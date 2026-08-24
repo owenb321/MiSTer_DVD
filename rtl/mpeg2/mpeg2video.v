@@ -74,9 +74,10 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              pause,                                                // DVD-FORK (gamepad transport): freeze the displayed frame while paused
              freeze_wd,                                            // DVD-FORK (disc-menu still): watchdog-suppress ONLY (no governor freeze)
              vbuf_flush,                                           // DVD-FORK (gamepad transport): discard the buffered bitstream on a seek
-             disp_vscale_mode,                                     // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox (addrgen NN path, now dormant)
+             disp_vscale_mode,                                     // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox(dormant) 2=SIF 2x line repeat
              disp_vscale_en,                                       // DVD-FORK (CRT anamorphic letterbox AA): enable downstream disp_vscale 2-tap blend
              disp_hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
+             disp_hfill_en,                                        // DVD-FORK FIX (SIF analog fill): stretch sub-D1 lines to the 720 raster
              menu_ff,                                              // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
              film24,                                               // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
              film_det_ntsc, film_det_pal,                          // DVD-FORK (Film 24p auto-detect): cadence verdicts (up to emu)
@@ -206,8 +207,10 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * NOTE (2026-07-05): the addrgen nearest-neighbour vscale path (vscale_mode==1) is now
    * DORMANT — Letterbox is done by the downstream disp_vscale 2-tap blender (disp_vscale_en
    * below), which needs the addrgen to emit FIT vertically (all source lines). emu therefore
-   * drives disp_vscale_mode = 0 always; the port stays wired for the six addrgen governor
-   * testbenches (which pass 0) and prunes to nothing under constant 0. */
+   * never drives mode 1; that arm stays unreachable and prunes.
+   * NOTE (2026-08-24, SIF analog fill): mode 2 is LIVE — the same addrgen walk with
+   * v_step=128 gives an exact 2x line repeat (240->480 / 288->576) so sub-D1 MPEG-1
+   * content fills the analog raster vertically. emu drives {sif_v2x_eff, 1'b0}. */
   input      [1:0] disp_vscale_mode;
   /* DVD-FORK (CRT anamorphic Letterbox anti-aliasing, 2026-07-05): 1 => the downstream
    * dvd/disp_vscale.sv 2-tap vertical resampler is active (480->360 / field 240->180 with a
@@ -219,6 +222,15 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * centre ~3/4 of the columns and the mixer stretches them to full raster width (Crop
    * mode). 0 outside Crop => full width, mixer stretch off (bit-identical). */
   input            disp_hcrop_en;
+  /* DVD-FORK FIX (SIF analog fill, 2026-08-24): 1 => MPEG-1 SIF (352-wide) content is
+   * stretched to fill the 720-wide raster by the SAME disp_hstretch stage Crop uses
+   * (hsrc = the native mb width, hdst = 720), and the syncgen active region is forced to
+   * 720 so the DE window fills the line. Vertical 2x (240->480 / 288->576) rides
+   * disp_vscale_mode==2 (the re-armed addrgen walk, see resample_addrgen.v). emu gates
+   * both on analog_eff: HDMI-only rigs keep the narrow DE window + ascal's polyphase
+   * scale (HW-proven for MPEG-1); the analog re-interlacer needs a true 720-wide line.
+   * Quasi-static (settles at load/flush boundaries). 0 => bit-identical legacy path. */
+  input            disp_hfill_en;
 
   /* DVD-FORK (menu VBUF-lag §5): fast-drain the display through a deeply-buffered menu
    * transition (governor picks up a new frame every refresh) so the settled still is
@@ -1404,7 +1416,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * and the pixel queue. Pure combinational pass-through unless disp_hcrop_en. */
   disp_hstretch disp_hstretch (
     .clk(clk), .clk_en(1'b1), .rst(sync_rst),
-    .hcrop_en(disp_hcrop_en),
+    .hcrop_en(disp_hcrop_en | disp_hfill_en),  // DVD-FORK FIX (SIF analog fill): fill reuses the stretch stage
     .hsrc_width(disp_hsrc_w),
     .hdst_width(disp_hdst_w),
     /* from disp_vscale */
@@ -1444,12 +1456,25 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .pixel_rd_underflow(pixel_rd_underflow_pqueue)           // to mixer
     );
 
+  /* DVD-FORK FIX (SIF analog fill): the syncgen's active region normally tracks the
+   * DECODED size, so 352x240 SIF gave a quarter-screen DE window at (0,0) of the 720x480
+   * raster (garbage right/below on the analog re-interlacer, which is hardcoded 720-wide).
+   * With the fill active the display path emits a true 720-wide (disp_hstretch) x
+   * line-doubled (addrgen vscale_mode==2) picture, so the syncgen must open the FULL
+   * active region. Mux ONLY these syncgen legs — motcomp, resample and the regfile
+   * readback keep the true decoded size (addrgen bounds / motcomp clipping depend on it).
+   * clip_display_size is always 0 in this fork, so the display_*_size legs are unused.
+   * No N'() size casts (Quartus 17 mangles them — docs/mpeg1.md). */
+  wire        sif_v2x = disp_vscale_mode[1];
+  wire [13:0] eff_horizontal_size = disp_hfill_en ? 14'd720 : horizontal_size;
+  wire [13:0] eff_vertical_size   = sif_v2x ? {vertical_size[12:0], 1'b0} : vertical_size;
+
   syncgen_intf syncgen_intf (
-    .clk(dot_clk), 
-    .clk_en(dot_ce), 
-    .rst(dot_rst), 
-    .horizontal_size(horizontal_size),                       // from vld
-    .vertical_size(vertical_size),                           // from vld
+    .clk(dot_clk),
+    .clk_en(dot_ce),
+    .rst(dot_rst),
+    .horizontal_size(eff_horizontal_size),                   // from vld (SIF fill: forced 720)
+    .vertical_size(eff_vertical_size),                       // from vld (SIF fill: doubled)
     .display_horizontal_size(display_horizontal_size),       // from vld
     .display_vertical_size(display_vertical_size),           // from vld
     .syncgen_rst(syncgen_rst),                               // from regfile
@@ -1479,7 +1504,10 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * (60 lines for NTSC 480, 72 for PAL 576), in woven frame lines; 0 unless the display
    * mode is LETTERBOX (Fit/Crop fill from the top, no bars). Quasi-static. Keyed on
    * disp_vscale_en (the downstream 2-tap letterbox), not disp_vscale_mode (dormant). */
-  wire [11:0] disp_v_offset = disp_vscale_en ? {1'b0, vertical_size[13:3]} : 12'd0;
+  /* DVD-FORK FIX (SIF analog fill): key the bar height on the EFFECTIVE (doubled) size so
+   * a manually-forced Letterbox over doubled SIF places the bars where crt_ov_map's
+   * raster-space v_bar constants (60/72) expect them. */
+  wire [11:0] disp_v_offset = disp_vscale_en ? {1'b0, eff_vertical_size[13:3]} : 12'd0;
 
   /* DVD-FORK (CRT anamorphic horizontal crop / pan-scan): the mixer stretches the cropped
    * source line (disp_hsrc_w wide) up to the raster active width (disp_hdst_w) so Crop
@@ -1487,7 +1515,10 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * = round(mb_width/8). Off (disp_hcrop_en=0) => hsrc_w == full width, stretch bypassed. */
   wire [7:0]  hcrop_mb_i  = disp_hcrop_en ? ((mb_width + 8'd4) >> 3) : 8'd0;
   wire [11:0] disp_hsrc_w = (mb_width - (hcrop_mb_i << 1)) << 4;   // (mb_width - 2*hcrop)*16
-  wire [11:0] disp_hdst_w = mb_width << 4;                         // full (uncropped) line width = what a Fit line emits
+  /* DVD-FORK FIX (SIF analog fill): with the fill active the stretch target is the 720
+   * raster width, not the native line width — 352->720 (SIF, qstep 125) or 256->720
+   * (Crop+SIF, qstep 91), both inside disp_hstretch's upscale RATIO CONTRACT. */
+  wire [11:0] disp_hdst_w = disp_hfill_en ? 12'd720 : (mb_width << 4); // full raster line width = what a Fit line emits
 
   /* Mixer */
   mixer mixer (

@@ -216,6 +216,18 @@ regains its same-parity premise in this mode (see the ⚠ note in `dvd/disp_vsca
    `csync`.
 5. `status[14]` (the old `O[14] CRT 480i Out`) is left **dead/reserved for one
    release** so stale per-core saved status can't re-arm anything.
+6. **Sub-D1 sources (2026-08-24 update).** `re_interlace` is a 720-wide re-timer:
+   its 4-line BRAM is only written inside the main raster's DE window, so a
+   narrower/shorter DE window leaves stale columns right of the picture and a
+   4-line smear below it. **MPEG-1 SIF (352×240/352×288) is now FIXED by the
+   in-core SIF analog fill** (`docs/mpeg1.md` §B.3, ⏳ HW-confirm pending): while
+   `analog_eff` is high the decoder's display path stretches 352→720
+   (`disp_hstretch`) and line-doubles 240→480 / 288→576 (addrgen vscale mode 2),
+   and the syncgen opens the full active region — the re-interlacer then needs no
+   change. HDMI trade-off while analog is engaged: ascal sees the in-core-scaled
+   720×480 frame instead of the raw 352×240 (same class as Letterbox/Crop).
+   Wider sub-D1 MPEG-2 (704/544) is NOT filled (user scope decision) — thin
+   stale columns remain there; extending is one predicate away.
 
 ## HW test checklist
 

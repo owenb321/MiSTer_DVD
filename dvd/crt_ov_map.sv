@@ -36,6 +36,13 @@
  *     no divider, no approximation. Output = hcrop_x0 + column (the addrgen crop window
  *     origin), clamped at the window's last column (a blanking guard; inside the active
  *     line the walk lands on hsrc-1 exactly at the last column).
+ *   - SIF fill (DVD-FORK FIX 2026-08-24): the horizontal 352->720 stretch reuses the SAME
+ *     crop inverse with hcrop_x0=0 / hsrc=352 / hextra=368 (the identity above holds at
+ *     any upscale ratio). The vertical 2x line repeat (addrgen vscale_mode==2, v_step=128)
+ *     is inverted by a closed-form post-map on the letterbox mux's candidate:
+ *     progressive y -> min(floor((y+1)/2), v_src_max); interlaced field line i parity p ->
+ *     min(p + 2*floor((i+1)/2), v_src_max) — exactly the forward walk's rounded map,
+ *     0xFFF bar sentinel preserved. See the v2x_en port comment.
  *
  * TIMING: mapped outputs register one clk_sys after a position change. Vertical changes
  * at line rate (irrelevant); horizontal means the mapped x lags the raw query by one
@@ -53,8 +60,19 @@ module crt_ov_map (
     input  wire        rst_n,
 
     input  wire        letterbox_en,   // CRT Letterbox active (disp_vscale_en)
-    input  wire        crop_en,        // CRT Crop active (disp_hcrop_en); exclusive with letterbox
+    input  wire        crop_en,        // CRT Crop OR SIF fill active (analog_crop | sif_hfill_eff)
     input  wire        interlaced,     // CRT 480i: v_pos = absolute frame line, +2 per field line
+
+    /* DVD-FORK FIX (SIF analog fill): invert the addrgen 2x line repeat (vscale_mode==2).
+     * The forward walk (resample_addrgen, v_step=128, rounded) maps output line i to
+     * source line min(floor((i+1)/2), v_src_max) on the progressive path; on the
+     * interlaced (Native Fields) path each field walks its own parity:
+     * field line i, parity p -> min(p + 2*floor((i+1)/2), v_src_max). This stage
+     * post-maps the letterbox mux's candidate (letterbox output is a line in DOUBLED
+     * space — the 2x repeat happens upstream of disp_vscale — so the two inverses
+     * compose in that order), preserving the 0xFFF bar/blanking sentinel. */
+    input  wire        v2x_en,         // SIF vertical 2x active (sif_v2x_eff)
+    input  wire [11:0] v_src_max,      // decoded vertical_size - 1 (239/287): the forward walk's clamp
 
     /* letterbox geometry (quasi-static): mixer bar offset + content band, frame lines */
     input  wire [11:0] v_bar,          // disp_v_offset (60 NTSC / 72 PAL)
@@ -145,8 +163,22 @@ module crt_ov_map (
     end
 
     /* ---------------- output mux (pure pass-through when inactive) ---------------- */
-    assign q_y_out = letterbox_en ? (ly_valid ? ly_eff : 12'hFFF) : v_pos_in;
-    assign q_x_out = crop_en      ? (hcrop_x0 + cx)               : h_pos_in;
+    wire [11:0] q_y_pre = letterbox_en ? (ly_valid ? ly_eff : 12'hFFF) : v_pos_in;
+
+    /* DVD-FORK FIX (SIF analog fill): post-map the vertical candidate through the exact
+     * inverse of the addrgen 2x line-repeat walk (see the v2x_en port comment). The
+     * 0xFFF letterbox-bar sentinel passes through untouched (it must stay outside every
+     * DAREA / button rect). Combinational — v changes at line rate. */
+    wire [11:0] v2x_i    = {1'b0, q_y_pre[11:1]};                    // field-line index i (interlaced)
+    wire [11:0] v2x_prog = (q_y_pre + 12'd1) >> 1;                   // floor((y+1)/2)
+    wire [11:0] v2x_half = (v2x_i + 12'd1) >> 1;                     // floor((i+1)/2)
+    wire [11:0] v2x_il   = {11'd0, q_y_pre[0]} + {v2x_half[10:0], 1'b0}; // p + 2*floor((i+1)/2)
+    wire [11:0] v2x_raw  = interlaced ? v2x_il : v2x_prog;
+    wire [11:0] v2x_clmp = (v2x_raw > v_src_max) ? v_src_max : v2x_raw;
+    wire [11:0] q_y_v2x  = (q_y_pre == 12'hFFF) ? 12'hFFF : v2x_clmp;
+
+    assign q_y_out = v2x_en ? q_y_v2x : q_y_pre;
+    assign q_x_out = crop_en ? (hcrop_x0 + cx) : h_pos_in;
 
 endmodule
 /* not truncated */

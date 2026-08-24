@@ -826,6 +826,19 @@ the old "unknown" sentinel), reframed by `dvd/mp2_reframer.sv`, decoded by
 ps_demux → reframers → audio_ring → dvd_audio_decode). Suite:
 `bench/dvd/run_mp2.sh`. 44.1 kHz (VCD) decodes bit-correct but plays ~8.8 % fast
 against the fixed 48 kHz NCO (future-VCD item).
+**SIF ANALOG FILL (2026-08-24, branch `feature/sif-analog-fill`, ⏳ HW-confirm
+pending):** SIF content used to show in the upper-left quarter of the ANALOG output
+(the syncgen DE window tracks the decoded size; `re_interlace` is hardcoded 720-wide).
+Now an in-core 2× fill — `disp_hstretch` 352→720 + the addrgen vscale walk re-armed as
+mode 2 (2× line repeat) + a syncgen-only effective-size mux in `mpeg2video.v` — gated
+on `analog_eff` (HDMI keeps ascal's scale; also fixes direct-video + un-clips the HUD).
+True 240p output was REJECTED: no exact-59.94 Hz 240p modeline exists at 1716
+dots/line, so it would drift against the fixed 48 kHz audio NCO — line-doubled 480i
+carries the same content. Sub-D1 MPEG-2 (704/544) intentionally NOT filled (user scope
+decision; one predicate away). Design: `docs/mpeg1.md` §B.3; overlay inverse contract:
+`docs/crt_anamorphic.md` §9b. Sim: `resample_chain_tb +sif=1` variants (`+linetag`
+source map, `+hgrad` blend, `+crt` fields, `+siftog` runtime toggle),
+`crt_ov_map_tb` T1d/T6.
 
 ---
 

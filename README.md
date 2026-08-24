@@ -66,9 +66,14 @@ HUD and seek bar.
 - **Only 720×480, 720×576 and the MPEG-1 SIF sizes (352×240, 352×288) are well
   tested.** Other DVD-compliant MPEG-2 resolutions (704×480, 352×480 half-D1) are
   accepted by the spec but have had little or no testing here.
-- **Sub-D1 resolutions on the analog CRT output are untested** — the re-interlacer is
-  built around the 720-wide raster; MPEG-1 content is verified on HDMI (the scaler
-  handles it cleanly).
+- **MPEG-1 SIF content is scaled to fill the analog CRT output in-core** (2×
+  line repeat + a 352→720 stretch, engaged only while the analog output is active;
+  HDMI keeps the framework scaler's cleaner upscale). A true 240p output raster is
+  deliberately not offered: the core's A/V sync requires the raster to run at the
+  exact content rate against the fixed audio clock, and no exact-rate 240p modeline
+  exists at the 27 MHz dot clock — line-doubled 480i carries the same content to a
+  CRT, which is what DVD players do. Wider sub-D1 MPEG-2 (704/544-wide) is not
+  scaled and remains lightly tested on analog.
 - **Very demanding scenes may drop a frame.** The inherited decoder has a motion-comp /
   IDCT throughput ceiling, and on the heaviest content it can fall behind the display
   cadence. The frame-rate governor absorbs this by dropping a B-frame to stay in step —

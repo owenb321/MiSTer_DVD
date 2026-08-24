@@ -3013,9 +3013,10 @@ mpeg2video mpeg2video_inst (
     .pause             (pause_dec),                    // DVD-FORK (gamepad transport): freeze frame while paused (clk_dec-synced)
     .freeze_wd         (still_dec),                    // DVD-FORK (disc-menu still): watchdog-suppress only (clk_dec-synced)
     .vbuf_flush        (vbuf_flush_dec),               // DVD-FORK (gamepad transport): discard VBUF on a seek (clk_dec-synced)
-    .disp_vscale_mode  (disp_vscale_mode),             // DVD-FORK (CRT anamorphic vscale): addrgen NN path, dormant (0)
+    .disp_vscale_mode  (disp_vscale_mode),             // DVD-FORK (CRT anamorphic vscale): 0 Fit / 2 SIF 2x line repeat
     .disp_vscale_en    (disp_vscale_en),               // DVD-FORK (CRT anamorphic letterbox AA): downstream 2-tap blend enable
     .disp_hcrop_en     (disp_hcrop_en),                // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
+    .disp_hfill_en     (disp_hfill_en),                // DVD-FORK FIX (SIF analog fill): 352->720 stretch + 720 DE window
     .menu_ff           (1'b0),                         // DVD-FORK (menu VBUF-lag §5): fast-drain RETIRED (HW-inert); menu_ff=0 = bit-identical governor
     .film24            (filmp_dec),                    // DVD-FORK (Film 24p/25p Out): 1 frame/refresh in the governor; ascal does the pulldown
     .film_det_ntsc     (core_film_det_ntsc),           // DVD-FORK (Film 24p auto-detect): 3:2 telecine verdict (clk_dec)
@@ -3139,11 +3140,47 @@ always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin hsz_s1 <= 14'd720; hsz_s2 <= 14'd720; end
     else          begin hsz_s1 <= core_horizontal_size; hsz_s2 <= hsz_s1; end
 end
+// DVD-FORK FIX (SIF analog fill, 2026-08-24): sub-D1 detect for the in-core 2x fill.
+// MPEG-1 SIF (352x240/352x288) used to display in the upper-left quarter of the ANALOG
+// output — the syncgen DE window tracks the decoded size while the re-interlacer is
+// hardcoded 720-wide (garbage right/below). Two INDEPENDENT 1-bit flags (so 352x480
+// half-D1 would get horizontal-only fill, correctly), clk_dec compares 2-FF synced into
+// clk_sys (the pal_det pattern). Threshold <=360 = SIF widths only (352/320); wider
+// sub-D1 MPEG-2 (704/544) keeps today's behaviour — deferred follow-up by predicate.
+wire sif_h_dec = (core_horizontal_size != 14'd0) && (core_horizontal_size <= 14'd360);
+wire sif_v_dec = (core_vertical_size  != 14'd0) && (core_vertical_size  <= 14'd288);
+reg  sif_h_s1, sif_h_s2, sif_v_s1, sif_v_s2;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin sif_h_s1 <= 1'b0; sif_h_s2 <= 1'b0; sif_v_s1 <= 1'b0; sif_v_s2 <= 1'b0; end
+    else begin
+        sif_h_s1 <= sif_h_dec; sif_h_s2 <= sif_h_s1;
+        sif_v_s1 <= sif_v_dec; sif_v_s2 <= sif_v_s1;
+    end
+end
+// Gated on analog_eff (the Letterbox/Crop pattern): HDMI-only rigs keep the narrow DE
+// window + ascal's polyphase scale (HW-proven for MPEG-1); the fill exists because the
+// analog chain (re_interlace + direct video) needs a true 720-wide raster line.
+wire sif_hfill_eff = analog_eff & sif_h_s2;   // horizontal 352->720 stretch
+wire sif_v2x_eff   = analog_eff & sif_v_s2;   // vertical 2x line repeat (240->480 / 288->576)
+// DVD-FORK FIX (SIF analog fill): decoded height, 2-FF synced (hsz_s2 pattern) — feeds
+// crt_ov_map's v2x inverse clamp (v_src_max = vertical_size-1).
+reg  [13:0] vsz_s1, vsz_s2;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin vsz_s1 <= 14'd480; vsz_s2 <= 14'd480; end
+    else          begin vsz_s1 <= core_vertical_size; vsz_s2 <= vsz_s1; end
+end
+// DVD-FORK FIX (SIF analog fill): the overlay-inverse geometry now describes whichever
+// horizontal remap is active. Crop off => hcrop_mb = 0 (window origin 0, full width);
+// the stretch target (ov_hdst_w) is 720 whenever the SIF fill is on. crt_ov_map's
+// crop_en is analog_crop | sif_hfill_eff, so SIF-only gives the pure 352->720 inverse
+// (x0=0, hsrc=352, hextra=368) and Crop+SIF composes (x0=48, hsrc=256, hextra=464) —
+// exactly matching mpeg2video's disp_hsrc_w/disp_hdst_w forward geometry.
 wire [9:0]  ov_mb_width = (hsz_s2 + 14'd15) >> 4;
-wire [7:0]  ov_hcrop_mb = (ov_mb_width[7:0] + 8'd4) >> 3;
-wire [11:0] ov_hcrop_x0 = {ov_hcrop_mb[7:0], 4'b0000};              // crop window origin (96)
-wire [11:0] ov_hextra   = {ov_hcrop_mb[6:0], 5'b00000};             // hdst - hsrc (192)
-wire [11:0] ov_hsrc_w   = {ov_mb_width[7:0], 4'b0000} - ov_hextra;  // cropped width (528)
+wire [7:0]  ov_hcrop_mb = analog_crop ? ((ov_mb_width[7:0] + 8'd4) >> 3) : 8'd0;
+wire [11:0] ov_hcrop_x0 = {ov_hcrop_mb[7:0], 4'b0000};              // crop window origin (96; 0 unless Crop)
+wire [11:0] ov_hsrc_w   = {ov_mb_width[7:0], 4'b0000} - {ov_hcrop_mb[6:0], 5'b00000}; // source width (528 crop / 352 SIF)
+wire [11:0] ov_hdst_w   = sif_hfill_eff ? 12'd720 : {ov_mb_width[7:0], 4'b0000};      // stretch target
+wire [11:0] ov_hextra   = ov_hdst_w - ov_hsrc_w;                    // hdst - hsrc (192 crop / 368 SIF)
 // DVD-FORK FIX (aspect ratio): sequence-header display aspect (clk_dec), 2-FF synced
 // into clk_sys (same CDC pattern as core_vertical_size -> pal_det_s2 above). DVD MPEG-2
 // emits code 2 (4:3) or 3 (16:9). CRITICAL: VIDEO_ARX/ARY must be STABLE — every change
@@ -3208,8 +3245,12 @@ assign analog_letterbox = analog_eff & ((analog_aspect_sel == 2'd2) |
                                 ((analog_aspect_sel == 2'd0) & ar_wide_auto_eff)); // Letterbox or Auto-16:9
 assign analog_crop      = analog_eff &  (analog_aspect_sel == 2'd3);         // Crop (manual)
 wire       disp_vscale_en   = analog_letterbox;                             // downstream 2-tap letterbox
-wire [1:0] disp_vscale_mode = 2'd0;                                         // addrgen vertical = Fit (NN path dormant)
+// DVD-FORK FIX (SIF analog fill): mode 2 = the re-armed addrgen 2x line repeat (v_step
+// 128) for sub-D1 heights on the analog output; bit 0 stays tied (mode 1 letterbox-NN
+// remains dormant and prunes). Quasi-static into clk_dec like the neighbours.
+wire [1:0] disp_vscale_mode = {sif_v2x_eff, 1'b0};                          // 0 Fit / 2 SIF 2x line repeat
 wire       disp_hcrop_en    = analog_crop;
+wire       disp_hfill_en    = sif_hfill_eff;                                // SIF 352->720 stretch (disp_hstretch)
 // DVD-FORK DEBUG (256-line strobe probe): per-output-frame mixer telemetry from
 // the decoder core. No longer surfaced on the overlay (the 256-line strobe is
 // resolved); kept as debug taps for future re-wiring if needed.
@@ -3632,8 +3673,10 @@ crt_ov_map crt_ov_map_inst (
     .clk          (clk_sys),
     .rst_n        (reset_n),
     .letterbox_en (analog_letterbox),
-    .crop_en      (analog_crop),
+    .crop_en      (analog_crop | sif_hfill_eff), // DVD-FORK FIX (SIF analog fill): SIF drives the same inverse (x0=0)
     .interlaced   (il_eff),                // interlaced raster: v_pos = absolute frame line, +2/field-line
+    .v2x_en       (sif_v2x_eff),           // DVD-FORK FIX (SIF analog fill): invert the addrgen 2x line repeat
+    .v_src_max    ((vsz_s2 == 14'd0) ? 12'hfff : (vsz_s2[11:0] - 12'd1)), // decoded height - 1 (239/287)
     .v_bar        (pal_eff ? 12'd72 : 12'd60),   // mixer disp_v_offset (vertical_size/8)
     .v_band       (pal_eff ? 12'd432 : 12'd360), // letterboxed content height (3/4)
     .hcrop_x0     (ov_hcrop_x0),

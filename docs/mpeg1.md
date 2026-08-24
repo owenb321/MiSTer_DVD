@@ -255,11 +255,47 @@ all edits marked `// DVD-FORK FIX (mpeg1)`.
 The syncgen active window tracks the decoded size (`h_size<=horizontal_size`,
 `v_size<=vertical_size`), so 352×240 yields a 352×240 DE window that **ascal
 upscales full-screen on HDMI** — no in-core scaling needed for v1. Known non-HDMI
-gaps (deferred, documented): analog dual-raster `re_interlace` hardcodes 720×480
-(sub-D1 → garbage right/below picture; v1 = force `analog_eff` off for sub-D1 or
-document), HUD/overlay geometry is 720-authored (clipped at 352 — cosmetic),
-direct-video top-left quarter. In-core 2× repeat via `disp_hstretch` retarget +
-addrgen line-repeat is the mapped-out v2 if scaler softness disappoints.
+gaps at v1 (now closed, see below): analog dual-raster `re_interlace` hardcodes
+720×480 (sub-D1 → quarter picture + garbage right/below), HUD/overlay geometry is
+720-authored (clipped at 352), direct-video top-left quarter.
+
+**✅ SIF ANALOG FILL — the mapped-out v2, implemented 2026-08-24 (branch
+`feature/sif-analog-fill`), ⏳ HW-confirm pending.** In-core 2× fill, gated on
+`analog_eff` (HDMI-only rigs keep ascal's polyphase scale — HW-proven for MPEG-1):
+
+- **Detect** (`dvd/emu.sv`): two independent 1-bit flags off the clk_dec size taps,
+  2-FF synced (the `pal_det` pattern): `sif_h` = width ≤360, `sif_v` = height ≤288.
+  `sif_hfill_eff / sif_v2x_eff = analog_eff & flag`. Independence means 352×480
+  half-D1 would get horizontal-only fill, correctly. **Scope decision (user):
+  SIF widths only** — 704/544-wide MPEG-2 keeps today's behaviour (their thin stale
+  re-interlacer columns are a deferred follow-up, one predicate away).
+- **Horizontal** — `disp_hstretch` retarget: `disp_hdst_w = 720` and
+  `hcrop_en |= disp_hfill_en` in `mpeg2video.v`; 352→720 (qstep 125) and Crop+SIF
+  256→720 (qstep 91) both satisfy the module's upscale RATIO CONTRACT — zero
+  changes inside the stretcher.
+- **Vertical** — the dormant addrgen vscale walk armed as **mode 2**
+  (`dvd/resample_addrgen.v`): `v_step=128`, `v_outlines = 2×source-lines` = an
+  exact NN 2× line repeat (240→480 / 288→576; field path 120→240 per field). The
+  rounded walk maps output line i → source `min(floor((i+1)/2), vsz-1)` (src 0
+  once, src N−1 thrice — a half-line shift, invisible on a CRT). Mode 1
+  (letterbox-NN) stays dormant and prunes.
+- **Raster** — `mpeg2video.v` muxes ONLY the `syncgen_intf` size legs to the
+  effective values (720 / doubled height); motcomp / resample / regfile keep the
+  true decoded size (addrgen bounds + motcomp clipping depend on it). The 720×480
+  modeline is untouched — no rate change, the A/V architecture never notices.
+- **Overlay** — `crt_ov_map` reuses the crop inverse for the stretch (x0=0,
+  hsrc=352, hextra=368; identity holds at any upscale ratio) and gains a closed-form
+  `v2x_en` post-map for the line repeat (progressive `min((y+1)>>1, v_src_max)`,
+  interlaced parity-preserving; 0xFFF bar sentinel preserved). The HUD un-clips as
+  a side effect (full 720-wide DE window).
+- **Sim**: `resample_chain_tb +sif=1` (+`linetag` source-map proof, `+hgrad`
+  352→720 blend proof, `+crt` field path, `+vsmode=1` letterbox compose,
+  `+siftog` mid-run enable toggle) and `crt_ov_map_tb` T1d/T6.
+- **Accepted quirks**: the field path's final line clamps to vsz−1 and can cross
+  field parity for one bottom line; hstretch stretches the mb-padded width (all
+  real SIF widths are multiples of 16); one ascal re-init popup on HDMI when the
+  fill engages (Letterbox-engage class); while analog is engaged HDMI sees the
+  in-core 2× instead of ascal (Letterbox/Crop trade-off class).
 
 ### B.4 Verification
 
@@ -309,6 +345,8 @@ in-loop effect of the mismatch-control difference is visible.
 - MP2 passthrough (IEC 61937 Pc=0x0004) not implemented; passthrough mode silences
   MP2 (correct fallback).
 - MPEG-2 multichannel extension (attr format 3) stays unsupported (HUD notice).
-- Analog CRT with sub-D1 sources: see B.3.
+- Analog CRT with SIF sources: ✅ fixed by the in-core 2× fill (B.3, 2026-08-24,
+  ⏳ HW-confirm pending). Wider sub-D1 MPEG-2 (704/544) still shows thin stale
+  re-interlacer columns on analog — deferred follow-up (one predicate away, B.3).
 - MPEG-1 aspect_ratio_information is a pixel-AR table (differs from MPEG-2 DAR
   codes) — v1 maps to 4:3 (DVD MPEG-1 is 4:3 by spec).
