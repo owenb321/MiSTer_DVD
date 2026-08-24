@@ -27,6 +27,13 @@
  *       map to the nearest-tap source line 2*(k_j + (r_j==2)) + parity (field) /
  *       k_j + (r_j==2) (progressive), bar/blank lines to 0xFFF. A second frame re-run
  *       proves the per-field re-arm.
+ *   T1d SIF fill (DVD-FORK FIX 2026-08-24): the same crop inverse at the SIF-fill
+ *       geometries 352 -> 720 (x0=0) and 256 -> 720 (Crop+SIF, x0=48). Forward geometry
+ *       (exactly hdst px, clean codes) + closed-form inverse with the right-edge clamp
+ *       (cr_near hits hsrc at the very last column at these ratios; both the forward
+ *       stage and the inverse clamp to hsrc-1). The T1a affine-tag exact co-sim is
+ *       ratio-independent and the 8-bit tag wraps at 352 sources, so the value check
+ *       here is the closed form.
  *   T4  Pass-through: both enables low => q_x_out/q_y_out combinationally equal the
  *       inputs (bit-identical wiring for HDMI / CRT-Fit).
  *   T5  spu_decode row-base adder under the mapped walks: the letterbox inverse map
@@ -35,6 +42,12 @@
  *       bmp[q_y*STRIDE + q_x]. Drives a REAL spu_decode (bitmap seeded hierarchically)
  *       with both mapped sequences plus the plain +1/+2 raster walks (regression) and
  *       compares every read against the golden array.
+ *   T6  SIF vertical 2x inverse (DVD-FORK FIX 2026-08-24): the v2x_en post-map vs a
+ *       behavioral model of the addrgen mode-2 walk (v_step=128, rounded):
+ *       progressive y -> min(floor((y+1)/2), v_src_max); interlaced field line i,
+ *       parity p -> min(p + 2*floor((i+1)/2), v_src_max). Four walks: progressive,
+ *       480i both fields, letterbox+v2x compose (progressive + 480i) with the 0xFFF
+ *       bar sentinel preserved.
  *
  * Build:
  *   iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/crt_ov_map_sim \
@@ -73,12 +86,15 @@ module crt_ov_map_tb;
     // ------------------------------------------------------------------
     reg         rst_n = 0;
     reg         letterbox_en = 0, crop_en = 0, interlaced = 0;
+    reg         v2x_en = 0;                    // DVD-FORK FIX (SIF analog fill)
+    reg  [11:0] v_src_max = 12'd479;           // decoded vertical_size - 1
     reg  [11:0] h_pos_in = 12'hFFF, v_pos_in = 12'hFFF;
     wire [11:0] q_x_out, q_y_out;
 
     crt_ov_map dut (
         .clk(clk), .rst_n(rst_n),
         .letterbox_en(letterbox_en), .crop_en(crop_en), .interlaced(interlaced),
+        .v2x_en(v2x_en), .v_src_max(v_src_max),
         .v_bar(P_VBAR), .v_band(P_VBAND),
         .hcrop_x0(P_HX0), .hsrc_w(P_HSRC), .hextra(P_HEXTRA),
         .h_pos_in(h_pos_in), .v_pos_in(v_pos_in),
@@ -221,6 +237,17 @@ module crt_ov_map_tb;
         cr_near = (j * HSRC + HDST / 2) / HDST;
     endfunction
 
+    // DVD-FORK FIX (SIF analog fill): behavioral model of the addrgen mode-2 2x walk
+    // (v_step=128, rounded) — output line y -> the source line it repeats.
+    function automatic integer v2x_src(input integer y, input integer il, input integer vmax);
+        integer fi, s;
+        begin
+            if (il) begin fi = y / 2; s = (y % 2) + 2 * ((fi + 1) / 2); end
+            else    s = (y + 1) / 2;
+            v2x_src = (s > vmax) ? vmax : s;
+        end
+    endfunction
+
     // reconfigure the crop geometry; rst_n pulse re-arms the stretcher's phase divider
     task automatic set_geom(input integer s, input integer d, input integer x0);
         begin
@@ -254,7 +281,7 @@ module crt_ov_map_tb;
         end
     endtask
 
-    integer i, j, f, v, expv, got, src;
+    integer i, j, f, v, expv, got, src, g;
     integer err0;
 
     initial begin
@@ -378,6 +405,61 @@ module crt_ov_map_tb;
         err0 = errors;
 
         // ==============================================================
+        // T1d — SIF fill geometries (DVD-FORK FIX): 352->720 (x0=0) and
+        //       256->720 (Crop+SIF, x0=48). Forward geometry + closed-form
+        //       inverse with the right-edge clamp (cr_near reaches hsrc at
+        //       the last column at these ratios; both sides clamp hsrc-1).
+        // ==============================================================
+        for (g = 0; g < 2; g = g + 1) begin
+            if (g == 0) set_geom(352, 720, 0);      // SIF-only fill
+            else        set_geom(256, 720, 48);     // Crop + SIF compose
+
+            send_hs_line(0);
+            if (fwd_n !== HDST) begin
+                errors = errors + 1;
+                $display("T1d FAIL (g%0d): forward resample emitted %0d px (expected exactly %0d)",
+                         g, fwd_n, HDST);
+            end
+            if (fwd_n > 0 && fwd_pos[0] !== ROW_0_COL_0) begin
+                errors = errors + 1;
+                $display("T1d FAIL (g%0d): first output pos %0d (expected ROW_0_COL_0)", g, fwd_pos[0]);
+            end
+            if (fwd_n > 0 && fwd_pos[fwd_n-1] !== ROW_X_COL_LAST) begin
+                errors = errors + 1;
+                $display("T1d FAIL (g%0d): last output pos %0d (expected ROW_X_COL_LAST)", g, fwd_pos[fwd_n-1]);
+            end
+
+            crop_en = 1;
+            h_pos_in = 12'hFFF; repeat (4) @(negedge clk);
+            src = HX0;
+            for (i = 0; i < HDST; i = i + 1) begin
+                step_h(i[11:0]);
+                expv = cr_near(i);
+                if (expv > HSRC - 1) expv = HSRC - 1;   // right-edge clamp (matches the fwd b-tap clamp)
+                expv = HX0 + expv;
+                if (q_x_out !== expv[11:0]) begin
+                    errors = errors + 1;
+                    if (errors < 20)
+                        $display("T1d FAIL (g%0d): display x=%0d mapped %0d, closed form %0d",
+                                 g, i, q_x_out, expv);
+                end
+                if (q_x_out < src) begin
+                    errors = errors + 1;
+                    $display("T1d FAIL (g%0d): mapper went backwards at x=%0d (%0d after %0d)",
+                             g, i, q_x_out, src);
+                end
+                src = q_x_out;
+            end
+            for (i = HDST; i < HDST + 40; i = i + 1) step_h(i[11:0]);
+            crop_en = 0;
+        end
+        $display("T1d SIF fill crop inverse (352->720, 256->720): %s", (errors != err0) ? "FAIL" : "PASS");
+        err0 = errors;
+
+        // restore the T1b geometry so later sections see the classic Crop numbers
+        set_geom(528, 720, 96);
+
+        // ==============================================================
         // T2 — Letterbox forward co-sim: disp_vscale output line i carries
         //      tag 3*k_i + r_i (field path)
         // ==============================================================
@@ -499,6 +581,82 @@ module crt_ov_map_tb;
         end
         $display("T5 spu_decode row-base adder (mapped walks): %s",
                  (errors != err0) ? "FAIL" : "PASS");
+        err0 = errors;
+
+        // ==============================================================
+        // T6 — SIF vertical 2x inverse (DVD-FORK FIX) vs the behavioral
+        //      model of the addrgen mode-2 walk. v_src_max = 239 (NTSC SIF).
+        // ==============================================================
+        v2x_en = 1; v_src_max = 12'd239;
+
+        // (a) progressive, no letterbox: every raster line maps to
+        //     min(floor((v+1)/2), 239) — incl. the clamp rows 480..524
+        letterbox_en = 0; crop_en = 0; interlaced = 0;
+        v_pos_in = 12'hFFF; repeat (4) @(negedge clk);
+        for (v = 0; v < 525; v = v + 1) begin
+            step_v(v[11:0]);
+            expv = v2x_src(v, 0, 239);
+            if (q_y_out !== expv[11:0]) begin
+                errors = errors + 1;
+                if (errors < 40)
+                    $display("T6a FAIL: raster v=%0d mapped %0d expected %0d", v, q_y_out, expv);
+            end
+        end
+
+        // (b) 480i (Native Fields raster), both fields: parity-preserving inverse
+        interlaced = 1;
+        for (f = 0; f < 2; f = f + 1) begin
+            v_pos_in = 12'hFFF; repeat (4) @(negedge clk);
+            for (v = f; v < 525; v = v + 2) begin
+                step_v(v[11:0]);
+                expv = v2x_src(v, 1, 239);
+                if (q_y_out !== expv[11:0]) begin
+                    errors = errors + 1;
+                    if (errors < 40)
+                        $display("T6b FAIL (f%0d): raster v=%0d mapped %0d expected %0d",
+                                 f, v, q_y_out, expv);
+                end
+            end
+        end
+
+        // (c) letterbox + v2x compose (progressive): the letterbox inverse yields a
+        //     DOUBLED-space line, the v2x post-map halves it; bars stay 0xFFF
+        interlaced = 0; letterbox_en = 1;
+        v_pos_in = 12'hFFF; repeat (4) @(negedge clk);
+        for (v = 0; v < 525; v = v + 1) begin
+            step_v(v[11:0]);
+            if (v >= VBAR && v < VBAR + VBAND) begin
+                expv = lb_k(v - VBAR) + ((lb_r(v - VBAR) == 2) ? 1 : 0);
+                expv = v2x_src(expv, 0, 239);
+            end else expv = 'hFFF;
+            if (q_y_out !== expv[11:0]) begin
+                errors = errors + 1;
+                if (errors < 40)
+                    $display("T6c FAIL: raster v=%0d mapped %0d expected %0d", v, q_y_out, expv);
+            end
+        end
+
+        // (d) letterbox + v2x, 480i: doubled-space field walk through both inverses
+        interlaced = 1;
+        for (f = 0; f < 2; f = f + 1) begin
+            v_pos_in = 12'hFFF; repeat (4) @(negedge clk);
+            for (v = f; v < 525; v = v + 2) begin
+                step_v(v[11:0]);
+                if (v >= VBAR && v < VBAR + VBAND) begin
+                    j    = (v - VBAR) >> 1;
+                    expv = 2 * (lb_k(j) + ((lb_r(j) == 2) ? 1 : 0)) + (v & 1);
+                    expv = v2x_src(expv, 1, 239);
+                end else expv = 'hFFF;
+                if (q_y_out !== expv[11:0]) begin
+                    errors = errors + 1;
+                    if (errors < 40)
+                        $display("T6d FAIL (f%0d): raster v=%0d mapped %0d expected %0d",
+                                 f, v, q_y_out, expv);
+                end
+            end
+        end
+        v2x_en = 0; letterbox_en = 0; interlaced = 0;
+        $display("T6 SIF vertical 2x inverse: %s", (errors != err0) ? "FAIL" : "PASS");
 
         if (errors) begin $display("crt_ov_map_tb: FAIL (%0d errors)", errors); $finish; end
         $display("crt_ov_map_tb: ALL TESTS PASS");

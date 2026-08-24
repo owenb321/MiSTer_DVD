@@ -187,7 +187,10 @@ module resample_addrgen (
    * emits the scaled line count + the blend weight). Works on BOTH the progressive FRAME
    * path and the interlaced FIELD path (per-field, parity preserved). See
    * docs/crt_anamorphic.md. (Crop — the horizontal pan-scan mode — is hcrop_en below,
-   * NOT a vscale_mode: it leaves the vertical at Fit/1:1.) */
+   * NOT a vscale_mode: it leaves the vertical at Fit/1:1.)
+   * DVD-FORK FIX (SIF analog fill, 2026-08-24): 2 = SIF 2x LINE REPEAT (v_step=128,
+   * v_outlines=2x source lines) so sub-D1 MPEG-1 fills the analog raster vertically;
+   * see the walk comment below. Mode 1 stays dormant (emu never drives it). */
   input        [1:0] vscale_mode;
 
   /* DVD-FORK (CRT anamorphic horizontal crop / pan-scan): when high, the address
@@ -337,20 +340,32 @@ module resample_addrgen (
    *   source line for output line i = v_base + stride * round(i * step)
    *     stride = 2 on the field path (stay on the field's parity), 1 progressive
    *     step (Q8.8): LETTERBOX 341 (=4/3, downscale 480->360 / field 240->180)
-   *                  ZOOM     192 (=3/4, upscale 360->480 from a centre crop)
-   *     v_base = crop offset (+ field parity): ZOOM skips H/8 source lines top+bottom
+   *                  SIF 2x   128 (=1/2, upscale 240->480 / 288->576 — line repeat)
+   *     v_base = crop offset (+ field parity)
    * Line-index (oline) drives termination and the ROW_0/1/X position codes (via the
    * existing output-index disp_y_sat), so the mixer frame-top pairing is unchanged; the
    * emission height (v_outlines) is <= the raster active region in every mode so nothing
    * spills into the next frame (the 256-line strobe class — docs/history.md).
-   * ------------------------------------------------------------------------- */
-  wire              vscale_en   = (vscale_mode == 2'd1);                    // 1 = LETTERBOX (only vertical mode)
+   *
+   * DVD-FORK FIX (SIF analog fill, 2026-08-24) — vscale_mode==2: the SAME walk with
+   * v_step=128 and v_outlines = 2*source-lines gives an exact nearest-neighbour 2x line
+   * repeat so sub-D1 MPEG-1 (352x240/352x288) fills the analog raster vertically. The
+   * rounded walk maps output line i -> source line min(floor((i+1)/2), vertical_size-1):
+   * source 0 appears once, N-1 three times — a half-line shift, invisible on a CRT, and
+   * replicated EXACTLY by crt_ov_map's inverse (keep them in step). The field path
+   * (analog Native Fields) doubles each 120/144-line field to 240/288 parity-preserved
+   * lines; its final line clamps to vertical_size-1, which can cross field parity for
+   * one bottom line — accepted (see docs/mpeg1.md). Mode 1 (letterbox NN) stays dormant
+   * (emu never drives it) and prunes. */
+  wire              sif2x       = (vscale_mode == 2'd2);                    // 2 = SIF 2x line repeat (DVD-FORK FIX)
+  wire              vscale_en   = (vscale_mode == 2'd1) | sif2x;            // 1 = LETTERBOX (dormant)
   /* per-scan geometry, computed from the INCOMING image (image_0 at STATE_NEXT_IMG) */
   wire              vs_field0   = (image_0 != FRAME);                       // TOP/BOTTOM => field path
   wire       [11:0] vs_H0       = vs_field0 ? vertical_size[11:1] : vertical_size[11:0]; // source lines this scan
   wire       [11:0] vs_par0     = (image_0 == BOTTOM) ? 12'd1 : 12'd0;      // field parity (bottom field = odd lines)
   wire       [11:0] v_base_comb = vs_field0 ? vs_par0 : 12'd0;             // first source line (parity on the field path)
-  wire       [11:0] vs_outlines_comb = ((vs_H0 << 1) + vs_H0) >> 2;        // letterbox: H*3/4 (480->360 / 240->180)
+  wire       [11:0] vs_outlines_comb = sif2x ? {vs_H0[10:0], 1'b0}         // SIF 2x: H*2 (240->480 / field 120->240)
+                                             : (((vs_H0 << 1) + vs_H0) >> 2); // letterbox: H*3/4 (480->360 / 240->180)
 
   reg        [11:0] v_base;      // latched source line of output line 0
   reg        [11:0] v_outlines;  // latched number of output lines (termination bound)
@@ -861,7 +876,7 @@ module resample_addrgen (
       v_base     <= v_base_comb;
       v_outlines <= vs_outlines_comb;
       v_stride2  <= vs_field0;
-      v_step     <= 9'd341;                            // Q8.8: 4/3 letterbox downscale
+      v_step     <= sif2x ? 9'd128 : 9'd341;           // Q8.8: 1/2 SIF 2x repeat / 4/3 letterbox downscale
     end
 
   always @(posedge clk)

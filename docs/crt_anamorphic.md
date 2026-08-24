@@ -346,6 +346,20 @@ overlay clipped at the crop edges; (c) Fit + HDMI: unchanged (pass-through); (d)
 on an anamorphic menu now letterboxes (matches HDMI). Release build gated green:
 clk_dec 91.24/87.58 MHz, `releases/DVD_crtovalign_20260711_0009.rbf`.
 
+## 9b. SIF analog fill reuse (✅ HW-CONFIRMED 2026-08-24, PR #2)
+
+The MPEG-1 SIF fill (`docs/mpeg1.md` §B.3) reuses this machinery wholesale:
+`disp_hstretch` runs at 352→720 (or 256→720 with Crop stacked; both inside the §8b
+RATIO CONTRACT, no module change), and `crt_ov_map`'s crop inverse serves the stretch
+with `hcrop_x0=0` (emu now gates `ov_hcrop_mb` on `analog_crop` and derives
+`ov_hextra = ov_hdst_w − ov_hsrc_w`). New in `crt_ov_map`: a `v2x_en` closed-form
+post-map inverting the addrgen 2× line repeat (mode-2 vscale walk) —
+progressive `min((y+1)>>1, v_src_max)`, interlaced parity-preserving, 0xFFF bar
+sentinel preserved; it composes AFTER the letterbox inverse (the doubling happens
+upstream of `disp_vscale`). Co-sim: `crt_ov_map_tb` T1d (352→720, 256→720) + T6
+(v2x progressive / 480i / letterbox-composed). The mode-2 inverse formula is part of
+the §9 EXACTNESS contract — change the addrgen walk and this map together.
+
 ## 10. Follow-ups
 
 - ~~`disp_hstretch` 2-tap horizontal blend (Crop edge quality)~~ — **DONE, see §8b.**

@@ -137,16 +137,34 @@ module resample_chain_tb;
   // stretches to full width; vertical stays 1:1). Exercises the whole display chain
   // (resample -> disp_hstretch -> pixel_queue -> mixer). report_frame asserts geometry.
   integer vsmode = 0;
-  wire [1:0] rs_vscale_mode = 2'd0;                           // addrgen vertical = Fit (letterbox now downstream)
+  // ---- +sif=1 : SIF analog fill (DVD-FORK FIX 2026-08-24) --------------------------
+  // Reproduces the in-core 2x fill for MPEG-1 SIF content (352x240): content geometry
+  // 352x240 (MB_WIDTH=22, mbh=15) into the WIDE 720x480 modeline, with the emu/
+  // mpeg2video muxes replicated here: addrgen vscale_mode=2 (2x line repeat, v_step
+  // 128), disp_hstretch 352->720 (hcrop_en forced, hdst=720), syncgen fed the
+  // EFFECTIVE sizes (720 / doubled 480) — exactly mpeg2video's eff_horizontal_size /
+  // eff_vertical_size mux. Composes with +vsmode=1 (letterbox over the doubled frame),
+  // +crt=1 (field path) and +hgrad=1 (352->720 blend proof). Every +sif run also
+  // co-sims the addrgen disp_y walk against the 2x closed form (the sif-walk block
+  // below). +siftog=1 starts with the fill OFF and flips it on at a frame
+  // boundary mid-run (the runtime Analog Out toggle case): the chain must re-prime
+  // and settle back to passing geometry with no wedge.
+  integer sif = 0, siftog = 0;
+  integer dumplines = 0;   // +dumplines=1: print the full per-line luma map (debug aid)
+  reg        sif_live = 1'b0;                                 // the live enable (toggled by +siftog)
+  wire [1:0] rs_vscale_mode = sif_live ? 2'd2 : 2'd0;         // addrgen vertical: Fit / SIF 2x line repeat
   wire       rs_vscale_en   = (vsmode == 1);                  // letterbox -> downstream disp_vscale 2-tap blend
   wire       rs_hcrop_en    = (vsmode == 2);                  // crop
-  // letterbox top-bar height (woven frame lines) = vertical_size/8; 0 for fit/crop.
-  wire [11:0] mixer_voff = (vsmode == 1) ? {1'b0, vertical_size[13:3]} : 12'd0;
+  // letterbox top-bar height (woven frame lines) = EFFECTIVE vertical_size/8 (the SIF
+  // doubling happens upstream of disp_vscale, mirroring mpeg2video's eff mux); 0 for fit/crop.
+  wire [13:0] eff_vsz_w  = sif_live ? {vertical_size[12:0], 1'b0} : vertical_size;
+  wire [13:0] sg_hsize   = sif_live ? 14'd720 : HORIZONTAL_SIZE;
+  wire [11:0] mixer_voff = (vsmode == 1) ? {1'b0, eff_vsz_w[13:3]} : 12'd0;
   // crop horizontal stretch params (mirrors mpeg2video): centre 3/4 crop, stretch back to
-  // the full (uncropped) line width MB_WIDTH*16.
+  // the full (uncropped) line width MB_WIDTH*16 — or the 720 raster width under SIF fill.
   wire  [7:0] hcrop_mb_tb = rs_hcrop_en ? ((MB_WIDTH + 8'd4) >> 3) : 8'd0;
   wire [11:0] hsrc_w_tb   = (MB_WIDTH - (hcrop_mb_tb << 1)) << 4;
-  wire [11:0] hdst_w_tb   = MB_WIDTH << 4;
+  wire [11:0] hdst_w_tb   = sif_live ? 12'd720 : (MB_WIDTH << 4);
   reg     dot_ce = 1'b1;                       // /2 CE when +crt, constant 1 otherwise
   always @(posedge dot_clk) dot_ce <= crt ? ~dot_ce : 1'b1;
   reg [11:0] HALFLINE_R = 12'd0;               // syncgen horizontal_halfline
@@ -231,7 +249,7 @@ module resample_chain_tb;
   wire       pq_wr_almost_full;   // pixel_queue -> hstretch
   disp_hstretch disp_hstretch (
     .clk(clk), .clk_en(1'b1), .rst(rst),
-    .hcrop_en(rs_hcrop_en), .hsrc_width(hsrc_w_tb), .hdst_width(hdst_w_tb),
+    .hcrop_en(rs_hcrop_en | sif_live), .hsrc_width(hsrc_w_tb), .hdst_width(hdst_w_tb),
     .in_y(vs_y), .in_u(vs_u), .in_v(vs_v), .in_osd(vs_osd),
     .in_pos(vs_pos), .in_wr(vs_wr), .in_almost_full(hs_in_almost_full),
     .out_y(hs_y), .out_u(hs_u), .out_v(hs_v), .out_osd(hs_osd),
@@ -399,7 +417,7 @@ module resample_chain_tb;
 
   sync_gen sync_gen (
     .clk(dot_clk), .clk_en(dot_ce), .rst(rst),
-    .horizontal_size(HORIZONTAL_SIZE), .vertical_size(vertical_size),
+    .horizontal_size(sg_hsize), .vertical_size(eff_vsz_w),   // SIF fill: the EFFECTIVE (filled) sizes
     .display_horizontal_size(14'd0), .display_vertical_size(14'd0),
     .horizontal_resolution(H_RES), .horizontal_sync_start(H_SS),
     .horizontal_sync_end(H_SE), .horizontal_length(H_LEN),
@@ -455,7 +473,7 @@ module resample_chain_tb;
   task report_frame;
     integer last_video, vis_cnt, nb_cnt, span, hole;
     integer content_woven, exp_vpos_first, exp_vpos_last, exp_nb, TOL;
-    integer dvf, dvl, fr_ok, hfill_ok;
+    integer dvf, dvl, fr_ok, hfill_ok, eff_vsz;
     begin
       last_video = -1; vis_cnt = 0; nb_cnt = 0; first_video = -1;
       for (i = 0; i < MAXLINE; i = i + 1) begin
@@ -476,8 +494,11 @@ module resample_chain_tb;
       // tb's out_line (which carries a raster back-porch offset). content_woven is the
       // woven-frame line count of the picture; nb_cnt (scored per v_sync = per field in
       // crt) is half that in the field path.
-      content_woven  = (vsmode == 1) ? ((vertical_size * 3) / 4) : vertical_size;   // 360 / 480
-      exp_vpos_first = (vsmode == 1) ? (vertical_size >> 3) : 0;                     // 60 / 0
+      // SIF fill: the display-space content height is the DOUBLED size (the addrgen 2x
+      // repeat runs upstream of disp_vscale), mirroring mpeg2video's eff_vertical_size.
+      eff_vsz        = (sif && sif_live) ? (vertical_size * 2) : vertical_size;
+      content_woven  = (vsmode == 1) ? ((eff_vsz * 3) / 4) : eff_vsz;                // 360 / 480
+      exp_vpos_first = (vsmode == 1) ? (eff_vsz >> 3) : 0;                           // 60 / 0
       exp_vpos_last  = exp_vpos_first + content_woven - 1;                           // 419 / 479
       exp_nb         = crt ? (content_woven >> 1) : content_woven;                   // per field in crt
       TOL            = 6;
@@ -534,12 +555,67 @@ module resample_chain_tb;
     end
   endtask
 
+  // ---- SIF source-map check (+sif): addrgen disp_y walk co-sim ----
+  // Samples the ACTUAL source line the addrgen reads for each emitted output line
+  // (hierarchically, at the line-complete state), against the closed form
+  //   src(i) = min(v_base + stride * floor((i+1)/2), vertical_size-1)
+  // (stride 1 progressive, 2 on the field path with v_base = the field parity).
+  // This is the deterministic contract crt_ov_map's v2x inverse replicates.
+  // Two rejected measurement points, recorded so nobody retries them:
+  //  - the MIXER-side per-frame capture: the scan loop free-runs vs the raster in
+  //    this bench (the mixer discards queue entries while hunting after an
+  //    underflow — see the SCANRATE instrument), so displayed frames drop/seam
+  //    lines at wide geometry even in FIT (verified with +dumplines);
+  //  - the +linetag memory-tag path: tags are captured at addr-fifo ACCEPT time,
+  //    which lags the addrgen's disp_y by the elastic issue->accept backlog, so
+  //    the tag<->line pairing is only approximate (fine for the strobe hunting it
+  //    was built for, wrong for an exact co-sim).
+  integer aw_bad = 0, aw_scans = 0, aw_maxline = -1;
+  integer aw_exp, aw_line;
+  reg     aw_armed = 1'b0, aw_done_d = 1'b0;
+  wire    aw_scan_latch = (resample.resample_addrgen.state == 4'h1);                 // STATE_NEXT_IMG
+  wire    aw_line_done  = (resample.resample_addrgen.state == 4'h3) &&               // STATE_NEXT_MB
+                          resample.resample_addrgen.last_mb;
+  always @(posedge clk) if (rst) begin
+    aw_done_d <= aw_line_done;
+    if (aw_scan_latch)
+      aw_armed <= (sif != 0) && sif_live;          // score only scans that START with the fill on
+    else if (aw_armed && aw_line_done && !aw_done_d) begin
+      aw_line = resample.resample_addrgen.oline;   // output line just completed
+      if (aw_line == 0) aw_scans = aw_scans + 1;
+      if (aw_line > aw_maxline) aw_maxline = aw_line;
+      aw_exp = resample.resample_addrgen.v_base
+             + (resample.resample_addrgen.v_stride2 ? 2 : 1) * ((aw_line + 1) / 2);
+      if (aw_exp > vertical_size - 1) aw_exp = vertical_size - 1;
+      if (resample.resample_addrgen.disp_y !== aw_exp[11:0]) begin
+        aw_bad = aw_bad + 1;
+        if (aw_bad <= 12)
+          $display("  [sif-walk] scan %0d line %0d: disp_y %0d expected %0d",
+                   aw_scans, aw_line, resample.resample_addrgen.disp_y, aw_exp);
+      end
+    end
+  end
+
   // LINE-TAG analysis: line_luma[N] = source disp_y&0xFF displayed at output line N.
   // A correct render is monotonic +1 (allowing the small bilinear wobble). Report the
   // mapping at sample points and flag the FIRST big discontinuity (the offset/wrap).
   task linetag_report;
     integer ln, prev, d, firstjump, jumpat;
     begin
+      if (dumplines) begin
+        for (ln = 0; ln < MAXLINE; ln = ln + 16) begin
+          $display("  [dump f%0d] L%0d: %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d",
+                   frame_no, ln,
+                   line_luma_set[ln]    ? line_luma[ln]    : -1, line_luma_set[ln+1]  ? line_luma[ln+1]  : -1,
+                   line_luma_set[ln+2]  ? line_luma[ln+2]  : -1, line_luma_set[ln+3]  ? line_luma[ln+3]  : -1,
+                   line_luma_set[ln+4]  ? line_luma[ln+4]  : -1, line_luma_set[ln+5]  ? line_luma[ln+5]  : -1,
+                   line_luma_set[ln+6]  ? line_luma[ln+6]  : -1, line_luma_set[ln+7]  ? line_luma[ln+7]  : -1,
+                   line_luma_set[ln+8]  ? line_luma[ln+8]  : -1, line_luma_set[ln+9]  ? line_luma[ln+9]  : -1,
+                   line_luma_set[ln+10] ? line_luma[ln+10] : -1, line_luma_set[ln+11] ? line_luma[ln+11] : -1,
+                   line_luma_set[ln+12] ? line_luma[ln+12] : -1, line_luma_set[ln+13] ? line_luma[ln+13] : -1,
+                   line_luma_set[ln+14] ? line_luma[ln+14] : -1, line_luma_set[ln+15] ? line_luma[ln+15] : -1);
+        end
+      end
       firstjump = -1; jumpat = -1; prev = -1;
       for (ln = 0; ln < MAXLINE; ln = ln + 1) begin
         if (line_visible[ln] && line_luma_set[ln]) begin
@@ -641,7 +717,11 @@ module resample_chain_tb;
     void'($value$plusargs("vsmode=%d",   vsmode));
     void'($value$plusargs("vgrad=%d",    vgrad));
     void'($value$plusargs("hgrad=%d",    hgrad));
+    void'($value$plusargs("dumplines=%d", dumplines));
+    void'($value$plusargs("sif=%d",      sif));
+    void'($value$plusargs("siftog=%d",   siftog));
     if (vgrad != 0) linetag = 1;                 // the blend proof rides the linetag side-fifo
+    if (sif) wide = 1;                           // SIF fill targets the wide 720x480 modeline
     if (crt) begin wide = 1; il = 1; end       // CRT implies the wide geometry + field path
     mb_height     = mbh[7:0];
     vertical_size = mbh * 16;
@@ -681,6 +761,16 @@ module resample_chain_tb;
       HALFLINE_R = 12'd429;
       $display("     CRT 480i mode: dot_ce=1/2, halfline=429, per-field 262/263");
     end
+    // ---- SIF content geometry (352x240) into the wide/crt raster chosen above.
+    // The modeline stays 720x480; the fill muxes (sg_hsize/eff_vsz_w, vscale_mode=2,
+    // disp_hstretch 352->720) open the full active region — mirroring emu/mpeg2video.
+    if (sif) begin
+      MB_WIDTH = 8'd22; HORIZONTAL_SIZE = 14'd352;
+      mbh = 15; mb_height = 8'd15; vertical_size = 14'd240;
+      if (!siftog) sif_live = 1'b1;            // +siftog starts OFF, flips mid-run
+      $display("     SIF fill mode: content 352x240, fill %s (vscale_mode=2, hstretch 352->720)",
+               siftog ? "toggled mid-run" : "ON");
+    end
 `ifdef DEEP_DISP
     $display("\n==== resample_chain_tb [DEEP_DISP=2048] mb_height=%0d content=%0dx%0d ====",
              mbh, MB_WIDTH*16, mbh*16);
@@ -708,6 +798,19 @@ module resample_chain_tb;
       if (held_mode) output_frame_valid = 0;
     end
     // (pace mode: pace_driver drives output_frame_valid from reset; nothing here.)
+
+    // ---- +siftog: run a few frames with the fill OFF, then flip it on at a frame
+    // boundary (the runtime Analog Out toggle). The pre-toggle and settling frames are
+    // excluded from the aggregates; the assertion is that the chain re-primes (hstretch
+    // cfg divider, addrgen NEXT_IMG latch, syncgen sizes) and passes geometry after.
+    if (sif && siftog) begin
+      repeat (4) @(negedge v_sync);
+      @(negedge v_sync) sif_live = 1'b1;
+      $display("     SIFTOG: fill enabled at frame %0d", frame_no);
+      repeat (3) @(negedge v_sync);            // settle (one garbled transition frame allowed)
+      vs_good_frames = 0; vs_pass_frames = 0;
+      reported_frames = 0; black_frames = 0;
+    end
 
     // run several raster frames under the held/persistence/pace path
     // (+frames=N overrides for long scan-rate measurements)
@@ -756,15 +859,27 @@ module resample_chain_tb;
     // (vsmode 0) NOTHING resamples horizontally, so the same run is the CONTROL: it must
     // score 0, which proves the pass-through really is a bypass. ----
     if (hgrad != 0) begin
-      integer hp_ok;
-      if (vsmode == 2) hp_ok = (hg_interp_max * 2 > hg_seen_max) && (hg_seen_max > 0);
-      else             hp_ok = (hg_interp_max <= 0);
-      $display("---- BLENDPROOF-H vsmode=%0d crt=%0d : max interpolated pixels=%0d/%0d => %s ----",
-               vsmode, crt, hg_interp_max, hg_seen_max,
-               hp_ok ? ((vsmode == 2) ? "PASS (2-tap real)" : "PASS (control: no h-resample)")
-                     : ((vsmode == 2) ? "*** FAIL (looks like NN) ***"
-                                      : "*** FAIL (pass-through is resampling!) ***"));
+      integer hp_ok, hp_exp;
+      hp_exp = (vsmode == 2) || (sif && sif_live);   // hstretch active: Crop OR the SIF 352->720 fill
+      if (hp_exp) hp_ok = (hg_interp_max * 2 > hg_seen_max) && (hg_seen_max > 0);
+      else        hp_ok = (hg_interp_max <= 0);
+      $display("---- BLENDPROOF-H vsmode=%0d crt=%0d sif=%0d : max interpolated pixels=%0d/%0d => %s ----",
+               vsmode, crt, sif, hg_interp_max, hg_seen_max,
+               hp_ok ? (hp_exp ? "PASS (2-tap real)" : "PASS (control: no h-resample)")
+                     : (hp_exp ? "*** FAIL (looks like NN) ***"
+                               : "*** FAIL (pass-through is resampling!) ***"));
       if (!hp_ok) $fatal(1, "disp_hstretch horizontal 2-tap proof failed (hgrad)");
+    end
+    // ---- SIF source-map verdict (every +sif run): every output line of every
+    // mode-2 scan must read the exact 2x-repeat source line, and scans must reach
+    // the full doubled height (479 progressive / 239 per field). ----
+    if (sif) begin
+      integer slt_ok, exp_last;
+      exp_last = il ? ((vertical_size / 2) * 2 - 1) : (vertical_size * 2 - 1);  // 239 field / 479 frame
+      slt_ok = (aw_scans >= 2) && (aw_bad == 0) && (aw_maxline == exp_last);
+      $display("---- SIF-WALK il=%0d : %0d scans, max line %0d (exp %0d), %0d bad lines => %s ----",
+               il, aw_scans, aw_maxline, exp_last, aw_bad, slt_ok ? "PASS" : "*** FAIL ***");
+      if (!slt_ok) $fatal(1, "SIF 2x line-repeat source walk check failed");
     end
     $display("==== DONE mb_height=%0d (held=%0d) ====\n", mbh, held_mode);
     $finish;
