@@ -392,6 +392,12 @@ module dvd_iso_reader #(
     output reg [3:0]  subp_ctl_waddr,
     output reg [31:0] subp_ctl_wdata,
 
+    // Raw MODE2/2352 mode readback: the mounted image is a raw CD sector dump
+    // (VCD/SVCD bin/cue data track). The reader strips the 2352-byte sector
+    // wrapper in-line (Form-2 payloads only) and streams the contained
+    // MPEG-1/MPEG-2 system stream. emu uses this for the transport gating.
+    output            raw_mode_o,
+
     // Debug / overlay taps
     output            debug_active,
     output            debug_sd_rd,
@@ -1077,6 +1083,7 @@ localparam S_PTTLD_MAT    = 6'd53;   // entered after VTSI@200 shadow: vts_ptt_s
 localparam S_PTTLD_HDR    = 6'd54;   // nr_of_srpts@0 + last_byte@4 -> read ttu offsets
 localparam S_PTTLD_OFF    = 6'd55;   // ttu_offset[ttn-1]/[ttn] -> nr_ptt, launch P_PTT
 localparam S_PTTLD_DONE   = 6'd56;   // re-fetch the resume field (@200 / @204) -> ptt_resume
+localparam S_CHK_RAW      = 6'd58;   // raw MODE2/2352 (VCD/SVCD .bin) signature probe
 
 reg [5:0]  state;
 reg [5:0]  fetch_ret;   // state to enter after S_FETCH
@@ -1132,6 +1139,26 @@ reg [6:0]  strm_idx;    // current extent (absolute)
 reg [6:0]  strm_left;   // extents remaining
 reg [31:0] strm_blk;    // 2048-sector offset within the current extent
 reg        strm_done;
+
+// =========================================================================
+// Raw MODE2/2352 deblocker (VCD/SVCD .bin). The stream cache write port is
+// gated so ONLY Mode-2 Form-2 payload bytes (sector offsets [24, 24+2324))
+// land in the cache — Form-1 sectors (the ISO-filesystem track of single-bin
+// images) are skipped entirely so filesystem bytes can never false-sync the
+// PS demux, and zero-payload Form-2 pregap sectors pass as harmless zeros.
+// raw_pos is a free-running mod-2352 byte position: linear streaming requests
+// blocks strictly in order, so it simply accumulates across the 2048-byte
+// blocks (2352 > 2048 sector-straddle needs no special case). raw_sec_pass is
+// latched from the mode byte (@15) and XA submode (@18, bit5 = Form 2) and
+// cleared at every sector wrap — a stream entered mid-sector (seek, RIFF CDXA
+// header skip) drops the partial first sector and starts clean at the next
+// boundary. Golden model: tools/cd_deblock_ref.py (byte-exact contract).
+// =========================================================================
+reg        raw_mode;       // mounted image is raw 2352-byte CD sectors
+reg [11:0] raw_pos;        // sector byte position (mod 2352) of the next byte
+reg        raw_m2;         // this sector's mode byte (@15) == 2
+reg        raw_sec_pass;   // Form-2 sector: pass payload window [24, 2348)
+reg [11:0] raw_wcnt;       // compact cache write index within the current block
 
 // parse_buf read address (combinational; 1-cycle latency to pb_rdata). The
 // walker addresses parse_buf directly at walk_off during S_WALK_RD; every
@@ -1193,6 +1220,22 @@ wire [31:0] gq_mnu_blk = gmem_q[31:0];
 wire        cd001 = (rbuf[1]=="C") && (rbuf[2]=="D") && (rbuf[3]=="0") &&
                     (rbuf[4]=="0") && (rbuf[5]=="1");
 wire [7:0]  vd_type = rbuf[0];
+
+// Raw MODE2/2352 image signature at file byte 0 (shadow of block 0): the
+// 12-byte CD sector sync 00 FF*10 00 + mode byte 2 @15. Block-aligned, so the
+// probe is free; a DVD ISO has zeros at LBA 0 and can never false-fire.
+wire raw2352 = (rbuf[0]==8'h00) && (rbuf[1]==8'hFF) && (rbuf[2]==8'hFF) &&
+               (rbuf[3]==8'hFF) && (rbuf[4]==8'hFF) && (rbuf[5]==8'hFF) &&
+               (rbuf[6]==8'hFF) && (rbuf[7]==8'hFF) && (rbuf[8]==8'hFF) &&
+               (rbuf[9]==8'hFF) && (rbuf[10]==8'hFF) && (rbuf[11]==8'h00) &&
+               (rbuf[15]==8'h02);
+// RIFF/CDXA wrapper (extracted AVSEQnn.DAT files): 44-byte RIFF header, then
+// raw 2352-byte sectors. Handled by pre-loading raw_pos so the header bytes
+// count as the tail of a phantom sector (positions 2308..2351, never in the
+// pass window) and byte 44 lands on position 0.
+wire riff_cdxa = (rbuf[0]=="R") && (rbuf[1]=="I") && (rbuf[2]=="F") &&
+                 (rbuf[3]=="F") && (rbuf[8]=="C") && (rbuf[9]=="D") &&
+                 (rbuf[10]=="X") && (rbuf[11]=="A");
 
 // directory record (rbuf shadow starts at the record) - also used for the PVD
 // root record when the shadow is fetched at offset 156
@@ -1303,11 +1346,16 @@ always @(posedge clk)
         parse_buf[sd_buff_addr[10:0]] <= sd_buff_dout;
 
 // =========================================================================
-// stream cache write (during streaming block reads)
+// stream cache write (during streaming block reads). Raw MODE2/2352 mode
+// filters to Form-2 payload bytes and compacts them (raw_wcnt) so the cache
+// holds a contiguous deblocked stream; the wr_ptr advance at block completion
+// is counted (+raw_wcnt) instead of the fixed +BLK.
 // =========================================================================
+wire raw_keep = raw_sec_pass && (raw_pos >= 12'd24) && (raw_pos < 12'd2348);
 always @(posedge clk)
-    if (sd_buff_wr && state==S_STREAM)
-        cache_mem[wr_ptr + sd_buff_addr[10:0]] <= sd_buff_dout;
+    if (sd_buff_wr && state==S_STREAM && (!raw_mode || raw_keep))
+        cache_mem[wr_ptr + (raw_mode ? {2'b00, raw_wcnt}
+                                     : {3'b000, sd_buff_addr[10:0]})] <= sd_buff_dout;
 
 // =========================================================================
 // Multi-angle NV_PCK snoop (Phase 9). While streaming an angle-block cell,
@@ -1714,6 +1762,24 @@ always @(posedge clk or negedge rst_n) begin
             ilvu_target  <= snoop_nvtgt;
         end
 
+        // ---- Raw MODE2/2352 position walk (parallel; one step per delivered
+        // stream byte). Latches the per-sector mode/submode, counts accepted
+        // payload bytes (raw_wcnt, consumed by the cache write port above),
+        // and wraps the mod-2352 position — clearing the pass flag at the wrap
+        // so a mid-sector entry can never emit a partial sector. Placed BEFORE
+        // the main state dispatch so block-completion / seek writes (later in
+        // this block) override the walk on a collision cycle.
+        if (raw_mode && state == S_STREAM && sd_buff_wr) begin
+            if (raw_pos == 12'd15) raw_m2       <= (sd_buff_dout == 8'h02);
+            if (raw_pos == 12'd18) raw_sec_pass <= raw_m2 && sd_buff_dout[5];
+            if (raw_keep)          raw_wcnt     <= raw_wcnt + 12'd1;
+            if (raw_pos == 12'd2351) begin
+                raw_pos      <= 12'd0;
+                raw_sec_pass <= 1'b0;
+            end else
+                raw_pos <= raw_pos + 12'd1;
+        end
+
         // Latch a transport seek request (emu delivers a 1-cycle pulse). Range +
         // cell-mode checked at capture; executed at the next block boundary via
         // seek_jump below so the outstanding sd read completes cleanly first.
@@ -1978,6 +2044,11 @@ always @(posedge clk or negedge rst_n) begin
             wr_ptr     <= 0;
             iso_mode   <= 1'b0;
             iso_error  <= 1'b0;
+            raw_mode   <= 1'b0;
+            raw_pos    <= 12'd0;
+            raw_m2     <= 1'b0;
+            raw_sec_pass <= 1'b0;
+            raw_wcnt   <= 12'd0;
             all_n      <= 7'd0;
             best_base  <= 7'd0;
             best_cnt   <= 7'd0;
@@ -2209,7 +2280,36 @@ always @(posedge clk or negedge rst_n) begin
                     wr_ptr    <= 0;
                     state     <= S_EXT_LOAD;   // let ext_start_q/ext_blocks_q refresh first
                 end else begin
+                    // Probe file byte 0 first: a raw MODE2/2352 image (VCD/SVCD
+                    // .bin) starts with the 12-byte CD sync there, block-aligned.
+                    // Not raw -> S_CHK_RAW falls through to the LBA-16 CD001
+                    // probe (one extra block read per mount, negligible).
                     vd_lba    <= 32'd16;
+                    sec_lba   <= 32'd0;
+                    fetch_base<= 11'd0;
+                    fetch_ret <= S_CHK_RAW;
+                    state     <= S_SECREAD;
+                end
+            end
+
+            // ------------------------------------------------------------
+            // Raw MODE2/2352 signature probe (shadow of file byte 0)
+            S_CHK_RAW: begin
+                if (raw2352 || riff_cdxa) begin
+                    // Raw CD image -> whole-file linear stream through the
+                    // deblocker (same extent setup as the flat-file fallback).
+                    raw_mode     <= 1'b1;
+                    raw_pos      <= riff_cdxa ? 12'd2308 : 12'd0;  // 2352-44
+                    raw_m2       <= 1'b0;
+                    raw_sec_pass <= 1'b0;
+                    raw_wcnt     <= 12'd0;
+                    ext_mem[0] <= {32'd0, total_blocks};
+                    best_base <= 7'd0; best_cnt <= 7'd1;
+                    strm_idx  <= 7'd0; strm_left <= 7'd1;
+                    strm_blk  <= 32'd0; strm_done <= 1'b0;
+                    wr_ptr    <= 0;
+                    state     <= S_EXT_LOAD;
+                end else begin
                     sec_lba   <= 32'd16;
                     fetch_base<= 11'd0;      // CD001 / type at sector start
                     fetch_ret <= S_CHK_VD0;
@@ -3523,7 +3623,13 @@ always @(posedge clk or negedge rst_n) begin
                     if (sd_ack) sd_rd <= 1'b0;
                     if (sd_ack_d && !sd_ack) begin
                         blk_inflight <= 1'b0;
-                        wr_ptr       <= wr_ptr + BLK;
+                        // Raw mode: counted advance (only the deblocked payload
+                        // bytes landed in the cache); else the fixed block size
+                        // (14'd2048 = BLK; plain literal, no size cast — the
+                        // Quartus-17 N'() netlist lesson).
+                        wr_ptr       <= wr_ptr + (raw_mode ? {2'b00, raw_wcnt}
+                                                           : 14'd2048);
+                        raw_wcnt     <= 12'd0;
                         if (cell_mode) begin
                             if (ilvu_armed &&
                                 play_blk == ilvu_end_rbn) begin
@@ -4164,6 +4270,7 @@ assign debug_state          = {iso_mode, iso_error, sel_valid, best_cnt[4:0],
                                menu_dom, (state == S_STILL), state};
 assign debug_iso_mode       = iso_mode;
 assign debug_iso_error      = iso_error;
+assign raw_mode_o           = raw_mode;
 assign debug_play_vtsn      = play_vtsn;
 assign debug_target_vtsn    = target_vtsn;
 

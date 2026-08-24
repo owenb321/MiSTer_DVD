@@ -442,11 +442,15 @@ assign CE_PIXEL = 1'b1;
 parameter CONF_STR = {
     "DVD;;",
     // MiSTer CONF_STR file extensions are a CONCATENATED list of 3-char exts
-    // with NO separator (MPGM2VVOBISO = MPG + M2V + VOB + ISO). A space-separated
-    // list is wrong: the OSD chunks every 3 chars, so "MPG M2V VOB" -> MPG/_M2/...
-    // ISO selects a decrypted DVD-Video image; dvd_iso_reader navigates VIDEO_TS
-    // in fabric (largest VTS = main feature). Non-ISO files stream as before.
-    "S0,MPGM2VVOBISO,Load Video;",
+    // with NO separator (MPGM2VVOBISO... = MPG + M2V + VOB + ISO + ...). A
+    // space-separated list is wrong: the OSD chunks every 3 chars, so
+    // "MPG M2V VOB" -> MPG/_M2/... ISO selects a decrypted DVD-Video image;
+    // dvd_iso_reader navigates VIDEO_TS in fabric (largest VTS = main feature).
+    // BIN/IMG/DAT select a raw MODE2/2352 CD image (VCD/SVCD bin/cue data
+    // track — pick the LARGE track bin; .cue sheets are text the fabric cannot
+    // parse). Detection is content-based (sector-sync probe at byte 0), the
+    // extension list is only the OSD picker filter. Other files stream as before.
+    "S0,MPGM2VVOBISOBINIMGDAT,Load Video;",
     // Aspect Ratio: Auto (default) reads the display AR from the MPEG-2 sequence header
     // (aspect_ratio_information, par. 6.3.3: 2=4:3, 3=16:9); 4:3/16:9 force it. Drives the
     // MiSTer scaler output aspect (VIDEO_ARX/ARY) — the 720x480/576 raster is unchanged,
