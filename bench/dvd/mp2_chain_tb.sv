@@ -159,6 +159,20 @@ module mp2_chain_tb;
 
     wire signed [15:0] audio_l, audio_r;
 
+    // +SCHED=1: model the HW drain gate — sched_en high, STC anchored and
+    // advancing at the real 90 kHz/27 MHz ratio (1 tick / 300 clk), video
+    // live. The PTS-scheduled release, mid-run underrun re-arms and
+    // re-releases must all pass MP2 audio through unchanged (still bit-exact).
+    logic sched_mode = 0;
+    logic [32:0] stc_r = 33'd50000;      // just below the VOB's first audio PTS
+    logic [8:0]  stc_div = 0;
+    always @(posedge clk) begin
+        if (sched_mode && rst_n) begin
+            stc_div <= (stc_div == 9'd299) ? 9'd0 : stc_div + 9'd1;
+            if (stc_div == 9'd299) stc_r <= stc_r + 33'd1;
+        end
+    end
+
     dvd_audio_decode dut (
         .clk(clk), .rst_n(rst_n),
         .enable(1'b1),
@@ -170,11 +184,11 @@ module mp2_chain_tb;
         .frame_pop(frame_pop),
         .nco_trim(22'sd0),
         .dispatch_pts(), .dispatch_pts_valid(),
-        .sched_en(1'b0),                     // free-run (no PTS gate)
-        .stc_anchored(1'b0),
+        .sched_en(sched_mode),
+        .stc_anchored(sched_mode),
         .arr_pts(33'd0), .arr_pts_valid(1'b0),
-        .video_live(1'b0),
-        .stc(33'd0),
+        .video_live(sched_mode),
+        .stc(stc_r),
         .av_ofs(18'sd0),
         .audio_l(audio_l), .audio_r(audio_r),
         .ac3_synced(), .ac3_err(),
@@ -208,6 +222,7 @@ module mp2_chain_tb;
     end
 
     initial begin
+        if ($test$plusargs("SCHED")) sched_mode = 1;
         $readmemh("bench/dvd/test_mp2/vobchain.vob.hex", vob);
         $readmemh("bench/dvd/test_mp2/vobchain/pcm_golden.hex", golden);
         nbytes = 0;

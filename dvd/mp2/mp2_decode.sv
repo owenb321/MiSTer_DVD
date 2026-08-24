@@ -331,23 +331,30 @@ module mp2_decode #(
     end
 
     // ------------------------------------------------------------------
-    // Saturation helpers (match mp2_ref.sat exactly)
+    // Saturation helpers (match mp2_ref.sat exactly).
+    // ⚠ The min-clamp RESULTS are written as HEX BIT PATTERNS, not negated
+    // decimals: `-27'sd67108864` overflows the signed-27 literal (max is
+    // 2^26-1) — Icarus wraps it to the intended pattern (sim was bit-exact)
+    // but Quartus 17 raises "Warning (10259): constant value overflow" and
+    // mangles the clamp → the first HW build played SILENCE. Same for
+    // 32'sd2147483648 and 16'sd32768. The comparison-side literals are
+    // wide enough and fine.
     // ------------------------------------------------------------------
     function automatic signed [26:0] sat27 (input signed [48:0] v);
         if      (v >  49'sd67108863)  sat27 = 27'sd67108863;
-        else if (v < -49'sd67108864)  sat27 = -27'sd67108864;
+        else if (v < -49'sd67108864)  sat27 = 27'sh4000000;    // -2^26
         else                          sat27 = 27'(v);
     endfunction
 
     function automatic signed [31:0] sat32 (input signed [47:0] v);
         if      (v >  48'sd2147483647)  sat32 = 32'sd2147483647;
-        else if (v < -48'sd2147483648)  sat32 = -32'sd2147483648;
+        else if (v < -48'sd2147483648)  sat32 = 32'sh80000000;  // -2^31
         else                            sat32 = 32'(v);
     endfunction
 
     function automatic signed [15:0] sat16 (input signed [53:0] v);
         if      (v >  54'sd32767)  sat16 = 16'sd32767;
-        else if (v < -54'sd32768)  sat16 = -16'sd32768;
+        else if (v < -54'sd32768)  sat16 = 16'sh8000;           // -32768
         else                       sat16 = 16'(v);
     endfunction
 
