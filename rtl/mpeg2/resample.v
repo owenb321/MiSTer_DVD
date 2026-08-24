@@ -36,7 +36,19 @@ module resample(
   progressive_sequence, progressive_frame, top_field_first, repeat_first_field, mb_width, mb_height, horizontal_size, vertical_size, resample_wr_overflow,
   disp_wr_addr_full, disp_wr_addr_almost_full, disp_wr_addr_en, disp_wr_addr_ack, disp_wr_addr, disp_rd_dta_empty, disp_rd_dta_en, disp_rd_dta_valid, disp_rd_dta,
   pixel_wr_almost_full, interlaced, deinterlace, persistence, repeat_frame,
-  y, u, v, osd_out, position_out, pixel_wr_en
+  y, u, v, osd_out, position_out, pixel_wr_en,
+  frame_late,                                       // DVD-FORK (frame-drop governor O[19])
+  video_live,                                       // DVD-FORK (av_sync STC reference)
+  pickup_hold,                                      // DVD-FORK (STD mux-lead hold)
+  pause,                                            // DVD-FORK (gamepad transport): freeze frame while paused
+  cur_show_out,                                     // DVD-FORK (film-aware drop reclaim)
+  pickup_tick, pickup_show, refresh_tick_dbg,       // DVD-FORK (vid_err instrument)
+  film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect)
+  det_video,                                        // DVD-FORK (Interlaced Out auto): true-interlaced verdict
+  vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
+  hcrop_en,                                         // DVD-FORK (CRT anamorphic horizontal crop)
+  menu_ff,                                          // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
+  film24                                            // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
   );
 
   input              clk;                      // clock
@@ -80,6 +92,21 @@ module resample(
   output        [7:0]osd_out;
   output        [2:0]position_out;
   output             pixel_wr_en;
+  output             frame_late;                 // DVD-FORK (frame-drop governor O[19]): decode deadline-miss pulse
+  output             video_live;                 // DVD-FORK (av_sync STC reference): sticky "first frame displayed"
+  input              pickup_hold;                 // DVD-FORK (STD mux-lead hold): defer the FIRST display pickup
+  input              pause;                        // DVD-FORK (gamepad transport): freeze the displayed frame while paused
+  output       [3:0] cur_show_out;                // DVD-FORK (film-aware drop reclaim): on-display frame duration
+  output             pickup_tick;                 // DVD-FORK (vid_err instrument): frame entered display
+  output       [3:0] pickup_show;                 // its display duration (refreshes)
+  output             refresh_tick_dbg;            // one pulse per displayed refresh (video_live-gated)
+  output             film_det_ntsc;               // DVD-FORK (Film 24p auto-detect): sustained 3:2 telecine verdict (NTSC 24p)
+  output             film_det_pal;                // DVD-FORK (Film 24p auto-detect): sustained progressive verdict (PAL 25p)
+  output             det_video;                   // DVD-FORK (Interlaced Out auto): sustained true-interlaced-video verdict (480i/576i)
+  input        [1:0] vscale_mode;                 // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox
+  input              hcrop_en;                    // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
+  input              menu_ff;                      // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
+  input              film24;                        // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
 
   /* resample fifo */
   wire          [2:0]resample_wr_dta;
@@ -128,7 +155,22 @@ module resample(
     
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full),
     .resample_wr_almost_full(resample_wr_almost_full),
-    .busy(resample_addr_busy)
+    .busy(resample_addr_busy),
+    .frame_late(frame_late),                       // DVD-FORK (frame-drop governor O[19])
+    .video_live(video_live),                       // DVD-FORK (av_sync STC reference)
+    .pickup_hold(pickup_hold),                     // DVD-FORK (STD mux-lead hold)
+    .pause(pause),                                 // DVD-FORK (gamepad transport): freeze frame while paused
+    .cur_show_out(cur_show_out),                   // DVD-FORK (film-aware drop reclaim)
+    .pickup_tick(pickup_tick),                     // DVD-FORK (vid_err instrument)
+    .pickup_show(pickup_show),
+    .refresh_tick_dbg(refresh_tick_dbg),
+    .film_det_ntsc(film_det_ntsc),                 // DVD-FORK (Film 24p auto-detect)
+    .film_det_pal(film_det_pal),
+    .det_video(det_video),                         // DVD-FORK (Interlaced Out auto)
+    .vscale_mode(vscale_mode),                     // DVD-FORK (CRT anamorphic vscale)
+    .hcrop_en(hcrop_en),                           // DVD-FORK (CRT anamorphic horizontal crop)
+    .menu_ff(menu_ff),                             // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
+    .film24(film24)                                // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
     );
 
   wire        fifo_read;

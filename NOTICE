@@ -1,0 +1,47 @@
+MiSTer DVD Player Core — licensing notice
+=========================================
+
+The project as a whole is distributed under the **GNU General Public License,
+version 3 or later** (see LICENSE).
+
+That is not an arbitrary choice — it is what the combination of components
+resolves to:
+
+  sys/   The MiSTer framework, © MiSTer-devel and contributors.
+         A mix of "GPL version 2 or later" (alsa.sv, arcade_video.v,
+         iir_filter.v, ltc2308.sv, spdif.v, sys_top.v, video_freezer.sv,
+         yc_out.sv) and "GPL version 3 or later" (ddr_svc.sv, hps_io.sv,
+         scandoubler.v, sd_card.sv).
+         The "or later" files can be taken to v3, but the v3 files cannot be
+         taken down to v2 — so the combined work is GPLv3-or-later.
+
+  rtl/   The MPEG-2 video decoder, © 2007 Koen De Vleeschauwer, from the
+         `mpeg2fpga` project (https://opencores.org/projects/mpeg2fpga),
+         published by its author under the **BSD** licence, and reached here
+         via the MiSTer port at https://github.com/mrchrisster/MiSTer_MPEG2.
+         BSD is GPL-compatible, so these files combine into the GPLv3 whole
+         while remaining BSD in their own right. The original copyright
+         notices in the file headers must be retained.
+
+         NOTE: the file headers as vendored carry only the BSD *warranty
+         disclaimer*; the grant clauses are not reproduced in them. The
+         licence is established by the author's own publication of the
+         project on OpenCores, which states "License: BSD".
+
+  dvd/, bench/dvd/, tools/, docs/
+         Original to this project. GPLv3-or-later, matching the whole.
+
+  rtl/LICENSE-MPEG2
+         A PATENT notice, not a copyright licence, and independent of the
+         above. MPEG-2 is patent-encumbered; commercial use of an MPEG-2
+         implementation may require a licence from MPEG LA. Retained from
+         upstream and reproduced unchanged.
+
+Third-party work used as reference or verification oracle — libdvdnav,
+libdvdread, liba52, ffmpeg, libdvdcss — is NOT included in this repository
+and none of its source was copied. In particular the in-fabric AC-3 decoder
+(dvd/ac3/) was developed independently and verified *against* liba52 as a
+co-simulation reference; liba52's GPL does not attach by that route.
+
+See the Acknowledgements section of README.md for the full list of sources
+this project drew on.

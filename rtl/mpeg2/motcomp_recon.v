@@ -97,7 +97,8 @@ module motcomp_recon(
   idct_rd_dta_empty, idct_rd_dta_en, idct_rd_dta, idct_rd_dta_valid,
   fwd_rd_dta_empty, fwd_rd_dta_en, fwd_rd_dta, fwd_rd_dta_valid,
   bwd_rd_dta_empty, bwd_rd_dta_en, bwd_rd_dta, bwd_rd_dta_valid,
-  recon_wr_full, recon_wr_almost_full, recon_wr_en, recon_wr_addr, recon_wr_dta
+  recon_wr_full, recon_wr_almost_full, recon_wr_en, recon_wr_addr, recon_wr_dta,
+  dbg_ref_stall                                                  // DVD-FORK DEBUG (stage profiler)
   );
 
   input              clk;                      // clock
@@ -134,6 +135,15 @@ module motcomp_recon(
   output reg        recon_wr_en;               // assert to write recon_wr_addr/recon_wr_dta to fifo.
   output reg  [21:0]recon_wr_addr;             // address to write reconstructed block row to
   output reg  [63:0]recon_wr_dta;              // reconstructed block row
+
+  /* DVD-FORK DEBUG (stage profiler): recon is STALLED waiting for REFERENCE pixels
+     — it has work (dst_valid_0) and its output isn't blocked (~recon_wr_almost_full),
+     but a needed prediction row hasn't arrived (motion_forward_0 & ~fwd_row_0_valid,
+     or motion_backward_0 & ~bwd_row_0_valid). Demand-gated (only fires when recon
+     actually wants the missing direction), so unlike a raw fwd|bwd fifo-empty it does
+     NOT saturate on the unused direction of P/I frames. High on Matrix vs BBB =>
+     reference-read FEED is the neck (prefetch/overlap lever), not recon arithmetic. */
+  output            dbg_ref_stall;
 
   /*
    To reconstruct a row 
@@ -207,6 +217,13 @@ module motcomp_recon(
     if (~rst) state <= STATE_WAIT;
     else if (clk_en) state <= next;
     else state <= state;
+
+  /* DVD-FORK DEBUG (stage profiler): precise reference-feed stall — recon is in
+     STATE_WAIT with work to do and output room, blocked only because a wanted
+     prediction row isn't valid yet. Mirrors the STATE_WAIT->STATE_RUN guard. */
+  assign dbg_ref_stall = (state == STATE_WAIT) && ~recon_wr_almost_full && dst_valid_0
+                      && ((motion_forward_0  && ~fwd_row_0_valid)
+                       || (motion_backward_0 && ~bwd_row_0_valid));
 
   /* fifo read enables */
   always @(posedge clk)

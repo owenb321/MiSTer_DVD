@@ -225,8 +225,8 @@ sysmem_HPS_fpga_interfaces fpga_interfaces (
 wire hps_h2f_reset_n;
 
 reg init_reset_n = 0;
+integer timeout = 0;
 always @(posedge clock) begin
-	integer timeout = 0;
 
 	if(timeout < 2000000) begin
 		init_reset_n <= 0;

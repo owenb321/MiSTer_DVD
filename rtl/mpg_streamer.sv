@@ -26,7 +26,16 @@ module mpg_streamer (
     // Output to mpeg2video decoder
     output reg  [7:0] stream_data,
     output reg        stream_valid,
-    input             busy          // backpressure from decoder
+    input             busy,         // backpressure from decoder
+
+    // Debug outputs
+    output            debug_active,
+    output            debug_sd_rd,
+    output            debug_sd_ack,
+    output            debug_cache_has_data,
+    output [15:0]     debug_file_size,      // Lower 16 bits of file_size
+    output [15:0]     debug_total_sectors,  // Lower 16 bits of total_sectors
+    output [15:0]     debug_next_lba        // Lower 16 bits of next_lba
 );
 
 // =========================================================================
@@ -163,5 +172,14 @@ always @(posedge clk or negedge rst_n) begin
         end
     end
 end
+
+// Debug outputs
+assign debug_active         = active;
+assign debug_sd_rd          = sd_rd;
+assign debug_sd_ack         = sd_ack;
+assign debug_cache_has_data = cache_has_data;
+assign debug_file_size      = file_size[15:0];
+assign debug_total_sectors  = total_sectors[15:0];
+assign debug_next_lba       = next_lba[15:0];
 
 endmodule

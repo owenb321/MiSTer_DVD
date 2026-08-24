@@ -109,6 +109,14 @@ module hps_io #(parameter CONF_STR, CONF_STR_BRAM=0, PS2DIV=0, WIDE=0, VDNUM=1, 
 	output      [1:0] buttons,
 	output            forced_scandoubler,
 	output            direct_video,
+
+	// DVD-FORK (dual-raster analog output): expose the MiSTer.ini analog video
+	// bits to the core so it can auto-engage its native 15 kHz raster exactly
+	// when the user has configured an analog TV — no core-specific OSD setup.
+	output            ini_vga_scaler,   // cfg[2]  vga_scaler=
+	output            ini_csync,        // cfg[3]  composite_sync=
+	output            ini_ypbpr,        // cfg[5]  ypbpr / vga_mode=ypbpr
+	output            ini_sog,          // cfg[9]  vga_sog=
 	input             video_rotated,
 
 	//toggle to force notify of video mode change
@@ -195,11 +203,16 @@ assign HPS_BUS[15:0] = EXT_BUS[32] ? EXT_BUS[15:0] : fp_enable ? fp_dout : io_do
 
 reg [15:0] cfg;
 assign buttons = cfg[1:0];
-//cfg[2] - vga_scaler handled in sys_top
-//cfg[3] - csync handled in sys_top
+//cfg[2] - vga_scaler handled in sys_top (and exported below, DVD-FORK)
+//cfg[3] - csync handled in sys_top (and exported below, DVD-FORK)
 assign forced_scandoubler = cfg[4];
-//cfg[5] - ypbpr handled in sys_top
+//cfg[5] - ypbpr handled in sys_top (and exported below, DVD-FORK)
 assign direct_video = cfg[10];
+// DVD-FORK (dual-raster analog output): ini video bits for the core
+assign ini_vga_scaler = cfg[2];
+assign ini_csync      = cfg[3];
+assign ini_ypbpr      = cfg[5];
+assign ini_sog        = cfg[9];
 
 reg [3:0] sdn;
 reg [3:0] sd_rrb = 0;

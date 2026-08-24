@@ -1,0 +1,27 @@
+{
+    "verilog.linting.linter": "iverilog",
+    "verilog.linting.iverilog.arguments": "-g2012",
+    "verilog.formatting.formatter": "none",
+    "files.associations": {
+        "*.v": "verilog",
+        "*.sv": "systemverilog",
+        "*.svh": "systemverilog",
+        "*.vhd": "vhdl",
+        "*.vhdl": "vhdl"
+    },
+    "editor.rulers": [100],
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "[systemverilog]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+    },
+    "[c]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+    },
+    "[cpp]": {
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true
+    }
+}

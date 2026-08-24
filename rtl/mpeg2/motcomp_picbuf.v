@@ -36,8 +36,9 @@ module motcomp_picbuf(
   progressive_sequence, progressive_frame, top_field_first, repeat_first_field, last_frame,
   picture_coding_type,
   forward_reference_frame, backward_reference_frame, current_frame,
-  output_frame, output_frame_valid, output_frame_rd, output_progressive_sequence, output_progressive_frame, output_top_field_first, output_repeat_first_field, 
-  update_picture_buffers, picbuf_busy
+  output_frame, output_frame_valid, output_frame_rd, output_progressive_sequence, output_progressive_frame, output_top_field_first, output_repeat_first_field,
+  update_picture_buffers, picbuf_busy,
+  flags_commit                             // DVD-FORK (round 11): per-picture display flags valid (coding ext parsed)
   );
 
   input              clk;                          // clock
@@ -86,6 +87,24 @@ module motcomp_picbuf(
   output reg         picbuf_busy;
 
   input              update_picture_buffers;
+
+  /* DVD-FORK FIX (round 11 — STALE DISPLAY FLAGS, the lip-sync ~+3% engine):
+   * update_picture_buffers fires at the picture HEADER (and the vld then
+   * freezes until this FSM processes it), but progressive_frame /
+   * top_field_first / repeat_first_field parse LATER, in the picture coding
+   * extension — so the STATE_UPDATE branches below capture the PREVIOUS
+   * coded picture's flags into current_frame_*. On clean 3:2 film the
+   * display-order flag sequence is merely phase-shifted (still alternating,
+   * cadence looks perfect); FRAME DROPS break the pairing and each
+   * phase-locked drop leaks ~+1 refresh of video lead (measured: the
+   * VBUF-funded +3% ramp that parks lips ~0.9 s audio-behind — see
+   * docs/lipsync_pickup.md rounds 8–11). flags_commit pulses when the vld
+   * has parsed THIS picture's coding extension (never for a dropped
+   * picture): re-latch the three per-picture flags into the current slot.
+   * Ordering is guaranteed by the header freeze: STATE_UPDATE for picture N
+   * strictly precedes the vld reaching N's extension. Emission reads
+   * current_frame_* at the NEXT picture's update — long after the commit. */
+  input              flags_commit;
 
   reg                prev_output_frame_valid;
 
@@ -265,6 +284,19 @@ module motcomp_picbuf(
         current_frame_progressive_frame <= vld_progressive_frame;
         current_frame_top_field_first <= vld_top_field_first;
         current_frame_repeat_first_field <= vld_repeat_first_field;
+      end
+    else if (clk_en && flags_commit && current_frame_valid)
+      begin
+        /* DVD-FORK FIX (round 11): the vld has parsed the CURRENT picture's
+         * coding extension — replace the stale (previous picture's) flags
+         * captured at STATE_UPDATE with the picture's own. */
+        current_frame <= current_frame;
+        current_frame_valid <= current_frame_valid;
+        current_frame_coding_type <= current_frame_coding_type;
+        current_frame_progressive_sequence <= current_frame_progressive_sequence;
+        current_frame_progressive_frame <= progressive_frame;
+        current_frame_top_field_first <= top_field_first;
+        current_frame_repeat_first_field <= repeat_first_field;
       end
     else
       begin

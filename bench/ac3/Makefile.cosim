@@ -1,0 +1,44 @@
+# Verilator + liba52 co-sim build for the AC-3 front-end.
+#   make -f Makefile.cosim          # build
+#   make -f Makefile.cosim run      # build + run against the tone stream
+#   make -f Makefile.cosim clean
+#
+# Requires: verilator (sudo pacman -S verilator), liba52 (a52dec).
+
+TOP     := ac3_front
+RTLDIR  := $(abspath $(CURDIR)/../../dvd/ac3)
+STREAMS := $(abspath $(CURDIR)/../../tools/streams)
+MDIR    := obj_cosim
+BIN     := $(MDIR)/$(TOP)_cosim
+
+VSRC := \
+    $(RTLDIR)/bit_fifo.sv \
+    $(RTLDIR)/bit_reader.sv \
+    $(RTLDIR)/sync_crc.sv \
+    $(RTLDIR)/bsi_parse.sv \
+    $(RTLDIR)/audblk_parse.sv \
+    $(RTLDIR)/exponent_decode.sv \
+    $(RTLDIR)/bit_allocation.sv \
+    $(RTLDIR)/mantissa_dequant.sv \
+    $(RTLDIR)/imdct_512.sv \
+    $(RTLDIR)/ac3_parse.sv \
+    $(RTLDIR)/ac3_front.sv
+
+VFLAGS := --cc --exe --build -j 0 \
+    --top-module $(TOP) +incdir+$(RTLDIR) \
+    +define+AC3_COSIM \
+    --Mdir $(MDIR) -o $(TOP)_cosim \
+    -Wall -Wno-fatal \
+    -CFLAGS "-std=c++17" -LDFLAGS "-la52"
+
+.PHONY: all run clean
+all: $(BIN)
+
+$(BIN): cosim_main.cpp $(VSRC)
+	verilator $(VFLAGS) cosim_main.cpp $(VSRC)
+
+run: $(BIN)
+	./$(BIN) $(STREAMS)/tone_1k_48k_stereo_192k.ac3
+
+clean:
+	rm -rf $(MDIR)

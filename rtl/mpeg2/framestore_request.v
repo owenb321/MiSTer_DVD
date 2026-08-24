@@ -51,7 +51,8 @@ module framestore_request(rst, clk,
                   vbr_wr_full, vbr_wr_almost_full, vbr_rd_almost_empty,
                   vb_flush,
                   mem_req_wr_cmd, mem_req_wr_addr, mem_req_wr_dta, mem_req_wr_en, mem_req_wr_almost_full, 
-                  tag_wr_dta, tag_wr_en, tag_wr_almost_full
+                  tag_wr_dta, tag_wr_en, tag_wr_almost_full,
+                  dbg_vbuf_fill                                     // DVD-FORK DEBUG: VBUF occupancy tap
                   );
 
   input            rst;
@@ -141,6 +142,31 @@ module framestore_request(rst, clk,
   wire do_osd;
   wire do_vbw;
 
+  /*
+   * DVD-FORK FIX (2026-07-01, feature/fringe-retime-fmax): pipeline-register the two
+   * high-fanout FIFO almost_full backpressure inputs. mem_req_wr_almost_full is the
+   * mem_request_fifo's registered prog_full, which fans out across the 8-way do_* priority
+   * mux into the state register — that cross-module + high-fanout combinational path was the
+   * clk_dec Fmax limiter (~11.5 ns, only ~80 MHz vs the 81 MHz clock), the root cause of the
+   * intermittent green edge-fringe (over-clocked clk_dec, placement lottery). Registering
+   * these inputs here splits the long path into two short hops (FIFO reg -> boundary reg,
+   * then boundary reg -> local do_* cloud), the manual analogue of physical-synthesis
+   * register duplication (which cured the fringe but had to be disabled to route the
+   * congestion-marginal frame-drop build). SAFE: this adds exactly one cycle of latency to
+   * the backpressure, and both FIFOs assert almost_full with MEM_THRESHOLD=16 free slots
+   * (mem_request_fifo depth 64, mem_tag_fifo depth 32) while the FSM issues <=1 request per
+   * cycle, so a 1-cycle-late almost_full can consume at most 1 extra slot of the 16-slot
+   * margin -> no possibility of overflow.
+   */
+  reg mem_req_af_r;
+  reg tag_wr_af_r;
+  always @(posedge clk)
+    if (~rst) mem_req_af_r <= 1'b1;      // reset to "full" = don't issue until fifo confirms room
+    else      mem_req_af_r <= mem_req_wr_almost_full;
+  always @(posedge clk)
+    if (~rst) tag_wr_af_r <= 1'b1;
+    else      tag_wr_af_r <= tag_wr_almost_full;
+
   /* 
    * memory clear address
    */
@@ -154,6 +180,18 @@ module framestore_request(rst, clk,
 
   reg [21:0]vbuf_wr_addr;
   reg [21:0]vbuf_rd_addr;
+
+  /*
+   * DVD-FORK DEBUG: VBUF occupancy, scaled to a byte for the on-screen overlay
+   * (row 10 high byte). The VBUF region is a power-of-two span of 64-bit words
+   * (enlarged ML map: 0x080000..0x0bfffe = 0x40000 words = 2 MB), so occupancy =
+   * (wr - rd) masked to the region size. [17:10] scales 0..0x3FFFF words to
+   * 0..0xFF (0xFF = full). Diagnostic for the decoder's bitstream cushion
+   * (slideshow-decay diagnosis). Width must track VBUF_END-VBUF in mem_codes.v.
+   */
+  output wire [7:0] dbg_vbuf_fill;
+  wire [17:0] dbg_vbuf_fill_words = vbuf_wr_addr[17:0] - vbuf_rd_addr[17:0];
+  assign dbg_vbuf_fill = dbg_vbuf_fill_words[17:10];
 
   reg       vbuf_full;
   reg       vbuf_empty;
@@ -197,7 +235,7 @@ module framestore_request(rst, clk,
   always @*
     case (state)
       STATE_INIT:       next = STATE_CLEAR;
-      STATE_CLEAR:      if ((mem_clr_addr == VBUF_END) && ~mem_req_wr_almost_full) next = STATE_IDLE; // initialize memory
+      STATE_CLEAR:      if ((mem_clr_addr == VBUF_END) && ~mem_req_af_r) next = STATE_IDLE; // initialize memory
                         else next = STATE_CLEAR;
       STATE_IDLE,
       STATE_DISP,
@@ -372,7 +410,7 @@ module framestore_request(rst, clk,
     else 
       case (previous)
         STATE_INIT:        mem_req_wr_en <= 1'b0;
-        STATE_CLEAR:       mem_req_wr_en <= ~mem_req_wr_almost_full;
+        STATE_CLEAR:       mem_req_wr_en <= ~mem_req_af_r;
         STATE_IDLE:        mem_req_wr_en <= 1'b0;
         STATE_REFRESH:     mem_req_wr_en <= 1'b1;
         STATE_DISP:        mem_req_wr_en <= disp_rd_addr_valid;
@@ -399,12 +437,12 @@ module framestore_request(rst, clk,
 `else
     else if (state == STATE_INIT) mem_clr_addr <= FRAME_0_Y; /* lowest address used */
 `endif
-    else if ((state == STATE_CLEAR) && ~mem_req_wr_almost_full) mem_clr_addr <= mem_clr_addr + 22'd1;
+    else if ((state == STATE_CLEAR) && ~mem_req_af_r) mem_clr_addr <= mem_clr_addr + 22'd1;
     else mem_clr_addr <= mem_clr_addr;
 
   always @(posedge clk)
     if (~rst) mem_clr_addr_0 <= FRAME_0_Y;
-    else if ((state == STATE_CLEAR) && ~mem_req_wr_almost_full) mem_clr_addr_0 <= mem_clr_addr;
+    else if ((state == STATE_CLEAR) && ~mem_req_af_r) mem_clr_addr_0 <= mem_clr_addr;
     else mem_clr_addr_0 <= mem_clr_addr_0;
 
   /*
@@ -476,14 +514,14 @@ module framestore_request(rst, clk,
 
   wire vbuf_holdoff = (state == STATE_VBW) || (state == STATE_VBR) || (previous == STATE_VBW) || (previous == STATE_VBR);
  
-  assign do_refresh = (refresh_cnt == 0)                    && REFRESH_EN                 && ~mem_req_wr_almost_full;
-  assign do_disp    = ~disp_rd_addr_empty                   && ~disp_wr_dta_almost_full   && ~mem_req_wr_almost_full && ~tag_wr_almost_full;
-  assign do_vbr     = ~vbuf_empty          && ~vbuf_holdoff &&  vbr_rd_almost_empty       && ~mem_req_wr_almost_full && ~tag_wr_almost_full;
-  assign do_fwd     = ~fwd_rd_addr_empty                    && ~fwd_wr_dta_almost_full    && ~mem_req_wr_almost_full && ~tag_wr_almost_full;
-  assign do_bwd     = ~bwd_rd_addr_empty                    && ~bwd_wr_dta_almost_full    && ~mem_req_wr_almost_full && ~tag_wr_almost_full;
-  assign do_recon   =                                          ~recon_rd_empty            && ~mem_req_wr_almost_full;
-  assign do_vbw     = ~vbuf_full           && ~vbuf_holdoff && ~vbw_rd_empty              && ~mem_req_wr_almost_full;
-  assign do_osd     =                                          ~osd_rd_empty              && ~mem_req_wr_almost_full;
+  assign do_refresh = (refresh_cnt == 0)                    && REFRESH_EN                 && ~mem_req_af_r;
+  assign do_disp    = ~disp_rd_addr_empty                   && ~disp_wr_dta_almost_full   && ~mem_req_af_r && ~tag_wr_af_r;
+  assign do_vbr     = ~vbuf_empty          && ~vbuf_holdoff &&  vbr_rd_almost_empty       && ~mem_req_af_r && ~tag_wr_af_r;
+  assign do_fwd     = ~fwd_rd_addr_empty                    && ~fwd_wr_dta_almost_full    && ~mem_req_af_r && ~tag_wr_af_r;
+  assign do_bwd     = ~bwd_rd_addr_empty                    && ~bwd_wr_dta_almost_full    && ~mem_req_af_r && ~tag_wr_af_r;
+  assign do_recon   =                                          ~recon_rd_empty            && ~mem_req_af_r;
+  assign do_vbw     = ~vbuf_full           && ~vbuf_holdoff && ~vbw_rd_empty              && ~mem_req_af_r;
+  assign do_osd     =                                          ~osd_rd_empty              && ~mem_req_af_r;
 
 `ifdef DEBUG
   always @(posedge clk)

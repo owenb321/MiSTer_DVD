@@ -26,7 +26,11 @@
 `ifndef MODELINE_PAL_PROGR
 `ifndef MODELINE_HDTV_INTERL
 `ifndef MODELINE_VGA
-`define MODELINE_SVGA 1
+`ifndef MODELINE_SVGA
+`ifndef MODELINE_NTSC
+`define MODELINE_NTSC 1  // NTSC 720x480@60Hz for 27.0 MHz dot_clk
+`endif
+`endif
 `endif
 `endif
 `endif
@@ -78,6 +82,45 @@
 
   parameter [2:0]
     VID_MODE       = 3'b000; // = {clip_display_size, pixel_repetition, interlaced}
+`endif
+
+`ifdef MODELINE_NTSC
+
+  /*
+   * modeline: NTSC 480p
+   * ModeLine "720x480"    27.0  720  736  798  858    480  489  495  525 -hsync -vsync
+   */
+
+  parameter [11:0]
+    // DVD-FORK FIX (horizontal off-by-one): syncgen blanks at `h_cntr >= horizontal_resolution`,
+    // so HORZ_RES is the COUNT of active columns, not "columns-1". At 719 the active region was
+    // 719 columns while 720-wide content emits 720 -> the rightmost column fell outside the
+    // active region (a 1-column right crop). 720 gives 720 active columns = standard 720p SD;
+    // hsync (735) and total (858) are unchanged, only the front porch shrinks 16->15. This is
+    // the exact horizontal analogue of the VERT_RES 479->480 fix below. (Alternative root fix,
+    // not taken: change syncgen's `>=` to `>` for both axes/all modelines and keep the -1
+    // values — see the OFF-BY-ONE note in rtl/mpeg2/syncgen.v.)
+    HORZ_RES       = 720,
+    HORZ_SYNC_STRT = 735,
+    HORZ_SYNC_END  = 797,
+    HORZ_LEN       = 857,
+    // DVD-FORK FIX (480-line split): the syncgen blanks at `v_cntr >= vertical_resolution`,
+    // so VERT_RES is the COUNT of active lines, not "lines-1". At 479 the active region is
+    // 479 lines while exactly-480 content emits 480 -> the bottom line falls outside the
+    // active region and spills to the next frame (the 480-only K=1 strobe; 479-tall content
+    // played clean, which pinned it here). 480 gives 480 active lines = standard 480p; the
+    // vsync position (488) and total (525) are unchanged, only the front porch shrinks 9->8.
+    // (Alternative root fix, not taken: change syncgen's `>=` to `>` for both axes/all modes
+    //  and keep VERT_RES=479 — see the OFF-BY-ONE note in rtl/mpeg2/syncgen.v. If you do that,
+    //  set VERT_RES back to 479 here.)
+    VERT_RES       = 480,
+    VERT_SYNC_STRT = 488,
+    VERT_SYNC_END  = 494,
+    VERT_LEN       = 524,
+    HALFLINE       = 0;
+
+  parameter [2:0]
+    VID_MODE       = 3'b000;
 `endif
 
 `ifdef MODELINE_SIF

@@ -35,14 +35,17 @@
 //`define DEBUG 1
 
 module mixer(
-  clk, rst, 
+  clk, clk_en, rst, 
   pixel_repetition,
   y_in, u_in, v_in, osd_in, position_in, pixel_rd_en, pixel_rd_valid, pixel_rd_underflow,
   h_pos, v_pos, h_sync_in, v_sync_in, pixel_en_in,
-  y_out, u_out, v_out, osd_out, h_sync_out, v_sync_out, pixel_en_out
+  y_out, u_out, v_out, osd_out, h_sync_out, v_sync_out, pixel_en_out,
+  dbg_lines_displayed, dbg_first_vpos, dbg_last_vpos,             // DVD-FORK DEBUG (256-line strobe probe)
+  disp_v_offset                                                   // DVD-FORK (CRT anamorphic letterbox bar offset)
   );
 
   input              clk;                      // clock
+  input              clk_en;                   // clock enable
   input              rst;                      // synchronous active low reset
 
   input              pixel_repetition;         // if asserted, repeat each pixel once
@@ -72,6 +75,30 @@ module mixer(
   output reg         h_sync_out;
   output reg         v_sync_out;
   output reg         pixel_en_out;
+
+  /* DVD-FORK DEBUG (256-line strobe probe): per-output-frame instrumentation,
+   * latched at end of frame (on v_sync_out rising edge) so emu reads a stable value.
+   * Underflow was confirmed ZERO on HW, so these now report the on-screen BAND of the
+   * displayed picture (which v_pos lines actually got pixels) to reconcile the line
+   * count with what is seen:
+   *  - dbg_lines_displayed : number of lines displayed this frame (STATE_FIRST_PIXEL).
+   *  - dbg_first_vpos      : v_pos of the FIRST displayed (non-blanked) pixel (0xFFF none).
+   *  - dbg_last_vpos       : v_pos of the LAST displayed pixel this frame. */
+  output reg   [11:0]dbg_lines_displayed;
+  output reg   [11:0]dbg_first_vpos;
+  output reg   [11:0]dbg_last_vpos;
+
+  /* DVD-FORK (CRT anamorphic letterbox, 2026-07-05): raster v_pos of the first
+   * displayed picture line (the top black bar height, in woven frame lines). The
+   * picture frame-top (ROW_0_COL_0 top field / ROW_1_COL_0 bottom field) is held in
+   * STATE_WAIT until v_pos reaches this offset, so lines 0..offset-1 stay at the mixer's
+   * black default (top bar); the picture then fills down and runs out before the raster
+   * bottom (bottom bar is automatic). v_pos is the woven frame-line number in BOTH
+   * progressive (v_cntr) and interlaced (2*v_cntr+parity, syncgen.v) modes, so one value
+   * serves both paths (letterbox = vertical_size/8; FIT/ZOOM = 0). At offset 0 the two
+   * comparisons below reduce to the original (v_pos<=1) / (v_pos!=0 && v_pos!=1) — the
+   * FIT path is bit-identical. Quasi-static (menu-rate) level. */
+  input        [11:0]disp_v_offset;
 
   /* store pixel_queue fifo output */
   reg           [7:0]y_0;
@@ -108,9 +135,24 @@ module mixer(
 
   wire              first_pixel_read    = (pixel_rd_valid && ((position_in == ROW_0_COL_0) || (position_in == ROW_1_COL_0) || (position_in == ROW_X_COL_0)))      // first pixel at fifo output
                                                          || ((position_in_0 == ROW_0_COL_0) || (position_in_0 == ROW_1_COL_0) || (position_in_0 == ROW_X_COL_0)); // first pixel already stored
-  wire              display_first_pixel = (h_pos == 12'd0) && (((position_in_0 == ROW_0_COL_0) && (v_pos == 12'd0)) ||
-                                                               ((position_in_0 == ROW_1_COL_0) && (v_pos == 12'd1)) ||
-                                                               ((position_in_0 == ROW_X_COL_0) && (v_pos != 12'd0) && (v_pos != 12'd1)));
+  // DVD-FORK FIX (interlaced 3:2 field-parity / black fields): a field's first line
+  // carries ROW_0_COL_0 (top field) or ROW_1_COL_0 (bottom field); upstream only START a
+  // frame when that code matches the syncgen's free-running v_pos parity (ROW_0@v_pos0,
+  // ROW_1@v_pos1). But 3:2 pulldown repeats a field, so the content field sequence is NOT
+  // strictly alternating (…T,B,T,T,B…); the repeated/boundary field then arrives on the
+  // OPPOSITE parity slot, never matches, and the mixer emits 0 lines = a BLACK field (black
+  // frame in bob, woven scanlines/"pulse" in weave). Fix: treat EITHER frame-top code as a
+  // frame start whenever v_pos is at the top of the active region (0 or 1), so every field
+  // displays regardless of its parity. Cost: a field landing on the off-parity slot is
+  // offset <=1 line (irrelevant for bob; minor weave comb on 3:2 boundary frames only).
+  // Progressive/strobe path is unchanged: FRAME emits ROW_0_COL_0 and lands at v_pos 0.
+  wire              is_frame_top        = (position_in_0 == ROW_0_COL_0) || (position_in_0 == ROW_1_COL_0);
+  /* DVD-FORK (CRT anamorphic letterbox): the frame-top window and the "not-frame-top"
+   * line gate are shifted by disp_v_offset (0 in FIT/ZOOM => bit-identical to upstream's
+   * v_pos 0/1). The picture starts at v_pos==offset (top field, even) / offset+1 (bottom
+   * field, odd), giving a centred top bar. */
+  wire              display_first_pixel = (h_pos == 12'd0) && ((is_frame_top && (v_pos >= disp_v_offset) && (v_pos <= disp_v_offset + 12'd1)) ||
+                                                               ((position_in_0 == ROW_X_COL_0) && (v_pos != disp_v_offset) && (v_pos != disp_v_offset + 12'd1)));
   wire              last_pixel_read     = pixel_rd_valid && (position_in == ROW_X_COL_LAST);
 
   /* next state logic */
@@ -148,39 +190,39 @@ module mixer(
   /* state */
   always @(posedge clk)
     if(~rst) state <= STATE_INIT;
-    else state <= next;
+    else if (clk_en) state <= next;
 
   /* registers */
   /* store pixel_fifo output */
   always @(posedge clk)
     if (~rst) y_0 <= 8'd0;
-    else if (pixel_rd_valid) y_0 <= y_in;
+    else if (clk_en && pixel_rd_valid) y_0 <= y_in;
     else y_0 <= y_0;
 
   always @(posedge clk)
     if (~rst) u_0 <= 8'd0;
-    else if (pixel_rd_valid) u_0 <= u_in;
+    else if (clk_en && pixel_rd_valid) u_0 <= u_in;
     else u_0 <= u_0;
 
   always @(posedge clk)
     if (~rst) v_0 <= 8'd0;
-    else if (pixel_rd_valid) v_0 <= v_in;
+    else if (clk_en && pixel_rd_valid) v_0 <= v_in;
     else v_0 <= v_0;
 
   always @(posedge clk)
     if (~rst) osd_0 <= 8'd0;
-    else if (pixel_rd_valid) osd_0 <= osd_in;
+    else if (clk_en && pixel_rd_valid) osd_0 <= osd_in;
     else osd_0 <= osd_0;
 
   always @(posedge clk)
     if (~rst) position_in_0 <= ROW_X_COL_X;
-    else if (pixel_rd_valid) position_in_0 <= position_in;
+    else if (clk_en && pixel_rd_valid) position_in_0 <= position_in;
     else position_in_0 <= position_in_0;
 
   /* read from pixel_fifo */
   always @(posedge clk)
     if (~rst) pixel_rd_en <= 1'b0;
-    else 
+    else if (clk_en)
       case (state)
         STATE_INIT:               pixel_rd_en <= ~pixel_rd_en && ~first_pixel_read;
 	STATE_WAIT:               pixel_rd_en <= 1'b0;
@@ -196,15 +238,15 @@ module mixer(
   /* delay sync gen output */
   always @(posedge clk)
     if (~rst) h_sync_0 <= 1'b0;
-    else h_sync_0 <= h_sync_in;
+    else if (clk_en) h_sync_0 <= h_sync_in;
 
   always @(posedge clk)
     if (~rst) v_sync_0 <= 1'b0;
-    else v_sync_0 <= v_sync_in;
+    else if (clk_en) v_sync_0 <= v_sync_in;
 
   always @(posedge clk)
     if (~rst) pixel_en_0 <= 1'b0;
-    else pixel_en_0 <= pixel_en_in;
+    else if (clk_en) pixel_en_0 <= pixel_en_in;
 
   /* default values of y_out, u_out and v_out are 16, 128, 128, which maps onto black */
 
@@ -217,23 +259,23 @@ module mixer(
 
   always @(posedge clk)
     if (~rst) y_out <= 8'b0;
-    else if (pixel_en_2 && displaying) y_out <= y_0;
-    else y_out <= 8'd16;
+    else if (clk_en && pixel_en_2 && displaying) y_out <= y_0;
+    else if (clk_en) y_out <= 8'd16;
 
   always @(posedge clk)
     if (~rst) u_out <= 8'b0;
-    else if (pixel_en_2 && displaying) u_out <= u_0;
-    else u_out <= 8'd128;
+    else if (clk_en && pixel_en_2 && displaying) u_out <= u_0;
+    else if (clk_en) u_out <= 8'd128;
 
   always @(posedge clk)
     if (~rst) v_out <= 8'b0;
-    else if (pixel_en_2 && displaying) v_out <= v_0;
-    else v_out <= 8'd128;
+    else if (clk_en && pixel_en_2 && displaying) v_out <= v_0;
+    else if (clk_en) v_out <= 8'd128;
 
   always @(posedge clk)
     if (~rst) osd_out <= 8'b0;
-    else if (pixel_en_2 && displaying) osd_out <= osd_0;
-    else osd_out <= 8'd0;
+    else if (clk_en && pixel_en_2 && displaying) osd_out <= osd_0;
+    else if (clk_en) osd_out <= 8'd0;
 
  /*
   * delay h_sync, v_sync, pixel_en_out by two clocks
@@ -241,39 +283,71 @@ module mixer(
 
   always @(posedge clk)
     if (~rst) pixel_en_1 <= 1'b0;
-    else pixel_en_1 <= pixel_en_0;
+    else if (clk_en) pixel_en_1 <= pixel_en_0;
 
   always @(posedge clk)
     if (~rst) h_sync_1 <= 1'b0;
-    else h_sync_1 <= h_sync_0;
+    else if (clk_en) h_sync_1 <= h_sync_0;
 
   always @(posedge clk)
     if (~rst) v_sync_1 <= 1'b0;
-    else v_sync_1 <= v_sync_0;
+    else if (clk_en) v_sync_1 <= v_sync_0;
 
   always @(posedge clk)
     if (~rst) pixel_en_2 <= 1'b0;
-    else pixel_en_2 <= pixel_en_1;
+    else if (clk_en) pixel_en_2 <= pixel_en_1;
 
   always @(posedge clk)
     if (~rst) h_sync_2 <= 1'b0;
-    else h_sync_2 <= h_sync_1;
+    else if (clk_en) h_sync_2 <= h_sync_1;
 
   always @(posedge clk)
     if (~rst) v_sync_2 <= 1'b0;
-    else v_sync_2 <= v_sync_1;
+    else if (clk_en) v_sync_2 <= v_sync_1;
 
   always @(posedge clk)
     if (~rst) pixel_en_out <= 1'b0;
-    else pixel_en_out <= pixel_en_2;
+    else if (clk_en) pixel_en_out <= pixel_en_2;
 
   always @(posedge clk)
     if (~rst) h_sync_out <= 1'b0;
-    else h_sync_out <= h_sync_2;
+    else if (clk_en) h_sync_out <= h_sync_2;
 
   always @(posedge clk)
     if (~rst) v_sync_out <= 1'b0;
-    else v_sync_out <= v_sync_2;
+    else if (clk_en) v_sync_out <= v_sync_2;
+
+  /* DVD-FORK DEBUG (256-line strobe probe) ------------------------------------
+   * Count displayed lines + capture underflow position, per output frame.
+   * A line is "displayed" when the FSM enters STATE_FIRST_PIXEL (next==FP from
+   * STATE_WAIT). Latch the running tallies on the v_sync_out rising edge.       */
+  reg        v_sync_out_dly;
+  reg [11:0] lines_run;        // displayed lines so far this frame
+  reg [11:0] first_vpos_run;   // v_pos of first displayed pixel this frame (0xFFF = none yet)
+  reg [11:0] last_vpos_run;    // v_pos of last displayed pixel this frame
+  wire       line_started = (state == STATE_WAIT) && (next == STATE_FIRST_PIXEL);
+  wire       displaying_now = (pixel_en_2 && displaying);   // a real pixel is being emitted
+  always @(posedge clk)
+    if (~rst) begin
+      v_sync_out_dly <= 1'b0; lines_run <= 12'd0; first_vpos_run <= 12'hfff; last_vpos_run <= 12'd0;
+      dbg_lines_displayed <= 12'd0; dbg_first_vpos <= 12'hfff; dbg_last_vpos <= 12'd0;
+    end else if (clk_en) begin
+      v_sync_out_dly <= v_sync_out;
+      if (v_sync_out && ~v_sync_out_dly) begin           // start of a new output frame
+        dbg_lines_displayed <= lines_run;                // latch previous frame's tallies
+        dbg_first_vpos      <= first_vpos_run;
+        dbg_last_vpos       <= last_vpos_run;
+        lines_run      <= 12'd0;
+        first_vpos_run <= 12'hfff;
+        last_vpos_run  <= 12'd0;
+      end else begin
+        if (line_started && (lines_run != 12'hfff)) lines_run <= lines_run + 12'd1;
+        if (displaying_now) begin
+          if (first_vpos_run == 12'hfff) first_vpos_run <= v_pos;  // first displayed line
+          last_vpos_run <= v_pos;                                   // keeps the last
+        end
+      end
+    end
 
 `ifdef DEBUG
   always @(posedge clk)

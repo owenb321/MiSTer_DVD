@@ -10,8 +10,17 @@ derive_pll_clocks
 derive_clock_uncertainty
 
 # Decouple different clock groups (to simplify routing)
+# DVD-FORK FIX (2026-08-01): also match this fork's core PLL hierarchy. The stock
+# pattern expects emu|pll|pll_inst|altera_pll_i|... but our PLL is dvd/sys_pll.sv
+# instantiated as emu|sys_pll with altera_pll_i directly inside (no pll_inst
+# level), so the core's four PLL clocks (clk_sys/clk_mem/vga/clk_dec) matched NO
+# group and every async crossing to h2f/pll_audio/FPGA_CLK2_50/pll_hdmi was fully
+# timed (~40k paths, -68k ns TNS vs clk_dec's real -278 ns) — drowning the
+# fitter's timing-driven placement and feeding the clk_dec Fmax placement lottery
+# (the chroma fringe). Intra-sys_pll transfers stay timed (same group), matching
+# stock semantics.
 set_clock_groups -exclusive \
-   -group [get_clocks { *|pll|pll_inst|altera_pll_i|*[*].*|divclk}] \
+   -group [get_clocks { *|pll|pll_inst|altera_pll_i|*[*].*|divclk *|sys_pll|altera_pll_i|*[*].*|divclk}] \
    -group [get_clocks { pll_hdmi|pll_hdmi_inst|altera_pll_i|*[0].*|divclk}] \
    -group [get_clocks { pll_audio|pll_audio_inst|altera_pll_i|*[0].*|divclk}] \
    -group [get_clocks { spi_sck}] \

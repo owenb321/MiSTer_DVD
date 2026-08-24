@@ -235,8 +235,8 @@ module yuv2rgb (clk, clk_en, rst,
         b_0   <= b_0;
 
         r_1   <= r_1;
-        g_1   <= r_1;
-        b_1   <= r_1;
+        g_1   <= g_1;
+        b_1   <= b_1;
       end
 
   /* clipping */

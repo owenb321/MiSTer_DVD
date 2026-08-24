@@ -43,31 +43,6 @@ module sys_top
 	
 	input         HDMI_TX_INT,
 
-	//////////// SDR ///////////
-	output [12:0] SDRAM_A,
-	inout  [15:0] SDRAM_DQ,
-	output        SDRAM_DQML,
-	output        SDRAM_DQMH,
-	output        SDRAM_nWE,
-	output        SDRAM_nCAS,
-	output        SDRAM_nRAS,
-	output        SDRAM_nCS,
-	output  [1:0] SDRAM_BA,
-	output        SDRAM_CLK,
-	output        SDRAM_CKE,
-
-`ifdef MISTER_DUAL_SDRAM
-	////////// SDR #2 //////////
-	output [12:0] SDRAM2_A,
-	inout  [15:0] SDRAM2_DQ,
-	output        SDRAM2_nWE,
-	output        SDRAM2_nCAS,
-	output        SDRAM2_nRAS,
-	output        SDRAM2_nCS,
-	output  [1:0] SDRAM2_BA,
-	output        SDRAM2_CLK,
-
-`else
 	//////////// VGA ///////////
 	output  [5:0] VGA_R,
 	output  [5:0] VGA_G,
@@ -93,7 +68,6 @@ module sys_top
 	input         BTN_USER,
 	input         BTN_OSD,
 	input         BTN_RESET,
-`endif
 
 	////////// I/O ALT /////////
 	output        SD_SPI_CS,
@@ -1390,6 +1364,29 @@ scanlines #(0) VGA_scanlines
 	.ce_out(vga_ce_sl)
 );
 
+// DVD-FORK (dual-raster analog output): second scanlines stage for the core's
+// 15 kHz VGA2_* raster, so the ini/OSD scanlines effect keeps working on the
+// analog output exactly like stock.
+wire [23:0] vga2_data_sl;
+wire        vga2_de_sl, vga2_ce_sl, vga2_vs_sl, vga2_hs_sl;
+scanlines #(0) VGA2_scanlines
+(
+	.clk(clk_vid),
+
+	.scanlines(scanlines),
+	.din(vga2_de ? {vga2_r, vga2_g, vga2_b} : 24'd0),
+	.hs_in(vga2_hs_fix),
+	.vs_in(vga2_vs_fix),
+	.de_in(vga2_de),
+	.ce_in(vga2_ce),
+
+	.dout(vga2_data_sl),
+	.hs_out(vga2_hs_sl),
+	.vs_out(vga2_vs_sl),
+	.de_out(vga2_de_sl),
+	.ce_out(vga2_ce_sl)
+);
+
 wire [23:0] vga_data_osd;
 wire        vga_vs_osd, vga_hs_osd, vga_de_osd;
 osd vga_osd
@@ -1401,11 +1398,16 @@ osd vga_osd
 	.io_din(io_din),
 	.osd_status(osd_status),
 
+	// DVD-FORK (dual-raster analog output): the ONE functional mux. vga2_en=0
+	// reduces to the stock wiring; vga2_en=1 hands the whole direct analog
+	// chain (osd -> csync -> yc -> vga_out -> pins + direct_video tap) the
+	// core's native 15 kHz raster. ascal/HDMI taps vga_data_sl above — main
+	// raster, unaffected.
 	.clk_video(clk_vid),
-	.din(vga_data_sl),
-	.hs_in(vga_hs_sl),
-	.vs_in(vga_vs_sl),
-	.de_in(vga_de_sl),
+	.din(vga2_en ? vga2_data_sl : vga_data_sl),
+	.hs_in(vga2_en ? vga2_hs_sl : vga_hs_sl),
+	.vs_in(vga2_en ? vga2_vs_sl : vga_vs_sl),
+	.de_in(vga2_en ? vga2_de_sl : vga_de_sl),
 
 	.dout(vga_data_osd),
 	.hs_out(vga_hs_osd),
@@ -1548,12 +1550,19 @@ end
 
 /////////////////////////  Audio output  ////////////////////////////////
 
-assign SDCD_SPDIF = (mcp_en & ~spdif) ? 1'b0 : 1'bZ;
+// DVD-FORK: IEC 61937 bitstream passthrough. When the core asserts
+// spdif_pass_en, its own biphase-encoded (non-PCM) stream `spdif_pass`
+// replaces the framework's PCM `spdif` on the S/PDIF pins; otherwise the
+// normal PCM path is bit-for-bit unchanged.
+wire spdif_pass, spdif_pass_en;
+wire spdif_out = spdif_pass_en ? spdif_pass : spdif;
+
+assign SDCD_SPDIF = (mcp_en & ~spdif_out) ? 1'b0 : 1'bZ;
 
 `ifndef MISTER_DUAL_SDRAM
 	wire analog_l, analog_r;
 
-	assign AUDIO_SPDIF = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_LRCLK : spdif;
+	assign AUDIO_SPDIF = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_LRCLK : spdif_out;
 	assign AUDIO_R     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_I2S   : analog_r;
 	assign AUDIO_L     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_SCLK  : analog_l;
 `endif
@@ -1679,6 +1688,16 @@ wire        hvs_fix, hhs_fix, hde_emu;
 wire        clk_vid, ce_pix, clk_ihdmi, ce_hpix;
 wire        vga_force_scaler;
 
+// DVD-FORK (dual-raster analog output): the core emits a SECOND, simultaneous
+// raster (native 15 kHz 480i/576i from dvd/re_interlace.sv) on the VGA2_* ports.
+// When vga2_en=1 the DIRECT analog chain (scanlines -> vga_osd -> csync -> yc ->
+// vga_out -> pins, incl. the direct_video tap) takes this raster, while ascal/
+// HDMI keeps consuming the main VGA_* stream untouched. vga2_en=0 reduces every
+// added mux to its stock expression — bit-identical to upstream.
+wire  [7:0] vga2_r, vga2_g, vga2_b;
+wire        vga2_hs, vga2_vs, vga2_de, vga2_ce, vga2_en;
+wire        vga2_vs_fix, vga2_hs_fix;
+
 wire        ram_clk;
 wire [28:0] ram_address;
 wire [7:0]  ram_burstcount;
@@ -1697,6 +1716,10 @@ wire  [1:0] btn;
 
 sync_fix sync_v(clk_vid, vs_emu, vs_fix);
 sync_fix sync_h(clk_vid, hs_emu, hs_fix);
+
+// DVD-FORK (dual-raster analog output)
+sync_fix sync_v2(clk_vid, vga2_vs, vga2_vs_fix);
+sync_fix sync_h2(clk_vid, vga2_hs, vga2_hs_fix);
 
 wire  [6:0] user_out, user_in;
 
@@ -1766,6 +1789,16 @@ emu emu
 	.VGA_F1(f1),
 	.VGA_SCALER(vga_force_scaler),
 
+	// DVD-FORK (dual-raster analog output)
+	.VGA2_R(vga2_r),
+	.VGA2_G(vga2_g),
+	.VGA2_B(vga2_b),
+	.VGA2_HS(vga2_hs),
+	.VGA2_VS(vga2_vs),
+	.VGA2_DE(vga2_de),
+	.VGA2_CE(vga2_ce),
+	.VGA2_EN(vga2_en),
+
 `ifndef MISTER_DUAL_SDRAM
 	.VGA_DISABLE(VGA_DISABLE),
 `endif
@@ -1816,6 +1849,12 @@ emu emu
 	.AUDIO_S(audio_s),
 	.AUDIO_MIX(audio_mix),
 
+	// DVD-FORK: IEC 61937 bitstream passthrough — override the framework PCM
+	// spdif on the S/PDIF pin(s) when the core requests it (see the S/PDIF
+	// output assigns above).
+	.SPDIF_PASS(spdif_pass),
+	.SPDIF_PASS_EN(spdif_pass_en),
+
 	.ADC_BUS({ADC_SCK,ADC_SDO,ADC_SDI,ADC_CONVST}),
 
 	.DDRAM_CLK(ram_clk),
@@ -1828,30 +1867,6 @@ emu emu
 	.DDRAM_DIN(ram_writedata),
 	.DDRAM_BE(ram_byteenable),
 	.DDRAM_WE(ram_write),
-
-	.SDRAM_DQ(SDRAM_DQ),
-	.SDRAM_A(SDRAM_A),
-	.SDRAM_DQML(SDRAM_DQML),
-	.SDRAM_DQMH(SDRAM_DQMH),
-	.SDRAM_BA(SDRAM_BA),
-	.SDRAM_nCS(SDRAM_nCS),
-	.SDRAM_nWE(SDRAM_nWE),
-	.SDRAM_nRAS(SDRAM_nRAS),
-	.SDRAM_nCAS(SDRAM_nCAS),
-	.SDRAM_CLK(SDRAM_CLK),
-	.SDRAM_CKE(SDRAM_CKE),
-
-`ifdef MISTER_DUAL_SDRAM
-	.SDRAM2_DQ(SDRAM2_DQ),
-	.SDRAM2_A(SDRAM2_A),
-	.SDRAM2_BA(SDRAM2_BA),
-	.SDRAM2_nCS(SDRAM2_nCS),
-	.SDRAM2_nWE(SDRAM2_nWE),
-	.SDRAM2_nRAS(SDRAM2_nRAS),
-	.SDRAM2_nCAS(SDRAM2_nCAS),
-	.SDRAM2_CLK(SDRAM2_CLK),
-	.SDRAM2_EN(io_dig),
-`endif
 
 	.BUTTONS(btn),
 	.OSD_STATUS(osd_status),

@@ -40,17 +40,20 @@ module motcomp(
   dmv_0_0, dmv_0_1, dmv_1_0, dmv_1_1,
   motion_vert_field_select_0_0, motion_vert_field_select_0_1, motion_vert_field_select_1_0, motion_vert_field_select_1_1,
   second_field, update_picture_buffers, progressive_sequence, progressive_frame, top_field_first, repeat_first_field, last_frame,
+  flags_commit,                                                  // DVD-FORK (round 11): vld's per-picture display flags valid (coding ext parsed)
   idct_rd_dta_empty, idct_rd_dta_en, idct_rd_dta, idct_rd_dta_valid, frame_idct_wr_overflow, dct_block_wr_overflow, mvec_wr_almost_full, mvec_wr_overflow, dst_wr_overflow,
   source_select,
   fwd_wr_addr_clk_en, fwd_wr_addr_full, fwd_wr_addr_almost_full, fwd_wr_addr_en, fwd_wr_addr_ack, fwd_wr_addr, fwd_rd_dta_clk_en, fwd_rd_dta_empty, fwd_rd_dta_en, fwd_rd_dta_valid, fwd_rd_dta,
   bwd_wr_addr_clk_en, bwd_wr_addr_full, bwd_wr_addr_almost_full, bwd_wr_addr_en, bwd_wr_addr_ack, bwd_wr_addr, bwd_rd_dta_clk_en, bwd_rd_dta_empty, bwd_rd_dta_en, bwd_rd_dta_valid, bwd_rd_dta,
   recon_wr_full, recon_wr_almost_full, recon_wr_en, recon_wr_ack, recon_wr_addr, recon_wr_dta,
-  output_frame, output_frame_valid, output_frame_rd, output_progressive_sequence, output_progressive_frame, output_top_field_first, output_repeat_first_field
+  output_frame, output_frame_valid, output_frame_rd, output_progressive_sequence, output_progressive_frame, output_top_field_first, output_repeat_first_field,
+  dbg_ref_stall                                                  // DVD-FORK DEBUG (stage profiler)
   );
 
   input              clk;                      // clock
   input              clk_en;                   // clock enable
   input              rst;                      // synchronous active low reset
+  output             dbg_ref_stall;            // DVD-FORK DEBUG (stage profiler): recon ref-feed stall
   output reg         busy;                     // addrgen freezes vld while processing motion vectors 
 
   input         [2:0]picture_coding_type;      // identifies whether a picture is an I, P or B picture.
@@ -85,6 +88,7 @@ module motcomp(
   input              motion_vert_field_select_1_1;
   input              second_field;
   input              update_picture_buffers;
+  input              flags_commit;      // DVD-FORK (round 11): direct wire (NOT via the mvec fifo — ordering by the vld header freeze)
   input              progressive_sequence;
   input              progressive_frame;
   input              top_field_first;
@@ -400,6 +404,7 @@ module motcomp(
     .repeat_first_field(repeat_first_field),                 // from vld
     .last_frame(mvec_rd_last_frame),
     .update_picture_buffers(mvec_rd_update_picture_buffers),
+    .flags_commit(flags_commit),                             // DVD-FORK (round 11): direct from vld
     .motion_vector_valid(mvec_rd_motion_vector_valid),
 
     .source_select(source_select),
@@ -480,7 +485,8 @@ module motcomp(
     .recon_wr_almost_full(recon_wr_almost_full),
     .recon_wr_en(recon_wr_en),
     .recon_wr_addr(recon_wr_addr),
-    .recon_wr_dta(recon_wr_dta)
+    .recon_wr_dta(recon_wr_dta),
+    .dbg_ref_stall(dbg_ref_stall)                                // DVD-FORK DEBUG (stage profiler)
     );
 
 

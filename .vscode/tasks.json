@@ -1,0 +1,105 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Quartus: Full Compile",
+            "type": "shell",
+            "command": "quartus_sh --flow compile dvd_player",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Quartus: Analysis & Synthesis Only",
+            "type": "shell",
+            "command": "quartus_map --read_settings_files=on dvd_player",
+            "group": "build",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Simulate: PS Demuxer",
+            "type": "shell",
+            "command": "iverilog -g2012 -o bench/dvd/ps_demux_sim dvd/ps_demux.sv bench/dvd/ps_demux_tb.sv && vvp bench/dvd/ps_demux_sim",
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Simulate: Audio Ring Buffer",
+            "type": "shell",
+            "command": "iverilog -g2012 -o bench/dvd/audio_ring_sim dvd/audio_ring.sv bench/dvd/audio_ring_tb.sv && vvp bench/dvd/audio_ring_sim",
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "Simulate: All",
+            "type": "shell",
+            "command": "for tb in bench/dvd/*_tb.sv; do module=$(basename $tb _tb.sv); echo \"--- Simulating $module ---\"; iverilog -g2012 -o bench/dvd/${module}_sim dvd/${module}.sv $tb && vvp bench/dvd/${module}_sim; done",
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "VOB: Hex dump first 200 lines",
+            "type": "shell",
+            "command": "xxd ${input:vobPath} | head -200",
+            "group": "none",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        },
+        {
+            "label": "VOB: Extract test sample for sim",
+            "type": "shell",
+            "command": "dd if=${input:vobPath} bs=2048 count=50 | xxd > bench/dvd/test_vobs/sample.hex && echo 'Sample written to bench/dvd/test_vobs/sample.hex'",
+            "group": "none",
+            "problemMatcher": []
+        },
+        {
+            "label": "MiSTer: Deploy bitstream via SSH",
+            "type": "shell",
+            "command": "scp output_files/dvd_player.rbf root@${input:misterIP}:/media/fat/cores/dvd_player_$(date +%Y%m%d).rbf",
+            "group": "none",
+            "problemMatcher": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "vobPath",
+            "description": "Path to VOB file",
+            "default": "VIDEO_TS/VTS_01_1.VOB",
+            "type": "promptString"
+        },
+        {
+            "id": "misterIP",
+            "description": "MiSTer IP address",
+            "default": "192.168.1.100",
+            "type": "promptString"
+        }
+    ]
+}

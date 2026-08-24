@@ -111,7 +111,7 @@ module sync_gen    (clk, clk_en, rst,
    * In progressive video,  the vertical sync begins at horizontal position 0,
    * In interlaced video:
    *  - in even fields, vertical sync begins at horizontal position 0
-   *  - in odd fields,  vertical sync is delayed horizontal_halfline dots. 
+   *  - in odd fields,  vertical sync is delayed horizontal_halfline dots.
    *  A common value for horizontal_halfline is horizontal_length/2.
    */
 
@@ -119,6 +119,35 @@ module sync_gen    (clk, clk_en, rst,
     if (~rst) v_sync_h_pos <= 12'd0;
     else if (clk_en) v_sync_h_pos <= (interlaced && odd_field) ? horizontal_halfline : 12'd0;
     else v_sync_h_pos <= v_sync_h_pos;
+
+  /* DVD-FORK FIX (CRT 2:1 interlace, N64 model): the upstream half-line mechanism above
+   * only PULSE-DELAYS the vsync edge within an unchanged, fixed-length field — the
+   * vertical counter reference never moves, and the total frame stays EVEN (2x
+   * vertical_length+1 lines). On a real CRT that never locks 2:1 (HW-verified: vertical
+   * buzz/jitter, or a stable 240p-equivalent with the half-line off). Broadcast 480i
+   * needs an ODD total (525 = 262.5 x 2), i.e. BOTH of:
+   *   - per-field total alternating 262/263 full lines, and
+   *   - the vertical COUNTER REFERENCE (the point in the line where "line N of the
+   *     field" begins for sync purposes) shifted by half a line on one field,
+   * so vsync-to-vsync spacing is exactly 262.5 lines every field. This is how the
+   * known-good N64 core does it (MiSTer-devel/N64_MiSTer rtl/VI_videoout_sync.vhd:
+   * vtotal 262/263 by field + vsyncCount sampled at htotal/2 on one field).
+   *
+   * crt_ilace selects the new model: interlaced with a NONZERO horizontal_halfline.
+   * All existing consumers write halfline=0 when interlaced (the HDMI-480i modeline
+   * walk in dvd/emu.sv), so their pulse-delay behavior is bit-identical; only the new
+   * CRT modeline (halfline = horizontal_length/2 = 429) takes this path.
+   *
+   * Field mapping (derivation): let field A have LA full lines with vsync sampled at
+   * dot 0, field B LB lines with vsync sampled at dot `halfline`. Spacing A->B =
+   * LA + 0.5 lines, B->A = LB - 0.5 lines; both equal 262.5 iff LA=262, LB=263.
+   * odd_field=1 scans v_pos even lines (TOP content, the upper field), so it is the
+   * reference field A; odd_field=0 (BOTTOM content) is B: one extra line and the
+   * mid-line vsync. (If HW shows the fields spatially swapped, flip both terms.) */
+  wire        crt_ilace   = interlaced && (horizontal_halfline != 12'd0);
+  wire [11:0] vs_ref_dot  = odd_field ? 12'd0 : horizontal_halfline;   /* vertical-event sample dot */
+  /* (the half-line-referenced vsync sampler itself lives below, after the h/v
+   *  counters it samples — see "CRT vsync sampler") */
 
   /*
    * for h_display_size and v_display_size:
@@ -163,10 +192,57 @@ module sync_gen    (clk, clk_en, rst,
     else h_cntr <= h_cntr;
 
   /* vertical counter */
+  /* DVD-FORK FIX (CRT 2:1 interlace): in interlaced mode the field totals ALTERNATE —
+   * the B field (odd_field=0) is one full line longer, giving the odd frame total
+   * (2*(vertical_length+1)+1 lines, e.g. 262+263=525). vertical_length still holds the
+   * SHORT field's last line index (261 for NTSC, 311 for PAL). odd_field toggles at the
+   * field's first dot, so the bound is stable across each whole field.
+   *
+   * DVD-FORK HARDENING (2026-08-02) — arming widened crt_ilace -> interlaced.
+   * BEHAVIOURAL NO-OP TODAY (verified: the whole TB gives identical results against
+   * the pre-change file); it removes an ACCIDENTAL dependency, so read this before
+   * "tidying" syncgen_intf.
+   *
+   * The alternating field total is what makes an interlaced frame land on an EXACT
+   * rate: 262+263 = 525 lines x 1716 dots = 900,900 clk27 = 29.97 fps, and
+   * 312+313 = 625 x 1728 = 1,080,000 = 25.000 fps. Since nco_trim is retired (audio
+   * free-runs at a fixed 48 kHz off the same crystal), an inexact raster is a
+   * permanent linear A/V drift — see docs/av_sync.md "raster-rate invariant" and the
+   * Film-24p 858x1313 case (docs/film_24p_plan.md §10). With EQUAL 262-line fields
+   * NTSC 480i would be 899,184 clk27 = 0.19 % fast = ~6.9 s/hour of drift.
+   *
+   * The trap: this alternation used to be armed by `crt_ilace` = interlaced &&
+   * halfline != 0, and dvd/emu.sv's HDMI Interlaced Out modeline writes halfline = 0
+   * (deliberately — a half-line vsync offset makes an HDMI receiver hunt for lock).
+   * It nevertheless got the alternation, because syncgen_intf doubles EVERY horizontal
+   * parameter under pixel repetition as `{x[10:0],1'b1}` = 2x+1 — and 2*0+1 = **1**,
+   * which is nonzero. So HDMI-480i/576i have always been exact, but only by accident
+   * of that doubling; anyone "fixing" 0 -> 0 there would have silently made both
+   * rasters 0.19 %/0.16 % fast. Arming on `interlaced` alone makes the exactness
+   * explicit and independent of it. HDMI still keeps its dot-0-ish vsync reference
+   * (halfline 1 = a one-DOT shift, not a half line); the CRT/re_interlace path
+   * (halfline 429/432) is untouched. Nothing else asserts `interlaced` —
+   * modeline.v's default is VID_MODE 3'b000.
+   * Pinned by bench/dvd/crt_syncgen_tb.sv PHASE 2 (480i) and PHASE 2b (576i). */
+  wire [11:0] eff_vertical_length = vertical_length + {11'd0, interlaced & ~odd_field};
   always @(posedge clk)
     if (~rst) v_cntr <= 12'd0;
-    else if (clk_en && (h_cntr >= horizontal_length)) v_cntr <= (v_cntr >= vertical_length) ? 12'd0 : (v_cntr + 1);
+    else if (clk_en && (h_cntr >= horizontal_length)) v_cntr <= (v_cntr >= eff_vertical_length) ? 12'd0 : (v_cntr + 1);
     else v_cntr <= v_cntr;
+
+  /* DVD-FORK FIX (CRT 2:1 interlace): the CRT vsync sampler (see the crt_ilace note
+   * above). The vsync window [vertical_sync_start, vertical_sync_end) is sampled once
+   * per line at the field's reference dot vs_ref_dot (dot 0 on the reference field,
+   * mid-line on the other) => exactly (end-start) FULL lines of vsync in both fields,
+   * the B field's shifted half a line. With the alternating field totals this puts
+   * vsync rising edges exactly 262.5 lines apart every field — the 2:1 lock. */
+  wire        vsync_window   = (v_cntr >= vertical_sync_start) && (v_cntr < vertical_sync_end);
+  reg         vsync_crt;
+  wire        vsync_crt_nxt  = (h_cntr == vs_ref_dot) ? vsync_window : vsync_crt;
+  always @(posedge clk)
+    if (~rst) vsync_crt <= 1'b0;
+    else if (clk_en) vsync_crt <= vsync_crt_nxt;
+    else vsync_crt <= vsync_crt;
 
   /* 
    * Stage 1
@@ -195,6 +271,21 @@ module sync_gen    (clk, clk_en, rst,
     else if (clk_en) h_sync_1 <= (h_cntr >= horizontal_sync_start) && (h_cntr <= horizontal_sync_end);
     else h_sync_1 <= h_sync_1;
 
+  /* DVD-FORK NOTE — KNOWN OFF-BY-ONE in the active-region blanking below.
+   * These blank when the counter is `>= resolution`, which makes the active region exactly
+   * `resolution` pixels/lines. But the modeline params (modeline.v) and the regfile doc treat
+   * horizontal_resolution / vertical_resolution as "active count MINUS ONE" (e.g. NTSC stores
+   * HORZ_RES=719 for 720, VERT_RES was 479 for 480). So `>=` lands the active region ONE short
+   * of the intended count. The clean root fix is `>=` -> `>` here (and in the matching h_sync/
+   * v_sync/length compares as needed) for BOTH axes and ALL modelines at once — but that
+   * touches every mode and was deemed risky. Instead each axis was fixed TARGETALLY in the
+   * active modeline: VERT_RES 479->480 (vertical active = 480 = standard 480p) and HORZ_RES
+   * 719->720 (horizontal active = 720 = standard 720 SD), both in modeline.v AND the runtime
+   * register-write walk in dvd/emu.sv (the walk's values override the static params at boot).
+   * If you ever switch the compares here to `>`, REVERT BOTH back to the -1 values (479/719,
+   * and re-check all other modelines) or you'll over-extend by one. See docs/history.md
+   * (256-line strobe). */
+
   /* horizontal blanking */
   always @(posedge clk)
     if (~rst) h_blank_1 <= 1'b1;
@@ -202,11 +293,15 @@ module sync_gen    (clk, clk_en, rst,
     else h_blank_1 <= h_blank_1;
 
   /* vertical synchronisation */
+  /* DVD-FORK FIX (CRT 2:1 interlace): in crt_ilace mode vsync comes from the
+   * half-line-referenced sampler above (vsync_crt_nxt), not the pulse-delay
+   * expression. Non-CRT modes (halfline==0) are bit-identical to upstream. */
   always @(posedge clk)
     if (~rst) v_sync_1 <= 1'b0;
-    else if (clk_en) v_sync_1 <= ((v_cntr == vertical_sync_start) && (h_cntr >= v_sync_h_pos)) 
+    else if (clk_en) v_sync_1 <= crt_ilace ? vsync_crt_nxt
+                              : (((v_cntr == vertical_sync_start) && (h_cntr >= v_sync_h_pos))
                               || ((v_cntr > vertical_sync_start) && (v_cntr < vertical_sync_end))
-                              || ((v_cntr == vertical_sync_end) && (h_cntr < v_sync_h_pos));
+                              || ((v_cntr == vertical_sync_end) && (h_cntr < v_sync_h_pos)));
     else v_sync_1 <= v_sync_1;
 
   /* vertical blanking */

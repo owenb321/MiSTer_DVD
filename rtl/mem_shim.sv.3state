@@ -1,0 +1,348 @@
+module mem_shim (
+    input             clk,
+    input             rst_n,
+
+    // MPEG2 Core memory request FIFO (read side) — clocked on clk (mem_clk)
+    input       [1:0] mem_req_rd_cmd,
+    input      [21:0] mem_req_rd_addr,
+    input      [63:0] mem_req_rd_dta,
+    output reg        mem_req_rd_en,
+    input             mem_req_rd_valid,
+
+    // MPEG2 Core memory response FIFO (write side) — clocked on clk (mem_clk)
+    output reg [63:0] mem_res_wr_dta,
+    output reg        mem_res_wr_en,
+    input             mem_res_wr_almost_full,
+
+    // DDR3 Controller Interface (Avalon-MM 64-bit)
+    output     [28:0] ddr3_addr,
+    output      [7:0] ddr3_burstcnt,
+    output            ddr3_read,
+    output            ddr3_write,
+    output     [63:0] ddr3_writedata,
+    output      [7:0] ddr3_byteenable,
+    input      [63:0] ddr3_readdata,
+    input             ddr3_readdatavalid,
+    input             ddr3_waitrequest,
+
+    // Debug outputs
+    output     [3:0]  debug_state,
+    output      [1:0] debug_saved_cmd,
+    output            debug_sdram_busy,
+    output            debug_sdram_ack,
+    output    [15:0]  debug_rd_count,
+    output    [15:0]  debug_wr_count,
+    output    [15:0]  debug_rsp_count,
+    output    [15:0]  debug_read_pend_cycles
+);
+
+    // Command encoding (from mem_codes.v)
+    localparam CMD_NOOP    = 2'd0;
+    localparam CMD_REFRESH = 2'd1;
+    localparam CMD_READ    = 2'd2;
+    localparam CMD_WRITE   = 2'd3;
+
+    // ADDR_ERR sentinel (from mem_codes.v MP@HL profile).
+    localparam ADDR_ERR = 22'h1EFFFF;
+
+    // =========================================================================
+    // DDR3 Avalon-MM outputs
+    // =========================================================================
+    reg        ram_read;
+    reg        ram_write;
+    reg [28:0] ram_address;
+    reg [63:0] ram_writedata;
+
+    assign ddr3_read       = ram_read;
+    assign ddr3_write      = ram_write;
+    assign ddr3_addr       = ram_address;
+    assign ddr3_writedata  = ram_writedata;
+    assign ddr3_burstcnt   = 8'd1;
+    assign ddr3_byteenable = 8'hFF;
+
+    // =========================================================================
+    // 3-State FSM (matches TSConf ddram.sv Avalon-MM protocol)
+    // =========================================================================
+    // S_IDLE      (0): Accept new FIFO commands, issue to DDR3
+    // S_WAIT      (1): Holding ram_read/ram_write, waiting for !waitrequest
+    // S_READ_PEND (2): READ accepted, waiting for ddr3_readdatavalid
+    //                   MUST complete before any new command can be issued.
+
+    localparam S_IDLE      = 2'd0;
+    localparam S_WAIT      = 2'd1;
+    localparam S_READ_PEND = 2'd2;
+
+    reg [1:0] state;
+
+    // Skid buffer
+    reg        saved_valid;
+    reg [1:0]  saved_cmd;
+    reg [21:0] saved_addr;
+    reg [63:0] saved_dta;
+
+    // Track in-flight read
+    reg        inflight_read;
+
+    // Holding latch: captures ddr3_readdatavalid if it fires while NOT
+    // in S_READ_PEND (e.g., during S_WAIT or transition). The response
+    // path independently pushes data to the FIFO; this latch only
+    // ensures the FSM doesn't miss the "response arrived" signal.
+    reg        rdv_pending;
+
+    // Timeout counter: if S_READ_PEND waits longer than READ_TIMEOUT cycles,
+    // the bridge dropped the response. Synthesize zero data and recover.
+    // 4000 cycles @ 100MHz = 40 µs — much longer than max DDR3 latency (~300ns)
+    localparam READ_TIMEOUT = 12'd4000;
+    reg [11:0] read_timeout_cnt;
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            state          <= S_IDLE;
+            ram_read       <= 0;
+            ram_write      <= 0;
+            ram_address    <= 0;
+            ram_writedata  <= 0;
+            mem_req_rd_en  <= 0;
+            mem_res_wr_en  <= 0;
+            mem_res_wr_dta <= 0;
+            saved_valid    <= 0;
+            saved_cmd      <= 0;
+            saved_addr     <= 0;
+            saved_dta      <= 0;
+            inflight_read      <= 0;
+            rdv_pending        <= 0;
+            read_timeout_cnt   <= 0;
+        end
+        else begin
+            // =============================================================
+            // Response Path (Always Active — independent of FSM state)
+            // =============================================================
+            mem_res_wr_en <= ddr3_readdatavalid;
+            if (ddr3_readdatavalid)
+                mem_res_wr_dta <= ddr3_readdata;
+
+            // =============================================================
+            // Holding Latch for readdatavalid
+            // =============================================================
+            // Set when readdatavalid fires outside S_READ_PEND AND we have
+            // an inflight read. Gating on inflight_read prevents spurious
+            // startup pulses (proven: RP=1 before P=1) from causing a
+            // cascading off-by-one where S_READ_PEND exits prematurely.
+            if (ddr3_readdatavalid && inflight_read && state != S_READ_PEND)
+                rdv_pending <= 1;
+
+            // =============================================================
+            // Command Path FSM
+            // =============================================================
+            case (state)
+
+            // ---------------------------------------------------------
+            // S_IDLE: Accept next command from skid buffer or FIFO
+            // ---------------------------------------------------------
+            S_IDLE: begin
+                if (saved_valid && !mem_res_wr_almost_full) begin
+                    // ── Process Saved (Skid) Request ──
+                    case (saved_cmd)
+                        CMD_WRITE: begin
+                            if (saved_addr == ADDR_ERR) begin
+                                saved_valid   <= 0;
+                                mem_req_rd_en <= !mem_res_wr_almost_full;
+                            end else begin
+                                ram_write     <= 1;
+                                ram_address   <= {4'b0011, saved_addr, 3'b000};
+                                ram_writedata <= saved_dta;
+                                inflight_read <= 0;
+                                state         <= S_WAIT;
+                                saved_valid   <= 0;
+                                mem_req_rd_en <= 0;
+                            end
+                        end
+                        CMD_READ: begin
+                            if (saved_addr == ADDR_ERR) begin
+                                mem_res_wr_dta <= 64'd0;
+                                mem_res_wr_en  <= 1;
+                                saved_valid    <= 0;
+                                mem_req_rd_en  <= !mem_res_wr_almost_full;
+                            end else begin
+                                ram_read      <= 1;
+                                ram_address   <= {4'b0011, saved_addr, 3'b000};
+                                inflight_read <= 1;
+                                state         <= S_WAIT;
+                                saved_valid   <= 0;
+                                mem_req_rd_en <= 0;
+                            end
+                        end
+                        default: begin
+                            saved_valid   <= 0;
+                            mem_req_rd_en <= !mem_res_wr_almost_full;
+                        end
+                    endcase
+                end
+                else if (mem_req_rd_valid && !mem_res_wr_almost_full) begin
+                    // ── Process New FIFO Request ──
+                    case (mem_req_rd_cmd)
+                        CMD_WRITE: begin
+                            if (mem_req_rd_addr == ADDR_ERR) begin
+                                mem_req_rd_en <= !mem_res_wr_almost_full;
+                            end else begin
+                                ram_write     <= 1;
+                                ram_address   <= {4'b0011, mem_req_rd_addr, 3'b000};
+                                ram_writedata <= mem_req_rd_dta;
+                                inflight_read <= 0;
+                                state         <= S_WAIT;
+                                mem_req_rd_en <= 0;
+                            end
+                        end
+                        CMD_READ: begin
+                            if (mem_req_rd_addr == ADDR_ERR) begin
+                                mem_res_wr_dta <= 64'd0;
+                                mem_res_wr_en  <= 1;
+                                mem_req_rd_en  <= !mem_res_wr_almost_full;
+                            end else begin
+                                ram_read      <= 1;
+                                ram_address   <= {4'b0011, mem_req_rd_addr, 3'b000};
+                                inflight_read <= 1;
+                                state         <= S_WAIT;
+                                mem_req_rd_en <= 0;
+                            end
+                        end
+                        default: mem_req_rd_en <= !mem_res_wr_almost_full;
+                    endcase
+                end
+                else begin
+                    mem_req_rd_en <= !mem_res_wr_almost_full;
+                end
+            end // S_IDLE
+
+            // ---------------------------------------------------------
+            // S_WAIT: Hold ram_read/ram_write until bridge accepts
+            // ---------------------------------------------------------
+            S_WAIT: begin
+                if (!ddr3_waitrequest) begin
+                    // Transaction accepted — clear request lines
+                    ram_read  <= 0;
+                    ram_write <= 0;
+
+                    if (inflight_read) begin
+                        // READ accepted: go to S_READ_PEND.
+                        // If readdatavalid already fired, rdv_pending is set
+                        // and S_READ_PEND will consume it immediately.
+                        state            <= S_READ_PEND;
+                        read_timeout_cnt <= 0;  // reset timeout on each new read
+                    end else begin
+                        // WRITE accepted: done, return to IDLE
+                        state         <= S_IDLE;
+                        mem_req_rd_en <= !mem_res_wr_almost_full;
+                    end
+                end
+
+                // Skid buffer: capture late FIFO data (always active in S_WAIT)
+                if (mem_req_rd_valid && !saved_valid) begin
+                    saved_valid <= 1;
+                    saved_cmd   <= mem_req_rd_cmd;
+                    saved_addr  <= mem_req_rd_addr;
+                    saved_dta   <= mem_req_rd_dta;
+                end
+            end // S_WAIT
+
+            // ---------------------------------------------------------
+            // S_READ_PEND: READ accepted, wait for data to arrive
+            // ---------------------------------------------------------
+            S_READ_PEND: begin
+                if (ddr3_readdatavalid || rdv_pending) begin
+                    // Read data arrived (live or latched) — response path
+                    // already captured data into FIFO. Return to IDLE.
+                    rdv_pending      <= 0;
+                    state            <= S_IDLE;
+                    mem_req_rd_en    <= !mem_res_wr_almost_full;
+                end else begin
+                    // No response yet — increment timeout counter.
+                    read_timeout_cnt <= read_timeout_cnt + 1'd1;
+                    if (read_timeout_cnt == READ_TIMEOUT) begin
+                        // Bridge dropped response. Synthesize zero data for
+                        // decoder and recover. Video may corrupt but won't hang.
+                        // (This assignment overrides the response path's
+                        //  mem_res_wr_en <= ddr3_readdatavalid above.)
+                        mem_res_wr_dta   <= 64'd0;
+                        mem_res_wr_en    <= 1'b1;
+                        rdv_pending      <= 0;
+                        read_timeout_cnt <= 0;
+                        state            <= S_IDLE;
+                        mem_req_rd_en    <= !mem_res_wr_almost_full;
+                    end
+                end
+
+                // Skid buffer: capture late FIFO data (also active here)
+                if (mem_req_rd_valid && !saved_valid) begin
+                    saved_valid <= 1;
+                    saved_cmd   <= mem_req_rd_cmd;
+                    saved_addr  <= mem_req_rd_addr;
+                    saved_dta   <= mem_req_rd_dta;
+                end
+            end // S_READ_PEND
+
+            default: state <= S_IDLE;
+
+            endcase
+        end
+    end
+
+    // =========================================================================
+    // Debug
+    // =========================================================================
+    reg [15:0] rd_count;
+    reg [15:0] wr_count;
+    reg [15:0] rsp_count;          // Counts EVERY ddr3_readdatavalid pulse
+    reg [15:0] pend_cycles;        // Cycles spent in S_READ_PEND (saturates)
+
+    wire rd_accepted = ddr3_read  && !ddr3_waitrequest;
+    wire wr_accepted = ddr3_write && !ddr3_waitrequest;
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            rd_count   <= 0;
+            wr_count   <= 0;
+            rsp_count  <= 0;
+            pend_cycles <= 0;
+        end else begin
+            if (rd_accepted) rd_count <= rd_count + 1'd1;
+            if (wr_accepted) wr_count <= wr_count + 1'd1;
+            if (ddr3_readdatavalid) rsp_count <= rsp_count + 1'd1;
+            // Count cycles in S_READ_PEND (saturates at 0xFFFF)
+            if (state == S_READ_PEND) begin
+                if (pend_cycles != 16'hFFFF)
+                    pend_cycles <= pend_cycles + 1'd1;
+            end else begin
+                pend_cycles <= 0;
+            end
+        end
+    end
+
+    reg [1:0] debug_cmd;
+    always @* begin
+        case (state)
+            S_WAIT: begin
+                 if (ram_write) debug_cmd = CMD_WRITE;
+                 else if (ram_read) debug_cmd = CMD_READ;
+                 else debug_cmd = CMD_NOOP;
+            end
+            S_READ_PEND: debug_cmd = CMD_READ;
+            default: begin
+                 if (saved_valid) debug_cmd = saved_cmd;
+                 else if (mem_req_rd_valid) debug_cmd = mem_req_rd_cmd;
+                 else debug_cmd = CMD_NOOP;
+            end
+        endcase
+    end
+
+    // M field: {debug_cmd[1:0], saved_valid, state[0]}
+    assign debug_state      = {debug_cmd, saved_valid, state[0]};
+    assign debug_saved_cmd  = saved_valid ? saved_cmd : CMD_NOOP;
+    assign debug_sdram_busy = ddr3_waitrequest;
+    assign debug_sdram_ack  = rd_accepted | wr_accepted;
+    assign debug_rd_count   = rd_count;
+    assign debug_wr_count   = wr_count;
+    assign debug_rsp_count  = rsp_count;
+    assign debug_read_pend_cycles = pend_cycles;
+
+endmodule

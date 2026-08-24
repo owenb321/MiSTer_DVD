@@ -49,7 +49,10 @@ module vld(clk, clk_en, rst,
   frame_rate_code, frame_rate_extension_n, frame_rate_extension_d,                          // interface with regfile
   aspect_ratio_information,
   progressive_sequence, progressive_frame, repeat_first_field, top_field_first,             // interface with resample
-  vld_err                                                                                   // asserted when vld code parse error
+  vld_err,                                                                                  // asserted when vld code parse error
+  drop_pic_req, drop_pic_ack, drop_pic_rff, drop_pic_field,                                 // DVD-FORK (frame-drop governor O[19] + field-pair drop)
+  dbg_drop_probe,                                                                           // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe (Thayer drops=0)
+  flags_commit                                                                              // DVD-FORK (round 11): per-picture display flags are valid (coding ext parsed)
   );
 
   input            clk;                           // clock
@@ -70,6 +73,34 @@ module vld(clk, clk_en, rst,
   output reg       wr_chroma_non_intra_quant;     // write enable for chroma non intra quantiser matrix
 
   output reg       vld_err;                       // vld_err is asserted when a slice parsing error has occurred. self-repairing.
+
+  /* DVD-FORK (frame-drop governor, O[19]).
+   * drop_pic_req (level, from dvd/frame_drop_ctl.sv via mpeg2video): the decoder is
+   *   behind the display cadence; drop the next droppable B-frame to catch up.
+   * drop_pic_ack (1-cycle pulse, to frame_drop_ctl): a B-frame WAS dropped this
+   *   picture — spend one drop credit.
+   * A B-frame is never a reference, so skipping its decode cannot corrupt any later
+   *   picture. When we drop, we (a) suppress update_picture_buffers for it so
+   *   motcomp/picbuf never set it up, reconstruct, or emit it, and (b) skip its
+   *   slices by routing the FSM straight to STATE_NEXT_START_CODE (a cheap
+   *   byte-aligned start-code hunt) instead of decoding macroblocks — which is where
+   *   the expensive VLC + IDCT + motion-comp work is. The governor simply repeats the
+   *   previous frame in the dropped B's display slot. See docs/motcomp_throughput.md. */
+  input            drop_pic_req;
+  output reg       drop_pic_ack;
+  output reg       drop_pic_rff;  // DVD-FORK (film-aware drop cost): rff of the DROPPED picture, valid with drop_pic_ack
+  output reg       drop_pic_field; // DVD-FORK (field-pair drop): dropped picture was a FIELD (cost 1), valid with drop_pic_ack
+  output reg       second_field;   // declared here (used by the field-pair drop_now_comb); driven near update_picture_buffers
+  /* DVD-FORK DEBUG (2026-08-05, Thayer drops=0): the request reads asserted at
+   * the mpeg2video-level export yet zero acks, and the identical RTL drops in
+   * sim in every regime incl. display-blocked (+DRAIN). These taps read the
+   * ACTUAL in-vld nodes so a build-level net divergence becomes visible:
+   *   [9:6] hdr_cnt   — wrapping count of clk_en visits to STATE_PICTURE_HEADER
+   *   [5:2] dropnow_cnt — wrapping count of drop_now_comb TRUE at those visits
+   *   [1]   req_in    — drop_pic_req as sampled INSIDE the vld at the last header
+   *   [0]   b_seen    — drop_hdr_is_b at the last header visit
+   * All (* preserve *) so the fitter may not merge them with the export copies. */
+  output wire [9:0] dbg_drop_probe;   // logic lives beside drop_now_comb (below)
 
   parameter [7:0]
     STATE_NEXT_START_CODE             = 8'h00,
@@ -217,6 +248,18 @@ module vld(clk, clk_en, rst,
   reg              sequence_extension_seen; /* set when sequence extension encountered, cleared when sequence end encountered  */
   reg              picture_header_seen;     /* set when picture header encountered, cleared when sequence end encountered  */
 
+  /* DVD-FORK (frame-drop governor, O[19]).
+   * drop_now_comb is evaluated combinationally while the FSM is in STATE_PICTURE_HEADER,
+   * where the incoming picture_coding_type is still in getbits (loadreg offset 10,
+   * width 3 => getbits[13:11]) before it is registered. We only ever drop a
+   * FRAME_PICTURE B-frame: B is never a reference (safe to skip) and picture_structure
+   * here still holds the previous picture's value, which for progressive DVD content is
+   * always FRAME_PICTURE — so interlaced field-picture B's are naturally left alone.
+   * drop_this_picture latches the decision for the duration of the picture so the
+   * slice-routing gate can bypass every slice of the dropped B. */
+  wire             drop_now_comb;   // assigned below, after picture_structure is declared
+  (* preserve *) reg drop_this_picture;   // DVD-FORK FIX (2026-08-05): see drop_now_comb hardening note
+
   /* in sequence header */
   output wire[13:0]horizontal_size;
   output wire[13:0]vertical_size;
@@ -251,6 +294,88 @@ module vld(clk, clk_en, rst,
   wire        [3:0]f_code_11;
   output wire [1:0]intra_dc_precision;
   output wire [1:0]picture_structure;
+
+  // DVD-FORK (frame-drop governor, O[19]): droppable-B detection (see block above).
+  // DVD-FORK FIX (2026-08-05, Thayer drops=0): HW ran with debt=15/req=1/en=1/ok=1
+  // (row-16 readout) and B-frames plentiful, yet ZERO acks — while the IDENTICAL
+  // RTL drops 43/43-faithfully in vld_drop_rff_tb on the same ES. That is the
+  // round-10 failure class again (see drop_rff_lat below: a shared-register
+  // compare mangled by physical synthesis in the BUILD, sim-perfect). Harden the
+  // whole decision path the same proven way: (* keep *) the two compare terms so
+  // synthesis may not narrow/merge them across the shared fan-out registers, and
+  // (* preserve *) the decision/ack state bits below.
+  (* keep *) wire drop_hdr_is_b = (getbits[13:11] == B_TYPE);
+  /* DVD-FORK FIX (2026-08-05 round 2, THE Thayer drops=0 root): the in-vld probe
+   * (row 16 v2) showed hdr_cnt ticking, req_in_vld=1, b_seen=1 at B headers —
+   * and dropnow_cnt frozen at 0. Three of drop_now_comb's four terms probe TRUE
+   * at the same instant, so the fourth — (picture_structure == FRAME_PICTURE) —
+   * evaluates FALSE on HW, while the stream's every coding extension codes
+   * frame (3) and the IDENTICAL RTL passes in sim (incl. +DRAIN display-blocked).
+   * That is the round-10 failure class one register over: the shared
+   * `picture_structure` loadreg fans out across the decoder and physical
+   * synthesis is free to retime/duplicate it; the copy reaching this compare
+   * did not carry the value (same as drop_rff_lat's mangled rff export, fixed
+   * below by a preserved private copy). Same proven medicine: a (* preserve *)
+   * PRIVATE register sampling the SAME bits the loadreg samples
+   * (getbits[21:20] at STATE_PICTURE_CODING_EXT0, offset 2 width 2) — bitwise
+   * identical semantics, immune to shared-fanout mangling. */
+  (* preserve *) reg [1:0] drop_ps_lat;
+  always @(posedge clk)
+    if (~rst) drop_ps_lat <= 2'd0;
+    else if (clk_en && (state == STATE_PICTURE_CODING_EXT0)) drop_ps_lat <= getbits[21:20];
+    else drop_ps_lat <= drop_ps_lat;
+  (* keep *) wire drop_ps_frame = (drop_ps_lat == FRAME_PICTURE);
+  /* DVD-FORK (2026-08-05 round 3 — THE ACTUAL Thayer drops=0 truth): the disc is
+   * mostly FIELD-CODED MPEG-2 (top/bottom field pictures: the VMGM intro past its
+   * head, VTS_02/05/07/11 — while every earlier ES sample happened to hit the
+   * frame-coded lead-ins and VTS_09). The row-16 probe proved it on HW: the
+   * private drop_ps_lat ALSO read not-frame (ps=0) during play — the value is
+   * genuine, not mangled; drops=0 was this design's DOCUMENTED punt on
+   * field-picture B's. Extension: drop B FIELD PAIRS atomically.
+   *  - Decide at the FIRST field of a B frame. second_field READS 1 at a
+   *    first-field header (the seq/gop preset convention — the same read that
+   *    fires update_picture_buffers there), so the pair's OWN update pulse is
+   *    suppressed by the existing ~drop_now_comb term, exactly like a frame-B.
+   *  - drop_pair_arm forces the SIBLING field (next header, second_field reads
+   *    0, no update pulse to suppress) to the same fate, keeping the pair
+   *    atomic — a half-dropped pair would emit a frame with a stale field.
+   *  - Each dropped FIELD acks at cost 1 (a field = 1 refresh at 59.94), so a
+   *    pair debits exactly the 2 refreshes it frees (drop_pic_field -> the
+   *    mpeg2video cost/credit muxes).
+   *  - drop_ps_lat at a first-field header holds the PREVIOUS picture's
+   *    structure: correct in steady field-coded regions; at a frame->field
+   *    content transition one boundary frame is misjudged conservatively
+   *    (treated as frame-coded, its sibling not armed) — a one-frame glitch
+   *    per cell transition worst case, accepted. */
+  (* keep *) wire drop_ps_field = (drop_ps_lat == 2'd1) || (drop_ps_lat == 2'd2);
+  (* preserve *) reg drop_pair_arm;
+  assign drop_now_comb = (state == STATE_PICTURE_HEADER) && drop_hdr_is_b &&
+                         ( (drop_pic_req &&
+                            (drop_ps_frame || (drop_ps_field && second_field)))
+                           || drop_pair_arm );
+  always @(posedge clk)
+    if (~rst) drop_pair_arm <= 1'b0;
+    else if (clk_en && (state == STATE_PICTURE_HEADER))
+      // armed by a dropped FIRST field (second_field reads 1 there); the
+      // sibling's own header re-evaluates this with second_field=0 -> cleared.
+      drop_pair_arm <= drop_now_comb && drop_ps_field && second_field;
+    else drop_pair_arm <= drop_pair_arm;
+  // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe — see the port comment.
+  (* preserve *) reg [3:0] dbg_hdr_cnt;
+  (* preserve *) reg [3:0] dbg_dropnow_cnt;
+  (* preserve *) reg       dbg_req_in;
+  (* preserve *) reg       dbg_b_seen;
+  always @(posedge clk)
+    if (~rst) begin
+      dbg_hdr_cnt <= 4'd0; dbg_dropnow_cnt <= 4'd0;
+      dbg_req_in <= 1'b0; dbg_b_seen <= 1'b0;
+    end else if (clk_en && (state == STATE_PICTURE_HEADER)) begin
+      dbg_hdr_cnt <= dbg_hdr_cnt + 4'd1;
+      if (drop_now_comb) dbg_dropnow_cnt <= dbg_dropnow_cnt + 4'd1;
+      dbg_req_in <= drop_pic_req;
+      dbg_b_seen <= drop_ps_frame || drop_ps_field;   // round 3: droppable structure (frame OR field-pair)
+    end
+  assign dbg_drop_probe = {dbg_hdr_cnt, dbg_dropnow_cnt, dbg_req_in, dbg_b_seen};
   output wire      top_field_first;
   wire             frame_pred_frame_dct;
   wire             concealment_motion_vectors;
@@ -545,7 +670,8 @@ module vld(clk, clk_en, rst,
 					 8'h7x,
 					 8'h8x,
 					 8'h9x,
-					 8'hax:                  if (sequence_header_seen & sequence_extension_seen & picture_header_seen) next = STATE_SLICE;
+					 8'hax:                  if (drop_this_picture) next = STATE_NEXT_START_CODE; // DVD-FORK (frame-drop O[19]): skip this B-frame's slices cheaply
+					                         else if (sequence_header_seen & sequence_extension_seen & picture_header_seen) next = STATE_SLICE;
                                                                  else next = STATE_NEXT_START_CODE;
 					 default                 next = STATE_NEXT_START_CODE;
 				       endcase 
@@ -1833,8 +1959,8 @@ module vld(clk, clk_en, rst,
     else motion_vector_valid <= 1'b0;
 
   /* second field */
-  output reg       second_field;
-
+  /* second_field DECLARED early (near the drop ports) — the field-pair drop's
+   * drop_now_comb reads it and iverilog requires declaration before use. */
   always @(posedge clk)
     if (~rst) second_field <= 1'b0;
     else if (clk_en && ((state == STATE_SEQUENCE_HEADER) || (state == STATE_GROUP_HEADER))) second_field <= 1'b1;
@@ -1851,11 +1977,115 @@ module vld(clk, clk_en, rst,
   output reg       update_picture_buffers;
   output reg       last_frame;
 
+  // DVD-FORK (frame-drop governor, O[19]): when dropping this B-frame, SUPPRESS its
+  // update_picture_buffers so motcomp/picbuf never freeze the VLD for it, never rotate
+  // for it (B never rotates anyway), and never set it up to be reconstructed/emitted.
+  // The dropped B becomes fully invisible downstream; the next I/P picture's update
+  // proceeds normally.
   always @(posedge clk)
     if (~rst) update_picture_buffers <= 1'b0;
-    else if (clk_en) update_picture_buffers <= ((state == STATE_PICTURE_HEADER) && ((picture_structure == FRAME_PICTURE) || second_field)) // emit frame at picture header
+    else if (clk_en) update_picture_buffers <= ((state == STATE_PICTURE_HEADER) && ((picture_structure == FRAME_PICTURE) || second_field) && ~drop_now_comb) // emit frame at picture header
                                                || ((state == STATE_SEQUENCE_END) && ~last_frame); // emit last frame
     else update_picture_buffers <= 1'b0;
+
+  /* DVD-FORK (frame-drop governor, O[19]): drop bookkeeping.
+   * drop_this_picture is (re)evaluated at every picture header: set when this is a
+   * droppable frame-picture B and the governor is behind (drop_now_comb), else cleared.
+   * It persists through the picture so the slice-routing gate bypasses every slice, and
+   * is naturally re-armed at the next picture header.
+   *
+   * drop_pic_ack (REVISED 2026-07-03, film-aware drop COST — the Shea-Stadium
+   * over-advance): the ack used to pulse at the PICTURE HEADER and frame_drop_ctl
+   * debited the governor's on-display cur_show as a proxy for the dropped frame's
+   * display duration. HW (MiB crash sequence, OSD recording): a heavy-drop burst
+   * left video ~900 ms AHEAD with audio provably still on schedule (play_err flat
+   * to the LSB) — the crush drops correlate with the rff phase (+268 lates vs
+   * +103 drops balancing at cost ~2.6 while the dropped frames' true durations
+   * averaged ~3.0), leaking ~+0.5 refresh of unaccounted timeline advance per
+   * drop. Fix: pulse the ack at the FIRST SKIPPED SLICE — by then THIS picture's
+   * coding extension has parsed, so repeat_first_field holds the DROPPED
+   * picture's own flag — and export it (drop_pic_rff) so the ledger debits the
+   * dropped frame's own would-be duration, exactly cancelling the content-time
+   * the drop skips. A dropped picture with no slices never acks (nothing was
+   * skipped that would have displayed). */
+  always @(posedge clk)
+    if (~rst) drop_this_picture <= 1'b0;
+    else if (clk_en && (state == STATE_PICTURE_HEADER)) drop_this_picture <= drop_now_comb;
+    else drop_this_picture <= drop_this_picture;
+
+  wire drop_slice_hit = (state == STATE_START_CODE) && drop_this_picture &&
+                        (getbits[7:0] >= 8'h01) && (getbits[7:0] <= 8'haf);
+  (* preserve *) reg drop_acked;   // one ack per dropped picture (many slices are skipped); preserved per the drop_now_comb hardening note
+
+  /* DVD-FORK FIX (round 10, the drop-debit leak): dedicated, synthesis-
+   * preserved capture of the current picture's repeat_first_field for the
+   * drop export. On HW (DVD_drift6 overlay row-16 read) the ack exported
+   * rff=0 for ~90-100% of drops while the dropped pictures are provably rff
+   * (their true display durations measure ~3.0 from the recording) and the
+   * IDENTICAL RTL is 43/43 faithful in simulation (vld_drop_rff_tb over a
+   * real MiB ES) — i.e. the shared `repeat_first_field` loadreg's value did
+   * not reach this export intact in the BUILD. That register fans out to
+   * picbuf/resample (where it provably works — the 3:2 cadence is HW-good)
+   * and physical synthesis is enabled, making it a retime/duplicate
+   * candidate; a mangled private copy is the same failure class as the
+   * synth-narrowed disp_y==0 compare (docs/history.md). This register is
+   * private to the drop path, samples the SAME bit the loadreg samples
+   * (getbits[13] at STATE_PICTURE_CODING_EXT0, offset 10 of the extension
+   * word), and is marked (* preserve *) so the fitter may not retime, merge
+   * or duplicate it. Verified sim-equivalent by vld_drop_rff_tb. */
+  (* preserve *) reg drop_rff_lat;
+  always @(posedge clk)
+    if (~rst) drop_rff_lat <= 1'b0;
+    else if (clk_en && (state == STATE_PICTURE_CODING_EXT0)) drop_rff_lat <= getbits[13];
+    else drop_rff_lat <= drop_rff_lat;
+
+  /* DVD-FORK FIX (round 11, 2026-07-04 — THE STALE DISPLAY FLAGS, the real
+   * lip-sync engine): update_picture_buffers fires right after
+   * STATE_PICTURE_HEADER, and motcomp_picbuf saves the per-picture display
+   * flags (repeat_first_field / top_field_first / progressive_frame) on that
+   * pulse — but those fields parse ~10 states LATER in the picture CODING
+   * EXTENSION, so every picture's saved flags are the PREVIOUS coded
+   * picture's. On clean 3:2 film the display-order flag sequence is then
+   * merely phase-shifted (still alternating — the cadence looks perfect,
+   * which is why this survived the film-3:2 HW confirmation), and the ±1
+   * refresh per-frame error is zero-mean. FRAME DROPS break the pairing:
+   * the governor's debit reclaims the dropped frame's OWN duration (the ack
+   * path samples post-extension — the one consumer that reads fresh) while
+   * the display timeline actually freed the STALE duration; the drop
+   * selection is cadence-phase-locked (HW rows 16: ~90 % own-rff=0 drops,
+   * whose stale predecessor flag is 1), so each drop leaks ~+1 refresh of
+   * video lead — the measured ~+3 % video-fast ramp that burns the VBUF and
+   * parks lips ~0.9 s audio-behind (drift6a/drift7a; behavioral sim
+   * reproduces the ratio 2.00 and the sign/magnitude).
+   * FIX: pulse flags_commit at the coding extension so picbuf RE-LATCHES the
+   * three per-picture flags for the CURRENT picture (its update pulse has
+   * already selected the slot; emission happens at the NEXT picture's update,
+   * long after). Gated off for dropped pictures — their extension still
+   * parses, but they own no picbuf slot and must not clobber the current
+   * picture's committed flags. */
+  output reg flags_commit;
+  always @(posedge clk)
+    if (~rst) flags_commit <= 1'b0;
+    else if (clk_en) flags_commit <= (state == STATE_PICTURE_CODING_EXT0) && ~drop_this_picture;
+    else flags_commit <= 1'b0;
+
+  always @(posedge clk)
+    if (~rst) begin
+      drop_pic_ack <= 1'b0;
+      drop_pic_rff <= 1'b0;
+      drop_pic_field <= 1'b0;
+      drop_acked   <= 1'b0;
+    end else if (clk_en) begin
+      if (state == STATE_PICTURE_HEADER) drop_acked <= 1'b0;   // new picture: re-arm
+      drop_pic_ack <= drop_slice_hit && ~drop_acked;
+      if (drop_slice_hit && ~drop_acked) begin
+        drop_acked   <= 1'b1;
+        drop_pic_rff <= drop_rff_lat;   // the DROPPED picture's rff (private preserved copy)
+        // the DROPPED picture's own structure (its coding ext has parsed by the
+        // first slice): field -> the cost/credit muxes debit 1 refresh per field.
+        drop_pic_field <= (drop_ps_lat == 2'd1) || (drop_ps_lat == 2'd2);
+      end
+    end else drop_pic_ack <= 1'b0;
 
   /*
     We're at video end, tell motion compensation to emit the last frame.

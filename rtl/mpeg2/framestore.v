@@ -137,7 +137,8 @@ module framestore(rst, clk, mem_clk,
                   mem_req_rd_cmd, mem_req_rd_addr, mem_req_rd_dta, mem_req_rd_en, mem_req_rd_valid, 
                   mem_res_wr_dta, mem_res_wr_en, mem_res_wr_almost_full, mem_res_wr_full, mem_res_wr_overflow,
                   mem_req_wr_almost_full, mem_req_wr_full, mem_req_wr_overflow, 
-		  tag_wr_almost_full, tag_wr_full, tag_wr_overflow
+		  tag_wr_almost_full, tag_wr_full, tag_wr_overflow,
+                  dbg_vbuf_fill                                     // DVD-FORK DEBUG: VBUF occupancy tap
                   );
 
   input            rst;
@@ -145,6 +146,7 @@ module framestore(rst, clk, mem_clk,
   input            mem_clk;
   /* motion compensation: reading forward reference frame */
   input             fwd_rd_addr_empty;
+  output      [7:0] dbg_vbuf_fill;   // DVD-FORK DEBUG: VBUF occupancy (0xFF = full), from framestore_request
   output            fwd_rd_addr_en;
   input             fwd_rd_addr_valid;
   input       [21:0]fwd_rd_addr;
@@ -301,7 +303,8 @@ module framestore(rst, clk, mem_clk,
     .mem_req_wr_almost_full(mem_req_wr_almost_full),
     .tag_wr_dta(tag_wr_dta),
     .tag_wr_en(tag_wr_en),
-    .tag_wr_almost_full(tag_wr_almost_full)
+    .tag_wr_almost_full(tag_wr_almost_full),
+    .dbg_vbuf_fill(dbg_vbuf_fill)                     // DVD-FORK DEBUG
     );
 
   /* accept data read from memory controller */
