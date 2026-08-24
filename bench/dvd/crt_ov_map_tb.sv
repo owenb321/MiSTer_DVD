@@ -405,14 +405,21 @@ module crt_ov_map_tb;
         err0 = errors;
 
         // ==============================================================
-        // T1d — SIF fill geometries (DVD-FORK FIX): 352->720 (x0=0) and
-        //       256->720 (Crop+SIF, x0=48). Forward geometry + closed-form
+        // T1d — sub-720 fill geometries (DVD-FORK FIX): 352->720 (x0=0),
+        //       256->720 (Crop+SIF, x0=48), and the <720 predicate widening
+        //       (2026-08-24): 480->720 (SVCD, exact 2:3), 544->720 and
+        //       704->720 (DVD sub-D1). Forward geometry + closed-form
         //       inverse with the right-edge clamp (cr_near reaches hsrc at
-        //       the last column at these ratios; both sides clamp hsrc-1).
+        //       these ratios; both sides clamp hsrc-1).
         // ==============================================================
-        for (g = 0; g < 2; g = g + 1) begin
-            if (g == 0) set_geom(352, 720, 0);      // SIF-only fill
-            else        set_geom(256, 720, 48);     // Crop + SIF compose
+        for (g = 0; g < 5; g = g + 1) begin
+            case (g)
+                0: set_geom(352, 720, 0);       // SIF-only fill
+                1: set_geom(256, 720, 48);      // Crop + SIF compose
+                2: set_geom(480, 720, 0);       // SVCD 2/3-D1 (exact 2:3)
+                3: set_geom(544, 720, 0);       // DVD sub-D1
+                default: set_geom(704, 720, 0); // DVD sub-D1
+            endcase
 
             send_hs_line(0);
             if (fwd_n !== HDST) begin
@@ -453,7 +460,7 @@ module crt_ov_map_tb;
             for (i = HDST; i < HDST + 40; i = i + 1) step_h(i[11:0]);
             crop_en = 0;
         end
-        $display("T1d SIF fill crop inverse (352->720, 256->720): %s", (errors != err0) ? "FAIL" : "PASS");
+        $display("T1d sub-720 fill crop inverse (352/256/480/544/704 ->720): %s", (errors != err0) ? "FAIL" : "PASS");
         err0 = errors;
 
         // restore the T1b geometry so later sections see the classic Crop numbers

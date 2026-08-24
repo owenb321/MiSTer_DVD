@@ -35,7 +35,7 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 
 ## What works
 
-**Video** — MPEG-2 decode at full rate, plus **MPEG-1** (the DVD spec's other permitted
+**Video** — MPEG-2 decode at full rate, plus MPEG-1 (the DVD spec's other permitted
 video format, 352×240/352×288); NTSC and PAL auto-detected from the stream; progressive
 and native 480i/576i output; 3:2 pulldown handling for film; PTS-driven A/V sync with a
 display-refresh-locked frame-rate governor.
@@ -49,7 +49,7 @@ pause. SVCD's 480-wide picture fills both HDMI and the analog CRT output. No men
 15 kHz 480i/576i raster on the analog pins. It engages from `MiSTer.ini` alone, like any
 other core. A field-passthrough mode hands the CRT the disc's authored fields 1:1.
 
-**Audio** — AC-3 and **MPEG-1 Layer II (MP2)** decoded entirely in fabric (AC-3 5.1
+**Audio** — AC-3 and MPEG-1 Layer II (MP2) decoded entirely in fabric (AC-3 5.1
 downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
 over S/PDIF to a receiver.
 
