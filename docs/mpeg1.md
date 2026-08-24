@@ -288,9 +288,11 @@ gaps at v1 (now closed, see below): analog dual-raster `re_interlace` hardcodes
   `v2x_en` post-map for the line repeat (progressive `min((y+1)>>1, v_src_max)`,
   interlaced parity-preserving; 0xFFF bar sentinel preserved). The HUD un-clips as
   a side effect (full 720-wide DE window).
-- **Sim**: `resample_chain_tb +sif=1` (+`linetag` source-map proof, `+hgrad`
-  352→720 blend proof, `+crt` field path, `+vsmode=1` letterbox compose,
-  `+siftog` mid-run enable toggle) and `crt_ov_map_tb` T1d/T6.
+- **Sim**: `resample_chain_tb +sif=1` (every `+sif` run co-sims the addrgen
+  `disp_y` walk against the 2× closed form — the `+linetag` memory-tag path was
+  measured too elastic for an exact map check, see the TB's sif-walk comment;
+  `+hgrad` 352→720 blend proof, `+crt` field path, `+vsmode=1` letterbox
+  compose, `+siftog` mid-run enable toggle) and `crt_ov_map_tb` T1d/T6.
 - **Accepted quirks**: the field path's final line clamps to vsz−1 and can cross
   field parity for one bottom line; hstretch stretches the mb-padded width (all
   real SIF widths are multiples of 16); one ascal re-init popup on HDMI when the

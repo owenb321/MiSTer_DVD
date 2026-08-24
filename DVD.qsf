@@ -531,4 +531,10 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   the passing one here. Seeds are tied to the EXACT synth/map netlist — a seed that
 #   passed (or failed) on a previous netlist carries NO information about this one. Always
 #   re-sweep after a change that moves ALMs; never assume a seed's verdict transfers.
-set_global_assignment -name SEED 9
+#
+# SIF-ANALOG-FILL netlist (2026-08-24, feature/sif-analog-fill): the inherited SEED 9
+# came in MARGINAL on `--compile` (clk_dec 78.83 MHz @100C, gate 86.0). Re-swept
+# (USE_DOCKER tools/seed_sweep.sh, FMAX_MIN=86.0): SEED 7 routes + PASSES both corners
+# (clk_dec 88.35 MHz @100C / 86.51 MHz @-40C) — first seed tried. Pinned SEED 7,
+# committed with the branch per the rule above.
+set_global_assignment -name SEED 7

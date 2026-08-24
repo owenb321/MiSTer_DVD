@@ -836,9 +836,9 @@ True 240p output was REJECTED: no exact-59.94 Hz 240p modeline exists at 1716
 dots/line, so it would drift against the fixed 48 kHz audio NCO — line-doubled 480i
 carries the same content. Sub-D1 MPEG-2 (704/544) intentionally NOT filled (user scope
 decision; one predicate away). Design: `docs/mpeg1.md` §B.3; overlay inverse contract:
-`docs/crt_anamorphic.md` §9b. Sim: `resample_chain_tb +sif=1` variants (`+linetag`
-source map, `+hgrad` blend, `+crt` fields, `+siftog` runtime toggle),
-`crt_ov_map_tb` T1d/T6.
+`docs/crt_anamorphic.md` §9b. Sim: `resample_chain_tb +sif=1` variants (`+sif` runs
+co-sim the addrgen walk vs the 2× closed form; `+hgrad` blend, `+crt` fields,
+`+siftog` runtime toggle), `crt_ov_map_tb` T1d/T6.
 
 ---
 
