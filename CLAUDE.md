@@ -794,13 +794,17 @@ machine — used for `tools/nav_extract.py`, `tools/spu_dump_iso.py`, etc.). Cur
 | AC-3 (Dolby Digital) | 0x80–0x87 | liba52 | ✅ stereo PCM | IEC 61937-3, Pc=0x0001 |
 | DTS | 0x88–0x8F | libdca | ✅ stereo PCM | IEC 61937-5, Pc=0x000B |
 | LPCM | 0xA0–0xA7 | none (raw PCM) | ✅ direct | N/A |
-| MP2 (MPEG-1 Layer II) | stream_id 0xC0–0xC7 (no substream byte) | none — in-fabric `dvd/mp2/mp2_decode.sv` | ✅ stereo PCM (⏳ HW-confirm pending) | IEC 61937, Pc=0x0004 (not implemented; passthrough mode silences MP2) |
+| MP2 (MPEG-1 Layer II) | stream_id 0xC0–0xC7 (no substream byte) | none — in-fabric `dvd/mp2/mp2_decode.sv` | ✅ stereo PCM ✅ HW-CONFIRMED 2026-08-24 | IEC 61937, Pc=0x0004 (not implemented; passthrough mode silences MP2) |
 
 DTS support is essentially free once AC-3 works — same IEC 61937 wrapper, different
 preamble constant and library. Always detect substream ID before routing audio PES.
 
-**MP2 + MPEG-1 video (2026-08-24, branch `feature/mpeg1-codecs`): the missing
-DVD-spec codecs, both in fabric — see `docs/mpeg1.md`.** MP2 rides PES stream_id
+**MP2 + MPEG-1 video — ✅ HW-CONFIRMED 2026-08-24 (branch `feature/mpeg1-codecs`,
+build `DVD_mpeg1c`): the missing DVD-spec codecs, both in fabric — see
+`docs/mpeg1.md`.** NTSC+PAL MPEG-1 clips + a converted VCD play with A/V sync on
+the board. ⚠ HW-bringup lesson recorded in docs/mpeg1.md: Quartus 17 mangles
+`N'(expr)` size casts (sim-perfect, silent silicon); caught by the new
+post-map-netlist cosim technique — use part-selects/$signed instead. MP2 rides PES stream_id
 0xC0+n directly (track select = stream_id low 3 bits; type `T_MP2 = 2'd3` reuses
 the old "unknown" sentinel), reframed by `dvd/mp2_reframer.sv`, decoded by
 `dvd/mp2/mp2_decode.sv` — **BIT-EXACT in sim vs the golden model

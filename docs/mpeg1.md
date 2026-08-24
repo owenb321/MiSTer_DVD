@@ -1,7 +1,19 @@
 # MPEG-1 video + MPEG-1 Layer II (MP2) audio — the missing DVD-spec codecs
 
-**Status: ✅ IMPLEMENTED + SIM-VERIFIED + BUILD CLOSED (2026-08-24, branch
-`feature/mpeg1-codecs`). ⏳ HW-confirm pending.** Release build
+**Status: ✅ HW-CONFIRMED (2026-08-24, branch `feature/mpeg1-codecs`, build
+`DVD_mpeg1c`).** User-confirmed on the DE10-Nano: MPEG-1 NTSC (352x240) and PAL
+(352x288) test clips (tools/make_mpeg1_test.sh) AND a converted real VCD
+(tools/vcd_to_vob.sh) all play with correct video, good audio, A/V in sync.
+★ THE HW-BRINGUP BUG (one round of silence): Quartus 17 mis-synthesizes
+size-cast-of-expression forms — `signed'(27'(dq_p1 >>> 16))` became a ONE-BIT
+operand in silicon while every Icarus sim was bit-exact. Found WITHOUT further
+board cycles by simulating Quartus's own post-map functional netlist
+(`quartus_eda --functional` + behavioral M10K/MAC models) — that netlist-cosim
+flow reproduced the silence on the desk and pinpointed the mangled operand.
+RULE: no `N'(expr)` size casts in RTL destined for Quartus 17; use explicit
+part-selects / concats / $signed(). (Residual netlist-cosim deltas after the
+fix were artifacts of the hand-written behavioral DSP/RAM sim models — real
+hardware decodes correctly.) Fit (DVD_mpeg1 numbers; mpeg1c equivalent)
 `releases/DVD_mpeg1_20260824_1150.rbf` (compressed 4.5 MB): clk_dec Restricted
 Fmax **89.92 MHz @100C / 93.23 @-40C** (86 MHz gate PASS); **ALM 38,884/41,910
 = 93 %** (+~3.0k vs the 86 % pre-feature baseline — inside the 2–3.5k estimate,
