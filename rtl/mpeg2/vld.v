@@ -52,7 +52,8 @@ module vld(clk, clk_en, rst,
   vld_err,                                                                                  // asserted when vld code parse error
   drop_pic_req, drop_pic_ack, drop_pic_rff, drop_pic_field,                                 // DVD-FORK (frame-drop governor O[19] + field-pair drop)
   dbg_drop_probe,                                                                           // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe (Thayer drops=0)
-  flags_commit                                                                              // DVD-FORK (round 11): per-picture display flags are valid (coding ext parsed)
+  flags_commit,                                                                             // DVD-FORK (round 11): per-picture display flags are valid (coding ext parsed)
+  mpeg1                                                                                     // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
   );
 
   input            clk;                           // clock
@@ -178,6 +179,7 @@ module vld(clk, clk_en, rst,
     STATE_DCT_NON_INTRA_FIRST         = 8'h7a,
     STATE_NON_CODED_BLOCK             = 8'h7b,
     STATE_DCT_ERROR                   = 8'h7c,
+    STATE_DCT_ESCAPE_M1               = 8'h7d, // DVD-FORK FIX (mpeg1): second byte of a double-byte MPEG-1 escape level
 
     STATE_SEQUENCE_END                = 8'h80,
 
@@ -245,8 +247,17 @@ module vld(clk, clk_en, rst,
 
   /* position in video stream */
   reg              sequence_header_seen;    /* set when sequence header encountered, cleared when sequence end encountered  */
-  reg              sequence_extension_seen; /* set when sequence extension encountered, cleared when sequence end encountered  */
+  reg              sequence_extension_seen; /* set when sequence extension encountered, cleared when sequence end encountered (and re-armed at every sequence header — see the mpeg1 latch) */
   reg              picture_header_seen;     /* set when picture header encountered, cleared when sequence end encountered  */
+
+  /* DVD-FORK FIX (mpeg1): MPEG-1 decode mode. Latched at every accepted picture start
+   * code (see the always block near sequence_extension_seen for the detection policy)
+   * and muxes the extension-borne decode parameters to their MPEG-1 constants.
+   * Exported to rld (per-picture, through the rld fifo) for mismatch control. */
+  output reg       mpeg1;
+  /* DVD-FORK FIX (mpeg1): skip the slices of an MPEG-1 D-picture (declared early —
+   * used by the slice-routing gate in the next-state logic; policy at the latch). */
+  reg              skip_d_picture;
 
   /* DVD-FORK (frame-drop governor, O[19]).
    * drop_now_comb is evaluated combinationally while the FSM is in STATE_PICTURE_HEADER,
@@ -320,9 +331,19 @@ module vld(clk, clk_en, rst,
    * (getbits[21:20] at STATE_PICTURE_CODING_EXT0, offset 2 width 2) — bitwise
    * identical semantics, immune to shared-fanout mangling. */
   (* preserve *) reg [1:0] drop_ps_lat;
+  /* DVD-FORK FIX (mpeg1): STATE_PICTURE_CODING_EXT0 never occurs in MPEG-1, so
+   * drop_ps_lat would stay stale (typically 0) and the governor could never drop a
+   * B-frame. Every MPEG-1 picture is a frame picture: refresh the latch at the
+   * picture header instead. Ordering matches the MPEG-2 convention exactly —
+   * drop_now_comb samples drop_ps_lat AT the header, i.e. it reads the PREVIOUS
+   * picture's structure, which from the second MPEG-1 picture onward is always
+   * FRAME_PICTURE (the very first picture after a stream switch is conservatively
+   * non-droppable, same one-picture conservatism the field-pair logic accepts).
+   * The (* preserve *) hardening is untouched — this only adds a load arm. */
   always @(posedge clk)
     if (~rst) drop_ps_lat <= 2'd0;
     else if (clk_en && (state == STATE_PICTURE_CODING_EXT0)) drop_ps_lat <= getbits[21:20];
+    else if (clk_en && mpeg1 && (state == STATE_PICTURE_HEADER)) drop_ps_lat <= FRAME_PICTURE;
     else drop_ps_lat <= drop_ps_lat;
   (* keep *) wire drop_ps_frame = (drop_ps_lat == FRAME_PICTURE);
   /* DVD-FORK (2026-08-05 round 3 — THE ACTUAL Thayer drops=0 truth): the disc is
@@ -424,6 +445,11 @@ module vld(clk, clk_en, rst,
   wire        [5:0]macroblock_addr_inc_value;
   wire        [6:0]macroblock_addr_inc_value_ext = macroblock_addr_inc_value;
   wire             macroblock_addr_inc_escape;
+  /* DVD-FORK FIX (mpeg1): macroblock_stuffing ('0000 0001 111', MPEG-1 only) decodes in
+   * vlc_tables.v as {length=11, value=0, escape=0} — a combination no real increment
+   * produces. Consumed-and-stayed in STATE_NEXT_MACROBLOCK when mpeg1; still the
+   * value==0 error in MPEG-2 mode. */
+  wire             macroblock_addr_inc_stuffing = (macroblock_addr_inc_length == 4'd11) && (macroblock_addr_inc_value == 6'd0) && ~macroblock_addr_inc_escape;
   reg         [6:0]macroblock_address_increment;
   /* 
    * macroblock address is valid after STATE_MACROBLOCK_TYPE and before STATE_NEXT_BLOCK. 
@@ -631,6 +657,12 @@ module vld(clk, clk_en, rst,
 
 `include "vlc_tables.v"
 
+  /* DVD-FORK FIX (mpeg1): MPEG-1 DCT escape level extension. In STATE_DCT_ESCAPE_B14
+   * (mpeg1 mode) getbits[23:16] holds the FIRST 8-bit level byte: 0x00 or 0x80 mean a
+   * second byte follows (level = +b / b-256); anything else is the level itself
+   * (signed 8-bit). */
+  wire dct_escape_m1_ext = mpeg1 && ((getbits[23:16] == 8'h00) || (getbits[23:16] == 8'h80));
+
   /* next state logic */
   always @*
     casex (state)
@@ -638,7 +670,11 @@ module vld(clk, clk_en, rst,
                                        else next = STATE_NEXT_START_CODE;
 
       STATE_START_CODE:                casex(getbits[7:0])
-                                         CODE_PICTURE_START:    if (sequence_header_seen & sequence_extension_seen) next = STATE_PICTURE_HEADER;
+                                         /* DVD-FORK FIX (mpeg1): a sequence extension is no longer required — a picture
+                                          * start with sequence_header_seen && ~sequence_extension_seen means MPEG-1
+                                          * (13818-2 sends the extension immediately after every sequence header, before
+                                          * any picture). The mpeg1 flag latches on this very acceptance. */
+                                         CODE_PICTURE_START:    if (sequence_header_seen) next = STATE_PICTURE_HEADER;
                                                                 else next = STATE_NEXT_START_CODE;
                                          CODE_USER_DATA_START:  next = STATE_NEXT_START_CODE;
 					 CODE_SEQUENCE_HEADER:  next = STATE_SEQUENCE_HEADER;
@@ -670,8 +706,8 @@ module vld(clk, clk_en, rst,
 					 8'h7x,
 					 8'h8x,
 					 8'h9x,
-					 8'hax:                  if (drop_this_picture) next = STATE_NEXT_START_CODE; // DVD-FORK (frame-drop O[19]): skip this B-frame's slices cheaply
-					                         else if (sequence_header_seen & sequence_extension_seen & picture_header_seen) next = STATE_SLICE;
+					 8'hax:                  if (drop_this_picture || skip_d_picture) next = STATE_NEXT_START_CODE; // DVD-FORK (frame-drop O[19]): skip this B-frame's slices cheaply; DVD-FORK FIX (mpeg1): also skip MPEG-1 D-picture slices (different mb syntax)
+					                         else if (sequence_header_seen & (sequence_extension_seen | mpeg1) & picture_header_seen) next = STATE_SLICE; // DVD-FORK FIX (mpeg1): no extension needed in MPEG-1 mode
                                                                  else next = STATE_NEXT_START_CODE;
 					 default                 next = STATE_NEXT_START_CODE;
 				       endcase 
@@ -791,6 +827,7 @@ module vld(clk, clk_en, rst,
                                        else next = STATE_NEXT_MACROBLOCK;
 
       STATE_NEXT_MACROBLOCK:           if (macroblock_addr_inc_escape) next = STATE_NEXT_MACROBLOCK; // macroblock address escape
+                                       else if (mpeg1 && macroblock_addr_inc_stuffing) next = STATE_NEXT_MACROBLOCK; // DVD-FORK FIX (mpeg1): macroblock_stuffing — consume 11 bits (value 0 adds nothing), stay
                                        else if (macroblock_addr_inc_value == 6'd0) next = STATE_ERROR;
 				       else if (first_macroblock_of_slice) next = STATE_MACROBLOCK_TYPE; // par. 6.3.16.1: syntax does not allow the first and last macroblock of a slice to be skipped
 				       else if ((macroblock_address_increment + macroblock_addr_inc_value_ext) != 7'd1) next = STATE_MACROBLOCK_SKIP; // macroblocks skipped. macroblock_address_increment + macroblock_addr_inc_value_ext is next value of macroblock_address_increment.
@@ -913,7 +950,13 @@ module vld(clk, clk_en, rst,
                                        else if (dct_coefficient_0_decoded[15:11] == 5'b0) next = STATE_DCT_ERROR; // unknown code
                                        else next = STATE_DCT_SUBS_B14;
 
-      STATE_DCT_ESCAPE_B14:            // table B-16 escapes to table B-15
+      STATE_DCT_ESCAPE_B14:            // table B-16 escapes to table B-14 (MPEG-2: fixed 12-bit level)
+                                       // DVD-FORK FIX (mpeg1): MPEG-1 escape level is 8 bits; first byte
+                                       // 0x00/0x80 announces a second (double-byte) level byte.
+                                       if (dct_escape_m1_ext) next = STATE_DCT_ESCAPE_M1;
+                                       else next = STATE_DCT_SUBS_B14;
+
+      STATE_DCT_ESCAPE_M1:             // DVD-FORK FIX (mpeg1): second escape-level byte (128..255 / -255..-128)
                                        next = STATE_DCT_SUBS_B14;
 
       STATE_NON_CODED_BLOCK:           next = STATE_NEXT_BLOCK; // Output end-of-block for all-zeroes non-coded block
@@ -1006,7 +1049,8 @@ module vld(clk, clk_en, rst,
         STATE_DCT_SUBS_B15:               next_advance = dct_coefficient_escape ? 5'd12 : dct_coefficient_1_decoded[15:11]; // escape + fixed-length run encoding as in table B-16 or variable length encoding as in table B-15
         STATE_DCT_ESCAPE_B15:             next_advance = 5'd12; // 12-bit fixed-length signed_level (table B-16)
         STATE_DCT_SUBS_B14:               next_advance = dct_coefficient_escape ? 5'd12 : dct_coefficient_0_decoded[15:11]; // escape + fixed-length run encoding as in table B-16 or variable length encoding as in table B-14
-        STATE_DCT_ESCAPE_B14      :       next_advance = 5'd12; // 12-bit fixed-length signed_level (table B-16)
+        STATE_DCT_ESCAPE_B14      :       next_advance = mpeg1 ? 5'd8 : 5'd12; // 12-bit fixed-length signed_level (table B-16); DVD-FORK FIX (mpeg1): 8-bit first level byte
+        STATE_DCT_ESCAPE_M1:              next_advance = 5'd8;  // DVD-FORK FIX (mpeg1): second level byte
         STATE_DCT_NON_INTRA_FIRST:        next_advance = dct_coefficient_escape ? 5'd12 : dct_non_intra_first_coefficient_0_decoded[15:11]; // escape + fixed-length run encoding as in table B-16 or variable length encoding as in table B-14, modified as in table b-14 note 2, 3
         STATE_NON_CODED_BLOCK:            next_advance = 5'd0;
         STATE_DCT_ERROR:                  next_advance = 5'd0;
@@ -1073,9 +1117,41 @@ module vld(clk, clk_en, rst,
 
   always @(posedge clk)
     if (~rst) sequence_extension_seen <= 1'b0;
+    /* DVD-FORK FIX (mpeg1): re-arm at every sequence header. 13818-2 requires each
+     * sequence_header to be immediately followed by its sequence_extension (before
+     * any picture), so this clear is invisible to legal MPEG-2 streams — and it makes
+     * the MPEG-1 verdict robust across an MPEG-2 -> MPEG-1 splice with no intervening
+     * sequence_end (the old clear-at-SEQUENCE_END-only left the flag stale). */
+    else if (clk_en && (state == STATE_SEQUENCE_HEADER)) sequence_extension_seen <= 1'b0;
     else if (clk_en && (state == STATE_SEQUENCE_EXT)) sequence_extension_seen <= 1'b1;
     else if (clk_en && (state == STATE_SEQUENCE_END)) sequence_extension_seen <= 1'b0;
     else sequence_extension_seen <= sequence_extension_seen;
+
+  /* DVD-FORK FIX (mpeg1): MPEG-1/MPEG-2 stream discrimination.
+   * MPEG-1 (11172-2) has no extensions at all, while 13818-2 sends sequence_extension
+   * immediately after EVERY sequence header, before any picture. So: a picture start
+   * code accepted while sequence_header_seen && ~sequence_extension_seen == the stream
+   * is MPEG-1. The flag is (re)latched at every accepted picture start (self-heals one
+   * picture after a corrupt/missing extension) and cleared the moment any sequence
+   * extension parses (instant MPEG-2 confirmation). Combined with the re-arm above,
+   * MPEG-1<->MPEG-2 splices re-detect at the first picture of the new sequence. */
+  always @(posedge clk)
+    if (~rst) mpeg1 <= 1'b0;
+    else if (clk_en && (state == STATE_SEQUENCE_EXT)) mpeg1 <= 1'b0;
+    else if (clk_en && (state == STATE_START_CODE) && (getbits[7:0] == CODE_PICTURE_START) && sequence_header_seen) mpeg1 <= ~sequence_extension_seen;
+    else mpeg1 <= mpeg1;
+
+  /* DVD-FORK FIX (mpeg1): D-pictures (picture_coding_type == 4; MPEG-1 only, illegal
+   * on DVD/VCD) use a different macroblock syntax (end_of_macroblock bit, no EOB) that
+   * the I/P/B slice FSM would mis-decode into STATE_ERROR spam. Guard: route a
+   * D-picture's slice start codes to STATE_NEXT_START_CODE — the same pattern
+   * drop_this_picture uses — and suppress its update_picture_buffers (hdr_is_d_m1
+   * below), so the previous frame simply repeats. picture_coding_type is valid here:
+   * its loadreg latches at STATE_PICTURE_HEADER. Self-clears at the next picture. */
+  always @(posedge clk)
+    if (~rst) skip_d_picture <= 1'b0;
+    else if (clk_en && (state == STATE_PICTURE_HEADER0)) skip_d_picture <= mpeg1 && (picture_coding_type == D_TYPE);
+    else skip_d_picture <= skip_d_picture;
 
   always @(posedge clk)
     if (~rst) picture_header_seen <= 1'b0;
@@ -1185,17 +1261,70 @@ module vld(clk, clk_en, rst,
                                   ? RLD_QUANT : RLD_NOOP);
     else rld_cmd <= rld_cmd;
 
+
+  /* DVD-FORK FIX (mpeg1): extension defaults. MPEG-1 has no sequence/picture-coding
+   * extension, so every extension-loaded parameter would otherwise be stale (reset
+   * zeroes, or the last MPEG-2 stream's values after a splice). Each affected loadreg
+   * now lands in a private *_ld net and the visible signal — module output AND every
+   * internal consumer alike — is muxed to the MPEG-1 constant while mpeg1 is high:
+   *   progressive_sequence=1, chroma_format=4:2:0, size MSBs=0 (they only load in
+   *   STATE_SEQUENCE_EXT — stale-value hazard after an MPEG-2->MPEG-1 switch),
+   *   f_code_xx={0,forward/backward_f_code} (the MPEG-1 picture-header fields, parsed
+   *   at STATE_PICTURE_HEADER1/2, previously unconsumed; r_size = f_code-1 per
+   *   direction falls out), intra_dc_precision=8-bit, picture_structure=FRAME,
+   *   tff=0, frame_pred_frame_dct=1, concealment_motion_vectors=0, q_scale_type=0
+   *   (linear — arithmetically identical to MPEG-1 dequant), intra_vlc_format=0
+   *   (table B-14), alternate_scan=0, rff=0, progressive_frame=1. */
+  wire        progressive_sequence_ld;
+  wire   [1:0]chroma_format_ld;
+  wire   [1:0]horizontal_size_msb_ld;
+  wire   [1:0]vertical_size_msb_ld;
+  wire   [3:0]f_code_00_ld;
+  wire   [3:0]f_code_01_ld;
+  wire   [3:0]f_code_10_ld;
+  wire   [3:0]f_code_11_ld;
+  wire   [1:0]intra_dc_precision_ld;
+  wire   [1:0]picture_structure_ld;
+  wire        top_field_first_ld;
+  wire        frame_pred_frame_dct_ld;
+  wire        concealment_motion_vectors_ld;
+  wire        q_scale_type_ld;
+  wire        intra_vlc_format_ld;
+  wire        alternate_scan_ld;
+  wire        repeat_first_field_ld;
+  wire        progressive_frame_ld;
+
+  assign progressive_sequence       = mpeg1 ? 1'b1                     : progressive_sequence_ld;
+  assign chroma_format              = mpeg1 ? CHROMA420                : chroma_format_ld;
+  assign horizontal_size[13:12]     = mpeg1 ? 2'b00                    : horizontal_size_msb_ld;
+  assign vertical_size[13:12]       = mpeg1 ? 2'b00                    : vertical_size_msb_ld;
+  assign f_code_00                  = mpeg1 ? {1'b0, forward_f_code}   : f_code_00_ld;
+  assign f_code_01                  = mpeg1 ? {1'b0, forward_f_code}   : f_code_01_ld;
+  assign f_code_10                  = mpeg1 ? {1'b0, backward_f_code}  : f_code_10_ld;
+  assign f_code_11                  = mpeg1 ? {1'b0, backward_f_code}  : f_code_11_ld;
+  assign intra_dc_precision         = mpeg1 ? 2'b00                    : intra_dc_precision_ld;
+  assign picture_structure          = mpeg1 ? FRAME_PICTURE            : picture_structure_ld;
+  assign top_field_first            = mpeg1 ? 1'b0                     : top_field_first_ld;
+  assign frame_pred_frame_dct       = mpeg1 ? 1'b1                     : frame_pred_frame_dct_ld;
+  assign concealment_motion_vectors = mpeg1 ? 1'b0                     : concealment_motion_vectors_ld;
+  assign q_scale_type               = mpeg1 ? 1'b0                     : q_scale_type_ld;
+  assign intra_vlc_format           = mpeg1 ? 1'b0                     : intra_vlc_format_ld;
+  assign alternate_scan             = mpeg1 ? 1'b0                     : alternate_scan_ld;
+  assign repeat_first_field         = mpeg1 ? 1'b0                     : repeat_first_field_ld;
+  assign progressive_frame          = mpeg1 ? 1'b1                     : progressive_frame_ld;
+
   /* par. 6.2.2.3: Sequence extension */ 
   loadreg #( .offset(0), .width(8), .fsm_state(STATE_SEQUENCE_EXT))                  loadreg_profile_and_level_indication(.fsm_reg(profile_and_level_indication), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(8), .width(1), .fsm_state(STATE_SEQUENCE_EXT))                  loadreg_progressive_sequence(.fsm_reg(progressive_sequence), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(9), .width(2), .fsm_state(STATE_SEQUENCE_EXT))                  loadreg_chroma_format(.fsm_reg(chroma_format), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(11), .width(2), .fsm_state(STATE_SEQUENCE_EXT))                 loadreg_horizontal_size_msb(.fsm_reg(horizontal_size[13:12]), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(13), .width(2), .fsm_state(STATE_SEQUENCE_EXT))                 loadreg_vertical_size_msb(.fsm_reg(vertical_size[13:12]), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(8), .width(1), .fsm_state(STATE_SEQUENCE_EXT))                  loadreg_progressive_sequence(.fsm_reg(progressive_sequence_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(9), .width(2), .fsm_state(STATE_SEQUENCE_EXT))                  loadreg_chroma_format(.fsm_reg(chroma_format_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(11), .width(2), .fsm_state(STATE_SEQUENCE_EXT))                 loadreg_horizontal_size_msb(.fsm_reg(horizontal_size_msb_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(13), .width(2), .fsm_state(STATE_SEQUENCE_EXT))                 loadreg_vertical_size_msb(.fsm_reg(vertical_size_msb_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(0), .width(12), .fsm_state(STATE_SEQUENCE_EXT0))                loadreg_bit_rate_msb(.fsm_reg(bit_rate[29:18]), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(0), .width(8), .fsm_state(STATE_SEQUENCE_EXT1))                 loadreg_vbv_buffer_size_msb(.fsm_reg(vbv_buffer_size[17:10]), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(8), .width(1), .fsm_state(STATE_SEQUENCE_EXT1))                 loadreg_low_delay(.fsm_reg(low_delay), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(9), .width(2), .fsm_state(STATE_SEQUENCE_EXT1))                 loadreg_frame_rate_extension_n(.fsm_reg(frame_rate_extension_n), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(11), .width(5), .fsm_state(STATE_SEQUENCE_EXT1))                loadreg_frame_rate_extension_d(.fsm_reg(frame_rate_extension_d), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+
 
   /* par. 6.2.2.4: Sequence display extension */
   loadreg #( .offset(0), .width(3), .fsm_state(STATE_SEQUENCE_DISPLAY_EXT))          loadreg_video_format(.fsm_reg(video_format), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
@@ -1206,21 +1335,21 @@ module vld(clk, clk_en, rst,
   loadreg #( .offset(0), .width(14), .fsm_state(STATE_SEQUENCE_DISPLAY_EXT2))        loadreg_display_vertical_size(.fsm_reg(display_vertical_size), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
 
   /* par. 6.2.3.1: Picture coding extension */
-  loadreg #( .offset(0), .width(4), .fsm_state(STATE_PICTURE_CODING_EXT))            loadreg_f_code_00(.fsm_reg(f_code_00), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(4), .width(4), .fsm_state(STATE_PICTURE_CODING_EXT))            loadreg_f_code_01(.fsm_reg(f_code_01), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(8), .width(4), .fsm_state(STATE_PICTURE_CODING_EXT))            loadreg_f_code_10(.fsm_reg(f_code_10), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(12), .width(4), .fsm_state(STATE_PICTURE_CODING_EXT))           loadreg_f_code_11(.fsm_reg(f_code_11), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(0), .width(2), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_intra_dc_precision(.fsm_reg(intra_dc_precision), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(2), .width(2), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_picture_structure(.fsm_reg(picture_structure), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(4), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_top_field_first(.fsm_reg(top_field_first), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(5), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_frame_pred_frame_dct(.fsm_reg(frame_pred_frame_dct), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(6), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_concealment_motion_vectors(.fsm_reg(concealment_motion_vectors), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(7), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_q_scale_type(.fsm_reg(q_scale_type), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(8), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_intra_vlc_format(.fsm_reg(intra_vlc_format), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(9), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_alternate_scan(.fsm_reg(alternate_scan), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(10), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))          loadreg_repeat_first_field(.fsm_reg(repeat_first_field), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(0), .width(4), .fsm_state(STATE_PICTURE_CODING_EXT))            loadreg_f_code_00(.fsm_reg(f_code_00_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(4), .width(4), .fsm_state(STATE_PICTURE_CODING_EXT))            loadreg_f_code_01(.fsm_reg(f_code_01_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(8), .width(4), .fsm_state(STATE_PICTURE_CODING_EXT))            loadreg_f_code_10(.fsm_reg(f_code_10_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(12), .width(4), .fsm_state(STATE_PICTURE_CODING_EXT))           loadreg_f_code_11(.fsm_reg(f_code_11_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(0), .width(2), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_intra_dc_precision(.fsm_reg(intra_dc_precision_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(2), .width(2), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_picture_structure(.fsm_reg(picture_structure_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(4), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_top_field_first(.fsm_reg(top_field_first_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(5), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_frame_pred_frame_dct(.fsm_reg(frame_pred_frame_dct_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(6), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_concealment_motion_vectors(.fsm_reg(concealment_motion_vectors_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(7), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_q_scale_type(.fsm_reg(q_scale_type_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(8), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_intra_vlc_format(.fsm_reg(intra_vlc_format_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(9), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))           loadreg_alternate_scan(.fsm_reg(alternate_scan_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(10), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))          loadreg_repeat_first_field(.fsm_reg(repeat_first_field_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(11), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))          loadreg_chroma_420_type(.fsm_reg(chroma_420_type), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
-  loadreg #( .offset(12), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))          loadreg_progressive_frame(.fsm_reg(progressive_frame), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
+  loadreg #( .offset(12), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))          loadreg_progressive_frame(.fsm_reg(progressive_frame_ld), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(13), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT0))          loadreg_composite_display_flag(.fsm_reg(composite_display_flag), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(0), .width(1), .fsm_state(STATE_PICTURE_CODING_EXT1))           loadreg_v_axis(.fsm_reg(v_axis), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
   loadreg #( .offset(1), .width(3), .fsm_state(STATE_PICTURE_CODING_EXT1))           loadreg_field_sequence(.fsm_reg(field_sequence), .clk(clk), .clk_en(clk_en), .rst(rst), .state(state), .getbits(getbits));
@@ -1683,6 +1812,22 @@ module vld(clk, clk_en, rst,
 
   wire shift_pmv = (mv_format == MV_FIELD) && (picture_structure == FRAME_PICTURE);
 
+  /* DVD-FORK FIX (mpeg1): full-pel motion vectors (MPEG-1 picture-header flags
+   * full_pel_forward_vector / full_pel_backward_vector). MSSG reference semantics:
+   * PMV storage stays in HALF-pel units; when full-pel applies to the vector being
+   * reconstructed:  vec = (pred >> 1) + delta;  wrap on lim = 16 << r_size (the
+   * existing stage-3 sign-truncation, operating on the full-pel value);
+   * stored pred = vec << 1.  The >>1 is exact — every PMV stored in full-pel mode is
+   * a vec<<1 (even), and pmv_reset zeroes are even too. Applied per DIRECTION:
+   * motion_vector[2] is the s index (0 = forward, 1 = backward). shift_pmv (the
+   * MPEG-2 field-in-frame vertical halving) is mutually exclusive with mpeg1
+   * (picture_structure forced FRAME + frame_pred_frame_dct=1 -> MV_FRAME), so the
+   * ORed conditions below can never double-shift. full_pel_rd keys off the CURRENT
+   * motion_vector (stage-1 predictor read); full_pel_wr keys off motion_vector_5
+   * (stage-6 write-back), both against the same per-picture header flags. */
+  wire full_pel_rd = mpeg1 && (motion_vector[2]   ? full_pel_backward_vector : full_pel_forward_vector);
+  wire full_pel_wr = mpeg1 && (motion_vector_5[2] ? full_pel_backward_vector : full_pel_forward_vector);
+
   always @(posedge clk)  
     if (~rst) 
       begin
@@ -1696,15 +1841,17 @@ module vld(clk, clk_en, rst,
     else if (clk_en)
       begin
         /* stage 1 */
+        /* DVD-FORK FIX (mpeg1): full_pel_rd halves the predictor into full-pel units
+         * before the delta add (see the comment at full_pel_rd above). */
         case (motion_vector)
-          MOTION_VECTOR_0_0_0: pmv_0 <= pmv_0_0_0;
-          MOTION_VECTOR_0_0_1: pmv_0 <= shift_pmv ? pmv_0_0_1 >>> 1 : pmv_0_0_1;
-          MOTION_VECTOR_1_0_0: pmv_0 <= pmv_1_0_0;
-          MOTION_VECTOR_1_0_1: pmv_0 <= shift_pmv ? pmv_1_0_1 >>> 1 : pmv_1_0_1;
-          MOTION_VECTOR_0_1_0: pmv_0 <= pmv_0_1_0;
-          MOTION_VECTOR_0_1_1: pmv_0 <= shift_pmv ? pmv_0_1_1 >>> 1 : pmv_0_1_1; 
-          MOTION_VECTOR_1_1_0: pmv_0 <= pmv_1_1_0;
-          MOTION_VECTOR_1_1_1: pmv_0 <= shift_pmv ? pmv_1_1_1 >>> 1 : pmv_1_1_1;
+          MOTION_VECTOR_0_0_0: pmv_0 <= full_pel_rd ? pmv_0_0_0 >>> 1 : pmv_0_0_0;
+          MOTION_VECTOR_0_0_1: pmv_0 <= (shift_pmv || full_pel_rd) ? pmv_0_0_1 >>> 1 : pmv_0_0_1;
+          MOTION_VECTOR_1_0_0: pmv_0 <= full_pel_rd ? pmv_1_0_0 >>> 1 : pmv_1_0_0;
+          MOTION_VECTOR_1_0_1: pmv_0 <= (shift_pmv || full_pel_rd) ? pmv_1_0_1 >>> 1 : pmv_1_0_1;
+          MOTION_VECTOR_0_1_0: pmv_0 <= full_pel_rd ? pmv_0_1_0 >>> 1 : pmv_0_1_0;
+          MOTION_VECTOR_0_1_1: pmv_0 <= (shift_pmv || full_pel_rd) ? pmv_0_1_1 >>> 1 : pmv_0_1_1;
+          MOTION_VECTOR_1_1_0: pmv_0 <= full_pel_rd ? pmv_1_1_0 >>> 1 : pmv_1_1_0;
+          MOTION_VECTOR_1_1_1: pmv_0 <= (shift_pmv || full_pel_rd) ? pmv_1_1_1 >>> 1 : pmv_1_1_1;
           default              pmv_0 <= 13'b0;
         endcase
         /* stage 2 */
@@ -1755,53 +1902,53 @@ module vld(clk, clk_en, rst,
   always @(posedge clk)  
     if (~rst) pmv_0_0_0 <= 13'b0;
     else if (clk_en && pmv_reset) pmv_0_0_0 <= 13'b0;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_0_0)) pmv_0_0_0 <= pmv_5;
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_0_0)) pmv_0_0_0 <= full_pel_wr ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1): full-pel store = vec<<1
     else pmv_0_0_0 <= pmv_0_0_0;
 
   always @(posedge clk)  
     if (~rst) pmv_0_0_1 <= 13'b0;
     else if (clk_en && pmv_reset) pmv_0_0_1 <= 13'b0;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_0_1)) pmv_0_0_1 <= shift_pmv ? pmv_5 <<< 1 : pmv_5;
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_0_1)) pmv_0_0_1 <= (shift_pmv || full_pel_wr) ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1): full-pel store = vec<<1
     else pmv_0_0_1 <= pmv_0_0_1;
 
   always @(posedge clk)  
     if (~rst) pmv_1_0_0 <= 13'b0;
     else if (clk_en && pmv_reset) pmv_1_0_0 <= 13'b0;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_1_0_0)) pmv_1_0_0 <= pmv_5;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_0_0) && pmv_update0) pmv_1_0_0 <= pmv_5;
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_1_0_0)) pmv_1_0_0 <= full_pel_wr ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_0_0) && pmv_update0) pmv_1_0_0 <= full_pel_wr ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
     else pmv_1_0_0 <= pmv_1_0_0;
 
   always @(posedge clk)  
     if (~rst) pmv_1_0_1 <= 13'b0;
     else if (clk_en && pmv_reset) pmv_1_0_1 <= 13'b0;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_1_0_1)) pmv_1_0_1 <= shift_pmv ? pmv_5 <<< 1 : pmv_5;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_0_1) && pmv_update0) pmv_1_0_1 <= shift_pmv ? pmv_5 <<< 1 : pmv_5;
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_1_0_1)) pmv_1_0_1 <= (shift_pmv || full_pel_wr) ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_0_1) && pmv_update0) pmv_1_0_1 <= (shift_pmv || full_pel_wr) ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
     else pmv_1_0_1 <= pmv_1_0_1;
 
   always @(posedge clk)  
     if (~rst) pmv_0_1_0 <= 13'b0;
     else if (clk_en && pmv_reset) pmv_0_1_0 <= 13'b0;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_1_0)) pmv_0_1_0 <= pmv_5;
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_1_0)) pmv_0_1_0 <= full_pel_wr ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
     else pmv_0_1_0 <= pmv_0_1_0;
 
   always @(posedge clk)  
     if (~rst) pmv_0_1_1 <= 13'b0;
     else if (clk_en && pmv_reset) pmv_0_1_1 <= 13'b0;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_1_1)) pmv_0_1_1 <= shift_pmv ? pmv_5 <<< 1 : pmv_5;
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_1_1)) pmv_0_1_1 <= (shift_pmv || full_pel_wr) ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
     else pmv_0_1_1 <= pmv_0_1_1;
 
   always @(posedge clk)  
     if (~rst) pmv_1_1_0 <= 13'b0;
     else if (clk_en && pmv_reset) pmv_1_1_0 <= 13'b0;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_1_1_0)) pmv_1_1_0 <= pmv_5;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_1_0) && pmv_update1) pmv_1_1_0 <= pmv_5;
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_1_1_0)) pmv_1_1_0 <= full_pel_wr ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_1_0) && pmv_update1) pmv_1_1_0 <= full_pel_wr ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
     else pmv_1_1_0 <= pmv_1_1_0;
 
   always @(posedge clk)  
     if (~rst) pmv_1_1_1 <= 13'b0;
     else if (clk_en && pmv_reset) pmv_1_1_1 <= 13'b0;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_1_1_1)) pmv_1_1_1 <= shift_pmv ? pmv_5 <<< 1 : pmv_5;
-    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_1_1) && pmv_update1) pmv_1_1_1 <= shift_pmv ? pmv_5 <<< 1 : pmv_5;
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_1_1_1)) pmv_1_1_1 <= (shift_pmv || full_pel_wr) ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
+    else if (clk_en && (motion_vector_valid_5) && (motion_vector_5 == MOTION_VECTOR_0_1_1) && pmv_update1) pmv_1_1_1 <= (shift_pmv || full_pel_wr) ? pmv_5 <<< 1 : pmv_5; // DVD-FORK FIX (mpeg1)
     else pmv_1_1_1 <= pmv_1_1_1;
 
   /* motion vector field select */
@@ -1982,9 +2129,14 @@ module vld(clk, clk_en, rst,
   // for it (B never rotates anyway), and never set it up to be reconstructed/emitted.
   // The dropped B becomes fully invisible downstream; the next I/P picture's update
   // proceeds normally.
+  // DVD-FORK FIX (mpeg1): an MPEG-1 D-picture's slices are skipped (skip_d_picture),
+  // so its update must be suppressed like a dropped B's — it must not rotate/freeze
+  // picbuf for a picture that never delivers data. Combinational off the same getbits
+  // field the drop test reads (the loadreg only latches this cycle).
+  wire hdr_is_d_m1 = mpeg1 && (getbits[13:11] == D_TYPE);
   always @(posedge clk)
     if (~rst) update_picture_buffers <= 1'b0;
-    else if (clk_en) update_picture_buffers <= ((state == STATE_PICTURE_HEADER) && ((picture_structure == FRAME_PICTURE) || second_field) && ~drop_now_comb) // emit frame at picture header
+    else if (clk_en) update_picture_buffers <= ((state == STATE_PICTURE_HEADER) && ((picture_structure == FRAME_PICTURE) || second_field) && ~drop_now_comb && ~hdr_is_d_m1) // emit frame at picture header
                                                || ((state == STATE_SEQUENCE_END) && ~last_frame); // emit last frame
     else update_picture_buffers <= 1'b0;
 
@@ -2037,6 +2189,7 @@ module vld(clk, clk_en, rst,
   always @(posedge clk)
     if (~rst) drop_rff_lat <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_CODING_EXT0)) drop_rff_lat <= getbits[13];
+    else if (clk_en && mpeg1 && (state == STATE_PICTURE_HEADER)) drop_rff_lat <= 1'b0; // DVD-FORK FIX (mpeg1): no coding ext — rff is 0 for every MPEG-1 picture
     else drop_rff_lat <= drop_rff_lat;
 
   /* DVD-FORK FIX (round 11, 2026-07-04 — THE STALE DISPLAY FLAGS, the real
@@ -2064,9 +2217,20 @@ module vld(clk, clk_en, rst,
    * parses, but they own no picbuf slot and must not clobber the current
    * picture's committed flags. */
   output reg flags_commit;
+  /* DVD-FORK FIX (mpeg1): MPEG-1 has no picture coding extension, so the MPEG-2 pulse
+   * below would never fire and picbuf would display STALE flags forever (the round-11
+   * bug all over again). Pulse at the SLICE header instead: STATE_SLICE is (a)
+   * strictly after picbuf's STATE_UPDATE for this picture (the vld freezes at the
+   * header until picbuf has processed the update), and (b) never reached for dropped
+   * pictures or skipped D-pictures (their slice start codes route to
+   * STATE_NEXT_START_CODE) — so the "never for dropped pictures" gating comes
+   * structurally, mirroring the ~drop_this_picture term of the MPEG-2 arm. Re-pulsing
+   * on every slice of the picture is idempotent: the committed values are the MPEG-1
+   * constants progressive_frame=1 / tff=0 / rff=0 from the mpeg1 default muxes. */
   always @(posedge clk)
     if (~rst) flags_commit <= 1'b0;
-    else if (clk_en) flags_commit <= (state == STATE_PICTURE_CODING_EXT0) && ~drop_this_picture;
+    else if (clk_en) flags_commit <= mpeg1 ? (state == STATE_SLICE)
+                                           : ((state == STATE_PICTURE_CODING_EXT0) && ~drop_this_picture);
     else flags_commit <= 1'b0;
 
   always @(posedge clk)
@@ -2203,9 +2367,21 @@ module vld(clk, clk_en, rst,
     else if (clk_en && ((state == STATE_NON_CODED_BLOCK) || (state == STATE_EMIT_EMPTY_BLOCK))) dct_coeff_run_0 <= 5'd0; // non-coded block: all zeroes.
     else dct_coeff_run_0 <= dct_coeff_run_0;
 
+  /* DVD-FORK FIX (mpeg1): remembers whether the first escape-level byte was 0x80
+   * (negative double-byte: level = b - 256) or 0x00 (positive: level = +b). */
+  reg dct_m1_neg;
+  always @(posedge clk)
+    if (~rst) dct_m1_neg <= 1'b0;
+    else if (clk_en && (state == STATE_DCT_ESCAPE_B14)) dct_m1_neg <= (getbits[23:16] == 8'h80);
+    else dct_m1_neg <= dct_m1_neg;
+
   always @(posedge clk)
     if (~rst) dct_coeff_signed_level_0 <= 12'd0;
-    else if (clk_en && ((state == STATE_DCT_ESCAPE_B15) || (state == STATE_DCT_ESCAPE_B14))) dct_coeff_signed_level_0 <= getbits[23:12];
+    // DVD-FORK FIX (mpeg1): MPEG-1 escape level is a signed 8-bit byte (sign-extends into
+    // the 12-bit level path); the 0x00/0x80 double-byte cases are completed in
+    // STATE_DCT_ESCAPE_M1 below (this capture is then dead — valid_0 stays low).
+    else if (clk_en && ((state == STATE_DCT_ESCAPE_B15) || (state == STATE_DCT_ESCAPE_B14))) dct_coeff_signed_level_0 <= mpeg1 ? {{4{getbits[23]}}, getbits[23:16]} : getbits[23:12];
+    else if (clk_en && (state == STATE_DCT_ESCAPE_M1)) dct_coeff_signed_level_0 <= dct_m1_neg ? {4'b1111, getbits[23:16]} : {4'b0000, getbits[23:16]}; // DVD-FORK FIX (mpeg1): b-256 / +b (b = second byte)
     else if (clk_en && (state == STATE_DCT_SUBS_B15) && ~dct_coefficient_escape) dct_coeff_signed_level_0 <= dct_coefficient_1_decoded[5:0]; // still needs sign
     else if (clk_en && (state == STATE_DCT_SUBS_B14) && ~dct_coefficient_escape) dct_coeff_signed_level_0 <= dct_coefficient_0_decoded[5:0]; // still needs sign
     else if (clk_en && (state == STATE_DCT_NON_INTRA_FIRST) && ~dct_coefficient_escape) dct_coeff_signed_level_0 <= dct_non_intra_first_coefficient_0_decoded[5:0]; // still needs sign
@@ -2215,14 +2391,17 @@ module vld(clk, clk_en, rst,
 
   always @(posedge clk)
     if (~rst) dct_coeff_apply_signbit_0 <= 1'b0;
-    else if (clk_en && ((state == STATE_DCT_DC_DIFF_0) || (state == STATE_DCT_ESCAPE_B15) || (state == STATE_DCT_ESCAPE_B14))) dct_coeff_apply_signbit_0 <= 1'b0;
+    else if (clk_en && ((state == STATE_DCT_DC_DIFF_0) || (state == STATE_DCT_ESCAPE_B15) || (state == STATE_DCT_ESCAPE_B14) || (state == STATE_DCT_ESCAPE_M1))) dct_coeff_apply_signbit_0 <= 1'b0; // DVD-FORK FIX (mpeg1): M1 levels are already signed
     else if (clk_en && ((state == STATE_DCT_SUBS_B14) || (state == STATE_DCT_SUBS_B15) || (state == STATE_DCT_NON_INTRA_FIRST))) dct_coeff_apply_signbit_0 <= ~dct_coefficient_escape;
     else if (clk_en && (state == STATE_NON_CODED_BLOCK) || (state == STATE_EMIT_EMPTY_BLOCK)) dct_coeff_apply_signbit_0 <= 1'b0; // non-coded block: all zeroes.
     else dct_coeff_apply_signbit_0 <= dct_coeff_apply_signbit_0;
 
   always @(posedge clk)
     if (~rst) dct_coeff_valid_0 <= 1'b0;
-    else if (clk_en && ((state == STATE_DCT_DC_DIFF_0) || (state == STATE_DCT_ESCAPE_B15) || (state == STATE_DCT_ESCAPE_B14) || (state == STATE_NON_CODED_BLOCK) || (state == STATE_EMIT_EMPTY_BLOCK))) dct_coeff_valid_0 <= 1'b1;
+    // DVD-FORK FIX (mpeg1): a 0x00/0x80 first escape byte means the level completes in
+    // STATE_DCT_ESCAPE_M1 — no coefficient is emitted from STATE_DCT_ESCAPE_B14 then.
+    else if (clk_en && (state == STATE_DCT_ESCAPE_B14)) dct_coeff_valid_0 <= ~dct_escape_m1_ext;
+    else if (clk_en && ((state == STATE_DCT_DC_DIFF_0) || (state == STATE_DCT_ESCAPE_B15) || (state == STATE_DCT_ESCAPE_M1) || (state == STATE_NON_CODED_BLOCK) || (state == STATE_EMIT_EMPTY_BLOCK))) dct_coeff_valid_0 <= 1'b1;
     else if (clk_en && ((state == STATE_DCT_SUBS_B14) || (state == STATE_DCT_SUBS_B15) || (state == STATE_DCT_NON_INTRA_FIRST))) dct_coeff_valid_0 <= ~dct_coefficient_escape;
     else if (clk_en) dct_coeff_valid_0 <= 1'b0; 
     else dct_coeff_valid_0 <= dct_coeff_valid_0;

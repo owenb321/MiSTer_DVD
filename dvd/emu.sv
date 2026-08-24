@@ -3072,7 +3072,11 @@ end
 // (clk_dec domain). 480 => NTSC, 576 => PAL. We derive a 1-bit "tall" flag and 2-FF
 // sync it into clk_sys, where pal_eff (below) resolves the Auto/NTSC/PAL override.
 wire [13:0] core_vertical_size;
-wire        pal_detect_dec = (core_vertical_size > 14'd480);   // PAL frame is 576 lines
+// DVD-FORK FIX (mpeg1): MPEG-1 PAL/SIF is 352x288 (288 = half of 576), which the
+// ">480" test misses — key on it explicitly. MPEG-1 NTSC/SIF is 240 (not >480, and
+// not 288), so it correctly stays NTSC.
+wire        pal_detect_dec = (core_vertical_size > 14'd480)    // PAL frame is 576 lines
+                          || (core_vertical_size == 14'd288);  // MPEG-1 PAL SIF (352x288)
 reg         pal_det_s1, pal_det_s2;
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin pal_det_s1 <= 1'b0; pal_det_s2 <= 1'b0; end

@@ -332,6 +332,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire       q_scale_type;                  // quantizer scale type
   wire       macroblock_intra;
   wire  [1:0]intra_dc_precision;
+  wire       mpeg1_es;                      // DVD-FORK FIX (mpeg1): stream is MPEG-1 (vld -> rld_fifo)
+  wire       mpeg1_es_rd;                   // DVD-FORK FIX (mpeg1): rld_fifo -> rld (per-picture mismatch-control mode)
   wire  [7:0]quant_wr_data_wr;              // data bus for writing quantizer matrix rams
   wire  [5:0]quant_wr_addr_wr;              // address bus for writing quantizer matrix rams
   wire       quant_rst_wr;                  // reset quantizer matrix to default values
@@ -925,6 +927,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .quantiser_scale_code(quantiser_scale_code),             // to rld_fifo
     .macroblock_intra(macroblock_intra),                     // to rld_fifo and motcomp
     .intra_dc_precision(intra_dc_precision),                 // to rld_fifo
+    .mpeg1(mpeg1_es),                                        // DVD-FORK FIX (mpeg1): to rld_fifo
     .matrix_coefficients(matrix_coefficients),               // to yuv2rgb
     .horizontal_size(horizontal_size),                       // to regfile
     .vertical_size(vertical_size),                           // to regfile
@@ -1083,8 +1086,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .alternate_scan_wr(alternate_scan), 
     .macroblock_intra_wr(macroblock_intra), 
     .intra_dc_precision_wr(intra_dc_precision), 
-    .q_scale_type_wr(q_scale_type), 
-    .quantiser_scale_code_wr(quantiser_scale_code), 
+    .q_scale_type_wr(q_scale_type),
+    .quantiser_scale_code_wr(quantiser_scale_code),
+    .mpeg1_wr(mpeg1_es),                                     // DVD-FORK FIX (mpeg1)
     .quant_wr_data_wr(quant_wr_data_wr), 
     .quant_wr_addr_wr(quant_wr_addr_wr), 
     .quant_rst_wr(quant_rst_wr), 
@@ -1102,9 +1106,10 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .alternate_scan_rd(alternate_scan_rd), 
     .macroblock_intra_rd(macroblock_intra_rd), 
     .intra_dc_precision_rd(intra_dc_precision_rd), 
-    .q_scale_type_rd(q_scale_type_rd), 
-    .quantiser_scale_code_rd(quantiser_scale_code_rd), 
-    .quant_wr_data_rd(quant_wr_data_rd), 
+    .q_scale_type_rd(q_scale_type_rd),
+    .quantiser_scale_code_rd(quantiser_scale_code_rd),
+    .mpeg1_rd(mpeg1_es_rd),                                  // DVD-FORK FIX (mpeg1)
+    .quant_wr_data_rd(quant_wr_data_rd),
     .quant_wr_addr_rd(quant_wr_addr_rd), 
     .quant_rst_rd(quant_rst_rd), 
     .quant_wr_intra_rd(quant_wr_intra_rd), 
@@ -1130,6 +1135,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .macroblock_intra_rd(macroblock_intra_rd),                   // from rld_fifo
     .intra_dc_precision_rd(intra_dc_precision_rd),               // from rld_fifo
     .quantiser_scale_code_rd(quantiser_scale_code_rd),           // from rld_fifo
+    .mpeg1_rd(mpeg1_es_rd),                                      // DVD-FORK FIX (mpeg1): from rld_fifo
     .quant_wr_data_rd(quant_wr_data_rd),                         // from rld_fifo
     .quant_wr_addr_rd(quant_wr_addr_rd),                         // from rld_fifo
     .quant_rst_rd(quant_rst_rd),                                 // from rld_fifo

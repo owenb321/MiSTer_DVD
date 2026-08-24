@@ -155,48 +155,80 @@ HW-validated before the decoder exists — no wedge risk.
 
 ## Part B — MPEG-1 video
 
-### B.1 Why the decoder refuses MPEG-1 today
+**Status: ✅ IMPLEMENTED + SIM-VERIFIED (2026-08-24, this branch). ⏳ HW-confirm
+pending; pixel-level TB (B.4 tier 2) still open.** All delta-list items below are
+in; per-item notes record where the implementation deviated from this plan.
 
-`rtl/mpeg2/vld.v:641/674`: picture/slice decode requires `sequence_extension_seen`,
-which MPEG-1 never sets. The MPEG-1 picture-header motion fields (`full_pel_*`,
-`forward/backward_f_code`) are parsed into wires but unconsumed.
+### B.1 Why the decoder refused MPEG-1 (fixed)
 
-### B.2 The delta list (vld.v unless noted)
+`rtl/mpeg2/vld.v` picture/slice decode required `sequence_extension_seen`, which
+MPEG-1 never sets. The MPEG-1 picture-header motion fields (`full_pel_*`,
+`forward/backward_f_code`) were parsed into wires but unconsumed. Both fixed —
+all edits marked `// DVD-FORK FIX (mpeg1)`.
 
-1. **Mode flag**: `mpeg1` = at picture-header time, `sequence_header_seen &&
-   ~sequence_extension_seen`. Relax the two gates to accept it.
-2. **Extension defaults** (output-side muxes on the loadreg nets when `mpeg1`):
-   progressive_sequence=1, chroma_format=4:2:0, picture_structure=FRAME,
-   frame_pred_frame_dct=1, intra_dc_precision=8-bit, concealment_motion_vectors=0,
-   q_scale_type=0, intra_vlc_format=0, alternate_scan=0, tff=0, rff=0,
-   progressive_frame=1, `f_code_00/01 = {1'b0, forward_f_code}`,
-   `f_code_10/11 = {1'b0, backward_f_code}`.
-3. **horizontal/vertical_size MSBs**: bits [13:12] load only in STATE_SEQUENCE_EXT —
-   zero them when an MPEG-1 sequence header arrives (stale-value hazard after an
-   MPEG-2 → MPEG-1 stream switch).
-4. **macroblock_stuffing** (VLC 0000_0001_111, MPEG-1 only): currently decodes as
-   error in `vlc_tables.v` `macroblock_address_increment_dec`. Add the entry +
-   consume-and-stay in STATE_NEXT_MACROBLOCK.
-5. **DCT escape coding**: MPEG-1 escape = 6-bit run + 8-bit level, with double-byte
-   extension when the first 8 bits are 0x00 (level=+next8) or 0x80 (level=next8−256);
-   total 14 or 22 bits vs MPEG-2's fixed 18 (run6+level12). New handling in the
-   ESCAPE states (advance mux + level extraction), sign-extended 8-bit fits the
-   existing 12-bit signed level path (max |level| 255 < 2047).
-6. **full_pel motion**: per MSSG semantics — PMV kept in half-pel units; when
-   `mpeg1 && full_pel_x`: `vec = (pred>>1) + delta`, wrap on `16<<r_size`, store
-   `pred = vec<<1`. r_size muxing falls out of the f_code defaults in (2).
-7. **D-pictures** (picture_coding_type==4): DVD/VCD-illegal; guard = treat like
-   drop_this_picture (skip slices) rather than mis-decoding.
-8. **Mismatch control** (`rtl/mpeg2/rld.v:415`): MPEG-2 sum-parity LSB toggle at
-   EOB → MPEG-1 per-coefficient oddification (`if even, subtract sign`). The mpeg1
-   flag rides the existing rld aux-variable path (alongside q_scale_type etc.).
-   **Dequant formula needs NO change**: MPEG-2 with q_scale_type=0 computes
-   `(2QF+k)·W·(2·code)/32` ≡ MPEG-1's `(2QF+k)·W·code/16`; intra DC via
-   intra_dc_precision=8 ≡ MPEG-1's `8·QF`. Saturation ±2048 identical.
-9. **Slices spanning MB rows**: OK as-is — `macroblock_address` is a linear
-   frame-wide counter; skip runs crossing rows work naturally.
-10. **PAL detect** (`dvd/emu.sv:3045`): `vertical_size > 480` misses 352×**288** —
-    key on height 288/576 (or frame_rate_code).
+### B.2 The delta list (vld.v unless noted) — all ✅ done
+
+1. ✅ **Mode flag** `mpeg1` (exported as a vld output): latched at every ACCEPTED
+   picture start code as `~sequence_extension_seen`, cleared the moment any
+   sequence extension parses. **Deviation from plan / robustness addition:**
+   `sequence_extension_seen` is now also RE-ARMED (cleared) at every
+   `STATE_SEQUENCE_HEADER` — 13818-2 sends the extension immediately after every
+   sequence header, before any picture, so this is invisible to legal MPEG-2 but
+   makes an MPEG-2→MPEG-1 splice with no intervening `sequence_end` re-detect
+   correctly (the old clear-at-SEQUENCE_END-only left the flag stale). The
+   picture-start gate is now just `sequence_header_seen`; the slice gate is
+   `sequence_header_seen & (sequence_extension_seen | mpeg1)`.
+2. ✅ **Extension defaults**: every affected loadreg renamed to a private `*_ld`
+   net; the visible signal (module output and all internal consumers) is an
+   `assign ... = mpeg1 ? <const> : *_ld` mux. Constants as planned
+   (progressive_sequence=1, chroma_format=4:2:0, picture_structure=FRAME,
+   frame_pred_frame_dct=1, intra_dc_precision=8-bit, cmv=0, q_scale_type=0,
+   intra_vlc_format=0, alternate_scan=0, tff=0, rff=0, progressive_frame=1,
+   `f_code_00/01={0,forward_f_code}`, `f_code_10/11={0,backward_f_code}`).
+3. ✅ **size MSBs** [13:12]: muxed to 0 under `mpeg1` (same `*_ld` mechanism).
+4. ✅ **macroblock_stuffing**: `vlc_tables.v` entry returns `{len=11, value=0,
+   escape=0}` — a combination no real increment produces — and
+   `STATE_NEXT_MACROBLOCK` consumes-and-stays on it when `mpeg1`
+   (`macroblock_addr_inc_stuffing` wire). MPEG-2 keeps the old error behaviour
+   via the unchanged `value==0` check (it now advances 11 bits before
+   STATE_ERROR's start-code hunt — immaterial to error recovery).
+5. ✅ **DCT escape coding**: `STATE_DCT_ESCAPE_B14` in mpeg1 mode advances 8 and
+   treats getbits[23:16] as the signed 8-bit level; first byte 0x00/0x80 routes
+   to new `STATE_DCT_ESCAPE_M1` (8'h7d) which forms +b / b−256 from the second
+   byte (`dct_m1_neg` remembers which). `dct_coeff_valid_0` is suppressed at
+   ESCAPE_B14 when the extension byte follows, so rld_wr_en still pulses exactly
+   once per coefficient. **Note:** only the B14 path — B15 is unreachable in
+   MPEG-1 (intra_vlc_format forced 0), so `STATE_DCT_ESCAPE_B15` stays
+   MPEG-2-only.
+6. ✅ **full_pel motion**: `full_pel_rd` (keyed on `motion_vector[2]` = the s
+   index, against the per-picture header flags) halves the predictor at the
+   stage-1 read; `full_pel_wr` (keyed on `motion_vector_5[2]`) doubles at every
+   stage-6 write-back including the pmv_update0/1 copy arms. Wrap unchanged
+   (stage-3 sign truncation on the full-pel value = MSSG's ±16<<r_size). The >>1
+   is exact (stored PMVs are vec<<1, always even). ORed with `shift_pmv`, which
+   is mutually exclusive with mpeg1 (FRAME + fpfd=1 ⇒ MV_FRAME). ⚠ Verified at
+   parse level only: encoders (ffmpeg, the real VCD rip) never emit full_pel=1,
+   so value-level verification waits for the B.4 pixel TB.
+7. ✅ **D-pictures**: `skip_d_picture` (latched at STATE_PICTURE_HEADER0 from
+   picture_coding_type) routes slice start codes to STATE_NEXT_START_CODE like
+   drop_this_picture. **Addition beyond plan:** `update_picture_buffers` is also
+   suppressed for a D header (`hdr_is_d_m1`, combinational off getbits like the
+   drop test) so picbuf never rotates for a picture that delivers no data — the
+   previous frame repeats.
+8. ✅ **Mismatch control** (`rtl/mpeg2/rld.v`): mode-gated at the stage-4→5
+   register — MPEG-1 oddifies every even nonzero coefficient toward zero, with
+   the **intra DC exempt** (11172-2 2.4.4.1; `iquant_intra_dc` pipeline extended
+   to stage 4). The mpeg1 flag rides the rld_fifo like its aux neighbours —
+   **fifo word widened 31→32 bits** (`mpeg1` at the top of both the dct and
+   quant layouts), new `mpeg1_wr/_rd` ports, threaded vld → rld_fifo → rld in
+   `mpeg2video.v` (`mpeg1_es`/`mpeg1_es_rd`). Dequant/saturation shared,
+   unchanged, as predicted. **Clarification recorded while writing the golden:**
+   the MPEG-2 toggle hits coefficient 63 (the LAST of the block, par. 7.4.4
+   note 1), not the last *nonzero* one — with an all-zero tail it materialises
+   an extra ±1 at index 63.
+9. ✅ **Slices spanning MB rows**: confirmed OK as-is (no change needed).
+10. ✅ **PAL detect** (`dvd/emu.sv`): now `(vertical_size > 480) ||
+    (vertical_size == 288)` — MPEG-1 PAL SIF is 352×288.
 
 ### B.3 Display path — mostly free (agent-verified)
 
@@ -211,14 +243,41 @@ addrgen line-repeat is the mapped-out v2 if scaler softness disappoints.
 
 ### B.4 Verification
 
-- Parse level: `vld_drop_rff_tb`-style run over a real VCD MPEG-1 ES (`qg_video.m1v`
-  extract) — pictures must parse (today: stall after sequence header).
-- Pixel level: new `bench/dvd/mpeg1_decode_tb.sv` (full `mpeg2video` + behavioural
-  framestore + PPM dump) vs ffmpeg golden frames (`-f rawvideo -pix_fmt yuv420p`),
-  bounded-error compare (IDCT precision) via a new `tools/frame_cmp.py`. This TB is
-  new infrastructure (no full-decoder pixel TB exists in the repo).
-- MPEG-2 regression: the same TB over an MPEG-2 ES + the existing suites must be
-  unchanged; rld mismatch edit is mode-gated.
+**Tier 1 (parse + value level) — ✅ DONE (2026-08-24), all green:**
+
+- **`bench/dvd/vld_mpeg1_tb.sv`** (real vld + getbits_fifo + motcomp_picbuf with
+  the freeze interlock; fixture-regen recipe in its header; `$fatal` on any check):
+  - synthetic ffmpeg ES (`m1v_test.hex`, 352×240, `-bf 2`): 115 pictures
+    (10 I / 30 P / 76 B), 0 vld_err, 961k DCT writes, every picbuf emission
+    reads pf=1/rff=0/tff=0, size 352×240, mpeg1 latched — and the stream
+    NATURALLY covers the escape paths (13,123 8-bit escapes, 60 double-byte);
+  - same ES with `+REQ=1`: **76/76 B pictures dropped** (the drop_ps_lat trap
+    fix verified — without it acks would be 0), every ack rff=0/field=0;
+  - real VCD rip ES (`qg_video`, 352×240@25): long-run parse gate;
+  - `+HAND=1`: embedded hand-assembled stream (bytes in the TB) with a
+    BYTE-EXACT golden coefficient list covering macroblock_stuffing ×2 and all
+    three escape-level forms (−1 direct, +133 via 0x00, −129 via 0x80).
+- **`bench/dvd/rld_mpeg1_tb.sv`** (real rld_fifo + rld): hand-computed dequant
+  goldens in BOTH modes over the same blocks — MPEG-2 coeff-63 parity toggle
+  preserved ({10,14,1}/{128,20,1}), MPEG-1 per-coefficient oddification with
+  intra-DC exemption ({9,13}/{128,19}); also proves the widened-fifo mpeg1 bit.
+- **MPEG-2 regression**: `vld_drop_rff_tb` over an ffmpeg 720×480 MPEG-2 ES
+  (`m2v_test.hex`), REQ=1 and REQ=0, output DIFFED against the same runs on the
+  pre-change RTL — byte-identical. Full-`mpeg2video` iverilog elaboration error
+  list also diffed vs pre-change: identical (15 pre-existing iverilog
+  strictness errors, line numbers shifted only). `ps_chain_tb` green.
+- **TB gotcha worth keeping:** `getbits_fifo` starves ~2 words before true EOS
+  (it can't expose the tail bits without a refill) — hand vectors need trailing
+  zero-word padding, and file runs stop at `+MAXPIC` a few pictures short of
+  the stream end.
+
+**Tier 2 (pixel level) — ❌ still open:** new `bench/dvd/mpeg1_decode_tb.sv`
+(full `mpeg2video` + behavioural framestore + PPM dump) vs ffmpeg golden frames
+(`-f rawvideo -pix_fmt yuv420p`), bounded-error compare (IDCT precision) via a
+new `tools/frame_cmp.py`. New infrastructure (no full-decoder pixel TB exists in
+the repo). This is also where **full_pel motion gets value-level verification**
+(no encoder emits full_pel=1, so tier 1 can only prove the parse) and where the
+in-loop effect of the mismatch-control difference is visible.
 
 ---
 
