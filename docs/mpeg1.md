@@ -259,8 +259,8 @@ gaps at v1 (now closed, see below): analog dual-raster `re_interlace` hardcodes
 720×480 (sub-D1 → quarter picture + garbage right/below), HUD/overlay geometry is
 720-authored (clipped at 352), direct-video top-left quarter.
 
-**✅ SIF ANALOG FILL — the mapped-out v2, implemented 2026-08-24 (branch
-`feature/sif-analog-fill`), ⏳ HW-confirm pending.** In-core 2× fill, gated on
+**✅ SIF ANALOG FILL — the mapped-out v2, ✅ HW-CONFIRMED 2026-08-24 (PR #2):
+NTSC + PAL SIF fill the CRT cleanly, normal DVDs unregressed.** In-core 2× fill, gated on
 `analog_eff` (HDMI-only rigs keep ascal's polyphase scale — HW-proven for MPEG-1):
 
 - **Detect** (`dvd/emu.sv`): two independent 1-bit flags off the clk_dec size taps,
@@ -347,8 +347,9 @@ in-loop effect of the mismatch-control difference is visible.
 - MP2 passthrough (IEC 61937 Pc=0x0004) not implemented; passthrough mode silences
   MP2 (correct fallback).
 - MPEG-2 multichannel extension (attr format 3) stays unsupported (HUD notice).
-- Analog CRT with SIF sources: ✅ fixed by the in-core 2× fill (B.3, 2026-08-24,
-  ⏳ HW-confirm pending). Wider sub-D1 MPEG-2 (704/544) still shows thin stale
-  re-interlacer columns on analog — deferred follow-up (one predicate away, B.3).
+- Analog CRT with SIF sources: ✅ fixed by the in-core 2× fill (B.3,
+  ✅ HW-CONFIRMED 2026-08-24, PR #2). Wider sub-D1 MPEG-2 (704/544) still shows
+  thin stale re-interlacer columns on analog — deferred follow-up (one predicate
+  away, B.3).
 - MPEG-1 aspect_ratio_information is a pixel-AR table (differs from MPEG-2 DAR
   codes) — v1 maps to 4:3 (DVD MPEG-1 is 4:3 by spec).

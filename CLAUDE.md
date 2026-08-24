@@ -826,8 +826,8 @@ the old "unknown" sentinel), reframed by `dvd/mp2_reframer.sv`, decoded by
 ps_demux → reframers → audio_ring → dvd_audio_decode). Suite:
 `bench/dvd/run_mp2.sh`. 44.1 kHz (VCD) decodes bit-correct but plays ~8.8 % fast
 against the fixed 48 kHz NCO (future-VCD item).
-**SIF ANALOG FILL (2026-08-24, branch `feature/sif-analog-fill`, ⏳ HW-confirm
-pending):** SIF content used to show in the upper-left quarter of the ANALOG output
+**SIF ANALOG FILL — ✅ HW-CONFIRMED 2026-08-24 (PR #2):** SIF content used to
+show in the upper-left quarter of the ANALOG output
 (the syncgen DE window tracks the decoded size; `re_interlace` is hardcoded 720-wide).
 Now an in-core 2× fill — `disp_hstretch` 352→720 + the addrgen vscale walk re-armed as
 mode 2 (2× line repeat) + a syncgen-only effective-size mux in `mpeg2video.v` — gated

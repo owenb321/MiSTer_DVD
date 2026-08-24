@@ -346,7 +346,7 @@ overlay clipped at the crop edges; (c) Fit + HDMI: unchanged (pass-through); (d)
 on an anamorphic menu now letterboxes (matches HDMI). Release build gated green:
 clk_dec 91.24/87.58 MHz, `releases/DVD_crtovalign_20260711_0009.rbf`.
 
-## 9b. SIF analog fill reuse (2026-08-24, `feature/sif-analog-fill`)
+## 9b. SIF analog fill reuse (✅ HW-CONFIRMED 2026-08-24, PR #2)
 
 The MPEG-1 SIF fill (`docs/mpeg1.md` §B.3) reuses this machinery wholesale:
 `disp_hstretch` runs at 352→720 (or 256→720 with Crop stacked; both inside the §8b

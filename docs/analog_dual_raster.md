@@ -220,7 +220,8 @@ regains its same-parity premise in this mode (see the ⚠ note in `dvd/disp_vsca
    its 4-line BRAM is only written inside the main raster's DE window, so a
    narrower/shorter DE window leaves stale columns right of the picture and a
    4-line smear below it. **MPEG-1 SIF (352×240/352×288) is now FIXED by the
-   in-core SIF analog fill** (`docs/mpeg1.md` §B.3, ⏳ HW-confirm pending): while
+   in-core SIF analog fill** (`docs/mpeg1.md` §B.3, ✅ HW-CONFIRMED 2026-08-24,
+   PR #2): while
    `analog_eff` is high the decoder's display path stretches 352→720
    (`disp_hstretch`) and line-doubles 240→480 / 288→576 (addrgen vscale mode 2),
    and the syncgen opens the full active region — the re-interlacer then needs no
