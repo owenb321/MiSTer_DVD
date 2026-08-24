@@ -40,14 +40,23 @@ module mp2_chain_tb;
     logic [7:0] vob [0:MAXB-1];
     int nbytes, fed = 0;
 
+    // Registered prefetch feed: reading the big fixture array combinationally
+    // (vob[fed] in always_comb) makes iverilog elaborate a 512K-entry mux and
+    // the compile takes tens of minutes — clocked indexed reads are cheap.
     logic [7:0] in_byte;
-    logic       in_valid;
     wire        in_ready;
-    always_comb begin
-        in_valid = (rst_n && fed < nbytes);
-        in_byte  = vob[fed >= nbytes ? 0 : fed];
+    logic       prefetched = 0;
+    wire        in_valid = prefetched && rst_n && (fed < nbytes);
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            fed <= 0; prefetched <= 0;
+        end else if (!prefetched) begin
+            in_byte <= vob[0]; prefetched <= 1;
+        end else if (in_valid && in_ready) begin
+            in_byte <= vob[fed + 1];
+            fed     <= fed + 1;
+        end
     end
-    always @(posedge clk) if (in_valid && in_ready) fed <= fed + 1;
 
     wire [7:0]  ps_aud_byte;
     wire        ps_aud_valid, ps_aud_ready;
