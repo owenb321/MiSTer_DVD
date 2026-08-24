@@ -146,7 +146,13 @@ module ps_demux (
     // audio static). emu.sv accumulates these into a sticky per-mount latch
     // (ps_demux itself resets on every jump via pipe_rst_n, so the latch can't
     // live here) that drives the HUD "CSS ENCRYPTED" popup + the audio mute.
-    output logic        pes_scrambled
+    output logic        pes_scrambled,
+
+    // Held: a 0xBA pack has been seen — this stream is a program/system stream
+    // (not a raw ES). Gates the flat-file transport seek in emu: only a stream
+    // with packs can be re-synced by the reader's post-seek pack hunt. Clears
+    // on every pipe reset (per-jump), re-latching within ms of playback.
+    output logic        saw_pack
 );
 
 // ============================================================================
@@ -226,6 +232,7 @@ logic  [1:0] es_emit_idx;      // index into reconstructed 00 00 01 <code> pream
 logic        ever_seen_pack;   // a 0xBA pack was seen -> stream is PS, lock out ES mode
 logic        mpeg1_ps;         // stream flavour, re-latched at every pack marker:
                                // 1 = MPEG-1 system stream (VCD), 0 = MPEG-2 PS (DVD)
+assign saw_pack = ever_seen_pack;
 
 // ============================================================================
 // Output handshake (1:1 passthrough, no buffering)

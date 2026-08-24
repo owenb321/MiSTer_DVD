@@ -820,6 +820,14 @@ end
 // "next" at the last cell, causes no glitch). See docs/dvd_nav.md "Transport".
 wire [7:0] cur_cell;         // from dvd_iso_reader
 wire       cell_ready;       // from dvd_iso_reader (cell-mode active)
+// Linear transport (VCD/SVCD raw .bin, flat .mpg/.VOB): the reader seeks the
+// whole file by RBN — raw mode snaps to a CD sector (= MPEG pack) boundary,
+// flat mode is qualified by ps_demux having seen a pack (ps_saw_pack) and
+// re-syncs via the reader's post-seek pack hunt. Raw ES (.m2v) stays
+// linear-only. These open the same scrub/seek-bar/pause UI as a DVD title.
+wire        raw_mode_w;      // from dvd_iso_reader (raw MODE2/2352 image)
+wire        lin_seek_ok_w;   // from dvd_iso_reader (linear seek available)
+wire [31:0] lin_blk_w;       // from dvd_iso_reader (linear playhead block)
 wire       seek_ack;         // from dvd_iso_reader (seek accepted this cycle)
 
 // Disc-menu proto-nav read-backs / request lines (Phase 2)
@@ -1127,7 +1135,7 @@ always @(posedge clk_sys or negedge reset_n) begin
         else if (pause_edge)      pause_q <= ~pause_q;
         // a title-mode Fast Fwd/Rewind time scrub resumes playback (the scrub FSM
         // below issues the actual seek_rbn)
-        else if (cell_ready && !menu_active && !in_title_menu && (ff_edge || rew_edge)) pause_q <= 1'b0;
+        else if ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu && (ff_edge || rew_edge)) pause_q <= 1'b0;
         // any VM jump / menu key resumes playback (a paused governor would
         // freeze the menu the VM is jumping to)
         if (jump_ack)             pause_q <= 1'b0;
@@ -1328,8 +1336,8 @@ scrub_ctrl scrub_ctrl_inst (
     .rst_n           (reset_n),
     .held_right      (joy_ff),                   // B10 Fast Fwd = seek forward
     .held_left       (joy_rew),                  // B11 Rewind   = seek backward
-    .in_title        (cell_ready && !menu_active && !in_title_menu),  // seek only while a title plays (not a menu / in-title game menu)
-    .cur_rbn         (dsi_nv_pck_lbn),
+    .in_title        ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu),  // title OR linear (VCD/SVCD/.mpg) playback
+    .cur_rbn         (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .title_first_rbn (title_first_rbn_w),
     .title_last_rbn  (title_last_rbn_w),
     .seek_rbn_pulse  (seek_rbn_pulse),
@@ -1997,6 +2005,13 @@ dvd_iso_reader dvd_iso_reader_inst (
     .subp_ctl_waddr (subp_ctl_waddr),
     .subp_ctl_wdata (subp_ctl_wdata),
 
+    // Linear transport (VCD/SVCD raw .bin + flat .mpg/.VOB): see the
+    // lin_transport_ok gating below.
+    .raw_mode_o           (raw_mode_w),
+    .flat_seek_en         (ps_saw_pack),
+    .lin_seek_ok_o        (lin_seek_ok_w),
+    .lin_blk_o            (lin_blk_w),
+
     .debug_active         (streamer_active),
     .debug_sd_rd          (streamer_sd_rd),
     .debug_sd_ack         (streamer_sd_ack),
@@ -2110,7 +2125,8 @@ ps_demux ps_demux_inst (
     .aud_lpcm_quant   (ps_aud_lpcm_quant),
 
     // CSS detection pulse -> the css_scrambled sticky latch below
-    .pes_scrambled    (ps_pes_scrambled)
+    .pes_scrambled    (ps_pes_scrambled),
+    .saw_pack         (ps_saw_pack)
 );
 
 // =========================================================================
@@ -2130,6 +2146,7 @@ ps_demux ps_demux_inst (
 // of packs) it trips within a few sectors of mount.
 // =========================================================================
 wire ps_pes_scrambled;
+wire ps_saw_pack;
 reg  [2:0] css_det_cnt;
 reg        css_scrambled;
 always @(posedge clk_sys or negedge reset_n) begin
@@ -3148,10 +3165,12 @@ end
 // MPEG-1 SIF (352x240/352x288) used to display in the upper-left quarter of the ANALOG
 // output — the syncgen DE window tracks the decoded size while the re-interlacer is
 // hardcoded 720-wide (garbage right/below). Two INDEPENDENT 1-bit flags (so 352x480
-// half-D1 would get horizontal-only fill, correctly), clk_dec compares 2-FF synced into
-// clk_sys (the pal_det pattern). Threshold <=360 = SIF widths only (352/320); wider
-// sub-D1 MPEG-2 (704/544) keeps today's behaviour — deferred follow-up by predicate.
-wire sif_h_dec = (core_horizontal_size != 14'd0) && (core_horizontal_size <= 14'd360);
+// half-D1 gets horizontal-only fill, correctly), clk_dec compares 2-FF synced into
+// clk_sys (the pal_det pattern). Threshold: ANY sub-720 width fills (the stretcher is
+// a true fractional resampler — SVCD 480 = exact 2:3, DVD sub-D1 704/544 included by
+// user decision 2026-08-24, reversing the earlier SIF-only <=360 scope). 720-wide
+// content stays un-stretched (hsrc<hdst contract).
+wire sif_h_dec = (core_horizontal_size != 14'd0) && (core_horizontal_size < 14'd720);
 wire sif_v_dec = (core_vertical_size  != 14'd0) && (core_vertical_size  <= 14'd288);
 reg  sif_h_s1, sif_h_s2, sif_v_s1, sif_v_s2;
 always @(posedge clk_sys or negedge reset_n) begin
@@ -4032,7 +4051,7 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .pause_q    (pause_q),
     .show_evt   (hud_user_evt),
     .menu_active(menus_on && menu_active),
-    .cur_rbn    (dsi_nv_pck_lbn),
+    .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),
     .nr_pgm     (hud_nr_ch),          // Phase 6: exact PTT total for chapter notches
     .pm_we      (vm_pm_we),

@@ -64,12 +64,21 @@ module iso_reader_raw_tb;
         end
 
     // ---------------------------------------------------------------
+    reg         seek_rbn_pulse = 0;
+    reg  [31:0] seek_rbn_r = 0;
+    reg         flat_seek_en = 0;
+    wire        lin_seek_ok_o;
+    wire [31:0] lin_blk_o;
+    wire        seek_ack_w;
+
     dvd_iso_reader dut (
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
         .jump_ttn(7'd0), .jump_pgn(8'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
+        .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn_r), .seek_ack(seek_ack_w),
+        .flat_seek_en(flat_seek_en), .lin_seek_ok_o(lin_seek_ok_o), .lin_blk_o(lin_blk_o),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
@@ -146,6 +155,27 @@ module iso_reader_raw_tb;
     // ---- checks ----
     integer errors = 0;
     integer i, t;
+
+    // pulse a linear RBN seek, wait for the ack, then restart the capture
+    task do_seek;
+        begin
+            seek_rbn_pulse = 1; @(posedge clk); seek_rbn_pulse = 0;
+            t = 0;
+            while (!seek_ack_w && t < 100000) begin @(posedge clk); t = t + 1; end
+            if (!seek_ack_w && t >= 100000) begin
+                errors = errors + 1; $display("  ERR seek never acked");
+            end
+            repeat (10) @(posedge clk);
+            cap_n = 0;
+        end
+    endtask
+
+    task chk_seek_ok(input integer want_ok);
+        if (lin_seek_ok_o !== want_ok[0]) begin
+            errors = errors + 1;
+            $display("  ERR lin_seek_ok=%b (expect %0d)", lin_seek_ok_o, want_ok);
+        end
+    endtask
 
     task run_raw_case(input [1023:0] name, input integer expect_raw);
         begin
@@ -225,6 +255,68 @@ module iso_reader_raw_tb;
             gold_n = g;
         end
         run_raw_case("TEST5 eof-partial", 1);
+
+        // ============= TEST 6: raw-mode seek (sector snap) =============
+        // Re-mount vcd_mid, then seek to block 40. The reader maps block 40 ->
+        // sector 35 (40 - 40/8 = 35), restarts at block byte 81920 with the
+        // partial head sector dropped, so emission resumes exactly at sector
+        // 35's payload = golden byte 35*2324 (and starts 00 00 01 BA).
+        load_img("bench/dvd/test_vobs/vcd_mid.hex");
+        load_gold("bench/dvd/test_vobs/vcd_mid.golden.hex");
+        run_raw_case("TEST6 pre-seek", 1);
+        chk_seek_ok(1);
+        seek_rbn_r = 32'd40; do_seek;
+        t = 0;
+        while (cap_n < (64-35)*2324 && t < 30000000) begin @(posedge clk); t = t + 1; end
+        $display("TEST6 raw seek: cap_n=%0d (expect %0d)", cap_n, (64-35)*2324);
+        if (cap_n < (64-35)*2324) begin errors=errors+1; $display("  ERR short post-seek output"); end
+        if (!(cap[0]===8'h00 && cap[1]===8'h00 && cap[2]===8'h01 && cap[3]===8'hBA)) begin
+            errors=errors+1; $display("  ERR post-seek stream must start 00 00 01 BA");
+        end
+        for (i = 0; i < (64-35)*2324 && i < cap_n; i = i + 1)
+            if (cap[i] !== gold[35*2324 + i]) begin
+                errors = errors + 1;
+                if (errors < 10)
+                    $display("  SEEK MISMATCH @%0d: got %02x want %02x", i, cap[i], gold[35*2324+i]);
+            end
+
+        // ============= TEST 7: flat-PS seek (pack hunt) =============
+        // The deblocked stream itself as a FLAT file (raw detect fails, CD001
+        // fails -> linear fallback; flat_seek_en models ps_demux saw_pack).
+        // Seek to block 30 (byte 61440): the hunt must drop to the first pack
+        // at/after it (VCD packs every 2324 bytes -> offset 62748) and re-emit
+        // the preamble, so the output equals img[62748..] exactly.
+        load_gold("bench/dvd/test_vobs/vcd_mid.golden.hex");
+        img_n = gold_n;
+        for (i = 0; i < img_n; i = i + 1) img[i] = gold[i];
+        flat_seek_en = 1;
+        run_raw_case("TEST7 flat-ps mount", 0);
+        chk_seek_ok(1);
+        begin : find_pack
+            integer o;
+            o = 30*2048;
+            while (o + 3 < img_n && !(img[o]==8'h00 && img[o+1]==8'h00
+                                   && img[o+2]==8'h01 && img[o+3]==8'hBA))
+                o = o + 1;
+            seek_rbn_r = 32'd30; do_seek;
+            t = 0;
+            while (cap_n < (img_n - o) && t < 30000000) begin @(posedge clk); t = t + 1; end
+            $display("TEST7 flat seek: pack@%0d cap_n=%0d (expect %0d)", o, cap_n, img_n - o);
+            if (cap_n < (img_n - o)) begin errors=errors+1; $display("  ERR short post-seek output"); end
+            if (!(cap[0]===8'h00 && cap[1]===8'h00 && cap[2]===8'h01 && cap[3]===8'hBA)) begin
+                errors=errors+1; $display("  ERR flat post-seek stream must start 00 00 01 BA");
+            end
+            for (i = 0; i < (img_n - o) && i < cap_n; i = i + 1)
+                if (cap[i] !== img[o + i]) begin
+                    errors = errors + 1;
+                    if (errors < 10)
+                        $display("  FLATSEEK MISMATCH @%0d: got %02x want %02x", i, cap[i], img[o+i]);
+                end
+        end
+        // .m2v guard: without flat_seek_en (no packs seen) linear seek stays off
+        flat_seek_en = 0;
+        @(posedge clk);
+        chk_seek_ok(0);
 
         // =============================================================
         if (errors == 0) $display("ISO_READER_RAW_TB: ALL TESTS PASSED");
