@@ -1,4 +1,4 @@
-// ps_demux.sv — MPEG-2 Program Stream Demuxer
+// ps_demux.sv — MPEG-2 / MPEG-1 Program (System) Stream Demuxer
 // Part of MiSTer DVD Player Core
 //
 // Parses MPEG-2 Program Stream pack/PES headers from VOB data and routes:
@@ -34,6 +34,18 @@
 // the 00 00 01 <code> preamble and forwards every subsequent byte unchanged.
 // This is what lets bare elementary streams (and ffmpeg `-c copy` .m2v extracts
 // of DVD video) play, not just program streams / VOBs.
+//
+// MPEG-1 SYSTEM STREAMS (VCD): auto-detected per pack from the byte after
+// 0xBA — marker nibble 0010 = MPEG-1 (ISO 11172-1), marker bits 01 = MPEG-2.
+// An MPEG-1 pack is 12 bytes flat (no stuffing-length byte), and the PES
+// optional header is a different shape: 0xFF stuffing* -> optional 2-byte STD
+// buffer field (top bits 01) -> 0x2X + PTS(5) | 0x3X + PTS(5)+DTS(5) | one
+// no-timestamp byte (spec 0x0F). The `mpeg1_ps` latch (re-set at every pack)
+// routes S_PES_LEN_LO into the S_M1_HDR/S_M1_STD group instead of the MPEG-2
+// flags/hdr_len triple; the 5-byte PTS bit-packing is IDENTICAL to MPEG-2's,
+// so S_PTS is reused as-is (entered with pts_buf[0] preloaded). pes_scrambled
+// (a DVD/CSS concept) is never touched on the MPEG-1 path. Golden model:
+// tools/mpeg1_ps_ref.py; TB: bench/dvd/ps_demux_m1_tb.sv (real VCD packs).
 
 `default_nettype none
 
@@ -162,6 +174,8 @@ typedef enum logic [4:0] {
     S_PCI_DATA,       // forward PCI payload bytes to nav_pci (accept-always)
     S_DSI_DATA,       // forward DSI payload bytes to nav_dsi (accept-always)
     S_DISCARD,        // discard bytes_remaining bytes, then S_HUNT
+    S_M1_HDR,         // MPEG-1 PES optional header: stuffing/STD/timestamp dispatch
+    S_M1_STD,         // MPEG-1 STD buffer field second byte
     S_ES_EMIT,        // raw ES: emit reconstructed 00 00 01 <code> preamble
     S_ES_PASS,        // raw ES: forward every input byte to video (no demux)
     S_VID_FLUSH       // after a sequence_end_code: emit trailing filler so the
@@ -210,6 +224,8 @@ logic        aud_pes_has_pts;  // current PES carried a PTS (set at PES_HDR_FLAG
 logic  [7:0] es_code;          // saved video start-code byte (e.g. 0xB3 seq header)
 logic  [1:0] es_emit_idx;      // index into reconstructed 00 00 01 <code> preamble
 logic        ever_seen_pack;   // a 0xBA pack was seen -> stream is PS, lock out ES mode
+logic        mpeg1_ps;         // stream flavour, re-latched at every pack marker:
+                               // 1 = MPEG-1 system stream (VCD), 0 = MPEG-2 PS (DVD)
 
 // ============================================================================
 // Output handshake (1:1 passthrough, no buffering)
@@ -332,6 +348,7 @@ always_ff @(posedge clk or negedge rst_n) begin
         es_code        <= 8'd0;
         es_emit_idx    <= 2'd0;
         ever_seen_pack <= 1'b0;
+        mpeg1_ps       <= 1'b0;
         vid_hist       <= 32'd0;
         flush_cnt      <= 8'd0;
         vid_pts        <= 33'd0;
@@ -411,9 +428,19 @@ always_ff @(posedge clk or negedge rst_n) begin
                 end
             end
 
-            // ---- Pack header: 9 fixed bytes, then stuffing-length byte ----
+            // ---- Pack header: MPEG-2 = 9 fixed bytes then a stuffing-length
+            //      byte; MPEG-1 = 8 flat bytes (SCR + mux_rate), no stuffing.
+            //      Discriminated on the marker in the first byte after 0xBA
+            //      (bytes_remaining==9): 0010xxxx = MPEG-1, 01xxxxxx = MPEG-2.
+            //      The markers are disjoint, and every pack re-latches
+            //      mpeg1_ps, so a conforming stream can never mis-latch. ----
             S_PACK_SKIP: begin
-                if (bytes_remaining != 16'd0) begin
+                if (bytes_remaining == 16'd9 && in_byte[7:4] == 4'b0010) begin
+                    mpeg1_ps        <= 1'b1;
+                    bytes_remaining <= 16'd7;    // marker byte consumed; 7 more
+                    state           <= S_DISCARD;
+                end else if (bytes_remaining != 16'd0) begin
+                    if (bytes_remaining == 16'd9) mpeg1_ps <= 1'b0;
                     bytes_remaining <= bytes_remaining - 16'd1;
                 end else begin
                     // this byte = pack_stuffing_length (low 3 bits)
@@ -434,7 +461,11 @@ always_ff @(posedge clk or negedge rst_n) begin
 
             // ---- PES packet length ----
             S_PES_LEN_HI: begin pes_len_hi <= in_byte; state <= S_PES_LEN_LO; end
-            S_PES_LEN_LO: begin pes_length <= {pes_len_hi, in_byte}; state <= S_PES_HDR_FLAGS1; end
+            S_PES_LEN_LO: begin
+                pes_length <= {pes_len_hi, in_byte};
+                if (mpeg1_ps) state <= S_M1_HDR;
+                else          state <= S_PES_HDR_FLAGS1;
+            end
 
             // ---- MPEG-2 PES optional header ----
             S_PES_HDR_FLAGS1: begin
@@ -495,6 +526,43 @@ always_ff @(posedge clk or negedge rst_n) begin
                 end else begin
                     pts_byte_count <= pts_byte_count + 3'd1;
                 end
+            end
+
+            // ---- MPEG-1 PES optional header (ISO 11172-1): 0xFF stuffing* ->
+            //      optional 2-byte STD buffer field ('01......') -> 0x2X+PTS /
+            //      0x3X+PTS+DTS / one no-timestamp byte (spec 0x0F; any other
+            //      value is treated the same — graceful on junk). The 5-byte
+            //      timestamp packing matches MPEG-2, so S_PTS is entered with
+            //      pts_buf[0] preloaded and pts_byte_count=1: PTS-only lands on
+            //      the existing bytes_remaining==1 header-done dispatch, and
+            //      PTS+DTS falls into S_PES_HDR_SKIP with exactly the 5 DTS
+            //      bytes left to consume. ----
+            S_M1_HDR: begin
+                pes_length <= pes_length - 16'd1;
+                if (in_byte == 8'hFF) begin                    // stuffing
+                    if (pes_length == 16'd1) state <= S_HUNT;
+                end else if (in_byte[7:6] == 2'b01) begin      // STD buffer field
+                    if (pes_length == 16'd1) state <= S_HUNT;
+                    else                     state <= S_M1_STD;
+                end else if (in_byte[7:5] == 3'b001) begin     // 0x2X PTS / 0x3X PTS+DTS
+                    aud_pes_has_pts <= 1'b1;
+                    pts_buf[0]      <= in_byte;
+                    pts_byte_count  <= 3'd1;
+                    bytes_remaining <= in_byte[4] ? 16'd9 : 16'd4;
+                    if (pes_length == 16'd1) state <= S_HUNT;  // truncated packet
+                    else                     state <= S_PTS;
+                end else begin                                 // 0x0F: no timestamp
+                    aud_pes_has_pts <= 1'b0;
+                    if (pes_length == 16'd1) state <= S_HUNT;  // no payload
+                    else if (stream_id_r == 8'hE0) state <= S_VIDEO_DATA;
+                    else if (is_mp2_sid) begin first_aud_byte <= 1'b1; state <= S_AUDIO_DATA; end
+                    else state <= S_SUBSTREAM_ID;
+                end
+            end
+            S_M1_STD: begin                                    // STD field 2nd byte
+                pes_length <= pes_length - 16'd1;
+                if (pes_length == 16'd1) state <= S_HUNT;
+                else                     state <= S_M1_HDR;
             end
 
             // ---- Skip remaining optional-header bytes ----
