@@ -49,6 +49,19 @@ leave enough hints to pick up cleanly:
   name the relevant files/modules/testbenches so they're easy to locate.
 - Keep `docs/roadmap.md` current — it's the canonical "what's next" across sessions.
 
+### ★ Keep README.md current (mandatory — it is the user-facing contract)
+
+`README.md` states what the core does and doesn't do — "What works", "Known
+limitations", supported formats/resolutions, tools, controls, settings, on-screen
+messages, acknowledgements. **Whenever a change invalidates or adds to any statement in
+the README, update the README in the SAME change.** A README that still lists a shipped
+feature as a limitation (or vice versa) misleads every user and evaluator who reads it
+— treat it exactly like a stale status marker: a documentation bug, fix on sight.
+Concrete triggers: a new codec/format/resolution, a limitation removed or discovered, a
+new user-facing tool in `tools/`, new OSD settings or buttons, new on-screen messages,
+new external references worth acknowledging. (Instituted 2026-08-24 after the MPEG-1/MP2
+feature landed while the README still said "MPEG-1 video is not supported".)
+
 ### ★ Update status markers when a feature completes (mandatory — a stale marker is a bug)
 
 The docs went stale once (2026-07-09 reconciliation, PR after fj#93) because status wording
@@ -794,9 +807,25 @@ machine — used for `tools/nav_extract.py`, `tools/spu_dump_iso.py`, etc.). Cur
 | AC-3 (Dolby Digital) | 0x80–0x87 | liba52 | ✅ stereo PCM | IEC 61937-3, Pc=0x0001 |
 | DTS | 0x88–0x8F | libdca | ✅ stereo PCM | IEC 61937-5, Pc=0x000B |
 | LPCM | 0xA0–0xA7 | none (raw PCM) | ✅ direct | N/A |
+| MP2 (MPEG-1 Layer II) | stream_id 0xC0–0xC7 (no substream byte) | none — in-fabric `dvd/mp2/mp2_decode.sv` | ✅ stereo PCM ✅ HW-CONFIRMED 2026-08-24 | IEC 61937, Pc=0x0004 (not implemented; passthrough mode silences MP2) |
 
 DTS support is essentially free once AC-3 works — same IEC 61937 wrapper, different
 preamble constant and library. Always detect substream ID before routing audio PES.
+
+**MP2 + MPEG-1 video — ✅ HW-CONFIRMED 2026-08-24 (branch `feature/mpeg1-codecs`,
+build `DVD_mpeg1c`): the missing DVD-spec codecs, both in fabric — see
+`docs/mpeg1.md`.** NTSC+PAL MPEG-1 clips + a converted VCD play with A/V sync on
+the board. ⚠ HW-bringup lesson recorded in docs/mpeg1.md: Quartus 17 mangles
+`N'(expr)` size casts (sim-perfect, silent silicon); caught by the new
+post-map-netlist cosim technique — use part-selects/$signed instead. MP2 rides PES stream_id
+0xC0+n directly (track select = stream_id low 3 bits; type `T_MP2 = 2'd3` reuses
+the old "unknown" sentinel), reframed by `dvd/mp2_reframer.sv`, decoded by
+`dvd/mp2/mp2_decode.sv` — **BIT-EXACT in sim vs the golden model
+`tools/mp2_ref.py`** (which is itself ≤1 LSB vs ffmpeg float decode) on synthetic
+48 kHz fixtures AND real VCD content, plus a full-chain TB (real `-f dvd` VOB →
+ps_demux → reframers → audio_ring → dvd_audio_decode). Suite:
+`bench/dvd/run_mp2.sh`. 44.1 kHz (VCD) decodes bit-correct but plays ~8.8 % fast
+against the fixed 48 kHz NCO (future-VCD item).
 
 ---
 

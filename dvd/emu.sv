@@ -292,8 +292,43 @@ assign AUDIO_S      = 1;
 assign AUDIO_MIX    = 0;
 // css_scrambled: CSS-encrypted source detected (sticky latch by the demux
 // instance below) — mute the PCM out (scrambled AC-3 decodes to loud static).
+// probe taps (declared unconditionally — the instantiation below always
+// connects them; the tone logic itself is behind the define)
+wire [1:0] dbg_cur_codec_w;
+wire       dbg_mp2_avalid_w;
+wire       dbg_mp2_s_nz_w, dbg_mp2_pcm_nz_w;
+`ifdef MP2_TONE_PROBE
+// ============ TEMPORARY HW DIAGNOSTIC v2 (MP2 silent-audio bisect) ===========
+// Round-1 result: dispatch + decode-FSM + FIFO pops all run (both v1 tones),
+// so the decoder emits perfectly-timed ZERO samples. v2 probes DATA liveness:
+//   LEFT  = 1 kHz tone if any NONZERO dequantized subband sample was written
+//           in the last ~39 ms (parse + dequant produce real data)
+//   RIGHT = 1 kHz tone if any NONZERO PCM pair was pushed in the last ~39 ms
+//           (synthesis produces real data)
+// Interpretation: both silent -> the parse yields empty allocations / zero
+// samples (bit-reader/alloc path in silicon); LEFT only -> synthesis zeros
+// the data (N/D ROM or V-ring/MAC path); both tones -> real PCM is pushed and
+// the fault is in the FIFO-pop/output-latch path. Remove after the bisect.
+reg [14:0] probe_div;  reg probe_sq;
+always @(posedge clk_sys) begin
+    probe_div <= (probe_div == 15'd13499) ? 15'd0 : probe_div + 15'd1;  // 1 kHz square
+    if (probe_div == 15'd13499) probe_sq <= ~probe_sq;
+end
+reg [19:0] probe_act_s, probe_act_p;        // ~39 ms activity windows
+always @(posedge clk_sys) begin
+    if (dbg_mp2_s_nz_w)        probe_act_s <= 20'hFFFFF;
+    else if (probe_act_s != 0) probe_act_s <= probe_act_s - 20'd1;
+    if (dbg_mp2_pcm_nz_w)      probe_act_p <= 20'hFFFFF;
+    else if (probe_act_p != 0) probe_act_p <= probe_act_p - 20'd1;
+end
+wire signed [15:0] probe_tone = probe_sq ? 16'sd8000 : -16'sd8000;
+assign AUDIO_L = (probe_act_s != 0) ? probe_tone : ((pass_mode | css_scrambled) ? 16'sd0 : dec_audio_l);
+assign AUDIO_R = (probe_act_p != 0) ? probe_tone : ((pass_mode | css_scrambled) ? 16'sd0 : dec_audio_r);
+// =============================================================================
+`else
 assign AUDIO_L      = (pass_mode | css_scrambled) ? 16'sd0 : dec_audio_l;
 assign AUDIO_R      = (pass_mode | css_scrambled) ? 16'sd0 : dec_audio_r;
+`endif
 assign SPDIF_PASS_EN = pass_mode;
 
 assign SD_SCK       = 0;
@@ -2148,20 +2183,22 @@ end
 
 // (B) Unsupported audio format. The IFO's per-track audio_format (VTSI_MAT
 // @515+, already parsed for track enumeration in PR #100) is authoritative and
-// known at mount, so this needs no PES sniffing: format 2 (MPEG-1 Layer II) and
-// 3 (MPEG-2 extension) ride stream_id 0xC0-0xDF, which ps_demux skips BY DESIGN
-// => silent playback with no clue. A VTSI_MAT census over all 34 library ISOs
-// found ZERO such discs (34 AC-3, 2 LPCM, 2 DTS), so this ships as a MESSAGE,
-// not as decode support — there is no local vehicle to develop a decoder
-// against. Suppressed when the user has muted audio anyway (O5 Off) or is in
-// S/PDIF passthrough, where the receiver reports the format itself.
+// known at mount, so this needs no PES sniffing. Format 2 (MPEG-1 Layer II)
+// NOW DECODES in fabric (feature/mpeg1-codecs: ps_demux routes 0xC0-0xC7 ->
+// mp2_reframer -> dvd/mp2/mp2_decode.sv), so the notice is narrowed to
+// format 3 only (MPEG-2 multichannel extension, stream_id 0xC8-0xDF — still
+// skipped; its backwards-compatible CORE stream would be 0xC0 MP2, but a
+// format-3 track's core is on the SAME 0xC0+n id only for 7.1 authoring
+// variants we can't verify without a disc, so keep the honest notice).
+// Suppressed when the user has muted audio anyway (O5 Off) or is in S/PDIF
+// passthrough, where the receiver reports the format itself.
 // ⚠ ~css_scrambled (HW round 1, 2026-08-23): on a CSS-scrambled rip the audio
 // is muted by the CSS path anyway, so an audio-FORMAT notice is both redundant
 // and actively misleading about the cause. CSS is the root cause; suppress this
 // under it. (The IFO itself is never scrambled, so attr_a_fmt stays truthful —
 // it just isn't the user's problem on such a disc.)
 wire aud_unsupported = iso_mode_w & nav_ready_w & aud_dec_en & ~css_scrambled &
-                       ((attr_a_fmt_w == 3'd2) | (attr_a_fmt_w == 3'd3));
+                       (attr_a_fmt_w == 3'd3);
 
 // (C) Title-VTS notice — largest-VTS heuristic path ONLY. With Disc Menus On
 // (the default since PR #179) the disc's own VM picks the title, so the
@@ -2200,7 +2237,14 @@ wire        ar_aud_frame_start;
 wire [32:0] ar_aud_frame_pts;
 wire        ar_aud_frame_pts_valid;
 
-wire [7:0]  rf_aud_byte;            // dts_reframer output (into audio_ring)
+wire [7:0]  dr_aud_byte;            // dts_reframer output (into mp2_reframer)
+wire        dr_aud_valid;
+wire [1:0]  dr_aud_type;
+wire        dr_aud_frame_start;
+wire [32:0] dr_aud_frame_pts;
+wire        dr_aud_frame_pts_valid;
+
+wire [7:0]  rf_aud_byte;            // mp2_reframer output (into audio_ring)
 wire        rf_aud_valid;
 wire [1:0]  rf_aud_type;
 wire        rf_aud_frame_start;
@@ -2247,6 +2291,27 @@ dts_reframer dts_reframer_inst (
     .in_frame_start     (ar_aud_frame_start),
     .in_frame_pts       (ar_aud_frame_pts),
     .in_frame_pts_valid (ar_aud_frame_pts_valid),
+    .out_byte            (dr_aud_byte),
+    .out_valid           (dr_aud_valid),
+    .out_type            (dr_aud_type),
+    .out_frame_start     (dr_aud_frame_start),
+    .out_frame_pts       (dr_aud_frame_pts),
+    .out_frame_pts_valid (dr_aud_frame_pts_valid)
+);
+
+// MP2 reframer (dvd/mp2_reframer.sv): re-frame MPEG-1 Layer II (T_MP2, DVD
+// stream_id 0xC0+n) on real frame boundaries — 15-bit qualified sync +
+// frame-length lock — so audio_ring's overflow drop unit is a whole MP2 frame.
+// AC-3/DTS/LPCM pass through untouched. See docs/mpeg1.md A.3.
+mp2_reframer mp2_reframer_inst (
+    .clk                (clk_sys),
+    .rst_n              (reset_n),        // reset only on core reset - self-heals on the next 0xFFFx
+    .in_byte            (dr_aud_byte),
+    .in_valid           (dr_aud_valid),
+    .in_type            (dr_aud_type),
+    .in_frame_start     (dr_aud_frame_start),
+    .in_frame_pts       (dr_aud_frame_pts),
+    .in_frame_pts_valid (dr_aud_frame_pts_valid),
     .out_byte            (rf_aud_byte),
     .out_valid           (rf_aud_valid),
     .out_type            (rf_aud_type),
@@ -2421,7 +2486,11 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .dbg_rearm_cnt      (dbg_aud_rearm_cnt),
     .dbg_fbrel_cnt      (dbg_aud_fbrel_cnt),
     .dbg_skip_cnt       (dbg_aud_skip_cnt),
-    .dbg_play_err       (dbg_aud_play_err)
+    .dbg_play_err       (dbg_aud_play_err),
+    .dbg_cur_codec      (dbg_cur_codec_w),
+    .dbg_mp2_avalid     (dbg_mp2_avalid_w),
+    .dbg_mp2_s_nz       (dbg_mp2_s_nz_w),
+    .dbg_mp2_pcm_nz     (dbg_mp2_pcm_nz_w)
 );
 wire [32:0] dbg_aud_play_pts;
 wire [3:0]  dbg_aud_rearm_cnt, dbg_aud_fbrel_cnt;
@@ -3042,7 +3111,11 @@ end
 // (clk_dec domain). 480 => NTSC, 576 => PAL. We derive a 1-bit "tall" flag and 2-FF
 // sync it into clk_sys, where pal_eff (below) resolves the Auto/NTSC/PAL override.
 wire [13:0] core_vertical_size;
-wire        pal_detect_dec = (core_vertical_size > 14'd480);   // PAL frame is 576 lines
+// DVD-FORK FIX (mpeg1): MPEG-1 PAL/SIF is 352x288 (288 = half of 576), which the
+// ">480" test misses — key on it explicitly. MPEG-1 NTSC/SIF is 240 (not >480, and
+// not 288), so it correctly stays NTSC.
+wire        pal_detect_dec = (core_vertical_size > 14'd480)    // PAL frame is 576 lines
+                          || (core_vertical_size == 14'd288);  // MPEG-1 PAL SIF (352x288)
 reg         pal_det_s1, pal_det_s2;
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin pal_det_s1 <= 1'b0; pal_det_s2 <= 1'b0; end

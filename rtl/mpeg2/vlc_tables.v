@@ -44,6 +44,7 @@ function [10:0]macroblock_address_increment_dec;
       11'b0000_0011_001: macroblock_address_increment_dec = {4'd11, 6'd32, 1'b0};
       11'b0000_0011_000: macroblock_address_increment_dec = {4'd11, 6'd33, 1'b0};
       11'b0000_0001_000: macroblock_address_increment_dec = {4'd11, 6'd33, 1'b1}; // macroblock_escape
+      11'b0000_0001_111: macroblock_address_increment_dec = {4'd11, 6'd0,  1'b0}; // DVD-FORK FIX (mpeg1): macroblock_stuffing (11172-2 table B.1, MPEG-1 only). {len=11, value=0, no escape} is a combination no real increment produces — the vld consumes-and-stays on it in MPEG-1 mode; in MPEG-2 mode the value==0 check still yields the old error behaviour.
       11'b0000_0101_11x: macroblock_address_increment_dec = {4'd10, 6'd16, 1'b0};
       11'b0000_0101_10x: macroblock_address_increment_dec = {4'd10, 6'd17, 1'b0};
       11'b0000_0101_01x: macroblock_address_increment_dec = {4'd10, 6'd18, 1'b0};

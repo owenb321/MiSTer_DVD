@@ -35,16 +35,18 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 
 ## What works
 
-**Video** — MPEG-2 decode at full rate; NTSC and PAL auto-detected from the stream;
-progressive and native 480i/576i output; 3:2 pulldown handling for film; PTS-driven A/V
-sync with a display-refresh-locked frame-rate governor.
+**Video** — MPEG-2 decode at full rate, plus **MPEG-1** (the DVD spec's other permitted
+video format, 352×240/352×288); NTSC and PAL auto-detected from the stream; progressive
+and native 480i/576i output; 3:2 pulldown handling for film; PTS-driven A/V sync with a
+display-refresh-locked frame-rate governor.
 
 **Analog / CRT** — two simultaneous rasters: the progressive one for HDMI, plus a native
 15 kHz 480i/576i raster on the analog pins. It engages from `MiSTer.ini` alone, like any
 other core. A field-passthrough mode hands the CRT the disc's authored fields 1:1.
 
-**Audio** — AC-3 decoded entirely in fabric (5.1 downmixed to stereo) to HDMI; LPCM at
-16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream over S/PDIF to a receiver.
+**Audio** — AC-3 and **MPEG-1 Layer II (MP2)** decoded entirely in fabric (AC-3 5.1
+downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
+over S/PDIF to a receiver.
 
 **DVD navigation** — the core reads an ISO directly, parses the IFOs, and runs a real
 **DVD virtual machine** validated command-by-command against libdvdnav's behaviour. The
@@ -61,12 +63,12 @@ HUD and seek bar.
   `CSS ENCRYPTED` on screen, and mutes rather than emitting loud static.
 - **ISO9660 only.** UDF-only images will not load; the core reports
   `UNSUPPORTED IMAGE`.
-- **MPEG-1 video is not supported.** The DVD-Video spec permits it and a small number of
-  discs use it; those will not play. MPEG-2 is the format essentially all commercial
-  discs use.
-- **Only 720×480 and 720×576 are well tested.** Other DVD-compliant resolutions
-  (704×480, 352×480 half-D1, 352×240) are accepted by the spec but have had little or no
-  testing here.
+- **Only 720×480, 720×576 and the MPEG-1 SIF sizes (352×240, 352×288) are well
+  tested.** Other DVD-compliant MPEG-2 resolutions (704×480, 352×480 half-D1) are
+  accepted by the spec but have had little or no testing here.
+- **Sub-D1 resolutions on the analog CRT output are untested** — the re-interlacer is
+  built around the 720-wide raster; MPEG-1 content is verified on HDMI (the scaler
+  handles it cleanly).
 - **Very demanding scenes may drop a frame.** The inherited decoder has a motion-comp /
   IDCT throughput ceiling, and on the heaviest content it can fall behind the display
   cadence. The frame-rate governor absorbs this by dropping a B-frame to stay in step —
@@ -76,9 +78,11 @@ HUD and seek bar.
 - **Interactive DVD games are incomplete.** Several game discs mis-navigate their
   dispatcher logic. Film and TV discs are the supported path.
 - **No DTS decode** — S/PDIF passthrough to a receiver only.
-- **Audio formats:** AC-3, DTS (passthrough) and LPCM. MPEG-1 Layer II audio is not
-  decoded; such a disc reports `AUDIO UNSUPPORTED` and plays silent. (No disc in the
-  test library uses it.)
+- **Audio formats:** AC-3, MPEG-1 Layer II (MP2), LPCM, and DTS (passthrough only).
+  The one gap left is the MPEG-2 multichannel *extension* (a rare 5.1 variant of MP2):
+  its backwards-compatible stereo core should play, but no disc was available to verify,
+  so such a track still reports `AUDIO UNSUPPORTED`. MP2 has no S/PDIF passthrough —
+  in Passthru mode an MP2 track is silent.
 - **Changing the audio track while a disc menu is open silences the menu audio** until
   you leave the menu. Menu audio otherwise plays normally on the default track.
 - No parental-control enforcement, no UOP enforcement.
@@ -115,6 +119,18 @@ rip. A ripper that transcodes to a single title will lose the menus.
 Put the `.iso` anywhere the MiSTer file browser can reach it and select it from the
 core's `Load Video` entry. The core also accepts bare `.VOB`, `.mpg` and `.m2v` streams,
 which it plays linearly without navigation.
+
+**Video CDs:** the core doesn't read bin/cue images directly, but VCD content is
+MPEG-1 — which the core decodes — so a one-step conversion makes them playable:
+
+```bash
+tools/vcd_to_vob.sh "MYDISC (Track 2).bin" mydisc.vob
+```
+
+This strips the CD sectors, stream-copies the original MPEG-1 video bit-for-bit, and
+re-encodes only the audio (44.1 kHz → the DVD-standard 48 kHz). There is also
+`tools/make_mpeg1_test.sh` to transcode any video file into a DVD-spec MPEG-1/MP2
+`.vob`.
 
 DVD images are large, so **loading from a NAS share works and is often more practical
 than filling the SD card**. One requirement catches people out:
@@ -315,6 +331,8 @@ genuinely leaned on.
   per-stage algorithms for the in-fabric decoder.
 - **ISO/IEC 13818-1 and 13818-2** — MPEG-2 Systems (Program Stream, pack and PES
   headers) and MPEG-2 Video.
+- **ISO/IEC 11172-2 and 11172-3** — MPEG-1 Video (the decoder's MPEG-1 mode) and MPEG-1
+  Audio (the Layer II decoder's tables and algorithms).
 - **IEC 61937-3 / 61937-5 / 60958-1** — AC-3 and DTS over S/PDIF, and the channel-status
   non-PCM flag that makes receivers lock onto a bitstream.
 - ***DVD Demystified*, Jim Taylor** — the practical DVD-Video reference for VOB/IFO
@@ -336,7 +354,12 @@ rather than by reading specs alone.
 - **liba52 0.8.0** — the golden reference for the AC-3 decoder's co-simulation. Every
   coding tool is checked against it to a bounded error, and it caught bugs
   (a mis-decoded dynamic-range exponent among them) that listening tests did not.
-- **ffmpeg** (`ac3dec.c`, `ac3_fixed`) — second opinion and fixed-point cross-check.
+- **ffmpeg** (`ac3dec.c`, `ac3_fixed`) — second opinion and fixed-point cross-check for
+  AC-3, and the float reference the MP2 golden model is gated against.
+- **pl_mpeg** (Dominic Szablewski, MIT) — compact C reference for MPEG-1/MP2; the Layer
+  II synthesis-window table (`tools/mp2_window.py`) is extracted from it, as vendored by
+  **MiSTer-devel/CDi_MiSTer**, whose serial-MAC filterbank was the reference spec for the
+  fabric MP2 decoder's architecture.
 - **Han, Dapeng (2017)**, *FPGA Implementation of an AC3 Decoder*, MSc thesis,
   Linköping University — stage-by-stage pseudocode for exponent decode, bit allocation,
   mantissa and IMDCT.

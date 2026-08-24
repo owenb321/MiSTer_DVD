@@ -32,10 +32,11 @@
 `define CHECK 1
 `endif
 
-module rld(clk, clk_en, rst, 
+module rld(clk, clk_en, rst,
   idct_fifo_almost_full,
   dct_coeff_rd_run, dct_coeff_rd_signed_level, dct_coeff_rd_end,                                            // dct run/level values input
   alternate_scan_rd, q_scale_type_rd, macroblock_intra_rd, intra_dc_precision_rd, quantiser_scale_code_rd,  // aux variables
+  mpeg1_rd,                                                                                                 // DVD-FORK FIX (mpeg1): aux variable — MPEG-1 mismatch control
   quant_wr_data_rd, quant_wr_addr_rd, quant_rst_rd, quant_wr_intra_rd, quant_wr_non_intra_rd,               // quantizer matrix updates
   quant_wr_chroma_intra_rd, quant_wr_chroma_non_intra_rd,
   rld_cmd_rd,                                                                                               // rld command: rld_DCT or RLD_QUANT
@@ -56,8 +57,9 @@ module rld(clk, clk_en, rst,
   input                    alternate_scan_rd;            // choose zigzag scan order 0 or 1
   input                    q_scale_type_rd;              // whether linear or non-linear quantiser scale
   input                    macroblock_intra_rd;          // whether intra or non-intra macroblock
-  input               [1:0]intra_dc_precision_rd;        // 
+  input               [1:0]intra_dc_precision_rd;        //
   input               [4:0]quantiser_scale_code_rd;      // quantiser scale code, par. 7.4.2.2
+  input                    mpeg1_rd;                     // DVD-FORK FIX (mpeg1): stream is MPEG-1 — per-coefficient oddification instead of the MPEG-2 EOB parity toggle
   input               [7:0]quant_wr_data_rd;
   input               [5:0]quant_wr_addr_rd;
   input                    quant_rst_rd;
@@ -110,6 +112,8 @@ module rld(clk, clk_en, rst,
   reg               iquant_intra_dc_0;
   reg               iquant_intra_dc_1;
   reg               iquant_intra_dc_2;
+  reg               iquant_intra_dc_3;   // DVD-FORK FIX (mpeg1): extend the intra-DC marker to stage 4
+  reg               iquant_intra_dc_4;   // (MPEG-1 oddification exempts the intra DC coefficient)
   reg               iquant_eob_0;
   reg               iquant_eob_1;
   reg               iquant_eob_2;
@@ -195,8 +199,9 @@ module rld(clk, clk_en, rst,
   reg                      alternate_scan;            // choose zigzag scan order 0 or 1
   reg                      q_scale_type;              // whether linear or non-linear quantiser scale
   reg                      macroblock_intra;          // whether intra or non-intra macroblock
-  reg                 [1:0]intra_dc_precision;        // 
+  reg                 [1:0]intra_dc_precision;        //
   reg                 [4:0]quantiser_scale_code;      // quantiser scale code, par. 7.4.2.2
+  reg                      mpeg1;                     // DVD-FORK FIX (mpeg1): registered per entry like its aux neighbours (per-picture in practice — it only changes between pictures, and the fifo/pipeline drain long before the next picture's first coefficient arrives)
 
   always @(posedge clk)
     if (~rst) dct_coeff_run <= 6'd0;
@@ -237,6 +242,11 @@ module rld(clk, clk_en, rst,
     if (~rst) quantiser_scale_code <= 5'd0;
     else if (clk_en && rld_rd_valid) quantiser_scale_code <= quantiser_scale_code_rd;
     else  quantiser_scale_code <= quantiser_scale_code;
+
+  always @(posedge clk)
+    if (~rst) mpeg1 <= 1'd0;
+    else if (clk_en && rld_rd_valid) mpeg1 <= mpeg1_rd;
+    else  mpeg1 <= mpeg1;
 
 /* internal registers */
 
@@ -378,6 +388,22 @@ module rld(clk, clk_en, rst,
   wire iquant_oddness_sum = iquant_oddness ^ iquant_level_4[0];
   wire signed [15:0]iquant_factor_2_signed = {1'b0, iquant_factor_2};
   wire signed [22:0]iquant_level_3_correction = {17'b0, {5{iquant_level_2[12]}}};
+
+  /* DVD-FORK FIX (mpeg1): MPEG-1 mismatch control (11172-2 par. 2.4.4.2/2.4.4.3)
+   * oddifies EVERY reconstructed coefficient — if even and nonzero, pull one toward
+   * zero (val -= Sign(val), exactly MSSG mpeg2decode's Decode_MPEG1 blocks) — instead
+   * of MPEG-2's sum-parity LSB toggle on the last coefficient (par. 7.4.4 note 1,
+   * the iquant_oddness_sum term below). The intra DC coefficient is EXEMPT: 11172-2
+   * par. 2.4.4.1 reconstructs dct_recon[0][0] with no oddification (MSSG likewise
+   * computes the intra DC before the oddification loop) — hence iquant_intra_dc_4.
+   * Zero coefficients are untouched (Sign(0)=0). Saturation to -2048..2047 is the
+   * shared stage-3->4 clamp, identical in both modes; the dequant arithmetic itself
+   * needs no change (MPEG-2 with q_scale_type=0 / intra_dc_precision=8-bit is
+   * arithmetically identical to MPEG-1 — docs/mpeg1.md B.2 item 8). */
+  wire mpeg1_oddify = ~iquant_level_4[0] && (iquant_level_4 != 12'd0) && ~iquant_intra_dc_4;
+  wire signed [11:0]iquant_level_4_m1 = mpeg1_oddify ? (iquant_level_4[11] ? (iquant_level_4 + 12'sd1)
+                                                                          : (iquant_level_4 - 12'sd1))
+                                                     : iquant_level_4;
  
   always @(posedge clk)
     if (~rst) 
@@ -412,7 +438,8 @@ module rld(clk, clk_en, rst,
 	  iquant_level_4 <= iquant_level_3[11:0];
 	else 
 	  iquant_level_4 <= {iquant_level_3[22], {11{~iquant_level_3[22]}}}; // Saturation, par. 7.4.3
-        iquant_level_5 <= (iquant_oddness_sum || ~iquant_eob_4) ? iquant_level_4 : {iquant_level_4[11:1], ~iquant_level_4[0]}; // Mismatch control, par. 7.4.4, implemented as of note 1.
+        iquant_level_5 <= mpeg1 ? iquant_level_4_m1 // DVD-FORK FIX (mpeg1): per-coefficient oddification (see block above)
+                                : ((iquant_oddness_sum || ~iquant_eob_4) ? iquant_level_4 : {iquant_level_4[11:1], ~iquant_level_4[0]}); // Mismatch control, par. 7.4.4, implemented as of note 1.
       end
     else
       begin
@@ -509,23 +536,29 @@ module rld(clk, clk_en, rst,
       end
 
   always @(posedge clk)
-    if (~rst) 
+    if (~rst)
       begin
         iquant_intra_dc_0 <= 1'b0;
         iquant_intra_dc_1 <= 1'b0;
         iquant_intra_dc_2 <= 1'b0;
+        iquant_intra_dc_3 <= 1'b0;
+        iquant_intra_dc_4 <= 1'b0;
       end
     else if (clk_en)
       begin
         iquant_intra_dc_0 <= iquant_intra_dc;
         iquant_intra_dc_1 <= iquant_intra_dc_0;
         iquant_intra_dc_2 <= iquant_intra_dc_1;
+        iquant_intra_dc_3 <= iquant_intra_dc_2;   // DVD-FORK FIX (mpeg1)
+        iquant_intra_dc_4 <= iquant_intra_dc_3;   // DVD-FORK FIX (mpeg1)
       end
-    else 
+    else
       begin
         iquant_intra_dc_0 <= iquant_intra_dc_0;
         iquant_intra_dc_1 <= iquant_intra_dc_1;
         iquant_intra_dc_2 <= iquant_intra_dc_2;
+        iquant_intra_dc_3 <= iquant_intra_dc_3;
+        iquant_intra_dc_4 <= iquant_intra_dc_4;
       end
 
   always @(posedge clk)
@@ -799,14 +832,16 @@ endmodule
  * input:  DCT coefficients, as run/signed level pairs. Quantizer updates. output: DCT coefficients, as run/signed level pairs. Quantizer updates.
  */
 
-module rld_fifo(clk, clk_en, rst, 
+module rld_fifo(clk, clk_en, rst,
   dct_coeff_wr_run, dct_coeff_wr_signed_level, dct_coeff_wr_end,                                                  // dct run/level values input
   alternate_scan_wr, macroblock_intra_wr, intra_dc_precision_wr, q_scale_type_wr, quantiser_scale_code_wr,        // aux variables input
+  mpeg1_wr,                                                                                                       // DVD-FORK FIX (mpeg1): aux variable input
   quant_wr_data_wr, quant_wr_addr_wr,                                                                             // quantizer input
   quant_rst_wr, quant_wr_intra_wr, quant_wr_non_intra_wr, quant_wr_chroma_intra_wr, quant_wr_chroma_non_intra_wr, // quantizer input
   rld_cmd_wr, rld_wr_en, rld_wr_almost_full, rld_wr_overflow,                                                     // command to run-length decoding
   dct_coeff_rd_run, dct_coeff_rd_signed_level, dct_coeff_rd_end,                                                  // dct run/level values output
   alternate_scan_rd, macroblock_intra_rd, intra_dc_precision_rd, q_scale_type_rd, quantiser_scale_code_rd,        // aux variables output
+  mpeg1_rd,                                                                                                       // DVD-FORK FIX (mpeg1): aux variable output
   quant_wr_data_rd, quant_wr_addr_rd,                                                                             // quantizer output
   quant_rst_rd, quant_wr_intra_rd, quant_wr_non_intra_rd, quant_wr_chroma_intra_rd, quant_wr_chroma_non_intra_rd, // quantizer output
   rld_cmd_rd, rld_rd_en, rld_rd_valid                                                                             // command to run-length decoding
@@ -824,6 +859,7 @@ module rld_fifo(clk, clk_en, rst,
   input               [1:0]intra_dc_precision_wr;            // from ves
   input                    q_scale_type_wr;                  // from ves - whether linear or non-linear quantiser scale
   input               [4:0]quantiser_scale_code_wr;          // from slice - quantiser scale code, par. 7.4.2.2
+  input                    mpeg1_wr;                         // DVD-FORK FIX (mpeg1): from vld - stream is MPEG-1
 
   input               [7:0]quant_wr_data_wr;                 // data bus for quantizer matrix rams
   input               [5:0]quant_wr_addr_wr;                 // address bus for quantizer matrix rams
@@ -847,6 +883,7 @@ module rld_fifo(clk, clk_en, rst,
   output              [1:0]intra_dc_precision_rd;
   output                   q_scale_type_rd;
   output              [4:0]quantiser_scale_code_rd;
+  output                   mpeg1_rd;                         // DVD-FORK FIX (mpeg1): to rld
 
   output              [7:0]quant_wr_data_rd;                 // data bus for quantizer matrix rams
   output              [5:0]quant_wr_addr_rd;                 // address bus for quantizer matrix rams
@@ -870,19 +907,22 @@ module rld_fifo(clk, clk_en, rst,
 
   wire                     alternate_scan_rd_dummy;
   wire                [1:0]rld_cmd_rd_dummy;
+  wire                     mpeg1_rd_dummy;                  // DVD-FORK FIX (mpeg1)
   wire                [8:0]dummy_1 = 9'b0;
   wire                [8:0]dummy_2;
-  
-  wire               [30:0]dct_wr_dta = {dct_coeff_wr_run, dct_coeff_wr_signed_level, dct_coeff_wr_end, macroblock_intra_wr, intra_dc_precision_wr, q_scale_type_wr, quantiser_scale_code_wr, alternate_scan_wr, rld_cmd_wr};
-  wire               [30:0]quant_wr_dta = {dummy_1, quant_wr_data_wr, quant_wr_addr_wr, quant_rst_wr, quant_wr_intra_wr, quant_wr_non_intra_wr, quant_wr_chroma_intra_wr, quant_wr_chroma_non_intra_wr, alternate_scan_wr, rld_cmd_wr};
 
-  wire               [30:0]rld_rd_dta;
-  assign                   {dct_coeff_rd_run, dct_coeff_rd_signed_level, dct_coeff_rd_end, macroblock_intra_rd, intra_dc_precision_rd, q_scale_type_rd, quantiser_scale_code_rd, alternate_scan_rd, rld_cmd_rd} = rld_rd_dta;
-  assign                   {dummy_2, quant_wr_data_rd, quant_wr_addr_rd, quant_rst_rd, quant_wr_intra_rd, quant_wr_non_intra_rd, quant_wr_chroma_intra_rd, quant_wr_chroma_non_intra_rd, alternate_scan_rd_dummy, rld_cmd_rd_dummy} = rld_rd_dta;
+  /* DVD-FORK FIX (mpeg1): fifo word widened 31 -> 32 bits — mpeg1 rides at the top of
+   * BOTH word layouts (like alternate_scan/rld_cmd it is common to dct and quant). */
+  wire               [31:0]dct_wr_dta = {mpeg1_wr, dct_coeff_wr_run, dct_coeff_wr_signed_level, dct_coeff_wr_end, macroblock_intra_wr, intra_dc_precision_wr, q_scale_type_wr, quantiser_scale_code_wr, alternate_scan_wr, rld_cmd_wr};
+  wire               [31:0]quant_wr_dta = {mpeg1_wr, dummy_1, quant_wr_data_wr, quant_wr_addr_wr, quant_rst_wr, quant_wr_intra_wr, quant_wr_non_intra_wr, quant_wr_chroma_intra_wr, quant_wr_chroma_non_intra_wr, alternate_scan_wr, rld_cmd_wr};
+
+  wire               [31:0]rld_rd_dta;
+  assign                   {mpeg1_rd, dct_coeff_rd_run, dct_coeff_rd_signed_level, dct_coeff_rd_end, macroblock_intra_rd, intra_dc_precision_rd, q_scale_type_rd, quantiser_scale_code_rd, alternate_scan_rd, rld_cmd_rd} = rld_rd_dta;
+  assign                   {mpeg1_rd_dummy, dummy_2, quant_wr_data_rd, quant_wr_addr_rd, quant_rst_rd, quant_wr_intra_rd, quant_wr_non_intra_rd, quant_wr_chroma_intra_rd, quant_wr_chroma_non_intra_rd, alternate_scan_rd_dummy, rld_cmd_rd_dummy} = rld_rd_dta;
 
   fifo_sc
     #(.addr_width(RLD_DEPTH),
-    .dta_width(9'd31),
+    .dta_width(9'd32),
     .prog_thresh(RLD_THRESHOLD))
     rld_fifo (
     .rst(rst),

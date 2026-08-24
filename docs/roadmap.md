@@ -1525,6 +1525,11 @@ Measured before planning, so they are NOT on the list: **MPEG-1 Layer II audio**
 (reader is ISO9660-only ⇒ won't load). A VTSI_MAT audio-attribute census over all 34
 library ISOs found **0 MP2 discs** (34 AC-3, 2 LPCM, 2 DTS) and **0 UDF-only images**.
 Both are real conformance gaps with no local vehicle → messaging, not decode support.
+**⤷ SUPERSEDED for MP2 (2026-08-24, branch `feature/mpeg1-codecs`): MP2 now DECODES
+in fabric** — ps_demux routes 0xC0–0xC7 → `dvd/mp2_reframer.sv` → `dvd/mp2/
+mp2_decode.sv` (bit-exact vs `tools/mp2_ref.py`), and MPEG-1 VIDEO decode is added
+on the same branch. The unsupported-audio notice is narrowed to format 3. See
+**`docs/mpeg1.md`**.
 
 | Phase | Branch | Scope | Status |
 |---|---|---|---|
