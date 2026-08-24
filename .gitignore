@@ -78,3 +78,4 @@ __pycache__/
 
 # Phase-2 conformance golden-trace binaries (built by tools/build_dvd_trace.sh)
 tools/bin/
+bench/dvd/test_mp2/

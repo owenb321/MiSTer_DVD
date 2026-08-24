@@ -413,10 +413,14 @@ def cmd_compare(args):
         sr = hdr["sample_rate"]
         ours.extend(dec.decode_frame(frame, hdr))
         nf += 1
-    # ffmpeg float decode of the same bytes
+    # ffmpeg float decode of the same bytes. For mono use pan (not -ac 2):
+    # ffmpeg's default mono->stereo upmix attenuates -3 dB per side; the model
+    # (like a DVD player) duplicates at full scale.
+    mono = (hdr["mode"] == 3) if nf else False
+    chan = ["-af", "pan=stereo|c0=c0|c1=c0"] if mono else ["-ac", "2"]
     p = subprocess.run(
-        ["ffmpeg", "-loglevel", "error", "-f", "mp3", "-i", args.infile,
-         "-f", "s16le", "-ac", "2", "-"],
+        ["ffmpeg", "-loglevel", "error", "-f", "mp3", "-i", args.infile]
+        + chan + ["-f", "s16le", "-"],
         capture_output=True, check=True)
     ref = struct.unpack(f"<{len(p.stdout)//2}h", p.stdout)
     ref = list(zip(ref[0::2], ref[1::2]))
