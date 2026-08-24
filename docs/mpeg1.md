@@ -1,7 +1,15 @@
 # MPEG-1 video + MPEG-1 Layer II (MP2) audio — the missing DVD-spec codecs
 
-**Status: IN PROGRESS (2026-08-23, branch `feature/mpeg1-codecs`).** Per-piece status
-markers below. Companion docs: `docs/vcd_svcd_mpeg_reuse.md` (the earlier CDi_MiSTer
+**Status: ✅ IMPLEMENTED + SIM-VERIFIED + BUILD CLOSED (2026-08-24, branch
+`feature/mpeg1-codecs`). ⏳ HW-confirm pending.** Release build
+`releases/DVD_mpeg1_20260824_1150.rbf` (compressed 4.5 MB): clk_dec Restricted
+Fmax **89.92 MHz @100C / 93.23 @-40C** (86 MHz gate PASS); **ALM 38,884/41,910
+= 93 %** (+~3.0k vs the 86 % pre-feature baseline — inside the 2–3.5k estimate,
+but now firmly in the seed-lottery zone: expect SEED sweeps on future growth);
+DSP 100/112 (+3); **RAM blocks 504/553 = 91 %** (+96 vs baseline 408 — the MP2
+PCM FIFO (PCM_AW=12), V ring, ROMs and the many small sync-read RAMs each cost
+whole M10Ks; block RAM is now the second-tightest resource — shrink PCM_AW
+first if a future feature needs blocks back). Per-piece status markers below. Companion docs: `docs/vcd_svcd_mpeg_reuse.md` (the earlier CDi_MiSTer
 eval — note its framing is superseded, see "Scope decision" below), `docs/experiments.md`
 "VCD / SVCD playback" (the original delta list).
 
