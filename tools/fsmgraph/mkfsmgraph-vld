@@ -1,0 +1,114 @@
+#!/usr/bin/perl
+
+# code used to generate the state machine graph.
+# input: verilog code
+# output: gml graph
+# use: mkgraph < vld.v > vld.gml
+#
+# This one is used for simplifying the vld graph. 
+# Removes transitions to STATE_ERROR
+# Removes transitions to STATE_NEXT_START_CODE; nodes are drawn with double border instead.
+#
+# Flow:
+# 1. mkfsmgraph-vld < vld.v > vld-simple.gml
+# 2. gml2udg vld-simple.gml  > vld-simple-1.graph
+# 3. sed -e 's/"_GO","ellipse"/"BORDER","double"/g' < vld-simple-1.graph > vld-simple.graph
+# 4. uDrawgraph vld-simple.graph
+# 5. Choose menu "Layout -> Improve All"
+# 6. Choose menu "View->Full Scale"
+# 7. Choose menu "File->Print" (print to file vld-simple.ps, fit to page, center graph on page)
+# 8. ps2pdf vld-simple.ps
+#
+# Algorithm:
+#
+#   /* next state logic */
+#     always @*
+#       casex (state)
+#         STATE_1:           if (somecondition) next = STATE_2;
+#                              else next = STATE_1;
+#
+#  - find comment /* next state logic */
+#  - take first always block after this comment
+#  - any word beginning with STATE_ is a fsm state
+#  - if character following the state is a colon (:) the state is source of a transition
+#  - if character following the state is a semicolon (;) the state is destination of a transition
+#
+#
+$gmlgraph = 1; # "gml" format
+$dotgraph = 0; # "dot" format
+
+%nodes = ();
+%edges = ();
+$cnt = 1;
+
+$fsmfound = 0;
+
+# extract next state logic from verilog
+while (<>) {
+  chop;
+  if ($_ =~ /next state logic/) { $fsmfound = 1; }
+  if ($_ =~ /always \@/) { if ($fsmfound == 1) {$fsmfound = 2; } else {$fsmfound = 0; }}
+
+  if ($fsmfound) { $fsm = $fsm.$_; }
+  }
+
+# extract fsm states and edges from next state logic
+while ($fsm =~ m/STATE_\w+/g) {
+  $state = $&;
+
+  if (!exists($nodes{$state})) {
+    $nodes{$state} = $cnt;
+    $cnt++;
+    }
+
+  $fsm =~ m/[:;]/g;
+  $separator = $&;
+
+  if ($separator eq ":") {
+    $from = $state;
+    }
+  if ($separator eq ";") {
+    $to = $state;
+    $edges{"$from $to"} = 1;
+    }
+  }
+
+if ($gmlgraph) {
+  # output "gml" format graph 
+  print "graph [\n";
+  print " directed 1\n";
+  
+  foreach $key (sort keys %nodes) {
+    if (!exists($edges{"$key STATE_NEXT_START_CODE"})) {
+      print " node [ id ".$nodes{$key}." label \"".$key."\" ]\n";
+      }
+    else {
+      print " node [ id ".$nodes{$key}." label \"".$key."\" graphics [ type \"ellipse\" ] ]\n";
+      }
+    }
+  
+  foreach $key (sort keys %edges) {
+    ($from, $to) = split (/ /, $key);
+    # uncomment next two lines to simplify vld graph
+    next if (($to eq "STATE_NEXT_START_CODE") && ($from ne "STATE_ERROR"));
+    next if ($to eq "STATE_ERROR");
+    print " edge [ source ".$nodes{$from}." target ". $nodes{$to}." ] \n";
+    }
+  
+  print "]\n"
+  }
+
+if ($dotgraph) {
+  # output "dot" format graph
+  print "digraph \"fsmgraph\" {\n";
+  foreach $key (sort keys %edges) {
+    ($from, $to) = split (/ /, $key);
+    # uncomment next two lines to simplify graph
+    # next if ($to eq "STATE_NEXT_START_CODE");
+    # next if ($to eq "STATE_ERROR");
+    print " \"".$from."\" -> \"".$to."\"\n";
+    }
+  print "}\n";
+  }
+
+# not truncated

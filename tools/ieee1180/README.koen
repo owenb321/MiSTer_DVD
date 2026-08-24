@@ -1,0 +1,16 @@
+This is the testbench for the idct implementation.
+
+I found an ieee1180 test program for the jpeg idct, and modified it as follows:
+- write idct input to file
+- execute iverilog simulation of idct
+- idct simulation writes idct output to file
+- read idct output from file
+compares verilog idct implementation  with floating point idct results, and prints worst error , mean error, mean square error.
+
+Use:
+compile verilog files into idct-verilog:
+iverilog -o idct-verilog *.v
+compile c test program:
+make
+run tests:
+./doieee ./ieeetest

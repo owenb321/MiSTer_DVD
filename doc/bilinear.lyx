@@ -1,0 +1,982 @@
+#LyX 1.5.5 created this file. For more info see http://www.lyx.org/
+\lyxformat 276
+\begin_document
+\begin_header
+\textclass scrbook
+\begin_preamble
+\usepackage{hyperref}
+\end_preamble
+\language english
+\inputencoding auto
+\font_roman default
+\font_sans default
+\font_typewriter default
+\font_default_family default
+\font_sc false
+\font_osf false
+\font_sf_scale 100
+\font_tt_scale 100
+\graphics default
+\float_placement h
+\paperfontsize default
+\spacing single
+\papersize default
+\use_geometry false
+\use_amsmath 0
+\use_esint 0
+\cite_engine basic
+\use_bibtopic false
+\paperorientation portrait
+\secnumdepth 3
+\tocdepth 3
+\paragraph_separation indent
+\defskip medskip
+\quotes_language english
+\papercolumns 1
+\papersides 1
+\paperpagestyle default
+\tracking_changes false
+\output_changes false
+\author "" 
+\author "" 
+\end_header
+
+\begin_body
+
+\begin_layout Section*
+Bilinear Chroma Upsampling
+\end_layout
+
+\begin_layout Standard
+The chrominance components have half the vertical and half the horizontal
+ resolution of the luminance.
+ To obtain equal chrominance and luminance resolution, bilinear chroma upsamplin
+g is used.
+ Bilinear chroma upsampling computes chroma pixel values by vertical and
+ horizontal interpolation.
+ Vertical interpolation implies adding two rows of chroma values with different
+ weights.
+ The chroma row closest to the luma row gets weight 3/4, while the chroma
+ row farthest from the luma row gets weight 1/4.
+ Figures 
+\begin_inset LatexCommand ref
+reference "fig:Frame-picture,-progressive"
+
+\end_inset
+
+, 
+\begin_inset LatexCommand ref
+reference "fig:Top-field,-progressive"
+
+\end_inset
+
+ and 
+\begin_inset LatexCommand ref
+reference "fig:Bottom-field,-progressive"
+
+\end_inset
+
+ illustrate these weights for progressive pictures, while figures 
+\begin_inset LatexCommand ref
+reference "fig:Top-field,-interlaced"
+
+\end_inset
+
+ and 
+\begin_inset LatexCommand ref
+reference "fig:Bottom-field,-interlaced"
+
+\end_inset
+
+ show the weights for interlaced pictures.
+ 
+\end_layout
+
+\begin_layout Standard
+In figures 
+\begin_inset LatexCommand ref
+reference "fig:Frame-picture,-progressive"
+
+\end_inset
+
+ to 
+\begin_inset LatexCommand ref
+reference "fig:Bottom-field,-interlaced"
+
+\end_inset
+
+,
+\end_layout
+
+\begin_layout Itemize
+00 refers to the first row of luma values of the current macroblock,
+\end_layout
+
+\begin_layout Itemize
+15 refers to the last row of luma values of the current macroblock,
+\end_layout
+
+\begin_layout Itemize
+c-1 refers to the last row of chroma values of the macroblock one macroblock
+ row up,
+\end_layout
+
+\begin_layout Itemize
+c0 refers to the first row of chroma values of the current macroblock,
+\end_layout
+
+\begin_layout Itemize
+c7 refers to the last row of chroma values of the current macroblock,
+\end_layout
+
+\begin_layout Itemize
+c8 refers to the first row of chroma values of the macroblock one macroblock
+ row down.
+\end_layout
+
+\begin_layout Standard
+The corresponding source file is 
+\family typewriter
+resample_bilinear.v
+\family default
+.
+\end_layout
+
+\begin_layout Standard
+\begin_inset Float figure
+wide false
+sideways false
+status open
+
+\begin_layout LyX-Code
+                                        | 3/4 1/4
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout LyX-Code
+00  x x x x x x x x x x x x x x x x     | c0  c-1
+\end_layout
+
+\begin_layout LyX-Code
+c0  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+01  x x x x x x x x x x x x x x x x     | c0  c1
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+02  x x x x x x x x x x x x x x x x     | c1  c0
+\end_layout
+
+\begin_layout LyX-Code
+c1  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+03  x x x x x x x x x x x x x x x x     | c1  c2
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+04  x x x x x x x x x x x x x x x x     | c2  c1
+\end_layout
+
+\begin_layout LyX-Code
+c2  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+05  x x x x x x x x x x x x x x x x     | c2  c3
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+06  x x x x x x x x x x x x x x x x     | c3  c2
+\end_layout
+
+\begin_layout LyX-Code
+c3  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+07  x x x x x x x x x x x x x x x x     | c3  c4 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+08  x x x x x x x x x x x x x x x x     | c4  c3
+\end_layout
+
+\begin_layout LyX-Code
+c4  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+09  x x x x x x x x x x x x x x x x     | c4  c5
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+10  x x x x x x x x x x x x x x x x     | c5  c4
+\end_layout
+
+\begin_layout LyX-Code
+c5  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+11  x x x x x x x x x x x x x x x x     | c5  c6
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+12  x x x x x x x x x x x x x x x x     | c6  c5
+\end_layout
+
+\begin_layout LyX-Code
+c6  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+13  x x x x x x x x x x x x x x x x     | c6  c7
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+14  x x x x x x x x x x x x x x x x     | c7  c6
+\end_layout
+
+\begin_layout LyX-Code
+c7  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+15  x x x x x x x x x x x x x x x x     | c7  c8
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout Standard
+\begin_inset Caption
+
+\begin_layout Standard
+\begin_inset LatexCommand label
+name "fig:Frame-picture,-progressive"
+
+\end_inset
+
+Frame picture, progressive upsampling
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout LyX-Code
+\begin_inset Float figure
+wide false
+sideways false
+status open
+
+\begin_layout LyX-Code
+                                        | 3/4 1/4
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout LyX-Code
+00  x x x x x x x x x x x x x x x x     | c0  c-1
+\end_layout
+
+\begin_layout LyX-Code
+c0  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+02  x x x x x x x x x x x x x x x x     | c1  c0
+\end_layout
+
+\begin_layout LyX-Code
+c1  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+04  x x x x x x x x x x x x x x x x     | c2  c1
+\end_layout
+
+\begin_layout LyX-Code
+c2  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+06  x x x x x x x x x x x x x x x x     | c3  c2
+\end_layout
+
+\begin_layout LyX-Code
+c3  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+08  x x x x x x x x x x x x x x x x     | c4  c3
+\end_layout
+
+\begin_layout LyX-Code
+c4  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+10  x x x x x x x x x x x x x x x x     | c5  c4
+\end_layout
+
+\begin_layout LyX-Code
+c5  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+12  x x x x x x x x x x x x x x x x     | c6  c5
+\end_layout
+
+\begin_layout LyX-Code
+c6  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+14  x x x x x x x x x x x x x x x x     | c7  c6
+\end_layout
+
+\begin_layout LyX-Code
+c7  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout Standard
+\begin_inset Caption
+
+\begin_layout Standard
+\begin_inset LatexCommand label
+name "fig:Top-field,-progressive"
+
+\end_inset
+
+Top field, progressive upsampling
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout LyX-Code
+\begin_inset Float figure
+wide false
+sideways false
+status open
+
+\begin_layout LyX-Code
+                                        | 3/4 1/4
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c0  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+01  x x x x x x x x x x x x x x x x     | c0  c1
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c1  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+03  x x x x x x x x x x x x x x x x     | c1  c2
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c2  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+05  x x x x x x x x x x x x x x x x     | c2  c3
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c3  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+07  x x x x x x x x x x x x x x x x     | c3  c4
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c4  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+09  x x x x x x x x x x x x x x x x     | c4  c5
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c5  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+11  x x x x x x x x x x x x x x x x     | c5  c6
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c6  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+13  x x x x x x x x x x x x x x x x     | c6  c7
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c7  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+15  x x x x x x x x x x x x x x x x     | c7  c8
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout Standard
+\begin_inset Caption
+
+\begin_layout Standard
+\begin_inset LatexCommand label
+name "fig:Bottom-field,-progressive"
+
+\end_inset
+
+Bottom field, progressive upsampling
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout LyX-Code
+\begin_inset Float figure
+wide false
+sideways false
+status open
+
+\begin_layout LyX-Code
+
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 3/4 1/4
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout LyX-Code
+00  x x x x x x x x x x x x x x x x     | c0  c-2
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c0  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+02  x x x x x x x x x x x x x x x x     | c0  c2
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+04  x x x x x x x x x x x x x x x x     | c2  c0
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c2  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+06  x x x x x x x x x x x x x x x x     | c2  c4
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+08  x x x x x x x x x x x x x x x x     | c4  c2
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c4  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+10  x x x x x x x x x x x x x x x x     | c4  c6
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+12  x x x x x x x x x x x x x x x x     | c6  c4
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c6  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+14  x x x x x x x x x x x x x x x x     | c6  c8
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout Standard
+\begin_inset Caption
+
+\begin_layout Standard
+\begin_inset LatexCommand label
+name "fig:Top-field,-interlaced"
+
+\end_inset
+
+Top field, interlaced upsampling
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout LyX-Code
+\begin_inset Float figure
+wide false
+sideways false
+status open
+
+\begin_layout LyX-Code
+                                        | 3/4 1/4
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+01  x x x x x x x x x x x x x x x x     | c1  c-1
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c1  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+03  x x x x x x x x x x x x x x x x     | c1  c3
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+05  x x x x x x x x x x x x x x x x     | c3  c1
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c3  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+07  x x x x x x x x x x x x x x x x     | c3  c5
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+09  x x x x x x x x x x x x x x x x     | c5  c3
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c5  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+11  x x x x x x x x x x x x x x x x     | c5  c7
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+13  x x x x x x x x x x x x x x x x     | c7  c5
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+c7  c   c   c   c   c   c   c   c       | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+15  x x x x x x x x x x x x x x x x     | c7  c9
+\end_layout
+
+\begin_layout LyX-Code
+                                        | 
+\end_layout
+
+\begin_layout LyX-Code
+                                        |
+\end_layout
+
+\begin_layout Standard
+\begin_inset Caption
+
+\begin_layout Standard
+\begin_inset LatexCommand label
+name "fig:Bottom-field,-interlaced"
+
+\end_inset
+
+Bottom field, interlaced upsampling
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout LyX-Code
+
+\end_layout
+
+\end_body
+\end_document

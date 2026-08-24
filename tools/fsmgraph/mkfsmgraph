@@ -1,0 +1,104 @@
+#!/usr/bin/perl
+
+# code used to generate the state machine graph.
+# input: verilog code
+# output: gml graph
+# use: mkgraph < vld.v > vld.gml
+#
+# Flow:
+#     mkfsmgraph < vld.v > vld.gml
+#     gml2udg vld.gml  > vld.graph
+#     uDrawGraph vld.graph
+#     Choose menu "Layout->Improve All"
+#     Choose menu "View->Full Scale"
+#     Choose menu "File->Print" (print to file vld.ps, fit to page, center graph on page)
+#     ps2pdf vld.ps
+#
+# Algorithm:
+#
+#   /* next state logic */
+#     always @*
+#       casex (state)
+#         STATE_1:           if (somecondition) next = STATE_2;
+#                              else next = STATE_1;
+#
+#  - find comment /* next state logic */
+#  - take first always block after this comment
+#  - any word beginning with STATE_ is a fsm state
+#  - if character following the state is a colon (:) the state is source of a transition
+#  - if character following the state is a semicolon (;) the state is destination of a transition
+#
+#
+$gmlgraph = 1; # "gml" format
+$dotgraph = 0; # "dot" format
+
+%nodes = ();
+%edges = ();
+$cnt = 1;
+
+$fsmfound = 0;
+
+# extract next state logic from verilog
+while (<>) {
+  chop;
+  if ($_ =~ /next state logic/) { $fsmfound = 1; }
+  if ($_ =~ /always \@/) { if ($fsmfound == 1) {$fsmfound = 2; } else {$fsmfound = 0; }}
+
+  if ($fsmfound) { $fsm = $fsm.$_; }
+  }
+
+# extract fsm states and edges from next state logic
+while ($fsm =~ m/STATE_\w+/g) {
+  $state = $&;
+
+  if (!exists($nodes{$state})) {
+    $nodes{$state} = $cnt;
+    $cnt++;
+    }
+
+  $fsm =~ m/[:;]/g;
+  $separator = $&;
+
+  if ($separator eq ":") {
+    $from = $state;
+    }
+  if ($separator eq ";") {
+    $to = $state;
+    $edges{"$from $to"} = 1;
+    }
+  }
+
+if ($gmlgraph) {
+  # output "gml" format graph 
+  print "graph [\n";
+  print " directed 1\n";
+  
+  foreach $key (sort keys %nodes) {
+    print " node [ id ".$nodes{$key}." label \"".$key."\" ]\n";
+    }
+  
+  foreach $key (sort keys %edges) {
+    ($from, $to) = split (/ /, $key);
+    # uncomment next two lines to simplify graph
+    # next if ($to eq "STATE_NEXT_START_CODE");
+    # next if ($to eq "STATE_ERROR");
+    print " edge [ source ".$nodes{$from}." target ". $nodes{$to}." ] \n";
+    }
+  
+  print "]\n"
+  }
+
+if ($dotgraph) {
+  # output "dot" format graph
+  print "digraph \"fsmgraph\" {\n";
+  foreach $key (sort keys %edges) {
+    ($from, $to) = split (/ /, $key);
+    # uncomment next two lines to simplify graph
+    # next if ($to eq "STATE_NEXT_START_CODE");
+    # next if ($to eq "STATE_ERROR");
+    print " \"".$from."\" -> \"".$to."\"\n";
+    }
+  print "}\n";
+  }
+
+# not truncated

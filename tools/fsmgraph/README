@@ -1,0 +1,8 @@
+This directory contains graphs.
+With the exception of mpeg2fpga, which was drawn by hand, all graphs have been generated from the Verilog sources using the "mkfsmgraph" script.
+The graph layout was done using uDrawGraph from the University of Bremen, Germany.
+
+Flow:
+ Verilog source -> mkfsmgraph -> gml2udg -> uDrawGraph -> print postscript -> pdf
+
+koen

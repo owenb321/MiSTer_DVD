@@ -1,0 +1,6 @@
+QUARTUS_VERSION = "17.0"
+DATE = "01:23:45  February 10, 2026"
+
+# Revisions
+
+PROJECT_REVISION = "mpeg2fpga"

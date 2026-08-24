@@ -1,0 +1,13 @@
+- fast forward, still image, slow reverse, ...
+- fifo sizes depend upon clock speed and mpeg bitrate - hence desired mpeg level.
+
+  motcomp, resample, framestore, regfile: fifo ack/valid
+  motcomp_addrgen: 1 line offset if field_bottom
+    /* IMPLEMENTATION:
+       one-time folding of a line offset into the pointer which stores the
+       memory address of the current frame saves offsets and conditional
+       branches throughout the remainder of the picture processing loop */
+    if (picture_structure==BOTTOM_FIELD)
+      current_frame[cc]+= (cc==0) ? Coded_Picture_Width : Chroma_Width;
+
+- 1-bit rounding error in hue when running tcela-9-fp-dp/tcela-9.bits conformance test

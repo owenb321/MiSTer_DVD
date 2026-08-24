@@ -1,0 +1,44 @@
+/* 
+ * regfile_codes.v
+ * 
+ * Copyright (c) 2007 Koen De Vleeschauwer. 
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND 
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE 
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL 
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS 
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) 
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT 
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY 
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF 
+ * SUCH DAMAGE.
+ */
+
+/*
+ * regfile_codes - Register file.
+ */
+
+  parameter [3:0] 
+        REG_RD_VERSION        = 4'h0,
+        REG_RD_STATUS         = 4'h1,
+        REG_RD_SIZE           = 4'h2,
+        REG_RD_DISP_SIZE      = 4'h3,
+        REG_RD_FRAME_RATE     = 4'h4,
+        REG_RD_TESTPOINT      = 4'hf,
+        REG_WR_STREAM         = 4'h0,
+        REG_WR_HOR            = 4'h1,
+        REG_WR_HOR_SYNC       = 4'h2,
+        REG_WR_VER            = 4'h3,
+        REG_WR_VER_SYNC       = 4'h4,
+        REG_WR_VID_MODE       = 4'h5,
+        REG_WR_CLT_YUVM       = 4'h6,
+        REG_WR_CLT_ADDR       = 4'h7,
+        REG_WR_OSD_DTA_HIGH   = 4'h8,        
+        REG_WR_OSD_DTA_LOW    = 4'h9,        
+        REG_WR_OSD_ADDR       = 4'ha,
+        REG_WR_TRICK          = 4'hb,
+        REG_WR_TESTPOINT      = 4'hf;        
+
+/* not truncated */

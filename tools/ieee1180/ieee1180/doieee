@@ -1,0 +1,12 @@
+# perform IEEE 1180 test series
+# Typical usage:
+#    doieee  progname  >outfile
+# where progname is ieeetest or a variant
+
+time $1 -256 255 1 10000
+time $1 -5 5     1 10000
+time $1 -300 300 1 10000
+
+time $1 -256 255 -1 10000
+time $1 -5 5     -1 10000
+time $1 -300 300 -1 10000

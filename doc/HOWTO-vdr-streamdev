@@ -1,0 +1,47 @@
+vdr [1] is a digital video recorder program, optionally extended with plugins.
+The streamdev [2] plugin allows vdr to stream video over the LAN. 
+This document describes briefly how to configure vdr with streamdev to 
+stream live TV to the ML505.
+
+Assume the ML505 has been assigned ip address 192.168.153.9, 
+and the vdr system uses ip address 192.168.153.3.
+Start up the Xilinx ML505 with the mpeg2fpga bitstream.
+
+On the vdr system, set up the arp entry for the ML505:
+
+pandora ~ # arp -s 192.168.153.9 01:02:03:04:05:06
+
+Using the remote control, enable the vdr-to-vdr server in streamdev,
+using the default port 2004.
+
+Next, telnet to the streamdev port:
+
+koen@macpro ~ $ telnet 192.168.153.3 2004
+Trying 192.168.153.3...
+Connected to 192.168.153.3.
+Escape character is '^]'.
+220 Welcome to Video Disk Recorder (VTP)
+CAPS PES
+220 Capability "PES" accepted
+PORT 0 192,168,153,9,64,1
+220 Port command ok, data connection opened
+TUNE 1
+220 Channel tuned
+QUIT
+221 Video Disk Recorder closing connection
+Connection closed by foreign host.
+koen@macpro ~ $
+
+streamdev commands explained:
+"CAPS PES": ask for a packetized elementary stream to be sent
+"PORT 0 192,168,153,9,64,1": send the PES stream to IP address 192.168.153.9, port 16385 (=64*256+1)
+"TUNE 1": Tune to first channel in channel list
+A PES stream is sent to the ML505, and video is decoded.
+If need be, modeline parameters can be modified "on the fly" using mpeg2ether.
+"QUIT": Ends video streaming
+
+koen
+Wed Apr 16 18:31:51 CEST 2008
+
+[1] http://www.linuxtv.org/vdrwiki/index.php/Main_Page
+[2] http://streamdev.vdr-developer.org/

@@ -1,0 +1,47 @@
+#!/bin/bash
+# 
+# Script to retrieve conformance test bitstreams from the ISO web site
+#
+for bitstream in \
+  mei/MEI.stream16.long/MEI.stream16.long  \
+  mei/MEI.stream16v2/MEI.stream16v2 \
+  ti/TI_cl_2/TI_c1_2.bits  \
+  tek/Tek-5-long/conf4.bit \
+  tek/Tek-5.2/conf4.bit \
+  att/att_mismatch/att.bits  \
+  lep/bits_conf_lep_11/bits_conf_lep_11.bits \
+  gi/gi4/video.bits \
+  gi/gi6/bit_stream \
+  gi/gi7/bit_stream \
+  gi/gi_9/bit_stream \
+  gi/gi_from_tape/gi_stream \
+  hhi/hhi_burst_long/hhi_burst_long.bits \
+  hhi/hhi_burst_short/hhi_burst_short.bits \
+  ibm/ibm-bw-v3/ibm-bw.BITS \
+  ccett/mcp10ccett/mcp10ccett.bits \
+  mei/mei.2conftest.4f/mei_2stream.4f \
+  mei/mei.2conftest.60f.new/mei_2stream.60f.new \
+  nokia/nokia6/nokia6_dual.bit \
+  nokia/nokia6/nokia6_dual_60.bit \
+  nokia/nokia_7/nokia7_dual.bit \
+  ntr/ntr_skipped_v3/ntr_skipped_v3.bits \
+  sony/sony-ct1/sony-ct1.bits \
+  sony/sony-ct2/sony-ct2.bits \
+  sony/sony-ct3/sony-ct3.bs \
+  toshiba/toshiba_DPall-0/toshiba_DPall-0.mpg \
+  tceh/tceh_conf2/conf2.bits \
+  tcela/tcela-10-killer/tcela-10.bits \
+  tcela/tcela-14-bff-dp/tcela-14.short.bits \
+  tcela/tcela-14-bff-dp/tcela-14.bits \
+  tcela/tcela-15-stuffing/tcela-15.bits \
+  tcela/tcela-17-dots/tcela-17.bits \
+  tcela/tcela-6-slices/tcela-6.bits \
+  tcela/tcela-7-slices/tcela-7.bits \
+  tcela/tcela-8-fp-dp/tcela-8.bits   \
+  tcela/tcela-9-fp-dp/tcela-9.bits \
+  teracom/teracom_vlc4/teracom_vlc4.bin
+  do
+    wget --force-directories -nH --cut-dirs=6 http://standards.iso.org/ittf/PubliclyAvailableStandards/ISO_IEC_13818-4_2004_Conformance_Testing/Video/bitstreams/main-profile/$bitstream.gz ;
+    gunzip -v $bitstream.gz
+  done
+#not truncated

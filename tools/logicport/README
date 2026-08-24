@@ -1,0 +1,10 @@
+These are configuration files for the Logicport logic analyzer. 
+The adapter from http://www.kdvelectronics.eu/probe_adapter/probe_adapter.html has been used as interface between Xilinx ml505 board and Logicport logic analyzer.
+
+To use, set testpoint_sel either 
+- using a write to to the testpoint register 
+- or using dip switches.
+
+Note configuration files can be read and waveforms displayed by Logicport software even if no analyzer is present. 
+The Logicport software can be downloaded from http://www.pctestinstruments.com at no charge.
+

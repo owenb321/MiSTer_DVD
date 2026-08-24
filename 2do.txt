@@ -1,0 +1,7 @@
+Error recovery
+
+Decoding a syntactically correct MPEG2 stream is one thing. What if the MPEG2 stream is damaged?
+
+MPEG2 divides the screen in 16 pixel x 16 pixel macroblocks. For every macroblock, variable length decoding  produces two items: a motion vector and a 16x16 pixel prediction error.
+
+If the MPEG2 stream is damaged, it is possible that a prediction error is produced, but no motion vector. Or that a motion vector is produced, but no (or a truncated) prediction error. So it would probably make sense to have a counter, which is increased when a motion vector has been created, and decreased when a prediction error has been created. When variable length decoding begins a new macroblock the counter could be checked, and a zero-valued motion vector or prediction error pixels created to balance things out. 

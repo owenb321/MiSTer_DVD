@@ -1,0 +1,27 @@
+Additional tracing and dumping added. Sample command line: 
+ mpeg2decode -r -v9 -t -o0  'dump_%d_out_%c' -b tcela-10.bits 
+Write frames to ppm files:
+ mpeg2decode -r -o3  'frame_%d_field_%c' -b tcela-10.bits
+Output to X11:
+ mpeg2decode -r -o5 -b tcela-10.bits
+
+Trace options in the code:
+In global.h:
+#define TRACE 1
+// Run-length decoding
+//#define TRACE_RLD 1
+// DCT decoding
+//#define TRACE_DCT 1
+// Inverse Discrete Cosine Transform
+//#define TRACE_IDCT 1
+// Trace calculation of individual pixels (very detailed)
+//#define TRACE_RECON 1
+
+TRACE_RECON is for low-level debugging, and produces very large amounts of logging. 
+A sample line from TRACE_RECON logging:
+
+form_component_prediction (6): 0.5 * (fwd_y[  5,  0](=156) + fwd_y[  6,  0](=158)) ->  aux_y[  0,  0](=157)
+
+Interpret this as: calculate the average of the y[5,0] of the forward reference frame (with value 156) and y[6,0] of the forward reference frame (with value 158), and store the result (with value 157) in pixel y[0,0] of the auxiliary frame.
+
+koen

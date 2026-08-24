@@ -1,0 +1,2 @@
+Make sure iverilog is in your path. 
+For a command-line simulation, type "make clean test".
