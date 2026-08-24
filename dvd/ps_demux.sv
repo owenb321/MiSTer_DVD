@@ -3,7 +3,10 @@
 //
 // Parses MPEG-2 Program Stream pack/PES headers from VOB data and routes:
 //   - Video PES (stream_id 0xE0) → MPEG-2 decoder input
-//   - Audio PES (stream_id 0xBD) → HPS audio ring buffer
+//   - Audio PES (stream_id 0xBD) → audio ring buffer (AC-3/DTS/LPCM substreams)
+//   - MPEG audio PES (stream_id 0xC0-0xC7) → audio ring buffer as MP2 (type 3).
+//     No substream_id / sub-header: payload starts after the PES optional
+//     header. Track select = stream_id low 3 bits (== aud_track).
 //
 // MPEG-2 Program Stream packet structure:
 //   Pack header:   start code 0x000001BA (14 bytes)
@@ -64,7 +67,7 @@ module ps_demux (
     input  wire         vid_ready,
 
     // Output: audio frames → audio_ring.sv
-    // aud_type: 0=AC3, 1=DTS, 2=LPCM, 3=unknown
+    // aud_type: 0=AC3, 1=DTS, 2=LPCM, 3=MP2 (MPEG-1 Layer II)
     output logic [7:0]  aud_byte,
     output logic        aud_valid,
     output logic [1:0]  aud_type,
@@ -193,7 +196,9 @@ logic  [7:0] pts_buf [4:0];    // 5-byte PTS buffer (bytes 0..3; byte 4 used dir
 logic  [2:0] pts_byte_count;
 logic        pts_present;
 logic  [7:0] pes_hdr_len;      // PES header data length (optional-field byte count)
-logic [1:0]  aud_type_r;       // 0=AC3, 1=DTS, 2=LPCM, 3=unknown
+logic [1:0]  aud_type_r;       // 0=AC3, 1=DTS, 2=LPCM, 3=MP2 (MPEG-1 Layer II; was
+                               // the never-forwarded "unknown" sentinel — code 3 only
+                               // ever reaches the ring with payload for MP2)
 logic [1:0]  lpcm_quant_r;     // LPCM word-length (sub-header byte +5 bits[7:6])
 logic        first_aud_byte;   // marks first forwarded byte of an audio frame
 logic        first_sp_byte;    // marks first forwarded byte of a subpicture PES
@@ -246,6 +251,11 @@ always_comb begin
 end
 
 wire consume = in_valid && in_ready;
+
+// MPEG audio stream_id 0xC0-0xC7 (DVD MP2): payload starts straight after the
+// PES optional header (no substream byte / sub-header), so the three header-exit
+// branches route it directly to S_AUDIO_DATA instead of S_SUBSTREAM_ID.
+wire is_mp2_sid = (stream_id_r[7:3] == 5'b11000);
 
 assign aud_byte        = in_byte;
 assign aud_valid       = (state == S_AUDIO_DATA) && in_valid;
@@ -355,10 +365,25 @@ always_ff @(posedge clk or negedge rst_n) begin
             S_HUNT: begin
                 if (start_code_detected) begin
                     stream_id_r <= in_byte;
-                    case (in_byte)
+                    casez (in_byte)
                         8'hBA:   begin ever_seen_pack <= 1'b1; bytes_remaining <= 16'd9; state <= S_PACK_SKIP; end
                         8'hE0:   state <= S_PES_LEN_HI;   // video
                         8'hBD:   state <= S_PES_LEN_HI;   // private stream 1 (audio)
+                        // MPEG audio 0xC0-0xC7 (DVD-spec MP2, MPEG-1 Layer II).
+                        // Unlike private_stream_1 there is NO substream_id byte and
+                        // NO sub-header: the elementary stream starts right after the
+                        // PES optional header. Track select = stream_id low 3 bits
+                        // (the 0xBD path compares substream_id low 3 bits instead).
+                        // A conforming DVD authors audio stream n as EITHER 0xBD
+                        // substream 0x80+n/0xA0+n OR stream_id 0xC0+n, never both,
+                        // so no cross-codec ambiguity on the shared track number.
+                        // Non-selected MP2 tracks fall to the skip-by-length path.
+                        8'b1100_0???: begin
+                            if (in_byte[2:0] == aud_track) begin
+                                aud_type_r <= 2'd3;          // T_MP2 (was the dead "unknown" sentinel)
+                                state      <= S_PES_LEN_HI;
+                            end else state <= S_SYS_LEN_HI;
+                        end
                         default: begin
                             // A video-layer start code (<= 0xB8: picture 0x00,
                             // slices 0x01-0xAF, user 0xB2, seq-hdr 0xB3, ext 0xB5,
@@ -375,7 +400,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                                 // carry a 2-byte length field (system_header 0xBB,
                                 // program_stream_map 0xBC, padding 0xBE,
                                 // private_stream_2 / NV_PCK nav packs 0xBF, MPEG audio
-                                // 0xC0-0xDF, extra video 0xE1-0xEF, etc). Skip the WHOLE
+                                // 0xC8-0xDF, extra video 0xE1-0xEF, etc). Skip the WHOLE
                                 // packet by its declared length so a 00 00 01 pattern
                                 // embedded in the payload (common in DVD nav packs) can
                                 // never false-trigger a start code and desync the stream.
@@ -435,6 +460,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                     // no optional header -> straight to payload
                     if (pes_length == 16'd1) state <= S_HUNT;        // no payload
                     else if (stream_id_r == 8'hE0) state <= S_VIDEO_DATA;
+                    else if (is_mp2_sid) begin first_aud_byte <= 1'b1; state <= S_AUDIO_DATA; end
                     else begin state <= S_SUBSTREAM_ID; end
                 end else if (pts_present) begin
                     state <= S_PTS;
@@ -463,6 +489,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                     if (pes_length == 16'd1) state <= S_HUNT;       // packet ends at PTS
                     else if (bytes_remaining == 16'd1) begin        // header done
                         if (stream_id_r == 8'hE0) state <= S_VIDEO_DATA;
+                        else if (is_mp2_sid) begin first_aud_byte <= 1'b1; state <= S_AUDIO_DATA; end
                         else state <= S_SUBSTREAM_ID;
                     end else state <= S_PES_HDR_SKIP;
                 end else begin
@@ -476,6 +503,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                 if (pes_length == 16'd1) state <= S_HUNT;
                 else if (bytes_remaining <= 16'd1) begin
                     if (stream_id_r == 8'hE0) state <= S_VIDEO_DATA;
+                    else if (is_mp2_sid) begin first_aud_byte <= 1'b1; state <= S_AUDIO_DATA; end
                     else state <= S_SUBSTREAM_ID;
                 end else bytes_remaining <= bytes_remaining - 16'd1;
             end
