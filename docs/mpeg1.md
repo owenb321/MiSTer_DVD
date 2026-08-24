@@ -57,7 +57,10 @@ decode: **max_err = 1 LSB** on real VCD audio (200 frames) and synthetic 48 kHz
 Window table `tools/mp2_window.py` = ISO Table 3-B.3 × 2^16 exact, provenance pl_mpeg
 (MIT) via CDi_MiSTer.
 
-### A.2 ps_demux routing (0xC0–0xC7) — planned
+### A.2 ps_demux routing (0xC0–0xC7) — ✅ DONE (sim-verified)
+
+Implemented exactly as below; `bench/dvd/ps_demux_mp2_tb.sv` (6 scenarios) + all
+existing demux TBs green. Original plan follows.
 
 DVD MP2 rides PES stream_id 0xC0–0xC7 directly (NOT private_stream_1; no substream
 byte, no sub-header — payload starts after the PES optional header). Today those IDs
@@ -80,7 +83,7 @@ edits (`iec61937_wrap.is_codec` already excludes 3 → MP2 frames in passthrough
 are popped + silenced, correct). A future distinct passthrough code would need the
 3-bit widening (edit-site list in the 2026-08-23 session notes / audio agent report).
 
-### A.3 mp2_reframer — planned (dvd/mp2_reframer.sv)
+### A.3 mp2_reframer — ✅ DONE (sim-verified, `bench/dvd/mp2_reframer_tb.sv` 5 scenarios)
 
 Mirror of `ac3_reframer`/`dts_reframer`, chained after dts_reframer in emu.sv:
 regenerate `aud_frame_start` on the 11-bit 0xFFE syncword, with a **frame-length
@@ -89,7 +92,17 @@ at header byte 2 parse `{bitrate_index, sampling_frequency, padding}` →
 `frame_len = 144*bitrate/samplerate + padding` (Layer II; table ROM per rate).
 Passes foreign types through untouched. Reset on `pipe_rst_n` like the others.
 
-### A.4 MP2 decoder core — planned (dvd/mp2/)
+### A.4 MP2 decoder core — ✅ DONE (dvd/mp2/mp2_decode.sv, BIT-EXACT sim-verified)
+
+Shipped as planned below, verified by `bench/dvd/run_mp2.sh`: PCM bit-exact vs
+the golden model on 5 synthetic fixtures (48k stereo/noise/mono/44.1k/low-rate
+table-c) AND 30 frames of real VCD content — every sample identical. Notable
+implementation deltas vs the plan: one 10-cycle restoring divider extracts
+grouped triplets (no DSP); the sync-read one-cycle-wait discipline matters
+(two bugs the bit-exact TB caught: RAM outputs consumed a cycle early in the
+scfsi/scf/sample walks, and a window-ROM index scaled 32x instead of 64x).
+MP2 self-heal reset dumps the decoder's internal PCM FIFO (unlike AC-3 where
+pcm_out survives) — acceptable, resets should be rare. Original plan follows.
 
 Pure-HDL FSM in the AC-3 house style, single clk_sys 27 MHz domain, **all tables in
 sync-read M10K** (the recurring LUT-RAM lesson), serialized MACs on shared DSPs (the
@@ -114,7 +127,17 @@ Verification tiers (mirroring AC-3): (1) Icarus TB `bench/dvd/mp2_decode_tb.sv` 
 cosim vs a C reference (pl_mpeg) per the bench/ac3 pattern. Real-stream vectors from
 the VCD rips + `tools/gen_test_stream.sh` MP2 recipes.
 
-### A.5 dvd_audio_decode integration — planned
+### A.5 dvd_audio_decode integration — ✅ DONE (sim-verified)
+
+As planned: `cur_codec` (2-bit, replacing `cur_is_lpcm`), MP2 sink/write arms,
+MP2 self-heal watchdog (progress = mp2_aud_valid), emu reframer chain +
+DVD.qsf entries, HUD notice narrowed to format 3 (a format-3 track's
+backwards-compatible MP2 core on 0xC0+n likely plays stereo now — notice kept
+until HW-verified on a real MC disc). `dvd_audio_decode_tb` still green;
+`bench/dvd/mp2_chain_tb.sv` runs a real `-f dvd` VOB through
+ps_demux → all three reframers → audio_ring → dvd_audio_decode bit-exact.
+NOT yet fixed here: the pre-existing `attr_a_sel` wiring quirk (emu drives it
+with `aud_cur` not `aud_track_eff`) — separate follow-up.
 
 `T_MP2 = 2'd3`; `sink_ready` third arm (`~mp2_full`); widen the 1-bit `cur_is_lpcm`
 selector to a 2-bit `cur_codec` (5 consumer sites: audio mux, active_avalid, 2×

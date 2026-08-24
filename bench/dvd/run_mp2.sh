@@ -75,6 +75,27 @@ if [ -n "${MP2_REAL:-}" ]; then
     vvp bench/dvd/mp2_decode_sim +FIXDIR="$FIX/real" || rc=1
 fi
 
+echo "== full chain (VOB -> ps_demux -> reframers -> ring -> decode) =="
+if [ ! -f "$FIX/vobchain.vob" ]; then
+    ffmpeg -y -loglevel error \
+        -f lavfi -i "testsrc2=size=352x240:rate=30000/1001:duration=2" \
+        -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=2" \
+        -c:v mpeg1video -b:v 1150k -c:a mp2 -ar 48000 -ac 2 -b:a 224k \
+        -f dvd "$FIX/vobchain.vob"
+fi
+ffmpeg -y -loglevel error -i "$FIX/vobchain.vob" -map 0:a -c copy -f mp2 "$FIX/vobchain.mp2"
+python3 tools/mp2_ref.py fixture "$FIX/vobchain.mp2" "$FIX/vobchain" --frames 12
+python3 - <<'PYEOF'
+d = open('bench/dvd/test_mp2/vobchain.vob', 'rb').read()
+with open('bench/dvd/test_mp2/vobchain.vob.hex', 'w') as f:
+    f.write('\n'.join(f'{b:02x}' for b in d))
+PYEOF
+iverilog -g2012 -I dvd/ac3 -o bench/dvd/mp2_chain_sim \
+    dvd/ps_demux.sv dvd/ac3_reframer.sv dvd/dts_reframer.sv dvd/mp2_reframer.sv \
+    dvd/audio_ring.sv dvd/dvd_audio_decode.sv dvd/lpcm_unpack.sv \
+    dvd/mp2/mp2_decode.sv dvd/ac3/*.sv bench/dvd/mp2_chain_tb.sv
+vvp bench/dvd/mp2_chain_sim || rc=1
+
 echo "== reframer =="
 iverilog -g2012 -o bench/dvd/mp2_reframer_sim dvd/mp2_reframer.sv bench/dvd/mp2_reframer_tb.sv
 vvp bench/dvd/mp2_reframer_sim || rc=1
