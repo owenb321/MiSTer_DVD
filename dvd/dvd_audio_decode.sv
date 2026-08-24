@@ -143,15 +143,41 @@ module dvd_audio_decode #(
     wire rst = ~rst_n;
 
     // ---------------------------------------------------------------------
-    // 48 kHz sample tick — fractional NCO so the average rate is exact even
-    // though CLK_HZ/AUD_HZ (27e6/48e3 = 562.5) isn't an integer.
-    //   acc += INC each clk; aud_ce on overflow.  INC = AUD_HZ/CLK_HZ * 2^32.
+    // Sample tick — fractional NCO so the average rate is exact even though
+    // CLK_HZ/rate (27e6/48e3 = 562.5) isn't an integer.
+    //   acc += INC each clk; aud_ce on overflow.  INC = rate/CLK_HZ * 2^32.
+    //
+    // RATE SELECT (VCD/SVCD): DVD audio is always 48 kHz, but MP2 on VCD/SVCD
+    // is 44.1 kHz (32 kHz also legal). The increment muxes on the MP2 header
+    // rate (mp2_decode.fs_o, qualified by its sync) whenever the active codec
+    // is MP2; AC-3/DTS/LPCM stay 48 kHz. The select is latched ONLY while the
+    // drain gate is closed (!draining — load / seek / underrun re-arm), so a
+    // mid-play header rate change can't phase-kick the FIFO drain; the rate
+    // swap lands with the next scheduled release. The framework side needs
+    // nothing: sys/audio_out.v zero-order-holds AUDIO_L/R at its own fixed
+    // 48 kHz, so a 44.1 kHz core tick gives correct pitch (NN-resample only).
+    // (Localparams are elaboration-time constants — the Quartus-17 N'() cast
+    // hazard applies to runtime expressions, not these.)
     // ---------------------------------------------------------------------
-    localparam logic [63:0] NCO_INC64 = (64'(AUD_HZ) << 32) / CLK_HZ;
-    localparam logic [31:0] NCO_INC   = NCO_INC64[31:0];
+    localparam logic [63:0] NCO_INC64   = (64'(AUD_HZ) << 32) / CLK_HZ;
+    localparam logic [31:0] NCO_INC     = NCO_INC64[31:0];
+    localparam logic [63:0] NCO441_64   = (64'd44100 << 32) / CLK_HZ;
+    localparam logic [31:0] NCO_INC_441 = NCO441_64[31:0];
+    localparam logic [63:0] NCO32K_64   = (64'd32000 << 32) / CLK_HZ;
+    localparam logic [31:0] NCO_INC_32K = NCO32K_64[31:0];
+
+    // fs coding matches the MP2 header: 0 = 44.1 k, 1 = 48 k (reset), 2 = 32 k.
+    // nco_fs is latched in the drain-gate controller at the end of this file
+    // (where `draining`/`cur_codec` are in scope — declaration-before-use).
+    wire [1:0] mp2_fs;
+    wire       mp2_synced;
+    logic [1:0] nco_fs;
+
     // Effective increment = nominal + av_sync trim (signed, ±0.5% so always > 0).
     // av_sync genlocks the audio sample rate to the video-referenced STC.
-    wire signed [33:0] nco_inc_s   = $signed({2'b00, NCO_INC}) + $signed(nco_trim);
+    wire [31:0] nco_inc_base = (nco_fs == 2'd0) ? NCO_INC_441 :
+                               (nco_fs == 2'd2) ? NCO_INC_32K : NCO_INC;
+    wire signed [33:0] nco_inc_s   = $signed({2'b00, nco_inc_base}) + $signed(nco_trim);
     wire        [31:0] nco_inc_eff = nco_inc_s[31:0];
     logic [32:0] nco_acc;
     logic        aud_ce;
@@ -606,8 +632,9 @@ module dvd_audio_decode #(
         .audio_l        (mp2_l),
         .audio_r        (mp2_r),
         .aud_valid      (mp2_aud_valid),
-        .synced         (),
+        .synced         (mp2_synced),
         .err_unsupported(mp2_err),
+        .fs_o           (mp2_fs),
         .dbg_s_nz       (dbg_mp2_s_nz),
         .dbg_pcm_nz     (dbg_mp2_pcm_nz)
     );
@@ -690,16 +717,23 @@ module dvd_audio_decode #(
     assign drain_en = draining || !sched_en;
 
     // ---- Playback-position tracker (drift instrument; see dbg_play_err port) ----
-    // pos_acc8 counts the playback position since the last release in 1/8-tick
-    // units: 90000/48000 = 1.875 = 15/8 ticks per sample, so += 15 per play tick.
-    // play_anchor is the PTS the release scheduled the FIFO head for (the head
-    // sample exits when STC == play_pts + av_ofs, so err starts ~av_ofs; on a
-    // fallback release with no latched PTS, anchor = STC and err starts ~0 —
-    // either way the SLOPE is the measurement).
+    // Counts the playback position since the last release in whole 90 kHz ticks
+    // plus a per-rate fractional accumulator, so the slope is exact at every
+    // sample rate: 90000/48000 = 1+7/8, 90000/44100 = 2+2/49, 90000/32000 =
+    // 2+13/16 ticks per sample. play_anchor is the PTS the release scheduled
+    // the FIFO head for (the head sample exits when STC == play_pts + av_ofs,
+    // so err starts ~av_ofs; on a fallback release with no latched PTS,
+    // anchor = STC and err starts ~0 — either way the SLOPE is the measurement).
     logic [32:0] play_anchor;
-    logic [36:0] pos_acc8;
+    logic [33:0] pos_ticks;
+    logic [5:0]  pos_frac;
+    wire  [1:0]  pos_int = (nco_fs == 2'd1) ? 2'd1 : 2'd2;
+    wire  [5:0]  pos_num = (nco_fs == 2'd0) ? 6'd2  : (nco_fs == 2'd2) ? 6'd13 : 6'd7;
+    wire  [5:0]  pos_den = (nco_fs == 2'd0) ? 6'd49 : (nco_fs == 2'd2) ? 6'd16 : 6'd8;
+    wire  [6:0]  pos_frac_nx = {1'b0, pos_frac} + {1'b0, pos_num};
+    wire         pos_carry   = (pos_frac_nx >= {1'b0, pos_den});
     wire signed [34:0] play_err_w =
-        $signed({2'b0, stc}) - $signed({2'b0, play_anchor}) - $signed({1'b0, pos_acc8[36:3]});
+        $signed({2'b0, stc}) - $signed({2'b0, play_anchor}) - $signed({1'b0, pos_ticks});
 
     always_ff @(posedge clk) begin
         if (rst || !enable) begin
@@ -713,10 +747,18 @@ module dvd_audio_decode #(
             dbg_rearm_cnt  <= '0;
             dbg_fbrel_cnt  <= '0;
             play_anchor    <= '0;
-            pos_acc8       <= '0;
+            pos_ticks      <= '0;
+            pos_frac       <= '0;
+            nco_fs         <= 2'd1;    // 48 kHz until an MP2 header says otherwise
             dbg_play_err   <= '0;
         end else begin
             ce_play_d <= aud_ce_play;
+
+            // NCO rate select: MP2's header rate while MP2 is the active codec
+            // (44.1/32 kHz VCD/SVCD audio), else 48 kHz. Latched ONLY while the
+            // drain gate is closed so a swap can never phase-kick mid-playback.
+            if (!draining)
+                nco_fs <= (cur_codec == T_MP2 && mp2_synced) ? mp2_fs : 2'd1;
 
             // latch the phase reference: first PTS-tagged dispatch while armed
             if (!draining && !play_pts_valid && dispatch_pts_valid) begin
@@ -745,20 +787,26 @@ module dvd_audio_decode #(
                     draining    <= 1'b1;       // scheduled release (the normal path)
                     seen_valid  <= 1'b0;
                     play_anchor <= play_pts;
-                    pos_acc8    <= '0;
+                    pos_ticks   <= '0;
+                    pos_frac    <= '0;
                 end else if (armed_data && (&arm_timer)) begin
                     draining    <= 1'b1;       // fallback: free-run rather than wedge
                     seen_valid  <= 1'b0;
                     play_anchor <= play_pts_valid ? play_pts : stc;
-                    pos_acc8    <= '0;
+                    pos_ticks   <= '0;
+                    pos_frac    <= '0;
                     if (!(&dbg_fbrel_cnt)) dbg_fbrel_cnt <= dbg_fbrel_cnt + 1'b1;
                 end
             end else begin
                 armed_data <= 1'b0;
                 arm_timer  <= '0;
-                // playback-position tracker: advance 15/8 ticks per play tick and
-                // publish the error while playing (held across armed gaps)
-                if (aud_ce_play) pos_acc8 <= pos_acc8 + 37'd15;
+                // playback-position tracker: advance the rate-exact ticks/sample
+                // (integer + fraction) per play tick and publish the error while
+                // playing (held across armed gaps)
+                if (aud_ce_play) begin
+                    pos_ticks <= pos_ticks + {32'd0, pos_int} + {33'd0, pos_carry};
+                    pos_frac  <= pos_carry ? (pos_frac_nx[5:0] - pos_den) : pos_frac_nx[5:0];
+                end
                 dbg_play_err <= play_err_w[19:4];
                 // (v5.2's live re-phase on an av_ofs change was REVERTED in v5.3:
                 //  re-arming with FULL decode FIFOs deadlocks — play_pts can only

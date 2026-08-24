@@ -60,6 +60,12 @@ module mp2_decode #(
     output logic        synced,
     output logic        err_unsupported,
 
+    // Header sampling_frequency (valid while synced): 0 = 44.1 kHz, 1 = 48 kHz,
+    // 2 = 32 kHz (3 = reserved, rejected via err_unsupported). dvd_audio_decode
+    // muxes its output NCO increment on this so VCD/SVCD 44.1 kHz MP2 plays at
+    // the correct rate instead of ~8.8 % fast against a fixed 48 kHz tick.
+    output logic [1:0]  fs_o,
+
     // TEMPORARY (MP2 silent-audio bisect v2): data-liveness taps.
     //   dbg_s_nz   — pulses on any NONZERO dequantized subband-sample write
     //                (parse + dequant produced real data)
@@ -415,6 +421,7 @@ module mp2_decode #(
     logic        prot_nocrc;
     logic [3:0]  bidx;
     logic [1:0]  fs, mode, mode_ext;
+    assign fs_o = fs;
     logic        padbit;
     logic        variant_cd;
     logic [4:0]  sblimit, bound;
