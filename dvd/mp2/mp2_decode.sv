@@ -58,7 +58,16 @@ module mp2_decode #(
     output logic        aud_valid,
 
     output logic        synced,
-    output logic        err_unsupported
+    output logic        err_unsupported,
+
+    // TEMPORARY (MP2 silent-audio bisect v2): data-liveness taps.
+    //   dbg_s_nz   — pulses on any NONZERO dequantized subband-sample write
+    //                (parse + dequant produced real data)
+    //   dbg_pcm_nz — pulses on any NONZERO PCM pair pushed to the output FIFO
+    //                (synthesis produced real data)
+    // Remove with the probe once the HW fault is found.
+    output logic        dbg_s_nz,
+    output logic        dbg_pcm_nz
 );
 
     // ------------------------------------------------------------------
@@ -109,7 +118,7 @@ module mp2_decode #(
         case (c)
             5'd0, 5'd1, 5'd3: cls_dsh = 4'd1;
             5'd2:             cls_dsh = 4'd2;
-            default:          cls_dsh = 4'(c) - 4'd1;
+            default:          cls_dsh = c[3:0] - 4'd1;
         endcase
     endfunction
 
@@ -296,7 +305,9 @@ module mp2_decode #(
     logic [31:0] pcm_head;
     logic        head_ok;               // delayed non-empty: guards the
                                         // registered-head read-during-write race
-    wire [PCM_AW:0] pcm_free = (PCM_AW+1)'(PCM_DEPTH) - pcm_cnt;
+    localparam logic [PCM_AW:0] PCM_DEPTH_C  = PCM_DEPTH[PCM_AW:0];
+    localparam logic [PCM_AW:0] SLOT_RESERVE = 32;
+    wire [PCM_AW:0] pcm_free = PCM_DEPTH_C - pcm_cnt;
     wire pcm_pop = aud_ce && head_ok;
 
     always_ff @(posedge clk) begin
@@ -317,6 +328,10 @@ module mp2_decode #(
         end
     end
     always_ff @(posedge clk) pcm_head <= pcm_mem[pcm_rp];
+
+    // probe taps (see port comment)
+    assign dbg_s_nz   = smem_we  && (smem_wd  != '0);
+    assign dbg_pcm_nz = pcm_push && (pcm_wdata != '0);
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -343,19 +358,19 @@ module mp2_decode #(
     function automatic signed [26:0] sat27 (input signed [48:0] v);
         if      (v >  49'sd67108863)  sat27 = 27'sd67108863;
         else if (v < -49'sd67108864)  sat27 = 27'sh4000000;    // -2^26
-        else                          sat27 = 27'(v);
+        else                          sat27 = v[26:0];
     endfunction
 
     function automatic signed [31:0] sat32 (input signed [47:0] v);
         if      (v >  48'sd2147483647)  sat32 = 32'sd2147483647;
         else if (v < -48'sd2147483648)  sat32 = 32'sh80000000;  // -2^31
-        else                            sat32 = 32'(v);
+        else                            sat32 = v[31:0];
     endfunction
 
     function automatic signed [15:0] sat16 (input signed [53:0] v);
         if      (v >  54'sd32767)  sat16 = 16'sd32767;
         else if (v < -54'sd32768)  sat16 = 16'sh8000;           // -32768
-        else                       sat16 = 16'(v);
+        else                       sat16 = v[15:0];
     endfunction
 
     // requantizer seed: ((code ^ msb) sign-extended) <<< (25-nb), plus D.
@@ -366,9 +381,9 @@ module mp2_decode #(
         logic signed [25:0] xq;
         begin
             x = code ^ (17'd1 << (nb - 5'd1));
-            if (x[nb-5'd1]) xs = signed'(x | ~((17'd1 << nb) - 17'd1));
-            else            xs = signed'(x &  ((17'd1 << nb) - 17'd1));
-            xq = 26'(xs) <<< (5'd25 - nb);
+            if (x[nb-5'd1]) xs = $signed(x | ~((17'd1 << nb) - 17'd1));
+            else            xs = $signed(x &  ((17'd1 << nb) - 17'd1));
+            xq = {{9{xs[16]}}, xs} <<< (5'd25 - nb);
             dq_seed = xq + (26'sd1 <<< (5'd24 - {1'b0, dsh}));
         end
     endfunction
@@ -428,6 +443,7 @@ module mp2_decode #(
     logic [3:0]  div_cnt;
     logic        div_phase;
     logic [4:0]  racc;                 // comb temp (blocking)
+    logic [4:0]  racc_sub;             // comb temp: racc - divisor
     logic        racc_ge;
 
     // dequant datapath
@@ -442,7 +458,17 @@ module mp2_decode #(
     logic signed [53:0] wmac;
     logic [1:0]  pipe_v;
     logic signed [15:0] pcm_t;         // comb temp (blocking)
+    logic [31:0] skip_rem;             // comb temp (blocking)
     logic [31:0] skip_target;          // comb temp (blocking)
+
+    // explicit signed product wires (NO size casts around multiplies /
+    // shifts anywhere in this file: Quartus 17 mis-synthesizes the
+    // size-cast-of-expression forms — the netlist reduced
+    // signed'(27'(dq_p1 >>> 16)) to ONE BIT (dq_p1[16]) and the decoder
+    // played silence on HW while every Icarus sim was bit-exact. Netlist
+    // cosim reproduced it; part-selects and $signed() synthesize right.
+    wire signed [42:0] mat_prod = nrom_rd * smem_rd;
+    wire signed [49:0] win_prod = drom_rd * vmem_rd;
 
     wire ch_top = nch2;
     wire shared_alloc_reuse = (sb >= bound) && ch;   // alloc walk: ch1 of a
@@ -489,7 +515,7 @@ module mp2_decode #(
             ST_INIT: begin
                 vmem_wa <= init_cnt; vmem_wd <= '0; vmem_we <= 1'b1;
                 if (init_cnt < 11'd256) begin
-                    smem_wa <= 8'(init_cnt); smem_wd <= '0; smem_we <= 1'b1;
+                    smem_wa <= init_cnt[7:0]; smem_wd <= '0; smem_we <= 1'b1;
                 end
                 init_cnt <= init_cnt + 1'b1;
                 if (init_cnt == 11'd2047) st <= ST_HUNT0;
@@ -734,26 +760,25 @@ module mp2_decode #(
             end
             ST_DIV: begin
                 racc    = {div_r, div_n[div_cnt]};
-                racc_ge = (racc >= {1'b0, cls_div(cls)});
-                div_r <= racc_ge ? 4'(racc - {1'b0, cls_div(cls)}) : racc[3:0];
+                racc_ge  = (racc >= {1'b0, cls_div(cls)});
+                racc_sub = racc - {1'b0, cls_div(cls)};
+                div_r <= racc_ge ? racc_sub[3:0] : racc[3:0];
                 div_q <= {div_q[8:0], racc_ge};
                 if (div_cnt == 4'd0) begin
                     if (!div_phase) begin
-                        s_raw[0] <= {13'd0, racc_ge ? 4'(racc - {1'b0, cls_div(cls)})
-                                                    : racc[3:0]};
+                        s_raw[0] <= {13'd0, racc_ge ? racc_sub[3:0] : racc[3:0]};
                         div_n <= {div_q[8:0], racc_ge};
                         div_q <= '0; div_r <= '0; div_cnt <= 4'd9;
                         div_phase <= 1'b1;
                     end else begin
-                        s_raw[1] <= {13'd0, racc_ge ? 4'(racc - {1'b0, cls_div(cls)})
-                                                    : racc[3:0]};
+                        s_raw[1] <= {13'd0, racc_ge ? racc_sub[3:0] : racc[3:0]};
                         s_raw[2] <= {7'd0, div_q[8:0], racc_ge};
                         dq_k <= 2'd0; st <= ST_DQ_SCF;
                     end
                 end else div_cnt <= div_cnt - 4'd1;
             end
             ST_SMP_UREQ: begin
-                br_req <= 1'b1; br_nbits <= 6'(cls_nb(cls));
+                br_req <= 1'b1; br_nbits <= {1'b0, cls_nb(cls)};
                 st <= ST_SMP_UACK;
             end
             ST_SMP_UACK: if (br_ack) begin
@@ -771,11 +796,11 @@ module mp2_decode #(
                 st <= ST_DQ_M2;
             end
             ST_DQ_M2: begin
-                dq_p1 <= dq_s * signed'({1'b0, cls_c(cls)});
+                dq_p1 <= dq_s * $signed({1'b0, cls_c(cls)});
                 st <= ST_DQ_WR;
             end
             ST_DQ_WR: begin
-                dq_p2 = signed'(27'(dq_p1 >>> 16)) * signed'({1'b0, scfrom_rd});
+                dq_p2 = $signed(dq_p1[42:16]) * $signed({1'b0, scfrom_rd});
                 smem_wa <= {dq_k, ch, sb};
                 smem_wd <= sat27(dq_p2 >>> 20);
                 smem_we <= 1'b1;
@@ -799,7 +824,7 @@ module mp2_decode #(
 
             // ---- synthesis: one 32-sample slot per channel ----
             ST_SYN_WAIT: begin
-                if (pcm_free >= (PCM_AW+1)'(32)) begin
+                if (pcm_free >= SLOT_RESERVE) begin
                     ch <= 1'b0;
                     st <= ST_SYN_VOFF;
                 end
@@ -816,7 +841,7 @@ module mp2_decode #(
                 end
                 pipe_v <= {pipe_v[0], (wk < 6'd32)};
                 if (pipe_v[1])
-                    mac <= mac + 48'(nrom_rd * smem_rd);
+                    mac <= mac + mat_prod;
                 if (wk == 6'd34) st <= ST_MAT_VWR;
                 else wk <= wk + 6'd1;
             end
@@ -846,7 +871,7 @@ module mp2_decode #(
                 end
                 pipe_v <= {pipe_v[0], (wk < 6'd16)};
                 if (pipe_v[1])
-                    wmac <= wmac + 54'(drom_rd * vmem_rd);
+                    wmac <= wmac + win_prod;
                 if (wk == 6'd18) st <= ST_WIN_OUT;
                 else wk <= wk + 6'd1;
             end
@@ -892,13 +917,14 @@ module mp2_decode #(
             // ---- skip ancillary data to the frame boundary ----
             ST_SKIP: begin
                 skip_target = sync_bitpos + {15'd0, frame_bytes, 3'd0};   // *8
+                skip_rem    = skip_target - br_bitpos;
                 if (br_bitpos >= skip_target) begin
                     if (br_bitpos > skip_target) err_unsupported <= 1'b1;
                     st <= ST_HUNT0;
                 end else begin
                     br_req <= 1'b1;
                     br_nbits <= (skip_target - br_bitpos >= 32'd16)
-                                ? 6'd16 : 6'(skip_target - br_bitpos);
+                                ? 6'd16 : skip_rem[5:0];
                     st <= ST_SKIPW;
                 end
             end

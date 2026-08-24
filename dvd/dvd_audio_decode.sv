@@ -126,7 +126,16 @@ module dvd_audio_decode #(
     // = playback LATE. Starts ~av_ofs at each release; the SLOPE is the read
     // (a slope with no re-arm events = STC-vs-NCO rate error; a step at a
     // fallback release = re-phased late). Held while armed.
-    output logic [15:0] dbg_play_err
+    output logic [15:0] dbg_play_err,
+
+    // TEMPORARY (MP2 silent-audio bisect, MP2_TONE_PROBE in emu): which codec
+    // the output mux has selected, the MP2 core's sample strobe, and the v2
+    // data-liveness taps. Cheap wires; remove with the probe once the HW
+    // fault is found.
+    output logic [1:0]  dbg_cur_codec,
+    output logic        dbg_mp2_avalid,
+    output logic        dbg_mp2_s_nz,
+    output logic        dbg_mp2_pcm_nz
 );
 
     localparam logic [1:0] T_AC3 = 2'd0, T_DTS = 2'd1, T_LPCM = 2'd2, T_MP2 = 2'd3;
@@ -598,7 +607,9 @@ module dvd_audio_decode #(
         .audio_r        (mp2_r),
         .aud_valid      (mp2_aud_valid),
         .synced         (),
-        .err_unsupported(mp2_err)
+        .err_unsupported(mp2_err),
+        .dbg_s_nz       (dbg_mp2_s_nz),
+        .dbg_pcm_nz     (dbg_mp2_pcm_nz)
     );
 
     // ---------------------------------------------------------------------
@@ -668,6 +679,9 @@ module dvd_audio_decode #(
 
     wire active_avalid = (cur_codec == T_LPCM) ? lpcm_aud_valid :
                          (cur_codec == T_MP2)  ? mp2_aud_valid  : ac3_aud_valid;
+
+    assign dbg_cur_codec  = cur_codec;
+    assign dbg_mp2_avalid = mp2_aud_valid;
     // start when stc - play_pts - av_ofs >= 0 (35-bit signed headroom)
     wire signed [34:0] start_delta =
         $signed({2'b0, stc}) - $signed({2'b0, play_pts}) - 35'($signed(av_ofs));

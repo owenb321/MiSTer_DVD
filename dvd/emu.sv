@@ -292,8 +292,43 @@ assign AUDIO_S      = 1;
 assign AUDIO_MIX    = 0;
 // css_scrambled: CSS-encrypted source detected (sticky latch by the demux
 // instance below) — mute the PCM out (scrambled AC-3 decodes to loud static).
+// probe taps (declared unconditionally — the instantiation below always
+// connects them; the tone logic itself is behind the define)
+wire [1:0] dbg_cur_codec_w;
+wire       dbg_mp2_avalid_w;
+wire       dbg_mp2_s_nz_w, dbg_mp2_pcm_nz_w;
+`ifdef MP2_TONE_PROBE
+// ============ TEMPORARY HW DIAGNOSTIC v2 (MP2 silent-audio bisect) ===========
+// Round-1 result: dispatch + decode-FSM + FIFO pops all run (both v1 tones),
+// so the decoder emits perfectly-timed ZERO samples. v2 probes DATA liveness:
+//   LEFT  = 1 kHz tone if any NONZERO dequantized subband sample was written
+//           in the last ~39 ms (parse + dequant produce real data)
+//   RIGHT = 1 kHz tone if any NONZERO PCM pair was pushed in the last ~39 ms
+//           (synthesis produces real data)
+// Interpretation: both silent -> the parse yields empty allocations / zero
+// samples (bit-reader/alloc path in silicon); LEFT only -> synthesis zeros
+// the data (N/D ROM or V-ring/MAC path); both tones -> real PCM is pushed and
+// the fault is in the FIFO-pop/output-latch path. Remove after the bisect.
+reg [14:0] probe_div;  reg probe_sq;
+always @(posedge clk_sys) begin
+    probe_div <= (probe_div == 15'd13499) ? 15'd0 : probe_div + 15'd1;  // 1 kHz square
+    if (probe_div == 15'd13499) probe_sq <= ~probe_sq;
+end
+reg [19:0] probe_act_s, probe_act_p;        // ~39 ms activity windows
+always @(posedge clk_sys) begin
+    if (dbg_mp2_s_nz_w)        probe_act_s <= 20'hFFFFF;
+    else if (probe_act_s != 0) probe_act_s <= probe_act_s - 20'd1;
+    if (dbg_mp2_pcm_nz_w)      probe_act_p <= 20'hFFFFF;
+    else if (probe_act_p != 0) probe_act_p <= probe_act_p - 20'd1;
+end
+wire signed [15:0] probe_tone = probe_sq ? 16'sd8000 : -16'sd8000;
+assign AUDIO_L = (probe_act_s != 0) ? probe_tone : ((pass_mode | css_scrambled) ? 16'sd0 : dec_audio_l);
+assign AUDIO_R = (probe_act_p != 0) ? probe_tone : ((pass_mode | css_scrambled) ? 16'sd0 : dec_audio_r);
+// =============================================================================
+`else
 assign AUDIO_L      = (pass_mode | css_scrambled) ? 16'sd0 : dec_audio_l;
 assign AUDIO_R      = (pass_mode | css_scrambled) ? 16'sd0 : dec_audio_r;
+`endif
 assign SPDIF_PASS_EN = pass_mode;
 
 assign SD_SCK       = 0;
@@ -2451,7 +2486,11 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .dbg_rearm_cnt      (dbg_aud_rearm_cnt),
     .dbg_fbrel_cnt      (dbg_aud_fbrel_cnt),
     .dbg_skip_cnt       (dbg_aud_skip_cnt),
-    .dbg_play_err       (dbg_aud_play_err)
+    .dbg_play_err       (dbg_aud_play_err),
+    .dbg_cur_codec      (dbg_cur_codec_w),
+    .dbg_mp2_avalid     (dbg_mp2_avalid_w),
+    .dbg_mp2_s_nz       (dbg_mp2_s_nz_w),
+    .dbg_mp2_pcm_nz     (dbg_mp2_pcm_nz_w)
 );
 wire [32:0] dbg_aud_play_pts;
 wire [3:0]  dbg_aud_rearm_cnt, dbg_aud_fbrel_cnt;
