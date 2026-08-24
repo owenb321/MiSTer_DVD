@@ -824,8 +824,8 @@ the old "unknown" sentinel), reframed by `dvd/mp2_reframer.sv`, decoded by
 `tools/mp2_ref.py`** (which is itself ≤1 LSB vs ffmpeg float decode) on synthetic
 48 kHz fixtures AND real VCD content, plus a full-chain TB (real `-f dvd` VOB →
 ps_demux → reframers → audio_ring → dvd_audio_decode). Suite:
-`bench/dvd/run_mp2.sh`. 44.1 kHz (VCD) decodes bit-correct but plays ~8.8 % fast
-against the fixed 48 kHz NCO (future-VCD item).
+`bench/dvd/run_mp2.sh`. ~~44.1 kHz (VCD) plays ~8.8 % fast~~ — ✅ FIXED by the
+VCD/SVCD feature below (NCO muxes on the MP2 header rate).
 **SIF ANALOG FILL — ✅ HW-CONFIRMED 2026-08-24 (PR #2):** SIF content used to
 show in the upper-left quarter of the ANALOG output
 (the syncgen DE window tracks the decoded size; `re_interlace` is hardcoded 720-wide).
@@ -834,11 +834,31 @@ mode 2 (2× line repeat) + a syncgen-only effective-size mux in `mpeg2video.v` �
 on `analog_eff` (HDMI keeps ascal's scale; also fixes direct-video + un-clips the HUD).
 True 240p output was REJECTED: no exact-59.94 Hz 240p modeline exists at 1716
 dots/line, so it would drift against the fixed 48 kHz audio NCO — line-doubled 480i
-carries the same content. Sub-D1 MPEG-2 (704/544) intentionally NOT filled (user scope
-decision; one predicate away). Design: `docs/mpeg1.md` §B.3; overlay inverse contract:
-`docs/crt_anamorphic.md` §9b. Sim: `resample_chain_tb +sif=1` variants (`+sif` runs
-co-sim the addrgen walk vs the 2× closed form; `+hgrad` blend, `+crt` fields,
-`+siftog` runtime toggle), `crt_ov_map_tb` T1d/T6.
+carries the same content. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
+scope REVERSED 2026-08-24 by user decision: the predicate is now `< 720` (any sub-720
+width fills; SVCD 480 = exact 2:3), shipped with the VCD/SVCD feature below. Design:
+`docs/mpeg1.md` §B.3; overlay inverse contract: `docs/crt_anamorphic.md` §9b. Sim:
+`resample_chain_tb +sif=1`/`+hfill=1` variants (`+sif` runs co-sim the addrgen walk
+vs the 2× closed form; `+hgrad` blend, `+crt` fields, `+siftog` runtime toggle),
+`crt_ov_map_tb` T1d/T6.
+**VCD + SVCD playback (bin/cue direct) — implemented + sim-verified 2026-08-24
+(branch `feature/vcd-svcd-playback`), ⏳ HW-confirm pending — see
+`docs/vcd_svcd.md` (design + HW checklist).** Select the rip's data-track `.bin`
+(CONF_STR gained BIN/IMG/DAT): `dvd_iso_reader` detects raw MODE2/2352 by the
+sector sync at byte 0 (new S_CHK_RAW; RIFF/CDXA .DAT handled) and deblocks
+in-line — Form-2 payloads [24,2348) only, Form-1/ISO track skipped, counted
+wr_ptr advance — golden-model byte-exact (`tools/cd_deblock_ref.py`). `ps_demux`
+auto-detects MPEG-1 system streams per pack (12-byte packs; S_M1_HDR/S_M1_STD PES
+path reusing the S_PTS assembler; golden `tools/mpeg1_ps_ref.py`). MP2 output NCO
+muxes 44.1/48/32 kHz off the new `mp2_decode.fs_o`, latched only while the drain
+gate is closed. Whole-file seek + seek bar + pause on linear playback: raw seeks
+snap to a sector (= pack) boundary; flat `.mpg`/`.VOB` seeks re-sync via a
+post-seek 00 00 01 BA pack hunt (gated on `ps_demux.saw_pack`; `.m2v` stays
+linear-only). SVCD display: HDMI already correct (ascal + DAR latch, 16:9
+anamorphic included). Suite: `bench/dvd/run_vcd.sh` (real-VCD fixtures committed,
+`tools/vcd_fixtures.py`; full chain PCM bit-exact + NCO cadence proven). v1
+limitations (no VCD menus/PBC, no CD-DA tracks, no 2336-byte images, 23.976 film
+VCDs play fast, HUD time zero in linear modes): `docs/vcd_svcd.md` §5.
 
 ---
 

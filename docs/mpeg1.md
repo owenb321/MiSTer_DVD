@@ -42,12 +42,16 @@ In scope: DVD-compliant MPEG-1 video (both resolutions, D-pictures excluded — 
 forbids them), MP2 **stereo/mono/intensity-stereo at 48 kHz** decode to the existing
 stereo output (MP2 5.1-surround multichannel extension = format 3 stays unsupported;
 it is backwards compatible so the core stereo stream decodes fine and that IS the
-plan — user framing). 44.1 kHz (VCD) decodes correctly bit-wise but plays 8.8% fast
-against the fixed 48 kHz NCO — a future-VCD item, see §6.
+plan — user framing). ~~44.1 kHz (VCD) decodes correctly bit-wise but plays 8.8% fast
+against the fixed 48 kHz NCO~~ — **✅ FIXED 2026-08-24** (`feature/vcd-svcd-playback`):
+the output NCO now muxes on the MP2 header rate (44.1/48/32 kHz), see
+`docs/vcd_svcd.md` §2c.
 
-Out of scope (future VCD/SVCD): MPEG-1 **system** stream parsing (VCD pack/PES headers
-differ from DVD's MPEG-2 PS; ps_demux is MPEG-2-PS-only), .bin/.cue Mode2 sector
-deblocking, 44.1 kHz output rate, IEC 61937 MP2 passthrough.
+~~Out of scope (future VCD/SVCD)~~ — **✅ DELIVERED 2026-08-24**
+(`feature/vcd-svcd-playback`, `docs/vcd_svcd.md`): MPEG-1 **system** stream parsing
+(ps_demux auto-detects the pack flavour), .bin/.cue MODE2/2352 sector deblocking
+(in-fabric, `dvd_iso_reader` raw mode), and the 44.1 kHz output rate all shipped.
+Still out of scope: IEC 61937 MP2 passthrough (passthrough mode silences MP2).
 
 ## Test material
 
@@ -266,9 +270,10 @@ NTSC + PAL SIF fill the CRT cleanly, normal DVDs unregressed.** In-core 2× fill
 - **Detect** (`dvd/emu.sv`): two independent 1-bit flags off the clk_dec size taps,
   2-FF synced (the `pal_det` pattern): `sif_h` = width ≤360, `sif_v` = height ≤288.
   `sif_hfill_eff / sif_v2x_eff = analog_eff & flag`. Independence means 352×480
-  half-D1 would get horizontal-only fill, correctly. **Scope decision (user):
-  SIF widths only** — 704/544-wide MPEG-2 keeps today's behaviour (their thin stale
-  re-interlacer columns are a deferred follow-up, one predicate away).
+  half-D1 gets horizontal-only fill, correctly. ~~Scope decision (user): SIF widths
+  only~~ — **REVERSED 2026-08-24** (`feature/vcd-svcd-playback`): the width
+  predicate is now `< 720`, so SVCD 480-wide and DVD sub-D1 704/544 all fill on
+  analog (see `docs/vcd_svcd.md` §2d).
 - **Horizontal** — `disp_hstretch` retarget: `disp_hdst_w = 720` and
   `hcrop_en |= disp_hfill_en` in `mpeg2video.v`; 352→720 (qstep 125) and Crop+SIF
   256→720 (qstep 91) both satisfy the module's upscale RATIO CONTRACT — zero
@@ -341,15 +346,15 @@ in-loop effect of the mismatch-control difference is visible.
 
 ## §6 Known limitations / follow-ups
 
-- 44.1 kHz MP2 (VCD) plays 8.8% fast (fixed 48 kHz NCO); future: NCO reparam per
-  frame-header rate + av_sync AUD_HZ consistency (locations mapped in the audio
-  agent report / `docs/fabric_audio.md`).
+- ~~44.1 kHz MP2 (VCD) plays 8.8% fast (fixed 48 kHz NCO)~~ — **✅ FIXED
+  2026-08-24** (`feature/vcd-svcd-playback`): the NCO muxes on the MP2 header rate
+  (44.1/48/32 kHz), glitch-free at drain re-arm; see `docs/vcd_svcd.md` §2c.
 - MP2 passthrough (IEC 61937 Pc=0x0004) not implemented; passthrough mode silences
   MP2 (correct fallback).
 - MPEG-2 multichannel extension (attr format 3) stays unsupported (HUD notice).
 - Analog CRT with SIF sources: ✅ fixed by the in-core 2× fill (B.3,
-  ✅ HW-CONFIRMED 2026-08-24, PR #2). Wider sub-D1 MPEG-2 (704/544) still shows
-  thin stale re-interlacer columns on analog — deferred follow-up (one predicate
-  away, B.3).
+  ✅ HW-CONFIRMED 2026-08-24, PR #2). ~~Wider sub-D1 MPEG-2 (704/544) still shows
+  thin stale re-interlacer columns~~ — **✅ FIXED 2026-08-24**: the fill predicate
+  widened to `< 720` (`feature/vcd-svcd-playback`, `docs/vcd_svcd.md` §2d).
 - MPEG-1 aspect_ratio_information is a pixel-AR table (differs from MPEG-2 DAR
   codes) — v1 maps to 4:3 (DVD MPEG-1 is 4:3 by spec).

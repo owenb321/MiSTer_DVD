@@ -40,6 +40,11 @@ video format, 352×240/352×288); NTSC and PAL auto-detected from the stream; pr
 and native 480i/576i output; 3:2 pulldown handling for film; PTS-driven A/V sync with a
 display-refresh-locked frame-rate governor.
 
+**Video CD / Super Video CD** — bin/cue rips play directly: select the data-track
+`.bin` and the core strips the raw CD sectors in fabric, demuxes the MPEG-1 (VCD) or
+MPEG-2 (SVCD) system stream, and plays it with correct 44.1 kHz audio pitch, seek and
+pause. SVCD's 480-wide picture fills both HDMI and the analog CRT output. No menus/PBC.
+
 **Analog / CRT** — two simultaneous rasters: the progressive one for HDMI, plus a native
 15 kHz 480i/576i raster on the analog pins. It engages from `MiSTer.ini` alone, like any
 other core. A field-passthrough mode hands the CRT the disc's authored fields 1:1.
@@ -66,14 +71,17 @@ HUD and seek bar.
 - **Only 720×480, 720×576 and the MPEG-1 SIF sizes (352×240, 352×288) are well
   tested.** Other DVD-compliant MPEG-2 resolutions (704×480, 352×480 half-D1) are
   accepted by the spec but have had little or no testing here.
-- **MPEG-1 SIF content is scaled to fill the analog CRT output in-core** (2×
-  line repeat + a 352→720 stretch, engaged only while the analog output is active;
-  HDMI keeps the framework scaler's cleaner upscale). A true 240p output raster is
-  deliberately not offered: the core's A/V sync requires the raster to run at the
-  exact content rate against the fixed audio clock, and no exact-rate 240p modeline
-  exists at the 27 MHz dot clock — line-doubled 480i carries the same content to a
-  CRT, which is what DVD players do. Wider sub-D1 MPEG-2 (704/544-wide) is not
-  scaled and remains lightly tested on analog.
+- **Sub-720 content is scaled to fill the analog CRT output in-core** (MPEG-1 SIF
+  gets a 2× line repeat + 352→720 stretch; SVCD 480-wide, DVD 704/544 sub-D1 and any
+  other sub-720 width get the horizontal fill; engaged only while the analog output
+  is active — HDMI keeps the framework scaler's cleaner upscale). A true 240p output
+  raster is deliberately not offered: the core's A/V sync requires the raster to run
+  at the exact content rate against the fixed audio clock, and no exact-rate 240p
+  modeline exists at the 27 MHz dot clock — line-doubled 480i carries the same
+  content to a CRT, which is what DVD players do.
+- **VCD/SVCD is basic playback**: no VCD menus/PBC or segment stills, one `.bin` per
+  movie track, no CD-DA audio tracks, no 2336-byte-sector images, and a (rare)
+  23.976-coded film VCD would play fast — see `docs/vcd_svcd.md`.
 - **Very demanding scenes may drop a frame.** The inherited decoder has a motion-comp /
   IDCT throughput ceiling, and on the heaviest content it can fall behind the display
   cadence. The frame-rate governor absorbs this by dropping a B-frame to stay in step —
@@ -125,17 +133,17 @@ Put the `.iso` anywhere the MiSTer file browser can reach it and select it from 
 core's `Load Video` entry. The core also accepts bare `.VOB`, `.mpg` and `.m2v` streams,
 which it plays linearly without navigation.
 
-**Video CDs:** the core doesn't read bin/cue images directly, but VCD content is
-MPEG-1 — which the core decodes — so a one-step conversion makes them playable:
-
-```bash
-tools/vcd_to_vob.sh "MYDISC (Track 2).bin" mydisc.vob
-```
-
-This strips the CD sectors, stream-copies the original MPEG-1 video bit-for-bit, and
-re-encodes only the audio (44.1 kHz → the DVD-standard 48 kHz). There is also
-`tools/make_mpeg1_test.sh` to transcode any video file into a DVD-spec MPEG-1/MP2
-`.vob`.
+**Video CDs and Super Video CDs play directly from the rip** — select the bin/cue
+rip's **data-track `.bin`** (usually "Track 2"; the small Track 1 is the ISO
+filesystem) from `Load Video`. The core detects the raw CD sectors by content, strips
+them in fabric, and plays the contained MPEG-1 (VCD) or MPEG-2 (SVCD) stream with
+correct 44.1 kHz audio pitch, A/V sync, seek and pause. Single-file whole-disc `.bin`
+images and raw `.img`/extracted `.DAT` files work too; `.cue` sheets themselves are
+not selectable (text). VCDs have no CSS, so no decryption step is ever needed.
+Limitations: no VCD menus/PBC, one `.bin` per movie track, and audio-CD tracks don't
+play — see `docs/vcd_svcd.md`. (`tools/vcd_to_vob.sh`, the previous PC-side
+conversion route, still works but is no longer needed; `tools/make_mpeg1_test.sh`
+transcodes any video file into a DVD-spec MPEG-1/MP2 `.vob`.)
 
 DVD images are large, so **loading from a NAS share works and is often more practical
 than filling the SD card**. One requirement catches people out:
