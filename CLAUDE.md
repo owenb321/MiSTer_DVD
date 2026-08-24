@@ -49,6 +49,19 @@ leave enough hints to pick up cleanly:
   name the relevant files/modules/testbenches so they're easy to locate.
 - Keep `docs/roadmap.md` current — it's the canonical "what's next" across sessions.
 
+### ★ Keep README.md current (mandatory — it is the user-facing contract)
+
+`README.md` states what the core does and doesn't do — "What works", "Known
+limitations", supported formats/resolutions, tools, controls, settings, on-screen
+messages, acknowledgements. **Whenever a change invalidates or adds to any statement in
+the README, update the README in the SAME change.** A README that still lists a shipped
+feature as a limitation (or vice versa) misleads every user and evaluator who reads it
+— treat it exactly like a stale status marker: a documentation bug, fix on sight.
+Concrete triggers: a new codec/format/resolution, a limitation removed or discovered, a
+new user-facing tool in `tools/`, new OSD settings or buttons, new on-screen messages,
+new external references worth acknowledging. (Instituted 2026-08-24 after the MPEG-1/MP2
+feature landed while the README still said "MPEG-1 video is not supported".)
+
 ### ★ Update status markers when a feature completes (mandatory — a stale marker is a bug)
 
 The docs went stale once (2026-07-09 reconciliation, PR after fj#93) because status wording
