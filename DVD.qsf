@@ -537,4 +537,10 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # (USE_DOCKER tools/seed_sweep.sh, FMAX_MIN=86.0): SEED 7 routes + PASSES both corners
 # (clk_dec 88.35 MHz @100C / 86.51 MHz @-40C) — first seed tried. Pinned SEED 7,
 # committed with the branch per the rule above.
-set_global_assignment -name SEED 7
+#
+# VCD/SVCD netlist (2026-08-24, feature/vcd-svcd-playback, ALM 97%): the inherited
+# SEED 7 came in MARGINAL (clk_dec 90.03 @100C / 85.46 @-40C — 0.54 under the cold
+# gate). Re-swept (USE_DOCKER tools/seed_sweep.sh, FMAX_MIN=86.0): seeds 9/11/13
+# FAILED (75-86 range); SEED 5 routes + PASSES both corners (87.70 @100C /
+# 88.88 @-40C) -> releases/DVD_vcdsvcd_20260825_0131.rbf. Pinned SEED 5.
+set_global_assignment -name SEED 5
