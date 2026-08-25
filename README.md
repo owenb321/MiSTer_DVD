@@ -246,7 +246,7 @@ that path. The rest (`Debug Overlay`, `Title VTS`, `Audio Genlock`, `Force 4:3 S
 | Message | Meaning |
 |---|---|
 | `CSS ENCRYPTED` | The image is an undecrypted rip. Audio is muted; re-rip the disc. |
-| `UNSUPPORTED IMAGE` | Not an ISO9660 DVD image (e.g. UDF-only), or not a playable stream. |
+| `UNSUPPORTED IMAGE` | Not an ISO9660 DVD image (e.g. UDF-only), or not a playable stream. Only raised after ~20 s of *actual streaming* with no picture, so slow media (a NAS spinning up) does not trigger it; it clears itself if a picture does appear. |
 | `AUDIO UNSUPPORTED` | The selected audio track is in a format the core cannot decode. |
 | `TITLE VTS nn` | Which title was auto-selected (shown only with Disc Menus Off). |
 

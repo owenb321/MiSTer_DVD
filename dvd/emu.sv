@@ -2184,21 +2184,53 @@ end
 // AND no video" trivially, so it latched UNSUPPORTED IMAGE after 5 s every time
 // — the failure message as a boot screen. Sticky from the first mount; the
 // re-arm on each subsequent mount is what actually clears the latch.
-localparam [27:0] IMG_WD = 28'd135_000_000;        // ~5 s @ 27 MHz
-reg [27:0] img_wd_cnt;
+// ⚠ STREAMING TIME, NOT WALL TIME (HW round 2, 2026-08-25): the window used to
+// run on wall time from the mount, so an image served off a slow share (user
+// report: a NAS whose drives spin up on first access) burned the entire 5 s
+// before the FIRST BYTE ever arrived — UNSUPPORTED IMAGE latched, the image then
+// loaded fine, and the sticky popup sat over correct playback. Two changes fix
+// that class of false positive for good:
+//   (1) the window only advances while sector data is ACTUALLY BEING DELIVERED
+//       (a sd_buff_wr write within IMG_IDLE). Any delivery stall — spin-up, a
+//       slow share, a re-seek — freezes the count instead of spending it, so the
+//       watchdog measures "streamed this long without a picture", which is the
+//       thing it was always trying to say.
+//   (2) the window is widened 5 s -> ~20 s of that active streaming. An
+//       unplayable image is not urgent to report; a wrong report is expensive.
+// And the latch now SELF-RETRACTS on video_live: the message asserts "this image
+// never produces a picture", so a decoded frame disproves it by construction and
+// it must not outlive that. Belt-and-braces against any future timing surprise.
+localparam [29:0] IMG_WD   = 30'd540_000_000;      // ~20 s of ACTIVE streaming @ 27 MHz
+localparam [24:0] IMG_IDLE = 25'd13_500_000;       // ~0.5 s with no delivered data = stalled
+reg [29:0] img_wd_cnt;
+reg [24:0] img_idle_cnt;                           // saturating "time since last sector byte"
 reg        img_unplayable;
 reg        media_seen;
+wire       img_streaming = (img_idle_cnt != IMG_IDLE);
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin
-        img_wd_cnt <= 28'd0; img_unplayable <= 1'b0; media_seen <= 1'b0;
-    end else if (start_streaming) begin           // fresh mount: re-arm
-        img_wd_cnt <= 28'd0; img_unplayable <= 1'b0; media_seen <= 1'b1;
-    end else if (!media_seen || video_live_s2 || iso_mode_w) begin
-        img_wd_cnt <= 28'd0;                      // idle, playing, or a real ISO
-    end else if (img_wd_cnt == IMG_WD) begin
-        img_unplayable <= 1'b1;
+        img_wd_cnt <= 30'd0; img_idle_cnt <= IMG_IDLE;
+        img_unplayable <= 1'b0; media_seen <= 1'b0;
     end else begin
-        img_wd_cnt <= img_wd_cnt + 28'd1;
+        // Delivery-activity detector (free-running, mount-independent): every
+        // sector-buffer write re-arms it; it saturates at IMG_IDLE = "nothing has
+        // arrived for ~0.5 s" = the stream is stalled, not slow.
+        if (sd_buff_wr)                     img_idle_cnt <= 25'd0;
+        else if (img_idle_cnt != IMG_IDLE)  img_idle_cnt <= img_idle_cnt + 25'd1;
+
+        if (start_streaming) begin                    // fresh mount: re-arm
+            img_wd_cnt <= 30'd0; img_unplayable <= 1'b0; media_seen <= 1'b1;
+        end else if (!media_seen || video_live_s2 || iso_mode_w) begin
+            img_wd_cnt <= 30'd0;                      // idle, playing, or a real ISO
+            if (video_live_s2) img_unplayable <= 1'b0;   // a picture disproves the verdict
+        end else if (!img_streaming) begin
+            // Delivery stalled: hold the window rather than spend it. This is the
+            // NAS spin-up case and it must not count against the image.
+        end else if (img_wd_cnt == IMG_WD) begin
+            img_unplayable <= 1'b1;
+        end else begin
+            img_wd_cnt <= img_wd_cnt + 30'd1;
+        end
     end
 end
 
