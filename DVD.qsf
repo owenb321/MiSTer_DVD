@@ -558,4 +558,12 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # (clk_dec 90.56 MHz @100C / 90.56 MHz @-40C) -> releases/DVD_wlentropy_20260825_2010.rbf.
 # Pinned SEED 8. Note the scatter: on this congested placement one seed lands and the rest
 # come in 10+ MHz low - sweep, never assume a neighbouring seed transfers.
-set_global_assignment -name SEED 8
+#
+# 0.1b VERSION-BUMP netlist (2026-08-25, chore/version-0.1b): proof that the CONF_STR
+# version string is part of the netlist - changing `CORE_VERSION "0.1a"` -> "0.1b" and
+# NOTHING else dropped SEED 8 to 81.66 MHz @100C (87.48 @-40C = hot corner fails). This is
+# why CLAUDE.md forbids putting a time/SHA in BUILD_DATE: it would re-roll this lottery on
+# EVERY compile. Re-swept (USE_DOCKER tools/seed_sweep.sh, FMAX_MIN=86.0): SEED 7 66.41,
+# then SEED 9 routes + PASSES both corners (clk_dec 90.70 MHz @100C / 90.14 MHz @-40C)
+# -> releases/DVD_v01b_20260825_2220.rbf. Pinned SEED 9.
+set_global_assignment -name SEED 9
