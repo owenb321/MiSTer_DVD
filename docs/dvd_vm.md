@@ -239,10 +239,77 @@ Events, serviced one at a time from V_IDLE (all latched):
 | `vm_pgc_end` | run the POST block (the reader has already **drained** — its stream cache AND, for a title-domain PGC, the decoder VBUF via the tail-drain wait; see `docs/dvd_nav.md` "Natural-transition tail drain") |
 | `vm_cell_cmd` | run that one cell command |
 | `btn_cmd_valid` | run the button's command (directly from the 64-bit register) |
-| `key_menu` | title: synthesized `CallSS VTSM Root` (sets `came_via_menukey`); menu: `LinkRSM` **only if `came_via_menukey`** (the movie menu↔title toggle), else re-invoke `CallSS VTSM Root` |
+| `key_menu` | title: synthesized `CallSS VTSM Root` (sets `came_via_menukey`); menu: `LinkRSM` **only if `came_via_menukey`** (the movie menu↔title toggle), else re-invoke `CallSS VTSM Root`. The **first** menu invocation of a mount retargets to `best_menu_vts` — see "Boot-chain menu shortcut" below |
 | `key_resume` | `LinkRSM` (Select with no buttons armed) — **only if `came_via_menukey`**, same gate as `key_menu` (see the Cluedo note below) |
 | `key_title` | B12 "Title" (the real-remote **Top Menu** key) — **✅ HW-CONFIRMED 2026-07-31 (PR fj#152)**: jump to the **VMGM Title menu** (entry 2) from anywhere. From a playing title also saves RSM + sets `came_via_menukey` (Menu/Select toggle back, like `key_menu`); from a menu it jumps **without touching RSM or the toggle** — a disc-driven menu's RSM is the boot trampoline and must not be re-blessed. `fb=FB_VMGM` (no VMGM Title entry → resume/auto-title). Tests: `dvd_vm_tb` [S17], `iso_reader_cluedo_menu_tb` [B] |
 | `key_return` | B13 "Return" (**GoUp**, libdvdnav `dvdnav_go_up`) — **✅ HW-CONFIRMED 2026-07-31 (PR fj#152)**: in-domain jump to the loaded PGC's authored `goup_pgcn` — the menu hierarchy's "one level up" pointer; mirrors the `LinkGoUpPGC` command exec (`fb=FB_NONE`). `goup_pgcn==0` (no authored parent — most discs, 16/22 in the library census) = strict no-op. HW: Atmosfear submenus return properly; Akira's goup targets its Root DISPATCHER whose fall-through is `RSM`, so Return there resumes the title (mid-film) or replays the boot warning (post-boot) — **authored**, identical under libdvdnav. Test: `dvd_vm_tb` [S18] |
+
+### Boot-chain menu shortcut — ⚠ DELIBERATE DEVIATION from libdvdnav (2026-08-25)
+
+**Symptom (user report, Atmosfear).** Press Menu while the copyright/warning screen the
+disc's First Play chain puts up is on screen, and instead of the main menu you get a clip
+that looks like it came from the end of the game.
+
+**It is the disc, not us — and that is exactly why we had to deviate.** Traced on the real
+ISO:
+
+```
+FP: g5=0x2000; g5=1; g3=0x44; JumpTT 68        <- VTS_68 = the FBI warning card (5 s)
+Menu -> menu_call(Root) on the PLAYING VTS, per spec
+VTSM(68) PGC1 pre:  ... g2 = 7 ; JumpSS VMGM 6
+VMGM  PGC6  pre:    g2 < 0x2c -> JumpSS VTSM(1, Root)
+VTSM(1)  PGC1 pre:  g2 != 0 -> LinkPGCN 5 -> (dispatch on g2==7) -> LinkPGCN 48
+VTSM(1)  PGC48 pre: g15 = rnd 6 ; g5 = g15 ; g3 = 1 ; JumpSS VMGM 2  -> JumpTT 1
+TT(1) plays program g5 = a random ~35 s Gatekeeper clip in the lava cavern
+  ...then its cell command (CallSS VMGM 9) finally reaches the main menu.
+```
+
+Every VTS's VTSM Root on this disc sets `g[2] = 7` — that PGC is **not a menu**, it is a
+dispatcher that records *"the player pressed Menu inside a VTS"* and routes on it. The
+disc's own VMGM Title entry (0x82) does the same thing, so `key_title` lands there too.
+**libdvdnav behaves identically** — verified by building its `examples/trace_menuearly.c`
+against the real ISO: `[CELL #1] Title=68` → `menu_call(Root)` → `[CELL #2] Title=1` → menu
+domain. There are **no UOP bits** to lean on either: the PGC `prohibited_ops` word and every
+PCI `vobu_uop_ctl` on this disc are zero, so nothing tells a player to refuse the key. A
+faithful VM cannot help the user here; only a deviation can.
+
+**The deviation, and how its blast radius is bounded.** While **no menu-domain PGC has
+loaded since the mount** (`menu_seen == 0` — the disc has never yet shown the user a menu),
+the Menu key skips the playing title's VTSM Root and jumps straight to the Root menu of
+**`best_menu_vts`** (the VTS holding the largest menu VOB — the same heuristic the error
+fallback chain has always trusted). Because the current VTS's Root PGC never runs, `g[2]`
+stays 0 and Atmosfear's `VTSM(1)` Root takes its `g1==0 && g2==0` path → `LinkPGCN 7` = the
+real main menu. Four things keep this safe:
+
+- **Self-limiting.** That very press loads a menu, which latches `menu_seen`, so every
+  subsequent Menu press for the rest of the mount is the unmodified spec path.
+- **Fallback preserves the spec path.** New `fb = FB_BOOTM`: if the shortcut's target has
+  no Root menu, the chain tries **this title's own VTSM Root** *before* widening to VMGM.
+  A bad `best_menu_vts` guess cannot cost a menu that used to work.
+- **Inert where it cannot help.** `best_menu_vts == 0` (no menu VOB) or
+  `best_menu_vts == cur_vts` (the common movie disc, menus in the VTS already playing)
+  → unchanged behaviour.
+- **`menu_seen` latches on the LOAD EVENT** (`pgc_loaded && vm_dom` in a menu domain), not
+  on the bare `menu_active` level — a level still stale from the previous disc for a cycle
+  after a mount would otherwise disable the shortcut for a whole session, silently.
+
+**Library sweep (141 discs, `tools/dvd_vm_ref.py`, old vs new landing).** 135 unchanged;
+**6 changed, all in the same direction** — the old spec path landed the Menu key in the
+**title** domain (the disc bounced it into content), the new one lands in a **menu**:
+
+| disc | old landing | new landing |
+|---|---|---|
+| `ATMOSFEAR_NTSC` | TT vts=1 pgcn=1 (Gatekeeper clip) | VTSM vts=1 pgcn=7 (main menu) |
+| `A_Good_Man` | TT vts=9 pgcn=1 | VTSM vts=1 pgcn=7 |
+| `GMEN_FROM_HELL` | TT vts=2 pgcn=1 | VTSM vts=1 pgcn=8 |
+| `RETURN_OF_THE_LIVING_DEAD` (both rips) | TT vts=8/9 pgcn=1 | VTSM vts=1 pgcn=7 |
+| `STARWARP` | TT vts=3 pgcn=1 | VTSM vts=1 pgcn=9 |
+
+Tests: `dvd_vm_tb` [S2] (first press retargets, `fb == FB_BOOTM`) and **[S21]** (target /
+`FB_BOOTM`→own-VTS fallback → VMGM / self-limiting after a menu load). Mirrored in
+`tools/dvd_vm_ref.py` (`menu_seen`, `_menu_call_root`) so the golden model stays in
+lockstep. **✅ HW-CONFIRMED 2026-08-25** (user report: Menu over Atmosfear's
+copyright screen now reaches the main menu).
 
 **Menu key `came_via_menukey` gate (Trivial Pursuit Star Wars).** The Menu key used to
 `LinkRSM` unconditionally from any menu. On a **single-VTS game disc whose VTS1/title1 IS the
@@ -392,6 +459,8 @@ PTT exactness (`VTS_PTT_SRPT` = Phase 6 — PTT ≈ program until then), languag
 python3 tools/dvd_vm_ref.py selftest            # 27/27 golden eval vectors
 python3 tools/dvd_vm_ref.py boot  <disc.iso>    # trace the FP boot chain
 python3 tools/dvd_vm_ref.py menu  <disc.iso> N  # trace a Menu-key press
+# library sweep (old vs new Menu-key landing): force vm.menu_seen = True for the
+# pre-shortcut path and compare -- how the 141-disc table above was produced.
 iverilog -g2012 -o /tmp/v dvd/dvd_vm.sv bench/dvd/dvd_vm_tb.sv && vvp /tmp/v
 iverilog -g2012 -o /tmp/r dvd/dvd_iso_reader.sv dvd/dvd_vm.sv \
     bench/dvd/iso_reader_vm_tb.sv && vvp /tmp/r

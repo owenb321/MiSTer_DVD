@@ -475,7 +475,12 @@ def main(path):
             print("  SRP[%d] = PGCN %d: entry_id=0x%02x%s  cells=%d next=%d prev=%d "
                   "goup=%d mode=0x%02x still=0x%02x  (pgc in-sector off=%d%s)"
                   % (i, i+1, eid, ent, h[3], nxt, prv, gup, mode, still, pgc_off,
-                     " *STRADDLE >1816: RTL skips hdr/palette/cmds*"
+                     # The RTL's Phase-1 "skip straddling PGCs" limitation is
+                     # RETIRED (sector-crossing walker + rbuf shadow fetch, see
+                     # docs/dvd_nav.md "Sector-straddle audit"): a PGC starting
+                     # this late parses fine now. Kept as a note because it is
+                     # still the interesting case to re-check after reader work.
+                     " *straddles the sector boundary (walker handles it)*"
                      if pgc_off > 1816 else ""))
             dump_pgc_cmds("cmds", pa)
             cpo = struct.unpack('>H', h[232:234])[0]

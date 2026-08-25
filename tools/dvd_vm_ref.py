@@ -489,6 +489,15 @@ class VM(object):
         # (title -> CallSS VTSM Root). Only then does a second Menu press LinkRSM
         # back to the title (the movie menu<->title toggle). See dvd_vm.sv.
         self.came_via_menukey = False
+        # TRUE once a menu-domain PGC has been loaded since the mount. Gates the
+        # BOOT-CHAIN MENU SHORTCUT - see the long note at FB_BOOTM in dvd_vm.sv.
+        # Deliberate deviation from libdvdnav's vm_jump_menu (user decision,
+        # 2026-08-25, Atmosfear): the FIRST menu invocation of a mount aims at
+        # best_menu_vts instead of the playing title's own VTSM Root, because on a
+        # DVD-game disc that Root PGC is a dispatcher that routes on "which VTS
+        # were you in", not a menu. Self-limiting: that press loads a menu, so
+        # every later press is the unmodified spec path.
+        self.menu_seen = False
         self.trace = []
         self.verbose = verbose
         self.fuse = 0
@@ -529,6 +538,8 @@ class VM(object):
         if pgcn < 1 or pgcn > len(pit):
             return False
         self.dom, self.vts, self.pgcn = dom, vts, pgcn
+        if dom in (DOM_VMGM, DOM_VTSM):
+            self.menu_seen = True           # RTL: `if (menu_active) menu_seen <= 1`
         self.pgc = self.nav.pgc(pit[pgcn - 1][1])
         if pgn and self.pgc["pm"] and pgn <= len(self.pgc["pm"]):
             cell = self.pgc["pm"][pgn - 1] - 1
@@ -714,12 +725,21 @@ class VM(object):
     def _menu_call_root(self):
         """menu_call(Root): jump to the Root menu with the VTSM->best_menu->VMGM
         fallback chain. Used by Menu-in-title AND (the TP_SW case) Menu-in-menu
-        when we did NOT enter this menu via the Menu key."""
-        if not self._load_pgcn(DOM_VTSM, self.vts, 0, entry=ENTRY_ROOT):
-            self.log("  own VTSM failed -> best_menu_vts %d"
-                     % self.nav.best_menu_vts)
-            if not self._load_pgcn(DOM_VTSM, self.nav.best_menu_vts, 0,
-                                   entry=ENTRY_ROOT):
+        when we did NOT enter this menu via the Menu key.
+
+        BOOT-CHAIN SHORTCUT (see __init__): before the disc has ever shown a menu,
+        aim at best_menu_vts and keep the playing title's own VTSM Root as the
+        FALLBACK, so a bad best_menu_vts guess can never cost a menu that worked."""
+        boot_menu = (not self.menu_seen and self.nav.best_menu_vts
+                     and self.nav.best_menu_vts != self.vts)
+        first = self.nav.best_menu_vts if boot_menu else self.vts
+        second = self.vts if boot_menu else self.nav.best_menu_vts
+        if boot_menu:
+            self.log("  boot-chain shortcut: Root of best_menu_vts %d "
+                     "(no menu seen yet)" % first)
+        if not self._load_pgcn(DOM_VTSM, first, 0, entry=ENTRY_ROOT):
+            self.log("  VTSM %d failed -> VTSM %d" % (first, second))
+            if not self._load_pgcn(DOM_VTSM, second, 0, entry=ENTRY_ROOT):
                 if not self._load_pgcn(DOM_VMGM, 0, 0, entry=2):
                     return self._process(("LinkRSM", 0, 0, 0))
         return True

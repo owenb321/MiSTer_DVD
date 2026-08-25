@@ -1596,8 +1596,10 @@ width change), and the detectors live next to the `css_scrambled` latch in `emu.
    for a bare `.VOB`/`.mpg`/`.m2v` — and those decode within a second. An image the
    reader can't navigate (UDF-only, or truncated/garbage) takes the SAME path and never
    produces a picture. So the test is `~iso_mode & ~video_live` sustained for
-   `IMG_WD` (~5 s), sticky until the next load. This is also strictly more general —
-   it catches any unplayable file, not just UDF.
+   `IMG_WD`, sticky until the next load. This is also strictly more general —
+   it catches any unplayable file, not just UDF. **The window measures STREAMING time,
+   not wall time** (HW round 2 — see below): it advances only while sector data is
+   actually being delivered, and is ~20 s wide.
 2. **Unsupported audio** → persistent **`AUDIO UNSUPPORTED`**, menu-exempt.
    Driven from the IFO's per-track `audio_format` (`attr_a_fmt`, already parsed for
    track enumeration in PR fj#100) rather than by sniffing PES: formats 2 (MPEG-1
@@ -1644,6 +1646,33 @@ it**); warnings re-appear after a user audio/subtitle popup. Two defects found:
    to expire. Preemption is scoped to warnings: user events (types 0-3) are never
    preempted, so the "user popup wins" contract is unchanged. Tests: `transport_hud_tb`
    T17a-e.
+
+**★ HW ROUND 2 (2026-08-25) — `UNSUPPORTED IMAGE` false-positive on slow media.
+✅ FIXED + HW-CONFIRMED 2026-08-25 (user report).**
+User report: an image served off a NAS whose drives spin up on first access raised
+`UNSUPPORTED IMAGE`, and because the latch is sticky the popup then sat **over correct
+playback** once the image finally loaded. Root cause: `IMG_WD` ran on **wall time from
+the mount**, so the entire 5 s window could be spent before the first byte ever arrived —
+"no video yet" was true, but for a reason that has nothing to do with the image. Fix
+(`dvd/emu.sv`), three parts:
+
+1. **Streaming time, not wall time.** A free-running activity detector (`img_idle_cnt`,
+   re-armed by every `sd_buff_wr`, saturating at ~0.5 s) gates the window: any delivery
+   stall — spin-up, a slow share, a re-seek — **freezes** the count instead of spending
+   it. The watchdog now measures what it always meant: *streamed this long without a
+   picture*.
+2. **Window widened 5 s → ~20 s** of that active streaming. An unplayable image is not
+   urgent to report; a wrong report is expensive.
+3. **The latch self-retracts on `video_live`.** The message asserts "this image never
+   produces a picture", so a decoded frame disproves it by construction — it must not
+   outlive that. Belt-and-braces: even if some future timing surprise trips the window,
+   the popup cannot survive over working playback, which was the actual user-visible
+   harm.
+
+Coverage is unchanged for a genuinely unplayable file that streams (it still latches,
+just later). A junk file that delivers *nothing at all* now stays silent rather than
+being reported — a deliberate trade, since "nothing arrived" is a media/transport
+problem, not an image-format one.
 
 **Side finding: `SCENEIT_JR.iso` is a RAW (CSS-scrambled) rip** — 27.6 % of packs,
 found because it was picked as the MP2-flag test vehicle and the core's own CSS
