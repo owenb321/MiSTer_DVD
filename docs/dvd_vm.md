@@ -225,6 +225,58 @@ Bit-exactness: the golden model and `dvd_vm_tb` PART 1/2 drive the fixed 0xACE1 
 no ticks/stir, so all existing vectors are unchanged. `dvd_vm_tb` PART 3 + `dvd_vm_ref.py
 Regs.tick()` cover the tick, seed variation, stir, and the zero-seed guard.
 
+### ★ First-boot hole — the seed needs a WALL CLOCK, not just the mount instant (2026-08-25)
+
+**Status: 🔧 fixed, ⏳ HW-confirm pending** (branch `fix/cell-duration-frames`).
+
+**Symptom (user report, Weakest Link).** From a cold core load the game asked **the same
+question every time** (the Scotland-flag one), for every player. Reloading the disc
+*without* reloading the core fixed it — from then on the questions were properly
+randomised.
+
+**Why.** The seed above was `entropy_ctr[15:0]` alone, sampled when `dvd_vm` sees `start`
+(the mount). That is only entropy if the mount instant is **user-timed**. On the first
+mount after a core load it need not be — MiSTer can mount an image from the core-launch
+path, and from there the whole chain to the disc's first `rnd` is machine-timed, so the
+sample (and every `rnd` derived from it) repeated exactly. The second mount *is* user-timed,
+which is precisely the asymmetry the user saw.
+
+Weakest Link makes the consequence total, because its whole question order hangs off two
+`rnd` calls made during that machine-timed window:
+
+```
+VTS21 PGC24 PRE : g[13] rnd 0xffff ; SetMode Counter g[12] = g[13]  <- seed a wall counter
+VTS21 PGC28 POST: g[5] = g[12]     ; g[4] rnd 0x35f                 <- harvest + step
+VTS21 PGC30 PRE : g[5] += g[4] ; g[5] %= 0x35f                      <- the question index
+       (and VTS02 PGC1381's POST repeats that advance after every question)
+```
+
+**Fix — take the source a real player uses.** libdvdnav seeds with `srand(time.tv_usec)`;
+the MiSTer framework hands every core the same wall clock. `hps_io`'s **`TIMESTAMP`**
+(seconds since the epoch, sent by Main once at core load, *before* any mount —
+`user_io.cpp` `send_rtc(3)` just before reset release) is now XORed into the seed in
+`emu.sv`:
+
+```verilog
+wire [15:0] vm_rnd_seed = entropy_ctr[15:0] ^ hps_timestamp[15:0] ^ hps_timestamp[31:16];
+```
+
+Both halves of the timestamp fold in so a 16-bit seed still moves with the high word. If
+the framework never sends it (`TIMESTAMP` stays 0) the seed degrades to the old
+counter-only behaviour, so nothing depends on it being present. Note the timestamp is
+constant for the session — it fixes *cold-load* determinism; the counter keeps supplying
+per-mount variation, and `entropy_stir` keeps supplying per-play variation from gamepad
+timing.
+
+**Also fixed here: an LFSR zero-lockup.** `entropy_stir` did `lfsr <= lfsr ^ entropy_val`
+unguarded, and `entropy_val` is a free-running counter — it lands on the LFSR's own value
+roughly once in 65,536 stirs. An all-zero LFSR never leaves zero (`lfsr_next` of 0 is 0),
+so every later `rnd` would return 1 forever. The stir now falls back to `0xACE1`, the same
+guard `lfsr_seed` already had. Test: `dvd_vm_tb` PART 3 **T5**.
+
+**HW gate:** Weakest Link asks a *different* first question on each cold core load (not
+just after a disc reload); Scene It's per-load variation (PR fj#119) still works.
+
 Deferred (still): **NVTMR fire (SPRM9)** — libdvdnav doesn't fire it either (stores only;
 `decoder.c:527`), and the census found 1/7 discs set it at 999 s (never fires in practice).
 

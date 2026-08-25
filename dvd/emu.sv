@@ -696,7 +696,11 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     // Image mount detection
     .img_mounted    (img_mounted),
     .img_readonly   (img_readonly),
-    .img_size       (img_size)
+    .img_size       (img_size),
+
+    // Wall clock (seconds since the epoch), sent by Main once at core load.
+    // The DVD-game entropy seed - see the entropy source below.
+    .TIMESTAMP      (hps_timestamp)
 );
 
 // =========================================================================
@@ -1371,6 +1375,21 @@ wire pause_aud = pause_q | hold_freeze;
 // counter latched by dvd_vm at mount; (2) sec_tick - a 1 Hz pulse that ticks
 // counter-mode GPRMs; (3) entropy_stir - user-input timing folded into the rnd
 // LFSR (so rnd varies per play even when the mount instant is similar).
+// ★ FIRST-BOOT ENTROPY (2026-08-25). The counter below is sampled at the MOUNT
+// instant, which is only entropy if that instant is user-timed. On the FIRST
+// mount after a core load it need not be: MiSTer can mount an image from the
+// core-launch path (and the whole boot chain to the disc's first `rnd` is
+// machine-timed), so the sample - and every `rnd` derived from it - came out
+// IDENTICAL on every first play. HW symptom (Weakest Link, user report): the
+// same question every time from a cold core load, correctly randomised from the
+// second disc load on (that mount IS user-timed). A real player has no such
+// hole because it seeds from a WALL CLOCK - libdvdnav literally does
+// srand(time.tv_usec) at init - so take the same source: hps_io hands us
+// TIMESTAMP (seconds since the epoch), sent by Main at core load, before any
+// mount. XORed into the seed it varies every core load even when the mount
+// instant does not. Falls back to the counter alone if the framework never
+// sends it (TIMESTAMP stays 0). See docs/dvd_vm.md "DVD-game entropy".
+wire [32:0] hps_timestamp;
 reg  [31:0] entropy_ctr = 32'd0;
 reg  [24:0] sec_div     = 25'd0;
 reg         sec_tick    = 1'b0;
@@ -1385,11 +1404,15 @@ always @(posedge clk_sys) begin
     end
 end
 wire vm_entropy_stir = |(joystick_0 ^ joy_prev);   // any gamepad edge = user timing
+// Seed = mount-instant counter XOR the wall clock (both halves of it, so a
+// 16-bit seed still moves with the high word). srand(time()) parity.
+wire [15:0] vm_rnd_seed = entropy_ctr[15:0] ^
+                          hps_timestamp[15:0] ^ hps_timestamp[31:16];
 
 dvd_vm dvd_vm_inst (
     .clk           (clk_sys),
     .rst_n         (reset_n),
-    .rnd_seed      (entropy_ctr[15:0]),
+    .rnd_seed      (vm_rnd_seed),
     .sec_tick      (sec_tick),
     .entropy_stir  (vm_entropy_stir),
     .entropy_val   (entropy_ctr[15:0]),

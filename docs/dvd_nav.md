@@ -1704,7 +1704,8 @@ residual is served through the existing HW-proven timed-still machinery (PR fj#9
 
 ### Amendment (2026-08-25) — the C_PBTM FRAME FIELD: short screens flashed by
 
-**Status: 🔧 fixed, ⏳ HW-confirm pending** (branch `fix/cell-duration-frames`).
+**Status: ✅ HW-CONFIRMED 2026-08-25** (user report: "the hold durations are correct now",
+`DVD_celldurfrm_MARGINAL` build; branch `fix/cell-duration-frames`).
 
 **Symptom.** On Weakest Link the questions held for the authored time (the fix above
 works), but the **correct/wrong answer reveal** after choosing an answer, and the

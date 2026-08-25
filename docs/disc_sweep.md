@@ -876,13 +876,39 @@ gameplay cell on this disc carries a cell command; and the user-button provenanc
 (`nat_src`, PR fj#150) is not involved either — these cells flash on any path, the press
 just happens to be how you reach them.
 
-> **🔧 FIXED, ⏳ HW-confirm pending (branch `fix/cell-duration-frames`):** the stored
-> per-cell duration now rounds the frame field to the nearest second (`pb_dur_w`), so the
-> reveal and banked screens hold 2 s and the status screens 4 s. `pb_c` stays truncated
+> **✅ FIXED + HW-CONFIRMED 2026-08-25 (user report, `DVD_celldurfrm_MARGINAL` build):**
+> the stored per-cell duration now rounds the frame field to the nearest second
+> (`pb_dur_w`), so the reveal and banked screens hold 2 s and the status screens 4 s. `pb_c` stays truncated
 > where the libdvdnav still HEURISTIC reads it (lockstep with `vm.c`), and `RESID_MIN`
 > stays 2 s so sub-second cells — Deal or No Deal authors ~1,800 of them — keep their
 > current no-hold behaviour. Detail + the accepted ±0.5 s quantisation:
 > `docs/dvd_nav.md` "Authored cell duration → Amendment (2026-08-25)".
+
+### Round-8 (2026-08-25) — ★ Cluster B's last piece: the first-boot entropy hole
+
+**HW report (same session):** with the hold fixed, Weakest Link asks **the same question
+every time from a cold core load** — and **reloading the disc without reloading the core
+randomises it** from then on.
+
+That asymmetry is the whole diagnosis. The `rnd` LFSR was seeded from `entropy_ctr` at the
+**mount instant**, which is entropy only if the mount is user-timed. The FIRST mount after
+a core load need not be (MiSTer can mount from the core-launch path), and from there the
+chain to the disc's first `rnd` is machine-timed — so the seed, and every `rnd` off it,
+repeated exactly. The second mount is user-timed, hence randomised.
+
+WL hangs its entire question order on two `rnd` calls inside that window (VTS21 PGC24's
+`g[13] rnd 0xffff` → `SetMode Counter g[12]`, and PGC28's `g[5] = g[12]` + `g[4] rnd
+0x35f`, advanced by `g[5] += g[4]` after every question), which is why it shows the fault
+so starkly. Verified by running the golden model (`tools/dvd_vm_ref.py`) over the real ISO:
+the chain executes correctly, so the VM logic was never the problem — only the seed.
+
+> **🔧 FIXED, ⏳ HW-confirm pending:** `hps_io`'s **`TIMESTAMP`** (wall clock, sent by Main
+> at core load before any mount) is XORed into the seed — the same source libdvdnav uses
+> (`srand(time.tv_usec)`). Also fixed en route: an LFSR **zero-lockup** in the stir path
+> (`lfsr ^ entropy_val` can hit 0, and 0 is absorbing → every later `rnd` returns 1).
+> Detail: `docs/dvd_vm.md` "First-boot hole". **This closes the WL half of Cluster B's
+> entropy family** — Brain Game / Family Feud II are untested against it and may be the
+> same root cause.
 
 ### Round-3 — Cluster A SPLITS: the two highlight bugs have DIFFERENT roots
 

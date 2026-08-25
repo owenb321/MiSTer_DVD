@@ -1768,12 +1768,20 @@ every one of them — the trail is worth more than the clone size. Note the larg
 > Design + status: `docs/dvd_nav.md` "authored cell duration". (WL questions not random =
 > separate open issue, Cluster B in `docs/disc_sweep.md`.)
 >
-> **🔧 2026-08-25, ⏳ HW-confirm pending — the C_PBTM FRAME FIELD (branch
+> **✅ HW-CONFIRMED 2026-08-25 — the C_PBTM FRAME FIELD (branch
 > `fix/cell-duration-frames`).** The duration above was read as hh:mm:ss only, dropping
 > the frame field: WL's answer-reveal and money-banked screens are `1 s + 24 f` = 1.96 s
 > single-I-frame cells, stored as 1 s, which fell under `RESID_MIN` and so got no hold at
 > all — they flashed by in ~0.2 s. The stored duration now rounds the frames in. See
 > `docs/disc_sweep.md` "Round-7" + `docs/dvd_nav.md` "Amendment (2026-08-25)".
+>
+> **🔧 2026-08-25, ⏳ HW-confirm pending — FIRST-BOOT ENTROPY (same branch).** The rnd
+> LFSR was seeded only from the mount instant, which is not entropy when the first mount
+> after a core load is machine-timed: Weakest Link asked the same question on every cold
+> load (a disc reload fixed it, since that mount IS user-timed). `hps_io`'s `TIMESTAMP`
+> (wall clock) is now XORed into the seed — libdvdnav's `srand(time)` parity — plus a
+> zero-lockup guard on the stir path. See `docs/disc_sweep.md` "Round-8" +
+> `docs/dvd_vm.md` "First-boot hole".
 >
 > **★ NEW TRACK (2026-08-18): SPEC HARDENING — design to the DVD spec maximum, phased
 > plan in `docs/spec_hardening.md`.** The PGCN and cell-duration bugs were both
