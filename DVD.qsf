@@ -550,4 +550,12 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # tools/seed_sweep.sh, FMAX_MIN=86.0): SEED 7 routes + PASSES both corners
 # (clk_dec 86.54 MHz @100C / 87.73 MHz @-40C) - first seed tried ->
 # releases/DVD_celldurfrm_20260825_1652.rbf. Pinned SEED 7.
-set_global_assignment -name SEED 7
+#
+# WL-ENTROPY netlist (2026-08-25, same branch, + the TIMESTAMP seed hardening): the
+# hps_io TIMESTAMP plumbing reshuffled placement again -> SEED 7 fell to 73.58 MHz @100C.
+# Re-swept (USE_DOCKER tools/seed_sweep.sh, FMAX_MIN=86.0): 7 73.58, 9 85.68 (0.32 under),
+# 11 68.24, 13 75.61, 5 77.62 -- then SEED 8 routes + PASSES both corners with real margin
+# (clk_dec 90.56 MHz @100C / 90.56 MHz @-40C) -> releases/DVD_wlentropy_20260825_2010.rbf.
+# Pinned SEED 8. Note the scatter: on this congested placement one seed lands and the rest
+# come in 10+ MHz low - sweep, never assume a neighbouring seed transfers.
+set_global_assignment -name SEED 8
