@@ -841,9 +841,10 @@ width fills; SVCD 480 = exact 2:3), shipped with the VCD/SVCD feature below. Des
 `resample_chain_tb +sif=1`/`+hfill=1` variants (`+sif` runs co-sim the addrgen walk
 vs the 2× closed form; `+hgrad` blend, `+crt` fields, `+siftog` runtime toggle),
 `crt_ov_map_tb` T1d/T6.
-**VCD + SVCD playback (bin/cue direct) — implemented + sim-verified 2026-08-24
-(branch `feature/vcd-svcd-playback`), ⏳ HW-confirm pending — see
-`docs/vcd_svcd.md` (design + HW checklist).** Select the rip's data-track `.bin`
+**VCD + SVCD playback (bin/cue direct) — ✅ HW-CONFIRMED 2026-08-24 (user report:
+VCD/SVCD good on analog + HDMI, seeking works; branch
+`feature/vcd-svcd-playback`) — see `docs/vcd_svcd.md` (design + remaining
+sub-item checklist).** Select the rip's data-track `.bin`
 (CONF_STR gained BIN/IMG/DAT): `dvd_iso_reader` detects raw MODE2/2352 by the
 sector sync at byte 0 (new S_CHK_RAW; RIFF/CDXA .DAT handled) and deblocks
 in-line — Form-2 payloads [24,2348) only, Form-1/ISO track skipped, counted

@@ -1,8 +1,12 @@
 # VCD / SVCD Playback (bin/cue raw-2352 images)
 
-**Status: implemented + sim-verified 2026-08-24 (branch `feature/vcd-svcd-playback`);
-⏳ HW-confirm pending.** Select the rip's **data-track `.bin`** in the OSD and the movie
-plays with A/V sync, correct 44.1 kHz audio pitch, seek + pause. No menus/PBC (v1).
+**Status: ✅ HW-CONFIRMED 2026-08-24 (user report, branch
+`feature/vcd-svcd-playback`): VCD and SVCD look good on both analog and HDMI, and
+seeking works as expected.** Select the rip's **data-track `.bin`** in the OSD and the
+movie plays with A/V sync, correct 44.1 kHz audio pitch, seek + pause. No menus/PBC
+(v1). The confirming build was the `DVD_vcdsvcd_MARGINAL` rbf (clk_dec 85.46 MHz at
+the −40 °C corner, 0.54 under the 86 gate — the release rbf comes from the seed
+sweep); sub-items not specifically re-verified stay open in §6 below.
 
 Companion docs: `docs/mpeg1.md` (the MPEG-1 video + MP2 decoders this feature rides on),
 `docs/experiments.md` §"VCD / SVCD playback" (the original delta list, now largely
@@ -161,13 +165,13 @@ goldens against `ffmpeg -c copy` at generation time. Plus: `crt_ov_map_tb`,
   end-of-play junk, harmless.
 - IEC 61937 MP2 passthrough unchanged (passthrough mode silences MP2, as on DVD).
 
-## 6. HW gate checklist
+## 6. HW gate checklist (✅ core gate passed 2026-08-24, user report)
 
-- [ ] Real PAL VCD (Lock Up rip): select the Track-2 `.bin` → plays, correct pitch
-      (44.1 k), A/V in sync end-to-end; seek bar + hold-scrub + pause work.
-- [ ] NTSC VCD if available (29.97 cadence).
-- [ ] SVCD image: full-screen 4:3 on HDMI; analog CRT shows the 480→720 fill; a
-      16:9 SVCD honours the DAR latch.
-- [ ] DVD regression: an ISO with menus + a flat `.VOB`/`.mpg` (now seekable) + a
-      `.m2v` (still linear-only); DVD 704/544 sub-D1 disc now fills on analog.
+- [x] Real VCD: plays with correct pitch and A/V sync; seeking works as expected.
+- [x] SVCD: looks good on HDMI **and** analog (the 480→720 fill confirmed).
+- [ ] NTSC VCD 29.97 cadence (the confirming discs' standards weren't itemised).
+- [ ] 16:9 anamorphic SVCD DAR latch (no such disc tested yet).
+- [ ] DVD regression pass on the RELEASE build: an ISO with menus + a flat
+      `.VOB`/`.mpg` (now seekable) + a `.m2v` (still linear-only); DVD 704/544
+      sub-D1 disc now fills on analog.
 - [ ] CSS-encrypted ISO still warns (scramble detect untouched on the MPEG-2 path).
