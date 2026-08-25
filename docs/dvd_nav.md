@@ -1685,8 +1685,11 @@ residual is served through the existing HW-proven timed-still machinery (PR fj#9
   paths the same lead means the countdown runs concurrently with the decoder playing out
   its buffered tail (the still freeze is watchdog-suppression only), so a normal video
   cell's hold converges on the same wait the `vbuf_empty` tail-drain already imposes.
-- **`RESID_MIN = 2 s`** absorbs load→display latency and sub-second truncation; WL's
-  1-second answer-branch cells (cells 1–3 of PGC 51, `pbtime=1s` + cmd) stay instant.
+- **`RESID_MIN = 2 s`** absorbs load→display latency and sub-second truncation; cells
+  whose rounded authored duration leaves under 2 s unspent stay instant.
+  ⚠️ *This bullet used to read "WL's 1-second answer-branch cells … stay instant" as if
+  that were correct. It was the bug fixed on 2026-08-25 — see the amendment below: those
+  cells are not 1-second cells.*
 - **Known limitations:** durations clamp at 255 s (`pb_c`) and `cell_secs` saturates to
   match, so a >4 min still-shaped cell holds at most ~4 min (no real disc authors this);
   the elapsed clock keeps counting through a user pause (raster keeps ticking — parity
@@ -1698,3 +1701,62 @@ residual is served through the existing HW-proven timed-still machinery (PR fj#9
   display-seconds tick → hold is the residual 4 s only; T4 PGC-end hold then POST.
   Cross-checked against the real disc: WL VTS 8 PGC 51 cell 0 reads
   `pbtm 0:00:17, still=0, cmd=1, 311 sectors` (matches Round-6 exactly).
+
+### Amendment (2026-08-25) — the C_PBTM FRAME FIELD: short screens flashed by
+
+**Status: 🔧 fixed, ⏳ HW-confirm pending** (branch `fix/cell-duration-frames`).
+
+**Symptom.** On Weakest Link the questions held for the authored time (the fix above
+works), but the **correct/wrong answer reveal** after choosing an answer, and the
+**"money banked"** screen after pressing Bank, both flashed past in well under a second
+where a real player shows them for about two.
+
+**Root cause — half of the authored duration was never read.** `C_PBTM` is a BCD
+`dvd_time {hh, mm, ss, rate|frames}`, and `pb_c` (the value stored per cell and used as
+the hold source) summed **hh:mm:ss only**, discarding the frame field. Interactive discs
+author their short screens as *"N seconds + (fps−1) frames"* — i.e. N+1 seconds minus one
+frame:
+
+| screen | disc location | C_PBTM | real length | stored (before) |
+|---|---|---|---|---|
+| answer reveal | VTS 18 PGC 29 cells 1–6 | `0:00:01` + **24 f** @25 fps | **1.96 s** | 1 s |
+| money banked | VTS 02 PGC 248 cell 0 | `0:00:01` + **24 f** | **1.96 s** | 1 s |
+| chain/bank status | VTS 02 PGC 1381 cells 0–6 | `0:00:03` + 23 f | 3.92 s | 3 s |
+| question (works) | VTS 18 PGC 29 cell 0 | `0:00:17` + 23 f | 17.92 s | 17 s |
+
+Every one of these cells is **a single I-frame** (`pics=1 gops=1` over the whole cell —
+same shape as the Round-6 question cell), so the authored duration is the *only* thing
+holding them on screen. With 1.96 s stored as 1 s the residual was 1 s, which is **under
+`RESID_MIN` (2 s)** — so no hold was served at all and the frame flashed by in the time
+the pipeline needed to decode it (~0.2 s). The 17 s question cleared `RESID_MIN` easily,
+which is exactly why one worked and the other did not. Both this disc's screens are also
+reached by a **user button press**, which is what made them look like a provenance /
+tail-drain problem; they are not — the same cells flash on any path.
+
+**Fix.** The frame field is rounded into the stored duration (`pb_dur_w` at the cell-meta
+write): 1 s + 24 f → 2, 3 s + 23 f → 4, 17 s + 23 f → 18. Rate bits pick the threshold
+(2'b01 = 25 fps → ≥13 frames rounds up, otherwise ≥15).
+
+Deliberate scope limits, both load-bearing:
+
+- **`pb_c` stays truncated for the libdvdnav still HEURISTIC** (`heur_hit_w`, the
+  `size/time > 30` test) — that code is a port of `vm.c get_current_position`, which
+  truncates, and `tools/iso_nav_check.py` mirrors it. Only the *hold* uses the rounded
+  value.
+- **`RESID_MIN` stays 2 s.** With rounding a genuine 2 s screen now qualifies, while
+  sub-second cells (`0 s + n f`) round to 1 and still take no hold — Deal or No Deal
+  alone authors ~1,800 half-second cells, and lowering the threshold would give every one
+  of them a ~0.4 s freeze they do not have today.
+
+**Residual imprecision (accepted, documented):** the hold countdown is 1 Hz, so a hold is
+quantised to whole seconds — ±0.5 s worst case, +40 ms on the "N s + (fps−1) f" shape
+that dominates real discs. Frame-granular holding would need a sub-second countdown in
+`S_STILL` and a wider `cell_meta_mem`; not worth it until a disc shows a symptom.
+
+**Tests:** `bench/dvd/iso_reader_celldur_tb.sv` T8 (1 s + 24 f holds 2 s — the reveal
+shape), T9 (1 s + 2 f stays 1 s, monitored so it never holds), T10 (3 s + 23 f → 4 s
+PGC-end hold). T1–T7 unchanged and green.
+
+**HW gate:** Weakest Link — answer reveal and the banked-money screen each stay up ~2 s;
+questions still hold ~18 s and stay answerable; MiB/Matrix/T2 menus, Thayer's timed
+choices and a normal movie unchanged.

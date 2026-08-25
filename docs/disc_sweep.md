@@ -842,6 +842,48 @@ be recorded as one.
 > **Cluster-B entropy family** below (Brain Game / Family Feud II — dispatcher registers
 > not varying), it is NOT part of the cell-timing fix.
 
+### Round-7 (2026-08-25) — ★ the OTHER half of the authored duration: the C_PBTM FRAME FIELD
+
+**HW report:** gameplay works, but the **correct/wrong answer reveal** shown after choosing
+an answer and the **"money banked"** screen shown after pressing Bank both flash past in
+**under a second**; a real player (checked against gameplay footage) holds each for about
+**two**. Questions themselves hold for the right time — i.e. the Round-6 fix is working.
+
+**Decoded from the disc — the screens are 1.96-second cells stored as 1 second.** The
+gameplay loop was traced with `tools/bin/trace_nav WEAKEST_LINK_DES.iso "1 5 1 1 1 …"`:
+answering a question runs the button's auto-action → POST → `LinkCN 5`, so the reveal is
+**VTS 18 PGC 29 cell 5**; banking lands on **VTS 02 PGC 248 cell 0**. Dumping their cell
+records and demuxing their video:
+
+| screen | cell | C_PBTM | pictures in the cell | real length |
+|---|---|---|---|---|
+| answer reveal | VTS18 PGC29 cells 1–6 | `0:00:01` + **24 f** @25 fps | **1** | **1.96 s** |
+| money banked | VTS02 PGC248 cell 0 | `0:00:01` + **24 f** | **1** | **1.96 s** |
+| chain/bank status | VTS02 PGC1381 cells 0–6 | `0:00:03` + 23 f | 1 | 3.92 s |
+| question (works) | VTS18 PGC29 cell 0 | `0:00:17` + 23 f | 1 | 17.92 s |
+
+`C_PBTM` is `{hh, mm, ss, rate|frames}` and the reader summed **hh:mm:ss only**, dropping
+the frame field. This disc (PAL, 25 fps) authors its short screens as *N seconds +
+(fps−1) frames* = N+1 seconds minus a frame, so 1.96 s stored as **1 s** — and 1 s is
+**below `RESID_MIN` (2 s)**, so the Round-6 hold was never armed and the single I-frame
+flashed by in decode time. The 17 s question cleared the threshold, which is precisely why
+one screen worked and the other did not. Same authoring style is everywhere on this disc:
+**5,279 cells at exactly `1 s + 24 f`**.
+
+⛔ **Ruled out before the disc was decoded** (worth recording — both fit the symptom):
+the mid-PGC plain-advance path (which by design serves no hold) is not involved — every
+gameplay cell on this disc carries a cell command; and the user-button provenance
+(`nat_src`, PR fj#150) is not involved either — these cells flash on any path, the press
+just happens to be how you reach them.
+
+> **🔧 FIXED, ⏳ HW-confirm pending (branch `fix/cell-duration-frames`):** the stored
+> per-cell duration now rounds the frame field to the nearest second (`pb_dur_w`), so the
+> reveal and banked screens hold 2 s and the status screens 4 s. `pb_c` stays truncated
+> where the libdvdnav still HEURISTIC reads it (lockstep with `vm.c`), and `RESID_MIN`
+> stays 2 s so sub-second cells — Deal or No Deal authors ~1,800 of them — keep their
+> current no-hold behaviour. Detail + the accepted ±0.5 s quantisation:
+> `docs/dvd_nav.md` "Authored cell duration → Amendment (2026-08-25)".
+
 ### Round-3 — Cluster A SPLITS: the two highlight bugs have DIFFERENT roots
 
 First-row probes (`blk1` hl_btns_armed, `blk2` video_live, `blk3` sp_seen, `blk4` spb_seen):

@@ -600,9 +600,11 @@ localparam MAXCELL = 255;             // max cells parsed (DVD nr_of_cells is 1 
 reg [31:0] cell_first_mem [0:MAXCELL-1];  // cell first_sector (2048-sector RBN)
 reg [31:0] cell_last_mem  [0:MAXCELL-1];  // cell last_sector  (2048-sector RBN, incl)
 reg [31:0] cell_start_mem [0:MAXCELL-1];  // Phase 11: BCD start time (prefix sum)
-reg [32:0] cell_meta_mem  [0:MAXCELL-1];  // {heur, pb_secs[15:0]@4-6, still_time@2,
+reg [32:0] cell_meta_mem  [0:MAXCELL-1];  // {heur, pb_secs[15:0]@4-7, still_time@2,
                                           //  cell_cmd_nr@3}. pb_secs = authored
                                           // playback time (C_PBTM) in binary seconds,
+                                          // the FRAME field rounded in (pb_dur_w:
+                                          // "1 s + 24 f" = 1.96 s stores as 2, not 1),
                                           // clamped at the SPEC MAX 9:59:59 = 35,999 s
                                           // (spec-hardening Phase 6; was 255) - the
                                           // authored-cell-duration hold source. heur =
@@ -895,6 +897,15 @@ reg        still_last;                // the still cell was the PGC's last cell
 // cell_secs saturates at 16'hFFFF, above the 35,999 s C_PBTM spec max (the
 // Phase-6 clamp widening), so a long cell stops qualifying once its full
 // authored duration has displayed - never a spurious hold.
+//
+// The authored duration read here (cell_dur_w) is the FRAME-ROUNDED C_PBTM
+// (see pb_dur_w at the cell-meta write): before that rounding a "1 s + 24 f"
+// = 1.96 s screen stored as 1 s, and 1 < RESID_MIN meant it got NO hold at
+// all - the Weakest Link answer-reveal / money-banked flash (2026-08-25).
+// RESID_MIN stays at 2 deliberately: with the rounding in place a genuine
+// 2 s screen qualifies, while sub-second cells (0 s + n f, e.g. Deal or No
+// Deal's ~1800 half-second cells) round to 1 and still take no hold - the
+// same behaviour they have today, so no disc gains a new hitch.
 localparam RESID_MIN = 16'd2;         // min unspent seconds worth holding for
 reg [15:0] cell_secs;                 // display seconds since this cell loaded
 reg [5:0]  cell_refr;                 // sub-second display-refresh counter
@@ -1476,6 +1487,30 @@ reg  [31:0] pt_c;                     // this cell's playback_time (BCD)
 reg  [31:0] run_eltm;                 // running duration sum (BCD)
 wire [31:0] run_sum_w;
 bcd_time_add run_eltm_add (.a(run_eltm), .b(pt_c), .sum(run_sum_w));
+// ---- AUTHORED DURATION: ROUND THE C_PBTM FRAME FIELD (2026-08-25) ---------
+// C_PBTM is a BCD dvd_time {hh, mm, ss, rate|frames}; pb_c above keeps only
+// hh:mm:ss because that is what libdvdnav's still HEURISTIC uses (vm.c
+// get_current_position - keep pb_c truncated so detection stays in lockstep
+// with tools/iso_nav_check.py). The HOLD, though, must serve the cell's REAL
+// authored length, and interactive discs author their short screens as
+// "N seconds + (fps-1) frames" = N+1 seconds minus one frame:
+//
+//   Weakest Link (PAL, 25 fps): the correct/wrong answer reveal and the
+//   "money banked" screen are single I-frame cells with pbtime = 1 s + 24 f
+//   = 1.96 s. Truncating to 1 s put the residual (1 s) UNDER RESID_MIN, so
+//   no hold was served at all and the screen flashed by in ~0.2 s - while
+//   the 17 s + 23 f question cell held fine. See docs/disc_sweep.md
+//   "Round-7" and docs/dvd_nav.md "Authored cell duration".
+//
+// So the STORED duration rounds the frame field to the nearest second (the
+// hold countdown is 1 Hz - docs record the +-0.5 s quantisation). Rate bits:
+// 2'b01 = 25 fps, 2'b11 = 30 fps (dvd/bcd_time_add.sv); anything else is
+// malformed and takes the 30 fps threshold (rounds up less eagerly).
+wire [5:0]  pb_frames_w = {2'b0, pt_c[5:4]} * 6'd10 + {2'b0, pt_c[3:0]};
+wire        pb_rndup_w  = (pt_c[7:6] == 2'b01) ? (pb_frames_w >= 6'd13)
+                                               : (pb_frames_w >= 6'd15);
+wire [15:0] pb_dur_w    = (pb_c >= 16'd35999) ? 16'd35999      // spec-max clamp
+                                              : (pb_c + {15'd0, pb_rndup_w});
 always @(posedge clk)
     if (!rst_n) begin
         // title span is captured only in this block (sole driver of the outputs)
@@ -1522,7 +1557,10 @@ always @(posedge clk)
             // Store the EFFECTIVE hold (explicit still_time OR the heuristic),
             // so downstream sees a nonzero still for authored menu/ad/copyright
             // stills that carry still_time==0.
-            cell_meta_mem[cell_wi] <= {heur_flag_w, pb_c, eff_still_w, cm_cmd_c};
+            // pb_dur_w (not pb_c): the frame-rounded authored duration - the
+            // hold must serve the cell's real length, while the heuristic
+            // DETECTION above stays on the truncated libdvdnav value.
+            cell_meta_mem[cell_wi] <= {heur_flag_w, pb_dur_w, eff_still_w, cm_cmd_c};
             cell_cat_mem [cell_wi] <= cm_cat_c;      // Phase 9 angle-block flags
         end
         end
@@ -1588,7 +1626,8 @@ always @(posedge clk)
 // The hold decision, evaluated at CELL FINISHED (cm_rd tracks cell_raddr =
 // this cell, same as the existing still branch). dur_resid is only meaningful
 // under dur_hold's cell_secs < dur guard.
-wire [15:0] cell_dur_w  = cm_rd[31:16];              // authored secs (spec-max clamp)
+wire [15:0] cell_dur_w  = cm_rd[31:16];              // authored secs, frames rounded in
+                                                     // (pb_dur_w; spec-max clamp)
 wire [15:0] dur_resid_w = cell_dur_w - cell_secs;    // unspent authored seconds
 wire        dur_hold_w  = vm_mode && !menu_dom &&
                           !angle_active && !seamless_active && !cell_partial &&
