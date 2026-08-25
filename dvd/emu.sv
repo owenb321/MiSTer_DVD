@@ -437,7 +437,18 @@ assign CE_PIXEL = 1'b1;
 // date matters for a public release: it is the only way a bug report can identify
 // WHICH build the reporter is running.
 `include "build_id.v"
-`define CORE_VERSION "0.1a"
+// VERSIONING (2026-08-25): bump this the moment a release is PUBLISHED, not when
+// the next one is cut. `0.1a` shipped as tag v0.1a-20260825, so every build made
+// after that point must advertise 0.1b or it lies about which build it is - and
+// this OSD line is the only thing a bug report can quote. Keeping the next
+// version open also means the latest .rbf already matches the tag when you decide
+// to release, instead of forcing a rebuild (and a fitter re-sweep) at release
+// time. BUILD_DATE below still separates dev builds within the series.
+// ⚠ Do NOT add a time-of-day or git SHA to BUILD_DATE to separate same-day
+// builds: it is part of CONF_STR = part of the netlist, so every compile would
+// become a new netlist and re-roll the fitter seed lottery (DVD.qsf's ledger).
+// Same-day dev builds are identified by their build_release.sh --name filename.
+`define CORE_VERSION "0.1b"
 
 parameter CONF_STR = {
     "DVD;;",
