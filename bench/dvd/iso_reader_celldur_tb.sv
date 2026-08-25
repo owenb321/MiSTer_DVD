@@ -32,6 +32,17 @@
 // T4: cell 3 (last) ends with 6 s unspent -> PGC-end hold (STILL_PGEND), then
 //     vm_pgc_end dispatches POST.
 //
+// T8-T10 (2026-08-25): the C_PBTM FRAME FIELD. Interactive discs author their
+// short screens as "N s + (fps-1) frames" - Weakest Link's correct/wrong answer
+// reveal and its money-banked screen are 1 s + 24 f @25 fps = 1.96 s. Dropping
+// the frames stored 1 s, whose residual (1) sits under RESID_MIN, so those
+// screens took NO hold at all and flashed by in ~0.2 s. Title 3 vectors it:
+//     cell 0: pbtime 1 s + 24 f @25 fps, cmd 1  (0xB0) -> rounds to 2 s: HOLDS
+//     cell 1: pbtime 1 s +  2 f @25 fps, cmd 2  (0xB1) -> stays 1 s: NO hold
+//                                                         (sub-second cells on
+//                                                          other discs unchanged)
+//     cell 2: pbtime 3 s + 23 f @25 fps, last   (0xB2) -> rounds to 4 s: PGC-end
+//
 // SEC_DIV(1000): 1 hold-second = 1000 clk. disp_fps=4: 4 disp_ticks = 1
 // display-second (the tb is the "raster").
 //
@@ -166,6 +177,7 @@ module iso_reader_celldur_tb;
     reg [7:0] cap [0:131071];
     reg saw_b1 = 0, saw_b2 = 0;
     reg plain_hold_viol = 0;
+    reg frac_hold_viol = 0;      // T9: title-3 cell 1 must never hold
     always @(posedge clk) begin
         if (stream_valid) begin
             cap[cap_n] = stream_data;
@@ -175,6 +187,10 @@ module iso_reader_celldur_tb;
         end
         // the cell1 (plain, 9 s unspent) -> cell2 advance must never hold
         if (still_active && saw_b1 && !saw_b2) plain_hold_viol = 1;
+        // T9: title 3's cell 1 (1 s + 2 f = 1.08 s, rounds DOWN to 1 s) must
+        // stay under RESID_MIN - sub-second cells keep their no-hold behaviour.
+        if (still_active && dut.cur_pgcn == 16'd3 && cur_cell == 8'd1)
+            frac_hold_viol = 1;
     end
 
     // ---- event counters ----
@@ -376,11 +392,13 @@ module iso_reader_celldur_tb;
 
             // TT_SRPT @20: 2 titles -> VTS_01 ttn 1 / ttn 2 (t2 = Phase-6
             // spec-max-duration vectors)
-            be16(20*2048+0, 16'd2);
+            be16(20*2048+0, 16'd3);
             img[20*2048+14] = 8'd1;               // TT_SRP[0].title_set_nr
             img[20*2048+15] = 8'd1;               // TT_SRP[0].vts_ttn
             img[20*2048+26] = 8'd1;               // TT_SRP[1].title_set_nr
             img[20*2048+27] = 8'd2;               // TT_SRP[1].vts_ttn
+            img[20*2048+38] = 8'd1;               // TT_SRP[2].title_set_nr
+            img[20*2048+39] = 8'd3;               // TT_SRP[2].vts_ttn (frame-field)
 
             // VMGM PGCI_UT @21: PGCN1 entry 0x82, 1 cell (unused here)
             put_ut(21, 16'd1);
@@ -398,11 +416,13 @@ module iso_reader_celldur_tb;
             //   cell 2: pbtime 10s, cmd 2  (0xB2)   elapsed-credit case
             //   cell 3: pbtime  6s, plain  (0xB3)   last cell: PGC-end hold
             //   cmd tbl: post=1 (Nop), cell 1/2 (Nop); pm {1,2,3,4}
-            be16(23*2048+0, 16'd2);
+            be16(23*2048+0, 16'd3);
             img[23*2048+8] = 8'h81;               // SRP[0].entry_id (title 1)
             be32(23*2048+8+4, 32'd16);
             img[23*2048+16] = 8'h82;              // SRP[1].entry_id (title 2)
             be32(23*2048+16+4, 32'd700);
+            img[23*2048+24] = 8'h83;              // SRP[2].entry_id (title 3)
+            be32(23*2048+24+4, 32'd1100);
             put_pgc(23*2048+16, 8'd4, 8'd4, 16'd0, 8'd0, 16'd400, 16'd240, 16'd256);
             img[23*2048+16+240] = 8'd1;           // pm[0] = cell 1
             img[23*2048+16+241] = 8'd2;           // pm[1] = cell 2
@@ -432,6 +452,22 @@ module iso_reader_celldur_tb;
             put_cell(23*2048+700, 16'd256, 1, 8'd0, 8'd0, 32'h095959C0, 32'd5, 32'd5);
             put_cell(23*2048+700, 16'd256, 2, 8'd0, 8'd0, 32'h000002C0, 32'd6, 32'd6);
             put_cmdtbl(23*2048+700, 16'd400, 0, 1, 0,
+                       64'd0, 64'd0, 64'd0);
+
+            // title 3 PGC @1100 - the C_PBTM FRAME-FIELD vectors (T8-T10).
+            // rate|frames byte: 2'b01 = 25 fps, so 0x64 = 24 frames (0.96 s),
+            // 0x42 = 2 frames (0.08 s), 0x63 = 23 frames (0.92 s).
+            //   cell 0: 1 s + 24 f = 1.96 s, cmd 1 -> stored 2 s -> HOLDS 2 s
+            //   cell 1: 1 s +  2 f = 1.08 s, cmd 2 -> stored 1 s -> NO hold
+            //   cell 2: 3 s + 23 f = 3.92 s, last  -> stored 4 s -> PGC-end 4 s
+            put_pgc(23*2048+1100, 8'd3, 8'd3, 16'd0, 8'd0, 16'd400, 16'd236, 16'd256);
+            img[23*2048+1100+236] = 8'd1;         // pm {1,2,3}
+            img[23*2048+1100+237] = 8'd2;
+            img[23*2048+1100+238] = 8'd3;
+            put_cell(23*2048+1100, 16'd256, 0, 8'd0, 8'd1, 32'h00000164, 32'd0, 32'd0);
+            put_cell(23*2048+1100, 16'd256, 1, 8'd0, 8'd2, 32'h00000142, 32'd1, 32'd1);
+            put_cell(23*2048+1100, 16'd256, 2, 8'd0, 8'd0, 32'h00000363, 32'd2, 32'd2);
+            put_cmdtbl(23*2048+1100, 16'd400, 0, 1, 2,
                        64'd0, 64'd0, 64'd0);
 
             // payload sectors
@@ -604,6 +640,49 @@ module iso_reader_celldur_tb;
         while (n_vm_pgc_end < 2 && t < 400000) begin @(posedge clk); t = t + 1; end
         if (n_vm_pgc_end < 2) fail("T7: vm_pgc_end never dispatched after the hold");
         $display("T7 PASS: 16-bit residual machinery end-to-end (600 s hold -> spec-max meta -> PGC end)");
+
+        // ------------- T8-T10: the C_PBTM FRAME FIELD ----------------------
+        // Jump to title 3 (button JumpTT 3 - the VM is idle after T7's POST).
+        @(negedge clk); btn_cmd = 64'h3002000000030000; btn_cmd_valid = 1;
+        @(negedge clk); btn_cmd_valid = 0;
+
+        // T8: the Weakest Link reveal shape - 1 s + 24 f @25 fps = 1.96 s. The
+        // frames must round INTO the stored duration (2 s), or the residual (1)
+        // sits under RESID_MIN and the screen flashes past with no hold at all.
+        t = 0;
+        while (!(still_active && dut.cur_pgcn == 16'd3 && cur_cell == 8'd0) &&
+               t < 4000000) begin @(posedge clk); t = t + 1; end
+        $display("T8 hold: still_active=%b secs=%0d next=%0d dur=%0d",
+                 still_active, dut.still_secs, dut.still_next,
+                 dut.cell_meta_mem[0][31:16]);
+        if (!still_active)                        fail("T8: 1 s + 24 f cell did NOT hold (frames dropped)");
+        if (dut.cell_meta_mem[0][31:16] !== 16'd2) fail("T8: meta duration != 2 s (frames not rounded in)");
+        if (dut.still_secs !== 16'd2)             fail("T8: hold != 2 s");
+        if (dut.still_next !== 2'd1)              fail("T8: hold action != STILL_CMD");
+        $display("T8 PASS: 1 s + 24 f (1.96 s) holds 2 s - the WL answer-reveal shape");
+
+        // T9: 1 s + 2 f = 1.08 s rounds DOWN -> stored 1 s -> no hold (checked
+        // continuously by frac_hold_viol; the meta value is the direct proof).
+        t = 0;
+        while (!(dut.cur_pgcn == 16'd3 && cur_cell == 8'd1) && t < 4000000) begin
+            @(posedge clk); t = t + 1;
+        end
+        if (dut.cell_meta_mem[1][31:16] !== 16'd1) fail("T9: 1 s + 2 f wrongly rounded UP");
+        $display("T9 PASS: 1 s + 2 f stays 1 s (sub-second cells keep no-hold)");
+
+        // T10: 3 s + 23 f = 3.92 s on the LAST cell -> 4 s PGC-end hold.
+        t = 0;
+        while (!(still_active && dut.cur_pgcn == 16'd3 && cur_cell == 8'd2) &&
+               t < 4000000) begin @(posedge clk); t = t + 1; end
+        $display("T10 hold: still_active=%b secs=%0d next=%0d dur=%0d",
+                 still_active, dut.still_secs, dut.still_next,
+                 dut.cell_meta_mem[2][31:16]);
+        if (!still_active)                         fail("T10: last cell did not PGC-end hold");
+        if (dut.cell_meta_mem[2][31:16] !== 16'd4) fail("T10: meta duration != 4 s");
+        if (dut.still_secs !== 16'd4)              fail("T10: PGC-end hold != 4 s");
+        if (dut.still_next !== 2'd2)               fail("T10: hold action != STILL_PGEND");
+        if (frac_hold_viol) fail("T9: title-3 cell 1 (1.08 s) raised a hold");
+        $display("T10 PASS: 3 s + 23 f (3.92 s) holds 4 s at PGC end");
 
         if (errors == 0) $display("ISO_READER_CELLDUR_TB: ALL TESTS PASSED");
         else             $display("ISO_READER_CELLDUR_TB: FAILED with %0d errors", errors);

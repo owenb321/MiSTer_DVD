@@ -225,8 +225,60 @@ Bit-exactness: the golden model and `dvd_vm_tb` PART 1/2 drive the fixed 0xACE1 
 no ticks/stir, so all existing vectors are unchanged. `dvd_vm_tb` PART 3 + `dvd_vm_ref.py
 Regs.tick()` cover the tick, seed variation, stir, and the zero-seed guard.
 
-Deferred (still): **NVTMR fire (SPRM9)** — libdvdnav doesn't fire it either (stores only;
-`decoder.c:527`), and the census found 1/7 discs set it at 999 s (never fires in practice).
+### Seed hardening — the wall clock (2026-08-25), and what it is NOT
+
+**Status: 🔧 shipped as HARDENING, unverified. It fixes no known symptom.**
+
+`rnd_seed` was `entropy_ctr[15:0]` alone, sampled when `dvd_vm` sees `start` (the mount) —
+entropy only if that instant is user-timed. `hps_io`'s **`TIMESTAMP`** (seconds since the
+epoch, sent by Main once at core load, before any mount — `user_io.cpp` `send_rtc(3)` just
+before reset release) is now XORed in, both halves so a 16-bit seed still moves with the
+high word:
+
+```verilog
+wire [15:0] vm_rnd_seed = entropy_ctr[15:0] ^ hps_timestamp[15:0] ^ hps_timestamp[31:16];
+```
+
+That is the source libdvdnav uses (`srand(time.tv_usec)`), it costs nothing, and it
+degrades to the old counter-only value if a framework never sends it. **But it was
+written for a diagnosis that turned out to be wrong** — see the retraction in
+`docs/disc_sweep.md` "Round-8": Weakest Link's repeated question came from the disc's own
+seeding commands being SKIPPED, not from a stale seed. Do not cite this as the fix for
+anything until some symptom actually confirms it.
+
+**Also shipped, and this one stands on its own: an LFSR zero-lockup guard.**
+`entropy_stir` did `lfsr <= lfsr ^ entropy_val` unguarded, and `entropy_val` is a
+free-running counter — it lands on the LFSR's own value roughly once in 65,536 stirs. Zero
+is absorbing for this LFSR (`lfsr_next` of 0 is 0), so every later `rnd` would return 1
+forever. The stir now falls back to `0xACE1`, the same guard `lfsr_seed` already had.
+Test: `dvd_vm_tb` PART 3 **T5**.
+
+### Menu over a boot chain — why a skipped intro can break a game disc
+
+Game discs put **setup** in their boot chain, and their Root-menu trampoline jumps past
+it. Weakest Link is the worked example (full command dumps in `docs/disc_sweep.md`
+"Round-8"): `rnd`-seeded question state is written by VTS21 PGC24/PGC28, while
+`VTSM(21) Root → VMGM 4 → JumpTT 21 → PGC1 dispatcher` lands straight on the menu (PGC30).
+Press Menu during the intro and the game plays unseeded — the same question for every
+player. **libdvdnav does the identical jump** (`tools/bin/trace_menuearly`), so this is
+what a real player does too.
+
+Two things were checked before considering any change, and both are worth remembering:
+
+- **UOPs cannot help here.** WL sets **no** prohibition bits: 4,257 title PGCs with
+  `prohibited_ops == 0`, and every NAV pack in the boot clip with `vobu_uop_ctl == 0`
+  (`tools/` scan, 2026-08-25). Same as Atmosfear. Enforcing UOPs is still a legitimate
+  spec feature we have punted, but it would be a no-op on these discs — do not adopt it
+  expecting to fix them.
+- **The boot-chain menu shortcut is inert on WL**, because it only retargets when
+  `best_menu_vts != cur_vts` and both are VTS 21 here.
+
+Deviations that WOULD change it, all rejected so far as worse than the problem: ignoring
+Menu until the disc reaches a menu (breaks Atmosfear, which needs Menu during the boot
+chain), or "skip the clip, keep the VM" — ending the playing PGC and letting the authored
+chain run at speed instead of jumping (on a movie disc that runs the FP chain straight
+into the feature instead of showing a menu). Current answer: stay faithful, document the
+workaround (let the intro play).
 
 ## Execution model
 

@@ -740,7 +740,13 @@ always @(posedge clk or negedge rst_n) begin
                         if (gprm_mode[gi]) gprm[gi] <= gprm[gi] + 16'd1;
                     tick_pending <= 1'b0;
                 end
-                if (entropy_stir) lfsr <= lfsr ^ entropy_val;
+                // Zero-guard: an all-zero LFSR is a LOCKUP (lfsr_next of 0 is
+                // 0, so every later rnd returns 1 forever). The XOR can land
+                // there whenever entropy_val happens to equal lfsr, so fold in
+                // the fixed seed instead - same guard as lfsr_seed's.
+                if (entropy_stir)
+                    lfsr <= (|(lfsr ^ entropy_val)) ? (lfsr ^ entropy_val)
+                                                    : 16'hACE1;
                 if (!enable) begin
                     ev_boot <= 1'b0; ev_loaded <= 1'b0; ev_error <= 1'b0;
                     ev_btn  <= 1'b0; ev_menu <= 1'b0; ev_resume <= 1'b0;

@@ -1359,6 +1359,18 @@ module dvd_vm_tb;
         if (dut.lfsr === 16'd0) fail("T4: zero seed locked the LFSR at 0");
         rnd_seed = 16'hACE1;
         $display("T4 nonzero-seed guard PASS");
+
+        // ---- T5: a stir that XORs the LFSR to ZERO must not lock it --------
+        // entropy_val is the free-running entropy counter, so it lands on the
+        // LFSR's own value eventually (1 in 65536 per stir). An all-zero LFSR
+        // never leaves 0, and every later rnd would return 1 forever.
+        vm_restart;                          // lfsr = 0xACE1
+        @(negedge clk); ent_val = 16'hACE1; ent_stir = 1;   // XOR -> 0
+        @(negedge clk); ent_stir = 0;
+        repeat (3) @(negedge clk);
+        if (dut.lfsr === 16'd0) fail("T5: self-XOR stir locked the LFSR at 0");
+        ent_val = 16'd0;
+        $display("T5 stir zero-lock guard PASS (lfsr=%04h)", dut.lfsr);
     end
     endtask
 

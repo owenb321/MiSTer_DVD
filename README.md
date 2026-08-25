@@ -89,7 +89,10 @@ HUD and seek bar.
   practice this is not something you notice. PAL has less headroom because the frames are
   taller.
 - **Interactive DVD games are incomplete.** Several game discs mis-navigate their
-  dispatcher logic. Film and TV discs are the supported path.
+  dispatcher logic. Film and TV discs are the supported path. Note also that some game
+  discs put their randomisation setup in the boot sequence and jump past it when you press
+  **Menu** to skip the intro — the game then repeats one question. That is how the disc is
+  authored (a real player and libdvdnav do the same); let the intro play.
 - **No DTS decode** — S/PDIF passthrough to a receiver only.
 - **Audio formats:** AC-3, MPEG-1 Layer II (MP2), LPCM, and DTS (passthrough only).
   The one gap left is the MPEG-2 multichannel *extension* (a rare 5.1 variant of MP2):
