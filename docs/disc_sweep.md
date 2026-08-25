@@ -884,6 +884,511 @@ just happens to be how you reach them.
 > current no-hold behaviour. Detail + the accepted ±0.5 s quantisation:
 > `docs/dvd_nav.md` "Authored cell duration → Amendment (2026-08-25)".
 
+### Round-8 (2026-08-25) — the "same question every time" is AUTHORED: Menu skips the disc's own RNG seeding
+
+**HW report (same session):** with the hold fixed, Weakest Link asked **the same question
+every time** — and the user then pinned it precisely: *it only happens if you press the
+**Menu button during the boot sequence** to skip to the main menu.* Let the intro play and
+the questions randomise.
+
+**That is the disc's own design, and we reproduce it exactly.** WL seeds its question
+index inside the boot chain:
+
+```
+VTS21 PGC24 PRE : g[12] = 0 ; g[13] rnd 0xffff ; SetMode Counter g[12] = g[13]
+VTS21 PGC28 POST: g[5] = g[12] ; g[4] rnd 0x35f ; (guard g[4] != 0)
+VTS21 PGC30 PRE : g[5] += g[4] ; g[5] %= 0x35f          <- the question index
+VTS02 PGC1381 POST: same advance after every question
+```
+
+and its **Root-menu trampoline bypasses both**:
+
+```
+VTSM(21) PGC1 : g[15] = 2 ; JumpSS VMGM pgc 4
+VMGM   PGC4  : JumpTT 21
+VTS21  PGC1  : if (g[15]==0) LinkPGCN 29   <- the boot intro
+               if (g[15]==1) LinkPGCN 24   <- the RNG seeding
+               if (g[15]==2) LinkPGCN 30   <- the player-select menu   <== Menu lands here
+```
+
+Press Menu before the chain reaches PGC24/PGC28 and the game runs with `g[4] = g[5] = 0`:
+index 0, and `g[5] += g[4]` never moves it — **the same question, for every player,
+forever**. Confirmed three ways: the command dumps above, our golden model
+(`tools/dvd_vm_ref.py menu`) landing on PGC30 with `g4=g5=0`, and **libdvdnav's own
+`trace_menuearly`** taking the identical route (VTSM21 PGC1 → VMGM4 → JumpTT 21 → PGC1 →
+PGC30). A real player does the same thing.
+
+**⚠ UOP enforcement would NOT change this** (asked and answered before writing any code):
+this disc sets **no operation-prohibition bits at all** — 4,257 title PGCs with
+`prohibited_ops == 0`, and all 68 NAV packs across the boot clip with
+`vobu_uop_ctl == 0`. Same finding as the Atmosfear round. There is no flag saying "don't
+call the menu here", so no faithful player can refuse the press.
+
+**The boot-chain menu shortcut (PR #4) is also not involved:** it only retargets when
+`best_menu_vts != cur_vts`, and on WL both are VTS 21, so the shortcut is inert and the
+spec path runs.
+
+**Verdict: authored fragility, faithfully reproduced. No RTL fix shipped.** Workaround:
+let the boot chain play (or press Menu once the disc's own menu is up). The only thing
+that could paper over it is a deviation that *runs* the skipped chain instead of jumping
+(see the options recorded in `docs/dvd_vm.md` "Menu over a boot chain"), which would
+misbehave on ordinary movie discs.
+
+> ⛔ **RETRACTED — the "first-boot entropy hole" diagnosis (written earlier the same day).**
+> Before the user isolated the Menu press, this round argued that the `rnd` LFSR seed was
+> deterministic because the first mount after a core load is machine-timed. The evidence
+> now shows the observation is fully explained by the skipped seeding commands, and
+> nothing supports the mount-timing theory. **The `TIMESTAMP` change shipped for it is
+> KEPT as hardening, not as a fix** — it makes the seed match libdvdnav's
+> `srand(time.tv_usec)` and costs nothing — but it is UNVERIFIED and must not be recorded
+> as the cause of anything. The LFSR **zero-lockup guard** that shipped alongside it
+> stands on its own (provable by inspection: `lfsr ^ entropy_val` can reach 0, and 0 is
+> absorbing). See `docs/dvd_vm.md` "DVD-game entropy".
+
+### Cluster B — game dispatchers take the wrong branch (Weakest Link, Family Feud II, Brain Game) — 3 discs ★ TOP PRIORITY
+
+All three are `HL_BTNN`/GPRM **dispatcher** discs: the button press itself does little, and
+the real routing happens in a PRE/POST chain that reads SPRM8 or a GPRM and jumps. Weakest
+Link reads `HL_BTNN` **1426 times** — by far the most SPRM8-dependent disc we own.
+
+Symptoms: WL cuts to "Round winnings" exactly where the first question should appear; FF
+"How to Play → Start" lands on the end-of-game Fast Money round; BG's buttons return to the
+menu.
+
+We have prior art here — SPRM8 has been wrong twice before, in ways that produce precisely
+"the dispatcher picked the wrong option": PR fj#135 (`sprm8` not latched on `btn_cmd_valid`
+→ menus always picked option 1, memory `sprm8-hlbtnn-latch`) and PR fj#137 (a POST read saw
+the *drifting* live `btn_sel` shadow → `sprm8_frozen`, memory `atmosfear-sprm8-frozen`).
+**PR fj#159 reworked promotion/arming — the layer that feeds `btn_sel` — so an SPRM8-shadow
+regression is a live possibility and should be the first thing checked.**
+
+Brain Game folds in here (see Cluster C's retraction): its buttons must set `g[3]` to
+2/3/4/6 to escape the menu, and "does nothing" is exactly what an unset `g[3]` produces.
+
+> **★ Decisive measurement — see "Round-2 measurements" below for the full version.**
+> Weakest Link is the instrument (1426 `HL_BTNN` reads, and a golden `trace_nav` capture of
+> the screen we never reach). Probe **SPRM8 + g[0], g[4], g[5], g[13]** at the divergence.
+
+### Cluster C — ⛔ **RETRACTED** (counter-inflated dispatcher loop) — hypothesis was WRONG
+
+The original theory: Brain Game's `PGC7` self-loops `LinkPGCN 7` `g[0]` times where
+`g[0] = 6 + seconds-on-menu` (seeded from a counter-mode GPRM), so PR fj#119's 1 Hz tick
+turned a 6-load dispatcher into a 6–50-load one = the black screen.
+
+> **⛔ REFUTED on hardware 2026-08-17.** Pressing Start after **2 s** and after **60 s**
+> produced **identical** behaviour. Dwell time does not change the outcome, so the loop
+> count is not the mechanism. **Do not re-chase this.** The disc's machine as decoded below
+> is still accurate and still useful — only the *inflation* theory is dead.
+
+The IFO decode stands and is worth keeping, because it shows what Brain Game needs in
+order to work at all (`VTSM vts=2`):
+
+```
+FP:    g[2]=1; g[3]=0x63; JumpSS VTSM(vts 2, menu 3)     <- boot landing is authored
+PGC1:  if g[3]==0x63 -> PGC2 ... else -> PGC3            <- dispatcher (g[3]=0x63 at boot)
+PGC2:  HL_BTNN=btn1; g[3]=0x62; SetMode Counter g[1]=6
+       POST: g[2]=HL_BTNN/0x400; LinkPGCN 6
+PGC6:  g[0]=g[1]; if g[0]>0x32 g[0]=0x23; SetMode Register g[1]=0; LinkPGCN 7
+PGC7:  g[1]=0x3e8; g[1] rnd g[1]; g[0]-=1;
+       if (g[0] > 0) LinkPGCN 7
+       if (g[3]==0) LinkPGCN 3;  if (g[3]==0x62) LinkPGCN 3;  else LinkPGCN 8
+PGC8:  dispatch g[3] -> JumpVTS_TT 1/2/3
+```
+
+**The surviving reading:** the tail of that chain routes to `PGC3` (the menu) whenever
+`g[3]` is still 0 or 0x62, and only reaches the `JumpVTS_TT` dispatcher (`PGC8`) when
+**`g[3]` has been set to 2/3/4/6 by the pressed button's command**. "The button does
+nothing" is therefore consistent with **`g[3]` never being set** — i.e. the button's
+command not taking effect — which is the same failure shape as Cluster B, so **Brain Game
+is folded into Cluster B** below.
+
+Also verified **not** a bug en route: Brain Game's odd boot landing (dispatcher takes the
+`g[3]==0x63` branch at cold boot) is **authored** — First Play sets `g[3]=0x63` itself.
+
+### Round-2 measurements (2026-08-17) — what the first probes settled
+
+**★ My block-numbering instruction in round 1 was WRONG and is corrected here:**
+blocks **1–4 are the FIRST row** (`blk1` hl_btns_armed, `blk2` video_live, `blk3` sp_seen,
+`blk4` spb_seen) and **5–8 the SECOND row** (`blk5` vbuf_deep, `blk6` still_active,
+`blk7` hl_on_w, `blk8` hlvis_seen). I asked for "blocks 3,4,7,8 (second row)" — those are
+not the same row, and the reported second row is therefore **blk5–blk8**.
+
+Reported second row (`blk5 blk6 blk7 blk8`):
+
+| Disc | vbuf_deep | still_active | **hl_on_w** | hlvis_seen |
+|---|---|---|---|---|
+| Harry Potter (Player Mode screen) | red | red | **GREEN** | green |
+| Speed Racer (first-loop main menu) | GREEN | red | **GREEN** | green |
+
+**What this proves:**
+- **`blk7` GREEN on both = `hl_on_w` (nav_pci `armed` AND `fetched`) is true.** Promotion
+  *and* the button-record fetch complete. **Cluster A is definitively not a promotion or
+  fetch fault** — that half of the round-1 reasoning is confirmed, and PR fj#159's promotion
+  model v2 is exonerated for these two discs.
+- **`blk6` red on both = the reader is NOT parked on a still**, so both are *motion/looping*
+  menus. `menu_settled` cannot fire on either (it requires `still_active`), so promotion here
+  came from the 1 s timer — the documented behaviour for looping menus, working as designed.
+- **`blk8` GREEN is NOT trustworthy as reported.** ⚠️ The probe watched `sp_force_q`, which
+  is `hud_on_w | bar_on_w | hl_use` — it reads green whenever the **transport HUD or seek bar**
+  draws any pixel, regardless of the highlight. A HUD auto-popup alone turns it green.
+  **Fixed in this change** ([emu.sv](../dvd/emu.sv), `hl_use_q`): blk8 now watches the
+  highlight term only. The green readings above must be re-taken on the next build.
+  *(Same lesson as the stale `straddle_check` model earlier in this sweep: our own probes go
+  stale and lie. A probe that can be green for two different reasons answers no question.)*
+
+**Still needed for Cluster A — the FIRST row, blocks 3 and 4** (`sp_seen`, `spb_seen`), plus
+the corrected blk8:
+- **blk4 red** → no SPU bytes reached the decoder → demux/substream routing.
+- **blk4 green, blk3 red** → bytes arrived, no subpicture pixel displayed → `spu_decode`
+  commit (the menu re-send guard, or the show window).
+- **blk3 green, corrected blk8 red** → subpicture displays but the recolour never fires →
+  rect/coli/`hl_use` path (PR fj#83 family).
+- **blk3 green AND corrected blk8 green** → the recolour genuinely fires and is still
+  invisible → the failure is downstream: the **PGC palette** lookup or the blend output.
+  (Both discs recover after a PGC re-load — Harry Potter when a skip forces one, Speed Racer
+  on the next loop — which fits a palette that is stale or unloaded for the new menu; see
+  memory `pgc-palette-seek-reset-bug`.)
+
+### Cluster B measurements — what came back
+
+- **Weakest Link: "ALL menu options that start the game land on the same Round Winnings
+  screen."** A dispatcher receiving a *constant* regardless of which button was pressed is
+  the signature of an SPRM8/GPRM that is not tracking the activation (`sprm8` resets to
+  `0x0400` = button 1). This strengthens Cluster B considerably.
+- **Family Feud II: the same question no matter how long you wait** — so dwell time is not
+  the entropy on this disc, and cluster F does not close for free.
+- Brain Game's dwell test (above) also showed no time dependence.
+
+Together those say **the GPRM/entropy state these discs read is not varying with time**, and
+Weakest Link's says **it does not vary with the button either**. Both point at the same
+place: the register state the dispatchers read.
+
+**Ruled out by direct comparison against libdvdnav (do not re-chase):**
+- **The ALU.** `tools/dvd_vm_ref.py set_op` matches `libdvdnav decoder.c eval_set_op`
+  case-for-case for ops 1–7 and 9–11 (including `/=` and `%=`, and ÷0 → 0xFFFF). Weakest
+  Link's engine leans on `g[5] %= 0x35f` and `g[13] = g[0] / 0x10`, and both are correct.
+- **`Goto` indexing.** DVD command numbers are 1-based and the RTL does
+  `pc <= blk_base + ins[7:0] - 1` ([dvd_vm.sv:1027](../dvd/dvd_vm.sv#L1027)); the python
+  model matches. A jump-table off-by-one would have explained "everything lands in one
+  place", but it is not present.
+- **The entropy machinery is wired**: free-running `entropy_ctr`, 1 Hz `sec_tick`,
+  mount-latched `rnd_seed`, gamepad `entropy_stir` ([emu.sv](../dvd/emu.sv) ~L1223).
+  Whether the *tick reaches counter-mode GPRMs in practice* is still unmeasured — the tick
+  is applied only in `V_IDLE` ([dvd_vm.sv:678](../dvd/dvd_vm.sv#L678)).
+
+**Weakest Link golden-oracle reference (captured for the next round).** `tools/bin/trace_nav`
+drives libdvdnav interactively, and on this disc it reaches the real game:
+
+```
+tools/bin/trace_nav WEAKEST_LINK_DES.iso "1 1"
+  PARK #1  title=21 part=1  buttons=1   -> btn1 cmd 71 04 00 0e 00 00 00 19  = g[14]=0, LinkPGCN 25
+  PARK #2  TT vts=21 PGC:30  buttons=12  GPRM[4]=708 GPRM[5]=118   <- the QUESTION screen
+     btn1-4,7-9: HL_BTNN = 0x2c00 (button 11), LinkCN <n>
+     btn5:       g[0] = 0x11, LinkPGCN 31
+     btn6:       HL_BTNN = 0x1800 (button 6), LinkPGCN 42
+  PGC30 PRE: g[5] += g[4]; g[5] %= 0x35f; g[13] = g[0]; g[13] /= 0x10; if (g[13]==N) Goto ...
+  PGC30 POST: LinkPGCN 30 (loop)
+```
+
+So **libdvdnav reaches the 12-button question screen where our hardware shows Round
+Winnings** — a confirmed divergence with a golden trace to diff against. `g[5]` (question
+index, mod 863) and `g[0] >> 4` (screen dispatch) are the two values to probe.
+
+> **★ Decisive measurement for Cluster B:** put **SPRM8 and GPRM g[0], g[4], g[5], g[13]**
+> on the debug overlay, then walk Weakest Link to the failure with `trace_nav` open beside
+> it and diff the registers at the divergence point. Cheap pre-check needing no build:
+> on the Weakest Link player-select menu pick the **second** option rather than the first —
+> if the failure is identical, a stuck SPRM8 is near-certain.
+
+### Round-3 (2026-08-17) — ★ WEAKEST LINK ROOT CAUSE FOUND: PGCN is 8 bits, the disc needs 11
+
+**This one is solved, offline, with high confidence.**
+
+`tools/bin/trace_nav WEAKEST_LINK_DES.iso "1 5"` (boot → the player-select screen → SINGLE
+PLAYER) shows libdvdnav walking to the question bank at **VTS 2, PGC 1381**. Our hardware
+shows a "Round winnings" screen instead, for *every* option on that menu.
+
+**Why every option:** the disc's question PGCs live in a huge PGCIT, and
+
+| Disc | VTS_PGCIT `nr_of_srp` |
+|---|---|
+| **WEAKEST_LINK_DES** | **TT_02 = 1394**, TT_23 = 1021, TT_22 = 355 |
+| tomb_raider_pal | TT_04 = 256 (exactly at the edge) |
+| *every other disc in the library* | < 256 |
+
+…while **our PGCN is 8 bits everywhere**:
+`jump_pgcn [7:0]`, `cur_pgcn [7:0]`, `next/prev/goup_pgcn [7:0]`, `want_pgcn [7:0]`,
+`link_pgcn_u/c [7:0]`, `ptt_pgcn_c [7:0]`, `rsm_pgcn [7:0]`, `deadend_pgcn [7:0]`
+([dvd_iso_reader.sv](../dvd/dvd_iso_reader.sv), [dvd_vm.sv](../dvd/dvd_vm.sv)) — and the
+link operand is taken as **`jump_pgcn <= ins[7:0]`**
+([dvd_vm.sv:1302](../dvd/dvd_vm.sv#L1302)) when **the DVD `LinkPGCN` field is 15 bits**.
+
+So `LinkPGCN 1381` (0x565) becomes `0x65` = **101**. The alias is *deterministic*, which is
+exactly why **all** paths land on the same wrong screen rather than behaving randomly. The
+intro plays normally first because PGC31's PRE/POST are reached correctly (its own PGCNs are
+small) — only the jump into the question bank aliases.
+
+Ruled out en route, by direct comparison against the golden trace (do not re-chase):
+- **The ALU is exact.** Replaying PGC31's whole POST block through `dvd_vm_ref` from
+  libdvdnav's entry registers reproduces `g[2]=1, g[3]=25, g[8]=2800 (the winnings!),
+  g[9]=4096, g[13]=1, g[6]=0` — every value matches, including the saturating `*=`, the
+  register-source `|=` bitfield pack and `/=`.
+- **`Goto` indexing** (1-based, correct in both RTL and model) and the **PTT tables**
+  (WL's VTS 2 title has `nr_of_ptts = 1`; max 29 across the disc — the `ptt_mem` 256 bound
+  is nowhere near).
+
+**✅ FIXED (2026-08-17, `feature/pgcn-16bit`) — see the fix note at the end of this
+section.** Original fix shape: widen the PGCN path from 8 to 16 bits end-to-end — the reader's
+jump/current/next/prev/goup/want/link/rsm/deadend registers and the VM's `jump_pgcn` plus
+`ins[14:0]` extraction for `LinkPGCN` — and raise the PGCIT SRP walk beyond 255. Note the
+golden models share the ceiling: `dvd_vm_ref.pgcit()` caps at `min(nr_srp, 99)`, so widen
+that too or the model can't validate the fix.
+
+> **⚠️ Audit gap worth remembering:** the prework capacity audit (max commands / programs /
+> cells per PGC) *missed this* because it walked PGCs through `pgcit()`, which silently caps
+> at 99 SRPs — the audit never saw a PGC count. **A capacity audit must measure the table
+> the code indexes, not the table the tool happens to enumerate.**
+
+#### ✅ The fix (2026-08-17) — 15-bit PGCN end-to-end
+
+**Root of the root cause:** the DVD `LinkPGCN` operand is a **15-bit** field
+(`libdvdnav decoder.c eval_link_instruction`: `getbits(14, 15)`), and
+`JumpSS_VMGM_PGC`'s `pgcN` is `getbits(46, 15)`. We extracted `ins[7:0]` and
+`ins[39:32]` respectively. Everything downstream was 8 bits to match.
+
+Changed (`dvd/dvd_vm.sv`, `dvd/dvd_iso_reader.sv`, `dvd/emu.sv` wiring):
+
+| Site | Was | Now |
+|---|---|---|
+| `LinkPGCN` operand | `ins[7:0]` | **`ins[14:0]`** |
+| `JumpSS_VMGM_PGC` pgcN | `ins[39:32]` | **`ins[46:32]`** |
+| `jump_pgcn`, `cur_pgcn`, `next/prev/goup_pgcn`, `want_pgcn`, `link_pgcn_u/c`, `jpgcn_l`, `rsm_pgcn`, `deadend_pgcn`, `srp_i` | `[7:0]` | `[15:0]` |
+| PGC header `next/prev/goup` capture | low byte only (@157/159/161) | **full u16** (@156–161) |
+| PRE-scan `LinkPGCN` target | byte 7 only | **`{byte6[6:0], byte7}`** |
+| `ptt_mem` entry | `{pgcn_lo, pgn_lo}` (16 b) | **`{pgcn u16, pgn_lo}` (24 b)** |
+| PTT resolve | `nr_pgci_srp > 255 → "garbage" → PGCN 1` | full u16 (that guard *was* the clamp) |
+| SRP fetch address | 17-bit `pit_off + 8 + srp_i*8` | **21-bit** (`srp_i*8` needs 19) |
+
+**Regression test — `dvd_vm_tb` S13**, which reproduces the bug exactly when the fix is
+reverted: `LinkPGCN 1381` → **`got pgcn=101`**, the precise `1381 & 0xFF` alias predicted
+from the disc analysis. S13 covers a large `LinkPGCN`, a small one (no regression on normal
+discs), and a large `JumpSS_VMGM_PGC`.
+
+**Golden model:** `IsoNav.pgcit()` capped enumeration at `min(nr_srp, 99)`, which is why the
+prework capacity audit never saw a PGC count. Raised to the spec bound; it now enumerates all
+1394 of Weakest Link's VTS_02 PGCs.
+
+**Regression status:** `dvd_vm_tb`, `dvd_vm_atmos_tb`, `iso_reader_tb`, `iso_reader_menu_tb`,
+`iso_reader_seek_tb`, `iso_reader_chapter_tb`, `iso_reader_real_tb`, `iso_reader_vm_tb` — all
+green.
+
+> **HW gate:** Weakest Link → pick any number of players + LET'S PLAY (or SINGLE PLAYER) →
+> the **first question** should appear instead of the Round Winnings screen. The golden path
+> to diff against is `tools/bin/trace_nav WEAKEST_LINK_DES.iso "1 5"` → VTS 2, PGC 1381.
+> Also re-check a normal disc (MiB/Matrix) for no menu regression, and Tomb Raider, whose
+> TT_04 PGCIT sits at exactly 256.
+
+### Round-4 (2026-08-18) — Weakest Link plays, but the answer window is cut: DRAIN_WD < an authored cell
+
+**HW after the PGCN fix:** the game now reaches the real questions ✅. New symptom: *"there is
+a timer for answering (not visible on screen) and it expires as soon as the highlight appears,
+showing 'Too Late!' and moving to the next player."*
+
+**Decoded from the disc.** The answer screen is **VTS 8 PGC 51**, and its cell table is the
+whole story:
+
+| cell | sectors | size | authored pbtime |
+|---|---|---|---|
+| **0 (the answer window)** | 32961–33271 = **311** | **0.6 MB** | **17 s** |
+| 1–6 (the "time's up" branches) | ~69 each | 0.14 MB | 1 s |
+
+`cell[0].cmd_nr = 1` → `cellc[0] = LinkCN 2`, i.e. when cell 0 ends the disc jumps into the
+timeout branch. Its POST reads the answer out of `HL_BTNN`
+(`g[14] = HL_BTNN; if (g[14]==0x1400) …` — button 5 = 0x1400 is the neutral/no-answer
+position that `fosl` selects, and the answer buttons 1/2/4 are `auto_action`).
+
+**The mechanism:** 0.6 MB **fits entirely inside the 2 MB VBUF**. So the reader parses the
+whole 17-second cell in a fraction of a second, hits the cell end, and the cell command's
+verdict is produced at the **parse front** while the display is still at the start of the
+question. The Phase-B tail drain (PR fj#150) is exactly the guard for this — a natural
+cell-command verdict waits for `vbuf_empty` — and it *does* engage here (`ev_cellcmd` →
+`nat_src` → `vm_from_wait` → `snat_l`). But it is bounded by **`DRAIN_WD`, which was 5.0 s**,
+and `vbuf_empty` cannot arrive until the decoder has displayed all 17 s. **The watchdog fired
+first and truncated a 17-second answer window to 5 seconds.**
+
+**Fix:** `DRAIN_WD` 5 s → **60 s**, sized from the thing that actually bounds the wait: the
+time for the decoder to *display* a full VBUF. 2 MB at the ~300 kbit/s these screens are
+authored at is ~56 s. Normal transitions are unaffected — they exit early on `vbuf_empty`;
+the bound only ever fires when `vbuf_empty` never arrives (a wedged decoder), which is
+already a failure state. `drain_tmr` widened 28 → 31 bits.
+
+> **⚠️ This fix may be necessary but not sufficient — flagged before testing.** The same
+> parse-vs-display skew applies to the *button* timeline: because the entire cell buffers at
+> once, every PCI/HLI packet in those 17 seconds is parsed within a fraction of a second, so
+> nav_pci sees the whole arm/disarm schedule up front and only the (parse-anchored) STC paces
+> it. If the highlight still appears at the wrong moment after this fix, that is the next
+> thread — and it is the same family as Cluster A. Watch specifically whether the answer
+> buttons are *responsive* before they are *visible*.
+
+### Round-5 (2026-08-18) — the DRAIN_WD fix did NOT change it; the symptom is re-framed
+
+**HW report:** *"still too fast, seems the same speed as before. The buttons are responsive
+before the highlight — it turns out the highlight is a different colour depending on whether
+you got the answer right or wrong, and the highlight I was seeing was revealing the correct
+answer, not a highlight for selection."*
+
+Two things follow, and they matter more than the timing question:
+
+1. **The answer buttons ARE armed and responsive during the window** — so nav_pci's HLI
+   handling on this screen is working. This confirms the caveat filed with the DRAIN_WD fix:
+   the button timeline runs at the parse front.
+2. **There is no visible SELECTION highlight at all.** The only thing that ever becomes
+   visible is the disc's answer *reveal*. So Weakest Link is unplayable for the same reason as
+   Speed Racer and Harry Potter — **Cluster A, the highlight render** — not (or not only) a
+   timer bug. You cannot answer a question when you cannot see which answer is selected.
+
+**Offline finding that gives Cluster A a WL-specific lead.** Scanning the answer cell's
+sectors (VTS_08 title VOB, RBN 32961+) shows what is multiplexed there:
+
+```
+stream 0xE0 (video) 33   substream 0x80 (audio) 55
+substream 0x20 0x21 0x22 0x23 0x24 0x25 0x26 0x27 0x28 0x29   <- TEN subpicture streams
+```
+
+The screen carries **ten subpicture substreams**, each sent as a small one-shot SPU — and
+`ps_demux` filters to **exactly one** substream. If the selection graphic lives on a stream we
+are not routing, no amount of correct HLI handling will make it appear. The disc also uses
+`SPSTN` (SPRM2, the *subpicture stream number*) as a **game variable** — VTS2 PGC1381's POST
+does `g[13] = SPSTN; g[13] %= 0x40;` and scores the answer from it (`g[7] += 0/2/5/10/20/30/45`),
+and the disc issues `SetSTN` 9 times across VTS2/VTS8. So on this disc the subpicture stream
+selection is *gameplay state*, not a user preference.
+
+**On the timing half:** the gate chain was traced and is correct in principle —
+`ev_cellcmd` → `blk=BLK_CELL` + `nat_src=1` ([dvd_vm.sv:827](../dvd/dvd_vm.sv#L827)) →
+`vm_from_wait` → `seek_natural_mux` ([emu.sv:1322](../dvd/emu.sv#L1322)) → `snat_l` → the seek
+waits on `vbuf_empty`. Since the observed speed did not change, either the build under test
+predates the fix, or the display is not in fact being cut and the "fast" impression comes
+entirely from the invisible selection highlight. **Not chasing it further until that is
+measured** — two hypotheses on this symptom have already died (`foac`, which is 0 on every
+HLI this disc authors, and `auto_action`-on-arm, which cannot fire because `moved` is set only
+by D-pad navigation).
+
+> **★ Two measurements needed (both cheap):**
+> 1. **Which `.rbf` was under test** — `DVD_pgcn16_drain_20260818_1149.rbf` carries the
+>    DRAIN_WD fix; `DVD_pgcn16_MARGINAL_*` does not.
+> 2. **Roughly how many seconds the question stays up before the reveal.** ~17 s ⇒ the cell
+>    plays correctly and this is purely a render bug (fold into Cluster A). ~1–5 s ⇒ the cell
+>    IS being cut and the drain gate is not doing its job.
+> 3. Optional but decisive for the render half: the O[2] **first-row** blocks (blk3 `sp_seen`,
+>    blk4 `spb_seen`) on the answer screen — with ten substreams multiplexed, blk4 red would
+>    mean we are routing a substream that carries nothing on this screen.
+
+### Round-6 (2026-08-18) — ★ ROOT CAUSE: the answer cell is ONE I-FRAME held for 17 s
+
+Measurements: the **drain build was under test**, the question holds **~1.5 s**, and the O[2]
+first row on the question screen reads **green green green green** (armed, video_live,
+sp_seen, spb_seen) before flipping to red at the transition.
+
+**Decoding the cell's actual content settles it.** Extracting the video ES from all 311
+sectors of VTS 8 PGC 51 cell 0:
+
+```
+video ES bytes = 64837   picture headers = 1   GOP headers = 1
+```
+
+**One picture.** The 17-second answer window is a **single I-frame that the disc expects the
+player to HOLD for the cell's authored playback time** (`pbtime = 17 s`, with
+`still_time = 0` — the hold is expressed by the cell's *duration*, not by a still flag).
+
+That explains every observation at once, including the two failed fixes:
+
+- **~1.5 s, not 5 s and not 60 s.** The tail-drain gate is not timing out — it is **passing
+  immediately**, because `vbuf_empty` is *true*: there is only one frame to decode, 64 KB
+  drains instantly, and the compressed buffer really is empty while the frame is still meant
+  to be on screen for another 16.5 s. **Raising `DRAIN_WD` could never have helped**, which is
+  exactly what the hardware said.
+- **The buttons are responsive** — the NAV packs across all 311 sectors are parsed within that
+  same fraction of a second, so the HLI arms correctly and early.
+- **`spb_seen` red at the transition** — the cell command's seek executes with a flush.
+- **All four first-row probes green on the question screen** — the subpicture *does* arrive and
+  display here, so Weakest Link is **not** blocked on the Cluster-A render bug after all. Its
+  selection highlight is invisible for a different reason (or is simply not authored as a
+  recoloured subpicture on this screen); the window closing in 1.5 s is the whole problem.
+
+**Why our model of "cell end" is wrong.** The reader ends a cell when its **sectors are
+delivered**. For ordinary cells that is close enough (the display trails by the VBUF depth,
+and `vbuf_empty` bridges the gap). For a **still-image cell** the two diverge completely:
+the data is exhausted in ~0.2 s while the authored presentation time is 17 s. A real player
+ends a cell when its **authored playback time has elapsed on the display timeline**.
+
+**Fix direction (next change).** This is the sibling of PR fj#144, which honoured an explicit
+`still_time` on title-domain cells; here the hold is authored as `pbtime` with
+`still_time = 0`. Hold such a cell for its authored duration before running the cell command:
+reuse the existing `still_secs`/`still_timed`/`STILL_CMD` machinery (the freeze path is already
+HW-proven for Thayer's Quest timed choices), sourcing the duration from the cell playback time
+the reader already reads for the HUD (`cell_start_mem` prefix sums). Scope it the same way
+PR fj#144 was — title domain + `vm_mode` + the cell carries a cell command — so ordinary movie
+playback is untouched. The natural trigger is "content exhausted (`vbuf_empty`) but the cell's
+authored time has not elapsed".
+
+⛔ **Retracted by this finding:** the `DRAIN_WD` 5 s → 60 s change (previous round) was
+predicated on the wait timing out. It does not, so the raise is inert for this disc. It is
+harmless and arguably still correct as a deadlock bound, but it is **not** the fix and must not
+be recorded as one.
+
+> **✅ FIXED + HW-CONFIRMED 2026-08-18 (PR fj#165):** the general real-player model — a
+> title-domain (vm_mode) cell end that dispatches to the VM (cell command / PGC end) with
+> ≥2 s of its authored `C_PBTM` unspent on the DISPLAY clock serves the residual as a
+> timed still first, so the cell command evaluates at the cell's authored end. Design +
+> implementation detail: `docs/dvd_nav.md` "Authored cell duration". HW verdict: WL
+> questions hold for the correct time and are answerable; no regressions on the other
+> menu discs. **New finding from the same HW round: WL's questions are NOT random** —
+> the same question sequence every run. That is a separate issue: WL joins the
+> **Cluster-B entropy family** below (Brain Game / Family Feud II — dispatcher registers
+> not varying), it is NOT part of the cell-timing fix.
+
+### Round-7 (2026-08-25) — ★ the OTHER half of the authored duration: the C_PBTM FRAME FIELD
+
+**HW report:** gameplay works, but the **correct/wrong answer reveal** shown after choosing
+an answer and the **"money banked"** screen shown after pressing Bank both flash past in
+**under a second**; a real player (checked against gameplay footage) holds each for about
+**two**. Questions themselves hold for the right time — i.e. the Round-6 fix is working.
+
+**Decoded from the disc — the screens are 1.96-second cells stored as 1 second.** The
+gameplay loop was traced with `tools/bin/trace_nav WEAKEST_LINK_DES.iso "1 5 1 1 1 …"`:
+answering a question runs the button's auto-action → POST → `LinkCN 5`, so the reveal is
+**VTS 18 PGC 29 cell 5**; banking lands on **VTS 02 PGC 248 cell 0**. Dumping their cell
+records and demuxing their video:
+
+| screen | cell | C_PBTM | pictures in the cell | real length |
+|---|---|---|---|---|
+| answer reveal | VTS18 PGC29 cells 1–6 | `0:00:01` + **24 f** @25 fps | **1** | **1.96 s** |
+| money banked | VTS02 PGC248 cell 0 | `0:00:01` + **24 f** | **1** | **1.96 s** |
+| chain/bank status | VTS02 PGC1381 cells 0–6 | `0:00:03` + 23 f | 1 | 3.92 s |
+| question (works) | VTS18 PGC29 cell 0 | `0:00:17` + 23 f | 1 | 17.92 s |
+
+`C_PBTM` is `{hh, mm, ss, rate|frames}` and the reader summed **hh:mm:ss only**, dropping
+the frame field. This disc (PAL, 25 fps) authors its short screens as *N seconds +
+(fps−1) frames* = N+1 seconds minus a frame, so 1.96 s stored as **1 s** — and 1 s is
+**below `RESID_MIN` (2 s)**, so the Round-6 hold was never armed and the single I-frame
+flashed by in decode time. The 17 s question cleared the threshold, which is precisely why
+one screen worked and the other did not. Same authoring style is everywhere on this disc:
+**5,279 cells at exactly `1 s + 24 f`**.
+
+⛔ **Ruled out before the disc was decoded** (worth recording — both fit the symptom):
+the mid-PGC plain-advance path (which by design serves no hold) is not involved — every
+gameplay cell on this disc carries a cell command; and the user-button provenance
+(`nat_src`, PR fj#150) is not involved either — these cells flash on any path, the press
+just happens to be how you reach them.
+
+> **✅ FIXED + HW-CONFIRMED 2026-08-25 (user report, `DVD_celldurfrm_MARGINAL` build):**
+> the stored per-cell duration now rounds the frame field to the nearest second
+> (`pb_dur_w`), so the reveal and banked screens hold 2 s and the status screens 4 s. `pb_c` stays truncated
+> where the libdvdnav still HEURISTIC reads it (lockstep with `vm.c`), and `RESID_MIN`
+> stays 2 s so sub-second cells — Deal or No Deal authors ~1,800 of them — keep their
+> current no-hold behaviour. Detail + the accepted ±0.5 s quantisation:
+> `docs/dvd_nav.md` "Authored cell duration → Amendment (2026-08-25)".
+
 ### Round-8 (2026-08-25) — ★ Cluster B's last piece: the first-boot entropy hole
 
 **HW report (same session):** with the hold fixed, Weakest Link asks **the same question

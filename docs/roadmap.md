@@ -1775,13 +1775,14 @@ every one of them — the trail is worth more than the clone size. Note the larg
 > all — they flashed by in ~0.2 s. The stored duration now rounds the frames in. See
 > `docs/disc_sweep.md` "Round-7" + `docs/dvd_nav.md` "Amendment (2026-08-25)".
 >
-> **🔧 2026-08-25, ⏳ HW-confirm pending — FIRST-BOOT ENTROPY (same branch).** The rnd
-> LFSR was seeded only from the mount instant, which is not entropy when the first mount
-> after a core load is machine-timed: Weakest Link asked the same question on every cold
-> load (a disc reload fixed it, since that mount IS user-timed). `hps_io`'s `TIMESTAMP`
-> (wall clock) is now XORed into the seed — libdvdnav's `srand(time)` parity — plus a
-> zero-lockup guard on the stir path. See `docs/disc_sweep.md` "Round-8" +
-> `docs/dvd_vm.md` "First-boot hole".
+> **2026-08-25 — WL "same question every time" = AUTHORED, no fix shipped.** It happens
+> only when Menu is pressed during the boot sequence: the disc seeds its question index in
+> the boot chain (VTS21 PGC24/PGC28) and its own Root trampoline jumps past it, so the game
+> runs with `g[4]=g[5]=0`. libdvdnav does the identical jump and the disc sets NO UOP bits
+> (4,257 PGCs, all zero), so no faithful player can refuse the press. Workaround: let the
+> intro play. Shipped alongside as unverified HARDENING (not a fix): `TIMESTAMP` XORed into
+> the rnd seed, plus a real LFSR zero-lockup guard on the stir path. See
+> `docs/disc_sweep.md` "Round-8" + `docs/dvd_vm.md` "Menu over a boot chain".
 >
 > **★ NEW TRACK (2026-08-18): SPEC HARDENING — design to the DVD spec maximum, phased
 > plan in `docs/spec_hardening.md`.** The PGCN and cell-duration bugs were both
