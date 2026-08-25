@@ -1538,6 +1538,20 @@ on the same branch. The unsupported-audio notice is narrowed to format 3. See
 | 3 | `feature/readme-release` | README, LICENSE + NOTICE, rip + settings docs | ✅ (PR fj#181) |
 | 4 | `feature/alpha-release` | Version scheme, tagged build, final soak | ✅ (PR fj#182) — soak is the remaining HW step |
 
+## VCD / SVCD playback (bin/cue direct) — ✅ HW-CONFIRMED 2026-08-24
+
+**2026-08-24, branch `feature/vcd-svcd-playback` — see `docs/vcd_svcd.md`.** Select a
+bin/cue rip's data-track `.bin`: in-fabric raw MODE2/2352 deblock (Form-2 payloads,
+Form-1/ISO track skipped), MPEG-1 system-stream demux (auto-detected per pack),
+44.1/32 kHz MP2 output NCO (closes the "8.8 % fast" item), SVCD 480-wide analog fill
+(the `< 720` predicate widening — DVD sub-D1 704/544 now fills too, reversing the
+earlier scope), and whole-file seek + pause (raw seeks snap to a sector = pack
+boundary; flat `.mpg`/`.VOB` seeks re-sync via a post-seek pack hunt, and now seek
+too). Not in v1: VCD menus/PBC, CD-DA tracks, 2336-byte images, 23.976 film VCDs.
+✅ HW gate passed 2026-08-24 (user report: VCD/SVCD good on analog + HDMI, seeking
+works). Remaining sub-items (NTSC cadence, 16:9 SVCD, release-build DVD regression):
+`docs/vcd_svcd.md` §6.
+
 ### Phase 1 — end-user defaults ✅ (this change)
 
 Full CONF_STR audit against an end user rather than a developer. **One functional

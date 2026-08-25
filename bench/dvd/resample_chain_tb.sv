@@ -149,15 +149,19 @@ module resample_chain_tb;
   // below). +siftog=1 starts with the fill OFF and flips it on at a frame
   // boundary mid-run (the runtime Analog Out toggle case): the chain must re-prime
   // and settle back to passing geometry with no wedge.
-  integer sif = 0, siftog = 0;
+  // +hfill=1 : SVCD-style h-fill-only (2026-08-24 <720 predicate widening):
+  // 480x480 content, disp_hstretch 480->720 (exact 2:3), NO vertical scaling
+  // (vscale_mode stays 0 — SVCD vertical is raster-native). Same sif_live
+  // enable plumbing; composes with +hgrad (480->720 blend proof) and +crt.
+  integer sif = 0, siftog = 0, hfill = 0;
   integer dumplines = 0;   // +dumplines=1: print the full per-line luma map (debug aid)
   reg        sif_live = 1'b0;                                 // the live enable (toggled by +siftog)
-  wire [1:0] rs_vscale_mode = sif_live ? 2'd2 : 2'd0;         // addrgen vertical: Fit / SIF 2x line repeat
+  wire [1:0] rs_vscale_mode = (sif_live && (hfill == 0)) ? 2'd2 : 2'd0;  // Fit / SIF 2x line repeat
   wire       rs_vscale_en   = (vsmode == 1);                  // letterbox -> downstream disp_vscale 2-tap blend
   wire       rs_hcrop_en    = (vsmode == 2);                  // crop
   // letterbox top-bar height (woven frame lines) = EFFECTIVE vertical_size/8 (the SIF
   // doubling happens upstream of disp_vscale, mirroring mpeg2video's eff mux); 0 for fit/crop.
-  wire [13:0] eff_vsz_w  = sif_live ? {vertical_size[12:0], 1'b0} : vertical_size;
+  wire [13:0] eff_vsz_w  = (sif_live && (hfill == 0)) ? {vertical_size[12:0], 1'b0} : vertical_size;
   wire [13:0] sg_hsize   = sif_live ? 14'd720 : HORIZONTAL_SIZE;
   wire [11:0] mixer_voff = (vsmode == 1) ? {1'b0, eff_vsz_w[13:3]} : 12'd0;
   // crop horizontal stretch params (mirrors mpeg2video): centre 3/4 crop, stretch back to
@@ -720,8 +724,10 @@ module resample_chain_tb;
     void'($value$plusargs("dumplines=%d", dumplines));
     void'($value$plusargs("sif=%d",      sif));
     void'($value$plusargs("siftog=%d",   siftog));
+    void'($value$plusargs("hfill=%d",    hfill));
     if (vgrad != 0) linetag = 1;                 // the blend proof rides the linetag side-fifo
     if (sif) wide = 1;                           // SIF fill targets the wide 720x480 modeline
+    if (hfill) wide = 1;                         // SVCD h-fill likewise
     if (crt) begin wide = 1; il = 1; end       // CRT implies the wide geometry + field path
     mb_height     = mbh[7:0];
     vertical_size = mbh * 16;
@@ -770,6 +776,13 @@ module resample_chain_tb;
       if (!siftog) sif_live = 1'b1;            // +siftog starts OFF, flips mid-run
       $display("     SIF fill mode: content 352x240, fill %s (vscale_mode=2, hstretch 352->720)",
                siftog ? "toggled mid-run" : "ON");
+    end
+    if (hfill) begin
+      // SVCD 2/3-D1: 480x480 content, h-fill 480->720 only (vertical native)
+      MB_WIDTH = 8'd30; HORIZONTAL_SIZE = 14'd480;
+      mbh = 30; mb_height = 8'd30; vertical_size = 14'd480;
+      sif_live = 1'b1;
+      $display("     SVCD h-fill mode: content 480x480, hstretch 480->720 (no vscale)");
     end
 `ifdef DEEP_DISP
     $display("\n==== resample_chain_tb [DEEP_DISP=2048] mb_height=%0d content=%0dx%0d ====",
@@ -860,7 +873,7 @@ module resample_chain_tb;
     // score 0, which proves the pass-through really is a bypass. ----
     if (hgrad != 0) begin
       integer hp_ok, hp_exp;
-      hp_exp = (vsmode == 2) || (sif && sif_live);   // hstretch active: Crop OR the SIF 352->720 fill
+      hp_exp = (vsmode == 2) || ((sif || hfill) && sif_live);  // hstretch: Crop / SIF / SVCD fill
       if (hp_exp) hp_ok = (hg_interp_max * 2 > hg_seen_max) && (hg_seen_max > 0);
       else        hp_ok = (hg_interp_max <= 0);
       $display("---- BLENDPROOF-H vsmode=%0d crt=%0d sif=%0d : max interpolated pixels=%0d/%0d => %s ----",

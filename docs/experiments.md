@@ -54,6 +54,14 @@ when on the CRT, `Fit` + `Aspect Ratio 16:9` when you care about HDMI.
 
 ## VCD / SVCD playback (spin-off or mode)
 
+> **★ 2026-08-24: DELIVERED as a mode of this core** (`feature/vcd-svcd-playback`,
+> `docs/vcd_svcd.md`): MPEG-1 video + MP2 landed earlier (`docs/mpeg1.md`), and
+> bin/cue raw-sector deblocking, MPEG-1 system-stream demux, the 44.1 kHz output
+> rate, SVCD 480-wide analog fill, and linear seek/pause are all in. The `.DAT →
+> .mpg` PC-side extraction this section assumes is no longer needed — the core
+> reads the data-track `.bin` directly. The section below is kept as the original
+> delta analysis; its "not scheduled / spin-off" framing is historical.
+
 **Idea:** play Video CD (VCD) and Super Video CD (SVCD) rips, either as a separate spin-off
 core or as an added mode of this one.
 
