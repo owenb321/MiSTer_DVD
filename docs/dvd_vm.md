@@ -308,7 +308,8 @@ real main menu. Four things keep this safe:
 Tests: `dvd_vm_tb` [S2] (first press retargets, `fb == FB_BOOTM`) and **[S21]** (target /
 `FB_BOOTM`→own-VTS fallback → VMGM / self-limiting after a menu load). Mirrored in
 `tools/dvd_vm_ref.py` (`menu_seen`, `_menu_call_root`) so the golden model stays in
-lockstep. ⏳ **HW-confirm pending.**
+lockstep. **✅ HW-CONFIRMED 2026-08-25** (user report: Menu over Atmosfear's
+copyright screen now reaches the main menu).
 
 **Menu key `came_via_menukey` gate (Trivial Pursuit Star Wars).** The Menu key used to
 `LinkRSM` unconditionally from any menu. On a **single-VTS game disc whose VTS1/title1 IS the

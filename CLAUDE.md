@@ -649,9 +649,10 @@ worse maintenance burden than targeted in-place edits. So:
   Menus Off = Phase-3 behaviour exactly. Punted: angles, PTT exactness (Phase 6),
   GPRM counter tick, UOPs, parental.
   - **⚠ BOOT-CHAIN MENU SHORTCUT — the one deliberate deviation from libdvdnav
-    (2026-08-25, user decision; ⏳ HW-confirm pending).** Menu pressed over the
-    First Play copyright screen used to hand the key to the PLAYING title's VTSM
-    Root, which on a DVD-game disc is a DISPATCHER, not a menu: Atmosfear's sets
+    (2026-08-25, user decision) — ✅ HW-CONFIRMED 2026-08-25 (user report).**
+    Menu pressed over the First Play copyright screen used to hand the key to
+    the PLAYING title's VTSM Root, which on a DVD-game disc is a DISPATCHER,
+    not a menu: Atmosfear's sets
     `g[2]=7` → VMGM 6 → VTSM(1) Root → (g2≠0) PGCN 5 → 48 → `rnd 6; JumpTT 1` =
     a random ~35 s Gatekeeper clip. **libdvdnav does the same** (verified with its
     own `trace_menuearly` on the real ISO) and the disc sets **no UOP bits**, so a

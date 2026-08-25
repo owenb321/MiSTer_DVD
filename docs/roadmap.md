@@ -1647,7 +1647,8 @@ it**); warnings re-appear after a user audio/subtitle popup. Two defects found:
    preempted, so the "user popup wins" contract is unchanged. Tests: `transport_hud_tb`
    T17a-e.
 
-**★ HW ROUND 2 (2026-08-25) — `UNSUPPORTED IMAGE` false-positive on slow media.**
+**★ HW ROUND 2 (2026-08-25) — `UNSUPPORTED IMAGE` false-positive on slow media.
+✅ FIXED + HW-CONFIRMED 2026-08-25 (user report).**
 User report: an image served off a NAS whose drives spin up on first access raised
 `UNSUPPORTED IMAGE`, and because the latch is sticky the popup then sat **over correct
 playback** once the image finally loaded. Root cause: `IMG_WD` ran on **wall time from
