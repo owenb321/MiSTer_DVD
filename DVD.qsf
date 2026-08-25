@@ -543,4 +543,11 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # gate). Re-swept (USE_DOCKER tools/seed_sweep.sh, FMAX_MIN=86.0): seeds 9/11/13
 # FAILED (75-86 range); SEED 5 routes + PASSES both corners (87.70 @100C /
 # 88.88 @-40C) -> releases/DVD_vcdsvcd_20260825_0131.rbf. Pinned SEED 5.
-set_global_assignment -name SEED 5
+#
+# CELL-DURATION-FRAMES netlist (2026-08-25, fix/cell-duration-frames): the C_PBTM
+# frame-rounding wires reshuffled placement -> the inherited SEED 5 came in badly
+# MARGINAL (clk_dec 75.95 MHz @100C / 77.7 @-40C). Re-swept (USE_DOCKER
+# tools/seed_sweep.sh, FMAX_MIN=86.0): SEED 7 routes + PASSES both corners
+# (clk_dec 86.54 MHz @100C / 87.73 MHz @-40C) - first seed tried ->
+# releases/DVD_celldurfrm_20260825_1652.rbf. Pinned SEED 7.
+set_global_assignment -name SEED 7
