@@ -1055,6 +1055,28 @@ told apart on the SD card. The date/time suffix is appended automatically.
 The script always passes `-o bitstream_compression=on` and warns if the output
 exceeds ~4 MB. Copy the resulting `releases/*.rbf` to the SD card to load it.
 
+### Versioning and publishing releases
+
+Two identifiers, deliberately at different granularities:
+
+- **`` `CORE_VERSION `` in `dvd/emu.sv`** — the series (`0.1b`), shown in the OSD as
+  ``v`CORE_VERSION` `BUILD_DATE` `` (e.g. `v0.1b 260825`). **Bump it the moment a release
+  is PUBLISHED, not when the next one is cut**, so no dev build ever advertises a version
+  that already exists on the releases page — that line is the only thing a bug report can
+  quote. Keeping the next version open also means the latest `.rbf` already matches the
+  tag when you decide to release, instead of forcing a rebuild (and a possible fitter
+  re-sweep) at release time.
+- **`BUILD_DATE`** — `yymmdd`, regenerated per compile by `sys/build_id.tcl`. ⚠ Do NOT
+  extend it with a time or a git SHA to separate same-day builds: it is part of
+  `CONF_STR`, hence part of the netlist, so every compile would become a new netlist and
+  re-roll the fitter seed lottery (see `DVD.qsf`'s seed ledger). Same-day dev builds are
+  told apart by their `build_release.sh --name` filename, which already carries
+  `<date>_<time>`.
+
+Publishing (GitHub, `gh`): tag `v<version>-<yyyymmdd>` (the first release was
+`v0.1a-20260825`), title `<version> (<date>) — <headline>`, attach the **timing-clean**
+`.rbf` only — never a `_MARGINAL_` one. Then bump `` `CORE_VERSION `` in the same session.
+
 > **Always build after completing a requested feature.** When an RTL/feature change is
 > finished (committed, PR opened), run `./build_release.sh --compile` to produce a fresh
 > loadable `.rbf` so it's ready to flash and HW-test — don't leave the user to trigger the
