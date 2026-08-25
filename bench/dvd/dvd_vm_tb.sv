@@ -439,15 +439,20 @@ module dvd_vm_tb;
         $display("S1 boot chain PASS");
 
         // ---------------- [S2] MENU KEY in a title --------------------------
+        // This is the FIRST menu invocation of the mount (no menu-domain PGC has
+        // loaded yet), so the BOOT-CHAIN MENU SHORTCUT applies: the target is
+        // best_menu_vts (2), NOT the playing title's own VTS (4). See the
+        // FB_BOOTM note in dvd_vm.sv. RSM still records the playing title.
         menu_active = 0;
         cur_vts = 8'd4; cur_pgcn = 8'd1; cur_cell = 8'd2;
         clear_actions;
         @(negedge clk); key_menu = 1;
         @(negedge clk); key_menu = 0;
         wait_settled;
-        if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != 8'd4 ||
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != best_menu_vts ||
             cap_jentry != 4'd3)
-            fail("S2: expected VTSM Root jump");
+            fail("S2: expected boot-shortcut VTSM Root jump to best_menu_vts");
+        if (dut.fb !== 3'd7) fail("S2: expected fb = FB_BOOTM");
         if (dut.rsm_vts !== 8'd4 || dut.rsm_cell !== 8'd2)
             fail("S2: RSM not saved");
         // reader answers: 0-cell root stub, pre = LinkPGCN 2
@@ -1231,6 +1236,60 @@ module dvd_vm_tb;
         if (saw_jump)
             fail("S20b: round-2 pre must NOT jump (infinite boot loop)");
         $display("S20 Hobbit VTSM PGC1 pre (trampoline round + menu round) PASS");
+
+        // -------- [S21] BOOT-CHAIN MENU SHORTCUT (Atmosfear, 2026-08-25) -----
+        // Three properties of the deviation documented at FB_BOOTM in dvd_vm.sv:
+        //   (a) the FIRST menu invocation of a mount targets best_menu_vts, not
+        //       the playing title's own VTS  (also covered inline by S2);
+        //   (b) if that target has no Root menu, FB_BOOTM falls back to the SPEC
+        //       path -- this title's own VTSM Root -- BEFORE widening to VMGM, so
+        //       a bad best_menu_vts guess can never cost a menu that used to work;
+        //   (c) it is SELF-LIMITING: once a menu-domain PGC has loaded
+        //       (menu_seen), every later Menu press is the unmodified spec path.
+        menu_active = 0;
+        vm_restart;
+        nav_ready = 1;
+        nr_pre = 0; nr_post = 0; nr_cell = 0;
+        cur_vts = 8'd7; cur_pgcn = 8'd3; cur_cell = 8'd1; cell_count = 8'd4;
+        dut.vm_dom = 2'd3;                       // DOM_TT: a title is playing
+        // (a) first Menu press of the mount -> best_menu_vts (2), not cur_vts (7)
+        clear_actions;
+        @(negedge clk); key_menu = 1;
+        @(negedge clk); key_menu = 0;
+        wait_settled;
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != best_menu_vts ||
+            cap_jentry != 4'd3)
+            fail("S21a: first Menu press must target best_menu_vts Root");
+        // (b) that VTS has no Root menu -> fall back to the OWN-VTS Root (7)
+        clear_actions; pulse_error; wait_settled;
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != 8'd7 ||
+            cap_jentry != 4'd3)
+            fail("S21b: FB_BOOTM must fall back to the own-VTS Root");
+        // ... and only then widen to the VMGM Title menu
+        clear_actions; pulse_error; wait_settled;
+        if (!saw_jump || cap_jdom != 2'd1 || cap_jentry != 4'd2)
+            fail("S21b: FB_BOOTM -> VMGM Title fallback");
+        // the VMGM menu loads: menu_seen latches here
+        nr_pre = 0; cell_count = 8'd2;
+        menu_active = 1;
+        cur_vts = 8'd0; cur_pgcn = 8'd1; cur_cell = 8'd0;
+        pulse_loaded;
+        wait_idle;
+        if (dut.menu_seen !== 1'b1) fail("S21c: menu_seen must latch on a menu load");
+        // (c) back to a title, press Menu again -> spec path, targets cur_vts (7)
+        menu_active = 0;
+        dut.vm_dom = 2'd3;
+        dut.came_via_menukey = 1'b0;             // a title played: toggle dropped
+        cur_vts = 8'd7; cur_pgcn = 8'd3; cur_cell = 8'd1; cell_count = 8'd4;
+        clear_actions;
+        @(negedge clk); key_menu = 1;
+        @(negedge clk); key_menu = 0;
+        wait_settled;
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != 8'd7 ||
+            cap_jentry != 4'd3)
+            fail("S21c: after a menu was seen, Menu must use the spec path (cur_vts)");
+        if (dut.fb !== 3'd2) fail("S21c: expected fb = FB_VTSM (spec path)");
+        $display("S21 boot-chain menu shortcut (target/fallback/self-limit) PASS");
     end
     endtask
 

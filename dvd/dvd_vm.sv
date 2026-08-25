@@ -506,8 +506,48 @@ reg [15:0] rsm_r4, rsm_r5, rsm_r6, rsm_r7, rsm_r8;
 // Fallback chain (ported from the Phase-2/3 emu glue). FB_TITLE also tags
 // command-issued title jumps: if one fails, retry once with the auto title.
 localparam [2:0] FB_NONE = 3'd0, FB_FP = 3'd1, FB_VTSM = 3'd2, FB_VTSM2 = 3'd3,
-                 FB_VMGM = 3'd4, FB_TITLE = 3'd5, FB_GAVEUP = 3'd6;
+                 FB_VMGM = 3'd4, FB_TITLE = 3'd5, FB_GAVEUP = 3'd6,
+                 FB_BOOTM = 3'd7;
 reg [2:0] fb;
+
+// ---------------------------------------------------------------------------
+// BOOT-CHAIN MENU SHORTCUT (2026-08-25, Atmosfear).
+//
+// Pressing Menu on the copyright/warning screen a disc's First Play chain puts
+// up used to hand the key to that title's OWN VTSM Root PGC, per spec. On a
+// DVD-game disc that PGC is not a menu - it is a dispatcher that records "the
+// player pressed Menu inside VTS n" and routes on it. ATMOSFEAR: every VTS's
+// VTSM Root sets `g[2] = 7` then JumpSS VMGM 6 -> VTSM(1) Root, whose own PRE
+// reads `g[2] != 0` and links away to PGCN 48 = `rnd 6 -> g[5]; g[3] = 1;
+// JumpSS VMGM 2` = JumpTT 1 = a random ~35 s Gatekeeper clip. Only after that
+// clip's cell command (CallSS VMGM 9) does the main menu appear. libdvdnav does
+// exactly the same (verified on the real ISO with its own trace harness), and
+// the disc sets NO UOP bits, so nothing tells a player to refuse the key: the
+// disc is doing this to itself and a faithful VM cannot help the user here.
+//
+// So, by user decision, this is a DELIBERATE DEVIATION with a deliberately tiny
+// blast radius: only while NO menu-domain PGC has been loaded since the mount
+// (`menu_seen` == 0 - i.e. the disc has never yet shown the user a menu) does
+// the Menu key skip the current title's VTSM Root and jump straight to the Root
+// menu of `best_menu_vts` (the VTS holding the largest menu VOB - the same
+// heuristic the error-fallback chain already trusts). Because it never runs the
+// current VTS's Root PGC, `g[2]` stays 0 and Atmosfear lands directly on its
+// real main menu (VTSM vts=1 PGCN 7 - verified against the disc).
+//
+// Self-limiting by construction: the very first Menu press loads a menu, which
+// sets `menu_seen`, so every subsequent press is the unmodified spec path. Inert
+// on discs with no menu VOB (best_menu_vts == 0) and on the common movie-disc
+// case where the menus live in the VTS that is already playing (best_menu_vts ==
+// cur_vts). On MiB - feature in VTS_21, menus in VTS_02 - it short-circuits a
+// trampoline that already ended at VTS_02's menu anyway.
+//
+// If the shortcut's target has no Root menu, FB_BOOTM falls back to the SPEC
+// path (this title's own VTSM Root) before widening to VMGM, so nothing that
+// used to work can be lost to a bad `best_menu_vts` guess.
+// ---------------------------------------------------------------------------
+reg  menu_seen;    // a menu-domain PGC has been loaded since the last mount
+wire boot_menu = ~menu_seen & (best_menu_vts != 8'd0) & (best_menu_vts != cur_vts);
+wire [7:0] menukey_vts = boot_menu ? best_menu_vts : cur_vts;
 
 // Serial ALU (mul: MSB-first shift-add; div/mod/rnd: restoring divide)
 reg [3:0]  alu_op;
@@ -577,6 +617,7 @@ always @(posedge clk or negedge rst_n) begin
         skip_pre <= 1'b0;
         tt_resolve <= 1'b0;
         came_via_menukey <= 1'b0;
+        menu_seen <= 1'b0;
         deadend_vts <= 8'd0; deadend_pgcn <= 16'd0; deadend_seen <= 1'b0;
         rsm_vts <= 8'd0; rsm_pgcn <= 16'd0; rsm_cell <= 8'd0;
         rsm_r4 <= 16'd0; rsm_r5 <= 16'd0; rsm_r6 <= 16'd0;
@@ -614,6 +655,16 @@ always @(posedge clk or negedge rst_n) begin
         if (sec_tick) tick_pending <= 1'b1;
 
         nav_ready_d <= nav_ready;
+
+        // "the disc has shown the user a menu" - gates the boot-chain menu
+        // shortcut above. Latched on the LOAD EVENT of a menu-domain PGC, not on
+        // the bare menu_active level: a level that is still stale from the last
+        // disc for a cycle or two after a mount would otherwise disable the
+        // shortcut for the whole session, silently. vm_dom is the VM's own
+        // tracked domain (set when the jump is issued), so this is deterministic
+        // and matches the golden model's `_load_pgcn` hook exactly.
+        if (pgc_loaded && (vm_dom == DOM_VMGM || vm_dom == DOM_VTSM))
+            menu_seen <= 1'b1;
 
         // ---- event latching (any state; the FSM consumes by priority) ---
         if (enable) begin
@@ -662,6 +713,7 @@ always @(posedge clk or negedge rst_n) begin
             skip_pre <= 1'b0;
             tt_resolve <= 1'b0;
             came_via_menukey <= 1'b0;
+            menu_seen <= 1'b0;
             deadend_vts <= 8'd0; deadend_pgcn <= 16'd0; deadend_seen <= 1'b0;
             fb <= FB_NONE;
             fuse <= 13'd0; chain <= 7'd0;
@@ -727,6 +779,21 @@ always @(posedge clk or negedge rst_n) begin
                     nat_src   <= 1'b0;
                     if (fb == FB_GAVEUP) begin
                         fb <= FB_NONE;            // never loop on errors
+                    end else if (fb == FB_BOOTM && cur_vts != 8'd0 &&
+                                 cur_vts != vm_vts) begin
+                        // The boot-chain shortcut aimed at best_menu_vts and that
+                        // VTS has no Root menu: fall back to the SPEC path (this
+                        // title's own VTSM Root) before widening to VMGM, so a bad
+                        // best_menu_vts guess can never cost a menu that used to work.
+                        fb <= FB_VTSM2;
+                        vm_dom <= DOM_VTSM; vm_vts <= cur_vts;
+                        jump_domain <= DOM_VTSM;
+                        jump_vts <= cur_vts; jump_pgcn <= 16'd0;
+                        jump_entry <= 4'd3;       // Root
+                        jump_ttn <= 7'd0; jump_pgn <= 8'd0; jump_cell <= 8'd0;
+                        jump_pulse <= 1'b1;
+                        wait_tmr <= 24'd0;
+                        state <= V_WAIT;
                     end else if (fb == FB_VTSM && best_menu_vts != 8'd0 &&
                                  best_menu_vts != vm_vts) begin
                         fb <= FB_VTSM2;
@@ -738,7 +805,8 @@ always @(posedge clk or negedge rst_n) begin
                         jump_pulse <= 1'b1;
                         wait_tmr <= 24'd0;
                         state <= V_WAIT;
-                    end else if (fb == FB_VTSM || fb == FB_VTSM2) begin
+                    end else if (fb == FB_VTSM || fb == FB_VTSM2 ||
+                                 fb == FB_BOOTM) begin
                         fb <= FB_VMGM;
                         vm_dom <= DOM_VMGM; vm_vts <= 8'd0;
                         jump_domain <= DOM_VMGM;
@@ -883,13 +951,17 @@ always @(posedge clk or negedge rst_n) begin
                             // Resuming RSM here would replay the copyright, so instead
                             // RE-INVOKE the Root menu (menu_call(Root) semantics), with
                             // the FB_VTSM fallback chain to a real menu.
-                            vm_dom <= DOM_VTSM; vm_vts <= cur_vts;
+                            // menukey_vts/boot_menu: before the disc has ever shown a
+                            // menu (e.g. Menu pressed while still in the FP chain), aim
+                            // at best_menu_vts instead - see the boot-menu shortcut note
+                            // at the FB_BOOTM declaration.
+                            vm_dom <= DOM_VTSM; vm_vts <= menukey_vts;
                             jump_domain <= DOM_VTSM;
-                            jump_vts <= cur_vts; jump_pgcn <= 16'd0;
+                            jump_vts <= menukey_vts; jump_pgcn <= 16'd0;
                             jump_entry <= 4'd3;   // Root
                             jump_ttn <= 7'd0; jump_pgn <= 8'd0; jump_cell <= 8'd0;
                             jump_pulse <= 1'b1;
-                            fb <= FB_VTSM;
+                            fb <= boot_menu ? FB_BOOTM : FB_VTSM;
                             wait_tmr <= 24'd0;
                             state <= V_WAIT;
                         end
@@ -902,13 +974,17 @@ always @(posedge clk or negedge rst_n) begin
                         rsm_r4 <= sprm4; rsm_r5 <= sprm5; rsm_r6 <= sprm6;
                         rsm_r7 <= sprm7; rsm_r8 <= sprm8_eff;
                         came_via_menukey <= 1'b1;
-                        vm_dom <= DOM_VTSM; vm_vts <= cur_vts;
+                        // menukey_vts/boot_menu: on the FIRST menu invocation of a
+                        // mount, aim at best_menu_vts rather than this title's own
+                        // VTSM Root, which on a DVD-game disc is a dispatcher and not
+                        // a menu (Atmosfear). See the FB_BOOTM declaration note.
+                        vm_dom <= DOM_VTSM; vm_vts <= menukey_vts;
                         jump_domain <= DOM_VTSM;
-                        jump_vts <= cur_vts; jump_pgcn <= 16'd0;
+                        jump_vts <= menukey_vts; jump_pgcn <= 16'd0;
                         jump_entry <= 4'd3;   // Root
                         jump_ttn <= 7'd0; jump_pgn <= 8'd0; jump_cell <= 8'd0;
                         jump_pulse <= 1'b1;
-                        fb <= FB_VTSM;
+                        fb <= boot_menu ? FB_BOOTM : FB_VTSM;
                         wait_tmr <= 24'd0;
                         state <= V_WAIT;
                     end

@@ -647,7 +647,23 @@ worse maintenance burden than targeted in-place edits. So:
   title-entry scan, P_PMAP program-map walk; emu's Phase-2/3 proto-nav/micro-bridge
   glue is DELETED (VM owns jumps; nav_pci gained `sel_force` for SetHL_BTNN).
   Menus Off = Phase-3 behaviour exactly. Punted: angles, PTT exactness (Phase 6),
-  GPRM counter tick, UOPs, parental. Tests: dvd_vm_tb (27 vectors + 9 scenarios),
+  GPRM counter tick, UOPs, parental.
+  - **⚠ BOOT-CHAIN MENU SHORTCUT — the one deliberate deviation from libdvdnav
+    (2026-08-25, user decision; ⏳ HW-confirm pending).** Menu pressed over the
+    First Play copyright screen used to hand the key to the PLAYING title's VTSM
+    Root, which on a DVD-game disc is a DISPATCHER, not a menu: Atmosfear's sets
+    `g[2]=7` → VMGM 6 → VTSM(1) Root → (g2≠0) PGCN 5 → 48 → `rnd 6; JumpTT 1` =
+    a random ~35 s Gatekeeper clip. **libdvdnav does the same** (verified with its
+    own `trace_menuearly` on the real ISO) and the disc sets **no UOP bits**, so a
+    faithful VM cannot help — hence the deviation. While `menu_seen == 0` (no
+    menu-domain PGC loaded since the mount) the Menu key targets `best_menu_vts`
+    Root instead; `g[2]` stays 0 and Atmosfear lands on its real main menu.
+    Self-limiting (that press latches `menu_seen`), inert when
+    `best_menu_vts ∈ {0, cur_vts}`, and new `fb=FB_BOOTM` falls back to the SPEC
+    path (own-VTS Root) before VMGM. **141-disc sweep: 135 unchanged, 6 changed —
+    all from a TITLE landing to a MENU landing.** Tests `dvd_vm_tb` [S2]/[S21];
+    golden model in lockstep. Full trace + table: `docs/dvd_vm.md` "Boot-chain
+    menu shortcut". Tests: dvd_vm_tb (27 vectors + 9 scenarios),
   iso_reader_vm_tb (command-driven boot→menu→loop→resume→post), all reader/demux/
   nav suites green. Design: **`docs/dvd_vm.md`**. **HW gate: BBB boots FP→menu→
   correct feature; MiB trampoline/Play/resume; SetSTN switches streams.**

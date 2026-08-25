@@ -197,6 +197,12 @@ Notes:
 
 A USB keyboard's number keys select menu buttons directly.
 
+**Menu during the disc's opening chain.** Pressing Menu over a copyright/warning screen —
+before the disc has shown you any menu — goes straight to the disc's main menu. Some discs
+(DVD games especially) author their per-title Root "menu" as a dispatcher that routes on
+where you pressed Menu from, which would otherwise drop you into a random clip rather than
+the menu. After you have been to a menu once, Menu behaves exactly as the disc specifies.
+
 ## Settings
 
 Defaults are chosen to be correct for most users; the first value listed is the default.
