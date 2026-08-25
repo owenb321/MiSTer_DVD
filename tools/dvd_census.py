@@ -30,6 +30,13 @@
 #   tools/dvd_census.py <iso-or-dir> [<iso-or-dir> ...]
 #   tools/dvd_census.py                     # defaults to $DVD_ISO_DIR
 #   tools/dvd_census.py --json out.json ... # also dump the raw vectors
+#   tools/dvd_census.py --captions ...      # + scan the video ES for line-21 CC
+#
+# --captions adds the one feature that is NOT visible in the IFO at all: NTSC
+# line-21 closed captions live in MPEG-2 user_data inside the VOB video stream,
+# so no nav table mentions them (libdvdread can't see them either). That scan is
+# delegated to tools/cc_scan.py, which opens the ES; it costs a few seconds per
+# disc, hence the opt-in flag.
 #
 # What each detected feature maps to in docs/conformance.md "Prioritized gap
 # list" is printed alongside the prevalence table.
@@ -65,7 +72,7 @@ def _be16(b, off):
 # =============================================================================
 # per-disc census
 # =============================================================================
-def census_iso(path):
+def census_iso(path, captions=False):
     """Return a feature dict for one ISO (or raise for a non-ISO / UDF-only)."""
     nav = IsoNav(path)                      # asserts CD001 -> ISO9660 only
     f = {"path": path, "name": os.path.basename(path)}
@@ -186,6 +193,25 @@ def census_iso(path):
     f["title_goup_pgcs"] = title_goup
     f["has_menu_goup"]   = menu_goup  > 0
     f["has_title_goup"]  = title_goup > 0
+    # --- line-21 closed captions (video ES, opt-in) --------------------------
+    f["cc_scanned"] = False
+    if captions:
+        from cc_scan import scan_iso as cc_scan_iso, verdict as cc_verdict
+        try:
+            res, err = cc_scan_iso(path)
+        except Exception:                                        # noqa: BLE001
+            res, err = None, "scan failed"
+        if res and not err:
+            _, _, acc, _ = res
+            f["cc_scanned"]   = acc["pics"] > 0
+            f["cc_present"]   = acc["nonnull"] > 0      # live captions
+            f["cc_carrier"]   = acc["cc_blocks"] > 0 and acc["nonnull"] == 0
+            f["cc_pairs"]     = acc["pairs"]
+            f["cc_nonnull"]   = acc["nonnull"]
+            f["cc_field2"]    = acc["nonnull_field"][0] > 0
+            f["cc_708"]       = acc["ga94_cc"] > 0
+            f["cc_verdict"]   = cc_verdict(acc)[0]
+
     return f
 
 
@@ -248,6 +274,10 @@ PREVALENCE_ROWS = [
     ("has_menu_goup", "Menu GoUp authored (B13 Return acts)",      "supported (B13)"),
     ("has_title_goup","Title-domain GoUp authored",                "supported (B13)"),
     ("vm_unknown_bits","VM command with un-decoded bits",          "decode/quirk"),
+    # --captions only (rows read 0/N when the ES scan was not requested)
+    ("cc_present",    "Line-21 captions (EIA-608 in user_data)",    "not decoded"),
+    ("cc_carrier",    "  ...CC carrier present but all-null",       "not decoded"),
+    ("cc_708",        "  ...CEA-708 (A/53 GA94 cc_data)",           "not decoded"),
 ]
 
 
@@ -284,6 +314,11 @@ def report(vectors):
         if f["vm_gprm_counter"]: flags.append("GPRMcounter")
         if f["vm_rnd"]:          flags.append("rnd")
         if f["vm_unknown_bits"]: flags.append("UNKBITS=%d" % f["vm_unknown_bits"])
+        if f.get("cc_present"):  flags.append("CC608(%d/%d pairs%s)"
+                                              % (f["cc_nonnull"], f["cc_pairs"],
+                                                 ",f2" if f.get("cc_field2") else ""))
+        elif f.get("cc_carrier"): flags.append("CC-carrier-only")
+        if f.get("cc_708"):      flags.append("CEA708")
         print("  scanned %d VM commands. flags: %s"
               % (f["vm_commands_scanned"], " ".join(flags) or "(none)"))
 
@@ -320,6 +355,8 @@ def main():
     ap.add_argument("paths", nargs="*", default=[DEFAULT_DIR],
                     help="ISO files or directories (default: %s)" % DEFAULT_DIR)
     ap.add_argument("--json", help="also write the raw per-disc vectors here")
+    ap.add_argument("--captions", action="store_true",
+                    help="also scan the video ES for line-21 captions (slower)")
     args = ap.parse_args()
 
     isos = gather_isos(args.paths or [DEFAULT_DIR])
@@ -330,7 +367,7 @@ def main():
     vectors = []
     for path in isos:
         try:
-            f = _derived(census_iso(path))
+            f = _derived(census_iso(path, captions=args.captions))
             vectors.append(f)
             print("[ok]   %s" % os.path.basename(path))
         except AssertionError as e:
