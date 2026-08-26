@@ -608,4 +608,8 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # rolling this badly, the structural relief candidate is the mem_shim_burst
 # tag/valid/LRU flop arrays (~7,680 FF of high-fanout compare logic -> 1 M10K),
 # but that touches the 2-cycle hit pipeline's live lookup - own branch + HW gate.
+#
+# Round-2 field-fix netlist (same branch, one inverter on cc_fld1 + comments):
+# SEED 3 HELD first roll, and better -- clk_dec 94.71 MHz @100C / 92.26 @-40C
+# -> releases/DVD_cc21r2_20260826_2022.rbf. SEED 3 stays pinned.
 set_global_assignment -name SEED 3

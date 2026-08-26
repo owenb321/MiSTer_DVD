@@ -66,10 +66,12 @@ round.
 
 ### Next step
 
-**The timing-clean build exists: `releases/DVD_cc21_20260826_2006.rbf`** (SEED 3, clk_dec
-90.9 MHz @100C / 90.2 @-40C — healthy class; the sweep history is in the `DVD.qsf` ledger).
-Flash it and test per §6 — **`P1O[44] CC Test Line = On` first**, on one of the six
-captioned discs in §3, analog output engaged and scanlines off.
+**The round-3 build is `releases/DVD_cc21r2_20260826_2022.rbf`** (SEED 3 first roll,
+clk_dec 94.71 MHz @100C / 92.26 @-40C — the branch's best fit; sweep history in the
+`DVD.qsf` ledger). It carries the round-2 field fix, so the test is now simply: play a
+captioned disc (§3), TV captions on **C1**, analog output, scanlines off. The CC Test Line
+diagnostic remains at `P1O[44]` if anything regresses. (`DVD_cc21_20260826_2006.rbf` is the
+round-2 build — superseded, its CC1 rides the wrong field.)
 
 Checked and needing no action: the idle screen cannot interact (it draws in the active
 region while nothing is mounted; captions live in the VBI of the second raster), and OSD
