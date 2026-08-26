@@ -275,11 +275,11 @@ function [15:0] sprm_read(input [4:0] r);
     endcase
 endfunction
 
-// eval_reg: bit7 = system register, else GPRM (low 4 bits). Counter-mode
-// GPRMs read their stored value (the 1 Hz tick is punted - documented).
-function [15:0] eval_reg(input [7:0] r);
-    eval_reg = r[7] ? sprm_read(r[4:0]) : gprm[r[3:0]];
-endfunction
+// eval_reg semantics (now inlined at the three shared operand reads below --
+// the function form is gone because a function-mediated gprm[] word read
+// loses array sensitivity in continuous/@* contexts, see the ⚠ note there):
+// bit7 = system register, else GPRM (low 4 bits). Counter-mode GPRMs read
+// their stored value (the 1 Hz tick is punted - documented).
 
 // =========================================================================
 // Instruction register + field decode (bit numbering = vmcmd.c getbits:
@@ -307,35 +307,83 @@ function cmp_eval(input [2:0] op, input [15:0] a, input [15:0] b);
     endcase
 endfunction
 
-// Compare operand muxes per if-version
-wire [15:0] cmpa_v1 = eval_reg(ins[39:32]);
-wire [15:0] cmpb_v1 = cmp_imm ? ins[31:16] : eval_reg(ins[23:16]);
-wire [15:0] cmpa_v2 = eval_reg(ins[15:8]);
-wire [15:0] cmpb_v2 = eval_reg(ins[7:0]);
-wire [15:0] cmpa_v3 = eval_reg(ins[47:40]);
-wire [15:0] cmpb_v3 = cmp_imm ? ins[15:0] : eval_reg(ins[7:0]);
-wire [15:0] cmpa_v4 = gprm[ins[51:48]];
-wire [15:0] cmpb_v4 = cmp_imm ? ins[31:16] : eval_reg(ins[23:16]);
-wire [15:0] cmpa_v5 = ins_imm ? gprm[ins[27:24]] : gprm[ins[35:32]];
-wire [15:0] cmpb_v5 = ins_imm ? eval_reg(ins[23:16])
-                              : (cmp_imm ? ins[31:16] : eval_reg(ins[23:16]));
+// Compare operands -- SHARED eval_reg pair (area reclaim, 2026-08-26).
+// The per-if-version trees (cmpa_v1..v5 / cmpb_v1..v5, each its own eval_reg =
+// a 16:1 GPRM mux + the SPRM mux) instantiated eval_reg 11x in parallel, but
+// only ONE version is consumed per executed instruction (selected by ins_type),
+// so the 8-bit REGISTER SELECTOR is muxed first and eval_reg runs once per
+// operand. gprm[x] == eval_reg({4'b0, x}) (bit7 clear = GPRM path), so the
+// direct-gprm versions (v4, v5-A) fold into the same selector space.
+// BIT-EXACT vs the old trees: the selector muxes below reproduce, per
+// ins_type, exactly the operand the old cond_v* consumer read --
+//   t0/t1(!imm) = v1, t1(imm)/t2 = v2, t3 = v3, t4 = v4, t5/6 = v5.
+// cond_now evaluated in V_EXEC == the latched pre-set compare; evaluated in
+// V_LINKEV for type 4 == the old LIVE cond_v4 (selectors are combinational
+// off `ins`, which is unchanged; gprm has the type-4 set applied by then).
+reg [7:0] cmpa_rsel;
+always @* case (ins_type)
+    3'd0:    cmpa_rsel = ins[39:32];                              // v1
+    3'd1:    cmpa_rsel = ins_imm ? ins[15:8] : ins[39:32];        // v2 : v1
+    3'd2:    cmpa_rsel = ins[15:8];                               // v2
+    3'd3:    cmpa_rsel = ins[47:40];                              // v3
+    3'd4:    cmpa_rsel = {4'b0, ins[51:48]};                      // v4 (gprm)
+    default: cmpa_rsel = ins_imm ? {4'b0, ins[27:24]}             // v5 (gprm)
+                                 : {4'b0, ins[35:32]};
+endcase
 
-wire cond_v1 = cmp_eval(cmp_op, cmpa_v1, cmpb_v1);
-wire cond_v2 = cmp_eval(cmp_op, cmpa_v2, cmpb_v2);
-wire cond_v3 = cmp_eval(cmp_op, cmpa_v3, cmpb_v3);
-wire cond_v4 = cmp_eval(cmp_op, cmpa_v4, cmpb_v4);
-wire cond_v5 = cmp_eval(cmp_op, cmpa_v5, cmpb_v5);
+reg        cmpb_isimm;
+reg [15:0] cmpb_immv;
+reg [7:0]  cmpb_rsel;
+always @* begin
+    // defaults = the v1/v4 shape (immediate ins[31:16], register ins[23:16])
+    cmpb_isimm = cmp_imm; cmpb_immv = ins[31:16]; cmpb_rsel = ins[23:16];
+    case (ins_type)
+    3'd1: if (ins_imm) begin                                      // v2
+              cmpb_isimm = 1'b0; cmpb_rsel = ins[7:0];
+          end
+    3'd2: begin cmpb_isimm = 1'b0; cmpb_rsel = ins[7:0]; end      // v2
+    3'd3: begin cmpb_immv = ins[15:0]; cmpb_rsel = ins[7:0]; end  // v3
+    3'd5, 3'd6:                                                   // v5: imm form
+        if (ins_imm) cmpb_isimm = 1'b0;                           // reads a REG
+    default: ;                                                    // t0/t4 = v1/v4
+    endcase
+end
 
-// Set operand muxes per set-version
+// ⚠ The gprm[] read is written DIRECTLY here, not through eval_reg(): a
+// continuous assignment (or, in Icarus, even an always @*) that reads an
+// array WORD inside a called function is sensitive to the function's
+// arguments only, not to the array -- between V_EXEC and V_LINKEV the
+// selector doesn't change, so a function-form eval holds the STALE pre-set
+// value and breaks type 4's compare-after-set (its set and its live compare
+// hit the same register: t4_inc_hits, S9 TailPGC). A direct gprm[idx] read
+// gets proper array sensitivity, matching synthesis (structural, always
+// live) and decoder.c. This is exactly why the OLD per-version tree read
+// cmpa_v4 directly from gprm[] instead of through eval_reg. SPRM reads stay
+// function-form: no instruction type both writes an SPRM and live-re-reads
+// it in the same instruction (type 2's SPRM writes use the LATCHED cond).
+reg [15:0] cmpa_sh, cmpb_sh;
+always @* begin
+    cmpa_sh = cmpa_rsel[7] ? sprm_read(cmpa_rsel[4:0]) : gprm[cmpa_rsel[3:0]];
+    cmpb_sh = cmpb_isimm ? cmpb_immv
+            : cmpb_rsel[7] ? sprm_read(cmpb_rsel[4:0]) : gprm[cmpb_rsel[3:0]];
+end
+wire        cond_now = cmp_eval(cmp_op, cmpa_sh, cmpb_sh);
+
+// Set operand -- the third shared eval_reg. Covers s1/s2/s3_data AND the
+// type-2 SetNVTMR/SetGPRMMD value (which was s2_data's formula verbatim).
 wire [3:0]  s1_reg  = ins[35:32];
 wire [3:0]  s1_reg2 = ins[19:16];
-wire [15:0] s1_data = ins_imm ? ins[31:16] : eval_reg(ins[23:16]);
 wire [3:0]  s2_reg  = ins[51:48];
 wire [3:0]  s2_reg2 = ins[35:32];
-wire [15:0] s2_data = ins_imm ? ins[47:32] : eval_reg(ins[39:32]);
 wire [3:0]  s3_reg  = ins[51:48];
 wire [3:0]  s3_reg2 = ins[19:16];
-wire [15:0] s3_data = ins_imm ? ins[47:32] : eval_reg(ins[47:40]);
+wire [7:0]  set_rsel = (ins_type == 3'd3) ? ins[23:16] :          // s1
+                       (ins_type >= 3'd5) ? ins[47:40] :          // s3
+                                            ins[39:32];           // s2 (t2/t4)
+wire [15:0] set_imm  = (ins_type == 3'd3) ? ins[31:16] : ins[47:32];
+reg [15:0] set_data_sh;                  // direct gprm read: same reason as above
+always @* set_data_sh = ins_imm   ? set_imm :
+                        set_rsel[7] ? sprm_read(set_rsel[4:0]) : gprm[set_rsel[3:0]];
 
 // Which set variant applies (types 3-6) and whether it executes
 reg         set_do;
@@ -350,19 +398,19 @@ always @* begin
     set_sel_data = 16'd0;
     case (ins_type)
     3'd3: begin
-        set_do = cond_v3 && (set_op != 4'd0);
+        set_do = cond_now && (set_op != 4'd0);
         set_sel_op = set_op; set_sel_reg = s1_reg; set_sel_reg2 = s1_reg2;
-        set_sel_data = s1_data;
+        set_sel_data = set_data_sh;
     end
     3'd4: begin
         set_do = (set_op != 4'd0);              // set ALWAYS (decoder.c type 4)
         set_sel_op = set_op; set_sel_reg = s2_reg; set_sel_reg2 = s2_reg2;
-        set_sel_data = s2_data;
+        set_sel_data = set_data_sh;
     end
     3'd5, 3'd6: begin
-        set_do = cond_v5 && (set_op != 4'd0);   // set only when cond (both types)
+        set_do = cond_now && (set_op != 4'd0);  // set only when cond (both types)
         set_sel_op = set_op; set_sel_reg = s3_reg; set_sel_reg2 = s3_reg2;
-        set_sel_data = s3_data;
+        set_sel_data = set_data_sh;
     end
     default: ;
     endcase
@@ -400,11 +448,12 @@ always @* begin
 end
 
 reg  link_cond_l;                            // latched in V_EXEC
-wire link_cond = (ins_type == 3'd4) ? cond_v4 : link_cond_l;
-wire link_cond_pre = (ins_type == 3'd1) ? (ins_imm ? cond_v2 : cond_v1) :
-                     (ins_type == 3'd2) ? cond_v2 :
-                     (ins_type == 3'd3) ? cond_v3 :
-                     (ins_type == 3'd5) ? cond_v5 : 1'b1;
+wire link_cond = (ins_type == 3'd4) ? cond_now : link_cond_l;
+// types 0/4/6/7 latch TRUE (t0's cond gates its own Goto/Break in V_EXEC;
+// t4 re-evaluates live; t6's link sub-instruction is unconditional) -- the
+// per-type cond_v* reads all collapse to cond_now (selectors track ins_type).
+wire link_cond_pre = (ins_type == 3'd1 || ins_type == 3'd2 ||
+                      ins_type == 3'd3 || ins_type == 3'd5) ? cond_now : 1'b1;
 
 // For types 4/5/6 the link part is always a SUB-instruction (bits 51:48 are
 // set-op register bits there, not a link op) - force the subins route.
@@ -1111,11 +1160,11 @@ always @(posedge clk or negedge rst_n) begin
                 end else begin
                     case (ins_type)
                     3'd0: begin              // special: Nop/Goto/Break/SetPML
-                        if (cond_v1 && lnk_op == 4'd3)
+                        if (cond_now && lnk_op == 4'd3)
                             sprm13 <= {12'd0, ins[11:8]};
-                        if (cond_v1 && (lnk_op == 4'd1 || lnk_op == 4'd3))
+                        if (cond_now && (lnk_op == 4'd1 || lnk_op == 4'd3))
                             pc <= blk_base + ins[7:0] - 8'd1;   // Goto (1-based)
-                        else if (cond_v1 && lnk_op == 4'd2)
+                        else if (cond_now && lnk_op == 4'd2)
                             pc <= blk_end;                      // Break
                         else
                             pc <= pc + 8'd1;
@@ -1124,29 +1173,27 @@ always @(posedge clk or negedge rst_n) begin
                     3'd1: state <= V_LINKEV;
                     3'd2: begin              // system set (+ optional link)
                         if (set_op == 4'd1) begin      // SetSTN
-                            if (cond_v2 && ins[39])
+                            if (cond_now && ins[39])
                                 sprm1 <= ins_imm ? {9'd0, ins[38:32]}
                                                  : gprm[ins[35:32]];
-                            if (cond_v2 && ins[31])
+                            if (cond_now && ins[31])
                                 sprm2 <= ins_imm ? {9'd0, ins[30:24]}
                                                  : gprm[ins[27:24]];
-                            if (cond_v2 && ins[23])
+                            if (cond_now && ins[23])
                                 sprm3 <= ins_imm ? {9'd0, ins[22:16]}
                                                  : gprm[ins[19:16]];
                         end else if (set_op == 4'd2) begin   // SetNVTMR (stub)
-                            if (cond_v2) begin
-                                sprm9  <= ins_imm ? ins[47:32]
-                                                  : eval_reg(ins[39:32]);
+                            if (cond_now) begin
+                                sprm9  <= set_data_sh;
                                 sprm10 <= {8'd0, ins[23:16]};
                             end
                         end else if (set_op == 4'd3) begin   // SetGPRMMD
                             // the mode bit is set even when the cond fails
                             gprm_mode[ins[19:16]] <= ins[23];
-                            if (cond_v2)
-                                gprm[ins[19:16]] <= ins_imm ? ins[47:32]
-                                                            : eval_reg(ins[39:32]);
+                            if (cond_now)
+                                gprm[ins[19:16]] <= set_data_sh;
                         end else if (set_op == 4'd6) begin   // SetHL_BTNN
-                            if (cond_v2) begin
+                            if (cond_now) begin
                                 sprm8 <= ins_imm ? ins[31:16] : gprm[ins[19:16]];
                                 btn_force <= 1'b1;
                                 btn_force_val <= ins_imm

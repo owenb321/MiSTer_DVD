@@ -38,7 +38,11 @@ module emu (
 	output        VGA2_CE,
 	output        VGA2_EN,
 
-	input  [1:0]  BUTTONS,
+	// DVD-FORK FIX: canonical MiSTer direction is OUTPUT (core -> HPS virtual
+	// buttons; b[0] = OSD button). This fork inherited it as an input, leaving
+	// sys_top's btn wire undriven -- which is why the core could never pop the
+	// OSD open at load like console cores do. See the osd_btn block.
+	output  [1:0]  BUTTONS,
 
 	output        LED_USER,
 	output  [1:0] LED_POWER,
@@ -108,8 +112,28 @@ wire ar_wide_eff;
 // active the RASTER ITSELF is made 4:3-true upstream (disp_vscale/disp_hstretch),
 // and under dual raster HDMI sees that raster too — so force the scaler aspect to
 // 4:3 or ascal would stretch the already-letterboxed image back to 16:9.
-assign VIDEO_ARX    = (analog_letterbox | analog_crop) ? 13'd4 : ar_wide_eff ? 13'd16 : 13'd4;
-assign VIDEO_ARY    = (analog_letterbox | analog_crop) ? 13'd3 : ar_wide_eff ? 13'd9  : 13'd3;
+// DVD-FORK (idle screen, PR #9 follow-up): while NO media has been mounted the
+// Auto aspect path has no stream DAR to follow and idled at 4:3 -- on a 16:9
+// display ascal pillarboxed the raster, confining the bouncing logo to the
+// centre 4:3 window (HW report, 2026-08-26). The scaler output mode is already
+// an emu input (HDMI_WIDTH/HEIGHT, previously unused), so idle now presents
+// 16:9 whenever the DISPLAY is widescreen (W/H >= 1.5, shift+add only:
+// 1920x1080 wide, 640x480 / 1280x1024 not) and the raster fills the screen --
+// the logo bounces edge-to-edge. Registered + gated on the quasi-static
+// media_seen so VIDEO_ARX/ARY stays STABLE (the one flip at first mount
+// coincides with the load's own scaler re-init). The mild anamorphic stretch
+// of the logo (720x480 -> 16:9) is accepted -- same geometry as anamorphic
+// DVD content. Independent of O[20:19]: that option describes CONTENT aspect;
+// idle has none, so display-fit wins. HDMI_WIDTH==0 (no scaler) -> 4:3 path.
+reg disp_wide_q = 1'b0;
+always @(posedge clk_sys)
+    disp_wide_q <= ({1'b0, HDMI_WIDTH, 1'b0} >=                       // 14-bit W*2
+                    {1'b0, HDMI_HEIGHT, 1'b0} + {2'b00, HDMI_HEIGHT}) // 14-bit H*3
+                   && (HDMI_WIDTH != 12'd0);       // W*2 >= H*3  <=>  W/H >= 1.5
+wire idle_wide = ~media_seen & disp_wide_q;
+
+assign VIDEO_ARX    = (analog_letterbox | analog_crop) ? 13'd4 : (ar_wide_eff | idle_wide) ? 13'd16 : 13'd4;
+assign VIDEO_ARY    = (analog_letterbox | analog_crop) ? 13'd3 : (ar_wide_eff | idle_wide) ? 13'd9  : 13'd3;
 
 // DVD-FORK FIX (interlaced cadence): interlaced field indicator. In interlaced
 // mode the syncgen encodes the field in v_pos[0] (rtl/mpeg2/syncgen.v:289:
@@ -448,7 +472,7 @@ assign CE_PIXEL = 1'b1;
 // builds: it is part of CONF_STR = part of the netlist, so every compile would
 // become a new netlist and re-roll the fitter seed lottery (DVD.qsf's ledger).
 // Same-day dev builds are identified by their build_release.sh --name filename.
-`define CORE_VERSION "0.1b"
+`define CORE_VERSION "0.1c"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -625,6 +649,15 @@ parameter CONF_STR = {
     // the range is rebalanced around +/-200 ms. See docs/av_sync.md.
     "P1O[23:21],A/V Offset,+100ms,-200ms,-100ms,-50ms,0ms,+50ms,+150ms,+200ms;",
     "R0,Reset;",
+    // Saved-settings version (lowercase v = user_io.cpp config_ver, DISTINCT
+    // from the display-only uppercase V line below): the framework persists
+    // the raw 128-bit status word to config/DVD_v<N>.CFG, so any INCOMPATIBLE
+    // O[..] relayout must bump N (1..99) or every existing user's file gets
+    // silently reinterpreted with mismatched bit meanings (the O[1] Disc
+    // Menus polarity flip did exactly that pre-versioning). Bumping orphans
+    // the old file and falls everyone back to defaults -- there is no per-bit
+    // migration, so audit the index-0 label of every option when bumping.
+    "v,1;",
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
     // disc-menu nav (Phase 2). The J1 list names buttons B1..B11 for the MiSTer
     // "Define buttons" menu (bits 4..14 of joystick_0; D-pad = bits 3:0). The
@@ -819,6 +852,45 @@ always @(posedge clk_sys or negedge reset_n) begin
             current_file_size <= img_size;
     end
 end
+
+// =========================================================================
+// STARTUP OSD POPUP (launch-feedback, 2026-08-26): pop the framework OSD
+// ~0.9 s after core load when no disc was auto-mounted, so a bare launch
+// lands in the file picker instead of a black screen -- the console-core
+// convention (NES/SNES/Genesis all raise the virtual OSD button).
+//
+// Mechanics: BUTTONS[0] is the core->HPS virtual OSD button (sys_top.v ORs
+// it into gp_in; menu.cpp synthesises KEY_F12|UPSTROKE on its RELEASE edge).
+// ⚠ Because the RELEASE is what fires, the console-core "hold ~did-load for
+// the whole window" idiom would pop the OSD even for an auto-mounted disc
+// whose mount lands mid-window (an MGL <file> mount arrives seconds after
+// load, unlike boot.rom/SC mounts which complete before status[0] falls).
+// So this is a WAIT-THEN-PULSE instead: arm on the falling edge of
+// status[0] (the framework's core-load reset, released at the END of
+// user_io_init -- after every init-time auto-load), wait ~0.9 s watching
+// for a mount, and only then emit a 100 ms pulse. Any mount cancels it.
+// Must stay well under 3 s: a >=3 s hold means "enter Bluetooth pairing".
+//
+// One-shot per FPGA configuration (the counter saturates and nothing resets
+// it, so OSD-menu Reset can't re-fire it), and disc_ever has no reset term
+// (power-up init only) so a played-then-reset session never pops it either.
+localparam [24:0] OSD_T_FIRE = 25'd24_300_000;   // ~0.90 s @ 27 MHz
+localparam [24:0] OSD_T_END  = 25'd27_000_000;   // ~1.00 s (100 ms pulse)
+
+reg        osd_btn      = 1'b0;
+reg        hps_rst_seen = 1'b0;   // status[0] observed high since power-up
+reg        disc_ever    = 1'b0;   // any nonzero-size mount since power-up
+reg [24:0] osd_wait     = 25'd0;
+
+always @(posedge clk_sys) begin
+    if (img_mounted[0] && img_size != 64'd0) disc_ever <= 1'b1;
+    if (status[0])                           hps_rst_seen <= 1'b1;
+    if (hps_rst_seen && !status[0] && osd_wait != OSD_T_END)
+        osd_wait <= osd_wait + 25'd1;
+    osd_btn <= (osd_wait >= OSD_T_FIRE) && (osd_wait != OSD_T_END) && !disc_ever;
+end
+
+assign BUTTONS = {1'b0, osd_btn};
 
 // =========================================================================
 // GAMEPAD TRANSPORT (2026-07-06): pause + cell-granular seek, driven by the
@@ -4139,6 +4211,60 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .bar_alpha  (bar_alpha_w)
 );
 
+// ---------------------------------------------------------------------------
+// IDLE LOGO (launch-feedback, 2026-08-26): bouncing logo while no disc is
+// mounted -- see dvd/idle_logo.sv + docs/idle_screen.md. Priority-muxed into
+// the SAME register stage below (no new blend); alpha is a constant 15 there
+// (opaque passthrough). User bitmap = /media/fat/games/DVD/boot.rom (ioctl
+// index 0, the framework's zero-CONF_STR boot.rom convention -- the ioctl_*
+// wires were previously entirely unused).
+//
+// Visibility: every term is belt-and-braces on top of !media_seen (nothing
+// can be on screen before a mount), but each covers a real path --
+// video_live_s2/img_streaming catch the OSD-Reset-while-mounted case
+// (reset_n clears media_seen but the HPS does not re-pulse img_mounted);
+// img_unplayable yields to the UNSUPPORTED IMAGE popup; ioctl_download
+// hides a half-rewritten bank; OSD_STATUS hides under the file browser
+// (same clk_sys domain as sys/osd.v -- one flop, no CDC); logo_boot_dly
+// kills the flash of the DEFAULT logo between core load and Main's
+// boot.rom push (also re-armed by any later download).
+reg osd_status_q;
+always @(posedge clk_sys) osd_status_q <= OSD_STATUS;
+
+reg [24:0] logo_boot_dly;   // ~1.2 s @ 27 MHz
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)                  logo_boot_dly <= 25'h1FFFFFF;
+    else if (ioctl_download)       logo_boot_dly <= 25'h1FFFFFF;
+    else if (logo_boot_dly != 25'd0) logo_boot_dly <= logo_boot_dly - 25'd1;
+end
+
+wire logo_vis = !media_seen && !video_live_s2 && !img_streaming &&
+                !img_unplayable && !ioctl_download && !osd_status_q &&
+                (logo_boot_dly == 25'd0);
+
+wire       logo_on_w;
+wire [7:0] logo_r_w, logo_g_w, logo_b_w;
+idle_logo #(.LOGO_QX_ADJ(12'd4)) idle_logo_inst (
+    .clk            (clk_sys),
+    .rst_n          (reset_n),
+    .h_pos          (ov_h_gen),
+    .v_pos          (core_v_pos),
+    .pal_mode       (pal_eff),
+    .il_mode        (il_eff),
+    .frame_tick     (av_refresh_tick),
+    .vis            (logo_vis),
+    .entropy        (entropy_ctr),
+    .ioctl_download (ioctl_download),
+    .ioctl_wr       (ioctl_wr),
+    .ioctl_addr     (ioctl_addr),
+    .ioctl_dout     (ioctl_dout),
+    .ioctl_index    (ioctl_index),
+    .logo_on        (logo_on_w),
+    .logo_r         (logo_r_w),
+    .logo_g         (logo_g_w),
+    .logo_b         (logo_b_w)
+);
+
 // Pipeline the palette RGB + alpha + on/idx one clk_sys stage before the combinational
 // blend, so the blend stays a flat mux (no colour-space math) in the output hotspot.
 // The subtitle already tolerates a 1-px right shift (see below); this adds one more px,
@@ -4151,15 +4277,22 @@ reg  [3:0] sp_alpha_q;
 reg  [1:0] sp_idx_q;
 reg        sp_on_q;
 reg        sp_force_q;
+// The idle logo joins as a fourth layer below the bar (it is mutually
+// exclusive with all of them by its !media_seen gate -- the ordering is
+// belt-and-braces so any future gate leak keeps warnings on top). Its
+// alpha is a constant 15 (weight 16 = exact passthrough in subpic_blend)
+// and it MUST assert force: sp_idx_q carries the subpicture's index, which
+// is 0 when idle, and without force the idx-0 transparency key would erase
+// the logo.
 always @(posedge clk_sys) begin
-    sp_r_q     <= hud_on_w ? hud_r_w     : bar_on_w ? bar_r_w     : pal_r;
-    sp_g_q     <= hud_on_w ? hud_g_w     : bar_on_w ? bar_g_w     : pal_g;
-    sp_b_q     <= hud_on_w ? hud_b_w     : bar_on_w ? bar_b_w     : pal_b;
-    sp_alpha_q <= hud_on_w ? hud_alpha_w : bar_on_w ? bar_alpha_w
+    sp_r_q     <= hud_on_w ? hud_r_w     : bar_on_w ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
+    sp_g_q     <= hud_on_w ? hud_g_w     : bar_on_w ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
+    sp_b_q     <= hud_on_w ? hud_b_w     : bar_on_w ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
+    sp_alpha_q <= hud_on_w ? hud_alpha_w : bar_on_w ? bar_alpha_w : logo_on_w ? 4'd15
                            : (hl_use ? hl_a : sp_alpha);   // HLI alpha for recoloured classes
     sp_idx_q   <= sp_q_idx;
-    sp_on_q    <= hud_on_w | bar_on_w | sp_q_inside;
-    sp_force_q <= hud_on_w | bar_on_w | hl_use; // HUD/bar + background-class highlights blend
+    sp_on_q    <= hud_on_w | bar_on_w | logo_on_w | sp_q_inside;
+    sp_force_q <= hud_on_w | bar_on_w | logo_on_w | hl_use; // + logo: bypass the idx0 key
 end
 
 // Alpha-composite the subtitle over the decoded video, COMBINATIONALLY, right before

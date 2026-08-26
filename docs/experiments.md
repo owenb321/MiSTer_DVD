@@ -256,5 +256,9 @@ while `idle`, gated off once the decoder produces its first frame.
 - Needs a clean `idle` signal that reliably drops the moment real video starts (no logo bleeding over
   frame 1).
 
-**Status:** idea only (2026-07-09), user‑requested during the experiments brainstorm. Not scheduled;
-gated behind a fabric‑budget/congestion check before it's worth attempting.
+**Status: ✅ MERGED (PR #9, 2026-08-26) — see `docs/idle_screen.md`,
+which supersedes this sketch.** Shipped essentially as outlined above (1-bpp M10K mask,
+Q12.4 bounce FSM, reuse of the subpic_blend priority stage, `!media_seen` idle gate,
+original artwork) plus a user-replaceable bitmap via the `boot.rom` convention. The
+fabric-budget precondition was met by the same branch's reclaim pass (dead mpeg2 OSD
+tie-off + dvd_vm mux sharing).

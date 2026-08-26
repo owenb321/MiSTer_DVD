@@ -814,7 +814,14 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   sync_reg #(.width(8))  sync_matrix_coefficients     (dot_clk, dot_rst, matrix_coefficients, dot_matrix_coefficients);
   sync_reg #(.width(1))  sync_interlaced              (dot_clk, dot_rst, interlaced, dot_interlaced);
   sync_reg #(.width(1))  sync_pixel_repetition        (dot_clk, dot_rst, pixel_repetition, dot_pixel_repetition);
-  sync_reg #(.width(1))  sync_osd_enable              (dot_clk, dot_rst, osd_enable, dot_osd_enable);
+  /* DVD-FORK FIX (area reclaim): the mpeg2fpga on-screen display is dead logic
+   * in this fork -- osd_enable is only ever set by a REG_WR_STREAM (addr 0)
+   * regfile write, and emu.sv's modeline sequencer writes only addrs 1-5/0xB,
+   * so the enable is provably unreachable. Tying it off lets Quartus prune the
+   * alpha_blend DSPs + osd_clt read cone while KEEPING mpeg2_osd's pipeline
+   * registers (stage-5 passthrough), so the calibrated video latency vs the
+   * emu.sv overlay QX_ADJ constants is unchanged. See docs/roadmap.md. */
+  assign dot_osd_enable = 1'b0; // was: sync_reg sync_osd_enable (dot_clk, dot_rst, osd_enable, dot_osd_enable);
 
   /* test point synchronizer, for reading test point via register file */
   wire [31:0]regfile_testpoint;
@@ -1943,27 +1950,28 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * writing on-screen display
    */ 
 
+  /* DVD-FORK FIX (area reclaim): the OSD write path is unreachable (see the
+   * dot_osd_enable tie-off above -- nothing in this fork issues the REG_WR_OSD_*
+   * writes either), so the regfile->framestore OSD fifo is deleted and its
+   * consumer-side wires tied inert: rd_empty=1 idles the framestore_request OSD
+   * channel (arbiter constant-folds), wr_full/ack=0 keeps the regfile status
+   * bits benign, and the dangling osd_wr_* outputs let regfile's osd_mem_addr
+   * datapath prune. */
+  assign osd_wr_full        = 1'b0;
+  assign osd_wr_almost_full = 1'b0;
+  assign osd_wr_ack         = 1'b0;
+  assign osd_wr_overflow    = 1'b0;
+  assign osd_rd_empty        = 1'b1;
+  assign osd_rd_almost_empty = 1'b1;
+  assign osd_rd_valid        = 1'b0;
+  assign osd_rd_addr         = 22'd0;
+  assign osd_rd_dta          = 64'd0;
+  /* was:
   framestore_writer 
     #(.fifo_depth(OSD_DEPTH),
     .fifo_threshold(OSD_THRESHOLD))
-    osd_writer (
-    .rst(sync_rst), 
-    .clk(clk), 
-    .clk_en(1'b1), 
-    .wr_full(osd_wr_full), 
-    .wr_almost_full(osd_wr_almost_full), 
-    .wr_en(osd_wr_en), 
-    .wr_ack(osd_wr_ack),
-    .wr_addr(osd_wr_addr), 
-    .wr_dta(osd_wr_dta), 
-    .wr_overflow(osd_wr_overflow), 
-    .rd_empty(osd_rd_empty), 
-    .rd_almost_empty(osd_rd_almost_empty), 
-    .rd_en(osd_rd_en), 
-    .rd_valid(osd_rd_valid), 
-    .rd_addr(osd_rd_addr), 
-    .rd_dta(osd_rd_dta)
-    );
+    osd_writer ( ... );
+  */
 
  /*
   * Watchdog timer
