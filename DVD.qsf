@@ -574,5 +574,9 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # netlist: 40,854 -> 38,659 ALM (97% -> 92%), DSP 100 -> 92, M10K 505 -> 497. Full
 # feature netlist: 39,085 ALM (93%), SEED 9 closes FIRST ROLL - clk_dec 89.89 MHz
 # @100C / 90.60 @-40C (gate 86.0) -> releases/DVD_launchfb_20260826_0305.rbf.
-# No sweep needed; SEED 9 stays pinned.
+# No sweep needed; SEED 9 stays pinned. Two follow-up netlists on the same branch
+# also closed SEED 9 first roll: the 0.1c version bump (89.89/90.60,
+# DVD_launchfb_20260826_0354.rbf) and the idle-widescreen ARX fix (39,028 ALM,
+# 87.48/92.09 - tighter hot corner but PASS -> DVD_launchfb_20260826_0417.rbf =
+# the PR #9 merge build).
 set_global_assignment -name SEED 9
