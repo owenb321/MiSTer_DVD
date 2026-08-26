@@ -1,7 +1,6 @@
 # Idle Screen — Bouncing Logo (+ startup OSD, config versioning)
 
-**Status: implemented + sim-verified 2026-08-26 (branch `feature/launch-feedback`);
-⏳ HW-confirm pending.** The three post-release feedback items land together:
+**Status: ✅ MERGED (PR #9, 2026-08-26); ⏳ HW-confirm pending.** The three post-release feedback items land together:
 config versioning (`v,1;`), the startup OSD popup (`BUTTONS[0]`), and this
 idle screen.
 

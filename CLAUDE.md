@@ -158,8 +158,8 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **LAUNCH FEEDBACK TRIO (2026-08-26, branch `feature/launch-feedback`) — ⏳
-  HW-CONFIRM PENDING; design + HW gate: `docs/idle_screen.md`.** (1) **Config
+- ✅ **LAUNCH FEEDBACK TRIO — MERGED (PR #9, 2026-08-26); ⏳ HW-CONFIRM PENDING;
+  design + HW gate: `docs/idle_screen.md`.** (1) **Config
   versioning**: CONF_STR `"v,1;"` → settings persist to `config/DVD_v1.CFG`;
   bump N on any incompatible O[..] relayout (resets ALL options — re-audit
   index-0 labels when bumping). (2) **Startup OSD popup**: `BUTTONS` was

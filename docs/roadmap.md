@@ -1571,7 +1571,7 @@ bit means: a stale cfg from an older build decodes `status[1]=1` with the old me
 and comes up **Off**, i.e. the release whose headline is "menus default on" silently
 disables them for every existing user. Mitigations: (1) `menus_on` now inverts the bit
 (`~status[1]`), (2) do ALL default reordering in one phase rather than across releases,
-and (3) **✅ SOLVED PROPERLY 2026-08-26 (`feature/launch-feedback`): the CONF_STR now
+and (3) **✅ SOLVED PROPERLY 2026-08-26 (PR #9): the CONF_STR now
 carries `"v,1;"`**, so settings persist to `config/DVD_v1.CFG` — any future incompatible
 relayout bumps N and every user falls back to clean defaults automatically (the old
 file is orphaned, not reinterpreted). The former "delete `DVD.cfg` after updating"
