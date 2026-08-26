@@ -233,6 +233,10 @@ the menu. After you have been to a menu once, Menu behaves exactly as the disc s
 
 ## Settings
 
+**`Reset`** (in the OSD) stops playback, unloads the current image, resets the DVD
+navigation VM, and drops back to the bouncing-logo idle screen — pick a new image from
+`Load Video` to play again. (A custom `boot.rom` logo survives the reset.)
+
 > **Settings reset on upgrade (config versioning).** Saved settings now live in
 > `/media/fat/config/DVD_v1.CFG`. The first time you run a build with this change your
 > options fall back to the defaults below (your old `DVD.CFG`/`DVD.cfg` is left on the

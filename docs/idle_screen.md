@@ -167,6 +167,17 @@ new `DEF_W/DEF_H` power-up values in the RTL) *and* user PNG conversions
 `.mem`'s bank-0 bbox exactly fills the RTL's power-up dims, so the tool and
 RTL cannot drift apart silently.
 
+### OSD Reset → idle (HW round 5 request, 2026-08-26)
+
+The `R0,Reset` OSD row toggled `status[0]`, which nothing consumed — a no-op
+since the fork began. It now ORs (registered) into `reset_n`, the proven
+core-load reset, which yields the requested semantics for free: playback
+stops, `media_seen` clears (logo + widescreen idle presentation return), the
+reader/demux/decoder and the DVD-VM (GPRMs included) restart, `css_scrambled`
+clears. The two deliberately reset-less blocks survive by design: the user
+boot.rom logo and the startup-OSD one-shot (Reset does not re-pop the file
+picker; R-type options close the OSD as they fire, landing on the logo).
+
 ## Startup OSD popup (same branch)
 
 `BUTTONS` was declared `input` since the fork's inception — the canonical
