@@ -66,8 +66,10 @@ round.
 
 ### Next step
 
-Flash a timing-clean build and test per §6 — **`P1O[44] CC Test Line = On` first**, on one
-of the six captioned discs in §3, analog output engaged and scanlines off.
+**The timing-clean build exists: `releases/DVD_cc21_20260826_2006.rbf`** (SEED 3, clk_dec
+90.9 MHz @100C / 90.2 @-40C — healthy class; the sweep history is in the `DVD.qsf` ledger).
+Flash it and test per §6 — **`P1O[44] CC Test Line = On` first**, on one of the six
+captioned discs in §3, analog output engaged and scanlines off.
 
 Checked and needing no action: the idle screen cannot interact (it draws in the active
 region while nothing is mounted; captions live in the VBI of the second raster), and OSD
