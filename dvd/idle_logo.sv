@@ -7,17 +7,25 @@
 // dvd/seek_bar.sv's (x,y)-pure registered pipeline; ROM init pattern:
 // dvd/transport_hud.sv's $readmemh glyph ROM.
 //
-// ROM = ONE M10K, 512 x 16, TWO BANKS:
-//   bank 0 (words   0..255): built-in default (tools/idle_logo.py), 128x32.
-//   bank 1 (words 256..511): user bitmap, streamed at core load from
+// ROM = FOUR M10K, 2048 x 16, TWO BANKS (resolution x4, 2026-08-26 -- the
+// original 1-M10K/128x32 budget predated the area-reclaim pass):
+//   bank 0 (words    0..1023): built-in default (tools/idle_logo.py), up to
+//     256x64, displayed NATIVE (1x) -- same on-screen size as the old
+//     103x29-at-2x default at double the detail.
+//   bank 1 (words 1024..2047): user bitmap, streamed at core load from
 //     /media/fat/games/DVD/boot.rom via ioctl (index 0, the framework's
 //     zero-CONF_STR boot.rom convention). The write port is HARD-GATED to
-//     bank 1 ({1'b1, wa[7:0]}), so no file -- valid, corrupt, truncated or
+//     bank 1 ({1'b1, wa[9:0]}), so no file -- valid, corrupt, truncated or
 //     hostile -- can ever touch the default: the never-garbage guarantee is
 //     structural, not procedural. tools/idle_logo.py initialises bank 1 as a
 //     copy of bank 0, so even a stuck bank select shows the default.
 //
-// Word address = {bank, row[4:0], col[6:4]}; bit = word[15 - col[3:0]]
+// Two boot.rom formats (byte 6): 0x01 = 256x64-capable, dims stored MINUS
+// ONE, 32-byte row stride, flags bit1 selects 1x (native) vs 2x display
+// scale; 0x00 = the original 128x32 / 16-byte-stride layout, accepted for
+// back-compat and always displayed 2x. The bounce box is the DISPLAYED size.
+//
+// Word address = {bank, row[5:0], col[7:4]}; bit = word[15 - col[3:0]]
 // (MSB = leftmost pixel, the hud_font convention). Pure concatenation + a
 // 16:1 mux -- no arithmetic in the display hotspot.
 //
@@ -39,8 +47,16 @@
 //  - frame_tick (emu's av_refresh_tick) is per-FIELD when interlaced -- the
 //    fld_tog divider halves it under il_mode or the two fields of a frame
 //    would sample the logo at positions SPY/16 px apart (edge comb on CRTs).
-//  - LOGO_QX_ADJ needs NO hardware calibration (unlike SP_QX_ADJ): the logo
-//    is free-floating with no content to align to; +/-2 px is unobservable.
+//  - LOGO_QX_LEAD is a SUBTRACTED horizontal lead, like the subpicture's
+//    SP_QX_ADJ and UNLIKE the HUD/seek-bar's added constants. ⚠ HW round 3
+//    (2026-08-26) disproved this file's original "needs no calibration"
+//    claim: the raster counter LEADS the RGB datapath, so an overlay
+//    queried at h_pos renders LEFT of the screen window -- invisible for
+//    the centred HUD/bar boxes, but the logo's wall-bounce exposed it as a
+//    symmetric left-overlap/right-gap (~16 px: the +4 sign error plus the
+//    12-px uncompensated lead). Value transposed from the HW-calibrated
+//    SP_QX_ADJ=13 (subpic query path = 3 regs, this one = 4, so 13-1=12);
+//    residual +/-1-2 px would need an HW trim exactly like SP_QX_ADJ's.
 //
 // boot.rom format ("MDL1", 16-byte header + h rows x 16 bytes 1-bpp
 // MSB-first): see tools/idle_logo.py's docstring -- the tool is the format's
@@ -48,7 +64,7 @@
 // ============================================================================
 
 module idle_logo #(
-    parameter [11:0] LOGO_QX_ADJ = 12'd4   // 3 module stages + emu's sp_*_q
+    parameter [11:0] LOGO_QX_LEAD = 12'd12  // subtracted; see the ⚠ note above
 ) (
     input  wire        clk,               // clk_sys 27 MHz
     input  wire        rst_n,             // pixel pipeline + motion ONLY (see traps)
@@ -80,40 +96,63 @@ module idle_logo #(
 // ---------------------------------------------------------------------------
 // Logo ROM -- one M10K, two banks (see header)
 // ---------------------------------------------------------------------------
-(* ramstyle = "M10K, no_rw_check" *) reg [15:0] logo_rom [0:511];
+(* ramstyle = "M10K, no_rw_check" *) reg [15:0] logo_rom [0:2047];
 initial $readmemh("dvd/idle_logo.mem", logo_rom);
 
 // ---------------------------------------------------------------------------
 // ioctl receive: header parse + bank-1 write + commit.
 // ⚠ NO reset terms anywhere in this section (trap #1 above).
 // ---------------------------------------------------------------------------
+// Power-up geometry = the DEFAULT art's trimmed bounding box, reported by
+// tools/idle_logo.py when it writes idle_logo.mem (idle_logo_tb asserts the
+// two stay in sync). The bounce box is exactly the declared w x h, so any
+// mask margin bounces early on that side -- HW round 2: the untrimmed
+// 128-wide default had a 22-column right margin = a 44 px early right
+// bounce ("bounces well before the border"); the tool now trims all art.
+localparam [8:0] DEF_W = 9'd201;       // native (1x-displayed) default
+localparam [6:0] DEF_H = 7'd58;
+
 reg        logo_valid = 1'b0;          // bank select: 1 = user bitmap
-reg  [7:0] u_w   = 8'd128;             // committed geometry (display side)
-reg  [5:0] u_h   = 6'd32;
+reg  [8:0] u_w   = DEF_W;              // committed geometry, MASK pixels
+reg  [6:0] u_h   = DEF_H;
+reg        u_scale1x = 1'b1;           // 1 = native, 0 = classic 2x
 reg        u_fixcol = 1'b0;
 reg  [7:0] u_r = 8'd0, u_g = 8'd0, u_b = 8'd0;
 reg  [7:0] u_spd = 8'd0;               // committed speed byte (0 = defaults)
 
 reg        dl_prev = 1'b0, idx0_q = 1'b0;
-reg        m_ok = 1'b0, wok = 1'b0, hok = 1'b0, fok = 1'b0;
-reg  [7:0] w_s = 8'd0;                 // staged header fields
-reg  [5:0] h_s = 6'd0;
+reg        m_ok = 1'b0, fok = 1'b0;
+reg        fmt1_s = 1'b0;              // format byte 0x01 (else legacy 0x00)
+reg  [7:0] w_raw = 8'd0;               // header bytes AS STORED (the format
+reg  [7:0] h_raw = 8'd0;               // byte arrives after them, so dims
+                                       // are interpreted at use time)
 reg        fixcol_s = 1'b0;
+reg        scale1x_s = 1'b0;
 reg  [7:0] r_s = 8'd0, g_s = 8'd0, b_s = 8'd0, spd_s = 8'd0;
 reg  [7:0] ld_hi = 8'd0;               // even payload byte (word high half)
 reg        pix_over = 1'b0;
 reg [26:0] last_addr = 27'd0;
 
 wire        dl_here  = ioctl_download & idx0_q;
-wire        hdr_ok   = m_ok & wok & hok & fok;
+// effective dims: fmt-1 stores minus-one (256/64 fit a byte); fmt-0 as-is
+wire  [8:0] w_eff    = fmt1_s ? ({1'b0, w_raw} + 9'd1) : {1'b0, w_raw};
+wire  [6:0] h_eff    = fmt1_s ? ({1'b0, h_raw[5:0]} + 7'd1) : h_raw[6:0];
+wire        dims_ok  = fmt1_s ? (h_raw <= 8'd63)             // w always 1..256
+                              : ((w_raw >= 8'd1) && (w_raw <= 8'd128) &&
+                                 (h_raw >= 8'd1) && (h_raw <= 8'd32));
+wire        hdr_ok   = m_ok & fok & dims_ok;
 wire        hdr_ph   = (ioctl_addr[26:4] == 23'd0);          // bytes 0..15
-// payload word address: (addr-16)>>1, 9 bits so >=256 is visible
-wire  [8:0] pay_wa   = ioctl_addr[9:1] - 9'd8;
-wire        addr_far = (ioctl_addr[26:10] != 17'd0);
-wire        over_now = addr_far | pay_wa[8];
+// payload byte index + per-format word address (fmt-0 rows are 16 bytes =
+// 8 words, packed at 16-word row stride with the upper 8 words untouched --
+// those columns are beyond fmt-0's 128-px width and never rendered)
+wire [26:0] pb       = ioctl_addr - 27'd16;
+wire  [9:0] pay_wa   = fmt1_s ? pb[10:1]
+                              : {1'b0, pb[8:4], 1'b0, pb[3:1]};
+wire        over_now = fmt1_s ? (pb >= 27'd2048) : (pb >= 27'd512);
 wire        rom_we   = ioctl_wr & dl_here & hdr_ok & ~hdr_ph &
                        ioctl_addr[0] & ~over_now;
-wire [26:0] want_len = {17'd0, h_s, 4'd0} + 27'd16;          // 16*(h+1)
+wire [26:0] want_len = fmt1_s ? ({15'd0, h_eff, 5'd0} + 27'd16)   // 32*h+16
+                              : ({16'd0, h_eff, 4'd0} + 27'd16);  // 16*h+16
 
 always @(posedge clk) begin
     dl_prev <= ioctl_download;
@@ -121,7 +160,8 @@ always @(posedge clk) begin
     if (ioctl_download & ~dl_prev) begin
         // download start: hps_io latches ioctl_index BEFORE raising download
         idx0_q    <= (ioctl_index == 16'd0);
-        m_ok      <= 1'b0; wok <= 1'b0; hok <= 1'b0; fok <= 1'b0;
+        m_ok      <= 1'b0; fok <= 1'b0; fmt1_s <= 1'b0;
+        w_raw     <= 8'd0; h_raw <= 8'd0;
         pix_over  <= 1'b0;
         last_addr <= 27'd0;
     end
@@ -133,12 +173,12 @@ always @(posedge clk) begin
             4'd1:  m_ok <= m_ok & (ioctl_dout == 8'h44);     // 'D'
             4'd2:  m_ok <= m_ok & (ioctl_dout == 8'h4C);     // 'L'
             4'd3:  m_ok <= m_ok & (ioctl_dout == 8'h31);     // '1'
-            4'd4:  begin w_s <= ioctl_dout;
-                         wok <= (ioctl_dout >= 8'd1) && (ioctl_dout <= 8'd128); end
-            4'd5:  begin h_s <= ioctl_dout[5:0];
-                         hok <= (ioctl_dout >= 8'd1) && (ioctl_dout <= 8'd32); end
-            4'd6:  fok <= (ioctl_dout == 8'd0);
-            4'd7:  fixcol_s <= ioctl_dout[0];
+            4'd4:  w_raw <= ioctl_dout;                      // interpreted at
+            4'd5:  h_raw <= ioctl_dout;                      // use (see w_eff)
+            4'd6:  begin fok <= (ioctl_dout <= 8'd1);        // fmt 0 or 1
+                         fmt1_s <= ioctl_dout[0]; end
+            4'd7:  begin fixcol_s <= ioctl_dout[0];
+                         scale1x_s <= ioctl_dout[1]; end
             4'd8:  r_s <= ioctl_dout;
             4'd9:  g_s <= ioctl_dout;
             4'd10: b_s <= ioctl_dout;
@@ -151,7 +191,7 @@ always @(posedge clk) begin
         end
     end
 
-    if (rom_we) logo_rom[{1'b1, pay_wa[7:0]}] <= {ld_hi, ioctl_dout};
+    if (rom_we) logo_rom[{1'b1, pay_wa}] <= {ld_hi, ioctl_dout};
 
     // commit at download end. A GOOD-header download decides logo_valid
     // (truncated/oversized -> 0, bank 1 is part-written -> default renders);
@@ -161,7 +201,8 @@ always @(posedge clk) begin
         if (hdr_ok) begin
             if (~pix_over && ((last_addr + 27'd1) == want_len)) begin
                 logo_valid <= 1'b1;
-                u_w <= w_s; u_h <= h_s;
+                u_w <= w_eff; u_h <= h_eff;
+                u_scale1x <= fmt1_s & scale1x_s;   // fmt-0 is always 2x
                 u_fixcol <= fixcol_s;
                 u_r <= r_s; u_g <= g_s; u_b <= b_s;
                 u_spd <= spd_s;
@@ -187,8 +228,9 @@ wire tick = frame_tick & (~il_mode | fld_tog);
 localparam [3:0] SPX_DEF = 4'd14;      // ~52 px/s @ 59.94: traverse ~9 s
 localparam [3:0] SPY_DEF = 4'd9;       // ~34 px/s: traverse ~12 s
 
-wire [11:0] w2 = {3'd0, u_w, 1'b0};    // on-screen size (2x render)
-wire [11:0] h2 = {5'd0, u_h, 1'b0};
+// on-screen (bounce-box) size: native or 2x per the logo's scale flag
+wire [11:0] w2 = u_scale1x ? {3'd0, u_w} : {2'd0, u_w, 1'b0};
+wire [11:0] h2 = u_scale1x ? {5'd0, u_h} : {4'd0, u_h, 1'b0};
 wire [11:0] x_hi = 12'd720 - w2;
 wire [11:0] y_hi = (pal_mode ? 12'd576 : 12'd480) - h2;
 
@@ -217,8 +259,8 @@ wire hit_y  = hit_y0 | hit_y1;
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        pxq <= {12'd100, 4'd0};        // safe for any logo (100+256<=720)
-        pyq <= {12'd80,  4'd0};        // (80+64<=480)
+        pxq <= {12'd100, 4'd0};        // safe for any logo (100+2*128<=720)
+        pyq <= {12'd80,  4'd0};        // (80+2*32<=480)
         vxn <= 1'b0; vyn <= 1'b0;
         spx <= SPX_DEF; spy <= SPY_DEF;
         cidx <= 3'd0;
@@ -269,8 +311,8 @@ reg tick_d;
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         tick_d <= 1'b0;
-        px_end <= 12'd100 + 12'd256;   // matches the motion reset position
-        py_end <= 12'd80  + 12'd64;
+        px_end <= 12'd100 + {3'd0, DEF_W};   // reset position + default (1x) size
+        py_end <= 12'd80  + {5'd0, DEF_H};
     end else begin
         tick_d <= tick;
         if (tick_d) begin
@@ -285,15 +327,15 @@ end
 // Stage A: window test + logo-space coords. Stage B: ROM read. Stage C:
 // bit select + colour.
 // ---------------------------------------------------------------------------
-wire [11:0] hq  = h_pos + LOGO_QX_ADJ;
+wire [11:0] hq  = h_pos - LOGO_QX_LEAD;   // SUBTRACT: lead comp (SP_QX_ADJ sign)
 wire        inx = (hq >= px) && (hq < px_end);
 wire        iny = (v_pos >= py) && (v_pos < py_end);
 wire [11:0] hx  = hq - px;
 wire [11:0] vy  = v_pos - py;
 
 reg        s0_in, s1_in;
-reg  [6:0] s0_lx;
-reg  [4:0] s0_ly;
+reg  [7:0] s0_lx;
+reg  [5:0] s0_ly;
 reg  [3:0] s1_sel;
 reg [15:0] rom_q;
 
@@ -306,8 +348,8 @@ always @(posedge clk or negedge rst_n) begin
     end else begin
         // A
         s0_in <= vis && inx && iny;
-        s0_lx <= hx[7:1];              // /2: rendered at 2x
-        s0_ly <= vy[5:1];
+        s0_lx <= u_scale1x ? hx[7:0] : hx[8:1];   // native vs 2x render
+        s0_ly <= u_scale1x ? vy[5:0] : vy[6:1];
         // B (ROM read is outside the reset tree -- see below)
         s1_in  <= s0_in;
         s1_sel <= s0_lx[3:0];
@@ -321,6 +363,6 @@ end
 
 // sync ROM read, no reset (M10K inference)
 always @(posedge clk)
-    rom_q <= logo_rom[{logo_valid, s0_ly, s0_lx[6:4]}];
+    rom_q <= logo_rom[{logo_valid, s0_ly, s0_lx[7:4]}];
 
 endmodule

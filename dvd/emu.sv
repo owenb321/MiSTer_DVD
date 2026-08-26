@@ -430,7 +430,21 @@ assign DDRAM_BE       = arb_ddr_byteenable;
 // so we must NOT feed watchdog_rst back into rst to avoid a latch-up:
 // watchdog fires -> reset_n LOW -> async_rst LOW -> hard_rst LOW -> watchdog stuck
 wire watchdog_rst;
-wire reset_n = locked & ~RESET;
+// DVD-FORK (launch feedback): the OSD "R0,Reset" row actually resets the
+// core now. status[0] was previously consumed by NOTHING (most cores OR it
+// into their reset; this fork never did, so the Reset row was a no-op). A
+// full reset_n pulse gives exactly the wanted semantics for free: media_seen
+// clears (playback stops; the bouncing logo + widescreen idle presentation
+// return), the reader/demux/decoder pipelines and the DVD-VM (GPRMs
+// included) restart -- while the two deliberately reset-less blocks survive:
+// the user boot.rom logo (power-up-init-only regs) and the startup-OSD
+// one-shot (Reset does NOT re-pop the file picker; R-type options close the
+// OSD as they fire, dropping straight to the logo). user_rst_qn is declared
+// here and driven next to the hps_io instance (status is declared later --
+// the ar_wide_eff early-declare pattern); it is a registered copy because
+// reset_n is consumed as an ASYNC clear all over the core.
+wire user_rst_qn;
+wire reset_n = locked & ~RESET & user_rst_qn;
 
 // 108 MHz / 4 = 27 MHz pixel clock enable for internal modules
 reg [1:0] ce_cnt;
@@ -683,6 +697,11 @@ wire  [1:0] buttons;
 // 128-bit to match hps_io's status port (was [31:0], which truncated it and
 // hid bits 32+ — needed since the Debug "Title VTS" picker at status[39:32]).
 wire [127:0] status;
+
+// OSD R0 Reset -> core reset (see the reset_n comment near the top)
+reg user_rst_q = 1'b0;
+always @(posedge clk_sys) user_rst_q <= status[0];
+assign user_rst_qn = ~user_rst_q;
 wire [31:0] joystick_0;
 wire [10:0] ps2_key;    // {toggle, pressed, extended, scancode[7:0]} (numpad menu input)
 
@@ -4224,12 +4243,13 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
 // video_live_s2/img_streaming catch the OSD-Reset-while-mounted case
 // (reset_n clears media_seen but the HPS does not re-pulse img_mounted);
 // img_unplayable yields to the UNSUPPORTED IMAGE popup; ioctl_download
-// hides a half-rewritten bank; OSD_STATUS hides under the file browser
-// (same clk_sys domain as sys/osd.v -- one flop, no CDC); logo_boot_dly
-// kills the flash of the DEFAULT logo between core load and Main's
-// boot.rom push (also re-armed by any later download).
-reg osd_status_q;
-always @(posedge clk_sys) osd_status_q <= OSD_STATUS;
+// hides a half-rewritten bank; logo_boot_dly kills the flash of the
+// DEFAULT logo between core load and Main's boot.rom push (also re-armed
+// by any later download). ⚠ HW round 3: do NOT gate on OSD_STATUS -- the
+// framework OSD covers only part of the screen and the logo bouncing
+// BEHIND the file browser is the intended (and README-promised) look; the
+// original OSD gate made the logo vanish the moment the startup popup
+// opened.
 
 reg [24:0] logo_boot_dly;   // ~1.2 s @ 27 MHz
 always @(posedge clk_sys or negedge reset_n) begin
@@ -4239,12 +4259,12 @@ always @(posedge clk_sys or negedge reset_n) begin
 end
 
 wire logo_vis = !media_seen && !video_live_s2 && !img_streaming &&
-                !img_unplayable && !ioctl_download && !osd_status_q &&
+                !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
 
 wire       logo_on_w;
 wire [7:0] logo_r_w, logo_g_w, logo_b_w;
-idle_logo #(.LOGO_QX_ADJ(12'd4)) idle_logo_inst (
+idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .clk            (clk_sys),
     .rst_n          (reset_n),
     .h_pos          (ov_h_gen),

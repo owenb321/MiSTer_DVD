@@ -579,4 +579,19 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # DVD_launchfb_20260826_0354.rbf) and the idle-widescreen ARX fix (39,028 ALM,
 # 87.48/92.09 - tighter hot corner but PASS -> DVD_launchfb_20260826_0417.rbf =
 # the PR #9 merge build).
-set_global_assignment -name SEED 9
+#
+# IDLE-LOGO-BOUNDS netlist (2026-08-26, feature/idle-logo-bounds): the bounce-box
+# trim (tool-side art bbox + DEF_W/DEF_H 103x29). SEED 9 finally lost the lottery
+# on this one: 83.9 MHz @100C (88.62 @-40C) = hot corner FAIL -> _MARGINAL_ rbf,
+# not shipped. Swept: SEED 7 routes + PASSES (clk_dec 89.27 @100C / 86.63 @-40C)
+# -> releases/DVD_logobounds_20260826_0523.rbf. Pinned SEED 7 (the sweep tool
+# already rewrote the assignment; this comment is the ledger).
+#
+# IDLE-LOGO ROUNDS 3-5 netlist (2026-08-26, feature/idle-logo-bounds cont.):
+# logo-behind-OSD + QX lead sign fix + 256x64 logo ROM (4 M10K) + OSD-Reset
+# wiring. Fit pressure rose ("ALMs needed" 97% -- packing variance, idle_logo
+# itself is ~244 ALMs) and the lottery got rough: SEED 7 80.53 @100C FAIL,
+# SEED 9 fitter TIMEOUT (2100s grind), SEED 11 routes + PASSES with margin
+# (clk_dec 88.88 @100C / 90.46 @-40C) -> releases/DVD_logores_20260826_1645.rbf.
+# Pinned SEED 11.
+set_global_assignment -name SEED 11

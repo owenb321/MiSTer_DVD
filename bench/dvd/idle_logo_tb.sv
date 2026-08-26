@@ -61,7 +61,7 @@ task send_byte(input [26:0] a, input [7:0] d); begin
 end endtask
 
 // full download of buf[0..n-1] at index idx
-reg [7:0] fx [0:1023];
+reg [7:0] fx [0:4095];
 task send_file(input integer n, input [15:0] idx);
     integer i;
 begin
@@ -72,27 +72,27 @@ begin
     repeat (3) @(negedge clk);
 end endtask
 
-// snapshot/compare bank helpers
-reg [15:0] snap [0:511];
+// snapshot/compare bank helpers (banks are 1024 words since the 256x64 upgrade)
+reg [15:0] snap [0:2047];
 task snap_bank(input integer bank);
     integer i;
 begin
-    for (i = 0; i < 256; i = i + 1) snap[bank*256 + i] = dut.logo_rom[bank*256 + i];
+    for (i = 0; i < 1024; i = i + 1) snap[bank*1024 + i] = dut.logo_rom[bank*1024 + i];
 end endtask
 task check_bank(input integer bank, input [8*40-1:0] msg);
     integer i; reg ok;
 begin
     ok = 1;
-    for (i = 0; i < 256; i = i + 1)
-        if (dut.logo_rom[bank*256 + i] !== snap[bank*256 + i]) ok = 0;
+    for (i = 0; i < 1024; i = i + 1)
+        if (dut.logo_rom[bank*1024 + i] !== snap[bank*1024 + i]) ok = 0;
     if (!ok) fail(msg);
 end endtask
 
 // bounds monitor (runs continuously; checked at each tick)
 wire [11:0] px = dut.pxq[15:4];
 wire [11:0] py = dut.pyq[15:4];
-wire [11:0] w2 = {3'd0, dut.u_w, 1'b0};
-wire [11:0] h2 = {5'd0, dut.u_h, 1'b0};
+wire [11:0] w2 = dut.w2;               // displayed size (scale-aware)
+wire [11:0] h2 = dut.h2;
 
 integer i, j, bounces, cchanges, moved, n_on;
 reg [23:0] col_prev;
@@ -104,6 +104,26 @@ initial begin
     repeat (4) @(negedge clk);
     rst_n = 1;
     repeat (4) @(negedge clk);
+
+    // T0: tool/RTL sync -- the default art's bounding box must exactly fill
+    // the power-up u_w x u_h (a mask margin = an early bounce, HW round 2)
+    begin : t0
+        integer x, y, maxx, maxy; reg lit0, litw, lith;
+        maxx = -1; maxy = -1; lit0 = 0;
+        for (y = 0; y < 64; y = y + 1)
+            for (x = 0; x < 256; x = x + 1)
+                if (dut.logo_rom[y*16 + x/16][15 - (x % 16)]) begin
+                    if (x > maxx) maxx = x;
+                    if (y > maxy) maxy = y;
+                    if (x == 0 || y == 0) lit0 = 1;
+                end
+        if (maxx + 1 != {23'd0, dut.u_w} || maxy + 1 != {25'd0, dut.u_h}) begin
+            $display("  mask bbox %0dx%0d vs power-up u_w/u_h %0dx%0d",
+                     maxx+1, maxy+1, dut.u_w, dut.u_h);
+            fail("T0 default dims out of sync with idle_logo.mem");
+        end else if (!lit0) fail("T0 art not trimmed (nothing on row/col 0)");
+        else $display("T0 tool/RTL default-dims sync (%0dx%0d) PASS", maxx+1, maxy+1);
+    end
 
     // T1: NTSC bounds over 20k ticks
     for (i = 0; i < 20000; i = i + 1) begin
@@ -193,9 +213,10 @@ initial begin
     // T7: happy-path user download (the committed 64x16 fixture)
     $readmemh("bench/dvd/idle_logo_user.hex", fx);
     snap_bank(0);
-    send_file(16 + 16*16, 16'd0);
+    send_file(16 + 32*16, 16'd0);
     if (dut.logo_valid !== 1'b1) fail("T7 logo_valid");
-    if (dut.u_w !== 8'd64 || dut.u_h !== 6'd16) fail("T7 dims");
+    if (dut.u_w !== 9'd64 || dut.u_h !== 7'd16) fail("T7 dims");
+    if (dut.u_scale1x !== 1'b0) fail("T7 scale (fixture is 2x)");
     if (dut.u_fixcol !== 1'b1 || {dut.u_r, dut.u_g, dut.u_b} !== 24'hFFC820)
         fail("T7 fixed colour");
     check_bank(0, "T7 bank 0 was touched");
@@ -210,52 +231,55 @@ initial begin
     // T8: bad magic -> ZERO writes (bank 1 keeps the T7 image)
     snap_bank(1);
     fx[0] = "X"; fx[1] = "X";                 // corrupt magic
-    send_file(16 + 16*16, 16'd0);
+    send_file(16 + 32*16, 16'd0);
     check_bank(1, "T8 bank 1 changed on bad magic");
     // T13 rolled in: the T7 logo must SURVIVE a bad later file
     if (dut.logo_valid !== 1'b1) fail("T13 valid logo lost to bad-magic file");
-    if (dut.u_w !== 8'd64) fail("T13 geometry lost");
+    if (dut.u_w !== 9'd64) fail("T13 geometry lost");
     $display("T8 bad magic zero-writes + T13 survive PASS");
 
     // T9: truncated (good header, half the rows) -> logo_valid falls, bank 0 intact
     $readmemh("bench/dvd/idle_logo_user.hex", fx);
     snap_bank(0);
-    send_file(16 + 16*8, 16'd0);              // 8 of 16 rows
+    send_file(16 + 32*8, 16'd0);              // 8 of 16 rows
     if (dut.logo_valid !== 1'b0) fail("T9 truncated file accepted");
     check_bank(0, "T9 bank 0 damaged");
     $display("T9 truncated -> default fallback PASS");
 
-    // T10: oversized (bytes past 128x32) -> clamped writes, rejected
-    for (i = 0; i < 1024; i = i + 1) fx[i] = 8'hAA;
+    // T10: oversized fmt-1 (declares 256x64, streams past the mask) ->
+    // clamped writes, rejected
+    for (i = 0; i < 4096; i = i + 1) fx[i] = 8'hAA;
     fx[0]="M"; fx[1]="D"; fx[2]="L"; fx[3]="1";
-    fx[4]=8'd128; fx[5]=8'd32; fx[6]=0; fx[7]=0;
+    fx[4]=8'd255; fx[5]=8'd63; fx[6]=8'd1; fx[7]=0;   // fmt1: 256x64
     fx[8]=0; fx[9]=0; fx[10]=0; fx[11]=0; fx[12]=0; fx[13]=0; fx[14]=0; fx[15]=0;
     snap_bank(0);
-    send_file(1024, 16'd0);                   // 1024 > 528
+    send_file(4096, 16'd0);                   // 4096 > 16+32*64 = 2064
     if (dut.logo_valid !== 1'b0) fail("T10 oversized accepted");
     check_bank(0, "T10 bank 0 damaged");
     if (dut.pix_over !== 1'b1) fail("T10 pix_over not latched");
     $display("T10 oversized rejected PASS");
 
+
+
     // T11: wrong index -> nothing at all
     $readmemh("bench/dvd/idle_logo_user.hex", fx);
     snap_bank(0); snap_bank(1);
-    send_file(16 + 16*16, 16'd1);
+    send_file(16 + 32*16, 16'd1);
     check_bank(0, "T11 bank 0 changed");
     check_bank(1, "T11 bank 1 changed");
     if (dut.logo_valid !== 1'b0) fail("T11 logo_valid changed");
     $display("T11 wrong-index ignored PASS");
 
     // T12: replace -- a fresh valid file restores/updates everything
-    send_file(16 + 16*16, 16'd0);
-    if (dut.logo_valid !== 1'b1 || dut.u_w !== 8'd64 || dut.u_h !== 6'd16)
+    send_file(16 + 32*16, 16'd0);
+    if (dut.logo_valid !== 1'b1 || dut.u_w !== 9'd64 || dut.u_h !== 7'd16)
         fail("T12 replace");
     $display("T12 replace PASS");
 
     // T14: core reset must NOT clear the user logo (the .mif-vs-reset trap)
     rst_n = 0; repeat (4) @(negedge clk);
     rst_n = 1; repeat (4) @(negedge clk);
-    if (dut.logo_valid !== 1'b1 || dut.u_w !== 8'd64 || dut.u_h !== 6'd16 ||
+    if (dut.logo_valid !== 1'b1 || dut.u_w !== 9'd64 || dut.u_h !== 7'd16 ||
         dut.u_fixcol !== 1'b1)
         fail("T14 reset cleared user state");
     $display("T14 reset keeps user logo PASS");
@@ -274,6 +298,25 @@ initial begin
     // keeps rendering (emu hides it) and the ROM write port is idle
     @(negedge clk); dl = 0;
     $display("T15 download-in-flight (emu-side gate; module unaffected) PASS");
+
+    // T17: legacy fmt-0 back-compat -- 64x16 at the old 16-byte stride;
+    // rows must land at the NEW 16-word row stride (upper 8 words untouched)
+    for (i = 0; i < 1024; i = i + 1) fx[i] = 8'h00;
+    fx[0]="M"; fx[1]="D"; fx[2]="L"; fx[3]="1";
+    fx[4]=8'd64; fx[5]=8'd16; fx[6]=8'd0; fx[7]=8'd0;  // fmt0: dims as-is
+    fx[8]=0; fx[9]=0; fx[10]=0; fx[11]=0; fx[12]=0; fx[13]=0; fx[14]=0; fx[15]=0;
+    for (i = 0; i < 16; i = i + 1) begin
+        fx[16 + i*16 + 0] = 8'hA5;            // row i, first byte
+        fx[16 + i*16 + 7] = 8'h5A;            // row i, byte 7 (word 3 low)
+    end
+    send_file(16 + 16*16, 16'd0);
+    if (dut.logo_valid !== 1'b1) fail("T17 fmt0 rejected");
+    if (dut.u_w !== 9'd64 || dut.u_h !== 7'd16) fail("T17 fmt0 dims");
+    if (dut.u_scale1x !== 1'b0) fail("T17 fmt0 must be 2x");
+    if (dut.logo_rom[1024 + 0*16 + 0][15:8] !== 8'hA5) fail("T17 row0 word0");
+    if (dut.logo_rom[1024 + 5*16 + 3][7:0]  !== 8'h5A) fail("T17 row5 word3");
+    $display("T17 legacy fmt-0 back-compat PASS");
+
 
     if (errors == 0) $display("ALL TESTS PASS (idle_logo_tb)");
     else $display("%0d ERRORS (idle_logo_tb)", errors);
