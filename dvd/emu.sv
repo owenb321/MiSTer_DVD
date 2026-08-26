@@ -4224,12 +4224,13 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
 // video_live_s2/img_streaming catch the OSD-Reset-while-mounted case
 // (reset_n clears media_seen but the HPS does not re-pulse img_mounted);
 // img_unplayable yields to the UNSUPPORTED IMAGE popup; ioctl_download
-// hides a half-rewritten bank; OSD_STATUS hides under the file browser
-// (same clk_sys domain as sys/osd.v -- one flop, no CDC); logo_boot_dly
-// kills the flash of the DEFAULT logo between core load and Main's
-// boot.rom push (also re-armed by any later download).
-reg osd_status_q;
-always @(posedge clk_sys) osd_status_q <= OSD_STATUS;
+// hides a half-rewritten bank; logo_boot_dly kills the flash of the
+// DEFAULT logo between core load and Main's boot.rom push (also re-armed
+// by any later download). ⚠ HW round 3: do NOT gate on OSD_STATUS -- the
+// framework OSD covers only part of the screen and the logo bouncing
+// BEHIND the file browser is the intended (and README-promised) look; the
+// original OSD gate made the logo vanish the moment the startup popup
+// opened.
 
 reg [24:0] logo_boot_dly;   // ~1.2 s @ 27 MHz
 always @(posedge clk_sys or negedge reset_n) begin
@@ -4239,12 +4240,12 @@ always @(posedge clk_sys or negedge reset_n) begin
 end
 
 wire logo_vis = !media_seen && !video_live_s2 && !img_streaming &&
-                !img_unplayable && !ioctl_download && !osd_status_q &&
+                !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
 
 wire       logo_on_w;
 wire [7:0] logo_r_w, logo_g_w, logo_b_w;
-idle_logo #(.LOGO_QX_ADJ(12'd4)) idle_logo_inst (
+idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .clk            (clk_sys),
     .rst_n          (reset_n),
     .h_pos          (ov_h_gen),

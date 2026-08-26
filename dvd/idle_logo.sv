@@ -39,8 +39,16 @@
 //  - frame_tick (emu's av_refresh_tick) is per-FIELD when interlaced -- the
 //    fld_tog divider halves it under il_mode or the two fields of a frame
 //    would sample the logo at positions SPY/16 px apart (edge comb on CRTs).
-//  - LOGO_QX_ADJ needs NO hardware calibration (unlike SP_QX_ADJ): the logo
-//    is free-floating with no content to align to; +/-2 px is unobservable.
+//  - LOGO_QX_LEAD is a SUBTRACTED horizontal lead, like the subpicture's
+//    SP_QX_ADJ and UNLIKE the HUD/seek-bar's added constants. ⚠ HW round 3
+//    (2026-08-26) disproved this file's original "needs no calibration"
+//    claim: the raster counter LEADS the RGB datapath, so an overlay
+//    queried at h_pos renders LEFT of the screen window -- invisible for
+//    the centred HUD/bar boxes, but the logo's wall-bounce exposed it as a
+//    symmetric left-overlap/right-gap (~16 px: the +4 sign error plus the
+//    12-px uncompensated lead). Value transposed from the HW-calibrated
+//    SP_QX_ADJ=13 (subpic query path = 3 regs, this one = 4, so 13-1=12);
+//    residual +/-1-2 px would need an HW trim exactly like SP_QX_ADJ's.
 //
 // boot.rom format ("MDL1", 16-byte header + h rows x 16 bytes 1-bpp
 // MSB-first): see tools/idle_logo.py's docstring -- the tool is the format's
@@ -48,7 +56,7 @@
 // ============================================================================
 
 module idle_logo #(
-    parameter [11:0] LOGO_QX_ADJ = 12'd4   // 3 module stages + emu's sp_*_q
+    parameter [11:0] LOGO_QX_LEAD = 12'd12  // subtracted; see the ⚠ note above
 ) (
     input  wire        clk,               // clk_sys 27 MHz
     input  wire        rst_n,             // pixel pipeline + motion ONLY (see traps)
@@ -294,7 +302,7 @@ end
 // Stage A: window test + logo-space coords. Stage B: ROM read. Stage C:
 // bit select + colour.
 // ---------------------------------------------------------------------------
-wire [11:0] hq  = h_pos + LOGO_QX_ADJ;
+wire [11:0] hq  = h_pos - LOGO_QX_LEAD;   // SUBTRACT: lead comp (SP_QX_ADJ sign)
 wire        inx = (hq >= px) && (hq < px_end);
 wire        iny = (v_pos >= py) && (v_pos < py_end);
 wire [11:0] hx  = hq - px;

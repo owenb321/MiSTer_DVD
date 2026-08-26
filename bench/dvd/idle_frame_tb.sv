@@ -34,7 +34,7 @@ module idle_frame_tb;
     wire        logo_on;
     wire [7:0]  logo_r, logo_g, logo_b;
 
-    idle_logo #(.LOGO_QX_ADJ(12'd4)) dut (
+    idle_logo #(.LOGO_QX_LEAD(12'd12)) dut (
         .clk(clk), .rst_n(rst_n),
         .h_pos(h_pos), .v_pos(v_pos),
         .pal_mode(pal_mode), .il_mode(1'b0), .frame_tick(1'b0),
@@ -72,21 +72,24 @@ module idle_frame_tb;
     end
     endfunction
 
-    // scan a line. idle_logo has THREE registered stages (hud has four) and
-    // LOGO_QX_ADJ=4 budgets for emu's sp_*_q register, which this TB does not
-    // have -- so the settled output after the edge that sampled input x is
-    // f(input x-2) = screen (x-2)+4 = x+2. Capture at fb[x+2].
+    // scan a line. idle_logo has THREE registered stages and now a
+    // SUBTRACTED 12-px query lead (LOGO_QX_LEAD, budgeting for emu's sp_*_q
+    // register + the raster-vs-datapath lead that this bare TB does not
+    // have) -- the settled output after the edge that sampled input x is
+    // f(input x-2) = mask position (x-2)-12 = x-14. Capture at fb[x-14]:
+    // in this TB's frame the logo lands 14 px RIGHT of the box coordinate,
+    // which on hardware is exactly cancelled by the pipeline/datapath lead.
     integer x, y, i;
     task scan_line(input integer yy, input integer pass);
         begin
             v_pos = yy[11:0];
-            for (x = -5; x < W; x = x + 1) begin
-                h_pos = (x < 0) ? 12'd850 : x[11:0];
+            for (x = -5; x < W + 14; x = x + 1) begin
+                h_pos = (x < 0) ? 12'd850 : (x >= W) ? 12'd850 : x[11:0];
                 @(posedge clk);
                 @(negedge clk);
-                if (x >= -2 && (x + 2) < W) begin
-                    if (pass == 0) fb [yy*W + x+2] = {out_r, out_g, out_b};
-                    else           fb2[yy*W + x+2] = {out_r, out_g, out_b};
+                if (x >= 14 && (x - 14) < W) begin
+                    if (pass == 0) fb [yy*W + x-14] = {out_r, out_g, out_b};
+                    else           fb2[yy*W + x-14] = {out_r, out_g, out_b};
                 end
             end
         end
