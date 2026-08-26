@@ -223,8 +223,6 @@ always @(posedge clk or negedge rst_n) begin
         spx <= SPX_DEF; spy <= SPY_DEF;
         cidx <= 3'd0;
         corner_tmr <= 6'd0;
-        px_end <= 12'd100 + 12'd256;
-        py_end <= 12'd80 + 12'd64;
         cur_r <= 8'hFF; cur_g <= 8'h3B; cur_b <= 8'h30;
     end else if (tick) begin
         // X axis
@@ -269,8 +267,11 @@ end
 // compares below clamp anyway).
 reg tick_d;
 always @(posedge clk or negedge rst_n) begin
-    if (!rst_n) tick_d <= 1'b0;
-    else begin
+    if (!rst_n) begin
+        tick_d <= 1'b0;
+        px_end <= 12'd100 + 12'd256;   // matches the motion reset position
+        py_end <= 12'd80  + 12'd64;
+    end else begin
         tick_d <= tick;
         if (tick_d) begin
             px_end <= px + w2;
