@@ -305,32 +305,32 @@ end
 // The long field carries its extra line at the end (eff_vertical_length 262), so
 // 261 is the 15th line after vsync in BOTH fields — one constant covers both.
 //
-// WHICH FIELD. This one is counter-intuitive and was wrong in the first cut, so
-// it is now pinned by bench/dvd/cc_field_map_tb.sv rather than by argument.
+// WHICH FIELD — identified by SYNC TIMING, the way the television does, NOT by
+// picture content. This mapping has now been wrong in both directions once each,
+// so the full derivation stays here and bench/dvd/cc_field_map_tb.sv pins it by
+// measuring what a TV measures (the vsync leading-edge alignment):
 //
-// syncgen's counter starts at the first ACTIVE line and puts the blanking at the
-// END of the field, so the VBI lines a field owns in broadcast numbering are
-// emitted while odd_field still reads the PREVIOUS field. NTSC line 21 belongs to
-// field 1 and precedes field 1's active video, so it is emitted during the
-// odd_field=0 (BOTTOM) count — the bench confirms line 261 with v_pos[0]==1 is
-// followed by the TOP field's active lines, and TOP = field 1 = CC1/CC2.
+//   * SMPTE 170M: broadcast FIELD 1's vertical sync begins coincident with a
+//     line boundary; FIELD 2's begins mid-line. That alignment is the ONLY thing
+//     a TV uses to name the fields.
+//   * In sync_gen, vs_ref_dot = odd_field ? 0 : halfline — the LINE-ALIGNED
+//     vsync is emitted during odd_field==1, i.e. in the blanking AFTER the
+//     TOP-content active lines. The 15 back-porch lines that follow it carry
+//     v_pos[0] = ~odd_field = 0, and the active field after the wrap is BOTTOM
+//     content. So broadcast field 1 = { line-aligned vsync, VBI with
+//     v_pos[0]==0, BOTTOM active } — consistent with NTSC being
+//     bottom-field-first (field 1 displays the bottom lines).
+//   * CC1/CC2 (and T1/T2) ride FIELD 1's line 21, hence: transmit the field-1
+//     slot on the v_pos[0]==0 VBI line -> cc_fld1 = ~sg_vpos[0].
 //
-// Getting this backwards puts the CC1 stream on line 284, where a television set
-// to "CC1" never looks — which reads as "captions do not work at all", not as
-// garbled text.
-
-//
-// NTSC ONLY: line 21 is an NTSC construct, PAL discs use subpicture (and the
-// census found zero PAL discs carrying CC at all — docs/closed_captions.md §3).
-// CC_TEST moves the burst to a visible line near the top of the picture. The
-// waveform is unchanged — same data, same rate, same levels — so what shows up is
-// literally the caption bits: a band of dashes that CHANGES AS DIALOGUE CHANGES,
-// and goes quiet when the disc sends null pairs. That distinguishes "extraction
-// and pacing work, the TV just isn't decoding" from "no data is arriving" without
-// a scope, which is otherwise impossible to tell apart from the sofa.
-wire [11:0] cc_vline = cc_test ? 12'd20 : p_vlen;
-wire       cc_line  = ~pal & (sg_vpos[11:1] == cc_vline);
-wire       cc_fld1  = sg_vpos[0];
+// ⚠ THE TRAP (fell into it round 1): content parity does NOT identify the
+// broadcast field. The DVD decoder-side labels (TOP field = "field 1" in the
+// picture-coding sense) are about picture geometry; the TV's field 1 is about
+// sync phase, and in this raster TOP content displays inside SYNC field 2.
+// Round 1 "fixed" cc_fld1 to sg_vpos[0] on the content-based premise — flipping
+// a correct mapping — and the DE-gate bug masked it. Round 2 on HW (CC Test
+// Line fine, C1/C2/T1/T2 all empty — every one a FIELD-1 service) exposed it.
+wire       cc_fld1  = ~sg_vpos[0];
 wire [7:0] cc_level;
 wire       cc_level_en;
 

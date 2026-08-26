@@ -421,23 +421,28 @@ worse maintenance burden than targeted in-place edits. So:
   the bytes; 5/5), `re_interlace_tb` unchanged 9/9. Census: **6/34 local discs**
   carry live captions, zero PAL, zero CEA-708, field 2 empty everywhere
   (`tools/cc_scan.py`, `dvd_census.py --captions`). **★ HW ROUND 1 (2026-08-25): no
-  captions on MiB/Matrix with the TV on C1 — TWO bugs, either alone sufficient, both
-  FIXED.** (1) `sys/sys_top.v` fed the VGA2 scanlines stage
-  `.din(vga2_de ? rgb : 24'd0)`, zeroing everything outside active video — and line 21
-  is BY DEFINITION in the VBI, so the waveform was generated correctly and died one
-  module before the DAC (`scanlines`/`osd`/`yc_out`/`vga_out` all checked: none gate
-  data on DE). ⚠ Lesson: a VBI side-channel travels a path every other feature uses
-  only inside DE — trace it to the PIN, not to the module boundary. (2) The FIELD
-  MAPPING was inverted (`cc_fld1` = `sg_vpos[0]`, not `~sg_vpos[0]`): syncgen's counter
-  starts at the first ACTIVE line and puts blanking at the END, so the VBI lines a field
-  owns in broadcast numbering are emitted while `odd_field` still reads the PREVIOUS
-  field. With field 2 empty on every real disc, wrong parity = TOTAL SILENCE on C1, not
-  garbled text — which is why it read as "the feature does nothing". Pinned by
-  `bench/dvd/cc_field_map_tb.sv` (mutation-checked). Also added **`P1O[44] CC Test
-  Line`** — paints the waveform on a VISIBLE line, because line-21 data is invisible by
-  construction and round 1 could not tell "TV not decoding" from "no data arriving".
-  Rebased onto post-0.1c main 2026-08-26 (clean; the caption-critical files are
-  untouched there). **HW gate: `docs/closed_captions.md` §0 + §6.**
+  captions on MiB/Matrix, TV on C1 — ONE real bug + ONE misdiagnosis.** The bug:
+  `sys/sys_top.v` fed the VGA2 scanlines stage `.din(vga2_de ? rgb : 24'd0)`, zeroing
+  everything outside active video — line 21 is BY DEFINITION in the VBI, so the
+  waveform died one module before the DAC (`scanlines`/`osd`/`yc_out`/`vga_out` all
+  checked: none gate data on DE). ⚠ Lesson: a VBI side-channel travels a path every
+  other feature uses only inside DE — trace it to the PIN. The misdiagnosis: cc_fld1
+  was flipped to `sg_vpos[0]` on a content-based premise (TOP = field 1), inverting a
+  CORRECT mapping — masked by the DE bug (everything looked identically dead).
+  **★ HW ROUND 2 (2026-08-26, YC encoder board → composite): CC Test Line ✅ (dash
+  band changes with dialogue = extraction/pacing/waveform/DE-fix/analog chain ALL
+  HW-CONFIRMED), C1 empty → the symptom IS the diagnosis: C1/C2/T1/T2 are all
+  FIELD-1 services, so the field mapping was wrong — the round-1 flip. FIXED back to
+  `cc_fld1 = ~sg_vpos[0]` with the SYNC-SIGNATURE derivation (SMPTE 170M: field 1 =
+  vsync line-aligned, field 2 = mid-line; in this raster that VBI has v_pos[0]==0 and
+  its active is BOTTOM content — NTSC is bottom-field-first; picture-content parity
+  NEVER identifies the broadcast field). `bench/dvd/cc_field_map_tb.sv` REWRITTEN to
+  classify by vsync-edge alignment (what a TV measures) + mutation-checked, so the
+  wrong premise can't be encoded again. `P1O[44] CC Test Line` = the diagnostic that
+  cracked it (paints the waveform on a visible line — one glance separates "chain
+  works, placement wrong" from everything upstream). Rebased onto post-0.1c main
+  (clean); SEED 3 closed the pre-round-2 netlist (90.9/90.2). **HW gate (round 3 =
+  C1 decode): `docs/closed_captions.md` §0 + §6.**
 - ✅ **DUAL-RASTER ANALOG OUTPUT (2026-07-29, HW-CONFIRMED + MERGED PR fj#146,
   2026-07-30) — SUPERSEDES the O[14] whole-core CRT mode below.** User-confirmed
   working on real hardware (analog engages from ini alone, HDMI stays progressive

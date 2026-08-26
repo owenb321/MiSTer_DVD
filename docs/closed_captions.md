@@ -355,8 +355,8 @@ captions from RGB. Every US television 13 inches and larger has had a decoder si
 ### Round 1 (2026-08-25): no captions on MiB or The Matrix, TV set to C1
 
 C1 was the correct choice — CC1 and CC2 both ride field 1, and field 2 is empty on every
-disc measured. Two independent bugs were found, **either of which alone produces exactly
-that symptom**, and both are fixed:
+disc measured. **One real bug** was found (and one misdiagnosis was introduced on top of
+it — see round 2):
 
 1. **The analog chain blanked the data one module before the DAC.** `sys/sys_top.v` fed the
    VGA2 scanlines stage `.din(vga2_de ? {vga2_r,vga2_g,vga2_b} : 24'd0)` — everything
@@ -370,24 +370,46 @@ that symptom**, and both are fixed:
    uses only inside DE. Anything that writes outside active video has to be traced to the
    pin, not just to the module boundary.
 
-2. **The field mapping was inverted**, so CC1 went out on broadcast line 284. `syncgen`'s
-   vertical counter starts at the first *active* line and puts blanking at the *end* of the
-   field, so the VBI lines a field owns in broadcast numbering are emitted while
-   `odd_field` still reads the **previous** field. NTSC line 21 belongs to field 1 and
-   precedes field 1's active video, so it goes out during the `odd_field = 0` count:
-   `cc_fld1 = sg_vpos[0]`, not `~sg_vpos[0]`.
+2. **A second "fix" made in this round was itself a bug.** Reasoning from picture content
+   (TOP field = "field 1"), `cc_fld1` was flipped from `~sg_vpos[0]` to `sg_vpos[0]` —
+   inverting a mapping that had been correct. The DE-gate bug masked it: with everything
+   blanked, both parities looked identically dead, and a bench was written that "pinned"
+   the wrong premise. Kept here as a caution: **round 1 had one bug in the code and one in
+   the diagnosis.**
 
-   This was item 5 below, filed as "if captions decode as garbage, try inverting" — which
-   **understated it**. With field 2 empty on every real disc, the wrong parity puts the
-   caption stream where a set switched to CC1 never looks, so it reads as total silence,
-   not as garbled text. Now settled by simulation and pinned by
-   `bench/dvd/cc_field_map_tb.sv` (mutation-checked: inverting the mapping fails the bench
-   on every field).
+### Round 2 (2026-08-26, YC active encoder board → composite): CC Test Line ✅, C1 empty
+
+The test line showed the dash band changing with dialogue — **hardware confirmation for
+extraction, pacing, the waveform, the DE-gate fix, and the whole analog path through the
+external encoder**. With the test line off, C1/C2/T1/T2 all showed nothing.
+
+That symptom is itself the diagnosis: **C1, C2, T1 and T2 are all FIELD-1 services**, so
+"every option empty while the data provably flows" points at the field mapping — and the
+round-1 flip was wrong. The correct derivation, by what the television actually measures:
+
+- **SMPTE 170M: broadcast field 1's vertical sync begins coincident with a line boundary;
+  field 2's begins mid-line.** Sync phase is the *only* thing a TV uses to name fields —
+  picture content never enters into it.
+- In `sync_gen`, `vs_ref_dot = odd_field ? 0 : halfline` — the line-aligned vsync is
+  emitted during `odd_field==1`, in the blanking *after* the TOP-content lines. The 15 VBI
+  lines after it carry `v_pos[0]==0`, and the active field that follows is BOTTOM content.
+- So broadcast field 1 = { line-aligned vsync, VBI with `v_pos[0]==0`, BOTTOM active } —
+  consistent with NTSC being **bottom-field-first** (field 1 displays the bottom lines).
+  The DVD decoder-side "TOP = field 1" labeling is about picture geometry, not sync phase;
+  in this raster TOP content displays inside *sync* field 2.
+
+**Fix: `cc_fld1 = ~sg_vpos[0]`** (the original mapping, restored). The bench was rewritten
+to assert by the TV's definition — it classifies each vsync leading edge by the `h_pos` it
+rises at (line-aligned vs mid-line) and requires CC1 on the line-aligned-vsync field's VBI
+— and mutation-checked (flipping the formula fails on every field). The premise can no
+longer be encoded wrongly, because the bench measures sync phase, not content.
 
 ### `P1O[44] CC Test Line` — the diagnostic that was missing
 
 Line-21 data is invisible by construction, so round 1 could not distinguish "the TV is not
-decoding" from "no data is reaching the output" — which is what made it guesswork. With
+decoding" from "no data is reaching the output" — which is what made it guesswork. Round 2
+proved the diagnostic's worth: one glance separated "chain works, placement wrong" from
+every upstream possibility. With
 **CC Test Line = On** the same waveform is painted on a *visible* line near the top of the
 picture instead of line 21. Same data, same rate, same levels.
 
@@ -398,6 +420,10 @@ picture instead of line 21. Same data, same rate, same levels.
 - **A band that never changes** ⇒ data is flowing but stuck — pacing or flush.
 
 ### Still unconfirmed, in rough order of likelihood-to-be-wrong
+
+*(Round 2's test line moved items 2–4 from "unproven" to "unlikely": the same NCO, levels
+and shaping were slice-visible on screen through the real encoder chain. They stay listed
+because a visible-line check is not a caption-decoder lock.)*
 
 1. **The line number.** Derived twice, agreeing (§4.4), but both derivations rest on the
    modeline's relationship to broadcast line numbering. If captions do not appear, this is
@@ -413,8 +439,10 @@ picture instead of line 21. Same data, same rate, same levels.
    marginal decoder is where it would show.
 4. **Amplitude.** 50 IRE is taken as 128/255 on the RGB output. Correct if the analog chain
    maps 0–255 to 0–700 mV; worth a scope check if a decoder half-locks.
-5. ~~**Which field is field 1.**~~ **FOUND AND FIXED in round 1** — see above. Pinned by
-   `bench/dvd/cc_field_map_tb.sv`.
+5. ~~**Which field is field 1.**~~ **SETTLED in round 2** — the round-1 "fix" had inverted
+   a correct mapping; restored to `~sg_vpos[0]` with the sync-signature derivation, and
+   pinned by the rewritten `bench/dvd/cc_field_map_tb.sv`, which now measures vsync
+   alignment (what a TV measures) instead of content parity (what round 1 wrongly assumed).
 
 Also worth knowing: **turn scanlines off while testing.** The analog scanlines effect
 attenuates alternate lines by 25–75 %, and it is applied before the caption line reaches

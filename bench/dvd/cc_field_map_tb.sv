@@ -1,22 +1,28 @@
 /*
- * cc_field_map_tb.sv — does the caption line carry the field the TELEVISION
- * expects there?
+ * cc_field_map_tb.sv — does CC1 go out on the field the TELEVISION calls field 1?
  *
- * This bench exists because the mapping was wrong in the first cut and the
- * failure mode is indistinguishable from "the feature does nothing": if CC1 is
- * emitted on the wrong field it lands on broadcast line 284, and a set switched
- * to "CC1" simply shows nothing. No garbled text, no partial result — just
- * silence. So it is asserted here rather than argued in a comment.
+ * This mapping has been wrong in both directions once each, so the bench now
+ * asserts it the way a TV decides it, with no room for premise error:
  *
- * The subtlety: syncgen's vertical counter starts at the first ACTIVE line and
- * puts blanking at the END of the field, so the VBI lines that a field owns in
- * broadcast numbering are emitted while odd_field still reads the PREVIOUS field.
- * NTSC line 21 belongs to field 1 and precedes field 1's active video.
+ *   SMPTE 170M: broadcast FIELD 1's vertical sync begins coincident with a line
+ *   boundary; FIELD 2's begins mid-line. A caption decoder slices CC1 from line
+ *   21 of the field whose vsync it saw LINE-ALIGNED. Nothing about the picture
+ *   content enters into it.
  *
- * ASSERTION: the candidate caption line (v_cntr == vertical_length == 261) with
- * v_pos[0] == 1 must be followed by the TOP field's active lines, because TOP is
- * NTSC field 1 = the CC1/CC2 field — and that is exactly the value
- * dvd/re_interlace.sv feeds cc_line21 as `field1`.
+ * So this bench watches sync_gen's OUTPUT sync stream exactly as a TV would:
+ * classify each vsync leading edge by the h_pos it rises at (line-aligned vs
+ * mid-line), then check that the caption line inside the line-aligned-vsync
+ * field is the one dvd/re_interlace.sv's formula (cc_fld1 = ~sg_vpos[0]) marks
+ * for the field-1 (CC1) slot.
+ *
+ * ⚠ HISTORY, so nobody re-derives the wrong premise: the first version of this
+ * bench asserted "field 1 = the line preceding TOP-field active video" — the DVD
+ * decoder-side labeling, where TOP = field 1 in the picture-coding sense. That
+ * is a statement about picture geometry, not sync phase, and in this raster TOP
+ * content displays inside SYNC field 2 (NTSC is bottom-field-first: field 1
+ * shows the bottom lines). Encoding that premise "pinned" an inverted mapping,
+ * and on hardware every field-1 service (C1/C2/T1/T2) showed nothing while the
+ * CC Test Line proved the rest of the chain worked.
  *
  * Build:
  *   iverilog -g2012 -I rtl/mpeg2 -o bench/dvd/cc_field_map_sim \
@@ -32,7 +38,7 @@ module cc_field_map_tb;
   reg rst = 0;
 
   wire [11:0] hp, vp;
-  wire        pe;
+  wire        pe, vs;
 
   // The NTSC parameters dvd/re_interlace.sv gives its sync_gen instance.
   sync_gen sg (
@@ -45,29 +51,46 @@ module cc_field_map_tb;
     .vertical_sync_end(12'd247), .horizontal_halfline(12'd429),
     .vertical_length(12'd261), .interlaced(1'b1), .clip_display_size(1'b0),
     .h_pos(hp), .v_pos(vp), .pixel_en(pe),
-    .h_sync(), .v_sync(), .c_sync(), .h_blank(), .v_blank()
+    .h_sync(), .v_sync(vs), .c_sync(), .h_blank(), .v_blank()
   );
 
+  // ---- the TV model: classify each vsync leading edge by where it rises ----
+  // h_pos and v_sync ride the same 3-stage output pipeline, so comparing them
+  // against each other is delay-consistent. Line-aligned rise = h_pos near 0;
+  // mid-line rise = h_pos near halfline (429). The quadrant test keeps it robust
+  // to the constant pipeline offset.
+  reg  vs_q = 1'b0;
+  reg  f1_period  = 1'b0;   // current field period began with a line-aligned vsync
+  reg  have_class = 1'b0;
+
   integer checked = 0, errors = 0;
-  reg     pend = 1'b0;
-  reg     cc_field1;                 // what re_interlace would pass as `field1`
 
   always @(posedge clk) if (ce2 && rst) begin
-    if (vp[11:1] == 12'd261 && hp == 12'd0) begin
-      cc_field1 <= vp[0];            // mirrors dvd/re_interlace.sv cc_fld1 = sg_vpos[0]
-      pend      <= 1'b1;
-    end else if (pend && pe && hp == 12'd0) begin
-      // vp[0] == 0 on an active line means the TOP field (odd_field == 1)
-      if (cc_field1 !== ~vp[0]) begin
-        $display("FAIL: caption line claimed field1=%0d but the following active field is %0s",
-                 cc_field1, vp[0] ? "BOTTOM (field 2)" : "TOP (field 1)");
+    vs_q <= vs;
+    if (vs && !vs_q) begin
+      f1_period  <= (hp < 12'd214) || (hp > 12'd643);   // line-aligned => FIELD 1
+      have_class <= 1'b1;
+    end
+
+    // The caption line (v_cntr == 261) lies between this field's vsync and the
+    // next active region, so f1_period still describes the field it belongs to.
+    if (have_class && vp[11:1] == 12'd261 && hp == 12'd0) begin
+      // (a) raster sanity: field 1's VBI must carry v_pos[0]==0 here
+      if (f1_period !== ~vp[0]) begin
+        $display("FAIL: %0s-vsync field has caption-line v_pos[0]=%0d",
+                 f1_period ? "line-aligned (field 1)" : "mid-line (field 2)", vp[0]);
         errors = errors + 1;
       end
-      pend    <= 1'b0;
+      // (b) the DUT formula: cc_fld1 = ~sg_vpos[0] must mark exactly field 1
+      if ((~vp[0]) !== f1_period) begin
+        $display("FAIL: cc_fld1 formula (~v_pos[0]=%0d) disagrees with the TV's field (field1=%0d)",
+                 ~vp[0], f1_period);
+        errors = errors + 1;
+      end
       checked = checked + 1;
       if (checked == 4) begin
         if (errors == 0)
-          $display("PASS: cc_field_map_tb — field1 marks the line preceding TOP-field active video (%0d fields checked)",
+          $display("PASS: cc_field_map_tb — CC1 rides the line-aligned-vsync (broadcast field 1) VBI (%0d fields checked)",
                    checked);
         else begin
           $display("FAIL: cc_field_map_tb — %0d error(s)", errors);
