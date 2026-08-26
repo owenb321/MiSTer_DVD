@@ -4191,6 +4191,60 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .bar_alpha  (bar_alpha_w)
 );
 
+// ---------------------------------------------------------------------------
+// IDLE LOGO (launch-feedback, 2026-08-26): bouncing logo while no disc is
+// mounted -- see dvd/idle_logo.sv + docs/idle_screen.md. Priority-muxed into
+// the SAME register stage below (no new blend); alpha is a constant 15 there
+// (opaque passthrough). User bitmap = /media/fat/games/DVD/boot.rom (ioctl
+// index 0, the framework's zero-CONF_STR boot.rom convention -- the ioctl_*
+// wires were previously entirely unused).
+//
+// Visibility: every term is belt-and-braces on top of !media_seen (nothing
+// can be on screen before a mount), but each covers a real path --
+// video_live_s2/img_streaming catch the OSD-Reset-while-mounted case
+// (reset_n clears media_seen but the HPS does not re-pulse img_mounted);
+// img_unplayable yields to the UNSUPPORTED IMAGE popup; ioctl_download
+// hides a half-rewritten bank; OSD_STATUS hides under the file browser
+// (same clk_sys domain as sys/osd.v -- one flop, no CDC); logo_boot_dly
+// kills the flash of the DEFAULT logo between core load and Main's
+// boot.rom push (also re-armed by any later download).
+reg osd_status_q;
+always @(posedge clk_sys) osd_status_q <= OSD_STATUS;
+
+reg [24:0] logo_boot_dly;   // ~1.2 s @ 27 MHz
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)                  logo_boot_dly <= 25'h1FFFFFF;
+    else if (ioctl_download)       logo_boot_dly <= 25'h1FFFFFF;
+    else if (logo_boot_dly != 25'd0) logo_boot_dly <= logo_boot_dly - 25'd1;
+end
+
+wire logo_vis = !media_seen && !video_live_s2 && !img_streaming &&
+                !img_unplayable && !ioctl_download && !osd_status_q &&
+                (logo_boot_dly == 25'd0);
+
+wire       logo_on_w;
+wire [7:0] logo_r_w, logo_g_w, logo_b_w;
+idle_logo #(.LOGO_QX_ADJ(12'd4)) idle_logo_inst (
+    .clk            (clk_sys),
+    .rst_n          (reset_n),
+    .h_pos          (ov_h_gen),
+    .v_pos          (core_v_pos),
+    .pal_mode       (pal_eff),
+    .il_mode        (il_eff),
+    .frame_tick     (av_refresh_tick),
+    .vis            (logo_vis),
+    .entropy        (entropy_ctr),
+    .ioctl_download (ioctl_download),
+    .ioctl_wr       (ioctl_wr),
+    .ioctl_addr     (ioctl_addr),
+    .ioctl_dout     (ioctl_dout),
+    .ioctl_index    (ioctl_index),
+    .logo_on        (logo_on_w),
+    .logo_r         (logo_r_w),
+    .logo_g         (logo_g_w),
+    .logo_b         (logo_b_w)
+);
+
 // Pipeline the palette RGB + alpha + on/idx one clk_sys stage before the combinational
 // blend, so the blend stays a flat mux (no colour-space math) in the output hotspot.
 // The subtitle already tolerates a 1-px right shift (see below); this adds one more px,
@@ -4203,15 +4257,22 @@ reg  [3:0] sp_alpha_q;
 reg  [1:0] sp_idx_q;
 reg        sp_on_q;
 reg        sp_force_q;
+// The idle logo joins as a fourth layer below the bar (it is mutually
+// exclusive with all of them by its !media_seen gate -- the ordering is
+// belt-and-braces so any future gate leak keeps warnings on top). Its
+// alpha is a constant 15 (weight 16 = exact passthrough in subpic_blend)
+// and it MUST assert force: sp_idx_q carries the subpicture's index, which
+// is 0 when idle, and without force the idx-0 transparency key would erase
+// the logo.
 always @(posedge clk_sys) begin
-    sp_r_q     <= hud_on_w ? hud_r_w     : bar_on_w ? bar_r_w     : pal_r;
-    sp_g_q     <= hud_on_w ? hud_g_w     : bar_on_w ? bar_g_w     : pal_g;
-    sp_b_q     <= hud_on_w ? hud_b_w     : bar_on_w ? bar_b_w     : pal_b;
-    sp_alpha_q <= hud_on_w ? hud_alpha_w : bar_on_w ? bar_alpha_w
+    sp_r_q     <= hud_on_w ? hud_r_w     : bar_on_w ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
+    sp_g_q     <= hud_on_w ? hud_g_w     : bar_on_w ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
+    sp_b_q     <= hud_on_w ? hud_b_w     : bar_on_w ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
+    sp_alpha_q <= hud_on_w ? hud_alpha_w : bar_on_w ? bar_alpha_w : logo_on_w ? 4'd15
                            : (hl_use ? hl_a : sp_alpha);   // HLI alpha for recoloured classes
     sp_idx_q   <= sp_q_idx;
-    sp_on_q    <= hud_on_w | bar_on_w | sp_q_inside;
-    sp_force_q <= hud_on_w | bar_on_w | hl_use; // HUD/bar + background-class highlights blend
+    sp_on_q    <= hud_on_w | bar_on_w | logo_on_w | sp_q_inside;
+    sp_force_q <= hud_on_w | bar_on_w | logo_on_w | hl_use; // + logo: bypass the idx0 key
 end
 
 // Alpha-composite the subtitle over the decoded video, COMBINATIONALLY, right before
