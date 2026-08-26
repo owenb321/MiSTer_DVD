@@ -595,4 +595,17 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # SEED 9 fitter TIMEOUT (2100s grind), SEED 11 routes + PASSES with margin
 # (clk_dec 88.88 @100C / 90.46 @-40C) -> releases/DVD_logores_20260826_1645.rbf.
 # Pinned SEED 11.
-set_global_assignment -name SEED 11
+#
+# CLOSED-CAPTIONS netlist (2026-08-26, feature/closed-captions): line-21 EIA-608
+# re-insertion (vld.v user_data snoop + dvd/cc_line21.sv + sys_top VBI un-gate +
+# O[14]/P1O[44] CONF_STR), rebased onto the post-0.1c main. A rough roll, worse
+# than main's own idle-logo netlist: SEED 11 grind ABANDONED (~43 min), SEED 7
+# and SEED 2 fitter TIMEOUT (1500s cap), SEED 5 routed 88.13/84.49 = below the
+# 86.0 gate, SEED 12 routed 70.4/74.43 deep-fringe FAIL. SEED 3 routes + PASSES
+# with margin (clk_dec 90.9 MHz @100C / 90.2 @-40C, a ~13-min healthy-class fit)
+# -> releases/DVD_cc21_20260826_2006.rbf. Pinned SEED 3 (the sweep tool rewrote
+# the assignment; this comment is the ledger). If this netlist family keeps
+# rolling this badly, the structural relief candidate is the mem_shim_burst
+# tag/valid/LRU flop arrays (~7,680 FF of high-fanout compare logic -> 1 M10K),
+# but that touches the 2-cycle hit pipeline's live lookup - own branch + HW gate.
+set_global_assignment -name SEED 3
