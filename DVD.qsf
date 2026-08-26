@@ -612,4 +612,10 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # Round-2 field-fix netlist (same branch, one inverter on cc_fld1 + comments):
 # SEED 3 HELD first roll, and better -- clk_dec 94.71 MHz @100C / 92.26 @-40C
 # -> releases/DVD_cc21r2_20260826_2022.rbf. SEED 3 stays pinned.
+# ⚠ That rbf shipped an UNDRIVEN cc_line net (deleted declaration -> Quartus
+# grounded it; Warning 10236) -- captions dead on HW, superseded. Guards added:
+# default_nettype none in the cc files, a zero-tolerance 10236 gate in
+# build_release.sh, and bench/dvd/cc_e2e_tb.sv (TV model at the pins).
+# Round-3-fix netlist (wires restored + vld_err declared): SEED 3 held AGAIN --
+# clk_dec 93.43 @100C / 88.86 @-40C -> releases/DVD_cc21r3_20260826_2129.rbf.
 set_global_assignment -name SEED 3

@@ -66,7 +66,8 @@ round.
 
 ### Next step
 
-**Round 4 is the current build — see the round-3 entry in §6 first.** The round-3 rbf
+**Round 4 is the current build: `releases/DVD_cc21r3_20260826_2129.rbf`** (SEED 3 held,
+clk_dec 93.43/88.86, implicit-net gate clean) — see the round-3 entry in §6 first. The round-3 rbf
 (`DVD_cc21r2_20260826_2022.rbf`) shipped with an UNDRIVEN `cc_line` net (an edit had
 deleted the wire declaration; Quartus grounded it) — the whole caption chain was dead, so
 it tested nothing about the field fix. Superseded, along with `DVD_cc21_20260826_2006.rbf`
