@@ -647,6 +647,11 @@ parameter CONF_STR = {
     // OUTPUT mode (CRT O[4:3]=Letterbox) for correct silhouette geometry. status[15].
     // See memory mib-visual-commentary-letterbox-substream / docs/dvd_nav.md.
     "P1O[15],Force 4:3 Subpics,Off,On;",
+    // DVD-FORK (line-21 CC diagnostic): paint the caption waveform on a VISIBLE
+    // line instead of line 21. The bits are otherwise invisible — they live in the
+    // blanking interval — so without this there is no way to tell "the TV is not
+    // decoding" from "no captions are reaching the output". See docs/closed_captions.md §6.
+    "P1O[44],CC Test Line,Off,On;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
     // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
@@ -4543,6 +4548,7 @@ re_interlace re_interlace_inst (
     // a load / seek / menu jump, so the caption backlog is dropped with everything
     // else rather than painting the pre-seek sentence onto the new scene.
     .cc_enable      (analog_eff & ~status[14]),
+    .cc_test        (status[44]),
     .cc_flush       (load_flush),
     .dec_clk        (clk_dec),
     .cc_pair_valid  (core_cc_valid),

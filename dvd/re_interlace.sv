@@ -87,6 +87,9 @@ module re_interlace (
     // because the line number and the field parity are properties of THIS raster's
     // modeline, and nothing outside should have to re-derive them.
     input             cc_enable,    // captions wanted (NTSC only — see cc_line below)
+    input             cc_test,      // diagnostic: paint the caption waveform on a VISIBLE
+                                    //   line instead of line 21, so it can be seen without
+                                    //   a scope or a caption-capable TV
     input             cc_flush,     // seek / new title: drop the caption backlog
     input             dec_clk,      // clk_dec — the VLD's domain
     input             cc_pair_valid,
@@ -302,13 +305,32 @@ end
 // The long field carries its extra line at the end (eff_vertical_length 262), so
 // 261 is the 15th line after vsync in BOTH fields — one constant covers both.
 //
-// odd_field=1 is field A = TOP content = NTSC field 1, the field that carries
-// CC1/CC2, and v_pos[0] = ~odd_field.
+// WHICH FIELD. This one is counter-intuitive and was wrong in the first cut, so
+// it is now pinned by bench/dvd/cc_field_map_tb.sv rather than by argument.
+//
+// syncgen's counter starts at the first ACTIVE line and puts the blanking at the
+// END of the field, so the VBI lines a field owns in broadcast numbering are
+// emitted while odd_field still reads the PREVIOUS field. NTSC line 21 belongs to
+// field 1 and precedes field 1's active video, so it is emitted during the
+// odd_field=0 (BOTTOM) count — the bench confirms line 261 with v_pos[0]==1 is
+// followed by the TOP field's active lines, and TOP = field 1 = CC1/CC2.
+//
+// Getting this backwards puts the CC1 stream on line 284, where a television set
+// to "CC1" never looks — which reads as "captions do not work at all", not as
+// garbled text.
+
 //
 // NTSC ONLY: line 21 is an NTSC construct, PAL discs use subpicture (and the
 // census found zero PAL discs carrying CC at all — docs/closed_captions.md §3).
-wire       cc_line  = ~pal & (sg_vpos[11:1] == p_vlen);
-wire       cc_fld1  = ~sg_vpos[0];
+// CC_TEST moves the burst to a visible line near the top of the picture. The
+// waveform is unchanged — same data, same rate, same levels — so what shows up is
+// literally the caption bits: a band of dashes that CHANGES AS DIALOGUE CHANGES,
+// and goes quiet when the disc sends null pairs. That distinguishes "extraction
+// and pacing work, the TV just isn't decoding" from "no data is arriving" without
+// a scope, which is otherwise impossible to tell apart from the sofa.
+wire [11:0] cc_vline = cc_test ? 12'd20 : p_vlen;
+wire       cc_line  = ~pal & (sg_vpos[11:1] == cc_vline);
+wire       cc_fld1  = sg_vpos[0];
 wire [7:0] cc_level;
 wire       cc_level_en;
 
@@ -337,7 +359,9 @@ cc_line21 cc (
 // together (non-blocking: sg_* still hold the old pixel's values there).
 // ---------------------------------------------------------------------------
 wire run   = (state == S_RUN);
-wire cc_on = run & cc_level_en & ~sg_pixel_en;   // VBI only, never over a pixel
+// Normally VBI-only so a mis-derived line number can never punch a hole in the
+// picture; in test mode it deliberately paints over active video.
+wire cc_on = run & cc_level_en & (cc_test | ~sg_pixel_en);
 
 always @(posedge clk) begin
     if (!rst_n) begin

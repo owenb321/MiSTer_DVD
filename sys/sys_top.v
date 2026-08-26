@@ -1374,7 +1374,13 @@ scanlines #(0) VGA2_scanlines
 	.clk(clk_vid),
 
 	.scanlines(scanlines),
-	.din(vga2_de ? {vga2_r, vga2_g, vga2_b} : 24'd0),
+	// DVD-FORK (line-21 closed captions): NOT gated on vga2_de. The stock gate
+	// (`vga2_de ? data : 24'd0`) blanks everything outside active video, which
+	// silently zeroed the EIA-608 caption waveform the core writes into line 21
+	// of the vertical blanking interval — the data reached here and died one
+	// module before the DAC. Safe to drop because re_interlace already emits 0
+	// outside its own active region, so this is a no-op for every other line.
+	.din({vga2_r, vga2_g, vga2_b}),
 	.hs_in(vga2_hs_fix),
 	.vs_in(vga2_vs_fix),
 	.de_in(vga2_de),
