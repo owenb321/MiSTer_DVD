@@ -13,6 +13,12 @@
  *   [3] a field with no pair blanks line 21 (we transmit only what the disc gives)
  *   [4] flush drops the backlog instead of painting the pre-seek sentence
  *   [5] disabled = nothing on the wire
+ *   [6] edge slope is SHAPED: no per-dot level step may exceed 70 (a square
+ *       74 ns edge is a 128 step and fails; the ~310 ns half-cosine passes) —
+ *       608 decoders drop bad-parity bytes, and over-sharp edges after the
+ *       analog chain's filtering are exactly what makes parity fail (round 4)
+ *   [7] bunched field parity (f1,f1,f2) transmits BOTH f1 pairs in order on
+ *       successive field-1 lines — the first cut dropped the second one
  *
  * Build:
  *   iverilog -g2012 -I rtl/mpeg2 -o bench/dvd/cc_line21_sim \
@@ -165,6 +171,7 @@ module cc_line21_tb;
   endfunction
 
   reg [16:0] d;
+  integer max_step, d_step;
   integer    n_on;
 
   initial begin
@@ -246,6 +253,52 @@ module cc_line21_tb;
     for (i = 0; i < HLEN; i = i + 1) if (capv[i]) n_on = n_on + 1;
     check(n_on == 0, "[5] transmitted while disabled");
     if (errors == 0) $display("PASS [5] disabled = nothing on the wire");
+    enable = 1'b1;
+
+    // [5] pushed a pair while disabled — it sits in the FIFO (the producer side
+    // does not see `enable`). Flush so scenarios [6]/[7] start from a clean
+    // pipeline; this contaminated exactly these scenarios when first written.
+    @(posedge clk) flush = 1'b1;
+    repeat (8) @(posedge clk);
+    flush = 1'b0;
+    repeat (400) @(posedge clk);
+
+    // ---------------------------------------------------------------- [6] ----
+    push(1'b1, 8'h55, 8'hAA);          // alternating bits = maximum transitions
+    repeat (400) @(posedge clk);
+    run_field(1'b1);
+    max_step = 0;
+    for (i = 1; i < HLEN; i = i + 1) begin
+      if (capv[i] && capv[i-1]) begin
+        d_step = (cap[i] > cap[i-1]) ? (cap[i] - cap[i-1]) : (cap[i-1] - cap[i]);
+        if (d_step > max_step) max_step = d_step;
+      end
+    end
+    check(max_step != 0,  "[6] no waveform captured for the slope check");
+    check(max_step <= 70, "[6] edge too sharp: per-dot step exceeds 70 (square edge?)");
+    find_start();
+    d = demod();
+    check(d[16] && d[15:8] == 8'h55 && d[7:0] == 8'hAA,
+          "[6] shaped waveform no longer demodulates");
+    if (errors == 0) $display("PASS [6] edges shaped (max per-dot step %0d) and still demodulate", max_step);
+
+    // ---------------------------------------------------------------- [7] ----
+    // Bunched parity: two field-1 pairs back to back, then a field-2 pair.
+    push(1'b1, 8'h31, 8'h32);
+    push(1'b1, 8'h33, 8'h34);
+    push(1'b0, 8'h35, 8'h36);
+    repeat (600) @(posedge clk);
+    run_field(1'b1);
+    find_start(); d = demod();
+    check(d[16] && d[15:8] == 8'h31 && d[7:0] == 8'h32, "[7] first f1 pair wrong");
+    run_field(1'b0);
+    find_start(); d = demod();
+    check(d[16] && d[15:8] == 8'h35 && d[7:0] == 8'h36, "[7] f2 pair wrong");
+    run_field(1'b1);
+    find_start(); d = demod();
+    check(d[16] && d[15:8] == 8'h33 && d[7:0] == 8'h34,
+          "[7] second f1 pair lost or out of order (drop-on-mismatch?)");
+    if (errors == 0) $display("PASS [7] bunched parity held and delivered in order");
 
     if (errors == 0) $display("PASS: cc_line21_tb — all scenarios green");
     else begin
