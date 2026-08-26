@@ -44,6 +44,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/disp_vscale.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/crt_ov_map.sv
 # dual-raster analog output: progressive -> 15 kHz 480i/576i second raster (VGA2_*)
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/re_interlace.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/cc_line21.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ps_stream_fifo.sv
 # AC-3 reframer: re-frame demuxed AC-3 on 0x0B77 boundaries so audio_ring drops
 # whole AC-3 frames (clean) instead of PES chunks (pop). See dvd/ac3_reframer.sv.

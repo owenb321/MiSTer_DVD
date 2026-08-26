@@ -120,6 +120,7 @@ def parse_cc_block(p, acc):
                 acc['xds'] += 1
         if fld == 1:
             acc['stream1'].append((c1, c2))
+        acc['raw'].append((fld, b1, b2))
     return ok
 
 
@@ -149,6 +150,95 @@ def decode_608_text(pairs, limit=600):
     return ''.join(out)
 
 
+# =============================================================================
+# RTL fixture writer
+# =============================================================================
+def write_fixture(path, outdir, vts_sel=None, nblocks=6, start_frac=0.40):
+    """Carve a small REAL elementary stream carrying CC blocks + its golden pairs.
+
+    The stream is real disc bytes throughout: for each caption block found we keep
+    the run from its GOP header (00 00 01 B8) through the end of the user_data, and
+    concatenate those runs. That gives the VLD genuine GOP headers to parse and
+    genuine user_data to walk, in a few hundred bytes instead of the ~200 KB a
+    contiguous multi-GOP capture would cost -- small enough to commit.
+
+    Writes  cc_es.hex     : 64-bit big-endian words, getbits_fifo's shift order
+            cc_golden.hex : one line per pair, "<field> <b1> <b2>" (hex)
+    """
+    nav = IsoNav(path)
+    vts = vts_sel if vts_sel is not None else nav.best_vts
+    runs = [(ext, dl // SEC) for ext, dl in nav.groups[vts]]
+    total = sum(n for _, n in runs)
+
+    def sector_at(idx):
+        for ext, n in runs:
+            if idx < n:
+                return ext + idx
+            idx -= n
+        return None
+
+    chunks, golden = [], []
+    start = int(total * start_frac)
+    k = 0
+    buf = b''
+    while len(chunks) < nblocks and k < 40000:
+        s_ = sector_at(start + k)
+        if s_ is None:
+            break
+        buf += video_payload(nav.sec(s_))
+        k += 1
+        # scan what we have for complete GOP-header -> end-of-user_data runs
+        i = 0
+        consumed = 0
+        while True:
+            g = buf.find(b'\x00\x00\x01\xb8', i)
+            if g < 0:
+                break
+            u = buf.find(b'\x00\x00\x01\xb2', g)
+            if u < 0 or u - g > 64:
+                i = g + 4
+                continue
+            e = buf.find(b'\x00\x00\x01', u + 4)
+            if e < 0:
+                break                                  # need more bytes
+            payload = buf[u + 4:e]
+            if payload[0:2] == SIG_CC:
+                acc = new_acc()
+                parse_cc_block(payload, acc)
+                # Require live caption bytes: a fixture full of 0x80 0x80 null
+                # padding would pass a broken extractor that emitted constants.
+                if acc['pairs'] and acc['nonnull']:
+                    chunks.append(buf[g:e])
+                    for fld, b1, b2 in acc['raw']:
+                        golden.append((fld, b1, b2))
+                    if len(chunks) >= nblocks:
+                        break
+            i = e
+            consumed = e
+        if consumed:
+            buf = buf[consumed:]
+
+    if not chunks:
+        raise SystemExit("no caption blocks found to build a fixture from")
+
+    # sequence_end, then a tail of filler. The tail is not cosmetic: getbits_fifo
+    # keeps a 24-bit window and reads whole 64-bit words, so without bytes BEHIND
+    # the last caption byte the pipeline starves before it can present it and the
+    # final pair of the last block never reaches getbits[23:16]. A real stream
+    # always continues; the fixture has to say so.
+    es = b''.join(chunks) + b'\x00\x00\x01\xb7' + b'\x00' * 64
+    es += b'\x00' * ((-len(es)) % 8)
+    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, "cc_es.hex"), "w") as f:
+        for w in range(0, len(es), 8):
+            f.write(es[w:w+8].hex() + "\n")
+    with open(os.path.join(outdir, "cc_golden.hex"), "w") as f:
+        for fld, b1, b2 in golden:
+            f.write("%d %02x %02x\n" % (fld, b1, b2))
+    print("fixture: %d blocks, %d ES bytes, %d golden pairs -> %s"
+          % (len(chunks), len(es), len(golden), outdir))
+
+
 def new_acc():
     return {'pics': 0, 'ud_blocks': 0, 'cc_blocks': 0, 'other_sig': collections.Counter(),
             'ga94': 0, 'ga94_cc': 0, 'dtg1': 0,
@@ -156,7 +246,7 @@ def new_acc():
             'odd_first': 0, 'extra_field': 0, 'filler_bit': 0, 'truncated': 0,
             'bad_marker': 0, 'pairs': 0, 'parity_ok': 0, 'nonnull': 0, 'xds': 0,
             'field': collections.Counter(), 'nonnull_field': collections.Counter(),
-            'stream1': []}
+            'stream1': [], 'raw': []}
 
 
 def merge(dst, src):
@@ -291,6 +381,8 @@ def main():
     ap.add_argument('--windows', type=int, default=12)
     ap.add_argument('--win-sectors', type=int, default=1200)
     ap.add_argument('--per-window', action='store_true')
+    ap.add_argument('--fixture', metavar='OUTDIR',
+                    help="carve an RTL testbench fixture (ES + golden pairs) here")
     ap.add_argument('--text', action='store_true',
                     help="decode a sample of CC1 text (proof the data is real)")
     a = ap.parse_args()
@@ -302,6 +394,10 @@ def main():
                       if n.lower().endswith('.iso')]
         else:
             paths.append(p)
+
+    if a.fixture:
+        write_fixture(paths[0], a.fixture, a.vts)
+        return 0
 
     hits = 0
     for path in paths:

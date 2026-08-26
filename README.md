@@ -49,6 +49,13 @@ pause. SVCD's 480-wide picture fills both HDMI and the analog CRT output. No men
 15 kHz 480i/576i raster on the analog pins. It engages from `MiSTer.ini` alone, like any
 other core. A field-passthrough mode hands the CRT the disc's authored fields 1:1.
 
+**Closed captions (line 21)** — NTSC discs carry EIA-608 captions hidden in the MPEG-2
+video stream, separately from subtitles. The core extracts them and re-modulates them
+onto **line 21 of the analog output**, exactly as a real DVD player does, so your
+television's own caption decoder displays them. Analog output only, and it needs a set
+with a caption decoder (every US television 13" and larger since 1993 has one). Not yet
+confirmed against a real set — see Known limitations.
+
 **Audio** — AC-3 and MPEG-1 Layer II (MP2) decoded entirely in fabric (AC-3 5.1
 downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
 over S/PDIF to a receiver.
@@ -68,6 +75,14 @@ HUD and seek bar.
   `CSS ENCRYPTED` on screen, and mutes rather than emitting loud static.
 - **ISO9660 only.** UDF-only images will not load; the core reports
   `UNSUPPORTED IMAGE`.
+- **Closed captions go out on line 21 of the ANALOG output only** — there is no
+  on-screen caption renderer, so nothing appears on HDMI, and your television has to
+  decode them (line-21 data reaches a decoder over composite and S-video, and over
+  component on many sets; consumer sets generally do not slice captions from RGB).
+  ⚠ **This has not yet been confirmed against a real television** — it is verified in
+  simulation, and the exact line and timing are derived from the raster rather than
+  measured on a set. Captions are also NTSC-only; PAL discs use subtitles instead.
+  Roughly 1 disc in 6 carries them at all — see [docs/closed_captions.md](docs/closed_captions.md).
 - **Only 720×480, 720×576 and the MPEG-1 SIF sizes (352×240, 352×288) are well
   tested.** Other DVD-compliant MPEG-2 resolutions (704×480, 352×480 half-D1) are
   accepted by the spec but have had little or no testing here.
@@ -262,6 +277,7 @@ Defaults are chosen to be correct for most users; the first value listed is the 
 | **480i Deint** | **Bob** / Weave | |
 | **Analog Out** | **Auto** / Interlaced / Progressive / Native Fields | See below. |
 | **Analog Aspect** | **Auto** / Fit / Letterbox / Crop | How anamorphic content fits a 4:3 analog TV. |
+| **Line-21 CC** | **On** / Off | Re-inserts the disc's closed captions on line 21 of the analog output for your TV to decode. NTSC + analog only; it lives in the blanking interval so it is invisible otherwise. Turn it off if a capture device or upscaler objects to VBI data. |
 
 ### Choosing an Analog Out mode
 

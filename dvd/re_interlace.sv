@@ -83,6 +83,16 @@ module re_interlace (
     input             fieldpass,    // 1 = main raster is the pixrep INTERLACED fields raster (re-time
                                     //     1:1); 0 = standard progressive raster (derive fields)
 
+    // line-21 closed captions (dvd/cc_line21.sv) — the caption inserter lives here
+    // because the line number and the field parity are properties of THIS raster's
+    // modeline, and nothing outside should have to re-derive them.
+    input             cc_enable,    // captions wanted (NTSC only — see cc_line below)
+    input             cc_flush,     // seek / new title: drop the caption backlog
+    input             dec_clk,      // clk_dec — the VLD's domain
+    input             cc_pair_valid,
+    input      [15:0] cc_pair,
+    input             cc_pair_field,
+
     // main raster tap — the registered vga_*_q output stage plus its matching
     // coordinates (emu delays core_h_pos/core_v_pos/core_pixel_en 1 clk to align)
     input      [7:0]  in_r,
@@ -100,7 +110,8 @@ module re_interlace (
     output reg        out_vs,
     output reg        out_de,
     output            out_ce,       // 13.5 MHz CE aligned to the out_* registers
-    output            locked        // diagnostics: RUN state reached
+    output            locked,       // diagnostics: RUN state reached
+    output            cc_active     // diagnostics: a caption pair is on the wire
 );
 
 // ---------------------------------------------------------------------------
@@ -274,21 +285,72 @@ always @(posedge clk) begin
 end
 
 // ---------------------------------------------------------------------------
+// Line-21 closed captions
+// ---------------------------------------------------------------------------
+// WHERE LINE 21 IS. sync_gen already publishes everything needed, so nothing in
+// syncgen.v changes: in interlaced mode v_pos = {v_cntr[10:0], ~odd_field}, so
+// sg_vpos[11:1] IS the field-relative line counter and sg_vpos[0] is the field
+// parity — both already aligned to sg_hpos through the same output pipeline.
+//
+// The line number derives two ways and they agree, which is the reason to trust
+// it without a set in front of us:
+//   * BY COUNT — NTSC line 21 is the 15th line after the vertical sync ends. Our
+//     vsync window is [244,247), so lines 247..261 are that back porch and 261 is
+//     its 15th. p_vlen (the short field's last line index) is exactly 261.
+//   * BY POSITION — line 21 is the last VBI line before active video. v_cntr 261
+//     is the last line before the counter wraps to 0 = the first active line.
+// The long field carries its extra line at the end (eff_vertical_length 262), so
+// 261 is the 15th line after vsync in BOTH fields — one constant covers both.
+//
+// odd_field=1 is field A = TOP content = NTSC field 1, the field that carries
+// CC1/CC2, and v_pos[0] = ~odd_field.
+//
+// NTSC ONLY: line 21 is an NTSC construct, PAL discs use subpicture (and the
+// census found zero PAL discs carrying CC at all — docs/closed_captions.md §3).
+wire       cc_line  = ~pal & (sg_vpos[11:1] == p_vlen);
+wire       cc_fld1  = ~sg_vpos[0];
+wire [7:0] cc_level;
+wire       cc_level_en;
+
+cc_line21 cc (
+    .clk            (clk),
+    .rst_n          (rst_n),
+    .ce2            (ce2),
+    .dec_clk        (dec_clk),
+    .dec_pair_valid (cc_pair_valid),
+    .dec_pair       (cc_pair),
+    .dec_pair_field (cc_pair_field),
+    .enable         (cc_enable & ~pal),
+    .flush          (cc_flush),
+    .hpos           (sg_hpos),
+    .cc_line        (cc_line),
+    .field1         (cc_fld1),
+    .level          (cc_level),
+    .level_en       (cc_level_en),
+    .active         (cc_active)
+);
+
+// ---------------------------------------------------------------------------
 // Registered output stage (mirrors the main vga_*_q placement defense).
 // sg2's outputs hold each pixel for 2 clk27; rd_q (1-clk BRAM latency) is
 // stable by the NEXT ce2 tick, where the out_* registers latch pixel and syncs
 // together (non-blocking: sg_* still hold the old pixel's values there).
 // ---------------------------------------------------------------------------
-wire run = (state == S_RUN);
+wire run   = (state == S_RUN);
+wire cc_on = run & cc_level_en & ~sg_pixel_en;   // VBI only, never over a pixel
 
 always @(posedge clk) begin
     if (!rst_n) begin
         out_r <= 8'd0; out_g <= 8'd0; out_b <= 8'd0;
         out_hs <= 1'b0; out_vs <= 1'b0; out_de <= 1'b0;
     end else if (ce2) begin
-        out_r  <= (run && sg_pixel_en) ? rd_q[23:16] : 8'd0;
-        out_g  <= (run && sg_pixel_en) ? rd_q[15:8]  : 8'd0;
-        out_b  <= (run && sg_pixel_en) ? rd_q[7:0]   : 8'd0;
+        // Captions ride the VBI, above the active region, so they never contend
+        // with a picture pixel — but the mux is written caption-first anyway so a
+        // mis-derived line number can only ever cost one blanking line, never
+        // punch a hole in the image. Equal on R/G/B = luma-only, no chroma.
+        out_r  <= cc_on ? cc_level : (run && sg_pixel_en) ? rd_q[23:16] : 8'd0;
+        out_g  <= cc_on ? cc_level : (run && sg_pixel_en) ? rd_q[15:8]  : 8'd0;
+        out_b  <= cc_on ? cc_level : (run && sg_pixel_en) ? rd_q[7:0]   : 8'd0;
         out_hs <= run ? sg_hsync : 1'b0;
         out_vs <= run ? sg_vsync : 1'b0;
         out_de <= run ? sg_pixel_en : 1'b0;

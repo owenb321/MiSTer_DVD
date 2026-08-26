@@ -386,6 +386,40 @@ worse maintenance burden than targeted in-place edits. So:
   engaged (`analog_eff`), Interlaced Out is FORCED OFF (the re-interlacer needs the
   standard progressive main raster; the CRT still gets true 480i via the weave frames).
   Sim: `bench/dvd/film_detect_tb.sv`. Design + follow-ups: **`docs/interlaced_auto.md`**.
+- 🔧 **LINE-21 CLOSED CAPTIONS (2026-08-25, branch `feature/closed-captions`) —
+  ⏳ HW-CONFIRM PENDING.** NTSC discs carry EIA-608 captions in MPEG-2 **user_data**,
+  not subpicture. The core now extracts them and re-modulates them onto **line 21 of
+  the analog raster** so the TELEVISION's own decoder renders them — what a real
+  player does. **No on-screen character generator**: that needs a 32x15 char plane +
+  a font ROM grown past 64 glyphs for lowercase (~2-3 M10K, several hundred ALMs)
+  against a 98% ALM / 91% RAM fit that has already failed to route once at 91% —
+  see `docs/closed_captions.md` §5, which records what it would cost if ever wanted.
+  Three legs: (1) **extraction** = a PASSIVE SNOOP in `rtl/mpeg2/vld.v` — no new FSM
+  state, because `STATE_NEXT_START_CODE` already walks user_data one byte at a time
+  so the payload streams past in `getbits[23:16]` for free (**110 insertions, 0
+  deletions**; the new block writes only its own regs, so the decode path is
+  untouchable by construction). ★ In the VLD and NOT `ps_demux` — ps_demux is in
+  FRONT of the ~1 s VBUF, so a demux-side sniff is the stale-display-flags bug
+  (drift rounds 11-12) in a new hat; the VLD is where `flags_commit` had to move for
+  the same reason. (2) **pacing** = one pair per displayed FIELD, no PTS/STC/NCO at
+  all — MEASURED on real discs: the block sits on the GOP header and `cc_count`
+  counts DISPLAY frames not coded pictures (15 vs 12 following pictures = 3:2 already
+  expanded by the encoder), so the caption clock and the raster are the same clock
+  and governor drops/repeats are absorbed for free. (3) **waveform**
+  (`dvd/cc_line21.sv`) — exact by construction: 13.5 MHz = 858·fH and the bit rate is
+  32·fH, so one bit is **858/32 = 26.8125 dots EXACTLY**; a 16-bit NCO at 2444/dot
+  hits that to +0.0002% and its top 4 bits index the run-in sine LUT. Line number
+  derived TWICE and agreeing (15th line after vsync end = last VBI line before active
+  = `v_cntr` 261 = `p_vlen`), from `sg_vpos` alone — `syncgen.v` unchanged. Output mux
+  gated on `~sg_pixel_en` so a wrong line can only cost a blanking line, never punch a
+  hole in the picture. `O[14] Line-21 CC` (default On; reuses the bit freed by the
+  O[14] CRT-mode retirement). Sim: `cc_extract_tb` (**180/180 pairs byte-exact**
+  through the REAL vld+getbits over REAL MiB bytes vs a Python golden),
+  `cc_line21_tb` (a **DEMODULATOR** — slices at 25 IRE, locks to the run-in, rebuilds
+  the bytes; 5/5), `re_interlace_tb` unchanged 9/9. Census: **6/34 local discs**
+  carry live captions, zero PAL, zero CEA-708, field 2 empty everywhere
+  (`tools/cc_scan.py`, `dvd_census.py --captions`). **HW gate + the 5 things only a
+  set can settle: `docs/closed_captions.md` §6.**
 - ✅ **DUAL-RASTER ANALOG OUTPUT (2026-07-29, HW-CONFIRMED + MERGED PR fj#146,
   2026-07-30) — SUPERSEDES the O[14] whole-core CRT mode below.** User-confirmed
   working on real hardware (analog engages from ini alone, HDMI stays progressive

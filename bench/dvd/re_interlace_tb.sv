@@ -23,7 +23,9 @@
 //
 // Build:
 //   iverilog -g2012 -I rtl/mpeg2 -o bench/dvd/re_interlace_sim \
-//       rtl/mpeg2/syncgen.v dvd/re_interlace.sv bench/dvd/re_interlace_tb.sv
+//       rtl/mpeg2/syncgen.v dvd/re_interlace.sv dvd/cc_line21.sv \
+//       rtl/mpeg2/wrappers.v rtl/mpeg2/xilinx_fifo_dc.v rtl/mpeg2/xfifo_sc.v \
+//       rtl/mpeg2/xilinx_fifo_sc.v bench/dvd/re_interlace_tb.sv
 //   vvp bench/dvd/re_interlace_sim
 //
 `include "timescale.v"
@@ -56,7 +58,13 @@ module re_interlace_tb;
     .in_hpos(in_hpos), .in_vpos(in_vpos),
     .out_r(out_r), .out_g(out_g), .out_b(out_b),
     .out_hs(out_hs), .out_vs(out_vs), .out_de(out_de),
-    .out_ce(out_ce), .locked(locked)
+    .out_ce(out_ce), .locked(locked),
+    // line-21 captions: disabled here — this bench proves the RASTER. The
+    // inserter has its own bench (bench/dvd/cc_line21_tb.sv), and holding
+    // cc_enable low keeps every pixel-exact content check below unchanged,
+    // which is itself the assertion that captions cannot touch active video.
+    .cc_enable(1'b0), .cc_flush(1'b0), .dec_clk(clk),
+    .cc_pair_valid(1'b0), .cc_pair(16'd0), .cc_pair_field(1'b0), .cc_active()
   );
 
   // ------------------------------------------- synthetic main raster model

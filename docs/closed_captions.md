@@ -1,10 +1,23 @@
 # Line-21 closed captions (EIA-608) on DVD — measurement + feasibility
 
-**Status (2026-08-25): MEASURED, NOT IMPLEMENTED.** No RTL exists. What ships as of this
-document is the *census* half: `tools/cc_scan.py` and `tools/dvd_census.py --captions` can
-now tell you which discs carry captions and how dense they are. The decode/render half is
-assessed below with a concrete design and an honest cost — it is **not** started, and the
-fit headroom section explains why it should not be started casually.
+**Status (2026-08-25): IMPLEMENTED as line-21 re-insertion on the analog raster —
+⏳ HW-confirm pending.** The core now strips the disc's EIA-608 caption bytes out of the
+MPEG-2 video stream and re-modulates them onto **line 21 of the analog output**, exactly
+as a real DVD player does, so the *television's* own caption decoder renders them. There
+is deliberately **no on-screen character generator** (§4 explains why that option was
+dropped on fit grounds; §5 records what it would have cost if it is ever wanted).
+
+Shipping in this change:
+- `tools/cc_scan.py` + `tools/dvd_census.py --captions` — the census half (§2, §3)
+- `rtl/mpeg2/vld.v` user_data snoop — extraction (§4.1), sim-proven byte-exact on real
+  disc bytes
+- `dvd/cc_line21.sv` — field-rate pacing + the EIA-608 waveform (§4.2, §4.3)
+- `dvd/re_interlace.sv` — line-21 injection into the analog raster (§4.4)
+- `O[14] Line-21 CC` (On/Off, default On), NTSC + analog only
+
+**What is NOT yet confirmed: any of it, on a television.** Everything below is
+sim-verified and derived from the modeline; §6 is the list of things only a real set can
+settle, and the line number and start dot are the two that matter.
 
 This supersedes the previous stance in `docs/test_disc_shopping_list.md` #15 ("normally
 decoded by the TV, not the DVD core — likely out of scope"). That was half right: it *is*
@@ -133,107 +146,179 @@ Text decoded from MEN_IN_BLACK's CC1 stream, as proof the parse is correct:
 
 ---
 
-## 4. Could we decode them as subtitles? — design assessment
+## 4. How it works, as built
 
-**Yes, and the timing model is unusually easy.** Three legs, of which only the third is
-expensive.
+Four legs. Only the first two contain anything subtle.
 
-### Leg 1 — extraction (the only RTL that both options need)
+### 4.1 Extraction — a passive snoop in the VLD
 
-`rtl/mpeg2/vld.v:679` currently throws the data away:
+`rtl/mpeg2/vld.v` used to throw the data away:
 
 ```verilog
 CODE_USER_DATA_START:  next = STATE_NEXT_START_CODE;
 ```
 
-which hunts straight to the next start code. The bytes are *already* flowing through
-`ps_demux` into the decoder; nothing upstream has to change. Adding a `STATE_USER_DATA`
-that shifts bytes out into a small FIFO until `00 00 01` is on the order of 20 lines.
+The key realisation is that this line already does most of the work. `STATE_NEXT_START_CODE`
+walks the stream **one byte at a time** (`next_advance = 0`, `align = 1`) looking for the
+next start code, so the whole user_data payload streams past in `getbits[23:16]` for free.
+The snoop therefore adds **no FSM state, no advance/align change, and no new bitstream
+consumer** — it is one `always` block that watches bytes go by, armed by the `0xB2` start
+code and disarmed the moment the walk ends. The diff to `vld.v` is **110 insertions and
+zero deletions**, and the new block assigns only to its own registers, so the decode path
+cannot be affected by construction.
 
-**Extract in the vld, not in `ps_demux`.** This is the same lesson the project already
-paid for twice:
+A non-caption user_data block (CLUE carries ~1100 of them) simply fails the
+`"CC" 0x01 0xF8` signature match and is ignored.
 
-- `ps_demux` sits *in front* of the VBUF, which runs up to ~1 s ahead of the screen. A
-  demux-side sniff is the **stale-display-flags** bug (CLAUDE.md, drift saga rounds 11–12)
-  in a new costume: data captured at parse time, presented against a different picture.
-- The vld sits *behind* the VBUF and is at most a reorder-depth ahead of display, which is
-  exactly where `flags_commit` had to move the `rff`/`tff`/`progressive_frame` capture to
-  fix the drift ramp. Put captions on the same footing.
+**Why the VLD and not `ps_demux`,** where the sniff would have been trivially easy:
+`ps_demux` sits *in front* of the VBUF, which runs up to ~1 s ahead of the screen. A
+demux-side sniff is the **stale-display-flags** bug (drift saga rounds 11–12) wearing a
+new hat — data captured at parse time, presented against a different picture. The VLD sits
+*behind* the VBUF, which is precisely why `flags_commit` had to move there.
 
-### Leg 2 — pacing (nearly free, per §1 finding 3)
+### 4.2 Pacing — one pair per displayed field, and nothing else
 
-One byte-pair per **displayed field**. Buffer a GOP's worth (max `cc_count=31` × 2 = 62
-pairs = 124 bytes; a single small FIFO) at the GOP header, drain one pair per field tick.
-No PTS, no STC compare, no NCO — the encoder pre-expanded the stream over the 3:2 cadence,
-and draining per *displayed* field means governor frame drops and repeats are absorbed
-automatically, because the caption clock and the raster are then the same clock.
+This is where the §1 measurements pay off. Because `cc_count` counts **display frames** and
+the encoder has already expanded the stream over the 3:2 cadence, one byte pair belongs to
+one displayed **field**. So `dvd/cc_line21.sv` consumes exactly one pair per field at line
+21 and captions track the picture with **no PTS, no STC compare, and no rate correction** —
+governor drops and repeats included, because the caption clock and the raster are then
+literally the same clock.
 
-Flush on the existing contract: whatever pulses `load_flush` / `vbuf_flush` must clear the
-caption FIFO and reset the 608 decoder state, or a seek will paint the pre-seek sentence.
+Pairs carry their own field bit, so they are de-interleaved into one slot per field parity.
+A disc that only ever emits field 1 (every disc in §3) leaves the field-2 slot empty and
+field 2 transmits nothing. An empty slot **blanks** line 21 rather than inventing a null
+pair: we transmit exactly the fields the disc provides.
 
-### Leg 3 — the 608 decoder and the glyph plane (the expensive leg)
+Crossing `clk_dec` → `clk_sys` is a `fifo_dc` inside the inserter, 128 entries against a
+worst case of 62 pairs per GOP block. `load_flush` — the same event that resets `ps_demux`
+and re-anchors `av_sync` — drops the backlog, so a seek cannot paint the pre-seek sentence
+onto the new scene.
 
-An EIA-608 decoder is a modest FSM — control-code pairs (PACs, mid-row codes, pop-on /
-roll-up / paint-on modes, backspace, EOC/EDM/ERM), doubled control pairs to de-duplicate,
-a 32×15 character grid, double-buffered for pop-on. Call it 32×15×7 bits ×2 ≈ 6.7 kbit,
-so **one M10K** for the character RAM.
-
-Rendering has a ready-made home: `dvd/transport_hud.sv` already runs a text plane through
-a generated glyph ROM (`tools/hud_font.py` → `dvd/hud_font.mem`), (x,y)-pure and
-priority-muxed into the **one existing `subpic_blend` register stage** — the hotspot
-discipline documented in `docs/transport_hud.md`. A caption plane is 15 rows of the same
-machinery instead of 2.
-
-One catch: **the HUD font is uppercase-only** — `GLYPH_ORDER` is 45 glyphs (digits, six
-punctuation, `A`–`Z`, three transport icons) in a 64-entry ROM. Captions are mixed case
-(see the MiB sample above). Adding lowercase pushes past 64 glyphs, so the ROM goes to 128
-entries / 7-bit index — 2 M10K instead of 1. Rendering captions in all-caps to dodge this
-is defensible (period caption decoders often were) but it is a visible quality choice, not
-a free one.
-
-### The real blocker: fit headroom
-
-Current release fit:
+### 4.3 The waveform
 
 ```
-Logic utilization (ALMs) : 40,973 / 41,910  (98 %)
-Total RAM Blocks         :    504 /    553  (91 %)
-Total DSP Blocks         :    100 /    112  (89 %)
+7 cycles clock run-in | 3 start bits (0,0,1) | 16 data bits  =  26 bit periods
 ```
 
-That is **~937 ALMs and 49 M10K free**, on a design whose history includes a branch that
-**failed to route at 91% ALMs** and needed the M19 area pass to recover (CLAUDE.md,
-`docs/ac3_decoder_architecture.md` §4.11). Leg 3 plausibly fits *on paper* — a few hundred
-ALMs and 2–3 M10K — but it lands on a fit that is already marginal and seed-sensitive
-(memory `quartus-build-flaky-routing`). **Realistically this feature needs an area pass to
-pay for itself first**, and the known-productive lever is the recurring one: find
-unconverted LUT-RAM and move it to M10K.
+The dot clock makes the timing exact rather than approximate: 13.5 MHz = 858 × fH and the
+bit rate is 32 × fH, so **one bit is 858/32 = 26.8125 dots exactly**. A 16-bit NCO stepping
+2444 per dot realises that to +0.0002 %, and its top 4 bits index the run-in sine LUT for
+free. Levels are 50 IRE for logic 1 and blanking for logic 0; the run-in is
+`25 − 25·cos(2πφ)` IRE, which puts its positive peaks at the bit centres — the alignment
+the standard defines between the recovered clock and the data eyes.
 
-### Option B — inject a real line-21 waveform on the analog output
+Placement: hsync leads at dot 735 of 858, so 10.5 µs later is dot 18.75 of the next line's
+active region. The waveform is 26 × 26.8125 = 697 dots, ending at dot ~716 — inside the
+720-dot active window with 4 dots to spare, which is not luck: line 21 is specified to fit
+an active line. The module arms at dot 16 so that after three registers of pipeline the
+emitted run-in lands on ~19, keeping the ±0.25 µs (±3.4 dot) window centred rather than
+spending it on pipeline delay.
 
-Worth taking seriously precisely *because* of the fit numbers. This core has a native
-15 kHz interlaced analog raster (`dvd/re_interlace.sv`, `docs/analog_dual_raster.md`) with
-true field parity — which is exactly what a real DVD player uses to hand captions to the
-TV. Instead of decoding 608, modulate the byte pairs onto **line 21 of the matching field**
-as the standard waveform (7 cycles run-in at 32×fH ≈ 503.5 kHz, 3 start bits, 16 data bits,
-50 IRE) and let the television's built-in decoder do the work.
+Levels are driven equally on R, G and B — luma-only, zero colour difference — so the data
+lands on Y for a YPbPr or composite chain and carries no chroma.
 
-- **Cost: a phase accumulator and a shift register.** No 608 FSM, no character RAM, no font
-  ROM growth, no glyph plane, no new blend path. Tens of ALMs against Leg 3's hundreds —
-  which on a 98%-ALM fit is the difference between "needs an area pass first" and "try it".
-- It is what the hardware being emulated actually did, and every US television 13" and
-  larger since 1993 has the decoder.
-- **Limits:** analog output only (nothing on HDMI), and it depends on the viewer's TV. It
-  still needs Legs 1 and 2 — extraction and field-rate pacing are shared with Option A.
+### 4.4 Injection — finding line 21 without touching `syncgen`
 
-Legs 1+2 are the shared prerequisite either way, and they are the small, structurally
-interesting part. A sensible order is: extraction + pacing first (provable in sim against
-`cc_scan.py`'s decode of the same disc, which is a ready-made golden model), then Option B
-as the cheap payoff, then Option A when an area pass has bought the room.
+`sync_gen` already publishes everything needed, so nothing in `syncgen.v` changes: in
+interlaced mode `v_pos = {v_cntr[10:0], ~odd_field}`, which makes `sg_vpos[11:1]` the
+field-relative line counter and `sg_vpos[0]` the field parity, both already aligned to
+`sg_hpos` through the same output pipeline.
+
+**The line number derives two independent ways and they agree**, which is the reason to
+ship it without a set in front of us:
+
+- **By count** — NTSC line 21 is the 15th line after vertical sync ends. Our vsync window
+  is `[244, 247)`, so lines 247–261 are that back porch and 261 is its 15th.
+- **By position** — line 21 is the last VBI line before active video. `v_cntr` 261 is the
+  last line before the counter wraps to 0 = the first active line.
+
+Both give `v_cntr == 261`, which is exactly `p_vlen`, the short field's last line index.
+The long field carries its extra line at the end, so 261 is the 15th line after vsync in
+**both** fields and one constant covers both. `odd_field = 1` is field A = TOP content =
+NTSC field 1, the field that carries CC1/CC2.
+
+The output mux is written caption-first but gated on `~sg_pixel_en`, so a mis-derived line
+number can only ever cost one blanking line — it can never punch a hole in the picture.
+
+### 4.5 Verification
+
+| Bench | What it proves |
+|---|---|
+| `bench/dvd/cc_extract_tb.sv` | **180/180 caption pairs recovered byte-exact** by the real `vld` + `getbits_fifo` over real MEN_IN_BLACK bytes, against a golden list from the independent Python parse. This is the leg with a real assumption in it — that the payload streams past in `getbits[23:16]` — so it is tested against the real getbits pipeline, not a model. |
+| `bench/dvd/cc_line21_tb.sv` | A **demodulator**, not a register-toggle check: slices the emitted luma at 25 IRE, locks to the run-in the way a television does, samples at the bit centres and reassembles the byte pair. Plus field-parity routing, one-pair-per-field pacing, empty-slot blanking, flush, and disabled. 5/5 green. |
+| `bench/dvd/re_interlace_tb.sv` | Unchanged and still green (9/9, pixel-exact content checks) with `cc_enable` held low — which is itself the assertion that captions cannot touch active video. |
+
+Fixtures come from `tools/cc_scan.py --fixture`, which carves real GOP-header + user_data
+runs out of a disc (712 bytes, small enough to commit) together with the golden pair list.
+
+### 4.6 What this cost
+
+Sub-1 % of the device: a 17-bit × 128 `fifo_dc`, a 16-bit NCO, a 19-bit shift register, a
+16-entry sine LUT and the VLD snoop's ~40 flip-flops. That was the whole point of choosing
+this over an on-screen character generator — see §5.
+
+## 5. The option not taken: an on-screen character generator
+
+Rendering 608 ourselves — decoding the control codes and painting a 32×15 character grid —
+was the obvious reading of "decode them as subtitles", and it was dropped on **fit
+grounds**, not on principle. Recorded here so the trade-off is not re-litigated from
+scratch:
+
+- A 608 decoder is a modest FSM (PACs, mid-row codes, pop-on / roll-up / paint-on, doubled
+  control pairs) plus a 32×15×7-bit character RAM, double-buffered for pop-on ≈ one M10K.
+- Rendering had a ready home: `dvd/transport_hud.sv` already runs a text plane through a
+  generated glyph ROM, (x,y)-pure and priority-muxed into the one existing `subpic_blend`
+  register stage.
+- But the **HUD font is uppercase-only** — 45 glyphs in a 64-entry ROM — and captions are
+  mixed case, so the ROM goes to 128 entries / 7-bit index, 2 M10K instead of 1.
+- Against a release fit of **40,973 / 41,910 ALMs (98 %), 504 / 553 RAM blocks (91 %),
+  100 / 112 DSP (89 %)**, on a design where a branch has already failed to route at 91 %
+  ALMs and needed the M19 area pass to recover.
+
+So it plausibly fits on paper and lands on a fit that cannot absorb it. **If it is ever
+wanted, do an area pass first** — the known-productive lever is the recurring one, finding
+unconverted LUT-RAM and moving it to M10K. The extraction and pacing legs (§4.1, §4.2) are
+already built and would be reused unchanged; only the renderer is missing.
+
+The honest limitation of the shipped approach, stated plainly: **it does nothing on HDMI**,
+and on analog it depends on the viewer's television having a caption decoder. Line-21 data
+reaches a decoder over composite and S-video, and over component on many sets; an RGB SCART
+path carries the waveform on all three channels but consumer sets generally do not slice
+captions from RGB. Every US television 13 inches and larger has had a decoder since 1993.
 
 ---
 
-## 5. Known limitations of the census (not of DVDs)
+## 6. HW gate — what only a television can settle
+
+Sim proves the bytes are right and the waveform demodulates. It cannot prove a real decoder
+locks. In rough order of likelihood-to-be-wrong:
+
+1. **The line number.** Derived twice, agreeing (§4.4), but both derivations rest on the
+   modeline's relationship to broadcast line numbering. If captions do not appear, this is
+   the first thing to move: `cc_line` in `dvd/re_interlace.sv`, ±1 or 2 lines. Most decoders
+   slice a window around line 21 rather than exactly one line, which is the reason for
+   optimism.
+2. **The start dot.** `CC_START = 16` in `dvd/cc_line21.sv` targets 10.5 µs ±0.25 µs after
+   the hsync leading edge, after three registers of pipeline. The pipeline depth is counted,
+   not measured.
+3. **Waveform shaping.** The run-in is a 16-entry sine; the data bits are hard square edges
+   with no raised-cosine shaping. Decoders slice at 25 IRE and lock to the run-in
+   fundamental, so this is the normal simplification — but it is a simplification, and a
+   marginal decoder is where it would show.
+4. **Amplitude.** 50 IRE is taken as 128/255 on the RGB output. Correct if the analog chain
+   maps 0–255 to 0–700 mV; worth a scope check if a decoder half-locks.
+5. **Which field is field 1.** `odd_field = 1` is assumed to be NTSC field 1. If captions
+   decode as garbage rather than not at all, try inverting `cc_fld1` — the CC1 stream would
+   be landing on line 284 instead of line 21.
+
+Test discs are already in hand and measured: MEN_IN_BLACK, THE_MATRIX, CASTLE_IN_THE_SKY,
+CLUE, ELMOPALOOZA, PAW_PATROL (§3). ROGER_WATERS is the negative control — well-formed
+blocks, all-null payload, so line 21 should stay blank on it.
+
+---
+
+## 7. Known limitations of the census (not of DVDs)
 
 - **Main-feature VTS only.** `scan_iso` defaults to `nav.best_vts`; captioned bonus
   features or a second title in another VTS are not sampled. `--vts N` overrides.

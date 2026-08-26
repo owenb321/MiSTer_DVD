@@ -53,6 +53,7 @@ module vld(clk, clk_en, rst,
   drop_pic_req, drop_pic_ack, drop_pic_rff, drop_pic_field,                                 // DVD-FORK (frame-drop governor O[19] + field-pair drop)
   dbg_drop_probe,                                                                           // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe (Thayer drops=0)
   flags_commit,                                                                             // DVD-FORK (round 11): per-picture display flags are valid (coding ext parsed)
+  cc_pair_valid, cc_pair, cc_pair_field,                                                    // DVD-FORK (line-21 CC): EIA-608 byte pairs sniffed out of user_data
   mpeg1                                                                                     // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
   );
 
@@ -64,6 +65,16 @@ module vld(clk, clk_en, rst,
 
   output reg  [4:0]advance;                       // number of bits to advance the bitstream (advance <= 24)
   output reg       align;                         // byte-align getbits and move forward one byte.
+
+  /* DVD-FORK (line-21 closed captions, 2026-08-25) — see docs/closed_captions.md.
+   * EIA-608 caption bytes ride in MPEG-2 user_data attached to the GOP header. This
+   * is a passive SNOOP, not a new FSM branch: user_data was already walked one
+   * byte at a time by STATE_NEXT_START_CODE (next_advance=0, align=1), so the
+   * payload bytes stream past in getbits[23:16] for free. Nothing in the state
+   * graph, the advance/align logic, or the decode path changes. */
+  output reg       cc_pair_valid;                 // one pulse per caption byte pair
+  output reg [15:0]cc_pair;                       // {cc_byte_1, cc_byte_2} (parity bit included)
+  output reg       cc_pair_field;                 // 1 = field 1 (CC1/CC2), 0 = field 2
 
   output reg  [7:0]quant_wr_data;                 // data bus for quantizer matrix rams
   output reg  [5:0]quant_wr_addr;                 // address bus for quantizer matrix rams
@@ -971,6 +982,105 @@ module vld(clk, clk_en, rst,
 
     endcase
  
+  /* ------------------------------------------------------------------------
+   * DVD-FORK (line-21 closed captions): user_data byte snoop -> EIA-608 pairs
+   * ------------------------------------------------------------------------
+   * Format (verified against real discs by tools/cc_scan.py, which checks every
+   * filler bit and the 608 odd parity of every data byte -- see
+   * docs/closed_captions.md §1):
+   *
+   *   00 00 01 B2  43 43 01 F8  <flags>  { <marker> <b1> <b2> } x 2*cc_count
+   *      flags: bit7 odd_field_first | bit6 filler | bit5:1 cc_count | bit0 extra_field
+   *      marker: bits 7:1 = 0x7F filler, bit 0 = 1 -> field 1 (CC1/CC2)
+   *
+   * WHY HERE AND NOT IN ps_demux: ps_demux sits IN FRONT of the VBUF, which runs
+   * up to ~1 s ahead of the screen, so a demux-side sniff is the stale-display-
+   * flags bug (drift saga rounds 11-12) wearing a new hat. The vld sits BEHIND
+   * the VBUF -- the same reason flags_commit had to move here. Captions then
+   * arrive at most a reorder depth ahead of display and are paced out one pair
+   * per displayed FIELD downstream (dvd/cc_line21.sv), which is exactly how the
+   * encoder framed them: cc_count counts DISPLAY frames, not coded pictures.
+   *
+   * ud_active is armed by the user_data start code and disarmed the moment the
+   * FSM leaves the byte walk, so a non-caption user_data block (CLUE carries
+   * ~1100 of them) simply fails the signature match and is ignored. */
+  reg        ud_active;                           // inside a user_data byte walk
+  reg  [1:0] ud_hit;                              // 0=matching sig, 1=flags, 2=groups, 3=done
+  reg  [3:0] ud_sig;                              // signature match progress / group phase
+  reg  [5:0] ud_left;                             // caption_field_blocks remaining (2*cc_count)
+  reg  [7:0] ud_b1;                               // first caption byte, held for the pair
+  reg        ud_fld;                              // marker's field bit
+
+  wire       ud_walk  = (state == STATE_NEXT_START_CODE) && (getbits != 24'h000001);
+  wire [7:0] ud_byte  = getbits[23:16];
+
+  always @(posedge clk)
+    if (~rst) begin
+      ud_active     <= 1'b0;
+      ud_hit        <= 2'd0;
+      ud_sig        <= 4'd0;
+      ud_left       <= 6'd0;
+      ud_b1         <= 8'd0;
+      ud_fld        <= 1'b0;
+      cc_pair_valid <= 1'b0;
+      cc_pair       <= 16'd0;
+      cc_pair_field <= 1'b0;
+    end else if (clk_en) begin
+      cc_pair_valid <= 1'b0;                      // default: single-cycle pulse
+      if (state == STATE_START_CODE) begin
+        // arm on 00 00 01 B2; any other start code disarms
+        ud_active <= (getbits[7:0] == CODE_USER_DATA_START);
+        ud_hit    <= 2'd0;
+        ud_sig    <= 4'd0;
+      end else if (ud_active && ud_walk) begin
+        case (ud_hit)
+          2'd0: begin                             // "CC" 0x01 0xF8
+            case (ud_sig)
+              4'd0: if (ud_byte == 8'h43) ud_sig <= 4'd1; else ud_active <= 1'b0;
+              4'd1: if (ud_byte == 8'h43) ud_sig <= 4'd2; else ud_active <= 1'b0;
+              4'd2: if (ud_byte == 8'h01) ud_sig <= 4'd3; else ud_active <= 1'b0;
+              4'd3: if (ud_byte == 8'hf8) begin ud_hit <= 2'd1; ud_sig <= 4'd0; end
+                    else ud_active <= 1'b0;
+              default: ud_active <= 1'b0;
+            endcase
+          end
+          2'd1: begin                             // flags byte -> 2*cc_count groups
+            ud_left <= {ud_byte[5:1], 1'b0};      // 2 * cc_count, saturating at 62
+            ud_hit  <= (ud_byte[5:1] == 5'd0) ? 2'd3 : 2'd2;
+            ud_sig  <= 4'd0;
+          end
+          2'd2: begin                             // { marker, b1, b2 } groups
+            case (ud_sig)
+              4'd0: begin
+                // marker filler must be 0x7F; anything else means we have lost
+                // sync inside the block -- stop rather than emit garbage.
+                if (ud_byte[7:1] == 7'h7f) begin
+                  ud_fld <= ud_byte[0];
+                  ud_sig <= 4'd1;
+                end else begin
+                  ud_active <= 1'b0;
+                end
+              end
+              4'd1: begin ud_b1 <= ud_byte; ud_sig <= 4'd2; end
+              default: begin
+                cc_pair       <= {ud_b1, ud_byte};
+                cc_pair_field <= ud_fld;
+                cc_pair_valid <= 1'b1;
+                ud_sig        <= 4'd0;
+                ud_left       <= ud_left - 6'd1;
+                if (ud_left == 6'd1) ud_hit <= 2'd3;
+              end
+            endcase
+          end
+          default: ud_active <= 1'b0;             // block consumed; ignore the tail
+        endcase
+      end else if (state != STATE_NEXT_START_CODE) begin
+        ud_active <= 1'b0;                        // left the byte walk
+      end
+    end else begin
+      cc_pair_valid <= 1'b0;
+    end
+
   /* advance and align logic. advance is number of bits to advance the bitstream. */
   always @*
     if (~rst) next_advance = 5'b0;

@@ -206,7 +206,7 @@ Detailed in `docs/fabric_audio.md`, `docs/iec61937.md`, `docs/subpicture.md`. Qu
 | DTS | ✅ passthrough only | IEC 61937 S/PDIF (PR fj#109); **no in-fabric DTS decode** |
 | Menu audio | ✅ | plays. (Past bug: an audio-track switch could disable menu audio — resolved.) |
 | Subpicture / subtitle (disc palette, RLE) | ✅ | `dvd/spu_decode.sv` + `subpic_blend`; CRT-480i mapped (PR fj#108) |
-| Closed captions (line-21 / CC) | ❌ | no parser anywhere. Prevalence now MEASURED: **6/34 local discs** carry live EIA-608 (all NTSC); `tools/cc_scan.py`, `dvd_census.py --captions`. Format + decode design: `docs/closed_captions.md` |
+| Closed captions (line-21 / CC) | ✅ analog line-21 re-insertion (⏳ HW-confirm pending) | Extracted in `vld.v` from MPEG-2 user_data, re-modulated onto line 21 of the analog raster for the TV to decode (`dvd/cc_line21.sv`, `O[14]`). **No on-screen renderer** — nothing on HDMI; dropped on fit grounds (98% ALMs). Prevalence MEASURED: **6/34 local discs** carry live EIA-608 (all NTSC); `tools/cc_scan.py`, `dvd_census.py --captions`. Format + decode design: `docs/closed_captions.md` |
 | Multi-angle | ✅ | Phase 9 |
 | Audio + subtitle track selection | ✅ | Phase 10 gamepad |
 
