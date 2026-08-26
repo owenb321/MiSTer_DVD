@@ -38,7 +38,11 @@ module emu (
 	output        VGA2_CE,
 	output        VGA2_EN,
 
-	input  [1:0]  BUTTONS,
+	// DVD-FORK FIX: canonical MiSTer direction is OUTPUT (core -> HPS virtual
+	// buttons; b[0] = OSD button). This fork inherited it as an input, leaving
+	// sys_top's btn wire undriven -- which is why the core could never pop the
+	// OSD open at load like console cores do. See the osd_btn block.
+	output  [1:0]  BUTTONS,
 
 	output        LED_USER,
 	output  [1:0] LED_POWER,
@@ -625,6 +629,15 @@ parameter CONF_STR = {
     // the range is rebalanced around +/-200 ms. See docs/av_sync.md.
     "P1O[23:21],A/V Offset,+100ms,-200ms,-100ms,-50ms,0ms,+50ms,+150ms,+200ms;",
     "R0,Reset;",
+    // Saved-settings version (lowercase v = user_io.cpp config_ver, DISTINCT
+    // from the display-only uppercase V line below): the framework persists
+    // the raw 128-bit status word to config/DVD_v<N>.CFG, so any INCOMPATIBLE
+    // O[..] relayout must bump N (1..99) or every existing user's file gets
+    // silently reinterpreted with mismatched bit meanings (the O[1] Disc
+    // Menus polarity flip did exactly that pre-versioning). Bumping orphans
+    // the old file and falls everyone back to defaults -- there is no per-bit
+    // migration, so audit the index-0 label of every option when bumping.
+    "v,1;",
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
     // disc-menu nav (Phase 2). The J1 list names buttons B1..B11 for the MiSTer
     // "Define buttons" menu (bits 4..14 of joystick_0; D-pad = bits 3:0). The
@@ -819,6 +832,45 @@ always @(posedge clk_sys or negedge reset_n) begin
             current_file_size <= img_size;
     end
 end
+
+// =========================================================================
+// STARTUP OSD POPUP (launch-feedback, 2026-08-26): pop the framework OSD
+// ~0.9 s after core load when no disc was auto-mounted, so a bare launch
+// lands in the file picker instead of a black screen -- the console-core
+// convention (NES/SNES/Genesis all raise the virtual OSD button).
+//
+// Mechanics: BUTTONS[0] is the core->HPS virtual OSD button (sys_top.v ORs
+// it into gp_in; menu.cpp synthesises KEY_F12|UPSTROKE on its RELEASE edge).
+// ⚠ Because the RELEASE is what fires, the console-core "hold ~did-load for
+// the whole window" idiom would pop the OSD even for an auto-mounted disc
+// whose mount lands mid-window (an MGL <file> mount arrives seconds after
+// load, unlike boot.rom/SC mounts which complete before status[0] falls).
+// So this is a WAIT-THEN-PULSE instead: arm on the falling edge of
+// status[0] (the framework's core-load reset, released at the END of
+// user_io_init -- after every init-time auto-load), wait ~0.9 s watching
+// for a mount, and only then emit a 100 ms pulse. Any mount cancels it.
+// Must stay well under 3 s: a >=3 s hold means "enter Bluetooth pairing".
+//
+// One-shot per FPGA configuration (the counter saturates and nothing resets
+// it, so OSD-menu Reset can't re-fire it), and disc_ever has no reset term
+// (power-up init only) so a played-then-reset session never pops it either.
+localparam [24:0] OSD_T_FIRE = 25'd24_300_000;   // ~0.90 s @ 27 MHz
+localparam [24:0] OSD_T_END  = 25'd27_000_000;   // ~1.00 s (100 ms pulse)
+
+reg        osd_btn      = 1'b0;
+reg        hps_rst_seen = 1'b0;   // status[0] observed high since power-up
+reg        disc_ever    = 1'b0;   // any nonzero-size mount since power-up
+reg [24:0] osd_wait     = 25'd0;
+
+always @(posedge clk_sys) begin
+    if (img_mounted[0] && img_size != 64'd0) disc_ever <= 1'b1;
+    if (status[0])                           hps_rst_seen <= 1'b1;
+    if (hps_rst_seen && !status[0] && osd_wait != OSD_T_END)
+        osd_wait <= osd_wait + 25'd1;
+    osd_btn <= (osd_wait >= OSD_T_FIRE) && (osd_wait != OSD_T_END) && !disc_ever;
+end
+
+assign BUTTONS = {1'b0, osd_btn};
 
 // =========================================================================
 // GAMEPAD TRANSPORT (2026-07-06): pause + cell-granular seek, driven by the
