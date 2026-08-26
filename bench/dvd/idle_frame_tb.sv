@@ -56,17 +56,17 @@ module idle_frame_tb;
 
     reg [23:0] fb  [0:W*HP-1];
     reg [23:0] fb2 [0:W*HP-1];
-    reg [15:0] memw [0:511];               // the .mem, read independently
+    reg [15:0] memw [0:2047];              // the .mem, read independently
 
-    // reference mask query: is 2x-expanded pixel (x,y) of bank b set?
+    // reference mask query: is pixel (x,y) of bank b set, at display scale sc?
     function mask_at(input integer bank, input integer x, input integer y,
-                     input integer w, input integer h);
+                     input integer w, input integer h, input integer sc);
         integer lx, ly; reg [15:0] wd;
     begin
         mask_at = 0;
-        if (x >= LX && x < LX + 2*w && y >= LY && y < LY + 2*h) begin
-            lx = (x - LX) / 2; ly = (y - LY) / 2;
-            wd = memw[bank*256 + ly*8 + lx/16];
+        if (x >= LX && x < LX + sc*w && y >= LY && y < LY + sc*h) begin
+            lx = (x - LX) / sc; ly = (y - LY) / sc;
+            wd = memw[bank*1024 + ly*16 + lx/16];
             mask_at = (wd >> (15 - (lx % 16))) & 1'b1;
         end
     end
@@ -98,7 +98,7 @@ module idle_frame_tb;
     // compare a rendered frame against the mask of one bank
     integer errors = 0;
     task check_frame(input integer bank, input integer w, input integer h,
-                     input integer lines, input [23:0] fg,
+                     input integer sc, input integer lines, input [23:0] fg,
                      input [8*8-1:0] tag);
         integer bad; reg exp_on; reg [23:0] px;
     begin
@@ -106,7 +106,7 @@ module idle_frame_tb;
         for (y = 0; y < lines; y = y + 1)
             for (x = 0; x < W; x = x + 1) begin
                 px = fb[y*W + x];
-                exp_on = mask_at(bank, x, y, w, h);
+                exp_on = mask_at(bank, x, y, w, h, sc);
                 if ((exp_on && px !== fg) || (!exp_on && px !== 24'h000000)) begin
                     bad = bad + 1;
                     if (bad == 1)
@@ -135,14 +135,14 @@ module idle_frame_tb;
 
         // force the box: position (LX,LY), ends precomputed
         dut.pxq = {LX[11:0], 4'd0}; dut.pyq = {LY[11:0], 4'd0};
-        dut.px_end = LX[11:0] + 12'd206; dut.py_end = LY[11:0] + 12'd58;  // 2x 103x29
+        dut.px_end = LX[11:0] + 12'd201; dut.py_end = LY[11:0] + 12'd58;  // 201x58 at 1x
         // pin the colour (the motion FSM isn't ticking)
         dut.cur_r = 8'hFF; dut.cur_g = 8'hD6; dut.cur_b = 8'h0A;
         repeat (4) @(posedge clk);
 
         // [1] progressive NTSC render, bit-exact
         for (y = 0; y < H; y = y + 1) scan_line(y, 0);
-        check_frame(0, 103, 29, H, 24'hFFD60A, "dflt/60");
+        check_frame(0, 201, 58, 1, H, 24'hFFD60A, "dflt/60");
 
         // [2] field-order identity
         for (y = 0; y < H; y = y + 2) scan_line(y, 1);
@@ -167,24 +167,24 @@ module idle_frame_tb;
         // the module's y bound only affects MOTION; render is position-pure)
         pal_mode = 1;
         for (y = 0; y < HP; y = y + 1) scan_line(y, 0);
-        check_frame(0, 103, 29, HP, 24'hFFD60A, "dflt/50");
+        check_frame(0, 201, 58, 1, HP, 24'hFFD60A, "dflt/50");
         pal_mode = 0;
 
         // [6] ioctl override -> bank 1 render with the fixture's fixed colour
         $readmemh("bench/dvd/idle_logo_user.hex", fx);
         @(negedge clk); dl = 1; @(negedge clk);
-        for (i = 0; i < 16 + 16*16; i = i + 1) send_byte(i[26:0], fx[i]);
+        for (i = 0; i < 16 + 32*16; i = i + 1) send_byte(i[26:0], fx[i]);
         @(negedge clk); dl = 0; repeat (4) @(negedge clk);
         if (dut.logo_valid !== 1'b1) begin errors = errors + 1;
             $display("FAIL [user] fixture not accepted"); end
         // refresh the local mask copy of bank 1 from the DUT (the download
         // just rewrote it) and re-force geometry/colour
-        for (i = 0; i < 256; i = i + 1) memw[256 + i] = dut.logo_rom[256 + i];
-        dut.px_end = LX[11:0] + 12'd128; dut.py_end = LY[11:0] + 12'd32;
+        for (i = 0; i < 1024; i = i + 1) memw[1024 + i] = dut.logo_rom[1024 + i];
+        dut.px_end = LX[11:0] + 12'd128; dut.py_end = LY[11:0] + 12'd32;  // 64x16 at 2x
         dut.cur_r = 8'hFF; dut.cur_g = 8'hC8; dut.cur_b = 8'h20;  // = fixture RGB
         repeat (4) @(posedge clk);
         for (y = 0; y < H; y = y + 1) scan_line(y, 0);
-        check_frame(1, 64, 16, H, 24'hFFC820, "user/60");
+        check_frame(1, 64, 16, 2, H, 24'hFFC820, "user/60");
 
         if (errors == 0) $display("ALL TESTS PASS (idle_frame_tb)");
         else $display("%0d ERRORS (idle_frame_tb)", errors);

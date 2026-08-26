@@ -142,7 +142,8 @@ behind it until something is mounted — so a bare launch is never just a black 
 
 **Custom idle logo:** drop a `boot.rom` at **`/media/fat/games/DVD/boot.rom`** (create
 the `games/DVD` folder if it doesn't exist — this core doesn't make it for you) and the
-screensaver uses your artwork instead (up to 128×32 px, shown at 2×). The framework
+screensaver uses your artwork instead (up to 256×64 px shown 1:1, or up to a 512×128
+on-screen footprint with `--scale 2`; the converter picks sensibly by size). The framework
 also accepts `DVD.ROM` (that exact name, uppercase) next to the core's `.rbf`, in
 `/media/fat/`, or in `/media/fat/bootrom/`. The file is read once at core load, so
 **reload the core after placing it**; it is skipped when the core is launched directly

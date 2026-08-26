@@ -24,14 +24,24 @@ corner hit. Users can replace the artwork by dropping a `boot.rom` file in
 
 ## Design decisions
 
-### ROM: one M10K, two banks — the never-garbage guarantee is structural
+### ROM: four M10K, two banks — the never-garbage guarantee is structural
 
-512 × 16-bit (= exactly one M10K in ×16 mode). Bank 0 (words 0-255) is the
-built-in default, 128×32 px; bank 1 (words 256-511) is the user bitmap.
-Word address = `{bank, row[4:0], col[6:4]}`, bit = `word[15 - col[3:0]]` —
-pure concatenation + a 16:1 mux, zero arithmetic in the display hotspot
-(the ×10/×20 M10K modes would use all 10,240 bits but force a ÷10 into the
-pixel path — rejected).
+2048 × 16-bit (4 M10K in ×16 mode; **resolution ×4, 2026-08-26** — the
+original 1-M10K/128×32 budget predated the reclaim pass, and post-reclaim
+~55 M10K were free). Bank 0 (words 0-1023) is the built-in default, up to
+256×64 px; bank 1 (words 1024-2047) is the user bitmap. Word address =
+`{bank, row[5:0], col[7:4]}`, bit = `word[15 - col[3:0]]` — pure
+concatenation + a 16:1 mux, zero arithmetic in the display hotspot (the
+×10/×20 M10K modes would use all 10,240 bits but force a ÷10 into the pixel
+path — rejected).
+
+**Per-logo display scale** (fmt-1 flags bit1): 1× native (crisp, up to
+256×64 on screen) or 2× classic chunky (up to 512×128). The bounce box is
+the *displayed* size. The default art is authored native at 201×58 — the
+same on-screen size as the old 103×29-at-2× default, at double the detail
+(the disc edge no longer stair-steps; the wordmark uses 10×14 letterforms).
+Legacy fmt-0 `boot.rom`s (the 128×32 / 16-byte-stride layout) still load
+and display at 2×, exactly as before.
 
 The file length is unknowable until a download ends (hps_io carries no size
 up front), so a truncated good-header file *will* leave bank 1 part-written.
@@ -98,14 +108,17 @@ implementation:
 | Off | Size | Field |
 |---|---|---|
 | 0 | 4 | magic `"MDL1"` |
-| 4 | 1 | width 1..128 |
-| 5 | 1 | height 1..32 |
-| 6 | 1 | format 0x00 (1 bpp packed, MSB-first, fixed 16-byte stride) |
-| 7 | 1 | flags: bit0 = fixed colour (else palette cycling) |
+| 4 | 1 | width **minus one** (0..255 → 1..256) |
+| 5 | 1 | height **minus one** (0..63 → 1..64) |
+| 6 | 1 | format 0x01 (1 bpp packed, MSB-first, fixed 32-byte stride) |
+| 7 | 1 | flags: bit0 = fixed colour (else palette cycling); bit1 = 1× display scale (else 2×) |
 | 8 | 3 | R, G, B |
 | 11 | 1 | speed: [3:0] x, [7:4] y, 1/16 px per frame; 0 = defaults |
 | 12 | 4 | reserved (0) |
-| 16 | 16·h | pixel rows, row 0 = top |
+| 16 | 32·h | pixel rows, row 0 = top |
+
+(Format 0x00 — dims stored as-is, 1..128 × 1..32, 16-byte stride, always
+2× — is the original layout and remains accepted.)
 
 Convert a PNG: `tools/idle_logo.py --png art.png --out boot.rom`
 (`--fit` box-average downscale, `--invert`, `--colour RRGGBB`,
