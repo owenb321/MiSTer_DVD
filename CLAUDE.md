@@ -1089,6 +1089,16 @@ Two identifiers, deliberately at different granularities:
   quote. Keeping the next version open also means the latest `.rbf` already matches the
   tag when you decide to release, instead of forcing a rebuild (and a possible fitter
   re-sweep) at release time.
+  **★ Corollary — check at the START of every feature branch (instituted 2026-08-26, by
+  user decision):** before building a new feature, verify `` `CORE_VERSION `` is AHEAD of
+  the latest published release (`gh release list`); if it still equals a published tag,
+  bump it as the branch's first commit. The point is that ANY feature build must be
+  publishable as-is as the next release — its version line already distinct from
+  everything on the releases page. This costs nothing extra in the seed lottery: a
+  feature branch changes the netlist anyway, and folding the bump into the branch means
+  ONE re-roll instead of a second one at release time. (The saved-settings `"v,N;"`
+  config version is a SEPARATE, coarser counter — bump that one only on an incompatible
+  `O[..]` relayout, see `docs/idle_screen.md`.)
 - **`BUILD_DATE`** — `yymmdd`, regenerated per compile by `sys/build_id.tcl`. ⚠ Do NOT
   extend it with a time or a git SHA to separate same-day builds: it is part of
   `CONF_STR`, hence part of the netlist, so every compile would become a new netlist and

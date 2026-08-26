@@ -452,7 +452,7 @@ assign CE_PIXEL = 1'b1;
 // builds: it is part of CONF_STR = part of the netlist, so every compile would
 // become a new netlist and re-roll the fitter seed lottery (DVD.qsf's ledger).
 // Same-day dev builds are identified by their build_release.sh --name filename.
-`define CORE_VERSION "0.1b"
+`define CORE_VERSION "0.1c"
 
 parameter CONF_STR = {
     "DVD;;",
