@@ -28,36 +28,51 @@ below, not an argument that the data is unreachable.
 
 ## 0. WHERE THIS STANDS — read first
 
-**The feature is code-complete and sim-verified. It is blocked on a timing-clean fit,
-not on any remaining caption work.**
+**The feature is code-complete and sim-verified, rebased onto the post-0.1c main, and
+waiting on a hardware round.** Round 1 on hardware found two real bugs, both fixed (§6).
 
-Round 1 on hardware found two real bugs, both fixed (§6). What is left is purely a build
-problem: the netlist change re-rolled the fitter seed lottery and the resulting build came
-out at **clk_dec 67 MHz against the 86 MHz gate** — the worst paths are all pre-existing
-`framestore` / `mem_request_fifo` / `resample` infrastructure, with no caption logic
-anywhere in the top 20, so this is the documented congestion lottery
-(`quartus-build-flaky-routing`, the `DVD.qsf` seed ledger), not something captions caused.
+### The build blocker that parked this is resolved
 
-**Deliberately deferred (2026-08-26, user decision):** an ALM/DSP reclamation pass comes
-first. A seed sweep run now would be invalidated by it, because any netlist change re-rolls
-the seed — sweeping before the area work means sweeping twice. Resume here afterwards.
+Captions were parked because the netlist change re-rolled the fitter seed lottery and the
+build landed at **clk_dec 67 MHz against the 86 MHz gate** (which pixellates). The worst
+paths were all pre-existing `framestore` / `mem_request_fifo` / `resample` infrastructure
+with no caption logic in the top 20 — the documented congestion lottery
+(`quartus-build-flaky-routing`, the `DVD.qsf` seed ledger), not anything captions caused.
+The agreed fix was to let an area-reclaim pass land first, since any netlist change
+re-rolls the seed and sweeping beforehand would mean sweeping twice.
 
-### Next concrete steps, in order
+That landed in PRs #9–#11 (dead mpeg2fpga OSD tie-off, `dvd_vm` shared `eval_reg` muxes).
+Baseline when captions was parked vs. main today:
 
-1. Land the area-reclamation work.
-2. `USE_DOCKER=1 ./build_release.sh --compile --name DVD_cc21` — and if it lands marginal,
-   `USE_DOCKER=1 SEEDS="5 7 2 12 3 11" tools/seed_sweep.sh DVD_cc21`.
-   **Do not flash a `_MARGINAL_` build** — 67 MHz under-clocks the decode domain and the
-   picture pixellates heavily. That is the marker doing its job, not a caption fault.
-3. Flash the timing-clean build and test per §6: `P1O[44] CC Test Line = On` first, on one
-   of the six captioned discs in §3, with the analog output engaged and scanlines off.
+| | parked (2026-08-25) | main today |
+|---|---|---|
+| ALM | 40,973 (98 %) | **39,117 (93 %)** |
+| RAM (M10K) | 504 (91 %) | **501 (91 %)** |
+| DSP | 100 (89 %) | **92 (82 %)** |
 
-Builds on disk, neither testable: `DVD_cc21_20260826_0003.rbf` is timing-clean but predates
-both round-1 fixes, so it cannot show captions; `DVD_cc21c_MARGINAL_*.rbf` has the fixes but
-is the 67 MHz build that pixellates.
+**⚠ But do not read that as an easy fit.** The idle-logo rounds spent much of the ALM gain
+back (its ROM grew to 256×64 = 4 M10K), M10K is unchanged at 91 %, and the `DVD.qsf` ledger
+records the most recent netlist going badly: SEED 7 FAIL, SEED 9 fitter TIMEOUT, SEED 11
+passing. **Expect to sweep.** Lead with SEED 11 — the seed currently pinned and passing on
+main:
 
-Not yet done: the on-screen renderer stays out of scope (§5), though an area pass is exactly
-what would reopen it.
+```
+USE_DOCKER=1 SEEDS="11 7 5 2 12 3" tools/seed_sweep.sh DVD_cc21
+```
+
+**Never flash a `_MARGINAL_` build.** 67 MHz under-clocks the decode domain and the picture
+pixellates heavily — that is the marker doing its job, and it has already cost one hardware
+round.
+
+### Next step
+
+Flash a timing-clean build and test per §6 — **`P1O[44] CC Test Line = On` first**, on one
+of the six captioned discs in §3, analog output engaged and scanlines off.
+
+Checked and needing no action: the idle screen cannot interact (it draws in the active
+region while nothing is mounted; captions live in the VBI of the second raster), and OSD
+Reset pulses `reset_n`, which async-clears the caption FIFO — so no stale pair can fire onto
+the logo screen.
 
 ---
 
@@ -307,14 +322,23 @@ scratch:
   register stage.
 - But the **HUD font is uppercase-only** — 45 glyphs in a 64-entry ROM — and captions are
   mixed case, so the ROM goes to 128 entries / 7-bit index, 2 M10K instead of 1.
-- Against a release fit of **40,973 / 41,910 ALMs (98 %), 504 / 553 RAM blocks (91 %),
-  100 / 112 DSP (89 %)**, on a design where a branch has already failed to route at 91 %
-  ALMs and needed the M19 area pass to recover.
+- The fit it was weighed against was **40,973 / 41,910 ALMs (98 %), 504 / 553 RAM blocks
+  (91 %), 100 / 112 DSP (89 %)** — a design where a branch had already failed to route at
+  91 % ALMs and needed the M19 area pass to recover. It plausibly fit on paper and landed
+  on a fit that could not absorb it.
 
-So it plausibly fits on paper and lands on a fit that cannot absorb it. **If it is ever
-wanted, do an area pass first** — the known-productive lever is the recurring one, finding
-unconverted LUT-RAM and moving it to M10K. The extraction and pacing legs (§4.1, §4.2) are
-already built and would be reused unchanged; only the renderer is missing.
+**★ That rationale has since expired — the conclusion is now a CHOICE, not a constraint
+(2026-08-26).** The PR #9–#11 area reclaim moved the baseline to **39,117 ALMs (93 %),
+501 RAM blocks (91 %), 92 DSP (82 %)**, which is enough for the renderer's few hundred ALMs
+and 2–3 M10K. Asked directly, the user chose to **keep the scope at line-21 only** and
+revisit separately if ever wanted. So do not re-derive "it does not fit" from this section:
+it does fit, it is simply not in scope.
+
+If it is ever picked up: the extraction and pacing legs (§4.1, §4.2) are already built and
+would be reused unchanged — only the renderer is missing. Two cautions survive the reclaim.
+RAM is **still 91 %**, so the 2–3 M10K is a real bite; and "ALMs needed" still peaks near
+97 % under packing variance, with the fitter temperamental enough that the most recent
+netlist needed three seeds to find one that closes. Affordable, not free.
 
 The honest limitation of the shipped approach, stated plainly: **it does nothing on HDMI**,
 and on analog it depends on the viewer's television having a caption decoder. Line-21 data

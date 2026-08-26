@@ -390,10 +390,12 @@ worse maintenance burden than targeted in-place edits. So:
   ⏳ HW-CONFIRM PENDING.** NTSC discs carry EIA-608 captions in MPEG-2 **user_data**,
   not subpicture. The core now extracts them and re-modulates them onto **line 21 of
   the analog raster** so the TELEVISION's own decoder renders them — what a real
-  player does. **No on-screen character generator**: that needs a 32x15 char plane +
-  a font ROM grown past 64 glyphs for lowercase (~2-3 M10K, several hundred ALMs)
-  against a 98% ALM / 91% RAM fit that has already failed to route once at 91% —
-  see `docs/closed_captions.md` §5, which records what it would cost if ever wanted.
+  player does. **No on-screen character generator** — originally dropped because a 32x15 char
+  plane + a font ROM grown past 64 glyphs for lowercase (~2-3 M10K, several hundred
+  ALMs) did not fit a 98% ALM / 91% RAM design. ★ That rationale EXPIRED with the
+  PR #9-#11 area reclaim (now 93% ALM / 91% RAM); asked directly (2026-08-26) the user
+  chose to KEEP the scope line-21-only, so it is a CHOICE not a constraint — do NOT
+  re-derive "it doesn't fit". See `docs/closed_captions.md` §5.
   Three legs: (1) **extraction** = a PASSIVE SNOOP in `rtl/mpeg2/vld.v` — no new FSM
   state, because `STATE_NEXT_START_CODE` already walks user_data one byte at a time
   so the payload streams past in `getbits[23:16]` for free (**110 insertions, 0
@@ -418,8 +420,24 @@ worse maintenance burden than targeted in-place edits. So:
   `cc_line21_tb` (a **DEMODULATOR** — slices at 25 IRE, locks to the run-in, rebuilds
   the bytes; 5/5), `re_interlace_tb` unchanged 9/9. Census: **6/34 local discs**
   carry live captions, zero PAL, zero CEA-708, field 2 empty everywhere
-  (`tools/cc_scan.py`, `dvd_census.py --captions`). **HW gate + the 5 things only a
-  set can settle: `docs/closed_captions.md` §6.**
+  (`tools/cc_scan.py`, `dvd_census.py --captions`). **★ HW ROUND 1 (2026-08-25): no
+  captions on MiB/Matrix with the TV on C1 — TWO bugs, either alone sufficient, both
+  FIXED.** (1) `sys/sys_top.v` fed the VGA2 scanlines stage
+  `.din(vga2_de ? rgb : 24'd0)`, zeroing everything outside active video — and line 21
+  is BY DEFINITION in the VBI, so the waveform was generated correctly and died one
+  module before the DAC (`scanlines`/`osd`/`yc_out`/`vga_out` all checked: none gate
+  data on DE). ⚠ Lesson: a VBI side-channel travels a path every other feature uses
+  only inside DE — trace it to the PIN, not to the module boundary. (2) The FIELD
+  MAPPING was inverted (`cc_fld1` = `sg_vpos[0]`, not `~sg_vpos[0]`): syncgen's counter
+  starts at the first ACTIVE line and puts blanking at the END, so the VBI lines a field
+  owns in broadcast numbering are emitted while `odd_field` still reads the PREVIOUS
+  field. With field 2 empty on every real disc, wrong parity = TOTAL SILENCE on C1, not
+  garbled text — which is why it read as "the feature does nothing". Pinned by
+  `bench/dvd/cc_field_map_tb.sv` (mutation-checked). Also added **`P1O[44] CC Test
+  Line`** — paints the waveform on a VISIBLE line, because line-21 data is invisible by
+  construction and round 1 could not tell "TV not decoding" from "no data arriving".
+  Rebased onto post-0.1c main 2026-08-26 (clean; the caption-critical files are
+  untouched there). **HW gate: `docs/closed_captions.md` §0 + §6.**
 - ✅ **DUAL-RASTER ANALOG OUTPUT (2026-07-29, HW-CONFIRMED + MERGED PR fj#146,
   2026-07-30) — SUPERSEDES the O[14] whole-core CRT mode below.** User-confirmed
   working on real hardware (analog engages from ini alone, HDMI stays progressive
