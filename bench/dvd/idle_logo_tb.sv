@@ -105,6 +105,26 @@ initial begin
     rst_n = 1;
     repeat (4) @(negedge clk);
 
+    // T0: tool/RTL sync -- the default art's bounding box must exactly fill
+    // the power-up u_w x u_h (a mask margin = an early bounce, HW round 2)
+    begin : t0
+        integer x, y, maxx, maxy; reg lit0, litw, lith;
+        maxx = -1; maxy = -1; lit0 = 0;
+        for (y = 0; y < 32; y = y + 1)
+            for (x = 0; x < 128; x = x + 1)
+                if (dut.logo_rom[y*8 + x/16][15 - (x % 16)]) begin
+                    if (x > maxx) maxx = x;
+                    if (y > maxy) maxy = y;
+                    if (x == 0 || y == 0) lit0 = 1;
+                end
+        if (maxx + 1 != {24'd0, dut.u_w} || maxy + 1 != {26'd0, dut.u_h}) begin
+            $display("  mask bbox %0dx%0d vs power-up u_w/u_h %0dx%0d",
+                     maxx+1, maxy+1, dut.u_w, dut.u_h);
+            fail("T0 default dims out of sync with idle_logo.mem");
+        end else if (!lit0) fail("T0 art not trimmed (nothing on row/col 0)");
+        else $display("T0 tool/RTL default-dims sync (%0dx%0d) PASS", maxx+1, maxy+1);
+    end
+
     // T1: NTSC bounds over 20k ticks
     for (i = 0; i < 20000; i = i + 1) begin
         tick;

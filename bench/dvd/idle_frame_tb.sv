@@ -132,14 +132,14 @@ module idle_frame_tb;
 
         // force the box: position (LX,LY), ends precomputed
         dut.pxq = {LX[11:0], 4'd0}; dut.pyq = {LY[11:0], 4'd0};
-        dut.px_end = LX[11:0] + 12'd256; dut.py_end = LY[11:0] + 12'd64;
+        dut.px_end = LX[11:0] + 12'd206; dut.py_end = LY[11:0] + 12'd58;  // 2x 103x29
         // pin the colour (the motion FSM isn't ticking)
         dut.cur_r = 8'hFF; dut.cur_g = 8'hD6; dut.cur_b = 8'h0A;
         repeat (4) @(posedge clk);
 
         // [1] progressive NTSC render, bit-exact
         for (y = 0; y < H; y = y + 1) scan_line(y, 0);
-        check_frame(0, 128, 32, H, 24'hFFD60A, "dflt/60");
+        check_frame(0, 103, 29, H, 24'hFFD60A, "dflt/60");
 
         // [2] field-order identity
         for (y = 0; y < H; y = y + 2) scan_line(y, 1);
@@ -164,7 +164,7 @@ module idle_frame_tb;
         // the module's y bound only affects MOTION; render is position-pure)
         pal_mode = 1;
         for (y = 0; y < HP; y = y + 1) scan_line(y, 0);
-        check_frame(0, 128, 32, HP, 24'hFFD60A, "dflt/50");
+        check_frame(0, 103, 29, HP, 24'hFFD60A, "dflt/50");
         pal_mode = 0;
 
         // [6] ioctl override -> bank 1 render with the fixture's fixed colour

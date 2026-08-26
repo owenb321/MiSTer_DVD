@@ -30,6 +30,9 @@ Modes:
                             1/8, grey/RGB/RGBA/palette; all 5 row filters)
   --verify boot.rom         decode a boot.rom back and ASCII-preview it
 
+PNG conversion TRIMS the image to its lit bounding box by default (blank
+margins make the bounce fire early on that side); --no-trim keeps them.
+
 boot.rom byte layout (16-byte header + 16 bytes per row):
   0..3   magic "MDL1"
   4      width_px   1..128
@@ -230,6 +233,23 @@ L['U'] = """
 # ---------------------------------------------------------------------------
 # packing
 # ---------------------------------------------------------------------------
+def trim_grid(grid):
+    """Crop to the lit bounding box. The RTL bounce box is the DECLARED
+    w x h, so any blank margin in the mask makes the logo bounce early on
+    that side (HW round 2: the untrimmed default had a 22-column right
+    margin = a 44 px early right bounce). Returns (grid, w, h); an all-blank
+    grid comes back 1x1."""
+    h = len(grid)
+    w = len(grid[0]) if h else 0
+    cols = [x for x in range(w) if any(grid[y][x] for y in range(h))]
+    rows = [y for y in range(h) if any(grid[y][x] for x in range(w))]
+    if not cols:
+        return [[0]], 1, 1
+    x0, x1, y0, y1 = min(cols), max(cols), min(rows), max(rows)
+    out = [[grid[y][x] for x in range(x0, x1 + 1)] for y in range(y0, y1 + 1)]
+    return out, x1 - x0 + 1, y1 - y0 + 1
+
+
 def grid_to_words(grid):
     """One bank: 256 16-bit words, 8 words/row, MSB = leftmost pixel.
     Grids narrower/shorter than 128x32 are zero-padded (left/top packed)."""
@@ -465,6 +485,7 @@ def main():
     verify = take('--verify')
     fit = bool(take('--fit', val=False))
     invert = bool(take('--invert', val=False))
+    notrim = bool(take('--no-trim', val=False))
     colour = take('--colour')
     speed = take('--speed')
     if args:
@@ -481,6 +502,8 @@ def main():
         if not out:
             sys.exit("--png needs --out boot.rom")
         grid, w, h = png_to_grid(png_in, fit=fit, invert=invert)
+        if not notrim:
+            grid, w, h = trim_grid(grid)   # margins would bounce early (--no-trim to keep)
         col = None
         if colour:
             v = int(colour, 16)
@@ -502,7 +525,9 @@ def main():
         return
 
     # default: regenerate the committed artifacts
-    dgrid = default_grid()
+    dgrid, dw, dh = trim_grid(default_grid())
+    print(f"default art bounding box: {dw}x{dh} -- MUST equal idle_logo.sv's "
+          f"power-up u_w/u_h (idle_logo_tb asserts this)")
     words = grid_to_words(dgrid)
     words = words + words[:]        # bank 1 = power-up copy of bank 0
     assert len(words) == 512

@@ -87,9 +87,18 @@ initial $readmemh("dvd/idle_logo.mem", logo_rom);
 // ioctl receive: header parse + bank-1 write + commit.
 // ⚠ NO reset terms anywhere in this section (trap #1 above).
 // ---------------------------------------------------------------------------
+// Power-up geometry = the DEFAULT art's trimmed bounding box, reported by
+// tools/idle_logo.py when it writes idle_logo.mem (idle_logo_tb asserts the
+// two stay in sync). The bounce box is exactly the declared w x h, so any
+// mask margin bounces early on that side -- HW round 2: the untrimmed
+// 128-wide default had a 22-column right margin = a 44 px early right
+// bounce ("bounces well before the border"); the tool now trims all art.
+localparam [7:0] DEF_W = 8'd103;
+localparam [5:0] DEF_H = 6'd29;
+
 reg        logo_valid = 1'b0;          // bank select: 1 = user bitmap
-reg  [7:0] u_w   = 8'd128;             // committed geometry (display side)
-reg  [5:0] u_h   = 6'd32;
+reg  [7:0] u_w   = DEF_W;              // committed geometry (display side)
+reg  [5:0] u_h   = DEF_H;
 reg        u_fixcol = 1'b0;
 reg  [7:0] u_r = 8'd0, u_g = 8'd0, u_b = 8'd0;
 reg  [7:0] u_spd = 8'd0;               // committed speed byte (0 = defaults)
@@ -217,8 +226,8 @@ wire hit_y  = hit_y0 | hit_y1;
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        pxq <= {12'd100, 4'd0};        // safe for any logo (100+256<=720)
-        pyq <= {12'd80,  4'd0};        // (80+64<=480)
+        pxq <= {12'd100, 4'd0};        // safe for any logo (100+2*128<=720)
+        pyq <= {12'd80,  4'd0};        // (80+2*32<=480)
         vxn <= 1'b0; vyn <= 1'b0;
         spx <= SPX_DEF; spy <= SPY_DEF;
         cidx <= 3'd0;
@@ -269,8 +278,8 @@ reg tick_d;
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         tick_d <= 1'b0;
-        px_end <= 12'd100 + 12'd256;   // matches the motion reset position
-        py_end <= 12'd80  + 12'd64;
+        px_end <= 12'd100 + {3'd0, DEF_W, 1'b0};   // reset position + default 2x size
+        py_end <= 12'd80  + {5'd0, DEF_H, 1'b0};
     end else begin
         tick_d <= tick;
         if (tick_d) begin

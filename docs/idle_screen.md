@@ -131,6 +131,20 @@ accepted (same geometry as anamorphic DVD content). Independent of the
 ARX flip at first mount coincides with the load's own scaler re-init
 (stability rule respected); `HDMI_WIDTH==0` falls back to 4:3.
 
+### Bounce-box trim (HW round 2 fix, 2026-08-26)
+
+Second report: "the right side bounces well before the logo reaches the
+border; the left overlaps a bit." Measured cause: the bounce box is the
+DECLARED w×h, but the default artwork only occupied columns 3..105 of its
+128-wide mask — a 22-column right margin = the box wall sitting **44 px**
+past the visible art (and the near-flush left read as overlap against that
+asymmetry). Fix is general, in the tool: `tools/idle_logo.py` now **trims
+all artwork to its lit bounding box** — the default (now 103×29, matching
+new `DEF_W/DEF_H` power-up values in the RTL) *and* user PNG conversions
+(`--no-trim` keeps deliberate margins). `idle_logo_tb` T0 asserts the
+`.mem`'s bank-0 bbox exactly fills the RTL's power-up dims, so the tool and
+RTL cannot drift apart silently.
+
 ## Startup OSD popup (same branch)
 
 `BUTTONS` was declared `input` since the fork's inception — the canonical
