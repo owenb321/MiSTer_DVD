@@ -108,9 +108,18 @@ implementation:
 | 16 | 16·h | pixel rows, row 0 = top |
 
 Convert a PNG: `tools/idle_logo.py --png art.png --out boot.rom`
-(`--fit` nearest-neighbour downscale, `--invert`, `--colour RRGGBB`,
+(`--fit` box-average downscale, `--invert`, `--colour RRGGBB`,
 `--speed SX,SY`; `--verify boot.rom` round-trips + ASCII-previews).
 A user-pinned speed disables the bounce re-roll.
+
+**HW round 4 (converter rewrite):** the original `--fit` point-sampled every
+Nth pixel and thresholded on luma>127 — a large colour-on-dark logo came out
+all-blank, trimmed to a "valid" 1×1 rom, and the core dutifully bounced an
+invisible 2×2-px dot ("the logo doesn't load"). Now: "on" = differs from the
+background (alpha mask when the PNG uses transparency, else colour distance
+from the median corner colour), `--fit` box-averages each cell (lit ≥30%
+coverage, so thin strokes survive), and results smaller than 8×4 are refused
+with a diagnostic instead of written.
 
 Default artwork policy: **original only** — the oval-with-"DVD" mark is the
 DVD Format/Logo Licensing Corp.'s trademark. Plain "DVD" letterforms are

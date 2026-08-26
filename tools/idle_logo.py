@@ -419,20 +419,48 @@ def read_png(path):
 
 
 def png_to_grid(path, fit=False, invert=False):
+    """PNG -> 1-bpp grid. Two fixes from HW round 4 (the old version point-
+    sampled every Nth pixel and thresholded on luma>127, which turned a
+    1920-wide colour logo into an all-blank grid -> a useless 1x1 rom):
+      - "on" = differs from the BACKGROUND, not "is bright": alpha is the
+        mask when the PNG really uses it, else colour distance from the
+        median corner colour (so dark-on-light, colour-on-black etc. all
+        work; --invert still flips the result);
+      - --fit box-AVERAGES each cell (lit at >=30% coverage) instead of
+        point-sampling, so thin strokes survive a 15x downscale."""
     W, H, px = read_png(path)
     if (W > LOGO_W or H > LOGO_H) and not fit:
         sys.exit(f"{path}: {W}x{H} exceeds {LOGO_W}x{LOGO_H} -- pass --fit to downscale")
-    if fit and (W > LOGO_W or H > LOGO_H):
-        scale = max((W + LOGO_W - 1) // LOGO_W, (H + LOGO_H - 1) // LOGO_H)
-    else:
-        scale = 1
+    scale = max((W + LOGO_W - 1) // LOGO_W, (H + LOGO_H - 1) // LOGO_H)         if (fit and (W > LOGO_W or H > LOGO_H)) else 1
     w, h = (W + scale - 1) // scale, (H + scale - 1) // scale
+
+    # background estimate: median of the four corner pixels; alpha counts as
+    # "uses alpha" only if some pixel is actually transparent
+    corners = [px(0, 0), px(W - 1, 0), px(0, H - 1), px(W - 1, H - 1)]
+    br = sorted(c[0] for c in corners)[1]
+    bg = sorted(c[1] for c in corners)[1]
+    bb = sorted(c[2] for c in corners)[1]
+    has_alpha = any(px(x, y)[3] < 128
+                    for y in range(0, H, max(1, H // 16))
+                    for x in range(0, W, max(1, W // 16)))
+
+    def is_on(x, y):
+        r, g, b, a = px(x, y)
+        if has_alpha:
+            return a > 127
+        return max(abs(r - br), abs(g - bg), abs(b - bb)) > 64
+
     grid = [[0] * w for _ in range(h)]
     for y in range(h):
         for x in range(w):
-            r, g, b, a = px(min(x * scale, W - 1), min(y * scale, H - 1))
-            luma = (54 * r + 183 * g + 19 * b) >> 8
-            on = (a > 127) and (luma > 127)
+            x0s, y0s = x * scale, y * scale
+            n_on = n_tot = 0
+            for yy in range(y0s, min(y0s + scale, H)):
+                for xx in range(x0s, min(x0s + scale, W)):
+                    n_tot += 1
+                    if is_on(xx, yy):
+                        n_on += 1
+            on = n_tot > 0 and (n_on * 10 >= n_tot * 3)   # >=30% coverage
             grid[y][x] = int(on ^ invert)
     return grid, w, h
 
@@ -504,6 +532,11 @@ def main():
         grid, w, h = png_to_grid(png_in, fit=fit, invert=invert)
         if not notrim:
             grid, w, h = trim_grid(grid)   # margins would bounce early (--no-trim to keep)
+        if w < 8 or h < 4:
+            sys.exit(f"{png_in}: extraction produced only {w}x{h} lit pixels -- "
+                     f"not writing a useless rom. The logo/background split "
+                     f"probably failed: try --invert, or a PNG with a plain "
+                     f"background or real transparency.")
         col = None
         if colour:
             v = int(colour, 16)

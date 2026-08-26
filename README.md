@@ -140,9 +140,13 @@ When the core is loaded without a disc it **opens the OSD file picker by itself*
 about a second (like the console cores do), and a **bouncing logo screensaver** plays
 behind it until something is mounted — so a bare launch is never just a black screen.
 
-**Custom idle logo:** drop a `boot.rom` at `/media/fat/games/DVD/boot.rom` and the
-screensaver uses your artwork instead (up to 128×32 px, shown at 2×). Convert any PNG
-with the repo tool:
+**Custom idle logo:** drop a `boot.rom` at **`/media/fat/games/DVD/boot.rom`** (create
+the `games/DVD` folder if it doesn't exist — this core doesn't make it for you) and the
+screensaver uses your artwork instead (up to 128×32 px, shown at 2×). The framework
+also accepts `DVD.ROM` (that exact name, uppercase) next to the core's `.rbf`, in
+`/media/fat/`, or in `/media/fat/bootrom/`. The file is read once at core load, so
+**reload the core after placing it**; it is skipped when the core is launched directly
+with a video file. Convert any PNG with the repo tool:
 
 ```bash
 tools/idle_logo.py --png mylogo.png --out boot.rom          # add --fit to downscale
@@ -150,8 +154,9 @@ tools/idle_logo.py --verify boot.rom                        # preview what will 
 ```
 
 Optional flags: `--colour RRGGBB` pins a fixed colour (otherwise the logo cycles a
-palette on each bounce), `--speed SX,SY` pins the drift speed. A corrupt or truncated
-file is ignored and the built-in logo shows instead. (When the core is launched *with*
+palette on each bounce), `--speed SX,SY` pins the drift speed. Always eyeball the
+`--verify` output — what it prints is what will bounce. A corrupt or truncated file is
+ignored and the built-in logo shows instead. (When the core is launched *with*
 a file — file association or MGL — MiSTer skips `boot.rom`, so the built-in logo would
 show in that session's idle moments.)
 
