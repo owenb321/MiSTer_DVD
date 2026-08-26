@@ -66,12 +66,15 @@ round.
 
 ### Next step
 
-**The round-3 build is `releases/DVD_cc21r2_20260826_2022.rbf`** (SEED 3 first roll,
-clk_dec 94.71 MHz @100C / 92.26 @-40C — the branch's best fit; sweep history in the
-`DVD.qsf` ledger). It carries the round-2 field fix, so the test is now simply: play a
-captioned disc (§3), TV captions on **C1**, analog output, scanlines off. The CC Test Line
-diagnostic remains at `P1O[44]` if anything regresses. (`DVD_cc21_20260826_2006.rbf` is the
-round-2 build — superseded, its CC1 rides the wrong field.)
+**Round 4 is the current build — see the round-3 entry in §6 first.** The round-3 rbf
+(`DVD_cc21r2_20260826_2022.rbf`) shipped with an UNDRIVEN `cc_line` net (an edit had
+deleted the wire declaration; Quartus grounded it) — the whole caption chain was dead, so
+it tested nothing about the field fix. Superseded, along with `DVD_cc21_20260826_2006.rbf`
+(round 2 — its CC1 rides the wrong field). The round-4 build carries the restored wiring +
+the round-2 field fix, now pinned end-to-end by `bench/dvd/cc_e2e_tb.sv` (a TV model
+demodulating re_interlace's own output pins). Test: captioned disc (§3), TV captions on
+**C1**, analog output, scanlines off; `P1O[44]` CC Test Line remains the first check if
+nothing appears.
 
 Checked and needing no action: the idle screen cannot interact (it draws in the active
 region while nothing is mounted; captions live in the VBI of the second raster), and OSD
@@ -405,6 +408,29 @@ to assert by the TV's definition — it classifies each vsync leading edge by th
 rises at (line-aligned vs mid-line) and requires CC1 on the line-aligned-vsync field's VBI
 — and mutation-checked (flipping the formula fails on every field). The premise can no
 longer be encoded wrongly, because the bench measures sync phase, not content.
+
+### Round 3 (2026-08-26): no captions AND no test line — the build, not the logic
+
+The test line dying was the tell: it sits upstream of everything field-related, so the
+whole chain was dead and **the field fix was never actually exercised**. Root cause: the
+edit that rewrote the field-mapping comment had **deleted the `cc_vline`/`cc_line` wire
+declarations** along with the old text. Verilog silently created an undriven implicit net,
+Quartus tied it to ground (Warning 10236 — in the build log, missed by error-only greps),
+and the transmitter never armed. Every bench still passed, because none ran `re_interlace`
+with captions *enabled* — the wiring **between** the proven pieces was the only untested
+thing, and it was the thing that broke.
+
+Three guards now exist so this class cannot recur:
+
+1. **`bench/dvd/cc_e2e_tb.sv`** — captions end-to-end at `re_interlace`'s output pins,
+   checked by a television model (vsync-alignment field classification, run-in-anchored
+   demodulation, line-position check, active-video-untouched check). Written first and run
+   against the broken tree: it fails there with the exact hardware symptom.
+2. **`` `default_nettype none``** guards in `dvd/re_interlace.sv` and `dvd/cc_line21.sv` —
+   an undeclared identifier is now a compile error in both iverilog and Quartus.
+3. **`build_release.sh` fails on any Warning 10236** in the map report, listing the nets.
+   (A pre-existing benign one — `vld_err` in `emu.sv`, driven and consumed under the same
+   implicit name — was declared properly so the gate can be zero-tolerance.)
 
 ### `P1O[44] CC Test Line` — the diagnostic that was missing
 
