@@ -1570,8 +1570,13 @@ framework persists the whole 128-bit status word per core in
 bit means: a stale cfg from an older build decodes `status[1]=1` with the old meaning
 and comes up **Off**, i.e. the release whose headline is "menus default on" silently
 disables them for every existing user. Mitigations: (1) `menus_on` now inverts the bit
-(`~status[1]`), (2) release notes must say *delete `DVD.cfg` after updating*, and
-(3) do ALL default reordering in this one phase rather than across several releases.
+(`~status[1]`), (2) do ALL default reordering in one phase rather than across releases,
+and (3) **✅ SOLVED PROPERLY 2026-08-26 (`feature/launch-feedback`): the CONF_STR now
+carries `"v,1;"`**, so settings persist to `config/DVD_v1.CFG` — any future incompatible
+relayout bumps N and every user falls back to clean defaults automatically (the old
+file is orphaned, not reinterpreted). The former "delete `DVD.cfg` after updating"
+release-note workaround is retired. Remember: bumping resets ALL options, so re-audit
+each list's index-0 label when bumping.
 
 Also fixed here: two stale option comments — `Frame Drop` claimed "Default Off (safe
 A/B)" when its list has been `On,Off` for some time (and PR fj#158's film cadence-slip

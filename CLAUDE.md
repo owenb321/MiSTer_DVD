@@ -158,6 +158,29 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **LAUNCH FEEDBACK TRIO (2026-08-26, branch `feature/launch-feedback`) — ⏳
+  HW-CONFIRM PENDING; design + HW gate: `docs/idle_screen.md`.** (1) **Config
+  versioning**: CONF_STR `"v,1;"` → settings persist to `config/DVD_v1.CFG`;
+  bump N on any incompatible O[..] relayout (resets ALL options — re-audit
+  index-0 labels when bumping). (2) **Startup OSD popup**: `BUTTONS` was
+  wrongly an INPUT since the fork began (canonical = output; b[0] = the
+  virtual OSD button) — now a wait-then-pulse `osd_btn` pops the file picker
+  ~1 s after a bare load (mount-suppressed, one-shot, NOT the console-core
+  hold idiom: menu.cpp fires on the RELEASE edge so a mid-window MGL mount
+  would pop it anyway — the pulse form cancels instead). (3) **Idle screen**:
+  `dvd/idle_logo.sv` bouncing-logo screensaver while nothing is mounted
+  (1 M10K two-bank ROM, user bitmap via `/media/fat/games/DVD/boot.rom` —
+  `tools/idle_logo.py` converts PNGs; never-garbage is structural: writes
+  are bank-1-gated + exact-length commit). Rode in with an area-reclaim
+  pass: dead mpeg2fpga OSD tied off (~300 ALM + 7 DSP + 5 M10K) and
+  `dvd_vm`'s 11 parallel `eval_reg` register-file muxes shared down to 3
+  (~1k ALM; ⚠ the gprm[] reads must stay DIRECT array expressions — a
+  function-mediated word read loses array sensitivity and broke type 4's
+  compare-after-set; see the ⚠ note in dvd/dvd_vm.sv). Decoder >576-line
+  support was investigated for removal and found NOT worth it (HD costs
+  DDR3 + counter widths, not fabric — the big decoder M10Ks are
+  latency-tuning FIFOs).
+
 - 🔧 **AUDIO IS NOW DECODED IN FABRIC (2026-06-27, branch `feature/fabric-ac3-audio`).**
   AC-3 and LPCM are decoded entirely in the FPGA: `ps_demux` → `audio_ring` →
   `dvd/dvd_audio_decode.sv` (AC-3 via the ported `dvd/ac3/*` `ac3_front`+`pcm_out`,

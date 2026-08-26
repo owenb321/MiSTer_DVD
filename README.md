@@ -136,6 +136,25 @@ Put the `.iso` anywhere the MiSTer file browser can reach it and select it from 
 core's `Load Video` entry. The core also accepts bare `.VOB`, `.mpg` and `.m2v` streams,
 which it plays linearly without navigation.
 
+When the core is loaded without a disc it **opens the OSD file picker by itself** after
+about a second (like the console cores do), and a **bouncing logo screensaver** plays
+behind it until something is mounted — so a bare launch is never just a black screen.
+
+**Custom idle logo:** drop a `boot.rom` at `/media/fat/games/DVD/boot.rom` and the
+screensaver uses your artwork instead (up to 128×32 px, shown at 2×). Convert any PNG
+with the repo tool:
+
+```bash
+tools/idle_logo.py --png mylogo.png --out boot.rom          # add --fit to downscale
+tools/idle_logo.py --verify boot.rom                        # preview what will render
+```
+
+Optional flags: `--colour RRGGBB` pins a fixed colour (otherwise the logo cycles a
+palette on each bounce), `--speed SX,SY` pins the drift speed. A corrupt or truncated
+file is ignored and the built-in logo shows instead. (When the core is launched *with*
+a file — file association or MGL — MiSTer skips `boot.rom`, so the built-in logo would
+show in that session's idle moments.)
+
 **Video CDs and Super Video CDs play directly from the rip** — select the bin/cue
 rip's **data-track `.bin`** (usually "Track 2"; the small Track 1 is the ISO
 filesystem) from `Load Video`. The core detects the raw CD sectors by content, strips
@@ -207,6 +226,14 @@ where you pressed Menu from, which would otherwise drop you into a random clip r
 the menu. After you have been to a menu once, Menu behaves exactly as the disc specifies.
 
 ## Settings
+
+> **Settings reset on upgrade (config versioning).** Saved settings now live in
+> `/media/fat/config/DVD_v1.CFG`. The first time you run a build with this change your
+> options fall back to the defaults below (your old `DVD.CFG`/`DVD.cfg` is left on the
+> card but is no longer read — it can be deleted). This is deliberate: it stops a
+> settings file written by an older build from being silently misread when the option
+> layout changes, which previously required a "delete your config" release note.
+
 
 Defaults are chosen to be correct for most users; the first value listed is the default.
 
