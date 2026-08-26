@@ -71,6 +71,11 @@
 // issue for no gain.
 
 `include "timescale.v"
+// An undeclared identifier becomes a compile ERROR, not a silent undriven net.
+// Instituted after round 3 (2026-08-26): an edit deleted the cc_line declaration,
+// Verilog created an implicit net, Quartus tied it to ground, and the whole
+// caption chain went dead on hardware while every bench still passed.
+`default_nettype none
 
 module re_interlace (
     input             clk,          // clk_sys 27 MHz
@@ -330,9 +335,18 @@ end
 // Round 1 "fixed" cc_fld1 to sg_vpos[0] on the content-based premise — flipping
 // a correct mapping — and the DE-gate bug masked it. Round 2 on HW (CC Test
 // Line fine, C1/C2/T1/T2 all empty — every one a FIELD-1 service) exposed it.
-wire       cc_fld1  = ~sg_vpos[0];
-wire [7:0] cc_level;
-wire       cc_level_en;
+//
+// CC_TEST moves the burst to a visible line near the top of the picture. The
+// waveform is unchanged — same data, same rate, same levels — so what shows up is
+// literally the caption bits: a band of dashes that CHANGES AS DIALOGUE CHANGES,
+// and goes quiet when the disc sends null pairs. That distinguishes "extraction
+// and pacing work, the TV just isn't decoding" from "no data is arriving" without
+// a scope, which is otherwise impossible to tell apart from the sofa.
+wire [11:0] cc_vline = cc_test ? 12'd20 : p_vlen;
+wire        cc_line  = ~pal & (sg_vpos[11:1] == cc_vline);
+wire        cc_fld1  = ~sg_vpos[0];
+wire [7:0]  cc_level;
+wire        cc_level_en;
 
 cc_line21 cc (
     .clk            (clk),
@@ -388,3 +402,5 @@ always @(posedge clk) ce2_q <= ce2;
 assign out_ce = ce2_q;
 
 endmodule
+
+`default_nettype wire   // restore for any file compiled after this one

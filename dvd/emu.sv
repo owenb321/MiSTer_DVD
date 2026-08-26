@@ -3128,6 +3128,8 @@ always @(posedge clk_dec) begin
     end
 end
 
+wire        vld_err;         // decoder parse-error flag (was an implicit net — see the
+                             // build_release.sh implicit-net gate, instituted 2026-08-26)
 // DVD-FORK (line-21 CC): caption byte pairs out of the VLD's user_data snoop.
 // clk_dec domain — do NOT sample these in clk_sys directly.
 wire        core_cc_valid;

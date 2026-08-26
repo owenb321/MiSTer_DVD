@@ -69,6 +69,7 @@
 // =============================================================================
 
 `include "timescale.v"
+`default_nettype none   // see the note in dvd/re_interlace.sv (round-3 lesson)
 
 module cc_line21 (
     input             clk,             // clk_sys 27 MHz
@@ -269,3 +270,5 @@ assign     level_en = tx;
 assign     active   = tx;
 
 endmodule
+
+`default_nettype wire

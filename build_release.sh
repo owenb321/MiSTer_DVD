@@ -80,6 +80,20 @@ if [[ "$DO_COMPILE" -eq 1 ]]; then
     quartus_sh --flow compile "$PROJECT"
 fi
 
+# --- Implicit-net gate (instituted 2026-08-26, closed-captions round 3) -----
+# An edit deleted a wire declaration; Verilog silently created an undriven
+# implicit net, Quartus tied it to GROUND (Warning 10236) and the feature went
+# dead on hardware while every testbench still passed. iverilog does not catch
+# this either unless the file uses `default_nettype none. Zero tolerance: any
+# 10236 in the map report fails the build. If one is ever intentional, declare
+# the wire instead.
+MAP_RPT="output_files/${PROJECT}.map.rpt"
+if [[ -f "$MAP_RPT" ]] && grep -q "Warning (10236)" "$MAP_RPT"; then
+    echo "ERROR: implicit net(s) created during synthesis — every one of these is an undeclared/undriven wire bug:" >&2
+    grep "Warning (10236)" "$MAP_RPT" | sed 's/^/    /' >&2
+    exit 1
+fi
+
 if [[ ! -f "$SOF" ]]; then
     echo "ERROR: $SOF not found. Run with --compile, or compile in Quartus first." >&2
     exit 1
