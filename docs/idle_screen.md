@@ -116,6 +116,21 @@ Default artwork policy: **original only** — the oval-with-"DVD" mark is the
 DVD Format/Logo Licensing Corp.'s trademark. Plain "DVD" letterforms are
 descriptive and fine.
 
+### Widescreen idle presentation (HW round 1 fix, 2026-08-26)
+
+First hardware report: on a 16:9 display the logo bounced "confined to a 4:3
+window". Cause: `VIDEO_ARX/ARY`'s Auto path follows the stream DAR — with no
+stream it idled at 4:3 and ascal pillarboxed the raster. Fix (emu.sv, at the
+`VIDEO_ARX` assigns): while `!media_seen`, present 16:9 whenever the DISPLAY
+is widescreen — `HDMI_WIDTH/HEIGHT` (previously unused emu inputs) give the
+scaler output mode, tested `W*2 >= H*3` (W/H ≥ 1.5: 1920×1080/1280×720/4K
+wide; 640×480/1280×1024/4:3 modes not). The raster then fills the screen and
+the logo bounces edge-to-edge. The mild anamorphic stretch of the logo is
+accepted (same geometry as anamorphic DVD content). Independent of the
+`O[20:19]` aspect option — that describes content; idle has none. The single
+ARX flip at first mount coincides with the load's own scaler re-init
+(stability rule respected); `HDMI_WIDTH==0` falls back to 4:3.
+
 ## Startup OSD popup (same branch)
 
 `BUTTONS` was declared `input` since the fork's inception — the canonical
@@ -154,3 +169,6 @@ any future incompatible O[..] relayout; range 1-99. This retires the
 6. Analog CRT 480i + PAL 576i: no inter-field combing on the logo edges;
    logo stays inside the active area under Analog Letterbox/Crop.
 7. R0 Reset mid-session: no second OSD popup; user logo survives.
+8. 16:9 display (e.g. 1080p out): idle logo bounces the FULL screen width;
+   4:3 display modes keep the 4:3 idle frame; first mount still lands in the
+   correct content aspect.

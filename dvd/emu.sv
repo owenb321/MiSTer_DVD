@@ -112,8 +112,28 @@ wire ar_wide_eff;
 // active the RASTER ITSELF is made 4:3-true upstream (disp_vscale/disp_hstretch),
 // and under dual raster HDMI sees that raster too — so force the scaler aspect to
 // 4:3 or ascal would stretch the already-letterboxed image back to 16:9.
-assign VIDEO_ARX    = (analog_letterbox | analog_crop) ? 13'd4 : ar_wide_eff ? 13'd16 : 13'd4;
-assign VIDEO_ARY    = (analog_letterbox | analog_crop) ? 13'd3 : ar_wide_eff ? 13'd9  : 13'd3;
+// DVD-FORK (idle screen, PR #9 follow-up): while NO media has been mounted the
+// Auto aspect path has no stream DAR to follow and idled at 4:3 -- on a 16:9
+// display ascal pillarboxed the raster, confining the bouncing logo to the
+// centre 4:3 window (HW report, 2026-08-26). The scaler output mode is already
+// an emu input (HDMI_WIDTH/HEIGHT, previously unused), so idle now presents
+// 16:9 whenever the DISPLAY is widescreen (W/H >= 1.5, shift+add only:
+// 1920x1080 wide, 640x480 / 1280x1024 not) and the raster fills the screen --
+// the logo bounces edge-to-edge. Registered + gated on the quasi-static
+// media_seen so VIDEO_ARX/ARY stays STABLE (the one flip at first mount
+// coincides with the load's own scaler re-init). The mild anamorphic stretch
+// of the logo (720x480 -> 16:9) is accepted -- same geometry as anamorphic
+// DVD content. Independent of O[20:19]: that option describes CONTENT aspect;
+// idle has none, so display-fit wins. HDMI_WIDTH==0 (no scaler) -> 4:3 path.
+reg disp_wide_q = 1'b0;
+always @(posedge clk_sys)
+    disp_wide_q <= ({1'b0, HDMI_WIDTH, 1'b0} >=                       // 14-bit W*2
+                    {1'b0, HDMI_HEIGHT, 1'b0} + {2'b00, HDMI_HEIGHT}) // 14-bit H*3
+                   && (HDMI_WIDTH != 12'd0);       // W*2 >= H*3  <=>  W/H >= 1.5
+wire idle_wide = ~media_seen & disp_wide_q;
+
+assign VIDEO_ARX    = (analog_letterbox | analog_crop) ? 13'd4 : (ar_wide_eff | idle_wide) ? 13'd16 : 13'd4;
+assign VIDEO_ARY    = (analog_letterbox | analog_crop) ? 13'd3 : (ar_wide_eff | idle_wide) ? 13'd9  : 13'd3;
 
 // DVD-FORK FIX (interlaced cadence): interlaced field indicator. In interlaced
 // mode the syncgen encodes the field in v_pos[0] (rtl/mpeg2/syncgen.v:289:
