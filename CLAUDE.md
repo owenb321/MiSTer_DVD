@@ -158,8 +158,16 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ✅ **LAUNCH FEEDBACK TRIO — MERGED (PR #9, 2026-08-26); ⏳ HW-CONFIRM PENDING;
-  design + HW gate: `docs/idle_screen.md`.** (1) **Config
+- ✅ **LAUNCH FEEDBACK TRIO — HW-CONFIRMED 2026-08-26 (5 HW rounds; PR #9 +
+  the follow-up rounds PR); design + full history: `docs/idle_screen.md`.**
+  Shipped as release v0.1c. HW rounds delivered on top of the original trio:
+  bounce-box art trim, logo-behind-OSD, the QX query-lead SIGN fix (subtract
+  like SP_QX_ADJ, not add like the HUD -- the centred boxes hide the shift),
+  the PNG converter rewrite (background-aware, box-averaged --fit, refuses
+  tiny results), the 256x64 logo ROM (4 M10K, per-logo 1x/2x scale, fmt-0
+  back-compat), and OSD R0 Reset actually wired (status[0] consumed by
+  nothing since the fork began -> now ORs into reset_n: unload + VM reset +
+  back to the logo; boot.rom logo and the OSD one-shot survive by design). (1) **Config
   versioning**: CONF_STR `"v,1;"` → settings persist to `config/DVD_v1.CFG`;
   bump N on any incompatible O[..] relayout (resets ALL options — re-audit
   index-0 labels when bumping). (2) **Startup OSD popup**: `BUTTONS` was
