@@ -291,8 +291,52 @@ captions from RGB. Every US television 13 inches and larger has had a decoder si
 
 ## 6. HW gate — what only a television can settle
 
-Sim proves the bytes are right and the waveform demodulates. It cannot prove a real decoder
-locks. In rough order of likelihood-to-be-wrong:
+### Round 1 (2026-08-25): no captions on MiB or The Matrix, TV set to C1
+
+C1 was the correct choice — CC1 and CC2 both ride field 1, and field 2 is empty on every
+disc measured. Two independent bugs were found, **either of which alone produces exactly
+that symptom**, and both are fixed:
+
+1. **The analog chain blanked the data one module before the DAC.** `sys/sys_top.v` fed the
+   VGA2 scanlines stage `.din(vga2_de ? {vga2_r,vga2_g,vga2_b} : 24'd0)` — everything
+   outside active video forced to zero, and line 21 is *by definition* in the blanking
+   interval. The waveform was generated correctly, reached `sys_top`, and was zeroed. Gate
+   dropped; it is a no-op for every other line because `re_interlace` already emits 0
+   outside its own active region. (`scanlines`, `osd`, `yc_out` and `vga_out` were all
+   checked — none gate data on DE, they only pipeline it. This was the only one.)
+
+   **Lesson worth keeping:** a VBI side-channel travels a path that every other feature
+   uses only inside DE. Anything that writes outside active video has to be traced to the
+   pin, not just to the module boundary.
+
+2. **The field mapping was inverted**, so CC1 went out on broadcast line 284. `syncgen`'s
+   vertical counter starts at the first *active* line and puts blanking at the *end* of the
+   field, so the VBI lines a field owns in broadcast numbering are emitted while
+   `odd_field` still reads the **previous** field. NTSC line 21 belongs to field 1 and
+   precedes field 1's active video, so it goes out during the `odd_field = 0` count:
+   `cc_fld1 = sg_vpos[0]`, not `~sg_vpos[0]`.
+
+   This was item 5 below, filed as "if captions decode as garbage, try inverting" — which
+   **understated it**. With field 2 empty on every real disc, the wrong parity puts the
+   caption stream where a set switched to CC1 never looks, so it reads as total silence,
+   not as garbled text. Now settled by simulation and pinned by
+   `bench/dvd/cc_field_map_tb.sv` (mutation-checked: inverting the mapping fails the bench
+   on every field).
+
+### `P1O[44] CC Test Line` — the diagnostic that was missing
+
+Line-21 data is invisible by construction, so round 1 could not distinguish "the TV is not
+decoding" from "no data is reaching the output" — which is what made it guesswork. With
+**CC Test Line = On** the same waveform is painted on a *visible* line near the top of the
+picture instead of line 21. Same data, same rate, same levels.
+
+- **A band of dashes that changes as dialogue changes** ⇒ extraction, pacing, the waveform
+  and the whole analog path are all working, and only the TV-side placement is left.
+- **Nothing at all** ⇒ the problem is upstream: check the analog raster is actually engaged
+  (`Analog Out`, `vga_scaler=0`), and that the disc is one of the captioned six in §3.
+- **A band that never changes** ⇒ data is flowing but stuck — pacing or flush.
+
+### Still unconfirmed, in rough order of likelihood-to-be-wrong
 
 1. **The line number.** Derived twice, agreeing (§4.4), but both derivations rest on the
    modeline's relationship to broadcast line numbering. If captions do not appear, this is
@@ -308,9 +352,19 @@ locks. In rough order of likelihood-to-be-wrong:
    marginal decoder is where it would show.
 4. **Amplitude.** 50 IRE is taken as 128/255 on the RGB output. Correct if the analog chain
    maps 0–255 to 0–700 mV; worth a scope check if a decoder half-locks.
-5. **Which field is field 1.** `odd_field = 1` is assumed to be NTSC field 1. If captions
-   decode as garbage rather than not at all, try inverting `cc_fld1` — the CC1 stream would
-   be landing on line 284 instead of line 21.
+5. ~~**Which field is field 1.**~~ **FOUND AND FIXED in round 1** — see above. Pinned by
+   `bench/dvd/cc_field_map_tb.sv`.
+
+Also worth knowing: **turn scanlines off while testing.** The analog scanlines effect
+attenuates alternate lines by 25–75 %, and it is applied before the caption line reaches
+the DAC, which would halve the waveform amplitude on one field.
+
+### Connection matters
+
+Line-21 data reaches a television's decoder over **composite and S-video**, and over
+**component** on many sets. An **RGB SCART** path carries the waveform on all three
+channels, but consumer sets generally do not slice captions from RGB. And none of this
+does anything on **HDMI** — there is no on-screen renderer (§5).
 
 Test discs are already in hand and measured: MEN_IN_BLACK, THE_MATRIX, CASTLE_IN_THE_SKY,
 CLUE, ELMOPALOOZA, PAW_PATROL (§3). ROGER_WATERS is the negative control — well-formed

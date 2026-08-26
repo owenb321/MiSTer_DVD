@@ -303,6 +303,15 @@ that path. The rest (`Debug Overlay`, `Title VTS`, `Audio Genlock`, `Force 4:3 S
 `Film 24p Out`, `A/V Offset`) are tuning and diagnostic levers; `A/V Offset` defaults to
 +100 ms, which is the correct null for both NTSC film and PAL.
 
+`CC Test Line` (default **Off**) is the diagnostic for closed captions. They normally go
+out in the blanking interval, where they are invisible unless your television decodes
+them — so if captions do not appear there is no way to tell "the TV is not decoding" from
+"no caption data is reaching the output". Turn this on and the same waveform is painted on
+a visible line near the top of the picture instead: **a band of dashes that changes as
+dialogue changes** means everything on the core's side is working, and only the TV-side
+setup is left. Nothing at all means the analog raster is not engaged or the disc has no
+captions (only about one disc in six does).
+
 ## On-screen messages
 
 | Message | Meaning |
