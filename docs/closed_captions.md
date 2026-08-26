@@ -26,6 +26,41 @@ below, not an argument that the data is unreachable.
 
 ---
 
+## 0. WHERE THIS STANDS — read first
+
+**The feature is code-complete and sim-verified. It is blocked on a timing-clean fit,
+not on any remaining caption work.**
+
+Round 1 on hardware found two real bugs, both fixed (§6). What is left is purely a build
+problem: the netlist change re-rolled the fitter seed lottery and the resulting build came
+out at **clk_dec 67 MHz against the 86 MHz gate** — the worst paths are all pre-existing
+`framestore` / `mem_request_fifo` / `resample` infrastructure, with no caption logic
+anywhere in the top 20, so this is the documented congestion lottery
+(`quartus-build-flaky-routing`, the `DVD.qsf` seed ledger), not something captions caused.
+
+**Deliberately deferred (2026-08-26, user decision):** an ALM/DSP reclamation pass comes
+first. A seed sweep run now would be invalidated by it, because any netlist change re-rolls
+the seed — sweeping before the area work means sweeping twice. Resume here afterwards.
+
+### Next concrete steps, in order
+
+1. Land the area-reclamation work.
+2. `USE_DOCKER=1 ./build_release.sh --compile --name DVD_cc21` — and if it lands marginal,
+   `USE_DOCKER=1 SEEDS="5 7 2 12 3 11" tools/seed_sweep.sh DVD_cc21`.
+   **Do not flash a `_MARGINAL_` build** — 67 MHz under-clocks the decode domain and the
+   picture pixellates heavily. That is the marker doing its job, not a caption fault.
+3. Flash the timing-clean build and test per §6: `P1O[44] CC Test Line = On` first, on one
+   of the six captioned discs in §3, with the analog output engaged and scanlines off.
+
+Builds on disk, neither testable: `DVD_cc21_20260826_0003.rbf` is timing-clean but predates
+both round-1 fixes, so it cannot show captions; `DVD_cc21c_MARGINAL_*.rbf` has the fixes but
+is the 67 MHz build that pixellates.
+
+Not yet done: the on-screen renderer stays out of scope (§5), though an area pass is exactly
+what would reopen it.
+
+---
+
 ## 1. What line-21 captions actually are on a DVD
 
 They are **not** subpicture. Subtitles on a DVD are SPU bitmaps (`dvd/spu_decode.sv`);
