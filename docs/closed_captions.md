@@ -14,7 +14,7 @@ Shipping in this change:
   disc bytes
 - `dvd/cc_line21.sv` — field-rate pacing + the EIA-608 waveform (§4.2, §4.3)
 - `dvd/re_interlace.sv` — line-21 injection into the analog raster (§4.4)
-- `O[14] Line-21 CC` (On/Off, default On), NTSC + analog only
+- `P1O[14] Line-21 CC` (On/Off, default On, debug page), NTSC + analog only
 
 §6 is the five-round hardware history: one wiring bug in the analog chain (DE gate), one
 diagnosis inverted and re-inverted (field mapping), one editing accident (undriven net),

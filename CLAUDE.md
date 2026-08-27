@@ -415,7 +415,7 @@ worse maintenance burden than targeted in-place edits. So:
   derived TWICE and agreeing (15th line after vsync end = last VBI line before active
   = `v_cntr` 261 = `p_vlen`), from `sg_vpos` alone — `syncgen.v` unchanged. Output mux
   gated on `~sg_pixel_en` so a wrong line can only cost a blanking line, never punch a
-  hole in the picture. `O[14] Line-21 CC` (default On; reuses the bit freed by the
+  hole in the picture. `P1O[14] Line-21 CC` (default On, debug page; reuses the bit freed by the
   O[14] CRT-mode retirement). Sim: `cc_extract_tb` (**180/180 pairs byte-exact**
   through the REAL vld+getbits over REAL MiB bytes vs a Python golden),
   `cc_line21_tb` (a **DEMODULATOR** — slices at 25 IRE, locks to the run-in, rebuilds

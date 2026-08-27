@@ -274,7 +274,6 @@ Defaults are chosen to be correct for most users; the first value listed is the 
 | **480i Deint** | **Bob** / Weave | |
 | **Analog Out** | **Auto** / Interlaced / Progressive / Native Fields | See below. |
 | **Analog Aspect** | **Auto** / Fit / Letterbox / Crop | How anamorphic content fits a 4:3 analog TV. |
-| **Line-21 CC** | **On** / Off | Re-inserts the disc's closed captions on line 21 of the analog output for your TV to decode. NTSC + analog only; it lives in the blanking interval so it is invisible otherwise. Turn it off if a capture device or upscaler objects to VBI data. |
 
 ### Choosing an Analog Out mode
 
@@ -300,7 +299,11 @@ that path. The rest (`Debug Overlay`, `Title VTS`, `Audio Genlock`, `Force 4:3 S
 `Film 24p Out`, `A/V Offset`) are tuning and diagnostic levers; `A/V Offset` defaults to
 +100 ms, which is the correct null for both NTSC film and PAL.
 
-`CC Test Line` (default **Off**) is the diagnostic for closed captions. They normally go
+`Line-21 CC` (default **On**) re-inserts the disc's closed captions on line 21 of the
+analog output for your TV to decode — NTSC + analog only, invisible in the blanking
+interval otherwise. It lives here rather than on the main page because correct behavior
+is simply On; the Off is an escape hatch for capture devices or upscalers that display
+VBI lines. `CC Test Line` (default **Off**) is the diagnostic for closed captions. They normally go
 out in the blanking interval, where they are invisible unless your television decodes
 them — so if captions do not appear there is no way to tell "the TV is not decoding" from
 "no caption data is reaching the output". Turn this on and the same waveform is painted on

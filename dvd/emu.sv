@@ -582,14 +582,8 @@ parameter CONF_STR = {
     // VIDEO_ARX/ARY switch to 4:3 while active so HDMI geometry stays correct.
     // status[4:3]: 0=Auto, 1=Fit, 2=Letterbox, 3=Crop. See docs/crt_anamorphic.md.
     "O[4:3],Analog Aspect,Auto,Fit,Letterbox,Crop;",
-    // DVD-FORK (line-21 closed captions): re-inject the disc's EIA-608 caption
-    // bytes onto line 21 of the analog raster so the TELEVISION's own decoder
-    // renders them, exactly as a real player does (dvd/cc_line21.sv,
-    // docs/closed_captions.md). NTSC + analog only, and it lives in the VBI so it
-    // is invisible to anything that does not look for it — hence default On, with
-    // an Off for capture devices or upscalers that dislike VBI data.
-    // Reuses bit 14, freed when O[14] "CRT 480i Out" was retired.
-    "O[14],Line-21 CC,On,Off;",
+    // (Line-21 CC moved to the debug page — see P1O[14] below. Normal users never
+    // need it: the data is invisible in the VBI and correct behavior is On.)
     // Video Standard: NTSC (720x480p @ 59.94 Hz, 27 MHz dot clock) or PAL (720x576p
     // @ 50 Hz, same 27 MHz clock — 864x625 total = 50.0 Hz). Switches the runtime
     // modeline-write walk AND av_sync's STC tick rate. Auto (default) picks from the
@@ -651,6 +645,17 @@ parameter CONF_STR = {
     // line instead of line 21. The bits are otherwise invisible — they live in the
     // blanking interval — so without this there is no way to tell "the TV is not
     // decoding" from "no captions are reaching the output". See docs/closed_captions.md §6.
+    // DVD-FORK (line-21 closed captions): re-inject the disc's EIA-608 caption
+    // bytes onto line 21 of the analog raster so the TELEVISION's own decoder
+    // renders them, like a real player (dvd/cc_line21.sv, docs/closed_captions.md;
+    // ✅ HW-CONFIRMED 2026-08-26). NTSC + analog only; lives in the VBI so it is
+    // invisible to anything not looking for it — hence default On, and buried
+    // here (user decision, post-HW-confirm): the Off exists only as an escape
+    // hatch for capture devices / upscalers that display VBI lines or the rare
+    // TV whose caption decoder misbehaves on caption data — the same "CC output
+    // on/off" setting real DVD players kept in their setup menus. Reuses bit 14,
+    // freed when O[14] "CRT 480i Out" was retired.
+    "P1O[14],Line-21 CC,On,Off;",
     "P1O[44],CC Test Line,Off,On;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
