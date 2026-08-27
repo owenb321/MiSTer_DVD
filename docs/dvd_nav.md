@@ -1138,7 +1138,15 @@ Rewind (B11)** buttons to choose a target (the offset **accelerates** the longer
 then **release to jump there** with one seek. While held, the video simply **pauses** and audio
 holds. Implemented in `dvd/scrub_ctrl.sv` (unit-tested by `bench/dvd/scrub_ctrl_tb.sv`).
 
-> **★ Seek is on dedicated buttons, NOT the D-pad (2026-07-28).** The scrub originally rode
+> **★ Seek is on dedicated buttons, NOT the D-pad (2026-07-28).**
+> **⚠ AMENDED 2026-08-27 — now CONDITIONAL, not absolute: see §2b.** The *hold-to-seek scrub*
+> is still exclusively Fast Fwd/Rewind and the D-pad is still pure navigation **by default**,
+> but the opt-in `O[45]` **D-Pad Seek** toggle puts fixed-time jumps on the D-pad for users who
+> want them. The original conflict is contained three ways: the toggle **defaults Off**, it is
+> suppressed by `menu_nav`/`in_title_menu` exactly like the rest of the title transport, and it
+> never touches the held scrub. The reasoning below is why it must stay opt-in.
+>
+> The scrub originally rode
 > D-pad Left/Right, which collided with interactive/game DVDs whose title video is *seekable*
 > yet the game expects left/right *directional* input (the core's `in_title_menu` heuristic
 > couldn't always tell the two apart). Splitting the scrub onto its own **Fast Fwd/Rewind**
@@ -1186,10 +1194,103 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   title start/end; a sub-tick tap does nothing; `hold_freeze` high only while held;
   direction-flip restarts; in_title gate.
 
-> **Note:** §2a (seek-on-release, sector/RBN-based) is the shipped hold-to-seek. The fwda/bwda
-> table mechanism in §2 above is **superseded** — `scrub_ctrl` no longer reads those tables
-> (nav_dsi still parses them, but nothing consumes the ±time scrub tables now). The
-> `tools/nav_extract.py` "scrub tiers" dump is therefore historical.
+> **Note:** §2a (seek-on-release, sector/RBN-based) is the shipped **hold-to-seek** on
+> Fast Fwd/Rewind, and `scrub_ctrl` itself never reads the fwda/bwda tables.
+> **★ AMENDED 2026-08-27:** the tables are **no longer dead** — §2's mechanism is exactly what
+> the opt-in `O[45]` **D-Pad Seek** (§2b) resurrects, via `dvd/dpad_seek.sv` on the
+> `nav_dsi.tbl_raddr/tbl_rdata` port that `emu.sv` had tied to 0 since Phase 7. The
+> `tools/nav_extract.py` "scrub tiers" dump stays historical, but the new
+> **`--dpad`** dump is the live golden model.
+
+### 2b. D-Pad fixed-time seek — `O[45]` (`dvd/dpad_seek.sv`)
+
+**Opt-in, default Off.** With it On, while a title plays: **Left/Right = ∓10 s,
+Down/Up = ∓60 s** — VLC-style *fixed-time* jumps, as opposed to §2a's span-relative
+("percent of title") scrub. Presses inside a **~400 ms window coalesce into ONE seek**.
+
+**Where the target comes from.** The DSI VOBU_SRI tables of §2, addressed as:
+
+| gesture | seconds | fwd index | `dsi_tbl` addr |
+|---|---|---|---|
+| Right / Up | +10 / +60 | `fwda[3]` / `fwda[1]` | 3 / 1 |
+| Left / Down | −10 / −60 | mirror | 34 / 36 |
+
+The backward mirror of forward index `a` is address `37 − a`. Decoding is §2's:
+`offset = entry[29:0]`, `valid = entry[31] && offset != 0x3fffffff`,
+`target = jump_base ± offset`. The target goes to **`scrub_ctrl`'s jump port**, which
+applies the existing title-span clamp and issues the ONE proven `seek_rbn` — so the
+reader's `S_NAV_SEEK` VOBU-snap (§2a) applies unchanged and every landing is an I-frame.
+
+**Why a greedy ladder, not N × the 10 s entry.** All entries are offsets from the *same*
+`nv_pck_lbn`, so a multi-term sum is only time-linear if the bitrate is flat over the
+window. Decomposing greedily over the coarse ladder `{120,60,30,10}` s minimises terms,
+which makes the common gestures **exact single lookups**:
+
+| presses | seconds | naive N×10 s | greedy ladder |
+|---|---|---|---|
+| 1×R | 10 | exact | **exact** `fwda[3]` |
+| 3×R | 30 | 3 terms | **exact** `fwda[2]` |
+| 6×R / 1×U | 60 | 6 terms | **exact** `fwda[1]` |
+| 2×U | 120 | — | **exact** `fwda[0]` |
+| 2×R | 20 | 2 terms | 2 terms (no 20 s rung exists) |
+
+**END_OF_CELL cascade.** Descend one coarse rung, crediting the leftover seconds (only the
+rung actually *used* is subtracted) → below 10 s, walk the fine rungs (7.5 s … 2 s) and take
+the first valid one, then **stop** (a bounded partial jump) → if the whole ladder is dead:
+forward takes `dsi_next_vobu`, else `dsi_vobu_ea + 1` (the head of the next cell in RBN
+order, which `S_RBN_SCAN` re-selects); **backward with no `dsi_prev_vobu` is a NO-OP**, not a
+guess. A partial result already accumulated is kept rather than mixed with a VOBU pointer.
+
+**⚠ The stale-table trap — read before touching this.** `nav_dsi.rst_n` is `pipe_rst_n`, so
+every load/seek/jump clears `dsi_nv_pck_lbn` to 0, but `dsi_tbl`/`tbl_rdata` are written by a
+**separate, unreset** always block and keep the *previous* VOBU's offsets. Resolving in that
+window computes `0 ± stale_offset`, which the clamp turns into **a jump to the start of the
+title** — and "tap, then tap again 200 ms later" is exactly what a user does. So `dpad_seek`
+keeps a `dsi_fresh` latch (set by `dsi_commit`, cleared by `load_flush`) that gates entry to
+the resolve; `load_flush` or a new DSI packet mid-resolve **restarts** it; the base is latched
+**once** on entry and exported as `jump_base` so `scrub_ctrl` can never pair it with another
+VOBU's offsets; and a resolve that cannot get a trustworthy base within ~2 s is **dropped**.
+`dsi_commit` is the correct set point — it fires at DSI byte `0x191`, after the last `bwda`
+write at `0x18D`, so scalars and table belong to the same VOBU. The contract is now recorded
+in `nav_dsi.sv`'s header for the next consumer.
+
+**Why coalesce and never auto-repeat.** A held direction firing a jump per VOBU is exactly
+the rapid flush/re-lock regime that HW rounds 1–2 of the scrub proved fatal (mostly-black
+playback, watchdog resync — see §2a). The debounce shape is the chapter-skip burst's.
+Unlike the scrub, a D-pad tap does **not** freeze video (an instantaneous hop has nothing to
+freeze for, and the chapter-skip precedent doesn't either).
+
+**Non-DVD content.** Raw VCD/SVCD `.bin` has no DSI, but a CD is a fixed 75 sectors/s of
+2352 B and the reader's linear `seek_rbn` unit is a 2048-byte **file block**, so
+`75·2352/2048 = 86.13 blk/s` → **10 s = 861 blocks** (exact for VCD's CBR mux; approximate on
+VBR SVCD). Flat `.mpg`/`.VOB` has no derivable rate and is **deliberately inert** on the
+D-pad — B10/B11 still scrub it.
+
+**Conflict containment.** The D-pad is taken **only** where the nav layer has not claimed it:
+`menu_nav` (disc menu) and `in_title_menu` (in-title game menu) both suppress it, exactly like
+the rest of the title transport. Combined with the default-Off toggle, the 2026-07-28
+guarantee below is preserved for anyone who does not ask for this.
+
+**Feedback.** `pend_evt` joins `hud_user_evt`, so the position bar pops on the **first** press;
+the status line renders the tap count in the shared `►►×n` field; and a new popup type reads
+**`SEEK FWD  30S` / `SEEK BACK 60S`** (the sign is *spelled* because the glyph ROM has no `+`,
+which keeps `tools/hud_font.py` and the committed `dvd/hud_font.mem` untouched).
+
+**Known characteristics (properties of the data, not bugs):**
+- `dsi_nv_pck_lbn` is **parse-front timed**, ~1 s ahead of the displayed picture, so `+10 s`
+  lands ≈ +11 s and `−10 s` ≈ −9 s *relative to what is on screen*. More noticeable on a fixed
+  10 s hop than on the eyeballed scrub. No VBUF-corrected playhead exists today.
+- `bwda`'s 60 s rung is END_OF_CELL for the first 60 s of **every** cell, so a backward 60 s
+  there cascades down to ~10 s or the cell start.
+- This does **not** reopen Phase-8b/TMAP absolute seek, which stays RETIRED (see §2).
+
+**Golden + tests:** `tools/nav_extract.py <iso> --title-vob N --dpad` prints the four gestures
+per NAV pack with the rung or fallback each used — `dpad_resolve()` is a faithful mirror of the
+RTL FSM. `bench/dvd/dpad_seek_tb.sv` drives the **real `nav_dsi`** from a synthetic DSI payload
+(24 scenarios: exact lookups, both cascade tiers, both structural fallbacks, the stale-table
+trap, mid-resolve restart, coalescing, linear mode, saturation, every inert-guard);
+`bench/dvd/scrub_ctrl_tb.sv` T9–T12 cover the jump port; `bench/dvd/transport_hud_tb.sv`
+T18–T20 the popup. `bench/dvd/run_dpad_seek.sh` runs the lot.
 
 > **✅ RESOLVED — HW-CONFIRMED (2026-07-10, PR fj#106): A/V sync off after a scrub seek**
 > (audio ahead <1 s, permanent; re-scrub / audio-track

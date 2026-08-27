@@ -875,7 +875,41 @@ worse maintenance burden than targeted in-place edits. So:
   cycle). Timed/heuristic stills: HW-CONFIRMED 2026-07-10 (PR fj#90).
 - ❌ DVD-specific remaining: chapters/PTT exactness (Phase 6: VTS_PTT_SRPT), menu audio,
   no UDF-only-image support. (Phase-8b TMAP absolute seek: RETIRED 2026-07-10 by user
-  decision — the shipped seek UX is final.)
+  decision. The seek UX gained ONE opt-in layer since — `O[45]` D-Pad Seek, below — which
+  rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
+- ⏳ **D-PAD FIXED-TIME SEEK (`O[45]`, default Off) — 2026-08-27, branch
+  `feature/dpad-time-seek`; sim-verified, HW gate pending.** VLC-style jumps on the D-pad
+  while a title plays: **Left/Right ∓10 s, Down/Up ∓60 s**, with presses inside ~400 ms
+  coalescing into ONE seek (never auto-repeat — a jump per VOBU is the rapid flush/re-lock
+  regime that HW rounds 1–2 of the scrub proved fatal). Targets come from the disc's OWN
+  authored **DSI VOBU_SRI `fwda`/`bwda`** tables, which `nav_dsi` has parsed since Phase 7
+  but **nothing ever consumed** — `emu.sv` tied `dsi_tbl_raddr` to 0, so Quartus
+  dead-stripped the whole `dsi_tbl` RAM (the fit report showed `nav_dsi` at **16 ALMs / 0
+  memory bits**); wiring the port back RESURRECTS ~1 M10K + ~100 ALMs, so check the map
+  report after a fit. New `dvd/dpad_seek.sv` resolves the request by **greedy decomposition
+  over the coarse ladder {120,60,30,10} s**, which makes the common gestures exact single
+  lookups (1×R=`fwda[3]`, 3×R=`fwda[2]`, 1×U=`fwda[1]`, 2×U=`fwda[0]`) instead of
+  compounding the 10 s entry; it hands the target to a new **jump mode in
+  `dvd/scrub_ctrl.sv`**, reusing the title-span clamp, the seek bar and the one proven
+  `seek_rbn` issue. Raw VCD/SVCD has no DSI and uses the exact CD geometry instead
+  (75 sectors/s × 2352 B ÷ 2048 = **861 blocks per 10 s**); flat `.mpg`/`.VOB` is
+  deliberately inert. **⚠ Default Off ON PURPOSE** — the 2026-07-28 decision to move
+  seeking OFF the D-pad (game DVDs play seekable video while expecting directional input)
+  becomes CONDITIONAL, not wrong; it is also suppressed by `menu_nav`/`in_title_menu`.
+  ★ **THE STALE-TABLE TRAP** it had to guard is worth knowing beyond this feature:
+  `nav_dsi.rst_n` is `pipe_rst_n`, so every seek clears `dsi_nv_pck_lbn` to 0, but
+  `dsi_tbl`/`tbl_rdata` live in a **separate UNRESET always block** and keep the previous
+  VOBU's offsets — resolving in that window computes `0 ± stale_offset` and the clamp turns
+  it into **a jump to the start of the title**, which "tap, tap again 200 ms later"
+  reproduces every time. Guarded by a `dsi_fresh` latch (set by `dsi_commit`, cleared by
+  `load_flush`), a mid-resolve restart, a base latched ONCE and exported as `jump_base`, and
+  a ~2 s give-up. The contract is now recorded in `nav_dsi.sv`'s header for the next
+  consumer. HUD: popup type 8 `SEEK FWD 30S` (the `pop_type` field widened 3→4 bits; the
+  sign is SPELLED so the glyph ROM and `dvd/hud_font.mem` stay untouched) + the tap count in
+  the shared `►►×n` field. Golden `tools/nav_extract.py --dpad`; tests
+  `bench/dvd/dpad_seek_tb.sv` (24 scenarios incl. the trap), `scrub_ctrl_tb` T9–T12,
+  `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
+  **`docs/dvd_nav.md` §2b**.
 
 ---
 

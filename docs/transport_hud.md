@@ -53,13 +53,34 @@ step rates since PR fj#101, *not* seconds). `CH` hides until the reader's
 "Display" toggles it), paused, scrubbing, or ~2.5 s after a transport event.
 
 **Popup line** (above the bar): `AUDIO n/N LL` / `SUB n/N LL` / `SUB OFF` /
-`ANGLE n/N` / `CH n/N` — single slot, **last event wins**, own 2.5 s timer.
+`ANGLE n/N` / `CH n/N` / `SEEK FWD nnS` — single slot, **last event wins**, own 2.5 s timer.
 Languages come from the Phase-10 `attr_*` readout (2-ASCII ISO-639,
 uppercased by the glyph mapper).
 
 **Suppression:** the whole HUD hides while a menu is up (`menus_on &&
 menu_active` — the HLI highlight layer owns the screen); persistent mode
 survives and reappears on resume. A fresh media load clears everything.
+
+**D-pad seek popup (`seek_evt`, 2026-08-27):** popup type **8** renders
+`SEEK FWD  30S` / `SEEK BACK 60S` while an `O[45]` D-Pad Seek coalesce window is
+open, so the running total is readable *before* the jump commits (`dpad_seek`
+pulses `seek_evt` on every counted press). Arbitrated as a **user** event —
+above the warnings, never preempted. Two things worth knowing:
+
+- `pop_type`/`f2_type` were widened **3 → 4 bits** for this: all eight 3-bit
+  encodings (0 aud, 1 sub, 2 angle, 3 chapter, 4 CSS, 5 image, 6 audio-fmt,
+  7 VTS) were already spoken for.
+- The sign is **spelled** (`FWD`/`BACK`), not punctuated, because the glyph ROM
+  has no `+`. That keeps `tools/hud_font.py` and the committed
+  `dvd/hud_font.mem` **untouched** — no regenerating a binary artifact, no new
+  ROM content on a 91 %-RAM design. `FWD` is padded to `BACK`'s width so the
+  digits land on fixed columns, and leading zeros are suppressed (`10S`…`240S`).
+
+**Transport icon is shared (2026-08-27):** `scrub_held`/`scrub_dir`/`scrub_tier`
+are muxed in emu — a **held** FF/REW scrub renders its accelerating tier, an open
+**D-pad** coalesce window renders the tap COUNT, both as `►►×n` in the same field.
+`hold_freeze` itself is untouched (it still pauses the governor/audio), which is
+why a D-pad tap does not freeze video. See `docs/dvd_nav.md` §2b.
 
 **CSS warning popup (`css_warn`, 2026-08-06):** popup type 4 renders
 `CSS ENCRYPTED` (accent, cols 0–12) when emu's sticky `css_scrambled` latch is

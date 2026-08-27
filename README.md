@@ -228,12 +228,19 @@ Notes:
 | Button | Action | | Button | Action |
 |---|---|---|---|---|
 | B1 | Pause | | B8 | Subtitle (cycle) |
-| B2 / Left | Previous chapter | | B9 | Display (toggle status line) |
-| B3 / Right | Next chapter | | B10 | Fast forward (hold to scrub) |
+| B2 | Previous chapter | | B9 | Display (toggle status line) |
+| B3 | Next chapter | | B10 | Fast forward (hold to scrub) |
 | B4 | Select | | B11 | Rewind (hold to scrub) |
 | B5 | Menu | | B12 | Title menu |
 | B6 | Angle (cycle) | | B13 | Return (go up) |
-| B7 | Audio (cycle) | | | |
+| B7 | Audio (cycle) | | D-pad | Menu navigation (see below) |
+
+The **D-pad** walks the buttons of whatever menu is on screen. During plain playback it
+does nothing unless you turn on **D-Pad Seek**, which puts VLC-style jumps on it:
+**Left/Right = ∓10 seconds, Down/Up = ∓1 minute**. Taps within about a third of a second
+add up into a single jump, so three quick taps of Right is one 30-second skip rather than
+three separate ones. It never takes the D-pad away from a menu — disc menus and the
+on-screen menus of interactive DVDs always keep it.
 
 A USB keyboard's number keys select menu buttons directly.
 
@@ -264,6 +271,7 @@ Defaults are chosen to be correct for most users; the first value listed is the 
 | Setting | Options | Notes |
 |---|---|---|
 | **Disc Menus** | **On** / Off | On boots the disc's authored First Play and runs its menus. Off skips navigation entirely and auto-plays the main feature — useful if a disc's menus misbehave. |
+| **D-Pad Seek** | On / **Off** | Puts fixed-time seeking on the D-pad: Left/Right jump ∓10 s, Down/Up ∓1 min. On a DVD the targets come from the disc's own seek tables, so they land on real frames. Off by default because some interactive/game DVDs play seekable video while expecting the D-pad as game input. |
 | **Aspect Ratio** | **Auto** / 4:3 / 16:9 | Auto reads the MPEG-2 sequence header. |
 | **Audio** | **On** / Off | |
 | **Audio Out** | **Decode HDMI** / Passthru SPDIF | Passthru sends undecoded AC-3/DTS to a receiver and mutes HDMI. Required for DTS. |
@@ -320,6 +328,7 @@ captions (only about one disc in six does).
 | `UNSUPPORTED IMAGE` | Not an ISO9660 DVD image (e.g. UDF-only), or not a playable stream. Only raised after ~20 s of *actual streaming* with no picture, so slow media (a NAS spinning up) does not trigger it; it clears itself if a picture does appear. |
 | `AUDIO UNSUPPORTED` | The selected audio track is in a format the core cannot decode. |
 | `TITLE VTS nn` | Which title was auto-selected (shown only with Disc Menus Off). |
+| `SEEK FWD 30S` | How far the pending D-Pad Seek jump will go, while you are still tapping. |
 
 ## Building from source
 
