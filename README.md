@@ -360,9 +360,14 @@ headers must be retained.
 > distribution in the chain ships a LICENSE file. The licence is established by the
 > author's own publication of `mpeg2fpga` on OpenCores, which states "License: BSD".
 
-**Patents are separate.** `rtl/LICENSE-MPEG2` is a patent notice, not a copyright
-licence. MPEG-2 is patent-encumbered and commercial use may require a licence from
-MPEG LA. That is unaffected by the copyright position above.
+**Patents are separate, and the MPEG-2 ones have expired.** `rtl/LICENSE-MPEG2` is a
+patent notice, not a copyright licence, and it is retained from upstream unchanged. It
+warns that commercial use may require a licence from MPEG LA — that warning is now
+**stale**: the last US patent in MPEG LA's MPEG-2 portfolio expired in February 2018 and
+the licensing programme was wound down, so there is no longer an MPEG-2 pool licence to
+take. The other formats this core decodes are in the same position — the AC-3 (Dolby
+Digital) patents ran out in 2017, and MPEG-1/MP2 earlier still. None of this is affected
+by, and does not affect, the copyright position above.
 
 ## About this repository's history
 
