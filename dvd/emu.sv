@@ -1481,6 +1481,7 @@ wire [31:0] dsi_tbl_rdata;
 // bar and left UNWIRED for now (the seek action itself needs no overlay).
 wire        hold_freeze;
 wire        dpad_pend, dpad_pend_dir, dpad_pend_evt, dpad_pend_fail;
+wire        dpad_freeze;                           // a HELD D-pad seek gesture
 wire [1:0]  dpad_pend_n;
 wire [7:0]  dpad_pend_tens;
 wire        dpad_jump_fire, dpad_jump_dir;
@@ -1537,6 +1538,13 @@ dpad_seek dpad_seek_inst (
     .dn_edge        (dn_edge),
     .lf_edge        (lf_edge),
     .rt_edge        (rt_edge),
+    // HELD levels: keeping a direction down COMPOUNDS the pending jump (see
+    // dpad_seek.sv). The nav layer only ever consumes the EDGES, so feeding the
+    // levels here cannot disturb menu button-walking.
+    .up_lvl         (joystick_0[3]),
+    .dn_lvl         (joystick_0[2]),
+    .lf_lvl         (joystick_0[1]),
+    .rt_lvl         (joystick_0[0]),
     .cancel         (jump_ack | chap_pulse | start_streaming | hold_freeze),
     .nav_flush      (load_flush),               // nav_dsi's own reset condition
     .dsi_commit     (dsi_commit),
@@ -1557,13 +1565,18 @@ dpad_seek dpad_seek_inst (
     .pend_n         (dpad_pend_n),
     .pend_tens      (dpad_pend_tens),
     .pend_evt       (dpad_pend_evt),
-    .pend_fail      (dpad_pend_fail)
+    .pend_fail      (dpad_pend_fail),
+    .freeze         (dpad_freeze)
 );
 // While a seek gesture is held the video simply PAUSES (a plain, proven freeze --
 // no repeated flushing) and audio holds; releasing does one seek. ORed into the
 // manual-pause paths below (governor/STC + audio).
-wire pause_gov = pause_q | hold_freeze;
-wire pause_aud = pause_q | hold_freeze;
+// A HELD D-pad seek gesture freezes too, for the same reason and by the same
+// mechanism: the amount compounds while the picture is parked, so the base stops
+// drifting under a long gesture. Only a genuine hold (past ~500 ms) asserts it --
+// a tap never does, so a single +10 s press stays hitch-free.
+wire pause_gov = pause_q | hold_freeze | dpad_freeze;
+wire pause_aud = pause_q | hold_freeze | dpad_freeze;
 
 // =========================================================================
 // DVD-VM (Phase 4): executes the disc's navigation commands. Owns all jumps
@@ -4261,7 +4274,7 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // its accelerating tier, and an open D-pad coalesce window renders the tap
     // COUNT in the same "x n" field. hold_freeze itself is untouched -- it still
     // pauses the governor/audio below, which a D-pad tap deliberately does not.
-    .scrub_held   (hold_freeze | dpad_pend),
+    .scrub_held   (hold_freeze | dpad_pend),   // dpad_pend covers taps AND holds
     .scrub_dir    (hold_freeze ? hud_dir_w  : dpad_pend_dir),
     .scrub_tier   (hold_freeze ? hud_tier_w : dpad_pend_n),
     .display_edge (display_edge),

@@ -879,9 +879,12 @@ worse maintenance burden than targeted in-place edits. So:
   rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
 - ⏳ **D-PAD FIXED-TIME SEEK (`O[45]`, default Off) — 2026-08-27, branch
   `feature/dpad-time-seek`; sim-verified, HW gate pending.** VLC-style jumps on the D-pad
-  while a title plays: **Left/Right ∓10 s, Down/Up ∓60 s**, with presses inside ~400 ms
-  coalescing into ONE seek (never auto-repeat — a jump per VOBU is the rapid flush/re-lock
-  regime that HW rounds 1–2 of the scrub proved fatal). Targets come from the disc's OWN
+  while a title plays: **Left/Right ∓10 s, Down/Up ∓60 s**. TAPS inside ~400 ms coalesce;
+  HOLDING a direction past ~500 ms **compounds** the pending amount (another increment every
+  ~250 ms, doubling at 1.5/3/5 s, cap 600 s) and freezes the picture like the scrub. Either
+  way exactly ONE seek fires, on release — a jump PER VOBU is the rapid flush/re-lock regime
+  that HW rounds 1–2 of the scrub proved fatal, so the gesture grows a NUMBER, not a series
+  of seeks. Targets come from the disc's OWN
   authored **DSI VOBU_SRI `fwda`/`bwda`** tables, which `nav_dsi` has parsed since Phase 7
   but **nothing ever consumed** — `emu.sv` tied `dsi_tbl_raddr` to 0, so Quartus
   dead-stripped the whole `dsi_tbl` RAM (the fit report showed `nav_dsi` at **16 ALMs / 0
