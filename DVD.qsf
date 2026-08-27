@@ -626,4 +626,8 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # Round-6 netlist (Line-21 CC toggle moved to the debug page, CONF_STR only):
 # SEED 9 held first roll, BETTER margin -- clk_dec 93.0 @100C / 88.6 @-40C
 # -> releases/DVD_cc21r5_20260827_0032.rbf. This is the merge candidate.
+# picbufalias netlist (fix/picbuf-display-slot-alias: two ~vld_last_frame guard
+# terms in motcomp_picbuf's reference swap -- a tiny logic delta): SEED 9 held
+# first roll, clk_dec 87.54 @100C / 90.91 @-40C (gate 86.0 PASS both corners)
+# -> releases/DVD_picbufalias_20260827_0158.rbf.
 set_global_assignment -name SEED 9
