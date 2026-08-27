@@ -33,9 +33,12 @@ resolves to:
 
   rtl/LICENSE-MPEG2
          A PATENT notice, not a copyright licence, and independent of the
-         above. MPEG-2 is patent-encumbered; commercial use of an MPEG-2
-         implementation may require a licence from MPEG LA. Retained from
-         upstream and reproduced unchanged.
+         above. Retained from upstream and reproduced unchanged, so it still
+         says commercial use may require a licence from MPEG LA. That is no
+         longer the case: the last US patent in MPEG LA's MPEG-2 portfolio
+         expired in February 2018 and the programme was wound down. The file
+         is kept verbatim because it is upstream's, not ours to edit; this
+         note records that it has been overtaken by events.
 
 Third-party work used as reference or verification oracle — libdvdnav,
 libdvdread, liba52, ffmpeg, libdvdcss — is NOT included in this repository

@@ -48,10 +48,22 @@ The AC-3 decoder was ported from the now-archived `MiSTer_AC3` repo. See
 
 ## Key Libraries (HPS C side)
 
+> **Licence note (corrected 2026-08-26).** These five were all listed here as **LGPL**.
+> They are not — every one of them is **GPL-2.0-or-later**. The distinction matters
+> because it is the difference between "link it and ship" and "derive from it and the
+> whole work is GPL": LGPL would have permitted linking from a differently-licensed
+> program, GPL does not. It happens not to bite this project — the HPS C tree was
+> deleted and none of these is linked or vendored, they survive here as *reference and
+> co-simulation oracles* only, and the core is already GPL-3.0-or-later (GPL-2-**or-later**
+> is compatible with that; GPL-2-*only* would not have been). But a licence stated wrongly
+> in the one file a contributor would check is a documentation bug, so: corrected.
+> See [`NOTICE`](../NOTICE) for the shipped-component breakdown.
+
+
 ### libdvdcss
 - **URL:** https://www.videolan.org/developers/libdvdcss.html
 - **API docs:** https://www.videolan.org/developers/libdvdcss/doc/html/dvdcss_8h.html
-- **License:** LGPL
+- **License:** GPL-2.0-or-later
 - **Purpose:** CSS decryption. Transparent — works on ISO files and physical drives.
 - **Key calls:**
   - `dvdcss_open(path)` — open ISO or device
@@ -62,28 +74,28 @@ The AC-3 decoder was ported from the now-archived `MiSTer_AC3` repo. See
 
 ### libdvdread
 - **URL:** https://www.videolan.org/developers/libdvdnav.html
-- **License:** LGPL
+- **License:** GPL-2.0-or-later
 - **Purpose:** UDF filesystem parsing + IFO file parsing. Built on top of libdvdcss.
 - **Recommended:** Use instead of writing your own UDF parser (udf.c / ifo_parse.c).
 - **Key headers:** `<dvdread/dvd_reader.h>`, `<dvdread/ifo_read.h>`
 
 ### libdvdnav (stretch goal — for menu support)
 - **URL:** https://www.videolan.org/developers/libdvdnav.html
-- **License:** LGPL
+- **License:** GPL-2.0-or-later
 - **Purpose:** Full DVD navigation including menus, chapter selection, angle switching.
 - Skip for v1, consider for post-launch.
 
 ### liba52 (AC-3 decode)
 - **URL:** http://liba52.sourceforge.net/
 - **Also:** https://github.com/dtschump/liba52
-- **License:** LGPL
+- **License:** GPL-2.0-or-later
 - **Purpose:** AC-3 / Dolby Digital audio decode to PCM.
 - **Key calls:** `a52_init()`, `a52_syncinfo()`, `a52_frame()`, `a52_block()`, `a52_samples()`
 - **Output:** 6 blocks × 256 samples per AC-3 frame = 1536 samples total.
 
 ### libdca (DTS decode)
 - **URL:** https://www.videolan.org/developers/libdca.html
-- **License:** LGPL
+- **License:** GPL-2.0-or-later
 - **Purpose:** DTS audio decode to PCM. Same role as liba52 for DTS.
 - **Key calls:** `dca_init()`, `dca_syncinfo()`, `dca_frame()`, `dca_block()`, `dca_samples()`
 

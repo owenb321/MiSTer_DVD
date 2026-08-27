@@ -79,7 +79,7 @@ For v1, default to the first AC-3 stream (0x80) or first DTS stream (0x88).
 - Max frame size: 1536 bytes
 
 ### HPS Decode: liba52
-liba52 is a lightweight, LGPL-licensed AC-3 decoder in C. Runs at ~3–5% of one
+liba52 is a lightweight, GPL-2.0-or-later AC-3 decoder in C. Runs at ~3–5% of one
 Cortex-A9 core for a DVD-rate stream.
 
 ```c
@@ -137,7 +137,7 @@ int decode_ac3_frame(uint8_t *frame_data, int frame_len,
   (DTS sends frames 3× more frequently than AC-3)
 
 ### HPS Decode: libdca
-libdca (also known as libdts) is the DTS equivalent of liba52 — LGPL licensed,
+libdca (also known as libdts) is the DTS equivalent of liba52 — GPL-2.0-or-later,
 similar API pattern.
 
 ```c
