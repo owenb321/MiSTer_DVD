@@ -549,6 +549,9 @@ class VM(object):
         # were you in", not a menu. Self-limiting: that press loads a menu, so
         # every later press is the unmodified spec path.
         self.menu_seen = False
+        # last SUCCESSFULLY loaded menu PGC (dom, vts, pgcn) — the re-enter
+        # target of the RTL's 2026-08-27 link-fail arm (dvd_vm.sv ev_error).
+        self.last_menu = None
         self.trace = []
         self.verbose = verbose
         self.fuse = 0
@@ -591,6 +594,7 @@ class VM(object):
         self.dom, self.vts, self.pgcn = dom, vts, pgcn
         if dom in (DOM_VMGM, DOM_VTSM):
             self.menu_seen = True           # RTL: `if (menu_active) menu_seen <= 1`
+            self.last_menu = (dom, vts, pgcn)   # link-fail re-enter target
         self.pgc = self.nav.pgc(pit[pgcn - 1][1])
         if pgn and self.pgc["pm"] and pgn <= len(self.pgc["pm"]):
             cell = self.pgc["pm"][pgn - 1] - 1
@@ -606,6 +610,22 @@ class VM(object):
             self.regs.sprm[6] = pgcn        # TT_PGCN
             self.came_via_menukey = False   # a title plays -> drop the toggle state
         return self._run_pre()
+
+    def _jump(self, dom, vts, pgcn, **kw):
+        """A VM-initiated jump with the RTL ev_error recovery (2026-08-27): a
+        failed MENU-domain link with a last good menu re-enters that menu
+        ("LINK FAIL" popup) instead of falling through to the auto-title —
+        the arm that stops a bad "next page" button from launching the movie.
+        Title/FP-destination failures keep their old behaviour."""
+        if self._load_pgcn(dom, vts, pgcn, **kw):
+            return True
+        if dom in (DOM_VMGM, DOM_VTSM) and self.last_menu is not None:
+            ld, lv, lp = self.last_menu
+            self.log("  !! LINK FAIL (menu link unresolved, pgcn=%s) -> "
+                     "re-enter %s vts=%d PGCN %d"
+                     % (pgcn, DOM_NAME[ld], lv, lp))
+            return self._load_pgcn(ld, lv, lp)
+        return False
 
     def _run_pre(self):
         link = eval_block(self.pgc["pre"], self.regs, self.lfsr, FUSE, self.trace)
@@ -669,7 +689,7 @@ class VM(object):
             self.log("  -> SEEK cell %d (pg %d)" % (self.cell, pg)); return True
         if cmd == "LinkTopPGC":
             self._btn(d1)
-            return self._load_pgcn(self.dom, self.vts, self.pgcn)
+            return self._jump(self.dom, self.vts, self.pgcn)
         if cmd in ("LinkNextPGC", "LinkPrevPGC", "LinkGoUpPGC"):
             self._btn(d1)
             n = {"LinkNextPGC": self.pgc["next"], "LinkPrevPGC": self.pgc["prev"],
@@ -677,7 +697,7 @@ class VM(object):
             if not n:
                 self.log("  !! %s with no target -> stop" % cmd)
                 self.stopped = True; return True
-            return self._load_pgcn(self.dom, self.vts, n)
+            return self._jump(self.dom, self.vts, n)
         if cmd == "LinkTailPGC":
             self._btn(d1)
             return self._run_post()
@@ -692,7 +712,7 @@ class VM(object):
             self.dom = DOM_TT
             return self._load_title(vts, pgcn=pgcn, cell=cell, run_pre=False)
         if cmd == "LinkPGCN":
-            return self._load_pgcn(self.dom, self.vts, d1)
+            return self._jump(self.dom, self.vts, d1)
         if cmd == "LinkPTTN":                  # ptt ~= program (Phase-6 exact)
             self._btn(d2)
             pg = min(d1, max(self.pgc["nr_pgms"], 1))
@@ -725,25 +745,25 @@ class VM(object):
             self.regs.sprm[7] = d2
             return self._load_title(self.vts, ttn=d1, pgn=d2)
         if cmd == "JumpSS_FP":
-            return self._load_pgcn(DOM_FP, 0, 0)
+            return self._jump(DOM_FP, 0, 0)
         if cmd == "JumpSS_VMGM_MENU":
-            return self._load_pgcn(DOM_VMGM, 0, 0, entry=d1)
+            return self._jump(DOM_VMGM, 0, 0, entry=d1)
         if cmd == "JumpSS_VTSM":
             vts = d1 if d1 else self.vts
             self.regs.sprm[5] = d2
-            return self._load_pgcn(DOM_VTSM, vts, 0, entry=d3)
+            return self._jump(DOM_VTSM, vts, 0, entry=d3)
         if cmd == "JumpSS_VMGM_PGC":
-            return self._load_pgcn(DOM_VMGM, 0, d1)
+            return self._jump(DOM_VMGM, 0, d1)
         if cmd.startswith("CallSS"):
             self._save_rsm(d2 if cmd != "CallSS_FP" else d1)
             if cmd == "CallSS_FP":
-                return self._load_pgcn(DOM_FP, 0, 0)
+                return self._jump(DOM_FP, 0, 0)
             if cmd == "CallSS_VMGM_MENU":
-                return self._load_pgcn(DOM_VMGM, 0, 0, entry=d1)
+                return self._jump(DOM_VMGM, 0, 0, entry=d1)
             if cmd == "CallSS_VTSM":
-                return self._load_pgcn(DOM_VTSM, self.vts, 0, entry=d1)
+                return self._jump(DOM_VTSM, self.vts, 0, entry=d1)
             if cmd == "CallSS_VMGM_PGC":
-                return self._load_pgcn(DOM_VMGM, 0, d1)
+                return self._jump(DOM_VMGM, 0, d1)
         self.log("  !! unhandled link %s" % cmd)
         return True
 

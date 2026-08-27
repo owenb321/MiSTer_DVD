@@ -98,6 +98,12 @@ module transport_hud #(
     // O[45] D-Pad Seek (dvd/dpad_seek.sv): pulses on every counted press while
     // the coalesce window is open, so the popup tracks the running total and the
     // user can see "SEEK FWD 30S" BEFORE the jump commits.
+    // Failed-menu-link notice (dvd_vm link_fail, 2026-08-27): a menu button's
+    // link did not resolve (e.g. a page-2 LinkPGCN out of the language unit's
+    // range) and the VM re-entered the current menu instead of auto-playing
+    // the movie. Menu-exempt like the warnings: it FIRES while a menu is up.
+    input  wire        link_evt,
+    input  wire [7:0]  link_pgcn,           // the PGCN that failed to resolve
     input  wire        seek_evt,
     input  wire        seek_fwd,            // 1 = forward
     input  wire [6:0]  seek_min,            // |request| as MM:SS -- whole minutes
@@ -160,7 +166,8 @@ module transport_hud #(
             else if (load_evt)            show_tmr <= 27'd0;
             else if (show_tmr != 27'd0)   show_tmr <= show_tmr - 27'd1;
             // popup: last event wins the single slot
-            if (aud_evt)        begin pop_type <= 4'd0; pop_tmr <= SHOW_TICKS; end
+            if (link_evt)       begin pop_type <= 4'd9; pop_tmr <= SHOW_TICKS; end
+            else if (aud_evt)   begin pop_type <= 4'd0; pop_tmr <= SHOW_TICKS; end
             else if (sub_evt)   begin pop_type <= 4'd1; pop_tmr <= SHOW_TICKS; end
             else if (angle_evt) begin pop_type <= 4'd2; pop_tmr <= SHOW_TICKS; end
             else if (chap_evt)  begin pop_type <= 4'd3; pop_tmr <= SHOW_TICKS; end
@@ -197,7 +204,8 @@ module transport_hud #(
     // CSS warning shows in menus too (scrambled discs green-screen there first)
     wire pop_vis = (pop_tmr != 27'd0) &&
                    (!menu_active || pop_type == 4'd4 ||
-                    pop_type == 4'd5 || pop_type == 4'd6);
+                    pop_type == 4'd5 || pop_type == 4'd6 ||
+                    pop_type == 4'd9);   // LINK FAIL fires while a menu is up
 
     // ---- text plane (2 rows x 32 cells x {accent, glyph[5:0]}) -------------
     reg [6:0] plane [0:63];                 // addr = {row, col}
@@ -382,6 +390,26 @@ module transport_hud #(
                 5'd16: fmt_g = {1'b1, a2g("D")};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
+        end else if (fmt_col[5] && f2_type == 4'd9) begin
+            // ---- popup row: "LINK FAIL nn" (accent label, digit cols 10-11) --
+            // nn = the unresolved PGCN (0 for entry-scan targets; row 26 of the
+            // debug overlay carries the reader's full reason latch).
+            case (fmt_col[4:0])
+                5'd0:  fmt_g = {1'b1, a2g("L")};
+                5'd1:  fmt_g = {1'b1, a2g("I")};
+                5'd2:  fmt_g = {1'b1, a2g("N")};
+                5'd3:  fmt_g = {1'b1, a2g("K")};
+                5'd4:  fmt_g = {1'b0, G_SPACE};
+                5'd5:  fmt_g = {1'b1, a2g("F")};
+                5'd6:  fmt_g = {1'b1, a2g("A")};
+                5'd7:  fmt_g = {1'b1, a2g("I")};
+                5'd8:  fmt_g = {1'b1, a2g("L")};
+                5'd9:  fmt_g = {1'b0, G_SPACE};
+                5'd10: fmt_g = (f2_n[7:4] != 4'd0) ? {1'b0, 2'b00, f2_n[7:4]}
+                                                   : {1'b0, G_SPACE};
+                5'd11: fmt_g = {1'b0, 2'b00, f2_n[3:0]};
+                default: fmt_g = {1'b0, G_NONE};
+            endcase
         end else if (fmt_col[5] && f2_type == 4'd7) begin
             // ---- popup row: "TITLE VTS nn" (cols 0-8 label, 10-11 digits) --
             case (fmt_col[4:0])
@@ -487,6 +515,8 @@ module transport_hud #(
                 f2_l1   <= G_NONE;
                 f2_l2   <= G_NONE;
                 if (pop_type == 4'd7) f2_n <= bin2bcd99(vts_no);
+                if (pop_type == 4'd9)
+                    f2_n <= bin2bcd99((link_pgcn > 8'd99) ? 8'd99 : link_pgcn);
                 if (pop_type == 4'd8) begin
                     f2_n   <= bin2bcd99({1'b0, seek_min});
                     sk_two <= (seek_min >= 7'd10);    // leading-zero suppression

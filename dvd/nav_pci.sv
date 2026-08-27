@@ -655,15 +655,20 @@ always @(posedge clk or negedge rst_n) begin
         end
         F_DONE: begin
             // Activate the freshly-fetched button when: a numpad digit forced it
-            // (auto_pend); an auto_action button was ARRIVED at via nav (moved); or
-            // a forced-activate (foac) button was just committed. btn_cmd now holds
-            // this button's command, so the fired activation is race-free.
+            // (auto_pend), or an auto_action button was ARRIVED at via nav
+            // (moved). btn_cmd now holds this button's command, so the fired
+            // activation is race-free.
+            //   ★ The forced-ACTIVATE arm (h_foac == btn_sel fired btn_cmd_valid
+            //   here) was DELETED 2026-08-27 (menu-link fix): libdvdnav does not
+            //   implement foac at all (only fosl, dvdnav.c:814), only 18 NAV
+            //   packs library-wide author it, and it was the one nav path that
+            //   could start playback with no keypress — indistinguishable from
+            //   the "arrow launched the movie" failure. The forced-SELECT hop
+            //   below stays (spec-correct, harmless).
             if (auto_pend ||
-                (b_auto == 2'd1 && moved) ||
-                (h_foac != 6'd0 && h_foac == btn_sel)) begin
+                (b_auto == 2'd1 && moved)) begin
                 btn_cmd_valid <= 1'b1;
                 act_tmr       <= 24'hFFFFFF;
-                h_foac        <= 6'd0;
             end
             auto_pend <= 1'b0;
             moved     <= 1'b0;
@@ -672,12 +677,16 @@ always @(posedge clk or negedge rst_n) begin
         default: fstate <= F_IDLE;
         endcase
 
-        // foac points elsewhere: hop the selection there once
-        if (fstate == F_IDLE && !fetch_req && armed &&
-            h_foac != 6'd0 && h_foac <= h_btn_ns && h_foac != btn_sel) begin
-            btn_sel   <= h_foac;
-            fetch_req <= 1'b1;
-            fetched   <= 1'b0;
+        // foac forced-SELECT: hop the selection there ONCE at commit, then
+        // clear h_foac unconditionally (previously the activate arm cleared it;
+        // without the clear a user navigating away would be dragged back).
+        if (fstate == F_IDLE && !fetch_req && armed && h_foac != 6'd0) begin
+            if (h_foac <= h_btn_ns && h_foac != btn_sel) begin
+                btn_sel   <= h_foac;
+                fetch_req <= 1'b1;
+                fetched   <= 1'b0;
+            end
+            h_foac <= 6'd0;
         end
 
         // display mode changed while armed (OSD aspect toggle / menu V_ATR

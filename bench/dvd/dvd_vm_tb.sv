@@ -99,6 +99,8 @@ module dvd_vm_tb;
     wire [7:0]  seek_cell;
     wire        vm_replay, vm_adv;
     wire        vm_from_wait;             // Phase B natural-jump provenance
+    wire        link_fail_w;              // S22: failed-menu-link popup pulse
+    wire [7:0]  link_fail_pgcn_w;
     wire [7:0]  sprm_astn, sprm_spstn;
     wire [7:0]  dbg_state;
 
@@ -138,7 +140,8 @@ module dvd_vm_tb;
         .vm_replay(vm_replay), .vm_adv(vm_adv), .wait_hold(1'b0),
         .vm_from_wait(vm_from_wait),
         .sprm_astn(sprm_astn), .sprm_spstn(sprm_spstn),
-        .dbg_state(dbg_state)
+        .dbg_state(dbg_state),
+        .link_fail(link_fail_w), .link_fail_pgcn(link_fail_pgcn_w)
     );
 
     integer errors = 0;
@@ -146,6 +149,8 @@ module dvd_vm_tb;
 
     // ---- action capture (latched between clear_actions() calls) ----------
     reg        saw_jump, saw_seek, saw_replay, saw_adv, saw_btnf;
+    reg        saw_linkfail;
+    reg [7:0]  cap_lfpgcn;
     reg [1:0]  cap_jdom;
     reg [7:0]  cap_jvts, cap_jcell, cap_jpgn;
     reg [15:0] cap_jpgcn;
@@ -169,12 +174,14 @@ module dvd_vm_tb;
         if (vm_replay)  saw_replay <= 1'b1;
         if (vm_adv)     saw_adv    <= 1'b1;
         if (btn_force)  begin saw_btnf <= 1'b1; cap_btnf <= btn_force_val; end
+        if (link_fail_w) begin saw_linkfail <= 1'b1; cap_lfpgcn <= link_fail_pgcn_w; end
     end
 
     task clear_actions;
     begin
         @(negedge clk);
         saw_jump = 0; saw_seek = 0; saw_replay = 0; saw_adv = 0; saw_btnf = 0;
+        saw_linkfail = 0; cap_lfpgcn = 0;
         cap_jdom = 0; cap_jvts = 0; cap_jpgcn = 0; cap_jcell = 0; cap_jpgn = 0;
         cap_jentry = 0; cap_jttn = 0; cap_scell = 0; cap_btnf = 0;
         cap_natural = 1'bx; cap_snat = 1'bx;
@@ -1290,6 +1297,69 @@ module dvd_vm_tb;
             fail("S21c: after a menu was seen, Menu must use the spec path (cur_vts)");
         if (dut.fb !== 3'd2) fail("S21c: expected fb = FB_VTSM (spec path)");
         $display("S21 boot-chain menu shortcut (target/fallback/self-limit) PASS");
+
+        // -------- [S22] FAILED MENU LINK -> re-enter the menu (2026-08-27) ---
+        // The Blade Runner arrow: a menu button's LinkPGCN names a PGCN out of
+        // the selected language unit's range -> the reader answers pgc_error.
+        // Pre-fix, the FB_NONE fallthrough ran the AUTO-TITLE fallback =
+        // pressing "next page" LAUNCHED THE MOVIE. Contract now:
+        //   (a) link_fail pulses (HUD "LINK FAIL nn") and the VM re-enters the
+        //       LAST successfully loaded menu PGC — same page, buttons re-arm;
+        //   (b) a second failure walks the EXISTING recovery chain unchanged;
+        //   (c) a failed jump whose DESTINATION is a title (JumpTT off a menu
+        //       button) keeps today's auto-title behaviour, no link_fail.
+        // S21c left a VTSM Root jump to vts 7 pending: complete it as PGCN 5.
+        nr_pre = 0; nr_post = 0; nr_cell = 0; cell_count = 8'd2;
+        menu_active = 1;
+        cur_vts = 8'd7; cur_pgcn = 16'd5; cur_cell = 8'd0;
+        clear_actions;
+        pulse_loaded;                    // menu loads -> last_menu = {VTSM,7,5}
+        wait_idle;
+        if (dut.last_menu_v !== 1'b1 || dut.last_menu_pgcn !== 16'd5 ||
+            dut.last_menu_vts !== 8'd7)
+            fail("S22: last_menu not latched on the menu load");
+        // (a) button LinkPGCN 10 -> jump 10; reader: pgc_error
+        clear_actions;
+        @(negedge clk); btn_cmd = 64'h200400000000000A; btn_cmd_valid = 1;
+                        btn_sel = 6'd3; btns_armed = 1;
+        @(negedge clk); btn_cmd_valid = 0;
+        wait_settled;
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jpgcn != 16'd10)
+            fail("S22a: expected the LinkPGCN 10 jump");
+        clear_actions;
+        pulse_error;
+        wait_settled;
+        if (!saw_linkfail || cap_lfpgcn != 8'd10)
+            fail("S22a: expected link_fail pulse with pgcn 10");
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != 8'd7 ||
+            cap_jpgcn != 16'd5)
+            fail("S22a: must RE-ENTER the last menu (VTSM 7 PGCN 5), not auto-title");
+        if (dut.fb !== 3'd2) fail("S22a: fb must advance to FB_VTSM");
+        // (b) the re-enter itself fails -> the EXISTING FB_VTSM chain
+        clear_actions; pulse_error; wait_settled;
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != best_menu_vts ||
+            cap_jentry != 4'd3)
+            fail("S22b: second failure must walk the existing FB_VTSM chain");
+        // recover: the chain's menu loads (last_menu re-latches here)
+        cur_vts = best_menu_vts; cur_pgcn = 16'd1;
+        clear_actions; pulse_loaded; wait_idle;
+        // (c) menu button JumpTT 3 (destination = TITLE) fails -> auto-title
+        clear_actions;
+        @(negedge clk); btn_cmd = 64'h3002000000030000; btn_cmd_valid = 1;
+        @(negedge clk); btn_cmd_valid = 0;
+        wait_settled;
+        if (!saw_jump || cap_jdom != 2'd3)
+            fail("S22c: expected the JumpTT title jump");
+        clear_actions; pulse_error; wait_settled;
+        if (saw_linkfail)
+            fail("S22c: link_fail must NOT pulse for a title-destination failure");
+        if (!saw_jump || cap_jdom != 2'd3 || cap_jvts != auto_vts ||
+            cap_jpgcn != 16'd1)
+            fail("S22c: title-destination failure must keep the auto-title fallback");
+        // settle: the auto title loads
+        menu_active = 0; cur_vts = auto_vts; cur_pgcn = 16'd1; cell_count = 8'd3;
+        pulse_loaded; wait_idle;
+        $display("S22 failed-menu-link re-enter (a/b/c) PASS");
     end
     endtask
 

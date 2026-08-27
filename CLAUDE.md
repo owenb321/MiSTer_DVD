@@ -218,6 +218,25 @@ worse maintenance burden than targeted in-place edits. So:
   DDR3 + counter widths, not fabric — the big decoder M10Ks are
   latency-tuning FIFOs).
 
+- 🔧 **FAILED MENU LINK RE-ENTERS THE MENU, NEVER THE MOVIE (2026-08-27, branch
+  `fix/menu-link-audio-map`) — sim-verified, ⏳ HW-confirm pending.** Field report
+  (Blade Runner): a language-menu "next page" arrow STARTED THE FEATURE — a failed
+  menu-domain jump (`pgc_error`, e.g. a page-2 LinkPGCN out of the selected
+  PGCI_UT language unit's range) fell through the VM's `fb == FB_NONE` chain to the
+  auto-title. New arm in `dvd/dvd_vm.sv`: a failed MENU-destination link with a
+  last-good menu **re-enters that menu** (`last_menu_*`, latched per menu-domain
+  `pgc_loaded` — NOT the reader's live `cur_vts`, which has already moved to the
+  failed target) + pulses `link_fail` → transport-HUD **`LINK FAIL nn`** popup
+  (`pop_type 9`, menu-exempt). Second failure walks the existing FB_VTSM chain;
+  boot/FP and title-destination failures keep the auto-title exactly as before.
+  Also: `nav_pci` foac forced-ACTIVATE deleted (libdvdnav never implements it; it
+  could start playback with no keypress), forced-SELECT hop kept one-shot; overlay
+  **row 26 = reader `pgc_error` reason latch** (reason/nr_srp/want_pgcn — replaces
+  the answered `dbg_promo` probe). Tests: `dvd_vm_tb` [S22], `transport_hud_tb`
+  T21; golden `_jump()` in `dvd_vm_ref.py`. No local repro disc exists (431-ISO
+  scan: zero out-of-range menu links; Goonies' unequal LUs check out) — validated
+  by sim fault-injection; the reporter's disc is the HW gate. Detail:
+  `docs/dvd_vm.md` "Failed-menu-link re-enter".
 - 🔧 **AUDIO LOGICAL→PHYSICAL STREAM MAPPING (2026-08-27, branch
   `fix/menu-link-audio-map`) — sim-verified, ⏳ HW-confirm pending.** The track pick
   (SPRM1/SetSTN or the Audio button) is a LOGICAL stream number; the PGC's

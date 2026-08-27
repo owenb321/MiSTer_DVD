@@ -713,7 +713,9 @@ interactive cell** instead of falling off the end.
   00 00 01 desync trap inside PCI payloads is covered by `ps_demux_ps2_tb` (plus a
   byte-exact real-NAV-sector check).
 - **`dvd/nav_pci.sv`**: double-buffered sync BRAM holds HLI bytes 0x60..0x315; commit
-  honours `hli_ss` (1 = new → selection resets to `fosl_btnn`/1, `foac` forced-activate;
+  honours `hli_ss` (1 = new → selection resets to `fosl_btnn`/1, `foac` = forced-SELECT
+  hop only since 2026-08-27 (the forced-ACTIVATE arm was deleted — see
+  `docs/dvd_vm.md` "Failed-menu-link re-enter");
   2/3 keep selection; 0 disarms). A fetch sequencer pulls the selected button's 18-byte
   record + its colour group's {sel, act} words into REGISTERS. D-pad pulses walk
   up/dn/lf/rt links (0/out-of-range = stay); activation pulses `btn_cmd[63:0]` and

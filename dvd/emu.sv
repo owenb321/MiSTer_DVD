@@ -1114,6 +1114,8 @@ wire [7:0]  vm_dbg_state;
 wire [15:0] vm_dbg_g3, vm_dbg_g14_9;
 wire [15:0] vm_dbg_rsm;      // {rsm_vts, rsm_pgcn} for the DEBUG_OVERLAY (symptom-1)
 wire [15:0] vm_dbg_deadend;  // {deadend_vts, deadend_pgcn} = the PGC that dead-ended
+wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HUD popup)
+wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
 wire [7:0]  rdr_play_vtsn, rdr_target_vtsn;
 reg         key_menu_p, key_resume_p, key_title_p, key_return_p;
 
@@ -1691,7 +1693,9 @@ dvd_vm dvd_vm_inst (
     .dbg_g3        (vm_dbg_g3),
     .dbg_g14_9     (vm_dbg_g14_9),
     .dbg_rsm       (vm_dbg_rsm),
-    .dbg_deadend   (vm_dbg_deadend)
+    .dbg_deadend   (vm_dbg_deadend),
+    .link_fail     (vm_link_fail),       // failed menu link -> HUD "LINK FAIL nn"
+    .link_fail_pgcn(vm_link_fail_pgcn)
 );
 
 // Transport / VM seek mux (the VM's LinkCN/LinkPGN cell seeks share the
@@ -4356,6 +4360,8 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .img_warn     (img_unplayable),  // persistent "UNSUPPORTED IMAGE" popup
     .aud_warn     (aud_unsupported), // persistent "AUDIO UNSUPPORTED" popup
     .vts_evt      (vts_evt_r),       // one-shot "TITLE VTS nn" (menus-off only)
+    .link_evt     (vm_link_fail),    // failed menu link (menu-exempt popup)
+    .link_pgcn    (vm_link_fail_pgcn),
     .vts_no       (rdr_play_vtsn),
     // O[45] D-Pad Seek: "SEEK FWD 30S" / "SEEK BACK 60S" while the coalesce
     // window is open, so the tap COUNT is readable before the jump commits.

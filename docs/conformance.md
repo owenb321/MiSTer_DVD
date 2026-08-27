@@ -183,7 +183,7 @@ Reference: `libdvdread/src/nav_read.c` + `dvdread/nav_types.h`; highlight logic
 | Feature | Reference | Status | Notes |
 |---|---|---|---|
 | PCI general info / PTM | `pci_gi_t` | ✅ | STC arm window |
-| HLI highlight info (hl_gi, s/e_ptm, btn_ns, fosl/foac) | `hli_t` | ✅ | double-buffered, ss commit; `video_live` fallback promote (deep menus) |
+| HLI highlight info (hl_gi, s/e_ptm, btn_ns, fosl/foac) | `hli_t` | ✅ | double-buffered, ss commit; `video_live` fallback promote (deep menus). foac = forced-SELECT only since 2026-08-27 — the forced-ACTIVATE arm was deleted (libdvdnav doesn't implement foac at all; it was the one nav path that could start playback with no keypress). |
 | Button records (btni, coli color/contrast) | `btni_t`,`btn_colit_t` | ✅ | **group selected by display mode** (`btngr_ns`/`dsp_ty` vs the PR fj#115 aspect verdict; group-1 fallback; spec-hardening Phase 3, ✅ HW-confirmed PR fj#168) — note libdvdnav itself reads group 1 only |
 | Directional button nav + activate | `highlight.c` | ✅ | D-pad link-walk, activate → btn_cmd (PR fj#84) |
 | **CHG_COLCON** (dynamic color-contrast change) | PCI | ❌ | deferred |
