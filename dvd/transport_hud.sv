@@ -95,6 +95,13 @@ module transport_hud #(
     // heuristic path (Disc Menus Off) where a wrong pick is actually possible.
     input  wire        vts_evt,
     input  wire [7:0]  vts_no,
+    // O[45] D-Pad Seek (dvd/dpad_seek.sv): pulses on every counted press while
+    // the coalesce window is open, so the popup tracks the running total and the
+    // user can see "SEEK FWD 30S" BEFORE the jump commits.
+    input  wire        seek_evt,
+    input  wire        seek_fwd,            // 1 = forward
+    input  wire [6:0]  seek_min,            // |request| as MM:SS -- whole minutes
+    input  wire [2:0]  seek_sec,            //   ...and tens of seconds (0..5)
     input  wire [3:0]  aud_no,              // 1-based playing audio track
     input  wire [3:0]  aud_cnt,
     input  wire [15:0] aud_lang,            // 2-ASCII ISO-639 (0 = none)
@@ -136,13 +143,16 @@ module transport_hud #(
     reg        persist_q;
     reg [26:0] show_tmr;
     reg [26:0] pop_tmr;
-    reg [2:0]  pop_type;                    // 0 aud, 1 sub, 2 angle, 3 chapter, 4 CSS
+    // 0 aud, 1 sub, 2 angle, 3 chapter, 4 CSS, 5 image, 6 audio-fmt, 7 VTS,
+    // 8 D-pad seek. Widened 3->4 bits in 2026-08-27: all eight 3-bit encodings
+    // were already spoken for.
+    reg [3:0]  pop_type;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             persist_q <= 1'b0;
             show_tmr  <= 27'd0;
             pop_tmr   <= 27'd0;
-            pop_type  <= 3'd0;
+            pop_type  <= 4'd0;
         end else begin
             if (display_edge) persist_q <= ~persist_q;
             if (load_evt)     persist_q <= 1'b0;
@@ -150,11 +160,12 @@ module transport_hud #(
             else if (load_evt)            show_tmr <= 27'd0;
             else if (show_tmr != 27'd0)   show_tmr <= show_tmr - 27'd1;
             // popup: last event wins the single slot
-            if (aud_evt)        begin pop_type <= 3'd0; pop_tmr <= SHOW_TICKS; end
-            else if (sub_evt)   begin pop_type <= 3'd1; pop_tmr <= SHOW_TICKS; end
-            else if (angle_evt) begin pop_type <= 3'd2; pop_tmr <= SHOW_TICKS; end
-            else if (chap_evt)  begin pop_type <= 3'd3; pop_tmr <= SHOW_TICKS; end
-            else if (vts_evt)   begin pop_type <= 3'd7; pop_tmr <= SHOW_TICKS; end
+            if (aud_evt)        begin pop_type <= 4'd0; pop_tmr <= SHOW_TICKS; end
+            else if (sub_evt)   begin pop_type <= 4'd1; pop_tmr <= SHOW_TICKS; end
+            else if (angle_evt) begin pop_type <= 4'd2; pop_tmr <= SHOW_TICKS; end
+            else if (chap_evt)  begin pop_type <= 4'd3; pop_tmr <= SHOW_TICKS; end
+            else if (vts_evt)   begin pop_type <= 4'd7; pop_tmr <= SHOW_TICKS; end
+            else if (seek_evt)  begin pop_type <= 4'd8; pop_tmr <= SHOW_TICKS; end
             else if (load_evt)          pop_tmr <= 27'd0;
             // CSS warning: lowest priority so user popups show for their 2.5 s,
             // then the warning re-takes the slot for as long as css_warn holds.
@@ -172,12 +183,12 @@ module transport_hud #(
             // warnings only: user events (types 0-3) are never preempted, so the
             // "user popup wins the slot" contract is unchanged.
             else if (css_warn && (pop_tmr == 27'd0 ||
-                                  pop_type == 3'd5 || pop_type == 3'd6))
-                                begin pop_type <= 3'd4; pop_tmr <= SHOW_TICKS; end
-            else if (img_warn && (pop_tmr == 27'd0 || pop_type == 3'd6))
-                                begin pop_type <= 3'd5; pop_tmr <= SHOW_TICKS; end
+                                  pop_type == 4'd5 || pop_type == 4'd6))
+                                begin pop_type <= 4'd4; pop_tmr <= SHOW_TICKS; end
+            else if (img_warn && (pop_tmr == 27'd0 || pop_type == 4'd6))
+                                begin pop_type <= 4'd5; pop_tmr <= SHOW_TICKS; end
             else if (aud_warn && pop_tmr == 27'd0)
-                                begin pop_type <= 3'd6; pop_tmr <= SHOW_TICKS; end
+                                begin pop_type <= 4'd6; pop_tmr <= SHOW_TICKS; end
             else if (pop_tmr != 27'd0)  pop_tmr <= pop_tmr - 27'd1;
         end
     end
@@ -185,8 +196,8 @@ module transport_hud #(
              : (persist_q | pause_q | bar_active | (show_tmr != 27'd0)) && !menu_active;
     // CSS warning shows in menus too (scrambled discs green-screen there first)
     wire pop_vis = (pop_tmr != 27'd0) &&
-                   (!menu_active || pop_type == 3'd4 ||
-                    pop_type == 3'd5 || pop_type == 3'd6);
+                   (!menu_active || pop_type == 4'd4 ||
+                    pop_type == 4'd5 || pop_type == 4'd6);
 
     // ---- text plane (2 rows x 32 cells x {accent, glyph[5:0]}) -------------
     reg [6:0] plane [0:63];                 // addr = {row, col}
@@ -232,11 +243,13 @@ module transport_hud #(
     reg [1:0]  f_icon;                       // 0 play, 1 pause, 2 ffwd, 3 rev
     reg [3:0]  f_tier1;                      // tier+1 (1..4)
     // format snapshot (popup row)
-    reg [2:0]  f2_type;
+    reg [3:0]  f2_type;
     reg [7:0]  f2_n, f2_nn;                  // n / N as {tens,ones} BCD
     reg [5:0]  f2_l1, f2_l2;                 // language glyphs (NONE = hidden)
     reg        f2_off;                       // SUB OFF variant
 
+    reg        sk_two, sk_fwd;               // popup 8: 2-digit minutes, direction
+    reg [2:0]  sk_sec;                       // popup 8: tens-of-seconds digit
     reg [6:0]  fmt_col;                      // 0..63 write cursor, 64+ = idle
     reg [14:0] fmt_wait;
 
@@ -248,38 +261,66 @@ module transport_hud #(
         pop_lbl = G_SPACE;
         case (fmt_col[4:0])
             5'd0: case (f2_type)
-                2'd0: pop_lbl = G_A;                    // A
-                2'd1: pop_lbl = G_A + 6'd18;            // S
-                2'd2: pop_lbl = G_A;                    // A
-                2'd3: pop_lbl = G_C;                    // C
+                4'd0: pop_lbl = G_A;                    // A
+                4'd1: pop_lbl = G_A + 6'd18;            // S
+                4'd2: pop_lbl = G_A;                    // A
+                4'd3: pop_lbl = G_C;                    // C
             endcase
             5'd1: case (f2_type)
-                2'd0: pop_lbl = G_A + 6'd20;            // U
-                2'd1: pop_lbl = G_A + 6'd20;            // U
-                2'd2: pop_lbl = G_A + 6'd13;            // N
-                2'd3: pop_lbl = G_H;                    // H
+                4'd0: pop_lbl = G_A + 6'd20;            // U
+                4'd1: pop_lbl = G_A + 6'd20;            // U
+                4'd2: pop_lbl = G_A + 6'd13;            // N
+                4'd3: pop_lbl = G_H;                    // H
             endcase
             5'd2: case (f2_type)
-                2'd0: pop_lbl = G_A + 6'd3;             // D
-                2'd1: pop_lbl = G_A + 6'd1;             // B
-                2'd2: pop_lbl = G_A + 6'd6;             // G
-                2'd3: pop_lbl = G_SPACE;
+                4'd0: pop_lbl = G_A + 6'd3;             // D
+                4'd1: pop_lbl = G_A + 6'd1;             // B
+                4'd2: pop_lbl = G_A + 6'd6;             // G
+                4'd3: pop_lbl = G_SPACE;
             endcase
             5'd3: case (f2_type)
-                2'd0: pop_lbl = G_A + 6'd8;             // I
-                2'd2: pop_lbl = G_A + 6'd11;            // L
+                4'd0: pop_lbl = G_A + 6'd8;             // I
+                4'd2: pop_lbl = G_A + 6'd11;            // L
                 default: pop_lbl = G_SPACE;
             endcase
             5'd4: case (f2_type)
-                2'd0: pop_lbl = G_A + 6'd14;            // O
-                2'd2: pop_lbl = G_A + 6'd4;             // E
+                4'd0: pop_lbl = G_A + 6'd14;            // O
+                4'd2: pop_lbl = G_A + 6'd4;             // E
                 default: pop_lbl = G_SPACE;
             endcase
             default: pop_lbl = G_SPACE;
         endcase
 
         fmt_g = {1'b0, G_SPACE};
-        if (fmt_col[5] && f2_type == 3'd4) begin
+        if (fmt_col[5] && f2_type == 4'd8) begin
+            // ---- popup row, D-pad seek: "SEEK FWD  30S" / "SEEK BACK 60S" ----
+            // The sign is spelled, not punctuated: the glyph ROM has no '+', and
+            // words keep tools/hud_font.py + dvd/hud_font.mem untouched (no
+            // regenerating a committed binary at 91 % RAM). FWD is padded to
+            // BACK's width so the digits sit at fixed columns either way, and
+            // digit glyph index == the digit value (0..9 are ROM slots 0..9).
+            case (fmt_col[4:0])
+                5'd0:  fmt_g = {1'b0, a2g("S")};
+                5'd1:  fmt_g = {1'b0, a2g("E")};
+                5'd2:  fmt_g = {1'b0, a2g("E")};
+                5'd3:  fmt_g = {1'b0, a2g("K")};
+                5'd4:  fmt_g = {1'b0, G_SPACE};
+                5'd5:  fmt_g = {1'b0, sk_fwd ? a2g("F") : a2g("B")};
+                5'd6:  fmt_g = {1'b0, sk_fwd ? a2g("W") : a2g("A")};
+                5'd7:  fmt_g = {1'b0, sk_fwd ? a2g("D") : a2g("C")};
+                5'd8:  fmt_g = {1'b0, sk_fwd ? G_SPACE  : a2g("K")};
+                5'd9:  fmt_g = {1'b0, G_SPACE};
+                // MM:SS -- seconds are always a multiple of 10, so the second
+                // seconds digit is a literal '0' (glyph slot 0, like every digit).
+                // Minutes lose their leading zero: "1:30", "12:30".
+                5'd10: fmt_g = {1'b0, 2'b00, sk_two ? f2_n[7:4] : f2_n[3:0]};
+                5'd11: fmt_g = sk_two ? {1'b0, 2'b00, f2_n[3:0]} : {1'b0, G_COLON};
+                5'd12: fmt_g = sk_two ? {1'b0, G_COLON}          : {1'b0, 3'b000, sk_sec};
+                5'd13: fmt_g = sk_two ? {1'b0, 3'b000, sk_sec}   : {1'b0, 6'd0};
+                5'd14: fmt_g = sk_two ? {1'b0, 6'd0}             : {1'b0, G_NONE};
+                default: fmt_g = {1'b0, G_NONE};
+            endcase
+        end else if (fmt_col[5] && f2_type == 4'd4) begin
             // ---- popup row, CSS warning: "CSS ENCRYPTED" (accent), cols 0-12 --
             case (fmt_col[4:0])
                 5'd0:  fmt_g = {1'b1, a2g("C")};
@@ -297,7 +338,7 @@ module transport_hud #(
                 5'd12: fmt_g = {1'b1, a2g("D")};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
-        end else if (fmt_col[5] && f2_type == 3'd5) begin
+        end else if (fmt_col[5] && f2_type == 4'd5) begin
             // ---- popup row: unplayable image (accent), cols 0-16 -----------
             case (fmt_col[4:0])
                 5'd0:  fmt_g = {1'b1, a2g("U")};
@@ -319,7 +360,7 @@ module transport_hud #(
                 5'd16: fmt_g = {1'b1, a2g("E")};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
-        end else if (fmt_col[5] && f2_type == 3'd6) begin
+        end else if (fmt_col[5] && f2_type == 4'd6) begin
             // ---- popup row: unsupported audio format (accent), cols 0-16 ---
             case (fmt_col[4:0])
                 5'd0:  fmt_g = {1'b1, a2g("A")};
@@ -341,7 +382,7 @@ module transport_hud #(
                 5'd16: fmt_g = {1'b1, a2g("D")};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
-        end else if (fmt_col[5] && f2_type == 3'd7) begin
+        end else if (fmt_col[5] && f2_type == 4'd7) begin
             // ---- popup row: "TITLE VTS nn" (cols 0-8 label, 10-11 digits) --
             case (fmt_col[4:0])
                 5'd0:  fmt_g = {1'b1, a2g("T")};
@@ -423,7 +464,7 @@ module transport_hud #(
             fmt_wait <= 15'd0;
             f_cur <= 24'd0; f_tot <= 24'd0; f_n <= 8'd0; f_nn <= 8'd0;
             f_ch <= 1'b0; f_icon <= 2'd0; f_tier1 <= 4'd1;
-            f2_type <= 3'd0; f2_n <= 8'd0; f2_nn <= 8'd0;
+            f2_type <= 4'd0; f2_n <= 8'd0; f2_nn <= 8'd0; sk_sec <= 3'd0;
             f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0;
         end else begin
             if (fmt_col <= 7'd63) begin
@@ -445,15 +486,21 @@ module transport_hud #(
                 f2_off  <= 1'b0;
                 f2_l1   <= G_NONE;
                 f2_l2   <= G_NONE;
-                if (pop_type == 3'd7) f2_n <= bin2bcd99(vts_no);
+                if (pop_type == 4'd7) f2_n <= bin2bcd99(vts_no);
+                if (pop_type == 4'd8) begin
+                    f2_n   <= bin2bcd99({1'b0, seek_min});
+                    sk_two <= (seek_min >= 7'd10);    // leading-zero suppression
+                    sk_sec <= seek_sec;
+                    sk_fwd <= seek_fwd;
+                end
                 case (pop_type)
-                    2'd0: begin
+                    4'd0: begin
                         f2_n  <= bin2bcd99({4'd0, aud_no});
                         f2_nn <= bin2bcd99({4'd0, aud_cnt});
                         f2_l1 <= a2g(aud_lang[15:8]);
                         f2_l2 <= a2g(aud_lang[7:0]);
                     end
-                    2'd1: begin
+                    4'd1: begin
                         f2_n  <= bin2bcd99({4'd0, sub_no});
                         f2_nn <= bin2bcd99({4'd0, sub_cnt});
                         f2_off <= !sub_enabled;
@@ -462,11 +509,11 @@ module transport_hud #(
                             f2_l2 <= a2g(sub_lang[7:0]);
                         end
                     end
-                    2'd2: begin
+                    4'd2: begin
                         f2_n  <= bin2bcd99({4'd0, ang_no});
                         f2_nn <= bin2bcd99({4'd0, ang_cnt});
                     end
-                    2'd3: begin
+                    4'd3: begin
                         f2_n  <= bin2bcd99(cur_pgm);
                         f2_nn <= bin2bcd99(nr_pgm);
                     end
@@ -534,13 +581,13 @@ module transport_hud #(
             hud_alpha <= 4'd0;
             if (s2_in) begin
                 case (rom_q[{~s2_gx, 1'b0} +: 2])  // MSB pair = leftmost: k = 7-gx = ~gx
-                    2'd2: begin                     // fill: white / accent amber
+                    4'd2: begin                     // fill: white / accent amber
                         hud_on <= 1'b1; hud_alpha <= 4'd15;
                         hud_r  <= 8'hFF;
                         hud_g  <= s2_acc ? 8'hC8 : 8'hFF;
                         hud_b  <= s2_acc ? 8'h20 : 8'hFF;
                     end
-                    2'd1: begin                     // outline: opaque black
+                    4'd1: begin                     // outline: opaque black
                         hud_on <= 1'b1; hud_alpha <= 4'd15;
                     end
                     default: if (s2_act) begin      // backing: translucent black

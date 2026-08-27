@@ -25,6 +25,10 @@ module scrub_ctrl_tb;
     logic        hold_freeze, bar_active;
     logic [31:0] bar_base_rbn, bar_tgt_rbn;
 
+    // jump mode (dpad_seek)
+    logic        jump_fire = 0, jump_dir = 0;
+    logic [31:0] jump_base = 0, jump_off = 0;
+
     always #5 clk = ~clk;
 
     scrub_ctrl #(.T1(T1_C), .T2(T2_C), .T3(T3_C), .TICK(TICK_C), .LINGER(LING_C)) dut (
@@ -33,7 +37,9 @@ module scrub_ctrl_tb;
         .cur_rbn(cur_rbn), .title_first_rbn(title_first), .title_last_rbn(title_last),
         .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn),
         .hold_freeze(hold_freeze),
-        .bar_active(bar_active), .bar_base_rbn(bar_base_rbn), .bar_tgt_rbn(bar_tgt_rbn)
+        .bar_active(bar_active), .bar_base_rbn(bar_base_rbn), .bar_tgt_rbn(bar_tgt_rbn),
+        .jump_fire(jump_fire), .jump_dir(jump_dir),
+        .jump_base(jump_base), .jump_off(jump_off)
     );
 
     integer errors = 0;
@@ -61,6 +67,18 @@ module scrub_ctrl_tb;
     endtask
 
     integer fwd_short, fwd_long;
+
+    // fire a resolved jump (one cycle), then let the jump_go stage land.
+    task automatic jump(input dir, input [31:0] base, input [31:0] off);
+        begin
+            got = 1'b0;
+            @(posedge clk);
+            jump_dir = dir; jump_base = base; jump_off = off; jump_fire = 1'b1;
+            @(posedge clk);
+            jump_fire = 1'b0;
+            tick(4);
+        end
+    endtask
 
     initial begin
         rst_n = 0; tick(4); rst_n = 1; tick(2);
@@ -135,8 +153,47 @@ module scrub_ctrl_tb;
         chk(!got, "gate: no seek when !in_title");
         in_title = 1; tick(2);
 
+        // ---------- TEST 9: jump mode seeks base +/- off ----------
+        $display("TEST 9: jump mode");
+        cur_rbn = 32'd400000; tick(2);
+        jump(1'b1, 32'd300000, 32'd25000);
+        chk(got, "jump fwd: a seek issued");
+        chk(cap_rbn == 32'd325000, "jump fwd: target = jump_base + jump_off (NOT cur_rbn)");
+        jump(1'b0, 32'd300000, 32'd25000);
+        chk(got, "jump bwd: a seek issued");
+        chk(cap_rbn == 32'd275000, "jump bwd: target = jump_base - jump_off");
+        chk(hold_freeze == 1'b0, "jump: never freezes video");
+
+        // ---------- TEST 10: jump clamps to the title span ----------
+        $display("TEST 10: jump clamp");
+        jump(1'b1, 32'd990000, 32'd500000);
+        chk(cap_rbn == 32'd1000000, "jump: clamped at title_last");
+        jump(1'b0, 32'd10000, 32'd500000);
+        chk(cap_rbn == 32'd0, "jump: clamped at title_first");
+
+        // ---------- TEST 11: a held FF/REW gesture always wins ----------
+        $display("TEST 11: jump ignored while held");
+        cur_rbn = 32'd500000; tick(2);
+        got = 1'b0;
+        held_right = 1'b1; tick(30);
+        jump_dir = 1'b0; jump_base = 32'd10; jump_off = 32'd5; jump_fire = 1'b1;
+        @(posedge clk); jump_fire = 1'b0; tick(4);
+        chk(!got, "jump: no seek issued while a hold gesture is live");
+        held_right = 1'b0; tick(6);
+        chk(got && cap_rbn > 32'd500000, "jump: the HOLD's own release seek is unharmed");
+
+        // ---------- TEST 12: jump gated by in_title ----------
+        $display("TEST 12: jump in_title gate");
+        in_title = 0; tick(2);
+        jump(1'b1, 32'd300000, 32'd25000);
+        chk(!got, "jump: no seek when !in_title");
+        in_title = 1; tick(2);
+
         if (errors == 0) $display("\nscrub_ctrl_tb: ALL TESTS PASSED");
-        else             $display("\nscrub_ctrl_tb: %0d FAILURE(S)", errors);
+        else begin
+            $display("\nscrub_ctrl_tb: %0d FAILURE(S)", errors);
+            $fatal(1);
+        end
         $finish;
     end
 

@@ -18,6 +18,20 @@
 //   vobu_sri @0xEA: next_video@EA fwda[19]@EE next_vobu@13A
 //                   prev_vobu@13E bwda[19]@142 prev_video@18E
 //
+// ⚠ STALENESS CONTRACT -- READ BEFORE ADDING A CONSUMER. dsi_tbl and tbl_rdata
+// are written by a SEPARATE, UNRESET always block below. rst_n (= pipe_rst_n,
+// asserted on every load/seek/jump) clears the SCALARS -- including
+// dsi_nv_pck_lbn, the base every table offset is relative to -- but leaves the
+// TABLE holding the PREVIOUS VOBU's entries. So in the window after a seek,
+// `dsi_nv_pck_lbn +/- tbl_rdata` evaluates to `0 +/- stale_offset`, which a
+// downstream clamp turns into a jump to the start of the title. Any consumer
+// must therefore gate on a freshness latch SET by dsi_commit and CLEARED by
+// load_flush, latch the base once on entry, and restart if a new packet arrives
+// mid-read. dsi_commit is the correct set point: it fires at byte 0x191, after
+// the last bwda write at 0x18D, so at that pulse the scalars and the whole table
+// belong to the same VOBU. Worked example + tests: dvd/dpad_seek.sv (the
+// header's STALE-TABLE TRAP note) and bench/dvd/dpad_seek_tb.sv T0/T10.
+//
 // FIT DISCIPLINE (see dvd-iso-navigator / pgc-cell-timeline memories): the
 // 19+19 seek-table entries and 9 angle offsets live in ONE sync-read M10K
 // (dsi_tbl), never an async register file. Scalars are plain registers.

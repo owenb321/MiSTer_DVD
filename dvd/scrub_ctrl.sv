@@ -4,7 +4,12 @@
 // Hold the Fast Fwd/Rewind buttons (in a playing title) to choose a seek target,
 // then release to jump there. (These are dedicated gamepad buttons, NOT the
 // D-pad -- the D-pad stays free for directional menu/game navigation so seeking
-// never conflicts with a game that wants left/right input over seekable video.)
+// never conflicts with a game that wants left/right input over seekable video.
+// ★ AMENDED: that exclusion is now CONDITIONAL, not absolute. The opt-in
+// O[45] "D-Pad Seek" toggle -- default OFF, so the guarantee above still holds
+// out of the box -- routes D-pad presses through dvd/dpad_seek.sv, which
+// resolves a FIXED-TIME target from the disc's DSI tables and hands it to the
+// JUMP MODE below. The held scrub itself remains exclusively FF/REW.)
 // While held the video simply PAUSES (a plain, proven
 // freeze -- no repeated flushing) and a target cursor moves along the on-screen
 // position bar, ACCELERATING the longer the button is held. On release ONE
@@ -45,6 +50,17 @@ module scrub_ctrl #(
     input  wire [31:0] cur_rbn,         // live playhead RBN (nav_dsi.dsi_nv_pck_lbn)
     input  wire [31:0] title_first_rbn, // title span (reader)
     input  wire [31:0] title_last_rbn,
+
+    // ---- JUMP MODE (dvd/dpad_seek.sv, O[45]) ------------------------------
+    // A pre-resolved one-shot seek: dpad_seek has already turned "+30 s" into a
+    // sector offset against a SPECIFIC VOBU, so it supplies its own base rather
+    // than letting us re-sample cur_rbn (the two must come from the same VOBU or
+    // the target is nonsense -- see the stale-table note in dpad_seek.sv). We
+    // add the title-span clamp, the bar/linger, and the single seek issue.
+    input  wire        jump_fire,       // 1-cyc: resolved, go
+    input  wire        jump_dir,        // 1 = forward
+    input  wire [31:0] jump_base,       // base the offset was resolved against
+    input  wire [31:0] jump_off,        // magnitude (sectors / linear blocks)
 
     // ONE raw-RBN seek, issued on release.
     output reg         seek_rbn_pulse,
@@ -100,7 +116,8 @@ module scrub_ctrl #(
 
     reg  [31:0] released_tgt;                   // latched at release (for the linger)
     reg  [25:0] linger_cnt;
-    assign bar_active  = want || (linger_cnt != 26'd0);
+    reg         jump_go;                        // 1-cyc staging (see below)
+    assign bar_active  = want || jump_go || (linger_cnt != 26'd0);
     assign bar_tgt_rbn = want ? target : released_tgt;
     assign hud_dir     = pending_dir;
 
@@ -109,7 +126,7 @@ module scrub_ctrl #(
             want_q <= 1'b0; hold_cnt <= 28'd0; pending_off <= 32'd0; pending_dir <= 1'b0;
             tick_cnt <= 21'd0; bar_base_rbn <= 32'd0; released_tgt <= 32'd0;
             linger_cnt <= 26'd0; seek_rbn_pulse <= 1'b0; seek_rbn <= 32'd0;
-            hud_tier <= 2'd0;
+            hud_tier <= 2'd0; jump_go <= 1'b0;
         end else begin
             want_q <= want;
             hud_tier <= tier;
@@ -144,6 +161,26 @@ module scrub_ctrl #(
                 linger_cnt   <= LINGER[25:0];
                 if (pending_off != 32'd0) begin
                     seek_rbn <= target; seek_rbn_pulse <= 1'b1;   // ONE seek on release
+                end
+                pending_off <= 32'd0;
+            end
+
+            // ---- JUMP MODE ------------------------------------------------
+            // A held FF/REW gesture always wins: jump_ok requires want_q==0, so
+            // this is mutually exclusive with want_rise/want/want_fall above.
+            // The one-cycle jump_go stage is LOAD-BEARING -- `target` is
+            // combinational off the pending_off/pending_dir/bar_base_rbn
+            // REGISTERS, so it cannot be consumed in the cycle that writes them.
+            if (jump_fire && in_title && !want && !want_q) begin
+                bar_base_rbn <= jump_base;
+                pending_dir  <= jump_dir;
+                pending_off  <= jump_off;
+                jump_go      <= 1'b1;
+            end else if (jump_go) begin
+                jump_go <= 1'b0;
+                if (!want) begin
+                    seek_rbn     <= target;  seek_rbn_pulse <= 1'b1;
+                    released_tgt <= target;  linger_cnt     <= LINGER[25:0];
                 end
                 pending_off <= 32'd0;
             end

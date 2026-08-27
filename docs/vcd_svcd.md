@@ -138,6 +138,14 @@ scrub/seek-bar playhead muxes to the reader's linear block; the linear title spa
 (0..total_blocks−1) publishes on `title_first/last_rbn`. Chapters/angles stay
 DVD-only. HUD time shows 0:00 in linear modes (no DSI timecodes — see limitations).
 
+**D-Pad Seek (`O[45]`, 2026-08-27)** works on **raw** images too, without any DSI: a
+CD is a fixed **75 sectors/s** of 2352 B and the reader's linear `seek_rbn` unit is a
+2048-byte **file block**, so `75·2352/2048 = 86.13 blk/s` → **10 s = 861 blocks**,
+60 s = 6×861. Constants, no divider (`dvd/dpad_seek.sv` `LIN_10S`); `lin_blk` is the
+base. Exact for VCD's CBR mux; approximate on VBR SVCD. A flat `.mpg`/`.VOB` has no
+derivable byte rate, so the D-pad is **deliberately inert** there — the Fast Fwd /
+Rewind span-relative scrub still covers it. See `docs/dvd_nav.md` §2b.
+
 ## 4. Tests
 
 One entry point: **`bench/dvd/run_vcd.sh`** (raw reader TB + MPEG-1 demux TB + full
@@ -160,7 +168,11 @@ goldens against `ffmpeg -c copy` at generation time. Plus: `crt_ov_map_tb`,
   so the film detector cannot see them and the governor shows every frame for 2
   refreshes. Rare; revisit if a real disc surfaces (would key on frame_rate_code).
 - **HUD time blank/zero in linear modes** (no DSI). A VCD-only elapsed clock from the
-  75-sector/s CBR geometry is a possible follow-up; SVCD is VBR.
+  75-sector/s CBR geometry is a possible follow-up; SVCD is VBR. (That same geometry
+  *is* already used for `O[45]` D-Pad Seek — exact on VCD, and on a max-rate SVCD a
+  10 s jump can fall short by up to ~2× because the mux is VBR.)
+- **D-Pad Seek is inert on flat `.mpg`/`.VOB`** — no derivable byte rate. Raw `.bin`
+  (VCD/SVCD) and DVD titles are covered; use Fast Fwd/Rewind on flat files.
 - **EOF tail**: the final partial 2048-block may emit a few stale in-window bytes —
   end-of-play junk, harmless.
 - IEC 61937 MP2 passthrough unchanged (passthrough mode silences MP2, as on DVD).
