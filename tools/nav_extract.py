@@ -617,6 +617,91 @@ def dump_subp_map(f, vts, pgcn):
               (subpN, ctl, 0x20 + m43, 0x20 + wide, 0x20 + lb, 0x20 + ps))
 
 
+def find_vmg_ifo(f):
+    """Locate VIDEO_TS.IFO (the VMGI). Returns its start LBA."""
+    f.seek(16 * 2048)
+    pvd = f.read(2048)
+    assert pvd[1:6] == b'CD001' and pvd[0] == 1, "not an ISO9660 image"
+    root_lba = struct.unpack('<I', pvd[158:162])[0]
+    root_len = struct.unpack('<I', pvd[166:170])[0]
+    vdir = None
+    for nm, ext, dl in walk_dir(f, root_lba, root_len):
+        if nm.startswith(b'VIDEO_TS'):
+            vdir = (ext, dl)
+    assert vdir, "no VIDEO_TS"
+    for nm, ext, dl in walk_dir(f, *vdir):
+        if nm.startswith(b'VIDEO_TS.IFO'):
+            return ext
+    raise SystemExit("VIDEO_TS.IFO not found")
+
+
+def dump_pgcit_map(f, vts):
+    """Per-language-unit dump of a menu domain's PGCI_UT (--vts 0 = VMGM,
+    else that VTS's VTSM). This is the exact table dvd_iso_reader's
+    S_UT_HDR/S_LU_EVAL walk indexes, so "is this LinkPGCN target out of range
+    of the LU the Player Language picks?" is a ten-second offline check."""
+    if vts == 0:
+        ifo_lba = find_vmg_ifo(f); ut_ptr_off = 200; name = "VMGM"
+    else:
+        ifo_lba = find_vts_ifo(f, vts); ut_ptr_off = 208; name = "VTSM%d" % vts
+    f.seek(ifo_lba * 2048); mat = f.read(2048)
+    ut = be32(mat, ut_ptr_off)
+    if not ut:
+        print("%s: no PGCI_UT" % name); return
+    ut_abs = (ifo_lba + ut) * 2048
+    f.seek(ut_abs); hdr = f.read(8)
+    nr = be16(hdr, 0)
+    print("%s PGCI_UT @lba %d: %d language unit(s)" % (name, ifo_lba + ut, nr))
+    for i in range(nr):
+        f.seek(ut_abs + 8 + i * 8); e = f.read(8)
+        lang = e[0:2].decode('ascii', 'replace')
+        start = be32(e, 4)
+        f.seek(ut_abs + start); pit = f.read(8)
+        nsrp = be16(pit, 0)
+        print("  LU %d lang=%s menus=0x%02x start=%d: %d PGCs" %
+              (i, lang, e[3], start, nsrp))
+        for j in range(nsrp):
+            f.seek(ut_abs + start + 8 + j * 8); srp = f.read(8)
+            print("    PGC %-3d entry_id=0x%02x pgc_start_byte=%d" %
+                  (j + 1, srp[0], be32(srp, 4)))
+
+
+AUD_FMT = {0: ("AC3", 0x80), 2: ("MPEG1", 0xC0), 3: ("MPEG2ext", 0xC0),
+           4: ("LPCM", 0xA0), 6: ("DTS", 0x88)}
+
+
+def dump_audio_map(f, vts, pgcn):
+    """Dump a title PGC's audio_control[8] (PGC+0x0C, u16 each: bit15 =
+    available, bits[10:8] = PHYSICAL stream number) and the resolved substream
+    id per logical stream -- the libdvdnav vm_get_audio_stream mapping that
+    dvd/aud_stream_map.sv must reproduce. Golden predictor for
+    bench/dvd/aud_stream_map_tb.sv."""
+    ifo_lba = find_vts_ifo(f, vts)
+    f.seek(ifo_lba * 2048); mat = f.read(2048)
+    pgcit_abs = (ifo_lba + be32(mat, 204)) * 2048
+    f.seek(pgcit_abs); pgcit = f.read(2048)
+    pa = pgcit_abs + be32(pgcit, 8 + (pgcn - 1) * 8 + 4)
+    f.seek(pa); pgc = f.read(0x1C)
+    print("VTS_%02d PGCN %d audio_control map:" % (vts, pgcn))
+    first_avail = None
+    for n in range(8):
+        ctl = be16(pgc, 0x0C + n * 2)
+        if not (ctl & 0x8000):
+            continue
+        phys = (ctl >> 8) & 7
+        if first_avail is None:
+            first_avail = phys
+        fmt = (mat[516 + phys * 8] >> 5) & 7    # vts_audio_attr[phys] byte0
+        fname, base = AUD_FMT.get(fmt, ("?", 0x80))
+        print("  logical %d: ctl=0x%04x -> physical %d = %s substream 0x%02X"
+              % (n, ctl, phys, fname, base + phys))
+    if first_avail is None:
+        print("  (no available streams -- aud_stream_map falls back to identity)")
+    else:
+        print("  unresolvable logical -> first available = physical %d"
+              % first_avail)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('iso')
@@ -650,6 +735,12 @@ def main():
     ap.add_argument('--subp-map', type=int, metavar='PGCN',
                     help='dump the subpicture display-mode substream mapping '
                          '(pgc->subp_control) for a PGC (needs --vts)')
+    ap.add_argument('--audio-map', type=int, metavar='PGCN',
+                    help='dump the logical->physical audio stream mapping '
+                         '(pgc->audio_control) for a title PGC (needs --vts)')
+    ap.add_argument('--pgcit-map', action='store_true',
+                    help='dump a menu domain\'s PGCI_UT language units + '
+                         'per-LU PGC counts/SRPs (--vts 0 = VMGM, else VTSM)')
     ap.add_argument('--vts-attr', action='store_true',
                     help='Phase 10: dump the VTS audio/subpicture stream-attribute '
                          'tables (counts, codec, channels, language) from the '
@@ -665,6 +756,12 @@ def main():
         return
     if a.subp_map is not None:
         dump_subp_map(f, a.vts, a.subp_map)
+        return
+    if a.audio_map is not None:
+        dump_audio_map(f, a.vts, a.audio_map)
+        return
+    if a.pgcit_map:
+        dump_pgcit_map(f, a.vts)
         return
     if a.vts_attr:
         dump_vts_attr(f, a.vts, a.attr_hex)

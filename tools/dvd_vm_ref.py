@@ -321,8 +321,12 @@ DOM_FP, DOM_VMGM, DOM_VTSM, DOM_TT = 0, 1, 2, 3
 DOM_NAME = {0: "FP", 1: "VMGM", 2: "VTSM", 3: "TT"}
 
 class IsoNav(object):
-    def __init__(self, path):
+    def __init__(self, path, lang_pref='en'):
         self.f = open(path, 'rb')
+        # Menu-LU language preference (OSD "Player Language" -> reader
+        # lu_lang_pref / dvd_vm.cfg_lang / SPRM0). Full-u16 ISO-639 match,
+        # LU[0] on no match -- the S_LU_EVAL rule (spec-hardening Phase 4).
+        self.lang_pref = (ord(lang_pref[0]) << 8) | ord(lang_pref[1])
         self._walk()
 
     def sec(self, n):
@@ -403,10 +407,17 @@ class IsoNav(object):
     def pgc(self, abs_byte):
         """Parse one PGC: header fields + command blocks + program map."""
         h = self.rd(abs_byte, 236)
+        # next/prev/goup are 15-bit PGCN fields; the old "& 0xFF" masks were a
+        # divergence from the RTL's full-u16 capture (same class as the
+        # min(nr_srp,99) cap above).
         p = {"nr_pgms": h[2], "nr_cells": h[3],
-             "next": struct.unpack('>H', h[156:158])[0] & 0xFF,
-             "prev": struct.unpack('>H', h[158:160])[0] & 0xFF,
-             "goup": struct.unpack('>H', h[160:162])[0] & 0xFF,
+             "next": struct.unpack('>H', h[156:158])[0] & 0x7FFF,
+             "prev": struct.unpack('>H', h[158:160])[0] & 0x7FFF,
+             "goup": struct.unpack('>H', h[160:162])[0] & 0x7FFF,
+             # audio_control[8] @0x0C (u16 each): bit15 = available,
+             # bits[10:8] = physical stream number (libdvdread pgc_t)
+             "audio_ctl": [struct.unpack('>H', h[0x0C+i*2:0x0E+i*2])[0]
+                           for i in range(8)],
              "still": h[163],
              "cmd_off":  struct.unpack('>H', h[228:230])[0],
              "pm_off":   struct.unpack('>H', h[230:232])[0],
@@ -451,8 +462,21 @@ class IsoNav(object):
                 ut_abs = (ifo + ptr) * 2048
             nr_lus = struct.unpack('>H', self.rd(ut_abs, 2))[0]
             if not (1 <= nr_lus < 100): return None
+            # Language-unit walk, matching the RTL's S_LU_EVAL exactly: first
+            # LU whose lang_code == lang_pref (full u16) with a sane
+            # lang_start_byte wins; exhausted -> LU[0]. (The old hardcoded
+            # LU[0] made the golden model index a DIFFERENT PGCIT than the
+            # RTL on any multi-LU disc -- the Blade Runner disc class.)
             lu0 = struct.unpack('>I', self.rd(ut_abs + 12, 4))[0]
-            pit_abs = ut_abs + lu0
+            pick = lu0
+            for i in range(nr_lus):
+                e = self.rd(ut_abs + 8 + i*8, 8)
+                lang = struct.unpack('>H', e[0:2])[0]
+                start = struct.unpack('>I', e[4:8])[0]
+                if lang == self.lang_pref and 8 <= start <= 2097151:
+                    pick = start
+                    break
+            pit_abs = ut_abs + pick
         nr_srp = struct.unpack('>H', self.rd(pit_abs, 2))[0]
         out = []
         # PGCN is a 15-bit DVD field and real discs DO exceed 255 PGCs per PGCIT
@@ -473,6 +497,33 @@ class IsoNav(object):
 # =============================================================================
 ENTRY_ROOT = 3
 FUSE = 4096
+
+def aud_stream_map(logical, audio_ctl, dom_title, map_valid=True):
+    """Golden model of dvd/aud_stream_map.sv: resolve a LOGICAL audio stream
+    number (SPRM1 / the user's track pick) to the PHYSICAL substream index the
+    demux filters on, through the PGC's audio_control[8] table.
+
+    Mirrors libdvdnav vm_get_audio_stream (vmget.c:111) + the
+    vm_get_audio_active_stream first-available fallback (vmget.c:169), with ONE
+    documented deviation: where libdvdnav returns -1 (no stream resolvable in a
+    title PGC), we return the logical number unchanged (identity = the
+    pre-mapping behaviour), so a PGC that authors no audio_control at all is
+    bit-identical to the old core. map_valid=False (no PGC parsed / linear
+    playback) is the identity for the same reason."""
+    if not map_valid:
+        return logical & 7
+    log_eff = (logical & 7) if dom_title else 0    # menus force logical 0
+    avail = [(w >> 15) & 1 for w in audio_ctl]
+    phys  = [(w >> 8) & 7 for w in audio_ctl]
+    if avail[log_eff]:
+        return phys[log_eff]
+    if not dom_title:
+        return 0                                   # vmget.c: non-title miss -> 0
+    for n in range(8):
+        if avail[n]:
+            return phys[n]                         # first-available fallback
+    return logical & 7                             # DEVIATION: identity, not -1
+
 
 class VM(object):
     def __init__(self, nav, verbose=True):
@@ -544,8 +595,13 @@ class VM(object):
         if pgn and self.pgc["pm"] and pgn <= len(self.pgc["pm"]):
             cell = self.pgc["pm"][pgn - 1] - 1
         self.cell = cell if cell < max(self.pgc["nr_cells"], 1) else 0
-        self.log("  [reader] loaded %s vts=%d PGCN %d (cells=%d, start cell %d)"
-                 % (DOM_NAME[dom], vts, pgcn, self.pgc["nr_cells"], self.cell))
+        ast = self.regs.sprm[1] & 0xFF
+        phys = aud_stream_map(ast if ast < 8 else 0, self.pgc["audio_ctl"],
+                              dom == DOM_TT)
+        self.log("  [reader] loaded %s vts=%d PGCN %d (cells=%d, start cell %d,"
+                 " aud SPRM1=%d -> phys %d)"
+                 % (DOM_NAME[dom], vts, pgcn, self.pgc["nr_cells"], self.cell,
+                    ast, phys))
         if self.dom == DOM_TT:
             self.regs.sprm[6] = pgcn        # TT_PGCN
             self.came_via_menukey = False   # a title plays -> drop the toggle state
