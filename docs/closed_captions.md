@@ -66,8 +66,14 @@ round.
 
 ### Next step
 
-**Round 4 is the current build: `releases/DVD_cc21r3_20260826_2129.rbf`** (SEED 3 held,
-clk_dec 93.43/88.86, implicit-net gate clean) — see the round-3 entry in §6 first. The round-3 rbf
+**Round 5 is the current build: `releases/DVD_cc21r4_20260827_0004.rbf`** (SEED 9,
+clk_dec 86.47/87.92 — above the gate at both corners; its `_MARGINAL_` sibling from SEED 3
+is not to be flashed). Round 4 confirmed **captions decode on C1 on a real television**;
+round 5 chases the residual scattered-dropped-characters symptom with ~500 ns shaped data
+edges (the spec's transition, vs the 74 ns square steps that make a marginal slicer fail
+parity — and 608 decoders *drop* bad-parity bytes, which reads as missing letters) plus a
+skid-hold de-interleave that can no longer drop a bunched-parity pair (measured harmless on
+MiB/Matrix, deleted on principle). See §6. The round-3 rbf
 (`DVD_cc21r2_20260826_2022.rbf`) shipped with an UNDRIVEN `cc_line` net (an edit had
 deleted the wire declaration; Quartus grounded it) — the whole caption chain was dead, so
 it tested nothing about the field fix. Superseded, along with `DVD_cc21_20260826_2006.rbf`
@@ -432,6 +438,33 @@ Three guards now exist so this class cannot recur:
 3. **`build_release.sh` fails on any Warning 10236** in the map report, listing the nets.
    (A pre-existing benign one — `vld_err` in `emu.sv`, driven and consumed under the same
    implicit name — was declared properly so the gate can be zero-tolerance.)
+
+### Round 4 (2026-08-26): ✅ CAPTIONS DECODE ON C1 — residual: scattered dropped characters
+
+With the round-3 wiring restored and the round-2 field fix finally reaching the pins,
+**a real television decodes CC1 through the YC active encoder board over composite**. The
+feature works end to end. Residual symptom: letters missing mid-word and occasional words
+run together (a vanished space).
+
+Diagnosed measurement-first (round 5):
+
+- **The de-interleave was exonerated by replaying it over the real pair streams** (~13 min
+  each): Matrix alternates field parity perfectly (0 drops) and MiB's 7 bunching events
+  would have dropped null padding only — zero data-carrying pairs. So the pacing logic was
+  not eating the letters on these discs.
+- That leaves the analog domain, with a real spec gap on our side: **EIA-608 data
+  transitions are specified shaped; we transmitted square edges with 74 ns steps.** Edges
+  that sharp ring after the encoder's filtering, and a 608 decoder **drops any byte whose
+  parity check fails** — which displays exactly as missing letters and eaten spaces, never
+  as garbage on screen.
+
+Round-5 changes: data-bit transitions shaped through the shared half-cosine over ~500 ns
+(max per-dot step 48 vs the old 128 cliff; >1.3 µs plateau preserved per bit; a virtual
+forced-zero tail bit ramps the final logic-1 down). And the drop-on-mismatch became a
+1-entry **skid hold** — measured harmless here, deleted on principle; `cc_line21_tb` [6]
+(slope bound) and [7] (bunched parity in order) pin both. ⚠ The television itself is still
+unexonerated — there is no second line-21 source to A/B against — but shaped edges are
+correct regardless of which side the marginality lives on.
 
 ### `P1O[44] CC Test Line` — the diagnostic that was missing
 
