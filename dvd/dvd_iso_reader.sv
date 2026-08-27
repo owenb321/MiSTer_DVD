@@ -447,7 +447,21 @@ module dvd_iso_reader #(
     // = sel_valid ? target_vtsn : best_vtsn). A JumpTT 66 that ends on 52 shows
     // play_vtsn=52 here.
     output     [7:0]  debug_play_vtsn,
-    output     [7:0]  debug_target_vtsn
+    output     [7:0]  debug_target_vtsn,
+
+    // Last pgc_error's cause, latched at the error site (overlay row 26 —
+    // replaced the retired nav_pci dbg_promo probe, 2026-08-27). Format
+    // {reason[15:13], nr_srp_sat[12:8], want_pgcn[7:0]}:
+    //   1 = PGCIT empty (nr_pgci_srp == 0)
+    //   2 = requested PGCN out of the PGCIT/LU's range  <- the failed-menu-link
+    //       signature (e.g. a page-2 LinkPGCN valid in one language unit but
+    //       not the one the Player Language picked)
+    //   3 = malformed pgc_start_byte     4 = JumpTT TT_SRPT resolve failed
+    //   5 = no VMGM/VTSM PGCI_UT         6 = malformed PGCI_UT header
+    //   7 = VTS / menu VOB not found
+    // nr_srp_sat = the PGCIT's SRP count saturated to 31; want_pgcn = the
+    // requested PGCN's low byte. Cleared on rst_n only (a diagnostic latch).
+    output reg [15:0] dbg_pgcerr
 );
 
 // =========================================================================
@@ -1756,6 +1770,7 @@ always @(posedge clk or negedge rst_n) begin
         pgc_ctl_wdata <= 32'd0;
         pgc_ctl_valid <= 1'b0;
         pgc_dom_tt    <= 1'b0;
+        dbg_pgcerr    <= 16'd0;
         wacc         <= 24'd0;
         jump_pending <= 1'b0;
         jump_ctx     <= 1'b0;
@@ -2801,6 +2816,7 @@ always @(posedge clk or negedge rst_n) begin
                 if (sel_i >= grp_count) begin
                     if (sel_ret) begin
                         pgc_error <= 1'b1;             // VTS not found -> menu jump fails
+                        dbg_pgcerr <= {3'd7, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]), want_pgcn[7:0]};
                         state     <= S_DONE;
                     end else
                         state <= S_PGC_BEGIN;          // not found -> largest-VTS
@@ -2822,6 +2838,7 @@ always @(posedge clk or negedge rst_n) begin
                             state      <= S_SECREAD;
                         end else begin
                             pgc_error <= 1'b1;         // no VTSI / no menu VOB
+                            dbg_pgcerr <= {3'd7, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]), want_pgcn[7:0]};
                             state     <= S_DONE;
                         end
                     end else begin
@@ -3121,6 +3138,7 @@ always @(posedge clk or negedge rst_n) begin
                 if (nr_pgci_srp == 16'd0) begin
                     if (jump_ctx && dom != DOM_TT) begin
                         pgc_error <= 1'b1;
+                        dbg_pgcerr <= {3'd1, 5'd0, want_pgcn[7:0]};
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;             // no PGCs -> linear title
@@ -3130,7 +3148,8 @@ always @(posedge clk or negedge rst_n) begin
                         scan_mode <= 1'b0;
                         state     <= S_SRP_FETCH;
                     end else if (jump_ctx && dom != DOM_TT) begin
-                        pgc_error <= 1'b1;
+                        pgc_error <= 1'b1;     // requested PGCN out of range
+                        dbg_pgcerr <= {3'd2, ((nr_pgci_srp > 16'd31) ? 5'd31 : nr_pgci_srp[4:0]), want_pgcn[7:0]};
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;
@@ -3178,6 +3197,7 @@ always @(posedge clk or negedge rst_n) begin
                     // pgc_start_byte beyond 2 MB = malformed PGCIT
                     if (jump_ctx && dom != DOM_TT) begin
                         pgc_error <= 1'b1;
+                        dbg_pgcerr <= {3'd3, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]), want_pgcn[7:0]};
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;
@@ -3550,8 +3570,11 @@ always @(posedge clk or negedge rst_n) begin
                             scan_mode  <= 1'b0;
                             state      <= (((link_pgcn_u != 16'd0) ? link_pgcn_u : link_pgcn_c)
                                            <= nr_srp_l) ? S_SRP_FETCH : S_DONE;
-                            if (((link_pgcn_u != 16'd0) ? link_pgcn_u : link_pgcn_c) > nr_srp_l)
+                            if (((link_pgcn_u != 16'd0) ? link_pgcn_u : link_pgcn_c) > nr_srp_l) begin
                                 pgc_error <= 1'b1;
+                                dbg_pgcerr <= {3'd2, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]),
+                                               ((link_pgcn_u != 16'd0) ? link_pgcn_u[7:0] : link_pgcn_c[7:0])};
+                            end
                         end else begin
                             pgc_error <= 1'b1;
                             state     <= S_DONE;
@@ -4185,6 +4208,7 @@ always @(posedge clk or negedge rst_n) begin
                 if (tt_srpt_ptr == 32'd0 || tt_srpt_ptr > 32'd65535 ||
                     jttn_l == 7'd0) begin
                     pgc_error <= 1'b1;
+                    dbg_pgcerr <= {3'd4, 5'd0, 1'b0, jttn_l};
                     state     <= S_DONE;
                 end else begin
                     sec_lba    <= vmgi_lba + tt_srpt_ptr;
@@ -4202,6 +4226,7 @@ always @(posedge clk or negedge rst_n) begin
                 // rbuf@0 = TT_SRP[ttn-1]: title_set_nr @+6, vts_ttn @+7
                 if (rbuf[6] == 8'd0 || rbuf[6] > 8'd99 || rbuf[7] == 8'd0) begin
                     pgc_error <= 1'b1;
+                    dbg_pgcerr <= {3'd4, 5'd1, 1'b0, jttn_l};
                     state     <= S_DONE;
                 end else begin
                     want_ttn    <= rbuf[7][6:0];
@@ -4223,6 +4248,7 @@ always @(posedge clk or negedge rst_n) begin
             S_JMP_VMGI: begin
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     pgc_error <= 1'b1;
+                    dbg_pgcerr <= {3'd5, 5'd0, want_pgcn[7:0]};
                     state     <= S_DONE;
                 end else if (dom == DOM_FP) begin
                     // FP PGC: byte offset rel. to the VMGI start
@@ -4252,6 +4278,7 @@ always @(posedge clk or negedge rst_n) begin
             S_JMP_VTSM: begin
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     pgc_error <= 1'b1;     // no VTSM menu -> emu falls back to VMGM
+                    dbg_pgcerr <= {3'd5, 5'd1, want_pgcn[7:0]};
                     state     <= S_DONE;
                 end else begin
                     // Latch the UT target (uses the current @208 rbuf), then grab
@@ -4293,6 +4320,7 @@ always @(posedge clk or negedge rst_n) begin
                 if (ut_nr_lus == 16'd0 || ut_nr_lus > 16'd99 ||
                     ut_lu0_start < 32'd8 || ut_lu0_start > 32'd2097151) begin
                     pgc_error <= 1'b1;
+                    dbg_pgcerr <= {3'd6, 5'd0, want_pgcn[7:0]};
                     state     <= S_DONE;
                 end else if (ut_nr_lus == 16'd1) begin
                     pit_sec    <= jmp_ut_lba + (ut_lu0_start[20:0] >> 11);

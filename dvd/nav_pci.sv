@@ -167,13 +167,9 @@ module nav_pci #(
     output reg  [63:0] btn_cmd,       // selected button's 8-byte VM command
     output reg         btn_cmd_valid, // pulse: activated (execute/flash)
 
-    // DVD-FORK DEBUG (2026-08-05, branch highlight-early regression): WHICH path
-    // promoted the last armed HLI + how long it had waited. The cap/settle fixes
-    // changed nothing on HW, so promotion must flow through a path other than
-    // the fallback — this names it. {promo_cnt[3:0] (wrapping, one per arm
-    // promotion), src[1:0] (1=STC-scheduled, 2=menu-settled, 3=timer),
-    // pend_age_at_promo[26:17] (~4.85 ms units: 2^17 clk_sys)}.
-    output reg  [15:0] dbg_promo,
+    // (The 2026-08-05 dbg_promo promotion probe was RETIRED 2026-08-27 — its
+    // question was answered by the HW rounds; overlay row 26 is now the reader's
+    // pgc_error reason latch. pend_age stays: it drives PROMOTE_FALLBACK.)
 
     // state read-backs
     output wire        btns_armed,    // an HLI with buttons is committed
@@ -526,10 +522,6 @@ always @(posedge clk or negedge rst_n) begin
                 fetched <= 1'b0;
                 h_forever <= 1'b0;
             end else begin
-                // promotion-source probe (see dbg_promo port comment)
-                dbg_promo <= {dbg_promo[15:12] + 4'd1,
-                              (nxt_sched ? 2'd1 : (menu_settled ? 2'd2 : 2'd3)),
-                              pend_age[26:17]};
                 disp_bank <= nxt_bank;
                 armed     <= 1'b1;
                 h_sptm    <= nxt_sptm;

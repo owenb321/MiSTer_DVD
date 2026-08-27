@@ -1186,7 +1186,7 @@ wire rt_edge    = joystick_0[0] & ~joy_prev[0];
 
 // nav_pci interface (Phase 3)
 wire        hl_btns_armed;
-wire [15:0] hl_dbg_promo;     // TEMP highlight-promotion probe (overlay row 26)
+wire [15:0] rd_dbg_pgcerr;    // reader pgc_error reason latch (overlay row 26)
 // STC display-coherence latch for nav_pci's scheduled promotion path: 1 when the
 // most recent load/seek/jump FLUSHED the decoder (keep_vbuf=0 — STC anchor and
 // display reset together). A keep_vbuf menu->menu hop clears it (the re-anchored
@@ -2316,7 +2316,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     .debug_iso_mode       (iso_mode_w),
     .debug_iso_error      (iso_error_w),
     .debug_play_vtsn      (rdr_play_vtsn),
-    .debug_target_vtsn    (rdr_target_vtsn)
+    .debug_target_vtsn    (rdr_target_vtsn),
+    .dbg_pgcerr           (rd_dbg_pgcerr)
 );
 
 // =========================================================================
@@ -3955,9 +3956,11 @@ debug_overlay debug_overlay_inst (
     .dbg23  (tr_ld0),                               // PGC-load history [0] newest {menu_dom,vts,pgcn}
     .dbg24  (tr_ld1),                               // PGC-load history [1]
     .dbg25  (tr_ld2),                               // PGC-load history [2]
-    .dbg26  (hl_dbg_promo),                         // TEMP (2026-08-05): highlight promotion probe
-                                                    // {cnt[15:12], src[11:10] 1=sched/2=settle/3=timer,
-                                                    //  pend_age@promo[9:0] ~4.85ms units} (was tr_ld3)
+    .dbg26  (rd_dbg_pgcerr),                        // last pgc_error {reason[15:13], nr_srp_sat[12:8],
+                                                    //  want_pgcn[7:0]} — reason 1=empty PGCIT,
+                                                    //  2=PGCN out of range (the failed-menu-link case),
+                                                    //  3=bad pgc_start, 4=JumpTT resolve, 5=no PGCI_UT,
+                                                    //  6=bad UT header, 7=VTS/menu-VOB not found
     .flowctl (dbg_flowctl),                         // row 27: {vbuf_fill, flow-control flags}
     .ov_on        (ov_on),
     .ov_r         (ov_r),
@@ -4203,7 +4206,6 @@ nav_pci nav_pci_inst (
     .hl_coli    (hl_coli),
     .btn_cmd    (hl_btn_cmd),
     .btn_cmd_valid (hl_btn_cmd_valid),
-    .dbg_promo  (hl_dbg_promo),          // TEMP row-26 diagnostic: promotion path + wait age
     .btns_armed (hl_btns_armed),
     .btn_sel    (hl_btn_sel),
     .dbg_btn_ns (hl_btn_ns),         // gate in-title multi-button menu nav (Scene It)
