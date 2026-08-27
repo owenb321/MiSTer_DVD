@@ -993,7 +993,8 @@ wrong; the measurement split them.
   guess below was **WRONG** — root-caused 2026-08-26 to an upstream `motcomp_picbuf.v` defect:
   the fwd/bwd reference swap was missing the `~vld_last_frame` guard its two sibling blocks
   have, so at every `sequence_end_code` the decode target could alias the slot the display was
-  scanning out, and the new picture painted in on screen. Fixed by adding the guard; see
+  scanning out, and the new picture painted in on screen. Fixed by adding the guard —
+  **✅ HW-CONFIRMED 2026-08-27 (user report): HP artifacting gone, no regressions**; see
   `docs/dvd_menu_refinements.md` §5 and `bench/dvd/motcomp_picbuf_tb.sv`.
   ⚠ Note this also proved the disc's stills get **no** cold re-decode at all: they are
   *title-domain* (`VTS_PGCIT`) `still_time=255` cells, and `dvd_iso_reader.sv:4017` gates the

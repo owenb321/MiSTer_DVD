@@ -159,7 +159,8 @@ worse maintenance burden than targeted in-place edits. So:
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **PIXELATED MENU STILLS — root-caused + fixed in fabric (2026-08-26, branch
-  `fix/picbuf-display-slot-alias`); ⏳ HW-CONFIRM PENDING.** A menu/game still could come up
+  `fix/picbuf-display-slot-alias`); ✅ HW-CONFIRMED 2026-08-27 (user report: Harry Potter
+  artifacting GONE, no regressions on other discs; build `DVD_picbufalias`).** A menu/game still could come up
   **blocky, "like it hasn't finished loading"** because the decoder was writing the new picture
   **into the frame slot the display was scanning out**. `rtl/mpeg2/motcomp_picbuf.v` guards its
   `current_frame` (:268/:278) and `prev_i_p_frame` (:355) updates with `~vld_last_frame`, but the
@@ -179,8 +180,8 @@ worse maintenance burden than targeted in-place edits. So:
   Potter Interactive disc, every `still_time=255` still is `SEQ GOP PIC:I SEQ_END` (so a still
   arms the collision for whatever decodes next ⇒ still→still navigation collided every time)
   while every video/transition cell ends on a coded B (⇒ never armed). So this does **not**
-  explain the reported jump-vs-natural asymmetry, nor a multi-second artifact — expect it to fix
-  a blocky flash. Also learned: that disc's stills are **title-domain**, and the menu-still cold
+  explain the reported jump-vs-natural asymmetry, nor a multi-second artifact — yet on HW the fix
+  cleared ALL observed artifacting on the disc, so those observation-level discrepancies closed with it. Also learned: that disc's stills are **title-domain**, and the menu-still cold
   re-decode (`dvd_iso_reader.sv:4017`) is `menu_dom`-gated, so it never ran there at all — a
   separate, deliberately deferred item. Detail: `docs/dvd_menu_refinements.md` §5.
   A follow-up **audit of the rest of the upstream decoder found no further fix-now
