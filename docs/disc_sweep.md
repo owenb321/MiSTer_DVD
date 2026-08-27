@@ -86,6 +86,8 @@ css_scan.py}` (the first needs the next three importable beside it). Per disc:
 ```bash
 tools/css_scan.py  <iso>                      # pre-flight (above)
 tools/dvd_census.py <iso>                     # structure one-liner + feature flags
+tools/dvd_census.py --captions <iso>          # + line-21 CC scan (needs cc_scan.py
+                                              #   and video_cadence_census.py beside it)
 tools/dvd_vm_ref.py boot    <iso>             # predicted boot landing
 tools/dvd_vm_ref.py menu    <iso>             # predicted Menu-key landing
 tools/dvd_vm_ref.py postend <iso>             # predicted title-end POST dispatch

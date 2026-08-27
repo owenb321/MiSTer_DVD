@@ -60,6 +60,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              init_cnt_out, sync_rst_out, vbw_almost_full_out,
              dbg_lines_displayed, dbg_first_vpos, dbg_last_vpos,   // DVD-FORK DEBUG (256-line strobe)
              dbg_prof0, dbg_prof1,                                 // DVD-FORK DEBUG (stage profiler)
+             cc_pair_valid, cc_pair, cc_pair_field,               // DVD-FORK (line-21 CC): EIA-608 pairs from user_data (clk domain)
              vertical_size_out,                                   // DVD-FORK FIX (PAL auto-detect): sequence-header frame height
              horizontal_size_out,                                 // DVD-FORK (CRT anamorphic overlay align): sequence-header frame width
              aspect_ratio_out,                                    // DVD-FORK FIX (aspect ratio): sequence-header display-AR code
@@ -421,7 +422,14 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire              motion_vert_field_select_1_1;
   wire              second_field;
   wire              update_picture_buffers;
+  output            cc_pair_valid;      // DVD-FORK (line-21 CC): one pulse per EIA-608 byte pair
+  output     [15:0] cc_pair;            // DVD-FORK (line-21 CC): {cc_byte_1, cc_byte_2}
+  output            cc_pair_field;      // DVD-FORK (line-21 CC): 1 = field 1 (CC1/CC2)
+
   wire              flags_commit;       // DVD-FORK (round 11): per-picture display flags valid (coding ext parsed)
+  /* DVD-FORK (line-21 CC): straight passthrough of the VLD's user_data snoop to
+   * the top level. Sniffed in the clk_dec domain and crossed to clk_sys by the
+   * inserter's own fifo_dc — see dvd/cc_line21.sv. */
   wire              last_frame;
   wire         [1:0]chroma_format;
   wire              motion_vector_valid;    // asserted when pmv_x_x_x, dmv_x_x valid
@@ -972,6 +980,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .second_field(second_field),                             // to motcomp
     .update_picture_buffers(update_picture_buffers),         // to motcomp
     .flags_commit(flags_commit),                             // DVD-FORK (round 11): to motcomp/picbuf
+    .cc_pair_valid(cc_pair_valid),                           // DVD-FORK (line-21 CC): to dvd/cc_line21.sv
+    .cc_pair(cc_pair),                                       // DVD-FORK (line-21 CC)
+    .cc_pair_field(cc_pair_field),                           // DVD-FORK (line-21 CC)
     .last_frame(last_frame),                                 // to motcomp
     .chroma_format(chroma_format),                           // to motcomp
     .motion_vector_valid(motion_vector_valid),               // to motcomp

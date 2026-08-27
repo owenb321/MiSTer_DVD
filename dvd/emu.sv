@@ -582,6 +582,8 @@ parameter CONF_STR = {
     // VIDEO_ARX/ARY switch to 4:3 while active so HDMI geometry stays correct.
     // status[4:3]: 0=Auto, 1=Fit, 2=Letterbox, 3=Crop. See docs/crt_anamorphic.md.
     "O[4:3],Analog Aspect,Auto,Fit,Letterbox,Crop;",
+    // (Line-21 CC moved to the debug page — see P1O[14] below. Normal users never
+    // need it: the data is invisible in the VBI and correct behavior is On.)
     // Video Standard: NTSC (720x480p @ 59.94 Hz, 27 MHz dot clock) or PAL (720x576p
     // @ 50 Hz, same 27 MHz clock — 864x625 total = 50.0 Hz). Switches the runtime
     // modeline-write walk AND av_sync's STC tick rate. Auto (default) picks from the
@@ -639,6 +641,22 @@ parameter CONF_STR = {
     // OUTPUT mode (CRT O[4:3]=Letterbox) for correct silhouette geometry. status[15].
     // See memory mib-visual-commentary-letterbox-substream / docs/dvd_nav.md.
     "P1O[15],Force 4:3 Subpics,Off,On;",
+    // DVD-FORK (line-21 CC diagnostic): paint the caption waveform on a VISIBLE
+    // line instead of line 21. The bits are otherwise invisible — they live in the
+    // blanking interval — so without this there is no way to tell "the TV is not
+    // decoding" from "no captions are reaching the output". See docs/closed_captions.md §6.
+    // DVD-FORK (line-21 closed captions): re-inject the disc's EIA-608 caption
+    // bytes onto line 21 of the analog raster so the TELEVISION's own decoder
+    // renders them, like a real player (dvd/cc_line21.sv, docs/closed_captions.md;
+    // ✅ HW-CONFIRMED 2026-08-26). NTSC + analog only; lives in the VBI so it is
+    // invisible to anything not looking for it — hence default On, and buried
+    // here (user decision, post-HW-confirm): the Off exists only as an escape
+    // hatch for capture devices / upscalers that display VBI lines or the rare
+    // TV whose caption decoder misbehaves on caption data — the same "CC output
+    // on/off" setting real DVD players kept in their setup menus. Reuses bit 14,
+    // freed when O[14] "CRT 480i Out" was retired.
+    "P1O[14],Line-21 CC,On,Off;",
+    "P1O[44],CC Test Line,Off,On;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
     // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
@@ -3115,6 +3133,14 @@ always @(posedge clk_dec) begin
     end
 end
 
+wire        vld_err;         // decoder parse-error flag (was an implicit net — see the
+                             // build_release.sh implicit-net gate, instituted 2026-08-26)
+// DVD-FORK (line-21 CC): caption byte pairs out of the VLD's user_data snoop.
+// clk_dec domain — do NOT sample these in clk_sys directly.
+wire        core_cc_valid;
+wire [15:0] core_cc_pair;
+wire        core_cc_field;
+
 mpeg2video mpeg2video_inst (
     .clk        (clk_dec),   // 81 MHz — decoder COMPUTE clock (3×27). Was 27 (compute-
                              // bound on D1: bridge idle ~100%, core_busy high). The
@@ -3173,6 +3199,11 @@ mpeg2video mpeg2video_inst (
     .dbg_last_vpos  (core_dbg_last_vpos),
     .dbg_prof0       (core_dbg_prof0),                 // DVD-FORK DEBUG (stage profiler) rows 10/11
     .dbg_prof1       (core_dbg_prof1),
+    // DVD-FORK (line-21 CC): EIA-608 pairs sniffed from user_data, in clk_dec.
+    // They cross to clk_sys inside dvd/cc_line21.sv's own fifo_dc.
+    .cc_pair_valid     (core_cc_valid),
+    .cc_pair           (core_cc_pair),
+    .cc_pair_field     (core_cc_field),
     .vertical_size_out (core_vertical_size),           // DVD-FORK FIX (PAL auto-detect): seq-header frame height (clk_dec)
     .horizontal_size_out (core_horizontal_size),       // DVD-FORK (CRT anamorphic overlay align): seq-header frame width (clk_dec)
     .aspect_ratio_out  (core_aspect_ratio),            // DVD-FORK FIX (aspect ratio): seq-header display-AR code (clk_dec)
@@ -4517,7 +4548,20 @@ re_interlace re_interlace_inst (
     .out_vs  (VGA2_VS),
     .out_de  (VGA2_DE),
     .out_ce  (VGA2_CE),
-    .locked  (ri_locked)
+    .locked  (ri_locked),
+    // Line-21 closed captions. Gated on the analog raster being up (the inserter
+    // writes the analog VBI and nothing else) and on NTSC inside the module.
+    // load_flush is the same event that resets ps_demux and re-anchors av_sync on
+    // a load / seek / menu jump, so the caption backlog is dropped with everything
+    // else rather than painting the pre-seek sentence onto the new scene.
+    .cc_enable      (analog_eff & ~status[14]),
+    .cc_test        (status[44]),
+    .cc_flush       (load_flush),
+    .dec_clk        (clk_dec),
+    .cc_pair_valid  (core_cc_valid),
+    .cc_pair        (core_cc_pair),
+    .cc_pair_field  (core_cc_field),
+    .cc_active      ()
 );
 assign VGA2_EN = analog_eff;
 

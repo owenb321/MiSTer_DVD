@@ -49,6 +49,12 @@ pause. SVCD's 480-wide picture fills both HDMI and the analog CRT output. No men
 15 kHz 480i/576i raster on the analog pins. It engages from `MiSTer.ini` alone, like any
 other core. A field-passthrough mode hands the CRT the disc's authored fields 1:1.
 
+**Closed captions (line 21)** — NTSC discs carry EIA-608 captions hidden in the MPEG-2
+video stream, separately from subtitles. The core extracts them and re-modulates them
+onto **line 21 of the analog output**, exactly as a real DVD player does, so your
+television's own caption decoder displays them. Analog output only, and it needs a set
+with a caption decoder (every US television 13" and larger since 1993 has one).
+
 **Audio** — AC-3 and MPEG-1 Layer II (MP2) decoded entirely in fabric (AC-3 5.1
 downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
 over S/PDIF to a receiver.
@@ -68,6 +74,12 @@ HUD and seek bar.
   `CSS ENCRYPTED` on screen, and mutes rather than emitting loud static.
 - **ISO9660 only.** UDF-only images will not load; the core reports
   `UNSUPPORTED IMAGE`.
+- **Closed captions go out on line 21 of the ANALOG output only** — there is no
+  on-screen caption renderer, so nothing appears on HDMI, and your television has to
+  decode them (line-21 data reaches a decoder over composite and S-video, and over
+  component on many sets; consumer sets generally do not slice captions from RGB).
+  Captions are NTSC-only; PAL discs use subtitles instead.
+  Roughly 1 disc in 6 carries them at all — see [docs/closed_captions.md](docs/closed_captions.md).
 - **Only 720×480, 720×576 and the MPEG-1 SIF sizes (352×240, 352×288) are well
   tested.** Other DVD-compliant MPEG-2 resolutions (704×480, 352×480 half-D1) are
   accepted by the spec but have had little or no testing here.
@@ -286,6 +298,19 @@ overrides `MiSTer.ini` and persists across reloads.
 that path. The rest (`Debug Overlay`, `Title VTS`, `Audio Genlock`, `Force 4:3 Subpics`,
 `Film 24p Out`, `A/V Offset`) are tuning and diagnostic levers; `A/V Offset` defaults to
 +100 ms, which is the correct null for both NTSC film and PAL.
+
+`Line-21 CC` (default **On**) re-inserts the disc's closed captions on line 21 of the
+analog output for your TV to decode — NTSC + analog only, invisible in the blanking
+interval otherwise. It lives here rather than on the main page because correct behavior
+is simply On; the Off is an escape hatch for capture devices or upscalers that display
+VBI lines. `CC Test Line` (default **Off**) is the diagnostic for closed captions. They normally go
+out in the blanking interval, where they are invisible unless your television decodes
+them — so if captions do not appear there is no way to tell "the TV is not decoding" from
+"no caption data is reaching the output". Turn this on and the same waveform is painted on
+a visible line near the top of the picture instead: **a band of dashes that changes as
+dialogue changes** means everything on the core's side is working, and only the TV-side
+setup is left. Nothing at all means the analog raster is not engaged or the disc has no
+captions (only about one disc in six does).
 
 ## On-screen messages
 

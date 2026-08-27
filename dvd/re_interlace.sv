@@ -71,6 +71,11 @@
 // issue for no gain.
 
 `include "timescale.v"
+// An undeclared identifier becomes a compile ERROR, not a silent undriven net.
+// Instituted after round 3 (2026-08-26): an edit deleted the cc_line declaration,
+// Verilog created an implicit net, Quartus tied it to ground, and the whole
+// caption chain went dead on hardware while every bench still passed.
+`default_nettype none
 
 module re_interlace (
     input             clk,          // clk_sys 27 MHz
@@ -82,6 +87,19 @@ module re_interlace (
     input             pal,          // 1 = 576i params (864x312/313), 0 = 480i (858x262/263)
     input             fieldpass,    // 1 = main raster is the pixrep INTERLACED fields raster (re-time
                                     //     1:1); 0 = standard progressive raster (derive fields)
+
+    // line-21 closed captions (dvd/cc_line21.sv) — the caption inserter lives here
+    // because the line number and the field parity are properties of THIS raster's
+    // modeline, and nothing outside should have to re-derive them.
+    input             cc_enable,    // captions wanted (NTSC only — see cc_line below)
+    input             cc_test,      // diagnostic: paint the caption waveform on a VISIBLE
+                                    //   line instead of line 21, so it can be seen without
+                                    //   a scope or a caption-capable TV
+    input             cc_flush,     // seek / new title: drop the caption backlog
+    input             dec_clk,      // clk_dec — the VLD's domain
+    input             cc_pair_valid,
+    input      [15:0] cc_pair,
+    input             cc_pair_field,
 
     // main raster tap — the registered vga_*_q output stage plus its matching
     // coordinates (emu delays core_h_pos/core_v_pos/core_pixel_en 1 clk to align)
@@ -100,7 +118,8 @@ module re_interlace (
     output reg        out_vs,
     output reg        out_de,
     output            out_ce,       // 13.5 MHz CE aligned to the out_* registers
-    output            locked        // diagnostics: RUN state reached
+    output            locked,       // diagnostics: RUN state reached
+    output            cc_active     // diagnostics: a caption pair is on the wire
 );
 
 // ---------------------------------------------------------------------------
@@ -274,21 +293,102 @@ always @(posedge clk) begin
 end
 
 // ---------------------------------------------------------------------------
+// Line-21 closed captions
+// ---------------------------------------------------------------------------
+// WHERE LINE 21 IS. sync_gen already publishes everything needed, so nothing in
+// syncgen.v changes: in interlaced mode v_pos = {v_cntr[10:0], ~odd_field}, so
+// sg_vpos[11:1] IS the field-relative line counter and sg_vpos[0] is the field
+// parity — both already aligned to sg_hpos through the same output pipeline.
+//
+// The line number derives two ways and they agree, which is the reason to trust
+// it without a set in front of us:
+//   * BY COUNT — NTSC line 21 is the 15th line after the vertical sync ends. Our
+//     vsync window is [244,247), so lines 247..261 are that back porch and 261 is
+//     its 15th. p_vlen (the short field's last line index) is exactly 261.
+//   * BY POSITION — line 21 is the last VBI line before active video. v_cntr 261
+//     is the last line before the counter wraps to 0 = the first active line.
+// The long field carries its extra line at the end (eff_vertical_length 262), so
+// 261 is the 15th line after vsync in BOTH fields — one constant covers both.
+//
+// WHICH FIELD — identified by SYNC TIMING, the way the television does, NOT by
+// picture content. This mapping has now been wrong in both directions once each,
+// so the full derivation stays here and bench/dvd/cc_field_map_tb.sv pins it by
+// measuring what a TV measures (the vsync leading-edge alignment):
+//
+//   * SMPTE 170M: broadcast FIELD 1's vertical sync begins coincident with a
+//     line boundary; FIELD 2's begins mid-line. That alignment is the ONLY thing
+//     a TV uses to name the fields.
+//   * In sync_gen, vs_ref_dot = odd_field ? 0 : halfline — the LINE-ALIGNED
+//     vsync is emitted during odd_field==1, i.e. in the blanking AFTER the
+//     TOP-content active lines. The 15 back-porch lines that follow it carry
+//     v_pos[0] = ~odd_field = 0, and the active field after the wrap is BOTTOM
+//     content. So broadcast field 1 = { line-aligned vsync, VBI with
+//     v_pos[0]==0, BOTTOM active } — consistent with NTSC being
+//     bottom-field-first (field 1 displays the bottom lines).
+//   * CC1/CC2 (and T1/T2) ride FIELD 1's line 21, hence: transmit the field-1
+//     slot on the v_pos[0]==0 VBI line -> cc_fld1 = ~sg_vpos[0].
+//
+// ⚠ THE TRAP (fell into it round 1): content parity does NOT identify the
+// broadcast field. The DVD decoder-side labels (TOP field = "field 1" in the
+// picture-coding sense) are about picture geometry; the TV's field 1 is about
+// sync phase, and in this raster TOP content displays inside SYNC field 2.
+// Round 1 "fixed" cc_fld1 to sg_vpos[0] on the content-based premise — flipping
+// a correct mapping — and the DE-gate bug masked it. Round 2 on HW (CC Test
+// Line fine, C1/C2/T1/T2 all empty — every one a FIELD-1 service) exposed it.
+//
+// CC_TEST moves the burst to a visible line near the top of the picture. The
+// waveform is unchanged — same data, same rate, same levels — so what shows up is
+// literally the caption bits: a band of dashes that CHANGES AS DIALOGUE CHANGES,
+// and goes quiet when the disc sends null pairs. That distinguishes "extraction
+// and pacing work, the TV just isn't decoding" from "no data is arriving" without
+// a scope, which is otherwise impossible to tell apart from the sofa.
+wire [11:0] cc_vline = cc_test ? 12'd20 : p_vlen;
+wire        cc_line  = ~pal & (sg_vpos[11:1] == cc_vline);
+wire        cc_fld1  = ~sg_vpos[0];
+wire [7:0]  cc_level;
+wire        cc_level_en;
+
+cc_line21 cc (
+    .clk            (clk),
+    .rst_n          (rst_n),
+    .ce2            (ce2),
+    .dec_clk        (dec_clk),
+    .dec_pair_valid (cc_pair_valid),
+    .dec_pair       (cc_pair),
+    .dec_pair_field (cc_pair_field),
+    .enable         (cc_enable & ~pal),
+    .flush          (cc_flush),
+    .hpos           (sg_hpos),
+    .cc_line        (cc_line),
+    .field1         (cc_fld1),
+    .level          (cc_level),
+    .level_en       (cc_level_en),
+    .active         (cc_active)
+);
+
+// ---------------------------------------------------------------------------
 // Registered output stage (mirrors the main vga_*_q placement defense).
 // sg2's outputs hold each pixel for 2 clk27; rd_q (1-clk BRAM latency) is
 // stable by the NEXT ce2 tick, where the out_* registers latch pixel and syncs
 // together (non-blocking: sg_* still hold the old pixel's values there).
 // ---------------------------------------------------------------------------
-wire run = (state == S_RUN);
+wire run   = (state == S_RUN);
+// Normally VBI-only so a mis-derived line number can never punch a hole in the
+// picture; in test mode it deliberately paints over active video.
+wire cc_on = run & cc_level_en & (cc_test | ~sg_pixel_en);
 
 always @(posedge clk) begin
     if (!rst_n) begin
         out_r <= 8'd0; out_g <= 8'd0; out_b <= 8'd0;
         out_hs <= 1'b0; out_vs <= 1'b0; out_de <= 1'b0;
     end else if (ce2) begin
-        out_r  <= (run && sg_pixel_en) ? rd_q[23:16] : 8'd0;
-        out_g  <= (run && sg_pixel_en) ? rd_q[15:8]  : 8'd0;
-        out_b  <= (run && sg_pixel_en) ? rd_q[7:0]   : 8'd0;
+        // Captions ride the VBI, above the active region, so they never contend
+        // with a picture pixel — but the mux is written caption-first anyway so a
+        // mis-derived line number can only ever cost one blanking line, never
+        // punch a hole in the image. Equal on R/G/B = luma-only, no chroma.
+        out_r  <= cc_on ? cc_level : (run && sg_pixel_en) ? rd_q[23:16] : 8'd0;
+        out_g  <= cc_on ? cc_level : (run && sg_pixel_en) ? rd_q[15:8]  : 8'd0;
+        out_b  <= cc_on ? cc_level : (run && sg_pixel_en) ? rd_q[7:0]   : 8'd0;
         out_hs <= run ? sg_hsync : 1'b0;
         out_vs <= run ? sg_vsync : 1'b0;
         out_de <= run ? sg_pixel_en : 1'b0;
@@ -302,3 +402,5 @@ always @(posedge clk) ce2_q <= ce2;
 assign out_ce = ce2_q;
 
 endmodule
+
+`default_nettype wire   // restore for any file compiled after this one

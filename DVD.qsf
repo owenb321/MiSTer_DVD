@@ -44,6 +44,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/disp_vscale.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/crt_ov_map.sv
 # dual-raster analog output: progressive -> 15 kHz 480i/576i second raster (VGA2_*)
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/re_interlace.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/cc_line21.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ps_stream_fifo.sv
 # AC-3 reframer: re-frame demuxed AC-3 on 0x0B77 boundaries so audio_ring drops
 # whole AC-3 frames (clean) instead of PES chunks (pop). See dvd/ac3_reframer.sv.
@@ -594,4 +595,35 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # SEED 9 fitter TIMEOUT (2100s grind), SEED 11 routes + PASSES with margin
 # (clk_dec 88.88 @100C / 90.46 @-40C) -> releases/DVD_logores_20260826_1645.rbf.
 # Pinned SEED 11.
-set_global_assignment -name SEED 11
+#
+# CLOSED-CAPTIONS netlist (2026-08-26, feature/closed-captions): line-21 EIA-608
+# re-insertion (vld.v user_data snoop + dvd/cc_line21.sv + sys_top VBI un-gate +
+# O[14]/P1O[44] CONF_STR), rebased onto the post-0.1c main. A rough roll, worse
+# than main's own idle-logo netlist: SEED 11 grind ABANDONED (~43 min), SEED 7
+# and SEED 2 fitter TIMEOUT (1500s cap), SEED 5 routed 88.13/84.49 = below the
+# 86.0 gate, SEED 12 routed 70.4/74.43 deep-fringe FAIL. SEED 3 routes + PASSES
+# with margin (clk_dec 90.9 MHz @100C / 90.2 @-40C, a ~13-min healthy-class fit)
+# -> releases/DVD_cc21_20260826_2006.rbf. Pinned SEED 3 (the sweep tool rewrote
+# the assignment; this comment is the ledger). If this netlist family keeps
+# rolling this badly, the structural relief candidate is the mem_shim_burst
+# tag/valid/LRU flop arrays (~7,680 FF of high-fanout compare logic -> 1 M10K),
+# but that touches the 2-cycle hit pipeline's live lookup - own branch + HW gate.
+#
+# Round-2 field-fix netlist (same branch, one inverter on cc_fld1 + comments):
+# SEED 3 HELD first roll, and better -- clk_dec 94.71 MHz @100C / 92.26 @-40C
+# -> releases/DVD_cc21r2_20260826_2022.rbf. SEED 3 stays pinned.
+# ⚠ That rbf shipped an UNDRIVEN cc_line net (deleted declaration -> Quartus
+# grounded it; Warning 10236) -- captions dead on HW, superseded. Guards added:
+# default_nettype none in the cc files, a zero-tolerance 10236 gate in
+# build_release.sh, and bench/dvd/cc_e2e_tb.sv (TV model at the pins).
+# Round-3-fix netlist (wires restored + vld_err declared): SEED 3 held AGAIN --
+# clk_dec 93.43 @100C / 88.86 @-40C -> releases/DVD_cc21r3_20260826_2129.rbf.
+# Round-5 netlist (edge shaping + skid-hold de-interleave, HW round 4 = captions
+# DECODE on C1; chasing dropped characters): SEED 3 ground 30 min -> MARGINAL
+# 82.6/84.62 (not shipped). Sweep at gate 86.0: SEED 5 TIMEOUT, SEED 9 routes +
+# PASSES (86.47 @100C / 87.92 @-40C, slim but above gate both corners)
+# -> releases/DVD_cc21r4_20260827_0004.rbf. Pinned SEED 9 (sweep rewrote it).
+# Round-6 netlist (Line-21 CC toggle moved to the debug page, CONF_STR only):
+# SEED 9 held first roll, BETTER margin -- clk_dec 93.0 @100C / 88.6 @-40C
+# -> releases/DVD_cc21r5_20260827_0032.rbf. This is the merge candidate.
+set_global_assignment -name SEED 9

@@ -291,3 +291,18 @@ regains its same-parity premise in this mode (see the ⚠ note in `dvd/disp_vsca
 - [ ] `Analog Out = Interlaced` with no csync/ypbpr/sog set (RGBHV force case).
 - [ ] `direct_video=1` through an HDMI DAC: 15 kHz 480i on the DAC output.
 - [ ] `vga_scaler=1`: scaler output on the VGA pins (ini finally respected).
+
+---
+
+## Line-21 closed captions on this raster
+
+`dvd/re_interlace.sv` also instantiates `dvd/cc_line21.sv`, which writes the disc's
+EIA-608 caption bytes into **line 21** of this raster's vertical blanking interval so a
+television's own decoder can render them (NTSC only). The line number and field parity are
+read straight out of `sg_vpos` — in interlaced mode `v_pos = {v_cntr[10:0], ~odd_field}` —
+so `syncgen.v` needed no change, and the injection is gated on `~sg_pixel_en` so it can
+never reach active video.
+
+Why it lives here rather than in `emu.sv`: line 21's position is a property of *this*
+modeline (15th line after vsync end = `v_cntr` 261 = `p_vlen`), and nothing outside should
+have to re-derive it. Full design, measurements and the HW gate: `docs/closed_captions.md`.
