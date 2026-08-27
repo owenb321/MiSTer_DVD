@@ -69,9 +69,9 @@ round.
 
 ### Next step
 
-**Current build (merge candidate): `releases/DVD_cc21r5_20260827_0032.rbf`** (SEED 9,
-clk_dec 93.0/88.6 — healthy band; only change vs the HW-confirmed round-5 build is the
-Line-21 CC toggle moving to the debug page). The round-5 rbf (`DVD_cc21r4_20260827_0004`,
+**Current build: `releases/DVD_cc21r5_20260827_0032.rbf`** (SEED 9, clk_dec 93.0/88.6 —
+healthy band) — **✅ HW-confirmed 2026-08-26 (user report)**; only change vs the round-5
+build is the Line-21 CC toggle moving to the debug page. The round-5 rbf (`DVD_cc21r4_20260827_0004`,
 86.47/87.92) is the one HW-confirmed; its `_MARGINAL_` sibling from SEED 3 is not to be
 flashed. Round 4 confirmed **captions decode on C1 on a real television**;
 round 5 chases the residual scattered-dropped-characters symptom with ~500 ns shaped data
