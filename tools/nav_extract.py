@@ -336,6 +336,100 @@ def dsi_seek_map(dsi):
     return lbn, rows
 
 
+# ---------------------------------------------------------------------------
+# GOLDEN MODEL for dvd/dpad_seek.sv (O[45] "D-Pad Seek", Left/Right = -/+10 s,
+# Down/Up = -/+60 s). The RTL must reproduce dpad_resolve() offset-for-offset.
+# Mirrors the FSM exactly: greedy decomposition over the COARSE ladder
+# {120,60,30,10} s = forward table indices {0,1,2,3}, descending one rung on
+# END_OF_CELL and crediting the leftover seconds, then the FINE rungs 4..15
+# (first valid one, then STOP -- a bounded partial jump), then the structural
+# +/-1-VOBU fallback. The backward mirror of forward index a is table address
+# (37 - a), i.e. bwda entry (18 - a).
+# ---------------------------------------------------------------------------
+DPAD_RUNG_U = {0: 12, 1: 6, 2: 3, 3: 1}     # coarse rung -> units of 10 s
+DPAD_MAXTERMS = 8
+
+
+def _sri_entry(dsi, fwd, ridx):
+    """One VOBU_SRI entry by FORWARD-equivalent index (0..18)."""
+    if fwd:
+        return be32(dsi, 0xEE + ridx * 4)
+    return be32(dsi, 0x142 + (18 - ridx) * 4)
+
+
+def _dpad_pick(units_left):
+    if units_left >= 12: return 0
+    if units_left >= 6:  return 1
+    if units_left >= 3:  return 2
+    return 3
+
+
+def dpad_resolve(dsi, units, fwd):
+    """units = |request| in units of 10 s (1..24). Returns (offset|None, trace)."""
+    off, terms, units_left, trace = 0, 0, units, []
+    ridx = _dpad_pick(units_left)
+    while True:
+        ent = _sri_entry(dsi, fwd, ridx)
+        ok, o = sri_offset(ent)
+        ok = ok and bool(ent & 0x80000000)
+        name = "%s[%d]=%gs" % ("fwda" if fwd else "bwda-mirror", ridx,
+                               STIME[ridx] / 2.0)
+        if ok:
+            off += o
+            trace.append("%s +%d" % (name, o))
+            if ridx >= 4:
+                trace.append("(fine rung -> stop)")
+                break
+            use = DPAD_RUNG_U[ridx]
+            last = (units_left <= use) or (terms + 1 >= DPAD_MAXTERMS)
+            terms += 1
+            units_left = units_left - use if units_left > use else 0
+            if last:
+                break
+            ridx = _dpad_pick(units_left)
+        else:
+            trace.append("%s EOC" % name)
+            if ridx >= 15:
+                if off:
+                    trace.append("(partial, keep)")
+                elif fwd:
+                    nxv = be32(dsi, 0x13A)
+                    ok2, o2 = sri_offset(nxv)
+                    if ok2 and (nxv & 0x80000000):
+                        off, _t = o2, trace.append("next_vobu +%d" % o2)
+                    else:
+                        off = be32(dsi, 0x08) + 1
+                        trace.append("vobu_ea+1 +%d" % off)
+                else:
+                    pvv = be32(dsi, 0x13E)
+                    ok2, o2 = sri_offset(pvv)
+                    if ok2 and (pvv & 0x80000000):
+                        off = o2
+                        trace.append("prev_vobu -%d" % o2)
+                    else:
+                        trace.append("DEAD END -> no-op")
+                        return None, trace
+                break
+            ridx += 1
+    return (off if off else None), trace
+
+
+def dump_dpad(dsi):
+    """The four D-pad gestures for one DSI packet, as the RTL resolves them."""
+    lbn = be32(dsi, 0x04)
+    out = ["  dpad_seek (golden for dvd/dpad_seek.sv): nv_pck_lbn=%d" % lbn]
+    for label, units, fwd in (("Right +10s", 1, True), ("Up    +60s", 6, True),
+                              ("Left  -10s", 1, False), ("Down  -60s", 6, False)):
+        off, trace = dpad_resolve(dsi, units, fwd)
+        if off is None:
+            out.append("    %s -> NO-OP            [%s]" % (label, "; ".join(trace)))
+        else:
+            tgt = lbn + off if fwd else max(0, lbn - off)
+            out.append("    %s -> RBN %-8d off=%-7d [%s]"
+                       % (label, tgt, off, "; ".join(trace)))
+    return out
+
+
 def parse_dsi(dsi):
     """dsi = 979 B DSI data (from the byte after the 0x01 substream id)."""
     out = []
@@ -535,6 +629,9 @@ def main():
     ap.add_argument('--max-dumps', type=int, default=6,
                     help='full HLI dumps to print (rest summarized)')
     ap.add_argument('--cmds', action='store_true', help='decode button commands')
+    ap.add_argument('--dpad', action='store_true',
+                    help='golden D-pad fixed-time seek targets per NAV pack '
+                         '(the reference dvd/dpad_seek.sv must reproduce)')
     ap.add_argument('--dsi', action='store_true',
                     help='also decode the DSI packet (substream 0x01) of each NAV pack')
     ap.add_argument('--hex', help='write raw NAV sectors to a $readmemh fixture')
@@ -592,6 +689,17 @@ def main():
         navs += 1
         pci = sec[0x2D:0x2D + 980]          # PCI data (after the substream id)
         ss = be16(pci, 0x60) & 3
+
+        # ---- D-pad fixed-time seek golden ------------------------------------
+        if a.dpad:
+            has_dsi = sec[0x400:0x404] == b'\x00\x00\x01\xbf' and sec[0x406] == 0x01
+            if not has_dsi:
+                continue
+            if dumped < a.max_dumps:
+                print("NAV pack @RBN %d:" % rbn)
+                print("\n".join(dump_dpad(sec[DSI_DATA_OFF:DSI_DATA_OFF + 979])))
+                dumped += 1
+            continue
 
         # ---- Phase-9 angle mode: report/extract ILVU (angle) NAV packs -------
         if a.angles:
