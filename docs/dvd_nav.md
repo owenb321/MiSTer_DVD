@@ -1532,10 +1532,19 @@ display mode (libdvdnav `vmget.c vm_get_subp_stream`): `present = ctl>>31`; 4:3 
 16:9 wide = `(ctl>>16)&0x1f`; 16:9 letterbox = `(ctl>>8)&0x1f`; 16:9 pan&scan = `ctl&0x1f`;
 substream = `0x20 + streamN`. Verified: Matrix PGCN 6 `subp_control[1]=0x80020300` → **wide=0x22,
 letterbox=0x23** (video aspect 16:9). Golden tool: `tools/nav_extract.py --vts 2 --subp-map 6`.
-  - **Reader** (`dvd_iso_reader.sv`): a new `P_SUBP` walk phase (title PGCs only) parses
-    `subp_control[0..15]` (PGC @0x1C, 64 B) and streams it out on `subp_ctl_we/waddr/wdata` (the
-    palette-streaming pattern) BEFORE the @156 `P_HDR` walk — menu/FP parse is byte-identical
-    (`bench/dvd/iso_reader_subpctl_tb.sv` proves the capture).
+  - **Reader** (`dvd_iso_reader.sv`): a `P_SUBP` walk phase (title PGCs only) parses
+    `subp_control[0..15]` (PGC @0x1C, 64 B) and streams it out (the palette-streaming
+    pattern) BEFORE the @156 `P_HDR` walk (`bench/dvd/iso_reader_subpctl_tb.sv` proves
+    the capture). **2026-08-27 (`fix/menu-link-audio-map`): the bus is now the shared
+    `pgc_ctl_we/waddr[4:0]/wdata`** — waddr 0–15 = these subp words (unchanged), waddr
+    16–23 = **`audio_control[8]`** (PGC @0x0C, u16 in wdata[15:0]), parsed by a new
+    `P_ACTL` phase that runs FIRST in **every** domain (the two tables are contiguous,
+    so a title PGC rolls from P_ACTL into P_SUBP with no re-seek; menu/FP re-seek to
+    @156 as before). Plus `pgc_ctl_valid` (all 8 audio words landed; cleared at
+    S_PGC_HDR) and `pgc_dom_tt` (the loaded PGC's domain). This is the audio sibling of
+    this subpicture mapping — `dvd/aud_stream_map.sv` resolves the logical audio pick →
+    physical substream (libdvdnav `vm_get_audio_stream`); full design + the
+    silence-bug story in `docs/track_selection.md` "Logical→physical audio mapping".
   - **emu** (`emu.sv`): `subp_ctl_mem[16]` BRAM; for the VM-selected stream computes the display
     mode (`status[4:3]`: Crop→pan&scan, Letterbox→letterbox, else wide — 16:9 "Fit"/HDMI → wide
     → 0x22 is the common case, HW-tunable) and drives `sp_track_eff = mapped_streamN[2:0]`. The

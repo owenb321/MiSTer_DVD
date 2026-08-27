@@ -115,6 +115,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/mem_shim_burst.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/sys_pll.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mpg_streamer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dvd_iso_reader.sv
+# audio logical->physical stream mapping (PGC audio_control, libdvdnav vmget.c)
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/aud_stream_map.sv
 
 
 

@@ -218,6 +218,21 @@ worse maintenance burden than targeted in-place edits. So:
   DDR3 + counter widths, not fabric — the big decoder M10Ks are
   latency-tuning FIFOs).
 
+- 🔧 **AUDIO LOGICAL→PHYSICAL STREAM MAPPING (2026-08-27, branch
+  `fix/menu-link-audio-map`) — sim-verified, ⏳ HW-confirm pending.** The track pick
+  (SPRM1/SetSTN or the Audio button) is a LOGICAL stream number; the PGC's
+  `audio_control[8]` table maps it to the PHYSICAL substream `ps_demux` filters on
+  (libdvdnav `vm_get_audio_stream` + the first-available fallback). The old raw-index
+  assumption silenced any disc with a non-identity map — the "language menu → movie
+  plays with NO audio" field report (Blade Runner), and 31/431 library discs; local
+  boot-silent repro = **GET_SMART VTS 2** (every logical → 0x83; HW A/B via the Debug
+  Title VTS picker). Reader streams the table on the shared `pgc_ctl_*` bus (new
+  `P_ACTL` phase, every domain — menus resolve logical 0 through it); new
+  `dvd/aud_stream_map.sv` (32-FF store, identity when no PGC/table = legacy
+  bit-identical); `aud_switch` gains a jump-window guard so PGC re-parses can't pulse
+  `aud_resync` (menu audio continuity, §5d). Golden: `dvd_vm_ref.py aud_stream_map()`
+  + `nav_extract.py --audio-map`; 2,026-vector bit-exact TB + reader/demux suites
+  green. Detail: `docs/track_selection.md` "Logical→physical audio mapping".
 - 🔧 **AUDIO IS NOW DECODED IN FABRIC (2026-06-27, branch `feature/fabric-ac3-audio`).**
   AC-3 and LPCM are decoded entirely in the FPGA: `ps_demux` → `audio_ring` →
   `dvd/dvd_audio_decode.sv` (AC-3 via the ported `dvd/ac3/*` `ac3_front`+`pcm_out`,

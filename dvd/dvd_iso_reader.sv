@@ -383,14 +383,35 @@ module dvd_iso_reader #(
     output reg [3:0]  pal_waddr,
     output reg [31:0] pal_wdata,
 
-    // PGC subpicture stream control (subp_control[16], IFO @ PGC+0x1C, 32-bit ea)
-    // streamed at PGC load. Maps a LOGICAL subpicture stream (SPRM2/SetSTN) to the
-    // PHYSICAL substream id (0x20+N) per video display mode - needed to render
-    // in-title HLI button graphics (Matrix "Follow the White Rabbit" rides
-    // substream 0x22/0x23 on logical stream 1). See docs/dvd_nav.md.
-    output reg        subp_ctl_we,
-    output reg [3:0]  subp_ctl_waddr,
-    output reg [31:0] subp_ctl_wdata,
+    // PGC stream-control tables, streamed at PGC load on ONE shared bus:
+    //   waddr  0..15 = subp_control[16] (IFO @ PGC+0x1C, 32-bit each): LOGICAL
+    //                  subpicture stream (SPRM2/SetSTN) -> PHYSICAL substream id
+    //                  (0x20+N) per video display mode - needed to render
+    //                  in-title HLI button graphics (Matrix "Follow the White
+    //                  Rabbit" rides substream 0x22/0x23 on logical stream 1).
+    //   waddr 16..23 = audio_control[8] (IFO @ PGC+0x0C, u16 each, in
+    //                  wdata[15:0]): bit15 = stream available, bits[10:8] =
+    //                  PHYSICAL audio stream number. The libdvdnav
+    //                  vm_get_audio_stream mapping (vmget.c) - without it SPRM1/
+    //                  the user's track pick is a RAW substream index and any
+    //                  disc with a non-identity map (GET_SMART VTS2: everything
+    //                  -> 0x83) plays SILENT. audio_control is walked in EVERY
+    //                  domain (menus resolve logical 0 through it, per vmget.c);
+    //                  subp_control stays title-only. See docs/dvd_nav.md.
+    output reg        pgc_ctl_we,
+    output reg [4:0]  pgc_ctl_waddr,
+    output reg [31:0] pgc_ctl_wdata,
+    // High while the streamed audio_control words above are COMPLETE and
+    // consistent with the loaded PGC: cleared at S_PGC_HDR (a new PGC's parse),
+    // set when the P_ACTL walk finishes. Doubles as "any PGC has been parsed" -
+    // 0 from reset until the first PGC (linear .VOB/.mpg playback stays 0
+    // forever), which emu maps to the IDENTITY mapping = pre-fork behaviour.
+    output reg        pgc_ctl_valid,
+    // Domain of the audio_control above (1 = title). Latched WITH pgc_ctl_valid
+    // because libdvdnav's rule differs by domain (menus force logical 0). NOTE:
+    // menu_dom is NOT a substitute - it reads 0 for DOM_FP, which must also
+    // take the non-title rule.
+    output reg        pgc_dom_tt,
 
     // Raw MODE2/2352 mode readback: the mounted image is a raw CD sector dump
     // (VCD/SVCD bin/cue data track). The reader strips the 2352-byte sector
@@ -932,8 +953,9 @@ reg [1:0]  follow_cnt;
 // the cell playback table (-> cell BRAMs, still/cmd_nr meta included).
 localparam [2:0] P_HDR = 3'd0, P_CMDH = 3'd1, P_CMD = 3'd2, P_CELL = 3'd3,
                  P_PMAP = 3'd4,      // Phase-4: program-map stream -> dvd_vm
-                 P_SUBP = 3'd5,      // subp_control[16] @ PGC+0x1C -> subp_ctl_we
-                 P_PTT  = 3'd6;      // Phase-6: VTS_PTT_SRPT TTU -> ptt_mem
+                 P_SUBP = 3'd5,      // subp_control[16] @ PGC+0x1C -> pgc_ctl_we
+                 P_PTT  = 3'd6,      // Phase-6: VTS_PTT_SRPT TTU -> ptt_mem
+                 P_ACTL = 3'd7;      // audio_control[8] @ PGC+0x0C -> pgc_ctl_we
 reg [2:0]  wphase;
 reg [31:0] walk_sec;                  // sector being walked
 reg [10:0] walk_off;                  // byte offset within walk_sec
@@ -1729,9 +1751,11 @@ always @(posedge clk or negedge rst_n) begin
         pal_we       <= 1'b0;
         pal_waddr    <= 4'd0;
         pal_wdata    <= 32'd0;
-        subp_ctl_we    <= 1'b0;
-        subp_ctl_waddr <= 4'd0;
-        subp_ctl_wdata <= 32'd0;
+        pgc_ctl_we    <= 1'b0;
+        pgc_ctl_waddr <= 5'd0;
+        pgc_ctl_wdata <= 32'd0;
+        pgc_ctl_valid <= 1'b0;
+        pgc_dom_tt    <= 1'b0;
         wacc         <= 24'd0;
         jump_pending <= 1'b0;
         jump_ctx     <= 1'b0;
@@ -1804,7 +1828,16 @@ always @(posedge clk or negedge rst_n) begin
         sd_ack_d <= sd_ack;
         seek_ack <= 1'b0;               // default: one-cycle pulses
         pal_we   <= 1'b0;
-        subp_ctl_we <= 1'b0;
+        pgc_ctl_we <= 1'b0;
+        // audio_control completion: the P_ACTL walk's LAST write (addr 23 =
+        // audio_control[7]) is registered, so this fires the cycle it lands at
+        // the consumer - pgc_ctl_valid rises strictly AFTER all 8 words are
+        // stable. dom is still the loaded PGC's domain here (it only changes
+        // at jump dispatch).
+        if (pgc_ctl_we && pgc_ctl_waddr == 5'd23) begin
+            pgc_ctl_valid <= 1'b1;
+            pgc_dom_tt    <= (dom == DOM_TT);
+        end
         cmd_we   <= 1'b0;
         pm_we    <= 1'b0;
         ptt_we   <= 1'b0;
@@ -3198,23 +3231,21 @@ always @(posedge clk or negedge rst_n) begin
                     cmd_tbl_off    <= 16'd0;
                     cell_pb_off16  <= 16'd0;
                     prog_map_off16 <= 16'd0;
-                    // TITLE PGC: first walk subp_control[16] (PGC@0x1C, 64 B) into
-                    // subp_ctl_mem via subp_ctl_we, THEN the @156 header (P_HDR).
-                    // Menu/FP domains skip straight to P_HDR (byte-identical to
-                    // before) - menu buttons force subpicture stream 0 anyway.
-                    if (dom == DOM_TT) begin
-                        walk_sec  <= pgc_sec + (({1'b0,pgc_off} + 12'd28) >> 11);
-                        walk_off  <= ({1'b0,pgc_off} + 12'd28) & 12'h7FF;
-                        walk_left <= 13'd64;               // 16 streams x 4 bytes
-                        walk_idx  <= 13'd0;
-                        wphase    <= P_SUBP;
-                    end else begin
-                        walk_sec  <= pgc_sec + (({1'b0,pgc_off} + 12'd156) >> 11);
-                        walk_off  <= ({1'b0,pgc_off} + 12'd156) & 12'h7FF;
-                        walk_left <= 13'd78;
-                        walk_idx  <= 13'd0;
-                        wphase    <= P_HDR;
-                    end
+                    // EVERY domain first walks audio_control[8] (PGC@0x0C, 16 B)
+                    // -> pgc_ctl_we addr 16..23 (menus resolve logical audio 0
+                    // through it too, per libdvdnav vmget.c). audio_control is
+                    // CONTIGUOUS with subp_control @0x1C, so a TITLE PGC then
+                    // rolls straight into P_SUBP with no re-seek; menu/FP
+                    // domains re-seek to the @156 header (P_HDR) - menu buttons
+                    // force subpicture stream 0 anyway. pgc_ctl_valid drops for
+                    // the duration of the parse (emu gates aud_switch on it so
+                    // the streaming words can't glitch a track resync).
+                    pgc_ctl_valid <= 1'b0;
+                    walk_sec  <= pgc_sec + (({1'b0,pgc_off} + 12'd12) >> 11);
+                    walk_off  <= ({1'b0,pgc_off} + 12'd12) & 12'h7FF;
+                    walk_left <= 13'd16;               // 8 streams x 2 bytes
+                    walk_idx  <= 13'd0;
+                    wphase    <= P_ACTL;
                     state     <= S_WALK_RD;
                 end
             end
@@ -3248,13 +3279,43 @@ always @(posedge clk or negedge rst_n) begin
                 state     <= S_WALK_RD;                // default: next byte
 
                 case (wphase)
+                // ----- audio_control[8]: PGC bytes 0x0C..0x1B (idx 0..15) -----
+                // Emit one u16 per stream (BE, wdata[15:0]) at addr 16..23.
+                // Title -> roll into P_SUBP (contiguous, no re-seek);
+                // menu/FP -> the @156 header window.
+                P_ACTL: begin
+                    if (walk_idx[0]) begin
+                        pgc_ctl_we    <= 1'b1;
+                        pgc_ctl_waddr <= {2'b10, walk_idx[3:1]};  // 16 + stream 0..7
+                        pgc_ctl_wdata <= {16'd0, wacc[7:0], pb_rdata};
+                    end
+                    if (walk_left == 13'd1) begin
+                        // (pgc_ctl_valid rises one cycle later, off the last
+                        // write pulse itself - see the we/waddr==23 clause -
+                        // so a consumer never sees valid=1 while word 7 is
+                        // still in flight.)
+                        if (dom == DOM_TT) begin
+                            // walk_off/walk_sec continue naturally into 0x1C
+                            walk_left <= 13'd64;       // 16 streams x 4 bytes
+                            walk_idx  <= 13'd0;
+                            wphase    <= P_SUBP;
+                        end else begin
+                            walk_sec  <= pgc_sec + (({1'b0,pgc_off} + 12'd156) >> 11);
+                            walk_off  <= ({1'b0,pgc_off} + 12'd156) & 12'h7FF;
+                            walk_left <= 13'd78;
+                            walk_idx  <= 13'd0;
+                            wphase    <= P_HDR;
+                        end
+                    end
+                end
+
                 // ----- subp_control[16]: PGC bytes 0x1C..0x5B (idx 0..63) -----
                 // Emit one 32-bit word per stream (BE), then walk the @156 header.
                 P_SUBP: begin
                     if (walk_idx[1:0] == 2'd3) begin
-                        subp_ctl_we    <= 1'b1;
-                        subp_ctl_waddr <= walk_idx[5:2];      // stream 0..15
-                        subp_ctl_wdata <= {wacc, pb_rdata};
+                        pgc_ctl_we    <= 1'b1;
+                        pgc_ctl_waddr <= {1'b0, walk_idx[5:2]};   // stream 0..15
+                        pgc_ctl_wdata <= {wacc, pb_rdata};
                     end
                     if (walk_left == 13'd1) begin
                         // subp_control done -> the @156 PGC header window (P_HDR).

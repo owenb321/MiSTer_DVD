@@ -1,9 +1,20 @@
-// iso_reader_subpctl_tb.sv - verify dvd_iso_reader parses the PGC subpicture
-// stream control table (subp_control[16] @ PGC+0x1C) and streams it out on
-// subp_ctl_we/waddr/wdata at TITLE PGC load. This is the data behind the DVD
-// subpicture display-mode substream mapping (Matrix "Follow the White Rabbit":
-// logical stream 1 -> physical substream 0x22/0x23). Mirrors the real disc:
-// PGCN with subp_control[1]=0x80020300 (present, wide=0x22, letterbox=0x23).
+// iso_reader_subpctl_tb.sv - verify dvd_iso_reader parses the PGC stream
+// control tables and streams them out on the shared pgc_ctl_we/waddr/wdata bus
+// at PGC load:
+//   waddr  0..15 = subp_control[16] @ PGC+0x1C (TITLE domain only) - the data
+//                  behind the subpicture display-mode substream mapping (Matrix
+//                  "Follow the White Rabbit": logical 1 -> substream 0x22/0x23).
+//   waddr 16..23 = audio_control[8] @ PGC+0x0C (EVERY domain) - the libdvdnav
+//                  vm_get_audio_stream logical->physical audio map (GET_SMART
+//                  VTS2 maps everything to substream 0x83; identity assumed =
+//                  the "language menu -> movie plays silent" bug).
+// Checks, per the audio-mapping feature:
+//   [1] title PGC: audio_control words arrive at 16..23 (values byte-exact),
+//       CONTIGUOUS with the subp words (audio first - the walk rolls straight
+//       into P_SUBP with no re-seek), subp_control byte-exact as before.
+//   [2] pgc_ctl_valid rises only AFTER the last audio word, with pgc_dom_tt=1.
+//   [3] title PGC with audio_control[0]=0x8300 resolves like GET_SMART (the
+//       shadow check mirrors tools/nav_extract.py --audio-map).
 
 `timescale 1ns/1ps
 
@@ -21,21 +32,42 @@ module iso_reader_subpctl_tb;
     reg         sd_buff_wr = 0;
     wire [7:0]  stream_data;  wire stream_valid;
 
-    wire        subp_ctl_we;
-    wire [3:0]  subp_ctl_waddr;
-    wire [31:0] subp_ctl_wdata;
+    wire        pgc_ctl_we;
+    wire [4:0]  pgc_ctl_waddr;
+    wire [31:0] pgc_ctl_wdata;
+    wire        pgc_ctl_valid;
+    wire        pgc_dom_tt;
 
     reg  [7:0]  img [0:IMG_BYTES-1];
 
-    // capture subp_control writes into a shadow the test can check
-    reg [31:0] cap_mem [0:15];
+    // capture stream-control writes into shadows the test can check
+    reg [31:0] cap_mem  [0:15];      // subp_control words
     reg        cap_seen [0:15];
+    reg [15:0] cap_aud  [0:7];       // audio_control words
+    reg        cap_aseen[0:7];
+    reg        valid_at_aud_write;   // pgc_ctl_valid sampled DURING an audio write
+    reg        aud_before_subp_ok;   // all 8 audio words landed before subp word 0
+    reg        dom_tt_at_valid;
+    integer    aud_writes;
     integer k;
     always @(posedge clk) begin
-        if (subp_ctl_we) begin
-            cap_mem [subp_ctl_waddr] <= subp_ctl_wdata;
-            cap_seen[subp_ctl_waddr] <= 1'b1;
+        if (pgc_ctl_we) begin
+            if (pgc_ctl_waddr[4]) begin
+                cap_aud  [pgc_ctl_waddr[2:0]] <= pgc_ctl_wdata[15:0];
+                cap_aseen[pgc_ctl_waddr[2:0]] <= 1'b1;
+                aud_writes <= aud_writes + 1;
+                if (pgc_ctl_valid) begin
+                    valid_at_aud_write <= 1'b1;   // must stay 0
+                    $display("  [probe] t=%0t audio write addr=%0d while valid=1 (writes so far %0d)",
+                             $time, pgc_ctl_waddr[2:0], aud_writes);
+                end
+            end else begin
+                cap_mem [pgc_ctl_waddr[3:0]] <= pgc_ctl_wdata;
+                cap_seen[pgc_ctl_waddr[3:0]] <= 1'b1;
+                if (aud_writes != 8) aud_before_subp_ok <= 1'b0; // audio must precede
+            end
         end
+        if (pgc_ctl_valid) dom_tt_at_valid <= pgc_dom_tt;
     end
 
     dvd_iso_reader dut (
@@ -50,7 +82,8 @@ module iso_reader_subpctl_tb;
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1), .chap_at_start(1'b0),
         .angle_pulse(1'b0), .cur_angle(), .angle_count(),
         .keep_vbuf(), .cur_cell(), .cell_ready(),
-        .subp_ctl_we(subp_ctl_we), .subp_ctl_waddr(subp_ctl_waddr), .subp_ctl_wdata(subp_ctl_wdata),
+        .pgc_ctl_we(pgc_ctl_we), .pgc_ctl_waddr(pgc_ctl_waddr), .pgc_ctl_wdata(pgc_ctl_wdata),
+        .pgc_ctl_valid(pgc_ctl_valid), .pgc_dom_tt(pgc_dom_tt),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(1'b0),
@@ -118,6 +151,12 @@ module iso_reader_subpctl_tb;
         // PGC @ (22*2048 + 16): nr_programs@2=1, nr_cells@3=1, cell_pb_off@232=256
         img[22*2048+16+2]=1; img[22*2048+16+3]=1;
         img[22*2048+16+232]=1; img[22*2048+16+233]=0;   // cell_pb_off = 256
+        // audio_control @ PGC+0x0C: the GET_SMART VTS2 shape - logical 0/1/2 all
+        // available -> PHYSICAL 3 (0x8300); logical 5 -> physical 1 (0x8100)
+        img[22*2048+16+16'h0C+0]=8'h83; img[22*2048+16+16'h0C+1]=8'h00;   // [0]=0x8300
+        img[22*2048+16+16'h0C+2]=8'h83; img[22*2048+16+16'h0C+3]=8'h00;   // [1]=0x8300
+        img[22*2048+16+16'h0C+4]=8'h83; img[22*2048+16+16'h0C+5]=8'h00;   // [2]=0x8300
+        img[22*2048+16+16'h0C+10]=8'h81; img[22*2048+16+16'h0C+11]=8'h00; // [5]=0x8100
         // subp_control[1] @ PGC+0x1C+4 = 0x80020300 (BE)
         img[22*2048+16+16'h20+0]=8'h80; img[22*2048+16+16'h20+1]=8'h02;
         img[22*2048+16+16'h20+2]=8'h03; img[22*2048+16+16'h20+3]=8'h00;
@@ -131,6 +170,8 @@ module iso_reader_subpctl_tb;
     integer errors = 0;
     initial begin
         for (k=0;k<16;k=k+1) begin cap_mem[k]=0; cap_seen[k]=0; end
+        for (k=0;k<8;k=k+1)  begin cap_aud[k]=0; cap_aseen[k]=0; end
+        valid_at_aud_write=0; aud_before_subp_ok=1; dom_tt_at_valid=0; aud_writes=0;
         rst_n=0; repeat(4) @(posedge clk); rst_n=1; @(posedge clk);
         build; file_size=IMG_BYTES;
         @(posedge clk); start=1; @(posedge clk); start=0;
@@ -145,6 +186,27 @@ module iso_reader_subpctl_tb;
         // verify the mapping the RTL enables: logical 1, 16:9 wide -> substream 0x22
         if ((32'h80020300 >> 16 & 32'h1f) + 32'h20 !== 32'h22) begin
             errors=errors+1; $display("  FAIL: wide map != 0x22"); end
+        // ---- audio_control (this feature) ----
+        $display("audio_control capture: [0]=0x%04x [1]=0x%04x [2]=0x%04x [5]=0x%04x (writes=%0d)",
+                 cap_aud[0], cap_aud[1], cap_aud[2], cap_aud[5], aud_writes);
+        for (k=0;k<8;k=k+1)
+            if (!cap_aseen[k]) begin
+                errors=errors+1; $display("  FAIL: audio_control[%0d] never written", k); end
+        if (cap_aud[0] !== 16'h8300 || cap_aud[1] !== 16'h8300 || cap_aud[2] !== 16'h8300) begin
+            errors=errors+1; $display("  FAIL: audio_control[0..2] expected 0x8300"); end
+        if (cap_aud[5] !== 16'h8100) begin
+            errors=errors+1; $display("  FAIL: audio_control[5] expected 0x8100"); end
+        if (cap_aud[3] !== 16'h0000 || cap_aud[4] !== 16'h0000
+            || cap_aud[6] !== 16'h0000 || cap_aud[7] !== 16'h0000) begin
+            errors=errors+1; $display("  FAIL: absent audio_control words not zero"); end
+        if (!aud_before_subp_ok) begin
+            errors=errors+1; $display("  FAIL: a subp word arrived before all 8 audio words"); end
+        if (valid_at_aud_write) begin
+            errors=errors+1; $display("  FAIL: pgc_ctl_valid high during the audio walk"); end
+        if (!pgc_ctl_valid) begin
+            errors=errors+1; $display("  FAIL: pgc_ctl_valid low after the parse"); end
+        if (!dom_tt_at_valid) begin
+            errors=errors+1; $display("  FAIL: pgc_dom_tt not 1 for a title PGC"); end
         if (errors==0) $display("ISO_READER_SUBPCTL_TB: ALL TESTS PASSED");
         else           $display("ISO_READER_SUBPCTL_TB: %0d FAILURE(S)", errors);
         $finish;

@@ -494,9 +494,14 @@ The ~220-line proto-nav/micro-bridge always block is deleted. emu keeps gamepad
 decode only: pause + title cell seeks (D-pad, unchanged), Phase-3 button-nav pulses,
 and Menu/Select key pulses into the VM. The VM owns the reader's jump port; its cell
 seeks mux onto the seek port. `jump_ack` clears pause. Stream mux:
-`aud_track = (menus_on && SPRM1 < 8) ? SPRM1 : O[8:6]` (SPRM1 = 15 "none" keeps the
-OSD in control until the disc selects); `sp_track/sp display` from SPRM2 (bit6),
-with `O[15]` still forcing subtitles on.
+`aud_sel = (menus_on && vm_owns_aud && SPRM1 < 8) ? SPRM1 : aud_cur` (SPRM1 = 15
+"none" keeps the gamepad in control until the disc selects; Phase 10 replaced the
+old O[8:6] OSD selector with the Audio button). **Since 2026-08-27
+(`fix/menu-link-audio-map`) that pick is a LOGICAL stream number** — it is
+count-clamped then resolved to the physical substream through the PGC's
+`audio_control` table by `dvd/aud_stream_map.sv` (libdvdnav `vm_get_audio_stream`;
+menus force logical 0; see `docs/track_selection.md`). `sp_track/sp display` from
+SPRM2 (bit6), with `O[15]` still forcing subtitles on.
 
 ## Punted (documented, not planned soon)
 
