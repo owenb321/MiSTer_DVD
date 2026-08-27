@@ -216,6 +216,39 @@ module framestore(rst, clk, mem_clk,
   wire         [21:0]mem_req_wr_addr;
   wire         [63:0]mem_req_wr_dta;
   wire               mem_req_wr_en;
+
+  /* DVD-FORK RETIME (2026-08-27, fix/menu-link-audio-map): pipeline register
+   * between framestore_request and mem_request_fifo's M10K write port. The
+   * mem_req_wr_dta -> fifo write path is ROUTING-dominated (~11.0-11.2 ns of a
+   * 12.35 ns budget at SEED 5) and was the SINGLE path binding clk_dec's
+   * Restricted Fmax below the 86 MHz gate (85.7; the next cluster, getbits->
+   * vld advance, is >= 90-equivalent -- see docs/history.md, the
+   * tools/timing_paths.sh doctrine). One register here lets the fitter place a
+   * mid-route stage next to the M10K, splitting the die crossing.
+   * Correctness: a pure 1-deep delay into an elastic queue -- every request
+   * still enters exactly once, in order (the 1:1 request:response contract is
+   * untouched); the extra in-flight slot is absorbed by MEMREQ_THRESHOLD's
+   * 16-slot margin (the PR fj#58 almost_full retime already leaned on it).
+   * The tag fifo is an INDEPENDENT order-matched queue, so it needs no
+   * matching delay. */
+  reg           [1:0]mem_req_wr_cmd_q;
+  reg          [21:0]mem_req_wr_addr_q;
+  reg          [63:0]mem_req_wr_dta_q;
+  reg                mem_req_wr_en_q;
+
+  always @(posedge clk)
+    if (~rst) begin
+      mem_req_wr_en_q   <= 1'b0;
+      mem_req_wr_cmd_q  <= 2'b0;
+      mem_req_wr_addr_q <= 22'b0;
+      mem_req_wr_dta_q  <= 64'b0;
+    end
+    else begin
+      mem_req_wr_en_q   <= mem_req_wr_en;
+      mem_req_wr_cmd_q  <= mem_req_wr_cmd;
+      mem_req_wr_addr_q <= mem_req_wr_addr;
+      mem_req_wr_dta_q  <= mem_req_wr_dta;
+    end
   output             mem_res_wr_full;
   output             mem_req_wr_full;
   output             mem_req_wr_overflow;
@@ -351,8 +384,8 @@ module framestore(rst, clk, mem_clk,
     mem_request_fifo (
     .rst(rst), 
     .wr_clk(clk), 
-    .din({mem_req_wr_cmd, mem_req_wr_addr, mem_req_wr_dta}), 
-    .wr_en(mem_req_wr_en), 
+    .din({mem_req_wr_cmd_q, mem_req_wr_addr_q, mem_req_wr_dta_q}),   /* DVD-FORK RETIME */
+    .wr_en(mem_req_wr_en_q),
     .full(mem_req_wr_full), 
     .wr_ack(), 
     .overflow(mem_req_wr_overflow), 
