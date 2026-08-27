@@ -1206,22 +1206,18 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
 
 **Opt-in, default Off.** With it On, while a title plays: **Left/Right = ∓10 s,
 Down/Up = ∓60 s** — VLC-style *fixed-time* jumps, as opposed to §2a's span-relative
-("percent of title") scrub.
+("percent of title") scrub. Presses inside a **~400 ms window coalesce into ONE seek**,
+and each further tap re-arms the window, so **keep tapping and the total keeps growing** —
+tap Up twenty times and you get one 20-minute jump. There is no small artificial ceiling:
+`UNIT_CAP` exists only so the **MM:SS** readout stays exact (99:50 is the widest it can
+render), and what actually bounds a jump is `scrub_ctrl`'s clamp to the title span.
+Whatever the total, it is still ONE seek and ONE decoder flush.
 
-**Two ways to grow the pending amount, one signed accumulator (units of 10 s), and
-exactly ONE seek per gesture:**
-
-- **Tap** — each press adds its own amount and re-arms a **~400 ms** window; taps inside
-  it coalesce. Tap Right 3× = one +30 s jump.
-- **Hold** — keep a direction down past **~500 ms** and it **compounds**: another
-  increment every **~250 ms**, and the increment **doubles at 1.5 / 3 / 5 s** of hold
-  (×1 → ×2 → ×4 → ×8), saturating at the **600 s** cap (`UNIT_CAP`). The coalesce window
-  **cannot close while a direction is down**, so *release* is what commits. A genuine hold
-  (never a tap) also asserts **`freeze`**, which emu ORs into `pause_gov`/`pause_aud` —
-  the same proven pause §2a's scrub uses, so the base stops drifting under a long gesture.
-
-The HUD's `SEEK FWD nnnS` readout is the live feedback: the number grows in your hand and
-you release when it reads what you want. Either way it is **one** decoder flush.
+The HUD shows the running total as **`SEEK FWD 12:30`** while you tap. The accumulator
+counts units of 10 s, so the readout needs `units/6` and `units%6`; rather than a divider
+that would sit idle 99.99 % of the time, `dpad_seek` converts by **repeated subtraction
+across the idle cycles of the coalesce window** (≤99 iterations against a ~400 ms window),
+which keeps the module free of any wide arithmetic.
 
 **Where the target comes from.** The DSI VOBU_SRI tables of §2, addressed as:
 
@@ -1249,8 +1245,8 @@ which makes the common gestures **exact single lookups**:
 | 2×U | 120 | — | **exact** `fwda[0]` |
 | 2×R | 20 | 2 terms | 2 terms (no 20 s rung exists) |
 
-A compounded **hold** lands on arbitrary totals, which simply decompose into more terms
-(bounded by `MAXTERMS = 8`); the ladder keeps that count small — the 600 s cap is 5 terms.
+A long tap burst lands on a large total, which simply decomposes into more 120 s rungs
+(bounded by `MAXTERMS = 64`, a few cycles each) — 20 minutes is 10 rungs.
 
 **END_OF_CELL cascade.** Descend one coarse rung, crediting the leftover seconds (only the
 rung actually *used* is subtracted) → below 10 s, walk the fine rungs (7.5 s … 2 s) and take
@@ -1272,12 +1268,11 @@ VOBU's offsets; and a resolve that cannot get a trustworthy base within ~2 s is 
 write at `0x18D`, so scalars and table belong to the same VOBU. The contract is now recorded
 in `nav_dsi.sv`'s header for the next consumer.
 
-**Why the hold compounds an amount instead of repeating jumps.** A held direction *firing a
-jump per VOBU* is exactly the rapid flush/re-lock regime that HW rounds 1–2 of the scrub
-proved fatal (mostly-black playback, watchdog resync — see §2a). Growing a pending number
-and committing once on release gets the same "keep going further" feel for **one** flush.
-A **tap** does not freeze video (an instantaneous hop has nothing to freeze for, and the
-chapter-skip precedent doesn't either); a **hold** does, past the ~500 ms arm delay.
+**Why coalesce and never auto-repeat.** A held direction firing a jump per VOBU is exactly
+the rapid flush/re-lock regime that HW rounds 1–2 of the scrub proved fatal (mostly-black
+playback, watchdog resync — see §2a). The debounce shape is the chapter-skip burst's.
+Unlike the scrub, a D-pad tap does **not** freeze video (an instantaneous hop has nothing to
+freeze for, and the chapter-skip precedent doesn't either).
 
 **Non-DVD content.** Raw VCD/SVCD `.bin` has no DSI, but a CD is a fixed 75 sectors/s of
 2352 B and the reader's linear `seek_rbn` unit is a 2048-byte **file block**, so

@@ -100,7 +100,8 @@ module transport_hud #(
     // user can see "SEEK FWD 30S" BEFORE the jump commits.
     input  wire        seek_evt,
     input  wire        seek_fwd,            // 1 = forward
-    input  wire [7:0]  seek_tens,           // |request| in units of 10 s (1..24)
+    input  wire [6:0]  seek_min,            // |request| as MM:SS -- whole minutes
+    input  wire [2:0]  seek_sec,            //   ...and tens of seconds (0..5)
     input  wire [3:0]  aud_no,              // 1-based playing audio track
     input  wire [3:0]  aud_cnt,
     input  wire [15:0] aud_lang,            // 2-ASCII ISO-639 (0 = none)
@@ -247,7 +248,8 @@ module transport_hud #(
     reg [5:0]  f2_l1, f2_l2;                 // language glyphs (NONE = hidden)
     reg        f2_off;                       // SUB OFF variant
 
-    reg        sk_two, sk_fwd;               // popup 8: 2-digit tens, direction
+    reg        sk_two, sk_fwd;               // popup 8: 2-digit minutes, direction
+    reg [2:0]  sk_sec;                       // popup 8: tens-of-seconds digit
     reg [6:0]  fmt_col;                      // 0..63 write cursor, 64+ = idle
     reg [14:0] fmt_wait;
 
@@ -308,10 +310,14 @@ module transport_hud #(
                 5'd7:  fmt_g = {1'b0, sk_fwd ? a2g("D") : a2g("C")};
                 5'd8:  fmt_g = {1'b0, sk_fwd ? G_SPACE  : a2g("K")};
                 5'd9:  fmt_g = {1'b0, G_SPACE};
+                // MM:SS -- seconds are always a multiple of 10, so the second
+                // seconds digit is a literal '0' (glyph slot 0, like every digit).
+                // Minutes lose their leading zero: "1:30", "12:30".
                 5'd10: fmt_g = {1'b0, 2'b00, sk_two ? f2_n[7:4] : f2_n[3:0]};
-                5'd11: fmt_g = sk_two ? {1'b0, 2'b00, f2_n[3:0]} : {1'b0, 6'd0};
-                5'd12: fmt_g = sk_two ? {1'b0, 6'd0}             : {1'b0, a2g("S")};
-                5'd13: fmt_g = sk_two ? {1'b0, a2g("S")}         : {1'b0, G_NONE};
+                5'd11: fmt_g = sk_two ? {1'b0, 2'b00, f2_n[3:0]} : {1'b0, G_COLON};
+                5'd12: fmt_g = sk_two ? {1'b0, G_COLON}          : {1'b0, 3'b000, sk_sec};
+                5'd13: fmt_g = sk_two ? {1'b0, 3'b000, sk_sec}   : {1'b0, 6'd0};
+                5'd14: fmt_g = sk_two ? {1'b0, 6'd0}             : {1'b0, G_NONE};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
         end else if (fmt_col[5] && f2_type == 4'd4) begin
@@ -458,7 +464,7 @@ module transport_hud #(
             fmt_wait <= 15'd0;
             f_cur <= 24'd0; f_tot <= 24'd0; f_n <= 8'd0; f_nn <= 8'd0;
             f_ch <= 1'b0; f_icon <= 2'd0; f_tier1 <= 4'd1;
-            f2_type <= 4'd0; f2_n <= 8'd0; f2_nn <= 8'd0;
+            f2_type <= 4'd0; f2_n <= 8'd0; f2_nn <= 8'd0; sk_sec <= 3'd0;
             f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0;
         end else begin
             if (fmt_col <= 7'd63) begin
@@ -482,8 +488,9 @@ module transport_hud #(
                 f2_l2   <= G_NONE;
                 if (pop_type == 4'd7) f2_n <= bin2bcd99(vts_no);
                 if (pop_type == 4'd8) begin
-                    f2_n   <= bin2bcd99(seek_tens);
-                    sk_two <= (seek_tens >= 8'd10);   // leading-zero suppression
+                    f2_n   <= bin2bcd99({1'b0, seek_min});
+                    sk_two <= (seek_min >= 7'd10);    // leading-zero suppression
+                    sk_sec <= seek_sec;
                     sk_fwd <= seek_fwd;
                 end
                 case (pop_type)

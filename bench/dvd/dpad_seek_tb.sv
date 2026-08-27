@@ -16,9 +16,6 @@ module dpad_seek_tb;
 
     localparam integer COAL = 200;      // shrunk coalesce window (cycles)
     localparam integer FRTO = 4000;     // shrunk wait-for-fresh timeout
-    localparam integer HDLY = 100;      // shrunk hold-arm delay
-    localparam integer HREP = 50;       // shrunk compounding step interval
-    localparam integer HA1  = 300, HA2 = 600, HA3 = 900;   // accel tiers
 
     reg clk = 1'b0;
     always #18.5 clk = ~clk;            // ~27 MHz
@@ -27,7 +24,6 @@ module dpad_seek_tb;
     reg         nav_rst_n = 1'b0;       // the DUT's pipe_rst_n twin for nav_dsi
     reg         en = 1'b1, in_title = 1'b1, dvd_mode = 1'b1, lin_mode = 1'b0;
     reg         up_e = 0, dn_e = 0, lf_e = 0, rt_e = 0, cancel = 0;
-    reg         up_l = 0, dn_l = 0, lf_l = 0, rt_l = 0;   // held levels
     reg         nav_flush = 0;
     reg  [31:0] lin_blk = 32'd100_000;
 
@@ -57,18 +53,13 @@ module dpad_seek_tb;
     wire        jump_fire, jump_dir, pend, pend_dir, pend_evt, pend_fail;
     wire [31:0] jump_base, jump_off;
     wire [1:0]  pend_n;
-    wire [7:0]  pend_tens;
-    wire        freeze;
+    wire [6:0]  pend_min;
+    wire [2:0]  pend_sec;
 
-    integer freeze_seen = 0;
-    always @(posedge clk) if (freeze) freeze_seen = freeze_seen + 1;
-
-    dpad_seek #(.COALESCE(COAL), .FRESH_TO(FRTO), .HOLD_DLY(HDLY), .HOLD_REP(HREP),
-                .HOLD_A1(HA1), .HOLD_A2(HA2), .HOLD_A3(HA3)) dut (
+    dpad_seek #(.COALESCE(COAL), .FRESH_TO(FRTO)) dut (
         .clk(clk), .rst_n(rst_n), .en(en), .in_title(in_title),
         .dvd_mode(dvd_mode), .lin_mode(lin_mode),
         .up_edge(up_e), .dn_edge(dn_e), .lf_edge(lf_e), .rt_edge(rt_e),
-        .up_lvl(up_l), .dn_lvl(dn_l), .lf_lvl(lf_l), .rt_lvl(rt_l),
         .cancel(cancel), .nav_flush(nav_flush),
         .dsi_commit(dsi_commit), .dsi_stream(dsi_valid),
         .dsi_nv_pck_lbn(nv_pck_lbn), .dsi_vobu_ea(vobu_ea),
@@ -77,8 +68,8 @@ module dpad_seek_tb;
         .jump_fire(jump_fire), .jump_dir(jump_dir),
         .jump_base(jump_base), .jump_off(jump_off),
         .pend(pend), .pend_dir(pend_dir), .pend_n(pend_n),
-        .pend_tens(pend_tens), .pend_evt(pend_evt), .pend_fail(pend_fail),
-        .freeze(freeze));
+        .pend_min(pend_min), .pend_sec(pend_sec),
+        .pend_evt(pend_evt), .pend_fail(pend_fail));
 
     integer errors = 0;
 
@@ -155,24 +146,8 @@ module dpad_seek_tb;
             @(negedge clk);
             rt_e = (d==2'd0); lf_e = (d==2'd1);
             up_e = (d==2'd2); dn_e = (d==2'd3);
-            rt_l = rt_e; lf_l = lf_e; up_l = up_e; dn_l = dn_e;
             @(negedge clk);
             rt_e = 0; lf_e = 0; up_e = 0; dn_e = 0;
-            rt_l = 0; lf_l = 0; up_l = 0; dn_l = 0;
-        end
-    endtask
-
-    // hold a direction down for `cyc` cycles, then release (release commits)
-    task hold_dir(input [1:0] d, input integer cyc);
-        begin
-            @(negedge clk);
-            rt_e = (d==2'd0); lf_e = (d==2'd1);
-            up_e = (d==2'd2); dn_e = (d==2'd3);
-            rt_l = rt_e; lf_l = lf_e; up_l = up_e; dn_l = dn_e;
-            @(negedge clk);
-            rt_e = 0; lf_e = 0; up_e = 0; dn_e = 0;   // edge is one cycle
-            repeat (cyc) @(negedge clk);              // ...level stays down
-            rt_l = 0; lf_l = 0; up_l = 0; dn_l = 0;
         end
     endtask
 
@@ -197,22 +172,6 @@ module dpad_seek_tb;
                 errors = errors + 1;
             end else
                 $display("PASS %0s: off=%0d dir=%0b base=%0d", lbl, f_off, f_dir, f_base);
-        end
-    endtask
-
-    // For HOLD gestures the exact total depends on cycle alignment, so assert the
-    // property instead: one fire, right direction, and strictly more than a tap.
-    task expect_fire_ge(input [80*8-1:0] lbl, input [31:0] floor_off, input dir);
-        begin
-            tick(COAL + 400);
-            if (fires != 1) begin
-                $display("FAIL %0s: expected 1 fire, got %0d", lbl, fires);
-                errors = errors + 1;
-            end else if (f_dir !== dir || f_off <= floor_off) begin
-                $display("FAIL %0s: off=%0d (want > %0d) dir=%0b", lbl, f_off, floor_off, f_dir);
-                errors = errors + 1;
-            end else
-                $display("PASS %0s: off=%0d dir=%0b", lbl, f_off, f_dir);
         end
     endtask
 
@@ -258,8 +217,10 @@ module dpad_seek_tb;
         // ---- T1: single Right = exactly fwda[3] ---------------------------
         arm; press(2'd0);
         expect_fire("T1 1xR = +10s fwda[3]", 32'd2500, 1'b1, LBN0);
-        if (pend_tens !== 8'd1) begin
-            $display("FAIL T1 pend_tens=%0d want 1", pend_tens); errors = errors + 1; end
+        tick(120);      // let the MM:SS subtract loop settle
+        if (pend_min !== 7'd0 || pend_sec !== 3'd1) begin
+            $display("FAIL T1 readout %0d:%0d0 want 0:10", pend_min, pend_sec);
+            errors = errors + 1; end
 
         // ---- T2: 2xR = two 10 s terms (no 20 s rung exists) ---------------
         arm; press(2'd0); press(2'd0);
@@ -375,82 +336,45 @@ module dpad_seek_tb;
         arm; press(2'd0); tick(COAL/2); cancel = 1'b1; tick(4); cancel = 1'b0;
         expect_none("T15c cancel mid-window", 0);
 
-        // ---- T16a: a mid-size tap burst decomposes over the ladder --------
+        // ---- T16: taps keep accumulating well past the old 240 s ceiling --
+        // 5xUp = 300 s = 12 + 12 + 6 units -> fwda[0] x2 + fwda[1].
         arm;
-        press(2'd2); press(2'd2); press(2'd2); press(2'd2); press(2'd2);  // 5x60 = 300 s
-        if (pend_tens !== 8'd30) begin
-            $display("FAIL T16a pend_tens=%0d want 30", pend_tens);
+        press(2'd2); press(2'd2); press(2'd2); press(2'd2); press(2'd2);
+        tick(120);      // let the MM:SS subtract loop settle
+        if (pend_min !== 7'd5 || pend_sec !== 3'd0) begin
+            $display("FAIL T16a readout %0d:%0d0 want 5:00", pend_min, pend_sec);
             errors = errors + 1; end
-        // 30 units = 12 + 12 + 6 -> fwda[0] x2 + fwda[1]
-        expect_fire("T16a 300 s = 2 x fwda[0] + fwda[1]", 32'd75000, 1'b1, LBN0);
+        expect_fire("T16a 5xU = 300 s (past the old cap)", 32'd75000, 1'b1, LBN0);
 
-        // ---- T16b: request saturates at UNIT_CAP (600 s) ------------------
+        // ---- T16b: a long tap burst keeps going -- 20xUp = 20 min ---------
         arm;
-        press(2'd2); press(2'd2); press(2'd2); press(2'd2); press(2'd2); press(2'd2);
-        press(2'd2); press(2'd2); press(2'd2); press(2'd2); press(2'd2);  // 11x60 = 660 s
-        if (pend_tens !== 8'd60) begin
-            $display("FAIL T16b pend_tens=%0d want 60 (capped)", pend_tens);
+        for (i = 0; i < 20; i = i + 1) press(2'd2);
+        tick(120);      // let the MM:SS subtract loop settle
+        if (pend_min !== 7'd20 || pend_sec !== 3'd0) begin
+            $display("FAIL T16b readout %0d:%0d0 want 20:00", pend_min, pend_sec);
             errors = errors + 1; end
-        // 60 units = 5 x the 120 s rung
-        expect_fire("T16b saturate at 600 s = 5 x fwda[0]", 32'd150000, 1'b1, LBN0);
+        // 120 units = 10 x the 120 s rung
+        expect_fire("T16b 20xU = 20 min, 10 rungs", 32'd300000, 1'b1, LBN0);
 
-        // ---- T17: HOLDING COMPOUNDS the pending amount -------------------
-        arm; freeze_seen = 0;
-        hold_dir(2'd0, HDLY + 6*HREP);          // Right held well past the delay
-        expect_fire_ge("T17 hold Right compounds past one tap", 32'd2500, 1'b1);
-        if (freeze_seen == 0) begin
-            $display("FAIL T17: a genuine hold must assert freeze"); errors = errors + 1;
-        end else $display("PASS T17b: hold asserted freeze (%0d cycles)", freeze_seen);
-        if (freeze !== 1'b0) begin
-            $display("FAIL T17: freeze stuck after release"); errors = errors + 1; end
-
-        // ---- T18: a LONGER hold seeks further (acceleration) -------------
-        arm; hold_dir(2'd0, HDLY + 3*HREP);
-        tick(COAL + 400);
-        begin : t18
-            integer shortoff;
-            shortoff = f_off;
-            fires = 0;
-            arm; hold_dir(2'd0, HA3 + 4*HREP);   // long enough to reach x8
-            tick(COAL + 400);
-            if (fires != 1) begin
-                $display("FAIL T18: expected one fire, got %0d", fires);
-                errors = errors + 1;
-            end else if (f_off <= shortoff) begin
-                $display("FAIL T18: long hold %0d not > short hold %0d", f_off, shortoff);
-                errors = errors + 1;
-            end else
-                $display("PASS T18: hold accelerates (short=%0d long=%0d)",
-                         shortoff, f_off);
-        end
-
-        // ---- T19: a TAP must never freeze video --------------------------
-        arm; freeze_seen = 0;
-        press(2'd0);
-        expect_fire("T19 tap still = one exact 10 s lookup", 32'd2500, 1'b1, LBN0);
-        if (freeze_seen != 0) begin
-            $display("FAIL T19: a tap asserted freeze (%0d)", freeze_seen);
-            errors = errors + 1;
-        end else $display("PASS T19b: a tap never freezes");
-
-        // ---- T20: release is what commits -- no fire while still held ----
+        // ---- T16c: mixed taps give an exact MM:SS readout -----------------
         arm;
-        @(negedge clk); rt_e = 1; rt_l = 1; @(negedge clk); rt_e = 0;
-        tick(HA1 + COAL + 200);                  // long past the window
-        if (fires != 0) begin
-            $display("FAIL T20: fired while the direction was still held");
-            errors = errors + 1;
-        end else $display("PASS T20: window held open while the D-pad is down");
-        rt_l = 0;
-        expect_fire_ge("T20b fires on release", 32'd2500, 1'b1);
+        press(2'd2); press(2'd2);                         // +2:00
+        press(2'd0); press(2'd0); press(2'd0);             // +0:30
+        tick(120);      // let the MM:SS subtract loop settle
+        if (pend_min !== 7'd2 || pend_sec !== 3'd3) begin
+            $display("FAIL T16c readout %0d:%0d0 want 2:30", pend_min, pend_sec);
+            errors = errors + 1; end
+        // 15 units = 12 + 3 -> fwda[0] + fwda[2]
+        expect_fire("T16c 2:30 = fwda[0] + fwda[2]", 32'd37500, 1'b1, LBN0);
 
-        // ---- T21: a long hold saturates at UNIT_CAP (600 s) --------------
-        arm; hold_dir(2'd0, HA3 + 40*HREP);
-        if (pend_tens !== 8'd60) begin
-            $display("FAIL T21: pend_tens=%0d want 60 (capped)", pend_tens);
-            errors = errors + 1;
-        end else $display("PASS T21: hold saturates at 600 s");
-        tick(COAL + 400);
+        // ---- T16d: the readout saturates at the widest MM:SS (99:50) ------
+        arm;
+        for (i = 0; i < 110; i = i + 1) press(2'd2);       // 110 min of taps
+        tick(120);      // let the MM:SS subtract loop settle
+        if (pend_min !== 7'd99 || pend_sec !== 3'd5) begin
+            $display("FAIL T16d readout %0d:%0d0 want 99:50", pend_min, pend_sec);
+            errors = errors + 1; end
+        tick(COAL + 3000);
 
         if (errors == 0) $display("DPAD_SEEK_TB: ALL TESTS PASSED");
         else begin $display("DPAD_SEEK_TB: %0d FAILURE(S)", errors); $fatal(1); end

@@ -365,8 +365,7 @@ def _dpad_pick(units_left):
 
 
 def dpad_resolve(dsi, units, fwd):
-    """units = |request| in units of 10 s (1..60, the RTL's UNIT_CAP).
-    Returns (offset|None, trace)."""
+    """units = |request| in units of 10 s (1..24). Returns (offset|None, trace)."""
     off, terms, units_left, trace = 0, 0, units, []
     ridx = _dpad_pick(units_left)
     while True:
