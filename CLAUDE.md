@@ -878,7 +878,7 @@ worse maintenance burden than targeted in-place edits. So:
   decision. The seek UX gained ONE opt-in layer since — `O[45]` D-Pad Seek, below — which
   rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
 - ✅ **D-PAD FIXED-TIME SEEK (`O[45]`, default Off) — HW-CONFIRMED 2026-08-27
-  (user report; SEED 7, clk_dec 90.97 @100C / 89.5 @-40C).** VLC-style jumps on the D-pad
+  (PR #15; user report; SEED 7, clk_dec 90.97 @100C / 89.5 @-40C).** VLC-style jumps on the D-pad
   while a title plays: **Left/Right ∓10 s, Down/Up ∓60 s**. Presses inside ~400 ms coalesce
   into ONE seek and each tap RE-ARMS the window, so a burst builds an arbitrarily long jump
   (20 taps of Up = one 20-min jump), shown as **`SEEK FWD 12:30`**. HOLD-to-compound was

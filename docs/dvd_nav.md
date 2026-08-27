@@ -1202,7 +1202,7 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
 > `tools/nav_extract.py` "scrub tiers" dump stays historical, but the new
 > **`--dpad`** dump is the live golden model.
 
-### 2b. D-Pad fixed-time seek — `O[45]` (`dvd/dpad_seek.sv`) — ✅ HW-CONFIRMED 2026-08-27
+### 2b. D-Pad fixed-time seek — `O[45]` (`dvd/dpad_seek.sv`) — ✅ HW-CONFIRMED 2026-08-27 (PR #15)
 
 **Opt-in, default Off.** With it On, while a title plays: **Left/Right = ∓10 s,
 Down/Up = ∓60 s** — VLC-style *fixed-time* jumps, as opposed to §2a's span-relative
