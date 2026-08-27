@@ -989,10 +989,21 @@ wrong; the measurement split them.
 - **Speed Racer:** ~0.5 s hitch at the race's correct/incorrect **video branches**. That is
   the seamless-branch/ILVU path (PR fj#112, memory `seamless-branch-ilvu-navigation`) — either
   the branch is not being followed via `next_vobu` or it is taking a flushing jump.
-- **Harry Potter:** skipping a transition leaves the static image **pixelated for a few
-  seconds**. The menu still cold re-decode (PR fj#116) is supposed to give a clean image; a
-  few seconds of macroblocking says the re-decode started mid-GOP rather than on the still's
-  I-frame.
+- **Harry Potter:** the static image comes up **pixelated**. ⛔ The "re-decode started mid-GOP"
+  guess below was **WRONG** — root-caused 2026-08-26 to an upstream `motcomp_picbuf.v` defect:
+  the fwd/bwd reference swap was missing the `~vld_last_frame` guard its two sibling blocks
+  have, so at every `sequence_end_code` the decode target could alias the slot the display was
+  scanning out, and the new picture painted in on screen. Fixed by adding the guard —
+  **✅ HW-CONFIRMED 2026-08-27 (user report): HP artifacting gone, no regressions**; see
+  `docs/dvd_menu_refinements.md` §5 and `bench/dvd/motcomp_picbuf_tb.sv`.
+  ⚠ Note this also proved the disc's stills get **no** cold re-decode at all: they are
+  *title-domain* (`VTS_PGCIT`) `still_time=255` cells, and `dvd_iso_reader.sv:4017` gates the
+  re-decode on `menu_dom`. Measured: every still cell is `SEQ GOP PIC:I SEQ_END`, every
+  video/transition cell ends on a coded B — so still→still navigation collided every time,
+  video→still never did.
+  *(Original wording, kept for the record: "The menu still cold re-decode (PR fj#116) is
+  supposed to give a clean image; a few seconds of macroblocking says the re-decode started
+  mid-GOP rather than on the still's I-frame.")*
 
 Both are quality-of-transition, not navigation — genuinely lower priority than A/B/C, but
 they share the "what happens at a cell boundary" surface, so triage them together.

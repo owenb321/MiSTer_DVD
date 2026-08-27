@@ -21,7 +21,8 @@
  *
  * Build:
  *   iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/vld_drop_rff_sim \
- *       rtl/mpeg2/vld.v rtl/mpeg2/getbits.v bench/dvd/vld_drop_rff_tb.sv
+ *       rtl/mpeg2/vld.v rtl/mpeg2/getbits.v rtl/mpeg2/motcomp_picbuf.v \
+ *       bench/dvd/vld_drop_rff_tb.sv
  *   vvp bench/dvd/vld_drop_rff_sim +ES=<stream.hex> [+MAXPIC=N] [+REQ=0]
  *
  * +ES    : $readmemh file of the ES as 64-bit big-endian words (first stream

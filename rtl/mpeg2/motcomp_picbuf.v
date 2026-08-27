@@ -317,14 +317,32 @@ module motcomp_picbuf(
    and subsequent B pictures will use the I or P picture being decoded as backward reference frame.
    */
 
+  /* DVD-FORK FIX (pixelated menu stills): the sequence-end STATE_UPDATE must
+   * NOT rotate the reference slots. The current_frame (above) and prev_i_p_frame
+   * (below) updates are already guarded with ~vld_last_frame because no picture
+   * is being decoded at a sequence end -- this swap was not, so the pointers
+   * rotated one extra step. STATE_LAST_FRAME then emits prev_i_p_frame (== the
+   * old backward_reference_frame) for display AND clears prev_i_p_frame_valid,
+   * so the next sequence's first I picture took current_frame <=
+   * forward_reference_frame -- which the extra swap had just made equal to the
+   * slot now on screen -- while output_frame_valid == 0 let STATE_IP_FRAME_0's
+   * shortcut release the VLD without waiting for the display handshake. The
+   * picture then painted into the slot resample was persistence-re-scanning:
+   * the "menu still comes up blocky, like it hasn't finished loading" bug.
+   * Measured on Harry Potter Interactive DVD: every still cell is
+   * SEQ GOP PIC:I SEQ_END, so a still arms this for whatever decodes next and
+   * still->still menu navigation collided every time.
+   * Safe: the picture after a sequence end is necessarily an I, which predicts
+   * from nothing, so only slot ALLOCATION matters here, never slot contents.
+   * See bench/dvd/motcomp_picbuf_tb.sv scenario [A]. */
   always @(posedge clk)
     if (~rst) forward_reference_frame <= 3'd0;
-    else if (clk_en && (state == STATE_UPDATE) && (vld_picture_coding_type != B_TYPE)) forward_reference_frame <= backward_reference_frame;
+    else if (clk_en && (state == STATE_UPDATE) && (vld_picture_coding_type != B_TYPE) && ~vld_last_frame) forward_reference_frame <= backward_reference_frame;
     else forward_reference_frame <= forward_reference_frame;
 
   always @(posedge clk)
     if (~rst) backward_reference_frame <= 3'd1;
-    else if (clk_en && (state == STATE_UPDATE) && (vld_picture_coding_type != B_TYPE)) backward_reference_frame <= forward_reference_frame;
+    else if (clk_en && (state == STATE_UPDATE) && (vld_picture_coding_type != B_TYPE) && ~vld_last_frame) backward_reference_frame <= forward_reference_frame;
     else backward_reference_frame <= backward_reference_frame;
 
   always @(posedge clk)
@@ -493,6 +511,32 @@ module motcomp_picbuf(
         output_repeat_first_field     <= output_repeat_first_field;
         prev_output_frame_valid       <= prev_output_frame_valid;
       end
+
+`ifdef CHECK
+  /* DVD-FORK: the decode target must never be the slot the display is scanning
+   * out (see the sequence-end fix above). Checked on the two states that release
+   * the VLD to write macroblocks -- STATE_LAST_FRAME also drops picbuf_busy, but
+   * no macroblocks can follow it before the next update_picture_buffers.
+   * chk_shown suppresses it before the very first emission (video start), where
+   * output_frame is still its reset value and nothing is on screen. Note the
+   * existing prev_output_frame_valid reg canNOT be used here: the same I/P emit
+   * branch that zeroes output_frame_valid also zeroes it, so it reads 0 at
+   * exactly the moment of interest. Everything here is inside `ifdef CHECK, so
+   * synthesis sees none of it.
+   * NOTE this is deliberately an assertion and NOT an FSM change -- gating
+   * STATE_IP_FRAME_0's shortcut on slot inequality DEADLOCKS the core, because
+   * dvd/resample_addrgen.v:543 gates pickup on output_frame_valid, which is 0
+   * in exactly the scenario such a gate would be trying to catch. */
+  reg chk_shown;
+  always @(posedge clk)
+    if (~rst) chk_shown <= 1'b0;
+    else if (clk_en && output_frame_valid) chk_shown <= 1'b1;
+
+  always @(posedge clk)
+    if (rst && clk_en && ((state == STATE_IP_FRAME_1) || (state == STATE_B_FRAME_0))
+        && chk_shown && (current_frame == output_frame))
+      $display("%m\t*** Error: releasing decode into displayed slot %0d", current_frame);
+`endif
 
 `ifdef DEBUG
 
