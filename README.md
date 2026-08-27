@@ -53,8 +53,7 @@ other core. A field-passthrough mode hands the CRT the disc's authored fields 1:
 video stream, separately from subtitles. The core extracts them and re-modulates them
 onto **line 21 of the analog output**, exactly as a real DVD player does, so your
 television's own caption decoder displays them. Analog output only, and it needs a set
-with a caption decoder (every US television 13" and larger since 1993 has one). Not yet
-confirmed against a real set — see Known limitations.
+with a caption decoder (every US television 13" and larger since 1993 has one).
 
 **Audio** — AC-3 and MPEG-1 Layer II (MP2) decoded entirely in fabric (AC-3 5.1
 downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
@@ -79,9 +78,7 @@ HUD and seek bar.
   on-screen caption renderer, so nothing appears on HDMI, and your television has to
   decode them (line-21 data reaches a decoder over composite and S-video, and over
   component on many sets; consumer sets generally do not slice captions from RGB).
-  ⚠ **This has not yet been confirmed against a real television** — it is verified in
-  simulation, and the exact line and timing are derived from the raster rather than
-  measured on a set. Captions are also NTSC-only; PAL discs use subtitles instead.
+  Captions are NTSC-only; PAL discs use subtitles instead.
   Roughly 1 disc in 6 carries them at all — see [docs/closed_captions.md](docs/closed_captions.md).
 - **Only 720×480, 720×576 and the MPEG-1 SIF sizes (352×240, 352×288) are well
   tested.** Other DVD-compliant MPEG-2 resolutions (704×480, 352×480 half-D1) are

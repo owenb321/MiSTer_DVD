@@ -1,7 +1,8 @@
 # Line-21 closed captions (EIA-608) on DVD — measurement + feasibility
 
-**Status (2026-08-25): IMPLEMENTED as line-21 re-insertion on the analog raster —
-⏳ HW-confirm pending.** The core now strips the disc's EIA-608 caption bytes out of the
+**Status: ✅ HW-CONFIRMED 2026-08-26 (round 5, user report — C1 captions complete and
+readable on MiB and The Matrix, real TV via the YC active encoder board over composite).**
+Implemented as line-21 re-insertion on the analog raster. The core now strips the disc's EIA-608 caption bytes out of the
 MPEG-2 video stream and re-modulates them onto **line 21 of the analog output**, exactly
 as a real DVD player does, so the *television's* own caption decoder renders them. There
 is deliberately **no on-screen character generator** (§4 explains why that option was
@@ -15,9 +16,11 @@ Shipping in this change:
 - `dvd/re_interlace.sv` — line-21 injection into the analog raster (§4.4)
 - `O[14] Line-21 CC` (On/Off, default On), NTSC + analog only
 
-**What is NOT yet confirmed: any of it, on a television.** Everything below is
-sim-verified and derived from the modeline; §6 is the list of things only a real set can
-settle, and the line number and start dot are the two that matter.
+§6 is the five-round hardware history: one wiring bug in the analog chain (DE gate), one
+diagnosis inverted and re-inverted (field mapping), one editing accident (undriven net),
+and one spec gap (square edges → parity drops). All found by exactly the round order the
+doc prescribed; the CC Test Line diagnostic and the measurement-first rule earned their
+keep.
 
 This supersedes the previous stance in `docs/test_disc_shopping_list.md` #15 ("normally
 decoded by the TV, not the DVD core — likely out of scope"). That was half right: it *is*
@@ -438,6 +441,12 @@ Three guards now exist so this class cannot recur:
 3. **`build_release.sh` fails on any Warning 10236** in the map report, listing the nets.
    (A pre-existing benign one — `vld_err` in `emu.sv`, driven and consumed under the same
    implicit name — was declared properly so the gate can be zero-tolerance.)
+
+### Round 5 (2026-08-26): ✅ HW-CONFIRMED — shaped edges fixed the dropped characters
+
+User report: C1 captions complete and readable on MiB and The Matrix. The scattered
+missing-letter symptom is gone with the ~500 ns shaped transitions, confirming the
+parity-drop-at-the-slicer diagnosis below.
 
 ### Round 4 (2026-08-26): ✅ CAPTIONS DECODE ON C1 — residual: scattered dropped characters
 

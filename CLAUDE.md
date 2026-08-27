@@ -386,8 +386,9 @@ worse maintenance burden than targeted in-place edits. So:
   engaged (`analog_eff`), Interlaced Out is FORCED OFF (the re-interlacer needs the
   standard progressive main raster; the CRT still gets true 480i via the weave frames).
   Sim: `bench/dvd/film_detect_tb.sv`. Design + follow-ups: **`docs/interlaced_auto.md`**.
-- 🔧 **LINE-21 CLOSED CAPTIONS (2026-08-25, branch `feature/closed-captions`) —
-  ⏳ HW-CONFIRM PENDING.** NTSC discs carry EIA-608 captions in MPEG-2 **user_data**,
+- ✅ **LINE-21 CLOSED CAPTIONS (2026-08-25/26, branch `feature/closed-captions`) —
+  ✅ HW-CONFIRMED 2026-08-26 (round 5, user report: C1 captions complete on MiB +
+  Matrix, real TV, YC encoder board → composite).** NTSC discs carry EIA-608 captions in MPEG-2 **user_data**,
   not subpicture. The core now extracts them and re-modulates them onto **line 21 of
   the analog raster** so the TELEVISION's own decoder renders them — what a real
   player does. **No on-screen character generator** — originally dropped because a 32x15 char
