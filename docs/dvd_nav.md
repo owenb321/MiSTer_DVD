@@ -504,7 +504,7 @@ and its jump's flush hits an empty buffer (A/V re-anchor semantics preserved). D
   `S_STREAM`, so a VM jump (Menu key, button) hits `jump_go` at once and clears
   `vmw_pgc_pend`; a transport seek likewise. Menu-domain PGC ends bypass the wait
   entirely (their tail rides `keep_vbuf`; menus stay snappy).
-- **`DRAIN_WD` watchdog (~5 s, module parameter).** A wedged/never-draining decoder
+- **`DRAIN_WD` watchdog (60 s, module parameter — `dvd_iso_reader.sv:78`; was ~5 s, widened for Weakest Link's 17 s answer cell).** A wedged/never-draining decoder
   degrades to the old dispatch-with-flush behaviour instead of parking the transition.
   Very-low-bitrate tails > 5 s truncate at the bound — still strictly better than before.
 - **No decoder-watchdog suppression needed — and it must NOT be added.** The decoder
@@ -642,7 +642,11 @@ the cell command on timeout). **✅ HW-CONFIRMED (2026-07-29, PR fj#144).** Watc
 heuristic (`vm.c` playback-time rule) can now mark a *heuristic* (implicit) still on a short
 single-VOBU title cell under `vm_mode` — matches libdvdnav, but verify normal FMV clips don't
 falsely freeze; (b) the frozen choice frame is decoded warm (just-played), so no menu-style
-cold re-decode is applied — confirm it isn't pixelated.
+cold re-decode is applied — confirm it isn't pixelated. **✅ ANSWERED 2026-08-26: it WAS
+pixelated, but the cause was not the warm decode** — it was the `motcomp_picbuf.v` sequence-end
+slot alias (the decoder writing into the slot being scanned out). Fixed in
+`rtl/mpeg2/motcomp_picbuf.v`; see `docs/dvd_menu_refinements.md` §5. The `menu_dom`-only gate on
+the cold re-decode remains a separate, deliberate open item.
 
 ### Proto-nav glue (emu.sv, replaced by the VM in Phase 4)
 

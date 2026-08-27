@@ -158,6 +158,32 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **PIXELATED MENU STILLS — root-caused + fixed in fabric (2026-08-26, branch
+  `fix/picbuf-display-slot-alias`); ⏳ HW-CONFIRM PENDING.** A menu/game still could come up
+  **blocky, "like it hasn't finished loading"** because the decoder was writing the new picture
+  **into the frame slot the display was scanning out**. `rtl/mpeg2/motcomp_picbuf.v` guards its
+  `current_frame` (:268/:278) and `prev_i_p_frame` (:355) updates with `~vld_last_frame`, but the
+  **fwd/bwd reference swap (:322/:327) was not guarded** — so at every `sequence_end_code` the
+  slot pointers rotated one extra step, `STATE_LAST_FRAME` put that slot on screen while clearing
+  `prev_i_p_frame_valid`, and the next sequence's first I both targeted the displayed slot AND
+  took `STATE_IP_FRAME_0`'s `~output_frame_valid` shortcut (:164) past the anti-overwrite
+  handshake. **Fix = add `~vld_last_frame` to the swap** (the alias becomes structurally
+  impossible: `fwd`/`bwd` are always a distinct {0,1} pair and `output_frame == prev_i_p_frame
+  == bwd` at a sequence end). This is an **upstream mpeg2fpga bug** — the file was untouched
+  since import. Sim: new `bench/dvd/motcomp_picbuf_tb.sv` ([A] still→still fails pre-fix, passes
+  post-fix; [B] video→still control; [C] boot-deadlock guard) + a `` `ifdef CHECK `` assertion now
+  live in the module. ⛔ **Do NOT instead gate the `STATE_IP_FRAME_0` shortcut on slot
+  inequality — it DEADLOCKS the core** (`dvd/resample_addrgen.v:543` gates pickup on
+  `output_frame_valid`, which is 0 in exactly that scenario, so `output_frame_rd` never arrives).
+  ⚠ **Scope is honest and narrower than the symptom:** measured over 70 real cells of the Harry
+  Potter Interactive disc, every `still_time=255` still is `SEQ GOP PIC:I SEQ_END` (so a still
+  arms the collision for whatever decodes next ⇒ still→still navigation collided every time)
+  while every video/transition cell ends on a coded B (⇒ never armed). So this does **not**
+  explain the reported jump-vs-natural asymmetry, nor a multi-second artifact — expect it to fix
+  a blocky flash. Also learned: that disc's stills are **title-domain**, and the menu-still cold
+  re-decode (`dvd_iso_reader.sv:4017`) is `menu_dom`-gated, so it never ran there at all — a
+  separate, deliberately deferred item. Detail: `docs/dvd_menu_refinements.md` §5.
+
 - ✅ **LAUNCH FEEDBACK TRIO — HW-CONFIRMED 2026-08-26 (5 HW rounds; PR #9 +
   the follow-up rounds PR); design + full history: `docs/idle_screen.md`.**
   Shipped as release v0.1c. HW rounds delivered on top of the original trio:

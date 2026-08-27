@@ -330,6 +330,40 @@ Matrix submenus similarly; MiB/BBB menus unchanged; normal playback (O[1] Off) u
 
 ## 5. Menu stills don't reach their final frame — cold re-decode (clean), with a FAST trigger
 
+> **★ 2026-08-26 — SEPARATE ROOT CAUSE FOUND for the PIXELATED half: the decoder was
+> writing the new picture INTO the frame slot the display was scanning out.**
+> `rtl/mpeg2/motcomp_picbuf.v`'s `STATE_UPDATE` guards `current_frame` (:268/:278) and
+> `prev_i_p_frame` (:355) with `~vld_last_frame`, but the **forward/backward reference swap
+> (:322/:327) was NOT guarded**, so at every `sequence_end_code` the slot pointers rotated one
+> extra step. `STATE_LAST_FRAME` then emits `prev_i_p_frame` for display *and* clears
+> `prev_i_p_frame_valid`; the next sequence's first I therefore took
+> `current_frame <= forward_reference_frame` — which the extra swap had just made equal to the
+> displayed slot — while `output_frame_valid == 0` let `STATE_IP_FRAME_0`'s `~output_frame_valid`
+> shortcut (:164) release the VLD with no display handshake. The picture then painted into the
+> slot `dvd/resample_addrgen.v` was persistence-re-scanning (`output_frame_sav`, :1065) =
+> "blocky, like it hasn't finished loading". **Fix: add `~vld_last_frame` to the swap** —
+> the alias becomes structurally impossible (`fwd`/`bwd` are always a distinct {0,1} pair, and
+> at a sequence end `output_frame == prev_i_p_frame == bwd`). Sim:
+> `bench/dvd/motcomp_picbuf_tb.sv` scenario [A] fails pre-fix, passes post-fix; a new
+> `` `ifdef CHECK `` assertion in the module catches any recurrence in every picbuf bench.
+>
+> ⛔ **Do NOT "harden" the `STATE_IP_FRAME_0` shortcut instead** — gating it on slot inequality
+> DEADLOCKS the core: `dvd/resample_addrgen.v:543` gates pickup on `output_frame_valid`, which
+> is 0 in exactly the scenario such a gate would try to catch, so `output_frame_rd` can never
+> arrive. (It also aliases legitimately at video start, where all the slot regs reset to 0.)
+>
+> **What this does and does not explain.** MEASURED over 70 real cells of
+> `Harry Potter Interactive DVD Game (HOGWARTS CHALLENGE)`: every `still_time=255` still cell is
+> `SEQ GOP PIC:I SEQ_END` with the `B7` ending a video PES (so `ps_demux`'s `S_VID_FLUSH` filler
+> fires and the VLD really does reach `STATE_SEQUENCE_END`), while every video/transition cell
+> ends on a coded **B**. Since the swap is `!= B_TYPE`-gated, **a still arms the collision for
+> whatever decodes next** — so still→still menu navigation collided every time, and video→still
+> did not. It therefore does **not** explain the reported "clean when jumped to, pixelated when
+> landing naturally" asymmetry (video transitions never armed it), nor the "pixelated for a few
+> seconds" duration (the filler fires, so the still's I-frame does fully decode — this predicts
+> a blocky flash of a frame or two). Any residual after the fix has a second cause.
+
+
 > **Status (2026-07-12): the PR fj#85 cold re-decode is the CORRECT mechanism and is KEPT.**
 > The §5b trailing-byte flush primer that briefly replaced it was **HW-reverted** — it made
 > the still appear fast but **PIXELATED** (see §5b), because it shoves out the *mid-stream*
@@ -419,7 +453,11 @@ diagnostic at the stuck blank-cubes frame.
 backward reference and only pushed to the screen when the **next** I/P frame arrives *or* the VLD
 hits the `sequence_end_code` (`STATE_LAST_FRAME` flush). At the still-park the reader stops, and
 **ps_demux drops the trailing padding stream**, so the VLD starves right at the `seq_end` and
-never reaches `STATE_SEQUENCE_END`. cell 0's frame stays in the reorder hold → the screen keeps
+never reaches `STATE_SEQUENCE_END`. ⚠ **STALE as written (corrected 2026-08-26):** `ps_demux`
+now synthesizes 24 filler bytes after a `000001B7` at a PES end (`S_VID_FLUSH`, `ps_demux.sv:187-203`),
+so the VLD *does* reach `STATE_SEQUENCE_END` on real still cells — verified on the Harry Potter
+disc. The surviving lag mechanism is the buffered-depth lead plus the reorder hold, not seq_end
+starvation. cell 0's frame stays in the reorder hold → the screen keeps
 the forward reference = **cell 5's blank last frame**. keep_vbuf (continuous decode, no flush)
 is what exposes it; re-entry from a range only *looks* right because that source transition's
 last frame already carries numbers (cell 0's frame isn't displayed there either — it's masked).
