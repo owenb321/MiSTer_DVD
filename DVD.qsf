@@ -623,4 +623,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # 82.6/84.62 (not shipped). Sweep at gate 86.0: SEED 5 TIMEOUT, SEED 9 routes +
 # PASSES (86.47 @100C / 87.92 @-40C, slim but above gate both corners)
 # -> releases/DVD_cc21r4_20260827_0004.rbf. Pinned SEED 9 (sweep rewrote it).
+# Round-6 netlist (Line-21 CC toggle moved to the debug page, CONF_STR only):
+# SEED 9 held first roll, BETTER margin -- clk_dec 93.0 @100C / 88.6 @-40C
+# -> releases/DVD_cc21r5_20260827_0032.rbf. This is the merge candidate.
 set_global_assignment -name SEED 9
