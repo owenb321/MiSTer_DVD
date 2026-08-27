@@ -240,6 +240,31 @@ decisive A/B; backups `BATTLEFIELD_EARTH` VTS 4, `NATIONAL_LAMPOONS_VACATION`
 VTS 2); MiB 4-track cycling unregressed; menu→title transitions keep audio
 continuous.
 
+### Audio-substream observation tap (shipped) + the deferred watchdog
+
+`ps_demux` now exports a PASSIVE tap beside the untouched FSM (the `aud_track`
+compare deliberately stays ahead of the class `casez`): **`aud_ss_seen`** (pulse
+per audio-class substream/stream id parsed — AC-3/DTS/LPCM 0xBD subids +
+MP2 0xC0-C7; subpicture excluded), **`aud_ss_id`** (its track number, held),
+**`aud_pes_hit`** (pulse when that PES matched `aud_track`). Per-codec sticky
+seen-masks live inside ps_demux under `` `ifdef DEBUG_OVERLAY `` (32 FFs,
+dead-stripped from release). This makes "the disc is carrying audio, just not
+on our id" directly observable — the diagnostic a field report needs.
+Tests: `ps_demux_substream_tb` (per-case seen counts 1/1/1, exactly one hit).
+
+**Deferred by design — the self-healing watchdog.** With the `audio_control`
+mapping above delivering libdvdnav's own first-available fallback, a second
+net keyed on observed traffic would only cover a disc whose IFO table itself
+is absent or wrong, at ~135 ALMs on a ~98 % design. Build it ONLY if a report
+shows silence *with the mapping in place*. The vetted design, so it needn't be
+re-derived: windowed (never sticky) — fire only when `video_live`, audio
+unmuted, not `css_scrambled`, ≥8 foreign `aud_ss_seen` pulses and **zero**
+`aud_pes_hit` for ~2.5 s (window cleared on any hit — a legitimately silent
+passage still carries AC-3 PES, so it can never trip); on fire, override to
+the first seen substream, rotate on repeat fire, stop after all seen bits
+tried; clear on `start_streaming`/Audio-button. Reset the window on
+`aud_switch` and inside the jump window.
+
 ## Follow-ups
 
 - **Phase 11: on-screen track indicator** ("AUD 2/4 · fr") using the `attr_*` readout

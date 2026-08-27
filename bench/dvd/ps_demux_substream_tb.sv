@@ -23,6 +23,8 @@ module ps_demux_substream_tb;
 
     wire [7:0]  vid_byte;  wire vid_valid;  logic vid_ready = 1;
     wire [7:0]  aud_byte;  wire aud_valid;  wire [1:0] aud_type;
+    wire        aud_ss_seen, aud_pes_hit;
+    wire [2:0]  aud_ss_id;
     wire        aud_frame_start; logic aud_ready = 1;
     wire [32:0] vid_pts; wire vid_pts_valid; wire [32:0] aud_pts; wire aud_pts_valid;
 
@@ -34,8 +36,17 @@ module ps_demux_substream_tb;
         .aud_byte(aud_byte), .aud_valid(aud_valid), .aud_type(aud_type),
         .aud_frame_start(aud_frame_start), .aud_ready(aud_ready),
         .vid_pts(vid_pts), .vid_pts_valid(vid_pts_valid),
-        .aud_pts(aud_pts), .aud_pts_valid(aud_pts_valid)
+        .aud_pts(aud_pts), .aud_pts_valid(aud_pts_valid),
+        .aud_ss_seen(aud_ss_seen), .aud_ss_id(aud_ss_id), .aud_pes_hit(aud_pes_hit)
     );
+
+    // observation-tap counters (2026-08-27): seen pulses per id + hit pulses
+    int seen_cnt[0:7];
+    int hit_cnt;
+    always @(posedge clk) if (rst_n) begin
+        if (aud_ss_seen) seen_cnt[aud_ss_id]++;
+        if (aud_pes_hit) hit_cnt++;
+    end
 
     // collect forwarded audio bytes
     byte unsigned aud_log[$];
@@ -68,6 +79,8 @@ module ps_demux_substream_tb;
     int errors = 0;
     task automatic run_case(input [2:0] trk, input [7:0] want_pay);
         aud_log.delete();
+        foreach (seen_cnt[i]) seen_cnt[i] = 0;
+        hit_cnt = 0;
         aud_track = trk;
         send_pack();
         send_ac3(8'h80, 8'hA0);   // track 0
@@ -86,6 +99,16 @@ module ps_demux_substream_tb;
             if (errors == 0 || aud_log[0] === want_pay)
                 $display("  track=%0d -> %0d bytes, payload %02h (other substreams dropped) OK",
                          trk, aud_log.size(), want_pay);
+        end
+        // observation tap: all three substreams SEEN once each, exactly one HIT
+        if (seen_cnt[0] != 1 || seen_cnt[1] != 1 || seen_cnt[2] != 1) begin
+            $display("  FAIL track=%0d: aud_ss_seen counts %0d/%0d/%0d (want 1/1/1)",
+                     trk, seen_cnt[0], seen_cnt[1], seen_cnt[2]);
+            errors++;
+        end
+        if (hit_cnt != 1) begin
+            $display("  FAIL track=%0d: aud_pes_hit=%0d (want 1)", trk, hit_cnt);
+            errors++;
         end
     endtask
 

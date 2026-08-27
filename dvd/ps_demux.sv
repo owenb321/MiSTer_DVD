@@ -148,6 +148,18 @@ module ps_demux (
     // live here) that drives the HUD "CSS ENCRYPTED" popup + the audio mute.
     output logic        pes_scrambled,
 
+    // ---- Audio-substream observation (2026-08-27, menu-link/audio-map fix) ----
+    // A PASSIVE tap beside the FSM (which is untouched): which audio-class
+    // substreams the stream actually carries, and whether the selected track is
+    // getting any PES at all. "Silent because the selected substream does not
+    // exist" was invisible before this — the filter discards everything with no
+    // diagnostic. Consumers: the DEBUG_OVERLAY seen-masks below; a future
+    // never-silently-silent watchdog (designed, deliberately deferred — see
+    // docs/track_selection.md).
+    output logic        aud_ss_seen,   // pulse: an audio-class substream/stream id parsed
+    output logic [2:0]  aud_ss_id,     // its low 3 bits (the track number)
+    output logic        aud_pes_hit,   // pulse: that PES matched aud_track
+
     // Held: a 0xBA pack has been seen — this stream is a program/system stream
     // (not a raw ES). Gates the flat-file transport seek in emu: only a stream
     // with packs can be re-synced by the reader's post-seek pack hunt. Clears
@@ -274,6 +286,47 @@ always_comb begin
 end
 
 wire consume = in_valid && in_ready;
+
+// ---- audio-substream observation tap (no FSM interaction) -------------------
+// 0xBD path: the substream id byte is consumed in S_SUBSTREAM_ID (skip the
+// pes_length==1 degenerate, which the FSM also ignores); audio classes are
+// AC-3 0x80-87 / DTS 0x88-8F / LPCM 0xA0-A7 (subpicture 0x20-3F excluded).
+// MP2 path: stream_id 0xC0-C7 consumed at the S_HUNT start-code dispatch.
+wire obs_bd_aud = (state == S_SUBSTREAM_ID) && (pes_length != 16'd1) &&
+                  ((in_byte[7:3] == 5'b10000) ||     // AC-3
+                   (in_byte[7:3] == 5'b10001) ||     // DTS
+                   (in_byte[7:3] == 5'b10100));      // LPCM
+wire obs_mp2    = (state == S_HUNT) && start_code_detected &&
+                  (in_byte[7:3] == 5'b11000);        // MPEG audio 0xC0-C7
+always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        aud_ss_seen <= 1'b0;
+        aud_ss_id   <= 3'd0;
+        aud_pes_hit <= 1'b0;
+    end else begin
+        aud_ss_seen <= consume && (obs_bd_aud || obs_mp2);
+        if (consume && (obs_bd_aud || obs_mp2))
+            aud_ss_id <= in_byte[2:0];       // holds the LAST seen id
+        aud_pes_hit <= consume && (obs_bd_aud || obs_mp2) &&
+                       (in_byte[2:0] == aud_track);
+    end
+end
+`ifdef DEBUG_OVERLAY
+// Sticky per-codec seen masks (debug builds only — dead-stripped from release).
+// Cleared with the demux reset (per jump/mount via pipe_rst_n in emu).
+logic [7:0] dbg_seen_ac3, dbg_seen_dts, dbg_seen_lpcm, dbg_seen_mp2;
+always_ff @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+        dbg_seen_ac3 <= 8'd0; dbg_seen_dts  <= 8'd0;
+        dbg_seen_lpcm <= 8'd0; dbg_seen_mp2 <= 8'd0;
+    end else if (consume) begin
+        if (obs_bd_aud && in_byte[7:3] == 5'b10000) dbg_seen_ac3[in_byte[2:0]]  <= 1'b1;
+        if (obs_bd_aud && in_byte[7:3] == 5'b10001) dbg_seen_dts[in_byte[2:0]]  <= 1'b1;
+        if (obs_bd_aud && in_byte[7:3] == 5'b10100) dbg_seen_lpcm[in_byte[2:0]] <= 1'b1;
+        if (obs_mp2)                                dbg_seen_mp2[in_byte[2:0]]  <= 1'b1;
+    end
+end
+`endif
 
 // MPEG audio stream_id 0xC0-0xC7 (DVD MP2): payload starts straight after the
 // PES optional header (no substream byte / sub-header), so the three header-exit
