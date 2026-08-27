@@ -183,6 +183,8 @@ worse maintenance burden than targeted in-place edits. So:
   a blocky flash. Also learned: that disc's stills are **title-domain**, and the menu-still cold
   re-decode (`dvd_iso_reader.sv:4017`) is `menu_dom`-gated, so it never ran there at all — a
   separate, deliberately deferred item. Detail: `docs/dvd_menu_refinements.md` §5.
+  A follow-up **audit of the rest of the upstream decoder found no further fix-now
+  defects** — findings + the audited-clean list: `docs/decoder_audit.md`.
 
 - ✅ **LAUNCH FEEDBACK TRIO — HW-CONFIRMED 2026-08-26 (5 HW rounds; PR #9 +
   the follow-up rounds PR); design + full history: `docs/idle_screen.md`.**
