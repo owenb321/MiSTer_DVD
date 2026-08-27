@@ -34,6 +34,9 @@ module transport_hud_tb;
     reg         aud_warn = 0;      // Phase-2: unsupported audio format
     reg         vts_evt  = 0;      // Phase-2: title-VTS notice pulse
     reg  [7:0]  vts_no   = 8'd0;
+    reg         seek_evt = 0;      // O[45] D-pad seek popup
+    reg         seek_fwd = 0;
+    reg  [7:0]  seek_tens = 8'd0;
     reg  [3:0]  aud_no = 0, aud_cnt = 0, sub_no = 0, sub_cnt = 0;
     reg  [3:0]  ang_no = 0, ang_cnt = 0;
     reg  [15:0] aud_lang = 0, sub_lang = 0;
@@ -54,6 +57,7 @@ module transport_hud_tb;
         .chap_evt(chap_evt), .css_warn(css_warn),
         .img_warn(img_warn), .aud_warn(aud_warn),
         .vts_evt(vts_evt), .vts_no(vts_no),
+        .seek_evt(seek_evt), .seek_fwd(seek_fwd), .seek_tens(seek_tens),
         .aud_no(aud_no), .aud_cnt(aud_cnt), .aud_lang(aud_lang),
         .sub_enabled(sub_enabled), .sub_no(sub_no), .sub_cnt(sub_cnt),
         .sub_lang(sub_lang), .ang_no(ang_no), .ang_cnt(ang_cnt),
@@ -319,6 +323,38 @@ module transport_hud_tb;
         else $display("  ok  T17e user popup not preempted by warning");
         css_warn = 0; aud_warn = 0;
         repeat (2100) @(posedge clk);
+
+        // ---- T18: O[45] D-pad seek popup ------------------------------
+        // Both the 1-digit and 2-digit tens paths (leading-zero suppression)
+        // and both direction words, which differ in width.
+        css_warn = 0; img_warn = 0; aud_warn = 0; @(posedge clk);
+        seek_fwd = 1; seek_tens = 8'd3; seek_evt = 1; @(posedge clk); seek_evt = 0;
+        check_popup("T18a seek fwd 30 s", "SEEK FWD  30S~~~~~~~~~~~~~~~~~~~");
+        seek_fwd = 0; seek_tens = 8'd6; seek_evt = 1; @(posedge clk); seek_evt = 0;
+        check_popup("T18b seek back 60 s", "SEEK BACK 60S~~~~~~~~~~~~~~~~~~~");
+        seek_fwd = 1; seek_tens = 8'd24; seek_evt = 1; @(posedge clk); seek_evt = 0;
+        check_popup("T18c seek fwd 240 s", "SEEK FWD  240S~~~~~~~~~~~~~~~~~~");
+        seek_fwd = 0; seek_tens = 8'd1; seek_evt = 1; @(posedge clk); seek_evt = 0;
+        check_popup("T18d seek back 10 s", "SEEK BACK 10S~~~~~~~~~~~~~~~~~~~");
+
+        // ---- T19: the seek popup is a USER event, never preempted ------
+        seek_fwd = 1; seek_tens = 8'd1; seek_evt = 1; @(posedge clk); seek_evt = 0;
+        css_warn = 1; @(posedge clk); @(posedge clk);
+        if (dut.pop_type !== 4'd8) begin
+            $display("  FAIL T19: css_warn preempted the seek popup (pop_type=%0d)",
+                     dut.pop_type);
+            errors = errors + 1;
+        end else $display("  ok  T19 seek popup not preempted by a warning");
+        css_warn = 0; @(posedge clk);
+
+        // ---- T20: the status-line icon field renders the tap count -----
+        // emu drives scrub_held|dpad_pend / dpad_pend_n into these taps, so a
+        // 3-tap D-pad gesture must read as ">>x3" exactly like a scrub tier.
+        scrub_held = 1; scrub_dir = 1; scrub_tier = 2'd2;
+        cur_time = 32'h00123400; total_time = 32'h01370500;
+        cur_pgm = 8'd12; nr_pgm = 8'd23; @(posedge clk);
+        check_line("T20 dpad tap count icon", ">>x3 0:12:34/1:37:05 CH 12/23~~~");
+        scrub_held = 0; scrub_tier = 2'd0; @(posedge clk);
 
         if (errors == 0) $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
         else             $display("TRANSPORT_HUD_TB: FAILED (%0d errors)", errors);

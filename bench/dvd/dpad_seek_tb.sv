@@ -34,6 +34,10 @@ module dpad_seek_tb;
     wire        dsi_commit;
     wire [5:0]  tbl_raddr;
     wire [31:0] tbl_rdata;
+    // T0 probe: the DUT parks tbl_raddr at 0 while idle, so the TB may drive the
+    // nav_dsi read port itself to inspect the table.
+    reg  [5:0]  tbl_probe = 6'd0;
+    wire [5:0]  tbl_addr_mux = (tbl_probe != 6'd0) ? tbl_probe : tbl_raddr;
 
     nav_dsi nav_dsi_i (
         .clk(clk), .rst_n(nav_rst_n),
@@ -44,7 +48,7 @@ module dpad_seek_tb;
         .dsi_next_video(), .dsi_prev_video(),
         .dsi_category(), .dsi_ilvu_block(), .dsi_ilvu_last(),
         .dsi_commit(dsi_commit),
-        .tbl_raddr(tbl_raddr), .tbl_rdata(tbl_rdata));
+        .tbl_raddr(tbl_addr_mux), .tbl_rdata(tbl_rdata));
 
     wire        jump_fire, jump_dir, pend, pend_dir, pend_evt, pend_fail;
     wire [31:0] jump_base, jump_off;
@@ -186,6 +190,27 @@ module dpad_seek_tb;
     initial begin
         setup_dsi(LBN0);
         tick(4); rst_n = 1'b1; nav_rst_n = 1'b1; tick(4);
+
+        // ---- T0: DEMONSTRATE the hazard dsi_fresh exists to cover --------
+        // nav_dsi's rst_n clears the scalars but dsi_tbl/tbl_rdata live in a
+        // SEPARATE UNRESET always block. This asserts that asymmetry directly,
+        // so the trap is documented executably rather than only in prose.
+        arm;
+        tbl_probe = 6'd3; tick(3);
+        if (tbl_rdata !== (32'h8000_0000 | 32'd2500)) begin
+            $display("FAIL T0: table read back wrong before reset (%08x)", tbl_rdata);
+            errors = errors + 1;
+        end
+        nav_rst_n = 1'b0; tick(3); nav_rst_n = 1'b1; tick(3);
+        if (nv_pck_lbn !== 32'd0) begin
+            $display("FAIL T0: nv_pck_lbn should clear on reset"); errors = errors + 1;
+        end else if (tbl_rdata !== (32'h8000_0000 | 32'd2500)) begin
+            $display("FAIL T0: dsi_tbl unexpectedly cleared -- re-read dpad_seek's");
+            $display("         stale-table note; the freshness gate may be re-derivable");
+            errors = errors + 1;
+        end else
+            $display("PASS T0: base cleared but dsi_tbl RETAINED = the stale-table trap");
+        tbl_probe = 6'd0;
 
         // ---- T1: single Right = exactly fwda[3] ---------------------------
         arm; press(2'd0);

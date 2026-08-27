@@ -518,6 +518,18 @@ parameter CONF_STR = {
     // with the OLD meaning and comes up Off — delete the .cfg after updating.
     // status[1]. See docs/dvd_nav.md, docs/dvd_vm.md.
     "O[1],Disc Menus,On,Off;",
+    // D-Pad Seek: OFF by default. On = the D-pad does VLC-style FIXED-TIME
+    // seeking while a title plays -- Left/Right jump -/+10 s, Down/Up -/+60 s --
+    // with targets read from the disc's OWN authored DSI seek tables
+    // (dvd/dpad_seek.sv). Presses inside ~0.4 s add up into ONE jump.
+    // ⚠ Default Off ON PURPOSE: the hold-to-seek scrub was deliberately moved
+    // OFF the D-pad in 2026-07-28 because interactive/game DVDs have seekable
+    // title video yet expect directional input, and the in_title_menu heuristic
+    // cannot always tell the two apart. Off keeps the D-pad pure navigation for
+    // everyone who does not ask for this. When On it is still suppressed
+    // wherever the nav layer claims the D-pad (menus, in-title game menus).
+    // See docs/dvd_nav.md 2b.
+    "O[45],D-Pad Seek,Off,On;",
     "O5,Audio,On,Off;",
     // Audio Out: Decode = AC-3/LPCM decoded in fabric to HDMI PCM (default).
     // Passthru = the UNDECODED AC-3/DTS frames are wrapped in IEC 61937 and
@@ -1107,6 +1119,7 @@ reg         key_menu_p, key_resume_p, key_title_p, key_return_p;
 
 wire menus_on  = ~status[1];                       // O[1] Disc Menus (index 0 = On, default)
 wire hud_dbg   = status[2];                         // O[2]: HUD shows reader PGCN/VTS (nav diagnostic)
+wire dpad_seek_en = status[45];                     // O[45]: D-pad fixed-time seek
 // effective subpicture routing/decode enable: subtitles OR a menu is up
 wire sp_route_en;                                  // (assigned at the SPU block)
 wire joy_pause = joystick_0[4];                    // B1 "Pause"
@@ -1144,9 +1157,12 @@ wire sel_edge   = joy_sel   & ~joy_prev[7];
 // enter/return, a menu next_pgcn advance) - those are "clip starts", not user
 // actions, and should not pop the HUD. (Audio/subtitle/angle cycles drive the
 // popup line separately.) seek_rbn_pulse is the scrub-release seek (user).
+// dpad_pend_evt pops the HUD on the FIRST D-pad press rather than ~0.4 s later
+// when the coalesced jump actually fires, so the seconds readout tracks the taps.
 wire hud_user_evt = pause_edge
                   | ((chnext_edge | chprev_edge) && cell_ready && !menu_active)
-                  | seek_rbn_pulse;
+                  | seek_rbn_pulse
+                  | dpad_pend_evt;
 wire menu_edge  = joy_menu  & ~joy_prev[8];
 wire angle_edge = joy_angle & ~joy_prev[9];
 wire audio_edge = joy_audio & ~joy_prev[10];       // Phase 10: cycle audio track
@@ -1157,8 +1173,12 @@ wire rew_edge   = joy_rew & ~joy_prev[14];         // Rewind press  (scrub start
 wire title_edge = joy_title & ~joy_prev[15];       // Title press   (Top Menu)
 wire ret_edge   = joy_ret   & ~joy_prev[16];       // Return press  (GoUp)
 // D-pad edges (bits 3:0 = up/down/left/right): BUTTON NAV in a menu / in-title
-// HLI with armed buttons (Phase 3). Seeking is on the dedicated Fast Fwd/Rewind
-// buttons now, so the D-pad no longer scrubs and never fights game direction input.
+// HLI with armed buttons (Phase 3). The HOLD-to-seek scrub is on the dedicated
+// Fast Fwd/Rewind buttons, so the D-pad never fights game direction input.
+// With O[45] "D-Pad Seek" On (default Off), the same edges ALSO feed
+// dvd/dpad_seek.sv for VLC-style fixed-time jumps -- but only where the nav
+// layer has NOT claimed them (see the menu_nav / in_title_menu gates below),
+// so the no-conflict property above is preserved by construction.
 wire up_edge    = joystick_0[3] & ~joy_prev[3];
 wire dn_edge    = joystick_0[2] & ~joy_prev[2];
 wire lf_edge    = joystick_0[1] & ~joy_prev[1];
@@ -1260,6 +1280,11 @@ always @(posedge clk_sys or negedge reset_n) begin
         // a title-mode Fast Fwd/Rewind time scrub resumes playback (the scrub FSM
         // below issues the actual seek_rbn)
         else if ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu && (ff_edge || rew_edge)) pause_q <= 1'b0;
+        // a D-pad fixed-time seek likewise resumes playback (dvd/dpad_seek.sv
+        // issues the jump when the coalesce window closes)
+        else if (dpad_seek_en && (cell_ready || lin_seek_ok_w) && !menu_active &&
+                 !in_title_menu && !menu_nav &&
+                 (up_edge || dn_edge || lf_edge || rt_edge)) pause_q <= 1'b0;
         // any VM jump / menu key resumes playback (a paused governor would
         // freeze the menu the VM is jumping to)
         if (jump_ack)             pause_q <= 1'b0;
@@ -1441,8 +1466,13 @@ end
 // position bar (deferred, not built yet) so the user can see where they're going;
 // the seek action itself needs no overlay. Chapter B2/B3 and menu D-pad nav are
 // handled elsewhere; scrub_ctrl only runs while `in_title`.
-wire [5:0]  dsi_tbl_raddr = 6'd0;                 // nav_dsi fwda/bwda read port (unused now)
-wire [31:0] dsi_tbl_rdata;                        // from nav_dsi (unused)
+// nav_dsi fwda/bwda seek-table read port. Driven by dvd/dpad_seek.sv (O[45]).
+// ⚠ This port was tied to 0 until 2026-08-27, which let Quartus dead-strip the
+// whole dsi_tbl RAM and its byte-walker write branches (the fit report showed
+// nav_dsi at 16 ALMs / 0 memory bits). Wiring it up RESURRECTS that logic --
+// expect nav_dsi to grow by ~1 M10K and ~100 ALMs, and check the map report.
+wire [5:0]  dsi_tbl_raddr;
+wire [31:0] dsi_tbl_rdata;
 
 // Seek-on-release: holding D-pad L/R pauses the video and accumulates an
 // accelerating target offset; releasing issues ONE raw-RBN seek. hold_freeze
@@ -1450,6 +1480,11 @@ wire [31:0] dsi_tbl_rdata;                        // from nav_dsi (unused)
 // (playhead + target position) are computed for the Phase-11 on-screen position
 // bar and left UNWIRED for now (the seek action itself needs no overlay).
 wire        hold_freeze;
+wire        dpad_pend, dpad_pend_dir, dpad_pend_evt, dpad_pend_fail;
+wire [1:0]  dpad_pend_n;
+wire [7:0]  dpad_pend_tens;
+wire        dpad_jump_fire, dpad_jump_dir;
+wire [31:0] dpad_jump_base, dpad_jump_off;
 wire        bar_active_w;                          // Phase 11: seek-bar visible
 wire [31:0] bar_base_rbn_w, bar_tgt_rbn_w;         // Phase 11: bar fill + cursor
 wire [31:0] title_first_rbn_w, title_last_rbn_w;
@@ -1471,7 +1506,58 @@ scrub_ctrl scrub_ctrl_inst (
     .bar_base_rbn    (bar_base_rbn_w),
     .bar_tgt_rbn     (bar_tgt_rbn_w),
     .hud_tier        (hud_tier_w),
-    .hud_dir         (hud_dir_w)
+    .hud_dir         (hud_dir_w),
+    // ---- O[45] D-Pad Seek: pre-resolved fixed-time jumps ----------------
+    .jump_fire       (dpad_jump_fire),
+    .jump_dir        (dpad_jump_dir),
+    .jump_base       (dpad_jump_base),
+    .jump_off        (dpad_jump_off)
+);
+
+// =========================================================================
+// D-PAD FIXED-TIME SEEK (O[45], default Off) - dvd/dpad_seek.sv
+// =========================================================================
+// Left/Right = -/+10 s, Down/Up = -/+60 s, resolved from the disc's authored
+// DSI fwda/bwda tables (or the exact CD geometry on a raw VCD/SVCD image) and
+// handed to scrub_ctrl's jump port, which clamps and issues the ONE proven
+// raw-RBN seek. The D-pad is taken ONLY where the nav layer has not claimed it:
+// menu_nav and in_title_menu both suppress it, exactly like the transport above,
+// so a disc menu or an in-title game menu always keeps its button walk.
+// `cancel` guarantees no late surprise jump survives a context change.
+dpad_seek dpad_seek_inst (
+    .clk            (clk_sys),
+    .rst_n          (reset_n),                  // NOT pipe_rst_n: the gesture
+                                                // must survive its own seek
+    .en             (dpad_seek_en),
+    .in_title       ((cell_ready || lin_seek_ok_w) && !menu_active &&
+                     !in_title_menu && !menu_nav),
+    .dvd_mode       (cell_ready),               // DSI tables available
+    .lin_mode       (lin_seek_ok_w && raw_mode_w && !cell_ready),  // raw CD geometry
+    .up_edge        (up_edge),
+    .dn_edge        (dn_edge),
+    .lf_edge        (lf_edge),
+    .rt_edge        (rt_edge),
+    .cancel         (jump_ack | chap_pulse | start_streaming | hold_freeze),
+    .nav_flush      (load_flush),               // nav_dsi's own reset condition
+    .dsi_commit     (dsi_commit),
+    .dsi_stream     (ps_dsi_valid),
+    .dsi_nv_pck_lbn (dsi_nv_pck_lbn),
+    .dsi_vobu_ea    (dsi_vobu_ea),
+    .dsi_next_vobu  (dsi_next_vobu),
+    .dsi_prev_vobu  (dsi_prev_vobu),
+    .tbl_raddr      (dsi_tbl_raddr),
+    .tbl_rdata      (dsi_tbl_rdata),
+    .lin_blk        (lin_blk_w),
+    .jump_fire      (dpad_jump_fire),
+    .jump_dir       (dpad_jump_dir),
+    .jump_base      (dpad_jump_base),
+    .jump_off       (dpad_jump_off),
+    .pend           (dpad_pend),
+    .pend_dir       (dpad_pend_dir),
+    .pend_n         (dpad_pend_n),
+    .pend_tens      (dpad_pend_tens),
+    .pend_evt       (dpad_pend_evt),
+    .pend_fail      (dpad_pend_fail)
 );
 // While a seek gesture is held the video simply PAUSES (a plain, proven freeze --
 // no repeated flushing) and audio holds; releasing does one seek. ORed into the
@@ -4171,9 +4257,13 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .dbg_mode     (hud_dbg),                // O[2]: show reader PGCN/VTS, always visible
     .pause_q      (pause_q),
     .bar_active   (bar_active_w),
-    .scrub_held   (hold_freeze),
-    .scrub_dir    (hud_dir_w),
-    .scrub_tier   (hud_tier_w),
+    // The status-line transport icon is shared: a HELD FF/REW scrub renders
+    // its accelerating tier, and an open D-pad coalesce window renders the tap
+    // COUNT in the same "x n" field. hold_freeze itself is untouched -- it still
+    // pauses the governor/audio below, which a D-pad tap deliberately does not.
+    .scrub_held   (hold_freeze | dpad_pend),
+    .scrub_dir    (hold_freeze ? hud_dir_w  : dpad_pend_dir),
+    .scrub_tier   (hold_freeze ? hud_tier_w : dpad_pend_n),
     .display_edge (display_edge),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
@@ -4198,6 +4288,11 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .aud_warn     (aud_unsupported), // persistent "AUDIO UNSUPPORTED" popup
     .vts_evt      (vts_evt_r),       // one-shot "TITLE VTS nn" (menus-off only)
     .vts_no       (rdr_play_vtsn),
+    // O[45] D-Pad Seek: "SEEK FWD 30S" / "SEEK BACK 60S" while the coalesce
+    // window is open, so the tap COUNT is readable before the jump commits.
+    .seek_evt     (dpad_pend_evt),
+    .seek_fwd     (dpad_pend_dir),
+    .seek_tens    (dpad_pend_tens),
     .aud_no       ({1'b0, aud_cur} + 4'd1),
     .aud_cnt      (audio_ntracks_w),
     .aud_lang     (attr_a_lang_w),
