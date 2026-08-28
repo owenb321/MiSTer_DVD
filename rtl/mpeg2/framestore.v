@@ -236,15 +236,16 @@ module framestore(rst, clk, mem_clk,
   reg          [63:0]mem_req_wr_dta_q;
   reg                mem_req_wr_en_q;
 
+  /* Only en_q is reset: while it is 0 the payload registers are don't-care,
+   * and keeping the 88 payload bits OFF the high-fanout reset tree matters —
+   * the first build of this retime made `syncrst -> mem_req_wr_addr_q` the
+   * new worst path. */
   always @(posedge clk)
-    if (~rst) begin
-      mem_req_wr_en_q   <= 1'b0;
-      mem_req_wr_cmd_q  <= 2'b0;
-      mem_req_wr_addr_q <= 22'b0;
-      mem_req_wr_dta_q  <= 64'b0;
-    end
-    else begin
-      mem_req_wr_en_q   <= mem_req_wr_en;
+    if (~rst) mem_req_wr_en_q <= 1'b0;
+    else      mem_req_wr_en_q <= mem_req_wr_en;
+
+  always @(posedge clk)
+    begin
       mem_req_wr_cmd_q  <= mem_req_wr_cmd;
       mem_req_wr_addr_q <= mem_req_wr_addr;
       mem_req_wr_dta_q  <= mem_req_wr_dta;

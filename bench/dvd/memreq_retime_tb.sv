@@ -52,15 +52,13 @@ module memreq_retime_tb;
         else      begin ref_af_r <= ref_prog_full; ret_af_r <= ret_prog_full; end
     wire src_stop = ref_af_r | ret_af_r;
 
-    // the retime under test (mirrors framestore.v exactly)
+    // the retime under test (mirrors framestore.v exactly: en-only reset —
+    // the payload registers stay OFF the reset tree, don't-care while en=0)
     always @(posedge wr_clk)
-        if (~rst) begin
-            pipe_en  <= 1'b0;
-            pipe_dta <= 88'b0;
-        end else begin
-            pipe_en  <= src_en;
-            pipe_dta <= src_dta;
-        end
+        if (~rst) pipe_en <= 1'b0;
+        else      pipe_en <= src_en;
+    always @(posedge wr_clk)
+        pipe_dta <= src_dta;
 
     // ---- the two fifos -----------------------------------------------------
     wire [87:0] ref_dout, ret_dout;
