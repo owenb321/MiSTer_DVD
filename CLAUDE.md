@@ -158,8 +158,10 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **MID-PLAY LOAD A/V DESYNC — FIXED IN FABRIC (2026-08-28, branch
-  `fix/mount-avsync-flush`); ⏳ HW-confirm pending. The companion FILM-ENGAGE flush was
+- ✅ **MID-PLAY LOAD A/V DESYNC — FIXED IN FABRIC; ✅ HW-CONFIRMED 2026-08-28 (user
+  report: mid-play loads across VOB/mpg/ISO/VCD cut to black, start clean, hold sync;
+  T2 logo chain clean; seeks/menus/cold mount unregressed; build
+  `DVD_mountflush2_20260828_1537.rbf`). The companion FILM-ENGAGE flush was
   attempted and ⛔ REVERTED after a T2 HW regression — that skew stays OPEN, owned by
   the planned early-film-detect feature.** The rule both bugs share: a playback
   discontinuity needs the FULL FLUSH TRIO (seek/vbuf + load + aud) or audio phases
