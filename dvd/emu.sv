@@ -1939,33 +1939,26 @@ wire [2:0] sp_track_eff  = (menus_on && menu_active) || sp_menu_early ? 3'd0 :
 // Declared here (above CLIP-LOAD FLUSH) so it precedes its use in load_flush/aud_flush.
 reg       il_eff_q = 1'b0;
 wire      il_switch = il_eff ^ il_eff_q;
-// FILM-RASTER SWITCH (2026-08-28): a LIVE filmp_eff change is the same raster-regime
-// event as il_switch and needs the same full seek-equivalent flush. With Film 24p Out
-// = Auto (the default), the cadence detector engages the 23.976/25 Hz film raster
-// ~2 s AFTER a menu->feature jump established audio sync at 59.94/50 Hz: the modeline
-// re-walks and av_sync's TPR_Q16 muxes to the film rate, but with no flush the raster
-// hand-off leaves a constant phase error between the free-running audio and the video
-// timeline that never re-anchors (forward, < 15 s) - HW symptom: slight skew entering
-// the main film, fixed by a chapter skip (whose seek flush is exactly this trio). The
-// XOR covers BOTH directions: engage (menu->film) and mid-title disengage (film->video
-// content; the detector drops after ~50 non-film pictures and the mirror-image skew
-// would accrue). Gated on ~menu_active: a detector-confidence decay while a MENU is up
-// must not fire a flush into the keep_vbuf menu machinery (visible glitch for nothing -
-// menus aren't lip-sync-scheduled, sched_en=0); the next menu->title jump flushes
-// anyway. Trade (same as Interlaced Auto's il_switch): a brief seek-like re-lock at
-// the switch, ~once per title entry, instead of a permanent skew.
-reg       filmp_eff_q = 1'b0;
-wire      film_switch = (filmp_eff ^ filmp_eff_q) & ~menu_active;
-// mode_switch = any live raster-regime change -> full flush trio (load+aud+seek).
-wire      mode_switch = il_switch | film_switch;
+// ⛔ FILM-RASTER SWITCH — ATTEMPTED AND REVERTED (2026-08-28). A filmp_eff XOR edge
+// briefly drove mode_switch here (full flush trio on a live film engage/disengage, to
+// fix the menu->film constant skew). ON HW IT BROKE T2's menu->Play logo chain: the
+// Dolby/THX logos flap the cadence detector, and each flap fired the trio at an
+// ARBITRARY mid-stream byte position (no reader jump = no VOBU re-alignment, unlike a
+// chapter seek). Repeated mid-parse flushes yielded garbage sequence headers (186-wide
+// resolution popups), a garbage 576-line parse flipped pal_eff (25 Hz), and pal_eff
+// feeds back into film_want -> another filmp_eff edge -> another flush = a self-
+// feeding corruption/strobe loop. il_switch is only safe because il_eff changes
+// ~once/title. Do NOT re-add a bare filmp edge here. The proper fix is the early-
+// film-detect feature (parse-front sniffer seeds the detector during the load hold so
+// the raster is right BEFORE display; a mid-title film_switch then needs hold-
+// suppression + a post-discontinuity holdoff, TB'd in flush_ctl_tb) — see
+// docs/film_24p_plan.md §13.
+// mode_switch = live raster-regime change -> full flush trio (load+aud+seek).
+// Today that is il_switch alone.
+wire      mode_switch = il_switch;
 always @(posedge clk_sys) begin
-    if (~reset_n) begin
-        il_eff_q    <= 1'b0;
-        filmp_eff_q <= 1'b0;
-    end else begin
-        il_eff_q    <= il_eff;
-        filmp_eff_q <= filmp_eff;
-    end
+    if (~reset_n) il_eff_q <= 1'b0;
+    else          il_eff_q <= il_eff;
 end
 
 // =========================================================================

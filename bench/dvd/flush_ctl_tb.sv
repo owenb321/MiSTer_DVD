@@ -163,14 +163,14 @@ module flush_ctl_tb;
     check_row(1, 0, 0, 0, "[6] keep_vbuf seek must fire load only");
     keep_vbuf = 0;
 
-    // [7] raster-regime switch (il_switch engage OR film_switch engage) -> all
+    // [7] raster-regime switch (mode_switch, today il_switch) -> all
     //     three (the il_switch full re-sync rule)
     mode_switch = 1;
     fork pulse_and_measure; begin @(posedge clk); mode_switch <= 0; end join
     check_row(1, 1, 1, 0, "[7] mode_switch engage must fire load+aud+seek");
 
-    // [8] raster-regime switch, other direction (film DISENGAGE mid-title,
-    //     film->video content — same XOR edge, same trio; user-asked 2026-08-28)
+    // [8] a second mode_switch pulse (e.g. the opposite-direction edge) fires
+    //     the same trio again — the counters re-arm cleanly back-to-back
     mode_switch = 1;
     fork pulse_and_measure; begin @(posedge clk); mode_switch <= 0; end join
     check_row(1, 1, 1, 0, "[8] mode_switch disengage must fire load+aud+seek");

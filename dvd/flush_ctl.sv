@@ -26,9 +26,10 @@
  * out, audio rides through — docs/dvd_menu_refinements.md §5d) and the audio-only
  * aud_resync (video is continuous, so only the audio side re-phases).
  *
- * Kept in emu.sv (not moved): the il_switch/film_switch edge-detects that produce
- * mode_switch (they need il_eff/filmp_eff/menu_active), aud_drop_pulse, and the
- * seek_flush 2-FF CDC into clk_dec (vbuf_flush_dec).
+ * Kept in emu.sv (not moved): the edge-detect that produces mode_switch (today
+ * il_switch only — a filmp_eff edge was attempted and REVERTED 2026-08-28, see the
+ * mode_switch comment in emu.sv for the T2 logo-chain post-mortem), aud_drop_pulse,
+ * and the seek_flush 2-FF CDC into clk_dec (vbuf_flush_dec).
  */
 
 `default_nettype none
@@ -117,7 +118,7 @@ assign    aud_flush = aud_flush_cnt != 7'd0;
 always @(posedge clk) begin
     if (~rst_n)                                            aud_flush_cnt <= 7'd0;
     else if (start_streaming || ((seek_ack || jump_ack) && ~keep_vbuf) || mode_switch)
-                                                           aud_flush_cnt <= 7'd64;   // mode_switch: full re-sync (see il_switch/film_switch comments)
+                                                           aud_flush_cnt <= 7'd64;   // mode_switch: full re-sync (see the mode_switch comment in emu.sv)
     else if (aud_flush)                                    aud_flush_cnt <= aud_flush_cnt - 7'd1;
 end
 assign aud_rst_n = rst_n & ~aud_flush & ~aud_resync;

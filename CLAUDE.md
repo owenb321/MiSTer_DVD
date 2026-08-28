@@ -158,27 +158,31 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **MID-PLAY LOAD + FILM-ENGAGE A/V DESYNC — FIXED IN FABRIC (2026-08-28, branch
-  `fix/mount-avsync-flush`); ⏳ HW-confirm pending.** Two same-family bugs, one rule:
-  a playback discontinuity needs the FULL FLUSH TRIO (seek/vbuf + load + aud) or audio
-  phases against the wrong video timeline. (1) **Mount:** loading a new file mid-play
+- 🔧 **MID-PLAY LOAD A/V DESYNC — FIXED IN FABRIC (2026-08-28, branch
+  `fix/mount-avsync-flush`); ⏳ HW-confirm pending. The companion FILM-ENGAGE flush was
+  attempted and ⛔ REVERTED after a T2 HW regression — that skew stays OPEN, owned by
+  the planned early-film-detect feature.** The rule both bugs share: a playback
+  discontinuity needs the FULL FLUSH TRIO (seek/vbuf + load + aud) or audio phases
+  against the wrong video timeline. **Mount fix (kept):** loading a new file mid-play
   fired load_flush + aud_flush but NOT the VBUF flush — the old "Seek-only; clip-load
   path untouched" exclusion predated the lip-sync v5 video_live re-arm, which turned
   the surviving 0.5–2 MB old-file VBUF into a PERMANENT audio lead (STC anchors on the
   new file, governor displays old frames; forward skew < 15 s never re-anchors; only a
   core reload avoided it). `start_streaming` now fires the trio, keep_vbuf-ungated.
-  (2) **Film switch:** `Film 24p Out = Auto` engaging ~2 s into a menu→feature entry
-  switched raster + STC rate with NO flush (`il_switch` watches only il_eff) — the
-  user-reported "skew entering the film, chapter-skip fixes it". New `film_switch`
-  (filmp_eff XOR edge, both directions, `~menu_active`-gated) ORs with il_switch into
-  `mode_switch` → the trio; trade = a brief seek-like re-lock at engage (README now
-  says it's normal; discs flipping film↔video constantly may prefer Off). Also:
-  flush glue EXTRACTED to `dvd/flush_ctl.sv` + `bench/dvd/flush_ctl_tb.sv` locks the
-  11-row trigger matrix (proven RED against the pre-fix logic); `frame_drop_ctl` debt
-  now clears on `flush_vbuf_eff` (carried-in stale debt could fire spurious B-drops
-  post-seek/mount). Post-mortem + deferred items (detector re-arm, vidfeed_cdc):
-  `docs/av_sync.md` "Mid-play mount desync post-mortem"; film side:
-  `docs/film_24p_plan.md` §13.
+  **Film-switch attempt (reverted):** a bare `filmp_eff` XOR edge into `mode_switch`
+  broke T2's menu→Play Dolby/THX logo chain — the logos flap the detector, each flap
+  flushed at an arbitrary mid-stream position (no reader jump = no VOBU re-alignment),
+  garbage seq headers (186-wide popups) flipped pal_eff (25 Hz) which feeds back into
+  film_want = a self-feeding corruption/strobe loop. ⚠ il_switch's fire-on-edge
+  pattern is only safe for ~once/title signals; a filmp edge oscillates and the flush
+  perturbs the parse the detector feeds on. Full post-mortem + the reintroduction
+  requirements (hold-suppression + holdoff, T2 logo chain as HW gate):
+  `docs/film_24p_plan.md` §13. Also shipped: flush glue EXTRACTED to
+  `dvd/flush_ctl.sv` + `bench/dvd/flush_ctl_tb.sv` locks the 11-row trigger matrix
+  (proven RED against the pre-fix logic); `frame_drop_ctl` debt now clears on
+  `flush_vbuf_eff` (carried-in stale debt could fire spurious B-drops post-seek/mount).
+  Post-mortem + deferred items (detector re-arm, vidfeed_cdc): `docs/av_sync.md`
+  "Mid-play mount desync post-mortem".
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
   PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
   no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**

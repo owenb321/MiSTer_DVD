@@ -631,23 +631,37 @@ be counted via `refresh_tick_dbg`.
 
 ---
 
-## 13. Engage/disengage now fires the full seek-equivalent flush (2026-08-28, `fix/mount-avsync-flush`)
+## 13. ⛔ Engage/disengage flush — ATTEMPTED AND REVERTED (2026-08-28, `fix/mount-avsync-flush`); the engage skew remains OPEN, owned by the early-film-detect feature
 
 **Symptom (user report, 2026-08-27):** entering the main film from a menu introduced a
 small constant A/V skew once Auto engaged the 24p raster; a chapter skip fixed it. The
 menu→title jump establishes audio sync at 59.94/50 Hz, then ~2 s later the detector
 locks and the raster + `TPR_Q16` switch — with **no flush on that edge** (`il_switch`
-watches only `il_eff`), so the raster hand-off left a constant phase error the one-sided
-re-anchor can never catch (forward, < 15 s) and the locked rate never grinds out. The
-chapter-skip workaround was exactly the missing flush trio.
+watches only `il_eff`), so the raster hand-off leaves a constant phase error the
+one-sided re-anchor can never catch (forward, < 15 s) and the locked rate never grinds
+out. The chapter-skip workaround is exactly the missing flush trio.
 
-**Fix (emu.sv):** `film_switch = (filmp_eff ^ filmp_eff_q) & ~menu_active`, ORed with
-`il_switch` into `mode_switch`, which drives all three flush triggers (load + aud +
-seek/vbuf) in `dvd/flush_ctl.sv`. Both edges covered (engage AND a mid-title film→video
-disengage — the mirror skew). The `~menu_active` gate keeps a detector-confidence decay
-during a menu from glitching the keep_vbuf menu machinery; the next menu→title jump
-flushes anyway. Trade (same as Interlaced Auto): a brief seek-like re-lock at the
-switch, ~once per title entry — README's Film 24p section now tells users the hiccup is
-normal and that discs which flip content types constantly may prefer `Off`. Trigger
-matrix locked by `bench/dvd/flush_ctl_tb.sv`; post-mortem in `docs/av_sync.md`.
-⏳ HW-confirm pending.
+**The attempted fix and why it was REVERTED:** `film_switch = (filmp_eff ^ filmp_eff_q)
+& ~menu_active`, ORed with `il_switch` into `mode_switch` → the full trio on both
+edges. **HW verdict (same day, T2): catastrophic on the menu→Play logo chain.** The
+Dolby/THX logos flap the cadence detector (mixed film/video/still content in quick
+succession); each flap fired the trio at an ARBITRARY mid-stream byte position — unlike
+a chapter seek there is no reader jump, so nothing re-aligns delivery to a VOBU
+boundary — and repeated mid-parse flushes produced garbage sequence headers (resolution
+popups, 186-wide), a garbage 576-line parse flipped `pal_eff` (25 Hz raster), and
+`pal_eff` feeds back into `film_want` (`film_det = pal_eff ? det_pal : det_ntsc`) →
+another `filmp_eff` edge → another flush: a self-feeding corruption loop ending in a
+green/white strobe. Not always the same failure point (detector state is
+content/history dependent). ⚠ Lesson: `il_switch`'s "fire the trio on a live mode
+edge" pattern is only safe for a signal that changes ~once/title — a bare `filmp_eff`
+edge can OSCILLATE, and the flush itself perturbs the very parse the detector feeds on.
+
+**Disposition:** reverted to `mode_switch = il_switch` (emu.sv carries a ⛔ comment at
+the edge-detect). The engage skew is back to pre-branch behavior (constant offset until
+the next seek; chapter skip clears it — README notes this). **The proper fix is the
+early-film-detect feature** (`feature/film-early-detect` plan): a parse-front sniffer
+classifies cadence during the load hold and seeds the detector, so the raster is
+correct BEFORE the first frame and every title/logo entry is covered by its jump's own
+trio — no mid-play engage at all on the common path. If a mid-title film_switch flush
+is reintroduced there it MUST have hold-suppression + a post-discontinuity holdoff,
+TB'd in `flush_ctl_tb`, **with the T2 menu→Play logo chain as an explicit HW gate**.
