@@ -2116,11 +2116,26 @@ always @(posedge clk_sys) begin
 end
 wire reader_busy = fifo_almost_full | menu_vbuf_throttle | vbuf_hard_over;
 
-// SEEK VBUF FLUSH: on a transport seek (NOT a clip load), also discard the
+// SEEK VBUF FLUSH: on a transport seek OR a new file mount, also discard the
 // decoder's ~1 s compressed video cushion (VBUF) so the picture jumps with the
-// audio instead of playing the old buffered stream for ~1 s. Seek-only (the
-// known-good clip-load path is left untouched). A ~64-cycle level, 2-FF synced
-// into clk_dec, drives mpeg2video.vbuf_flush.
+// audio instead of playing the old buffered stream for ~1 s. A ~64-cycle level,
+// 2-FF synced into clk_dec, drives mpeg2video.vbuf_flush.
+//
+// MOUNT FLUSH (2026-08-28): start_streaming now fires this too, completing the
+// full flush trio (seek/vbuf + load + aud) for a mid-play file load — the same
+// trio il_switch performs (see the il_switch comment for the HW-proven rule that
+// all three are needed). The original "Seek-only (the known-good clip-load path
+// is left untouched)" exclusion predated the lip-sync v5 pickup_hold->video_live
+// re-arm (PR fj#60): back then a warm reload kept the old STC advancing and the
+// un-flushed VBUF was a small bounded offset. After v5, a reload re-anchors the
+// STC on the NEW file's first vid_pts and re-arms video_live like a cold start —
+// so the surviving 0.5-2 MB of OLD-file VBUF meant the governor's first pickup
+// displayed an OLD frame against the NEW anchor: audio led video by the whole
+// residual VBUF depth, permanently (a forward skew < ~15 s never re-anchors,
+// av_sync FWD_REANCHOR_TICKS). Only a core reload (empty VBUF) avoided it.
+// The mount term is deliberately UNGATED by keep_vbuf: a stale keep_vbuf=1 level
+// from a previous menu hop must not suppress a mount flush (mirrors the ungated
+// start_streaming term in aud_flush_cnt above).
 // PHASE-5 MENU TRANSITION: a menu->menu seek/jump (keep_vbuf) suppresses the
 // VBUF flush so the buffered transition-animation tail plays out (no cold
 // re-lock on a stale/black frame). Title seeks and menu->title jumps still
@@ -2142,7 +2157,8 @@ wire      seek_flush_now = seek_ack && ~keep_vbuf;
 // see that il_switch comment for why the vbuf flush ALONE desynced audio.
 always @(posedge clk_sys) begin
     if (~reset_n)                                          seek_flush_cnt <= 7'd0;
-    else if (seek_flush_now || jump_flush || il_switch)    seek_flush_cnt <= 7'd64;   // seek / menu->title jump / interlace mode switch
+    else if (seek_flush_now || jump_flush || il_switch || start_streaming)
+                                                           seek_flush_cnt <= 7'd64;   // seek / menu->title jump / interlace mode switch / file mount
     else if (seek_flush)                                   seek_flush_cnt <= seek_flush_cnt - 7'd1;
 end
 reg vbuf_flush_s1, vbuf_flush_dec;
@@ -2923,6 +2939,10 @@ always @(posedge clk_sys) begin
     // never picked up) and keeping video_live=0 (which blocks the highlight render
     // gate + nav_pci fallback). Forcing it off for menu_active makes the menu
     // display immediately and video_live stay set. Titles are unaffected.
+    // A file MOUNT cannot be swallowed by this branch even if a menu was up on
+    // the old disc: the reader's `start` clears menu_dom (-> menu_active) on the
+    // first cycle of the mount while pipe_rst_n stays low for ~64 cycles, so the
+    // !pipe_rst_n arm below always latches the hold (verified 2026-08-28).
     if (menu_active) begin
         av_vid_hold     <= 1'b0;
         av_vid_hold_tmr <= '0;
