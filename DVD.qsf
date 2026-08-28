@@ -657,4 +657,14 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # the same worst-roll seed 73.5 -> 83.1 and SEED 5 to 94.5. Lesson re-proven:
 # at 98% ALM, retime the measured limiter; do not re-roll seeds or reach for
 # the physical-synthesis switch (PR fj#92 retired it deliberately).
+#
+# 2026-08-28 (feature/mem-shim-tag-bram netlist — the ALM RECLAIM): SEED 5 held
+# FIRST ROLL, clk_dec 93.73 @100C / 90.33 @-40C, PASS with margin. This is the
+# congestion-relief project the two entries above motivated: mem_shim_burst's
+# tag/LRU flop store (4,899 ALMs / 6,546 regs, per-set 128:1 async muxes) moved
+# to M10K -> module now ~1,406 ALMs / 1,028 regs / 16 M10K, DESIGN 41,202 (98%)
+# -> 36,341 (87%) ALMs, RAM 503 -> 506 M10K. With ~5k ALMs of placement slack
+# back, seed sweeps should again be rarely needed (the sub-86 rule stands: a
+# failing fit on THIS netlist family means the netlist degraded -- measure with
+# tools/timing_paths.sh, don't re-roll).
 set_global_assignment -name SEED 5
