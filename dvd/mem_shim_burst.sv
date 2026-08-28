@@ -228,11 +228,14 @@ module mem_shim_burst #(
     // line + queues a fallback serve. The case statement only ISSUES bursts and
     // sequences A->peek->B. Responses stay strictly in order. A non-pairable peek is
     // stashed in pk_* and processed by S_STREAM after the fill, so no command is lost.
-    // NOTE (BRAM-tag rework): the peek costs 2 cycles now (present set / decide),
-    // and pairing is SUPPRESSED when the skid holds a command at fill entry — the
-    // skid command is OLDER than the FIFO head, so peeking the FIFO there would
-    // reorder. Decisions are unaffected: the un-paired B misses later through the
-    // stream with an identical LRU view (A and B are different sets by rule).
+    // NOTE (BRAM-tag rework): the stream's pops are SPECULATIVE, so at fill entry
+    // the next command usually sits in the SKID already (parked on the miss-exit
+    // cycle) — that skid command IS the peek candidate then (its set has been on
+    // the tag-RAM address since the exit cycle, so S_FILL_CMD goes straight to
+    // S_PEEK2); only an empty skid pops the FIFO for a candidate (S_PEEK latches
+    // it into pk_*). sk and pk are therefore mutually exclusive. A non-pairable
+    // candidate simply STAYS in its hold register for S_STREAM to process in
+    // order — no command is ever lost or reordered.
     reg        dual_en_q;
     reg [SET_W-1:0]  ifb_set;    // slot B (2nd burst) line set
     reg [ASW-1:0]    ifb_way;    // slot B victim way (chosen from B's set; set != A's)
@@ -247,11 +250,19 @@ module mem_shim_burst #(
     reg  [1:0] pk_cmd;
     reg [21:0] pk_addr;
     reg [63:0] pk_dta;
-    wire [LOFF_W-1:0] pk_off  = pk_addr[LOFF_W-1:0];
-    wire [SET_W-1:0]  pk_set  = pk_addr[LOFF_W +: SET_W];
-    wire [TAG_W-1:0]  pk_tag  = pk_addr[LOFF_W+SET_W +: TAG_W];
-    wire              pk_aerr = (pk_addr == ADDR_ERR);
-    wire [21:0] pk_line_base  = {pk_addr[21:LOFF_W], {LOFF_W{1'b0}}};
+    // Pair-candidate mux for S_PEEK2: the skid command when it holds one (the
+    // common case — the speculative pop parked the next command there on the
+    // miss-exit cycle), else the S_PEEK-latched pk. Mutually exclusive by
+    // construction (S_PEEK is only entered with an empty skid; the skid only
+    // loads while streaming).
+    wire        cand_is_sk = sk_valid;
+    wire [1:0]  cand_cmd  = sk_valid ? sk_cmd  : pk_cmd;
+    wire [21:0] cand_addr = sk_valid ? sk_addr : pk_addr;
+    wire [LOFF_W-1:0] cand_off  = cand_addr[LOFF_W-1:0];
+    wire [SET_W-1:0]  cand_set  = cand_addr[LOFF_W +: SET_W];
+    wire [TAG_W-1:0]  cand_tag  = cand_addr[LOFF_W+SET_W +: TAG_W];
+    wire              cand_aerr = (cand_addr == ADDR_ERR);
+    wire [21:0] cand_line_base  = {cand_addr[21:LOFF_W], {LOFF_W{1'b0}}};
     // fallback serve queue (depth 2): words whose cwf early-serve didn't fire.
     reg [SET_W-1:0]  sv_set [0:1];
     reg [ASW-1:0]    sv_way [0:1];
@@ -341,8 +352,8 @@ module mem_shim_burst #(
     // Inputs: stage A's command while streaming, the peeked command in S_PEEK2.
     // (S_PROC never uses this block — it runs on the snap_* snapshot registers.)
     wire              peek_cmp  = (state == S_PEEK2);
-    wire [TAG_W-1:0]  cmp_tag   = peek_cmp ? pk_tag : pA_tag;
-    wire [SET_W-1:0]  cmp_set   = peek_cmp ? pk_set : pA_set;
+    wire [TAG_W-1:0]  cmp_tag   = peek_cmp ? cand_tag : pA_tag;
+    wire [SET_W-1:0]  cmp_set   = peek_cmp ? cand_set : pA_set;
     wire [LRUV_W-1:0] cmp_lru   = peek_cmp ? lru_rd : lru_eff;
     wire [ASSOC-1:0]  cmp_valid = cache_valid[cmp_set];
 
@@ -849,13 +860,17 @@ module mem_shim_burst #(
             // =================================================================
             // Burst read (slot A): wait for command acceptance. Beats (incl. a same-
             // cycle accept+data) are collected by the centralized COLLECT block above.
-            // On accept: in DUAL mode go peek the next command for a pair (rd_en was
-            // pulsed combinationally this cycle — suppressed if the skid holds an
-            // older command); else collect normally.
+            // On accept, in DUAL mode: if the skid already holds the next command
+            // (the speculative pop parked it on the miss-exit cycle) its set word
+            // has been on the tag-RAM address since the exit — decide DIRECTLY in
+            // S_PEEK2; else pop the FIFO for a candidate (rd_en was pulsed
+            // combinationally this cycle) and latch it in S_PEEK first.
             S_FILL_CMD: begin
                 if (!ddr3_waitrequest) begin
                     ddr3_read <= 1'b0;
-                    state     <= (dual_en_q && !sk_valid) ? S_PEEK : S_FILL_DAT;
+                    state     <= !dual_en_q ? S_FILL_DAT
+                               : sk_valid   ? S_PEEK2
+                               :              S_PEEK;
                 end
             end
 
@@ -877,31 +892,32 @@ module mem_shim_burst #(
             end
 
             // =================================================================
-            // DUAL: the peeked command's set word is on tag_rd/lru_rd. Pair it as
-            // burst B iff it is a READ MISS to a DIFFERENT set (so its victim
-            // can't collide with A's in-flight way; also guarantees A's validate
-            // never writes B's set word between B's snapshot and B's validate).
-            // Otherwise keep it held in pk_* for S_STREAM to process in order and
-            // fall back to a single A fill.
+            // DUAL: the candidate's (skid- or pk-held) set word is on
+            // tag_rd/lru_rd. Pair it as burst B iff it is a READ MISS to a
+            // DIFFERENT set (so its victim can't collide with A's in-flight way;
+            // also guarantees A's validate never writes B's set word between B's
+            // snapshot and B's validate). Otherwise it stays in its hold register
+            // for S_STREAM to process in order; single A fill.
             S_PEEK2: begin
-                if ((pk_cmd == CMD_READ) && !hit_c && !pk_aerr && (pk_set != cur_set)) begin
-                    ifb_set    <= pk_set;
+                if ((cand_cmd == CMD_READ) && !hit_c && !cand_aerr && (cand_set != cur_set)) begin
+                    ifb_set    <= cand_set;
                     ifb_way    <= victim_c;
-                    ifb_off    <= pk_off;
-                    ifb_tag    <= pk_tag;
-                    cache_valid[pk_set][victim_c] <= 1'b0;     // invalidate B's victim
+                    ifb_off    <= cand_off;
+                    ifb_tag    <= cand_tag;
+                    cache_valid[cand_set][victim_c] <= 1'b0;   // invalidate B's victim
                     fillB_tags <= tag_rd;                      // B's validate RMW base
                     fillB_lru  <= lru_rd;
                     served_b   <= 1'b0;
                     pairing    <= 1'b1;
-                    pk_valid   <= 1'b0;
+                    if (cand_is_sk) sk_valid <= 1'b0;          // candidate consumed
+                    else            pk_valid <= 1'b0;
                     // issue burst B now (A is already accepted / in flight)
-                    ddr3_addr     <= {7'b0011000, pk_line_base};
+                    ddr3_addr     <= {7'b0011000, cand_line_base};
                     ddr3_burstcnt <= LINEW[7:0];
                     ddr3_read     <= 1'b1;
                     state         <= S_ISSUE2;
                 end else begin
-                    state <= S_FILL_DAT;                       // pk stays held, single A
+                    state <= S_FILL_DAT;                       // candidate stays held
                 end
             end
 

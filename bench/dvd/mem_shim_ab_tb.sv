@@ -86,7 +86,13 @@ module mem_shim_ab_tb;
     generate
     for (g = 0; g < 2; g = g + 1) begin : rig
         // ---- FIFO model (standard mode: valid the cycle after rd_en) ----
+        // With random SUPPLY GAPS (per-rig seed): a pop can find the FIFO
+        // "empty" even when trace commands remain — models the real decoder's
+        // bursty request stream. Exercises the stream's drain/refetch paths and
+        // the dual S_PEEK (FIFO-pop) candidate path, and widens the invariance
+        // proof: supply timing must not change decisions either.
         integer     q_head = 0;
+        integer     gseed = (g == 0) ? 32'h6A9_0001 : 32'h6A9_0002;
         reg  [1:0]  req_cmd;
         reg  [21:0] req_addr;
         reg  [63:0] req_dta;
@@ -99,7 +105,7 @@ module mem_shim_ab_tb;
                 req_valid <= 1'b0; q_head <= 0;
                 req_cmd <= 0; req_addr <= 0; req_dta <= 0;
             end else if (req_en) begin
-                if (!q_empty) begin
+                if (!q_empty && (($random(gseed) % 8) != 0)) begin
                     req_cmd   <= q_cmd[q_head];
                     req_addr  <= q_addr[q_head];
                     req_dta   <= q_dta[q_head];
@@ -253,6 +259,20 @@ module mem_shim_ab_tb;
         .debug_cache_missrate(rig[1].dbg_mr)
     );
 
+    // ---- pairing-alive tripwire (hierarchical, sim-only) ----
+    // The A/B burst-sequence compare is blind to PAIRING (it changes only
+    // timing, never decisions) — so a rework that silently kills the dual
+    // overlap would still "pass". Count S_ISSUE2 entries in both DUTs and
+    // require NEW to pair when REF does.
+    localparam [3:0] ST_ISSUE2 = 4'd13;
+    reg [3:0] pst_r = 4'd0, pst_n = 4'd0;
+    integer   pairs_r = 0, pairs_n = 0;
+    always @(posedge clk) if (rst_n) begin
+        pst_r <= dut_ref.state; pst_n <= dut_new.state;
+        if ((dut_ref.state == ST_ISSUE2) && (pst_r != ST_ISSUE2)) pairs_r = pairs_r + 1;
+        if ((dut_new.state == ST_ISSUE2) && (pst_n != ST_ISSUE2)) pairs_n = pairs_n + 1;
+    end
+
     // ---- stimulus ----
     integer j, k, base, ra;
     integer tseed = 32'h7EA_C0DE;
@@ -340,8 +360,12 @@ module mem_shim_ab_tb;
         $display("=================================================");
         $display("mem_shim_ab_tb (cwf=%0d dual=%0d): %0d cmds, %0d reads",
                  `MSAB_CWF, `MSAB_DUAL, q_count, exp_count);
-        $display("  REF: bursts=%0d resp=%0d writes=%0d | NEW: bursts=%0d resp=%0d writes=%0d",
-                 cap_bn[0], cap_rn[0], cap_wn[0], cap_bn[1], cap_rn[1], cap_wn[1]);
+        $display("  REF: bursts=%0d resp=%0d writes=%0d pairs=%0d | NEW: bursts=%0d resp=%0d writes=%0d pairs=%0d",
+                 cap_bn[0], cap_rn[0], cap_wn[0], pairs_r, cap_bn[1], cap_rn[1], cap_wn[1], pairs_n);
+        if (`MSAB_DUAL && (pairs_r > 0) && (pairs_n == 0)) begin
+            $display("  ERROR: dual pairing is DEAD in NEW (REF paired %0d times)", pairs_r);
+            errors = errors + 1;
+        end
 
         if (cap_rn[0] !== exp_count || cap_rn[1] !== exp_count) begin
             $display("  ERROR: response counts (exp %0d)", exp_count);
