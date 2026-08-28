@@ -630,6 +630,23 @@ holdoff, TB'd in flush_ctl_tb, with the T2 logo chain as an explicit HW gate). S
 carried-in stale lateness at the new position). `vbuf_healthy` needs no change — the
 VBUF flush zeroes the fill, so the hysteresis drops it to the cold-boot state by itself.
 
+**Mount decoder soft reset (2026-08-28, follow-up HW round — macroblocks at flat-file
+load):** the flush trio discards BUFFERED data but the decode pipeline's state survives
+by upstream design (the "trick play" flush resets only the VBUF FIFOs; vld/getbits/
+motcomp/picbuf are on `sync_rst`). Right for seeks — wrong for a NEW FILE: the in-flight
+picture "completes" on the new file's first start code (one truncated garbage frame),
+and the old file's reference frames stay flagged valid, so an open-GOP-leading new file
+(common for flat `.mpg`/`.VOB` clips cut from longer streams; DVD first cells are
+usually closed-GOP, MPEG-1/VCD equally exposed) motion-compensates its first B-frames
+against the PREVIOUS file — HW symptom: macroblock garbage at load instead of a clean
+black cut. Fix: `flush_ctl.mount_flush` (mount ONLY, never seeks) →
+`mpeg2video.soft_flush` → a new `reset.soft_rst_n` leg that requests exactly the
+watchdog-expiry soft reset: everything on `sync_rst`/`mem_rst`/`dot_rst` clears while
+the **regfile/modeline survive** (they are on `hard_rst` — the HW-proven watchdog
+recovery path exercises this routinely). A warm load now starts the decoder as cold as
+a core reload: black until the new file's first frame. Matrix TB extended (mount rows
+fire all four; seek/jump/mode rows prove mount_flush stays 0).
+
 **Considered and DEFERRED (recorded so they aren't re-derived):**
 - *Cadence/film/PAL detector confidence re-arm on mount* (`resample_addrgen.v` conf_*
   accumulators, reset by `rst` only): a `pickup_hold`-edge reset would drop film lock on

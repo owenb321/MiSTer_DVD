@@ -1968,7 +1968,7 @@ end
 // deliberately does NOT reset), AUDIO-ONLY RE-SYNC (aud_resync), keep_vbuf
 // audio-continuity (aud_flush gating), the SEEK VBUF FLUSH + the 2026-08-28
 // mount/mode_switch flush-trio rule. Events in, ~64-cycle flush levels out.
-wire load_flush, aud_flush, aud_resync, seek_flush;
+wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
 wire pipe_rst_n, aud_rst_n;
 flush_ctl flush_ctl_i (
     .clk             (clk_sys),
@@ -1983,6 +1983,7 @@ flush_ctl flush_ctl_i (
     .aud_flush       (aud_flush),
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
+    .mount_flush     (mount_flush),
     .pipe_rst_n      (pipe_rst_n),
     .aud_rst_n       (aud_rst_n)
 );
@@ -3332,6 +3333,7 @@ mpeg2video mpeg2video_inst (
     .pause             (pause_dec),                    // DVD-FORK (gamepad transport): freeze frame while paused (clk_dec-synced)
     .freeze_wd         (still_dec),                    // DVD-FORK (disc-menu still): watchdog-suppress only (clk_dec-synced)
     .vbuf_flush        (vbuf_flush_dec),               // DVD-FORK (gamepad transport): discard VBUF on a seek (clk_dec-synced)
+    .soft_flush        (mount_flush),                  // DVD-FORK (mount soft reset): watchdog-equivalent decode reset on a file mount (async, synchronizers inside)
     .disp_vscale_mode  (disp_vscale_mode),             // DVD-FORK (CRT anamorphic vscale): 0 Fit / 2 SIF 2x line repeat
     .disp_vscale_en    (disp_vscale_en),               // DVD-FORK (CRT anamorphic letterbox AA): downstream 2-tap blend enable
     .disp_hcrop_en     (disp_hcrop_en),                // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)

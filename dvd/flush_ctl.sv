@@ -7,9 +7,11 @@
  * played the OLD file's 0.5-2 MB buffered tail against the NEW file's STC anchor)
  * lived exactly in this glue, which had no sim coverage while it was inline.
  *
- * One module, four counters, clk_sys only. The event inputs are 1-cycle pulses
+ * One module, five counters, clk_sys only. The event inputs are 1-cycle pulses
  * except keep_vbuf (a reader level, sampled by the same event pulses it qualifies).
  * Each flush output is a ~64-cycle level; the consumers treat it as a reset.
+ * mount_flush (mount ONLY) additionally requests the decoder's watchdog-equivalent
+ * soft reset — see its block comment at the bottom.
  *
  * THE FLUSH TRIO RULE (HW-proven, see the il_switch comment in emu.sv and
  * docs/interlaced_auto.md): a playback discontinuity needs ALL THREE of
@@ -49,6 +51,7 @@ module flush_ctl (
     output wire aud_flush,        // ~64-cycle level -> audio chain reset (with aud_resync)
     output wire aud_resync,       // ~64-cycle level -> audio-only re-phase
     output wire seek_flush,       // ~64-cycle level -> 2-FF into clk_dec = mpeg2video.vbuf_flush
+    output wire mount_flush,      // ~64-cycle level, MOUNT ONLY -> mpeg2video.soft_flush (decoder soft reset)
     output wire pipe_rst_n,       // reset_n & ~load_flush
     output wire aud_rst_n         // reset_n & ~aud_flush & ~aud_resync
 );
@@ -160,6 +163,28 @@ always @(posedge clk) begin
     else if (seek_flush_now || jump_flush || mode_switch || start_streaming)
                                                            seek_flush_cnt <= 7'd64;   // seek / menu->title jump / raster-regime switch / file mount
     else if (seek_flush)                                   seek_flush_cnt <= seek_flush_cnt - 7'd1;
+end
+
+// MOUNT SOFT RESET (2026-08-28): on a file MOUNT ONLY, also request the decoder's
+// watchdog-equivalent soft reset (mpeg2video.soft_flush -> reset.soft_rst_n). The
+// flush trio above discards BUFFERED data but deliberately leaves the decode
+// pipeline's state (the upstream "trick play" flush resets only the VBUF FIFOs;
+// vld/getbits/motcomp/picbuf are all on sync_rst) — right for seeks, where the
+// display must hold the last frame and the reference frames are same-file valid.
+// A NEW FILE must not inherit any of it: the in-flight picture "completes" on the
+// new file's first start code (one truncated garbage frame), and the old file's
+// reference frames stay flagged valid, so an open-GOP-leading new file (common for
+// flat .mpg/.VOB clips; MPEG-1/VCD too) motion-compensates its first B-frames
+// against the PREVIOUS file = macroblock garbage at load. The soft reset clears
+// all of it while the regfile/modeline (hard_rst) survive — the exact recovery
+// path a watchdog expiry exercises routinely on HW — so a warm load starts as
+// black and clean as a core reload. NEVER on seeks/jumps/mode switches.
+reg [6:0] mount_flush_cnt = 7'd0;
+assign    mount_flush = mount_flush_cnt != 7'd0;
+always @(posedge clk) begin
+    if (~rst_n)                  mount_flush_cnt <= 7'd0;
+    else if (start_streaming)    mount_flush_cnt <= 7'd64;   // mount ONLY
+    else if (mount_flush)        mount_flush_cnt <= mount_flush_cnt - 7'd1;
 end
 
 endmodule

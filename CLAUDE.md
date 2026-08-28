@@ -181,6 +181,15 @@ worse maintenance burden than targeted in-place edits. So:
   `dvd/flush_ctl.sv` + `bench/dvd/flush_ctl_tb.sv` locks the 11-row trigger matrix
   (proven RED against the pre-fix logic); `frame_drop_ctl` debt now clears on
   `flush_vbuf_eff` (carried-in stale debt could fire spurious B-drops post-seek/mount).
+  **Mount decoder SOFT RESET (same branch, follow-up HW round):** the trio flushes
+  BUFFERS only — the decode pipeline (vld in-flight picture, reference frames, picbuf)
+  survives on sync_rst by upstream design, so a flat-file load showed MACROBLOCK
+  GARBAGE (truncated picture + new file's open-GOP B-frames motion-compensated against
+  the OLD file's references; DVD first cells are closed-GOP which is why ISOs looked
+  better). Fix: `flush_ctl.mount_flush` (mount ONLY, never seeks — those need display
+  continuity) → `mpeg2video.soft_flush` → new `reset.soft_rst_n` leg = the exact
+  watchdog-expiry soft reset (regfile/modeline on hard_rst SURVIVE — the HW-proven
+  recovery path); a warm load now cuts to black and starts as cold as a core reload.
   Post-mortem + deferred items (detector re-arm, vidfeed_cdc): `docs/av_sync.md`
   "Mid-play mount desync post-mortem".
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,

@@ -75,6 +75,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              pause,                                                // DVD-FORK (gamepad transport): freeze the displayed frame while paused
              freeze_wd,                                            // DVD-FORK (disc-menu still): watchdog-suppress ONLY (no governor freeze)
              vbuf_flush,                                           // DVD-FORK (gamepad transport): discard the buffered bitstream on a seek
+             soft_flush,                                           // DVD-FORK (mount soft reset): watchdog-equivalent decode-pipeline reset on a file mount
              disp_vscale_mode,                                     // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox(dormant) 2=SIF 2x line repeat
              disp_vscale_en,                                       // DVD-FORK (CRT anamorphic letterbox AA): enable downstream disp_vscale 2-tap blend
              disp_hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
@@ -199,6 +200,16 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * old buffered ~1 s of video while audio jumped immediately (HW: video lagged the
    * seek by ~1 s, A/V desynced). ORed into the regfile's own flush_vbuf below. */
   input            vbuf_flush;
+  /* DVD-FORK (mount soft reset, 2026-08-28): active-HIGH level from emu (clk_sys-timed,
+   * >= 2.4 us; the reset synchronizers handle the CDC). Requests the SAME decode-pipeline
+   * reset a watchdog expiry produces (sync_rst/mem_rst/dot_rst assert; the regfile is on
+   * hard_rst and SURVIVES, so the modeline keeps its programming — the HW-proven watchdog
+   * recovery path). Fired on a new file MOUNT only, never on seeks: a seek wants display
+   * continuity (held frame) and its references are same-file valid, but a mount must not
+   * carry the old file's in-flight picture or reference frames into the new one (open-GOP
+   * leading B-frames motion-compensated against the previous file = macroblock garbage at
+   * load; the truncated in-flight picture completes on the new file's first start code). */
+  input            soft_flush;
   /* DVD-FORK (CRT anamorphic vertical scaler, emu clk_sys origin — quasi-static menu
    * level). disp_vscale_mode selects the resample_addrgen display mapping (0=fit,
    * 1=letterbox, 2=zoom); 0 outside CRT mode => bit-identical to the pre-scaler path.
@@ -801,13 +812,14 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* reset signal synchronizers */
 
   reset reset (
-    .clk(clk), 
-    .mem_clk(mem_clk), 
-    .dot_clk(dot_clk), 
+    .clk(clk),
+    .mem_clk(mem_clk),
+    .dot_clk(dot_clk),
     .async_rst(rst),
     .watchdog_rst(watchdog_rst),
-    .clk_rst(sync_rst), 
-    .mem_rst(mem_rst), 
+    .soft_rst_n(~soft_flush),                                // DVD-FORK (mount soft reset): active-low request, watchdog-equivalent
+    .clk_rst(sync_rst),
+    .mem_rst(mem_rst),
     .dot_rst(dot_rst),
     .hard_rst(hard_rst)
     );
