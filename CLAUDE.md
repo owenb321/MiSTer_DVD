@@ -158,8 +158,9 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
-  branch `feature/mem-shim-tag-bram`); sim-complete, ⏳ HW SOAK REQUIRED before merge.**
+- ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
+  PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
+  no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**
   The designated congestion-relief project: post-PR#17 the design sat at 98% ALM and
   the last two branches each needed fit-rescue work. `dvd/mem_shim_burst.sv` (4,899
   ALMs — the tag/valid/LRU flop store + per-set 128:1 async muxes, the recurring
@@ -172,11 +173,10 @@ worse maintenance burden than targeted in-place edits. So:
   burst sequences must be identical — 4/4 combos, 1,351 identical misses). Suite:
   `bench/dvd/run_mem_shim.sh` (all green). Fit: module 4,899→~1,406 ALMs (regs
   6,546→1,028, +3 M10K), **design 41,202 ALMs (98%) → 36,341 (87%)**; pinned SEED 5
-  held FIRST roll, clk_dec 93.73/90.33 (gate 86.0) — soak build
-  `releases/DVD_shimreclaim_20260828_0259.rbf`. ⚠ This is the
-  shear-fix module — sim cannot prove hit-rate-under-real-traffic, so the HW gate is a
-  long-title soak (MiB full length), seek/chapter/menu stress, VCD raw mode, and an
-  explicit shear/artifact watch. Detail: `docs/history.md` §11.
+  held FIRST roll, clk_dec 93.73/90.33 (gate 86.0). The HW soak mattered because this
+  is the shear-fix module (sim cannot prove hit-rate-under-real-traffic) — it PASSED:
+  entire MiB movie + menu/seek actions, no video issues, no shearing, no artifacting.
+  Detail: `docs/history.md` §11.
 
 - 🔧 **PIXELATED MENU STILLS — root-caused + fixed in fabric (2026-08-26, branch
   `fix/picbuf-display-slot-alias`); ✅ HW-CONFIRMED 2026-08-27 (user report: Harry Potter

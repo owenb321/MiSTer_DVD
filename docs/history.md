@@ -321,7 +321,7 @@ escalation ladder stays documented for a future netlist that outgrows this margi
 2026-08-01 (PR fj#156, user report: "looks great")** — fringe gone, playback clean, S/PDIF
 unaffected (the pll_audio crossing false-pathed = stock framework semantics, as audited).
 
-## 11. mem_shim_burst tag/LRU store to M10K — the ALM congestion reclaim (2026-08-27, `feature/mem-shim-tag-bram`)
+## 11. mem_shim_burst tag/LRU store to M10K — the ALM congestion reclaim (MERGED, PR #18; ✅ HW-CONFIRMED 2026-08-28)
 
 **The motive.** After PR #17 the design sat at **98% ALM (41,202/41,910)** and the fit
 lottery was back despite §10's SDC fix: the D-pad branch needed a seed re-sweep, and the
@@ -382,8 +382,8 @@ ladder, PASS-grepped (the M19 vvp-exit-0 lesson).
   ledger entry (94.5/91.5) despite the whole-module rework. The reclaim's point —
   seed sweeps become rare again — holds on its first data point.
 
-**HW soak.** Required before merge — this is the shear-fix module and sim cannot prove
-hit-rate-under-real-traffic: long title playback (MiB full length), seek/chapter
-stress, menu stress, VCD raw mode, an explicit shear/artifact watch. Status: ⏳ soak
-pending as of 2026-08-28 (`releases/DVD_shimreclaim_20260828_0259.rbf` is the soak
-build); branch unmerged until it passes.
+**HW soak — ✅ PASSED 2026-08-28 (user report), merge gate cleared.** Required because
+this is the shear-fix module and sim cannot prove hit-rate-under-real-traffic. Soak on
+`releases/DVD_shimreclaim_20260828_0259.rbf`: the entire MiB movie played through plus
+menu/seek actions — no video issues, no shearing, no artifacting. Merged as PR #18
+(no release cut yet — rides with the next one; `` `CORE_VERSION `` 0.1e stays open).
