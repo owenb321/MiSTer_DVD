@@ -289,7 +289,22 @@ ALSO flushes the decoder's VBUF** (the ~1 s compressed-video cushion in DDR): `s
 separate seek-only `seek_flush` level, 2-FF synced to `clk_dec` as `mpeg2video.vbuf_flush`, ORed
 into the regfile's native `flush_vbuf` (`rtl/mpeg2/mpeg2video.v`). Without it the audio (small
 ring) jumps immediately while the video plays the old buffered ~1 s first — the first HW build's
-exact symptom. Seek-only; the known-good clip-load path is untouched.
+exact symptom.
+
+> **Mount flush (2026-08-28, `fix/mount-avsync-flush`) — the "Seek-only; the known-good
+> clip-load path is untouched" exclusion is RETIRED.** That wording dated from when the
+> seek flush was introduced: the clip-load path had just been stabilized and, crucially,
+> `video_live` was then cleared only by core reset, so a warm reload kept the old STC
+> advancing and the un-flushed VBUF cost only a small bounded offset. The lip-sync v5
+> `pickup_hold`→`video_live` re-arm (PR fj#60) changed that — a reload re-anchors the STC
+> on the NEW file's first `vid_pts` like a cold start — which turned the surviving
+> 0.5–2 MB of OLD-file VBUF into a *permanent* audio lead of the whole residual depth
+> (the governor's first pickup showed an OLD frame against the NEW anchor; a forward skew
+> < ~15 s never re-anchors). HW symptom: loading a new file mid-play desynced audio until
+> a core reload. `start_streaming` now fires the full flush trio (seek/vbuf + load + aud)
+> exactly like `il_switch` and a chapter seek, ungated by `keep_vbuf` (a stale menu-hop
+> level must not suppress a mount flush). The trigger matrix now lives in
+> `dvd/flush_ctl.sv` and is locked by `bench/dvd/flush_ctl_tb.sv`.
 
 **Pause = freeze video + audio in lock-step.** Video-referenced-STC (master-clock) design; pause
 holds *everything* frozen rather than gating the sector feed (the multi-MB VBUF would keep

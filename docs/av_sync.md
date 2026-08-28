@@ -576,12 +576,65 @@ compounding flaws in the original anchor logic:
   buffering; VBUF 2 MB at a low 2 Mb/s ≈ 8 s worst case). Real seeks (Phase 8) will
   flush + force a re-anchor explicitly anyway.
 
-**Known limitations:** `video_live` is cleared only by core reset, not by the clip-load
-flush (the decoder isn't reset on reload), so a reloaded clip's STC starts advancing at
-anchor parse time again — a small, bounded offset; acceptable until flush-on-seek lands.
-A pathological video-less program stream never sets `video_live`, so scheduled audio
-would wait — covered by the existing ring drain-watchdog (degrades to drop-on-full,
-video-side unaffected).
+**Known limitations:** ~~`video_live` is cleared only by core reset~~ — OUTDATED TWICE
+OVER: the v5 `pickup_hold` rising edge re-arms `video_live` on every load (a reload
+behaves like a cold start), and since 2026-08-28 a file mount also fires the full flush
+trio (see "Mid-play mount desync post-mortem" below). A pathological video-less program
+stream never sets `video_live`, so scheduled audio would wait — covered by the existing
+ring drain-watchdog (degrades to drop-on-full, video-side unaffected).
+
+## Mid-play mount desync post-mortem (2026-08-28, `fix/mount-avsync-flush`)
+
+**Symptom:** loading a new file while another played left audio permanently out of sync;
+only a core reload between loads avoided it. **Root cause — a half-flushed pipeline:**
+`start_streaming` fired `load_flush` (fresh STC anchor + `av_vid_hold`/`video_live`
+re-arm) and `aud_flush` (audio cold start) but NOT the seek/VBUF flush, so 0.5–2 MB of
+the OLD file's bitstream survived in the decoder. The STC anchored on the NEW file's
+first `vid_pts`; the STD hold released on the new file's audio (`aud_caught`); the
+governor's first pickup displayed an OLD-file frame → `video_live=1` → STC advanced →
+the drain gate released NEW-file audio against a display a whole VBUF depth stale. The
+skew is forward and < 15 s, so the one-sided re-anchor (by design, above) never corrects
+it; the rate is locked (NCO trim retired), so it never grinds out either. A cold boot
+starts with an empty VBUF — hence "fine after a core reload". This is the exact mirror
+of the `il_switch` v1 lesson (VBUF-flush-only ⇒ audio ~1 s LATE; load+aud-only ⇒ audio
+EARLY by the residual depth).
+
+**THE FLUSH TRIO RULE (write it on the wall):** any playback discontinuity — mount,
+title seek/jump, raster-regime switch — needs ALL THREE of `seek_flush` (VBUF discard) +
+`load_flush` (demux/av_sync re-anchor) + `aud_flush` (audio cold start), except the
+deliberate keep_vbuf menu-transition and aud_resync carve-outs. The trigger matrix now
+lives in `dvd/flush_ctl.sv` with `bench/dvd/flush_ctl_tb.sv` locking every row.
+
+**Film-switch skew (same fix, same day):** with `Film 24p Out = Auto` (default), the
+cadence detector engages the 23.976/25 Hz film raster ~2 s AFTER a menu→feature jump
+established sync at 59.94/50 Hz. The modeline re-walks and `TPR_Q16` muxes to the film
+rate, but no flush fired on that edge (`il_switch` watches only `il_eff`) — the raster
+hand-off left a constant phase error; HW workaround was a chapter skip (= the missing
+trio). Now `film_switch = (filmp_eff ^ filmp_eff_q) & ~menu_active`, ORed with
+`il_switch` into `mode_switch`, fires the trio on BOTH edges (engage and mid-title
+film→video disengage). The `~menu_active` gate keeps a detector decay during a menu from
+glitching the keep_vbuf machinery (menus aren't lip-sync-scheduled; the next menu→title
+jump flushes anyway). Trade, same as Interlaced Auto: a brief seek-like re-lock at the
+switch instead of a permanent skew.
+
+**Also fixed in the same pass:** `frame_drop_ctl`'s debt ledger now clears on
+`flush_vbuf_eff` (it survived every discontinuity and could fire spurious B-drops from
+carried-in stale lateness at the new position). `vbuf_healthy` needs no change — the
+VBUF flush zeroes the fill, so the hysteresis drops it to the cold-boot state by itself.
+
+**Considered and DEFERRED (recorded so they aren't re-derived):**
+- *Cadence/film/PAL detector confidence re-arm on mount* (`resample_addrgen.v` conf_*
+  accumulators, reset by `rst` only): a `pickup_hold`-edge reset would drop film lock on
+  EVERY seek (~1.7 s re-lock ⇒ raster churn, and a det-driven mode_switch could re-fire
+  the flush). A mount-only reset needs new plumbing CDC'd through
+  mpeg2video→resample→addrgen for a bounded, self-correcting ~2 s wrong-cadence window
+  on cross-cadence warm mounts. Revisit only if post-fix HW shows a residual constant
+  offset there.
+- *`vidfeed_cdc` reset on `pipe_rst_n`* (stale clk_sys→clk_dec ES bytes splice ahead of
+  the new stream): seeks/jumps have the identical exposure today and are HW-clean (the
+  decoder's start-code hunt absorbs the residue); resetting a dual-clock FIFO from a
+  clk_sys-timed level adds CDC risk, and widening a flush-reset net has twice failed to
+  route in this design (the aud_rst_n Error 11802 note).
 
 **Verification:** `av_sync_tb` check `[0]` (STC frozen through 20 dead refreshes + a 1 s
 parse-lead PTS without re-anchor) and `[4a/4b/4c]` (+2.2 s lead → no re-anchor; −2.2 s →

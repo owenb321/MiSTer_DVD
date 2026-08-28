@@ -220,6 +220,13 @@ Notes:
   and does nothing without it.
 - **`A/V Offset` defaults to +100 ms**, which is the correct null for NTSC film and also
   measures correctly on PAL. There should be no need to change it.
+- **A brief re-lock hiccup when the film mode engages or disengages is normal.** When
+  Auto detects film a couple of seconds into a title (or drops back at a film→video
+  content change), the core performs a seek-equivalent re-sync so audio and video stay
+  locked through the raster switch — the picture skips forward for a moment, exactly
+  like a chapter jump. On discs that switch between film and video content frequently
+  (some episodic or extras-heavy discs), the repeated re-locks can be more distracting
+  than the cadence win — set `Film 24p Out` to **Off** for those.
 - If the analog CRT raster is active, the film raster is suppressed — the re-interlacer
   needs the standard progressive raster to work from.
 

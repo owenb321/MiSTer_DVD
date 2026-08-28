@@ -628,3 +628,26 @@ be counted via `refresh_tick_dbg`.
 - [ ] A second NTSC film disc (different mastering = different cadence-break rate)
       stays locked too.
 - [ ] 60 Hz / PAL / analog / menus unchanged (corrector inert outside NTSC film24).
+
+---
+
+## 13. Engage/disengage now fires the full seek-equivalent flush (2026-08-28, `fix/mount-avsync-flush`)
+
+**Symptom (user report, 2026-08-27):** entering the main film from a menu introduced a
+small constant A/V skew once Auto engaged the 24p raster; a chapter skip fixed it. The
+menu→title jump establishes audio sync at 59.94/50 Hz, then ~2 s later the detector
+locks and the raster + `TPR_Q16` switch — with **no flush on that edge** (`il_switch`
+watches only `il_eff`), so the raster hand-off left a constant phase error the one-sided
+re-anchor can never catch (forward, < 15 s) and the locked rate never grinds out. The
+chapter-skip workaround was exactly the missing flush trio.
+
+**Fix (emu.sv):** `film_switch = (filmp_eff ^ filmp_eff_q) & ~menu_active`, ORed with
+`il_switch` into `mode_switch`, which drives all three flush triggers (load + aud +
+seek/vbuf) in `dvd/flush_ctl.sv`. Both edges covered (engage AND a mid-title film→video
+disengage — the mirror skew). The `~menu_active` gate keeps a detector-confidence decay
+during a menu from glitching the keep_vbuf menu machinery; the next menu→title jump
+flushes anyway. Trade (same as Interlaced Auto): a brief seek-like re-lock at the
+switch, ~once per title entry — README's Film 24p section now tells users the hiccup is
+normal and that discs which flip content types constantly may prefer `Off`. Trigger
+matrix locked by `bench/dvd/flush_ctl_tb.sv`; post-mortem in `docs/av_sync.md`.
+⏳ HW-confirm pending.
