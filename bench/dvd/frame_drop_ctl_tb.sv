@@ -38,11 +38,12 @@ module frame_drop_ctl_tb;
   integer errors = 0;
 
   reg bitstream_ok = 1'b1;   // healthy by default; the guard case toggles it
+  reg flush = 1'b0;          // VBUF-flush level; case [9] drives it
   reg [3:0] drop_cost = 4'd2; // flat SHOW_N by default; the film case drives 3
 
   frame_drop_ctl #(.DROP_THRESHOLD(DROP_THRESHOLD), .DEBT_MAX(DEBT_MAX)) dut (
     .clk(clk), .clk_en(clk_en), .rst(rst),
-    .enable(enable), .bitstream_ok(bitstream_ok),
+    .enable(enable), .bitstream_ok(bitstream_ok), .flush(flush),
     .frame_late(frame_late), .drop_ack(drop_ack), .drop_cost(drop_cost),
     .drop_req(drop_req),
     .frames_late_cnt(frames_late_cnt),
@@ -210,9 +211,36 @@ module frame_drop_ctl_tb;
     check("film: long-run neutral (req off)", drop_req == 1'b0);
     drop_cost = 4'd2;
 
+    // ---- 9. VBUF flush clears carried debt (2026-08-28 mount/seek fix) ----
+    // Debt used to survive every discontinuity (reset only by sync_rst), so a
+    // warm mount/seek carried stale lateness into the new position and fired
+    // spurious B-drops the moment vbuf_healthy re-armed.
+    $display("[9] flush clears carried debt");
+    enable = 1'b0; @(negedge clk); enable = 1'b1; @(negedge clk);  // debt = 0
+    for (i = 0; i < 5; i = i + 1) pulse_late;    // bank 5 refreshes of "old title" debt
+    @(negedge clk);
+    check("flush: debt banked pre", debt_out == 5'd5);
+    check("flush: req armed pre",   drop_req == 1'b1);
+    flush = 1'b1;                                 // the seek/mount VBUF flush level
+    @(negedge clk); @(negedge clk);
+    check("flush: debt cleared",    debt_out == 5'd0);
+    check("flush: req off",         drop_req == 1'b0);
+    pulse_late;                                   // a late DURING the flush window
+    @(negedge clk);
+    check("flush: holds debt at 0 while asserted", debt_out == 5'd0);
+    flush = 1'b0;
+    @(negedge clk);
+    pulse_late; pulse_late;                       // normal accounting resumes
+    @(negedge clk);
+    check("flush: accounting resumes (debt 2)", debt_out == 5'd2);
+    check("flush: req resumes",                 drop_req == 1'b1);
+    pulse_ack; @(negedge clk);                    // leave the ledger clean
+    // telemetry must NOT have been cleared by the flush (free-running totals)
+    check("flush: late counter untouched", frames_late_cnt > 16'd0);
+
     $display("");
     if (errors == 0) $display("PASS: frame_drop_ctl_tb (all checks)");
-    else             $display("FAIL: frame_drop_ctl_tb (%0d errors)", errors);
+    else             $fatal(1, "FAIL: frame_drop_ctl_tb (%0d errors)", errors);
     $finish;
   end
 

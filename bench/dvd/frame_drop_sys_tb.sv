@@ -94,7 +94,7 @@ module frame_drop_sys_tb;
 
   frame_drop_ctl #(.DROP_THRESHOLD(SHOW_N), .DEBT_MAX(15)) dut (
     .clk(clk), .clk_en(1'b1), .rst(rst_n),
-    .enable(enable), .frame_late(frame_late), .drop_ack(drop_ack), .drop_cost(4'd2),
+    .enable(enable), .bitstream_ok(1'b1), .flush(1'b0), .frame_late(frame_late), .drop_ack(drop_ack), .drop_cost(4'd2),
     .drop_req(drop_req),
     .frames_late_cnt(flate_cnt), .frames_dropped_cnt(fdrop_cnt), .debt_out(debt)
   );

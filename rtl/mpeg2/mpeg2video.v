@@ -1071,6 +1071,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
                (drop_pic_field ? 4'd1 : (drop_pic_rff ? 4'd3 : 4'd2))),   // field-pair drop: 1/field
     .drop_req(drop_pic_req),
     .bitstream_ok(vbuf_healthy),                       // DVD-FORK: starvation guard (see frame_drop_ctl)
+    .flush(flush_vbuf_eff),                            // DVD-FORK FIX (2026-08-28): clear carried debt on a VBUF flush (mount/seek/mode switch)
     .frames_late_cnt(dbg_frames_late),
     .frames_dropped_cnt(dbg_frames_dropped),
     .debt_out(dbg_debt)

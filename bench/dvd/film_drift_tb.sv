@@ -89,7 +89,7 @@ module film_drift_tb;
   wire [4:0]  debt;
   frame_drop_ctl #(.DROP_THRESHOLD(2), .DEBT_MAX(15)) dut (
     .clk(clk), .clk_en(1'b1), .rst(rst_n),
-    .enable(enable), .bitstream_ok(1'b1),
+    .enable(enable), .bitstream_ok(1'b1), .flush(1'b0),
     .frame_late(frame_late), .drop_ack(drop_ack), .drop_cost(drop_cost),
     .drop_req(drop_req),
     .frames_late_cnt(flate_cnt), .frames_dropped_cnt(fdrop_cnt), .debt_out(debt)
