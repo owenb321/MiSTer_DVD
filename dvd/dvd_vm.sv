@@ -176,7 +176,15 @@ module dvd_vm (
     //       docs/dvd_nav.md "Sector-straddle audit"). Either way the VM recovers to a
     //       menu (FB_VTSM) instead of the auto-title (= the copyright), which is why
     //       TP_SW plays correctly (a question returns to the menu).
-    output     [15:0] dbg_deadend
+    output     [15:0] dbg_deadend,
+
+    // One-cycle pulse: a USER-visible menu link failed to resolve (pgc_error on
+    // a menu-domain jump) and the VM re-entered the last good menu instead of
+    // running the auto-title fallback. emu surfaces it as the transport-HUD
+    // "LINK FAIL nn" popup so a field report can say what happened.
+    output reg        link_fail,
+    // The PGCN that failed to resolve, valid on the link_fail pulse (HUD digits).
+    output reg [7:0]  link_fail_pgcn
 );
 
 // =========================================================================
@@ -546,6 +554,10 @@ reg       came_via_menukey;
 reg [7:0]  deadend_vts;
 reg [15:0] deadend_pgcn;   // 16-bit: PGCN is a 15-bit DVD field
 reg       deadend_seen;
+reg [1:0]  last_menu_dom;  // last successfully loaded menu PGC (re-enter target)
+reg [7:0]  last_menu_vts;
+reg [15:0] last_menu_pgcn;
+reg        last_menu_v;
 
 // RSM state (CallSS saves, LinkRSM restores). rsm_vts==0 = no resume info.
 reg [7:0]  rsm_vts, rsm_cell;
@@ -668,6 +680,9 @@ always @(posedge clk or negedge rst_n) begin
         came_via_menukey <= 1'b0;
         menu_seen <= 1'b0;
         deadend_vts <= 8'd0; deadend_pgcn <= 16'd0; deadend_seen <= 1'b0;
+        last_menu_dom <= DOM_VTSM; last_menu_vts <= 8'd0;
+        last_menu_pgcn <= 16'd0; last_menu_v <= 1'b0;
+        link_fail <= 1'b0; link_fail_pgcn <= 8'd0;
         rsm_vts <= 8'd0; rsm_pgcn <= 16'd0; rsm_cell <= 8'd0;
         rsm_r4 <= 16'd0; rsm_r5 <= 16'd0; rsm_r6 <= 16'd0;
         rsm_r7 <= 16'd0; rsm_r8 <= 16'd0;
@@ -697,6 +712,20 @@ always @(posedge clk or negedge rst_n) begin
         vm_replay  <= 1'b0;
         vm_adv     <= 1'b0;
         btn_force  <= 1'b0;
+        link_fail  <= 1'b0;
+        // Last SUCCESSFULLY loaded menu PGC {dom, vts, pgcn} — the re-enter
+        // target when a later menu link fails (see the ev_error arm). Latched
+        // on every menu-domain pgc_loaded: vm_dom/vm_vts are the completed
+        // jump's destination, and the reader's cur_pgcn has settled to the
+        // resolved PGCN by S_PGC_DONE (entry scans included). NOT the reader's
+        // live cur_vts at error time — the jump service has already moved
+        // play_vtsn to the FAILED target by then.
+        if (pgc_loaded && (vm_dom == DOM_VMGM || vm_dom == DOM_VTSM)) begin
+            last_menu_dom  <= vm_dom;
+            last_menu_vts  <= vm_vts;
+            last_menu_pgcn <= cur_pgcn;
+            last_menu_v    <= 1'b1;
+        end
 
         // 1 Hz seconds tick -> pending (applied in V_IDLE, race-free vs GPRM
         // writes). Free-running whether or not the VM is busy; one flag is
@@ -764,6 +793,8 @@ always @(posedge clk or negedge rst_n) begin
             came_via_menukey <= 1'b0;
             menu_seen <= 1'b0;
             deadend_vts <= 8'd0; deadend_pgcn <= 16'd0; deadend_seen <= 1'b0;
+            last_menu_dom <= DOM_VTSM; last_menu_vts <= 8'd0;
+            last_menu_pgcn <= 16'd0; last_menu_v <= 1'b0;
             fb <= FB_NONE;
             fuse <= 13'd0; chain <= 7'd0;
             nat_src <= 1'b0;
@@ -883,6 +914,35 @@ always @(posedge clk or negedge rst_n) begin
                         jump_pgn <= 8'd0; jump_cell <= rsm_cell;
                         jump_pulse <= 1'b1;
                         skip_pre <= 1'b1;
+                        wait_tmr <= 24'd0;
+                        state <= V_WAIT;
+                    end else if (fb == FB_NONE && last_menu_v &&
+                                 (vm_dom == DOM_VMGM || vm_dom == DOM_VTSM)) begin
+                        // A USER-initiated menu-domain link failed to resolve
+                        // (e.g. a "next page" LinkPGCN out of the language
+                        // unit's range — the Blade Runner field report). A real
+                        // player IGNORES an unresolvable press; running the
+                        // auto-title here LAUNCHED THE MOVIE off a menu button.
+                        // Truly doing nothing is not safe either: the jump
+                        // teardown already cleared the stream and nav_pci's
+                        // buttons, leaving a dead menu. So RE-ENTER the last
+                        // successfully loaded menu PGC (LinkTopPGC semantics —
+                        // same page, buttons re-armed) and surface a HUD popup.
+                        // fb advances to FB_VTSM, so if even this fails the
+                        // EXISTING menu-recovery chain runs unchanged. Boot/FP
+                        // failures are untouched (last_menu_v=0 pre-first-menu;
+                        // FP/TT destinations skip this arm), and a failed jump
+                        // whose DESTINATION was a title (JumpTT off a menu
+                        // button) keeps today's auto-title behaviour.
+                        fb <= FB_VTSM;
+                        link_fail <= 1'b1;
+                        link_fail_pgcn <= jump_pgcn[7:0];
+                        vm_dom <= last_menu_dom; vm_vts <= last_menu_vts;
+                        jump_domain <= last_menu_dom;
+                        jump_vts <= last_menu_vts; jump_pgcn <= last_menu_pgcn;
+                        jump_entry <= 4'd0; jump_ttn <= 7'd0;
+                        jump_pgn <= 8'd0; jump_cell <= 8'd0;
+                        jump_pulse <= 1'b1;
                         wait_tmr <= 24'd0;
                         state <= V_WAIT;
                     end else begin

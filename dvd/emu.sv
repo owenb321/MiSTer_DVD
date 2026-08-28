@@ -1114,6 +1114,8 @@ wire [7:0]  vm_dbg_state;
 wire [15:0] vm_dbg_g3, vm_dbg_g14_9;
 wire [15:0] vm_dbg_rsm;      // {rsm_vts, rsm_pgcn} for the DEBUG_OVERLAY (symptom-1)
 wire [15:0] vm_dbg_deadend;  // {deadend_vts, deadend_pgcn} = the PGC that dead-ended
+wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HUD popup)
+wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
 wire [7:0]  rdr_play_vtsn, rdr_target_vtsn;
 reg         key_menu_p, key_resume_p, key_title_p, key_return_p;
 
@@ -1186,7 +1188,7 @@ wire rt_edge    = joystick_0[0] & ~joy_prev[0];
 
 // nav_pci interface (Phase 3)
 wire        hl_btns_armed;
-wire [15:0] hl_dbg_promo;     // TEMP highlight-promotion probe (overlay row 26)
+wire [15:0] rd_dbg_pgcerr;    // reader pgc_error reason latch (overlay row 26)
 // STC display-coherence latch for nav_pci's scheduled promotion path: 1 when the
 // most recent load/seek/jump FLUSHED the decoder (keep_vbuf=0 — STC anchor and
 // display reset together). A keep_vbuf menu->menu hop clears it (the re-anchored
@@ -1691,7 +1693,9 @@ dvd_vm dvd_vm_inst (
     .dbg_g3        (vm_dbg_g3),
     .dbg_g14_9     (vm_dbg_g14_9),
     .dbg_rsm       (vm_dbg_rsm),
-    .dbg_deadend   (vm_dbg_deadend)
+    .dbg_deadend   (vm_dbg_deadend),
+    .link_fail     (vm_link_fail),       // failed menu link -> HUD "LINK FAIL nn"
+    .link_fail_pgcn(vm_link_fail_pgcn)
 );
 
 // Transport / VM seek mux (the VM's LinkCN/LinkPGN cell seeks share the
@@ -1770,8 +1774,43 @@ end
 // Selected audio track, clamped to the parsed count (belt-and-suspenders — a VM
 // SetSTN could name a track the title lacks; the button path is already bounded).
 wire [2:0] aud_sel = (menus_on && vm_owns_aud && vm_astn < 8'd8) ? vm_astn[2:0] : aud_cur;
-wire [2:0] aud_track_eff = (({1'b0,aud_sel} >= audio_ntracks_w)
-                           ? (audio_ntracks_w[2:0] - 3'd1) : aud_sel);
+wire [2:0] aud_log = (({1'b0,aud_sel} >= audio_ntracks_w)
+                     ? (audio_ntracks_w[2:0] - 3'd1) : aud_sel);
+// ---- DVD audio logical->physical stream mapping (libdvdnav vm_get_audio_stream) ----
+// aud_log is a LOGICAL stream number (that's what SPRM1/SetSTN and the DVD spec
+// mean by "audio stream"); the substream id ps_demux filters on is the PHYSICAL
+// number from the PGC's audio_control[8] table. Assuming identity here was the
+// "language menu -> movie plays SILENT" bug (a disc may map every logical to
+// e.g. 0x83 — GET_SMART VTS2; 31/431 library discs author non-identity maps).
+// The map store is deliberately NARROW: only avail (bit15) + phys (bits[10:8])
+// are kept — 32 FFs, not eight u16 words (a second 32-bit mux failed to route
+// on this design once already; see the subp_ctl_mem note below).
+reg [7:0]  actl_avail;
+reg [23:0] actl_phys;                       // {phys7,...,phys0}, 3 bits each
+always @(posedge clk_sys) begin
+    if (pgc_ctl_we && pgc_ctl_waddr[4]) begin
+        actl_avail[pgc_ctl_waddr[2:0]] <= pgc_ctl_wdata[15];
+        case (pgc_ctl_waddr[2:0])       // explicit mux — no variable part-select
+        3'd0: actl_phys[ 2: 0] <= pgc_ctl_wdata[10:8];
+        3'd1: actl_phys[ 5: 3] <= pgc_ctl_wdata[10:8];
+        3'd2: actl_phys[ 8: 6] <= pgc_ctl_wdata[10:8];
+        3'd3: actl_phys[11: 9] <= pgc_ctl_wdata[10:8];
+        3'd4: actl_phys[14:12] <= pgc_ctl_wdata[10:8];
+        3'd5: actl_phys[17:15] <= pgc_ctl_wdata[10:8];
+        3'd6: actl_phys[20:18] <= pgc_ctl_wdata[10:8];
+        3'd7: actl_phys[23:21] <= pgc_ctl_wdata[10:8];
+        endcase
+    end
+end
+wire [2:0] aud_track_eff;
+aud_stream_map aud_stream_map_inst (
+    .map_valid    (pgc_ctl_valid),          // 0 = no PGC parsed / linear -> identity
+    .dom_tt       (pgc_dom_tt),             // menus/FP force logical 0 (vmget.c)
+    .logical      (aud_log),
+    .avail        (actl_avail),
+    .phys_flat    (actl_phys),
+    .phys_streamN (aud_track_eff)
+);
 // Phase-10 HW follow-up (round 2): an audio-track switch changes which substream
 // ps_demux forwards, so the audio pipeline restarts at a new fill level while the
 // video STC keeps running — the audio playback phase (set at the PCM-FIFO exit) is
@@ -1786,12 +1825,36 @@ wire [2:0] aud_track_eff = (({1'b0,aud_sel} >= audio_ntracks_w)
 //   the shared demux -> the dedicated `aud_resync` reset below.
 // Detect a real change of the EFFECTIVE track (covers the gamepad button AND a VM
 // SetSTN), one-cycle pulse.
+//   ★ Jump-window guard (audio-mapping follow-up): with the logical->physical map
+//   in the path, aud_track_eff now ALSO changes whenever a PGC load re-parses
+//   audio_control (streaming intermediate words included). Those changes must NOT
+//   pulse aud_resync: a ~keep_vbuf jump already did the full aud_flush, and a
+//   keep_vbuf menu->menu hop deliberately keeps audio continuous (§5d) — a resync
+//   there re-introduces the menu-junction audio drop. Every PGC parse is bracketed
+//   by {start_streaming|seek_ack|jump_ack} .. pgc_loaded, so suppress the pulse in
+//   that window (0.62 s timeout covers pgc_error / linear seeks, where pgc_loaded
+//   never comes). aud_track_eff_q keeps tracking INSIDE the window so its close
+//   can't manufacture a stale-vs-new edge. User/SetSTN switches outside a load are
+//   untouched — including on linear .VOB/.mpg (map_valid=0 = identity map there).
+reg        aud_jw;
+reg [23:0] aud_jw_tmr;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        aud_jw <= 1'b0; aud_jw_tmr <= 24'd0;
+    end else if (start_streaming | seek_ack | jump_ack) begin
+        aud_jw <= 1'b1; aud_jw_tmr <= 24'd0;
+    end else if (pgc_loaded | (&aud_jw_tmr)) begin
+        aud_jw <= 1'b0;
+    end else if (aud_jw) begin
+        aud_jw_tmr <= aud_jw_tmr + 24'd1;
+    end
+end
 reg [2:0] aud_track_eff_q;
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) aud_track_eff_q <= 3'd0;
     else          aud_track_eff_q <= aud_track_eff;
 end
-wire aud_switch = (aud_track_eff != aud_track_eff_q);
+wire aud_switch = (aud_track_eff != aud_track_eff_q) && !aud_jw;
 // MENU subpicture is ALWAYS on subpicture stream 0 (substream 0x20 — the button/
 // highlight graphic; verified on T2: every menu carries 0x20 + 0x21). ps_demux
 // filters to ONE substream, so a SetSTN on the way into a submenu (SPRM2) or a
@@ -1808,7 +1871,8 @@ wire [2:0] sp_sel = (menus_on && vm_owns_sp && vm_spstn[6]) ? vm_spstn[2:0] : su
 // (letterbox) instead of 0x21. Applied ONLY to the VM-selected stream so the
 // user subtitle path is byte-identical. Ref: libdvdnav vmget.c vm_get_subp_stream.
 reg  [31:0] subp_ctl_mem [0:15];
-always @(posedge clk_sys) if (subp_ctl_we) subp_ctl_mem[subp_ctl_waddr] <= subp_ctl_wdata;
+always @(posedge clk_sys)
+    if (pgc_ctl_we && !pgc_ctl_waddr[4]) subp_ctl_mem[pgc_ctl_waddr[3:0]] <= pgc_ctl_wdata;
 // Force 4:3 Subpics (P1O[15]) debug override: advertise a 4:3/LETTERBOX display so a
 // disc that authors mode-specific subpicture streams serves its 4:3-mode art. MiB
 // "visual commentary" is the motivating case (logical subp 3: wide->0x23 warning,
@@ -2232,9 +2296,11 @@ dvd_iso_reader dvd_iso_reader_inst (
     .pal_we         (pgc_pal_we),         // PGC palette stream -> pgc_palette
     .pal_waddr      (pgc_pal_waddr),
     .pal_wdata      (pgc_pal_wdata),
-    .subp_ctl_we    (subp_ctl_we),        // PGC subp_control stream -> subp_ctl_mem
-    .subp_ctl_waddr (subp_ctl_waddr),
-    .subp_ctl_wdata (subp_ctl_wdata),
+    .pgc_ctl_we     (pgc_ctl_we),         // PGC subp/audio control stream (shared bus)
+    .pgc_ctl_waddr  (pgc_ctl_waddr),
+    .pgc_ctl_wdata  (pgc_ctl_wdata),
+    .pgc_ctl_valid  (pgc_ctl_valid),
+    .pgc_dom_tt     (pgc_dom_tt),
 
     // Linear transport (VCD/SVCD raw .bin + flat .mpg/.VOB): see the
     // lin_transport_ok gating below.
@@ -2254,7 +2320,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     .debug_iso_mode       (iso_mode_w),
     .debug_iso_error      (iso_error_w),
     .debug_play_vtsn      (rdr_play_vtsn),
-    .debug_target_vtsn    (rdr_target_vtsn)
+    .debug_target_vtsn    (rdr_target_vtsn),
+    .dbg_pgcerr           (rd_dbg_pgcerr)
 );
 
 // =========================================================================
@@ -3893,9 +3960,11 @@ debug_overlay debug_overlay_inst (
     .dbg23  (tr_ld0),                               // PGC-load history [0] newest {menu_dom,vts,pgcn}
     .dbg24  (tr_ld1),                               // PGC-load history [1]
     .dbg25  (tr_ld2),                               // PGC-load history [2]
-    .dbg26  (hl_dbg_promo),                         // TEMP (2026-08-05): highlight promotion probe
-                                                    // {cnt[15:12], src[11:10] 1=sched/2=settle/3=timer,
-                                                    //  pend_age@promo[9:0] ~4.85ms units} (was tr_ld3)
+    .dbg26  (rd_dbg_pgcerr),                        // last pgc_error {reason[15:13], nr_srp_sat[12:8],
+                                                    //  want_pgcn[7:0]} — reason 1=empty PGCIT,
+                                                    //  2=PGCN out of range (the failed-menu-link case),
+                                                    //  3=bad pgc_start, 4=JumpTT resolve, 5=no PGCI_UT,
+                                                    //  6=bad UT header, 7=VTS/menu-VOB not found
     .flowctl (dbg_flowctl),                         // row 27: {vbuf_fill, flow-control flags}
     .ov_on        (ov_on),
     .ov_r         (ov_r),
@@ -4030,11 +4099,14 @@ spu_decode spu_decode_inst (
 wire        pgc_pal_we;
 wire [3:0]  pgc_pal_waddr;
 wire [31:0] pgc_pal_wdata;
-// PGC subp_control stream (dvd_iso_reader -> subp_ctl_mem, used by the subpicture
-// display-mode substream mapping above).
-wire        subp_ctl_we;
-wire [3:0]  subp_ctl_waddr;
-wire [31:0] subp_ctl_wdata;
+// PGC stream-control bus (dvd_iso_reader): waddr 0..15 = subp_control words
+// (-> subp_ctl_mem, the subpicture display-mode substream mapping above),
+// waddr 16..23 = audio_control words (-> the audio logical->physical map).
+wire        pgc_ctl_we;
+wire [4:0]  pgc_ctl_waddr;
+wire [31:0] pgc_ctl_wdata;
+wire        pgc_ctl_valid;
+wire        pgc_dom_tt;
 wire [3:0] sp_sel_col_spu = (sp_q_idx == 2'd0) ? sp_col0 :
                             (sp_q_idx == 2'd1) ? sp_col1 :
                             (sp_q_idx == 2'd2) ? sp_col2 : sp_col3;
@@ -4138,7 +4210,6 @@ nav_pci nav_pci_inst (
     .hl_coli    (hl_coli),
     .btn_cmd    (hl_btn_cmd),
     .btn_cmd_valid (hl_btn_cmd_valid),
-    .dbg_promo  (hl_dbg_promo),          // TEMP row-26 diagnostic: promotion path + wait age
     .btns_armed (hl_btns_armed),
     .btn_sel    (hl_btn_sel),
     .dbg_btn_ns (hl_btn_ns),         // gate in-title multi-button menu nav (Scene It)
@@ -4289,6 +4360,8 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .img_warn     (img_unplayable),  // persistent "UNSUPPORTED IMAGE" popup
     .aud_warn     (aud_unsupported), // persistent "AUDIO UNSUPPORTED" popup
     .vts_evt      (vts_evt_r),       // one-shot "TITLE VTS nn" (menus-off only)
+    .link_evt     (vm_link_fail),    // failed menu link (menu-exempt popup)
+    .link_pgcn    (vm_link_fail_pgcn),
     .vts_no       (rdr_play_vtsn),
     // O[45] D-Pad Seek: "SEEK FWD 30S" / "SEEK BACK 60S" while the coalesce
     // window is open, so the tap COUNT is readable before the jump commits.

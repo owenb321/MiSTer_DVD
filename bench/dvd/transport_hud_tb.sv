@@ -35,6 +35,8 @@ module transport_hud_tb;
     reg         vts_evt  = 0;      // Phase-2: title-VTS notice pulse
     reg  [7:0]  vts_no   = 8'd0;
     reg         seek_evt = 0;      // O[45] D-pad seek popup
+    reg         link_evt = 0;      // failed-menu-link popup (2026-08-27)
+    reg [7:0]   link_pgcn = 0;
     reg         seek_fwd = 0;
     reg  [6:0]  seek_min = 7'd0;
     reg  [2:0]  seek_sec = 3'd0;
@@ -59,6 +61,7 @@ module transport_hud_tb;
         .img_warn(img_warn), .aud_warn(aud_warn),
         .vts_evt(vts_evt), .vts_no(vts_no),
         .seek_evt(seek_evt), .seek_fwd(seek_fwd),
+        .link_evt(link_evt), .link_pgcn(link_pgcn),
         .seek_min(seek_min), .seek_sec(seek_sec),
         .aud_no(aud_no), .aud_cnt(aud_cnt), .aud_lang(aud_lang),
         .sub_enabled(sub_enabled), .sub_no(sub_no), .sub_cnt(sub_cnt),
@@ -348,6 +351,27 @@ module transport_hud_tb;
             errors = errors + 1;
         end else $display("  ok  T19 seek popup not preempted by a warning");
         css_warn = 0; @(posedge clk);
+
+        // ---- T21: LINK FAIL popup (failed menu link, 2026-08-27) -------
+        // Fires while a MENU is up (that's where the press happened), so it
+        // must be menu-exempt like the warnings; digits = the failed PGCN.
+        menu_active = 1; @(posedge clk);
+        link_pgcn = 8'd10; link_evt = 1; @(posedge clk); link_evt = 0;
+        repeat (4) @(posedge clk);     // sample BEFORE the shrunk timer expires
+        if (dut.pop_vis !== 1'b1) begin
+            errors = errors + 1;
+            $display("  FAIL T21b link-fail popup hidden in menu");
+        end else $display("  ok  T21b link-fail popup visible in menu");
+        check_popup("T21a link fail 10", "LINK FAIL 10~~~~~~~~~~~~~~~~~~~~");
+        // single digit keeps a leading space; >99 clamps to 99
+        link_pgcn = 8'd7;  link_evt = 1; @(posedge clk); link_evt = 0;
+        check_popup("T21c link fail 7", "LINK FAIL  7~~~~~~~~~~~~~~~~~~~~");
+        link_pgcn = 8'd200; link_evt = 1; @(posedge clk); link_evt = 0;
+        check_popup("T21d link fail clamp", "LINK FAIL 99~~~~~~~~~~~~~~~~~~~~");
+        menu_active = 0;
+        repeat (400) @(posedge clk);   // let the popup timer run well past
+        wait (dut.pop_tmr == 27'd0);   // (SHOW_TICKS is seconds at sim rate? use wait)
+        @(posedge clk);
 
         // ---- T20: the status-line icon field renders the tap count -----
         // emu drives scrub_held|dpad_pend / dpad_pend_n into these taps, so a

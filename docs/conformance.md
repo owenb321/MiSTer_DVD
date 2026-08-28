@@ -109,7 +109,7 @@ Reference: `libdvdnav/src/vm/{decoder.c,vm.c,vmcmd.c,getset.c,play.c}`. Our impl
 | SPRM | Name | Status | Notes (our `dvd_vm.sv` sprm_read) |
 |---|---|---|---|
 | 0 | Menu language | 🟡 | constant `'en'` |
-| 1 | Audio stream # | ✅ | SetSTN → `sprm_astn` → demux mux |
+| 1 | Audio stream # | ✅ | SetSTN → `sprm_astn` → **logical→physical resolution through PGC `audio_control`** (`dvd/aud_stream_map.sv` = `vmget.c` `vm_get_audio_stream` + the `vm_get_audio_active_stream` first-available fallback; menus force logical 0; deviation: an all-unavailable title map resolves to identity, not −1/silence) → demux mux. 2026-08-27, `fix/menu-link-audio-map`; see `docs/track_selection.md`. |
 | 2 | Subpicture stream # | ✅ | SetSTN → `sprm_spstn` (bit6 = display enable) |
 | 3 | Angle # | 🟡 | stored; angle *block* selection is via B6 gamepad + DSI, not VM-driven (Phase 9) |
 | 4 | Title track # | ✅ | |
@@ -183,7 +183,7 @@ Reference: `libdvdread/src/nav_read.c` + `dvdread/nav_types.h`; highlight logic
 | Feature | Reference | Status | Notes |
 |---|---|---|---|
 | PCI general info / PTM | `pci_gi_t` | ✅ | STC arm window |
-| HLI highlight info (hl_gi, s/e_ptm, btn_ns, fosl/foac) | `hli_t` | ✅ | double-buffered, ss commit; `video_live` fallback promote (deep menus) |
+| HLI highlight info (hl_gi, s/e_ptm, btn_ns, fosl/foac) | `hli_t` | ✅ | double-buffered, ss commit; `video_live` fallback promote (deep menus). foac = forced-SELECT only since 2026-08-27 — the forced-ACTIVATE arm was deleted (libdvdnav doesn't implement foac at all; it was the one nav path that could start playback with no keypress). |
 | Button records (btni, coli color/contrast) | `btni_t`,`btn_colit_t` | ✅ | **group selected by display mode** (`btngr_ns`/`dsp_ty` vs the PR fj#115 aspect verdict; group-1 fallback; spec-hardening Phase 3, ✅ HW-confirmed PR fj#168) — note libdvdnav itself reads group 1 only |
 | Directional button nav + activate | `highlight.c` | ✅ | D-pad link-walk, activate → btn_cmd (PR fj#84) |
 | **CHG_COLCON** (dynamic color-contrast change) | PCI | ❌ | deferred |
@@ -209,6 +209,7 @@ Detailed in `docs/fabric_audio.md`, `docs/iec61937.md`, `docs/subpicture.md`. Qu
 | Closed captions (line-21 / CC) | ✅ analog line-21 re-insertion — **HW-CONFIRMED 2026-08-26** (C1 on a real TV, MiB/Matrix) | Extracted in `vld.v` from MPEG-2 user_data, re-modulated onto line 21 of the analog raster for the TV to decode (`dvd/cc_line21.sv`, `P1O[14]`, default On). **No on-screen renderer** — nothing on HDMI; kept out by choice (see `docs/closed_captions.md` §5 — the fit rationale expired with the PR #9–#11 reclaim). Prevalence MEASURED: **6/34 local discs** carry live EIA-608 (all NTSC); `tools/cc_scan.py`, `dvd_census.py --captions`. Format + decode design: `docs/closed_captions.md` |
 | Multi-angle | ✅ | Phase 9 |
 | Audio + subtitle track selection | ✅ | Phase 10 gamepad |
+| Audio logical→physical stream mapping (PGC `audio_control`) | ✅ | `dvd/aud_stream_map.sv`, 2026-08-27 — before this the track number was used as a raw substream index, silencing any disc with a non-identity map (31/431 library discs; GET_SMART VTS2 = the boot-silent repro). `docs/track_selection.md` |
 
 ---
 

@@ -363,6 +363,41 @@ Tests: `dvd_vm_tb` [S2] (first press retargets, `fb == FB_BOOTM`) and **[S21]** 
 lockstep. **✅ HW-CONFIRMED 2026-08-25** (user report: Menu over Atmosfear's
 copyright screen now reaches the main menu).
 
+### Failed-menu-link re-enter (`link_fail`) — 2026-08-27, `fix/menu-link-audio-map`
+
+**The bug (field report, Blade Runner):** a language-menu "next page" arrow started the
+MOVIE. Mechanism: every menu-class link waits with `fb = FB_NONE`, and on `pgc_error`
+the fallback chain's final `else` ran the **auto-title** (largest VTS) — deliberate and
+right for BOOT failures, catastrophic for a user's menu press whose `LinkPGCN` simply
+didn't resolve (e.g. a page-2 PGCN valid in one PGCI_UT language unit but out of range
+in the one Player Language picked — overlay row 26 reason 2 is exactly this signature).
+
+**The fix — a new arm ABOVE the auto-title `else`:** when `fb == FB_NONE`, the failed
+jump's DESTINATION was menu-domain (`vm_dom` ∈ {VMGM, VTSM}), and a menu has loaded
+before (`last_menu_v`), the VM **re-enters the last successfully loaded menu PGC**
+(`last_menu_{dom,vts,pgcn}`, latched on every menu-domain `pgc_loaded`) with
+LinkTopPGC semantics — same page comes back, `nav_pci` re-arms its buttons — and pulses
+**`link_fail`/`link_fail_pgcn`** (→ the transport-HUD `LINK FAIL nn` popup, menu-exempt).
+Why re-enter instead of "stay put": by `pgc_error` time the jump service has already
+torn the stream down (`wr_ptr`, `cell_mode`) and the buttons are gone — staying put is
+a dead menu. Why `last_menu_*` and not the reader's live `cur_vts`: the jump service
+moves `play_vtsn` to the FAILED target before the range check runs. `fb` advances to
+`FB_VTSM`, so a second failure walks the existing recovery chain — bounded, no loop.
+Untouched: boot/FP failures (`last_menu_v`=0 pre-first-menu; FP/TT destinations skip
+the arm) and title-destination failures (a menu button's `JumpTT` that fails still
+auto-titles, no popup).
+
+Also in this change: **`nav_pci`'s foac forced-ACTIVATE arm deleted** (libdvdnav
+doesn't implement foac at all — only fosl; 18 NAV packs library-wide author it, and it
+was the one nav path that could start playback with no keypress). The forced-SELECT
+hop stays, now one-shot with an unconditional `h_foac` clear.
+
+Tests: `dvd_vm_tb` **[S22]** (a: re-enter + `link_fail` pulse, not auto-title; b:
+second failure walks the FB_VTSM chain; c: title-destination failure keeps the
+auto-title, no pulse), `transport_hud_tb` T21 (popup text/menu-visibility/clamp),
+`nav_pci_tb` compile-clean. Golden model: `_jump()` in `tools/dvd_vm_ref.py` mirrors
+the arm (`last_menu` + "LINK FAIL" trace lines).
+
 **Menu key `came_via_menukey` gate (Trivial Pursuit Star Wars).** The Menu key used to
 `LinkRSM` unconditionally from any menu. On a **single-VTS game disc whose VTS1/title1 IS the
 First-Play copyright+intro** (TP Star Wars: FP `JumpTT 1` → intro → menu, and boot's
@@ -494,9 +529,14 @@ The ~220-line proto-nav/micro-bridge always block is deleted. emu keeps gamepad
 decode only: pause + title cell seeks (D-pad, unchanged), Phase-3 button-nav pulses,
 and Menu/Select key pulses into the VM. The VM owns the reader's jump port; its cell
 seeks mux onto the seek port. `jump_ack` clears pause. Stream mux:
-`aud_track = (menus_on && SPRM1 < 8) ? SPRM1 : O[8:6]` (SPRM1 = 15 "none" keeps the
-OSD in control until the disc selects); `sp_track/sp display` from SPRM2 (bit6),
-with `O[15]` still forcing subtitles on.
+`aud_sel = (menus_on && vm_owns_aud && SPRM1 < 8) ? SPRM1 : aud_cur` (SPRM1 = 15
+"none" keeps the gamepad in control until the disc selects; Phase 10 replaced the
+old O[8:6] OSD selector with the Audio button). **Since 2026-08-27
+(`fix/menu-link-audio-map`) that pick is a LOGICAL stream number** — it is
+count-clamped then resolved to the physical substream through the PGC's
+`audio_control` table by `dvd/aud_stream_map.sv` (libdvdnav `vm_get_audio_stream`;
+menus force logical 0; see `docs/track_selection.md`). `sp_track/sp display` from
+SPRM2 (bit6), with `O[15]` still forcing subtitles on.
 
 ## Punted (documented, not planned soon)
 

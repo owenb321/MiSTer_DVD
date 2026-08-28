@@ -167,13 +167,9 @@ module nav_pci #(
     output reg  [63:0] btn_cmd,       // selected button's 8-byte VM command
     output reg         btn_cmd_valid, // pulse: activated (execute/flash)
 
-    // DVD-FORK DEBUG (2026-08-05, branch highlight-early regression): WHICH path
-    // promoted the last armed HLI + how long it had waited. The cap/settle fixes
-    // changed nothing on HW, so promotion must flow through a path other than
-    // the fallback — this names it. {promo_cnt[3:0] (wrapping, one per arm
-    // promotion), src[1:0] (1=STC-scheduled, 2=menu-settled, 3=timer),
-    // pend_age_at_promo[26:17] (~4.85 ms units: 2^17 clk_sys)}.
-    output reg  [15:0] dbg_promo,
+    // (The 2026-08-05 dbg_promo promotion probe was RETIRED 2026-08-27 — its
+    // question was answered by the HW rounds; overlay row 26 is now the reader's
+    // pgc_error reason latch. pend_age stays: it drives PROMOTE_FALLBACK.)
 
     // state read-backs
     output wire        btns_armed,    // an HLI with buttons is committed
@@ -526,10 +522,6 @@ always @(posedge clk or negedge rst_n) begin
                 fetched <= 1'b0;
                 h_forever <= 1'b0;
             end else begin
-                // promotion-source probe (see dbg_promo port comment)
-                dbg_promo <= {dbg_promo[15:12] + 4'd1,
-                              (nxt_sched ? 2'd1 : (menu_settled ? 2'd2 : 2'd3)),
-                              pend_age[26:17]};
                 disp_bank <= nxt_bank;
                 armed     <= 1'b1;
                 h_sptm    <= nxt_sptm;
@@ -663,15 +655,20 @@ always @(posedge clk or negedge rst_n) begin
         end
         F_DONE: begin
             // Activate the freshly-fetched button when: a numpad digit forced it
-            // (auto_pend); an auto_action button was ARRIVED at via nav (moved); or
-            // a forced-activate (foac) button was just committed. btn_cmd now holds
-            // this button's command, so the fired activation is race-free.
+            // (auto_pend), or an auto_action button was ARRIVED at via nav
+            // (moved). btn_cmd now holds this button's command, so the fired
+            // activation is race-free.
+            //   ★ The forced-ACTIVATE arm (h_foac == btn_sel fired btn_cmd_valid
+            //   here) was DELETED 2026-08-27 (menu-link fix): libdvdnav does not
+            //   implement foac at all (only fosl, dvdnav.c:814), only 18 NAV
+            //   packs library-wide author it, and it was the one nav path that
+            //   could start playback with no keypress — indistinguishable from
+            //   the "arrow launched the movie" failure. The forced-SELECT hop
+            //   below stays (spec-correct, harmless).
             if (auto_pend ||
-                (b_auto == 2'd1 && moved) ||
-                (h_foac != 6'd0 && h_foac == btn_sel)) begin
+                (b_auto == 2'd1 && moved)) begin
                 btn_cmd_valid <= 1'b1;
                 act_tmr       <= 24'hFFFFFF;
-                h_foac        <= 6'd0;
             end
             auto_pend <= 1'b0;
             moved     <= 1'b0;
@@ -680,12 +677,16 @@ always @(posedge clk or negedge rst_n) begin
         default: fstate <= F_IDLE;
         endcase
 
-        // foac points elsewhere: hop the selection there once
-        if (fstate == F_IDLE && !fetch_req && armed &&
-            h_foac != 6'd0 && h_foac <= h_btn_ns && h_foac != btn_sel) begin
-            btn_sel   <= h_foac;
-            fetch_req <= 1'b1;
-            fetched   <= 1'b0;
+        // foac forced-SELECT: hop the selection there ONCE at commit, then
+        // clear h_foac unconditionally (previously the activate arm cleared it;
+        // without the clear a user navigating away would be dragged back).
+        if (fstate == F_IDLE && !fetch_req && armed && h_foac != 6'd0) begin
+            if (h_foac <= h_btn_ns && h_foac != btn_sel) begin
+                btn_sel   <= h_foac;
+                fetch_req <= 1'b1;
+                fetched   <= 1'b0;
+            end
+            h_foac <= 6'd0;
         end
 
         // display mode changed while armed (OSD aspect toggle / menu V_ATR

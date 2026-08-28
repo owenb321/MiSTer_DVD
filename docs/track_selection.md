@@ -176,11 +176,102 @@ timing is STC-referenced independently of audio).
 - Press **Subtitle** → off → English → French → Spanish → English → off (visible).
 - A cycle never lands on a non-existent track (bounded by the parsed count = 4).
 
+## Logical→physical audio mapping (`audio_control`) — ✅ HW-CONFIRMED 2026-08-27 (GET_SMART VTS 2: sound where it was silent; build `DVD_menulink_20260828_0153.rbf`)
+
+Everything above this section treated a track NUMBER as a substream INDEX —
+`aud_track_eff` went straight into `ps_demux`'s `substream_id[2:0]` compare. That
+assumption is wrong on the DVD spec's own terms: SPRM1/SetSTN and the user's pick
+are **logical stream numbers**, and the PGC's **`audio_control[8]` table**
+(PGC+0x0C, u16 each: bit 15 = available, bits [10:8] = the **physical** stream
+number) maps them to the substream actually muxed — libdvdnav
+`vm_get_audio_stream` (`vmget.c:111`). The subpicture side has had exactly this
+mapping since PR fj#115 (`subp_control`); audio was the missing sibling.
+
+**The failure it fixes** (field report: language-select menu → movie plays with
+NO audio; local repro: `GET_SMART` VTS 2, where **every** PGC maps its logical
+streams to **physical 3** and the VOB carries only substream 0x83 — the old core
+hunted 0x80 = silent from the first frame). A 431-ISO library scan found **31
+discs** with non-identity maps and **49** with non-contiguous availability, so
+this was latent everywhere, not one disc's quirk.
+
+Mechanism:
+
+- **`dvd_iso_reader`**: the PGC-load walk now starts at PGC+0x0C with a new
+  `P_ACTL` phase (audio_control is contiguous with subp_control @0x1C, so a title
+  PGC rolls straight into `P_SUBP` with no re-seek; menu/FP PGCs re-seek to the
+  @156 header as before). The old `subp_ctl_*` bus is renamed **`pgc_ctl_*`**
+  (waddr widened to 5 bits: 0–15 subp words, 16–23 audio words — ONE shared bus,
+  net one new wire). audio_control is walked in **every** domain (menus resolve
+  logical 0 through it, per vmget.c); subp_control stays title-only. New outputs
+  `pgc_ctl_valid` (complete + consistent; rises one cycle after the last word
+  lands) and `pgc_dom_tt` (the loaded PGC's domain — `menu_dom` is NOT a
+  substitute: it reads 0 for First Play, which must take the non-title rule).
+- **`dvd/aud_stream_map.sv`** (combinational, unit-tested): resolves
+  `aud_log` (the count-clamped logical pick) → `aud_track_eff`. Rules, faithful
+  to libdvdnav: menus/FP force logical 0; an available entry resolves to its
+  phys; a non-title miss → 0; a title miss → **first available** stream
+  (`vm_get_audio_active_stream`). **One documented deviation:** where libdvdnav
+  returns −1 (title PGC authoring no available stream at all), we return the
+  logical unchanged — identity = the pre-mapping core, so legacy behaviour is
+  bit-identical. `map_valid=0` (no PGC parsed / linear `.VOB`/`.mpg`) is identity
+  for the same reason. Storage is deliberately narrow: `avail[7:0]` + eight
+  3-bit phys fields = **32 FFs**, not eight u16 words (a second 32-bit mux
+  already failed to route on this design once — see the `subp_ctl_mem` note in
+  emu).
+- **`aud_switch` jump-window guard (emu)**: with the map in the path,
+  `aud_track_eff` also changes at every PGC re-parse. Those changes must NOT
+  pulse `aud_resync` (a ~keep_vbuf jump already did the full `aud_flush`; a
+  keep_vbuf menu→menu hop deliberately keeps audio continuous — §5d). Every PGC
+  parse is bracketed by `{start_streaming|seek_ack|jump_ack} … pgc_loaded`, so
+  the pulse is suppressed in that window (0.62 s timeout for pgc_error/linear
+  seeks where `pgc_loaded` never comes). `aud_track_eff_q` keeps tracking inside
+  the window so its close can't manufacture a stale edge. User/SetSTN switches
+  outside a load are untouched, including on linear files.
+
+Golden model: `tools/dvd_vm_ref.py aud_stream_map()` (PGC-load traces print the
+resolved physical stream); offline predictor `tools/nav_extract.py --audio-map
+PGCN --vts N`. Tests: `bench/dvd/aud_stream_map_tb.sv` (2,026 vectors bit-exact
+vs the golden model, fixture from `tools/gen_aud_map_vec.py`),
+`bench/dvd/iso_reader_subpctl_tb.sv` (audio words byte-exact + ordering +
+valid/dom_tt semantics), full reader + demux suites green.
+
+HW gate: **GET_SMART, Debug Title VTS = 2 — silent before, audio after** (the
+decisive A/B; backups `BATTLEFIELD_EARTH` VTS 4, `NATIONAL_LAMPOONS_VACATION`
+VTS 2); MiB 4-track cycling unregressed; menu→title transitions keep audio
+continuous.
+
+### Audio-substream observation tap (shipped) + the deferred watchdog
+
+`ps_demux` now exports a PASSIVE tap beside the untouched FSM (the `aud_track`
+compare deliberately stays ahead of the class `casez`): **`aud_ss_seen`** (pulse
+per audio-class substream/stream id parsed — AC-3/DTS/LPCM 0xBD subids +
+MP2 0xC0-C7; subpicture excluded), **`aud_ss_id`** (its track number, held),
+**`aud_pes_hit`** (pulse when that PES matched `aud_track`). Per-codec sticky
+seen-masks live inside ps_demux under `` `ifdef DEBUG_OVERLAY `` (32 FFs,
+dead-stripped from release). This makes "the disc is carrying audio, just not
+on our id" directly observable — the diagnostic a field report needs.
+Tests: `ps_demux_substream_tb` (per-case seen counts 1/1/1, exactly one hit).
+
+**Deferred by design — the self-healing watchdog.** With the `audio_control`
+mapping above delivering libdvdnav's own first-available fallback, a second
+net keyed on observed traffic would only cover a disc whose IFO table itself
+is absent or wrong, at ~135 ALMs on a ~98 % design. Build it ONLY if a report
+shows silence *with the mapping in place*. The vetted design, so it needn't be
+re-derived: windowed (never sticky) — fire only when `video_live`, audio
+unmuted, not `css_scrambled`, ≥8 foreign `aud_ss_seen` pulses and **zero**
+`aud_pes_hit` for ~2.5 s (window cleared on any hit — a legitimately silent
+passage still carries AC-3 PES, so it can never trip); on fire, override to
+the first seen substream, rotate on repeat fire, stop after all seen bits
+tried; clear on `start_streaming`/Audio-button. Reset the window on
+`aud_switch` and inside the jump window.
+
 ## Follow-ups
 
 - **Phase 11: on-screen track indicator** ("AUD 2/4 · fr") using the `attr_*` readout
   + the subpicture blend. This is the piece the OSD *cannot* do.
-- Menu-domain title entry (VM First Play path) currently leaves the counts at the
-  default 8 if the title is reached without passing `S_PGC_BEGIN`; verify on MiB with
-  `O[1]` on. Safe (default = unconstrained), but tighten if a menu-entry title needs
-  bounding.
+- ~~Menu-domain title entry (VM First Play path) currently leaves the counts at the
+  default 8 if the title is reached without passing `S_PGC_BEGIN`~~ — **RETIRED
+  2026-08-27**: with the `audio_control` mapping above, the MAP (parsed at every
+  PGC load, every domain), not the count, decides what plays; a stale count only
+  widens the clamp on the logical index, which the map then resolves or
+  falls back from. Not worth fixing separately.

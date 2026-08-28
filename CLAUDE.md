@@ -218,6 +218,46 @@ worse maintenance burden than targeted in-place edits. So:
   DDR3 + counter widths, not fabric — the big decoder M10Ks are
   latency-tuning FIFOs).
 
+- 🔧 **FAILED MENU LINK RE-ENTERS THE MENU, NEVER THE MOVIE (2026-08-27, PR #17)
+  — MERGED; HW no-regression pass 2026-08-27 (menus/boot unaffected); ⏳ the
+  positive case (a disc whose menu link actually fails — the reporter's Blade
+  Runner) is still the outstanding gate; sim fault-injection covers it
+  meanwhile ([S22]).** Field report
+  (Blade Runner): a language-menu "next page" arrow STARTED THE FEATURE — a failed
+  menu-domain jump (`pgc_error`, e.g. a page-2 LinkPGCN out of the selected
+  PGCI_UT language unit's range) fell through the VM's `fb == FB_NONE` chain to the
+  auto-title. New arm in `dvd/dvd_vm.sv`: a failed MENU-destination link with a
+  last-good menu **re-enters that menu** (`last_menu_*`, latched per menu-domain
+  `pgc_loaded` — NOT the reader's live `cur_vts`, which has already moved to the
+  failed target) + pulses `link_fail` → transport-HUD **`LINK FAIL nn`** popup
+  (`pop_type 9`, menu-exempt). Second failure walks the existing FB_VTSM chain;
+  boot/FP and title-destination failures keep the auto-title exactly as before.
+  Also: `nav_pci` foac forced-ACTIVATE deleted (libdvdnav never implements it; it
+  could start playback with no keypress), forced-SELECT hop kept one-shot; overlay
+  **row 26 = reader `pgc_error` reason latch** (reason/nr_srp/want_pgcn — replaces
+  the answered `dbg_promo` probe). Tests: `dvd_vm_tb` [S22], `transport_hud_tb`
+  T21; golden `_jump()` in `dvd_vm_ref.py`. No local repro disc exists (431-ISO
+  scan: zero out-of-range menu links; Goonies' unequal LUs check out) — validated
+  by sim fault-injection; the reporter's disc is the HW gate. Detail:
+  `docs/dvd_vm.md` "Failed-menu-link re-enter".
+- ✅ **AUDIO LOGICAL→PHYSICAL STREAM MAPPING (2026-08-27, PR #17) —
+  HW-CONFIRMED 2026-08-27 (user report: GET_SMART VTS 2 now has sound where it
+  was silent — the decisive A/B; build `DVD_menulink_20260828_0153.rbf`,
+  SEED 5, clk_dec 94.5/91.5, reached via the framestore mem-request-write
+  RETIME, see the DVD.qsf ledger).** The track pick
+  (SPRM1/SetSTN or the Audio button) is a LOGICAL stream number; the PGC's
+  `audio_control[8]` table maps it to the PHYSICAL substream `ps_demux` filters on
+  (libdvdnav `vm_get_audio_stream` + the first-available fallback). The old raw-index
+  assumption silenced any disc with a non-identity map — the "language menu → movie
+  plays with NO audio" field report (Blade Runner), and 31/431 library discs; local
+  boot-silent repro = **GET_SMART VTS 2** (every logical → 0x83; HW A/B via the Debug
+  Title VTS picker). Reader streams the table on the shared `pgc_ctl_*` bus (new
+  `P_ACTL` phase, every domain — menus resolve logical 0 through it); new
+  `dvd/aud_stream_map.sv` (32-FF store, identity when no PGC/table = legacy
+  bit-identical); `aud_switch` gains a jump-window guard so PGC re-parses can't pulse
+  `aud_resync` (menu audio continuity, §5d). Golden: `dvd_vm_ref.py aud_stream_map()`
+  + `nav_extract.py --audio-map`; 2,026-vector bit-exact TB + reader/demux suites
+  green. Detail: `docs/track_selection.md` "Logical→physical audio mapping".
 - 🔧 **AUDIO IS NOW DECODED IN FABRIC (2026-06-27, branch `feature/fabric-ac3-audio`).**
   AC-3 and LPCM are decoded entirely in the FPGA: `ps_demux` → `audio_ring` →
   `dvd/dvd_audio_decode.sv` (AC-3 via the ported `dvd/ac3/*` `ac3_front`+`pcm_out`,

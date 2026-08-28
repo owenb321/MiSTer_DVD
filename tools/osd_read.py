@@ -95,10 +95,13 @@ ROW_LABELS = [
     "TR  load[0]new",  # 23 PGC-load history newest {menu_dom15, vts[14:8], pgcn[7:0]}
     "TR  load[1]   ",  # 24 PGC-load history [1]
     "TR  load[2]   ",  # 25 PGC-load history [2]
-    # Row 26 TEMP (2026-08-05, highlight-early branch regression): nav_pci
-    # promotion probe {cnt[15:12], src[11:10] 1=STC-sched/2=settled/3=timer,
-    # pend_age@promo[9:0] ~4.85ms units (2^17 clk_sys)}  (was TR load[3])
-    "hl promo probe",  # 26 {cnt, src, age@promo}
+    # Row 26 (2026-08-27, menu-link/audio-map branch — replaced the answered
+    # dbg_promo probe): the reader's LAST pgc_error cause, latched at the error
+    # site. {reason[15:13], nr_srp_sat[12:8] (PGCIT SRP count, sat 31),
+    # want_pgcn[7:0]}. reason: 1=empty PGCIT, 2=PGCN out of the LU's range (the
+    # failed-menu-link signature), 3=bad pgc_start, 4=JumpTT resolve,
+    # 5=no PGCI_UT, 6=bad UT header, 7=VTS/menu-VOB not found.
+    "pgc_err reason",  # 26 {reason, nr_srp, want_pgcn}
     # --- Thayer menu-audio flow-control (row 27) ---
     # {vbuf_fill[15:8], thr_sticky7, fifo_sticky6, aud_bp_sticky5, aud_bp_armed4,
     #  aud_ring_low3, menu_aud_live2, menu_vbuf_over1, menu_active0}

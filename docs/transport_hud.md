@@ -85,6 +85,18 @@ are muxed in emu — a **held** FF/REW scrub renders its accelerating tier, an o
 `hold_freeze` itself is untouched (it still pauses the governor/audio), which is
 why a D-pad tap does not freeze video. See `docs/dvd_nav.md` §2b.
 
+**Failed-menu-link popup (`link_evt`, 2026-08-27):** popup type **9** renders
+`LINK FAIL nn` (accent label, `nn` = the unresolved PGCN clamped to 99, leading
+zero suppressed; 0 for entry-scan targets) when `dvd_vm.link_fail` pulses — a
+menu button's link did not resolve and the VM re-entered the current menu
+instead of auto-playing the movie (see `docs/dvd_vm.md` "Failed-menu-link
+re-enter"). Arbitrated as a **user** event (top of the event chain — it is rare
+and it is the answer to "why did nothing happen") and **menu-exempt** like the
+warnings, because it fires precisely while a menu is on screen. The debug
+overlay's row 26 carries the reader's full reason latch for the same event.
+Rendered with `a2g()` letters only — `hud_font.mem` untouched. Tests:
+`transport_hud_tb` T21.
+
 **CSS warning popup (`css_warn`, 2026-08-06):** popup type 4 renders
 `CSS ENCRYPTED` (accent, cols 0–12) when emu's sticky `css_scrambled` latch is
 set — the loaded image still carries CSS-scrambled sectors

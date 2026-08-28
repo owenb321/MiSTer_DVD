@@ -115,6 +115,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/mem_shim_burst.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/sys_pll.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mpg_streamer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dvd_iso_reader.sv
+# audio logical->physical stream mapping (PGC audio_control, libdvdnav vmget.c)
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/aud_stream_map.sv
 
 
 
@@ -644,4 +646,15 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # estimated. Do NOT read a large "ALMs needed" jump as a capacity problem without
 # checking A and B -- and note the Fmax hit is real regardless (dpad_seek is on
 # clk_sys, so it is congestion pressure on clk_dec paths, not a new critical path).
-set_global_assignment -name SEED 7
+#
+# 2026-08-28 (fix/menu-link-audio-map netlist, +143 ALMs): SEED 5, clk_dec
+# 94.54 @100C / 91.49 @-40C, PASS with margin. This seed came AFTER a measured
+# RETIME, not from rolling: the initial netlist failed ELEVEN seeds (best 85.7,
+# one routing timeout), tools/timing_paths.sh named ONE binding path
+# (framestore_request mem_req_wr_dta -> mem_request_fifo M10K write, routing-
+# dominated), and the framestore.v DVD-FORK RETIME (pipeline reg, payload bits
+# kept OFF the reset tree -- v1's reset loading became the new worst path) took
+# the same worst-roll seed 73.5 -> 83.1 and SEED 5 to 94.5. Lesson re-proven:
+# at 98% ALM, retime the measured limiter; do not re-roll seeds or reach for
+# the physical-synthesis switch (PR fj#92 retired it deliberately).
+set_global_assignment -name SEED 5
