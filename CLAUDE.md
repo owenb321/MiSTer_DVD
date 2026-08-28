@@ -238,7 +238,10 @@ worse maintenance burden than targeted in-place edits. So:
   by sim fault-injection; the reporter's disc is the HW gate. Detail:
   `docs/dvd_vm.md` "Failed-menu-link re-enter".
 - 🔧 **AUDIO LOGICAL→PHYSICAL STREAM MAPPING (2026-08-27, branch
-  `fix/menu-link-audio-map`) — sim-verified, ⏳ HW-confirm pending.** The track pick
+  `fix/menu-link-audio-map`) — sim-verified, ⏳ HW-confirm pending. Timing-clean
+  build: `releases/DVD_menulink_20260828_0153.rbf` (SEED 5, clk_dec 94.5/91.5 —
+  reached via the framestore mem-request-write RETIME, see the DVD.qsf ledger;
+  the branch also carries that retime + the LINK FAIL popup + overlay row 26).** The track pick
   (SPRM1/SetSTN or the Audio button) is a LOGICAL stream number; the PGC's
   `audio_control[8]` table maps it to the PHYSICAL substream `ps_demux` filters on
   (libdvdnav `vm_get_audio_stream` + the first-available fallback). The old raw-index
