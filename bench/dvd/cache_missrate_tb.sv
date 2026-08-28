@@ -77,8 +77,13 @@ module cache_missrate_tb;
     wire        dbg_busy, dbg_ack;
     wire [15:0] dbg_rd, dbg_wr, dbg_rsp, dbg_pend, dbg_missrate;
 
+    // cwf_en/dual_en tied OFF: these ports postdate this TB and were left
+    // unconnected (= X) — the flop-tag FSM happened to resolve the X to the
+    // same "cwf off, dual off" config, the BRAM-tag FSM's reordered state
+    // ternary does not. emu.sv always drives both pins on hardware.
     mem_shim_burst #(.ASSOC(4), .NSETS(64)) dut (
         .clk(clk), .rst_n(rst_n), .hard_rst_n(rst_n),
+        .cwf_en(1'b0), .dual_en(1'b0),
         .mem_req_rd_cmd(req_cmd), .mem_req_rd_addr(req_addr), .mem_req_rd_dta(req_dta),
         .mem_req_rd_en(req_en), .mem_req_rd_valid(req_valid),
         .mem_res_wr_dta(res_dta), .mem_res_wr_en(res_en), .mem_res_wr_almost_full(res_almost_full),

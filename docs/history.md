@@ -320,3 +320,70 @@ escalation ladder stays documented for a future netlist that outgrows this margi
 `releases/DVD_sdcgroups_sweep_20260801_1449.rbf` = the SEED-29 build. ✅ **HW-CONFIRMED
 2026-08-01 (PR fj#156, user report: "looks great")** — fringe gone, playback clean, S/PDIF
 unaffected (the pll_audio crossing false-pathed = stock framework semantics, as audited).
+
+## 11. mem_shim_burst tag/LRU store to M10K — the ALM congestion reclaim (MERGED, PR #18; ✅ HW-CONFIRMED 2026-08-28)
+
+**The motive.** After PR #17 the design sat at **98% ALM (41,202/41,910)** and the fit
+lottery was back despite §10's SDC fix: the D-pad branch needed a seed re-sweep, and the
+menu-link branch burned eleven failed seeds before a measured retime of framestore's
+mem_request_fifo write closed it (see the DVD.qsf seed ledger). The 2026-08-27
+per-entity fit report named the fish: `dvd/mem_shim_burst.sv` = **4,899 ALMs / 6,546
+registers**, third-largest block in the design, bigger than all of dvd_vm. The 32 KB
+cache DATA array was already M10K, but the tag/valid/LRU store was not: 12b × 128 sets ×
+4 ways of tag flops read through four parallel 128:1 async muxes, plus 2b × 512 LRU
+rank flops — the project's recurring LUT-RAM pattern (M19, parse_buf, iso-navigator)
+one more time. RAM headroom existed (503/553 M10K), and the whole tag+LRU store is
+under 8 kbit.
+
+**The design.** Tags and LRU ranks moved to two sync-read simple-dual-port M10Ks
+addressed BY SET (one read = all four ways' context); the valid bits stayed in flops
+(512 FFs — S_INIT invalidation and victim-invalidate-before-fill keep their
+reset-friendly semantics, since BRAM has no reset). The 1-cycle RAM latency is absorbed
+by growing the `S_STREAM` hit loop from two to **three overlapped stages** (present
+set → compare + present data address → emit): still 1 word/cycle, with command N+1's
+tag read overlapping command N's data read. Misses and writes issue their DDR
+transaction **directly from the compare-stage verdict cycle** (fast entry), so the
+miss/write path costs the same cycle count as the flop version (the TB's pure-miss
+meter actually improved, 26.0 → 25.0 cyc/resp). Geometry and policy untouched:
+NSETS=128 / ASSOC=4 / LINEW=8, true LRU.
+
+**Why it stays bit-exact** (the §-level invariant: hit rate IS the product — the
+direct-mapped predecessor sheared on real hardware):
+- Back-to-back same-set hits see current ranks through a **2-deep bypass** — the
+  stage-B touch being written that cycle, plus a last-write register covering the
+  M10K's undefined mixed-port read-during-write edge. Any colliding write is bypassed
+  by construction, so the undefined RAM value is never consumed.
+- Fills **read-modify-write whole set words from snapshots** captured at the miss
+  lookup — legal because nothing else writes that set in between (the stream is
+  drained; a paired slot B is a different set by rule). No byte-enables needed.
+- The dual peek costs 2 cycles now (`S_PEEK` latches + presents, new `S_PEEK2`
+  decides), and pairing is suppressed when the skid holds a command at fill entry (the
+  stream's pops are speculative now, and peeking the FIFO past a parked older command
+  would reorder). The un-paired miss lands later with an identical LRU view.
+
+**The gate.** New `bench/dvd/mem_shim_ab_tb.sv` runs the live module against a FROZEN
+copy of the flop-tag implementation (`bench/dvd/mem_shim_burst_ref.sv`, main @c223041)
+on one trace through two independently-random-stalled rigs, and requires the
+accepted-burst-address sequences to be **identical** (same misses ⇔ same victims ⇔ same
+LRU state). All four {cwf,dual} combos: 1,351 identical misses, every response checked
+against a reference memory. `mem_shim_burst_tb` unchanged across five config sweeps
+(pure-hit throughput still 1.0 cyc/resp). `bench/dvd/run_mem_shim.sh` bundles the
+ladder, PASS-grepped (the M19 vvp-exit-0 lesson).
+
+**Numbers** (build `DVD_shimreclaim_20260828_0259.rbf`, pinned SEED 5, FIRST roll):
+- Module: 4,899 ALMs / 6,546 registers → **~1,406 ALMs / 1,028 registers** (−3.5k
+  ALMs, −5.5k FFs in-module); +3 M10K (2× tag 128×48, 1× LRU 128×8), all three
+  stores altsyncram-inferred (checked in the fit report — the resurrected-RAM
+  lesson from D-pad seek cuts both ways).
+- Design: **41,202 ALMs (98%) → 36,341 (87%)** = −4,861 ALMs of placement pressure
+  (beats the −3–4k target); RAM 503 → 506 / 553 M10K; DSPs unchanged.
+- Timing: clk_dec **93.73 MHz @100C / 90.33 @−40C** (gate 86.0) — the pinned SEED 5
+  passed on the first roll, no sweep needed, margin comparable to the menu-link
+  ledger entry (94.5/91.5) despite the whole-module rework. The reclaim's point —
+  seed sweeps become rare again — holds on its first data point.
+
+**HW soak — ✅ PASSED 2026-08-28 (user report), merge gate cleared.** Required because
+this is the shear-fix module and sim cannot prove hit-rate-under-real-traffic. Soak on
+`releases/DVD_shimreclaim_20260828_0259.rbf`: the entire MiB movie played through plus
+menu/seek actions — no video issues, no shearing, no artifacting. Merged as PR #18
+(no release cut yet — rides with the next one; `` `CORE_VERSION `` 0.1e stays open).
