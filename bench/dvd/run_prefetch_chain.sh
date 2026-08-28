@@ -21,6 +21,7 @@ SRC="rtl/mpeg2/resample.v dvd/resample_addrgen.v rtl/mpeg2/resample_dta.v \
 rtl/mpeg2/resample_bilinear.v rtl/mpeg2/mem_addr.v rtl/mpeg2/mixer.v \
 rtl/mpeg2/pixel_queue.v rtl/mpeg2/syncgen.v rtl/mpeg2/read_write.v \
 rtl/mpeg2/wrappers.v rtl/mpeg2/fwft.v rtl/mpeg2/xilinx_fifo_dc.v rtl/mpeg2/xfifo_sc.v \
+dvd/disp_hstretch.sv dvd/disp_vscale.sv \
 bench/dvd/resample_chain_tb.sv"
 
 echo "### building SHALLOW (upstream 256) ..."

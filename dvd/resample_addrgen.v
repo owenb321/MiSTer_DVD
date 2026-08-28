@@ -98,8 +98,9 @@ module resample_addrgen (
    * advancing when the first frame actually REACHES THE SCREEN, not when its PES was
    * parsed — the parse leads the display by the whole buffering window (audio_ring +
    * VBUF fill), which is content-dependent and, uncorrected, made the audio genlock
-   * target wrong by that much. Cleared only by rst (not by a clip reload — known
-   * limitation, see docs/av_sync.md). */
+   * target wrong by that much. RE-ARMED per load: a pickup_hold rising edge (the STD
+   * mux-lead hold, asserted from every load/seek flush) clears it again, so a clip
+   * reload behaves like a cold start (the lip-sync v5 fix; see docs/av_sync.md). */
   output reg         video_live;
 
   /* DVD-FORK (STD mux-lead hold, 2026-07-02): while high AND no frame has been

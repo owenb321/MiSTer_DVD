@@ -220,6 +220,9 @@ Notes:
   and does nothing without it.
 - **`A/V Offset` defaults to +100 ms**, which is the correct null for NTSC film and also
   measures correctly on PAL. There should be no need to change it.
+- When Auto engages a couple of seconds into a title, the audio can end up slightly
+  offset until the next seek re-syncs it — a chapter jump (or a D-pad seek) clears it.
+  A proper fix (detecting film before the first frame is shown) is planned.
 - If the analog CRT raster is active, the film raster is suppressed — the re-interlacer
   needs the standard progressive raster to work from.
 

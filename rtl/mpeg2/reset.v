@@ -28,7 +28,7 @@
 
 `include "timescale.v"
 
-module reset (clk, mem_clk, dot_clk, async_rst, watchdog_rst,
+module reset (clk, mem_clk, dot_clk, async_rst, watchdog_rst, soft_rst_n,
               clk_rst, mem_rst, dot_rst, hard_rst);
 
   input clk;                  /* decoder clock */
@@ -36,6 +36,12 @@ module reset (clk, mem_clk, dot_clk, async_rst, watchdog_rst,
   input dot_clk;              /* pixel clock */
   input async_rst;            /* global reset, asynchronous. */
   input watchdog_rst;         /* watchdog-generated reset, synchronous with clk. Goes low when watchdog timer expires. */
+  input soft_rst_n;           /* DVD-FORK (mount soft reset, 2026-08-28): externally requested soft reset,
+                               * async (clk_sys-timed level, >=2.4 us). Goes low to request the same
+                               * decode-pipeline reset a watchdog expiry produces: everything on
+                               * clk_rst/mem_rst/dot_rst clears, the regfile (hard_rst) survives. Used by
+                               * emu on a new file mount so a warm load starts the decoder as cold as a
+                               * core reload (no in-flight picture, no stale reference frames). */
   output clk_rst;             /* global reset, synchronized to decoder clock. Goes low when "async_rst" or "watchdog_rst" goes low. */
   output mem_rst;             /* global reset, synchronized to memory clock. Goes low when "async_rst" or "watchdog_rst" goes low. */
   output dot_rst;             /* global reset, synchronized to pixel clock. Goes low when "async_rst" or "watchdog_rst" goes low. */
@@ -53,13 +59,21 @@ module reset (clk, mem_clk, dot_clk, async_rst, watchdog_rst,
     );
 
   sync_reset clk_swatchdog_0 (
-    .clk(clk), 
+    .clk(clk),
     .asyncrst(watchdog_rst),
     .syncrst(clk_watchdog_0)
     );
 
-  /* combine async_rst and watchdog into a common reset signal */
-  wire comm_rst = clk_rst_0 && clk_watchdog_0;
+  /* DVD-FORK (mount soft reset): synchronize the external soft-reset request like the watchdog */
+  wire clk_soft_0;
+  sync_reset clk_ssoft_0 (
+    .clk(clk),
+    .asyncrst(soft_rst_n),
+    .syncrst(clk_soft_0)
+    );
+
+  /* combine async_rst, watchdog and the external soft reset into a common reset signal */
+  wire comm_rst = clk_rst_0 && clk_watchdog_0 && clk_soft_0;   // DVD-FORK: && clk_soft_0
 
   /* synchronize common reset signal to the three system clocks */
   wire clk_rst_1;

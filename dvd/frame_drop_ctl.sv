@@ -81,6 +81,15 @@ module frame_drop_ctl #(
   // governor just holds (brief slow-motion), consumption falls below delivery, and the
   // cushion refills — self-healing.
   input  wire        bitstream_ok, // level: VBUF cushion healthy (hysteretic, clk-domain)
+  // DVD-FORK FIX (2026-08-28, mid-play load/seek debt carry-over): clear the ledger
+  // whenever the decoder's VBUF is flushed (flush_vbuf_eff level, same clk domain).
+  // The debt survived every discontinuity — reset only by sync_rst — so a warm file
+  // mount or a seek carried up to DEBT_MAX (15) refreshes of stale lateness into the
+  // new position and could fire spurious B-drops (~0.25 s of stutter) the moment
+  // vbuf_healthy re-armed. Post-flush the governor's timeline restarts anyway, so the
+  // old debt refers to display history that no longer exists. Telemetry counters are
+  // deliberately NOT cleared (free-running totals).
+  input  wire        flush,      // level: VBUF flushed (seek/jump/mount/mode switch)
   input  wire        frame_late, // 1-cycle pulse: governor held a late refresh (+1 debt)
   input  wire        drop_ack,   // 1-cycle pulse: VLD dropped a B-frame (-drop_cost debt)
   // FILM-AWARE RECLAIM (2026-07-03): display duration (refreshes) of the frame
@@ -135,7 +144,7 @@ module frame_drop_ctl #(
     if (~rst)
       debt <= {DW{1'b0}};
     else if (clk_en) begin
-      if (~enable)
+      if (~enable || flush)
         debt <= {DW{1'b0}};
       else
         debt <= debt_n;

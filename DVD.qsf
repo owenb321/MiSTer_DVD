@@ -70,6 +70,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/lpcm_unpack.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/spdif_pass.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/iec61937_wrap.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/av_sync.sv
+# Flush/reset trigger matrix (extracted from emu.sv 2026-08-28 for TB coverage of
+# the mount/seek/jump/mode_switch flush trio). See bench/dvd/flush_ctl_tb.sv.
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/flush_ctl.sv
 # Reference-read run-ahead prefetch (O[18]): single-bitstream A/B gate for the deepened
 # fwd/bwd motion-comp reference data fifos. See dvd/ref_dta_gate.sv / docs/motcomp_throughput.md.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ref_dta_gate.sv
