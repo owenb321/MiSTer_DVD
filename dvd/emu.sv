@@ -1939,9 +1939,33 @@ wire [2:0] sp_track_eff  = (menus_on && menu_active) || sp_menu_early ? 3'd0 :
 // Declared here (above CLIP-LOAD FLUSH) so it precedes its use in load_flush/aud_flush.
 reg       il_eff_q = 1'b0;
 wire      il_switch = il_eff ^ il_eff_q;
+// FILM-RASTER SWITCH (2026-08-28): a LIVE filmp_eff change is the same raster-regime
+// event as il_switch and needs the same full seek-equivalent flush. With Film 24p Out
+// = Auto (the default), the cadence detector engages the 23.976/25 Hz film raster
+// ~2 s AFTER a menu->feature jump established audio sync at 59.94/50 Hz: the modeline
+// re-walks and av_sync's TPR_Q16 muxes to the film rate, but with no flush the raster
+// hand-off leaves a constant phase error between the free-running audio and the video
+// timeline that never re-anchors (forward, < 15 s) - HW symptom: slight skew entering
+// the main film, fixed by a chapter skip (whose seek flush is exactly this trio). The
+// XOR covers BOTH directions: engage (menu->film) and mid-title disengage (film->video
+// content; the detector drops after ~50 non-film pictures and the mirror-image skew
+// would accrue). Gated on ~menu_active: a detector-confidence decay while a MENU is up
+// must not fire a flush into the keep_vbuf menu machinery (visible glitch for nothing -
+// menus aren't lip-sync-scheduled, sched_en=0); the next menu->title jump flushes
+// anyway. Trade (same as Interlaced Auto's il_switch): a brief seek-like re-lock at
+// the switch, ~once per title entry, instead of a permanent skew.
+reg       filmp_eff_q = 1'b0;
+wire      film_switch = (filmp_eff ^ filmp_eff_q) & ~menu_active;
+// mode_switch = any live raster-regime change -> full flush trio (load+aud+seek).
+wire      mode_switch = il_switch | film_switch;
 always @(posedge clk_sys) begin
-    if (~reset_n) il_eff_q <= 1'b0;
-    else          il_eff_q <= il_eff;
+    if (~reset_n) begin
+        il_eff_q    <= 1'b0;
+        filmp_eff_q <= 1'b0;
+    end else begin
+        il_eff_q    <= il_eff;
+        filmp_eff_q <= filmp_eff;
+    end
 end
 
 // =========================================================================
@@ -1961,8 +1985,8 @@ reg [6:0] load_flush_cnt = 7'd0;
 wire      load_flush = load_flush_cnt != 7'd0;
 always @(posedge clk_sys) begin
     if (~reset_n)                          load_flush_cnt <= 7'd0;
-    else if (start_streaming || seek_ack || jump_ack || il_switch)
-                                           load_flush_cnt <= 7'd64;   // load, seek, menu jump OR interlace mode switch
+    else if (start_streaming || seek_ack || jump_ack || mode_switch)
+                                           load_flush_cnt <= 7'd64;   // load, seek, menu jump OR raster-regime (interlace/film) switch
     else if (load_flush)                   load_flush_cnt <= load_flush_cnt - 7'd1;
 end
 wire pipe_rst_n = reset_n & ~load_flush;
@@ -2008,8 +2032,8 @@ reg [6:0] aud_flush_cnt = 7'd0;
 wire      aud_flush = aud_flush_cnt != 7'd0;
 always @(posedge clk_sys) begin
     if (~reset_n)                                          aud_flush_cnt <= 7'd0;
-    else if (start_streaming || ((seek_ack || jump_ack) && ~keep_vbuf) || il_switch)
-                                                           aud_flush_cnt <= 7'd64;   // il_switch: full re-sync (see il_switch comment)
+    else if (start_streaming || ((seek_ack || jump_ack) && ~keep_vbuf) || mode_switch)
+                                                           aud_flush_cnt <= 7'd64;   // mode_switch: full re-sync (see il_switch/film_switch comments)
     else if (aud_flush)                                    aud_flush_cnt <= aud_flush_cnt - 7'd1;
 end
 wire aud_rst_n = reset_n & ~aud_flush & ~aud_resync;
@@ -2157,8 +2181,8 @@ wire      seek_flush_now = seek_ack && ~keep_vbuf;
 // see that il_switch comment for why the vbuf flush ALONE desynced audio.
 always @(posedge clk_sys) begin
     if (~reset_n)                                          seek_flush_cnt <= 7'd0;
-    else if (seek_flush_now || jump_flush || il_switch || start_streaming)
-                                                           seek_flush_cnt <= 7'd64;   // seek / menu->title jump / interlace mode switch / file mount
+    else if (seek_flush_now || jump_flush || mode_switch || start_streaming)
+                                                           seek_flush_cnt <= 7'd64;   // seek / menu->title jump / raster-regime switch / file mount
     else if (seek_flush)                                   seek_flush_cnt <= seek_flush_cnt - 7'd1;
 end
 reg vbuf_flush_s1, vbuf_flush_dec;
