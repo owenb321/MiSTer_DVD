@@ -218,8 +218,11 @@ worse maintenance burden than targeted in-place edits. So:
   DDR3 + counter widths, not fabric — the big decoder M10Ks are
   latency-tuning FIFOs).
 
-- 🔧 **FAILED MENU LINK RE-ENTERS THE MENU, NEVER THE MOVIE (2026-08-27, branch
-  `fix/menu-link-audio-map`) — sim-verified, ⏳ HW-confirm pending.** Field report
+- 🔧 **FAILED MENU LINK RE-ENTERS THE MENU, NEVER THE MOVIE (2026-08-27, PR #17)
+  — MERGED; HW no-regression pass 2026-08-27 (menus/boot unaffected); ⏳ the
+  positive case (a disc whose menu link actually fails — the reporter's Blade
+  Runner) is still the outstanding gate; sim fault-injection covers it
+  meanwhile ([S22]).** Field report
   (Blade Runner): a language-menu "next page" arrow STARTED THE FEATURE — a failed
   menu-domain jump (`pgc_error`, e.g. a page-2 LinkPGCN out of the selected
   PGCI_UT language unit's range) fell through the VM's `fb == FB_NONE` chain to the
@@ -237,11 +240,11 @@ worse maintenance burden than targeted in-place edits. So:
   scan: zero out-of-range menu links; Goonies' unequal LUs check out) — validated
   by sim fault-injection; the reporter's disc is the HW gate. Detail:
   `docs/dvd_vm.md` "Failed-menu-link re-enter".
-- 🔧 **AUDIO LOGICAL→PHYSICAL STREAM MAPPING (2026-08-27, branch
-  `fix/menu-link-audio-map`) — sim-verified, ⏳ HW-confirm pending. Timing-clean
-  build: `releases/DVD_menulink_20260828_0153.rbf` (SEED 5, clk_dec 94.5/91.5 —
-  reached via the framestore mem-request-write RETIME, see the DVD.qsf ledger;
-  the branch also carries that retime + the LINK FAIL popup + overlay row 26).** The track pick
+- ✅ **AUDIO LOGICAL→PHYSICAL STREAM MAPPING (2026-08-27, PR #17) —
+  HW-CONFIRMED 2026-08-27 (user report: GET_SMART VTS 2 now has sound where it
+  was silent — the decisive A/B; build `DVD_menulink_20260828_0153.rbf`,
+  SEED 5, clk_dec 94.5/91.5, reached via the framestore mem-request-write
+  RETIME, see the DVD.qsf ledger).** The track pick
   (SPRM1/SetSTN or the Audio button) is a LOGICAL stream number; the PGC's
   `audio_control[8]` table maps it to the PHYSICAL substream `ps_demux` filters on
   (libdvdnav `vm_get_audio_stream` + the first-available fallback). The old raw-index

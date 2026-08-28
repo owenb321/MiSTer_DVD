@@ -176,7 +176,7 @@ timing is STC-referenced independently of audio).
 - Press **Subtitle** → off → English → French → Spanish → English → off (visible).
 - A cycle never lands on a non-existent track (bounded by the parsed count = 4).
 
-## Logical→physical audio mapping (`audio_control`) — 2026-08-27, `fix/menu-link-audio-map`
+## Logical→physical audio mapping (`audio_control`) — ✅ HW-CONFIRMED 2026-08-27 (GET_SMART VTS 2: sound where it was silent; build `DVD_menulink_20260828_0153.rbf`)
 
 Everything above this section treated a track NUMBER as a substream INDEX —
 `aud_track_eff` went straight into `ps_demux`'s `substream_id[2:0]` compare. That
