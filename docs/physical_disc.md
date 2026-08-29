@@ -92,6 +92,15 @@ resolved in principle; **HW-verify crack timing/robustness on real encrypted rip
 Note: `dvd_css` holds a single handle, so physical disc and encrypted ISO are mutually
 exclusive (last mount wins) — a non-issue in normal use.
 
+**CSS key cache — legal guardrail.** Recovered keys are cached at
+`/media/fat/dvdcss/cache` (device-local, runtime-generated). Caching adds no legal
+exposure beyond the decryption itself — it is the standard `DVDCSS_CACHE` behaviour VLC
+et al. use, the keys are disc-specific and re-derivable from media the user owns, and the
+cache is never handed to anyone. The one hard rule: **a populated key cache must never be
+committed to the repo, bundled in a release, or uploaded** — *distributing* CSS keys is
+the genuinely fraught act (cf. the AACS "09 F9" case). The cache lives on the SD card,
+nowhere near the repo, so this holds by construction; keep it that way.
+
 ## Open items before HW test
 
 1. **Build** `MiSTer_DVDcss` with the ARM toolchain — **done** (native + Docker; the

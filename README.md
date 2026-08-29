@@ -142,6 +142,12 @@ It decrypts and writes an `.iso` directly, ready to use.
 Either way the point is the same: keep the whole disc structure and decrypt during the
 rip. A ripper that transcodes to a single title will lose the menus.
 
+> **Decrypted vs. encrypted rips.** A decrypted ISO always loads fastest — there is no
+> key step, ever. You *can* instead keep a raw (still-encrypted) rip and let the core
+> decrypt it on the fly (see [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos)),
+> which needs no PC decrypt step, but the **first** play of each disc pauses a few seconds
+> to recover its keys. Those keys are then cached, so it is only ever slow once per disc.
+
 ### 2. Load it
 
 Put the `.iso` anywhere the MiSTer file browser can reach it and select it from the
