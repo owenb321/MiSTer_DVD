@@ -194,12 +194,7 @@ than filling the SD card**. One requirement catches people out:
 > idle — no error message. The same file plays fine from the SD card, which makes it
 > look like a size or filesystem problem. It isn't; re-mount the share read-write.
 
-## Physical DVD playback (experimental)
-
-> ⚠️ **New and not yet hardware-tested.** The pieces build and are wired up, but this
-> path has not been confirmed on a real board yet — ISO playback (above) is the tested
-> route. Physical-disc support is **entirely optional and additive**: if you don't
-> install the extra binary below, the core plays decrypted ISOs exactly as before.
+## Physical DVD playback
 
 The core can also play a **physical DVD-Video disc** straight from a USB optical drive,
 decrypting CSS on the fly — no PC rip step. This needs one extra piece: a small custom
@@ -426,9 +421,9 @@ Module testbenches run under Icarus Verilog (`iverilog -g2012`); see `bench/dvd/
 
 ### The physical-disc Main (`MiSTer_DVDcss`)
 
-The optional custom Main for [physical DVD playback](#physical-dvd-playback-experimental)
+The optional custom Main for [physical DVD playback](#physical-dvd-playback)
 is a separate ARM binary — stock Main_MiSTer plus the small overlay under `main/` — not
-part of the FPGA `.rbf`. Like the Quartus build, it supports a pinned Docker toolchain
+part of the FPGA `.rbf`. Like the Quartus build it supports a pinned Docker toolchain
 image, so no local toolchain install is needed:
 
 ```bash

@@ -83,7 +83,7 @@ project neither distributes libdvdcss nor contains any CSS circumvention code.
 
 ## Status
 
-**Work in progress — not yet built or hardware-tested.** The CSS/decrypt modules are
+**Builds (native + Docker); not yet hardware-tested.** The CSS/decrypt modules are
 lifted from a proven branch; the standalone auto-mount trigger (`dvd_phys`) and the
 stock integration are new. See [../docs/physical_disc.md](../docs/physical_disc.md) for
 the open verification items.
