@@ -10,6 +10,9 @@
 # (git-ignored), the overlay is copied in, and the ARM binary is emitted there.
 #
 # Env:
+#   USE_DOCKER=1      build inside the pinned toolchain image (no local toolchain
+#                     needed); see main/docker_reexec.sh. No-op without it.
+#   MAIN_DOCKER_IMAGE image tag for USE_DOCKER (default mister-dvd-main:gcc-arm-10.2)
 #   MAIN_MISTER_SRC   path to an existing Main_MiSTer checkout to copy from
 #                     (skips the network clone; the copy is still patched in scratch)
 #   MAIN_MISTER_REF   stock ref to build against (default below)
@@ -21,6 +24,11 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
+
+# Optionally re-exec inside the pinned ARM-toolchain Docker image (USE_DOCKER=1).
+# No-op otherwise; never returns when it re-execs. Must run before any build work.
+source "$HERE/docker_reexec.sh"
+maybe_reexec_in_docker "$0" "$@"
 
 # Stock Main_MiSTer base. Pinned to the last stock commit before the Physical Disc
 # fork diverged (the CSS overlay was developed against it). Bump deliberately; if a
@@ -65,12 +73,12 @@ python3 "$HERE/integration/apply_integration.py" "$STOCK"
 echo "-- building (this is an ARM cross-compile; ensure your toolchain is on PATH)"
 make -C "$STOCK" ${CROSS_COMPILE:+CROSS_COMPILE="$CROSS_COMPILE"} -j"$(nproc)"
 
-# 5. Collect the binary. Stock Main_MiSTer emits `MiSTer`.
-if [ -f "$STOCK/MiSTer" ]; then
-    cp "$STOCK/MiSTer" "$BUILD_DIR/$OUT_NAME"
+# 5. Collect the binary. Stock Main_MiSTer emits it under BUILDDIR (bin/MiSTer).
+if [ -f "$STOCK/bin/MiSTer" ]; then
+    cp "$STOCK/bin/MiSTer" "$BUILD_DIR/$OUT_NAME"
     echo "== done: $BUILD_DIR/$OUT_NAME"
     echo "   copy to /media/fat/$OUT_NAME and add [DVD] main=$OUT_NAME to MiSTer.ini"
 else
-    echo "!! build did not produce $STOCK/MiSTer — check the make output above" >&2
+    echo "!! build did not produce $STOCK/bin/MiSTer — check the make output above" >&2
     exit 1
 fi

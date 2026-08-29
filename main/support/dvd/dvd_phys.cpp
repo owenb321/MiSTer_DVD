@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
+#include <limits.h>          // INT_MAX — CDSL_CURRENT expands to it via <linux/cdrom.h>
 #include <sys/ioctl.h>
 #include <linux/cdrom.h>
 

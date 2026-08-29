@@ -28,9 +28,15 @@ change is needed. See [../docs/physical_disc.md](../docs/physical_disc.md) for t
 ## Build
 
 ```bash
-# ARM cross-compile — put your MiSTer toolchain on PATH (or set CROSS_COMPILE=).
+# In Docker (no local toolchain needed) — like the Quartus USE_DOCKER build. The
+# pinned image (main/docker/Dockerfile, gcc-arm 10.2 arm-none-linux-gnueabihf) is
+# built automatically on first use:
+USE_DOCKER=1 ./build_main.sh
+
+# Or natively — put your MiSTer ARM toolchain on PATH (or set CROSS_COMPILE=):
 ./build_main.sh
-# or reuse an existing stock checkout instead of cloning:
+
+# Either way, reuse an existing stock checkout instead of cloning:
 MAIN_MISTER_SRC=/path/to/Main_MiSTer ./build_main.sh
 ```
 
