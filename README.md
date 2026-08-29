@@ -194,6 +194,77 @@ than filling the SD card**. One requirement catches people out:
 > idle — no error message. The same file plays fine from the SD card, which makes it
 > look like a size or filesystem problem. It isn't; re-mount the share read-write.
 
+## Physical DVD playback (experimental)
+
+> ⚠️ **New and not yet hardware-tested.** The pieces build and are wired up, but this
+> path has not been confirmed on a real board yet — ISO playback (above) is the tested
+> route. Physical-disc support is **entirely optional and additive**: if you don't
+> install the extra binary below, the core plays decrypted ISOs exactly as before.
+
+The core can also play a **physical DVD-Video disc** straight from a USB optical drive,
+decrypting CSS on the fly — no PC rip step. This needs one extra piece: a small custom
+MiSTer *Main* binary, **`MiSTer_DVDcss`**, that reads the drive and feeds decrypted
+sectors to the core. (A physical disc looks exactly like a mounted ISO to the core, so
+the FPGA side is unchanged.)
+
+### 1. Install the binary
+
+Build `MiSTer_DVDcss` (see [Building from source](#building-from-source)) or use a
+released copy, and put it at the SD-card root:
+
+```
+/media/fat/MiSTer_DVDcss
+```
+
+Do **not** overwrite the stock `/media/fat/MiSTer` — both files stay side by side.
+
+### 2. Point the DVD core at it
+
+Add this to `/media/fat/MiSTer.ini` (add the section — don't replace the file):
+
+```
+[DVD]
+main=MiSTer_DVDcss
+```
+
+`main=` is a stock MiSTer feature: whenever the DVD core is loaded, MiSTer runs
+`MiSTer_DVDcss` instead of the stock Main. Open the core with a disc in the drive and it
+plays; insert a disc while the core is open and it plays; eject to stop. Remove the
+`[DVD]` section (or the binary) and the core reverts to ISO-only playback with the stock
+Main — nothing else changes.
+
+### 3. libdvdcss (encrypted discs only)
+
+Most commercial discs are CSS-encrypted. Decrypting them needs **libdvdcss**, which is
+**not part of MiSTer and is not shipped here** — it is loaded at runtime from a copy you
+provide. Unencrypted discs need nothing.
+
+Install it from the MiSTer **Scripts** menu with the bundled downloader:
+
+```
+Scripts/install_dvdcss.sh
+```
+
+It fetches a prebuilt **glibc/armhf** `libdvdcss.so.2` and installs it to
+`/media/fat/dvdcss/libdvdcss.so.2` (override the download source with `DVDCSS_URL=...`,
+or drop a glibc/armhf `libdvdcss.so.2` there by hand). If an encrypted disc is inserted
+without libdvdcss present, the core shows `CSS ENCRYPTED` and mutes rather than playing
+static — your cue to run the script.
+
+Cracking CSS may be regulated where you live; check the laws that apply to you. This
+project neither distributes libdvdcss nor contains any CSS circumvention code.
+
+### 4. Auto-launch on insert (optional)
+
+With just the above you open the DVD core yourself. If you also run
+[MiSTer Physical Disc](https://github.com/Anime0t4ku/Main_MiSTer_Physical_Disc), its
+Auto Disc Discovery can detect a DVD inserted from *any* core or the menu and launch the
+DVD core for you. That fork is only needed for the auto-launch convenience; playback
+itself needs only `MiSTer_DVDcss`.
+
+The design and current status are in [main/README.md](main/README.md) and
+[docs/physical_disc.md](docs/physical_disc.md).
+
 ## Film (24p) content
 
 Nearly all commercial film DVDs store 24 fps material and mark it for 3:2 pulldown
@@ -352,6 +423,23 @@ loader needs a *compressed* `.rbf` (~4.3 MB). An uncompressed one (~7 MB) silent
 to configure — the core appears to load but produces no video on any output.
 
 Module testbenches run under Icarus Verilog (`iverilog -g2012`); see `bench/dvd/`.
+
+### The physical-disc Main (`MiSTer_DVDcss`)
+
+The optional custom Main for [physical DVD playback](#physical-dvd-playback-experimental)
+is a separate ARM binary — stock Main_MiSTer plus the small overlay under `main/` — not
+part of the FPGA `.rbf`. Like the Quartus build, it supports a pinned Docker toolchain
+image, so no local toolchain install is needed:
+
+```bash
+USE_DOCKER=1 ./main/build_main.sh   # pinned ARM-toolchain image (built on first use)
+./main/build_main.sh                # native — needs your MiSTer ARM toolchain on PATH
+```
+
+The result is `main/.build/MiSTer_DVDcss`. The script fetches stock Main_MiSTer at a
+pinned commit, copies the `main/` overlay in, patches `user_io.cpp`/`Makefile`, and
+cross-compiles for the board's ARM CPU. The overlay, the `user_io.cpp` integration, and
+the Docker image are documented in [main/README.md](main/README.md).
 
 ## Licensing
 
