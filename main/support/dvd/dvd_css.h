@@ -19,6 +19,12 @@
 // success, 0 if libdvdcss is unavailable or no readable DVD is present.
 int dvd_css_open(void);
 
+// Open a CSS-encrypted DVD-Video ISO *image file* (no drive needed). Returns 1 only
+// if the image is genuinely scrambled and libdvdcss is present (reads then go via
+// dvd_css_read); 0 otherwise, so the caller keeps the normal direct-file mount for
+// decrypted ISOs. Keys are cracked from the data and cached under DVDCSS_CACHE.
+int dvd_css_open_image(const char *path);
+
 // True while a libdvdcss handle is open.
 int dvd_css_active(void);
 

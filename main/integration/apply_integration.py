@@ -116,6 +116,18 @@ if 'DVD_PHYS_SENTINEL' not in u:
         f'{ind}\t\tret = 1;\n'
         f'{ind}\t}}\n'
         f'{ind}}}\n'
+        f'{ind}else if (is_dvd() && len > 4 && !strcasecmp(name + len - 4, ".iso")\n'
+        f'{ind}         && dvd_css_open_image(name))\n'
+        f'{ind}{{\n'
+        f'{ind}\t// CSS-encrypted ISO image (no drive needed): serve it CSS-decrypted\n'
+        f'{ind}\t// too. dvd_css_open_image() claims the mount only when the image is\n'
+        f'{ind}\t// actually scrambled; a decrypted ISO returns 0 and takes the normal\n'
+        f'{ind}\t// direct-file path below.\n'
+        f'{ind}\tsd_type[index] = SD_TYPE_DVDCSS;\n'
+        f'{ind}\tsd_image[index].size = dvd_css_size();\n'
+        f'{ind}\twritable = 0;\n'
+        f'{ind}\tret = 1;\n'
+        f'{ind}}}\n'
         f'{ind}else if (x2trd_ext_supp(name))'
     )
     u = u[:m.start()] + branch + u[m.end():]

@@ -470,6 +470,55 @@ int dvd_css_open(void)
 	return 1;
 }
 
+// Open a CSS-encrypted DVD-Video ISO *image file* (no optical drive needed) and
+// claim it only if it is actually scrambled — a decrypted ISO must keep the fast
+// direct-file mount, not pay per-sector libdvdcss. Returns 1 (use dvd_css_read for
+// this slot) or 0 (not encrypted / no libdvdcss / not a DVD -> caller falls back to
+// the normal file path). libdvdcss reads image files directly; with no drive to
+// authenticate, title keys are cracked from the data (the same slow path as a
+// no-region drive), cached under DVDCSS_CACHE so it is a one-time cost per disc.
+int dvd_css_open_image(const char *path)
+{
+	if (css || raw_fd >= 0) return 0;   // a source is already open
+	if (!path) return 0;
+
+	// Decrypting an image needs libdvdcss. Without it, let the normal file path
+	// handle the mount: a decrypted ISO plays; an encrypted one trips the core's
+	// CSS ENCRYPTED notice (raw scrambled sectors), same as before this existed.
+	if (!load_library()) return 0;
+
+	struct stat st;
+	if (stat(path, &st) != 0 || st.st_size <= 0) return 0;
+
+	// Persist cracked keys per disc (shared with the drive path).
+	mkdir("/media/fat/dvdcss/cache", 0755);
+	setenv("DVDCSS_CACHE", "/media/fat/dvdcss/cache", 1);
+
+	dvdcss_t h = p_open(path);
+	if (!h) { css_log("dvdcss_open(image) failed: %s", path); return 0; }
+
+	// Only claim the mount for a genuinely scrambled image. If the lib is too old to
+	// tell (no dvdcss_is_scrambled), don't claim it — the direct-file path already
+	// plays decrypted ISOs, and mis-routing one through libdvdcss would only slow it.
+	int scrambled = p_scram ? (p_scram(h) != 0) : 0;
+	if (!scrambled)
+	{
+		p_close(h);
+		return 0;
+	}
+
+	css = h;
+	css_size = (uint64_t)st.st_size;
+	region_set = 1;    // no drive; keys are cracked from data regardless of region
+	css_pos = -1;
+	cur_vob = -1;
+	css_log("encrypted ISO %s (%llu MB) — decrypting via libdvdcss",
+	        path, (unsigned long long)(css_size >> 20));
+
+	build_vob_list();  // enumerate VOBs + pre-crack every title key at its VOB start
+	return 1;
+}
+
 int dvd_css_active(void)
 {
 	return css != NULL || raw_fd >= 0;

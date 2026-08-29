@@ -46,7 +46,7 @@ while the core is open plays it (`dvd_phys` polls for media change).
 
 | File | Role |
 |---|---|
-| `support/dvd/dvd_css.cpp/.h` | libdvdcss `dlopen` wrapper: find drive, RPC-region detect (SG_IO REPORT KEY), CSS detect (READ DVD STRUCTURE), per-VOB title keys, `dvd_css_read()` decrypted sectors, deferred "install libdvdcss" popup. Lifted from the proven `feature/dvd-video-css` branch. |
+| `support/dvd/dvd_css.cpp/.h` | libdvdcss `dlopen` wrapper: find drive, RPC-region detect (SG_IO REPORT KEY), CSS detect (READ DVD STRUCTURE), per-VOB title keys, `dvd_css_read()` decrypted sectors, deferred "install libdvdcss" popup. Drive path lifted from the proven `feature/dvd-video-css` branch; `dvd_css_open_image()` (encrypted-ISO file source, reusing the same read/VOB-walk machinery) added here. |
 | `support/dvd/dvd_detect.cpp/.h` | `READ(10)` ISO9660 PVD + root-dir walk for `VIDEO_TS` — recognises a DVD-Video without mounting. |
 | `support/dvd/dvd_phys.cpp/.h` | **New, standalone.** Replaces the fork's launcher trigger: polls `/dev/srN`, mounts a DVD-Video via `user_io_file_mount(DVD_PHYS_SENTINEL)` on insert, unmounts on eject. |
 | `Scripts/install_dvdcss.sh` | User-run installer for a prebuilt armhf libdvdcss → `/media/fat/dvdcss/libdvdcss.so.2`. |
@@ -74,25 +74,37 @@ core and dvd-core coexist. Our upstream contribution is limited to the detection
 `READ(10)` probe (with his fixes: run before the CD TOC path; add ISO9660 bounds checks).
 Our PR #10 (CSS in his Main) is superseded by this custom-Main approach.
 
-## Planned extension: encrypted ISOs
+## Encrypted ISOs (no drive needed)
 
-Reuse `dvd_css` with a **file** source instead of `/dev/srN`, so raw (still-CSS-scrambled)
-`.iso` rips play directly — removing the current "decrypt on PC first" step. No drive to
-authenticate ⇒ libdvdcss uses its crack method (same UX as the no-region case). Route only
-CSS-detected images through the decrypt path; plain decrypted ISOs keep the direct
-file-mount. **Verify** whether `dvdcss_open()` accepts a bare image path or needs a loop
-mount / VIDEO_TS dir.
+Implemented. `dvd_css_open_image()` reuses the exact decrypt / VOB-walk machinery with a
+**file** source instead of `/dev/srN`, so a CSS-encrypted `.iso` rip plays directly —
+removing the "decrypt on PC first" step and, notably, **needing no optical drive at all**
+(broadens the audience). On an `.iso` mount under the DVD core, `user_io_file_mount` opens
+the image through libdvdcss and claims it (`SD_TYPE_DVDCSS`) **only if
+`dvdcss_is_scrambled()`**; a decrypted ISO returns 0 and keeps the fast direct-file mount,
+so clean rips pay nothing. With no drive to authenticate, title keys are cracked from the
+data (same slow path as a no-region drive) and cached under `DVDCSS_CACHE`
+(`/media/fat/dvdcss/cache`), so it is a one-time cost per disc.
+
+libdvdcss reads image files directly (it is how VLC/mplayer play ISOs — no loop mount
+needed), so the earlier "does `dvdcss_open()` accept a bare image path" question is
+resolved in principle; **HW-verify crack timing/robustness on real encrypted rips**.
+Note: `dvd_css` holds a single handle, so physical disc and encrypted ISO are mutually
+exclusive (last mount wins) — a non-issue in normal use.
 
 ## Open items before HW test
 
-1. **Build** `MiSTer_DVDcss` with the ARM toolchain; confirm `apply_integration.py`'s
-   anchors match the pinned stock (validated against fork `master` in this session).
+1. **Build** `MiSTer_DVDcss` with the ARM toolchain — **done** (native + Docker; the
+   `apply_integration.py` anchors validated against fork `master`, and the encrypted-ISO
+   branch confirmed in the patched tree).
 2. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open
    after any detector (fork or ours) released it.
 3. **img_mount signalling from a custom Main:** confirm the mount index/size the core
-   expects, matching how ISOs mount today.
+   expects, matching how ISOs mount today (covers both physical and encrypted-ISO mounts).
 4. **Media-change robustness:** eject / swap while playing (`dvd_phys` re-probe/re-key).
-5. **libdvdcss path:** code + installer agree on `/media/fat/dvdcss/` — confirm the core's
-   `CSS ENCRYPTED` fallback still triggers when it is absent.
-6. **Then** fold the physical-disc + libdvdcss section into the top-level `README.md`
+5. **Encrypted ISO on HW:** confirm `dvdcss_open()` cracks and plays a real encrypted
+   `.iso`; check first-play crack timing and that decrypted ISOs still take the fast path.
+6. **libdvdcss path:** code + installer agree on `/media/fat/dvdcss/` — confirm the core's
+   `CSS ENCRYPTED` fallback still triggers (disc **and** ISO) when it is absent.
+7. **Then** fold physical-disc + encrypted-ISO + libdvdcss into the top-level `README.md`
    "What works" and drop the "CSS is not handled in-core" limitation — only once HW-confirmed.

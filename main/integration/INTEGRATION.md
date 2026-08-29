@@ -68,7 +68,8 @@ Also declare `char is_dvd();` in `user_io.h` (near the other `is_*()` declaratio
 	if (sd_type[index] == SD_TYPE_DVDCSS) dvd_css_close();
 ```
 
-and replace the opening `if (x2trd_ext_supp(name))` of the mount dispatch with:
+and replace the opening `if (x2trd_ext_supp(name))` of the mount dispatch with the
+physical-disc branch, the encrypted-ISO branch, and an `else if` back to `x2trd`:
 
 ```cpp
 			if (!strcmp(name, DVD_PHYS_SENTINEL) && is_dvd())
@@ -84,6 +85,17 @@ and replace the opening `if (x2trd_ext_supp(name))` of the mount dispatch with:
 					writable = 0;
 					ret = 1;
 				}
+			}
+			else if (is_dvd() && len > 4 && !strcasecmp(name + len - 4, ".iso")
+			         && dvd_css_open_image(name))
+			{
+				// CSS-encrypted ISO image (no drive needed). dvd_css_open_image()
+				// claims the mount only when the image is genuinely scrambled; a
+				// decrypted ISO returns 0 and takes the normal direct-file path.
+				sd_type[index] = SD_TYPE_DVDCSS;
+				sd_image[index].size = dvd_css_size();
+				writable = 0;
+				ret = 1;
 			}
 			else if (x2trd_ext_supp(name))
 ```

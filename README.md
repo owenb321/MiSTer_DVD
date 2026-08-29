@@ -194,13 +194,21 @@ than filling the SD card**. One requirement catches people out:
 > idle — no error message. The same file plays fine from the SD card, which makes it
 > look like a size or filesystem problem. It isn't; re-mount the share read-write.
 
-## Physical DVD playback
+## Physical discs and encrypted ISOs
 
-The core can also play a **physical DVD-Video disc** straight from a USB optical drive,
-decrypting CSS on the fly — no PC rip step. This needs one extra piece: a small custom
-MiSTer *Main* binary, **`MiSTer_DVDcss`**, that reads the drive and feeds decrypted
-sectors to the core. (A physical disc looks exactly like a mounted ISO to the core, so
-the FPGA side is unchanged.)
+One optional add-on — a small custom MiSTer *Main* binary, **`MiSTer_DVDcss`**, plus
+(for encrypted media) libdvdcss — unlocks two things beyond the decrypted-ISO playback
+above:
+
+- **Physical DVD-Video discs** play straight from a USB optical drive, decrypting CSS on
+  the fly — no PC rip step.
+- **CSS-encrypted ISOs play directly.** Drop a raw (still-encrypted) rip on the SD card
+  or USB and it decrypts as it plays — so you **don't need an optical drive at all**, and
+  there's no separate PC decrypt step. Select it from `Load Video` like any other ISO.
+
+Both feed CSS-decrypted sectors to the core over the same path a mounted ISO already
+uses, so the FPGA side is unchanged. It's entirely optional and additive: without
+`MiSTer_DVDcss`, the core plays decrypted ISOs exactly as before.
 
 ### 1. Install the binary
 
@@ -228,11 +236,13 @@ plays; insert a disc while the core is open and it plays; eject to stop. Remove 
 `[DVD]` section (or the binary) and the core reverts to ISO-only playback with the stock
 Main — nothing else changes.
 
-### 3. libdvdcss (encrypted discs only)
+### 3. libdvdcss (encrypted discs and ISOs)
 
-Most commercial discs are CSS-encrypted. Decrypting them needs **libdvdcss**, which is
-**not part of MiSTer and is not shipped here** — it is loaded at runtime from a copy you
-provide. Unencrypted discs need nothing.
+Most commercial discs — and raw ISO rips of them — are CSS-encrypted. Decrypting them
+needs **libdvdcss**, which is **not part of MiSTer and is not shipped here**; it is loaded
+at runtime from a copy you provide. Unencrypted discs and already-decrypted ISOs need
+nothing. **This is the piece that lets a drive-less user play encrypted ISOs directly** —
+install it and a raw rip decrypts as it plays.
 
 Install it from the MiSTer **Scripts** menu with the bundled downloader:
 
@@ -242,9 +252,14 @@ Scripts/install_dvdcss.sh
 
 It fetches a prebuilt **glibc/armhf** `libdvdcss.so.2` and installs it to
 `/media/fat/dvdcss/libdvdcss.so.2` (override the download source with `DVDCSS_URL=...`,
-or drop a glibc/armhf `libdvdcss.so.2` there by hand). If an encrypted disc is inserted
-without libdvdcss present, the core shows `CSS ENCRYPTED` and mutes rather than playing
-static — your cue to run the script.
+or drop a glibc/armhf `libdvdcss.so.2` there by hand). If an encrypted disc or ISO is
+loaded without libdvdcss present, the core shows `CSS ENCRYPTED` and mutes rather than
+playing static — your cue to run the script.
+
+The first time an encrypted disc's keys are needed they may take a few seconds to
+recover (longer with no drive-region set, or for an ISO where they are always cracked
+from the data); recovered keys are cached under `/media/fat/dvdcss/cache`, so the same
+disc is instant next time.
 
 Cracking CSS may be regulated where you live; check the laws that apply to you. This
 project neither distributes libdvdcss nor contains any CSS circumvention code.
@@ -421,7 +436,7 @@ Module testbenches run under Icarus Verilog (`iverilog -g2012`); see `bench/dvd/
 
 ### The physical-disc Main (`MiSTer_DVDcss`)
 
-The optional custom Main for [physical DVD playback](#physical-dvd-playback)
+The optional custom Main for [physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos)
 is a separate ARM binary — stock Main_MiSTer plus the small overlay under `main/` — not
 part of the FPGA `.rbf`. Like the Quartus build it supports a pinned Docker toolchain
 image, so no local toolchain install is needed:
