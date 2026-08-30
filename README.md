@@ -270,14 +270,6 @@ disc is instant next time.
 Cracking CSS may be regulated where you live; check the laws that apply to you. This
 project neither distributes libdvdcss nor contains any CSS circumvention code.
 
-### 4. Auto-launch on insert (optional)
-
-With just the above you open the DVD core yourself. If you also run
-[MiSTer Physical Disc](https://github.com/Anime0t4ku/Main_MiSTer_Physical_Disc), its
-Auto Disc Discovery can detect a DVD inserted from *any* core or the menu and launch the
-DVD core for you. That fork is only needed for the auto-launch convenience; playback
-itself needs only `MiSTer_DVDcss`.
-
 The design and current status are in [main/README.md](main/README.md) and
 [docs/physical_disc.md](docs/physical_disc.md).
 
