@@ -558,6 +558,13 @@ genuinely leaned on.
   `ascal` scaler. The **N64 core** additionally supplied the interlaced sync model that
   the native 15 kHz CRT raster is built on, after a from-scratch approach failed to lock.
 
+### Design guidance
+
+- **[Anime0t4ku](https://github.com/Anime0t4ku)** — the custom-MiSTer-Main approach for
+  physical-disc cores (a core-specific `main=` binary that reads and serves the disc's own
+  sectors). That guidance shaped `MiSTer_DVDcss` and is what unlocked physical-disc support
+  here. The CSS and reader code is our own, developed independently.
+
 ### Specifications
 
 - **ATSC A/52** — *Digital Audio Compression (AC-3)*: normative frame syntax and the
