@@ -386,16 +386,22 @@ static void crack_title_keys(const char *text)
 	css_pos = -1;
 }
 
-// Is a VOB payload actually CSS-scrambled? libdvdcss's dvdcss_is_scrambled() can rely on
-// a drive ioctl (READ DVD STRUCTURE) that an image FILE has no answer for, so for a file
-// we read the bitstream directly: the CSS scrambling_control bits sit in the (clear) PES
-// header, and the NAV pack (VOBU sector 0) is never scrambled — so we sample later
-// sectors. Returns 1 if any payload PES is marked scrambled.
+// Are the actual VOB SECTORS CSS-scrambled? This is what decides whether to decrypt —
+// distinct from dvdcss_is_scrambled(), which only reports the disc's CSS *structure* and
+// so reads 1 for a DECRYPTED rip of a CSS disc too. We read VOB payload sectors raw and
+// look at the CSS scrambling_control bits in the (clear) PES header. The NAV pack (VOBU
+// sector 0) is never scrambled, so we sample later sectors; and a single sector's first
+// PES may be unscrambled on an encrypted disc, so we must scan and only conclude
+// "plaintext" after finding NONE scrambled.
+//   returns 1 = a scrambled sector was found (encrypted; must decrypt)
+//           0 = valid PES seen, none scrambled (plaintext — decrypted rip or never-CSS)
+//          -1 = inconclusive (no parseable PES sampled) -> caller falls back to the lib flag
 static int image_is_scrambled(void)
 {
+	int saw_pes = 0;
 	for (int i = 0; i < g_nvobs; i++)
 	{
-		for (uint32_t s = 1; s < g_vobs[i].nsec && s <= 16; s++)
+		for (uint32_t s = 1; s < g_vobs[i].nsec && s <= 8; s++)
 		{
 			uint8_t sec[2048];
 			if (css_raw_read(g_vobs[i].start + s, sec, 1) < 1) break;
@@ -408,11 +414,14 @@ static int image_is_scrambled(void)
 			{
 				uint8_t flags = sec[po + 6];
 				if ((flags & 0xC0) == 0x80)                    // valid '10' PES marker
-					return (flags & 0x30) != 0;                // PES_scrambling_control != 0
+				{
+					saw_pes = 1;
+					if ((flags & 0x30) != 0) return 1;         // PES_scrambling_control set
+				}
 			}
 		}
 	}
-	return 0;
+	return saw_pes ? 0 : -1;
 }
 
 // Physical-drive path: enumerate + crack. dvdcss_is_scrambled is reliable here (drive
@@ -557,18 +566,19 @@ int dvd_css_open_image(const char *path)
 		return 0;
 	}
 
-	// libdvdcss's own dvdcss_is_scrambled() is authoritative and — HW-confirmed —
-	// reliable on an image FILE (reads 1 for a genuinely encrypted disc, where the
-	// raw-bitstream heuristic missed it). Prefer it; fall back to the heuristic only if
-	// the lib is too old to expose it. Log both so any divergence stays visible.
+	// Decide from the BITSTREAM (are the sectors actually scrambled?), NOT from
+	// dvdcss_is_scrambled() — the lib flag reports the disc's CSS *structure*, so it reads
+	// 1 for a DECRYPTED rip of a CSS disc too and would waste time cracking keys for an
+	// already-plaintext image. Fall back to the lib flag only when the sample was
+	// inconclusive (bs == -1: no parseable PES to judge). Log both so divergence is visible.
 	int lib_scr = p_scram ? (p_scram(css) != 0) : -1;
 	int bs_scr  = image_is_scrambled();
-	int scrambled = (lib_scr >= 0) ? lib_scr : bs_scr;
-	css_log("image %s: %d VOBs, scrambled=%d (lib=%d bitstream=%d)",
-	        path, g_nvobs, scrambled, lib_scr, bs_scr);
+	int scrambled = (bs_scr >= 0) ? bs_scr : (lib_scr > 0);
+	css_log("image %s: %d VOBs, scrambled=%d (bitstream=%d lib=%d)",
+	        path, g_nvobs, scrambled, bs_scr, lib_scr);
 	if (!scrambled)
 	{
-		// Decrypted ISO -> keep the fast direct-file mount (no per-sector libdvdcss).
+		// Plaintext image (decrypted rip or never-CSS) -> keep the fast direct-file mount.
 		dvd_css_close();
 		return 0;
 	}

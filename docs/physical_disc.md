@@ -96,17 +96,25 @@ mutually exclusive (last mount wins) — a non-issue in normal use.
    (`stat failed` in the log) and the mount fell through to `CSS ENCRYPTED`. Fix: resolve
    via `getFullPath()` (handles the CIFS/USB prefix) before touching the file. The
    framework's own `FileOpenEx` does this internally, which is why *decrypted* ISOs worked.
-2. **Scramble detection.** With the path fixed, the log showed `scrambled=0
-   (lib is_scrambled=1)` — i.e. **`dvdcss_is_scrambled()` is correct and reliable on an
-   image file**, and the home-grown raw-bitstream heuristic (`image_is_scrambled()`) was
-   the wrong one. Fix: trust `dvdcss_is_scrambled()` as primary; keep the bitstream check
-   only as a fallback for a lib too old to expose it. (Earlier notes here wrongly blamed
-   `is_scrambled` — that was the path bug masquerading.)
+2. **Scramble detection — must read the BITSTREAM, not `dvdcss_is_scrambled()`.** The
+   right question is "are the VOB *sectors* actually scrambled (need decrypting)?", which
+   `dvdcss_is_scrambled()` does **not** answer — it reports the disc's CSS *structure*, so
+   it reads 1 for a **decrypted rip of a CSS disc** too (structure says CSS, sectors are
+   plaintext). Trusting it cracked keys for already-decrypted ISOs (Atlantis: `scrambled=1
+   (lib=1 bitstream=0)`). Correct signal: `image_is_scrambled()` reads VOB payload sectors
+   raw and checks the clear PES `scrambling_control` bits. Its own bug had to be fixed
+   first — it returned on the *first* PES, so one unscrambled PES made it miss a genuinely
+   encrypted disc (FAIRYTOPIA read `bitstream=0`); it now scans and only concludes
+   "plaintext" after finding none scrambled (returns 1 found / 0 plaintext / -1
+   inconclusive). Gate = bitstream primary, `dvdcss_is_scrambled()` only as the `-1`
+   fallback. So: encrypted disc → crack; decrypted rip or never-CSS → fast direct path.
 
-`/tmp/dvdcss.log` logs both verdicts per mount. Physical discs were unaffected by both.
-**HW-verify** that with these in, an encrypted ISO cracks + plays (watch for the separate
-`DVDCSS_METHOD`-on-a-file question: if it now claims the mount but still shows
-`CSS ENCRYPTED`, per-title key cracking on a file needs `DVDCSS_METHOD=title`).
+`/tmp/dvdcss.log` logs both verdicts per mount (`scrambled=N (bitstream=B lib=L)`).
+Physical discs were unaffected by all of this. **HW-verify** a genuinely encrypted ISO
+still reads `bitstream=1` and cracks + plays, and a decrypted/unencrypted ISO reads
+`bitstream=0` and takes the direct path with no crack. (If an encrypted ISO ever claims
+the mount but still shows `CSS ENCRYPTED`, that is the separate `DVDCSS_METHOD`-on-a-file
+question — per-title cracking on a file may need `DVDCSS_METHOD=title`.)
 
 **CSS key cache — legal guardrail.** Recovered keys are cached at
 `/media/fat/dvdcss/cache` (device-local, runtime-generated). Caching adds no legal
