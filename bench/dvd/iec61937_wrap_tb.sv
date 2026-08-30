@@ -34,6 +34,8 @@ module iec61937_wrap_tb;
     wire        spdif_o;
     wire [15:0] dbg_word;
     wire        dbg_word_stb;
+    wire [15:0] bs_l, bs_r;
+    wire        bs_nonpcm, bs_stb;
 
     // ~27 MHz and 24.576 MHz
     always #18.5 clk_sys   = ~clk_sys;
@@ -51,8 +53,55 @@ module iec61937_wrap_tb;
         .sync_armed(sync_armed_r), .stc_anchored(stc_anch_r), .stc(stc_r), .av_ofs(avofs_r),
         .frame_pop(frame_pop),
         .clk_audio(clk_audio), .rst_audio_n(rst_audio_n), .spdif_o(spdif_o),
+        .bs_l_o(bs_l), .bs_r_o(bs_r), .bs_nonpcm_o(bs_nonpcm), .bs_stb_o(bs_stb),
         .dbg_word(dbg_word), .dbg_word_stb(dbg_word_stb)
     );
+
+    // ---- HDMI bitstream tap monitors (TEST 9) --------------------------------
+    // The tap feeds the HDMI I2S serializer. Two properties must hold or the
+    // HDMI path silently diverges from S/PDIF:
+    //  (a) COHERENCE - the tap presents exactly the pair spdif_pass is playing,
+    //      so both outputs carry the same burst. Structural today, but this
+    //      guards a future refactor that gates one path and not the other.
+    //  (b) PACING - in STEADY STATE the strobe is exactly one per 512 clk_audio
+    //      (48.000 kHz). The whole no-handshake argument rests on this: the I2S
+    //      frame is also 512 clk, so a fixed offset means one frame per pair,
+    //      forever.
+    //
+    // MEASURED startup transient: the FIRST interval after an audio-domain reset
+    // is 509, not 512. `bit_ce` is (ce_cnt==0) of a free-running 2-bit counter
+    // that reset clears, while spdif_pass's own subframe counter restarts from
+    // its reset state, so the two re-align three clk_audio into the first frame.
+    // That is a genuine PHASE STEP against the I2S frame counter, and it is
+    // exactly what the post-reset hold-off in sys/audio_out.v and dvd/emu.sv
+    // exists to hide -- rst_audio_n pulses on every audio-track switch and
+    // aud_flush, not just at power-on. Steady state must still be exact, so the
+    // hard check starts once the transient has passed.
+    localparam TAP_SETTLE = 4;   // strobes to ignore after a reset
+    integer tap_incoherent = 0;
+    integer tap_badperiod  = 0;  // steady-state deviations: must be ZERO
+    integer tap_startup    = 0;  // transient deviations: one per reset, bounded
+    integer tap_strobes    = 0;
+    integer tap_resets     = 0;
+    always @(posedge clk_audio) begin : tap_mon
+        reg [15:0] gap;
+        if (!rst_audio_n) begin
+            if (tap_strobes != 0) tap_resets = tap_resets + 1;
+            gap = 16'd0; tap_strobes = 0;
+        end else begin
+            if ({bs_r, bs_l} !== dut.u_spdif.sample_i || bs_nonpcm !== dut.u_spdif.nonpcm_i)
+                tap_incoherent = tap_incoherent + 1;
+            gap = gap + 16'd1;
+            if (bs_stb) begin
+                if (tap_strobes > 0 && gap != 16'd512) begin
+                    if (tap_strobes < TAP_SETTLE) tap_startup   = tap_startup + 1;
+                    else                          tap_badperiod = tap_badperiod + 1;
+                end
+                tap_strobes = tap_strobes + 1;
+                gap = 16'd0;
+            end
+        end
+    end
 
     // captured producer word stream, indexed by the DUT's word index so a
     // burst always lands at cap[0..N]; count committed words since reset.
@@ -324,6 +373,25 @@ module iec61937_wrap_tb;
         expect_word(2, PC_AC3, "unmute-Pc");
         if (dut.cur_nonpcm !== 1'b1) begin
             $display("  FAIL: unmuted burst not tagged non-PCM"); errors=errors+1; end
+
+        // ---- TEST 9: HDMI bitstream tap -------------------------------------
+        $display("TEST 9: HDMI tap, strobes=%0d incoherent=%0d steady_bad=%0d startup_dev=%0d (resets=%0d)",
+                 tap_strobes, tap_incoherent, tap_badperiod, tap_startup, tap_resets);
+        if (tap_strobes < 100) begin
+            $display("  FAIL: tap strobe never ran (%0d)", tap_strobes); errors=errors+1; end
+        if (tap_incoherent != 0) begin
+            $display("  FAIL: tap diverged from the pair spdif_pass is playing (%0d cycles)",
+                     tap_incoherent); errors=errors+1; end
+        if (tap_badperiod != 0) begin
+            $display("  FAIL: steady-state tap strobe not 512 clk_audio -- the fixed-offset");
+            $display("        pacing argument is void and HDMI would slip against S/PDIF (%0d)",
+                     tap_badperiod); errors=errors+1; end
+        // The transient is expected and hold-off-covered, but it must stay a
+        // transient: at most one short interval per reset. More than that means
+        // the re-alignment is not settling and the hold-off cannot bound it.
+        if (tap_startup > tap_resets + 1) begin
+            $display("  FAIL: post-reset re-alignment not settling (%0d deviations, %0d resets)",
+                     tap_startup, tap_resets); errors=errors+1; end
 
         if (errors==0) $display("\nALL TESTS PASSED");
         else           $display("\n%0d FAILURES", errors);

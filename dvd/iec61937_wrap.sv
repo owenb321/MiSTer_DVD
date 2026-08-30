@@ -74,6 +74,22 @@ module iec61937_wrap #(
     input  wire        rst_audio_n,
     output wire        spdif_o,
 
+    // ---- HDMI bitstream tap (clk_audio) ----
+    // Aliases of the already-CDC'd, already-paced `cur_pair`, exported so the
+    // SAME burst can also leave over HDMI (the ADV7513's I2S input) without a
+    // second formatter. cur_pair is HELD for a whole 48 kHz frame, so a consumer
+    // anywhere on this clock samples it exactly once — see docs/hdmi_bitstream.md
+    // "Pacing". NOT a second FIFO reader: the FIFO has one read pointer and two
+    // independent readers would diverge.
+    //
+    // Mute (`mute_i`), A/V-sync holds and PCM-silence are all applied BEFORE the
+    // FIFO, so this tap already carries them and needs no gating of its own.
+    output wire [15:0] bs_l_o,       // = cur_pair[15:0]  -> IEC 60958 channel A / I2S left
+    output wire [15:0] bs_r_o,       // = cur_pair[31:16] -> channel B / I2S right
+    output wire        bs_nonpcm_o,  // = cur_pair[32]    -> 1 = 61937 data burst
+    output wire        bs_stb_o,     // 48 kHz pair strobe (slip instrument; not needed
+                                     // for correctness — see "Pacing")
+
     // ---- debug taps (producer word stream, clk_sys) ----
     output reg  [15:0] dbg_word,      // word committed this cycle
     output reg         dbg_word_stb
@@ -362,6 +378,14 @@ module iec61937_wrap #(
     always @(posedge clk_audio or negedge rst_audio_n)
         if (!rst_audio_n) cur_pair <= 33'd0;       // underflow -> PCM zeros (flag 0)
         else if (sample_req) cur_pair <= fifo_empty ? 33'd0 : fifo_rd_data;
+
+    // HDMI bitstream tap: pure aliases, no added logic. `sample_req` is the same
+    // strobe that reloads cur_pair, so bs_stb_o marks the frame boundary of the
+    // pair the consumer is about to see.
+    assign bs_l_o      = cur_pair[15:0];
+    assign bs_r_o      = cur_pair[31:16];
+    assign bs_nonpcm_o = cur_pair[32];
+    assign bs_stb_o    = sample_req;
 
     spdif_pass u_spdif (
         .clk_i       (clk_audio),
