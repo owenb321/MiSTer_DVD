@@ -14,7 +14,7 @@
 # VLC does not have this problem because its IVTC reads PIXELS and explicitly
 # discards uninformative frames as evidence ("If no motion, the result from
 # this algorithm cannot be reliable"). We cannot read pixels at the display
-# pickup, but we are not out of options -- and docs/film_24p_plan.md 14.8's
+# pickup, but we are not out of options -- and docs/film_24p_plan.md §14's
 # claim that "no threshold tuning or cleverer flag rule can help" was only ever
 # tested against progressive_frame alone. This tool tests the alternatives.
 #
@@ -302,6 +302,14 @@ def main():
                     help="contiguous sectors to walk (~8 MB at 2048 B)")
     ap.add_argument('--csv', default=None, help="write the per-picture trace")
     ap.add_argument('--xtab', action='store_true', help="flag cross-tabulation")
+    ap.add_argument('--cut', default=None, metavar='STEM',
+                    help="write a simulation fixture: STEM.hex (video ES as "
+                         "64-bit words) + STEM.golden.hex (one word per "
+                         "picture, {informative[24], size_bytes[23:0]}), for "
+                         "bench/dvd/film_evidence_tb.sv")
+    ap.add_argument('--cut-warm', type=int, default=2,
+                    help="EV_WARM the fixture's golden verdicts assume; must "
+                         "match the TB's parameter override")
     ap.add_argument('--brief', action='store_true',
                     help="one machine-readable line per disc, for library "
                          "regression sweeps: the gate must never ADD film "
@@ -380,6 +388,27 @@ def main():
 
     span = sum(duration(p) for p in pics)
     sizes = [p['size'] for p in pics]
+
+    if a.cut:
+        es = b''.join(
+            d for d in (video_payload(nav.sec(sector_at(start + k)))
+                        for k in range(a.sectors)
+                        if sector_at(start + k) is not None) if d)
+        es += b'\x00' * (-len(es) % 8)
+        with open(a.cut + '.hex', 'w') as fh:
+            for i in range(0, len(es), 8):
+                fh.write(es[i:i+8].hex() + '\n')
+        # Golden verdicts come from the CODED-order gate -- the only order the
+        # vld has, and the one F' proved equivalent on every disc.
+        gold = annotate(parse_pictures(es), warm_gate(warm=a.cut_warm))
+        with open(a.cut + '.golden.hex', 'w') as fh:
+            for q in gold:
+                fh.write(f"{(1 << 24 if q['inf'] else 0) | (q['size'] & 0xFFFFFF):08x}\n")
+        print(f"  {a.cut}.hex        {len(es)} B of video ES")
+        print(f"  {a.cut}.golden.hex {len(gold)} pictures "
+              f"({sum(1 for q in gold if not q['inf'])} uninformative, "
+              f"EV_WARM={a.cut_warm})")
+        return 0
 
     if a.brief:
         b = simulate(pics)

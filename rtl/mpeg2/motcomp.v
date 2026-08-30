@@ -41,6 +41,7 @@ module motcomp(
   motion_vert_field_select_0_0, motion_vert_field_select_0_1, motion_vert_field_select_1_0, motion_vert_field_select_1_1,
   second_field, update_picture_buffers, progressive_sequence, progressive_frame, top_field_first, repeat_first_field, last_frame,
   flags_commit,                                                  // DVD-FORK (round 11): vld's per-picture display flags valid (coding ext parsed)
+  pic_informative, informative_commit, output_informative,       // DVD-FORK (film evidence gate): per-picture evidence verdict
   idct_rd_dta_empty, idct_rd_dta_en, idct_rd_dta, idct_rd_dta_valid, frame_idct_wr_overflow, dct_block_wr_overflow, mvec_wr_almost_full, mvec_wr_overflow, dst_wr_overflow,
   source_select,
   fwd_wr_addr_clk_en, fwd_wr_addr_full, fwd_wr_addr_almost_full, fwd_wr_addr_en, fwd_wr_addr_ack, fwd_wr_addr, fwd_rd_dta_clk_en, fwd_rd_dta_empty, fwd_rd_dta_en, fwd_rd_dta_valid, fwd_rd_dta,
@@ -89,6 +90,9 @@ module motcomp(
   input              second_field;
   input              update_picture_buffers;
   input              flags_commit;      // DVD-FORK (round 11): direct wire (NOT via the mvec fifo — ordering by the vld header freeze)
+  input              pic_informative;   // DVD-FORK (film evidence gate): direct wire, same reasoning as flags_commit
+  input              informative_commit;// DVD-FORK (film evidence gate): committed at picture END (size is not known any earlier)
+  output             output_informative;// DVD-FORK (film evidence gate): display-order verdict, out of picbuf
   input              progressive_sequence;
   input              progressive_frame;
   input              top_field_first;
@@ -405,6 +409,9 @@ module motcomp(
     .last_frame(mvec_rd_last_frame),
     .update_picture_buffers(mvec_rd_update_picture_buffers),
     .flags_commit(flags_commit),                             // DVD-FORK (round 11): direct from vld
+    .pic_informative(pic_informative),                       // DVD-FORK (film evidence gate)
+    .informative_commit(informative_commit),                 // DVD-FORK (film evidence gate)
+    .output_informative(output_informative),                 // DVD-FORK (film evidence gate)
     .motion_vector_valid(mvec_rd_motion_vector_valid),
 
     .source_select(source_select),

@@ -209,7 +209,7 @@ module resample_chain_tb;
     .clk(clk), .rst(rst),
     .output_frame(output_frame), .output_frame_valid(output_frame_valid),
     .output_frame_rd(output_frame_rd),
-    .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame),
+    .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame), .informative(1'b1),
     .top_field_first(top_field_first), .repeat_first_field(repeat_first_field),
     .mb_width(MB_WIDTH), .mb_height(mb_height),
     .horizontal_size(HORIZONTAL_SIZE), .vertical_size(vertical_size),

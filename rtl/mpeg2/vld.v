@@ -53,6 +53,7 @@ module vld(clk, clk_en, rst,
   drop_pic_req, drop_pic_ack, drop_pic_rff, drop_pic_field,                                 // DVD-FORK (frame-drop governor O[19] + field-pair drop)
   dbg_drop_probe,                                                                           // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe (Thayer drops=0)
   flags_commit,                                                                             // DVD-FORK (round 11): per-picture display flags are valid (coding ext parsed)
+  pic_informative, informative_commit,                                                      // DVD-FORK (film evidence gate): this picture carried real evidence
   cc_pair_valid, cc_pair, cc_pair_field,                                                    // DVD-FORK (line-21 CC): EIA-608 byte pairs sniffed out of user_data
   mpeg1                                                                                     // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
   );
@@ -2342,6 +2343,135 @@ module vld(clk, clk_en, rst,
     else if (clk_en) flags_commit <= mpeg1 ? (state == STATE_SLICE)
                                            : ((state == STATE_PICTURE_CODING_EXT0) && ~drop_this_picture);
     else flags_commit <= 1'b0;
+
+  /* DVD-FORK (film evidence gate, 2026-08-30) — see docs/film_24p_plan.md §14.
+   *
+   * progressive_frame is NOT a measurement. It is one bit the ENCODER chose to
+   * write into the picture coding extension, and on a near-black picture there
+   * is no field structure to analyse, so the encoder takes the MPEG-2 default
+   * and marks it interlaced — mismarking progressive costs visible artifacts,
+   * mismarking interlaced costs a few bytes of disc space. The film detector in
+   * dvd/resample_addrgen.v then counts that meaningless flag at full weight
+   * (DN_HARD=8) and falls out of film lock. Measured on APOLLO_13: NINE raster
+   * changes inside the first 46 s of the main title, every one of them driven
+   * by the credits fading through black.
+   *
+   * VLC's IVTC survives the same clip because it reads PIXELS and explicitly
+   * discards uninformative frames as evidence — "If no motion, the result from
+   * this algorithm cannot be reliable". We cannot see pixels at the display
+   * pickup, but we can see how many bits the encoder spent, and that separates
+   * the cases cleanly: APOLLO_13's black pictures code 384 B against that
+   * title's own 17,704 B median.
+   *
+   * ★ THE COMPARISON MUST BE RELATIVE, NOT A BYTE CONSTANT. HIGH_SCHOOL_MUSICAL
+   * codes a 318 B MEDIAN — there, small pictures ARE the content, and a fixed
+   * threshold discards 55 % of the disc and delays its video verdict by 17 s.
+   * The core also plays VCD/SVCD, where the whole scale shifts again. So the
+   * reference is a running mean PER PICTURE CODING TYPE: a black I-frame codes
+   * 7,580 B where a real one codes ~82,000 B — tiny for an I, yet larger than
+   * any threshold that does not also swallow legitimate B-frames.
+   *
+   * ★ THE WARM-UP IS LOAD-BEARING, not a detail. Seeding the mean from whichever
+   * picture happened to arrive first made two rips of near-identical content
+   * (same median, same p10, same p90) gate 0.0 % and 85.8 %. For the first
+   * EV_WARM pictures of a coding type nothing is gated and the mean tracks every
+   * picture, so it converges on what THIS stream looks like; after that it
+   * tracks ACCEPTED pictures only, so a long fade cannot walk the reference down
+   * to meet itself and start trusting black frames again.
+   *
+   * ★ ORDERING — why this cannot ride flags_commit. A picture's size is only
+   * known when it ENDS, whereas flags_commit fires at the coding extension near
+   * its START. informative_commit fires instead at STATE_START_CODE for the code
+   * that TERMINATES the picture, which is strictly before the next picture's
+   * STATE_PICTURE_HEADER and therefore before picbuf rotates slots
+   * (update_picture_buffers fires at that header, and the vld then freezes until
+   * picbuf has processed it). Same slot, later write.
+   *
+   * Dropped pictures are excluded from both the commit and the mean: they own no
+   * picbuf slot (so a commit would clobber the displayed picture's verdict) and
+   * their slices are walked rather than decoded, so their size is not evidence.
+   *
+   * MPEG-1 needs no special case — this keys on picture start codes, not on the
+   * coding extension MPEG-1 lacks.
+   *
+   * Defaults are legacy-identical: pic_informative resets to 1, so until a
+   * verdict is committed every picture counts exactly as it does today. */
+  output reg        pic_informative;    // this picture carried real evidence
+  output reg        informative_commit; // pic_informative valid for the current picbuf slot
+
+  /* parameter, not localparam, so a testbench can arm the gate on a short ES cut
+   * instead of needing 16 pictures of every coding type before it does anything. */
+  parameter   [4:0] EV_WARM   = 5'd16;  // pictures per coding type before the gate arms
+  localparam        EV_ASHIFT = 4;      // running-mean time constant (1/16 per picture)
+  localparam        EV_GSHIFT = 3;      // uninformative below mean/8
+  localparam [21:0] EV_SAT    = 22'h3FFF00;
+
+  reg        [21:0] pic_bits;           // bits consumed by the picture being measured
+  reg        [21:0] ev_mean [0:3];      // running mean, indexed by picture_coding_type
+  reg         [4:0] ev_warm [0:3];      // warm-up count, same index
+  reg               pic_active;         // between a picture header and its terminator
+
+  /* Direct array expressions, NOT a function-mediated read: a read behind a
+   * function loses array sensitivity and goes stale (the dvd_vm gprm[] lesson). */
+  wire        [1:0] ev_ct   = picture_coding_type[1:0];   // 1=I, 2=P, 3=B, 0=D
+  wire       [21:0] ev_m    = ev_mean[ev_ct];
+  wire        [4:0] ev_n    = ev_warm[ev_ct];
+  wire              ev_hot  = (ev_n >= EV_WARM);
+  wire              ev_ok   = ~ev_hot || (pic_bits >= (ev_m >> EV_GSHIFT));
+  wire       [21:0] ev_next = ev_m - (ev_m >> EV_ASHIFT) + (pic_bits >> EV_ASHIFT);
+
+  /* Bits the bitstream cursor moves this clock, mirroring getbits_fifo's own
+   * next_cursor logic: align byte-aligns and steps one byte, else advance bits. */
+  wire        [5:0] ev_step = align ? 6'd8 : {1'b0, advance};
+
+  wire              pic_ends = (state == STATE_START_CODE) &&
+                               ((getbits[7:0] == CODE_PICTURE_START)   ||
+                                (getbits[7:0] == CODE_GROUP_START)     ||
+                                (getbits[7:0] == CODE_SEQUENCE_HEADER) ||
+                                (getbits[7:0] == CODE_SEQUENCE_END));
+
+  integer ev_i;
+  always @(posedge clk)
+    if (~rst)
+      begin
+        pic_bits           <= 22'd0;
+        pic_active         <= 1'b0;
+        pic_informative    <= 1'b1;      // legacy default: everything counts
+        informative_commit <= 1'b0;
+        for (ev_i = 0; ev_i < 4; ev_i = ev_i + 1)
+          begin
+            ev_mean[ev_i] <= 22'd0;
+            ev_warm[ev_i] <= 5'd0;
+          end
+      end
+    else if (clk_en)
+      begin
+        informative_commit <= 1'b0;
+
+        if (pic_active && (pic_bits < EV_SAT))
+          pic_bits <= pic_bits + {16'd0, ev_step};
+
+        if (state == STATE_PICTURE_HEADER)
+          begin                          // a new picture: start measuring it
+            pic_bits   <= 22'd0;
+            pic_active <= 1'b1;
+          end
+        else if (pic_ends && pic_active)
+          begin
+            pic_active <= 1'b0;
+            if (~drop_this_picture)
+              begin
+                pic_informative    <= ev_ok;
+                informative_commit <= 1'b1;
+                if (~ev_hot)      ev_warm[ev_ct] <= ev_n + 5'd1;
+                if (ev_n == 5'd0) ev_mean[ev_ct] <= pic_bits;   // first of its type
+                else if (~ev_hot || ev_ok)
+                                  ev_mean[ev_ct] <= ev_next;
+              end
+          end
+      end
+    else
+      informative_commit <= 1'b0;
 
   always @(posedge clk)
     if (~rst) begin

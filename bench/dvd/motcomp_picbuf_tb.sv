@@ -86,7 +86,9 @@ module motcomp_picbuf_tb;
     .output_top_field_first(), .output_repeat_first_field(),
     .update_picture_buffers(update_picture_buffers),
     .picbuf_busy(picbuf_busy),
-    .flags_commit(1'b0)
+    .flags_commit(1'b0),
+    .pic_informative(1'b1), .informative_commit(1'b0),   // DVD-FORK (film evidence gate)
+    .output_informative()
     );
 
   // ---------------- display model ----------------

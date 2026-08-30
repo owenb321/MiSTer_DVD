@@ -47,7 +47,7 @@ module resample_cadence_rate_tb;
   resample_addrgen dut (
     .clk(clk), .clk_en(clk_en), .rst(rst),
     .output_frame(output_frame), .output_frame_valid(output_frame_valid_w), .output_frame_rd(output_frame_rd),
-    .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame),
+    .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame), .informative(1'b1),
     .top_field_first(top_field_first), .repeat_first_field(repeat_first_field),
     .mb_width(mb_width), .mb_height(mb_height),
     .horizontal_size(horizontal_size), .vertical_size(vertical_size),

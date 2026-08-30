@@ -27,6 +27,9 @@ module film_detect_tb;
   reg   [2:0] output_frame = 3'd1;
   wire        output_frame_rd;
   reg         progressive_sequence = 0, progressive_frame = 1;
+  // DVD-FORK (film evidence gate): 1 = this picture carried real evidence. Default 1,
+  // so every pre-existing scenario below runs exactly as it did before the gate.
+  reg         tb_informative = 1;
   reg         top_field_first = 0, repeat_first_field = 0;
   reg   [7:0] mb_width = 8'd1, mb_height = 8'd1;   // tiny frame -> very fast scans
   reg  [13:0] horizontal_size = 14'd16, vertical_size = 14'd4;
@@ -50,7 +53,7 @@ module film_detect_tb;
   resample_addrgen dut (
     .clk(clk), .clk_en(clk_en), .rst(rst),
     .output_frame(output_frame), .output_frame_valid(output_frame_valid_w), .output_frame_rd(output_frame_rd),
-    .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame),
+    .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame), .informative(tb_informative),
     .top_field_first(top_field_first), .repeat_first_field(repeat_first_field),
     .mb_width(mb_width), .mb_height(mb_height),
     .horizontal_size(horizontal_size), .vertical_size(vertical_size),

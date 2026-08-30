@@ -321,6 +321,14 @@ Notes:
 - **Auto** detects film from the stream's pulldown flags. **Hard-telecined** discs — where
   the pulldown was baked in at authoring time — carry no such flags, so Auto cannot see
   them. If a disc looks like film but Auto isn't engaging, set it to **On**.
+- **Fades to black no longer knock Auto out of film mode.** MPEG-2's `progressive_frame`
+  is a flag the *encoder* writes, and on a near-black picture there is no field structure
+  for it to describe, so encoders mark those frames interlaced by default. Auto used to
+  believe them: Apollo 13's fading opening credits changed resolution nine times in the
+  first 46 seconds. The detector now ignores pictures that carry no evidence — measured
+  against the disc's own bitrate, so it works equally on a heavily compressed disc — while
+  still following a genuine film-to-video change within about a second. Fifteen of the 123
+  discs surveyed flapped at the title head before this and no longer do.
 - **`Frame Drop` must stay On.** The cadence-slip corrector, which keeps imperfect
   real-world telecine in step with the display, runs on the frame-drop governor's path
   and does nothing without it.

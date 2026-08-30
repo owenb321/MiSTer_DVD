@@ -29,6 +29,7 @@ module resample_addrgen (
   clk, clk_en, rst,
   output_frame, output_frame_valid, output_frame_rd,
   progressive_sequence, progressive_frame, top_field_first, repeat_first_field, mb_width, mb_height, horizontal_size, vertical_size,
+  informative,               // DVD-FORK (film evidence gate): this displayed picture carried real evidence
   interlaced, deinterlace, persistence, repeat_frame,
   disp_wr_addr_full, disp_wr_addr_en, disp_wr_addr_ack, disp_wr_addr,
   resample_wr_dta, resample_wr_en,
@@ -58,6 +59,7 @@ module resample_addrgen (
 
   input             progressive_sequence;
   input             progressive_frame;
+  input             informative;      // DVD-FORK (film evidence gate) — see the gate note at the detector
   input             top_field_first;
   input             repeat_first_field;
   input         [7:0]mb_width;                 // par. 6.3.3. width of the encoded luminance component of pictures in macroblocks
@@ -728,7 +730,31 @@ module resample_addrgen (
       conf_ntsc <= 8'd0; conf_pal <= 8'd0;
       det_ntsc  <= 1'b0; det_pal  <= 1'b0;
       conf_video <= 8'd0; det_v   <= 1'b0;
-    end else if (clk_en && film_pickup) begin
+    /* ★ DVD-FORK (film evidence gate, 2026-08-30) — the `informative` term.
+     *
+     * progressive_frame is the ENCODER's claim, not a measurement, and on a
+     * near-black picture there is nothing to measure: the encoder takes the
+     * MPEG-2 default and marks it interlaced. Counting that claim is what made
+     * APOLLO_13's fading credits knock this detector out of film lock NINE
+     * times in the first 46 s of the title, re-walking the raster each time.
+     *
+     * VLC's IVTC hits the same content and rides through it, because it reads
+     * pixels and refuses to score a frame it cannot trust — "If no motion, the
+     * result from this algorithm cannot be reliable ... we do nothing, as it's
+     * not a good idea to act on unreliable data". `informative` is that rule
+     * with coded picture size standing in for motion (measured in the vld; see
+     * rtl/mpeg2/vld.v). An uninformative pickup updates NOTHING — not the
+     * confidences and not rff_q, so the 3:2 toggle test resumes across the gap
+     * rather than seeing a false edge.
+     *
+     * Measured effect (tools/film_evidence_probe.py, real discs, this exact
+     * arithmetic): APOLLO_13 credits 9 raster changes -> 1. FERRIS_BUELLER's
+     * special feature, which really does turn from film to video mid-title,
+     * keeps BOTH of its transitions at the same timestamps as before — so the
+     * detector still follows genuine changes in about a second, and none of
+     * this needs the per-title latch that cost 12 s to leave film mode.
+     * Library sweep, 123 discs: 15 better, 0 worse. */
+    end else if (clk_en && film_pickup && informative) begin
       rff_q <= repeat_first_field;
       // ---- NTSC telecine confidence ----
       begin : ntsc_conf

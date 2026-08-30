@@ -34,9 +34,10 @@ module motcomp_picbuf(
   clk, clk_en, rst,
   source_select, 
   progressive_sequence, progressive_frame, top_field_first, repeat_first_field, last_frame,
+  pic_informative, informative_commit,       // DVD-FORK (film evidence gate): per-picture evidence verdict
   picture_coding_type,
   forward_reference_frame, backward_reference_frame, current_frame,
-  output_frame, output_frame_valid, output_frame_rd, output_progressive_sequence, output_progressive_frame, output_top_field_first, output_repeat_first_field,
+  output_frame, output_frame_valid, output_frame_rd, output_progressive_sequence, output_progressive_frame, output_top_field_first, output_repeat_first_field, output_informative,
   update_picture_buffers, picbuf_busy,
   flags_commit                             // DVD-FORK (round 11): per-picture display flags valid (coding ext parsed)
   );
@@ -49,6 +50,14 @@ module motcomp_picbuf(
   input         [2:0]picture_coding_type;          // identifies whether a picture is an I, P or B picture.
   input              progressive_sequence;
   input              progressive_frame;
+  /* DVD-FORK (film evidence gate): a picture's coded size is only known when it
+   * ENDS, so unlike flags_commit this verdict cannot be committed at the coding
+   * extension. informative_commit pulses at the picture's terminating start code,
+   * which is still strictly before the NEXT picture's update_picture_buffers —
+   * same slot, later write. Default is 1 (informative), so a picture that never
+   * commits counts exactly as it does today. */
+  input              pic_informative;
+  input              informative_commit;
   input              top_field_first;
   input              repeat_first_field;
   input              last_frame;                   // asserted when frame is the last frame of a bitstream
@@ -73,6 +82,7 @@ module motcomp_picbuf(
   reg           [2:0]current_frame_coding_type;    /* I, P or B-TYPE */
   reg                current_frame_progressive_sequence;
   reg                current_frame_progressive_frame;
+  reg                current_frame_informative;        // DVD-FORK (film evidence gate)
   reg                current_frame_top_field_first;
   reg                current_frame_repeat_first_field;
 
@@ -82,6 +92,7 @@ module motcomp_picbuf(
 
   output reg         output_progressive_sequence;
   output reg         output_progressive_frame;
+  output reg         output_informative;               // DVD-FORK (film evidence gate)
   output reg         output_top_field_first;
   output reg         output_repeat_first_field;
   output reg         picbuf_busy;
@@ -112,6 +123,7 @@ module motcomp_picbuf(
   reg                prev_i_p_frame_valid;         /* high if previous I or P frame exists, low when no previous I or P frame exists (at video sequence start) */
   reg                prev_i_p_frame_progressive_sequence;
   reg                prev_i_p_frame_progressive_frame;
+  reg                prev_i_p_frame_informative;       // DVD-FORK (film evidence gate)
   reg                prev_i_p_frame_top_field_first;
   reg                prev_i_p_frame_repeat_first_field;
 
@@ -262,6 +274,7 @@ module motcomp_picbuf(
         current_frame_coding_type <= I_TYPE;
         current_frame_progressive_sequence <= 1'b0;
         current_frame_progressive_frame <= 1'b0;
+        current_frame_informative <= 1'b1;
         current_frame_top_field_first <= 1'b0;
         current_frame_repeat_first_field <= 1'b0;
       end 
@@ -272,6 +285,7 @@ module motcomp_picbuf(
         current_frame_coding_type <= vld_picture_coding_type;
         current_frame_progressive_sequence <= vld_progressive_sequence;
         current_frame_progressive_frame <= vld_progressive_frame;
+        current_frame_informative <= 1'b1;
         current_frame_top_field_first <= vld_top_field_first;
         current_frame_repeat_first_field <= vld_repeat_first_field;
       end
@@ -282,6 +296,7 @@ module motcomp_picbuf(
         current_frame_coding_type <= vld_picture_coding_type;
         current_frame_progressive_sequence <= vld_progressive_sequence;
         current_frame_progressive_frame <= vld_progressive_frame;
+        current_frame_informative <= 1'b1;
         current_frame_top_field_first <= vld_top_field_first;
         current_frame_repeat_first_field <= vld_repeat_first_field;
       end
@@ -295,8 +310,25 @@ module motcomp_picbuf(
         current_frame_coding_type <= current_frame_coding_type;
         current_frame_progressive_sequence <= current_frame_progressive_sequence;
         current_frame_progressive_frame <= progressive_frame;
+        current_frame_informative <= current_frame_informative;
         current_frame_top_field_first <= top_field_first;
         current_frame_repeat_first_field <= repeat_first_field;
+      end
+    else if (clk_en && informative_commit && current_frame_valid)
+      begin
+        /* DVD-FORK (film evidence gate): the vld has finished MEASURING this
+         * picture and knows whether it carried real evidence. Same ordering
+         * argument flags_commit makes, one step later: the pulse lands at the
+         * picture's terminating start code, and the next picture's STATE_UPDATE
+         * cannot precede its own header. */
+        current_frame <= current_frame;
+        current_frame_valid <= current_frame_valid;
+        current_frame_coding_type <= current_frame_coding_type;
+        current_frame_progressive_sequence <= current_frame_progressive_sequence;
+        current_frame_progressive_frame <= current_frame_progressive_frame;
+        current_frame_top_field_first <= current_frame_top_field_first;
+        current_frame_repeat_first_field <= current_frame_repeat_first_field;
+        current_frame_informative <= pic_informative;
       end
     else
       begin
@@ -305,6 +337,7 @@ module motcomp_picbuf(
         current_frame_coding_type <= current_frame_coding_type;
         current_frame_progressive_sequence <= current_frame_progressive_sequence;
         current_frame_progressive_frame <= current_frame_progressive_frame;
+        current_frame_informative <= current_frame_informative;
         current_frame_top_field_first <= current_frame_top_field_first;
         current_frame_repeat_first_field <= current_frame_repeat_first_field;
       end
@@ -367,6 +400,7 @@ module motcomp_picbuf(
         prev_i_p_frame_valid <= 1'b0;
         prev_i_p_frame_progressive_sequence <= 1'b0;
         prev_i_p_frame_progressive_frame <= 1'b0;
+        prev_i_p_frame_informative <= 1'b1;
         prev_i_p_frame_top_field_first <= 1'b0;
         prev_i_p_frame_repeat_first_field <= 1'b0;
       end
@@ -376,6 +410,7 @@ module motcomp_picbuf(
         prev_i_p_frame_valid <= current_frame_valid;
         prev_i_p_frame_progressive_sequence <= current_frame_progressive_sequence;
         prev_i_p_frame_progressive_frame <= current_frame_progressive_frame;
+        prev_i_p_frame_informative <= current_frame_informative;
         prev_i_p_frame_top_field_first <= current_frame_top_field_first;
         prev_i_p_frame_repeat_first_field <= current_frame_repeat_first_field;
       end
@@ -388,6 +423,7 @@ module motcomp_picbuf(
         prev_i_p_frame_valid <= 1'b0;
         prev_i_p_frame_progressive_sequence <= prev_i_p_frame_progressive_sequence;
         prev_i_p_frame_progressive_frame <= prev_i_p_frame_progressive_frame;
+        prev_i_p_frame_informative <= prev_i_p_frame_informative;
         prev_i_p_frame_top_field_first <= prev_i_p_frame_top_field_first;
         prev_i_p_frame_repeat_first_field <= prev_i_p_frame_repeat_first_field;
       end
@@ -397,6 +433,7 @@ module motcomp_picbuf(
         prev_i_p_frame_valid <= prev_i_p_frame_valid;
         prev_i_p_frame_progressive_sequence <= prev_i_p_frame_progressive_sequence;
         prev_i_p_frame_progressive_frame <= prev_i_p_frame_progressive_frame;
+        prev_i_p_frame_informative <= prev_i_p_frame_informative;
         prev_i_p_frame_top_field_first <= prev_i_p_frame_top_field_first;
         prev_i_p_frame_repeat_first_field <= prev_i_p_frame_repeat_first_field;
       end
@@ -422,6 +459,7 @@ module motcomp_picbuf(
         output_frame_valid            <= 1'b0;
         output_progressive_sequence   <= 1'b0;
         output_progressive_frame      <= 1'b0;
+        output_informative            <= 1'b1;
         output_top_field_first        <= 1'b0;
         output_repeat_first_field     <= 1'b0;
         prev_output_frame_valid       <= 1'b0;
@@ -432,6 +470,7 @@ module motcomp_picbuf(
         output_frame_valid            <= 1'b0;
         output_progressive_sequence   <= output_progressive_sequence;
         output_progressive_frame      <= output_progressive_frame;
+        output_informative            <= output_informative;
         output_top_field_first        <= output_top_field_first;
         output_repeat_first_field     <= output_repeat_first_field;
         prev_output_frame_valid       <= prev_output_frame_valid;
@@ -445,6 +484,7 @@ module motcomp_picbuf(
         output_frame_valid            <= prev_i_p_frame_valid;
         output_progressive_sequence   <= prev_i_p_frame_progressive_sequence;
         output_progressive_frame      <= prev_i_p_frame_progressive_frame;
+        output_informative            <= prev_i_p_frame_informative;
         output_top_field_first        <= prev_i_p_frame_top_field_first;
         output_repeat_first_field     <= prev_i_p_frame_repeat_first_field;
         prev_output_frame_valid       <= prev_i_p_frame_valid;
@@ -458,6 +498,7 @@ module motcomp_picbuf(
         output_frame_valid            <= current_frame_valid;
         output_progressive_sequence   <= current_frame_progressive_sequence;
         output_progressive_frame      <= current_frame_progressive_frame;
+        output_informative            <= current_frame_informative;
         output_top_field_first        <= current_frame_top_field_first;
         output_repeat_first_field     <= current_frame_repeat_first_field;
         prev_output_frame_valid       <= current_frame_valid;
@@ -471,6 +512,7 @@ module motcomp_picbuf(
         output_frame_valid            <= prev_i_p_frame_valid;
         output_progressive_sequence   <= prev_i_p_frame_progressive_sequence;
         output_progressive_frame      <= prev_i_p_frame_progressive_frame;
+        output_informative            <= prev_i_p_frame_informative;
         output_top_field_first        <= prev_i_p_frame_top_field_first;
         output_repeat_first_field     <= prev_i_p_frame_repeat_first_field;
         prev_output_frame_valid       <= prev_i_p_frame_valid;
@@ -484,6 +526,7 @@ module motcomp_picbuf(
         output_frame_valid            <= output_frame_rd; // drop output_frame_valid when output_frame_rd is lowered
         output_progressive_sequence   <= output_progressive_sequence;
         output_progressive_frame      <= output_progressive_frame;
+        output_informative            <= output_informative;
         output_top_field_first        <= output_top_field_first;
         output_repeat_first_field     <= output_repeat_first_field;
         prev_output_frame_valid       <= prev_output_frame_valid;
@@ -497,6 +540,7 @@ module motcomp_picbuf(
         output_frame_valid            <= source_select[2];
         output_progressive_sequence   <= progressive_sequence;
         output_progressive_frame      <= progressive_frame;
+        output_informative            <= 1'b1;
         output_top_field_first        <= top_field_first;
         output_repeat_first_field     <= 1'b0;
         prev_output_frame_valid       <= source_select[2];
@@ -507,6 +551,7 @@ module motcomp_picbuf(
         output_frame_valid            <= output_frame_valid;
         output_progressive_sequence   <= output_progressive_sequence;
         output_progressive_frame      <= output_progressive_frame;
+        output_informative            <= output_informative;
         output_top_field_first        <= output_top_field_first;
         output_repeat_first_field     <= output_repeat_first_field;
         prev_output_frame_valid       <= prev_output_frame_valid;
