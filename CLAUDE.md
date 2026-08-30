@@ -194,6 +194,50 @@ worse maintenance burden than targeted in-place edits. So:
   recovery path); a warm load now cuts to black and starts as cold as a core reload.
   Post-mortem + deferred items (detector re-arm, vidfeed_cdc): `docs/av_sync.md`
   "Mid-play mount desync post-mortem".
+- ✅ **FILM MODE FLAPPING — FIXED BY AN EVIDENCE GATE; ✅ HW-CONFIRMED 2026-08-30
+  (build `DVD_filmevidence_20260830_1720`: APOLLO_13's credits no longer flap, T2 holds
+  sync in Auto, and FERRIS_BUELLER follows its own mid-title film→video change IN SYNC).**
+  ★ **The defect was never engage LATENCY — it was mode FLAPPING.** MEASURED on APOLLO_13
+  in DISPLAY order (coded order hides it behind B-reordering): **9 engage/disengage flips
+  in 46 s**, each re-walking the modeline and re-locking ascal. Near-black pictures are
+  **100 % `progressive_frame==0`** (384 B against that title's own 17,704 B median).
+  ★★ **THE FRAMING THAT SOLVED IT: `progressive_frame` is not a measurement — it is a bit
+  the ENCODER wrote**, and on a near-black picture there is no field structure to describe,
+  so the encoder takes the MPEG-2 default and marks it interlaced. The detector counted
+  that meaningless claim at `DN_HARD=8`. VLC's IVTC survives the same content because it
+  reads PIXELS and discards uninformative frames as evidence ("If no motion, the result
+  from this algorithm cannot be reliable ... we do nothing"). **FIX = an informativeness
+  gate on CODED PICTURE SIZE** measured in `vld.v`, carried to the display as a fourth
+  per-picture attribute through `motcomp_picbuf`, where an uninformative pickup updates
+  NOTHING in the detector — not the confidences, not `rff_q`.
+  ⚠ **The threshold must be RELATIVE, per picture coding type, with a warm-up** — all three
+  forced by measurement, not taste: HIGH_SCHOOL_MUSICAL codes a **318 B median** (its small
+  pictures ARE its content; a fixed threshold discards 55 % of the disc and delays its video
+  verdict 17 s), a black I-frame codes 7,580 B where a real one codes ~82,000 B (tiny for an
+  I, above any threshold that does not also eat legitimate B-frames), and seeding the mean
+  from whichever picture arrived first made two rips of near-identical content gate 0.0 %
+  and 85.8 %. ⚠ **Ordering gotcha:** size is known only at picture END, so this CANNOT ride
+  `flags_commit` (which fires at the coding extension near the START) — `informative_commit`
+  pulses at the terminating start code, still strictly before picbuf rotates slots.
+  ⚠ **Count `next_advance`/`next_align`, NOT the registered `advance`/`align`** — vld.v
+  forces those to 0 whenever `clk_en` is low, so a clk_en-gated block reads 0 almost always;
+  that made every picture measure 0 B, which is SILENTLY INERT (a zero mean compares equal,
+  so everything reads "informative") and would have shipped as a no-op.
+  ⛔ **A PER-TITLE LATCH WAS TRIED AND IS NOT THE ANSWER** (abandoned, unpushed): it works on
+  APOLLO_13 but costs **12 s to leave film mode**, which FERRIS_BUELLER's film→video special
+  feature makes unacceptable. ⛔ **`frame_pred_frame_dct` is NOT a usable substitute** — it
+  looks perfect on APOLLO_13 and reads 0 for ~99 % of pictures INCLUDING progressive ones on
+  FERRIS/AUSTIN_POWERS_2, so a detector keyed on it calls film VIDEO within two seconds. It
+  is an encoder rate setting, not a content property. Library sweep: **15 better, 0 worse
+  over 123 discs**. Golden model `tools/film_evidence_probe.py`; suite
+  `bench/dvd/run_film_evidence.sh` (`film_evidence_tb` runs the REAL vld over REAL disc
+  bytes and checks size AND verdict against the golden — a hand-driven vld model would only
+  check one's reading of the FSM). Detail: `docs/film_24p_plan.md` §14.
+  ⚠ **Separate, still OPEN:** APOLLO_13 plays **~800 ms audio-ahead**, established at the
+  FIRST anchor of a playback and cleared by any re-anchor (chapter skip). NOT detection, NOT
+  the raster switch (`Film 24p = On` shows it too), and NOT the VBUF cap (Shallow changed
+  nothing). An imported "anchor the STC on the screen" fix made it WORSE (1800 ms + stream
+  freezes) and is not merged — see `docs/av_sync.md` "HW round 3" before touching it.
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
   PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
   no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**
