@@ -2420,9 +2420,18 @@ module vld(clk, clk_en, rst,
   wire              ev_ok   = ~ev_hot || (pic_bits >= (ev_m >> EV_GSHIFT));
   wire       [21:0] ev_next = ev_m - (ev_m >> EV_ASHIFT) + (pic_bits >> EV_ASHIFT);
 
-  /* Bits the bitstream cursor moves this clock, mirroring getbits_fifo's own
-   * next_cursor logic: align byte-aligns and steps one byte, else advance bits. */
-  wire        [5:0] ev_step = align ? 6'd8 : {1'b0, advance};
+  /* Bits the bitstream cursor moves, mirroring getbits_fifo's own next_cursor
+   * logic: align byte-aligns and steps one byte, else advance bits.
+   *
+   * ★ next_advance/next_align, NOT the registered advance/align. The registered
+   * outputs are forced to 0 on every cycle where clk_en is LOW (see their always
+   * blocks above), so sampling them from a clk_en-gated block reads 0 almost
+   * every time — vld_en arrives in bursts, and the zeroed cycles are exactly the
+   * ones in between. Counting the registered value made every picture measure
+   * 0 B, which the gate cannot even fail loudly on: a zero mean compares equal,
+   * so everything reads "informative" and the feature is silently inert.
+   * Caught by bench/dvd/film_evidence_tb.sv against the golden model. */
+  wire        [5:0] ev_step = next_align ? 6'd8 : {1'b0, next_advance};
 
   wire              pic_ends = (state == STATE_START_CODE) &&
                                ((getbits[7:0] == CODE_PICTURE_START)   ||

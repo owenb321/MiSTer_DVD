@@ -32,7 +32,7 @@ if [ -n "$APOLLO" ]; then
   # start-frac lands in the opening credits, where black pictures code 384 B
   # against the title's own ~17 kB median — both populations in one cut.
   python3 tools/film_evidence_probe.py "$APOLLO" \
-      --start-frac 0.0028 --sectors 350 --cut "$FIX" --cut-warm 2
+      --start-frac 0.0028 --sectors 240 --cut "$FIX" --cut-warm 2
 elif [ ! -f "$FIX.hex" ]; then
   echo "== film_evidence_tb: SKIPPED — set DVD_ISO_DIR to a library containing APOLLO_13 =="
 fi

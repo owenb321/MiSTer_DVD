@@ -394,6 +394,16 @@ def main():
             d for d in (video_payload(nav.sec(sector_at(start + k)))
                         for k in range(a.sectors)
                         if sector_at(start + k) is not None) if d)
+        # Start the cut at a SEQUENCE HEADER. The vld refuses picture start
+        # codes until sequence_header_seen, so a cut that begins mid-GOP makes
+        # the golden count pictures the hardware will never commit -- the two
+        # models would then disagree about WHICH picture index they are on,
+        # which reads as a size mismatch on every row.
+        sh = es.find(b'\x00\x00\x01\xb3')
+        if sh < 0:
+            print("  no sequence header in this cut -- move --start-frac")
+            return 1
+        es = es[sh:]
         es += b'\x00' * (-len(es) % 8)
         with open(a.cut + '.hex', 'w') as fh:
             for i in range(0, len(es), 8):
