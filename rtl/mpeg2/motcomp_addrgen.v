@@ -45,6 +45,7 @@ module motcomp_addrgen(
   motion_vert_field_select_0_0, motion_vert_field_select_0_1, motion_vert_field_select_1_0, motion_vert_field_select_1_1,
   second_field, progressive_sequence, progressive_frame, top_field_first, repeat_first_field, last_frame, update_picture_buffers, motion_vector_valid,
   flags_commit,                                            // DVD-FORK (round 11): per-picture display flags valid (direct from vld)
+  pic_informative, informative_commit, output_informative, // DVD-FORK (film evidence gate): per-picture evidence verdict
   source_select,
   fwd_wr_addr_en, fwd_wr_addr, fwd_wr_addr_almost_full,
   bwd_wr_addr_en, bwd_wr_addr, bwd_wr_addr_almost_full,
@@ -103,6 +104,9 @@ module motcomp_addrgen(
   input              last_frame;
   input              update_picture_buffers;
   input              flags_commit;      // DVD-FORK (round 11)
+  input              pic_informative;   // DVD-FORK (film evidence gate)
+  input              informative_commit;// DVD-FORK (film evidence gate)
+  output             output_informative;// DVD-FORK (film evidence gate)
   input              motion_vector_valid;
   /* trick modes */
   input         [2:0]source_select;                 /* select video out source */
@@ -374,6 +378,9 @@ module motcomp_addrgen(
     .last_frame(last_frame),
     .update_picture_buffers(do_update_picture_buffers),
     .flags_commit(flags_commit),                             // DVD-FORK (round 11): re-latch display flags post-extension
+    .pic_informative(pic_informative),                       // DVD-FORK (film evidence gate)
+    .informative_commit(informative_commit),                 // DVD-FORK (film evidence gate): later pulse, same slot
+    .output_informative(output_informative),                 // DVD-FORK (film evidence gate)
     .forward_reference_frame(forward_reference_frame), 
     .backward_reference_frame(backward_reference_frame), 
     .current_frame(current_frame), 

@@ -665,3 +665,260 @@ correct BEFORE the first frame and every title/logo entry is covered by its jump
 trio — no mid-play engage at all on the common path. If a mid-title film_switch flush
 is reintroduced there it MUST have hold-suppression + a post-discontinuity holdoff,
 TB'd in `flush_ctl_tb`, **with the T2 menu→Play logo chain as an explicit HW gate**.
+
+
+## 14. ★★ THE EVIDENCE GATE — measuring what the stream actually carries (2026-08-30, PR pending)
+
+The engage/disengage churn §13 left open was chased through three hardware rounds of an
+**early-film-detect investigation** (a pre-roll sniffer, a per-title latch, two attempts at
+a flush on the `filmp_eff` edge — both reverted). None of it is merged. What that
+investigation established, and where it went wrong, is recorded here because the
+correction matters more than the fix.
+
+### 14.1 The wrong conclusion, and the framing that unlocks it
+
+The investigation measured the right thing. Reading APOLLO_13's main title in **display**
+order, the sustained detector flips **9 times in 46 s**, and characterising those regions:
+
+| region | `progressive_frame == 0` | median coded picture |
+|---|---|---|
+| film mode held | 1.9 % | 20,380 B |
+| dropped to video | 51.7 % | 3,620 B |
+| near-black pictures (< 400 B) | **100 %** | 384 B |
+
+The credits are white text fading in and out of black, and on the black frames the encoder
+stops maintaining the pulldown altogether. From that it concluded:
+
+> *"no threshold tuning or cleverer flag rule can help: during those frames the 3:2
+> signature genuinely is not in the stream"*
+
+— and reached for a **per-title latch**, releasing only after ~12 s of sustained contrary
+evidence. That conclusion is true of **thresholds on `progressive_frame`**, which is the
+only signal it ever tested. It is not evidence that no better signal exists. Nobody checked.
+
+The framing that unlocks it: **`progressive_frame` is not a measurement.** It is one bit
+the *encoder* wrote into the picture coding extension, which `rtl/mpeg2/vld.v` reads off at
+ext bit offset 12. On a near-black picture there is no field structure to analyse, so the
+encoder takes the MPEG-2 default and marks it interlaced — mismarking progressive costs
+visible artifacts, mismarking interlaced costs a few bytes of disc space. We are reading a
+claim, and on black frames the claim is arbitrary.
+
+VLC's IVTC (`modules/video_filter/deinterlace/algo_ivtc.c`) rides through the same content
+because it reads **pixels**, and has an explicit rule for exactly this case: *"If no motion,
+the result from this algorithm cannot be reliable"* — the frame is discarded as evidence,
+never counted against film. VLC needs no latch because it can distinguish *no information*
+from *video*. Our detector could not, because its one input reads 0 for both. **The latch
+was a workaround for a blind detector**, and 12 s of wrong raster on a genuine film→video
+change is too high a price for the blindness.
+
+### 14.2 The measurement (`tools/film_evidence_probe.py`)
+
+The probe walks a contiguous region of a title, reorders to display order (coded order hides
+the flapping behind B-frame reordering), records every field the VLD already parses, and
+replays the shipped accumulator constants over the trace — once per candidate rule. Its own
+correctness gate is reproducing the 9-transition baseline above, which it does.
+
+**`frame_pred_frame_dct` — disproven, and it would have been a bug.** This was the promising
+candidate: a claim about what the encoder *did* rather than what it believed, free in the
+same loadreg block. On APOLLO_13 it tracks `progressive_frame` in perfect lockstep. On
+FERRIS_BUELLER and AUSTIN_POWERS_2 it reads **0 for ~99 % of pictures including progressive
+ones**, so a detector keyed on it declares film content VIDEO within two seconds. It is an
+encoder rate/quality setting, not a content property; APOLLO's clean correlation was one
+disc's coincidence. Caught for the cost of an afternoon rather than another hardware round.
+
+**A fixed byte threshold — works on DVD, does not generalise.** APOLLO_13's black pictures
+code 384 B against that title's own 17,704 B median. But HIGH_SCHOOL_MUSICAL codes a
+**318 B median** — there small pictures *are* the content, and a fixed threshold discards
+55 % of the disc and delays its video verdict 2.6 s → 19.9 s. The core also plays VCD/SVCD,
+where the scale shifts again.
+
+**Selected — a relative mean per picture coding type, with a warm-up.** Per coding type
+because a black I-frame codes 7,580 B where a real one codes ~82,000 B: tiny for an I, yet
+larger than any fixed threshold that does not also swallow legitimate B-frames (median
+18,540 B).
+
+| disc | baseline | with the gate |
+|---|---|---|
+| APOLLO_13 credits (157 s) | **9 film transitions** | **1** |
+| FERRIS_BUELLER VTS04 (187 s) | 4 transitions | 4, **at identical timestamps** |
+| HIGH_SCHOOL_MUSICAL (318 B median) | 1 | 1, identical; 1 picture skipped |
+| AUSTIN_POWERS_2 (control) | 1 | 1, identical |
+| library sweep, 123 discs | — | **15 better, 0 worse** |
+
+The FERRIS row is what retires the latch. Its VTS04 is the special feature that really does
+turn from film to video mid-title — twice — and the gate keeps **both** transitions at the
+same tenth of a second as today. Real changes are still followed in about a second; only the
+fades stop counting.
+
+The sweep also shows this was never just an APOLLO_13 fix: 15 library discs flap at the title
+head today, including Harry Potter (5→3), Analyze This (5→3), The Hangover (4→2) and
+Batman Begins / Aviator / Alexander / Troy (2→0).
+
+**★ The warm-up is load-bearing, not a detail.** Seeding the mean from whichever picture
+arrived first made two rips of near-identical content — same median, same p10, same p90 —
+gate 0.0 % and 85.8 %. For the first `EV_WARM` pictures of a coding type nothing is gated and
+the mean tracks every picture; after that it tracks **accepted** pictures only, so a long
+fade cannot walk the reference down to meet itself and start trusting black frames again.
+
+### 14.3 The implementation
+
+- **`rtl/mpeg2/vld.v`** — accumulates coded picture size (bitstream cursor movement,
+  mirroring `getbits_fifo`'s own `align`/`advance` logic), keeps a running mean and warm-up
+  count per `picture_coding_type`, and emits `pic_informative` + `informative_commit`.
+  `EV_WARM` is a **parameter** so a bench can arm the gate on a short ES cut.
+- **★ Ordering — why this cannot ride `flags_commit`.** A picture's size is only known when
+  it **ends**, whereas `flags_commit` fires at the coding extension near its **start**.
+  `informative_commit` fires instead at `STATE_START_CODE` for the code that *terminates* the
+  picture, which is strictly before the next picture's `STATE_PICTURE_HEADER` and therefore
+  before picbuf rotates slots (`update_picture_buffers` fires at that header). Same slot,
+  later write.
+- **`rtl/mpeg2/motcomp_picbuf.v`** — carries the verdict as a fourth per-picture attribute
+  beside `progressive_frame`/`tff`/`rff`, through `motcomp` → `motcomp_addrgen` →
+  `mpeg2video` → `resample`. Default is **1 (informative)**, so a picture that never commits
+  counts exactly as it does today.
+- **`dvd/resample_addrgen.v`** — an uninformative pickup updates **nothing**: not the
+  confidences and not `rff_q`, so the 3:2 toggle test resumes across the gap instead of seeing
+  a false edge. That is VLC's *"we do nothing, as it's not a good idea to act on unreliable
+  data"*.
+- **Dropped pictures are excluded** from both the commit and the mean: they own no picbuf
+  slot, and their slices are walked rather than decoded, so their size is not evidence.
+- **No latch.** `det_ntsc`/`det_pal` keep their existing symmetric hysteresis unchanged.
+
+### 14.4 Verification
+
+`bench/dvd/run_film_evidence.sh`:
+
+1. **`film_evidence_tb`** — the linchpin. Everything rests on one number, so the bench does
+   not assert the counter is right, it **measures** it: REAL `getbits_fifo` + `vld` over REAL
+   disc bytes, per-picture size and verdict checked against `tools/film_evidence_probe.py`,
+   picture for picture. Same technique as `cc_extract_tb`, for the same reason — a
+   hand-driven model of the vld would be checking my understanding of the FSM rather than the
+   FSM. The fixture deliberately spans a fade so it contains both populations, and the bench
+   **fails** if the fixture has no uninformative pictures (otherwise a gate wired to 1 would
+   look identical to one that works).
+2. **`film_detect_tb`** — the detector arithmetic on top of the verdict.
+3. **`cadence_slip_tb`** — the corrector must be unaffected.
+
+The gate was also modelled in **coded** order — the only order the VLD has — and is
+bit-identical to the display-order model on every disc tested, so the hardware placement is
+validated rather than assumed.
+
+Fixtures are cut from a real disc and are **not committed** (`bench/dvd/test_vobs/` is
+gitignored); set `DVD_ISO_DIR` and the script regenerates them, and **skips** rather than
+silently passing without it.
+
+Build: `DVD_filmevidence_20260830_1720.rbf`, pinned SEED 5 on the first roll —
+clk_dec **93.01 MHz @100C / 89.3 MHz @-40C** against the 86.0 gate, 36,341 → **36,714
+ALMs (87 % → 88 %)**, RAM and DSP unchanged. The gate costs ~373 ALMs.
+
+### 14.5 Honest residuals
+
+- On **PRI0NNW1** the *video* verdict is delayed 1.5 s → 5.2 s. That verdict only drives
+  `Interlaced Out = Auto`, which is not the default.
+- The measured effect is on the **detector's verdict stream**, from real disc data through
+  the shipped arithmetic. It is not yet a hardware observation.
+- The mid-title raster switch that §13 left open is **not** addressed here. This section
+  removes the spurious switches; the skew on a genuine one remains that section's problem —
+  and the HW round confirms it survives (§14.7).
+
+### 14.6 HW gate — ✅ CONFIRMED 2026-08-30 (build `DVD_filmevidence_20260830_1720`)
+
+User report, all three gates passed:
+
+| gate | result |
+|---|---|
+| APOLLO_13 credits, no raster flapping | ✅ **no longer flaps** |
+| FERRIS_BUELLER film→video mid-title | ✅ **switches and STAYS IN SYNC, plays clean** |
+| T2 (video-coded leader) in Auto | ✅ in sync |
+
+The FERRIS row is the one that retires the per-title latch for good: the disc that made an
+indefinite latch untenable now follows its own film→video change on hardware, in sync,
+with no 12 s exit rule anywhere in the design.
+
+**⚠ Residual, NOT fixed by this section: APOLLO_13 still runs ~800 ms audio-AHEAD**
+(improved from ~1 s, and the flapping that used to accompany it is gone). This is an
+A/V-sync fault, not a detection fault — the detector now holds one stable verdict through
+the credits, which is all §14 claims. See §14.7.
+
+
+### 14.7 The APOLLO_13 residual — what it is NOT, and the two candidates
+
+HW 2026-08-30: with the flapping gone, APOLLO_13 still plays **~800 ms audio-ahead**.
+Recording what this rules OUT matters as much as the candidates, because the detector is
+now the obvious suspect and it is the wrong one:
+
+- **Not detection.** The verdict is stable through the credits (that is the confirmed
+  gate), and the same build holds sync on T2, FERRIS_BUELLER and AUSTIN_POWERS_2.
+- **Not the evidence gate's own doing.** The gate only ever *suppresses* pickups; it
+  cannot move audio. The offset also predates it — the earlier investigation measured
+  "audio ~1 s ahead on T2 and APOLLO_13" with no gate in the design at all.
+- **Audio AHEAD** means the audio timeline is running on a clock further along than the
+  picture on screen — the signature of the STC referencing something ahead of the display,
+  not of the governor dropping or repeating frames.
+
+**Candidate A — the mid-title raster switch (§13's open item).** APOLLO_13 opens on a
+**69-picture video-coded leader** (~2.3 s), so Auto starts at 59.94 Hz and switches once
+when the feature begins. That switch has no flush and does not re-anchor the STC.
+Consistent with: the offset being disc-specific and tied to leader discs.
+Inconsistent with: T2 also having a leader (45 pictures) and now being fine.
+
+**Candidate B — the parse-front STC anchor.** The STC is anchored on the demux parse
+position, which runs ahead of the screen by the VBUF depth, so audio leads the picture by
+exactly that depth. The earlier investigation MEASURED `buf_lag` at **1.7 s on APOLLO_13**
+and 2.0 s on T2 under Film 24p, and noted film mode makes it worse because the film raster
+removes the decode bottleneck and lets the parse front run to the VBUF ceiling. A fix
+exists and was HW-proven on that branch (STC anchored on the screen via a per-picture PTS
+through picbuf: overlay row 24 went **−1829 ms → −340 ms**), but it is not merged.
+Consistent with: the disc, the direction, and the order of magnitude.
+Inconsistent with: T2 measuring a LARGER buf_lag yet being fine now.
+
+**Neither candidate explains why T2 recovered and APOLLO_13 did not**, so do not pick one
+on plausibility — both stories currently have a T2-shaped hole. Two zero-cost HW A/Bs
+discriminate them before any code is written:
+
+1. **Chapter-skip inside the title.** A seek re-anchors the STC. If the 800 ms clears, the
+   fault is established at a single event (the switch) — candidate A. If it returns or
+   never clears, the offset is continuously regenerated — candidate B.
+2. **`Film 24p = On` instead of Auto.** This engages film from the first frame, so there is
+   no mid-title switch at all. If the offset disappears, candidate A. If it persists, the
+   switch is innocent and candidate B stands.
+
+### 14.8 ✅ DISCRIMINATED (HW, 2026-08-30): the INITIAL STC anchor, not the switch
+
+Both A/Bs run:
+
+| test | result | what it establishes |
+|---|---|---|
+| chapter skip inside the title | **clears the 800 ms** | a re-anchor fixes it |
+| `Film 24p = On` (no mid-title switch at all) | **same 800 ms** | the switch is INNOCENT |
+
+Test 2 kills candidate A outright. Test 1 does **not** support A either, and the way §14.7
+framed it was wrong: it read "seek clears it" as evidence for a switch-established fault,
+but a seek **flushes the VBUF**, which collapses the parse front onto the screen and only
+then re-anchors. Clearing on seek is exactly what candidate B predicts. The dichotomy was
+too crude — B has both a "baked in once" and a "continuously regenerated" reading, and the
+tests select the first.
+
+**Verdict: the fault is baked in at the FIRST STC anchor of a playback.** The STC anchors
+on the demux parse position, which at start-of-playback sits ~800 ms ahead of the first
+displayed picture, and the audio is slaved to that clock for the rest of the title. Every
+later re-anchor (seek, chapter jump) happens after a flush, when parse ≈ screen, which is
+why they all look correct and only the opening is wrong.
+
+This resolves the T2-shaped hole that blocked §14.7: the offset is set by **how deep the
+VBUF happens to be at the moment of the first anchor**, which is a per-disc, per-mount
+property (bitrate and leading fill), not a property of having a video-coded leader. T2 and
+APOLLO_13 both have leaders; they simply anchor at different buffer depths.
+
+**The fix is already written and HW-proven, and is not merged.** The archived
+early-detect investigation carried a self-contained av_sync change that anchors the STC on
+the SCREEN rather than the parse front, by carrying a per-picture PTS through
+`motcomp_picbuf` (the same fourth-attribute route §14.3 uses for the evidence verdict).
+On hardware it moved overlay row 24 from **−1829 ms to −340 ms**. It belongs on its own
+branch — it is a separate feature with its own benches (`av_sync_screen_tb`,
+`av_sync_rate_tb`, `pts_track_tb`), and it has its own residual: that same round concluded
+the remaining −340 ms is the buffer DEPTH rather than the anchor, so expect this to cut
+the 800 ms substantially without necessarily closing it to zero.
+
+`A/V Offset` can mask the symptom but must not be treated as the answer — it binds at
+(re)start events only, and the +100 ms default is already the measured NTSC-film null.

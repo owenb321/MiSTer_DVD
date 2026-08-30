@@ -670,4 +670,9 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # back, seed sweeps should again be rarely needed (the sub-86 rule stands: a
 # failing fit on THIS netlist family means the netlist degraded -- measure with
 # tools/timing_paths.sh, don't re-roll).
+# 2026-08-30 (feature/film-evidence-gate netlist, +373 ALMs: the vld's per-picture
+# size counter, three running means, and the verdict's ride through picbuf):
+# pinned SEED 5 held on the FIRST roll -- clk_dec 93.01 @100C / 89.3 @-40C, PASS
+# with margin at 88% ALM. No sweep needed, consistent with the post-reclaim note
+# above.
 set_global_assignment -name SEED 5

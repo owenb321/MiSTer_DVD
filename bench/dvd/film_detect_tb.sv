@@ -27,6 +27,9 @@ module film_detect_tb;
   reg   [2:0] output_frame = 3'd1;
   wire        output_frame_rd;
   reg         progressive_sequence = 0, progressive_frame = 1;
+  // DVD-FORK (film evidence gate): 1 = this picture carried real evidence. Default 1,
+  // so every pre-existing scenario below runs exactly as it did before the gate.
+  reg         tb_informative = 1;
   reg         top_field_first = 0, repeat_first_field = 0;
   reg   [7:0] mb_width = 8'd1, mb_height = 8'd1;   // tiny frame -> very fast scans
   reg  [13:0] horizontal_size = 14'd16, vertical_size = 14'd4;
@@ -50,7 +53,7 @@ module film_detect_tb;
   resample_addrgen dut (
     .clk(clk), .clk_en(clk_en), .rst(rst),
     .output_frame(output_frame), .output_frame_valid(output_frame_valid_w), .output_frame_rd(output_frame_rd),
-    .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame),
+    .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame), .informative(tb_informative),
     .top_field_first(top_field_first), .repeat_first_field(repeat_first_field),
     .mb_width(mb_width), .mb_height(mb_height),
     .horizontal_size(horizontal_size), .vertical_size(vertical_size),
@@ -164,6 +167,46 @@ module film_detect_tb;
     chk(!det_video,     "det_video FALSELY engaged on 30fps progressive video");
     $display("  [2] 30fps video: det_ntsc=%b det_pal=%b det_video=%b (expect 0/1/0)",
              film_det_ntsc, film_det_pal, det_video);
+
+    // ===== G. THE EVIDENCE GATE (informative=0 pickups) =====
+    // The whole point of the gate: on a fade to black the encoder stops
+    // describing field structure and marks pictures interlaced by default, so
+    // progressive_frame goes 0 for reasons that have nothing to do with the
+    // content. APOLLO_13's credits did that for seconds at a time and dropped
+    // film lock nine times in 46 s. Those pickups must not count -- while a
+    // GENUINE video stretch, which is informative, still must.
+    mode = 0;
+    run_pickups(60);
+    chk(film_det_ntsc, "[G] setup: det_ntsc should be engaged on film before the fade");
+
+    // G1: a long uninformative interlaced run = a fade. Film lock must HOLD.
+    tb_informative = 1'b0;
+    mode = 2;                       // pf=0, exactly what a black picture carries
+    run_pickups(80);                // far longer than the ~13 pickups that release
+    chk(film_det_ntsc, "[G1] film lock dropped on an UNINFORMATIVE interlaced run (the APOLLO_13 bug)");
+    chk(!det_video,    "[G1] det_video engaged on uninformative pickups");
+    $display("  [G1] 80 uninformative pf=0 pickups: det_ntsc=%b det_video=%b (expect 1/0)",
+             film_det_ntsc, det_video);
+
+    // G2: the same run, now INFORMATIVE = a real film->video change. Must follow it.
+    tb_informative = 1'b1;
+    run_pickups(80);
+    chk(!film_det_ntsc, "[G2] film lock did NOT release on a genuine interlaced video run");
+    chk(det_video,      "[G2] det_video did not engage on genuine interlaced video");
+    $display("  [G2] 80 informative pf=0 pickups: det_ntsc=%b det_video=%b (expect 0/1)",
+             film_det_ntsc, det_video);
+
+    // G3: gated pickups must not disturb the 3:2 toggle test either -- the run
+    // resumes across the gap rather than seeing a false rff edge.
+    mode = 0; tb_informative = 1'b1;
+    run_pickups(60);
+    chk(film_det_ntsc, "[G3] film did not re-engage after the gated stretch");
+    tb_informative = 1'b0;
+    run_pickups(40);
+    tb_informative = 1'b1;
+    run_pickups(20);
+    chk(film_det_ntsc, "[G3] film lock lost across a gated gap in the 3:2 run");
+    $display("  [G3] film survives a 40-pickup gated gap: det_ntsc=%b (expect 1)", film_det_ntsc);
 
     // ===== 3. transition to 60i/50i interlaced VIDEO (pf=0) =====
     // Both film verdicts release AND the true-interlaced verdict must ENGAGE — this is

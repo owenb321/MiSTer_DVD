@@ -438,6 +438,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   output            cc_pair_field;      // DVD-FORK (line-21 CC): 1 = field 1 (CC1/CC2)
 
   wire              flags_commit;       // DVD-FORK (round 11): per-picture display flags valid (coding ext parsed)
+  wire              pic_informative;    // DVD-FORK (film evidence gate): this picture carried real evidence
+  wire              informative_commit; // DVD-FORK (film evidence gate): pic_informative valid for the current slot
+  wire              output_informative; // DVD-FORK (film evidence gate): display-order verdict, from picbuf
   /* DVD-FORK (line-21 CC): straight passthrough of the VLD's user_data snoop to
    * the top level. Sniffed in the clk_dec domain and crossed to clk_sys by the
    * inserter's own fifo_dc — see dvd/cc_line21.sv. */
@@ -992,6 +995,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .second_field(second_field),                             // to motcomp
     .update_picture_buffers(update_picture_buffers),         // to motcomp
     .flags_commit(flags_commit),                             // DVD-FORK (round 11): to motcomp/picbuf
+    .pic_informative(pic_informative),                       // DVD-FORK (film evidence gate): to motcomp/picbuf
+    .informative_commit(informative_commit),                 // DVD-FORK (film evidence gate): committed at picture END, not at the coding ext
     .cc_pair_valid(cc_pair_valid),                           // DVD-FORK (line-21 CC): to dvd/cc_line21.sv
     .cc_pair(cc_pair),                                       // DVD-FORK (line-21 CC)
     .cc_pair_field(cc_pair_field),                           // DVD-FORK (line-21 CC)
@@ -1271,6 +1276,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .second_field(second_field),                             // from vld
     .update_picture_buffers(update_picture_buffers),         // from vld
     .flags_commit(flags_commit),                             // DVD-FORK (round 11): from vld (direct; ordering by header freeze)
+    .pic_informative(pic_informative),                       // DVD-FORK (film evidence gate): from vld
+    .informative_commit(informative_commit),                 // DVD-FORK (film evidence gate): from vld
+    .output_informative(output_informative),                 // DVD-FORK (film evidence gate): to resample
     .progressive_sequence(progressive_sequence),             // from vld
     .progressive_frame(progressive_frame),                   // from vld
     .top_field_first(top_field_first),                       // from vld
@@ -1384,6 +1392,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
 
     .progressive_sequence(output_progressive_sequence),      // from motcomp_picbuf
     .progressive_frame(output_progressive_frame),            // from motcomp_picbuf
+    .informative(output_informative),                        // DVD-FORK (film evidence gate): from motcomp_picbuf
     .top_field_first(output_top_field_first),                // from motcomp_picbuf
     .repeat_first_field(output_repeat_first_field),          // from motcomp_picbuf
     .mb_width(mb_width),                                     // from vld

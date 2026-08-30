@@ -34,6 +34,7 @@ module resample(
   clk, rst, 
   output_frame, output_frame_valid, output_frame_rd,
   progressive_sequence, progressive_frame, top_field_first, repeat_first_field, mb_width, mb_height, horizontal_size, vertical_size, resample_wr_overflow,
+  informative,                    // DVD-FORK (film evidence gate): this displayed picture carried real evidence
   disp_wr_addr_full, disp_wr_addr_almost_full, disp_wr_addr_en, disp_wr_addr_ack, disp_wr_addr, disp_rd_dta_empty, disp_rd_dta_en, disp_rd_dta_valid, disp_rd_dta,
   pixel_wr_almost_full, interlaced, deinterlace, persistence, repeat_frame,
   y, u, v, osd_out, position_out, pixel_wr_en,
@@ -60,6 +61,7 @@ module resample(
 
   input             progressive_sequence;
   input             progressive_frame;
+  input             informative;  // DVD-FORK (film evidence gate)
   input             top_field_first;
   input             repeat_first_field;
   input        [7:0]mb_width;                  // par. 6.3.3. width of the encoded luminance component of pictures in macroblocks
@@ -133,6 +135,7 @@ module resample(
     .output_frame_rd(output_frame_rd),
     .progressive_sequence(progressive_sequence), 
     .progressive_frame(progressive_frame), 
+    .informative(informative),                               // DVD-FORK (film evidence gate)
     .top_field_first(top_field_first), 
     .repeat_first_field(repeat_first_field), 
     .mb_width(mb_width),
