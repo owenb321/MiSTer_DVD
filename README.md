@@ -67,11 +67,20 @@ tables, multi-angle, seamless-branch interleaved cells, still frames, and
 audio/subtitle/angle/language selection. Transport is on the gamepad with an on-screen
 HUD and seek bar.
 
+**Physical discs & encrypted ISOs** — with the optional **`MiSTer_DVDcss`** add-on (a
+small custom MiSTer Main, bundled in the release), the core plays a **physical DVD**
+straight from a USB optical drive, and **CSS-encrypted ISOs** directly — decrypting on the
+fly via a user-supplied libdvdcss, with no PC decrypt step (recovered keys are cached, so
+it's slow only on first play). The bare `.rbf` plays decrypted ISOs on its own; the add-on
+is opt-in and additive. See
+[Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos).
+
 ## Known limitations
 
-- **CSS is not handled in-core.** Rip to a *decrypted* ISO on a PC first — see
-  [Getting started](#getting-started). The core detects an undecrypted rip, says
-  `CSS ENCRYPTED` on screen, and mutes rather than emitting loud static.
+- **The bare `.rbf` plays decrypted ISOs only.** Physical discs and CSS-encrypted ISOs
+  need the optional `MiSTer_DVDcss` add-on + a user-supplied libdvdcss (see
+  [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos)). Without it, an
+  undecrypted rip shows `CSS ENCRYPTED` on screen and mutes rather than emitting static.
 - **ISO9660 only.** UDF-only images will not load; the core reports
   `UNSUPPORTED IMAGE`.
 - **Closed captions go out on line 21 of the ANALOG output only** — there is no
@@ -119,30 +128,54 @@ HUD and seek bar.
 
 ## Getting started
 
-### 1. Rip the disc
+### 1. Install the core
 
-The core needs a **decrypted** DVD-Video image. Most commercial discs are CSS-encrypted,
-so a plain `dd` or disc-image copy will not work — it produces a green-screening picture
-with loud static. (The core detects this and shows `CSS ENCRYPTED` rather than letting it
-through.)
+Download the latest build from the
+[**Releases page**](https://github.com/owenb321/MiSTer_DVD/releases/latest), extract the
+zip to the **root of your MiSTer SD card** — that's **`/media/fat`** if you copy it over
+the network (SSH/SFTP) rather than pulling the card — and launch **DVD** from the MiSTer
+menu.
 
-Two known-good methods:
+What you install depends on what you want to play — the extra piece is optional and
+additive:
 
-**`dvdbackup` (Linux)** — mirror the disc, decrypting as it reads, then wrap the result
-as an ISO:
+- **Decrypted DVD ISOs, and VCD/SVCD** — the bare `.rbf` (in the zip, or its own release
+  asset) is all you need.
+- **Physical DVDs, and still-encrypted DVD ISOs** — also enable the bundled
+  **`MiSTer_DVDcss`** Main and (for CSS) libdvdcss; the zip places both. See
+  [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos) to switch them
+  on. Without them the core still plays decrypted ISOs exactly the same — nothing regresses.
 
-```bash
-dvdbackup -M -i /dev/sr0 -o /path/to/work
-genisoimage -dvd-video -o DISC.iso /path/to/work/DISC_LABEL
-```
+### 2. Get a movie onto it
 
-**MakeMKV (Windows / macOS / Linux)** — use its **Backup** mode, not title conversion.
-It decrypts and writes an `.iso` directly, ready to use.
+Three ways in — pick whichever suits you:
 
-Either way the point is the same: keep the whole disc structure and decrypt during the
-rip. A ripper that transcodes to a single title will lose the menus.
+**Physical DVD** — with `MiSTer_DVDcss` enabled and a USB optical drive, just insert the
+disc and it plays; no rip at all. CSS-encrypted discs are decrypted on the fly (libdvdcss).
+Details: [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos).
 
-### 2. Load it
+**DVD ISO** — rip the disc to an image on a PC. Both kinds play; keep the whole disc
+structure either way (a ripper that transcodes to a single title loses the menus):
+
+- **Decrypted (recommended)** — decrypt *during* the rip, so it plays on the bare core and
+  loads fastest (no key step, ever).
+  - *MakeMKV* (Windows / macOS / Linux): use **Backup** mode, not title conversion — it
+    writes a ready-to-use `.iso`.
+  - *dvdbackup* (Linux):
+    ```bash
+    dvdbackup -M -i /dev/sr0 -o /path/to/work
+    genisoimage -dvd-video -o DISC.iso /path/to/work/DISC_LABEL
+    ```
+- **Encrypted (raw image)** — a plain whole-disc copy of a CSS disc plays too, but **only**
+  with `MiSTer_DVDcss` + libdvdcss (on the bare core it shows `CSS ENCRYPTED` and mutes
+  rather than green-screening with static). No PC decrypt step; the first play recovers the
+  disc's keys — fast for an image, much quicker than a physical drive — and caches them, so
+  it's slow only once per disc.
+
+**VCD / Super Video CD** — no CSS is ever involved; select the rip's data-track `.bin` as
+described under [Load it](#3-load-it) below.
+
+### 3. Load it
 
 Put the `.iso` anywhere the MiSTer file browser can reach it and select it from the
 core's `Load Video` entry. The core also accepts bare `.VOB`, `.mpg` and `.m2v` streams,
@@ -193,6 +226,79 @@ than filling the SD card**. One requirement catches people out:
 > read-only mount fails with `EACCES` and you get a black screen with the core sitting
 > idle — no error message. The same file plays fine from the SD card, which makes it
 > look like a size or filesystem problem. It isn't; re-mount the share read-write.
+
+## Physical discs and encrypted ISOs
+
+One optional add-on — a small custom MiSTer *Main* binary, **`MiSTer_DVDcss`**, plus
+(for encrypted media) libdvdcss — unlocks two things beyond the decrypted-ISO playback
+above:
+
+- **Physical DVD-Video discs** play straight from a USB optical drive, decrypting CSS on
+  the fly — no PC rip step.
+- **CSS-encrypted ISOs play directly.** Drop a raw (still-encrypted) rip on the SD card
+  or USB and it decrypts as it plays — so you **don't need an optical drive at all**, and
+  there's no separate PC decrypt step. Select it from `Load Video` like any other ISO.
+
+Both feed CSS-decrypted sectors to the core over the same path a mounted ISO already
+uses, so the FPGA side is unchanged. It's entirely optional and additive: without
+`MiSTer_DVDcss`, the core plays decrypted ISOs exactly as before.
+
+### 1. Install the binary
+
+If you extracted the release zip ([Get the core](#getting-started)), `MiSTer_DVDcss` is
+already at your SD-card root — skip to step 2. Otherwise grab the `MiSTer_DVDcss` release
+asset (or build it — see [Building from source](#building-from-source)) and put it at the
+SD-card root:
+
+```
+/media/fat/MiSTer_DVDcss
+```
+
+Do **not** overwrite the stock `/media/fat/MiSTer` — both files stay side by side.
+
+### 2. Point the DVD core at it
+
+Add this to `/media/fat/MiSTer.ini` (add the section — don't replace the file):
+
+```
+[DVD]
+main=MiSTer_DVDcss
+```
+
+`main=` is a stock MiSTer feature: whenever the DVD core is loaded, MiSTer runs
+`MiSTer_DVDcss` instead of the stock Main. Open the core with a disc in the drive and it
+plays; insert a disc while the core is open and it plays; eject to stop. Remove the
+`[DVD]` section (or the binary) and the core reverts to ISO-only playback with the stock
+Main — nothing else changes.
+
+### 3. libdvdcss (encrypted discs and ISOs)
+
+Most commercial discs — and raw ISO rips of them — are CSS-encrypted. Decrypting them
+needs **libdvdcss**, which is **not part of MiSTer and is not shipped here**; it is loaded
+at runtime from a copy you provide. Unencrypted discs and already-decrypted ISOs need
+nothing. **This is the piece that lets a drive-less user play encrypted ISOs directly** —
+install it and a raw rip decrypts as it plays.
+
+The release zip puts the installer in your MiSTer **Scripts** menu — just run
+**install_dvdcss** there. (Didn't use the zip? Grab the `install_dvdcss.sh` asset and
+drop it in `/media/fat/Scripts/`.)
+
+It fetches a prebuilt **glibc/armhf** `libdvdcss.so.2` and installs it to
+`/media/fat/dvdcss/libdvdcss.so.2` (override the download source with `DVDCSS_URL=...`,
+or drop a glibc/armhf `libdvdcss.so.2` there by hand). If an encrypted disc or ISO is
+loaded without libdvdcss present, the core shows `CSS ENCRYPTED` and mutes rather than
+playing static — your cue to run the script.
+
+The first time an encrypted disc's keys are needed they may take a few seconds to
+recover (longer with no drive-region set, or for an ISO where they are always cracked
+from the data); recovered keys are cached under `/media/fat/dvdcss/cache`, so the same
+disc is instant next time.
+
+Cracking CSS may be regulated where you live; check the laws that apply to you. This
+project neither distributes libdvdcss nor contains any CSS circumvention code.
+
+The design and current status are in [main/README.md](main/README.md) and
+[docs/physical_disc.md](docs/physical_disc.md).
 
 ## Film (24p) content
 
@@ -353,6 +459,28 @@ to configure — the core appears to load but produces no video on any output.
 
 Module testbenches run under Icarus Verilog (`iverilog -g2012`); see `bench/dvd/`.
 
+### The physical-disc Main (`MiSTer_DVDcss`)
+
+The optional custom Main for [physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos)
+is a separate ARM binary — stock Main_MiSTer plus the small overlay under `main/` — not
+part of the FPGA `.rbf`. Like the Quartus build it supports a pinned Docker toolchain
+image, so no local toolchain install is needed:
+
+```bash
+USE_DOCKER=1 ./main/build_main.sh   # pinned ARM-toolchain image (built on first use)
+./main/build_main.sh                # native — needs your MiSTer ARM toolchain on PATH
+```
+
+The result is `main/.build/MiSTer_DVDcss`. The script fetches stock Main_MiSTer at a
+pinned commit, copies the `main/` overlay in, patches `user_io.cpp`/`Makefile`, and
+cross-compiles for the board's ARM CPU. The overlay, the `user_io.cpp` integration, and
+the Docker image are documented in [main/README.md](main/README.md).
+
+Once you have a `.rbf` (`build_release.sh --release`) and `MiSTer_DVDcss`,
+`tools/package_release.sh` assembles them plus `Scripts/install_dvdcss.sh` into a
+ready-to-extract `releases/MiSTer_DVD_v<ver>.zip` (and prints the individual files to
+attach to a GitHub release alongside the zip).
+
 ## Licensing
 
 The project as a whole is **GPL-3.0-or-later** — see [LICENSE](LICENSE), with the
@@ -429,6 +557,13 @@ genuinely leaned on.
 - **The MiSTer project** (`MiSTer-devel`) — the framework in `sys/`, `hps_io`, and the
   `ascal` scaler. The **N64 core** additionally supplied the interlaced sync model that
   the native 15 kHz CRT raster is built on, after a from-scratch approach failed to lock.
+
+### Design guidance
+
+- **[Anime0t4ku](https://github.com/Anime0t4ku)** — the custom-MiSTer-Main approach for
+  physical-disc cores (a core-specific `main=` binary that reads and serves the disc's own
+  sectors). That guidance shaped `MiSTer_DVDcss` and is what unlocked physical-disc support
+  here. The CSS and reader code is our own, developed independently.
 
 ### Specifications
 

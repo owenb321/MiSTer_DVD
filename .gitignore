@@ -58,6 +58,7 @@ bench/dvd/prefetch_sweep_fine.txt
 
 # --- Built cores (huge; keep out of git — use build_release.sh, archive to releases-old/) ---
 releases/*.rbf
+releases/*.zip
 !releases/.gitkeep
 
 # --- Test media (copyrighted VOB extracts — keep out of the repo) ---
