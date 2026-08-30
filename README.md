@@ -67,11 +67,20 @@ tables, multi-angle, seamless-branch interleaved cells, still frames, and
 audio/subtitle/angle/language selection. Transport is on the gamepad with an on-screen
 HUD and seek bar.
 
+**Physical discs & encrypted ISOs** — with the optional **`MiSTer_DVDcss`** add-on (a
+small custom MiSTer Main, bundled in the release), the core plays a **physical DVD**
+straight from a USB optical drive, and **CSS-encrypted ISOs** directly — decrypting on the
+fly via a user-supplied libdvdcss, with no PC decrypt step (recovered keys are cached, so
+it's slow only on first play). The bare `.rbf` plays decrypted ISOs on its own; the add-on
+is opt-in and additive. See
+[Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos).
+
 ## Known limitations
 
-- **CSS is not handled in-core.** Rip to a *decrypted* ISO on a PC first — see
-  [Getting started](#getting-started). The core detects an undecrypted rip, says
-  `CSS ENCRYPTED` on screen, and mutes rather than emitting loud static.
+- **The bare `.rbf` plays decrypted ISOs only.** Physical discs and CSS-encrypted ISOs
+  need the optional `MiSTer_DVDcss` add-on + a user-supplied libdvdcss (see
+  [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos)). Without it, an
+  undecrypted rip shows `CSS ENCRYPTED` on screen and mutes rather than emitting static.
 - **ISO9660 only.** UDF-only images will not load; the core reports
   `UNSUPPORTED IMAGE`.
 - **Closed captions go out on line 21 of the ANALOG output only** — there is no
@@ -119,44 +128,50 @@ HUD and seek bar.
 
 ## Getting started
 
-### 1. Get the core
+### 1. Install the core
 
 Download the latest build from the
-[**Releases page**](https://github.com/owenb321/MiSTer_DVD/releases/latest) and extract
-the zip to the **root** of your MiSTer SD card. That installs the core, and — for
-physical discs and encrypted ISOs — the custom Main and the libdvdcss installer (see
-[Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos) to turn those
-on). If you only want ISO playback, the bare `.rbf` release asset is all you need.
-Launch **DVD** from the MiSTer menu.
+[**Releases page**](https://github.com/owenb321/MiSTer_DVD/releases/latest), extract the
+zip to the **root** of your MiSTer SD card, and launch **DVD** from the MiSTer menu.
 
-### 2. Rip the disc
+What you install depends on what you want to play — the extra piece is optional and
+additive:
 
-The core needs a **decrypted** DVD-Video image. Most commercial discs are CSS-encrypted,
-so a plain `dd` or disc-image copy will not work — it produces a green-screening picture
-with loud static. (The core detects this and shows `CSS ENCRYPTED` rather than letting it
-through.)
+- **Decrypted DVD ISOs, and VCD/SVCD** — the bare `.rbf` (in the zip, or its own release
+  asset) is all you need.
+- **Physical DVDs, and still-encrypted DVD ISOs** — also enable the bundled
+  **`MiSTer_DVDcss`** Main and (for CSS) libdvdcss; the zip places both. See
+  [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos) to switch them
+  on. Without them the core still plays decrypted ISOs exactly the same — nothing regresses.
 
-Two known-good methods:
+### 2. Get a movie onto it
 
-**`dvdbackup` (Linux)** — mirror the disc, decrypting as it reads, then wrap the result
-as an ISO:
+Three ways in — pick whichever suits you:
 
-```bash
-dvdbackup -M -i /dev/sr0 -o /path/to/work
-genisoimage -dvd-video -o DISC.iso /path/to/work/DISC_LABEL
-```
+**Physical DVD** — with `MiSTer_DVDcss` enabled and a USB optical drive, just insert the
+disc and it plays; no rip at all. CSS-encrypted discs are decrypted on the fly (libdvdcss).
+Details: [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos).
 
-**MakeMKV (Windows / macOS / Linux)** — use its **Backup** mode, not title conversion.
-It decrypts and writes an `.iso` directly, ready to use.
+**DVD ISO** — rip the disc to an image on a PC. Both kinds play; keep the whole disc
+structure either way (a ripper that transcodes to a single title loses the menus):
 
-Either way the point is the same: keep the whole disc structure and decrypt during the
-rip. A ripper that transcodes to a single title will lose the menus.
+- **Decrypted (recommended)** — decrypt *during* the rip, so it plays on the bare core and
+  loads fastest (no key step, ever).
+  - *MakeMKV* (Windows / macOS / Linux): use **Backup** mode, not title conversion — it
+    writes a ready-to-use `.iso`.
+  - *dvdbackup* (Linux):
+    ```bash
+    dvdbackup -M -i /dev/sr0 -o /path/to/work
+    genisoimage -dvd-video -o DISC.iso /path/to/work/DISC_LABEL
+    ```
+- **Encrypted (raw image)** — a plain whole-disc copy of a CSS disc plays too, but **only**
+  with `MiSTer_DVDcss` + libdvdcss (on the bare core it shows `CSS ENCRYPTED` and mutes
+  rather than green-screening with static). No PC decrypt step; the first play recovers the
+  disc's keys — fast for an image, much quicker than a physical drive — and caches them, so
+  it's slow only once per disc.
 
-> **Decrypted vs. encrypted rips.** A decrypted ISO always loads fastest — there is no
-> key step, ever. You *can* instead keep a raw (still-encrypted) rip and let the core
-> decrypt it on the fly (see [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos)),
-> which needs no PC decrypt step, but the **first** play of each disc pauses a few seconds
-> to recover its keys. Those keys are then cached, so it is only ever slow once per disc.
+**VCD / Super Video CD** — no CSS is ever involved; select the rip's data-track `.bin` as
+described under [Load it](#3-load-it) below.
 
 ### 3. Load it
 
