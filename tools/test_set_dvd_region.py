@@ -82,6 +82,16 @@ check("locked drive offers only Exit", [ENTER],
       ["NO changes left", "Exit"], ["Pick the region"], fake="2:0:4:1")
 check("picking the current region is a no-op", [b"2", ENTER],
       ["already set to region 2"], ["Setting region"], fake="2:4:4:1")
+# 7 (unassigned) and 8 (aircraft/cruise) are not offered - no disc carries them,
+# and choosing one would spend a permanent change for nothing.
+check("menu offers regions 1-6 only", [ESC],
+      ["6  China"], ["7  reserved", "international venues"])
+
+text, code = run([], args=("8",))
+print(("PASS  " if code == 2 and "not consumer regions" in text else "FAIL  ")
+      + "argument form refuses region 8")
+if code != 2 or "not consumer regions" not in text:
+    FAIL += 1
 
 print("\n%s" % ("ALL PASS" if not FAIL else "%d FAILURES" % FAIL))
 sys.exit(1 if FAIL else 0)

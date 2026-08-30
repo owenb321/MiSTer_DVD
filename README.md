@@ -333,8 +333,7 @@ no disc playing, since the core holds the drive open while one is mounted.
 
 > ⚠️ **A region change is close to permanent.** Drives allow only a handful of user
 > changes — typically five — and when the counter runs out the region is locked to
-> whatever was set last. **There is no un-set**: a region can only be changed to another
-> region, never back to none, and each change costs one from the counter. The counter
+> whatever was set last. The counter
 > lives in the drive's own firmware, so it is not reset by a different PC, a reformat, or
 > a different operating system. Pick the region matching the discs you own and set it once.
 
@@ -349,9 +348,6 @@ The region travels with the drive, so a drive set on a PC arrives at the MiSTer 
 
 Note that a drive set to one region and asked to play a disc from *another* still falls
 back to cracking — matching the drive to your library is what makes discs start quickly.
-
-The design and current status are in [main/README.md](main/README.md) and
-[docs/physical_disc.md](docs/physical_disc.md).
 
 ## Film (24p) content
 

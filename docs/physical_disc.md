@@ -178,6 +178,11 @@ starts on *Cancel*, selecting a region leads to a confirm screen whose cursor st
 `ucca == 0` is never offered the menu at all. Over SSH the same rules apply, with `--yes`
 required to skip the confirm.
 
+Only regions **1–6** are offered, in the menu and the argument form alike. 7 is unassigned
+and 8 is international venues (aircraft, cruise ships), so no disc a user owns carries
+either — offering them only creates a way to spend a permanent change for nothing. They
+stay in the naming table so a drive that already reports one is still described correctly.
+
 **Testing.** The ioctl itself cannot be tested without a drive; everything guarding it can,
 and that is where the damage would be. `tools/test_set_dvd_region.py` fakes the drive
 (`DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>`, honoured by the script) and drives

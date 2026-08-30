@@ -21,7 +21,7 @@
 #
 # Over SSH you can skip the menu:
 #   ./set_dvd_region.sh          show the current region and changes remaining
-#   ./set_dvd_region.sh 2        set region 2 (asks to confirm)
+#   ./set_dvd_region.sh 2        set region 2, 1-6 (asks to confirm)
 #   ./set_dvd_region.sh 2 --yes  set region 2 without asking
 
 set -u
@@ -69,6 +69,12 @@ REGIONS = [
     (7, "reserved"),
     (8, "international venues (aircraft, cruise ships)"),
 ]
+
+# Regions 7 and 8 are named above so a drive reporting one is still described
+# correctly, but they are never OFFERED: 7 is unassigned and 8 is for aircraft and
+# cruise ships, so no disc a user owns carries either. Spending one of a drive's
+# handful of permanent changes on one would be a mistake with no way back.
+CHOOSABLE = [entry for entry in REGIONS if entry[0] <= 6]
 
 
 # ---------------------------------------------------------------- drive access
@@ -251,7 +257,7 @@ def interactive(drive, region, changes, resets):
         return 0
 
     header += ["", "  Pick the region your discs come from:"]
-    items = ["%d  %s" % (num, name) for num, name in REGIONS] + ["Cancel - change nothing"]
+    items = ["%d  %s" % (num, name) for num, name in CHOOSABLE] + ["Cancel - change nothing"]
     footer = ["  D-pad = move    B1 = select    B2 = cancel",
               "",
               "  A change costs one of the drive's %d remaining changes" % changes,
@@ -263,7 +269,7 @@ def interactive(drive, region, changes, resets):
         out("  Cancelled. Nothing was changed.")
         return 0
 
-    want = REGIONS[choice][0]
+    want = CHOOSABLE[choice][0]
     if want == region:
         clear()
         out("  The drive is already set to region %d. Nothing was changed." % want)
@@ -297,8 +303,12 @@ def main():
     args = [a for a in argv if a != "--yes"]
     want = None
     if args:
-        if not args[0].isdigit() or not 1 <= int(args[0]) <= 8:
-            out("usage: set_dvd_region.sh [1-8] [--yes]")
+        if args[0] in ("7", "8"):
+            out("  Regions 7 and 8 are not consumer regions (7 is unassigned, 8 is")
+            out("  aircraft and cruise ships), so this tool does not set them.")
+            return 2
+        if not args[0].isdigit() or not 1 <= int(args[0]) <= 6:
+            out("usage: set_dvd_region.sh [1-6] [--yes]")
             return 2
         want = int(args[0])
 
