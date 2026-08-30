@@ -24,14 +24,19 @@ REPO="$(cd "$HERE/.." && pwd)"
 RBF=""
 MAIN_BIN="$REPO/main/.build/MiSTer_DVDcss"
 OUT=""
+RBF_DIR="_Other"   # SD subfolder the .rbf extracts into (a DVD player fits _Other, not a
+                   # console/computer category). Pass --rbf-dir . (or "") for the SD root.
 while [ $# -gt 0 ]; do
     case "$1" in
-        --rbf)  RBF="$2";      shift 2 ;;
-        --main) MAIN_BIN="$2"; shift 2 ;;
-        --out)  OUT="$2";      shift 2 ;;
+        --rbf)     RBF="$2";      shift 2 ;;
+        --main)    MAIN_BIN="$2"; shift 2 ;;
+        --out)     OUT="$2";      shift 2 ;;
+        --rbf-dir) RBF_DIR="$2";  shift 2 ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
 done
+# Normalise "." / "" to "SD root".
+case "$RBF_DIR" in .|"") RBF_DIR="" ;; esac
 
 # Core version from the RTL, for the zip name (falls back to the date).
 VER="$(sed -n 's/.*`define CORE_VERSION "\([^"]*\)".*/\1/p' "$REPO/dvd/emu.sv" 2>/dev/null | head -1)"
@@ -64,21 +69,23 @@ echo "   core : $(basename "$RBF")"
 echo "   main : $(basename "$MAIN_BIN")"
 
 # Stage a tree that mirrors the SD-card root, then zip its CONTENTS (so extraction
-# drops files straight into /media/fat).
+# drops files straight into /media/fat). The .rbf goes in RBF_DIR (default _Other);
+# MiSTer_DVDcss MUST be at the root — that is where `[DVD] main=` looks for it.
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-mkdir -p "$STAGE/Scripts"
-cp "$RBF"       "$STAGE/$(basename "$RBF")"
+mkdir -p "$STAGE/Scripts" "$STAGE/${RBF_DIR}"
+cp "$RBF"       "$STAGE/${RBF_DIR:+$RBF_DIR/}$(basename "$RBF")"
 cp "$MAIN_BIN"  "$STAGE/MiSTer_DVDcss"
 cp "$INSTALLER" "$STAGE/Scripts/install_dvdcss.sh"
 chmod +x "$STAGE/Scripts/install_dvdcss.sh"
 
+RBF_SHOWN="${RBF_DIR:+$RBF_DIR/}$(basename "$RBF")"
 cat > "$STAGE/DVD_INSTALL.txt" <<EOF
 MiSTer DVD Player v${VER}
 
 1. Extract this zip to the ROOT of your MiSTer SD card (/media/fat). You get:
-     $(basename "$RBF")   - the core
-     MiSTer_DVDcss         - custom Main (physical discs + encrypted ISOs)
+     ${RBF_SHOWN}   - the core (in ${RBF_DIR:-the SD root}; move it elsewhere if you prefer)
+     MiSTer_DVDcss         - custom Main (physical discs + encrypted ISOs); keep at the root
      Scripts/install_dvdcss.sh
 
 2. To play PHYSICAL discs or ENCRYPTED ISOs, add to /media/fat/MiSTer.ini
