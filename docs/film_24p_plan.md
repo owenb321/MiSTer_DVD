@@ -818,11 +818,70 @@ ALMs (87 % → 88 %)**, RAM and DSP unchanged. The gate costs ~373 ALMs.
 - The measured effect is on the **detector's verdict stream**, from real disc data through
   the shipped arithmetic. It is not yet a hardware observation.
 - The mid-title raster switch that §13 left open is **not** addressed here. This section
-  removes the spurious switches; the skew on a genuine one remains that section's problem.
+  removes the spurious switches; the skew on a genuine one remains that section's problem —
+  and the HW round confirms it survives (§14.7).
 
-### 14.6 HW gate
+### 14.6 HW gate — ✅ CONFIRMED 2026-08-30 (build `DVD_filmevidence_20260830_1720`)
 
-In priority order: APOLLO_13's credits play through at a stable 24p with **no raster
-flapping**; FERRIS_BUELLER's special feature switches to 59.94 Hz **promptly** when the video
-segment starts, not after 12 s; AUSTIN_POWERS_2 unregressed; a chapter skip inside a film
-title keeps film mode.
+User report, all three gates passed:
+
+| gate | result |
+|---|---|
+| APOLLO_13 credits, no raster flapping | ✅ **no longer flaps** |
+| FERRIS_BUELLER film→video mid-title | ✅ **switches and STAYS IN SYNC, plays clean** |
+| T2 (video-coded leader) in Auto | ✅ in sync |
+
+The FERRIS row is the one that retires the per-title latch for good: the disc that made an
+indefinite latch untenable now follows its own film→video change on hardware, in sync,
+with no 12 s exit rule anywhere in the design.
+
+**⚠ Residual, NOT fixed by this section: APOLLO_13 still runs ~800 ms audio-AHEAD**
+(improved from ~1 s, and the flapping that used to accompany it is gone). This is an
+A/V-sync fault, not a detection fault — the detector now holds one stable verdict through
+the credits, which is all §14 claims. See §14.7.
+
+
+### 14.7 The APOLLO_13 residual — what it is NOT, and the two candidates
+
+HW 2026-08-30: with the flapping gone, APOLLO_13 still plays **~800 ms audio-ahead**.
+Recording what this rules OUT matters as much as the candidates, because the detector is
+now the obvious suspect and it is the wrong one:
+
+- **Not detection.** The verdict is stable through the credits (that is the confirmed
+  gate), and the same build holds sync on T2, FERRIS_BUELLER and AUSTIN_POWERS_2.
+- **Not the evidence gate's own doing.** The gate only ever *suppresses* pickups; it
+  cannot move audio. The offset also predates it — the earlier investigation measured
+  "audio ~1 s ahead on T2 and APOLLO_13" with no gate in the design at all.
+- **Audio AHEAD** means the audio timeline is running on a clock further along than the
+  picture on screen — the signature of the STC referencing something ahead of the display,
+  not of the governor dropping or repeating frames.
+
+**Candidate A — the mid-title raster switch (§13's open item).** APOLLO_13 opens on a
+**69-picture video-coded leader** (~2.3 s), so Auto starts at 59.94 Hz and switches once
+when the feature begins. That switch has no flush and does not re-anchor the STC.
+Consistent with: the offset being disc-specific and tied to leader discs.
+Inconsistent with: T2 also having a leader (45 pictures) and now being fine.
+
+**Candidate B — the parse-front STC anchor.** The STC is anchored on the demux parse
+position, which runs ahead of the screen by the VBUF depth, so audio leads the picture by
+exactly that depth. The earlier investigation MEASURED `buf_lag` at **1.7 s on APOLLO_13**
+and 2.0 s on T2 under Film 24p, and noted film mode makes it worse because the film raster
+removes the decode bottleneck and lets the parse front run to the VBUF ceiling. A fix
+exists and was HW-proven on that branch (STC anchored on the screen via a per-picture PTS
+through picbuf: overlay row 24 went **−1829 ms → −340 ms**), but it is not merged.
+Consistent with: the disc, the direction, and the order of magnitude.
+Inconsistent with: T2 measuring a LARGER buf_lag yet being fine now.
+
+**Neither candidate explains why T2 recovered and APOLLO_13 did not**, so do not pick one
+on plausibility — both stories currently have a T2-shaped hole. Two zero-cost HW A/Bs
+discriminate them before any code is written:
+
+1. **Chapter-skip inside the title.** A seek re-anchors the STC. If the 800 ms clears, the
+   fault is established at a single event (the switch) — candidate A. If it returns or
+   never clears, the offset is continuously regenerated — candidate B.
+2. **`Film 24p = On` instead of Auto.** This engages film from the first frame, so there is
+   no mid-title switch at all. If the offset disappears, candidate A. If it persists, the
+   switch is innocent and candidate B stands.
+
+`A/V Offset` can mask the symptom but must not be treated as the answer — it binds at
+(re)start events only, and the +100 ms default is already the measured NTSC-film null.
