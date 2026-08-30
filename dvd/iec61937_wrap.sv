@@ -90,6 +90,16 @@ module iec61937_wrap #(
     output wire        bs_stb_o,     // 48 kHz pair strobe (slip instrument; not needed
                                      // for correctness — see "Pacing")
 
+    // ---- HDMI IEC958-direct serial output (clk_audio) ----
+    // The same burst, clocked out for the ADV7513's I2S input in IEC958-direct
+    // mode (reg 0x0C[1:0]=3). sys_top muxes these three onto HDMI_SCLK/LRCLK/I2S
+    // while the HPS ack is set; MCLK is unaffected. All three come from HERE
+    // rather than from the framework's serializer so the word select and bit
+    // clock are phase-consistent with the subframes by construction.
+    output wire        hdmi_sck_o,
+    output wire        hdmi_ws_o,
+    output wire        hdmi_sd_o,
+
     // ---- debug taps (producer word stream, clk_sys) ----
     output reg  [15:0] dbg_word,      // word committed this cycle
     output reg         dbg_word_stb
@@ -387,6 +397,9 @@ module iec61937_wrap #(
     assign bs_nonpcm_o = cur_pair[32];
     assign bs_stb_o    = sample_req;
 
+    wire [31:0] sub_w;
+    wire        sub_load;
+
     spdif_pass u_spdif (
         .clk_i       (clk_audio),
         .rst_i       (~rst_audio_n),
@@ -394,7 +407,23 @@ module iec61937_wrap #(
         .spdif_o     (spdif_o),
         .nonpcm_i    (cur_pair[32]),  // per-pair PCM/non-PCM flag (latched per block)
         .sample_i    (cur_pair[31:0]),
-        .sample_req_o(sample_req)
+        .sample_req_o(sample_req),
+        .sub_w_o     (sub_w),
+        .sub_load_o  (sub_load)
+    );
+
+    // HDMI leg: the same subframes, serialized for the ADV7513 instead of
+    // biphase-encoded. Driven off the SAME load pulse as the S/PDIF encoder, so
+    // the two outputs cannot drift apart — there is one subframe source.
+    i2s_iec958 u_hdmi_i2s (
+        .clk       (clk_audio),
+        .rst_n     (rst_audio_n),
+        .ce_i      (bit_ce),
+        .sub_w_i   (sub_w),
+        .sub_load_i(sub_load),
+        .sck_o     (hdmi_sck_o),
+        .ws_o      (hdmi_ws_o),
+        .sd_o      (hdmi_sd_o)
     );
 
 endmodule

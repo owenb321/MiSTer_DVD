@@ -25,7 +25,8 @@ run() {
 }
 
 # 61937 burst assembly + the S/PDIF channel-status block + the HDMI pair tap
-run iec61937_wrap dvd/spdif_pass.sv dvd/iec61937_wrap.sv bench/dvd/iec61937_wrap_tb.sv
+run iec61937_wrap dvd/spdif_pass.sv dvd/i2s_iec958.sv dvd/iec61937_wrap.sv \
+    bench/dvd/iec61937_wrap_tb.sv
 
 # IEC958-direct serialization for the ADV7513's I2S input, read back off the wire
 run i2s_iec958 dvd/spdif_pass.sv dvd/i2s_iec958.sv bench/dvd/i2s_iec958_tb.sv

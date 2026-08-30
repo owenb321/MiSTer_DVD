@@ -1573,6 +1573,25 @@ assign SDCD_SPDIF = (mcp_en & ~spdif_out) ? 1'b0 : 1'bZ;
 	assign AUDIO_L     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_SCLK  : analog_l;
 `endif
 
+// DVD-FORK: IEC 61937 bitstream over HDMI. When the core asserts hdmi_bs_en it
+// drives IEC 60958 subframes in the ADV7513's "IEC958 direct" format, and all
+// three audio signals come from the CORE's serializer rather than audio_out's -
+// bit clock, word select and data have to stay phase-consistent with each other,
+// and IEC958-direct needs sck at 64.Fs where the PCM path runs 32.Fs. MCLK is
+// untouched (clk_audio = 512.Fs either way), and with hdmi_bs_en low every one of
+// these is bit-for-bit the stock PCM path.
+//
+// The SW[0]/mcp_en guard matters: those route HDMI_I2S/SCLK/LRCLK to the analog
+// board's audio pins (see the AUDIO_* assigns above), where an I2S DAC would turn
+// a bitstream into full-scale noise.
+wire hdmi_bs_sck, hdmi_bs_ws, hdmi_bs_sd, hdmi_bs_en;
+wire hdmi_bs_ok = hdmi_bs_en & ~(SW[0] | mcp_en);
+
+wire i2s_bclk_pcm, i2s_lrclk_pcm, i2s_data_pcm;
+assign HDMI_SCLK  = hdmi_bs_ok ? hdmi_bs_sck : i2s_bclk_pcm;
+assign HDMI_LRCLK = hdmi_bs_ok ? hdmi_bs_ws  : i2s_lrclk_pcm;
+assign HDMI_I2S   = hdmi_bs_ok ? hdmi_bs_sd  : i2s_data_pcm;
+
 assign HDMI_MCLK = clk_audio;
 wire clk_audio;
 
@@ -1611,9 +1630,9 @@ audio_out audio_out
 	.alsa_r(alsa_r),
 `endif
 
-	.i2s_bclk(HDMI_SCLK),
-	.i2s_lrclk(HDMI_LRCLK),
-	.i2s_data(HDMI_I2S),
+	.i2s_bclk(i2s_bclk_pcm),
+	.i2s_lrclk(i2s_lrclk_pcm),
+	.i2s_data(i2s_data_pcm),
 `ifndef MISTER_DUAL_SDRAM
 	.dac_l(analog_l),
 	.dac_r(analog_r),
@@ -1860,6 +1879,12 @@ emu emu
 	// output assigns above).
 	.SPDIF_PASS(spdif_pass),
 	.SPDIF_PASS_EN(spdif_pass_en),
+
+	// DVD-FORK: the same bitstream over HDMI - see the mux above.
+	.HDMI_BS_SCK(hdmi_bs_sck),
+	.HDMI_BS_WS(hdmi_bs_ws),
+	.HDMI_BS_SD(hdmi_bs_sd),
+	.HDMI_BS_EN(hdmi_bs_en),
 
 	.ADC_BUS({ADC_SCK,ADC_SDO,ADC_SDI,ADC_CONVST}),
 

@@ -68,6 +68,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/lpcm_unpack.sv
 # AC-3/DTS frames into 61937 bursts; spdif_pass is the biphase encoder (a copy of
 # sys/spdif.v with the non-PCM channel-status bit set). See docs/iec61937.md.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/spdif_pass.sv
+# HDMI leg: the same IEC 60958 subframes serialized for the ADV7513's I2S input
+# in IEC958-direct mode, so Passthru reaches an AVR over HDMI too.
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/i2s_iec958.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/iec61937_wrap.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/av_sync.sv
 # Flush/reset trigger matrix (extracted from emu.sv 2026-08-28 for TB coverage of

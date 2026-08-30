@@ -61,6 +61,16 @@ module emu (
 	output        SPDIF_PASS,
 	output        SPDIF_PASS_EN,
 
+	// DVD-FORK: the same IEC 61937 bitstream over HDMI. These are IEC 60958
+	// subframes in the ADV7513's "IEC958 direct" format, NOT PCM samples;
+	// sys_top substitutes them for the framework's PCM I2S on HDMI_SCLK/LRCLK/
+	// I2S while HDMI_BS_EN. Gated on the HPS ack, so a Main that has not put the
+	// chip in non-PCM mode never sees them. See docs/hdmi_bitstream.md.
+	output        HDMI_BS_SCK,
+	output        HDMI_BS_WS,
+	output        HDMI_BS_SD,
+	output        HDMI_BS_EN,
+
 	inout   [3:0] ADC_BUS,
 
 	output        SD_SCK,
@@ -176,6 +186,8 @@ wire pal_eff;
 wire direct_video;                        // hps_io cfg[10] (declared early for the gating here)
 wire forced_scandoubler;                  // hps_io cfg[4]
 wire ini_vga_scaler, ini_csync, ini_ypbpr, ini_sog;  // hps_io MiSTer.ini exports (DVD-FORK)
+wire hdmi_bs_ack;                                    // cfg[14] HPS ack (DVD-FORK, HDMI bitstream)
+wire bs_stb_w;                                       // 48 kHz pair strobe from iec61937_wrap
 wire [1:0] analog_mode = status[27:26];   // 0=Auto 1=Interlaced 2=Progressive 3=Native Fields
 // Debug "Title VTS" override (P1, two BCD digits -> VTS 1..99; 0 = Auto).
 // See the CONF_STR note at the retired O[31:28] slot.
@@ -346,14 +358,41 @@ always @(posedge clk_sys) begin
     else if (probe_act_p != 0) probe_act_p <= probe_act_p - 20'd1;
 end
 wire signed [15:0] probe_tone = probe_sq ? 16'sd8000 : -16'sd8000;
-assign AUDIO_L = (probe_act_s != 0) ? probe_tone : ((pass_mode | css_scrambled) ? 16'sd0 : dec_audio_l);
-assign AUDIO_R = (probe_act_p != 0) ? probe_tone : ((pass_mode | css_scrambled) ? 16'sd0 : dec_audio_r);
+assign AUDIO_L = (probe_act_s != 0) ? probe_tone : (pcm_mute ? 16'sd0 : dec_audio_l);
+assign AUDIO_R = (probe_act_p != 0) ? probe_tone : (pcm_mute ? 16'sd0 : dec_audio_r);
 // =============================================================================
 `else
-assign AUDIO_L      = (pass_mode | css_scrambled) ? 16'sd0 : dec_audio_l;
-assign AUDIO_R      = (pass_mode | css_scrambled) ? 16'sd0 : dec_audio_r;
+assign AUDIO_L      = pcm_mute ? 16'sd0 : dec_audio_l;
+assign AUDIO_R      = pcm_mute ? 16'sd0 : dec_audio_r;
 `endif
 assign SPDIF_PASS_EN = pass_mode;
+
+// -----------------------------------------------------------------------------
+// DVD-FORK: HDMI IEC 61937 bitstream (docs/hdmi_bitstream.md)
+// -----------------------------------------------------------------------------
+// hdmi_bs_ack is cfg[14] from MiSTer_DVDcss: "the ADV7513 is in IEC958-direct /
+// non-PCM mode". Stock Main never sets it, so everything below stays inert and
+// the core behaves exactly as it does today.
+//
+// ⚠ INVARIANT - the ACK owns the HDMI audio format, not pass_mode. While the ack
+// is set the sink has been told to expect non-PCM, so the core must never put PCM
+// on HDMI: a receiver would decode it as a data burst. Leaving Passthru is
+// instant in fabric but the chip stays in non-PCM mode until Main's next poll, so
+// that window has to be digital silence rather than decoded audio. Hence
+// hdmi_bs_ack joins the mute term above instead of pass_mode alone.
+wire pcm_mute = pass_mode | css_scrambled | hdmi_bs_ack;
+
+// Post-reset hold-off. rst_audio_n pulses on every audio-track switch and
+// aud_flush, and it re-phases the subframe pacing (MEASURED: the first interval
+// after a reset is 509 clk_audio, not 512 - see bench/dvd/iec61937_wrap_tb.sv
+// TEST 9). Mute the HDMI leg for ~100 ms across that so a receiver sees clean
+// silence and one switch, never a torn subframe.
+reg [12:0] bs_hold;
+always @(posedge CLK_AUDIO or negedge rst_audio_n)
+    if (!rst_audio_n)                 bs_hold <= 13'd4800;   // ~100 ms at 48 kHz
+    else if (bs_stb_w && |bs_hold)    bs_hold <= bs_hold - 13'd1;
+
+assign HDMI_BS_EN = pass_mode & hdmi_bs_ack & ~|bs_hold;
 
 assign SD_SCK       = 0;
 assign SD_MOSI      = 0;
@@ -774,6 +813,7 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     .ini_csync      (ini_csync),
     .ini_ypbpr      (ini_ypbpr),
     .ini_sog        (ini_sog),
+    .ini_hdmi_bs_ok (hdmi_bs_ack),
 
     // SD sector-level access (virtual disk for MPG streaming)
     .sd_lba         ('{sd_lba}),
@@ -2840,6 +2880,13 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .clk_audio    (CLK_AUDIO),
     .rst_audio_n  (rst_audio_n),
     .spdif_o      (SPDIF_PASS),
+    .hdmi_sck_o   (HDMI_BS_SCK),
+    .hdmi_ws_o    (HDMI_BS_WS),
+    .hdmi_sd_o    (HDMI_BS_SD),
+    .bs_l_o       (),
+    .bs_r_o       (),
+    .bs_nonpcm_o  (),
+    .bs_stb_o     (bs_stb_w),
     .dbg_word     (),
     .dbg_word_stb ()
 );
