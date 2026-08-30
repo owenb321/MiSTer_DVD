@@ -119,16 +119,17 @@ nowhere near the repo, so this holds by construction; keep it that way.
 
 ## HW status / open items
 
-**HW round 1 (2026-08-29) — physical disc CONFIRMED:** no-region-drive cracking + progress,
-cached keys, and unencrypted-disc playback all work on the DE10-Nano. Encrypted ISOs
-failed (`CSS ENCRYPTED`) → fixed via `image_is_scrambled()` (above), pending re-test.
+**HW CONFIRMED (2026-08-29):** on the DE10-Nano — physical disc (no-region-drive cracking +
+progress, cached keys, unencrypted playback) **and encrypted ISOs** (crack + play; keys
+cached). Two bugs were fixed between first test and success: the storage-relative mount
+path (`getFullPath`) and the scramble gate (trust `dvdcss_is_scrambled`) — see above.
+Note: an encrypted **ISO** cracks noticeably FASTER than a no-region physical disc — CSS
+cracking is seek-heavy and an image's random I/O beats optical seek latency — so the ISO
+message is "Decrypting ISO" (no "slow"; the drive path keeps "No drive region: cracking").
 
 Remaining:
 
-1. **Encrypted ISO re-test:** confirm the bitstream-scramble fix cracks + plays a real
-   encrypted `.iso`; check first-play crack timing and that decrypted ISOs still take the
-   fast direct-file path. `/tmp/dvdcss.log` shows the per-mount verdicts.
-2. **Region-mismatch cracking message (Q2):** a regioned drive playing a disc from a
+1. **Region-mismatch cracking message (Q2):** a regioned drive playing a disc from a
    *different* region cracks (the drive refuses the title-key ioctl, libdvdcss falls back)
    — but the message still says "Preparing disc" because a region *is* set. To warn
    correctly, compare the disc's region-management byte (`READ DVD STRUCTURE` copyright RMI)

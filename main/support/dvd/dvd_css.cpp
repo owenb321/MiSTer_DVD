@@ -573,7 +573,9 @@ int dvd_css_open_image(const char *path)
 		return 0;
 	}
 
-	crack_title_keys("Decrypting ISO: slow");   // no drive -> always a crack (first play)
+	// No drive -> always a crack, but an image's random I/O is far quicker than an
+	// optical drive's seeks, so this is fast in practice (and cached after) — no "slow".
+	crack_title_keys("Decrypting ISO");
 	css_log("encrypted ISO %s (%llu MB) — decrypting via libdvdcss",
 	        path, (unsigned long long)(css_size >> 20));
 	return 1;
