@@ -24,8 +24,9 @@
 // spins up, so a freshly inserted disc is simply picked up on a later tick.
 #define DVD_PHYS_SCAN_PERIOD_S 1
 
-static int    mounted = 0;   // 1 while a DVD-Video disc is mounted into the core
+static int    mounted = 0;         // 1 while a DVD-Video disc is mounted into the core
 static time_t last_scan = 0;
+static time_t reset_release_at = 0; // >0 while an eject reset pulse is being held
 
 // Find the first /dev/srN that currently holds a disc reported ready. Fills `out`
 // (size >= 16) and returns an fd opened O_RDONLY|O_NONBLOCK, or -1. Mirrors the
@@ -54,6 +55,15 @@ void dvd_phys_tick(void)
 	if (!is_dvd()) return;
 
 	time_t now = time(NULL);
+
+	// Release the eject reset pulse once it has been held briefly, so the idle screen
+	// (bouncing logo + OSD file picker) runs instead of the core sitting in reset.
+	if (reset_release_at && now >= reset_release_at)
+	{
+		user_io_status_set("[0]", 0);
+		reset_release_at = 0;
+	}
+
 	if (now - last_scan < DVD_PHYS_SCAN_PERIOD_S) return;
 	last_scan = now;
 
@@ -63,12 +73,15 @@ void dvd_phys_tick(void)
 	if (fd < 0)
 	{
 		// No ready disc. If we had one mounted, the disc was ejected/removed:
-		// tear the slot down so the core stops streaming a gone disc.
+		// tear the slot down and soft-reset the core back to the idle logo so a
+		// gone disc doesn't leave a frozen last frame.
 		if (mounted)
 		{
-			printf("DVD_PHYS: disc removed, unmounting\n");
+			printf("DVD_PHYS: disc removed, unmounting + reset to idle\n");
 			user_io_file_mount("", 0);
 			dvd_css_close();
+			user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
+			reset_release_at = now + 1;      // release after ~1 s (see the tick top)
 			mounted = 0;
 		}
 		return;

@@ -48,7 +48,7 @@ while the core is open plays it (`dvd_phys` polls for media change).
 |---|---|
 | `support/dvd/dvd_css.cpp/.h` | libdvdcss `dlopen` wrapper: find drive, RPC-region detect (SG_IO REPORT KEY), CSS detect (READ DVD STRUCTURE), per-VOB title keys, `dvd_css_read()` decrypted sectors, deferred "install libdvdcss" popup. Drive path lifted from the proven `feature/dvd-video-css` branch; `dvd_css_open_image()` (encrypted-ISO file source, reusing the same read/VOB-walk machinery) added here. |
 | `support/dvd/dvd_detect.cpp/.h` | `READ(10)` ISO9660 PVD + root-dir walk for `VIDEO_TS` — recognises a DVD-Video without mounting. |
-| `support/dvd/dvd_phys.cpp/.h` | **New, standalone.** Replaces the fork's launcher trigger: polls `/dev/srN`, mounts a DVD-Video via `user_io_file_mount(DVD_PHYS_SENTINEL)` on insert, unmounts on eject. |
+| `support/dvd/dvd_phys.cpp/.h` | **New, standalone.** Replaces the fork's launcher trigger: polls `/dev/srN`, mounts a DVD-Video via `user_io_file_mount(DVD_PHYS_SENTINEL)` on insert; on eject, unmounts **and** pulses `user_io_status_set("[0]", 1)` (the core's OSD-reset → unload + VM reset → idle logo) so a removed disc doesn't freeze the last frame. |
 | `Scripts/install_dvdcss.sh` | User-run installer for a prebuilt armhf libdvdcss → `/media/fat/dvdcss/libdvdcss.so.2`. |
 | `integration/` | `INTEGRATION.md` (the six `user_io.cpp` edits + `-ldl`) and `apply_integration.py` (anchored, idempotent patcher). |
 | `build_main.sh` | Fetch pinned stock Main, apply overlay, patch, build `MiSTer_DVDcss`. |
@@ -87,10 +87,18 @@ data (same slow path as a no-region drive) and cached under `DVDCSS_CACHE`
 (`/media/fat/dvdcss/cache`), so it is a one-time cost per disc.
 
 libdvdcss reads image files directly (it is how VLC/mplayer play ISOs — no loop mount
-needed), so the earlier "does `dvdcss_open()` accept a bare image path" question is
-resolved in principle; **HW-verify crack timing/robustness on real encrypted rips**.
-Note: `dvd_css` holds a single handle, so physical disc and encrypted ISO are mutually
-exclusive (last mount wins) — a non-issue in normal use.
+needed). Note: `dvd_css` holds a single handle, so physical disc and encrypted ISO are
+mutually exclusive (last mount wins) — a non-issue in normal use.
+
+**★ Scramble detection must NOT use `dvdcss_is_scrambled()` for an image (HW round 1,
+2026-08-29).** First HW test: encrypted ISOs fell through to `CSS ENCRYPTED` — the gate
+`dvdcss_is_scrambled()` reads **0 on an image file** even for a genuinely encrypted disc,
+because it depends on a drive ioctl (`READ DVD STRUCTURE`) a file has no answer for. Fix:
+`image_is_scrambled()` reads a VOB payload sector raw and checks the **clear PES
+`scrambling_control` bits** (the NAV pack / VOBU sector 0 is never scrambled, so it
+samples later sectors). `/tmp/dvdcss.log` now logs both the bitstream verdict and the lib
+verdict so a divergence is visible. Physical discs were unaffected (that path never gated
+on `is_scrambled`). **HW-verify the fix on a real encrypted rip.**
 
 **CSS key cache — legal guardrail.** Recovered keys are cached at
 `/media/fat/dvdcss/cache` (device-local, runtime-generated). Caching adds no legal
@@ -101,19 +109,28 @@ committed to the repo, bundled in a release, or uploaded** — *distributing* CS
 the genuinely fraught act (cf. the AACS "09 F9" case). The cache lives on the SD card,
 nowhere near the repo, so this holds by construction; keep it that way.
 
-## Open items before HW test
+## HW status / open items
 
-1. **Build** `MiSTer_DVDcss` with the ARM toolchain — **done** (native + Docker; the
-   `apply_integration.py` anchors validated against fork `master`, and the encrypted-ISO
-   branch confirmed in the patched tree).
-2. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open
-   after any detector (fork or ours) released it.
-3. **img_mount signalling from a custom Main:** confirm the mount index/size the core
-   expects, matching how ISOs mount today (covers both physical and encrypted-ISO mounts).
-4. **Media-change robustness:** eject / swap while playing (`dvd_phys` re-probe/re-key).
-5. **Encrypted ISO on HW:** confirm `dvdcss_open()` cracks and plays a real encrypted
-   `.iso`; check first-play crack timing and that decrypted ISOs still take the fast path.
-6. **libdvdcss path:** code + installer agree on `/media/fat/dvdcss/` — confirm the core's
-   `CSS ENCRYPTED` fallback still triggers (disc **and** ISO) when it is absent.
-7. **Then** fold physical-disc + encrypted-ISO + libdvdcss into the top-level `README.md`
+**HW round 1 (2026-08-29) — physical disc CONFIRMED:** no-region-drive cracking + progress,
+cached keys, and unencrypted-disc playback all work on the DE10-Nano. Encrypted ISOs
+failed (`CSS ENCRYPTED`) → fixed via `image_is_scrambled()` (above), pending re-test.
+
+Remaining:
+
+1. **Encrypted ISO re-test:** confirm the bitstream-scramble fix cracks + plays a real
+   encrypted `.iso`; check first-play crack timing and that decrypted ISOs still take the
+   fast direct-file path. `/tmp/dvdcss.log` shows the per-mount verdicts.
+2. **Region-mismatch cracking message (Q2):** a regioned drive playing a disc from a
+   *different* region cracks (the drive refuses the title-key ioctl, libdvdcss falls back)
+   — but the message still says "Preparing disc" because a region *is* set. To warn
+   correctly, compare the disc's region-management byte (`READ DVD STRUCTURE` copyright RMI)
+   against the drive's set region (`REPORT KEY` RPC state) and show the cracking text on a
+   mismatch. Needs a region-mismatched disc to verify (easiest: `regionset` the drive to a
+   region that mismatches an existing disc, rather than authoring one).
+3. **Eject → idle reset (just added):** confirm the `status[0]` pulse returns to the idle
+   logo cleanly and a subsequent insert plays.
+4. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open.
+5. **libdvdcss-absent fallback:** confirm `CSS ENCRYPTED` still triggers (disc **and** ISO)
+   when libdvdcss is missing.
+6. **Then** fold physical-disc + encrypted-ISO + libdvdcss into the top-level `README.md`
    "What works" and drop the "CSS is not handled in-core" limitation — only once HW-confirmed.

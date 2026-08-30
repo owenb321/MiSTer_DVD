@@ -345,14 +345,14 @@ static int vob_index(uint32_t lba)
 	return -1;
 }
 
-// Walk ISO9660 (root -> VIDEO_TS) and record every VOB extent, then crack each
-// title key at its VOB start (fast cached lookups thereafter). Done once at mount.
-static void build_vob_list(void)
+// Enumerate every VOB extent from ISO9660 (root -> VIDEO_TS). Raw reads only, no keys.
+// Returns 1 if at least one VOB was found.
+static int enumerate_vobs(void)
 {
 	g_nvobs = 0;
 	uint8_t sec[2048];
-	if (css_raw_read(16, sec, 1) < 1) { css_log("vobs: PVD read failed"); return; }
-	if (memcmp(sec + 1, "CD001", 5) != 0) { css_log("vobs: not ISO9660"); return; }
+	if (css_raw_read(16, sec, 1) < 1) { css_log("vobs: PVD read failed"); return 0; }
+	if (memcmp(sec + 1, "CD001", 5) != 0) { css_log("vobs: not ISO9660"); return 0; }
 
 	uint32_t root_lba = rd_le32(sec + 156 + 2);
 	uint32_t root_len = rd_le32(sec + 156 + 10);
@@ -360,20 +360,19 @@ static void build_vob_list(void)
 	if (!iso_find(root_lba, root_len, "VIDEO_TS", 1, &vts_lba, &vts_len))
 	{
 		css_log("vobs: VIDEO_TS dir not found");
-		return;
+		return 0;
 	}
 	collect_vobs(vts_lba, vts_len);
+	return g_nvobs > 0;
+}
 
-	// Fetch each VOB's title key at its start sector. With a drive region set this
-	// is instant (ioctl); with none it's a slow crack — say so on screen instead of
-	// leaving an unexplained black screen. Also show a bar (blocks the main loop).
-	// The region matters only for a scrambled disc — an unencrypted DVD needs no
-	// key, so don't warn about cracking there. dvdcss_is_scrambled is optional;
-	// assume scrambled if the lib is too old to tell (rather than hide a real warning).
-	int scrambled = p_scram ? (p_scram(css) != 0) : 1;
-	// Sidebar title fits ~9 chars; the main line is capped at 27 (ProgressMessage).
-	const char *title = "DVD";
-	const char *text  = (!region_set && scrambled) ? "No drive region: cracking" : "Preparing disc";
+// Pre-crack each VOB's title key at its start sector (fast cached lookups thereafter).
+// With a drive region set this is instant (ioctl); with none — or an image file with no
+// drive at all — it is a slow crack, so show a bar (it blocks the main loop) with the
+// caller's `text`. The message never changes what libdvdcss does.
+static void crack_title_keys(const char *text)
+{
+	const char *title = "DVD";   // sidebar ~9 chars; main line capped at 27 (ProgressMessage)
 	ProgressMessage();   // reset so the first update renders
 	int keyed = 0;
 	for (int i = 0; i < g_nvobs; i++)
@@ -384,6 +383,47 @@ static void build_vob_list(void)
 	ProgressMessage();   // clear
 	css_log("%d VOBs, %d title keys (region %s)", g_nvobs, keyed, region_set ? "set" : "NOT set");
 	css_pos = -1;
+}
+
+// Is a VOB payload actually CSS-scrambled? libdvdcss's dvdcss_is_scrambled() can rely on
+// a drive ioctl (READ DVD STRUCTURE) that an image FILE has no answer for, so for a file
+// we read the bitstream directly: the CSS scrambling_control bits sit in the (clear) PES
+// header, and the NAV pack (VOBU sector 0) is never scrambled — so we sample later
+// sectors. Returns 1 if any payload PES is marked scrambled.
+static int image_is_scrambled(void)
+{
+	for (int i = 0; i < g_nvobs; i++)
+	{
+		for (uint32_t s = 1; s < g_vobs[i].nsec && s <= 16; s++)
+		{
+			uint8_t sec[2048];
+			if (css_raw_read(g_vobs[i].start + s, sec, 1) < 1) break;
+			if (!(sec[0] == 0 && sec[1] == 0 && sec[2] == 1 && sec[3] == 0xBA)) continue;
+			int po = 14 + (sec[13] & 0x07);              // pack header + stuffing -> first PES
+			if (po + 6 >= 2048) continue;
+			if (!(sec[po] == 0 && sec[po + 1] == 0 && sec[po + 2] == 1)) continue;
+			uint8_t sid = sec[po + 3];
+			if (sid == 0xBD || (sid >= 0xC0 && sid <= 0xEF))   // stream carries a PES ext header
+			{
+				uint8_t flags = sec[po + 6];
+				if ((flags & 0xC0) == 0x80)                    // valid '10' PES marker
+					return (flags & 0x30) != 0;                // PES_scrambling_control != 0
+			}
+		}
+	}
+	return 0;
+}
+
+// Physical-drive path: enumerate + crack. dvdcss_is_scrambled is reliable here (drive
+// ioctls are available); assume scrambled if the lib is too old to tell.
+static void build_vob_list(void)
+{
+	if (!enumerate_vobs()) return;
+	// The region matters only for a scrambled disc — an unencrypted DVD needs no key,
+	// so don't warn about cracking there. dvdcss_is_scrambled is optional; assume
+	// scrambled if the lib is too old to tell (rather than hide a real warning).
+	int scrambled = p_scram ? (p_scram(css) != 0) : 1;
+	crack_title_keys((!region_set && scrambled) ? "No drive region: cracking" : "Preparing disc");
 }
 
 int dvd_css_open(void)
@@ -485,37 +525,48 @@ int dvd_css_open_image(const char *path)
 	// Decrypting an image needs libdvdcss. Without it, let the normal file path
 	// handle the mount: a decrypted ISO plays; an encrypted one trips the core's
 	// CSS ENCRYPTED notice (raw scrambled sectors), same as before this existed.
-	if (!load_library()) return 0;
+	if (!load_library()) { css_log("image %s: no libdvdcss -> direct path", path); return 0; }
 
 	struct stat st;
-	if (stat(path, &st) != 0 || st.st_size <= 0) return 0;
+	if (stat(path, &st) != 0 || st.st_size <= 0) { css_log("image %s: stat failed", path); return 0; }
 
 	// Persist cracked keys per disc (shared with the drive path).
 	mkdir("/media/fat/dvdcss/cache", 0755);
 	setenv("DVDCSS_CACHE", "/media/fat/dvdcss/cache", 1);
 
 	dvdcss_t h = p_open(path);
-	if (!h) { css_log("dvdcss_open(image) failed: %s", path); return 0; }
-
-	// Only claim the mount for a genuinely scrambled image. If the lib is too old to
-	// tell (no dvdcss_is_scrambled), don't claim it — the direct-file path already
-	// plays decrypted ISOs, and mis-routing one through libdvdcss would only slow it.
-	int scrambled = p_scram ? (p_scram(h) != 0) : 0;
-	if (!scrambled)
-	{
-		p_close(h);
-		return 0;
-	}
+	if (!h) { css_log("dvdcss_open(image) FAILED: %s", path); return 0; }
 
 	css = h;
 	css_size = (uint64_t)st.st_size;
 	region_set = 1;    // no drive; keys are cracked from data regardless of region
 	css_pos = -1;
 	cur_vob = -1;
+
+	if (!enumerate_vobs())
+	{
+		css_log("image %s: no VIDEO_TS/VOBs -> direct path", path);
+		dvd_css_close();
+		return 0;
+	}
+
+	// Detect scrambling from the bitstream (not libdvdcss's ioctl-dependent
+	// is_scrambled, which reads 0 on an image file even for an encrypted disc — the
+	// bug that made encrypted ISOs fall through to CSS ENCRYPTED). Log both so a
+	// mismatch is visible in /tmp/dvdcss.log.
+	int scrambled = image_is_scrambled();
+	css_log("image %s: %d VOBs, bitstream scrambled=%d (lib is_scrambled=%d)",
+	        path, g_nvobs, scrambled, p_scram ? p_scram(css) : -1);
+	if (!scrambled)
+	{
+		// Decrypted ISO -> keep the fast direct-file mount (no per-sector libdvdcss).
+		dvd_css_close();
+		return 0;
+	}
+
+	crack_title_keys("Decrypting ISO: slow");   // no drive -> always a crack (first play)
 	css_log("encrypted ISO %s (%llu MB) — decrypting via libdvdcss",
 	        path, (unsigned long long)(css_size >> 20));
-
-	build_vob_list();  // enumerate VOBs + pre-crack every title key at its VOB start
 	return 1;
 }
 
