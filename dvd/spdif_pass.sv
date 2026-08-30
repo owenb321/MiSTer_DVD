@@ -68,7 +68,24 @@ module spdif_pass
 
     // Audio interface (16-bit x 2 = RL)
     input [31:0]    sample_i,
-    output reg      sample_req_o
+    output reg      sample_req_o,
+
+    // ---- DVD-FORK: parallel IEC 60958 subframe export (HDMI path) ----------
+    // The SAME subframe this module is about to biphase-encode, handed out in
+    // parallel so dvd/i2s_iec958.sv can clock it into the ADV7513's I2S input in
+    // "IEC958 direct" mode (reg 0x0C[1:0]=3). Exporting rather than duplicating
+    // matters: the channel-status table below (esp. the non-PCM bit, the fj#110
+    // ROUND 2 fix) is HW-proven, and a second copy would drift from it.
+    //
+    // Purely additive - nothing above consumes these, so the biphase output is
+    // bit-identical whether or not they are used.
+    //
+    // sub_w_o is in IEC 60958 TIMESLOT order: [3:0] preamble code, [27:4] audio,
+    // [28] V, [29] U, [30] C, [31] P. Unlike the internal subframe_w, the parity
+    // and preamble fields are FILLED here - the biphase stage computes those as
+    // it emits, which is too late for a parallel consumer.
+    output [31:0]   sub_w_o,
+    output          sub_load_o
 );
 
 //-----------------------------------------------------------------
@@ -233,6 +250,41 @@ begin
         channel_status_bit_q <= channel_status_bit_r;
     end
 end
+
+//-----------------------------------------------------------------
+// DVD-FORK: parallel subframe export (see sub_w_o in the port list)
+//-----------------------------------------------------------------
+// Preamble CODE for the parallel interface. The 8-bit patterns above are
+// half-bit-time biphase cell patterns and cannot be sent over a plain serial
+// data line; a parallel/"direct" interface carries a code instead. Their upper
+// nibbles are already a clean one-hot (Z=0001, Y=0010, X=0100), so that is what
+// is exported.
+// ⚠ ASSUMPTION - the exact nibble the ADV7513 expects in IEC958-direct mode is
+// unconfirmed (the Programming Guide could not be obtained; the mainline Linux
+// driver selects the mode but never writes the field). If HW round 1 shows the
+// receiver locking to the wrong channel or never seeing block start, this table
+// is the first thing to change. See docs/hdmi_bitstream.md.
+// Built from the REGISTERED preamble_q / audio_sample_q (via subframe_w), so the
+// exported word is the coherent set for the subframe currently being emitted.
+// preamble_r and audio_sample_q are valid on OPPOSITE sides of the load edge -
+// preamble_r already describes the subframe about to start while audio_sample_q
+// still holds the previous one - so sub_load_o is delayed one cycle to land
+// where both are settled. A consumer latches sub_w_o on sub_load_o.
+wire [3:0] sub_pre_code = preamble_q[7:4];
+
+// Even parity over timeslots 4..31: choose [31] so that range holds an even
+// number of ones. The biphase stage derives the same value serially
+// (parity_count_q); subframe_w[31] is the zero placeholder, so this is just the
+// XOR of the rest.
+wire       sub_parity   = ^subframe_w[30:4];
+
+reg        sub_load_q;
+always @ (posedge rst_i or posedge clk_i)
+    if (rst_i) sub_load_q <= 1'b0;
+    else       sub_load_q <= load_subframe_q;
+
+assign sub_w_o    = {sub_parity, subframe_w[30:4], sub_pre_code};
+assign sub_load_o = sub_load_q;
 
 //-----------------------------------------------------------------
 // Parity Counter

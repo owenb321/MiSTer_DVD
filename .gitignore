@@ -50,6 +50,7 @@ compile_output.log
 *.ppm
 *.mpg
 bench/**/*_sim
+bench/dvd/*.log
 mpeg2_sim
 sim_mpg
 bench/dvd/chain_*
