@@ -408,14 +408,28 @@ finds the main feature, navigates to it, and plays from start.
 
 ---
 
-## Phase 5 — DTS Audio (via IEC 61937 S/PDIF passthrough)
+## Phase 5 — DTS Audio (via IEC 61937 passthrough)
 
-> **⚠️ APPROACH (2026-07-11): DTS is delivered by IEC 61937 bitstream passthrough over
-> optical S/PDIF, NOT by decoding** (there is no in-fabric DCA decoder; a from-scratch
-> one is out of scope, and the HPS libdca path is retired with the rest of the HPS audio
-> daemon). An AV receiver decodes the bitstream. Design: **`docs/iec61937.md`**.
+> **⚠️ APPROACH (2026-07-11): DTS is delivered by IEC 61937 bitstream passthrough, NOT by
+> decoding** (there is no in-fabric DCA decoder; a from-scratch one is out of scope, and
+> the HPS libdca path is retired with the rest of the HPS audio daemon). An AV receiver
+> decodes the bitstream. Design: **`docs/iec61937.md`**.
 
-**Goal:** make DTS (and AC-3) tracks audible on an AV receiver with an optical input.
+**Goal:** make DTS (and AC-3) tracks audible on an AV receiver.
+
+### 🔧 Milestone C — the same bitstream over HDMI (2026-08-30, ⏳ HW-confirm pending)
+- [x] `dvd/i2s_iec958.sv` — IEC 60958 subframes into the ADV7513's I2S input in
+  IEC958-direct mode (`0x0C[1:0]=3`), so **an AV receiver on HDMI gets DD/DTS 5.1 with no
+  Digital I/O board**. One subframe source, two link layers — `spdif_pass` exports the
+  very subframe it biphase-encodes, so the outputs cannot drift.
+- [x] Chosen over an I2C channel-status bit because IEC958-direct keeps the non-PCM flag
+  **dynamic**, preserving the fj#110 ROUND 2 behaviour instead of pinning it high.
+- [x] HPS half: `main/support/dvd/dvd_hdmi_audio.cpp` (EDID Short Audio Descriptors +
+  `hdmi_config_set_audio()`), gated by a `cfg[14]` ack so **stock Main is safe by
+  construction** — no ack, no bitstream, no noise.
+- [ ] **HW gate:** receiver names DD/DTS and plays 5.1; locks at startup without a chapter
+  skip; a plain TV stays silent, never noisy; stock Main unchanged.
+- Design + the open preamble-nibble assumption: **`docs/hdmi_bitstream.md`**.
 
 ### ✅ Milestone A — passthrough machinery + AC-3 (HW-CONFIRMED 2026-07-11)
 - [x] `dvd/spdif_pass.sv` — IEC 60958 biphase encoder (copy of `sys/spdif.v`) with the

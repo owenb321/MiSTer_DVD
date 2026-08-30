@@ -57,7 +57,8 @@ with a caption decoder (every US television 13" and larger since 1993 has one).
 
 **Audio** — AC-3 and MPEG-1 Layer II (MP2) decoded entirely in fabric (AC-3 5.1
 downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
-over S/PDIF to a receiver.
+to a receiver — over optical S/PDIF, or over HDMI itself with the custom Main, so 5.1
+needs no add-on board.
 
 **DVD navigation** — the core reads an ISO directly, parses the IFOs, and runs a real
 **DVD virtual machine** validated command-by-command against libdvdnav's behaviour. The
@@ -117,16 +118,15 @@ is opt-in and additive. See
   discs put their randomisation setup in the boot sequence and jump past it when you press
   **Menu** to skip the intro — the game then repeats one question. That is how the disc is
   authored (a real player and libdvdnav do the same); let the intro play.
-- **No DTS decode** — S/PDIF passthrough to a receiver only.
-- **Audio formats:** AC-3 (mono 1/0, stereo 2/0 and 5.1 3/2), MPEG-1 Layer II
-  (MP2), LPCM, and DTS (passthrough only). A few discs use rarer AC-3 channel
-  layouts the decoder does not implement yet (3/0, 2/1, 3/1 and 2/2 quad); those
-  tracks are silent rather than distorted. Dolby Digital **1.0 mono** used to be
-  silent for the same reason and works as of 0.2.1.
+- **No DTS decode** — passthrough to an AV receiver only (optical S/PDIF or HDMI).
+- **Audio formats:** AC-3 (every channel mode from 1.0 mono through 5.1, downmixed to
+  stereo), MPEG-1 Layer II (MP2), LPCM, and DTS (passthrough only). AC-3 **1+1 dual
+  mono** (`acmod 0`, two independent programmes) is deliberately refused and plays
+  silent — 4 frames on 1 disc out of 491 surveyed.
   The one gap left is the MPEG-2 multichannel *extension* (a rare 5.1 variant of MP2):
   its backwards-compatible stereo core should play, but no disc was available to verify,
-  so such a track still reports `AUDIO UNSUPPORTED`. MP2 has no S/PDIF passthrough —
-  in Passthru mode an MP2 track is silent.
+  so such a track still reports `AUDIO UNSUPPORTED`. MP2 has no passthrough encoding —
+  in Passthru mode an MP2 track is silent on both outputs.
 - **Changing the audio track while a disc menu is open silences the menu audio** until
   you leave the menu. Menu audio otherwise plays normally on the default track.
 - No parental-control enforcement, no UOP enforcement.
@@ -402,8 +402,8 @@ Defaults are chosen to be correct for most users; the first value listed is the 
 | **D-Pad Seek** | On / **Off** | Puts fixed-time seeking on the D-pad: Left/Right jump ∓10 s, Down/Up ∓1 min, and repeated taps build a longer jump. On a DVD the targets come from the disc's own seek tables, so they land on real frames. Off by default because some interactive/game DVDs play seekable video while expecting the D-pad as game input. |
 | **Aspect Ratio** | **Auto** / 4:3 / 16:9 | Auto reads the MPEG-2 sequence header. |
 | **Audio** | **On** / Off | |
-| **Audio Out** | **Decode HDMI** / Passthru SPDIF | Passthru sends undecoded AC-3/DTS to a receiver and mutes HDMI. Required for DTS. |
-| **SPDIF Byte Order** | **Normal** / Swap | If the receiver names the format but plays static, toggle this. |
+| **Audio Out** | **Decode PCM** / Passthru (SPDIF+HDMI) | Passthru sends undecoded AC-3/DTS to an AV receiver to decode — over optical S/PDIF, and over HDMI too if you run the custom Main and your receiver advertises AC-3/DTS. Required for DTS. On a TV that can't decode them, HDMI stays silent — use Decode. |
+| **SPDIF Byte Order** | **Normal** / Swap | Applies to both bitstream outputs despite the name. If the receiver names the format but plays static, toggle this. |
 | **Player Language** | **English** / … | Sets the player's menu/audio/subtitle language preference, like a set-top player's setup screen. |
 | **Video Standard** | **Auto** / NTSC / PAL | Auto detects from the stream's vertical size. |
 | **Interlaced Out** | **Off** / Auto / On | Native 480i/576i to HDMI. Auto switches mid-title and still has a slight A/V skew — opt-in. |
@@ -588,8 +588,8 @@ genuinely leaned on.
   headers) and MPEG-2 Video.
 - **ISO/IEC 11172-2 and 11172-3** — MPEG-1 Video (the decoder's MPEG-1 mode) and MPEG-1
   Audio (the Layer II decoder's tables and algorithms).
-- **IEC 61937-3 / 61937-5 / 60958-1** — AC-3 and DTS over S/PDIF, and the channel-status
-  non-PCM flag that makes receivers lock onto a bitstream.
+- **IEC 61937-3 / 61937-5 / 60958-1** — AC-3 and DTS over S/PDIF and HDMI, and the
+  channel-status non-PCM flag that makes receivers lock onto a bitstream.
 - ***DVD Demystified*, Jim Taylor** — the practical DVD-Video reference for VOB/IFO
   structure. Repeatedly the fastest route to understanding how discs are actually
   authored, as opposed to how the spec says they could be.
