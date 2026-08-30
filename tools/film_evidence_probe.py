@@ -104,6 +104,21 @@ def parse_pictures(buf):
     return [p for p in pics if p['prog'] is not None]
 
 
+def annotate(pics_coded, gate):
+    """Run the informativeness gate in CODED order -- which is the only order
+    the VLD has -- and stamp the verdict onto each picture. The detector then
+    consumes that verdict in DISPLAY order, exactly as the hardware will: the
+    running means live in the VLD (clk_dec, coded order), the 1-bit verdict
+    rides to the display through motcomp_picbuf alongside progressive_frame.
+
+    Modelling the gate in display order would flatter it -- the reorder is
+    small, but 'small' is what the round-11 stale-flags bug was called too.
+    """
+    for p in pics_coded:
+        p['inf'] = gate(p)
+    return pics_coded
+
+
 def display_order(pics):
     """Sort to display order. temporal_reference is display position within a
     GOP, so (gop, tr) IS display order -- and the whole point of the exercise:
@@ -141,6 +156,66 @@ def rel_gate(shift=3, ew=4):
         ok = p['size'] >= (a >> shift)
         if ok:
             avg[p['ct']] = a - (a >> ew) + (p['size'] >> ew)
+        return ok
+    return g
+
+
+def peak_gate(shift=3, decay=7):
+    """CANDIDATE E -- informativeness relative to a decaying PEAK, per coding
+    type. Same idea as D but without D's bootstrap fragility.
+
+    D seeds a running mean from whatever picture happens to arrive first, so
+    two rips of near-identical content gated differently depending only on
+    where the window started (HIGH_SCHOOL_MUSICAL skipD=0.0% vs PRI0NNW1
+    skipD=85.8%, same median, same p10, same p90). A peak needs no seed: it
+    starts at zero, the first picture of each type sets it, and it only ever
+    rises on real content.
+
+    Decay runs only on ACCEPTED pictures, so a long fade cannot walk the
+    reference down to meet itself and start trusting black frames again --
+    the failure that makes a fixed threshold break on a longer fade.
+    """
+    peak = {}
+    def g(p):
+        k = peak.get(p['ct'], 0)
+        ok = p['size'] >= (k >> shift)
+        if ok:
+            peak[p['ct']] = max(p['size'], k - (k >> decay))
+        return ok
+    return g
+
+
+def warm_gate(shift=3, ew=4, warm=16):
+    """CANDIDATE F -- D with the bootstrap fixed, which is the whole difference
+    between D being right and D being lucky.
+
+    D seeded its mean from the FIRST picture of each coding type, so the gate's
+    behaviour depended on where the window happened to start: two rips of
+    near-identical content (HIGH_SCHOOL_MUSICAL, PRI0NNW1 -- same median 318 B,
+    same p10 288 B, same p90 31,45x B) came out skipping 0.0% and 85.8%.
+
+    F warms up instead. For the first `warm` pictures of a coding type nothing
+    is gated and the mean tracks EVERY picture, so it converges on what this
+    stream actually looks like. After that the mean updates only on ACCEPTED
+    pictures, so a long fade cannot walk the reference down to meet itself.
+
+    That distinction is the entire point: APOLLO_13's 384 B pictures are tiny
+    RELATIVE TO THEIR OWN STREAM (median 17,704 B), while HIGH_SCHOOL_MUSICAL's
+    318 B pictures ARE the stream. An absolute threshold cannot tell those
+    apart, and the core plays VCD/SVCD too, where the whole scale shifts again.
+    """
+    avg, seen = {}, {}
+    def g(p):
+        ct = p['ct']
+        n = seen.get(ct, 0)
+        a = avg.get(ct, p['size'])
+        if n < warm:                        # warm-up: gate nothing, learn scale
+            seen[ct] = n + 1
+            avg[ct] = a - (a >> ew) + (p['size'] >> ew)
+            return True
+        ok = p['size'] >= (a >> shift)
+        if ok:
+            avg[ct] = a - (a >> ew) + (p['size'] >> ew)
         return ok
     return g
 
@@ -227,6 +302,10 @@ def main():
                     help="contiguous sectors to walk (~8 MB at 2048 B)")
     ap.add_argument('--csv', default=None, help="write the per-picture trace")
     ap.add_argument('--xtab', action='store_true', help="flag cross-tabulation")
+    ap.add_argument('--brief', action='store_true',
+                    help="one machine-readable line per disc, for library "
+                         "regression sweeps: the gate must never ADD film "
+                         "transitions relative to the baseline")
     ap.add_argument('--sweep', default=None,
                     help="comma-separated candidate-A thresholds to compare, "
                          "e.g. 512,768,1024,2048")
@@ -290,13 +369,36 @@ def main():
         return 0
 
     start = int(total * a.start_frac)
-    pics = window(start, a.sectors)
+    coded = parse_pictures(b''.join(
+        d for d in (video_payload(nav.sec(sector_at(start + k)))
+                    for k in range(a.sectors)
+                    if sector_at(start + k) is not None) if d))
+    pics = display_order(list(coded))
     if not pics:
         print("no pictures found")
         return 1
 
     span = sum(duration(p) for p in pics)
     sizes = [p['size'] for p in pics]
+
+    if a.brief:
+        b = simulate(pics)
+        g = simulate(pics, gate=lambda p: p['size'] >= a.small)
+        dg = rel_gate()
+        d = simulate(pics, gate=dg)
+        tiny = sum(1 for p in pics if p['size'] < a.small)
+
+        def flag(r):
+            return ('WORSE' if r['film_flips'] > b['film_flips'] else
+                    ('better' if r['film_flips'] < b['film_flips'] else 'same'))
+        print(f"{os.path.basename(a.iso)[:44]:44s} VTS{vts:02d} "
+              f"pics={len(pics):5d} p10={pct(sizes,0.10):6d} "
+              f"tinyA={100*tiny/len(pics):5.1f}% "
+              f"skipD={100*d['skipped']/len(pics):5.1f}% "
+              f"base={b['film_flips']:2d} A={g['film_flips']:2d} D={d['film_flips']:2d} "
+              f"A:{flag(g):6s} D:{flag(d)}")
+        return 0
+
     print(f"{os.path.basename(a.iso)}  VTS{vts:02d}  sectors {start}..{start+a.sectors} "
           f"of {total}")
     print(f"  {len(pics)} pictures, {span:.1f} s displayed, "
@@ -317,7 +419,10 @@ def main():
          lambda p: p['size'] >= a.small),
         ("B  frame_pred_frame_dct", lambda p: p['fpfd'], None),
         ("C  A + B", lambda p: p['fpfd'], lambda p: p['size'] >= a.small),
-        ("D  relative, per coding type", None, rel_gate()),
+        ("D  relative mean, per type", None, rel_gate()),
+        ("E  relative peak, per type", None, peak_gate()),
+        ("F  relative mean + warm-up", None, warm_gate()),
+        ("F' same, gate in CODED order", None, 'coded'),
     ]
     if a.sweep:
         print(f"\n  {'threshold':>10} {'film flips':>11} {'skipped':>8} "
@@ -325,6 +430,7 @@ def main():
         cands = [(f"abs {x}", (lambda p, t=int(x): p['size'] >= t))
                  for x in a.sweep.split(',')]
         cands += [(f"rel >>{k}", rel_gate(shift=k)) for k in (2, 3, 4, 5)]
+        cands += [(f"peak >>{k}", peak_gate(shift=k)) for k in (2, 3, 4, 5)]
         for th, gt in cands:
             r = simulate(pics, gate=gt)
             first = next((f"{t:.1f}s" for t, e in r['events'] if e == 'FILM+'),
@@ -336,6 +442,9 @@ def main():
 
     print(f"\n  {'rule':34s} {'film flips':>11} {'skipped':>8}  events")
     for name, prog_of, gate in rules:
+        if gate == 'coded':
+            annotate(coded, warm_gate())
+            gate = (lambda p: p['inf'])
         r = simulate(pics, prog_of, gate)
         ev = " ".join(f"{t:.1f}{e}" for t, e in r['events'][:12])
         if len(r['events']) > 12:
