@@ -557,13 +557,15 @@ int dvd_css_open_image(const char *path)
 		return 0;
 	}
 
-	// Detect scrambling from the bitstream (not libdvdcss's ioctl-dependent
-	// is_scrambled, which reads 0 on an image file even for an encrypted disc — the
-	// bug that made encrypted ISOs fall through to CSS ENCRYPTED). Log both so a
-	// mismatch is visible in /tmp/dvdcss.log.
-	int scrambled = image_is_scrambled();
-	css_log("image %s: %d VOBs, bitstream scrambled=%d (lib is_scrambled=%d)",
-	        path, g_nvobs, scrambled, p_scram ? p_scram(css) : -1);
+	// libdvdcss's own dvdcss_is_scrambled() is authoritative and — HW-confirmed —
+	// reliable on an image FILE (reads 1 for a genuinely encrypted disc, where the
+	// raw-bitstream heuristic missed it). Prefer it; fall back to the heuristic only if
+	// the lib is too old to expose it. Log both so any divergence stays visible.
+	int lib_scr = p_scram ? (p_scram(css) != 0) : -1;
+	int bs_scr  = image_is_scrambled();
+	int scrambled = (lib_scr >= 0) ? lib_scr : bs_scr;
+	css_log("image %s: %d VOBs, scrambled=%d (lib=%d bitstream=%d)",
+	        path, g_nvobs, scrambled, lib_scr, bs_scr);
 	if (!scrambled)
 	{
 		// Decrypted ISO -> keep the fast direct-file mount (no per-sector libdvdcss).

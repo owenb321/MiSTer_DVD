@@ -90,15 +90,23 @@ libdvdcss reads image files directly (it is how VLC/mplayer play ISOs — no loo
 needed). Note: `dvd_css` holds a single handle, so physical disc and encrypted ISO are
 mutually exclusive (last mount wins) — a non-issue in normal use.
 
-**★ Scramble detection must NOT use `dvdcss_is_scrambled()` for an image (HW round 1,
-2026-08-29).** First HW test: encrypted ISOs fell through to `CSS ENCRYPTED` — the gate
-`dvdcss_is_scrambled()` reads **0 on an image file** even for a genuinely encrypted disc,
-because it depends on a drive ioctl (`READ DVD STRUCTURE`) a file has no answer for. Fix:
-`image_is_scrambled()` reads a VOB payload sector raw and checks the **clear PES
-`scrambling_control` bits** (the NAV pack / VOBU sector 0 is never scrambled, so it
-samples later sectors). `/tmp/dvdcss.log` now logs both the bitstream verdict and the lib
-verdict so a divergence is visible. Physical discs were unaffected (that path never gated
-on `is_scrambled`). **HW-verify the fix on a real encrypted rip.**
+**★ Two real bugs found bringing encrypted ISOs up on HW (round 1, 2026-08-29):**
+1. **Storage-relative mount path.** MiSTer passes `user_io_file_mount` a storage-relative
+   name (`cifs/games/DVD/x.iso`), not an absolute path, so `stat()`/`dvdcss_open()` failed
+   (`stat failed` in the log) and the mount fell through to `CSS ENCRYPTED`. Fix: resolve
+   via `getFullPath()` (handles the CIFS/USB prefix) before touching the file. The
+   framework's own `FileOpenEx` does this internally, which is why *decrypted* ISOs worked.
+2. **Scramble detection.** With the path fixed, the log showed `scrambled=0
+   (lib is_scrambled=1)` — i.e. **`dvdcss_is_scrambled()` is correct and reliable on an
+   image file**, and the home-grown raw-bitstream heuristic (`image_is_scrambled()`) was
+   the wrong one. Fix: trust `dvdcss_is_scrambled()` as primary; keep the bitstream check
+   only as a fallback for a lib too old to expose it. (Earlier notes here wrongly blamed
+   `is_scrambled` — that was the path bug masquerading.)
+
+`/tmp/dvdcss.log` logs both verdicts per mount. Physical discs were unaffected by both.
+**HW-verify** that with these in, an encrypted ISO cracks + plays (watch for the separate
+`DVDCSS_METHOD`-on-a-file question: if it now claims the mount but still shows
+`CSS ENCRYPTED`, per-title key cracking on a file needs `DVDCSS_METHOD=title`).
 
 **CSS key cache — legal guardrail.** Recovered keys are cached at
 `/media/fat/dvdcss/cache` (device-local, runtime-generated). Caching adds no legal
