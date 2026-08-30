@@ -4,7 +4,8 @@
 # Bundles the three things a user installs into ONE zip that extracts to the SD-card
 # root (/media/fat): the core .rbf, the custom Main (MiSTer_DVDcss — physical discs +
 # encrypted ISOs), and Scripts/install_dvdcss.sh (so the libdvdcss installer lands in
-# the MiSTer Scripts menu automatically). It BUILDS nothing — point it at an already-
+# the MiSTer Scripts menu automatically, alongside the drive-region tool). It
+# BUILDS nothing — point it at an already-
 # built .rbf and MiSTer_DVDcss:
 #
 #   ./build_release.sh --release                 # -> releases/DVD_YYYYMMDD.rbf
@@ -60,6 +61,9 @@ fi
 INSTALLER="$REPO/main/Scripts/install_dvdcss.sh"
 [ -f "$INSTALLER" ] || { echo "!! missing $INSTALLER" >&2; exit 1; }
 
+REGIONTOOL="$REPO/main/Scripts/set_dvd_region.sh"
+[ -f "$REGIONTOOL" ] || { echo "!! missing $REGIONTOOL" >&2; exit 1; }
+
 command -v python3 >/dev/null 2>&1 || { echo "!! 'python3' not found on PATH" >&2; exit 1; }
 
 [ -n "$OUT" ] || OUT="$REPO/releases/MiSTer_DVD_v${VER}.zip"
@@ -78,6 +82,8 @@ cp "$RBF"       "$STAGE/${RBF_DIR:+$RBF_DIR/}$(basename "$RBF")"
 cp "$MAIN_BIN"  "$STAGE/MiSTer_DVDcss"
 cp "$INSTALLER" "$STAGE/Scripts/install_dvdcss.sh"
 chmod +x "$STAGE/Scripts/install_dvdcss.sh"
+cp "$REGIONTOOL" "$STAGE/Scripts/set_dvd_region.sh"
+chmod +x "$STAGE/Scripts/set_dvd_region.sh"
 
 RBF_SHOWN="${RBF_DIR:+$RBF_DIR/}$(basename "$RBF")"
 cat > "$STAGE/DVD_INSTALL.txt" <<EOF
@@ -88,6 +94,7 @@ MiSTer DVD Player v${VER}
      ${RBF_SHOWN}   - the core (in ${RBF_DIR:-the SD root}; move it elsewhere if you prefer)
      MiSTer_DVDcss         - custom Main (physical discs + encrypted ISOs); keep at the root
      Scripts/install_dvdcss.sh
+     Scripts/set_dvd_region.sh
 
 2. To play PHYSICAL discs or ENCRYPTED ISOs, add to /media/fat/MiSTer.ini
    (add the section; do NOT replace the file):
@@ -101,7 +108,13 @@ MiSTer DVD Player v${VER}
    Run "install_dvdcss" once from the MiSTer Scripts menu to fetch it. Unencrypted
    discs and already-decrypted ISOs need nothing.
 
-4. Launch DVD from the MiSTer menu.
+4. PHYSICAL DISCS ONLY: a drive with no region set makes every disc slow to start,
+   because the CSS keys have to be cracked instead of read from the drive. Run
+   "set_dvd_region" from the Scripts menu to see the drive's region and, if you
+   want, set it. Read its warnings first - a drive allows only about five region
+   changes, ever, and the region cannot be un-set.
+
+5. Launch DVD from the MiSTer menu.
 EOF
 
 rm -f "$OUT"
@@ -126,10 +139,13 @@ echo
 echo "Attach these to the GitHub release (zip for a full install; bare files for"
 echo "users who just want one piece — most want only the .rbf):"
 echo "  $OUT"
-echo "      ^ complete install: core + MiSTer_DVDcss + Scripts/install_dvdcss.sh"
+echo "      ^ complete install: core + MiSTer_DVDcss + Scripts/ (dvdcss installer,"
+echo "        drive-region tool)"
 echo "  $RBF"
 echo "      ^ core only (ISO-only users; physical disc is opt-in)"
 echo "  $MAIN_BIN"
 echo "      ^ custom Main only (physical discs + encrypted ISOs); needs [DVD] main="
 echo "  $INSTALLER"
 echo "      ^ libdvdcss installer (also inside the zip's Scripts/)"
+echo "  $REGIONTOOL"
+echo "      ^ DVD drive-region tool (also inside the zip's Scripts/)"

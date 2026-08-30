@@ -308,12 +308,47 @@ loaded without libdvdcss present, the core shows `CSS ENCRYPTED` and mutes rathe
 playing static — your cue to run the script.
 
 The first time an encrypted disc's keys are needed they may take a few seconds to
-recover (longer with no drive-region set, or for an ISO where they are always cracked
-from the data); recovered keys are cached under `/media/fat/dvdcss/cache`, so the same
-disc is instant next time.
+recover; recovered keys are cached under `/media/fat/dvdcss/cache`, so the same disc is
+instant next time. For a **physical disc**, how long that first recovery takes depends on
+whether the drive has a region set — see step 4. For an **ISO** the keys are always
+cracked from the data, so the region makes no difference there.
 
 Cracking CSS may be regulated where you live; check the laws that apply to you. This
 project neither distributes libdvdcss nor contains any CSS circumvention code.
+
+### 4. Set the drive region (physical discs — makes them start faster)
+
+A USB DVD drive ships with **no region set**. In that state the drive refuses the CSS key
+exchange, so libdvdcss has to crack every key out of the disc data — that is the
+several-second wait before a title starts. Set the drive's region to match your discs and
+the drive hands the keys over directly, so playback starts almost immediately. (An
+encrypted *ISO* is always cracked from the data, so this only affects physical discs.)
+
+**From the MiSTer** — run **set_dvd_region** from the **Scripts** menu (it's in the
+release zip; otherwise grab the `set_dvd_region.sh` asset and drop it in
+`/media/fat/Scripts/`). It shows the drive's current region and how many changes it has
+left, and setting one is a menu you can drive with the **D-pad and B1** — no keyboard
+needed. Nothing changes until you confirm, and the cursor starts on *Cancel*. Run it with
+no disc playing, since the core holds the drive open while one is mounted.
+
+> ⚠️ **A region change is close to permanent.** Drives allow only a handful of user
+> changes — typically five — and when the counter runs out the region is locked to
+> whatever was set last. **There is no un-set**: a region can only be changed to another
+> region, never back to none, and each change costs one from the counter. The counter
+> lives in the drive's own firmware, so it is not reset by a different PC, a reformat, or
+> a different operating system. Pick the region matching the discs you own and set it once.
+
+Region codes: **1** US/Canada · **2** Europe/Japan/Middle East/South Africa · **3** SE Asia
+· **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia · **6** China.
+
+If you'd rather do it on a PC, the same setting is reachable there — on **Linux** with
+`regionset` (`sudo regionset /dev/sr0`, which prints the current region and remaining
+changes, then prompts), and on **Windows** through **Device Manager → DVD/CD-ROM drives →**
+the drive **→ Properties → DVD Region**, which shows the remaining count before you commit.
+The region travels with the drive, so a drive set on a PC arrives at the MiSTer ready.
+
+Note that a drive set to one region and asked to play a disc from *another* still falls
+back to cracking — matching the drive to your library is what makes discs start quickly.
 
 The design and current status are in [main/README.md](main/README.md) and
 [docs/physical_disc.md](docs/physical_disc.md).
@@ -503,7 +538,8 @@ cross-compiles for the board's ARM CPU. The overlay, the `user_io.cpp` integrati
 the Docker image are documented in [main/README.md](main/README.md).
 
 Once you have a `.rbf` (`build_release.sh --release`) and `MiSTer_DVDcss`,
-`tools/package_release.sh` assembles them plus `Scripts/install_dvdcss.sh` into a
+`tools/package_release.sh` assembles them plus the two `Scripts/` tools
+(`install_dvdcss.sh`, `set_dvd_region.sh`) into a
 ready-to-extract `releases/MiSTer_DVD_v<ver>.zip` (and prints the individual files to
 attach to a GitHub release alongside the zip).
 
