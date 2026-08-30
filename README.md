@@ -119,7 +119,17 @@ HUD and seek bar.
 
 ## Getting started
 
-### 1. Rip the disc
+### 1. Get the core
+
+Download the latest build from the
+[**Releases page**](https://github.com/owenb321/MiSTer_DVD/releases/latest) and extract
+the zip to the **root** of your MiSTer SD card. That installs the core, and — for
+physical discs and encrypted ISOs — the custom Main and the libdvdcss installer (see
+[Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos) to turn those
+on). If you only want ISO playback, the bare `.rbf` release asset is all you need.
+Launch **DVD** from the MiSTer menu.
+
+### 2. Rip the disc
 
 The core needs a **decrypted** DVD-Video image. Most commercial discs are CSS-encrypted,
 so a plain `dd` or disc-image copy will not work — it produces a green-screening picture
@@ -148,7 +158,7 @@ rip. A ripper that transcodes to a single title will lose the menus.
 > which needs no PC decrypt step, but the **first** play of each disc pauses a few seconds
 > to recover its keys. Those keys are then cached, so it is only ever slow once per disc.
 
-### 2. Load it
+### 3. Load it
 
 Put the `.iso` anywhere the MiSTer file browser can reach it and select it from the
 core's `Load Video` entry. The core also accepts bare `.VOB`, `.mpg` and `.m2v` streams,
@@ -218,8 +228,10 @@ uses, so the FPGA side is unchanged. It's entirely optional and additive: withou
 
 ### 1. Install the binary
 
-Build `MiSTer_DVDcss` (see [Building from source](#building-from-source)) or use a
-released copy, and put it at the SD-card root:
+If you extracted the release zip ([Get the core](#getting-started)), `MiSTer_DVDcss` is
+already at your SD-card root — skip to step 2. Otherwise grab the `MiSTer_DVDcss` release
+asset (or build it — see [Building from source](#building-from-source)) and put it at the
+SD-card root:
 
 ```
 /media/fat/MiSTer_DVDcss
@@ -250,11 +262,9 @@ at runtime from a copy you provide. Unencrypted discs and already-decrypted ISOs
 nothing. **This is the piece that lets a drive-less user play encrypted ISOs directly** —
 install it and a raw rip decrypts as it plays.
 
-Install it from the MiSTer **Scripts** menu with the bundled downloader:
-
-```
-Scripts/install_dvdcss.sh
-```
+The release zip puts the installer in your MiSTer **Scripts** menu — just run
+**install_dvdcss** there. (Didn't use the zip? Grab the `install_dvdcss.sh` asset and
+drop it in `/media/fat/Scripts/`.)
 
 It fetches a prebuilt **glibc/armhf** `libdvdcss.so.2` and installs it to
 `/media/fat/dvdcss/libdvdcss.so.2` (override the download source with `DVDCSS_URL=...`,
@@ -448,6 +458,11 @@ The result is `main/.build/MiSTer_DVDcss`. The script fetches stock Main_MiSTer 
 pinned commit, copies the `main/` overlay in, patches `user_io.cpp`/`Makefile`, and
 cross-compiles for the board's ARM CPU. The overlay, the `user_io.cpp` integration, and
 the Docker image are documented in [main/README.md](main/README.md).
+
+Once you have a `.rbf` (`build_release.sh --release`) and `MiSTer_DVDcss`,
+`tools/package_release.sh` assembles them plus `Scripts/install_dvdcss.sh` into a
+ready-to-extract `releases/MiSTer_DVD_v<ver>.zip` (and prints the individual files to
+attach to a GitHub release alongside the zip).
 
 ## Licensing
 
