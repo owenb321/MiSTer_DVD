@@ -883,5 +883,42 @@ discriminate them before any code is written:
    no mid-title switch at all. If the offset disappears, candidate A. If it persists, the
    switch is innocent and candidate B stands.
 
+### 14.8 ✅ DISCRIMINATED (HW, 2026-08-30): the INITIAL STC anchor, not the switch
+
+Both A/Bs run:
+
+| test | result | what it establishes |
+|---|---|---|
+| chapter skip inside the title | **clears the 800 ms** | a re-anchor fixes it |
+| `Film 24p = On` (no mid-title switch at all) | **same 800 ms** | the switch is INNOCENT |
+
+Test 2 kills candidate A outright. Test 1 does **not** support A either, and the way §14.7
+framed it was wrong: it read "seek clears it" as evidence for a switch-established fault,
+but a seek **flushes the VBUF**, which collapses the parse front onto the screen and only
+then re-anchors. Clearing on seek is exactly what candidate B predicts. The dichotomy was
+too crude — B has both a "baked in once" and a "continuously regenerated" reading, and the
+tests select the first.
+
+**Verdict: the fault is baked in at the FIRST STC anchor of a playback.** The STC anchors
+on the demux parse position, which at start-of-playback sits ~800 ms ahead of the first
+displayed picture, and the audio is slaved to that clock for the rest of the title. Every
+later re-anchor (seek, chapter jump) happens after a flush, when parse ≈ screen, which is
+why they all look correct and only the opening is wrong.
+
+This resolves the T2-shaped hole that blocked §14.7: the offset is set by **how deep the
+VBUF happens to be at the moment of the first anchor**, which is a per-disc, per-mount
+property (bitrate and leading fill), not a property of having a video-coded leader. T2 and
+APOLLO_13 both have leaders; they simply anchor at different buffer depths.
+
+**The fix is already written and HW-proven, and is not merged.** The archived
+early-detect investigation carried a self-contained av_sync change that anchors the STC on
+the SCREEN rather than the parse front, by carrying a per-picture PTS through
+`motcomp_picbuf` (the same fourth-attribute route §14.3 uses for the evidence verdict).
+On hardware it moved overlay row 24 from **−1829 ms to −340 ms**. It belongs on its own
+branch — it is a separate feature with its own benches (`av_sync_screen_tb`,
+`av_sync_rate_tb`, `pts_track_tb`), and it has its own residual: that same round concluded
+the remaining −340 ms is the buffer DEPTH rather than the anchor, so expect this to cut
+the 800 ms substantially without necessarily closing it to zero.
+
 `A/V Offset` can mask the symptom but must not be treated as the answer — it binds at
 (re)start events only, and the +100 ms default is already the measured NTSC-film null.
