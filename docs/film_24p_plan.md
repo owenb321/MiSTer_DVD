@@ -807,6 +807,10 @@ Fixtures are cut from a real disc and are **not committed** (`bench/dvd/test_vob
 gitignored); set `DVD_ISO_DIR` and the script regenerates them, and **skips** rather than
 silently passing without it.
 
+Build: `DVD_filmevidence_20260830_1720.rbf`, pinned SEED 5 on the first roll —
+clk_dec **93.01 MHz @100C / 89.3 MHz @-40C** against the 86.0 gate, 36,341 → **36,714
+ALMs (87 % → 88 %)**, RAM and DSP unchanged. The gate costs ~373 ALMs.
+
 ### 14.5 Honest residuals
 
 - On **PRI0NNW1** the *video* verdict is delayed 1.5 s → 5.2 s. That verdict only drives
