@@ -572,10 +572,18 @@ parameter CONF_STR = {
     "O5,Audio,On,Off;",
     // Audio Out: Decode = AC-3/LPCM decoded in fabric to HDMI PCM (default).
     // Passthru = the UNDECODED AC-3/DTS frames are wrapped in IEC 61937 and
-    // sent as a bitstream over optical S/PDIF for an AV receiver to decode
-    // (Path B; enables DTS, which has no in-fabric decoder). HDMI PCM is muted
-    // in Passthru. status[6]. See docs/iec61937.md.
-    "O6,Audio Out,Decode HDMI,Passthru SPDIF;",
+    // sent as a bitstream for an AV receiver to decode (Path B; enables DTS,
+    // which has no in-fabric decoder). Always out optical S/PDIF, and ALSO over
+    // HDMI when MiSTer_DVDcss has put the ADV7513 in IEC958-direct mode and the
+    // sink advertises AC-3/DTS; otherwise HDMI stays muted as before.
+    // status[6]. See docs/iec61937.md and docs/hdmi_bitstream.md.
+    //
+    // ★ OX (not O) marks it "also handled by the HPS": the bit still reaches the
+    // core exactly as before, but Main sees the declaration in parse_config and
+    // learns this build HAS the HDMI bitstream path. A core without it never
+    // declares OX6, so Main never reconfigures the chip for a core that cannot
+    // drive it. Bit layout is unchanged, so no CONF_STR "v,N" bump is needed.
+    "OX6,Audio Out,Decode PCM,Passthru (SPDIF+HDMI);",
     // SPDIF Byte Order: flips the 61937 payload byte packing. If the receiver
     // recognises the format (e.g. "Dolby D"/"DTS") but plays static, toggle
     // this. status[7]. Only meaningful in Passthru.

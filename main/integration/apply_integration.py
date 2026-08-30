@@ -193,4 +193,137 @@ if ' -ldl ' not in mk and '-ldl' not in mk:
 else:
     print("[integration] Makefile: -ldl already present")
 
+# =============================================================================
+# HDMI IEC 61937 bitstream (steps 12-21). See INTEGRATION.md.
+# The overlay's FIRST edits to video.cpp / video.h / cfg.* — re-verify these
+# specifically on a MAIN_MISTER_REF bump.
+# =============================================================================
+
+# ---------------------------------------------------------------- user_io.cpp
+u = read(uio_path)
+
+# 12. include
+u = insert_after(u, '#include "support/dvd/dvd_phys.h"',
+    '#include "support/dvd/dvd_hdmi_audio.h"\n',
+    12, 'support/dvd/dvd_hdmi_audio.h')
+
+# 13. poll tick (reuses the step-7 tick site)
+u = insert_after(u, 'dvd_phys_tick();   // auto-mount / unmount the optical drive',
+    '\tdvd_hdmi_audio_tick();  // ADV7513 non-PCM mode + the cfg[14] ack\n',
+    13, 'dvd_hdmi_audio_tick();')
+
+# 14. the ack into the cfg[] word sent to the core
+u = insert_after(u, 'if (vga_fb) map |= CONF_VGA_FB;',
+    '\tif (dvd_hdmi_audio_ack()) map |= CONF_DVD_HDMI_BS;   // dvd:hdmibs\n',
+    14, '// dvd:hdmibs')
+
+# 15. capability declaration off the OX arm. The core marks Audio Out as OX6 so
+# Main learns the build HAS the HDMI tap; a core without it never declares, and
+# we never reconfigure the chip for a core that cannot drive it.
+u = insert_after(u, 'printf("found OX option: %s: %d\\n", p, x);',
+    '\t\t\t\tif (is_dvd() && p[2] == \'6\') dvd_hdmi_audio_declare();\n',
+    15, 'dvd_hdmi_audio_declare()')
+
+write(uio_path, u)
+print("[integration] user_io.cpp patched (hdmi bitstream)")
+
+# ---------------------------------------------------------------- user_io.h
+h = read(h_path)
+# 16. cfg[] bit 14. Stock defines up to CONF_DIRECT_VIDEO2 (bit 13); 14 and 15
+# are the only free bits, so this is the last cheap one - if a future stock
+# version claims it, this step must move rather than silently collide.
+h = insert_after(h, '#define CONF_DIRECT_VIDEO2      0b0010000000000000',
+    '#define CONF_DVD_HDMI_BS        0b0100000000000000\n',
+    16, 'CONF_DVD_HDMI_BS')
+write(h_path, h)
+print("[integration] user_io.h patched (hdmi bitstream)")
+
+# ---------------------------------------------------------------- video.h
+vh_path = os.path.join(ROOT, "video.h")
+vh = read(vh_path)
+# 17. exports
+vh = insert_after(vh, 'int   video_get_edid(uint8_t **buf, int *size);',
+    'void  hdmi_config_set_audio(int bitstream);   // dvd:hdmibs\n'
+    'int   video_hdmi_config_generation(void);\n',
+    17, 'hdmi_config_set_audio')
+write(vh_path, vh)
+print("[integration] video.h patched")
+
+# ---------------------------------------------------------------- video.cpp
+vc_path = os.path.join(ROOT, "video.cpp")
+vc = read(vc_path)
+
+# 18. generation counter storage, with the other file statics
+vc = insert_after(vc, 'static int edid_version = 0;',
+    'static int hdmi_cfg_generation = 0;   // dvd:hdmibs\n',
+    18, 'hdmi_cfg_generation')
+
+# 19. bump it whenever the full init rewrites the audio block. Anchored on the
+# write loop's header, NOT on "hdmi_config_set_csc();" - that string also occurs
+# later in the file and insert_after takes the FIRST match, which would land the
+# bump in the wrong function.
+vc = insert_before(vc, 'for (uint i = 0; i < sizeof(init_data); i += 2)',
+    'hdmi_cfg_generation++;   // dvd:hdmibs - audio block is about to revert to PCM\n',
+    19, 'hdmi_cfg_generation++')
+
+# 20. the audio-only register writer
+vc = insert_before(vc, 'static void hdmi_config_set_hdr()', r"""
+// dvd:hdmibs - switch the ADV7513's audio input between PCM I2S and IEC958
+// direct (IEC 61937 bitstream), writing ONLY the audio registers.
+//
+// Deliberately not a hdmi_config_init() call: that rewrites ~50 registers plus
+// the CSC and would blank the picture on every Audio Out toggle.
+//
+// IEC958-direct (0x0C[1:0]=3) is how the mainline Linux adv7511 driver carries
+// IEC958 subframe data, and it is the mode where channel status travels inside
+// the subframe - so the non-PCM flag stays dynamic exactly as it is on S/PDIF,
+// instead of being pinned high for the whole session.
+void hdmi_config_set_audio(int bitstream)
+{
+	if (hdmi_main_fd < 0) return;
+
+	uint8_t audio_data[] = {
+		0x0A, 0x00,                                  // [6:4] audio select = I2S
+		0x0C, (uint8_t)(bitstream ? 0x07 : 0x04),    // [2] I2S0 en; [1:0] 3=IEC958 direct, 0=standard
+		0x14, 0x02,                                  // audio word length = 16 bit
+		0x15, (uint8_t)((cfg.hdmi_audio_96k ? 0x80 : 0x00) | 0x20),   // sample rate
+		0x73, (uint8_t)(bitstream ? 0x00 : 0x01),    // InfoFrame CC: 0 = refer to stream header
+	};
+
+	for (uint i = 0; i < sizeof(audio_data); i += 2)
+	{
+		int res = i2c_smbus_write_byte_data(hdmi_main_fd, audio_data[i], audio_data[i + 1]);
+		if (res < 0) printf("i2c: audio write error (%02X %02X): %d\n",
+		                    audio_data[i], audio_data[i + 1], res);
+	}
+	printf("ADV7513: audio input set to %s\n", bitstream ? "IEC958 direct (bitstream)" : "PCM I2S");
+}
+
+int video_hdmi_config_generation(void)
+{
+	return hdmi_cfg_generation;
+}
+
+""", 20, 'hdmi_config_set_audio')
+
+write(vc_path, vc)
+print("[integration] video.cpp patched")
+
+# ---------------------------------------------------------------- cfg.h / cfg.cpp
+cfgh_path = os.path.join(ROOT, "cfg.h")
+ch = read(cfgh_path)
+# 21. ini field. 0 = auto (EDID-gated), 1 = off, 2 = force.
+ch = insert_after(ch, '\tuint8_t hdmi_audio_96k;',
+    '\tuint8_t dvd_hdmi_bitstream;   // dvd:hdmibs 0=auto 1=off 2=force\n',
+    21, 'dvd_hdmi_bitstream')
+write(cfgh_path, ch)
+
+cfgc_path = os.path.join(ROOT, "cfg.cpp")
+cc = read(cfgc_path)
+cc = insert_after(cc, '{ "HDMI_AUDIO_96K", (void*)(&(cfg.hdmi_audio_96k)), UINT8, 0, 1 },',
+    '\t{ "DVD_HDMI_BITSTREAM", (void*)(&(cfg.dvd_hdmi_bitstream)), UINT8, 0, 2 },\n',
+    21, 'DVD_HDMI_BITSTREAM')
+write(cfgc_path, cc)
+print("[integration] cfg.h/cfg.cpp patched")
+
 print("[integration] done")
