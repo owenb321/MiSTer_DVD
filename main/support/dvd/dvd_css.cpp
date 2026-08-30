@@ -21,7 +21,8 @@
 #include <linux/fs.h>
 
 #include "dvd_css.h"
-#include "../../menu.h"   // ProgressMessage() — on-screen feedback during key crack
+#include "../../menu.h"      // ProgressMessage() — on-screen feedback during key crack
+#include "../../file_io.h"   // getFullPath() — resolve MiSTer's storage-relative mount path
 
 // Status logging: to stdout and to /tmp/dvdcss.log (the latter so the reason for
 // a failed mount is visible over SSH, where the core's stdout is not).
@@ -527,15 +528,21 @@ int dvd_css_open_image(const char *path)
 	// CSS ENCRYPTED notice (raw scrambled sectors), same as before this existed.
 	if (!load_library()) { css_log("image %s: no libdvdcss -> direct path", path); return 0; }
 
+	// MiSTer passes a storage-relative path (e.g. "cifs/games/DVD/x.iso"); stat() and
+	// dvdcss_open() need the absolute path. getFullPath() returns a shared static buffer,
+	// so copy it before any later getFullPath call clobbers it.
+	char full[1024];
+	snprintf(full, sizeof(full), "%s", getFullPath(path));
+
 	struct stat st;
-	if (stat(path, &st) != 0 || st.st_size <= 0) { css_log("image %s: stat failed", path); return 0; }
+	if (stat(full, &st) != 0 || st.st_size <= 0) { css_log("image %s: stat(%s) failed", path, full); return 0; }
 
 	// Persist cracked keys per disc (shared with the drive path).
 	mkdir("/media/fat/dvdcss/cache", 0755);
 	setenv("DVDCSS_CACHE", "/media/fat/dvdcss/cache", 1);
 
-	dvdcss_t h = p_open(path);
-	if (!h) { css_log("dvdcss_open(image) FAILED: %s", path); return 0; }
+	dvdcss_t h = p_open(full);
+	if (!h) { css_log("dvdcss_open(image) FAILED: %s", full); return 0; }
 
 	css = h;
 	css_size = (uint64_t)st.st_size;
