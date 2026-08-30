@@ -83,7 +83,8 @@ RBF_SHOWN="${RBF_DIR:+$RBF_DIR/}$(basename "$RBF")"
 cat > "$STAGE/DVD_INSTALL.txt" <<EOF
 MiSTer DVD Player v${VER}
 
-1. Extract this zip to the ROOT of your MiSTer SD card (/media/fat). You get:
+1. Extract this zip to the ROOT of your MiSTer SD card. If you copy files over the
+   network (SSH/SFTP) instead of pulling the card, that root is /media/fat. You get:
      ${RBF_SHOWN}   - the core (in ${RBF_DIR:-the SD root}; move it elsewhere if you prefer)
      MiSTer_DVDcss         - custom Main (physical discs + encrypted ISOs); keep at the root
      Scripts/install_dvdcss.sh

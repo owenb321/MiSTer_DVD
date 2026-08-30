@@ -132,7 +132,9 @@ is opt-in and additive. See
 
 Download the latest build from the
 [**Releases page**](https://github.com/owenb321/MiSTer_DVD/releases/latest), extract the
-zip to the **root** of your MiSTer SD card, and launch **DVD** from the MiSTer menu.
+zip to the **root of your MiSTer SD card** — that's **`/media/fat`** if you copy it over
+the network (SSH/SFTP) rather than pulling the card — and launch **DVD** from the MiSTer
+menu.
 
 What you install depends on what you want to play — the extra piece is optional and
 additive:
