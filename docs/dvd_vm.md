@@ -502,6 +502,107 @@ reader never latched).
 own VTSM → `best_menu_vts` VTSM Root → VMGM Title → RSM resume / auto title; a
 failed FP or title jump goes to the auto title once (`FB_GAVEUP` stops error loops).
 
+### POST-only PGC dispatch — a 0-cell PGC runs its POST (2026-08-30, `feature/postonly-pgc-and-fosl`)
+
+**The bug (user-submitted discs: The Residents Commercial DVD, Dinosaur Disc 1):**
+three symptoms with one cause — *"doesn't currently allow you to enter the maze"*,
+*"will choose the Play All option regardless of what option you choose"*, and
+*"Link Fails on two titles"*.
+
+**Mechanism.** These discs do not encode the destination in the button. Every button
+on the Residents main menu (VTSM vts1 PGCN 9, 4 buttons) carries the **identical**
+command `20 04 00 00 00 00 00 51` = `LinkPGCN 81`. PGC 81 has **0 cells, 0 pre-commands
+and a 20-command POST**:
+
+```
+POST[0]  g[3] = 0
+POST[1]  g[0] = HL_BTNN          <- the ONLY carrier of the user's choice
+POST[2]  g[0] /= 0x400
+POST[3]  if (g[0] != 1) Goto 8
+POST[4]     LinkPGCN 82          (button 1)
+POST[7]  if (g[0] != 2) Goto 12
+POST[8]     LinkPGCN 83          (button 2)   ... 3 -> 84, 4 -> 85
+```
+
+So the *dispatcher is the PGC*, and SPRM8 is the only thing that distinguishes one
+button press from another. We treated every 0-cell PGC as a dead end, which killed
+PGC 81 outright: `pgc_error` → `LINK FAIL` → the fallback chain → the same
+destination for all four buttons. Dinosaur authors **26** PGCs of the identical shape
+(same authoring house: `g[3]=0; g[0]=HL_BTNN; g[0]/=0x400; if (g[0]!=k) Goto ...`).
+
+**Why we were wrong.** libdvdnav's `play_PGC()` does the opposite — a PGC with
+`nr_of_programs == 0` falls straight through to `play_PGC_post()`. A 0-cell PGC is a
+perfectly ordinary command carrier; only a 0-cell PGC with **no POST at all** is a
+genuine dead end.
+
+**The fix.** Three sites in `dvd_vm.sv` shared the "0 cells ⇒ dead end" shape — the
+`ev_loaded` `nr_pre == 0` branch, the `V_NEXT` `BLK_PRE` fall-through, and the second
+`pgc_loaded` path. Each now enters `BLK_POST` when `nr_post != 0`, and keeps the
+existing `fb = FB_VTSM` dead-end recovery when `nr_post == 0` (the TP_SW
+selector-with-no-matching-case path — see "Menu over a boot chain" — is untouched).
+
+`dvd_iso_reader.sv` needed the matching half: `S_PGC_CELLCHK` only reported a 0-cell
+PGC as a runnable command stub when `cmd_nr_pre != 0`, and its LinkPGCN-follow
+heuristic scans **PRE commands only** (`walk_idx[12:3] < nr_pre16`), so a POST-only
+stub fell through to `pgc_error`. The gate is now
+`cmd_nr_pre != 0 || cmd_nr_post != 0`.
+
+⚠ **`tools/dvd_vm_ref.py` encoded the SAME wrong assumption** (`_run_pre`: *"0-cell PGC
+whose pre fell through: dead end (RTL: pgc_error)"*), so the golden model could never
+have caught this — it agreed with the RTL because it was written from it. Fixed in
+lockstep. Worth remembering: a golden model derived from the implementation only
+catches drift, not a shared misreading of the spec. libdvdnav (`tools/bin/trace_boot`)
+is the independent oracle here, and it is what settled it.
+
+**Measured scope (505-disc sweep, 491 parseable).** ⚠ An earlier "15/122 discs (12%)"
+figure — quoted in commit dbe5d57 — was measured with a NON-RECURSIVE glob that missed
+every subdirectory, including the 20-disc `interactive/` folder (DVD games, the exact
+population that uses dispatcher PGCs). Corrected numbers:
+
+- **70 discs (14.3%)** contain a 0-cell/**0-pre**/has-POST PGC — the strict dispatcher
+  shape — Residents ×1 (the one every main-menu button routes through) and Dinosaur ×26
+  among the submitted discs; usage is heavily skewed, the heaviest single disc carrying
+  **171** and the top six 171/33/26/25/21/17.
+- **178 discs (36.3%)** contain a 0-cell PGC with **any** POST block — the full
+  population this change can affect, since the `V_NEXT` `BLK_PRE` fall-through site
+  covers 0-cell PGCs that DO have pre-commands. A third of the library touches this
+  path, which is why the sweep below matters more than the prevalence number.
+
+**Regression evidence.** A full boot sweep of all **505** discs through the golden
+model, pre-fix vs post-fix: **499 landings unchanged, 6 changed — and all six went from
+a HARD BOOT FAILURE to a healthy menu**:
+
+| # | pre-fix | post-fix | verified by |
+|---|---|---|---|
+| 1 | `pgc_error` → LINK FAIL → `post error` | VTSM vts1 PGCN 1 (97-cell menu, indefinite still) | libdvdnav |
+| 2 | LINK FAIL → `post error` | VTSM vts1 PGCN 6 cell 1 | libdvdnav |
+| 3 | LINK FAIL → `post error` | VTSM vts1 PGCN 20 cell 1 — **matches `trace_boot` exactly** | libdvdnav |
+| 4 | VTSM vts1 PGCN 8 (dead) | VTSM vts1 PGCN 6 | ✅ HW 2026-08-31 |
+| 5 | VTSM vts1 PGCN 11 (dead) | VTSM vts1 PGCN 6 cell 1 | ✅ HW 2026-08-31 |
+| 6 | VMGM PGCN 2 (dead) | VMGM PGCN 6 | ✅ HW 2026-08-31 |
+
+**Zero regressions across 505 discs.** Four of the six were silently broken at boot and
+had never been reported. (Library discs are left unnamed here by maintainer preference;
+the per-disc rows are reproducible from the sweep in `tools/`.)
+
+**Independent confirmation from a disc outside the swept set.** A TV box set that showed
+*"link failure on every menu option"* matches exactly: each of its three discs carries
+**6** of these dispatchers, byte-identical in template, and the boot landing is UNCHANGED
+by the fix (`VTSM/1/8/0`) — which is why the menu drew fine and then every option failed.
+Pre-fix every dispatcher answers `pgc_error` for every button; post-fix PGCN 33 btn1/btn2
+→ PGCN 29/30, PGCN 35 btn1 → PGCN 1, PGCN 37 btn1 → PGCN 12.
+
+**Test:** `dvd_vm_tb` **[S23]** drives the REAL Residents PGCN 81 POST bytes and
+requires buttons 1–4 to dispatch to PGCN 82/83/84/85, plus a negative case that a
+no-POST 0-cell stub still takes the dead-end chain. **Proven RED against the pre-fix
+RTL** (4 failures, one per button). `iso_reader_zerocell_tb` (the Hobbit 0-cell-stub
+boot chain) stays green, which is the guard on the reader-gate half.
+
+✅ **HW-CONFIRMED 2026-08-31** (user report, build `DVD_navfix_20260831_0029`): the
+Residents maze is enterable; Dinosaur's bonus-feature navigation, other menus and a
+minigame all work; three of the six recovered discs confirmed booting. Expected to fix
+the box set's menu failures (sim-verified above, not yet run on hardware).
+
 ## Reader coupling (`dvd_iso_reader.sv`, `vm_mode` input = O[1])
 
 - **Mount**: after the VIDEO_TS walk the reader **idles in S_DONE** (no auto-play);

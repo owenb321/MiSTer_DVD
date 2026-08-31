@@ -728,7 +728,9 @@ interactive cell** instead of falling off the end.
   00 00 01 desync trap inside PCI payloads is covered by `ps_demux_ps2_tb` (plus a
   byte-exact real-NAV-sector check).
 - **`dvd/nav_pci.sv`**: double-buffered sync BRAM holds HLI bytes 0x60..0x315; commit
-  honours `hli_ss` (1 = new → selection resets to `fosl_btnn`/1, `foac` = forced-SELECT
+  honours `hli_ss` (1 = new → selection resets to `fosl_btnn`/1 — see the
+  forced-select note below, which is where that promise was NOT kept until
+  2026-08-30, `foac` = forced-SELECT
   hop only since 2026-08-27 (the forced-ACTIVATE arm was deleted — see
   `docs/dvd_vm.md` "Failed-menu-link re-enter");
   2/3 keep selection; 0 disarms). A fetch sequencer pulls the selected button's 18-byte
@@ -828,6 +830,78 @@ arithmetic). Needs a USB keyboard attached to the MiSTer (a gamepad has no numpa
   select+activate. The easter-egg codes ARE authored as per-digit hidden auto-action
   button chains (GPRM arithmetic in the VM), so single-digit activation is exactly right.
   A true multi-digit numeric *entry* field (rare) would need an accumulator + timeout.
+
+
+### Forced select (`fosl_btnn`) must apply on a NEW HLI, not a not-armed edge (2026-08-30)
+
+**The bug (user-submitted disc: Scooby-Doo 2, "Monsters Unleashed Challenge"):** *"the
+floor maze in Wickles Manor starts the player in the wrong position (should start at
+the bottom with the player moving forward)."*
+
+**Mechanism.** The maze's HLI (VTS_02 title VOB, in-title HLI — this is a title-domain
+game like Tomb Raider, not a menu) authors **5 buttons**:
+
+| btn | rect | auto | role |
+|---|---|---|---|
+| 1 | x125–135 y92–102 | **1** | left  (`g15=3`) |
+| 2 | x217–227 y92–105 | **1** | right (`g15=4`) |
+| 3 | x167–177 y62–75  | **1** | forward (`g15=5`) |
+| 4 | x167–177 y132–145| **1** | back  (`g15=6`) |
+| 5 | x167–177 y92–105 | 0 | **neutral centre** (`LinkTopPG`) |
+
+Buttons 1–4 are `auto_action`: *landing* the highlight on one FIRES it. `fosl=5` exists
+precisely to park the highlight on the inert centre so the player is not moved before
+they press anything.
+
+`nav_pci.sv` gated the forced select on `!armed`. In that always-block `armed` reads its
+**pre-assignment** value, so `fosl` only ever applied on a not-armed → armed transition
+and was silently dropped whenever one HLI replaced another *while the highlight stayed
+armed* — which is exactly what a maze does VOBU to VOBU. The highlight therefore stayed
+on the default button 1 = **left**, auto-activated, and the player moved on entry.
+
+**The fix.** Apply `fosl` when the HLI is **NEW** (`nxt_ss == 1`), which is the same
+test the `foac` commit one line above already uses:
+
+```systemverilog
+if (nxt_fosl != 6'd0 && nxt_fosl <= nxt_btn_ns && (!armed || nxt_ss == 2'd1))
+    btn_sel <= nxt_fosl;
+```
+
+⚠ The `hli_ss == 2/3` **continuation** case must stay excluded: those VOBUs re-send the
+same HLI, and re-applying `fosl` on each one would drag the highlight back to centre
+every VOBU and fight the player's own D-pad. This disc sends the maze HLI as **both**
+`ss=1` and `ss=2`, so both halves of the rule are load-bearing.
+
+**Tests:** `nav_pci_tb` **T16** arms the 7-button MiB fixture, moves the selection to
+button 4, then delivers a NEW HLI carrying `fosl=5` while still armed and requires the
+selection to become 5 — **RED pre-fix** (stays 4). **T17** is the control: the same
+packet as an `hli_ss=2` continuation must leave the selection at 4 (passes both ways by
+design, so it guards the exclusion).
+
+⚠ **HW result 2026-08-31 — PARTIAL PASS.** Fresh entry is FIXED: the Wickles Manor
+floor maze now starts at the bottom facing forward. But **re-entry after falling into a
+trap, and the next room after clearing the first, both still land on the upper-left of
+the grid** — i.e. the highlight is still defaulting to button 1 (= left), which
+auto-activates and moves the player before any input.
+
+**Leading theory (NOT yet coded — verify before changing anything):** those entries
+deliver the maze HLI as `hli_ss == 2`, the author marking it "same button set", which
+this fix deliberately excludes so `fosl` cannot fight the D-pad mid-room. If so the gate
+must key on **the cell/PGC having changed** (a genuine re-entry) rather than on `hli_ss`
+alone — that re-parks the highlight on a real entry while still leaving a mid-room
+continuation alone. Both halves have to keep working; see the T17 control.
+
+⚠ **Gotcha when scanning this yourself:** a DVD NAV pack carries a **system header**
+before the `000001BF` PCI packet, so PCI data starts at sector offset **0x2D**, not
+`14 + stuffing + 7`. Computing it the naive way finds ZERO HLIs and looks like "this VOB
+has no buttons" rather than like a bug — it cost a scan here. `nav_pci_tb`'s
+`localparam PCI = 'h2D` is the authority.
+
+⏳ Remaining HW gate: trap re-entry and room 2 must also start at the bottom.
+
+⚠ **Still open, same disc:** the Old Tyme Mining Town **Whac-A-Mole** minigame is a
+separate report and is NOT root-caused. It is not the deleted forced-ACTIVATE — `foac`
+reads 0 across every HLI on this disc.
 
 ## DVD-VM interpreter (Phase 4, `feature/dvd-vm`)
 
