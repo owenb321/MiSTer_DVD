@@ -193,4 +193,195 @@ if ' -ldl ' not in mk and '-ldl' not in mk:
 else:
     print("[integration] Makefile: -ldl already present")
 
+# =============================================================================
+# HDMI IEC 61937 bitstream (steps 12-21). See INTEGRATION.md.
+# The overlay's FIRST edits to video.cpp / video.h / cfg.* — re-verify these
+# specifically on a MAIN_MISTER_REF bump.
+# =============================================================================
+
+# ---------------------------------------------------------------- user_io.cpp
+u = read(uio_path)
+
+# 12. include
+u = insert_after(u, '#include "support/dvd/dvd_phys.h"',
+    '#include "support/dvd/dvd_hdmi_audio.h"\n',
+    12, 'support/dvd/dvd_hdmi_audio.h')
+
+# 13. poll tick (reuses the step-7 tick site)
+u = insert_after(u, 'dvd_phys_tick();   // auto-mount / unmount the optical drive',
+    '\tdvd_hdmi_audio_tick();  // ADV7513 non-PCM mode + the cfg[14] ack\n',
+    13, 'dvd_hdmi_audio_tick();')
+
+# 14. the ack into the cfg[] word sent to the core
+u = insert_after(u, 'if (vga_fb) map |= CONF_VGA_FB;',
+    '\tif (dvd_hdmi_audio_ack()) map |= CONF_DVD_HDMI_BS;   // dvd:hdmibs\n',
+    14, '// dvd:hdmibs')
+
+# 15. capability declaration off the OX arm. The core marks Audio Out as OX6 so
+# Main learns the build HAS the HDMI tap; a core without it never declares, and
+# we never reconfigure the chip for a core that cannot drive it.
+u = insert_after(u, 'printf("found OX option: %s: %d\\n", p, x);',
+    '\t\t\t\tif (is_dvd() && p[2] == \'6\') dvd_hdmi_audio_declare();\n',
+    15, 'dvd_hdmi_audio_declare()')
+
+write(uio_path, u)
+print("[integration] user_io.cpp patched (hdmi bitstream)")
+
+# ---------------------------------------------------------------- user_io.h
+h = read(h_path)
+# 16. cfg[] bit 14. Stock defines up to CONF_DIRECT_VIDEO2 (bit 13); 14 and 15
+# are the only free bits, so this is the last cheap one - if a future stock
+# version claims it, this step must move rather than silently collide.
+h = insert_after(h, '#define CONF_DIRECT_VIDEO2      0b0010000000000000',
+    '#define CONF_DVD_HDMI_BS        0b0100000000000000\n',
+    16, 'CONF_DVD_HDMI_BS')
+write(h_path, h)
+print("[integration] user_io.h patched (hdmi bitstream)")
+
+# ---------------------------------------------------------------- video.h
+vh_path = os.path.join(ROOT, "video.h")
+vh = read(vh_path)
+# 17. exports
+vh = insert_after(vh, 'int   video_get_edid(uint8_t **buf, int *size);',
+    'void  hdmi_config_set_audio(int bitstream);   // dvd:hdmibs\n'
+    'int   video_hdmi_config_generation(void);\n',
+    17, 'hdmi_config_set_audio')
+write(vh_path, vh)
+print("[integration] video.h patched")
+
+# ---------------------------------------------------------------- video.cpp
+vc_path = os.path.join(ROOT, "video.cpp")
+vc = read(vc_path)
+
+# 18. generation counter storage, with the other file statics
+vc = insert_after(vc, 'static int edid_version = 0;',
+    'static int hdmi_cfg_generation = 0;   // dvd:hdmibs\n',
+    18, 'hdmi_cfg_generation')
+
+# 19. bump it whenever the full init rewrites the audio block. Anchored on the
+# write loop's header, NOT on "hdmi_config_set_csc();" - that string also occurs
+# later in the file and insert_after takes the FIRST match, which would land the
+# bump in the wrong function.
+vc = insert_before(vc, 'for (uint i = 0; i < sizeof(init_data); i += 2)',
+    'hdmi_cfg_generation++;   // dvd:hdmibs - audio block is about to revert to PCM\n',
+    19, 'hdmi_cfg_generation++')
+
+# 20. the audio-only register writer
+vc = insert_before(vc, 'static void hdmi_config_set_hdr()', r"""
+// dvd:hdmibs - switch the ADV7513's audio input between PCM I2S and IEC958
+// direct (IEC 61937 bitstream), writing ONLY the audio registers.
+//
+// Deliberately not a hdmi_config_init() call: that rewrites ~50 registers plus
+// the CSC and would blank the picture on every Audio Out toggle.
+//
+// IEC958-direct (0x0C[1:0]=3) is how the mainline Linux adv7511 driver carries
+// IEC958 subframe data, and it is the mode where channel status travels inside
+// the subframe - so the non-PCM flag stays dynamic exactly as it is on S/PDIF,
+// instead of being pinned high for the whole session.
+void hdmi_config_set_audio(int bitstream)
+{
+	if (hdmi_main_fd < 0) return;
+
+	// dvd_hdmi_bs_tweak: an ini-selectable sweep of the values that had to be
+	// ASSUMED, so trying a candidate costs a core reload rather than a 30-minute
+	// Quartus fit. HW round 2 proved optical carries both DD and DTS on the SAME
+	// build, so the 61937 word stream is right and only the chip's reading of it
+	// is in question.
+	//   bit 0  word length 24-bit instead of 16-bit (0x14). If the chip counts the
+	//          sample up from timeslot 4 rather than 12, "16-bit" makes it read
+	//          our zero padding instead of the payload.
+	//   bit 1  invert the I2S bit clock (0x0B[6]). Wrong latching edge shifts
+	//          every bit.
+	// dvd_hdmi_bs_mode: 0 = AES3-direct (32-bit IEC60958 subframes from fabric),
+	//                   1 = ROUTE (i): plain 16-bit standard I2S carrying the raw
+	//                       61937 words, with channel status supplied HERE.
+	// Route (i) needs none of the subframe machinery and reuses the framework's
+	// proven serializer; its cost is that the non-PCM flag is static for the
+	// session rather than per-block. Programming Guide Table 84 gives the bit:
+	// channel status bit 1 "audio sample word" = 0x12[7], and 0x0C[6]=1 selects
+	// the register map as the channel-status source.
+	// mode 0 (the zero default) = route (i). HW-CONFIRMED 2026-08-31: DD and DTS
+	// both decode on a real receiver. Mode 1 selects the AES3-direct transport,
+	// which never worked over four HW rounds and is kept only for reproducing it.
+	int route_i = bitstream && (cfg.dvd_hdmi_bs_mode == 0);
+	int tweak = bitstream ? cfg.dvd_hdmi_bs_tweak : 0;
+	uint8_t wordlen  = (tweak & 1) ? 0x0B : 0x02;   // IEC 60958: 1011=24bit, 0010=16bit
+	uint8_t audiocfg = (uint8_t)(0x0E | ((tweak & 2) ? 0x40 : 0x00));
+
+	uint8_t audio_data[] = {
+		0x0A, 0x00,                              // [6:4] audio select = I2S
+		0x0B, audiocfg,                          // [6] bit-clock invert (tweak bit 1)
+		// [2] I2S0 en; [1:0] 3 = IEC958 direct / 0 = standard I2S;
+		// [6] = 1 takes channel status from the register map (route i)
+		0x0C, (uint8_t)(route_i ? 0x44 : (bitstream ? 0x07 : 0x04)),
+		// Channel status byte 0 via Table 84: [7] audio sample word
+		// (1 = NOT linear PCM), [6] consumer use = 0, [5] copyright
+		// (1 = not protected). Only consulted when 0x0C[6] = 1.
+		0x12, (uint8_t)(route_i ? 0xA0 : 0x20),
+		0x14, wordlen,                           // audio word length (tweak bit 0)
+		0x15, (uint8_t)((cfg.hdmi_audio_96k ? 0x80 : 0) | 0x20),   // 48 kHz
+		0x73, 0x01,                              // Channel Count = 1 (stereo).
+		                                         // NOT 0: Programming Guide 4.4.1.1 -
+		                                         // "If I2S0 only is needed, setting the
+		                                         // Channel Count register (0x73[2:0]) and
+		                                         // I2S enable (0x0C[2]) to 1 will select
+		                                         // this". CC also drives the Audio Sample
+		                                         // Packet layout bit and sample_present.spX
+		                                         // (Figure 23), so 0 mis-frames the packet.
+		                                         // A 61937 burst is a 2-channel carrier, so
+		                                         // stereo is right for bitstream too.
+	};
+
+	for (uint i = 0; i < sizeof(audio_data); i += 2)
+	{
+		int res = i2c_smbus_write_byte_data(hdmi_main_fd, audio_data[i], audio_data[i + 1]);
+		if (res < 0) printf("i2c: audio write error (%02X %02X): %d\n",
+		                    audio_data[i], audio_data[i + 1], res);
+	}
+	// Read back what the chip DETECTED, rather than assuming it agrees with us.
+	// 0x42[3]: SCLK periods per LRCLK period - 0 = 32-bit mode, 1 = 64-bit mode.
+	// AES3-direct carries 32 bits per channel and so REQUIRES 64-bit mode; if
+	// this reads 0 the chip is only taking half of every subframe.
+	int r42 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x42);
+	const char *mode = bitstream ? (route_i ? "std-I2S+CSreg" : "IEC958-direct") : "PCM I2S";
+	printf("ADV7513: audio %s tweak=%d wl=%02X r0B=%02X r42=%02X (%s)\n",
+	       mode, tweak, wordlen, audiocfg, r42 & 0xFF,
+	       (r42 >= 0) ? ((r42 & 0x08) ? "64-bit detected" : "32-bit detected") : "read failed");
+	FILE *lf = fopen("/tmp/dvd_hdmi_audio.log", "a");
+	if (lf) { fprintf(lf, "adv7513: %s tweak=%d wordlen=%02X reg0B=%02X r42=%02X %s\n",
+	                  mode, tweak, wordlen, audiocfg, r42 & 0xFF,
+	                  (r42 >= 0) ? ((r42 & 0x08) ? "64bit" : "32bit") : "readfail"); fclose(lf); }
+}
+
+int video_hdmi_config_generation(void)
+{
+	return hdmi_cfg_generation;
+}
+
+""", 20, 'hdmi_config_set_audio')
+
+write(vc_path, vc)
+print("[integration] video.cpp patched")
+
+# ---------------------------------------------------------------- cfg.h / cfg.cpp
+cfgh_path = os.path.join(ROOT, "cfg.h")
+ch = read(cfgh_path)
+# 21. ini field. 0 = auto (EDID-gated), 1 = off, 2 = force.
+ch = insert_after(ch, '\tuint8_t hdmi_audio_96k;',
+    '\tuint8_t dvd_hdmi_bitstream;   // dvd:hdmibs 0=auto 1=off 2=force\n'
+    '\tuint8_t dvd_hdmi_bs_tweak;    // dvd:hdmibs ADV7513 register sweep, 0..3\n'
+    '\tuint8_t dvd_hdmi_bs_mode;     // dvd:hdmibs 0=std I2S + CS regs (works) 1=AES3-direct\n',
+    21, 'dvd_hdmi_bitstream')
+write(cfgh_path, ch)
+
+cfgc_path = os.path.join(ROOT, "cfg.cpp")
+cc = read(cfgc_path)
+cc = insert_after(cc, '{ "HDMI_AUDIO_96K", (void*)(&(cfg.hdmi_audio_96k)), UINT8, 0, 1 },',
+    '\t{ "DVD_HDMI_BITSTREAM", (void*)(&(cfg.dvd_hdmi_bitstream)), UINT8, 0, 2 },\n'
+    '\t{ "DVD_HDMI_BS_TWEAK", (void*)(&(cfg.dvd_hdmi_bs_tweak)), UINT8, 0, 3 },\n'
+    '\t{ "DVD_HDMI_BS_MODE", (void*)(&(cfg.dvd_hdmi_bs_mode)), UINT8, 0, 1 },\n',
+    21, 'DVD_HDMI_BITSTREAM')
+write(cfgc_path, cc)
+print("[integration] cfg.h/cfg.cpp patched")
+
 print("[integration] done")

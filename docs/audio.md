@@ -5,10 +5,13 @@
 > drive `AUDIO_L/R` directly — the HPS-decode path described below is **retired**.
 > See [`fabric_audio.md`](fabric_audio.md). The codec/PES details in this file
 > (substream IDs, frame sizes, IEC 61937 constants) are still accurate reference.
-> DTS was dropped in fabric; **Path B (IEC 61937 passthrough over optical S/PDIF) is now
-> IMPLEMENTED** — `dvd/iec61937_wrap.sv` + `dvd/spdif_pass.sv`, toggle `O6` Audio Out.
-> Milestone A (AC-3 passthrough) is sim-verified with a HW gate pending; DTS (Milestone B,
-> a DTS reframer) is next. Full design: [`iec61937.md`](iec61937.md).
+> DTS was dropped in fabric; **Path B (IEC 61937 passthrough) is now IMPLEMENTED** —
+> `dvd/iec61937_wrap.sv` + `dvd/spdif_pass.sv`, toggle `O6` Audio Out. AC-3 and DTS are
+> both ✅ HW-CONFIRMED over optical S/PDIF (PRs fj#109/fj#110).
+> **As of 2026-08-30 the same bitstream also leaves over HDMI** (`dvd/i2s_iec958.sv`,
+> IEC958-direct into the ADV7513), so an AV receiver on HDMI gets 5.1 with no Digital I/O
+> board — ⏳ HW-confirm pending. Full design: [`iec61937.md`](iec61937.md) and
+> [`hdmi_bitstream.md`](hdmi_bitstream.md).
 
 ## Overview
 
@@ -19,11 +22,13 @@ consumer DVD players worked:
   written to the MiSTer ALSA dummy device, auto-mixed into HDMI audio output.
   Works on any TV or monitor with no extra hardware.
 
-- **Path B — S/PDIF optical (IMPLEMENTED, Milestone A):** the undecoded AC-3/DTS
-  frames are wrapped in IEC 61937 and biphase-encoded onto the S/PDIF pin for AV
-  receivers that decode AC-3/DTS natively. `dvd/iec61937_wrap.sv` (burst formatter +
-  async FIFO) + `dvd/spdif_pass.sv` (IEC 60958 encoder with the non-PCM bit set), toggle
-  `O6`. See [`iec61937.md`](iec61937.md).
+- **Path B — bitstream to a receiver (IMPLEMENTED):** the undecoded AC-3/DTS frames are
+  wrapped in IEC 61937 for AV receivers that decode them natively.
+  `dvd/iec61937_wrap.sv` (burst formatter + async FIFO) + `dvd/spdif_pass.sv` (IEC 60958
+  subframes with the non-PCM bit), toggle `O6`. Two link layers off **one** subframe
+  source: biphase onto the S/PDIF pin, and `dvd/i2s_iec958.sv` serializing the same
+  subframes into the ADV7513's I2S input in IEC958-direct mode for **HDMI**.
+  See [`iec61937.md`](iec61937.md) and [`hdmi_bitstream.md`](hdmi_bitstream.md).
 
   **Optical is NOT exclusive to the Digital I/O board.** The framework routes its
   S/PDIF signal to *two* destinations (both fed by the same internal `spdif` net in

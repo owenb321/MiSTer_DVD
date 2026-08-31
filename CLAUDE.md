@@ -453,6 +453,33 @@ worse maintenance burden than targeted in-place edits. So:
   `aud_resync` (menu audio continuity, §5d). Golden: `dvd_vm_ref.py aud_stream_map()`
   + `nav_extract.py --audio-map`; 2,026-vector bit-exact TB + reader/demux suites
   green. Detail: `docs/track_selection.md` "Logical→physical audio mapping".
+- 🔧 **IEC 61937 BITSTREAM NOW ALSO LEAVES OVER HDMI (2026-08-30, branch
+  `feature/hdmi-bitstream`); ⏳ HW-confirm pending.** `Audio Out = Passthru` used to be
+  optical-only, so 5.1 needed the Digital I/O board. It doesn't: 61937 rides inside an
+  ordinary 2-ch/48 kHz/16-bit IEC 60958 stream (1.536 Mbit/s — exactly AC-3's max), which
+  is precisely what the DE10-Nano's single wired I2S line to the ADV7513 carries. (That one
+  line is also why **multichannel LPCM is impossible** here — the board routes no other
+  audio data pin; confirmed in its pin table.) `dvd/i2s_iec958.sv` serializes the SAME
+  subframes `spdif_pass` biphase-encodes — one source, two link layers, so they cannot
+  drift. ★ **Chosen route is IEC958-direct (`0x0C[1:0]=3`), NOT an I2C channel-status bit**:
+  it is what mainline Linux uses for IEC958 subframes, and crucially it keeps the non-PCM
+  flag **DYNAMIC**, preserving the fj#110 ROUND 2 fix (receivers cannot acquire across
+  non-PCM null bursts) instead of pinning the flag high for a session. ★ **Stock Main is
+  safe BY CONSTRUCTION**: the ADV7513's I2C is HPS-only, so a bitstream sent to a sink still
+  expecting PCM is full-scale noise — the core therefore refuses to emit one without the
+  `cfg[14]` ack that only MiSTer_DVDcss sets (after checking EDID Short Audio Descriptors,
+  which stock Main never parses at all). ⚠ **The ack, not `pass_mode`, owns the HDMI audio
+  format** — leaving Passthru is instant in fabric but the chip stays non-PCM until Main's
+  next poll, so that window must be digital silence; Main sequences engage/release
+  asymmetrically. ⚠ **MEASURED phase step:** the first pair interval after `rst_audio_n` is
+  509 clk_audio, not 512 (`bit_ce` and `spdif_pass`'s counter re-align three cycles in), and
+  that reset pulses on every audio-track switch and `aud_flush` — hence the ~100 ms hold-off.
+  Tests: `bench/dvd/run_hdmi_bitstream.sh` — `iec61937_wrap_tb` TEST 9 (pacing exact over 513
+  strobes) and `i2s_iec958_tb`, a **demodulator** that reads subframes back off the wire
+  (it failed all four checks first run and the serializer was correct — the demod was
+  free-running instead of framing on `ws`; a register-peek test would have proven nothing).
+  ⚠ Open: the preamble nibble for IEC958-direct is an assumption (Z=1,Y=2,X=4) — first thing
+  to change if HW round 1 mis-locks. Design: **`docs/hdmi_bitstream.md`**.
 - 🔧 **AUDIO IS NOW DECODED IN FABRIC (2026-06-27, branch `feature/fabric-ac3-audio`).**
   AC-3 and LPCM are decoded entirely in the FPGA: `ps_demux` → `audio_ring` →
   `dvd/dvd_audio_decode.sv` (AC-3 via the ported `dvd/ac3/*` `ac3_front`+`pcm_out`,
@@ -1467,6 +1494,21 @@ Two identifiers, deliberately at different granularities:
   ONE re-roll instead of a second one at release time. (The saved-settings `"v,N;"`
   config version is a SEPARATE, coarser counter — bump that one only on an incompatible
   `O[..]` relayout, see `docs/idle_screen.md`.)
+  **★ HOW FAR to bump (instituted 2026-08-31, by user decision — the rule existed only
+  as precedent until someone had to ask):**
+  - **patch** (`0.2.0` → `0.2.1`) — bug fixes, doc-only changes, internal rework with no
+    change in what the user can do.
+  - **minor** (`0.2.1` → `0.3.0`) — ANY new user-visible capability: a new format or
+    output path, a new OSD option, or content that used to be silent/broken now working.
+    If the release notes would lead with it, it is a minor bump.
+  - **major** — reserved; nothing has warranted it yet (`1.0` would be a
+    "this is finished" statement, not a size-of-change one).
+  The failure this prevents is a release whose version says "fixes" while its own notes
+  lead with a headline feature — the version line is what a user quotes in a bug report,
+  so it should not understate what they are running. Precedent: `0.1d` → `0.2.0` for
+  physical-disc playback; `0.2.1` → `0.3.0` for HDMI bitstream + multichannel AC-3.
+  ⚠ Judge the bump against the WHOLE unreleased delta on `main`, not just the branch in
+  hand — several patch-looking merges can add up to a minor release.
 - **`BUILD_DATE`** — `yymmdd`, regenerated per compile by `sys/build_id.tcl`. ⚠ Do NOT
   extend it with a time or a git SHA to separate same-day builds: it is part of
   `CONF_STR`, hence part of the netlist, so every compile would become a new netlist and

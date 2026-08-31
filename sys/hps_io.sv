@@ -117,6 +117,17 @@ module hps_io #(parameter CONF_STR, CONF_STR_BRAM=0, PS2DIV=0, WIDE=0, VDNUM=1, 
 	output            ini_csync,        // cfg[3]  composite_sync=
 	output            ini_ypbpr,        // cfg[5]  ypbpr / vga_mode=ypbpr
 	output            ini_sog,          // cfg[9]  vga_sog=
+
+	// DVD-FORK (HDMI bitstream): the HPS ack. Set ONLY by MiSTer_DVDcss, and
+	// only once it has put the ADV7513 into IEC958-direct mode and confirmed the
+	// sink advertises AC-3/DTS in its EDID. The core refuses to put a bitstream
+	// on the I2S pin without it, so a stock Main - which never sets cfg[14] -
+	// gets exactly today's behaviour and can never be fed a bitstream it has
+	// told the sink to expect as PCM (that would be full-scale noise).
+	// cfg[14]/cfg[15] are the only bits stock Main leaves free (CONF_DIRECT_VIDEO2
+	// at bit 13 is the highest it defines).
+	output            ini_hdmi_bs_ok,   // cfg[14] MiSTer_DVDcss: ADV7513 is in
+	                                    //         IEC958-direct/non-PCM mode
 	input             video_rotated,
 
 	//toggle to force notify of video mode change
@@ -213,6 +224,8 @@ assign ini_vga_scaler = cfg[2];
 assign ini_csync      = cfg[3];
 assign ini_ypbpr      = cfg[5];
 assign ini_sog        = cfg[9];
+// DVD-FORK (HDMI bitstream): HPS ack, see the port comment
+assign ini_hdmi_bs_ok = cfg[14];
 
 reg [3:0] sdn;
 reg [3:0] sd_rrb = 0;

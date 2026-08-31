@@ -61,6 +61,16 @@ module emu (
 	output        SPDIF_PASS,
 	output        SPDIF_PASS_EN,
 
+	// DVD-FORK: the same IEC 61937 bitstream over HDMI. These are IEC 60958
+	// subframes in the ADV7513's "IEC958 direct" format, NOT PCM samples;
+	// sys_top substitutes them for the framework's PCM I2S on HDMI_SCLK/LRCLK/
+	// I2S while HDMI_BS_EN. Gated on the HPS ack, so a Main that has not put the
+	// chip in non-PCM mode never sees them. See docs/hdmi_bitstream.md.
+	output        HDMI_BS_SCK,
+	output        HDMI_BS_WS,
+	output        HDMI_BS_SD,
+	output        HDMI_BS_EN,
+
 	inout   [3:0] ADC_BUS,
 
 	output        SD_SCK,
@@ -176,6 +186,8 @@ wire pal_eff;
 wire direct_video;                        // hps_io cfg[10] (declared early for the gating here)
 wire forced_scandoubler;                  // hps_io cfg[4]
 wire ini_vga_scaler, ini_csync, ini_ypbpr, ini_sog;  // hps_io MiSTer.ini exports (DVD-FORK)
+wire hdmi_bs_ack;                                    // cfg[14] HPS ack (DVD-FORK, HDMI bitstream)
+wire bs_stb_w;                                       // 48 kHz pair strobe from iec61937_wrap
 wire [1:0] analog_mode = status[27:26];   // 0=Auto 1=Interlaced 2=Progressive 3=Native Fields
 // Debug "Title VTS" override (P1, two BCD digits -> VTS 1..99; 0 = Auto).
 // See the CONF_STR note at the retired O[31:28] slot.
@@ -346,14 +358,41 @@ always @(posedge clk_sys) begin
     else if (probe_act_p != 0) probe_act_p <= probe_act_p - 20'd1;
 end
 wire signed [15:0] probe_tone = probe_sq ? 16'sd8000 : -16'sd8000;
-assign AUDIO_L = (probe_act_s != 0) ? probe_tone : ((pass_mode | css_scrambled) ? 16'sd0 : dec_audio_l);
-assign AUDIO_R = (probe_act_p != 0) ? probe_tone : ((pass_mode | css_scrambled) ? 16'sd0 : dec_audio_r);
+assign AUDIO_L = (probe_act_s != 0) ? probe_tone : (pcm_mute ? 16'sd0 : dec_audio_l);
+assign AUDIO_R = (probe_act_p != 0) ? probe_tone : (pcm_mute ? 16'sd0 : dec_audio_r);
 // =============================================================================
 `else
-assign AUDIO_L      = (pass_mode | css_scrambled) ? 16'sd0 : dec_audio_l;
-assign AUDIO_R      = (pass_mode | css_scrambled) ? 16'sd0 : dec_audio_r;
+assign AUDIO_L      = pcm_mute ? 16'sd0 : dec_audio_l;
+assign AUDIO_R      = pcm_mute ? 16'sd0 : dec_audio_r;
 `endif
 assign SPDIF_PASS_EN = pass_mode;
+
+// -----------------------------------------------------------------------------
+// DVD-FORK: HDMI IEC 61937 bitstream (docs/hdmi_bitstream.md)
+// -----------------------------------------------------------------------------
+// hdmi_bs_ack is cfg[14] from MiSTer_DVDcss: "the ADV7513 is in IEC958-direct /
+// non-PCM mode". Stock Main never sets it, so everything below stays inert and
+// the core behaves exactly as it does today.
+//
+// ⚠ INVARIANT - the ACK owns the HDMI audio format, not pass_mode. While the ack
+// is set the sink has been told to expect non-PCM, so the core must never put PCM
+// on HDMI: a receiver would decode it as a data burst. Leaving Passthru is
+// instant in fabric but the chip stays in non-PCM mode until Main's next poll, so
+// that window has to be digital silence rather than decoded audio. Hence
+// hdmi_bs_ack joins the mute term above instead of pass_mode alone.
+wire pcm_mute = pass_mode | css_scrambled | hdmi_bs_ack;
+
+// Post-reset hold-off. rst_audio_n pulses on every audio-track switch and
+// aud_flush, and it re-phases the subframe pacing (MEASURED: the first interval
+// after a reset is 509 clk_audio, not 512 - see bench/dvd/iec61937_wrap_tb.sv
+// TEST 9). Mute the HDMI leg for ~100 ms across that so a receiver sees clean
+// silence and one switch, never a torn subframe.
+reg [12:0] bs_hold;
+always @(posedge CLK_AUDIO or negedge rst_audio_n)
+    if (!rst_audio_n)                 bs_hold <= 13'd4800;   // ~100 ms at 48 kHz
+    else if (bs_stb_w && |bs_hold)    bs_hold <= bs_hold - 13'd1;
+
+assign HDMI_BS_EN = pass_mode & hdmi_bs_ack & ~|bs_hold;
 
 assign SD_SCK       = 0;
 assign SD_MOSI      = 0;
@@ -486,7 +525,7 @@ assign CE_PIXEL = 1'b1;
 // builds: it is part of CONF_STR = part of the netlist, so every compile would
 // become a new netlist and re-roll the fitter seed lottery (DVD.qsf's ledger).
 // Same-day dev builds are identified by their build_release.sh --name filename.
-`define CORE_VERSION "0.2.1"
+`define CORE_VERSION "0.3.0"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -533,10 +572,18 @@ parameter CONF_STR = {
     "O5,Audio,On,Off;",
     // Audio Out: Decode = AC-3/LPCM decoded in fabric to HDMI PCM (default).
     // Passthru = the UNDECODED AC-3/DTS frames are wrapped in IEC 61937 and
-    // sent as a bitstream over optical S/PDIF for an AV receiver to decode
-    // (Path B; enables DTS, which has no in-fabric decoder). HDMI PCM is muted
-    // in Passthru. status[6]. See docs/iec61937.md.
-    "O6,Audio Out,Decode HDMI,Passthru SPDIF;",
+    // sent as a bitstream for an AV receiver to decode (Path B; enables DTS,
+    // which has no in-fabric decoder). Always out optical S/PDIF, and ALSO over
+    // HDMI when MiSTer_DVDcss has put the ADV7513 in IEC958-direct mode and the
+    // sink advertises AC-3/DTS; otherwise HDMI stays muted as before.
+    // status[6]. See docs/iec61937.md and docs/hdmi_bitstream.md.
+    //
+    // ★ OX (not O) marks it "also handled by the HPS": the bit still reaches the
+    // core exactly as before, but Main sees the declaration in parse_config and
+    // learns this build HAS the HDMI bitstream path. A core without it never
+    // declares OX6, so Main never reconfigures the chip for a core that cannot
+    // drive it. Bit layout is unchanged, so no CONF_STR "v,N" bump is needed.
+    "OX6,Audio Out,Decode PCM,Passthru (SPDIF+HDMI);",
     // SPDIF Byte Order: flips the 61937 payload byte packing. If the receiver
     // recognises the format (e.g. "Dolby D"/"DTS") but plays static, toggle
     // this. status[7]. Only meaningful in Passthru.
@@ -669,6 +716,15 @@ parameter CONF_STR = {
     // freed when O[14] "CRT 480i Out" was retired.
     "P1O[14],Line-21 CC,On,Off;",
     "P1O[44],CC Test Line,Off,On;",
+    // HDMI bitstream subframe variant — the HW A/B for the two unknowns the
+    // ADV7513 Programming Guide would have settled (bit order, preamble code).
+    // Round 1 gave "decoder off": the chip HAD switched to IEC958-direct but the
+    // receiver could not find 61937 sync. status[47:46]. docs/hdmi_bitstream.md §3.
+    "P1O[48:46],HDMI BS Variant,PCM16,AES3 LSB,AES3 MSB,AES3 legacy,AES3 legacyM;",
+    // What a bitstream HOLD looks like once the stream is running. The hold is
+    // the pacing loop and is untouched; this is only its fill. Default PCM
+    // silence = shipped behaviour. See docs/iec61937.md. status[50:49].
+    "P1O[50:49],BS Hold Style,PCM silence,NonPCM hold,Pause burst;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
     // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
@@ -774,6 +830,7 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     .ini_csync      (ini_csync),
     .ini_ypbpr      (ini_ypbpr),
     .ini_sog        (ini_sog),
+    .ini_hdmi_bs_ok (hdmi_bs_ack),
 
     // SD sector-level access (virtual disk for MPG streaming)
     .sd_lba         ('{sd_lba}),
@@ -2820,6 +2877,7 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .rst_sys_n    (aud_rst_n),
     .enable       (pass_mode),
     .byte_swap    (pass_bswap),
+    .hold_style   (status[50:49]),
     .mute_i       (css_scrambled),   // CSS source: drain frames, emit PCM silence
     .ring_byte    (aud_ring_byte),
     .ring_valid   (aud_ring_valid),
@@ -2840,6 +2898,14 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .clk_audio    (CLK_AUDIO),
     .rst_audio_n  (rst_audio_n),
     .spdif_o      (SPDIF_PASS),
+    .hdmi_sck_o   (HDMI_BS_SCK),
+    .hdmi_ws_o    (HDMI_BS_WS),
+    .hdmi_sd_o    (HDMI_BS_SD),
+    .bs_l_o       (),
+    .bs_r_o       (),
+    .bs_nonpcm_o  (),
+    .bs_stb_o     (bs_stb_w),
+    .hdmi_variant (status[48:46]),
     .dbg_word     (),
     .dbg_word_stb ()
 );

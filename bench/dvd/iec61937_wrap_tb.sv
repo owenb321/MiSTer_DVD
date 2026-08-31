@@ -13,6 +13,7 @@ module iec61937_wrap_tb;
     reg         clk_sys = 0, clk_audio = 0;
     reg         rst_sys_n = 0, rst_audio_n = 0;
     reg         enable = 0, byte_swap = 0, mute = 0;
+    reg  [1:0]  hold_style = 2'd0;
 
     // ring model
     reg  [7:0]  ring_byte;
@@ -34,6 +35,8 @@ module iec61937_wrap_tb;
     wire        spdif_o;
     wire [15:0] dbg_word;
     wire        dbg_word_stb;
+    wire [15:0] bs_l, bs_r;
+    wire        bs_nonpcm, bs_stb;
 
     // ~27 MHz and 24.576 MHz
     always #18.5 clk_sys   = ~clk_sys;
@@ -43,7 +46,7 @@ module iec61937_wrap_tb;
     // the layout capture.
     iec61937_wrap #(.FIFO_AW(12)) dut (
         .clk_sys(clk_sys), .rst_sys_n(rst_sys_n), .enable(enable), .byte_swap(byte_swap),
-        .mute_i(mute),
+        .mute_i(mute), .hold_style(hold_style),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
         .frame_samples(frame_samples),
@@ -51,8 +54,57 @@ module iec61937_wrap_tb;
         .sync_armed(sync_armed_r), .stc_anchored(stc_anch_r), .stc(stc_r), .av_ofs(avofs_r),
         .frame_pop(frame_pop),
         .clk_audio(clk_audio), .rst_audio_n(rst_audio_n), .spdif_o(spdif_o),
+        .bs_l_o(bs_l), .bs_r_o(bs_r), .bs_nonpcm_o(bs_nonpcm), .bs_stb_o(bs_stb),
         .dbg_word(dbg_word), .dbg_word_stb(dbg_word_stb)
     );
+
+    // ---- HDMI bitstream tap monitors (TEST 9) --------------------------------
+    // The tap feeds the HDMI I2S serializer. Two properties must hold or the
+    // HDMI path silently diverges from S/PDIF:
+    //  (a) COHERENCE - the tap presents exactly the pair spdif_pass is playing,
+    //      so both outputs carry the same burst. Structural today, but this
+    //      guards a future refactor that gates one path and not the other.
+    //  (b) PACING - in STEADY STATE the strobe is exactly one per 512 clk_audio
+    //      (48.000 kHz). The whole no-handshake argument rests on this: the I2S
+    //      frame is also 512 clk, so a fixed offset means one frame per pair,
+    //      forever.
+    //
+    // MEASURED startup transient: the FIRST interval after an audio-domain reset
+    // is 509, not 512. `bit_ce` is (ce_cnt==0) of a free-running 2-bit counter
+    // that reset clears, while spdif_pass's own subframe counter restarts from
+    // its reset state, so the two re-align three clk_audio into the first frame.
+    // That is a genuine PHASE STEP against the I2S frame counter, and it is
+    // exactly what the post-reset hold-off in sys/audio_out.v and dvd/emu.sv
+    // exists to hide -- rst_audio_n pulses on every audio-track switch and
+    // aud_flush, not just at power-on. Steady state must still be exact, so the
+    // hard check starts once the transient has passed.
+    localparam TAP_SETTLE = 4;   // strobes to ignore after a reset
+    integer tap_incoherent = 0;
+    integer tap_badperiod  = 0;  // steady-state deviations: must be ZERO
+    integer tap_startup    = 0;  // transient deviations: one per reset, bounded
+    integer tap_strobes    = 0;   // since the last reset (period checking)
+    integer tap_total      = 0;   // cumulative; survives the do_reset calls
+    integer tap_resets     = 0;
+    always @(posedge clk_audio) begin : tap_mon
+        reg [15:0] gap;
+        if (!rst_audio_n) begin
+            if (tap_strobes != 0) tap_resets = tap_resets + 1;
+            gap = 16'd0; tap_strobes = 0;
+        end else begin
+            if ({bs_r, bs_l} !== dut.u_spdif.sample_i || bs_nonpcm !== dut.u_spdif.nonpcm_i)
+                tap_incoherent = tap_incoherent + 1;
+            gap = gap + 16'd1;
+            if (bs_stb) begin
+                if (tap_strobes > 0 && gap != 16'd512) begin
+                    if (tap_strobes < TAP_SETTLE) tap_startup   = tap_startup + 1;
+                    else                          tap_badperiod = tap_badperiod + 1;
+                end
+                tap_strobes = tap_strobes + 1;
+                tap_total   = tap_total + 1;
+                gap = 16'd0;
+            end
+        end
+    end
 
     // captured producer word stream, indexed by the DUT's word index so a
     // burst always lands at cap[0..N]; count committed words since reset.
@@ -324,6 +376,75 @@ module iec61937_wrap_tb;
         expect_word(2, PC_AC3, "unmute-Pc");
         if (dut.cur_nonpcm !== 1'b1) begin
             $display("  FAIL: unmuted burst not tagged non-PCM"); errors=errors+1; end
+
+        // ---- TEST 8d: hold FILL styles --------------------------------------
+        // The hold itself is the pacing loop and is NOT touched here (see
+        // docs/iec61937.md - one-shotting it cost A/V sync). Only its fill
+        // changes, and only after a real burst has gone out, so pre-content
+        // behaviour stays the fj#110 round-2 PCM silence.
+        frame_valid = 0; do_reset;
+        hold_style = 2'd2;                            // pause bursts
+        sync_armed_r = 1; stc_anch_r = 1; fptsv_r = 1;
+        fpts_r = 33'd100000; stc_r = 33'd200000;      // due -> a real burst first
+        frame_len = 16'd8; plen = 8; frame_type = 2'd0; frame_valid = 1;
+        enable = 1;
+        wait (pulses >= 3072);
+        @(posedge clk_sys);
+        if (dut.burst_seen !== 1'b1) begin
+            $display("  FAIL 8d: burst_seen not set"); errors=errors+1; end
+
+        // now starve it: the hold must emit a REAL pause burst, still non-PCM
+        frame_valid = 0;
+        wait (pulses >= 3*3072);      // burst 2 may already have been latched real
+        @(posedge clk_sys); @(posedge clk_sys);
+        $display("TEST 8d: pause-burst hold, cur_nonpcm=%0b", dut.cur_nonpcm);
+        expect_word(0, PA,       "pause-Pa");
+        expect_word(1, PB,       "pause-Pb");
+        expect_word(2, 16'h0003, "pause-Pc");
+        if (dut.cur_nonpcm !== 1'b1) begin
+            $display("  FAIL 8d: pause burst not tagged non-PCM"); errors=errors+1; end
+
+        // style 1: zero words but the format still must not change
+        frame_valid = 0; do_reset;
+        hold_style = 2'd1;
+        stc_r = 33'd200000; frame_valid = 1; enable = 1;
+        wait (pulses >= 3072); @(posedge clk_sys);
+        frame_valid = 0;
+        wait (pulses >= 3*3072); @(posedge clk_sys); @(posedge clk_sys);
+        $display("TEST 8d2: nonpcm hold, cur_nonpcm=%0b", dut.cur_nonpcm);
+        expect_word(0, 16'h0000, "nonpcm-hold-w0");   // still no Pa/Pb
+        if (dut.cur_nonpcm !== 1'b1) begin
+            $display("  FAIL 8d2: nonpcm hold dropped the flag"); errors=errors+1; end
+
+        // style 0 PRE-content must still be PCM silence (the round-2 fix)
+        frame_valid = 0; do_reset;
+        hold_style = 2'd0; enable = 1;
+        wait (pulses >= 3072); @(posedge clk_sys);
+        $display("TEST 8d3: pre-content default, cur_nonpcm=%0b", dut.cur_nonpcm);
+        if (dut.cur_nonpcm !== 1'b0) begin
+            $display("  FAIL 8d3: pre-content hold is not PCM silence -");
+            $display("            that is the fj#110 round-1 regression");
+            errors=errors+1; end
+        hold_style = 2'd0;
+
+        // ---- TEST 9: HDMI bitstream tap -------------------------------------
+        $display("TEST 9: HDMI tap, total=%0d incoherent=%0d steady_bad=%0d startup_dev=%0d (resets=%0d)",
+                 tap_total, tap_incoherent, tap_badperiod, tap_startup, tap_resets);
+        if (tap_total < 100) begin
+            $display("  FAIL: tap strobe never ran (%0d)", tap_total); errors=errors+1; end
+        if (tap_incoherent != 0) begin
+            $display("  FAIL: tap diverged from the pair spdif_pass is playing (%0d cycles)",
+                     tap_incoherent); errors=errors+1; end
+        if (tap_badperiod != 0) begin
+            $display("  FAIL: steady-state tap strobe not 512 clk_audio -- the fixed-offset");
+            $display("        pacing argument is void and HDMI would slip against S/PDIF (%0d)",
+                     tap_badperiod); errors=errors+1; end
+        // The transient is expected and hold-off-covered, but it must stay a
+        // transient: at most one short interval per reset. More than that means
+        // the re-alignment is not settling and the hold-off cannot bound it.
+        if (tap_startup > tap_resets + 1) begin
+            $display("  FAIL: post-reset re-alignment not settling (%0d deviations, %0d resets)",
+                     tap_startup, tap_resets); errors=errors+1; end
 
         if (errors==0) $display("\nALL TESTS PASSED");
         else           $display("\n%0d FAILURES", errors);

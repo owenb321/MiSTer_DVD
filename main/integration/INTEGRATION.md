@@ -127,9 +127,61 @@ and in the two sd block-read branches, before the `else if (sd_image[disk].size)
 `buffer_lba[disk] = -1` on failure — see `dvd_phys`/fork history for the exact
 form; `build_main.sh` inserts both.)
 
+## HDMI IEC 61937 bitstream (steps 12-21)
+
+Lets `Audio Out = Passthru` reach an AV receiver over **HDMI** as well as optical
+S/PDIF. The core serializes IEC 60958 subframes into the ADV7513's I2S input, but
+only the HPS can put that chip into IEC958-direct mode over I2C — so the core
+refuses to emit a bitstream until Main sets the `cfg[14]` ack. **Stock Main never
+sets it**, which is what makes a stock-Main user safe: without the mode change the
+sink expects PCM, and a bitstream would arrive as full-scale noise.
+
+> ⚠ These are the overlay's **first edits to `video.cpp`, `video.h` and `cfg.*`**.
+> Everything before step 12 touches only `user_io.*` and the `Makefile`. On a
+> `MAIN_MISTER_REF` bump, re-verify these specifically.
+
+| Step | File | What |
+|---|---|---|
+| 12 | `user_io.cpp` | include `support/dvd/dvd_hdmi_audio.h` |
+| 13 | `user_io.cpp` | `dvd_hdmi_audio_tick()` on the step-7 poll site |
+| 14 | `user_io.cpp` | `CONF_DVD_HDMI_BS` into the `cfg[]` word sent to the core |
+| 15 | `user_io.cpp` | `dvd_hdmi_audio_declare()` off the `OX` arm in `parse_config()` |
+| 16 | `user_io.h` | `#define CONF_DVD_HDMI_BS 0b0100000000000000` (bit 14) |
+| 17 | `video.h` | export `hdmi_config_set_audio()` + `video_hdmi_config_generation()` |
+| 18 | `video.cpp` | `static int hdmi_cfg_generation` beside the other file statics |
+| 19 | `video.cpp` | bump that counter in `hdmi_config_init()` |
+| 20 | `video.cpp` | `hdmi_config_set_audio()` — the audio-only register writer |
+| 21 | `cfg.h` / `cfg.cpp` | `dvd_hdmi_bitstream` ini key (0=auto, 1=off, 2=force) |
+
+Three things here are easy to get subtly wrong:
+
+- **Step 19's anchor is the `for (uint i = 0; ...)` write-loop header, not
+  `hdmi_config_set_csc();`.** That second string appears again later in
+  `video.cpp`, and `insert_after` takes the FIRST match — it would apply today and
+  silently land in the wrong function after any stock reorder.
+- **Step 20 is a small audio-only writer on purpose.** Reusing
+  `hdmi_config_init()` would rewrite ~50 registers plus the CSC and blank the
+  picture on every Audio Out toggle. But that full init *does* revert the audio
+  block, so step 18/19's generation counter exists to notice and re-apply.
+- **Bit 14 is nearly the last free `cfg[]` bit.** Stock defines up to
+  `CONF_DIRECT_VIDEO2` (bit 13); only 14 and 15 remain. If a future stock version
+  claims 14, this step must move rather than collide silently.
+
+The core marks the option `OX6` rather than `O6`. `OX` means "also handled by the
+HPS": the bit still reaches the core exactly as before, but Main sees the
+declaration and learns this build *has* the HDMI path. A core without it never
+declares `OX6`, so Main never reconfigures the chip for a core that cannot drive
+it.
+
 ## MiSTer.ini (end user)
 
 ```
 [DVD]
 main=MiSTer_DVDcss
+
+; HDMI bitstream for Audio Out = Passthru.
+;   0 = auto  (default) engage only when the sink's EDID advertises AC-3/DTS
+;   1 = off   never engage; HDMI behaves as it did before
+;   2 = force engage regardless of EDID (sinks do mis-report, especially over ARC)
+dvd_hdmi_bitstream=0
 ```

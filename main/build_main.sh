@@ -64,6 +64,7 @@ mkdir -p "$STOCK/support/dvd" "$STOCK/Scripts"
 cp "$HERE"/support/dvd/dvd_css.cpp  "$HERE"/support/dvd/dvd_css.h  "$STOCK/support/dvd/"
 cp "$HERE"/support/dvd/dvd_detect.cpp "$HERE"/support/dvd/dvd_detect.h "$STOCK/support/dvd/"
 cp "$HERE"/support/dvd/dvd_phys.cpp "$HERE"/support/dvd/dvd_phys.h "$STOCK/support/dvd/"
+cp "$HERE"/support/dvd/dvd_hdmi_audio.cpp "$HERE"/support/dvd/dvd_hdmi_audio.h "$STOCK/support/dvd/"
 cp "$HERE"/Scripts/install_dvdcss.sh "$STOCK/Scripts/"
 
 # 3. Patch user_io.cpp / user_io.h / Makefile.
