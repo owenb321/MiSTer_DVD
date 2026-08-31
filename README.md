@@ -337,6 +337,15 @@ no disc playing, since the core holds the drive open while one is mounted.
 > lives in the drive's own firmware, so it is not reset by a different PC, a reformat, or
 > a different operating system. Pick the region matching the discs you own and set it once.
 
+> **Reading a drive is proven; setting one is not.** Identifying the drive's region and
+> its remaining changes has been confirmed on real hardware, with one drive connected and
+> with two. **Nobody has yet used the script to actually set a region** — it does the right
+> thing in testing, but the write has never touched a real drive, because proving it costs
+> one of a drive's permanent changes. So if you run it, reading is safe to try freely;
+> setting is a step into the unknown. If you take that step, please
+> [open an issue](https://github.com/owenb321/MiSTer_DVD/issues) saying whether it worked —
+> you'll be the first, and thank you for it.
+
 Region codes: **1** US/Canada · **2** Europe/Japan/Middle East/South Africa · **3** SE Asia
 · **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia · **6** China.
 
