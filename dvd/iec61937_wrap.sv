@@ -41,6 +41,21 @@ module iec61937_wrap #(
     input  wire        rst_sys_n,
     input  wire        enable,        // passthrough active (else producer idles)
     input  wire        byte_swap,     // 0: first byte in word[15:8]; 1: swapped
+    // How to fill a HOLD once the bitstream is already running. The hold itself
+    // is the pacing loop and must not be touched (see docs/iec61937.md "one-shot
+    // hold gate"); this only changes what the gap LOOKS like to the receiver:
+    //   0 PCM silence  all-zero words, non-PCM bit CLEARED (shipped behaviour).
+    //                  The receiver re-negotiates PCM<->DD on every hold, which
+    //                  is the startup/track-change flapping.
+    //   1 NonPCM hold  same zero words but the non-PCM bit stays SET, so the
+    //                  format never changes - only the data pauses.
+    //   2 Pause burst  a real IEC 61937 PAUSE burst (Pa/Pb/Pc=3): what the
+    //                  standard defines for exactly this, and what a real player
+    //                  emits between bursts.
+    // 1 and 2 apply ONLY after the first real burst since a flush, so pre-content
+    // behaviour is unchanged and the fj#110 round-1 finding (a receiver cannot
+    // ACQUIRE across non-PCM-with-no-data) is not re-litigated.
+    input  wire [1:0]  hold_style,
     input  wire        mute_i,        // CSS-scrambled source: consume frames but
                                       // emit PCM silence (scrambled AC-3/DTS sent
                                       // raw = loud noise bursts on the receiver)
@@ -113,6 +128,7 @@ module iec61937_wrap #(
     localparam [15:0] PB = 16'h4E1F;
     localparam [15:0] PC_AC3 = 16'h0001; // burst-info data type 1
     localparam [15:0] PC_DTS = 16'h000B; // burst-info data type 11 (DTS I/II/III)
+    localparam [15:0] PC_PAUSE = 16'h0003; // data type 3 = PAUSE (see hold_style)
 
     localparam [15:0] PERIOD_AC3 = 16'd1536; // samples (6144 bytes)
     localparam [15:0] PERIOD_DTS = 16'd512;  // samples (2048 bytes, core DTS)
@@ -226,6 +242,12 @@ module iec61937_wrap #(
     wire sync_en = sync_armed && stc_anchored;
     wire signed [34:0] head_delta =
         $signed({2'b0, stc}) - $signed({2'b0, frame_pts}) - 35'($signed(av_ofs));
+    // Set by the first real burst since a flush; cleared by rst_sys_n (= aud_rst_n,
+    // which pulses on seeks, track switches and aud_flush). Used ONLY to choose the
+    // hold FILL above - it must never gate hold_frame itself, which is the pacing
+    // loop (docs/iec61937.md "one-shot hold gate" records what that cost).
+    reg burst_seen;
+
     wire hold_frame = is_codec &&
         ( (sync_armed && !stc_anchored)                              // wait for the anchor
        || (sync_en && frame_pts_valid && (head_delta < 35'sd0)) );   // anchored but not yet due
@@ -256,6 +278,7 @@ module iec61937_wrap #(
             wr_en       <= 1'b0;
             burst_silent<= 1'b1;
             cur_nonpcm  <= 1'b0;
+            burst_seen  <= 1'b0;
             frame_pop_r <= 1'b0;
             dbg_word    <= 16'd0;
             dbg_word_stb<= 1'b0;
@@ -284,6 +307,7 @@ module iec61937_wrap #(
                         words_total <= {period_sel, 1'b0};
                         burst_silent<= 1'b0;   // real data-burst
                         cur_nonpcm  <= 1'b1;   // -> set the channel-status non-PCM bit
+                        burst_seen  <= 1'b1;   // hold-fill selection only
                         frame_pop_r <= 1'b1;
                         st <= S_PA;
                     end else if (frame_valid && is_codec && mute_i) begin
@@ -315,18 +339,29 @@ module iec61937_wrap #(
                         st <= S_PA;
                     end else begin
                         // No frame ready, OR a codec frame HELD (pre-anchor / not due).
-                        // Emit LINEAR-PCM SILENCE (all-zero words, non-PCM bit cleared)
-                        // rather than a Pc=0 non-PCM null burst: a real player presents
-                        // PCM before the bitstream starts, and HW showed the receiver
-                        // fails to acquire across non-PCM null bursts (it re-locks fine
-                        // on the single clean PCM->DD/DTS switch). Period-matched so the
-                        // producer re-checks S_IDLE on the codec's burst cadence.
+                        // BEFORE the first real burst this is LINEAR-PCM SILENCE, which
+                        // is the fj#110 round-2 fix: a real player presents PCM before
+                        // the bitstream starts, and HW showed the receiver cannot
+                        // ACQUIRE across non-PCM null bursts. AFTER the stream is
+                        // running the problem is the opposite one - dropping back to PCM
+                        // makes the receiver re-negotiate the format on every hold - so
+                        // hold_style can keep the format steady instead.
                         bytes_left  <= 16'd0;
-                        pc_val      <= 16'd0;
                         pd_bits     <= 16'd0;
                         words_total <= {null_period, 1'b0};
-                        burst_silent<= 1'b1;
-                        cur_nonpcm  <= 1'b0;
+                        if (burst_seen && hold_style == 2'd2) begin
+                            pc_val      <= PC_PAUSE;   // real 61937 pause burst
+                            burst_silent<= 1'b0;       // ... so Pa/Pb ARE emitted
+                            cur_nonpcm  <= 1'b1;
+                        end else if (burst_seen && hold_style == 2'd1) begin
+                            pc_val      <= 16'd0;
+                            burst_silent<= 1'b1;       // zero words, format unchanged
+                            cur_nonpcm  <= 1'b1;
+                        end else begin
+                            pc_val      <= 16'd0;
+                            burst_silent<= 1'b1;
+                            cur_nonpcm  <= 1'b0;       // PCM silence (shipped default)
+                        end
                         st <= S_PA;
                     end
                 end

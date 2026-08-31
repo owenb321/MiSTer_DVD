@@ -721,6 +721,10 @@ parameter CONF_STR = {
     // Round 1 gave "decoder off": the chip HAD switched to IEC958-direct but the
     // receiver could not find 61937 sync. status[47:46]. docs/hdmi_bitstream.md §3.
     "P1O[48:46],HDMI BS Variant,PCM16,AES3 LSB,AES3 MSB,AES3 legacy,AES3 legacyM;",
+    // What a bitstream HOLD looks like once the stream is running. The hold is
+    // the pacing loop and is untouched; this is only its fill. Default PCM
+    // silence = shipped behaviour. See docs/iec61937.md. status[50:49].
+    "P1O[50:49],BS Hold Style,PCM silence,NonPCM hold,Pause burst;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
     // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
@@ -2873,6 +2877,7 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .rst_sys_n    (aud_rst_n),
     .enable       (pass_mode),
     .byte_swap    (pass_bswap),
+    .hold_style   (status[50:49]),
     .mute_i       (css_scrambled),   // CSS source: drain frames, emit PCM silence
     .ring_byte    (aud_ring_byte),
     .ring_valid   (aud_ring_valid),

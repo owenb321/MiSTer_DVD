@@ -13,6 +13,7 @@ module iec61937_wrap_tb;
     reg         clk_sys = 0, clk_audio = 0;
     reg         rst_sys_n = 0, rst_audio_n = 0;
     reg         enable = 0, byte_swap = 0, mute = 0;
+    reg  [1:0]  hold_style = 2'd0;
 
     // ring model
     reg  [7:0]  ring_byte;
@@ -45,7 +46,7 @@ module iec61937_wrap_tb;
     // the layout capture.
     iec61937_wrap #(.FIFO_AW(12)) dut (
         .clk_sys(clk_sys), .rst_sys_n(rst_sys_n), .enable(enable), .byte_swap(byte_swap),
-        .mute_i(mute),
+        .mute_i(mute), .hold_style(hold_style),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
         .frame_samples(frame_samples),
@@ -81,7 +82,8 @@ module iec61937_wrap_tb;
     integer tap_incoherent = 0;
     integer tap_badperiod  = 0;  // steady-state deviations: must be ZERO
     integer tap_startup    = 0;  // transient deviations: one per reset, bounded
-    integer tap_strobes    = 0;
+    integer tap_strobes    = 0;   // since the last reset (period checking)
+    integer tap_total      = 0;   // cumulative; survives the do_reset calls
     integer tap_resets     = 0;
     always @(posedge clk_audio) begin : tap_mon
         reg [15:0] gap;
@@ -98,6 +100,7 @@ module iec61937_wrap_tb;
                     else                          tap_badperiod = tap_badperiod + 1;
                 end
                 tap_strobes = tap_strobes + 1;
+                tap_total   = tap_total + 1;
                 gap = 16'd0;
             end
         end
@@ -374,11 +377,61 @@ module iec61937_wrap_tb;
         if (dut.cur_nonpcm !== 1'b1) begin
             $display("  FAIL: unmuted burst not tagged non-PCM"); errors=errors+1; end
 
+        // ---- TEST 8d: hold FILL styles --------------------------------------
+        // The hold itself is the pacing loop and is NOT touched here (see
+        // docs/iec61937.md - one-shotting it cost A/V sync). Only its fill
+        // changes, and only after a real burst has gone out, so pre-content
+        // behaviour stays the fj#110 round-2 PCM silence.
+        frame_valid = 0; do_reset;
+        hold_style = 2'd2;                            // pause bursts
+        sync_armed_r = 1; stc_anch_r = 1; fptsv_r = 1;
+        fpts_r = 33'd100000; stc_r = 33'd200000;      // due -> a real burst first
+        frame_len = 16'd8; plen = 8; frame_type = 2'd0; frame_valid = 1;
+        enable = 1;
+        wait (pulses >= 3072);
+        @(posedge clk_sys);
+        if (dut.burst_seen !== 1'b1) begin
+            $display("  FAIL 8d: burst_seen not set"); errors=errors+1; end
+
+        // now starve it: the hold must emit a REAL pause burst, still non-PCM
+        frame_valid = 0;
+        wait (pulses >= 3*3072);      // burst 2 may already have been latched real
+        @(posedge clk_sys); @(posedge clk_sys);
+        $display("TEST 8d: pause-burst hold, cur_nonpcm=%0b", dut.cur_nonpcm);
+        expect_word(0, PA,       "pause-Pa");
+        expect_word(1, PB,       "pause-Pb");
+        expect_word(2, 16'h0003, "pause-Pc");
+        if (dut.cur_nonpcm !== 1'b1) begin
+            $display("  FAIL 8d: pause burst not tagged non-PCM"); errors=errors+1; end
+
+        // style 1: zero words but the format still must not change
+        frame_valid = 0; do_reset;
+        hold_style = 2'd1;
+        stc_r = 33'd200000; frame_valid = 1; enable = 1;
+        wait (pulses >= 3072); @(posedge clk_sys);
+        frame_valid = 0;
+        wait (pulses >= 3*3072); @(posedge clk_sys); @(posedge clk_sys);
+        $display("TEST 8d2: nonpcm hold, cur_nonpcm=%0b", dut.cur_nonpcm);
+        expect_word(0, 16'h0000, "nonpcm-hold-w0");   // still no Pa/Pb
+        if (dut.cur_nonpcm !== 1'b1) begin
+            $display("  FAIL 8d2: nonpcm hold dropped the flag"); errors=errors+1; end
+
+        // style 0 PRE-content must still be PCM silence (the round-2 fix)
+        frame_valid = 0; do_reset;
+        hold_style = 2'd0; enable = 1;
+        wait (pulses >= 3072); @(posedge clk_sys);
+        $display("TEST 8d3: pre-content default, cur_nonpcm=%0b", dut.cur_nonpcm);
+        if (dut.cur_nonpcm !== 1'b0) begin
+            $display("  FAIL 8d3: pre-content hold is not PCM silence -");
+            $display("            that is the fj#110 round-1 regression");
+            errors=errors+1; end
+        hold_style = 2'd0;
+
         // ---- TEST 9: HDMI bitstream tap -------------------------------------
-        $display("TEST 9: HDMI tap, strobes=%0d incoherent=%0d steady_bad=%0d startup_dev=%0d (resets=%0d)",
-                 tap_strobes, tap_incoherent, tap_badperiod, tap_startup, tap_resets);
-        if (tap_strobes < 100) begin
-            $display("  FAIL: tap strobe never ran (%0d)", tap_strobes); errors=errors+1; end
+        $display("TEST 9: HDMI tap, total=%0d incoherent=%0d steady_bad=%0d startup_dev=%0d (resets=%0d)",
+                 tap_total, tap_incoherent, tap_badperiod, tap_startup, tap_resets);
+        if (tap_total < 100) begin
+            $display("  FAIL: tap strobe never ran (%0d)", tap_total); errors=errors+1; end
         if (tap_incoherent != 0) begin
             $display("  FAIL: tap diverged from the pair spdif_pass is playing (%0d cycles)",
                      tap_incoherent); errors=errors+1; end
