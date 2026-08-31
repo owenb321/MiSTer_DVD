@@ -1237,7 +1237,9 @@ that still drain the ring — no STD wedge). Video keeps playing so the disc is
 identifiable. Sim: `ps_demux_scram_tb`, `iec61937_wrap_tb` T8, `transport_hud_tb`
 T13. Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
 
-**DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ⏳ HW gate.**
+**DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ✅ READ +
+gamepad menu HW-CONFIRMED 2026-08-31 (Scripts menu, gamepad-driven, 1 and 2 drives);
+⏳ the SET ioctl is the one remaining gate.**
 A drive with no region set refuses the CSS title-key ioctl, so every physical disc pays a
 multi-second crack (`No drive region: cracking`); the Scripts-menu tool reads the region
 (and the remaining-change count) and can set it, via `DVD_AUTH` — no compiled helper, since

@@ -194,9 +194,10 @@ nudges toward it.
 **Testing.** The ioctl itself cannot be tested without a drive; everything guarding it can,
 and that is where the damage would be. `tools/test_set_dvd_region.py` fakes the drive
 (`DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>`, honoured by the script) and drives
-the menus through a pty using the exact key sequences MiSTer sends for a gamepad — 8
+the menus through a pty using the exact key sequences MiSTer sends for a gamepad — 13
 scenarios, including "a stray B1 on entry changes nothing" and "the confirm defaults to No".
-⏳ **The ioctl path is an HW gate** (see open items).
+The **read** ioctl and the gamepad-driven console are ✅ **HW-CONFIRMED 2026-08-31**; the
+**set** ioctl is the one part still ungated (see open items).
 
 ## HW status / open items
 
@@ -217,14 +218,19 @@ Remaining:
    against the drive's set region (`REPORT KEY` RPC state) and show the cracking text on a
    mismatch. Needs a region-mismatched disc to verify — a second drive set to a region the
    local library does **not** match is the practical rig (see item 2).
-2. **`set_dvd_region.sh` on hardware (⏳ gate):** confirm the read reports the drive's real
-   region/`ucca`, that the gamepad drives the menu on tty2, and that a set is accepted and
-   reads back. Note the read path is safe to test freely; a **set is one-way and spends one
-   of the drive's ~5 changes**, so it wants a drive you are willing to commit. Bench plan is
-   three drives — one left unset (keeps the `No drive region: cracking` path testable, which
-   a set would destroy forever), one matching the local library, one deliberately mismatched
-   as the permanent Q2 rig. `DVDCSS_METHOD=title` forces the crack path on any drive if the
-   physical unset state is not available.
+2. **`set_dvd_region.sh` on hardware — ✅ READ HW-CONFIRMED 2026-08-31, ⏳ SET still gated.**
+   Run from the Scripts menu and driven with a **gamepad**, with one drive connected and
+   with two: regions read correctly (an unset drive and a region-1 drive each identified),
+   and the multi-drive warning listed both. That confirms everything except the write — the
+   `DVD_AUTH` read, drive enumeration, and the uinput key injection on tty2, which was the
+   design's riskiest assumption (nothing else in the repo depends on it).
+   **Remaining: the SET ioctl** (`DVD_HOST_SEND_RPC_STATE` accepted by the drive and reading
+   back). The read path is safe to re-test freely; a **set is one-way and spends one of the
+   drive's ~5 permanent changes**, so it wants a drive you have decided to commit. Bench plan
+   is three drives — one left unset (keeps the `No drive region: cracking` path testable,
+   which a set would destroy forever), one matching the local library, one deliberately
+   mismatched as the permanent Q2 rig. `DVDCSS_METHOD=title` forces the crack path on any
+   drive if the physical unset state is not available.
 3. **Eject → idle reset (just added):** confirm the `status[0]` pulse returns to the idle
    logo cleanly and a subsequent insert plays.
 4. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open.
