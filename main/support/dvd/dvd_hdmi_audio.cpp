@@ -9,6 +9,7 @@
 #include "../../video.h"
 #include "../../cfg.h"
 #include "../../hardware.h"
+#include "../../menu.h"
 #include "dvd_hdmi_audio.h"
 
 // ---------------------------------------------------------------------------
@@ -89,6 +90,21 @@ static int sink_supports_bitstream(void)
 // ---------------------------------------------------------------------------
 // State machine
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Self-reporting. The failure this feature can produce is ambiguous from the
+// listening position: "receiver says PCM, no sound" looks identical whether the
+// custom Main never ran, the core never declared, EDID said no, or the chip was
+// configured and the receiver could not parse our subframes. Rather than make
+// the user iterate blind, say on screen which stage was reached.
+static const char *stage_msg = 0;
+static void report(const char *msg)
+{
+	if (stage_msg == msg) return;      // only on transition
+	stage_msg = msg;
+	printf("dvd_hdmi_audio: %s\n", msg);
+	InfoMessage(msg, 3000, "HDMI Audio");
+}
+
 static int declared   = 0;   // the core declared OX6, so it has the HDMI tap
 static int acked      = 0;   // cfg[14] is currently set
 static int seen_gen   = -1;  // last hdmi_config_init() generation we applied over
@@ -117,6 +133,10 @@ void dvd_hdmi_audio_tick(void)
 	if (!declared || !is_dvd())
 	{
 		if (acked) { set_ack(0); hdmi_config_set_audio(0); }
+		// A core built before the HDMI tap never declares OX6. Say so, but only
+		// once the user actually selects passthru, so it cannot nag.
+		if (is_dvd() && !declared && user_io_status_get("6"))
+			report("Core has no HDMI bitstream\n\nOld .rbf - rebuild/reflash");
 		return;
 	}
 
@@ -124,9 +144,17 @@ void dvd_hdmi_audio_tick(void)
 	// "force" exists because a sink can decode a format it fails to advertise,
 	// and because ARC/soundbar topologies routinely mis-report.
 	int mode = cfg.dvd_hdmi_bitstream;
-	int want = (mode != 1)
-	        && user_io_status_get("6")            // Audio Out = Passthru
-	        && (mode == 2 || sink_supports_bitstream());
+	int passthru = user_io_status_get("6");       // Audio Out = Passthru
+	int sink_ok  = (mode == 2) || sink_supports_bitstream();
+	int want = (mode != 1) && passthru && sink_ok;
+
+	// Name the stage whenever the user has ASKED for passthru but we are not
+	// engaging - that is exactly the "no sound and the receiver says PCM" case.
+	if (passthru && !want)
+	{
+		if (mode == 1)      report("Bitstream disabled\n\ndvd_hdmi_bitstream=1 in MiSTer.ini");
+		else if (!sink_ok)  report("Sink does not list AC-3/DTS\n\nSet dvd_hdmi_bitstream=2 to force");
+	}
 
 	// A full hdmi_config_init() (boot, and video_reinit() on hotplug) rewrites
 	// the audio block back to PCM behind our back. Watch its generation counter
@@ -149,7 +177,7 @@ void dvd_hdmi_audio_tick(void)
 		// ORDER MATTERS: configure the chip FIRST, then let the core start.
 		hdmi_config_set_audio(1);
 		set_ack(1);
-		printf("dvd_hdmi_audio: HDMI bitstream ENGAGED\n");
+		report("HDMI bitstream ENGAGED\n\nADV7513 in IEC958-direct mode");
 	}
 	else if (!want && acked)
 	{
@@ -158,6 +186,7 @@ void dvd_hdmi_audio_tick(void)
 		// the core presents digital silence, never PCM into a non-PCM link.
 		set_ack(0);
 		restore_at = GetTimer(50);
+		stage_msg = 0;   // re-arm reporting for the next engage attempt
 		printf("dvd_hdmi_audio: HDMI bitstream released\n");
 	}
 
