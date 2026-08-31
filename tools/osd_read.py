@@ -92,8 +92,13 @@ ROW_LABELS = [
     #   menu_dom=0 => TT(title); menu_dom=1 & vts=00 => VMGM; menu_dom=1 & vts>0 => VTSM.
     "TR  rd_state  ",  # 21 LIVE reader debug_state {iso_mode15,iso_err14,selvalid13,best_cnt[12:8],menu_dom7,S_STILL6,rd_state[5:0]}
     "TR  lastjump  ",  # 22 last VM jump {jump_domain[15:14], jump_vts[13:7], jump_pgcn[6:0]}  (dom 3=TT 1=VMGM 2=VTSM)
-    "TR  load[0]new",  # 23 PGC-load history newest {menu_dom15, vts[14:8], pgcn[7:0]}
-    "TR  load[1]   ",  # 24 PGC-load history [1]
+    # Rows 23/24 are MUXED on Passthru (O6) since 2026-08-31: in Passthru they
+    # carry the IEC 61937 flap probe (docs/iec61937.md "FLAP ANALYSIS + PROBE
+    # BUILD") instead of the TR history:
+    #   23 = {gap_runs[15:8], aud_rst_cnt[7:4], reanchor_cnt[3:0]}
+    #   24 = {max_silent_run[15:8], underrun_bursts[7:0]}
+    "TR ld0|BSgaps ",  # 23 Decode: PGC-load hist newest; Passthru: flap probe
+    "TR ld1|BSruns ",  # 24 Decode: PGC-load hist [1];   Passthru: flap probe
     "TR  load[2]   ",  # 25 PGC-load history [2]
     # Row 26 (2026-08-27, menu-link/audio-map branch — replaced the answered
     # dbg_promo probe): the reader's LAST pgc_error cause, latched at the error
