@@ -1494,6 +1494,21 @@ Two identifiers, deliberately at different granularities:
   ONE re-roll instead of a second one at release time. (The saved-settings `"v,N;"`
   config version is a SEPARATE, coarser counter — bump that one only on an incompatible
   `O[..]` relayout, see `docs/idle_screen.md`.)
+  **★ HOW FAR to bump (instituted 2026-08-31, by user decision — the rule existed only
+  as precedent until someone had to ask):**
+  - **patch** (`0.2.0` → `0.2.1`) — bug fixes, doc-only changes, internal rework with no
+    change in what the user can do.
+  - **minor** (`0.2.1` → `0.3.0`) — ANY new user-visible capability: a new format or
+    output path, a new OSD option, or content that used to be silent/broken now working.
+    If the release notes would lead with it, it is a minor bump.
+  - **major** — reserved; nothing has warranted it yet (`1.0` would be a
+    "this is finished" statement, not a size-of-change one).
+  The failure this prevents is a release whose version says "fixes" while its own notes
+  lead with a headline feature — the version line is what a user quotes in a bug report,
+  so it should not understate what they are running. Precedent: `0.1d` → `0.2.0` for
+  physical-disc playback; `0.2.1` → `0.3.0` for HDMI bitstream + multichannel AC-3.
+  ⚠ Judge the bump against the WHOLE unreleased delta on `main`, not just the branch in
+  hand — several patch-looking merges can add up to a minor release.
 - **`BUILD_DATE`** — `yymmdd`, regenerated per compile by `sys/build_id.tcl`. ⚠ Do NOT
   extend it with a time or a git SHA to separate same-day builds: it is part of
   `CONF_STR`, hence part of the netlist, so every compile would become a new netlist and
