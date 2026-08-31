@@ -23,9 +23,12 @@ durable scope/decisions/verification knowledge from that repo so it isn't lost.
 
 ## Supported (decodes end-to-end; cosim + hardware verified)
 
-- Plain AC-3 (not E-AC-3), **48 kHz**, **`acmod ∈ {2, 7}`** (stereo L/R and 5.1
-  L C R Ls Rs), **`lfeon ∈ {0,1}`** (LFE parsed/dequantized but dropped from the
-  stereo downmix, like liba52).
+- Plain AC-3 (not E-AC-3), **48 kHz**, **`acmod ∈ {1, 2, 7}`** — **1/0 mono**
+  (added 2026-08-31), stereo L/R, and 5.1 L C R Ls Rs — **`lfeon ∈ {0,1}`** (LFE
+  parsed/dequantized but dropped from the stereo downmix, like liba52).
+  **Mono** needs no downmix (`dmx_en = nfchans > 2`); it decodes one fbw channel
+  and `pcm_out.mono` duplicates ch0 to both outputs. Gate:
+  `bench/ac3/vectors/bbb_mono.ac3` — exps/bap bit-exact, PCM ≤0.5 LSB @ s16.
 - **Channel coupling** and **rematrixing** (stereo) — real DVD/broadcast stereo all
   use coupling. Per-block coupling-strategy changes including **ch0 uncoupled** (the
   first coupled channel isn't always ch0) are handled.
@@ -60,8 +63,16 @@ durable scope/decisions/verification knowledge from that repo so it isn't lost.
 
 ## NOT supported — each currently **fails loud** (`err_unsupported`)
 
-- Other `acmod` (mono / 3-channel / etc.), non-48 kHz sample rates, E-AC-3, and a
-  true multichannel (vs downmixed-stereo) output path.
+- `acmod` **3, 4, 5, 6** (3/0, 2/1, 3/1, **2/2 quad**) and `acmod 0` (1+1 dual
+  mono); non-48 kHz sample rates; E-AC-3; and a true multichannel (vs
+  downmixed-stereo) output path. ⚠ These still **fail loud**, and failing loud
+  here means SILENCE: `err_unsupported` → `ac3_err` → an `ac3_front` self-heal
+  reset every frame. Measured over a 505-disc library, the remaining gap is
+  small but real — **2 library discs** carry a default track our decoder still
+  rejects (both the 2/2 quad case), plus **The Residents Commercial DVD**, whose
+  whole AC-3 layer is `acmod 6` (its LPCM maze rooms play, which is exactly how
+  the bug was reported). acmod 3–6 need real
+  multichannel downmix coefficients, unlike mono which needed none.
 
 > **Debugging note (relevant to the 2026-06-27 choppy-AC-3 bring-up):** the **full
 > Big Buck Bunny NTSC DVD AC-3 track is hardware-validated** in the standalone core
