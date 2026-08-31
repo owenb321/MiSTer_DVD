@@ -3551,12 +3551,19 @@ always @(posedge clk or negedge rst_n) begin
                     state      <= S_DONE;              // FP: commands only, no video
                 end else if (nr_cells == 8'd0 || nr_cells > MAXCELL ||
                              cell_pb_off16 == 16'd0) begin
-                    if (vm_mode && cmd_nr_pre != 8'd0) begin
+                    if (vm_mode && (cmd_nr_pre != 8'd0 || cmd_nr_post != 8'd0)) begin
                         // Phase-4: a 0-cell PGC is a COMMAND STUB - report it
                         // loaded and let the VM execute its pre commands (the
                         // real LinkPGCN / JumpSS trampoline). The heuristic
                         // follow below stays for vm_mode-off. A stub with no
                         // commands falls through to the legacy handling.
+                        // DVD-FORK FIX: || cmd_nr_post - a stub may carry its
+                        // dispatch ENTIRELY in POST (0 cells, 0 pre), which is
+                        // how menu discs route buttons that all share one
+                        // LinkPGCN target whose POST reads HL_BTNN. The old
+                        // pre-only gate dropped those to the pgc_error path
+                        // below = LINK FAIL (Residents VTSM1 PGCN 81, Dinosaur
+                        // x26, 15/122 library discs). dvd_vm.sv runs the POST.
                         cell_count <= 8'd0;
                         cell_mode  <= 1'b0;
                         pgc_loaded <= 1'b1;

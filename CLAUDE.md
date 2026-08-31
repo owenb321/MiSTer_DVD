@@ -318,6 +318,72 @@ worse maintenance burden than targeted in-place edits. So:
   DDR3 + counter widths, not fabric — the big decoder M10Ks are
   latency-tuning FIFOs).
 
+- ✅ **POST-ONLY PGC DISPATCH + FORCED-SELECT ON A NEW HLI — two nav bugs from
+  user-submitted discs (2026-08-30, branch `feature/postonly-pgc-and-fosl`);
+  ✅ HW-CONFIRMED 2026-08-31 (build `DVD_navfix_20260831_0029`) — fix (1) fully,
+  fix (2) PARTIALLY (see below).** Reports: The Residents Commercial DVD *"doesn't allow you
+  to enter the maze / picks Play All whatever you choose / LINK FAIL"*, Dinosaur
+  *"LINK FAIL, navigation issues preventing progress"*, Scooby-Doo 2 *"floor maze
+  starts the player in the wrong position"*.
+  **(1) A 0-CELL PGC IS NOT A DEAD END — it runs its POST.** libdvdnav `play_PGC()`
+  falls to `play_PGC_post()` when `nr_of_programs == 0`, and menu discs use exactly
+  that as the **button dispatcher**: every button carries the SAME `LinkPGCN`, and the
+  target PGC (0 cells, 0 pre) reads `HL_BTNN` in its POST to decide where the press
+  goes — so **SPRM8 is the only carrier of the user's choice**. Killing that PGC
+  collapsed every option onto one destination AND raised LINK FAIL. Fixed at the three
+  `dvd_vm.sv` "0 cells ⇒ dead end" sites (enter `BLK_POST` when `nr_post != 0`;
+  `nr_post == 0` keeps the TP_SW dead-end recovery) + the `dvd_iso_reader.sv`
+  `S_PGC_CELLCHK` gate (`cmd_nr_pre || cmd_nr_post` — its LinkPGCN-follow scan walks
+  PRE commands ONLY, so a POST-only stub fell to `pgc_error`).
+  ⚠ **`tools/dvd_vm_ref.py` HELD THE SAME WRONG ASSUMPTION**, so the golden model could
+  not have caught this — it was written from the RTL and agreed with it. **libdvdnav
+  (`tools/bin/trace_*`) is the independent oracle; use it when a model and its RTL
+  agree suspiciously well.** Scope (**505-disc sweep**; an earlier "15/122" in commit
+  dbe5d57 used a NON-RECURSIVE glob that missed `interactive/` = the DVD games):
+  **70 discs (14.3%)** have the strict 0-cell/0-pre/POST dispatcher, **178 (36.3%)** have
+  a 0-cell PGC with any POST = the full affected population. Sweep: **499/505 landings
+  unchanged, 6 changed — ALL SIX went from a HARD BOOT FAILURE to a healthy menu**
+  (3 verified vs libdvdnav, one landing byte-exact; 3 ✅ HW-confirmed 2026-08-31; four had
+  never been reported). **Zero regressions.** Corroborated by a TV box set outside the
+  swept set (*"link failure on every menu option"*): 6 dispatchers per disc, boot landing
+  unchanged, every button `pgc_error` pre-fix and resolving post-fix.
+  ⚠ Library disc titles are deliberately NOT recorded here (maintainer preference); the
+  per-disc rows are reproducible by re-running the sweep.
+  Test `dvd_vm_tb` [S23] (real Residents PGCN 81 POST bytes; RED pre-fix).
+  **(2) FORCED SELECT (`fosl`) applied only on a not-armed→armed edge** — `armed` reads
+  its pre-assignment value, so `fosl` was dropped whenever one HLI replaced another
+  while armed, which is what a title-domain game does VOBU to VOBU. Scooby's maze
+  authors 4 auto-action compass buttons + an inert centre with `fosl=5`; losing it left
+  the highlight on button 1 (= left), which **self-activated**. Now gated on
+  `nxt_ss == 1` (NEW HLI), matching the `foac` commit; `ss=2/3` continuations stay
+  excluded so it can't fight the player's D-pad. Tests `nav_pci_tb` T16 (RED pre-fix) /
+  T17 (control). Detail: `docs/dvd_vm.md` "POST-only PGC dispatch", `docs/dvd_nav.md`
+  "Forced select".
+  ⚠ **fix (2) is PARTIAL — HW shows fresh maze entry now correct, but RE-ENTRY after a
+  trap and the NEXT room still land on button 1 (auto-action = the player moves before
+  any input).** Leading theory: those entries deliver the HLI as `hli_ss==2`
+  (author marking "same button set"), which the fix deliberately excludes so `fosl`
+  can't fight the D-pad mid-room; the rule likely needs to key on **the cell/PGC having
+  changed**, not on `hli_ss` alone. NOT yet coded — verify against the byte sequence
+  first (⚠ NAV packs carry a system header: PCI data starts at sector offset **0x2D**,
+  not 0x15 — an early scan of mine silently found zero HLIs from that mistake).
+  ⚠ **Still OPEN:** Scooby's **Whac-A-Mole** (not root-caused; NOT `foac` — reads 0
+  disc-wide).
+  ★ **RESIDENTS' MISSING AUDIO — ROOT-CAUSED, and it is NOT a nav bug: `dvd/ac3/`
+  SUPPORTS ONLY acmod 2 (2/0) AND acmod 7 (3/2).** `bsi_parse.sv:167` sets sticky
+  `err_unsupported` for anything else → `ac3_err` → ac3_front self-heal reset every
+  frame → SILENCE. The Residents is **acmod 6 (2/2 quad)** on 310/314 frames; its maze
+  rooms play because they are LPCM, which is exactly the split the user reported.
+  ★★ **The same guard rejects acmod 1 (MONO)** — a much bigger catch, confirmed by HW
+  (BBB-NTSC's special feature is silent) and an independent field report (*"Dolby Digital
+  1.0 Mono … running without audio"*). 505-disc census: **26 discs** have an unsupported
+  acmod on some track, **11 on a DEFAULT track** (9 mono + 2 quad), **2 AC-3-silent
+  disc-wide**. Verified in-bitstream on four library discs (mono ×273, mono ×101,
+  acmod 5 ×167, mono ×200). ⚠ Use the PES `first_access_unit_pointer` to locate
+  the syncframe — a naive `0x0B77` search hits false syncs in payloads.
+  **Mono is the next work item** (accept acmod 1, nfchans=1, duplicate to L/R); acmod
+  3–6 need real multichannel downmix coefficients. All three ISOs are clean rips
+  (`css_scan` 0 scrambled packs).
 - 🔧 **FAILED MENU LINK RE-ENTERS THE MENU, NEVER THE MOVIE (2026-08-27, PR #17)
   — MERGED; HW no-regression pass 2026-08-27 (menus/boot unaffected); ⏳ the
   positive case (a disc whose menu link actually fails — the reporter's Blade
