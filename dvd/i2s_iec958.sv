@@ -47,6 +47,16 @@ module i2s_iec958 (
     input  wire [31:0] sub_w_i,    // timeslot order: [3:0] preamble code .. [31] parity
     input  wire        sub_load_i, // 1 clk pulse: sub_w_i is the new subframe
 
+    // ⚠ HW A/B for the two things the Programming Guide would have told us.
+    // [0] bit order : 0 = LSB/timeslot first (IEC 60958 on the wire), 1 = MSB first
+    //                 (what plain I2S does, which the chip may expect instead)
+    // [1] preamble  : 0 = one-hot code in [3:0], 1 = zeroed, letting the chip
+    //                 derive framing from ws + its own 192-frame counter
+    // HW round 1 got "decoder off" from the receiver: the chip HAD switched to
+    // IEC958-direct (it stopped reporting PCM) but could not find 61937 sync, so
+    // one of these two is wrong. Four combinations, one build.
+    input  wire [1:0]  variant_i,
+
     // Serial output to the ADV7513
     output reg         sck_o,      // 3.072 MHz bit clock
     output reg         ws_o,       // 48 kHz word select: 0 = channel A, 1 = B
@@ -78,7 +88,7 @@ module i2s_iec958 (
                 // Re-arm on the producer's boundary. This is what keeps the two
                 // serializers frame-aligned across a reset re-phase instead of
                 // free-running into a slip.
-                shift_q <= sub_w_i;
+                shift_q <= variant_i[1] ? {sub_w_i[31:4], 4'd0} : sub_w_i;
                 bit_cnt <= 6'd0;
                 msck    <= 1'b0;
                 // spdif_pass loads channel A on even subframe counts; its
@@ -90,10 +100,11 @@ module i2s_iec958 (
                 // Advance on the rising half so the bit is presented for a full
                 // sck period.
                 if (msck) begin
-                    shift_q <= {1'b0, shift_q[31:1]};
+                    shift_q <= variant_i[0] ? {shift_q[30:0], 1'b0}   // MSB first
+                                            : {1'b0, shift_q[31:1]};  // LSB first
                     bit_cnt <= bit_cnt + 6'd1;
                 end else begin
-                    sd_o <= shift_q[0];     // LSB first = timeslot order
+                    sd_o <= variant_i[0] ? shift_q[31] : shift_q[0];
                 end
             end
         end

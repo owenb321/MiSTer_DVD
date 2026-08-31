@@ -99,6 +99,7 @@ module iec61937_wrap #(
     output wire        hdmi_sck_o,
     output wire        hdmi_ws_o,
     output wire        hdmi_sd_o,
+    input  wire [1:0]  hdmi_variant,   // HW A/B, see dvd/i2s_iec958.sv
 
     // ---- debug taps (producer word stream, clk_sys) ----
     output reg  [15:0] dbg_word,      // word committed this cycle
@@ -421,6 +422,7 @@ module iec61937_wrap #(
         .ce_i      (bit_ce),
         .sub_w_i   (sub_w),
         .sub_load_i(sub_load),
+        .variant_i (hdmi_variant),
         .sck_o     (hdmi_sck_o),
         .ws_o      (hdmi_ws_o),
         .sd_o      (hdmi_sd_o)

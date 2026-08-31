@@ -146,12 +146,45 @@ feature carries no new exposure to that trap.
 Bits leave in **timeslot order, LSB first** — the opposite of `sys/i2s.v`'s
 MSB-first PCM. `sck` = 64·Fs = 3.072 MHz, `ws` = 48 kHz.
 
-⚠ **Open assumption.** The exact preamble nibble the ADV7513 expects in
-IEC958-direct is unconfirmed. The upper nibble of the biphase patterns is
-already a clean one-hot (Z=1, Y=2, X=4) and that is what is exported. **If HW
-round 1 shows the receiver locking to the wrong channel or never finding block
-start, this table is the first thing to change** — it is flagged in both
-`dvd/spdif_pass.sv` and `dvd/i2s_iec958.sv`.
+### ★ HW ROUND 1 (2026-08-31): the chip switches, the receiver cannot sync
+
+Receiver reported **PCM + silence** on the first attempt and **"decoder off"**
+once bitstream mode actually engaged. That progression is the useful part:
+
+- "PCM + silence" was the **designed safe fallback** — the ack had not engaged,
+  so `pass_mode` muted `AUDIO_L/R` and `HDMI_BS_EN` stayed low. Nothing made
+  noise, which is the gate working.
+- "decoder off" means the ADV7513 **did** switch to IEC958-direct (it stopped
+  calling the stream PCM) but the receiver could not find IEC 61937 sync
+  (Pa=`F872`, Pb=`4E1F`) inside our subframes.
+
+So Main, the EDID path, the ack and the register write are all **confirmed
+working end to end**. What remains is purely the subframe content, i.e. exactly
+the two things the Programming Guide would have settled and that had to be
+assumed (§ below).
+
+⚠ **Diagnostic lesson, worth keeping:** the round-1 popup was invisible.
+`InfoMessage` no-ops unless the menu FSM is idle, and Audio Out is toggled from
+*inside* the OSD, so a single call at the transition is always dropped —
+`dvd_css` had hit the identical trap. The state is now also written to
+`/tmp/dvd_hdmi_audio.log`, which does not care about menu state:
+`state: passthru=N sink_ok=N declared=N ini_mode=N acked=N`.
+
+### The two unknowns, and the runtime A/B
+
+`P1O[47:46] HDMI BS Variant` selects all four combinations from one build,
+because each guess would otherwise cost a 30-minute fit:
+
+| variant | bit order | preamble field |
+|---|---|---|
+| 0 `LSB+code` | LSB / timeslot first (IEC 60958 on the wire) | one-hot Z=1, Y=2, X=4 |
+| 1 `MSB+code` | MSB first (what plain I2S does) | one-hot |
+| 2 `LSB+zero` | LSB first | zeroed — chip derives framing from `ws` |
+| 3 `MSB+zero` | MSB first | zeroed |
+
+Variant 0 is the original assumption. Sim proves the **mux** in all four (each
+channel still carries its own audio, preamble zeroed exactly when asked); which
+one the real chip wants is the HW question the selector exists to answer.
 
 ---
 

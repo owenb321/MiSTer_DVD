@@ -33,10 +33,11 @@ module i2s_iec958_tb;
         .sub_w_o(sub_w), .sub_load_o(sub_load)
     );
 
+    reg [1:0] variant = 2'd0;    // [0] 1=MSB-first, [1] 1=zeroed preamble
     wire sck, ws, sd;
     i2s_iec958 u_i2s (
         .clk(clk), .rst_n(rst_n), .ce_i(ce),
-        .sub_w_i(sub_w), .sub_load_i(sub_load),
+        .sub_w_i(sub_w), .sub_load_i(sub_load), .variant_i(variant),
         .sck_o(sck), .ws_o(ws), .sd_o(sd)
     );
 
@@ -69,7 +70,8 @@ module i2s_iec958_tb;
                 nbits = 0; acc = 32'd0;
             end
             if (sck && !sck_d) begin             // rising sck: sample the line
-                acc = {sd, acc[31:1]};           // LSB-first fill
+                // undo whichever order the DUT is sending in
+                acc = variant[0] ? {acc[30:0], sd} : {sd, acc[31:1]};
                 nbits = nbits + 1;
                 if (nbits == 32) begin
                     if (rec_n < 256) begin
@@ -83,7 +85,7 @@ module i2s_iec958_tb;
         end
     end
 
-    integer errors = 0, i;
+    integer errors = 0, i, v;
     integer chkA = 0, chkB = 0, badpar = 0, badpre = 0;
     reg [31:0] w;
 
@@ -141,6 +143,39 @@ module i2s_iec958_tb;
             $display("  FAIL: %0d subframes with the wrong channel's audio -", chkA);
             $display("        bit order or A/B mapping is inverted");
             errors = errors + 1; end
+
+        // ---- sweep the other three variants -------------------------------
+        // Correctness against the real ADV7513 is a HW question (that is why the
+        // selector exists), but the MUX must be right in all four: each channel
+        // still carries its own audio, and the preamble field is zeroed exactly
+        // when asked. A broken variant would waste a whole HW round.
+        for (v = 1; v < 4; v = v + 1) begin
+            variant = v[1:0];
+            rec_n = 0;
+            repeat (60000) @(posedge clk);
+            chkA = 0; chkB = 0;
+            for (i = 4; i < (rec_n > 120 ? 120 : rec_n); i = i + 1) begin
+                w = rec_q[i];
+                // channel identity comes from ws when the preamble is zeroed
+                if (rec_ws[i]) begin
+                    if (w[27:24] !== 4'hA) chkA = chkA + 1;
+                end else begin
+                    if (w[27:24] !== 4'h5) chkA = chkA + 1;
+                end
+                if (variant[1] && w[3:0] !== 4'd0) chkB = chkB + 1;
+                if (!variant[1] && w[3:0] !== 4'b0001
+                                && w[3:0] !== 4'b0010
+                                && w[3:0] !== 4'b0100) chkB = chkB + 1;
+            end
+            $display("  variant %0d: %0d subframes, audio_mismatch=%0d preamble_bad=%0d",
+                     v, rec_n, chkA, chkB);
+            if (rec_n < 40)  begin $display("  FAIL: variant %0d produced nothing", v);
+                                   errors = errors + 1; end
+            if (chkA != 0)   begin $display("  FAIL: variant %0d audio/channel mismatch", v);
+                                   errors = errors + 1; end
+            if (chkB != 0)   begin $display("  FAIL: variant %0d preamble field wrong", v);
+                                   errors = errors + 1; end
+        end
 
         if (errors == 0) $display("\nPASS: i2s_iec958");
         else begin $display("\n%0d FAILURES", errors); $fatal(1, "i2s_iec958_tb failed"); end
