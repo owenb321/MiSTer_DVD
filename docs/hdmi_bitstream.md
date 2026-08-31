@@ -129,6 +129,17 @@ volume keypress** (`audio.cpp` `setFilter()` → `sys_top.v:359-369`), restartin
 bitstream: attenuation lives in `aud_mix_top`, which this path bypasses
 entirely. That is correct player behaviour, not a bug.
 
+### Note on the SV-function silent-silicon trap
+
+`docs/ac3_decoder.md` records (2026-08-31) that `function automatic` helpers in the
+AC-3 decoder simulated perfectly and produced **silent hardware** under Quartus 17,
+with no warning. Worth stating plainly for this path: **the HDMI leg adds no
+functions.** `dvd/i2s_iec958.sv` is one always block; the `spdif_pass` export is
+wires. The two functions in `iec61937_wrap.sv` (`mkword`, `bin2gray`) are
+pre-existing and sit on the HW-CONFIRMED S/PDIF path — and since HDMI reuses that
+same word stream, a fault in either would already show up on optical. So this
+feature carries no new exposure to that trap.
+
 ### Serial format
 
 `dvd/i2s_iec958.sv`, 64 bits per frame = two 32-bit subframes, channel A then B.

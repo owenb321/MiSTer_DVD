@@ -55,8 +55,8 @@ onto **line 21 of the analog output**, exactly as a real DVD player does, so you
 television's own caption decoder displays them. Analog output only, and it needs a set
 with a caption decoder (every US television 13" and larger since 1993 has one).
 
-**Audio** — AC-3 and MPEG-1 Layer II (MP2) decoded entirely in fabric (AC-3 5.1
-downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
+**Audio** — AC-3 and MPEG-1 Layer II (MP2) decoded entirely in fabric (every AC-3
+channel mode, downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
 to a receiver — over optical S/PDIF, or over HDMI itself with the custom Main, so 5.1
 needs no add-on board.
 
