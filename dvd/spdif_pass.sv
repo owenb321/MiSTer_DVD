@@ -85,7 +85,12 @@ module spdif_pass
     // and preamble fields are FILLED here - the biphase stage computes those as
     // it emits, which is too late for a parallel consumer.
     output [31:0]   sub_w_o,
-    output          sub_load_o
+    output          sub_load_o,
+    // Channel of the subframe being emitted: 0 = A (left), 1 = B (right). Must
+    // come from here rather than be inferred from the exported word - the
+    // documented AES3-direct format has NO preamble, so the word itself no
+    // longer identifies the channel.
+    output          sub_chb_o
 );
 
 //-----------------------------------------------------------------
@@ -254,36 +259,36 @@ end
 //-----------------------------------------------------------------
 // DVD-FORK: parallel subframe export (see sub_w_o in the port list)
 //-----------------------------------------------------------------
-// Preamble CODE for the parallel interface. The 8-bit patterns above are
-// half-bit-time biphase cell patterns and cannot be sent over a plain serial
-// data line; a parallel/"direct" interface carries a code instead. Their upper
-// nibbles are already a clean one-hot (Z=0001, Y=0010, X=0100), so that is what
-// is exported.
-// ⚠ ASSUMPTION - the exact nibble the ADV7513 expects in IEC958-direct mode is
-// unconfirmed (the Programming Guide could not be obtained; the mainline Linux
-// driver selects the mode but never writes the field). If HW round 1 shows the
-// receiver locking to the wrong channel or never seeing block start, this table
-// is the first thing to change. See docs/hdmi_bitstream.md.
-// Built from the REGISTERED preamble_q / audio_sample_q (via subframe_w), so the
-// exported word is the coherent set for the subframe currently being emitted.
-// preamble_r and audio_sample_q are valid on OPPOSITE sides of the load edge -
-// preamble_r already describes the subframe about to start while audio_sample_q
-// still holds the previous one - so sub_load_o is delayed one cycle to land
-// where both are settled. A consumer latches sub_w_o on sub_load_o.
-wire [3:0] sub_pre_code = preamble_q[7:4];
+// ★ AES3-DIRECT FRAME FORMAT, from the ADV7511 Programming Guide §4.4.1.1
+// (obtained 2026-08-31, after HW rounds 1-3 were spent guessing at it):
+//
+//   "In the direct AES3 stream I2S format, the user can send an IEC60958
+//    sub-frame ... with the Preamble LEFT OUT ... Notice that the PARITY BIT IS
+//    REPLACED BY THE BLOCK START FLAG. The parity bit will be calculated
+//    automatically."
+//
+// So the exported word is the IEC 60958 subframe with two ends changed:
+//   [3:0]  preamble slots -> ZERO (left out; the chip re-generates preambles)
+//   [31]   parity         -> BLOCK START (1 on frame 0 of each 192-frame block)
+//
+// V/U/C keep their slots 28/29/30 - confirmed empirically before the document
+// arrived: the chip read our channel-status bit correctly (the receiver reported
+// non-PCM), which can only happen if C is where it expects it.
+//
+// The block-start flag is what was missing. Without it the chip can never find
+// the head of a channel-status block, so it cannot assemble the status the sink
+// needs - which is exactly why HW round 3 saw a stable non-PCM indication and
+// yet no 61937 lock, and why zeroing the preamble alone made it FLAP (block
+// start then landed wherever the old parity bit happened to be 1).
+wire sub_blk_start = (preamble_q == PREAMBLE_Z);   // Z(B) == frame 0 of the block
 
-// Even parity over timeslots 4..31: choose [31] so that range holds an even
-// number of ones. The biphase stage derives the same value serially
-// (parity_count_q); subframe_w[31] is the zero placeholder, so this is just the
-// XOR of the rest.
-wire       sub_parity   = ^subframe_w[30:4];
-
-reg        sub_load_q;
+reg  sub_load_q;
 always @ (posedge rst_i or posedge clk_i)
     if (rst_i) sub_load_q <= 1'b0;
     else       sub_load_q <= load_subframe_q;
 
-assign sub_w_o    = {sub_parity, subframe_w[30:4], sub_pre_code};
+assign sub_w_o    = {sub_blk_start, subframe_w[30:4], 4'b0000};
+assign sub_chb_o  = (preamble_q == PREAMBLE_Y);   // Y(W) = channel B
 assign sub_load_o = sub_load_q;
 
 //-----------------------------------------------------------------

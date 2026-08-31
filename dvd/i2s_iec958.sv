@@ -46,15 +46,15 @@ module i2s_iec958 (
     // Parallel subframe source (dvd/spdif_pass.sv exports)
     input  wire [31:0] sub_w_i,    // timeslot order: [3:0] preamble code .. [31] parity
     input  wire        sub_load_i, // 1 clk pulse: sub_w_i is the new subframe
+    input  wire        sub_chb_i,  // 0 = channel A (left), 1 = channel B
 
     // ⚠ HW A/B for the two things the Programming Guide would have told us.
     // [0] bit order : 0 = LSB/timeslot first (IEC 60958 on the wire), 1 = MSB first
     //                 (what plain I2S does, which the chip may expect instead)
-    // [1] preamble  : 0 = one-hot code in [3:0], 1 = zeroed, letting the chip
-    //                 derive framing from ws + its own 192-frame counter
-    // HW round 1 got "decoder off" from the receiver: the chip HAD switched to
-    // IEC958-direct (it stopped reporting PCM) but could not find 61937 sync, so
-    // one of these two is wrong. Four combinations, one build.
+    // [1] legacy    : 0 = documented format (block-start flag in [31], preamble
+    //                 slots zeroed - Programming Guide §4.4.1.1), 1 = the old
+    //                 pre-document guess (parity in [31], one-hot preamble code),
+    //                 kept only so the fix can be A/B'd against what failed.
     input  wire [1:0]  variant_i,
 
     // Serial output to the ADV7513
@@ -88,13 +88,20 @@ module i2s_iec958 (
                 // Re-arm on the producer's boundary. This is what keeps the two
                 // serializers frame-aligned across a reset re-phase instead of
                 // free-running into a slip.
-                shift_q <= variant_i[1] ? {sub_w_i[31:4], 4'd0} : sub_w_i;
+                // sub_w_i already carries the documented format. The legacy
+                // option reconstructs the pre-document guess for comparison:
+                // even parity over 4..31 back into [31], one-hot code into [3:0].
+                shift_q <= variant_i[1]
+                         ? {^sub_w_i[30:4], sub_w_i[30:4], 4'b0100}
+                         : sub_w_i;
                 bit_cnt <= 6'd0;
                 msck    <= 1'b0;
-                // spdif_pass loads channel A on even subframe counts; its
-                // preamble code distinguishes them, and ws follows the same
-                // parity so the ADV7513 sees a conventional word select.
-                ws_o    <= (sub_w_i[3:0] == 4'b0010);   // Y(W) = channel B
+                // ⚠ ws MUST come from spdif_pass, not from the word. The
+                // documented AES3-direct format has no preamble, so the word no
+                // longer identifies the channel - deriving ws from it left ws
+                // stuck at 0 (no word select at all), which is a silent and
+                // total failure.
+                ws_o    <= sub_chb_i;
             end else if (ce_i) begin
                 msck <= ~msck;
                 // Advance on the rising half so the bit is presented for a full

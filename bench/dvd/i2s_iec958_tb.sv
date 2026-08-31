@@ -24,20 +24,20 @@ module i2s_iec958_tb;
     reg  [31:0] sample = 32'd0;           // {R, L}
     reg         nonpcm = 1'b1;
     wire [31:0] sub_w;
-    wire        sub_load, sample_req, spdif_o;
+    wire        sub_load, sub_chb, sample_req, spdif_o;
 
     spdif_pass u_sp (
         .clk_i(clk), .rst_i(~rst_n), .bit_out_en_i(ce),
         .spdif_o(spdif_o), .nonpcm_i(nonpcm),
         .sample_i(sample), .sample_req_o(sample_req),
-        .sub_w_o(sub_w), .sub_load_o(sub_load)
+        .sub_w_o(sub_w), .sub_load_o(sub_load), .sub_chb_o(sub_chb)
     );
 
     reg [1:0] variant = 2'd0;    // [0] 1=MSB-first, [1] 1=zeroed preamble
     wire sck, ws, sd;
     i2s_iec958 u_i2s (
         .clk(clk), .rst_n(rst_n), .ce_i(ce),
-        .sub_w_i(sub_w), .sub_load_i(sub_load), .variant_i(variant),
+        .sub_w_i(sub_w), .sub_load_i(sub_load), .sub_chb_i(sub_chb), .variant_i(variant),
         .sck_o(sck), .ws_o(ws), .sd_o(sd)
     );
 
@@ -86,7 +86,7 @@ module i2s_iec958_tb;
     end
 
     integer errors = 0, i, v;
-    integer chkA = 0, chkB = 0, badpar = 0, badpre = 0;
+    integer chkA = 0, chkB = 0, badpar = 0, badpre = 0, blk = 0;
     reg [31:0] w;
 
     initial begin
@@ -102,80 +102,73 @@ module i2s_iec958_tb;
             errors = errors + 1;
         end
 
-        // Skip the first few (reset re-phase, and the demod locks mid-subframe
-        // until the first full 32-bit window completes).
+        // ---- documented AES3-direct format (Programming Guide 4.4.1.1) ------
+        //   [3:0]  preamble LEFT OUT -> zero
+        //   [31]   BLOCK START flag, not parity (the chip computes parity)
+        //   V/U/C stay at 28/29/30
+        // Channel identity comes from ws, since there is no preamble to carry it.
+        badpre = 0; chkA = 0; chkB = 0; blk = 0;
         for (i = 4; i < (rec_n > 200 ? 200 : rec_n); i = i + 1) begin
             w = rec_q[i];
-
-            // preamble code must be one of the three one-hot values
-            if (w[3:0] !== 4'b0001 && w[3:0] !== 4'b0010 && w[3:0] !== 4'b0100)
-                badpre = badpre + 1;
-
-            // even parity over timeslots 4..31
-            if (^w[31:4] !== 1'b0) badpar = badpar + 1;
-
-            // channel A carries the low (left) word, B the high (right) word
-            if (w[3:0] == 4'b0010) chkB = chkB + 1; else chkA = chkA + 1;
+            if (w[3:0] !== 4'd0)                      badpre = badpre + 1;
+            if (w[31])                                blk    = blk + 1;
+            if (w[31] && rec_ws[i])                   chkB   = chkB + 1;  // must be ch A
+            if (rec_ws[i]) begin
+                if (w[27:24] !== 4'hA) chkA = chkA + 1;
+            end else begin
+                if (w[27:24] !== 4'h5) chkA = chkA + 1;
+            end
         end
 
         if (badpre != 0) begin
-            $display("  FAIL: %0d subframes with a bogus preamble code", badpre);
+            $display("  FAIL: %0d subframes with a non-zero preamble field", badpre);
             errors = errors + 1; end
-        if (badpar != 0) begin
-            $display("  FAIL: %0d subframes with bad even parity", badpar);
-            errors = errors + 1; end
-        if (chkA == 0 || chkB == 0) begin
-            $display("  FAIL: only one channel present (A=%0d B=%0d)", chkA, chkB);
-            errors = errors + 1; end
-
-        // The audio field of consecutive A/B subframes must be the 0x5000/0xA000
-        // pattern that was fed in, proving LSB-first order and channel mapping.
-        chkA = 0;
-        for (i = 4; i < (rec_n > 200 ? 200 : rec_n); i = i + 1) begin
-            w = rec_q[i];
-            if (w[3:0] == 4'b0010) begin
-                if (w[27:24] !== 4'hA) chkA = chkA + 1;   // channel B = right = 0xAxxx
-            end else begin
-                if (w[27:24] !== 4'h5) chkA = chkA + 1;   // channel A = left  = 0x5xxx
-            end
-        end
         if (chkA != 0) begin
             $display("  FAIL: %0d subframes with the wrong channel's audio -", chkA);
             $display("        bit order or A/B mapping is inverted");
             errors = errors + 1; end
+        if (chkB != 0) begin
+            $display("  FAIL: block start asserted on a channel-B subframe (%0d)", chkB);
+            errors = errors + 1; end
+        // 196 subframes spans about half a 384-subframe block, so expect 0 or 1.
+        if (blk > 2) begin
+            $display("  FAIL: block start asserted %0d times in ~196 subframes", blk);
+            errors = errors + 1; end
+        $display("  format: preamble_zero=OK block_starts=%0d", blk);
 
-        // ---- sweep the other three variants -------------------------------
-        // Correctness against the real ADV7513 is a HW question (that is why the
-        // selector exists), but the MUX must be right in all four: each channel
-        // still carries its own audio, and the preamble field is zeroed exactly
-        // when asked. A broken variant would waste a whole HW round.
-        for (v = 1; v < 4; v = v + 1) begin
-            variant = v[1:0];
-            rec_n = 0;
-            repeat (60000) @(posedge clk);
-            chkA = 0; chkB = 0;
-            for (i = 4; i < (rec_n > 120 ? 120 : rec_n); i = i + 1) begin
-                w = rec_q[i];
-                // channel identity comes from ws when the preamble is zeroed
-                if (rec_ws[i]) begin
-                    if (w[27:24] !== 4'hA) chkA = chkA + 1;
-                end else begin
-                    if (w[27:24] !== 4'h5) chkA = chkA + 1;
-                end
-                if (variant[1] && w[3:0] !== 4'd0) chkB = chkB + 1;
-                if (!variant[1] && w[3:0] !== 4'b0001
-                                && w[3:0] !== 4'b0010
-                                && w[3:0] !== 4'b0100) chkB = chkB + 1;
+        // ---- MSB-first variant still carries the same content ---------------
+        variant = 2'd1;
+        rec_n = 0;
+        repeat (60000) @(posedge clk);
+        chkA = 0;
+        for (i = 4; i < (rec_n > 120 ? 120 : rec_n); i = i + 1) begin
+            w = rec_q[i];
+            if (rec_ws[i]) begin
+                if (w[27:24] !== 4'hA) chkA = chkA + 1;
+            end else begin
+                if (w[27:24] !== 4'h5) chkA = chkA + 1;
             end
-            $display("  variant %0d: %0d subframes, audio_mismatch=%0d preamble_bad=%0d",
-                     v, rec_n, chkA, chkB);
-            if (rec_n < 40)  begin $display("  FAIL: variant %0d produced nothing", v);
-                                   errors = errors + 1; end
-            if (chkA != 0)   begin $display("  FAIL: variant %0d audio/channel mismatch", v);
-                                   errors = errors + 1; end
-            if (chkB != 0)   begin $display("  FAIL: variant %0d preamble field wrong", v);
-                                   errors = errors + 1; end
         end
+        $display("  variant 1 (MSB): %0d subframes, audio_mismatch=%0d", rec_n, chkA);
+        if (rec_n < 40 || chkA != 0) begin
+            $display("  FAIL: MSB-first variant broken"); errors = errors + 1; end
+
+        // ---- legacy variant reproduces the pre-document guess ---------------
+        variant = 2'd2;
+        rec_n = 0;
+        repeat (60000) @(posedge clk);
+        badpre = 0;
+        for (i = 4; i < (rec_n > 120 ? 120 : rec_n); i = i + 1) begin
+            w = rec_q[i];
+            if (w[3:0] !== 4'b0100) badpre = badpre + 1;   // one-hot code restored
+            if (^w[31:4] !== 1'b0)  badpre = badpre + 1;   // even parity restored
+        end
+        $display("  variant 2 (legacy): %0d subframes, deviations=%0d", rec_n, badpre);
+        if (rec_n < 40 || badpre != 0) begin
+            $display("  FAIL: legacy variant does not reproduce the old format");
+            errors = errors + 1; end
+
+        variant = 2'd0;
 
         if (errors == 0) $display("\nPASS: i2s_iec958");
         else begin $display("\n%0d FAILURES", errors); $fatal(1, "i2s_iec958_tb failed"); end

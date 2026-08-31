@@ -170,6 +170,97 @@ assumed (§ below).
 `/tmp/dvd_hdmi_audio.log`, which does not care about menu state:
 `state: passthru=N sink_ok=N declared=N ini_mode=N acked=N`.
 
+### ★★ THE FORMAT, from the Programming Guide §4.4.1.1 (obtained 2026-08-31)
+
+Three HW rounds were spent guessing at this. The document settles it in one
+paragraph:
+
+> "In the direct AES3 stream I2S format, the user can send an IEC60958 sub-frame
+> ... with the **Preamble left out** ... Notice that the **parity bit is replaced
+> by the block start flag**. The parity bit will be calculated automatically. The
+> information contained in "C" of I2S0 is used in the HDMI audio sample packet."
+
+So the AES3-direct subframe is the IEC 60958 subframe with **both ends changed**:
+
+| slots | content |
+|---|---|
+| `[3:0]` | preamble **left out** → zero (the chip regenerates preambles) |
+| `[27:4]` | audio + aux, unchanged |
+| `[28] [29] [30]` | V, U, C — unchanged |
+| `[31]` | **BLOCK START flag**, *not* parity (parity is computed by the chip) |
+
+**The missing block-start flag was the bug.** Without it the chip can never find
+the head of a 192-frame channel-status block, so it cannot assemble the status
+the sink needs. That is exactly what HW round 3 showed: a *stable* non-PCM
+indication (proving V/U/C were already in the right slots) with no 61937 lock —
+and it is why zeroing the preamble alone made the receiver FLAP between PCM and
+"decoder off", since block start then landed wherever the old parity bit
+happened to be 1.
+
+⚠ **Word select must come from `spdif_pass`, not from the word.** With no
+preamble the subframe no longer identifies its own channel. Deriving `ws` from
+the preamble code — which worked while a code was present — left `ws` stuck at 0
+once it was correctly zeroed: no word select at all, a total and silent failure.
+`sub_chb_o` now carries it explicitly.
+
+⚠ **Channel Count `0x73[2:0]` must be 1, not 0.** §4.4.1.1: "If I2S0 only is
+needed, setting the Channel Count register (0x73[2:0]) and I2S enable (0x0C[2])
+to 1 will select this." CC also drives the Audio Sample Packet layout bit and
+`sample_present.spX` (Figure 23), so 0 mis-frames the packet. A 61937 burst is a
+two-channel carrier, so stereo is correct for bitstream as well.
+
+**Correction to an earlier reading of Table 11.** Its Output Format column lists
+"AES3 Direct" for this mode and "IEC61937" only for the SPDIF pin and HBR, which
+looked like a statement that I2S AES3-direct *cannot* carry 61937. It is not —
+that column describes the input encoding. §4.4.1.1 is explicit that C from I2S0
+reaches the HDMI audio sample packet, which is the whole mechanism. (The SPDIF
+input really is unreachable, though: it is **pin 3**, physically separate from
+I2S0 on pin 5, and the DE10-Nano routes only I2S0/MCLK/SCLK/LRCLK.)
+
+### What the runtime A/B is still for
+
+`P1O[47:46] HDMI BS Variant` now selects:
+
+| variant | meaning |
+|---|---|
+| 0 `LSB+blkstart` | the documented format above — **the expected answer** |
+| 1 `MSB+blkstart` | MSB-first, insurance against a bit-order misreading |
+| 2 `LSB+legacy` | reproduces the pre-document guess (parity in `[31]`, one-hot preamble) |
+| 3 `MSB+legacy` | both |
+
+Variant 2 exists so the fix can be A/B'd against the exact thing that failed,
+rather than trusting that anything changed.
+
+### Serial format
+
+`dvd/i2s_iec958.sv`, 64 bits per frame = two 32-bit subframes, channel A then B.
+Bits leave in **timeslot order, LSB first** — the opposite of `sys/i2s.v`'s
+MSB-first PCM. `sck` = 64·Fs = 3.072 MHz, `ws` = 48 kHz.
+
+### ★ HW ROUND 1 (2026-08-31): the chip switches, the receiver cannot sync
+
+Receiver reported **PCM + silence** on the first attempt and **"decoder off"**
+once bitstream mode actually engaged. That progression is the useful part:
+
+- "PCM + silence" was the **designed safe fallback** — the ack had not engaged,
+  so `pass_mode` muted `AUDIO_L/R` and `HDMI_BS_EN` stayed low. Nothing made
+  noise, which is the gate working.
+- "decoder off" means the ADV7513 **did** switch to IEC958-direct (it stopped
+  calling the stream PCM) but the receiver could not find IEC 61937 sync
+  (Pa=`F872`, Pb=`4E1F`) inside our subframes.
+
+So Main, the EDID path, the ack and the register write are all **confirmed
+working end to end**. What remains is purely the subframe content, i.e. exactly
+the two things the Programming Guide would have settled and that had to be
+assumed (§ below).
+
+⚠ **Diagnostic lesson, worth keeping:** the round-1 popup was invisible.
+`InfoMessage` no-ops unless the menu FSM is idle, and Audio Out is toggled from
+*inside* the OSD, so a single call at the transition is always dropped —
+`dvd_css` had hit the identical trap. The state is now also written to
+`/tmp/dvd_hdmi_audio.log`, which does not care about menu state:
+`state: passthru=N sink_ok=N declared=N ini_mode=N acked=N`.
+
 ### The two unknowns, and the runtime A/B
 
 `P1O[47:46] HDMI BS Variant` selects all four combinations from one build,

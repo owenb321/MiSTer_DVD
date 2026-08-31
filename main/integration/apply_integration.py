@@ -302,7 +302,16 @@ void hdmi_config_set_audio(int bitstream)
 		0x0C, (uint8_t)(bitstream ? 0x07 : 0x04),    // [2] I2S0 en; [1:0] 3=IEC958 direct, 0=standard
 		0x14, wordlen,                           // audio word length (tweak bit 0)
 		0x15, (uint8_t)((cfg.hdmi_audio_96k ? 0x80 : 0) | 0x20),   // 48 kHz
-		0x73, (uint8_t)(bitstream ? 0x00 : 0x01),    // CT/CC = refer to stream header
+		0x73, 0x01,                              // Channel Count = 1 (stereo).
+		                                         // NOT 0: Programming Guide 4.4.1.1 -
+		                                         // "If I2S0 only is needed, setting the
+		                                         // Channel Count register (0x73[2:0]) and
+		                                         // I2S enable (0x0C[2]) to 1 will select
+		                                         // this". CC also drives the Audio Sample
+		                                         // Packet layout bit and sample_present.spX
+		                                         // (Figure 23), so 0 mis-frames the packet.
+		                                         // A 61937 burst is a 2-channel carrier, so
+		                                         // stereo is right for bitstream too.
 	};
 
 	for (uint i = 0; i < sizeof(audio_data); i += 2)

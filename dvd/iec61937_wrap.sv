@@ -399,7 +399,7 @@ module iec61937_wrap #(
     assign bs_stb_o    = sample_req;
 
     wire [31:0] sub_w;
-    wire        sub_load;
+    wire        sub_load, sub_chb;
 
     spdif_pass u_spdif (
         .clk_i       (clk_audio),
@@ -410,7 +410,8 @@ module iec61937_wrap #(
         .sample_i    (cur_pair[31:0]),
         .sample_req_o(sample_req),
         .sub_w_o     (sub_w),
-        .sub_load_o  (sub_load)
+        .sub_load_o  (sub_load),
+        .sub_chb_o   (sub_chb)
     );
 
     // HDMI leg: the same subframes, serialized for the ADV7513 instead of
@@ -422,6 +423,7 @@ module iec61937_wrap #(
         .ce_i      (bit_ce),
         .sub_w_i   (sub_w),
         .sub_load_i(sub_load),
+        .sub_chb_i (sub_chb),
         .variant_i (hdmi_variant),
         .sck_o     (hdmi_sck_o),
         .ws_o      (hdmi_ws_o),
