@@ -157,8 +157,10 @@ module debug_overlay (
     // (clk_sys) nav taps, synced like the rest for uniformity.
     input      [15:0] dbg21,   // LIVE reader debug_state: rd_state[5:0], S_STILL[6], menu_dom[7]
     input      [15:0] dbg22,   // {cur_vts[15:8], cur_pgcn[7:0]} currently-loaded PGC
-    input      [15:0] dbg23,   // {rsm_vts[15:8], rsm_pgcn[7:0]} (01/01 = FP intro)
-    input      [15:0] dbg24,   // {deadend_vts[15:8], deadend_pgcn[7:0]} (0 = none)
+    input      [15:0] dbg23,   // Decode: PGC-load hist [0]; Passthru: 61937 flap probe
+                               //   {gap_runs[7:0], aud_rst[3:0], reanchor[3:0]}
+    input      [15:0] dbg24,   // Decode: PGC-load hist [1]; Passthru: 61937 flap probe
+                               //   {max_silent_run[7:0], underrun_bursts[7:0]}
     input      [15:0] dbg25,   // {pgc_err_cnt[7:0], vm_dbg_state[7:0]=came_via[7]/fb[6:4]/state[3:0]}
     input      [15:0] dbg26,   // reader debug_state AT first pgc_error (0 = none)
     // Row 27 (Thayer menu-audio flow-control): {vbuf_fill[15:8], stall/guard flags[7:0]}

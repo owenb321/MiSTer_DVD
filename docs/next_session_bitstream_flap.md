@@ -1,5 +1,12 @@
 # Next session: the IEC 61937 startup / track-change lock flap
 
+> **STATUS 2026-08-31 (session 2, `feature/bs-flap-probe`):** analysis + probe
+> build done — see `docs/iec61937.md` "FLAP ANALYSIS + PROBE BUILD". Two claims
+> below are now revised there: the hold-fill A/B never engaged in the symptom
+> windows (so "the fill is not the variable" is unproven for startup/track
+> change), and the `cur_period` lead is a footnote (silence holds carry no Pa/Pb
+> grid; 1536 = 3×512). Next: the round-0 zero-build checks + the probe rows.
+
 Paste the block below to start. Everything it claims has been verified on hardware
 unless marked otherwise.
 
