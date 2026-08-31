@@ -33,7 +33,7 @@ module i2s_iec958_tb;
         .sub_w_o(sub_w), .sub_load_o(sub_load), .sub_chb_o(sub_chb)
     );
 
-    reg [2:0] variant = 3'd0;    // [0] 1=MSB-first, [1] 1=zeroed preamble
+    reg [2:0] variant = 3'd1;   // AES3 LSB+blkstart (PCM16 is now 0)    // [0] 1=MSB-first, [1] 1=zeroed preamble
     wire sck, ws, sd;
     i2s_iec958 u_i2s (
         .clk(clk), .rst_n(rst_n), .ce_i(ce),
@@ -71,7 +71,9 @@ module i2s_iec958_tb;
             end
             if (sck && !sck_d) begin             // rising sck: sample the line
                 // undo whichever order the DUT is sending in
-                acc = variant[0] ? {acc[30:0], sd} : {sd, acc[31:1]};
+                // MSB-first is variants 2 and 4 (see dvd/i2s_iec958.sv)
+                acc = (variant == 3'd2 || variant == 3'd4)
+                    ? {acc[30:0], sd} : {sd, acc[31:1]};
                 nbits = nbits + 1;
                 if (nbits == 32) begin
                     if (rec_n < 256) begin
@@ -134,10 +136,10 @@ module i2s_iec958_tb;
         if (blk > 2) begin
             $display("  FAIL: block start asserted %0d times in ~196 subframes", blk);
             errors = errors + 1; end
-        $display("  format: preamble_zero=OK block_starts=%0d", blk);
+        $display("  format: preamble_bad=%0d block_starts=%0d", badpre, blk);
 
         // ---- MSB-first variant still carries the same content ---------------
-        variant = 3'd1;
+        variant = 3'd2;   // AES3 MSB
         rec_n = 0;
         repeat (60000) @(posedge clk);
         chkA = 0;
@@ -149,12 +151,12 @@ module i2s_iec958_tb;
                 if (w[27:24] !== 4'h5) chkA = chkA + 1;
             end
         end
-        $display("  variant 1 (MSB): %0d subframes, audio_mismatch=%0d", rec_n, chkA);
+        $display("  variant 2 (AES3 MSB): %0d subframes, audio_mismatch=%0d", rec_n, chkA);
         if (rec_n < 40 || chkA != 0) begin
             $display("  FAIL: MSB-first variant broken"); errors = errors + 1; end
 
         // ---- legacy variant reproduces the pre-document guess ---------------
-        variant = 3'd2;
+        variant = 3'd3;   // AES3 legacy
         rec_n = 0;
         repeat (60000) @(posedge clk);
         badpre = 0;
@@ -163,7 +165,7 @@ module i2s_iec958_tb;
             if (w[3:0] !== 4'b0100) badpre = badpre + 1;   // one-hot code restored
             if (^w[31:4] !== 1'b0)  badpre = badpre + 1;   // even parity restored
         end
-        $display("  variant 2 (legacy): %0d subframes, deviations=%0d", rec_n, badpre);
+        $display("  variant 3 (AES3 legacy): %0d subframes, deviations=%0d", rec_n, badpre);
         if (rec_n < 40 || badpre != 0) begin
             $display("  FAIL: legacy variant does not reproduce the old format");
             errors = errors + 1; end
@@ -172,7 +174,7 @@ module i2s_iec958_tb;
         // Different framing entirely (16 bits/channel, MSB first), so just
         // prove it produces a live word select and a moving data line - the
         // serializer itself is sys/i2s.v, which ships PCM to this chip daily.
-        variant = 3'd4;
+        variant = 3'd0;   // PCM16 - the shipping default
         begin : pcm16_chk
             integer ws_edges, sd_edges;
             reg wsd, sdd;
@@ -182,12 +184,12 @@ module i2s_iec958_tb;
                 if (sd != sdd) sd_edges = sd_edges + 1;
                 wsd = ws; sdd = sd;
             end
-            $display("  variant 4 (PCM16): ws_edges=%0d sd_edges=%0d", ws_edges, sd_edges);
+            $display("  variant 0 (PCM16, default): ws_edges=%0d sd_edges=%0d", ws_edges, sd_edges);
             if (ws_edges < 20 || sd_edges < 20) begin
                 $display("  FAIL: PCM16 transport not running"); errors = errors + 1; end
         end
 
-        variant = 3'd0;
+        variant = 3'd1;
 
         if (errors == 0) $display("\nPASS: i2s_iec958");
         else begin $display("\n%0d FAILURES", errors); $fatal(1, "i2s_iec958_tb failed"); end

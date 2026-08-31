@@ -300,7 +300,10 @@ void hdmi_config_set_audio(int bitstream)
 	// session rather than per-block. Programming Guide Table 84 gives the bit:
 	// channel status bit 1 "audio sample word" = 0x12[7], and 0x0C[6]=1 selects
 	// the register map as the channel-status source.
-	int route_i = bitstream && (cfg.dvd_hdmi_bs_mode == 1);
+	// mode 0 (the zero default) = route (i). HW-CONFIRMED 2026-08-31: DD and DTS
+	// both decode on a real receiver. Mode 1 selects the AES3-direct transport,
+	// which never worked over four HW rounds and is kept only for reproducing it.
+	int route_i = bitstream && (cfg.dvd_hdmi_bs_mode == 0);
 	int tweak = bitstream ? cfg.dvd_hdmi_bs_tweak : 0;
 	uint8_t wordlen  = (tweak & 1) ? 0x0B : 0x02;   // IEC 60958: 1011=24bit, 0010=16bit
 	uint8_t audiocfg = (uint8_t)(0x0E | ((tweak & 2) ? 0x40 : 0x00));
@@ -367,7 +370,7 @@ ch = read(cfgh_path)
 ch = insert_after(ch, '\tuint8_t hdmi_audio_96k;',
     '\tuint8_t dvd_hdmi_bitstream;   // dvd:hdmibs 0=auto 1=off 2=force\n'
     '\tuint8_t dvd_hdmi_bs_tweak;    // dvd:hdmibs ADV7513 register sweep, 0..3\n'
-    '\tuint8_t dvd_hdmi_bs_mode;     // dvd:hdmibs 0=AES3-direct 1=std I2S + CS regs\n',
+    '\tuint8_t dvd_hdmi_bs_mode;     // dvd:hdmibs 0=std I2S + CS regs (works) 1=AES3-direct\n',
     21, 'dvd_hdmi_bitstream')
 write(cfgh_path, ch)
 

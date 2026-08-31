@@ -55,12 +55,15 @@ module i2s_iec958 (
     //                 slots zeroed - Programming Guide §4.4.1.1), 1 = the old
     //                 pre-document guess (parity in [31], one-hot preamble code),
     //                 kept only so the fix can be A/B'd against what failed.
-    // [2] transport: 0 = AES3-direct 32-bit subframes (this module's own
-    //                serializer), 1 = PLAIN 16-BIT STANDARD I2S carrying the raw
-    //                61937 words, with the ADV7513 supplying channel status from
-    //                its I2C registers (0x0C[6]=1, non-PCM in 0x12[7]). That
-    //                route needs none of the subframe machinery and reuses the
-    //                framework's proven serializer - see docs/hdmi_bitstream.md.
+    // 0 = PCM16   plain 16-bit standard I2S carrying the raw 61937 words, with
+    //             the ADV7513 supplying channel status from its I2C registers
+    //             (0x0C[6]=1, non-PCM in 0x12[7]). ★ HW-CONFIRMED 2026-08-31 -
+    //             DD and DTS both decode on a real receiver. This is variant 0
+    //             so it is what a default build does.
+    // 1 = AES3 LSB+blkstart, 2 = AES3 MSB+blkstart  (documented AES3 format)
+    // 3 = AES3 legacy LSB,   4 = AES3 legacy MSB    (the pre-document guess)
+    // The AES3 transport never worked on hardware over four rounds; it is kept
+    // selectable rather than deleted so the finding stays reproducible.
     input  wire [2:0]  variant_i,
     input  wire [15:0] pcm_l_i,     // raw 61937 words for the 16-bit route
     input  wire [15:0] pcm_r_i,
@@ -88,10 +91,14 @@ module i2s_iec958 (
         .left_chan(pcm_l_i), .right_chan(pcm_r_i)
     );
 
+    wire pcm16_sel = (variant_i == 3'd0);
+    wire aes_msb    = (variant_i == 3'd2) || (variant_i == 3'd4);
+    wire aes_legacy = (variant_i == 3'd3) || (variant_i == 3'd4);
+
     reg  aes_sck, aes_ws, aes_sd;
-    assign sck_o = variant_i[2] ? pcm_sck : aes_sck;
-    assign ws_o  = variant_i[2] ? pcm_ws  : aes_ws;
-    assign sd_o  = variant_i[2] ? pcm_sd  : aes_sd;
+    assign sck_o = pcm16_sel ? pcm_sck : aes_sck;
+    assign ws_o  = pcm16_sel ? pcm_ws  : aes_ws;
+    assign sd_o  = pcm16_sel ? pcm_sd  : aes_sd;
 
     // Shift register and bit counter. spdif_pass emits one subframe per 64 of
     // its bit strobes; we emit one per 32 sck = 64 ce, so the two stay in
@@ -121,7 +128,7 @@ module i2s_iec958 (
                 // sub_w_i already carries the documented format. The legacy
                 // option reconstructs the pre-document guess for comparison:
                 // even parity over 4..31 back into [31], one-hot code into [3:0].
-                shift_q <= variant_i[1]
+                shift_q <= aes_legacy
                          ? {^sub_w_i[30:4], sub_w_i[30:4], 4'b0100}
                          : sub_w_i;
                 bit_cnt <= 6'd0;
@@ -137,11 +144,11 @@ module i2s_iec958 (
                 // Advance on the rising half so the bit is presented for a full
                 // sck period.
                 if (msck) begin
-                    shift_q <= variant_i[0] ? {shift_q[30:0], 1'b0}   // MSB first
-                                            : {1'b0, shift_q[31:1]};  // LSB first
+                    shift_q <= aes_msb ? {shift_q[30:0], 1'b0}   // MSB first
+                                       : {1'b0, shift_q[31:1]};  // LSB first
                     bit_cnt <= bit_cnt + 6'd1;
                 end else begin
-                    aes_sd <= variant_i[0] ? shift_q[31] : shift_q[0];
+                    aes_sd <= aes_msb ? shift_q[31] : shift_q[0];
                 end
             end
         end

@@ -720,7 +720,7 @@ parameter CONF_STR = {
     // ADV7513 Programming Guide would have settled (bit order, preamble code).
     // Round 1 gave "decoder off": the chip HAD switched to IEC958-direct but the
     // receiver could not find 61937 sync. status[47:46]. docs/hdmi_bitstream.md §3.
-    "P1O[48:46],HDMI BS Variant,AES3 LSB,AES3 MSB,AES3 legacy,AES3 legacyM,PCM16;",
+    "P1O[48:46],HDMI BS Variant,PCM16,AES3 LSB,AES3 MSB,AES3 legacy,AES3 legacyM;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
     // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
