@@ -55,13 +55,43 @@ module i2s_iec958 (
     //                 slots zeroed - Programming Guide §4.4.1.1), 1 = the old
     //                 pre-document guess (parity in [31], one-hot preamble code),
     //                 kept only so the fix can be A/B'd against what failed.
-    input  wire [1:0]  variant_i,
+    // [2] transport: 0 = AES3-direct 32-bit subframes (this module's own
+    //                serializer), 1 = PLAIN 16-BIT STANDARD I2S carrying the raw
+    //                61937 words, with the ADV7513 supplying channel status from
+    //                its I2C registers (0x0C[6]=1, non-PCM in 0x12[7]). That
+    //                route needs none of the subframe machinery and reuses the
+    //                framework's proven serializer - see docs/hdmi_bitstream.md.
+    input  wire [2:0]  variant_i,
+    input  wire [15:0] pcm_l_i,     // raw 61937 words for the 16-bit route
+    input  wire [15:0] pcm_r_i,
 
     // Serial output to the ADV7513
-    output reg         sck_o,      // 3.072 MHz bit clock
-    output reg         ws_o,       // 48 kHz word select: 0 = channel A, 1 = B
-    output reg         sd_o        // serial data, LSB (timeslot 0) first
+    output wire        sck_o,      // bit clock
+    output wire        ws_o,       // 48 kHz word select: 0 = channel A, 1 = B
+    output wire        sd_o        // serial data
 );
+
+    // ---- route (i): plain 16-bit standard I2S -------------------------------
+    // sys/i2s.v is the framework's own serializer, already carrying PCM to this
+    // exact chip every day, so it is the least risky way to present the words.
+    // It needs ce = 2 x BCLK = 64 x Fs = 3.072 MHz; bit_ce here is 6.144 MHz.
+    reg  ce_div;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n)   ce_div <= 1'b0;
+        else if (ce_i) ce_div <= ~ce_div;
+    wire ce16 = ce_i & ce_div;
+
+    wire pcm_sck, pcm_ws, pcm_sd;
+    i2s u_pcm16 (
+        .reset(~rst_n), .clk(clk), .ce(ce16),
+        .sclk(pcm_sck), .lrclk(pcm_ws), .sdata(pcm_sd),
+        .left_chan(pcm_l_i), .right_chan(pcm_r_i)
+    );
+
+    reg  aes_sck, aes_ws, aes_sd;
+    assign sck_o = variant_i[2] ? pcm_sck : aes_sck;
+    assign ws_o  = variant_i[2] ? pcm_ws  : aes_ws;
+    assign sd_o  = variant_i[2] ? pcm_sd  : aes_sd;
 
     // Shift register and bit counter. spdif_pass emits one subframe per 64 of
     // its bit strobes; we emit one per 32 sck = 64 ce, so the two stay in
@@ -75,14 +105,14 @@ module i2s_iec958 (
             shift_q <= 32'd0;
             bit_cnt <= 6'd0;
             msck    <= 1'b0;
-            sck_o   <= 1'b0;
-            ws_o    <= 1'b0;
-            sd_o    <= 1'b0;
+            aes_sck <= 1'b0;
+            aes_ws  <= 1'b0;
+            aes_sd  <= 1'b0;
         end else begin
             // sck follows msck one clk later, so sd_o changes on the FALLING
             // sck edge and the receiver samples it on the rising edge - the
             // same convention sys/i2s.v uses.
-            sck_o <= msck;
+            aes_sck <= msck;
 
             if (sub_load_i) begin
                 // Re-arm on the producer's boundary. This is what keeps the two
@@ -101,7 +131,7 @@ module i2s_iec958 (
                 // longer identifies the channel - deriving ws from it left ws
                 // stuck at 0 (no word select at all), which is a silent and
                 // total failure.
-                ws_o    <= sub_chb_i;
+                aes_ws  <= sub_chb_i;
             end else if (ce_i) begin
                 msck <= ~msck;
                 // Advance on the rising half so the bit is presented for a full
@@ -111,7 +141,7 @@ module i2s_iec958 (
                                             : {1'b0, shift_q[31:1]};  // LSB first
                     bit_cnt <= bit_cnt + 6'd1;
                 end else begin
-                    sd_o <= variant_i[0] ? shift_q[31] : shift_q[0];
+                    aes_sd <= variant_i[0] ? shift_q[31] : shift_q[0];
                 end
             end
         end

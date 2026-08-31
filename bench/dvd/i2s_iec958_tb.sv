@@ -33,11 +33,11 @@ module i2s_iec958_tb;
         .sub_w_o(sub_w), .sub_load_o(sub_load), .sub_chb_o(sub_chb)
     );
 
-    reg [1:0] variant = 2'd0;    // [0] 1=MSB-first, [1] 1=zeroed preamble
+    reg [2:0] variant = 3'd0;    // [0] 1=MSB-first, [1] 1=zeroed preamble
     wire sck, ws, sd;
     i2s_iec958 u_i2s (
         .clk(clk), .rst_n(rst_n), .ce_i(ce),
-        .sub_w_i(sub_w), .sub_load_i(sub_load), .sub_chb_i(sub_chb), .variant_i(variant),
+        .sub_w_i(sub_w), .sub_load_i(sub_load), .sub_chb_i(sub_chb), .variant_i(variant), .pcm_l_i(sample[15:0]), .pcm_r_i(sample[31:16]),
         .sck_o(sck), .ws_o(ws), .sd_o(sd)
     );
 
@@ -137,7 +137,7 @@ module i2s_iec958_tb;
         $display("  format: preamble_zero=OK block_starts=%0d", blk);
 
         // ---- MSB-first variant still carries the same content ---------------
-        variant = 2'd1;
+        variant = 3'd1;
         rec_n = 0;
         repeat (60000) @(posedge clk);
         chkA = 0;
@@ -154,7 +154,7 @@ module i2s_iec958_tb;
             $display("  FAIL: MSB-first variant broken"); errors = errors + 1; end
 
         // ---- legacy variant reproduces the pre-document guess ---------------
-        variant = 2'd2;
+        variant = 3'd2;
         rec_n = 0;
         repeat (60000) @(posedge clk);
         badpre = 0;
@@ -168,7 +168,26 @@ module i2s_iec958_tb;
             $display("  FAIL: legacy variant does not reproduce the old format");
             errors = errors + 1; end
 
-        variant = 2'd0;
+        // ---- route (i): plain 16-bit standard I2S ------------------------
+        // Different framing entirely (16 bits/channel, MSB first), so just
+        // prove it produces a live word select and a moving data line - the
+        // serializer itself is sys/i2s.v, which ships PCM to this chip daily.
+        variant = 3'd4;
+        begin : pcm16_chk
+            integer ws_edges, sd_edges;
+            reg wsd, sdd;
+            ws_edges = 0; sd_edges = 0; wsd = ws; sdd = sd;
+            repeat (40000) @(posedge clk) begin
+                if (ws != wsd) ws_edges = ws_edges + 1;
+                if (sd != sdd) sd_edges = sd_edges + 1;
+                wsd = ws; sdd = sd;
+            end
+            $display("  variant 4 (PCM16): ws_edges=%0d sd_edges=%0d", ws_edges, sd_edges);
+            if (ws_edges < 20 || sd_edges < 20) begin
+                $display("  FAIL: PCM16 transport not running"); errors = errors + 1; end
+        end
+
+        variant = 3'd0;
 
         if (errors == 0) $display("\nPASS: i2s_iec958");
         else begin $display("\n%0d FAILURES", errors); $fatal(1, "i2s_iec958_tb failed"); end

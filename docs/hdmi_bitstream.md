@@ -217,6 +217,35 @@ reaches the HDMI audio sample packet, which is the whole mechanism. (The SPDIF
 input really is unreachable, though: it is **pin 3**, physically separate from
 I2S0 on pin 5, and the DE10-Nano routes only I2S0/MCLK/SCLK/LRCLK.)
 
+### ★ HW ROUND 4: block-start did not fix it — and route (i) exists
+
+The documented format still gives "decoder off" (now flapping to PCM), silent,
+with Main provably correct in the log. AES3-direct has cost four rounds.
+
+**Route (i) is now fully specified**, which is exactly what was missing when it
+was abandoned at Step 0:
+
+| what | where |
+|---|---|
+| non-PCM flag ("audio sample word", CS bit 1) | **`0x12[7]`** (Table 84) |
+| channel-status source | `0x0C[6]` — 1 = from the register map |
+| transport | plain 16-bit **standard I2S** carrying the raw 61937 words |
+
+It needs no preamble, no block-start flag and no word-select derivation, and the
+serializer is `sys/i2s.v` — the framework's own, already carrying PCM to this
+chip daily. The cost is a **static** non-PCM flag rather than per-block.
+
+Select with fabric variant **4 (PCM16)** *and* ini `dvd_hdmi_bs_mode=1`; one
+picks the transport, the other the chip config, so they must agree.
+
+### Instrument: what the chip actually detected
+
+`0x42[3]` is read back and logged: SCLK periods per LRCLK period, 0 = 32-bit
+mode, 1 = **64-bit** mode. AES3-direct carries 32 bits per channel and therefore
+*requires* 64-bit mode — if the chip reports 32-bit it is taking half of every
+subframe, which would explain the whole saga and which nothing on our side could
+have revealed by reasoning.
+
 ### What the runtime A/B is still for
 
 `P1O[47:46] HDMI BS Variant` now selects:
@@ -227,6 +256,7 @@ I2S0 on pin 5, and the DE10-Nano routes only I2S0/MCLK/SCLK/LRCLK.)
 | 1 `MSB+blkstart` | MSB-first, insurance against a bit-order misreading |
 | 2 `LSB+legacy` | reproduces the pre-document guess (parity in `[31]`, one-hot preamble) |
 | 3 `MSB+legacy` | both |
+| 4 `PCM16` | route (i) — standard 16-bit I2S, channel status from registers |
 
 Variant 2 exists so the fix can be A/B'd against the exact thing that failed,
 rather than trusting that anything changed.

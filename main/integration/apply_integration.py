@@ -292,6 +292,15 @@ void hdmi_config_set_audio(int bitstream)
 	//          our zero padding instead of the payload.
 	//   bit 1  invert the I2S bit clock (0x0B[6]). Wrong latching edge shifts
 	//          every bit.
+	// dvd_hdmi_bs_mode: 0 = AES3-direct (32-bit IEC60958 subframes from fabric),
+	//                   1 = ROUTE (i): plain 16-bit standard I2S carrying the raw
+	//                       61937 words, with channel status supplied HERE.
+	// Route (i) needs none of the subframe machinery and reuses the framework's
+	// proven serializer; its cost is that the non-PCM flag is static for the
+	// session rather than per-block. Programming Guide Table 84 gives the bit:
+	// channel status bit 1 "audio sample word" = 0x12[7], and 0x0C[6]=1 selects
+	// the register map as the channel-status source.
+	int route_i = bitstream && (cfg.dvd_hdmi_bs_mode == 1);
 	int tweak = bitstream ? cfg.dvd_hdmi_bs_tweak : 0;
 	uint8_t wordlen  = (tweak & 1) ? 0x0B : 0x02;   // IEC 60958: 1011=24bit, 0010=16bit
 	uint8_t audiocfg = (uint8_t)(0x0E | ((tweak & 2) ? 0x40 : 0x00));
@@ -299,7 +308,13 @@ void hdmi_config_set_audio(int bitstream)
 	uint8_t audio_data[] = {
 		0x0A, 0x00,                              // [6:4] audio select = I2S
 		0x0B, audiocfg,                          // [6] bit-clock invert (tweak bit 1)
-		0x0C, (uint8_t)(bitstream ? 0x07 : 0x04),    // [2] I2S0 en; [1:0] 3=IEC958 direct, 0=standard
+		// [2] I2S0 en; [1:0] 3 = IEC958 direct / 0 = standard I2S;
+		// [6] = 1 takes channel status from the register map (route i)
+		0x0C, (uint8_t)(route_i ? 0x44 : (bitstream ? 0x07 : 0x04)),
+		// Channel status byte 0 via Table 84: [7] audio sample word
+		// (1 = NOT linear PCM), [6] consumer use = 0, [5] copyright
+		// (1 = not protected). Only consulted when 0x0C[6] = 1.
+		0x12, (uint8_t)(route_i ? 0xA0 : 0x20),
 		0x14, wordlen,                           // audio word length (tweak bit 0)
 		0x15, (uint8_t)((cfg.hdmi_audio_96k ? 0x80 : 0) | 0x20),   // 48 kHz
 		0x73, 0x01,                              // Channel Count = 1 (stereo).
@@ -320,11 +335,19 @@ void hdmi_config_set_audio(int bitstream)
 		if (res < 0) printf("i2c: audio write error (%02X %02X): %d\n",
 		                    audio_data[i], audio_data[i + 1], res);
 	}
-	printf("ADV7513: audio %s tweak=%d wl=%02X r0B=%02X\n",
-	       bitstream ? "IEC958-direct" : "PCM I2S", tweak, wordlen, audiocfg);
+	// Read back what the chip DETECTED, rather than assuming it agrees with us.
+	// 0x42[3]: SCLK periods per LRCLK period - 0 = 32-bit mode, 1 = 64-bit mode.
+	// AES3-direct carries 32 bits per channel and so REQUIRES 64-bit mode; if
+	// this reads 0 the chip is only taking half of every subframe.
+	int r42 = i2c_smbus_read_byte_data(hdmi_main_fd, 0x42);
+	const char *mode = bitstream ? (route_i ? "std-I2S+CSreg" : "IEC958-direct") : "PCM I2S";
+	printf("ADV7513: audio %s tweak=%d wl=%02X r0B=%02X r42=%02X (%s)\n",
+	       mode, tweak, wordlen, audiocfg, r42 & 0xFF,
+	       (r42 >= 0) ? ((r42 & 0x08) ? "64-bit detected" : "32-bit detected") : "read failed");
 	FILE *lf = fopen("/tmp/dvd_hdmi_audio.log", "a");
-	if (lf) { fprintf(lf, "adv7513: %s tweak=%d wordlen=%02X reg0B=%02X\n",
-	                  bitstream ? "IEC958-direct" : "PCM", tweak, wordlen, audiocfg); fclose(lf); }
+	if (lf) { fprintf(lf, "adv7513: %s tweak=%d wordlen=%02X reg0B=%02X r42=%02X %s\n",
+	                  mode, tweak, wordlen, audiocfg, r42 & 0xFF,
+	                  (r42 >= 0) ? ((r42 & 0x08) ? "64bit" : "32bit") : "readfail"); fclose(lf); }
 }
 
 int video_hdmi_config_generation(void)
@@ -343,7 +366,8 @@ ch = read(cfgh_path)
 # 21. ini field. 0 = auto (EDID-gated), 1 = off, 2 = force.
 ch = insert_after(ch, '\tuint8_t hdmi_audio_96k;',
     '\tuint8_t dvd_hdmi_bitstream;   // dvd:hdmibs 0=auto 1=off 2=force\n'
-    '\tuint8_t dvd_hdmi_bs_tweak;    // dvd:hdmibs ADV7513 register sweep, 0..3\n',
+    '\tuint8_t dvd_hdmi_bs_tweak;    // dvd:hdmibs ADV7513 register sweep, 0..3\n'
+    '\tuint8_t dvd_hdmi_bs_mode;     // dvd:hdmibs 0=AES3-direct 1=std I2S + CS regs\n',
     21, 'dvd_hdmi_bitstream')
 write(cfgh_path, ch)
 
@@ -351,7 +375,8 @@ cfgc_path = os.path.join(ROOT, "cfg.cpp")
 cc = read(cfgc_path)
 cc = insert_after(cc, '{ "HDMI_AUDIO_96K", (void*)(&(cfg.hdmi_audio_96k)), UINT8, 0, 1 },',
     '\t{ "DVD_HDMI_BITSTREAM", (void*)(&(cfg.dvd_hdmi_bitstream)), UINT8, 0, 2 },\n'
-    '\t{ "DVD_HDMI_BS_TWEAK", (void*)(&(cfg.dvd_hdmi_bs_tweak)), UINT8, 0, 3 },\n',
+    '\t{ "DVD_HDMI_BS_TWEAK", (void*)(&(cfg.dvd_hdmi_bs_tweak)), UINT8, 0, 3 },\n'
+    '\t{ "DVD_HDMI_BS_MODE", (void*)(&(cfg.dvd_hdmi_bs_mode)), UINT8, 0, 1 },\n',
     21, 'DVD_HDMI_BITSTREAM')
 write(cfgc_path, cc)
 print("[integration] cfg.h/cfg.cpp patched")
