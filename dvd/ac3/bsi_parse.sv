@@ -66,6 +66,22 @@ module bsi_parse (
     output logic        err_unsupported
 );
 
+    // ---- A/52 bsi() field-presence rules (DVD-FORK 2026-08-31) --------------
+    // cmixlev present iff (acmod & 1) && acmod != 1   -> acmod 3, 5, 7
+    // surmixlev present iff (acmod & 4)               -> acmod 4, 5, 6, 7
+    //
+    // ⚠ PLAIN WIRES, NOT FUNCTIONS, ON PURPOSE. These began life as
+    // `function automatic` (mixlfe_bits calling the other two). That simulated
+    // perfectly and produced SILENT HARDWARE for acmod 1 and 5: a real disc's
+    // mono track plays on a build using the equivalent inline ternary and goes
+    // silent on a build differing ONLY by using functions. Quartus 17 does not
+    // elaborate these reliably here -- same family as the recorded
+    // function-mediated-array-read hazard. Keep this straight-line.
+    wire       acmod_cmix    = acmod[0] && (acmod != 3'd1);
+    wire       acmod_smix    = acmod[2];
+    wire [5:0] acmod_mixbits = (acmod_cmix && acmod_smix)                  ? 6'd5 :
+                               (acmod_cmix || acmod_smix || acmod == 3'd2) ? 6'd3 : 6'd1;
+
     typedef enum logic [4:0] {
         B_IDLE,
         B_BSID,     // bsid(5)+bsmod(3)
@@ -125,10 +141,15 @@ module bsi_parse (
                 case (st)
                     B_BSID:  begin req <= 1'b1; nbits <= 6'd8;  awaiting <= 1'b1; end
                     B_ACMOD: begin req <= 1'b1; nbits <= 6'd3;  awaiting <= 1'b1; end
-                    // acmod==2: dsurmod(2)+lfeon(1)=3; acmod==7: cmixlev(2)+
-                    // surmixlev(2)+lfeon(1)=5.  lfeon is always the last bit.
+                    // A/52 bsi(): cmixlev if (acmod&1 && acmod!=1); surmixlev if
+                    // (acmod&4); dsurmod if (acmod==2); then lfeon, ALWAYS last.
+                    //   acmod 1 (1/0)        : lfeon only                       = 1
+                    //   acmod 2 (2/0)        : dsurmod(2)+lfeon(1)              = 3
+                    //   acmod 3 (3/0)        : cmixlev(2)+lfeon(1)              = 3
+                    //   acmod 4 (2/1), 6(2/2): surmixlev(2)+lfeon(1)            = 3
+                    //   acmod 5 (3/1), 7(3/2): cmixlev(2)+surmixlev(2)+lfeon(1) = 5
                     B_MIXLFE:begin req <= 1'b1;
-                             nbits <= (acmod == AC3_ACMOD_3_2) ? 6'd5 : 6'd3;
+                             nbits <= acmod_mixbits;
                              awaiting <= 1'b1; end
                     B_DIAL:  begin req <= 1'b1; nbits <= 6'd6;  awaiting <= 1'b1; end
                     B_COMPR: begin req <= 1'b1; nbits <= 6'd8;  awaiting <= 1'b1; end
@@ -164,8 +185,18 @@ module bsi_parse (
                     end
                     B_ACMOD: begin
                         acmod <= data_in[2:0];
-                        if (data_in[2:0] != AC3_ACMOD_LR &&
-                            data_in[2:0] != AC3_ACMOD_3_2) begin
+                        // DVD-FORK 2026-08-31: acmod 1..7 are ALL decoded now.
+                        // Anything rejected here sets sticky err_unsupported ->
+                        // ac3_err -> an ac3_front self-heal reset EVERY frame =
+                        // total SILENCE, not a glitch. That is how mono (acmod 1)
+                        // and the 2/2 quad case (acmod 6) reached users as "no
+                        // audio". Only acmod 0 (1+1 dual mono) is still out: it
+                        // carries a SECOND dialnorm/compr/langcod/audprodi block
+                        // in bsi that this FSM does not walk, so accepting it
+                        // would desync bsi and produce garbage instead of silence
+                        // — a strictly worse failure. It is also absent from the
+                        // measured library (see docs/ac3_decoder.md).
+                        if (data_in[2:0] == 3'd0) begin
                             err_unsupported <= 1'b1;
                             st              <= B_ERR;
                         end else begin
@@ -175,14 +206,24 @@ module bsi_parse (
                     B_MIXLFE: begin
                         // lfeon is the LSB regardless of width (both in scope).
                         lfeon <= data_in[0];
-                        if (acmod == AC3_ACMOD_3_2) begin
+                        // Field order is fixed (cmixlev, surmixlev, dsurmod,
+                        // lfeon); only PRESENCE varies, so each present field
+                        // sits just above lfeon in the order they appear.
+                        cmixlev   <= 2'd0;
+                        surmixlev <= 2'd0;
+                        dsurmod   <= 2'd0;
+                        if (acmod_cmix && acmod_smix) begin
                             // 5 bits: cmixlev[4:3] surmixlev[2:1] lfeon[0]
                             cmixlev   <= data_in[4:3];
                             surmixlev <= data_in[2:1];
-                        end else begin
-                            // acmod==2: 3 bits: dsurmod[2:1] lfeon[0]
-                            dsurmod <= data_in[2:1];
+                        end else if (acmod_cmix) begin
+                            cmixlev   <= data_in[2:1];   // 3 bits (acmod 3)
+                        end else if (acmod_smix) begin
+                            surmixlev <= data_in[2:1];   // 3 bits (acmod 4, 6)
+                        end else if (acmod == AC3_ACMOD_LR) begin
+                            dsurmod   <= data_in[2:1];   // 3 bits (acmod 2)
                         end
+                        // acmod 1: 1 bit, lfeon only - all three stay 0.
                         st <= B_DIAL;
                     end
                     B_DIAL: begin

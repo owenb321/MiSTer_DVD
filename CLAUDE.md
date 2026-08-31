@@ -381,9 +381,38 @@ worse maintenance burden than targeted in-place edits. So:
   disc-wide**. Verified in-bitstream on four library discs (mono ×273, mono ×101,
   acmod 5 ×167, mono ×200). ⚠ Use the PES `first_access_unit_pointer` to locate
   the syncframe — a naive `0x0B77` search hits false syncs in payloads.
-  **Mono is the next work item** (accept acmod 1, nfchans=1, duplicate to L/R); acmod
-  3–6 need real multichannel downmix coefficients. All three ISOs are clean rips
-  (`css_scan` 0 scrambled packs).
+  ✅ **MONO SHIPPED (2026-08-31, branch `feature/ac3-mono`)** — `acmod 1` accepted;
+  ⚠ its `B_MIXLFE` field is **lfeon ALONE = 1 bit** (no cmixlev/surmixlev/dsurmod
+  for 1/0 — reading acmod 2's 3 bits would desync the rest of bsi); `nfchans = 1`
+  in BOTH derivation sites (`ac3_parse` + `audblk_parse`); and new `pcm_out.mono`
+  reads ch0 for L AND R because mono never writes pcm_mem ch1 (`ac3_front.acmod`
+  had been left unconnected in `dvd_audio_decode` — it drives this now). Mono needs
+  NO downmix (`dmx_en = nfchans > 2` is false), so its PCM path IS the stereo ch0
+  path. Gate: `bench/ac3/vectors/bbb_mono.ac3` (Creative-Commons BBB extract)
+  through the Verilator/liba52 cosim — exps/bap BIT-EXACT, PCM ≤0.5 LSB @ s16
+  (tol 2.0); proven RED pre-fix (`acmod=-1 inscope=0 err=1`, zero frames produced).
+  All 9 cosim vectors + 11 bench/ac3 suites + `dvd_audio_decode_tb` green.
+  ✅ **HW-CONFIRMED 2026-08-31** (build `DVD_ac3fnfix_20260831_0452`): mono, 3/1 and
+  2/2 discs all play; stereo and 5.1 unregressed.
+  ★★ **THE BUG THAT COST THE MOST TIME HERE WAS NOT THE CODEC — IT WAS FIVE
+  `function automatic` HELPERS THAT QUARTUS 17 MISCOMPILED SILENTLY.** acmod 1 and 5
+  were SILENT on hardware while every sim gate stayed green (the cosim decoded real
+  mono/acmod-5 disc streams BIT-EXACTLY for 400 frames). The helpers took only scalar
+  args and read no arrays, and **Quartus emitted NO warning for any changed module**.
+  ⚠ **The technique that cracked it, reuse it: A/B TWO OF OUR OWN BUILDS.** A real
+  disc's mono track played on the earlier build (inline ternary) and was silent on the
+  later one differing on that path ONLY by using functions — same RTL, different
+  silicon. That is far cheaper than the post-map netlist cosim and was decisive.
+  Fix = all five rewritten as plain wires/inline ternaries (`acmod_cmix`,
+  `acmod_smix`, `acmod_mixbits`, and the two `nfchans` ternaries). Pre-existing
+  functions elsewhere (`to_s16`, `bin2gray`, `bndtab`, `compute_mask`) ship fine —
+  functions are not banned, but **when sim says correct and silicon says broken,
+  suspect a recently-added function FIRST.** Memory: `verilog-function-hazards`.
+  **Still unsupported (and "unsupported" means SILENCE, not distortion): acmod
+  0/3/4/5/6** — only **2** library discs have such a DEFAULT track (both 2/2 quad)
+  plus the Residents, whose entire AC-3 layer is acmod 6.
+  Those need real multichannel downmix coefficients, unlike mono which needed none.
+  All three bug ISOs are clean rips (`css_scan` 0 scrambled packs).
 - 🔧 **FAILED MENU LINK RE-ENTERS THE MENU, NEVER THE MOVIE (2026-08-27, PR #17)
   — MERGED; HW no-regression pass 2026-08-27 (menus/boot unaffected); ⏳ the
   positive case (a disc whose menu link actually fails — the reporter's Blade

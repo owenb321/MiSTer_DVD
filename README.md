@@ -118,7 +118,11 @@ is opt-in and additive. See
   **Menu** to skip the intro — the game then repeats one question. That is how the disc is
   authored (a real player and libdvdnav do the same); let the intro play.
 - **No DTS decode** — S/PDIF passthrough to a receiver only.
-- **Audio formats:** AC-3, MPEG-1 Layer II (MP2), LPCM, and DTS (passthrough only).
+- **Audio formats:** AC-3 (mono 1/0, stereo 2/0 and 5.1 3/2), MPEG-1 Layer II
+  (MP2), LPCM, and DTS (passthrough only). A few discs use rarer AC-3 channel
+  layouts the decoder does not implement yet (3/0, 2/1, 3/1 and 2/2 quad); those
+  tracks are silent rather than distorted. Dolby Digital **1.0 mono** used to be
+  silent for the same reason and works as of 0.2.1.
   The one gap left is the MPEG-2 multichannel *extension* (a rare 5.1 variant of MP2):
   its backwards-compatible stereo core should play, but no disc was available to verify,
   so such a track still reports `AUDIO UNSUPPORTED`. MP2 has no S/PDIF passthrough —

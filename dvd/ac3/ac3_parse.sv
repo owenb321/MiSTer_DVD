@@ -137,7 +137,15 @@ module ac3_parse (
     logic        err_s, err_b, err_a;
 
     // nfchans from acmod (== liba52 nfchans_tbl[acmod]).
-    wire  [2:0]  nfchans = (acmod == AC3_ACMOD_3_2) ? 3'd5 : 3'd2;
+    // A/52 nfchans by acmod: {2,1,2,3,3,4,4,5}. ⚠ Inline ternary, NOT a
+    // function: a `function automatic` here simulated correctly but produced
+    // SILENT HARDWARE (see the note in bsi_parse.sv). Getting nfchans wrong
+    // parses per-channel fields not present in the bitstream and desyncs.
+    wire [2:0] nfchans = (acmod == 3'd1)                  ? 3'd1 :  // 1/0
+                         (acmod == 3'd3 || acmod == 3'd4) ? 3'd3 :  // 3/0, 2/1
+                         (acmod == 3'd5 || acmod == 3'd6) ? 3'd4 :  // 3/1, 2/2
+                         (acmod == 3'd7)                  ? 3'd5 :  // 3/2
+                                                            3'd2;   // 1+1, 2/0
 
     // ---- audblk_parse staged geometry (packed: ch occupies [ch*W +: W]) ----
     logic [9:0]  chexpstr;     // 2 bits/ch
@@ -334,7 +342,7 @@ module ac3_parse (
         .nfchans(nfchans),
         .blksw(blksw),
         .dynrng(dynrng),
-        .cmixlev(cmixlev), .surmixlev(surmixlev),
+        .cmixlev(cmixlev), .surmixlev(surmixlev), .acmod(acmod),
         .coeff_rd_addr(imdct_coeff_rd_addr), .coeff_rd_data(imdct_coeff_rd_data),
         .pcm_rd_addr(pcm_rd_addr), .pcm_rd_data(pcm_rd_data),
         .done(imdct_done)

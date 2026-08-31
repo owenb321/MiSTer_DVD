@@ -595,12 +595,33 @@ int main(int argc, char** argv) {
             // (clev/slev are liba52's own state->clev/slev — same LEVEL constants
             // the dut's ROM uses; the per-channel gpcm are already golden-verified,
             // so this is a full-chain Lo/Ro check by linearity of the IMDCT.)
-            bool dmx = (g.acmod == 7);
+            // DVD-FORK 2026-08-31: acmod-aware. The dut folds every multichannel
+            // acmod (3..7) into pcm slots 0/1 (Lo/Ro), so the golden for those
+            // slots is the stereo downmix of the per-channel goldens. Coefficients
+            // match liba52's a52_downmix_coeff(acmod, A52_STEREO, ...), verified by
+            // probe: centre takes clev; a STEREO surround pair takes slev; a MONO
+            // surround (acmod 4/5) is split to BOTH outputs and takes an extra
+            // -3 dB, i.e. slev*LEVEL_3DB. Bitstream channel order per acmod:
+            //   3: L C R    4: L R S    5: L C R S    6: L R Ls Rs   7: L C R Ls Rs
+            const int am  = g.acmod;
+            const bool dmx      = (am >= 3);
+            const bool has_c    = (am & 1) && (am != 1);          // 3,5,7
+            const bool surr_mono= (am == 4) || (am == 5);
+            const bool has_surr = (am & 4) != 0;                  // 4,5,6,7
+            const double L3DB = 0.7071067811865476;
+            const double cc   = has_c    ? g.g_clev : 0.0;
+            const double sc   = !has_surr ? 0.0
+                              : (surr_mono ? g.g_slev * L3DB : g.g_slev);
+            const int i_l  = 0;
+            const int i_c  = 1;
+            const int i_r  = has_c ? 2 : 1;
+            const int i_ls = has_c ? 3 : 2;                       // or the mono S
+            const int i_rs = surr_mono ? i_ls : (has_c ? 4 : 3);
             auto golden = [&](int ch, int s) -> double {
-                if (dmx && ch == 0) return g.gpcm[b][0][s] + g.g_clev*g.gpcm[b][1][s]
-                                         + g.g_slev*g.gpcm[b][3][s];
-                if (dmx && ch == 1) return g.gpcm[b][2][s] + g.g_clev*g.gpcm[b][1][s]
-                                         + g.g_slev*g.gpcm[b][4][s];
+                if (dmx && ch == 0) return g.gpcm[b][i_l][s] + cc*g.gpcm[b][i_c][s]
+                                         + sc*g.gpcm[b][i_ls][s];
+                if (dmx && ch == 1) return g.gpcm[b][i_r][s] + cc*g.gpcm[b][i_c][s]
+                                         + sc*g.gpcm[b][i_rs][s];
                 return g.gpcm[b][ch][s];
             };
             if (!d.pcm_cap[b]) { pcm_ok = false; if (pm_blk < 0) pm_blk = b; }

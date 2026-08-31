@@ -23,9 +23,30 @@ durable scope/decisions/verification knowledge from that repo so it isn't lost.
 
 ## Supported (decodes end-to-end; cosim + hardware verified)
 
-- Plain AC-3 (not E-AC-3), **48 kHz**, **`acmod ∈ {2, 7}`** (stereo L/R and 5.1
-  L C R Ls Rs), **`lfeon ∈ {0,1}`** (LFE parsed/dequantized but dropped from the
-  stereo downmix, like liba52).
+- Plain AC-3 (not E-AC-3), **48 kHz**, **`acmod ∈ {1..7}`** — every channel mode
+  except 1+1 — **`lfeon ∈ {0,1}`** (LFE parsed/dequantized but dropped from the
+  stereo downmix, like liba52). All multichannel modes fold to stereo.
+
+  **Downmix matrix**, MEASURED from liba52's own
+  `a52_downmix_coeff(acmod, A52_STEREO, …)` rather than read off the spec:
+
+  | acmod | bitstream order | Lo | Ro |
+  |---|---|---|---|
+  | 1 | C | C | C (duplicated by `pcm_out.mono`) |
+  | 2 | L R | L | R |
+  | 3 | L C R | L + clev·C | R + clev·C |
+  | 4 | L R S | L + (slev·√½)·S | R + (slev·√½)·S |
+  | 5 | L C R S | L + clev·C + (slev·√½)·S | R + clev·C + (slev·√½)·S |
+  | 6 | L R Ls Rs | L + slev·Ls | R + slev·Rs |
+  | 7 | L C R Ls Rs | L + clev·C + slev·Ls | R + clev·C + slev·Rs |
+
+  ⚠ The easy thing to get wrong: a **mono** surround (acmod 4/5) is sent to BOTH
+  outputs and takes an extra **−3 dB** (`slev·LEVEL_3DB`); a stereo surround
+  **pair** takes `slev` unchanged. Confirmed by probing liba52 twice with
+  different clev/slev to separate the dependence.
+
+  Gates: `acmod{3,4,5,6}_*_640k.ac3` (generated) and `bbb_mono.ac3` (committed),
+  all strictly checked at 2.0 LSB, plus real acmod-6 disc audio at 0.024 LSB.
 - **Channel coupling** and **rematrixing** (stereo) — real DVD/broadcast stereo all
   use coupling. Per-block coupling-strategy changes including **ch0 uncoupled** (the
   first coupled channel isn't always ch0) are handled.
@@ -60,8 +81,13 @@ durable scope/decisions/verification knowledge from that repo so it isn't lost.
 
 ## NOT supported — each currently **fails loud** (`err_unsupported`)
 
-- Other `acmod` (mono / 3-channel / etc.), non-48 kHz sample rates, E-AC-3, and a
-  true multichannel (vs downmixed-stereo) output path.
+- **`acmod 0` (1+1 dual mono)** — deliberately still refused. It carries a
+  SECOND `dialnorm/compr/langcod/audprodi` block in `bsi()` that the FSM does not
+  walk, so accepting it would desync `bsi` and emit garbage rather than silence,
+  which is strictly worse. Census: 4 frames on 1 disc out of 491.
+- Non-48 kHz sample rates, E-AC-3, and a true multichannel (vs downmixed-stereo)
+  output path. ⚠ Failing loud here means SILENCE: `err_unsupported` → `ac3_err` →
+  an `ac3_front` self-heal reset every frame.
 
 > **Debugging note (relevant to the 2026-06-27 choppy-AC-3 bring-up):** the **full
 > Big Buck Bunny NTSC DVD AC-3 track is hardware-validated** in the standalone core
@@ -110,3 +136,55 @@ twiddle/window widths.
   stage-by-stage pseudocode. (Uses a PicoBlaze for control — we don't.)
 - **liba52 0.8.0** golden decoder; **ffmpeg `ac3dec.c` / `ac3_fixed`** as a
   second/cross-check. See `docs/references.md`.
+
+## Coupled multichannel accuracy — a PRE-EXISTING gap, found 2026-08-31
+
+While gating the new acmods it emerged that **coupled multichannel content
+diverges from liba52 by ~40–210 LSB @ s16 on RAW per-channel output** (i.e.
+before any downmix — the mismatch shows on ch2/ch3 as well as ch0/ch1), even
+though exponents, bap and the coupling geometry/`cplco` are all bit-exact.
+
+This is **not** introduced by the multichannel work and is **not** specific to
+the new acmods: a coupled 5.1 (acmod 7) stream — the shipped, hardware-validated
+path — shows it worse than acmod 6 does. It had gone unnoticed because the only
+committed coupled-multichannel vector (`bbb_short_5p1`) has its PCM marked
+informational for IMDCT-precision reasons, so nothing ever gated it strictly.
+Coupled *stereo* (`sweep_192k`) passes strictly, so the gap is specific to
+coupling with more than two channels.
+
+Practically it is ~0.6 % of full scale and the 5.1 path has always sounded
+correct on hardware, so this is an accuracy question rather than an audible
+defect — but it is a real, measurable divergence and it is written down here
+rather than left as a surprise. The new acmod vectors are therefore generated
+at 640 kb/s (coupling off) so they gate the downmix rather than this.
+
+Reproduce: encode any ≥3-channel stream at 448 kb/s with distinct per-channel
+content (`tools/gen_test_stream.sh` has the `join=` recipe) and run the cosim.
+
+## ⚠ Silent-silicon trap: SV functions in this decoder (2026-08-31)
+
+The acmod 1..7 work shipped correct RTL that **simulated perfectly and produced silent
+hardware**. Five `function automatic` helpers (`acmod_has_cmix`, `acmod_has_smix`,
+`mixlfe_bits` — which called the other two — and `ac3_nfchans` in `ac3_parse` and
+`audblk_parse`) are miscompiled by Quartus 17 here. Result: **acmod 1 and 5 were silent
+on real discs while acmod 2, 6 and 7 played**, with no clean rule behind which survived.
+
+What makes this worth writing down:
+
+- **Every simulation gate was green**, including the Verilator/liba52 cosim decoding
+  real mono and acmod-5 streams off real discs bit-exactly for 400 frames. Simulation
+  could not have caught it and cannot prove the fix.
+- **Quartus emitted no warning** for any changed module. A clean build log is not
+  evidence here.
+- The helpers took **only scalar arguments and read no arrays**, so this is broader
+  than the previously recorded function-mediated-array-read hazard.
+
+**The cheap technique that found it:** A/B two of our own builds. The mono track of a
+real disc played on the build whose mono path was an inline ternary and was silent on
+the build differing on that path *only* by using functions. One flash, decisive — reach
+for this before the post-map netlist cosim.
+
+All five are now plain wires / inline ternaries. Functions are **not** banned: `to_s16`,
+`bin2gray`, `bndtab` and `compute_mask` ship and work. The rule is narrower — when
+simulation says correct and silicon says broken, suspect a recently-added function
+first.
