@@ -125,8 +125,12 @@ is opt-in and additive. See
   silent — 4 frames on 1 disc out of 491 surveyed.
   The one gap left is the MPEG-2 multichannel *extension* (a rare 5.1 variant of MP2):
   its backwards-compatible stereo core should play, but no disc was available to verify,
-  so such a track still reports `AUDIO UNSUPPORTED`. MP2 has no passthrough encoding —
-  in Passthru mode an MP2 track is silent on both outputs.
+  so such a track still reports `AUDIO UNSUPPORTED`.
+- **Passthru carries AC-3 and DTS only.** IEC 61937 exists to carry *compressed*
+  audio, so there is nothing for it to do with an **LPCM** or **MP2** track — those
+  are silent in Passthru, on both S/PDIF and HDMI. Use **Decode** for LPCM discs.
+  (On HDMI the receiver will likely show "decoder off" rather than a PCM indication
+  while this happens; it is silence either way.)
 - **Changing the audio track while a disc menu is open silences the menu audio** until
   you leave the menu. Menu audio otherwise plays normally on the default track.
 - No parental-control enforcement, no UOP enforcement.
