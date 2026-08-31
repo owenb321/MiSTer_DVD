@@ -2917,7 +2917,18 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .frame_pop    (pass_frame_pop),
     // A/V sync: slave passthrough audio to the video STC (same as the decode
     // path) so it tracks the display timeline instead of the parse front.
-    .sync_armed   (~av_freerun),
+    // MENU DOMAIN FREE-RUNS (2026-08-31): menus aren't lip-synced (the same
+    // rule that forces av_vid_hold off for menu_active), and the §5d keep_vbuf
+    // audio-continuity design preserves a near-full ring of OLD-loop-timeline
+    // audio across menu->menu transitions — holding those frames against a
+    // fresh post-transition anchor is a CIRCULAR STALL (hold -> ring full ->
+    // backpressure -> demux jammed -> new menu's video can't parse -> no
+    // vid_pts/STC -> hold persists), MEASURED wedged ~20 s on a T2 menu hop
+    // until the next user jump reset it (docs/iec61937.md "menu freeze").
+    // Free-running menus plays the continuity audio immediately (decode-path
+    // parity) and cannot wedge; title entry pulses aud_flush, so title sync
+    // re-arms cleanly.
+    .sync_armed   (~av_freerun && ~menu_active),
     .stc_anchored (av_stc_anchored),
     .stc          (av_stc),
     .av_ofs       (av_ofs),
