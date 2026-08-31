@@ -1,7 +1,8 @@
 # Next session: the IEC 61937 startup / track-change lock flap
 
-> **STATUS 2026-08-31 (session 2, `feature/bs-flap-probe`): ROOT CAUSE FOUND
-> AND MEASURED — fix in fabric, HW gate pending.** The drain watchdog read the
+> **STATUS 2026-08-31 (session 2, `feature/bs-flap-probe`): ✅ CLOSED —
+> root cause measured, fixed, HW-confirmed on optical and HDMI (title start,
+> track changes, menus, A/V sync). This file is now history only.** The drain watchdog read the
 > wrapper's A/V-sync hold as a wedged consumer, left the STD backpressure
 > disengaged, and the ring dropped ~1130 frames in the first 46 s of a title —
 > each dropped span a forward PTS hole = a multi-second wire gap = the flap.

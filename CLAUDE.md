@@ -453,8 +453,26 @@ worse maintenance burden than targeted in-place edits. So:
   `aud_resync` (menu audio continuity, §5d). Golden: `dvd_vm_ref.py aud_stream_map()`
   + `nav_extract.py --audio-map`; 2,026-vector bit-exact TB + reader/demux suites
   green. Detail: `docs/track_selection.md` "Logical→physical audio mapping".
-- 🔧 **IEC 61937 BITSTREAM NOW ALSO LEAVES OVER HDMI (2026-08-30, branch
-  `feature/hdmi-bitstream`); ⏳ HW-confirm pending.** `Audio Out = Passthru` used to be
+- ✅ **IEC 61937 BITSTREAM NOW ALSO LEAVES OVER HDMI (2026-08-30, PR #25) —
+  ✅ HW-CONFIRMED 2026-08-31 (DD + DTS decode on a real receiver over HDMI, route (i)).**
+  ★ **The startup/track-change LOCK FLAP that shadowed it (pre-existing, both outputs)
+  is ✅ FIXED + HW-CONFIRMED 2026-08-31 (branch `feature/bs-flap-probe`, build
+  `DVD_bsflapfix2`): the ring drain watchdog read the wrapper's A/V-sync hold as a
+  wedged consumer (it arms only on `frame_pop`), left the STD backpressure disengaged,
+  and the ring dropped ~1130 frames in a title's first 46 s — each dropped span a
+  forward PTS hole = a multi-second wire gap = the receiver flap.** MEASURED via
+  DEBUG_OVERLAY captures + `tools/osd_read.py` (probe rows 23/24, muxed on Passthru).
+  Fixes: `iec61937_wrap.hold_active_o` re-arms the watchdog (a deliberate hold is a
+  live consumer), and the wrapper FREE-RUNS in the menu domain (`sync_armed &=
+  ~menu_active` — a keep_vbuf menu hop's pre-anchor hold against the preserved
+  old-timeline ring is a circular stall, measured wedged ~20 s; menus aren't
+  lip-synced, same rule as the av_vid_hold menu exemption). HW: title start locks in
+  seconds, track changes near-instant, T2/Matrix menu transitions smooth WITH audio
+  (v0.2.0 dropped audio there), A/V sync good, optical + HDMI. Tried-negative worth
+  keeping: NO hold fill (NonPCM/pause burst) holds this receiver's lock across
+  authored menu silence even with clean streams — only real data bursts do ("digital
+  black" canned silent AC-3 = possible future polish). `docs/iec61937.md` "FLAP ROOT
+  CAUSE". `Audio Out = Passthru` used to be
   optical-only, so 5.1 needed the Digital I/O board. It doesn't: 61937 rides inside an
   ordinary 2-ch/48 kHz/16-bit IEC 60958 stream (1.536 Mbit/s — exactly AC-3's max), which
   is precisely what the DE10-Nano's single wired I2S line to the ADV7513 carries. (That one
