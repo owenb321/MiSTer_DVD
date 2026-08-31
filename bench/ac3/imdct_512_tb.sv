@@ -44,6 +44,7 @@ module imdct_512_tb;
         // 8'h80 — unity only under the PRE-M17 buggy unsigned decode — and had
         // been silently failing 16x-scaled ever since the M17 fix.)
         .nfchans(3'd2), .blksw(5'd0), .dynrng(8'h00), .cmixlev(2'd0), .surmixlev(2'd0),
+        .acmod(3'd2),
         .coeff_rd_addr(coeff_rd_addr), .coeff_rd_data(coeff_rd_data),
         .pcm_rd_addr(pcm_rd_addr), .pcm_rd_data(pcm_rd_data),
         .done(done)

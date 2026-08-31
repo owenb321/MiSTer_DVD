@@ -66,6 +66,20 @@ module bsi_parse (
     output logic        err_unsupported
 );
 
+    // ---- A/52 bsi() field-presence rules (DVD-FORK 2026-08-31) --------------
+    // cmixlev present iff (acmod & 1) && acmod != 1   -> acmod 3, 5, 7
+    // surmixlev present iff (acmod & 4)               -> acmod 4, 5, 6, 7
+    function automatic logic acmod_has_cmix(input logic [2:0] a);
+        acmod_has_cmix = a[0] && (a != 3'd1);
+    endfunction
+    function automatic logic acmod_has_smix(input logic [2:0] a);
+        acmod_has_smix = a[2];
+    endfunction
+    function automatic logic [5:0] mixlfe_bits(input logic [2:0] a);
+        mixlfe_bits = (acmod_has_cmix(a) && acmod_has_smix(a)) ? 6'd5 :
+                      (acmod_has_cmix(a) || acmod_has_smix(a) || a == 3'd2) ? 6'd3 : 6'd1;
+    endfunction
+
     typedef enum logic [4:0] {
         B_IDLE,
         B_BSID,     // bsid(5)+bsmod(3)
@@ -127,12 +141,13 @@ module bsi_parse (
                     B_ACMOD: begin req <= 1'b1; nbits <= 6'd3;  awaiting <= 1'b1; end
                     // A/52 bsi(): cmixlev if (acmod&1 && acmod!=1); surmixlev if
                     // (acmod&4); dsurmod if (acmod==2); then lfeon, ALWAYS last.
-                    //   acmod==1 (1/0 mono): none of the three -> lfeon only  = 1
-                    //   acmod==2 (2/0)     : dsurmod(2)+lfeon(1)              = 3
-                    //   acmod==7 (3/2)     : cmixlev(2)+surmixlev(2)+lfeon(1) = 5
+                    //   acmod 1 (1/0)        : lfeon only                       = 1
+                    //   acmod 2 (2/0)        : dsurmod(2)+lfeon(1)              = 3
+                    //   acmod 3 (3/0)        : cmixlev(2)+lfeon(1)              = 3
+                    //   acmod 4 (2/1), 6(2/2): surmixlev(2)+lfeon(1)            = 3
+                    //   acmod 5 (3/1), 7(3/2): cmixlev(2)+surmixlev(2)+lfeon(1) = 5
                     B_MIXLFE:begin req <= 1'b1;
-                             nbits <= (acmod == AC3_ACMOD_3_2)  ? 6'd5 :
-                                      (acmod == AC3_ACMOD_MONO) ? 6'd1 : 6'd3;
+                             nbits <= mixlfe_bits(acmod);
                              awaiting <= 1'b1; end
                     B_DIAL:  begin req <= 1'b1; nbits <= 6'd6;  awaiting <= 1'b1; end
                     B_COMPR: begin req <= 1'b1; nbits <= 6'd8;  awaiting <= 1'b1; end
@@ -168,15 +183,18 @@ module bsi_parse (
                     end
                     B_ACMOD: begin
                         acmod <= data_in[2:0];
-                        // DVD-FORK: acmod 1 (1/0 MONO) added 2026-08-31. It was
-                        // rejected here, which set sticky err_unsupported ->
+                        // DVD-FORK 2026-08-31: acmod 1..7 are ALL decoded now.
+                        // Anything rejected here sets sticky err_unsupported ->
                         // ac3_err -> an ac3_front self-heal reset EVERY frame =
-                        // total silence on any mono AC-3 disc (Dolby Digital 1.0
-                        // is common on TV box sets and catalogue titles; 9 discs
-                        // in the 505-disc census carry it on a DEFAULT track).
-                        if (data_in[2:0] != AC3_ACMOD_LR &&
-                            data_in[2:0] != AC3_ACMOD_MONO &&
-                            data_in[2:0] != AC3_ACMOD_3_2) begin
+                        // total SILENCE, not a glitch. That is how mono (acmod 1)
+                        // and the 2/2 quad case (acmod 6) reached users as "no
+                        // audio". Only acmod 0 (1+1 dual mono) is still out: it
+                        // carries a SECOND dialnorm/compr/langcod/audprodi block
+                        // in bsi that this FSM does not walk, so accepting it
+                        // would desync bsi and produce garbage instead of silence
+                        // — a strictly worse failure. It is also absent from the
+                        // measured library (see docs/ac3_decoder.md).
+                        if (data_in[2:0] == 3'd0) begin
                             err_unsupported <= 1'b1;
                             st              <= B_ERR;
                         end else begin
@@ -186,17 +204,24 @@ module bsi_parse (
                     B_MIXLFE: begin
                         // lfeon is the LSB regardless of width (both in scope).
                         lfeon <= data_in[0];
-                        if (acmod == AC3_ACMOD_3_2) begin
+                        // Field order is fixed (cmixlev, surmixlev, dsurmod,
+                        // lfeon); only PRESENCE varies, so each present field
+                        // sits just above lfeon in the order they appear.
+                        cmixlev   <= 2'd0;
+                        surmixlev <= 2'd0;
+                        dsurmod   <= 2'd0;
+                        if (acmod_has_cmix(acmod) && acmod_has_smix(acmod)) begin
                             // 5 bits: cmixlev[4:3] surmixlev[2:1] lfeon[0]
                             cmixlev   <= data_in[4:3];
                             surmixlev <= data_in[2:1];
-                        end else if (acmod == AC3_ACMOD_MONO) begin
-                            // 1 bit: lfeon[0] only - no dsurmod for 1/0.
-                            dsurmod <= 2'd0;
-                        end else begin
-                            // acmod==2: 3 bits: dsurmod[2:1] lfeon[0]
-                            dsurmod <= data_in[2:1];
+                        end else if (acmod_has_cmix(acmod)) begin
+                            cmixlev   <= data_in[2:1];   // 3 bits (acmod 3)
+                        end else if (acmod_has_smix(acmod)) begin
+                            surmixlev <= data_in[2:1];   // 3 bits (acmod 4, 6)
+                        end else if (acmod == AC3_ACMOD_LR) begin
+                            dsurmod   <= data_in[2:1];   // 3 bits (acmod 2)
                         end
+                        // acmod 1: 1 bit, lfeon only - all three stay 0.
                         st <= B_DIAL;
                     end
                     B_DIAL: begin

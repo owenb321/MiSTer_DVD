@@ -99,6 +99,10 @@ module imdct_512 (
     // §5.4.2.4/5).  nfchans==2 → no downmix (Lo=L, Ro=R already).
     input  logic [1:0]  cmixlev,
     input  logic [1:0]  surmixlev,
+    // DVD-FORK 2026-08-31: the downmix fold is now acmod-aware (was hardwired to
+    // the 3/2 channel order). acmod selects which decoded slot plays which role
+    // and whether the surround is a stereo PAIR or a single MONO channel.
+    input  logic [2:0]  acmod,
 
     // transform-coefficient read port (Q1.23, {ch[2:0], idx[7:0]})
     output logic [10:0] coeff_rd_addr,
@@ -208,20 +212,36 @@ module imdct_512 (
     // clev[]/slev[]): LEVEL_3DB=0.7071→92682, LEVEL_45DB=0.5946→77933,
     // LEVEL_6DB=0.5→65536.  product (Q8.23·Q1.17)>>>17 → Q8.23; the 8 integer
     // bits of Q8.23 absorb the |Lo|<~2.4 headroom (no saturation possible).
-    wire        dmx_en = (nfchans > 3'd2);     // 5.1 (acmod==7) only; stereo: off
+    wire        dmx_en = (nfchans > 3'd2);     // acmod 3..7; 1/0, 1+1, 2/0: off
+    // ---- which roles this acmod actually carries -----------------------------
+    //   acmod 3 = L C R      : centre, no surround
+    //   acmod 4 = L R S      : MONO surround
+    //   acmod 5 = L C R S    : centre + MONO surround
+    //   acmod 6 = L R Ls Rs  : STEREO surround, no centre
+    //   acmod 7 = L C R Ls Rs: centre + STEREO surround
+    wire has_c    = acmod[0] && (acmod != 3'd1);       // 3, 5, 7
+    wire has_surr = acmod[2];                          // 4, 5, 6, 7
+    wire surr_mono= (acmod == 3'd4) || (acmod == 3'd5);
     logic signed [17:0] clev, slev;
     always_comb begin
-        case (cmixlev)                         // A/52 Table: 0.707 / 0.595 / 0.5
+        // A/52 mix-level tables, Q1.17. Matched against liba52's
+        // a52_downmix_coeff(acmod, A52_STEREO, ...) for every acmod.
+        case (cmixlev)                         // 0.707 / 0.595 / 0.5
             2'd0: clev = 18'sd92682;
             2'd1: clev = 18'sd77933;
             2'd2: clev = 18'sd65536;
             default: clev = 18'sd77933;
         endcase
-        case (surmixlev)                       // 0.707 / 0.5 / 0 (reserved→0)
-            2'd0: slev = 18'sd92682;
-            2'd1: slev = 18'sd65536;
+        if (!has_c) clev = 18'sd0;             // no centre in this acmod
+        // ★ A MONO surround is split to BOTH outputs and takes an extra -3 dB:
+        // liba52 uses slev*LEVEL_3DB there (measured: slev 0.5 -> 0.353553,
+        // slev 0.707 -> 0.500000). A stereo surround PAIR takes slev as-is.
+        case (surmixlev)                       // 0.707 / 0.5 / 0 (reserved->0)
+            2'd0: slev = surr_mono ? 18'sd65536 : 18'sd92682;  // .707*.707=.5
+            2'd1: slev = surr_mono ? 18'sd46341 : 18'sd65536;  // .5*.707=.35355
             default: slev = 18'sd0;
         endcase
+        if (!has_surr) slev = 18'sd0;
     end
     logic [8:0]  dmx_idx;                       // downmix walk 0..255
     // M15: the 5 fbw channels are read one-per-cycle through the single pcm read
@@ -232,7 +252,18 @@ module imdct_512 (
     // ph6/ph7; the bank's `(a*b)>>>17` truncation keeps the identical low 32
     // bits the dedicated 50-bit products produced (low bits are unaffected by
     // the wider intermediate).
-    logic signed [31:0] dmx_l, dmx_c, dmx_r, dmx_ls, dmx_rs;
+    // Slot capture: dmx_s0..s4 are decoded channels 0..4 IN BITSTREAM ORDER.
+    logic signed [31:0] dmx_s0, dmx_s1, dmx_s2, dmx_s3, dmx_s4;
+    // Role mux (DVD-FORK 2026-08-31). Bitstream order per acmod:
+    //   3: L C R      4: L R S      5: L C R S    6: L R Ls Rs   7: L C R Ls Rs
+    wire signed [31:0] dmx_l  = dmx_s0;
+    wire signed [31:0] dmx_r  = has_c ? dmx_s2 : dmx_s1;      // R is slot2 w/ centre
+    wire signed [31:0] dmx_c  = dmx_s1;                        // only read when has_c
+    // Surround: mono S goes to BOTH outputs; a pair splits Ls/Rs.
+    // Ls slot is the same index whether it is a true Ls or the mono S.
+    wire signed [31:0] dmx_ls = has_c ? dmx_s3 : dmx_s2;
+    // A mono surround feeds BOTH outputs; a pair takes the next slot for Rs.
+    wire signed [31:0] dmx_rs = surr_mono ? dmx_ls : (has_c ? dmx_s4 : dmx_s3);
     wire signed [31:0] dmx_cwq = 32'(p0);                  // (C*clev)>>>17 -> Q8.23
     wire signed [31:0] dmx_lo  = dmx_l + dmx_cwq + 32'(p1);// + (Ls*slev)>>>17
     wire signed [31:0] dmx_ro  = dmx_r + dmx_cwq + 32'(p2);// + (Rs*slev)>>>17
@@ -642,11 +673,12 @@ module imdct_512 (
                 default: ;
             endcase
             S_DMX: case (ph)
-                4'd0: pm_raddr = {3'd0, dmx_idx[7:0]};   // L
-                4'd1: pm_raddr = {3'd1, dmx_idx[7:0]};   // C
-                4'd2: pm_raddr = {3'd2, dmx_idx[7:0]};   // R
-                4'd3: pm_raddr = {3'd3, dmx_idx[7:0]};   // Ls
-                4'd4: pm_raddr = {3'd4, dmx_idx[7:0]};   // Rs
+                // slots 0..4 in BITSTREAM order; roles assigned by acmod above.
+                4'd0: pm_raddr = {3'd0, dmx_idx[7:0]};
+                4'd1: pm_raddr = {3'd1, dmx_idx[7:0]};
+                4'd2: pm_raddr = {3'd2, dmx_idx[7:0]};
+                4'd3: pm_raddr = {3'd3, dmx_idx[7:0]};
+                4'd4: pm_raddr = {3'd4, dmx_idx[7:0]};
                 4'd6: begin pm_we = 1'b1; pm_waddr = {3'd0, dmx_idx[7:0]}; pm_wdata = dmx_lo; end
                 4'd7: begin pm_we = 1'b1; pm_waddr = {3'd1, dmx_idx[7:0]}; pm_wdata = dmx_ro; end
                 default: ;
@@ -867,11 +899,11 @@ module imdct_512 (
                 // reads slots 0..4 before overwriting only 0/1, so it is hazard-free.
                 S_DMX: case (ph)
                     4'd0: ph <= 4'd1;
-                    4'd1: begin dmx_l  <= pm_rq; ph <= 4'd2; end
-                    4'd2: begin dmx_c  <= pm_rq; ph <= 4'd3; end
-                    4'd3: begin dmx_r  <= pm_rq; ph <= 4'd4; end
-                    4'd4: begin dmx_ls <= pm_rq; ph <= 4'd5; end
-                    4'd5: begin dmx_rs <= pm_rq; ph <= 4'd6; end
+                    4'd1: begin dmx_s0 <= pm_rq; ph <= 4'd2; end
+                    4'd2: begin dmx_s1 <= pm_rq; ph <= 4'd3; end
+                    4'd3: begin dmx_s2 <= pm_rq; ph <= 4'd4; end
+                    4'd4: begin dmx_s3 <= pm_rq; ph <= 4'd5; end
+                    4'd5: begin dmx_s4 <= pm_rq; ph <= 4'd6; end
                     4'd6: ph <= 4'd7;          // pcm[0]=Lo (port-mux)
                     default: begin             // ph7: pcm[1]=Ro (port-mux), advance
                         ph <= 4'd0;

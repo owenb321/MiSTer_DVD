@@ -138,9 +138,22 @@ module audblk_parse (
 );
 
     // nfchans from acmod (== liba52 nfchans_tbl[acmod]).
-    // DVD-FORK 2026-08-31: acmod 1 (1/0 mono) => ONE fbw channel (see ac3_parse).
-    wire [2:0] nfchans = (acmod == AC3_ACMOD_3_2)  ? 3'd5 :
-                         (acmod == AC3_ACMOD_MONO) ? 3'd1 : 3'd2;
+    // A/52 nfchans by acmod: {2,1,2,3,3,4,4,5} (DVD-FORK 2026-08-31 — was a
+    // 2-way mux that only knew acmod 2 and 7). Getting this wrong parses
+    // per-channel fields that are not in the bitstream and desyncs the audblk.
+    function automatic logic [2:0] ac3_nfchans(input logic [2:0] a);
+        case (a)
+            3'd0: ac3_nfchans = 3'd2;   // 1+1
+            3'd1: ac3_nfchans = 3'd1;   // 1/0
+            3'd2: ac3_nfchans = 3'd2;   // 2/0
+            3'd3: ac3_nfchans = 3'd3;   // 3/0
+            3'd4: ac3_nfchans = 3'd3;   // 2/1
+            3'd5: ac3_nfchans = 3'd4;   // 3/1
+            3'd6: ac3_nfchans = 3'd4;   // 2/2
+            default: ac3_nfchans = 3'd5; // 3/2
+        endcase
+    endfunction
+    wire [2:0] nfchans = ac3_nfchans(acmod);
     wire [2:0] nfm1    = nfchans - 3'd1;
 
     // Packed-exponent staging (fbw channels).  Address = {ch[2:0], idx[6:0]}:

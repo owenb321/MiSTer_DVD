@@ -144,3 +144,31 @@ done
 
 echo "[done] streams in $OUT"
 ls -l "$OUT"
+
+# --- acmod 3/4/5/6 vectors (DVD-FORK 2026-08-31, multichannel downmix) -------
+# The decoder folds every multichannel acmod to stereo, so each of these must be
+# checked against liba52's own downmix. Two properties matter for the vector to
+# actually TEST anything:
+#   1. DISTINCT content per channel (join= with one noise source per channel).
+#      A mono source upmixed to N channels leaves the extra channels silent, and
+#      then a WRONG downmix still passes -- that false green happened here.
+#   2. 640 kb/s so ffmpeg does not enable channel COUPLING. Coupled MULTICHANNEL
+#      content has a pre-existing accuracy gap (~40-210 LSB) that is present on
+#      the shipped acmod-7 path too, and would swamp the downmix check. See
+#      docs/ac3_decoder.md "Coupled multichannel accuracy".
+gen_mc () {   # $1 = n channels, $2 = ffmpeg layout, $3 = output name
+    local n="$1" lay="$2" name="$3" args="" ins="" i
+    for i in $(seq 1 "$n"); do
+        args="$args -f lavfi -i anoisesrc=d=0.20:c=white:r=$SR:a=0.5:seed=$((i*37+3))"
+    done
+    for i in $(seq 0 $((n-1))); do ins="$ins[$i]"; done
+    echo "[gen] $lay -> $name"
+    # shellcheck disable=SC2086
+    ffmpeg -hide_banner -loglevel error -y $args \
+        -filter_complex "${ins}join=inputs=$n:channel_layout=$lay[a]" -map "[a]" \
+        -ar "$SR" -c:a ac3 -b:a 640k -f ac3 "$OUT/$name"
+}
+gen_mc 3 "3.0"       acmod3_30_48k_640k.ac3
+gen_mc 3 "3.0(back)" acmod4_21_48k_640k.ac3
+gen_mc 4 "4.0"       acmod5_31_48k_640k.ac3
+gen_mc 4 "quad"      acmod6_22_48k_640k.ac3
