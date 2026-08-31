@@ -1,8 +1,12 @@
 # IEC 61937 bitstream over HDMI
 
-**Status: 🔧 built, sim-verified, ⏳ HW-confirm pending** (2026-08-30, branch
-`feature/hdmi-bitstream`). Design + the open HW questions are below; the S/PDIF
-half this builds on is `docs/iec61937.md`.
+**Status: ✅ HW-CONFIRMED 2026-08-31** — DD and DTS both decode on a real receiver
+over HDMI, with no Digital I/O board, via **route (i)** (§ below). Default build,
+no ini needed. ⚠ It inherits the **pre-existing** startup / track-change lock flap
+documented in `docs/iec61937.md` — that affects optical identically and reproduces
+on the shipped v0.2.0, so it is not a property of this feature.
+
+Design below; the S/PDIF half this builds on is `docs/iec61937.md`.
 
 `Audio Out = Passthru` wraps undecoded AC-3/DTS in IEC 61937. Until now that
 only ever left over optical S/PDIF, so 5.1 required the Digital I/O board and
