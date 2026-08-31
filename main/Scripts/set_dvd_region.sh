@@ -17,7 +17,9 @@
 # !! returned to none, only changed to another region at the cost of one change.
 #
 # Needs only what a stock MiSTer already has: python3. Run it with no disc playing —
-# the DVD core holds the drive open while a disc is mounted.
+# the DVD core holds the drive open while a disc is mounted. If several drives are
+# connected it only ever touches the first, and says so; connect just the one you
+# mean to change.
 #
 # Over SSH you can skip the menu:
 #   ./set_dvd_region.sh          show the current region and changes remaining
@@ -114,12 +116,13 @@ class FakeDrive:
     """Test stand-in so the menus can be exercised without an optical drive.
 
     Enable with DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>, region 0
-    meaning none set, e.g. DVD_REGION_FAKE=0:5:4:1. Touches no hardware.
+    meaning none set, e.g. DVD_REGION_FAKE=0:5:4:1. Several drives can be
+    simulated by separating them with commas. Touches no hardware.
     """
-    def __init__(self, spec):
+    def __init__(self, spec, index=0):
         parts = (spec.split(":") + ["0", "5", "4", "1"])[:4]
         region, changes, resets, scheme = (int(p) for p in parts)
-        self.path = "(simulated drive)"
+        self.path = "(simulated sr%d)" % index
         self.state = [region or None, changes, resets, scheme]
 
     def read_state(self):
@@ -135,7 +138,7 @@ class FakeDrive:
 def find_drives():
     fake = os.environ.get("DVD_REGION_FAKE")
     if fake:
-        return [FakeDrive(fake)]
+        return [FakeDrive(spec, n) for n, spec in enumerate(fake.split(","))]
     drives = []
     for path in sorted(glob.glob("/dev/sr[0-9]*")):
         try:
@@ -219,6 +222,31 @@ def describe(region):
     return str(region)
 
 
+def sibling_lines(drives):
+    """Warning + inventory when more than one optical drive is connected.
+
+    Only the first drive is ever touched. Reading the others is harmless (the RPC
+    state ioctl changes nothing), and naming them with their regions is what makes
+    the warning actionable: you can tell which drive is which without unplugging
+    anything, and see that the one about to change is the one you meant.
+    """
+    if len(drives) < 2:
+        return []
+    lines = ["",
+             "  !! %d optical drives are connected. This tool only looks at" % len(drives),
+             "  !! %s, the first one:" % drives[0].path]
+    for drive in drives:
+        try:
+            region, _changes, _resets, scheme = drive.read_state()
+            what = "region-free (RPC-1)" if scheme == 0 else describe(region)
+        except OSError:
+            what = "(could not be read)"
+        lines.append("       %-16s %s%s"
+                     % (drive.path, what, "   <- this one" if drive is drives[0] else ""))
+    lines.append("  !! Connect only the drive you want to change, to be certain.")
+    return lines
+
+
 def status_lines(drive, region, changes, resets, rpc1=False):
     lines = ["  DVD drive region                    %s" % drive.path, ""]
     lines.append("  Current region : %s" % describe(region))
@@ -248,8 +276,8 @@ def apply_region(drive, want):
     return 1
 
 
-def interactive(drive, region, changes, resets):
-    header = status_lines(drive, region, changes, resets)
+def interactive(drive, region, changes, resets, extra=()):
+    header = status_lines(drive, region, changes, resets) + list(extra)
     if changes == 0:
         header += ["", "  This drive has NO changes left - its region is locked",
                    "  permanently and cannot be altered."]
@@ -275,7 +303,7 @@ def interactive(drive, region, changes, resets):
         out("  The drive is already set to region %d. Nothing was changed." % want)
         return 0
 
-    confirm_header = ["  Set this drive to region %d?" % want, ""]
+    confirm_header = ["  Set %s to region %d?" % (drive.path, want), ""]
     confirm_header.append("  %s" % describe(want))
     confirm_header += ["",
                        "  This uses one of the %d changes the drive has left" % changes,
@@ -328,8 +356,10 @@ def main():
         out("  stop playback and try again.")
         return 1
 
+    extra = sibling_lines(drives)
+
     if scheme == 0:
-        for row in status_lines(drive, region, changes, resets, rpc1=True):
+        for row in status_lines(drive, region, changes, resets, rpc1=True) + extra:
             out(row)
         out()
         out("  This drive is RPC-1 (region-free): it ignores disc regions and")
@@ -341,16 +371,16 @@ def main():
         # no stdin at all, and a pipe has none either): report and stop rather than
         # block on input nobody can give.
         if not sys.stdin.isatty():
-            for row in status_lines(drive, region, changes, resets):
+            for row in status_lines(drive, region, changes, resets) + extra:
                 out(row)
             out()
             out("  Run this from the MiSTer Scripts menu (with fb_terminal=1) to")
             out("  change the region, or pass the region number as an argument.")
             return 0
-        return interactive(drive, region, changes, resets)
+        return interactive(drive, region, changes, resets, extra)
 
     # Argument form (SSH): same safety rules, minus the cursor menu.
-    for row in status_lines(drive, region, changes, resets):
+    for row in status_lines(drive, region, changes, resets) + extra:
         out(row)
     if want == region:
         out()
@@ -366,7 +396,7 @@ def main():
             out("  Nothing to confirm with: this is not a terminal. Re-run with")
             out("  --yes if you are sure, or use the MiSTer Scripts menu.")
             return 1
-        verdict = menu(["  Set this drive to region %d?" % want,
+        verdict = menu(["  Set %s to region %d?" % (drive.path, want),
                         "",
                         "  Uses one of %d remaining changes; cannot be undone." % changes],
                        ["No  - leave the drive alone", "Yes - set region %d" % want],

@@ -70,12 +70,12 @@ check("Esc/B2 backs out", [ESC],
       ["Cancelled. Nothing was changed."], ["Setting region"])
 # Down from Cancel wraps to region 1; the confirm screen defaults to No.
 check("confirm defaults to No", [DOWN, ENTER, ENTER],
-      ["Set this drive to region 1?", "Cancelled. Nothing was changed."],
+      ["Set (simulated sr0) to region 1?", "Cancelled. Nothing was changed."],
       ["Setting region"])
 check("Down+Enter on confirm applies", [DOWN, ENTER, DOWN, ENTER],
       ["Setting region 1 ...", "Done. The drive is now region 1, with 4 changes left."])
 check("digit key jumps the cursor", [b"3", ENTER, DOWN, ENTER],
-      ["Set this drive to region 3?", "Done. The drive is now region 3"])
+      ["Set (simulated sr0) to region 3?", "Done. The drive is now region 3"])
 check("last-change warning shown", [DOWN, ENTER, ESC],
       ["This is the LAST change this drive allows."], fake="0:1:4:1")
 check("locked drive offers only Exit", [ENTER],
@@ -86,6 +86,18 @@ check("picking the current region is a no-op", [b"2", ENTER],
 # and choosing one would spend a permanent change for nothing.
 check("menu offers regions 1-6 only", [ESC],
       ["6  China"], ["7  reserved", "international venues"])
+
+# Only the first drive is ever touched, so a second one must be called out by
+# name - "which drive am I about to change?" is unanswerable otherwise, and the
+# change cannot be undone.
+check("multi-drive warning names every drive", [ESC],
+      ["2 optical drives are connected", "(simulated sr0)  NONE set   <- this one",
+       "(simulated sr1)  1  (US, Canada)", "Connect only the drive you want"],
+      fake="0:5:4:1,1:3:4:1")
+check("single drive gets no warning", [ESC],
+      ["Current region : NONE set"], ["optical drives are connected"])
+check("confirm screen names the drive", [DOWN, ENTER, ESC],
+      ["Set (simulated sr0) to region 1?"], fake="0:5:4:1,1:3:4:1")
 
 text, code = run([], args=("8",))
 print(("PASS  " if code == 2 and "not consumer regions" in text else "FAIL  ")

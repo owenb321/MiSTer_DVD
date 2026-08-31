@@ -183,6 +183,14 @@ and 8 is international venues (aircraft, cruise ships), so no disc a user owns c
 either — offering them only creates a way to spend a permanent change for nothing. They
 stay in the naming table so a drive that already reports one is still described correctly.
 
+**More than one drive.** Only the first `/dev/srN` is ever touched. When others are
+present the tool says so and lists every drive with its current region, marking the one it
+will act on — reading the others is harmless, and "which drive am I about to change?" is
+otherwise unanswerable for an act that cannot be undone. A picker was considered and not
+built: the drives are told apart by device node, which says nothing about which physical
+unit it is, so connecting only the target drive is the reliable habit and the warning
+nudges toward it.
+
 **Testing.** The ioctl itself cannot be tested without a drive; everything guarding it can,
 and that is where the damage would be. `tools/test_set_dvd_region.py` fakes the drive
 (`DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>`, honoured by the script) and drives
