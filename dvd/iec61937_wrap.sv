@@ -226,7 +226,23 @@ module iec61937_wrap #(
     wire sync_en = sync_armed && stc_anchored;
     wire signed [34:0] head_delta =
         $signed({2'b0, stc}) - $signed({2'b0, frame_pts}) - 35'($signed(av_ofs));
-    wire hold_frame = is_codec &&
+    // ★ ONE-SHOT GATE (2026-08-31). The hold's job is to align the START of audio
+    // to the video timeline; once the bitstream is running, re-entering it just
+    // punches a silence gap into a stream the receiver has already acquired -
+    // and a real->silence->real flap is exactly what fj#110 identified as what
+    // breaks acquisition. Symptom without this: at every title start the
+    // receiver flaps between the codec and "decoder off", and on optical - where
+    // the transition ALSO flips the channel-status non-PCM bit and so forces a
+    // full format re-negotiation - it may never settle until a chapter skip.
+    //
+    // The gate therefore applies only until the first real burst since the last
+    // flush. `burst_seen` is cleared by rst_sys_n = aud_rst_n, which pulses on
+    // seeks, audio-track switches and aud_flush: exactly the discontinuities
+    // where a fresh hold IS wanted. Ongoing drift is not this gate's job - the
+    // drop/catch-up path handles that.
+    reg burst_seen;
+
+    wire hold_frame = is_codec && !burst_seen &&
         ( (sync_armed && !stc_anchored)                              // wait for the anchor
        || (sync_en && frame_pts_valid && (head_delta < 35'sd0)) );   // anchored but not yet due
 
@@ -256,6 +272,7 @@ module iec61937_wrap #(
             wr_en       <= 1'b0;
             burst_silent<= 1'b1;
             cur_nonpcm  <= 1'b0;
+            burst_seen  <= 1'b0;
             frame_pop_r <= 1'b0;
             dbg_word    <= 16'd0;
             dbg_word_stb<= 1'b0;
@@ -284,6 +301,7 @@ module iec61937_wrap #(
                         words_total <= {period_sel, 1'b0};
                         burst_silent<= 1'b0;   // real data-burst
                         cur_nonpcm  <= 1'b1;   // -> set the channel-status non-PCM bit
+                        burst_seen  <= 1'b1;   // one-shot gate: see hold_frame
                         frame_pop_r <= 1'b1;
                         st <= S_PA;
                     end else if (frame_valid && is_codec && mute_i) begin

@@ -81,7 +81,8 @@ module iec61937_wrap_tb;
     integer tap_incoherent = 0;
     integer tap_badperiod  = 0;  // steady-state deviations: must be ZERO
     integer tap_startup    = 0;  // transient deviations: one per reset, bounded
-    integer tap_strobes    = 0;
+    integer tap_strobes    = 0;   // since the last reset (period checking)
+    integer tap_total      = 0;   // cumulative; never cleared
     integer tap_resets     = 0;
     always @(posedge clk_audio) begin : tap_mon
         reg [15:0] gap;
@@ -98,6 +99,7 @@ module iec61937_wrap_tb;
                     else                          tap_badperiod = tap_badperiod + 1;
                 end
                 tap_strobes = tap_strobes + 1;
+                tap_total   = tap_total + 1;
                 gap = 16'd0;
             end
         end
@@ -374,11 +376,48 @@ module iec61937_wrap_tb;
         if (dut.cur_nonpcm !== 1'b1) begin
             $display("  FAIL: unmuted burst not tagged non-PCM"); errors=errors+1; end
 
+        // ---- TEST 8c: the one-shot hold gate --------------------------------
+        // Once a real burst has gone out, a frame that is NOT yet due must NOT be
+        // held again. Re-holding punches a silence gap into a stream the receiver
+        // has already acquired, and that real->silence->real flap is what fj#110
+        // identified as breaking acquisition (symptom: the receiver flaps between
+        // the codec and "decoder off" at every title start, and on optical never
+        // settles without a chapter skip).
+        frame_valid = 0; do_reset;
+        sync_armed_r = 1; stc_anch_r = 1; fptsv_r = 1;
+        fpts_r = 33'd100000; stc_r = 33'd200000;      // due -> first burst goes out
+        frame_len = 16'd8; plen = 8; frame_type = 2'd0; frame_valid = 1;
+        enable = 1;
+        wait (pulses >= 3072);
+        @(posedge clk_sys);
+        if (dut.burst_seen !== 1'b1) begin
+            $display("  FAIL 8c: burst_seen not set after a real burst"); errors=errors+1; end
+
+        // now make the front frame NOT due; it must still be emitted
+        stc_r = 33'd50000;                            // STC behind the PTS again
+        i = pop_count;
+        wait (pulses >= 2*3072);
+        @(posedge clk_sys); @(posedge clk_sys);
+        $display("TEST 8c: post-burst not-due frame, cur_nonpcm=%0b pops=%0d",
+                 dut.cur_nonpcm, pop_count - i);
+        if (dut.cur_nonpcm !== 1'b1) begin
+            $display("  FAIL 8c: re-held after the stream started (silence gap ->");
+            $display("           receiver re-acquires; this is the fj#110 flap)");
+            errors=errors+1; end
+        if (pop_count == i) begin
+            $display("  FAIL 8c: no frame consumed while un-due post-start"); errors=errors+1; end
+
+        // a flush must re-arm the gate, so a cold start still holds
+        frame_valid = 0; do_reset;
+        sync_armed_r = 1; stc_anch_r = 0;             // armed, not yet anchored
+        if (dut.burst_seen !== 1'b0) begin
+            $display("  FAIL 8c: flush did not re-arm the hold gate"); errors=errors+1; end
+
         // ---- TEST 9: HDMI bitstream tap -------------------------------------
-        $display("TEST 9: HDMI tap, strobes=%0d incoherent=%0d steady_bad=%0d startup_dev=%0d (resets=%0d)",
-                 tap_strobes, tap_incoherent, tap_badperiod, tap_startup, tap_resets);
-        if (tap_strobes < 100) begin
-            $display("  FAIL: tap strobe never ran (%0d)", tap_strobes); errors=errors+1; end
+        $display("TEST 9: HDMI tap, total=%0d incoherent=%0d steady_bad=%0d startup_dev=%0d (resets=%0d)",
+                 tap_total, tap_incoherent, tap_badperiod, tap_startup, tap_resets);
+        if (tap_total < 100) begin
+            $display("  FAIL: tap strobe never ran (%0d)", tap_total); errors=errors+1; end
         if (tap_incoherent != 0) begin
             $display("  FAIL: tap diverged from the pair spdif_pass is playing (%0d cycles)",
                      tap_incoherent); errors=errors+1; end
