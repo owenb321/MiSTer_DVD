@@ -81,6 +81,22 @@ If an encrypted disc is inserted without libdvdcss present, the core shows
 Cracking CSS may be regulated where you live; check the laws that apply to you. This
 project neither distributes libdvdcss nor contains any CSS circumvention code.
 
+## Drive region (physical discs start faster with one set)
+
+A drive with **no region set** refuses the CSS title-key ioctl, so libdvdcss cracks every
+key from the disc data — that is the wait shown on screen as `No drive region: cracking`.
+Setting the drive's region removes it. The other bundled script reads the drive's region
+and can set it, from the MiSTer, with a menu you can drive on a gamepad:
+
+```
+Scripts/set_dvd_region.sh
+```
+
+⚠️ A region change is close to permanent — a drive allows about five changes ever, there is
+no un-set, and at zero it locks to the last region. The script shows the remaining count
+and defaults every prompt to *don't*. Design notes and the ioctl details are in
+[../docs/physical_disc.md](../docs/physical_disc.md).
+
 ## Status
 
 **Builds (native + Docker); not yet hardware-tested.** The CSS/decrypt modules are

@@ -1237,6 +1237,21 @@ that still drain the ring — no STD wedge). Video keeps playing so the disc is
 identifiable. Sim: `ps_demux_scram_tb`, `iec61937_wrap_tb` T8, `transport_hud_tb`
 T13. Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
 
+**DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ✅ READ +
+gamepad menu HW-CONFIRMED 2026-08-31 (Scripts menu, gamepad-driven, 1 and 2 drives);
+⏳ the SET ioctl is the one remaining gate.**
+A drive with no region set refuses the CSS title-key ioctl, so every physical disc pays a
+multi-second crack (`No drive region: cracking`); the Scripts-menu tool reads the region
+(and the remaining-change count) and can set it, via `DVD_AUTH` — no compiled helper, since
+python3 is stock on MiSTer. Two durable facts it is built around, worth knowing before
+writing ANY MiSTer Scripts tool: a Scripts-menu script is run by handing its bare path to
+`agetty`, so it can **never take arguments** (SSH only); and MiSTer injects uinput KEYBOARD
+events from the gamepad while a script runs (D-pad→arrows, B1→Enter, B2→Esc) but **no digits
+or letters** — so interactive means a cursor menu, never a typed prompt. A region set is
+**irreversible** (no un-set, ~5 changes ever), hence cursor-starts-on-Cancel/No throughout.
+Tested by `tools/test_set_dvd_region.py` (fakes the drive, drives the menus through a pty);
+the ioctl itself is the HW gate. Design + ioctl details: `docs/physical_disc.md`.
+
 ### No USB DVD-ROM drive support
 MiSTer's custom Linux kernel almost certainly lacks `sr_mod` (`CONFIG_BLK_DEV_SR`).
 Recompiling the kernel is out of scope. Workflow: rip disc to ISO on PC, copy to SD card,

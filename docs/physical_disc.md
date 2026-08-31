@@ -125,6 +125,80 @@ committed to the repo, bundled in a release, or uploaded** — *distributing* CS
 the genuinely fraught act (cf. the AACS "09 F9" case). The cache lives on the SD card,
 nowhere near the repo, so this holds by construction; keep it that way.
 
+## Drive region tool (`main/Scripts/set_dvd_region.sh`)
+
+A drive with **no region set** refuses the CSS title-key ioctl, so libdvdcss cracks every
+key from the data — the multi-second wait `dvd_css.cpp` surfaces as
+`No drive region: cracking`. Setting the drive's region removes that wait for physical
+discs (an encrypted *ISO* always cracks, so it is unaffected). The tool reads the state and
+optionally sets it, from the MiSTer itself.
+
+**Why a script and not part of the Main:** it is a once-per-drive administrative act, not
+part of playback, and it must be usable *before* deciding to buy into the `[DVD] main=`
+setup at all. The Scripts menu is where MiSTer puts exactly this kind of thing, and it is
+already how `install_dvdcss.sh` ships.
+
+**Mechanism.** One ioctl, `DVD_AUTH` (`0x5392`, `linux/cdrom.h`), which the kernel turns
+into the SCSI REPORT KEY / SEND KEY commands for RPC state:
+
+| | value | struct |
+|---|---|---|
+| read  | `DVD_LU_SEND_RPC_STATE` = **10** | `{type:2, vra:3, ucca:3, region_mask, rpc_scheme}` — 3 bytes, bitfields packed from the low end |
+| write | `DVD_HOST_SEND_RPC_STATE` = **11** | `{type, pdrc}` — `pdrc` is the region, 1–8 |
+
+`sizeof(dvd_authinfo)` is 16. `region_mask` has a **clear** bit per playable region, so
+`0xff` = no region set (the same test `dvd_css.cpp:drive_region_set()` already makes over
+SG_IO). The read also returns `ucca` (user changes remaining) and `vra` (vendor resets),
+which is what lets the tool state the cost before spending it. `rpc_scheme == 0` means an
+RPC-1 (region-free) drive — nothing to set.
+
+No compiled helper is needed: `python3` is a stock MiSTer tool (`install_dvdcss.sh` already
+depends on it) and `fcntl.ioctl` covers this.
+
+**Why the UI is a cursor menu.** A Scripts-menu script is launched by handing its bare path
+to `agetty` (`menu.cpp`, `MENU_SCRIPTS_FB`), so **it can never receive arguments** — an
+argument interface only works over SSH. Input does work, though: the launcher calls
+`video_fb_enable(1)` first, and MiSTer's `input.cpp` (`else if (video_fb_state())`) injects
+real uinput **keyboard** events from a gamepad — D-pad → arrows, B1 → Enter, B2 → Esc,
+B3 → Space, B4 → Tab, L/R → PgUp/PgDn. There are **no digits or letters** in that mapping,
+which rules out any typed prompt; hence menus only. Consequences baked into the script:
+
+- The python payload is written to a temp **file**, not fed to `python3` on stdin — stdin is
+  the console the menu is read from, and a `python3 - <<EOF` heredoc would consume it.
+- With `fb_terminal=0` in MiSTer.ini the Scripts menu uses the OSD runner instead
+  (`popen(..., "r")`) — output only, **no stdin at all**. The script detects a non-tty stdin
+  and degrades to printing status rather than blocking on input nobody can give.
+- Esc needs a ~50 ms timeout to be told apart from the start of an arrow's CSI sequence.
+
+**Safety, because a region change is irreversible.** There is no un-set: MMC has no "clear
+region" command, the code field is 1–8 with no none value, each set spends one of ~5 user
+changes, and at zero the drive is locked to the last region. So the entry menu's cursor
+starts on *Cancel*, selecting a region leads to a confirm screen whose cursor starts on
+*No*, the last-change case gets an explicit "locked forever" warning, and a drive already at
+`ucca == 0` is never offered the menu at all. Over SSH the same rules apply, with `--yes`
+required to skip the confirm.
+
+Only regions **1–6** are offered, in the menu and the argument form alike. 7 is unassigned
+and 8 is international venues (aircraft, cruise ships), so no disc a user owns carries
+either — offering them only creates a way to spend a permanent change for nothing. They
+stay in the naming table so a drive that already reports one is still described correctly.
+
+**More than one drive.** Only the first `/dev/srN` is ever touched. When others are
+present the tool says so and lists every drive with its current region, marking the one it
+will act on — reading the others is harmless, and "which drive am I about to change?" is
+otherwise unanswerable for an act that cannot be undone. A picker was considered and not
+built: the drives are told apart by device node, which says nothing about which physical
+unit it is, so connecting only the target drive is the reliable habit and the warning
+nudges toward it.
+
+**Testing.** The ioctl itself cannot be tested without a drive; everything guarding it can,
+and that is where the damage would be. `tools/test_set_dvd_region.py` fakes the drive
+(`DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>`, honoured by the script) and drives
+the menus through a pty using the exact key sequences MiSTer sends for a gamepad — 13
+scenarios, including "a stray B1 on entry changes nothing" and "the confirm defaults to No".
+The **read** ioctl and the gamepad-driven console are ✅ **HW-CONFIRMED 2026-08-31**; the
+**set** ioctl is the one part still ungated (see open items).
+
 ## HW status / open items
 
 **HW CONFIRMED (2026-08-29):** on the DE10-Nano — physical disc (no-region-drive cracking +
@@ -142,8 +216,21 @@ Remaining:
    — but the message still says "Preparing disc" because a region *is* set. To warn
    correctly, compare the disc's region-management byte (`READ DVD STRUCTURE` copyright RMI)
    against the drive's set region (`REPORT KEY` RPC state) and show the cracking text on a
-   mismatch. Needs a region-mismatched disc to verify (easiest: `regionset` the drive to a
-   region that mismatches an existing disc, rather than authoring one).
+   mismatch. Needs a region-mismatched disc to verify — a second drive set to a region the
+   local library does **not** match is the practical rig (see item 2).
+2. **`set_dvd_region.sh` on hardware — ✅ READ HW-CONFIRMED 2026-08-31, ⏳ SET still gated.**
+   Run from the Scripts menu and driven with a **gamepad**, with one drive connected and
+   with two: regions read correctly (an unset drive and a region-1 drive each identified),
+   and the multi-drive warning listed both. That confirms everything except the write — the
+   `DVD_AUTH` read, drive enumeration, and the uinput key injection on tty2, which was the
+   design's riskiest assumption (nothing else in the repo depends on it).
+   **Remaining: the SET ioctl** (`DVD_HOST_SEND_RPC_STATE` accepted by the drive and reading
+   back). The read path is safe to re-test freely; a **set is one-way and spends one of the
+   drive's ~5 permanent changes**, so it wants a drive you have decided to commit. Bench plan
+   is three drives — one left unset (keeps the `No drive region: cracking` path testable,
+   which a set would destroy forever), one matching the local library, one deliberately
+   mismatched as the permanent Q2 rig. `DVDCSS_METHOD=title` forces the crack path on any
+   drive if the physical unset state is not available.
 3. **Eject → idle reset (just added):** confirm the `status[0]` pulse returns to the idle
    logo cleanly and a subsequent insert plays.
 4. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open.
