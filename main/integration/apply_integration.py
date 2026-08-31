@@ -282,12 +282,27 @@ void hdmi_config_set_audio(int bitstream)
 {
 	if (hdmi_main_fd < 0) return;
 
+	// dvd_hdmi_bs_tweak: an ini-selectable sweep of the values that had to be
+	// ASSUMED, so trying a candidate costs a core reload rather than a 30-minute
+	// Quartus fit. HW round 2 proved optical carries both DD and DTS on the SAME
+	// build, so the 61937 word stream is right and only the chip's reading of it
+	// is in question.
+	//   bit 0  word length 24-bit instead of 16-bit (0x14). If the chip counts the
+	//          sample up from timeslot 4 rather than 12, "16-bit" makes it read
+	//          our zero padding instead of the payload.
+	//   bit 1  invert the I2S bit clock (0x0B[6]). Wrong latching edge shifts
+	//          every bit.
+	int tweak = bitstream ? cfg.dvd_hdmi_bs_tweak : 0;
+	uint8_t wordlen  = (tweak & 1) ? 0x0B : 0x02;   // IEC 60958: 1011=24bit, 0010=16bit
+	uint8_t audiocfg = (uint8_t)(0x0E | ((tweak & 2) ? 0x40 : 0x00));
+
 	uint8_t audio_data[] = {
-		0x0A, 0x00,                                  // [6:4] audio select = I2S
+		0x0A, 0x00,                              // [6:4] audio select = I2S
+		0x0B, audiocfg,                          // [6] bit-clock invert (tweak bit 1)
 		0x0C, (uint8_t)(bitstream ? 0x07 : 0x04),    // [2] I2S0 en; [1:0] 3=IEC958 direct, 0=standard
-		0x14, 0x02,                                  // audio word length = 16 bit
-		0x15, (uint8_t)((cfg.hdmi_audio_96k ? 0x80 : 0x00) | 0x20),   // sample rate
-		0x73, (uint8_t)(bitstream ? 0x00 : 0x01),    // InfoFrame CC: 0 = refer to stream header
+		0x14, wordlen,                           // audio word length (tweak bit 0)
+		0x15, (uint8_t)((cfg.hdmi_audio_96k ? 0x80 : 0) | 0x20),   // 48 kHz
+		0x73, (uint8_t)(bitstream ? 0x00 : 0x01),    // CT/CC = refer to stream header
 	};
 
 	for (uint i = 0; i < sizeof(audio_data); i += 2)
@@ -296,7 +311,11 @@ void hdmi_config_set_audio(int bitstream)
 		if (res < 0) printf("i2c: audio write error (%02X %02X): %d\n",
 		                    audio_data[i], audio_data[i + 1], res);
 	}
-	printf("ADV7513: audio input set to %s\n", bitstream ? "IEC958 direct (bitstream)" : "PCM I2S");
+	printf("ADV7513: audio %s tweak=%d wl=%02X r0B=%02X\n",
+	       bitstream ? "IEC958-direct" : "PCM I2S", tweak, wordlen, audiocfg);
+	FILE *lf = fopen("/tmp/dvd_hdmi_audio.log", "a");
+	if (lf) { fprintf(lf, "adv7513: %s tweak=%d wordlen=%02X reg0B=%02X\n",
+	                  bitstream ? "IEC958-direct" : "PCM", tweak, wordlen, audiocfg); fclose(lf); }
 }
 
 int video_hdmi_config_generation(void)
@@ -314,14 +333,16 @@ cfgh_path = os.path.join(ROOT, "cfg.h")
 ch = read(cfgh_path)
 # 21. ini field. 0 = auto (EDID-gated), 1 = off, 2 = force.
 ch = insert_after(ch, '\tuint8_t hdmi_audio_96k;',
-    '\tuint8_t dvd_hdmi_bitstream;   // dvd:hdmibs 0=auto 1=off 2=force\n',
+    '\tuint8_t dvd_hdmi_bitstream;   // dvd:hdmibs 0=auto 1=off 2=force\n'
+    '\tuint8_t dvd_hdmi_bs_tweak;    // dvd:hdmibs ADV7513 register sweep, 0..3\n',
     21, 'dvd_hdmi_bitstream')
 write(cfgh_path, ch)
 
 cfgc_path = os.path.join(ROOT, "cfg.cpp")
 cc = read(cfgc_path)
 cc = insert_after(cc, '{ "HDMI_AUDIO_96K", (void*)(&(cfg.hdmi_audio_96k)), UINT8, 0, 1 },',
-    '\t{ "DVD_HDMI_BITSTREAM", (void*)(&(cfg.dvd_hdmi_bitstream)), UINT8, 0, 2 },\n',
+    '\t{ "DVD_HDMI_BITSTREAM", (void*)(&(cfg.dvd_hdmi_bitstream)), UINT8, 0, 2 },\n'
+    '\t{ "DVD_HDMI_BS_TWEAK", (void*)(&(cfg.dvd_hdmi_bs_tweak)), UINT8, 0, 3 },\n',
     21, 'DVD_HDMI_BITSTREAM')
 write(cfgc_path, cc)
 print("[integration] cfg.h/cfg.cpp patched")
