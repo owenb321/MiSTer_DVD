@@ -678,4 +678,11 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # pinned SEED 5 held on the FIRST roll -- clk_dec 93.01 @100C / 89.3 @-40C, PASS
 # with margin at 88% ALM. No sweep needed, consistent with the post-reclaim note
 # above.
+# 2026-08-30 (feature/hdmi-bitstream netlist, +~300 ALMs: dvd/i2s_iec958.sv, the
+# spdif_pass parallel subframe export, the emu ack/hold-off and the sys_top pin
+# mux): pinned SEED 5 held on the FIRST roll again -- clk_dec 90.83 @100C /
+# 90.15 @-40C, PASS both corners at 87% ALM. RAM UNCHANGED at 506/553: the new
+# serializer is a shift register and counters, so it inferred no memory, which
+# was the design prediction. Third consecutive first-roll fit since the mem_shim
+# reclaim -- the sub-86 rule continues to hold.
 set_global_assignment -name SEED 5
