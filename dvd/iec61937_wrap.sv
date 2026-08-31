@@ -135,9 +135,19 @@ module iec61937_wrap #(
     // Passthru) so the wire's real/silent burst pattern is readable on hardware.
     output reg         dbg_burst_stb,  // pulses when a burst begins
     output reg         dbg_burst_real, // 1 = real 61937 data-burst (Pa/Pb emitted)
-    output reg         dbg_burst_held  // silent AND a codec frame was queued but
+    output reg         dbg_burst_held, // silent AND a codec frame was queued but
                                        // HELD (pacing) — else silent = no frame
                                        // queued (ring underrun) or LPCM/mute
+
+    // Level: the front frame is being HELD BY DESIGN (A/V sync hold — pre-anchor
+    // or not yet due). Exported so emu's ring drain watchdog can treat the hold
+    // as "consumer alive" and keep the STD backpressure engaged: a hold produces
+    // no frame_pop, and without this the watchdog reads it as a wedged consumer,
+    // reverts the ring to drop-on-full, and the dropped frames punch forward PTS
+    // holes into the stream — each hole = a multi-second silence gap on the wire
+    // = the measured startup/track-change receiver flap. See docs/iec61937.md
+    // "FLAP ROOT CAUSE".
+    output wire        hold_active_o
 );
 
     // -------------------------------------------------------------
@@ -277,6 +287,10 @@ module iec61937_wrap #(
     wire hold_frame = is_codec &&
         ( (sync_armed && !stc_anchored)                              // wait for the anchor
        || (sync_en && frame_pts_valid && (head_delta_b < 35'sd0)) ); // anchored but not yet due
+
+    // Deliberate-hold level for the emu drain watchdog (see the port comment).
+    // Mute is excluded: muted frames still pop, so they feed the watchdog anyway.
+    assign hold_active_o = enable && frame_valid && hold_frame && !mute_i;
 
     // The IEC 61937 data-burst REPETITION PERIOD must stay constant for a given
     // codec or the receiver drops lock. Null/hold bursts therefore reuse the

@@ -1,11 +1,13 @@
 # Next session: the IEC 61937 startup / track-change lock flap
 
-> **STATUS 2026-08-31 (session 2, `feature/bs-flap-probe`):** analysis + probe
-> build done — see `docs/iec61937.md` "FLAP ANALYSIS + PROBE BUILD". Two claims
-> below are now revised there: the hold-fill A/B never engaged in the symptom
-> windows (so "the fill is not the variable" is unproven for startup/track
-> change), and the `cur_period` lead is a footnote (silence holds carry no Pa/Pb
-> grid; 1536 = 3×512). Next: the round-0 zero-build checks + the probe rows.
+> **STATUS 2026-08-31 (session 2, `feature/bs-flap-probe`): ROOT CAUSE FOUND
+> AND MEASURED — fix in fabric, HW gate pending.** The drain watchdog read the
+> wrapper's A/V-sync hold as a wedged consumer, left the STD backpressure
+> disengaged, and the ring dropped ~1130 frames in the first 46 s of a title —
+> each dropped span a forward PTS hole = a multi-second wire gap = the flap.
+> See `docs/iec61937.md` "FLAP ROOT CAUSE" (which also retires this file's
+> `cur_period` lead and the "fill is not the variable" claim). Fix =
+> `hold_active_o` re-arms the watchdog while the wrapper holds by design.
 
 Paste the block below to start. Everything it claims has been verified on hardware
 unless marked otherwise.

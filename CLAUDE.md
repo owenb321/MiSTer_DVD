@@ -1380,7 +1380,13 @@ parked with `aud_ready=1'b1`); wiring it in + the HPS read path are the next ste
   32 ms gap (the low-fps audio "stutter"); backpressure loses nothing. Guard: a
   ~1.2 s drain watchdog in `emu.sv` (armed by `frame_pop`) — audio muted (O5) /
   wedged decoder → backpressure released, reverting to drop-on-full, so the
-  stream can never wedge video. The 48 kHz audio NCO stays untouched (same
+  stream can never wedge video. ⚠ **The watchdog must also count a PASSTHROUGH
+  A/V-sync hold as "consumer alive"** (`iec61937_wrap.hold_active_o` re-arms it,
+  2026-08-31): a hold produces no `frame_pop`, and reading it as a wedge left
+  backpressure disengaged at every title start — the ring dropped ~25 frames/s
+  for ~46 s and the dropped spans' PTS holes were the measured IEC 61937
+  receiver lock flap (`docs/iec61937.md` "FLAP ROOT CAUSE"). The 48 kHz audio
+  NCO stays untouched (same
   crystal as the raster + exact governor cadence ⇒ no drift to correct).
 - **Two coupled FIFOs:** a byte ring (`BYTE_DEPTH`, default 8192) + a
   frame-descriptor ring (`FRAME_DEPTH`, default 64) of `{length[15:0], type[1:0]}`,

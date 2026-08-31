@@ -2720,6 +2720,7 @@ wire  [1:0] aud_frame_type;
 // backpressure watchdog either way — the STD model holds in both modes).
 wire        dec_ring_ready, dec_frame_pop;   // dvd_audio_decode's ring handshake
 wire        pass_ring_ready, pass_frame_pop; // iec61937_wrap's ring handshake
+wire        pass_hold_active;                // wrapper A/V-sync hold level (watchdog feed)
 assign aud_ring_ready = pass_mode ? pass_ring_ready : dec_ring_ready;
 assign aud_frame_pop  = pass_mode ? pass_frame_pop  : dec_frame_pop;
 
@@ -2774,7 +2775,20 @@ reg  [24:0] aud_bp_wd = 25'd0;                 // ~1.24 s @ 27 MHz
 wire        aud_bp_armed = (aud_bp_wd != 25'd0);
 always @(posedge clk_sys) begin
     if (~reset_n)            aud_bp_wd <= 25'd0;
-    else if (aud_frame_pop)  aud_bp_wd <= 25'h1FFFFFF;   // decoder draining -> (re)arm
+    // (Re)arm on a pop (consumer draining) — or while the PASSTHROUGH wrapper is
+    // deliberately HOLDING the front frame (A/V sync hold). A hold produces no
+    // pop, so before this term the watchdog read every passthrough startup hold
+    // as a wedged consumer, left backpressure disengaged (it arms only on the
+    // first pop), and the ring dropped whole frames at the free-running demux
+    // rate — MEASURED at ~25 frames/s for the first ~46 s of a title (overlay
+    // row 13 → 1130 drops), each dropped span a forward PTS hole whose far side
+    // is a multi-second silence gap on the wire = the receiver lock flap
+    // (docs/iec61937.md "FLAP ROOT CAUSE"). The hold is bounded by the STC
+    // reaching the front frame's PTS, so this cannot wedge the stream on any
+    // stream whose video plays; the decode path is unaffected (its stale-skip
+    // pops keep the watchdog fed the same way it always was).
+    else if (aud_frame_pop || (pass_mode && pass_hold_active))
+                             aud_bp_wd <= 25'h1FFFFFF;
     // Freeze the drain watchdog while paused: the audio decoder is held (no
     // frame_pop), so without this the watchdog would expire after ~1.24 s,
     // release backpressure, and let the ring drop frames -> an audible gap /
@@ -2922,7 +2936,8 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .dbg_word_stb (),
     .dbg_burst_stb (bs_burst_stb),
     .dbg_burst_real(bs_burst_real),
-    .dbg_burst_held(bs_burst_held)
+    .dbg_burst_held(bs_burst_held),
+    .hold_active_o (pass_hold_active)
 );
 
 // =========================================================================

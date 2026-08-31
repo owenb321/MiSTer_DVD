@@ -39,6 +39,7 @@ module iec61937_wrap_tb;
     wire [15:0] bs_l, bs_r;
     wire        bs_nonpcm, bs_stb;
     wire        dbg_b_stb, dbg_b_real, dbg_b_held;
+    wire        hold_active;
 
     // ~27 MHz and 24.576 MHz
     always #18.5 clk_sys   = ~clk_sys;
@@ -58,7 +59,8 @@ module iec61937_wrap_tb;
         .clk_audio(clk_audio), .rst_audio_n(rst_audio_n), .spdif_o(spdif_o),
         .bs_l_o(bs_l), .bs_r_o(bs_r), .bs_nonpcm_o(bs_nonpcm), .bs_stb_o(bs_stb),
         .dbg_word(dbg_word), .dbg_word_stb(dbg_word_stb),
-        .dbg_burst_stb(dbg_b_stb), .dbg_burst_real(dbg_b_real), .dbg_burst_held(dbg_b_held)
+        .dbg_burst_stb(dbg_b_stb), .dbg_burst_real(dbg_b_real), .dbg_burst_held(dbg_b_held),
+        .hold_active_o(hold_active)
     );
 
     // ---- burst-classification counters (TEST 10) ----
@@ -465,6 +467,12 @@ module iec61937_wrap_tb;
         if (cnt_held == t10_held) begin
             $display("  FAIL: hold burst not classified as `held`");
             errors = errors + 1; end
+        // hold_active must be HIGH while the frame is deliberately held: this is
+        // the emu drain-watchdog feed (a hold is "consumer alive", NOT a wedge -
+        // the flap root cause was the watchdog reading it as one).
+        if (hold_active !== 1'b1) begin
+            $display("  FAIL: hold_active_o low during a sync hold");
+            errors = errors + 1; end
         rel_bias_r = 2'd1;                 // 10 ms allowance
         for (i=0;i<20000 && pop_count==0;i=i+1) @(posedge clk_sys);
         $display("TEST 10b: bias 10ms: pop_count=%0d real_bursts=%0d",
@@ -479,11 +487,20 @@ module iec61937_wrap_tb;
         // FIRST burst is an underrun-classified silence burst. (Continuing from
         // 10b instead would stall for tens of ms behind the queued-burst FIFO
         // backlog - a TB artifact, not a design property.)
+        // released frame -> hold_active must have dropped
+        if (hold_active !== 1'b0) begin
+            $display("  FAIL: hold_active_o still high after release");
+            errors = errors + 1; end
         frame_valid = 0; enable = 0; do_reset;
         t10_under = cnt_under;
         enable = 1;
         for (i=0;i<20000 && cnt_under==t10_under;i=i+1) @(posedge clk_sys);
         $display("TEST 10c: ring dry: underrun_bursts=%0d", cnt_under - t10_under);
+        // no frame queued: an underrun is NOT a deliberate hold - hold_active
+        // must be low so a genuinely idle/wedged consumer still trips the watchdog
+        if (hold_active !== 1'b0) begin
+            $display("  FAIL: hold_active_o high with no frame queued");
+            errors = errors + 1; end
         if (cnt_under == t10_under) begin
             $display("  FAIL: dry-ring silent burst not classified as underrun");
             errors = errors + 1; end
