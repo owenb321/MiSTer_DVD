@@ -1360,6 +1360,70 @@ module dvd_vm_tb;
         menu_active = 0; cur_vts = auto_vts; cur_pgcn = 16'd1; cell_count = 8'd3;
         pulse_loaded; wait_idle;
         $display("S22 failed-menu-link re-enter (a/b/c) PASS");
+
+        // -------- [S23] POST-ONLY 0-CELL PGC = a button DISPATCHER ----------
+        // The Residents Commercial DVD / Dinosaur pathology (2026-08-30). A
+        // menu whose buttons ALL carry the same LinkPGCN target, where the
+        // target PGC has 0 cells AND 0 pre-commands and does its entire
+        // dispatch in POST off HL_BTNN. libdvdnav play_PGC() runs POST when a
+        // PGC has no programs; we used to call it a dead end, which collapsed
+        // every menu option onto ONE destination and raised LINK FAIL
+        // ("picks Play All whatever you choose"; 15/122 library discs).
+        // Bytes below are the REAL VTSM vts1 PGCN 81 POST block, verbatim.
+        nav_ready = 1;
+        dut.vm_dom = 2'd2;                 // DOM_VTSM
+        dut.vm_vts = 8'd1;
+        menu_active = 1;
+        cur_vts = 8'd1; cur_pgcn = 16'd81; cur_cell = 8'd0;
+        cell_count = 8'd0;                 // <-- 0 cells
+        btns_armed = 0;                    // the LinkPGCN tore the menu down
+        begin : s23_init integer i;
+            for (i = 0; i < 16; i = i + 1) dut.gprm[i] = 16'd0;
+        end
+        wr_cmd(0,  64'h7100000300000000);  // g[3] = 0
+        wr_cmd(1,  64'h6100000000880000);  // g[0] = HL_BTNN
+        wr_cmd(2,  64'h7600000004000000);  // g[0] /= 0x400
+        wr_cmd(3,  64'h00b1000000010008);  // if (g[0] != 1) Goto 8
+        wr_cmd(4,  64'h2004000000000052);  // LinkPGCN 82
+        wr_cmd(5,  64'h0000000000000000);
+        wr_cmd(6,  64'h0000000000000000);
+        wr_cmd(7,  64'h00b100000002000c);  // if (g[0] != 2) Goto 12
+        wr_cmd(8,  64'h2004000000000053);  // LinkPGCN 83
+        wr_cmd(9,  64'h0000000000000000);
+        wr_cmd(10, 64'h0000000000000000);
+        wr_cmd(11, 64'h00b1000000030010);  // if (g[0] != 3) Goto 16
+        wr_cmd(12, 64'h2004000000000054);  // LinkPGCN 84
+        wr_cmd(13, 64'h0000000000000000);
+        wr_cmd(14, 64'h0000000000000000);
+        wr_cmd(15, 64'h00b1000000040014);  // if (g[0] != 4) Goto 20
+        wr_cmd(16, 64'h2004000000000055);  // LinkPGCN 85
+        wr_cmd(17, 64'h0000000000000000);
+        wr_cmd(18, 64'h0000000000000000);
+        wr_cmd(19, 64'h0000000000000000);
+        nr_pre = 0; nr_post = 20; nr_cell = 0;
+        begin : s23_run integer b;
+            for (b = 1; b <= 4; b = b + 1) begin
+                dut.sprm8 = b << 10;       // the activation-latched HL_BTNN
+                clear_actions;
+                pulse_loaded;
+                wait_settled;
+                if (!saw_jump || cap_jdom != 2'd2 ||
+                    cap_jpgcn != (16'd81 + b))
+                    fail("S23: POST-only 0-cell PGC must dispatch each button");
+            end
+        end
+        // A 0-cell PGC with NO post is still a genuine dead end -> FB_VTSM
+        // (the TP_SW selector-with-no-matching-case path must not regress).
+        nr_pre = 0; nr_post = 0; nr_cell = 0; cell_count = 8'd0;
+        dut.deadend_seen = 1'b0;           // fb moves on once the chain runs,
+        clear_actions;                     // so latch the dead-end itself
+        pulse_loaded;
+        wait_settled;
+        if (dut.deadend_seen !== 1'b1)
+            fail("S23: 0-cell PGC with no POST must still take the dead-end chain");
+        if (saw_jump && cap_jpgcn >= 16'd82 && cap_jpgcn <= 16'd85)
+            fail("S23: a no-POST stub must not dispatch like a POST dispatcher");
+        $display("S23 POST-only 0-cell dispatcher (btn 1-4 -> PGCN 82-85) PASS");
     end
     endtask
 

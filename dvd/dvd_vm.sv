@@ -981,11 +981,26 @@ always @(posedge clk or negedge rst_n) begin
                         pc       <= 8'd0;
                         state    <= V_FETCH;
                     end else begin
-                        if (cell_count == 8'd0 && vm_dom != DOM_TT) begin
-                            // 0-cell menu PGC with no PRE = a dead-end stub (its
-                            // nr_pre arrived as 0). Recover through the MENU fallback
-                            // chain (fb=FB_VTSM -> ... -> VMGM Title menu), NOT the
-                            // auto-title: on a single-VTS game disc (TP Star Wars)
+                        if (cell_count == 8'd0 && vm_dom != DOM_TT && nr_post != 8'd0) begin
+                            // DVD-FORK FIX: a 0-cell PGC that has a POST block is NOT a dead
+                            // end. libdvdnav play_PGC() falls straight to play_PGC_post() when a
+                            // PGC has no programs, and real discs use exactly that as the button
+                            // DISPATCHER: every menu button carries the SAME LinkPGCN, and the
+                            // target PGC (0 cells, 0 pre) reads HL_BTNN in its POST to decide
+                            // where the press goes. Declaring it a dead end collapsed every option
+                            // onto one destination and raised LINK FAIL (Residents VTSM1 PGCN 81,
+                            // 26 more on Dinosaur, 15/122 library discs).
+                            // See docs/dvd_vm.md "POST-only PGC dispatch".
+                            blk      <= BLK_POST;
+                            blk_base <= nr_pre;
+                            blk_end  <= nr_pre + nr_post;
+                            pc       <= nr_pre;
+                            state    <= V_FETCH;
+                        end else if (cell_count == 8'd0 && vm_dom != DOM_TT) begin
+                            // 0-cell menu PGC with no PRE and NO POST = a dead-end
+                            // stub (its nr_pre arrived as 0). Recover through the MENU
+                            // fallback chain (fb=FB_VTSM -> ... -> VMGM Title menu), NOT
+                            // the auto-title: on a single-VTS game disc (TP Star Wars)
                             // the auto-title = VTS1/title1 = the FP copyright, so a
                             // dead-end here replays the copyright ("question completes
                             // -> copyright"). Latch which PGC for the overlay.
@@ -1832,16 +1847,33 @@ always @(posedge clk or negedge rst_n) begin
                         // reader delivered the real nr_pre here; do NOT read this as an
                         // nr_pre==0 / straddle bug (see dbg_deadend + docs/dvd_nav.md).
                         // TP_SW plays fine: a question returns to the menu via this path.
-                        if (cell_count == 8'd0 && vm_dom != DOM_TT) begin
-                            fb <= FB_VTSM;
-                            ev_error <= 1'b1;
-                            if (!deadend_seen) begin
-                                deadend_seen <= 1'b1;
-                                deadend_vts  <= cur_vts;
-                                deadend_pgcn <= cur_pgcn;
+                        if (cell_count == 8'd0 && vm_dom != DOM_TT && nr_post != 8'd0) begin
+                            // DVD-FORK FIX: a 0-cell PGC that has a POST block is NOT a dead
+                            // end. libdvdnav play_PGC() falls straight to play_PGC_post() when a
+                            // PGC has no programs, and real discs use exactly that as the button
+                            // DISPATCHER: every menu button carries the SAME LinkPGCN, and the
+                            // target PGC (0 cells, 0 pre) reads HL_BTNN in its POST to decide
+                            // where the press goes. Declaring it a dead end collapsed every option
+                            // onto one destination and raised LINK FAIL (Residents VTSM1 PGCN 81,
+                            // 26 more on Dinosaur, 15/122 library discs).
+                            // See docs/dvd_vm.md "POST-only PGC dispatch".
+                            blk      <= BLK_POST;
+                            blk_base <= nr_pre;
+                            blk_end  <= nr_pre + nr_post;
+                            pc       <= nr_pre;
+                            state    <= V_FETCH;
+                        end else begin
+                            if (cell_count == 8'd0 && vm_dom != DOM_TT) begin
+                                fb <= FB_VTSM;
+                                ev_error <= 1'b1;
+                                if (!deadend_seen) begin
+                                    deadend_seen <= 1'b1;
+                                    deadend_vts  <= cur_vts;
+                                    deadend_pgcn <= cur_pgcn;
+                                end
                             end
+                            state <= V_IDLE;
                         end
-                        state <= V_IDLE;
                     end
                     BLK_POST: begin
                         // post fell through: authored next_pgcn/still/hold
@@ -1901,17 +1933,34 @@ always @(posedge clk or negedge rst_n) begin
                         // no pre-commands: a 0-cell menu PGC is a dead end ->
                         // recover through the MENU fallback chain (NOT auto-title
                         // = copyright; see the ev_loaded site above).
-                        if (cell_count == 8'd0 && vm_dom != DOM_TT) begin
-                            fb <= FB_VTSM;
-                            ev_error <= 1'b1;
-                            if (!deadend_seen) begin
-                                deadend_seen <= 1'b1;
-                                deadend_vts  <= cur_vts;
-                                deadend_pgcn <= cur_pgcn;
-                            end
-                        end else
-                            fb <= FB_NONE;
-                        state <= V_IDLE;
+                        if (cell_count == 8'd0 && vm_dom != DOM_TT && nr_post != 8'd0) begin
+                            // DVD-FORK FIX: a 0-cell PGC that has a POST block is NOT a dead
+                            // end. libdvdnav play_PGC() falls straight to play_PGC_post() when a
+                            // PGC has no programs, and real discs use exactly that as the button
+                            // DISPATCHER: every menu button carries the SAME LinkPGCN, and the
+                            // target PGC (0 cells, 0 pre) reads HL_BTNN in its POST to decide
+                            // where the press goes. Declaring it a dead end collapsed every option
+                            // onto one destination and raised LINK FAIL (Residents VTSM1 PGCN 81,
+                            // 26 more on Dinosaur, 15/122 library discs).
+                            // See docs/dvd_vm.md "POST-only PGC dispatch".
+                            blk      <= BLK_POST;
+                            blk_base <= nr_pre;
+                            blk_end  <= nr_pre + nr_post;
+                            pc       <= nr_pre;
+                            state    <= V_FETCH;
+                        end else begin
+                            if (cell_count == 8'd0 && vm_dom != DOM_TT) begin
+                                fb <= FB_VTSM;
+                                ev_error <= 1'b1;
+                                if (!deadend_seen) begin
+                                    deadend_seen <= 1'b1;
+                                    deadend_vts  <= cur_vts;
+                                    deadend_pgcn <= cur_pgcn;
+                                end
+                            end else
+                                fb <= FB_NONE;
+                            state <= V_IDLE;
+                        end
                     end
                 end else if (ev_error) begin
                     state <= V_IDLE;             // V_IDLE runs the chain

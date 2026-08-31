@@ -632,8 +632,15 @@ class VM(object):
         if link is not None:
             return self._process(link)
         if self.pgc["nr_cells"] == 0:
-            # 0-cell PGC whose pre fell through: dead end (RTL: pgc_error)
-            self.log("  !! 0-cell PGC pre fell through -> pgc_error")
+            # DVD-FORK FIX: libdvdnav play_PGC() falls to play_PGC_post() when a
+            # PGC has no programs, and menu discs use that as the button
+            # DISPATCHER (all buttons share one LinkPGCN; the 0-cell/0-pre target
+            # reads HL_BTNN in its POST). Only a 0-cell PGC with NO post is a
+            # genuine dead end. Mirrors dvd_vm.sv's three BLK_PRE sites.
+            if self.pgc["post"]:
+                self.log("  [0-cell PGC] no programs -> run POST")
+                return self._run_post()
+            self.log("  !! 0-cell PGC pre fell through, no POST -> pgc_error")
             return False
         self.log("  -> PLAYING %s vts=%d PGCN %d from cell %d"
                  % (DOM_NAME[self.dom], self.vts, self.pgcn, self.cell))
