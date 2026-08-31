@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 
 #include "../../user_io.h"
 #include "../../video.h"
@@ -96,13 +97,38 @@ static int sink_supports_bitstream(void)
 // custom Main never ran, the core never declared, EDID said no, or the chip was
 // configured and the receiver could not parse our subframes. Rather than make
 // the user iterate blind, say on screen which stage was reached.
+#define HDMI_LOG_PATH "/tmp/dvd_hdmi_audio.log"
+
 static const char *stage_msg = 0;
+static time_t      show_until = 0;
+
+// ⚠ InfoMessage no-ops unless the menu FSM is idle, and the user changes Audio
+// Out from INSIDE the OSD - so a single call at the transition is dropped every
+// time. dvd_css hit this exact trap with its libdvdcss popup and solved it by
+// re-asserting once a second until the launch settles; do the same. The log file
+// is the reliable channel regardless of menu state.
 static void report(const char *msg)
 {
 	if (stage_msg == msg) return;      // only on transition
-	stage_msg = msg;
+	stage_msg  = msg;
+	show_until = time(NULL) + 6;       // re-assert until the OSD closes
 	printf("dvd_hdmi_audio: %s\n", msg);
-	InfoMessage(msg, 3000, "HDMI Audio");
+	FILE *f = fopen(HDMI_LOG_PATH, "a");
+	if (f) { fprintf(f, "%s\n", msg); fclose(f); }
+}
+
+static void report_pump(void)
+{
+	if (!show_until || !stage_msg) return;
+	time_t now = time(NULL);
+	if (now >= show_until) { show_until = 0; return; }
+
+	static time_t last = 0;
+	if (now != last)                   // 2 s timeout bridges the 1 s cadence
+	{
+		last = now;
+		InfoMessage(stage_msg, 2000, "HDMI Audio");
+	}
 }
 
 static int declared   = 0;   // the core declared OX6, so it has the HDMI tap
@@ -130,6 +156,8 @@ static void set_ack(int on)
 
 void dvd_hdmi_audio_tick(void)
 {
+	report_pump();
+
 	if (!declared || !is_dvd())
 	{
 		if (acked) { set_ack(0); hdmi_config_set_audio(0); }
@@ -150,6 +178,20 @@ void dvd_hdmi_audio_tick(void)
 
 	// Name the stage whenever the user has ASKED for passthru but we are not
 	// engaging - that is exactly the "no sound and the receiver says PCM" case.
+	static int last_dbg = -1;
+	int dbg = (passthru ? 1 : 0) | (sink_ok ? 2 : 0) | (declared ? 4 : 0) | (mode << 3);
+	if (dbg != last_dbg)
+	{
+		last_dbg = dbg;
+		FILE *f = fopen(HDMI_LOG_PATH, "a");
+		if (f)
+		{
+			fprintf(f, "state: passthru=%d sink_ok=%d declared=%d ini_mode=%d acked=%d\n",
+			        passthru, sink_ok, declared, mode, acked);
+			fclose(f);
+		}
+	}
+
 	if (passthru && !want)
 	{
 		if (mode == 1)      report("Bitstream disabled\n\ndvd_hdmi_bitstream=1 in MiSTer.ini");
