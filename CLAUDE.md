@@ -392,7 +392,22 @@ worse maintenance burden than targeted in-place edits. So:
   through the Verilator/liba52 cosim — exps/bap BIT-EXACT, PCM ≤0.5 LSB @ s16
   (tol 2.0); proven RED pre-fix (`acmod=-1 inscope=0 err=1`, zero frames produced).
   All 9 cosim vectors + 11 bench/ac3 suites + `dvd_audio_decode_tb` green.
-  ⏳ HW gate: BBB-NTSC's special feature and any DD 1.0 disc get sound.
+  ✅ **HW-CONFIRMED 2026-08-31** (build `DVD_ac3fnfix_20260831_0452`): mono, 3/1 and
+  2/2 discs all play; stereo and 5.1 unregressed.
+  ★★ **THE BUG THAT COST THE MOST TIME HERE WAS NOT THE CODEC — IT WAS FIVE
+  `function automatic` HELPERS THAT QUARTUS 17 MISCOMPILED SILENTLY.** acmod 1 and 5
+  were SILENT on hardware while every sim gate stayed green (the cosim decoded real
+  mono/acmod-5 disc streams BIT-EXACTLY for 400 frames). The helpers took only scalar
+  args and read no arrays, and **Quartus emitted NO warning for any changed module**.
+  ⚠ **The technique that cracked it, reuse it: A/B TWO OF OUR OWN BUILDS.** A real
+  disc's mono track played on the earlier build (inline ternary) and was silent on the
+  later one differing on that path ONLY by using functions — same RTL, different
+  silicon. That is far cheaper than the post-map netlist cosim and was decisive.
+  Fix = all five rewritten as plain wires/inline ternaries (`acmod_cmix`,
+  `acmod_smix`, `acmod_mixbits`, and the two `nfchans` ternaries). Pre-existing
+  functions elsewhere (`to_s16`, `bin2gray`, `bndtab`, `compute_mask`) ship fine —
+  functions are not banned, but **when sim says correct and silicon says broken,
+  suspect a recently-added function FIRST.** Memory: `verilog-function-hazards`.
   **Still unsupported (and "unsupported" means SILENCE, not distortion): acmod
   0/3/4/5/6** — only **2** library discs have such a DEFAULT track (both 2/2 quad)
   plus the Residents, whose entire AC-3 layer is acmod 6.

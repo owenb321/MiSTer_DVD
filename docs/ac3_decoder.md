@@ -160,3 +160,31 @@ at 640 kb/s (coupling off) so they gate the downmix rather than this.
 
 Reproduce: encode any ≥3-channel stream at 448 kb/s with distinct per-channel
 content (`tools/gen_test_stream.sh` has the `join=` recipe) and run the cosim.
+
+## ⚠ Silent-silicon trap: SV functions in this decoder (2026-08-31)
+
+The acmod 1..7 work shipped correct RTL that **simulated perfectly and produced silent
+hardware**. Five `function automatic` helpers (`acmod_has_cmix`, `acmod_has_smix`,
+`mixlfe_bits` — which called the other two — and `ac3_nfchans` in `ac3_parse` and
+`audblk_parse`) are miscompiled by Quartus 17 here. Result: **acmod 1 and 5 were silent
+on real discs while acmod 2, 6 and 7 played**, with no clean rule behind which survived.
+
+What makes this worth writing down:
+
+- **Every simulation gate was green**, including the Verilator/liba52 cosim decoding
+  real mono and acmod-5 streams off real discs bit-exactly for 400 frames. Simulation
+  could not have caught it and cannot prove the fix.
+- **Quartus emitted no warning** for any changed module. A clean build log is not
+  evidence here.
+- The helpers took **only scalar arguments and read no arrays**, so this is broader
+  than the previously recorded function-mediated-array-read hazard.
+
+**The cheap technique that found it:** A/B two of our own builds. The mono track of a
+real disc played on the build whose mono path was an inline ternary and was silent on
+the build differing on that path *only* by using functions. One flash, decisive — reach
+for this before the post-map netlist cosim.
+
+All five are now plain wires / inline ternaries. Functions are **not** banned: `to_s16`,
+`bin2gray`, `bndtab` and `compute_mask` ship and work. The rule is narrower — when
+simulation says correct and silicon says broken, suspect a recently-added function
+first.
