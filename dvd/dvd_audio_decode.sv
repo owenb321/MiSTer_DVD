@@ -400,6 +400,11 @@ module dvd_audio_decode #(
     wire        ac3_wr   = consume && (cur_type == T_AC3) && !discard_cur;
     wire [7:0]  ac3_data = ring_byte;
 
+    // DVD-FORK 2026-08-31: acmod 1 (1/0 mono) decodes a single fbw channel, so
+    // pcm_mem ch1 is not written. Tell pcm_out to read ch0 for BOTH outputs.
+    wire [2:0]  ac3_acmod;
+    wire        ac3_mono = (ac3_acmod == 3'd1);
+
     // ac3_front <-> pcm_out block handshake
     wire        imdct_done, pcm_done_w;
     wire [8:0]  pcm_rd_addr9;             // {ch, idx[7:0]} from pcm_out
@@ -495,7 +500,7 @@ module dvd_audio_decode #(
         .bsi_valid       (),
         .bsid            (),
         .bsmod           (),
-        .acmod           (),
+        .acmod           (ac3_acmod),
         .dsurmod         (),
         .cmixlev         (),
         .surmixlev       (),
@@ -546,6 +551,7 @@ module dvd_audio_decode #(
         .clk         (clk),
         .rst         (rst),
         .start       (imdct_done),
+        .mono        (ac3_mono),
         .pcm_rd_addr (pcm_rd_addr9),
         .pcm_rd_data (pcm_rd_data),
         .busy        (),

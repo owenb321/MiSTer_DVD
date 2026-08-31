@@ -13,6 +13,7 @@ localparam logic [1:0] AC3_FSCOD_48K = 2'b00;
 
 // acmod == 2 => 2/0 L/R stereo; acmod == 7 => 3/2 (L C R Ls Rs), i.e. 5.1 when
 // lfeon==1.  These are the two channel modes this decoder supports (M14).
+localparam logic [2:0] AC3_ACMOD_MONO = 3'd1;   // 1/0 (DVD-FORK 2026-08-31)
 localparam logic [2:0] AC3_ACMOD_LR  = 3'd2;
 localparam logic [2:0] AC3_ACMOD_3_2 = 3'd7;
 

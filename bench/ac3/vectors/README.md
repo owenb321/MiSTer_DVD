@@ -31,3 +31,33 @@ delay line).
 **Attribution / licence.** Big Buck Bunny is © Blender Foundation, licensed
 **Creative Commons Attribution 3.0** (https://peach.blender.org). This short
 audio excerpt is included for automated decoder testing under that licence.
+
+## `bbb_mono.ac3` — acmod 1 (1/0 mono) vector
+
+A 14-frame (6272 B) extract of the **mono** AC-3 track (224 kb/s, 48 kHz,
+`acmod=1 lfeon=0`) from VTS_05 of the **Big Buck Bunny** NTSC DVD — the disc's
+special feature, not the film. Big Buck Bunny is Creative Commons, which is why a
+real-disc extract can be committed here (same basis as `bbb_short_5p1`).
+
+**Why it exists.** `bsi_parse` accepted only acmod 2 and 7; acmod 1 set sticky
+`err_unsupported`, which self-heal-resets `ac3_front` every frame = total silence
+on any Dolby Digital 1.0 disc. This vector gates the mono path end to end:
+acmod acceptance, the 1-bit `B_MIXLFE` field width (mono has no
+cmixlev/surmixlev/dsurmod — lfeon only), `nfchans == 1`, and `pcm_out.mono`
+duplicating ch0 to both outputs (mono decodes ONE channel, so pcm_mem ch1 is
+never written).
+
+**Unlike `bbb_short_5p1`, this vector's PCM IS gated** at the normal 2.0 LSB
+tolerance — mono needs no downmix at all (`dmx_en = nfchans > 2` is false), so
+its PCM path is exactly the stereo ch0 path and there is no mono-specific
+arithmetic to excuse.
+
+**Window choice, stated plainly.** A 60-frame probe of the same track showed
+**exponents and bap bit-exact on all 60 frames**, with PCM exceeding 2.0 LSB on
+7 transient frames (14, 15, 20, 21, 38, 57, 59; worst 5.2 LSB) — the same
+fixed-point-IMDCT-precision band documented above for `bbb_short_5p1`, and
+acmod-independent by construction. The committed window is frames 0..13, chosen
+to be free of those transients so the PCM gate can stay strict rather than be
+downgraded to informational. The excursions are a property of the shared IMDCT
+on real full-band content, not of mono; short-block IMDCT arithmetic is gated
+separately by `run_imdct256.sh`.

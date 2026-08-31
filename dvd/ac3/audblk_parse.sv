@@ -56,7 +56,7 @@ module audblk_parse (
     input  logic        first_blk,    // this is block 0 of the frame (dynrng reset)
 
     // channel configuration (from bsi_parse, latched for the frame)
-    input  logic [2:0]  acmod,        // 2 (2/0) or 7 (3/2)
+    input  logic [2:0]  acmod,        // 1 (1/0), 2 (2/0) or 7 (3/2)
     input  logic        lfeon,        // LFE channel present
 
     // bit_reader request/grant interface (granted by ac3_parse while in P_AUDBLK)
@@ -138,7 +138,9 @@ module audblk_parse (
 );
 
     // nfchans from acmod (== liba52 nfchans_tbl[acmod]).
-    wire [2:0] nfchans = (acmod == AC3_ACMOD_3_2) ? 3'd5 : 3'd2;
+    // DVD-FORK 2026-08-31: acmod 1 (1/0 mono) => ONE fbw channel (see ac3_parse).
+    wire [2:0] nfchans = (acmod == AC3_ACMOD_3_2)  ? 3'd5 :
+                         (acmod == AC3_ACMOD_MONO) ? 3'd1 : 3'd2;
     wire [2:0] nfm1    = nfchans - 3'd1;
 
     // Packed-exponent staging (fbw channels).  Address = {ch[2:0], idx[6:0]}:

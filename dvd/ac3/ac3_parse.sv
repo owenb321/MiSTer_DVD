@@ -137,7 +137,11 @@ module ac3_parse (
     logic        err_s, err_b, err_a;
 
     // nfchans from acmod (== liba52 nfchans_tbl[acmod]).
-    wire  [2:0]  nfchans = (acmod == AC3_ACMOD_3_2) ? 3'd5 : 3'd2;
+    // DVD-FORK 2026-08-31: acmod 1 (1/0 mono) => ONE fbw channel. The old
+    // 2-way mux gave mono nfchans=2, which would parse a second channel's
+    // fields that are not in the bitstream and desync the whole audblk.
+    wire  [2:0]  nfchans = (acmod == AC3_ACMOD_3_2)  ? 3'd5 :
+                           (acmod == AC3_ACMOD_MONO) ? 3'd1 : 3'd2;
 
     // ---- audblk_parse staged geometry (packed: ch occupies [ch*W +: W]) ----
     logic [9:0]  chexpstr;     // 2 bits/ch

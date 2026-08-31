@@ -36,7 +36,7 @@ module pcm_out_tb;
     logic signed [15:0] audio_l, audio_r;
 
     pcm_out #(.FIFO_AW(7)) dut (
-        .clk(clk), .rst(rst), .start(start),
+        .clk(clk), .rst(rst), .start(start), .mono(1'b0),
         .pcm_rd_addr(pcm_rd_addr), .pcm_rd_data(pcm_rd_data), .busy(busy),
         .aud_clk(aud_clk), .aud_rst(aud_rst), .aud_ce(aud_ce),
         .audio_l(audio_l), .audio_r(audio_r), .aud_valid(aud_valid)

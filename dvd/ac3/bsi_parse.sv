@@ -125,10 +125,14 @@ module bsi_parse (
                 case (st)
                     B_BSID:  begin req <= 1'b1; nbits <= 6'd8;  awaiting <= 1'b1; end
                     B_ACMOD: begin req <= 1'b1; nbits <= 6'd3;  awaiting <= 1'b1; end
-                    // acmod==2: dsurmod(2)+lfeon(1)=3; acmod==7: cmixlev(2)+
-                    // surmixlev(2)+lfeon(1)=5.  lfeon is always the last bit.
+                    // A/52 bsi(): cmixlev if (acmod&1 && acmod!=1); surmixlev if
+                    // (acmod&4); dsurmod if (acmod==2); then lfeon, ALWAYS last.
+                    //   acmod==1 (1/0 mono): none of the three -> lfeon only  = 1
+                    //   acmod==2 (2/0)     : dsurmod(2)+lfeon(1)              = 3
+                    //   acmod==7 (3/2)     : cmixlev(2)+surmixlev(2)+lfeon(1) = 5
                     B_MIXLFE:begin req <= 1'b1;
-                             nbits <= (acmod == AC3_ACMOD_3_2) ? 6'd5 : 6'd3;
+                             nbits <= (acmod == AC3_ACMOD_3_2)  ? 6'd5 :
+                                      (acmod == AC3_ACMOD_MONO) ? 6'd1 : 6'd3;
                              awaiting <= 1'b1; end
                     B_DIAL:  begin req <= 1'b1; nbits <= 6'd6;  awaiting <= 1'b1; end
                     B_COMPR: begin req <= 1'b1; nbits <= 6'd8;  awaiting <= 1'b1; end
@@ -164,7 +168,14 @@ module bsi_parse (
                     end
                     B_ACMOD: begin
                         acmod <= data_in[2:0];
+                        // DVD-FORK: acmod 1 (1/0 MONO) added 2026-08-31. It was
+                        // rejected here, which set sticky err_unsupported ->
+                        // ac3_err -> an ac3_front self-heal reset EVERY frame =
+                        // total silence on any mono AC-3 disc (Dolby Digital 1.0
+                        // is common on TV box sets and catalogue titles; 9 discs
+                        // in the 505-disc census carry it on a DEFAULT track).
                         if (data_in[2:0] != AC3_ACMOD_LR &&
+                            data_in[2:0] != AC3_ACMOD_MONO &&
                             data_in[2:0] != AC3_ACMOD_3_2) begin
                             err_unsupported <= 1'b1;
                             st              <= B_ERR;
@@ -179,6 +190,9 @@ module bsi_parse (
                             // 5 bits: cmixlev[4:3] surmixlev[2:1] lfeon[0]
                             cmixlev   <= data_in[4:3];
                             surmixlev <= data_in[2:1];
+                        end else if (acmod == AC3_ACMOD_MONO) begin
+                            // 1 bit: lfeon[0] only - no dsurmod for 1/0.
+                            dsurmod <= 2'd0;
                         end else begin
                             // acmod==2: 3 bits: dsurmod[2:1] lfeon[0]
                             dsurmod <= data_in[2:1];

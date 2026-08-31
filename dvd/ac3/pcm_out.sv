@@ -46,6 +46,10 @@ module pcm_out #(
     input  logic        clk,
     input  logic        rst,             // synchronous, active-high
     input  logic        start,           // pulse: a block's pcm_mem is ready
+    // DVD-FORK 2026-08-31: acmod 1 (1/0 mono) decodes ONE channel, so pcm_mem
+    // channel 1 holds nothing valid. Duplicate ch0 to both outputs (what every
+    // player does for 1/0 -> 2ch). Held level, sampled per read; 0 = unchanged.
+    input  logic        mono,            // 1 = read ch0 for BOTH L and R
     output logic [8:0]  pcm_rd_addr,     // {ch, idx[7:0]} into imdct_512.pcm_mem
     input  logic signed [31:0] pcm_rd_data,  // Q8.23
     output logic        busy,            // drain in progress
@@ -134,7 +138,7 @@ module pcm_out #(
                 // L (ch0) on pcm_rd_data this cycle; capture, point at R.
                 D_L: begin
                     lat_l       <= to_s16(pcm_rd_data);
-                    pcm_rd_addr <= {1'b1, idx};         // R of sample idx
+                    pcm_rd_addr <= {~mono, idx};        // R of sample idx (mono: ch0)
                     st          <= D_RW;               // wait one cycle for the read
                 end
                 D_RW: st <= D_R;
