@@ -34,9 +34,10 @@ module pcm_out_tb;
     logic        start, busy;
     logic        aud_ce, aud_valid;
     logic signed [15:0] audio_l, audio_r;
+    logic mono = 1'b0;          // DVD-FORK: acmod-1 ch0-duplication mode
 
     pcm_out #(.FIFO_AW(7)) dut (
-        .clk(clk), .rst(rst), .start(start), .mono(1'b0),
+        .clk(clk), .rst(rst), .start(start), .mono(mono),
         .pcm_rd_addr(pcm_rd_addr), .pcm_rd_data(pcm_rd_data), .busy(busy),
         .aud_clk(aud_clk), .aud_rst(aud_rst), .aud_ce(aud_ce),
         .audio_l(audio_l), .audio_r(audio_r), .aud_valid(aud_valid)
@@ -83,10 +84,13 @@ module pcm_out_tb;
                     if (errs <= 10) $display("  L mismatch idx%0d: dut=%0d ref=%0d",
                                              gi, $signed(audio_l), gL[gi]);
                 end
-                if (audio_r !== gR[gi][15:0]) begin
+                // DVD-FORK: with `mono` the drain must read ch0 for BOTH
+                // outputs, so R is expected to equal the ch0 (L) golden.
+                if (audio_r !== (mono ? gL[gi][15:0] : gR[gi][15:0])) begin
                     errs = errs + 1;
                     if (errs <= 10) $display("  R mismatch idx%0d: dut=%0d ref=%0d",
-                                             gi, $signed(audio_r), gR[gi]);
+                                             gi, $signed(audio_r),
+                                             mono ? gL[gi] : gR[gi]);
                 end
             end
             gi = gi + 1;     // count even past 256 to catch over-production
@@ -151,6 +155,33 @@ module pcm_out_tb;
 
         if (errs == 0) $display("PASS: pcm_out 256 pairs format/order/CDC/underflow ok");
         else           $display("FAIL: %0d error(s)", errs);
+
+        // ================= MONO PASS (DVD-FORK 2026-08-31) =================
+        // acmod 1 decodes ONE channel, so pcm_mem ch1 is never written and the
+        // drain must read ch0 for BOTH outputs. Nothing covered this before:
+        // the front-end cosim reads ac3_front's pcm_mem directly and never
+        // instantiates pcm_out, so `mono` had no test at all while being the
+        // only genuinely new signal in the hardware audio path.
+        // ch1 is filled with a DISTINCT poison pattern: if the drain ever reads
+        // it, R will not equal the ch0 golden and this fails loudly.
+        for (i = 0; i < 256; i = i + 1)
+            pcm_src[{1'b1, i[7:0]}] = 32'sd7654321;   // poison ch1
+        mono = 1'b1;
+        gi = 0; errs = 0;
+        rst = 1; aud_rst = 1; start = 0;
+        repeat (5) @(posedge clk);
+        rst = 0;
+        repeat (5) @(posedge aud_clk);
+        aud_rst = 0;
+        @(posedge clk); start = 1; @(posedge clk); #1 start = 0;
+        timeout = 0;
+        while (gi < 256 && timeout < 2000000) begin @(posedge aud_clk); timeout = timeout + 1; end
+        if (gi < 256) begin
+            $display("FAIL(mono): only %0d/256 pairs popped (timeout)", gi);
+            errs = errs + 1;
+        end
+        if (errs == 0) $display("PASS: pcm_out mono duplicates ch0 to L and R");
+        else           $display("FAIL: mono pass, %0d error(s)", errs);
         $finish;
     end
 
