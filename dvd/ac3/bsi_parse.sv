@@ -69,16 +69,18 @@ module bsi_parse (
     // ---- A/52 bsi() field-presence rules (DVD-FORK 2026-08-31) --------------
     // cmixlev present iff (acmod & 1) && acmod != 1   -> acmod 3, 5, 7
     // surmixlev present iff (acmod & 4)               -> acmod 4, 5, 6, 7
-    function automatic logic acmod_has_cmix(input logic [2:0] a);
-        acmod_has_cmix = a[0] && (a != 3'd1);
-    endfunction
-    function automatic logic acmod_has_smix(input logic [2:0] a);
-        acmod_has_smix = a[2];
-    endfunction
-    function automatic logic [5:0] mixlfe_bits(input logic [2:0] a);
-        mixlfe_bits = (acmod_has_cmix(a) && acmod_has_smix(a)) ? 6'd5 :
-                      (acmod_has_cmix(a) || acmod_has_smix(a) || a == 3'd2) ? 6'd3 : 6'd1;
-    endfunction
+    //
+    // ⚠ PLAIN WIRES, NOT FUNCTIONS, ON PURPOSE. These began life as
+    // `function automatic` (mixlfe_bits calling the other two). That simulated
+    // perfectly and produced SILENT HARDWARE for acmod 1 and 5: a real disc's
+    // mono track plays on a build using the equivalent inline ternary and goes
+    // silent on a build differing ONLY by using functions. Quartus 17 does not
+    // elaborate these reliably here -- same family as the recorded
+    // function-mediated-array-read hazard. Keep this straight-line.
+    wire       acmod_cmix    = acmod[0] && (acmod != 3'd1);
+    wire       acmod_smix    = acmod[2];
+    wire [5:0] acmod_mixbits = (acmod_cmix && acmod_smix)                  ? 6'd5 :
+                               (acmod_cmix || acmod_smix || acmod == 3'd2) ? 6'd3 : 6'd1;
 
     typedef enum logic [4:0] {
         B_IDLE,
@@ -147,7 +149,7 @@ module bsi_parse (
                     //   acmod 4 (2/1), 6(2/2): surmixlev(2)+lfeon(1)            = 3
                     //   acmod 5 (3/1), 7(3/2): cmixlev(2)+surmixlev(2)+lfeon(1) = 5
                     B_MIXLFE:begin req <= 1'b1;
-                             nbits <= mixlfe_bits(acmod);
+                             nbits <= acmod_mixbits;
                              awaiting <= 1'b1; end
                     B_DIAL:  begin req <= 1'b1; nbits <= 6'd6;  awaiting <= 1'b1; end
                     B_COMPR: begin req <= 1'b1; nbits <= 6'd8;  awaiting <= 1'b1; end
@@ -210,13 +212,13 @@ module bsi_parse (
                         cmixlev   <= 2'd0;
                         surmixlev <= 2'd0;
                         dsurmod   <= 2'd0;
-                        if (acmod_has_cmix(acmod) && acmod_has_smix(acmod)) begin
+                        if (acmod_cmix && acmod_smix) begin
                             // 5 bits: cmixlev[4:3] surmixlev[2:1] lfeon[0]
                             cmixlev   <= data_in[4:3];
                             surmixlev <= data_in[2:1];
-                        end else if (acmod_has_cmix(acmod)) begin
+                        end else if (acmod_cmix) begin
                             cmixlev   <= data_in[2:1];   // 3 bits (acmod 3)
-                        end else if (acmod_has_smix(acmod)) begin
+                        end else if (acmod_smix) begin
                             surmixlev <= data_in[2:1];   // 3 bits (acmod 4, 6)
                         end else if (acmod == AC3_ACMOD_LR) begin
                             dsurmod   <= data_in[2:1];   // 3 bits (acmod 2)
