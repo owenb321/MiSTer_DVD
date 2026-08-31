@@ -56,6 +56,15 @@ module iec61937_wrap #(
     // behaviour is unchanged and the fj#110 round-1 finding (a receiver cannot
     // ACQUIRE across non-PCM-with-no-data) is not re-litigated.
     input  wire [1:0]  hold_style,
+    // Release bias (P1O[52:51], flap probe): allow a frame to be released up to
+    // {0, 10, 21, 32} ms EARLY (90 kHz ticks 0/900/1890/2880). The STC advances
+    // in whole-refresh quanta (~16.7 ms at 59.94 Hz), so an equilibrium sitting
+    // within a quantum of "due" makes the due compare flip refresh to refresh —
+    // a bang-bang release/hold chatter whose every hold is a burst-length gap on
+    // the wire. A bias of one-two quanta absorbs that jitter while still bounding
+    // the audio lead (the hold still engages past the bias), and ≤32 ms early is
+    // below lip-sync perception. Default 0 = shipped behaviour.
+    input  wire [1:0]  rel_bias,
     input  wire        mute_i,        // CSS-scrambled source: consume frames but
                                       // emit PCM silence (scrambled AC-3/DTS sent
                                       // raw = loud noise bursts on the receiver)
@@ -118,7 +127,27 @@ module iec61937_wrap #(
 
     // ---- debug taps (producer word stream, clk_sys) ----
     output reg  [15:0] dbg_word,      // word committed this cycle
-    output reg         dbg_word_stb
+    output reg         dbg_word_stb,
+
+    // ---- burst-classification taps (flap probe, clk_sys) ----
+    // One pulse per burst START (the S_IDLE decision), with its classification.
+    // These feed the emu-side gap/underrun counters (DEBUG_OVERLAY rows 23/24 in
+    // Passthru) so the wire's real/silent burst pattern is readable on hardware.
+    output reg         dbg_burst_stb,  // pulses when a burst begins
+    output reg         dbg_burst_real, // 1 = real 61937 data-burst (Pa/Pb emitted)
+    output reg         dbg_burst_held, // silent AND a codec frame was queued but
+                                       // HELD (pacing) — else silent = no frame
+                                       // queued (ring underrun) or LPCM/mute
+
+    // Level: the front frame is being HELD BY DESIGN (A/V sync hold — pre-anchor
+    // or not yet due). Exported so emu's ring drain watchdog can treat the hold
+    // as "consumer alive" and keep the STD backpressure engaged: a hold produces
+    // no frame_pop, and without this the watchdog reads it as a wedged consumer,
+    // reverts the ring to drop-on-full, and the dropped frames punch forward PTS
+    // holes into the stream — each hole = a multi-second silence gap on the wire
+    // = the measured startup/track-change receiver flap. See docs/iec61937.md
+    // "FLAP ROOT CAUSE".
+    output wire        hold_active_o
 );
 
     // -------------------------------------------------------------
@@ -248,9 +277,20 @@ module iec61937_wrap #(
     // loop (docs/iec61937.md "one-shot hold gate" records what that cost).
     reg burst_seen;
 
+    // Release bias (see the rel_bias port comment): a frame within `bias_ticks`
+    // of due is released rather than held. 0 = exact compare (shipped).
+    wire [11:0] bias_ticks = (rel_bias == 2'd1) ? 12'd900  :
+                             (rel_bias == 2'd2) ? 12'd1890 :
+                             (rel_bias == 2'd3) ? 12'd2880 : 12'd0;
+    wire signed [34:0] head_delta_b = head_delta + {23'd0, bias_ticks};
+
     wire hold_frame = is_codec &&
         ( (sync_armed && !stc_anchored)                              // wait for the anchor
-       || (sync_en && frame_pts_valid && (head_delta < 35'sd0)) );   // anchored but not yet due
+       || (sync_en && frame_pts_valid && (head_delta_b < 35'sd0)) ); // anchored but not yet due
+
+    // Deliberate-hold level for the emu drain watchdog (see the port comment).
+    // Mute is excluded: muted frames still pop, so they feed the watchdog anyway.
+    assign hold_active_o = enable && frame_valid && hold_frame && !mute_i;
 
     // The IEC 61937 data-burst REPETITION PERIOD must stay constant for a given
     // codec or the receiver drops lock. Null/hold bursts therefore reuse the
@@ -282,10 +322,14 @@ module iec61937_wrap #(
             frame_pop_r <= 1'b0;
             dbg_word    <= 16'd0;
             dbg_word_stb<= 1'b0;
+            dbg_burst_stb <= 1'b0;
+            dbg_burst_real<= 1'b0;
+            dbg_burst_held<= 1'b0;
         end else begin
             wr_en        <= 1'b0;
             frame_pop_r  <= 1'b0;
             dbg_word_stb <= 1'b0;
+            dbg_burst_stb<= 1'b0;
 
             if (!enable) begin
                 st   <= S_IDLE;
@@ -309,6 +353,7 @@ module iec61937_wrap #(
                         cur_nonpcm  <= 1'b1;   // -> set the channel-status non-PCM bit
                         burst_seen  <= 1'b1;   // hold-fill selection only
                         frame_pop_r <= 1'b1;
+                        dbg_burst_stb <= 1'b1; dbg_burst_real <= 1'b1; dbg_burst_held <= 1'b0;
                         st <= S_PA;
                     end else if (frame_valid && is_codec && mute_i) begin
                         // MUTED codec frame (CSS-scrambled source): drain its
@@ -326,6 +371,7 @@ module iec61937_wrap #(
                         burst_silent<= 1'b1;
                         cur_nonpcm  <= 1'b0;
                         frame_pop_r <= 1'b1;
+                        dbg_burst_stb <= 1'b1; dbg_burst_real <= 1'b0; dbg_burst_held <= 1'b0;
                         st <= S_PA;
                     end else if (frame_valid && !is_codec) begin
                         // LPCM/unknown -> not wrappable: consume + emit PCM silence
@@ -336,6 +382,7 @@ module iec61937_wrap #(
                         burst_silent<= 1'b1;
                         cur_nonpcm  <= 1'b0;
                         frame_pop_r <= 1'b1;   // drop it (no backpressure buildup)
+                        dbg_burst_stb <= 1'b1; dbg_burst_real <= 1'b0; dbg_burst_held <= 1'b0;
                         st <= S_PA;
                     end else begin
                         // No frame ready, OR a codec frame HELD (pre-anchor / not due).
@@ -362,6 +409,11 @@ module iec61937_wrap #(
                             burst_silent<= 1'b1;
                             cur_nonpcm  <= 1'b0;       // PCM silence (shipped default)
                         end
+                        // Classify: a queued codec frame reaching here is HELD
+                        // (pacing); no frame queued = ring underrun / priming.
+                        dbg_burst_stb  <= 1'b1;
+                        dbg_burst_real <= 1'b0;
+                        dbg_burst_held <= frame_valid && is_codec && !mute_i;
                         st <= S_PA;
                     end
                 end

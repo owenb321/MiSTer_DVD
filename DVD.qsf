@@ -360,6 +360,10 @@ set_global_assignment -name VERILOG_MACRO "QUARTUS=1"
 # (dvd/debug_overlay.sv rows 21..26; O[2] + Disc Menus On to view), uncomment the
 # next line and rebuild (--compile). It re-tightens the congested fit and may
 # need a fitter seed re-sweep. Left OFF for the release build.
+# DVD-FORK DEBUG (feature/bs-flap-probe): the overlay was temporarily enabled here
+# for the IEC 61937 flap probe rows 23/24 (docs/iec61937.md "FLAP ROOT CAUSE" —
+# the captures that cracked it). Re-enable by uncommenting for future passthrough
+# diagnosis; left OFF for release builds.
 # set_global_assignment -name VERILOG_MACRO "DEBUG_OVERLAY=1"
 # NOTE (Film 24p, issue #124): DEBUG_OVERLAY was briefly re-enabled here for the
 # bring-up lates readout, but the overlay+Phase1 netlist fit flaky on SEED 9 (routed +

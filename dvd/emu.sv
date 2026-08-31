@@ -725,6 +725,12 @@ parameter CONF_STR = {
     // the pacing loop and is untouched; this is only its fill. Default PCM
     // silence = shipped behaviour. See docs/iec61937.md. status[50:49].
     "P1O[50:49],BS Hold Style,PCM silence,NonPCM hold,Pause burst;",
+    // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
+    // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
+    // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
+    // chatters hold/release at burst granularity). Bounded (the hold engages
+    // past the bias) and below lip-sync perception. status[52:51].
+    "P1O[52:51],BS Release Bias,Off,10ms,21ms,32ms;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
     // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
@@ -2714,6 +2720,7 @@ wire  [1:0] aud_frame_type;
 // backpressure watchdog either way — the STD model holds in both modes).
 wire        dec_ring_ready, dec_frame_pop;   // dvd_audio_decode's ring handshake
 wire        pass_ring_ready, pass_frame_pop; // iec61937_wrap's ring handshake
+wire        pass_hold_active;                // wrapper A/V-sync hold level (watchdog feed)
 assign aud_ring_ready = pass_mode ? pass_ring_ready : dec_ring_ready;
 assign aud_frame_pop  = pass_mode ? pass_frame_pop  : dec_frame_pop;
 
@@ -2768,7 +2775,20 @@ reg  [24:0] aud_bp_wd = 25'd0;                 // ~1.24 s @ 27 MHz
 wire        aud_bp_armed = (aud_bp_wd != 25'd0);
 always @(posedge clk_sys) begin
     if (~reset_n)            aud_bp_wd <= 25'd0;
-    else if (aud_frame_pop)  aud_bp_wd <= 25'h1FFFFFF;   // decoder draining -> (re)arm
+    // (Re)arm on a pop (consumer draining) — or while the PASSTHROUGH wrapper is
+    // deliberately HOLDING the front frame (A/V sync hold). A hold produces no
+    // pop, so before this term the watchdog read every passthrough startup hold
+    // as a wedged consumer, left backpressure disengaged (it arms only on the
+    // first pop), and the ring dropped whole frames at the free-running demux
+    // rate — MEASURED at ~25 frames/s for the first ~46 s of a title (overlay
+    // row 13 → 1130 drops), each dropped span a forward PTS hole whose far side
+    // is a multi-second silence gap on the wire = the receiver lock flap
+    // (docs/iec61937.md "FLAP ROOT CAUSE"). The hold is bounded by the STC
+    // reaching the front frame's PTS, so this cannot wedge the stream on any
+    // stream whose video plays; the decode path is unaffected (its stale-skip
+    // pops keep the watchdog fed the same way it always was).
+    else if (aud_frame_pop || (pass_mode && pass_hold_active))
+                             aud_bp_wd <= 25'h1FFFFFF;
     // Freeze the drain watchdog while paused: the audio decoder is held (no
     // frame_pop), so without this the watchdog would expire after ~1.24 s,
     // release backpressure, and let the ring drop frames -> an audible gap /
@@ -2872,12 +2892,18 @@ always @(posedge CLK_AUDIO or negedge aud_rst_n)
     else            aud_rsync <= {aud_rsync[0], 1'b1};
 wire rst_audio_n = aud_rsync[1];
 
+// Flap-probe burst classification taps (fed to the DEBUG_OVERLAY gap/underrun
+// counters, rows 23/24 in Passthru; declared unconditionally like the other
+// dbg wires so the ports are always connected).
+wire bs_burst_stb, bs_burst_real, bs_burst_held;
+
 iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .clk_sys      (clk_sys),
     .rst_sys_n    (aud_rst_n),
     .enable       (pass_mode),
     .byte_swap    (pass_bswap),
     .hold_style   (status[50:49]),
+    .rel_bias     (status[52:51]),   // flap probe: early-release allowance
     .mute_i       (css_scrambled),   // CSS source: drain frames, emit PCM silence
     .ring_byte    (aud_ring_byte),
     .ring_valid   (aud_ring_valid),
@@ -2891,7 +2917,18 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .frame_pop    (pass_frame_pop),
     // A/V sync: slave passthrough audio to the video STC (same as the decode
     // path) so it tracks the display timeline instead of the parse front.
-    .sync_armed   (~av_freerun),
+    // MENU DOMAIN FREE-RUNS (2026-08-31): menus aren't lip-synced (the same
+    // rule that forces av_vid_hold off for menu_active), and the §5d keep_vbuf
+    // audio-continuity design preserves a near-full ring of OLD-loop-timeline
+    // audio across menu->menu transitions — holding those frames against a
+    // fresh post-transition anchor is a CIRCULAR STALL (hold -> ring full ->
+    // backpressure -> demux jammed -> new menu's video can't parse -> no
+    // vid_pts/STC -> hold persists), MEASURED wedged ~20 s on a T2 menu hop
+    // until the next user jump reset it (docs/iec61937.md "menu freeze").
+    // Free-running menus plays the continuity audio immediately (decode-path
+    // parity) and cannot wedge; title entry pulses aud_flush, so title sync
+    // re-arms cleanly.
+    .sync_armed   (~av_freerun && ~menu_active),
     .stc_anchored (av_stc_anchored),
     .stc          (av_stc),
     .av_ofs       (av_ofs),
@@ -2907,7 +2944,11 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .bs_stb_o     (bs_stb_w),
     .hdmi_variant (status[48:46]),
     .dbg_word     (),
-    .dbg_word_stb ()
+    .dbg_word_stb (),
+    .dbg_burst_stb (bs_burst_stb),
+    .dbg_burst_real(bs_burst_real),
+    .dbg_burst_held(bs_burst_held),
+    .hold_active_o (pass_hold_active)
 );
 
 // =========================================================================
@@ -3905,6 +3946,70 @@ always @(posedge clk_sys or negedge reset_n) begin
         end
     end
 end
+
+// ---- IEC 61937 FLAP PROBE (rows 23/24, Passthru mode only) ------------------
+// Counts what the RECEIVER actually sees on the wire at title start / across a
+// track change, to discriminate the flap hypotheses (docs/iec61937.md "flap
+// probe"): repeated re-anchors vs aud_rst_n resets vs marginal-due hold chatter
+// vs ring underrun. All saturating, cleared only on core reset — read them as
+// deltas (or watch them tick live during a flap).
+//   row 23 = {gap_runs[7:0], aud_rst_cnt[3:0], reanchor_cnt[3:0]}
+//     gap_runs     = real→silent burst transitions AFTER acquisition (each one
+//                    is an interruption of the data-burst stream = one receiver
+//                    re-negotiation candidate). Ticking during the flap = the
+//                    pacing gaps ARE the flap; static = look at resets instead.
+//     aud_rst_cnt  = aud_rst_n pulses (track switch aud_resync, seeks, mounts —
+//                    each also hard-resets the spdif encoder = a discontinuity).
+//     reanchor_cnt = av_sync STC re-anchors (each can re-open a hold run).
+//   row 24 = {max_silent_run[7:0], underrun_bursts[7:0]}
+//     max_silent_run  = longest consecutive silent-burst run post-acquisition
+//                       (large = long gaps → re-anchor/hold-run shaped; 1-2 =
+//                       single-burst chatter → marginal-due shaped, test the
+//                       BS Release Bias lever).
+//     underrun_bursts = silent bursts with NO frame queued post-acquisition
+//                       (ring starvation, distinct from a pacing hold).
+reg        bsp_seen;                    // a real burst since the last aud_rst_n
+reg        bsp_prev_real;               // last burst's classification
+reg [7:0]  bsp_gap_runs, bsp_run_len, bsp_run_max, bsp_under;
+reg [3:0]  bsp_audrst, bsp_reanchor;
+reg        bsp_audrst_q;
+reg [15:0] bsp_reanchor_prev;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        bsp_seen <= 1'b0; bsp_prev_real <= 1'b0;
+        bsp_gap_runs <= 8'd0; bsp_run_len <= 8'd0; bsp_run_max <= 8'd0;
+        bsp_under <= 8'd0; bsp_audrst <= 4'd0; bsp_reanchor <= 4'd0;
+        bsp_audrst_q <= 1'b1; bsp_reanchor_prev <= 16'd0;
+    end else begin
+        bsp_audrst_q <= aud_rst_n;
+        if (bsp_audrst_q && !aud_rst_n && bsp_audrst != 4'hF)
+            bsp_audrst <= bsp_audrst + 4'd1;
+        if (!aud_rst_n) bsp_seen <= 1'b0;   // mirrors the wrapper's burst_seen clear
+        bsp_reanchor_prev <= av_reanchor_cnt;
+        // av_sync resets per load flush (its counter drops to 0) — count only
+        // nonzero changes so a reset itself isn't miscounted as a re-anchor.
+        if (av_reanchor_cnt != bsp_reanchor_prev && av_reanchor_cnt != 16'd0
+            && bsp_reanchor != 4'hF)
+            bsp_reanchor <= bsp_reanchor + 4'd1;
+        if (bs_burst_stb) begin
+            bsp_prev_real <= bs_burst_real;
+            if (bs_burst_real) begin
+                bsp_seen    <= 1'b1;
+                bsp_run_len <= 8'd0;
+            end else if (bsp_seen) begin
+                if (bsp_prev_real && bsp_gap_runs != 8'hFF)
+                    bsp_gap_runs <= bsp_gap_runs + 8'd1;
+                if (bsp_run_len != 8'hFF) begin
+                    bsp_run_len <= bsp_run_len + 8'd1;
+                    if (bsp_run_len + 8'd1 > bsp_run_max)
+                        bsp_run_max <= bsp_run_len + 8'd1;
+                end
+                if (!bs_burst_held && bsp_under != 8'hFF)
+                    bsp_under <= bsp_under + 8'd1;
+            end
+        end
+    end
+end
 debug_overlay debug_overlay_inst (
     .clk          (clk_sys),
     .rst_n        (reset_n),
@@ -3980,8 +4085,11 @@ debug_overlay debug_overlay_inst (
     //            sequence NAMES the wrong turn out of title 3 into the menu domain.
     .dbg21  (streamer_dbg_state),                   // LIVE reader state (rd_state[5:0]+menu_dom[7]+flags)
     .dbg22  (tr_lastjmp),                           // last VM jump {jump_domain[15:14], jump_vts[13:7], jump_pgcn[6:0]}
-    .dbg23  (tr_ld0),                               // PGC-load history [0] newest {menu_dom,vts,pgcn}
-    .dbg24  (tr_ld1),                               // PGC-load history [1]
+    // Rows 23/24 are MUXED on pass_mode: Passthru shows the IEC 61937 flap
+    // probe (packing documented at the bsp_* block above); Decode keeps the
+    // Tomb Raider PGC-load history.
+    .dbg23  (pass_mode ? {bsp_gap_runs, bsp_audrst, bsp_reanchor} : tr_ld0),
+    .dbg24  (pass_mode ? {bsp_run_max, bsp_under}                : tr_ld1),
     .dbg25  (tr_ld2),                               // PGC-load history [2]
     .dbg26  (rd_dbg_pgcerr),                        // last pgc_error {reason[15:13], nr_srp_sat[12:8],
                                                     //  want_pgcn[7:0]} — reason 1=empty PGCIT,

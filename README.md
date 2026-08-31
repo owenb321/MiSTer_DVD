@@ -126,10 +126,13 @@ is opt-in and additive. See
   The one gap left is the MPEG-2 multichannel *extension* (a rare 5.1 variant of MP2):
   its backwards-compatible stereo core should play, but no disc was available to verify,
   so such a track still reports `AUDIO UNSUPPORTED`.
-- **Passthru can take a few seconds to lock at the start of a title**, and again
-  after switching audio track: the receiver flaps between naming the format and
-  showing no decode. It settles on its own, and a **chapter skip** locks it
-  immediately. Affects optical and HDMI alike, and predates the HDMI output.
+- **Passthru drops to PCM at menus with no background audio** (the receiver may
+  show "decoder off" until the next menu with sound). Authored silence has no
+  bitstream to carry; the receiver re-acquires in under a second when audio
+  returns. *(The old startup/track-change lock flap — the receiver flapping
+  between naming the format and no decode for ~45 s until a chapter skip — is
+  fixed: the core was starving its own bitstream while audio/video buffers
+  aligned at a title start.)*
 - **Passthru carries AC-3 and DTS only.** IEC 61937 exists to carry *compressed*
   audio, so there is nothing for it to do with an **LPCM** or **MP2** track — those
   are silent in Passthru, on both S/PDIF and HDMI. Use **Decode** for LPCM discs.

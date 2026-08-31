@@ -2,9 +2,9 @@
 
 **Status: ✅ HW-CONFIRMED 2026-08-31** — DD and DTS both decode on a real receiver
 over HDMI, with no Digital I/O board, via **route (i)** (§ below). Default build,
-no ini needed. ⚠ It inherits the **pre-existing** startup / track-change lock flap
-documented in `docs/iec61937.md` — that affects optical identically and reproduces
-on the shipped v0.2.0, so it is not a property of this feature.
+no ini needed. The startup / track-change lock flap it used to inherit is
+**✅ FIXED + HW-CONFIRMED 2026-08-31** (both outputs) — root cause was the ring
+drain watchdog, not this feature: `docs/iec61937.md` "FLAP ROOT CAUSE".
 
 Design below; the S/PDIF half this builds on is `docs/iec61937.md`.
 

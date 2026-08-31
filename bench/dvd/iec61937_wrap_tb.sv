@@ -14,6 +14,7 @@ module iec61937_wrap_tb;
     reg         rst_sys_n = 0, rst_audio_n = 0;
     reg         enable = 0, byte_swap = 0, mute = 0;
     reg  [1:0]  hold_style = 2'd0;
+    reg  [1:0]  rel_bias_r = 2'd0;
 
     // ring model
     reg  [7:0]  ring_byte;
@@ -37,6 +38,8 @@ module iec61937_wrap_tb;
     wire        dbg_word_stb;
     wire [15:0] bs_l, bs_r;
     wire        bs_nonpcm, bs_stb;
+    wire        dbg_b_stb, dbg_b_real, dbg_b_held;
+    wire        hold_active;
 
     // ~27 MHz and 24.576 MHz
     always #18.5 clk_sys   = ~clk_sys;
@@ -46,7 +49,7 @@ module iec61937_wrap_tb;
     // the layout capture.
     iec61937_wrap #(.FIFO_AW(12)) dut (
         .clk_sys(clk_sys), .rst_sys_n(rst_sys_n), .enable(enable), .byte_swap(byte_swap),
-        .mute_i(mute), .hold_style(hold_style),
+        .mute_i(mute), .hold_style(hold_style), .rel_bias(rel_bias_r),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
         .frame_samples(frame_samples),
@@ -55,8 +58,18 @@ module iec61937_wrap_tb;
         .frame_pop(frame_pop),
         .clk_audio(clk_audio), .rst_audio_n(rst_audio_n), .spdif_o(spdif_o),
         .bs_l_o(bs_l), .bs_r_o(bs_r), .bs_nonpcm_o(bs_nonpcm), .bs_stb_o(bs_stb),
-        .dbg_word(dbg_word), .dbg_word_stb(dbg_word_stb)
+        .dbg_word(dbg_word), .dbg_word_stb(dbg_word_stb),
+        .dbg_burst_stb(dbg_b_stb), .dbg_burst_real(dbg_b_real), .dbg_burst_held(dbg_b_held),
+        .hold_active_o(hold_active)
     );
+
+    // ---- burst-classification counters (TEST 10) ----
+    integer cnt_real = 0, cnt_held = 0, cnt_under = 0;
+    always @(posedge clk_sys) if (dbg_b_stb) begin
+        if      (dbg_b_real) cnt_real  = cnt_real  + 1;
+        else if (dbg_b_held) cnt_held  = cnt_held  + 1;
+        else                 cnt_under = cnt_under + 1;
+    end
 
     // ---- HDMI bitstream tap monitors (TEST 9) --------------------------------
     // The tap feeds the HDMI I2S serializer. Two properties must hold or the
@@ -150,6 +163,7 @@ module iec61937_wrap_tb;
     end endtask
 
     integer i, errors = 0;
+    integer t10_held, t10_real, t10_under;
     task expect_word(input integer idx, input [15:0] exp, input [8*16:1] name);
         begin
             if (cap[idx] !== exp) begin
@@ -426,6 +440,71 @@ module iec61937_wrap_tb;
             $display("            that is the fj#110 round-1 regression");
             errors=errors+1; end
         hold_style = 2'd0;
+
+        // ---- TEST 10: release bias + burst-classification taps --------------
+        // A frame 500 ticks (~5.6 ms, inside one refresh quantum) short of due:
+        // bias Off must HOLD it (classified `held`); bias 10ms (900 ticks) must
+        // RELEASE it (the marginal-due chatter absorber, docs/iec61937.md
+        // "flap probe"). Then an empty ring must classify as underrun.
+        frame_valid = 0; sync_armed_r = 1; stc_anch_r = 1; enable = 0; do_reset;
+        byte_swap = 0; frame_len = 16'd8; plen = 8; frame_type = 2'd0;
+        frame_samples = 0; mute = 0; hold_style = 2'd0; rel_bias_r = 2'd0;
+        for (i=0;i<8;i=i+1) payload[i] = (i+1)*8'h11;
+        fpts_r = 33'd200000; fptsv_r = 1'b1; avofs_r = 18'sd0;
+        stc_r  = 33'd199500;               // 500 ticks EARLY
+        @(posedge clk_sys); @(posedge clk_sys);
+        frame_valid = 1'b1;
+        @(posedge clk_sys); @(posedge clk_sys);
+        pop_count = 0;
+        t10_held = cnt_held; t10_real = cnt_real;   // snapshot BEFORE enabling
+        enable = 1'b1;
+        wait (pulses >= 3072); @(posedge clk_sys);
+        $display("TEST 10: bias Off, marginal frame: pop_count=%0d held_bursts=%0d",
+                 pop_count, cnt_held - t10_held);
+        if (pop_count !== 0) begin
+            $display("  FAIL: marginally-early frame released with bias Off");
+            errors = errors + 1; end
+        if (cnt_held == t10_held) begin
+            $display("  FAIL: hold burst not classified as `held`");
+            errors = errors + 1; end
+        // hold_active must be HIGH while the frame is deliberately held: this is
+        // the emu drain-watchdog feed (a hold is "consumer alive", NOT a wedge -
+        // the flap root cause was the watchdog reading it as one).
+        if (hold_active !== 1'b1) begin
+            $display("  FAIL: hold_active_o low during a sync hold");
+            errors = errors + 1; end
+        rel_bias_r = 2'd1;                 // 10 ms allowance
+        for (i=0;i<20000 && pop_count==0;i=i+1) @(posedge clk_sys);
+        $display("TEST 10b: bias 10ms: pop_count=%0d real_bursts=%0d",
+                 pop_count, cnt_real - t10_real);
+        if (pop_count == 0) begin
+            $display("  FAIL: bias 10ms did not release the marginal frame");
+            errors = errors + 1; end
+        if (cnt_real == t10_real) begin
+            $display("  FAIL: released burst not classified as `real`");
+            errors = errors + 1; end
+        // 10c from a clean reset (an emptied FIFO): with no frame queued the
+        // FIRST burst is an underrun-classified silence burst. (Continuing from
+        // 10b instead would stall for tens of ms behind the queued-burst FIFO
+        // backlog - a TB artifact, not a design property.)
+        // released frame -> hold_active must have dropped
+        if (hold_active !== 1'b0) begin
+            $display("  FAIL: hold_active_o still high after release");
+            errors = errors + 1; end
+        frame_valid = 0; enable = 0; do_reset;
+        t10_under = cnt_under;
+        enable = 1;
+        for (i=0;i<20000 && cnt_under==t10_under;i=i+1) @(posedge clk_sys);
+        $display("TEST 10c: ring dry: underrun_bursts=%0d", cnt_under - t10_under);
+        // no frame queued: an underrun is NOT a deliberate hold - hold_active
+        // must be low so a genuinely idle/wedged consumer still trips the watchdog
+        if (hold_active !== 1'b0) begin
+            $display("  FAIL: hold_active_o high with no frame queued");
+            errors = errors + 1; end
+        if (cnt_under == t10_under) begin
+            $display("  FAIL: dry-ring silent burst not classified as underrun");
+            errors = errors + 1; end
+        rel_bias_r = 2'd0;
 
         // ---- TEST 9: HDMI bitstream tap -------------------------------------
         $display("TEST 9: HDMI tap, total=%0d incoherent=%0d steady_bad=%0d startup_dev=%0d (resets=%0d)",
