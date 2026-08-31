@@ -532,8 +532,23 @@ always @(posedge clk or negedge rst_n) begin
                 h_g1ty    <= nxt_g1ty;
                 h_g2ty    <= nxt_g2ty;
                 h_g3ty    <= nxt_g3ty;
-                if (nxt_fosl != 6'd0 && nxt_fosl <= nxt_btn_ns && !armed)
-                    btn_sel <= nxt_fosl;             // forced select on (re)arm
+                // DVD-FORK FIX: forced-select must apply on a NEW HLI
+                // (hli_ss==1), not only on a not-armed -> armed edge. `armed`
+                // reads its PRE-assignment value here, so the old `!armed` gate
+                // silently dropped fosl whenever one HLI replaced another while
+                // the highlight stayed armed -- which is exactly what a
+                // title-domain game does VOBU to VOBU. Scooby-Doo 2's Wickles
+                // Manor floor maze authors 5 buttons: 1-4 are the compass
+                // directions with auto-action (landing the highlight FIRES them)
+                // and 5 is the neutral centre, with fosl=5 to park there. Losing
+                // it defaulted the highlight to button 1 (= left), which
+                // self-activated and moved the player before any input.
+                // hli_ss==2/3 are CONTINUATIONS of the same HLI: re-applying
+                // fosl there would fight the player's own D-pad, so they are
+                // excluded (same test the foac commit above uses).
+                if (nxt_fosl != 6'd0 && nxt_fosl <= nxt_btn_ns &&
+                    (!armed || nxt_ss == 2'd1))
+                    btn_sel <= nxt_fosl;             // forced select on a NEW HLI
                 else if (btn_sel == 6'd0 || btn_sel > nxt_btn_ns)
                     btn_sel <= 6'd1;
                 fetch_req <= 1'b1;

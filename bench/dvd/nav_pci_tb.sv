@@ -125,6 +125,8 @@ module nav_pci_tb;
     localparam int OFF_SS   = PCI + 'h061;   // hli_ss low byte (low 2 bits)
     localparam int OFF_VPTM = PCI + 'h00C;   // pci_gi.vobu_s_ptm (BE u32 @0x0C..0x0F)
     localparam int OFF_EPTM = PCI + 'h066;   // hl_gi.hli_e_ptm  (BE u32 @0x66..0x69)
+    localparam int OFF_SPTM = PCI + 'h062;   // hl_gi.hli_s_ptm  (BE u32 @0x62..0x65)
+    localparam int OFF_FOSL = PCI + 'h074;   // hl_gi.fosl_btnn  (low 6 bits)
     initial begin
         for (i = 0; i < 12288; i++) nav[i] = 8'hXX;
         // real fixture = 2 sectors (0..4095); 4096.. are built at runtime (TEST 8/9).
@@ -139,7 +141,7 @@ module nav_pci_tb;
 
         if (nav[0] !== 8'h00 || nav[3] !== 8'hBA) begin
             $display("NAV_PCI_TB: fixture absent -> SKIPPED (regen with tools/nav_extract.py)");
-            $display("NAV_PCI_TB: ALL TESTS PASSED (skipped)");
+        $display("NAV_PCI_TB: ALL TESTS PASSED (skipped)");
             $finish;
         end
 
@@ -347,6 +349,58 @@ module nav_pci_tb;
         chk(hl_y1 == 10'd181 && hl_y2 == 10'd245, "T15 LETTERBOX group-2 btn-2 rect");
         disp_wide = 1; disp_mode = 0;
         end   // t2 fixture present
+
+            // ---- TEST 16/17: FORCED SELECT (fosl) on a NEW HLI while ALREADY
+        // ARMED (Scooby-Doo 2 "Monsters Unleashed Challenge", 2026-08-30).
+        // The Wickles Manor floor maze authors 5 buttons: 1-4 are the compass
+        // directions with AUTO-ACTION (landing the highlight FIRES them) and 5
+        // is the neutral centre, with fosl=5 to park there. The maze re-presents
+        // that HLI every VOBU while the highlight stays armed, so the old
+        // `!armed` gate silently dropped the forced select and the highlight sat
+        // on button 1 (= left), which self-activated: "the maze starts the
+        // player in the wrong position". Contract:
+        //   T16 hli_ss==1 (a NEW HLI) -> fosl WINS over the live selection;
+        //   T17 hli_ss==2 (a CONTINUATION) -> fosl must NOT fight the player.
+        for (i = 0; i < 2048; i++) nav[10240 + i] = nav[0 + i];
+        nav[10240 + OFF_FOSL]   = 8'd5;                    // forced select btn 5
+        nav[10240 + OFF_SPTM+0] = 8'h00;
+        nav[10240 + OFF_SPTM+1] = 8'h2D;
+        nav[10240 + OFF_SPTM+2] = 8'hC6;
+        nav[10240 + OFF_SPTM+3] = 8'hC0;                   // s_ptm = 3000000
+        nav[10240 + OFF_SS]     = 8'h01;                   // hli_ss = 1 (NEW)
+
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+        stc = 33'd0;
+        feed_pci(0);
+        stc = 33'd2579300;                                 // cross s_ptm -> arm
+        repeat (120) @(posedge clk);
+        chk(btns_armed === 1'b1, "T16a first HLI armed");
+        chk(btn_sel == 6'd1, "T16a selection starts at button 1");
+        pulse(3);                                          // right: 1 -> 4
+        chk(btn_sel == 6'd4, "T16a player moved the selection to button 4");
+        feed_pci(10240);                                   // NEW HLI, fosl=5
+        stc = 33'd3000100;                                 // cross its s_ptm
+        repeat (160) @(posedge clk);
+        $display("T16: armed=%b sel=%0d (fosl=5 on a NEW HLI must win)",
+                 btns_armed, btn_sel);
+        chk(btn_sel == 6'd5, "T16 forced-select applies on a NEW HLI while armed");
+
+        // T17 control: the SAME packet as a CONTINUATION (ss=2) must leave the
+        // player's own selection alone.
+        nav[10240 + OFF_SS] = 8'h02;                       // hli_ss = 2
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+        stc = 33'd0;
+        feed_pci(0);
+        stc = 33'd2579300;
+        repeat (120) @(posedge clk);
+        pulse(3);                                          // right: 1 -> 4
+        chk(btn_sel == 6'd4, "T17a player moved the selection to button 4");
+        feed_pci(10240);                                   // CONTINUATION, fosl=5
+        stc = 33'd3000100;
+        repeat (160) @(posedge clk);
+        $display("T17: sel=%0d (continuation fosl must NOT move the player)",
+                 btn_sel);
+        chk(btn_sel == 6'd4, "T17 fosl on an hli_ss=2 continuation is ignored");
 
         if (errors == 0) $display("NAV_PCI_TB: ALL TESTS PASSED");
         else             $display("NAV_PCI_TB: FAILED with %0d errors", errors);
