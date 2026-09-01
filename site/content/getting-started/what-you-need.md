@@ -43,18 +43,6 @@ not part of MiSTer — it is loaded at runtime from a copy you provide, which th
     pieces. Installing the Main alone and concluding the feature is broken is an easy and
     entirely understandable mistake.
 
-!!! tip "An encrypted ISO needs libdvdcss but **no optical drive**"
-    This is the non-obvious combination, and for most people it is the best path. A plain
-    whole-disc rip of a CSS disc — no decryption at rip time, which is the fastest and
-    simplest thing a ripper can do — plays directly. There is no PC decrypt step and no
-    drive attached to the MiSTer at all. You still need `MiSTer_DVDcss` and libdvdcss,
-    because that is where the decryption happens.
-
-    The first play recovers the disc's keys, which takes a few seconds, and caches them
-    under `/media/fat/dvdcss/cache` — so it is slow exactly once per disc. Cracking from a
-    disk image is markedly faster than from a physical drive, because the process is
-    seek-heavy and random reads from a file beat optical seek latency.
-
 !!! tip "5.1 over HDMI needs `MiSTer_DVDcss` but **not** libdvdcss"
     The mirror image of the case above. IEC 61937 bitstream rides inside an ordinary
     2-channel/48 kHz stream, which is exactly what the DE10-Nano's single wired audio line
@@ -75,24 +63,6 @@ not part of MiSTer — it is loaded at runtime from a copy you provide, which th
     Video keeps playing, so the disc is still identifiable — it does not green-screen with
     static, which is what a raw undecrypted rip would otherwise produce. Treat the message
     as a prompt to run the installer.
-
-## Which should I install?
-
-**Decrypted ISOs, VCD/SVCD, or bare video files** — the `.rbf` alone. Skip the rest of
-this page.
-
-**Films from your own shelf, ripped on a PC** — you can go either way. Decrypting *during*
-the rip gives you an image that plays on the bare core with no key step ever; leaving it
-encrypted needs all three pieces but makes ripping quicker and simpler.
-[Discs and images](discs-and-images.md) walks through both.
-
-**5.1 audio to an AV receiver over HDMI** — the `.rbf` and `MiSTer_DVDcss`. No libdvdcss
-needed unless your discs are also encrypted. Over optical S/PDIF instead, the bare `.rbf`
-is enough.
-
-**Playing the physical disc itself** — all three pieces, plus a USB optical drive. Also
-consider [setting the drive's region](../formats/physical-discs.md#set-the-drive-region),
-which is what makes discs start quickly rather than after a several-second key crack.
 
 ## Getting them installed
 

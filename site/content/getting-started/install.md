@@ -10,12 +10,17 @@ That is the whole installation for decrypted images. What the zip puts where:
 
 ```
 /media/fat/
-├── _Console/DVD_YYYYMMDD.rbf   the core itself
+├── _Other/DVD_YYYYMMDD.rbf     the core itself — move it elsewhere if you prefer
 ├── MiSTer_DVDcss               optional custom Main (physical discs, encrypted ISOs)
-└── Scripts/
-    ├── install_dvdcss.sh       fetches libdvdcss
-    └── set_dvd_region.sh       reads/sets a USB drive's region
+├── Scripts/
+│   ├── install_dvdcss.sh       fetches libdvdcss
+│   └── set_dvd_region.sh       reads/sets a USB drive's region
+└── DVD_INSTALL.txt             the same instructions, on the card
 ```
+
+The core goes in **`_Other`** because a DVD player is not a console or computer
+category. Nothing depends on that location — move the `.rbf` wherever you keep your
+cores. `MiSTer_DVDcss` is the one file that must stay at the SD-card root.
 
 Extracting the zip **does not switch anything on**. `MiSTer_DVDcss` sits on the card
 inert until you name it in `MiSTer.ini`, and the two scripts do nothing until you run
