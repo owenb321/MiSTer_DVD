@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <h1>Page not found</h1>
+  <p>
+    That page does not exist in the manual. It may have been renamed since the
+    link you followed was written.
+  </p>
+  <ul>
+    <li><a href="{{ base_url }}/">Start from the front page</a></li>
+    <li><a href="{{ base_url }}/getting-started/install/">Install the core</a></li>
+    <li><a href="{{ base_url }}/reference/troubleshooting/">Troubleshooting</a></li>
+  </ul>
+  <p>Use the search box above to find what you were after.</p>
+{% endblock %}

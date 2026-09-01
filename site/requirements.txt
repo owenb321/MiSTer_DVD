@@ -1,0 +1,11 @@
+# Pinned so a Material release never silently changes the published site.
+# Refresh deliberately: pip install -U mkdocs-material, then update this pin
+# from `pip freeze`. Only mkdocs-material is pinned — mkdocs, markdown and
+# pymdown-extensions arrive as its dependencies, and pinning them separately
+# only invites resolver conflicts.
+mkdocs-material==9.7.7
+
+# On the "MkDocs 2.0 will break everything" warning the build prints: it does not
+# affect us. mkdocs-material 9.x declares `mkdocs<2,>=1.6`, so pinning the theme
+# transitively caps the framework below the breaking release. Nothing extra to
+# pin — but if that cap is ever relaxed upstream, add an explicit `mkdocs<2` here.

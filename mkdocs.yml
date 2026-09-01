@@ -1,0 +1,142 @@
+# MkDocs configuration for the MiSTer DVD user manual.
+#
+#   site/content/ = the manual's markdown (docs_dir)
+#   .site-build/  = build output (site_dir) — gitignored, NEVER named "site"
+#
+# MkDocs' own defaults are docs_dir: docs and site_dir: site, and BOTH collide
+# with this repo: docs/ is the engineering journal, and site/ is the manual's
+# source. Both are overridden below so neither can be confused for the other.
+#
+# docs/ (engineering design notes) is deliberately NOT part of this build.
+
+site_name: MiSTer DVD Player
+site_description: User manual for the MiSTer FPGA DVD player core
+site_url: https://owenb321.github.io/MiSTer_DVD/
+site_author: owenb321
+
+repo_url: https://github.com/owenb321/MiSTer_DVD
+repo_name: owenb321/MiSTer_DVD
+edit_uri: edit/main/site/content/
+
+copyright: >
+  GPL-3.0-or-later. The MPEG-2 decoder in <code>rtl/</code> is
+  &copy; 2007 Koen De Vleeschauwer (BSD).
+
+docs_dir: site/content
+site_dir: .site-build
+
+# A mistyped cross-link fails the build instead of shipping a 404.
+strict: true
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+theme:
+  name: material
+  custom_dir: site/overrides
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.action.edit
+    - content.tabs.link
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Follow system theme
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list          # image sizing: ![...](x.png){ width="640" }
+  - def_list
+  - footnotes
+  - md_in_html         # <figure markdown="span"> for captioned screenshots
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Link to this section
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.snippets:
+      # Deliberately NOT docs/ — nobody should be able to --8<-- an engineering
+      # note into the manual.
+      base_path: [site/content]
+      check_paths: true
+
+extra:
+  # The manual documents the development build on main. This is the newest
+  # PUBLISHED release, shown in the announcement bar so a reader running a
+  # release knows what they are looking at. The release process bumps it.
+  released_version: "0.3.0"
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/owenb321/MiSTer_DVD
+      name: MiSTer_DVD on GitHub
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Install the core: getting-started/install.md
+      - What you need: getting-started/what-you-need.md
+      - Discs and images: getting-started/discs-and-images.md
+      - Loading a movie: getting-started/loading.md
+  - Playback:
+      - Controls: playback/controls.md
+      - Settings: playback/settings.md
+      - On-screen messages: playback/on-screen-messages.md
+  - Video:
+      - Film (24p): video/film-24p.md
+      - Analog and CRT output: video/analog-crt.md
+      - Interlaced output: video/interlaced.md
+      - Closed captions: video/closed-captions.md
+  - Audio:
+      - Formats and decoding: audio/formats.md
+      - Bitstream passthrough: audio/passthrough.md
+  - Other media:
+      - Video CD / SVCD: formats/vcd-svcd.md
+      - Physical discs and encrypted ISOs: formats/physical-discs.md
+  - Customising:
+      - Idle logo: customising/idle-logo.md
+  - Reference:
+      - Compatibility: reference/compatibility.md
+      - Troubleshooting: reference/troubleshooting.md
+  - About:
+      - Building from source: about/building.md
+      - Acknowledgements: about/acknowledgements.md
