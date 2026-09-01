@@ -1,15 +1,14 @@
 # Physical discs and encrypted ISOs
 
-Two optional pieces — a small custom MiSTer *Main* called **`MiSTer_DVDcss`**, and
-**libdvdcss** — unlock playing physical DVDs from a USB optical drive, and playing
-CSS-encrypted images directly without a PC decrypt step.
-
-Read [What you need](../getting-started/what-you-need.md) first if you have not: it lays
-out which of these you actually need for the discs you own. This page is the *how*.
+Playing a **physical DVD** from a USB optical drive, or a **CSS-encrypted image** with no
+PC decrypt step, uses two pieces alongside the core: a small custom MiSTer *Main* called
+**`MiSTer_DVDcss`**, and **libdvdcss**. The
+[install guide](../getting-started/install.md) covers setting both up in two short steps;
+this page is the detail, plus the drive region tool.
 
 Both feed decrypted sectors to the core over the same path a mounted image already uses, so
-the FPGA side is unchanged. It is entirely optional and additive — without them, the core
-plays decrypted images exactly as before.
+the FPGA side is unchanged — and a decrypted image still takes the fast direct path, so
+having them installed costs nothing.
 
 ## 1. Install the binary
 

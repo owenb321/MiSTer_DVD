@@ -1,8 +1,10 @@
 # Install the core
 
-Three steps. Step 1 alone plays decrypted DVD images, VCDs and video files — most people
-need nothing else. Steps 2 and 3 add physical discs, encrypted images, and 5.1 audio over
-HDMI. Details for every step are [further down](#what-the-zip-puts-where).
+Three steps: extract the zip, add two lines to `MiSTer.ini`, run one script. Do all three
+and the core plays everything it can play — DVD images, physical discs, encrypted discs,
+Video CDs — with 5.1 audio to a receiver over HDMI or optical.
+
+Details for every step are [further down](#what-the-zip-puts-where).
 
 ## 1. Extract the zip
 
@@ -11,33 +13,33 @@ Download the latest build from the
 to the **root of your MiSTer SD card** — `/media/fat` if you copy over the network
 (SSH/SFTP) rather than pulling the card out.
 
-Launch **DVD** from the MiSTer menu. Done, for decrypted images.
-
 ## 2. Add two lines to `MiSTer.ini`
 
-*Only for physical discs, encrypted images, or bitstream audio over HDMI. Skip otherwise.*
-
-Add this to `/media/fat/MiSTer.ini` — **add the section, do not replace the file** — then
-**reload the core**:
+Add this to `/media/fat/MiSTer.ini`. **Add the section, do not replace the file:**
 
 ```ini
 [DVD]
 main=MiSTer_DVDcss
 ```
 
+This is what enables physical discs, encrypted images, and bitstream audio over HDMI.
+
 ## 3. Run `install_dvdcss`
 
-*Only for CSS-encrypted discs or images. Skip otherwise.*
-
-From the MiSTer **Scripts** menu, run **install_dvdcss**, once. It fetches libdvdcss,
-which is not shipped with this project.
+From the MiSTer **Scripts** menu, run **install_dvdcss**, once. It fetches libdvdcss, the
+library that decrypts CSS — which nearly every commercial DVD uses, and which is not
+shipped with this project.
 
 ---
 
-That is the whole installation. Everything below is detail — read it if something did not
-work, or if you want to know what each piece does.
-[What you need](what-you-need.md) sorts out which of steps 2 and 3 apply to the discs you
-own.
+Now launch **DVD** from the MiSTer menu and load a disc or an image.
+
+!!! tip "Steps 2 and 3 are one-time"
+    **To update later, just extract the new release zip.** The `MiSTer.ini` section and
+    libdvdcss stay where they are — you never repeat them.
+
+Everything below is detail — read it if something did not work, or if you want to know
+what each piece does.
 
 ## What the zip puts where
 
@@ -60,11 +62,12 @@ name it in `MiSTer.ini`, and the two scripts do nothing until you run them.
 
 ## About step 2 — the `MiSTer.ini` section
 
-!!! warning "This is the step people miss, and the symptom is silence"
+!!! warning "If you skip step 2, the symptom is silence"
     Without those two lines the core behaves **exactly as if `MiSTer_DVDcss` were not
     installed**. Decrypted images still play, so nothing looks broken — but physical discs
     do nothing, encrypted images show `CSS ENCRYPTED`, and HDMI bitstream never engages.
-    There is no message pointing at the ini file.
+    There is no message pointing at the ini file, so this is worth double-checking if
+    something is not working.
 
 `main=` is a stock MiSTer feature: whenever the DVD core is loaded, MiSTer runs
 `MiSTer_DVDcss` instead of the stock Main. Every other core is unaffected. Delete the
@@ -88,9 +91,10 @@ copy you provide, and `install_dvdcss` fetches a prebuilt one to
 `/media/fat/dvdcss/libdvdcss.so.2`. Override the source with `DVDCSS_URL=...`, or put a
 glibc/armhf `libdvdcss.so.2` there by hand.
 
-Unencrypted discs and already-decrypted images need none of this. If encrypted media is
-loaded without libdvdcss, the core shows `CSS ENCRYPTED` and mutes rather than playing
-static — that is your cue to run the script.
+If encrypted media is loaded without libdvdcss, the core shows `CSS ENCRYPTED` and mutes
+rather than playing static — that is your cue to run the script. (Unencrypted discs and
+already-decrypted images play without it, so nothing breaks if you have not got to this
+step yet.)
 
 Didn't use the zip? Download the `install_dvdcss.sh` asset and drop it in
 `/media/fat/Scripts/`.
@@ -136,9 +140,13 @@ a build unambiguously.
 
 ## Updating
 
-Extract a newer zip over the top. The `.rbf` filenames differ by date, so old builds are
-not overwritten — delete them by hand if you want them gone. Your `MiSTer.ini` section and
-libdvdcss are untouched, so steps 2 and 3 do not need repeating.
+**Extract the newer zip over the top. That is the whole update.**
+
+Steps 2 and 3 are one-time setup and never need repeating: your `MiSTer.ini` section stays
+as you wrote it, and libdvdcss — along with any disc keys it has cached — is left alone.
+
+The `.rbf` filenames differ by date, so old builds are not overwritten; delete them by hand
+if you want them gone. MiSTer offers the newest by date either way.
 
 !!! warning "Your settings may reset after an update"
     Saved settings live in `/media/fat/config/DVD_v1.CFG`, and the `v1` is a layout

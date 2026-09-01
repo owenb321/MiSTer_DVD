@@ -1,8 +1,8 @@
 # What you need
 
-The core ships as three separate pieces, and which ones you need depends entirely on what
-you want to play. This page is the map. Everything beyond the first column is **opt-in and
-additive** — adding it never changes how anything already working behaves.
+The core ships as three pieces, and the
+[install guide](install.md) sets up all three. This page explains what each one does — so
+that when something does not play, you can tell which piece is missing.
 
 | | bare `.rbf` | `+ MiSTer_DVDcss` | `+ libdvdcss` |
 |---|:--:|:--:|:--:|
@@ -34,14 +34,13 @@ lines reverts to the stock Main with nothing else changed.
 not part of MiSTer — it is loaded at runtime from a copy you provide, which the bundled
 `install_dvdcss` script fetches for you.
 
-## Three things worth knowing before you choose
+## Three things worth knowing
 
-!!! warning "`MiSTer_DVDcss` on its own is a stepping stone, not a destination"
-    Nearly every commercial DVD is CSS-encrypted. Without libdvdcss, the custom Main plays
-    only *unencrypted* discs — which in practice means home-burned discs and a handful of
-    older releases. If your goal is playing the films on your shelf, you need all three
-    pieces. Installing the Main alone and concluding the feature is broken is an easy and
-    entirely understandable mistake.
+!!! warning "`MiSTer_DVDcss` without libdvdcss plays almost no commercial disc"
+    Nearly every commercial DVD is CSS-encrypted. Stopping after the custom Main leaves you
+    with only *unencrypted* discs — in practice, home-burned ones and a handful of older
+    releases. If a disc mounts and then shows `CSS ENCRYPTED`, this is why: run
+    **install_dvdcss** and it will play.
 
 !!! tip "5.1 over HDMI needs `MiSTer_DVDcss` but **not** libdvdcss"
     The mirror image of the case above. IEC 61937 bitstream rides inside an ordinary
@@ -66,10 +65,21 @@ not part of MiSTer — it is loaded at runtime from a copy you provide, which th
 
 ## Getting them installed
 
-The release zip contains all three and puts each in the right place — see
-[Install the core](install.md). Then [Physical discs and encrypted
-ISOs](../formats/physical-discs.md) covers switching the optional pieces on: the two
-`MiSTer.ini` lines, running the libdvdcss installer, and the drive region tool.
+**Install all three.** They come in one release zip, the extra steps take a minute, and
+nothing is lost by having them — a decrypted image still takes the fast direct path, and
+the custom Main is inert on every core except this one.
+
+[Install the core](install.md) is the three-step guide.
+[Physical discs and encrypted ISOs](../formats/physical-discs.md) covers the rest,
+including the drive region tool.
+
+The table above is here so you can work out what is wrong when something does not play —
+not so you can decide what to leave out.
+
+!!! tip "Upgrading later is just the zip"
+    The `MiSTer.ini` section and libdvdcss are **one-time setup**. To update the core,
+    extract the new release zip and that is all — your ini stays as it is, and libdvdcss
+    (and any cached disc keys) are untouched.
 
 !!! note "Legal note"
     Cracking CSS may be regulated where you live; check the laws that apply to you. This

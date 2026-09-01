@@ -79,20 +79,21 @@ serves SD blocks through the standard framework interface.
 
 ## Getting started
 
-1. **Install** — download the [latest release](https://github.com/owenb321/MiSTer_DVD/releases/latest),
-   extract the zip to the root of your SD card (`/media/fat`), and launch **DVD**.
-2. **Add a movie** — put a decrypted `.iso` on the card, a USB drive, or a network share,
-   and pick it from `Load Video`.
-3. **Physical discs, encrypted images, or 5.1 over HDMI?** Add two lines to
-   `/media/fat/MiSTer.ini` (add the section, don't replace the file) and reload the core:
+1. **Install** — download the [latest release](https://github.com/owenb321/MiSTer_DVD/releases/latest)
+   and extract the zip to the root of your SD card (`/media/fat`).
+2. **Add two lines** to `/media/fat/MiSTer.ini` (add the section, don't replace the file):
 
    ```ini
    [DVD]
    main=MiSTer_DVDcss
    ```
 
-   Encrypted media also needs libdvdcss — run **install_dvdcss** from the Scripts menu.
-   [What each piece buys you](https://owenb321.github.io/MiSTer_DVD/getting-started/what-you-need/).
+3. **Run `install_dvdcss`** once from the MiSTer Scripts menu — it fetches the library that
+   decrypts CSS, which nearly every commercial DVD uses.
+
+Then launch **DVD**, and load a disc or an image from `Load Video`.
+
+Steps 2 and 3 are one-time — **updating later is just the new zip.**
 
 > **If a network share gives you a black screen and no error, it is mounted read-only.**
 > The framework opens images read-write regardless, so a read-only mount fails silently.
