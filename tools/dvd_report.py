@@ -45,6 +45,19 @@
 # optional --nav-packs flag, which captures menu NAV packs (PCI/HLI button
 # rectangles) for menu-highlight bugs -- still nav-domain data.
 #
+# That scope line is ENFORCED, not merely intended. audit() runs over the final
+# captured set before anything is written, and refuses to produce a bundle if
+# any captured sector that parses as an MPEG-PS pack contains a packet other
+# than a system header, padding or private_stream_2. A bundle therefore cannot
+# carry picture or sound even if the collector is wrong.
+#
+# It also cannot carry decryption keys, and not by choice: CSS title keys live
+# in the headers of scrambled sectors (which are never captured), and the disc
+# key block lives in the lead-in control area, which is not part of an ISO
+# filesystem image at all. The IFO tables and NAV packs a bundle does contain
+# are the parts of a DVD that CSS leaves in the clear by design, because every
+# player must read them to navigate -- see main/support/dvd/dvd_css.cpp:341,393.
+#
 # PRIVACY -- bundles are meant to be attached to PUBLIC issues
 #
 # The manifest records the image's BASENAME only, never a full path, and no
@@ -90,9 +103,16 @@ BUNDLE_README = """\
 MiSTer DVD core -- navigation bug repro bundle
 =============================================
 
-This archive contains the ISO9660 directory records and the DVD-Video IFO
-(navigation table) sectors of a DVD, stored at their original disc addresses.
-It contains NO video and NO audio -- only the disc's navigation metadata.
+This archive contains only the UNENCRYPTED NAVIGATION STRUCTURES of a DVD --
+the ISO9660 directory records, the IFO navigation tables, and optionally the
+NAV packs that describe menu buttons -- stored at their original disc
+addresses.
+
+It contains NO video, NO audio and NO decryption keys, and it cannot be used
+to watch anything. Every sector was checked before the archive was written:
+any sector that parses as an MPEG program-stream pack carries navigation
+packets only (system header, padding, private_stream_2), never picture or
+sound. See "content_audit" in manifest.json.
 
 To use it (from a MiSTer_DVD checkout):
 
@@ -259,8 +279,35 @@ def merge(lbas):
     return out
 
 
+# The only PES stream ids that carry NO elementary stream data: system header,
+# padding, and private_stream_2 (which on a DVD is PCI/DSI navigation only).
+# A sector built exclusively from these cannot contain picture or sound.
+NAV_ONLY_IDS = {0xBB, 0xBE, 0xBF}
+
+
+def pack_packets(d):
+    """Walk a 2048-byte MPEG-PS pack. -> [(stream_id, payload_off)] or None."""
+    if d[0:4] != b"\x00\x00\x01\xba":
+        return None
+    p = 14 + (d[13] & 7)                      # pack header + stuffing
+    out = []
+    while p + 6 <= len(d) and d[p:p + 3] == b"\x00\x00\x01":
+        ln = struct.unpack(">H", d[p + 4:p + 6])[0]
+        out.append((d[p + 3], p + 6))
+        if ln == 0:
+            break
+        p += 6 + ln
+    return out
+
+
 def is_nav_pack(d):
-    """True if this sector is a DVD NAV pack (pack header + PCI).
+    """True iff this sector is a DVD NAV pack AND carries nothing else.
+
+    Both halves matter. The second is what makes "no audiovisual content" a
+    property of the code rather than an intention: a sector is only ever taken
+    from a VOB if EVERY packet in it is a system header, padding or
+    private_stream_2, and one of those is a PCI. Proven by walking the packet
+    lengths -- not assumed from the layout.
 
     ⚠ Do NOT shortcut this as "0x000001BF at offset 14". Real discs put a
     SYSTEM HEADER (0x000001BB) between the pack header and the PCI packet, so
@@ -269,14 +316,42 @@ def is_nav_pack(d):
     nothing -- the same silent-miss that cost a NAV scan elsewhere in this
     project (see CLAUDE.md, forced-select fix). Walk the packets by length.
     """
-    if d[0:4] != b"\x00\x00\x01\xba":
+    pkts = pack_packets(d)
+    if not pkts:
         return False
-    p = 14 + (d[13] & 7)                      # pack header + stuffing
-    if d[p:p + 4] == b"\x00\x00\x01\xbb":     # optional system header
-        p += 6 + struct.unpack(">H", d[p + 4:p + 6])[0]
-    # private_stream_2 carries no PES optional header: payload starts at p+6,
-    # and its first byte is the substream id (0x00 = PCI, 0x01 = DSI).
-    return d[p:p + 4] == b"\x00\x00\x01\xbf" and d[p + 6:p + 7] == b"\x00"
+    if any(sid not in NAV_ONLY_IDS for sid, _ in pkts):
+        return False
+    # private_stream_2 carries no PES optional header: its payload starts
+    # immediately, and the first byte is the substream id (0x00 = PCI).
+    return any(sid == 0xBF and d[off:off + 1] == b"\x00" for sid, off in pkts)
+
+
+def audit(iso, extents):
+    """Prove that no captured sector carries elementary stream data.
+
+    This is the structural form of the promise the bundle makes: it contains
+    only unencrypted navigation structures, never picture or sound. Rather than
+    trusting the collector's intent, it runs over the FINAL captured set --
+    filesystem and IFO sectors included, so it also catches a mistake upstream
+    of the nav-pack scanner (a bad extent length spilling into a VOB, say).
+
+    The rule is total and simple: if a captured sector parses as an MPEG-PS pack
+    at all, every packet in it must be nav-only.
+    """
+    meta = navp = 0
+    for lba, count in extents:
+        for i in range(count):
+            d = iso.sec(lba + i)
+            if pack_packets(d) is None:
+                meta += 1                     # not a media pack: PVD/dir/IFO
+            elif is_nav_pack(d):
+                navp += 1
+            else:
+                raise SystemExit(
+                    "INTERNAL ERROR: sector %d carries elementary stream data, "
+                    "so no bundle was written.\nPlease report this -- it is a "
+                    "bug in this tool, not in your disc." % (lba + i))
+    return meta, navp
 
 
 def collect(iso, nav_packs=False, nav_scan_mb=512, verbose=True):
@@ -358,6 +433,7 @@ def cmd_make(args):
 
     extents = collect(iso, args.nav_packs, args.nav_scan_mb)
     n_sec = sum(c for _, c in extents)
+    n_meta, n_nav = audit(iso, extents)
 
     blob = bytearray()
     for lba, count in extents:
@@ -384,6 +460,11 @@ def cmd_make(args):
         "settings_cfg": read_cfg(args.cfg),
         "includes_nav_packs": bool(args.nav_packs),
         "sector_count": n_sec,
+        "content_audit": {
+            "metadata_sectors": n_meta,
+            "nav_pack_sectors": n_nav,
+            "elementary_stream_sectors": 0,   # enforced by audit(), not asserted
+        },
         "extents": extents,
     }
 
@@ -405,12 +486,16 @@ def cmd_make(args):
           % (n_sec, len(blob) / 1024.0, size / 1024.0))
     print("  %.5f%% of the original %.2f GB image"
           % (100.0 * len(blob) / image_bytes, image_bytes / 1e9))
-    print("  self-check: %s" % ("PASS" if ok else "FAILED -- please report this"))
+    print("  self-check:    %s" % ("PASS" if ok else "FAILED -- please report this"))
+    print("  content audit: PASS -- %d navigation-table sectors, %d NAV packs,"
+          % (n_meta, n_nav))
+    print("                 0 sectors carrying picture or sound data")
     print()
-    print("This bundle contains: ISO9660 directory records, the IFO navigation")
-    print("tables%s, and what you typed above."
+    print("This bundle contains only the UNENCRYPTED NAVIGATION STRUCTURES of the")
+    print("disc: ISO9660 directory records, the IFO tables%s,"
           % (", menu NAV packs" if args.nav_packs else ""))
-    print("It contains NO video and NO audio, and no file paths from this machine.")
+    print("and what you typed above. No video, no audio, no decryption keys, and")
+    print("no file paths from this machine. It cannot be used to watch anything.")
     print("Attach it to a GitHub issue.")
     return 0 if ok else 1
 
@@ -495,6 +580,11 @@ def cmd_info(args):
           % (d["image_bytes"] / 1e9, d["n_vts"], d["n_titles"]))
     print("captured     %d sectors, nav packs: %s"
           % (man["sector_count"], "yes" if man["includes_nav_packs"] else "no"))
+    ca = man.get("content_audit")
+    if ca:
+        print("audit        %d nav-table sectors, %d NAV packs, %d carrying A/V"
+              % (ca["metadata_sectors"], ca["nav_pack_sectors"],
+                 ca["elementary_stream_sectors"]))
     if man.get("settings_cfg"):
         print("settings     %s = %s"
               % (man["settings_cfg"]["file"], man["settings_cfg"]["hex"]))

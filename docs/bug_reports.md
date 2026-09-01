@@ -63,6 +63,44 @@ Deliberately **not** captured: title VOB payload. Subpicture, closed-caption,
 film-cadence and A/V-sync evidence all live in the elementary stream, which is
 megabytes and a different problem — those report better in prose.
 
+## The content guarantee, and why it is structural
+
+A bundle contains **only unencrypted navigation structures: no picture, no
+sound, no decryption keys.** That is worth being able to say plainly, so it is
+enforced by `audit()` rather than left as an intention.
+
+Before anything is written, `audit()` walks every gathered sector and applies one
+total rule: *if a sector parses as an MPEG program-stream pack at all, every
+packet in it must be a system header, padding, or `private_stream_2`* — the only
+stream ids that carry no elementary stream data. Anything else aborts the run
+with no bundle produced. Because it runs over the **final** captured set, it also
+catches a mistake upstream of the nav-pack scanner (an IFO extent length spilling
+into a VOB, say), not merely a bad nav-pack verdict. The counts land in the
+manifest as `content_audit` and are printed as `content audit: PASS`.
+
+Proven RED, not merely observed green: pointed at a real title-VOB sector from
+`Dinosaur` (stream id `0xE0`) it refuses, and passes a real NAV pack from the
+same disc. Then re-swept across the library with `--nav-packs` on — every disc
+audits clean, bundles 38–596 KB.
+
+The **no keys** half needs no enforcement, because a bundle cannot carry key
+material even in principle: CSS title keys live in the headers of scrambled
+sectors, which are never captured, and the disc key block lives in the lead-in
+control area, which is not part of an ISO filesystem image at all.
+
+This is also why the IFO tables and NAV packs are capturable in the first place.
+CSS cannot scramble them — every player has to read them to navigate — which
+this project's own CSS implementation states outright:
+`main/support/dvd/dvd_css.cpp:341` ("a filesystem/IFO sector (never scrambled ->
+must be read raw)") and `:393` ("The NAV pack (VOBU sector 0) is never
+scrambled"). A bundle is, by construction, exactly the part of a DVD that is
+already in the clear.
+
+⚠ **Never relax this to accept VOB payload "just for one bug".** The guarantee is
+the whole reason the bundle is something a stranger can hand over without
+thinking about it, and it is what keeps the tool clearly distinct from the CSS
+key cache, which must never be shared (see the `css-key-cache-never-ship` rule).
+
 ## The bundle
 
 A plain `.zip` — **not** a custom extension, because GitHub only accepts a fixed
@@ -158,3 +196,10 @@ reproduces it at 46 KB automatically.
   the gamepad injects only arrow keys and Enter, so disc/timestamp selection
   would need a cursor menu with no precedent anywhere in this tree.
 - **No decoder-side (video) evidence.** See scope above.
+- **No `--from-drive` mode.** Reading the IFOs straight off `/dev/sr0` would
+  work — they are unscrambled, so no decryption is involved — and would mean a
+  reporter never needed a rip at all. Rejected 2026-08-31 by user decision, for
+  two reasons: it asks users to point a tool at their optical drive, and a report
+  from someone who has already ripped and decrypted their own ISO is a better
+  report — they can answer follow-up questions and re-run tools against the disc.
+  The target reporter is a capable one, and the workflow should assume that.

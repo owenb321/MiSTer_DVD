@@ -1352,6 +1352,20 @@ between original and reconstruction (up to 9,143 lines), plus `dvd_vm_ref.py`
 boot/menu, `dvd_census.py`, `nav_extract.py`. Every bundle **self-checks by
 rebuilding itself** before it is handed over (a bundle that cannot be walked is
 worse than none — the reporter is gone by the time anyone opens it).
+★ **The bundle contains ONLY unencrypted navigation structures — no picture, no
+sound, no keys — and that is ENFORCED, not promised.** `audit()` refuses to write
+a bundle if any gathered sector parses as an MPEG-PS pack containing anything but
+a system header, padding or `private_stream_2`; proven RED against a real title
+sector (`0xE0`) and green on a real NAV pack. It cannot carry key material even in
+principle (title keys live in scrambled sector headers, the disc key block in the
+lead-in, which is not in an ISO image at all) — and the IFO/NAV data it DOES carry
+is capturable precisely because CSS never scrambles it (our own
+`main/support/dvd/dvd_css.cpp:341,393` says so). ⚠ **Never relax this to accept
+VOB payload "just for one bug"** — the guarantee is why a stranger can hand a
+bundle over without thinking, and it is the same line as
+`css-key-cache-never-ship`. ⛔ A `--from-drive` mode was considered and REJECTED
+(2026-08-31, user decision): it points users at their optical drive, and a
+reporter who has already ripped their own ISO is a better reporter.
 ⚠ Two traps recorded in `docs/bug_reports.md`: NAV-pack detection is **not**
 `0x000001BF` at offset 14 (a **system header** pushes PCI to `0x26`; the fixed
 offset found ZERO packs and reported success), and the tool is **deliberately
