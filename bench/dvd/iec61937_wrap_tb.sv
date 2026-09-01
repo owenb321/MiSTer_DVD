@@ -13,8 +13,6 @@ module iec61937_wrap_tb;
     reg         clk_sys = 0, clk_audio = 0;
     reg         rst_sys_n = 0, rst_audio_n = 0;
     reg         enable = 0, byte_swap = 0, mute = 0;
-    reg  [1:0]  hold_style = 2'd0;
-    reg  [1:0]  rel_bias_r = 2'd0;
 
     // ring model
     reg  [7:0]  ring_byte;
@@ -49,7 +47,7 @@ module iec61937_wrap_tb;
     // the layout capture.
     iec61937_wrap #(.FIFO_AW(12)) dut (
         .clk_sys(clk_sys), .rst_sys_n(rst_sys_n), .enable(enable), .byte_swap(byte_swap),
-        .mute_i(mute), .hold_style(hold_style), .rel_bias(rel_bias_r),
+        .mute_i(mute),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
         .frame_samples(frame_samples),
@@ -391,121 +389,6 @@ module iec61937_wrap_tb;
         if (dut.cur_nonpcm !== 1'b1) begin
             $display("  FAIL: unmuted burst not tagged non-PCM"); errors=errors+1; end
 
-        // ---- TEST 8d: hold FILL styles --------------------------------------
-        // The hold itself is the pacing loop and is NOT touched here (see
-        // docs/iec61937.md - one-shotting it cost A/V sync). Only its fill
-        // changes, and only after a real burst has gone out, so pre-content
-        // behaviour stays the fj#110 round-2 PCM silence.
-        frame_valid = 0; do_reset;
-        hold_style = 2'd2;                            // pause bursts
-        sync_armed_r = 1; stc_anch_r = 1; fptsv_r = 1;
-        fpts_r = 33'd100000; stc_r = 33'd200000;      // due -> a real burst first
-        frame_len = 16'd8; plen = 8; frame_type = 2'd0; frame_valid = 1;
-        enable = 1;
-        wait (pulses >= 3072);
-        @(posedge clk_sys);
-        if (dut.burst_seen !== 1'b1) begin
-            $display("  FAIL 8d: burst_seen not set"); errors=errors+1; end
-
-        // now starve it: the hold must emit a REAL pause burst, still non-PCM
-        frame_valid = 0;
-        wait (pulses >= 3*3072);      // burst 2 may already have been latched real
-        @(posedge clk_sys); @(posedge clk_sys);
-        $display("TEST 8d: pause-burst hold, cur_nonpcm=%0b", dut.cur_nonpcm);
-        expect_word(0, PA,       "pause-Pa");
-        expect_word(1, PB,       "pause-Pb");
-        expect_word(2, 16'h0003, "pause-Pc");
-        if (dut.cur_nonpcm !== 1'b1) begin
-            $display("  FAIL 8d: pause burst not tagged non-PCM"); errors=errors+1; end
-
-        // style 1: zero words but the format still must not change
-        frame_valid = 0; do_reset;
-        hold_style = 2'd1;
-        stc_r = 33'd200000; frame_valid = 1; enable = 1;
-        wait (pulses >= 3072); @(posedge clk_sys);
-        frame_valid = 0;
-        wait (pulses >= 3*3072); @(posedge clk_sys); @(posedge clk_sys);
-        $display("TEST 8d2: nonpcm hold, cur_nonpcm=%0b", dut.cur_nonpcm);
-        expect_word(0, 16'h0000, "nonpcm-hold-w0");   // still no Pa/Pb
-        if (dut.cur_nonpcm !== 1'b1) begin
-            $display("  FAIL 8d2: nonpcm hold dropped the flag"); errors=errors+1; end
-
-        // style 0 PRE-content must still be PCM silence (the round-2 fix)
-        frame_valid = 0; do_reset;
-        hold_style = 2'd0; enable = 1;
-        wait (pulses >= 3072); @(posedge clk_sys);
-        $display("TEST 8d3: pre-content default, cur_nonpcm=%0b", dut.cur_nonpcm);
-        if (dut.cur_nonpcm !== 1'b0) begin
-            $display("  FAIL 8d3: pre-content hold is not PCM silence -");
-            $display("            that is the fj#110 round-1 regression");
-            errors=errors+1; end
-        hold_style = 2'd0;
-
-        // ---- TEST 10: release bias + burst-classification taps --------------
-        // A frame 500 ticks (~5.6 ms, inside one refresh quantum) short of due:
-        // bias Off must HOLD it (classified `held`); bias 10ms (900 ticks) must
-        // RELEASE it (the marginal-due chatter absorber, docs/iec61937.md
-        // "flap probe"). Then an empty ring must classify as underrun.
-        frame_valid = 0; sync_armed_r = 1; stc_anch_r = 1; enable = 0; do_reset;
-        byte_swap = 0; frame_len = 16'd8; plen = 8; frame_type = 2'd0;
-        frame_samples = 0; mute = 0; hold_style = 2'd0; rel_bias_r = 2'd0;
-        for (i=0;i<8;i=i+1) payload[i] = (i+1)*8'h11;
-        fpts_r = 33'd200000; fptsv_r = 1'b1; avofs_r = 18'sd0;
-        stc_r  = 33'd199500;               // 500 ticks EARLY
-        @(posedge clk_sys); @(posedge clk_sys);
-        frame_valid = 1'b1;
-        @(posedge clk_sys); @(posedge clk_sys);
-        pop_count = 0;
-        t10_held = cnt_held; t10_real = cnt_real;   // snapshot BEFORE enabling
-        enable = 1'b1;
-        wait (pulses >= 3072); @(posedge clk_sys);
-        $display("TEST 10: bias Off, marginal frame: pop_count=%0d held_bursts=%0d",
-                 pop_count, cnt_held - t10_held);
-        if (pop_count !== 0) begin
-            $display("  FAIL: marginally-early frame released with bias Off");
-            errors = errors + 1; end
-        if (cnt_held == t10_held) begin
-            $display("  FAIL: hold burst not classified as `held`");
-            errors = errors + 1; end
-        // hold_active must be HIGH while the frame is deliberately held: this is
-        // the emu drain-watchdog feed (a hold is "consumer alive", NOT a wedge -
-        // the flap root cause was the watchdog reading it as one).
-        if (hold_active !== 1'b1) begin
-            $display("  FAIL: hold_active_o low during a sync hold");
-            errors = errors + 1; end
-        rel_bias_r = 2'd1;                 // 10 ms allowance
-        for (i=0;i<20000 && pop_count==0;i=i+1) @(posedge clk_sys);
-        $display("TEST 10b: bias 10ms: pop_count=%0d real_bursts=%0d",
-                 pop_count, cnt_real - t10_real);
-        if (pop_count == 0) begin
-            $display("  FAIL: bias 10ms did not release the marginal frame");
-            errors = errors + 1; end
-        if (cnt_real == t10_real) begin
-            $display("  FAIL: released burst not classified as `real`");
-            errors = errors + 1; end
-        // 10c from a clean reset (an emptied FIFO): with no frame queued the
-        // FIRST burst is an underrun-classified silence burst. (Continuing from
-        // 10b instead would stall for tens of ms behind the queued-burst FIFO
-        // backlog - a TB artifact, not a design property.)
-        // released frame -> hold_active must have dropped
-        if (hold_active !== 1'b0) begin
-            $display("  FAIL: hold_active_o still high after release");
-            errors = errors + 1; end
-        frame_valid = 0; enable = 0; do_reset;
-        t10_under = cnt_under;
-        enable = 1;
-        for (i=0;i<20000 && cnt_under==t10_under;i=i+1) @(posedge clk_sys);
-        $display("TEST 10c: ring dry: underrun_bursts=%0d", cnt_under - t10_under);
-        // no frame queued: an underrun is NOT a deliberate hold - hold_active
-        // must be low so a genuinely idle/wedged consumer still trips the watchdog
-        if (hold_active !== 1'b0) begin
-            $display("  FAIL: hold_active_o high with no frame queued");
-            errors = errors + 1; end
-        if (cnt_under == t10_under) begin
-            $display("  FAIL: dry-ring silent burst not classified as underrun");
-            errors = errors + 1; end
-        rel_bias_r = 2'd0;
-
         // ---- TEST 9: HDMI bitstream tap -------------------------------------
         $display("TEST 9: HDMI tap, total=%0d incoherent=%0d steady_bad=%0d startup_dev=%0d (resets=%0d)",
                  tap_total, tap_incoherent, tap_badperiod, tap_startup, tap_resets);
@@ -524,6 +407,63 @@ module iec61937_wrap_tb;
         if (tap_startup > tap_resets + 1) begin
             $display("  FAIL: post-reset re-alignment not settling (%0d deviations, %0d resets)",
                      tap_startup, tap_resets); errors=errors+1; end
+
+
+        // ---- TEST 10: hold classification + hold_active_o -------------------
+        // Restored from main and adapted: the release-bias half is gone with the
+        // option, but the rest guards things that ship. hold_active_o especially
+        // - that IS the flap fix (the drain watchdog must read a deliberate hold
+        // as "consumer alive", not as a wedge), so it needs a standing test.
+        // Release is triggered by advancing the STC rather than by a bias.
+        frame_valid = 0; sync_armed_r = 1; stc_anch_r = 1; enable = 0; do_reset;
+        byte_swap = 0; frame_len = 16'd8; plen = 8; frame_type = 2'd0;
+        frame_samples = 0; mute = 0;
+        for (i=0;i<8;i=i+1) payload[i] = (i+1)*8'h11;
+        fpts_r = 33'd200000; fptsv_r = 1'b1; avofs_r = 18'sd0;
+        stc_r  = 33'd199500;               // 500 ticks EARLY -> must hold
+        @(posedge clk_sys); @(posedge clk_sys);
+        frame_valid = 1'b1;
+        @(posedge clk_sys); @(posedge clk_sys);
+        pop_count = 0;
+        t10_held = cnt_held; t10_real = cnt_real;   // snapshot BEFORE enabling
+        enable = 1'b1;
+        wait (pulses >= 3072); @(posedge clk_sys);
+        $display("TEST 10: early frame held: pop_count=%0d held_bursts=%0d",
+                 pop_count, cnt_held - t10_held);
+        if (pop_count !== 0) begin
+            $display("  FAIL: not-yet-due frame was released"); errors=errors+1; end
+        if (cnt_held == t10_held) begin
+            $display("  FAIL: hold burst not classified as `held`"); errors=errors+1; end
+        if (hold_active !== 1'b1) begin
+            $display("  FAIL: hold_active_o low during a sync hold - the drain");
+            $display("        watchdog would read this as a wedge (the flap cause)");
+            errors=errors+1; end
+
+        stc_r = 33'd201000;                // now past due -> must release
+        for (i=0;i<20000 && pop_count==0;i=i+1) @(posedge clk_sys);
+        $display("TEST 10b: STC past due: pop_count=%0d real_bursts=%0d",
+                 pop_count, cnt_real - t10_real);
+        if (pop_count == 0) begin
+            $display("  FAIL: due frame not released"); errors=errors+1; end
+        if (cnt_real == t10_real) begin
+            $display("  FAIL: released burst not classified as `real`"); errors=errors+1; end
+        if (hold_active !== 1'b0) begin
+            $display("  FAIL: hold_active_o still high after release"); errors=errors+1; end
+
+        // 10c from a clean reset: with no frame queued the first burst is an
+        // underrun-classified silence burst, and that is NOT a deliberate hold -
+        // hold_active must stay low so a genuinely idle consumer still trips the
+        // watchdog.
+        frame_valid = 0; enable = 0; do_reset;
+        t10_under = cnt_under;
+        enable = 1;
+        for (i=0;i<20000 && cnt_under==t10_under;i=i+1) @(posedge clk_sys);
+        $display("TEST 10c: ring dry: underrun_bursts=%0d", cnt_under - t10_under);
+        if (hold_active !== 1'b0) begin
+            $display("  FAIL: hold_active_o high with no frame queued"); errors=errors+1; end
+        if (cnt_under == t10_under) begin
+            $display("  FAIL: dry-ring silent burst not classified as underrun");
+            errors=errors+1; end
 
         if (errors==0) $display("\nALL TESTS PASSED");
         else           $display("\n%0d FAILURES", errors);

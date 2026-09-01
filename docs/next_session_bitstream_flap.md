@@ -6,6 +6,8 @@
 > wrapper's A/V-sync hold as a wedged consumer, left the STD backpressure
 > disengaged, and the ring dropped ~1130 frames in the first 46 s of a title —
 > each dropped span a forward PTS hole = a multi-second wire gap = the flap.
+> ⚠ The debug options this file names (`HDMI BS Variant`, `BS Hold Style`) were
+> REMOVED in the pre-release cleanup, along with `BS Release Bias`.
 > See `docs/iec61937.md` "FLAP ROOT CAUSE" (which also retires this file's
 > `cur_period` lead and the "fill is not the variable" claim). Fix =
 > `hold_active_o` re-arms the watchdog while the wrapper holds by design.

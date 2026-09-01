@@ -716,21 +716,11 @@ parameter CONF_STR = {
     // freed when O[14] "CRT 480i Out" was retired.
     "P1O[14],Line-21 CC,On,Off;",
     "P1O[44],CC Test Line,Off,On;",
-    // HDMI bitstream subframe variant — the HW A/B for the two unknowns the
-    // ADV7513 Programming Guide would have settled (bit order, preamble code).
-    // Round 1 gave "decoder off": the chip HAD switched to IEC958-direct but the
-    // receiver could not find 61937 sync. status[47:46]. docs/hdmi_bitstream.md §3.
-    "P1O[48:46],HDMI BS Variant,PCM16,AES3 LSB,AES3 MSB,AES3 legacy,AES3 legacyM;",
-    // What a bitstream HOLD looks like once the stream is running. The hold is
-    // the pacing loop and is untouched; this is only its fill. Default PCM
-    // silence = shipped behaviour. See docs/iec61937.md. status[50:49].
-    "P1O[50:49],BS Hold Style,PCM silence,NonPCM hold,Pause burst;",
     // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
     // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
     // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
     // chatters hold/release at burst granularity). Bounded (the hold engages
     // past the bias) and below lip-sync perception. status[52:51].
-    "P1O[52:51],BS Release Bias,Off,10ms,21ms,32ms;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
     // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
@@ -2902,8 +2892,6 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .rst_sys_n    (aud_rst_n),
     .enable       (pass_mode),
     .byte_swap    (pass_bswap),
-    .hold_style   (status[50:49]),
-    .rel_bias     (status[52:51]),   // flap probe: early-release allowance
     .mute_i       (css_scrambled),   // CSS source: drain frames, emit PCM silence
     .ring_byte    (aud_ring_byte),
     .ring_valid   (aud_ring_valid),
@@ -2942,7 +2930,6 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .bs_r_o       (),
     .bs_nonpcm_o  (),
     .bs_stb_o     (bs_stb_w),
-    .hdmi_variant (status[48:46]),
     .dbg_word     (),
     .dbg_word_stb (),
     .dbg_burst_stb (bs_burst_stb),
@@ -3965,7 +3952,7 @@ end
 //     max_silent_run  = longest consecutive silent-burst run post-acquisition
 //                       (large = long gaps → re-anchor/hold-run shaped; 1-2 =
 //                       single-burst chatter → marginal-due shaped, test the
-//                       BS Release Bias lever).
+//                       drain-watchdog fix).
 //     underrun_bursts = silent bursts with NO frame queued post-acquisition
 //                       (ring starvation, distinct from a pacing hold).
 reg        bsp_seen;                    // a real burst since the last aud_rst_n

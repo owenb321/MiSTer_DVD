@@ -25,11 +25,9 @@ run() {
 }
 
 # 61937 burst assembly + the S/PDIF channel-status block + the HDMI pair tap
-run iec61937_wrap dvd/spdif_pass.sv dvd/i2s_iec958.sv sys/i2s.v dvd/iec61937_wrap.sv \
+run iec61937_wrap dvd/spdif_pass.sv dvd/hdmi_bs_i2s.sv sys/i2s.v dvd/iec61937_wrap.sv \
     bench/dvd/iec61937_wrap_tb.sv
 
-# IEC958-direct serialization for the ADV7513's I2S input, read back off the wire
-run i2s_iec958 dvd/spdif_pass.sv dvd/i2s_iec958.sv sys/i2s.v bench/dvd/i2s_iec958_tb.sv
 
 if [ "$fail" -ne 0 ]; then echo; echo "SUITE FAILED"; exit 1; fi
 echo; echo "SUITE PASSED"

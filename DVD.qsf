@@ -68,9 +68,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/lpcm_unpack.sv
 # AC-3/DTS frames into 61937 bursts; spdif_pass is the biphase encoder (a copy of
 # sys/spdif.v with the non-PCM channel-status bit set). See docs/iec61937.md.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/spdif_pass.sv
-# HDMI leg: the same IEC 60958 subframes serialized for the ADV7513's I2S input
-# in IEC958-direct mode, so Passthru reaches an AVR over HDMI too.
-set_global_assignment -name SYSTEMVERILOG_FILE dvd/i2s_iec958.sv
+# HDMI leg: the 61937 words as plain 16-bit I2S for the ADV7513, so Passthru
+# reaches an AVR over HDMI too (channel status comes from the chip's registers).
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/hdmi_bs_i2s.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/iec61937_wrap.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/av_sync.sv
 # Flush/reset trigger matrix (extracted from emu.sv 2026-08-28 for TB coverage of
@@ -682,7 +682,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # pinned SEED 5 held on the FIRST roll -- clk_dec 93.01 @100C / 89.3 @-40C, PASS
 # with margin at 88% ALM. No sweep needed, consistent with the post-reclaim note
 # above.
-# 2026-08-30/31 (feature/hdmi-bitstream netlist, +~300 ALMs: dvd/i2s_iec958.sv, the
+# 2026-08-30/31 (feature/hdmi-bitstream netlist, +~300 ALMs: the HDMI serializer, the
 # spdif_pass parallel subframe export, the emu ack/hold-off and the sys_top pin
 # mux): pinned SEED 5 held on the FIRST roll, twice. Pre-rebase (2026-08-30, on
 # 6b7e1ba): clk_dec 90.83 @100C / 90.15 @-40C at 87% ALM. REBASED onto dd8fd0e
