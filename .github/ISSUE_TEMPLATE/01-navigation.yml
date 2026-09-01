@@ -9,9 +9,9 @@ body:
         disc — and they are all that is needed to reproduce this class of problem without
         the disc itself.
 
-        If you have a decrypted rip on a PC, please attach a repro bundle. It takes a
-        minute and it is usually the difference between "I'll look when I find that disc"
-        and a fix:
+        If you have a rip of the disc on a PC — encrypted or decrypted, either works —
+        please attach a repro bundle. It takes a minute and it is usually the difference
+        between "I'll look when I find that disc" and a fix:
 
         ```bash
         python3 dvd_report.py MY_DISC.iso

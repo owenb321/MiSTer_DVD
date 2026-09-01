@@ -58,6 +58,12 @@
 # are the parts of a DVD that CSS leaves in the clear by design, because every
 # player must read them to navigate -- see main/support/dvd/dvd_css.cpp:341,393.
 #
+# The corollary matters for who can file a report: a bundle built from an
+# ENCRYPTED rip is byte-identical to one built from the decrypted disc, because
+# every sector this reads is one CSS never touches. So asking a user for a bundle
+# never asks them to decrypt anything. Verified on a real CSS disc, not argued
+# from the spec -- see docs/bug_reports.md "Validation".
+#
 # PRIVACY -- bundles are meant to be attached to PUBLIC issues
 #
 # The manifest records the image's BASENAME only, never a full path, and no
@@ -68,7 +74,7 @@
 # rather than importing dvd_vm_ref.IsoNav) because a bug reporter downloads this
 # ONE file from the repository and runs it -- they do not have a checkout.
 #
-# Usage (reporter, on a PC, with their own decrypted rip):
+# Usage (reporter, on a PC, with their own rip -- encrypted or decrypted):
 #   python3 dvd_report.py disc.iso
 #   python3 dvd_report.py disc.iso --nav-packs        # menu highlight bugs
 #   python3 dvd_report.py disc.iso --core-version "0.3.0 260830" --no-prompt
@@ -186,7 +192,7 @@ class IsoWalk(object):
             if d[1:6] != b"CD001":
                 raise SystemExit(
                     "%s is not an ISO9660 image (no CD001 at sector %d).\n"
-                    "This tool needs a decrypted DVD-Video .iso rip."
+                    "This tool needs a DVD-Video .iso rip (encrypted is fine)."
                     % (os.path.basename(self.path), lba))
             self.vd_lbas.append(lba)
             if d[0] == 1 and pvd is None:
@@ -604,7 +610,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd")
 
     def add_make(p):
-        p.add_argument("iso", help="decrypted DVD-Video .iso rip")
+        p.add_argument("iso", help="DVD-Video .iso rip (encrypted or decrypted)")
         p.add_argument("-o", "--out", help="output .zip (default: auto-named)")
         p.add_argument("--core-version",
                        help="core version line from the OSD, e.g. '0.3.0 260830'")

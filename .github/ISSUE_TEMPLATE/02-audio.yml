@@ -7,7 +7,8 @@ body:
       value: |
         Which track maps to which soundtrack is decided in the disc's `.IFO` navigation
         tables — so a silent or wrong-language track is reproducible from a repro bundle,
-        even though it presents as an audio problem. If you have a decrypted rip on a PC:
+        even though it presents as an audio problem. If you have a rip of the disc on a PC
+        (encrypted or decrypted — either works):
 
         ```bash
         python3 dvd_report.py MY_DISC.iso

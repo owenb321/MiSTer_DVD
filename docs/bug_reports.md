@@ -170,6 +170,27 @@ That disc is also the argument for the whole feature: it is a 5 MB image
 assembled by hand to investigate a remote Blade Runner report, and the bundle
 reproduces it at 46 KB automatically.
 
+### An encrypted rip produces the same bundle
+
+**Verified on a real CSS-encrypted disc** (`interactive/FAIRYTOPIA.iso`, 7.99 GB,
+78 of 417 sampled title-VOB packs scrambled — about 19%, the raw-rip case that
+motivated the `CSS ENCRYPTED` detection). It builds a 188 KB bundle, self-check
+and content audit both pass, and the reconstruction gives **byte-identical output
+to the encrypted original** on `iso_nav_check.py` (747 lines), `dvd_vm_ref.py
+boot`, and `dvd_vm_ref.py menu`.
+
+This is the practical half of "CSS never scrambles the nav tables": every sector
+the collector reads is one CSS leaves alone, so encryption is invisible to it.
+It matters for **who can file a report** — a reporter needs a rip, but not a
+*decrypted* one, and asking for a bundle therefore never asks anyone to decrypt
+anything. The user-facing wording was corrected accordingly (it had said
+"decrypted rip" in the manual and two issue forms).
+
+⚠ A simulation ran first — 2,920 synthetic scrambled packs written into a
+reconstruction's VOB regions, bundle byte-identical — and was **superseded** by
+the real disc. Keep the real-disc result as the citation; a simulation of CSS
+proves only that the collector skips sectors *it* marked, which is circular.
+
 ## Notes for future work on this file
 
 - **`tools/dvd_report.py` is deliberately self-contained** — it duplicates a

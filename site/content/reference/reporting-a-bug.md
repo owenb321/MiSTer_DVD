@@ -31,7 +31,9 @@ typical disc they come to well under 100 KB, and they are all that is needed to 
 - chapters that are missing or in the wrong place
 
 Download **[`dvd_report.py`](https://github.com/owenb321/MiSTer_DVD/blob/main/tools/dvd_report.py)**
-and run it on a PC against your own decrypted rip. It needs Python 3 and nothing else:
+and run it on a PC against your own rip of the disc. It needs Python 3 and nothing else,
+and it works on an **encrypted rip too** — the navigation tables are never encrypted, so
+no decryption step is involved:
 
 ```bash
 python3 dvd_report.py MY_DISC.iso
@@ -61,8 +63,9 @@ python3 dvd_report.py MY_DISC.iso --nav-packs
     path from your computer. `python3 dvd_report.py info <zip>` prints back everything a
     bundle holds, any time.
 
-The bundle is built from an image, so this path needs a decrypted rip on a PC. If you only
-ever play physical discs, describe the problem instead — that is still a useful report.
+The bundle is built from an image file, so this path needs a rip on a PC — encrypted or
+decrypted, either works. If you only ever play physical discs, describe the problem
+instead; that is still a useful report.
 
 ## Everything else: describe it
 
