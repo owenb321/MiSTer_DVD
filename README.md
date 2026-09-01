@@ -79,8 +79,9 @@ serves SD blocks through the standard framework interface.
 
 ## Getting started
 
-1. **Install** — download the [latest release](https://github.com/owenb321/MiSTer_DVD/releases/latest)
-   and extract the zip to the root of your SD card (`/media/fat`).
+1. **Install** — download **`MiSTer_DVD_v<version>.zip`** from the
+   [latest release](https://github.com/owenb321/MiSTer_DVD/releases/latest) and extract it
+   to the root of your SD card (`/media/fat`).
 2. **Add two lines** to `/media/fat/MiSTer.ini` (add the section, don't replace the file):
 
    ```ini

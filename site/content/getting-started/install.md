@@ -8,10 +8,12 @@ Details for every step are [further down](#what-the-zip-puts-where).
 
 ## 1. Extract the zip
 
-Download the latest build from the
-[**Releases page**](https://github.com/owenb321/MiSTer_DVD/releases/latest) and extract it
-to the **root of your MiSTer SD card** — `/media/fat` if you copy over the network
-(SSH/SFTP) rather than pulling the card out.
+From the [**Releases page**](https://github.com/owenb321/MiSTer_DVD/releases/latest),
+download **`MiSTer_DVD_v<version>.zip`** — the one zip, not the individual files listed
+beside it.
+
+Extract it to the **root of your MiSTer SD card** — `/media/fat` if you copy over the
+network (SSH/SFTP) rather than pulling the card out.
 
 ## 2. Add two lines to `MiSTer.ini`
 
@@ -115,8 +117,9 @@ region cannot be un-set. Full detail:
 
 ## The release assets
 
-The zip is the easy path, but every piece is also attached to the release individually if
-you would rather place things by hand:
+`MiSTer_DVD_v<version>.zip` is the one to download — it contains everything below, laid
+out ready to extract. The individual files are attached as well, for placing things by hand
+or grabbing a single piece:
 
 | Asset | What it is |
 |---|---|
