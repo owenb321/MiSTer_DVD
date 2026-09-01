@@ -69,9 +69,6 @@ supports.
 The core also accepts `.VOB`, `.mpg` and `.m2v` files directly, played linearly with no
 navigation. Useful for testing and for clips you have already extracted.
 
-`tools/make_mpeg1_test.sh` in the repository transcodes any video file into a DVD-spec
-MPEG-1/MP2 `.vob`, which is a convenient way to get arbitrary content onto the core.
-
 ## Where to keep them
 
 DVD images are large, so **loading from a NAS share works and is often more practical than
