@@ -1336,6 +1336,30 @@ or letters** — so interactive means a cursor menu, never a typed prompt. A reg
 Tested by `tools/test_set_dvd_region.py` (fakes the drive, drives the menus through a pty);
 the ioctl itself is the HW gate. Design + ioctl details: `docs/physical_disc.md`.
 
+### User bug reports arrive as sparse-sector nav bundles, not ISOs
+
+**`tools/dvd_report.py` (2026-08-31) — the answer to "the disc that breaks it is
+one I don't own".** A nav bug needs the IFO tables and nothing else, and those are
+~0.005% of an image (104 KB of a 4.47 GB rip), so a reporter builds a **36–100 KB
+zip** from their own rip on their PC. The bundle stores `{LBA → sector}` pairs at
+their **original disc addresses**; `unpack` writes them into a **sparse** image of
+the original size (6.77 GB apparent, 480 KB on disk). ★ **That is why no tool
+needed changing** — `IsoNav` asserts `CD001` at sector 16 and follows absolute
+LBAs, so the reconstruction simply *is* an ISO; it is also the `*_meta.hex`
+testbench idiom, so a submission is already shaped like a regression fixture.
+Validated 23/23 discs across the library: `iso_nav_check.py` output byte-identical
+between original and reconstruction (up to 9,143 lines), plus `dvd_vm_ref.py`
+boot/menu, `dvd_census.py`, `nav_extract.py`. Every bundle **self-checks by
+rebuilding itself** before it is handed over (a bundle that cannot be walked is
+worse than none — the reporter is gone by the time anyone opens it).
+⚠ Two traps recorded in `docs/bug_reports.md`: NAV-pack detection is **not**
+`0x000001BF` at offset 14 (a **system header** pushes PCI to `0x26`; the fixed
+offset found ZERO packs and reported success), and the tool is **deliberately
+self-contained** — a reporter downloads one file, not a checkout, so it duplicates
+a small ISO9660 walk instead of importing `IsoNav`. Scope is nav only; video-side
+bugs (subpicture, CC, cadence, lip-sync) report in prose. User-facing entry:
+README "Reporting a navigation bug". Design: **`docs/bug_reports.md`**.
+
 ### No USB DVD-ROM drive support
 MiSTer's custom Linux kernel almost certainly lacks `sr_mod` (`CONFIG_BLK_DEV_SR`).
 Recompiling the kernel is out of scope. Workflow: rip disc to ISO on PC, copy to SD card,
