@@ -41,21 +41,6 @@ module iec61937_wrap #(
     input  wire        rst_sys_n,
     input  wire        enable,        // passthrough active (else producer idles)
     input  wire        byte_swap,     // 0: first byte in word[15:8]; 1: swapped
-    // How to fill a HOLD once the bitstream is already running. The hold itself
-    // is the pacing loop and must not be touched (see docs/iec61937.md "one-shot
-    // hold gate"); this only changes what the gap LOOKS like to the receiver:
-    //   0 PCM silence  all-zero words, non-PCM bit CLEARED (shipped behaviour).
-    //                  The receiver re-negotiates PCM<->DD on every hold, which
-    //                  is the startup/track-change flapping.
-    //   1 NonPCM hold  same zero words but the non-PCM bit stays SET, so the
-    //                  format never changes - only the data pauses.
-    //   2 Pause burst  a real IEC 61937 PAUSE burst (Pa/Pb/Pc=3): what the
-    //                  standard defines for exactly this, and what a real player
-    //                  emits between bursts.
-    // 1 and 2 apply ONLY after the first real burst since a flush, so pre-content
-    // behaviour is unchanged and the fj#110 round-1 finding (a receiver cannot
-    // ACQUIRE across non-PCM-with-no-data) is not re-litigated.
-    input  wire [1:0]  hold_style,
     // Release bias (P1O[52:51], flap probe): allow a frame to be released up to
     // {0, 10, 21, 32} ms EARLY (90 kHz ticks 0/900/1890/2880). The STC advances
     // in whole-refresh quanta (~16.7 ms at 59.94 Hz), so an equilibrium sitting
@@ -114,16 +99,14 @@ module iec61937_wrap #(
     output wire        bs_stb_o,     // 48 kHz pair strobe (slip instrument; not needed
                                      // for correctness — see "Pacing")
 
-    // ---- HDMI IEC958-direct serial output (clk_audio) ----
-    // The same burst, clocked out for the ADV7513's I2S input in IEC958-direct
-    // mode (reg 0x0C[1:0]=3). sys_top muxes these three onto HDMI_SCLK/LRCLK/I2S
-    // while the HPS ack is set; MCLK is unaffected. All three come from HERE
-    // rather than from the framework's serializer so the word select and bit
-    // clock are phase-consistent with the subframes by construction.
+    // ---- HDMI serial output (clk_audio) ----
+    // The same 61937 words as plain 16-bit standard I2S; the ADV7513 supplies the
+    // non-PCM channel status from its register map. sys_top muxes these three
+    // onto HDMI_SCLK/LRCLK/I2S while the HPS ack is set; MCLK is unaffected.
+    // See docs/hdmi_bitstream.md.
     output wire        hdmi_sck_o,
     output wire        hdmi_ws_o,
     output wire        hdmi_sd_o,
-    input  wire [2:0]  hdmi_variant,   // HW A/B, see dvd/i2s_iec958.sv
 
     // ---- debug taps (producer word stream, clk_sys) ----
     output reg  [15:0] dbg_word,      // word committed this cycle
@@ -157,7 +140,6 @@ module iec61937_wrap #(
     localparam [15:0] PB = 16'h4E1F;
     localparam [15:0] PC_AC3 = 16'h0001; // burst-info data type 1
     localparam [15:0] PC_DTS = 16'h000B; // burst-info data type 11 (DTS I/II/III)
-    localparam [15:0] PC_PAUSE = 16'h0003; // data type 3 = PAUSE (see hold_style)
 
     localparam [15:0] PERIOD_AC3 = 16'd1536; // samples (6144 bytes)
     localparam [15:0] PERIOD_DTS = 16'd512;  // samples (2048 bytes, core DTS)
@@ -275,7 +257,6 @@ module iec61937_wrap #(
     // which pulses on seeks, track switches and aud_flush). Used ONLY to choose the
     // hold FILL above - it must never gate hold_frame itself, which is the pacing
     // loop (docs/iec61937.md "one-shot hold gate" records what that cost).
-    reg burst_seen;
 
     // Release bias (see the rel_bias port comment): a frame within `bias_ticks`
     // of due is released rather than held. 0 = exact compare (shipped).
@@ -318,7 +299,6 @@ module iec61937_wrap #(
             wr_en       <= 1'b0;
             burst_silent<= 1'b1;
             cur_nonpcm  <= 1'b0;
-            burst_seen  <= 1'b0;
             frame_pop_r <= 1'b0;
             dbg_word    <= 16'd0;
             dbg_word_stb<= 1'b0;
@@ -351,7 +331,6 @@ module iec61937_wrap #(
                         words_total <= {period_sel, 1'b0};
                         burst_silent<= 1'b0;   // real data-burst
                         cur_nonpcm  <= 1'b1;   // -> set the channel-status non-PCM bit
-                        burst_seen  <= 1'b1;   // hold-fill selection only
                         frame_pop_r <= 1'b1;
                         dbg_burst_stb <= 1'b1; dbg_burst_real <= 1'b1; dbg_burst_held <= 1'b0;
                         st <= S_PA;
@@ -390,25 +369,14 @@ module iec61937_wrap #(
                         // is the fj#110 round-2 fix: a real player presents PCM before
                         // the bitstream starts, and HW showed the receiver cannot
                         // ACQUIRE across non-PCM null bursts. AFTER the stream is
-                        // running the problem is the opposite one - dropping back to PCM
-                        // makes the receiver re-negotiate the format on every hold - so
-                        // hold_style can keep the format steady instead.
+                        // running, a hold is a genuine gap in the data and PCM silence
+                        // is still what goes out.
                         bytes_left  <= 16'd0;
                         pd_bits     <= 16'd0;
                         words_total <= {null_period, 1'b0};
-                        if (burst_seen && hold_style == 2'd2) begin
-                            pc_val      <= PC_PAUSE;   // real 61937 pause burst
-                            burst_silent<= 1'b0;       // ... so Pa/Pb ARE emitted
-                            cur_nonpcm  <= 1'b1;
-                        end else if (burst_seen && hold_style == 2'd1) begin
-                            pc_val      <= 16'd0;
-                            burst_silent<= 1'b1;       // zero words, format unchanged
-                            cur_nonpcm  <= 1'b1;
-                        end else begin
-                            pc_val      <= 16'd0;
-                            burst_silent<= 1'b1;
-                            cur_nonpcm  <= 1'b0;       // PCM silence (shipped default)
-                        end
+                        pc_val      <= 16'd0;
+                        burst_silent<= 1'b1;
+                        cur_nonpcm  <= 1'b0;
                         // Classify: a queued codec frame reaching here is HELD
                         // (pacing); no frame queued = ring underrun / priming.
                         dbg_burst_stb  <= 1'b1;
@@ -485,9 +453,6 @@ module iec61937_wrap #(
     assign bs_nonpcm_o = cur_pair[32];
     assign bs_stb_o    = sample_req;
 
-    wire [31:0] sub_w;
-    wire        sub_load, sub_chb;
-
     spdif_pass u_spdif (
         .clk_i       (clk_audio),
         .rst_i       (~rst_audio_n),
@@ -495,28 +460,20 @@ module iec61937_wrap #(
         .spdif_o     (spdif_o),
         .nonpcm_i    (cur_pair[32]),  // per-pair PCM/non-PCM flag (latched per block)
         .sample_i    (cur_pair[31:0]),
-        .sample_req_o(sample_req),
-        .sub_w_o     (sub_w),
-        .sub_load_o  (sub_load),
-        .sub_chb_o   (sub_chb)
+        .sample_req_o(sample_req)
     );
 
-    // HDMI leg: the same subframes, serialized for the ADV7513 instead of
-    // biphase-encoded. Driven off the SAME load pulse as the S/PDIF encoder, so
-    // the two outputs cannot drift apart — there is one subframe source.
-    i2s_iec958 u_hdmi_i2s (
-        .clk       (clk_audio),
-        .rst_n     (rst_audio_n),
-        .ce_i      (bit_ce),
-        .sub_w_i   (sub_w),
-        .sub_load_i(sub_load),
-        .sub_chb_i (sub_chb),
-        .variant_i (hdmi_variant),
-        .pcm_l_i   (cur_pair[15:0]),
-        .pcm_r_i   (cur_pair[31:16]),
-        .sck_o     (hdmi_sck_o),
-        .ws_o      (hdmi_ws_o),
-        .sd_o      (hdmi_sd_o)
+    // HDMI leg: the same 61937 words, as plain 16-bit I2S for the ADV7513.
+    // One word source feeds both outputs, so they cannot drift apart.
+    hdmi_bs_i2s u_hdmi_i2s (
+        .clk    (clk_audio),
+        .rst_n  (rst_audio_n),
+        .ce_i   (bit_ce),
+        .pcm_l_i(cur_pair[15:0]),
+        .pcm_r_i(cur_pair[31:16]),
+        .sck_o  (hdmi_sck_o),
+        .ws_o   (hdmi_ws_o),
+        .sd_o   (hdmi_sd_o)
     );
 
 endmodule
