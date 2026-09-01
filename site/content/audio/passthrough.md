@@ -98,4 +98,3 @@ of seconds and track changes are near-instant.
   "Decoder Off" until audio returns, under a second later. There is no bitstream to send,
   and a receiver holds lock only on real data; a non-PCM hold and a pause burst were both
   tested and neither works. Many set-top players do the same.
-- Needs a receiver that decodes AC-3/DTS. Inaudible on a plain television.

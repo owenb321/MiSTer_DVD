@@ -27,7 +27,11 @@ SVCD's 480-wide picture fills the screen on both HDMI and the analog CRT output.
 
 ## Limitations
 
-VCD support is deliberately basic playback:
+VCD support is deliberately basic playback, and the reason is worth knowing: **it came
+almost free.** MPEG-1 video and MP2 audio are both DVD-Video-legal formats, so they were
+implemented to meet the DVD specification rather than for VCDs. Once they existed, playing a
+VCD needed only the CD sector deblocking and an MPEG-1 system-stream demux on top — so it
+was added. Nothing beyond that was built:
 
 - **No VCD menus or PBC** (playback control). The movie track plays; interactive VCD
   navigation is not implemented.
