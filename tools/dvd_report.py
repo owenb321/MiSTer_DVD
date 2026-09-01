@@ -503,9 +503,14 @@ def cmd_make(args):
         "extents": extents,
     }
 
-    out = args.out or ("dvdreport-%s-%s%s"
-                       % (safe_slug(summ["volume_label"]),
-                          fp[3:11], BUNDLE_EXT))
+    # Auto-name carries BOTH the disc identity and a timestamp: the identity so
+    # two discs never collide and the maintainer can see what it is without
+    # opening it, the timestamp so a second run on the SAME disc -- a follow-up
+    # after a fix, or a second bug -- does not silently overwrite the first.
+    out = args.out or ("dvdreport-%s-%s-%s%s"
+                       % (safe_slug(summ["volume_label"]), fp[3:11],
+                          datetime.datetime.now().strftime("%Y%m%d-%H%M%S"),
+                          BUNDLE_EXT))
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
         z.writestr("sectors.bin", bytes(blob))

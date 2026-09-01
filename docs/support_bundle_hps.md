@@ -107,6 +107,18 @@ blank line and would have jammed it against the next function).
 No `Makefile` change: `$(wildcard ./support/*/*.cpp)` already picks up the new
 file.
 
+## ⚠ Do not trust the clock on an on-player bundle
+
+The DE10-Nano has **no battery-backed RTC**. A networked MiSTer gets the time by
+NTP; one that has never been online does not, so both the bundle's filename
+(`dvdreport-YYYYMMDD-HHMMSS.zip`) and the manifest's `created_utc` can be
+arbitrarily wrong — an epoch date rather than today's.
+
+They stay *unique* within a session either way, which is all the filename needs.
+But when ordering two bundles from the same reporter, sequence them by what they
+say, not by their timestamps. A bundle made on a PC has a real clock behind it;
+`player.generated_on == "mister"` marks the ones that may not.
+
 ## What is not done
 
 - **The live status word is not captured.** `user_io_status_get()` reads at most
