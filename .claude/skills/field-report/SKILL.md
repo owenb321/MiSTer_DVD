@@ -1,6 +1,6 @@
 ---
 name: field-report
-description: Turn a field report pasted from Discord (or anywhere else) into a tracked GitHub issue on owenb321/MiSTer_DVD, plus a ready-to-paste reply asking for whatever is missing. Use when the user pastes a user's bug report and wants it filed, tracked, or turned into an issue.
+description: Turn a field report from Discord — pasted text or a screenshot of a thread — into a tracked GitHub issue on owenb321/MiSTer_DVD, plus a ready-to-paste reply asking for whatever is missing. Use when the user shares a user's bug report and wants it filed, tracked, or turned into an issue.
 ---
 
 # Filing a field report as an issue
@@ -41,6 +41,36 @@ that the draft looks good.
 **Check for duplicates first.** Discord reports repeat, and the same disc surfaces
 repeatedly. Search before drafting, and if something matches, propose commenting on the
 existing issue instead of opening a new one.
+
+## Screenshots of a thread
+
+A screenshot works as well as pasted text — drag it into the terminal, or give the file
+path and read it. It is often the *easier* thing for the user to produce, so expect it.
+Three things change, and they matter more than they look:
+
+**Never guess an illegible character.** Reading a screenshot is transcription, and the
+highest-value fields are the most digit-dense and therefore the easiest to get wrong: the
+version line (`v0.3.0 260901`), the number in `LINK FAIL 12`, a chapter or title number. A
+misread version sends the maintainer to the wrong build and, unlike a blank, nobody ever
+notices it was wrong. If a character is ambiguous, it is **Not stated** — then ask for it
+as text in the Discord reply. Transcribing `v0.3.0` as `v0.3.6` is worse than not having
+it.
+
+**Never attach the screenshot to the issue.** It is a picture of a chat window: handles,
+display names, avatars, the server and channel in the sidebar, and other people's messages.
+Transcribe what is relevant and leave the image on the local machine. This is the same rule
+as stripping handles from text, but it is much easier to violate by accident — dragging the
+image straight into `gh issue create` publishes every one of those at once.
+
+**Read the whole thread, not just the reporter.** A screenshot usually catches several
+messages. Someone else in the thread may have supplied the version line, or asked the
+question that produced the useful detail — take those. Ignore unrelated chatter, and if two
+different people are describing two different problems, treat it as the "several unrelated
+problems" case below rather than blending them.
+
+If the screenshot is cropped so the useful part is missing — a version line half cut off, a
+message continuing past the edge — say so rather than working around it. Asking for one
+more screenshot is cheap.
 
 ## Step 1 — classify
 
