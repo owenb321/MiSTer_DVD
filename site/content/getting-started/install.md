@@ -6,7 +6,13 @@ the zip to the **root of your MiSTer SD card** — that is **`/media/fat`** if y
 over the network (SSH/SFTP) rather than pulling the card out. Then launch **DVD** from
 the MiSTer menu.
 
-That is the whole installation for decrypted images. What the zip puts where:
+That is the whole installation for decrypted images, VCDs and video files.
+
+**For physical discs, encrypted images, or bitstream audio over HDMI there is one more
+step** — two lines in `MiSTer.ini` that nothing adds for you. See
+[Turning on the optional pieces](#turning-on-the-optional-pieces) below.
+
+What the zip puts where:
 
 ```
 /media/fat/
@@ -22,10 +28,39 @@ The core goes in **`_Other`** because a DVD player is not a console or computer
 category. Nothing depends on that location — move the `.rbf` wherever you keep your
 cores. `MiSTer_DVDcss` is the one file that must stay at the SD-card root.
 
-Extracting the zip **does not switch anything on**. `MiSTer_DVDcss` sits on the card
-inert until you name it in `MiSTer.ini`, and the two scripts do nothing until you run
-them from the Scripts menu. If you only ever play decrypted images, you can ignore all
-three. See [What you need](what-you-need.md) to work out which apply to you.
+## Turning on the optional pieces
+
+Extracting the zip **does not switch anything on**. `MiSTer_DVDcss` sits on the card inert
+until you name it in `MiSTer.ini`, and the two scripts do nothing until you run them from
+the Scripts menu.
+
+!!! warning "This is the step people miss"
+    If you want **physical discs**, **CSS-encrypted images**, or **bitstream audio over
+    HDMI**, you must add these two lines to `/media/fat/MiSTer.ini` yourself. Nothing in
+    the zip does it for you, and without them the core behaves exactly as if
+    `MiSTer_DVDcss` were not installed — decrypted images play, everything else does not.
+
+```ini
+[DVD]
+main=MiSTer_DVDcss
+```
+
+**Add that section; do not replace the file.** If `MiSTer.ini` already has other sections,
+append this at the end. `main=` is a stock MiSTer feature — whenever the DVD core is
+loaded, MiSTer runs `MiSTer_DVDcss` instead of the stock Main. Every other core is
+unaffected. Delete the section and the core reverts to image-only playback with nothing
+else changed.
+
+Then **reload the core** — the Main is chosen at core load, so an already-running core
+will not pick it up.
+
+For **encrypted** discs or images you also need libdvdcss, which is not shipped here: run
+**install_dvdcss** once from the MiSTer **Scripts** menu.
+
+If you only ever play decrypted images, VCDs and video files, you can ignore all of this.
+[What you need](what-you-need.md) sorts out which pieces apply to you, and
+[Physical discs and encrypted ISOs](../formats/physical-discs.md) covers the rest of the
+setup including the drive region tool.
 
 ## The release assets
 
