@@ -6,18 +6,18 @@ additive** — adding it never changes how anything already working behaves.
 
 | | bare `.rbf` | `+ MiSTer_DVDcss` | `+ libdvdcss` |
 |---|:--:|:--:|:--:|
-| Decrypted DVD-Video ISO | &#10003; | &#10003; | &#10003; |
-| Flat `.VOB` / `.mpg` / `.m2v` stream | &#10003; | &#10003; | &#10003; |
-| Video CD / SVCD (bin/cue) | &#10003; | &#10003; | &#10003; |
-| Disc menus, navigation, subtitles, chapters, angles | &#10003; | &#10003; | &#10003; |
-| Audio decode to stereo (AC-3, MP2, LPCM) | &#10003; | &#10003; | &#10003; |
-| **Bitstream passthrough over optical S/PDIF** | &#10003; | &#10003; | &#10003; |
-| **Bitstream passthrough over HDMI** — *DD/DTS 5.1, no I/O board* | no | &#10003; | &#10003; |
-| Analog/CRT output, closed captions, HUD, seeking | &#10003; | &#10003; | &#10003; |
-| **Physical disc — unencrypted** | no | &#10003; | &#10003; |
-| **Physical disc — CSS-encrypted** *(most commercial discs)* | no | no | &#10003; |
-| **CSS-encrypted ISO** — *no optical drive needed* | no | no | &#10003; |
-| Recovered-key caching (slow only on first play) | — | — | &#10003; |
+| Decrypted DVD-Video ISO | ✓ | ✓ | ✓ |
+| Flat `.VOB` / `.mpg` / `.m2v` stream | ✓ | ✓ | ✓ |
+| Video CD / SVCD (bin/cue) | ✓ | ✓ | ✓ |
+| Disc menus, navigation, subtitles, chapters, angles | ✓ | ✓ | ✓ |
+| Audio decode to stereo (AC-3, MP2, LPCM) | ✓ | ✓ | ✓ |
+| **Bitstream passthrough over optical S/PDIF** | ✓ | ✓ | ✓ |
+| **Bitstream passthrough over HDMI** — *DD/DTS 5.1, no I/O board* | — | ✓ | ✓ |
+| Analog/CRT output, closed captions, HUD, seeking | ✓ | ✓ | ✓ |
+| **Physical disc — unencrypted** | — | ✓ | ✓ |
+| **Physical disc — CSS-encrypted** *(most commercial discs)* | — | — | ✓ |
+| **CSS-encrypted ISO** — *no optical drive needed* | — | — | ✓ |
+| Recovered-key caching (slow only on first play) | — | — | ✓ |
 
 ## The three pieces
 
