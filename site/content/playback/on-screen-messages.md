@@ -15,9 +15,14 @@ themselves; the ones that persist are describing a condition, not an event.
 | `Decrypting ISO` | An encrypted image's keys are being recovered on first play. | Wait. It is cached afterwards, so this happens once per disc. |
 
 !!! note "`UNSUPPORTED IMAGE` is patient by design"
-    It is only raised after about 20 seconds of *actual streaming* with no picture, so slow
-    media — a NAS spinning up, a cold USB drive — does not trigger it. It also clears itself
-    if a picture does appear.
+    It is only raised after about 20 seconds of *actual streaming* with no picture. The
+    timer counts delivered data, not wall-clock time, so slow media — a NAS spinning up, a
+    cold USB drive — does not trigger it, and it clears itself if a picture appears.
+
+    A consequence worth knowing: a mount that fails outright delivers no data at all, so it
+    produces **no message**. Silence means the core never got the file; `UNSUPPORTED IMAGE`
+    means it read the file and could not play it. See
+    [Troubleshooting](../reference/troubleshooting.md#nothing-plays).
 
 ## Transport popups
 

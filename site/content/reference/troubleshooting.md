@@ -14,6 +14,13 @@ which makes it look like a size or filesystem problem.
 
 **Fix:** re-mount the share read-write.
 
+!!! note "Why there is no message"
+    The absence of one is the clue. `UNSUPPORTED IMAGE` is raised only after the core has
+    *actually received sector data* for a while without producing a picture — a mount that
+    fails outright delivers nothing, so that timer never starts. If you get no message at
+    all, the core never got the file; if you get `UNSUPPORTED IMAGE`, it read the file and
+    could not play it. Those are different problems.
+
 ### `UNSUPPORTED IMAGE`
 
 Either the image is not ISO9660 — a **UDF-only** image will not load — or the file is not a

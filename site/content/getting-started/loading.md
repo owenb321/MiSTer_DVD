@@ -38,8 +38,7 @@ disc whose menus misbehave.
 
 !!! tip "Skipping the opening chain"
     Pressing **Menu** (B5) over a copyright or warning screen goes straight to the disc's
-    main menu, before the disc has shown you one. Some discs — DVD games especially — would
-    otherwise drop you into a random clip. See
+    main menu, before the disc has shown you one. Some discs — DVD games especially — use this boot chain to perform set up steps and may behave incorrectly if skipped. See
     [Menu during the opening chain](../playback/controls.md#menu-during-the-discs-opening-chain).
 
 ## Loading something else
@@ -53,8 +52,12 @@ core cuts to black and starts the new one cleanly.
 
 ## If nothing happens
 
-A black screen with the core sitting idle and no message is almost always a **read-only
-network share** — see the warning in [Discs and images](discs-and-images.md#where-to-keep-them).
+A black screen with the core sitting idle and **no message at all** is almost always a
+**read-only network share** — see the warning in
+[Discs and images](discs-and-images.md#where-to-keep-them). No message means the core never
+received the file; it is not the same as `UNSUPPORTED IMAGE`, which means the file was read
+and could not be played.
+
 Anything else, the core will usually tell you: check
 [On-screen messages](../playback/on-screen-messages.md) and
 [Troubleshooting](../reference/troubleshooting.md).
