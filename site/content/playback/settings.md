@@ -36,7 +36,7 @@ playback and are documented properly below; the rest exist for narrowing down pr
 
 | Setting | Options | What it does |
 |---|---|---|
-| **Debug Overlay** | **Off** / On | In a release build this shows the menu-highlight diagnostic blocks. The full multi-row counter overlay is compiled out. |
+| **Debug Overlay** | **Off** / On | In a release build this shows the menu-highlight diagnostic blocks. |
 | **Title VTS Tens** / **Title VTS Units** | **0** / **Auto** | Forces a specific title set instead of the auto-selected one. Diagnostic, for discs where the wrong title is picked with Disc Menus off. |
 | **Frame Drop** | **On** / Off | **Leave this on.** See below. |
 | **Audio Genlock** | **On** / Off | Off free-runs the audio clock instead of slaving it to the video timeline. Diagnostic only. |
