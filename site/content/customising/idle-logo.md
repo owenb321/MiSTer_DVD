@@ -29,11 +29,13 @@ core's `.rbf`, in `/media/fat/`, or in `/media/fat/bootrom/`.
 
 ## Making one
 
-Convert any PNG with the repository's tool:
+Convert any PNG with **[`idle_logo.py`](https://github.com/owenb321/MiSTer_DVD/blob/main/tools/idle_logo.py)**, run on your PC. It is
+not in the release zip — download it from the repository (it needs only Python 3, no
+libraries):
 
 ```bash
-tools/idle_logo.py --png mylogo.png --out boot.rom     # add --fit to downscale
-tools/idle_logo.py --verify boot.rom                   # preview what will render
+python3 idle_logo.py --png mylogo.png --out boot.rom     # add --fit to downscale
+python3 idle_logo.py --verify boot.rom                   # preview what will render
 ```
 
 | Flag | Effect |
