@@ -88,33 +88,14 @@ re-establishes it. This used to be visibly bad — several seconds of dropouts a
 start, and audible flapping on track changes — and is now fixed: titles lock within a couple
 of seconds and track changes are near-instant.
 
-## Authored silence drops the receiver out of Dolby/DTS
-
-**Where a disc authors silence — a menu with no background audio, a gap between
-programmes — your receiver will stop decoding and show something like "Decoder Off"** until
-audio returns. Re-acquisition takes under a second.
-
-This is a real limitation, not a misconfiguration, and there is currently no way around it.
-Silence in the stream means there is no bitstream to send, and a receiver only holds its
-lock on **real data**. Both plausible fillers were built and tested on a real receiver — a
-non-PCM hold, and a pause burst — and **neither holds the lock**, even with an otherwise
-clean stream.
-
-The fix that would work is "digital black": looping a pre-encoded silent AC-3 frame during
-authored silence, which is what some set-top players do. It is recorded as possible future
-polish rather than something in progress. Many real players behave exactly as this core does
-today.
-
-!!! note "Not to be confused with the old startup flap"
-    A separate, now-fixed bug made receivers flap between naming the codec and no decode for
-    around 45 seconds at every title start. If you see dropouts at a *title start* or on a
-    *track change*, that is the fixed bug and you want a newer build. Dropouts at a silent
-    menu are the limitation above.
-
 ## Limitations
 
 - **Core DTS only** — 48 kHz, up to 16-bit. No DTS-HD, no 96 kHz, no high-bit-depth
   variants. DVDs do not carry those.
 - **LPCM and MP2 are silent** in Passthru; use Decode PCM for those discs.
-- **Authored silence drops the receiver out of decode mode** — see above.
+- **Authored silence drops the receiver out of decode mode.** Where a disc authors silence
+  — a menu with no background audio, a gap between programmes — the receiver shows
+  "Decoder Off" until audio returns, under a second later. There is no bitstream to send,
+  and a receiver holds lock only on real data; a non-PCM hold and a pause burst were both
+  tested and neither works. Many set-top players do the same.
 - Needs a receiver that decodes AC-3/DTS. Inaudible on a plain television.
