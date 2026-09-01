@@ -1,0 +1,12 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Read the manual first
+    url: https://owenb321.github.io/MiSTer_DVD/reference/troubleshooting/
+    about: Troubleshooting covers most problems, including several that look like bugs.
+  - name: Is this disc supported?
+    url: https://owenb321.github.io/MiSTer_DVD/reference/compatibility/
+    about: What plays, what does not, and what is known-incomplete.
+  # Add the Discord invite here so people have a low-friction route:
+  # - name: Ask on Discord
+  #   url: https://discord.gg/<invite>
+  #   about: Questions and quick reports. Anything that needs tracking gets an issue.

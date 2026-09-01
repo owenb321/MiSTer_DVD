@@ -1,5 +1,10 @@
 nul
-.claude/
+# .claude/: the shared agent config (skills, commands, project settings) IS tracked --
+# it is part of how this project is built, and the release/merge/docs workflows live
+# there. Only per-machine and runtime state stays out.
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/**/*.local.*
 Template_MiSTer-master/
 CDi_MiSTer-main/
 mpeg2fpga-orig/

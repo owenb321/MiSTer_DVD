@@ -1,0 +1,103 @@
+name: Navigation, menus or titles
+description: Menus that misbehave, LINK FAIL, the wrong title playing, chapters wrong
+labels: ["bug", "area:navigation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A disc's navigation lives in small `.IFO` files — well under 100 KB on a typical
+        disc — and they are all that is needed to reproduce this class of problem without
+        the disc itself.
+
+        If you have a decrypted rip on a PC, please attach a repro bundle. It takes a
+        minute and it is usually the difference between "I'll look when I find that disc"
+        and a fix:
+
+        ```bash
+        python3 dvd_report.py MY_DISC.iso
+        ```
+
+        [`dvd_report.py`](https://github.com/owenb321/MiSTer_DVD/blob/main/tools/dvd_report.py)
+        · [what it does and what it contains](https://owenb321.github.io/MiSTer_DVD/reference/reporting-a-bug/)
+
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      description: The line at the top of the OSD. It is the only thing that identifies a build.
+      placeholder: v0.3.0 260901
+    validations:
+      required: true
+
+  - type: input
+    id: disc
+    attributes:
+      label: Disc title and region
+      placeholder: The Matrix, region 1 NTSC
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: Where it goes wrong — does it boot, reach a menu, start the feature? What did you press?
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen instead
+    validations:
+      required: false
+
+  - type: input
+    id: message
+    attributes:
+      label: On-screen message, if any
+      description: For example `LINK FAIL 12`. Copy the number too — it identifies the failing jump.
+      placeholder: LINK FAIL 12
+    validations:
+      required: false
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: What are you playing from?
+      options:
+        - Decrypted image
+        - Encrypted image (with MiSTer_DVDcss)
+        - Physical disc
+    validations:
+      required: true
+
+  - type: dropdown
+    id: menus
+    attributes:
+      label: Is `Disc Menus` on?
+      options:
+        - "On (the default)"
+        - "Off"
+        - "Don't know"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Did this work in an earlier version?
+      options:
+        - "Don't know / never tried it before"
+        - "No — this is the first version I have tried"
+        - "Yes — it worked in an earlier version"
+    validations:
+      required: false
+
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Repro bundle
+      description: Drag the `dvdreport-*.zip` here. If you cannot make one, say so — the report is still useful.
+    validations:
+      required: false

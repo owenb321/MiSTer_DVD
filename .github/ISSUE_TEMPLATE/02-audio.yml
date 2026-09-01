@@ -1,0 +1,105 @@
+name: Audio — silent, wrong track, or unsupported
+description: No sound on a track, the wrong language, or AUDIO UNSUPPORTED
+labels: ["bug", "area:audio"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Which track maps to which soundtrack is decided in the disc's `.IFO` navigation
+        tables — so a silent or wrong-language track is reproducible from a repro bundle,
+        even though it presents as an audio problem. If you have a decrypted rip on a PC:
+
+        ```bash
+        python3 dvd_report.py MY_DISC.iso
+        ```
+
+        [`dvd_report.py`](https://github.com/owenb321/MiSTer_DVD/blob/main/tools/dvd_report.py)
+        · [more](https://owenb321.github.io/MiSTer_DVD/reference/reporting-a-bug/)
+
+        Before filing: **`Audio Out = Passthru` is silent on an ordinary television**, and
+        LPCM and MP2 have no bitstream form, so they are silent in that mode too. See
+        [No sound](https://owenb321.github.io/MiSTer_DVD/reference/troubleshooting/#no-sound).
+
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      placeholder: v0.3.0 260901
+    validations:
+      required: true
+
+  - type: input
+    id: disc
+    attributes:
+      label: Disc title and region
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: What is silent?
+      options:
+        - One track only — other tracks play
+        - Every track on this disc
+        - Every track on every disc
+        - Not silent — the wrong language or channel layout plays
+        - Only in menus
+    validations:
+      required: true
+
+  - type: dropdown
+    id: audioout
+    attributes:
+      label: "`Audio Out` setting"
+      options:
+        - Decode PCM
+        - Passthru (S/PDIF or HDMI bitstream)
+        - "Don't know"
+    validations:
+      required: true
+
+  - type: input
+    id: track
+    attributes:
+      label: What the track popup says
+      description: Press B7 to cycle tracks; the popup names the track and language, e.g. `AUD 2/4 FR`.
+      placeholder: AUD 2/4 FR
+    validations:
+      required: false
+
+  - type: input
+    id: format
+    attributes:
+      label: Track format, if you know it
+      description: Dolby Digital / DTS / LPCM / MP2, and the channel layout (2.0, 5.1, mono…).
+      placeholder: Dolby Digital 1.0 mono
+    validations:
+      required: false
+
+  - type: textarea
+    id: what
+    attributes:
+      label: Anything else
+      description: Whether a message appeared, whether it is the whole disc or one title, what you have tried.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Did this work in an earlier version?
+      options:
+        - "Don't know / never tried it before"
+        - "No — this is the first version I have tried"
+        - "Yes — it worked in an earlier version"
+    validations:
+      required: false
+
+  - type: textarea
+    id: bundle
+    attributes:
+      label: Repro bundle
+      description: Drag the `dvdreport-*.zip` here if you were able to make one.
+    validations:
+      required: false
