@@ -10,13 +10,14 @@ additive** — adding it never changes how anything already working behaves.
 | Flat `.VOB` / `.mpg` / `.m2v` stream | &#10003; | &#10003; | &#10003; |
 | Video CD / SVCD (bin/cue) | &#10003; | &#10003; | &#10003; |
 | Disc menus, navigation, subtitles, chapters, angles | &#10003; | &#10003; | &#10003; |
-| Audio decode + IEC 61937 passthrough | &#10003; | &#10003; | &#10003; |
+| Audio decode to stereo (AC-3, MP2, LPCM) | &#10003; | &#10003; | &#10003; |
+| **Bitstream passthrough over optical S/PDIF** | &#10003; | &#10003; | &#10003; |
+| **Bitstream passthrough over HDMI** — *DD/DTS 5.1, no I/O board* | no | &#10003; | &#10003; |
 | Analog/CRT output, closed captions, HUD, seeking | &#10003; | &#10003; | &#10003; |
 | **Physical disc — unencrypted** | no | &#10003; | &#10003; |
 | **Physical disc — CSS-encrypted** *(most commercial discs)* | no | no | &#10003; |
 | **CSS-encrypted ISO** — *no optical drive needed* | no | no | &#10003; |
 | Recovered-key caching (slow only on first play) | — | — | &#10003; |
-| `set_dvd_region.sh` does anything useful | — | — | physical discs only |
 
 ## The three pieces
 
@@ -54,6 +55,21 @@ not part of MiSTer — it is loaded at runtime from a copy you provide, which th
     disk image is markedly faster than from a physical drive, because the process is
     seek-heavy and random reads from a file beat optical seek latency.
 
+!!! tip "5.1 over HDMI needs `MiSTer_DVDcss` but **not** libdvdcss"
+    The mirror image of the case above. IEC 61937 bitstream rides inside an ordinary
+    2-channel/48 kHz stream, which is exactly what the DE10-Nano's single wired audio line
+    to the HDMI transmitter carries — so **Dolby Digital and DTS 5.1 reach a receiver over
+    HDMI with no Digital I/O board at all**.
+
+    It needs the custom Main because the HDMI transmitter's configuration is only reachable
+    from the ARM side: the core will not emit a bitstream over HDMI without an
+    acknowledgement that only `MiSTer_DVDcss` sets, after checking the display's EDID. That
+    is a safety interlock, not a licensing one — a bitstream sent to a sink still expecting
+    PCM is full-scale noise.
+
+    **Optical S/PDIF passthrough needs none of this** and works on the bare `.rbf`. See
+    [Bitstream passthrough](../audio/passthrough.md).
+
 !!! info "What happens without libdvdcss"
     An encrypted disc or image shows **`CSS ENCRYPTED`** on screen and mutes the audio.
     Video keeps playing, so the disc is still identifiable — it does not green-screen with
@@ -69,6 +85,10 @@ this page.
 the rip gives you an image that plays on the bare core with no key step ever; leaving it
 encrypted needs all three pieces but makes ripping quicker and simpler.
 [Discs and images](discs-and-images.md) walks through both.
+
+**5.1 audio to an AV receiver over HDMI** — the `.rbf` and `MiSTer_DVDcss`. No libdvdcss
+needed unless your discs are also encrypted. Over optical S/PDIF instead, the bare `.rbf`
+is enough.
 
 **Playing the physical disc itself** — all three pieces, plus a USB optical drive. Also
 consider [setting the drive's region](../formats/physical-discs.md#set-the-drive-region),

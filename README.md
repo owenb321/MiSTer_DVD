@@ -50,8 +50,8 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/), PTS-driven A/V sync.
 - **Audio** — AC-3 (every channel mode) and MP2 and LPCM decoded
   [entirely in fabric](https://owenb321.github.io/MiSTer_DVD/audio/formats/); AC-3 and DTS as
-  [IEC 61937 bitstream](https://owenb321.github.io/MiSTer_DVD/audio/passthrough/) to a receiver over optical *or*
-  HDMI, so 5.1 needs no add-on board.
+  [IEC 61937 bitstream](https://owenb321.github.io/MiSTer_DVD/audio/passthrough/) to a receiver — over optical S/PDIF,
+  or over HDMI with the custom Main, so 5.1 needs no add-on board.
 - **Analog / CRT** — a native 15 kHz 480i/576i raster alongside the progressive one, so
   [a CRT and HDMI work at once](https://owenb321.github.io/MiSTer_DVD/video/analog-crt/). Engages from `MiSTer.ini`
   like any other core.
@@ -68,6 +68,8 @@ serves SD blocks through the standard framework interface.
   need `MiSTer_DVDcss` plus a user-supplied libdvdcss.
 - **ISO9660 only** — UDF-only images report `UNSUPPORTED IMAGE`.
 - **No DTS decode** — passthrough to a receiver only.
+- **Bitstream passthrough over HDMI needs `MiSTer_DVDcss`**; over optical S/PDIF the
+  bare `.rbf` is enough.
 - **Closed captions are analog-only** and need a television that decodes them. Roughly
   1 disc in 6 carries any.
 - **Interactive DVD games are incomplete.** Film and TV discs are the supported path.

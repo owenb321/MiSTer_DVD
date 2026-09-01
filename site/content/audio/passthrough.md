@@ -20,6 +20,11 @@ exactly what the DE10-Nano's single wired audio line to the HDMI transmitter car
 **5.1 over HDMI needs no add-on board at all** — just the custom Main and a receiver that
 advertises AC-3/DTS support in its EDID.
 
+!!! warning "HDMI bitstream needs `MiSTer_DVDcss`"
+    Optical S/PDIF passthrough works on the bare `.rbf`. **Over HDMI it does not** — see
+    [What you need](../getting-started/what-you-need.md). Nothing else about passthrough
+    changes; the same `Audio Out` toggle drives both outputs.
+
 !!! info "Why HDMI needs the custom Main"
     Sending a bitstream to a device still expecting PCM produces full-scale noise. The
     HDMI transmitter's configuration is only reachable from the ARM side, so the core
@@ -48,6 +53,33 @@ Toggle **`SPDIF Byte Order`** (Normal / Swap). Payload byte order is the classic
 here — the receiver correctly identifies "Dolby Digital" from the stream's header but
 cannot make sense of the payload, so it hisses. It is a runtime toggle for exactly this
 reason.
+
+## Controlling the HDMI path from `MiSTer.ini`
+
+By default the core engages the HDMI bitstream only when the display's EDID advertises
+AC-3/DTS support. That is the safe behaviour, but sinks do misreport — **especially over
+ARC** — so there is an override:
+
+```ini
+[DVD]
+main=MiSTer_DVDcss
+
+; HDMI bitstream for Audio Out = Passthru.
+;   0 = auto  (default) engage only when the sink's EDID advertises AC-3/DTS
+;   1 = off   never engage; HDMI behaves as it did before
+;   2 = force engage regardless of EDID
+dvd_hdmi_bitstream=0
+```
+
+Use **`2` (force)** when you know your receiver handles Dolby Digital or DTS but the core
+is not engaging — a receiver reached over ARC often does not advertise its capabilities
+correctly. Use **`1` (off)** to rule the HDMI path out entirely while diagnosing something
+else.
+
+!!! tip "Finding out what it decided"
+    The custom Main writes `/tmp/dvd_hdmi_audio.log` with the stage-by-stage result —
+    what the EDID said, whether the bitstream path engaged, and why not if it did not.
+    That is the first thing to read when HDMI passthrough is silent.
 
 ## Track changes and startup
 

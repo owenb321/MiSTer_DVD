@@ -75,6 +75,24 @@ Toggle **`SPDIF Byte Order`** (Normal / Swap). The receiver is reading the strea
 correctly but the payload byte order is wrong for it. This is the classic passthrough
 failure and is a runtime toggle for that reason.
 
+### No audio over HDMI in Passthru, but optical works
+
+**HDMI bitstream needs `MiSTer_DVDcss`.** On the stock Main the core deliberately will not
+emit a bitstream over HDMI — see [What you need](../getting-started/what-you-need.md).
+
+If the custom Main *is* installed and HDMI is still silent, the core is probably not
+engaging because your receiver's EDID does not advertise AC-3/DTS. Receivers reached over
+**ARC** frequently misreport this. Force it in `MiSTer.ini`:
+
+```ini
+[DVD]
+main=MiSTer_DVDcss
+dvd_hdmi_bitstream=2      ; 0=auto (default), 1=off, 2=force
+```
+
+Read `/tmp/dvd_hdmi_audio.log` to see what it decided and why — it records the EDID result
+and each stage of the handoff.
+
 ### The receiver shows "decoder off" during menus
 
 Expected on a menu with no background audio — there is no bitstream to carry during
