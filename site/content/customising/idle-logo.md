@@ -1,7 +1,14 @@
 # Idle logo
 
 When the core is loaded with nothing mounted, a **bouncing logo screensaver** plays behind
-the file picker. You can replace it with your own artwork.
+the file picker. This is the built-in default:
+
+<figure markdown="span">
+  ![The default idle logo: an optical-disc glyph beside a "MiSTer DVD" wordmark](../assets/img/default-logo.png){ width="512" }
+  <figcaption>The built-in logo. It cycles through a palette on each bounce.</figcaption>
+</figure>
+
+You can replace it with your own artwork.
 
 ## Where the file goes
 
@@ -70,14 +77,6 @@ or from `--colour`, not from the source artwork.
 
 Use your own artwork. The oval-with-"DVD" mark is a trademark of the DVD Format/Logo
 Licensing Corporation. Plain "DVD" letterforms are descriptive and fine.
-
-<!-- SCREENSHOT idle-logo.png — the bouncing logo on the idle screen, custom artwork.
-     Save to site/content/assets/img/idle-logo.png. Replace this comment with:
-     <figure markdown="span">
-       ![A custom logo on the idle screen](../assets/img/idle-logo.png){ width="640" }
-       <figcaption>A custom boot.rom bouncing on the idle screen.</figcaption>
-     </figure>
--->
 
 ## Related
 

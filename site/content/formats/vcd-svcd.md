@@ -27,7 +27,7 @@ SVCD's 480-wide picture fills the screen on both HDMI and the analog CRT output.
 
 ## Limitations
 
-VCD support is deliberately basic playback, and the reason is worth knowing: **it came
+VCD support is deliberately basic playback, the reason being: **it came
 almost free.** MPEG-1 video and MP2 audio are both DVD-Video-legal formats, so they were
 implemented to meet the DVD specification rather than for VCDs. Once they existed, playing a
 VCD needed only the CD sector deblocking and an MPEG-1 system-stream demux on top — so it
@@ -44,11 +44,3 @@ was added. Nothing beyond that was built:
   25 fps.
 - **The HUD shows no time** in linear playback modes, since there is no navigation
   structure to read chapter and title times from.
-
-## Older conversion route
-
-`tools/vcd_to_vob.sh` in the repository converts a VCD to a DVD-spec `.vob` on a PC. It
-still works but is **no longer necessary** — direct playback supersedes it.
-
-`tools/make_mpeg1_test.sh` transcodes any video file into a DVD-spec MPEG-1/MP2 `.vob`,
-which remains useful for getting arbitrary content onto the core.

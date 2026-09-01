@@ -61,6 +61,11 @@ development build. Anything not in the newest release gets:
 The announcement bar carries the released version from `extra.released_version` in
 `mkdocs.yml`. The release process bumps it and sweeps out the stale admonitions.
 
+**`assets/img/default-logo.png` is generated, not drawn.** It is a copy of
+`tools/idle_logo_preview.png`, which `tools/idle_logo.py` regenerates from the built-in art
+alongside `dvd/idle_logo.mem`. If the default logo ever changes, re-run the tool and copy
+the preview across, or the manual will show art the core no longer draws.
+
 **Prose must never depend on an image.** No "as shown below", no "the highlighted row".
 There are no screenshots in the repo yet; every page has to read correctly with none, so
 that adding one later is an insertion rather than a rewrite. Placeholders are marked with
