@@ -71,6 +71,11 @@ Press **B7** to cycle audio tracks. The disc's default may be:
 
 `AUDIO UNSUPPORTED` on screen means exactly this.
 
+If none of those fit — a track is silent with no message, or cycling lands on the wrong
+language — the fault is likely in how the disc maps tracks to soundtracks, which lives in
+its navigation tables. A [repro bundle](reporting-a-bug.md) captures those, so that report
+can be reproduced without the disc.
+
 ### Menu audio went silent
 
 You changed the audio track while the menu was open. It comes back when you leave the menu.
@@ -173,8 +178,10 @@ with zero contrast, which is intentional on their part.
 working menu. Occasional occurrences are harmless.
 
 If a disc is consistently unnavigable, it is worth
-[reporting](compatibility.md#reporting-a-disc-that-does-not-work) — especially a film or TV
-disc, since interactive games are known-incomplete.
+[reporting](reporting-a-bug.md) — especially a film or TV disc, since interactive games are
+known-incomplete. A menu problem can be reproduced from the disc's navigation tables
+alone, so a [repro bundle](reporting-a-bug.md#menus-titles-and-audio-tracks-send-a-repro-bundle)
+makes that report actionable without the disc.
 
 **Workaround:** set **`Disc Menus` = `Off`** to skip navigation and auto-play the main
 feature.

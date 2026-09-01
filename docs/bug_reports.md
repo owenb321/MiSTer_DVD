@@ -1,7 +1,9 @@
 # Navigation bug reports — the sparse-sector repro bundle
 
 **Status: ✅ implemented (`tools/dvd_report.py`), validated across 23 library discs.
-User-facing entry point is the README's "Reporting a navigation bug" section.**
+User-facing entry point is the manual page `site/content/reference/reporting-a-bug.md`
+(Reference → Reporting a bug); the README is a landing page and deliberately does not
+carry this.**
 
 ## Why this exists
 

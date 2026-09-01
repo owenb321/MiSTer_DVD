@@ -1372,7 +1372,8 @@ offset found ZERO packs and reported success), and the tool is **deliberately
 self-contained** — a reporter downloads one file, not a checkout, so it duplicates
 a small ISO9660 walk instead of importing `IsoNav`. Scope is nav only; video-side
 bugs (subpicture, CC, cadence, lip-sync) report in prose. User-facing entry:
-README "Reporting a navigation bug". Design: **`docs/bug_reports.md`**.
+the MANUAL page `site/content/reference/reporting-a-bug.md` (Reference → Reporting a
+bug) — NOT the README, which is a landing page. Design: **`docs/bug_reports.md`**.
 
 ### No USB DVD-ROM drive support
 MiSTer's custom Linux kernel almost certainly lacks `sr_mod` (`CONFIG_BLK_DEV_SR`).

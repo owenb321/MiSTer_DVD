@@ -137,6 +137,7 @@ nav:
   - Reference:
       - Compatibility: reference/compatibility.md
       - Troubleshooting: reference/troubleshooting.md
+      - Reporting a bug: reference/reporting-a-bug.md
   - About:
       - Building from source: about/building.md
       - Acknowledgements: about/acknowledgements.md

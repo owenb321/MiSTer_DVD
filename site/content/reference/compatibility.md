@@ -100,13 +100,13 @@ the receiver re-acquires in under a second when audio returns.
 
 ## Reporting a disc that does not work
 
-[Open an issue](https://github.com/owenb321/MiSTer_DVD/issues) with:
+[Open an issue](https://github.com/owenb321/MiSTer_DVD/issues) with the core version from
+the OSD, the disc title and region, what happens and where, and any
+[on-screen message](../playback/on-screen-messages.md).
 
-- The **core version** from the OSD — the `v0.3.0 260901` line
-- The disc title and region
-- What happens, and where — does it boot, reach a menu, start the feature?
-- Any [on-screen message](../playback/on-screen-messages.md)
-- Whether it is a physical disc, a decrypted image, or an encrypted image
+If the trouble is with **menus, titles or audio tracks**, you can also send the disc's
+navigation tables as a sub-100 KB file, which makes the problem reproducible without the
+disc — see [Reporting a bug](reporting-a-bug.md).
 
 Interactive/game discs are known-incomplete, so those reports are useful but expected. A
 **film or TV disc** that does not play properly is the more surprising case and worth
