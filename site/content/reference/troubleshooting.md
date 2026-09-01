@@ -100,10 +100,16 @@ dvd_hdmi_bitstream=2      ; 0=auto (default), 1=off, 2=force
 Read `/tmp/dvd_hdmi_audio.log` to see what it decided and why — it records the EDID result
 and each stage of the handoff.
 
-### The receiver shows "decoder off" during menus
+### The receiver shows "decoder off" during silent menus or gaps
 
-Expected on a menu with no background audio — there is no bitstream to carry during
-authored silence. It re-acquires in under a second when audio returns.
+**Expected, and there is currently no fix.** Where the disc authors silence there is no
+bitstream to send, and a receiver holds its lock only on real data — both possible fillers
+were tested on a real receiver and neither works. It re-acquires in under a second when
+audio returns, and many set-top players behave the same way. See
+[Authored silence](../audio/passthrough.md#authored-silence-drops-the-receiver-out-of-dolbydts).
+
+If instead the dropouts happen at a **title start** or on a **track change**, that is a
+different, already-fixed bug — update to a newer build.
 
 ## Picture problems
 

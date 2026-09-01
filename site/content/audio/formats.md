@@ -29,10 +29,7 @@ If a track plays silent and shows `AUDIO UNSUPPORTED`, cycle to another with **B
 
 MPEG-1 Layer II, at 32, 44.1 and 48 kHz.
 
-It is a DVD-legal audio format and was used on some early PAL-region discs, but it is
-**rare in practice** — a census of 124 discs in the development library found AC-3 on every
-single one and MPEG audio on none. It is included because the DVD specification permits it
-and a disc carrying it should not be silent, not because you are likely to meet one.
+It is a DVD-legal audio format and was used on some early PAL-region discs. It is included because the DVD specification permits it.
 
 On **Video CD and SVCD** it is the opposite: MP2 is the only audio format those use, so
 every VCD depends on it.
