@@ -147,13 +147,32 @@ class IsoWalk(object):
     def __init__(self, path):
         self.path = path
         self.f = open(path, "rb")
-        self.file_size = os.path.getsize(path)
+        self.file_size = self._size(path)
         self.vd_lbas = []        # volume descriptor sectors
         self.dir_spans = []      # (lba, nsec) for root + VIDEO_TS
         self.ifo = {}            # NAME -> (lba, length)
         self.menu_vob = {}       # vts -> (lba, length); 0 = VIDEO_TS.VOB
         self.title_vob = {}      # vts -> [(lba, length), ...]
         self._walk()
+
+    def _size(self, path):
+        """Byte size of an image file OR a block device (/dev/sr0).
+
+        os.path.getsize() returns 0 for a device node, which would poison
+        image_bytes and so the size of the reconstruction. Seek to the end
+        instead; if even that fails, the caller falls back to the PVD's own
+        volume_space_size, which is the disc's true size anyway.
+        """
+        try:
+            n = os.path.getsize(path)
+            if n:
+                return n
+        except OSError:
+            pass
+        try:
+            return self.f.seek(0, os.SEEK_END) or 0
+        except OSError:
+            return 0
 
     def sec(self, n):
         self.f.seek(n * SEC)
@@ -464,6 +483,16 @@ def cmd_make(args):
             **{k: v for k, v in summ.items() if k != "volume_sectors"},
         },
         "settings_cfg": read_cfg(args.cfg),
+        # Present only when the bundle was generated on the player itself,
+        # where the Main knows things a reporter cannot state from memory:
+        # the exact sector being served when the problem was seen, and the
+        # live status word (= the OSD settings, without hunting for the CFG).
+        "player": None if not (args.lba is not None or args.status
+                               or args.generated_on) else {
+            "generated_on": args.generated_on,
+            "lba": args.lba,
+            "status_hex": args.status,
+        },
         "includes_nav_packs": bool(args.nav_packs),
         "sector_count": n_sec,
         "content_audit": {
@@ -594,6 +623,13 @@ def cmd_info(args):
     if man.get("settings_cfg"):
         print("settings     %s = %s"
               % (man["settings_cfg"]["file"], man["settings_cfg"]["hex"]))
+    pl = man.get("player")
+    if pl:
+        print("generated on %s" % (pl.get("generated_on") or "?"))
+        if pl.get("lba") is not None:
+            print("playhead     sector %d" % pl["lba"])
+        if pl.get("status_hex"):
+            print("status word  %s  (live OSD settings)" % pl["status_hex"])
     for k in ("symptom", "expected", "steps"):
         if man.get(k):
             print("%-12s %s" % (k, man[k]))
@@ -626,6 +662,14 @@ def main():
                             "(default 512)")
         p.add_argument("--no-prompt", action="store_true",
                        help="do not ask any questions")
+        # Set by MiSTer_DVDcss when it generates a bundle on the player; see
+        # main/support/dvd/dvd_report.cpp and docs/support_bundle_hps.md.
+        p.add_argument("--lba", type=int,
+                       help="sector being served when the problem was seen")
+        p.add_argument("--status",
+                       help="core status word as hex (the live OSD settings)")
+        p.add_argument("--generated-on",
+                       help="where this was generated, e.g. 'mister'")
 
     pm = sub.add_parser("make", help="build a bundle from an ISO")
     add_make(pm)
@@ -644,6 +688,23 @@ def main():
     argv = sys.argv[1:]
     if argv and argv[0] not in ("make", "unpack", "info", "-h", "--help"):
         argv = ["make"] + argv
+    if not argv:
+        # Reached with no arguments -- most likely picked from the MiSTer
+        # Scripts menu, where a script gets no arguments at all. An argparse
+        # usage dump is useless there, so say what this is and how it is used.
+        print("MiSTer DVD -- support bundle builder")
+        print()
+        print("This packages a disc's navigation tables (no video, no audio) so a")
+        print("navigation bug can be reproduced without the disc.")
+        print()
+        print("On the MiSTer: hold Audio + Subtitle for 2 seconds while a disc is")
+        print("playing. The bundle is written to /media/fat/DVD_reports/.")
+        print()
+        print("On a PC:  python3 dvd_report.py MY_DISC.iso")
+        print()
+        print("https://owenb321.github.io/MiSTer_DVD/reference/reporting-a-bug/")
+        return 0
+
     args = ap.parse_args(argv)
     if not getattr(args, "func", None):
         ap.print_help()

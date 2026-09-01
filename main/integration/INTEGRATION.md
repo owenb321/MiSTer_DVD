@@ -185,3 +185,33 @@ main=MiSTer_DVDcss
 ;   2 = force engage regardless of EDID (sinks do mis-report, especially over ARC)
 dvd_hdmi_bitstream=0
 ```
+
+## Steps 22-25 — on-player support bundle
+
+`main/support/dvd/dvd_report.{h,cpp}`. A gamepad chord (Audio + Subtitle, held
+2 s) makes the Main build a navigation support bundle from whatever is mounted
+and write it to `/media/fat/DVD_reports/`. Design, and the alternatives that were
+rejected: `MiSTer_DVD/docs/support_bundle_hps.md`.
+
+| # | File | Edit |
+|---|---|---|
+| 22 | `user_io.cpp` | include `support/dvd/dvd_report.h` |
+| 23 | `user_io.cpp` | `dvd_report_tick()` at the step-7 tick site |
+| 24 | `user_io.cpp` | `dvd_report_joy(map)` at the top of `user_io_digital_joystick()` |
+| 25 | `user_io.cpp` + `user_io.h` | `user_io_last_lba(int index)` accessor |
+
+Notes that matter on a `MAIN_MISTER_REF` bump:
+
+- **Step 24 observes only.** It reads `map` and never writes it, so the chord's
+  buttons still reach the core and a bug here cannot stop a button working. Do
+  not "improve" it into masking the chord bits — that trades a harmless
+  double-action for the risk of breaking input outright, and it would swallow a
+  legitimate fast double-press.
+- **Step 25 is anchored on the end of the `buffer_lba[16]` initialiser**, i.e. the
+  line `ULLONG_MAX,ULLONG_MAX,ULLONG_MAX,ULLONG_MAX };`. If stock reformats that
+  array the anchor breaks loudly, which is correct — the accessor must sit after
+  the declaration it reads.
+- **No Makefile edit is needed.** `CPP_SRC` already has
+  `$(wildcard ./support/*/*.cpp)`.
+- The work forks; it must never run inline in the poll loop, which also services
+  SD blocks for the core.

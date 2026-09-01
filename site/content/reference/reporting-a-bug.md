@@ -63,6 +63,22 @@ python3 dvd_report.py MY_DISC.iso --nav-packs
     path from your computer. `python3 dvd_report.py info <zip>` prints back everything a
     bundle holds, any time.
 
+### Or make one on the MiSTer itself
+
+!!! info "Unreleased"
+    Available in development builds; not in v0.3.0. Needs `MiSTer_DVDcss`.
+
+While a disc is playing, **hold Audio + Subtitle together for two seconds**. The player
+writes a bundle to `/media/fat/DVD_reports/` and tells you the filename on screen. Copy it
+off the SD card and attach it to the issue.
+
+This works for **physical discs** as well as images, and it needs no PC. It also records
+something the PC route cannot: the exact point on the disc you were at when you pressed it,
+which for a menu problem is usually the whole answer.
+
+Holding those two buttons also steps the audio track and the subtitle track once each —
+that is expected, and pressing them again puts things back.
+
 The bundle is built from an image file, so this path needs a rip on a PC — encrypted or
 decrypted, either works. If you only ever play physical discs, describe the problem
 instead; that is still a useful report.

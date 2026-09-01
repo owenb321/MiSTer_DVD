@@ -26,4 +26,10 @@
 // No-op on non-DVD cores and while nothing changes.
 void dvd_phys_tick(void);
 
+// The /dev/srN node of the disc currently mounted by this module, or NULL when
+// nothing is mounted. Exported for dvd_report.cpp, which hands it to
+// tools/dvd_report.py: every sector that tool reads is one CSS never scrambles,
+// so a support bundle can be built straight off the drive with no decryption.
+const char *dvd_phys_device(void);
+
 #endif
