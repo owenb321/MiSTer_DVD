@@ -1790,6 +1790,39 @@ every one of them — the trail is worth more than the clone size. Note the larg
 
 **Remaining: the final soak** (film + TV + one game disc on shipping defaults), then tag.
 
+## User bug reports — repro bundles (2026-09-01) — ⏳ HW-confirm pending (chord only)
+
+**Branch `feature/bug-report-bundle`; design in `docs/bug_reports.md` +
+`docs/support_bundle_hps.md`; user-facing page `site/content/reference/reporting-a-bug.md`.**
+
+The project is public and the discs that break it are discs we do not own. A nav bug
+needs only the IFO tables — ~0.005% of an image — so `tools/dvd_report.py` packages
+them into a 36–100 KB zip that reconstructs to a **sparse ISO at the original LBAs**,
+which every existing nav tool reads unmodified and which matches the `*_meta.hex`
+testbench idiom (so a submission is already fixture-shaped).
+
+- ✅ **PC route** — validated 23/23 discs across the library: `iso_nav_check.py` output
+  byte-identical between original and reconstruction (up to 9,143 lines), plus
+  `dvd_vm_ref.py boot`/`menu`, `dvd_census.py`, `nav_extract.py`.
+- ✅ **Works on an ENCRYPTED rip** — verified on a real CSS disc (FAIRYTOPIA, ~19% of
+  sampled packs scrambled): identical nav output, so asking a user for a bundle never
+  asks them to decrypt anything.
+- ✅ **Content guarantee is enforced, not promised** — `audit()` refuses to write a
+  bundle if any gathered sector carries elementary stream data; proven RED against a
+  real title-VOB sector (`0xE0`).
+- ⏳ **On-player route** — Audio + Subtitle held 2 s makes `MiSTer_DVDcss` build a bundle
+  from whatever is mounted (image or drive) into `/media/fat/DVD_reports/`. Uniquely
+  captures `buffer_lba`, i.e. where playback actually was. Integration steps 22–25.
+  **Not hardware-confirmed:** chord timing, `InfoMessage` during playback,
+  fork-under-load, and reading `/dev/srN` while `dvd_css` holds the drive.
+- ✅ **Intake** — six GitHub issue forms split by the evidence a report needs, and a
+  `field-report` skill that turns a pasted/screenshotted Discord report into a tracked
+  issue (most users will never open one themselves).
+
+Next: the HW gate on the chord, then decide whether the audio-silence route is pulling
+its weight — the acmod census says 11 discs have an unsupported DEFAULT track, so that
+form should see traffic early.
+
 ## Test Media Recommendations
 
 > **✅ HW-CONFIRMED 2026-08-18 (PR fj#165): authored cell duration ("real-player cell

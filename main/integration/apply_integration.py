@@ -382,7 +382,11 @@ u = insert_after(u, 'dvd_hdmi_audio_tick();  // ADV7513 non-PCM mode + the cfg[1
 # 24. observe the gamepad for the chord. Placed at the TOP of the function, and
 # it only reads `map` - the map is passed to the core unchanged, so a bug here
 # cannot stop a button working.
-u = insert_after(u, 'void user_io_digital_joystick(unsigned char joystick, uint32_t map, int newdir)\n{',
+# NOTE the anchor is the function's FIRST BODY LINE, not its signature.
+# insert_after() splits on the first newline AFTER the anchor, so a two-line
+# 'signature\n{' anchor lands the call BETWEEN the signature and its brace --
+# which compiles as "expected initializer before 'dvd_report_joy'".
+u = insert_after(u, '\tuint8_t joy = (joystick>1 || !joyswap) ? joystick : joystick ^ 1;',
     '\tdvd_report_joy(map);   // dvd:report — observe only, never modifies map\n',
     24, 'dvd_report_joy(map)')
 

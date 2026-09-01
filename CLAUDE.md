@@ -1375,6 +1375,33 @@ bugs (subpicture, CC, cadence, lip-sync) report in prose. User-facing entry:
 the MANUAL page `site/content/reference/reporting-a-bug.md` (Reference → Reporting a
 bug) — NOT the README, which is a landing page. Design: **`docs/bug_reports.md`**.
 
+**★ AND FROM THE PLAYER ITSELF — a gamepad chord (2026-09-01, `MiSTer_DVDcss`;
+⏳ HW-confirm pending).** Hold **Audio + Subtitle 2 s** and the Main writes a bundle
+for whatever is mounted — image OR optical drive — to `/media/fat/DVD_reports/`.
+★ **The Main SHELLS OUT to `tools/dvd_report.py`, it does not reimplement the
+collector** (python3 is on stock MiSTer; a C++ copy would drift, audit and
+self-check included) — and that is also what DISSOLVED the old Scripts-menu
+blocker: "no arguments, gamepad gives only arrows/Enter" stops mattering when the
+Main already knows what is mounted and passes it as an argument. ★★ **A chord, not
+an OSD row, because a `CONF_STR` entry changes the netlist and RE-ROLLS THE PINNED
+FITTER SEED** — a one-line menu addition is not a one-line change in this project.
+⚠ `dvd_report_joy()` **observes `map` and never modifies it**: masking the chord
+bits would mean a detection bug could stop buttons working, and would swallow a
+fast double-press — the accepted cost is that the chord also steps audio/subtitle
+once each (why B7/B8, not the transport buttons, where a stray seek would linger).
+⚠ **The work FORKS** — `dvd_report_tick()` shares the poll loop with SD block
+service, so inline work would starve the core mid-playback; feedback rides Main's
+own `InfoMessage()`, so no RTL change was needed for it either. Uniquely captures
+`buffer_lba` = **where playback actually was**, which a reporter can never state
+from memory. ⚠ **The DE10-Nano has NO battery-backed RTC** — an on-player bundle
+from a never-networked MiSTer carries an epoch date in its filename AND
+`created_utc`; unique per session, not trustworthy as a sequence
+(`player.generated_on == "mister"` marks them). Integration steps 22–25.
+⚠ **`main/build_main.sh` used to copy the overlay as a HAND-MAINTAINED FILE LIST**
+and silently omitted the new module — it now globs `support/dvd/*`; the failure
+surfaced far away as a missing-header error in `user_io.cpp`.
+Design: **`docs/support_bundle_hps.md`**.
+
 ### No USB DVD-ROM drive support
 MiSTer's custom Linux kernel almost certainly lacks `sr_mod` (`CONFIG_BLK_DEV_SR`).
 Recompiling the kernel is out of scope. Workflow: rip disc to ISO on PC, copy to SD card,
