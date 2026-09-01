@@ -1,0 +1,81 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'mkdocs.yml'
+      - 'tools/docs_check.py'
+      - 'dvd/emu.sv'          # CONF_STR is the OSD contract the manual is checked against
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'site/**'
+      - 'mkdocs.yml'
+      - 'tools/docs_check.py'
+      - 'dvd/emu.sv'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# Least privilege by default; the deploy job adds only what it needs.
+permissions:
+  contents: read
+
+# Keyed on ref so a PR build never queues behind a main deploy. Never cancel a
+# deployment mid-flight; PR builds are cheap to cancel.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build the manual
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: site/requirements.txt
+
+      - name: Install MkDocs Material
+        run: pip install -r site/requirements.txt
+
+      # The OSD is the contract: every option, gamepad button and file extension
+      # in dvd/emu.sv's CONF_STR must be documented. This is why dvd/emu.sv is in
+      # the paths filter above — adding an option without documenting it must
+      # fail even when no doc file was touched.
+      - name: Check the manual against the OSD definition
+        run: python3 tools/docs_check.py
+
+      # --strict turns a broken cross-link into a build failure. Same command the
+      # maintainer runs locally before committing.
+      - name: Build
+        run: mkdocs build --strict
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .site-build
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

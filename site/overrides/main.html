@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+
+{#
+  Announcement bar: the manual is built from `main`, so it documents the
+  development build, while nearly every reader is running the latest release.
+  `released_version` lives in mkdocs.yml `extra:` and is bumped by the release
+  process. Without this, someone reads about an option their .rbf does not have
+  and files a bug.
+#}
+{% block announce %}
+  This manual documents the current <strong>development build</strong>.
+  The latest release is
+  <a href="https://github.com/owenb321/MiSTer_DVD/releases/latest"><strong>v{{ config.extra.released_version }}</strong></a>.
+  Features marked <em>Unreleased</em> are not in it yet.
+{% endblock %}

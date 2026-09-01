@@ -49,18 +49,73 @@ leave enough hints to pick up cleanly:
   name the relevant files/modules/testbenches so they're easy to locate.
 - Keep `docs/roadmap.md` current — it's the canonical "what's next" across sessions.
 
-### ★ Keep README.md current (mandatory — it is the user-facing contract)
+### ★ Keep the user-facing docs current (mandatory — README.md + `site/` are the contract)
 
-`README.md` states what the core does and doesn't do — "What works", "Known
-limitations", supported formats/resolutions, tools, controls, settings, on-screen
-messages, acknowledgements. **Whenever a change invalidates or adds to any statement in
-the README, update the README in the SAME change.** A README that still lists a shipped
-feature as a limitation (or vice versa) misleads every user and evaluator who reads it
-— treat it exactly like a stale status marker: a documentation bug, fix on sight.
-Concrete triggers: a new codec/format/resolution, a limitation removed or discovered, a
-new user-facing tool in `tools/`, new OSD settings or buttons, new on-screen messages,
-new external references worth acknowledging. (Instituted 2026-08-24 after the MPEG-1/MP2
-feature landed while the README still said "MPEG-1 video is not supported".)
+There are now **three** documentation surfaces with three different jobs. Putting text in
+the wrong one is itself a documentation bug:
+
+- **`README.md`** — the landing page. What the core is, honest status, how this was built,
+  a 3-step quick start, licensing, and where to read more. Deliberately short (~155 lines).
+  **It is not the manual — do not grow it back.**
+- **`site/content/`** — the **user manual**, published to
+  <https://owenb321.github.io/MiSTer_DVD/> by `.github/workflows/docs.yml` on every push to
+  `main` that touches `site/**`, `mkdocs.yml`, `tools/docs_check.py` or `dvd/emu.sv`.
+  Every user-visible detail lives here: controls, every OSD setting, on-screen messages,
+  analog/CRT modes, closed captions, audio passthrough, VCD/SVCD, physical discs,
+  compatibility, troubleshooting.
+- **`docs/`** — engineering design notes. **NOT published, NOT user documentation.** Never
+  send a user from README or the manual into `docs/` as if it were a manual page. When a
+  `docs/` note contains genuinely user-facing material, *harvest* those sentences into
+  `site/content/` — the note keeps its own copy for the engineering context.
+
+**Whenever a change invalidates or adds to a user-visible statement, update the manual page
+in the SAME change** — and the README too if it touches something the README still states
+(the feature list, the six headline limitations, the install steps). A page that lists a
+shipped feature as a limitation, or vice versa, misleads every user and evaluator who reads
+it: treat it exactly like a stale status marker — a documentation bug, fix on sight.
+
+| Change | Update |
+|---|---|
+| New codec / format / resolution | `reference/compatibility.md`, `audio/formats.md`; README "What works" if headline |
+| Limitation removed or discovered | `reference/compatibility.md`; README bullet if headline |
+| New or changed OSD option | `playback/settings.md` — **enforced by `tools/docs_check.py`** |
+| New gamepad button | `playback/controls.md` — **enforced** |
+| New accepted file extension | `getting-started/loading.md` — **enforced** |
+| New on-screen message string | `playback/on-screen-messages.md` **and** `reference/troubleshooting.md` |
+| New user-facing tool in `tools/` or `main/Scripts/` | its owning page (e.g. `customising/idle-logo.md`, `formats/physical-discs.md`) |
+| New install step or release asset | `getting-started/install.md`, `getting-started/what-you-need.md`, README quick start |
+| New external reference worth crediting | `about/acknowledgements.md` |
+
+**Two checks, run both before committing anything under `site/content/` or touching
+`CONF_STR`:**
+
+```bash
+python3 tools/docs_check.py     # OSD options/buttons/extensions <-> manual parity
+mkdocs build --strict           # broken cross-link = build failure
+```
+
+CI runs exactly these. `dvd/emu.sv` is in the workflow's `paths:` filter precisely so that
+adding an OSD option without documenting it fails **even when no doc file was touched**.
+
+⚠ `tools/docs_check.py` parses the `CONF_STR` block by walking to its matching brace and
+stripping comments. Do **not** "simplify" it to a grep: `emu.sv` carries commented-out
+CONF_STR history further down the file (a retired `Direct Video` row among others), and a
+loose grep invents options that do not exist. That mistake was made by hand while writing
+the manual and nearly shipped three fictional OSD settings.
+
+**Mark unreleased features.** The site is built from `main`, so it documents the
+development build while readers run a release. Anything not yet released gets an
+`!!! info "Unreleased"` admonition, and `extra.released_version` in `mkdocs.yml` drives the
+announcement bar. The release process bumps it and sweeps the stale admonitions.
+
+**Authoring rules** (full set in `site/README.md`): keep `.md` extensions on cross-links so
+pages resolve in MkDocs *and* natively on GitHub; links to repo files must be absolute
+`https://github.com/owenb321/MiSTer_DVD/blob/main/…` URLs, because `strict` rejects
+anything escaping `docs_dir`; prose must never depend on an image.
+
+(Instituted 2026-08-24 after the MPEG-1/MP2 feature landed while the README still said
+"MPEG-1 video is not supported". Extended 2026-09-01 when the manual moved to `site/` and
+the parity check made the OSD surface mechanically enforced.)
 
 ### ★ Update status markers when a feature completes (mandatory — a stale marker is a bug)
 
@@ -88,23 +143,43 @@ and misdirected a "what's next?" session. To prevent recurrence:
 ```
 MiSTer_DVD/
 ├── CLAUDE.md                  ← you are here
-├── docs/
+├── docs/                      ← ENGINEERING NOTES — not published, NOT the manual
+│   ├── README.md              ← says exactly that, for anyone who browses in
 │   ├── architecture.md        ← full system design & data flow
 │   ├── audio.md               ← AC-3, DTS, LPCM audio strategy
 │   ├── roadmap.md             ← phased implementation plan
 │   └── references.md          ← key repos, specs, libraries
+├── mkdocs.yml                 ← docs_dir=site/content, site_dir=.site-build
+├── site/                      ← USER MANUAL (source, not build output)
+│   ├── content/               ← the manual's markdown — published to GitHub Pages
+│   │   ├── getting-started/   ← install, what-you-need (tier matrix), images, loading
+│   │   ├── playback/          ← controls, settings, on-screen messages
+│   │   ├── video/             ← film 24p, analog/CRT, interlaced, closed captions
+│   │   ├── audio/             ← formats, bitstream passthrough
+│   │   ├── formats/           ← VCD/SVCD, physical discs
+│   │   ├── customising/       ← idle logo (boot.rom)
+│   │   ├── reference/         ← compatibility, troubleshooting
+│   │   ├── about/             ← building from source, acknowledgements
+│   │   └── assets/img/        ← screenshots (drop-in; pages carry placeholders)
+│   ├── overrides/             ← Material partials: announce bar, 404
+│   ├── requirements.txt       ← pinned mkdocs-material
+│   └── README.md              ← local preview + authoring rules
+├── .github/
+│   └── workflows/docs.yml     ← build + deploy the manual on push to main
 ├── rtl/                       ← UPSTREAM: existing mpeg2fpga decoder (do not modify)
 ├── sys/                       ← UPSTREAM: MiSTer framework (do not modify)
 ├── dvd/                       ← YOUR NEW RTL MODULES go here
 │   ├── ps_demux.sv            ← Program Stream demuxer (build this first)
 │   ├── audio_ring.sv          ← Audio frame ring buffer to HPS
 │   └── iec61937_wrap.sv       ← Future: IEC 61937 wrapper for S/PDIF
-├── hps/                       ← YOUR HPS-SIDE C CODE goes here
-│   ├── main.cpp               ← Main HPS program
-│   ├── udf.c                  ← UDF filesystem parser
-│   ├── ifo_parse.c            ← IFO/PGC DVD navigation
-│   ├── audio_decode.c         ← liba52 (AC-3) + libdca (DTS) integration
-│   └── alsa_out.c             ← ALSA write loop → HDMI audio
+├── hps/                       ← RETIRED. The HPS audio daemon's C sources were deleted in
+│                                 the pre-release cleanup; only two stale compiled ARM
+│                                 binaries remain tracked (~1.7 MB). Nothing builds or
+│                                 uses them — candidates for deletion.
+├── main/                      ← MiSTer_DVDcss overlay (custom Main: physical disc + CSS)
+│   ├── support/dvd/           ← drive probe, CSS via libdvdcss, encrypted-image source
+│   ├── Scripts/               ← install_dvdcss.sh, set_dvd_region.sh (ship in releases)
+│   └── build_main.sh          ← fetch stock Main, apply overlay, cross-compile
 ├── bench/
 │   └── dvd/                   ← Simulation testbenches for new modules
 │       ├── ps_demux_tb.sv
@@ -112,6 +187,15 @@ MiSTer_DVD/
 └── .vscode/
     └── settings.json
 ```
+
+> **`docs/` and `site/` are not the same thing and must not be merged.** `docs/` is the
+> engineering record and **keeps its name permanently** — it is referenced ~593 times across
+> 109 files, 194 of those inside RTL and `.qsf` comments, so renaming it would smear a
+> documentation move across the whole hardware tree. `site/` is the user manual. Note that
+> MkDocs' *default* output directory is also called `site/`, which is why `mkdocs.yml` sets
+> `site_dir: .site-build` — never let a build write into `site/`, and **never add a bare
+> `site/` line to `.gitignore`** (the stock MkDocs snippet does exactly that, and it would
+> silently untrack the manual).
 
 **rtl/ may now be modified directly (rule relaxed 2026-06-24, by user decision).**
 The earlier "never modify `rtl/`" rule was dropped: chasing the 256-line strobe needs
