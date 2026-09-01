@@ -1,6 +1,6 @@
 # Settings
 
-Everything here is in the core's OSD. The **first value listed is the default**, and the
+Everything here is in the core's OSD. The **default is shown in bold**, and the
 defaults are chosen to be correct for most setups — on a normal HDMI installation you
 should not need to change anything.
 
@@ -12,7 +12,7 @@ Settings are saved to `/media/fat/config/DVD_v1.CFG` and persist across core rel
 |---|---|---|
 | **Aspect Ratio** | **Auto** / 4:3 / 16:9 | Auto reads the MPEG-2 sequence header, which is what the disc says it is. Override only if a disc is authored wrongly. |
 | **Disc Menus** | **On** / Off | On boots the disc's authored First Play chain and runs its menus, like a set-top player. Off skips navigation entirely and auto-plays the main feature. |
-| **D-Pad Seek** | On / **Off** | Puts fixed-time seeking on the D-pad — see [Controls](controls.md#d-pad-seek). |
+| **D-Pad Seek** | **Off** / On | Puts fixed-time seeking on the D-pad — see [Controls](controls.md#d-pad-seek). |
 | **Audio** | **On** / Off | Master audio enable. |
 | **Audio Out** | **Decode PCM** / Passthru (SPDIF+HDMI) | Decode PCM decodes in fabric and sends stereo. Passthru sends the undecoded bitstream to an AV receiver — see [Bitstream passthrough](../audio/passthrough.md). |
 | **SPDIF Byte Order** | **Normal** / Swap | Applies to *both* bitstream outputs despite the name. If a receiver names the format but plays static, toggle this. |
