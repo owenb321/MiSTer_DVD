@@ -721,7 +721,6 @@ parameter CONF_STR = {
     // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
     // chatters hold/release at burst granularity). Bounded (the hold engages
     // past the bias) and below lip-sync perception. status[52:51].
-    "P1O[52:51],BS Release Bias,Off,10ms,21ms,32ms;",
     // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
     // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
     // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
@@ -2893,7 +2892,6 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .rst_sys_n    (aud_rst_n),
     .enable       (pass_mode),
     .byte_swap    (pass_bswap),
-    .rel_bias     (status[52:51]),   // flap probe: early-release allowance
     .mute_i       (css_scrambled),   // CSS source: drain frames, emit PCM silence
     .ring_byte    (aud_ring_byte),
     .ring_valid   (aud_ring_valid),
@@ -3954,7 +3952,7 @@ end
 //     max_silent_run  = longest consecutive silent-burst run post-acquisition
 //                       (large = long gaps → re-anchor/hold-run shaped; 1-2 =
 //                       single-burst chatter → marginal-due shaped, test the
-//                       BS Release Bias lever).
+//                       drain-watchdog fix).
 //     underrun_bursts = silent bursts with NO frame queued post-acquisition
 //                       (ring starvation, distinct from a pacing hold).
 reg        bsp_seen;                    // a real burst since the last aud_rst_n

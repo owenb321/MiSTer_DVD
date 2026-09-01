@@ -41,15 +41,6 @@ module iec61937_wrap #(
     input  wire        rst_sys_n,
     input  wire        enable,        // passthrough active (else producer idles)
     input  wire        byte_swap,     // 0: first byte in word[15:8]; 1: swapped
-    // Release bias (P1O[52:51], flap probe): allow a frame to be released up to
-    // {0, 10, 21, 32} ms EARLY (90 kHz ticks 0/900/1890/2880). The STC advances
-    // in whole-refresh quanta (~16.7 ms at 59.94 Hz), so an equilibrium sitting
-    // within a quantum of "due" makes the due compare flip refresh to refresh —
-    // a bang-bang release/hold chatter whose every hold is a burst-length gap on
-    // the wire. A bias of one-two quanta absorbs that jitter while still bounding
-    // the audio lead (the hold still engages past the bias), and ≤32 ms early is
-    // below lip-sync perception. Default 0 = shipped behaviour.
-    input  wire [1:0]  rel_bias,
     input  wire        mute_i,        // CSS-scrambled source: consume frames but
                                       // emit PCM silence (scrambled AC-3/DTS sent
                                       // raw = loud noise bursts on the receiver)
@@ -258,16 +249,9 @@ module iec61937_wrap #(
     // hold FILL above - it must never gate hold_frame itself, which is the pacing
     // loop (docs/iec61937.md "one-shot hold gate" records what that cost).
 
-    // Release bias (see the rel_bias port comment): a frame within `bias_ticks`
-    // of due is released rather than held. 0 = exact compare (shipped).
-    wire [11:0] bias_ticks = (rel_bias == 2'd1) ? 12'd900  :
-                             (rel_bias == 2'd2) ? 12'd1890 :
-                             (rel_bias == 2'd3) ? 12'd2880 : 12'd0;
-    wire signed [34:0] head_delta_b = head_delta + {23'd0, bias_ticks};
-
     wire hold_frame = is_codec &&
         ( (sync_armed && !stc_anchored)                              // wait for the anchor
-       || (sync_en && frame_pts_valid && (head_delta_b < 35'sd0)) ); // anchored but not yet due
+       || (sync_en && frame_pts_valid && (head_delta < 35'sd0)) );   // anchored but not yet due
 
     // Deliberate-hold level for the emu drain watchdog (see the port comment).
     // Mute is excluded: muted frames still pop, so they feed the watchdog anyway.
