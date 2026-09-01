@@ -16,6 +16,10 @@ everything needed to turn a decoder into a player.
 > exercised across a library of ~34 commercial discs. Interactive DVD *games* are
 > known-incomplete — see [Known limitations](#known-limitations).
 
+
+📖 **[Read the manual](https://owenb321.github.io/MiSTer_DVD)** — install, controls, every setting, CRT and
+captions, physical discs, troubleshooting.
+
 ## How this was built
 
 The RTL in this repository was written by an LLM working under human direction. The
@@ -35,518 +39,79 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 
 ## What works
 
-**Video** — MPEG-2 decode at full rate, plus MPEG-1 (the DVD spec's other permitted
-video format, 352×240/352×288); NTSC and PAL auto-detected from the stream; progressive
-and native 480i/576i output; 3:2 pulldown handling for film; PTS-driven A/V sync with a
-display-refresh-locked frame-rate governor.
+- **DVD-Video** from a decrypted `.iso` — the disc's own menus, First Play, button
+  highlights, chapters, subtitles, multi-angle and still frames, driven by a real
+  [DVD virtual machine](https://owenb321.github.io/MiSTer_DVD/reference/compatibility/#navigation)
+  validated against libdvdnav.
+- **Physical discs and CSS-encrypted images** with the optional
+  [`MiSTer_DVDcss`](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/) add-on — no PC decrypt step, and
+  encrypted images need no optical drive at all.
+- **Video** — MPEG-2 and MPEG-1, NTSC and PAL auto-detected, progressive or native
+  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/), PTS-driven A/V sync.
+- **Audio** — AC-3 (every channel mode) and MP2 and LPCM decoded
+  [entirely in fabric](https://owenb321.github.io/MiSTer_DVD/audio/formats/); AC-3 and DTS as
+  [IEC 61937 bitstream](https://owenb321.github.io/MiSTer_DVD/audio/passthrough/) to a receiver over optical *or*
+  HDMI, so 5.1 needs no add-on board.
+- **Analog / CRT** — a native 15 kHz 480i/576i raster alongside the progressive one, so
+  [a CRT and HDMI work at once](https://owenb321.github.io/MiSTer_DVD/video/analog-crt/). Engages from `MiSTer.ini`
+  like any other core.
+- **[Closed captions](https://owenb321.github.io/MiSTer_DVD/video/closed-captions/)** re-modulated onto line 21 of the
+  analog output for your television to decode, exactly as a real player does.
+- **[Video CD / SVCD](https://owenb321.github.io/MiSTer_DVD/formats/vcd-svcd/)** — bin/cue rips play directly.
 
-**Video CD / Super Video CD** — bin/cue rips play directly: select the data-track
-`.bin` and the core strips the raw CD sectors in fabric, demuxes the MPEG-1 (VCD) or
-MPEG-2 (SVCD) system stream, and plays it with correct 44.1 kHz audio pitch, seek and
-pause. SVCD's 480-wide picture fills both HDMI and the analog CRT output. No menus/PBC.
-
-**Analog / CRT** — two simultaneous rasters: the progressive one for HDMI, plus a native
-15 kHz 480i/576i raster on the analog pins. It engages from `MiSTer.ini` alone, like any
-other core. A field-passthrough mode hands the CRT the disc's authored fields 1:1.
-
-**Closed captions (line 21)** — NTSC discs carry EIA-608 captions hidden in the MPEG-2
-video stream, separately from subtitles. The core extracts them and re-modulates them
-onto **line 21 of the analog output**, exactly as a real DVD player does, so your
-television's own caption decoder displays them. Analog output only, and it needs a set
-with a caption decoder (every US television 13" and larger since 1993 has one).
-
-**Audio** — AC-3 and MPEG-1 Layer II (MP2) decoded entirely in fabric (every AC-3
-channel mode, downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as IEC 61937 bitstream
-to a receiver — over optical S/PDIF, or over HDMI itself with the custom Main, so 5.1
-needs no add-on board.
-
-**DVD navigation** — the core reads an ISO directly, parses the IFOs, and runs a real
-**DVD virtual machine** validated command-by-command against libdvdnav's behaviour. The
-disc's authored menus work: First Play, root and title menus, PCI/HLI button highlights,
-D-pad navigation following the authored link graph, subpictures, chapters via the PTT
-tables, multi-angle, seamless-branch interleaved cells, still frames, and
-audio/subtitle/angle/language selection. Transport is on the gamepad with an on-screen
-HUD and seek bar.
-
-**Physical discs & encrypted ISOs** — with the optional **`MiSTer_DVDcss`** add-on (a
-small custom MiSTer Main, bundled in the release), the core plays a **physical DVD**
-straight from a USB optical drive, and **CSS-encrypted ISOs** directly — decrypting on the
-fly via a user-supplied libdvdcss, with no PC decrypt step (recovered keys are cached, so
-it's slow only on first play). The bare `.rbf` plays decrypted ISOs on its own; the add-on
-is opt-in and additive. See
-[Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos).
+Everything runs in FPGA fabric: no HPS-side daemon, no Linux helper process. The ARM only
+serves SD blocks through the standard framework interface.
 
 ## Known limitations
 
-- **The bare `.rbf` plays decrypted ISOs only.** Physical discs and CSS-encrypted ISOs
-  need the optional `MiSTer_DVDcss` add-on + a user-supplied libdvdcss (see
-  [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos)). Without it, an
-  undecrypted rip shows `CSS ENCRYPTED` on screen and mutes rather than emitting static.
-- **ISO9660 only.** UDF-only images will not load; the core reports
-  `UNSUPPORTED IMAGE`.
-- **Closed captions go out on line 21 of the ANALOG output only** — there is no
-  on-screen caption renderer, so nothing appears on HDMI, and your television has to
-  decode them (line-21 data reaches a decoder over composite and S-video, and over
-  component on many sets; consumer sets generally do not slice captions from RGB).
-  Captions are NTSC-only; PAL discs use subtitles instead.
-  Roughly 1 disc in 6 carries them at all — see [docs/closed_captions.md](docs/closed_captions.md).
-- **Only 720×480, 720×576 and the MPEG-1 SIF sizes (352×240, 352×288) are well
-  tested.** Other DVD-compliant MPEG-2 resolutions (704×480, 352×480 half-D1) are
-  accepted by the spec but have had little or no testing here.
-- **Sub-720 content is scaled to fill the analog CRT output in-core** (MPEG-1 SIF
-  gets a 2× line repeat + 352→720 stretch; SVCD 480-wide, DVD 704/544 sub-D1 and any
-  other sub-720 width get the horizontal fill; engaged only while the analog output
-  is active — HDMI keeps the framework scaler's cleaner upscale). A true 240p output
-  raster is deliberately not offered: the core's A/V sync requires the raster to run
-  at the exact content rate against the fixed audio clock, and no exact-rate 240p
-  modeline exists at the 27 MHz dot clock — line-doubled 480i carries the same
-  content to a CRT, which is what DVD players do.
-- **VCD/SVCD is basic playback**: no VCD menus/PBC or segment stills, one `.bin` per
-  movie track, no CD-DA audio tracks, no 2336-byte-sector images, and a (rare)
-  23.976-coded film VCD would play fast — see `docs/vcd_svcd.md`.
-- **Very demanding scenes may drop a frame.** The inherited decoder has a motion-comp /
-  IDCT throughput ceiling, and on the heaviest content it can fall behind the display
-  cadence. The frame-rate governor absorbs this by dropping a B-frame to stay in step —
-  B-frames are never used as references, so the picture cannot be corrupted, and in
-  practice this is not something you notice. PAL has less headroom because the frames are
-  taller.
-- **Interactive DVD games are incomplete.** Some game discs still mis-navigate their
-  dispatcher logic, and individual minigames can misbehave. Film and TV discs are the
-  supported path. (One large class of this was fixed in 0.2.1: a menu whose buttons all
-  share one link, routed through a dispatcher PGC that reads the pressed button number,
-  used to send every option to the same place and show `LINK FAIL`.) Note also that some game
-  discs put their randomisation setup in the boot sequence and jump past it when you press
-  **Menu** to skip the intro — the game then repeats one question. That is how the disc is
-  authored (a real player and libdvdnav do the same); let the intro play.
-- **No DTS decode** — passthrough to an AV receiver only (optical S/PDIF or HDMI).
-- **Audio formats:** AC-3 (every channel mode from 1.0 mono through 5.1, downmixed to
-  stereo), MPEG-1 Layer II (MP2), LPCM, and DTS (passthrough only). AC-3 **1+1 dual
-  mono** (`acmod 0`, two independent programmes) is deliberately refused and plays
-  silent — 4 frames on 1 disc out of 491 surveyed.
-  The one gap left is the MPEG-2 multichannel *extension* (a rare 5.1 variant of MP2):
-  its backwards-compatible stereo core should play, but no disc was available to verify,
-  so such a track still reports `AUDIO UNSUPPORTED`.
-- **Passthru drops to PCM at menus with no background audio** (the receiver may
-  show "decoder off" until the next menu with sound). Authored silence has no
-  bitstream to carry; the receiver re-acquires in under a second when audio
-  returns. *(The old startup/track-change lock flap — the receiver flapping
-  between naming the format and no decode for ~45 s until a chapter skip — is
-  fixed: the core was starving its own bitstream while audio/video buffers
-  aligned at a title start.)*
-- **Passthru carries AC-3 and DTS only.** IEC 61937 exists to carry *compressed*
-  audio, so there is nothing for it to do with an **LPCM** or **MP2** track — those
-  are silent in Passthru, on both S/PDIF and HDMI. Use **Decode** for LPCM discs.
-  (On HDMI the receiver will likely show "decoder off" rather than a PCM indication
-  while this happens; it is silence either way.)
-- **Changing the audio track while a disc menu is open silences the menu audio** until
-  you leave the menu. Menu audio otherwise plays normally on the default track.
-- No parental-control enforcement, no UOP enforcement.
-- PAL on an analog CRT is implemented but **unconfirmed** — no PAL CRT was available to
-  test it.
+- **The bare `.rbf` plays decrypted images only.** Physical discs and CSS-encrypted images
+  need `MiSTer_DVDcss` plus a user-supplied libdvdcss.
+- **ISO9660 only** — UDF-only images report `UNSUPPORTED IMAGE`.
+- **No DTS decode** — passthrough to a receiver only.
+- **Closed captions are analog-only** and need a television that decodes them. Roughly
+  1 disc in 6 carries any.
+- **Interactive DVD games are incomplete.** Film and TV discs are the supported path.
+- **PAL on an analog CRT is unconfirmed** — no PAL CRT was available to test it.
+
+[Full list, with the reasoning →](https://owenb321.github.io/MiSTer_DVD/reference/compatibility/)
 
 ## Getting started
 
-### 1. Install the core
-
-Download the latest build from the
-[**Releases page**](https://github.com/owenb321/MiSTer_DVD/releases/latest), extract the
-zip to the **root of your MiSTer SD card** — that's **`/media/fat`** if you copy it over
-the network (SSH/SFTP) rather than pulling the card — and launch **DVD** from the MiSTer
-menu.
-
-What you install depends on what you want to play — the extra piece is optional and
-additive:
-
-- **Decrypted DVD ISOs, and VCD/SVCD** — the bare `.rbf` (in the zip, or its own release
-  asset) is all you need.
-- **Physical DVDs, and still-encrypted DVD ISOs** — also enable the bundled
-  **`MiSTer_DVDcss`** Main and (for CSS) libdvdcss; the zip places both. See
-  [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos) to switch them
-  on. Without them the core still plays decrypted ISOs exactly the same — nothing regresses.
-
-### 2. Get a movie onto it
-
-Three ways in — pick whichever suits you:
-
-**Physical DVD** — with `MiSTer_DVDcss` enabled and a USB optical drive, just insert the
-disc and it plays; no rip at all. CSS-encrypted discs are decrypted on the fly (libdvdcss).
-Details: [Physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos).
-
-**DVD ISO** — rip the disc to an image on a PC. Both kinds play; keep the whole disc
-structure either way (a ripper that transcodes to a single title loses the menus):
-
-- **Decrypted (recommended)** — decrypt *during* the rip, so it plays on the bare core and
-  loads fastest (no key step, ever).
-  - *MakeMKV* (Windows / macOS / Linux): use **Backup** mode, not title conversion — it
-    writes a ready-to-use `.iso`.
-  - *dvdbackup* (Linux):
-    ```bash
-    dvdbackup -M -i /dev/sr0 -o /path/to/work
-    genisoimage -dvd-video -o DISC.iso /path/to/work/DISC_LABEL
-    ```
-- **Encrypted (raw image)** — a plain whole-disc copy of a CSS disc plays too, but **only**
-  with `MiSTer_DVDcss` + libdvdcss (on the bare core it shows `CSS ENCRYPTED` and mutes
-  rather than green-screening with static). No PC decrypt step; the first play recovers the
-  disc's keys — fast for an image, much quicker than a physical drive — and caches them, so
-  it's slow only once per disc.
-
-**VCD / Super Video CD** — no CSS is ever involved; select the rip's data-track `.bin` as
-described under [Load it](#3-load-it) below.
-
-### 3. Load it
-
-Put the `.iso` anywhere the MiSTer file browser can reach it and select it from the
-core's `Load Video` entry. The core also accepts bare `.VOB`, `.mpg` and `.m2v` streams,
-which it plays linearly without navigation.
-
-When the core is loaded without a disc it **opens the OSD file picker by itself** after
-about a second (like the console cores do), and a **bouncing logo screensaver** plays
-behind it until something is mounted — so a bare launch is never just a black screen.
-
-**Custom idle logo:** drop a `boot.rom` at **`/media/fat/games/DVD/boot.rom`** (create
-the `games/DVD` folder if it doesn't exist — this core doesn't make it for you) and the
-screensaver uses your artwork instead (up to 256×64 px shown 1:1, or up to a 512×128
-on-screen footprint with `--scale 2`; the converter picks sensibly by size). The framework
-also accepts `DVD.ROM` (that exact name, uppercase) next to the core's `.rbf`, in
-`/media/fat/`, or in `/media/fat/bootrom/`. The file is read once at core load, so
-**reload the core after placing it**; it is skipped when the core is launched directly
-with a video file. Convert any PNG with the repo tool:
-
-```bash
-tools/idle_logo.py --png mylogo.png --out boot.rom          # add --fit to downscale
-tools/idle_logo.py --verify boot.rom                        # preview what will render
-```
-
-Optional flags: `--colour RRGGBB` pins a fixed colour (otherwise the logo cycles a
-palette on each bounce), `--speed SX,SY` pins the drift speed. Always eyeball the
-`--verify` output — what it prints is what will bounce. A corrupt or truncated file is
-ignored and the built-in logo shows instead. (When the core is launched *with*
-a file — file association or MGL — MiSTer skips `boot.rom`, so the built-in logo would
-show in that session's idle moments.)
-
-**Video CDs and Super Video CDs play directly from the rip** — select the bin/cue
-rip's **data-track `.bin`** (usually "Track 2"; the small Track 1 is the ISO
-filesystem) from `Load Video`. The core detects the raw CD sectors by content, strips
-them in fabric, and plays the contained MPEG-1 (VCD) or MPEG-2 (SVCD) stream with
-correct 44.1 kHz audio pitch, A/V sync, seek and pause. Single-file whole-disc `.bin`
-images and raw `.img`/extracted `.DAT` files work too; `.cue` sheets themselves are
-not selectable (text). VCDs have no CSS, so no decryption step is ever needed.
-Limitations: no VCD menus/PBC, one `.bin` per movie track, and audio-CD tracks don't
-play — see `docs/vcd_svcd.md`. (`tools/vcd_to_vob.sh`, the previous PC-side
-conversion route, still works but is no longer needed; `tools/make_mpeg1_test.sh`
-transcodes any video file into a DVD-spec MPEG-1/MP2 `.vob`.)
-
-DVD images are large, so **loading from a NAS share works and is often more practical
-than filling the SD card**. One requirement catches people out:
-
-> **The share must be mounted read-write.** The MiSTer framework opens disk images
-> read-write (`O_RDWR|O_SYNC`) regardless of whether anything writes to them, so a
-> read-only mount fails with `EACCES` and you get a black screen with the core sitting
-> idle — no error message. The same file plays fine from the SD card, which makes it
-> look like a size or filesystem problem. It isn't; re-mount the share read-write.
-
-## Physical discs and encrypted ISOs
-
-One optional add-on — a small custom MiSTer *Main* binary, **`MiSTer_DVDcss`**, plus
-(for encrypted media) libdvdcss — unlocks two things beyond the decrypted-ISO playback
-above:
-
-- **Physical DVD-Video discs** play straight from a USB optical drive, decrypting CSS on
-  the fly — no PC rip step.
-- **CSS-encrypted ISOs play directly.** Drop a raw (still-encrypted) rip on the SD card
-  or USB and it decrypts as it plays — so you **don't need an optical drive at all**, and
-  there's no separate PC decrypt step. Select it from `Load Video` like any other ISO.
-
-Both feed CSS-decrypted sectors to the core over the same path a mounted ISO already
-uses, so the FPGA side is unchanged. It's entirely optional and additive: without
-`MiSTer_DVDcss`, the core plays decrypted ISOs exactly as before.
-
-### 1. Install the binary
-
-If you extracted the release zip ([Get the core](#getting-started)), `MiSTer_DVDcss` is
-already at your SD-card root — skip to step 2. Otherwise grab the `MiSTer_DVDcss` release
-asset (or build it — see [Building from source](#building-from-source)) and put it at the
-SD-card root:
-
-```
-/media/fat/MiSTer_DVDcss
-```
-
-Do **not** overwrite the stock `/media/fat/MiSTer` — both files stay side by side.
-
-### 2. Point the DVD core at it
-
-Add this to `/media/fat/MiSTer.ini` (add the section — don't replace the file):
-
-```
-[DVD]
-main=MiSTer_DVDcss
-```
-
-`main=` is a stock MiSTer feature: whenever the DVD core is loaded, MiSTer runs
-`MiSTer_DVDcss` instead of the stock Main. Open the core with a disc in the drive and it
-plays; insert a disc while the core is open and it plays; eject to stop. Remove the
-`[DVD]` section (or the binary) and the core reverts to ISO-only playback with the stock
-Main — nothing else changes.
-
-### 3. libdvdcss (encrypted discs and ISOs)
-
-Most commercial discs — and raw ISO rips of them — are CSS-encrypted. Decrypting them
-needs **libdvdcss**, which is **not part of MiSTer and is not shipped here**; it is loaded
-at runtime from a copy you provide. Unencrypted discs and already-decrypted ISOs need
-nothing. **This is the piece that lets a drive-less user play encrypted ISOs directly** —
-install it and a raw rip decrypts as it plays.
-
-The release zip puts the installer in your MiSTer **Scripts** menu — just run
-**install_dvdcss** there. (Didn't use the zip? Grab the `install_dvdcss.sh` asset and
-drop it in `/media/fat/Scripts/`.)
-
-It fetches a prebuilt **glibc/armhf** `libdvdcss.so.2` and installs it to
-`/media/fat/dvdcss/libdvdcss.so.2` (override the download source with `DVDCSS_URL=...`,
-or drop a glibc/armhf `libdvdcss.so.2` there by hand). If an encrypted disc or ISO is
-loaded without libdvdcss present, the core shows `CSS ENCRYPTED` and mutes rather than
-playing static — your cue to run the script.
-
-The first time an encrypted disc's keys are needed they may take a few seconds to
-recover; recovered keys are cached under `/media/fat/dvdcss/cache`, so the same disc is
-instant next time. For a **physical disc**, how long that first recovery takes depends on
-whether the drive has a region set — see step 4. For an **ISO** the keys are always
-cracked from the data, so the region makes no difference there.
-
-Cracking CSS may be regulated where you live; check the laws that apply to you. This
-project neither distributes libdvdcss nor contains any CSS circumvention code.
-
-### 4. Set the drive region (physical discs — makes them start faster)
-
-A USB DVD drive ships with **no region set**. In that state the drive refuses the CSS key
-exchange, so libdvdcss has to crack every key out of the disc data — that is the
-several-second wait before a title starts. Set the drive's region to match your discs and
-the drive hands the keys over directly, so playback starts almost immediately. (An
-encrypted *ISO* is always cracked from the data, so this only affects physical discs.)
-
-**From the MiSTer** — run **set_dvd_region** from the **Scripts** menu (it's in the
-release zip; otherwise grab the `set_dvd_region.sh` asset and drop it in
-`/media/fat/Scripts/`). It shows the drive's current region and how many changes it has
-left, and setting one is a menu you can drive with the **D-pad and B1** — no keyboard
-needed. Nothing changes until you confirm, and the cursor starts on *Cancel*. Run it with
-no disc playing, since the core holds the drive open while one is mounted.
-
-> ⚠️ **A region change is close to permanent.** Drives allow only a handful of user
-> changes — typically five — and when the counter runs out the region is locked to
-> whatever was set last. The counter
-> lives in the drive's own firmware, so it is not reset by a different PC, a reformat, or
-> a different operating system. Pick the region matching the discs you own and set it once.
-
-> **Reading a drive is proven; setting one is not.** Identifying the drive's region and
-> its remaining changes has been confirmed on real hardware, with one drive connected and
-> with two. **Nobody has yet used the script to actually set a region** — it does the right
-> thing in testing, but the write has never touched a real drive, because proving it costs
-> one of a drive's permanent changes. So if you run it, reading is safe to try freely;
-> setting is a step into the unknown. If you take that step, please
-> [open an issue](https://github.com/owenb321/MiSTer_DVD/issues) saying whether it worked —
-> you'll be the first, and thank you for it.
-
-Region codes: **1** US/Canada · **2** Europe/Japan/Middle East/South Africa · **3** SE Asia
-· **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia · **6** China.
-
-If you'd rather do it on a PC, the same setting is reachable there — on **Linux** with
-`regionset` (`sudo regionset /dev/sr0`, which prints the current region and remaining
-changes, then prompts), and on **Windows** through **Device Manager → DVD/CD-ROM drives →**
-the drive **→ Properties → DVD Region**, which shows the remaining count before you commit.
-The region travels with the drive, so a drive set on a PC arrives at the MiSTer ready.
-
-Note that a drive set to one region and asked to play a disc from *another* still falls
-back to cracking — matching the drive to your library is what makes discs start quickly.
-
-## Film (24p) content
-
-Nearly all commercial film DVDs store 24 fps material and mark it for 3:2 pulldown
-rather than storing 60 fields per second. This core handles that in two ways, and
-`Film 24p Out` (Debug page, default **Auto**) picks between them.
-
-**Default path** — the core performs the 3:2 pulldown itself, following the flags in
-the stream, and outputs at the display's native 59.94 Hz (50 Hz for PAL).
-
-**Film 24p path** — the core instead outputs a true **23.976 Hz progressive** raster
-(25.000 Hz for PAL) and lets the framework scaler do the pulldown. Because 23.976:59.94
-is exactly 2:5 and the clocks are locked, that conversion is exact. This also cuts
-framebuffer re-reads from 60/s to 24/s, which hands the decoder a much larger
-uninterrupted memory window each frame — so it helps throughput on demanding discs as
-well as cadence.
-
-Notes:
-
-- **Auto** detects film from the stream's pulldown flags. **Hard-telecined** discs — where
-  the pulldown was baked in at authoring time — carry no such flags, so Auto cannot see
-  them. If a disc looks like film but Auto isn't engaging, set it to **On**.
-- **Fades to black no longer knock Auto out of film mode.** MPEG-2's `progressive_frame`
-  is a flag the *encoder* writes, and on a near-black picture there is no field structure
-  for it to describe, so encoders mark those frames interlaced by default. Auto used to
-  believe them: Apollo 13's fading opening credits changed resolution nine times in the
-  first 46 seconds. The detector now ignores pictures that carry no evidence — measured
-  against the disc's own bitrate, so it works equally on a heavily compressed disc — while
-  still following a genuine film-to-video change within about a second. Fifteen of the 123
-  discs surveyed flapped at the title head before this and no longer do.
-- **`Frame Drop` must stay On.** The cadence-slip corrector, which keeps imperfect
-  real-world telecine in step with the display, runs on the frame-drop governor's path
-  and does nothing without it.
-- **`A/V Offset` defaults to +100 ms**, which is the correct null for NTSC film and also
-  measures correctly on PAL. There should be no need to change it.
-- When Auto engages a couple of seconds into a title, the audio can end up slightly
-  offset until the next seek re-syncs it — a chapter jump (or a D-pad seek) clears it.
-  A proper fix (detecting film before the first frame is shown) is planned.
-- If the analog CRT raster is active, the film raster is suppressed — the re-interlacer
-  needs the standard progressive raster to work from.
-
-## Controls
-
-| Button | Action | | Button | Action |
-|---|---|---|---|---|
-| B1 | Pause | | B8 | Subtitle (cycle) |
-| B2 | Previous chapter | | B9 | Display (toggle status line) |
-| B3 | Next chapter | | B10 | Fast forward (hold to scrub) |
-| B4 | Select | | B11 | Rewind (hold to scrub) |
-| B5 | Menu | | B12 | Title menu |
-| B6 | Angle (cycle) | | B13 | Return (go up) |
-| B7 | Audio (cycle) | | D-pad | Menu navigation (see below) |
-
-The **D-pad** walks the buttons of whatever menu is on screen. During plain playback it
-does nothing unless you turn on **D-Pad Seek**, which puts VLC-style jumps on it:
-**Left/Right = ∓10 seconds, Down/Up = ∓1 minute**.
-
-Taps add up, and each one restarts a short window — so three quick taps of Right is one
-30-second skip rather than three separate ones, and you can keep tapping to build a jump
-of any length (tap Up twenty times for a 20-minute skip). The on-screen `SEEK FWD 12:30`
-readout shows the running total, and the jump happens once you stop tapping. It never
-takes the D-pad away from a menu — disc menus and the on-screen menus of interactive DVDs
-always keep it.
-
-A USB keyboard's number keys select menu buttons directly.
-
-**Menu during the disc's opening chain.** Pressing Menu over a copyright/warning screen —
-before the disc has shown you any menu — goes straight to the disc's main menu. Some discs
-(DVD games especially) author their per-title Root "menu" as a dispatcher that routes on
-where you pressed Menu from, which would otherwise drop you into a random clip rather than
-the menu. After you have been to a menu once, Menu behaves exactly as the disc specifies.
-
-## Settings
-
-**`Reset`** (in the OSD) stops playback, unloads the current image, resets the DVD
-navigation VM, and drops back to the bouncing-logo idle screen — pick a new image from
-`Load Video` to play again. (A custom `boot.rom` logo survives the reset.)
-
-> **Settings reset on upgrade (config versioning).** Saved settings now live in
-> `/media/fat/config/DVD_v1.CFG`. The first time you run a build with this change your
-> options fall back to the defaults below (your old `DVD.CFG`/`DVD.cfg` is left on the
-> card but is no longer read — it can be deleted). This is deliberate: it stops a
-> settings file written by an older build from being silently misread when the option
-> layout changes, which previously required a "delete your config" release note.
-
-
-Defaults are chosen to be correct for most users; the first value listed is the default.
-
-### Main page
-
-| Setting | Options | Notes |
-|---|---|---|
-| **Disc Menus** | **On** / Off | On boots the disc's authored First Play and runs its menus. Off skips navigation entirely and auto-plays the main feature — useful if a disc's menus misbehave. |
-| **D-Pad Seek** | On / **Off** | Puts fixed-time seeking on the D-pad: Left/Right jump ∓10 s, Down/Up ∓1 min, and repeated taps build a longer jump. On a DVD the targets come from the disc's own seek tables, so they land on real frames. Off by default because some interactive/game DVDs play seekable video while expecting the D-pad as game input. |
-| **Aspect Ratio** | **Auto** / 4:3 / 16:9 | Auto reads the MPEG-2 sequence header. |
-| **Audio** | **On** / Off | |
-| **Audio Out** | **Decode PCM** / Passthru (SPDIF+HDMI) | Passthru sends undecoded AC-3/DTS to an AV receiver to decode — over optical S/PDIF, and over HDMI too if you run the custom Main and your receiver advertises AC-3/DTS. Required for DTS. On a TV that can't decode them, HDMI stays silent — use Decode. |
-| **SPDIF Byte Order** | **Normal** / Swap | Applies to both bitstream outputs despite the name. If the receiver names the format but plays static, toggle this. |
-| **Player Language** | **English** / … | Sets the player's menu/audio/subtitle language preference, like a set-top player's setup screen. |
-| **Video Standard** | **Auto** / NTSC / PAL | Auto detects from the stream's vertical size. |
-| **Interlaced Out** | **Off** / Auto / On | Native 480i/576i to HDMI. Auto switches mid-title and still has a slight A/V skew — opt-in. |
-| **480i Deint** | **Bob** / Weave | |
-| **Analog Out** | **Auto** / Interlaced / Progressive / Native Fields | See below. |
-| **Analog Aspect** | **Auto** / Fit / Letterbox / Crop | How anamorphic content fits a 4:3 analog TV. |
-
-### Choosing an Analog Out mode
-
-`Auto` follows `MiSTer.ini` and is right for most setups. The others are overrides:
-
-| Your setup | Mode |
-|---|---|
-| CRT only, video-sourced content (TV, concerts) | **Native Fields** — smoothest motion |
-| CRT only, film | Native Fields or Auto — little difference |
-| CRT **and** HDMI at the same time | **Auto** or **Interlaced** |
-| A 15 kHz RGBHV rig the ini bits can't identify | **Interlaced** |
-| A display that wants 480p/576p on the analog pins | **Progressive** |
-
-**Native Fields** gives the best CRT motion on true-interlaced content, but it puts the
-whole core in field mode — so HDMI drops to 480i for the session and film content
-regresses there. Set it *before* loading a disc. An explicit choice here always
-overrides `MiSTer.ini` and persists across reloads.
-
-### Debug page
-
-`Frame Drop` (default **On**) should be left on — the film cadence corrector runs on
-that path. The rest (`Debug Overlay`, `Title VTS`, `Audio Genlock`, `Force 4:3 Subpics`,
-`Film 24p Out`, `A/V Offset`) are tuning and diagnostic levers; `A/V Offset` defaults to
-+100 ms, which is the correct null for both NTSC film and PAL.
-
-`Line-21 CC` (default **On**) re-inserts the disc's closed captions on line 21 of the
-analog output for your TV to decode — NTSC + analog only, invisible in the blanking
-interval otherwise. It lives here rather than on the main page because correct behavior
-is simply On; the Off is an escape hatch for capture devices or upscalers that display
-VBI lines. `CC Test Line` (default **Off**) is the diagnostic for closed captions. They normally go
-out in the blanking interval, where they are invisible unless your television decodes
-them — so if captions do not appear there is no way to tell "the TV is not decoding" from
-"no caption data is reaching the output". Turn this on and the same waveform is painted on
-a visible line near the top of the picture instead: **a band of dashes that changes as
-dialogue changes** means everything on the core's side is working, and only the TV-side
-setup is left. Nothing at all means the analog raster is not engaged or the disc has no
-captions (only about one disc in six does).
-
-## On-screen messages
-
-| Message | Meaning |
-|---|---|
-| `CSS ENCRYPTED` | The image is an undecrypted rip. Audio is muted; re-rip the disc. |
-| `UNSUPPORTED IMAGE` | Not an ISO9660 DVD image (e.g. UDF-only), or not a playable stream. Only raised after ~20 s of *actual streaming* with no picture, so slow media (a NAS spinning up) does not trigger it; it clears itself if a picture does appear. |
-| `AUDIO UNSUPPORTED` | The selected audio track is in a format the core cannot decode. |
-| `TITLE VTS nn` | Which title was auto-selected (shown only with Disc Menus Off). |
-| `SEEK FWD 12:30` | How far the pending D-Pad Seek jump will go, while you are still tapping. |
+1. **Install** — download the [latest release](https://github.com/owenb321/MiSTer_DVD/releases/latest),
+   extract the zip to the root of your SD card (`/media/fat`), and launch **DVD**.
+2. **Add a movie** — put a decrypted `.iso` on the card, a USB drive, or a network share,
+   and pick it from `Load Video`.
+3. **Physical discs or encrypted images?** Those need the optional add-ons —
+   [work out what you need](https://owenb321.github.io/MiSTer_DVD/getting-started/what-you-need/).
+
+> **If a network share gives you a black screen and no error, it is mounted read-only.**
+> The framework opens images read-write regardless, so a read-only mount fails silently.
+
+[Full installation guide →](https://owenb321.github.io/MiSTer_DVD/getting-started/install/)
+
+## Documentation
+
+- **[User manual](https://owenb321.github.io/MiSTer_DVD)** — everything above, properly. Source in [`site/content/`](site/content/).
+- **[`docs/`](docs/)** — engineering design notes: the *why* behind the RTL, including the
+  long diagnostic hunts and the theories that turned out wrong. **Not a manual.**
+- Historical note: `fj#NN` references and quoted commit SHAs come from a pre-publication
+  private repository and do not resolve here.
 
 ## Building from source
 
 Requires **Quartus 17.0.2 exactly** — newer versions break MiSTer project compatibility.
-Either a native install or the pinned Docker image:
 
 ```bash
 ./build_release.sh --compile --name DVD_myfeature              # native Quartus
 USE_DOCKER=1 ./build_release.sh --compile --name DVD_myfeature # pinned container
 ```
 
-Always use `build_release.sh` rather than calling `quartus_cpf` directly: MiSTer's
-loader needs a *compressed* `.rbf` (~4.3 MB). An uncompressed one (~7 MB) silently fails
-to configure — the core appears to load but produces no video on any output.
+Always use `build_release.sh` rather than `quartus_cpf` directly: MiSTer's loader needs a
+*compressed* `.rbf` (~4.3 MB). An uncompressed one (~7 MB) silently fails to configure —
+the core appears to load but produces no video on any output.
 
-Module testbenches run under Icarus Verilog (`iverilog -g2012`); see `bench/dvd/`.
-
-### The physical-disc Main (`MiSTer_DVDcss`)
-
-The optional custom Main for [physical discs and encrypted ISOs](#physical-discs-and-encrypted-isos)
-is a separate ARM binary — stock Main_MiSTer plus the small overlay under `main/` — not
-part of the FPGA `.rbf`. Like the Quartus build it supports a pinned Docker toolchain
-image, so no local toolchain install is needed:
-
-```bash
-USE_DOCKER=1 ./main/build_main.sh   # pinned ARM-toolchain image (built on first use)
-./main/build_main.sh                # native — needs your MiSTer ARM toolchain on PATH
-```
-
-The result is `main/.build/MiSTer_DVDcss`. The script fetches stock Main_MiSTer at a
-pinned commit, copies the `main/` overlay in, patches `user_io.cpp`/`Makefile`, and
-cross-compiles for the board's ARM CPU. The overlay, the `user_io.cpp` integration, and
-the Docker image are documented in [main/README.md](main/README.md).
-
-Once you have a `.rbf` (`build_release.sh --release`) and `MiSTer_DVDcss`,
-`tools/package_release.sh` assembles them plus the two `Scripts/` tools
-(`install_dvdcss.sh`, `set_dvd_region.sh`) into a
-ready-to-extract `releases/MiSTer_DVD_v<ver>.zip` (and prints the individual files to
-attach to a GitHub release alongside the zip).
+Module testbenches run under Icarus Verilog; see `bench/dvd/`.
+[Full build docs, including `MiSTer_DVDcss` and packaging →](https://owenb321.github.io/MiSTer_DVD/about/building/)
 
 ## Licensing
 
@@ -559,7 +124,7 @@ That falls out of what it is built from rather than being a preference:
 |---|---|
 | `sys/` — MiSTer framework | GPL, mixed "v2 or later" and "v3 or later" |
 | `rtl/` — MPEG-2 decoder, © 2007 Koen De Vleeschauwer | **BSD** ([`mpeg2fpga`](https://opencores.org/projects/mpeg2fpga)) |
-| `dvd/`, `bench/dvd/`, `tools/`, `docs/` | Original to this project — GPL-3.0-or-later |
+| `dvd/`, `bench/dvd/`, `tools/`, `docs/`, `site/` | Original to this project — GPL-3.0-or-later |
 
 The `sys/` files that are "v2 or later" can be taken to v3, but the "v3 or later" ones
 cannot go down to v2, so the combination resolves to GPLv3-or-later. BSD is
@@ -580,102 +145,12 @@ take. The other formats this core decodes are in the same position — the AC-3 
 Digital) patents ran out in 2017, and MPEG-1/MP2 earlier still. None of this is affected
 by, and does not affect, the copyright position above.
 
-## About this repository's history
-
-This core was developed in a private repository before being published here, and the
-public history begins with an upstream import plus the accumulated work rather than the
-full commit-by-commit trail.
-
-The `docs/` directory is the record of that development, and it is unusually detailed —
-it documents the reasoning behind most non-trivial decisions, including the long
-diagnostic hunts and the theories that turned out to be wrong. Two things follow from the
-move:
-
-- References written **`fj#NN`** (and `issue fj#NN`) are pre-migration pull requests and
-  issues. They have no equivalent here. They are prefixed precisely so they can never be
-  confused with this repository's own `#NN`, which start from 1.
-- Commit SHAs quoted in `docs/` refer to that earlier history and will not resolve here.
-
-Neither affects the design rationale the docs exist to record, which is the part worth
-reading.
-
-## Documentation
-
-`docs/` holds the design notes. Useful entry points: `architecture.md` (system data
-flow), `dvd_nav.md` and `dvd_vm.md` (navigation and the DVD virtual machine),
-`fabric_audio.md` (audio), `av_sync.md` (A/V sync), `analog_dual_raster.md` (CRT
-output), `roadmap.md` (what's next), `conformance.md` (DVD-spec coverage).
-
 ## Acknowledgements
 
-This project is assembled on other people's work, and much of what looks like original
-engineering here is really the result of having good references to check against. Listed
-in full — not only where attribution is legally required, but everywhere something was
-genuinely leaned on.
+This core is built on **Koen De Vleeschauwer's** [`mpeg2fpga`](https://opencores.org/projects/mpeg2fpga)
+MPEG-2 decoder (2007), ported to MiSTer by **mrchrisster** as
+[`MiSTer_MPEG2`](https://github.com/mrchrisster/MiSTer_MPEG2), on the **MiSTer-devel**
+framework. Much of what looks like original engineering here is the result of having good
+references — libdvdnav, libdvdread, liba52 and others — to check against.
 
-### Code this is built from
-
-- **Koen De Vleeschauwer** — [`mpeg2fpga`](https://opencores.org/projects/mpeg2fpga)
-  (2007), the hardware MPEG-2 decoder at the centre of this core. Nearly the entire
-  video datapath is his.
-- **mrchrisster** — [`MiSTer_MPEG2`](https://github.com/mrchrisster/MiSTer_MPEG2), the
-  MiSTer port this forks: the framework integration, SD streaming, and DDR3 frame buffer
-  that made a working starting point.
-- **The MiSTer project** (`MiSTer-devel`) — the framework in `sys/`, `hps_io`, and the
-  `ascal` scaler. The **N64 core** additionally supplied the interlaced sync model that
-  the native 15 kHz CRT raster is built on, after a from-scratch approach failed to lock.
-
-### Design guidance
-
-- **[Anime0t4ku](https://github.com/Anime0t4ku)** — the custom-MiSTer-Main approach for
-  physical-disc cores (a core-specific `main=` binary that reads and serves the disc's own
-  sectors). That guidance shaped `MiSTer_DVDcss` and is what unlocked physical-disc support
-  here. The CSS and reader code is our own, developed independently.
-
-### Specifications
-
-- **ATSC A/52** — *Digital Audio Compression (AC-3)*: normative frame syntax and the
-  per-stage algorithms for the in-fabric decoder.
-- **ISO/IEC 13818-1 and 13818-2** — MPEG-2 Systems (Program Stream, pack and PES
-  headers) and MPEG-2 Video.
-- **ISO/IEC 11172-2 and 11172-3** — MPEG-1 Video (the decoder's MPEG-1 mode) and MPEG-1
-  Audio (the Layer II decoder's tables and algorithms).
-- **IEC 61937-3 / 61937-5 / 60958-1** — AC-3 and DTS over S/PDIF and HDMI, and the
-  channel-status non-PCM flag that makes receivers lock onto a bitstream.
-- ***DVD Demystified*, Jim Taylor** — the practical DVD-Video reference for VOB/IFO
-  structure. Repeatedly the fastest route to understanding how discs are actually
-  authored, as opposed to how the spec says they could be.
-- **mpucoder's DVD documentation** — the long-standing public reference for DVD sector,
-  NAV pack and IFO layout.
-
-### Behavioural references and verification oracles
-
-Much of this core was built by checking its behaviour against known-good implementations
-rather than by reading specs alone.
-
-- **libdvdnav** — the reference the DVD virtual machine was validated against
-  command-by-command (`decoder.c`, `vmcmd.c`). Where this core and libdvdnav disagreed,
-  libdvdnav was usually right; where it wasn't, the disagreement itself was informative.
-- **libdvdread** — `ifo_types.h` and `nav_types.h` were the authority for every IFO and
-  NAV pack offset the in-fabric parsers use.
-- **liba52 0.8.0** — the golden reference for the AC-3 decoder's co-simulation. Every
-  coding tool is checked against it to a bounded error, and it caught bugs
-  (a mis-decoded dynamic-range exponent among them) that listening tests did not.
-- **ffmpeg** (`ac3dec.c`, `ac3_fixed`) — second opinion and fixed-point cross-check for
-  AC-3, and the float reference the MP2 golden model is gated against.
-- **pl_mpeg** (Dominic Szablewski, MIT) — compact C reference for MPEG-1/MP2; the Layer
-  II synthesis-window table (`tools/mp2_window.py`) is extracted from it, as vendored by
-  **MiSTer-devel/CDi_MiSTer**, whose serial-MAC filterbank was the reference spec for the
-  fabric MP2 decoder's architecture.
-- **Han, Dapeng (2017)**, *FPGA Implementation of an AC3 Decoder*, MSc thesis,
-  Linköping University — stage-by-stage pseudocode for exponent decode, bit allocation,
-  mantissa and IMDCT.
-- **libdvdcss** — not used in the core, but it is what makes the PC-side rip step work,
-  and the reason a decrypted image can be produced at all.
-- **The MiSTer CD cores** (PCE-CD, MegaCD, Saturn) — prior art for partitioning work
-  between the ARM and the fabric, studied while designing the audio path.
-
-### Test material
-
-The DVD-Video discs used for hardware verification are commercial releases, ripped from
-owned copies for testing. No disc content appears in this repository.
+[Full credits, specs and verification oracles →](https://owenb321.github.io/MiSTer_DVD/about/acknowledgements/)
