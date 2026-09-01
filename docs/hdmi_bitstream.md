@@ -537,8 +537,10 @@ they have to be read back off the wire.
    phase-step / hold-off gate.)
 3. Volume keypress mid-bitstream recovers.
 4. Picture unaffected across repeated Audio Out toggles.
-5. **Negatives:** a plain TV stays muted and **silent, never noisy**; the same
-   `.rbf` on **stock** Main behaves exactly as today.
+5. **Negatives — ✅ VERIFIED 2026-09-01.** A sink with no AC-3/DTS in its EDID is
+   **silent, never noisy**, in Passthru. On **stock Main** the same `.rbf` is silent
+   over HDMI and optical passthrough still works — i.e. the ack gate holds and a
+   user who never installs MiSTer_DVDcss is unaffected.
 
 If (1) fails with the receiver naming nothing or mis-locking, try the §3
 preamble table before anything else.
