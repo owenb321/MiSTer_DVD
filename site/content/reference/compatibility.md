@@ -41,6 +41,11 @@ Covered in full on [Audio formats](../audio/formats.md). In short: AC-3 (all cha
 and MP2 and LPCM decode in the core; **DTS is passthrough-only**; AC-3 1+1 dual mono is
 deliberately refused; the MPEG-2 multichannel MP2 extension is unverified.
 
+Two limits worth knowing: **LPCM is 48 kHz stereo**, and 20/24-bit tracks play but are
+truncated to 16 bits, so there is real fidelity loss on high-bit-depth music discs. 96 kHz
+and multichannel LPCM are not supported — the board wires a single two-channel audio line
+to the HDMI transmitter, which is also why 5.1 must leave as a compressed bitstream.
+
 ## Navigation
 
 Working: First Play, root and title menus, PCI/HLI button highlights, D-pad navigation

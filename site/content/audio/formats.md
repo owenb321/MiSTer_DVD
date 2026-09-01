@@ -1,13 +1,13 @@
 # Audio formats and decoding
 
-Audio is decoded **entirely in FPGA fabric**. There is no HPS-side decoder daemon — the
+Audio is decoded **entirely in FPGA fabric**. There is no HPS-side decoder — the
 same as the video path.
 
 | Format | Decoded in core | Passthrough | Notes |
 |---|:--:|:--:|---|
 | **AC-3 (Dolby Digital)** | yes | yes | Every channel mode from 1.0 mono to 5.1, downmixed to stereo |
-| **MPEG-1 Layer II (MP2)** | yes | no | The DVD spec's other permitted format; universal on PAL discs and VCDs |
-| **LPCM** | yes | no | 16, 20 and 24-bit |
+| **MPEG-1 Layer II (MP2)** | yes | no | Rare on DVD, universal on Video CD. 48/44.1/32 kHz |
+| **LPCM** | yes | no | 48 kHz stereo. 20/24-bit tracks play, truncated to 16-bit |
 | **DTS** | **no** | yes | Passthrough to a receiver only |
 
 By default the core decodes to stereo and sends it over HDMI, which works on any display.
@@ -27,20 +27,41 @@ If a track plays silent and shows `AUDIO UNSUPPORTED`, cycle to another with **B
 
 ## MP2
 
-MPEG-1 Layer II, at 32, 44.1 and 48 kHz. This is what PAL discs commonly use, and what
-Video CDs always use.
+MPEG-1 Layer II, at 32, 44.1 and 48 kHz.
+
+It is a DVD-legal audio format and was used on some early PAL-region discs, but it is
+**rare in practice** — a census of 124 discs in the development library found AC-3 on every
+single one and MPEG audio on none. It is included because the DVD specification permits it
+and a disc carrying it should not be silent, not because you are likely to meet one.
+
+On **Video CD and SVCD** it is the opposite: MP2 is the only audio format those use, so
+every VCD depends on it.
 
 !!! warning "MP2 has no passthrough encoding"
     In `Passthru` mode an MP2 track is **silent on both outputs**. Use `Decode PCM` for MP2
-    discs.
+    content.
 
-The one gap is the MPEG-2 multichannel *extension* — a rare 5.1 variant of MP2. Its
+The one gap is the MPEG-2 multichannel *extension* — a rare 5.1 variant. Its
 backwards-compatible stereo core should play, but no disc carrying one was available to
 verify, so such a track currently reports `AUDIO UNSUPPORTED`.
 
 ## LPCM
 
-Uncompressed, at 16, 20 and 24-bit. Nothing to decode, so it plays directly.
+Uncompressed, so there is nothing to decode. **48 kHz stereo.**
+
+DVD also permits 20-bit and 24-bit LPCM. Those tracks **play**, but the core takes the top
+16 bits of each sample and discards the rest — the audio path out to HDMI is 16-bit, so the
+extra resolution has nowhere to go.
+
+!!! note "There is real fidelity loss on 20/24-bit tracks"
+    Truncation, not rounding or dithering. On the sort of content that ships as high-bit-depth
+    LPCM — concert recordings, audiophile music discs — this is the one place the core is
+    audibly short of what the disc holds. A 16-bit LPCM track is unaffected and is exact.
+
+**96 kHz and multichannel LPCM are not supported.** Multichannel is not a matter of effort:
+the DE10-Nano wires a single audio data line to its HDMI transmitter, which carries two
+channels, and the board routes no other pin for it. That is also why 5.1 has to leave as a
+[compressed bitstream](passthrough.md) rather than as PCM.
 
 ## DTS
 

@@ -74,11 +74,6 @@ disc as on a lavish one. A picture that fails the test updates nothing at all, n
 `repeat_first_field` history, so the 3:2 toggle test picks up across the gap instead of
 seeing a false edge.
 
-This is the same rule VLC's inverse-telecine uses, which meets the same content and rides
-through it: if there is nothing to measure, do nothing, because acting on unreliable data is
-worse than waiting. Across 123 discs the change fixed 15 and broke none, and a disc that
-genuinely changes from film to video mid-title is still followed within about a second.
-
 ### What it cannot see
 
 **Hard-telecined discs.** If the pulldown was baked in when the disc was authored, the
@@ -96,8 +91,7 @@ left to detect. Nothing can infer it from the stream, which is why the manual **
 ## Known limitations
 
 - **When Auto engages a couple of seconds into a title, audio can end up slightly offset**
-  until the next seek re-syncs it. A chapter jump or a D-pad seek clears it. Detecting film
-  before the first frame is shown is the proper fix and is planned.
+  until the next seek re-syncs it. A chapter jump or a D-pad seek clears it.
 - **If the analog CRT raster is active, the film raster is suppressed** — the re-interlacer
   needs the standard progressive raster to work from. See
   [Analog and CRT output](analog-crt.md).

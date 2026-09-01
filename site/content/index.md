@@ -50,7 +50,7 @@ audio/subtitle/angle/language selection. Transport is on the gamepad with an on-
 and seek bar.
 
 **Audio** — AC-3 and MPEG-1 Layer II decoded entirely in fabric (every AC-3 channel mode,
-downmixed to stereo) to HDMI; LPCM at 16/20/24-bit; AC-3 and DTS as
+downmixed to stereo) to HDMI; 48 kHz LPCM; AC-3 and DTS as
 [IEC 61937 bitstream](audio/passthrough.md) to a receiver — over optical S/PDIF, or over
 HDMI itself with the custom Main, so 5.1 needs no add-on board.
 
