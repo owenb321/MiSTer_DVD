@@ -705,4 +705,9 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # "deleting a mode" freed almost nothing). The 88%->89% step vs the previous
 # entry is the four intervening merged branches + packing noise, not this one.
 # Fifth consecutive first-roll fit. Build DVD_videoout_20260902_1146.rbf.
+# 2026-09-02b (same branch + the boot-time modeline-walk reset-race fix -- the
+# dec_ready gate, a 3-bit counter): SEED 5 held FIRST roll again -- clk_dec
+# 93.28 @100C / 89.91 @-40C at 88% ALM (37,078). The 97.73 of the previous roll
+# confirming itself as fit variance. Sixth consecutive first-roll fit. Build
+# DVD_videoout2_20260902_1312.rbf.
 set_global_assignment -name SEED 5
