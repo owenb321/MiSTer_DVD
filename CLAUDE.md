@@ -242,6 +242,65 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **SINGLE-RASTER ANALOG OUTPUT — the second raster (`re_interlace`/VGA2) is
+  RETIRED; the interlaced MAIN raster carries the N64 half-line and drives the CRT
+  directly (2026-09-03, branch `feature/single-raster-analog`) — sim-proven (two RED
+  reproductions), ⏳ HW-confirm pending (gate = the RGBS/YPbPr/RetroTINK field reports
+  reproduce clean at the idle logo AND in play; composite + HDMI 480i unregressed; Main
+  reads `720x480i @ 59.94` steady). Design + evidence: `docs/single_raster_analog.md`.**
+  Two csync-connected users (RGB SCART; YPbPr → RT4K) reported the PR #37 prerelease
+  worse: jitter/sawtooth, the RT4K seeing vsync length / lines-per-frame / frame rate
+  toggle ~every second with tearing, `1441x478i` idle vs `1440x480i` playing, "59.8 <->
+  60.1 Hz", Progressive losing signal when the feature starts. Every prior fieldpass HW
+  confirmation was composite/HDMI — csync had never been gated.
+  ★ **The load-bearing correction: "a half-line on the main raster makes HDMI hunt
+  (ff01ac8)" was a STALE rule** — observed on the OLD pulse-delay half-line (equal
+  262/262 fields ⇒ 262.5/261.5 alternating spacing). The N64 model (262/263 + shifted
+  vsync counter reference) is exact, was HW-proven on the CRT, and already ran on the main
+  raster with HDMI alongside in the O[14] rounds. ascal reads `VGA_F1` + the vsync edge;
+  every other 480i core feeds it exactly this. With the half-line on the main modeline
+  (halfline 429/432; `syncgen_intf` doubles it and `horizontal_resolution` as 2x, not
+  2x+1) the second raster had no remaining job — its only justification (progressive
+  HDMI beside a CRT) died with the consolidation — and it WAS the amplifier: in HUNT it
+  emitted NO sync at all, so any upstream hiccup became 33–67 ms of dead CRT sync.
+  Deleted: `dvd/re_interlace.sv` (~10 M10K line buffer + a second `sync_gen`), the
+  `sys_top.v` VGA2 block, `re_interlace_tb`. Line-21 CC moved into **`dvd/cc_vbi.sv`**
+  on the main raster's VBI (the `sys_top` VGA scanlines DE gate dropped — it killed the
+  waveform once on VGA2; emu's output stage now blanks outside DE itself).
+  ★ **Triggers found in the code and fixed (none HW-proven, all mechanically real):**
+  (1) `syncgen_intf`'s modeline copies were on `dot_rst`, which the WATCHDOG and mount
+  soft reset pulse — `sync_reg` zeroes them async, the running `sync_gen` saw
+  `horizontal_length=0/interlaced=0` for a few dots and RE-PHASED (cadence ≈1.2 s at
+  81 MHz); now on `dot_hard_rst` like the regfile (`modeline_boot_tb` [4]: RED 2/7
+  spacings broken with the old wiring, GREEN 0/7). (2) `pal_eff` was live off the decoded
+  `vertical_size` (0 after any reset ⇒ a PAL disc read NTSC ⇒ double walk) — held now.
+  (3) `analog_want` was COMBINATIONAL off Main's live cfg word while its comment claimed a
+  latch (Main re-sends cfg on every `video_mode_adjust`/OSD leave/`[video=]` re-parse ⇒ a
+  changed bit = a full `il_switch` mid-play, the likeliest "toggle = crash") — latched via
+  new `hps_io.cfg_seen`, follows while nothing is mounted, frozen while a disc plays.
+  (4) Progressive + analog-direct wrote the 875×1287 @ 23.976 Hz film modeline to the
+  pins — `filmp_eff` also gated on `~analog_want` (HDMI-only rigs keep Film 24p).
+  ★ **MEASURED sync-shape defect, the best candidate for the per-field toggling
+  (`bench/dvd/csync_field_tb.sv`, runs the REAL `sys_top.v` `csync` extracted at run
+  time):** the framework serrates at LINE rate (no equalizing pulses) and our interlaced
+  vsync began at active dot 0, ~9 µs after hsync, so field B's first broad pulse was only
+  **~18 µs** (field A ~50 µs) — at/below the broad-pulse threshold of many separators ⇒
+  a set can lock a line late on B or flip field to field. `syncgen.v` now anchors the
+  interlaced vsync on the HSYNC LEADING EDGE (field B half a line later, wrapping to the
+  next line): 59 µs / 27 µs (standard 27.2), width detector exactly 262.5 lines apart.
+  ⚠ Because "vsync on line N" now means "at line N−1's trailing hsync", the walk's
+  per-field vsync moved one line EARLIER (243..246 NTSC, 291..294 PAL) so caption line 21
+  (`v_cntr == 261`) keeps its broadcast position 17 H after the vsync edge —
+  `cc_e2e_tb` pins it. ⚠ The RC-integrator asymmetry that remains (±0.1 line) is
+  inherent to line-rate serrations and affects every MiSTer 480i core; reported, not
+  gated; 2H eq pulses in a fork `csync` are the next step if a set still hunts.
+  Also: idle window off-by-ones fixed (VER_RES 479→480, H 1441→1440 — idle now reports
+  `720x480i`, no load-time popup); `CE_PIXEL` = one clock per pixrep pair in Interlaced
+  (Main reports **720x480i**, ascal samples 720 real pixels; the analog waveform is
+  bit-identical since the DAC never used the enable) — native 13.5 MHz dot pacing was NOT
+  done (every overlay query-lead constant assumes one dot per clock). `O[2]` gained a
+  third-row trigger readout (watchdog / il_switch / pal edge / vsize 0 / cfg re-write)
+  visible whenever Interlaced, so a reporter can say which trigger fires.
 - 🔧 **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02, branch
   `feature/video-output-consolidation`) — sim-proven (RED/GREEN), ⏳ HW-confirm pending
   (gate = the two CRT field reports below reproduce clean).** Two CRT field reports
@@ -900,11 +959,12 @@ worse maintenance burden than targeted in-place edits. So:
   (clean); SEED 3 closed the pre-round-2 netlist (90.9/90.2). **HW gate (round 3 =
   C1 decode): `docs/closed_captions.md` §0 + §6.**
 - ✅ **DUAL-RASTER ANALOG OUTPUT (2026-07-29, HW-CONFIRMED + MERGED PR fj#146,
-  2026-07-30) — SUPERSEDES the O[14] whole-core CRT mode below. ⛔ PARTLY RETIRED
-  2026-09-02: the DERIVE (weave) modes and the 4-value Analog Out enum are gone —
-  `re_interlace` is fieldpass-only under `Video Output = Interlaced` (see the
-  consolidation bullet at the top). The VGA2 plumbing, ini engagement rule, fieldpass
-  re-timer and CC injection below all still ship.** User-confirmed
+  2026-07-30) — SUPERSEDES the O[14] whole-core CRT mode below. ⛔ FULLY RETIRED
+  2026-09-03 (`feature/single-raster-analog`, top bullet): `re_interlace`, the VGA2
+  plumbing and the fieldpass re-timer are DELETED — the interlaced main raster carries
+  the half-line and drives the pins directly; the ini engagement rule (`analog_want`,
+  now latched) and line-21 CC (now `dvd/cc_vbi.sv`) survive. History only below.**
+  User-confirmed
   working on real hardware (analog engages from ini alone, HDMI stays progressive
   simultaneously). ⚠️ The exact PAL 576i timing numbers and the field-dominance
   caveat (see `docs/analog_dual_raster.md`) were not specifically re-verified by

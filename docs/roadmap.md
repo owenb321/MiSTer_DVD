@@ -646,7 +646,16 @@ motion-comp starvation that caused the misses (keep Frame Drop On as a safety ne
 **Goal:** View output on an old CRT TV that has only **composite** input, via the
 MiSTer analog (I/O) board. This is the project owner's ultimate target display.
 
-**Status: ✅ HW-CONFIRMED 2026-07-05 (branch `feature/crt-480i-native`, MERGED PR fj#65) —
+**★ 2026-09-03 (branch `feature/single-raster-analog`, ⏳ HW-confirm pending): the
+dual raster is RETIRED — the interlaced MAIN raster carries the N64 half-line and drives
+the analog pins directly (pixrep, `CE_PIXEL` one clock per pair ⇒ Main reports
+`720x480i @ 59.94`); `re_interlace`/VGA2 deleted; watchdog decoupled from the raster;
+`pal_eff`/`analog_want` latched; film raster suppressed on analog-direct rigs in
+Progressive; vsync anchored on the hsync edge after `csync_field_tb` measured field B's
+first broad pulse at 18 µs. Driven by the RGBS/YPbPr/RT4K field reports on the PR #37
+prerelease. Design + HW checklist: `docs/single_raster_analog.md`.**
+
+**Status (history): ✅ HW-CONFIRMED 2026-07-05 (branch `feature/crt-480i-native`, MERGED PR fj#65) —
 then REWORKED 2026-07-29 into the DUAL-RASTER architecture, ✅ HW-CONFIRMED + MERGED
 2026-07-30 (PR fj#146):** the O[14] whole-core CRT mode is retired; the 15 kHz raster is
 now a SECOND simultaneous output (`dvd/re_interlace.sv` → `VGA2_*` → sys_top

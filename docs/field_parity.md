@@ -1,8 +1,13 @@
 # Field-parity re-engage corrector (2026-09-02)
 
-**Status: ✅ sim-proven (RED pre-fix / GREEN post-fix, `bench/dvd/field_parity_tb.sv`);
-⏳ HW-confirm pending — the gate is the two field reports below (chapter skip / FF /
-Analog Aspect change on a CRT in Native Fields no longer needs mode-toggling to fix).**
+**Status: ✅ MERGED (PR #37, 2026-09-02); sim-proven (RED pre-fix / GREEN post-fix,
+`bench/dvd/field_parity_tb.sv`); ⏳ HW-confirm pending — the gate is the two field
+reports below (chapter skip / FF / Analog Aspect change on a CRT in Native Fields no
+longer needs mode-toggling to fix). HW so far: a mid-title switch to Interlaced lands
+clean (user report). NOTE 2026-09-03: the analog delivery under this corrector changed —
+`re_interlace` is gone and the interlaced main raster drives the CRT directly
+(`docs/single_raster_analog.md`); the corrector itself is untouched and `run_field_parity.sh`
+stays green (it never touched the raster, only which field image is picked up).**
 
 ## The field reports
 

@@ -7,8 +7,17 @@
 
 The core drives a real CRT natively: with
 [`Video Output = Interlaced`](interlaced.md) (or Auto with the ini below), the analog
-pins carry a native 15 kHz 480i/576i raster built from the disc's **authored fields**,
-re-timed 1:1 — the same presentation a set-top player feeds a TV.
+pins carry a native 15 kHz 480i/576i raster of the disc's **authored fields** — the
+same presentation a set-top player feeds a TV.
+
+!!! info "Unreleased"
+    The analog raster is now the core's main interlaced raster driven straight to the
+    pins, like every other MiSTer 480i core — the separate re-timed second raster of
+    v0.4.0 and the PR #37 prerelease is gone. Together with a set of timing fixes this
+    addresses the RGB SCART / YPbPr / RetroTINK reports of a picture that shakes or
+    tears about once a second, sawtooth edges, and MiSTer reporting `1441x478i` /
+    `59.8 <-> 60.1 Hz`. MiSTer now reports **`720x480i @ 59.94 Hz`** (also on the idle
+    logo). The composite and S-video paths are unchanged in substance.
 
 ## Turning it on
 
@@ -38,14 +47,18 @@ live on the [Video Output](interlaced.md) page.
 
 In Progressive mode the analog pins carry the plain progressive raster through the stock
 path — a **31 kHz** signal a 15 kHz CRT cannot sync — and the analog-only extras
-(line-21 captions, sub-720 fill, Analog Aspect) are off. One thing to know on a
-progressive-analog rig: [Film 24p](film-24p.md) is *not* suppressed there, so with it on
-Auto a film disc switches the pins to a 23.976/25 Hz raster that almost no analog
-display accepts — set `Film 24p Out = Off`, or run `vga_scaler=1`.
+(line-21 captions, sub-720 fill, Analog Aspect) are off.
+
+!!! info "Unreleased"
+    On a progressive-analog rig (`vga_scaler=0` plus a sync mode in the ini)
+    [Film 24p](film-24p.md) is now suppressed automatically, so a film disc no longer
+    switches the pins to a 23.976/25 Hz raster the display drops when the feature
+    starts. HDMI-only setups (`vga_scaler=1`, or no analog sync mode set) keep Film 24p
+    exactly as before. On v0.4.0 and earlier set `Film 24p Out = Off` on such a rig.
 
 !!! warning "HDMI shows 480i while a CRT is active"
     Interlaced mode puts the whole core in field mode, so HDMI drops to 480i via the
-    framework scaler for the session. The earlier dual-raster arrangement that kept HDMI
+    framework scaler for the session. The earlier arrangement that kept HDMI
     progressive alongside the CRT was removed with its structurally unstable
     field-pairing (the "wobbly interlace" reports) — pick the output that matters and
     set `Video Output` for it.
@@ -54,6 +67,13 @@ Motion looks right on video-sourced discs by construction — every displayed re
 one genuine authored field — and film's 3:2 field cadence on a CRT is exactly what an
 NTSC player output. Seeks and aspect changes land clean:
 [field alignment is automatic](interlaced.md#field-alignment-is-automatic).
+
+**Composite sync (RGB SCART, sync-on-green) and YPbPr** derive the vertical timing from
+the sync waveform itself. The current build anchors the vertical sync on the horizontal
+sync edge the way broadcast signals do; if a set or scaler still shows a per-field
+wobble or reports the line count toggling, that is worth
+[reporting](../reference/reporting-a-bug.md) with the connection type — see
+[troubleshooting](../reference/troubleshooting.md#the-picture-shakes-or-tears-about-once-a-second-on-a-crt-or-scaler).
 
 ## Analog Aspect
 

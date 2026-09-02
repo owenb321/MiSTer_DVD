@@ -10,7 +10,7 @@
 | Mode | Behaviour |
 |---|---|
 | **Auto** *(default)* | Follows `MiSTer.ini`: an analog TV configured there means **Interlaced**, otherwise **Progressive**. |
-| **Interlaced** | The decoder emits the disc's **authored fields**. The analog pins carry a native 15 kHz 480i/576i raster for a CRT; HDMI shows 480i through the framework scaler. |
+| **Interlaced** | The decoder emits the disc's **authored fields** as a native 15 kHz 480i/576i raster. The analog pins carry it directly for a CRT; HDMI shows it as 480i through the framework scaler. MiSTer reports `720x480i @ 59.94 Hz`. |
 | **Progressive** | The progressive picture, as before. HDMI at full quality, [Film 24p](film-24p.md) available, and the analog pins carry the progressive raster for displays that take 480p/576p. |
 
 An explicit choice always overrides `MiSTer.ini` and persists across reloads.
@@ -59,10 +59,12 @@ everything.
 !!! note "Switching mid-title works, with a brief interruption"
     Changing `Video Output` during playback fires a full seek-equivalent flush — a short
     cut to black while the raster and A/V sync re-anchor, like a chapter jump — and then
-    plays on cleanly (field alignment recovers automatically). Setting the mode before
-    loading just avoids the interruption; it is not required. On builds up to v0.3.0
-    the equivalent switch could come back badly aliased — that is the
-    [fixed parity bug](#field-alignment-is-automatic).
+    plays on cleanly (field alignment recovers automatically; confirmed on hardware for
+    a switch to Interlaced). Setting the mode before loading just avoids the
+    interruption; it is not required. On builds up to v0.3.0 the equivalent switch could
+    come back badly aliased — that is the [fixed parity bug](#field-alignment-is-automatic).
+    `Auto` reads the ini bits at boot and while nothing is mounted; it does not change
+    the output mode under a playing disc.
 
 ## Field alignment is automatic
 
