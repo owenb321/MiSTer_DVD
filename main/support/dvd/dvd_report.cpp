@@ -148,7 +148,20 @@ static void start(void)
 	const char *src = find_source();
 	if (!src)
 	{
-		InfoMessage("Load a disc or image first", 3000, "DVD");
+		// Say what was actually seen, not just that nothing was found. The
+		// three inputs fail for different reasons -- an old Main with no
+		// step-26 hook looks identical to a genuinely empty slot otherwise,
+		// and one screenshot should tell them apart.
+		char msg[220];
+		const char *dev = dvd_phys_device();
+		snprintf(msg, sizeof(msg),
+		         "Nothing to bundle\n\ncss active: %d\ndrive: %s\nmounted: %s",
+		         dvd_css_active(), dev ? dev : "(none)",
+		         mounted_path[0] ? mounted_path : "(not captured)");
+		InfoMessage(msg, 8000, "DVD");
+		printf("DVD_REPORT: no source (css=%d dev=%s mount=%s)\n",
+		       dvd_css_active(), dev ? dev : "-",
+		       mounted_path[0] ? mounted_path : "-");
 		return;
 	}
 
