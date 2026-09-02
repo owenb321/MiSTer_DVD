@@ -15,6 +15,7 @@
 
 #include "../../user_io.h"
 #include "../../menu.h"
+#include "../../osd.h"
 #include "../../file_io.h"
 #include "dvd_report.h"
 #include "dvd_css.h"
@@ -146,7 +147,24 @@ static void start(void)
 	char cfgbuf[128];
 	const char *cfg = find_cfg(cfgbuf, sizeof(cfgbuf));
 
-	printf("DVD_REPORT: %s -> %s (lba %s)\n", src, out_path, have_lba ? lba : "n/a");
+	// The core version, without a human having to read it off the OSD and type
+	// it. CONF_STR's "V,v0.4.0 260901" line is appended to the OSD core name at
+	// init (user_io.cpp, the p[0]=='V' arm), so OsdCoreNameGet() reads back
+	// "DVD v0.4.0 260901" and everything after the first space is the version.
+	// This matters more here than on the PC route: there is no reporter in the
+	// loop to supply it, and it is the only thing that identifies a build.
+	const char *ver = 0;
+	const char *osdname = OsdCoreNameGet();
+	if (osdname)
+	{
+		const char *sp = strchr(osdname, ' ');
+		// No space means no V line was parsed -- pass nothing rather than
+		// recording the bare core name as if it were a version.
+		if (sp && sp[1]) ver = sp + 1;
+	}
+
+	printf("DVD_REPORT: %s -> %s (lba %s, ver %s)\n",
+	       src, out_path, have_lba ? lba : "n/a", ver ? ver : "n/a");
 
 	pid_t p = fork();
 	if (p < 0)
@@ -158,7 +176,7 @@ static void start(void)
 	{
 		// Child. Nav-tables only: no --nav-packs, because that scans menu VOBs
 		// and this should finish in seconds on SD-card media.
-		const char *argv[16];
+		const char *argv[20];
 		int i = 0;
 		argv[i++] = "python3";
 		argv[i++] = script;
@@ -170,6 +188,7 @@ static void start(void)
 		argv[i++] = out_path;
 		if (have_lba) { argv[i++] = "--lba"; argv[i++] = lba; }
 		if (cfg)      { argv[i++] = "--cfg"; argv[i++] = cfg; }
+		if (ver)      { argv[i++] = "--core-version"; argv[i++] = ver; }
 		argv[i] = 0;
 
 		freopen("/tmp/dvd_report.log", "w", stdout);

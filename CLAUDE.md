@@ -1376,7 +1376,12 @@ the MANUAL page `site/content/reference/reporting-a-bug.md` (Reference → Repor
 bug) — NOT the README, which is a landing page. Design: **`docs/bug_reports.md`**.
 
 **★ AND FROM THE PLAYER ITSELF — a gamepad chord (2026-09-01, `MiSTer_DVDcss`;
-⏳ HW-confirm pending).** Hold **Audio + Subtitle 2 s** and the Main writes a bundle
+✅ HW-CONFIRMED 2026-09-02, and on the hardest case first — a PHYSICAL DISC:
+77 KB off a 7.22 GB disc, audit clean, full nav walk + VM boot chain on the
+reconstruction, and ★ the playhead landed 2,064 sectors into the feature, which is
+the fact a reporter can never supply. ★★ Reading `/dev/srN` while `dvd_css` holds
+the drive WORKS — the thing flagged as likeliest to misbehave.)** Hold
+**Audio + Subtitle 2 s** and the Main writes a bundle
 for whatever is mounted — image OR optical drive — to `/media/fat/DVD_reports/`.
 ★ **The Main SHELLS OUT to `tools/dvd_report.py`, it does not reimplement the
 collector** (python3 is on stock MiSTer; a C++ copy would drift, audit and
@@ -1396,7 +1401,10 @@ own `InfoMessage()`, so no RTL change was needed for it either. Uniquely capture
 from memory. ⚠ **The DE10-Nano has NO battery-backed RTC** — an on-player bundle
 from a never-networked MiSTer carries an epoch date in its filename AND
 `created_utc`; unique per session, not trustworthy as a sequence
-(`player.generated_on == "mister"` marks them). Integration steps 22–25.
+(`player.generated_on == "mister"` marks them). Integration steps 22–25. The **core version needs no new plumbing**: `CONF_STR`'s
+`V,` line is appended to the OSD core name at init, so `OsdCoreNameGet()` reads back
+`"DVD v0.4.0 260901"` — everything after the first space (no space ⇒ record nothing,
+never pass the bare core name off as a version).
 ⚠ **`main/build_main.sh` used to copy the overlay as a HAND-MAINTAINED FILE LIST**
 and silently omitted the new module — it now globs `support/dvd/*`; the failure
 surfaced far away as a missing-header error in `user_io.cpp`.

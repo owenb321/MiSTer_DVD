@@ -1,8 +1,23 @@
 # On-player support bundles — the gamepad chord
 
-**Status: 🔧 implemented (2026-09-01), sim/host-verified; ⏳ HW-confirm pending.**
-Ships in `MiSTer_DVDcss`, so it needs a Main rebuild and a board test.
-See [`bug_reports.md`](bug_reports.md) for the bundle format itself.
+**Status: ✅ HW-CONFIRMED 2026-09-02 — and on the hardest case first, a PHYSICAL
+DISC.** See [`bug_reports.md`](bug_reports.md) for the bundle format itself.
+
+The confirming artifact (`dvdreport-20260902-030608.zip`, NCIS_S1_D4 on `sr0`,
+7.22 GB disc): 76 sectors → **77 KB**, content audit clean (76 nav-table sectors,
+0 carrying A/V), reconstructs to a 7.22 GB sparse image occupying 160 KB, and
+`iso_nav_check.py` walks it fully — 5 titles, TT_SRPT, the First Play PGC and its
+13 pre-commands — while `dvd_vm_ref.py boot` executes the boot chain to
+`JumpTT 5` → VTS 2 PGCN 1.
+
+★ **The playhead is the part that justifies building this into the Main at all.**
+It recorded sector **52673**; VTS_01's title VOB starts at **50609**, so it caught
+the user 2,064 sectors (4.2 MB) into the feature. That is the one fact a reporter
+can never supply from memory.
+
+★★ **Reading `/dev/srN` while `dvd_css` holds the drive WORKS** — this was flagged
+as the likeliest thing to misbehave (two readers seeking one optical device) and it
+did not.
 
 ## Why put this in the Main at all
 
@@ -65,6 +80,7 @@ chord held 2 s
        ├─ source: dvd_phys_device() if a disc is mounted, else get_image(0)->path
        ├─ playhead: user_io_last_lba(0)
        ├─ settings: newest /media/fat/config/DVD*.CFG
+       ├─ core version: OsdCoreNameGet() after the first space
        ├─ fork + execvp python3 dvd_report.py <src> --lba N --cfg F
        │                          --generated-on mister -o DVD_reports/<ts>.zip
        └─ reap in a later tick -> InfoMessage("written to ...") or ("FAILED, see log")
@@ -86,6 +102,20 @@ never scrambles — proven on a real encrypted disc, see
 [`bug_reports.md`](bug_reports.md) "An encrypted rip produces the same bundle" —
 so no libdvdcss handle, no keys, and no circumvention. `dvd_phys.cpp` gained
 `dvd_phys_device()` to export the mounted node.
+
+## The core version comes for free
+
+The first hardware bundle read `core version (not stated)`, which matters more on
+this route than on the PC one: there is no reporter in the loop to type it, and
+CLAUDE.md is emphatic that the OSD version line is the only thing that identifies
+a build.
+
+No new plumbing was needed. `CONF_STR`'s `V,v0.4.0 260901` line is appended to the
+OSD core name at init (`user_io.cpp`, the `p[0] == 'V'` arm), so
+`OsdCoreNameGet()` reads back `"DVD v0.4.0 260901"` and everything after the first
+space is the version. ⚠ If there is no space the core published no `V` line, and
+the bundle records nothing rather than passing the bare core name off as a
+version.
 
 ## Integration steps 22–25
 
@@ -128,7 +158,4 @@ say, not by their timestamps. A bundle made on a PC has a real clock behind it;
 - **No HUD confirmation.** `InfoMessage()` is Main's overlay, not the core's, so
   the message is not part of the recorded video if someone films the screen. Good
   enough, and free.
-- **Not hardware-confirmed.** The chord timing, the `InfoMessage` behaviour during
-  playback, fork-under-load, and reading `/dev/srN` while `dvd_css` holds the
-  drive are all untested on a board. That last one is the likeliest to surprise:
-  two readers seeking the same optical device.
+- ~~Not hardware-confirmed.~~ Confirmed 2026-09-02 — see the status block above.
