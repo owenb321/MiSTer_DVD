@@ -117,9 +117,29 @@ space is the version. ⚠ If there is no space the core published no `V` line, a
 the bundle records nothing rather than passing the bare core name off as a
 version.
 
-## Integration steps 22–25
+## ⚠ Where the mounted image's path comes from
 
-Four anchored edits in `main/integration/apply_integration.py`; all verified to
+Nothing in stock Main keeps it. `fileTYPE::name` is the **basename only**
+(`FileOpenEx` stores `p + 1`), and `fileTYPE::path` is populated **solely** in the
+pre-create branch of `user_io_file_mount()` (`if (!ret && pre)`). So a normally
+mounted ISO has neither, and the first version of `find_source()` — which tested
+`f->path[0]` — reported **"Load a disc or image first" with a disc plainly
+loaded**. A physical disc worked throughout, because that path resolves through
+`dvd_phys_device()` instead, which is exactly why the bug survived the first
+hardware round.
+
+Fixed by capturing the path at mount time (step 26) rather than trying to recover
+it afterwards.
+
+⚠ **And it must be made absolute.** Mount paths are relative to `getRootDir()`
+unless they begin with `/` — `make_fullpath()` does that expansion, and every
+in-Main consumer goes through it. This one does not: it is handed to a separate
+process with its own working directory, so a relative path would simply not be
+found. The `*DVD_PHYS*` sentinel is filtered out too; it is not a file.
+
+## Integration steps 22–26
+
+Five anchored edits in `main/integration/apply_integration.py`; all verified to
 apply and re-apply idempotently against the current stock tree.
 
 | # | File | What |
@@ -128,6 +148,7 @@ apply and re-apply idempotently against the current stock tree.
 | 23 | `user_io.cpp` | `dvd_report_tick()` at the step-7 tick site |
 | 24 | `user_io.cpp` | `dvd_report_joy(map)` at the top of `user_io_digital_joystick()` |
 | 25 | `user_io.cpp` + `.h` | `user_io_last_lba(int)` — `buffer_lba[]` is file-static |
+| 26 | `user_io.cpp` | `dvd_report_note_mount(name)` in `user_io_file_mount()` |
 
 Step 25 is anchored on the **end of the `buffer_lba[16]` initialiser**, not on the
 following function, so the accessor lands beside the data it exposes and

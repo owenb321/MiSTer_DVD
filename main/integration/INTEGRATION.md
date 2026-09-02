@@ -186,7 +186,7 @@ main=MiSTer_DVDcss
 dvd_hdmi_bitstream=0
 ```
 
-## Steps 22-25 — on-player support bundle
+## Steps 22-26 — on-player support bundle
 
 `main/support/dvd/dvd_report.{h,cpp}`. A gamepad chord (Audio + Subtitle, held
 2 s) makes the Main build a navigation support bundle from whatever is mounted
@@ -199,6 +199,7 @@ rejected: `MiSTer_DVD/docs/support_bundle_hps.md`.
 | 23 | `user_io.cpp` | `dvd_report_tick()` at the step-7 tick site |
 | 24 | `user_io.cpp` | `dvd_report_joy(map)` at the top of `user_io_digital_joystick()` |
 | 25 | `user_io.cpp` + `user_io.h` | `user_io_last_lba(int index)` accessor |
+| 26 | `user_io.cpp` | `dvd_report_note_mount(name)` inside `user_io_file_mount()` |
 
 Notes that matter on a `MAIN_MISTER_REF` bump:
 
@@ -211,6 +212,10 @@ Notes that matter on a `MAIN_MISTER_REF` bump:
   line `ULLONG_MAX,ULLONG_MAX,ULLONG_MAX,ULLONG_MAX };`. If stock reformats that
   array the anchor breaks loudly, which is correct — the accessor must sit after
   the declaration it reads.
+- **Step 26 exists because nothing else keeps the mounted path.** `fileTYPE::name`
+  is the basename only and `fileTYPE::path` is filled only in this function's
+  pre-create branch, so a normal mount has neither. It observes `name` and never
+  modifies it.
 - **No Makefile edit is needed.** `CPP_SRC` already has
   `$(wildcard ./support/*/*.cpp)`.
 - The work forks; it must never run inline in the poll loop, which also services

@@ -402,6 +402,15 @@ u = insert_after(u,
     '}\n',
     25, 'user_io_last_lba')
 
+# 26. capture the mounted image's full path. Nothing in stock Main keeps it:
+# fileTYPE::name is the basename only, and fileTYPE::path is filled ONLY in the
+# pre-create branch of this same function -- so a normally-mounted ISO has
+# neither, which made the support-bundle chord report "Load a disc or image
+# first" with a disc plainly loaded. Observes only; it never touches `name`.
+u = insert_after(u, '\tint len = strlen(name);',
+    '\tdvd_report_note_mount(name);   // dvd:report — observe only\n',
+    26, 'dvd_report_note_mount(name)')
+
 write(uio_path, u)
 print("[integration] user_io.cpp patched (support bundle)")
 

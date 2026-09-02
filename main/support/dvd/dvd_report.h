@@ -37,4 +37,11 @@ void dvd_report_joy(uint32_t map);
 // starve the core mid-playback.
 void dvd_report_tick(void);
 
+// Call from user_io_file_mount() with the path it was handed. Nothing else in
+// Main keeps the full path of a mounted image: fileTYPE::name is the basename
+// only, and fileTYPE::path is populated solely in the pre-create branch -- so a
+// normally-mounted ISO has neither, and the bundle had nothing to work from.
+// Observes only; the empty string (an unmount) clears it.
+void dvd_report_note_mount(const char *path);
+
 #endif

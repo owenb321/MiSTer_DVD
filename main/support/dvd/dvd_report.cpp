@@ -48,6 +48,7 @@ static const char *SCRIPT_PATHS[] = {
 	0
 };
 
+static char     mounted_path[1024] = {0};   // full path of the mounted image
 static uint32_t chord_since = 0;   // 0 = chord not currently held
 static int      fired       = 0;   // one bundle per press-and-hold
 static pid_t    child       = -1;
@@ -101,15 +102,36 @@ static const char *find_cfg(char *buf, size_t len)
 // What is the core reading from right now? An image file gives its path; a
 // physical disc gives the drive node, which is safe to hand to the tool because
 // every sector it reads is unscrambled (see docs/bug_reports.md).
+void dvd_report_note_mount(const char *path)
+{
+	if (!path || !path[0]) { mounted_path[0] = 0; return; }         // unmount
+	if (!strcmp(path, DVD_PHYS_SENTINEL)) { mounted_path[0] = 0; return; }
+
+	// ⚠ Mount paths are RELATIVE to getRootDir() unless they start with '/' --
+	// make_fullpath() in file_io.cpp does this expansion, and everything inside
+	// Main goes through it. We hand this path to a separate process with its own
+	// working directory, so it has to be absolute or python3 simply will not
+	// find the file.
+	if (path[0] == '/')
+		snprintf(mounted_path, sizeof(mounted_path), "%s", path);
+	else
+		snprintf(mounted_path, sizeof(mounted_path), "%s/%s", getRootDir(), path);
+}
+
 static const char *find_source(void)
 {
+	// A physical disc first: dvd_phys owns the drive and its node is what the
+	// tool should read (every sector it touches is unscrambled).
 	if (dvd_css_active())
 	{
 		const char *dev = dvd_phys_device();
 		if (dev && *dev) return dev;
 	}
-	fileTYPE *f = get_image(0);
-	if (f && f->path[0]) return f->path;
+	// Otherwise the mounted image, captured at mount time. Do NOT use
+	// fileTYPE::path here -- user_io.cpp only fills it in the pre-create branch
+	// (`if (!ret && pre)`), so a normally-mounted ISO leaves it empty and this
+	// reported "Load a disc or image first" with a disc plainly loaded.
+	if (mounted_path[0]) return mounted_path;
 	return 0;
 }
 
