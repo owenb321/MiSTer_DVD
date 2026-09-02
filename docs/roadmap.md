@@ -3,6 +3,23 @@
 > Speculative "might-be-interesting" ideas that are **not** committed here live in
 > [`docs/experiments.md`](experiments.md). Move an item over once it's decided.
 
+> **How to read the checklists.** This file is mostly a **record of work already
+> done** — phase-by-phase, with the root causes and the theories that turned out
+> wrong — rather than a live plan. Three markers, and they are kept honest because
+> a stale one misdirects a cold session as surely as a wrong comment:
+>
+> - `- [x]` — done. Some carry a note where the outcome differed from the plan.
+> - `- ⛔ **[superseded — why]**` — the item is no longer wanted *as written*,
+>   because the approach changed under it. Kept, not deleted: the reason it was
+>   dropped is usually more useful than the item was.
+> - `- [ ]` — genuinely still open. **There are 9 of them**, and that is the whole
+>   forward-looking content of this file.
+>
+> Reconciled 2026-09-01: 23 items were ticked and 15 marked superseded in one pass.
+> Most of the stale ones were Phase-0 setup tasks ("fork the repo", "install
+> Quartus") left unticked for 890 commits, which read as though the project had
+> never started.
+
 ## Guiding Principles
 
 - **★ Self-contained `.rbf` — NO HPS-side daemon (project owner's hard requirement).**
@@ -28,16 +45,16 @@
 **Goal:** Working build environment, upstream core running on hardware.
 
 ### Tasks
-- [ ] Fork `mrchrisster/MiSTer_MPEG2` → your GitHub account as `MiSTer_DVD`
-- [ ] Add upstream as remote: `git remote add upstream https://github.com/mrchrisster/MiSTer_MPEG2.git`
-- [ ] Install Quartus **17.0.2** with Cyclone V device support
-- [ ] Install VS Code extensions: `mshr-h.verilog`, `teros-technology.teroshdl`, `ms-vscode.cpptools`
-- [ ] Set up `.vscode/settings.json` (see CLAUDE.md)
+- [x] Fork `mrchrisster/MiSTer_MPEG2` → your GitHub account as `MiSTer_DVD`
+- [x] Add upstream as remote: `git remote add upstream https://github.com/mrchrisster/MiSTer_MPEG2.git`
+- [x] Install Quartus **17.0.2** with Cyclone V device support
+- [x] Install VS Code extensions: `mshr-h.verilog`, `teros-technology.teroshdl`, `ms-vscode.cpptools`
+- [x] Set up `.vscode/settings.json` (see CLAUDE.md)
 - [x] Rename `.qpf` / `.qsf` / `.qdf` revision from `mpeg2fpga` → `DVD` (done)
-- [ ] Compile in Quartus — verify bitstream generates without errors
-- [ ] Load on DE10-Nano via USB Blaster, test with a sample `.mpg` file
-- [ ] Create directory structure: `dvd/`, `hps/`, `bench/dvd/`
-- [ ] Verify lsmod / kernel: `find /lib/modules -name 'sr_mod.ko'` (expect: not found — confirm ISO-only strategy)
+- [x] Compile in Quartus — verify bitstream generates without errors
+- [x] Load on DE10-Nano via USB Blaster, test with a sample `.mpg` file
+- [x] Create directory structure: `dvd/`, `hps/`, `bench/dvd/`
+- [x] Verify lsmod / kernel: `find /lib/modules -name 'sr_mod.ko'` (expect: not found — confirm ISO-only strategy)  *(answered — sr_mod IS present; physical discs play via /dev/srN)*
 
 **Checkpoint:** Upstream MPEG-2 player works on hardware. You can see video from a `.mpg` file.
 
@@ -71,8 +88,8 @@ interleaved in packets. The demuxer separates them.
   held handshake). Compiles in Quartus, configures on hardware, OSD reached.
 
 ### HPS Tasks
-- [ ] Modify `hps/main.cpp` to open an ISO instead of a raw `.mpg` file
-- [ ] Stub out audio ring buffer read loop (just log audio frame type/size for now)
+- ⛔ **[superseded — the HPS daemon was retired 2026-06-27; playback is all in fabric]** Modify `hps/main.cpp` to open an ISO instead of a raw `.mpg` file
+- ⛔ **[superseded — as above — audio_ring is read in fabric, not by an HPS loop]** Stub out audio ring buffer read loop (just log audio frame type/size for now)
 
 **Checkpoint:** Video still plays correctly (same quality as Phase 0). Console log
 shows audio frames being correctly identified as AC-3/DTS/LPCM with correct sizes.
@@ -301,9 +318,9 @@ LPCM is the easiest codec (no decode needed) so it's the right first audio targe
     `frames_available`, `bytes_available`, `overflow_count`.
   - See CLAUDE.md → "audio_ring.sv — Status & design decisions" for the full
     rationale and the length-deferred-finalize limitation.
-- [ ] **Next:** wire `audio_ring` into `dvd/emu.sv` (replace the `aud_ready=1'b1`
+- [x] **Next:** wire `audio_ring` into `dvd/emu.sv` (replace the `aud_ready=1'b1`
   park) and expose its status on `status`/debug-overlay bits.
-- [ ] **Next:** add the HPS read path — `ioctl_upload` wiring in the `hps_io`
+- ⛔ **[superseded — no HPS read path exists; dvd_audio_decode consumes the ring in fabric]** **Next:** add the HPS read path — `ioctl_upload` wiring in the `hps_io`
   instance + an HPS-side reader.
   - ~~Read port: Avalon-MM slave, accessible by HPS via `f2sdram` bridge~~
     (superseded — ioctl_upload chosen instead).
@@ -317,7 +334,7 @@ LPCM is the easiest codec (no decode needed) so it's the right first audio targe
   dispatch + ALSA. LPCM implemented (sub-header already stripped by `ps_demux`, so
   just big-endian→little-endian + write). AC-3/DTS behind `HAVE_A52`/`HAVE_DCA`.
   `hps/Makefile` + `hps/README.md`. Host-compiles clean; **not yet run on hardware**.
-- [ ] **Bring-up:** `./dvd_audio --probe` on HW → magic "DVDA" + write_seq climbing;
+- ⛔ **[superseded — the dvd_audio daemon was deleted in the pre-release cleanup]** **Bring-up:** `./dvd_audio --probe` on HW → magic "DVDA" + write_seq climbing;
   then `./dvd_audio` for LPCM playback on an LPCM disc.
 
 **Checkpoint:** DVDs with LPCM audio (find test discs with LPCM track) play with
@@ -335,11 +352,11 @@ synchronised audio and video on HDMI. Use a movie with stereo LPCM to test.
 This covers the vast majority of commercial DVD releases.
 
 ### HPS Tasks
-- [ ] Cross-compile or build liba52 for ARM (or find it in MiSTer's Linux environment)
-- [ ] Write AC-3 decode path in `hps/audio_decode.c` (see audio.md for code)
-- [ ] Test: `a52dec` command-line tool on MiSTer to verify liba52 works before integrating
-- [ ] Integrate into ring buffer read loop
-- [ ] Basic A/V sync: dual frame counter approach (see architecture.md)
+- ⛔ **[superseded — AC-3 decodes in fabric (dvd/ac3/*); no liba52 on the ARM]** Cross-compile or build liba52 for ARM (or find it in MiSTer's Linux environment)
+- ⛔ **[superseded — replaced by dvd/ac3/* + dvd/dvd_audio_decode.sv]** Write AC-3 decode path in `hps/audio_decode.c` (see audio.md for code)
+- ⛔ **[superseded — no liba52 dependency to verify]** Test: `a52dec` command-line tool on MiSTer to verify liba52 works before integrating
+- ⛔ **[superseded — the ring is consumed in fabric]** Integrate into ring buffer read loop
+- ⛔ **[superseded — replaced by the PTS-driven STC in dvd/av_sync.sv]** Basic A/V sync: dual frame counter approach (see architecture.md)
 
 ### Testing
 - Most commercial DVDs are AC-3 2.0 or 5.1 — choose a simple 2.0 disc first
@@ -389,9 +406,9 @@ ifo_handle_t *vmgi = ifoOpen(dvd, 0);    // VIDEO_TS.IFO
 
 **Option B: Write minimal UDF parser**
 If you want more control or can't build libdvdread for MiSTer's ARM:
-- [ ] `hps/udf.c` — parse UDF Volume Descriptor Sequences
-- [ ] Find `VIDEO_TS/` directory, enumerate `.IFO` and `.VOB` files
-- [ ] `hps/ifo_parse.c` — parse title structure
+- ⛔ **[superseded — UDF is still unsupported, but it would be parsed in fabric, not in hps/udf.c]** `hps/udf.c` — parse UDF Volume Descriptor Sequences
+- [x] Find `VIDEO_TS/` directory, enumerate `.IFO` and `.VOB` files
+- ⛔ **[superseded — IFO parsing lives in dvd/dvd_iso_reader.sv + dvd/dvd_vm.sv]** `hps/ifo_parse.c` — parse title structure
   - Read `VIDEO_TS.IFO` → find main title set
   - Read `VTS_XX_0.IFO` → find main PGC (longest = main feature heuristic)
   - Get ordered list of VOB cell addresses
@@ -399,9 +416,9 @@ If you want more control or can't build libdvdread for MiSTer's ARM:
 **For v1:** Skip menu navigation. Use "longest PGC = main feature" heuristic.
 
 ### CSS Encryption Integration
-- [ ] Link libdvdcss into HPS program
-- [ ] Replace `open()`/`read()` with `dvdcss_open()`/`dvdcss_read(DVDCSS_READ_DECRYPT)`
-- [ ] Test with both unencrypted ISOs and CSS-encrypted rips
+- [x] Link libdvdcss into HPS program
+- [x] Replace `open()`/`read()` with `dvdcss_open()`/`dvdcss_read(DVDCSS_READ_DECRYPT)`
+- [x] Test with both unencrypted ISOs and CSS-encrypted rips
 
 **Checkpoint:** Drop an ISO of any commercial DVD onto the SD card. Core automatically
 finds the main feature, navigates to it, and plays from start.
@@ -427,7 +444,7 @@ finds the main feature, navigates to it, and plays from start.
 - [x] HPS half: `main/support/dvd/dvd_hdmi_audio.cpp` (EDID Short Audio Descriptors +
   `hdmi_config_set_audio()`), gated by a `cfg[14]` ack so **stock Main is safe by
   construction** — no ack, no bitstream, no noise.
-- [ ] **HW gate:** receiver names DD/DTS and plays 5.1; locks at startup without a chapter
+- [x] **HW gate:** receiver names DD/DTS and plays 5.1; locks at startup without a chapter
   skip; a plain TV stays silent, never noisy; stock Main unchanged.
 - Design + the open preamble-nibble assumption: **`docs/hdmi_bitstream.md`**.
 
@@ -449,7 +466,7 @@ av_sync). Fixed by slaving the burst release to the video STC (`head_delta ≥ 0
   `frame_len` from the sync gap (contiguous frames). Verified on a real T2 DTS track.
 - [x] iec61937_wrap: Pc=`0x000B` for DTS; LPCM/unknown → silence guard. Burst period = 512
   (T2-correct; NBLKS-snoop deferred, see docs/iec61937.md).
-- [ ] **HW gate:** DTS VOB → receiver shows "DTS", plays clean + in sync. (Concert DVDs —
+- [x] **HW gate:** DTS VOB → receiver shows "DTS", plays clean + in sync. (Concert DVDs —
   many have DTS as the primary track. T2 is a known DTS disc.)
 
 ---
@@ -898,7 +915,7 @@ blocks); the fixed-rate fabric output removed that safety net. Tiered plan:
   AC-3 ~43 ms. Absorbs bursty delivery; sufficient for short clips / near-zero drift.
   A buffer only *delays* drift, it doesn't cure it — a feature-length movie exposes
   even a ~0.05 % mismatch.
-- [ ] **Tier 2 — sample drop/duplicate at watermarks (recommended near-term).** Keep
+- ⛔ **[superseded — superseded by Tier 3 PTS genlock below, on which the drift saga closed]** **Tier 2 — sample drop/duplicate at watermarks (recommended near-term).** Keep
   the clean fixed 48 kHz output but drop one sample on over-fill / repeat one on
   under-fill. One sample every ~second is inaudible, ~20 lines of RTL, no pitch-wobble
   risk; makes long playback robust regardless of small drift. Cheap insurance.
@@ -911,7 +928,7 @@ blocks); the fixed-rate fabric output removed that safety net. Tiered plan:
   `ps_demux.aud_frame_pts → audio_ring → dvd_audio_decode.dispatch_pts → av_sync`.
   Full design: `docs/av_sync.md`. (Tier 2 sample drop/dup is now subsumed; the bare
   adaptive-NCO stepping stone is moot.)
-- [ ] **Flush on load/seek.** Flush all audio buffers + reset decoders on a new
+- [x] **Flush on load/seek.** Flush all audio buffers + reset decoders on a new
   disc/clip or a seek, so stale audio never plays out or lags video. Cheap, and
   required for seeking (Phase 8). av_sync already re-anchors on a PTS discontinuity;
   this adds the buffer flush so the resync is clean rather than draining stale audio.
@@ -984,7 +1001,7 @@ order. Detail lives in `docs/av_sync.md` "Open follow-ups".
   residual ≈100 ms audio-EARLY (A/V Offset +100 nulls it). Small follow-ups
   in lipsync_pickup.md round 12: shipping offset default (verify Matrix/PAL),
   overlay cleanup debt, why-4-lates/s churn (secondary).
-- [ ] **Loop-gain tuning (`KP_SHIFT`/`KI_SHIFT`).** If audio audibly speeds/slows
+- ⛔ **[superseded — the NCO trim was retired — same-crystal rate lock, nothing to tune]** **Loop-gain tuning (`KP_SHIFT`/`KI_SHIFT`).** If audio audibly speeds/slows
   ("hunting"), soften `KP` and lean on the integrator. Sim convergence currently uses
   `KP_SHIFT=1`, `KI_SHIFT=9`.
 - [x] **PAL / 25 fps (manual toggle).** Done 2026-06-30 (`feature/hres-offbyone-pal`):
@@ -992,7 +1009,7 @@ order. Detail lives in `docs/av_sync.md` "Open follow-ups".
   already gives 25 fps at 50 Hz. **Remaining:** drive it from `frame_rate_code` so
   25/50 Hz content syncs *automatically* (no manual toggle) — see "PAL/NTSC Framerate
   Sync" above. Shared TODO with `docs/frame_rate_governor.md`.
-- [ ] **Overlay surfacing of drift/trim** (`av_drift`/`av_nco_trim`/`reanchor_count`).
+- ⛔ **[superseded — the drift instrument rows were built, used and then retired; the overlay is compiled out of release builds]** **Overlay surfacing of drift/trim** (`av_drift`/`av_nco_trim`/`reanchor_count`).
   Deferred in PR fj#36 — the 16-row 4-bit-addressed `debug_overlay` is fragile to expand.
   The debug nets are already wired in `emu.sv`; add a row (or repurpose one) to read
   drift on HW. Needed to *measure* lip-sync rather than eyeball it.
@@ -1000,7 +1017,7 @@ order. Detail lives in `docs/av_sync.md` "Open follow-ups".
   error `LEAD_TARGET` can't absorb: carry the frame PTS through decode and subtract the
   live `pcm_out` FIFO occupancy so the loop references the PTS of the sample actually
   *leaving* the speaker, not the one entering the decoder.
-- [ ] **Static-*pop* drop fix (related, separate effort).** `audio_ring` drops PES-sized
+- [x] **Static-*pop* drop fix (related, separate effort).** `audio_ring` drops PES-sized
   chunks, not AC-3 frames, so an overflow drop misaligns the AC-3 stream → `err` →
   self-heal reset → audible pop. PTS pacing reduces drop *frequency* but can't silence a
   drop. Fix: AC-3-frame-aligned drop in `audio_ring`, or graceful mute-and-resync in
@@ -1014,11 +1031,11 @@ refresh; see `docs/frame_rate_governor.md`. Tier 3 PTS genlock above replaced it
 Optical out is not Digital-board-exclusive: the framework's `spdif` net feeds both
 `AUDIO_SPDIF` (Digital TOSLINK) and `SDCD_SPDIF`/`PIN_AH7` (Analog board combo-jack
 mini-TOSLINK). The blocker is format, not connector — `audio_out` emits PCM only.
-- [ ] Complete `dvd/iec61937_wrap.sv` (frame undecoded AC-3/DTS from `ps_demux`/`audio_ring`;
+- [x] Complete `dvd/iec61937_wrap.sv` (frame undecoded AC-3/DTS from `ps_demux`/`audio_ring`;
       set the IEC 60958 non-PCM channel-status bit)
-- [ ] Bypass MiSTer framework's PCM `audio_out` for bitstream output
-- [ ] Drive the S/PDIF pin directly (`AUDIO_SPDIF` and/or `SDCD_SPDIF`)
-- [ ] Test with AV receiver via optical (confirm the board revision populates the TOSLINK TX)
+- [x] Bypass MiSTer framework's PCM `audio_out` for bitstream output
+- [x] Drive the S/PDIF pin directly (`AUDIO_SPDIF` and/or `SDCD_SPDIF`)
+- [x] Test with AV receiver via optical (confirm the board revision populates the TOSLINK TX)
 
 ### DVD Menu Navigation (stretch goal)
 - Parse DVD navigation packets (NAV packs embedded in VOB data)
@@ -1227,7 +1244,7 @@ chapter, and accurate-seek features need that data **parsed** instead of discard
   chapters / PTT (Phase 6)". **Deferred (documented):** cross-PGC user chapter-skip +
   PTT-based current-chapter `n` (would rewrite the HW-confirmed `chap_st`, and only affects
   multi-PGC game discs — no observable movie benefit).
-- [ ] **`program_map_offset` seekable timeline** (presentation time ⇄ disc sector) — the
+- ⛔ **[superseded — Phase-8b TMAP was retired by user decision 2026-07-10]** **`program_map_offset` seekable timeline** (presentation time ⇄ disc sector) — the
   PGC `palette`@164 and cell category word are already handled (Phases 3/9); the exact
   time↔sector map beyond the DSI ±10 s scrub is unbuilt (Phase-8b TMAP was retired).
 
@@ -1376,7 +1393,7 @@ of each via `aud_track`/`sp_track`. What was missing was knowing how many exist.
 - [x] **HW-CONFIRMED on MiB VTS_21** (2026-07-10): audio 4-track cycle audible, subtitle
   4-track+off visible, no out-of-range garbage, audio switch stays in sync with no video
   corruption.
-- [ ] **(Phase 11) On-screen track/language popup** — part of the custom graphic OSD (the
+- [x] **(Phase 11) On-screen track/language popup** — part of the custom graphic OSD (the
   piece the MiSTer OSD can't do); uses the `attr_*` readout + the subpicture blend.
 
 ### Subtitle (subpicture) selection
