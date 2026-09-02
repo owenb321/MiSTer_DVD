@@ -386,6 +386,33 @@ sp_ctx_mapped_w = hl_btns_armed | (menus_on && menu_active) | sp_menu_early
   if ever reported.
 - Pure `sub_on` playback is the only raw context — that is the fix.
 
+**Why not map the rect alone (asked and answered, 2026-09-02).** Mechanically it would be
+easy — the rect is four quasi-static numbers, so one could forward-map `hl_x1..y2` once
+per HLI instead of inverse-mapping the per-pixel query. But the highlight has NO pixels of
+its own: it draws only by recolouring the SPU pixels the query fetches (`hl_ci`/`hl_a`
+select on `sp_q_idx`, nothing renders where `sp_q_inside`=0), and the rect is authored ON
+the button art — they are one object on the disc. A mapped rect over a raw-queried bitmap
+recolours whichever art pixels happen to sit under the displaced rect: the wrong part of
+the button, or nothing (a background-class pixel with HLI alpha 0). So the switchable unit
+is always **(art + rect) together**, and the only real question is what space the ART
+needs — menu button art composes with imagery baked into the video frame, so it must
+track the rescaled picture; a dialogue subtitle composes with nothing. That is why the
+split is per-CONTEXT.
+
+**Can a highlight and dialogue subtitles coexist?** Spatially never — one `spu_decode`,
+one committed SPU frame, one stream (`sp_track_eff` mux); a highlight is a recolour of
+whatever is displayed. On every known disc pattern the highlightable art DISPLACES the
+subtitle stream for its window (menus/`sp_menu_early` force track 0; the white
+rabbit / MiB prompts force theirs via SetSTN = `vm_owns_route`), so the "sawtooth returns
+while an HLI is armed" edge affects the button art, not dialogue subs. The theoretical
+residue: a disc arming an in-title HLI WITHOUT forcing a stream would leave the user's
+subtitle displayed, mapped (sawtooth) and recolourable under the rect for that window —
+pre-existing behaviour, not a regression. If such a disc ever surfaces, the consistent
+refinement is raw art + raw rect for that case (prompt text doesn't align to video
+imagery): drop the bare `hl_btns_armed` term and let `vm_owns_route` catch forced-stream
+prompts — deliberately NOT done now, since it trades a proven-safe superset for an
+assumption about discs never seen.
+
 The select is **committed on `av_refresh_tick` (frame top) only**: `spu_decode`'s
 `q_row_base` walker accepts only {reset,+1,+2}/{reset≤1,+2,+4} q_y steps, so a mid-frame
 raw↔mapped flip would leave it stale for the rest of the field (`crt_ov_map_tb` T8b proves
