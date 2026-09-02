@@ -97,7 +97,7 @@ body:
     attributes:
       label: Relevant settings
       description: |
-        `Film 24p Out`, `A/V Offset`, `Interlaced Out`, `Video Standard`, `Audio Out` —
+        `Film 24p Out`, `A/V Offset`, `Video Output`, `Video Standard`, `Audio Out` —
         whichever you have changed from the defaults.
     validations:
       required: false

@@ -122,11 +122,19 @@ Set **`Analog Aspect`** to `Letterbox` (or `Crop`). Anamorphic content is stored
 into a 4:3 raster and needs unsqueezing. See
 [Analog Aspect](../video/analog-crt.md#analog-aspect).
 
-### Motion looks juddery on a CRT
+### Motion looks juddery or wobbly on a CRT
 
-If the content is video-sourced — television, concert footage — set
-**`Analog Out` = `Native Fields`** *before loading the disc*. See
-[Native Fields](../video/analog-crt.md#native-fields).
+Make sure **`Video Output`** is `Interlaced` (or `Auto` with the
+[analog ini bits](../video/analog-crt.md#turning-it-on) set) —
+the CRT then gets the disc's authored fields. See [Video Output](../video/interlaced.md).
+On builds up to v0.3.0 the equivalent setting is `Analog Out = Native Fields`; those
+builds' other analog modes have a known field-pairing wobble on video-sourced content.
+
+### The picture goes aliased / screen-door after a chapter skip on a CRT
+
+Fixed in current builds — field alignment now recovers automatically within a couple of
+fields. On builds up to v0.3.0, toggle `Analog Out` away and back (sometimes several
+times) to re-roll the field phase.
 
 ### A film disc keeps changing resolution, or judders
 
@@ -139,6 +147,17 @@ Also confirm **`Frame Drop` is On** — the cadence corrector runs on that path.
 ### The idle logo bounces in a small box on a widescreen display
 
 Fixed in current builds. Update the core.
+
+### Black & white picture over composite or S-video
+
+`MiSTer.ini` is missing `vga_mode=svideo` (or `vga_mode=cvbs` for composite). Without it
+the framework's Y/C encoder is off, the pins carry raw RGB, and the luma line shows a
+stable colorless picture. The chroma standard (PAL/NTSC) is picked automatically once the
+encoder is on. See [Analog and CRT output](../video/analog-crt.md#turning-it-on).
+
+If `vga_mode` is set and other cores show color on the same cable but the DVD core does
+not — or an NTSC disc shows color while a PAL disc is B&W — that is worth
+[reporting](reporting-a-bug.md), along with the OSD's reported resolution line.
 
 ### Nothing on the analog output at all
 

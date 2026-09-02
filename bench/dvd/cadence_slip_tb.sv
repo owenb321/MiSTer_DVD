@@ -48,7 +48,7 @@ module cadence_slip_tb;
   reg         disp_wr_addr_almost_full = 0, resample_wr_almost_full = 0;
   wire        busy;
   wire        frame_late;
-  wire        film_det_ntsc, film_det_pal, det_video;
+  wire        film_det_ntsc, film_det_pal;
   wire        refresh_tick_w;
   reg         film24 = 1'b1;
 
@@ -70,10 +70,9 @@ module cadence_slip_tb;
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full), .resample_wr_almost_full(resample_wr_almost_full),
     .busy(busy), .frame_late(frame_late),
     .film_det_ntsc(film_det_ntsc), .film_det_pal(film_det_pal),
-    .det_video(det_video),
     .video_live(), .pickup_hold(1'b0), .pause(1'b0),
     .refresh_tick_dbg(refresh_tick_w),
-    .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(film24));
+    .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(film24));
 
   always #5 clk = ~clk;
 

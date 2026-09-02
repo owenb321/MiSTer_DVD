@@ -387,3 +387,67 @@ this is the shear-fix module and sim cannot prove hit-rate-under-real-traffic. S
 `releases/DVD_shimreclaim_20260828_0259.rbf`: the entire MiB movie played through plus
 menu/seek actions — no video issues, no shearing, no artifacting. Merged as PR #18
 (no release cut yet — rides with the next one; `` `CORE_VERSION `` 0.1e stays open).
+
+## 12. The video-output settings consolidation + the field-parity coin flip (2026-09-02)
+
+Two CRT field reports arrived within days of each other: the derive/weave analog path
+looked "extremely wobbly — not how an interlaced signal normally looks on a CRT" (the
+long-documented caveat-2 pairing defect, now seen in the wild), and `Analog Out = Native
+Fields` came back from any chapter skip / fast-forward / Analog Aspect change "super
+aliased", healed only by toggling the mode away and back "3 or 4 times". The
+repeat-until-fixed ritual was the tell: a 50/50 parity roll.
+
+The parity bug was root-caused to the junction of two individually-correct decisions: the
+mixer's relaxed frame-top matcher (the 3:2/drop black-fields fix) accepts a field at
+either raster parity slot, and nothing carried the raster's field parity back to
+`resample_addrgen`'s pickup — so one odd perturbation flipped content-field↔raster-field
+phase permanently (invisible under HDMI Bob, which is why it shipped unseen). Fixed with
+a feed-forward alternation guard plus a mixer→addrgen parity feedback loop that inserts
+exactly one held-frame field; the two triggers compose by XOR and the inserted field's
+type depends on which fired. Full design, the livelock the first draft had, and the
+RED/GREEN testbench evidence: `docs/field_parity.md`.
+
+With fieldpass immune to the wobble by construction and the re-engage hole closed, the
+user reversed the 2026-08-23 "all four Analog Out modes stay" decision and collapsed the
+surface to one option: `O[10:9] Video Output = Auto/Interlaced/Progressive` (Interlaced =
+Native Fields renamed; the derive modes, `Interlaced Out`, and the `det_video` detector
+deleted; `re_interlace` fieldpass-only; config layout `v,2`). The deliberate cost: the
+dual-raster headline — CRT 480i with simultaneously-progressive HDMI — no longer exists;
+with a CRT active, HDMI shows 480i. Reversal rationale recorded at the (retained)
+original decision block in `docs/roadmap.md`; superseded headers in
+`docs/interlaced_auto.md` and `docs/analog_dual_raster.md`.
+
+### §12 addendum — HW round 1: the boot-time modeline-walk reset race (2026-09-02)
+
+The first hardware round of the consolidation build (`DVD_videoout_20260902_1146`)
+failed immediately: with the analog ini bits set, the core booted reporting
+"719x5i", a disc load showed "719x1035123i @ 31.48 kHz", and the composite CRT was
+dead — while the Progressive path was fine. The reading: 31.48 kHz is the
+PROGRESSIVE line rate and the "i" flag means `VGA_F1` was toggling, so `il_eff`
+was asserted but the modeline never switched (Main's geometry measurement returns
+garbage line counts when F1 toggles against a progressive raster), and
+`re_interlace`'s period check therefore correctly refused to lock — dead analog.
+
+Root cause: a latent race the consolidation was the first to arm. The emu modeline
+walk keys on RAW `reset_n` and fires its six regfile writes starting the next
+clk_dec cycle, but `mpeg2video` synchronizes its resets internally (`reset.v`,
+cascaded 5-FF `sync_reset` stages) — `hard_rst`, which gates every modeline
+register in `regfile.v`, deasserts ~5–10 cycles AFTER `reset_n` rises. Writes in
+that window are silently discarded while the registers re-default to the
+progressive modeline, and the walk latches `il_prev` anyway, so no edge remains to
+retry. Invisible since the walk was built (2026-07): `il_eff` was always 0 at boot,
+so a swallowed init walk wrote the values the registers were resetting to anyway,
+and every later mode change came from the OSD with the decoder long alive.
+`Video Output = Auto` driving `il_eff` from the ini bits is the first boot-time
+walk that ever wrote something different from the reset defaults.
+
+Fix: a `dec_ready` gate — walk kicks wait until `core_sync_rst` (the decoder's own
+`sync_rst_out`, the last reset in the cascade to deassert, same clk_dec domain)
+has been observed high for 8 consecutive cycles. Proven by
+`bench/dvd/modeline_boot_tb.sv` (`run_modeline_boot.sh`), which drives the REAL
+`reset.v` + `regfile.v` with a verbatim copy of the walk: pre-fix it reproduces
+both failure shapes (total swallow — the exact HW symptom — and partial
+application, timing-dependent, matching "very broken"), while the OSD-toggle
+control passes even un-fixed, which is why no earlier HW round could have caught
+it. The walk is the only emu-side writer of decoder registers; any future one must
+gate on `sync_rst_out`, not `reset_n`.

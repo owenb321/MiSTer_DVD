@@ -23,7 +23,8 @@ core.
 
 1. **An NTSC disc that actually has captions.** Only about **1 disc in 6** does. Every PAL
    disc scanned has none — line 21 is an NTSC construct, and PAL discs use subtitles instead.
-2. **The analog output engaged** — see [Analog and CRT output](analog-crt.md).
+2. **The analog output engaged** — `Video Output = Interlaced`, or Auto with the analog
+   ini bits set; see [Analog and CRT output](analog-crt.md).
 3. **A connection that carries line 21.** Composite and S-video always do. Component does
    on many sets. **Consumer sets generally do not slice captions from RGB**, so an RGB
    SCART path often will not work even though the waveform is present on all three channels.

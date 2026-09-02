@@ -1,6 +1,24 @@
 # Dual-Raster Analog Output — CRT 480i/576i from MiSTer.ini alone
 
-**Status: ✅ HW-CONFIRMED + MERGED (PR fj#146, 2026-07-30).** User-confirmed working on real
+**★ STATUS UPDATE 2026-09-02 (branch `feature/video-output-consolidation`): the DERIVE
+(weave) modes are REMOVED — fieldpass is now the ONLY analog delivery, under the single
+`O[10:9] Video Output = Auto/Interlaced/Progressive` control (`Interlaced` = the old
+Native Fields; `Auto` = the ini rule below resolving to Interlaced/Progressive; the old
+4-value `O[27:26] Analog Out` enum and `O[10:9] Interlaced Out` are gone, config layout
+bumped to `v,2`).** Why reversed (this doc's caveat 2 was the decisive evidence): two
+field reports — the derive path's pairing wobble seen in the wild ("extremely wobbly,
+not how interlace normally looks"), and the Native Fields post-seek "super aliased /
+toggle 3-4 times" defect, root-caused as a separate field-parity re-engage coin flip and
+FIXED (`docs/field_parity.md`). With fieldpass immune to caveat 2 by construction and the
+parity corrector closing the re-engage hole, the derive machinery's only remaining value
+was CRT-480i-plus-progressive-HDMI simultaneity, which the maintainer chose to drop
+(pick-your-output). `re_interlace.sv` keeps only the fieldpass timing (PERIOD_FP_*/
+SKEW_FP); the `fieldpass` port, the derive PERIOD/SKEW constants and the derive arming
+are deleted; `analog_eff`/`il_eff` collapsed into one `interlaced_eff`. The raster
+generator, phase lock, BRAM, CC injection and `VGA2_*` plumbing below all still ship.
+The rest of this doc is kept as design history; "caveat 2" is CLOSED.
+
+*(Historical status:)* ✅ HW-CONFIRMED + MERGED (PR fj#146, 2026-07-30). User-confirmed working on real
 hardware: the analog output engages from MiSTer.ini alone (no OSD step) with HDMI staying
 simultaneously progressive. Sim-verified: `bench/dvd/re_interlace_tb.sv` green (NTSC + PAL +
 re-lock + film-reject), all display-path regressions green. Supersedes the O[14] whole-core

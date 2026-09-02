@@ -41,7 +41,8 @@ module mixer(
   h_pos, v_pos, h_sync_in, v_sync_in, pixel_en_in,
   y_out, u_out, v_out, osd_out, h_sync_out, v_sync_out, pixel_en_out,
   dbg_lines_displayed, dbg_first_vpos, dbg_last_vpos,             // DVD-FORK DEBUG (256-line strobe probe)
-  disp_v_offset                                                   // DVD-FORK (CRT anamorphic letterbox bar offset)
+  disp_v_offset,                                                  // DVD-FORK (CRT anamorphic letterbox bar offset)
+  frame_top_par_err                                               // DVD-FORK (field-parity corrector): frame-top landed on the wrong raster field parity
   );
 
   input              clk;                      // clock
@@ -99,6 +100,19 @@ module mixer(
    * comparisons below reduce to the original (v_pos<=1) / (v_pos!=0 && v_pos!=1) — the
    * FIT path is bit-identical. Quasi-static (menu-rate) level. */
   input        [11:0]disp_v_offset;
+
+  /* DVD-FORK (field-parity corrector, 2026-09-02): latched at each frame-top start —
+   * 1 if the picture's first line began on the WRONG raster field parity: a TOP field
+   * (ROW_0_COL_0) starting at v_pos == disp_v_offset+1 (a bottom raster field), or a
+   * BOTTOM field (ROW_1_COL_0) at v_pos == disp_v_offset (a top raster field). The
+   * relaxed display_first_pixel matcher below accepts either parity ON PURPOSE (the
+   * 3:2/drop "black fields" fix) — this output merely REPORTS the mismatch so
+   * resample_addrgen can re-align the phase by inserting one field. A LEVEL, not a
+   * pulse: it holds its verdict until the next frame-top, so it is CDC-safe at field
+   * rate (2-FF synced dot->clk in mpeg2video.v). Meaningless while the raster is
+   * progressive (a FRAME image emits ROW_0_COL_0 at v_pos==disp_v_offset, so it reads
+   * 0 there anyway); the consumer additionally gates on its own `interlaced`. */
+  output reg         frame_top_par_err;
 
   /* store pixel_queue fifo output */
   reg           [7:0]y_0;
@@ -191,6 +205,17 @@ module mixer(
   always @(posedge clk)
     if(~rst) state <= STATE_INIT;
     else if (clk_en) state <= next;
+
+  /* DVD-FORK (field-parity corrector): frame-top parity verdict — see the output
+   * declaration above. Sampled exactly when a frame-top is accepted for display
+   * (STATE_WAIT -> STATE_FIRST_PIXEL with a ROW_0/ROW_1 head), i.e. once per
+   * displayed picture start. */
+  always @(posedge clk)
+    if (~rst) frame_top_par_err <= 1'b0;
+    else if (clk_en && (state == STATE_WAIT) && (next == STATE_FIRST_PIXEL) && is_frame_top)
+      frame_top_par_err <= (position_in_0 == ROW_0_COL_0) ? (v_pos != disp_v_offset)
+                                                          : (v_pos != disp_v_offset + 12'd1);
+    else frame_top_par_err <= frame_top_par_err;
 
   /* registers */
   /* store pixel_fifo output */

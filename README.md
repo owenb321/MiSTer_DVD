@@ -52,9 +52,9 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   [entirely in fabric](https://owenb321.github.io/MiSTer_DVD/audio/formats/); AC-3 and DTS as
   [IEC 61937 bitstream](https://owenb321.github.io/MiSTer_DVD/audio/passthrough/) to a receiver — over optical S/PDIF,
   or over HDMI with the custom Main, so 5.1 needs no add-on board.
-- **Analog / CRT** — a native 15 kHz 480i/576i raster alongside the progressive one, so
-  [a CRT and HDMI work at once](https://owenb321.github.io/MiSTer_DVD/video/analog-crt/). Engages from `MiSTer.ini`
-  like any other core.
+- **Analog / CRT** — a native 15 kHz 480i/576i raster built from the disc's
+  [authored fields](https://owenb321.github.io/MiSTer_DVD/video/analog-crt/), the presentation a set-top player
+  feeds a TV. Engages from `MiSTer.ini` like any other core.
 - **[Closed captions](https://owenb321.github.io/MiSTer_DVD/video/closed-captions/)** re-modulated onto line 21 of the
   analog output for your television to decode, exactly as a real player does.
 - **[Video CD / SVCD](https://owenb321.github.io/MiSTer_DVD/formats/vcd-svcd/)** — bin/cue rips play directly.

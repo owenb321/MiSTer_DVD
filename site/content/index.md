@@ -65,10 +65,9 @@ the data-track `.bin` and the core strips the raw CD sectors in fabric, demuxes 
 (VCD) or MPEG-2 (SVCD) stream, and plays it with correct 44.1 kHz audio pitch, seek and
 pause.
 
-**Analog / CRT** — two simultaneous rasters: the progressive one for HDMI, plus a native
-15 kHz 480i/576i raster on the analog pins. It engages from `MiSTer.ini` alone, like any
-other core. A [field-passthrough mode](video/analog-crt.md) hands the CRT the disc's
-authored fields 1:1.
+**Analog / CRT** — a native 15 kHz 480i/576i raster on the analog pins, built from the
+disc's [authored fields](video/analog-crt.md), re-timed 1:1 — the presentation a set-top
+player feeds a TV. It engages from `MiSTer.ini` alone, like any other core.
 
 **Closed captions** — NTSC discs carry EIA-608 captions hidden in the MPEG-2 video stream,
 separately from subtitles. The core extracts them and re-modulates them onto

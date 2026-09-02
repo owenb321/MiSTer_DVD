@@ -610,7 +610,7 @@ module crt_ov_map_tb;
             end
         end
 
-        // (b) 480i (Native Fields raster), both fields: parity-preserving inverse
+        // (b) 480i (the Video Output = Interlaced fields raster), both fields: parity-preserving inverse
         interlaced = 1;
         for (f = 0; f < 2; f = f + 1) begin
             v_pos_in = 12'hFFF; repeat (4) @(negedge clk);

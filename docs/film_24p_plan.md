@@ -419,7 +419,8 @@ Active scan (720 × 480 at 27 MHz) is bit-for-bit unchanged; only blanking moves
 60 → 77 dots, vblank 833 → 807 lines). hsync goes 31.47 → 30.86 kHz. Nothing downstream cares:
 ascal takes DE/HS/VS + `CE_PIXEL≡1` and rescales the active window, the HDMI output modeline is
 the framework's own, and the 858-assuming `dvd/re_interlace.sv` is unreachable here (film is
-force-disabled under `analog_eff`). PAL 25p is already exact and is untouched.
+force-disabled under `analog_eff` — since the 2026-09-02 Video Output consolidation, the
+equivalent gate is `interlaced_eff`). PAL 25p is already exact and is untouched.
 
 `dvd/av_sync.sv` needs **no change**: `REFRESH_MHZ_FILM = 23976` was always the *correct*
 constant — it was the raster that didn't match it. Now they agree.

@@ -16,9 +16,10 @@
 # progressive_frame @12) rather than from the spec, so the census and the RTL
 # cannot drift apart.
 #
-# WHY IT EXISTS: `Analog Out = Native Fields` (docs/analog_dual_raster.md) only
-# shows its benefit on TRUE-INTERLACED (video-sourced) content -- on film the
-# derive path is nearly as good. Picking a test disc by intuition ("a concert
+# WHY IT EXISTS: `Video Output = Interlaced` (the authored-fields mode; was
+# "Analog Out = Native Fields" before the 2026-09 consolidation) only shows its
+# benefit on TRUE-INTERLACED (video-sourced) content -- film's 3:2 fields look
+# much the same either way. Picking a test disc by intuition ("a concert
 # is probably video") is a guess; this measures it.
 #
 # ★ SAMPLES DEEP, NOT HEADS. The Thayer's Quest diagnosis was derailed for
@@ -152,13 +153,13 @@ def verdict(acc):
     tog = acc['rff_toggle'] / n
     if pf < 0.10:
         return "VIDEO (true interlaced)", \
-               "det_video engages -> the ideal Native Fields test disc"
+               "the ideal Interlaced-mode (authored fields) test disc"
     if pf > 0.90 and tog > 0.20:
         return "FILM (3:2 soft telecine)", \
-               "det_ntsc engages; Native Fields gains little here"
+               "det_ntsc engages; Interlaced mode gains little here"
     if pf > 0.90 and rf < 0.05:
         return "FILM/PROGRESSIVE (25p or 30p)", \
-               "sustained progressive_frame; Native Fields gains little"
+               "sustained progressive_frame; Interlaced mode gains little"
     if pf > 0.90:
         return "FILM (progressive, irregular rff)", "mostly progressive_frame"
     return "MIXED", "neither detector would sit engaged -- inspect per-window"
@@ -200,7 +201,7 @@ def main():
             print(f"{'':44s}   per-window prog_frame%%: {sp}")
 
     if len(rows) > 1:
-        print("\n=== Native Fields test candidates (lowest progressive_frame%% first) ===")
+        print("\n=== Interlaced-mode (authored fields) test candidates (lowest progressive_frame%% first) ===")
         for name, vts, acc, v, _ in sorted(
                 rows, key=lambda r: r[2]['prog'] / max(1, r[2]['n'])):
             n = acc['n'] or 1
