@@ -71,8 +71,18 @@ navigation. Useful for testing and for clips you have already extracted.
 
 ## Where to keep them
 
-DVD images are large, so **loading from a NAS share works and is often more practical than
-filling the SD card**. USB storage works too. One requirement catches people out:
+The standard place is the core's own folder on the SD card:
+
+```
+/media/fat/games/DVD/
+```
+
+The OSD file picker opens there, so images in that folder are the ones you see first.
+Create it if it does not exist — the release zip does not.
+
+DVD images are large, though, so **loading from a NAS share works and is often more
+practical than filling the SD card**. USB storage works too. One requirement catches
+people out:
 
 !!! danger "The share must be mounted read-write"
     The MiSTer framework opens disk images read-write (`O_RDWR|O_SYNC`) whether or not

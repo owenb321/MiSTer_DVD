@@ -1,7 +1,15 @@
 # Loading a movie
 
-Put the image anywhere the MiSTer file browser can reach — SD card, USB storage or a
-network share — and select it from the core's **`Load Video`** entry in the OSD.
+Put your images in the core's folder on the SD card:
+
+```
+/media/fat/games/DVD/
+```
+
+That is where the OSD file picker opens when you choose **`Load Video`** — create the
+folder if it does not exist yet. Anywhere else the MiSTer file browser can reach works
+too — USB storage or a network share — see
+[Where to keep them](discs-and-images.md#where-to-keep-them).
 
 Accepted file types:
 
