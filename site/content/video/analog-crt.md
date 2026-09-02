@@ -26,6 +26,13 @@ monitor: **Interlaced**) or when your analog display wants a progressive signal
 (480p/576p component or VGA: **Progressive**). The mode table and the full description
 live on the [Video Output](interlaced.md) page.
 
+In Progressive mode the analog pins carry the plain progressive raster through the stock
+path — a **31 kHz** signal a 15 kHz CRT cannot sync — and the analog-only extras
+(line-21 captions, sub-720 fill, Analog Aspect) are off. One thing to know on a
+progressive-analog rig: [Film 24p](film-24p.md) is *not* suppressed there, so with it on
+Auto a film disc switches the pins to a 23.976/25 Hz raster that almost no analog
+display accepts — set `Film 24p Out = Off`, or run `vga_scaler=1`.
+
 !!! warning "HDMI shows 480i while a CRT is active"
     Interlaced mode puts the whole core in field mode, so HDMI drops to 480i via the
     framework scaler for the session. The earlier dual-raster arrangement that kept HDMI
