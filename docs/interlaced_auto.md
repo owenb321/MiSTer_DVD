@@ -1,6 +1,19 @@
 # Interlaced Out: Auto — native 480i/576i fields for true-interlaced video
 
-**Status: ✅ HW-CONFIRMED + MERGED (PR fj#132, 2026-07-27) — `On`/`Off` ship; `Auto` parked opt-in.**
+**Status: ⛔ SUPERSEDED (2026-09-02, branch `feature/video-output-consolidation`) — the
+`O[10:9] Interlaced Out` option and its `det_video` auto-detector are REMOVED.** The
+settings surface collapsed to one `O[10:9] Video Output = Auto/Interlaced/Progressive`
+control: `Interlaced` is the old "Native Fields" behavior (authored fields session-wide;
+HDMI 480i via ascal — the same picture Interlaced Out=On gave an HDMI rig), `Auto` is
+ini-driven and boot-static, and the mid-title `Auto` content detector died with its known
+audio-skew problem. The fields RASTER this doc designed (the il_eff modeline branch,
+syncgen behavior, VGA_F1/ascal handling, the mid-stream `il_switch` flush) **still ships
+unchanged** and is what Video Output=Interlaced engages — only the option surface and the
+detector are gone. Rationale + field reports: `docs/field_parity.md`,
+`docs/analog_dual_raster.md` status, roadmap "Video Output consolidation". The body below
+is kept as the engineering history of the raster design.
+
+*(Historical status at supersession:)* ✅ HW-CONFIRMED + MERGED (PR fj#132, 2026-07-27) — `On`/`Off` shipped; `Auto` parked opt-in.
 Sim-verified: `bench/dvd/film_detect_tb.sv` (extended with `det_video` cases). HW round 1–2
 (2026-07-26/27): interlaced detection + mode switching work, and **`On`/`Off` both play with
 correct A/V sync (HW-confirmed)** — but **`Auto`'s mid-title switch still leaves audio

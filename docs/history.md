@@ -387,3 +387,32 @@ this is the shear-fix module and sim cannot prove hit-rate-under-real-traffic. S
 `releases/DVD_shimreclaim_20260828_0259.rbf`: the entire MiB movie played through plus
 menu/seek actions — no video issues, no shearing, no artifacting. Merged as PR #18
 (no release cut yet — rides with the next one; `` `CORE_VERSION `` 0.1e stays open).
+
+## 12. The video-output settings consolidation + the field-parity coin flip (2026-09-02)
+
+Two CRT field reports arrived within days of each other: the derive/weave analog path
+looked "extremely wobbly — not how an interlaced signal normally looks on a CRT" (the
+long-documented caveat-2 pairing defect, now seen in the wild), and `Analog Out = Native
+Fields` came back from any chapter skip / fast-forward / Analog Aspect change "super
+aliased", healed only by toggling the mode away and back "3 or 4 times". The
+repeat-until-fixed ritual was the tell: a 50/50 parity roll.
+
+The parity bug was root-caused to the junction of two individually-correct decisions: the
+mixer's relaxed frame-top matcher (the 3:2/drop black-fields fix) accepts a field at
+either raster parity slot, and nothing carried the raster's field parity back to
+`resample_addrgen`'s pickup — so one odd perturbation flipped content-field↔raster-field
+phase permanently (invisible under HDMI Bob, which is why it shipped unseen). Fixed with
+a feed-forward alternation guard plus a mixer→addrgen parity feedback loop that inserts
+exactly one held-frame field; the two triggers compose by XOR and the inserted field's
+type depends on which fired. Full design, the livelock the first draft had, and the
+RED/GREEN testbench evidence: `docs/field_parity.md`.
+
+With fieldpass immune to the wobble by construction and the re-engage hole closed, the
+user reversed the 2026-08-23 "all four Analog Out modes stay" decision and collapsed the
+surface to one option: `O[10:9] Video Output = Auto/Interlaced/Progressive` (Interlaced =
+Native Fields renamed; the derive modes, `Interlaced Out`, and the `det_video` detector
+deleted; `re_interlace` fieldpass-only; config layout `v,2`). The deliberate cost: the
+dual-raster headline — CRT 480i with simultaneously-progressive HDMI — no longer exists;
+with a CRT active, HDMI shows 480i. Reversal rationale recorded at the (retained)
+original decision block in `docs/roadmap.md`; superseded headers in
+`docs/interlaced_auto.md` and `docs/analog_dual_raster.md`.

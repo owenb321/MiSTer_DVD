@@ -242,6 +242,44 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02, branch
+  `feature/video-output-consolidation`) — sim-proven (RED/GREEN), ⏳ HW-confirm pending
+  (gate = the two CRT field reports below reproduce clean).** Two CRT field reports
+  (SuperStationOne→YPbPr→Sony CRT; a second user on The Shining) exposed (a) the weave
+  analog path "extremely wobbly" = the known caveat-2 pairing defect, and (b) Native
+  Fields going "super aliased" after chapter skip/FF/aspect changes, healed only by
+  toggling the mode 3–4 times = a 50/50 parity roll. **(1) THE PARITY BUG — root-caused
+  and FIXED (`docs/field_parity.md`):** the mixer's relaxed frame-top matcher (the
+  3:2/drop black-fields fix) accepts either raster parity slot, and nothing carried
+  raster parity back to `resample_addrgen`'s pickup — one odd perturbation (seek tff,
+  raster restart, cold start) flipped content-field↔raster-field phase PERMANENTLY
+  (invisible under HDMI Bob, glaring on fieldpass/Weave). Fix = feed-forward
+  `alt_break` (schedule head would repeat the last field's parity) + feedback `par_fb`
+  (new `mixer.frame_top_par_err` → sync_reg → addrgen), inserting ONE held-frame field
+  and deferring the pickup one refresh (`pickup_go`), with a `frame_late` pulse so the
+  drop ledger reclaims it. ★ **The triggers compose by XOR and the inserted field's
+  TYPE depends on the trigger** (alt_break: OPPOSITE field; par_fb: SAME field; both at
+  once: insert NOTHING — the break itself lands aligned): "insert opposite on either"
+  livelocks — alt_break un-fixes every par_fb insertion. Suite
+  `bench/dvd/run_field_parity.sh` — the checker reads the mixer's frame-top acceptance
+  hierarchically (what the SCREEN gets); proven RED on pre-fix RTL (a break's
+  misalignment persists 16/16 tops and survives a CLEAN seek = the toggle-ritual
+  mechanism) and GREEN post-fix (feed-forward arms: zero wrong fields ever displayed;
+  feedback arm: ≤2). ⚠ `gov_field_late_tb` needed a stimulus fix, not an expectation
+  fix: real discs TOGGLE tff after an rff picture; holding it constant is an authored
+  cadence break the corrector now rightly heals. **(2) SETTINGS CONSOLIDATED (user
+  decision, reversing the 2026-08-23 "all four modes stay" review — see
+  `docs/roadmap.md`):** `O[10:9] Interlaced Out` (+ its `det_video` Auto detector) and
+  the 4-value `O[27:26] Analog Out` are REPLACED by ONE option **`O[10:9] Video Output
+  = Auto/Interlaced/Progressive`** (`Interlaced` = the old Native Fields renamed —
+  authored fields session-wide, fieldpass analog raster, HDMI 480i via ascal Bob/Weave;
+  `Auto` = ini-driven `analog_want`, boot-static; `Progressive` keeps Film 24p and
+  serves 480p-analog displays). `re_interlace.sv` is FIELDPASS-ONLY (weave/derive
+  deleted — CRT-480i-plus-progressive-HDMI simultaneity deliberately dropped:
+  pick-your-output); `analog_eff`/`il_eff` collapse into one `interlaced_eff`; config
+  layout `"v,1"`→`"v,2"` (all saved settings reset once). O[27:26] left dead/reserved.
+  Detail: `docs/field_parity.md`, superseded headers in `docs/interlaced_auto.md` +
+  `docs/analog_dual_raster.md`.
 - ✅ **MID-PLAY LOAD A/V DESYNC — FIXED IN FABRIC; ✅ HW-CONFIRMED 2026-08-28 (user
   report: mid-play loads across VOB/mpg/ISO/VCD cut to black, start clean, hold sync;
   T2 logo chain clean; seeks/menus/cold mount unregressed; build
@@ -760,7 +798,10 @@ worse maintenance burden than targeted in-place edits. So:
   (needs downscale). *(Interlaced ~half-speed field-cadence is addressed by native 480i/576i
   fields output — see the `Interlaced Out: Auto` note below.)*
 - ✅ **Interlaced Out (Off/Auto/On) — native 480i/576i fields to ascal — HW-CONFIRMED +
-  MERGED (PR fj#132, 2026-07-27).** `O[10:9] Interlaced Out` is 3-way **Off/Auto/On**,
+  MERGED (PR fj#132, 2026-07-27). ⛔ OPTION RETIRED 2026-09-02 — the fields raster it
+  built still ships as `Video Output = Interlaced`; the separate option and the
+  `det_video` Auto detector are deleted (see the consolidation bullet at the top).**
+  `O[10:9] Interlaced Out` is 3-way **Off/Auto/On**,
   **default Off** (reverted from Auto 2026-07-27 — see below). `On` gives native interlaced
   fields (NTSC 480i **and** the newly-added **PAL 576i**: `il_eff` no longer forced low under
   PAL; new `pal_prev & il_prev` modeline branch, 312 lines/field ≈ 50 Hz) and plays
@@ -838,7 +879,11 @@ worse maintenance burden than targeted in-place edits. So:
   (clean); SEED 3 closed the pre-round-2 netlist (90.9/90.2). **HW gate (round 3 =
   C1 decode): `docs/closed_captions.md` §0 + §6.**
 - ✅ **DUAL-RASTER ANALOG OUTPUT (2026-07-29, HW-CONFIRMED + MERGED PR fj#146,
-  2026-07-30) — SUPERSEDES the O[14] whole-core CRT mode below.** User-confirmed
+  2026-07-30) — SUPERSEDES the O[14] whole-core CRT mode below. ⛔ PARTLY RETIRED
+  2026-09-02: the DERIVE (weave) modes and the 4-value Analog Out enum are gone —
+  `re_interlace` is fieldpass-only under `Video Output = Interlaced` (see the
+  consolidation bullet at the top). The VGA2 plumbing, ini engagement rule, fieldpass
+  re-timer and CC injection below all still ship.** User-confirmed
   working on real hardware (analog engages from ini alone, HDMI stays progressive
   simultaneously). ⚠️ The exact PAL 576i timing numbers and the field-dominance
   caveat (see `docs/analog_dual_raster.md`) were not specifically re-verified by

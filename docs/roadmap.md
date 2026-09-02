@@ -630,11 +630,15 @@ motion-comp starvation that caused the misses (keep Frame Drop On as a safety ne
   in `dvd/resample_addrgen.v` (sustained `progressive_frame==0`) drives **Auto**
   (auto-engage for true-interlaced video; mid-title switch via a full seek-style flush).
   **⚠️ Auto PARKED as opt-in — its mid-title switch still leaves audio slightly out of
-  sync on HW; default is Off.** Open follow-up: the residual Auto-switch audio skew.
+  sync on HW; default is Off.**
   The **overlay/OSD horizontal squish in interlaced mode is ✅ FIXED (2026-08-22)** —
   pixrep `h_pos` map + `spu_decode`/`crt_ov_map` `.interlaced` following `il_eff`,
   shipped as a prerequisite of `Analog Out = Native Fields`.
-  See `docs/interlaced_auto.md`.
+  **⛔ OPTION RETIRED 2026-09-02** (`feature/video-output-consolidation`): the fields
+  raster it built still ships as `Video Output = Interlaced`; the separate option, the
+  `det_video` detector, and the Auto-switch audio-skew follow-up are all deleted with
+  the consolidation. See `docs/interlaced_auto.md` (superseded header) +
+  `docs/field_parity.md`.
 - ⛔ **[dropped — not needed (2026-09-01, user decision) — Film 24p and 25p both shipped and are HW-confirmed; what this line added beyond them was never established]** **Film 3:2 / PAL-25-from-24** `SHOW_N` cadence handling (separate from the above).
 
 ### Composite / Interlaced Analog Output for CRT (primary end goal)
@@ -1598,7 +1602,9 @@ falls back to the largest-VTS heuristic, which is documented to pick the wrong t
 some discs. Every other default audited and left as-is (Aspect Auto, Audio On, Audio Out
 Decode HDMI, Player Language English, Interlaced Out Off, Analog Out Auto, Analog Aspect
 Auto, Video Standard Auto, Frame Drop On, Audio Genlock On, Film 24p Auto, A/V Offset
-+100 ms, Debug Overlay Off, Title VTS Auto).
++100 ms, Debug Overlay Off, Title VTS Auto). *(2026-09-02: Interlaced Out + Analog Out
+have since been consolidated into `Video Output`, default Auto — see the reversal note
+further down.)*
 
 **⚠ The saved-status hazard (applies to every future default flip).** A MiSTer
 `CONF_STR` value list is positional — status value 0 is the FIRST label — and the
@@ -1761,7 +1767,23 @@ status; rip instructions with `tools/css_scan.py` as pre-flight; a settings refe
 covering every OSD option — including the `Analog Out` mode table below and a prominent
 **Frame Drop must stay On** warning; `MiSTer.ini` lines for analog/CRT output.
 
-**`Analog Out` — why all four modes stay (2026-08-23 review).** `Native Fields` and
+**`Analog Out` — why all four modes stay (2026-08-23 review). ⛔ REVERSED 2026-09-02
+(branch `feature/video-output-consolidation`, user decision).** The 2026-08-23 reasoning
+below was correct about the mechanics but its keep-them-all conclusion did not survive
+contact with the field: (1) the derive path's field-pairing wobble (this doc's
+"re-randomised several times a second") was REPORTED FROM THE WILD as "extremely wobbly,
+not how an interlaced signal normally looks on a CRT"; (2) Native Fields shipped with a
+separate field-parity re-engage coin flip ("super aliased after a chapter skip, toggle
+the mode 3-4 times to fix") — root-caused and FIXED (`docs/field_parity.md`); (3) with
+that fixed, fieldpass strictly dominates derive on the CRT side, and the maintainer chose
+to drop the one thing derive still bought (CRT 480i + progressive HDMI simultaneously —
+pick-your-output instead). The surface collapsed to **one option, `O[10:9] Video Output
+= Auto/Interlaced/Progressive`** (`Interlaced` = the old Native Fields renamed; `Auto` =
+the ini rule, boot-static; `O[27:26]` freed/dead; `Interlaced Out` + its `det_video`
+Auto detector deleted; config layout `v,2`). The persistence analysis in the last
+paragraph below still applies verbatim to the new option.
+
+*(Historical, pre-reversal:)* `Native Fields` and
 `Interlaced` are NOT redundant. Both force the analog raster on, but `Native Fields`
 also forces `il_eff`, which makes the MAIN raster interlaced ⇒ HDMI drops to 480i via
 ascal for the session, and ascal is not cadence-aware ⇒ **film regresses on HDMI**.
@@ -1776,8 +1798,9 @@ mid-title (Native Fields fires the `il_switch` flush).
 | CRT **and** HDMI simultaneously | **Auto / Interlaced** — Native Fields costs HDMI |
 | 15 kHz RGBHV rig the ini can't identify | **Interlaced** |
 
-**OSD overrides always beat the ini, and they persist.** `analog_eff` takes the ini
-(`analog_want`) only under `analog_mode == 2'd0` (Auto); `Progressive` (mode 2) matches
+**OSD overrides always beat the ini, and they persist.** `analog_eff` (now
+`interlaced_eff`) takes the ini
+(`analog_want`) only under mode Auto; `Progressive` matches
 none of the OR terms so it is unconditionally off. `emu.sv` never drives
 `status_set`/`status_in`, so nothing in fabric clobbers a restored selection — picking
 `Progressive` with `composite_sync=1` still in MiSTer.ini survives every reload.
