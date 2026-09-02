@@ -56,9 +56,13 @@ Film on a **CRT** in Interlaced mode is fine — 3:2 fields at 60 Hz is exactly 
 player fed a TV — so a CRT-only setup can simply stay in Interlaced (or Auto) for
 everything.
 
-!!! danger "Set it before loading a disc"
-    Changing `Video Output` mid-title fires a full seek-equivalent flush. Pick the mode
-    first, then load.
+!!! note "Switching mid-title works, with a brief interruption"
+    Changing `Video Output` during playback fires a full seek-equivalent flush — a short
+    cut to black while the raster and A/V sync re-anchor, like a chapter jump — and then
+    plays on cleanly (field alignment recovers automatically). Setting the mode before
+    loading just avoids the interruption; it is not required. On builds up to v0.3.0
+    the equivalent switch could come back badly aliased — that is the
+    [fixed parity bug](#field-alignment-is-automatic).
 
 ## Field alignment is automatic
 

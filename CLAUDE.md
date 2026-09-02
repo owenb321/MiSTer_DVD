@@ -296,6 +296,11 @@ worse maintenance burden than targeted in-place edits. So:
   partial application; the OSD-toggle control passes un-fixed — why no prior HW round
   ever saw it). ⚠ Lesson: any emu-side logic writing decoder REGISTERS around reset
   must gate on `sync_rst_out`, not `reset_n` — the walk was the only such writer.
+  ★ HW round 2 (`DVD_videoout2`, user report): a MID-TITLE switch to Interlaced now
+  works cleanly — indirect HW evidence for the parity corrector (pre-fix that exact
+  raster restart was a coin-flip perturbation, the source of the old "set it before
+  loading" advice; the manual now says the switch works with a chapter-seek-style
+  interruption).
 - ✅ **MID-PLAY LOAD A/V DESYNC — FIXED IN FABRIC; ✅ HW-CONFIRMED 2026-08-28 (user
   report: mid-play loads across VOB/mpg/ISO/VCD cut to black, start clean, hold sync;
   T2 logo chain clean; seeks/menus/cold mount unregressed; build

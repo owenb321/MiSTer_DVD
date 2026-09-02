@@ -125,7 +125,7 @@ into a 4:3 raster and needs unsqueezing. See
 ### Motion looks juddery or wobbly on a CRT
 
 Make sure **`Video Output`** is `Interlaced` (or `Auto` with the
-[analog ini bits](../video/analog-crt.md#turning-it-on) set) *before loading the disc* —
+[analog ini bits](../video/analog-crt.md#turning-it-on) set) —
 the CRT then gets the disc's authored fields. See [Video Output](../video/interlaced.md).
 On builds up to v0.3.0 the equivalent setting is `Analog Out = Native Fields`; those
 builds' other analog modes have a known field-pairing wobble on video-sourced content.

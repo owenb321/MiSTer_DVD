@@ -176,10 +176,13 @@ wire pal_eff;
 // The 2026-07 dual-raster DERIVE (weave) modes — CRT 480i built from the progressive
 // raster, HDMI simultaneously progressive — are DELETED (field-reported "extremely
 // wobbly": the pairing parity flips on every governor late, ~4/s; the simultaneity was
-// deliberately traded away — pick-your-output). SET THE MODE BEFORE LOADING A DISC:
-// changing it mid-title toggles il_eff and fires the full seek-equivalent il_switch
-// flush (the parity corrector heals the field phase, but the flush itself restarts
-// playback). See docs/analog_dual_raster.md (history + fieldpass design),
+// deliberately traded away — pick-your-output). A mid-title change WORKS (HW-observed
+// 2026-09-02): it toggles il_eff and fires the full seek-equivalent il_switch flush —
+// a brief chapter-seek-style interruption — and the parity corrector lands the field
+// phase clean (pre-corrector this restart was one of the coin-flip perturbations,
+// which is where the old "set it before loading" advice came from). Setting the mode
+// before loading merely avoids the interruption.
+// See docs/analog_dual_raster.md (history + fieldpass design),
 // docs/interlaced_auto.md (superseded), docs/field_parity.md.
 wire direct_video;                        // hps_io cfg[10] (declared early for the gating here)
 wire forced_scandoubler;                  // hps_io cfg[4]
@@ -605,8 +608,9 @@ parameter CONF_STR = {
     //   Interlaced     = the disc's AUTHORED fields (decoder in native-fields mode;
     //                    dvd/re_interlace.sv re-times them 1:1 onto the 15 kHz
     //                    half-line analog raster; HDMI shows 480i via ascal, OB
-    //                    Bob/Weave below). Set it BEFORE loading a disc — a
-    //                    mid-title change fires the seek-equivalent il_switch flush.
+    //                    Bob/Weave below). Switchable mid-title — fires the
+    //                    seek-equivalent il_switch flush (brief chapter-seek-style
+    //                    cut), field phase lands clean via the parity corrector.
     //   Progressive    = the progressive raster: full HDMI quality, Film 24p
     //                    available, analog pins carry 480p/576p through the stock
     //                    path (component/VGA displays; also the dev A/B switch).
