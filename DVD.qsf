@@ -710,4 +710,8 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # 93.28 @100C / 89.91 @-40C at 88% ALM (37,078). The 97.73 of the previous roll
 # confirming itself as fit variance. Sixth consecutive first-roll fit. Build
 # DVD_videoout2_20260902_1312.rbf.
+# 2026-09-02c (same branch + the analog-subtitle raw-query context split -- an
+# ~8-line emu select register + gated crt_ov_map enables, no module changes):
+# SEED 5 held FIRST roll again -- clk_dec 94.63 @100C / 90.56 @-40C. Seventh
+# consecutive first-roll fit. Build DVD_subraw_20260902_1440.rbf.
 set_global_assignment -name SEED 5
