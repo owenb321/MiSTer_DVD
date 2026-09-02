@@ -98,3 +98,4 @@ bench/dvd/test_mp2/
 # --- Local Python venvs (mkdocs preview, tooling) ---
 .venv/
 venv/
+bench/dvd/csync_ref_gen.v

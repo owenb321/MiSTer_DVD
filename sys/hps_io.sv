@@ -128,6 +128,13 @@ module hps_io #(parameter CONF_STR, CONF_STR_BRAM=0, PS2DIV=0, WIDE=0, VDNUM=1, 
 	// at bit 13 is the highest it defines).
 	output            ini_hdmi_bs_ok,   // cfg[14] MiSTer_DVDcss: ADV7513 is in
 	                                    //         IEC958-direct/non-PCM mode
+	// DVD-FORK (single-raster analog): cfg word bookkeeping for the core.
+	// cfg_seen = Main has written the buttons/cfg word at least once since FPGA
+	// configuration (the ini bits above are meaningless before that);
+	// cfg_wr   = one-cycle pulse on EVERY cfg write (Main re-sends it on each
+	// video_mode_adjust, OSD leave, ini video-section re-parse ...).
+	output            cfg_seen,
+	output            cfg_wr,
 	input             video_rotated,
 
 	//toggle to force notify of video mode change
@@ -213,6 +220,10 @@ assign HPS_BUS[32]   = io_wide;
 assign HPS_BUS[15:0] = EXT_BUS[32] ? EXT_BUS[15:0] : fp_enable ? fp_dout : io_dout;
 
 reg [15:0] cfg;
+reg        cfg_seen_r = 1'b0;          // power-up init; never cleared (see port note)
+reg        cfg_wr_r   = 1'b0;
+assign cfg_seen = cfg_seen_r;
+assign cfg_wr   = cfg_wr_r;
 assign buttons = cfg[1:0];
 //cfg[2] - vga_scaler handled in sys_top (and exported below, DVD-FORK)
 //cfg[3] - csync handled in sys_top (and exported below, DVD-FORK)
@@ -325,6 +336,7 @@ always@(posedge clk_sys) begin : uio_block
 	if(PS2DIV) {kbd_rd,kbd_we,mouse_rd,mouse_we} <= 0;
 
 	gamma_wr <= 0;
+	cfg_wr_r <= 1'b0;                    // DVD-FORK: one-cycle cfg write pulse
 
 	if(~io_enable) begin
 		if(cmd == 4 && !ps2skip) ps2_mouse[24] <= ~ps2_mouse[24];
@@ -383,7 +395,7 @@ always@(posedge clk_sys) begin : uio_block
 
 			casex(cmd)
 				// buttons and switches
-				'h01: cfg <= io_din;
+				'h01: begin cfg <= io_din; cfg_seen_r <= 1'b1; cfg_wr_r <= 1'b1; end   // DVD-FORK: cfg bookkeeping
 				'h02: if(byte_cnt==1) joystick_0[15:0] <= io_din; else joystick_0[31:16] <= io_din;
 				'h03: if(byte_cnt==1) joystick_1[15:0] <= io_din; else joystick_1[31:16] <= io_din;
 				'h10: if(byte_cnt==1) joystick_2[15:0] <= io_din; else joystick_2[31:16] <= io_din;

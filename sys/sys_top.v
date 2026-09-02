@@ -1351,7 +1351,14 @@ scanlines #(0) VGA_scanlines
 	.clk(clk_vid),
 
 	.scanlines(scanlines),
-	.din(de_emu ? {r_out, g_out, b_out} : 24'd0),
+	// DVD-FORK (line-21 closed captions, single-raster analog 2026-09-03): NOT gated
+	// on de_emu. The stock gate (`de_emu ? data : 24'd0`) blanks everything outside
+	// active video, which silently zeroes the EIA-608 caption waveform the core writes
+	// into line 21 of the vertical blanking interval — it killed the feature once
+	// already on the (now deleted) VGA2 path. Safe to drop: the core's registered
+	// output stage already emits 0 outside DE except that caption level, so this is
+	// a no-op for every other line, and ascal only captures inside DE.
+	.din({r_out, g_out, b_out}),
 	.hs_in(hs_fix),
 	.vs_in(vs_fix),
 	.de_in(de_emu),
@@ -1362,35 +1369,6 @@ scanlines #(0) VGA_scanlines
 	.vs_out(vga_vs_sl),
 	.de_out(vga_de_sl),
 	.ce_out(vga_ce_sl)
-);
-
-// DVD-FORK (dual-raster analog output): second scanlines stage for the core's
-// 15 kHz VGA2_* raster, so the ini/OSD scanlines effect keeps working on the
-// analog output exactly like stock.
-wire [23:0] vga2_data_sl;
-wire        vga2_de_sl, vga2_ce_sl, vga2_vs_sl, vga2_hs_sl;
-scanlines #(0) VGA2_scanlines
-(
-	.clk(clk_vid),
-
-	.scanlines(scanlines),
-	// DVD-FORK (line-21 closed captions): NOT gated on vga2_de. The stock gate
-	// (`vga2_de ? data : 24'd0`) blanks everything outside active video, which
-	// silently zeroed the EIA-608 caption waveform the core writes into line 21
-	// of the vertical blanking interval — the data reached here and died one
-	// module before the DAC. Safe to drop because re_interlace already emits 0
-	// outside its own active region, so this is a no-op for every other line.
-	.din({vga2_r, vga2_g, vga2_b}),
-	.hs_in(vga2_hs_fix),
-	.vs_in(vga2_vs_fix),
-	.de_in(vga2_de),
-	.ce_in(vga2_ce),
-
-	.dout(vga2_data_sl),
-	.hs_out(vga2_hs_sl),
-	.vs_out(vga2_vs_sl),
-	.de_out(vga2_de_sl),
-	.ce_out(vga2_ce_sl)
 );
 
 wire [23:0] vga_data_osd;
@@ -1404,16 +1382,11 @@ osd vga_osd
 	.io_din(io_din),
 	.osd_status(osd_status),
 
-	// DVD-FORK (dual-raster analog output): the ONE functional mux. vga2_en=0
-	// reduces to the stock wiring; vga2_en=1 hands the whole direct analog
-	// chain (osd -> csync -> yc -> vga_out -> pins + direct_video tap) the
-	// core's native 15 kHz raster. ascal/HDMI taps vga_data_sl above — main
-	// raster, unaffected.
 	.clk_video(clk_vid),
-	.din(vga2_en ? vga2_data_sl : vga_data_sl),
-	.hs_in(vga2_en ? vga2_hs_sl : vga_hs_sl),
-	.vs_in(vga2_en ? vga2_vs_sl : vga_vs_sl),
-	.de_in(vga2_en ? vga2_de_sl : vga_de_sl),
+	.din(vga_data_sl),
+	.hs_in(vga_hs_sl),
+	.vs_in(vga_vs_sl),
+	.de_in(vga_de_sl),
 
 	.dout(vga_data_osd),
 	.hs_out(vga_hs_osd),
@@ -1713,16 +1686,6 @@ wire        hvs_fix, hhs_fix, hde_emu;
 wire        clk_vid, ce_pix, clk_ihdmi, ce_hpix;
 wire        vga_force_scaler;
 
-// DVD-FORK (dual-raster analog output): the core emits a SECOND, simultaneous
-// raster (native 15 kHz 480i/576i from dvd/re_interlace.sv) on the VGA2_* ports.
-// When vga2_en=1 the DIRECT analog chain (scanlines -> vga_osd -> csync -> yc ->
-// vga_out -> pins, incl. the direct_video tap) takes this raster, while ascal/
-// HDMI keeps consuming the main VGA_* stream untouched. vga2_en=0 reduces every
-// added mux to its stock expression — bit-identical to upstream.
-wire  [7:0] vga2_r, vga2_g, vga2_b;
-wire        vga2_hs, vga2_vs, vga2_de, vga2_ce, vga2_en;
-wire        vga2_vs_fix, vga2_hs_fix;
-
 wire        ram_clk;
 wire [28:0] ram_address;
 wire [7:0]  ram_burstcount;
@@ -1741,10 +1704,6 @@ wire  [1:0] btn;
 
 sync_fix sync_v(clk_vid, vs_emu, vs_fix);
 sync_fix sync_h(clk_vid, hs_emu, hs_fix);
-
-// DVD-FORK (dual-raster analog output)
-sync_fix sync_v2(clk_vid, vga2_vs, vga2_vs_fix);
-sync_fix sync_h2(clk_vid, vga2_hs, vga2_hs_fix);
 
 wire  [6:0] user_out, user_in;
 
@@ -1813,16 +1772,6 @@ emu emu
 	.VGA_DE(de_emu),
 	.VGA_F1(f1),
 	.VGA_SCALER(vga_force_scaler),
-
-	// DVD-FORK (dual-raster analog output)
-	.VGA2_R(vga2_r),
-	.VGA2_G(vga2_g),
-	.VGA2_B(vga2_b),
-	.VGA2_HS(vga2_hs),
-	.VGA2_VS(vga2_vs),
-	.VGA2_DE(vga2_de),
-	.VGA2_CE(vga2_ce),
-	.VGA2_EN(vga2_en),
 
 `ifndef MISTER_DUAL_SDRAM
 	.VGA_DISABLE(VGA_DISABLE),

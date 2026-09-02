@@ -1513,10 +1513,27 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire [13:0] eff_horizontal_size = disp_hfill_en ? 14'd720 : horizontal_size;
   wire [13:0] eff_vertical_size   = sif_v2x ? {vertical_size[12:0], 1'b0} : vertical_size;
 
+  /* DVD-FORK FIX (single-raster analog, 2026-09-03): the modeline COPIES inside
+   * syncgen_intf used to sit on dot_rst, which pulses on every WATCHDOG expiry and
+   * every mount soft reset (reset.v comm_rst). sync_reg zeroes them asynchronously,
+   * so for a few dot clocks the RUNNING sync_gen (which is only reset by a modeline
+   * write, dot_syncgen_rst) saw horizontal_length=0 / interlaced=0: its counters were
+   * forced to 0 and the field parity re-rolled = a raster re-phase on the analog pins
+   * (and the HDMI receiver) at every watchdog event. The regfile that feeds these
+   * copies is on hard_rst precisely so the modeline SURVIVES a watchdog reset; the
+   * copies now follow the same rule. dot_hard_rst = hard_rst re-synchronized to the
+   * dot clock (hard_rst is a clk-domain signal derived from the rst pin alone). */
+  wire dot_hard_rst;
+  sync_reset dot_hard_sreset (
+    .clk(dot_clk),
+    .asyncrst(hard_rst),
+    .syncrst(dot_hard_rst)
+    );
+
   syncgen_intf syncgen_intf (
     .clk(dot_clk),
     .clk_en(dot_ce),
-    .rst(dot_rst),
+    .rst(dot_hard_rst),                                      // DVD-FORK FIX: was dot_rst (watchdog re-phased the raster)
     .horizontal_size(eff_horizontal_size),                   // from vld (SIF fill: forced 720)
     .vertical_size(eff_vertical_size),                       // from vld (SIF fill: doubled)
     .display_horizontal_size(display_horizontal_size),       // from vld
