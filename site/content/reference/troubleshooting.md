@@ -197,6 +197,26 @@ The auto-selection picks the largest title set, which is not always right. `Titl
 and `Title VTS Units` on the Debug page force a specific one. The core shows `TITLE VTS nn`
 to say what it picked.
 
+## Support bundles
+
+### The chord does nothing
+
+Hold **Audio + Subtitle together** for a full two seconds. Both buttons must be down at
+once, and the timer only starts when the second one goes down. It also needs
+`MiSTer_DVDcss` — on the stock Main nothing is listening, and there is no message.
+
+### `Nothing to bundle` with a disc playing
+
+The message lists what the player could see. `mounted: (not captured)` means it did not
+record the mount, which should not happen — that one is worth
+[reporting](reporting-a-bug.md). `css active: 0` with `drive: (none)` while a physical
+disc is playing points the same way.
+
+### `Support bundle FAILED`
+
+Read `/tmp/dvd_report_run.log`. Most often python3 is missing or too old — the collector
+needs 3.7 or newer.
+
 ## After an update
 
 ### All my settings reset

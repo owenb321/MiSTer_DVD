@@ -53,7 +53,8 @@ what each piece does.
 ├── MiSTer_DVDcss               optional custom Main (physical discs, encrypted ISOs)
 ├── Scripts/
 │   ├── install_dvdcss.sh       fetches libdvdcss
-│   └── set_dvd_region.sh       reads/sets a USB drive's region
+│   ├── set_dvd_region.sh       reads/sets a USB drive's region
+│   └── dvd_report.py           builds a bug-report bundle (unreleased)
 └── DVD_INSTALL.txt             the same instructions, on the card
 ```
 
