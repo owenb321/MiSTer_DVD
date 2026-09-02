@@ -31,12 +31,27 @@
 // A control phase toggles il_out with the decoder long alive (the historical
 // OSD path) and must apply in both variants.
 //
+// PHASE [4] (single-raster analog, 2026-09-03 — the RGBS/YPbPr "raster shakes
+// every second" field reports): a WATCHDOG expiry must not touch the running
+// raster. The bench attaches the REAL syncgen_intf + sync_gen to the regfile,
+// wired as mpeg2video wires them, pulses watchdog_rst mid-field and measures the
+// vsync spacing across it. syncgen_intf's modeline copies used to sit on dot_rst
+// (which the watchdog pulses); sync_reg zeroes them asynchronously, so the running
+// sync_gen saw horizontal_length=0 / interlaced=0 for a few dots and re-phased —
+// a full raster restart on the analog pins at every expiry (+ the VLD sizes going
+// to 0 = the "1441x478i" resolution popup). The fix puts the copies on the hard
+// reset like the regfile itself (mpeg2video.dot_hard_rst).
+//   +wdraster=0 : RED  — copies on dot_rst (the old wiring): spacing breaks
+//   +wdraster=1 : GREEN — copies on the dot-domain hard reset: 450450 every field
+//
 // Build:
 //   iverilog -g2012 -I rtl/mpeg2 -o bench/dvd/modeline_boot_sim \
 //     rtl/mpeg2/reset.v rtl/mpeg2/synchronizer.v rtl/mpeg2/regfile.v \
+//     rtl/mpeg2/mem_addr.v rtl/mpeg2/syncgen_intf.v rtl/mpeg2/syncgen.v \
 //     bench/dvd/modeline_boot_tb.sv
-//   vvp bench/dvd/modeline_boot_sim +holdoff=0   (RED pre-fix)
-//   vvp bench/dvd/modeline_boot_sim +holdoff=1   (GREEN)
+//   vvp bench/dvd/modeline_boot_sim +holdoff=0 +wdraster=1   (RED: boot race)
+//   vvp bench/dvd/modeline_boot_sim +holdoff=1 +wdraster=0   (RED: watchdog raster)
+//   vvp bench/dvd/modeline_boot_sim +holdoff=1 +wdraster=1   (GREEN)
 // Or: bash bench/dvd/run_modeline_boot.sh
 //
 module modeline_boot_tb;
@@ -67,6 +82,8 @@ module modeline_boot_tb;
 
   wire sync_rst_out;
   integer holdoff = 0;
+  integer wdraster = 1;
+  reg  watchdog_rst = 1'b1;          // active-LOW expiry pulse (watchdog.v)
 
   // ---- the FIX under test: only allow kicks once the decoder's synchronized
   // reset has been observed deasserted for a few cycles (regfile writable) ----
@@ -116,13 +133,13 @@ module modeline_boot_tb;
         3'd1: begin wr_addr = REG_WR_HOR_SYNC;
                     wr_data = {4'b0, 12'd735, 4'b0, 12'd797}; end
         3'd2: begin wr_addr = REG_WR_VER;
-                    wr_data = il_prev ? {4'b0, 12'd479, 4'b0, 12'd261}
+                    wr_data = il_prev ? {4'b0, 12'd480, 4'b0, 12'd261}
                                       : {4'b0, 12'd480, 4'b0, 12'd524}; end
         3'd3: begin wr_addr = REG_WR_VER_SYNC;
-                    wr_data = il_prev ? {4'b0, 12'd244, 4'b0, 12'd247}
+                    wr_data = il_prev ? {4'b0, 12'd243, 4'b0, 12'd246}
                                       : {4'b0, 12'd488, 4'b0, 12'd494}; end
         3'd4: begin wr_addr = REG_WR_VID_MODE;
-                    wr_data = il_prev ? {4'b0, 12'd0, 13'b0, 3'b011}
+                    wr_data = il_prev ? {4'b0, 12'd429, 13'b0, 3'b011}   // half-line + pixrep
                                       : {4'b0, 12'd0, 13'b0, 3'b000}; end
         default: begin wr_addr = REG_WR_TRICK;
                     wr_data = {21'b0, trick_w}; end
@@ -138,13 +155,15 @@ module modeline_boot_tb;
   reset u_reset (
     .clk(clk), .mem_clk(mem_clk), .dot_clk(dot_clk),
     .async_rst(rst),
-    .watchdog_rst(1'b1),        // never expires here
+    .watchdog_rst(watchdog_rst),   // pulsed low in phase [4]
     .soft_rst_n(1'b1),
     .clk_rst(sync_rst_w), .mem_rst(mem_rst_w), .dot_rst(dot_rst_w),
     .hard_rst(hard_rst_w)
   );
   assign sync_rst_out = sync_rst_w;   // what emu's core_sync_rst tap reads
 
+  wire [11:0] rf_hres, rf_hss, rf_hse, rf_hlen, rf_vres, rf_vss, rf_vse, rf_half, rf_vlen;
+  wire        rf_clip, rf_ilace, rf_pixrep, rf_sgrst;
   regfile regfile (
     .clk(clk), .clk_en(1'b1),
     .hard_rst(hard_rst_w),
@@ -153,6 +172,12 @@ module modeline_boot_tb;
     .reg_wr_en(seq_run),
     .reg_dta_in(wr_data),
     .reg_rd_en(1'b0),
+    .horizontal_resolution(rf_hres), .horizontal_sync_start(rf_hss),
+    .horizontal_sync_end(rf_hse), .horizontal_length(rf_hlen),
+    .vertical_resolution(rf_vres), .vertical_sync_start(rf_vss),
+    .vertical_sync_end(rf_vse), .horizontal_halfline(rf_half),
+    .vertical_length(rf_vlen), .clip_display_size(rf_clip),
+    .interlaced(rf_ilace), .pixel_repetition(rf_pixrep), .syncgen_rst(rf_sgrst),
     .vld_err(1'b0), .v_sync(1'b0),
     .progressive_sequence(1'b0),
     .horizontal_size(14'd0), .vertical_size(14'd0),
@@ -164,6 +189,48 @@ module modeline_boot_tb;
     .osd_wr_full(1'b0), .osd_wr_ack(1'b0),
     .testpoint(34'd0)
   );
+
+  // ---- the REAL raster generator on the regfile, wired as mpeg2video wires it.
+  //      sgi_rst = what the modeline COPIES inside syncgen_intf reset on:
+  //      the old dot_rst (watchdog pulses it) or the fix's dot-domain hard reset.
+  wire dot_hard_rst_w;
+  sync_reset u_dot_hard (.clk(dot_clk), .asyncrst(hard_rst_w), .syncrst(dot_hard_rst_w));
+  wire sgi_rst = (wdraster != 0) ? dot_hard_rst_w : dot_rst_w;
+  wire [11:0] sg_hpos, sg_vpos;
+  wire        sg_pe, sg_hs, sg_vs, sg_cs, sg_hb, sg_vb;
+  syncgen_intf u_sgi (
+    .clk(dot_clk), .clk_en(1'b1), .rst(sgi_rst),
+    .horizontal_size(14'd720), .vertical_size(14'd480),
+    .display_horizontal_size(14'd0), .display_vertical_size(14'd0),
+    .syncgen_rst(rf_sgrst),
+    .horizontal_resolution(rf_hres), .horizontal_sync_start(rf_hss),
+    .horizontal_sync_end(rf_hse), .horizontal_length(rf_hlen),
+    .vertical_resolution(rf_vres), .vertical_sync_start(rf_vss),
+    .vertical_sync_end(rf_vse), .horizontal_halfline(rf_half),
+    .vertical_length(rf_vlen), .interlaced(rf_ilace),
+    .clip_display_size(rf_clip), .pixel_repetition(rf_pixrep),
+    .h_pos(sg_hpos), .v_pos(sg_vpos), .pixel_en(sg_pe),
+    .h_sync(sg_hs), .v_sync(sg_vs), .c_sync(sg_cs), .h_blank(sg_hb), .v_blank(sg_vb));
+
+  // vsync-to-vsync spacing tracker (dot clocks). 450450 = 262.5 lines of 1716.
+  localparam integer FIELD_DOTS = 450450;
+  integer dot = 0, last_vs = -1, vs_n = 0, bad_sp = 0, sp_measured = 0;
+  reg     vs_q = 0, track = 0;
+  always @(posedge dot_clk) if (rst) begin
+    dot <= dot + 1;
+    vs_q <= sg_vs;
+    if (sg_vs && !vs_q) begin
+      if (track && last_vs >= 0) begin
+        sp_measured = sp_measured + 1;
+        if ((dot - last_vs) != FIELD_DOTS) begin
+          bad_sp = bad_sp + 1;
+          if (bad_sp <= 6) $display("  vsync spacing %0d dots (expect %0d) at dot %0d", dot - last_vs, FIELD_DOTS, dot);
+        end
+      end
+      last_vs = dot;
+      vs_n = vs_n + 1;
+    end
+  end
 
   integer errors = 0;
   task chk(input cond, input [8*64-1:0] msg);
@@ -178,9 +245,10 @@ module modeline_boot_tb;
                regfile.vertical_length, regfile.vertical_sync_start,
                regfile.interlaced, regfile.pixel_repetition, regfile.deinterlace);
       chk(regfile.horizontal_length    == 12'd857, "horizontal_length not applied");
-      chk(regfile.vertical_resolution  == 12'd479, "vertical_resolution not applied (per-field)");
+      chk(regfile.vertical_resolution  == 12'd480, "vertical_resolution not applied (per-field)");
+      chk(regfile.horizontal_halfline  == 12'd429, "VID_MODE half-line not applied");
       chk(regfile.vertical_length      == 12'd261, "vertical_length not applied (per-field)");
-      chk(regfile.vertical_sync_start  == 12'd244, "vertical_sync_start not applied (per-field)");
+      chk(regfile.vertical_sync_start  == 12'd243, "vertical_sync_start not applied (per-field)");
       chk(regfile.interlaced           == 1'b1,    "VID_MODE interlaced not applied");
       chk(regfile.pixel_repetition     == 1'b1,    "VID_MODE pixel_repetition not applied");
       chk(regfile.deinterlace          == 1'b0,    "TRICK deinterlace=0 not applied");
@@ -189,7 +257,8 @@ module modeline_boot_tb;
 
   initial begin
     void'($value$plusargs("holdoff=%d", holdoff));
-    $display("\n==== modeline_boot_tb  holdoff=%0d ====", holdoff);
+    void'($value$plusargs("wdraster=%d", wdraster));
+    $display("\n==== modeline_boot_tb  holdoff=%0d wdraster=%0d ====", holdoff, wdraster);
     rst = 0;
     repeat (20) @(posedge clk);
     rst = 1;                                  // reset_n release; il_out already 1 (the Auto boot)
@@ -215,15 +284,32 @@ module modeline_boot_tb;
     repeat (2000) @(posedge clk);
     check_interlaced_modeline("3-reload");
 
+    // [4] WATCHDOG vs the running raster: let the fields raster settle, start
+    // tracking vsync spacing, pulse the watchdog mid-field, keep tracking.
+    // Every spacing must stay 450450 dot clocks; the regfile must keep its modeline.
+    @(posedge sg_vs); @(posedge sg_vs); @(posedge sg_vs);    // settle after the reload walk
+    track = 1;
+    @(posedge sg_vs); @(posedge sg_vs);                      // two clean spacings
+    repeat (FIELD_DOTS / 3) @(posedge dot_clk);              // mid-field
+    $display("[4-watchdog] pulsing watchdog_rst at dot %0d", dot);
+    @(posedge clk); watchdog_rst = 1'b0;
+    @(posedge clk); @(posedge clk); watchdog_rst = 1'b1;
+    @(posedge sg_vs); @(posedge sg_vs); @(posedge sg_vs); @(posedge sg_vs); @(posedge sg_vs);
+    track = 0;
+    $display("[4-watchdog] %0d spacings measured across the expiry, %0d wrong", sp_measured, bad_sp);
+    chk(sp_measured >= 6, "watchdog phase: too few vsync spacings measured");
+    chk(bad_sp == 0, "watchdog expiry re-phased the raster (vsync spacing broke)");
+    check_interlaced_modeline("4-watchdog");
+
     if (errors == 0) begin
-      $display("\n==== PASS (holdoff=%0d) ====", holdoff);
+      $display("\n==== PASS (holdoff=%0d wdraster=%0d) ====", holdoff, wdraster);
       $finish;
     end else
-      $fatal(1, "==== FAIL (holdoff=%0d): %0d error(s) ====", holdoff, errors);
+      $fatal(1, "==== FAIL (holdoff=%0d wdraster=%0d): %0d error(s) ====", holdoff, wdraster, errors);
   end
 
   initial begin
-    #4_000_000;
+    #400_000_000;
     $fatal(1, "TIMEOUT");
   end
 

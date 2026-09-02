@@ -100,7 +100,9 @@ module resample_chain_tb;
   // ---- +crt=1 : CRT 480i mode (native-width 13.5 MHz CE + N64-model interlace) ----
   // ⛔ LEGACY CONFIG (dual raster, 2026-07-29): the whole-core O[14] CRT mode this
   // reproduces is RETIRED from emu.sv — the main raster now always runs CE=1 and the
-  // 15 kHz raster comes from dvd/re_interlace.sv (bench/dvd/re_interlace_tb.sv).
+  // 15 kHz raster IS the main raster since 2026-09-03 (pixrep + half-line, see
+  // crt_syncgen_tb PHASE 2c / cc_e2e_tb); +crt=1 here still exercises the native-
+  // width 13.5 MHz CE variant of the same syncgen model.
   // Kept because it still proves + guards the pixel_queue CE-stretch shim (in-tree,
   // inert at CE≡1) and the syncgen halfline model against a gated dot-CE consumer.
   // Not part of the default regression list; run on pixel_queue/syncgen changes.

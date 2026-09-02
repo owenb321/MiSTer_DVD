@@ -12,7 +12,7 @@
  * So this bench watches sync_gen's OUTPUT sync stream exactly as a TV would:
  * classify each vsync leading edge by the h_pos it rises at (line-aligned vs
  * mid-line), then check that the caption line inside the line-aligned-vsync
- * field is the one dvd/re_interlace.sv's formula (cc_fld1 = ~sg_vpos[0]) marks
+ * field is the one dvd/cc_vbi.sv's formula (cc_fld1 = ~v_pos[0]) marks
  * for the field-1 (CC1) slot.
  *
  * ⚠ HISTORY, so nobody re-derives the wrong premise: the first version of this
@@ -40,7 +40,8 @@ module cc_field_map_tb;
   wire [11:0] hp, vp;
   wire        pe, vs;
 
-  // The NTSC parameters dvd/re_interlace.sv gives its sync_gen instance.
+  // The NTSC 480i half-line parameters (native 858-dot line; the shipped main
+  // raster is the pixrep-doubled twin of this — same v_pos/field structure).
   sync_gen sg (
     .clk(clk), .clk_en(ce2), .rst(rst),
     .horizontal_size(14'd720), .vertical_size(14'd480),

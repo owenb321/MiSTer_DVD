@@ -86,6 +86,10 @@ module crt_syncgen_tb;
   integer exp_vs_width   = 0;
   integer exp_hs_period  = 858;       // dots/line for the phase (Film 24p uses 875)
   integer settle_rises   = 0;         // ignore the first N vsync intervals
+  // PHASE 2c: where in the line does each vsync rise? Consecutive rises must sit
+  // exactly exp_vs_half dots apart within the line (the half-line), 0 = skip.
+  integer exp_vs_half    = 0;
+  integer vs_off = -1, prev_vs_off = -1, bad_vs_half = 0;
 
   always @(posedge clk) if (rst && clk_en) begin
     dot <= dot + 1;
@@ -103,6 +107,15 @@ module crt_syncgen_tb;
     end
     if (v_sync && !vs_d) begin
       vs_rises = vs_rises + 1;
+      prev_vs_off = vs_off;
+      vs_off = dot - last_hs_rise;                       // rise position within the line
+      if (exp_vs_half != 0 && prev_vs_off >= 0 && vs_rises > settle_rises) begin
+        if (((vs_off - prev_vs_off + 2*exp_hs_period) % exp_hs_period) != exp_vs_half) begin
+          if (bad_vs_half < 8) $display("FAIL: vsync rise at line dot %0d after one at %0d (expect a %0d-dot half-line shift)",
+                                        vs_off, prev_vs_off, exp_vs_half);
+          bad_vs_half = bad_vs_half + 1;
+        end
+      end
       if (last_vs_rise >= 0 && vs_rises > settle_rises) begin
         vs_period = dot - last_vs_rise;
         if (exp_vs_spacing != 0 && vs_period != exp_vs_spacing) begin
@@ -258,6 +271,44 @@ module crt_syncgen_tb;
       $display("[HDMI 480i] PASS: field pair %0d dots = 27 MHz * 1001/30000 = 29.970030 fps EXACT (262+263 lines)",
                ILACE480_DOTS);
     exp_vs_pair = 0;
+
+    // =======================================================================
+    // PHASE 2c — the SHIPPED interlaced raster since the single-raster rework
+    // (2026-09-03): pixel repetition AND the N64-model half-line. dvd/emu.sv writes
+    // halfline 429; syncgen_intf doubles it as 2x (not 2x+1, fixed with it) to 858
+    // = exactly half of the 1716-dot line, and horizontal_resolution 720 -> 1440
+    // (was 1441). Invariants: vsync-to-vsync EXACTLY 450450 clk27 = 262.5 lines
+    // EVERY field (this is what makes Main report a steady 59.94 Hz and lets the
+    // analog pins take this raster directly), consecutive rises half a line apart
+    // within the line, 3.0-line vsync width both fields, 240 active lines/field
+    // with alternating parity.
+    // =======================================================================
+    rst = 0;
+    horizontal_resolution = 12'd1440; horizontal_sync_start = 12'd1471;
+    horizontal_sync_end   = 12'd1595; horizontal_length     = 12'd1715; // 1716 dots
+    vertical_resolution   = 12'd480;  vertical_sync_start   = 12'd243;
+    vertical_sync_end     = 12'd246;  vertical_length       = 12'd261;  // 262/263 fields
+    horizontal_halfline   = 12'd858;  interlaced            = 1'b1;     // pixrep: 2*429
+    horizontal_size = 14'd1440;       // as syncgen_intf doubles the stream width
+    waitclk(8); rst = 1;
+    reset_trackers;
+    exp_hs_period  = 1716;
+    exp_vs_spacing = ILACE480_DOTS / 2; // 450450 — constant, every field
+    exp_vs_width   = 3 * 1716;
+    exp_vs_half    = 858;
+    settle_rises   = 2;
+    track_fields   = 1;
+    waitclk(ILACE480_DOTS * 4);
+    if (bad_hs || bad_vs_spacing || bad_vs_width || bad_vs_half || parity_errs || field_line_errs || parity_alt_errs) begin
+      errors = errors + 1;
+      $display("[480i pixrep+halfline] FAIL: hs=%0d vs_spacing=%0d vs_width=%0d half=%0d parity=%0d lines=%0d alt=%0d",
+               bad_hs, bad_vs_spacing, bad_vs_width, bad_vs_half, parity_errs, field_line_errs, parity_alt_errs);
+    end else
+      $display("[480i pixrep+halfline] PASS: vsync every %0d clk27 (262.5 lines) x%0d, rises half a line (858) apart, 3.0-line width, 240 lines/field over %0d fields",
+               ILACE480_DOTS / 2, vs_rises, fields_seen);
+    track_fields = 0;
+    exp_vs_half  = 0;
+    horizontal_size = 14'd720;
 
     // =======================================================================
     // PHASE 2b — HDMI Interlaced Out (O[10:9]) PAL 576i, same invariant.
