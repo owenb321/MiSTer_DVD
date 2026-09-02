@@ -288,6 +288,15 @@ worse maintenance burden than targeted in-place edits. So:
   a set can lock a line late on B or flip field to field. `syncgen.v` now anchors the
   interlaced vsync on the HSYNC LEADING EDGE (field B half a line later, wrapping to the
   next line): 59 µs / 27 µs (standard 27.2), width detector exactly 262.5 lines apart.
+  ★★ **HW ROUND 1 (composite CRT): resolution right, picture PAIRED/BOUNCED MORE than
+  before.** A tau sweep (`bench/dvd/run_csync_sweep.sh`) showed the two separator
+  models want OPPOSITE placements under the framework's LINE-RATE serrations: dot-0
+  was near-perfect for an RC integrator (450460/450440 @ 80 µs — a classic composite
+  set) but broke width detectors (449837/451063 = the RT4K), anchoring did the reverse
+  (integrator ~0.1 line off). No placement satisfies both because the fields' vsyncs
+  start half a line apart and the serrations do not. FIX = the fork's `csync`
+  (`sys/sys_top.v`) serrates at 2H during vsync: both fields see 27 µs / 27 µs, width
+  detector exact, integrator 0.02 line — both gated in `csync_field_tb` now.
   ⚠ Because "vsync on line N" now means "at line N−1's trailing hsync", the walk's
   per-field vsync moved one line EARLIER (243..246 NTSC, 291..294 PAL) so caption line 21
   (`v_cntr == 261`) keeps its broadcast position 17 H after the vsync edge —

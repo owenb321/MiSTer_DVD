@@ -29,10 +29,11 @@
  *     clk27 apart (262.5 lines of 1716) every field, and [2] each field's first
  *     broad pulse must be at least a standard broad pulse wide (27 us) so no
  *     plausible threshold can reject one field's and accept the other's;
- *   - an RC INTEGRATOR (tau ~ 40 us, Schmitt 60/30 %): reported, not gated. Its
- *     per-field trigger asymmetry is inherent to the framework's LINE-RATE
- *     serrations (every MiSTer 480i core has it) — printed so the docs carry a
- *     number.
+ *   - an RC INTEGRATOR (tau ~ 40 us, Schmitt 60/30 %, +tau_us overrides): also
+ *     gated since the fork's `csync` serrates at 2H — [1b] its triggers must be
+ *     within +/- 0.05 line of 262.5 lines every field. (With stock's line-rate
+ *     serration the two fields' broad-pulse patterns differ and the integrator
+ *     lands ~0.1 line apart — the composite-CRT "pairing / bounce" round.)
  *   [3] hsync cadence 1716 clk27, vsync width 3 lines in both fields (raster sanity).
  * FINDING (2026-09-03, why syncgen.v anchors vsync on the hsync edge): with the
  * old dot-0 reference field B's first broad pulse was only ~18 us (below many
@@ -54,6 +55,17 @@ module csync_field_tb;
 
   wire [11:0] h_pos, v_pos;
   wire        pixel_en, h_sync, v_sync, c_sync_unused, h_blank, v_blank;
+  // +vss/+vse override the per-field vsync window (243/246 shipped; 244/247 was the
+  // pre-anchoring walk) and +tau_us the integrator time constant, for A/B sweeps
+  // against an older syncgen.v (bench/dvd/run_csync_field.sh --sweep).
+  reg  [11:0] vss = 12'd243, vse = 12'd246;
+  integer tau_us = 40;
+  initial begin
+    integer v;
+    if ($value$plusargs("vss=%d", v)) vss = v[11:0];
+    if ($value$plusargs("vse=%d", v)) vse = v[11:0];
+    void'($value$plusargs("tau_us=%d", tau_us));
+  end
 
   // The interlaced main raster as sync_gen sees it (after syncgen_intf's pixrep
   // doubling of the dvd/emu.sv modeline walk): 1716 dots/line, hsync 1471..1595,
@@ -66,7 +78,7 @@ module csync_field_tb;
     .horizontal_sync_start(12'd1471), .horizontal_sync_end(12'd1595),
     .horizontal_length(12'd1715),
     .vertical_resolution(12'd480),
-    .vertical_sync_start(12'd243), .vertical_sync_end(12'd246),
+    .vertical_sync_start(vss), .vertical_sync_end(vse),
     .horizontal_halfline(12'd858), .vertical_length(12'd261),
     .interlaced(1'b1), .clip_display_size(1'b0),
     .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
@@ -81,7 +93,7 @@ module csync_field_tb;
 
   // ---- the television: first-order RC integrator + threshold -----------------
   // v += (x - v) / N per 27 MHz sample; N = tau * 27e6. tau = 40 us -> N = 1080.
-  localparam integer N_TAU = 1080;
+  wire [31:0] N_TAU = tau_us * 27;             // tau * 27 MHz
   localparam integer LINE  = 1716;
   localparam integer FIELD = 450450;               // 262.5 * 1716
   localparam integer TOL   = 86;                   // 0.05 line
@@ -187,14 +199,14 @@ module csync_field_tb;
              first_broad_a, first_broad_a / 27, first_broad_b, first_broad_b / 27);
     $display("csync_field_tb: broad-pulse detector spacings: %0d / %0d clk27 (ideal %0d) over %0d triggers, %0d wrong",
              wd_sp_a, wd_sp_b, FIELD, wd_n, wd_bad);
-    $display("csync_field_tb: RC integrator (tau=%0d clk27, Schmitt) spacings: %0d / %0d clk27 (ideal %0d) — informational, %0d outside +/-%0d",
+    $display("csync_field_tb: RC integrator (tau=%0d clk27, Schmitt) spacings: %0d / %0d clk27 (ideal %0d), %0d outside +/-%0d",
              N_TAU, sp_a, sp_b, FIELD, bad, TOL);
     if (wd_bad == 0 && wd_n >= 8 && first_broad_a >= BROAD_STD && first_broad_b >= BROAD_STD
-        && bad_hs == 0 && bad_vsw == 0)
-      $display("PASS: csync_field_tb — both fields present a >= standard first broad pulse and trigger a width detector exactly 262.5 lines apart");
+        && bad == 0 && n_trig >= 8 && bad_hs == 0 && bad_vsw == 0)
+      $display("PASS: csync_field_tb — both fields present a >= standard first broad pulse; width detector exactly and RC integrator within 0.05 line of 262.5 lines apart");
     else begin
-      $display("FAIL: csync_field_tb — %0d bad width-detector spacings (%0d triggers), first broad A=%0d B=%0d (need >= %0d), %0d bad hsync, %0d bad vsync widths",
-               wd_bad, wd_n, first_broad_a, first_broad_b, BROAD_STD, bad_hs, bad_vsw);
+      $display("FAIL: csync_field_tb — %0d bad width-detector spacings (%0d triggers), %0d bad integrator spacings (%0d triggers), first broad A=%0d B=%0d (need >= %0d), %0d bad hsync, %0d bad vsync widths",
+               wd_bad, wd_n, bad, n_trig, first_broad_a, first_broad_b, BROAD_STD, bad_hs, bad_vsw);
       $fatal(1);
     end
     $finish;

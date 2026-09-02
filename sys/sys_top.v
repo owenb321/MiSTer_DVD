@@ -1904,6 +1904,21 @@ endmodule
 
 // CSync generation
 // Shifts HSync left by 1 HSync period during VSync
+//
+// DVD-FORK (single-raster analog, 2026-09-03): serrations at TWICE line rate
+// during vsync (the broadcast structure), not once per line as stock. Stock's
+// line-rate serration gives the two fields of an interlaced raster DIFFERENT
+// broad-pulse patterns relative to their vsync start (one field's vsync begins
+// half a line later than the other's, the serrations do not), so a set's vertical
+// sync separator triggers at a field-dependent offset: an RC integrator by
+// ~0.1 line (uneven line spacing / pairing on an analog CRT), a broad-pulse
+// width detector by up to a third of a line (the RetroTINK "lines-per-frame
+// toggling" report). With a serration every half line both fields see the same
+// pattern, and bench/dvd/csync_field_tb.sv measures BOTH separator models at
+// exactly 262.5 lines. The extra pulse sits half a line before the stock one
+// (same width); equalizing pulses outside vsync are not generated (they would
+// need advance knowledge of vsync). Progressive rasters get the same 2H
+// serration, which is what a 240p broadcast-style signal carries anyway.
 
 module csync
 (
@@ -1919,7 +1934,7 @@ assign csync = (csync_vs ^ csync_hs);
 reg csync_hs, csync_vs;
 always @(posedge clk) begin
 	reg prev_hs;
-	reg [15:0] h_cnt, line_len, hs_len;
+	reg [15:0] h_cnt, line_len, hs_len, half_len;
 
 	// Count line/Hsync length
 	h_cnt <= h_cnt + 1'd1;
@@ -1929,14 +1944,17 @@ always @(posedge clk) begin
 		h_cnt <= 0;
 		if (hsync) begin
 			line_len <= h_cnt - hs_len;
+			half_len <= (h_cnt + hs_len) >> 1;     // DVD-FORK: half the line period
 			csync_hs <= 0;
 		end
 		else hs_len <= h_cnt;
 	end
-	
+
 	if (~vsync) csync_hs <= hsync;
 	else if(h_cnt == line_len) csync_hs <= 1;
-	
+	else if(h_cnt == line_len - half_len) csync_hs <= 1;            // DVD-FORK: 2H serration
+	else if(h_cnt == line_len - half_len + hs_len) csync_hs <= 0;   // DVD-FORK: same width as hsync
+
 	csync_vs <= vsync;
 end
 

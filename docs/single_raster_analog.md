@@ -135,10 +135,34 @@ convention), which is where the 9 µs offset came from. Measured by `csync_field
 | broad-pulse width detector, trigger spacing | not measured | 450450 / 450450 exactly |
 | RC integrator (τ 40 µs, Schmitt) spacing | 450171 / 450729 | 450246 / 450654 (informational) |
 
-The integrator asymmetry that remains is inherent to the framework's line-rate serrations
-(no equalizing pulses) and affects every MiSTer 480i core; it is reported, not gated. If a
-picky set still hunts on HW, the next step is 2H serrations / equalizing pulses as a
-DVD-FORK variant of `csync` selected only when interlaced.
+### 3.9 HW round 1 → serrations at 2H in the fork's `csync` (`sys/sys_top.v`)
+The first board round (composite CRT, `DVD_singleraster_20260902_1902`): resolution
+reported correctly, but the picture **paired and bounced more than the previous build**.
+A tau sweep of the bench (`bench/dvd/run_csync_sweep.sh`, shipped vs main's `syncgen.v`)
+explained it: the two separator models want opposite placements under **line-rate**
+serrations —
+
+| tau | old placement (dot-0), integrator | anchored, integrator | old, width detector | anchored, width detector |
+|---|---|---|---|---|
+| 20 µs | 450368 / 450532 | — | 449837 / 451063 | 450450 / 450450 |
+| 40 µs | 450172 / 450728 | 450246 / 450654 | 449837 / 451063 | 450450 / 450450 |
+| 80 µs | **450460 / 450440** | 450582 / 450318 | 449837 / 451063 | 450450 / 450450 |
+
+The dot-0 placement happened to be near-perfect for an analog RC integrator (a classic
+composite set) while breaking width detectors (the RT4K); anchoring fixed the width
+detector and cost the integrator ~0.1 line — exactly the round-1 symptom. With line-rate
+serrations no placement satisfies both, because the two fields' vsyncs start half a line
+apart and the serrations do not. **Fix: the fork's `csync` module now serrates at twice
+line rate during vsync** (an extra hsync-width pulse half a line before each stock one;
+`half_len` measured like `line_len`). Both fields then see the same pattern:
+
+| | first broad pulse A / B | width detector | RC integrator (40 µs) |
+|---|---|---|---|
+| 2H serrations | 27 µs / 27 µs | 450450 / 450450 | 450486 / 450414 (0.02 line) |
+
+`csync_field_tb` now gates the integrator too (±0.05 line) and passes across tau 10–80 µs.
+Equalizing pulses outside vsync are still not generated (they need advance knowledge of
+vsync); every console core omits them as well.
 
 Because "vsync starts on line N" now means "at line N−1's trailing hsync", the interlaced
 walk's per-field vsync moved one line earlier (NTSC 243..246, PAL 291..294) so that line
@@ -152,7 +176,7 @@ are untouched.
 | Bench | What it proves |
 |---|---|
 | `bench/dvd/crt_syncgen_tb.sv` PHASE 2c (new) | pixrep + half-line 858: vsync every 450450 clk27, rises 858 apart within the line, 3.0-line width, 240 lines/field; PHASES 1/2/2b/3/4/5 unchanged |
-| `bench/dvd/csync_field_tb.sv` + `run_csync_field.sh` (new) | the REAL `sys_top.v` `csync` (extracted at run time) on the shipped modeline: first broad pulse ≥ standard in both fields, width-detector triggers exactly 262.5 lines apart; integrator numbers printed |
+| `bench/dvd/csync_field_tb.sv` + `run_csync_field.sh` (new) | the REAL `sys_top.v` `csync` (extracted at run time) on the shipped modeline: first broad pulse ≥ standard in both fields, width-detector triggers exactly 262.5 lines apart, RC integrator within 0.05 line; `run_csync_sweep.sh [<older syncgen.v>]` sweeps tau and A/Bs placements |
 | `bench/dvd/modeline_boot_tb.sv` [4] (new) + `run_modeline_boot.sh --red` | REAL `reset.v` + `regfile.v` + `syncgen_intf` + `sync_gen`: a watchdog pulse leaves vsync spacing at 450450 (GREEN) / breaks it with the old `dot_rst` wiring (RED); the boot-race phases updated to the new walk values |
 | `bench/dvd/cc_e2e_tb.sv` (rewritten) | REAL `sync_gen` + REAL `cc_vbi` + a copy of the output stage: captions demodulated at the pins, line 21 (17 H after the vsync edge), correct field slots, 720 enables per 1440-clock DE line |
 | `cc_line21_tb`, `cc_field_map_tb` | unchanged, green |
@@ -175,6 +199,7 @@ are untouched.
 - Native 13.5 MHz dot pacing (720-wide internally) — only if a reason appears; needs the
   overlay query-lead constants re-tuned (`HUD_QX_ADJ`, `BAR_QX_ADJ`, `LOGO_QX_LEAD`,
   `SP_QX_ADJ`, `crt_ov_map`, `cc_vbi`).
-- 2H serrations / equalizing pulses in a fork `csync` variant if a set still hunts.
+- Equalizing pulses outside vsync (needs the vsync position in advance — a 3-line video
+  delay or a hint from the modeline walk) if a set still hunts with 2H serrations.
 - Progressive 480p on the analog pins keeps the dot-0 vsync reference (no field
   ambiguity there); anchoring it too is a one-line follow-up if a 31 kHz display objects.
