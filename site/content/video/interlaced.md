@@ -1,54 +1,83 @@
-# Interlaced output (HDMI)
+# Video Output
 
-`Interlaced Out` controls whether the core sends **native 480i/576i fields** to HDMI
-instead of a progressive picture. Default **Off**.
+!!! info "Unreleased"
+    `Video Output` replaces the previous `Interlaced Out` and `Analog Out` settings.
+    Releases up to and including v0.3.0 still have the old pair — this page describes
+    the current development build.
 
-This is separate from [Analog and CRT output](analog-crt.md), which has its own raster and
-its own setting.
+`Video Output` is the core's one output-mode choice:
 
 | Mode | Behaviour |
 |---|---|
-| **Off** *(default)* | Weave both fields into a progressive frame. |
-| **Auto** | Engage native fields when the content is detected as true-interlaced video. |
-| **On** | Always send native fields. |
+| **Auto** *(default)* | Follows `MiSTer.ini`: an analog TV configured there means **Interlaced**, otherwise **Progressive**. |
+| **Interlaced** | The decoder emits the disc's **authored fields**. The analog pins carry a native 15 kHz 480i/576i raster for a CRT; HDMI shows 480i through the framework scaler. |
+| **Progressive** | The progressive picture, as before. HDMI at full quality, [Film 24p](film-24p.md) available, and the analog pins carry the progressive raster for displays that take 480p/576p. |
 
-`480i Deint` (Bob / Weave) then picks how the framework scaler deinterlaces what it
-receives.
+An explicit choice always overrides `MiSTer.ini` and persists across reloads.
 
-## What it is for
+## Which one you want
+
+| Your setup | Mode |
+|---|---|
+| HDMI | **Auto** (lands on Progressive) |
+| A 15 kHz CRT — composite, s-video, YPbPr, RGB SCART | **Auto** with the ini set up as below (lands on Interlaced) |
+| A 15 kHz RGBHV rig the ini bits cannot identify | **Interlaced**, explicitly |
+| A display that wants 480p/576p on the analog pins | **Progressive**, explicitly |
+| HDMI, but a disc of true-interlaced video (TV, concerts) and you want native fields | **Interlaced**, explicitly |
+
+For a CRT there is nothing to set in the OSD — it engages from `MiSTer.ini` exactly like
+any other core:
+
+```ini
+vga_scaler=0        ; (the default) native video on the analog pins
+composite_sync=1    ; or ypbpr=1, or vga_sog=1 — match your cable
+```
+
+## What Interlaced mode does
 
 DVD content shot on video — television, concerts, documentaries — is genuinely interlaced
-at 59.94 (or 50) fields per second. Weaving those fields into 29.97 progressive frames
-throws away half the motion information, which reads as juddery movement.
+at 59.94 (or 50) fields per second. Weaving those fields into progressive frames throws
+away half the motion information, which reads as juddery movement. In Interlaced mode
+every displayed refresh is one genuine authored field of exactly one picture, which is
+what a CRT is built to show.
 
-Sending native fields preserves it. On film content it makes no real difference, because
-film has only 24 distinct images per second regardless.
+While it is active:
 
-## Off by default, and Auto is opt-in
+- The **CRT** gets the fields re-timed 1:1 on a native 15 kHz raster — the smoothest
+  presentation for video-sourced discs, and the same thing a set-top player outputs.
+- **HDMI** drops to 480i for the session, deinterlaced by the framework scaler.
+  `480i Deint` picks Bob (smooth motion, half vertical resolution) or Weave (full
+  resolution, combing on motion). The scaler is not cadence-aware, so **film content
+  looks better in Progressive mode on HDMI** — which is why Interlaced is not forced
+  whenever a CRT is merely present, only chosen.
+- [Film 24p](film-24p.md) output is unavailable (a 23.976 Hz raster cannot carry fields).
 
-**`On` plays correctly with A/V sync** — the mode is fixed at load time, so nothing changes
-mid-title.
+Film on a **CRT** in Interlaced mode is fine — 3:2 fields at 60 Hz is exactly what an NTSC
+player fed a TV — so a CRT-only setup can simply stay in Interlaced (or Auto) for
+everything.
 
-**`Auto` still has a known problem.** The detector's verdict lands about 1.7 seconds into
-playback, so the switch is inherently mid-title, and even with the full seek-style re-sync
-that follows it, **audio ends up slightly out of sync**. It is kept as an opt-in to revisit
-rather than being the default.
+!!! danger "Set it before loading a disc"
+    Changing `Video Output` mid-title fires a full seek-equivalent flush. Pick the mode
+    first, then load.
 
-So: if you know a disc is video-sourced and you want native fields on HDMI, set **On**
-before loading it. Leave the default alone otherwise.
+## Field alignment is automatic
 
-!!! tip "On a CRT, use Native Fields instead"
-    If your target is an analog CRT rather than HDMI,
-    [`Analog Out = Native Fields`](analog-crt.md#native-fields) is the better route — it is
-    hardware-confirmed, has no mid-title switch, and gives the CRT the disc's authored
-    fields directly.
+Earlier builds could come back from a chapter skip, fast-forward or aspect change with a
+**badly aliased, screen-door picture** that only cleared after toggling the output mode a
+few times. That was a field-parity coin flip in the display pipeline, and it is fixed: the
+core now checks every displayed field against the raster phase and re-aligns within a
+field or two, so seeks and mode changes land clean without any ritual.
 
-## Interactions
+## What changed from the old settings
 
-- While the analog raster is engaged in `Auto` or `Interlaced` mode, `Interlaced Out` is
-  **forced off** — the re-interlacer needs the progressive main raster to derive from.
-- `Analog Out = Native Fields` does the opposite: it forces field mode on for the whole
-  session, which is what makes HDMI drop to 480i in that mode.
-- Overlays — subtitles, menu highlights, the transport HUD and seek bar — render correctly
-  in interlaced mode. They previously appeared squashed into the left half of the screen;
-  that is fixed.
+- The old `Analog Out = Native Fields` **is** the new Interlaced mode, renamed — it was
+  the mode worth keeping.
+- The old derive modes (`Analog Out = Auto/Interlaced`), which rebuilt CRT fields from a
+  woven progressive frame, are gone: field pairing on that path was structurally unstable
+  (the "wobbly interlace" field reports) and Interlaced mode is immune by construction.
+  This also means the old "CRT 480i and full-quality progressive HDMI at the same time"
+  combination no longer exists — with a CRT active, HDMI shows 480i. Pick the output that
+  matters and set the mode for it.
+- The old `Interlaced Out` (HDMI fields) is subsumed: `Video Output = Interlaced` gives
+  HDMI the same 480i-via-scaler picture. Its `Auto` content detector is retired — it
+  switched mid-title, which never worked cleanly with audio.

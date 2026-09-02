@@ -16,7 +16,7 @@
  * mirrors dvd/disp_hstretch.sv (the horizontal Crop stretcher) but on the vertical axis.
  *
  * FIELD PATH (480i): when the decoder is in NATIVE-FIELDS mode (`interlaced=1`, i.e. O[10:9]
- * Interlaced Out, or Analog Out = Native Fields) resample_addrgen emits a whole field's lines
+ * Video Output = Interlaced; was Interlaced Out / Native Fields) resample_addrgen emits a whole field's lines
  * contiguously (all one parity), so "adjacent stream lines" are adjacent SAME-FIELD source
  * lines — blending them is parity-safe (no inter-field comb / twitter) for both film (rff 3:2)
  * and true-interlaced content. Each field is an independent resampling pass, re-armed on its
@@ -32,7 +32,7 @@
  *   - true-interlaced content: the blend genuinely CROSS-FADES two time instants. It is not a
  *     deinterlacer and not a correctness bug (it softens rather than combs), but it is real.
  * Only Letterbox (disp_vscale_en = analog_letterbox, i.e. Auto-on-16:9 or manual) reaches this;
- * Fit and Crop never blend vertically. Analog Out = Native Fields restores the parity-safe
+ * Fit and Crop never blend vertically. Video Output = Interlaced restores the parity-safe
  * premise, because it puts the decoder back on the field path. See docs/analog_dual_raster.md.
  *
  * BARS: unchanged. This module just emits the 360 / 180 CONTENT lines (carrying the scan's

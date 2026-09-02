@@ -82,8 +82,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              disp_hfill_en,                                        // DVD-FORK FIX (SIF analog fill): stretch sub-D1 lines to the 720 raster
              menu_ff,                                              // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
              film24,                                               // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
-             film_det_ntsc, film_det_pal,                          // DVD-FORK (Film 24p auto-detect): cadence verdicts (up to emu)
-             det_video                                             // DVD-FORK (Interlaced Out auto): true-interlaced-video verdict (up to emu)
+             film_det_ntsc, film_det_pal                           // DVD-FORK (Film 24p auto-detect): cadence verdicts (up to emu)
 	     );
 
   input            clk;                     // clock. Typically a multiple of 27 Mhz as MPEG2 timestamps have a 27 Mhz resolution.
@@ -261,10 +260,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * resolves the Off/On/Auto mode. */
   output           film_det_ntsc;
   output           film_det_pal;
-  /* DVD-FORK (Interlaced Out — auto detect): sustained true-interlaced-video verdict
-   * (progressive_frame==0 run) from resample's detector. emu.sv CDC-syncs it to clk_sys
-   * and drives the native 480i/576i fields path when Interlaced Out = Auto. */
-  output           det_video;
 
   /* register file access */
   input       [3:0]reg_addr;
@@ -1440,7 +1435,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .refresh_tick_dbg(gov_refresh_tick),
     .film_det_ntsc(film_det_ntsc),                           // DVD-FORK (Film 24p auto-detect)
     .film_det_pal(film_det_pal),
-    .det_video(det_video),                                   // DVD-FORK (Interlaced Out auto)
     .raster_par_err(raster_par_err),                         // DVD-FORK (field-parity corrector): mixer verdict, synced
     .vscale_mode(disp_vscale_mode),                          // DVD-FORK (CRT anamorphic vscale)
     .hcrop_en(disp_hcrop_en),                                // DVD-FORK (CRT anamorphic horizontal crop)

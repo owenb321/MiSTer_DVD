@@ -1,8 +1,14 @@
 # Analog and CRT output
 
-The core drives a real CRT natively. It emits **two rasters at the same time**: the normal
-progressive one for HDMI, and a native 15 kHz 480i/576i raster on the analog pins. The two
-are independent, so **HDMI quality is never reduced by having the CRT connected**.
+!!! info "Unreleased"
+    The `Analog Out` setting described here for releases up to v0.3.0 has been replaced
+    by the single [`Video Output`](interlaced.md) option. This page describes the
+    current development build.
+
+The core drives a real CRT natively: with
+[`Video Output = Interlaced`](interlaced.md) (or Auto with the ini below), the analog
+pins carry a native 15 kHz 480i/576i raster built from the disc's **authored fields**,
+re-timed 1:1 — the same presentation a set-top player feeds a TV.
 
 ## Turning it on
 
@@ -14,49 +20,23 @@ vga_scaler=0        ; (the default) native video on the analog pins
 composite_sync=1    ; or ypbpr=1, or vga_sog=1 — match your cable
 ```
 
-That is the whole setup. `Analog Out` in the OSD is an override for cases where the ini
-bits alone do not describe your rig.
+That is the whole setup — `Video Output = Auto` reads those bits and lands on Interlaced.
+Set the mode explicitly only when the ini bits cannot describe your rig (a 15 kHz RGBHV
+monitor: **Interlaced**) or when your analog display wants a progressive signal
+(480p/576p component or VGA: **Progressive**). The mode table and the full description
+live on the [Video Output](interlaced.md) page.
 
-## Analog Out modes
+!!! warning "HDMI shows 480i while a CRT is active"
+    Interlaced mode puts the whole core in field mode, so HDMI drops to 480i via the
+    framework scaler for the session. The earlier dual-raster arrangement that kept HDMI
+    progressive alongside the CRT was removed with its structurally unstable
+    field-pairing (the "wobbly interlace" reports) — pick the output that matters and
+    set `Video Output` for it.
 
-`Auto` follows `MiSTer.ini` and is right for most setups.
-
-| Your setup | Mode |
-|---|---|
-| CRT only, video-sourced content (TV, concerts, live recordings) | **Native Fields** — smoothest motion |
-| CRT only, film | **Native Fields** or **Auto** — little difference |
-| CRT **and** HDMI at the same time | **Auto** or **Interlaced** |
-| A 15 kHz RGBHV rig the ini bits cannot identify | **Interlaced** |
-| A display that wants 480p/576p on the analog pins | **Progressive** |
-
-An explicit choice always overrides `MiSTer.ini` and persists across reloads.
-
-### Native Fields
-
-The other modes build the CRT's fields by taking a woven progressive frame apart again.
-**Native Fields** instead puts the decoder itself into field mode, so the CRT receives the
-disc's **authored** fields, re-timed 1:1.
-
-On true-interlaced content — television, concert footage, anything shot on video rather
-than film — this is visibly smoother. It is the correct answer for a CRT-only setup.
-
-!!! warning "It puts the whole core in field mode"
-    HDMI drops to 480i for the session and is deinterlaced by the framework scaler, which
-    is not cadence-aware — so **film content regresses on HDMI** while this mode is active.
-    That is why it is opt-in rather than automatic.
-
-!!! danger "Set it before loading a disc"
-    Changing `Analog Out` mid-title fires a full seek-equivalent flush. Pick the mode
-    first, then load.
-
-Why this exists rather than a cheaper fix: on the derived-field path, whether you see a
-coherent picture depends on which field of the pair lands on which raster field, and the
-frame-rate governor re-randomises that several times a second under normal load. There is
-no phase adjustment that holds. Feeding the decoder's own fields removes the pairing
-question entirely — every displayed refresh is one genuine field of exactly one picture.
-
-Film content barely notices the difference, because each field still lies wholly within one
-picture either way. **True 29.97i video is where it shows.**
+Motion looks right on video-sourced discs by construction — every displayed refresh is
+one genuine authored field — and film's 3:2 field cadence on a CRT is exactly what an
+NTSC player output. Seeks and aspect changes land clean:
+[field alignment is automatic](interlaced.md#field-alignment-is-automatic).
 
 ## Analog Aspect
 
@@ -102,7 +82,6 @@ upscale.
 - **PAL on an analog CRT is implemented but unconfirmed.** The 576i timings are derived by
   analogy with the hardware-proven NTSC ones, and no PAL CRT was available to test them.
   PAL over HDMI is confirmed working.
-- While the analog raster is active, [Film 24p](film-24p.md) output is suppressed — the
-  re-interlacer needs the standard progressive raster to work from.
-- In the derive modes (`Auto`, `Interlaced`), [Interlaced Out](interlaced.md) is forced
-  off for the same reason.
+- While `Video Output = Interlaced`, [Film 24p](film-24p.md) output is unavailable — a
+  23.976 Hz raster cannot carry fields. Film on the CRT plays with its normal 3:2 field
+  cadence instead, which is what an NTSC player always did.

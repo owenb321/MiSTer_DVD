@@ -215,7 +215,7 @@ module crt_syncgen_tb;
 
     track_fields = 0;
     // =======================================================================
-    // PHASE 2 — HDMI Interlaced Out (O[10:9]) 480i, EXACT-RATE check.
+    // PHASE 2 — HDMI fields 480i (Video Output = Interlaced; was Interlaced Out O[10:9]), EXACT-RATE check.
     //
     // Driven with the values syncgen ACTUALLY sees in this mode, i.e. AFTER
     // syncgen_intf's pixel-repetition doubling (`x -> {x[10:0],1'b1}` = 2x+1,

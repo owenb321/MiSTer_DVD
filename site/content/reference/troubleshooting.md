@@ -122,11 +122,19 @@ Set **`Analog Aspect`** to `Letterbox` (or `Crop`). Anamorphic content is stored
 into a 4:3 raster and needs unsqueezing. See
 [Analog Aspect](../video/analog-crt.md#analog-aspect).
 
-### Motion looks juddery on a CRT
+### Motion looks juddery or wobbly on a CRT
 
-If the content is video-sourced — television, concert footage — set
-**`Analog Out` = `Native Fields`** *before loading the disc*. See
-[Native Fields](../video/analog-crt.md#native-fields).
+Make sure **`Video Output`** is `Interlaced` (or `Auto` with the
+[analog ini bits](../video/analog-crt.md#turning-it-on) set) *before loading the disc* —
+the CRT then gets the disc's authored fields. See [Video Output](../video/interlaced.md).
+On builds up to v0.3.0 the equivalent setting is `Analog Out = Native Fields`; those
+builds' other analog modes have a known field-pairing wobble on video-sourced content.
+
+### The picture goes aliased / screen-door after a chapter skip on a CRT
+
+Fixed in current builds — field alignment now recovers automatically within a couple of
+fields. On builds up to v0.3.0, toggle `Analog Out` away and back (sometimes several
+times) to re-roll the field phase.
 
 ### A film disc keeps changing resolution, or judders
 

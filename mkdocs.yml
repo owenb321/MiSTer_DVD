@@ -123,8 +123,8 @@ nav:
       - On-screen messages: playback/on-screen-messages.md
   - Video:
       - Film (24p): video/film-24p.md
+      - Video Output: video/interlaced.md
       - Analog and CRT output: video/analog-crt.md
-      - Interlaced output: video/interlaced.md
       - Closed captions: video/closed-captions.md
   - Audio:
       - Formats and decoding: audio/formats.md

@@ -4,7 +4,7 @@ Everything here is in the core's OSD. The **default is shown in bold**, and the
 defaults are chosen to be correct for most setups — on a normal HDMI installation you
 should not need to change anything.
 
-Settings are saved to `/media/fat/config/DVD_v1.CFG` and persist across core reloads.
+Settings are saved to `/media/fat/config/DVD_v2.CFG` and persist across core reloads.
 
 ## Main page
 
@@ -17,11 +17,16 @@ Settings are saved to `/media/fat/config/DVD_v1.CFG` and persist across core rel
 | **Audio Out** | **Decode PCM** / Passthru (SPDIF+HDMI) | Decode PCM decodes in fabric and sends stereo. Passthru sends the undecoded bitstream to an AV receiver — see [Bitstream passthrough](../audio/passthrough.md). |
 | **SPDIF Byte Order** | **Normal** / Swap | Applies to *both* bitstream outputs despite the name. If a receiver names the format but plays static, toggle this. |
 | **Player Language** | **English** / 15 others | The player's language preference for menus, audio and subtitles, like a set-top player's setup screen. Discs use it to pick a default track. |
-| **Interlaced Out** | **Off** / Auto / On | Native 480i/576i to HDMI — see [Interlaced output](../video/interlaced.md). |
-| **480i Deint** | **Bob** / Weave | How the framework scaler deinterlaces when receiving 480i. |
-| **Analog Out** | **Auto** / Interlaced / Progressive / Native Fields | The analog CRT raster — see [Analog and CRT output](../video/analog-crt.md). |
+| **Video Output** | **Auto** / Interlaced / Progressive | The core's one output-mode choice: authored interlaced fields (CRTs, true-video content) or progressive (HDMI, film) — see [Video Output](../video/interlaced.md). Auto follows `MiSTer.ini`. |
+| **480i Deint** | **Bob** / Weave | How the framework scaler deinterlaces when receiving 480i (HDMI, while Video Output is Interlaced). |
 | **Analog Aspect** | **Auto** / Fit / Letterbox / Crop | How anamorphic content fits a 4:3 analog TV — see [Analog Aspect](../video/analog-crt.md#analog-aspect). |
 | **Video Standard** | **Auto** / NTSC / PAL | Auto detects from the stream's vertical size (480 = NTSC, 576 = PAL). |
+
+!!! info "Unreleased"
+    **Video Output** replaces the previous `Interlaced Out` and `Analog Out` settings
+    (which overlapped confusingly), and this relayout bumps the saved-settings file to
+    `DVD_v2.CFG` — [settings reset once](#settings-that-reset-after-an-update) on
+    updating. Releases up to and including v0.3.0 still have the old pair.
 
 ### Reset
 
@@ -74,7 +79,7 @@ If lip sync is wrong in a way this does not fix, that is a bug rather than a set
 
 ## Settings that reset after an update
 
-Saved settings live in `/media/fat/config/DVD_v1.CFG`, where `v1` is a **layout version**.
+Saved settings live in `/media/fat/config/DVD_v2.CFG`, where `v2` is a **layout version**.
 
 When a release changes the OSD option layout incompatibly, that number is bumped, and your
 settings fall back to the defaults rather than being silently misread — an old file's bits

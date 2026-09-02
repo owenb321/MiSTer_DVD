@@ -34,12 +34,12 @@ body:
   - type: dropdown
     id: analogout
     attributes:
-      label: "`Analog Out` setting"
+      label: "`Video Output` setting (`Analog Out` on v0.3.0 and earlier)"
       options:
         - "Auto (the default)"
         - Interlaced
         - Progressive
-        - Native Fields
+        - "Native Fields (v0.3.0 and earlier)"
     validations:
       required: true
 

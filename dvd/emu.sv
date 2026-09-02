@@ -155,40 +155,38 @@ assign VIDEO_ARY    = (analog_letterbox | analog_crop) ? 13'd3 : (ar_wide_eff | 
 // pal_eff: resolved PAL/50Hz flag (Auto-detected or forced via O[17:16]); assigned
 // near the decoder instance once core_vertical_size / pal_det_s2 exist.
 wire pal_eff;
-// DVD-FORK (dual-raster analog output, supersedes the O[14] whole-core CRT mode):
-// the native 15 kHz CRT raster is now a SECOND, simultaneous output
-// (dvd/re_interlace.sv -> VGA2_*) instead of a whole-core mode switch — HDMI keeps
-// the progressive main raster while the analog pins get broadcast 480i/576i
-// (PAL included). It auto-engages from the MiSTer.ini video bits like any other
-// MiSTer core: vga_scaler=0 plus an analog-TV signal type configured
-// (composite_sync / ypbpr / vga_sog), or direct_video (HDMI DAC -> CRT; the
-// direct-video tap sits on the muxed analog chain in sys_top). forced_scandoubler
-// vetoes Auto (a 31 kHz VGA rig). O[27:26] "Analog Out" overrides:
-//   Auto (default) = the ini rule above;
-//   Interlaced     = force the 480i raster (15 kHz RGBHV rigs none of the ini
-//                    bits identify);
-//   Progressive    = force it off (component/VGA displays that want 480p, and
-//                    dev A/B testing — the analog pins then carry the main
-//                    progressive raster through the stock bit-identical path);
-//   Native Fields  = force the 480i raster AND put the decoder in native-fields
-//                    mode, so the re-interlacer re-times AUTHORED fields 1:1
-//                    instead of splitting a woven progressive frame. This is the
-//                    structural fix for the field-pairing defect (caveat 2): a
-//                    governor late costs an ODD +1 refresh on the progressive
-//                    path, flipping the pairing parity ~4x/s, but an EVEN +2 on
-//                    the field path. Opt-in because it makes the MAIN raster
-//                    interlaced too, so HDMI drops to 480i via ascal bob/weave
-//                    for the session (ascal is not cadence-aware => film
-//                    regresses on HDMI). SET IT BEFORE LOADING A DISC: changing
-//                    it mid-title toggles il_eff and therefore fires the full
-//                    seek-equivalent il_switch flush.
-// See docs/analog_dual_raster.md.
+// DVD-FORK (Video Output consolidation, 2026-09-02 — replaces the O[10:9]
+// "Interlaced Out" + O[27:26] "Analog Out" pair):
+// ONE output-mode choice, O[10:9] "Video Output" = Auto / Interlaced / Progressive.
+//   Interlaced  = the old "Analog Out = Native Fields", renamed: the decoder runs in
+//                 native-fields mode (il_eff — the MAIN raster is the pixrep 480i/576i
+//                 fields raster), dvd/re_interlace.sv re-times the AUTHORED fields 1:1
+//                 onto the 15 kHz half-line analog raster (VGA2_*), and HDMI gets 480i
+//                 via ascal (OB Bob/Weave). Structurally immune to the derive path's
+//                 field-pairing defect (a governor late re-scans a field PAIR = even),
+//                 and the field-parity corrector (docs/field_parity.md) keeps
+//                 content-field <-> raster-field alignment through seeks/restarts.
+//   Progressive = the progressive main raster: full HDMI quality, Film 24p available,
+//                 and the analog pins carry the progressive raster through the stock
+//                 path (480p/576p-capable analog displays).
+//   Auto        = ini-driven, boot-static: an analog TV configured in MiSTer.ini
+//                 (vga_scaler=0 plus composite_sync / ypbpr / vga_sog, or direct_video;
+//                 forced_scandoubler vetoes = a 31 kHz VGA rig) resolves to Interlaced,
+//                 else Progressive — the same ini workflow as every other core.
+// The 2026-07 dual-raster DERIVE (weave) modes — CRT 480i built from the progressive
+// raster, HDMI simultaneously progressive — are DELETED (field-reported "extremely
+// wobbly": the pairing parity flips on every governor late, ~4/s; the simultaneity was
+// deliberately traded away — pick-your-output). SET THE MODE BEFORE LOADING A DISC:
+// changing it mid-title toggles il_eff and fires the full seek-equivalent il_switch
+// flush (the parity corrector heals the field phase, but the flush itself restarts
+// playback). See docs/analog_dual_raster.md (history + fieldpass design),
+// docs/interlaced_auto.md (superseded), docs/field_parity.md.
 wire direct_video;                        // hps_io cfg[10] (declared early for the gating here)
 wire forced_scandoubler;                  // hps_io cfg[4]
 wire ini_vga_scaler, ini_csync, ini_ypbpr, ini_sog;  // hps_io MiSTer.ini exports (DVD-FORK)
 wire hdmi_bs_ack;                                    // cfg[14] HPS ack (DVD-FORK, HDMI bitstream)
 wire bs_stb_w;                                       // 48 kHz pair strobe from iec61937_wrap
-wire [1:0] analog_mode = status[27:26];   // 0=Auto 1=Interlaced 2=Progressive 3=Native Fields
+wire [1:0] video_out_mode = status[10:9]; // 0=Auto 1=Interlaced 2=Progressive (O[27:26] left dead — old Analog Out)
 // Debug "Title VTS" override (P1, two BCD digits -> VTS 1..99; 0 = Auto).
 // See the CONF_STR note at the retired O[31:28] slot.
 wire [3:0] dbg_tv_tens  = status[35:32];
@@ -218,10 +216,12 @@ always @(*) case (status[43:40])
 endcase
 wire       analog_want = ((ini_csync | ini_ypbpr | ini_sog) & ~ini_vga_scaler & ~forced_scandoubler)
                        | direct_video;
-// Native Fields: session flag driving BOTH the analog raster and the decoder mode.
-wire       analog_fields = (analog_mode == 2'd3);
-wire       analog_eff  = (analog_mode == 2'd1) | analog_fields
-                       | ((analog_mode == 2'd0) & analog_want);
+// The ONE resolved output mode. Session flag: drives the decoder fields mode (il_eff),
+// the analog 15 kHz raster (re_interlace/VGA2), and every analog-only nicety (SIF fill,
+// Analog Aspect, line-21 CC). analog_want is latched from the HPS cfg word at core boot,
+// so Auto is boot-static — interlaced_eff only ever changes on an OSD edit (il_switch).
+wire       interlaced_eff = (video_out_mode == 2'd1)
+                          | ((video_out_mode == 2'd0) & analog_want);
 // Analog Aspect resolves near the decoder (needs ar_wide_auto_eff); forward-declared
 // like ar_wide_eff/pal_eff so VIDEO_ARX/ARY above can reference them.
 wire analog_letterbox, analog_crop;
@@ -239,41 +239,26 @@ wire analog_letterbox, analog_crop;
 //   telecine, PAL = sustained progressive = native 25p). CRT can't do 24/25 Hz on the
 //   analog pins, so forced off there. See docs/film_24p_plan.md §9.
 wire        film_det_ntsc_sync, film_det_pal_sync;   // driven near the decoder instance
-wire        il_det_sync;                             // DVD-FORK (Interlaced Out auto): true-interlaced verdict, clk_sys (driven near the decoder instance)
 // Enum ORDER makes AUTO the power-on default: MiSTer status bits reset to 0, and
 // index 0 = "Auto" in the CONF_STR below, so an unconfigured core film-detects.
 wire [1:0]  film_mode  = status[25:24];              // 0=Auto 1=Off 2=On
 wire        film_det   = pal_eff ? film_det_pal_sync : film_det_ntsc_sync;
 wire        film_want  = (film_mode == 2'b10) | ((film_mode == 2'b00) & film_det);
-// DVD-FORK (dual-raster): the 23.976/25 Hz film raster cannot feed the analog
-// re-interlacer (no frame store for the rate conversion), so an active analog
-// output suppresses it — HDMI falls back to the in-core 3:2 at 59.94p (today's
-// default quality), the CRT keeps its fields. ini-driven, boot-static.
-wire        filmp_eff  = film_want & ~analog_eff;    // progressive-film raster wanted
+// The 23.976/25 Hz film raster is a PROGRESSIVE-mode feature: it cannot carry fields
+// (and cannot feed the analog re-timer — no frame store for the rate conversion), so
+// Interlaced mode suppresses it. Film on the CRT then plays with its normal 3:2 field
+// cadence — exactly what an NTSC set-top player output.
+wire        filmp_eff  = film_want & ~interlaced_eff; // progressive-film raster wanted
 wire        film24_eff = filmp_eff & ~pal_eff;       // NTSC 23.976 Hz path
 wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
-// DVD-FORK (Interlaced Out — auto detect): O[10:9] is a 3-way Off/Auto/On enum. Default
-// is Off (index 0 = power-on default) — Auto's mid-title switch still leaves audio slightly
-// out of sync on HW (2026-07-27), so Auto is kept as an opt-in for revisiting rather than
-// the default. Auto engages the native fields path when the decoder's true-interlaced
-// detector (det_video -> il_det_sync) fires; On forces it; Off keeps the progressive weave.
-// Standard-neutral: covers both NTSC 480i and PAL 576i (the detector keys on
-// progressive_frame, not the standard).
-wire [1:0]  il_mode = status[10:9];                  // 0=Off 1=Auto 2=On
-wire        il_want = (il_mode == 2'd2) | ((il_mode == 2'd1) & il_det_sync);
-// il_eff: effective interlaced-output mode (the HDMI native-fields raster, O[10:9]).
-// Film 24p/25p wins (progressive-film raster can't also be interlaced). DVD-FORK
-// (dual-raster) v1: an active ANALOG output also forces it off — the re-interlacer
-// needs the standard progressive main raster (its period check rejects the pixrep
-// fields raster), and the weave frames still carry both fields so the CRT gets true
-// 480i content. Trade-off: HDMI temporarily loses native-fields mode while an
-// analog TV is configured.
-// DVD-FORK (Analog Out = Native Fields, 2026-08-22): that mode is the field-passthrough
-// follow-up — it FORCES native fields on so the re-interlacer re-times authored fields
-// instead of deriving them from a weave. Held for the whole session (the mode is an OSD
-// bit, so a mid-title change fires il_switch's seek-equivalent flush — documented at the
-// CONF_STR). filmp_eff is already 0 here because analog_eff is 1.
-wire il_eff = analog_fields | (il_want & ~filmp_eff & ~analog_eff);
+// il_eff: the decoder/main-raster fields mode — now simply the resolved Video Output
+// verdict (kept as its own name because ~15 consumers ride it: VGA_F1, HDMI_BOB_DEINT,
+// the modeline walk, il_switch, the pixrep overlay inverses, re_interlace). Interlaced
+// mode owns the session outright: film_want does NOT override it (Film 24p is a
+// Progressive-mode feature, see filmp_eff above). The old derivation
+// (analog_fields | (il_want & ~filmp_eff & ~analog_eff)) died with the Interlaced Out
+// option and the derive modes — Video Output consolidation, 2026-09-02.
+wire il_eff = interlaced_eff;
 assign VGA_F1       = il_eff ? ~core_v_pos[0] : 1'b0;
 assign VGA_SL       = 0;
 // DVD-FORK (dual-raster analog output): VGA_SCALER is never forced any more —
@@ -609,27 +594,25 @@ parameter CONF_STR = {
     // (audio/subtitle preference, read by disc nav commands to auto-select
     // streams). Takes effect at the next menu jump / disc mount. status[43:40].
     "O[43:40],Player Language,English,French,German,Spanish,Italian,Japanese,Chinese,Korean,Portuguese,Russian,Dutch,Swedish,Danish,Norwegian,Finnish,Polish;",
-    "O[10:9],Interlaced Out,Off,Auto,On;",
+    // Video Output (DVD-FORK consolidation 2026-09-02, replaces "Interlaced Out"
+    // O[10:9] + "Analog Out" O[27:26] — bits [27:26] are left DEAD/reserved one
+    // release so stale saved status can't re-arm the old enum; the relayout is why
+    // the config version below is "v,2"). ONE output-mode choice:
+    //   Auto (default) = ini-driven: an analog TV configured in MiSTer.ini
+    //                    (vga_scaler=0 AND composite_sync/ypbpr/vga_sog, or
+    //                    direct_video=1) => Interlaced, else Progressive — the same
+    //                    ini workflow as every other core, nothing to set here.
+    //   Interlaced     = the disc's AUTHORED fields (decoder in native-fields mode;
+    //                    dvd/re_interlace.sv re-times them 1:1 onto the 15 kHz
+    //                    half-line analog raster; HDMI shows 480i via ascal, OB
+    //                    Bob/Weave below). Set it BEFORE loading a disc — a
+    //                    mid-title change fires the seek-equivalent il_switch flush.
+    //   Progressive    = the progressive raster: full HDMI quality, Film 24p
+    //                    available, analog pins carry 480p/576p through the stock
+    //                    path (component/VGA displays; also the dev A/B switch).
+    // status[10:9]. See docs/analog_dual_raster.md, docs/field_parity.md.
+    "O[10:9],Video Output,Auto,Interlaced,Progressive;",
     "OB,480i Deint,Bob,Weave;",
-    // Analog Out (DVD-FORK dual raster, supersedes O[14] "CRT 480i Out" — bit 14 is
-    // left DEAD/reserved one release so stale per-core saved status can't re-arm it):
-    // the native 15 kHz 480i/576i SECOND raster on the analog pins.
-    //   Auto (default) = engage exactly when MiSTer.ini configures an analog TV
-    //                    (vga_scaler=0 AND composite_sync/ypbpr/vga_sog) or
-    //                    direct_video=1 — same ini workflow as every other core,
-    //                    nothing to set here.
-    //   Interlaced     = force the 480i raster (15 kHz RGBHV rigs the ini bits
-    //                    can't identify).
-    //   Progressive    = force it off (component/VGA displays that take 480p/576p;
-    //                    also the dev A/B switch — the analog pins then carry the
-    //                    main progressive raster, stock path);
-    //   Native Fields  = 480i from the disc's AUTHORED fields (decoder in native-
-    //                    fields mode, re-interlacer re-times 1:1). Best CRT motion
-    //                    on video-sourced discs and immune to the field-pairing
-    //                    defect, at the cost of HDMI dropping to 480i via ascal for
-    //                    the session. Set it BEFORE loading a disc.
-    // status[27:26]. See docs/analog_dual_raster.md.
-    "O[27:26],Analog Out,Auto,Interlaced,Progressive,Native Fields;",
     // Analog Aspect: how anamorphic content is fitted to the 4:3 analog TV (ONLY
     // active while the analog 480i raster is engaged). Auto = Fit for 4:3 streams,
     // Letterbox for 16:9 (from the sequence header aspect code). Fit = raster
@@ -647,15 +630,15 @@ parameter CONF_STR = {
     // @ 50 Hz, same 27 MHz clock — 864x625 total = 50.0 Hz). Switches the runtime
     // modeline-write walk AND av_sync's STC tick rate. Auto (default) picks from the
     // stream's vertical_size (480=NTSC, 576=PAL); NTSC/PAL force it (handy for HW
-    // bring-up without a matching disc). status[17:16]: 0=Auto, 1=NTSC, 2=PAL. PAL now
-    // supports native 576i fields (Interlaced Out Auto/On) for true-interlaced video;
-    // PAL film stays 25p. PAL 576i on the analog pins is handled by the dual-raster
-    // re-interlacer (docs/analog_dual_raster.md).
+    // bring-up without a matching disc). status[17:16]: 0=Auto, 1=NTSC, 2=PAL. PAL
+    // supports native 576i fields (Video Output = Interlaced) for true-interlaced
+    // video; PAL film stays 25p. PAL 576i on the analog pins rides the fieldpass
+    // re-timer (docs/analog_dual_raster.md).
     // The governor's SHOW_N=2 gives 25 fps from a 50 Hz display. See
     // docs/frame_rate_governor.md / docs/av_sync.md / docs/interlaced_auto.md.
     "O[17:16],Video Standard,Auto,NTSC,PAL;",
     // (DVD-FORK dual raster: the bogus "O[10],Direct Video,Off,On;" entry that used
-    // to sit here is DELETED — it collided with O[10:9] Interlaced Out (setting it
+    // to sit here is DELETED — it collided with the O[10:9] enum (setting it
     // silently forced native fields), and the real direct_video signal comes from
     // the HPS cfg word, not status.)
     // -------------------------------------------------------------------------
@@ -728,7 +711,8 @@ parameter CONF_STR = {
     // by cutting the core's framebuffer re-reads, so motion-comp stops missing
     // deadlines. Off/On/Auto: On forces it (hard-telecine discs); Auto engages only on
     // a confident sustained film cadence (an in-fabric detector). HDMI-only (forced off
-    // under CRT); wins over O9 Interlaced Out. status[25:24]. See docs/film_24p_plan.md.
+    // under Video Output = Interlaced — fields and a 23.976 Hz raster are mutually
+    // exclusive). status[25:24]. See docs/film_24p_plan.md.
     // Auto is FIRST so it's the power-on default (status bits reset to 0).
     "P1O[25:24],Film 24p Out,Auto,Off,On;",
     // A/V Offset: signed playback-start trim for the PTS-scheduled audio drain
@@ -753,7 +737,7 @@ parameter CONF_STR = {
     // Menus polarity flip did exactly that pre-versioning). Bumping orphans
     // the old file and falls everyone back to defaults -- there is no per-bit
     // migration, so audit the index-0 label of every option when bumping.
-    "v,1;",
+    "v,2;",   // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
     // disc-menu nav (Phase 2). The J1 list names buttons B1..B11 for the MiSTer
     // "Define buttons" menu (bits 4..14 of joystick_0; D-pad = bits 3:0). The
@@ -1967,10 +1951,11 @@ wire [2:0] sp_track_eff  = (menus_on && menu_active) || sp_menu_early ? 3'd0 :
                                                             sp_user_log;
 
 // =========================================================================
-// DVD-FORK (Interlaced Out auto): a LIVE interlaced<->progressive mode change must
+// DVD-FORK (live output-mode switch — built for Interlaced Out Auto, now serving the
+// Video Output OSD toggle): a LIVE interlaced<->progressive mode change must
 // re-init the pipeline the same way loading an ISO does. Flipping the modeline mid-title
 // re-kicks the register walk (emu ~2240) but the decoder/ascal keep running in the old
-// raster (observed on HW: toggling Interlaced Out mid-playback stayed progressive; setting
+// raster (observed on HW: toggling the fields mode mid-playback stayed progressive; setting
 // it BEFORE load worked because the pipeline cold-starts into the mode).
 //   il_switch therefore drives the FULL seek-equivalent flush, NOT just the VBUF flush:
 //   - seek_flush -> vbuf_flush_dec : the decoder discards its buffered bitstream and
@@ -1987,8 +1972,9 @@ wire [2:0] sp_track_eff  = (menus_on && menu_active) || sp_menu_early ? 3'd0 :
 //   ~1 s LATE under Auto (On/Off never flush mid-stream, so they stayed synced). The full
 //   flush is exactly what a chapter seek does (HW-confirmed synced); the only difference is
 //   the reader doesn't jump, so ps_demux re-hunts to the next pack boundary within the vbuf
-//   re-lock glitch. Deep detector hysteresis => Auto fires this ~once/title. Also fixes the
-//   live manual On/Off toggle. il_switch is a one-clk_sys-cycle pulse. See docs/interlaced_auto.md.
+//   re-lock glitch. Since the 2026-09-02 consolidation il_eff changes ONLY on an OSD edit
+//   of Video Output (the det_video Auto detector is gone; Auto is ini-static), so this
+//   fires at user rate. il_switch is a one-clk_sys-cycle pulse. See docs/interlaced_auto.md.
 // Declared here (above CLIP-LOAD FLUSH) so it precedes its use in load_flush/aud_flush.
 reg       il_eff_q = 1'b0;
 wire      il_switch = il_eff ^ il_eff_q;
@@ -3157,12 +3143,13 @@ wire [15:0] shim_debug_read_pend_cycles;
 wire [15:0] shim_debug_cache_missrate;   // {miss%, read-intensity} per window (row 6)
 
 // =========================================================================
-// DVD-FORK FIX (interlaced cadence): native 480i output as O9 "Interlaced Out"
+// DVD-FORK FIX (interlaced cadence): the native 480i/576i fields modeline
+// (built as O9 "Interlaced Out", now driven by Video Output = Interlaced via il_eff)
 // =========================================================================
 // Interlaced DVD content (480i60) played JUDDERY at ~half temporal rate because
 // the decoder defaults (reg_wr_en=0 => deinterlace=1, interlaced=0) WEAVE both
 // fields into one progressive frame and show only 30 distinct frames/s — the
-// 60-field motion is thrown away. Fix: when O9 is on, switch the modeline to
+// 60-field motion is thrown away. Fix: when il_eff is on, switch the modeline to
 // native 480i and force deinterlace OFF, so the resample emits TWO fields per
 // decoded frame (TOP then BOTTOM), filling the 60 Hz output with 60 distinct
 // motion phases. VGA_F1 tags the field; MiSTer's ascal scaler deinterlaces it
@@ -3435,25 +3422,20 @@ mpeg2video mpeg2video_inst (
     .menu_ff           (1'b0),                         // DVD-FORK (menu VBUF-lag §5): fast-drain RETIRED (HW-inert); menu_ff=0 = bit-identical governor
     .film24            (filmp_dec),                    // DVD-FORK (Film 24p/25p Out): 1 frame/refresh in the governor; ascal does the pulldown
     .film_det_ntsc     (core_film_det_ntsc),           // DVD-FORK (Film 24p auto-detect): 3:2 telecine verdict (clk_dec)
-    .film_det_pal      (core_film_det_pal),            // DVD-FORK (Film 24p auto-detect): sustained-progressive verdict (clk_dec)
-    .det_video         (core_det_video)                // DVD-FORK (Interlaced Out auto): sustained true-interlaced-video verdict (clk_dec)
+    .film_det_pal      (core_film_det_pal)             // DVD-FORK (Film 24p auto-detect): sustained-progressive verdict (clk_dec)
 );
 // DVD-FORK (Film 24p auto-detect): 2-FF sync the governor's clk_dec cadence verdicts
 // into clk_sys, where film_want / filmp_eff resolve the Off/On/Auto mode (the reverse
 // of the film24_eff -> filmp_dec feed above). The verdicts are hysteretic (change at
 // most ~1/s), so a plain 2-FF sync is sufficient. See docs/film_24p_plan.md §9a.
 wire core_film_det_ntsc, core_film_det_pal;
-wire core_det_video;                        // DVD-FORK (Interlaced Out auto): true-interlaced verdict (clk_dec)
 reg  film_det_ntsc_s1, film_det_ntsc_s2, film_det_pal_s1, film_det_pal_s2;
-reg  det_video_s1, det_video_s2;            // DVD-FORK (Interlaced Out auto): 2-FF clk_dec->clk_sys
 always @(posedge clk_sys) begin
     film_det_ntsc_s1 <= core_film_det_ntsc; film_det_ntsc_s2 <= film_det_ntsc_s1;
     film_det_pal_s1  <= core_film_det_pal;  film_det_pal_s2  <= film_det_pal_s1;
-    det_video_s1     <= core_det_video;     det_video_s2     <= det_video_s1;
 end
 assign film_det_ntsc_sync = film_det_ntsc_s2;
 assign film_det_pal_sync  = film_det_pal_s2;
-assign il_det_sync        = det_video_s2;
 // DVD-FORK (frame-drop governor O[12]): 2-FF sync the static toggle into clk_dec.
 // "On,Off" (default ON, 2026-07-02): with the cadence-correct governor both NTSC
 // film and PAL stutter withOUT frame drop (real lates hold the display), and the
@@ -3574,11 +3556,11 @@ always @(posedge clk_sys or negedge reset_n) begin
         sif_v_s1 <= sif_v_dec; sif_v_s2 <= sif_v_s1;
     end
 end
-// Gated on analog_eff (the Letterbox/Crop pattern): HDMI-only rigs keep the narrow DE
+// Gated on interlaced_eff (the Letterbox/Crop pattern): HDMI-only rigs keep the narrow DE
 // window + ascal's polyphase scale (HW-proven for MPEG-1); the fill exists because the
 // analog chain (re_interlace + direct video) needs a true 720-wide raster line.
-wire sif_hfill_eff = analog_eff & sif_h_s2;   // horizontal 352->720 stretch
-wire sif_v2x_eff   = analog_eff & sif_v_s2;   // vertical 2x line repeat (240->480 / 288->576)
+wire sif_hfill_eff = interlaced_eff & sif_h_s2;   // horizontal 352->720 stretch
+wire sif_v2x_eff   = interlaced_eff & sif_v_s2;   // vertical 2x line repeat (240->480 / 288->576)
 // DVD-FORK FIX (SIF analog fill): decoded height, 2-FF synced (hsz_s2 pattern) — feeds
 // crt_ov_map's v2x inverse clamp (v_src_max = vertical_size-1).
 reg  [13:0] vsz_s1, vsz_s2;
@@ -3643,7 +3625,7 @@ assign ar_wide_eff = (status[20:19] == 2'b01) ? 1'b0 :   // force 4:3
 //   - disp_hcrop_en (HORIZONTAL, dvd/disp_hstretch.sv): Crop = horizontal pan-scan — the
 //     addrgen reads only the centre columns and the stretcher fills the raster width
 //     (full vertical resolution, no bars). 0 for Fit/Letterbox.
-// ONLY active while the analog 480i raster is engaged (analog_eff). NOTE (dual
+// ONLY active while the analog 480i raster is engaged (interlaced_eff). NOTE (dual
 // raster): the rescale is upstream in the SHARED raster, so HDMI shows it too —
 // VIDEO_ARX/ARY switch to 4:3 while active (see the assign at the top) so HDMI
 // geometry stays correct instead of re-stretching the letterboxed image.
@@ -3658,9 +3640,9 @@ wire [1:0] analog_aspect_sel = status[4:3];   // 0 Auto, 1 Fit, 2 Letterbox, 3 C
 // menu-aware aspect — IFO V_ATR while a menu is up, PR #86) instead of the raw
 // stream aspect, matching what HDMI's ascal path does: an anamorphic menu now
 // letterboxes on the CRT under Auto exactly like it corrects on HDMI.
-assign analog_letterbox = analog_eff & ((analog_aspect_sel == 2'd2) |
+assign analog_letterbox = interlaced_eff & ((analog_aspect_sel == 2'd2) |
                                 ((analog_aspect_sel == 2'd0) & ar_wide_auto_eff)); // Letterbox or Auto-16:9
-assign analog_crop      = analog_eff &  (analog_aspect_sel == 2'd3);         // Crop (manual)
+assign analog_crop      = interlaced_eff &  (analog_aspect_sel == 2'd3);         // Crop (manual)
 wire       disp_vscale_en   = analog_letterbox;                             // downstream 2-tap letterbox
 // DVD-FORK FIX (SIF analog fill): mode 2 = the re-armed addrgen 2x line repeat (v_step
 // 128) for sub-D1 heights on the analog output; bit 0 stays tied (mode 1 letterbox-NN
@@ -4106,7 +4088,7 @@ assign ov_b  = 8'd0;
 // this blend (dvd/re_interlace.sv taps vga_*_q), so under the DEFAULT analog path
 // the overlay layer composes against the progressive main raster.
 // DVD-FORK FIX (2026-08-22, interlaced overlay alignment): when the main raster IS
-// interlaced (O[10:9] Interlaced Out, and the new Analog Out = Native Fields), the
+// interlaced (Video Output = Interlaced; historically Interlaced Out / Native Fields), the
 // old `1'b0` ties on spu_decode/crt_ov_map .interlaced were WRONG in both axes:
 //   - vertically, v_pos is the ABSOLUTE frame line stepping by 2 per field line, which
 //     broke the +1 row-base accumulator (both modules already implement the correct
@@ -4116,7 +4098,7 @@ assign ov_b  = 8'd0;
 //     (subtitles, menu button art, HLI highlights, HUD, seek bar) rendered into the
 //     LEFT HALF. Fixed by the uniform x2 inverse `ov_h_gen` / `sp_qx` above.
 // This was a long-standing open follow-up for HDMI-480i (docs/interlaced_auto.md) and
-// is a hard requirement for the analog Native Fields mode, where menus are the point.
+// is a hard requirement for the analog fields mode, where menus are the point.
 // =========================================================================
 // Subtitles ON (gamepad Subtitle button cycle, `sub_on`), or a MENU is up
 // (button graphics live in the subpicture stream; the subtitle toggle must not
@@ -4804,9 +4786,10 @@ assign VGA_DE = vga_de_q;
 // all included — with the raster coordinates delayed 1 clk to match the _q
 // registration. sys_top muxes the direct analog chain onto VGA2_* when
 // VGA2_EN=1; ascal/HDMI keeps consuming the main VGA_* stream untouched.
-// enable drops whenever the main raster is not the standard progressive one
-// (film / HDMI-fields raster — both already forced off under analog_eff; the
-// module's own period check is the backstop) and re-locks in <2 frames.
+// enable = interlaced_eff: the main raster is then the pixrep fields raster the
+// fieldpass re-timer expects (filmp is forced off under it). During an il_switch
+// mode walk the module's own period check is the backstop — it stays unlocked
+// until the fields raster is back, re-locking in <2 frames.
 // =========================================================================
 reg [11:0] ri_hpos_q, ri_vpos_q;
 always @(posedge clk_sys) begin
@@ -4818,12 +4801,8 @@ re_interlace re_interlace_inst (
     .clk     (clk_sys),
     .rst_n   (reset_n),
     .ce2     (ce_13m5),
-    // Native Fields RE-TIMES the interlaced main raster; every other analog mode
-    // DERIVES fields from the progressive one — so the expected source raster is the
-    // opposite in each case (the module's own period check is the backstop either way).
-    .enable  (analog_eff & ~filmp_eff & (analog_fields ? il_eff : ~il_eff)),
+    .enable  (interlaced_eff),
     .pal     (pal_eff),
-    .fieldpass (analog_fields),
     .in_r    (vga_r_q),
     .in_g    (vga_g_q),
     .in_b    (vga_b_q),
@@ -4843,7 +4822,7 @@ re_interlace re_interlace_inst (
     // load_flush is the same event that resets ps_demux and re-anchors av_sync on
     // a load / seek / menu jump, so the caption backlog is dropped with everything
     // else rather than painting the pre-seek sentence onto the new scene.
-    .cc_enable      (analog_eff & ~status[14]),
+    .cc_enable      (interlaced_eff & ~status[14]),
     .cc_test        (status[44]),
     .cc_flush       (load_flush),
     .dec_clk        (clk_dec),
@@ -4852,7 +4831,7 @@ re_interlace re_interlace_inst (
     .cc_pair_field  (core_cc_field),
     .cc_active      ()
 );
-assign VGA2_EN = analog_eff;
+assign VGA2_EN = interlaced_eff;
 
 
 // DVD-FORK: the UART debug transmitter (uart_debug + uart_tx) is REMOVED to free

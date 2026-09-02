@@ -66,7 +66,7 @@ module crt_ov_map (
     /* DVD-FORK FIX (SIF analog fill): invert the addrgen 2x line repeat (vscale_mode==2).
      * The forward walk (resample_addrgen, v_step=128, rounded) maps output line i to
      * source line min(floor((i+1)/2), v_src_max) on the progressive path; on the
-     * interlaced (Native Fields) path each field walks its own parity:
+     * interlaced (Video Output = Interlaced) path each field walks its own parity:
      * field line i, parity p -> min(p + 2*floor((i+1)/2), v_src_max). This stage
      * post-maps the letterbox mux's candidate (letterbox output is a line in DOUBLED
      * space — the 2x repeat happens upstream of disp_vscale — so the two inverses

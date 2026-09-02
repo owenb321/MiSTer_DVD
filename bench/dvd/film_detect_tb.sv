@@ -44,7 +44,6 @@ module film_detect_tb;
   wire        busy;
   wire        frame_late;
   wire        film_det_ntsc, film_det_pal;
-  wire        det_video;                    // DVD-FORK (Interlaced Out auto): true-interlaced verdict
 
   // decoder-supply model: keep a few frames buffered so pickups keep flowing
   integer     supplied = 0, consumed = 0;
@@ -65,7 +64,6 @@ module film_detect_tb;
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full), .resample_wr_almost_full(resample_wr_almost_full),
     .busy(busy), .frame_late(frame_late),
     .film_det_ntsc(film_det_ntsc), .film_det_pal(film_det_pal),
-    .det_video(det_video),
     .video_live(), .pickup_hold(1'b0), .pause(1'b0),
     .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(1'b0));
 
@@ -117,15 +115,8 @@ module film_detect_tb;
     if (!cond) begin $display("  FAIL: %0s", msg); errors = errors + 1; end
   endtask
 
-  // MUTUAL EXCLUSIVITY: the true-interlaced verdict (progressive_frame==0) and the film
-  // verdicts (progressive_frame==1) can never co-assert — they key on opposite senses of
-  // the same flag. Continuously guard it (a co-assert would let emu pick two output modes).
-  always @(posedge clk)
-    if (rst && det_video && (film_det_ntsc || film_det_pal)) begin
-      $display("  FAIL: det_video co-asserted with a film verdict (n=%b p=%b v=%b)",
-               film_det_ntsc, film_det_pal, det_video);
-      errors = errors + 1;
-    end
+  // (The det_video true-interlaced verdict and its mutual-exclusion guard were removed
+  // with the Interlaced Out option — Video Output consolidation, 2026-09-02.)
 
   // run until `n` more pickups have completed
   task run_pickups(input integer n);
@@ -148,9 +139,8 @@ module film_detect_tb;
     run_pickups(40);   // > ENGAGE_N (48) clean film frames total
     chk(film_det_ntsc, "det_ntsc did NOT engage on sustained 3:2 film");
     chk(film_det_pal,  "det_pal did NOT engage on progressive film");
-    chk(!det_video,    "det_video FALSELY engaged on progressive film (must stay 0)");
-    $display("  [1] NTSC film: det_ntsc=%b det_pal=%b det_video=%b after sustained 3:2 (expect 1/1/0)",
-             film_det_ntsc, film_det_pal, det_video);
+    $display("  [1] NTSC film: det_ntsc=%b det_pal=%b after sustained 3:2 (expect 1/1)",
+             film_det_ntsc, film_det_pal);
 
     // ===== 2. transition to 30fps progressive VIDEO (pf=1, rff=0) =====
     // det_ntsc must RELEASE (rff no longer toggles) but det_pal must HOLD
@@ -164,9 +154,8 @@ module film_detect_tb;
     run_pickups(60);
     chk(!film_det_ntsc, "det_ntsc did NOT release on sustained 30fps progressive video");
     chk(film_det_pal,   "det_pal wrongly released on progressive video");
-    chk(!det_video,     "det_video FALSELY engaged on 30fps progressive video");
-    $display("  [2] 30fps video: det_ntsc=%b det_pal=%b det_video=%b (expect 0/1/0)",
-             film_det_ntsc, film_det_pal, det_video);
+    $display("  [2] 30fps video: det_ntsc=%b det_pal=%b (expect 0/1)",
+             film_det_ntsc, film_det_pal);
 
     // ===== G. THE EVIDENCE GATE (informative=0 pickups) =====
     // The whole point of the gate: on a fade to black the encoder stops
@@ -184,17 +173,15 @@ module film_detect_tb;
     mode = 2;                       // pf=0, exactly what a black picture carries
     run_pickups(80);                // far longer than the ~13 pickups that release
     chk(film_det_ntsc, "[G1] film lock dropped on an UNINFORMATIVE interlaced run (the APOLLO_13 bug)");
-    chk(!det_video,    "[G1] det_video engaged on uninformative pickups");
-    $display("  [G1] 80 uninformative pf=0 pickups: det_ntsc=%b det_video=%b (expect 1/0)",
-             film_det_ntsc, det_video);
+    $display("  [G1] 80 uninformative pf=0 pickups: det_ntsc=%b (expect 1)",
+             film_det_ntsc);
 
     // G2: the same run, now INFORMATIVE = a real film->video change. Must follow it.
     tb_informative = 1'b1;
     run_pickups(80);
     chk(!film_det_ntsc, "[G2] film lock did NOT release on a genuine interlaced video run");
-    chk(det_video,      "[G2] det_video did not engage on genuine interlaced video");
-    $display("  [G2] 80 informative pf=0 pickups: det_ntsc=%b det_video=%b (expect 0/1)",
-             film_det_ntsc, det_video);
+    $display("  [G2] 80 informative pf=0 pickups: det_ntsc=%b (expect 0)",
+             film_det_ntsc);
 
     // G3: gated pickups must not disturb the 3:2 toggle test either -- the run
     // resumes across the gap rather than seeing a false rff edge.
@@ -209,17 +196,15 @@ module film_detect_tb;
     $display("  [G3] film survives a 40-pickup gated gap: det_ntsc=%b (expect 1)", film_det_ntsc);
 
     // ===== 3. transition to 60i/50i interlaced VIDEO (pf=0) =====
-    // Both film verdicts release AND the true-interlaced verdict must ENGAGE — this is
-    // the signal that drives Interlaced Out Auto to the native fields path (480i/576i).
+    // Both film verdicts must release. (The det_video engage half of this test
+    // left with the Interlaced Out Auto detector, 2026-09-02.)
     mode = 2;
     run_pickups(30);
     chk(!film_det_ntsc, "det_ntsc engaged on interlaced video");
     chk(!film_det_pal,  "det_pal did NOT release on interlaced video");
-    chk(!det_video,     "det_video engaged too early (< ENGAGE_TH interlaced frames)");
-    run_pickups(30);    // > ENGAGE_TH (120 / UP_STEP 3 = 40) sustained interlaced frames
-    chk(det_video,      "det_video did NOT engage on sustained interlaced video");
-    $display("  [3] 60i video: det_ntsc=%b det_pal=%b det_video=%b (expect 0/0/1)",
-             film_det_ntsc, film_det_pal, det_video);
+    run_pickups(30);
+    $display("  [3] 60i video: det_ntsc=%b det_pal=%b (expect 0/0)",
+             film_det_ntsc, film_det_pal);
 
     // ===== 4. false-positive guard: START on 30fps progressive video and run a
     //          LONG time — det_ntsc must NEVER engage (only det_pal). =====
@@ -227,9 +212,8 @@ module film_detect_tb;
     run_pickups(120);
     chk(!film_det_ntsc, "det_ntsc FALSELY engaged on a long 30fps-video run (REGRESSION)");
     chk(film_det_pal,   "det_pal did not hold on long progressive video");
-    chk(!det_video,     "det_video did NOT release on sustained progressive video");
-    $display("  [4] long 30fps video: det_ntsc=%b det_video=%b (expect 0/0 — false-positive guards)",
-             film_det_ntsc, det_video);
+    $display("  [4] long 30fps video: det_ntsc=%b (expect 0 — false-positive guard)",
+             film_det_ntsc);
 
     // ===== 4b. ISSUE-1 REGRESSION: film reached via a menu = periodic cadence
     //          hiccups (every 8th frame breaks the rff alternation). Starting from

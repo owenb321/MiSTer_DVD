@@ -42,7 +42,6 @@ module resample_addrgen (
   cur_show_out,                                     // DVD-FORK (film-aware drop reclaim)
   pickup_tick, pickup_show, refresh_tick_dbg,       // DVD-FORK (vid_err instrument)
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect): cadence verdicts
-  det_video,                                        // DVD-FORK (Interlaced Out auto): sustained true-interlaced-video verdict
   raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
   hcrop_en,                                         // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
@@ -166,20 +165,9 @@ module resample_addrgen (
   output             film_det_ntsc;
   output             film_det_pal;
 
-  /* DVD-FORK (Interlaced Out — auto detect): sustained TRUE-INTERLACED-VIDEO verdict,
-   * evaluated on the same per-display-pickup committed flags as the film detectors.
-   * det_video = a sustained run of interlaced-coded frames (progressive_frame==0). This
-   * is the signal to switch the framework scaler to a NATIVE fields path (480i/576i +
-   * VGA_F1, ascal deinterlaces) so 60-field (NTSC 29.97i) / 50-field (PAL 25i) motion is
-   * preserved instead of being weaved to 30/25 unique progressive frames. Standard-
-   * neutral: keys only on progressive_frame, so it covers both NTSC and PAL. Mutually
-   * exclusive with film_det_ntsc/pal by construction (film needs progressive_frame==1).
-   * Same strong hysteresis as the film verdicts, biased toward NON-interlaced (a false
-   * positive Bob-deinterlaces progressive content = a soft resolution loss; a false
-   * negative just stays the current progressive weave = harmless). Known edge case:
-   * HARD-telecine film (progressive_frame==0, no rff) reads as video and gets Bob'd at
-   * field rate — acceptable, no inverse-telecine attempted. See docs/interlaced_auto.md. */
-  output             det_video;
+  /* (The `det_video` true-interlaced-video verdict — the "Interlaced Out: Auto"
+   * detector — lived here 2026-07-27..2026-09-02 and was removed with that option in
+   * the Video Output consolidation; see docs/interlaced_auto.md's superseded header.) */
 
   /* DVD-FORK (field-parity corrector, 2026-09-02): 2-FF-synced level from the mixer —
    * 1 while the most recent displayed frame-top began on the WRONG raster field parity
@@ -810,8 +798,6 @@ module resample_addrgen (
   reg  [7:0] conf_ntsc, conf_pal;
   // (det_ntsc/det_pal are DECLARED EARLIER, above the cadence-slip corrector that
   //  consumes det_ntsc — iverilog rejects declaration-after-use.)
-  reg  [7:0] conf_video;                   // DVD-FORK (Interlaced Out auto): true-interlaced confidence
-  reg        det_v;
   wire       film_pickup = (state == STATE_INIT) && pickup_go;
   wire       rff_toggled = (repeat_first_field != rff_q);
   wire       good_ntsc   = progressive_frame && rff_toggled;   // clean 3:2 telecine frame
@@ -820,7 +806,6 @@ module resample_addrgen (
       rff_q     <= 1'b0;
       conf_ntsc <= 8'd0; conf_pal <= 8'd0;
       det_ntsc  <= 1'b0; det_pal  <= 1'b0;
-      conf_video <= 8'd0; det_v   <= 1'b0;
     /* ★ DVD-FORK (film evidence gate, 2026-08-30) — the `informative` term.
      *
      * progressive_frame is the ENCODER's claim, not a measurement, and on a
@@ -871,25 +856,9 @@ module resample_addrgen (
         if      (cp >= ENGAGE_TH)    det_pal <= 1'b1;
         else if (cp <= DISENGAGE_TH) det_pal <= 1'b0;
       end
-      // ---- TRUE-INTERLACED-VIDEO confidence (progressive_frame==0; standard-neutral) ----
-      // Mirror of PAL 25p: rises on interlaced-coded frames, falls hard on any progressive
-      // frame. Soft-telecine (NTSC) and 25p (PAL) film are progressive_frame==1 => this
-      // only ever decays on them, so it can never engage on film. NTSC 29.97i and PAL 25i
-      // video are progressive_frame==0 => it locks. Same up/down as the film hard step.
-      begin : video_conf
-        reg [7:0] cv;
-        if (!progressive_frame)
-          cv = (conf_video > (CONF_MAX - UP_STEP)) ? CONF_MAX : conf_video + UP_STEP;
-        else
-          cv = (conf_video < DN_HARD) ? 8'd0 : conf_video - DN_HARD;
-        conf_video <= cv;
-        if      (cv >= ENGAGE_TH)    det_v <= 1'b1;
-        else if (cv <= DISENGAGE_TH) det_v <= 1'b0;
-      end
     end
   assign film_det_ntsc = det_ntsc;
   assign film_det_pal  = det_pal;
-  assign det_video     = det_v;
 
   /*
    * Emit frame_late in units of REFRESHES of hold, for frame_drop_ctl's debt ledger

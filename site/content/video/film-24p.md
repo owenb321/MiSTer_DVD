@@ -92,6 +92,7 @@ left to detect. Nothing can infer it from the stream, which is why the manual **
 
 - **When Auto engages a couple of seconds into a title, audio can end up slightly offset**
   until the next seek re-syncs it. A chapter jump or a D-pad seek clears it.
-- **If the analog CRT raster is active, the film raster is suppressed** — the re-interlacer
-  needs the standard progressive raster to work from. See
-  [Analog and CRT output](analog-crt.md).
+- **Film 24p needs `Video Output = Progressive`** (or Auto on an HDMI rig) — a 23.976 Hz
+  raster cannot carry interlaced fields, so it is unavailable while
+  [Interlaced mode](interlaced.md) is active. Film on a CRT plays with its normal 3:2
+  field cadence instead.

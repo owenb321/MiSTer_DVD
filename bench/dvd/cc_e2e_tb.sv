@@ -10,8 +10,9 @@
  * chain went dead on hardware — and every bench still passed. The wiring BETWEEN
  * the proven pieces was the only untested thing, and it was the thing that broke.
  *
- * So this bench treats re_interlace exactly as the analog chain does: synthetic
- * progressive NTSC main raster in, caption pairs injected on a separate producer
+ * So this bench treats re_interlace exactly as the analog chain does: the synthetic
+ * pixrep NTSC fields main raster in (fieldpass-only since the 2026-09-02 Video
+ * Output consolidation), caption pairs injected on a separate producer
  * clock, and the ONLY signals observed are out_r/out_hs/out_vs/out_de/out_ce —
  * the pins. The checker is a TV model:
  *
@@ -54,7 +55,7 @@ module cc_e2e_tb;
 
   re_interlace dut (
     .clk(clk), .rst_n(rst_n), .ce2(ce2),
-    .enable(1'b1), .pal(1'b0), .fieldpass(1'b0),
+    .enable(1'b1), .pal(1'b0),
     .in_r(in_r), .in_g(in_g), .in_b(in_b), .in_de(in_de),
     .in_hpos(in_hpos), .in_vpos(in_vpos),
     .out_r(out_r), .out_g(out_g), .out_b(out_b),
@@ -65,18 +66,29 @@ module cc_e2e_tb;
     .cc_pair_field(dec_pair_field), .cc_active(cc_active)
   );
 
-  // ------------------------------------------- synthetic NTSC main raster
-  integer g_h = 0, g_v = 0;
+  // -------------------------- synthetic NTSC fields main raster (pixrep 480i)
+  // The interlaced main raster the decoder emits under Video Output = Interlaced:
+  // 1716-dot lines, fields alternating 262/263 lines, active 1440 dots (each source
+  // pixel sent twice) x 240 lines/field; v_pos = the absolute frame line
+  // (2*v_cntr + field). This is the only source raster the fieldpass-only
+  // re_interlace accepts (the progressive model this TB used pre-consolidation no
+  // longer locks). Flat active video — the caption checker only reads the VBI.
+  integer g_h = 0, g_vc = 0, g_fld = 0;
   always @(posedge clk) begin
-    if (g_h >= 857) begin
+    if (g_h >= 1715) begin
       g_h <= 0;
-      g_v <= (g_v >= 524) ? 0 : g_v + 1;
+      if (g_vc >= (g_fld ? 262 : 261)) begin
+        g_vc  <= 0;
+        g_fld <= 1 - g_fld;
+      end else g_vc <= g_vc + 1;
     end else g_h <= g_h + 1;
   end
+  integer g_absline;
   always @(*) begin
+    g_absline = 2*g_vc + g_fld;
     in_hpos = g_h[11:0];
-    in_vpos = g_v[11:0];
-    in_de   = (g_h < 720) && (g_v < 480);
+    in_vpos = g_absline[11:0];
+    in_de   = (g_h < 1440) && (g_vc < 240);
     in_r    = 8'h20; in_g = 8'h30; in_b = 8'h40;   // flat active video
   end
 
