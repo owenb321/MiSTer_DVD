@@ -20,6 +20,16 @@ vga_scaler=0        ; (the default) native video on the analog pins
 composite_sync=1    ; or ypbpr=1, or vga_sog=1 — match your cable
 ```
 
+**Composite or S-video** additionally needs the framework's Y/C encoder switched on —
+without it the pins carry raw RGB and the picture arrives **black & white**:
+
+```ini
+vga_mode=svideo     ; or vga_mode=cvbs for composite
+```
+
+The chroma standard (PAL/NTSC subcarrier) follows the disc automatically — the framework
+picks it from the video rate.
+
 That is the whole setup — `Video Output = Auto` reads those bits and lands on Interlaced.
 Set the mode explicitly only when the ini bits cannot describe your rig (a 15 kHz RGBHV
 monitor: **Interlaced**) or when your analog display wants a progressive signal
