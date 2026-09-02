@@ -15,6 +15,12 @@ It recorded sector **52673**; VTS_01's title VOB starts at **50609**, so it caug
 the user 2,064 sectors (4.2 MB) into the feature. That is the one fact a reporter
 can never supply from memory.
 
+**Both source routes confirmed.** A second bundle, from a *mounted ISO*
+(`dvdreport-20260902-035310.zip`, THE_MATRIX, 8.39 GB): 131 sectors → 99 KB, audit
+clean, `core version v0.4.0 260901` captured automatically, playhead at sector
+619898 — and `iso_nav_check.py` output is **byte-identical (526 lines) to the
+original ISO** held locally, which is the strongest form this check takes.
+
 ★★ **Reading `/dev/srN` while `dvd_css` holds the drive WORKS** — this was flagged
 as the likeliest thing to misbehave (two readers seeking one optical device) and it
 did not.

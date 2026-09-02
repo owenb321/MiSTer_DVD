@@ -63,6 +63,9 @@ python3 dvd_report.py MY_DISC.iso --nav-packs
     path from your computer. `python3 dvd_report.py info <zip>` prints back everything a
     bundle holds, any time.
 
+This route needs a rip on a PC — encrypted or decrypted, either works. If you only ever
+play physical discs, the next section is for you.
+
 ### Or make one on the MiSTer itself
 
 !!! info "Unreleased"
@@ -79,9 +82,10 @@ which for a menu problem is usually the whole answer.
 Holding those two buttons also steps the audio track and the subtitle track once each —
 that is expected, and pressing them again puts things back.
 
-The bundle is built from an image file, so this path needs a rip on a PC — encrypted or
-decrypted, either works. If you only ever play physical discs, describe the problem
-instead; that is still a useful report.
+The bundle it writes also records two things the PC route cannot: the **core version**,
+so you never have to read it off the OSD, and the **exact point on the disc** you were at
+when you pressed the chord.
+
 
 ## Everything else: describe it
 
