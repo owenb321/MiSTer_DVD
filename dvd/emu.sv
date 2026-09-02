@@ -4166,12 +4166,51 @@ wire [11:0] sp_qx = il_eff ? {1'b0, sp_qx_dot[11:1]} : sp_qx_dot;
 // the O[2] rect border all use the mapped coordinates so the whole overlay layer
 // stays glued to the video in all three CRT aspect modes. Pure pass-through
 // (bit-identical) when neither mode is active (HDMI / CRT Fit).
+//
+// DVD-FORK FIX (subtitle sawtooth, 2026-09-02): the inverse map is NEAREST-tap —
+// under Letterbox it drops every 4th subtitle line with no blending, so subtitle
+// edges stair-step (and shimmer between fields) while the 2-tap-scaled picture
+// underneath stays smooth (a CRT field report). The mapped coordinates only ever
+// MATTER when the HLI rect can draw or the SPU is picture-composed art; plain
+// dialogue subtitles don't need to track the rescaled picture (a set-top player
+// doesn't scale them either). So the query is CONTEXT-SPLIT: menu/highlight
+// contexts keep the mapped space (highlight ⟷ art stay pixel-locked — hl_use
+// reads the queried pixel's class, so rect and query MUST share one space), and
+// the pure-subtitle context bypasses the Letterbox/Crop inverses = raw raster
+// coordinates, 1:1 bitmap, zero resampling. Consequences, all intended:
+//   - raw subtitles lose the 0xFFF bar sentinel and may render INTO the
+//     letterbox bars (standalone-player behaviour, user-accepted);
+//   - the SIF fill stays FULLY mapped in every context (sub-720 SPU bitmaps are
+//     authored in SIF source space — raw coords would draw them quarter-screen);
+//   - a disc whose VM SetSTN-forces a real dialogue-subtitle stream rides
+//     vm_owns_route and keeps the mapped (nearest) path — revisit if reported.
+// hl_btns_armed (not hl_on_w) so the mapped space covers the arm→fetch window
+// AND the O[2] dbg_rectb gate: whenever any rect can draw, the space is mapped,
+// by construction. in_title_hli is subsumed by hl_btns_armed (its definition).
+wire sp_ctx_mapped_w = hl_btns_armed              // any armed HLI (white rabbit included)
+                     | (menus_on && menu_active)  // menu-domain button art
+                     | sp_menu_early              // Scene It: in-title menu art pre-arm
+                     | vm_owns_route              // SetSTN-forced SP (art shows via this pre-arm)
+                     | force_43_subp;             // MiB flipbook art = picture content
+// Committed at frame top: spu_decode's q_row_base walker tolerates only
+// {reset,+1,+2}/{reset<=1,+2,+4} q_y steps — a mid-frame raw<->mapped flip would
+// leave it stale for the rest of the field. A context change therefore lands at
+// the next vsync (<1 frame of raw-vs-mapped rect mismatch on an arming edge,
+// masked by video_live_s2). crt_ov_map's own walkers run UNCONDITIONALLY (the
+// enables sit only in its output mux), so enable-gating is glitch-free and the
+// mapped walk is exact the instant it is re-selected.
+reg sp_ctx_mapped_q;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)             sp_ctx_mapped_q <= 1'b1;   // reset = mapped (pre-fix behaviour)
+    else if (av_refresh_tick) sp_ctx_mapped_q <= sp_ctx_mapped_w;
+end
+wire sp_map_en = sp_ctx_mapped_q | sif_hfill_eff | sif_v2x_eff;   // SIF ⇒ always mapped
 wire [11:0] ov_qx, ov_qy;
 crt_ov_map crt_ov_map_inst (
     .clk          (clk_sys),
     .rst_n        (reset_n),
-    .letterbox_en (analog_letterbox),
-    .crop_en      (analog_crop | sif_hfill_eff), // DVD-FORK FIX (SIF analog fill): SIF drives the same inverse (x0=0)
+    .letterbox_en (analog_letterbox & sp_map_en), // DVD-FORK FIX (subtitle sawtooth): raw in pure-subtitle context
+    .crop_en      ((analog_crop & sp_map_en) | sif_hfill_eff), // DVD-FORK FIX (SIF analog fill): SIF drives the same inverse (x0=0)
     .interlaced   (il_eff),                // interlaced raster: v_pos = absolute frame line, +2/field-line
     .v2x_en       (sif_v2x_eff),           // DVD-FORK FIX (SIF analog fill): invert the addrgen 2x line repeat
     .v_src_max    ((vsz_s2 == 14'd0) ? 12'hfff : (vsz_s2[11:0] - 12'd1)), // decoded height - 1 (239/287)
