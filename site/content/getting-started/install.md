@@ -34,7 +34,9 @@ shipped with this project.
 
 ---
 
-Now launch **DVD** from the MiSTer menu and load a disc or an image.
+Now launch **DVD** from the MiSTer menu and load a disc or an image. Images go in
+**`/media/fat/games/DVD/`** — the folder the file picker opens in. See
+[Loading a movie](loading.md).
 
 !!! tip "Steps 2 and 3 are one-time"
     **To update later, just extract the new release zip.** The `MiSTer.ini` section and
