@@ -128,6 +128,16 @@ original 16-bit-only behaviour. Verified: `bench/dvd/lpcm_unpack_tb.sv` (16/20/2
 clean stereo — the loud static is gone — and `DMDC8200_THREE_TENORS.iso` (16-bit) still plays
 fine (no regression). Test vehicles: 20-bit target = Roger Waters, 16-bit control = Three Tenors.
 
+**The unpacker is also the WAV / CD-DA engine (2026-09-02, `feature/wav-audio`).**
+A new `le` input flips the byte assembly to little-endian, and `cdda_mode` in
+`dvd_audio_decode` feeds it bytes straight from `dvd_iso_reader` (bypassing
+ps_demux/audio_ring/the dispatch FSM entirely), forces `quant=0`, drives the NCO
+from the file's sample rate, and holds `sched_en`/`pass_mode` low. Riding LPCM
+rather than adding a fifth `aud_type` was forced by the encoding: all four 2-bit
+codes are taken, and raw PCM wants none of the dispatch machinery anyway. With
+`cdda_mode=0` the path is bit-identical (`lpcm_unpack_tb`, `dvd_audio_decode_tb`
+and the VCD/MP2 suite all pass unchanged). Design: **`docs/cdda.md`**.
+
 **Hi-res LPCM (24-bit / 96 kHz bit-perfect) — separately planned as S/PDIF PCM.** The HDMI
 `AUDIO_L/R` interface is a hard **16-bit** cap, so the path above truncates 24-bit to 16.
 For bit-perfect 24-bit and 96 kHz, the plan routes LPCM **out S/PDIF as linear PCM**
@@ -222,6 +232,9 @@ frames; video is unaffected).
 - Edited: `dvd/emu.sv` (AUDIO_L/R driven; DDR audio write chain removed; ddr_arb
   audio master tied off), `DVD.qsf`
 - Tests: `bench/dvd/lpcm_unpack_tb.sv`, `bench/dvd/dvd_audio_decode_tb.sv`
+- WAV/CD-DA (2026-09-02): `dvd/cdda_time.sv`, `bench/dvd/wav_probe_tb.sv`,
+  `bench/dvd/cdda_audio_tb.sv`, suite `bench/dvd/run_wav.sh`, golden
+  `tools/wav_ref.py` — see `docs/cdda.md`
 - Removed 2026-07-01 (`feature/remove-diagnostic-cruft`): `hps/dvd_audio.c`,
   `dvd/audio_ddr_pack.sv`, `dvd/cdc_req_ack.sv`, `dvd/audio_ddr_issue.sv` (retired
   DDR3-ring + HPS-daemon audio path — deleted, recoverable from git)
@@ -237,6 +250,9 @@ iverilog -g2012 -I dvd/ac3 -o bench/dvd/dad_sim \
     dvd/ac3/*.sv dvd/lpcm_unpack.sv dvd/dvd_audio_decode.sv \
     bench/dvd/dvd_audio_decode_tb.sv
 vvp bench/dvd/dad_sim                                   # -> PASS: dvd_audio_decode
+
+# WAV / CD-DA raw-PCM path (probe + end-to-end PCM, plus regressions)
+./bench/dvd/run_wav.sh                                  # -> ALL WAV TESTS PASS
 
 # AC-3 reframer (unit + reframer->audio_ring overflow integration)
 iverilog -g2012 -o bench/dvd/rf_sim dvd/ac3_reframer.sv bench/dvd/ac3_reframer_tb.sv

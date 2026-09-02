@@ -1993,6 +1993,62 @@ worse maintenance burden than targeted in-place edits. So:
   pre-change baseline, plus each unit suite. Detail: `docs/ac3_decoder_architecture.md`
   §4.12, `DVD.qsf` ledger. Plan for the remaining branches (nav/VM/glue, reader,
   block-RAM packing) is in the audit record there.
+- 🔧 **WAV / CD-DA RAW-PCM PLAYBACK (2026-09-10, branch `feature/wav-audio`) —
+  sim-complete, ⏳ HW-confirm pending.** `.wav` files (16-bit stereo PCM,
+  44.1/48 kHz) play through a new raw-PCM mode that bypasses `ps_demux` and every
+  codec: `dvd_iso_reader` chunk-walks the RIFF header (`S_WAV_HDR`) and streams the
+  data payload straight into `lpcm_unpack` via a new `cdda_*` port on
+  `dvd_audio_decode`. Screen = the bouncing idle logo, a forced-on HUD status line
+  and the seek bar as a progress bar. ★ **This is deliberately the CORE HALF OF
+  MUSIC-CD SUPPORT shipped first as its own feature**: branch 2
+  (`feature/cdda-physical`, NOT started) has the Main serve a physical audio CD as
+  ONE GIANT WAV — a synthetic 44-byte header in front of the repacked 2352→2048
+  audio sectors — so the disc reuses this exact probe and needs no new core mode,
+  no `cfg[15]` (the last free config bit stays free), and no `hps_io` mount-word
+  fork. ⚠ **Rode LPCM rather than adding a fifth `aud_type`** — the field is 2-bit
+  with all four codes taken, and raw PCM wants none of the dispatch/PES/PTS
+  machinery; `lpcm_unpack` gained `le` (CD/WAV are little-endian, DVD LPCM is
+  big-endian) + `afull`, and `cdda_mode=0` is bit-identical.
+  ⚠ **Three traps, all now covered by TBs:** the flat-PS **pack hunt** must not arm
+  (`00 00 01 BA` never arrives in PCM, so a seek would eat the rest of the file);
+  `S_INIT` had to stop skipping the byte-0 probe under 17 blocks (a tiny `.wav` is
+  legal where a tiny ISO is not); and a seek must resume on an **L/R-PAIR-ALIGNED**
+  byte (`bpos ≡ wav_doff mod 4`) or the channels swap for the rest of playback —
+  the `listchunk` fixture has `data_off=90` (≡2 mod 4) precisely so the naive
+  block-boundary answer fails there. ⚠ **The payload END needed two guards, both
+  RED-proven:** a STREAMING writer's `cksize = 0xFFFFFFFF` wrapped a 32-bit end
+  computation to ~40 (**file played nothing**), and a TRUNCATED file's over-claiming
+  chunk ran past EOF into the block padding (**852 bytes of 0xEE emitted as audio**);
+  `wav_dend` is 35-bit, EOF-clamped, then pair-truncated. Unsupported shapes
+  (mono/24-bit/float/96 k) raise `UNSUPPORTED IMAGE` **immediately** — the header
+  states the format, and the 20 s patience window can never advance for a source
+  that delivers no picture anyway.
+  ★★ **THE REBASE ONTO POST-v0.5.0 `main` DELETED CODE RATHER THAN MERGING IT, and
+  that is the durable part.** The branch had been parked since 2026-09-02 and `main`
+  had meanwhile grown **`dvd/lin_rate.sv`** — one time model shared by every linear
+  source, with an EXACT combinational bypass for raw CD and a measured-PTS path for
+  flat files. CD-DA is the same shape as the raw-CD arm (a fixed geometry), so the
+  branch's own `dvd/cdda_time.sv` was **retired** and CD-DA became a second
+  fixed-rate arm of that bypass. Three things fell out for free: the HUD clock, the
+  **seek-preview** clock, and a **48 kHz D-pad step that is now exact** (the branch
+  had reused the 44.1 kHz constant 861 for both, ~8.6% short at 48 kHz, and had
+  shipped that as a documented limitation). ⚠ **The bypass is not an optimisation —
+  it is required:** a PCM source carries NO PTS, so `lin_rate`'s measurement path can
+  never arm on it, and a measured-rate gate would leave the D-pad inert and the clock
+  at 0:00:00 on every `.wav` and every audio CD.
+  ⚠⚠ **AND THE PASSTHRU INTERACTION IS THE OPPOSITE OF THE OLD ONE (PR #79).**
+  Passthru is no longer bitstream-only: `aud_route` classifies each RING frame and
+  sends LPCM/MP2 to the decoder as PCM. CD-DA/WAV never enters the ring at all, so
+  `rt_pcm_session` would sit at its reset value 0 all session and
+  `pcm_mute = (pass_mode & ~rt_pcm_session)` would **mute a `.wav` outright in
+  Passthru**. `pass_mode` is therefore forced off in `cdda_mode` — which also makes
+  `af_passthru` tell Main to put the ADV7513 in PCM mode, and drops `SPDIF_PASS_EN`
+  and `HDMI_BS_EN` so both legs carry ordinary PCM. Same user-visible outcome PR #79
+  gives an LPCM track; **HW gate: play a `.wav` with `Audio Out = Passthru`.**
+  ⛔ **bin/cue + CHD images REJECTED** (user decision): ISO9660 cannot hold CD-DA so
+  it means parsing `.cue` sheets, and nobody archives music that way.
+  Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`; design **`docs/cdda.md`**.
+
 - 🔧 **SINGLE-RASTER ANALOG OUTPUT — the second raster (`re_interlace`/VGA2) is
   RETIRED; the interlaced MAIN raster carries the N64 half-line and drives the CRT
   directly (2026-09-03, branch `feature/single-raster-analog`). ✅ HW-CONFIRMED on the

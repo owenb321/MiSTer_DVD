@@ -492,6 +492,34 @@ av_sync). Fixed by slaving the burst release to the video STC (`head_delta ≥ 0
 
 ---
 
+## Music CD playback (WAV now, physical CD-DA next)
+
+Standalone DVD players played audio CDs; ours ignores them (`dvd_phys.cpp` skips
+any non-DVD-Video disc). The work splits into a core half and a Main half, and
+the split is deliberate:
+
+- **🔧 Branch 1 `feature/wav-audio` — the CORE half, sim-complete, ⏳ HW-confirm
+  pending.** `.wav` playback (16-bit stereo, 44.1/48 kHz) through a new raw-PCM
+  mode in `dvd_iso_reader` + `lpcm_unpack`, with the idle logo and a forced-on
+  HUD status line. Ships as a real feature AND is the whole fabric path CD-DA
+  needs. Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`.
+  Design: **`docs/cdda.md`**.
+- **❌ Branch 2 `feature/cdda-physical` — the MAIN half, not started.** TOC +
+  SG_IO `READ CD` (0xBE) in a new `main/support/dvd/dvd_cdda.cpp`, repacked
+  2352→2048 behind a **synthetic 44-byte WAV header** so the disc presents to
+  the core as one giant WAV and needs no new mode, no `cfg[15]`, no `hps_io`
+  fork. Served through the existing `SD_TYPE_DVDCSS` hooks = zero new
+  `apply_integration.py` steps. A track table rides the generic ioctl-download
+  channel (PSX `disk_t` precedent) into a new `dvd/cdda_toc.sv` for
+  tracks-as-chapters + seek-bar notches.
+  **Start with an SG_IO smoke test on the board** — whether the drive honours
+  0xBE audio reads is the one real unknown, and it gates the branch.
+
+⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
+CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.
+Cheap to revisit if ever wanted — stock Main's `cd.h`/`mister_chd.*`/`load_cue()`
+would feed the SAME byte stream this core already plays, with no RTL change.
+
 ## Phase 6 — Polish and Known Issues (Weeks 15+)
 
 > **★ General-catalog conformance:** the durable "what DVD-Video feature is implemented /

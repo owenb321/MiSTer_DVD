@@ -20,10 +20,26 @@ Accepted file types:
 | `.vob` | A single DVD program stream, played linearly |
 | `.mpg` | MPEG program stream (MPEG-1 or MPEG-2) |
 | `.m2v` | Bare MPEG-2 elementary video stream, no audio |
+| `.wav` | PCM audio file — 16-bit stereo, 44.1 or 48 kHz. Audio only, no picture |
 
 Only the first two give you navigation. A `.vob`, `.mpg` or `.m2v` is played straight
 through with no menus, no chapters, and — for `.m2v` — no sound, because the format
 carries none.
+
+## Playing a `.wav`
+
+A `.wav` plays as **audio only**: the bouncing logo stays on screen, and below it the
+status line and a progress bar show where you are in the file — like a CD player's front
+panel. Pause, the seek bar and the D-pad time jumps all work as they do for video; there
+are no chapters.
+
+The core plays **16-bit stereo PCM at 44.1 or 48 kHz** — the CD and DVD sample rates.
+Anything else (mono, 24-bit, floating point, 96 kHz) is refused with `UNSUPPORTED IMAGE`
+rather than played as noise. Compressed formats — MP3, FLAC, AAC, Ogg — are **not**
+supported; there is no decoder for them in the core.
+
+`Audio Out` can be left on either setting. A `.wav` is PCM, so it plays as PCM on both
+outputs even in `Passthru` — the same way an LPCM or MP2 track does.
 
 ## The idle screen
 
