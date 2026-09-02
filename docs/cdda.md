@@ -78,6 +78,21 @@ are mutually exclusive. A byte is kept iff its absolute file position lies in
 `[cdda_astart, wav_dend)`, so the header, any trailing chunks (`id3`, `LIST`)
 and a trailing partial sample pair never reach the decoder.
 
+★ **The payload END needs two guards, and both were RED-proven against the
+first cut of this RTL.** `wav_dend` is computed in 35-bit arithmetic, clamped to
+EOF, then truncated to a whole pair *relative to the payload start*:
+
+* a **streaming** writer emits `cksize = 0xFFFFFFFF` because the length is not
+  known when the header is written. A bare 32-bit `off + 8 + cksize` **wraps** —
+  measured `wav_dend = 40` for a data record at offset 36 — so the file played
+  **nothing at all**.
+* a **truncated / over-claiming** file (a part-copied download) ran past EOF into
+  the framework's block padding: measured **852 bytes of 0xEE emitted as audio**,
+  ~5 ms of buzz at the end of the file.
+
+Fixtures `streaming.wav` and `truncated.wav` cover both; against the pre-fix
+reader they read `cap_n=0 (expect 2800)` and `cap_n=4052 (expect 3200)`.
+
 ★ **`cdda_astart` is what makes seeks safe.** On a linear seek to block *B* it is
 recomputed as the first byte ≥ *B*×2048 that is **L/R-pair aligned relative to
 the data offset** (`bpos ≡ wav_doff mod 4`). Land one byte off and left/right

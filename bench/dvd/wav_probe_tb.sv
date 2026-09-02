@@ -10,6 +10,9 @@
 // TEST 3: listchunk.wav LIST+fact chunks before data (chunk walker).
 // TEST 4: oddchunk.wav  odd-cksize chunk (RIFF pad rule) + trailing id3 AFTER
 //                       the data chunk — the trailing bytes must never stream.
+// TEST 4b/4c: the two data-length guards — a truncated file whose data chunk
+//         over-claims (must stop at EOF, never play block padding) and a
+//         streaming writer's cksize=0xFFFFFFFF (must play to EOF, not wrap).
 // TEST 5: all five reject fixtures — wav_bad=1, cdda_mode=0, ZERO bytes out.
 // TEST 6: flat regressions — a non-RIFF ramp streams unchanged (large and,
 //                       new with this feature, SMALL <17-block files, which
@@ -238,6 +241,22 @@ module wav_probe_tb;
         load_meta("bench/dvd/test_wav/oddchunk.meta");
         gold_from_meta;
         run_case("TEST4 oddchunk", 1, 0);
+
+        // ===== TEST 4b: over-claiming data chunk (truncated file) =====
+        // Without the EOF clamp the reader streams the framework's block
+        // padding as audio; the golden stops at the last whole pair in-file.
+        load_img("bench/dvd/test_wav/truncated.wav.hex");
+        load_meta("bench/dvd/test_wav/truncated.meta");
+        gold_from_meta;
+        run_case("TEST4b truncated", 1, 0);
+
+        // ===== TEST 4c: streaming writer, cksize = 0xFFFFFFFF =====
+        // RED against a bare 32-bit end computation: off+8+0xFFFFFFFC wraps to
+        // ~40, so the file plays almost nothing.
+        load_img("bench/dvd/test_wav/streaming.wav.hex");
+        load_meta("bench/dvd/test_wav/streaming.meta");
+        gold_from_meta;
+        run_case("TEST4c streaming", 1, 1);
 
         // ============= TEST 5: rejects =============
         load_img("bench/dvd/test_wav/rej_mono.wav.hex");     run_reject("TEST5a rej_mono");

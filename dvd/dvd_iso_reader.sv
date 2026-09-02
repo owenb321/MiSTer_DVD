@@ -1586,6 +1586,22 @@ wire [16:0] pgc_wsum   = {6'b0, pgc_off} + {1'b0, pgc_woff};
 wire [31:0] walk_sec_w = pgc_sec + {15'b0, pgc_wsum[16:11]};
 wire [10:0] walk_off_w = pgc_wsum[10:0];
 
+// Data payload window, computed in 35-bit arithmetic and CLAMPED TO EOF, then
+// truncated to a whole L/R pair. Both guards are load-bearing:
+//   * a STREAMING writer emits cksize = 0xFFFFFFFF (the length is not known
+//     when the header is written). A bare 32-bit end = off+8+cksize WRAPS to a
+//     tiny value, so the file would play ~nothing.
+//   * a TRUNCATED/over-claiming file would otherwise keep streaming past EOF
+//     into the framework's block padding = a burst of noise at the end.
+// The pair truncation is relative to the payload START (not to 0), so the
+// window can never end mid-sample-pair whichever guard bound it.
+wire [34:0] wav_doff_n  = {23'd0, wav_off} + 35'd8;
+wire [34:0] wav_end_raw = wav_doff_n + {3'd0, wav_cksz};
+wire [34:0] wav_eof     = (|file_size[63:35]) ? 35'h7FFFFFFFF : file_size[34:0];
+wire [34:0] wav_end_cl  = (wav_end_raw > wav_eof) ? wav_eof : wav_end_raw;
+wire [34:0] wav_len_cl  = wav_end_cl - wav_doff_n;
+wire [34:0] wav_end_pt  = wav_doff_n + {wav_len_cl[34:2], 2'b00};
+
 // Linear-transport seek math (combinational off the latched target; consumed
 // by the !cell_mode seek_jump branch). Raw mode: a target file block r maps to
 // the containing sector s ~= r*2048/2352 = r*128/147, approximated by
@@ -3099,9 +3115,8 @@ always @(posedge clk or negedge rst_n) begin
                         cdda_mode   <= 1'b1;
                         cdda_fs     <= wfmt_fs;
                         wav_doff    <= wav_off + 12'd8;
-                        // pair-truncated payload end (absolute file byte)
-                        wav_dend    <= {20'd0, wav_off} + 32'd8 +
-                                       {wav_cksz[31:2], 2'b00};
+                        // payload end: EOF-clamped + pair-truncated (above)
+                        wav_dend    <= wav_end_pt[31:0];
                         cdda_astart <= {20'd0, wav_off} + 32'd8;
                         raw_wcnt    <= 12'd0;
                         state       <= S_FLAT_INIT;   // shared whole-file extent setup

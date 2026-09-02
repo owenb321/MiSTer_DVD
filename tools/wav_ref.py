@@ -16,12 +16,15 @@ Models the dvd_iso_reader.sv WAV path (branch feature/wav-audio) BYTE-EXACTLY:
     {44100, 48000}.  Anything else — or "data" not reached within the walkable
     window — is a REJECT (RTL: wav_bad -> img_unplayable, no audio ever
     emitted).
-  * Playback: bytes [data_off, data_off + data_len) stream to the PCM
-    assembler, little-endian interleaved s16: b0=L.lo b1=L.hi b2=R.lo b3=R.hi.
-    A trailing partial pair (data_len % 4 != 0) is DISCARDED.  Bytes after the
-    data chunk (trailing LIST/id3) are swallowed, never played.  If the data
-    chunk claims more bytes than the file holds, playback ends at EOF on the
-    last whole pair.
+  * Playback: bytes [data_off, data_end) stream to the PCM assembler,
+    little-endian interleaved s16: b0=L.lo b1=L.hi b2=R.lo b3=R.hi.  Bytes
+    after the data chunk (trailing LIST/id3) are swallowed, never played.
+    `data_end` is the claimed end CLAMPED TO EOF and then truncated to a whole
+    L/R pair *relative to data_off*, which covers three real cases at once:
+    a trailing partial pair (data_len % 4), a TRUNCATED file whose data chunk
+    over-claims (without the clamp the core would stream the framework's block
+    padding as noise), and a STREAMING writer's cksize = 0xFFFFFFFF (which a
+    bare 32-bit end computation wraps to a tiny value = plays ~nothing).
 
 The physical-CD virtual image (branch 2) is a canonical 44-byte header + raw
 CD-DA audio, i.e. exactly the `canonical()` shape here — one model covers both.
@@ -38,6 +41,10 @@ every bit pattern is exercised and no libm/float variance can creep in):
            listchunk.wav LIST + fact chunks between fmt and data
            oddchunk.wav  odd-cksize junk chunk (pad-byte walk rule) + trailing
                          bytes AFTER the data chunk (must not play)
+           truncated.wav data chunk over-claims by 5000 bytes (a partly-copied
+                         file) -> must stop at EOF, never play block padding
+           streaming.wav cksize = 0xFFFFFFFF (writer did not know the length)
+                         -> must play to EOF, not wrap to nothing
   reject:  rej_mono.wav  rej_24bit.wav  rej_float.wav  rej_96k.wav
            rej_latedata.wav (data chunk starts beyond sector 0)
 
@@ -103,7 +110,8 @@ class Verdict:
         self.reason = ''
         self.fs_code = None      # 0=44.1k, 1=48k (nco_fs encoding)
         self.data_off = None
-        self.data_len = None
+        self.data_len = None     # as CLAIMED by the chunk header
+        self.data_end = None     # clamped to EOF + truncated to a whole pair
 
 
 def probe(img: bytes) -> Verdict:
@@ -137,6 +145,8 @@ def probe(img: bytes) -> Verdict:
                 v.fs_code = 0 if rate == 44100 else 1
                 v.data_off = off + 8
                 v.data_len = cksz
+                end = min(v.data_off + cksz, len(img))       # EOF clamp
+                v.data_end = v.data_off + ((end - v.data_off) & ~3)
             return v
         if ckid == b'fmt ':
             fmt = struct.unpack('<HHIIHH', sec[off + 8:off + 24])
@@ -150,7 +160,7 @@ def expected_pairs(img: bytes):
     """Expected {L,R} s16 pairs for an ACCEPTED image (RTL playback model)."""
     v = probe(img)
     assert v.ok, v.reason
-    data = img[v.data_off:v.data_off + v.data_len]
+    data = img[v.data_off:v.data_end]
     pairs = []
     for i in range(0, len(data) - 3, 4):
         l = data[i] | (data[i + 1] << 8)
@@ -211,6 +221,18 @@ def gen(outdir: str):
                    trailing=b'id3 ' + b'\xAA' * 60),
          True)
 
+    # over-claiming data chunk (truncated file): stop at EOF
+    body = xs32_pcm(800 * 4, seed=0x7A05)
+    img = bytearray(build_wav([fmt_chunk(rate=44100)], body))
+    struct.pack_into('<I', img, 40, len(body) + 5000)   # over-claim the data size
+    emit(outdir, 'truncated', bytes(img), True)
+
+    # streaming writer: cksize = 0xFFFFFFFF (length unknown when written)
+    body = xs32_pcm(700 * 4, seed=0x57EA)
+    img = bytearray(build_wav([fmt_chunk(rate=48000)], body))
+    struct.pack_into('<I', img, 40, 0xFFFFFFFF)
+    emit(outdir, 'streaming', bytes(img), True)
+
     # rejects
     emit(outdir, 'rej_mono',
          build_wav([fmt_chunk(channels=1)], xs32_pcm(400)), False)
@@ -236,7 +258,7 @@ def main():
         v = probe(img)
         if v.ok:
             print(f'ACCEPT fs_code={v.fs_code} data_off={v.data_off} '
-                  f'data_len={v.data_len}')
+                  f'data_len={v.data_len} data_end={v.data_end}')
         else:
             print(f'REJECT: {v.reason}')
         return 0
