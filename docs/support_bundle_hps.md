@@ -83,7 +83,8 @@ edge-triggered single steps with on-screen feedback and both are trivially undon
 ```
 chord held 2 s
   └─ dvd_report_tick()          (poll loop, self-gates on is_dvd())
-       ├─ source: dvd_phys_device() if a disc is mounted, else get_image(0)->path
+       ├─ source: dvd_phys_device() if a disc is mounted, else mounted_path
+       │           (captured at mount time -- see below; NOT get_image()->path)
        ├─ playhead: user_io_last_lba(0)
        ├─ settings: newest /media/fat/config/DVD*.CFG
        ├─ core version: OsdCoreNameGet() after the first space
