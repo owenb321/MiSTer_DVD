@@ -280,6 +280,22 @@ worse maintenance burden than targeted in-place edits. So:
   layout `"v,1"`→`"v,2"` (all saved settings reset once). O[27:26] left dead/reserved.
   Detail: `docs/field_parity.md`, superseded headers in `docs/interlaced_auto.md` +
   `docs/analog_dual_raster.md`.
+  ★ **HW ROUND 1 (2026-09-02) found a LATENT BOOT RACE the consolidation was first to
+  arm: Interlaced-at-boot showed "719x...i @ 31.48 kHz" + dead CRT — the modeline walk
+  keys on RAW reset_n while the decoder synchronizes its resets INTERNALLY
+  (reset.v cascaded 5-FF stages), so hard_rst (gating every regfile modeline register)
+  deasserts ~5-10 clk_dec cycles later and the boot walk's writes were SILENTLY
+  SWALLOWED — progressive raster + VGA_F1 toggling, and il_prev latched so nothing
+  retried.** Invisible since the walk was built: il_eff was always 0 at boot (a
+  swallowed walk wrote the reset defaults anyway) and every change came via OSD with
+  the decoder alive — `Auto` from the ini bits is the first boot-time walk that
+  matters. FIX = `dec_ready` gate (kicks wait for `core_sync_rst` = the decoder's own
+  `sync_rst_out`, the LAST reset to deassert, observed high 8 cycles). Proven
+  RED/GREEN by `bench/dvd/modeline_boot_tb.sv` over the REAL `reset.v` + `regfile.v`
+  (RED reproduced BOTH failure shapes: total swallow = the exact HW symptom, and
+  partial application; the OSD-toggle control passes un-fixed — why no prior HW round
+  ever saw it). ⚠ Lesson: any emu-side logic writing decoder REGISTERS around reset
+  must gate on `sync_rst_out`, not `reset_n` — the walk was the only such writer.
 - ✅ **MID-PLAY LOAD A/V DESYNC — FIXED IN FABRIC; ✅ HW-CONFIRMED 2026-08-28 (user
   report: mid-play loads across VOB/mpg/ISO/VCD cut to black, start clean, hold sync;
   T2 logo chain clean; seeks/menus/cold mount unregressed; build

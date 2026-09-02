@@ -3298,6 +3298,31 @@ always @(*) begin
     endcase
 end
 
+// DVD-FORK FIX (boot-time walk reset race, 2026-09-02 — HW round 1 of the Video
+// Output consolidation): this block keys on RAW reset_n, but the decoder
+// synchronizes its resets INTERNALLY (rtl/mpeg2/reset.v: cascaded 5-FF
+// sync_reset stages), so hard_rst — which gates every modeline register in
+// regfile.v — deasserts ~5-10 clk_dec cycles AFTER reset_n rises. A walk kicked
+// in that window has its writes silently discarded while the registers
+// re-default to the PROGRESSIVE modeline, and il_prev latches anyway, so
+// nothing retries: the core then runs a progressive raster (31.47 kHz) with
+// VGA_F1 toggling — the HW report's "719x...i @ 31.48kHz", dead CRT. The race
+// was here since the walk was built but INVISIBLE: il_eff was always 0 at boot
+// (a swallowed init walk wrote the reset defaults anyway) and every change came
+// later via OSD with the decoder long alive. `Video Output = Auto` driving
+// il_eff from the MiSTer.ini bits is the first boot-time walk that matters.
+// FIX: gate every kick on the decoder's own synchronized reset (core_sync_rst =
+// mpeg2video.sync_rst_out, clk_dec domain, the LAST reset to deassert) having
+// been observed high for 8 consecutive cycles. Pending changes are simply
+// applied by the first post-ready walk — il_s2/pal_s2/filmp_s2 keep tracking.
+// Proven RED (swallowed walk, both partial and total) / GREEN by
+// bench/dvd/modeline_boot_tb.sv over the REAL reset.v + regfile.v.
+reg [2:0] dec_rdy_cnt = 3'd0;
+always @(posedge clk_dec)
+    if (!reset_n || !core_sync_rst) dec_rdy_cnt <= 3'd0;
+    else if (dec_rdy_cnt != 3'd7)   dec_rdy_cnt <= dec_rdy_cnt + 3'd1;
+wire dec_ready = (dec_rdy_cnt == 3'd7);   // decoder regfile writable (with margin)
+
 always @(posedge clk_dec) begin
     if (!reset_n) begin
         il_s1 <= 1'b0; il_s2 <= 1'b0; il_prev <= 1'b0;
@@ -3314,7 +3339,8 @@ always @(posedge clk_dec) begin
         if (seq_run) begin
             if (seq_step == 3'd5) seq_run <= 1'b0;
             seq_step <= seq_step + 3'd1;
-        end else if (!il_init || (il_s2 != il_prev) || (pal_s2 != pal_prev) || (filmp_s2 != filmp_prev)) begin
+        end else if (dec_ready &&
+                     (!il_init || (il_s2 != il_prev) || (pal_s2 != pal_prev) || (filmp_s2 != filmp_prev))) begin
             il_prev  <= il_s2;                   // latch the values being applied
             pal_prev <= pal_s2;
             filmp_prev <= filmp_s2;
