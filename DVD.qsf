@@ -722,4 +722,8 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # RAM 494/553 (89%, was 506 -- the re_interlace line buffer + its second
 # sync_gen), block memory 62%. Eighth consecutive first-roll fit. Build
 # DVD_singleraster_20260902_1902.rbf.
+# 2026-09-02e (same branch + the 2H-serration csync in sys_top -- one 16-bit reg
+# and two compares): SEED 5 held FIRST roll again -- clk_dec 91.40 @100C /
+# 90.26 @-40C at 88% ALM (36,945), RAM 494/553. Ninth consecutive first-roll
+# fit. Build DVD_singleraster2_20260902_1956.rbf (HW round 2 candidate).
 set_global_assignment -name SEED 5

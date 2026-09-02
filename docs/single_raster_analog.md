@@ -1,8 +1,10 @@
 # Single-raster analog output — the interlaced main raster drives the CRT
 
 **Status (2026-09-03, branch `feature/single-raster-analog`): sim-proven (every suite
-below green, two RED reproductions); built — `releases/DVD_singleraster_20260902_1902.rbf`,
-SEED 5 first roll, clk_dec 91.76 / 88.35 MHz, 88 % ALM, RAM 494/553 (12 M10K freed);
+below green, two RED reproductions); HW round 1 (composite CRT) on
+`DVD_singleraster_20260902_1902`: resolution right, picture paired/bounced → §3.9 (2H
+serrations); round-2 build `releases/DVD_singleraster2_20260902_1956.rbf`, SEED 5 first
+roll, clk_dec 91.40 / 90.26 MHz, 88 % ALM, RAM 494/553 (12 M10K freed);
 ⏳ HW-confirm pending. Gate = the two RGBS / YPbPr
 field reports below reproduce clean (idle logo AND playback), gregSTORM's composite CRT
 and the HDMI 480i path unregressed, Main reporting `720x480i @ 59.94` steady.**
