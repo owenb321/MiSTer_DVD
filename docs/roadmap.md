@@ -1783,7 +1783,8 @@ the ini rule, boot-static; `O[27:26]` freed/dead; `Interlaced Out` + its `det_vi
 Auto detector deleted; config layout `v,2`). The persistence analysis in the last
 paragraph below still applies verbatim to the new option.
 
-**Follow-up on the same branch (2026-09-02, ⏳ HW-confirm pending): analog subtitle
+**Follow-up (2026-09-02, branch `feature/crt-subtitle-raw` — stacked on this branch's
+code, kept separate by user decision; ⏳ HW-confirm pending): analog subtitle
 sawtooth fixed by a context-split overlay query** — plain dialogue subtitles bypass the
 `crt_ov_map` nearest-tap Letterbox/Crop inverse (raw raster coordinates, may render into
 the letterbox bars); menu art/highlights and the SIF fill stay mapped. Detail:
