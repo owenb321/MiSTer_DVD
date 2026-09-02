@@ -5,20 +5,26 @@
 
 > **How to read the checklists.** This file is mostly a **record of work already
 > done** — phase-by-phase, with the root causes and the theories that turned out
-> wrong — rather than a live plan. Three markers, and they are kept honest because
+> wrong — rather than a live plan. Four markers, and they are kept honest because
 > a stale one misdirects a cold session as surely as a wrong comment:
 >
 > - `- [x]` — done. Some carry a note where the outcome differed from the plan.
 > - `- ⛔ **[superseded — why]**` — the item is no longer wanted *as written*,
 >   because the approach changed under it. Kept, not deleted: the reason it was
 >   dropped is usually more useful than the item was.
-> - `- [ ]` — genuinely still open. **There are 9 of them**, and that is the whole
->   forward-looking content of this file.
+> - `- ⛔ **[dropped — why]**` — reviewed and decided against. Not the same as
+>   superseded: nothing changed underneath it, it simply is not wanted.
+> - `- [ ]` — genuinely still open. **There are none left.**
 >
-> Reconciled 2026-09-01: 23 items were ticked and 15 marked superseded in one pass.
-> Most of the stale ones were Phase-0 setup tasks ("fork the repo", "install
-> Quartus") left unticked for 890 commits, which read as though the project had
-> never started.
+> Reconciled 2026-09-01. First pass: 23 ticked, 15 marked superseded — most of the
+> stale ones were Phase-0 setup tasks ("fork the repo", "install Quartus") left
+> unticked for 890 commits, which read as though the project had never started.
+> Second pass: the 9 remaining open items were reviewed one by one and all closed —
+> several were already answered by work that had shipped, two by their own bodies,
+> and the rest dropped by decision.
+>
+> **So this file no longer carries any forward plan, and should not be read as one.**
+> It is the development record. New work is tracked on GitHub.
 
 ## Guiding Principles
 
@@ -281,12 +287,12 @@ DVD VOB (program stream with audio + nav packs) has not been tested end-to-end. 
      Covered by `bench/dvd/ps_demux_nav_tb.sv` (embeds a fake `00 00 01 E0` inside
      a nav payload and proves only the real video PES reaches the output); the
      real-Matrix-VOB `ps_chain_tb` still passes byte-for-byte (50,395 bytes).
-   - [ ] **Multi-sequence / repeated sequence headers.** Each VOB cell can carry
+   - ⛔ **[superseded — the symptom (repeated resolution change) was root-caused elsewhere — the mb-padded picture split + the VERT_RES off-by-one, both fixed 2026-06-24]** **Multi-sequence / repeated sequence headers.** Each VOB cell can carry
      its own sequence header; the repeated resolution change suggests the decoder
      is re-initialising per cell or on corrupted headers. Confirm the demuxed
      video ES is a clean, continuous elementary stream (dump `vid_byte` to SD /
      UART and compare against a known-good `.m2v` extracted with `ffmpeg`).
-   - [ ] **Unbounded video PES (`PES_packet_length == 0`).** Documented
+   - ⛔ **[superseded — ISO 13818-1 §2.4.3.7 permits length 0 only for video PES inside TRANSPORT streams; DVD is a Program Stream, so it cannot legally occur. Measured 0 of 3,395 video PES headers across 13 discs. ⚠ If it ever did occur the 16-bit counter would WRAP and eat ~64 KB — noted in ps_demux.sv]** **Unbounded video PES (`PES_packet_length == 0`).** Documented
      limitation in `ps_demux` — rare in VOBs but verify the test file doesn't use
      it; add the start-code-hunt fallback if needed.
 
@@ -560,7 +566,7 @@ motion-comp starvation that caused the misses (keep Frame Drop On as a safety ne
   (a strict consecutive-run counter never locked through menu/VM-path cadence hiccups).
 
 **Remaining follow-ups:**
-- [ ] **Motion-comp throughput rewrite (high-motion / PAL stutter)** — staged attack on the
+- ⛔ **[superseded — the item's own body retracts it: Matrix was a SOURCE-FILE defect (reproduces in VLC), and both genuine cases were fixed without a datapath rewrite — MiB act 3 by the Stage-1 reference prefetch, PAL BBB by the frame-drop governor]** **Motion-comp throughput rewrite (high-motion / PAL stutter)** — staged attack on the
   compute/feed-bound stutter; see `docs/motcomp_throughput.md`. **⚠️ Motivation revisited
   (2026-07-09):** the Matrix opening — long cited as *the* canonical worst case — is a
   SOURCE-FILE defect (its stutter reproduces in VLC on a PC, USER-CONFIRMED), so it is NOT
@@ -611,7 +617,7 @@ motion-comp starvation that caused the misses (keep Frame Drop On as a safety ne
   0xFF = 2 MB now; the `vbuf_healthy` hysteresis thresholds stay fractional (25 %/12.5 %),
   so the guard now demands an 8× fatter absolute cushion — the conservative direction.
   Files: `dvd/mem_override/mem_codes.v`, `rtl/mpeg2/framestore_request.v` (tap width).
-- [ ] **PAL high-motion stutter** — addressed by the frame-drop governor above (decode-load bound,
+- [x] **PAL high-motion stutter** — addressed by the frame-drop governor above (decode-load bound,  *(addressed by the frame-drop governor above (decode-load bound, not PAL-specific))*
   not PAL-specific).
 - [x] **PAL interlaced (576i @ 50) — HDMI/ascal — ✅ HW-CONFIRMED + MERGED (PR fj#132)**.
   Mirrors the NTSC-480i per-field modeline (pixel_repetition doubling): new
@@ -629,7 +635,7 @@ motion-comp starvation that caused the misses (keep Frame Drop On as a safety ne
   pixrep `h_pos` map + `spu_decode`/`crt_ov_map` `.interlaced` following `il_eff`,
   shipped as a prerequisite of `Analog Out = Native Fields`.
   See `docs/interlaced_auto.md`.
-- [ ] **Film 3:2 / PAL-25-from-24** `SHOW_N` cadence handling (separate from the above).
+- ⛔ **[dropped — not needed (2026-09-01, user decision) — Film 24p and 25p both shipped and are HW-confirmed; what this line added beyond them was never established]** **Film 3:2 / PAL-25-from-24** `SHOW_N` cadence handling (separate from the above).
 
 ### Composite / Interlaced Analog Output for CRT (primary end goal)
 
@@ -734,7 +740,7 @@ half-line, weave workaround, 1440-wide pixel repetition) is the
     `bench/dvd/crt_ov_map_tb.sv`); `spu_decode` row-base adder generalized for the skipping
     line walks; CRT Auto aspect now menu-aware (`ar_wide_auto_eff`, matches HDMI). Detail +
     HW-gate checklist: `docs/crt_anamorphic.md` §9.
-- [ ] **HDMI 4:3 output follows the same Fit / Letterbox / Crop setting as the analog CRT.**
+- ⛔ **[dropped — not needed (2026-09-01, user decision) — a want rather than a defect, for the narrow case of 16:9 anamorphic content on a 4:3 HDMI display]** **HDMI 4:3 output follows the same Fit / Letterbox / Crop setting as the analog CRT.**
   Today `O[4:3] CRT Aspect` (Fit/Letterbox/Crop, `docs/crt_anamorphic.md`) is gated on
   `crt_eff` (analog CRT mode only); HDMI instead gets its aspect from ascal via
   `O[20:19] Aspect Ratio` → `VIDEO_ARX/ARY`. Goal: when a **4:3 HDMI display** shows 16:9
@@ -883,7 +889,7 @@ Levers, cheapest/lowest-risk first:
   still pinned per-netlist for reproducibility, but sweeps should rarely be needed; a fit
   under the 86.0 gate now means the netlist degraded — measure (`tools/timing_paths.sh`) and
   fix, don't re-roll. (`FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION` remains `ALWAYS`.)
-- [ ] **Floorplan / LogicLock the hotspot (last resort, heavy effort).** If the logic cuts
+- ⛔ **[dropped — not needed (2026-09-01, user decision) — it was always the last resort, and the design fits at 88% ALM with clk_dec closing on the pinned seed's first roll. Kept as a note in case congestion returns; it is not pending work]** **Floorplan / LogicLock the hotspot (last resort, heavy effort).** If the logic cuts
   above aren't enough, constrain placement of the framestore/decoder→overlay region (or give
   the overlay/output path its own region) so the router isn't forced to cram it into
   X33_Y11–X44_Y22. High effort and brittle to design changes — only after the cheaper levers.
@@ -1013,7 +1019,7 @@ order. Detail lives in `docs/av_sync.md` "Open follow-ups".
   Deferred in PR fj#36 — the 16-row 4-bit-addressed `debug_overlay` is fragile to expand.
   The debug nets are already wired in `emu.sv`; add a row (or repurpose one) to read
   drift on HW. Needed to *measure* lip-sync rather than eyeball it.
-- [ ] **Per-sample PTS through the AC-3 pipeline.** Only if HW shows a residual phase
+- ⛔ **[superseded — its own precondition never fired — the drift saga closed at round 12 with vid_err flat and lips constant, so LEAD_TARGET absorbs what there is]** **Per-sample PTS through the AC-3 pipeline.** Only if HW shows a residual phase
   error `LEAD_TARGET` can't absorb: carry the frame PTS through decode and subtract the
   live `pcm_out` FIFO occupancy so the loop references the PTS of the sample actually
   *leaving* the speaker, not the one entering the decoder.
@@ -1423,7 +1429,7 @@ coordinates — NOT text. Needs a decoder + a video-overlay blend.
   menu highlights render with the disc's authored colours. SET_CONTR alpha honoured.
   Hardened for seeks by the `pgc-palette-seek-reset-bug` fix (palette on `reset_n`, not the
   per-seek pipe reset). The earlier "v1 uses a fixed high-contrast palette" note was stale.
-- [ ] **Follow-ups (minor):** HDMI-480i (O9) subtitle (needs the pixrep `q_x` halving — CRT
+- ⛔ **[partly shipped — the HDMI-480i (O9) subtitle q_x halving SHIPPED with the overlay pixrep fix 2026-08-22; CHG_COLCON and per-disc subtitle-track enumeration dropped as not needed (2026-09-01, user decision)]** **Follow-ups (minor):** HDMI-480i (O9) subtitle (needs the pixrep `q_x` halving — CRT
   is native width so it was addressed first); CHG_COLCON; per-disc subtitle-track
   enumeration (needs IFO — folds into the Phase-10 audio/subp attribute parse); HW
   confirmation on a subtitle disc (progressive + CRT 480i).
