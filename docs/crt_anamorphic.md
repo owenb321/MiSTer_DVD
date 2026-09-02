@@ -283,6 +283,10 @@ so display pixel `j` samples the exact source position and blends the two stradd
 **Status: ✅ HW-CONFIRMED 2026-07-11 (PR fj#108, tested on the real CRT).** Closes the "CRT 4:3
 experience must match HDMI" gap the user reported: the menu highlight (and the whole
 subpicture layer) did not account for the Letterbox/Crop transforms.
+**⚠ Amended 2026-09-02 (subtitle sawtooth fix, §9a): the mapped query now serves the
+MENU/HIGHLIGHT context only — plain dialogue subtitles bypass the Letterbox/Crop inverses
+and render at raw raster coordinates.** Everything below stays accurate for the mapped
+context; §9a records the split and its rationale.
 
 **The bug.** The overlay layer — `spu_decode`'s per-pixel bitmap query, the HLI button-rect
 compare (`hl_hit_q`), and the O[2] rect border — runs at the display tap in `emu.sv` in
@@ -302,6 +306,8 @@ overlay layer (subpicture query + highlight rect + O[2] border) queries source s
   `round(i·4/3)`; per-field re-arm at the bar edge (`v_bar`/`v_bar+1`) mirrors the
   blender's per-field restart, parity preserved. Bar/blank lines map to 0xFFF (outside any
   DAREA/rect ⇒ overlay hidden — the overlay lives *inside* the picture, like HDMI).
+  *(Since 2026-09-02 the sentinel clips the menu/highlight context only — raw-path
+  subtitles may render into the bars by design, see §9a.)*
 - **Crop (horizontal):** replicates `disp_hstretch`'s duplicate-insertion error term
   column-for-column (fresh advances the source column, a duplicate repeats it; COL_0/last
   never duplicated; right-edge clamp = the forward stage's documented 1-px shortfall).
@@ -340,11 +346,108 @@ re-arm proof) + progressive; T4 pass-through bit-identity; T5 drives a real `spu
 All existing subpic/HUD/nav_pci suites green.
 
 **✅ HW-CONFIRMED (2026-07-11, PR fj#108)** on the CRT with a 16:9 disc — (a) Letterbox:
-subtitles sit inside the letterboxed picture at the right height; menu highlight boxes sit
+subtitles sit inside the letterboxed picture at the right height *(superseded 2026-09-02:
+subtitles now render RAW, at their authored height — see §9a)*; menu highlight boxes sit
 ON their buttons (T2/Matrix menus); (b) Crop: highlight tracks the stretched buttons,
 overlay clipped at the crop edges; (c) Fit + HDMI: unchanged (pass-through); (d) CRT Auto
 on an anamorphic menu now letterboxes (matches HDMI). Release build gated green:
 clk_dec 91.24/87.58 MHz, `releases/DVD_crtovalign_20260711_0009.rbf`.
+
+## 9a. Context split — subtitles raw, menus/highlights mapped (2026-09-02, ⏳ HW-confirm pending)
+
+**The report:** subtitles on the analog output show **sawtooth/aliased edges** under
+Letterbox (the Auto default for 16:9 discs). Root cause is §9's own design point: the
+inverse map is **NEAREST-tap** — under Letterbox it drops every 4th subtitle line with no
+blending (and per-field on the consolidated fields raster, so the stair-steps also shimmer
+between fields), while the video underneath goes through `disp_vscale`'s 2-tap blend and
+stays smooth. The mismatch is the artifact. On HDMI-Fit both layers scale together through
+ascal, which is why the report is aspect-mode-only.
+
+**The fix — split by context, not by layer.** The mapped coordinates only ever *matter*
+when the HLI rect can draw or the SPU is picture-composed art; a dialogue subtitle does not
+need to track the rescaled picture (a set-top player doesn't scale subtitles either). It
+CANNOT be split per-layer: the highlight recolour reads the queried pixel's class
+(`hl_use`/`hl_ci` mux on `sp_q_idx`) and only draws where `sp_q_inside`=1, and `spu_decode`
+has one `q_x/q_y` port pair — rect compare and bitmap query must share one coordinate
+space whenever a highlight can draw. So `emu.sv` computes a **context select**:
+
+```
+sp_ctx_mapped_w = hl_btns_armed | (menus_on && menu_active) | sp_menu_early
+                | vm_owns_route | force_43_subp
+```
+
+- `hl_btns_armed`, not `hl_on_w`: the strict superset covers the arm→fetch window AND is
+  the O[2] `dbg_rectb` gate — whenever ANY rect can draw, the space is mapped, by
+  construction. (`in_title_hli` — the white rabbit — is subsumed: it is defined as
+  `menus_on && !menu_active && hl_btns_armed`.)
+- `vm_owns_route` / `force_43_subp`: SetSTN-forced art and the MiB flipbook are picture
+  content and keep tracking the rescaled picture. Known residual: a disc whose VM
+  SetSTN-forces a genuine dialogue-subtitle stream keeps the nearest-tap path — revisit
+  if ever reported.
+- Pure `sub_on` playback is the only raw context — that is the fix.
+
+**Why not map the rect alone (asked and answered, 2026-09-02).** Mechanically it would be
+easy — the rect is four quasi-static numbers, so one could forward-map `hl_x1..y2` once
+per HLI instead of inverse-mapping the per-pixel query. But the highlight has NO pixels of
+its own: it draws only by recolouring the SPU pixels the query fetches (`hl_ci`/`hl_a`
+select on `sp_q_idx`, nothing renders where `sp_q_inside`=0), and the rect is authored ON
+the button art — they are one object on the disc. A mapped rect over a raw-queried bitmap
+recolours whichever art pixels happen to sit under the displaced rect: the wrong part of
+the button, or nothing (a background-class pixel with HLI alpha 0). So the switchable unit
+is always **(art + rect) together**, and the only real question is what space the ART
+needs — menu button art composes with imagery baked into the video frame, so it must
+track the rescaled picture; a dialogue subtitle composes with nothing. That is why the
+split is per-CONTEXT.
+
+**Can a highlight and dialogue subtitles coexist?** Spatially never — one `spu_decode`,
+one committed SPU frame, one stream (`sp_track_eff` mux); a highlight is a recolour of
+whatever is displayed. On every known disc pattern the highlightable art DISPLACES the
+subtitle stream for its window (menus/`sp_menu_early` force track 0; the white
+rabbit / MiB prompts force theirs via SetSTN = `vm_owns_route`), so the "sawtooth returns
+while an HLI is armed" edge affects the button art, not dialogue subs. The theoretical
+residue: a disc arming an in-title HLI WITHOUT forcing a stream would leave the user's
+subtitle displayed, mapped (sawtooth) and recolourable under the rect for that window —
+pre-existing behaviour, not a regression. If such a disc ever surfaces, the consistent
+refinement is raw art + raw rect for that case (prompt text doesn't align to video
+imagery): drop the bare `hl_btns_armed` term and let `vm_owns_route` catch forced-stream
+prompts — deliberately NOT done now, since it trades a proven-safe superset for an
+assumption about discs never seen.
+
+The select is **committed on `av_refresh_tick` (frame top) only**: `spu_decode`'s
+`q_row_base` walker accepts only {reset,+1,+2}/{reset≤1,+2,+4} q_y steps, so a mid-frame
+raw↔mapped flip would leave it stale for the rest of the field (`crt_ov_map_tb` T8b proves
+exactly that). The split is implemented by gating the instance enables
+(`letterbox_en = analog_letterbox & sp_map_en`, `crop_en = (analog_crop & sp_map_en) |
+sif_hfill_eff`) — safe because `crt_ov_map`'s Bresenham walkers run **unconditionally**
+and the enables sit only in its output mux, so enable-gating IS an output mux: toggling
+between fields is glitch-free and the mapped walk is exact the instant it is re-selected
+(T8a). Two deliberate consequences:
+
+- **The SIF fill stays FULLY mapped in every context** (`sp_map_en = sp_ctx_mapped_q |
+  sif_hfill_eff | sif_v2x_eff`): sub-720 SPU bitmaps are authored in SIF source space
+  (`spu_decode` stores at absolute authored coordinates, 720-stride), so raw raster
+  coordinates would draw them unscaled in the top-left quadrant. Both SIF terms force the
+  whole map so manual Letterbox on SIF content keeps the composed inverse intact.
+- **Raw subtitles may render into the letterbox bars** — they lose the 0xFFF bar
+  sentinel, so a DAREA authored low in the frame draws over the bottom bar. User-accepted
+  (standalone-player behaviour, arguably an upgrade: full authored resolution, no clip).
+
+Sub-pixel note: with crop/SIF mapping active the mapped x lags the raw x by one clk_sys
+(§9 TIMING); the context mux therefore carries a ~0.5-pixel horizontal differential
+between contexts against the single `SP_QX_ADJ` calibration — invisible, recorded here so
+nobody re-derives it as a bug.
+
+**Verification:** `crt_ov_map_tb` **T7** (raw subtitle path: mapper is a wire for every
+raster line INCLUDING the bar band, no sentinel; raw 480i field walk through the real
+`spu_decode` across the band edge into the bars, both fields) and **T8** (toggle
+semantics: mapped→raw→mapped fields with inter-field toggles all bit-correct; a
+mid-field coordinate jump demonstrably stales the row base and recovers at field top).
+The emu-side select itself is ~8 lines of glue with no emu-level TB (none exists) —
+verified by review. All `run_subpic.sh` suites green.
+
+**HW gate:** subtitle edges clean under Letterbox/Crop on the CRT (and HDMI-480i — the
+letterboxed raster is shared); T2/Matrix menu highlights still land on buttons; white
+rabbit aligned; MiB flipbook still tracks the picture; SIF disc subtitles unchanged.
 
 ## 9b. SIF analog fill reuse (✅ HW-CONFIRMED 2026-08-24, PR #2)
 
@@ -359,6 +462,10 @@ sentinel preserved; it composes AFTER the letterbox inverse (the doubling happen
 upstream of `disp_vscale`). Co-sim: `crt_ov_map_tb` T1d (352→720, 256→720) + T6
 (v2x progressive / 480i / letterbox-composed). The mode-2 inverse formula is part of
 the §9 EXACTNESS contract — change the addrgen walk and this map together.
+**Note (2026-09-02): the §9a subtitle-context raw path deliberately EXEMPTS the SIF
+fill** — `sp_map_en` ORs in `sif_hfill_eff | sif_v2x_eff`, so sub-720 discs keep the
+full mapped query in every context (their SPU bitmaps are authored in SIF source
+space; raw coordinates would render them quarter-screen).
 
 ## 10. Follow-ups
 

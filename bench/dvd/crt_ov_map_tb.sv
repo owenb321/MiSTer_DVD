@@ -48,6 +48,23 @@
  *       parity p -> min(p + 2*floor((i+1)/2), v_src_max). Four walks: progressive,
  *       480i both fields, letterbox+v2x compose (progressive + 480i) with the 0xFFF
  *       bar sentinel preserved.
+ *   T7  Subtitle-context RAW path (DVD-FORK FIX 2026-09-02, subtitle sawtooth): emu
+ *       now gates letterbox_en/crop_en off in the pure-subtitle context so dialogue
+ *       subtitles render 1:1 (no nearest-tap stair-step). With the letterbox/crop
+ *       geometry live but the enables LOW: (a) the mapper is a wire for every raster
+ *       line INCLUDING the bar band — no 0xFFF sentinel, so a DAREA reaching into
+ *       the bars renders there (accepted set-top-player behaviour); (b) the raw 480i
+ *       field walk (the only reachable aspect raster since the Video Output
+ *       consolidation) lands spu_decode's q_idx on bmp[y*STRIDE+x] across the band's
+ *       bottom edge (VBAR+VBAND) and through the bar band, both fields.
+ *   T8  Context-toggle semantics (same fix): (a) three consecutive 480i fields —
+ *       mapped, raw, mapped — with the enable toggled only in the inter-field idle:
+ *       all three fields bit-correct, proving the mapper's walkers run independent
+ *       of the enables (frame-top switching is clean and re-selection is exact);
+ *       (b) a MID-FIELD raw->mapped coordinate jump through the real spu_decode:
+ *       the q_row_base walker rejects the non-{+2,+4} step and goes STALE for the
+ *       rest of the field (>=1 mismatch demanded), recovering at the next field
+ *       top — this is WHY emu commits the context select on av_refresh_tick only.
  *
  * Build:
  *   iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/crt_ov_map_sim \
@@ -189,8 +206,10 @@ module crt_ov_map_tb;
         gold_px = (addr[1:0] ^ addr[9:8] ^ addr[17:16]);
     endfunction
 
-    // one mapped "line": settle q_y, then sample a few columns
-    task automatic t5_line(input [11:0] y);
+    // one mapped "line": settle q_y, then sample a few columns. lbl names the
+    // calling test in the failure print (T5 mapped walks, T7b raw subtitle walk,
+    // T8b recovery) — the check itself is identical: q_idx == bmp[y*STRIDE+x].
+    task automatic sp_line(input [23:0] lbl, input [11:0] y);
         integer x;
         begin
             @(negedge clk) sp_q_y = y;
@@ -202,8 +221,8 @@ module crt_ov_map_tb;
                 if (sp_q_idx !== gold_px(y * SP_STRIDE + x)) begin
                     errors = errors + 1;
                     if (errors < 80)
-                        $display("T5 FAIL: q(%0d,%0d) idx %0d expected %0d",
-                                 x, y, sp_q_idx, gold_px(y * SP_STRIDE + x));
+                        $display("%s FAIL: q(%0d,%0d) idx %0d expected %0d",
+                                 lbl, x, y, sp_q_idx, gold_px(y * SP_STRIDE + x));
                 end
             end
         end
@@ -562,12 +581,12 @@ module crt_ov_map_tb;
 
         // (a) plain progressive raster 0..29 (+1 steps — regression)
         sp_interlaced = 0; sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
-        for (j = 0; j < 30; j = j + 1) t5_line(j[11:0]);
+        for (j = 0; j < 30; j = j + 1) sp_line("T5 ", j[11:0]);
         // (b) progressive letterbox-mapped walk (+1/+2 steps, skips every 4th line)
         sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
         for (j = 0; j < 60; j = j + 1) begin
             expv = lb_k(j) + ((lb_r(j) == 2) ? 1 : 0);
-            t5_line(expv[11:0]);
+            sp_line("T5 ", expv[11:0]);
         end
         // (c) plain 480i raster, both fields (+2 steps — regression)
         sp_interlaced = 1;
@@ -575,7 +594,7 @@ module crt_ov_map_tb;
             sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
             for (j = 0; j < 30; j = j + 1) begin
                 expv = 2 * j + f;
-                t5_line(expv[11:0]);
+                sp_line("T5 ", expv[11:0]);
             end
         end
         // (d) 480i letterbox-mapped walk (+2/+4 steps), both fields
@@ -583,7 +602,7 @@ module crt_ov_map_tb;
             sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
             for (j = 0; j < 60; j = j + 1) begin
                 expv = 2 * (lb_k(j) + ((lb_r(j) == 2) ? 1 : 0)) + f;
-                t5_line(expv[11:0]);
+                sp_line("T5 ", expv[11:0]);
             end
         end
         $display("T5 spu_decode row-base adder (mapped walks): %s",
@@ -664,6 +683,109 @@ module crt_ov_map_tb;
         end
         v2x_en = 0; letterbox_en = 0; interlaced = 0;
         $display("T6 SIF vertical 2x inverse: %s", (errors != err0) ? "FAIL" : "PASS");
+        err0 = errors;
+
+        // ==============================================================
+        // T7 — subtitle-context RAW path (DVD-FORK FIX subtitle sawtooth):
+        //      geometry live, enables LOW = exactly what the emu context
+        //      gate produces for plain dialogue subtitles.
+        // ==============================================================
+        v_src_max = 12'd479;
+
+        // (a) the mapper is a wire: every raster line maps to itself,
+        //     bar band (>= VBAR+VBAND) included — no 0xFFF sentinel; and
+        //     x passes through untouched with crop geometry programmed.
+        set_geom(528, 720, 96);          // known crop geometry, crop_en stays 0
+        interlaced = 1;
+        for (f = 0; f < 2; f = f + 1) begin
+            v_pos_in = 12'hFFF; repeat (4) @(negedge clk);
+            for (v = f; v < 525; v = v + 2) begin
+                step_v(v[11:0]);
+                if (q_y_out !== v[11:0]) begin
+                    errors = errors + 1;
+                    if (errors < 40)
+                        $display("T7a FAIL (f%0d): raw v=%0d mapped to %0d (expected identity)",
+                                 f, v, q_y_out);
+                end
+            end
+        end
+        for (i = 0; i < 20; i = i + 1) begin
+            step_h(i[11:0] * 12'd36);
+            if (q_x_out !== i[11:0] * 12'd36) begin
+                errors = errors + 1;
+                if (errors < 40)
+                    $display("T7a FAIL: raw x=%0d mapped to %0d (expected identity)",
+                             i * 36, q_x_out);
+            end
+        end
+
+        // (b) raw 480i field walk through the REAL spu_decode, field top to
+        //     line 524 — crosses the letterbox band edge (VBAR+VBAND = 420)
+        //     into the bar band; every read must land on bmp[y*STRIDE+x].
+        sp_interlaced = 1;
+        for (f = 0; f < 2; f = f + 1) begin
+            sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
+            for (v = f; v < 525; v = v + 2) sp_line("T7b", v[11:0]);
+        end
+        $display("T7 subtitle-context raw path (bars reachable): %s",
+                 (errors != err0) ? "FAIL" : "PASS");
+        err0 = errors;
+
+        // ==============================================================
+        // T8 — context-toggle semantics
+        // ==============================================================
+        // (a) mapped field -> raw field -> mapped field, enable toggled only
+        //     in the inter-field idle: all three bit-correct (the walkers run
+        //     independent of the enables, so frame-top switching is clean and
+        //     the mapped walk is exact the instant it is re-selected).
+        interlaced = 1;
+        for (g = 0; g < 3; g = g + 1) begin
+            letterbox_en = (g != 1);             // toggled while v_pos_in idles at 0xFFF
+            v_pos_in = 12'hFFF; repeat (4) @(negedge clk);
+            for (v = 0; v < 525; v = v + 2) begin
+                step_v(v[11:0]);
+                if (g == 1) expv = v;            // raw field: identity
+                else if (v >= VBAR && v < VBAR + VBAND) begin
+                    j    = (v - VBAR) >> 1;      // mapped field: the T3 closed form
+                    expv = 2 * (lb_k(j) + ((lb_r(j) == 2) ? 1 : 0)) + (v & 1);
+                end else expv = 'hFFF;
+                if (q_y_out !== expv[11:0]) begin
+                    errors = errors + 1;
+                    if (errors < 40)
+                        $display("T8a FAIL (field %0d, %s): v=%0d mapped %0d expected %0d",
+                                 g, (g == 1) ? "raw" : "mapped", v, q_y_out, expv);
+                end
+            end
+        end
+        letterbox_en = 0;
+
+        // (b) a MID-FIELD raw->mapped coordinate jump stales spu_decode's
+        //     q_row_base (the walker only accepts {reset,+2,+4} steps), and the
+        //     next field top recovers it — the reason the emu context select is
+        //     committed on av_refresh_tick, never mid-frame.
+        sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
+        for (v = 0; v <= 198; v = v + 2) begin   // clean raw walk to line 198
+            @(negedge clk) sp_q_y = v[11:0];
+            repeat (3) @(negedge clk);
+        end
+        // display line 200 would be source line 186 under the letterbox map —
+        // a -12 jump the walker must reject, leaving the base parked at 198
+        got = 0;
+        @(negedge clk) sp_q_y = 12'd186;
+        repeat (3) @(negedge clk);
+        for (i = 200; i < 206; i = i + 1) begin
+            @(negedge clk) sp_q_x = i[11:0];
+            repeat (2) @(negedge clk);
+            if (sp_q_idx !== gold_px(186 * SP_STRIDE + i)) got = got + 1;
+        end
+        if (got == 0) begin
+            errors = errors + 1;
+            $display("T8b FAIL: mid-field coordinate jump did NOT stale the row base — the emu frame-top commit would be unnecessary");
+        end
+        // recovery: the next field top re-arms the walker
+        sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
+        for (v = 0; v < 30; v = v + 2) sp_line("T8b", v[11:0]);
+        $display("T8 context-toggle semantics: %s", (errors != err0) ? "FAIL" : "PASS");
 
         if (errors) begin $display("crt_ov_map_tb: FAIL (%0d errors)", errors); $finish; end
         $display("crt_ov_map_tb: ALL TESTS PASS");

@@ -292,7 +292,10 @@ NTSC + PAL SIF fill the CRT cleanly, normal DVDs unregressed.** In-core 2× fill
   hsrc=352, hextra=368; identity holds at any upscale ratio) and gains a closed-form
   `v2x_en` post-map for the line repeat (progressive `min((y+1)>>1, v_src_max)`,
   interlaced parity-preserving; 0xFFF bar sentinel preserved). The HUD un-clips as
-  a side effect (full 720-wide DE window).
+  a side effect (full 720-wide DE window). *(2026-09-02: the subtitle-context raw
+  path — `docs/crt_anamorphic.md` §9a — EXEMPTS the SIF fill: sub-720 subtitles
+  stay fully mapped in every context, since their bitmaps are authored in SIF
+  source space and raw coordinates would draw them quarter-screen.)*
 - **Sim**: `resample_chain_tb +sif=1` (every `+sif` run co-sims the addrgen
   `disp_y` walk against the 2× closed form — the `+linetag` memory-tag path was
   measured too elastic for an exact map check, see the TB's sif-walk comment;

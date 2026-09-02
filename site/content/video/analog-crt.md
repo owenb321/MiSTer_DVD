@@ -80,6 +80,16 @@ image is smooth rather than aliased.
 **Auto never selects Crop** — it chooses between Letterbox and Fit. Crop is a deliberate
 manual choice.
 
+!!! info "Unreleased"
+    **Subtitles are no longer scaled by Letterbox or Crop.** Dialogue subtitles now draw
+    at their authored position and full resolution, with clean edges — like a set-top
+    player, they may reach into the black bars rather than being squeezed with the
+    picture. (Previously they were repositioned by a nearest-line map, which gave
+    diagonal subtitle edges a sawtooth look.) Menu button art and highlights still track
+    the scaled picture so highlights land on their buttons, and sub-720 content
+    (MPEG-1/SIF, SVCD) keeps its scaled subtitles — those are authored at the smaller
+    picture size.
+
 ## Sub-720 content on a CRT
 
 MPEG-1 SIF (352×240 / 352×288), SVCD (480 wide) and the sub-D1 DVD sizes (704, 544) are

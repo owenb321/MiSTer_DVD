@@ -189,6 +189,15 @@ Subtitles are separate from captions and are drawn by the core, so they work on 
 **B8** to cycle them; `SUB OFF` means they are disabled. Some discs author menu subpictures
 with zero contrast, which is intentional on their part.
 
+### Subtitle edges look jagged on a CRT
+
+!!! info "Unreleased"
+    Fixed in the development build: with `Analog Aspect` on Auto or Letterbox for a 16:9
+    disc, subtitle edges used to stair-step (the subtitle layer was repositioned by a
+    nearest-line map while the picture got a proper blend). Subtitles now draw unscaled
+    at full resolution and may reach into the black bars — see
+    [Analog and CRT output](../video/analog-crt.md#analog-aspect).
+
 ## Navigation
 
 ### A menu option does the wrong thing, or `LINK FAIL`
