@@ -77,7 +77,7 @@ module gov_field_late_tb;
     .resample_wr_dta(resample_wr_dta), .resample_wr_en(resample_wr_en),
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full), .resample_wr_almost_full(resample_wr_almost_full),
     .busy(busy), .frame_late(frame_late), .video_live(), .pickup_hold(pickup_hold), .pause(1'b0),
-    .cur_show_out(cur_show_w), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(1'b0));
+    .cur_show_out(cur_show_w), .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(1'b0));
 
   always #5 clk = ~clk;
 
@@ -138,7 +138,12 @@ module gov_field_late_tb;
     refreshes = 0;
     waitclk(4);
     film_show = cur_show_w;
-    progressive_frame = 1'b0; repeat_first_field = 1'b0;   // NEXT frame = plain video
+    // NEXT frame = plain video. tff TOGGLES after an rff picture on a real disc
+    // (the 3-field T,B,T show ends on TOP, so the next picture starts BOTTOM to
+    // keep strict field alternation). Holding tff=1 here would be an authored-
+    // cadence break, and the field-parity corrector (2026-09-02) now rightly
+    // inserts a re-align field for it — which this measurement must not count.
+    progressive_frame = 1'b0; repeat_first_field = 1'b0; top_field_first = 1'b0;
     supply;
     @(posedge output_frame_rd);
     film_scans = refreshes;

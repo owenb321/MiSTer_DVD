@@ -43,6 +43,7 @@ module resample_addrgen (
   pickup_tick, pickup_show, refresh_tick_dbg,       // DVD-FORK (vid_err instrument)
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect): cadence verdicts
   det_video,                                        // DVD-FORK (Interlaced Out auto): sustained true-interlaced-video verdict
+  raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
   hcrop_en,                                         // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
   menu_ff,                                          // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
@@ -179,6 +180,13 @@ module resample_addrgen (
    * HARD-telecine film (progressive_frame==0, no rff) reads as video and gets Bob'd at
    * field rate — acceptable, no inverse-telecine attempted. See docs/interlaced_auto.md. */
   output             det_video;
+
+  /* DVD-FORK (field-parity corrector, 2026-09-02): 2-FF-synced level from the mixer —
+   * 1 while the most recent displayed frame-top began on the WRONG raster field parity
+   * (a TOP-field image scanned out during a bottom raster field or vice versa). Consumed
+   * by the corrector at the pickup decision below; qualified there by `interlaced`, so
+   * a progressive display never acts on it. Field-rate level, CDC-safe. */
+  input              raster_par_err;
 
   /* DVD-FORK (CRT anamorphic VERTICAL scaler, 2026-07-05): display-mode select for
    * the 4:3-CRT 16:9 handling. 0 = FIT (bypass — bit-identical to the pre-scaler
@@ -545,6 +553,89 @@ module resample_addrgen (
    * this wire so the hold is atomic (no half-taken pickups). */
   wire ofv_pickup = output_frame_valid && ~hold_freeze && ~pause;
 
+  /* ================= DVD-FORK (field-parity corrector, 2026-09-02) =================
+   * On an interlaced display the mixer maps each emitted field image onto the next
+   * raster field, and its frame-top matcher deliberately accepts EITHER parity slot
+   * (mixer.v display_first_pixel — the 3:2/drop "black fields" fix). The emitted field
+   * sequence normally alternates TOP/BOTTOM (authored cadence keeps strict alternation,
+   * and the STATE_REPEAT persistence re-scan below alternates too), so content parity
+   * and raster parity stay locked — but ONE odd perturbation flips the phase
+   * PERMANENTLY: every TOP image then scans out during a bottom raster field and vice
+   * versa, i.e. the whole picture sits one scan-line set off = the field-report "super
+   * aliased" CRT image (invisible under HDMI Bob, which is why it shipped unseen;
+   * visible on the analog fieldpass raster and ascal Weave). Observed phase breaks: a
+   * seek/flush released on an arbitrary first tff, the il_switch raster restart, an
+   * Analog Aspect walk's syncgen restart, a mixer underflow, cold-start lock. Toggling
+   * the output mode merely re-rolled the coin (the users' "toggle 3-4 times to fix").
+   *
+   * Correction = insert exactly ONE extra field (an odd insertion flips the slot
+   * phase back into alignment) by deferring a due pickup one refresh and re-scanning
+   * one field of the HELD frame — persistence-style, so the screen shows real content;
+   * cost one refresh (16.7 ms) per event, and a frame_late pulse hands that refresh to
+   * the frame-drop ledger (a B-drop removes an EVEN field count on video content, so
+   * the reclaim can never re-break parity). Two triggers, both evaluated at the pickup
+   * instant, both qualified by `interlaced` (the progressive display path is
+   * bit-identical by construction — par_ins can never assert there):
+   *  - FEED-FORWARD (alt_break): the pending picture's first field would repeat the
+   *    parity of the last displayed field (schedule head == last_image). Catches a
+   *    seek-released tff break BEFORE a single wrong field displays.
+   *  - FEEDBACK (par_fb): the mixer reports the on-screen frame-top landed on the
+   *    wrong raster parity (raster_par_err, 2-FF synced level). Catches what the
+   *    schedule cannot see: cold start, raster restarts, underflow slips. par_armed is
+   *    a hysteresis one-shot so the field-rate feedback latency (~1-2 refreshes + CDC)
+   *    cannot double-insert: one insertion per error assertion, re-armed when the
+   *    error level clears, plus a 4-refresh timeout re-arm for liveness in case an
+   *    insertion was absorbed while the level stayed high.
+   * Design + RED-testbench evidence: docs/field_parity.md. */
+  wire       nxt_first_top = progressive_sequence ? 1'b1 : top_field_first; // first field the pending pickup would emit (mirrors the image-build branches)
+  wire       alt_break = interlaced &&
+                         (((last_image == TOP)    &&  nxt_first_top) ||
+                          ((last_image == BOTTOM) && ~nxt_first_top));
+  reg        par_armed;
+  reg  [2:0] par_tmo;                  // completed refreshes since insertion while the error level stays high
+  wire       par_fb   = interlaced && raster_par_err && par_armed &&
+                        ((last_image == TOP) || (last_image == BOTTOM));
+  /* XOR, not OR — the triggers CANCEL when simultaneous. Slot arithmetic (fields land
+   * on strictly alternating raster slots; a frame-top is accepted at whichever slot
+   * comes next): a content alternation break on an ALIGNED stream would land the new
+   * head one slot early (alt_break: insert the OPPOSITE field to fill that slot
+   * aligned); an intact stream on a MISALIGNED raster needs a one-slot delay (par_fb:
+   * re-show the SAME field — it lands aligned on the next slot, and the resumed
+   * stream continues consistently); but a content break arriving while ALREADY
+   * misaligned lands the new head aligned by itself — two wrongs make a right,
+   * insert nothing. Inserting "opposite" on a par_fb would keep the misalignment AND
+   * manufacture a new alternation break for alt_break to un-fix — a livelock. */
+  wire       par_ins  = alt_break ^ par_fb;                      // insert one field instead of picking up
+  wire       par_slip = (state == STATE_INIT) && ofv_pickup && par_ins;  // the insertion event
+  /* Qualified pickup: every pickup-conditioned latch below consumes THIS instead of
+   * ofv_pickup, so on an insertion cycle the pending frame stays unconsumed (picked up
+   * one refresh later, schedule intact). The FSM's STATE_INIT arc keeps raw ofv_pickup —
+   * it must still advance to scan the inserted field. */
+  wire       pickup_go = ofv_pickup && ~par_ins;
+
+  always @(posedge clk)
+    if (~rst) begin
+      par_armed <= 1'b1;
+      par_tmo   <= 3'd0;
+    end else if (clk_en) begin
+      if (par_slip) begin
+        par_armed <= 1'b0;             // one insertion per error assertion
+        par_tmo   <= 3'd0;
+      end else if (~raster_par_err) begin
+        par_armed <= 1'b1;             // error observed clear: re-arm
+        par_tmo   <= 3'd0;
+      end else if (~par_armed && (state == STATE_NEXT_MB) && last_mb && last_y) begin
+        if (par_tmo == 3'd4) par_armed <= 1'b1;   // liveness: level stuck high 4 shown refreshes after an insertion
+        else                 par_tmo   <= par_tmo + 3'd1;
+      end
+    end
+
+  reg par_late_r;                      // hand the inserted refresh to the frame-drop ledger (cad_late_r pattern)
+  always @(posedge clk)
+    if (~rst) par_late_r <= 1'b0;
+    else if (clk_en) par_late_r <= par_slip;
+    else par_late_r <= par_late_r;
+
   /* next state logic */
   always @*
     case (state)
@@ -598,7 +689,7 @@ module resample_addrgen (
 
   always @(posedge clk)
     if (~rst) output_frame_rd <= 1'd0;
-    else if (clk_en) output_frame_rd <= (state == STATE_INIT) && ofv_pickup; // INIT is reached at hold release (the held frame re-scans in STATE_REPEAT), or during a cold start with nothing to hold
+    else if (clk_en) output_frame_rd <= (state == STATE_INIT) && pickup_go; // INIT is reached at hold release (the held frame re-scans in STATE_REPEAT), or during a cold start with nothing to hold; parity insertion defers the read one refresh
     else output_frame_rd <= output_frame_rd;
 
   /*
@@ -630,7 +721,7 @@ module resample_addrgen (
    * frames (progressive display), else SHOW_N. Paces the 3:2 cadence via persistence. */
   always @(posedge clk)
     if (~rst) cur_show <= SHOW_N;
-    else if (clk_en && (state == STATE_INIT) && ofv_pickup) cur_show <= show_next;
+    else if (clk_en && (state == STATE_INIT) && pickup_go) cur_show <= show_next;
     else cur_show <= cur_show;
 
   /* DVD-FORK FIX (cadence-slip corrector, see the show_next comment): step the
@@ -648,7 +739,7 @@ module resample_addrgen (
       cad_late_r <= 1'b0;
     end else if (clk_en) begin
       cad_late_r <= 1'b0;
-      if ((state == STATE_INIT) && ofv_pickup) begin
+      if ((state == STATE_INIT) && pickup_go) begin
         if (!cad_gate)                  cad_acc <= 4'sd0;
         else if (cad_next <= -5'sd5) begin
                                         cad_acc <= cad_next[3:0] + 4'sd5;
@@ -669,8 +760,8 @@ module resample_addrgen (
       pickup_show_r  <= 4'd0;
       refresh_tick_r <= 1'b0;
     end else if (clk_en) begin
-      pickup_tick_r  <= (state == STATE_INIT) && ofv_pickup;
-      if ((state == STATE_INIT) && ofv_pickup) pickup_show_r <= show_next;
+      pickup_tick_r  <= (state == STATE_INIT) && pickup_go;
+      if ((state == STATE_INIT) && pickup_go) pickup_show_r <= show_next;
       refresh_tick_r <= (state == STATE_NEXT_MB) && last_mb && last_y && video_live;
     end else begin
       pickup_tick_r  <= 1'b0;
@@ -721,7 +812,7 @@ module resample_addrgen (
   //  consumes det_ntsc — iverilog rejects declaration-after-use.)
   reg  [7:0] conf_video;                   // DVD-FORK (Interlaced Out auto): true-interlaced confidence
   reg        det_v;
-  wire       film_pickup = (state == STATE_INIT) && ofv_pickup;
+  wire       film_pickup = (state == STATE_INIT) && pickup_go;
   wire       rff_toggled = (repeat_first_field != rff_q);
   wire       good_ntsc   = progressive_frame && rff_toggled;   // clean 3:2 telecine frame
   always @(posedge clk)
@@ -826,7 +917,7 @@ module resample_addrgen (
 
   always @(posedge clk)
     if (~rst) frame_late <= 1'b0;
-    else if (clk_en) frame_late <= late_raw | late_ext | cad_late_r;  // DVD-FORK: cadence-slip deficit correction (film24; can't collide with late_raw — pickup vs REPEAT cycles)
+    else if (clk_en) frame_late <= late_raw | late_ext | cad_late_r | par_late_r;  // DVD-FORK: cadence-slip deficit correction (film24) + field-parity insertion — both pulse on pickup cycles, can't collide with late_raw (REPEAT cycles)
     else frame_late <= frame_late;
 
   /* DVD-FORK (av_sync STC reference): sticky "display has shown a decoded frame".
@@ -838,7 +929,7 @@ module resample_addrgen (
   always @(posedge clk)
     if (~rst) video_live <= 1'b0;
     else if (pickup_hold && ~pickup_hold_d) video_live <= 1'b0;  // clip load: re-arm
-    else if (clk_en && (state == STATE_INIT) && ofv_pickup) video_live <= 1'b1;
+    else if (clk_en && (state == STATE_INIT) && pickup_go) video_live <= 1'b1;
     else video_live <= video_live;
 
   /*
@@ -867,7 +958,7 @@ module resample_addrgen (
   always @(posedge clk)
     if (~rst) refresh_cnt <= 4'd0;
     else if (clk_en) begin
-      if ((state == STATE_INIT) && ofv_pickup)                refresh_cnt <= 4'd0;             // new frame picked up -> restart count
+      if ((state == STATE_INIT) && pickup_go)                 refresh_cnt <= 4'd0;             // new frame picked up -> restart count (a parity insertion keeps counting: the frame stays due)
       else if ((state == STATE_NEXT_MB) && last_mb && last_y)
         refresh_cnt <= (refresh_cnt == 4'd15) ? 4'd15 : refresh_cnt + 4'd1; // one refresh (image scan) done; saturate (see above)
     end
@@ -942,7 +1033,23 @@ module resample_addrgen (
         image_5 <= NO_OUTPUT;
         progressive_upscaling <= 1'b0;
       end
-    else if (clk_en && (state == STATE_INIT) && ofv_pickup) // build image sequence on pickup (INIT is reached paced)
+    else if (clk_en && par_slip) // DVD-FORK (field-parity corrector): insert ONE field of the HELD frame; the pending pickup waits one refresh
+      begin
+        image   <= NO_OUTPUT;
+        // par_fb (raster misaligned, content intact): re-show the SAME field — it lands
+        // aligned on the next slot. alt_break (content break, raster aligned): show the
+        // OPPOSITE field — it fills the slot the break would have skipped. par_ins
+        // guarantees last_image is TOP or BOTTOM. See the XOR note above.
+        image_0 <= par_fb ? last_image
+                          : ((last_image == TOP) ? BOTTOM : TOP);
+        image_1 <= NO_OUTPUT;
+        image_2 <= NO_OUTPUT;
+        image_3 <= NO_OUTPUT;
+        image_4 <= NO_OUTPUT;
+        image_5 <= NO_OUTPUT;
+        progressive_upscaling <= progressive_upscaling;
+      end
+    else if (clk_en && (state == STATE_INIT) && pickup_go) // build image sequence on pickup (INIT is reached paced)
       begin
         /*
          * display progressive sequence on progressive display. Display frames.
@@ -1089,13 +1196,13 @@ module resample_addrgen (
   /* save output_frame */
   always @(posedge clk)
     if (~rst) output_frame_sav <= 3'b0;
-    else if (clk_en && (state == STATE_INIT) && ofv_pickup) output_frame_sav <= output_frame;
+    else if (clk_en && (state == STATE_INIT) && pickup_go) output_frame_sav <= output_frame;
     else output_frame_sav <= output_frame_sav;
 
   /* determine frame, top, bottom sequence */
   always @(posedge clk)
     if (~rst) encoder_bug_workaround <= 1'b0;
-    else if (clk_en && (state == STATE_INIT) && ofv_pickup) encoder_bug_workaround <= progressive_frame && repeat_first_field;
+    else if (clk_en && (state == STATE_INIT) && pickup_go) encoder_bug_workaround <= progressive_frame && repeat_first_field;
     else encoder_bug_workaround <= encoder_bug_workaround;
 
   always @(posedge clk)

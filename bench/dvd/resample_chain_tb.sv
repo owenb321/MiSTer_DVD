@@ -224,7 +224,7 @@ module resample_chain_tb;
     .y(px_y), .u(px_u), .v(px_v), .osd_out(px_osd),
     .position_out(px_position), .pixel_wr_en(px_wr_en),
     .video_live(), .pickup_hold(1'b0), .pause(1'b0),
-    .vscale_mode(rs_vscale_mode),              // DVD-FORK (CRT anamorphic vscale: letterbox)
+    .raster_par_err(1'b0), .vscale_mode(rs_vscale_mode),              // DVD-FORK (CRT anamorphic vscale: letterbox)
     .hcrop_en(rs_hcrop_en),                    // DVD-FORK (CRT anamorphic horizontal crop)
     .menu_ff(1'b0),                            // DVD-FORK (menu VBUF-lag §5): not exercised here
     .film24(1'b0)                              // DVD-FORK (Film 24p Out): not exercised here

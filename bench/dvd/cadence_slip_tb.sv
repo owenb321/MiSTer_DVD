@@ -73,7 +73,7 @@ module cadence_slip_tb;
     .det_video(det_video),
     .video_live(), .pickup_hold(1'b0), .pause(1'b0),
     .refresh_tick_dbg(refresh_tick_w),
-    .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(film24));
+    .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(film24));
 
   always #5 clk = ~clk;
 

@@ -46,6 +46,7 @@ module resample(
   pickup_tick, pickup_show, refresh_tick_dbg,       // DVD-FORK (vid_err instrument)
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect)
   det_video,                                        // DVD-FORK (Interlaced Out auto): true-interlaced verdict
+  raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
   hcrop_en,                                         // DVD-FORK (CRT anamorphic horizontal crop)
   menu_ff,                                          // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
@@ -105,6 +106,7 @@ module resample(
   output             film_det_ntsc;               // DVD-FORK (Film 24p auto-detect): sustained 3:2 telecine verdict (NTSC 24p)
   output             film_det_pal;                // DVD-FORK (Film 24p auto-detect): sustained progressive verdict (PAL 25p)
   output             det_video;                   // DVD-FORK (Interlaced Out auto): sustained true-interlaced-video verdict (480i/576i)
+  input              raster_par_err;              // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (2-FF synced level)
   input        [1:0] vscale_mode;                 // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox
   input              hcrop_en;                    // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
   input              menu_ff;                      // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
@@ -170,6 +172,7 @@ module resample(
     .film_det_ntsc(film_det_ntsc),                 // DVD-FORK (Film 24p auto-detect)
     .film_det_pal(film_det_pal),
     .det_video(det_video),                         // DVD-FORK (Interlaced Out auto)
+    .raster_par_err(raster_par_err),               // DVD-FORK (field-parity corrector)
     .vscale_mode(vscale_mode),                     // DVD-FORK (CRT anamorphic vscale)
     .hcrop_en(hcrop_en),                           // DVD-FORK (CRT anamorphic horizontal crop)
     .menu_ff(menu_ff),                             // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu

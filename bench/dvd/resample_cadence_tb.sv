@@ -70,7 +70,7 @@ module resample_cadence_tb;
     .disp_wr_addr_ack(disp_wr_addr_ack), .disp_wr_addr(disp_wr_addr),
     .resample_wr_dta(resample_wr_dta), .resample_wr_en(resample_wr_en),
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full), .resample_wr_almost_full(resample_wr_almost_full),
-    .busy(busy), .frame_late(frame_late), .video_live(), .pickup_hold(1'b0), .pause(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(1'b0));
+    .busy(busy), .frame_late(frame_late), .video_live(), .pickup_hold(1'b0), .pause(1'b0), .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(1'b0));
 
   always #5 clk = ~clk;
 
