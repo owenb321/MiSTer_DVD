@@ -198,6 +198,8 @@ are untouched.
 - [ ] Toggling `Video Output` mid-title: the chapter-seek-style interruption, then clean.
 
 ## 6. Follow-ups
+- Done in round 2 (user decision): the idle logo moves on every FIELD tick in Interlaced
+  (`dvd/idle_logo.sv`; the old every-other-field divider made it half speed on the CRT).
 - Native 13.5 MHz dot pacing (720-wide internally) — only if a reason appears; needs the
   overlay query-lead constants re-tuned (`HUD_QX_ADJ`, `BAR_QX_ADJ`, `LOGO_QX_LEAD`,
   `SP_QX_ADJ`, `crt_ov_map`, `cc_vbi`).

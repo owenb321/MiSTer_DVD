@@ -44,9 +44,14 @@
 //    and bank 0 renders, bit-identical to a fresh boot.
 //  - last_addr is tracked locally on ioctl_wr: sampling ioctl_addr at the
 //    falling edge of ioctl_download races hps_io's same-cycle update.
-//  - frame_tick (emu's av_refresh_tick) is per-FIELD when interlaced -- the
-//    fld_tog divider halves it under il_mode or the two fields of a frame
-//    would sample the logo at positions SPY/16 px apart (edge comb on CRTs).
+//  - frame_tick (emu's av_refresh_tick) is per-FIELD when interlaced, and the
+//    logo now moves on EVERY tick (2026-09-03, user decision after HW round 1 of
+//    the single-raster analog build: "the logo is slower in Interlaced"). The
+//    earlier fld_tog divider halved it so the two fields of a frame sampled one
+//    position (no edge comb on a woven frame); the cost was half-speed motion on
+//    the CRT for a one-pixel comb nobody sees on a bouncing logo. Per-field
+//    motion is what an interlaced camera pan looks like. il_mode is kept as a
+//    port (unused) so emu's wiring and the bench stay put.
 //  - LOGO_QX_LEAD is a SUBTRACTED horizontal lead, like the subpicture's
 //    SP_QX_ADJ and UNLIKE the HUD/seek-bar's added constants. ⚠ HW round 3
 //    (2026-08-26) disproved this file's original "needs no calibration"
@@ -214,11 +219,10 @@ always @(posedge clk) begin
 end
 
 // ---------------------------------------------------------------------------
-// Frame tick: halve under interlace (trap: per-field v_sync)
+// Frame tick: every refresh, field or frame (see the header note on il_mode)
 // ---------------------------------------------------------------------------
-reg fld_tog = 1'b0;
-always @(posedge clk) if (frame_tick) fld_tog <= ~fld_tog;
-wire tick = frame_tick & (~il_mode | fld_tog);
+wire tick = frame_tick;
+wire il_mode_unused = il_mode;
 
 // ---------------------------------------------------------------------------
 // Motion: Q12.4 position, clamp-bounce, entropy-re-rolled speeds, palette

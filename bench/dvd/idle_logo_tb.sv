@@ -7,7 +7,7 @@
 // Covers (plan: docs/idle_screen.md):
 //   T1  bounds hold over 20k ticks, NTSC          T2  same, PAL (and reaches it)
 //   T3  colour changes on bounce and only then    T4  corner flash needs BOTH axes
-//   T5  interlaced field divider (every other)    T6  vis=0 -> logo_on never
+//   T5  interlaced: moves on EVERY field tick      T6  vis=0 -> logo_on never
 //   T7  ioctl happy path (fixture: 64x16)         T8  bad magic -> zero writes
 //   T9  truncated -> logo_valid 0, bank 0 intact  T10 oversized -> writes clamped
 //   T11 wrong ioctl_index -> untouched            T12 replace A -> B
@@ -183,19 +183,18 @@ initial begin
     // let the flash decay
     for (i = 0; i < 50; i = i + 1) tick;
 
-    // T5: interlaced divider -- position updates every OTHER tick.
-    // Watch the Q12.4 accumulator, not integer py (spy/16 px per update
-    // means the INTEGER part only moves on a sub-cadence).
+    // T5: interlaced -- position updates on EVERY field tick (the old every-
+    // other divider was dropped 2026-09-03; same speed as progressive).
+    // Watch the Q12.4 accumulator, not integer py.
     il_mode = 1; moved = 0;
-    dut.fld_tog = 1'b0;
     for (i = 0; i < 10; i = i + 1) begin
         pyq_prev = dut.pyq; tick;
         if (dut.pyq !== pyq_prev) moved = moved + 1;
     end
-    if (moved != 5) begin
+    if (moved != 10) begin
         $display("  moved on %0d of 10 field ticks", moved);
-        fail("T5 field divider");
-    end else $display("T5 interlaced field divider PASS");
+        fail("T5 per-field motion");
+    end else $display("T5 interlaced per-field motion PASS");
     il_mode = 0;
 
     // T6: vis=0 -> logo_on never asserts across a full frame scan
