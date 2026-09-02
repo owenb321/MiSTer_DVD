@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <time.h>
 #include <errno.h>
 #include <dirent.h>
@@ -53,6 +54,35 @@ static uint32_t chord_since = 0;   // 0 = chord not currently held
 static int      fired       = 0;   // one bundle per press-and-hold
 static pid_t    child       = -1;
 static char     out_path[320];
+
+// Append-only trace. The OSD popup is timed and has to be transcribed by hand,
+// which cost several debugging rounds; this can just be cat'd.
+static void rep_log(const char *fmt, ...)
+{
+	va_list ap;
+	static int stamped = 0;
+	FILE *f = fopen("/tmp/dvd_report.log", "a");
+	if (f)
+	{
+		// Which binary is actually running? Several debugging rounds were lost
+		// to a stale copy that was indistinguishable by size, so the log says
+		// for itself rather than relying on an md5 taken at another time.
+		if (!stamped)
+		{
+			stamped = 1;
+			fprintf(f, "--- dvd_report built " __DATE__ " " __TIME__ " ---\n");
+		}
+		va_start(ap, fmt);
+		vfprintf(f, fmt, ap);
+		va_end(ap);
+		fputc('\n', f);
+		fclose(f);
+	}
+	va_start(ap, fmt);
+	vprintf(fmt, ap);
+	va_end(ap);
+	printf("\n");
+}
 
 static uint32_t now_ms(void)
 {
@@ -104,8 +134,18 @@ static const char *find_cfg(char *buf, size_t len)
 // every sector it reads is unscrambled (see docs/bug_reports.md).
 void dvd_report_note_mount(const char *path)
 {
-	if (!path || !path[0]) { mounted_path[0] = 0; return; }         // unmount
-	if (!strcmp(path, DVD_PHYS_SENTINEL)) { mounted_path[0] = 0; return; }
+	if (!path || !path[0])
+	{
+		rep_log("DVD_REPORT: mount hook: (empty) -> cleared");
+		mounted_path[0] = 0;
+		return;
+	}
+	if (!strcmp(path, DVD_PHYS_SENTINEL))
+	{
+		rep_log("DVD_REPORT: mount hook: sentinel -> cleared");
+		mounted_path[0] = 0;
+		return;
+	}
 
 	// ⚠ Mount paths are RELATIVE to getRootDir() unless they start with '/' --
 	// make_fullpath() in file_io.cpp does this expansion, and everything inside
@@ -116,6 +156,7 @@ void dvd_report_note_mount(const char *path)
 		snprintf(mounted_path, sizeof(mounted_path), "%s", path);
 	else
 		snprintf(mounted_path, sizeof(mounted_path), "%s/%s", getRootDir(), path);
+	rep_log("DVD_REPORT: mount hook: %s -> %s", path, mounted_path);
 }
 
 static const char *find_source(void)
@@ -159,9 +200,9 @@ static void start(void)
 		         dvd_css_active(), dev ? dev : "(none)",
 		         mounted_path[0] ? mounted_path : "(not captured)");
 		InfoMessage(msg, 8000, "DVD");
-		printf("DVD_REPORT: no source (css=%d dev=%s mount=%s)\n",
-		       dvd_css_active(), dev ? dev : "-",
-		       mounted_path[0] ? mounted_path : "-");
+		rep_log("DVD_REPORT: NO SOURCE (css=%d dev=%s mount=%s)",
+		        dvd_css_active(), dev ? dev : "-",
+		        mounted_path[0] ? mounted_path : "-");
 		return;
 	}
 
@@ -198,8 +239,8 @@ static void start(void)
 		if (sp && sp[1]) ver = sp + 1;
 	}
 
-	printf("DVD_REPORT: %s -> %s (lba %s, ver %s)\n",
-	       src, out_path, have_lba ? lba : "n/a", ver ? ver : "n/a");
+	rep_log("DVD_REPORT: src=%s out=%s lba=%s ver=%s",
+	        src, out_path, have_lba ? lba : "n/a", ver ? ver : "n/a");
 
 	pid_t p = fork();
 	if (p < 0)
@@ -226,7 +267,7 @@ static void start(void)
 		if (ver)      { argv[i++] = "--core-version"; argv[i++] = ver; }
 		argv[i] = 0;
 
-		freopen("/tmp/dvd_report.log", "w", stdout);
+		freopen("/tmp/dvd_report_run.log", "w", stdout);
 		dup2(fileno(stdout), fileno(stderr));
 		execvp("python3", (char * const *)argv);
 		_exit(127);
@@ -258,7 +299,7 @@ static void reap(void)
 	{
 		// python3 missing, an unreadable disc, or a tool error. The child's
 		// output is in /tmp/dvd_report.log — say so rather than swallowing it.
-		InfoMessage("Support bundle FAILED\nsee /tmp/dvd_report.log", 5000, "DVD");
+		InfoMessage("Support bundle FAILED\nsee /tmp/dvd_report_run.log", 5000, "DVD");
 	}
 }
 
