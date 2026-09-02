@@ -61,10 +61,11 @@ fi
 # 2. Copy the self-contained overlay (Makefile auto-globs support/*/*.cpp).
 echo "-- applying overlay"
 mkdir -p "$STOCK/support/dvd" "$STOCK/Scripts"
-cp "$HERE"/support/dvd/dvd_css.cpp  "$HERE"/support/dvd/dvd_css.h  "$STOCK/support/dvd/"
-cp "$HERE"/support/dvd/dvd_detect.cpp "$HERE"/support/dvd/dvd_detect.h "$STOCK/support/dvd/"
-cp "$HERE"/support/dvd/dvd_phys.cpp "$HERE"/support/dvd/dvd_phys.h "$STOCK/support/dvd/"
-cp "$HERE"/support/dvd/dvd_hdmi_audio.cpp "$HERE"/support/dvd/dvd_hdmi_audio.h "$STOCK/support/dvd/"
+# Copy the WHOLE overlay dir, not a hand-maintained file list. The list form
+# silently omitted dvd_report.* when it was added, and the failure surfaces far
+# away as "user_io.cpp: support/dvd/dvd_report.h: No such file or directory" --
+# everything under main/support/dvd/ is ours and belongs in the build.
+cp "$HERE"/support/dvd/*.cpp "$HERE"/support/dvd/*.h "$STOCK/support/dvd/"
 cp "$HERE"/Scripts/install_dvdcss.sh "$STOCK/Scripts/"
 
 # 3. Patch user_io.cpp / user_io.h / Makefile.

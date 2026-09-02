@@ -24,6 +24,23 @@ themselves; the ones that persist are describing a condition, not an event.
     means it read the file and could not play it. See
     [Troubleshooting](../reference/troubleshooting.md#nothing-plays).
 
+## Support bundle
+
+!!! info "Unreleased"
+    Available in development builds; not in v0.3.0. Needs `MiSTer_DVDcss`.
+
+Shown when you hold **Audio + Subtitle** for two seconds to write a
+[support bundle](../reference/reporting-a-bug.md#or-make-one-on-the-mister-itself).
+
+| Message | Meaning |
+|---|---|
+| `Generating support bundle...` | Started. It runs in the background, so playback carries on. |
+| `Support bundle written to DVD_reports/…` | Done — that is the file to attach to an issue. |
+| `Nothing to bundle` | No image or disc was found. The lines beneath say what was seen; `mounted: (not captured)` with a disc playing is a bug worth reporting. |
+| `Support bundle needs dvd_report.py` | Put `dvd_report.py` in `/media/fat/Scripts/` — the release zip does this for you. |
+| `Support bundle FAILED` | The collector errored. `/tmp/dvd_report_run.log` says why; the usual cause is a missing or very old python3. |
+| `Could not start bundle generation` | The player could not spawn the collector at all. |
+
 ## Transport popups
 
 These appear briefly when you change something, and are not errors:

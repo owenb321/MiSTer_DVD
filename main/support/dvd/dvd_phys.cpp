@@ -25,6 +25,7 @@
 #define DVD_PHYS_SCAN_PERIOD_S 1
 
 static int    mounted = 0;         // 1 while a DVD-Video disc is mounted into the core
+static char   mounted_dev[16] = {0};  // its /dev/srN, exported by dvd_phys_device()
 static time_t last_scan = 0;
 static time_t reset_release_at = 0; // >0 while an eject reset pulse is being held
 
@@ -80,6 +81,7 @@ void dvd_phys_tick(void)
 			printf("DVD_PHYS: disc removed, unmounting + reset to idle\n");
 			user_io_file_mount("", 0);
 			dvd_css_close();
+			mounted_dev[0] = 0;
 			user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
 			reset_release_at = now + 1;      // release after ~1 s (see the tick top)
 			mounted = 0;
@@ -100,5 +102,14 @@ void dvd_phys_tick(void)
 	// (see the SD_TYPE_DVDCSS handling in user_io.cpp). dvd_css_open() inside it
 	// re-scans for the drive and runs the CSS handshake; a failure there (no
 	// libdvdcss on an encrypted disc) surfaces the on-screen install prompt.
-	if (user_io_file_mount(DVD_PHYS_SENTINEL, 0)) mounted = 1;
+	if (user_io_file_mount(DVD_PHYS_SENTINEL, 0))
+	{
+		mounted = 1;
+		snprintf(mounted_dev, sizeof(mounted_dev), "%s", dev);
+	}
+}
+
+const char *dvd_phys_device(void)
+{
+	return mounted_dev[0] ? mounted_dev : 0;
 }

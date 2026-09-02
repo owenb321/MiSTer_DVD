@@ -18,6 +18,7 @@ that when something does not play, you can tell which piece is missing.
 | **Physical disc — CSS-encrypted** *(most commercial discs)* | — | — | ✓ |
 | **CSS-encrypted ISO** — *no optical drive needed* | — | — | ✓ |
 | Recovered-key caching (slow only on first play) | — | — | ✓ |
+| Support bundle from the player itself *(unreleased)* | — | ✓ | ✓ |
 
 ## The three pieces
 

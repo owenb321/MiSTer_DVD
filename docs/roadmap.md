@@ -3,6 +3,29 @@
 > Speculative "might-be-interesting" ideas that are **not** committed here live in
 > [`docs/experiments.md`](experiments.md). Move an item over once it's decided.
 
+> **How to read the checklists.** This file is mostly a **record of work already
+> done** — phase-by-phase, with the root causes and the theories that turned out
+> wrong — rather than a live plan. Four markers, and they are kept honest because
+> a stale one misdirects a cold session as surely as a wrong comment:
+>
+> - `- [x]` — done. Some carry a note where the outcome differed from the plan.
+> - `- ⛔ **[superseded — why]**` — the item is no longer wanted *as written*,
+>   because the approach changed under it. Kept, not deleted: the reason it was
+>   dropped is usually more useful than the item was.
+> - `- ⛔ **[dropped — why]**` — reviewed and decided against. Not the same as
+>   superseded: nothing changed underneath it, it simply is not wanted.
+> - `- [ ]` — genuinely still open. **There are none left.**
+>
+> Reconciled 2026-09-01. First pass: 23 ticked, 15 marked superseded — most of the
+> stale ones were Phase-0 setup tasks ("fork the repo", "install Quartus") left
+> unticked for 890 commits, which read as though the project had never started.
+> Second pass: the 9 remaining open items were reviewed one by one and all closed —
+> several were already answered by work that had shipped, two by their own bodies,
+> and the rest dropped by decision.
+>
+> **So this file no longer carries any forward plan, and should not be read as one.**
+> It is the development record. New work is tracked on GitHub.
+
 ## Guiding Principles
 
 - **★ Self-contained `.rbf` — NO HPS-side daemon (project owner's hard requirement).**
@@ -28,16 +51,16 @@
 **Goal:** Working build environment, upstream core running on hardware.
 
 ### Tasks
-- [ ] Fork `mrchrisster/MiSTer_MPEG2` → your GitHub account as `MiSTer_DVD`
-- [ ] Add upstream as remote: `git remote add upstream https://github.com/mrchrisster/MiSTer_MPEG2.git`
-- [ ] Install Quartus **17.0.2** with Cyclone V device support
-- [ ] Install VS Code extensions: `mshr-h.verilog`, `teros-technology.teroshdl`, `ms-vscode.cpptools`
-- [ ] Set up `.vscode/settings.json` (see CLAUDE.md)
+- [x] Fork `mrchrisster/MiSTer_MPEG2` → your GitHub account as `MiSTer_DVD`
+- [x] Add upstream as remote: `git remote add upstream https://github.com/mrchrisster/MiSTer_MPEG2.git`
+- [x] Install Quartus **17.0.2** with Cyclone V device support
+- [x] Install VS Code extensions: `mshr-h.verilog`, `teros-technology.teroshdl`, `ms-vscode.cpptools`
+- [x] Set up `.vscode/settings.json` (see CLAUDE.md)
 - [x] Rename `.qpf` / `.qsf` / `.qdf` revision from `mpeg2fpga` → `DVD` (done)
-- [ ] Compile in Quartus — verify bitstream generates without errors
-- [ ] Load on DE10-Nano via USB Blaster, test with a sample `.mpg` file
-- [ ] Create directory structure: `dvd/`, `hps/`, `bench/dvd/`
-- [ ] Verify lsmod / kernel: `find /lib/modules -name 'sr_mod.ko'` (expect: not found — confirm ISO-only strategy)
+- [x] Compile in Quartus — verify bitstream generates without errors
+- [x] Load on DE10-Nano via USB Blaster, test with a sample `.mpg` file
+- [x] Create directory structure: `dvd/`, `hps/`, `bench/dvd/`
+- [x] Verify lsmod / kernel: `find /lib/modules -name 'sr_mod.ko'` (expect: not found — confirm ISO-only strategy)  *(answered — sr_mod IS present; physical discs play via /dev/srN)*
 
 **Checkpoint:** Upstream MPEG-2 player works on hardware. You can see video from a `.mpg` file.
 
@@ -71,8 +94,8 @@ interleaved in packets. The demuxer separates them.
   held handshake). Compiles in Quartus, configures on hardware, OSD reached.
 
 ### HPS Tasks
-- [ ] Modify `hps/main.cpp` to open an ISO instead of a raw `.mpg` file
-- [ ] Stub out audio ring buffer read loop (just log audio frame type/size for now)
+- ⛔ **[superseded — the HPS daemon was retired 2026-06-27; playback is all in fabric]** Modify `hps/main.cpp` to open an ISO instead of a raw `.mpg` file
+- ⛔ **[superseded — as above — audio_ring is read in fabric, not by an HPS loop]** Stub out audio ring buffer read loop (just log audio frame type/size for now)
 
 **Checkpoint:** Video still plays correctly (same quality as Phase 0). Console log
 shows audio frames being correctly identified as AC-3/DTS/LPCM with correct sizes.
@@ -264,12 +287,12 @@ DVD VOB (program stream with audio + nav packs) has not been tested end-to-end. 
      Covered by `bench/dvd/ps_demux_nav_tb.sv` (embeds a fake `00 00 01 E0` inside
      a nav payload and proves only the real video PES reaches the output); the
      real-Matrix-VOB `ps_chain_tb` still passes byte-for-byte (50,395 bytes).
-   - [ ] **Multi-sequence / repeated sequence headers.** Each VOB cell can carry
+   - ⛔ **[superseded — the symptom (repeated resolution change) was root-caused elsewhere — the mb-padded picture split + the VERT_RES off-by-one, both fixed 2026-06-24]** **Multi-sequence / repeated sequence headers.** Each VOB cell can carry
      its own sequence header; the repeated resolution change suggests the decoder
      is re-initialising per cell or on corrupted headers. Confirm the demuxed
      video ES is a clean, continuous elementary stream (dump `vid_byte` to SD /
      UART and compare against a known-good `.m2v` extracted with `ffmpeg`).
-   - [ ] **Unbounded video PES (`PES_packet_length == 0`).** Documented
+   - ⛔ **[superseded — ISO 13818-1 §2.4.3.7 permits length 0 only for video PES inside TRANSPORT streams; DVD is a Program Stream, so it cannot legally occur. Measured 0 of 3,395 video PES headers across 13 discs. ⚠ If it ever did occur the 16-bit counter would WRAP and eat ~64 KB — noted in ps_demux.sv]** **Unbounded video PES (`PES_packet_length == 0`).** Documented
      limitation in `ps_demux` — rare in VOBs but verify the test file doesn't use
      it; add the start-code-hunt fallback if needed.
 
@@ -301,9 +324,9 @@ LPCM is the easiest codec (no decode needed) so it's the right first audio targe
     `frames_available`, `bytes_available`, `overflow_count`.
   - See CLAUDE.md → "audio_ring.sv — Status & design decisions" for the full
     rationale and the length-deferred-finalize limitation.
-- [ ] **Next:** wire `audio_ring` into `dvd/emu.sv` (replace the `aud_ready=1'b1`
+- [x] **Next:** wire `audio_ring` into `dvd/emu.sv` (replace the `aud_ready=1'b1`
   park) and expose its status on `status`/debug-overlay bits.
-- [ ] **Next:** add the HPS read path — `ioctl_upload` wiring in the `hps_io`
+- ⛔ **[superseded — no HPS read path exists; dvd_audio_decode consumes the ring in fabric]** **Next:** add the HPS read path — `ioctl_upload` wiring in the `hps_io`
   instance + an HPS-side reader.
   - ~~Read port: Avalon-MM slave, accessible by HPS via `f2sdram` bridge~~
     (superseded — ioctl_upload chosen instead).
@@ -317,7 +340,7 @@ LPCM is the easiest codec (no decode needed) so it's the right first audio targe
   dispatch + ALSA. LPCM implemented (sub-header already stripped by `ps_demux`, so
   just big-endian→little-endian + write). AC-3/DTS behind `HAVE_A52`/`HAVE_DCA`.
   `hps/Makefile` + `hps/README.md`. Host-compiles clean; **not yet run on hardware**.
-- [ ] **Bring-up:** `./dvd_audio --probe` on HW → magic "DVDA" + write_seq climbing;
+- ⛔ **[superseded — the dvd_audio daemon was deleted in the pre-release cleanup]** **Bring-up:** `./dvd_audio --probe` on HW → magic "DVDA" + write_seq climbing;
   then `./dvd_audio` for LPCM playback on an LPCM disc.
 
 **Checkpoint:** DVDs with LPCM audio (find test discs with LPCM track) play with
@@ -335,11 +358,11 @@ synchronised audio and video on HDMI. Use a movie with stereo LPCM to test.
 This covers the vast majority of commercial DVD releases.
 
 ### HPS Tasks
-- [ ] Cross-compile or build liba52 for ARM (or find it in MiSTer's Linux environment)
-- [ ] Write AC-3 decode path in `hps/audio_decode.c` (see audio.md for code)
-- [ ] Test: `a52dec` command-line tool on MiSTer to verify liba52 works before integrating
-- [ ] Integrate into ring buffer read loop
-- [ ] Basic A/V sync: dual frame counter approach (see architecture.md)
+- ⛔ **[superseded — AC-3 decodes in fabric (dvd/ac3/*); no liba52 on the ARM]** Cross-compile or build liba52 for ARM (or find it in MiSTer's Linux environment)
+- ⛔ **[superseded — replaced by dvd/ac3/* + dvd/dvd_audio_decode.sv]** Write AC-3 decode path in `hps/audio_decode.c` (see audio.md for code)
+- ⛔ **[superseded — no liba52 dependency to verify]** Test: `a52dec` command-line tool on MiSTer to verify liba52 works before integrating
+- ⛔ **[superseded — the ring is consumed in fabric]** Integrate into ring buffer read loop
+- ⛔ **[superseded — replaced by the PTS-driven STC in dvd/av_sync.sv]** Basic A/V sync: dual frame counter approach (see architecture.md)
 
 ### Testing
 - Most commercial DVDs are AC-3 2.0 or 5.1 — choose a simple 2.0 disc first
@@ -389,9 +412,9 @@ ifo_handle_t *vmgi = ifoOpen(dvd, 0);    // VIDEO_TS.IFO
 
 **Option B: Write minimal UDF parser**
 If you want more control or can't build libdvdread for MiSTer's ARM:
-- [ ] `hps/udf.c` — parse UDF Volume Descriptor Sequences
-- [ ] Find `VIDEO_TS/` directory, enumerate `.IFO` and `.VOB` files
-- [ ] `hps/ifo_parse.c` — parse title structure
+- ⛔ **[superseded — UDF is still unsupported, but it would be parsed in fabric, not in hps/udf.c]** `hps/udf.c` — parse UDF Volume Descriptor Sequences
+- [x] Find `VIDEO_TS/` directory, enumerate `.IFO` and `.VOB` files
+- ⛔ **[superseded — IFO parsing lives in dvd/dvd_iso_reader.sv + dvd/dvd_vm.sv]** `hps/ifo_parse.c` — parse title structure
   - Read `VIDEO_TS.IFO` → find main title set
   - Read `VTS_XX_0.IFO` → find main PGC (longest = main feature heuristic)
   - Get ordered list of VOB cell addresses
@@ -399,9 +422,9 @@ If you want more control or can't build libdvdread for MiSTer's ARM:
 **For v1:** Skip menu navigation. Use "longest PGC = main feature" heuristic.
 
 ### CSS Encryption Integration
-- [ ] Link libdvdcss into HPS program
-- [ ] Replace `open()`/`read()` with `dvdcss_open()`/`dvdcss_read(DVDCSS_READ_DECRYPT)`
-- [ ] Test with both unencrypted ISOs and CSS-encrypted rips
+- [x] Link libdvdcss into HPS program
+- [x] Replace `open()`/`read()` with `dvdcss_open()`/`dvdcss_read(DVDCSS_READ_DECRYPT)`
+- [x] Test with both unencrypted ISOs and CSS-encrypted rips
 
 **Checkpoint:** Drop an ISO of any commercial DVD onto the SD card. Core automatically
 finds the main feature, navigates to it, and plays from start.
@@ -427,7 +450,7 @@ finds the main feature, navigates to it, and plays from start.
 - [x] HPS half: `main/support/dvd/dvd_hdmi_audio.cpp` (EDID Short Audio Descriptors +
   `hdmi_config_set_audio()`), gated by a `cfg[14]` ack so **stock Main is safe by
   construction** — no ack, no bitstream, no noise.
-- [ ] **HW gate:** receiver names DD/DTS and plays 5.1; locks at startup without a chapter
+- [x] **HW gate:** receiver names DD/DTS and plays 5.1; locks at startup without a chapter
   skip; a plain TV stays silent, never noisy; stock Main unchanged.
 - Design + the open preamble-nibble assumption: **`docs/hdmi_bitstream.md`**.
 
@@ -449,7 +472,7 @@ av_sync). Fixed by slaving the burst release to the video STC (`head_delta ≥ 0
   `frame_len` from the sync gap (contiguous frames). Verified on a real T2 DTS track.
 - [x] iec61937_wrap: Pc=`0x000B` for DTS; LPCM/unknown → silence guard. Burst period = 512
   (T2-correct; NBLKS-snoop deferred, see docs/iec61937.md).
-- [ ] **HW gate:** DTS VOB → receiver shows "DTS", plays clean + in sync. (Concert DVDs —
+- [x] **HW gate:** DTS VOB → receiver shows "DTS", plays clean + in sync. (Concert DVDs —
   many have DTS as the primary track. T2 is a known DTS disc.)
 
 ---
@@ -543,7 +566,7 @@ motion-comp starvation that caused the misses (keep Frame Drop On as a safety ne
   (a strict consecutive-run counter never locked through menu/VM-path cadence hiccups).
 
 **Remaining follow-ups:**
-- [ ] **Motion-comp throughput rewrite (high-motion / PAL stutter)** — staged attack on the
+- ⛔ **[superseded — the item's own body retracts it: Matrix was a SOURCE-FILE defect (reproduces in VLC), and both genuine cases were fixed without a datapath rewrite — MiB act 3 by the Stage-1 reference prefetch, PAL BBB by the frame-drop governor]** **Motion-comp throughput rewrite (high-motion / PAL stutter)** — staged attack on the
   compute/feed-bound stutter; see `docs/motcomp_throughput.md`. **⚠️ Motivation revisited
   (2026-07-09):** the Matrix opening — long cited as *the* canonical worst case — is a
   SOURCE-FILE defect (its stutter reproduces in VLC on a PC, USER-CONFIRMED), so it is NOT
@@ -594,7 +617,7 @@ motion-comp starvation that caused the misses (keep Frame Drop On as a safety ne
   0xFF = 2 MB now; the `vbuf_healthy` hysteresis thresholds stay fractional (25 %/12.5 %),
   so the guard now demands an 8× fatter absolute cushion — the conservative direction.
   Files: `dvd/mem_override/mem_codes.v`, `rtl/mpeg2/framestore_request.v` (tap width).
-- [ ] **PAL high-motion stutter** — addressed by the frame-drop governor above (decode-load bound,
+- [x] **PAL high-motion stutter** — addressed by the frame-drop governor above (decode-load bound,  *(addressed by the frame-drop governor above (decode-load bound, not PAL-specific))*
   not PAL-specific).
 - [x] **PAL interlaced (576i @ 50) — HDMI/ascal — ✅ HW-CONFIRMED + MERGED (PR fj#132)**.
   Mirrors the NTSC-480i per-field modeline (pixel_repetition doubling): new
@@ -612,7 +635,7 @@ motion-comp starvation that caused the misses (keep Frame Drop On as a safety ne
   pixrep `h_pos` map + `spu_decode`/`crt_ov_map` `.interlaced` following `il_eff`,
   shipped as a prerequisite of `Analog Out = Native Fields`.
   See `docs/interlaced_auto.md`.
-- [ ] **Film 3:2 / PAL-25-from-24** `SHOW_N` cadence handling (separate from the above).
+- ⛔ **[dropped — not needed (2026-09-01, user decision) — Film 24p and 25p both shipped and are HW-confirmed; what this line added beyond them was never established]** **Film 3:2 / PAL-25-from-24** `SHOW_N` cadence handling (separate from the above).
 
 ### Composite / Interlaced Analog Output for CRT (primary end goal)
 
@@ -717,7 +740,7 @@ half-line, weave workaround, 1440-wide pixel repetition) is the
     `bench/dvd/crt_ov_map_tb.sv`); `spu_decode` row-base adder generalized for the skipping
     line walks; CRT Auto aspect now menu-aware (`ar_wide_auto_eff`, matches HDMI). Detail +
     HW-gate checklist: `docs/crt_anamorphic.md` §9.
-- [ ] **HDMI 4:3 output follows the same Fit / Letterbox / Crop setting as the analog CRT.**
+- ⛔ **[dropped — not needed (2026-09-01, user decision) — a want rather than a defect, for the narrow case of 16:9 anamorphic content on a 4:3 HDMI display]** **HDMI 4:3 output follows the same Fit / Letterbox / Crop setting as the analog CRT.**
   Today `O[4:3] CRT Aspect` (Fit/Letterbox/Crop, `docs/crt_anamorphic.md`) is gated on
   `crt_eff` (analog CRT mode only); HDMI instead gets its aspect from ascal via
   `O[20:19] Aspect Ratio` → `VIDEO_ARX/ARY`. Goal: when a **4:3 HDMI display** shows 16:9
@@ -866,7 +889,7 @@ Levers, cheapest/lowest-risk first:
   still pinned per-netlist for reproducibility, but sweeps should rarely be needed; a fit
   under the 86.0 gate now means the netlist degraded — measure (`tools/timing_paths.sh`) and
   fix, don't re-roll. (`FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION` remains `ALWAYS`.)
-- [ ] **Floorplan / LogicLock the hotspot (last resort, heavy effort).** If the logic cuts
+- ⛔ **[dropped — not needed (2026-09-01, user decision) — it was always the last resort, and the design fits at 88% ALM with clk_dec closing on the pinned seed's first roll. Kept as a note in case congestion returns; it is not pending work]** **Floorplan / LogicLock the hotspot (last resort, heavy effort).** If the logic cuts
   above aren't enough, constrain placement of the framestore/decoder→overlay region (or give
   the overlay/output path its own region) so the router isn't forced to cram it into
   X33_Y11–X44_Y22. High effort and brittle to design changes — only after the cheaper levers.
@@ -898,7 +921,7 @@ blocks); the fixed-rate fabric output removed that safety net. Tiered plan:
   AC-3 ~43 ms. Absorbs bursty delivery; sufficient for short clips / near-zero drift.
   A buffer only *delays* drift, it doesn't cure it — a feature-length movie exposes
   even a ~0.05 % mismatch.
-- [ ] **Tier 2 — sample drop/duplicate at watermarks (recommended near-term).** Keep
+- ⛔ **[superseded — superseded by Tier 3 PTS genlock below, on which the drift saga closed]** **Tier 2 — sample drop/duplicate at watermarks (recommended near-term).** Keep
   the clean fixed 48 kHz output but drop one sample on over-fill / repeat one on
   under-fill. One sample every ~second is inaudible, ~20 lines of RTL, no pitch-wobble
   risk; makes long playback robust regardless of small drift. Cheap insurance.
@@ -911,7 +934,7 @@ blocks); the fixed-rate fabric output removed that safety net. Tiered plan:
   `ps_demux.aud_frame_pts → audio_ring → dvd_audio_decode.dispatch_pts → av_sync`.
   Full design: `docs/av_sync.md`. (Tier 2 sample drop/dup is now subsumed; the bare
   adaptive-NCO stepping stone is moot.)
-- [ ] **Flush on load/seek.** Flush all audio buffers + reset decoders on a new
+- [x] **Flush on load/seek.** Flush all audio buffers + reset decoders on a new
   disc/clip or a seek, so stale audio never plays out or lags video. Cheap, and
   required for seeking (Phase 8). av_sync already re-anchors on a PTS discontinuity;
   this adds the buffer flush so the resync is clean rather than draining stale audio.
@@ -984,7 +1007,7 @@ order. Detail lives in `docs/av_sync.md` "Open follow-ups".
   residual ≈100 ms audio-EARLY (A/V Offset +100 nulls it). Small follow-ups
   in lipsync_pickup.md round 12: shipping offset default (verify Matrix/PAL),
   overlay cleanup debt, why-4-lates/s churn (secondary).
-- [ ] **Loop-gain tuning (`KP_SHIFT`/`KI_SHIFT`).** If audio audibly speeds/slows
+- ⛔ **[superseded — the NCO trim was retired — same-crystal rate lock, nothing to tune]** **Loop-gain tuning (`KP_SHIFT`/`KI_SHIFT`).** If audio audibly speeds/slows
   ("hunting"), soften `KP` and lean on the integrator. Sim convergence currently uses
   `KP_SHIFT=1`, `KI_SHIFT=9`.
 - [x] **PAL / 25 fps (manual toggle).** Done 2026-06-30 (`feature/hres-offbyone-pal`):
@@ -992,15 +1015,15 @@ order. Detail lives in `docs/av_sync.md` "Open follow-ups".
   already gives 25 fps at 50 Hz. **Remaining:** drive it from `frame_rate_code` so
   25/50 Hz content syncs *automatically* (no manual toggle) — see "PAL/NTSC Framerate
   Sync" above. Shared TODO with `docs/frame_rate_governor.md`.
-- [ ] **Overlay surfacing of drift/trim** (`av_drift`/`av_nco_trim`/`reanchor_count`).
+- ⛔ **[superseded — the drift instrument rows were built, used and then retired; the overlay is compiled out of release builds]** **Overlay surfacing of drift/trim** (`av_drift`/`av_nco_trim`/`reanchor_count`).
   Deferred in PR fj#36 — the 16-row 4-bit-addressed `debug_overlay` is fragile to expand.
   The debug nets are already wired in `emu.sv`; add a row (or repurpose one) to read
   drift on HW. Needed to *measure* lip-sync rather than eyeball it.
-- [ ] **Per-sample PTS through the AC-3 pipeline.** Only if HW shows a residual phase
+- ⛔ **[superseded — its own precondition never fired — the drift saga closed at round 12 with vid_err flat and lips constant, so LEAD_TARGET absorbs what there is]** **Per-sample PTS through the AC-3 pipeline.** Only if HW shows a residual phase
   error `LEAD_TARGET` can't absorb: carry the frame PTS through decode and subtract the
   live `pcm_out` FIFO occupancy so the loop references the PTS of the sample actually
   *leaving* the speaker, not the one entering the decoder.
-- [ ] **Static-*pop* drop fix (related, separate effort).** `audio_ring` drops PES-sized
+- [x] **Static-*pop* drop fix (related, separate effort).** `audio_ring` drops PES-sized
   chunks, not AC-3 frames, so an overflow drop misaligns the AC-3 stream → `err` →
   self-heal reset → audible pop. PTS pacing reduces drop *frequency* but can't silence a
   drop. Fix: AC-3-frame-aligned drop in `audio_ring`, or graceful mute-and-resync in
@@ -1014,11 +1037,11 @@ refresh; see `docs/frame_rate_governor.md`. Tier 3 PTS genlock above replaced it
 Optical out is not Digital-board-exclusive: the framework's `spdif` net feeds both
 `AUDIO_SPDIF` (Digital TOSLINK) and `SDCD_SPDIF`/`PIN_AH7` (Analog board combo-jack
 mini-TOSLINK). The blocker is format, not connector — `audio_out` emits PCM only.
-- [ ] Complete `dvd/iec61937_wrap.sv` (frame undecoded AC-3/DTS from `ps_demux`/`audio_ring`;
+- [x] Complete `dvd/iec61937_wrap.sv` (frame undecoded AC-3/DTS from `ps_demux`/`audio_ring`;
       set the IEC 60958 non-PCM channel-status bit)
-- [ ] Bypass MiSTer framework's PCM `audio_out` for bitstream output
-- [ ] Drive the S/PDIF pin directly (`AUDIO_SPDIF` and/or `SDCD_SPDIF`)
-- [ ] Test with AV receiver via optical (confirm the board revision populates the TOSLINK TX)
+- [x] Bypass MiSTer framework's PCM `audio_out` for bitstream output
+- [x] Drive the S/PDIF pin directly (`AUDIO_SPDIF` and/or `SDCD_SPDIF`)
+- [x] Test with AV receiver via optical (confirm the board revision populates the TOSLINK TX)
 
 ### DVD Menu Navigation (stretch goal)
 - Parse DVD navigation packets (NAV packs embedded in VOB data)
@@ -1227,7 +1250,7 @@ chapter, and accurate-seek features need that data **parsed** instead of discard
   chapters / PTT (Phase 6)". **Deferred (documented):** cross-PGC user chapter-skip +
   PTT-based current-chapter `n` (would rewrite the HW-confirmed `chap_st`, and only affects
   multi-PGC game discs — no observable movie benefit).
-- [ ] **`program_map_offset` seekable timeline** (presentation time ⇄ disc sector) — the
+- ⛔ **[superseded — Phase-8b TMAP was retired by user decision 2026-07-10]** **`program_map_offset` seekable timeline** (presentation time ⇄ disc sector) — the
   PGC `palette`@164 and cell category word are already handled (Phases 3/9); the exact
   time↔sector map beyond the DSI ±10 s scrub is unbuilt (Phase-8b TMAP was retired).
 
@@ -1376,7 +1399,7 @@ of each via `aud_track`/`sp_track`. What was missing was knowing how many exist.
 - [x] **HW-CONFIRMED on MiB VTS_21** (2026-07-10): audio 4-track cycle audible, subtitle
   4-track+off visible, no out-of-range garbage, audio switch stays in sync with no video
   corruption.
-- [ ] **(Phase 11) On-screen track/language popup** — part of the custom graphic OSD (the
+- [x] **(Phase 11) On-screen track/language popup** — part of the custom graphic OSD (the
   piece the MiSTer OSD can't do); uses the `attr_*` readout + the subpicture blend.
 
 ### Subtitle (subpicture) selection
@@ -1406,7 +1429,7 @@ coordinates — NOT text. Needs a decoder + a video-overlay blend.
   menu highlights render with the disc's authored colours. SET_CONTR alpha honoured.
   Hardened for seeks by the `pgc-palette-seek-reset-bug` fix (palette on `reset_n`, not the
   per-seek pipe reset). The earlier "v1 uses a fixed high-contrast palette" note was stale.
-- [ ] **Follow-ups (minor):** HDMI-480i (O9) subtitle (needs the pixrep `q_x` halving — CRT
+- ⛔ **[partly shipped — the HDMI-480i (O9) subtitle q_x halving SHIPPED with the overlay pixrep fix 2026-08-22; CHG_COLCON and per-disc subtitle-track enumeration dropped as not needed (2026-09-01, user decision)]** **Follow-ups (minor):** HDMI-480i (O9) subtitle (needs the pixrep `q_x` halving — CRT
   is native width so it was addressed first); CHG_COLCON; per-disc subtitle-track
   enumeration (needs IFO — folds into the Phase-10 audio/subp attribute parse); HW
   confirmation on a subtitle disc (progressive + CRT 480i).
@@ -1789,6 +1812,39 @@ every one of them — the trail is worth more than the clone size. Note the larg
 99 MB, just under GitHub's 100 MB hard limit, so a push will warn but succeed.
 
 **Remaining: the final soak** (film + TV + one game disc on shipping defaults), then tag.
+
+## User bug reports — repro bundles (2026-09-01) — ⏳ HW-confirm pending (chord only)
+
+**Branch `feature/bug-report-bundle`; design in `docs/bug_reports.md` +
+`docs/support_bundle_hps.md`; user-facing page `site/content/reference/reporting-a-bug.md`.**
+
+The project is public and the discs that break it are discs we do not own. A nav bug
+needs only the IFO tables — ~0.005% of an image — so `tools/dvd_report.py` packages
+them into a 36–100 KB zip that reconstructs to a **sparse ISO at the original LBAs**,
+which every existing nav tool reads unmodified and which matches the `*_meta.hex`
+testbench idiom (so a submission is already fixture-shaped).
+
+- ✅ **PC route** — validated 23/23 discs across the library: `iso_nav_check.py` output
+  byte-identical between original and reconstruction (up to 9,143 lines), plus
+  `dvd_vm_ref.py boot`/`menu`, `dvd_census.py`, `nav_extract.py`.
+- ✅ **Works on an ENCRYPTED rip** — verified on a real CSS disc (FAIRYTOPIA, ~19% of
+  sampled packs scrambled): identical nav output, so asking a user for a bundle never
+  asks them to decrypt anything.
+- ✅ **Content guarantee is enforced, not promised** — `audit()` refuses to write a
+  bundle if any gathered sector carries elementary stream data; proven RED against a
+  real title-VOB sector (`0xE0`).
+- ⏳ **On-player route** — Audio + Subtitle held 2 s makes `MiSTer_DVDcss` build a bundle
+  from whatever is mounted (image or drive) into `/media/fat/DVD_reports/`. Uniquely
+  captures `buffer_lba`, i.e. where playback actually was. Integration steps 22–25.
+  **Not hardware-confirmed:** chord timing, `InfoMessage` during playback,
+  fork-under-load, and reading `/dev/srN` while `dvd_css` holds the drive.
+- ✅ **Intake** — six GitHub issue forms split by the evidence a report needs, and a
+  `field-report` skill that turns a pasted/screenshotted Discord report into a tracked
+  issue (most users will never open one themselves).
+
+Next: the HW gate on the chord, then decide whether the audio-silence route is pulling
+its weight — the acmod census says 11 discs have an unsupported DEFAULT track, so that
+form should see traffic early.
 
 ## Test Media Recommendations
 

@@ -84,6 +84,11 @@ cp "$INSTALLER" "$STAGE/Scripts/install_dvdcss.sh"
 chmod +x "$STAGE/Scripts/install_dvdcss.sh"
 cp "$REGIONTOOL" "$STAGE/Scripts/set_dvd_region.sh"
 chmod +x "$STAGE/Scripts/set_dvd_region.sh"
+# dvd_report.py rides along so the support-bundle chord works out of the box:
+# MiSTer_DVDcss shells out to it (main/support/dvd/dvd_report.cpp searches
+# Scripts/ first). It is also the tool a reporter runs on a PC.
+cp "$REPO/tools/dvd_report.py" "$STAGE/Scripts/dvd_report.py"
+chmod +x "$STAGE/Scripts/dvd_report.py"
 
 RBF_SHOWN="${RBF_DIR:+$RBF_DIR/}$(basename "$RBF")"
 cat > "$STAGE/DVD_INSTALL.txt" <<EOF
@@ -95,6 +100,7 @@ MiSTer DVD Player v${VER}
      MiSTer_DVDcss         - custom Main (physical discs + encrypted ISOs); keep at the root
      Scripts/install_dvdcss.sh
      Scripts/set_dvd_region.sh
+     Scripts/dvd_report.py
 
 2. To play PHYSICAL discs or ENCRYPTED ISOs, add to /media/fat/MiSTer.ini
    (add the section; do NOT replace the file):

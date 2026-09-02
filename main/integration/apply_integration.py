@@ -362,4 +362,63 @@ cc = insert_after(cc, '{ "HDMI_AUDIO_96K", (void*)(&(cfg.hdmi_audio_96k)), UINT8
 write(cfgc_path, cc)
 print("[integration] cfg.h/cfg.cpp patched")
 
+# =============================================================================
+# On-player support bundle (steps 22-25). See INTEGRATION.md and
+# MiSTer_DVD/docs/support_bundle_hps.md.
+# =============================================================================
+
+u = read(uio_path)
+
+# 22. include
+u = insert_after(u, '#include "support/dvd/dvd_hdmi_audio.h"',
+    '#include "support/dvd/dvd_report.h"\n',
+    22, 'support/dvd/dvd_report.h')
+
+# 23. poll tick (reuses the step-7 tick site)
+u = insert_after(u, 'dvd_hdmi_audio_tick();  // ADV7513 non-PCM mode + the cfg[14] ack',
+    '\tdvd_report_tick();      // support-bundle chord: fire + reap\n',
+    23, 'dvd_report_tick();')
+
+# 24. observe the gamepad for the chord. Placed at the TOP of the function, and
+# it only reads `map` - the map is passed to the core unchanged, so a bug here
+# cannot stop a button working.
+# NOTE the anchor is the function's FIRST BODY LINE, not its signature.
+# insert_after() splits on the first newline AFTER the anchor, so a two-line
+# 'signature\n{' anchor lands the call BETWEEN the signature and its brace --
+# which compiles as "expected initializer before 'dvd_report_joy'".
+u = insert_after(u, '\tuint8_t joy = (joystick>1 || !joyswap) ? joystick : joystick ^ 1;',
+    '\tdvd_report_joy(map);   // dvd:report — observe only, never modifies map\n',
+    24, 'dvd_report_joy(map)')
+
+# 25. expose the last-served sector. buffer_lba[] is file-static, and it is the
+# one thing the on-player bundle knows that a reporter cannot state from memory:
+# where playback actually was when the problem was seen.
+u = insert_after(u,
+    '\t\t\t\t\t\t\t\t   ULLONG_MAX,ULLONG_MAX,ULLONG_MAX,ULLONG_MAX };',
+    '\nuint64_t user_io_last_lba(int index)   // dvd:report\n'
+    '{\n'
+    '\tif (index < 0 || index >= 16) return (uint64_t)-1;\n'
+    '\treturn buffer_lba[index];\n'
+    '}\n',
+    25, 'user_io_last_lba')
+
+# 26. capture the mounted image's full path. Nothing in stock Main keeps it:
+# fileTYPE::name is the basename only, and fileTYPE::path is filled ONLY in the
+# pre-create branch of this same function -- so a normally-mounted ISO has
+# neither, which made the support-bundle chord report "Load a disc or image
+# first" with a disc plainly loaded. Observes only; it never touches `name`.
+u = insert_after(u, '\tint len = strlen(name);',
+    '\tdvd_report_note_mount(name);   // dvd:report — observe only\n',
+    26, 'dvd_report_note_mount(name)')
+
+write(uio_path, u)
+print("[integration] user_io.cpp patched (support bundle)")
+
+h = read(h_path)
+h = insert_after(h, 'char is_dvd();',
+    'uint64_t user_io_last_lba(int index);   // dvd:report\n',
+    25, 'user_io_last_lba')
+write(h_path, h)
+print("[integration] user_io.h patched (support bundle)")
+
 print("[integration] done")

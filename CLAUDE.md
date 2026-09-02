@@ -1336,6 +1336,80 @@ or letters** — so interactive means a cursor menu, never a typed prompt. A reg
 Tested by `tools/test_set_dvd_region.py` (fakes the drive, drives the menus through a pty);
 the ioctl itself is the HW gate. Design + ioctl details: `docs/physical_disc.md`.
 
+### User bug reports arrive as sparse-sector nav bundles, not ISOs
+
+**`tools/dvd_report.py` (2026-08-31) — the answer to "the disc that breaks it is
+one I don't own".** A nav bug needs the IFO tables and nothing else, and those are
+~0.005% of an image (104 KB of a 4.47 GB rip), so a reporter builds a **36–100 KB
+zip** from their own rip on their PC. The bundle stores `{LBA → sector}` pairs at
+their **original disc addresses**; `unpack` writes them into a **sparse** image of
+the original size (6.77 GB apparent, 480 KB on disk). ★ **That is why no tool
+needed changing** — `IsoNav` asserts `CD001` at sector 16 and follows absolute
+LBAs, so the reconstruction simply *is* an ISO; it is also the `*_meta.hex`
+testbench idiom, so a submission is already shaped like a regression fixture.
+Validated 23/23 discs across the library: `iso_nav_check.py` output byte-identical
+between original and reconstruction (up to 9,143 lines), plus `dvd_vm_ref.py`
+boot/menu, `dvd_census.py`, `nav_extract.py`. Every bundle **self-checks by
+rebuilding itself** before it is handed over (a bundle that cannot be walked is
+worse than none — the reporter is gone by the time anyone opens it).
+★ **The bundle contains ONLY unencrypted navigation structures — no picture, no
+sound, no keys — and that is ENFORCED, not promised.** `audit()` refuses to write
+a bundle if any gathered sector parses as an MPEG-PS pack containing anything but
+a system header, padding or `private_stream_2`; proven RED against a real title
+sector (`0xE0`) and green on a real NAV pack. It cannot carry key material even in
+principle (title keys live in scrambled sector headers, the disc key block in the
+lead-in, which is not in an ISO image at all) — and the IFO/NAV data it DOES carry
+is capturable precisely because CSS never scrambles it (our own
+`main/support/dvd/dvd_css.cpp:341,393` says so). ⚠ **Never relax this to accept
+VOB payload "just for one bug"** — the guarantee is why a stranger can hand a
+bundle over without thinking, and it is the same line as
+`css-key-cache-never-ship`. ⛔ A `--from-drive` mode was considered and REJECTED
+(2026-08-31, user decision): it points users at their optical drive, and a
+reporter who has already ripped their own ISO is a better reporter.
+⚠ Two traps recorded in `docs/bug_reports.md`: NAV-pack detection is **not**
+`0x000001BF` at offset 14 (a **system header** pushes PCI to `0x26`; the fixed
+offset found ZERO packs and reported success), and the tool is **deliberately
+self-contained** — a reporter downloads one file, not a checkout, so it duplicates
+a small ISO9660 walk instead of importing `IsoNav`. Scope is nav only; video-side
+bugs (subpicture, CC, cadence, lip-sync) report in prose. User-facing entry:
+the MANUAL page `site/content/reference/reporting-a-bug.md` (Reference → Reporting a
+bug) — NOT the README, which is a landing page. Design: **`docs/bug_reports.md`**.
+
+**★ AND FROM THE PLAYER ITSELF — a gamepad chord (2026-09-01, `MiSTer_DVDcss`;
+✅ HW-CONFIRMED 2026-09-02, and on the hardest case first — a PHYSICAL DISC:
+77 KB off a 7.22 GB disc, audit clean, full nav walk + VM boot chain on the
+reconstruction, and ★ the playhead landed 2,064 sectors into the feature, which is
+the fact a reporter can never supply. ★★ Reading `/dev/srN` while `dvd_css` holds
+the drive WORKS — the thing flagged as likeliest to misbehave.)** Hold
+**Audio + Subtitle 2 s** and the Main writes a bundle
+for whatever is mounted — image OR optical drive — to `/media/fat/DVD_reports/`.
+★ **The Main SHELLS OUT to `tools/dvd_report.py`, it does not reimplement the
+collector** (python3 is on stock MiSTer; a C++ copy would drift, audit and
+self-check included) — and that is also what DISSOLVED the old Scripts-menu
+blocker: "no arguments, gamepad gives only arrows/Enter" stops mattering when the
+Main already knows what is mounted and passes it as an argument. ★★ **A chord, not
+an OSD row, because a `CONF_STR` entry changes the netlist and RE-ROLLS THE PINNED
+FITTER SEED** — a one-line menu addition is not a one-line change in this project.
+⚠ `dvd_report_joy()` **observes `map` and never modifies it**: masking the chord
+bits would mean a detection bug could stop buttons working, and would swallow a
+fast double-press — the accepted cost is that the chord also steps audio/subtitle
+once each (why B7/B8, not the transport buttons, where a stray seek would linger).
+⚠ **The work FORKS** — `dvd_report_tick()` shares the poll loop with SD block
+service, so inline work would starve the core mid-playback; feedback rides Main's
+own `InfoMessage()`, so no RTL change was needed for it either. Uniquely captures
+`buffer_lba` = **where playback actually was**, which a reporter can never state
+from memory. ⚠ **The DE10-Nano has NO battery-backed RTC** — an on-player bundle
+from a never-networked MiSTer carries an epoch date in its filename AND
+`created_utc`; unique per session, not trustworthy as a sequence
+(`player.generated_on == "mister"` marks them). Integration steps 22–25. The **core version needs no new plumbing**: `CONF_STR`'s
+`V,` line is appended to the OSD core name at init, so `OsdCoreNameGet()` reads back
+`"DVD v0.4.0 260901"` — everything after the first space (no space ⇒ record nothing,
+never pass the bare core name off as a version).
+⚠ **`main/build_main.sh` used to copy the overlay as a HAND-MAINTAINED FILE LIST**
+and silently omitted the new module — it now globs `support/dvd/*`; the failure
+surfaced far away as a missing-header error in `user_io.cpp`.
+Design: **`docs/support_bundle_hps.md`**.
+
 ### No USB DVD-ROM drive support
 MiSTer's custom Linux kernel almost certainly lacks `sr_mod` (`CONFIG_BLK_DEV_SR`).
 Recompiling the kernel is out of scope. Workflow: rip disc to ISO on PC, copy to SD card,

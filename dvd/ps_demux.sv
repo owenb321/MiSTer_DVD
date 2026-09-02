@@ -520,6 +520,20 @@ always_ff @(posedge clk or negedge rst_n) begin
             end
 
             // ---- PES packet length ----
+            // NOTE: PES_packet_length == 0 ("unbounded", run to the next start
+            // code) is NOT handled, and would not fail gracefully: pes_length is
+            // a 16-bit down-counter compared against 1, so loading 0 wraps to
+            // 0xFFFF on the first decrement and ~64 KB of following stream --
+            // pack headers, NAV packs, audio -- gets consumed as video payload
+            // before S_HUNT resyncs.
+            //
+            // This is deliberate, not an oversight. ISO 13818-1 §2.4.3.7 permits
+            // length 0 ONLY for video PES carried in TRANSPORT streams; DVD is a
+            // Program Stream, where the field must always be set. Measured 0 of
+            // 3,395 video PES headers across 13 library discs. The roadmap item
+            // for it was closed 2026-09-01 on those two grounds; if a
+            // non-compliant muxer ever produces one, this comment is the reason
+            // the picture breaks, and the fix is a start-code-hunt fallback.
             S_PES_LEN_HI: begin pes_len_hi <= in_byte; state <= S_PES_LEN_LO; end
             S_PES_LEN_LO: begin
                 pes_length <= {pes_len_hi, in_byte};

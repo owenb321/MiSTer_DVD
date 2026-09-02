@@ -62,6 +62,17 @@ naming what you switched to, with the language where the disc provides one — `
     Switching the audio track while a disc menu is open silences the menu's own audio until
     you leave the menu. Menu audio otherwise plays normally on the default track.
 
+## Support bundle chord
+
+!!! info "Unreleased"
+    Available in development builds; not in v0.3.0. Needs `MiSTer_DVDcss`.
+
+**Audio + Subtitle held together for two seconds** writes a navigation support bundle for
+the disc you are playing to `/media/fat/DVD_reports/` — a small file that makes a menu or
+navigation bug reproducible without the disc. See
+[Reporting a bug](../reference/reporting-a-bug.md). It also steps the audio and subtitle
+tracks once each, which you can simply step back.
+
 ## D-pad seek
 
 During plain playback the D-pad does nothing unless you turn on

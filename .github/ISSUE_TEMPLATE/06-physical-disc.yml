@@ -1,0 +1,81 @@
+name: Physical discs, MiSTer_DVDcss or libdvdcss
+description: The custom Main, drive detection, CSS decryption, region, install script
+labels: ["bug", "area:physical-disc"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This covers the optional add-on: the `MiSTer_DVDcss` Main, the `install_dvdcss`
+        script, drive detection and CSS decryption. The bare `.rbf` plays decrypted images
+        without any of it.
+
+        **`/tmp/dvdcss.log` on the MiSTer records every mount decision** and is the single
+        most useful thing you can attach here.
+
+        [Physical discs and encrypted ISOs →](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/)
+
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      placeholder: v0.3.0 260901
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is going wrong?
+      options:
+        - The drive is not detected, or a disc does nothing
+        - An encrypted image will not decrypt
+        - Decryption is very slow every time
+        - "`install_dvdcss` fails"
+        - The core does not use MiSTer_DVDcss at all
+        - Region setting
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installed
+    attributes:
+      label: Is the custom Main actually in use?
+      description: "`MiSTer_DVDcss` must be at the SD card root, with `main=MiSTer_DVDcss` under `[DVD]` in MiSTer.ini."
+      options:
+        - "Yes — both the file and the MiSTer.ini line are in place"
+        - "No, or not sure"
+    validations:
+      required: true
+
+  - type: input
+    id: drive
+    attributes:
+      label: Drive make and model
+      description: For a physical-disc problem. How is it connected and powered?
+    validations:
+      required: false
+
+  - type: input
+    id: disc
+    attributes:
+      label: Disc title and region
+    validations:
+      required: false
+
+  - type: textarea
+    id: log
+    attributes:
+      label: "`/tmp/dvdcss.log`"
+      description: Paste it, or drag the file in. It is written fresh on every boot.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: Any on-screen message, how long it waits, and what you have already tried.
+    validations:
+      required: true

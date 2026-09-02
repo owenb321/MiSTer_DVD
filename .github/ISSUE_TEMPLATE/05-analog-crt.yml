@@ -1,0 +1,79 @@
+name: Analog or CRT output
+description: No analog picture, wrong geometry, sync problems, scanline or field issues
+labels: ["bug", "area:analog"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The analog path engages from `MiSTer.ini` like any other core — there is no OSD
+        switch for it. If there is no analog picture at all, check `vga_scaler=0` and a
+        sync mode (`composite_sync=1`, `ypbpr=1`, or sync-on-green) are actually set.
+
+        [Analog and CRT output →](https://owenb321.github.io/MiSTer_DVD/video/analog-crt/)
+
+        **PAL on an analog CRT is unconfirmed** — no PAL CRT was available to test it, so
+        reports of that specifically are wanted.
+
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      placeholder: v0.3.0 260901
+    validations:
+      required: true
+
+  - type: textarea
+    id: ini
+    attributes:
+      label: Your MiSTer.ini video lines
+      description: The `vga_scaler`, `composite_sync`, `ypbpr`, `direct_video` and any `[DVD]` section lines.
+      render: ini
+    validations:
+      required: true
+
+  - type: dropdown
+    id: analogout
+    attributes:
+      label: "`Analog Out` setting"
+      options:
+        - "Auto (the default)"
+        - Interlaced
+        - Progressive
+        - Native Fields
+    validations:
+      required: true
+
+  - type: input
+    id: display
+    attributes:
+      label: What is it plugged into?
+      description: The display, and how — CRT over RGB SCART, component, VGA, an upscaler, a capture card…
+    validations:
+      required: true
+
+  - type: input
+    id: board
+    attributes:
+      label: Which I/O board?
+      description: Analog I/O board revision, HDMI-to-DAC, YC/composite encoder…
+    validations:
+      required: false
+
+  - type: dropdown
+    id: standard
+    attributes:
+      label: NTSC or PAL content?
+      options:
+        - NTSC
+        - PAL
+        - Both, and both are affected
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: No picture, rolling, wrong size or position, combing, flicker — and whether HDMI is fine at the same time.
+    validations:
+      required: true

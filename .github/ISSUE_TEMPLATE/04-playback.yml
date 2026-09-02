@@ -1,0 +1,122 @@
+name: Picture or sound during playback
+description: Stutter, artefacts, wrong colours, lip sync, subtitles, captions
+labels: ["bug", "area:playback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        These live in the video stream itself, which is far too large to share — so words
+        are the right tool here, and detail pays off.
+
+        **Two questions separate whole classes of cause.** Please answer both below: does
+        it happen from a cold load or only after playing a while, and does a chapter skip
+        clear it?
+
+        For lip sync, a **phone video with sound** is genuinely useful — the offset can be
+        measured from it. Drag it in at the bottom.
+
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      placeholder: v0.3.0 260901
+    validations:
+      required: true
+
+  - type: input
+    id: disc
+    attributes:
+      label: Disc title and region
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of problem?
+      options:
+        - Stutter or judder
+        - Lip sync — audio and video out of step
+        - Artefacts, blockiness, or tearing
+        - Wrong colours
+        - Subtitles
+        - Closed captions
+        - Picture geometry — stretched, squashed, cropped
+        - Something else
+    validations:
+      required: true
+
+  - type: dropdown
+    id: output
+    attributes:
+      label: Which output are you watching?
+      options:
+        - HDMI
+        - Analog — CRT
+        - Analog — other display
+        - HDMI and analog, both affected
+    validations:
+      required: true
+
+  - type: dropdown
+    id: onset
+    attributes:
+      label: When does it happen?
+      options:
+        - From the moment it starts playing, on a cold load
+        - Only after playing for a while
+        - Only after loading a new disc mid-play
+        - Only after seeking or a chapter skip
+        - Only in menus
+        - At one specific point in the film
+    validations:
+      required: true
+
+  - type: dropdown
+    id: chapterskip
+    attributes:
+      label: Does a chapter skip clear it?
+      options:
+        - "Yes — it comes good after a skip"
+        - "No — it survives a skip"
+        - "Haven't tried"
+        - "Not applicable"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: Describe it
+      description: What you see or hear, and roughly where in the film. Busy scene or calm one?
+    validations:
+      required: true
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Relevant settings
+      description: |
+        `Film 24p Out`, `A/V Offset`, `Interlaced Out`, `Video Standard`, `Audio Out` —
+        whichever you have changed from the defaults.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Did this work in an earlier version?
+      options:
+        - "Don't know / never tried it before"
+        - "No — this is the first version I have tried"
+        - "Yes — it worked in an earlier version"
+    validations:
+      required: false
+
+  - type: textarea
+    id: media
+    attributes:
+      label: Photo or video
+      description: Drag it here. For lip sync, video with sound is worth far more than a description.
+    validations:
+      required: false

@@ -1,0 +1,93 @@
+name: A disc or image will not load
+description: Black screen, nothing happens, CSS ENCRYPTED, or UNSUPPORTED IMAGE
+labels: ["bug", "area:loading"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Start with the message on screen — it usually is the answer.**
+
+        - **`CSS ENCRYPTED`** — the image is an encrypted rip and nothing available can
+          decrypt it. Install `MiSTer_DVDcss` + libdvdcss, or use a decrypted rip.
+        - **`UNSUPPORTED IMAGE`** — the core read the file and could not play it. A
+          UDF-only image will do this; ISO9660 is required.
+        - **No message at all** — the core never received the file. The usual cause is a
+          **network share mounted read-only**: the framework opens images read-write, so a
+          read-only mount fails silently.
+
+        [Nothing plays →](https://owenb321.github.io/MiSTer_DVD/reference/troubleshooting/#nothing-plays)
+
+        If none of those fit, please carry on.
+
+  - type: input
+    id: version
+    attributes:
+      label: Core version
+      placeholder: v0.3.0 260901
+    validations:
+      required: true
+
+  - type: dropdown
+    id: message
+    attributes:
+      label: What appears on screen?
+      options:
+        - Nothing — black screen, no message
+        - "`UNSUPPORTED IMAGE`"
+        - "`CSS ENCRYPTED`"
+        - The idle logo keeps bouncing, as if nothing was loaded
+        - Something else (describe below)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: What are you loading?
+      options:
+        - Decrypted image (.iso)
+        - Encrypted image (.iso)
+        - Physical disc
+        - VCD / SVCD (.bin)
+        - Bare .VOB / .mpg / .m2v
+    validations:
+      required: true
+
+  - type: input
+    id: ripped
+    attributes:
+      label: How was it made?
+      description: MakeMKV Backup, dvdbackup, ImgBurn, downloaded, unknown…
+    validations:
+      required: false
+
+  - type: dropdown
+    id: media
+    attributes:
+      label: Where does the file live?
+      options:
+        - SD card
+        - USB storage
+        - Network share (CIFS/SMB or NFS)
+        - "Not applicable — physical disc"
+    validations:
+      required: true
+
+  - type: input
+    id: disc
+    attributes:
+      label: Disc title, if it is one specific disc
+      description: Leave blank if nothing loads at all.
+    validations:
+      required: false
+
+  - type: textarea
+    id: what
+    attributes:
+      label: Anything else
+      description: |
+        If you have the image on a PC, `python3 tools/css_scan.py MY_DISC.iso` reports
+        whether it is still encrypted — pasting that output here answers the question
+        outright.
+    validations:
+      required: false
