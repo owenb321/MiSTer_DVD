@@ -1910,15 +1910,15 @@ endmodule
 // line-rate serration gives the two fields of an interlaced raster DIFFERENT
 // broad-pulse patterns relative to their vsync start (one field's vsync begins
 // half a line later than the other's, the serrations do not), so a set's vertical
-// sync separator triggers at a field-dependent offset: an RC integrator by
-// ~0.1 line (uneven line spacing / pairing on an analog CRT), a broad-pulse
-// width detector by up to a third of a line (the RetroTINK "lines-per-frame
-// toggling" report). With a serration every half line both fields see the same
-// pattern, and bench/dvd/csync_field_tb.sv measures BOTH separator models at
-// exactly 262.5 lines. The extra pulse sits half a line before the stock one
-// (same width); equalizing pulses outside vsync are not generated (they would
-// need advance knowledge of vsync). Progressive rasters get the same 2H
-// serration, which is what a 240p broadcast-style signal carries anyway.
+// sync separator sees a ~50 us broad pulse on one field and ~18 us on the other —
+// at or below the threshold of a width-based separator, which is the shape of the
+// RetroTINK "vsync length / lines-per-frame toggling" report. With a serration
+// every half line both fields see the same 27 us broad pulse (the broadcast
+// figure) and bench/dvd/csync_field_tb.sv measures both separator models at
+// 262.5 lines for either vsync placement. Equalizing pulses outside vsync are not
+// generated (they would need advance knowledge of vsync); no console core has
+// them either. Progressive rasters get the same 2H serration, which is what a
+// 240p broadcast-style signal carries anyway.
 
 module csync
 (
@@ -1944,7 +1944,13 @@ always @(posedge clk) begin
 		h_cnt <= 0;
 		if (hsync) begin
 			line_len <= h_cnt - hs_len;
-			half_len <= (h_cnt + hs_len) >> 1;     // DVD-FORK: half the line period
+			// DVD-FORK: half the line period. h_cnt resets on BOTH hsync edges, so
+			// at the RISING edge it holds (line - hs_len); the line period is
+			// h_cnt + hs_len and half of it is (h_cnt + hs_len) >> 1 = 858 clk27
+			// on the 1716-dot interlaced raster. (Using h_cnt >> 1 puts the extra
+			// serration 63 clocks early and re-breaks the per-field symmetry —
+			// bench/dvd/run_csync_field.sh catches it.)
+			half_len <= (h_cnt + hs_len) >> 1;
 			csync_hs <= 0;
 		end
 		else hs_len <= h_cnt;

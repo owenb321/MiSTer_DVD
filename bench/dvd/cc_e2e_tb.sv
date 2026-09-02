@@ -26,9 +26,8 @@
  *   [3] demodulates each burst (slice at ~25 IRE, sample at bit centres) and
  *       requires the FIELD-1 pair on the field-1 line and the FIELD-2 pair on
  *       the field-2 line — the full slot-routing contract at the pins,
- *   [4] requires the burst to sit 17 H after the vsync leading edge (the vsync
- *       is anchored on line 243's trailing hsync; line 21 = v_cntr 261 — the
- *       broadcast count, line 4 -> line 21),
+ *   [4] requires the burst to sit 17 lines after the vsync leading edge
+ *       (v_cntr 244 -> 261 = broadcast line 21's position in this raster),
  *   [5] the pixel-enable contract: exactly 720 enabled samples inside DE per
  *       active line (Main reports 720x480i), DE 1440 clocks wide.
  *
@@ -58,7 +57,7 @@ module cc_e2e_tb;
     .horizontal_sync_start(12'd1471), .horizontal_sync_end(12'd1595),
     .horizontal_length(12'd1715),
     .vertical_resolution(12'd480),
-    .vertical_sync_start(12'd243), .vertical_sync_end(12'd246),
+    .vertical_sync_start(12'd244), .vertical_sync_end(12'd247),
     .horizontal_halfline(12'd858), .vertical_length(12'd261),
     .interlaced(1'b1), .clip_display_size(1'b0),
     .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),

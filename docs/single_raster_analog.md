@@ -1,11 +1,10 @@
 # Single-raster analog output — the interlaced main raster drives the CRT
 
 **Status (2026-09-03, branch `feature/single-raster-analog`): sim-proven (every suite
-below green, two RED reproductions); HW round 1 (composite CRT) on
-`DVD_singleraster_20260902_1902`: resolution right, picture paired/bounced → §3.9 (2H
-serrations); round-2 build `releases/DVD_singleraster2_20260902_1956.rbf`, SEED 5 first
-roll, clk_dec 91.40 / 90.26 MHz, 88 % ALM, RAM 494/553 (12 M10K freed);
-⏳ HW-confirm pending. Gate = the two RGBS / YPbPr
+below green, two RED reproductions). **HW rounds 1–2 on a composite CRT: 720x480i is
+reported correctly, but the picture bounces at field rate and looks blockier than the
+previous release — root cause NOT established (§3.9).** Round 3 reverts the vsync
+anchoring and keeps the 2H serrations. ⏳ HW-confirm pending. Gate = the two RGBS / YPbPr
 field reports below reproduce clean (idle logo AND playback), gregSTORM's composite CRT
 and the HDMI 480i path unregressed, Main reporting `720x480i @ 59.94` steady.**
 
@@ -33,7 +32,7 @@ of it.
 | "59.8 <-> 60.1 Hz" | No half-line on the main raster ⇒ vsync-to-vsync alternated 262/263 lines; Main measures per vsync. With `vsync_adjust` the HDMI PLL was set 0.2 % off. | §3.1 |
 | Progressive loses signal | `filmp_eff = film_want & ~interlaced_eff` wrote the 875×1287 @ 23.976 Hz / 30.9 kHz film modeline to the analog pins. | §3.5 |
 | periodic sync events | `re_interlace` in HUNT emitted **no sync at all** (33–67 ms of dead CRT sync per drop). Triggers found: (1) `syncgen_intf`'s modeline copies were on `dot_rst`, which the **watchdog** and mount soft reset pulse — `sync_reg` zeroes them async, so the running `sync_gen` saw `horizontal_length=0 / interlaced=0` for a few dots and re-phased (cadence 0.41 s + 0.83 s holdoff ≈ 1.2 s at 81 MHz); (2) `pal_eff` live off the decoded `vertical_size` (0 after any reset); (3) `analog_want` combinational off Main's live `cfg` word (re-sent on every `video_mode_adjust`, OSD leave, `[video=…]` re-parse) while the comment claimed a latch. | §3.2–3.4, §3.7 |
-| per-field toggling on csync | The framework `csync` serrates at **line rate** (an hsync-width pulse one hsync period ahead of each hsync, no equalizing pulses). Our interlaced vsync began at **active dot 0**, ~9 µs after hsync, so field B's first broad pulse lasted only **~18 µs** against field A's ~50 µs — below or at the broad-pulse threshold of many sync separators, so a set could lock a line late on field B or flip between the two readings field to field. **Measured** by `bench/dvd/csync_field_tb.sv`. | §3.8 |
+| per-field toggling on csync | The framework `csync` serrates at **line rate** (an hsync-width pulse one hsync period ahead of each hsync, no equalizing pulses), so the two fields — whose vsyncs start half a line apart — present broad pulses of **~50 µs and ~18 µs**. 18 µs is at or below the threshold of a width-based sync separator: a set can lock a line late on one field or flip between the two readings field to field. **Measured** by `bench/dvd/csync_field_tb.sv`. | §3.8 |
 
 And the design-level finding that made the rest simple:
 
@@ -121,64 +120,61 @@ blk9 decoder watchdog expiry · blk10 `il_switch` · blk11 `pal_eff` changed · 
 OSD leave, `video_mode_adjust`, video-section re-parse). None of the first four should
 ever fire during steady playback.
 
-### 3.8 Vsync anchored on the hsync leading edge (`rtl/mpeg2/syncgen.v`)
-In the N64-model path the vertical-sync sample dot is now `horizontal_sync_start`
-(field A) and `horizontal_sync_start + halfline` (field B, wrapping to the next line
-with the vsync window shifted one line later so the B rise stays exactly 262.5 lines
-after A's). This is the broadcast convention — vsync begins where an hsync leading edge
-would be — and what every other MiSTer core does because their counters originate at
-hsync; this sync generator's `h_cntr` originates at active video (upstream mpeg2fpga
-convention), which is where the 9 µs offset came from. Measured by `csync_field_tb`:
-
-| | before (dot-0 reference) | after (hsync-anchored) |
-|---|---|---|
-| vsync start after hsync edge, field A / B | 245 / 1103 clk27 | 0 / 858 clk27 |
-| first broad pulse before the first serration, A / B | ~50 µs / **~18 µs** | ~59 µs / **27 µs** (standard 27.2) |
-| broad-pulse width detector, trigger spacing | not measured | 450450 / 450450 exactly |
-| RC integrator (τ 40 µs, Schmitt) spacing | 450171 / 450729 | 450246 / 450654 (informational) |
-
-### 3.9 HW round 1 → serrations at 2H in the fork's `csync` (`sys/sys_top.v`)
-The first board round (composite CRT, `DVD_singleraster_20260902_1902`): resolution
-reported correctly, but the picture **paired and bounced more than the previous build**.
-A tau sweep of the bench (`bench/dvd/run_csync_sweep.sh`, shipped vs main's `syncgen.v`)
-explained it: the two separator models want opposite placements under **line-rate**
-serrations —
-
-| tau | old placement (dot-0), integrator | anchored, integrator | old, width detector | anchored, width detector |
-|---|---|---|---|---|
-| 20 µs | 450368 / 450532 | — | 449837 / 451063 | 450450 / 450450 |
-| 40 µs | 450172 / 450728 | 450246 / 450654 | 449837 / 451063 | 450450 / 450450 |
-| 80 µs | **450460 / 450440** | 450582 / 450318 | 449837 / 451063 | 450450 / 450450 |
-
-The dot-0 placement happened to be near-perfect for an analog RC integrator (a classic
-composite set) while breaking width detectors (the RT4K); anchoring fixed the width
-detector and cost the integrator ~0.1 line — exactly the round-1 symptom. With line-rate
-serrations no placement satisfies both, because the two fields' vsyncs start half a line
-apart and the serrations do not. **Fix: the fork's `csync` module now serrates at twice
-line rate during vsync** (an extra hsync-width pulse half a line before each stock one;
-`half_len` measured like `line_len`). Both fields then see the same pattern:
+### 3.8 Serrations at 2H in the fork's `csync` (`sys/sys_top.v`)
+The framework `csync` serrates at LINE rate and has no equalizing pulses. On an
+interlaced raster one field's vsync begins at an hsync and the other's begins mid-line,
+but the serrations sit on the same line grid either way — so the two fields present
+**different broad pulses**: ~50 µs and ~18 µs measured. 18 µs is at or below the
+threshold of a width-based sync separator, which is the shape of the RetroTINK report
+(vsync length and lines-per-frame toggling). The fork's `csync` now adds a serration
+half a line before each stock one, so both fields present the standard ~27 µs broad
+pulse:
 
 | | first broad pulse A / B | width detector | RC integrator (40 µs) |
 |---|---|---|---|
-| 2H serrations | 27 µs / 27 µs | 450450 / 450450 | 450486 / 450414 (0.02 line) |
+| stock 1H serrations | 50 µs / 18 µs | 449837 / 451063 (±0.36 line) | 450172 / 450728 |
+| **2H serrations** | 27 µs / 27 µs | 450451 / 450449 | 450384 / 450516 |
 
-`csync_field_tb` now gates the integrator too (±0.05 line) and passes across tau 10–80 µs.
-Equalizing pulses outside vsync are still not generated (they need advance knowledge of
-vsync); every console core omits them as well.
+⚠ `half_len` is `(h_cnt + hs_len) >> 1`: `h_cnt` resets on BOTH hsync edges, so at the
+rising edge it holds `line − hs_len`. Using `h_cnt >> 1` puts the extra serration 63
+clocks early and re-breaks the per-field symmetry — the bench catches it (measured
+20 µs / 29 µs broad pulses when that was tried).
 
-Because "vsync starts on line N" now means "at line N−1's trailing hsync", the interlaced
-walk's per-field vsync moved one line earlier (NTSC 243..246, PAL 291..294) so that line
-21 (`v_cntr == 261`, the caption line) keeps its broadcast position 17 H after the vsync
-leading edge. Field-A front porch ≈ 3.9 lines, 3-line sync, ≈ 15 lines to the next active
-line = the standard 21-line VBI. Progressive and the legacy pulse-delay path (halfline=0)
-are untouched.
+`csync_field_tb` gates both separator models. Equalizing pulses outside vsync are still
+not generated (they need the vsync position in advance); no console core has them.
+
+### 3.9 HW round 2 — the hsync-anchored vsync experiment, reverted
+Round 1 (`DVD_singleraster_20260902_1902`) also **anchored the interlaced vsync on the
+hsync leading edge** (field B half a line later, vsync window moved to 243..246), on the
+theory that the 18 µs broad pulse came from the vsync starting ~9 µs after hsync. On the
+maintainer's composite CRT that build **bounced at field rate and looked blockier** than
+the previous release, at the idle logo as well as in playback, with every `O[2]` raster
+trigger reading clean. Round 2 with 2H serrations changed nothing on that set.
+
+The anchoring is therefore **reverted** to the upstream N64-model placement (`vs_ref_dot
+= odd_field ? 0 : halfline`, window 244..247 / 292..295), which is what the retired
+`re_interlace` raster used and what the CRT has always been happy with. The sweep says
+this costs nothing now that the serrations are at 2H: the width detector reads
+450451/450449 instead of exactly 450450 (a 74 ns difference, from `syncgen_intf`
+doubling hsync start/end as 2x+1 so the measured hsync width differs by a clock), and
+the integrator is unchanged. `bench/dvd/run_csync_sweep.sh` reproduces the A/B over
+tau = 10–80 µs.
+
+**What this means for the remaining bounce:** neither separator model reproduces the
+symptom, so the cause is not established. With the anchoring reverted, the analog sync
+waveform differs from the last-good release only by the 2H serrations — if the set is
+still unhappy, the next bisect step is the single-raster plumbing itself rather than the
+sync shape (candidates in order: `CE_PIXEL` back to constant 1, then the pixel-repetition
+raster vs `re_interlace`'s 13.5 MHz native-width output). ⚠ **The composite CRT is the
+reference display for this path** — do not re-anchor or re-shape analog sync without one
+to test on.
 
 ## 4. Tests
 
 | Bench | What it proves |
 |---|---|
 | `bench/dvd/crt_syncgen_tb.sv` PHASE 2c (new) | pixrep + half-line 858: vsync every 450450 clk27, rises 858 apart within the line, 3.0-line width, 240 lines/field; PHASES 1/2/2b/3/4/5 unchanged |
-| `bench/dvd/csync_field_tb.sv` + `run_csync_field.sh` (new) | the REAL `sys_top.v` `csync` (extracted at run time) on the shipped modeline: first broad pulse ≥ standard in both fields, width-detector triggers exactly 262.5 lines apart, RC integrator within 0.05 line; `run_csync_sweep.sh [<older syncgen.v>]` sweeps tau and A/Bs placements |
+| `bench/dvd/csync_field_tb.sv` + `run_csync_field.sh` (new) | the REAL `sys_top.v` `csync` (extracted at run time) on the shipped modeline: first broad pulse ≥ standard in both fields, width detector and RC integrator both within tolerance of 262.5 lines; `run_csync_sweep.sh [<older syncgen.v>]` sweeps tau and A/Bs vsync placements (`+vss`/`+vse`/`+tau_us`) |
 | `bench/dvd/modeline_boot_tb.sv` [4] (new) + `run_modeline_boot.sh --red` | REAL `reset.v` + `regfile.v` + `syncgen_intf` + `sync_gen`: a watchdog pulse leaves vsync spacing at 450450 (GREEN) / breaks it with the old `dot_rst` wiring (RED); the boot-race phases updated to the new walk values |
 | `bench/dvd/cc_e2e_tb.sv` (rewritten) | REAL `sync_gen` + REAL `cc_vbi` + a copy of the output stage: captions demodulated at the pins, line 21 (17 H after the vsync edge), correct field slots, 720 enables per 1440-clock DE line |
 | `cc_line21_tb`, `cc_field_map_tb` | unchanged, green |
@@ -203,6 +199,10 @@ are untouched.
 - Native 13.5 MHz dot pacing (720-wide internally) — only if a reason appears; needs the
   overlay query-lead constants re-tuned (`HUD_QX_ADJ`, `BAR_QX_ADJ`, `LOGO_QX_LEAD`,
   `SP_QX_ADJ`, `crt_ov_map`, `cc_vbi`).
+- **The open one:** the composite-CRT field-rate bounce (§3.9). Next bisect steps if
+  round 3 does not clear it: `CE_PIXEL` back to constant 1 (accepting 1440x480i in the
+  OSD), then the pixel-repetition raster vs a native-width 13.5 MHz `dot_ce` (the old
+  `O[14]` pacing) — which would need every overlay query-lead constant re-tuned.
 - Equalizing pulses outside vsync (needs the vsync position in advance — a 3-line video
   delay or a hint from the modeline walk) if a set still hunts with 2H serrations.
 - Progressive 480p on the analog pins keeps the dot-0 vsync reference (no field

@@ -3306,21 +3306,16 @@ always @(*) begin
                             : filmp_prev  ? {4'b0, 12'd480, 4'b0, 12'd1286}  // NTSC 24p: 1287 lines/frame @ 875 dots => 23.976024 Hz EXACT
                                           : {4'b0, 12'd480, 4'b0, 12'd524}; end // 525 lines/frame (480p, strobe-fix VERT_RES=480)
         3'd3: begin wr_addr = REG_WR_VER_SYNC;
-                    // Per-FIELD vsync for the interlaced rasters. DVD-FORK FIX (single-raster
-                    // analog, 2026-09-03): the sync generator now anchors the interlaced
-                    // vsync on the HSYNC LEADING EDGE (rtl/mpeg2/syncgen.v vs_ref_dot), so
-                    // "vsync starts on line N" means at line N-1's trailing hsync — the
-                    // broadcast convention, where line 4's start IS the vsync leading edge
-                    // and line 21 (closed captions, v_cntr == vertical_length) begins 17 H
-                    // later. Hence 243..246 (was 244..247 with the old dot-0 reference,
-                    // which put the caption line only 16 H after the vsync edge — a decoder
-                    // searching line 21 would have looked one line late). PAL likewise one
-                    // line earlier (291..294; PAL analog remains unverified on HW).
-                    // NTSC: front porch 240..243+ (~3.9 lines), 3-line sync, ~15 lines to
-                    // the next active line — the standard 21-line VBI.
-                    wr_data = (pal_prev && il_prev) ? {4'b0, 12'd291, 4'b0, 12'd294}   // PAL per-field vsync
+                    // Per-FIELD vsync for the interlaced rasters. These are the values the
+                    // retired re_interlace raster used and the composite CRT has always been
+                    // happy with; line 21 (closed captions, v_cntr == vertical_length) is
+                    // their 15th line after vsync end, which is where a TV's caption decoder
+                    // looks (docs/closed_captions.md). ⚠ HW round 2 reverted a one-line-earlier
+                    // variant (243..246 / 291..294) that came with the hsync-anchored vsync
+                    // reference — see rtl/mpeg2/syncgen.v vs_ref_dot.
+                    wr_data = (pal_prev && il_prev) ? {4'b0, 12'd292, 4'b0, 12'd295}   // PAL per-field vsync
                             : pal_prev ? {4'b0, 12'd581, 4'b0, 12'd586}   // PAL per-frame vsync 581..586
-                            : il_prev  ? {4'b0, 12'd243, 4'b0, 12'd246}   // NTSC per-field vsync
+                            : il_prev  ? {4'b0, 12'd244, 4'b0, 12'd247}   // NTSC per-field vsync
                                        : {4'b0, 12'd488, 4'b0, 12'd494}; end // per-frame vsync
         3'd4: begin wr_addr = REG_WR_VID_MODE;
                     // DVD-FORK FIX (single-raster analog, 2026-09-03): the interlaced

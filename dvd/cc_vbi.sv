@@ -17,10 +17,9 @@
  *     so it is enabled on one clock of each pair and sees hpos = h_pos >> 1.
  *   - v_pos = {v_cntr, ~odd_field}: v_pos[11:1] is the line within the FIELD,
  *     v_pos[0] the raster field parity. Line 21 = the last line of the field's
- *     blanking, v_cntr == vertical_length (261 NTSC): its hsync is 17 H after
- *     the vsync leading edge (line 4 -> line 21, the broadcast count; the walk's
- *     vsync 243..246 and syncgen's hsync-anchored reference make that exact —
- *     docs/closed_captions.md). Field 1 = ~v_pos[0]: the SYNC-SIGNATURE
+ *     blanking, v_cntr == vertical_length (261 NTSC) = the 15th line after vsync
+ *     end (docs/closed_captions.md), unchanged from the re_interlace raster this
+ *     inserter used to live in. Field 1 = ~v_pos[0]: the SYNC-SIGNATURE
  *     derivation pinned by bench/dvd/cc_field_map_tb.sv (SMPTE 170M field 1 =
  *     the line-aligned vsync; NTSC content is bottom-field-first, so picture
  *     parity never identifies the broadcast field).

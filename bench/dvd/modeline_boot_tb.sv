@@ -136,7 +136,7 @@ module modeline_boot_tb;
                     wr_data = il_prev ? {4'b0, 12'd480, 4'b0, 12'd261}
                                       : {4'b0, 12'd480, 4'b0, 12'd524}; end
         3'd3: begin wr_addr = REG_WR_VER_SYNC;
-                    wr_data = il_prev ? {4'b0, 12'd243, 4'b0, 12'd246}
+                    wr_data = il_prev ? {4'b0, 12'd244, 4'b0, 12'd247}
                                       : {4'b0, 12'd488, 4'b0, 12'd494}; end
         3'd4: begin wr_addr = REG_WR_VID_MODE;
                     wr_data = il_prev ? {4'b0, 12'd429, 13'b0, 3'b011}   // half-line + pixrep
@@ -248,7 +248,7 @@ module modeline_boot_tb;
       chk(regfile.vertical_resolution  == 12'd480, "vertical_resolution not applied (per-field)");
       chk(regfile.horizontal_halfline  == 12'd429, "VID_MODE half-line not applied");
       chk(regfile.vertical_length      == 12'd261, "vertical_length not applied (per-field)");
-      chk(regfile.vertical_sync_start  == 12'd243, "vertical_sync_start not applied (per-field)");
+      chk(regfile.vertical_sync_start  == 12'd244, "vertical_sync_start not applied (per-field)");
       chk(regfile.interlaced           == 1'b1,    "VID_MODE interlaced not applied");
       chk(regfile.pixel_repetition     == 1'b1,    "VID_MODE pixel_repetition not applied");
       chk(regfile.deinterlace          == 1'b0,    "TRICK deinterlace=0 not applied");

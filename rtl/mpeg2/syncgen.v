@@ -145,36 +145,20 @@ module sync_gen    (clk, clk_en, rst,
    * reference field A; odd_field=0 (BOTTOM content) is B: one extra line and the
    * mid-line vsync. (If HW shows the fields spatially swapped, flip both terms.) */
   wire        crt_ilace   = interlaced && (horizontal_halfline != 12'd0);
-  /* DVD-FORK FIX (single-raster analog, 2026-09-03): the vertical sync REFERENCE is
-   * the HSYNC LEADING EDGE, not dot 0 (= the start of active video in this sync
-   * generator's h_cntr convention, ~4.5 us AFTER hsync ends). Broadcast vsync begins
-   * where an hsync leading edge would be (field 1) and half a line later (field 2);
-   * every other MiSTer core does the same because their counters originate at hsync.
-   * Why it matters on the analog pins: the framework `csync` serrates at LINE rate
-   * (an hsync-width pulse one hsync period ahead of each hsync, sys_top.v). With
-   * vsync starting 245 dots (9 us) after hsync, field A's first broad pulse ran
-   * ~50 us before its first serration but field B's only ~18 us — below the
-   * broad-pulse threshold of many sync separators (a real broad pulse is ~27 us),
-   * so a picky set/scaler could lock a full line late on field B, or flip between
-   * the two readings field to field (bench/dvd/csync_field_tb.sv measured an RC
-   * integrator triggering 0.16 line differently per field; the RT4K field report
-   * showed lines-per-frame / vsync-length toggling). Anchored at the hsync edge the
-   * two fields see the SAME serration pattern relative to their vsync start (first
-   * broad pulse ~59 us / ~27 us, both comfortably broad).
-   *   field A sample dot = horizontal_sync_start;
-   *   field B sample dot = horizontal_sync_start + halfline, and when that wraps
-   *   past the end of the line the vsync window shifts one line later so the B
-   *   rise stays EXACTLY half a line (262.5 lines) after the A rise.
-   * Unchanged: the 262/263 alternation, v_cntr/v_pos/DE (the picture), vsync
-   * width (end-start full lines). Progressive and the legacy pulse-delay path
-   * (halfline=0) are untouched. */
-  wire [12:0] vs_ref_sum   = {1'b0, horizontal_sync_start} + {1'b0, horizontal_halfline};
-  wire        vs_ref_wrap  = (vs_ref_sum > {1'b0, horizontal_length});
-  wire [12:0] vs_ref_sum_w = vs_ref_sum - {1'b0, horizontal_length} - 13'd1;
-  wire [11:0] vs_ref_dot   = odd_field    ? horizontal_sync_start
-                           : vs_ref_wrap  ? vs_ref_sum_w[11:0]
-                                          : vs_ref_sum[11:0];              /* vertical-event sample dot */
-  wire        vs_line_adj  = ~odd_field & vs_ref_wrap;                     /* B window one line later */
+  /* DVD-FORK (single-raster analog): the vertical-sync sample dot. Dot 0 on the
+   * reference field, mid-line (halfline) on the other — the upstream N64-model
+   * placement, HW-proven on a composite CRT both in the O[14] mode and through the
+   * retired re_interlace second raster.
+   * ⚠ HW ROUND 2 (2026-09-03) REVERTED an experiment that anchored these on the
+   * HSYNC LEADING EDGE (horizontal_sync_start, +halfline wrapping to the next line)
+   * because the framework's csync serrates on a line grid and dot-0 gives the two
+   * fields different broad-pulse widths (~50 us / ~18 us, bench/dvd/csync_field_tb.sv).
+   * On the maintainer's composite CRT that anchoring made the picture BOUNCE at field
+   * rate and look blockier, and the bench's separator models never reproduced it —
+   * they now show both placements within a clock of each other once the serrations
+   * run at 2H (the real asymmetry fix, sys/sys_top.v csync). The CRT is the reference
+   * for the analog path: do not re-anchor without one to test on. */
+  wire [11:0] vs_ref_dot  = odd_field ? 12'd0 : horizontal_halfline;   /* vertical-event sample dot */
   /* (the half-line-referenced vsync sampler itself lives below, after the h/v
    *  counters it samples — see "CRT vsync sampler") */
 
@@ -261,13 +245,11 @@ module sync_gen    (clk, clk_en, rst,
 
   /* DVD-FORK FIX (CRT 2:1 interlace): the CRT vsync sampler (see the crt_ilace note
    * above). The vsync window [vertical_sync_start, vertical_sync_end) is sampled once
-   * per line at the field's reference dot vs_ref_dot (the hsync leading edge on the
-   * reference field, half a line later on the other — see the DVD-FORK FIX note at
-   * vs_ref_dot) => exactly (end-start) FULL lines of vsync in both fields,
+   * per line at the field's reference dot vs_ref_dot (dot 0 on the reference field,
+   * mid-line on the other) => exactly (end-start) FULL lines of vsync in both fields,
    * the B field's shifted half a line. With the alternating field totals this puts
    * vsync rising edges exactly 262.5 lines apart every field — the 2:1 lock. */
-  wire        vsync_window   = (v_cntr >= (vertical_sync_start + {11'd0, vs_line_adj}))
-                            && (v_cntr <  (vertical_sync_end   + {11'd0, vs_line_adj}));
+  wire        vsync_window   = (v_cntr >= vertical_sync_start) && (v_cntr < vertical_sync_end);
   reg         vsync_crt;
   wire        vsync_crt_nxt  = (h_cntr == vs_ref_dot) ? vsync_window : vsync_crt;
   always @(posedge clk)

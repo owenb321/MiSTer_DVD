@@ -286,8 +286,8 @@ module crt_syncgen_tb;
     rst = 0;
     horizontal_resolution = 12'd1440; horizontal_sync_start = 12'd1471;
     horizontal_sync_end   = 12'd1595; horizontal_length     = 12'd1715; // 1716 dots
-    vertical_resolution   = 12'd480;  vertical_sync_start   = 12'd243;
-    vertical_sync_end     = 12'd246;  vertical_length       = 12'd261;  // 262/263 fields
+    vertical_resolution   = 12'd480;  vertical_sync_start   = 12'd244;
+    vertical_sync_end     = 12'd247;  vertical_length       = 12'd261;  // 262/263 fields
     horizontal_halfline   = 12'd858;  interlaced            = 1'b1;     // pixrep: 2*429
     horizontal_size = 14'd1440;       // as syncgen_intf doubles the stream width
     waitclk(8); rst = 1;

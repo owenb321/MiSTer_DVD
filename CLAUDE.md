@@ -280,29 +280,28 @@ worse maintenance burden than targeted in-place edits. So:
   new `hps_io.cfg_seen`, follows while nothing is mounted, frozen while a disc plays.
   (4) Progressive + analog-direct wrote the 875×1287 @ 23.976 Hz film modeline to the
   pins — `filmp_eff` also gated on `~analog_want` (HDMI-only rigs keep Film 24p).
-  ★ **MEASURED sync-shape defect, the best candidate for the per-field toggling
-  (`bench/dvd/csync_field_tb.sv`, runs the REAL `sys_top.v` `csync` extracted at run
-  time):** the framework serrates at LINE rate (no equalizing pulses) and our interlaced
-  vsync began at active dot 0, ~9 µs after hsync, so field B's first broad pulse was only
-  **~18 µs** (field A ~50 µs) — at/below the broad-pulse threshold of many separators ⇒
-  a set can lock a line late on B or flip field to field. `syncgen.v` now anchors the
-  interlaced vsync on the HSYNC LEADING EDGE (field B half a line later, wrapping to the
-  next line): 59 µs / 27 µs (standard 27.2), width detector exactly 262.5 lines apart.
-  ★★ **HW ROUND 1 (composite CRT): resolution right, picture PAIRED/BOUNCED MORE than
-  before.** A tau sweep (`bench/dvd/run_csync_sweep.sh`) showed the two separator
-  models want OPPOSITE placements under the framework's LINE-RATE serrations: dot-0
-  was near-perfect for an RC integrator (450460/450440 @ 80 µs — a classic composite
-  set) but broke width detectors (449837/451063 = the RT4K), anchoring did the reverse
-  (integrator ~0.1 line off). No placement satisfies both because the fields' vsyncs
-  start half a line apart and the serrations do not. FIX = the fork's `csync`
-  (`sys/sys_top.v`) serrates at 2H during vsync: both fields see 27 µs / 27 µs, width
-  detector exact, integrator 0.02 line — both gated in `csync_field_tb` now.
-  ⚠ Because "vsync on line N" now means "at line N−1's trailing hsync", the walk's
-  per-field vsync moved one line EARLIER (243..246 NTSC, 291..294 PAL) so caption line 21
-  (`v_cntr == 261`) keeps its broadcast position 17 H after the vsync edge —
-  `cc_e2e_tb` pins it. ⚠ The RC-integrator asymmetry that remains (±0.1 line) is
-  inherent to line-rate serrations and affects every MiSTer 480i core; reported, not
-  gated; 2H eq pulses in a fork `csync` are the next step if a set still hunts.
+  ★ **MEASURED sync-shape defect (`bench/dvd/csync_field_tb.sv`, runs the REAL
+  `sys_top.v` `csync` extracted at run time):** the framework serrates at LINE rate with
+  no equalizing pulses, so the two fields — whose vsyncs start half a line apart — present
+  broad pulses of **~50 µs and ~18 µs**; 18 µs is at/below the threshold of a width-based
+  separator (the RT4K "vsync length / lines-per-frame toggling" shape). FIX = the fork's
+  `csync` serrates at **2H** during vsync: both fields present the standard ~27 µs pulse,
+  and both separator models then read 262.5 lines for EITHER vsync placement.
+  ⚠ `half_len = (h_cnt + hs_len) >> 1` — `h_cnt` resets on both hsync edges, so at the
+  rising edge it holds `line − hs_len`; `h_cnt >> 1` is 63 clocks early and re-breaks the
+  symmetry (the bench catches it).
+  ★★ **HW ROUNDS 1–2 (the maintainer's composite CRT): 720x480i reported right, but the
+  picture BOUNCES at field rate and looks blockier than the previous release — at the
+  idle logo too, with every `O[2]` trigger clean. ROOT CAUSE NOT ESTABLISHED.** Round 1
+  had also anchored the interlaced vsync on the HSYNC LEADING EDGE (window 243..246);
+  that is now **REVERTED** to the upstream N64 placement (dot 0 / halfline, window
+  244..247) — what `re_interlace` used and what this CRT has always been happy with —
+  since the 2H serrations make the placement nearly irrelevant to both separator models
+  (width detector 450451/450449 vs exactly 450450; the 74 ns comes from `syncgen_intf`
+  doubling hsync start/end as 2x+1). ⚠ **The composite CRT is the reference display for
+  the analog path; do not re-shape analog sync without one to test on.** Next bisect if
+  round 3 does not clear it: `CE_PIXEL` back to constant 1, then pixel repetition vs a
+  native-width 13.5 MHz `dot_ce`. Detail: `docs/single_raster_analog.md` §3.9.
   Also: idle window off-by-ones fixed (VER_RES 479→480, H 1441→1440 — idle now reports
   `720x480i`, no load-time popup); `CE_PIXEL` = one clock per pixrep pair in Interlaced
   (Main reports **720x480i**, ascal samples 720 real pixels; the analog waveform is

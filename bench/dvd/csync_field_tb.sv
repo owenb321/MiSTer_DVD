@@ -25,8 +25,8 @@
  * Two separator models, because real sets differ:
  *   - a BROAD-PULSE WIDTH detector (what digital sync processors and modern jungle
  *     chips do): vertical = the leading edge of the first sync pulse longer than
- *     ~20 us. This is the PASS criterion: [1] its triggers must be EXACTLY 450450
- *     clk27 apart (262.5 lines of 1716) every field, and [2] each field's first
+ *     ~20 us. This is the PASS criterion: [1] its triggers must be 450450 clk27
+ *     apart (262.5 lines of 1716) every field within TOL_WD, and [2] each field's first
  *     broad pulse must be at least a standard broad pulse wide (27 us) so no
  *     plausible threshold can reject one field's and accept the other's;
  *   - an RC INTEGRATOR (tau ~ 40 us, Schmitt 60/30 %, +tau_us overrides): also
@@ -35,11 +35,17 @@
  *     serration the two fields' broad-pulse patterns differ and the integrator
  *     lands ~0.1 line apart — the composite-CRT "pairing / bounce" round.)
  *   [3] hsync cadence 1716 clk27, vsync width 3 lines in both fields (raster sanity).
- * FINDING (2026-09-03, why syncgen.v anchors vsync on the hsync edge): with the
- * old dot-0 reference field B's first broad pulse was only ~18 us (below many
- * detectors' threshold, borderline for the rest) against field A's ~50 us — a
- * set could lock a line late on field B or flip between the two readings field
- * to field. Anchored: ~59 us / ~27 us.
+ * FINDING (2026-09-03, why sys_top's csync serrates at 2H): with stock's LINE-rate
+ * serration the two fields' broad pulses differ hugely — ~50 us on the field whose
+ * vsync starts at an hsync, ~18 us on the field whose vsync starts mid-line (below
+ * or at the threshold of a width-based separator: the RetroTINK report). At 2H both
+ * fields present the standard ~27 us broad pulse, and BOTH separator models then
+ * measure 262.5 lines for either vsync placement (+vss/+vse) — which is why the
+ * hsync-anchored placement experiment could be reverted after HW round 2 (it made
+ * the maintainer's composite CRT bounce; see rtl/mpeg2/syncgen.v vs_ref_dot).
+ * ⚠ The width-detector spacings differ by up to ~2 clk27 (74 ns) between fields
+ * because syncgen_intf doubles hsync start/end as 2x+1 under pixel repetition, so
+ * the measured hsync width differs by a clock; TOL_WD covers that.
  *
  * Build/run: bash bench/dvd/run_csync_field.sh
  */
@@ -58,7 +64,7 @@ module csync_field_tb;
   // +vss/+vse override the per-field vsync window (243/246 shipped; 244/247 was the
   // pre-anchoring walk) and +tau_us the integrator time constant, for A/B sweeps
   // against an older syncgen.v (bench/dvd/run_csync_field.sh --sweep).
-  reg  [11:0] vss = 12'd243, vse = 12'd246;
+  reg  [11:0] vss = 12'd244, vse = 12'd247;
   integer tau_us = 40;
   initial begin
     integer v;
@@ -118,7 +124,8 @@ module csync_field_tb;
 
   // ---- broad-pulse width detector ------------------------------------------
   localparam integer BROAD_MIN = 540;              // 20 us: "longer than any hsync"
-  localparam integer BROAD_STD = 734;              // 27.2 us: a standard broad pulse
+  localparam integer BROAD_STD = 730;              // ~27 us: a standard broad pulse
+  localparam integer TOL_WD    = 4;                // the 2x+1 hsync-doubling clock (see header)
   reg      cs_q = 0;
   integer  cs_rise = -1;                           // start of the current asserted pulse
   integer  wd_last = -1, wd_n = 0, wd_bad = 0, wd_sp_a = -1, wd_sp_b = -1;
@@ -136,10 +143,10 @@ module csync_field_tb;
           wd_n = wd_n + 1;
           if (wd_last >= 0 && wd_n > 2) begin
             if (wd_n[0]) wd_sp_a = cs_rise - wd_last; else wd_sp_b = cs_rise - wd_last;
-            if ((cs_rise - wd_last) != FIELD) begin
+            if ((cs_rise - wd_last) > FIELD + TOL_WD || (cs_rise - wd_last) < FIELD - TOL_WD) begin
               wd_bad = wd_bad + 1;
-              if (wd_bad <= 6) $display("FAIL: broad-pulse trigger spacing %0d clk27 (expect exactly %0d) at dot %0d",
-                                        cs_rise - wd_last, FIELD, dot);
+              if (wd_bad <= 6) $display("FAIL: broad-pulse trigger spacing %0d clk27 (expect %0d +/- %0d) at dot %0d",
+                                        cs_rise - wd_last, FIELD, TOL_WD, dot);
             end
           end
           wd_last = cs_rise;
@@ -203,7 +210,7 @@ module csync_field_tb;
              N_TAU, sp_a, sp_b, FIELD, bad, TOL);
     if (wd_bad == 0 && wd_n >= 8 && first_broad_a >= BROAD_STD && first_broad_b >= BROAD_STD
         && bad == 0 && n_trig >= 8 && bad_hs == 0 && bad_vsw == 0)
-      $display("PASS: csync_field_tb — both fields present a >= standard first broad pulse; width detector exactly and RC integrator within 0.05 line of 262.5 lines apart");
+      $display("PASS: csync_field_tb — both fields present a >= standard first broad pulse; width detector and RC integrator both within tolerance of 262.5 lines apart");
     else begin
       $display("FAIL: csync_field_tb — %0d bad width-detector spacings (%0d triggers), %0d bad integrator spacings (%0d triggers), first broad A=%0d B=%0d (need >= %0d), %0d bad hsync, %0d bad vsync widths",
                wd_bad, wd_n, bad, n_trig, first_broad_a, first_broad_b, BROAD_STD, bad_hs, bad_vsw);
