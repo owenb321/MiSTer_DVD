@@ -18,6 +18,12 @@
 // it saw when 861 was a parameter inside it. That is deliberate -- it makes
 // this module a structural no-op on the one path that already worked.
 //
+// ★ WAV / CD-DA TAKES THE SAME BYPASS, and MUST: 16-bit stereo PCM has a rate
+// fixed by its sample rate (44.1 kHz is the identical 861, a CD-DA sector being
+// 1/75 s), and it carries no PTS whatsoever -- so the measurement path below
+// could never arm on it, and a measured-rate gate would leave the D-pad inert
+// and the clock at 0:00:00 on every .wav and every audio CD.
+//
 // ★ WHY MEASURE PTS AGAINST BLOCKS, AND NOT A WALL CLOCK. A flat .mpg/.VOB has
 // no seek tables and no fixed geometry, so its rate has to be measured. Both
 // lin_blk (the reader's fetch front) and vid_pts (the demux's parse front) are
@@ -85,6 +91,13 @@ module lin_rate #(
                                                   // discontinuity, not a rate
     parameter [31:0] DBLK_MAX  = 32'd131_072,     // 256 MB in one window ditto
     parameter [23:0] BLK10_RAW = 24'd861,         // 75*2352/2048*10, exact CD
+    // WAV / CD-DA: 16-bit stereo PCM, so the byte rate is fixed by the sample
+    // rate alone. 44.1 kHz = 176400 B/s = 86.13 blk/s => 861 per 10 s -- the
+    // SAME constant as a raw CD, because a CD-DA sector IS 1/75 s. 48 kHz =
+    // 192000 B/s = 93.75 blk/s => 937.5, taken as 938 (a +0.05% step error,
+    // i.e. a 10 s jump lands 5 ms long).
+    parameter [23:0] BLK10_441 = 24'd861,
+    parameter [23:0] BLK10_48  = 24'd938,
     parameter [23:0] BLK10_MIN = 24'd100,         // ~20 KB/s  -- reject below
     parameter [23:0] BLK10_MAX = 24'd12_000       // ~2.4 MB/s -- reject above
 ) (
@@ -92,6 +105,11 @@ module lin_rate #(
     input  wire        rst_n,           // reset_n -- NOT pipe_rst_n (see above)
     input  wire        en,              // linear playback active
     input  wire        raw_mode,        // 1 = raw MODE2/2352 CD image
+    // 1 = WAV / CD-DA raw PCM. Like raw_mode this is an EXACT geometry, not a
+    // measurement -- and it has to be, because a PCM source carries no PTS at
+    // all, so the measurement path can never arm on it.
+    input  wire        cdda_mode,
+    input  wire [1:0]  cdda_fs,         // nco_fs encoding: 0 = 44.1 kHz, 1 = 48 kHz
     input  wire        mount,           // start_streaming: drop the estimate
     input  wire        flush,           // load_flush: restart the window only
     input  wire        sec_tick,        // 1 Hz: recompute the clock
@@ -126,9 +144,14 @@ module lin_rate #(
     reg  [31:0] blk0;
     reg         win_open;
 
-    // Raw CD bypasses everything (see the header).
-    assign blk10    = raw_mode ? BLK10_RAW : blk10_r;
-    assign blk10_ok = raw_mode ? en        : blk10_ok_r;
+    // A FIXED-GEOMETRY source bypasses the measurement entirely (see the
+    // header): raw CD and WAV/CD-DA both know their rate exactly, and the PCM
+    // one has no PTS for the measurement to work from in any case.
+    wire [23:0] blk10_fix = raw_mode ? BLK10_RAW
+                          : (cdda_fs == 2'd0) ? BLK10_441 : BLK10_48;
+    wire        fixed_rate = raw_mode | cdda_mode;
+    assign blk10    = fixed_rate ? blk10_fix : blk10_r;
+    assign blk10_ok = fixed_rate ? en        : blk10_ok_r;
 
     wire [33:0] d_pts   = {1'b0, vid_pts} - {1'b0, pts0};
     wire [31:0] d_blk   = lin_blk - blk0;

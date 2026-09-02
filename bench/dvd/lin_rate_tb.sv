@@ -22,6 +22,8 @@ module lin_rate_tb;
 
     reg         rst_n = 1'b0;
     reg         en = 1'b1, raw_mode = 1'b0;
+    reg         cdda_mode = 1'b0;
+    reg  [1:0]  cdda_fs = 2'd0;
     reg         mount = 1'b0, flush = 1'b0, sec_tick = 1'b0;
     reg  [32:0] vid_pts = 33'd0;
     reg         vid_pts_valid = 1'b0;
@@ -46,6 +48,7 @@ module lin_rate_tb;
 
     lin_rate dut (
         .clk(clk), .rst_n(rst_n), .en(en), .raw_mode(raw_mode),
+        .cdda_mode(cdda_mode), .cdda_fs(cdda_fs),
         .mount(mount), .flush(flush), .sec_tick(sec_tick),
         .vid_pts(vid_pts), .vid_pts_valid(vid_pts_valid),
         .lin_blk(lin_blk), .total_blk(total_blk),
@@ -304,6 +307,40 @@ module lin_rate_tb;
         chk(step_val > ref_val, "ema: moved toward the new rate");
         chk((step_val - ref_val) < ((6000 - ref_val) / 2),
             "ema: <half the gap in 1 win");
+
+        // ------------------------------------------------------------------
+        // TEST 14: WAV / CD-DA is a FIXED-GEOMETRY bypass, like a raw CD.
+        // The point of the arm is that it needs NO PTS: a PCM source carries
+        // none at all, so if this went through the measurement path the D-pad
+        // would stay inert and the clock would read 0:00:00 for ever. The
+        // stimulus therefore never presents a PTS, exactly like TEST 3's raw
+        // arm -- and the RED form of this test is the measured path, which
+        // cannot answer at all.
+        $display("TEST 14: WAV/CD-DA fixed rate, with no PTS at all");
+        raw_mode = 1'b0; cdda_mode = 1'b0;
+        @(negedge clk); mount = 1'b1; @(negedge clk); mount = 1'b0; tick(20);
+        chk(!blk10_ok, "cdda: nothing armed before the mode is set");
+
+        // 44.1 kHz: 176400 B/s over 2048-B blocks = 861 per 10 s -- the same
+        // constant a raw CD uses, because a CD-DA sector is 1/75 s.
+        cdda_mode = 1'b1; cdda_fs = 2'd0; tick(4);
+        chk(blk10 == 24'd861, "cdda 44.1k: 861 with no PTS");
+        chk(blk10_ok, "cdda 44.1k: armed");
+
+        // ...and the clock arms off the same edge. 8610 blocks = 100 s at
+        // 44.1 kHz; a 3600-block file is 41 s.
+        lin_blk = 32'd8610; total_blk = 32'd86_100; tick(4);
+        @(negedge clk); sec_tick = 1'b1; @(negedge clk); sec_tick = 1'b0;
+        tick(400);
+        chk(time_ok, "cdda clock: armed");
+        chk(cur_time[31:8]   == 24'h00_01_40, "cdda clock: 8610 blk = 1:40");
+        chk(total_time[31:8] == 24'h00_16_40, "cdda clock: 86100 blk = 16:40");
+
+        // 48 kHz: 192000 B/s = 93.75 blk/s => 937.5, taken as 938. This is the
+        // arm that the pre-rebase branch got wrong -- it reused 861 for both
+        // rates, so every 48 kHz jump was ~8.6% short.
+        cdda_fs = 2'd1; tick(4);
+        chk(blk10 == 24'd938, "cdda 48k: 938, not the 44.1k constant");
 
         if (errors == 0) $display("\nlin_rate_tb: ALL TESTS PASSED");
         else begin

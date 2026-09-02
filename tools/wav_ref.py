@@ -5,14 +5,17 @@ Models the dvd_iso_reader.sv WAV path (branch feature/wav-audio) BYTE-EXACTLY:
 
   * Probe: sector 0 must start "RIFF" with "WAVE" at offset 8 (same rbuf shadow
     the riff_cdxa comparator uses).  The chunk walker then runs over SECTOR 0
-    ONLY (2048 bytes): from offset 12, each chunk is <ckid:4><cksize:4 LE> and
-    advances by 8 + cksize rounded UP to even (RIFF pad rule).  "fmt " captures
+    ONLY: from offset 12, each chunk is <ckid:4><cksize:4 LE> and advances by
+    8 + cksize rounded UP to even (RIFF pad rule).  "fmt " captures
     {audio_format, channels, sample_rate, bits}; "data" captures the payload
-    byte offset and length and STOPS the walk.
+    byte offset and length and STOPS the walk.  A record may only START at
+    offset <= 2002 (the RTL reads each record through its 45-byte rbuf shadow,
+    which must stay inside the resident sector-0 parse_buf) — an advance past
+    that bound is a REJECT.
   * Accept: audio_format == 1 (PCM), channels == 2, bits == 16, rate in
-    {44100, 48000}.  Anything else — or "data" not found within sector 0, or a
-    chunk record straddling past sector 0 — is a REJECT (RTL: wav_bad ->
-    img_unplayable, no audio ever emitted).
+    {44100, 48000}.  Anything else — or "data" not reached within the walkable
+    window — is a REJECT (RTL: wav_bad -> img_unplayable, no audio ever
+    emitted).
   * Playback: bytes [data_off, data_off + data_len) stream to the PCM
     assembler, little-endian interleaved s16: b0=L.lo b1=L.hi b2=R.lo b3=R.hi.
     A trailing partial pair (data_len % 4 != 0) is DISCARDED.  Bytes after the
@@ -110,20 +113,13 @@ def probe(img: bytes) -> Verdict:
     if len(sec) < 12 or sec[0:4] != b'RIFF' or sec[8:12] != b'WAVE':
         v.reason = 'no RIFF/WAVE signature'
         return v
+    WALK_MAX = 2002          # rbuf-shadow bound: a record starts at <= 2002
     fmt = None
-    off = 12
+    off = 12                 # always <= WALK_MAX; re-checked at each advance
     while True:
-        if off + 8 > SECTOR:
-            v.reason = 'chunk record beyond sector 0'
-            return v
         ckid = sec[off:off + 4]
         cksz = struct.unpack('<I', sec[off + 4:off + 8])[0]
-        if ckid == b'fmt ':
-            if off + 8 + 16 > SECTOR:
-                v.reason = 'fmt body beyond sector 0'
-                return v
-            fmt = struct.unpack('<HHIIHH', sec[off + 8:off + 24])
-        elif ckid == b'data':
+        if ckid == b'data':
             if fmt is None:
                 v.reason = 'data before fmt'
                 return v
@@ -142,7 +138,12 @@ def probe(img: bytes) -> Verdict:
                 v.data_off = off + 8
                 v.data_len = cksz
             return v
+        if ckid == b'fmt ':
+            fmt = struct.unpack('<HHIIHH', sec[off + 8:off + 24])
         off += 8 + cksz + (cksz & 1)
+        if off > WALK_MAX:
+            v.reason = 'chunk walk past the sector-0 window'
+            return v
 
 
 def expected_pairs(img: bytes):

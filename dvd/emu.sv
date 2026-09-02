@@ -397,7 +397,28 @@ wire [11:0] ov_h_gen = il_eff ? {1'b0, core_h_pos[11:1]} : core_h_pos;
 // PCM is muted (the receiver plays the S/PDIF stream). O7 flips the S/PDIF
 // payload byte order live (the classic "passthrough plays static" gotcha).
 wire signed [15:0] dec_audio_l, dec_audio_r;
-wire        pass_mode  = status[6];   // O6: 1 = IEC 61937 passthrough
+// CD-DA/WAV mode taps (dvd_iso_reader, feature/wav-audio). Declared up here
+// because pass_mode just below is forced off for the whole session.
+//
+// ⚠ THIS IS NOT THE OLD "Passthru means bitstream only" RULE. Since PR #79 a
+// PCM track in Passthru is DECODED and sent as PCM, and CD-DA/WAV is exactly
+// that -- a PCM source -- so the user-visible outcome here is the same one that
+// change delivers for an LPCM or MP2 track. Forcing the bit off is simply how a
+// source that never enters audio_ring reaches it:
+//
+//   * aud_route decides PCM-vs-bitstream per RING FRAME, and this path bypasses
+//     ps_demux and the ring entirely, so no frame ever arrives to classify.
+//     rt_pcm_session would sit at its reset value 0 for the whole session, and
+//     pcm_mute = (pass_mode & ~rt_pcm_session) would MUTE a .wav outright.
+//   * af_passthru follows this wire, so Main is told PCM and puts the ADV7513
+//     in PCM mode -- which is what the sink needs for CD audio.
+//   * SPDIF_PASS_EN and HDMI_BS_EN fall out too, so the optical and HDMI legs
+//     carry ordinary PCM instead of an IEC 61937 carrier with nothing in it.
+wire        cdda_mode_w;
+wire [1:0]  cdda_fs_w;
+wire        wav_bad_w;
+wire        cdda_afull_w;
+wire        pass_mode  = status[6] & ~cdda_mode_w;   // O6: 1 = IEC 61937 passthrough
 wire        pass_bswap = status[7];   // O7: 1 = swap payload byte order
 assign AUDIO_S      = 1;
 assign AUDIO_MIX    = 2'd0;
@@ -645,9 +666,11 @@ parameter CONF_STR = {
     // dvd_iso_reader navigates VIDEO_TS in fabric (largest VTS = main feature).
     // BIN/IMG/DAT select a raw MODE2/2352 CD image (VCD/SVCD bin/cue data
     // track — pick the LARGE track bin; .cue sheets are text the fabric cannot
-    // parse). Detection is content-based (sector-sync probe at byte 0), the
-    // extension list is only the OSD picker filter. Other files stream as before.
-    "S0,MPGM2VVOBISOBINIMGDAT,Load Video;",
+    // parse). WAV plays PCM audio files (16-bit stereo 44.1/48 kHz) through
+    // the CD-DA path. Detection is content-based (sector-sync/RIFF probe at
+    // byte 0), the extension list is only the OSD picker filter. Other files
+    // stream as before.
+    "S0,MPGM2VVOBISOBINIMGDATWAV,Load Video;",
     // Aspect Ratio: Auto (default) reads the display AR from the MPEG-2 sequence header
     // (aspect_ratio_information, par. 6.3.3: 2=4:3, 3=16:9); 4:3/16:9 force it. Drives the
     // MiSTer scaler output aspect (VIDEO_ARX/ARY) — the 720x480/576 raster is unchanged,
@@ -2258,10 +2281,11 @@ dpad_seek dpad_seek_inst (
                      !in_title_menu && !menu_nav),
     .dvd_mode       (cell_ready),               // DSI tables available
     // Every linear source, not just raw CD: the step arrives on lin_blk10 --
-    // exact geometry for a VCD/SVCD image, a measured rate for a flat .mpg or
-    // .VOB (issue #39). Gated on the rate being VALID rather than letting a
-    // zero step through, so a tap in the ~0.5 s before the estimate arms does
-    // nothing instead of firing a jump resolved against nothing.
+    // exact geometry for a VCD/SVCD image or a WAV/CD-DA source, a measured
+    // rate for a flat .mpg or .VOB (issue #39). Gated on the rate being VALID
+    // rather than letting a zero step through, so a tap in the ~0.5 s before
+    // the estimate arms does nothing instead of firing a jump resolved against
+    // nothing.
     .lin_mode       (lin_mode_w && lin_blk10_ok_w),
     .up_edge        (dpad_seek_en & up_edge),
     .dn_edge        (dpad_seek_en & dn_edge),
@@ -3037,7 +3061,11 @@ always @(posedge clk_sys) begin
     else if (vbuf_fill_s1 >= VBUF_HARD_ON)     vbuf_hard_over <= 1'b1;
     else if (vbuf_fill_s1 <  VBUF_HARD_OFF)    vbuf_hard_over <= 1'b0;
 end
-wire reader_busy = fifo_almost_full | menu_vbuf_throttle | vbuf_hard_over;
+// CD-DA/WAV mode: the ONLY consumer is the PCM pair FIFO, so its almost-full
+// tap is the whole backpressure story — the video-side terms would reference
+// a pipeline this mode never feeds.
+wire reader_busy = cdda_mode_w ? cdda_afull_w
+                 : (fifo_almost_full | menu_vbuf_throttle | vbuf_hard_over);
 
 // SEEK VBUF FLUSH — now generated inside flush_ctl (see the trigger-matrix
 // instantiation above): a title transport seek / menu->title jump (~keep_vbuf),
@@ -3221,6 +3249,9 @@ dvd_iso_reader dvd_iso_reader_inst (
     // Linear transport (VCD/SVCD raw .bin + flat .mpg/.VOB): see the
     // lin_transport_ok gating below.
     .raw_mode_o           (raw_mode_w),
+    .cdda_mode_o          (cdda_mode_w),      // WAV/CD-DA PCM image (bypasses ps_demux)
+    .cdda_fs_o            (cdda_fs_w),
+    .wav_bad_o            (wav_bad_w),
     .flat_seek_en         (ps_saw_pack),
     .lin_seek_ok_o        (lin_seek_ok_w),
     .lin_blk_o            (lin_blk_w),
@@ -3254,8 +3285,11 @@ ps_stream_fifo ps_stream_fifo_inst (
     .clk          (clk_sys),
     .rst_n        (pipe_rst_n),
 
+    // CD-DA/WAV mode routes the reader's bytes STRAIGHT to the PCM path (the
+    // dvd_audio_decode cdda_wr_* port below) — nothing enters the demux, so
+    // the whole PS/codec chain is bypassed by simply never seeing a byte.
     .wr_data      (stream_data),
-    .wr_en        (stream_valid),
+    .wr_en        (stream_valid & ~cdda_mode_w),
     .almost_full  (fifo_almost_full),
 
     .out_byte     (demux_in_byte),
@@ -3474,8 +3508,15 @@ always @(posedge clk_sys or negedge reset_n) begin
             // on" is still the outcome there.
             img_wd_cnt <= 30'd0; img_unplayable <= 1'b0; media_seen <= 1'b0;
             slot_empty <= 1'b0;
-        end else if (!media_seen || video_live_s2 || iso_mode_w) begin
-            img_wd_cnt <= 30'd0;                      // idle, playing, or a real ISO
+        end else if (wav_bad_w) begin
+            // RIFF/WAVE image of an unsupported shape (mono/24-bit/float/96k/
+            // late data chunk): the reader's probe verdict is definitive, so
+            // show UNSUPPORTED IMAGE immediately -- never garbage noise, and
+            // without spending the 20 s patience window a silent source can
+            // never advance anyway (img_streaming gates it).
+            img_unplayable <= 1'b1;
+        end else if (!media_seen || video_live_s2 || iso_mode_w || cdda_mode_w) begin
+            img_wd_cnt <= 30'd0;   // idle, playing, a real ISO, or audio-only
             if (video_live_s2) img_unplayable <= 1'b0;   // a picture disproves the verdict
         end else if (!img_streaming) begin
             // Delivery stalled: hold the window rather than spend it. This is the
@@ -3906,6 +3947,18 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .frame_pts       (aud_frame_pts_w),
     .frame_pts_valid (aud_frame_pts_valid_w),
     .frame_pop   (dec_frame_pop),
+    // CD-DA/WAV: raw LE PCM bytes straight from the reader (see the
+    // ps_stream_fifo wr_en gate -- the two sinks are exclusive on cdda_mode).
+    // The seek/mount aud_flush level doubles as the unpacker flush; the full
+    // aud_rst_n reset covers it too, and the reader can't deliver a post-seek
+    // byte inside the ~64-cycle flush window (a fresh sd block fetch takes
+    // far longer), so no byte is ever dropped mid-pair.
+    .cdda_mode   (cdda_mode_w),
+    .cdda_fs     (cdda_fs_w),
+    .cdda_wr_en  (stream_valid & cdda_mode_w),
+    .cdda_wr_data(stream_data),
+    .cdda_flush  (aud_flush),
+    .cdda_full   (cdda_afull_w),
     // 48 kHz NCO trim: hardwired 0 since the 2026-07-02 trim retirement — NOT a
     // function of O[13]. See dec_nco_trim above for why the slew is gone.
     .nco_trim           (dec_nco_trim),
@@ -3924,7 +3977,9 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     // starves the drain = the "audio dropout during T2 transitions". Free-running the
     // menu audio decouples it (harmless in Snappy, where the video is already current).
     // docs/dvd_menu_refinements.md §5c.
-    .sched_en           (~av_freerun),          // THE STC IS A CLOCK: menus follow the same rule (docs/stc_freerun.md)
+    // ...and free-run in CD-DA/WAV mode: raw PCM has no PTS to schedule
+    // against (the drain gate would only ever release via the fallback timer).
+    .sched_en           (~av_freerun & ~cdda_mode_w),   // THE STC IS A CLOCK: menus follow the same rule (docs/stc_freerun.md)
     .stc_anchored       (av_stc_anchored),
     .disp_anchored      (av_disp_anchored),  // THE STC IS A CLOCK: playback releases only once the clock is on the DISPLAY timeline
     // Arrival front for the mid-play catch-up (Shea-Stadium ratchet fix): the
@@ -6162,6 +6217,8 @@ lin_rate lin_rate_inst (
     .clk           (clk_sys),
     .rst_n         (reset_n),
     .en            (lin_mode_w),
+    .cdda_mode     (cdda_mode_w),         // WAV/CD-DA: exact rate, no PTS to measure
+    .cdda_fs       (cdda_fs_w),
     .raw_mode      (raw_mode_w),
     .mount         (start_streaming),
     .flush         (load_flush),
@@ -6232,6 +6289,9 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .ab_state     (ab_state_w),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
+    // WAV/CD-DA: the status line is the only picture besides the logo -- keep
+    // it up for the whole session (time = the player's front panel).
+    .force_show   (cdda_mode_w),
     // Three LIVE sources, in the order they can be trusted: a linear file's
     // clock is derived from its measured rate (lin_time_ok_w implies
     // !cell_ready, so the DVD arms are untouched); a DVD title's is the reader's
@@ -6373,7 +6433,10 @@ end
 // picture to black instead and the field report was immediate: "one stop was
 // supposed to drop you to the idle logo". The position is still remembered
 // (nothing is torn down; see dvd/stop_ctl.sv), so this is display-only.
-wire logo_vis = (saver_on_w || stopped_w ||
+// ★ CD-DA/WAV playback joins them for the same structural reason: there is no
+// video to show, so the logo + persistent HUD ARE the screen, and media_seen /
+// img_streaming would otherwise hide it the moment the mount starts delivering.
+wire logo_vis = (saver_on_w || stopped_w || cdda_mode_w ||
                  (!media_seen && !video_live_s2 && !img_streaming)) &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);

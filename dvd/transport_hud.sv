@@ -114,6 +114,9 @@ module transport_hud #(
     input  wire [1:0]  ab_state,
     input  wire        load_evt,            // fresh media load: clear + hide
     input  wire        show_evt,            // transport event: re-arm show_tmr
+    input  wire        force_show,          // level: status line always on (WAV/
+                                            // CD-DA playback — the HUD is the
+                                            // only picture besides the logo)
 
     // values (BCD dvd_time {hh,mm,ss,ff}; chapter numbers binary, <= 99)
     input  wire [31:0] cur_time,
@@ -328,7 +331,7 @@ module transport_hud #(
     end
     wire vis = dbg_mode ? 1'b1                       // diagnostic: always on, incl. menus
              : (pause_q ? pause_show                 // paused: B9 owns it outright
-                        : (persist_q | bar_active | (show_tmr != 27'd0)))
+                        : (force_show | persist_q | bar_active | (show_tmr != 27'd0)))
                && !menu_active;
     // CSS warning shows in menus too (scrambled discs green-screen there first)
     wire pop_vis = (pop_tmr != 27'd0) &&

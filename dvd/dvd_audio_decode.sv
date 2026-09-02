@@ -58,6 +58,22 @@ module dvd_audio_decode #(
     input  logic        frame_pts_valid,  // that PTS is meaningful
     output logic        frame_pop,
 
+    // CD-DA/WAV direct-PCM injection (feature/wav-audio): raw little-endian
+    // 16-bit stereo bytes straight from the reader, bypassing ps_demux /
+    // audio_ring / the dispatch FSM entirely. cdda_mode (static per mount)
+    // forces the LPCM unpacker onto the output mux (le byte order, quant=0)
+    // and cdda_fs onto the NCO rate select; cdda_full (lpcm_unpack.afull) is
+    // the reader's backpressure tap. cdda_flush pulses on a seek: it clears
+    // the unpacker's assembler phase + pair FIFO so a seek can never
+    // channel-swap and stale pre-seek audio doesn't play out. There is no
+    // PTS in this mode — emu holds sched_en low so the drain gate free-runs.
+    input  logic        cdda_mode,
+    input  logic [1:0]  cdda_fs,
+    input  logic        cdda_wr_en,
+    input  logic [7:0]  cdda_wr_data,
+    input  logic        cdda_flush,
+    output logic        cdda_full,
+
     // A/V sync (dvd/av_sync.sv): signed trim added to the 48 kHz NCO increment to
     // genlock audio to the video-referenced STC; PTS of each dispatched frame out.
     input  logic signed [21:0] nco_trim,
@@ -646,13 +662,18 @@ module dvd_audio_decode #(
     // FIFO_AW=12 -> 4096 sample-pairs (~85 ms) of elastic buffering so bursty
     // demux delivery (governor releases ~1 frame of audio then holds) doesn't
     // underrun the steady 48 kHz output.
+    // CD-DA/WAV mode takes the unpacker over wholesale: bytes come from the
+    // reader (little-endian, plain 16-bit), and a seek flush resets the
+    // assembler + FIFO. DVD LPCM behaviour (cdda_mode=0) is bit-identical.
     lpcm_unpack #(.FIFO_AW(12)) lpcm_unpack_inst (
         .clk      (clk),
-        .rst      (rst),
-        .quant    (lpcm_quant),
-        .wr_en    (lpcm_wr),
-        .wr_data  (ring_byte),
+        .rst      (rst | (cdda_mode & cdda_flush)),
+        .quant    (cdda_mode ? 2'd0 : lpcm_quant),
+        .le       (cdda_mode),
+        .wr_en    (cdda_mode ? cdda_wr_en   : lpcm_wr),
+        .wr_data  (cdda_mode ? cdda_wr_data : ring_byte),
         .full     (lpcm_full),
+        .afull    (cdda_full),
         .aud_ce   (aud_ce_play),
         .audio_l  (lpcm_l),
         .audio_r  (lpcm_r),
@@ -724,13 +745,16 @@ module dvd_audio_decode #(
     // nothing is ever captured. Between pulses the last sample is held (silence
     // → DC hold), which the framework samples at its own 48 kHz.
     // ---------------------------------------------------------------------
+    // cdda_mode pins the mux to the LPCM unpacker regardless of what the
+    // (idle) dispatch FSM last latched.
+    wire [1:0] eff_codec = cdda_mode ? T_LPCM : cur_codec;
     always_ff @(posedge clk) begin
         if (rst || !enable) begin
             audio_l <= '0;
             audio_r <= '0;
-        end else if (cur_codec == T_LPCM) begin
+        end else if (eff_codec == T_LPCM) begin
             if (lpcm_aud_valid) begin audio_l <= lpcm_l; audio_r <= lpcm_r; end
-        end else if (cur_codec == T_MP2) begin
+        end else if (eff_codec == T_MP2) begin
             if (mp2_aud_valid)  begin audio_l <= mp2_l;  audio_r <= mp2_r;  end
         end else begin
             if (ac3_aud_valid)  begin audio_l <= ac3_l;  audio_r <= ac3_r;  end
@@ -834,7 +858,11 @@ module dvd_audio_decode #(
             // NCO rate select: MP2's header rate while MP2 is the active codec
             // (44.1/32 kHz VCD/SVCD audio), else 48 kHz. Latched ONLY while the
             // drain gate is closed so a swap can never phase-kick mid-playback.
-            if (!draining)
+            // CD-DA/WAV overrides unconditionally: cdda_fs is static for the
+            // whole mount (no mid-play change exists to phase-kick).
+            if (cdda_mode)
+                nco_fs <= cdda_fs;
+            else if (!draining)
                 nco_fs <= (cur_codec == T_MP2 && mp2_synced) ? mp2_fs : 2'd1;
 
             // latch the phase reference: first PTS-tagged dispatch while armed

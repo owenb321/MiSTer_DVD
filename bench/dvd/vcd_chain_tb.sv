@@ -148,6 +148,8 @@ module vcd_chain_tb;
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
         .lpcm_quant(2'd0),
+        .cdda_mode(1'b0), .cdda_fs(2'd0), .cdda_wr_en(1'b0),
+        .cdda_wr_data(8'd0), .cdda_flush(1'b0), .cdda_full(),
         .frame_pts(frame_pts), .frame_pts_valid(frame_pts_valid),
         .frame_pop(frame_pop),
         .nco_trim(22'sd0),

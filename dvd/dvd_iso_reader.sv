@@ -500,6 +500,21 @@ module dvd_iso_reader #(
     // MPEG-1/MPEG-2 system stream. emu uses this for the transport gating.
     output            raw_mode_o,
 
+    // WAV / CD-DA mode readback (feature/wav-audio; golden model
+    // tools/wav_ref.py). The mounted image is RIFF/WAVE PCM — either a plain
+    // .wav file or (branch 2) the Main's synthetic-header view of a physical
+    // audio CD. The reader chunk-walks sector 0 (fmt/data), then streams ONLY
+    // the data-chunk payload bytes (header skipped, trailing chunks and any
+    // partial final sample pair discarded, seeks re-aligned to an L/R pair
+    // boundary). emu routes the byte stream to the PCM path, bypassing
+    // ps_demux entirely. cdda_fs uses the nco_fs encoding (0=44.1k, 1=48k).
+    // wav_bad = RIFF/WAVE seen but an unsupported shape (mono, 24-bit, float,
+    // 96k, data chunk not within sector 0): emu shows UNSUPPORTED IMAGE
+    // immediately instead of feeding garbage anywhere.
+    output            cdda_mode_o,
+    output     [1:0]  cdda_fs_o,
+    output            wav_bad_o,
+
     // Linear (non-cell) transport. flat_seek_en (from emu = ps_demux saw a
     // pack) qualifies seeking on a PLAIN flat file: a flat seek lands at an
     // arbitrary byte offset and the demux resets per-jump, so emission is
@@ -1423,6 +1438,9 @@ localparam S_ANGLE_PICK   = 6'd60;   // load the effective angle's cell
 // (6'd61 was S_ANGLE_VOB, declared with the angle snap and never entered: the
 //  VOB_ID learn lives in the S_CELL_LOAD2 arm plus S_NAV_SEEK*/S_NAV_VOB.)
 localparam S_NAV_VOB      = 6'd62;   // NAV pack found: check its vobu_vob_idn
+// S_WAV_HDR took 6'd59 before the rebase; the angle work (PR #101) had claimed
+// 59/60/62 meanwhile, so it moves to the one code still free in the 6-bit space.
+localparam S_WAV_HDR      = 6'd63;   // RIFF/WAVE chunk walk (fmt/data) over sector 0
 
 reg [5:0]  state;
 reg [5:0]  fetch_ret;   // state to enter after S_FETCH
@@ -1499,6 +1517,49 @@ reg [11:0] raw_pos;        // sector byte position (mod 2352) of the next byte
 reg        raw_m2;         // this sector's mode byte (@15) == 2
 reg        raw_sec_pass;   // Form-2 sector: pass payload window [24, 2348)
 reg [11:0] raw_wcnt;       // compact cache write index within the current block
+                           // (shared by cdda_mode — the two are exclusive)
+
+// =========================================================================
+// WAV / CD-DA mode (feature/wav-audio; golden: tools/wav_ref.py). The chunk
+// walk runs over the resident sector-0 parse_buf via the rbuf shadow fetch
+// (24 bytes read per record: ckid+cksize+the fmt body). Every examined record
+// must start at offset <= 2002 so the 45-byte shadow can never cross into
+// sector 1 (a cross would swap parse_buf's resident sector mid-walk); the
+// golden model rejects at the same bound. Playback filters the cache WRITE
+// side exactly like the raw deblocker: a byte is kept iff its absolute file
+// position is in [cdda_astart, wav_dend), compacted through raw_wcnt.
+// cdda_astart = data payload start at mount; recomputed at each linear seek
+// to the first byte >= the seek target that is L/R-PAIR-ALIGNED relative to
+// the data offset (bpos ≡ wav_doff mod 4), so a seek can never channel-swap.
+// wav_dend is truncated to a whole pair.
+// =========================================================================
+reg        cdda_mode;      // accepted RIFF/WAVE PCM image
+reg [1:0]  cdda_fs;        // nco_fs encoding: 0=44.1 kHz, 1=48 kHz
+reg        wav_bad;        // RIFF/WAVE seen but unsupported shape
+reg [11:0] wav_off;        // chunk-walk cursor (sector-0 byte offset)
+reg        wav_fmt_seen;   // a fmt chunk has been parsed
+reg        wfmt_good;      // ...and it read PCM/2ch/16-bit/44.1k-or-48k
+reg [1:0]  wfmt_fs;        // its rate, nco_fs-encoded
+reg [11:0] wav_doff;       // data payload start (sector-0 byte offset)
+reg [31:0] wav_dend;       // data payload end (absolute byte, pair-truncated)
+reg [31:0] cdda_astart;    // first byte the cache write keeps (see above)
+
+// chunk-record field taps (rbuf shadow fetched at wav_off)
+wire [31:0] wav_cksz    = {rbuf[7], rbuf[6], rbuf[5], rbuf[4]};
+wire        wav_is_fmt  = (rbuf[0]=="f") && (rbuf[1]=="m") &&
+                          (rbuf[2]=="t") && (rbuf[3]==" ");
+wire        wav_is_data = (rbuf[0]=="d") && (rbuf[1]=="a") &&
+                          (rbuf[2]=="t") && (rbuf[3]=="a");
+wire [15:0] wav_ftag    = {rbuf[9],  rbuf[8]};
+wire [15:0] wav_fch     = {rbuf[11], rbuf[10]};
+wire [31:0] wav_frate   = {rbuf[15], rbuf[14], rbuf[13], rbuf[12]};
+wire [15:0] wav_fbits   = {rbuf[23], rbuf[22]};
+wire        wav_rate_ok = (wav_frate == 32'd44100) || (wav_frate == 32'd48000);
+wire        wav_fmt_ok  = (wav_ftag == 16'd1) && (wav_fch == 16'd2) &&
+                          (wav_fbits == 16'd16) && wav_rate_ok;
+// next record offset (RIFF pad rule: odd cksize advances one extra byte)
+wire [31:0] wav_next    = {20'd0, wav_off} + 32'd8 + wav_cksz +
+                          {31'd0, wav_cksz[0]};
 
 // ---- S_STREAM request address (area pass 2026-09-10) ---------------------------
 wire [31:0] sd_base_w = cell_mode ? (menu_dom ? menu_base_blk : (ext_start_q - ext_cum))
@@ -1620,6 +1681,12 @@ wire raw2352 = (rbuf[0]==8'h00) && (rbuf[1]==8'hFF) && (rbuf[2]==8'hFF) &&
 wire riff_cdxa = (rbuf[0]=="R") && (rbuf[1]=="I") && (rbuf[2]=="F") &&
                  (rbuf[3]=="F") && (rbuf[8]=="C") && (rbuf[9]=="D") &&
                  (rbuf[10]=="X") && (rbuf[11]=="A");
+// RIFF/WAVE PCM image (.wav file, or the Main's synthetic-header view of a
+// physical audio CD). Probed AFTER riff_cdxa (both are RIFF; the form tag
+// disambiguates), handled by the S_WAV_HDR chunk walk.
+wire riff_wave = (rbuf[0]=="R") && (rbuf[1]=="I") && (rbuf[2]=="F") &&
+                 (rbuf[3]=="F") && (rbuf[8]=="W") && (rbuf[9]=="A") &&
+                 (rbuf[10]=="V") && (rbuf[11]=="E");
 
 // directory record (rbuf shadow starts at the record) - also used for the PVD
 // root record when the shadow is fetched at offset 156
@@ -1749,9 +1816,15 @@ always @(posedge clk)
 // is counted (+raw_wcnt) instead of the fixed +BLK.
 // =========================================================================
 wire raw_keep = raw_sec_pass && (raw_pos >= 12'd24) && (raw_pos < 12'd2348);
+// CD-DA/WAV keep filter: absolute file position of the byte being written
+// (flat single extent from 0, so strm_blk IS the file block) inside the
+// pair-aligned data-payload window. Compacted through raw_wcnt like raw mode.
+wire [31:0] cdda_bpos = {strm_blk[20:0], 11'd0} + {21'd0, sd_buff_addr[10:0]};
+wire        cdda_keep = (cdda_bpos >= cdda_astart) && (cdda_bpos < wav_dend);
 always @(posedge clk)
-    if (sd_buff_wr && state==S_STREAM && (!raw_mode || raw_keep))
-        cache_mem[wr_ptr + (raw_mode ? {2'b00, raw_wcnt}
+    if (sd_buff_wr && state==S_STREAM && (!raw_mode || raw_keep)
+                                      && (!cdda_mode || cdda_keep))
+        cache_mem[wr_ptr + ((raw_mode | cdda_mode) ? {2'b00, raw_wcnt}
                                      : {3'b000, sd_buff_addr[10:0]})] <= sd_buff_dout;
 
 // =========================================================================
@@ -2403,6 +2476,10 @@ always @(posedge clk or negedge rst_n) begin
                 raw_pos <= raw_pos + 12'd1;
         end
 
+        // CD-DA/WAV kept-byte count (shares raw_wcnt; modes are exclusive)
+        if (cdda_mode && state == S_STREAM && sd_buff_wr && cdda_keep)
+            raw_wcnt <= raw_wcnt + 12'd1;
+
         // Latch a transport seek request (emu delivers a 1-cycle pulse). Range +
         // cell-mode checked at capture; executed at the next block boundary via
         // seek_jump below so the outstanding sd read completes cleanly first.
@@ -2681,6 +2758,11 @@ always @(posedge clk or negedge rst_n) begin
             raw_m2     <= 1'b0;
             raw_sec_pass <= 1'b0;
             raw_wcnt   <= 12'd0;
+            cdda_mode  <= 1'b0;
+            cdda_fs    <= 2'd0;
+            wav_bad    <= 1'b0;
+            wav_fmt_seen <= 1'b0;
+            wfmt_good  <= 1'b0;
             all_n      <= 7'd0;
             best_base  <= 7'd0;
             best_cnt   <= 7'd0;
@@ -2885,6 +2967,18 @@ always @(posedge clk or negedge rst_n) begin
                     raw_m2       <= 1'b0;
                     raw_sec_pass <= 1'b0;   // drop the partial head sector
                     raw_wcnt     <= 12'd0;
+                end else if (cdda_mode) begin
+                    // WAV/CD-DA: block-aligned target; the keep window's start
+                    // snaps forward to the first byte that is L/R-PAIR-ALIGNED
+                    // relative to the data offset (bpos ≡ wav_doff mod 4), so
+                    // a seek can never channel-swap. Block 0 clamps to the
+                    // data start itself (the header is never re-emitted).
+                    strm_blk    <= ls_tgt;
+                    cdda_astart <= (ls_tgt == 32'd0)
+                                   ? {20'd0, wav_doff}
+                                   : ({ls_tgt[20:0], 11'd0} +
+                                      {30'd0, wav_doff[1:0]});
+                    raw_wcnt    <= 12'd0;
                 end else begin
                     strm_blk <= ls_tgt;
                     // flat PS: the output pipeline arms its pack hunt off this
@@ -2938,19 +3032,20 @@ always @(posedge clk or negedge rst_n) begin
                 // it must not be treated as a tiny one. Main notifies the core of
                 // a mount even when the file never opened (size 0), and with
                 // total_blocks == 0 the extent below is zero-length -- which the
-                // S_STREAM terminator (strm_blk + 1 == ext_blocks_q) can never
+                // S_STREAM terminator (strm_blk + 1 >= ext_blocks_q) can never
                 // satisfy, so the reader walked LBA 0,1,2,... of an empty slot
                 // for ever. Stop here instead; emu.sv now also declines to start
                 // on a zero size, so this is the second of two locks.
                 if (total_blocks == 32'd0) begin
                     state <= S_DONE;
-                end else if (total_blocks < 32'd17) begin
-                    state     <= S_FLAT_INIT;             // shared whole-file extent setup
                 end else begin
                     // Probe file byte 0 first: a raw MODE2/2352 image (VCD/SVCD
-                    // .bin) starts with the 12-byte CD sync there, block-aligned.
-                    // Not raw -> S_CHK_RAW falls through to the LBA-16 CD001
-                    // probe (one extra block read per mount, negligible).
+                    // .bin) starts with the 12-byte CD sync there, and a RIFF/WAVE
+                    // (.wav) with its signature — both block-aligned. Small files
+                    // (< 17 blocks, can't hold an ISO's LBA-16 PVD) used to skip
+                    // probing entirely, but a tiny .wav is legal, so they probe
+                    // block 0 too and S_CHK_RAW takes the flat fallback for them
+                    // instead of reading a nonexistent LBA 16.
                     vd_lba    <= 32'd16;
                     sec_lba   <= 32'd0;
                     fetch_base<= 11'd0;
@@ -2960,7 +3055,7 @@ always @(posedge clk or negedge rst_n) begin
             end
 
             // ------------------------------------------------------------
-            // Raw MODE2/2352 signature probe (shadow of file byte 0)
+            // Raw MODE2/2352 + RIFF signature probe (shadow of file byte 0)
             S_CHK_RAW: begin
                 if (raw2352 || riff_cdxa) begin
                     // Raw CD image -> whole-file linear stream through the
@@ -2971,11 +3066,66 @@ always @(posedge clk or negedge rst_n) begin
                     raw_sec_pass <= 1'b0;
                     raw_wcnt     <= 12'd0;
                     state     <= S_FLAT_INIT;             // shared whole-file extent setup
+                end else if (riff_wave) begin
+                    // RIFF/WAVE -> chunk-walk sector 0 (already resident in
+                    // parse_buf from the byte-0 probe). Direct S_FETCH entry
+                    // needs fi/fi_cap_v cleared (the S_CHK_VD0 precedent).
+                    wav_off    <= 12'd12;
+                    fetch_base <= 11'd12;
+                    fetch_ret  <= S_WAV_HDR;
+                    fi         <= 6'd0;
+                    fi_cap_v   <= 1'b0;
+                    state      <= S_FETCH;
+                end else if (total_blocks < 32'd17) begin
+                    // Too small for ISO9660 -> flat-file fallback
+                    state     <= S_FLAT_INIT;             // shared whole-file extent setup
                 end else begin
                     sec_lba   <= 32'd16;
                     fetch_base<= 11'd0;      // CD001 / type at sector start
                     fetch_ret <= S_CHK_VD0;
                     state     <= S_SECREAD;
+                end
+            end
+
+            // ------------------------------------------------------------
+            // RIFF/WAVE chunk walk. rbuf shadows 24+ bytes at wav_off:
+            // ckid[0..3] cksize[4..7] and (for fmt) the 16-byte body. Every
+            // record examined must start at <= 2002 so the 45-byte shadow
+            // stays inside the resident sector-0 parse_buf (golden model
+            // rejects at the same bound). Accept = PCM/2ch/16-bit/44.1k|48k.
+            S_WAV_HDR: begin
+                if (wav_is_data) begin
+                    if (wav_fmt_seen && wfmt_good) begin
+                        cdda_mode   <= 1'b1;
+                        cdda_fs     <= wfmt_fs;
+                        wav_doff    <= wav_off + 12'd8;
+                        // pair-truncated payload end (absolute file byte)
+                        wav_dend    <= {20'd0, wav_off} + 32'd8 +
+                                       {wav_cksz[31:2], 2'b00};
+                        cdda_astart <= {20'd0, wav_off} + 32'd8;
+                        raw_wcnt    <= 12'd0;
+                        state       <= S_FLAT_INIT;   // shared whole-file extent setup
+                    end else begin
+                        wav_bad <= 1'b1;    // data before fmt, or bad fmt
+                        state   <= S_ERROR;
+                    end
+                end else begin
+                    if (wav_is_fmt) begin
+                        wav_fmt_seen <= 1'b1;
+                        wfmt_good    <= wav_fmt_ok;
+                        wfmt_fs      <= (wav_frate == 32'd44100) ? 2'd0 : 2'd1;
+                    end
+                    if (wav_next > 32'd2002) begin
+                        wav_bad <= 1'b1;    // next record beyond the walkable
+                        state   <= S_ERROR; // sector-0 window (or no data at all)
+                    end else begin
+                        wav_off    <= wav_next[11:0];
+                        fetch_base <= wav_next[10:0];
+                        fetch_ret  <= S_WAV_HDR;
+                        fi         <= 6'd0;
+                        fi_cap_v   <= 1'b0;
+                        state      <= S_FETCH;
+                    end
                 end
             end
 
@@ -4626,7 +4776,8 @@ always @(posedge clk or negedge rst_n) begin
                         // bytes landed in the cache); else the fixed block size
                         // (14'd2048 = BLK; plain literal, no size cast — the
                         // Quartus-17 N'() netlist lesson).
-                        wr_ptr       <= wr_ptr + (raw_mode ? {2'b00, raw_wcnt}
+                        wr_ptr       <= wr_ptr + ((raw_mode | cdda_mode)
+                                                           ? {2'b00, raw_wcnt}
                                                            : 14'd2048);
                         raw_wcnt     <= 12'd0;
                         if (cell_mode) begin
@@ -5283,7 +5434,7 @@ always @(posedge clk or negedge rst_n) begin
         // seek_ack flush cycle must PRESERVE it (seek_ack pulses one cycle
         // after seek_jump), and a fresh mount clears it.
         if (start)          hunt_active <= 1'b0;
-        else if (seek_jump) hunt_active <= !cell_mode && !raw_mode;
+        else if (seek_jump) hunt_active <= !cell_mode && !raw_mode && !cdda_mode;
         pre_active      <= 1'b0;
         pre_idx         <= 2'd0;
         hunt_shift      <= 24'hFFFFFF;
@@ -5365,11 +5516,15 @@ assign debug_state          = {iso_mode, iso_error, sel_valid, best_cnt[4:0],
 assign debug_iso_mode       = iso_mode;
 assign debug_iso_error      = iso_error;
 assign raw_mode_o           = raw_mode;
-// Linear transport: raw mode always seeks (sector = pack boundary); a plain
+assign cdda_mode_o          = cdda_mode;
+assign cdda_fs_o            = cdda_fs;
+assign wav_bad_o            = wav_bad;
+// Linear transport: raw mode always seeks (sector = pack boundary), and so
+// does WAV/CD-DA (any pair-aligned byte is a valid entry point); a plain
 // flat file only once the demux has proven the stream has packs (else .m2v
 // ES stays linear-only). Never in cell/ISO mode.
 assign lin_seek_ok_o        = !cell_mode && !iso_mode &&
-                              (raw_mode || flat_seek_en);
+                              (raw_mode || cdda_mode || flat_seek_en);
 assign lin_blk_o            = strm_blk;
 assign debug_play_vtsn      = play_vtsn;
 assign debug_target_vtsn    = target_vtsn;
