@@ -715,4 +715,11 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ~8-line emu select register + gated crt_ov_map enables, no module changes):
 # SEED 5 held FIRST roll again -- clk_dec 94.63 @100C / 90.56 @-40C. Seventh
 # consecutive first-roll fit. Build DVD_subraw_20260902_1440.rbf.
+# 2026-09-02d (feature/single-raster-analog -- dvd/re_interlace.sv + the sys_top
+# VGA2 block DELETED, dvd/cc_vbi.sv added, syncgen half-line/vsync anchoring,
+# syncgen_intf on dot_hard_rst, hps_io cfg_seen/cfg_wr, O[2] third row): SEED 5
+# held FIRST roll again -- clk_dec 91.76 @100C / 88.35 @-40C at 88% ALM (36,880),
+# RAM 494/553 (89%, was 506 -- the re_interlace line buffer + its second
+# sync_gen), block memory 62%. Eighth consecutive first-roll fit. Build
+# DVD_singleraster_20260902_1902.rbf.
 set_global_assignment -name SEED 5
