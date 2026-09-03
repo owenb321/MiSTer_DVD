@@ -782,4 +782,17 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # The new logic sits entirely in the once-per-picture STATE_PICTURE_HEADER decision cone,
 # which has cycles of slack; the only pre-existing path it touches is update_picture_buffers,
 # where an inverted term replaced an inlined comparison of the same width.
+# 2026-09-03g (feature/flat-file-time-seek, issue #39 -- D-Pad Seek on flat .mpg/.VOB plus a
+# clock for linear modes and a seek preview: NEW dvd/lin_rate.sv (445 ALMs, 719 comb / 556 reg,
+# 0 M10K) and NEW dvd/seek_time.sv (617 ALMs, 962 comb / 440 reg, 3 M10K = cellf 4096 + cstart
+# 2048 + pmap 1024 bits), plus emu glue and a 16-bit binary prefix sum in dvd_iso_reader):
+# SEED 5 held FIRST roll -- clk_dec 93.69 @100C / 89.69 @-40C (gate 86.0, PASS both corners, and
+# BETTER than the 91.10/88.28 it replaces) at 91% ALM (38,054), RAM 497/553 and DSP 92/112
+# unchanged. SIXTEENTH consecutive first-roll fit. Build DVD_linseek_20260903_2048.rbf (4344 KB).
+# ⚠ The +1,211 ALMs here IS a logic delta, not fit variance -- the two new modules account for
+# 1,061 of it by their own per-entity rows, and the estimate written before the build was ~550,
+# low by about 2x (seek_time's bracket scan, serial divide+multiply and BCD stage cost 617 where
+# ~250 was predicted). 88% -> 91% spends a real slice of the headroom the 2026-08-27 mem_shim
+# M10K reclaim bought (98% -> 87%). Timing did not suffer -- everything new is event-rate and
+# off the pixel hotspot -- but the next feature should budget from 91%, not from 88%.
 set_global_assignment -name SEED 5
