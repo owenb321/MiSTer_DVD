@@ -57,16 +57,29 @@ player fed a TV — so a CRT-only setup can simply stay in Interlaced (or Auto) 
 everything.
 
 !!! note "Switching mid-title works, with a brief interruption"
-    Changing `Video Output` during playback fires a full seek-equivalent flush — a short
-    cut to black while the raster and A/V sync re-anchor, like a chapter jump — and then
-    plays on cleanly. Setting the mode before loading just avoids the interruption; it is
-    not required. `Auto` reads the ini bits at boot and while nothing is mounted; it does
-    not change the output mode under a playing disc.
+    Changing `Video Output` during playback interrupts playback briefly — a short cut to
+    black while the raster and A/V sync re-anchor, like a chapter jump — and then plays on
+    cleanly. Setting the mode before loading just avoids the interruption; it is not
+    required. `Auto` reads the ini bits at boot and while nothing is mounted; it does not
+    change the output mode under a playing disc.
 
-    **On a PAL disc this can occasionally freeze the picture** on a malformed frame. It
-    does not recover on its own; **skip a chapter** and playback resumes normally. The
-    same happens on older releases when changing `Analog Out`, so it is not new — it is
-    being tracked. Setting the mode before loading avoids it entirely.
+    On v0.4.0 and earlier this could occasionally **freeze the picture** on a malformed
+    frame instead, on any disc; skipping a chapter recovered it. The same thing happens on
+    older releases when changing `Analog Out`.
+
+!!! info "Unreleased"
+    The current development build fixes that freeze. A mid-title switch now steps playback
+    back to the start of the chunk it was reading — up to about a second — and resumes
+    from there, so the picture always restarts from a clean point. On a VCD or SVCD the
+    step back can be a little longer.
+
+    The screen also **goes black for the changeover** instead of showing the picture
+    breaking up while the display re-locks — about a second, and the OSD stays visible
+    over it. Sound continues throughout. A brief glitch as the picture comes back is
+    normal, and is the same one a chapter skip produces — see
+    [Troubleshooting](../reference/troubleshooting.md). If the black lasts noticeably
+    longer than a second or so, or a mid-title switch still freezes,
+    [please report it](../reference/reporting-a-bug.md).
 
 ## Field alignment
 
