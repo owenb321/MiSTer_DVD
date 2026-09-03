@@ -55,7 +55,8 @@ module vld(clk, clk_en, rst,
   flags_commit,                                                                             // DVD-FORK (round 11): per-picture display flags are valid (coding ext parsed)
   pic_informative, informative_commit,                                                      // DVD-FORK (film evidence gate): this picture carried real evidence
   cc_pair_valid, cc_pair, cc_pair_field,                                                    // DVD-FORK (line-21 CC): EIA-608 byte pairs sniffed out of user_data
-  mpeg1                                                                                     // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
+  mpeg1,                                                                                    // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
+  vbuf_flush                                                                                // DVD-FORK FIX (seek realign, issue #45): a VBUF flush happened — the references are now stale
   );
 
   input            clk;                           // clock
@@ -282,6 +283,24 @@ module vld(clk, clk_en, rst,
    * slice-routing gate can bypass every slice of the dropped B. */
   wire             drop_now_comb;   // assigned below, after picture_structure is declared
   (* preserve *) reg drop_this_picture;   // DVD-FORK FIX (2026-08-05): see drop_now_comb hardening note
+  /* DVD-FORK FIX (seek realign, issue #45): drop_this_picture now latches EITHER
+   * reason, but only the governor's may pay into the frame-drop ledger — see the
+   * realign block below and drop_gov_picture at the ack. */
+  (* preserve *) reg drop_gov_picture;
+  wire             realign_now_comb; // assigned below, beside drop_now_comb
+  wire             hdr_upd_slot;     // assigned below, at update_picture_buffers
+
+  /* DVD-FORK FIX (seek realign, issue #45): a VBUF flush is a DISCONTINUITY.
+   * flush_vbuf_eff (mpeg2video.v) discards the buffered bitstream and nothing
+   * else: vld/getbits/motcomp/picbuf are on sync_rst, so motcomp_picbuf's
+   * reference slots survive a seek still holding the PRE-SEEK scene. An open
+   * GOP's leading B-pictures then motion-compensate against them, which is the
+   * reported "new chapter decoding and in motion with the old image overlaid",
+   * measured at ~6 frames on a 60 Hz capture.
+   *
+   * ~192 clk_dec-cycle LEVEL (dvd/flush_ctl.sv issues ~64 clk_sys cycles; the
+   * 2-FF CDC into clk_dec is in dvd/emu.sv). Level, not pulse — see the arm. */
+  input            vbuf_flush;
 
   /* in sequence header */
   output wire[13:0]horizontal_size;
@@ -393,6 +412,75 @@ module vld(clk, clk_en, rst,
       // sibling's own header re-evaluates this with second_field=0 -> cleared.
       drop_pair_arm <= drop_now_comb && drop_ps_field && second_field;
     else drop_pair_arm <= drop_pair_arm;
+
+  /* DVD-FORK FIX (seek realign, issue #45) — POST-FLUSH REFERENCE RE-ALIGN.
+   *
+   * WHY TWO ANCHORS. Trace motcomp_picbuf's rotation (:281-291 and :371-383):
+   * at a non-B update it assigns current_frame <= forward_reference_frame while
+   * fwd/bwd swap, so the FIRST anchor after a flush only establishes the
+   * BACKWARD reference — forward still points at the pre-flush slot, and that
+   * is exactly what the leading B's read. Only the SECOND anchor's
+   * current_frame <= forward_reference_frame overwrites the stale slot:
+   *
+   *   pre-flush anchor -> slot 1                fwd=0 bwd=1
+   *   I0  (1st post-flush anchor) -> slot 0     fwd=1 bwd=0   intra, safe
+   *   B1,B2 (open-GOP leading)    -> aux        fwd=1 = PRE-FLUSH  <- the defect
+   *   P3  (2nd post-flush anchor) -> slot 1     fwd=0 bwd=1   overwrites it
+   *   B4,B5 ...                                 both post-flush, clean
+   *
+   * So: while ra_anchors == 0 drop every picture that is not an I (a seek lands
+   * on a VOBU/GOP boundary, but a flat-file seek hunts a pack and may not);
+   * while ra_anchors == 1 drop B's; the second accepted anchor ends it. The
+   * dropped pictures use the existing, HW-proven suppression legs, so the
+   * display simply HOLDS the last frame until the new scene's references are
+   * real — which is what flush_ctl.sv always claimed a seek did.
+   *
+   * ★ THE ARM MUST SIT BEFORE THE clk_en TERM. clk_en here is vld_en, and
+   * motcomp.v:257-272 freezes the VLD at EVERY picture header until picbuf has
+   * processed the update — picbuf waits there on the display handshake, i.e.
+   * up to a whole display frame (~1.5 M clk_dec cycles at 93 MHz / 60 Hz).
+   * The flush level is only ~192 clk_dec cycles. A clk_en-gated capture would
+   * miss it routinely, not occasionally. Level-dominant for the whole window
+   * also coalesces repeated flushes for free (a scrub or double chapter skip
+   * restarts the window instead of being swallowed).
+   *
+   * ⚠ closed_gop (parsed at STATE_GROUP_HEADER0, consumed by nothing) is
+   * deliberately NOT honoured: it is a bit the ENCODER wrote, not a
+   * measurement — the same failure class as progressive_frame in the film
+   * evidence gate. A disc that lies would leave the defect present AND
+   * unfalsifiable. It could only ever make this weaker, and it buys two
+   * pictures at a landing the user already expects to re-lock.
+   *
+   * RA_CAP is the give-up: a stream that never delivers an I must not freeze
+   * video forever. It is a parameter so bench/dvd/seek_realign_tb.sv can reach
+   * the path inside a short fixture; the shipped value never is. */
+  parameter [5:0] RA_CAP = 6'd48;
+  (* preserve *) reg       ra_active;   // references not yet re-established
+  (* preserve *) reg [1:0] ra_anchors;  // post-flush frame anchors accepted (saturating)
+                 reg [5:0] ra_hdrs;     // picture headers seen while active (give-up)
+  (* keep *) wire ra_hdr_is_i = (getbits[13:11] == I_TYPE);
+  assign realign_now_comb = ra_active && (state == STATE_PICTURE_HEADER) &&
+                            ((ra_anchors == 2'd0) ? ~ra_hdr_is_i : drop_hdr_is_b);
+  /* No pair-arm sibling latch is needed. The governor needs one because its
+   * predicate is restricted to a field pair's FIRST field; this predicate is a
+   * pure function of getbits[13:11] and ra_anchors, identical at both field
+   * headers of a frame, so field-pair atomicity is structural. */
+  always @(posedge clk)
+    if (~rst)
+      begin ra_active <= 1'b0; ra_anchors <= 2'd0; ra_hdrs <= 6'd0; end
+    else if (vbuf_flush)                                   // ★ ungated: see above
+      begin ra_active <= 1'b1; ra_anchors <= 2'd0; ra_hdrs <= 6'd0; end
+    else if (clk_en && ra_active && (state == STATE_PICTURE_HEADER))
+      begin
+        ra_hdrs <= ra_hdrs + 6'd1;
+        if (ra_hdrs >= RA_CAP) ra_active <= 1'b0;          // give up, never freeze
+        else if (hdr_upd_slot && ~drop_hdr_is_b && ~realign_now_comb)
+          begin                                            // an ACCEPTED anchor
+            ra_anchors <= 2'd1;
+            if (ra_anchors == 2'd1) ra_active <= 1'b0;     // second one: done
+          end
+      end
+
   // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe — see the port comment.
   (* preserve *) reg [3:0] dbg_hdr_cnt;
   (* preserve *) reg [3:0] dbg_dropnow_cnt;
@@ -2245,9 +2333,18 @@ module vld(clk, clk_en, rst,
   // picbuf for a picture that never delivers data. Combinational off the same getbits
   // field the drop test reads (the loadreg only latches this cycle).
   wire hdr_is_d_m1 = mpeg1 && (getbits[13:11] == D_TYPE);
+  /* DVD-FORK FIX (seek realign, issue #45): factored so the realign's anchor
+   * counter keys on the SAME node picbuf's rotation does. "Count an anchor
+   * exactly when picbuf rotates" is then true by construction — in particular a
+   * field-coded I frame (two I field pictures) counts ONCE, because
+   * second_field reads 1 only at the first field's header. It also adds no new
+   * fan-out on picture_structure, the register physical synthesis mangled in
+   * the Thayer drops=0 round (see drop_ps_lat above). MPEG-1 comes free:
+   * picture_structure is forced to FRAME_PICTURE in mpeg1 mode. */
+  assign hdr_upd_slot = (state == STATE_PICTURE_HEADER) && ((picture_structure == FRAME_PICTURE) || second_field) && ~hdr_is_d_m1;
   always @(posedge clk)
     if (~rst) update_picture_buffers <= 1'b0;
-    else if (clk_en) update_picture_buffers <= ((state == STATE_PICTURE_HEADER) && ((picture_structure == FRAME_PICTURE) || second_field) && ~drop_now_comb && ~hdr_is_d_m1) // emit frame at picture header
+    else if (clk_en) update_picture_buffers <= (hdr_upd_slot && ~drop_now_comb && ~realign_now_comb) // emit frame at picture header
                                                || ((state == STATE_SEQUENCE_END) && ~last_frame); // emit last frame
     else update_picture_buffers <= 1'b0;
 
@@ -2273,10 +2370,23 @@ module vld(clk, clk_en, rst,
    * skipped that would have displayed). */
   always @(posedge clk)
     if (~rst) drop_this_picture <= 1'b0;
-    else if (clk_en && (state == STATE_PICTURE_HEADER)) drop_this_picture <= drop_now_comb;
+    else if (clk_en && (state == STATE_PICTURE_HEADER)) drop_this_picture <= drop_now_comb || realign_now_comb;
     else drop_this_picture <= drop_this_picture;
 
-  wire drop_slice_hit = (state == STATE_START_CODE) && drop_this_picture &&
+  /* DVD-FORK FIX (seek realign, issue #45): the ACK ledger must see the
+   * governor's drops only. A realign drop was not requested by frame_drop_ctl,
+   * so paying it a credit drives debt to DEBT_FLOOR (-4, dvd/frame_drop_ctl.sv)
+   * — the governor would then need 6 accrued lates before it could drop again,
+   * exactly during the post-seek re-lock where it is most likely to be late —
+   * and drop_pic_rff/drop_pic_field would export the realign-dropped picture's
+   * flags into drop_cost. Every SUPPRESSION leg keys on drop_this_picture (both
+   * reasons); only the ack keys on this. */
+  always @(posedge clk)
+    if (~rst) drop_gov_picture <= 1'b0;
+    else if (clk_en && (state == STATE_PICTURE_HEADER)) drop_gov_picture <= drop_now_comb;
+    else drop_gov_picture <= drop_gov_picture;
+
+  wire drop_slice_hit = (state == STATE_START_CODE) && drop_gov_picture &&
                         (getbits[7:0] >= 8'h01) && (getbits[7:0] <= 8'haf);
   (* preserve *) reg drop_acked;   // one ack per dropped picture (many slices are skipped); preserved per the drop_now_comb hardening note
 

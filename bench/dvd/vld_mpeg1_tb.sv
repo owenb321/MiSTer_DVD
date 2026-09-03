@@ -143,7 +143,8 @@ module vld_mpeg1_tb;
     .drop_pic_rff(drop_pic_rff),
     .drop_pic_field(drop_pic_field),
     .flags_commit(flags_commit),
-    .mpeg1(mpeg1_flag)
+    .mpeg1(mpeg1_flag),
+    .vbuf_flush(1'b0)   // DVD-FORK FIX (seek realign, issue #45): not exercised here
   );
 
   // ---- REAL motcomp_picbuf + the motcomp.v freeze interlock ----

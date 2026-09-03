@@ -104,7 +104,8 @@ module cc_extract_tb;
     .dbg_drop_probe(),
     .flags_commit(),
     .cc_pair_valid(cc_pair_valid), .cc_pair(cc_pair), .cc_pair_field(cc_pair_field),
-    .mpeg1()
+    .mpeg1(),
+    .vbuf_flush(1'b0)   // DVD-FORK FIX (seek realign, issue #45): not exercised here
   );
 
   // ---- check every emitted pair against the golden stream, in order ----
