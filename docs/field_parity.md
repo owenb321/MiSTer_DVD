@@ -1,13 +1,33 @@
 # Field-parity re-engage corrector (2026-09-02)
 
-**Status: ✅ MERGED (PR #37, 2026-09-02); sim-proven (RED pre-fix / GREEN post-fix,
-`bench/dvd/field_parity_tb.sv`); ⏳ HW-confirm pending — the gate is the two field
-reports below (chapter skip / FF / Analog Aspect change on a CRT in Native Fields no
-longer needs mode-toggling to fix). HW so far: a mid-title switch to Interlaced lands
-clean (user report). NOTE 2026-09-03: the analog delivery under this corrector changed —
-`re_interlace` is gone and the interlaced main raster drives the CRT directly
-(`docs/single_raster_analog.md`); the corrector itself is untouched and `run_field_parity.sh`
-stays green (it never touched the raster, only which field image is picked up).**
+**Status: ⛔ DISABLED ON HARDWARE (2026-09-03, PR #40) — `par_ins` is tied 0 in
+`dvd/resample_addrgen.v`. Tracking issue: #41.**
+
+★ **It made BOTH displayed fields carry the SAME source lines.** Measured from HW
+screenshots of a still by splitting each woven frame into its two fields and correlating
+them: **+0.00** frame lines of offset with the corrector on, where a correct interlaced
+still measures **+0.50**. That is a combed still under Weave and a picture that jumps a
+field line under Bob — on **every** output, HDMI included, which is what finally
+distinguished it from the sync-shape theories five HW rounds were spent on
+(`docs/single_raster_analog.md` §3.9). v0.3.0 `Analog Out = Native Fields` — the same
+authored-fields content path WITHOUT this corrector — measures +0.50 and is clean.
+
+⚠ **`bench/dvd/field_parity_tb.sv` stayed GREEN throughout.** Two reasons, both worth
+reading before trusting it again: its behavioural framestore returns a CONSTANT word (no
+displayed pixel carries evidence of which source line it came from), and its pass
+condition is the SAME EXPRESSION as the RTL's `frame_top_par_err` (it restates the
+design's convention instead of checking an external one — the POST-only PGC trap again).
+Replacement, committed UNFINISHED: `bench/dvd/field_phase_tb.sv`. Finish it FIRST.
+
+Disabling re-opens the coin flip this document was written to fix (below): after a chapter
+skip / FF / aspect change the field phase can land wrong on some sets, cleared by toggling
+`Video Output`. The maintainer's late-model CRT has never shown it; the two Discord
+reporters' older sets do.
+
+*(Historical status:)* ✅ MERGED (PR #37, 2026-09-02); sim-proven (RED pre-fix / GREEN
+post-fix, `bench/dvd/field_parity_tb.sv` — see the caveat above); the analog delivery
+under it later changed (`re_interlace` is gone, the interlaced main raster drives the CRT
+directly, `docs/single_raster_analog.md`).**
 
 ## The field reports
 

@@ -1783,7 +1783,10 @@ contact with the field: (1) the derive path's field-pairing wobble (this doc's
 "re-randomised several times a second") was REPORTED FROM THE WILD as "extremely wobbly,
 not how an interlaced signal normally looks on a CRT"; (2) Native Fields shipped with a
 separate field-parity re-engage coin flip ("super aliased after a chapter skip, toggle
-the mode 3-4 times to fix") — root-caused and FIXED (`docs/field_parity.md`); (3) with
+the mode 3-4 times to fix") — root-caused and fixed at the time, but ⛔ **that corrector is
+DISABLED as of 2026-09-03 (PR #40, issue #41): on HW it made both interlaced fields carry
+the same source lines.** The coin flip is therefore OPEN again — `docs/field_parity.md`,
+`docs/single_raster_analog.md` §3.9; (3) with
 that fixed, fieldpass strictly dominates derive on the CRT side, and the maintainer chose
 to drop the one thing derive still bought (CRT 480i + progressive HDMI simultaneously —
 pick-your-output instead). The surface collapsed to **one option, `O[10:9] Video Output
