@@ -58,10 +58,15 @@ everything.
 
 !!! note "Switching mid-title works, with a brief interruption"
     Changing `Video Output` during playback interrupts playback briefly — a short cut to
-    black while the raster and A/V sync re-anchor, like a chapter jump — and then plays on
-    cleanly. Setting the mode before loading just avoids the interruption; it is not
-    required. `Auto` reads the ini bits at boot and while nothing is mounted; it does not
-    change the output mode under a playing disc.
+    black while the raster and A/V sync re-anchor, like a chapter jump. Setting the mode
+    before loading just avoids the interruption; it is not required. `Auto` reads the ini
+    bits at boot and while nothing is mounted; it does not change the output mode under a
+    playing disc.
+
+    **Sound can come back out of sync**, and often does. This is long-standing behaviour on
+    every release, not something the recent fixes introduced. **Skip a chapter to clear
+    it** — that re-anchors the audio to the picture. Setting the mode before loading avoids
+    it entirely.
 
     On v0.4.0 and earlier this could occasionally **freeze the picture** on a malformed
     frame instead, on any disc; skipping a chapter recovered it. The same thing happens on
@@ -77,8 +82,9 @@ everything.
     breaking up while the display re-locks — about a second, and the OSD stays visible
     over it. Sound continues throughout. A brief glitch as the picture comes back is
     normal, and is the same one a chapter skip produces — see
-    [Troubleshooting](../reference/troubleshooting.md). If the black lasts noticeably
-    longer than a second or so, or a mid-title switch still freezes,
+    [Troubleshooting](../reference/troubleshooting.md). The lip-sync caveat above still
+    applies: that one is not fixed. If the black lasts noticeably longer than a second or
+    so, or a mid-title switch still freezes,
     [please report it](../reference/reporting-a-bug.md).
 
 ## Field alignment

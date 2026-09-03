@@ -76,6 +76,19 @@ language — the fault is likely in how the disc maps tracks to soundtracks, whi
 its navigation tables. A [repro bundle](reporting-a-bug.md) captures those, so that report
 can be reproduced without the disc.
 
+### Sound is out of sync after changing `Video Output` mid-title
+
+**Skip a chapter.** That re-anchors the audio to the picture and clears it.
+
+Changing the output mode under a playing disc restarts the raster and the A/V timing
+together, and the audio does not always come back on the picture's timeline. It is
+long-standing behaviour on every release. Setting `Video Output` before loading the disc
+avoids it entirely. See [Video Output](../video/interlaced.md).
+
+If sound drifts out of sync **without** a mode change, that is a different problem — try
+`A/V Offset` on the debug page first, and [report it](reporting-a-bug.md) with the disc and
+roughly how far into the title it started.
+
 ### Menu audio went silent
 
 You changed the audio track while the menu was open. It comes back when you leave the menu.
