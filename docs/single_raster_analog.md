@@ -5,7 +5,10 @@ below green). **HW rounds 1–3 found and fixed the real defect: a half-line on 
 raster combs the scaler's weave (§3.9) — the `ff01ac8` note was right and this branch had
 overturned it.** Round 4 keeps the main raster line-aligned for ascal and applies the 2:1
 half-line to the ANALOG composite sync only, in `sys_top`'s `csync`. One raster, one
-picture, two sync flavours. ⏳ HW-confirm pending. Gate = the two RGBS / YPbPr
+picture, two sync flavours. Build `releases/DVD_singleraster4_20260903_0000.rbf`,
+SEED 5 first roll, clk_dec 96.17 / 92.43 MHz, 88 % ALM, RAM 494/553.
+⏳ HW-confirm pending. Gate = the composite CRT (weave clean on a still, no field-rate
+bounce) and HDMI Weave clean on a still, plus the two RGBS / YPbPr
 field reports below reproduce clean (idle logo AND playback), gregSTORM's composite CRT
 and the HDMI 480i path unregressed, Main reporting `720x480i @ 59.94` steady.**
 
