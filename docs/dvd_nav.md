@@ -1269,9 +1269,20 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   (`dvd_audio_decode.pause` + drain-watchdog freeze). This is the *same* stable hold as a manual
   pause (the watchdog is suppressed the whole time), so there is no re-lock/watchdog problem.
 - **Accumulate** = on the press edge it latches `base_rbn = cur_rbn` (the live playhead
-  `dsi_nv_pck_lbn`); every ~0.06 s tick it adds a **tier-scaled** step `span >> {10,8,6,5}`
-  sectors (tier 0→3 by hold time 0/1.5/3/5 s) to a signed offset, capped at the title span. A
+  `dsi_nv_pck_lbn`); every ~0.06 s tick it adds a **tier-scaled** step `span >> {12,10,8,6}`
+  sectors (tier 0→3 by hold time 0/2/4.5/8 s) to a signed offset, capped at the title span. A
   direction flip restarts the accumulation the other way.
+  ⚠ **The ladder and the dwells are `scrub_ctrl` parameters (`SH0..SH3`, `T1..T3`), and they
+  were relaxed on 2026-09-03** after a user report that the scrub "ramps up too fast". The
+  original `{10,8,6,5}` / 0-1.5-3-5 s ladder moved ~2 **minutes** of a 2 h title per second
+  even in tier 0 — there was no fine-positioning tier at all, and 5 s of holding crossed 77
+  minutes. The shipped ladder gives ~29 s → 2 min → 7.8 min → 31 min per second held, and the
+  far end of a 2 h film is ~11 s of holding away. Steps are span-RELATIVE, so the feel is the
+  same fraction-of-title on a 5-minute clip and a 3-hour epic — keep it that way. Pinned by
+  `scrub_ctrl_tb` T13 (the ladder, MEASURED off `bar_tgt_rbn` rather than read out of the
+  DUT), T14 (the tier boundaries) and T15 (the shipped default parameters, so a retune is
+  deliberate). A retune must also move `dvd/scrub_ctrl.sv`'s header, `dvd/dpad_seek.sv`'s
+  header and `docs/transport_hud.md`.
 - **Release** = `target = clamp(base_rbn ± offset, first, last)`; if anything accumulated it
   pulses **one** `seek_rbn` (the reader's `S_RBN_SCAN` finds the containing cell). A sub-tick
   tap accumulates nothing → no-op.

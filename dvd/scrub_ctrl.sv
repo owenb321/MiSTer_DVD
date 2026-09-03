@@ -26,17 +26,35 @@
 //
 // Position math is sector/RBN-based against the title's VTSTT_VOBS span
 // (title_first_rbn..title_last_rbn from the reader). The accumulated offset grows
-// with hold time via the same 4 tiers as before (bigger step = faster):
-//   tier 0 (0-1.5s)  tier 1 (1.5-3s)  tier 2 (3-5s)  tier 3 (>5s)
-//   step = span >> {10, 8, 6, 5} sectors per tick (~each ~0.06 s).
+// with hold time via 4 tiers (bigger step = faster):
+//   tier 0 (0-2s)  tier 1 (2-4.5s)  tier 2 (4.5-8s)  tier 3 (>8s)
+//   step = span >> {12, 10, 8, 6} sectors per tick (~each ~0.06 s).
+//
+// ★ THE LADDER AND THE DWELLS ARE PARAMETERS (SH0..SH3, T1..T3), not magic
+// numbers in a ternary, because this is a FEEL setting that gets retuned from
+// hardware and every retune otherwise costs a hunt through four documents.
+// They were relaxed once already (2026-09-03, user report "it ramps up too
+// fast"): the old {10,8,6,5} / 1.5-3-5 s ladder moved ~2 MINUTES of a 2 h title
+// per second even in tier 0 -- there was no fine-positioning tier at all, and
+// 5 s of holding crossed 77 minutes. Now tier 0 moves ~29 s/s and the far end
+// of a 2 h film is still ~11 s of holding away. Numbers are span-RELATIVE, so
+// the feel is the same fraction-of-title on a 5-minute clip and a 3-hour epic;
+// keep it that way. If you retune, update dvd/dpad_seek.sv's header (it
+// contrasts its fixed-time step against this one), docs/dvd_nav.md
+// "Seeking / Phase 8a" and docs/transport_hud.md -- and NOT the user manual,
+// which deliberately says only "it accelerates the longer you hold".
 //
 // See docs/dvd_nav.md "Seeking / Phase 8a" and memory phase8a-hold-to-seek-scrub.
 // ============================================================================
 
 module scrub_ctrl #(
-    parameter T1     = 40_500_000,   // 1.5 s -> tier 1
-    parameter T2     = 81_000_000,   // 3.0 s -> tier 2
-    parameter T3     = 135_000_000,  // 5.0 s -> tier 3
+    parameter T1     = 54_000_000,   // 2.0 s -> tier 1
+    parameter T2     = 121_500_000,  // 4.5 s -> tier 2
+    parameter T3     = 216_000_000,  // 8.0 s -> tier 3  (hold_cnt is 28 bits: max 268M)
+    parameter SH0    = 5'd12,        // step = span >> SHn sectors per tick
+    parameter SH1    = 5'd10,
+    parameter SH2    = 5'd8,
+    parameter SH3    = 5'd6,
     parameter TICK   = 1_620_000,    // ~0.06 s accumulate tick
     parameter LINGER = 40_000_000    // ~1.5 s show the bar after release
 ) (
@@ -98,9 +116,9 @@ module scrub_ctrl #(
                       (hold_cnt >= T1) ? 2'd1 : 2'd0;
     wire [31:0] span = (title_last_rbn > title_first_rbn)
                        ? (title_last_rbn - title_first_rbn) : 32'd1;
-    wire [4:0] sh   = (tier == 2'd3) ? 5'd5 :
-                      (tier == 2'd2) ? 5'd6 :
-                      (tier == 2'd1) ? 5'd8 : 5'd10;
+    wire [4:0] sh   = (tier == 2'd3) ? SH3 :
+                      (tier == 2'd2) ? SH2 :
+                      (tier == 2'd1) ? SH1 : SH0;
     wire [31:0] step = (span >> sh) | 32'd1;  // >=1 sector/tick
 
     reg  [31:0] pending_off;                   // magnitude (sectors), 0..span

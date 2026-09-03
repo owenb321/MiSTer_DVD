@@ -48,8 +48,9 @@ Three layers:
 
 **Status line** (bottom-anchored): `[icon] H:MM:SS/H:MM:SS CH n/N` — icon =
 ▶ / ❚❚ / ▶▶×n / ◀◀×n (scrub tier 0..3 shows ×1..×4; tiers are span-relative
-step rates since PR fj#101, *not* seconds). `CH` hides until the reader's
-`cur_pgm` query resolves (0 = unknown). Shown while: **persistent mode** (B9
+step rates since PR fj#101, *not* seconds — 0/2/4.5/8 s of holding, step
+`span >> {12,10,8,6}`, relaxed 2026-09-03; see `docs/dvd_nav.md` "Phase 8a").
+`CH` hides until the reader's `cur_pgm` query resolves (0 = unknown). Shown while: **persistent mode** (B9
 "Display" toggles it), paused, scrubbing, or ~2.5 s after a transport event.
 
 **Popup line** (above the bar): `AUDIO n/N LL` / `SUB n/N LL` / `SUB OFF` /

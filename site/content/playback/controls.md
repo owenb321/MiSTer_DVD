@@ -43,7 +43,8 @@ once, Menu behaves exactly as the disc specifies.
 
 **B2 / B3** step chapters. **B10 / B11** (`Fast Fwd` / `Rewind`) tapped step forward and back; **held**, they
 scrub — a seek bar appears showing where you are and where you will land, and the seek
-happens when you release.
+happens when you release. The target accelerates the longer you hold, so a brief hold nudges
+you along and a long one crosses the whole disc.
 
 **B9 (Display)** toggles the status line — the elapsed/total time and chapter readout along
 the bottom. It also appears by itself for a couple of seconds whenever something changes.

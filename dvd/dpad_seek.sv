@@ -3,7 +3,7 @@
 // ============================================================================
 // Left/Right = -/+10 s, Down/Up = -/+60 s while a TITLE plays. Unlike the
 // hold-to-seek scrub (dvd/scrub_ctrl.sv), whose step is SPAN-relative
-// (span >> {10,8,6,5} sectors per tick = "percent of title"), this module seeks
+// (span >> {12,10,8,6} sectors per tick = "percent of title"), this module seeks
 // by SECONDS, using the disc's OWN authored seek tables.
 //
 // ★ WHERE THE TARGET COMES FROM. Every DVD NAV pack's DSI carries the VOBU_SRI
