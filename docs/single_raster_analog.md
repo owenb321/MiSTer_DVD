@@ -508,7 +508,17 @@ observation that relocates the remaining work. (It is an observation of appearan
 measurement — but it is the right shape, and it is the same reasoning that closed §3.9:
 when a build changes X and the symptom persists unchanged, X is exonerated.)
 
-**What the residual most likely is, for whoever picks it up.** `flush_ctl`'s trio discards
+**The residual is now tracked as [issue #45](https://github.com/owenb321/MiSTer_DVD/issues/45)**
+— *"Macroblocking for ~6 frames after any seek: reference frames survive the VBUF flush"*.
+Measured there from a 60 Hz HDMI recording: ~6 frames (~100 ms), on all four transport
+paths and every disc tried, with the target chapter decoding and in motion while the old
+scene bleeds through as residual. That last detail is what identifies it — motion
+compensation against stale references, not a corrupt picture. Root cause confirmed in the
+RTL: `motcomp_picbuf`'s `prev_i_p_frame_valid` is cleared only by `~rst` or a sequence end,
+never by a flush, so the reference slots survive a seek still holding the old scene and
+still flagged valid.
+
+**The original note, kept because it is the reasoning that got there:** `flush_ctl`'s trio discards
 *buffered* data but deliberately leaves the decode pipeline's state — `vld`/`getbits`/
 `motcomp`/`picbuf` are all on `sync_rst`, and `mount_flush` (the decoder soft reset) is
 MOUNT-ONLY, "NEVER on seeks/jumps/mode switches ... where the display must hold the last

@@ -358,7 +358,8 @@ worse maintenance burden than targeted in-place edits. So:
   still is not. Gate: `mode_realign_tb` [12]–[17], **mutation-checked** (5 targeted RTL
   mutations, each caught by its own scenario — these are cheap level assertions, exactly
   the shape that passes without proving anything).
-  ★★ **THE RESIDUAL IS NOW A TRANSPORT ITEM, NOT A MODE-SWITCH ONE, and the user's own
+  ★★ **THE RESIDUAL IS NOW A TRANSPORT ITEM (tracked as issue #45), NOT A MODE-SWITCH
+  ONE, and the user's own
   report is what establishes that:** *"still some visible glitches but I think these are
   more decoder issues than mode switch since it looks similar to when a chapter skip is
   performed."* The design goal was to make a mode switch **byte-identical to a chapter
