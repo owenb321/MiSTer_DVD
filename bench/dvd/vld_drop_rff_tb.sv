@@ -77,7 +77,8 @@ module vld_drop_rff_tb;
   );
 
   reg  drop_pic_req = 1'b1;
-  wire drop_pic_ack, drop_pic_rff;
+  wire drop_pic_ack, drop_pic_rff, drop_pic_field;
+  wire pic_informative, informative_commit;
   wire update_picture_buffers, flags_commit;
   wire [2:0] picture_coding_type;
   wire repeat_first_field, top_field_first, progressive_frame, progressive_sequence;
@@ -115,7 +116,17 @@ module vld_drop_rff_tb;
     .drop_pic_req(drop_pic_req),
     .drop_pic_ack(drop_pic_ack),
     .drop_pic_rff(drop_pic_rff),
-    .flags_commit(flags_commit)
+    .drop_pic_field(drop_pic_field),
+    .dbg_drop_probe(),
+    .flags_commit(flags_commit),
+    // ports added to vld since this bench was written (2026-09-03 repair):
+    // outputs may dangle, but picbuf's pic_informative/informative_commit are
+    // INPUTS and were floating to z -- connect them from the real vld.
+    .pic_informative(pic_informative),
+    .informative_commit(informative_commit),
+    .cc_pair_valid(), .cc_pair(), .cc_pair_field(),
+    .mpeg1(),
+    .vbuf_flush(1'b0)   // DVD-FORK FIX (seek realign, issue #45): not exercised here
   );
 
   // ---- REAL motcomp_picbuf + the motcomp.v freeze interlock (round 11) ----
@@ -150,6 +161,9 @@ module vld_drop_rff_tb;
     .last_frame(1'b0),
     .update_picture_buffers(update_picture_buffers),
     .flags_commit(flags_commit),
+    .pic_informative(pic_informative),
+    .informative_commit(informative_commit),
+    .output_informative(),
     .forward_reference_frame(), .backward_reference_frame(), .current_frame(),
     .output_frame(output_frame),
     .output_frame_valid(output_frame_valid),
@@ -231,7 +245,9 @@ module vld_drop_rff_tb;
   // ---- drive ----
   string esf;
   initial begin
-    if (!$value$plusargs("ES=%s", esf)) esf = "bench/dvd/mib6.hex";
+    // bench/dvd/mib6.hex was never committed and no longer exists; default to a
+    // fixture the repo's own tooling regenerates (bench/dvd/run_seek_realign.sh).
+    if (!$value$plusargs("ES=%s", esf)) esf = "bench/dvd/test_vobs/seek_realign.hex";
     void'($value$plusargs("MAXPIC=%d", maxpic));
     void'($value$plusargs("DRAIN=%d", drain));
     begin : req_arg
@@ -247,6 +263,10 @@ module vld_drop_rff_tb;
     end
     $display("ES: %0d words (%0d bytes), drop_pic_req=%0d, maxpic=%0d",
              es_words, es_words * 8, drop_pic_req, maxpic);
+    if (es_words == 0) begin
+      $display("SKIP: vld_drop_rff_tb - fixture %0s missing; run bench/dvd/run_seek_realign.sh", esf);
+      $finish;
+    end
     rst = 0;
     repeat (8) @(posedge clk);
     rst = 1;
