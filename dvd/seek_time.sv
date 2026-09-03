@@ -134,13 +134,17 @@ module seek_time (
     // SHIFTS on a pre-widened value: x10 = <<3 + <<1, x60 = <<5+<<4+<<3+<<2,
     // x3600 = <<11+<<10+<<9+<<4. Doing it with concatenations instead is how
     // the first version of this block silently computed h*44.
-    wire [7:0]  hh_t = {4'd0, live_time[31:28]};
+    // ⚠ The TENS-of-hours digit is deliberately not decoded. Every producer of
+    // live_time saturates at 9:59:59 (lin_rate's SEC_CAP, and a PGC playback
+    // time is spec-capped there too), and transport_hud renders only bits [27:8]
+    // -- the hours ONES nibble -- so a tens digit could not be displayed even if
+    // one arrived. Decoding it cost two 17-bit adds for a provably-zero term.
     wire [7:0]  hh_o = {4'd0, live_time[27:24]};
     wire [7:0]  mm_t = {4'd0, live_time[23:20]};
     wire [7:0]  mm_o = {4'd0, live_time[19:16]};
     wire [7:0]  ss_t = {4'd0, live_time[15:12]};
     wire [7:0]  ss_o = {4'd0, live_time[11:8]};
-    wire [16:0] lv_h = {9'd0, (hh_t << 3) + (hh_t << 1) + hh_o};
+    wire [16:0] lv_h = {9'd0, hh_o};
     wire [16:0] lv_m = {9'd0, (mm_t << 3) + (mm_t << 1) + mm_o};
     wire [16:0] lv_s = {9'd0, (ss_t << 3) + (ss_t << 1) + ss_o};
     wire [16:0] lv_secs = (lv_h << 11) + (lv_h << 10) + (lv_h << 9) + (lv_h << 4)
@@ -155,14 +159,16 @@ module seek_time (
     wire [1:0]  sel = dpad_pend  ? SEL_DPAD :
                       chap_prev  ? SEL_CHAP :
                       bar_active ? SEL_BAR  : SEL_NONE;
-    wire [39:0] key = (sel == SEL_DPAD) ? {6'd0, dpad_dir, dpad_min, dpad_sec,
-                                           6'd0, lv_secs}
-                    : (sel == SEL_CHAP) ? {32'd0, chap_pgm}
-                    : (sel == SEL_BAR ) ? {8'd0, bar_tgt_rbn}
-                                        : 40'd0;
+    // 32 bits is the widest request any source can pose (a bar target RBN); the
+    // D-pad's dir+min+sec+seconds is 28 and a chapter is 8.
+    wire [31:0] key = (sel == SEL_DPAD) ? {2'd0, dpad_dir, dpad_min, dpad_sec,
+                                           4'd0, lv_secs}
+                    : (sel == SEL_CHAP) ? {24'd0, chap_pgm}
+                    : (sel == SEL_BAR ) ? bar_tgt_rbn
+                                        : 32'd0;
 
     reg [1:0]  sel_l;
-    reg [39:0] key_l;
+    reg [31:0] key_l;
 
     // =====================================================================
     // Resolve FSM.
@@ -182,14 +188,23 @@ module seek_time (
     reg [15:0] lo_secs, hi_secs;
     reg [16:0] secs;
 
+    // ⚠ WIDTHS ARE ARGUED. off < c_span, and c_span is one cell's sector span,
+    // bounded by a whole dual-layer DVD (~4.2 M sectors = 2^22). dv_n therefore
+    // holds off<<8 in 30 bits and the remainder needs only c_span's width + 1;
+    // carrying 31 bits cost 7 spare bits of comparator and subtractor in the
+    // divide loop. c_span_ok is the guard that keeps that bound honest rather
+    // than assumed -- an out-of-range span degenerates to the cell start instead
+    // of silently producing a wrong quotient.
     reg [29:0] dv_n;
-    reg [30:0] dv_rem;
+    reg [23:0] dv_rem;
     reg [8:0]  dv_q;
     reg [5:0]  dv_i;
-    wire [30:0] rem_n    = {dv_rem[29:0], dv_n[29]};
+    wire [24:0] rem_n    = {dv_rem[23:0], dv_n[29]};
     wire [31:0] c_span   = hi_rbn - lo_rbn;
-    wire [30:0] c_span_x = c_span[30:0];
+    wire        c_span_ok= (c_span[31:23] == 9'd0) && (c_span != 32'd0);
+    wire [24:0] c_span_x = {2'd0, c_span[22:0]};
     wire        div_ge   = (rem_n >= c_span_x);
+    wire [24:0] rem_next = div_ge ? (rem_n - c_span_x) : rem_n;
     // off < c_span always (tgt is inside the bracket), so the quotient of
     // (off << 8) / c_span is at most 256 and the 9-bit dv_q cannot lose a
     // significant bit out of the top.
@@ -208,13 +223,13 @@ module seek_time (
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            st <= S_IDLE; sel_l <= SEL_NONE; key_l <= 40'd0;
+            st <= S_IDLE; sel_l <= SEL_NONE; key_l <= 32'd0;
             prev_time <= 32'd0; prev_ok <= 1'b0;
             pm_ra <= 7'd0; cf_ra <= 7'd0;
             tgt <= 32'd0; scan_i <= 8'd0; lo_ok <= 1'b0;
             lo_rbn <= 32'd0; hi_rbn <= 32'd0; lo_secs <= 16'd0; hi_secs <= 16'd0;
             secs <= 17'd0;
-            dv_n <= 30'd0; dv_rem <= 31'd0; dv_q <= 9'd0; dv_i <= 6'd0;
+            dv_n <= 30'd0; dv_rem <= 24'd0; dv_q <= 9'd0; dv_i <= 6'd0;
             ml_acc <= 24'd0; ml_i <= 4'd0;
             bc_t <= 17'd0; bc_h <= 4'd0; bc_mt <= 4'd0; bc_mo <= 4'd0;
             bc_st <= 4'd0; bc_st_n <= 3'd0;
@@ -307,19 +322,19 @@ module seek_time (
                     end
                     S_LO: begin
                         // q = (off << 8) / cell_span, a 0..255 fraction.
-                        if (hi_rbn <= lo_rbn) begin
+                        if (!c_span_ok) begin
                             secs <= {1'b0, lo_secs};     // degenerate cell
                             st <= S_BCD; bc_st_n <= 3'd0;
                         end else begin
                             dv_n   <= {cell_off[21:0], 8'd0};
-                            dv_rem <= 31'd0;
+                            dv_rem <= 24'd0;
                             dv_q   <= 9'd0;
                             dv_i   <= 6'd30;
                             st     <= S_DIV;
                         end
                     end
                     S_DIV: begin
-                        dv_rem <= div_ge ? (rem_n - c_span_x) : rem_n;
+                        dv_rem <= rem_next[23:0];
                         dv_n   <= {dv_n[28:0], 1'b0};
                         dv_q   <= {dv_q[7:0], div_ge};
                         if (dv_i == 6'd1) begin

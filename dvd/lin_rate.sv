@@ -152,28 +152,49 @@ module lin_rate #(
     reg  [2:0]  st;
     reg  [1:0]  job;
     reg  [3:0]  req;                    // pending, indexed by job
+    // ⚠ WIDTHS ARE ARGUED, NOT ROUNDED UP. acc must hold the largest product:
+    // RATE is d_blk (<= DBLK_MAX = 2^17) x 900000 (< 2^20) = 37 bits; a clock job
+    // is a block count clamped to 24 bits x 10 = 28. So acc is 38 and everything
+    // feeding it is narrower. divisor only ever holds d_pts (<= PTS_MAX, 21 bits)
+    // or blk10 (24), so rem needs divisor+1 = 25 -- carrying 38/39-bit versions of
+    // these cost ~14 bits of comparator and subtractor in the divide loop for
+    // nothing.
     reg  [37:0] acc;                    // product, then the divide numerator
-    reg  [37:0] mul_a;
-    reg  [19:0] mul_k;
+    reg  [23:0] mul_a;
     reg  [4:0]  mul_i;
-    reg  [37:0] divisor;
-    reg  [38:0] rem;
+    reg  [23:0] divisor;
+    reg  [24:0] rem;
     reg  [23:0] quo;
     reg         quo_sat;
     reg  [5:0]  div_i;
 
     // Latched job operands, so a request can never be paired with a later value.
-    reg  [31:0] d_blk_l;
+    // d_blk_l is bounded by the DBLK_MAX window guard; block counts are clamped to
+    // 24 bits, which is 16.7 M blocks = 34 GB of file -- an order of magnitude past
+    // any medium this core reads, and the readout saturates at 9:59:59 anyway.
+    reg  [17:0] d_blk_l;
     reg  [20:0] d_pts_l;
-    reg  [31:0] prev_rbn_l;
+    reg  [23:0] prev_rbn_l;
+    wire [23:0] lin_blk_c   = (lin_blk   > 32'h00FF_FFFF) ? 24'hFF_FFFF : lin_blk[23:0];
+    wire [23:0] total_blk_c = (total_blk > 32'h00FF_FFFF) ? 24'hFF_FFFF : total_blk[23:0];
+    wire [23:0] prev_rbn_c  = (prev_rbn  > 32'h00FF_FFFF) ? 24'hFF_FFFF : prev_rbn[23:0];
     reg         prev_new;               // prev_rbn_l has not been resolved yet
     reg         tot_seen;               // total_time resolved at least once
     reg         cur_seen;
     reg         ok_d;                   // blk10_ok delayed, for the first-arm
                                         // one-shot below
 
-    wire [38:0] rem_n = {rem[37:0], acc[37]};
+    wire [24:0] rem_n = {rem[23:0], acc[37]};
     wire        div_ge = (rem_n >= {1'b0, divisor});
+    // The multiplier's constant is one of exactly two, so it is a mux on the job
+    // rather than a 20-bit register reloaded per job.
+    // ⚠ The constant is muxed onto a WIRE and the bit selected from that, never
+    // bit-selected off the localparam directly (`K_TEN[mul_i]`): a variable
+    // bit-select of a parameter is not portable, and it read as 0 under Icarus --
+    // every product came out zero. Same family as the Quartus 17 `function`
+    // miscompiles: it elaborates quietly and behaves differently per tool.
+    wire [19:0] mul_kw  = (job == J_RATE) ? K_RATE : K_TEN;
+    wire        mul_bit = mul_kw[mul_i];
 
     // seconds -> BCD by repeated subtraction (the dpad_seek MM:SS trick), which
     // yields the DIGITS directly, so no separate binary-to-BCD pass is needed.
@@ -194,10 +215,10 @@ module lin_rate #(
             blk10_r <= 24'd0; blk10_ok_r <= 1'b0; win_open <= 1'b0;
             pts0 <= 33'd0; blk0 <= 32'd0;
             st <= S_IDLE; job <= J_RATE; req <= 4'd0;
-            acc <= 38'd0; mul_a <= 38'd0; mul_k <= 20'd0; mul_i <= 5'd0;
-            divisor <= 38'd0; rem <= 39'd0; quo <= 24'd0; quo_sat <= 1'b0;
+            acc <= 38'd0; mul_a <= 24'd0; mul_i <= 5'd0;
+            divisor <= 24'd0; rem <= 25'd0; quo <= 24'd0; quo_sat <= 1'b0;
             div_i <= 6'd0;
-            d_blk_l <= 32'd0; d_pts_l <= 21'd0; prev_rbn_l <= 32'd0;
+            d_blk_l <= 18'd0; d_pts_l <= 21'd0; prev_rbn_l <= 24'd0;
             prev_new <= 1'b0; tot_seen <= 1'b0; cur_seen <= 1'b0; ok_d <= 1'b0;
             sec_t <= 16'd0; sec_t_l <= 16'd0;
             bcd_h <= 4'd0; bcd_mt <= 4'd0; bcd_mo <= 4'd0;
@@ -222,7 +243,7 @@ module lin_rate #(
                 end else if (win_bad) begin
                     pts0 <= vid_pts; blk0 <= lin_blk;      // restart, keep est.
                 end else if (win_done) begin
-                    d_blk_l <= d_blk;
+                    d_blk_l <= d_blk[17:0];      // bounded by the DBLK_MAX guard
                     d_pts_l <= d_pts[20:0];
                     req[J_RATE] <= 1'b1;
                     pts0 <= vid_pts; blk0 <= lin_blk;
@@ -243,8 +264,8 @@ module lin_rate #(
                     req[J_CUR] <= 1'b1;
                     req[J_TOT] <= 1'b1;
                 end
-                if (prev_req && (!prev_new || (prev_rbn != prev_rbn_l))) begin
-                    prev_rbn_l  <= prev_rbn;
+                if (prev_req && (!prev_new || (prev_rbn_c != prev_rbn_l))) begin
+                    prev_rbn_l  <= prev_rbn_c;
                     prev_new    <= 1'b1;
                     req[J_PREV] <= 1'b1;
                 end
@@ -262,34 +283,34 @@ module lin_rate #(
                     // the preview (a live gesture), then the clock.
                     if (req[J_RATE]) begin
                         job <= J_RATE; req[J_RATE] <= 1'b0;
-                        mul_a <= {6'd0, d_blk_l}; mul_k <= K_RATE;
-                        divisor <= {17'd0, d_pts_l};
+                        mul_a <= {6'd0, d_blk_l};
+                        divisor <= {3'd0, d_pts_l};
                         st <= S_MUL;
                     end else if (blk10 != 24'd0) begin
                         if (req[J_PREV]) begin
                             job <= J_PREV; req[J_PREV] <= 1'b0;
-                            mul_a <= {6'd0, prev_rbn_l}; mul_k <= K_TEN;
-                            divisor <= {14'd0, blk10};
+                            mul_a <= prev_rbn_l;
+                            divisor <= blk10;
                             st <= S_MUL;
                         end else if (req[J_CUR]) begin
                             job <= J_CUR; req[J_CUR] <= 1'b0;
-                            mul_a <= {6'd0, lin_blk}; mul_k <= K_TEN;
-                            divisor <= {14'd0, blk10};
+                            mul_a <= lin_blk_c;
+                            divisor <= blk10;
                             st <= S_MUL;
                         end else if (req[J_TOT]) begin
                             job <= J_TOT; req[J_TOT] <= 1'b0;
-                            mul_a <= {6'd0, total_blk}; mul_k <= K_TEN;
-                            divisor <= {14'd0, blk10};
+                            mul_a <= total_blk_c;
+                            divisor <= blk10;
                             st <= S_MUL;
                         end
                     end
-                    acc <= 38'd0; rem <= 39'd0; quo <= 24'd0; quo_sat <= 1'b0;
+                    acc <= 38'd0; rem <= 25'd0; quo <= 24'd0; quo_sat <= 1'b0;
                     mul_i <= 5'd19; div_i <= 6'd38;
                 end
 
                 // product = mul_a * mul_k, MSB-first shift-add (one adder).
                 S_MUL: begin
-                    acc <= {acc[36:0], 1'b0} + (mul_k[mul_i] ? mul_a : 38'd0);
+                    acc <= {acc[36:0], 1'b0} + (mul_bit ? {14'd0, mul_a} : 38'd0);
                     if (mul_i == 5'd0) st <= S_DIV;
                     else               mul_i <= mul_i - 5'd1;
                 end

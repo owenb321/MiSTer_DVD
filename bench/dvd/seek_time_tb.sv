@@ -58,8 +58,17 @@ module seek_time_tb;
             errors = errors + 1;
         end
     endtask
+    // ⚠ Stimulus is driven away from the clock edge: blocking assignments made
+    // immediately after a posedge race the DUT's sampling of that same edge, and
+    // the failure is scheduling-dependent (it stayed hidden in lin_rate_tb until
+    // an unrelated width change reordered things). Same trap dpad_seek_tb hit --
+    // see CLAUDE.md. Every wait settles on the negedge.
     task automatic tick(input integer n);
-        integer k; begin for (k = 0; k < n; k = k + 1) @(posedge clk); end
+        integer k;
+        begin
+            for (k = 0; k < n; k = k + 1) @(posedge clk);
+            @(negedge clk);
+        end
     endtask
 
     // ---- the synthetic title -----------------------------------------------
@@ -76,26 +85,27 @@ module seek_time_tb;
         integer i;
         begin
             for (i = 0; i < ncells; i = i + 1) begin
-                @(posedge clk);
+                @(negedge clk);
                 cellf_we   = 1'b1;
                 cellf_idx  = i[6:0];
                 cellf_rbn  = BASE + i * STEP;
                 cellf_secs = i * dur;
-                @(posedge clk);
+                @(negedge clk);
                 cellf_we   = 1'b0;
             end
             for (i = 0; i < nprog; i = i + 1) begin
-                @(posedge clk);
+                @(negedge clk);
                 pm_we    = 1'b1;
                 pm_waddr = i[6:0];
                 pm_wdata = (i * 2) + 1;          // 1-based entry cell: 1,3,5,7
-                @(posedge clk);
+                @(negedge clk);
                 pm_we    = 1'b0;
             end
+            @(negedge clk);
             title_secs  = ncells * dur;
             title_first = BASE;
             title_last  = BASE + ncells * STEP - 1;
-            @(posedge clk);
+            @(negedge clk);
         end
     endtask
 

@@ -52,8 +52,18 @@ module lin_rate_tb;
         if (!cond) begin $display("  FAIL: %0s", msg); errors = errors + 1; end
     endtask
 
+    // ⚠ Stimulus is driven away from the clock edge. Blocking assignments made
+    // immediately after a posedge race the DUT's own sampling of the same edge,
+    // and the failure is scheduling-dependent -- it hid here until an unrelated
+    // width change reordered things, then showed up as a request latched
+    // alongside a value that had not arrived yet. dpad_seek_tb was bitten by the
+    // same thing (see CLAUDE.md). Every wait therefore SETTLES on the negedge.
     task automatic tick(input integer n);
-        integer k; begin for (k = 0; k < n; k = k + 1) @(posedge clk); end
+        integer k;
+        begin
+            for (k = 0; k < n; k = k + 1) @(posedge clk);
+            @(negedge clk);
+        end
     endtask
 
     // ---- stream model -------------------------------------------------------
@@ -68,11 +78,11 @@ module lin_rate_tb;
                 // blocks this picture is worth = bps10 * PIC_TICKS / 900000
                 want = (bps10 * PIC_TICKS) / 900000;
                 for (b = 0; b < want; b = b + 1) begin
-                    @(posedge clk); lin_blk = lin_blk + 32'd1;
+                    @(negedge clk); lin_blk = lin_blk + 32'd1;
                 end
-                vid_pts = vid_pts + PIC_TICKS;
-                @(posedge clk); vid_pts_valid = 1'b1;
-                @(posedge clk); vid_pts_valid = 1'b0;
+                @(negedge clk); vid_pts = vid_pts + PIC_TICKS;
+                                vid_pts_valid = 1'b1;
+                @(negedge clk); vid_pts_valid = 1'b0;
                 // let the engine finish any job it just queued
                 tick(120);
             end
@@ -80,7 +90,8 @@ module lin_rate_tb;
     endtask
 
     task automatic pulse_sec;
-        begin @(posedge clk); sec_tick = 1'b1; @(posedge clk); sec_tick = 1'b0;
+        begin @(negedge clk); sec_tick = 1'b1;
+              @(negedge clk); sec_tick = 1'b0;
               tick(400); end
     endtask
 
@@ -178,8 +189,8 @@ module lin_rate_tb;
         $display("TEST 5: PTS discontinuity rejected");
         ref_val = blk10;
         vid_pts = vid_pts + 33'd54_000_000;         // +10 min in one sample
-        @(posedge clk); vid_pts_valid = 1'b1;
-        @(posedge clk); vid_pts_valid = 1'b0; tick(200);
+        @(negedge clk); vid_pts_valid = 1'b1;
+        @(negedge clk); vid_pts_valid = 1'b0; tick(200);
         chk(blk10 == ref_val[23:0], "disc: estimate untouched");
         play(300, 6000);
         chk_near(blk10, 6000, 5, "disc: still tracking");
@@ -192,13 +203,13 @@ module lin_rate_tb;
         ref_val = blk10;
         lin_blk = lin_blk - 32'd50_000;             // seek backwards
         vid_pts = vid_pts - 33'd1_000_000;
-        @(posedge clk); flush = 1'b1; @(posedge clk); flush = 1'b0; tick(200);
+        @(negedge clk); flush = 1'b1; @(negedge clk); flush = 1'b0; tick(200);
         chk(blk10_ok, "flush: still valid");
         chk(blk10 == ref_val[23:0], "flush: estimate unchanged");
 
         // ---- T7: a new file is a new rate ----------------------------------
         $display("TEST 7: mount clears");
-        @(posedge clk); mount = 1'b1; @(posedge clk); mount = 1'b0; tick(200);
+        @(negedge clk); mount = 1'b1; @(negedge clk); mount = 1'b0; tick(200);
         chk(!blk10_ok, "mount: estimate dropped");
         chk(blk10 == 24'd0, "mount: rate zeroed");
         chk(!time_ok, "mount: clock invalid");
@@ -244,7 +255,7 @@ module lin_rate_tb;
         // the honest estimate standing rather than replace it.
         $display("TEST 11: out-of-range measurement rejected");
         raw_mode = 1'b0; lin_blk = 32'd0; vid_pts = 33'd0;
-        @(posedge clk); mount = 1'b1; @(posedge clk); mount = 1'b0; tick(50);
+        @(negedge clk); mount = 1'b1; @(negedge clk); mount = 1'b0; tick(50);
         play(40, 3000);                              // arm honestly
         ref_val = blk10;
         chk(blk10_ok, "range: armed");
@@ -277,7 +288,7 @@ module lin_rate_tb;
         // the estimate a QUARTER of the way to the new rate, not all of it.
         $display("TEST 13: one window moves the estimate a quarter");
         raw_mode = 1'b0; lin_blk = 32'd0; vid_pts = 33'd0;
-        @(posedge clk); mount = 1'b1; @(posedge clk); mount = 1'b0; tick(50);
+        @(negedge clk); mount = 1'b1; @(negedge clk); mount = 1'b0; tick(50);
         play(40, 3000); play(700, 3000);             // settle honestly at ~3000
         ref_val = blk10;
         play(250, 6000);                             // exactly one refine window
