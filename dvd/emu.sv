@@ -134,12 +134,30 @@ assign VIDEO_ARX    = (analog_letterbox | analog_crop) ? 13'd4 : (ar_wide_eff | 
 assign VIDEO_ARY    = (analog_letterbox | analog_crop) ? 13'd3 : (ar_wide_eff | idle_wide) ? 13'd9  : 13'd3;
 
 // DVD-FORK FIX (interlaced cadence): interlaced field indicator. In interlaced
-// mode the syncgen encodes the field in v_pos[0] (rtl/mpeg2/syncgen.v:289:
+// mode the syncgen encodes the field in v_pos[0] (rtl/mpeg2/syncgen.v:
 // v_pos = {v_cntr, ~odd_field}), so v_pos[0] == ~odd_field and is constant for a
-// whole field. core_v_pos is in the dot_clk(=clk_sys) domain, same as VGA_F1, so
-// no CDC is needed. Progressive mode (O9=off) forces F1=0 (v_pos[0] toggles every
-// line there). Polarity may need flipping on HW if the two fields come out
-// swapped — see docs/history.md.
+// whole field: v_pos EVEN is the TOP field. core_v_pos is in the dot_clk(=clk_sys)
+// domain, same as VGA_F1, so no CDC is needed. Progressive mode forces F1=0
+// (v_pos[0] toggles every line there).
+//
+// ★ POLARITY (2026-09-03, HW round 1 of issue #41 — the comment here used to say
+// "may need flipping on HW"; it did, and this is the flip). F1 = v_pos[0], i.e.
+// 0 on the TOP field, because that is what ascal wants:
+//   sys/ascal.vhd samples the flag into `i_flm` at every DE rising edge, and the
+//   write-placement decision that uses it runs in the SAME clocked process on the
+//   field's first active pixel — so it reads the value latched at the PREVIOUS DE
+//   rise, which is the last active line of the PREVIOUS field. `i_flm='0'` then
+//   offsets the CURRENT field's base address by one line. Net convention: the field
+//   FOLLOWING an F1=0 field is written to rows 1,3,5..., so F1=1 marks the BOTTOM
+//   field and F1=0 the TOP one - the standard "F1 = second field" reading.
+// Emitting the inverse made ascal store the top field in the odd rows: a pairwise
+// line swap, i.e. Weave combed on a STILL. It was invisible until the field-parity
+// corrector was repaired, because until then the content<->raster phase was a coin
+// flip and HDMI was right half the time. MEASURED on HW: with the corrector fixed
+// the CRT is consistently right and HDMI Weave consistently combed - the two
+// outputs disagreeing by exactly one field is what pins this to the flag, not to
+// the corrector (the analog pins never look at VGA_F1; the raster half-line carries
+// the CRT's interleave).
 // pal_eff: resolved PAL/50Hz flag (Auto-detected or forced via O[17:16]); assigned
 // near the decoder instance once core_vertical_size / pal_det_s2 exist.
 wire pal_eff;
@@ -275,7 +293,7 @@ wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
 // (analog_fields | (il_want & ~filmp_eff & ~analog_eff)) died with the Interlaced Out
 // option and the derive modes — Video Output consolidation, 2026-09-02.
 wire il_eff = interlaced_eff;
-assign VGA_F1       = il_eff ? ~core_v_pos[0] : 1'b0;
+assign VGA_F1       = il_eff ? core_v_pos[0] : 1'b0;   // 0 = TOP field (see above)
 assign VGA_SL       = 0;
 // DVD-FORK (dual-raster analog output): VGA_SCALER is never forced any more —
 // sys_top ORs this into the ini bit (vga_scaler = cfg[2] | vga_force_scaler), so
