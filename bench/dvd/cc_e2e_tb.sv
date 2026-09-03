@@ -14,7 +14,7 @@
  * ride the interlaced MAIN raster's VBI through dvd/cc_vbi.sv and the registered
  * output stage in dvd/emu.sv. This bench builds that exact chain: the REAL
  * rtl/mpeg2/syncgen.v with the interlaced modeline as syncgen sees it (pixel
- * repetition doubled, halfline 1 = line-aligned), the REAL dvd/cc_vbi.sv on its coordinates,
+ * repetition doubled, halfline 858), the REAL dvd/cc_vbi.sv on its coordinates,
  * and a copy of emu.sv's output stage (caption level outside DE, black elsewhere,
  * CE_PIXEL = one clock per pixrep pair). Caption pairs are injected on a separate
  * producer clock, and the ONLY signals observed are the pins. The checker is a TV
@@ -59,7 +59,7 @@ module cc_e2e_tb;
     .horizontal_length(12'd1715),
     .vertical_resolution(12'd480),
     .vertical_sync_start(12'd244), .vertical_sync_end(12'd247),
-    .horizontal_halfline(12'd1), .vertical_length(12'd261),
+    .horizontal_halfline(12'd858), .vertical_length(12'd261),
     .interlaced(1'b1), .clip_display_size(1'b0),
     .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
     .h_sync(h_sync), .v_sync(v_sync), .c_sync(c_sync_u),

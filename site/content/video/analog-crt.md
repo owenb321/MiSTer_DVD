@@ -68,13 +68,11 @@ one genuine authored field — and film's 3:2 field cadence on a CRT is exactly 
 NTSC player output. Seeks and aspect changes land clean:
 [field alignment is automatic](interlaced.md#field-alignment-is-automatic).
 
-**Composite sync (RGB SCART, sync-on-green), S-video, composite and YPbPr** all carry
-true 2:1 interlace: the core builds the analog sync with the half-line offset that
-interleaves the two fields, and serrates it at twice line rate the way broadcast signals
-do. A display wired for **separate H and V sync** (RGBHV) instead sees the two fields
-line-paired. If a set or scaler shows a per-field wobble or reports the line count
-toggling, that is worth [reporting](../reference/reporting-a-bug.md) with the connection
-type — see
+The raster carries a true 2:1 interlace half-line, the same way the N64 and PSX cores do
+it, so every analog connection — composite, S-video, RGB SCART, YPbPr, RGBHV — gets
+correctly interleaved fields, and the OSD reports a steady `720x480i @ 59.94 Hz`. If a set
+or scaler shows a per-field wobble or reports the line count toggling, that is worth
+[reporting](../reference/reporting-a-bug.md) with the connection type — see
 [troubleshooting](../reference/troubleshooting.md#the-picture-shakes-or-tears-about-once-a-second-on-a-crt-or-scaler).
 
 ## Analog Aspect

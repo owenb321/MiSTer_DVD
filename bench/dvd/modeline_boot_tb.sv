@@ -139,7 +139,7 @@ module modeline_boot_tb;
                     wr_data = il_prev ? {4'b0, 12'd244, 4'b0, 12'd247}
                                       : {4'b0, 12'd488, 4'b0, 12'd494}; end
         3'd4: begin wr_addr = REG_WR_VID_MODE;
-                    wr_data = il_prev ? {4'b0, 12'd0, 13'b0, 3'b011}     // pixrep + interlaced
+                    wr_data = il_prev ? {4'b0, 12'd429, 13'b0, 3'b011}   // N64 half-line + pixrep
                                       : {4'b0, 12'd0, 13'b0, 3'b000}; end
         default: begin wr_addr = REG_WR_TRICK;
                     wr_data = {21'b0, trick_w}; end
@@ -254,7 +254,7 @@ module modeline_boot_tb;
                regfile.interlaced, regfile.pixel_repetition, regfile.deinterlace);
       chk(regfile.horizontal_length    == 12'd857, "horizontal_length not applied");
       chk(regfile.vertical_resolution  == 12'd480, "vertical_resolution not applied (per-field)");
-      chk(regfile.horizontal_halfline  == 12'd0,   "VID_MODE halfline not 0 (the analog half-line lives in sys_top's csync)");
+      chk(regfile.horizontal_halfline  == 12'd429, "VID_MODE half-line not applied");
       chk(regfile.vertical_length      == 12'd261, "vertical_length not applied (per-field)");
       chk(regfile.vertical_sync_start  == 12'd244, "vertical_sync_start not applied (per-field)");
       chk(regfile.interlaced           == 1'b1,    "VID_MODE interlaced not applied");

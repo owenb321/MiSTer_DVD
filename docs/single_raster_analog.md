@@ -1,16 +1,21 @@
 # Single-raster analog output — the interlaced main raster drives the CRT
 
-**Status (2026-09-03, branch `feature/single-raster-analog`): sim-proven (every suite
-below green). **HW rounds 1–3 found and fixed the real defect: a half-line on the MAIN
-raster combs the scaler's weave (§3.9) — the `ff01ac8` note was right and this branch had
-overturned it.** Round 4 keeps the main raster line-aligned for ascal and applies the 2:1
-half-line to the ANALOG composite sync only, in `sys_top`'s `csync`. One raster, one
-picture, two sync flavours. Build `releases/DVD_singleraster4_20260903_0000.rbf`,
-SEED 5 first roll, clk_dec 96.17 / 92.43 MHz, 88 % ALM, RAM 494/553.
-⏳ HW-confirm pending. Gate = the composite CRT (weave clean on a still, no field-rate
-bounce) and HDMI Weave clean on a still, plus the two RGBS / YPbPr
-field reports below reproduce clean (idle logo AND playback), gregSTORM's composite CRT
-and the HDMI 480i path unregressed, Main reporting `720x480i @ 59.94` steady.**
+**Status (2026-09-03, branch `feature/single-raster-analog`): ✅ HW-CONFIRMED on the
+maintainer's rig — HDMI and the composite CRT both clean, no jumpy image, Main reporting a
+steady `720x480i @ 59.9` (build `releases/DVD_n64model_20260903_0148.rbf`, SEED 5,
+clk_dec 93.01 @100C / 88.94 @-40C, 88 % ALM, RAM 494/553).**
+
+★ **THE DEFECT WAS THE FIELD-PARITY CORRECTOR, NOT THE SYNC.** Five HW rounds chased sync
+shape on a wrong hypothesis; §3.9 is the post-mortem and it is the part of this document
+worth reading. The corrector (PR #37, `docs/field_parity.md`) is **DISABLED** pending a
+real fix — `par_ins` is tied 0 in `dvd/resample_addrgen.v`. That re-opens the "super
+aliased after a chapter skip" coin flip it was written for, so fixing it properly is the
+next job; `bench/dvd/field_phase_tb.sv` is the gate that can tell a correct field phase
+from an inverted one.
+
+⏳ Still to gate on HW: line-21 captions (moved to `dvd/cc_vbi.sv`), the overlay/HUD and
+subtitle geometry on the analog output, sub-720 fill (SIF/VCD/SVCD), Analog Aspect
+Letterbox/Crop, PAL, and Progressive-mode film suppression. Checklist in §5.
 
 ## 1. The field reports that started it
 
@@ -51,21 +56,19 @@ edge and counts lines from DE; every other 480i core feeds it exactly this.
 
 ## 3. What changed
 
-### 3.1 Where the 2:1 half-line lives
-An interlaced CRT needs the second field's vertical sync half a line later than the
-first's — that is what interleaves the fields. **It must not be on the main raster**
-(§3.9): ascal registers the two fields against each other wrongly when it is. So:
+### 3.1 The half-line is on the main raster — the N64 model
+`dvd/emu.sv`'s interlaced modeline writes `halfline = 429` (NTSC) / `432` (PAL), which
+`syncgen_intf` doubles under pixel repetition as **2x** (not the upstream `2x+1`) to
+858 / 864 = exactly half the line. With the alternating 262/263 field totals that puts
+vsync edges exactly **262.5 lines apart every field**: the two fields interleave on a CRT,
+and Main measures one constant 59.94 Hz instead of alternating 59.83 / 60.05.
 
-- the **main raster** keeps `halfline = 0` in the modeline (`syncgen_intf`'s upstream
-  `2x+1` pixrep doubling makes it 1, a one-dot reference shift = line-aligned both
-  fields), exactly as v0.3.0 Native Fields and v0.4.0 shipped it;
-- the **analog composite sync** gets the true half-line in `sys/sys_top.v`'s `csync`,
-  which delays the vsync edge by an exact half-line countdown on the field `VGA_F1`
-  marks as lower. New `emu` output `VGA_ILACE` enables it.
-
-Measured at the pin (`csync_field_tb`): the raster's vsyncs are a whole 262/263 lines
-apart, while the analog sync events are 450451/450449 clk27 = 262.5 lines apart. One
-raster and one picture serve the scaler and a CRT with the sync each needs.
+This is what the N64 and PSX cores do — one raster carrying the half-line, feeding both
+the framework scaler and the analog pins — and `rtl/mpeg2/syncgen.v`'s interlace model was
+copied from `N64_MiSTer/rtl/VI_videoout_sync.vhd` in the first place. ⚠ Rounds 3–5 briefly
+wrote `halfline = 0` here and synthesised the half-line downstream in `sys_top`'s `csync`
+instead, on the theory that a half-line on the main raster combs ascal's weave. **That was
+wrong** (§3.9); both detours are reverted and `csync` is the stock module again.
 
 ### 3.2 The second raster is gone
 `dvd/re_interlace.sv` (383 lines, a 4096×24 line buffer ≈ 10 M10K, a second `sync_gen`
@@ -132,59 +135,69 @@ blk9 decoder watchdog expiry · blk10 `il_switch` · blk11 `pal_eff` changed · 
 OSD leave, `video_mode_adjust`, video-section re-parse). None of the first four should
 ever fire during steady playback.
 
-### 3.8 Serrations at 2H in the fork's `csync` (`sys/sys_top.v`)
-The framework `csync` serrates at LINE rate and has no equalizing pulses. On an
-interlaced raster one field's vsync begins at an hsync and the other's begins mid-line,
-but the serrations sit on the same line grid either way — so the two fields present
-**different broad pulses**: ~50 µs and ~18 µs measured. 18 µs is at or below the
-threshold of a width-based sync separator, which is the shape of the RetroTINK report
-(vsync length and lines-per-frame toggling). The fork's `csync` now adds a serration
-half a line before each stock one, so both fields present the standard ~27 µs broad
-pulse:
+### 3.8 Sync shape: what was measured, and what ships
+`bench/dvd/csync_field_tb.sv` drives the REAL `sys_top.v` `csync` (extracted at run time)
+from the shipped modeline and reads the pin with two sync-separator models — an RC
+integrator and a broad-pulse width detector.
 
-| | first broad pulse A / B | width detector | RC integrator (40 µs) |
-|---|---|---|---|
-| stock 1H serrations | 50 µs / 18 µs | 449837 / 451063 (±0.36 line) | 450172 / 450728 |
-| **2H serrations** | 27 µs / 27 µs | 450451 / 450449 | 450384 / 450516 |
+What ships is the **stock** module: line-rate serrations, no equalizing pulses, the
+half-line coming from the raster. Measured at the pin: sync events one frame apart to the
+dot (449837 + 451063 = 900900), i.e. 262.5 lines per field — the interlace contract, which
+is what the bench gates.
 
-⚠ `half_len` is `(h_cnt + hs_len) >> 1`: `h_cnt` resets on BOTH hsync edges, so at the
-rising edge it holds `line − hs_len`. Using `h_cnt >> 1` puts the extra serration 63
-clocks early and re-breaks the per-field symmetry — the bench catches it (measured
-20 µs / 29 µs broad pulses when that was tried).
+Reported but **not** gated: with line-rate serrations the two fields necessarily present
+different broad pulses (~50 µs and ~18 µs), because their vsyncs start half a line apart
+while the serration grid does not move with them. 18 µs is at the threshold of a
+width-based separator, which is a plausible mechanism for the RetroTINK "vsync length /
+lines-per-frame toggling" report. Serrating at **2H** equalises it (27 µs / 27 µs, and the
+integrator asymmetry drops from 0.13 line to 0.02) — that variant was built and then
+reverted because the composite CRT that is the reference display for this path was worse
+with it. It is two lines in `csync` if a rig that needs it turns up:
+set `csync_hs` at `line_len - half_len` and clear it `hs_len` later, with
+`half_len = (h_cnt + hs_len) >> 1` (⚠ `h_cnt` resets on BOTH hsync edges, so at the rising
+edge it holds `line − hs_len`; `h_cnt >> 1` is 63 clocks early and re-breaks the symmetry —
+the bench catches that).
 
-`csync_field_tb` gates both separator models. Equalizing pulses outside vsync are still
-not generated (they need the vsync position in advance); no console core has them.
+### 3.9 Post-mortem: five rounds spent on the wrong layer
+**Symptom.** Interlaced output jumped at field rate and looked blockier than the previous
+release; HDMI Weave combed on a **still**, and consecutive bob frames of a still differed
+by 3.5 px at 1080p (one field line = 4.5 px; a still should show zero).
 
-### 3.9 HW rounds 1–3 — the half-line belongs on the analog sync, not the raster
-Round 1 put the half-line on the main raster (and, separately, anchored the vsync on the
-hsync edge). On the maintainer's composite CRT the picture **bounced at field rate and
-looked blockier**; round 2 (2H serrations) changed nothing; round 3 (vsync anchoring
-reverted) changed nothing. Then the decisive evidence arrived — **HDMI showed it too**:
+**What it actually was.** The field-parity corrector was making both displayed fields
+carry the **same source lines**. Measured from screenshots by splitting each woven frame
+into its two fields and correlating them:
 
-- **Weave on a still combed**, lines visible through the tops of letters;
-- consecutive **bob** frames of a still differed by **3.5 px at 1080p** (one 480i field
-  line is 4.5 px, one frame line 2.25 px). On a still, correct bob renders both fields at
-  the same apparent position, so any visible shift means the fields are misregistered.
-- **v0.3.0 `Analog Out = Native Fields` — the same authored-fields content path, on a
-  line-aligned raster — is CLEAN on the same disc.**
+| build | field-to-field offset |
+|---|---|
+| v0.3.0 `Analog Out = Native Fields` (no corrector) | **+0.50** frame lines — correct interleave |
+| round 1 (half-line on raster, corrector on) | **+0.00** |
+| round 4 (half-line on csync, corrector on) | **+0.00** |
+| corrector disabled | clean on HW, both outputs |
 
-The content path is byte-identical between those builds (`VGA_F1`,
-`dvd/resample_addrgen.v` and `rtl/mpeg2/mixer.v` are untouched by this branch), so the
-only interlace-relevant difference was the main raster's half-line. **`ff01ac8` was
-recording a real effect** — its note says "scanline comb", which is exactly the weave
-screenshot — and this branch had dismissed it as an artefact of the old pulse-delay
-implementation. It is not: ascal weaves and bobs from `VGA_F1` and counts lines from DE,
-and a genuine half-line on its input breaks that registration whatever the sync
-generator's internal model is.
+**How five rounds went by without seeing it.** The `ff01ac8` note ("a half-line on the main
+raster makes an HDMI receiver hunt — brightness pulse + scanline comb") fit the weave
+screenshot exactly, so the half-line became the suspect and stayed the suspect. The
+disproof was already in hand after round 4 — that build had **no** half-line on the main
+raster and still combed — and it was not acted on. The variable that actually moved
+between every combed capture and every clean one was the corrector.
 
-Fix: §3.1. The scaler gets the raster it wants; the CRT gets its half-line in the
-composite sync. ⚠ **Do not put a half-line on the main raster again.** If a future change
-needs one, it needs a second raster, which is what the retired `re_interlace` was.
-
-⚠ Consequence for RGBHV rigs that use separate H and V sync rather than composite sync or
-sync-on-Y: the V pin carries the line-aligned vsync, so those displays see field-paired
-480i. Every csync/SoY/composite/S-video path gets true interlace. No such rig has been
-reported; the fix is to apply the same delay to `VGA_VS` when `csync_en` is low.
+★ **Rules this earns.**
+1. When a build changes X and the symptom persists, X is exonerated — say so out loud and
+   move the suspect list, rather than refining the theory around X.
+2. A user's "does the old build do this?" A/B is worth more than any amount of RTL
+   reading: v0.3.0 Native Fields (same content path, no corrector) settled it in one shot.
+3. Prefer measuring the artefact to reasoning about it. Splitting the screenshots into
+   fields and correlating them took minutes and gave a number that no hypothesis survived.
+4. ⚠ **`bench/dvd/field_parity_tb.sv` could not see this defect**, for two reasons worth
+   knowing before trusting any bench: its behavioural framestore returns a **constant
+   word**, so no displayed pixel carries evidence of which source line it came from; and
+   its pass condition is the **same expression** as the RTL's own `frame_top_par_err`, so
+   it restates the design's convention instead of checking an external one. CLAUDE.md
+   already warns about golden models that agree suspiciously well with their RTL (the
+   POST-only PGC case) — same trap, different corner. `bench/dvd/field_phase_tb.sv` is the
+   replacement: address-derived framestore content, per-field hashes of what the mixer
+   actually emitted, and the invariant that consecutive fields must DIFFER and repeat with
+   period 2.
 
 ## 4. Tests
 

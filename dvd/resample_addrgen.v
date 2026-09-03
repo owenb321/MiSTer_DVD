@@ -593,7 +593,18 @@ module resample_addrgen (
    * misaligned lands the new head aligned by itself — two wrongs make a right,
    * insert nothing. Inserting "opposite" on a par_fb would keep the misalignment AND
    * manufacture a new alternation break for alt_break to un-fix — a livelock. */
-  wire       par_ins  = alt_break ^ par_fb;                      // insert one field instead of picking up
+  /* ⛔ DISABLED 2026-09-03 (HW round 5) pending root-cause. MEASURED on hardware: with
+   * the corrector active the two displayed fields carry content at the SAME vertical
+   * phase (screenshot analysis of a still: field offset +0.00 frame lines, where a
+   * correct interlaced still measures +0.50) — weave combs and bob jumps a field line.
+   * v0.3.0 `Analog Out = Native Fields`, the same content path WITHOUT this corrector,
+   * measures +0.50 and is clean. Both arms are suppressed here so the field schedule is
+   * exactly v0.3.0's; the logic is left in place (and prunes) so the fix can re-enable it
+   * once bench/dvd/field_phase_tb.sv can tell a right phase from a wrong one — the
+   * existing field_parity_tb encodes the same convention as the RTL, so it agreed with
+   * the defect. Re-opens the "super aliased after a chapter skip" coin flip
+   * (docs/field_parity.md) until then. */
+  wire       par_ins  = 1'b0 && (alt_break ^ par_fb);             // insert one field instead of picking up
   wire       par_slip = (state == STATE_INIT) && ofv_pickup && par_ins;  // the insertion event
   /* Qualified pickup: every pickup-conditioned latch below consumes THIS instead of
    * ofv_pickup, so on an insertion cycle the pending frame stays unconsumed (picked up
