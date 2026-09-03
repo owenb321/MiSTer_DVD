@@ -212,20 +212,28 @@ module modeline_boot_tb;
     .h_pos(sg_hpos), .v_pos(sg_vpos), .pixel_en(sg_pe),
     .h_sync(sg_hs), .v_sync(sg_vs), .c_sync(sg_cs), .h_blank(sg_hb), .v_blank(sg_vb));
 
-  // vsync-to-vsync spacing tracker (dot clocks). 450450 = 262.5 lines of 1716.
-  localparam integer FIELD_DOTS = 450450;
-  integer dot = 0, last_vs = -1, vs_n = 0, bad_sp = 0, sp_measured = 0;
+  // vsync-to-vsync tracker (dot clocks). The shipped interlaced raster is LINE-ALIGNED
+  // in both fields (halfline 0 -> 1; the 2:1 half-line for the analog pins is added in
+  // sys_top's csync, see docs/single_raster_analog.md §3.1), so individual field
+  // spacings alternate 262/263 lines and it is the PAIR that must be exact:
+  // 525 * 1716 = 900900 clk27 = 29.97 fps. A watchdog expiry must not disturb it.
+  localparam integer FRAME_DOTS = 900900;
+  integer dot = 0, last_vs = -1, prev_sp = -1, vs_n = 0, bad_sp = 0, sp_measured = 0;
   reg     vs_q = 0, track = 0;
   always @(posedge dot_clk) if (rst) begin
     dot <= dot + 1;
     vs_q <= sg_vs;
     if (sg_vs && !vs_q) begin
       if (track && last_vs >= 0) begin
-        sp_measured = sp_measured + 1;
-        if ((dot - last_vs) != FIELD_DOTS) begin
-          bad_sp = bad_sp + 1;
-          if (bad_sp <= 6) $display("  vsync spacing %0d dots (expect %0d) at dot %0d", dot - last_vs, FIELD_DOTS, dot);
+        if (prev_sp >= 0) begin
+          sp_measured = sp_measured + 1;
+          if ((prev_sp + (dot - last_vs)) != FRAME_DOTS) begin
+            bad_sp = bad_sp + 1;
+            if (bad_sp <= 6) $display("  vsync field pair %0d+%0d = %0d dots (expect %0d) at dot %0d",
+                                      prev_sp, dot - last_vs, prev_sp + (dot - last_vs), FRAME_DOTS, dot);
+          end
         end
+        prev_sp = dot - last_vs;
       end
       last_vs = dot;
       vs_n = vs_n + 1;
@@ -290,14 +298,14 @@ module modeline_boot_tb;
     @(posedge sg_vs); @(posedge sg_vs); @(posedge sg_vs);    // settle after the reload walk
     track = 1;
     @(posedge sg_vs); @(posedge sg_vs);                      // two clean spacings
-    repeat (FIELD_DOTS / 3) @(posedge dot_clk);              // mid-field
+    repeat (FRAME_DOTS / 6) @(posedge dot_clk);              // mid-field
     $display("[4-watchdog] pulsing watchdog_rst at dot %0d", dot);
     @(posedge clk); watchdog_rst = 1'b0;
     @(posedge clk); @(posedge clk); watchdog_rst = 1'b1;
     @(posedge sg_vs); @(posedge sg_vs); @(posedge sg_vs); @(posedge sg_vs); @(posedge sg_vs);
     track = 0;
-    $display("[4-watchdog] %0d spacings measured across the expiry, %0d wrong", sp_measured, bad_sp);
-    chk(sp_measured >= 6, "watchdog phase: too few vsync spacings measured");
+    $display("[4-watchdog] %0d field pairs measured across the expiry, %0d wrong", sp_measured, bad_sp);
+    chk(sp_measured >= 4, "watchdog phase: too few vsync field pairs measured");
     chk(bad_sp == 0, "watchdog expiry re-phased the raster (vsync spacing broke)");
     check_interlaced_modeline("4-watchdog");
 
