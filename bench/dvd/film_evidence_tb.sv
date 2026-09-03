@@ -112,7 +112,8 @@ module film_evidence_tb;
     .flags_commit(),
     .pic_informative(pic_informative), .informative_commit(informative_commit),
     .cc_pair_valid(), .cc_pair(), .cc_pair_field(),
-    .mpeg1()
+    .mpeg1(),
+    .vbuf_flush(1'b0)   // DVD-FORK FIX (seek realign, issue #45): not exercised here
   );
 
   // The counter measures from STATE_PICTURE_HEADER to the terminating start

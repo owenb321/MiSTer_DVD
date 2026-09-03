@@ -76,6 +76,19 @@ language — the fault is likely in how the disc maps tracks to soundtracks, whi
 its navigation tables. A [repro bundle](reporting-a-bug.md) captures those, so that report
 can be reproduced without the disc.
 
+### Sound is out of sync after changing `Video Output` mid-title
+
+**Skip a chapter.** That re-anchors the audio to the picture and clears it.
+
+Changing the output mode under a playing disc restarts the raster and the A/V timing
+together, and the audio does not always come back on the picture's timeline. It is
+long-standing behaviour on every release. Setting `Video Output` before loading the disc
+avoids it entirely. See [Video Output](../video/interlaced.md).
+
+If sound drifts out of sync **without** a mode change, that is a different problem — try
+`A/V Offset` on the debug page first, and [report it](reporting-a-bug.md) with the disc and
+roughly how far into the title it started.
+
 ### Menu audio went silent
 
 You changed the audio track while the menu was open. It comes back when you leave the menu.
@@ -162,18 +175,29 @@ never show this; it depends on the set.
 
 ### The picture blocks up briefly right after a chapter skip or seek
 
-Known and being tracked
-([issue #45](https://github.com/owenb321/MiSTer_DVD/issues/45)). For roughly six frames —
-about a tenth of a second — the new scene decodes and moves correctly but the old one
-shows through it as a blocky residual, then it clears on its own.
+!!! info "Unreleased"
+    Fixed in the development build; not in v0.3.0. On a release build you will still see
+    the artifact described below.
 
-It happens on every disc and on every way of jumping: chapter skip, Fast Fwd / Rewind,
-D-Pad Seek, and entering or leaving a menu. It is a decoder artifact, not a disc or a
-setting, so there is nothing to change and nothing to report unless it lasts appreciably
-longer than that or the picture does not recover.
+On v0.3.0, for roughly six frames — about a tenth of a second — the new scene decodes and
+moves correctly but the old one shows through it as a blocky residual, then it clears on
+its own. It happens on every disc and on every way of jumping: chapter skip, Fast Fwd /
+Rewind, D-Pad Seek, and entering or leaving a menu.
 
-Changing `Video Output` mid-title produces the same brief glitch on the way back in, for
-the same reason — see [Switching mid-title](../video/interlaced.md).
+It is a decoder artifact, not a disc or a setting: the player was still predicting each new
+picture from the scene it had just left ([issue
+#45](https://github.com/owenb321/MiSTer_DVD/issues/45)). The development build discards
+those pictures instead of showing them, so the last frame simply holds until the new scene
+is ready.
+
+**What remains on the development build** is much shorter, and confirmed on hardware: the
+picture freezes on the last frame, then cuts to the new position with about **one**
+misaligned frame in between. Report it if you see the old scene *moving* through the new
+one, if the blocking lasts appreciably longer than a frame, or if the picture does not
+recover on its own.
+
+Changing `Video Output` mid-title goes through the same landing sequence — see
+[Switching mid-title](../video/interlaced.md).
 
 ### A film disc keeps changing resolution, or judders
 

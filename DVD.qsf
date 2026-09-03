@@ -767,4 +767,17 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ⚠ The added mux level sits in the ALREADY-REGISTERED output stage (reg -> pin), which is
 # why a blank on the pixel path costs nothing in clk_dec: that stage was retimed in
 # 2026-06-28 precisely to make it a short hop.
+# 2026-09-03f (fix/seek-reference-realign, issue #45 -- the post-seek reference re-align:
+# rtl/mpeg2/vld.v gains ra_active / ra_anchors[1:0] / ra_hdrs[5:0] / drop_gov_picture, ten
+# registers plus a handful of LUTs, and mpeg2video routes flush_vbuf_eff to the new vld
+# input): SEED 5 held FIRST roll -- clk_dec 91.10 @100C / 88.28 @-40C (gate 86.0, PASS both
+# corners) at 88% ALM (36,843, DOWN 184 from the switch-blank netlist's 37,027), RAM 494/553
+# and DSP 92/112 both unchanged. FIFTEENTH consecutive first-roll fit. Build
+# DVD_seekrealign_20260903_1901.rbf (4293 KB).
+# ⚠ The ALM count going DOWN while logic was ADDED is fit variance on a fresh netlist, not a
+# reclaim -- the same caution the 2026-09-03e entry records in the opposite direction, where
+# clk_dec improved on a build that only added logic. Do not read either as a logic delta.
+# The new logic sits entirely in the once-per-picture STATE_PICTURE_HEADER decision cone,
+# which has cycles of slack; the only pre-existing path it touches is update_picture_buffers,
+# where an inverted term replaced an inlined comparison of the same width.
 set_global_assignment -name SEED 5

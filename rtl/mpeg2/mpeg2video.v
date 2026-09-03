@@ -1028,7 +1028,14 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .drop_pic_ack(drop_pic_ack),                             // DVD-FORK (frame-drop O[19]): to frame_drop_ctl
     .drop_pic_rff(drop_pic_rff),                             // DVD-FORK (film-aware drop cost): dropped pic's rff
     .drop_pic_field(drop_pic_field),                         // DVD-FORK (field-pair drop): dropped pic was a field
-    .dbg_drop_probe(dbg_drop_probe)                          // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe
+    .dbg_drop_probe(dbg_drop_probe),                         // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe
+    /* DVD-FORK FIX (seek realign, issue #45): the same flush that discards the
+     * buffered bitstream now also tells the vld that motcomp_picbuf's reference
+     * slots are stale, so it can drop the landing GOP's leading predicted
+     * pictures instead of displaying them motion-compensated against the scene
+     * we just left. Already clk_dec and already 2-FF synced upstream
+     * (dvd/emu.sv vbuf_flush_dec) — no new CDC. See docs/seek_realign.md. */
+    .vbuf_flush(flush_vbuf_eff)
     );
 
   /* DVD-FORK (frame-drop governor, O[19]): catch-up credit controller. Banks a "drop

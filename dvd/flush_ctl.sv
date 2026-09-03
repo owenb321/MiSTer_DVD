@@ -169,8 +169,7 @@ end
 // watchdog-equivalent soft reset (mpeg2video.soft_flush -> reset.soft_rst_n). The
 // flush trio above discards BUFFERED data but deliberately leaves the decode
 // pipeline's state (the upstream "trick play" flush resets only the VBUF FIFOs;
-// vld/getbits/motcomp/picbuf are all on sync_rst) — right for seeks, where the
-// display must hold the last frame and the reference frames are same-file valid.
+// vld/getbits/motcomp/picbuf are all on sync_rst).
 // A NEW FILE must not inherit any of it: the in-flight picture "completes" on the
 // new file's first start code (one truncated garbage frame), and the old file's
 // reference frames stay flagged valid, so an open-GOP-leading new file (common for
@@ -179,6 +178,22 @@ end
 // all of it while the regfile/modeline (hard_rst) survive — the exact recovery
 // path a watchdog expiry exercises routinely on HW — so a warm load starts as
 // black and clean as a core reload. NEVER on seeks/jumps/mode switches.
+//
+// ⚠ CORRECTED 2026-09-03 (issue #45). This comment used to justify the
+// mount-only rule as "right for seeks, where the display must hold the last
+// frame and the reference frames are same-file valid". BOTH halves were wrong,
+// and the conflation IS the bug: same-FILE is not same-POSITION, and MPEG
+// prediction cares about position, so a seek's surviving references are exactly
+// as stale as a mount's; and the display was NOT holding — output_frame_valid
+// stays high straight through a flush, so ~6 frames of the landing GOP's
+// leading B-pictures were displayed motion-compensated against the scene we
+// just left. THE RULE ITSELF STANDS, unchanged: a seek still must not soft-reset
+// (sync_rst drops dec_ready and gates the modeline walk, and a black cut on
+// every chapter skip is worse than a held frame). The reference staleness is
+// fixed one layer down instead — rtl/mpeg2/vld.v drops the landing GOP's
+// leading predicted pictures until two post-flush anchors have re-established
+// the references, so the display holds the last frame for real.
+// See docs/seek_realign.md.
 reg [6:0] mount_flush_cnt = 7'd0;
 assign    mount_flush = mount_flush_cnt != 7'd0;
 always @(posedge clk) begin
