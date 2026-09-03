@@ -331,8 +331,22 @@ worse maintenance burden than targeted in-place edits. So:
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
 - 🔧 **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
-  `fix/field-parity-corrector`) — sim-proven RED/GREEN, ⏳ HW-confirm pending (gate: a
-  still measures +0.50 field offset, and a chapter skip needs no toggle ritual).**
+  `fix/field-parity-corrector`) — sim-proven RED/GREEN; ✅ HW ROUND 1 CONFIRMS THE CRT
+  ("always gets the fields right on the TV" where PR #40 was a coin flip); ⏳ round 2
+  gates the `VGA_F1` fix round 1 exposed.**
+  ★★ **ROUND 1 ALSO EXPOSED AN INVERTED `VGA_F1`, and only determinism could:** with the
+  phase now fixed, HDMI Weave went from a coin flip to CONSISTENTLY COMBED while the CRT
+  became consistently right. Two outputs disagreeing by exactly one field pins it to the
+  FLAG, not the corrector — the analog pins never read `VGA_F1` (the raster half-line
+  carries the CRT's interleave). `sys/ascal.vhd` latches the flag at every DE rise and the
+  write-placement decision reads it in the SAME clocked process on the field's first
+  active pixel, so it uses the value from the PREVIOUS field's last line ⇒ the effective
+  convention is **F1 = 0 on the TOP field**. `emu.sv` emitted `~core_v_pos[0]` (1 on top)
+  ⇒ ascal stored the top field in the odd rows = a pairwise line swap = Weave combing on
+  a STILL. Now `core_v_pos[0]`. ⚠ Unfalsifiable while the parity was random — HDMI was
+  right half the time — and the line's own comment had said "polarity may need flipping on
+  HW" since it was written. ⚠ **Not sim-gateable here**: ascal is VHDL, the benches are
+  Icarus.
   ★ **Root cause of the withdrawal: the FEEDBACK arm was chasing STARVATION.** Its cure
   is a REPEATED field (re-showing `last_image` is the only insertion that lands the
   resumed stream aligned — see the XOR note below), and it was firing at field rate,

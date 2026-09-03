@@ -15,7 +15,9 @@ repeated one several times a second. It now only acts on a parity error that has
 (`PAR_CONFIRM`), with a hard budget on top (`PAR_HOLD`). `bench/dvd/field_phase_tb.sv` is
 finished and is the gate — it reproduces the defect (scenario [6] starves the pixel queue
 and counts the repeated fields) and measures field phase from LINE-STAMPED framestore
-content, so it cannot agree with the RTL by construction.
+content, so it cannot agree with the RTL by construction. ✅ HW round 1 confirms the CRT;
+it also exposed an inverted `VGA_F1` (HDMI Weave went from a coin flip to consistently
+combed once the phase stopped being random) — `docs/field_parity.md` "HW ROUND 1".
 
 **HW round 6 (2026-09-03) — the follow-up sweep, all on the maintainer's rig:**
 line-21 captions ✅, overlays/subtitles/menus/HUD on the analog output ✅, sub-720 fill

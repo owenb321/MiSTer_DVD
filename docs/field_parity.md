@@ -1,8 +1,32 @@
 # Field-parity re-engage corrector (2026-09-02, repaired 2026-09-03)
 
 **Status: ✅ RE-ENABLED with a stability gate (2026-09-03, issue #41) — sim-proven
-RED/GREEN by the new `bench/dvd/field_phase_tb.sv`; ⏳ HW-confirm pending (gate: a still
-must measure +0.50 field offset, and a chapter skip must not need the toggle ritual).**
+RED/GREEN by the new `bench/dvd/field_phase_tb.sv`, and ✅ HW round 1 confirms the analog
+CRT: "this one seems to always get the fields right on the TV", where PR #40 was a coin
+flip. ⏳ Round 2 gates the `VGA_F1` polarity fix that same round exposed (below).**
+
+★ **HW ROUND 1 (2026-09-03) — the corrector is right, and it exposed an INVERTED
+`VGA_F1`.** With the field phase now deterministic, HDMI Weave went from a coin flip to
+**consistently combed** while the CRT became consistently correct. Two outputs disagreeing
+by exactly one field is what pins this to the flag rather than to the corrector: the analog
+pins never look at `VGA_F1` (the raster half-line carries the CRT's interleave), so only
+HDMI can be affected by it.
+
+`sys/ascal.vhd` samples the flag into `i_flm` at every DE rising edge, and the
+write-placement decision that consumes it runs in the SAME clocked process on the field's
+first active pixel — so it reads the value latched at the PREVIOUS DE rise, i.e. the last
+active line of the PREVIOUS field. `i_flm='0'` then offsets the CURRENT field's base
+address by one line. Net convention: **F1 = 0 on the top field, 1 on the bottom** — the
+standard "F1 = second field" reading. `dvd/emu.sv` emitted the inverse
+(`~core_v_pos[0]`), so ascal stored the top field in the odd rows: a pairwise line swap,
+which is Weave combing on a STILL. Fixed to `core_v_pos[0]`.
+
+⚠ **This was invisible for as long as the parity was random** — with a coin-flip phase,
+HDMI was right half the time and nobody could tell a flag polarity error from the parity
+bug. The comment on that line had said "polarity may need flipping on HW if the two fields
+come out swapped" since it was written; determinism is what finally made the question
+answerable. There is no ascal model in this repo (it is VHDL, the benches are Icarus), so
+this one is HW-gated by construction — it cannot be closed in sim.
 
 ★ **The withdrawal (PR #40) and what actually caused it.** As shipped in PR #37 the
 corrector made both displayed fields carry the SAME source lines — a still measured
