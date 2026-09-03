@@ -13,9 +13,23 @@ aliased after a chapter skip" coin flip it was written for, so fixing it properl
 next job; `bench/dvd/field_phase_tb.sv` is the gate that can tell a correct field phase
 from an inverted one.
 
-⏳ Still to gate on HW: line-21 captions (moved to `dvd/cc_vbi.sv`), the overlay/HUD and
-subtitle geometry on the analog output, sub-720 fill (SIF/VCD/SVCD), Analog Aspect
-Letterbox/Crop, PAL, and Progressive-mode film suppression. Checklist in §5.
+**HW round 6 (2026-09-03) — the follow-up sweep, all on the maintainer's rig:**
+line-21 captions ✅, overlays/subtitles/menus/HUD on the analog output ✅, sub-720 fill
+(VCD/SVCD/MPEG-1) ✅, Analog Aspect Letterbox + Crop incl. subtitles ✅, PAL content ✅,
+`720x480i @ 59.9` steady ✅. Two findings, one fixed here and one filed:
+
+- **Film 24p on an analog-configured rig was over-suppressed** (fixed, §3.5): the
+  `~analog_want` gate removed the only way to watch 24p over HDMI with the CRT switched
+  off. It now applies to an **Auto** verdict only; `Film 24p Out = On` is an explicit
+  choice and is honoured. (The gate never bit anything else — under Auto such a rig
+  resolves to Interlaced, where `filmp_eff` is 0 anyway.)
+- **PAL + a mid-title `Video Output` change can freeze the decoder** — ⚠ **PRE-EXISTING,
+  not from this branch**: v0.3.0 does the same on an `Analog Out` mode change. See §6.
+
+⏳ Not yet gated: PAL on an analog CRT (no PAL CRT available), RGBHV, `direct_video=1`
+through an HDMI DAC, and the parity behaviour after a chapter skip (the maintainer's
+late-model CRT has never shown the coin flip that two Discord users report, so that fix
+will lean on `bench/dvd/field_phase_tb.sv` rather than on his rig).
 
 ## 1. The field reports that started it
 
@@ -223,7 +237,33 @@ between every combed capture and every clean one was the corrector.
 - [ ] Idle logo reports `720x480i`; no resolution popup on disc load.
 - [ ] Toggling `Video Output` mid-title: the chapter-seek-style interruption, then clean.
 
-## 6. Follow-ups
+## 6. Known issue: PAL freezes on a mid-title Video Output change (pre-existing)
+
+**Symptom** (HW round 6): with a PAL disc playing, changing `Video Output` mid-title can
+freeze the decoder — the picture stops on a malformed image and never recovers by itself.
+A chapter seek clears it. Either switch direction, not every time. NTSC is unaffected.
+
+**Not from this branch.** v0.3.0 shows the same on an `Analog Out` mode change, so it
+predates the consolidation as well as the single-raster work.
+
+**Analysis (not yet proven).** A mode switch fires the full flush trio through
+`flush_ctl` (load + aud + seek/vbuf) but **does not move the reader**, so the decoder
+resumes mid-VOBU with no GOP boundary to re-lock on — exactly the failure mode the
+reverted film-switch attempt hit (`docs/film_24p_plan.md` §13: "each flap flushed at an
+arbitrary mid-stream position (no reader jump = no VOBU re-alignment), garbage seq
+headers ... flipped `pal_eff` (25 Hz) which feeds back"). That a chapter seek clears it
+fits: a seek is the same flush trio **plus** a reader jump to a cell boundary. Why PAL
+specifically is the open part — the `pal_eff` feedback path is PAL-only by construction,
+so a garbage sequence header there can re-fire the modeline walk while the pipeline is
+still draining.
+
+**Fix direction.** Make `mode_switch` re-align the reader instead of flushing in place:
+issue a seek to the CURRENT position snapped forward to the next NAV pack, reusing the
+reader's existing `S_NAV_SEEK*` probe (the same contract `seek_is_rbn` scrub landings
+already use, `docs/dvd_nav.md` §2a). That gives the decoder a clean GOP entry for the
+price of the interruption a mode switch already has.
+
+## 7. Follow-ups
 - Done in round 2 (user decision): the idle logo moves on every FIELD tick in Interlaced
   (`dvd/idle_logo.sv`; the old every-other-field divider made it half speed on the CRT).
 - Native 13.5 MHz dot pacing (720-wide internally) — only if a reason appears; needs the
@@ -232,6 +272,12 @@ between every combed capture and every clean one was the corrector.
 - Apply the analog half-line to `VGA_VS` as well when `csync_en` is low, for RGBHV rigs
   (§3.9) — nobody has reported one, so it is unbuilt.
 - Equalizing pulses outside vsync (needs the vsync position in advance — a 3-line video
-  delay or a hint from the modeline walk) if a set still hunts with 2H serrations.
+  delay or a hint from the modeline walk), if a set ever needs them.
+- **Re-test the 2H serration question with instrumentation.** The maintainer has a
+  RetroTINK HDMI scaler on order that reports pixel clock, vsync length, lines/frame and
+  frame rate for analog inputs. That is exactly the readout the two Discord reports were
+  quoting, and it makes the §3.8 trade measurable on a bench rather than inferred:
+  line-rate serrations (what ships) vs 2H, against both a CRT and a width-based
+  separator.
 - Progressive 480p on the analog pins keeps the dot-0 vsync reference (no field
   ambiguity there); anchoring it too is a one-line follow-up if a 31 kHz display objects.

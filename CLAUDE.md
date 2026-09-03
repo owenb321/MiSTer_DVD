@@ -310,6 +310,21 @@ worse maintenance burden than targeted in-place edits. So:
   constant assumes one dot per clock). (7) idle_logo moves every FIELD in Interlaced
   (was half speed). `O[2]` gained a third-row trigger readout (watchdog / il_switch /
   pal edge / vsize 0 / cfg re-write) visible whenever Interlaced.
+  ★ **HW round 6 sweep (all ✅):** line-21 CC on the new `cc_vbi` path, overlays /
+  subtitles / menus / HUD on the analog output, sub-720 fill (VCD/SVCD/MPEG-1), Analog
+  Aspect Letterbox+Crop, PAL content, steady `720x480i @ 59.9`. Two findings: (a) the
+  `~analog_want` film gate was over-blunt — it removed the only way to watch 24p over
+  HDMI with the CRT off, and it never bit anything else (Auto already resolves such a rig
+  to Interlaced), so it now applies to the AUTO verdict only and `Film 24p Out = On`
+  overrides it; (b) ⚠ **PAL + a mid-title `Video Output` change can FREEZE the decoder**
+  (malformed frame, never self-recovers, a chapter seek clears it, either direction,
+  intermittent) — **PRE-EXISTING: v0.3.0 does the same on an `Analog Out` change**, so it
+  is NOT from this branch. Analysis + fix direction (re-align the reader to the next NAV
+  pack instead of flushing in place — the same mid-stream-flush trap as the reverted
+  film switch, `docs/film_24p_plan.md` §13): `docs/single_raster_analog.md` §6.
+  ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
+  the parity coin flip (the maintainer's late-model CRT has never shown it — the two
+  Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
 - 🔧 **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02, branch
   `feature/video-output-consolidation`) — sim-proven (RED/GREEN), ⏳ HW-confirm pending
   (gate = the two CRT field reports below reproduce clean).** Two CRT field reports

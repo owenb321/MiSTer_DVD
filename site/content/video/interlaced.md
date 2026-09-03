@@ -59,12 +59,14 @@ everything.
 !!! note "Switching mid-title works, with a brief interruption"
     Changing `Video Output` during playback fires a full seek-equivalent flush — a short
     cut to black while the raster and A/V sync re-anchor, like a chapter jump — and then
-    plays on cleanly (field alignment recovers automatically; confirmed on hardware for
-    a switch to Interlaced). Setting the mode before loading just avoids the
-    interruption; it is not required. On builds up to v0.3.0 the equivalent switch could
-    come back badly aliased — that is the [fixed parity bug](#field-alignment-is-automatic).
-    `Auto` reads the ini bits at boot and while nothing is mounted; it does not change
-    the output mode under a playing disc.
+    plays on cleanly. Setting the mode before loading just avoids the interruption; it is
+    not required. `Auto` reads the ini bits at boot and while nothing is mounted; it does
+    not change the output mode under a playing disc.
+
+    **On a PAL disc this can occasionally freeze the picture** on a malformed frame. It
+    does not recover on its own; **skip a chapter** and playback resumes normally. The
+    same happens on older releases when changing `Analog Out`, so it is not new — it is
+    being tracked. Setting the mode before loading avoids it entirely.
 
 ## Field alignment is automatic
 
