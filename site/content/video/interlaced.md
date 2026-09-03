@@ -68,13 +68,21 @@ everything.
     same happens on older releases when changing `Analog Out`, so it is not new — it is
     being tracked. Setting the mode before loading avoids it entirely.
 
-## Field alignment is automatic
+## Field alignment
 
-Earlier builds could come back from a chapter skip, fast-forward or aspect change with a
-**badly aliased, screen-door picture** that only cleared after toggling the output mode a
-few times. That was a field-parity coin flip in the display pipeline, and it is fixed: the
-core now checks every displayed field against the raster phase and re-aligns within a
-field or two, so seeks and mode changes land clean without any ritual.
+On some televisions the picture can come back from a chapter skip, fast-forward or aspect
+change looking **aliased, like a screen door**. It is a field-parity coin flip in the
+display pipeline: the two interlaced fields can land the wrong way round after an
+interruption. **Toggling `Video Output` away and back re-rolls it**, sometimes taking a
+few attempts. Not every set shows it — a television with a tolerant sync separator may
+never see it at all.
+
+!!! info "Unreleased"
+    v0.4.0 shipped an automatic corrector for this, and it is **switched off** in the
+    current development build: on hardware it made both interlaced fields carry the same
+    picture lines, which showed as a combed still image and a picture that jumped a line
+    at field rate on **every** set, HDMI included. Turning it off restores the v0.3.0
+    behaviour described above. A corrected version is being worked on.
 
 ## What changed from the old settings
 

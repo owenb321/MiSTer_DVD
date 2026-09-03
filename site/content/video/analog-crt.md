@@ -68,8 +68,8 @@ path — a **31 kHz** signal a 15 kHz CRT cannot sync — and the analog-only ex
 
 Motion looks right on video-sourced discs by construction — every displayed refresh is
 one genuine authored field — and film's 3:2 field cadence on a CRT is exactly what an
-NTSC player output. Seeks and aspect changes land clean:
-[field alignment is automatic](interlaced.md#field-alignment-is-automatic).
+NTSC player output. On some televisions a seek or aspect change can come back with the
+fields the wrong way round — see [field alignment](interlaced.md#field-alignment).
 
 The raster carries a true 2:1 interlace half-line, the same way the N64 and PSX cores do
 it, so every analog connection — composite, S-video, RGB SCART, YPbPr, RGBHV — gets
