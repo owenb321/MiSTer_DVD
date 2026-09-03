@@ -735,4 +735,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # SEED 5 held FIRST roll again -- clk_dec 94.06 @100C / 91.29 @-40C at 88% ALM (36,906),
 # RAM 494/553, DSP 92/112. Twelfth consecutive first-roll fit. Build
 # DVD_parityfix_20260903_0450.rbf.
+# 2026-09-03c (same branch + the VGA_F1 polarity flip after HW round 1 -- one inverter):
+# SEED 5, clk_dec 94.06 @100C / 91.29 @-40C, identical to the entry above as expected.
+# Build DVD_parityf1_20260903_1253.rbf (the HW round 2 candidate).
 set_global_assignment -name SEED 5
