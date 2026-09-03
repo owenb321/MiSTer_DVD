@@ -50,6 +50,52 @@
  * trio it needs. Such an ack leaves the arm open; the watchdog then fires the fallback,
  * which is right — by then we are in a menu, where a re-align is not possible anyway.
  *
+ * ★ THE SWITCH BLANK (2026-09-03, user request after the issue #42 HW round). Fixing the
+ * freeze left the ~1 s transient visible, and it is ugly: switching TO Interlaced shows a
+ * full-screen rolling image flashing between black frames (the display losing vertical
+ * lock across the raster change), and switching TO Progressive squishes the picture into
+ * the top half (field-height content in a frame-height DE window). Both are inherent to
+ * changing the raster under in-flight content, so the fix is cosmetic: hold the picture
+ * BLACK until the first frame of the new mode is actually on screen.
+ *
+ * ★ The window needs no new measurement — `video_live` already IS that signal. The
+ * re-align's own load_flush re-arms it (via pickup_hold in resample_addrgen), so it goes
+ * LOW at the flush and HIGH again when the governor picks up the first frame for display.
+ * So: blank on the edge, and clear on the first `video_live` HIGH *after* observing it go
+ * LOW. Requiring the drop first is what makes it robust — at the edge itself video_live is
+ * still high from the OLD content (the flush lands a few ms later), so a naive "clear when
+ * video_live" would clear immediately and blank nothing.
+ *
+ * ⚠ BLANK_MAX is not a nicety, it is load-bearing twice over. (1) In the MENU domain
+ * `video_live` never drops — emu forces the STD mux-lead hold off while `menu_active`
+ * (menus aren't lip-synced), so pickup_hold never rises and nothing re-arms video_live.
+ * The timeout is the ONLY exit there. (2) It bounds the cosmetic fix so it can only ever
+ * hide a TRANSIENT: if the roll or the squish ever outlived the window, the artifact must
+ * come back into view rather than be masked forever.
+ *
+ * ⚠ blank_en (emu wires it to `media_seen`) keeps the blank off until the user has mounted
+ * something. Without it the boot-time mode_edge — il_eff_q resets to 0, so an
+ * Interlaced/Auto-analog rig pulses one at reset release — would black out the idle
+ * screen for the whole timeout, and "nothing on screen after the core loads" is exactly
+ * what the launch-feedback work exists to prevent (docs/idle_screen.md).
+ *
+ * ⛔ "REPEAT THE LAST GOOD FRAME" WAS THE OTHER CANDIDATE AND IS WEAKER, despite the
+ * machinery already existing (the governor's persistence re-scan, repeat_frame=31, as used
+ * by pause and hold_freeze). Three reasons: the Interlaced symptom is a ROLL, i.e. the
+ * display has lost lock, so a held frame rolls too — a rolling still is no better than a
+ * rolling picture, whereas rolling BLACK is invisible; the re-scan goes back through the
+ * same mode-dependent scan path that produces the Progressive squish, and the held image
+ * was built for the OLD mode, so it is not obviously immune to the artifact it is meant to
+ * hide; and it needs the coordinated hold set (watchdog suppression et al.), where
+ * freezing video without audio for ~1 s diverges the timelines the flush just re-anchored.
+ * Blanking acts at the PIN, after every mode-dependent path, so it is immune by
+ * construction. See docs/single_raster_analog.md §7.
+ *
+ * ⚠ emu blanks RGB ONLY, never sync. That is the re_interlace S_HUNT defect
+ * (docs/single_raster_analog.md §3.2): it emitted no sync at all while hunting, costing
+ * 33-67 ms of dead CRT sync per event. Killing sync across a raster change lengthens the
+ * lock-up instead of hiding it.
+ *
  * NOTE ON THE DEFERRAL WINDOW. il_eff is combinational off the OSD bits, so the raster
  * (and VGA_F1, CE_PIXEL, the pixrep overlay inverses) still changes the instant the user
  * commits, exactly as before — only the FLUSH moves, to the moment it can land on a GOP
@@ -63,7 +109,8 @@
 `default_nettype none
 
 module mode_realign #(
-    parameter [23:0] WDOG = 24'd13_500_000       // ~0.5 s @ 27 MHz clk_sys
+    parameter [23:0] WDOG      = 24'd13_500_000, // ~0.5 s @ 27 MHz clk_sys
+    parameter [25:0] BLANK_MAX = 26'd40_500_000  // ~1.5 s: the blank's hard ceiling
 ) (
     input  wire        clk,              // clk_sys (27 MHz)
     input  wire        rst_n,            // core reset_n — NOT pipe_rst_n: the arm has to
@@ -91,6 +138,11 @@ module mode_realign #(
     input  wire        keep_vbuf,        // valid on the ack: 1 = menu hop, load_flush only
     input  wire        start_streaming,  // a new file was mounted => cancel
 
+    // ---- switch blank ----------------------------------------------------------------
+    input  wire        video_live,       // "the display is showing a decoded frame"
+                                         // (re-armed by our own flush, see the header)
+    input  wire        blank_en,         // media_seen: never blank the boot idle screen
+
     // ---- the other producer of the reader's single RBN-seek port ---------------------
     input  wire        scrub_pulse,      // dvd/scrub_ctrl.sv seek_rbn_pulse
     input  wire [31:0] scrub_rbn,        // dvd/scrub_ctrl.sv seek_rbn
@@ -99,7 +151,8 @@ module mode_realign #(
     output wire        seek_rbn_pulse,   // -> dvd_iso_reader (the arbitrated port)
     output wire [31:0] seek_rbn,
     output reg         mode_switch,      // -> flush_ctl: THE IN-PLACE FALLBACK ONLY
-    output wire        realign_pend      // level: an arm is open (debug readout / gating)
+    output wire        realign_pend,     // level: an arm is open (debug readout / gating)
+    output wire        sw_blank          // level: hold the picture black (RGB only!)
 );
 
 localparam [1:0] S_IDLE = 2'd0,   // nothing pending
@@ -192,6 +245,44 @@ always @(posedge clk) begin
         end
     end
 end
+
+// ---------------------------------------------------------------------------------
+// SWITCH BLANK. Deliberately a SEPARATE state machine from the seek arm above: it must
+// cover the raster change, which happens at the OSD edit whichever path the seek takes
+// (re-align or in-place fallback), and it outlives the arm by ~an order of magnitude (the
+// seek lands in ms; the decoder re-locks in ~a second).
+reg         blank_r;
+reg  [25:0] blank_tmr;
+reg         vl_dropped;      // video_live has gone LOW since the blank started
+
+always @(posedge clk) begin
+    if (~rst_n) begin
+        blank_r    <= 1'b0;
+        blank_tmr  <= 26'd0;
+        vl_dropped <= 1'b0;
+    end else if (start_streaming) begin
+        // A mount cuts to black and cold-starts on its own (flush trio + the decoder soft
+        // reset), so it needs no help from here — and holding a blank across it would just
+        // delay the new disc's first frame.
+        blank_r    <= 1'b0;
+        blank_tmr  <= 26'd0;
+        vl_dropped <= 1'b0;
+    end else if (mode_edge && blank_en) begin
+        // Re-triggers if another edge arrives mid-blank: the raster changed again, so the
+        // window restarts. (The SEEK arm coalesces; the blank must not, or a second toggle
+        // would uncover the transient it caused.)
+        blank_r    <= 1'b1;
+        blank_tmr  <= BLANK_MAX;
+        vl_dropped <= 1'b0;
+    end else if (blank_r) begin
+        if (~video_live)              vl_dropped <= 1'b1;
+        if (vl_dropped && video_live) blank_r    <= 1'b0;   // first new-mode frame on screen
+        else if (blank_tmr == 26'd0)  blank_r    <= 1'b0;   // menu path + the safety ceiling
+        else                          blank_tmr  <= blank_tmr - 26'd1;
+    end
+end
+
+assign sw_blank = blank_r;
 
 // The scrub ALWAYS wins the mux, so even in a state the FSM does not allow the reader
 // latches the user's target rather than ours; the resulting seek_ack then completes the

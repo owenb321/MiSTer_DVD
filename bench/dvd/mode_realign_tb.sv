@@ -28,7 +28,8 @@
 //
 module mode_realign_tb;
 
-  localparam [23:0] WDOG = 24'd200;      // sim-scale watchdog
+  localparam [23:0] WDOG      = 24'd200;   // sim-scale watchdog
+  localparam [25:0] BLANK_MAX = 26'd300;   // sim-scale blank ceiling
 
   reg clk = 0, rst_n = 0;
   reg mode_edge = 0;
@@ -40,14 +41,15 @@ module mode_realign_tb;
   reg seek_ack = 0, jump_ack = 0, keep_vbuf = 0, start_streaming = 0;
   reg scrub_pulse = 0;
   reg [31:0] scrub_rbn = 32'd0;
+  reg video_live = 1, blank_en = 1;
 
   wire        dut_sp;
   wire [31:0] dut_srbn;
-  wire        dut_ms, realign_pend;
+  wire        dut_ms, realign_pend, sw_blank;
 
   integer realign = 1;                   // 1 = the fixed module, 0 = the pre-fix path
 
-  mode_realign #(.WDOG(WDOG)) dut (
+  mode_realign #(.WDOG(WDOG), .BLANK_MAX(BLANK_MAX)) dut (
     .clk(clk), .rst_n(rst_n),
     .mode_edge(mode_edge),
     .in_title(in_title), .dvd_mode(dvd_mode), .lin_mode(lin_mode),
@@ -56,9 +58,10 @@ module mode_realign_tb;
     .dsi_nv_pck_lbn(dsi_nv_pck_lbn), .lin_blk(lin_blk),
     .seek_ack(seek_ack), .jump_ack(jump_ack), .keep_vbuf(keep_vbuf),
     .start_streaming(start_streaming),
+    .video_live(video_live), .blank_en(blank_en),
     .scrub_pulse(scrub_pulse), .scrub_rbn(scrub_rbn),
     .seek_rbn_pulse(dut_sp), .seek_rbn(dut_srbn),
-    .mode_switch(dut_ms), .realign_pend(realign_pend)
+    .mode_switch(dut_ms), .realign_pend(realign_pend), .sw_blank(sw_blank)
   );
 
   // ---- the PRE-FIX path: `wire mode_switch = il_switch;` and scrub_ctrl as the only
@@ -126,6 +129,17 @@ module mode_realign_tb;
     end
   endtask
 
+  task wait_n(input integer n); begin repeat (n) @(negedge clk); end endtask
+
+  task chk_blank(input want, input [8*76-1:0] msg);
+    begin
+      if (sw_blank !== want) begin
+        $display("  sw_blank=%0b, want %0b", sw_blank, want);
+        fail(msg);
+      end
+    end
+  endtask
+
   task edge_pulse; begin mode_edge = 1; @(negedge clk); mode_edge = 0; @(negedge clk); end endtask
 
   // A DSI packet finished parsing and left this VOBU NAV-pack RBN in force.
@@ -144,6 +158,7 @@ module mode_realign_tb;
       rst_n = 0; mode_edge = 0; in_title = 1; dvd_mode = 1; lin_mode = 0;
       still_active = 0; hold_freeze = 0; nav_flush = 0; dsi_commit = 0; dsi_stream = 0;
       start_streaming = 0; scrub_pulse = 0; ack_en = 1; ack_lat = 6; ack_keep = 0;
+      video_live = 1; blank_en = 1;
       repeat (4) @(negedge clk);
       rst_n = 1;
       repeat (2) @(negedge clk);
@@ -284,7 +299,83 @@ module mode_realign_tb;
     chk_counts(1, 0, "[11b] the release seek must satisfy the arm");
     chk_tgt(32'd11500, "[11c] the release target must be the scrub's");
 
-    if (errors == 0) $display("mode_realign_tb: ALL TESTS PASSED (11 scenarios)");
+    // =====================================================================
+    // THE SWITCH BLANK. Tested against the DUT directly and NOT through the eff_*
+    // muxes: it is new behaviour with no pre-fix counterpart, so there is nothing for
+    // a +realign=0 arm to disagree with. What these lock is the WINDOW's two endpoints.
+    // =====================================================================
+    do_reset;
+    commit_lbn(32'd20000);
+
+    // ============================================================= [12]
+    // The normal path: blank on the edge, clear on the first video_live HIGH *after*
+    // it has been seen LOW (our own flush re-arms it). Modelled explicitly here.
+    ack_en = 0;                            // drive the timeline by hand
+    chk_blank(1'b0, "[12a] no blank before the switch");
+    edge_pulse;
+    chk_blank(1'b1, "[12b] the edge must start the blank");
+    video_live = 0; wait_n(8);             // the flush lands: video_live re-arms
+    chk_blank(1'b1, "[12c] blank must hold while no frame is displayed");
+    video_live = 1; wait_n(4);
+    chk_blank(1'b0, "[12d] the first new-mode frame must clear the blank");
+
+    // ============================================================= [13]  ** the trap **
+    // ⚠ At the edge itself video_live is STILL HIGH (from the old content — the flush
+    // lands a few ms later). A naive "clear when video_live" would clear immediately and
+    // blank nothing at all. Requiring the LOW first is what makes the window real.
+    wait_n(4);
+    edge_pulse;
+    wait_n(BLANK_MAX/3);                   // video_live left HIGH throughout
+    chk_blank(1'b1, "[13] a still-high video_live must NOT clear the blank early");
+    video_live = 0; wait_n(4); video_live = 1; wait_n(4);
+    chk_blank(1'b0, "[13b] ...and the drop-then-rise still clears it");
+
+    // ============================================================= [14]
+    // THE MENU PATH. emu forces the STD mux-lead hold off while a menu is up, so
+    // pickup_hold never rises and video_live never re-arms: the timeout is the ONLY exit.
+    // It also bounds the fix so it can never mask a persistent fault.
+    wait_n(4);
+    edge_pulse;
+    wait_n(BLANK_MAX - 20);
+    chk_blank(1'b1, "[14a] blank must still be up just before the ceiling");
+    wait_n(60);
+    chk_blank(1'b0, "[14b] the ceiling must release the blank with video_live stuck high");
+
+    // ============================================================= [15]
+    // Never blank before the first mount: the boot-time edge (il_eff_q resets to 0, so an
+    // Interlaced rig pulses one at reset release) would otherwise black the idle screen
+    // for the whole ceiling -- the launch-feedback regression docs/idle_screen.md exists
+    // to prevent.
+    blank_en = 0;
+    wait_n(4);
+    edge_pulse;
+    wait_n(30);
+    chk_blank(1'b0, "[15] blank_en low must suppress the blank entirely");
+    blank_en = 1;
+
+    // ============================================================= [16]
+    // A second edge mid-blank RESTARTS the window. The seek arm coalesces; the blank must
+    // not, or the second toggle uncovers the transient it just caused.
+    wait_n(4);
+    edge_pulse;
+    wait_n(BLANK_MAX - 40);
+    edge_pulse;                            // re-trigger
+    wait_n(BLANK_MAX - 40);
+    chk_blank(1'b1, "[16] a second edge must restart the blank window, not ride the old one");
+    video_live = 0; wait_n(4); video_live = 1; wait_n(4);
+    chk_blank(1'b0, "[16b] ...and it still clears normally");
+
+    // ============================================================= [17]
+    // A mount cuts to black and cold-starts on its own; holding a blank across it would
+    // only delay the new disc's first frame.
+    wait_n(4);
+    edge_pulse;
+    chk_blank(1'b1, "[17a] setup: blank is up");
+    start_streaming = 1; wait_n(1); start_streaming = 0; wait_n(4);
+    chk_blank(1'b0, "[17b] a mount must clear the blank");
+    ack_en = 1;
+
+    if (errors == 0) $display("mode_realign_tb: ALL TESTS PASSED (17 scenarios)");
     else begin
       $display("mode_realign_tb: %0d FAILURE(S)", errors);
       $fatal(1, "mode_realign_tb FAILED");

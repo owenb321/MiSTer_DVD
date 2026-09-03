@@ -334,13 +334,30 @@ worse maintenance burden than targeted in-place edits. So:
 - ✅ **MODE-SWITCH READER RE-ALIGN + PAL/NTSC VERDICT HARDENING (2026-09-03, issue #42,
   branch `fix/mode-switch-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03
   (user report: the freeze is gone; build `DVD_modeswitch_20260903_1538.rbf`, SEED 5 first
-  roll, clk_dec 91.90/88.88).** ⏳ Still open on that build: the ~1 s SWITCH TRANSIENT is
-  ugly (to Interlaced = a full-screen rolling image flashing between black frames = the
-  display losing vertical lock; to Progressive = the picture squished into the top half =
-  field-height content in a frame-height DE window). Cosmetic and inherent to changing the
-  raster under in-flight content; the proposed fix (blank RGB — never sync — from
-  `il_switch` to the `video_live` rising edge, in `mode_realign`) plus why "repeat the last
-  good frame" is the weaker option are recorded in `docs/single_raster_analog.md` §7. Fixes: a mid-title `Video Output` change
+  roll, clk_dec 91.90/88.88).** ★ **SWITCH BLANK added on top (2026-09-03, user
+  request; ⏳ HW-confirm pending):** the fix left the ~1 s transient visible and ugly (to
+  Interlaced = a full-screen rolling image flashing between black frames = the display
+  losing vertical lock; to Progressive = the picture squished into the top half =
+  field-height content in a frame-height DE window). Both are inherent to changing the
+  raster under in-flight content, so the fix is cosmetic: `mode_realign` now holds the
+  picture BLACK from the edge until the first frame of the new mode is on screen.
+  ★ **The window needed no new signal — `video_live` already is it** (our own `load_flush`
+  re-arms it via `pickup_hold`). ⚠ **The rule is "clear on the first HIGH *after* a LOW"**:
+  at the edge `video_live` is still high from the OLD content, so a naive "clear when
+  video_live" blanks nothing. ⚠ `BLANK_MAX` (~1.5 s) is load-bearing twice — in a MENU
+  `video_live` never drops (emu forces the STD hold off while `menu_active`), so the
+  ceiling is the only exit; and it stops a cosmetic fix masking a persistent fault.
+  ⚠ Placement in the output mux is the design: **after** `cc_on` (line-21 captions live in
+  the VBI), **after** `dbg_px_q` (the `O[2]` blk10 "il_switch fired" readout must stay
+  visible during exactly this event), **before** `sub_r` (picture+subs+HUD+logo go dark
+  together). **RGB only — never sync** (the `re_interlace` `S_HUNT` defect). `blank_en` =
+  `media_seen` so the boot idle screen is never blanked. A second edge RESTARTS the window
+  (the seek arm coalesces; the blank must not). ⛔ "Repeat the last good frame" lost: the
+  symptom is a ROLL, so a held frame rolls too — rolling black is invisible, a rolling
+  still is not. Gate: `mode_realign_tb` [12]–[17], **mutation-checked** (5 targeted RTL
+  mutations, each caught by its own scenario — these are cheap level assertions, exactly
+  the shape that passes without proving anything). Detail:
+  `docs/single_raster_analog.md` §6.8. Fixes: a mid-title `Video Output` change
   could freeze the decoder on a malformed frame with no self-recovery; a chapter seek
   cleared it. Pre-existing (v0.3.0 does it on `Analog Out`).
   ★★ **THE FIX WAS WRITTEN IN THE EXISTING COMMENT AND HAD BEEN READ AS HARMLESS FOR

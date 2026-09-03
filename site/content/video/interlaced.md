@@ -71,9 +71,13 @@ everything.
     The current development build fixes that freeze. A mid-title switch now steps playback
     back to the start of the chunk it was reading — up to about a second — and resumes
     from there, so the picture always restarts from a clean point. On a VCD or SVCD the
-    step back can be a little longer. Not yet confirmed on hardware, so if a mid-title
-    switch still freezes on a current build, please
-    [report it](../reference/reporting-a-bug.md).
+    step back can be a little longer.
+
+    The screen also **goes black for the changeover** instead of showing the picture
+    breaking up while the display re-locks — about a second, and the OSD stays visible
+    over it. Sound continues throughout. If the black lasts noticeably longer than that,
+    or a mid-title switch still freezes,
+    [please report it](../reference/reporting-a-bug.md).
 
 ## Field alignment
 

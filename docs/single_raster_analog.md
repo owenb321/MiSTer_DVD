@@ -417,44 +417,89 @@ kicks the walk. And `mode_realign_tb`'s first version failed all 11 scenarios ag
 correct RTL: blocking stimulus assignments landed **on** the clock edge and raced the DUT,
 so every count read 0. Stimulus is driven from the negedge now, sampling from the posedge.
 
+### 6.8 The switch blank (2026-09-03) — ⏳ HW-confirm pending
+
+Fixing the freeze left the transient visible, and the maintainer's HW round named it
+exactly: switching **to Interlaced** gives *"a full screen rolling image flashing between
+black frames"*; switching **to Progressive** *"squishes the image into the top half of the
+screen"*. The first is the display losing vertical lock across the raster change; the
+second is field-height content in a frame-height DE window. Both are inherent to changing
+the raster under in-flight content — you cannot make the frames already in the pipe correct
+for the new mode — so the fix is cosmetic by construction: hold the picture **black** until
+the first frame of the new mode is on screen.
+
+**The window needed no new measurement.** `video_live` already is that signal: the
+re-align's own `load_flush` re-arms it (through `pickup_hold` in `resample_addrgen`), so it
+goes LOW at the flush and HIGH again when the governor picks up the first frame for
+display. `dvd/mode_realign.sv` owns the window because it already knows both endpoints.
+
+⚠ **The rule is "clear on the first HIGH *after* a LOW", and the ordering is the whole
+trick.** At the edge itself `video_live` is still HIGH — it belongs to the OLD content, and
+the flush only lands a few ms later. A naive "clear when `video_live`" would clear
+immediately and blank nothing at all. `mode_realign_tb` [13] is that exact trap, and
+mutating the RTL to drop the requirement fails six checks.
+
+**`BLANK_MAX` (~1.5 s) is load-bearing twice.** In the **menu domain** `video_live` never
+drops — emu forces the STD mux-lead hold off while `menu_active` (menus aren't lip-synced),
+so `pickup_hold` never rises and nothing re-arms it; the ceiling is the only exit there.
+And it bounds the cosmetic fix so it can only ever hide a **transient**: if the roll or the
+squish ever outlived the window the artifact must come back into view rather than be masked
+forever.
+
+**Three placement decisions, all in the `emu.sv` output-mux priority chain:**
+
+- **After `cc_on`** — the line-21 caption waveform still goes out. It lives in the VBI,
+  outside DE, and blanking it would kill captions for a second on every switch.
+- **After `ov_on` / `dbg_px_q`** — the `DEBUG_OVERLAY` rows and the release-visible `O[2]`
+  diagnostic blocks stay readable. `blk10` of the `O[2]` third row *is* the "il_switch
+  fired" readout; hiding it exactly when a switch happens would blind the one instrument
+  pointed at this event.
+- **Before `sub_r`** — picture, subtitles, HUD and idle logo go dark together, which is the
+  intent: everything content-derived at once.
+
+⚠ **RGB only. Sync is untouched.** Dropping sync across a raster change is the
+`re_interlace` `S_HUNT` defect (§3.2): it emitted no sync at all while hunting, costing
+33–67 ms of dead CRT sync per event, and it lengthens the display's lock-up instead of
+hiding it.
+
+★ **The MiSTer OSD is composited DOWNSTREAM** (`sys_top`: `emu` → `scanlines` → `osd` →
+pins), so the menu the user is standing in when they flip the setting stays fully visible
+over the black. That is what makes a full-screen blank acceptable rather than alarming.
+
+⚠ **`blank_en` (= `media_seen`) keeps it off until the first mount.** `il_eff_q` resets to
+0, so an Interlaced/Auto-analog rig pulses one `il_switch` at reset release — without the
+gate that would black the idle screen for the whole ceiling, and "nothing on screen after
+the core loads" is precisely what the launch-feedback work exists to prevent
+(`docs/idle_screen.md`).
+
+★ **A second edge mid-blank RESTARTS the window** — the opposite of the seek arm, which
+coalesces. Riding the old window would uncover the transient the second toggle just caused.
+
+⛔ **"Repeat the last good frame" was the other candidate and lost**, despite the machinery
+already existing (the governor's persistence re-scan, `repeat_frame=31`, as used by pause
+and `hold_freeze`). Three reasons: the Interlaced symptom is a **roll**, i.e. the display
+has lost lock, so a held frame rolls too — a rolling still is no better than a rolling
+picture, whereas rolling *black* is invisible; the re-scan goes back through the same
+mode-dependent scan path that produces the Progressive squish, and the held image was built
+for the OLD mode, so it is not obviously immune to the artifact it is meant to hide; and it
+needs the coordinated hold set (watchdog suppression et al.), where freezing video without
+audio for ~1 s diverges the timelines the flush just re-anchored. Blanking acts at the
+**pin**, after every mode-dependent path, so it is immune by construction.
+
+**Gate:** `mode_realign_tb` [12]–[17], and — because these are cheap assertions about a
+level, exactly the shape that passes without proving anything — **mutation-checked**: five
+targeted RTL mutations (clear without requiring the drop, no ceiling, no `blank_en` gate,
+coalesce instead of restart, no mount clear) are each caught by the scenario written for
+them.
+
 ## 7. Follow-ups
-- **Blank the video during a `Video Output` switch (proposed 2026-09-03, user request after
-  the issue #42 HW round; NOT implemented).** The freeze is fixed, but the ~1 s transient is
-  ugly: switching *to* Interlaced shows a full-screen rolling image flashing between black
-  frames (the display has lost vertical lock across the raster change), and switching *to*
-  Progressive squishes the picture into the top half (field-height content in a frame-height
-  DE window). Both are inherent to changing the raster under in-flight content, so the fix
-  is cosmetic by nature: force `vga_r_q/g_q/b_q` to 0 at the output mux (`emu.sv`, the
-  registered stage) for the duration.
-  - **The window already has a signal.** Blank on `il_switch`, clear on **`video_live`
-    rising** — the re-align's `load_flush` re-arms it via `pickup_hold`, and it rises when
-    the first frame is actually picked up for display, i.e. the first frame of the NEW mode.
-    Needs a minimum (the few ms before the flush lands, during which `video_live` is still
-    high) and a timeout. `dvd/mode_realign.sv` is the natural home: it knows both endpoints
-    and already owns a watchdog, and `realign_pend` is half of it.
-  - ⚠ **Blank RGB ONLY, never sync.** That is the `re_interlace` `S_HUNT` defect (§3.2): it
-    emitted no sync at all while hunting, costing 33–67 ms of dead CRT sync per event.
-    Killing sync across a raster change lengthens the lock-up.
-  - ★ **The MiSTer OSD is composited DOWNSTREAM** (`emu` → `scanlines` → `osd` → pins,
-    `sys/sys_top.v`), so blanking at the emu stage leaves the menu the user is standing in
-    fully visible. The HUD/subtitles/idle logo ride `sub_r` and would blank — acceptable for
-    a ~1 s transient.
-  - ⛔ **"Repeat the last good frame" was considered and is the WEAKER option**, despite the
-    machinery already existing (the governor's persistence re-scan, `repeat_frame=31`, as
-    used by pause and `hold_freeze`). Three reasons: the interlaced symptom is a *roll*, so a
-    held frame rolls too and a rolling still is no better than a rolling picture, whereas
-    rolling black is invisible; the re-scan goes back through the same mode-dependent scan
-    path that produces the progressive squish, and the held image was built for the OLD mode,
-    so it is not obviously immune to the artifact it is meant to hide; and it needs the
-    coordinated hold set (watchdog suppression etc.), where freezing video without audio for
-    ~1 s diverges the timelines the flush just re-anchored. Blanking acts at the PIN, after
-    every mode-dependent path, so it is immune by construction.
-  - Cost: ~20–30 ALMs, but a netlist change ⇒ re-rolls the pinned seed and needs a fresh
-    `tools/fmax_check.sh` verdict. **Bound the window with a timeout** — unbounded, it would
-    hide a persistent fault rather than a transient.
-  - The same ugliness on an **Analog Aspect** change would need its own trigger: per
-    `docs/field_parity.md` that walk issues no flush at all, so there is no `video_live`
-    re-arm to key on.
+- **✅ Blank the video during a `Video Output` switch — IMPLEMENTED 2026-09-03 (user
+  request after the issue #42 HW round; ⏳ HW-confirm pending).** See §6.8. The proposal
+  that was recorded here is now the shipped design; the reasoning that survived is in §6.8
+  including why "repeat the last good frame" lost.
+- The same ugliness on an **Analog Aspect** change is NOT covered: per `docs/field_parity.md`
+  that walk issues no flush at all, so there is no `video_live` re-arm to key on and the
+  blank would have to invent its own trigger. Nobody has reported it; left alone.
 - **`pal_detect_raw` reads `> 480` as PAL, so a 720p or 1080i flat `.mpg` already reads
   PAL** and gets a 50 Hz STC tick rate plus the PAL modeline. That predates issue #42 and
   is unchanged by it — `dvd/pal_detect.sv` altered *when* a verdict may take effect, never

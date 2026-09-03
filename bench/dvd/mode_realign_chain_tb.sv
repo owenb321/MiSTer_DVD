@@ -56,7 +56,7 @@ module mode_realign_chain_tb;
     // instance below is fed by nets the chain further down drives.
     wire        rd_seek_pulse;
     wire [31:0] rd_seek_rbn;
-    wire        mr_sp, mr_ms, mr_pend;
+    wire        mr_sp, mr_ms, mr_pend, mr_blank;
     wire [31:0] mr_srbn;
     wire        load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
     wire        pipe_rst_n, aud_rst_n;
@@ -430,9 +430,13 @@ module mode_realign_chain_tb;
         .dsi_nv_pck_lbn(ph_lbn), .lin_blk(32'd0),
         .seek_ack(seek_ack), .jump_ack(1'b0), .keep_vbuf(keep_vbuf),
         .start_streaming(start),
+        // The switch blank is irrelevant here: this bench measures the DELIVERED BYTE
+        // STREAM, which is upstream of emu's output mux. Held inert so it cannot perturb
+        // the seek FSM.
+        .video_live(1'b1), .blank_en(1'b0),
         .scrub_pulse(1'b0), .scrub_rbn(32'd0),
         .seek_rbn_pulse(mr_sp), .seek_rbn(mr_srbn),
-        .mode_switch(mr_ms), .realign_pend(mr_pend)
+        .mode_switch(mr_ms), .realign_pend(mr_pend), .sw_blank(mr_blank)
     );
 
     // +realign=0 removes the re-align entirely: the reader never sees an RBN seek, and

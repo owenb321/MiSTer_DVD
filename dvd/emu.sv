@@ -2070,6 +2070,7 @@ end
 // MODE-SWITCH READER RE-ALIGN — dvd/mode_realign.sv (issue #42). Design, the
 // coalescing rule, the stale-playhead trap and the deferral window: its header.
 wire       mode_switch;                 // the in-place FALLBACK trio (see above)
+wire       sw_blank;                    // hold the picture black across a mode switch
 // realign_pend is deliberately UNCONNECTED today. It exists for the round-2 lever
 // docs/single_raster_analog.md §6.5 describes: if hardware still freezes, gate il_out on
 // ~realign_pend so the modeline walk and the flush land together on the VOBU boundary.
@@ -2099,12 +2100,15 @@ mode_realign mode_realign_i (
     .jump_ack        (jump_ack),
     .keep_vbuf       (keep_vbuf),       // a menu hop's ack is not a full trio
     .start_streaming (start_streaming),
+    .video_live      (video_live_s2),   // clears the blank on the first new-mode frame
+    .blank_en        (media_seen),      // never blank the boot idle screen
     .scrub_pulse     (scrub_seek_pulse),
     .scrub_rbn       (scrub_seek_rbn),
     .seek_rbn_pulse  (seek_rbn_pulse),  // -> dvd_iso_reader (arbitrated)
     .seek_rbn        (seek_rbn),
     .mode_switch     (mode_switch),
-    .realign_pend    (realign_pend)
+    .realign_pend    (realign_pend),
+    .sw_blank        (sw_blank)
 );
 
 // =========================================================================
@@ -5086,12 +5090,30 @@ cc_vbi cc_vbi_inst (
 // the analog pins (the dual-raster VGA2_* path is gone). Outside DE the stage emits
 // black except the line-21 caption level (equal on R/G/B = luma only, no chroma), and
 // ce_pix_q is the framework-facing pixel enable (see CE_PIXEL near the top).
+// DVD-FORK (switch blank, 2026-09-03 — issue #42 follow-up): sw_blank holds the PICTURE
+// black from a Video Output change until the first frame of the new mode is on screen
+// (dvd/mode_realign.sv owns the window). Its position in this priority chain is the whole
+// design:
+//   - AFTER cc_on, so the line-21 caption waveform still goes out. It lives in the VBI,
+//     i.e. outside DE, and blanking it would kill captions for a second every switch.
+//   - AFTER ov_on / dbg_px_q, so the DEBUG_OVERLAY rows and the release-visible O[2]
+//     diagnostic blocks stay readable. blk10 of the O[2] third row IS the "il_switch
+//     fired" readout — hiding it exactly when a switch happens would blind the one
+//     instrument pointed at this event.
+//   - BEFORE sub_r, so it takes out the picture, subtitles, HUD and idle logo together.
+//     That is the intent: everything content-derived goes dark as one.
+// ⚠ RGB ONLY — vga_hs_q/vga_vs_q/vga_de_q below are UNTOUCHED. Dropping sync across a
+// raster change is the re_interlace S_HUNT defect (docs/single_raster_analog.md §3.2):
+// it lengthens the display's lock-up instead of hiding it.
+// ★ The MiSTer OSD is composited DOWNSTREAM of these pins (sys_top: emu -> scanlines ->
+// osd), so the menu the user is standing in when they flip the setting stays fully
+// visible over the black.
 reg [7:0] vga_r_q, vga_g_q, vga_b_q;
 reg       vga_hs_q, vga_vs_q, vga_de_q, ce_pix_q;
 always @(posedge clk_sys) begin
-    vga_r_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_r : (dbg_px_q ? dbg_r_q : sub_r);
-    vga_g_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_g : (dbg_px_q ? dbg_g_q : sub_g);
-    vga_b_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_b : (dbg_px_q ? dbg_b_q : sub_b);
+    vga_r_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_r : dbg_px_q ? dbg_r_q : sw_blank ? 8'd0 : sub_r;
+    vga_g_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_g : dbg_px_q ? dbg_g_q : sw_blank ? 8'd0 : sub_g;
+    vga_b_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_b : dbg_px_q ? dbg_b_q : sw_blank ? 8'd0 : sub_b;
     vga_hs_q <= core_h_sync;
     vga_vs_q <= core_v_sync;
     vga_de_q <= core_pixel_en;
