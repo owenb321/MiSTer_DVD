@@ -107,6 +107,10 @@ module dpad_seek #(
     input  wire [31:0] tbl_rdata,         // <- nav_dsi.tbl_rdata  (1-cycle latency)
 
     input  wire [31:0] lin_blk,           // linear playhead (base in lin_mode)
+    input  wire [23:0] lin_blk10,         // blocks per 10 s of linear file.
+                                          // 0 = no rate known -> off_acc stays 0
+                                          // and S_FIRE's existing guard turns
+                                          // the gesture into pend_fail.
 
     // ---- -> scrub_ctrl jump mode ------------------------------------------
     output reg         jump_fire,         // 1-cyc: resolved, go

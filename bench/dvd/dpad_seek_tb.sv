@@ -26,6 +26,10 @@ module dpad_seek_tb;
     reg         up_e = 0, dn_e = 0, lf_e = 0, rt_e = 0, cancel = 0;
     reg         nav_flush = 0;
     reg  [31:0] lin_blk = 32'd100_000;
+    // Blocks per 10 s of linear file: the exact CD geometry for a raw VCD/SVCD
+    // image (861 = 75 sectors/s * 2352 B / 2048), or a MEASURED rate for a flat
+    // program stream (dvd/lin_rate.sv). The DUT must not care which.
+    reg  [23:0] lin_blk10 = 24'd861;
 
     reg  [7:0]  dsi_byte = 8'd0;
     reg         dsi_valid = 1'b0, dsi_fs = 1'b0;
@@ -65,6 +69,7 @@ module dpad_seek_tb;
         .dsi_nv_pck_lbn(nv_pck_lbn), .dsi_vobu_ea(vobu_ea),
         .dsi_next_vobu(next_vobu), .dsi_prev_vobu(prev_vobu),
         .tbl_raddr(tbl_raddr), .tbl_rdata(tbl_rdata), .lin_blk(lin_blk),
+        .lin_blk10(lin_blk10),
         .jump_fire(jump_fire), .jump_dir(jump_dir),
         .jump_base(jump_base), .jump_off(jump_off),
         .pend(pend), .pend_dir(pend_dir), .pend_n(pend_n),
@@ -326,6 +331,27 @@ module dpad_seek_tb;
         fires = 0; press(2'd2);
         expect_fire("T14b linear 1xU = 6x861", 32'd5166, 1'b1, 32'd100_000);
         dvd_mode = 1'b1; lin_mode = 1'b0;
+
+        // ---- T17: linear mode takes the step from the PORT ----------------
+        // A flat .mpg/.VOB has no CD geometry and no DSI, so its step is a rate
+        // measured off the stream (dvd/lin_rate.sv). Same lin_mode path as the
+        // raw-CD case above -- only the number differs, which is the whole
+        // point: T14 keeps 861 and this keeps the DUT honest about using the
+        // port rather than a constant.
+        arm; dvd_mode = 1'b0; lin_mode = 1'b1; lin_blk10 = 24'd3000;
+        press(2'd0);
+        expect_fire("T17a flat 1xR = 3000 blocks", 32'd3000, 1'b1, 32'd100_000);
+        fires = 0; press(2'd2);
+        expect_fire("T17b flat 1xU = 6x3000", 32'd18_000, 1'b1, 32'd100_000);
+
+        // ---- T18: no rate known -> refuse, never guess ---------------------
+        // emu gates lin_mode on the rate being valid, so this should not arise;
+        // it is the belt-and-braces that a 0 step can never fire a jump to the
+        // base itself (which scrub_ctrl would clamp into a seek to nowhere).
+        arm; lin_blk10 = 24'd0;
+        press(2'd0);
+        expect_none("T18 no rate = pend_fail", 1);
+        lin_blk10 = 24'd861; dvd_mode = 1'b1; lin_mode = 1'b0;
 
         // ---- T15: inert when disabled / out of title / cancelled ----------
         arm; en = 1'b0; press(2'd0);
