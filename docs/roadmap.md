@@ -665,6 +665,20 @@ parity error that has HELD for ~0.5 s, with a hard ~2 s budget on top. Gate:
 `bench/dvd/field_phase_tb.sv` (finished; scenario [6] starves the pixel queue and counts
 the repeated fields). See `docs/field_parity.md`.
 
+**★ 2026-09-03 follow-up (issue #42, branch `fix/mode-switch-realign`): a mid-title
+`Video Output` change no longer freezes the decoder** — 🔧 sim-proven RED/GREEN,
+⏳ HW-confirm pending. The `il_switch` flush trio fired **without moving the reader**, so
+the decoder resumed mid-VOBU with no GOP boundary; a chapter seek cured it because a seek
+is the same trio *plus* a reader jump. `dvd/mode_realign.sv` now turns the edge into a seek
+to the playhead's own VOBU (already a NAV pack ⇒ a single-probe snap) and lets `seek_ack`
+drive the trio; the in-place path survives as the fallback for menus, raw `.m2v`, a still,
+or an unacknowledged seek, and it coalesces repeated edges. Leg 2: `dvd/pal_detect.sv`
+stops a garbage sequence header flipping `pal_eff` (a verdict change restarts the raster
+with **no** flush and feeds back through `film_det`). ⚠ Filed and documented as PAL-only;
+it reproduces on **NTSC** too, which is what disproved the `pal_eff`-only hypothesis.
+Gate: `bench/dvd/run_mode_realign.sh`. See `docs/single_raster_analog.md` §6,
+`docs/dvd_nav.md` §2c.
+
 **Status (history): ✅ HW-CONFIRMED 2026-07-05 (branch `feature/crt-480i-native`, MERGED PR fj#65) —
 then REWORKED 2026-07-29 into the DUAL-RASTER architecture, ✅ HW-CONFIRMED + MERGED
 2026-07-30 (PR fj#146):** the O[14] whole-core CRT mode is retired; the 15 kHz raster is
@@ -1820,7 +1834,8 @@ also forces `il_eff`, which makes the MAIN raster interlaced ⇒ HDMI drops to 4
 ascal for the session, and ascal is not cadence-aware ⇒ **film regresses on HDMI**.
 `Interlaced` keeps HDMI progressive. It also remains the only override for a 15 kHz
 RGBHV rig that the ini bits cannot identify, and unlike Native Fields it can be changed
-mid-title (Native Fields fires the `il_switch` flush).
+mid-title (Native Fields fires the `il_switch` flush). *(That flush is what issue #42
+fixed — it is now a reader re-align, so a mid-title switch is safe in either mode.)*
 
 | Setup | Mode |
 |---|---|

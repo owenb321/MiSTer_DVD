@@ -657,8 +657,7 @@ content/history dependent). ⚠ Lesson: `il_switch`'s "fire the trio on a live m
 edge" pattern is only safe for a signal that changes ~once/title — a bare `filmp_eff`
 edge can OSCILLATE, and the flush itself perturbs the very parse the detector feeds on.
 
-**Disposition:** reverted to `mode_switch = il_switch` (emu.sv carries a ⛔ comment at
-the edge-detect). The engage skew is back to pre-branch behavior (constant offset until
+**Disposition:** reverted (emu.sv carries a ⛔ comment at the edge-detect). The engage skew is back to pre-branch behavior (constant offset until
 the next seek; chapter skip clears it — README notes this). **The proper fix is the
 early-film-detect feature** (`feature/film-early-detect` plan): a parse-front sniffer
 classifies cadence during the load hold and seeds the detector, so the raster is
@@ -666,6 +665,35 @@ correct BEFORE the first frame and every title/logo entry is covered by its jump
 trio — no mid-play engage at all on the common path. If a mid-title film_switch flush
 is reintroduced there it MUST have hold-suppression + a post-discontinuity holdoff,
 TB'd in `flush_ctl_tb`, **with the T2 menu→Play logo chain as an explicit HW gate**.
+
+### ★ AMENDMENT (2026-09-03, issue #42): two of the three missing pieces now exist
+
+The post-mortem above named three things this attempt lacked. Issue #42 built two of them
+for its own reasons, and a future film edge should ride them rather than re-derive them:
+
+1. **Reader re-alignment.** `dvd/mode_realign.sv` turns a raster-mode edge into a seek to
+   the playhead's own VOBU and lets `seek_ack` drive the trio, so the flush lands on a GOP
+   boundary instead of an arbitrary mid-stream byte. That was the *primary* failure here —
+   "no reader jump = no VOBU re-alignment, unlike a chapter seek".
+2. **Edge coalescing.** Further edges arriving while an arm is open are absorbed, so a
+   flapping signal produces ONE re-align and ONE flush rather than one per flap. That
+   directly removes "repeated mid-parse flushes yielded garbage sequence headers".
+
+And the feedback half of the loop is gone independently: `dvd/pal_detect.sv` means a
+garbage 576-line parse can no longer flip `pal_eff` from a single header, so
+`pal_eff → film_det → film_want → filmp_eff → another flush` cannot self-feed. ⚠ Note the
+loop was never PAL-specific — `film_det` reads `det_pal` *or* `det_ntsc` off `pal_eff`, so
+the same churn is reachable on NTSC; issue #42's freeze reproduced on both standards.
+
+⚠ **This does NOT make the film edge safe, and the ⛔ above stands.** What remains
+unaddressed is the third piece: the flush **perturbs the very parse the detector feeds
+on**, so a detector whose input is degraded by its own output is still a feedback system,
+and coalescing bounds the rate without breaking the loop. A reintroduction still needs
+hold-suppression and a post-discontinuity holdoff, and it must go **through
+`mode_realign`** (never straight into `flush_ctl`). The T2 menu→Play logo chain remains
+the HW gate. The evidence gate of §14 also removes most of the flapping that made this
+lethal, which is a fourth reason to expect a different outcome — but expectation is not a
+gate.
 
 
 ## 14. ★★ THE EVIDENCE GATE — measuring what the stream actually carries (2026-08-30, PR pending)

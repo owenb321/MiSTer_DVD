@@ -9,7 +9,14 @@ ini-driven and boot-static, and the mid-title `Auto` content detector died with 
 audio-skew problem. The fields RASTER this doc designed (the il_eff modeline branch,
 syncgen behavior, VGA_F1/ascal handling, the mid-stream `il_switch` flush) **still ships
 unchanged** and is what Video Output=Interlaced engages — only the option surface and the
-detector are gone. Rationale + field reports: `docs/field_parity.md`,
+detector are gone.
+⚠ **One exception, added 2026-09-03 (issue #42): the `il_switch` flush described in §"Fix"
+below is NO LONGER fired in place.** It froze the decoder — the trio landed mid-VOBU with
+no GOP boundary to re-lock on. `dvd/mode_realign.sv` now turns the edge into a reader seek
+at the current VOBU and lets `seek_ack` drive the same trio, so the flush lands on a
+boundary; the in-place path survives only as the fallback where no re-align is possible.
+The trio itself, and every word below about *why* all three legs are needed, is unchanged.
+See `docs/single_raster_analog.md` §6 and `docs/dvd_nav.md` §2c. Rationale + field reports: `docs/field_parity.md`,
 `docs/analog_dual_raster.md` status, roadmap "Video Output consolidation". The body below
 is kept as the engineering history of the raster design.
 
@@ -157,6 +164,9 @@ same three coordinated resets a chapter seek uses:
 Because the detector hysteresis is deep, Auto fires this ~once per title, so the brief
 (~1 s) re-lock glitch is acceptable. This also fixes the live manual On/Off toggle.
 `il_switch` bypasses `keep_vbuf` (a mode switch always needs the flush).
+⚠ **Amended 2026-09-03 (issue #42):** still true, but the flush is now issued *by a reader
+seek* rather than in place — see the header note. Firing it where the parse happened to be
+was the freeze.
 
 **Why the VBUF flush alone was not enough (2026-07-26 HW round 1):** the first version
 pulsed only `seek_flush`. That jumped video ~1 s **forward** (discarded the decode-ahead

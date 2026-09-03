@@ -320,15 +320,87 @@ worse maintenance burden than targeted in-place edits. So:
   `~analog_want` film gate was over-blunt — it removed the only way to watch 24p over
   HDMI with the CRT off, and it never bit anything else (Auto already resolves such a rig
   to Interlaced), so it now applies to the AUTO verdict only and `Film 24p Out = On`
-  overrides it; (b) ⚠ **PAL + a mid-title `Video Output` change can FREEZE the decoder**
+  overrides it; (b) ⚠ **a mid-title `Video Output` change can FREEZE the decoder**
   (malformed frame, never self-recovers, a chapter seek clears it, either direction,
   intermittent) — **PRE-EXISTING: v0.3.0 does the same on an `Analog Out` change**, so it
-  is NOT from this branch. Analysis + fix direction (re-align the reader to the next NAV
-  pack instead of flushing in place — the same mid-stream-flush trap as the reverted
-  film switch, `docs/film_24p_plan.md` §13): `docs/single_raster_analog.md` §6.
+  is NOT from this branch. ⚠ **First seen on PAL and recorded here as PAL-only; that was
+  WRONG — it reproduces on NTSC (2026-09-03), which is what disproved the `pal_eff`-only
+  hypothesis and pointed at the standard-neutral cause.** Now **🔧 FIXED (issue #42,
+  branch `fix/mode-switch-realign`), sim-proven RED/GREEN, ⏳ HW-confirm pending** — see
+  the mode-switch re-align bullet below and `docs/single_raster_analog.md` §6.
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
+- 🔧 **MODE-SWITCH READER RE-ALIGN + PAL/NTSC VERDICT HARDENING (2026-09-03, issue #42,
+  branch `fix/mode-switch-realign`) — sim-proven RED/GREEN, ⏳ HW-confirm pending
+  (gate = a PAL disc AND an NTSC disc, `Video Output` toggled mid-title both directions
+  ×20 each, plus the T2 menu→Play logo chain).** Fixes: a mid-title `Video Output` change
+  could freeze the decoder on a malformed frame with no self-recovery; a chapter seek
+  cleared it. Pre-existing (v0.3.0 does it on `Analog Out`).
+  ★★ **THE FIX WAS WRITTEN IN THE EXISTING COMMENT AND HAD BEEN READ AS HARMLESS FOR
+  MONTHS.** `emu.sv`'s `il_switch` block said: "the full flush is exactly what a chapter
+  seek does (HW-confirmed synced); the only difference is the reader doesn't jump, so
+  ps_demux re-hunts to the next pack boundary within the vbuf re-lock glitch." That
+  difference IS the bug — the decoder resumed **mid-VOBU with no GOP boundary to re-lock
+  on** — and the reason a chapter seek cured it is that a seek is the same trio **plus a
+  reader jump**. The clue was in the workaround the whole time. New `dvd/mode_realign.sv`
+  turns the edge into a **seek to the playhead's own VOBU** and lets `seek_ack` drive the
+  trio, so a mode switch is byte-identical to a chapter jump. `flush_ctl.mode_switch`
+  survives as the **fallback** (menus, raw `.m2v`, no trustworthy playhead, or an
+  unacknowledged seek) — `flush_ctl.sv` itself is unchanged.
+  ★ **"PAL-only" was a WRONG CONSTRAINT that shaped the first diagnosis.** The report,
+  this file, `docs/single_raster_analog.md` and the manual all said NTSC was unaffected,
+  which pointed straight at the PAL-only `pal_eff` feedback path. The maintainer then saw
+  it on NTSC. The cause is the standard-neutral mid-VOBU resume; `pal_eff` is one of TWO
+  garbage-header amplifiers and the other (`filmp_eff` via `film_det`) flips on either
+  standard. ⚠ Worth the habit: when a symptom is reported as specific to one
+  configuration, that specificity is a *hypothesis*, not a measurement.
+  ★ **Three design points, each learned the hard way elsewhere:** (1) the target is the
+  playhead's OWN VOBU because `dsi_nv_pck_lbn` already IS a NAV pack — the reader's snap
+  probe hits candidate #1 and moves nowhere; the next VOBU would walk forward a sector at
+  a time up to `NAV_CAP=1024` reads (`iso_reader_seek_tb` TEST9 **measures** the walk at
+  1 read/sector over three points: 3 / 4 / 8 reads, so the cost model is proven not
+  claimed). (2) **Edges are COALESCED** — `il_eff` is a level, so N toggles converge on
+  one raster and need ONE re-align; that makes the repeated-mid-parse-flush loop class
+  (the thing that killed the film edge) structurally unreachable, and is why a future
+  `filmp_eff` edge belongs here and never straight in `flush_ctl`. (3) `tgt_rbn` is
+  latched ONCE and gated on `dsi_fresh` — `nav_dsi` is on `pipe_rst_n`, so the re-align's
+  OWN `load_flush` zeroes the playhead and the reader's clamp would turn that into a jump
+  to the start of the title (the `dpad_seek` stale-table trap).
+  ★ **Leg 2 — `dvd/pal_detect.sv`:** `pal_detect_dec` latched on ANY non-zero
+  `vertical_size`, so one garbage header flipped `pal_eff` → a raster restart **with no
+  flush at all** (the walk keys on `il_eff | pal_eff | filmp_eff`; only `il_eff` carries
+  the trio) → `film_det` → `filmp_eff` → the walk again. Now a plausibility bound
+  (64…1152 lines — a BOUND, not a whitelist: flat `.mpg` files exist and 1080 is not a
+  multiple of 16) plus a **sustained**-disagreement requirement to CHANGE an established
+  verdict; the first header after a mount still latches immediately. The 2026-09-03
+  `!= 0` hold is subsumed. ⚠ **Confirmation is a TIMER, not a count of headers:**
+  `vertical_size` is a REGISTER, not an event — a real disc re-parses a sequence header
+  every GOP but writes the SAME value, so a transition-counting rule can never reach N
+  for a genuine change and would freeze the verdict forever. That design was written and
+  discarded before it shipped.
+  ★ **Both benches are built against the `bench-that-cannot-fail` failure mode.**
+  `pal_detect_tb` counts **verdict EDGES, not end states** — the pre-fix rule self-heals
+  on the next real header, so an end-state check PASSED the stray-header and churn
+  scenarios (measured RED: 12 walk kicks during a garbage burst, 2 for one stray header).
+  `mode_realign_chain_tb` runs the REAL reader over a synthetic disc and reads **the first
+  bytes delivered after the flush**: pre-fix `b0 b0 b0 b0` (mid-sector cell payload),
+  fixed `00 00 01 BA / BB / BF` (a NAV pack) — a property of the byte stream, not a
+  restatement of an RTL expression. Suite: `bench/dvd/run_mode_realign.sh` (`--red` runs
+  the pre-fix arms first). ⚠ `mode_realign_tb`'s first version failed all 11 scenarios
+  against correct RTL: blocking stimulus assignments landed **on** the clock edge and
+  raced the DUT, so every count read 0. Stimulus is driven from the negedge now.
+  ⚠ **The field-parity suites pass unchanged BY CONSTRUCTION, which is not evidence:**
+  they compile `resample_addrgen`/`mixer`/`syncgen` and never see `emu.sv`. The corrector
+  names an `il_switch` raster restart as one of its expected triggers, and what this
+  branch changes is the flush's TIMING relative to that restart — so the interaction is
+  HW-only and belongs in the same round.
+  ⚠ **No `modeline_boot_tb` phase was added, deliberately:** the walk is NOT gated on
+  `realign_pend` — `il_eff` still changes the instant the OSD bit does, so only the FLUSH
+  is deferred. The existing bench passing unchanged IS that evidence. **If HW still
+  freezes, the remaining suspect is the raster restart** and the next step is to gate
+  `il_out` on `~realign_pend` — one behavioural delta per round
+  (`docs/single_raster_analog.md` §3.9). Detail: `docs/single_raster_analog.md` §6.
 - ✅ **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
   `fix/field-parity-corrector`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED: round 1 gave
   the CRT ("always gets the fields right on the TV" where PR #40 was a coin flip) and

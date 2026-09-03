@@ -1130,6 +1130,12 @@ no async table indexing (the repeated 106%/226% ALM trap).
 
 ## Seeking / Phase 8 — chapter skip + time scrub (`feature/dvd-seek-chapters`)
 
+> **Three things reposition the reader through this machinery:** the user's chapter skip and
+> hold-to-seek scrub (§1, §2a), the opt-in D-Pad fixed-time seek (§2b), and — since
+> 2026-09-03 — a live `Video Output` change, which re-aligns to the current VOBU instead of
+> flushing mid-parse (§2c, issue #42). Anything new that wants to move the reader should
+> read §2c's arbitration and stale-playhead rules before adding a fourth.
+
 Phase 8 turns the Phase-7 DSI seek tables + the PGC program_map into two interactive
 transport actions, both built **on the existing cell-seek primitive** (block-boundary
 latch + `seek_ack` → the VBUF-flush/A/V-reanchor contract; see "Transport" above). A
@@ -1429,6 +1435,65 @@ T18–T20 the popup. `bench/dvd/run_dpad_seek.sh` runs the lot.
   (TEST5); a target whose next NAV is in the following cell re-selects that cell (TEST6,
   cross-cell); a NAV-free stretch falls back to the raw target when the probe budget
   (`NAV_CAP`) exhausts (TEST7) or the title end is reached (TEST8).
+
+### 2c. Mode-switch re-align — the third producer of a reader reposition (`dvd/mode_realign.sv`) — 🔧 issue #42, ⏳ HW-confirm pending
+
+Until 2026-09-03 the reader's raw-RBN seek port had exactly one producer (`scrub_ctrl`,
+with `dpad_seek` feeding its jump port). It now has two: a **live raster-mode change**
+(`Video Output`) issues one as well.
+
+**Why.** A mode switch used to fire the flush trio through `flush_ctl` **without moving
+the reader**, so the decoder resumed mid-VOBU with no GOP boundary and could freeze on a
+malformed frame (issue #42 — and it is not PAL-specific, despite the original report). A
+chapter seek cleared it because a seek is the same trio *plus* a reader jump. So the mode
+switch now becomes a seek and lets `seek_ack` drive the trio: the same contract §2a's
+scrub landings use, and the one that is HW-proven to re-sync cleanly.
+
+**The target is the playhead's own VOBU** — `dsi_nv_pck_lbn`, which already *is* a NAV-pack
+RBN. `S_NAV_SEEK` therefore hits on candidate #1 and snaps nowhere: **one sector read**.
+That is not an assumption; `bench/dvd/iso_reader_seek_tb.sv` TEST9 measures the probe walk
+at one read per candidate over three points (on-NAV 3 reads, one-short 4, five-short 8), so
+targeting the *next* VOBU instead would cost up to `NAV_CAP = 1024` reads. Re-reading the
+VOBU being parsed also re-supplies roughly what the VBUF flush discards, so nothing is
+skipped.
+
+**Arbitration lives in `mode_realign`, and the scrub always wins the mux.** Even in a state
+its FSM does not allow, the reader latches the user's target rather than the re-align's,
+and the resulting `seek_ack` completes the arm — self-healing, with no cycle in which the
+reader can see a pulse carrying the wrong target. `emu.sv` keeps `seek_rbn_pulse`/`seek_rbn`
+as the reader-facing names; `scrub_ctrl` now drives `scrub_seek_pulse`/`scrub_seek_rbn`.
+⚠ `hud_user_evt` must watch the **scrub's** pulse: a re-align is not a user transport
+action and must not pop the HUD.
+
+**Inherited rules, both load-bearing:**
+
+- The **stale-table rule** from §2b applies verbatim. `nav_dsi` is on `pipe_rst_n`, so any
+  `load_flush` — including the one this seek itself causes — zeroes `dsi_nv_pck_lbn`, and
+  the containing-cell clamp turns a zero target into a jump to the start of the title. The
+  base is gated on a `dsi_fresh` latch and latched exactly **once**, on the issuing cycle.
+- A **`keep_vbuf` ack is not a completion.** A menu→menu hop fires `load_flush` only, so it
+  does not give the mode switch the trio it needs; such an ack leaves the arm open and the
+  watchdog fires the in-place fallback — correct, because by then we are in a menu, where
+  the VOBU snap is bypassed anyway.
+
+**Where a re-align is impossible, behaviour is exactly as it was:** the menu domain, a raw
+`.m2v` (`lin_seek_ok_o` is already low for a bare elementary stream), a reader parked on a
+still, or a seek unacknowledged within ~0.5 s — all take `flush_ctl.mode_switch`, the
+in-place trio. Note `seek_jump` has **no state qualifier** (unlike `jump_go`), which is
+why `still_active` has to be excluded explicitly: a re-align would otherwise fire from
+`S_STILL` and restart a title-domain timed still.
+
+**Path exactness by media type:**
+
+| media | landing |
+|---|---|
+| DVD title (cell mode) | exact — the target is a NAV pack, snap is a no-op |
+| flat `.mpg` / `.VOB` | exact (`strm_blk <= ls_tgt`) **and** arms the `00 00 01 BA` pack hunt |
+| raw MODE2/2352 `.bin` (VCD/SVCD) | ≈ **0.07 % early** (`ls_sec = r − r/8 − r/256 − r/1024`), i.e. up to ~2–3 s of rewind late in a long image — the same landing every VCD scrub already produces |
+| raw `.m2v` | not seekable; takes the fallback |
+
+Design + the RED/GREEN evidence: `docs/single_raster_analog.md` §6. Suite:
+`bench/dvd/run_mode_realign.sh`.
 
 ### HW status — ✅ CONFIRMED (PR fj#96)
 
