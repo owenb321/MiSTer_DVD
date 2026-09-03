@@ -12,7 +12,8 @@ worth reading. The corrector (PR #37, `docs/field_parity.md`) is **DISABLED** pe
 real fix — `par_ins` is tied 0 in `dvd/resample_addrgen.v`. That re-opens the "super
 aliased after a chapter skip" coin flip it was written for, so fixing it properly is the
 next job; `bench/dvd/field_phase_tb.sv` is the gate that can tell a correct field phase
-from an inverted one.
+from an inverted one — ⚠ committed **unfinished** (it runs but prints no verdict; see its
+header), because it belongs with the corrector fix rather than with this branch.
 
 **HW round 6 (2026-09-03) — the follow-up sweep, all on the maintainer's rig:**
 line-21 captions ✅, overlays/subtitles/menus/HUD on the analog output ✅, sub-720 fill

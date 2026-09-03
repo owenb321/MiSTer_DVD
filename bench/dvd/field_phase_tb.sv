@@ -1,6 +1,15 @@
 /*
  * field_phase_tb.sv — do the two displayed fields actually carry DIFFERENT lines?
  *
+ * ⚠ WORK IN PROGRESS — DOES NOT YET PRODUCE A VERDICT. It elaborates and runs, but no
+ * window result is printed: `fld_n` is not advancing, so `wait_flds` never returns and
+ * the run ends on the global watchdog. Most likely the per-field hash stays 0 because
+ * the accumulate condition (`pixel_en_out` with address-derived data) is not what this
+ * harness actually presents — debug that first. It is committed unfinished ON PURPOSE:
+ * it is the designated gate for repairing the field-parity corrector (which is DISABLED
+ * in the RTL right now), and the reasoning below is the part worth keeping. Finish it
+ * with that work; do not treat a silent run as a pass.
+ *
  * WHY THIS EXISTS (2026-09-03, HW rounds 1-5). The field-parity corrector shipped with
  * a bench (bench/dvd/field_parity_tb.sv) that could not see the defect it introduced,
  * for two reasons worth remembering:
