@@ -77,6 +77,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/av_sync.sv
 # Flush/reset trigger matrix (extracted from emu.sv 2026-08-28 for TB coverage of
 # the mount/seek/jump/mode_switch flush trio). See bench/dvd/flush_ctl_tb.sv.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/flush_ctl.sv
+# PAL/NTSC verdict from the parsed frame height, hardened so a garbage sequence header
+# cannot flip it (issue #42 leg 2): a pal_eff change restarts the raster with NO flush.
+# See bench/dvd/pal_detect_tb.sv.
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/pal_detect.sv
 # Reference-read run-ahead prefetch (O[18]): single-bitstream A/B gate for the deepened
 # fwd/bwd motion-comp reference data fifos. See dvd/ref_dta_gate.sv / docs/motcomp_throughput.md.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ref_dta_gate.sv

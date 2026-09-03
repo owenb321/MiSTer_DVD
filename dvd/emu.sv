@@ -3600,23 +3600,39 @@ end
 // (clk_dec domain). 480 => NTSC, 576 => PAL. We derive a 1-bit "tall" flag and 2-FF
 // sync it into clk_sys, where pal_eff (below) resolves the Auto/NTSC/PAL override.
 wire [13:0] core_vertical_size;
-// DVD-FORK FIX (mpeg1): MPEG-1 PAL/SIF is 352x288 (288 = half of 576), which the
-// ">480" test misses — key on it explicitly. MPEG-1 NTSC/SIF is 240 (not >480, and
-// not 288), so it correctly stays NTSC.
-wire        pal_detect_raw = (core_vertical_size > 14'd480)    // PAL frame is 576 lines
-                          || (core_vertical_size == 14'd288);  // MPEG-1 PAL SIF (352x288)
-// DVD-FORK FIX (single-raster analog, 2026-09-03): HOLD the verdict while no sequence
-// header is in force. vertical_size is a VLD register on sync_rst, so every watchdog
-// expiry / mount soft reset zeroed it - and a PAL disc then read "NTSC" for the gap
-// until the next header: pal_eff flipped, the modeline walk re-fired (PAL->NTSC->PAL,
-// two raster restarts), and av_sync's STC tick rate went with it. Same trap the
-// film-switch post-mortem hit (a garbage 576-line parse flipping pal_eff mid-title,
-// docs/film_24p_plan.md §13). Last verdict held across resets; reset_n clears it.
-reg         pal_detect_dec;
-always @(posedge clk_dec or negedge reset_n) begin
-    if (!reset_n)                          pal_detect_dec <= 1'b0;
-    else if (core_vertical_size != 14'd0)  pal_detect_dec <= pal_detect_raw;
+// DVD-FORK FIX (issue #42 leg 2, 2026-09-03): the verdict rule moved to
+// dvd/pal_detect.sv so it is testbenchable (bench/dvd/pal_detect_tb.sv) and so the
+// two guards it now carries have somewhere to be explained. It replaces:
+//     wire pal_detect_raw = (vsize > 480) || (vsize == 288);
+//     always @(posedge clk_dec or negedge reset_n)
+//       if (!reset_n) pal_detect_dec <= 0; else if (vsize != 0) pal_detect_dec <= raw;
+// The `!= 0` hold (added 2026-09-03 for the watchdog/soft-reset gap) is SUBSUMED, not
+// dropped. What it did not cover: any NON-ZERO garbage height still flipped the verdict
+// from a single header, and a pal_eff change RESTARTS THE RASTER WITH NO FLUSH (the
+// modeline walk keys on il_eff | pal_eff | filmp_eff, but only il_eff carries the flush
+// trio) and feeds back through film_det -> filmp_eff -> the walk again. That amplifier
+// is how issue #42's mid-VOBU flush reached a freeze, and it is NOT PAL-only: film_det
+// flips on either standard. Now a height must be plausible AND, to CHANGE an already
+// established verdict, must still be in force half a second later. See the module
+// header for why that is a timer and not a count of sequence headers.
+// A mount is the ONE event that may legitimately change the standard, so it re-arms the
+// immediate latch. mount_flush is MOUNT-ONLY by design (dvd/flush_ctl.sv) - deliberately
+// not load_flush, which also fires on a mode switch, i.e. exactly when the parse is
+// least trustworthy. 2-FF into clk_dec, same pattern as vbuf_flush_dec above; the
+// 64-cycle clk_sys level is ~192 clk_dec cycles, far wider than the synchronizer.
+reg         mnt_arm_s1, mnt_arm_dec;
+always @(posedge clk_dec) begin
+    mnt_arm_s1  <= mount_flush;
+    mnt_arm_dec <= mnt_arm_s1;
 end
+wire        pal_detect_dec;
+pal_detect pal_detect_i (
+    .clk       (clk_dec),               // the domain vertical_size is parsed in
+    .rst_n     (reset_n),
+    .mount_arm (mnt_arm_dec),
+    .vsize     (core_vertical_size),
+    .pal       (pal_detect_dec)
+);
 reg         pal_det_s1, pal_det_s2;
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin pal_det_s1 <= 1'b0; pal_det_s2 <= 1'b0; end
