@@ -730,4 +730,9 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # field-parity corrector disabled, csync back to stock, Film 24p override): SEED 5 held
 # FIRST roll throughout -- the shipped build DVD_analogfinal_20260903_0235.rbf reads
 # clk_dec 96.44 @100C / 92.11 @-40C at 88% ALM. Eleventh consecutive first-roll fit.
+# 2026-09-03b (fix/field-parity-corrector, issue #41 -- the corrector re-enabled behind
+# a stability gate: two counters, a 6-bit and an 8-bit, replacing par_armed/par_tmo):
+# SEED 5 held FIRST roll again -- clk_dec 94.06 @100C / 91.29 @-40C at 88% ALM (36,906),
+# RAM 494/553, DSP 92/112. Twelfth consecutive first-roll fit. Build
+# DVD_parityfix_20260903_0450.rbf.
 set_global_assignment -name SEED 5
