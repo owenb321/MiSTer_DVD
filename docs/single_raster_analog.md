@@ -508,15 +508,24 @@ observation that relocates the remaining work. (It is an observation of appearan
 measurement — but it is the right shape, and it is the same reasoning that closed §3.9:
 when a build changes X and the symptom persists unchanged, X is exonerated.)
 
-**The residual is now tracked as [issue #45](https://github.com/owenb321/MiSTer_DVD/issues/45)**
-— *"Macroblocking for ~6 frames after any seek: reference frames survive the VBUF flush"*.
-Measured there from a 60 Hz HDMI recording: ~6 frames (~100 ms), on all four transport
-paths and every disc tried, with the target chapter decoding and in motion while the old
-scene bleeds through as residual. That last detail is what identifies it — motion
-compensation against stale references, not a corrupt picture. Root cause confirmed in the
-RTL: `motcomp_picbuf`'s `prev_i_p_frame_valid` is cleared only by `~rst` or a sequence end,
-never by a flush, so the reference slots survive a seek still holding the old scene and
-still flagged valid.
+**The residual was tracked as [issue #45](https://github.com/owenb321/MiSTer_DVD/issues/45)**
+— *"Macroblocking for ~6 frames after any seek: reference frames survive the VBUF flush"* —
+and is **🔧 FIXED (2026-09-03, branch `fix/seek-reference-realign`, sim-proven RED/GREEN,
+⏳ HW-confirm pending): `docs/seek_realign.md`.** Measured there from a 60 Hz HDMI
+recording: ~6 frames (~100 ms), on all four transport paths and every disc tried, with the
+target chapter decoding and in motion while the old scene bleeds through as residual. That
+last detail is what identifies it — motion compensation against stale references, not a
+corrupt picture.
+
+⚠ **This note originally named `motcomp_picbuf`'s `prev_i_p_frame_valid` as the root
+cause. That is only the DISPLAY half, and it is the smaller one.** The slots themselves
+carry **no valid bit at all** — `forward_reference_frame` / `backward_reference_frame` are
+pure pointers that `motcomp_addrgen` reads unconditionally — so what produced the reported
+*moving* residual is the landing GOP's leading B-pictures predicting from the surviving
+slot, which clearing a display flag does nothing about. The fix is one layer up, in
+`rtl/mpeg2/vld.v`: drop the landing GOP's leading predicted pictures until two post-flush
+anchors have re-established the references. Why *two*, and why the picbuf-side clear cannot
+be made to work from outside the mvec FIFO, are both in `docs/seek_realign.md`.
 
 **The original note, kept because it is the reasoning that got there:** `flush_ctl`'s trio discards
 *buffered* data but deliberately leaves the decode pipeline's state — `vld`/`getbits`/
@@ -529,17 +538,21 @@ first B-frames against frames from the *old* position. Same mechanism as the mid
 garbage (`docs/av_sync.md`), just bounded, because within one title the references are at
 least same-file.
 
-★ **And the switch blank changes the cost/benefit for the mode-switch case specifically.**
-The stated reason not to soft-reset on a seek is *display continuity* — the screen must
-hold the last frame while the decoder re-locks. During a blanked mode switch there is no
-display continuity to protect: the screen is black by design. So adding `mode_switch` (the
-fallback leg) **and** the re-align's `seek_ack` to `mount_flush` is now arguable for this
-path alone, and would remove the truncated frame and the stale references. ⚠ Two things to
-design against before trying it: the soft reset asserts `sync_rst`, which drops `dec_ready`
-and gates the modeline walk (§3.2's boot race) — the regfile is on `hard_rst` so the walk's
-writes survive, but the interaction wants a `modeline_boot_tb` phase before a build; and
-chapter skips would still be untouched, so it fixes the symptom on one path while leaving
-the class open. Not attempted; recorded so the next session starts from here.
+⛔ **SUPERSEDED (2026-09-03) — the proposal below was to extend `mount_flush` to the mode
+switch. Issue #45 was fixed in the vld instead, which covers all four transport paths
+rather than this one. Retained as the FALLBACK if the re-align proves insufficient on
+hardware.** ★ *The switch blank changes the cost/benefit for the mode-switch case
+specifically.* The stated reason not to soft-reset on a seek is *display continuity* — the
+screen must hold the last frame while the decoder re-locks. During a blanked mode switch
+there is no display continuity to protect: the screen is black by design. So adding
+`mode_switch` (the fallback leg) **and** the re-align's `seek_ack` to `mount_flush` is
+arguable for this path alone, and would remove the truncated frame as well as the stale
+references. ⚠ Two things to design against before trying it: the soft reset asserts
+`sync_rst`, which drops `dec_ready` and gates the modeline walk (§3.2's boot race) — the
+regfile is on `hard_rst` so the walk's writes survive, but the interaction wants a
+`modeline_boot_tb` phase before a build; and chapter skips would still be untouched, so it
+fixes the symptom on one path while leaving the class open. **That last objection is
+exactly what sent the fix to the vld:** the class is shared, so the fix should be too.
 
 ## 7. Follow-ups
 - **✅ Blank the video during a `Video Output` switch — IMPLEMENTED 2026-09-03 (user

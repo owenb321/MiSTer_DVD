@@ -366,17 +366,8 @@ worse maintenance burden than targeted in-place edits. So:
   jump**; once it is, it cannot carry a class of artifact a chapter seek does not. So a
   symptom that matches a chapter skip is the goal being MET, and it relocates the remaining
   work. ⚠ Do NOT re-chase it under issue #42.
-  Likely mechanism, for whoever picks it up: the trio discards BUFFERED data but leaves the
-  decode pipeline (`vld`/`getbits`/`motcomp`/`picbuf` are on `sync_rst`; `mount_flush` is
-  MOUNT-ONLY, *"NEVER on seeks/jumps/mode switches"*), so across any seek the in-flight
-  picture completes on the new stream's first start code (one truncated frame) and the old
-  references stay valid for an open-GOP VOBU's first B-frames. ★ **The blank changes the
-  argument for this path only:** the stated reason not to soft-reset on a seek is *display
-  continuity*, and during a blanked mode switch there is none to protect — so adding the
-  mode-switch/re-align acks to `mount_flush` is now arguable. ⚠ It would gate the modeline
-  walk via `dec_ready`/`sync_rst` (§3.2's boot race — the regfile survives on `hard_rst`,
-  but TB it in `modeline_boot_tb` first), and it would leave chapter skips untouched, i.e.
-  fix one path and leave the class open. Detail: `docs/single_raster_analog.md` §6.8. Fixes: a mid-title `Video Output` change
+  ✅ **ISSUE #45 IS NOW FIXED — see the POST-SEEK REFERENCE RE-ALIGN bullet below**
+  (`docs/seek_realign.md`); the mechanism guessed here was confirmed exactly. Fixes: a mid-title `Video Output` change
   could freeze the decoder on a malformed frame with no self-recovery; a chapter seek
   cleared it. Pre-existing (v0.3.0 does it on `Analog Out`).
   ★★ **THE FIX WAS WRITTEN IN THE EXISTING COMMENT AND HAD BEEN READ AS HARMLESS FOR
@@ -443,6 +434,69 @@ worse maintenance burden than targeted in-place edits. So:
   freezes, the remaining suspect is the raster restart** and the next step is to gate
   `il_out` on `~realign_pend` — one behavioural delta per round
   (`docs/single_raster_analog.md` §3.9). Detail: `docs/single_raster_analog.md` §6.
+- 🔧 **POST-SEEK REFERENCE RE-ALIGN (2026-09-03, issue #45, branch
+  `fix/seek-reference-realign`) — sim-proven RED/GREEN, ⏳ HW-confirm pending.**
+  Every seek (chapter skip, scrub release, D-Pad Seek, menu → Play) showed **~6 frames
+  (~100 ms)** of macroblocking. ★ **The detail that identified it was in the report:**
+  *"the target chapter is decoding and in motion during this macroblocking, but it has the
+  residual image overlayed"* — new content building correctly AND MOVING exonerates the
+  reader, the demux and the landing point; only the PREDICTION is wrong. A corrupt picture
+  would be one still-wrong frame, not a burst with coherent new motion.
+  **Root cause:** `flush_vbuf_eff` reaches exactly three sinks (`vbuf_rst`,
+  `frame_drop_ctl.flush`, `framestore.vb_flush`) and the decode pipeline is on `sync_rst`,
+  so `motcomp_picbuf`'s reference slots survive a seek holding the PRE-SEEK scene — and
+  those slots carry **no valid bit at all** (`forward/backward_reference_frame` are pure
+  pointers `motcomp_addrgen` reads unconditionally), so stale CONTENT is invisible to the
+  decoder by construction.
+  ★ **TWO anchors, not one, and the rotation is why:** picbuf assigns
+  `current_frame <= forward_reference_frame` while fwd/bwd swap, so the first post-flush I
+  only establishes the BACKWARD reference — forward still points at the old scene, which is
+  exactly what an open GOP's leading B's read; only the SECOND anchor overwrites that slot.
+  Two coded pictures × 3:2 ≈ the reported 6 display frames.
+  **Fix = `rtl/mpeg2/vld.v`** (one new input, `vbuf_flush` from `flush_vbuf_eff` — already
+  clk_dec, no new CDC): drop every non-I picture until the first I, then B's until the
+  second anchor, through the EXISTING governor suppression legs, so picbuf never sees them
+  and the display **actually holds** the last frame — which is what `flush_ctl.sv` always
+  claimed a seek did.
+  ★ **THE ARM MUST SIT BEFORE THE `clk_en` TERM.** `vld.clk_en` is `vld_en`, and
+  `motcomp.v:257-272` freezes the VLD at EVERY picture header until picbuf's display
+  handshake — **up to a whole display frame (~1.5 M clk_dec cycles)** — while the flush
+  level is ~192 clk_dec cycles. A `clk_en`-gated capture would miss it ROUTINELY, not
+  occasionally. Level-dominant for the window also coalesces repeated flushes for free.
+  ★ **Anchors are counted off the SAME node picbuf rotates on** (`hdr_upd_slot`, factored
+  out of `update_picture_buffers`): "count an anchor exactly when picbuf rotates" is then
+  true by construction, a field-coded I frame (two I field pictures) counts ONCE, and it
+  adds no new fan-out on `picture_structure` — the register physical synthesis mangled in
+  the Thayer `drops=0` round. No sibling pair-arm is needed: the predicate is identical at
+  both field headers, so pair atomicity is structural.
+  ★ **The ledger split is not hygiene:** `drop_this_picture` latches either reason but a new
+  `drop_gov_picture` feeds `drop_pic_ack`, else 2–3 unrequested credits per seek drive
+  `frame_drop_ctl` to `DEBT_FLOOR = -4` and the governor needs 6 lates before it may drop
+  again — during the post-seek re-lock, when it is most likely to be late.
+  ⛔ **`closed_gop` is REJECTED, not overlooked** (parsed at `vld.v:1477`, consumed by
+  nothing): it is a bit the ENCODER wrote, not a measurement — the `progressive_frame`
+  failure class again; a disc that lies would leave the defect present AND unfalsifiable.
+  ⛔ **The picbuf `prev_i_p_frame_valid` clear (issue #45's own "fix direction 1") is
+  INSUFFICIENT and was not done:** it suppresses the display of one stale anchor and does
+  nothing to `forward_reference_frame`. ★★ **And the durable rule it earned: anything that
+  must correct an `update_picture_buffers` decision either RIDES the mvec FIFO or is decided
+  in the vld — it cannot bypass the FIFO and arrive on time.** A direct wire can be re-set
+  by a queued PRE-flush anchor's update, and no bounded level defeats that (the queue can
+  take a whole field to drain because picbuf blocks on the display handshake).
+  ⚠ **Known residual, WRITTEN DOWN BEFORE THE BUILD:** the picture in flight at the flush
+  is truncated, owns a slot, and is displayed once — now held ~4 picture times instead of
+  ~1. Net trade: ~6 frames of macroblocked MOTION → ~1 torn frame held longer. **The HW
+  question is binary: is the old scene still visible IN MOTION as residual?**
+  **Gate: `bench/dvd/run_seek_realign.sh`** — real `vld` + `getbits` + `motcomp_picbuf` over
+  TWO cuts of a real title with a real reader jump at the flush, measuring **slot
+  provenance** (a shadow tag per picbuf slot; a post-flush picture predicting from a
+  pre-flush-tagged slot is a violation). Names no signal in the fix, so it cannot become a
+  golden model that agrees with its RTL. RED (`-Pseek_realign_tb.SEEK_REALIGN=0`) measures
+  `viol == meta[3]` = the fixture's leading-B count and reproduces a pristine-RTL run byte
+  for byte; GREEN is `viol == 0` AND `realign_drops == meta[3]` — asserted EXACTLY, because
+  dropping too much costs display frames at every seek. `tools/seek_fixture.py` REFUSES a
+  cut whose landing GOP is closed or has no leading B's (that fixture would make RED
+  measure zero and the gate vacuous). Detail: **`docs/seek_realign.md`**.
 - ✅ **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
   `fix/field-parity-corrector`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED: round 1 gave
   the CRT ("always gets the fields right on the TV" where PR #40 was a coin flip) and

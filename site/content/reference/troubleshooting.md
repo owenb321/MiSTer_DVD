@@ -162,18 +162,28 @@ never show this; it depends on the set.
 
 ### The picture blocks up briefly right after a chapter skip or seek
 
-Known and being tracked
-([issue #45](https://github.com/owenb321/MiSTer_DVD/issues/45)). For roughly six frames —
-about a tenth of a second — the new scene decodes and moves correctly but the old one
-shows through it as a blocky residual, then it clears on its own.
+!!! info "Unreleased"
+    Fixed in the development build; not in v0.3.0. On a release build you will still see
+    the artifact described below.
 
-It happens on every disc and on every way of jumping: chapter skip, Fast Fwd / Rewind,
-D-Pad Seek, and entering or leaving a menu. It is a decoder artifact, not a disc or a
-setting, so there is nothing to change and nothing to report unless it lasts appreciably
-longer than that or the picture does not recover.
+On v0.3.0, for roughly six frames — about a tenth of a second — the new scene decodes and
+moves correctly but the old one shows through it as a blocky residual, then it clears on
+its own. It happens on every disc and on every way of jumping: chapter skip, Fast Fwd /
+Rewind, D-Pad Seek, and entering or leaving a menu.
 
-Changing `Video Output` mid-title produces the same brief glitch on the way back in, for
-the same reason — see [Switching mid-title](../video/interlaced.md).
+It is a decoder artifact, not a disc or a setting: the player was still predicting each new
+picture from the scene it had just left ([issue
+#45](https://github.com/owenb321/MiSTer_DVD/issues/45)). The development build discards
+those pictures instead of showing them, so the last frame simply holds until the new scene
+is ready.
+
+**What remains on the development build** is much shorter: a single frame at the landing
+point can look torn, and it is held a little longer than a normal frame while the picture
+comes back. Report it if you see the old scene moving through the new one, if the blocking
+lasts appreciably longer than that, or if the picture does not recover on its own.
+
+Changing `Video Output` mid-title goes through the same landing sequence — see
+[Switching mid-title](../video/interlaced.md).
 
 ### A film disc keeps changing resolution, or judders
 
