@@ -2,8 +2,9 @@
 
 **Status (2026-09-03, branch `feature/single-raster-analog`): ✅ HW-CONFIRMED on the
 maintainer's rig — HDMI and the composite CRT both clean, no jumpy image, Main reporting a
-steady `720x480i @ 59.9` (build `releases/DVD_n64model_20260903_0148.rbf`, SEED 5,
-clk_dec 93.01 @100C / 88.94 @-40C, 88 % ALM, RAM 494/553).**
+steady `720x480i @ 59.9`. Shipping build after the round-6 fix:
+`releases/DVD_analogfinal_20260903_0235.rbf`, SEED 5 first roll, clk_dec 96.44 @100C /
+92.11 @-40C, 88 % ALM, RAM 494/553.**
 
 ★ **THE DEFECT WAS THE FIELD-PARITY CORRECTOR, NOT THE SYNC.** Five HW rounds chased sync
 shape on a wrong hypothesis; §3.9 is the post-mortem and it is the part of this document

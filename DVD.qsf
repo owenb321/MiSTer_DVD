@@ -726,4 +726,8 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # and two compares): SEED 5 held FIRST roll again -- clk_dec 91.40 @100C /
 # 90.26 @-40C at 88% ALM (36,945), RAM 494/553. Ninth consecutive first-roll
 # fit. Build DVD_singleraster2_20260902_1956.rbf (HW round 2 candidate).
+# 2026-09-03 (HW rounds 5-6 -- the half-line back on the main raster (N64 model), the
+# field-parity corrector disabled, csync back to stock, Film 24p override): SEED 5 held
+# FIRST roll throughout -- the shipped build DVD_analogfinal_20260903_0235.rbf reads
+# clk_dec 96.44 @100C / 92.11 @-40C at 88% ALM. Eleventh consecutive first-roll fit.
 set_global_assignment -name SEED 5
