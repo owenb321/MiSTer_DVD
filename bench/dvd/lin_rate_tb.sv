@@ -33,6 +33,7 @@ module lin_rate_tb;
     wire [23:0] blk10;
     wire        blk10_ok;
     wire [31:0] cur_time, total_time, prev_time;
+    wire [15:0] total_secs;
     wire        prev_ok, time_ok;
 
     lin_rate dut (
@@ -43,7 +44,7 @@ module lin_rate_tb;
         .prev_rbn(prev_rbn), .prev_req(prev_req),
         .blk10(blk10), .blk10_ok(blk10_ok),
         .cur_time(cur_time), .total_time(total_time), .prev_time(prev_time),
-        .prev_ok(prev_ok), .time_ok(time_ok)
+        .prev_ok(prev_ok), .total_secs(total_secs), .time_ok(time_ok)
     );
 
     integer errors = 0;
@@ -216,6 +217,12 @@ module lin_rate_tb;
         chk_time(cur_time,   1_117_500, rate_now, "clock: elapsed");
         chk_time(total_time, 2_160_000, rate_now, "clock: total");
         chk(cur_time[7:0] == 8'h00, "clock: frame byte clear");
+        // total_secs must agree with the BCD total it is published beside --
+        // seek_time caps a forward D-pad preview with it, so a disagreement
+        // would silently clamp a jump to the wrong place.
+        chk_time(total_time, 2_160_000, rate_now, "clock: total (bcd)");
+        chk(total_secs == ((2_160_000 * 10) / rate_now),
+            "clock: total_secs matches");
 
         // ---- T9: the clock on a raw CD uses the exact geometry -------------
         $display("TEST 9: raw CD clock");

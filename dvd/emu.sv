@@ -1596,6 +1596,7 @@ wire        lin_mode_w = lin_seek_ok_w && !cell_ready;
 wire [23:0] lin_blk10_w;                           // blocks per 10 s of file
 wire        lin_blk10_ok_w;
 wire [31:0] lin_cur_bcd_w, lin_tot_bcd_w, lin_prev_bcd_w;
+wire [15:0] lin_total_secs_w;
 wire        lin_time_ok_w, lin_prev_ok_w;
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),
@@ -4676,7 +4677,6 @@ seek_time seek_time_inst (
     .cellf_idx       (cellf_idx_w),
     .cellf_rbn       (cellf_rbn_w),
     .cellf_secs      (cellf_secs_w),
-    .title_secs      (title_secs_w),
     .title_first_rbn (title_first_rbn_w),
     .title_last_rbn  (title_last_rbn_w),
     // The D-pad's own request is an exact signed MM:S0, so its preview needs no
@@ -4690,7 +4690,12 @@ seek_time seek_time_inst (
     .chap_pgm        (hud_cur_ch),
     .bar_active      (bar_active_w),
     .bar_tgt_rbn     (bar_tgt_rbn_w),
-    .live_time       (whole_eltm_w),
+    // Mode-correct live position and title length, so the D-pad arm answers on
+    // a flat .mpg too -- it is the ONLY preview available during the coalesce
+    // window (bar_active is still low, so lin_rate has no target to resolve),
+    // and a flat file is exactly where D-Pad Seek was just fixed.
+    .live_time       (lin_time_ok_w ? lin_cur_bcd_w  : whole_eltm_w),
+    .title_secs      (lin_time_ok_w ? lin_total_secs_w : title_secs_w),
     .prev_time       (seek_prev_time_w),
     .prev_ok         (seek_prev_ok_w)
 );
@@ -4724,13 +4729,19 @@ lin_rate lin_rate_inst (
     .total_time    (lin_tot_bcd_w),
     .prev_time     (lin_prev_bcd_w),
     .prev_ok       (lin_prev_ok_w),
+    .total_secs    (lin_total_secs_w),
     .time_ok       (lin_time_ok_w)
 );
 
 wire [31:0] hud_time_live = lin_time_ok_w ? lin_cur_bcd_w
                           : (cell_ready ? whole_eltm_w : dsi_c_eltm);
-wire        hud_prev_ok   = lin_mode_w ? lin_prev_ok_w  : seek_prev_ok_w;
-wire [31:0] hud_prev_time = lin_mode_w ? lin_prev_bcd_w : seek_prev_time_w;
+// A D-pad gesture is answered by seek_time in EITHER mode (its delta arm needs
+// no map, and nothing else can answer before the gesture resolves to a target);
+// everything else comes from whichever module owns the position->time map.
+wire        hud_prev_ok   = dpad_pend ? seek_prev_ok_w
+                          : lin_mode_w ? lin_prev_ok_w  : seek_prev_ok_w;
+wire [31:0] hud_prev_time = dpad_pend ? seek_prev_time_w
+                          : lin_mode_w ? lin_prev_bcd_w : seek_prev_time_w;
 
 transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .clk          (clk_sys),

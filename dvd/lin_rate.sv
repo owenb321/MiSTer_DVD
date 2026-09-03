@@ -109,6 +109,8 @@ module lin_rate #(
     output reg  [31:0] total_time,
     output reg  [31:0] prev_time,
     output reg         prev_ok,
+    output reg  [15:0] total_secs,      // the same total, in seconds -- the cap
+                                        // dvd/seek_time.sv's D-pad arm needs
     output reg         time_ok
 );
 
@@ -176,6 +178,8 @@ module lin_rate #(
     // seconds -> BCD by repeated subtraction (the dpad_seek MM:SS trick), which
     // yields the DIGITS directly, so no separate binary-to-BCD pass is needed.
     reg  [15:0] sec_t;
+    reg  [15:0] sec_t_l;                // the clamped seconds, before the digits
+                                        // consume sec_t
     reg  [3:0]  bcd_h, bcd_mt, bcd_mo, bcd_st;
     reg  [2:0]  sec_st;
 
@@ -195,10 +199,11 @@ module lin_rate #(
             div_i <= 6'd0;
             d_blk_l <= 32'd0; d_pts_l <= 21'd0; prev_rbn_l <= 32'd0;
             prev_new <= 1'b0; tot_seen <= 1'b0; cur_seen <= 1'b0; ok_d <= 1'b0;
-            sec_t <= 16'd0; bcd_h <= 4'd0; bcd_mt <= 4'd0; bcd_mo <= 4'd0;
+            sec_t <= 16'd0; sec_t_l <= 16'd0;
+            bcd_h <= 4'd0; bcd_mt <= 4'd0; bcd_mo <= 4'd0;
             bcd_st <= 4'd0; sec_st <= 3'd0;
             cur_time <= 32'd0; total_time <= 32'd0; prev_time <= 32'd0;
-            prev_ok <= 1'b0; time_ok <= 1'b0;
+            total_secs <= 16'd0; prev_ok <= 1'b0; time_ok <= 1'b0;
         end else begin
             ok_d <= blk10_ok;
             // ---- measurement -------------------------------------------
@@ -207,6 +212,7 @@ module lin_rate #(
                 cur_seen <= 1'b0; tot_seen <= 1'b0; prev_new <= 1'b0;
                 ok_d     <= 1'b0;
                 cur_time <= 32'd0; total_time <= 32'd0; prev_time <= 32'd0;
+                total_secs <= 16'd0;
             end else if (flush || !en) begin
                 // the position jumped; the file's rate did not. Keep it.
                 win_open <= 1'b0;
@@ -306,6 +312,7 @@ module lin_rate #(
                     case (sec_st)
                         3'd0: begin                       // load + clamp
                             sec_t  <= sec_cap;
+                            sec_t_l<= sec_cap;                // kept for total_secs
                             bcd_h  <= 4'd0; bcd_mt <= 4'd0;
                             bcd_mo <= 4'd0; bcd_st <= 4'd0;
                             sec_st <= 3'd1;
@@ -335,7 +342,9 @@ module lin_rate #(
                         J_PREV: begin prev_time  <= bcd_out;
                                       prev_ok    <= prev_req && prev_new; end
                         J_CUR:  begin cur_time   <= bcd_out; cur_seen <= 1'b1; end
-                        default:begin total_time <= bcd_out; tot_seen <= 1'b1; end
+                        default:begin total_time  <= bcd_out;
+                                      total_secs  <= sec_t_l;
+                                      tot_seen    <= 1'b1; end
                     endcase
                     st <= S_IDLE;
                 end

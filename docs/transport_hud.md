@@ -209,7 +209,10 @@ cannot disagree.
 | held scrub / resolved jump | bracket the RBN between two cells and interpolate: `secs = lo + ((hi−lo)·q)>>8`, `q = (off<<8)/cell_span` | ± seconds |
 
 The D-pad arm is the only one available during the coalesce window, before a
-target RBN exists.
+target RBN exists — which is why emu routes a D-pad gesture to `seek_time` in
+**either** mode, feeding it a mode-correct `live_time` and `title_secs`
+(`lin_rate.total_secs` on a linear file). Its delta arm needs no map, so it
+answers on a flat `.mpg` where the cell shadows are empty.
 
 ⛔ **Rejected: scaling the title's total by the bar's own 0..512 fraction.** Far
 cheaper — that fraction is already computed — but it assumes a constant bitrate
