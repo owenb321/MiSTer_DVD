@@ -569,19 +569,49 @@ module resample_addrgen (
    *    seek-released tff break BEFORE a single wrong field displays.
    *  - FEEDBACK (par_fb): the mixer reports the on-screen frame-top landed on the
    *    wrong raster parity (raster_par_err, 2-FF synced level). Catches what the
-   *    schedule cannot see: cold start, raster restarts, underflow slips. par_armed is
-   *    a hysteresis one-shot so the field-rate feedback latency (~1-2 refreshes + CDC)
-   *    cannot double-insert: one insertion per error assertion, re-armed when the
-   *    error level clears, plus a 4-refresh timeout re-arm for liveness in case an
-   *    insertion was absorbed while the level stayed high.
+   *    schedule cannot see: cold start, raster restarts, underflow slips. Gated by
+   *    PAR_CONFIRM (see below) so it only acts on an error that has HELD — its cure
+   *    costs a repeated field, and chasing a churning error at field rate is worse
+   *    than the error.
    * Design + RED-testbench evidence: docs/field_parity.md. */
   wire       nxt_first_top = progressive_sequence ? 1'b1 : top_field_first; // first field the pending pickup would emit (mirrors the image-build branches)
   wire       alt_break = interlaced &&
                          (((last_image == TOP)    &&  nxt_first_top) ||
                           ((last_image == BOTTOM) && ~nxt_first_top));
-  reg        par_armed;
-  reg  [2:0] par_tmo;                  // completed refreshes since insertion while the error level stays high
-  wire       par_fb   = interlaced && raster_par_err && par_armed &&
+  /* ★ THE FEEDBACK ARM ONLY ACTS ON A *STABLE* ERROR (2026-09-03, issue #41 — this is
+   * the fix that let the corrector be re-enabled). Its cure costs a REPEATED FIELD:
+   * re-showing last_image is the only insertion that lands the resumed stream aligned
+   * (inserting the opposite field keeps the misalignment and manufactures an alternation
+   * break for alt_break to un-fix — the livelock noted above). One repeated field per
+   * genuine phase flip is a fair price; several a second is NOT — that is a still
+   * measuring +0.00 field offset where a correct interlaced still measures +0.50, which
+   * is exactly what shipped in PR #37 and had to be withdrawn.
+   * The trigger it must not chase is a STARVED raster field: when the pixel queue runs
+   * dry at a frame-top opportunity the mixer displays nothing there and every following
+   * content field lands one slot late, so the parity error is REAL — but this core is
+   * compute-bound on heavy content and does that repeatedly, and each starve flips the
+   * phase back and forth. Correcting churn at field rate is worse than the churn.
+   * So: require the error level to hold across PAR_CONFIRM completed refreshes before
+   * inserting. A genuine phase flip (cold start, an il_switch/aspect raster restart, an
+   * underflow slip that is not part of a burst) is a STEP — it persists until corrected,
+   * so it heals ~0.5 s in and stays healed. Churn resets the count and is ignored.
+   * This also subsumes the old par_armed/par_tmo hysteresis: after an insertion the count
+   * restarts, so the feedback latency (~1-2 refreshes + CDC) can never double-insert, and
+   * insertions are inherently >= PAR_CONFIRM refreshes apart.
+   * The FEED-FORWARD arm below is deliberately NOT gated this way: it inserts the
+   * OPPOSITE field, so it can never repeat one, and it must act before a wrong field
+   * displays. */
+  localparam [5:0] PAR_CONFIRM = 6'd30;   // refreshes (~0.5 s at 59.94) the error must hold
+  localparam [7:0] PAR_HOLD    = 8'd120;  // refreshes (~2 s) between feedback insertions
+  reg  [5:0] par_cnt;                     // consecutive completed refreshes with the error asserted
+  reg  [7:0] par_age;                     // refreshes since the last FEEDBACK insertion (saturating)
+  wire       par_stable = (par_cnt == PAR_CONFIRM);
+  /* Second guard, belt to PAR_CONFIRM's braces: whatever the starvation rate turns out
+   * to be on a given disc, a repeated field can never appear more often than once per
+   * PAR_HOLD refreshes. PAR_CONFIRM alone bounds it at one per 30 refreshes (2/s), which
+   * is still inside the range that reads as judder. Feed-forward insertions do NOT spend
+   * this budget — they never repeat a field. */
+  wire       par_fb   = interlaced && raster_par_err && par_stable && (par_age == PAR_HOLD) &&
                         ((last_image == TOP) || (last_image == BOTTOM));
   /* XOR, not OR — the triggers CANCEL when simultaneous. Slot arithmetic (fields land
    * on strictly alternating raster slots; a frame-top is accepted at whichever slot
@@ -593,18 +623,11 @@ module resample_addrgen (
    * misaligned lands the new head aligned by itself — two wrongs make a right,
    * insert nothing. Inserting "opposite" on a par_fb would keep the misalignment AND
    * manufacture a new alternation break for alt_break to un-fix — a livelock. */
-  /* ⛔ DISABLED 2026-09-03 (HW round 5) pending root-cause. MEASURED on hardware: with
-   * the corrector active the two displayed fields carry content at the SAME vertical
-   * phase (screenshot analysis of a still: field offset +0.00 frame lines, where a
-   * correct interlaced still measures +0.50) — weave combs and bob jumps a field line.
-   * v0.3.0 `Analog Out = Native Fields`, the same content path WITHOUT this corrector,
-   * measures +0.50 and is clean. Both arms are suppressed here so the field schedule is
-   * exactly v0.3.0's; the logic is left in place (and prunes) so the fix can re-enable it
-   * once bench/dvd/field_phase_tb.sv can tell a right phase from a wrong one — the
-   * existing field_parity_tb encodes the same convention as the RTL, so it agreed with
-   * the defect. Re-opens the "super aliased after a chapter skip" coin flip
-   * (docs/field_parity.md) until then. */
-  wire       par_ins  = 1'b0 && (alt_break ^ par_fb);             // insert one field instead of picking up
+  /* Re-enabled 2026-09-03 with the PAR_CONFIRM gate above (issue #41). It was tied 0
+   * between PR #40 and that fix because the ungated feedback arm repeated a field
+   * several times a second on real content; bench/dvd/field_phase_tb.sv scenario [6]
+   * is the regression guard (it starves the pixel queue and budgets the repeats). */
+  wire       par_ins  = alt_break ^ par_fb;                       // insert one field instead of picking up
   wire       par_slip = (state == STATE_INIT) && ofv_pickup && par_ins;  // the insertion event
   /* Qualified pickup: every pickup-conditioned latch below consumes THIS instead of
    * ofv_pickup, so on an insertion cycle the pending frame stays unconsumed (picked up
@@ -612,21 +635,25 @@ module resample_addrgen (
    * it must still advance to scan the inserted field. */
   wire       pickup_go = ofv_pickup && ~par_ins;
 
+  /* PAR_CONFIRM stability counter: one tick per completed image scan (the same refresh
+   * event the governor counts), cleared whenever the mixer's verdict clears — so the
+   * count only reaches PAR_CONFIRM for an error that held that whole time — and cleared
+   * by an insertion, so the next one is at least PAR_CONFIRM refreshes away. */
+  wire       refresh_done = (state == STATE_NEXT_MB) && last_mb && last_y;
   always @(posedge clk)
-    if (~rst) begin
-      par_armed <= 1'b1;
-      par_tmo   <= 3'd0;
-    end else if (clk_en) begin
-      if (par_slip) begin
-        par_armed <= 1'b0;             // one insertion per error assertion
-        par_tmo   <= 3'd0;
-      end else if (~raster_par_err) begin
-        par_armed <= 1'b1;             // error observed clear: re-arm
-        par_tmo   <= 3'd0;
-      end else if (~par_armed && (state == STATE_NEXT_MB) && last_mb && last_y) begin
-        if (par_tmo == 3'd4) par_armed <= 1'b1;   // liveness: level stuck high 4 shown refreshes after an insertion
-        else                 par_tmo   <= par_tmo + 3'd1;
-      end
+    if (~rst) par_cnt <= 6'd0;
+    else if (clk_en) begin
+      if (par_slip || ~raster_par_err)             par_cnt <= 6'd0;
+      else if (refresh_done && ~par_stable)        par_cnt <= par_cnt + 6'd1;
+    end
+
+  /* par_age starts SATURATED so the first correction of a session (the cold-start
+   * landing, the one case the schedule cannot see at all) is not delayed by the budget. */
+  always @(posedge clk)
+    if (~rst) par_age <= PAR_HOLD;
+    else if (clk_en) begin
+      if (par_slip && par_fb)                      par_age <= 8'd0;
+      else if (refresh_done && (par_age != PAR_HOLD)) par_age <= par_age + 8'd1;
     end
 
   reg par_late_r;                      // hand the inserted refresh to the frame-drop ledger (cad_late_r pattern)
