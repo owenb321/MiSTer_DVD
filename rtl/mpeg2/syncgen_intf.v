@@ -236,7 +236,13 @@ module syncgen_intf
 
   always @(posedge clk)
     if (~rst) syncgen_horizontal_resolution <= 12'b0;
-    else if (clk_en) syncgen_horizontal_resolution <= dot_pixel_repetition ? {dot_horizontal_resolution[10:0], 1'b1} : dot_horizontal_resolution;
+    /* DVD-FORK FIX (single-raster analog, 2026-09-03): horizontal_resolution is a COUNT
+     * (sync_gen blanks at h_cntr >= resolution => `resolution` active dots), so under
+     * pixel repetition it doubles as 2x, NOT 2x+1 like the length-style registers below
+     * (those hold "last index" values, where 2x+1 is exact). 720 -> 1440 active dots.
+     * The old {x,1'b1} gave 1441, which only showed while no sequence header had set
+     * horizontal_size (idle logo / after a decoder reset) - the "1441x478i" MiSTer report. */
+    else if (clk_en) syncgen_horizontal_resolution <= dot_pixel_repetition ? {dot_horizontal_resolution[10:0], 1'b0} : dot_horizontal_resolution;
     else syncgen_horizontal_resolution <= syncgen_horizontal_resolution;
 
   always @(posedge clk)
@@ -256,7 +262,14 @@ module syncgen_intf
 
   always @(posedge clk)
     if (~rst) syncgen_horizontal_halfline <= 12'b0;
-    else if (clk_en) syncgen_horizontal_halfline <= dot_pixel_repetition ? {dot_horizontal_halfline[10:0], 1'b1}     : dot_horizontal_halfline;
+    /* DVD-FORK FIX: the half-line is a DOT POSITION (sync_gen samples the vertical-sync
+     * window at h_cntr == halfline on the second field), so under pixel repetition it
+     * doubles as 2x, NOT 2x+1 like the "last index" registers: 429 -> 858 = exactly half
+     * of the 1716-dot line. The upstream 2x+1 landed it one dot late, and turned the
+     * modeline's halfline 0 into 1 (nonzero), which is how the 262/263 alternation used
+     * to get armed by accident — syncgen.v arms that on `interlaced` alone since
+     * 2026-08-02, so 0 -> 0 here is safe. */
+    else if (clk_en) syncgen_horizontal_halfline <= dot_pixel_repetition ? {dot_horizontal_halfline[10:0], 1'b0}     : dot_horizontal_halfline;
     else syncgen_horizontal_halfline <= syncgen_horizontal_halfline;
 
   /* 

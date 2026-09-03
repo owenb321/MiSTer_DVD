@@ -42,9 +42,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/ps_demux.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/disp_hstretch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/disp_vscale.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/crt_ov_map.sv
-# dual-raster analog output: progressive -> 15 kHz 480i/576i second raster (VGA2_*)
-set_global_assignment -name SYSTEMVERILOG_FILE dvd/re_interlace.sv
+# (dvd/re_interlace.sv — the dual-raster second 15 kHz raster — DELETED 2026-09-03:
+#  the analog pins take the main half-line 480i/576i raster, docs/single_raster_analog.md)
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/cc_line21.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/cc_vbi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ps_stream_fifo.sv
 # AC-3 reframer: re-frame demuxed AC-3 on 0x0B77 boundaries so audio_ring drops
 # whole AC-3 frames (clean) instead of PES chunks (pop). See dvd/ac3_reframer.sv.
@@ -714,4 +715,19 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ~8-line emu select register + gated crt_ov_map enables, no module changes):
 # SEED 5 held FIRST roll again -- clk_dec 94.63 @100C / 90.56 @-40C. Seventh
 # consecutive first-roll fit. Build DVD_subraw_20260902_1440.rbf.
+# 2026-09-02d (feature/single-raster-analog -- dvd/re_interlace.sv + the sys_top
+# VGA2 block DELETED, dvd/cc_vbi.sv added, syncgen half-line/vsync anchoring,
+# syncgen_intf on dot_hard_rst, hps_io cfg_seen/cfg_wr, O[2] third row): SEED 5
+# held FIRST roll again -- clk_dec 91.76 @100C / 88.35 @-40C at 88% ALM (36,880),
+# RAM 494/553 (89%, was 506 -- the re_interlace line buffer + its second
+# sync_gen), block memory 62%. Eighth consecutive first-roll fit. Build
+# DVD_singleraster_20260902_1902.rbf.
+# 2026-09-02e (same branch + the 2H-serration csync in sys_top -- one 16-bit reg
+# and two compares): SEED 5 held FIRST roll again -- clk_dec 91.40 @100C /
+# 90.26 @-40C at 88% ALM (36,945), RAM 494/553. Ninth consecutive first-roll
+# fit. Build DVD_singleraster2_20260902_1956.rbf (HW round 2 candidate).
+# 2026-09-03 (HW rounds 5-6 -- the half-line back on the main raster (N64 model), the
+# field-parity corrector disabled, csync back to stock, Film 24p override): SEED 5 held
+# FIRST roll throughout -- the shipped build DVD_analogfinal_20260903_0235.rbf reads
+# clk_dec 96.44 @100C / 92.11 @-40C at 88% ALM. Eleventh consecutive first-roll fit.
 set_global_assignment -name SEED 5

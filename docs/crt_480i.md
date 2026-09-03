@@ -1,7 +1,12 @@
 # CRT 480i — native 15 kHz interlaced composite output (O[14])
 
 > **⛔ SUPERSEDED (2026-07-29, branch `feature/analog-dual-raster`) by the DUAL-RASTER
-> analog output — see `docs/analog_dual_raster.md`.** The whole-core CRT mode this
+> analog output — see `docs/analog_dual_raster.md`. ★ 2026-09-03: the dual raster is
+> itself retired and THIS document's architecture is back in a different coat: the
+> interlaced main raster carries the N64 half-line (§2) and drives the analog pins
+> directly — with pixel repetition (1440 @ 27 MHz, CE_PIXEL one clock per pair) instead
+> of §3's 13.5 MHz dot pacing, and vsync anchored on the hsync leading edge. See
+> `docs/single_raster_analog.md`.** The whole-core CRT mode this
 > document describes (O[14] toggle, 13.5 MHz `dot_ce` main-raster pacing, the CRT
 > branch of the modeline walk, `VGA_SCALER=~crt_eff`) is REMOVED: the 15 kHz raster is
 > now a second, simultaneous output (`dvd/re_interlace.sv` → `VGA2_*`) auto-engaged

@@ -1,33 +1,40 @@
 /*
- * cc_e2e_tb.sv — closed captions END TO END: re_interlace's own output pins,
- * demodulated by a television model.
+ * cc_e2e_tb.sv — closed captions END TO END on the MAIN raster: the core's own
+ * output pins, demodulated by a television model.
  *
  * WHY THIS BENCH EXISTS (round 3, 2026-08-26): every caption bench drove the
  * pieces separately — cc_line21_tb drives the inserter's ports, cc_field_map_tb
- * drives sync_gen, re_interlace_tb holds cc_enable low. So when an edit deleted
- * the cc_vline/cc_line wire declarations inside re_interlace, Verilog silently
- * created an undriven implicit net, Quartus tied it to ground, the whole caption
- * chain went dead on hardware — and every bench still passed. The wiring BETWEEN
- * the proven pieces was the only untested thing, and it was the thing that broke.
+ * drives sync_gen. So when an edit deleted the cc_vline/cc_line wire declarations
+ * inside the (then) re_interlace wrapper, Verilog silently created an undriven
+ * implicit net, Quartus tied it to ground, the whole caption chain went dead on
+ * hardware — and every bench still passed. The wiring BETWEEN the proven pieces
+ * was the only untested thing, and it was the thing that broke.
  *
- * So this bench treats re_interlace exactly as the analog chain does: the synthetic
- * pixrep NTSC fields main raster in (fieldpass-only since the 2026-09-02 Video
- * Output consolidation), caption pairs injected on a separate producer
- * clock, and the ONLY signals observed are out_r/out_hs/out_vs/out_de/out_ce —
- * the pins. The checker is a TV model:
+ * 2026-09-03 (single-raster analog): the second raster is gone. The captions now
+ * ride the interlaced MAIN raster's VBI through dvd/cc_vbi.sv and the registered
+ * output stage in dvd/emu.sv. This bench builds that exact chain: the REAL
+ * rtl/mpeg2/syncgen.v with the interlaced modeline as syncgen sees it (pixel
+ * repetition doubled, halfline 858), the REAL dvd/cc_vbi.sv on its coordinates,
+ * and a copy of emu.sv's output stage (caption level outside DE, black elsewhere,
+ * CE_PIXEL = one clock per pixrep pair). Caption pairs are injected on a separate
+ * producer clock, and the ONLY signals observed are the pins. The checker is a TV
+ * model, sampling at the pixel enable (858 samples per line):
  *
- *   [1] finds caption bursts in the VBI (never during out_de),
- *   [2] classifies each field by its vsync leading-edge alignment to hsync
- *       (SMPTE 170M: line-aligned = field 1, mid-line = field 2),
+ *   [1] finds caption bursts in the VBI (never during DE),
+ *   [2] classifies each field by the raster's own field marker (v_pos[0] = ~VGA_F1);
+ *       that it is the broadcast field 1 is proven by cc_field_map_tb (sync signature)
+ *       and csync_field_tb (the analog pin),
  *   [3] demodulates each burst (slice at ~25 IRE, sample at bit centres) and
  *       requires the FIELD-1 pair on the field-1 line and the FIELD-2 pair on
  *       the field-2 line — the full slot-routing contract at the pins,
  *   [4] requires the burst to sit 17 lines after the vsync leading edge
- *       (v_cntr 244 -> 261 = broadcast line 21's position in this raster).
+ *       (v_cntr 244 -> 261 = broadcast line 21's position in this raster),
+ *   [5] the pixel-enable contract: exactly 720 enabled samples inside DE per
+ *       active line (Main reports 720x480i), DE 1440 clocks wide.
  *
  * Build:
  *   iverilog -g2012 -I rtl/mpeg2 -o bench/dvd/cc_e2e_sim \
- *       rtl/mpeg2/syncgen.v dvd/re_interlace.sv dvd/cc_line21.sv \
+ *       rtl/mpeg2/syncgen.v dvd/cc_vbi.sv dvd/cc_line21.sv \
  *       rtl/mpeg2/wrappers.v rtl/mpeg2/xilinx_fifo_dc.v rtl/mpeg2/xfifo_sc.v \
  *       rtl/mpeg2/xilinx_fifo_sc.v bench/dvd/cc_e2e_tb.sv
  *   vvp bench/dvd/cc_e2e_sim
@@ -35,61 +42,52 @@
 `include "timescale.v"
 
 module cc_e2e_tb;
-
   // ---------------------------------------------------------------- clocks
   reg clk = 0;  always #5 clk = ~clk;          // "27 MHz"
   reg dec_clk = 0; always #3 dec_clk = ~dec_clk;
-  reg ce2 = 0;  always @(posedge clk) ce2 <= ~ce2;
+  reg rst_n = 0;
 
-  // ---------------------------------------------------------------- DUT
-  reg         rst_n = 0;
-  reg  [7:0]  in_r, in_g, in_b;
-  reg         in_de;
-  reg  [11:0] in_hpos, in_vpos;
-  wire [7:0]  out_r, out_g, out_b;
-  wire        out_hs, out_vs, out_de, out_ce, locked, cc_active;
+  // ---------------------------------------------------------------- the raster
+  wire [11:0] h_pos, v_pos;
+  wire        pixel_en, h_sync, v_sync, c_sync_u, h_blank, v_blank;
+  sync_gen sg (
+    .clk(clk), .clk_en(1'b1), .rst(rst_n),
+    .horizontal_size(14'd1440), .vertical_size(14'd480),
+    .display_horizontal_size(14'd0), .display_vertical_size(14'd0),
+    .horizontal_resolution(12'd1440),
+    .horizontal_sync_start(12'd1471), .horizontal_sync_end(12'd1595),
+    .horizontal_length(12'd1715),
+    .vertical_resolution(12'd480),
+    .vertical_sync_start(12'd244), .vertical_sync_end(12'd247),
+    .horizontal_halfline(12'd858), .vertical_length(12'd261),
+    .interlaced(1'b1), .clip_display_size(1'b0),
+    .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
+    .h_sync(h_sync), .v_sync(v_sync), .c_sync(c_sync_u),
+    .h_blank(h_blank), .v_blank(v_blank));
 
+  // ---------------------------------------------------------------- DUT wiring
   reg         dec_pair_valid = 0;
   reg  [15:0] dec_pair = 0;
   reg         dec_pair_field = 0;
+  wire [7:0]  cc_level;
+  wire        cc_on, cc_active;
+  cc_vbi dut (
+    .clk(clk), .rst_n(rst_n),
+    .dec_clk(dec_clk), .dec_pair_valid(dec_pair_valid),
+    .dec_pair(dec_pair), .dec_pair_field(dec_pair_field),
+    .enable(1'b1), .test(1'b0), .flush(1'b0), .pal(1'b0),
+    .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
+    .level(cc_level), .on(cc_on), .active(cc_active));
 
-  re_interlace dut (
-    .clk(clk), .rst_n(rst_n), .ce2(ce2),
-    .enable(1'b1), .pal(1'b0),
-    .in_r(in_r), .in_g(in_g), .in_b(in_b), .in_de(in_de),
-    .in_hpos(in_hpos), .in_vpos(in_vpos),
-    .out_r(out_r), .out_g(out_g), .out_b(out_b),
-    .out_hs(out_hs), .out_vs(out_vs), .out_de(out_de),
-    .out_ce(out_ce), .locked(locked),
-    .cc_enable(1'b1), .cc_test(1'b0), .cc_flush(1'b0), .dec_clk(dec_clk),
-    .cc_pair_valid(dec_pair_valid), .cc_pair(dec_pair),
-    .cc_pair_field(dec_pair_field), .cc_active(cc_active)
-  );
-
-  // -------------------------- synthetic NTSC fields main raster (pixrep 480i)
-  // The interlaced main raster the decoder emits under Video Output = Interlaced:
-  // 1716-dot lines, fields alternating 262/263 lines, active 1440 dots (each source
-  // pixel sent twice) x 240 lines/field; v_pos = the absolute frame line
-  // (2*v_cntr + field). This is the only source raster the fieldpass-only
-  // re_interlace accepts (the progressive model this TB used pre-consolidation no
-  // longer locks). Flat active video — the caption checker only reads the VBI.
-  integer g_h = 0, g_vc = 0, g_fld = 0;
+  // emu.sv's registered output stage (flat active video, no overlays)
+  reg  [7:0] out_r;
+  reg        out_hs, out_vs, out_de, out_ce;
   always @(posedge clk) begin
-    if (g_h >= 1715) begin
-      g_h <= 0;
-      if (g_vc >= (g_fld ? 262 : 261)) begin
-        g_vc  <= 0;
-        g_fld <= 1 - g_fld;
-      end else g_vc <= g_vc + 1;
-    end else g_h <= g_h + 1;
-  end
-  integer g_absline;
-  always @(*) begin
-    g_absline = 2*g_vc + g_fld;
-    in_hpos = g_h[11:0];
-    in_vpos = g_absline[11:0];
-    in_de   = (g_h < 1440) && (g_vc < 240);
-    in_r    = 8'h20; in_g = 8'h30; in_b = 8'h40;   // flat active video
+    out_r  <= cc_on ? cc_level : ~pixel_en ? 8'd0 : 8'h20;
+    out_hs <= h_sync;
+    out_vs <= v_sync;
+    out_de <= pixel_en;
+    out_ce <= ~h_pos[0];                    // first clock of each pixrep pair
   end
 
   // ------------------------------------------- caption producer (dec_clk)
@@ -163,6 +161,27 @@ module cc_e2e_tb;
 
   reg [16:0] d;
   integer dbg_i;
+  integer verbose = 0;
+  initial void'($value$plusargs("verbose=%d", verbose));
+
+  // [5] pixel-enable contract, counted on the raw clock
+  integer de_clk_cnt = 0, de_ce_cnt = 0, de_lines = 0;
+  reg     de_q = 0;
+  always @(posedge clk) if (rst_n) begin
+    de_q <= out_de;
+    if (out_de) begin
+      de_clk_cnt = de_clk_cnt + 1;
+      if (out_ce) de_ce_cnt = de_ce_cnt + 1;
+    end
+    if (!out_de && de_q) begin
+      de_lines = de_lines + 1;
+      if (de_lines > 1) begin            // line 0 starts inside the reset release
+        if (de_clk_cnt != 1440) fail($sformatf("DE line is %0d clocks wide (expect 1440)", de_clk_cnt));
+        if (de_ce_cnt  != 720)  fail($sformatf("%0d pixel enables inside DE (expect 720)", de_ce_cnt));
+      end
+      de_clk_cnt = 0; de_ce_cnt = 0;
+    end
+  end
 
   always @(posedge clk) if (out_ce && rst_n) begin
     hs_q <= out_hs;
@@ -182,7 +201,7 @@ module cc_e2e_tb;
           end
         end
         else if (line_no != 17)
-          fail($sformatf("burst on line %0d after vsync (expect 17 = line 21)", line_no));
+          fail($sformatf("burst on line %0d after vsync (expect 17 = line 21) [%0s field]", line_no, f1_field ? "line-aligned" : "mid-line"));
         else if (f1_field && d[15:0] != PAIR_F1)
           fail($sformatf("FIELD-1 line carries %04x (want %04x)", d[15:0], PAIR_F1));
         else if (!f1_field && d[15:0] != PAIR_F2)
@@ -199,32 +218,40 @@ module cc_e2e_tb;
     end
 
     if (out_vs && !vs_q) begin
-      // classify: line-aligned (h near 0 or wrapped near 858) = FIELD 1
-      f1_field <= (h_dot < 214) || (h_dot > 643);
+      // Classify the field. The MAIN raster is line-aligned in both fields on purpose
+      // (a half-line here combs ascal's weave — HW round 3), so the vsync position no
+      // longer distinguishes them; the 2:1 half-line is applied downstream, to the
+      // analog composite sync, by sys_top's csync. The raster's own field marker is
+      // v_pos[0] (= ~VGA_F1), and that it marks the BROADCAST field-1 line-aligned
+      // vsync is proven by bench/dvd/cc_field_map_tb.sv (sync_gen with the analog
+      // half-line) and bench/dvd/csync_field_tb.sv (the csync pin, both fields
+      // 262.5 lines apart).
+      f1_field <= ~v_pos[0];
       line_no  <= 0;
+      if (verbose) $display("  vsync rise at h_dot=%0d v_pos=%0d (field %0s) line_no was %0d",
+                            h_dot, v_pos, (~v_pos[0]) ? "1" : "2", line_no);
     end
 
     // capture non-active luma; captions must NEVER coincide with out_de
-    if (out_de && cc_active)
-      ;  // cc_active is a diagnostic, may span the tx window; the real check:
     if (h_dot < 1024) cap[h_dot] <= out_r;
     if (!out_de && out_r > 8'd40 && !out_vs) begin
       cap_burst <= cap_burst + 1;
       if (burst_start < 0) burst_start <= h_dot;
     end
-    if (out_de && out_r != 8'h20 && locked)
+    if (out_de && out_r != 8'h20)
       fail("active video corrupted (caption leaked into out_de region)");
   end
 
   initial begin
     #200 rst_n = 1;
-    // lock (~2 frames) + 8 fields of caption lines
+    // ~8 fields of caption lines
     #80_000_000;
     if (checked_f1 < 3) fail($sformatf("only %0d field-1 caption lines demodulated", checked_f1));
     if (checked_f2 < 3) fail($sformatf("only %0d field-2 caption lines demodulated", checked_f2));
+    if (de_lines < 100) fail($sformatf("only %0d DE lines seen", de_lines));
     if (errors == 0)
-      $display("PASS: cc_e2e_tb — %0d field-1 + %0d field-2 caption lines demodulated at the pins, line 21, correct slots",
-               checked_f1, checked_f2);
+      $display("PASS: cc_e2e_tb — %0d field-1 + %0d field-2 caption lines demodulated at the pins, line 21, correct slots; %0d DE lines x 720 enables",
+               checked_f1, checked_f2, de_lines);
     else begin
       $display("FAIL: cc_e2e_tb — %0d error(s)", errors);
       $fatal(1);

@@ -130,11 +130,31 @@ the CRT then gets the disc's authored fields. See [Video Output](../video/interl
 On builds up to v0.3.0 the equivalent setting is `Analog Out = Native Fields`; those
 builds' other analog modes have a known field-pairing wobble on video-sourced content.
 
+### The picture shakes or tears about once a second on a CRT or scaler
+
+Seen on RGB SCART and YPbPr connections (composite sync / sync-on-Y) with v0.4.0 and the
+PR #37 prerelease, including at the idle logo, often with a RetroTINK reporting the
+vertical sync length or line count toggling and MiSTer reading `1441x478i` or
+`59.8 <-> 60.1 Hz`. The current development build reworks the analog path — the main
+interlaced raster carries the half-line that interleaves the fields and drives the pins
+directly, and several internal events that could restart the raster are fixed — and
+reports a steady `720x480i @ 59.94 Hz`. If it still happens on a current build, turn on
+`Debug Overlay` (`O[2]`): a third row of small blocks appears in the top-left while
+Interlaced — green means an internal raster event fired. Please
+[report](reporting-a-bug.md) which blocks are green, your connection type and the
+`MiSTer.ini` video lines.
+
 ### The picture goes aliased / screen-door after a chapter skip on a CRT
 
-Fixed in current builds — field alignment now recovers automatically within a couple of
-fields. On builds up to v0.3.0, toggle `Analog Out` away and back (sometimes several
-times) to re-roll the field phase.
+Toggle `Video Output` away and back to re-roll the field phase — sometimes it takes a few
+attempts. On builds up to v0.3.0 the same trick works on `Analog Out`. Many televisions
+never show this; it depends on the set.
+
+!!! info "Unreleased"
+    v0.4.0's automatic corrector for this is switched off in the current development
+    build — it was making both fields carry the same picture lines, which combed still
+    images on every output including HDMI. A corrected version is being worked on. See
+    [Field alignment](../video/interlaced.md#field-alignment).
 
 ### A film disc keeps changing resolution, or judders
 
@@ -143,6 +163,11 @@ was baked in at authoring time and carries no flags for Auto to detect. See
 [Film (24p)](../video/film-24p.md).
 
 Also confirm **`Frame Drop` is On** — the cadence corrector runs on that path.
+
+### MiSTer reports 1441x478i, or the resolution changes when a disc loads
+
+An off-by-one in the idle raster window on v0.4.0 and the PR #37 prerelease. Fixed in
+the current development build: the idle logo and playback both report `720x480i`.
 
 ### The idle logo bounces in a small box on a widescreen display
 

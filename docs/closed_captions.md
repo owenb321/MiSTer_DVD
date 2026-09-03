@@ -13,7 +13,11 @@ Shipping in this change:
 - `rtl/mpeg2/vld.v` user_data snoop — extraction (§4.1), sim-proven byte-exact on real
   disc bytes
 - `dvd/cc_line21.sv` — field-rate pacing + the EIA-608 waveform (§4.2, §4.3)
-- `dvd/re_interlace.sv` — line-21 injection into the analog raster (§4.4)
+- `dvd/cc_vbi.sv` — line-21 injection into the analog raster's VBI (§4.4; was inside
+  `dvd/re_interlace.sv` until the single-raster rework of 2026-09-03 —
+  `docs/single_raster_analog.md` — same derivations on the MAIN raster's coordinates;
+  the walk's per-field vsync moved to 243..246 so line 21 stays 17 H after the vsync
+  leading edge now that syncgen anchors vsync on hsync)
 - `P1O[14] Line-21 CC` (On/Off, default On, debug page), NTSC + analog only
 
 §6 is the five-round hardware history: one wiring bug in the analog chain (DE gate), one
@@ -84,12 +88,13 @@ deleted the wire declaration; Quartus grounded it) — the whole caption chain w
 it tested nothing about the field fix. Superseded, along with `DVD_cc21_20260826_2006.rbf`
 (round 2 — its CC1 rides the wrong field). The round-4 build carries the restored wiring +
 the round-2 field fix, now pinned end-to-end by `bench/dvd/cc_e2e_tb.sv` (a TV model
-demodulating re_interlace's own output pins). Test: captioned disc (§3), TV captions on
+demodulating the core's own output pins — since 2026-09-03 the REAL `sync_gen` +
+`cc_vbi` + a copy of emu's output stage). Test: captioned disc (§3), TV captions on
 **C1**, analog output, scanlines off; `P1O[44]` CC Test Line remains the first check if
 nothing appears.
 
 Checked and needing no action: the idle screen cannot interact (it draws in the active
-region while nothing is mounted; captions live in the VBI of the second raster), and OSD
+region while nothing is mounted; captions live in the VBI), and OSD
 Reset pulses `reset_n`, which async-clears the caption FIFO — so no stale pair can fire onto
 the logo screen.
 

@@ -72,7 +72,7 @@
 // =============================================================================
 
 `include "timescale.v"
-`default_nettype none   // see the note in dvd/re_interlace.sv (round-3 lesson)
+`default_nettype none   // round-3 lesson (implicit nets): see docs/closed_captions.md
 
 module cc_line21 (
     input             clk,             // clk_sys 27 MHz
@@ -104,8 +104,8 @@ module cc_line21 (
 // Timing constants
 // ---------------------------------------------------------------------------
 // ARM dot, not the emitted dot. Transmission begins 3 dots later: one for the
-// arm-to-tx edge, one for cc_line21's own ce2 phase, one for re_interlace's
-// output register. 10.5 us after the hsync leading edge is dot 18.75, so arming
+// arm-to-tx edge, one for cc_line21's own ce2 phase, one for the emu.sv registered
+// output stage (dvd/cc_vbi.sv wraps this module on the main raster since 2026-09-03). 10.5 us after the hsync leading edge is dot 18.75, so arming
 // at 16 puts the first run-in dot on ~19 and keeps the +/-0.25 us (+/-3.4 dot)
 // window centred instead of spending it on pipeline delay.
 localparam [11:0] CC_START  = 12'd16;
@@ -230,9 +230,9 @@ always @(posedge clk) begin
 end
 
 // ---------------------------------------------------------------------------
-// Transmitter — advances on ce2 so it stays dot-aligned with sg_hpos, and its
-// outputs are combinational from those registers so they land in re_interlace's
-// output register on the same edge as the pixel they replace.
+// Transmitter — advances on ce2 so it stays dot-aligned with hpos, and its
+// outputs are combinational from those registers so they land in the output
+// register (emu.sv vga_*_q) on the same edge as the pixel they replace.
 // ---------------------------------------------------------------------------
 reg [15:0] phase;
 reg [4:0]  bitidx;

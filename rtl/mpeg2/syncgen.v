@@ -145,6 +145,19 @@ module sync_gen    (clk, clk_en, rst,
    * reference field A; odd_field=0 (BOTTOM content) is B: one extra line and the
    * mid-line vsync. (If HW shows the fields spatially swapped, flip both terms.) */
   wire        crt_ilace   = interlaced && (horizontal_halfline != 12'd0);
+  /* DVD-FORK (single-raster analog): the vertical-sync sample dot. Dot 0 on the
+   * reference field, mid-line (halfline) on the other — the upstream N64-model
+   * placement, HW-proven on a composite CRT both in the O[14] mode and through the
+   * retired re_interlace second raster.
+   * ⚠ HW ROUND 2 (2026-09-03) REVERTED an experiment that anchored these on the
+   * HSYNC LEADING EDGE (horizontal_sync_start, +halfline wrapping to the next line)
+   * because the framework's csync serrates on a line grid and dot-0 gives the two
+   * fields different broad-pulse widths (~50 us / ~18 us, bench/dvd/csync_field_tb.sv).
+   * On the maintainer's composite CRT that anchoring made the picture BOUNCE at field
+   * rate and look blockier, and the bench's separator models never reproduced it —
+   * they now show both placements within a clock of each other once the serrations
+   * run at 2H (the real asymmetry fix, sys/sys_top.v csync). The CRT is the reference
+   * for the analog path: do not re-anchor without one to test on. */
   wire [11:0] vs_ref_dot  = odd_field ? 12'd0 : horizontal_halfline;   /* vertical-event sample dot */
   /* (the half-line-referenced vsync sampler itself lives below, after the h/v
    *  counters it samples — see "CRT vsync sampler") */
@@ -219,9 +232,9 @@ module sync_gen    (clk, clk_en, rst,
    * which is nonzero. So HDMI-480i/576i have always been exact, but only by accident
    * of that doubling; anyone "fixing" 0 -> 0 there would have silently made both
    * rasters 0.19 %/0.16 % fast. Arming on `interlaced` alone makes the exactness
-   * explicit and independent of it. HDMI still keeps its dot-0-ish vsync reference
-   * (halfline 1 = a one-DOT shift, not a half line); the CRT/re_interlace path
-   * (halfline 429/432) is untouched. Nothing else asserts `interlaced` —
+   * explicit and independent of it. (2026-09-03: the interlaced modeline now writes
+   * halfline 429/432 — doubled 2x to 858/864 by syncgen_intf — so HDMI and the analog
+   * pins share ONE half-line raster, docs/single_raster_analog.md.) Nothing else asserts `interlaced` —
    * modeline.v's default is VID_MODE 3'b000.
    * Pinned by bench/dvd/crt_syncgen_tb.sv PHASE 2 (480i) and PHASE 2b (576i). */
   wire [11:0] eff_vertical_length = vertical_length + {11'd0, interlaced & ~odd_field};

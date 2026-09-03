@@ -1,5 +1,17 @@
 # Dual-Raster Analog Output — CRT 480i/576i from MiSTer.ini alone
 
+> **⛔ SUPERSEDED (2026-09-03, branch `feature/single-raster-analog`) — see
+> `docs/single_raster_analog.md`.** The second raster this document designs
+> (`dvd/re_interlace.sv` → `VGA2_*` → the sys_top direct-chain mux) is DELETED. The
+> interlaced MAIN raster now carries the N64-model half-line itself (the "main raster
+> does not need a half-line" paragraph below rested on the stale `ff01ac8` observation,
+> made on the old pulse-delay half-line) and goes to the analog pins through the stock
+> chain, like every other 480i core. What survives from here: the MiSTer.ini engagement
+> rule (`analog_want`, now latched), line-21 CC injection (moved to `dvd/cc_vbi.sv`),
+> the fieldpass-vs-derive analysis (caveat 2), and the N64 syncgen model. Caveat 4 (no
+> equalizing pulses) got measured: `bench/dvd/csync_field_tb.sv`. Everything below is
+> history.
+
 **★ STATUS UPDATE 2026-09-02 (branch `feature/video-output-consolidation`): the DERIVE
 (weave) modes are REMOVED — fieldpass is now the ONLY analog delivery, under the single
 `O[10:9] Video Output = Auto/Interlaced/Progressive` control (`Interlaced` = the old

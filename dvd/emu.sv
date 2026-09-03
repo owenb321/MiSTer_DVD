@@ -26,18 +26,6 @@ module emu (
 	output  [1:0] VGA_SL,
 	output        VGA_SCALER,
 
-	// DVD-FORK (dual-raster analog output): second, simultaneous native 15 kHz
-	// 480i/576i raster (dvd/re_interlace.sv). sys_top muxes the DIRECT analog
-	// chain onto it when VGA2_EN=1; ascal/HDMI stays on the main VGA_* stream.
-	output  [7:0] VGA2_R,
-	output  [7:0] VGA2_G,
-	output  [7:0] VGA2_B,
-	output        VGA2_HS,
-	output        VGA2_VS,
-	output        VGA2_DE,
-	output        VGA2_CE,
-	output        VGA2_EN,
-
 	// DVD-FORK FIX: canonical MiSTer direction is OUTPUT (core -> HPS virtual
 	// buttons; b[0] = OSD button). This fork inherited it as an input, leaving
 	// sys_top's btn wire undriven -- which is why the core could never pop the
@@ -160,11 +148,14 @@ wire pal_eff;
 // ONE output-mode choice, O[10:9] "Video Output" = Auto / Interlaced / Progressive.
 //   Interlaced  = the old "Analog Out = Native Fields", renamed: the decoder runs in
 //                 native-fields mode (il_eff — the MAIN raster is the pixrep 480i/576i
-//                 fields raster), dvd/re_interlace.sv re-times the AUTHORED fields 1:1
-//                 onto the 15 kHz half-line analog raster (VGA2_*), and HDMI gets 480i
-//                 via ascal (OB Bob/Weave). Structurally immune to the derive path's
-//                 field-pairing defect (a governor late re-scans a field PAIR = even),
-//                 and the field-parity corrector (docs/field_parity.md) keeps
+//                 fields raster WITH the N64-model half-line, i.e. a standard 15 kHz
+//                 interlaced signal). SINGLE RASTER (2026-09-03): that one raster goes
+//                 to ascal (HDMI 480i, OB Bob/Weave) AND straight to the analog pins
+//                 through the stock chain, like every other 480i core — the second
+//                 raster (dvd/re_interlace.sv / VGA2_*) is deleted, see
+//                 docs/single_raster_analog.md. Structurally immune to the derive
+//                 path's field-pairing defect (a governor late re-scans a field PAIR
+//                 = even), and the field-parity corrector (docs/field_parity.md) keeps
 //                 content-field <-> raster-field alignment through seeks/restarts.
 //   Progressive = the progressive main raster: full HDMI quality, Film 24p available,
 //                 and the analog pins carry the progressive raster through the stock
@@ -187,6 +178,7 @@ wire pal_eff;
 wire direct_video;                        // hps_io cfg[10] (declared early for the gating here)
 wire forced_scandoubler;                  // hps_io cfg[4]
 wire ini_vga_scaler, ini_csync, ini_ypbpr, ini_sog;  // hps_io MiSTer.ini exports (DVD-FORK)
+wire cfg_seen, cfg_wr;                               // hps_io cfg-word bookkeeping (DVD-FORK)
 wire hdmi_bs_ack;                                    // cfg[14] HPS ack (DVD-FORK, HDMI bitstream)
 wire bs_stb_w;                                       // 48 kHz pair strobe from iec61937_wrap
 wire [1:0] video_out_mode = status[10:9]; // 0=Auto 1=Interlaced 2=Progressive (O[27:26] left dead — old Analog Out)
@@ -217,12 +209,22 @@ always @(*) case (status[43:40])
     4'd15: player_lang = "pl";
     default: player_lang = "en";
 endcase
-wire       analog_want = ((ini_csync | ini_ypbpr | ini_sog) & ~ini_vga_scaler & ~forced_scandoubler)
-                       | direct_video;
-// The ONE resolved output mode. Session flag: drives the decoder fields mode (il_eff),
-// the analog 15 kHz raster (re_interlace/VGA2), and every analog-only nicety (SIF fill,
-// Analog Aspect, line-21 CC). analog_want is latched from the HPS cfg word at core boot,
-// so Auto is boot-static — interlaced_eff only ever changes on an OSD edit (il_switch).
+wire       analog_want_raw = ((ini_csync | ini_ypbpr | ini_sog) & ~ini_vga_scaler & ~forced_scandoubler)
+                           | direct_video;
+// DVD-FORK FIX (single-raster analog, 2026-09-03): analog_want is LATCHED. The old
+// wire was combinational off Main's live cfg word while the comment next to it
+// claimed a boot-time latch that never existed: Main re-sends cfg on every
+// video_mode_adjust (each resolution report), on leaving the OSD, and after an ini
+// `[video=...]` section re-parse - and a changed analog bit mid-play was a full
+// il_switch (flush trio + modeline walk) with nothing the user did. The latch
+// (assigned after img_mounted exists, below the file loader) FOLLOWS cfg while no
+// media is mounted (so a boot-time video-section re-parse is honoured) and FREEZES
+// while a disc plays. Auto is now genuinely boot/idle-static; interlaced_eff changes
+// only on an OSD edit (il_switch) or a change made with nothing mounted.
+wire       analog_want;
+// The ONE resolved output mode. Session flag: drives the decoder fields mode (il_eff)
+// = the pixrep 480i/576i half-line MAIN raster that both ascal and the analog pins
+// consume, and every analog-only nicety (SIF fill, Analog Aspect, line-21 CC).
 wire       interlaced_eff = (video_out_mode == 2'd1)
                           | ((video_out_mode == 2'd0) & analog_want);
 // Analog Aspect resolves near the decoder (needs ar_wide_auto_eff); forward-declared
@@ -251,12 +253,23 @@ wire        film_want  = (film_mode == 2'b10) | ((film_mode == 2'b00) & film_det
 // (and cannot feed the analog re-timer — no frame store for the rate conversion), so
 // Interlaced mode suppresses it. Film on the CRT then plays with its normal 3:2 field
 // cadence — exactly what an NTSC set-top player output.
-wire        filmp_eff  = film_want & ~interlaced_eff; // progressive-film raster wanted
+// DVD-FORK FIX (single-raster analog, 2026-09-03): on a rig whose ini asks for native
+// analog (analog_want) but whose user picked Progressive, an AUTO film verdict is
+// suppressed - the analog pins carry the main raster through the stock path there, and
+// the 23.976/25 Hz film modeline (875x1287 @ 30.9 kHz) is a signal no analog display
+// holds: HW report "Progressive is stable in the menus, loses signal when the feature
+// starts". ⚠ Only the AUTO verdict: `Film 24p Out = On` is an explicit user choice and
+// is honoured, which is how an analog-configured rig watches 24p on HDMI with the CRT
+// switched off (HW round 6 - the blunt ~analog_want gate took that away, and Auto
+// already resolves such a rig to Interlaced, where filmp_eff is 0 anyway, so the gate
+// only ever bit the deliberate case). An HDMI-only rig (analog_want=0) is unaffected.
+wire        film_forced = (film_mode == 2'b10);      // O[25:24] = On (not Auto)
+wire        filmp_eff  = film_want & ~interlaced_eff & (film_forced | ~analog_want);
 wire        film24_eff = filmp_eff & ~pal_eff;       // NTSC 23.976 Hz path
 wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
 // il_eff: the decoder/main-raster fields mode — now simply the resolved Video Output
 // verdict (kept as its own name because ~15 consumers ride it: VGA_F1, HDMI_BOB_DEINT,
-// the modeline walk, il_switch, the pixrep overlay inverses, re_interlace). Interlaced
+// the modeline walk, il_switch, the pixrep overlay inverses, the CC inserter). Interlaced
 // mode owns the session outright: film_want does NOT override it (Film 24p is a
 // Progressive-mode feature, see filmp_eff above). The old derivation
 // (analog_fields | (il_want & ~filmp_eff & ~analog_eff)) died with the Interlaced Out
@@ -482,15 +495,15 @@ wire ce_pixel = (ce_cnt == 2'b00);
 // For NTSC 480i/p video, this must be exactly 27.0 MHz.
 assign CLK_VIDEO = clk_sys;  // 27 MHz
 
-// DVD-FORK (dual-raster analog output): the main raster now ALWAYS runs at the
-// full 27 MHz (CE=1) — the retired whole-core CRT mode used to gate the whole
-// dot-clock pipeline with this 13.5 MHz CE. The free-running ce_13m5 is kept as
-// the 15 kHz pixel pacing of the SECOND raster (dvd/re_interlace.sv, instanced
-// near the vga_*_q output stage). The pixel_queue CE-stretch shim stays in-tree
-// (bit-identical/inert at CE==1).
-reg ce_13m5;
-always @(posedge clk_sys) ce_13m5 <= ~ce_13m5;
-assign CE_PIXEL = 1'b1;
+// DVD-FORK (single-raster analog, 2026-09-03): the dot-clock pipeline always runs at
+// the full 27 MHz (dot_ce=1; the pixel_queue CE-stretch shim stays in-tree, inert at
+// CE==1). What the FRAMEWORK sees as the pixel enable is decided at the registered
+// output stage near the end of this file (ce_pix_q): constant 1 on the progressive
+// raster, and in Interlaced mode ONE clock of each pixel-repetition pair - so hps_io
+// counts 720 active dots (Main reports 720x480i, not 1440x480i), ascal samples 720
+// real pixels, and the analog chain (which never used the enable for data) is
+// bit-identical. The old ce_13m5 that paced the second raster is gone with it.
+assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 
 // =========================================================================
 // HPS IO — OSD menu and file loading
@@ -606,8 +619,8 @@ parameter CONF_STR = {
     //                    direct_video=1) => Interlaced, else Progressive — the same
     //                    ini workflow as every other core, nothing to set here.
     //   Interlaced     = the disc's AUTHORED fields (decoder in native-fields mode;
-    //                    dvd/re_interlace.sv re-times them 1:1 onto the 15 kHz
-    //                    half-line analog raster; HDMI shows 480i via ascal, OB
+    //                    the main raster IS the 15 kHz half-line 480i/576i signal,
+    //                    fed to the analog pins directly; HDMI shows 480i via ascal, OB
     //                    Bob/Weave below). Switchable mid-title — fires the
     //                    seek-equivalent il_switch flush (brief chapter-seek-style
     //                    cut), field phase lands clean via the parity corrector.
@@ -815,6 +828,8 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     .ini_ypbpr      (ini_ypbpr),
     .ini_sog        (ini_sog),
     .ini_hdmi_bs_ok (hdmi_bs_ack),
+    .cfg_seen       (cfg_seen),
+    .cfg_wr         (cfg_wr),
 
     // SD sector-level access (virtual disk for MPG streaming)
     .sd_lba         ('{sd_lba}),
@@ -930,6 +945,18 @@ wire [15:0] av_reanchor_cnt;
 // Detect image mount event (start streaming)
 reg        img_mounted_prev;
 wire       start_streaming = img_mounted[0] && !img_mounted_prev;
+// DVD-FORK FIX (single-raster analog): the analog_want latch (see its declaration
+// near the top). Follows the cfg-derived request while nothing is mounted and once
+// Main has actually written cfg (cfg_seen - before that the ini bits read 0), holds
+// while media is mounted. Level-based on purpose: an OSD Reset (status[0]) pulls
+// reset_n with cfg_seen already high and no new cfg write coming, so an edge-armed
+// latch would come back empty.
+reg        analog_want_l;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)                          analog_want_l <= 1'b0;
+    else if (cfg_seen && !img_mounted[0])  analog_want_l <= analog_want_raw;
+end
+assign analog_want = analog_want_l;
 reg [63:0] current_file_size;
 
 always @(posedge clk_sys or negedge reset_n) begin
@@ -3183,9 +3210,9 @@ localparam [3:0] REG_WR_TRICK    = 4'hb;
 
 wire il_out  = il_eff;       // native 480i (NTSC) / 576i (PAL) HDMI fields raster (see il_eff)
 wire pal_out = pal_eff;      // resolved PAL flag: 720x576p @ 50 Hz (else NTSC 720x480p @ 59.94)
-// DVD-FORK (dual raster): the whole-core CRT modeline branch is RETIRED — the 15 kHz
-// raster is now generated OUTSIDE the decoder by dvd/re_interlace.sv, so the walk no
-// longer has a crt input/branch.
+// DVD-FORK (single-raster analog, 2026-09-03): there is no separate CRT branch — the
+// il_prev branch below IS the 15 kHz raster (pixrep + half-line), for HDMI and the
+// analog pins alike (docs/single_raster_analog.md).
 wire filmp_out = filmp_eff;  // Film 24p/25p: progressive-film raster (NTSC 875x1287 @ 23.976024, PAL 864x1250 @ 25.000; pal_prev picks the rate)
 
 // CDC: 2-FF sync the (slow, static) toggles from clk_sys into clk_dec. The walk is
@@ -3214,7 +3241,7 @@ wire [10:0] trick_w = { il_prev ? 1'b0 : 1'b1, // [10] deinterlace
 //   REG_WR_VER_SYNC: [27:16]=vertical_sync_start   [11:0]=vertical_sync_end
 //   REG_WR_VID_MODE: [27:16]=horizontal_halfline   [2:0]={clip,pixrep,interlaced}
 //   REG_WR_TRICK   : [10:0] trick_w
-// The walk has these states (the CRT branch is retired — dual raster):
+// The walk has these states (il = the 480i/576i half-line raster for HDMI AND analog):
 //   pal_prev & filmp_prev   -> PAL  720x576p @ 25.000 (576 active, vtotal 1250 = 27 MHz
 //                              / (864 x 1250) = 25.000 Hz exactly; ONLY VER differs from
 //                              PAL 50p — hsync/VER_SYNC/VID_MODE reuse the PAL progressive
@@ -3266,36 +3293,52 @@ always @(*) begin
                                        : {4'b0, 12'd735, 4'b0, 12'd797}; end // NTSC hsync 735..797
         3'd2: begin wr_addr = REG_WR_VER;
                     // PAL 576i (pal & il): per-FIELD values, mirroring NTSC 480i one row
-                    // down. vertical_resolution 575 -> syncgen halves to 287 active
-                    // lines/field (NTSC uses 479 -> 239; both = active/field - 1). Per-field
-                    // total 312 (vertical_length 311): 27 MHz / (1728 pixrep-dots x 312) =
-                    // 50.06 fields/s (~50 Hz; 312.5 would be exact — 312 is the closer int).
-                    // SIM-VERIFY the exact field rate + active region on HW (docs/interlaced_auto.md).
+                    // down. vertical_resolution 576 -> syncgen halves to 288 active
+                    // lines/field (NTSC 480 -> 240). DVD-FORK FIX (single-raster analog,
+                    // 2026-09-03): these were 575/479 (-> 287/239 per field = 574/478
+                    // lines), the same active-region off-by-one the progressive walk
+                    // fixed on 2026-06-24. A decoded stream masked it (the syncgen clamps
+                    // the window to the sequence-header size), so it only showed with no
+                    // header - the idle logo, or right after a decoder reset - as the
+                    // "1441x478i" MiSTer report (1441 = the pixrep 2x+1 doubling, fixed in
+                    // syncgen_intf). Per-field total 312 (vertical_length 311): 27 MHz /
+                    // (1728 pixrep-dots x 312) = 50.06 fields/s (312.5 would be exact —
+                    // 312 is the closer int; PAL analog is still unverified on HW).
                     wr_data = (pal_prev && filmp_prev) ? {4'b0, 12'd576, 4'b0, 12'd1249}  // PAL 25p: vtotal 1250 => 25.000 Hz
-                            : (pal_prev && il_prev)     ? {4'b0, 12'd575, 4'b0, 12'd311}   // PAL 576i: 312 lines/field => ~50.06 Hz
+                            : (pal_prev && il_prev)     ? {4'b0, 12'd576, 4'b0, 12'd311}   // PAL 576i: 312 lines/field => ~50.06 Hz
                             : pal_prev    ? {4'b0, 12'd576, 4'b0, 12'd624}   // 625 lines/frame (576p @ 50 Hz)
-                            : il_prev     ? {4'b0, 12'd479, 4'b0, 12'd261}   // 262 lines/field
+                            : il_prev     ? {4'b0, 12'd480, 4'b0, 12'd261}   // 262 lines/field
                             : filmp_prev  ? {4'b0, 12'd480, 4'b0, 12'd1286}  // NTSC 24p: 1287 lines/frame @ 875 dots => 23.976024 Hz EXACT
                                           : {4'b0, 12'd480, 4'b0, 12'd524}; end // 525 lines/frame (480p, strobe-fix VERT_RES=480)
         3'd3: begin wr_addr = REG_WR_VER_SYNC;
-                    // PAL 576i per-field vsync: ~4-line front porch after 288 active, 3-line
-                    // sync, inside the 288..311 field blanking (NTSC 480i uses 244..247 inside
-                    // its 240..261 blanking). SIM-VERIFY on HW.
+                    // Per-FIELD vsync for the interlaced rasters. These are the values the
+                    // retired re_interlace raster used and the composite CRT has always been
+                    // happy with; line 21 (closed captions, v_cntr == vertical_length) is
+                    // their 15th line after vsync end, which is where a TV's caption decoder
+                    // looks (docs/closed_captions.md). ⚠ HW round 2 reverted a one-line-earlier
+                    // variant (243..246 / 291..294) that came with the hsync-anchored vsync
+                    // reference — see rtl/mpeg2/syncgen.v vs_ref_dot.
                     wr_data = (pal_prev && il_prev) ? {4'b0, 12'd292, 4'b0, 12'd295}   // PAL per-field vsync
                             : pal_prev ? {4'b0, 12'd581, 4'b0, 12'd586}   // PAL per-frame vsync 581..586
                             : il_prev  ? {4'b0, 12'd244, 4'b0, 12'd247}   // NTSC per-field vsync
                                        : {4'b0, 12'd488, 4'b0, 12'd494}; end // per-frame vsync
         3'd4: begin wr_addr = REG_WR_VID_MODE;
-                    // HDMI-480i: halfline = 0 (NOT 429) — the half-line vsync offset
-                    // lands vsync at a different horizontal position every field, which
-                    // makes an HDMI receiver HUNT for lock — the ~1-2 s brightness pulse
-                    // + scanline comb seen on HW (found and fixed once before; commit
-                    // ff01ac8). ascal weaves/bobs from VGA_F1 (which still toggles
-                    // without the half-line), so it does NOT need it. The 15 kHz CRT
-                    // raster (which DOES need the half-line) is generated outside the
-                    // decoder by dvd/re_interlace.sv (dual raster) — the old crt_prev
-                    // branch here (halfline 429, no pixrep) is retired.
-                    wr_data = il_prev  ? {4'b0, 12'd0,   13'b0, 3'b011}  // halfline 0, pixrep+interlaced
+                    // The N64 half-line on the MAIN raster: 429 NTSC / 432 PAL, doubled
+                    // by syncgen_intf under pixrep to 858 / 864 = exactly half the line.
+                    // With the alternating 262/263 field totals this puts vsync edges
+                    // exactly 262.5 lines apart every field, which is what makes the two
+                    // fields interleave on a CRT — and it is what the N64 and PSX cores
+                    // put on their single raster, feeding ascal and the analog pins from
+                    // it. Main then reports a steady 59.94 Hz instead of alternating
+                    // 59.83/60.05, and a vsync_adjust PLL lands on the true rate.
+                    // ⚠ HW rounds 3-5 briefly wrote 0 here on the theory that a half-line
+                    // combs ascal's weave (the ff01ac8 note). That was a MISREADING: the
+                    // round-4 build had halfline 0 and still combed, and the comb only
+                    // cleared when the field-parity corrector was disabled
+                    // (dvd/resample_addrgen.v par_ins). Every combed capture had the
+                    // corrector on; every clean one had it off, halfline 0 or 429.
+                    // docs/single_raster_analog.md §3.9.
+                    wr_data = il_prev  ? {4'b0, (pal_prev ? 12'd432 : 12'd429), 13'b0, 3'b011}
                                        : {4'b0, 12'd0,   13'b0, 3'b000}; end // progressive
         default: begin wr_addr = REG_WR_TRICK;                          // 3'd5
                     wr_data = {21'b0, trick_w}; end
@@ -3370,9 +3413,9 @@ mpeg2video mpeg2video_inst (
                              // "should be a multiple of 27 MHz" (rtl/mpeg2/mpeg2video.v).
     .mem_clk    (clk_mem),   // 90 MHz — req FIFO wr=54MHz rd=90MHz, still read-faster CDC
     .dot_clk    (clk_sys),   // 27MHz native dot clock (cleanly drives MiSTer HDMI PHY)
-    .dot_ce     (1'b1),      // always full 27 MHz (dual raster: the 13.5 MHz CE whole-core
-                             // CRT pacing is retired; dvd/re_interlace.sv paces the 15 kHz
-                             // second raster outside the decoder)
+    .dot_ce     (1'b1),      // always full 27 MHz; the framework-facing pixel enable
+                             // (CE_PIXEL) is derived at the output stage instead — see
+                             // ce_pix_q (single-raster analog, 2026-09-03)
     .rst        (reset_n),
 
     .stream_data  (dec_stream_data),   // <- vidfeed_dc CDC (clk_sys -> clk_dec)
@@ -3542,8 +3585,20 @@ wire [13:0] core_vertical_size;
 // DVD-FORK FIX (mpeg1): MPEG-1 PAL/SIF is 352x288 (288 = half of 576), which the
 // ">480" test misses — key on it explicitly. MPEG-1 NTSC/SIF is 240 (not >480, and
 // not 288), so it correctly stays NTSC.
-wire        pal_detect_dec = (core_vertical_size > 14'd480)    // PAL frame is 576 lines
+wire        pal_detect_raw = (core_vertical_size > 14'd480)    // PAL frame is 576 lines
                           || (core_vertical_size == 14'd288);  // MPEG-1 PAL SIF (352x288)
+// DVD-FORK FIX (single-raster analog, 2026-09-03): HOLD the verdict while no sequence
+// header is in force. vertical_size is a VLD register on sync_rst, so every watchdog
+// expiry / mount soft reset zeroed it - and a PAL disc then read "NTSC" for the gap
+// until the next header: pal_eff flipped, the modeline walk re-fired (PAL->NTSC->PAL,
+// two raster restarts), and av_sync's STC tick rate went with it. Same trap the
+// film-switch post-mortem hit (a garbage 576-line parse flipping pal_eff mid-title,
+// docs/film_24p_plan.md §13). Last verdict held across resets; reset_n clears it.
+reg         pal_detect_dec;
+always @(posedge clk_dec or negedge reset_n) begin
+    if (!reset_n)                          pal_detect_dec <= 1'b0;
+    else if (core_vertical_size != 14'd0)  pal_detect_dec <= pal_detect_raw;
+end
 reg         pal_det_s1, pal_det_s2;
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin pal_det_s1 <= 1'b0; pal_det_s2 <= 1'b0; end
@@ -3588,7 +3643,7 @@ always @(posedge clk_sys or negedge reset_n) begin
 end
 // Gated on interlaced_eff (the Letterbox/Crop pattern): HDMI-only rigs keep the narrow DE
 // window + ascal's polyphase scale (HW-proven for MPEG-1); the fill exists because the
-// analog chain (re_interlace + direct video) needs a true 720-wide raster line.
+// analog chain (direct video off the main raster) needs a true 720-wide raster line.
 wire sif_hfill_eff = interlaced_eff & sif_h_s2;   // horizontal 352->720 stretch
 wire sif_v2x_eff   = interlaced_eff & sif_v_s2;   // vertical 2x line repeat (240->480 / 288->576)
 // DVD-FORK FIX (SIF analog fill): decoded height, 2-FF synced (hsz_s2 pattern) — feeds
@@ -4114,9 +4169,8 @@ assign ov_b  = 8'd0;
 // blend (subpic_blend). The blend is the load-bearing layer transport UI /
 // disc menus reuse later. It taps the same clk_sys RGB display path as the
 // debug overlay, with the debug overlay kept on TOP. See docs/subpicture.md.
-// DVD-FORK (dual raster): the analog 15 kHz raster is re-interlaced DOWNSTREAM of
-// this blend (dvd/re_interlace.sv taps vga_*_q), so under the DEFAULT analog path
-// the overlay layer composes against the progressive main raster.
+// DVD-FORK (single-raster analog, 2026-09-03): the analog pins take the main raster
+// (vga_*_q) directly, so this blend composes once for HDMI and the CRT alike.
 // DVD-FORK FIX (2026-08-22, interlaced overlay alignment): when the main raster IS
 // interlaced (Video Output = Interlaced; historically Interlaced Out / Native Fields), the
 // old `1'b0` ties on spu_decode/crt_ov_map .interlaced were WRONG in both axes:
@@ -4758,6 +4812,57 @@ wire        dbg_blk8  = (ov_h_gen >= 12'd68) && (ov_h_gen < 12'd84) &&
                         (core_v_pos >= 12'd30) && (core_v_pos < 12'd46);
 wire        dbg_vbar  = (core_v_pos >= 12'd50) && (core_v_pos < 12'd58) &&
                         (ov_h_gen >= 12'd8)  && (ov_h_gen < (12'd8 + {4'd0, vbuf_fill_s1}));
+// RASTER-TRIGGER ROW (single-raster analog, 2026-09-03; the RGBS/YPbPr "shake every
+// second" field reports). Third row, v 62..78, shown whenever O[2] is On AND the
+// fields raster is up (Interlaced) — menus or not — so a reporter on a CRT can read
+// it. GREEN = the event has FIRED since the diagnostic was switched on (or since the
+// last load/seek flush); RED = quiet. Every one of these is a raster-restart trigger
+// found in the code (none of them should fire during steady playback):
+//   blk9  (x  8.. 24) decoder WATCHDOG expiry (re-phased the raster pre-fix)
+//   blk10 (x 28.. 44) il_switch (Video Output mode change / analog_want edge)
+//   blk11 (x 48.. 64) pal_eff changed (modeline walk re-fired)
+//   blk12 (x 68.. 84) vertical_size read 0 = a decoder soft reset / lost header
+//   blk13 (x 88..104) Main re-wrote the cfg word AFTER its first write (OSD leave,
+//                     video_mode_adjust, [video=] section re-parse — informational)
+wire        dbg_r3_en = status[2] && interlaced_eff;
+wire        dbg_blk9  = (ov_h_gen >= 12'd8)  && (ov_h_gen < 12'd24) &&
+                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
+wire        dbg_blk10 = (ov_h_gen >= 12'd28) && (ov_h_gen < 12'd44) &&
+                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
+wire        dbg_blk11 = (ov_h_gen >= 12'd48) && (ov_h_gen < 12'd64) &&
+                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
+wire        dbg_blk12 = (ov_h_gen >= 12'd68) && (ov_h_gen < 12'd84) &&
+                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
+wire        dbg_blk13 = (ov_h_gen >= 12'd88) && (ov_h_gen < 12'd104) &&
+                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
+// clk_dec events -> toggles (one flip per event), 2-FF synced, edge-detected in clk_sys
+reg         wd_rst_q, wd_tgl, vs0_q, vs0_tgl;
+always @(posedge clk_dec) begin
+    wd_rst_q <= watchdog_rst;
+    if (wd_rst_q && !watchdog_rst) wd_tgl <= ~wd_tgl;            // active-LOW pulse = expiry
+    vs0_q    <= (core_vertical_size == 14'd0);
+    if (!vs0_q && (core_vertical_size == 14'd0)) vs0_tgl <= ~vs0_tgl;
+end
+reg  [2:0]  wd_tgl_s, vs0_tgl_s;
+reg         pal_eff_q, cfg_seen_q;
+reg         dbg_r3_en_q;
+reg         wd_seen_l, ils_seen_l, pal_seen_l, vs0_seen_l, cfg_seen_l;
+always @(posedge clk_sys) begin
+    wd_tgl_s    <= {wd_tgl_s[1:0],  wd_tgl};
+    vs0_tgl_s   <= {vs0_tgl_s[1:0], vs0_tgl};
+    pal_eff_q   <= pal_eff;
+    cfg_seen_q  <= cfg_seen;
+    dbg_r3_en_q <= dbg_r3_en;
+    if (!pipe_rst_n || (dbg_r3_en && !dbg_r3_en_q)) begin       // clear: flush, or O[2] turned on
+        wd_seen_l <= 1'b0; ils_seen_l <= 1'b0; pal_seen_l <= 1'b0; vs0_seen_l <= 1'b0; cfg_seen_l <= 1'b0;
+    end else begin
+        if (wd_tgl_s[2] ^ wd_tgl_s[1])   wd_seen_l  <= 1'b1;
+        if (il_switch)                   ils_seen_l <= 1'b1;
+        if (pal_eff ^ pal_eff_q)         pal_seen_l <= 1'b1;
+        if (vs0_tgl_s[2] ^ vs0_tgl_s[1]) vs0_seen_l <= 1'b1;
+        if (cfg_wr && cfg_seen_q)        cfg_seen_l <= 1'b1;    // a RE-write, not the first
+    end
+end
 // STICKY since the last flush (a menu SPU is sent ONCE then the reader parks, so a
 // per-frame latch reads red in steady state even if the SPU was routed — that was
 // misleading last round). Cleared on pipe_rst_n (load/seek/jump), set on any SPU byte.
@@ -4794,9 +4899,10 @@ end
 reg  [7:0]  dbg_r_q, dbg_g_q, dbg_b_q;
 reg         dbg_px_q;
 always @(posedge clk_sys) begin
-    dbg_px_q <= dbg_hl_en && (dbg_blk1 || dbg_blk2 || dbg_blk3 || dbg_blk4 ||
-                              dbg_blk5 || dbg_blk6 || dbg_blk7 || dbg_blk8 || dbg_vbar ||
-                              (hl_btns_armed && dbg_rectb));
+    dbg_px_q <= (dbg_hl_en && (dbg_blk1 || dbg_blk2 || dbg_blk3 || dbg_blk4 ||
+                               dbg_blk5 || dbg_blk6 || dbg_blk7 || dbg_blk8 || dbg_vbar ||
+                               (hl_btns_armed && dbg_rectb)))
+             || (dbg_r3_en && (dbg_blk9 || dbg_blk10 || dbg_blk11 || dbg_blk12 || dbg_blk13));
     if (dbg_blk1) begin
         dbg_r_q <= hl_btns_armed ? 8'h00 : 8'hFF;
         dbg_g_q <= hl_btns_armed ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
@@ -4821,6 +4927,21 @@ always @(posedge clk_sys) begin
     end else if (dbg_blk8) begin                                 // recolour fired this frame
         dbg_r_q <= hlvis_seen_l ? 8'h00 : 8'hFF;
         dbg_g_q <= hlvis_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
+    end else if (dbg_blk9) begin                                 // raster row: watchdog expired
+        dbg_r_q <= wd_seen_l ? 8'h00 : 8'hFF;
+        dbg_g_q <= wd_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
+    end else if (dbg_blk10) begin                                // raster row: il_switch fired
+        dbg_r_q <= ils_seen_l ? 8'h00 : 8'hFF;
+        dbg_g_q <= ils_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
+    end else if (dbg_blk11) begin                                // raster row: pal_eff changed
+        dbg_r_q <= pal_seen_l ? 8'h00 : 8'hFF;
+        dbg_g_q <= pal_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
+    end else if (dbg_blk12) begin                                // raster row: vertical_size hit 0
+        dbg_r_q <= vs0_seen_l ? 8'h00 : 8'hFF;
+        dbg_g_q <= vs0_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
+    end else if (dbg_blk13) begin                                // raster row: cfg re-written
+        dbg_r_q <= cfg_seen_l ? 8'h00 : 8'hFF;
+        dbg_g_q <= cfg_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
     end else if (dbg_vbar) begin                                 // VBUF occupancy bar (cyan)
         dbg_r_q <= 8'h00; dbg_g_q <= 8'hFF; dbg_b_q <= 8'hFF;
     end else begin
@@ -4828,18 +4949,60 @@ always @(posedge clk_sys) begin
     end
 end
 
+// =========================================================================
+// DVD-FORK (line-21 closed captions, single-raster analog 2026-09-03): the EIA-608
+// inserter rides the MAIN raster's vertical blanking interval (it used to live
+// inside the deleted dvd/re_interlace.sv second raster). The coordinate glue is
+// dvd/cc_vbi.sv (line 21 / field derivations documented there) so that
+// bench/dvd/cc_e2e_tb.sv drives exactly this wiring. Gated on the fields raster
+// being up (interlaced_eff), P1O[14] Line-21 CC, and NTSC. load_flush is the same
+// event that resets ps_demux and re-anchors av_sync on a load / seek / menu jump,
+// so the caption backlog is dropped with everything else. P1O[44] CC Test Line
+// paints the waveform on visible line 20 (the diagnostic that cracked the field
+// mapping on HW).
+// ⚠ sys_top's VGA scanlines stage must NOT zero the data outside DE (it did, stock:
+//   `de_emu ? data : 0`) — that gate silently killed this waveform once already on
+//   the VGA2 path. The output stage below blanks everything outside DE itself
+//   except the caption level, so dropping the framework gate changes nothing else.
+// =========================================================================
+wire [7:0]  cc_level;
+wire        cc_on;
+cc_vbi cc_vbi_inst (
+    .clk            (clk_sys),
+    .rst_n          (reset_n),
+    .dec_clk        (clk_dec),
+    .dec_pair_valid (core_cc_valid),
+    .dec_pair       (core_cc_pair),
+    .dec_pair_field (core_cc_field),
+    .enable         (interlaced_eff & ~status[14]),
+    .test           (status[44]),
+    .flush          (load_flush),
+    .pal            (pal_eff),
+    .h_pos          (core_h_pos),
+    .v_pos          (core_v_pos),
+    .pixel_en       (core_pixel_en),
+    .level          (cc_level),
+    .on             (cc_on),
+    .active         ()
+);
+
 // Registered video output stage (DVD-FORK FIX, 2026-06-28): registering the final mux at
 // the boundary cuts the route to the VGA_* pins to a short reg->pin hop (cured the faint
 // vertical-column dots). The subtitle blend feeds this mux; the debug overlay stays on top.
+// DVD-FORK (single-raster analog, 2026-09-03): this ONE stream now feeds ascal/HDMI AND
+// the analog pins (the dual-raster VGA2_* path is gone). Outside DE the stage emits
+// black except the line-21 caption level (equal on R/G/B = luma only, no chroma), and
+// ce_pix_q is the framework-facing pixel enable (see CE_PIXEL near the top).
 reg [7:0] vga_r_q, vga_g_q, vga_b_q;
-reg       vga_hs_q, vga_vs_q, vga_de_q;
+reg       vga_hs_q, vga_vs_q, vga_de_q, ce_pix_q;
 always @(posedge clk_sys) begin
-    vga_r_q  <= ov_on ? ov_r : (dbg_px_q ? dbg_r_q : sub_r);
-    vga_g_q  <= ov_on ? ov_g : (dbg_px_q ? dbg_g_q : sub_g);
-    vga_b_q  <= ov_on ? ov_b : (dbg_px_q ? dbg_b_q : sub_b);
+    vga_r_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_r : (dbg_px_q ? dbg_r_q : sub_r);
+    vga_g_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_g : (dbg_px_q ? dbg_g_q : sub_g);
+    vga_b_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_b : (dbg_px_q ? dbg_b_q : sub_b);
     vga_hs_q <= core_h_sync;
     vga_vs_q <= core_v_sync;
     vga_de_q <= core_pixel_en;
+    ce_pix_q <= ~core_h_pos[0];                      // first clock of each pixrep pair
 end
 assign VGA_R  = vga_r_q;
 assign VGA_G  = vga_g_q;
@@ -4847,60 +5010,6 @@ assign VGA_B  = vga_b_q;
 assign VGA_HS = vga_hs_q;
 assign VGA_VS = vga_vs_q;
 assign VGA_DE = vga_de_q;
-
-// =========================================================================
-// DVD-FORK (dual-raster analog output): second, simultaneous native 15 kHz
-// 480i/576i raster for the analog pins (dvd/re_interlace.sv). Taps the final
-// registered vga_*_q stage — so subtitles, menus, highlights and the HUD are
-// all included — with the raster coordinates delayed 1 clk to match the _q
-// registration. sys_top muxes the direct analog chain onto VGA2_* when
-// VGA2_EN=1; ascal/HDMI keeps consuming the main VGA_* stream untouched.
-// enable = interlaced_eff: the main raster is then the pixrep fields raster the
-// fieldpass re-timer expects (filmp is forced off under it). During an il_switch
-// mode walk the module's own period check is the backstop — it stays unlocked
-// until the fields raster is back, re-locking in <2 frames.
-// =========================================================================
-reg [11:0] ri_hpos_q, ri_vpos_q;
-always @(posedge clk_sys) begin
-    ri_hpos_q <= core_h_pos;
-    ri_vpos_q <= core_v_pos;
-end
-wire ri_locked;
-re_interlace re_interlace_inst (
-    .clk     (clk_sys),
-    .rst_n   (reset_n),
-    .ce2     (ce_13m5),
-    .enable  (interlaced_eff),
-    .pal     (pal_eff),
-    .in_r    (vga_r_q),
-    .in_g    (vga_g_q),
-    .in_b    (vga_b_q),
-    .in_de   (vga_de_q),
-    .in_hpos (ri_hpos_q),
-    .in_vpos (ri_vpos_q),
-    .out_r   (VGA2_R),
-    .out_g   (VGA2_G),
-    .out_b   (VGA2_B),
-    .out_hs  (VGA2_HS),
-    .out_vs  (VGA2_VS),
-    .out_de  (VGA2_DE),
-    .out_ce  (VGA2_CE),
-    .locked  (ri_locked),
-    // Line-21 closed captions. Gated on the analog raster being up (the inserter
-    // writes the analog VBI and nothing else) and on NTSC inside the module.
-    // load_flush is the same event that resets ps_demux and re-anchors av_sync on
-    // a load / seek / menu jump, so the caption backlog is dropped with everything
-    // else rather than painting the pre-seek sentence onto the new scene.
-    .cc_enable      (interlaced_eff & ~status[14]),
-    .cc_test        (status[44]),
-    .cc_flush       (load_flush),
-    .dec_clk        (clk_dec),
-    .cc_pair_valid  (core_cc_valid),
-    .cc_pair        (core_cc_pair),
-    .cc_pair_field  (core_cc_field),
-    .cc_active      ()
-);
-assign VGA2_EN = interlaced_eff;
 
 
 // DVD-FORK: the UART debug transmitter (uart_debug + uart_tx) is REMOVED to free
