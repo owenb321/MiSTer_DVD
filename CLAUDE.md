@@ -280,28 +280,32 @@ worse maintenance burden than targeted in-place edits. So:
   new `hps_io.cfg_seen`, follows while nothing is mounted, frozen while a disc plays.
   (4) Progressive + analog-direct wrote the 875×1287 @ 23.976 Hz film modeline to the
   pins — `filmp_eff` also gated on `~analog_want` (HDMI-only rigs keep Film 24p).
-  ★ **MEASURED sync-shape defect (`bench/dvd/csync_field_tb.sv`, runs the REAL
-  `sys_top.v` `csync` extracted at run time):** the framework serrates at LINE rate with
-  no equalizing pulses, so the two fields — whose vsyncs start half a line apart — present
-  broad pulses of **~50 µs and ~18 µs**; 18 µs is at/below the threshold of a width-based
-  separator (the RT4K "vsync length / lines-per-frame toggling" shape). FIX = the fork's
-  `csync` serrates at **2H** during vsync: both fields present the standard ~27 µs pulse,
-  and both separator models then read 262.5 lines for EITHER vsync placement.
-  ⚠ `half_len = (h_cnt + hs_len) >> 1` — `h_cnt` resets on both hsync edges, so at the
-  rising edge it holds `line − hs_len`; `h_cnt >> 1` is 63 clocks early and re-breaks the
-  symmetry (the bench catches it).
-  ★★ **HW ROUNDS 1–2 (the maintainer's composite CRT): 720x480i reported right, but the
-  picture BOUNCES at field rate and looks blockier than the previous release — at the
-  idle logo too, with every `O[2]` trigger clean. ROOT CAUSE NOT ESTABLISHED.** Round 1
-  had also anchored the interlaced vsync on the HSYNC LEADING EDGE (window 243..246);
-  that is now **REVERTED** to the upstream N64 placement (dot 0 / halfline, window
-  244..247) — what `re_interlace` used and what this CRT has always been happy with —
-  since the 2H serrations make the placement nearly irrelevant to both separator models
-  (width detector 450451/450449 vs exactly 450450; the 74 ns comes from `syncgen_intf`
-  doubling hsync start/end as 2x+1). ⚠ **The composite CRT is the reference display for
-  the analog path; do not re-shape analog sync without one to test on.** Next bisect if
-  round 3 does not clear it: `CE_PIXEL` back to constant 1, then pixel repetition vs a
-  native-width 13.5 MHz `dot_ce`. Detail: `docs/single_raster_analog.md` §3.9.
+  ★★ **THE DEFECT THIS BRANCH INTRODUCED, AND THE RULE IT RE-PROVED: DO NOT PUT A
+  HALF-LINE ON THE MAIN RASTER.** Round 1 wrote halfline 429/432 into the interlaced
+  modeline on the theory that `ff01ac8` ("a half-line makes an HDMI receiver hunt") was
+  stale — observed on the OLD pulse-delay half-line. It is NOT stale. HW rounds 1–3 on a
+  composite CRT bounced at field rate and looked blockier; then HDMI showed it too —
+  **Weave combed on a STILL** (lines through the tops of letters) and consecutive **bob**
+  frames of a still differed by **3.5 px @1080p** (one field line = 4.5 px; a still should
+  show ZERO). ★ The decisive A/B was the user's: **v0.3.0 `Analog Out = Native Fields` —
+  the SAME authored-fields content path on a line-aligned raster — is CLEAN on the same
+  disc**, and `VGA_F1`/`resample_addrgen`/`mixer` are byte-identical between the builds.
+  ascal weaves/bobs from `VGA_F1` and counts lines from DE; a genuine half-line on its
+  input breaks that registration. ⚠ Also learned: on v0.3.0 `Interlaced Out` is INERT
+  whenever the analog raster is engaged (`il_eff = analog_fields | (il_want & ~filmp_eff &
+  ~analog_eff)`), so `Analog Out = Native Fields` is the only 0.3.0 setting that engages
+  today's path — the right thing to compare against.
+  ★ **FIX (round 4): one raster, two sync flavours.** The main raster keeps halfline 0
+  (→1 through syncgen_intf's upstream 2x+1 doubling = line-aligned, exactly v0.3.0/v0.4.0)
+  so the scaler is happy; the 2:1 half-line is applied to the ANALOG composite sync alone,
+  in `sys/sys_top.v`'s fork `csync`, as an exact half-line countdown on the field `VGA_F1`
+  marks as lower (new one-bit emu output `VGA_ILACE` enables it). `csync_field_tb` proves
+  the pins get 262.5-line sync events from a raster whose own vsyncs are 262/263 apart.
+  The same `csync` also serrates at **2H** during vsync: stock's line-rate serration gives
+  the two fields ~50 µs and ~18 µs broad pulses (18 µs is at the threshold of a
+  width-based separator = the RT4K "lines-per-frame toggling" shape); at 2H both present
+  the standard ~27 µs. ⚠ `half_len = (h_cnt + hs_len) >> 1` — `h_cnt` resets on BOTH hsync
+  edges. Detail: `docs/single_raster_analog.md` §3.1/§3.9.
   Also: idle window off-by-ones fixed (VER_RES 479→480, H 1441→1440 — idle now reports
   `720x480i`, no load-time popup); `CE_PIXEL` = one clock per pixrep pair in Interlaced
   (Main reports **720x480i**, ascal samples 720 real pixels; the analog waveform is

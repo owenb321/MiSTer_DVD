@@ -3,6 +3,12 @@
  * interlaced main raster, give a television's vertical sync separator the same
  * trigger point in both fields?
  *
+ * ★ The half-line that makes the two fields interleave is applied INSIDE csync for the
+ * analog pins only (HW round 3: a half-line on the main raster combs ascal's weave).
+ * So this bench is also the proof that the analog output istrue 2:1 interlaced: the two
+ * fields' sync events must be 262.5 lines apart even though the RASTER's vsyncs are a
+ * whole 262/263 lines apart.
+ *
  * WHY (2026-09-03, the RGBS / YPbPr field reports): a CRT or a scaler on
  * composite sync (SCART RGBS, sync-on-Y) derives vertical timing by INTEGRATING
  * the sync signal — a low-pass filter and a threshold. The two fields of a 2:1
@@ -17,7 +23,8 @@
  * same pre-charge in both fields. This bench MEASURES it instead of guessing.
  *
  * Chain under test: rtl/mpeg2/syncgen.v with the interlaced modeline exactly as
- * syncgen sees it (pixel repetition doubled, half-line 858) -> the REAL sys_top.v
+ * syncgen sees it (pixel repetition doubled, half-line 1 = LINE-ALIGNED, which is what
+ * the scaler needs) -> the REAL sys_top.v
  * `csync` module (extracted at run time by bench/dvd/run_csync_field.sh, since
  * sys_top.v cannot be compiled standalone) -> a first-order RC integrator sampled at 27 MHz (tau ~ 40 us, the classic
  * vertical-integrator value) with a Schmitt threshold (60 % / 30 %).
@@ -85,7 +92,7 @@ module csync_field_tb;
     .horizontal_length(12'd1715),
     .vertical_resolution(12'd480),
     .vertical_sync_start(vss), .vertical_sync_end(vse),
-    .horizontal_halfline(12'd858), .vertical_length(12'd261),
+    .horizontal_halfline(12'd1), .vertical_length(12'd261),   // the MAIN raster: line-aligned (2x+1 of 0)
     .interlaced(1'b1), .clip_display_size(1'b0),
     .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
     .h_sync(h_sync), .v_sync(v_sync), .c_sync(c_sync_unused),
@@ -95,7 +102,11 @@ module csync_field_tb;
   // (sync_gen already emits them that way), then csync XORs them. The pin carries
   // ~csync, so "asserted" below means csync == 1.
   wire cs;
-  csync_ref csync_i (.clk(clk), .hsync(h_sync), .vsync(v_sync), .csync(cs));
+  // ilace/fld: the fork's csync adds the 2:1 half-line for the analog pins. fld is
+  // VGA_F1 = ~v_pos[0] = odd_field; F1 = 0 is the field delayed half a line.
+  wire f1 = ~v_pos[0];
+  csync_ref csync_i (.clk(clk), .hsync(h_sync), .vsync(v_sync),
+                     .ilace(1'b1), .fld(f1), .csync(cs));
 
   // ---- the television: first-order RC integrator + threshold -----------------
   // v += (x - v) / N per 27 MHz sample; N = tau * 27e6. tau = 40 us -> N = 1080.

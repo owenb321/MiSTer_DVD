@@ -14,15 +14,16 @@
  * ride the interlaced MAIN raster's VBI through dvd/cc_vbi.sv and the registered
  * output stage in dvd/emu.sv. This bench builds that exact chain: the REAL
  * rtl/mpeg2/syncgen.v with the interlaced modeline as syncgen sees it (pixel
- * repetition doubled, half-line 858), the REAL dvd/cc_vbi.sv on its coordinates,
+ * repetition doubled, halfline 1 = line-aligned), the REAL dvd/cc_vbi.sv on its coordinates,
  * and a copy of emu.sv's output stage (caption level outside DE, black elsewhere,
  * CE_PIXEL = one clock per pixrep pair). Caption pairs are injected on a separate
  * producer clock, and the ONLY signals observed are the pins. The checker is a TV
  * model, sampling at the pixel enable (858 samples per line):
  *
  *   [1] finds caption bursts in the VBI (never during DE),
- *   [2] classifies each field by its vsync leading-edge alignment to hsync
- *       (SMPTE 170M: line-aligned = field 1, mid-line = field 2),
+ *   [2] classifies each field by the raster's own field marker (v_pos[0] = ~VGA_F1);
+ *       that it is the broadcast field 1 is proven by cc_field_map_tb (sync signature)
+ *       and csync_field_tb (the analog pin),
  *   [3] demodulates each burst (slice at ~25 IRE, sample at bit centres) and
  *       requires the FIELD-1 pair on the field-1 line and the FIELD-2 pair on
  *       the field-2 line — the full slot-routing contract at the pins,
@@ -58,7 +59,7 @@ module cc_e2e_tb;
     .horizontal_length(12'd1715),
     .vertical_resolution(12'd480),
     .vertical_sync_start(12'd244), .vertical_sync_end(12'd247),
-    .horizontal_halfline(12'd858), .vertical_length(12'd261),
+    .horizontal_halfline(12'd1), .vertical_length(12'd261),
     .interlaced(1'b1), .clip_display_size(1'b0),
     .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
     .h_sync(h_sync), .v_sync(v_sync), .c_sync(c_sync_u),
@@ -217,11 +218,18 @@ module cc_e2e_tb;
     end
 
     if (out_vs && !vs_q) begin
-      // classify: line-aligned (h near 0 or wrapped near 858) = FIELD 1
-      f1_field <= (h_dot < 214) || (h_dot > 643);
+      // Classify the field. The MAIN raster is line-aligned in both fields on purpose
+      // (a half-line here combs ascal's weave — HW round 3), so the vsync position no
+      // longer distinguishes them; the 2:1 half-line is applied downstream, to the
+      // analog composite sync, by sys_top's csync. The raster's own field marker is
+      // v_pos[0] (= ~VGA_F1), and that it marks the BROADCAST field-1 line-aligned
+      // vsync is proven by bench/dvd/cc_field_map_tb.sv (sync_gen with the analog
+      // half-line) and bench/dvd/csync_field_tb.sv (the csync pin, both fields
+      // 262.5 lines apart).
+      f1_field <= ~v_pos[0];
       line_no  <= 0;
-      if (verbose) $display("  vsync rise at h_dot=%0d (%0s) v_pos=%0d line_no was %0d",
-                            h_dot, ((h_dot < 214) || (h_dot > 643)) ? "line-aligned" : "mid-line", v_pos, line_no);
+      if (verbose) $display("  vsync rise at h_dot=%0d v_pos=%0d (field %0s) line_no was %0d",
+                            h_dot, v_pos, (~v_pos[0]) ? "1" : "2", line_no);
     end
 
     // capture non-active luma; captions must NEVER coincide with out_de

@@ -1,10 +1,11 @@
 # Single-raster analog output — the interlaced main raster drives the CRT
 
 **Status (2026-09-03, branch `feature/single-raster-analog`): sim-proven (every suite
-below green, two RED reproductions). **HW rounds 1–2 on a composite CRT: 720x480i is
-reported correctly, but the picture bounces at field rate and looks blockier than the
-previous release — root cause NOT established (§3.9).** Round 3 reverts the vsync
-anchoring and keeps the 2H serrations. ⏳ HW-confirm pending. Gate = the two RGBS / YPbPr
+below green). **HW rounds 1–3 found and fixed the real defect: a half-line on the MAIN
+raster combs the scaler's weave (§3.9) — the `ff01ac8` note was right and this branch had
+overturned it.** Round 4 keeps the main raster line-aligned for ascal and applies the 2:1
+half-line to the ANALOG composite sync only, in `sys_top`'s `csync`. One raster, one
+picture, two sync flavours. ⏳ HW-confirm pending. Gate = the two RGBS / YPbPr
 field reports below reproduce clean (idle logo AND playback), gregSTORM's composite CRT
 and the HDMI 480i path unregressed, Main reporting `720x480i @ 59.94` steady.**
 
@@ -47,13 +48,21 @@ edge and counts lines from DE; every other 480i core feeds it exactly this.
 
 ## 3. What changed
 
-### 3.1 Half-line on the interlaced main modeline
-`dvd/emu.sv` `REG_WR_VID_MODE` interlaced branch writes `halfline = 429` (NTSC) /
-`432` (PAL); `rtl/mpeg2/syncgen_intf.v` doubles it as `2x` under pixel repetition
-(429 → 858 = exactly half the 1716-dot line; the old `2x+1` gave 859). Vsync-to-vsync is
-now 450450 clk27 = 262.5 lines **every field**. Main reports a steady 59.94, a
-`vsync_adjust` PLL lands on the true rate, and the raster is a standard 480i/576i
-signal.
+### 3.1 Where the 2:1 half-line lives
+An interlaced CRT needs the second field's vertical sync half a line later than the
+first's — that is what interleaves the fields. **It must not be on the main raster**
+(§3.9): ascal registers the two fields against each other wrongly when it is. So:
+
+- the **main raster** keeps `halfline = 0` in the modeline (`syncgen_intf`'s upstream
+  `2x+1` pixrep doubling makes it 1, a one-dot reference shift = line-aligned both
+  fields), exactly as v0.3.0 Native Fields and v0.4.0 shipped it;
+- the **analog composite sync** gets the true half-line in `sys/sys_top.v`'s `csync`,
+  which delays the vsync edge by an exact half-line countdown on the field `VGA_F1`
+  marks as lower. New `emu` output `VGA_ILACE` enables it.
+
+Measured at the pin (`csync_field_tb`): the raster's vsyncs are a whole 262/263 lines
+apart, while the analog sync events are 450451/450449 clk27 = 262.5 lines apart. One
+raster and one picture serve the scaler and a CRT with the sync each needs.
 
 ### 3.2 The second raster is gone
 `dvd/re_interlace.sv` (383 lines, a 4096×24 line buffer ≈ 10 M10K, a second `sync_gen`
@@ -143,38 +152,43 @@ clocks early and re-breaks the per-field symmetry — the bench catches it (meas
 `csync_field_tb` gates both separator models. Equalizing pulses outside vsync are still
 not generated (they need the vsync position in advance); no console core has them.
 
-### 3.9 HW round 2 — the hsync-anchored vsync experiment, reverted
-Round 1 (`DVD_singleraster_20260902_1902`) also **anchored the interlaced vsync on the
-hsync leading edge** (field B half a line later, vsync window moved to 243..246), on the
-theory that the 18 µs broad pulse came from the vsync starting ~9 µs after hsync. On the
-maintainer's composite CRT that build **bounced at field rate and looked blockier** than
-the previous release, at the idle logo as well as in playback, with every `O[2]` raster
-trigger reading clean. Round 2 with 2H serrations changed nothing on that set.
+### 3.9 HW rounds 1–3 — the half-line belongs on the analog sync, not the raster
+Round 1 put the half-line on the main raster (and, separately, anchored the vsync on the
+hsync edge). On the maintainer's composite CRT the picture **bounced at field rate and
+looked blockier**; round 2 (2H serrations) changed nothing; round 3 (vsync anchoring
+reverted) changed nothing. Then the decisive evidence arrived — **HDMI showed it too**:
 
-The anchoring is therefore **reverted** to the upstream N64-model placement (`vs_ref_dot
-= odd_field ? 0 : halfline`, window 244..247 / 292..295), which is what the retired
-`re_interlace` raster used and what the CRT has always been happy with. The sweep says
-this costs nothing now that the serrations are at 2H: the width detector reads
-450451/450449 instead of exactly 450450 (a 74 ns difference, from `syncgen_intf`
-doubling hsync start/end as 2x+1 so the measured hsync width differs by a clock), and
-the integrator is unchanged. `bench/dvd/run_csync_sweep.sh` reproduces the A/B over
-tau = 10–80 µs.
+- **Weave on a still combed**, lines visible through the tops of letters;
+- consecutive **bob** frames of a still differed by **3.5 px at 1080p** (one 480i field
+  line is 4.5 px, one frame line 2.25 px). On a still, correct bob renders both fields at
+  the same apparent position, so any visible shift means the fields are misregistered.
+- **v0.3.0 `Analog Out = Native Fields` — the same authored-fields content path, on a
+  line-aligned raster — is CLEAN on the same disc.**
 
-**What this means for the remaining bounce:** neither separator model reproduces the
-symptom, so the cause is not established. With the anchoring reverted, the analog sync
-waveform differs from the last-good release only by the 2H serrations — if the set is
-still unhappy, the next bisect step is the single-raster plumbing itself rather than the
-sync shape (candidates in order: `CE_PIXEL` back to constant 1, then the pixel-repetition
-raster vs `re_interlace`'s 13.5 MHz native-width output). ⚠ **The composite CRT is the
-reference display for this path** — do not re-anchor or re-shape analog sync without one
-to test on.
+The content path is byte-identical between those builds (`VGA_F1`,
+`dvd/resample_addrgen.v` and `rtl/mpeg2/mixer.v` are untouched by this branch), so the
+only interlace-relevant difference was the main raster's half-line. **`ff01ac8` was
+recording a real effect** — its note says "scanline comb", which is exactly the weave
+screenshot — and this branch had dismissed it as an artefact of the old pulse-delay
+implementation. It is not: ascal weaves and bobs from `VGA_F1` and counts lines from DE,
+and a genuine half-line on its input breaks that registration whatever the sync
+generator's internal model is.
+
+Fix: §3.1. The scaler gets the raster it wants; the CRT gets its half-line in the
+composite sync. ⚠ **Do not put a half-line on the main raster again.** If a future change
+needs one, it needs a second raster, which is what the retired `re_interlace` was.
+
+⚠ Consequence for RGBHV rigs that use separate H and V sync rather than composite sync or
+sync-on-Y: the V pin carries the line-aligned vsync, so those displays see field-paired
+480i. Every csync/SoY/composite/S-video path gets true interlace. No such rig has been
+reported; the fix is to apply the same delay to `VGA_VS` when `csync_en` is low.
 
 ## 4. Tests
 
 | Bench | What it proves |
 |---|---|
-| `bench/dvd/crt_syncgen_tb.sv` PHASE 2c (new) | pixrep + half-line 858: vsync every 450450 clk27, rises 858 apart within the line, 3.0-line width, 240 lines/field; PHASES 1/2/2b/3/4/5 unchanged |
-| `bench/dvd/csync_field_tb.sv` + `run_csync_field.sh` (new) | the REAL `sys_top.v` `csync` (extracted at run time) on the shipped modeline: first broad pulse ≥ standard in both fields, width detector and RC integrator both within tolerance of 262.5 lines; `run_csync_sweep.sh [<older syncgen.v>]` sweeps tau and A/Bs vsync placements (`+vss`/`+vse`/`+tau_us`) |
+| `bench/dvd/crt_syncgen_tb.sv` PHASE 2c (new) | the shipped raster (pixrep, halfline 0→1): field pair exactly 900900 clk27, line-aligned vsync in both fields, 3.0-line width, 240 lines/field with alternating parity; PHASES 1/2/2b/3/4/5 unchanged |
+| `bench/dvd/csync_field_tb.sv` + `run_csync_field.sh` (new) | the REAL `sys_top.v` `csync` (extracted at run time) fed the shipped LINE-ALIGNED raster: it must synthesise a 262.5-line analog sync, with a ≥ standard first broad pulse in both fields and both separator models in tolerance — i.e. this bench is the proof that the pins get true 2:1 interlace; `run_csync_sweep.sh` sweeps tau (`+tau_us`) |
 | `bench/dvd/modeline_boot_tb.sv` [4] (new) + `run_modeline_boot.sh --red` | REAL `reset.v` + `regfile.v` + `syncgen_intf` + `sync_gen`: a watchdog pulse leaves vsync spacing at 450450 (GREEN) / breaks it with the old `dot_rst` wiring (RED); the boot-race phases updated to the new walk values |
 | `bench/dvd/cc_e2e_tb.sv` (rewritten) | REAL `sync_gen` + REAL `cc_vbi` + a copy of the output stage: captions demodulated at the pins, line 21 (17 H after the vsync edge), correct field slots, 720 enables per 1440-clock DE line |
 | `cc_line21_tb`, `cc_field_map_tb` | unchanged, green |
@@ -199,10 +213,8 @@ to test on.
 - Native 13.5 MHz dot pacing (720-wide internally) — only if a reason appears; needs the
   overlay query-lead constants re-tuned (`HUD_QX_ADJ`, `BAR_QX_ADJ`, `LOGO_QX_LEAD`,
   `SP_QX_ADJ`, `crt_ov_map`, `cc_vbi`).
-- **The open one:** the composite-CRT field-rate bounce (§3.9). Next bisect steps if
-  round 3 does not clear it: `CE_PIXEL` back to constant 1 (accepting 1440x480i in the
-  OSD), then the pixel-repetition raster vs a native-width 13.5 MHz `dot_ce` (the old
-  `O[14]` pacing) — which would need every overlay query-lead constant re-tuned.
+- Apply the analog half-line to `VGA_VS` as well when `csync_en` is low, for RGBHV rigs
+  (§3.9) — nobody has reported one, so it is unbuilt.
 - Equalizing pulses outside vsync (needs the vsync position in advance — a 3-line video
   delay or a hint from the modeline walk) if a set still hunts with 2H serrations.
 - Progressive 480p on the analog pins keeps the dot-0 vsync reference (no field

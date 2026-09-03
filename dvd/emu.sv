@@ -25,6 +25,11 @@ module emu (
 	output        VGA_F1,
 	output  [1:0] VGA_SL,
 	output        VGA_SCALER,
+	// DVD-FORK (single-raster analog): the analog chain's composite sync needs the
+	// 2:1 half-line that the main raster deliberately does NOT carry (ascal combs on
+	// it). sys_top's csync applies it to the pins when this is high, using VGA_F1 to
+	// pick the field. docs/single_raster_analog.md §3.8.
+	output        VGA_ILACE,
 
 	// DVD-FORK FIX: canonical MiSTer direction is OUTPUT (core -> HPS virtual
 	// buttons; b[0] = OSD button). This fork inherited it as an input, leaving
@@ -271,6 +276,7 @@ wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
 // option and the derive modes — Video Output consolidation, 2026-09-02.
 wire il_eff = interlaced_eff;
 assign VGA_F1       = il_eff ? ~core_v_pos[0] : 1'b0;
+assign VGA_ILACE    = il_eff;
 assign VGA_SL       = 0;
 // DVD-FORK (dual-raster analog output): VGA_SCALER is never forced any more —
 // sys_top ORs this into the ini bit (vga_scaler = cfg[2] | vga_force_scaler), so
@@ -3318,26 +3324,20 @@ always @(*) begin
                             : il_prev  ? {4'b0, 12'd244, 4'b0, 12'd247}   // NTSC per-field vsync
                                        : {4'b0, 12'd488, 4'b0, 12'd494}; end // per-frame vsync
         3'd4: begin wr_addr = REG_WR_VID_MODE;
-                    // DVD-FORK FIX (single-raster analog, 2026-09-03): the interlaced
-                    // main raster carries the N64-model HALF-LINE (429 NTSC / 432 PAL =
-                    // half of 858 / 864; syncgen_intf doubles it to 858 / 864 under
-                    // pixrep). With it the vsync-to-vsync spacing is exactly 262.5 /
-                    // 312.5 lines every field, so Main reports a steady 59.94 / 50 Hz,
-                    // a vsync_adjust HDMI PLL lands on the true rate, and the raster is
-                    // a standard 480i/576i signal the analog pins can carry DIRECTLY —
-                    // which retired the second raster (dvd/re_interlace.sv, deleted).
-                    // HISTORY: this used to write halfline=0 "so an HDMI receiver does
-                    // not hunt (ff01ac8)". That observation was made on the OLD upstream
-                    // pulse-delay half-line (a mid-line vsync EDGE inside two equal
-                    // 262-line fields = 262.5/261.5 alternating spacing — which hunts on
-                    // anything, and never locked 2:1 on a CRT either, docs/crt_480i.md
-                    // §1). The N64 model (alternating 262/263 totals + a shifted vsync
-                    // COUNTER reference, rtl/mpeg2/syncgen.v) is exact, was HW-proven on
-                    // the CRT, and already ran on the main raster with HDMI alongside in
-                    // the O[14] rounds without hunting. ascal reads VGA_F1 + the vsync
-                    // EDGE and starts lines from DE; it never looks at where in the line
-                    // vsync falls — every other 480i core feeds it exactly this.
-                    wr_data = il_prev  ? {4'b0, (pal_prev ? 12'd432 : 12'd429), 13'b0, 3'b011}  // half-line, pixrep+interlaced
+                    // ★ halfline = 0 on the MAIN raster — do NOT put a real half-line
+                    // here. syncgen_intf's pixrep doubling turns it into 1 (a one-DOT
+                    // reference shift, both fields effectively line-aligned), which is
+                    // what ascal wants: it weaves/bobs from VGA_F1 and counts lines from
+                    // DE, and a genuine half-line makes it register the two fields
+                    // against each other WRONG — a scanline comb on a still, the
+                    // ff01ac8 symptom. HW ROUND 3 (2026-09-03) re-proved that the hard
+                    // way: this walk briefly wrote 429/432, and HDMI Weave combed on a
+                    // still while v0.3.0 `Analog Out = Native Fields` (the same authored-
+                    // fields content path, halfline 0) was clean on the same disc.
+                    // The 15 kHz analog output DOES need the half-line — it gets it in
+                    // sys_top's csync (fork variant), applied to the composite sync
+                    // alone, so one raster serves both. docs/single_raster_analog.md §3.8.
+                    wr_data = il_prev  ? {4'b0, 12'd0,   13'b0, 3'b011}  // halfline 0, pixrep+interlaced
                                        : {4'b0, 12'd0,   13'b0, 3'b000}; end // progressive
         default: begin wr_addr = REG_WR_TRICK;                          // 3'd5
                     wr_data = {21'b0, trick_w}; end

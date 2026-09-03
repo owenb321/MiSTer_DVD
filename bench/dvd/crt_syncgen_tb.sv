@@ -273,41 +273,41 @@ module crt_syncgen_tb;
     exp_vs_pair = 0;
 
     // =======================================================================
-    // PHASE 2c — the SHIPPED interlaced raster since the single-raster rework
-    // (2026-09-03): pixel repetition AND the N64-model half-line. dvd/emu.sv writes
-    // halfline 429; syncgen_intf doubles it as 2x (not 2x+1, fixed with it) to 858
-    // = exactly half of the 1716-dot line, and horizontal_resolution 720 -> 1440
-    // (was 1441). Invariants: vsync-to-vsync EXACTLY 450450 clk27 = 262.5 lines
-    // EVERY field (this is what makes Main report a steady 59.94 Hz and lets the
-    // analog pins take this raster directly), consecutive rises half a line apart
-    // within the line, 3.0-line vsync width both fields, 240 active lines/field
-    // with alternating parity.
+    // PHASE 2c — the SHIPPED interlaced raster (2026-09-03, single-raster analog):
+    // pixel repetition, horizontal_resolution 720 -> 1440 (2x; the old 2x+1 gave the
+    // 1441-wide idle window), and halfline 0 -> 1 through the upstream 2x+1 doubling,
+    // i.e. the vsync reference is effectively LINE-ALIGNED in both fields. That is
+    // deliberate: a real half-line here combs ascal's weave (HW round 3). The 2:1
+    // half-line for the analog pins is added downstream in sys_top's csync and is
+    // proven by bench/dvd/csync_field_tb.sv. Invariants here: the field PAIR is
+    // exactly 900900 clk27 (the A/V rate), 3.0-line vsync width, 240 active lines
+    // per field with alternating parity.
     // =======================================================================
     rst = 0;
     horizontal_resolution = 12'd1440; horizontal_sync_start = 12'd1471;
     horizontal_sync_end   = 12'd1595; horizontal_length     = 12'd1715; // 1716 dots
     vertical_resolution   = 12'd480;  vertical_sync_start   = 12'd244;
     vertical_sync_end     = 12'd247;  vertical_length       = 12'd261;  // 262/263 fields
-    horizontal_halfline   = 12'd858;  interlaced            = 1'b1;     // pixrep: 2*429
+    horizontal_halfline   = 12'd1;    interlaced            = 1'b1;     // pixrep: 2*0+1
     horizontal_size = 14'd1440;       // as syncgen_intf doubles the stream width
     waitclk(8); rst = 1;
     reset_trackers;
     exp_hs_period  = 1716;
-    exp_vs_spacing = ILACE480_DOTS / 2; // 450450 — constant, every field
+    exp_vs_spacing = 0;                 // spacings alternate 262/263 lines — check the PAIR
+    exp_vs_pair    = ILACE480_DOTS;     // 900900 clk27 to the dot
     exp_vs_width   = 3 * 1716;
-    exp_vs_half    = 858;
-    settle_rises   = 2;
+    settle_rises   = 3;
     track_fields   = 1;
     waitclk(ILACE480_DOTS * 4);
-    if (bad_hs || bad_vs_spacing || bad_vs_width || bad_vs_half || parity_errs || field_line_errs || parity_alt_errs) begin
+    if (bad_hs || bad_vs_pair || bad_vs_width || parity_errs || field_line_errs || parity_alt_errs) begin
       errors = errors + 1;
-      $display("[480i pixrep+halfline] FAIL: hs=%0d vs_spacing=%0d vs_width=%0d half=%0d parity=%0d lines=%0d alt=%0d",
-               bad_hs, bad_vs_spacing, bad_vs_width, bad_vs_half, parity_errs, field_line_errs, parity_alt_errs);
+      $display("[480i shipped raster] FAIL: hs=%0d vs_pair=%0d vs_width=%0d parity=%0d lines=%0d alt=%0d",
+               bad_hs, bad_vs_pair, bad_vs_width, parity_errs, field_line_errs, parity_alt_errs);
     end else
-      $display("[480i pixrep+halfline] PASS: vsync every %0d clk27 (262.5 lines) x%0d, rises half a line (858) apart, 3.0-line width, 240 lines/field over %0d fields",
-               ILACE480_DOTS / 2, vs_rises, fields_seen);
+      $display("[480i shipped raster] PASS: field pair %0d clk27 = 29.970030 fps EXACT, line-aligned vsync both fields, 3.0-line width, 240 lines/field over %0d fields",
+               ILACE480_DOTS, fields_seen);
     track_fields = 0;
-    exp_vs_half  = 0;
+    exp_vs_pair  = 0;
     horizontal_size = 14'd720;
 
     // =======================================================================

@@ -1395,7 +1395,7 @@ osd vga_osd
 );
 
 wire vga_cs_osd;
-csync csync_vga(clk_vid, vga_hs_osd, vga_vs_osd, vga_cs_osd);
+csync csync_vga(clk_vid, vga_hs_osd, vga_vs_osd, vga_ilace, f1, vga_cs_osd);
 
 `ifndef MISTER_DISABLE_YC
 	reg         pal_en;
@@ -1685,6 +1685,7 @@ wire        vs_fix, hs_fix, de_emu, vs_emu, hs_emu, f1;
 wire        hvs_fix, hhs_fix, hde_emu;
 wire        clk_vid, ce_pix, clk_ihdmi, ce_hpix;
 wire        vga_force_scaler;
+wire        vga_ilace;      // DVD-FORK (single-raster analog): analog csync half-line enable
 
 wire        ram_clk;
 wire [28:0] ram_address;
@@ -1772,6 +1773,7 @@ emu emu
 	.VGA_DE(de_emu),
 	.VGA_F1(f1),
 	.VGA_SCALER(vga_force_scaler),
+	.VGA_ILACE(vga_ilace),
 
 `ifndef MISTER_DUAL_SDRAM
 	.VGA_DISABLE(VGA_DISABLE),
@@ -1905,26 +1907,42 @@ endmodule
 // CSync generation
 // Shifts HSync left by 1 HSync period during VSync
 //
-// DVD-FORK (single-raster analog, 2026-09-03): serrations at TWICE line rate
-// during vsync (the broadcast structure), not once per line as stock. Stock's
-// line-rate serration gives the two fields of an interlaced raster DIFFERENT
-// broad-pulse patterns relative to their vsync start (one field's vsync begins
-// half a line later than the other's, the serrations do not), so a set's vertical
-// sync separator sees a ~50 us broad pulse on one field and ~18 us on the other —
-// at or below the threshold of a width-based separator, which is the shape of the
-// RetroTINK "vsync length / lines-per-frame toggling" report. With a serration
-// every half line both fields see the same 27 us broad pulse (the broadcast
-// figure) and bench/dvd/csync_field_tb.sv measures both separator models at
-// 262.5 lines for either vsync placement. Equalizing pulses outside vsync are not
-// generated (they would need advance knowledge of vsync); no console core has
-// them either. Progressive rasters get the same 2H serration, which is what a
-// 240p broadcast-style signal carries anyway.
+// DVD-FORK (single-raster analog, 2026-09-03). Two additions, both analog-only:
+//
+// 1. THE 2:1 HALF-LINE. An interlaced CRT needs the second field's vertical sync half
+//    a line later than the first's; that is what interleaves the fields. It must NOT be
+//    on the main raster, because ascal registers the two fields against each other
+//    wrongly when it is (a scanline comb on a still - the ff01ac8 symptom, re-proved on
+//    HW 2026-09-03 against v0.3.0 Native Fields, which is the same authored-fields
+//    content path with a line-aligned raster and is clean). So the core emits ONE raster
+//    with line-aligned vsyncs for the scaler, and the half-line is added HERE, to the
+//    composite sync the analog pins carry. `ilace` enables it and `fld` (VGA_F1, a
+//    field-long level) picks the field: F1 = 0 is the lower field, delayed half a line.
+//    The delay is an exact countdown from the vsync edge, not a phase compare, so it
+//    does not care where in the line vsync falls.
+//
+// 2. SERRATIONS AT 2H during vsync, instead of stock's line rate. With the half-line in
+//    play the two fields' vsyncs start half a line apart while a line-rate serration
+//    grid does not, so the fields present broad pulses of ~50 us and ~18 us; 18 us is at
+//    or below the threshold of a width-based sync separator, which is the shape of the
+//    RetroTINK "vsync length / lines-per-frame toggling" report. At 2H both fields
+//    present the standard ~27 us pulse. bench/dvd/csync_field_tb.sv measures both an RC
+//    integrator and a width detector at 262.5 lines.
+//    (!) half_len is (h_cnt + hs_len) >> 1: h_cnt resets on BOTH hsync edges, so at the
+//    rising edge it holds (line - hs_len). h_cnt >> 1 is 63 clocks early and re-breaks
+//    the symmetry (the bench catches it).
+//
+// Equalizing pulses outside vsync are not generated (they need the vsync position in
+// advance); no console core has them either. With ilace = 0 this is the stock module
+// plus the 2H serration.
 
 module csync
 (
 	input  clk,
 	input  hsync,
 	input  vsync,
+	input  ilace,          // DVD-FORK: interlaced analog raster - apply the half-line
+	input  fld,            // DVD-FORK: VGA_F1; 0 = the field delayed half a line
 
 	output csync
 );
@@ -1933,8 +1951,10 @@ assign csync = (csync_vs ^ csync_hs);
 
 reg csync_hs, csync_vs;
 always @(posedge clk) begin
-	reg prev_hs;
+	reg prev_hs, prev_vs;
 	reg [15:0] h_cnt, line_len, hs_len, half_len;
+	reg        vs_del, pend_r, pend_f;
+	reg [15:0] cnt_r, cnt_f;
 
 	// Count line/Hsync length
 	h_cnt <= h_cnt + 1'd1;
@@ -1944,24 +1964,37 @@ always @(posedge clk) begin
 		h_cnt <= 0;
 		if (hsync) begin
 			line_len <= h_cnt - hs_len;
-			// DVD-FORK: half the line period. h_cnt resets on BOTH hsync edges, so
-			// at the RISING edge it holds (line - hs_len); the line period is
-			// h_cnt + hs_len and half of it is (h_cnt + hs_len) >> 1 = 858 clk27
-			// on the 1716-dot interlaced raster. (Using h_cnt >> 1 puts the extra
-			// serration 63 clocks early and re-breaks the per-field symmetry —
-			// bench/dvd/run_csync_field.sh catches it.)
-			half_len <= (h_cnt + hs_len) >> 1;
+			half_len <= (h_cnt + hs_len) >> 1;   // DVD-FORK: half the line period
 			csync_hs <= 0;
 		end
 		else hs_len <= h_cnt;
 	end
 
-	if (~vsync) csync_hs <= hsync;
-	else if(h_cnt == line_len) csync_hs <= 1;
-	else if(h_cnt == line_len - half_len) csync_hs <= 1;            // DVD-FORK: 2H serration
-	else if(h_cnt == line_len - half_len + hs_len) csync_hs <= 0;   // DVD-FORK: same width as hsync
+	// DVD-FORK: vsync for the ANALOG pins, delayed half a line on the lower field.
+	prev_vs <= vsync;
+	if (vsync & ~prev_vs) begin
+		if (ilace & ~fld) begin pend_r <= 1'b1; cnt_r <= half_len; end
+		else vs_del <= 1'b1;
+	end
+	if (~vsync & prev_vs) begin
+		if (ilace & ~fld) begin pend_f <= 1'b1; cnt_f <= half_len; end
+		else vs_del <= 1'b0;
+	end
+	if (pend_r) begin
+		if (cnt_r == 16'd0) begin vs_del <= 1'b1; pend_r <= 1'b0; end
+		else cnt_r <= cnt_r - 1'd1;
+	end
+	if (pend_f) begin
+		if (cnt_f == 16'd0) begin vs_del <= 1'b0; pend_f <= 1'b0; end
+		else cnt_f <= cnt_f - 1'd1;
+	end
 
-	csync_vs <= vsync;
+	if (~vs_del) csync_hs <= hsync;
+	else if(h_cnt == line_len) csync_hs <= 1;
+	else if(h_cnt == line_len - half_len) csync_hs <= 1;             // DVD-FORK: 2H serration
+	else if(h_cnt == line_len - half_len + hs_len) csync_hs <= 0;    // DVD-FORK: same width as hsync
+
+	csync_vs <= vs_del;
 end
 
 endmodule
