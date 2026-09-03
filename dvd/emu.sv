@@ -1587,6 +1587,14 @@ wire [31:0] bar_base_rbn_w, bar_tgt_rbn_w;         // Phase 11: bar fill + curso
 wire [31:0] title_first_rbn_w, title_last_rbn_w;
 wire [1:0]  hud_tier_w;                            // Phase 11: scrub speed tier
 wire        hud_dir_w;                             // Phase 11: scrub direction
+// LINEAR playback (raw VCD/SVCD .bin, flat .mpg/.VOB) -- i.e. everything the
+// DVD cell layer does not own. dvd/mode_realign.sv wants the same predicate, so
+// it is named once here rather than spelled out at each use.
+wire        lin_mode_w = lin_seek_ok_w && !cell_ready;
+wire [23:0] lin_blk10_w;                           // blocks per 10 s of file
+wire        lin_blk10_ok_w;
+wire [31:0] lin_cur_bcd_w, lin_tot_bcd_w, lin_prev_bcd_w;
+wire        lin_time_ok_w, lin_prev_ok_w;
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),
     .rst_n           (reset_n),
@@ -1629,7 +1637,12 @@ dpad_seek dpad_seek_inst (
     .in_title       ((cell_ready || lin_seek_ok_w) && !menu_active &&
                      !in_title_menu && !menu_nav),
     .dvd_mode       (cell_ready),               // DSI tables available
-    .lin_mode       (lin_seek_ok_w && raw_mode_w && !cell_ready),  // raw CD geometry
+    // Every linear source, not just raw CD: the step arrives on lin_blk10 --
+    // exact geometry for a VCD/SVCD image, a measured rate for a flat .mpg or
+    // .VOB (issue #39). Gated on the rate being VALID rather than letting a
+    // zero step through, so a tap in the ~0.5 s before the estimate arms does
+    // nothing instead of firing a jump resolved against nothing.
+    .lin_mode       (lin_mode_w && lin_blk10_ok_w),
     .up_edge        (up_edge),
     .dn_edge        (dn_edge),
     .lf_edge        (lf_edge),
@@ -1645,6 +1658,7 @@ dpad_seek dpad_seek_inst (
     .tbl_raddr      (dsi_tbl_raddr),
     .tbl_rdata      (dsi_tbl_rdata),
     .lin_blk        (lin_blk_w),
+    .lin_blk10      (lin_blk10_w),
     .jump_fire      (dpad_jump_fire),
     .jump_dir       (dpad_jump_dir),
     .jump_base      (dpad_jump_base),
@@ -2088,7 +2102,7 @@ mode_realign mode_realign_i (
     // nothing. Title content is streaming, so a re-align is both valid and wanted.
     .in_title        ((cell_ready || lin_seek_ok_w) && !menu_active),
     .dvd_mode        (cell_ready),
-    .lin_mode        (lin_seek_ok_w && !cell_ready),
+    .lin_mode        (lin_mode_w),
     .still_active    (still_active),    // parked on a still: nothing to re-align
     .hold_freeze     (hold_freeze),
     .nav_flush       (load_flush),      // clears nav_dsi => the playhead goes stale
@@ -4640,6 +4654,38 @@ bcd_time_add hud_time_add (
     .b   (dsi_c_eltm),
     .sum (whole_eltm_w)
 );
+// LINEAR-MODE RATE + CLOCK -- dvd/lin_rate.sv. Two products from one measurement:
+// the blocks-per-10 s step dpad_seek needs to seek a flat .mpg/.VOB by time
+// (issue #39), and the elapsed/total clock the HUD has shown as 0:00:00 in every
+// linear mode until now. Raw VCD/SVCD bypasses the measurement combinationally
+// (a CD's geometry is fixed), so this is a no-op on that path.
+// ⚠ rst_n is reset_n, and `flush` restarts only the measurement WINDOW -- on
+// pipe_rst_n the estimate would be wiped by the very seek it enabled.
+lin_rate lin_rate_inst (
+    .clk           (clk_sys),
+    .rst_n         (reset_n),
+    .en            (lin_mode_w),
+    .raw_mode      (raw_mode_w),
+    .mount         (start_streaming),
+    .flush         (load_flush),
+    .sec_tick      (sec_tick),
+    .vid_pts       (ps_vid_pts),
+    .vid_pts_valid (ps_vid_pts_valid),
+    .lin_blk       (lin_blk_w),
+    .total_blk     (title_last_rbn_w + 32'd1),
+    // Seek preview: the bar's own cursor target, so the clock and the cursor
+    // can never disagree about where a gesture is heading.
+    .prev_rbn      (bar_tgt_rbn_w),
+    .prev_req      (bar_active_w),
+    .blk10         (lin_blk10_w),
+    .blk10_ok      (lin_blk10_ok_w),
+    .cur_time      (lin_cur_bcd_w),
+    .total_time    (lin_tot_bcd_w),
+    .prev_time     (lin_prev_bcd_w),
+    .prev_ok       (lin_prev_ok_w),
+    .time_ok       (lin_time_ok_w)
+);
+
 transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .clk          (clk_sys),
     .rst_n        (reset_n),
@@ -4660,8 +4706,14 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .display_edge (display_edge),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
-    .cur_time     (cell_ready ? whole_eltm_w : dsi_c_eltm),
-    .total_time   (pgc_playback_time_w),
+    // Three sources, in the order they can be trusted: a linear file's clock is
+    // derived from its measured rate (lin_time_ok_w implies !cell_ready, so the
+    // DVD arms below are untouched); a DVD title's is the reader's per-cell
+    // prefix sum plus the DSI cell-relative time; a bare cell-less stream falls
+    // back to the DSI time alone, which in linear modes was simply 0.
+    .cur_time     (lin_time_ok_w ? lin_cur_bcd_w
+                                 : (cell_ready ? whole_eltm_w : dsi_c_eltm)),
+    .total_time   (lin_time_ok_w ? lin_tot_bcd_w : pgc_playback_time_w),
     // DIAGNOSTIC (hud_dbg = O[2]): repurpose the "CH n/N" field as {PGCN, VTS} of the
     // reader's currently-loaded PGC, so the boot path and the how-to-play flow are
     // readable on-screen -- e.g. how-to-play looping on Title 33 shows "CH 01/07"
