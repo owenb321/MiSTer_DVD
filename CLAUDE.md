@@ -268,9 +268,14 @@ worse maintenance burden than targeted in-place edits. So:
   behavioural framestore returns a CONSTANT word (no displayed pixel carries evidence of
   which source line it came from) and its pass condition is the SAME EXPRESSION as the
   RTL's `frame_top_par_err` — a golden model that agrees with its RTL by construction
-  (the POST-only PGC trap again). Replacement: `field_phase_tb` (address-derived
-  framestore, per-field hashes of what the mixer EMITTED, consecutive fields must differ
-  and repeat with period 2).
+  (the POST-only PGC trap again). Replacement: `field_phase_tb` (LINE-STAMPED
+  framestore, per-field measurement of what the mixer EMITTED, consecutive fields must
+  differ and repeat with period 2). ★ **And the perturbation that finally exposed the
+  corrector was the MUNDANE one:** every scenario written from the field reports (seeks,
+  cold start, cadence breaks) passed with it on — the defect only appeared once the bench
+  STARVED the pixel queue, which is what this compute-bound core does several times a
+  second on real content. When a bench exonerates the code the hardware indicts, ask what
+  the hardware does all the time that the bench never does.
   ★ **The raster is the N64 model, on ONE raster** — halfline 429/432 in the interlaced
   modeline, doubled 2x (not 2x+1) by `syncgen_intf` to 858/864 = exactly half the line,
   with the 262/263 alternation ⇒ vsync exactly 262.5 lines apart EVERY field, so Main
@@ -325,6 +330,29 @@ worse maintenance burden than targeted in-place edits. So:
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
+- 🔧 **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
+  `fix/field-parity-corrector`) — sim-proven RED/GREEN, ⏳ HW-confirm pending (gate: a
+  still measures +0.50 field offset, and a chapter skip needs no toggle ritual).**
+  ★ **Root cause of the withdrawal: the FEEDBACK arm was chasing STARVATION.** Its cure
+  is a REPEATED field (re-showing `last_image` is the only insertion that lands the
+  resumed stream aligned — see the XOR note below), and it was firing at field rate,
+  because when the pixel queue runs dry the mixer displays nothing at that frame-top
+  opportunity and every following content field lands one raster slot later. That IS a
+  genuine parity error — but this core is compute-bound and does it repeatedly, so the
+  error churns, and one repeated field per starve is a far worse picture than the
+  half-line offset it removes. The old `par_armed` + **4-refresh** liveness re-arm
+  permitted an insertion every five refreshes = exactly the measured +0.00.
+  FIX = the feedback arm only acts on a **STABLE** error: `PAR_CONFIRM` (30 refreshes,
+  ~0.5 s) of a continuously-asserted verdict, plus `PAR_HOLD` (120 refreshes, ~2 s) as a
+  hard budget so a repeated field can never appear more often than that whatever the
+  starvation rate is. `par_age` starts saturated so the cold-start landing is not
+  delayed. The FEED-FORWARD arm (`alt_break`) is unchanged and ungated — it inserts the
+  OPPOSITE field, can never repeat one, and it is the arm that handles the reported
+  chapter-skip symptom. Gate: **`bench/dvd/field_phase_tb.sv`** (finished here; it was
+  committed unfinished by PR #40) + `run_field_phase.sh`, 7 windows × 2 raster phases.
+  Measured, not asserted: 4 starvation events cost **4** repeated fields with the shipped
+  corrector, **0** with the gate and **0** with the corrector off. Detail:
+  `docs/field_parity.md`.
 - 🔧 **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02, branch
   `feature/video-output-consolidation`) — sim-proven (RED/GREEN), ⏳ HW-confirm pending
   (gate = the two CRT field reports below reproduce clean).** Two CRT field reports

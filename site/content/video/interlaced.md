@@ -70,19 +70,21 @@ everything.
 
 ## Field alignment
 
-On some televisions the picture can come back from a chapter skip, fast-forward or aspect
-change looking **aliased, like a screen door**. It is a field-parity coin flip in the
-display pipeline: the two interlaced fields can land the wrong way round after an
-interruption. **Toggling `Video Output` away and back re-rolls it**, sometimes taking a
-few attempts. Not every set shows it — a television with a tolerant sync separator may
-never see it at all.
+On some televisions the picture could come back from a chapter skip, fast-forward or
+aspect change looking **aliased, like a screen door**. It is a field-parity coin flip in
+the display pipeline: the two interlaced fields land the wrong way round after an
+interruption. On older releases the workaround is to **toggle `Video Output` away and
+back**, sometimes taking a few attempts. Not every set shows it — a television with a
+tolerant sync separator may never see it at all.
 
 !!! info "Unreleased"
-    v0.4.0 shipped an automatic corrector for this, and it is **switched off** in the
-    current development build: on hardware it made both interlaced fields carry the same
-    picture lines, which showed as a combed still image and a picture that jumped a line
-    at field rate on **every** set, HDMI included. Turning it off restores the v0.3.0
-    behaviour described above. A corrected version is being worked on.
+    The current development build corrects this automatically, so the toggle should no
+    longer be needed. (v0.4.0's first attempt at the corrector had to be switched off
+    again — it made both interlaced fields carry the same picture lines, which showed as
+    a combed still image and a picture that jumped a line at field rate on every set,
+    HDMI included. The repaired version only steps in for a misalignment that persists,
+    so it cannot do that.) **If a skip still leaves the picture aliased, please report
+    it** — see [Reporting a bug](../reference/reporting-a-bug.md).
 
 ## What changed from the old settings
 

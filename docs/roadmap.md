@@ -655,6 +655,15 @@ Progressive; vsync anchored on the hsync edge after `csync_field_tb` measured fi
 first broad pulse at 18 µs. Driven by the RGBS/YPbPr/RT4K field reports on the PR #37
 prerelease. Design + HW checklist: `docs/single_raster_analog.md`.**
 
+**★ 2026-09-03 follow-up (issue #41, branch `fix/field-parity-corrector`): the
+field-parity corrector that branch had to disable is REPAIRED and re-enabled** —
+sim-proven RED/GREEN, ⏳ HW-confirm pending. Its feedback arm was chasing pixel-queue
+starvation, and its cure is a repeated field, so on this compute-bound core it repeated
+one several times a second (the "+0.00 field offset" measurement). It now only acts on a
+parity error that has HELD for ~0.5 s, with a hard ~2 s budget on top. Gate:
+`bench/dvd/field_phase_tb.sv` (finished; scenario [6] starves the pixel queue and counts
+the repeated fields). See `docs/field_parity.md`.
+
 **Status (history): ✅ HW-CONFIRMED 2026-07-05 (branch `feature/crt-480i-native`, MERGED PR fj#65) —
 then REWORKED 2026-07-29 into the DUAL-RASTER architecture, ✅ HW-CONFIRMED + MERGED
 2026-07-30 (PR fj#146):** the O[14] whole-core CRT mode is retired; the 15 kHz raster is
@@ -1783,10 +1792,12 @@ contact with the field: (1) the derive path's field-pairing wobble (this doc's
 "re-randomised several times a second") was REPORTED FROM THE WILD as "extremely wobbly,
 not how an interlaced signal normally looks on a CRT"; (2) Native Fields shipped with a
 separate field-parity re-engage coin flip ("super aliased after a chapter skip, toggle
-the mode 3-4 times to fix") — root-caused and fixed at the time, but ⛔ **that corrector is
-DISABLED as of 2026-09-03 (PR #40, issue #41): on HW it made both interlaced fields carry
-the same source lines.** The coin flip is therefore OPEN again — `docs/field_parity.md`,
-`docs/single_raster_analog.md` §3.9; (3) with
+the mode 3-4 times to fix") — root-caused and fixed at the time, then ⛔ **DISABLED
+2026-09-03 (PR #40): on HW it made both interlaced fields carry the same source lines**,
+and now ✅ **REPAIRED and re-enabled (issue #41, branch `fix/field-parity-corrector`;
+sim-proven, ⏳ HW-confirm pending)** — its feedback arm was chasing pixel-queue
+starvation, and its cure is a repeated field, so it now only acts on a parity error that
+has HELD. See `docs/field_parity.md`, `docs/single_raster_analog.md` §3.9; (3) with
 that fixed, fieldpass strictly dominates derive on the CRT side, and the maintainer chose
 to drop the one thing derive still bought (CRT 480i + progressive HDMI simultaneously —
 pick-your-output instead). The surface collapsed to **one option, `O[10:9] Video Output

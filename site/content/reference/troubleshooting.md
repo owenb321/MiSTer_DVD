@@ -151,9 +151,11 @@ attempts. On builds up to v0.3.0 the same trick works on `Analog Out`. Many tele
 never show this; it depends on the set.
 
 !!! info "Unreleased"
-    v0.4.0's automatic corrector for this is switched off in the current development
-    build — it was making both fields carry the same picture lines, which combed still
-    images on every output including HDMI. A corrected version is being worked on. See
+    The current development build corrects the field phase automatically, so the toggle
+    should no longer be needed. (v0.4.0's first attempt at that corrector was switched
+    off again — it was making both fields carry the same picture lines, which combed
+    still images on every output including HDMI.) If a skip still leaves the picture
+    aliased on a current build, please [report it](reporting-a-bug.md). See
     [Field alignment](../video/interlaced.md#field-alignment).
 
 ### A film disc keeps changing resolution, or judders

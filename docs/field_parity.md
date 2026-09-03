@@ -1,33 +1,68 @@
-# Field-parity re-engage corrector (2026-09-02)
+# Field-parity re-engage corrector (2026-09-02, repaired 2026-09-03)
 
-**Status: ⛔ DISABLED ON HARDWARE (2026-09-03, PR #40) — `par_ins` is tied 0 in
-`dvd/resample_addrgen.v`. Tracking issue: #41.**
+**Status: ✅ RE-ENABLED with a stability gate (2026-09-03, issue #41) — sim-proven
+RED/GREEN by the new `bench/dvd/field_phase_tb.sv`; ⏳ HW-confirm pending (gate: a still
+must measure +0.50 field offset, and a chapter skip must not need the toggle ritual).**
 
-★ **It made BOTH displayed fields carry the SAME source lines.** Measured from HW
-screenshots of a still by splitting each woven frame into its two fields and correlating
-them: **+0.00** frame lines of offset with the corrector on, where a correct interlaced
-still measures **+0.50**. That is a combed still under Weave and a picture that jumps a
-field line under Bob — on **every** output, HDMI included, which is what finally
-distinguished it from the sync-shape theories five HW rounds were spent on
-(`docs/single_raster_analog.md` §3.9). v0.3.0 `Analog Out = Native Fields` — the same
-authored-fields content path WITHOUT this corrector — measures +0.50 and is clean.
+★ **The withdrawal (PR #40) and what actually caused it.** As shipped in PR #37 the
+corrector made both displayed fields carry the SAME source lines — a still measured
+**+0.00** frame lines of field-to-field offset where a correct interlaced still measures
+**+0.50**, i.e. a combed still under Weave and a picture that jumps a field line under
+Bob, on **every** output. `par_ins` was tied 0 in `dvd/resample_addrgen.v` until this
+repair.
 
-⚠ **`bench/dvd/field_parity_tb.sv` stayed GREEN throughout.** Two reasons, both worth
-reading before trusting it again: its behavioural framestore returns a CONSTANT word (no
-displayed pixel carries evidence of which source line it came from), and its pass
-condition is the SAME EXPRESSION as the RTL's `frame_top_par_err` (it restates the
-design's convention instead of checking an external one — the POST-only PGC trap again).
-Replacement, committed UNFINISHED: `bench/dvd/field_phase_tb.sv`. Finish it FIRST.
+**Root cause: the FEEDBACK arm was chasing STARVATION.** Its cure is a REPEATED field —
+re-showing `last_image` is the only insertion that lands the resumed stream aligned (see
+the XOR table below) — and it was firing at field rate. What made it fire that often is
+the pixel queue running dry: when the mixer reaches a frame-top opportunity with no pixel
+to show it displays nothing there, and every following content field lands one raster slot
+later. **That is a genuine parity error**, but this core is compute-bound on heavy content
+and does it repeatedly, so the "error" churns back and forth — and one repeated field per
+starve is a far worse picture than the half-line offset it removes. The churn rate is
+already on the record from an unrelated investigation: `docs/roadmap.md` measured governor
+**lates at ~4/s on healthy content** and noted that the old derive path's field pairing was
+"re-randomised several times a second" by exactly this class of event. The old hysteresis
+(`par_armed` + a **4-refresh** liveness re-arm) capped insertions at one per five
+refreshes — 12 repeated fields a second, which is what a still measuring +0.00 looks
+like; the bench's four starvation events land inside that cap, one insertion each.
 
-Disabling re-opens the coin flip this document was written to fix (below): after a chapter
-skip / FF / aspect change the field phase can land wrong on some sets, cleared by toggling
-`Video Output`. The maintainer's late-model CRT has never shown it; the two Discord
-reporters' older sets do.
+**Reproduced in RTL**, `bench/dvd/field_phase_tb.sv` scenario [6] — four framestore stalls
+starving the pixel queue:
 
-*(Historical status:)* ✅ MERGED (PR #37, 2026-09-02); sim-proven (RED pre-fix / GREEN
-post-fix, `bench/dvd/field_parity_tb.sv` — see the caveat above); the analog delivery
-under it later changed (`re_interlace` is gone, the interlaced main raster drives the CRT
-directly, `docs/single_raster_analog.md`).**
+| build | repeated fields over 4 starvation events |
+|---|---|
+| corrector disabled (PR #40 … #41) | **0** |
+| corrector as shipped in PR #37 | **4** — one per starve |
+| corrector with the stability gate | **0** |
+
+**The fix — the feedback arm only acts on a STABLE error.**
+
+- `PAR_CONFIRM` (30 refreshes, ~0.5 s): the mixer's verdict must hold across that many
+  completed image scans before an insertion. A genuine phase flip (cold start, an
+  `il_switch`/aspect raster restart, an isolated underflow slip) is a **step** — it
+  persists until corrected, so it heals ~0.5 s in and stays healed. Churn resets the count
+  and is ignored. This also subsumes the old `par_armed`/`par_tmo` hysteresis: after an
+  insertion the count restarts, so the feedback latency can never double-insert.
+- `PAR_HOLD` (120 refreshes, ~2 s): a hard budget on top, so that whatever the starvation
+  rate turns out to be on a given disc, a repeated field can never appear more often than
+  once per two seconds. It starts saturated, so the first correction of a session is not
+  delayed. Feed-forward insertions do not spend it.
+- The **feed-forward arm is unchanged and ungated** — it inserts the OPPOSITE field, so it
+  can never repeat one, and it must act before a wrong field displays. It is also the arm
+  that handles the reported symptom (a chapter skip), which is why the repair keeps the
+  reported bug fixed while removing the cure's cost.
+
+⚠ **`bench/dvd/field_parity_tb.sv` stayed GREEN throughout the defect.** Two reasons, both
+worth reading before trusting it again: its behavioural framestore returns a CONSTANT word
+(no displayed pixel carries evidence of which source line it came from), and its pass
+condition is the SAME EXPRESSION as the RTL's `frame_top_par_err` (it restates the design's
+convention instead of checking an external one — the POST-only PGC trap again). It is kept
+as the alignment view; **`bench/dvd/field_phase_tb.sv` is the gate** (see "Proof" below).
+
+*(Historical status:)* ✅ MERGED (PR #37, 2026-09-02); ⛔ disabled in PR #40 after five HW
+rounds mis-attributed the symptom to sync shape (`docs/single_raster_analog.md` §3.9); the
+analog delivery under it later changed (`re_interlace` is gone, the interlaced main raster
+drives the CRT directly).
 
 ## The field reports
 
@@ -135,54 +170,57 @@ next pickup — an oscillation that never converges.
   the CRT's half-line sequence is fixed alternating and cannot follow content — the
   alignment must happen at the source.
 
-## Proof — `bench/dvd/field_parity_tb.sv` (`bash bench/dvd/run_field_parity.sh`)
+## Proof — `bench/dvd/field_phase_tb.sv` (`bash bench/dvd/run_field_phase.sh`)
 
-The real display chain (resample + addrgen → framestore model → pixel_queue → mixer ←
-interlaced sync_gen) with the parity feedback loop closed exactly as in `mpeg2video.v`.
-The checker reads **the wire the defect lives on**, hierarchically into the unmodified
-mixer: at every accepted frame-top, content field type (`position_in_0`) must match
-raster parity (`v_pos`) — it asserts what the screen gets, not a corrector register.
-Five windows per run: cold start (at a `+phase`-selected raster parity), two
-alternation-break seeks (the chapter-skip model), a clean-seek control, and soft-telecine
-film with authored tff toggling (the corrector must stay silent). Both `+phase` arms run.
+The gate. Same display chain (resample + addrgen → framestore model → pixel_queue → mixer
+← interlaced sync_gen) with the parity feedback loop closed exactly as in `mpeg2video.v`,
+but it measures the picture instead of restating the RTL's convention:
 
-**RED (pre-fix RTL, `--red`; captured 2026-09-02 against pre-fix
-`resample.v`/`resample_addrgen.v`/`mixer.v` extracted from main)** — the coin flip,
-verbatim:
+- the behavioural framestore is **LINE-STAMPED** — every returned word carries a code that
+  is constant along a source line and steps with the line number, so a displayed pixel
+  names the source line it came from (`field_parity_tb` returns a constant here, which is
+  why it cannot see a content-phase error at all);
+- each displayed field is reduced to its first picture line's stamp, the raster field it
+  landed in, and an FNV hash of every luma sample the mixer emitted;
+- **A** consecutive fields must carry DIFFERENT source lines (offset ±1 — the RTL
+  equivalent of the screenshot's +0.50); **B** the content repeats with period 2;
+  **C** an even (top) source line must land in an even (top) raster field — and the line
+  parity comes from the DATA, with source line 0 identified as the smaller of the two
+  first-line stamps ever observed, so the check cannot agree with the RTL by construction.
 
-```
-+phase=0  [1-cold-start]  PASS  16/16 aligned        (lucky landing)
-          [2-seek-break]  FAIL  16/16 MISALIGNED     (the break flips the phase...)
-          [3-seek-clean]  FAIL  16/16 MISALIGNED     (...and it PERSISTS through a clean seek)
-          [4-seek-break-2]PASS  16/16 aligned        (only another break flips it back)
-          [5-film-3:2]    PASS  16/16 aligned
-+phase=1  [1-cold-start]  FAIL  16/16 MISALIGNED     (unlucky landing — the feedback-only case)
-          [2-seek-break]  PASS  16/16 aligned        (two wrongs make a right)
-          [3-seek-clean]  PASS  16/16 aligned
-          [4-seek-break-2]FAIL  16/16 MISALIGNED
-          [5-film-3:2]    FAIL  16/16 MISALIGNED     (stays broken indefinitely)
-```
+Seven windows per run, both raster-phase arms (`+phase=0/1`): cold start at the selected
+raster parity, two alternation-break seeks (the chapter skip), a clean-seek control,
+soft-telecine film, **[6] four framestore stalls (starvation)**, and the recovery after
+them. `+dbg` prints the per-field table.
 
-Misalignment is a persistent STATE that perturbations toggle — which is precisely why
-the users' "change the setting and change it back, sometimes 3–4 times" ritual worked:
-each toggle re-rolled the coin.
-
-**GREEN (fixed RTL)**:
+**RED, corrector disabled (`main` at PR #40):** the coin flip, measured externally —
 
 ```
-+phase=0: all 5 windows 16/16 aligned; worst settle window 0 misaligned tops
-          (feed-forward: not a single wrong field ever displayed)
-+phase=1: all 5 windows 16/16 aligned; worst settle window 2 misaligned tops
-          (the misaligned cold start — feedback corrects within its designed
-           ~2-field latency bound, then stays aligned)
++phase=0  [1-cold-start]   PASS
+          [2-seek-break]   FAIL  16/16 MISALIGNED   (the break flips the phase...)
+          [3-seek-clean]   FAIL  16/16 MISALIGNED   (...and it PERSISTS through a clean seek)
+          [4-seek-break-2] PASS
+          [5-film-3:2]     PASS
+          [6-stutter]      PASS  4 starves, 0 repeated fields
++phase=1  [1-cold-start]   FAIL  16/16 MISALIGNED   (the feedback-only case)
+          [4-seek-break-2] FAIL
+          [5-film-3:2]     FAIL                     (stays broken indefinitely)
 ```
 
-Also green after the change: `run_prefetch_chain.sh` (progressive chain unchanged),
-`gov_field_late_tb` (its stimulus needed a real-disc fix: tff must toggle after an rff
-picture — holding it constant is an authored-cadence break the corrector now rightly
-handles), `resample_cadence(_rate)_tb`, `pickup_hold_tb`, `menu_ff_tb`,
-`cadence_slip_tb`, `resample_persist_tb`, `resample_addr_realstride_tb`,
-`run_film_evidence.sh`.
+**RED, corrector as shipped in PR #37** — every window aligned, but:
+
+```
++phase=0  [6-stutter]  FAIL  4 starvation events cost 4 repeated field(s)  <- the HW defect
+```
+
+**GREEN, with the stability gate:** all seven windows in both arms, and [6] costs zero
+repeated fields.
+
+Also green after the change: `run_field_parity.sh` (its cold-start window's settle was
+lengthened to the feedback arm's new latency — an expectation change, not a stimulus one),
+`run_prefetch_chain.sh`, `gov_field_late_tb`, `resample_cadence(_rate)_tb`,
+`pickup_hold_tb`, `menu_ff_tb`, `cadence_slip_tb`, `resample_persist_tb`,
+`resample_addr_realstride_tb`, `film_detect_tb`.
 
 ## Consequences for the HW symptom
 
@@ -201,6 +239,8 @@ handles), `resample_cadence(_rate)_tb`, `pickup_hold_tb`, `menu_ff_tb`,
 - `rtl/mpeg2/resample.v` — pass-through
 - `dvd/resample_addrgen.v` — the corrector (`alt_break` / `par_fb` / `par_armed` /
   `pickup_go` / the insertion branch)
-- `bench/dvd/field_parity_tb.sv`, `bench/dvd/run_field_parity.sh` — the suite
+- `bench/dvd/field_phase_tb.sv`, `bench/dvd/run_field_phase.sh` — **the gate**
+- `bench/dvd/field_parity_tb.sv`, `bench/dvd/run_field_parity.sh` — the alignment view
+  (kept, but it agrees with the RTL by construction: see the caveat above)
 - Every TB that instantiates `resample`/`resample_addrgen` directly ties
   `.raster_par_err(1'b0)` (an unconnected input would read X into the interlaced arms)
