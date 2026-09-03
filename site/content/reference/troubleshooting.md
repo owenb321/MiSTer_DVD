@@ -160,6 +160,21 @@ never show this; it depends on the set.
     please [report it](reporting-a-bug.md). See
     [Field alignment](../video/interlaced.md#field-alignment).
 
+### The picture blocks up briefly right after a chapter skip or seek
+
+Known and being tracked
+([issue #45](https://github.com/owenb321/MiSTer_DVD/issues/45)). For roughly six frames —
+about a tenth of a second — the new scene decodes and moves correctly but the old one
+shows through it as a blocky residual, then it clears on its own.
+
+It happens on every disc and on every way of jumping: chapter skip, Fast Fwd / Rewind,
+D-Pad Seek, and entering or leaving a menu. It is a decoder artifact, not a disc or a
+setting, so there is nothing to change and nothing to report unless it lasts appreciably
+longer than that or the picture does not recover.
+
+Changing `Video Output` mid-title produces the same brief glitch on the way back in, for
+the same reason — see [Switching mid-title](../video/interlaced.md).
+
 ### A film disc keeps changing resolution, or judders
 
 Set **`Film 24p Out` = `On`**. The disc is probably **hard-telecined**, meaning the pulldown

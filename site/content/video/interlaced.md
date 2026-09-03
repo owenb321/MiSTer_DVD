@@ -76,7 +76,8 @@ everything.
     The screen also **goes black for the changeover** instead of showing the picture
     breaking up while the display re-locks — about a second, and the OSD stays visible
     over it. Sound continues throughout. A brief glitch as the picture comes back is
-    normal, and is the same one a chapter skip produces. If the black lasts noticeably
+    normal, and is the same one a chapter skip produces — see
+    [Troubleshooting](../reference/troubleshooting.md). If the black lasts noticeably
     longer than a second or so, or a mid-title switch still freezes,
     [please report it](../reference/reporting-a-bug.md).
 
