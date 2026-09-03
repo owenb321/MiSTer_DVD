@@ -229,6 +229,22 @@ exports it on the existing per-cell stream as `cellf_secs`, plus `title_secs_o`
 — the upper bracket when interpolating inside the **final** cell, which has no
 next cell to bracket against.
 
+⛔ **The two modules shadow the same maps, and that is a DELIBERATE decision
+(2026-09-03), not an oversight.** `pmap_ram` (1024 bits) and `cellf_ram` (4096)
+exist in both, so consolidating them would save **2 M10K and ~30 ALMs**. It is
+tractable — `seek_bar` reads its copies *only* in `DV_TICK`, once per
+`pgc_loaded` rise, never in the live fill/cursor divides — so the shape would be:
+`seek_time` owns the maps, and `seek_bar` consumes a chapter→RBN stream over a
+ready/valid handshake, its divider and render pipeline untouched. Rejected for
+now because the payoff is about a quarter of what the width trims and the shared
+converter delivered, in the one part of this work that touches a shipped,
+HW-confirmed display path, and neither 91% ALM nor 90% RAM is binding. The two
+shadows cannot diverge (same stream, same writes), so this is tidiness, not
+correctness. ⚠ Do NOT merge the DIVIDERS even if the maps are consolidated:
+`seek_bar`'s runs per refresh for the fill and cursor while `seek_time`'s is
+event-rate, so sharing them puts per-frame work into the gesture engine and
+arbitrates against the render path for ~60 ALUT.
+
 **A sibling of `seek_bar`, not part of it.** That module's `cellf_ram` has one
 read port owned by its divider FSM; arbitrating a second consumer onto a proven
 display module is the wrong risk for a readout. The cost is a second shadow of
