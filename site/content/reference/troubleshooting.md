@@ -177,10 +177,11 @@ picture from the scene it had just left ([issue
 those pictures instead of showing them, so the last frame simply holds until the new scene
 is ready.
 
-**What remains on the development build** is much shorter: a single frame at the landing
-point can look torn, and it is held a little longer than a normal frame while the picture
-comes back. Report it if you see the old scene moving through the new one, if the blocking
-lasts appreciably longer than that, or if the picture does not recover on its own.
+**What remains on the development build** is much shorter, and confirmed on hardware: the
+picture freezes on the last frame, then cuts to the new position with about **one**
+misaligned frame in between. Report it if you see the old scene *moving* through the new
+one, if the blocking lasts appreciably longer than a frame, or if the picture does not
+recover on its own.
 
 Changing `Video Output` mid-title goes through the same landing sequence — see
 [Switching mid-title](../video/interlaced.md).

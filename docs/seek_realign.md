@@ -1,6 +1,9 @@
 # Post-seek reference re-align (issue #45)
 
-> **Status: 🔧 fixed in fabric, sim-proven RED/GREEN, ⏳ HW-confirm pending.**
+> **Status: ✅ FIXED and HW-CONFIRMED 2026-09-03** (build
+> `DVD_seekrealign_20260903_1901.rbf`, SEED 5 first roll, clk_dec 91.10/88.28).
+> Sim-proven RED/GREEN first; the hardware round then reported exactly the predicted
+> outcome — see §5.
 > Branch `fix/seek-reference-realign`. RTL: `rtl/mpeg2/vld.v` (+ one port connection
 > in `rtl/mpeg2/mpeg2video.v`). Gate: `bench/dvd/run_seek_realign.sh`.
 > Engineering note — the user-facing statement lives in
@@ -215,12 +218,35 @@ update. **With the leading B's dropped it is now held for ~4 picture times inste
 
 Net trade: **~6 frames of macroblocked *motion* → ~1 torn frame held longer.** That is
 better, and the *signature* the field report identifies is gone, but it is not clean. The
-HW round's question is therefore binary and falsifiable:
+HW round's question was therefore binary and falsifiable:
 
 > **Is the old scene still visible in motion as residual?**
 
-If no, v1 succeeded and the remaining held frame is a separate item. If yes, the anchor
-accounting is wrong and the bench's slot-tag arms are where to look — not the display path.
+### ✅ HW round, 2026-09-03 — the prediction held, to the frame
+
+> *"this looks good. the old scene is not in motion, it's frozen and we jump to the target
+> seek position with ~1 frame of a misaligned image."*
+
+Three separable claims in one sentence, and each maps onto a specific piece of the design:
+
+- **"the old scene is not in motion"** — the leading B's are no longer decoded and
+  displayed. That is the defect issue #45 reported, and it is gone.
+- **"it's frozen"** — `output_frame_valid` now stays on the last good frame across the
+  landing, because picbuf never sees the dropped pictures. This is the behaviour
+  `flush_ctl.sv` claimed a seek already had (§2) and did not.
+- **"~1 frame of a misaligned image"** — the truncated in-flight picture, predicted above
+  and unchanged by this fix. One frame, not a burst.
+
+★ **Writing the residual down *before* the build is what made this round cheap.** The
+report is a confirmation rather than a surprise, and no time was spent re-opening the
+anchor accounting to explain a frame that was already accounted for. Had the answer been
+"yes, still moving", the next place to look was named in advance (the bench's slot-tag
+arms, not the display path) — which is the same discipline `docs/single_raster_analog.md`
+§3.9 earned the hard way over five rounds.
+
+The remaining single frame is the v2 item costed in §5.1. It is now the *only* thing left
+of issue #45, and it is a different defect class: one corrupt picture, not stale
+prediction.
 
 ### 5.1 Why the display side was left alone (and what v2 would have to be)
 
@@ -254,6 +280,13 @@ the hold, reuses mutation-checked machinery, and lives entirely in `dvd/`. The
 counter-argument is `docs/single_raster_analog.md` §6.8's own reason not to blank a seek —
 display continuity — which is weaker than it looks when the thing being held is torn. **A
 UX call, deferred by user decision (2026-09-03): one behavioural delta this round.**
+
+⚠ **The HW round sharpens the cost/benefit for this one.** What the screen now does at a
+landing is *freeze, then cut to the new scene with one bad frame in between* — which is
+already close to a hard cut, so blanking that single frame would cost very little display
+continuity and would make the transition clean. The v1 argument for leaving it (never blank
+a seek) was written when the alternative was six frames of visible garbage; it is a weaker
+argument against blanking one.
 
 ## 6. The gate
 

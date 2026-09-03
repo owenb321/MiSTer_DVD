@@ -510,8 +510,11 @@ when a build changes X and the symptom persists unchanged, X is exonerated.)
 
 **The residual was tracked as [issue #45](https://github.com/owenb321/MiSTer_DVD/issues/45)**
 — *"Macroblocking for ~6 frames after any seek: reference frames survive the VBUF flush"* —
-and is **🔧 FIXED (2026-09-03, branch `fix/seek-reference-realign`, sim-proven RED/GREEN,
-⏳ HW-confirm pending): `docs/seek_realign.md`.** Measured there from a 60 Hz HDMI
+and is **✅ FIXED and HW-CONFIRMED 2026-09-03 (branch `fix/seek-reference-realign`, build
+`DVD_seekrealign_20260903_1901.rbf`): `docs/seek_realign.md`.** What remains at a landing
+is a freeze followed by ~1 misaligned frame — the truncated in-flight picture, which was
+predicted before the build and is a different defect class from the stale prediction this
+fixed. Measured there from a 60 Hz HDMI
 recording: ~6 frames (~100 ms), on all four transport paths and every disc tried, with the
 target chapter decoding and in motion while the old scene bleeds through as residual. That
 last detail is what identifies it — motion compensation against stale references, not a
@@ -555,6 +558,20 @@ fixes the symptom on one path while leaving the class open. **That last objectio
 exactly what sent the fix to the vld:** the class is shared, so the fix should be too.
 
 ## 7. Follow-ups
+- ⚠ **A/V SYNC after a `Video Output` change — OPEN, pre-existing, NOT from issue #42 or
+  #45.** Reported on the 2026-09-03 seek-realign round: *"Many video output changes can
+  cause sync issues, but that is existing behavior and is cleared by a chapter skip."*
+  Note what this is **not**: not the mode-switch FREEZE (§6, fixed and HW-confirmed), and
+  not the stale-reference macroblocking (`docs/seek_realign.md`, fixed and HW-confirmed on
+  the same build). It is lip-sync drift that survives the switch and is cured by a
+  re-anchor. ★ **That "cured by a chapter skip" detail is the diagnosis pointing at
+  `av_sync`, not at the raster:** a chapter skip re-anchors the STC, so the switch is
+  leaving the STC on a timeline the new raster no longer matches. The mode switch already
+  fires the full trio plus a re-align seek, so the suspect is the refresh-rate change
+  itself — `TICKS_PER_REFRESH` / `refresh_50hz` are picked from the mode, and an
+  Interlaced↔Progressive change alters how many refreshes a displayed frame costs. Not
+  investigated; recorded so the next session starts from the right layer.
+
 - **✅ Blank the video during a `Video Output` switch — IMPLEMENTED 2026-09-03 (user
   request after the issue #42 HW round; ⏳ HW-confirm pending).** See §6.8. The proposal
   that was recorded here is now the shipped design; the reasoning that survived is in §6.8

@@ -358,6 +358,15 @@ worse maintenance burden than targeted in-place edits. So:
   still is not. Gate: `mode_realign_tb` [12]–[17], **mutation-checked** (5 targeted RTL
   mutations, each caught by its own scenario — these are cheap level assertions, exactly
   the shape that passes without proving anything).
+  ⚠ **STILL OPEN on this path, and it is NEITHER of the two fixed bugs: A/V SYNC after a
+  `Video Output` change.** User report 2026-09-03 (on the seek-realign build): *"Many video
+  output changes can cause sync issues, but that is existing behavior and is cleared by a
+  chapter skip."* Not the freeze (fixed, §6) and not the stale-reference macroblocking
+  (fixed, `docs/seek_realign.md`) — it is lip-sync drift cured by a RE-ANCHOR. ★ That cure
+  is the diagnosis: a chapter skip re-anchors the STC, so suspect `av_sync`'s refresh
+  accounting across a refresh-rate change (`TICKS_PER_REFRESH`/`refresh_50hz` are picked
+  from the mode), NOT the raster or the flush — the switch already fires the full trio plus
+  a re-align seek. Detail: `docs/single_raster_analog.md` §7.
   ★★ **THE RESIDUAL IS NOW A TRANSPORT ITEM (tracked as issue #45), NOT A MODE-SWITCH
   ONE, and the user's own
   report is what establishes that:** *"still some visible glitches but I think these are
@@ -434,8 +443,19 @@ worse maintenance burden than targeted in-place edits. So:
   freezes, the remaining suspect is the raster restart** and the next step is to gate
   `il_out` on `~realign_pend` — one behavioural delta per round
   (`docs/single_raster_analog.md` §3.9). Detail: `docs/single_raster_analog.md` §6.
-- 🔧 **POST-SEEK REFERENCE RE-ALIGN (2026-09-03, issue #45, branch
-  `fix/seek-reference-realign`) — sim-proven RED/GREEN, ⏳ HW-confirm pending.**
+- ✅ **POST-SEEK REFERENCE RE-ALIGN (2026-09-03, issue #45, branch
+  `fix/seek-reference-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03**
+  (build `DVD_seekrealign_20260903_1901.rbf`, SEED 5 first roll, clk_dec 91.10/88.28).
+  ★★ **THE HW REPORT MATCHED THE WRITTEN PREDICTION TO THE FRAME:** *"the old scene is not
+  in motion, it's frozen and we jump to the target seek position with ~1 frame of a
+  misaligned image."* Three claims, each mapping onto a piece of the design — the leading
+  B's are no longer displayed (the reported defect, GONE); the display now genuinely HOLDS
+  the last frame (what `flush_ctl.sv` always claimed a seek did and did not); and the one
+  remaining bad frame is the truncated in-flight picture, predicted below and unchanged.
+  ★ **Writing the residual down BEFORE the build is what made the round cheap** — the
+  report read as a confirmation, not a surprise, and no time went into re-opening the
+  anchor accounting to explain a frame already accounted for. Same discipline as
+  `docs/single_raster_analog.md` §3.9, which cost five rounds to learn.
   Every seek (chapter skip, scrub release, D-Pad Seek, menu → Play) showed **~6 frames
   (~100 ms)** of macroblocking. ★ **The detail that identified it was in the report:**
   *"the target chapter is decoding and in motion during this macroblocking, but it has the
@@ -483,10 +503,15 @@ worse maintenance burden than targeted in-place edits. So:
   in the vld — it cannot bypass the FIFO and arrive on time.** A direct wire can be re-set
   by a queued PRE-flush anchor's update, and no bounded level defeats that (the queue can
   take a whole field to drain because picbuf blocks on the display handshake).
-  ⚠ **Known residual, WRITTEN DOWN BEFORE THE BUILD:** the picture in flight at the flush
-  is truncated, owns a slot, and is displayed once — now held ~4 picture times instead of
-  ~1. Net trade: ~6 frames of macroblocked MOTION → ~1 torn frame held longer. **The HW
-  question is binary: is the old scene still visible IN MOTION as residual?**
+  ⚠ **Residual, PREDICTED BEFORE THE BUILD AND CONFIRMED BY IT:** the picture in flight at
+  the flush is truncated, owns a slot, and is displayed once — held ~4 picture times
+  instead of ~1. Net trade: ~6 frames of macroblocked MOTION → **~1 misaligned frame**.
+  That is now the ONLY thing left of issue #45 and it is a different defect class (one
+  corrupt picture, not stale prediction). ★ The HW shape — freeze, then cut to the new
+  scene with one bad frame between — **weakens the v1 argument against blanking a seek**:
+  that argument was written when the alternative was six frames of visible garbage, and
+  blanking one frame of an already-hard cut costs almost no display continuity. See
+  `docs/seek_realign.md` §5.1.
   **Gate: `bench/dvd/run_seek_realign.sh`** — real `vld` + `getbits` + `motcomp_picbuf` over
   TWO cuts of a real title with a real reader jump at the flush, measuring **slot
   provenance** (a shadow tag per picbuf slot; a post-flush picture predicting from a
