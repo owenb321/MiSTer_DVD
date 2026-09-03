@@ -417,7 +417,7 @@ kicks the walk. And `mode_realign_tb`'s first version failed all 11 scenarios ag
 correct RTL: blocking stimulus assignments landed **on** the clock edge and raced the DUT,
 so every count read 0. Stimulus is driven from the negedge now, sampling from the posedge.
 
-### 6.8 The switch blank (2026-09-03) — ⏳ HW-confirm pending
+### 6.8 The switch blank (2026-09-03) — ✅ HW-CONFIRMED
 
 Fixing the freeze left the transient visible, and the maintainer's HW round named it
 exactly: switching **to Interlaced** gives *"a full screen rolling image flashing between
@@ -491,6 +491,45 @@ level, exactly the shape that passes without proving anything — **mutation-che
 targeted RTL mutations (clear without requiring the drop, no ceiling, no `blank_en` gate,
 coalesce instead of restart, no mount clear) are each caught by the scenario written for
 them.
+
+**HW round (2026-09-03, `DVD_swblank_20260903_1638.rbf`): ✅ better — the roll and the
+top-half squish are gone.** The maintainer's verdict on what remains is the useful part:
+
+> *"there are still some visible glitches but I think these are more decoder issues than
+> mode switch since it looks similar to when a chapter skip is performed"*
+
+★ **That observation is the fix's own success criterion being met, and it should be read as
+a result rather than as a leftover.** §6.3's whole design was to make a mode switch
+*byte-identical to a chapter jump* — same trio, same VOBU-boundary landing, same reader
+contract. Once it is, a mode switch cannot have a class of artifact that a chapter seek
+does not: anything still visible is generic **seek re-lock**, i.e. a pre-existing item that
+belongs to the transport, not to `Video Output`. The symptom matching a chapter skip is the
+observation that relocates the remaining work. (It is an observation of appearance, not a
+measurement — but it is the right shape, and it is the same reasoning that closed §3.9:
+when a build changes X and the symptom persists unchanged, X is exonerated.)
+
+**What the residual most likely is, for whoever picks it up.** `flush_ctl`'s trio discards
+*buffered* data but deliberately leaves the decode pipeline's state — `vld`/`getbits`/
+`motcomp`/`picbuf` are all on `sync_rst`, and `mount_flush` (the decoder soft reset) is
+MOUNT-ONLY, "NEVER on seeks/jumps/mode switches ... where the display must hold the last
+frame and the reference frames are same-file valid". So across any seek the in-flight
+picture still "completes" on the new stream's first start code (one truncated frame), and
+the previous references stay flagged valid — an open-GOP VOBU then motion-compensates its
+first B-frames against frames from the *old* position. Same mechanism as the mid-play mount
+garbage (`docs/av_sync.md`), just bounded, because within one title the references are at
+least same-file.
+
+★ **And the switch blank changes the cost/benefit for the mode-switch case specifically.**
+The stated reason not to soft-reset on a seek is *display continuity* — the screen must
+hold the last frame while the decoder re-locks. During a blanked mode switch there is no
+display continuity to protect: the screen is black by design. So adding `mode_switch` (the
+fallback leg) **and** the re-align's `seek_ack` to `mount_flush` is now arguable for this
+path alone, and would remove the truncated frame and the stale references. ⚠ Two things to
+design against before trying it: the soft reset asserts `sync_rst`, which drops `dec_ready`
+and gates the modeline walk (§3.2's boot race) — the regfile is on `hard_rst` so the walk's
+writes survive, but the interaction wants a `modeline_boot_tb` phase before a build; and
+chapter skips would still be untouched, so it fixes the symptom on one path while leaving
+the class open. Not attempted; recorded so the next session starts from here.
 
 ## 7. Follow-ups
 - **✅ Blank the video during a `Video Output` switch — IMPLEMENTED 2026-09-03 (user

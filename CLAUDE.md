@@ -335,7 +335,8 @@ worse maintenance burden than targeted in-place edits. So:
   branch `fix/mode-switch-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03
   (user report: the freeze is gone; build `DVD_modeswitch_20260903_1538.rbf`, SEED 5 first
   roll, clk_dec 91.90/88.88).** ★ **SWITCH BLANK added on top (2026-09-03, user
-  request; ⏳ HW-confirm pending):** the fix left the ~1 s transient visible and ugly (to
+  request; ✅ HW-CONFIRMED same day, build `DVD_swblank_20260903_1638.rbf` — the roll and
+  the top-half squish are GONE):** the fix left the ~1 s transient visible and ugly (to
   Interlaced = a full-screen rolling image flashing between black frames = the display
   losing vertical lock; to Progressive = the picture squished into the top half =
   field-height content in a frame-height DE window). Both are inherent to changing the
@@ -356,8 +357,25 @@ worse maintenance burden than targeted in-place edits. So:
   symptom is a ROLL, so a held frame rolls too — rolling black is invisible, a rolling
   still is not. Gate: `mode_realign_tb` [12]–[17], **mutation-checked** (5 targeted RTL
   mutations, each caught by its own scenario — these are cheap level assertions, exactly
-  the shape that passes without proving anything). Detail:
-  `docs/single_raster_analog.md` §6.8. Fixes: a mid-title `Video Output` change
+  the shape that passes without proving anything).
+  ★★ **THE RESIDUAL IS NOW A TRANSPORT ITEM, NOT A MODE-SWITCH ONE, and the user's own
+  report is what establishes that:** *"still some visible glitches but I think these are
+  more decoder issues than mode switch since it looks similar to when a chapter skip is
+  performed."* The design goal was to make a mode switch **byte-identical to a chapter
+  jump**; once it is, it cannot carry a class of artifact a chapter seek does not. So a
+  symptom that matches a chapter skip is the goal being MET, and it relocates the remaining
+  work. ⚠ Do NOT re-chase it under issue #42.
+  Likely mechanism, for whoever picks it up: the trio discards BUFFERED data but leaves the
+  decode pipeline (`vld`/`getbits`/`motcomp`/`picbuf` are on `sync_rst`; `mount_flush` is
+  MOUNT-ONLY, *"NEVER on seeks/jumps/mode switches"*), so across any seek the in-flight
+  picture completes on the new stream's first start code (one truncated frame) and the old
+  references stay valid for an open-GOP VOBU's first B-frames. ★ **The blank changes the
+  argument for this path only:** the stated reason not to soft-reset on a seek is *display
+  continuity*, and during a blanked mode switch there is none to protect — so adding the
+  mode-switch/re-align acks to `mount_flush` is now arguable. ⚠ It would gate the modeline
+  walk via `dec_ready`/`sync_rst` (§3.2's boot race — the regfile survives on `hard_rst`,
+  but TB it in `modeline_boot_tb` first), and it would leave chapter skips untouched, i.e.
+  fix one path and leave the class open. Detail: `docs/single_raster_analog.md` §6.8. Fixes: a mid-title `Video Output` change
   could freeze the decoder on a malformed frame with no self-recovery; a chapter seek
   cleared it. Pre-existing (v0.3.0 does it on `Analog Out`).
   ★★ **THE FIX WAS WRITTEN IN THE EXISTING COMMENT AND HAD BEEN READ AS HARMLESS FOR
