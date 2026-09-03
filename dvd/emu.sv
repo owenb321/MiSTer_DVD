@@ -1088,8 +1088,14 @@ wire [5:0] chap_net_abs = chap_net[5] ? (6'd0 - chap_net) : chap_net;
 wire       chap_at_start;            // 1 = <~5 s into the current chapter (from DSI
                                      // c_eltm) -> prev steps back; else prev restarts
                                      // the current chapter. Assigned near nav_dsi below.
-wire       seek_rbn_pulse;           // pulse: time scrub -> reader (from scrub_ctrl)
-wire [31:0] seek_rbn;                // target RBN (2048-sector, VTSTT_VOBS-rel)
+// The reader has ONE raw-RBN seek port and two producers now: the user's hold-to-seek
+// scrub and dvd/mode_realign.sv's re-align on a raster-mode change. mode_realign owns the
+// arbitration (the scrub always wins) -- see its header. scrub_seek_* are the scrub's own
+// outputs; seek_rbn_pulse/seek_rbn are what reaches dvd_iso_reader.
+wire       scrub_seek_pulse;         // pulse: time scrub (from scrub_ctrl)
+wire [31:0] scrub_seek_rbn;          // its target RBN (2048-sector, VTSTT_VOBS-rel)
+wire       seek_rbn_pulse;           // pulse: arbitrated raw-RBN seek -> reader
+wire [31:0] seek_rbn;                // its target RBN (2048-sector, VTSTT_VOBS-rel)
 reg        angle_pulse;              // pulse: cycle camera angle (Phase 9) -> reader
 wire [3:0] cur_angle;                // from reader: current camera angle (1-based)
 wire [3:0] angle_count;              // from reader: angles in the current block (0=none)
@@ -1244,12 +1250,14 @@ wire sel_edge   = joy_sel   & ~joy_prev[7];
 // also pulses on VM-driven jumps/resumes (a menu Play, a CallSS/RSM featurette
 // enter/return, a menu next_pgcn advance) - those are "clip starts", not user
 // actions, and should not pop the HUD. (Audio/subtitle/angle cycles drive the
-// popup line separately.) seek_rbn_pulse is the scrub-release seek (user).
+// popup line separately.) scrub_seek_pulse is the scrub-release seek (user); note it is
+// the SCRUB's pulse and not the arbitrated seek_rbn_pulse -- a mode-switch re-align rides
+// that same port and must not pop the HUD (issue #42).
 // dpad_pend_evt pops the HUD on the FIRST D-pad press rather than ~0.4 s later
 // when the coalesced jump actually fires, so the seconds readout tracks the taps.
 wire hud_user_evt = pause_edge
                   | ((chnext_edge | chprev_edge) && cell_ready && !menu_active)
-                  | seek_rbn_pulse
+                  | scrub_seek_pulse
                   | dpad_pend_evt;
 wire menu_edge  = joy_menu  & ~joy_prev[8];
 wire angle_edge = joy_angle & ~joy_prev[9];
@@ -1588,8 +1596,8 @@ scrub_ctrl scrub_ctrl_inst (
     .cur_rbn         (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .title_first_rbn (title_first_rbn_w),
     .title_last_rbn  (title_last_rbn_w),
-    .seek_rbn_pulse  (seek_rbn_pulse),
-    .seek_rbn        (seek_rbn),
+    .seek_rbn_pulse  (scrub_seek_pulse),   // arbitrated by mode_realign (issue #42)
+    .seek_rbn        (scrub_seek_rbn),
     .hold_freeze     (hold_freeze),
     .bar_active      (bar_active_w),
     .bar_base_rbn    (bar_base_rbn_w),
@@ -2041,13 +2049,59 @@ wire      il_switch = il_eff ^ il_eff_q;
 // the raster is right BEFORE display; a mid-title film_switch then needs hold-
 // suppression + a post-discontinuity holdoff, TB'd in flush_ctl_tb) — see
 // docs/film_24p_plan.md §13.
-// mode_switch = live raster-regime change -> full flush trio (load+aud+seek).
-// Today that is il_switch alone.
-wire      mode_switch = il_switch;
+// ★ AMENDED 2026-09-03 (issue #42). The paragraph above is still the right account of
+// WHAT the trio does; what it got wrong is WHEN. "The full flush is exactly what a chapter
+// seek does; the only difference is the reader doesn't jump" turned out not to be a
+// harmless difference: with a disc playing, a mid-title Video Output change could freeze
+// the decoder on a malformed frame with no self-recovery, on EITHER standard, and a
+// chapter seek cleared it. The reader not jumping IS the bug -- the decoder resumed
+// mid-VOBU with no GOP boundary to re-lock on, the same failure the film edge below hit.
+// So il_switch no longer drives flush_ctl directly: dvd/mode_realign.sv turns it into a
+// reader seek at the current VOBU and lets the resulting seek_ack drive the trio, which
+// makes a mode switch byte-identical to a chapter jump. mode_switch below is now only the
+// FALLBACK (menus, a raw .m2v, no trustworthy playhead, or an unacknowledged seek), where
+// it behaves exactly as it always did.
 always @(posedge clk_sys) begin
     if (~reset_n) il_eff_q <= 1'b0;
     else          il_eff_q <= il_eff;
 end
+
+// =========================================================================
+// MODE-SWITCH READER RE-ALIGN — dvd/mode_realign.sv (issue #42). Design, the
+// coalescing rule, the stale-playhead trap and the deferral window: its header.
+wire       mode_switch;                 // the in-place FALLBACK trio (see above)
+wire       realign_pend;                // an arm is open
+wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
+wire pipe_rst_n, aud_rst_n;
+mode_realign mode_realign_i (
+    .clk             (clk_sys),
+    .rst_n           (reset_n),         // NOT pipe_rst_n: the arm must survive its
+                                        // own load_flush
+    .mode_edge       (il_switch),
+    // in_title deliberately does NOT exclude in_title_menu (unlike scrub_ctrl): that
+    // gate exists because the D-pad is contested there, and an OSD edit contests
+    // nothing. Title content is streaming, so a re-align is both valid and wanted.
+    .in_title        ((cell_ready || lin_seek_ok_w) && !menu_active),
+    .dvd_mode        (cell_ready),
+    .lin_mode        (lin_seek_ok_w && !cell_ready),
+    .still_active    (still_active),    // parked on a still: nothing to re-align
+    .hold_freeze     (hold_freeze),
+    .nav_flush       (load_flush),      // clears nav_dsi => the playhead goes stale
+    .dsi_commit      (dsi_commit),
+    .dsi_stream      (ps_dsi_valid),
+    .dsi_nv_pck_lbn  (dsi_nv_pck_lbn),
+    .lin_blk         (lin_blk_w),
+    .seek_ack        (seek_ack),
+    .jump_ack        (jump_ack),
+    .keep_vbuf       (keep_vbuf),       // a menu hop's ack is not a full trio
+    .start_streaming (start_streaming),
+    .scrub_pulse     (scrub_seek_pulse),
+    .scrub_rbn       (scrub_seek_rbn),
+    .seek_rbn_pulse  (seek_rbn_pulse),  // -> dvd_iso_reader (arbitrated)
+    .seek_rbn        (seek_rbn),
+    .mode_switch     (mode_switch),
+    .realign_pend    (realign_pend)
+);
 
 // =========================================================================
 // FLUSH / RESET TRIGGER MATRIX — dvd/flush_ctl.sv (extracted 2026-08-28 so the
@@ -2056,8 +2110,9 @@ end
 // deliberately does NOT reset), AUDIO-ONLY RE-SYNC (aud_resync), keep_vbuf
 // audio-continuity (aud_flush gating), the SEEK VBUF FLUSH + the 2026-08-28
 // mount/mode_switch flush-trio rule. Events in, ~64-cycle flush levels out.
-wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
-wire pipe_rst_n, aud_rst_n;
+// ⚠ Its mode_switch input is now the FALLBACK leg only (issue #42): the normal path for
+// a raster-mode change arrives as seek_ack, from the re-align above. flush_ctl itself is
+// unchanged -- rows [7]-[9] of bench/dvd/flush_ctl_tb.sv still describe this input.
 flush_ctl flush_ctl_i (
     .clk             (clk_sys),
     .rst_n           (reset_n),

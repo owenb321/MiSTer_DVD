@@ -1,32 +1,46 @@
-// iso_reader_seek_tb.sv - transport SEEK test for dvd/dvd_iso_reader.sv.
-//
-// The gamepad transport (emu.sv) can jump playback to an arbitrary PGC cell by
-// pulsing seek_pulse with seek_cell. This tb drives that port directly and
-// proves the reader re-streams from the target cell (forward + backward),
-// no-ops an out-of-range target, and reports cur_cell / seek_ack correctly.
-//
-// Disc: ONE title set (VTS_01), a 4-cell PGC in physical order. Each cell spans
-// CELLSEC=10 sectors (20 KB) of a single distinct marker byte, so the captured
-// stream identifies which cell is playing:
-//   cell0 -> RBN  0..9  = 0xB0    cell1 -> RBN 10..19 = 0xB1
-//   cell2 -> RBN 20..29 = 0xB2    cell3 -> RBN 30..39 = 0xB3
-// (reorder is already covered by iso_reader_pgc_tb; here order is physical so
-//  the ONLY thing that changes the marker mid-stream is a seek.)
-//
-// Cells are deliberately LARGER than the reader's 16 KB read-ahead cache so the
-// fetch pointer (cur_cell = cell_i) can't race whole cells ahead of the display
-// - which mirrors real DVDs (multi-MB cells) and keeps cur_cell == displayed
-// cell within the sub-cell cache lead.
-//
-// Layout (2048-byte logical sectors), same skeleton as iso_reader_pgc_tb:
-//   16 PVD  17 root  18 VIDEO_TS dir
-//   19 VMGI sec0 (VMGI_MAT tt_srpt@196 -> 20)   20 VMGI TT_SRPT
-//   21 VTSI sec0 (VTSI_MAT vts_pgcit@204 -> 22) 22 VTS_PGCIT+PGC+cells
-//   24..63 VTS_01_1.VOB RBN 0..39 (four 10-sector cells)
-
 `timescale 1ns/1ps
+//
+// mode_realign_chain_tb.sv — THE PROOF for issue #42, measured in the delivered bytes.
+//
+// dvd/mode_realign.sv + dvd/flush_ctl.sv + the REAL dvd/dvd_iso_reader.sv over a
+// synthetic DVD image (fixture skeleton shared with bench/dvd/iso_reader_seek_tb.sv).
+//
+// ★ WHAT IS MEASURED, AND WHY IT IS THIS. The bug was never visible in a signal: the
+// trio fired correctly, on time, with the right levels. What was wrong was WHERE IN THE
+// BYTE STREAM it landed -- mid-VOBU, so the decoder had no GOP boundary to re-lock on.
+// So this bench fires one raster-mode change while the reader is mid-VOBU and then reads
+// the FIRST BYTES DELIVERED AFTER THE FLUSH, checking them against the 12-byte NAV-pack
+// signature (00 00 01 BA @0, 00 00 01 BB @14, 00 00 01 BF @38 -- the same bytes the
+// reader's own VOBU-snap probe matches, and the definition of a VOBU boundary).
+//
+//   pre-fix (+realign=0): the reader never moves, so the stream continues from wherever
+//                         it was -- the bytes after the flush are mid-sector payload.
+//   fixed:                the re-align seeks to the current VOBU, so the bytes after the
+//                         flush ARE a NAV pack.
+//
+// That criterion is external to the RTL: it is a property of the byte stream, not a
+// re-statement of any expression inside the design. bench/dvd/field_parity_tb.sv is the
+// cautionary tale (CLAUDE.md) -- its pass condition was the same expression as the RTL's,
+// so it agreed with the defect by construction.
+//
+// ⚠ The playhead (dsi_nv_pck_lbn) is modelled HERE rather than by instantiating nav_dsi
+// and ps_demux: it is an INPUT to the module under test, and modelling it keeps the
+// fixture honest -- the bench knows which sector is streaming because it counts the bytes
+// it received, so a wrong latched target shows up as a wrong seek.
+//
+// NAV packs sit at every 5th title sector (RBN 0,5,10,...), i.e. 5-sector VOBUs. Sectors
+// in between are deliberately NOT NAV packs, or a mid-VOBU landing would look aligned and
+// the pre-fix arm would pass.
+//
+// Build/run: bench/dvd/run_mode_realign.sh   (or, standalone)
+//   iverilog -g2012 -o bench/dvd/mode_realign_chain_sim \
+//       dvd/dvd_iso_reader.sv dvd/flush_ctl.sv dvd/mode_realign.sv \
+//       bench/dvd/mode_realign_chain_tb.sv
+//   vvp bench/dvd/mode_realign_chain_sim             # GREEN
+//   vvp bench/dvd/mode_realign_chain_sim +realign=0  # RED — failure EXPECTED
+//
 
-module iso_reader_seek_tb;
+module mode_realign_chain_tb;
 
     localparam CELLSEC   = 10;              // sectors per cell (> 16 KB cache)
     localparam VOBSEC    = 4*CELLSEC;       // 40 title sectors
@@ -38,11 +52,18 @@ module iso_reader_seek_tb;
     reg         start = 0;
     reg  [63:0] file_size = 0;
 
+    // Forward declarations: Icarus requires declaration before use, and the reader
+    // instance below is fed by nets the chain further down drives.
+    wire        rd_seek_pulse;
+    wire [31:0] rd_seek_rbn;
+    wire        mr_sp, mr_ms, mr_pend;
+    wire [31:0] mr_srbn;
+    wire        load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
+    wire        pipe_rst_n, aud_rst_n;
+
     // transport seek port
     reg         seek_pulse = 0;
     reg  [7:0]  seek_cell = 0;
-    reg         seek_rbn_pulse = 0;    // Phase-8 sub-cell scrub
-    reg  [31:0] seek_rbn = 0;
     wire        seek_ack;
     wire [7:0]  cur_cell;
     wire        cell_ready;
@@ -81,14 +102,14 @@ module iso_reader_seek_tb;
     // NAV_CAP(8): a small VOBU-align probe budget so TEST7 can exhaust it on this
     // 40-sector title (TEST8 exercises the title-end clamp before the budget runs).
     dvd_iso_reader #(.NAV_CAP(8)) dut (
-        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
         // Phase-4 DVD-VM ports: legacy mode (vm_mode=0 keeps prior behaviour)
         .jump_ttn(7'd0), .jump_pgn(8'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
         .seek_pulse(seek_pulse), .seek_natural(1'b0), .seek_cell(seek_cell), .seek_ack(seek_ack),
-        .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn),
+        .seek_rbn_pulse(rd_seek_pulse), .seek_rbn(rd_seek_rbn),
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1),
         .keep_vbuf(keep_vbuf),
         .cur_cell(cur_cell), .cell_ready(cell_ready),
@@ -102,16 +123,6 @@ module iso_reader_seek_tb;
     );
 
     always #5 clk = ~clk;
-
-    // ---- SD read counter: every sd_rd rising edge is one 2048-byte sector fetch.
-    // Used by TEST9 to MEASURE the VOBU-snap probe cost, which the mode-switch re-align
-    // (dvd/mode_realign.sv, issue #42) depends on being one read for an on-NAV target.
-    integer sd_reads = 0;
-    reg     sd_rd_q = 0;
-    always @(posedge clk) begin
-        if (sd_rd && !sd_rd_q) sd_reads = sd_reads + 1;
-        sd_rd_q <= sd_rd;
-    end
 
     // ---- mock HPS: serve one 2048-byte block (sector) per sd_rd ----
     integer m = 0;
@@ -376,207 +387,186 @@ module iso_reader_seek_tb;
         end
     endfunction
 
-    // Drive a raw-RBN scrub, wait for the jump to execute, capture from byte 0.
-    task do_scrub(input [31:0] rbn);
+
+
+    // =====================================================================
+    // THE CHAIN UNDER TEST
+    // =====================================================================
+    integer realign = 1;                  // 1 = the fix, 0 = the pre-fix path
+    localparam VOBU = 5;                  // title sectors per VOBU in this fixture
+
+    reg  mode_edge = 0;
+    reg  legacy_ms = 0;                   // pre-fix: `wire mode_switch = il_switch;`
+    always @(posedge clk) legacy_ms <= rst_n ? mode_edge : 1'b0;
+
+    // ---- the playhead model: which VOBU's NAV pack is the demux front on? -----------
+    // Bytes delivered since the stream last (re)started, and the title RBN that restart
+    // began at. Only needs to be valid up to the mode edge -- after that the module has
+    // latched, and the pass criterion below does not depend on it.
+    integer strm_bytes = 0;
+    integer base_rbn   = 0;
+    reg     ph_track   = 1;               // stop tracking once the edge has been taken
+    always @(posedge clk) if (stream_valid && ph_track) strm_bytes = strm_bytes + 1;
+
+    wire integer cur_sec  = base_rbn + (strm_bytes / SECBYTES);
+    wire integer cur_vobu = (cur_sec / VOBU) * VOBU;
+
+    reg  [31:0] ph_lbn  = 32'd0;
+    reg         ph_cmt  = 0;
+    always @(posedge clk) begin
+        ph_cmt <= 1'b0;
+        if (ph_track && (cur_vobu != ph_lbn)) begin
+            ph_lbn <= cur_vobu;
+            ph_cmt <= 1'b1;               // a DSI finished parsing for this VOBU
+        end
+    end
+
+    mode_realign #(.WDOG(24'd20000)) mr (
+        .clk(clk), .rst_n(rst_n),
+        .mode_edge(mode_edge),
+        .in_title(cell_ready), .dvd_mode(cell_ready), .lin_mode(1'b0),
+        .still_active(1'b0), .hold_freeze(1'b0),
+        .nav_flush(load_flush), .dsi_commit(ph_cmt), .dsi_stream(1'b0),
+        .dsi_nv_pck_lbn(ph_lbn), .lin_blk(32'd0),
+        .seek_ack(seek_ack), .jump_ack(1'b0), .keep_vbuf(keep_vbuf),
+        .start_streaming(start),
+        .scrub_pulse(1'b0), .scrub_rbn(32'd0),
+        .seek_rbn_pulse(mr_sp), .seek_rbn(mr_srbn),
+        .mode_switch(mr_ms), .realign_pend(mr_pend)
+    );
+
+    // +realign=0 removes the re-align entirely: the reader never sees an RBN seek, and
+    // flush_ctl is driven straight off the mode edge, exactly as it was before the fix.
+    assign rd_seek_pulse = realign[0] ? mr_sp   : 1'b0;
+    assign rd_seek_rbn   = realign[0] ? mr_srbn : 32'd0;
+    wire   fc_mode_sw    = realign[0] ? mr_ms   : legacy_ms;
+
+    flush_ctl fc (
+        .clk(clk), .rst_n(rst_n),
+        .start_streaming(start), .seek_ack(seek_ack), .jump_ack(1'b0),
+        .mode_switch(fc_mode_sw), .aud_switch(1'b0), .keep_vbuf(keep_vbuf),
+        .load_flush(load_flush), .aud_flush(aud_flush), .aud_resync(aud_resync),
+        .seek_flush(seek_flush), .mount_flush(mount_flush),
+        .pipe_rst_n(pipe_rst_n), .aud_rst_n(aud_rst_n)
+    );
+
+    // ---- the measurement: capture from the first byte after the flush RISES ----------
+    reg seek_flush_q = 0;
+    reg armed_cap    = 0;
+    integer n_trio   = 0;
+    always @(posedge clk) begin
+        if (seek_flush && !seek_flush_q) begin
+            n_trio    = n_trio + 1;
+            cap_n     = 0;                // the next captured byte is the first post-flush
+            armed_cap = 1;
+        end
+        seek_flush_q <= seek_flush;
+    end
+
+    // NAV packs every VOBU. build_iso puts them at 14/20/26 for the scrub tests; put the
+    // fixture back to plain markers there so "NAV pack" means exactly "VOBU boundary".
+    task build_chain_iso;
+        integer q;
         begin
-            ack_seen = 1'b0;
-            @(posedge clk); seek_rbn_pulse <= 1'b1; seek_rbn <= rbn;
-            @(posedge clk); seek_rbn_pulse <= 1'b0;
-            k = 0; while (!ack_seen && k < 200000) begin @(posedge clk); k = k + 1; end
-            cap_n = 0;                          // capture the landed stream from byte 0
-            k = 0; while (cap_n < 1 && k < 200000) begin @(posedge clk); k = k + 1; end
+            build_iso;
+            fill_sec(24 + 14, 8'hB1);
+            fill_sec(24 + 26, 8'hB2);
+            for (q = 0; q < VOBSEC; q = q + VOBU) put_nav(q);
         end
     endtask
 
     initial begin
-        rst_n = 0;
+        if (!$value$plusargs("realign=%d", realign)) realign = 1;
+        $display("mode_realign_chain_tb: %0s path", realign[0] ? "FIXED" : "PRE-FIX (+realign=0)");
+
+        build_chain_iso;
+        file_size = VOBSEC*2048;
+
         repeat (4) @(posedge clk);
         rst_n = 1;
-        @(posedge clk);
+        repeat (4) @(posedge clk);
+        @(negedge clk) start = 1;
+        @(negedge clk) start = 0;
 
-        build_iso;
-        file_size = IMG_BYTES;
-        @(posedge clk);
-        start = 1; @(posedge clk); start = 0;
+        // Let the reader mount, parse the IFOs and start streaming cell 0 from RBN 0.
+        k = 0;
+        while (!cell_ready && k < 400000) begin @(posedge clk); k = k + 1; end
+        if (!cell_ready) begin
+            $display("FAIL: reader never reached cell mode");
+            errors = errors + 1;
+        end
+        base_rbn   = 0;
+        strm_bytes = 0;
+        wait_bytes(1);
+        strm_bytes = 0;                    // count from the first delivered byte
 
-        // ---- baseline: playback begins at cell 0 (marker B0) ----
-        wait_bytes(1024);
-        if (dut.cell_mode !== 1'b1) begin errors=errors+1; $display("  FAIL: cell_mode not set"); end
-        if (!cell_ready)            begin errors=errors+1; $display("  FAIL: cell_ready low"); end
-        if (cur_cell !== 8'd0)      begin errors=errors+1; $display("  FAIL: cur_cell!=0 at start (%0d)", cur_cell); end
-        expect_marker(8'hB0, "baseline cell0");
-        $display("TEST0: cell_mode=%b cell_count=%0d cur_cell=%0d",
-                 dut.cell_mode, dut.cell_count, cur_cell);
-
-        // ---- TEST 1: forward seek cell0 -> cell3 (marker B3) ----
-        do_seek(8'd3);
-        if (!ack_seen)         begin errors=errors+1; $display("  FAIL: no seek_ack on forward seek"); end
-        if (cur_cell !== 8'd3) begin errors=errors+1; $display("  FAIL: cur_cell!=3 after fwd seek (%0d)", cur_cell); end
-        // Phase-5: a TITLE transport seek is NOT a menu transition -> keep_vbuf=0
-        // (the VBUF must flush so the picture jumps with the audio).
-        if (kv_at_seek !== 1'b0) begin errors=errors+1; $display("  FAIL: keep_vbuf!=0 on a title transport seek (%b)", kv_at_seek); end
-        wait_bytes(1024);
-        expect_marker(8'hB3, "TEST1 forward seek -> cell3");
-
-        // ---- TEST 2: backward seek cell3 -> cell1 (marker B1) ----
-        do_seek(8'd1);
-        if (!ack_seen)         begin errors=errors+1; $display("  FAIL: no seek_ack on backward seek"); end
-        if (cur_cell !== 8'd1) begin errors=errors+1; $display("  FAIL: cur_cell!=1 after bwd seek (%0d)", cur_cell); end
-        wait_bytes(1024);
-        expect_marker(8'hB1, "TEST2 backward seek -> cell1");
-
-        // ---- TEST 3: out-of-range seek (cell 10 >= cell_count 4) = no-op ----
-        // Must not ack and must not jump the cell cursor. Playback keeps running
-        // from where it was, so we only assert: no ack, cur_cell < cell_count.
-        ack_seen = 1'b0;
-        @(posedge clk); seek_pulse <= 1'b1; seek_cell <= 8'd10;
-        @(posedge clk); seek_pulse <= 1'b0;
-        repeat (40) @(posedge clk);
-        if (ack_seen)                    begin errors=errors+1; $display("  FAIL: out-of-range seek acked"); end
-        if (cur_cell >= dut.cell_count)  begin errors=errors+1; $display("  FAIL: cur_cell ran out of range (%0d)", cur_cell); end
-        else $display("  ok: TEST3 out-of-range seek ignored (no ack, cur_cell=%0d)", cur_cell);
-
-        // ---- TEST 4: scrub to RBN 25 (mid cell2) SNAPS forward to the NAV @26 ----
-        // A raw mid-VOBU target would leave the decoder mid-GOP and mis-anchor the
-        // STC; the reader now walks forward to the first NAV pack (RBN 26) so the
-        // landing is VOBU-aligned. cur_cell stays 2; the stream begins with the NAV
-        // signature; RBN 26..29 (4 sectors) precede cell3's B3.
-        do_scrub(32'd25);
-        if (!ack_seen)         begin errors=errors+1; $display("  FAIL: no seek_ack on RBN scrub"); end
-        if (cur_cell !== 8'd2) begin errors=errors+1; $display("  FAIL: TEST4 cur_cell!=2 (%0d)", cur_cell); end
-        wait_bytes(20000);
-        check_sig("TEST4");
-        if (first_of(8'hB3) !== 4*2048)
-            begin errors=errors+1;
-                $display("  FAIL: TEST4 snapped to wrong RBN - first B3 at %0d (want %0d = RBN 26..29)",
-                         first_of(8'hB3), 4*2048); end
-        else
-            $display("  ok: TEST4 scrub RBN 25 -> NAV-aligned RBN 26 (cell2, 4 sectors then B3)");
-
-        // ---- TEST 5: scrub to RBN 20 (already a NAV = cell2 head) = NO shift ----
-        do_scrub(32'd20);
-        if (cur_cell !== 8'd2) begin errors=errors+1; $display("  FAIL: TEST5 cur_cell!=2 (%0d)", cur_cell); end
-        wait_bytes(30000);
-        check_sig("TEST5");
-        if (first_of(8'hB3) !== 10*2048)
-            begin errors=errors+1;
-                $display("  FAIL: TEST5 shifted off an on-NAV target - first B3 at %0d (want %0d)",
-                         first_of(8'hB3), 10*2048); end
-        else
-            $display("  ok: TEST5 scrub RBN 20 (on NAV) -> no shift (RBN 20..29 then B3)");
-
-        // ---- TEST 6: scrub to RBN 17 (cell1, next NAV @20) CROSSES into cell2 ----
-        // The align target (20) is in the NEXT cell, so the containing-cell scan
-        // re-selects cell2 -> proves the cross-cell path.
-        do_scrub(32'd17);
-        if (cur_cell !== 8'd2) begin errors=errors+1; $display("  FAIL: TEST6 cur_cell!=2 cross-cell (%0d)", cur_cell); end
-        wait_bytes(30000);
-        check_sig("TEST6");
-        if (first_of(8'hB3) !== 10*2048)
-            begin errors=errors+1;
-                $display("  FAIL: TEST6 cross-cell align wrong - first B3 at %0d (want %0d)",
-                         first_of(8'hB3), 10*2048); end
-        else
-            $display("  ok: TEST6 scrub RBN 17 -> NAV @20 (cross-cell to cell2)");
-
-        // ---- TEST 7: scrub into NAV-free cell3 (RBN 31); budget exhausts -> raw ----
-        // cell3 (RBN 30..39) has no NAV; with NAV_CAP=8 the probe checks 31..38 then
-        // falls back to the RAW target 31 (pre-fix behaviour = no regression).
-        do_scrub(32'd31);
-        if (!ack_seen)         begin errors=errors+1; $display("  FAIL: no seek_ack on TEST7 scrub"); end
-        if (cur_cell !== 8'd3) begin errors=errors+1; $display("  FAIL: TEST7 cur_cell!=3 (%0d)", cur_cell); end
-        if (cap[0] !== 8'hB3)  begin errors=errors+1; $display("  FAIL: TEST7 fallback did not land raw (cap[0]=%02x)", cap[0]); end
-        wait_bytes(18432);
-        begin : t7count
-            integer b3run;
-            b3run = 0;
-            while (b3run < cap_n && cap[b3run] === 8'hB3) b3run = b3run + 1;
-            if (b3run !== 9*2048)
-                begin errors=errors+1;
-                    $display("  FAIL: TEST7 raw fallback wrong RBN - %0d B3 bytes (want %0d = RBN 31..39)", b3run, 9*2048); end
-            else
-                $display("  ok: TEST7 budget-exhausted fallback -> raw RBN 31 (%0d B3 bytes)", b3run);
+        // ---- park the demux front MID-VOBU -----------------------------------------
+        // Half a sector into VOBU 1 (RBN 5..9): a landing here is not a VOBU boundary,
+        // which is the whole point -- with no reader jump the flush lands right here.
+        wait_bytes(6*SECBYTES + 700);
+        if ((strm_bytes % SECBYTES) == 0) begin
+            $display("FAIL: setup -- the front is on a sector boundary, nothing to prove");
+            errors = errors + 1;
+        end
+        $display("  front: %0d bytes streamed (sector %0d, VOBU %0d), playhead RBN %0d",
+                 strm_bytes, cur_sec, cur_vobu, ph_lbn);
+        if (ph_lbn != 32'd5) begin
+            $display("FAIL: setup -- playhead model says %0d, expected 5", ph_lbn);
+            errors = errors + 1;
         end
 
-        // ---- TEST 8: scrub to RBN 36; probe hits the title-end clamp -> raw ----
-        do_scrub(32'd36);
-        if (cur_cell !== 8'd3) begin errors=errors+1; $display("  FAIL: TEST8 cur_cell!=3 (%0d)", cur_cell); end
-        if (cap[0] !== 8'hB3)  begin errors=errors+1; $display("  FAIL: TEST8 fallback did not land raw (cap[0]=%02x)", cap[0]); end
-        wait_bytes(8192);
-        begin : t8count
-            integer b3run;
-            b3run = 0;
-            while (b3run < cap_n && cap[b3run] === 8'hB3) b3run = b3run + 1;
-            if (b3run !== 4*2048)
-                begin errors=errors+1;
-                    $display("  FAIL: TEST8 title-end fallback wrong - %0d B3 bytes (want %0d = RBN 36..39)", b3run, 4*2048); end
-            else
-                $display("  ok: TEST8 title-end-clamp fallback -> raw RBN 36 (%0d B3 bytes)", b3run);
+        // ---- ONE raster-mode change -------------------------------------------------
+        n_trio = 0;
+        @(negedge clk) mode_edge = 1;
+        @(negedge clk) mode_edge = 0;
+        ph_track = 0;                      // freeze the model; the module has latched
+
+        // Wait for the trio, then for the first bytes to arrive behind it.
+        k = 0;
+        while (n_trio == 0 && k < 400000) begin @(posedge clk); k = k + 1; end
+        if (n_trio == 0) begin
+            $display("FAIL: no flush ever fired for the mode change");
+            errors = errors + 1;
+        end
+        k = 0;
+        while (cap_n < 64 && k < 400000) begin @(posedge clk); k = k + 1; end
+
+        // ---- THE CRITERION ----------------------------------------------------------
+        if (cap_n < 64) begin
+            $display("FAIL: fewer than 64 bytes delivered after the flush");
+            errors = errors + 1;
+        end else begin
+            $display("  first bytes after the flush: %02x %02x %02x %02x  (@14: %02x %02x %02x %02x)",
+                     cap[0], cap[1], cap[2], cap[3], cap[14], cap[15], cap[16], cap[17]);
+            check_sig("flush must land on a NAV pack");
         end
 
-        // ---- TEST 9: MEASURE the VOBU-snap probe cost ------------------------------
-        // The probe walks forward ONE SECTOR AT A TIME from the raw target (S_NAV_SEEK ->
-        // S_SECREAD -> S_NAV_CHK, budget NAV_CAP), so where the target sits relative to
-        // the next NAV pack is the whole cost. dvd/mode_realign.sv (issue #42) targets the
-        // playhead's OWN VOBU precisely because that is already a NAV pack: the first
-        // probe hits and the snap moves nowhere. This measures the difference rather than
-        // asserting it, by counting sector fetches from the jump to the first byte out.
-        begin : t9
-            integer r0, n_on_nav, n_short, n_one;
-            // (a) target RBN 20 -- already a NAV pack (cell2's head)
-            ack_seen = 1'b0;
-            @(posedge clk); seek_rbn_pulse <= 1'b1; seek_rbn <= 32'd20;
-            @(posedge clk); seek_rbn_pulse <= 1'b0;
-            k = 0; while (!ack_seen && k < 200000) begin @(posedge clk); k = k + 1; end
-            r0 = sd_reads; cap_n = 0;
-            k = 0; while (cap_n < 1 && k < 200000) begin @(posedge clk); k = k + 1; end
-            n_on_nav = sd_reads - r0;
-
-            // (b) target RBN 25 -- ONE sector short of the next NAV pack (26)
-            ack_seen = 1'b0;
-            @(posedge clk); seek_rbn_pulse <= 1'b1; seek_rbn <= 32'd25;
-            @(posedge clk); seek_rbn_pulse <= 1'b0;
-            k = 0; while (!ack_seen && k < 200000) begin @(posedge clk); k = k + 1; end
-            r0 = sd_reads; cap_n = 0;
-            k = 0; while (cap_n < 1 && k < 200000) begin @(posedge clk); k = k + 1; end
-            n_one = sd_reads - r0;
-
-            // (c) target RBN 21 -- five sectors short of the next NAV pack (26)
-            ack_seen = 1'b0;
-            @(posedge clk); seek_rbn_pulse <= 1'b1; seek_rbn <= 32'd21;
-            @(posedge clk); seek_rbn_pulse <= 1'b0;
-            k = 0; while (!ack_seen && k < 200000) begin @(posedge clk); k = k + 1; end
-            r0 = sd_reads; cap_n = 0;
-            k = 0; while (cap_n < 1 && k < 200000) begin @(posedge clk); k = k + 1; end
-            n_short = sd_reads - r0;
-
-            // Three points, so the cost MODEL is measured rather than assumed: each
-            // reading is a fixed landing cost (the cell-table reload and the first stream
-            // fetch) plus ONE sector read per probed candidate. Two independent
-            // differences pin the slope at 1 read/sector, which is what makes an on-NAV
-            // target -- the one dvd/mode_realign.sv uses -- a single-probe snap.
-            $display("  TEST9 probe cost: on-NAV %0d reads, 1-short %0d, 5-short %0d",
-                     n_on_nav, n_one, n_short);
-            if (n_one - n_on_nav !== 1) begin
-                errors = errors + 1;
-                $display("  FAIL: TEST9 one extra sector must cost one extra read (got %0d)",
-                         n_one - n_on_nav);
-            end else if (n_short - n_on_nav !== 5) begin
-                errors = errors + 1;
-                $display("  FAIL: TEST9 a 5-sector gap must cost 5 extra reads (got %0d)",
-                         n_short - n_on_nav);
-            end else
-                $display("  ok: TEST9 the probe walk is 1 read/sector; an on-NAV target snaps on the first probe");
+        // Exactly one flush for one mode change, whichever path was taken.
+        if (n_trio != 1) begin
+            $display("  flushes=%0d, want 1", n_trio);
+            errors = errors + 1;
+            $display("FAIL: one mode change must cost exactly one flush");
         end
 
-        if (errors == 0) $display("ISO_READER_SEEK_TB: ALL TESTS PASSED");
-        else             $display("ISO_READER_SEEK_TB: FAILED with %0d errors", errors);
+        // And it must have re-aligned to the VOBU the demux front was in -- not to the
+        // start of the title (the stale-playhead trap) and not forward past content.
+        if (realign[0] && mr_srbn != 32'd5) begin
+            $display("  re-align target=%0d, want 5", mr_srbn);
+            errors = errors + 1;
+            $display("FAIL: the re-align must target the CURRENT VOBU");
+        end
+
+        if (errors == 0) $display("mode_realign_chain_tb: ALL TESTS PASSED");
+        else begin
+            $display("mode_realign_chain_tb: FAILED with %0d errors", errors);
+            $fatal(1, "mode_realign_chain_tb FAILED");
+        end
         $finish;
     end
 
     initial begin
         #400000000;
-        $display("ISO_READER_SEEK_TB: TIMEOUT");
+        $display("mode_realign_chain_tb: TIMEOUT");
         $finish;
     end
 
