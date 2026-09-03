@@ -757,4 +757,14 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # seek_rbn latch -- a path with cycles of slack. The +62 ALM is the honest logic delta here
 # (compare the dpad_seek entry above, where a large "ALMs needed" jump was mostly the
 # collapse of the recoverable-by-packing estimate, not new logic).
+# 2026-09-03e (same branch + the SWITCH BLANK -- mode_realign grows a 26-bit ceiling
+# counter, a vl_dropped latch and a blank register: 78 -> 141 combinational ALUTs, and one
+# extra mux level in emu's registered output stage): SEED 5 held FIRST roll again --
+# clk_dec 93.17 @100C / 91.27 @-40C (BETTER than the entry above, which is fit variance on
+# a fresh netlist, not the logic delta) at 88% ALM (37,027, +59), RAM 494/553 and DSP
+# 92/112 both unchanged. FOURTEENTH consecutive first-roll fit. Build
+# DVD_swblank_20260903_1638.rbf.
+# ⚠ The added mux level sits in the ALREADY-REGISTERED output stage (reg -> pin), which is
+# why a blank on the pixel path costs nothing in clk_dec: that stage was retimed in
+# 2026-06-28 precisely to make it a short hop.
 set_global_assignment -name SEED 5
