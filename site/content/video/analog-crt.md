@@ -50,11 +50,14 @@ path — a **31 kHz** signal a 15 kHz CRT cannot sync — and the analog-only ex
 (line-21 captions, sub-720 fill, Analog Aspect) are off.
 
 !!! info "Unreleased"
-    On a progressive-analog rig (`vga_scaler=0` plus a sync mode in the ini)
-    [Film 24p](film-24p.md) is now suppressed automatically, so a film disc no longer
-    switches the pins to a 23.976/25 Hz raster the display drops when the feature
-    starts. HDMI-only setups (`vga_scaler=1`, or no analog sync mode set) keep Film 24p
-    exactly as before. On v0.4.0 and earlier set `Film 24p Out = Off` on such a rig.
+    On a rig configured for analog in `MiSTer.ini` (`vga_scaler=0` plus a sync mode) but
+    set to Progressive, an **Auto** [Film 24p](film-24p.md) verdict no longer engages, so
+    a film disc cannot switch the pins to a 23.976/25 Hz raster the display drops when the
+    feature starts. Setting **`Film 24p Out = On`** overrides that — it is an explicit
+    choice, and it is how you watch 24p over HDMI with the CRT switched off while leaving
+    the analog lines in your ini. HDMI-only setups (`vga_scaler=1`, or no analog sync mode
+    set) are unaffected on any setting. On v0.4.0 and earlier, set `Film 24p Out = Off`
+    on such a rig to avoid the signal loss.
 
 !!! warning "HDMI shows 480i while a CRT is active"
     Interlaced mode puts the whole core in field mode, so HDMI drops to 480i via the

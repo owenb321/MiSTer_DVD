@@ -253,13 +253,18 @@ wire        film_want  = (film_mode == 2'b10) | ((film_mode == 2'b00) & film_det
 // (and cannot feed the analog re-timer — no frame store for the rate conversion), so
 // Interlaced mode suppresses it. Film on the CRT then plays with its normal 3:2 field
 // cadence — exactly what an NTSC set-top player output.
-// DVD-FORK FIX (single-raster analog, 2026-09-03): ALSO suppressed when the ini asks
-// for native analog (analog_want) but the user picked Progressive - in that mode the
-// analog pins carry the main raster through the stock path, and the 23.976/25 Hz film
-// modeline (875x1287 @ 30.9 kHz) is a signal no analog display holds: HW report
-// "Progressive is stable in the menus, loses signal when the feature starts". A
-// vga_scaler=1 / HDMI-only rig (analog_want=0) keeps Film 24p exactly as before.
-wire        filmp_eff  = film_want & ~interlaced_eff & ~analog_want; // progressive-film raster wanted
+// DVD-FORK FIX (single-raster analog, 2026-09-03): on a rig whose ini asks for native
+// analog (analog_want) but whose user picked Progressive, an AUTO film verdict is
+// suppressed - the analog pins carry the main raster through the stock path there, and
+// the 23.976/25 Hz film modeline (875x1287 @ 30.9 kHz) is a signal no analog display
+// holds: HW report "Progressive is stable in the menus, loses signal when the feature
+// starts". ⚠ Only the AUTO verdict: `Film 24p Out = On` is an explicit user choice and
+// is honoured, which is how an analog-configured rig watches 24p on HDMI with the CRT
+// switched off (HW round 6 - the blunt ~analog_want gate took that away, and Auto
+// already resolves such a rig to Interlaced, where filmp_eff is 0 anyway, so the gate
+// only ever bit the deliberate case). An HDMI-only rig (analog_want=0) is unaffected.
+wire        film_forced = (film_mode == 2'b10);      // O[25:24] = On (not Auto)
+wire        filmp_eff  = film_want & ~interlaced_eff & (film_forced | ~analog_want);
 wire        film24_eff = filmp_eff & ~pal_eff;       // NTSC 23.976 Hz path
 wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
 // il_eff: the decoder/main-raster fields mode — now simply the resolved Video Output
