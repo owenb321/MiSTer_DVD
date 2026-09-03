@@ -242,6 +242,16 @@ instead of shifts (they are shifts on pre-widened values now, spelled out); and
 the "target before the first cell" path fell through the interpolation adder,
 which would have folded in a stale product from the previous request.
 
+**One converter, shared** (`dvd/secs_bcd.sv`). Both modules emit SECONDS; a
+single instance in emu renders them as the packed BCD the HUD reads. Measured,
+a private copy was 166 ALUTs / 56 registers, and only one clock is ever
+displayed at a time. It walks its four inputs round-robin (~4.4 µs for all
+four) rather than arbitrating — an arbiter would be more logic than the
+conversion, and nothing here changes faster than a scrub tick (~60 ms).
+⚠ **The 9:59:59 readout clamp lives ONLY there.** It was briefly duplicated in
+`lin_rate` as well, and the mutation sweep caught the consequence immediately:
+each copy covered for the other, so removing either one passed every test.
+
 **No `transport_hud.sv` change at all** — the mux is upstream in emu. Note for a
 later polish pass: `f_cur[3:0]` is a dead nibble and every time-field glyph is
 emitted with accent 0, so a "this is a target, not the playhead" accent is

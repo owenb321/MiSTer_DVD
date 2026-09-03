@@ -46,13 +46,13 @@ run() {
 }
 
 run dpad_seek_tb      dvd/dpad_seek.sv dvd/nav_dsi.sv
-run lin_rate_tb       dvd/lin_rate.sv
+run lin_rate_tb       dvd/lin_rate.sv dvd/secs_bcd.sv
 run scrub_ctrl_tb     dvd/scrub_ctrl.sv
 run nav_dsi_tb        dvd/nav_dsi.sv
 run transport_hud_tb  dvd/transport_hud.sv
 run hud_frame_tb      dvd/transport_hud.sv dvd/subpic_blend.sv
 run seek_bar_tb       dvd/seek_bar.sv
-run seek_time_tb      dvd/seek_time.sv
+run seek_time_tb      dvd/seek_time.sv dvd/secs_bcd.sv
 run iso_reader_seek_tb dvd/dvd_iso_reader.sv dvd/bcd_time_add.sv
 
 if [ $rc -eq 0 ]; then echo "RUN_DPAD_SEEK: ALL SUITES PASSED";

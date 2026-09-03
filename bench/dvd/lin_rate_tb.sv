@@ -32,9 +32,17 @@ module lin_rate_tb;
 
     wire [23:0] blk10;
     wire        blk10_ok;
-    wire [31:0] cur_time, total_time, prev_time;
-    wire [15:0] total_secs;
+    wire [16:0] cur_secs, total_secs, prev_secs;
     wire        prev_ok, time_ok;
+    // The DUT emits seconds now; the shared converter renders them. Checks stay
+    // on the BCD a viewer would actually read -- asserting seconds would drop
+    // the digit conversion out of the gate entirely.
+    wire [31:0] cur_time, total_time, prev_time, unused_bcd;
+    secs_bcd bcd_i (
+        .clk(clk), .rst_n(rst_n),
+        .secs0(cur_secs), .secs1(total_secs), .secs2(prev_secs), .secs3(17'd0),
+        .bcd0(cur_time), .bcd1(total_time), .bcd2(prev_time), .bcd3(unused_bcd)
+    );
 
     lin_rate dut (
         .clk(clk), .rst_n(rst_n), .en(en), .raw_mode(raw_mode),
@@ -43,8 +51,8 @@ module lin_rate_tb;
         .lin_blk(lin_blk), .total_blk(total_blk),
         .prev_rbn(prev_rbn), .prev_req(prev_req),
         .blk10(blk10), .blk10_ok(blk10_ok),
-        .cur_time(cur_time), .total_time(total_time), .prev_time(prev_time),
-        .prev_ok(prev_ok), .total_secs(total_secs), .time_ok(time_ok)
+        .cur_secs(cur_secs), .total_secs(total_secs), .prev_secs(prev_secs),
+        .prev_ok(prev_ok), .time_ok(time_ok)
     );
 
     integer errors = 0;
@@ -92,7 +100,7 @@ module lin_rate_tb;
     task automatic pulse_sec;
         begin @(negedge clk); sec_tick = 1'b1;
               @(negedge clk); sec_tick = 1'b0;
-              tick(400); end
+              tick(600); end
     endtask
 
     // |a-b| within pct% of b, reported with the numbers so a near-miss is

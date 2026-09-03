@@ -85,7 +85,11 @@ module seek_time (
 
     input  wire [31:0] live_time,         // packed BCD playhead
 
-    output reg  [31:0] prev_time,         // packed BCD {hh,mm,ss,8'h00}
+    // In SECONDS; dvd/secs_bcd.sv (shared with dvd/lin_rate.sv) renders it as
+    // the packed BCD the HUD reads. Only one clock is ever displayed at a time,
+    // so a private converter here bought nothing -- measured, 166 ALUTs and 56
+    // registers.
+    output reg  [16:0] prev_secs,
     output reg         prev_ok
 );
     // =====================================================================
@@ -135,8 +139,8 @@ module seek_time (
     // x3600 = <<11+<<10+<<9+<<4. Doing it with concatenations instead is how
     // the first version of this block silently computed h*44.
     // ⚠ The TENS-of-hours digit is deliberately not decoded. Every producer of
-    // live_time saturates at 9:59:59 (lin_rate's SEC_CAP, and a PGC playback
-    // time is spec-capped there too), and transport_hud renders only bits [27:8]
+    // live_time saturates at 9:59:59 (dvd/secs_bcd.sv clamps it there, and a PGC
+    // playback time is spec-capped too), and transport_hud renders only [27:8]
     // -- the hours ONES nibble -- so a tens digit could not be displayed even if
     // one arrived. Decoding it cost two 17-bit adds for a provably-zero term.
     wire [7:0]  hh_o = {4'd0, live_time[27:24]};
@@ -177,8 +181,7 @@ module seek_time (
                      S_CH_C  = 4'd3,  S_CH_D = 4'd4,
                      S_SC_A  = 4'd5,  S_SC_B = 4'd6,  S_SC_C = 4'd7,
                      S_LO    = 4'd8,  S_HI   = 4'd9,  S_DIV  = 4'd10,
-                     S_MUL   = 4'd11, S_SUM  = 4'd12, S_BCD  = 4'd13,
-                     S_PUB   = 4'd14;
+                     S_MUL   = 4'd11, S_SUM  = 4'd12, S_PUB  = 4'd13;
 
     reg [3:0]  st;
     reg [31:0] tgt;
@@ -213,26 +216,19 @@ module seek_time (
     reg [23:0] ml_acc;
     reg [3:0]  ml_i;
 
-    // seconds -> BCD digits by repeated subtraction (yields the digits
-    // directly, so no separate binary-to-BCD pass).
-    reg [16:0] bc_t;
-    reg [3:0]  bc_h, bc_mt, bc_mo, bc_st;
-    reg [2:0]  bc_st_n;
-
-    wire [16:0] secs_cap = (secs > 17'd35999) ? 17'd35999 : secs;
+    // No readout clamp here either -- dvd/secs_bcd.sv owns the single 9:59:59
+    // clamp, so it is the one place a test can prove it exists.
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             st <= S_IDLE; sel_l <= SEL_NONE; key_l <= 32'd0;
-            prev_time <= 32'd0; prev_ok <= 1'b0;
+            prev_secs <= 17'd0; prev_ok <= 1'b0;
             pm_ra <= 7'd0; cf_ra <= 7'd0;
             tgt <= 32'd0; scan_i <= 8'd0; lo_ok <= 1'b0;
             lo_rbn <= 32'd0; hi_rbn <= 32'd0; lo_secs <= 16'd0; hi_secs <= 16'd0;
             secs <= 17'd0;
             dv_n <= 30'd0; dv_rem <= 24'd0; dv_q <= 9'd0; dv_i <= 6'd0;
             ml_acc <= 24'd0; ml_i <= 4'd0;
-            bc_t <= 17'd0; bc_h <= 4'd0; bc_mt <= 4'd0; bc_mo <= 4'd0;
-            bc_st <= 4'd0; bc_st_n <= 3'd0;
         end else begin
             if (sel == SEL_NONE) begin
                 prev_ok <= 1'b0;
@@ -255,7 +251,7 @@ module seek_time (
                         else
                             secs <= (lv_secs > dp_delta) ? (lv_secs - dp_delta)
                                                          : 17'd0;
-                        st <= S_BCD; bc_st_n <= 3'd0;
+                        st <= S_PUB;
                     end
                     SEL_CHAP: begin
                         pm_ra <= (chap_pgm != 8'd0) ? (chap_pgm[6:0] - 7'd1) : 7'd0;
@@ -289,7 +285,7 @@ module seek_time (
                     S_CH_C: st <= S_CH_D;           // cs_q settling
                     S_CH_D: begin
                         secs <= {1'b0, cs_q};
-                        st <= S_BCD; bc_st_n <= 3'd0;
+                        st <= S_PUB;
                     end
 
                     // ---- RBN: find the bracketing cell --------------------
@@ -310,7 +306,7 @@ module seek_time (
                             if (lo_ok) st <= S_LO;
                             else begin
                                 secs <= 17'd0;
-                                st <= S_BCD; bc_st_n <= 3'd0;
+                                st <= S_PUB;
                             end
                         end else begin
                             lo_ok   <= 1'b1;
@@ -324,7 +320,7 @@ module seek_time (
                         // q = (off << 8) / cell_span, a 0..255 fraction.
                         if (!c_span_ok) begin
                             secs <= {1'b0, lo_secs};     // degenerate cell
-                            st <= S_BCD; bc_st_n <= 3'd0;
+                            st <= S_PUB;
                         end else begin
                             dv_n   <= {cell_off[21:0], 8'd0};
                             dv_rem <= 24'd0;
@@ -350,37 +346,11 @@ module seek_time (
                     end
                     S_SUM: begin                    // reached ONLY by S_MUL
                         secs <= {1'b0, lo_secs} + {1'b0, ml_acc[23:8]};
-                        st <= S_BCD; bc_st_n <= 3'd0;
-                    end
-
-                    // ---- seconds -> BCD -----------------------------------
-                    S_BCD: begin
-                        case (bc_st_n)
-                            3'd0: begin
-                                bc_t <= secs_cap;
-                                bc_h <= 4'd0; bc_mt <= 4'd0;
-                                bc_mo <= 4'd0; bc_st <= 4'd0;
-                                bc_st_n <= 3'd1;
-                            end
-                            3'd1: if (bc_t >= 17'd3600) begin
-                                      bc_t <= bc_t - 17'd3600; bc_h <= bc_h + 4'd1;
-                                  end else bc_st_n <= 3'd2;
-                            3'd2: if (bc_t >= 17'd600) begin
-                                      bc_t <= bc_t - 17'd600; bc_mt <= bc_mt + 4'd1;
-                                  end else bc_st_n <= 3'd3;
-                            3'd3: if (bc_t >= 17'd60) begin
-                                      bc_t <= bc_t - 17'd60; bc_mo <= bc_mo + 4'd1;
-                                  end else bc_st_n <= 3'd4;
-                            3'd4: if (bc_t >= 17'd10) begin
-                                      bc_t <= bc_t - 17'd10; bc_st <= bc_st + 4'd1;
-                                  end else bc_st_n <= 3'd5;
-                            default: st <= S_PUB;
-                        endcase
+                        st <= S_PUB;
                     end
 
                     default: begin                  // S_PUB
-                        prev_time <= {4'd0, bc_h, bc_mt, bc_mo, bc_st,
-                                      bc_t[3:0], 8'h00};
+                        prev_secs <= secs;
                         prev_ok   <= 1'b1;
                         st        <= S_IDLE;
                     end

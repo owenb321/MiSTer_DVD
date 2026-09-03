@@ -5,8 +5,10 @@
 //
 //   1. blk10   -- blocks per 10 s of file, the step dvd/dpad_seek.sv needs to
 //                 turn "+10 s" into a raw-RBN target (issue #39).
-//   2. cur/total/prev_time -- an elapsed / total / seek-preview clock for the
+//   2. cur/total/prev_secs -- an elapsed / total / seek-preview clock for the
 //                 transport HUD, which read 0:00:00 in linear modes until now.
+//                 Emitted in SECONDS; dvd/secs_bcd.sv (shared with
+//                 dvd/seek_time.sv) renders them as packed BCD.
 //
 // ★ RAW VCD/SVCD IS A COMBINATIONAL BYPASS, NOT A MEASUREMENT. A CD plays at a
 // fixed 75 sectors/s of 2352 B, which over the reader's 2048-byte linear block
@@ -68,7 +70,7 @@
 //    it never arms: the D-pad stays inert and the clock stays 0, i.e. exactly
 //    today's behaviour. An aud_pts fallback is cheap but deliberately not built
 //    (area, and mixing two PTS timelines into one window adds error).
-//  - total_time on a raw CD image is file-length based, so a single-bin image
+//  - total_secs on a raw CD image is file-length based, so a single-bin image
 //    with a leading ISO track reads slightly long.
 // ============================================================================
 `default_nettype none
@@ -84,8 +86,7 @@ module lin_rate #(
     parameter [31:0] DBLK_MAX  = 32'd131_072,     // 256 MB in one window ditto
     parameter [23:0] BLK10_RAW = 24'd861,         // 75*2352/2048*10, exact CD
     parameter [23:0] BLK10_MIN = 24'd100,         // ~20 KB/s  -- reject below
-    parameter [23:0] BLK10_MAX = 24'd12_000,      // ~2.4 MB/s -- reject above
-    parameter [15:0] SEC_CAP   = 16'd35_999       // 9:59:59, the widest readout
+    parameter [23:0] BLK10_MAX = 24'd12_000       // ~2.4 MB/s -- reject above
 ) (
     input  wire        clk,
     input  wire        rst_n,           // reset_n -- NOT pipe_rst_n (see above)
@@ -105,12 +106,14 @@ module lin_rate #(
 
     output wire [23:0] blk10,
     output wire        blk10_ok,
-    output reg  [31:0] cur_time,        // packed BCD {hh,mm,ss,8'h00}
-    output reg  [31:0] total_time,
-    output reg  [31:0] prev_time,
+    // Times come out in SECONDS; dvd/secs_bcd.sv turns them into the packed BCD
+    // the HUD renders. That converter is shared with dvd/seek_time.sv -- only
+    // one clock is ever displayed at a time, so carrying a copy here bought
+    // nothing (measured: 166 ALUTs and 56 registers).
+    output reg  [16:0] cur_secs,
+    output reg  [16:0] total_secs,
+    output reg  [16:0] prev_secs,
     output reg         prev_ok,
-    output reg  [15:0] total_secs,      // the same total, in seconds -- the cap
-                                        // dvd/seek_time.sv's D-pad arm needs
     output reg         time_ok
 );
 
@@ -142,8 +145,7 @@ module lin_rate #(
     // BCD stage, and the only one whose divisor is a PTS delta.
     // =====================================================================
     localparam [1:0] J_RATE = 2'd0, J_PREV = 2'd1, J_CUR = 2'd2, J_TOT = 2'd3;
-    localparam [2:0] S_IDLE = 3'd0, S_MUL = 3'd1, S_DIV = 3'd2,
-                     S_SEC  = 3'd3, S_PUB = 3'd4;
+    localparam [2:0] S_IDLE = 3'd0, S_MUL = 3'd1, S_DIV = 3'd2, S_PUB = 3'd3;
     // k = 900000 (PTS ticks in 10 s) for RATE, 10 (blocks -> block-seconds) for
     // the clock jobs. 20 bits covers both.
     localparam [19:0] K_RATE = 20'd900_000;   // 900000 < 2^20, fits exactly
@@ -196,19 +198,13 @@ module lin_rate #(
     wire [19:0] mul_kw  = (job == J_RATE) ? K_RATE : K_TEN;
     wire        mul_bit = mul_kw[mul_i];
 
-    // seconds -> BCD by repeated subtraction (the dpad_seek MM:SS trick), which
-    // yields the DIGITS directly, so no separate binary-to-BCD pass is needed.
-    reg  [15:0] sec_t;
-    reg  [15:0] sec_t_l;                // the clamped seconds, before the digits
-                                        // consume sec_t
-    reg  [3:0]  bcd_h, bcd_mt, bcd_mo, bcd_st;
-    reg  [2:0]  sec_st;
-
     wire [23:0] quo_c   = quo_sat ? 24'hFFFFFF : quo;
-    wire [15:0] sec_cap = (quo_c > {8'd0, SEC_CAP}) ? SEC_CAP : quo_c[15:0];
+    // Saturate to the output width only. The 9:59:59 READOUT clamp lives in
+    // dvd/secs_bcd.sv and nowhere else: duplicating it here made each copy
+    // untestable, because removing either one left the other covering for it.
+    wire [16:0] sec_sat = (quo_c > 24'h01_FFFF) ? 17'h1_FFFF : quo_c[16:0];
     wire [23:0] ema     = blk10_r - (blk10_r >> 2) + (quo_c >> 2);
     wire        rate_ok = (quo_c >= BLK10_MIN) && (quo_c <= BLK10_MAX);
-    wire [31:0] bcd_out = {4'd0, bcd_h, bcd_mt, bcd_mo, bcd_st, sec_t[3:0], 8'h00};
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -220,11 +216,8 @@ module lin_rate #(
             div_i <= 6'd0;
             d_blk_l <= 18'd0; d_pts_l <= 21'd0; prev_rbn_l <= 24'd0;
             prev_new <= 1'b0; tot_seen <= 1'b0; cur_seen <= 1'b0; ok_d <= 1'b0;
-            sec_t <= 16'd0; sec_t_l <= 16'd0;
-            bcd_h <= 4'd0; bcd_mt <= 4'd0; bcd_mo <= 4'd0;
-            bcd_st <= 4'd0; sec_st <= 3'd0;
-            cur_time <= 32'd0; total_time <= 32'd0; prev_time <= 32'd0;
-            total_secs <= 16'd0; prev_ok <= 1'b0; time_ok <= 1'b0;
+            cur_secs <= 17'd0; total_secs <= 17'd0; prev_secs <= 17'd0;
+            prev_ok <= 1'b0; time_ok <= 1'b0;
         end else begin
             ok_d <= blk10_ok;
             // ---- measurement -------------------------------------------
@@ -232,8 +225,7 @@ module lin_rate #(
                 blk10_r <= 24'd0; blk10_ok_r <= 1'b0; win_open <= 1'b0;
                 cur_seen <= 1'b0; tot_seen <= 1'b0; prev_new <= 1'b0;
                 ok_d     <= 1'b0;
-                cur_time <= 32'd0; total_time <= 32'd0; prev_time <= 32'd0;
-                total_secs <= 16'd0;
+                cur_secs <= 17'd0; total_secs <= 17'd0; prev_secs <= 17'd0;
             end else if (flush || !en) begin
                 // the position jumped; the file's rate did not. Keep it.
                 win_open <= 1'b0;
@@ -321,37 +313,8 @@ module lin_rate #(
                     acc     <= {acc[36:0], 1'b0};
                     quo     <= {quo[22:0], div_ge};
                     if (quo[23]) quo_sat <= 1'b1;
-                    if (div_i == 6'd1) begin
-                        sec_st <= 3'd0;
-                        st     <= (job == J_RATE) ? S_PUB : S_SEC;
-                    end else div_i <= div_i - 6'd1;
-                end
-
-                // seconds -> BCD digits by repeated subtraction. Bounded: at
-                // most 9 + 5 + 9 + 5 iterations from the SEC_CAP clamp.
-                S_SEC: begin
-                    case (sec_st)
-                        3'd0: begin                       // load + clamp
-                            sec_t  <= sec_cap;
-                            sec_t_l<= sec_cap;                // kept for total_secs
-                            bcd_h  <= 4'd0; bcd_mt <= 4'd0;
-                            bcd_mo <= 4'd0; bcd_st <= 4'd0;
-                            sec_st <= 3'd1;
-                        end
-                        3'd1: if (sec_t >= 16'd3600) begin
-                                  sec_t <= sec_t - 16'd3600; bcd_h <= bcd_h + 4'd1;
-                              end else sec_st <= 3'd2;
-                        3'd2: if (sec_t >= 16'd600) begin
-                                  sec_t <= sec_t - 16'd600; bcd_mt <= bcd_mt + 4'd1;
-                              end else sec_st <= 3'd3;
-                        3'd3: if (sec_t >= 16'd60) begin
-                                  sec_t <= sec_t - 16'd60; bcd_mo <= bcd_mo + 4'd1;
-                              end else sec_st <= 3'd4;
-                        3'd4: if (sec_t >= 16'd10) begin
-                                  sec_t <= sec_t - 16'd10; bcd_st <= bcd_st + 4'd1;
-                              end else sec_st <= 3'd5;
-                        default: st <= S_PUB;
-                    endcase
+                    if (div_i == 6'd1) st <= S_PUB;
+                    else                div_i <= div_i - 6'd1;
                 end
 
                 default: begin                            // S_PUB
@@ -360,12 +323,10 @@ module lin_rate #(
                                     blk10_r    <= blk10_ok_r ? ema : quo_c;
                                     blk10_ok_r <= 1'b1;
                                 end
-                        J_PREV: begin prev_time  <= bcd_out;
+                        J_PREV: begin prev_secs  <= sec_sat;
                                       prev_ok    <= prev_req && prev_new; end
-                        J_CUR:  begin cur_time   <= bcd_out; cur_seen <= 1'b1; end
-                        default:begin total_time  <= bcd_out;
-                                      total_secs  <= sec_t_l;
-                                      tot_seen    <= 1'b1; end
+                        J_CUR:  begin cur_secs   <= sec_sat; cur_seen <= 1'b1; end
+                        default:begin total_secs <= sec_sat; tot_seen <= 1'b1; end
                     endcase
                     st <= S_IDLE;
                 end

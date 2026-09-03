@@ -31,8 +31,16 @@ module seek_time_tb;
     reg         bar_active = 0; reg [31:0] bar_tgt = 0;
     reg  [31:0] live_time = 32'h00_00_00_00;
 
-    wire [31:0] prev_time;
+    wire [16:0] prev_secs;
     wire        prev_ok;
+    // Same as lin_rate_tb: assert the BCD a viewer reads, through the real
+    // shared converter, not the seconds behind it.
+    wire [31:0] prev_time, u1, u2, u3;
+    secs_bcd bcd_i (
+        .clk(clk), .rst_n(rst_n),
+        .secs0(prev_secs), .secs1(17'd0), .secs2(17'd0), .secs3(17'd0),
+        .bcd0(prev_time), .bcd1(u1), .bcd2(u2), .bcd3(u3)
+    );
 
     seek_time dut (
         .clk(clk), .rst_n(rst_n),
@@ -45,7 +53,7 @@ module seek_time_tb;
         .chap_prev(chap_prev), .chap_pgm(chap_pgm),
         .bar_active(bar_active), .bar_tgt_rbn(bar_tgt),
         .live_time(live_time),
-        .prev_time(prev_time), .prev_ok(prev_ok)
+        .prev_secs(prev_secs), .prev_ok(prev_ok)
     );
 
     integer errors = 0;

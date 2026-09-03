@@ -1595,9 +1595,9 @@ wire        hud_dir_w;                             // Phase 11: scrub direction
 wire        lin_mode_w = lin_seek_ok_w && !cell_ready;
 wire [23:0] lin_blk10_w;                           // blocks per 10 s of file
 wire        lin_blk10_ok_w;
-wire [31:0] lin_cur_bcd_w, lin_tot_bcd_w, lin_prev_bcd_w;
-wire [15:0] lin_total_secs_w;
+wire [16:0] lin_cur_secs_w, lin_total_secs_w, lin_prev_secs_w;
 wire        lin_time_ok_w, lin_prev_ok_w;
+wire [31:0] lin_cur_bcd_w, lin_tot_bcd_w, lin_prev_bcd_w, seek_prev_time_w;
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),
     .rst_n           (reset_n),
@@ -4665,7 +4665,7 @@ bcd_time_add hud_time_add (
 // and a chapter burst does not seek at all until its debounce closes. seek_bar
 // already gives the CURSOR a preview; this gives the number one, from the same
 // maps, so the two can never disagree.
-wire [31:0] seek_prev_time_w;
+wire [16:0] seek_prev_secs_w;
 wire        seek_prev_ok_w;
 seek_time seek_time_inst (
     .clk             (clk_sys),
@@ -4695,9 +4695,28 @@ seek_time seek_time_inst (
     // window (bar_active is still low, so lin_rate has no target to resolve),
     // and a flat file is exactly where D-Pad Seek was just fixed.
     .live_time       (lin_time_ok_w ? lin_cur_bcd_w  : whole_eltm_w),
-    .title_secs      (lin_time_ok_w ? lin_total_secs_w : title_secs_w),
-    .prev_time       (seek_prev_time_w),
+    .title_secs      (lin_time_ok_w ? lin_total_secs_w[15:0] : title_secs_w),
+    .prev_secs       (seek_prev_secs_w),
     .prev_ok         (seek_prev_ok_w)
+);
+
+// ONE seconds->BCD converter for every clock in the transport layer. lin_rate
+// and seek_time both used to carry a private copy; only one clock is ever
+// displayed at a time, so the second copy was 166 ALUTs and 56 registers of
+// nothing. It walks its four inputs round-robin (~4.4 us for all four) rather
+// than arbitrating -- an arbiter would be more logic than the conversion, and
+// nothing here changes faster than once a scrub tick. See dvd/secs_bcd.sv.
+secs_bcd secs_bcd_inst (
+    .clk   (clk_sys),
+    .rst_n (reset_n),
+    .secs0 (lin_cur_secs_w),
+    .secs1 (lin_total_secs_w),
+    .secs2 (lin_prev_secs_w),
+    .secs3 (seek_prev_secs_w),
+    .bcd0  (lin_cur_bcd_w),
+    .bcd1  (lin_tot_bcd_w),
+    .bcd2  (lin_prev_bcd_w),
+    .bcd3  (seek_prev_time_w)
 );
 
 // LINEAR-MODE RATE + CLOCK -- dvd/lin_rate.sv. Two products from one measurement:
@@ -4725,11 +4744,10 @@ lin_rate lin_rate_inst (
     .prev_req      (bar_active_w),
     .blk10         (lin_blk10_w),
     .blk10_ok      (lin_blk10_ok_w),
-    .cur_time      (lin_cur_bcd_w),
-    .total_time    (lin_tot_bcd_w),
-    .prev_time     (lin_prev_bcd_w),
-    .prev_ok       (lin_prev_ok_w),
+    .cur_secs      (lin_cur_secs_w),
     .total_secs    (lin_total_secs_w),
+    .prev_secs     (lin_prev_secs_w),
+    .prev_ok       (lin_prev_ok_w),
     .time_ok       (lin_time_ok_w)
 );
 
