@@ -20,6 +20,12 @@
 #                         this feature (dpad_seek drives the same seek_rbn_pulse
 #                         scrub_ctrl always drove); run as the guard that it is.
 #
+#   8. lin_rate_tb      — the blocks-per-10 s rate a flat .mpg/.VOB needs (the
+#                         step lin_mode now takes from a port, issue #39) plus
+#                         the linear-mode HUD clock built on the same divider.
+#                         Stimulus is a stream model, and every check is
+#                         mutation-proven against nine targeted RTL faults.
+#
 # The LINEAR raw-RBN seek that lin_mode targets is already covered by
 # iso_reader_raw_tb — see bench/dvd/run_vcd.sh, not duplicated here.
 
@@ -36,6 +42,7 @@ run() {
 }
 
 run dpad_seek_tb      dvd/dpad_seek.sv dvd/nav_dsi.sv
+run lin_rate_tb       dvd/lin_rate.sv
 run scrub_ctrl_tb     dvd/scrub_ctrl.sv
 run nav_dsi_tb        dvd/nav_dsi.sv
 run transport_hud_tb  dvd/transport_hud.sv
