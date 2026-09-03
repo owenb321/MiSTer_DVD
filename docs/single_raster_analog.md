@@ -15,9 +15,10 @@ repeated one several times a second. It now only acts on a parity error that has
 (`PAR_CONFIRM`), with a hard budget on top (`PAR_HOLD`). `bench/dvd/field_phase_tb.sv` is
 finished and is the gate — it reproduces the defect (scenario [6] starves the pixel queue
 and counts the repeated fields) and measures field phase from LINE-STAMPED framestore
-content, so it cannot agree with the RTL by construction. ✅ HW round 1 confirms the CRT;
-it also exposed an inverted `VGA_F1` (HDMI Weave went from a coin flip to consistently
-combed once the phase stopped being random) — `docs/field_parity.md` "HW ROUND 1".
+content, so it cannot agree with the RTL by construction. ✅ HW-CONFIRMED over two rounds:
+round 1 gave the CRT its fields and exposed an inverted `VGA_F1` (HDMI Weave went from a
+coin flip to consistently combed once the phase stopped being random), round 2 confirmed
+that fix — `docs/field_parity.md` "HW ROUND 1".
 
 **HW round 6 (2026-09-03) — the follow-up sweep, all on the maintainer's rig:**
 line-21 captions ✅, overlays/subtitles/menus/HUD on the analog output ✅, sub-720 fill
@@ -32,10 +33,9 @@ line-21 captions ✅, overlays/subtitles/menus/HUD on the analog output ✅, sub
 - **PAL + a mid-title `Video Output` change can freeze the decoder** — ⚠ **PRE-EXISTING,
   not from this branch**: v0.3.0 does the same on an `Analog Out` mode change. See §6.
 
-⏳ Not yet gated: PAL on an analog CRT (no PAL CRT available), RGBHV, `direct_video=1`
-through an HDMI DAC, and the parity behaviour after a chapter skip (the maintainer's
-late-model CRT has never shown the coin flip that two Discord users report, so the
-repaired corrector leans on `bench/dvd/field_phase_tb.sv` rather than on his rig).
+⏳ Not yet gated: PAL on an analog CRT (no PAL CRT available), RGBHV, and
+`direct_video=1` through an HDMI DAC. (The field-parity coin flip that was open here is
+✅ fixed and HW-confirmed — `docs/field_parity.md`.)
 
 ## 1. The field reports that started it
 

@@ -248,16 +248,15 @@ worse maintenance burden than targeted in-place edits. So:
   maintainer's rig: HDMI and the composite CRT both clean, no jumpy image, steady
   `720x480i @ 59.9` (build `DVD_n64model_20260903_0148.rbf`, SEED 5, clk_dec 93.01/88.94).
   Design + post-mortem: `docs/single_raster_analog.md`.**
-  ★★ **THE DEFECT USERS REPORTED WAS THE FIELD-PARITY CORRECTOR (PR #37), NOT SYNC —
-  and it is DISABLED, not fixed** (`par_ins` tied 0 in `dvd/resample_addrgen.v`).
+  ★★ **THE DEFECT USERS REPORTED WAS THE FIELD-PARITY CORRECTOR (PR #37), NOT SYNC.**
   MEASURED from screenshots by splitting each woven frame into its two fields and
   correlating: with the corrector on, consecutive fields carry the SAME source lines
   (offset **+0.00** frame lines; a correct interlaced still measures **+0.50**) — weave
   combs on a STILL and bob jumps a field line, on HDMI and the CRT alike. v0.3.0
   `Analog Out = Native Fields` (same authored-fields content path, no corrector) measures
-  +0.50 and is clean. ⚠ Disabling re-opens the "super aliased after a chapter skip" coin
-  flip the corrector was written for — fixing it properly is the NEXT JOB, gated by the
-  new `bench/dvd/field_phase_tb.sv`.
+  +0.50 and is clean. This branch tied `par_ins` 0; the corrector is now ✅ **REPAIRED,
+  re-enabled and HW-CONFIRMED** — see the field-parity bullet below and
+  `docs/field_parity.md`.
   ★ **FIVE HW ROUNDS WERE SPENT ON THE WRONG LAYER; the rules that earns are in
   `docs/single_raster_analog.md` §3.9 and worth reading before the next hunt:** (1) when
   a build changes X and the symptom persists, X is EXONERATED — round 4 had no half-line
@@ -330,10 +329,11 @@ worse maintenance burden than targeted in-place edits. So:
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
-- 🔧 **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
-  `fix/field-parity-corrector`) — sim-proven RED/GREEN; ✅ HW ROUND 1 CONFIRMS THE CRT
-  ("always gets the fields right on the TV" where PR #40 was a coin flip); ⏳ round 2
-  gates the `VGA_F1` fix round 1 exposed.**
+- ✅ **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
+  `fix/field-parity-corrector`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED: round 1 gave
+  the CRT ("always gets the fields right on the TV" where PR #40 was a coin flip) and
+  exposed an inverted `VGA_F1`; round 2 confirmed that fix
+  (`DVD_parityf1_20260903_1253.rbf`).**
   ★★ **ROUND 1 ALSO EXPOSED AN INVERTED `VGA_F1`, and only determinism could:** with the
   phase now fixed, HDMI Weave went from a coin flip to CONSISTENTLY COMBED while the CRT
   became consistently right. Two outputs disagreeing by exactly one field pins it to the
@@ -343,7 +343,7 @@ worse maintenance burden than targeted in-place edits. So:
   active pixel, so it uses the value from the PREVIOUS field's last line ⇒ the effective
   convention is **F1 = 0 on the TOP field**. `emu.sv` emitted `~core_v_pos[0]` (1 on top)
   ⇒ ascal stored the top field in the odd rows = a pairwise line swap = Weave combing on
-  a STILL. Now `core_v_pos[0]`. ⚠ Unfalsifiable while the parity was random — HDMI was
+  a STILL. Now `core_v_pos[0]`, ✅ HW-confirmed. ⚠ Unfalsifiable while the parity was random — HDMI was
   right half the time — and the line's own comment had said "polarity may need flipping on
   HW" since it was written. ⚠ **Not sim-gateable here**: ascal is VHDL, the benches are
   Icarus.

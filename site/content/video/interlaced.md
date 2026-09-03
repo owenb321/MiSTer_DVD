@@ -78,16 +78,16 @@ back**, sometimes taking a few attempts. Not every set shows it — a television
 tolerant sync separator may never see it at all.
 
 !!! info "Unreleased"
-    The current development build corrects this automatically, so the toggle should no
-    longer be needed. (v0.4.0's first attempt at the corrector had to be switched off
-    again — it made both interlaced fields carry the same picture lines, which showed as
-    a combed still image and a picture that jumped a line at field rate on every set,
-    HDMI included. The repaired version only steps in for a misalignment that persists,
-    so it cannot do that.) The same coin flip decided whether **HDMI with `480i Deint` =
-    `Weave`** came up combed on a still; that is fixed too, by a separate correction to
-    the field flag the core hands the framework scaler. **If a skip still leaves the
-    picture aliased, or a still combs under Weave, please report it** — see
-    [Reporting a bug](../reference/reporting-a-bug.md).
+    The current development build corrects this automatically — the toggle is no longer
+    needed. (v0.4.0's first attempt at the corrector had to be switched off again: it made
+    both interlaced fields carry the same picture lines, which showed as a combed still
+    image and a picture that jumped a line at field rate on every set, HDMI included. The
+    repaired version only steps in for a misalignment that persists, so it cannot do
+    that.) The same coin flip decided whether **HDMI with `480i Deint` = `Weave`** came up
+    combed on a still; that is fixed too, by a separate correction to the field flag the
+    core hands the framework scaler. Both are confirmed on hardware. Televisions differ,
+    so if a skip still leaves the picture aliased, or a still combs under Weave,
+    [please report it](../reference/reporting-a-bug.md).
 
 ## What changed from the old settings
 

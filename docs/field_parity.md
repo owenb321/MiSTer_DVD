@@ -1,12 +1,12 @@
 # Field-parity re-engage corrector (2026-09-02, repaired 2026-09-03)
 
-**Status: ✅ RE-ENABLED with a stability gate (2026-09-03, issue #41) — sim-proven
-RED/GREEN by the new `bench/dvd/field_phase_tb.sv`, and ✅ HW round 1 confirms the analog
-CRT: "this one seems to always get the fields right on the TV", where PR #40 was a coin
-flip. ⏳ Round 2 gates the `VGA_F1` polarity fix that same round exposed (below).**
+**Status: ✅ RE-ENABLED and ✅ HW-CONFIRMED (2026-09-03, issue #41). Round 1 confirmed the
+analog CRT — "this one seems to always get the fields right on the TV", where PR #40 was a
+coin flip — and exposed an inverted `VGA_F1`; round 2 confirmed that fix
+(`DVD_parityf1_20260903_1253.rbf`). Sim gate: `bench/dvd/field_phase_tb.sv`, RED/GREEN.**
 
 ★ **HW ROUND 1 (2026-09-03) — the corrector is right, and it exposed an INVERTED
-`VGA_F1`.** With the field phase now deterministic, HDMI Weave went from a coin flip to
+`VGA_F1` (fixed; ✅ confirmed in round 2).** With the field phase now deterministic, HDMI Weave went from a coin flip to
 **consistently combed** while the CRT became consistently correct. Two outputs disagreeing
 by exactly one field is what pins this to the flag rather than to the corrector: the analog
 pins never look at `VGA_F1` (the raster half-line carries the CRT's interleave), so only
@@ -26,7 +26,7 @@ HDMI was right half the time and nobody could tell a flag polarity error from th
 bug. The comment on that line had said "polarity may need flipping on HW if the two fields
 come out swapped" since it was written; determinism is what finally made the question
 answerable. There is no ascal model in this repo (it is VHDL, the benches are Icarus), so
-this one is HW-gated by construction — it cannot be closed in sim.
+this one is HW-gated by construction — it cannot be closed in sim. Round 2 closed it.
 
 ★ **The withdrawal (PR #40) and what actually caused it.** As shipped in PR #37 the
 corrector made both displayed fields carry the SAME source lines — a still measured

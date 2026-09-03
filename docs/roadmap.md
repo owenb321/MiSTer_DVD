@@ -657,7 +657,8 @@ prerelease. Design + HW checklist: `docs/single_raster_analog.md`.**
 
 **★ 2026-09-03 follow-up (issue #41, branch `fix/field-parity-corrector`): the
 field-parity corrector that branch had to disable is REPAIRED and re-enabled** —
-sim-proven RED/GREEN, ⏳ HW-confirm pending. Its feedback arm was chasing pixel-queue
+sim-proven RED/GREEN and ✅ HW-CONFIRMED over two rounds (round 1 gave the CRT its fields
+and exposed an inverted `VGA_F1`; round 2 confirmed that fix). Its feedback arm was chasing pixel-queue
 starvation, and its cure is a repeated field, so on this compute-bound core it repeated
 one several times a second (the "+0.00 field offset" measurement). It now only acts on a
 parity error that has HELD for ~0.5 s, with a hard ~2 s budget on top. Gate:
@@ -1795,7 +1796,7 @@ separate field-parity re-engage coin flip ("super aliased after a chapter skip, 
 the mode 3-4 times to fix") — root-caused and fixed at the time, then ⛔ **DISABLED
 2026-09-03 (PR #40): on HW it made both interlaced fields carry the same source lines**,
 and now ✅ **REPAIRED and re-enabled (issue #41, branch `fix/field-parity-corrector`;
-sim-proven, ⏳ HW-confirm pending)** — its feedback arm was chasing pixel-queue
+sim-proven and HW-CONFIRMED)** — its feedback arm was chasing pixel-queue
 starvation, and its cure is a repeated field, so it now only acts on a parity error that
 has HELD. See `docs/field_parity.md`, `docs/single_raster_analog.md` §3.9; (3) with
 that fixed, fieldpass strictly dominates derive on the CRT side, and the maintainer chose
