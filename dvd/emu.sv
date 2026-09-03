@@ -1193,6 +1193,8 @@ wire [31:0] cur_cell_start_w;         // Phase 11 HUD: BCD start time of the pla
 wire        cellf_we_w;               // Phase 11 bar: cell first_sector stream tap
 wire [6:0]  cellf_idx_w;
 wire [31:0] cellf_rbn_w;
+wire [15:0] cellf_secs_w;             // ...and the same cell's start, in seconds
+wire [15:0] title_secs_w;             // title total in seconds (dvd/seek_time.sv)
 wire        vm_pm_we;
 wire [6:0]  vm_pm_waddr;
 wire [7:0]  vm_pm_wdata;
@@ -2393,6 +2395,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     .cellf_we       (cellf_we_w),         // Phase 11: seek-bar chapter-tick feed
     .cellf_idx      (cellf_idx_w),
     .cellf_rbn      (cellf_rbn_w),
+    .cellf_secs     (cellf_secs_w),       // + dvd/seek_time.sv's preview clock
+    .title_secs_o   (title_secs_w),
     .cur_cell_still (),
     .cur_cell_cmdnr (cur_cell_cmdnr_w),
     .title_first_rbn (title_first_rbn_w),         // seek-bar: title RBN span
@@ -4654,6 +4658,43 @@ bcd_time_add hud_time_add (
     .b   (dsi_c_eltm),
     .sum (whole_eltm_w)
 );
+// SEEK-PREVIEW CLOCK -- dvd/seek_time.sv. The HUD clock used to sit frozen at
+// the position you left while the seek bar's cursor travelled: a held FF/REW
+// stops the governor (so dsi_c_eltm coasts then stops and cell_i cannot move),
+// and a chapter burst does not seek at all until its debounce closes. seek_bar
+// already gives the CURSOR a preview; this gives the number one, from the same
+// maps, so the two can never disagree.
+wire [31:0] seek_prev_time_w;
+wire        seek_prev_ok_w;
+seek_time seek_time_inst (
+    .clk             (clk_sys),
+    .rst_n           (reset_n),
+    .pm_we           (vm_pm_we),
+    .pm_waddr        (vm_pm_waddr),
+    .pm_wdata        (vm_pm_wdata),
+    .cellf_we        (cellf_we_w),
+    .cellf_idx       (cellf_idx_w),
+    .cellf_rbn       (cellf_rbn_w),
+    .cellf_secs      (cellf_secs_w),
+    .title_secs      (title_secs_w),
+    .title_first_rbn (title_first_rbn_w),
+    .title_last_rbn  (title_last_rbn_w),
+    // The D-pad's own request is an exact signed MM:S0, so its preview needs no
+    // map at all -- and it is the only one available during the coalesce
+    // window, before a target RBN exists.
+    .dpad_pend       (dpad_pend),
+    .dpad_dir        (dpad_pend_dir),
+    .dpad_min        (dpad_pend_min),
+    .dpad_sec        (dpad_pend_sec),
+    .chap_prev       (chap_disp_act),
+    .chap_pgm        (hud_cur_ch),
+    .bar_active      (bar_active_w),
+    .bar_tgt_rbn     (bar_tgt_rbn_w),
+    .live_time       (whole_eltm_w),
+    .prev_time       (seek_prev_time_w),
+    .prev_ok         (seek_prev_ok_w)
+);
+
 // LINEAR-MODE RATE + CLOCK -- dvd/lin_rate.sv. Two products from one measurement:
 // the blocks-per-10 s step dpad_seek needs to seek a flat .mpg/.VOB by time
 // (issue #39), and the elapsed/total clock the HUD has shown as 0:00:00 in every
@@ -4686,6 +4727,11 @@ lin_rate lin_rate_inst (
     .time_ok       (lin_time_ok_w)
 );
 
+wire [31:0] hud_time_live = lin_time_ok_w ? lin_cur_bcd_w
+                          : (cell_ready ? whole_eltm_w : dsi_c_eltm);
+wire        hud_prev_ok   = lin_mode_w ? lin_prev_ok_w  : seek_prev_ok_w;
+wire [31:0] hud_prev_time = lin_mode_w ? lin_prev_bcd_w : seek_prev_time_w;
+
 transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .clk          (clk_sys),
     .rst_n        (reset_n),
@@ -4706,13 +4752,14 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .display_edge (display_edge),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
-    // Three sources, in the order they can be trusted: a linear file's clock is
-    // derived from its measured rate (lin_time_ok_w implies !cell_ready, so the
-    // DVD arms below are untouched); a DVD title's is the reader's per-cell
-    // prefix sum plus the DSI cell-relative time; a bare cell-less stream falls
-    // back to the DSI time alone, which in linear modes was simply 0.
-    .cur_time     (lin_time_ok_w ? lin_cur_bcd_w
-                                 : (cell_ready ? whole_eltm_w : dsi_c_eltm)),
+    // Three LIVE sources, in the order they can be trusted: a linear file's
+    // clock is derived from its measured rate (lin_time_ok_w implies
+    // !cell_ready, so the DVD arms are untouched); a DVD title's is the reader's
+    // per-cell prefix sum plus the DSI cell-relative time; a bare cell-less
+    // stream falls back to the DSI time alone, which in linear modes was 0.
+    // While a seek gesture is open the PREVIEW outranks all three, so the number
+    // moves with the bar's cursor instead of freezing at the position you left.
+    .cur_time     (hud_prev_ok ? hud_prev_time : hud_time_live),
     .total_time   (lin_time_ok_w ? lin_tot_bcd_w : pgc_playback_time_w),
     // DIAGNOSTIC (hud_dbg = O[2]): repurpose the "CH n/N" field as {PGCN, VTS} of the
     // reader's currently-loaded PGC, so the boot path and the how-to-play flow are
