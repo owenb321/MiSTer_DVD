@@ -51,6 +51,11 @@
  *       bench/dvd/seek_realign_tb.sv
  *   vvp bench/dvd/seek_realign_sim [+FLUSHPIC=n] [+FLUSHDLY=k] [+FLUSHW=w]
  *                                  [+DRAIN=n] [+NOFLUSH=1] [+REFLUSH=k]
+ *
+ * +REFLUSH=k fires a SECOND flush k cycles after the first. Inside the landing
+ * window the two must COALESCE onto one re-align (ra_anchors is a level, not an
+ * edge count) -- the repeated-mid-parse-flush loop that killed the film-mode
+ * edge is structurally unreachable here for the same reason.
  */
 `timescale 1ns/1ps
 `include "vld_codes.v"
@@ -215,7 +220,6 @@ module seek_realign_tb;
 
   // ---- the seek: flush level + reader jump --------------------------------
   localparam [7:0] VS_PICTURE_HEADER  = 8'h02;
-  localparam [7:0] VS_SEQUENCE_HEADER = 8'h06;
   localparam [3:0] PB_UPDATE          = 4'h1;
 
   always @(posedge clk) cyc = cyc + 1;
@@ -223,8 +227,9 @@ module seek_realign_tb;
   integer flushpic = 3;        // flush during cut A's picture #3
   integer flushdly = 400;      // cycles after that header: >0 = mid-slice
   integer flushw   = 192;      // flush level width (dvd/flush_ctl.sv: ~64 clk_sys)
-  integer reflush  = 0;        // >0: fire a SECOND flush this many cycles later
+  integer reflush  = 0;        // >0: a SECOND flush this many cycles later (must coalesce)
   reg     caparm   = 1'b0;     // RA_CAP arm: the give-up path, not the normal one
+  reg     stillarm = 1'b0;     // MENU STILL arm: cut B is one I picture, nothing may drop
   reg     noflush  = 1'b0;     // control arm: no flush, no reader jump
 
   integer npic = -1;                       // coded picture index over the whole feed
@@ -232,8 +237,7 @@ module seek_realign_tb;
   integer arm_t = 0, wnd_end = 0, re_t = 0;
   reg     re_pend = 0;
   integer vlden_in_window = 0;             // vld_en cycles inside the flush window
-  reg     seq_after_flush = 0;             // a sequence header was parsed post-flush
-  reg     pic_after_flush = 0;
+  integer flush_edges = 0;                 // how many times the level was asserted
 
   always @(posedge clk) if (rst) begin
     jump_now <= 1'b0;
@@ -243,16 +247,14 @@ module seek_realign_tb;
         arm   <= 1'b1;
         arm_t  = cyc + flushdly;
       end
-      if (flushed_seen) pic_after_flush <= 1'b1;
     end
-    if (vld_en && (vld.state == VS_SEQUENCE_HEADER) && flushed_seen && !pic_after_flush)
-      seq_after_flush <= 1'b1;
 
     if (arm && (cyc >= arm_t)) begin
       arm          <= 1'b0;
       flush_lvl    <= 1'b1;
       jump_now     <= 1'b1;                // the reader lands on cut B
       flushed_seen <= 1'b1;
+      flush_edges   = flush_edges + 1;
       wnd_end       = cyc + flushw;
       if (reflush > 0) begin re_pend <= 1'b1; re_t = cyc + reflush; end
     end
@@ -263,9 +265,10 @@ module seek_realign_tb;
     // a second flush landing on the same seek (scrub / double chapter skip):
     // it must RESTART the window, not be swallowed by the first.
     if (re_pend && (cyc >= re_t)) begin
-      re_pend   <= 1'b0;
-      flush_lvl <= 1'b1;
-      wnd_end    = cyc + flushw;
+      re_pend     <= 1'b0;
+      flush_lvl   <= 1'b1;
+      flush_edges  = flush_edges + 1;
+      wnd_end      = cyc + flushw;
     end
   end
 
@@ -335,6 +338,7 @@ module seek_realign_tb;
       integer nf;
       if ($value$plusargs("NOFLUSH=%d", nf)) noflush = nf[0];
       if ($value$plusargs("CAPARM=%d", nf)) caparm = nf[0];
+      if ($value$plusargs("STILLARM=%d", nf)) stillarm = nf[0];
     end
     $readmemh(esf, es);
     $readmemh(mtf, meta);
@@ -403,19 +407,29 @@ module seek_realign_tb;
         $display("FAIL: the flush never fired - cut A has fewer than %0d pictures", flushpic + 1);
         errors = errors + 1;
       end
-      if (upds_b < 8) begin
+      if (!stillarm && (upds_b < 8)) begin
         $display("FAIL: only %0d post-flush pictures reached picbuf (need >= 8) - 'drop everything forever' would score zero violations", upds_b);
         errors = errors + 1;
       end
-      if (anchors_b < 2) begin
+      if (!stillarm && (anchors_b < 2)) begin
         $display("FAIL: only %0d post-flush anchors decoded (need >= 2) - the run never reached the point where the references are re-established", anchors_b);
         errors = errors + 1;
       end
-      if (!seq_after_flush) begin
-        $display("FAIL: no sequence header parsed between the flush and the first post-flush picture header - the cut-A/cut-B tagging is not trustworthy");
+      /* Tagging trustworthiness. getbits keeps a 129-bit window, so up to 16
+       * bytes of cut A survive the jump and are consumed as the truncated
+       * picture's payload -- which is also why cut B's own sequence header is
+       * usually eaten and NOT re-parsed (sequence_header_seen is already set
+       * from cut A). The property that does establish trust is the count: one
+       * leaked cut-A picture header would make this 15, not 14. */
+      if (!field_b && (hdr_b != pics_b)) begin
+        $display("FAIL: %0d post-flush frame headers, but the fixture says cut B has %0d pictures - a cut-A header leaked into the post-flush tag", hdr_b, pics_b);
         errors = errors + 1;
       end
-      if (lead_b == 0) begin
+      if (reflush > 0 && flush_edges != 2) begin
+        $display("FAIL: the second flush never fired (%0d edge(s)) - this arm proves nothing", flush_edges);
+        errors = errors + 1;
+      end
+      if (!stillarm && (lead_b == 0)) begin
         $display("FAIL: fixture reports zero leading B's - it cannot tell a working re-align from one wired off");
         errors = errors + 1;
       end
@@ -432,11 +446,35 @@ module seek_realign_tb;
         $display("FAIL: control arm only decoded %0d pictures - it proves nothing", upds_b);
         errors = errors + 1;
       end
+    end else if (stillarm) begin
+      /* MENU STILL. A menu still is a whole stream -- SEQ GOP PIC:I SEQ_END --
+       * carrying exactly ONE I picture and no B's. Entering or leaving a menu
+       * IS a flushing jump (flush_ctl gates seek_flush on ~keep_vbuf, so only
+       * menu->menu hops are exempt), so the re-align arms here like any seek.
+       * If it ever dropped that I the menu would simply never appear, which is
+       * the worst failure this change could have. It must drop NOTHING. */
+      if (realign_drops != 0) begin
+        $display("FAIL: the menu still lost %0d picture(s) - a still is one I frame, and dropping it means the menu never appears", realign_drops);
+        errors = errors + 1;
+      end
+      if (upds_b < 1) begin
+        $display("FAIL: the still's I never reached picbuf");
+        errors = errors + 1;
+      end
+      if (anchors_b < 1) begin
+        $display("FAIL: the still's I was not accepted as an anchor");
+        errors = errors + 1;
+      end
     end else if (caparm) begin
       // RA_CAP arm: the give-up must fire and decoding must RESUME. If the cap
       // were dead code this arm would look exactly like the normal one.
+      /* The give-up clears ra_active but realign_now_comb is combinational off
+       * the PRE-clear value, so the header that trips the cap is still judged
+       * normally: the cap shortens the window by one picture. RA_CAP must
+       * therefore be small enough that fewer than lead_b pictures are dropped,
+       * or "the cap fired" and "the cap is dead code" look identical. */
       if (realign_drops >= lead_b) begin
-        $display("FAIL: RA_CAP=%0d arm dropped %0d picture(s) - the give-up never fired", RA_CAP, realign_drops);
+        $display("FAIL: RA_CAP=%0d arm dropped %0d picture(s), same as an uncapped run (%0d) - the give-up never fired", RA_CAP, realign_drops, lead_b);
         errors = errors + 1;
       end
       if (upds_b < 8) begin

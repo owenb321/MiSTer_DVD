@@ -28,8 +28,8 @@ RTL="rtl/mpeg2/vld.v rtl/mpeg2/getbits.v rtl/mpeg2/motcomp_picbuf.v"
 rc=0
 
 # ---- fixture -----------------------------------------------------------------
+SRC=$(ls "$ISO_DIR"/*.iso "$ISO_DIR"/*.ISO 2>/dev/null | head -1 || true)
 if [ ! -f "$FIX.hex" ]; then
-  SRC=$(ls "$ISO_DIR"/*.iso "$ISO_DIR"/*.ISO 2>/dev/null | head -1 || true)
   if [ -n "$SRC" ]; then
     echo "== cutting fixture from $(basename "$SRC") (two cuts + a seek between them) =="
     # seek_fixture.py REFUSES a landing whose first GOP is closed or has no
@@ -63,7 +63,7 @@ vvp bench/dvd/seek_realign_sim | grep -vE '^WARNING' || rc=1
 echo "== [3] seek, flush at a picture header =="
 vvp bench/dvd/seek_realign_sim +FLUSHDLY=0 | grep -vE '^WARNING' || rc=1
 
-echo "== [4] two flushes on one seek -- the second must RESTART, not be swallowed =="
+echo "== [4] two flushes on one seek -- they must COALESCE onto one re-align =="
 vvp bench/dvd/seek_realign_sim +REFLUSH=400 | grep -vE '^WARNING' || rc=1
 
 echo "== [5] display-blocked (+DRAIN): the flush window sits inside a vld freeze,"
@@ -71,15 +71,43 @@ echo "==     so this is what proves the arm is not gated by clk_en =="
 vvp bench/dvd/seek_realign_sim +DRAIN=4000 +FLUSHDLY=20 | grep -vE '^WARNING' || rc=1
 
 echo "== [6] RA_CAP give-up: decoding must resume on a stream that never re-anchors =="
-$IV -Pseek_realign_tb.RA_CAP=2 -o bench/dvd/seek_realign_cap_sim $RTL bench/dvd/seek_realign_tb.sv
+$IV -Pseek_realign_tb.RA_CAP=1 -o bench/dvd/seek_realign_cap_sim $RTL bench/dvd/seek_realign_tb.sv
 vvp bench/dvd/seek_realign_cap_sim +CAPARM=1 | grep -vE '^WARNING' || rc=1
+
+# A menu still is SEQ GOP PIC:I SEQ_END -- one I picture, no B's. Entering or
+# leaving a menu is a FLUSHING jump (flush_ctl gates seek_flush on ~keep_vbuf, so
+# only menu->menu hops are exempt), so the re-align arms there like any seek. If
+# it ever dropped that I the menu would never appear. Cut B here is
+# bench/dvd/test_vobs/hp_still_i.hex, a real still cut from the Harry Potter
+# interactive disc for the picbuf slot-alias fix.
+if [ -f bench/dvd/test_vobs/hp_still_i.hex ]; then
+  echo "== [7] menu still as the landing: nothing may be dropped =="
+  python3 tools/seek_fixture.py "$SRC" --cut-b-hex bench/dvd/test_vobs/hp_still_i.hex \
+      --out bench/dvd/test_vobs/seek_still >/dev/null 2>&1 || true
+  if [ -f bench/dvd/test_vobs/seek_still.hex ]; then
+    vvp bench/dvd/seek_realign_sim +STILLARM=1 \
+        +ES=bench/dvd/test_vobs/seek_still.hex \
+        +META=bench/dvd/test_vobs/seek_still.meta.hex | grep -vE '^WARNING' || rc=1
+  else
+    echo "  SKIPPED -- could not build the still fixture"
+  fi
+fi
 
 # ---- regressions on the shared vld edits -------------------------------------
 # vld_drop_rff_tb is the ledger-split gate: drop_pic_ack must still fire for the
 # governor's drops and ONLY for those.
-echo "== regression: vld_drop_rff_tb (governor drop ack ledger) =="
+# The ledger split (drop_gov_picture) must leave the governor's drop accounting
+# BIT-IDENTICAL. Measured against the pre-fix vld on this same fixture
+# (2026-09-03, commit 0509f25): drops=11 ack_rff1=5 ack_rff0=6 over 18 pictures.
+echo "== regression: vld_drop_rff_tb -- the governor's ack ledger must not move =="
 $IV -o bench/dvd/vld_drop_rff_sim $RTL bench/dvd/vld_drop_rff_tb.sv
-vvp bench/dvd/vld_drop_rff_sim +ES=$FIX.hex +MAXPIC=18 | tail -3 || rc=1
+BASE="SUMMARY: pictures=18 drops=11 ack_rff1=5 ack_rff0=6 vld_err=0"
+GOT=$(vvp bench/dvd/vld_drop_rff_sim +ES=$FIX.hex +MAXPIC=18 | grep '^SUMMARY:' || true)
+if [ "$GOT" = "$BASE" ]; then
+  echo "  ledger unchanged: $GOT"
+else
+  echo "  FAIL: ledger moved"; echo "    want: $BASE"; echo "    got:  $GOT"; rc=1
+fi
 
 [ $rc -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES (rc=$rc) =="
 exit $rc

@@ -122,6 +122,14 @@ def main():
     ap.add_argument('--require-still', action='store_true',
                     help="cut B must be a still cell (I pictures only, terminated "
                          "by a sequence end) -- the menu arm")
+    ap.add_argument('--cut-b-hex', metavar='FILE',
+                    help="take cut B from an existing 64-bit-word ES fixture instead of "
+                         "from the disc. Used for the MENU STILL arm: a menu still is a "
+                         "whole stream (SEQ GOP PIC:I SEQ_END) with ONE I picture and no "
+                         "B's, which is the shape that would break catastrophically -- the "
+                         "menu would never appear -- if the re-align ever dropped an I. "
+                         "bench/dvd/test_vobs/hp_still_i.hex is exactly that, cut from a "
+                         "real disc for the picbuf slot-alias fix.")
     ap.add_argument('--out', required=True, help='fixture stem, no extension')
     a = ap.parse_args()
 
@@ -138,7 +146,12 @@ def main():
         return None
 
     es_a = cut(nav, sector_at, int(total * a.cut_a_frac), a.sectors_a)
-    es_b = cut(nav, sector_at, int(total * a.cut_b_frac), a.sectors_b)
+    if a.cut_b_hex:
+        raw = bytes.fromhex(''.join(l.strip() for l in open(a.cut_b_hex)))
+        sh = raw.find(b'\x00\x00\x01\xb3')
+        es_b = raw[sh:] if sh >= 0 else b''
+    else:
+        es_b = cut(nav, sector_at, int(total * a.cut_b_frac), a.sectors_b)
     if not es_a:
         return die("no sequence header in cut A -- move --cut-a-frac")
     if not es_b:
@@ -152,7 +165,10 @@ def main():
         return es, pics
 
     es_a, pics_a = trim(es_a, a.pics_a)
-    es_b, pics_b = trim(es_b, a.pics_b)
+    if not a.cut_b_hex:
+        es_b, pics_b = trim(es_b, a.pics_b)   # a supplied cut B is used whole
+    else:
+        pics_b = parse_pictures(es_b)
     if not pics_a or not pics_b:
         return die("a cut decoded to zero pictures -- widen --sectors-a/--sectors-b")
 
@@ -165,13 +181,21 @@ def main():
                    "references; move --cut-a-frac or shorten --sectors-a")
 
     n_lead, closed, first_gop = leading_bs(pics_b, gop_headers(es_b))
-    if first_gop and first_gop[0]['ct'] != I_TYPE:
+    if a.cut_b_hex:
+        # A still has no leading B's BY DEFINITION -- that is the whole point of
+        # the arm, so the checks below (which exist to stop a vacuous RED) would
+        # reject exactly the fixture we want. The bench gets lead_b = 0 and its
+        # own verdict: nothing may be dropped at all.
+        if any(q['ct'] != I_TYPE for q in pics_b):
+            return die(f"{a.cut_b_hex} is not a still: it contains non-I pictures")
+        n_lead, closed = 0, False
+    elif first_gop and first_gop[0]['ct'] != I_TYPE:
         return die(f"cut B's first picture is type {first_gop[0]['ct']}, not I -- "
                    "a seek always lands on a VOBU/GOP boundary; move --cut-b-frac")
-    if closed:
+    if (not a.cut_b_hex) and closed:
         return die("cut B's first GOP is CLOSED -- its leading B's do not predict "
                    "across the boundary, so the defect cannot appear; move --cut-b-frac")
-    if n_lead == 0:
+    if (not a.cut_b_hex) and n_lead == 0:
         return die("cut B's first GOP has no leading B-pictures -- the RED arm "
                    "would measure zero and the gate would be vacuous; move --cut-b-frac")
 

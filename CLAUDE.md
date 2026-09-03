@@ -496,7 +496,13 @@ worse maintenance burden than targeted in-place edits. So:
   for byte; GREEN is `viol == 0` AND `realign_drops == meta[3]` — asserted EXACTLY, because
   dropping too much costs display frames at every seek. `tools/seek_fixture.py` REFUSES a
   cut whose landing GOP is closed or has no leading B's (that fixture would make RED
-  measure zero and the gate vacuous). Detail: **`docs/seek_realign.md`**.
+  measure zero and the gate vacuous). Arms include a **menu still** landing
+  (`hp_still_i.hex` as cut B): a still is `SEQ GOP PIC:I SEQ_END`, ONE I and no B's, so a
+  rule that dropped an I would mean the menu never appears — measured `realign_drops=0`.
+  ★ **Scope note: menu→menu hops are structurally untouched** — `flush_ctl` gates
+  `seek_flush` on `~keep_vbuf`, so the Phase-5 rule is inherited for free and only menu
+  ENTRY/EXIT (which were always two of issue #45's four paths) re-align.
+  Detail: **`docs/seek_realign.md`**.
 - ✅ **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
   `fix/field-parity-corrector`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED: round 1 gave
   the CRT ("always gets the fields right on the TV" where PR #40 was a coin flip) and

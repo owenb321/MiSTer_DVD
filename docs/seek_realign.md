@@ -151,6 +151,46 @@ forever. It is a `parameter` so the bench can reach the path inside a short fixt
 (arm [6], `-Pseek_realign_tb.RA_CAP=2`); the shipped value never is, which would otherwise
 make it untested dead code.
 
+### 3.5 Scope: which menu transitions this touches
+
+The re-align arms on `flush_vbuf_eff`, and `dvd/flush_ctl.sv` gates `seek_flush` on
+`~keep_vbuf`:
+
+```verilog
+wire jump_flush     = jump_ack && ~keep_vbuf;
+wire seek_flush_now = seek_ack && ~keep_vbuf;
+```
+
+So the split is the Phase-5 menu-transition rule, unchanged and inherited for free:
+
+| transition | `keep_vbuf` | flush | re-align |
+|---|---|---|---|
+| menu → menu (submenu, page, `next_pgcn` advance) | 1 | none | **never arms** |
+| title → menu (Menu key) | 0 | trio | arms, like a seek |
+| menu → title (Play) | 0 | trio | arms, like a seek |
+| chapter skip / scrub / D-Pad Seek | 0 | trio | arms |
+| `Video Output` change | — (`mode_switch`) | trio | arms |
+
+Menu→menu hops — the ones that carry an authored transition animation, and that
+`keep_vbuf` exists to protect — are **structurally untouched**: no flush reaches the
+decoder, so `ra_active` never sets. Entering and leaving a menu *is* a flushing jump and
+was always one of the four paths issue #45 named, so it gets the same treatment as a
+chapter skip.
+
+⚠ **The failure mode worth measuring is a menu STILL**, because it is the shape that would
+break catastrophically. A still is a whole stream — `SEQ GOP PIC:I SEQ_END` — carrying
+**one** I picture and no B's, so if the re-align ever dropped an I the menu would simply
+never appear. It does not: an I is always accepted at `ra_anchors == 0`, and bench arm [7]
+measures it over `bench/dvd/test_vobs/hp_still_i.hex` (a real still, cut from the Harry
+Potter interactive disc for the picbuf slot-alias fix) landed as cut B:
+`realign_drops=0, post-flush{hdr=1 upd=1 anchors=1}`.
+
+A second-order effect worth knowing: after a still, `ra_active` stays armed (a still yields
+one anchor, never two) until the next anchor or `RA_CAP`. If the user then makes a
+`keep_vbuf` hop to a *motion* menu, that menu's leading B's are dropped — which is the
+right answer anyway, since they predict from the previous menu's frame. The cost is one
+extra held frame at a menu transition, bounded by `RA_CAP`.
+
 ## 4. Rejected alternatives
 
 **`closed_gop`** (parsed at `vld.v:1477`, consumed by nothing before or after this change)
@@ -236,28 +276,67 @@ closed first GOP or no leading B's — either would make the RED arm measure zer
 whole gate vacuous — and refuses a cut A containing a sequence end, which would pre-clear
 the references for free.
 
-| | measured |
-|---|---|
-| **RED** (`-Pseek_realign_tb.SEEK_REALIGN=0`, the fix's input tied low) | `viol == meta[3]` — the exact leading-B count, and `realign_drops == 0` (the added logic is provably inert when unarmed) |
-| **GREEN** | `viol == 0` **and** `realign_drops == meta[3]` — asserted **exactly**, because dropping too much costs display frames at every seek |
+| | asserted | measured (Matrix Revolutions VTS01, `lead_b = 2`) |
+|---|---|---|
+| **RED** (`-Pseek_realign_tb.SEEK_REALIGN=0`, the fix's input tied low) | `viol == meta[3]`, `realign_drops == 0` | `viol=2` — both leading B's predicting `fwd = slot 1`, tagged cut A |
+| **GREEN** | `viol == 0` **and** `realign_drops == meta[3]` | `viol=0 realign_drops=2 post-flush{hdr=14 upd=12 anchors=5}` |
+
+The GREEN drop count is asserted **exactly**, not as `>= 1`: dropping too much is a failure
+too, because it costs display frames at every seek.
 
 The RED arm is a *testbench* parameter, not an RTL one, so the shipped RTL has no
 feature-off path and the same binary proves both halves. Its numbers reproduce a run
-against pristine, unmodified `vld.v` byte for byte (`viol=2`, `emits=18`, identical emit
-gap), which is what makes it a legitimate stand-in for the pre-fix build.
+against pristine, unmodified `vld.v` **byte for byte** (`viol=2`, `emits=18`, emit gap
+285962 cycles), which is what makes it a legitimate stand-in for a pre-fix build.
 
-Arms: [1] control, no flush (the re-align must be completely inert over a whole stream);
-[2] flush mid-slice — the reported case; [3] flush at a picture header; [4] two flushes on
-one seek (the second must restart the window); [5] `+DRAIN` display-blocked — §3.1; [6]
-`RA_CAP=2` — the give-up must fire and decoding must resume. Anti-vacuity on every arm:
-≥ 8 post-flush pictures must reach picbuf and ≥ 2 post-flush anchors must decode, or
-"drop everything forever" would score zero violations and pass.
+All eight arms green (`bench/dvd/run_seek_realign.sh --red`, 2026-09-03).
 
-Regression: `vld_drop_rff_tb` guards the ledger split (§3.3). It was **stale** — its `vld`
-and `motcomp_picbuf` instances predated `pic_informative` / `informative_commit` /
-`drop_pic_field` / `mpeg1` / `cc_pair*`, so picbuf's two evidence *inputs* were floating,
-and its default fixture no longer existed — and was repaired in the same branch before
-being trusted as a baseline.
+**Arms.** [1] control, no flush — the re-align must be inert over a whole stream
+(`realign_drops=0` over 19 pictures); [2] flush mid-slice, the reported case; [3] flush at
+a picture header; [4] two flushes on one seek — they must **coalesce** onto one re-align,
+which is structural because `ra_active`/`ra_anchors` are a level rather than an edge count
+(the same property that makes the repeated-mid-parse-flush loop which killed the film-mode
+edge unreachable here); [5] `+DRAIN=4000` display-blocked — §3.1; [6] `RA_CAP=1`, the
+give-up; [7] a **menu still** as the landing — §3.5.
+
+Anti-vacuity on every arm: ≥ 8 post-flush pictures must reach picbuf and ≥ 2 post-flush
+anchors must decode, or "drop everything forever" would score zero violations and pass.
+
+Three things the arms taught, all worth keeping:
+
+- ⚠ **The truncated in-flight picture EATS cut B's sequence header.** The bench originally
+  asserted that a sequence header must be parsed between the flush and the first post-flush
+  picture header, as a guard that the cut-A/cut-B tagging was trustworthy. Arms [3] and [5]
+  failed it on correct RTL: the truncated picture consumes the new stream's opening bytes
+  as its own payload, and since `sequence_header_seen` is already set from cut A the vld
+  simply decodes on. The guard is now a **count** — post-flush frame headers must equal the
+  fixture's cut-B picture count (14 = 14); one leaked cut-A header would make it 15.
+- ⚠ **`RA_CAP` must be small enough to shorten the window by more than one picture.** The
+  give-up clears `ra_active`, but `realign_now_comb` is combinational off the *pre*-clear
+  value, so the header that trips the cap is still judged normally. At `RA_CAP=2` the arm
+  measured `realign_drops=2` — identical to an uncapped run, i.e. "the cap fired" and "the
+  cap is dead code" were indistinguishable. `RA_CAP=1` separates them.
+- ★ **The give-up arm measures `viol=1`, and that is the design, not a miss.** Cutting the
+  window short lets one leading B through to predict from the stale slot. The cap trades a
+  bounded amount of the very artifact this change fixes for a guarantee that video can
+  never freeze on a stream that stops delivering anchors. `RA_CAP=48` is far beyond any
+  real GOP, so the trade is never taken on a real disc — but the arm shows exactly what it
+  costs when it is.
+- The `+DRAIN` arm's own guard reports `vld_en high for 0 of the 192 flush-window cycles` —
+  the freeze really did cover the whole window, so the arm genuinely exercised §3.1.
+
+**Regression: the governor's ack ledger must not move.** `vld_drop_rff_tb` measured
+`pictures=18 drops=11 ack_rff1=5 ack_rff0=6` against the **pre-fix** vld on this fixture,
+and the same numbers after the split — asserted as a literal string by the runner. That
+bench was **stale** and had to be repaired before it could be trusted as a baseline: its
+`vld` and `motcomp_picbuf` instances predated `pic_informative` / `informative_commit` /
+`drop_pic_field` / `mpeg1` / `cc_pair*` (two of which are picbuf *inputs*, so they were
+floating to `z`), and its default fixture no longer existed — `$readmemh` on a missing file
+leaves the array all-X, so it would have "passed" having decoded nothing.
+
+Other benches over the shared `vld`, all green: `film_evidence_tb` (35/35 pictures, every
+verdict matches golden), `cc_extract_tb` (180/180 caption pairs byte-exact), `vld_mpeg1_tb`
+(115 pictures, 0 errors), `motcomp_picbuf_tb` (50 release-point checks, 0 fails).
 
 ## 7. Fit
 
