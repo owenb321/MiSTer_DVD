@@ -8,12 +8,17 @@ steady `720x480i @ 59.9`. Shipping build after the round-6 fix:
 
 ★ **THE DEFECT WAS THE FIELD-PARITY CORRECTOR, NOT THE SYNC.** Five HW rounds chased sync
 shape on a wrong hypothesis; §3.9 is the post-mortem and it is the part of this document
-worth reading. The corrector (PR #37, `docs/field_parity.md`) is **DISABLED** pending a
-real fix — `par_ins` is tied 0 in `dvd/resample_addrgen.v`. That re-opens the "super
-aliased after a chapter skip" coin flip it was written for, so fixing it properly is the
-next job; `bench/dvd/field_phase_tb.sv` is the gate that can tell a correct field phase
-from an inverted one — ⚠ committed **unfinished** (it runs but prints no verdict; see its
-header), because it belongs with the corrector fix rather than with this branch.
+worth reading. The corrector (PR #37, `docs/field_parity.md`) was **DISABLED** here and is
+now **repaired and re-enabled** (2026-09-03, issue #41): its feedback arm was chasing
+pixel-queue STARVATION, and its cure is a repeated field, so on compute-bound content it
+repeated one several times a second. It now only acts on a parity error that has HELD
+(`PAR_CONFIRM`), with a hard budget on top (`PAR_HOLD`). `bench/dvd/field_phase_tb.sv` is
+finished and is the gate — it reproduces the defect (scenario [6] starves the pixel queue
+and counts the repeated fields) and measures field phase from LINE-STAMPED framestore
+content, so it cannot agree with the RTL by construction. ✅ HW-CONFIRMED over two rounds:
+round 1 gave the CRT its fields and exposed an inverted `VGA_F1` (HDMI Weave went from a
+coin flip to consistently combed once the phase stopped being random), round 2 confirmed
+that fix — `docs/field_parity.md` "HW ROUND 1".
 
 **HW round 6 (2026-09-03) — the follow-up sweep, all on the maintainer's rig:**
 line-21 captions ✅, overlays/subtitles/menus/HUD on the analog output ✅, sub-720 fill
@@ -28,10 +33,9 @@ line-21 captions ✅, overlays/subtitles/menus/HUD on the analog output ✅, sub
 - **PAL + a mid-title `Video Output` change can freeze the decoder** — ⚠ **PRE-EXISTING,
   not from this branch**: v0.3.0 does the same on an `Analog Out` mode change. See §6.
 
-⏳ Not yet gated: PAL on an analog CRT (no PAL CRT available), RGBHV, `direct_video=1`
-through an HDMI DAC, and the parity behaviour after a chapter skip (the maintainer's
-late-model CRT has never shown the coin flip that two Discord users report, so that fix
-will lean on `bench/dvd/field_phase_tb.sv` rather than on his rig).
+⏳ Not yet gated: PAL on an analog CRT (no PAL CRT available), RGBHV, and
+`direct_video=1` through an HDMI DAC. (The field-parity coin flip that was open here is
+✅ fixed and HW-confirmed — `docs/field_parity.md`.)
 
 ## 1. The field reports that started it
 
@@ -211,9 +215,16 @@ between every combed capture and every clean one was the corrector.
    it restates the design's convention instead of checking an external one. CLAUDE.md
    already warns about golden models that agree suspiciously well with their RTL (the
    POST-only PGC case) — same trap, different corner. `bench/dvd/field_phase_tb.sv` is the
-   replacement: address-derived framestore content, per-field hashes of what the mixer
+   replacement: LINE-STAMPED framestore content, per-field measurement of what the mixer
    actually emitted, and the invariant that consecutive fields must DIFFER and repeat with
    period 2.
+5. ★ **The perturbation the bench was missing was the mundane one.** Scenarios written
+   from the field reports (seeks, cold start, cadence breaks) all passed with the
+   corrector on — the defect only appeared once the bench STARVED the pixel queue, which
+   is what this compute-bound core does several times a second on real content and what
+   no scenario derived from a user's description would have contained. When a bench
+   exonerates the code the hardware indicts, ask what the hardware is doing all the time
+   that the bench never does.
 
 ## 4. Tests
 

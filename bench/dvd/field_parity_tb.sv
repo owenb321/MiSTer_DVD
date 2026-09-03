@@ -247,15 +247,20 @@ module field_parity_tb;
     begin t0 = ft_seen; wait (ft_seen >= t0 + n); @(posedge dot_clk); end
   endtask
 
-  localparam SETTLE = 6;       // frame-tops allowed for the correction to land
-  localparam NCHK   = 16;      // frame-tops that must ALL be aligned after it
+  localparam SETTLE    = 6;    // frame-tops allowed for a FEED-FORWARD correction to land
+  /* The FEEDBACK arm waits for the mixer's verdict to hold across PAR_CONFIRM refreshes
+   * before it inserts (dvd/resample_addrgen.v — the issue #41 fix: its cure costs a
+   * repeated field, so it must not chase a churning error). The windows that exercise it
+   * therefore need a settle window that long. */
+  localparam SETTLE_FB = 40;
+  localparam NCHK      = 16;   // frame-tops that must ALL be aligned after it
   integer errors = 0;
   integer settle_worst = 0;
 
-  task check_window(input [8*40-1:0] name);
+  task check_window_s(input [8*40-1:0] name, input integer settle);
     begin
       settling = 1; settle_mis = 0;
-      wait_fts(SETTLE);
+      wait_fts(settle);
       settling = 0;
       if (settle_mis > settle_worst) settle_worst = settle_mis;
       checking = 1; mis_seen = 0;
@@ -272,6 +277,10 @@ module field_parity_tb;
     end
   endtask
 
+  task check_window(input [8*40-1:0] name);
+    begin check_window_s(name, SETTLE); end
+  endtask
+
   integer phase = 0;
 
   initial begin
@@ -286,7 +295,7 @@ module field_parity_tb;
     repeat (2) @(negedge v_sync);
     repeat (phase) @(negedge v_sync);          // one field period shifts landing parity
     output_frame_valid = 1;
-    check_window("1-cold-start");
+    check_window_s("1-cold-start", SETTLE_FB);   // the feedback arm's window
 
     // [2] SEEK released on a SAME-parity tff (alternation break; the chapter skip)
     output_frame_valid = 0;

@@ -248,16 +248,15 @@ worse maintenance burden than targeted in-place edits. So:
   maintainer's rig: HDMI and the composite CRT both clean, no jumpy image, steady
   `720x480i @ 59.9` (build `DVD_n64model_20260903_0148.rbf`, SEED 5, clk_dec 93.01/88.94).
   Design + post-mortem: `docs/single_raster_analog.md`.**
-  ★★ **THE DEFECT USERS REPORTED WAS THE FIELD-PARITY CORRECTOR (PR #37), NOT SYNC —
-  and it is DISABLED, not fixed** (`par_ins` tied 0 in `dvd/resample_addrgen.v`).
+  ★★ **THE DEFECT USERS REPORTED WAS THE FIELD-PARITY CORRECTOR (PR #37), NOT SYNC.**
   MEASURED from screenshots by splitting each woven frame into its two fields and
   correlating: with the corrector on, consecutive fields carry the SAME source lines
   (offset **+0.00** frame lines; a correct interlaced still measures **+0.50**) — weave
   combs on a STILL and bob jumps a field line, on HDMI and the CRT alike. v0.3.0
   `Analog Out = Native Fields` (same authored-fields content path, no corrector) measures
-  +0.50 and is clean. ⚠ Disabling re-opens the "super aliased after a chapter skip" coin
-  flip the corrector was written for — fixing it properly is the NEXT JOB, gated by the
-  new `bench/dvd/field_phase_tb.sv`.
+  +0.50 and is clean. This branch tied `par_ins` 0; the corrector is now ✅ **REPAIRED,
+  re-enabled and HW-CONFIRMED** — see the field-parity bullet below and
+  `docs/field_parity.md`.
   ★ **FIVE HW ROUNDS WERE SPENT ON THE WRONG LAYER; the rules that earns are in
   `docs/single_raster_analog.md` §3.9 and worth reading before the next hunt:** (1) when
   a build changes X and the symptom persists, X is EXONERATED — round 4 had no half-line
@@ -268,9 +267,14 @@ worse maintenance burden than targeted in-place edits. So:
   behavioural framestore returns a CONSTANT word (no displayed pixel carries evidence of
   which source line it came from) and its pass condition is the SAME EXPRESSION as the
   RTL's `frame_top_par_err` — a golden model that agrees with its RTL by construction
-  (the POST-only PGC trap again). Replacement: `field_phase_tb` (address-derived
-  framestore, per-field hashes of what the mixer EMITTED, consecutive fields must differ
-  and repeat with period 2).
+  (the POST-only PGC trap again). Replacement: `field_phase_tb` (LINE-STAMPED
+  framestore, per-field measurement of what the mixer EMITTED, consecutive fields must
+  differ and repeat with period 2). ★ **And the perturbation that finally exposed the
+  corrector was the MUNDANE one:** every scenario written from the field reports (seeks,
+  cold start, cadence breaks) passed with it on — the defect only appeared once the bench
+  STARVED the pixel queue, which is what this compute-bound core does several times a
+  second on real content. When a bench exonerates the code the hardware indicts, ask what
+  the hardware does all the time that the bench never does.
   ★ **The raster is the N64 model, on ONE raster** — halfline 429/432 in the interlaced
   modeline, doubled 2x (not 2x+1) by `syncgen_intf` to 858/864 = exactly half the line,
   with the 262/263 alternation ⇒ vsync exactly 262.5 lines apart EVERY field, so Main
@@ -325,6 +329,44 @@ worse maintenance burden than targeted in-place edits. So:
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
+- ✅ **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
+  `fix/field-parity-corrector`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED: round 1 gave
+  the CRT ("always gets the fields right on the TV" where PR #40 was a coin flip) and
+  exposed an inverted `VGA_F1`; round 2 confirmed that fix
+  (`DVD_parityf1_20260903_1253.rbf`).**
+  ★★ **ROUND 1 ALSO EXPOSED AN INVERTED `VGA_F1`, and only determinism could:** with the
+  phase now fixed, HDMI Weave went from a coin flip to CONSISTENTLY COMBED while the CRT
+  became consistently right. Two outputs disagreeing by exactly one field pins it to the
+  FLAG, not the corrector — the analog pins never read `VGA_F1` (the raster half-line
+  carries the CRT's interleave). `sys/ascal.vhd` latches the flag at every DE rise and the
+  write-placement decision reads it in the SAME clocked process on the field's first
+  active pixel, so it uses the value from the PREVIOUS field's last line ⇒ the effective
+  convention is **F1 = 0 on the TOP field**. `emu.sv` emitted `~core_v_pos[0]` (1 on top)
+  ⇒ ascal stored the top field in the odd rows = a pairwise line swap = Weave combing on
+  a STILL. Now `core_v_pos[0]`, ✅ HW-confirmed. ⚠ Unfalsifiable while the parity was random — HDMI was
+  right half the time — and the line's own comment had said "polarity may need flipping on
+  HW" since it was written. ⚠ **Not sim-gateable here**: ascal is VHDL, the benches are
+  Icarus.
+  ★ **Root cause of the withdrawal: the FEEDBACK arm was chasing STARVATION.** Its cure
+  is a REPEATED field (re-showing `last_image` is the only insertion that lands the
+  resumed stream aligned — see the XOR note below), and it was firing at field rate,
+  because when the pixel queue runs dry the mixer displays nothing at that frame-top
+  opportunity and every following content field lands one raster slot later. That IS a
+  genuine parity error — but this core is compute-bound and does it repeatedly, so the
+  error churns, and one repeated field per starve is a far worse picture than the
+  half-line offset it removes. The old `par_armed` + **4-refresh** liveness re-arm
+  permitted an insertion every five refreshes = exactly the measured +0.00.
+  FIX = the feedback arm only acts on a **STABLE** error: `PAR_CONFIRM` (30 refreshes,
+  ~0.5 s) of a continuously-asserted verdict, plus `PAR_HOLD` (120 refreshes, ~2 s) as a
+  hard budget so a repeated field can never appear more often than that whatever the
+  starvation rate is. `par_age` starts saturated so the cold-start landing is not
+  delayed. The FEED-FORWARD arm (`alt_break`) is unchanged and ungated — it inserts the
+  OPPOSITE field, can never repeat one, and it is the arm that handles the reported
+  chapter-skip symptom. Gate: **`bench/dvd/field_phase_tb.sv`** (finished here; it was
+  committed unfinished by PR #40) + `run_field_phase.sh`, 7 windows × 2 raster phases.
+  Measured, not asserted: 4 starvation events cost **4** repeated fields with the shipped
+  corrector, **0** with the gate and **0** with the corrector off. Detail:
+  `docs/field_parity.md`.
 - 🔧 **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02, branch
   `feature/video-output-consolidation`) — sim-proven (RED/GREEN), ⏳ HW-confirm pending
   (gate = the two CRT field reports below reproduce clean).** Two CRT field reports

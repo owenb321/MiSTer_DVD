@@ -1,13 +1,26 @@
 #!/usr/bin/env bash
 #
-# run_field_phase.sh — do the two displayed fields carry DIFFERENT source lines?
-# (bench/dvd/field_phase_tb.sv; docs/single_raster_analog.md §3.10.)
+# run_field_phase.sh — do the two displayed fields carry DIFFERENT source lines,
+# on the matching raster parity? (bench/dvd/field_phase_tb.sv; docs/field_parity.md.)
 #
 # This is the bench that can see the HW defect field_parity_tb could not: it feeds the
-# behavioural framestore address-derived data and compares what the mixer EMITTED for
-# consecutive fields, instead of restating the RTL's own parity convention.
+# behavioural framestore LINE-STAMPED data and measures what the mixer EMITTED for
+# consecutive fields, instead of restating the RTL's own parity convention. It is the
+# gate for the field-parity corrector (issue #41).
 #
-# Both raster-phase arms must pass.
+# It checks three invariants per window (see the testbench header):
+#   A  consecutive fields must carry DIFFERENT source lines  (the +0.50 field offset a
+#      real interlaced still measures; the withdrawn corrector made it +0.00)
+#   B  the emitted content repeats with period 2
+#   C  an even (top) source line lands in an even (top) raster field — derived from the
+#      DATA, so it does not agree with the RTL by construction
+#
+# Both raster-phase arms must pass. Add +dbg to either vvp line for a per-field table.
+#
+# Runtime: ~10 minutes per arm. Most of it is scenario [1] and [7], whose settle windows
+# have to be long enough for the FEEDBACK arm to confirm (PAR_CONFIRM refreshes in
+# dvd/resample_addrgen.v) — shortening them would make the bench green against a
+# corrector that never heals.
 set -e
 cd "$(dirname "$0")/../.."
 

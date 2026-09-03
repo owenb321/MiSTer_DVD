@@ -21,7 +21,8 @@
  * model, sampling at the pixel enable (858 samples per line):
  *
  *   [1] finds caption bursts in the VBI (never during DE),
- *   [2] classifies each field by the raster's own field marker (v_pos[0] = ~VGA_F1);
+ *   [2] classifies each field by the raster's own field marker (v_pos[0], which is
+ *       what VGA_F1 carries since 2026-09-03);
  *       that it is the broadcast field 1 is proven by cc_field_map_tb (sync signature)
  *       and csync_field_tb (the analog pin),
  *   [3] demodulates each burst (slice at ~25 IRE, sample at bit centres) and
@@ -222,7 +223,8 @@ module cc_e2e_tb;
       // (a half-line here combs ascal's weave — HW round 3), so the vsync position no
       // longer distinguishes them; the 2:1 half-line is applied downstream, to the
       // analog composite sync, by sys_top's csync. The raster's own field marker is
-      // v_pos[0] (= ~VGA_F1), and that it marks the BROADCAST field-1 line-aligned
+      // v_pos[0] (what VGA_F1 carries since 2026-09-03), and that it marks the
+      // BROADCAST field-1 line-aligned
       // vsync is proven by bench/dvd/cc_field_map_tb.sv (sync_gen with the analog
       // half-line) and bench/dvd/csync_field_tb.sv (the csync pin, both fields
       // 262.5 lines apart).

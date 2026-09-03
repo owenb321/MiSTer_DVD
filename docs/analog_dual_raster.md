@@ -21,7 +21,8 @@ bumped to `v,2`).** Why reversed (this doc's caveat 2 was the decisive evidence)
 field reports — the derive path's pairing wobble seen in the wild ("extremely wobbly,
 not how interlace normally looks"), and the Native Fields post-seek "super aliased /
 toggle 3-4 times" defect, root-caused as a separate field-parity re-engage coin flip and
-FIXED (`docs/field_parity.md`). With fieldpass immune to caveat 2 by construction and the
+FIXED (`docs/field_parity.md` — that corrector was later withdrawn and repaired; it is
+✅ HW-confirmed as of 2026-09-03). With fieldpass immune to caveat 2 by construction and the
 parity corrector closing the re-engage hole, the derive machinery's only remaining value
 was CRT-480i-plus-progressive-HDMI simultaneity, which the maintainer chose to drop
 (pick-your-output). `re_interlace.sv` keeps only the fieldpass timing (PERIOD_FP_*/
