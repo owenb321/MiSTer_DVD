@@ -56,3 +56,9 @@ These appear briefly when you change something, and are not errors:
 The status line along the bottom — `► 0:12:34/1:37:05 CH 12/23` — is toggled with **B9**
 and also auto-shows for a couple of seconds on any of the above. `❚❚` replaces `►` when
 paused.
+
+**While a seek is pending the time shows where you are going, not where you are.** Hold
+Fast Fwd or Rewind, step chapters, or tap out a D-pad seek and the elapsed time tracks the
+seek bar's cursor, so the two always agree; it returns to the live position once the seek
+lands. On a `.mpg`, `.VOB` or VCD/SVCD the whole clock is an estimate worked out from how
+fast the file is playing — see [VCD & SVCD](../formats/vcd-svcd.md).

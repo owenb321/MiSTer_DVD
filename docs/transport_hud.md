@@ -170,9 +170,83 @@ integer reference (8 directed + 500 random vectors). Two instances:
   evaluates once per 24-byte entry). `cur_cell_start` tracks the streaming
   cell on its **own** sync read port (`cell_raddr` is transiently repointed
   by the angle prefetch, so piggybacking would skew the readout).
-- **emu display sum:** `cur_time = cell_ready ? cur_cell_start (+)
-  dsi_c_eltm : dsi_c_eltm` — whole-title elapsed, falling back to bare
-  cell-relative time for linear (non-ISO) playback.
+- **emu display mux (2026-09-03):** four sources, priority high to low —
+  ```
+  cur_time = hud_prev_ok  ? hud_prev_time                    // a pending seek
+           : lin_time_ok  ? lin_cur_bcd                      // linear file clock
+           : cell_ready   ? cur_cell_start (+) dsi_c_eltm    // DVD whole-title
+                          : dsi_c_eltm;                      // bare cell-relative
+  ```
+  The linear arm is `dvd/lin_rate.sv` (a `.mpg`/`.VOB`/VCD used to read
+  `0:00:00/0:00:00`; see `docs/vcd_svcd.md` §3a). The preview arm is below.
+
+## Preview clock — `dvd/seek_time.sv` (2026-09-03)
+
+**The defect.** The clock showed the live playhead and nothing else, so it sat
+frozen at the position you left while the seek bar's amber cursor travelled.
+Two causes, one symptom:
+
+- a **held FF/REW** asserts `hold_freeze` → `pause_gov`, which stops the
+  governor; the demux stops draining, DSI packets stop arriving and
+  `dsi_c_eltm` coasts then stops. `cell_i` cannot change either, so
+  `cur_cell_start` is nailed. The bar keeps moving because `bar_tgt_rbn` is
+  pure register arithmetic, independent of the stream.
+- a **chapter burst** does not pause at all — nothing seeks until the ~500 ms
+  debounce closes, so the clock honestly reports the old position while
+  `hud_cur_ch` counts up to the projected chapter.
+
+`dvd/seek_bar.sv` had already solved exactly this for the *cursor* (its header
+records that "the bar sat frozen at the live playhead while the chapter number
+counted up"). This does it for the number, from the same maps, so the two
+cannot disagree.
+
+**Three sources, in the order they can be trusted:**
+
+| source | how | exact? |
+|---|---|---|
+| D-pad gesture | `live ± (pend_min·60 + pend_sec·10)` — `dpad_seek` already knows the request as a signed MM:S0 (⚠ `pend_sec` is *tens* of seconds) | as exact as the seek |
+| chapter skip | `pmap[chapter] → cell`, `cell_start[cell]` — the same two-step `seek_bar` walks for its notches | **exact**, no interpolation |
+| held scrub / resolved jump | bracket the RBN between two cells and interpolate: `secs = lo + ((hi−lo)·q)>>8`, `q = (off<<8)/cell_span` | ± seconds |
+
+The D-pad arm is the only one available during the coalesce window, before a
+target RBN exists.
+
+⛔ **Rejected: scaling the title's total by the bar's own 0..512 fraction.** Far
+cheaper — that fraction is already computed — but it assumes a constant bitrate
+across the *whole* title, so on a VBR DVD the preview would disagree with the
+landed time by minutes and the number would visibly jump when the seek
+completed. That is a worse bug than the frozen clock it replaces. Interpolating
+*inside a cell* is accurate because bitrate varies little over one cell.
+
+**Binary seconds until the last step.** `dvd/bcd_time_add.sv` has no subtract
+port and cannot cheaply get one, and both a backward jump and a prev-chapter
+burst need one; meanwhile `cell_meta_mem[31:16]` is *already* binary seconds. So
+`dvd_iso_reader` carries a binary prefix sum (`run_secs`) beside its BCD one and
+exports it on the existing per-cell stream as `cellf_secs`, plus `title_secs_o`
+— the upper bracket when interpolating inside the **final** cell, which has no
+next cell to bracket against.
+
+**A sibling of `seek_bar`, not part of it.** That module's `cellf_ram` has one
+read port owned by its divider FSM; arbitrating a second consumer onto a proven
+display module is the wrong risk for a readout. The cost is a second shadow of
+maps written once per PGC load. Shadows are sync-read (never async-indexed — the
+recurring LUT-RAM ALM trap), 128 entries indexed `cell[6:0]`, so cells ≥ 128
+alias — exactly what `cur_cell_start` already does, not a new limit.
+
+⚠ **Two bugs the tests found, both worth knowing:** the BCD→seconds decode
+computed `h*44` because its constant multiplies were built from concatenations
+instead of shifts (they are shifts on pre-widened values now, spelled out); and
+the "target before the first cell" path fell through the interpolation adder,
+which would have folded in a stale product from the previous request.
+
+**No `transport_hud.sv` change at all** — the mux is upstream in emu. Note for a
+later polish pass: `f_cur[3:0]` is a dead nibble and every time-field glyph is
+emitted with accent 0, so a "this is a target, not the playhead" accent is
+available without widening anything.
+
+Gate: `bench/dvd/seek_time_tb.sv` (9 tests over a synthetic cell table streamed
+through the real taps, mutation-proven against nine targeted faults) under
+`bench/dvd/run_dpad_seek.sh`.
 
 ## Compositing & layer order
 

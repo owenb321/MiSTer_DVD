@@ -95,8 +95,14 @@ rapid input.
 
 On a DVD the targets come from the **disc's own seek tables**, so they land on real frame
 boundaries rather than approximate byte offsets. On a VCD/SVCD, exact CD geometry is used
-instead. Flat `.mpg` and `.VOB` files are deliberately inert here — they have no seek
-tables to consult.
+instead. On a flat `.mpg` or `.VOB` there is neither, so the player measures how fast the
+file is playing and jumps by that — accurate on a steady-bitrate file, and on a very
+variable one a ten-second jump may land a second or two out. It needs about half a second
+of playback to take that measurement, so a jump attempted the instant a file starts does
+nothing; tap again.
+
+Bare `.m2v` files are the exception: they carry no timing information at all, so neither
+the D-pad nor Fast Fwd/Rewind can seek in them.
 
 !!! info "Why it is off by default"
     Some interactive and game DVDs play seekable video while expecting the D-pad as game

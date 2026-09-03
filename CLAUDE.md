@@ -1650,9 +1650,21 @@ worse maintenance burden than targeted in-place edits. So:
   lookups (1×R=`fwda[3]`, 3×R=`fwda[2]`, 1×U=`fwda[1]`, 2×U=`fwda[0]`) instead of
   compounding the 10 s entry; it hands the target to a new **jump mode in
   `dvd/scrub_ctrl.sv`**, reusing the title-span clamp, the seek bar and the one proven
-  `seek_rbn` issue. Raw VCD/SVCD has no DSI and uses the exact CD geometry instead
-  (75 sectors/s × 2352 B ÷ 2048 = **861 blocks per 10 s**); flat `.mpg`/`.VOB` is
-  deliberately inert. **⚠ Default Off ON PURPOSE** — the 2026-07-28 decision to move
+  `seek_rbn` issue. Non-DVD sources have no DSI and take the step from the
+  **`lin_blk10` port** (`dvd/lin_rate.sv`, 2026-09-03): a raw VCD/SVCD image uses the
+  exact CD geometry (75 sectors/s × 2352 B ÷ 2048 = **861 blocks per 10 s**, a
+  combinational bypass so that path is structurally unchanged), and a flat
+  `.mpg`/`.VOB` uses a rate **measured from the stream's own PTS against blocks
+  consumed** — that was **issue #39** (the D-pad did nothing on a `.mpg`; the one
+  blocking term was `emu.sv`'s `.lin_mode` ANDed with `raw_mode_w`). Bare `.m2v` stays
+  inert **structurally, not by policy** (no packs ⇒ `saw_pack` never asserts ⇒
+  `lin_seek_ok` is 0, which blocks FF/REW too). Same measurement also gives linear
+  modes their first **HUD clock** (they read `0:00:00` before). ★ The rate is DIVIDED,
+  not scaled by a shift: a window closes on the first PTS sample past its length and
+  samples are a picture apart, so a fixed scale would bake the overshoot in as a
+  systematic over-estimate. ⚠ Reset domain is `reset_n`, never `pipe_rst_n` — the
+  estimate must survive the seeks it enables. Detail: `docs/vcd_svcd.md` §3a.
+  **⚠ Default Off ON PURPOSE** — the 2026-07-28 decision to move
   seeking OFF the D-pad (game DVDs play seekable video while expecting directional input)
   becomes CONDITIONAL, not wrong; it is also suppressed by `menu_nav`/`in_title_menu`.
   ★ **THE STALE-TABLE TRAP** it had to guard is worth knowing beyond this feature:
@@ -1669,6 +1681,32 @@ worse maintenance burden than targeted in-place edits. So:
   `bench/dvd/dpad_seek_tb.sv` (24 scenarios incl. the trap), `scrub_ctrl_tb` T9–T12,
   `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
   **`docs/dvd_nav.md` §2b**.
+- ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
+  `feature/flat-file-time-seek`) — sim-proven, ⏳ HW-confirm pending.**
+  (1) **`dvd/seek_time.sv`**: the HUD clock showed the live playhead only, so it sat
+  FROZEN through every seek while the seek bar's cursor travelled. Two causes, one
+  symptom — a held FF/REW asserts `hold_freeze` → the governor stops → DSI packets stop
+  → `dsi_c_eltm` coasts and `cell_i` cannot move; a chapter burst does not pause at all
+  and simply does not seek until its ~500 ms debounce closes. `seek_bar` had already
+  fixed this for the CURSOR; this fixes the number, from the same maps. Three sources:
+  the D-pad's own signed MM:S0 delta (⚠ `pend_sec` is **tens** of seconds), a chapter's
+  authored start via `pmap→cell_start` (exact), and per-cell interpolation of an RBN.
+  ⛔ Scaling the title total by the bar's 0..512 fraction was REJECTED — constant-bitrate
+  across a whole title means the number visibly jumps by minutes when a VBR seek lands.
+  ★ Everything is BINARY SECONDS until the last step because `bcd_time_add` has no
+  subtract; the reader now carries a binary prefix sum beside its BCD one (`cellf_secs`,
+  `title_secs_o`). Design: `docs/transport_hud.md` "Preview clock".
+  (2) **Scrub ramp relaxed** (user report: "it ramps up too fast"): the old
+  `{10,8,6,5}` / 0-1.5-3-5 s ladder moved ~2 MINUTES of a 2 h title per second even in
+  tier 0 — no fine-positioning tier existed and 5 s of holding crossed 77 minutes. Now
+  `{12,10,8,6}` / 0-2-4.5-8 s, and the ladder is `SH0..SH3` PARAMETERS rather than a
+  hardcoded ternary, pinned by `scrub_ctrl_tb` T13–T15 so a retune is deliberate.
+  ⚠ A retune must also move `dvd/dpad_seek.sv`'s header, `docs/dvd_nav.md` §2a and
+  `docs/transport_hud.md` — the numbers are quoted in all four.
+  ⚠ **Trick play (continuous 2×/4×) is a SEPARATE feature and is NOT this**: it must be
+  flush-FREE (a jump per VOBU is the regime HW rounds 1–2 of the scrub proved fatal), so
+  it needs an I-frame-only VOBU splice in the reader. `dsi_1stref_ea` is already parsed
+  and currently unconnected/dead-stripped. See `docs/dvd_nav.md` §2d.
 
 ---
 

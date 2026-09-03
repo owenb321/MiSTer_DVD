@@ -1382,11 +1382,34 @@ playback, watchdog resync — see §2a). The debounce shape is the chapter-skip 
 Unlike the scrub, a D-pad tap does **not** freeze video (an instantaneous hop has nothing to
 freeze for, and the chapter-skip precedent doesn't either).
 
-**Non-DVD content.** Raw VCD/SVCD `.bin` has no DSI, but a CD is a fixed 75 sectors/s of
-2352 B and the reader's linear `seek_rbn` unit is a 2048-byte **file block**, so
-`75·2352/2048 = 86.13 blk/s` → **10 s = 861 blocks** (exact for VCD's CBR mux; approximate on
-VBR SVCD). Flat `.mpg`/`.VOB` has no derivable rate and is **deliberately inert** on the
-D-pad — B10/B11 still scrub it.
+**Non-DVD content — ✅ ALL LINEAR SOURCES WITH PACKS, since 2026-09-03 (issue #39).** There
+is no DSI outside a DVD title, so `lin_mode` takes its step from the **`lin_blk10` port**
+(blocks per 10 s of file) instead of a constant. `dvd/lin_rate.sv` supplies it:
+
+- **Raw VCD/SVCD `.bin`** — a CD is a fixed 75 sectors/s of 2352 B and the reader's linear
+  `seek_rbn` unit is a 2048-byte **file block**, so `75·2352/2048 = 86.13 blk/s` →
+  **10 s = 861 blocks**. Exact for VCD's CBR mux, approximate on VBR SVCD. This is a
+  *combinational bypass* in `lin_rate` — the same constant with the same timing it had when
+  it was `dpad_seek`'s own `LIN_10S` parameter, so the path that already worked is
+  structurally unchanged.
+- **Flat `.mpg` / directly-selected `.VOB`** — the rate is **measured** from the stream's own
+  PTS against blocks consumed. This was issue #39: the D-pad was inert here for want of a
+  derivable rate, and the one blocking term was `emu.sv`'s `.lin_mode` being ANDed with
+  `raw_mode_w`. Design, windows, rejection rules and the accuracy caveat:
+  **`docs/vcd_svcd.md` §3a**.
+- **Bare `.m2v`** — still inert, and **structurally so rather than by policy**: an elementary
+  stream carries no packs, so `ps_demux.saw_pack` never asserts, `lin_seek_ok` is 0, and
+  *neither* the D-pad *nor* B10/B11 engage. Enabling it is a real piece of work, not a flag:
+  the post-seek hunt would have to target `00 00 01 B3` (a sequence header) instead of the
+  pack code so the decoder has somewhere to re-lock, and the rate would need a source with no
+  PTS available — either `bit_rate` exported out of `rtl/mpeg2/vld.v` (parsed at `vld.v:293`,
+  currently consumed by nothing) or wall-clock block counting. Deliberately deferred; `.m2v`
+  is an ffmpeg-extraction debug format, not something users load.
+
+Note that the step is a **rate**, so a flat-file jump is only as good as the rate model: on a
+bursty VBR file a "+10 s" can land ±20 % out. `emu.sv` gates `lin_mode` on the estimate being
+valid, so a tap in the ~0.5 s before it arms does nothing rather than firing a jump resolved
+against nothing.
 
 **Conflict containment.** The D-pad is taken **only** where the nav layer has not claimed it:
 `menu_nav` (disc menu) and `in_title_menu` (in-title game menu) both suppress it, exactly like
@@ -1505,6 +1528,36 @@ why `still_active` has to be excluded explicitly: a re-align would otherwise fir
 
 Design + the RED/GREEN evidence: `docs/single_raster_analog.md` §6. Suite:
 `bench/dvd/run_mode_realign.sh`.
+
+### 2d. Trick play (continuous 2×/4×/… playback) — ❌ NOT BUILT, and NOT a variation on seeking
+
+Recorded 2026-09-03 so the next session starts from facts. Everything above **repositions**
+the reader and lets the flush contract re-lock; trick play must do the opposite — never flush
+at all — and that is why it is a separate feature rather than another seek mode.
+
+**Scaffolding that already exists** (check the map report after wiring any of it):
+
+- `dvd/nav_dsi.sv` already parses **`dsi_1stref_ea`** — the end of each VOBU's first reference
+  picture, i.e. the I-frame-masking field a trick mode needs (`nav_dsi.sv:51`; the comment
+  says exactly that). It is **unconnected in `emu.sv`** and therefore dead-stripped today.
+  Wiring it back will resurrect logic, exactly as re-wiring `dsi_tbl_raddr` did for D-Pad Seek
+  — that one showed `nav_dsi` at **16 ALMs / 0 memory bits** in the fit report beforehand.
+- The decoder's upstream `REG_WR_TRICK` register carries `repeat_frame[9:5]` + `persistence`
+  and is already used to hold a picture during pause — the native hook for showing each
+  I-frame for N refreshes.
+- `dvd/transport_hud.sv` already renders a `►►×n` tier, and `dvd/scrub_ctrl.sv` already owns
+  FF/REW with an acceleration tier.
+
+**The hard constraint.** The splice must be **flush-free**. `dvd/dpad_seek.sv`'s header
+records that a jump per VOBU is "exactly the rapid flush/re-lock regime that HW rounds 1–2 of
+the scrub proved fatal (mostly-black playback + watchdog resync)" — so the reader must deliver
+`[nv_pck_lbn .. +1stref_ea]` per VOBU and splice VOBUs back to back into **one continuous
+bitstream** (every splice is a pack boundary, so `ps_demux` is fine), with `av_sync`
+free-running and audio muted. Reverse uses `bwda`/`prev_vobu` the same way. It is **DVD-only**:
+flat and VCD sources have no DSI and would need GOP-header scanning instead.
+
+It also carries a UX decision — whether hold-FF *becomes* trick play or the proven
+scrub-to-target keeps B10/B11 — and it needs its own HW round.
 
 ### HW status — ✅ CONFIRMED (PR fj#96)
 

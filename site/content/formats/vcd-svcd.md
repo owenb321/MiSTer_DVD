@@ -42,5 +42,7 @@ was added. Nothing beyond that was built:
 - **No 2336-byte-sector images.** The common 2352-byte raw format is what is supported.
 - **A 23.976-coded film VCD would play fast.** This is rare; almost all VCDs are 29.97 or
   25 fps.
-- **The HUD shows no time** in linear playback modes, since there is no navigation
-  structure to read chapter and title times from.
+- **The elapsed and total times are an estimate** in linear playback modes, worked out
+  from how fast the file is playing rather than read from a navigation structure. On a
+  VCD it is exact; on a variable-bitrate file it can drift a little through the disc.
+  Chapter numbers are still blank, since there are no chapters to count.
