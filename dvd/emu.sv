@@ -2070,7 +2070,11 @@ end
 // MODE-SWITCH READER RE-ALIGN — dvd/mode_realign.sv (issue #42). Design, the
 // coalescing rule, the stale-playhead trap and the deferral window: its header.
 wire       mode_switch;                 // the in-place FALLBACK trio (see above)
-wire       realign_pend;                // an arm is open
+// realign_pend is deliberately UNCONNECTED today. It exists for the round-2 lever
+// docs/single_raster_analog.md §6.5 describes: if hardware still freezes, gate il_out on
+// ~realign_pend so the modeline walk and the flush land together on the VOBU boundary.
+// Keeping it out of the netlist now is the point -- one behavioural delta per HW round.
+wire       realign_pend;                // an arm is open (see above)
 wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
 wire pipe_rst_n, aud_rst_n;
 mode_realign mode_realign_i (

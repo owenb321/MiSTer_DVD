@@ -746,4 +746,15 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # 2026-09-03c (same branch + the VGA_F1 polarity flip after HW round 1 -- one inverter):
 # SEED 5, clk_dec 94.06 @100C / 91.29 @-40C, identical to the entry above as expected.
 # Build DVD_parityf1_20260903_1253.rbf (the HW round 2 candidate).
+# 2026-09-03d (fix/mode-switch-realign, issue #42 -- dvd/mode_realign.sv (78 combinational
+# ALUTs / 62 regs: a 32-bit target latch, a 32-bit 2:1 mux, one 24-bit watchdog and a 2-bit
+# FSM) + dvd/pal_detect.sv (84 / 43, clk_dec) + the emu seek-port arbitration): SEED 5 held
+# FIRST roll -- clk_dec 91.90 @100C / 88.88 @-40C (gate 86.0, PASS both corners) at 88% ALM
+# (36,968, up 62 from the parity netlist's 36,906), RAM 494/553 unchanged, DSP 92/112
+# unchanged. THIRTEENTH consecutive first-roll fit. Build DVD_modeswitch_20260903_1538.rbf.
+# ⚠ Both new modules are clk_sys control path at user rate or clk_dec quasi-static, and the
+# only added logic in an existing path is one LUT level of mux in front of the reader's
+# seek_rbn latch -- a path with cycles of slack. The +62 ALM is the honest logic delta here
+# (compare the dpad_seek entry above, where a large "ALMs needed" jump was mostly the
+# collapse of the recoverable-by-packing estimate, not new logic).
 set_global_assignment -name SEED 5
