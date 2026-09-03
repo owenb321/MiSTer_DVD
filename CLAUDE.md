@@ -331,10 +331,16 @@ worse maintenance burden than targeted in-place edits. So:
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
-- 🔧 **MODE-SWITCH READER RE-ALIGN + PAL/NTSC VERDICT HARDENING (2026-09-03, issue #42,
-  branch `fix/mode-switch-realign`) — sim-proven RED/GREEN, ⏳ HW-confirm pending
-  (gate = a PAL disc AND an NTSC disc, `Video Output` toggled mid-title both directions
-  ×20 each, plus the T2 menu→Play logo chain).** Fixes: a mid-title `Video Output` change
+- ✅ **MODE-SWITCH READER RE-ALIGN + PAL/NTSC VERDICT HARDENING (2026-09-03, issue #42,
+  branch `fix/mode-switch-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03
+  (user report: the freeze is gone; build `DVD_modeswitch_20260903_1538.rbf`, SEED 5 first
+  roll, clk_dec 91.90/88.88).** ⏳ Still open on that build: the ~1 s SWITCH TRANSIENT is
+  ugly (to Interlaced = a full-screen rolling image flashing between black frames = the
+  display losing vertical lock; to Progressive = the picture squished into the top half =
+  field-height content in a frame-height DE window). Cosmetic and inherent to changing the
+  raster under in-flight content; the proposed fix (blank RGB — never sync — from
+  `il_switch` to the `video_live` rising edge, in `mode_realign`) plus why "repeat the last
+  good frame" is the weaker option are recorded in `docs/single_raster_analog.md` §7. Fixes: a mid-title `Video Output` change
   could freeze the decoder on a malformed frame with no self-recovery; a chapter seek
   cleared it. Pre-existing (v0.3.0 does it on `Analog Out`).
   ★★ **THE FIX WAS WRITTEN IN THE EXISTING COMMENT AND HAD BEEN READ AS HARMLESS FOR
