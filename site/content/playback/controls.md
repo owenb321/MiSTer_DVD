@@ -47,6 +47,9 @@ itself to MiSTer as a keyboard counts, which is how a **remote** drives the play
 
 ## Using a remote
 
+!!! info "Unreleased"
+    Needs the keyboard support above; not in v0.3.0.
+
 The reliable way is an **infrared receiver that presents itself as a USB keyboard** — a
 Flirc, a generic MCE-style USB IR dongle, or the receiver built into a console dock. It
 learns whatever remote you already own, emits ordinary keystrokes, and needs no setting up

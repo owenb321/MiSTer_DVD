@@ -58,6 +58,9 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 - **[Closed captions](https://owenb321.github.io/MiSTer_DVD/video/closed-captions/)** re-modulated onto line 21 of the
   analog output for your television to decode, exactly as a real player does.
 - **[Video CD / SVCD](https://owenb321.github.io/MiSTer_DVD/formats/vcd-svcd/)** — bin/cue rips play directly.
+- **Gamepad, keyboard or infrared remote** — every transport action has a
+  [built-in key](https://owenb321.github.io/MiSTer_DVD/playback/controls/), so a USB IR receiver
+  turns any remote you already own into a DVD remote with nothing to configure.
 
 Everything runs in FPGA fabric: no HPS-side daemon, no Linux helper process. The ARM only
 serves SD blocks through the standard framework interface.

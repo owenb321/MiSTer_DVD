@@ -46,8 +46,8 @@ a display-refresh-locked frame-rate governor.
 disc's authored menus work: First Play, root and title menus, PCI/HLI button highlights,
 D-pad navigation following the authored link graph, subpictures, chapters via the PTT
 tables, multi-angle, seamless-branch interleaved cells, still frames, and
-audio/subtitle/angle/language selection. Transport is on the gamepad with an on-screen HUD
-and seek bar.
+audio/subtitle/angle/language selection. Transport runs from a gamepad, a USB keyboard or an
+infrared remote, with an on-screen HUD and seek bar.
 
 **Audio** — AC-3 and MPEG-1 Layer II decoded entirely in fabric (every AC-3 channel mode,
 downmixed to stereo) to HDMI; 48 kHz LPCM; AC-3 and DTS as

@@ -14,6 +14,7 @@ that when something does not play, you can tell which piece is missing.
 | **Bitstream passthrough over optical S/PDIF** | ✓ | ✓ | ✓ |
 | **Bitstream passthrough over HDMI** — *DD/DTS 5.1, no I/O board* | — | ✓ | ✓ |
 | Analog/CRT output, closed captions, HUD, seeking | ✓ | ✓ | ✓ |
+| Gamepad, keyboard or IR-remote control *(unreleased)* | ✓ | ✓ | ✓ |
 | **Physical disc — unencrypted** | — | ✓ | ✓ |
 | **Physical disc — CSS-encrypted** *(most commercial discs)* | — | — | ✓ |
 | **CSS-encrypted ISO** — *no optical drive needed* | — | — | ✓ |

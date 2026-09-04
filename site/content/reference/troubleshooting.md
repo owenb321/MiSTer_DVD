@@ -266,6 +266,47 @@ with zero contrast, which is intentional on their part.
     at full resolution and may reach into the black bars — see
     [Analog and CRT output](../video/analog-crt.md#analog-aspect).
 
+## Controls
+
+### My keyboard does nothing
+
+!!! info "Unreleased"
+    Keyboard control arrived after v0.3.0; on that release only the number keys work, and
+    only inside a menu.
+
+Check the [key list](../playback/controls.md#keyboard-and-tv-remote) — the keys are fixed,
+not derived from your gamepad mapping. Two things reasonably often explain it:
+
+- **A key you mapped in MiSTer's *Define buttons* takes over**, and is doing whatever you
+  mapped it to instead. That is how you rebind, but it can surprise you if you forgot.
+- **The MiSTer OSD is open.** No key reaches the player while it is up.
+
+### My TV remote does nothing over HDMI-CEC
+
+CEC has to be switched on (`hdmi_cec=1` under `[MiSTer]` in `MiSTer.ini`), and **it does not
+work on every board**. Before changing anything else, get the log — MiSTer discards its own
+output unless you ask for it. Add `debug=2` under `[MiSTer]`, reboot, and read it:
+
+```
+grep -i cec /tmp/debug.txt
+```
+
+If that says `CEC: no clock detected` followed by `CEC: init failed.`, your board's CEC
+hardware is not usable and **no `MiSTer.ini` setting will change it** — including
+`hdmi_cec_clock`, which only chooses between clock rates once CEC is already working. Set
+`hdmi_cec=0` and use an infrared receiver that presents itself as a USB keyboard instead
+(a Flirc or a generic MCE dongle); that path does not involve CEC at all and gives you the
+same control.
+
+The full table of log lines and what each one means is on the
+[controls page](../playback/controls.md#using-your-tvs-remote-over-hdmi-cec).
+
+### My remote's Menu button opens the MiSTer menu instead of the disc menu
+
+That is MiSTer claiming it, and it cannot be reassigned. Use the **blue** colour key for the
+disc's menu, **red** for its title menu. The Menu button is still useful — it is a toggle, so
+it also closes the OSD again.
+
 ## Navigation
 
 ### A menu option does the wrong thing, or `LINK FAIL`
