@@ -325,6 +325,14 @@ not hygiene: the verdict is 1–2 refreshes + a CDC stale, so clearing only `par
 the first `STATE_INIT` after the hold fire `par_fb` again on the same error and re-break
 the phase it just fixed.
 
+✅ **The arm is live in the shipped configuration** — worth checking, because it rides a
+path the benches tie on by hand. `persistence` is 1 both from `regfile.v`'s hard-reset
+default and from every `trick_w` write `emu.sv` makes (`[4] persistence = on`,
+`[9:5] repeat_frame = 0`), in both Interlaced and Progressive. So the persistence branch
+is the one a real hold takes, and the `repeat_cnt == 0` exclusion never disables the arm
+in practice — nothing in the fork drives a non-zero `repeat_frame` into `resample`
+(`mpeg2video.v` forces 31 only into the *watchdog*).
+
 **Exclusions.** `~hold_freeze`: a clip-load hold belongs to the *outgoing* clip, and
 spending the 120-refresh budget there could delay the incoming clip's correction by up to
 2 s — the exact latency `par_age`'s saturated reset exists to avoid. `repeat_cnt == 0`
