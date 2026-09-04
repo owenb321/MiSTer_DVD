@@ -114,9 +114,12 @@ Steps 2 and 3 are one-time — **updating later is just the new zip.**
 Requires **Quartus 17.0.2 exactly** — newer versions break MiSTer project compatibility.
 
 ```bash
-./build_release.sh --compile --name DVD_myfeature              # native Quartus
-USE_DOCKER=1 ./build_release.sh --compile --name DVD_myfeature # pinned container
+./build_release.sh --compile              # native Quartus
+USE_DOCKER=1 ./build_release.sh --compile # pinned container
 ```
+
+The build names itself after the `dev-<slug>` in `CORE_VERSION`, so the `.rbf`, the zip
+and the OSD line all identify the same build.
 
 Always use `build_release.sh` rather than `quartus_cpf` directly: MiSTer's loader needs a
 *compressed* `.rbf` (~4.3 MB). An uncompressed one (~7 MB) silently fails to configure —
