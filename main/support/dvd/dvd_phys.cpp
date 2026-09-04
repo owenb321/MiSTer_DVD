@@ -258,7 +258,16 @@ void dvd_phys_tick(void)
 	// not ours to play).
 	int is_dvd_video = dvd_video_probe(fd);
 	close(fd);
-	if (!is_dvd_video) { probed_not_video = 1; return; }
+	if (!is_dvd_video)
+	{
+		// Say so once per insertion. Without this, "I put a disc in and nothing
+		// happened" has no record at all, and the two explanations -- we rejected
+		// it, or we never saw it -- look identical from the outside.
+		probed_not_video = 1;
+		phys_log("DVD_PHYS: disc on %s is not DVD-Video (no ISO9660 VIDEO_TS) "
+		         "-- not mounting", dev);
+		return;
+	}
 
 	phys_log("DVD_PHYS: DVD-Video on %s -- mounting", dev);
 	// The sentinel routes user_io_file_mount() to the CSS-decrypted drive path

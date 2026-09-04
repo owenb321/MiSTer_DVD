@@ -116,6 +116,33 @@ still reads `bitstream=1` and cracks + plays, and a decrypted/unencrypted ISO re
 the mount but still shows `CSS ENCRYPTED`, that is the separate `DVDCSS_METHOD`-on-a-file
 question — per-title cracking on a file may need `DVDCSS_METHOD=title`.)
 
+**Why the probe tests two things, not one.** `dvd_video_probe()` requires an
+ISO9660 primary volume descriptor (`CD001` at sector 16) **and** a `VIDEO_TS`
+directory entry in the root. The second half is what makes it safe: `CD001` alone
+matches most of the optical-console library, including several systems MiSTer runs.
+
+| disc | ISO9660? | root `VIDEO_TS`? | mounted |
+|---|---|---|---|
+| PlayStation, Saturn, Sega CD, Neo Geo CD, CD32/CDTV, ao486 | yes | no (`SYSTEM.CNF`, `IP.BIN`, …) | no |
+| PC Engine CD / TurboGrafx-CD | no (custom, CD-DA + data) | — | no |
+| 3DO | no (Opera FS) | — | no |
+| CD-i | yes (XA) | no | no |
+| Video CD / SVCD | yes | no (`VCD/`, `MPEGAV/`) | no |
+| GameCube, Wii, Xbox | no (proprietary; XDVDFS starts at sector 32) | — | no |
+| audio CD | READ(10) fails outright | — | no |
+| DVD-Video, incl. DVD games and home-burned `VIDEO_TS` | yes | yes | **yes** |
+| DVD-Audio | yes | usually yes (the Video zone) | yes — and correctly: a real player plays that zone too |
+
+So no console disc can be mistaken for a movie, and that is worth keeping in mind
+before relaxing either half of the test.
+
+⚠ The probe scans at most the **first 8 sectors** of the root directory (16 KB,
+several hundred entries). A `VIDEO_TS` sorting past that would be missed — but that
+is a false *negative*: the disc is simply not auto-mounted, which is the safe
+direction. A rejection is now logged to `/tmp/dvd_report.log` once per insertion, so
+"I put a disc in and nothing happened" has a record; without it, "we rejected it"
+and "we never saw it" look identical from outside.
+
 **⚠ The cache directory must be created two levels deep, and the result checked.**
 `mkdir()` creates one level, and `/media/fat/dvdcss` only exists if libdvdcss was
 installed by our own `Scripts/install_dvdcss.sh` — `css_lib_names` also finds the
