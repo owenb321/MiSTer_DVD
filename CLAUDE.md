@@ -2083,18 +2083,34 @@ T13. Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
 
 **DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ✅ READ +
 gamepad menu HW-CONFIRMED 2026-08-31 (Scripts menu, gamepad-driven, 1 and 2 drives);
-⏳ the SET ioctl is the one remaining gate.**
+✅ the SET ioctl FIELD-CONFIRMED 2026-09-04 (issue #52: a user's LG GS40N took the region
+and a PC confirmed it).**
 A drive with no region set refuses the CSS title-key ioctl, so every physical disc pays a
 multi-second crack (`No drive region: cracking`); the Scripts-menu tool reads the region
 (and the remaining-change count) and can set it, via `DVD_AUTH` — no compiled helper, since
-python3 is stock on MiSTer. Two durable facts it is built around, worth knowing before
+python3 is stock on MiSTer. **Three** durable facts it is built around, worth knowing before
 writing ANY MiSTer Scripts tool: a Scripts-menu script is run by handing its bare path to
-`agetty`, so it can **never take arguments** (SSH only); and MiSTer injects uinput KEYBOARD
+`agetty`, so it can **never take arguments** (SSH only); MiSTer injects uinput KEYBOARD
 events from the gamepad while a script runs (D-pad→arrows, B1→Enter, B2→Esc) but **no digits
-or letters** — so interactive means a cursor menu, never a typed prompt. A region set is
+or letters** — so interactive means a cursor menu, never a typed prompt; and ★ **a script
+that returns quickly LOSES ITS LAST SCREEN** — `menu.cpp`'s `MENU_SCRIPTS_FB2` ignores keys
+while the script's process lives, then closes the framebuffer terminal on the first key
+**RELEASE** after it is reaped, so the press that confirms a menu erases the result of that
+press. Every exit must wait for a FRESH keypress. A region set is
 **irreversible** (no un-set, ~5 changes ever), hence cursor-starts-on-Cancel/No throughout.
-Tested by `tools/test_set_dvd_region.py` (fakes the drive, drives the menus through a pty);
-the ioctl itself is the HW gate. Design + ioctl details: `docs/physical_disc.md`.
+★★ **And the reporting rule issue #52 earned, which generalises past this tool: a failure to
+READ BACK a change is not a failure to MAKE it.** The set succeeded on that drive; the
+script's unguarded re-read hit the drive's post-SEND-KEY unit attention, threw an uncaught
+traceback, and the user reasonably reported it as a failed region set. Verification now
+re-opens the device and retries 6 × 0.5 s, an unconfirmed read reports "accepted, not yet
+reported" (exit 3) instead of failure, and only the change command itself refusing is an
+error. ★ The same round found `dvd_css.cpp:drive_region_set()` reading `region_mask` alone,
+which labels an **RPC-1 (region-free) drive** — empty mask, `rpc_scheme == 0`, no region
+enforced at all — as having no region, i.e. the best case reported as the worst; it now
+also passes on `rpc_scheme == 0`.
+Tested by `tools/test_set_dvd_region.py` (fakes the drive incl. post-change faults, drives
+the menus through a pty, **mutation-checked** 5/5, `SET_DVD_REGION_SH=` points it at another
+copy to prove RED). Design + ioctl details: `docs/physical_disc.md`.
 
 ### User bug reports arrive as sparse-sector nav bundles, not ISOs
 

@@ -77,11 +77,15 @@ the process is seek-heavy and random reads from a file beat optical seek latency
 
 *Physical discs only — this makes them start faster.*
 
-A USB DVD drive ships with **no region set**. In that state the drive refuses the CSS key
+Most USB DVD drives ship with **no region set**. In that state the drive refuses the CSS key
 exchange, so libdvdcss has to crack every key out of the disc data — that is the
 several-second wait before a title starts, shown on screen as `No drive region: cracking`.
 Set the drive's region to match your discs and it hands the keys over directly, so playback
 starts almost immediately.
+
+Some drives are **region-free** (the "RPC-1" drives, usually sold that way or reflashed to
+be). Those need nothing: they answer for any disc whatever region it is from, which is the
+best case. The script recognises one and tells you there is nothing to set.
 
 An encrypted *image* is always cracked from the data, so this only affects physical discs.
 
@@ -93,21 +97,28 @@ the cursor starts on *Cancel*.
 
 Run it with no disc playing, since the core holds the drive open while one is mounted.
 
+Every screen waits for a button before it closes, and everything it prints is also written
+to `DVD_reports/set_dvd_region.log` on the SD card (or `/tmp` if the SD card is not
+writable) — so if something goes wrong you can read what happened afterwards, and paste it
+into a bug report. The script names the file on its last line.
+
 !!! danger "A region change is close to permanent"
     Drives allow only a handful of user changes — typically five — and when the counter runs
     out the region is **locked to whatever was set last**. The counter lives in the drive's
     own firmware, so it is not reset by a different PC, a reformat, or a different operating
     system. Pick the region matching the discs you own and set it once.
 
-!!! warning "Reading is proven; setting is not"
-    Identifying a drive's region and its remaining changes has been confirmed on real
-    hardware, with one drive connected and with two. **Nobody has yet used the script to
-    actually set a region** — it does the right thing in testing, but the write has never
-    touched a real drive, because proving it costs one of a drive's permanent changes.
+!!! success "Setting a region works"
+    Reading a drive's region has long been confirmed on real hardware; **setting one is now
+    confirmed too**, by the first user to try it — thank you. The change reached the drive
+    and stuck.
 
-    Reading is safe to try freely. Setting is a step into the unknown. If you take it,
-    please [open an issue](https://github.com/owenb321/MiSTer_DVD/issues) saying whether it
-    worked — you will be the first, and thank you for it.
+    That first attempt also showed an error afterwards and closed too quickly to read, even
+    though the region had been set correctly. That was the script mis-reporting a change
+    that had worked: some drives will not answer for a moment after a change, and it treated
+    the silence as a failure. Fixed — the script now retries, says plainly whether it could
+    confirm the new region, and **waits for a keypress before it closes**, so no result
+    disappears again.
 
 **Region codes:** **1** US/Canada · **2** Europe/Japan/Middle East/South Africa ·
 **3** SE Asia · **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia ·

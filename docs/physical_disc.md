@@ -57,6 +57,11 @@ while the core is open plays it (`dvd_phys` polls for media change).
 
 - **No drive region (RPC-II):** SG_IO REPORT KEY reports `region_mask == 0xff`; libdvdcss
   falls back to statistical cracking. Shown on screen as `No drive region: cracking`.
+  ⚠ **An RPC-1 drive reports the same empty mask and means the opposite** — it enforces no
+  region at all and answers the key exchange whatever the disc's region. `drive_region_set()`
+  read only the mask until 2026-09-04, so a region-free drive (the best case there is) was
+  labelled `No drive region: cracking` and logged as having no region set. The verdict now
+  also passes on `rpc_scheme == 0` (REPORT KEY byte 6).
 - **CSS-without-libdvdcss:** READ DVD STRUCTURE copyright byte detects CSS upfront; a
   deferred popup asks the user to run `install_dvdcss.sh` (immediate reads would black-screen
   on many drives). The fabric core's own `pes_scrambled` → `CSS ENCRYPTED` + mute is the
@@ -211,6 +216,15 @@ which rules out any typed prompt; hence menus only. Consequences baked into the 
   (`popen(..., "r")`) — output only, **no stdin at all**. The script detects a non-tty stdin
   and degrades to printing status rather than blocking on input nobody can give.
 - Esc needs a ~50 ms timeout to be told apart from the start of an arrow's CSI sequence.
+- ★ **Every exit waits for a keypress, and it has to.** `MENU_SCRIPTS_FB2` ignores key
+  events while the script's process lives, then tears the framebuffer terminal down on the
+  first key **RELEASE** after it is reaped. A script that finishes inside the duration of
+  the press that confirmed it therefore has its last screen erased *by that press* — which
+  is issue #52's "spit out an error and exited faster than I could read it". Staying alive
+  until a **fresh** press spends that release on the pause instead. The pause drains
+  buffered input (auto-repeat included) for up to 2 s before waiting, or it dismisses
+  itself. This applies to any Scripts tool that prints a verdict and returns, not just
+  this one.
 
 **Safety, because a region change is irreversible.** There is no un-set: MMC has no "clear
 region" command, the code field is 1–8 with no none value, each set spends one of ~5 user
@@ -233,13 +247,51 @@ built: the drives are told apart by device node, which says nothing about which 
 unit it is, so connecting only the target drive is the reliable habit and the warning
 nudges toward it.
 
+**Reporting a change, after issue #52 (2026-09-04).** The reporter's LG GS40N *took* the
+region — Windows confirmed it afterwards — and the script called it an error. Two causes,
+and the durable rule they share is that **a failure to read the region back is not a failure
+to set it**: the SEND KEY either succeeded or it did not, and everything after it is
+reporting.
+
+- `apply_region()` re-read the drive with no `try` at all. A drive answers the command after
+  SEND KEY with a unit attention (its RPC state just changed), so that read raising is
+  *normal*, and it produced an uncaught Python traceback.
+- Even when it answered, `region_mask` can lag the change, so the old code's
+  `region == want` test printed "the drive did not take the change" about a drive that had.
+
+Now: the change is issued once and only once; verification re-opens the device (cheapest way
+to clear the unit attention) and retries 6 × 0.5 s, swallowing `OSError` between tries; a
+confirmed read says "Done"; an unconfirmed one says the change was **accepted but not yet
+reported**, tells the user not to repeat it, and exits **3** (distinct from the usage code 2
+and the genuine rejection code 1). Only `set_region()` itself raising is reported as a
+failure. A top-level handler turns any other exception into one line plus a logged
+traceback, because a traceback on a television scrolls the useful part off the screen.
+
+Also added for the next second-hand report: the status screen shows the **raw 3 RPC bytes**
+and decodes `rpc_scheme`/`type` (`RPC state : b0 ff 01   (RPC-2, region not set)`), and every
+printed line is appended to `/media/fat/DVD_reports/set_dvd_region.log` (or `/tmp` if that
+directory does not exist). `type` is a second, independent "is a region set" signal that does
+not depend on the mask having refreshed.
+
 **Testing.** The ioctl itself cannot be tested without a drive; everything guarding it can,
 and that is where the damage would be. `tools/test_set_dvd_region.py` fakes the drive
-(`DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>`, honoured by the script) and drives
-the menus through a pty using the exact key sequences MiSTer sends for a gamepad — 13
-scenarios, including "a stray B1 on entry changes nothing" and "the confirm defaults to No".
-The **read** ioctl and the gamepad-driven console are ✅ **HW-CONFIRMED 2026-08-31**; the
-**set** ioctl is the one part still ungated (see open items).
+(`DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>[:<fault>]`, honoured by the script)
+and drives the menus through a pty using the exact key sequences MiSTer sends for a gamepad —
+21 scenarios, including "a stray B1 on entry changes nothing" and "the confirm defaults to
+No". The `<fault>` field reproduces what a real drive does around a change: `rbfail` (every
+read after the change raises), `stale` (the mask keeps reporting the old region) and
+`setfail` (the change itself refuses) — of which **only the last may be reported as a
+failure**. `SET_DVD_REGION_SH=<path>` points the suite at another copy of the script, which
+is how the issue-52 checks were proven RED against the pre-fix version. The suite is
+**mutation-checked**: five targeted mutations (unguarded read-back, no pause, unconfirmed
+called a failure, raw bytes dropped, RPC-1 treated as unset) are each caught by their own
+scenario — these are string assertions on console output, exactly the shape that passes
+without proving anything.
+
+The **read** ioctl and the gamepad-driven console were ✅ **HW-CONFIRMED 2026-08-31**; the
+**set** ioctl is ✅ **FIELD-CONFIRMED 2026-09-04** by issue #52 — the change reached the drive
+and stuck, which is the one part of this tool nobody could gate locally without spending a
+permanent change.
 
 ## HW status / open items
 
@@ -260,19 +312,22 @@ Remaining:
    against the drive's set region (`REPORT KEY` RPC state) and show the cracking text on a
    mismatch. Needs a region-mismatched disc to verify — a second drive set to a region the
    local library does **not** match is the practical rig (see item 2).
-2. **`set_dvd_region.sh` on hardware — ✅ READ HW-CONFIRMED 2026-08-31, ⏳ SET still gated.**
-   Run from the Scripts menu and driven with a **gamepad**, with one drive connected and
-   with two: regions read correctly (an unset drive and a region-1 drive each identified),
-   and the multi-drive warning listed both. That confirms everything except the write — the
-   `DVD_AUTH` read, drive enumeration, and the uinput key injection on tty2, which was the
-   design's riskiest assumption (nothing else in the repo depends on it).
-   **Remaining: the SET ioctl** (`DVD_HOST_SEND_RPC_STATE` accepted by the drive and reading
-   back). The read path is safe to re-test freely; a **set is one-way and spends one of the
-   drive's ~5 permanent changes**, so it wants a drive you have decided to commit. Bench plan
-   is three drives — one left unset (keeps the `No drive region: cracking` path testable,
-   which a set would destroy forever), one matching the local library, one deliberately
-   mismatched as the permanent Q2 rig. `DVDCSS_METHOD=title` forces the crack path on any
-   drive if the physical unset state is not available.
+2. **`set_dvd_region.sh` on hardware — ✅ READ HW-CONFIRMED 2026-08-31, ✅ SET
+   FIELD-CONFIRMED 2026-09-04 (issue #52).** Read: run from the Scripts menu and driven with
+   a **gamepad**, with one drive connected and with two — regions read correctly (an unset
+   drive and a region-1 drive each identified), and the multi-drive warning listed both.
+   That confirmed the `DVD_AUTH` read, drive enumeration, and the uinput key injection on
+   tty2, which was the design's riskiest assumption. Write: a user set region on an LG GS40N
+   from the Scripts menu and a PC confirmed the drive was locked to it — so
+   `DVD_HOST_SEND_RPC_STATE` reaches the drive and sticks. The *reporting* around it was
+   wrong and is fixed above; what remains ungated is only the **happy read-back path** (a
+   drive that answers immediately with the new region), which cannot be gated without
+   spending another permanent change and is not worth one.
+   A **set is one-way and spends one of the drive's ~5 permanent changes**. Bench plan for
+   the Q2 rig is still three drives — one left unset (keeps the `No drive region: cracking`
+   path testable, which a set would destroy forever), one matching the local library, one
+   deliberately mismatched. `DVDCSS_METHOD=title` forces the crack path on any drive if the
+   physical unset state is not available.
 3. **Eject → idle reset (just added):** confirm the `status[0]` pulse returns to the idle
    logo cleanly and a subsequent insert plays.
 4. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open.
