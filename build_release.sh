@@ -54,6 +54,16 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# The OSD version string, read from the single source of truth. It is part of
+# CONF_STR = part of the synthesis netlist, so it changes at most ONCE PER BRANCH
+# (see CLAUDE.md "Versioning"). Recorded in the provenance manifest below, and
+# gated for shape further down.
+CORE_VERSION="$(sed -n 's/.*`define CORE_VERSION "\([^"]*\)".*/\1/p' dvd/emu.sv | head -1)"
+if [[ -z "$CORE_VERSION" ]]; then
+    echo "ERROR: no \`define CORE_VERSION found in dvd/emu.sv." >&2
+    exit 1
+fi
+
 SOF="output_files/${PROJECT}.sof"
 mkdir -p releases
 # Release builds take the MiSTer convention (CoreName_YYYYMMDD.rbf); feature builds keep
@@ -136,6 +146,75 @@ echo ">> Done: ${OUT} ($((SIZE/1024)) KB)"
 if [[ "$SIZE" -gt 4500000 ]]; then
     echo "WARNING: .rbf is larger than expected (~4.2 MB typical). Compression may not have applied." >&2
 fi
+
+# --- Build provenance manifest ---------------------------------------------
+# One JSON sidecar per .rbf, "<rbf>.json". releases/ and build_id.v are BOTH
+# git-ignored, so without this an .rbf found on a tester's SD card months from
+# now is unidentifiable — the filename is its only metadata. Three consumers:
+#   * .github/workflows/package.yml validates the uploaded release asset against
+#     it, and learns WHICH COMMIT to check out (a draft release has no git tag).
+#   * a mystery build: which tree, which seed, what timing.
+#   * DVD.qsf's hand-written seed ledger — its entries quote exactly these
+#     numbers, so this is machine-readable input for that paragraph.
+# Everything here comes from files this script has already produced; nothing is
+# recomputed and there is no python3 dependency inside the Quartus container.
+MANIFEST="${OUT}.json"
+FIT_SUMMARY="output_files/${PROJECT}.fit.summary"
+# `Key : value` lookup in the fitter summary. Keys contain ( ) which are literal in BRE.
+fitval() { sed -n "s/^$1 : *//p" "$FIT_SUMMARY" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
+# The pinned fitter seed. quartus_fit --seed=N writes this assignment back into the
+# qsf, so the LAST one is what actually built this netlist.
+SEED_V=$(sed -n 's/^set_global_assignment -name SEED  *//p' "${PROJECT}.qsf" 2>/dev/null | tail -1)
+# From "clk_dec Restricted Fmax: 94.06 MHz @100C, 93.11 MHz @-40C (target 86.0)".
+F100=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*Fmax: *\([0-9.]*\) MHz @100C.*/\1/p')
+FM40=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*, *\([0-9.]*\) MHz @-40C.*/\1/p')
+FTGT=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*(target *\([0-9.]*\)).*/\1/p')
+BDATE=$(sed -n 's/.*`define BUILD_DATE "\([^"]*\)".*/\1/p' build_id.v 2>/dev/null || true)
+RBF_SHA=$(sha256sum "$OUT" 2>/dev/null | cut -d' ' -f1 || true)
+# GIT_* normally arrive from tools/docker_reexec.sh, which resolves them on the
+# host. This fallback covers a direct (non-Docker) run.
+G_BRANCH="${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
+G_SHA="${GIT_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
+G_DIRTY="${GIT_DIRTY:-$([ -n "$(git status --porcelain 2>/dev/null)" ] && echo true || echo false)}"
+[[ "$G_DIRTY" == "true" || "$G_DIRTY" == "false" ]] || G_DIRTY=null
+
+cat > "$MANIFEST" <<EOF
+{
+  "schema": 1,
+  "core_version": "${CORE_VERSION}",
+  "build_date": "${BDATE}",
+  "built_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "rbf": {
+    "name": "$(basename "$OUT")",
+    "bytes": ${SIZE},
+    "sha256": "${RBF_SHA}",
+    "marginal": $([ -n "$FMAX_TAG" ] && echo true || echo false)
+  },
+  "git": {
+    "branch": "${G_BRANCH}",
+    "sha": "${G_SHA}",
+    "dirty": ${G_DIRTY}
+  },
+  "fit": {
+    "seed": ${SEED_V:-null},
+    "alm": "$(fitval 'Logic utilization (in ALMs)')",
+    "registers": "$(fitval 'Total registers')",
+    "ram_blocks": "$(fitval 'Total RAM Blocks')",
+    "dsp_blocks": "$(fitval 'Total DSP Blocks')"
+  },
+  "timing": {
+    "clk_dec_100c_mhz": ${F100:-null},
+    "clk_dec_m40c_mhz": ${FM40:-null},
+    "threshold_mhz": ${FTGT:-null},
+    "pass": $([ -z "$FMAX_TAG" ] && echo true || echo false)
+  },
+  "toolchain": {
+    "quartus": "$(fitval 'Quartus Prime Version')",
+    "image": "${QUARTUS_DOCKER_IMAGE:-raetro/quartus:mister}"
+  }
+}
+EOF
+echo ">> Manifest: ${MANIFEST}"
 
 # Phone notification (no-op if tools/.notify_url / $NOTIFY_URL unset; NOTIFY_SILENT=1
 # suppresses it, e.g. when seed_sweep.sh sends its own summary instead).
