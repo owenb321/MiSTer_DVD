@@ -151,17 +151,6 @@ into a bug report. The script names the file on its last line.
     own firmware, so it is not reset by a different PC, a reformat, or a different operating
     system. Pick the region matching the discs you own and set it once.
 
-!!! success "Reading and setting are both confirmed on real hardware"
-    Reading a drive's region has long been confirmed; **setting one now is too**. The first
-    user to try it had it work on theirs but saw an error afterwards and reported it — thank
-    you, because that report is what uncovered the rest.
-
-    The script used to treat a drive that was slow to answer as a failure, and it closed
-    before its last screen could be read. It now retries, says plainly whether it could
-    confirm the new region, tells you what the drive actually said when it refuses, and
-    **waits for a keypress before it closes**. It also sends the change in the form stricter
-    drives require — some drives accept either form, some reject one of them.
-
 **Region codes:** **1** US/Canada · **2** Europe/Japan/Middle East/South Africa ·
 **3** SE Asia · **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia ·
 **6** China.
