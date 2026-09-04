@@ -152,9 +152,9 @@ into a bug report. The script names the file on its last line.
     system. Pick the region matching the discs you own and set it once.
 
 !!! success "Reading and setting are both confirmed on real hardware"
-    Reading a drive's region has long been confirmed; **setting one now is too**, on two
-    different drives. The first user to try it had it work on theirs but saw an error
-    afterwards and reported it — thank you, because that report is what uncovered the rest.
+    Reading a drive's region has long been confirmed; **setting one now is too**. The first
+    user to try it had it work on theirs but saw an error afterwards and reported it — thank
+    you, because that report is what uncovered the rest.
 
     The script used to treat a drive that was slow to answer as a failure, and it closed
     before its last screen could be read. It now retries, says plainly whether it could
