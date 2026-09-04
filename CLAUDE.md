@@ -1634,8 +1634,16 @@ worse maintenance burden than targeted in-place edits. So:
   no UDF-only-image support. (Phase-8b TMAP absolute seek: RETIRED 2026-07-10 by user
   decision. The seek UX gained ONE opt-in layer since — `O[45]` D-Pad Seek, below — which
   rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
-- 🔧 **KEYBOARD / TV-REMOTE TRANSPORT (2026-09-03, issue #35, branch
-  `feature/keyboard-controls`) — sim-proven + mutation-checked, ⏳ HW-confirm pending.**
+- ✅ **KEYBOARD / TV-REMOTE TRANSPORT (2026-09-03, issue #35, branch
+  `feature/keyboard-controls`) — sim-proven + mutation-checked and ✅ HW-CONFIRMED
+  2026-09-04** (build `DVD_kbdmap_20260904_0226.rbf`, SEED 5 first roll, clk_dec
+  92.70/90.14): **the issue #35 case itself** (with no Define-buttons mapping, `Enter`
+  activates the highlighted button in a disc menu), menu navigation + the transport keys,
+  the keyboard 10 s seek, and **the gamepad unregressed** (hold-to-scrub still ramps and
+  lands — the one thing only HW could gate, since the `joy_eff` substitution has no bench).
+  ⏳ **STILL UNGATED, and neither is chaseable on the maintainer's rig:** HDMI-CEC (that
+  board's CEC engine does not run at all — see below) and the tap-repeating IR remote burst
+  (no receiver to hand; covered in sim by `dpad_seek_tb` T19a).
   Every transport action gained a built-in key: `dvd/kbd_map.sv` decodes `ps2_key` into a
   17-bit vector in `joystick_0`'s bit order and `emu.sv` ORs it into a new `joy_eff` that
   every button wire, edge detector, the chapter debounce, the menu walk, the HUD and

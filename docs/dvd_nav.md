@@ -807,7 +807,15 @@ Two independent decoders share the `ps2_key` scancode space, and keeping them di
 a standing constraint: the **digit** path below (menu button by number, shipped 2026-07-27)
 and the **transport** map in `dvd/kbd_map.sv` (issue #35, 2026-09-03).
 
-### Transport: `dvd/kbd_map.sv` — ⏳ HW-confirm pending
+### Transport: `dvd/kbd_map.sv` — ✅ HW-CONFIRMED 2026-09-04
+
+Confirmed on the board (build `DVD_kbdmap_20260904_0226.rbf`): the issue #35 case itself
+(`Enter` activates the highlighted button in a disc menu with no Define-buttons mapping in
+place), menu navigation and the transport keys, the keyboard 10 s seek, and the **gamepad
+unregressed** — that last one being the only gate the `joy_eff` substitution has, since
+there is no emu-level bench. ⏳ Still ungated: **HDMI-CEC** (the maintainer's board cannot
+run CEC at all, see the ⚠⚠ note below) and the **tap-repeating IR remote burst** (no
+receiver available; covered in sim by `dpad_seek_tb` T19a).
 
 **Why it exists.** MiSTer's own *Define buttons* already maps keys onto a core's `J1`
 buttons, so a built-in keymap looks redundant — until you find that **Main refuses to bind

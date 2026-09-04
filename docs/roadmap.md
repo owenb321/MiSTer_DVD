@@ -2068,7 +2068,7 @@ Downside: makes the whole share read-only to MiSTer, breaking cores that write s
 the `.iso` and its errno. Keep that trick for any future "core won't load a file" mystery: the
 framework's file syscalls (open mode + errno) are the ground truth the RTL side can't see.
 
-## ✅ DONE: full keyboard + TV-remote transport control (issue #35) — ⏳ HW-confirm pending
+## ✅ DONE: full keyboard + TV-remote transport control (issue #35) — ✅ HW-CONFIRMED 2026-09-04
 
 Every transport action now has a built-in key. `dvd/kbd_map.sv` decodes `ps2_key` into a
 17-bit vector in `joystick_0`'s bit order and `emu.sv` ORs it into a new `joy_eff` that every
@@ -2092,8 +2092,12 @@ keyboard press. `O[46]` stays free and appending it later is forward-compatible.
 
 Gate: `bench/dvd/run_kbd.sh` (`kbd_map_tb` mutation-checked; `dpad_seek_tb` T19a/T19b own the
 IR-burst routing; `scrub_ctrl_tb` unchanged is the gate that the gamepad scrub was untouched).
-**HW gate:** with no Define-buttons mapping in place, `Enter` activates the highlighted button
-in a DVD menu; a dock remote's held Fast Fwd produces one jump, not a burst of seeks. Design:
+**✅ HW-CONFIRMED 2026-09-04** (`DVD_kbdmap_20260904_0226.rbf`): the #35 case (`Enter` selects
+in a disc menu with no mapping in place), menu nav + transport keys, the keyboard 10 s seek,
+and the gamepad unregressed. ⏳ Ungated: **CEC** — the maintainer's board reports
+`CEC: no clock detected` / `init failed`, so it cannot be tested there and is documented as
+board-dependent with a USB-IR receiver as the recommended remote — and the **IR tap-burst**
+(no receiver available; sim-covered by `dpad_seek_tb` T19a). Design:
 **`docs/dvd_nav.md` "Keyboard / CEC input"**.
 
 ## ✅ DONE: numeric button entry via keyboard (easter eggs / direct chapter select) — ✅ HW-CONFIRMED (PR fj#134)
