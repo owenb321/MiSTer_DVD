@@ -568,8 +568,11 @@ worse maintenance burden than targeted in-place edits. So:
   Measured, not asserted: 4 starvation events cost **4** repeated fields with the shipped
   corrector, **0** with the gate and **0** with the corrector off. Detail:
   `docs/field_parity.md`.
-  🔧 **HOLD ARM — THE CORRECTOR COULD NOT ACT WHILE THE PICTURE WAS HELD (2026-09-04,
-  branch `fix/field-parity-hold`); sim-proven RED/GREEN, ⏳ HW-confirm pending.**
+  ✅ **HOLD ARM — THE CORRECTOR COULD NOT ACT WHILE THE PICTURE WAS HELD (2026-09-04,
+  branch `fix/field-parity-hold`); sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-04
+  (build `DVD_holdparity_20260904_1902.rbf`, SEED 5 first roll, clk_dec 91.72/87.62 —
+  the reported card on HDMI Weave AND the CRT, the cards behind it, pause, menu stills,
+  compute-heavy playback for the churn budget, and chapter skips: all good).**
   Field report: a disc (`RINGER_WS`) combed under Weave and jittered on a CRT **only on
   the FOX warning card it boots to**, clean once the movie started.
   ★★ **THE BLIND SPOT WAS WRITTEN DOWN AS A REASSURANCE.** `docs/field_parity.md`'s root

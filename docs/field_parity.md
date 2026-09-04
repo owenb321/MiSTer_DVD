@@ -5,12 +5,19 @@ analog CRT — "this one seems to always get the fields right on the TV", where 
 coin flip — and exposed an inverted `VGA_F1`; round 2 confirmed that fix
 (`DVD_parityf1_20260903_1253.rbf`). Sim gate: `bench/dvd/field_phase_tb.sv`, RED/GREEN.**
 
-🔧 **HOLD ARM (2026-09-04, branch `fix/field-parity-hold`): the corrector could not act
-while the picture was HELD — a menu still, a warning card, a pause — because its cure is
-to defer a pickup and a hold has none. Measured 360/360 held fields misaligned over a
-6-second hold (the committed gate is the shorter form of that experiment). Fixed by
-swapping the held pair's order for one visit; sim-proven RED/GREEN by the new
-`field_phase_tb` scenario [8], ⏳ HW-confirm pending. See "The hold gap" below.**
+✅ **HOLD ARM (2026-09-04, branch `fix/field-parity-hold`) — sim-proven RED/GREEN and
+✅ HW-CONFIRMED 2026-09-04 (build `DVD_holdparity_20260904_1902.rbf`, SEED 5 first roll,
+clk_dec 91.72/87.62): the corrector could not act while the picture was HELD — a menu
+still, a warning card, a pause — because its cure is to defer a pickup and a hold has
+none. Measured 360/360 held fields misaligned over a 6-second hold (the committed gate is
+the shorter form of that experiment). Fixed by swapping the held pair's order for one
+visit. See "The hold gap" below.**
+
+The HW round covered all six checks the fix could plausibly have broken: the reported FOX
+warning card on both HDMI Weave and the CRT, the second and third cards behind it, a
+mid-movie pause, menu stills, sustained playback on compute-heavy content (the churn
+budget — the failure mode that forced PR #37's withdrawal), and chapter skips (the
+untouched feed-forward arm). All good.
 
 ★ **HW ROUND 1 (2026-09-03) — the corrector is right, and it exposed an INVERTED
 `VGA_F1` (fixed; ✅ confirmed in round 2).** With the field phase now deterministic, HDMI Weave went from a coin flip to
