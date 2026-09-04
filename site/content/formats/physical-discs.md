@@ -77,37 +77,79 @@ the process is seek-heavy and random reads from a file beat optical seek latency
 
 *Physical discs only — this makes them start faster.*
 
-A USB DVD drive ships with **no region set**. In that state the drive refuses the CSS key
+Most USB DVD drives ship with **no region set**. In that state the drive refuses the CSS key
 exchange, so libdvdcss has to crack every key out of the disc data — that is the
 several-second wait before a title starts, shown on screen as `No drive region: cracking`.
 Set the drive's region to match your discs and it hands the keys over directly, so playback
 starts almost immediately.
 
+Some drives are **region-free** (the "RPC-1" drives, usually sold that way or reflashed to
+be). Those need nothing: they answer for any disc whatever region it is from, which is the
+best case. The script recognises one and tells you there is nothing to set.
+
 An encrypted *image* is always cracked from the data, so this only affects physical discs.
 
-**From the MiSTer:** run **set_dvd_region** from the **Scripts** menu (it is in the release
-zip; otherwise grab the `set_dvd_region.sh` asset and drop it in `/media/fat/Scripts/`). It
-shows the drive's current region and how many changes it has left. Setting one is a menu you
-drive with the **D-pad and B1** — no keyboard needed. Nothing changes until you confirm, and
-the cursor starts on *Cancel*.
+!!! info "Unreleased"
+    The region tool was substantially fixed in the development build. **In v0.3.0 the change
+    is refused by some drives** — it sends the request in a form stricter drives reject — and
+    when it does work the script can still report it as an error and close before you can
+    read it. Everything below describes the fixed version; take the newer
+    `set_dvd_region.sh` if you intend to set a region.
 
-Run it with no disc playing, since the core holds the drive open while one is mounted.
+### Put a disc in the drive first
+
+!!! warning "The disc in the drive usually has to allow the region you are setting"
+    Many drives take their new region **from the disc in the tray**, the same way Windows
+    offers to switch a drive when you insert a disc from elsewhere. On such a drive the
+    change is refused outright unless a disc is loaded *and* that disc allows the region you
+    asked for. Plenty of discs allow several regions at once, so this is usually easier than
+    it sounds — but if nothing you own allows the region you want, that drive will not switch
+    to it.
+
+    Not every drive behaves this way. Some accept the change with an empty tray. The tool
+    cannot tell which kind yours is in advance, so it warns rather than refusing.
+
+**From the MiSTer:** run **set_dvd_region** from the **Scripts** menu (it is in the release
+zip; otherwise grab the `set_dvd_region.sh` asset and drop it in `/media/fat/Scripts/`).
+Setting a region is a menu you drive with the **D-pad and B1** — no keyboard needed. Nothing
+changes until you confirm, and the cursor starts on *Cancel*.
+
+The first screen tells you where you stand:
+
+```
+  DVD drive region                    /dev/sr0
+
+  Current region : 1  (US, Canada)
+  Changes left   : 3       (vendor resets: 4)
+  RPC state      : 71 fe 01   (RPC-2, region set)
+  Disc in drive  : regions 1-6,8
+```
+
+**`Disc in drive`** is the loaded disc's own region — `regions 1-6,8` above means that disc
+allows every region except 7, so it would satisfy a switch to any of them. If you pick a
+region the loaded disc bars, the confirm screen says so before you commit.
+
+#### If the drive refuses
+
+The tool prints what the drive actually said. The two common ones are about the disc, not
+about the drive being broken:
+
+| It says | What to do |
+|---|---|
+| `no disc in the drive` | Put in a disc that allows the region you want, and try again |
+| `the disc in the drive is from a different region` | Swap it for one that allows that region — `Disc in drive` on the first screen tells you what the current one allows |
+| `the drive will not accept another region change` | The drive is out of changes; nothing can be done |
+
+Every screen waits for a button before it closes, and everything it prints is also written
+to `DVD_reports/set_dvd_region.log` on the SD card (or `/tmp` if the SD card is not
+writable) — so if something goes wrong you can read what happened afterwards, and paste it
+into a bug report. The script names the file on its last line.
 
 !!! danger "A region change is close to permanent"
     Drives allow only a handful of user changes — typically five — and when the counter runs
     out the region is **locked to whatever was set last**. The counter lives in the drive's
     own firmware, so it is not reset by a different PC, a reformat, or a different operating
     system. Pick the region matching the discs you own and set it once.
-
-!!! warning "Reading is proven; setting is not"
-    Identifying a drive's region and its remaining changes has been confirmed on real
-    hardware, with one drive connected and with two. **Nobody has yet used the script to
-    actually set a region** — it does the right thing in testing, but the write has never
-    touched a real drive, because proving it costs one of a drive's permanent changes.
-
-    Reading is safe to try freely. Setting is a step into the unknown. If you take it,
-    please [open an issue](https://github.com/owenb321/MiSTer_DVD/issues) saying whether it
-    worked — you will be the first, and thank you for it.
 
 **Region codes:** **1** US/Canada · **2** Europe/Japan/Middle East/South Africa ·
 **3** SE Asia · **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia ·

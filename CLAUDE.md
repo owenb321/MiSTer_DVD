@@ -2082,19 +2082,60 @@ identifiable. Sim: `ps_demux_scram_tb`, `iec61937_wrap_tb` T8, `transport_hud_tb
 T13. Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
 
 **DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ✅ READ +
-gamepad menu HW-CONFIRMED 2026-08-31 (Scripts menu, gamepad-driven, 1 and 2 drives);
-⏳ the SET ioctl is the one remaining gate.**
+gamepad menu HW-CONFIRMED (2026-08-31, re-confirmed 2026-09-04 on the rewritten script);
+✅ **the SET path is HW-CONFIRMED 2026-09-04 too** (region 1 → 2, read back first try,
+counter 3 → 2) — after issue #52 found TWO reasons it never had been: ★★ **the command was
+MALFORMED. `pdrc` is a region MASK with one bit CLEAR (region 1 = `0xfe`), NOT the region
+number**, which as a mask claims seven playable regions. MEASURED with `sg_raw` sending the
+byte-identical command: sense **05/26/00, "invalid field in PARAMETER LIST"** — ★ *parameter
+list*, not *CDB*, which localised it to one byte of the payload in a single shot. `regionset`
+has always sent the mask (`regionset.c` `~(1 << (n-1))` → `dvd_udf.c:UDFRPCSet`). ★ **Drives DIFFER on this
+byte, which is why it survived so long:** issue #52's LG GS40N *took* the plain number (that
+user's region change succeeded — only the read-back afterwards failed), while the TSSTcorp
+rejects it. The number worked by luck on tolerant firmware; the mask is what a strict drive
+demands.** ★ **The write now goes out over SG_IO with `DVD_AUTH`
+as the fallback** — byte-identical commands, but `sr_do_ioctl` collapses every refusal into a
+bare `EIO` (Illegal Request and most Not Ready alike), so the ioctl route CANNOT say why a
+one-way operation failed. ★★ **And it earned its keep on the first run: the second reason was THE DISC IN THE TRAY.**
+Sense `05/6f/04` — a drive takes its new region from the loaded disc, which must **ALLOW**
+the region being set (measured: a disc with `RMI 40`, everything but region 7, satisfied a
+switch to region 2; an empty tray gives `02/3a/01`). ⚠⚠ **The diagnostic lesson cost two HW
+rounds and is the durable part:** the evidence read "accepted on a PC over SG_IO, refused on
+the MiSTer over the ioctl", and BOTH variables that framing offers — route and machine — were
+wrong; the cause was a third nobody had written down. Then the first correction ("take the
+disc out") was wrong TOO, because one refuting measurement was read as establishing its
+opposite. A drive that can *explain itself* outranks any amount of A/B reasoning, and `EIO`
+is all the ioctl route can ever say.
 A drive with no region set refuses the CSS title-key ioctl, so every physical disc pays a
 multi-second crack (`No drive region: cracking`); the Scripts-menu tool reads the region
 (and the remaining-change count) and can set it, via `DVD_AUTH` — no compiled helper, since
-python3 is stock on MiSTer. Two durable facts it is built around, worth knowing before
+python3 is stock on MiSTer. **Three** durable facts it is built around, worth knowing before
 writing ANY MiSTer Scripts tool: a Scripts-menu script is run by handing its bare path to
-`agetty`, so it can **never take arguments** (SSH only); and MiSTer injects uinput KEYBOARD
+`agetty`, so it can **never take arguments** (SSH only); MiSTer injects uinput KEYBOARD
 events from the gamepad while a script runs (D-pad→arrows, B1→Enter, B2→Esc) but **no digits
-or letters** — so interactive means a cursor menu, never a typed prompt. A region set is
+or letters** — so interactive means a cursor menu, never a typed prompt; and ★ **a script
+that returns quickly LOSES ITS LAST SCREEN** — `menu.cpp`'s `MENU_SCRIPTS_FB2` ignores keys
+while the script's process lives, then closes the framebuffer terminal on the first key
+**RELEASE** after it is reaped, so the press that confirms a menu erases the result of that
+press. Every exit must wait for a FRESH keypress. A region set is
 **irreversible** (no un-set, ~5 changes ever), hence cursor-starts-on-Cancel/No throughout.
-Tested by `tools/test_set_dvd_region.py` (fakes the drive, drives the menus through a pty);
-the ioctl itself is the HW gate. Design + ioctl details: `docs/physical_disc.md`.
+★★ **And the reporting rule issue #52 earned, which generalises past this tool: a failure to
+READ BACK a change is not a failure to MAKE it.** The script's unguarded re-read would hit
+the drive's post-SEND-KEY unit attention and throw an uncaught traceback over a change that
+had worked. Verification now
+re-opens the device and retries 6 × 0.5 s, an unconfirmed read reports "accepted, not yet
+reported" (exit 3) instead of failure, and only the change command itself refusing is an
+error. ★ The same round found `dvd_css.cpp:drive_region_set()` reading `region_mask` alone,
+which labels an **RPC-1 (region-free) drive** — empty mask, `rpc_scheme == 0`, no region
+enforced at all — as having no region, i.e. the best case reported as the worst; it now
+also passes on `rpc_scheme == 0`. ⏳ **That arm is UNGATED — every local drive is RPC-2, so
+it cannot run here**; what was re-checked on HW (2026-09-04) is that an RPC-2 no-region drive
+still cracks and still says so. It moves a MESSAGE only (`region_set` never picks a code
+path), and a zeroed REPORT KEY reply already read as "set" before, so it adds no new way to
+be wrong.
+Tested by `tools/test_set_dvd_region.py` (fakes the drive incl. post-change faults, drives
+the menus through a pty, **mutation-checked** 5/5, `SET_DVD_REGION_SH=` points it at another
+copy to prove RED). Design + ioctl details: `docs/physical_disc.md`.
 
 ### User bug reports arrive as sparse-sector nav bundles, not ISOs
 

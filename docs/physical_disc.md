@@ -57,6 +57,20 @@ while the core is open plays it (`dvd_phys` polls for media change).
 
 - **No drive region (RPC-II):** SG_IO REPORT KEY reports `region_mask == 0xff`; libdvdcss
   falls back to statistical cracking. Shown on screen as `No drive region: cracking`.
+  ⚠ **An RPC-1 drive reports the same empty mask and means the opposite** — it enforces no
+  region at all and answers the key exchange whatever the disc's region. `drive_region_set()`
+  read only the mask until 2026-09-04, so a region-free drive (the best case there is) was
+  labelled `No drive region: cracking` and logged as having no region set. The verdict now
+  also passes on `rpc_scheme == 0` (REPORT KEY byte 6).
+  ⏳ **The RPC-1 arm is UNGATED and cannot be gated here — every local drive reports RPC-2**
+  (the new arm is unreachable on them by construction). What WAS re-checked on hardware
+  2026-09-04 is the arm that could regress: an RPC-2 drive with no region set still cracks
+  and still says `No drive region: cracking`. The blast radius is one message: `region_set`
+  feeds the progress text and the log, never a code path, and a degenerate REPORT KEY reply
+  (status 0, buffer left zeroed) already read as "set" under the mask-only test, so the new
+  term adds no new way to be wrong. To gate it, a region-free drive is needed — the updated
+  `set_dvd_region.sh` names one on sight (`RPC state` third byte `00`), so a user can say so
+  without owning any of this.
 - **CSS-without-libdvdcss:** READ DVD STRUCTURE copyright byte detects CSS upfront; a
   deferred popup asks the user to run `install_dvdcss.sh` (immediate reads would black-screen
   on many drives). The fabric core's own `pes_scrambled` → `CSS ENCRYPTED` + mute is the
@@ -186,7 +200,7 @@ into the SCSI REPORT KEY / SEND KEY commands for RPC state:
 | | value | struct |
 |---|---|---|
 | read  | `DVD_LU_SEND_RPC_STATE` = **10** | `{type:2, vra:3, ucca:3, region_mask, rpc_scheme}` — 3 bytes, bitfields packed from the low end |
-| write | `DVD_HOST_SEND_RPC_STATE` = **11** | `{type, pdrc}` — `pdrc` is the region, 1–8 |
+| write | `DVD_HOST_SEND_RPC_STATE` = **11** | `{type, pdrc}` — ⚠ `pdrc` is a region **MASK with one bit CLEAR**, not the region number: region 1 is `0xfe`, region 2 `0xfd`. Same polarity as the `region_mask` the read returns |
 
 `sizeof(dvd_authinfo)` is 16. `region_mask` has a **clear** bit per playable region, so
 `0xff` = no region set (the same test `dvd_css.cpp:drive_region_set()` already makes over
@@ -211,6 +225,15 @@ which rules out any typed prompt; hence menus only. Consequences baked into the 
   (`popen(..., "r")`) — output only, **no stdin at all**. The script detects a non-tty stdin
   and degrades to printing status rather than blocking on input nobody can give.
 - Esc needs a ~50 ms timeout to be told apart from the start of an arrow's CSI sequence.
+- ★ **Every exit waits for a keypress, and it has to.** `MENU_SCRIPTS_FB2` ignores key
+  events while the script's process lives, then tears the framebuffer terminal down on the
+  first key **RELEASE** after it is reaped. A script that finishes inside the duration of
+  the press that confirmed it therefore has its last screen erased *by that press* — which
+  is issue #52's "spit out an error and exited faster than I could read it". Staying alive
+  until a **fresh** press spends that release on the pause instead. The pause drains
+  buffered input (auto-repeat included) for up to 2 s before waiting, or it dismisses
+  itself. This applies to any Scripts tool that prints a verdict and returns, not just
+  this one.
 
 **Safety, because a region change is irreversible.** There is no un-set: MMC has no "clear
 region" command, the code field is 1–8 with no none value, each set spends one of ~5 user
@@ -233,13 +256,144 @@ built: the drives are told apart by device node, which says nothing about which 
 unit it is, so connecting only the target drive is the reliable habit and the warning
 nudges toward it.
 
+**Issue #52 (2026-09-04): the change command itself was malformed.** ★★ **`pdrc` is a
+region MASK with one bit CLEAR, not the region number.** We sent the number, and as a mask
+`0x01` claims *seven* playable regions — so a conforming drive rejects it. MEASURED on the
+maintainer's RPC-2 drive with `sg_raw` sending the byte-identical command the kernel builds:
+
+```
+sudo sg_raw -v -s 8 -i /tmp/rpc.bin /dev/sr0 a3 00 00 00 00 00 00 00 00 08 06 00
+  Sense key: Illegal Request / Additional sense: Invalid field in PARAMETER LIST  (05/26/00)
+```
+
+★ **The sense code is what localised it in one shot**: *parameter list*, not *CDB*, so the
+command reached the drive and parsed — only byte 4 of the 8-byte payload was wrong. And
+`regionset`, which has worked on Linux for twenty years, has always sent the mask:
+`regionset.c` computes `~(1 << (n-1))` and `dvd_udf.c:UDFRPCSet()` assigns it straight to
+`ai.hrpcs.pdrc`. `region_pdrc()` now does the same.
+
+✅ **The corrected encoding is HW-PROVEN (2026-09-04):** the same `sg_raw` command with byte
+4 = `0xfe` returned **Good status** on the drive that had just rejected `0x01`, and set it to
+region 1 — one permanent change spent to learn it. ⏳ What that does NOT gate is the
+script's own path: it reaches the drive through the `DVD_AUTH` ioctl rather than raw SG_IO,
+and the kernel building the identical CDB from it is read from `cdrom.c` (`setup_send_key`
+→ `cmd[10] = type | agid<<6`, `cmd[8:9] = buflen = 8`, `buf[1] = 6`, `buf[4] = pdrc`), not
+measured. ⚠ **Do not spend the unset drive to close that gap** — it is the only local rig
+for the `No drive region: cracking` path, and a set destroys it forever.
+
+★ **Drives differ in what they accept here, which is why this survived so long.** Issue
+#52's LG GS40N **took** the plain number — the reporter's change succeeded and a PC confirmed
+the drive was regioned; what failed on that drive was only the read-back afterwards (below).
+The TSSTcorp rejects the same byte outright. So the number worked by luck on tolerant
+firmware, and the mask is the encoding that is actually correct — it is what `regionset` has
+always sent, and what a strict drive demands.
+
+**The write goes out over SG_IO, with `DVD_AUTH` as the fallback (2026-09-04).** Both
+routes carry byte-identical commands — the kernel builds this exact one from the ioctl
+(`cdrom.c`: `setup_send_key`, then `buf[1] = 6`, `buf[4] = pdrc`) — so this is not a
+correctness change but an **observability** one: `sr_do_ioctl` funnels every drive refusal
+into a bare **`EIO`** (Illegal Request *and* most Not Ready conditions alike), which is
+useless when the operation is one-way and the user needs to know why. SG_IO hands the sense
+data back, so a refusal now reads `sense 05/26/00 (invalid field in parameter list)` instead
+of `Input/output error`. The ioctl remains the fallback for a python without `ctypes` or a
+device that refuses SG_IO, so this can only add outcomes, never remove the one that worked.
+A `SenseError` is never retried on the other route — the drive explained itself, and a
+second send could spend a change.
+
+★★ **AND IT PAID FOR ITSELF IN TWO RUNS. THE DRIVE TAKES ITS NEW REGION FROM THE DISC IN
+THE TRAY.** Measured on a TSSTcorp TS-L633C, drive at region 1:
+
+| tray | asked for | answer |
+|---|---|---|
+| region-1 disc | region 1 | **Good** (this was the PC success) |
+| region-1 disc | region 2 | `05/6f/04` media region code is mismatched to logical unit region |
+| empty | region 2 | `02/3a/01` medium not present, tray closed |
+| disc with RMI `40` (allows 1-6, 8) | region 2 | **Good** — ✅ and this is the end-to-end gate |
+
+That is the Windows model — insert a foreign disc and the OS offers to switch the drive to
+match. ★ **The exact rule is that the loaded disc must ALLOW the target region, not that it
+name exactly that region**: the fourth row is a multi-region disc (`RMI 40` = every region
+but 7) and it satisfied a switch to region 2. Neither "with a disc" nor "without a disc" is
+the rule, and neither is "a disc of that region" — *allows* is.
+
+★ **The diagnostic lesson is bigger than the bug, and it bit twice.** The evidence was
+"accepted on a PC over SG_IO, refused on the MiSTer over the ioctl", and both variables that
+framing offers — route and machine — were **wrong**; the real one was a third nobody had
+written down, the disc in the tray. Then the first correction was wrong TOO ("take the disc
+out"), because a single new data point (`6f/04`) was read as the whole rule when it was one
+row of a table that needed three. ⚠ When a comparison has two obvious differences, the cause
+can still be a third — and one measurement that refutes a hypothesis does not establish its
+opposite. Everything before the sense data was inference from `EIO`, which is all the ioctl
+route can ever give you.
+
+The script now reads the loaded disc's own region (`READ DVD STRUCTURE` format 1, byte 5 =
+Region Management Information, a clear bit per allowed region), shows it beside the drive's
+(`Disc in drive  : region 2`), says on the menu that the drive follows the disc, and warns on
+the confirm screen when the chosen region is one the loaded disc cannot support — a warning,
+not a block, since other drives may not care. `6f/04`, `3a/00`, `3a/01` and `3a/02` are all
+named sense codes, so a refusal names which of the two mistakes it was.
+
+⚠⚠ **`DRIVER_SENSE` (0x08) is in the LOW nibble of `driver_status` and means the drive
+ANSWERED — sense attached — not that the transport failed.** Reading it as a transport error
+cost a hardware round: the board logged `SG_IO status 02 host 00 driver 08 sb_len 18`, i.e.
+a Check Condition with 18 bytes of sense sitting right there, and the guard threw it away
+and fell back to the ioctl, which could then only say `EIO` — the exact information the
+SG_IO route existed to recover. Classification now lives in a pure `sg_check()` precisely so
+it can be tested: a synthetic `(status 02, host 00, driver 08, sense 05/26/00)` must decode,
+and the mutation that reinstates the bug is caught by it.
+
+`sg_io_hdr` is built with `ctypes`, so it lays itself out for whatever ABI it runs on (88
+bytes on x86-64, 64 on the MiSTer's armv7). Both were checked against the C ABI rather than
+assumed — the field list reproduces `sizeof`/`offsetof` exactly on x86-64, and the armv7
+sizes come from a `_Static_assert` compiled with the MiSTer toolchain's own headers.
+
+**Reporting a change — the defect issue #52 actually hit.** On a drive that accepts the
+change, these two are what turn a success into an apparent failure. Both share one durable
+rule — **a failure to read the region back is not a failure to set it**: the SEND KEY
+either succeeded or it did not, and everything after it is reporting.
+
+- `apply_region()` re-read the drive with no `try` at all. A drive answers the command after
+  SEND KEY with a unit attention (its RPC state just changed), so that read raising is
+  *normal*, and it produced an uncaught Python traceback.
+- Even when it answered, `region_mask` can lag the change, so the old code's
+  `region == want` test printed "the drive did not take the change" about a drive that had.
+
+Now: the change is issued once and only once; verification re-opens the device (cheapest way
+to clear the unit attention) and retries 6 × 0.5 s, swallowing `OSError` between tries; a
+confirmed read says "Done"; an unconfirmed one says the change was **accepted but not yet
+reported**, tells the user not to repeat it, and exits **3** (distinct from the usage code 2
+and the genuine rejection code 1). Only `set_region()` itself raising is reported as a
+failure. A top-level handler turns any other exception into one line plus a logged
+traceback, because a traceback on a television scrolls the useful part off the screen.
+
+Also added for the next second-hand report: the status screen shows the **raw 3 RPC bytes**
+and decodes `rpc_scheme`/`type` (`RPC state : b0 ff 01   (RPC-2, region not set)`), and every
+printed line is appended to `/media/fat/DVD_reports/set_dvd_region.log` (or `/tmp` if that
+directory does not exist). `type` is a second, independent "is a region set" signal that does
+not depend on the mask having refreshed.
+
 **Testing.** The ioctl itself cannot be tested without a drive; everything guarding it can,
 and that is where the damage would be. `tools/test_set_dvd_region.py` fakes the drive
-(`DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>`, honoured by the script) and drives
-the menus through a pty using the exact key sequences MiSTer sends for a gamepad — 13
-scenarios, including "a stray B1 on entry changes nothing" and "the confirm defaults to No".
-The **read** ioctl and the gamepad-driven console are ✅ **HW-CONFIRMED 2026-08-31**; the
-**set** ioctl is the one part still ungated (see open items).
+(`DVD_REGION_FAKE=<region>:<changes>:<resets>:<scheme>[:<fault>]`, honoured by the script)
+and drives the menus through a pty using the exact key sequences MiSTer sends for a gamepad —
+21 scenarios, including "a stray B1 on entry changes nothing" and "the confirm defaults to
+No". The `<fault>` field reproduces what a real drive does around a change: `rbfail` (every
+read after the change raises), `stale` (the mask keeps reporting the old region) and
+`setfail` (the change itself refuses) — of which **only the last may be reported as a
+failure**. `SET_DVD_REGION_SH=<path>` points the suite at another copy of the script, which
+is how the issue-52 checks were proven RED against the pre-fix version. The suite is
+**mutation-checked**: five targeted mutations (unguarded read-back, no pause, unconfirmed
+called a failure, raw bytes dropped, RPC-1 treated as unset) are each caught by their own
+scenario — these are string assertions on console output, exactly the shape that passes
+without proving anything.
+
+✅ **THE WHOLE TOOL IS NOW HW-CONFIRMED (2026-09-04), READ AND WRITE.** The read ioctl and
+the gamepad-driven console were confirmed 2026-08-31 and again on the rewritten script; the
+**write** closed the same day on a TSSTcorp TS-L633C — `route: SG_IO, accepted`,
+`verify 0: 51 fd 01`, `Done. The drive is now region 2, with 2 changes left`, `ucca` 3 → 2.
+★ Two details worth keeping from that log: the drive answered the read-back **on the first
+attempt** (`verify 0`), so the 6 × 0.5 s retry is insurance rather than a routine need; and
+`disc_regions()` ran on real iron for the first time, reading `RMI 40` correctly.
 
 ## HW status / open items
 
@@ -260,23 +414,34 @@ Remaining:
    against the drive's set region (`REPORT KEY` RPC state) and show the cracking text on a
    mismatch. Needs a region-mismatched disc to verify — a second drive set to a region the
    local library does **not** match is the practical rig (see item 2).
-2. **`set_dvd_region.sh` on hardware — ✅ READ HW-CONFIRMED 2026-08-31, ⏳ SET still gated.**
-   Run from the Scripts menu and driven with a **gamepad**, with one drive connected and
-   with two: regions read correctly (an unset drive and a region-1 drive each identified),
-   and the multi-drive warning listed both. That confirms everything except the write — the
-   `DVD_AUTH` read, drive enumeration, and the uinput key injection on tty2, which was the
-   design's riskiest assumption (nothing else in the repo depends on it).
-   **Remaining: the SET ioctl** (`DVD_HOST_SEND_RPC_STATE` accepted by the drive and reading
-   back). The read path is safe to re-test freely; a **set is one-way and spends one of the
-   drive's ~5 permanent changes**, so it wants a drive you have decided to commit. Bench plan
-   is three drives — one left unset (keeps the `No drive region: cracking` path testable,
-   which a set would destroy forever), one matching the local library, one deliberately
-   mismatched as the permanent Q2 rig. `DVDCSS_METHOD=title` forces the crack path on any
-   drive if the physical unset state is not available.
-3. **Eject → idle reset (just added):** confirm the `status[0]` pulse returns to the idle
+2. **`set_dvd_region.sh` on hardware — ✅ READ HW-CONFIRMED, ⏳ SET STILL UNGATED.** Read:
+   run from the Scripts menu and driven with a **gamepad**, with one drive connected and
+   with two — regions read correctly (an unset drive and a region-1 drive each identified),
+   the multi-drive warning listed both, and (2026-09-04) the rewritten script reads and
+   pauses correctly on the board. That confirms the `DVD_AUTH` read, drive enumeration, and
+   the uinput key injection on tty2, which was the design's riskiest assumption.
+   **Write: ✅ HW-CONFIRMED 2026-09-04** — the script set a TSSTcorp TS-L633C from region 1
+   to region 2 with a disc loaded that allowed region 2, read the new region back on the
+   first attempt, and the change counter went 3 → 2. Issue #52's LG GS40N had already set its
+   region successfully on the pre-fix script (tolerant firmware, plain number accepted); the
+   corrected encoding is what makes strict drives work too.
+   A **set is one-way and spends one of the drive's ~5 permanent changes**. Bench plan for
+   the Q2 rig is still three drives — one left unset (keeps the `No drive region: cracking`
+   path testable, which a set would destroy forever), one matching the local library, one
+   deliberately mismatched. `DVDCSS_METHOD=title` forces the crack path on any drive if the
+   physical unset state is not available.
+3. **RPC-1 message arm ungated (2026-09-04):** `drive_region_set()` now treats
+   `rpc_scheme == 0` as "no region needed", but no local drive is RPC-1, so the arm has never
+   run. Needs a region-free drive — or a user's report, since `set_dvd_region.sh` now prints
+   the scheme byte. Expected on such a drive: `Preparing disc` instead of
+   `No drive region: cracking`, no "RPC-II with NO region set" line in `/tmp/dvdcss.log`, and
+   — the falsifiable part — keys actually arriving fast with the cache cleared. If it still
+   crawls VOB by VOB, key the message on measured key-fetch behaviour rather than the RPC
+   bits.
+4. **Eject → idle reset (just added):** confirm the `status[0]` pulse returns to the idle
    logo cleanly and a subsequent insert plays.
-4. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open.
-5. **libdvdcss-absent fallback:** confirm `CSS ENCRYPTED` still triggers (disc **and** ISO)
+5. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open.
+6. **libdvdcss-absent fallback:** confirm `CSS ENCRYPTED` still triggers (disc **and** ISO)
    when libdvdcss is missing.
-6. **Then** fold physical-disc + encrypted-ISO + libdvdcss into the top-level `README.md`
+7. **Then** fold physical-disc + encrypted-ISO + libdvdcss into the top-level `README.md`
    "What works" and drop the "CSS is not handled in-core" limitation — only once HW-confirmed.
