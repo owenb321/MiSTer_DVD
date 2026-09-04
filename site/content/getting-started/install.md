@@ -101,8 +101,8 @@ rather than playing static — that is your cue to run the script. (Unencrypted 
 already-decrypted images play without it, so nothing breaks if you have not got to this
 step yet.)
 
-Didn't use the zip? Download the `install_dvdcss.sh` asset and drop it in
-`/media/fat/Scripts/`.
+Didn't use the zip? `install_dvdcss.sh` lives inside it, at `Scripts/install_dvdcss.sh` —
+extract just that one file if you are placing things by hand.
 
 !!! note "Legal note"
     Cracking CSS may be regulated where you live; check the laws that apply to you. This
@@ -128,16 +128,18 @@ or grabbing a single piece:
 |---|---|
 | `MiSTer_DVD_v<version>.zip` | Everything below, laid out ready to extract to the SD root |
 | `DVD_YYYYMMDD.rbf` | The core only — enough for decrypted ISOs, VCD/SVCD and video files |
-| `MiSTer_DVDcss` | The custom Main only — physical discs and encrypted ISOs |
-| `install_dvdcss.sh` | The libdvdcss installer (also inside the zip's `Scripts/`) |
-| `set_dvd_region.sh` | Drive-region tool (also inside the zip's `Scripts/`) |
 | `dvd_report.py` | [Repro-bundle](../reference/reporting-a-bug.md) collector (also inside the zip's `Scripts/`) |
 
-!!! warning "Taking `MiSTer_DVDcss` on its own? Take `dvd_report.py` too"
+`MiSTer_DVDcss`, `install_dvdcss.sh` and `set_dvd_region.sh` are **inside the zip** and are
+not attached separately — they are only useful as part of an install.
+
+!!! note "Why `dvd_report.py` is also on its own"
     The on-player bundle chord (**Audio + Subtitle**, held) runs `dvd_report.py` rather
-    than reimplementing it, and looks for it at `/media/fat/Scripts/dvd_report.py`. The zip
-    puts it there for you; if you are placing files by hand, the chord does nothing without
-    it.
+    than reimplementing it, and looks for it at `/media/fat/Scripts/dvd_report.py`. If it
+    is missing the core says so on screen — *"Support bundle needs dvd_report.py in
+    /media/fat/Scripts/"* — so the file is attached separately for anyone following that
+    instruction, including people who installed through a third-party updater that only
+    takes the core and the Main.
 
 !!! note "Why the `.rbf` filename has a date and not a version"
     MiSTer's core browser and update scripts parse the `YYYYMMDD` out of the filename to

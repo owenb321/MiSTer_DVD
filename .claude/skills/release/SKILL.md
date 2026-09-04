@@ -124,16 +124,33 @@ would cost a second compile.
    preserves the invariant: the semver now exists in exactly one commit, so no later dev
    build can advertise a released version.
 
-## Release assets (attach all six)
+## Release assets (attach all three)
 
 | Asset | For |
 |---|---|
 | `MiSTer_DVD_v<semver>.zip` | Complete install — extracts to SD root, drops the installer into the Scripts menu |
 | `DVD_YYYYMMDD.rbf` | Core only — ISO-only users (physical disc is opt-in); most people want just this |
-| `MiSTer_DVDcss` | Custom Main only — physical discs + encrypted ISOs; needs `[DVD] main=MiSTer_DVDcss` |
-| `install_dvdcss.sh` | libdvdcss installer (also inside the zip's `Scripts/`) |
-| `set_dvd_region.sh` | DVD drive-region tool — physical-disc users (also inside the zip's `Scripts/`). Documented in `site/content/formats/physical-discs.md`; keep it that way — it shipped as an asset for a release before it appeared in any prose. |
-| `dvd_report.py` | Repro-bundle collector (also inside the zip's `Scripts/`). Ships standalone because `MiSTer_DVDcss` **shells out to it**: anyone taking the Main alone gets the Audio+Subtitle chord and nothing for it to run, and it fails silently. |
+| `dvd_report.py` | Repro-bundle collector (also inside the zip's `Scripts/`) |
+
+**The rule for what ships loose: an asset is attached separately only when something
+OUTSIDE the zip names it**, because then a user is being told to go and fetch that exact
+file. Two qualify — the `.rbf` (MiSTer's core browser and update scripts parse
+`DVD_YYYYMMDD.rbf` out of the filename) and `dvd_report.py` (the Main shells out to it and
+puts *"Support bundle needs dvd_report.py in /media/fat/Scripts/"* on screen when it is
+absent; a third-party updater may install the core and Main without any `Scripts/`).
+
+`MiSTer_DVDcss`, `install_dvdcss.sh` and `set_dvd_region.sh` are inside the zip and are
+NOT attached loose. They are only meaningful as part of an install, and shipping them a la
+carte lets someone assemble a combination nobody tested — which is how the Main once
+shipped without the script it shells out to. ⚠ Do not "helpfully" re-add them.
+
+★ **Nothing downstream consumes a loose asset.** theypsilon's `MultiDatabases/mister-dvd`
+downloader database — which `Anime0t4ku/mister-companion` installs through — pins the ZIP
+by URL, hash and size and does a `"selective"` extract of `MiSTer_DVDcss` and
+`_Other/DVD_YYYYMMDD.rbf` from it. It fetches `libdvdcss.so.2` from its own repo, not
+ours. ⚠ It also pins a specific version and the `.rbf` filename carries the build date, so
+**that db needs regenerating for every release** — it is not automatic, and it installs no
+`Scripts/` at all.
 
 ## Release notes from every PR since the previous release
 

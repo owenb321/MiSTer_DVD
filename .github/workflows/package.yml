@@ -244,25 +244,31 @@ jobs:
           zip=$(ls -t releases/MiSTer_DVD_*.zip | head -1)
           # --clobber makes re-runs idempotent. The .rbf and its manifest are
           # already on the release (the maintainer uploaded them); these are the
-          # five this workflow owns.
+          # two this workflow owns.
           #
-          # dvd_report.py ships standalone as well as inside the zip's Scripts/,
-          # because MiSTer_DVDcss SHELLS OUT to it: anyone who takes the Main on
-          # its own (the a-la-carte physical-disc path) would otherwise get the
-          # Audio+Subtitle bundle chord and no script for it to run, which fails
-          # silently. It is also the tool a reporter runs on a PC, and 30 KB is a
-          # friendlier download than the whole zip for that.
+          # ONLY the zip and dvd_report.py. The rule: an asset ships standalone
+          # when something OUTSIDE the zip names it, because then a user is being
+          # told to go and get that exact file.
+          #   * the .rbf  -- MiSTer's core browser and update scripts parse
+          #     DVD_YYYYMMDD.rbf out of the filename (uploaded by publish_draft).
+          #   * dvd_report.py -- MiSTer_DVDcss shells out to it, and when it is
+          #     absent the Main puts "Support bundle needs dvd_report.py in
+          #     /media/fat/Scripts/" on screen. That message is an instruction to
+          #     fetch this one file; the releases page has to be able to serve it.
+          # MiSTer_DVDcss and the two Scripts are NOT uploaded loose: they are
+          # only meaningful as part of an install, they are all inside the zip,
+          # and shipping them a la carte lets someone assemble a combination
+          # nobody tested. theypsilon's MultiDatabases/mister-dvd downloader db
+          # (what mister-companion installs through) consumes the ZIP by URL and
+          # selectively extracts members from it -- it references no loose asset.
           gh release upload "$TAG" --clobber \
             "$zip" \
-            main/.build/MiSTer_DVDcss \
-            main/Scripts/install_dvdcss.sh \
-            main/Scripts/set_dvd_region.sh \
             tools/dvd_report.py
           {
             echo ""
             echo "### Packaged"
             echo ""
-            echo "Attached \`$(basename "$zip")\` + \`MiSTer_DVDcss\` + 3 Scripts to **$TAG**."
+            echo "Attached \`$(basename "$zip")\` + \`dvd_report.py\` to **$TAG**."
             echo ""
             echo "Next: download, flash, smoke-test, then publish with"
             echo '```'
