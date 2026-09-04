@@ -104,9 +104,17 @@ tolerant sync separator may never see it at all.
     repaired version only steps in for a misalignment that persists, so it cannot do
     that.) The same coin flip decided whether **HDMI with `480i Deint` = `Weave`** came up
     combed on a still; that is fixed too, by a separate correction to the field flag the
-    core hands the framework scaler. Both are confirmed on hardware. Televisions differ,
-    so if a skip still leaves the picture aliased, or a still combs under Weave,
-    [please report it](../reference/reporting-a-bug.md).
+    core hands the framework scaler. Both are confirmed on hardware.
+
+    The correction now also applies **while a picture is being held** — a disc menu, an
+    authored copyright or warning card, or a paused frame. Until it did, a disc that
+    booted straight to a several-second warning screen could show that screen misaligned
+    for its whole duration and then play perfectly, because the correction only ran when
+    a new frame arrived and a held picture never delivers one. A held picture now
+    straightens itself within about half a second.
+
+    Televisions differ, so if a skip still leaves the picture aliased, or a still combs
+    under Weave, [please report it](../reference/reporting-a-bug.md).
 
 ## What changed from the old settings
 

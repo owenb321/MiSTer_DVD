@@ -338,6 +338,14 @@ module field_phase_tb;
   function clean_head(input integer i);
     clean_head = (rec_code[i] == base_code) || (rec_code[i] == base_code + 8'd1);
   endfunction
+
+  /* Invariant C for ONE field, usable live on the last closed field rather than only
+   * over a window. Same external criterion tally() uses: the source line's parity
+   * (derived from the measured base_code, not from any RTL label) must match the raster
+   * field it landed in. */
+  function mis_now(input integer i);
+    mis_now = clean_head(i) && (((rec_code[i] - base_code) & 1) != rec_vpar[i]);
+  endfunction
   task tally(input integer a, input integer b, input reg verbose);
     integer i;
     begin
@@ -417,8 +425,15 @@ module field_phase_tb;
       for (i = 0; i < n; i = i + 1) begin
         wait_flds(5);
         mem_stall = 1'b1;
+        /* ...and no new frame is ready either. A framestore stall ALONE parks the FSM in
+         * STATE_WAIT, which never reaches the persistence branch, so it did not exercise
+         * the hold arm of the corrector at all; a compute-bound core starves the queue
+         * and misses the frame together. Dropping the frame here puts the churn where
+         * BOTH arms live, so this budget guards both. */
+        output_frame_valid = 1'b0;
         repeat (2) @(negedge v_sync);
         mem_stall = 1'b0;
+        output_frame_valid = 1'b1;
       end
       wait_flds(3);
       stamp_track = 1'b1;
@@ -430,6 +445,59 @@ module field_phase_tb;
         errors = errors + 1;
         $display("[6-stutter] FAIL: %0d starvation event(s) cost %0d repeated field(s) over %0d fields (budget %0d, %0d resumed mid-picture) - the corrector is chasing starvation at field rate",
                  n, v_same, fld_n - s0, STUTTER_MAX_SAME, v_part);
+      end
+    end
+  endtask
+
+  /* Break the raster phase ON PURPOSE, whatever +phase started it at: one starved raster
+   * field displays nothing and shifts every following content field one slot. A stall can
+   * eat one field or two, so the break is NOT guaranteed — measure it and retry, and
+   * $fatal rather than run a window that proves nothing. Without this, a hold scenario
+   * keyed on the cold-start landing would be vacuous on whichever arm happens to start
+   * aligned, which is exactly why [7-post-stutter] passes on both arms today. */
+  task force_misaligned;
+    integer k;
+    begin
+      k = 0;
+      while ((k < 4) && !mis_now(fld_n - 1)) begin
+        stamp_track = 1'b0;            // a resumed field's head line is arbitrary
+        mem_stall = 1'b1;
+        repeat (2) @(negedge v_sync);
+        mem_stall = 1'b0;
+        wait_flds(3);
+        stamp_track = 1'b1;
+        k = k + 1;
+      end
+      if (!mis_now(fld_n - 1))
+        $fatal(1, "[8] SCENARIO VACUOUS: the raster phase would not break in %0d starvation event(s)", k);
+      $display("[8-setup] raster phase broken after %0d starvation event(s) - the hold below starts MISALIGNED", k);
+    end
+  endtask
+
+  /* Hold-heal window: the frame is HELD (no pickups at all), so a correction here can
+   * only have come from the persistence branch. Settle until the phase has been right for
+   * four consecutive fields (bounded by `cap`), then require NCHK clean HELD fields.
+   * Adaptive so the normal cost is PAR_CONFIRM-sized; pre-fix it burns the cap, which is
+   * the RED. The settle may spend at most ONE repeated field — that is the churn budget
+   * for this arm, the same thing STUTTER_MAX_SAME does for the pickup arm. */
+  task hold_heal(input [8*40-1:0] name, input integer cap);
+    integer s0, c0, run, s_same;
+    begin
+      s0 = fld_n;  run = 0;
+      while (((fld_n - s0) < cap) && (run < 4)) begin
+        wait_flds(1);
+        if (clean_head(fld_n - 1) && !mis_now(fld_n - 1)) run = run + 1;
+        else                                              run = 0;
+      end
+      tally(s0, fld_n, 1'b0);  s_same = v_same;
+      c0 = fld_n;  wait_flds(NCHK);  tally(c0, c0 + NCHK, 1'b1);
+      if (v_same == 0 && v_alt == 0 && v_mis == 0 && s_same <= 1)
+        $display("[%0s] PASS: healed %0d held field(s) in, at a cost of %0d repeated field(s); %0d held fields clean after",
+                 name, c0 - s0, s_same, NCHK);
+      else begin
+        errors = errors + 1;
+        $display("[%0s] FAIL: %0d misaligned, %0d repeat(s), %0d period-2 break(s) over %0d HELD fields after a %0d-field settle (settle cost %0d repeat(s), budget 1)",
+                 name, v_mis, v_same, v_alt, NCHK, c0 - s0, s_same);
       end
     end
   endtask
@@ -479,6 +547,32 @@ module field_phase_tb;
     // cadence keeps strict alternation) — the corrector must stay silent
     progressive_frame = 1; repeat_first_field = 1; film_mode = 1;
     check_window("5-film-3:2");
+
+    // [8] PERSISTENCE HOLD entered MISALIGNED — a disc-menu STILL (one I-frame, then the
+    // reader parks), a pause, or a long decode stall. STATE_REPEAT never returns to
+    // STATE_INIT while a frame is held, so the pickup-time corrector is unreachable and a
+    // hold that STARTS misaligned stayed misaligned for every held field (measured
+    // 360/360 against 0/360 for a hold entered aligned). Real symptom: a disc whose first
+    // content after the mount is a 7 s FOX/FBI warning card displays the mount's
+    // coin-flip landing — combed under Weave, jittering a line on a CRT — for the whole
+    // card, then plays clean, which reads as a disc bug and is not one.
+    // ⚠ PLACEMENT IS LOAD-BEARING: the feedback arm needs par_age == PAR_HOLD (120
+    // refreshes) and [1] is the only earlier window that spends it, so [1]'s check region
+    // plus [2]-[5] (~90 fields) put us past the budget by here. Moved earlier, [8] would
+    // sit waiting the budget out instead of measuring, and its runtime would triple.
+    progressive_frame = 0; repeat_first_field = 0; film_mode = 0; top_field_first = 1;
+    force_misaligned();                   // non-vacuous on BOTH arms, by measurement
+    output_frame_valid = 0;               // the reader parks: persistence re-scan only
+    hold_heal("8-hold-heal", 170);
+
+    // [9] the hold ends and content resumes — the no-regression guard on the insertion:
+    // the schedule and last_image must survive it, and alt_break must not thrash on the
+    // resume (which is why the correction swaps the held PAIR rather than emitting one
+    // field: the tail parity flips, so a tff=1 head lands aligned by itself).
+    // ⚠ [9] PASSES PRE-FIX — the error has held all through the hold, so the pickup arm
+    // heals it at the first pickup. [8] is the RED; do not mistake this window for it.
+    output_frame_valid = 1;
+    check_window("9-post-hold");
 
     // self-check the measurement itself: a field can only ever head on source line 0
     // or 1, so exactly two stamps may appear and they must be adjacent. Anything else

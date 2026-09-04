@@ -1,9 +1,15 @@
-# Field-parity re-engage corrector (2026-09-02, repaired 2026-09-03)
+# Field-parity re-engage corrector (2026-09-02, repaired 2026-09-03, hold arm 2026-09-04)
 
 **Status: ✅ RE-ENABLED and ✅ HW-CONFIRMED (2026-09-03, issue #41). Round 1 confirmed the
 analog CRT — "this one seems to always get the fields right on the TV", where PR #40 was a
 coin flip — and exposed an inverted `VGA_F1`; round 2 confirmed that fix
 (`DVD_parityf1_20260903_1253.rbf`). Sim gate: `bench/dvd/field_phase_tb.sv`, RED/GREEN.**
+
+🔧 **HOLD ARM (2026-09-04, branch `fix/field-parity-hold`): the corrector could not act
+while the picture was HELD — a menu still, a warning card, a pause — because its cure is
+to defer a pickup and a hold has none. Measured 360/360 held fields misaligned. Fixed by
+swapping the held pair's order for one visit; sim-proven RED/GREEN by the new
+`field_phase_tb` scenario [8], ⏳ HW-confirm pending. See "The hold gap" below.**
 
 ★ **HW ROUND 1 (2026-09-03) — the corrector is right, and it exposed an INVERTED
 `VGA_F1` (fixed; ✅ confirmed in round 2).** With the field phase now deterministic, HDMI Weave went from a coin flip to
@@ -246,6 +252,109 @@ lengthened to the feedback arm's new latency — an expectation change, not a st
 `pickup_hold_tb`, `menu_ff_tb`, `cadence_slip_tb`, `resample_persist_tb`,
 `resample_addr_realstride_tb`, `film_detect_tb`.
 
+## The hold gap (2026-09-04) — the corrector could not act while the picture was HELD
+
+★ **The blind spot was written down as a reassurance.** "Root cause" point 2 above says
+the `STATE_REPEAT` persistence re-scan "preserves strict TOP/BOTTOM alternation, so in
+steady state content parity and raster parity stay locked". That is TRUE, and it is
+exactly the problem: preserving alternation is what **freezes a bad phase**. A hold
+neither breaks a good phase nor heals a bad one, and the corrector's only cure — defer a
+pickup — needs a pickup that a hold does not have.
+
+**Reported symptom.** A disc (`RINGER_WS`) whose first content after the mount is a
+7-second FOX/FBI warning card: Weave combing on HDMI and field jitter on a CRT for the
+whole card, clean the moment the movie starts. It reads as a disc bug and is not one —
+the card is a single clean I-frame (720×480, `progressive_frame=1`, `tff=1`, `rff=0`,
+`interlaced_frame=0` per ffprobe). Its boot chain is FP → VMGM PGC 10 (1 cell,
+`still=7`) → PGC 13 (2 cells, `still=7`) → `JumpTT 22`; each cell is one I-frame and
+nothing else.
+
+**Why a still is the worst case, twice over.** It is the content most sensitive to a
+one-line error (frozen dense text — every stroke combs), and it is the state in which
+the corrector is most thoroughly disabled. `par_slip` requires `state == STATE_INIT &&
+ofv_pickup`, but `STATE_REPEAT` returns straight to `STATE_NEXT_IMG` while a frame is
+held, so `STATE_INIT` is never re-entered. For a menu still it is unreachable **by
+construction**: `mpeg2video.v`'s `freeze_wd` comment records that a still is an
+end-of-stream hold, so `output_frame_valid` is 0 — there is no frame to pick up, ever.
+So the mount's coin-flip landing is displayed, uncorrected, for as long as the still
+lasts.
+
+**Measured** (`field_phase_tb` scenario [8], cold start at the `+phase`-selected raster
+parity, ONE pickup, then a 6-second hold):
+
+| landing phase | misaligned fields during the hold | on resume |
+|---|---|---|
+| aligned | 0 / 360 | clean |
+| misaligned | **360 / 360** | heals in ~2 fields |
+
+### The fix — swap the held pair's order for one visit
+
+`par_hold_ins` in `dvd/resample_addrgen.v` reuses `par_fb` **unchanged**, so the hold arm
+inherits the whole stability contract (`PAR_CONFIRM` = 30 held-error refreshes,
+`PAR_HOLD` = 120-refresh budget) and adds *opportunities to act*, not *permissions*. The
+counters advance during a hold: `refresh_done` ticks on repeat re-scans, and the mixer
+re-latches its verdict at every held field's frame top.
+
+In the `STATE_REPEAT` image build, the pair is emitted in the other order for that one
+visit ({BOTTOM,TOP} → {TOP,BOTTOM}). The junction repeats a field — an **odd** shift of
+the content-to-slot mapping, i.e. the re-alignment — and on a frozen picture a repeated
+field is invisible, which is why this arm is cheap where the pickup-time one is not.
+
+⛔ **Not the obvious one-field form** (`image_0 <= last_image; image_1 <= NO_OUTPUT`).
+It emits an identical stream, but two things ride on the visit being a PAIR:
+
+1. `late_pair`/`late_ext` stretch `frame_late` to two cycles *because* a repeat visit is
+   two refreshes. A one-field visit on a plain decode-stall hold would bank one refresh
+   of phantom drop debt per correction — an unearned B-drop, a visible ~33 ms skip.
+2. It leaves the tail on the same parity, so a `tff=1` resume re-fires `alt_break` for a
+   phase already fixed. The pair swap flips the tail, so the resume is clean.
+
+**No `frame_late` from this arm.** The addrgen free-runs against the raster: re-ordering
+a held pair adds no raster field, no image scan and no STC tick (`av_refresh_tick` comes
+from `core_v_sync`, not from this schedule). Nothing was retarded, unlike a deferred
+pickup. Pulsing it would also land one clock after a `STATE_REPEAT` cycle — where
+`late_ext` asserts — and since `frame_late` is an OR of pulses the two would merge and
+*under*-bank a real late.
+
+**Both counters clear on the insertion.** This is the anti-double-correction mechanism,
+not hygiene: the verdict is 1–2 refreshes + a CDC stale, so clearing only `par_cnt` lets
+the first `STATE_INIT` after the hold fire `par_fb` again on the same error and re-break
+the phase it just fixed.
+
+**Exclusions.** `~hold_freeze`: a clip-load hold belongs to the *outgoing* clip, and
+spending the 120-refresh budget there could delay the incoming clip's correction by up to
+2 s — the exact latency `par_age`'s saturated reset exists to avoid. `repeat_cnt == 0`
+keeps the decoder's native freeze/slow-motion path bit-identical. `pause` is deliberately
+**allowed**: a paused still is precisely when someone is staring at the comb, and
+`av_sync` freezes the STC under pause anyway.
+
+⛔ Also rejected: routing the hold through `STATE_INIT` (no valid frame — it parks there,
+the pixel queue drains and the mixer goes BLACK, the failure `hold_freeze` was written to
+prevent); re-picking-up the held frame (re-latches `cur_show` and fires the pickup into
+`vid_content_refr` for a frame that never advanced, corrupting `vid_err` and the drop
+reclaim to fix a cosmetic phase); an emu-side "a still is starting" hint (the error is
+only observable *after* the first field displays, by which time the reader has parked).
+
+### Gate — scenario [8], and a coverage gap it exposed in [6]
+
+`[8-hold-heal]` breaks the phase deliberately, then holds. ★ **`force_misaligned()`
+MEASURES the break and retries rather than assuming it**: a stall can eat one field or
+two, so a hold scenario keyed on the cold-start landing would be vacuous on whichever
+`+phase` arm happened to start aligned — which is precisely why `[7-post-stutter]` passes
+on both arms today. It `$fatal`s rather than run a window that proves nothing. The settle
+may spend at most ONE repeated field (this arm's churn budget), then `NCHK` **held**
+fields must be clean. `[9-post-hold]` guards the resume — and **passes pre-fix**, so it
+must not be mistaken for the RED.
+
+⚠ **`[6-stutter]` did not guard the new arm at all.** Its `mem_stall` parks the FSM in
+`STATE_WAIT`, which never reaches the persistence branch. It now drops
+`output_frame_valid` for the duration of each stall — a compute-bound core starves the
+queue and misses the frame together — so the churn budget covers both arms.
+
+⚠ Scenario placement is load-bearing: the feedback arm needs `par_age == PAR_HOLD`, and
+`[1]` is the only earlier window that spends it, so `[8]` sits after `[5]` where ~120
+refreshes have elapsed. Moved earlier it would wait the budget out instead of measuring.
+
 ## Consequences for the HW symptom
 
 - Chapter skip / FF / seek: the feed-forward guard aligns the first field of the new
@@ -254,6 +363,10 @@ lengthened to the feedback arm's new latency — an expectation change, not a st
   (~33 ms) of the first misaligned frame-top.
 - The "toggle Analog Out 3–4 times" ritual is obsolete; a mode toggle still works but
   is never needed.
+- Menu stills, authored warning cards and pause (2026-09-04): a hold entered misaligned
+  now heals ~0.5 s in (`PAR_CONFIRM`) instead of staying wrong for the whole hold. A
+  mount whose first content is a several-second still — the case that made this look
+  disc-specific — is the one that needed it.
 
 ## Files
 
@@ -262,7 +375,8 @@ lengthened to the feedback arm's new latency — an expectation change, not a st
 - `rtl/mpeg2/mpeg2video.v` — gate + `sync_reg` CDC + routing
 - `rtl/mpeg2/resample.v` — pass-through
 - `dvd/resample_addrgen.v` — the corrector (`alt_break` / `par_fb` / `par_armed` /
-  `pickup_go` / the insertion branch)
+  `pickup_go` / the insertion branch), and the hold arm (`par_hold_ins` / the pair swap
+  in the `STATE_REPEAT` image build)
 - `bench/dvd/field_phase_tb.sv`, `bench/dvd/run_field_phase.sh` — **the gate**
 - `bench/dvd/field_parity_tb.sv`, `bench/dvd/run_field_parity.sh` — the alignment view
   (kept, but it agrees with the RTL by construction: see the caveat above)
