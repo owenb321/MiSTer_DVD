@@ -858,4 +858,19 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # is the point: the old form ANDed a one-cycle pulse with two live status signals, so those
 # nets had to reach the mount-watchdog block combinationally. Latching the event first cuts
 # that path -- which is also why clk_dec picked up ~4.5 MHz.
+# 2026-09-04 (fix/field-parity-hold -- resample_addrgen.v only: par_hold_ins lets the
+# field-parity feedback arm act from inside the STATE_REPEAT persistence re-scan, by
+# emitting the held field pair in the other order for one visit): SEED 5 held FIRST roll --
+# clk_dec 91.72 @100C / 87.62 @-40C (gate 86.0, PASS both corners) at 90% ALM (37,902),
+# RAM 498/553 and DSP 92/112 both UNCHANGED. TWENTY-SECOND consecutive first-roll fit.
+# Build DVD_holdparity_20260904_1902.rbf (4361 KB).
+# ★ 15 ALMs SMALLER than the previous entry despite adding a wire and two mux inputs -- fit
+# noise, not a real reduction; do not read it as the change being free. What IS worth
+# knowing is the other column: clk_dec fell 96.90 -> 91.72 @100C, the largest single-round
+# drop the recent ledger records, and the mechanism is visible in the diff. par_hold_ins is
+# qualified on `next`, so the next-state cone now sits combinationally in front of the
+# image_0/image_1 schedule registers and the par_cnt/par_age counters, which previously saw
+# only `state` and `last_image`. Still 5.7 MHz of margin over the gate, so it ships -- but if
+# a later round on this file lands under 86, this is the term to look at first, and the cheap
+# fix is to register par_hold_ins one cycle rather than to re-roll seeds.
 set_global_assignment -name SEED 5
