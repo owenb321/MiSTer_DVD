@@ -114,6 +114,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_pci.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_dsi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/scrub_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dpad_seek.sv
+# DVD-FORK (issue #35): keyboard / TV-remote transport. See docs/dvd_nav.md
+# "Keyboard / CEC input".
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/kbd_map.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/lin_rate.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/seek_time.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/secs_bcd.sv
@@ -820,4 +823,16 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ★ The cold corner RECOVERED to 93.11 from the 87.84 of the previous netlist, which the
 # 2026-09-03h entry had flagged as the thinnest margin in this ledger -- more evidence that
 # 87.84 was fit variance rather than anything structural, since this build ADDS logic.
+# 2026-09-04 (feature/keyboard-controls, issue #35 -- dvd/kbd_map.sv added: a combinational
+# scancode->one-hot case plus one 17-bit pulse register and a toggle latch, and emu.sv's
+# joy_eff OR/mask feeding the existing button wires and edge detectors; the dpad_seek `en`
+# gate moved onto the four D-pad edges): SEED 5 held FIRST roll -- clk_dec 92.70 @100C /
+# 90.14 @-40C (gate 86.0, PASS both corners) at 90% ALM (37,653), RAM 498/553 and DSP 92/112
+# both UNCHANGED from the previous entry. NINETEENTH consecutive first-roll fit.
+# Build DVD_kbdmap_20260904_0226.rbf (4326 KB).
+# ★ Essentially ALM-neutral against the timeline netlist (37,846 -> 37,653, i.e. slightly
+# SMALLER): the decoder is a case statement and 18 flops, and it ADDED no consumers -- every
+# button wire, edge detector and the D-pad seek path already existed and simply re-source
+# from joy_eff. That is the fit evidence for the design claim that OR-ing into one vector
+# costs nothing over parallel pulse plumbing.
 set_global_assignment -name SEED 5

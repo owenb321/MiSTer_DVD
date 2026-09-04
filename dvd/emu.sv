@@ -566,7 +566,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-main"
+`define CORE_VERSION "dev-keyboard"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -796,13 +796,17 @@ parameter CONF_STR = {
     // migration, so audit the index-0 label of every option when bumping.
     "v,2;",   // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
-    // disc-menu nav (Phase 2). The J1 list names buttons B1..B11 for the MiSTer
-    // "Define buttons" menu (bits 4..14 of joystick_0; D-pad = bits 3:0). The
+    // disc-menu nav (Phase 2). The J1 list names buttons B1..B13 for the MiSTer
+    // "Define buttons" menu (bits 4..16 of joystick_0; D-pad = bits 3:0). The
     // HOLD-to-seek time scrub (accelerating 10->30->60->120 s via
     // dvd/scrub_ctrl.sv) rides its OWN buttons B10 "Fast Fwd" / B11 "Rewind"
     // while a TITLE plays, so the D-pad is ALWAYS free for directional
     // navigation (menu/game button walk) and never conflicts with a game that
     // wants left/right input over seekable video. See docs/dvd_nav.md.
+    // ⚠ These names are ALSO the "Define buttons" prompt list (Main walks this
+    // string, capped at 28 names), so the order is user-visible -- and MiSTer
+    // will NOT bind Enter or Esc to any of them (issue #35). dvd/kbd_map.sv
+    // gives every one of them a built-in key that bypasses that mapper.
     "J1,Pause,Prev Chapter,Next Chapter,Select,Menu,Angle,Audio,Subtitle,Display,Fast Fwd,Rewind,Title,Return;",
     "V,",`CORE_VERSION," ",`BUILD_DATE,";"
 };
@@ -1242,25 +1246,63 @@ wire hud_dbg   = status[2];                         // O[2]: HUD shows reader PG
 wire dpad_seek_en = status[45];                     // O[45]: D-pad fixed-time seek
 // effective subpicture routing/decode enable: subtitles OR a menu is up
 wire sp_route_en;                                  // (assigned at the SPU block)
-wire joy_pause = joystick_0[4];                    // B1 "Pause"
-wire joy_next  = joystick_0[6];                    // B3 "Next Chapter"
-wire joy_prevc = joystick_0[5];                    // B2 "Prev Chapter"
-wire joy_sel   = joystick_0[7];                    // B4 "Select"
-wire joy_menu  = joystick_0[8];                    // B5 "Menu"
-wire joy_angle = joystick_0[9];                    // B6 "Angle"
-wire joy_audio = joystick_0[10];                   // B7 "Audio"     (Phase 10)
-wire joy_sub   = joystick_0[11];                   // B8 "Subtitle"  (Phase 10)
-wire joy_disp  = joystick_0[12];                   // B9 "Display"   (Phase 11 HUD)
+// =========================================================================
+// KEYBOARD / TV-REMOTE TRANSPORT (2026-09-03, issue #35)
+// =========================================================================
+// dvd/kbd_map.sv turns the framework's ps2_key stream into a VIRTUAL JOYSTICK
+// VECTOR in joystick_0's own bit order, and joy_eff below is what every button
+// wire, edge detector and consumer in this file reads from here on. So a key
+// and a gamepad button are the same signal by the time anything acts on them --
+// no parallel pulse plumbing, and no consumer had to change.
+//
+// ★ OR-ing CANNOT DOUBLE-FIRE. Main hands a key to the joystick mapper OR to
+// the PS/2 stream, never both: input.cpp:3807-3821 matches the user's Define-
+// buttons map and RETURNS, so the scancode is never sent. A user's own mapping
+// therefore shadows our built-in one, which can only ever fire on keys that
+// would otherwise have done nothing. (Enter and Esc are the exception that
+// motivated the feature -- Main refuses to bind those two at all, so our
+// bindings for them always apply. See dvd/kbd_map.sv's header, and issue #35.)
+//
+// ★ kbd_joy[14:13] (Fast Fwd / Rewind) ARE MASKED OUT HERE. They are the only
+// LEVEL consumers in the design (scrub_ctrl's held_right/held_left) and a
+// keyboard-like device cannot drive a level safely -- a tap-repeating IR remote
+// turns a held button into ~9 complete seek gestures a second, and a swallowed
+// release freezes the picture. They go to dvd/dpad_seek.sv instead (+/-10 s per
+// press, coalescing into ONE seek), wired at the dpad_seek instance below. The
+// gamepad's hold-to-scrub is untouched. Full reasoning: dvd/kbd_map.sv header.
+wire [16:0] kbd_joy;
+
+kbd_map kbd_map_inst (
+    .clk     (clk_sys),
+    .rst_n   (reset_n),
+    .ps2_key (ps2_key),
+    .joy     (kbd_joy)
+);
+
+wire [31:0] joy_eff = joystick_0 | {15'd0, (kbd_joy & ~17'h0_6000)};
+
+wire joy_pause = joy_eff[4];                       // B1 "Pause"
+wire joy_next  = joy_eff[6];                       // B3 "Next Chapter"
+wire joy_prevc = joy_eff[5];                       // B2 "Prev Chapter"
+wire joy_sel   = joy_eff[7];                       // B4 "Select"
+wire joy_menu  = joy_eff[8];                       // B5 "Menu"
+wire joy_angle = joy_eff[9];                       // B6 "Angle"
+wire joy_audio = joy_eff[10];                      // B7 "Audio"     (Phase 10)
+wire joy_sub   = joy_eff[11];                      // B8 "Subtitle"  (Phase 10)
+wire joy_disp  = joy_eff[12];                      // B9 "Display"   (Phase 11 HUD)
 // Dedicated seek buttons: the HOLD-to-seek time scrub lives on its OWN buttons
 // (B10 Fast Fwd = seek forward, B11 Rewind = seek backward) so the D-pad is
 // never claimed by the scrub. This keeps left/right free for directional menu /
 // game navigation even when the underlying video is seekable (the conflict this
 // split resolves). scrub_ctrl reads the HELD levels; ff_edge/rew_edge below only
 // clear pause when a scrub begins.
-wire joy_ff    = joystick_0[13];                   // B10 "Fast Fwd" (held scrub fwd)
-wire joy_rew   = joystick_0[14];                   // B11 "Rewind"   (held scrub bwd)
-wire joy_title = joystick_0[15];                   // B12 "Title"    (VMGM Top Menu)
-wire joy_ret   = joystick_0[16];                   // B13 "Return"   (GoUp)
+// ⚠ GAMEPAD-ONLY BY CONSTRUCTION: joy_eff masks kbd_joy[14:13] out, so a
+// keyboard/remote can never assert these two LEVELS -- its Fast Fwd/Rewind keys
+// go to dpad_seek instead (see the joy_eff comment above).
+wire joy_ff    = joy_eff[13];                      // B10 "Fast Fwd" (held scrub fwd)
+wire joy_rew   = joy_eff[14];                      // B11 "Rewind"   (held scrub bwd)
+wire joy_title = joy_eff[15];                      // B12 "Title"    (VMGM Top Menu)
+wire joy_ret   = joy_eff[16];                      // B13 "Return"   (GoUp)
 wire pause_edge = joy_pause & ~joy_prev[4];
 // Phase 8: B2/B3 = CHAPTER prev/next (program_map); B10/B11 (Fast Fwd/Rewind) =
 // HOLD-to-seek TIME SCRUB (dvd/scrub_ctrl.sv, accelerating 10->30->60->120 s the
@@ -1301,10 +1343,10 @@ wire ret_edge   = joy_ret   & ~joy_prev[16];       // Return press  (GoUp)
 // dvd/dpad_seek.sv for VLC-style fixed-time jumps -- but only where the nav
 // layer has NOT claimed them (see the menu_nav / in_title_menu gates below),
 // so the no-conflict property above is preserved by construction.
-wire up_edge    = joystick_0[3] & ~joy_prev[3];
-wire dn_edge    = joystick_0[2] & ~joy_prev[2];
-wire lf_edge    = joystick_0[1] & ~joy_prev[1];
-wire rt_edge    = joystick_0[0] & ~joy_prev[0];
+wire up_edge    = joy_eff[3] & ~joy_prev[3];
+wire dn_edge    = joy_eff[2] & ~joy_prev[2];
+wire lf_edge    = joy_eff[1] & ~joy_prev[1];
+wire rt_edge    = joy_eff[0] & ~joy_prev[0];
 
 // nav_pci interface (Phase 3)
 wire        hl_btns_armed;
@@ -1383,7 +1425,7 @@ always @(posedge clk_sys or negedge reset_n) begin
         key_title_p  <= 1'b0;
         key_return_p <= 1'b0;
     end else begin
-        joy_prev     <= joystick_0;
+        joy_prev     <= joy_eff;
         seek_pulse   <= 1'b0;             // default: one-cycle pulses
         chap_pulse   <= 1'b0;
         angle_pulse  <= 1'b0;
@@ -1401,7 +1443,12 @@ always @(posedge clk_sys or negedge reset_n) begin
         else if (pause_edge)      pause_q <= ~pause_q;
         // a title-mode Fast Fwd/Rewind time scrub resumes playback (the scrub FSM
         // below issues the actual seek_rbn)
-        else if ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu && (ff_edge || rew_edge)) pause_q <= 1'b0;
+        // A KEYBOARD Fast Fwd/Rewind press must resume too, and it needs its own
+        // term: kbd_joy[14:13] are masked out of joy_eff (so ff_edge/rew_edge
+        // never see them) and the D-pad clause below is gated on O[45], which a
+        // dedicated seek key is deliberately NOT.
+        else if ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu &&
+                 (ff_edge || rew_edge || kbd_joy[13] || kbd_joy[14])) pause_q <= 1'b0;
         // a D-pad fixed-time seek likewise resumes playback (dvd/dpad_seek.sv
         // issues the jump when the coalesce window closes)
         else if (dpad_seek_en && (cell_ready || lin_seek_ok_w) && !menu_active &&
@@ -1660,7 +1707,13 @@ dpad_seek dpad_seek_inst (
     .clk            (clk_sys),
     .rst_n          (reset_n),                  // NOT pipe_rst_n: the gesture
                                                 // must survive its own seek
-    .en             (dpad_seek_en),
+    // ★ `en` is read in exactly ONE place inside dpad_seek
+    // (seek_ok = en && in_title && (dvd_mode || lin_mode)), so the O[45] gate is
+    // applied to the D-PAD EDGES instead and the module needs no change. That is
+    // what lets the keyboard's Fast Fwd/Rewind keys in unconditionally:
+    // O[45] exists solely to stop the D-PAD fighting a game disc that wants
+    // directional input, and a dedicated Fast Fwd key has no such conflict.
+    .en             (1'b1),
     .in_title       ((cell_ready || lin_seek_ok_w) && !menu_active &&
                      !in_title_menu && !menu_nav),
     .dvd_mode       (cell_ready),               // DSI tables available
@@ -1670,10 +1723,15 @@ dpad_seek dpad_seek_inst (
     // zero step through, so a tap in the ~0.5 s before the estimate arms does
     // nothing instead of firing a jump resolved against nothing.
     .lin_mode       (lin_mode_w && lin_blk10_ok_w),
-    .up_edge        (up_edge),
-    .dn_edge        (dn_edge),
-    .lf_edge        (lf_edge),
-    .rt_edge        (rt_edge),
+    .up_edge        (dpad_seek_en & up_edge),
+    .dn_edge        (dpad_seek_en & dn_edge),
+    // Keyboard/remote Fast Fwd + Rewind ride the COALESCING fixed-time path
+    // rather than scrub_ctrl's hold-to-scrub: a tap-repeating IR remote turns a
+    // held button into ~9 complete seek gestures a second, and a swallowed
+    // release freezes the picture. Here the same burst builds ONE jump.
+    // (dvd/kbd_map.sv header carries the measurements.)
+    .lf_edge        ((dpad_seek_en & lf_edge) | kbd_joy[14]),   // Rewind   key = -10 s
+    .rt_edge        ((dpad_seek_en & rt_edge) | kbd_joy[13]),   // Fast Fwd key = +10 s
     .cancel         (jump_ack | chap_pulse | start_streaming | hold_freeze),
     .nav_flush      (load_flush),               // nav_dsi's own reset condition
     .dsi_commit     (dsi_commit),
@@ -1748,7 +1806,7 @@ always @(posedge clk_sys) begin
         sec_tick <= 1'b0;
     end
 end
-wire vm_entropy_stir = |(joystick_0 ^ joy_prev);   // any gamepad edge = user timing
+wire vm_entropy_stir = |(joy_eff ^ joy_prev);      // any gamepad/key edge = user timing
 // Seed = mount-instant counter XOR the wall clock (both halves of it, so a
 // 16-bit seed still moves with the high word). srand(time()) parity.
 wire [15:0] vm_rnd_seed = entropy_ctr[15:0] ^

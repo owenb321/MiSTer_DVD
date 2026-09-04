@@ -801,6 +801,159 @@ interactive cell** instead of falling off the end.
   group 1). Still deferred: `btn_se_e_ptm` auto-deselect + CHG_COLCON, JumpTT
   unresolved (needs TT_SRPT-at-jump; Phase 4/6).
 
+## Keyboard / CEC input
+
+Two independent decoders share the `ps2_key` scancode space, and keeping them disjoint is
+a standing constraint: the **digit** path below (menu button by number, shipped 2026-07-27)
+and the **transport** map in `dvd/kbd_map.sv` (issue #35, 2026-09-03).
+
+### Transport: `dvd/kbd_map.sv` — ✅ HW-CONFIRMED 2026-09-04
+
+Confirmed on the board (build `DVD_kbdmap_20260904_0226.rbf`): the issue #35 case itself
+(`Enter` activates the highlighted button in a disc menu with no Define-buttons mapping in
+place), menu navigation and the transport keys, the keyboard 10 s seek, and the **gamepad
+unregressed** — that last one being the only gate the `joy_eff` substitution has, since
+there is no emu-level bench. ⏳ Still ungated: **HDMI-CEC** (the maintainer's board cannot
+run CEC at all, see the ⚠⚠ note below) and the **tap-repeating IR remote burst** (no
+receiver available; covered in sim by `dpad_seek_tb` T19a).
+
+**Why it exists.** MiSTer's own *Define buttons* already maps keys onto a core's `J1`
+buttons, so a built-in keymap looks redundant — until you find that **Main refuses to bind
+`Enter` or `Esc` to any button at all.** `input.cpp:3276` guards the capture block with
+`!((mapping_type < 2 || !mapping_button) && (cancel || enter))`, and a keyboard session is
+`mapping_type == 0` (`input.cpp:3353`), so those two keys are excluded for *every* button.
+They are not merely dropped, either: `Enter` is the OSD's own confirm key, so it reaches
+`menu.cpp:4419` (`else if (select || menu || …) finish_map_setting(...)`) and **ends and
+saves the mapping session** — which is exactly why a user reports that it "registered" and
+then does nothing. `start_map_setting()` even calls `user_io_kbd(KEY_ENTER, 0)` to un-stick
+Enter on entry (`input.cpp:1772`), confirming which key drives that UI.
+
+★ **That was the whole of issue #35**, and it was reproduced on a stock MiSTer with a plain
+USB keyboard: a mapped `Enter` does not activate a highlighted DVD-menu button while the
+gamepad's own Select does, in the same menu. The disc and the core were both blameless. It
+matters far beyond one report — on a console dock remote `OK` and `Exit` **are** Enter and
+Esc, i.e. its two most important buttons are precisely the two MiSTer will not map.
+
+★ **And for HDMI-CEC this is the only path that exists.** Main injects CEC button presses as
+KEYBOARD events (`hdmi_cec.cpp:290-319`) and never runs them through the joystick mapping,
+so before this a TV remote could drive nothing here except menu digits. The key choices are
+therefore led by CEC's fixed table, which is the constrained resource; keyboard aliases
+follow DVD-remote/VLC convention afterwards.
+⚠ **CEC's own Root Menu / Exit is unreachable and cannot be fixed here:** it maps to
+`menu_present() ? KEY_BACK : KEY_MENU`, and `menu_present()` means "the OSD is on screen
+right now" (`menu.cpp:8137`) — so during playback it is `KEY_MENU`, which Main eats as the
+OSD toggle, while `KEY_BACK` has `NONE` in the PS/2 table. Hence Menu/Title/Audio/Subtitle
+ride the CEC **colour keys** (`F1`–`F4`). Verified against `hdmi_cec.cpp` as of 2026-09.
+
+⚠⚠ **CEC IS NOT AVAILABLE ON EVERY BOARD, AND THE MAINTAINER'S IS ONE IT FAILS ON — do NOT
+treat it as a supported path or gate this feature on it.** MEASURED 2026-09-04: I2C to the
+ADV7513 is fine (no `main register setup failed`), but the clock probe reports
+`clock probe TX elapsed=150 finished=0` → `CEC: no clock detected.` → `CEC: init failed.`
+The chip's CEC transmitter never completes a frame, i.e. its CEC engine has no working clock
+(or the CEC line is not routed/pulled up, so arbitration never sees the bus idle). Either
+way it is a board fact, not a configuration one.
+⛔ **`hdmi_cec_clock=` DOES NOT FIX IT — and that wrong suggestion was already made once.**
+`cec_detect_clock` takes the ini value as `proposed_clock` and only consults it in the
+`else if (proposed_clock)` branch (`hdmi_cec.cpp:559`), which is reached **after** a
+successful probe TX. A failing probe fails identically whatever is configured: the setting
+picks *between* clock rates once the engine is known to run, it cannot start one.
+★ It fails CLEANLY, worth knowing before anyone chases a startup hang: `cec_can_try` is set
+true only *after* `cec_clock()` succeeds (`hdmi_cec.cpp:1060`), so a clock failure prints
+`CEC: init failed.`, sets `cfg.hdmi_cec = 0` and gives up — no 3 s retry loop, just a one-off
+~300 ms probe. `hdmi_cec=0` skips even that.
+★★ **The recommended remote route is a USB IR receiver that presents as a HID keyboard**
+(Flirc, a generic MCE dongle, or a console dock's own receiver): no CEC, no ini, and it lands
+on exactly the `ps2_key` path this module already decodes. The manual leads with that and
+files CEC under "worth trying".
+⚠ **Main discards its own log by default** (`cfg.cpp:452`:
+`stdout = (cfg.debug == 2) ? debug_file : cfg.debug ? orig_stdout : dev_null`), so any CEC
+diagnosis starts with `debug=2` under `[MiSTer]` and reading `/tmp/debug.txt`. Raw button
+codes are logged **only in the menu core** (`if (is_menu())`, `hdmi_cec.cpp:276`), so "is the
+TV sending anything at all?" has to be tested from the MiSTer main menu, not from inside the
+player.
+
+**Shape.** `kbd_map` emits a 17-bit vector in `joystick_0`'s own bit order and `emu.sv` ORs
+it in: `joy_eff = joystick_0 | {15'd0, kbd_joy & ~17'h0_6000}`. Every button wire, edge
+detector, the chapter debounce, the menu walk, the HUD and `vm_entropy_stir` then read
+`joy_eff`, so a key and a gamepad button are the same signal by the time anything acts on
+them and **no consumer had to change**. Four substitution sites, of which
+`joy_prev <= joy_eff` is the one that silently breaks everything if missed (a pulse would
+produce a phantom edge every cycle it is high).
+
+★ **OR-ing cannot double-fire**, which is what makes this safe: Main hands a key to the
+joystick mapper *or* to the PS/2 stream, never both — `input.cpp:3807-3821` matches the
+user's map and **returns**, so the scancode is never sent. A user's own mapping therefore
+shadows the built-in one, which can only fire on keys that would otherwise have done
+nothing. Enter and Esc are the exception that motivated the feature, and they can never be
+shadowed because they can never be mapped.
+
+★ **Every bit is a one-cycle PULSE; there is no level anywhere in the module.** Main drops
+keyboard auto-repeat (`user_io.cpp:4059`, `if (press > 1 && !use_ps2ctl) return;` — this
+core does not set `use_ps2ctl`), so a held key is one make and one break and a level would
+buy nothing except failure modes. A lost release becomes a non-event, and a stuck key is
+structurally impossible. (An all-levels design has a subtler trap too: a stuck bit swallows
+the *next* press, because there is no rising edge left to detect, and the key looks dead.)
+
+★★ **`[14:13]` Fast Fwd / Rewind are masked out of `joy_eff` and go to `dvd/dpad_seek.sv`,
+not to `dvd/scrub_ctrl.sv`'s hold-to-scrub.** They are the design's only LEVEL consumers
+(`scrub_ctrl.sv:84`), and a keyboard-like device cannot drive a level safely, for two
+reasons that are measured rather than argued:
+
+1. **Tap-repeating IR remotes turn a hold into a burst of seeks.** Retro Remake's SuperDock
+   receiver firmware (`Retro-Remake/DockIR`, `src/main.c`) sends `key-down → 80 ms →
+   key-up` **per NEC repeat frame**, ~110 ms apart — a long press is ~9 discrete taps a
+   second, not a hold. `scrub_ctrl`'s accumulate tick is 60 ms (`TICK = 1_620_000` @
+   27 MHz), so an 80 ms tap leaves `pending_off != 0` and *every* release issues a real
+   seek: ~9 flush/re-locks per second, precisely the regime HW rounds 1-2 recorded as fatal
+   (headers of `scrub_ctrl.sv` and `dpad_seek.sv`). Under coalescing the identical burst
+   builds ONE jump — `dpad_seek_tb` **T19a** replays it and measures exactly one `jump_fire`.
+2. **A stuck level hangs the picture.** `held_right` stuck with `in_title` leaves `want`
+   high forever → `hold_freeze` → frozen video with the bar up and no seek issued (the seek
+   happens on *release*), and the reflex recovery — tap it again — delivers a break with
+   `pending_off` already ramped to the title span, i.e. **one seek straight to the end of
+   the title**.
+
+The gamepad's hold-to-scrub is untouched: neither `scrub_ctrl.sv` nor `dpad_seek.sv` is
+modified by this feature. `dpad_seek`'s `en` is read in exactly one place
+(`seek_ok = en && in_title && (dvd_mode || lin_mode)`, `dpad_seek.sv:170`), so `emu.sv` ties
+it to 1 and applies the `O[45]` gate to the four **D-pad edges** instead, leaving the
+keyboard's Fast Fwd/Rewind ungated — `O[45]` exists solely to stop the *D-pad* fighting a
+game disc that wants directional input, and a dedicated seek key has no such conflict.
+Keyboard seek needs a `kbd_joy[13]|kbd_joy[14]` term of its own in the pause-clear chain,
+for the same two reasons (masked out of `joy_eff`, and not gated on `O[45]`).
+⚠ Known gap: `dpad_seek` needs DSI tables or a measured linear rate, so keyboard seek is
+inert on a bare `.m2v` where the gamepad scrub still works.
+
+**Keymap.** PS/2 **set 2** throughout (what Main sends — confirmed by the digit decoder
+below): arrows `E0 75/72/6B/74`; `Enter 5A` and `E0 5A` → Select; `Space 29` → Pause;
+`E0 7D`/`P 4D` → Prev Chapter; `E0 7A`/`N 31` → Next Chapter; `F1 05`/`M 3A`/`X 22` → Menu;
+`G 34` → Angle; `F3 04`/`A 1C` → Audio; `F4 0C`/`S 1B` → Subtitle; `D 23` → Display;
+`Tab 0D`/`F 2B` → Fast Fwd; `Backspace 66`/`R 2D` → Rewind; `F2 06`/`T 2C` → Title;
+`Esc 76`/`B 32` → Return. `X` is bound to Menu because it is the SuperDock remote's only
+spare key and that remote's own Menu button is `F12` = the MiSTer OSD. `Esc` is bound
+deliberately: CEC's real back button is unreachable, so without it a CEC user has no way up
+a menu level, and GoUp is a harmless no-op where the disc authors no parent.
+
+⚠ **Never bind**, all verified against Main: `F12` (`07`) and `KEY_MENU` (OSD toggle),
+`KEY_PAUSE` (`E1`, no break code at all), `KEY_SYSRQ`, NumLock/ScrollLock (Main's
+`EMU_SWITCH_1/2`), Alt/Meta.
+
+⚠ **The extended bit is load-bearing.** Six of the codes above are bit-identical to numpad
+digits and differ ONLY by the `E0` prefix — `75`/numpad-8, `72`/numpad-2, `6B`/numpad-4,
+`74`/numpad-6, `7D`/numpad-9, `7A`/numpad-3. The digit block requires `!ps2_key[8]`;
+`kbd_map` requires `ps2_key[8]` for exactly those six. `5A` is the one code accepted with
+either polarity (Enter and KP-Enter both mean OK). **Digits are not decoded in `kbd_map` at
+all** — all twenty scancodes belong to the digit path, and binding them twice would make one
+keypress do two things.
+
+**Gate: `bench/dvd/run_kbd.sh`.** `kbd_map_tb` is mutation-checked — five targeted RTL
+mutations (level-instead-of-pulse, numpad-8 leak, fire-on-break, digit leak, Esc unbound)
+are each caught by their own scenario, because level assertions on a decoder are exactly the
+shape that passes without proving anything. `dpad_seek_tb` T19a/T19b own the IR-burst
+routing. `scrub_ctrl_tb` must pass **completely unchanged** — that is the gate proving the
+gamepad scrub was not touched. ⚠ `emu.sv`'s `joy_eff` substitution has **no** simulation
+gate (there is no emu-level bench); it is review-only plus Quartus elaboration.
+
 ### Numpad input: keyboard digit = select+activate — ✅ HW-CONFIRMED (PR fj#134)
 
 The DVD-remote **number-key shortcut**: with a menu HLI armed, pressing a keyboard
