@@ -272,6 +272,15 @@ command reached the drive and parsed — only byte 4 of the 8-byte payload was w
 `regionset.c` computes `~(1 << (n-1))` and `dvd_udf.c:UDFRPCSet()` assigns it straight to
 `ai.hrpcs.pdrc`. `region_pdrc()` now does the same.
 
+✅ **The corrected encoding is HW-PROVEN (2026-09-04):** the same `sg_raw` command with byte
+4 = `0xfe` returned **Good status** on the drive that had just rejected `0x01`, and set it to
+region 1 — one permanent change spent to learn it. ⏳ What that does NOT gate is the
+script's own path: it reaches the drive through the `DVD_AUTH` ioctl rather than raw SG_IO,
+and the kernel building the identical CDB from it is read from `cdrom.c` (`setup_send_key`
+→ `cmd[10] = type | agid<<6`, `cmd[8:9] = buflen = 8`, `buf[1] = 6`, `buf[4] = pdrc`), not
+measured. ⚠ **Do not spend the unset drive to close that gap** — it is the only local rig
+for the `No drive region: cracking` path, and a set destroys it forever.
+
 ⚠ **The reporter's LG GS40N behaved differently and that is not explained.** It errored AND
 ended up regioned, so either it tolerates the malformed number (firmware varies) or it
 rejected the change and the region came from somewhere else. Do not build on either reading.
