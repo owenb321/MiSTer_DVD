@@ -999,6 +999,7 @@ wire [15:0] av_reanchor_cnt;
 // zero-length image. disc_ever below has ALWAYS guarded on img_size (it is the
 // one consumer that got this right); the other two now agree with it, so the
 // three cannot disagree about whether a disc arrived.
+reg        img_mounted_prev;
 wire       img_evt        = img_mounted[0] && !img_mounted_prev;   // slot changed
 wire       start_streaming = img_evt &&  (img_size != 64'd0);      // ...with media
 wire       img_ejected     = img_evt && !(img_size != 64'd0);      // ...without
@@ -1072,7 +1073,6 @@ reg        hps_rst_seen = 1'b0;   // status[0] observed high since power-up
 reg        disc_ever    = 1'b0;   // any nonzero-size mount since power-up
 reg [24:0] osd_wait     = 25'd0;
 
-//
 // ⚠ DVD-FORK FIX (issue #48): osd_btn must also be gated on ~status[0]. The
 // counter advances only while status[0] is low, but the button was a pure decode
 // of the counter -- so a reset asserted inside the [FIRE, END) window froze the
