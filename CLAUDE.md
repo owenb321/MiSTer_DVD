@@ -1759,6 +1759,104 @@ worse maintenance burden than targeted in-place edits. So:
   `bench/dvd/dpad_seek_tb.sv` (24 scenarios incl. the trap), `scrub_ctrl_tb` T9–T12,
   `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
   **`docs/dvd_nav.md` §2b**.
+- 🔧 **MGL LAUNCH (issue #48, 2026-09-04, branch `fix/mgl-launch`) — sim-proven
+  RED/GREEN, ⏳ HW-confirm pending.** Report: launching the core from an MGL shortcut
+  gave "a grey or green screen" and a MiSTer that was "completely unresponsive" and had
+  to be restarted, while the same `.mpg` played when picked by hand from Load Video.
+  ★★ **THE UNRESPONSIVENESS WAS OUR OWN `InfoMessage` PUMPS, and the coupling is worth
+  knowing before writing ANY Main-side tick:** while `mgl->done == 0`, `HandleUI()` takes
+  the MGL branch and **never calls `menu_key_get()`** — the SOLE source of every input
+  event (keyboard menu key, gamepad menu key, the physical OSD button, and the core's own
+  virtual one; the `KEY_F12|UPSTROKE` synthesis lives inside it). The MGL's only forward
+  edge out of state 1 requires `menustate == MENU_NONE2` **exactly**, states 1/2 have no
+  handler in the MGL switch, and there is **no timeout**. `InfoMessage()` pins
+  `menustate = MENU_INFO`. Two overlay pumps call it once a second from `user_io_poll()`,
+  BEFORE `HandleUI` runs — `dvd_css_tick` (8 s) and `dvd_hdmi_audio`'s `report_pump`
+  (6 s per arm, **re-armed on every stage transition**, and the stage moves with the
+  scaler re-init a mount itself provokes). A `delay="5"` MGL fires squarely inside them:
+  nothing mounted, nothing responded. **That is why MGL misbehaved on THIS core and not on
+  stock ones.** ⚠ **The rule, now in `INTEGRATION.md` and `docs/mgl_launch.md`: never
+  raise `Info`/`InfoMessage`/`ProgressMessage` from a poll tick while
+  `mgl_get()->done == 0` — check `dvd_launch_ui_busy()` and DEFER (push the window
+  forward, don't spend it).** New `main/support/dvd/dvd_launch.{h,cpp}` (steps 27-29) also
+  adds a 20 s MGL watchdog — a floor under the fix, not the fix: a stall we haven't
+  thought of now costs a failed load, not a reboot.
+  ⚠ **Two comments in those files said `InfoMessage` "no-ops"/"is dropped" when the menu
+  FSM is busy. For the IDLE case that is exactly backwards, and believing it is what let
+  this ship.** Both corrected in place. Same class: `docs/idle_screen.md` claimed Main
+  skips `boot.rom` for an MGL launch — it does not (an MGL leaves `path` empty, so
+  boot.rom downloads normally and the `<file>` mount arrives seconds later by another
+  route).
+  ★ **The MGL dispatch itself was SOUND for this core** — `type="s" index="0"` matches the
+  `S0` row at `selentry 0`, `user_io_ext_idx` resolves `.mpg` to extension 0, the index
+  byte is `0x01` in BOTH flows, `make_fullpath` passes an absolute path through. Nothing
+  about the MGL format needed changing; ruling that out first is what left the real
+  asymmetry visible (the MGL flow is the one that opens a COLD path — the manual flow
+  always walks the directory with `ScanDirectory` first, warming the CIFS cache).
+  ★★ **COLOUR IS A DIAGNOSTIC and it is measurable, not folklore** (traced through
+  `yuv2rgb.v`, SMPTE-170M, `cy=38155`): **black** (0,0,0) = nothing scanning at all
+  (`mixer` emits Y=16,U=V=128 when not displaying) = reader wedged; **green** (0,136,0) =
+  a framestore slot being scanned that was NEVER WRITTEN (Y=Cb=Cr=0); **grey**
+  (130,130,130) = an intra picture DECODED OUT OF MIS-FRAMED BYTES (MPEG-2 resets the
+  intra DC predictor to 128 per slice) ⇒ suspect `ps_demux` framing. Splits three bugs
+  apart before any instrumentation. ⚠ `mode_realign`'s switch blank is NOT a candidate for
+  any of them — hard ~1.5 s `BLANK_MAX`, cleared on `start_streaming`, gated off before
+  the first mount, and it produces black.
+  **Core-side, three defects the launch exposed** (none MGL-specific in mechanism):
+  (1) **A MOUNT WITH NO MEDIA WAS TREATED AS A MOUNT.** Main sends `UIO_SET_SDSTAT` even
+  when the open FAILED (size zeroed) and `hps_io` raises `img_mounted` for an all-zero
+  word — which is also how an EJECT arrives — so the pulse means "the slot changed", not
+  "there is media". `disc_ever` always guarded on `img_size != 0`; `start_streaming` and
+  `media_seen` did not, so a failed mount killed the idle logo AND its file picker,
+  flipped `VIDEO_ARX`, and started the reader on a zero-length image, where
+  `total_blocks == 0` took the "< 17 sectors" branch and `S_STREAM`'s
+  `strm_blk + 1 == ext_blocks_q` terminator can NEVER be satisfied ⇒ an unbounded walk of
+  LBA 0,1,2,… of an empty slot. ⚠ **And it could not be reported: `img_unplayable`'s
+  window only advances while `img_streaming`, so a reader that requests and receives
+  nothing SILENCES the one notice that would have named it.** Fixed in three places on
+  purpose (`start_streaming` gated on size; a new `img_ejected` clears `media_seen`,
+  itself guarded on the delivery/picture signals `logo_vis` uses so a failed mount can't
+  flip `VIDEO_ARX` under live content; `S_INIT` → `S_DONE` on zero blocks; terminator
+  relaxed to `>=`).
+  (2) **`ps_demux`'s `S_ES_PASS` WAS A ONE-WAY DOOR.** The raw-ES verdict is taken on the
+  first start code after a pipe reset and `ever_seen_pack` is cleared by EVERY
+  `load_flush`, so it is retaken after each one — and a flush does not always land on a
+  pack boundary (the in-place `mode_switch` fallback flushes without moving the reader,
+  and is chosen exactly when `ps_saw_pack` is 0, i.e. right after a mount). Landing
+  mid-PES on `00 00 01 B3` latched it for the rest of the title and handed PES headers,
+  audio, subpicture and NAV packs to the video decoder = the grey picture, no
+  self-recovery from any seek or watchdog. Now leaves on `00 00 01 BA`; a genuine bare ES
+  cannot contain one (`0xB9`-`0xFF` are system codes, illegal in a video ES, and MPEG-2
+  forbids emulation in the payload). ★ The 4 already-forwarded pack-code bytes LEAK ON
+  PURPOSE — the first three went out on earlier cycles, so suppressing only the `BA` emits
+  a headless `00 00 01` and the decoder eats the next real byte as its code. This also
+  subsumes arming the reader's `hunt_active` on the in-place `mode_switch`.
+  (3) **Two latches that did not do what their comments said.** `osd_btn` was a pure
+  decode of `osd_wait`, which advances only while `~status[0]` — so a reset inside the
+  `[FIRE, END)` window froze the count with the button HELD, and Main reads a ≥3 s hold as
+  "enter Bluetooth pairing"; now gated on `~status[0]`. And **`analog_want_l`'s "freeze
+  while a disc is mounted" NEVER FROZE**: `img_mounted` is a one-transaction PULSE, not a
+  level, so the latch tracked cfg forever, mid-title included — Main re-sends cfg on every
+  `video_mode_adjust`, INCLUDING the one the mount's own `VIDEO_ARX` flip provokes, so a
+  changed ini bit could fire a live `il_switch` under playing content (the issue #42
+  class). `media_seen` is the level that was meant.
+  **Gate: `bench/dvd/run_mgl.sh`.** `iso_reader_mount_tb` — RED 10 reads against an empty
+  slot and still `S_STREAM` (10 is only what fitted in the window; the walk has no end),
+  GREEN 0 reads and `S_DONE`. `ps_demux_esrecover_tb` — RED **48 video bytes and 0 AUDIO
+  bytes** after the next pack (the whole pack handed to the video decoder; 0 audio is the
+  sharp end, since raw-ES mode routes nothing to audio at all), GREEN 12 and 4. Both
+  measure what the hardware DOES (requests issued, bytes demuxed onto WHICH PORT), not a
+  signal the fix names, and each carries a control arm against over-reach (a real bare ES
+  must stay in ES mode; an empty mount must leave the reader able to start again).
+  ⚠ **`iso_reader_mount_tb` ships its OWN mock HPS because it POLLS.** The mock in
+  `iso_reader_tb.sv` and its clones latches the request on the first cycle `sd_rd` is high
+  and always serves it; the real `hps_io` picks requests up by polling cmd `'h16` at
+  Main's poll rate, so a request withdrawn in between is LOST. Without a polling mock the
+  "mount over an in-flight read" arm is a bench that cannot fail.
+  ⚠ **Residual (not fixed):** an MGL launch runs with the OSD DISABLED (`menu.cpp` calls
+  `OsdDisable()`), so a CSS-encrypted `.iso` mounted by an MGL cracks its keys with the
+  `ProgressMessage` bar invisible. Keys cache, so it is once per disc.
+  Detail: **`docs/mgl_launch.md`**.
 - ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
   `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build
   `DVD_timeline_20260904_0059.rbf`, SEED 5 first roll, clk_dec 94.06/93.11).

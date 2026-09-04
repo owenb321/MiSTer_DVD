@@ -49,6 +49,34 @@ disc whose menus misbehave.
     main menu, before the disc has shown you one. Some discs — DVD games especially — use this boot chain to perform set up steps and may behave incorrectly if skipped. See
     [Menu during the opening chain](../playback/controls.md#menu-during-the-discs-opening-chain).
 
+## Launching from an MGL shortcut
+
+An **MGL** is MiSTer's shortcut file: put one in the SD root or in a `_` menu folder and
+it appears in the MiSTer menu, loads the core and starts a movie in one step. The DVD core
+supports them.
+
+```xml title="The Terminator (1984).mgl"
+<mistergamedescription>
+  <rbf>_Other/DVD</rbf>
+  <file delay="5" type="s" index="0" path="Movies/The Terminator (1984).mpg"/>
+</mistergamedescription>
+```
+
+- `rbf` — where the core lives on the SD card, without the date and `.rbf`.
+- `type="s"` and `index="0"` — the core's one file slot, **Load Video**. These do not
+  change; any file type from the table above goes in the same slot.
+- `path` — relative to `/media/fat/games/DVD/`, or an absolute path starting with `/` if
+  the file lives somewhere else (a network share, for example).
+- `delay` — seconds to wait after the core loads before mounting. 1 is usually enough;
+  raise it if the file lives on a slow share.
+
+The name of the `.mgl` file is what shows in the menu, so it can differ from the movie's
+filename.
+
+!!! info "Unreleased"
+    MGL launching did not work before this build: the core could come up blank and stop
+    responding to the gamepad, needing a restart. If that is what you saw, update.
+
 ## Loading something else
 
 **`Reset`** in the OSD stops playback, unloads the current image, resets the navigation
