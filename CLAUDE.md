@@ -1853,9 +1853,22 @@ worse maintenance burden than targeted in-place edits. So:
   and always serves it; the real `hps_io` picks requests up by polling cmd `'h16` at
   Main's poll rate, so a request withdrawn in between is LOST. Without a polling mock the
   "mount over an in-flight read" arm is a bench that cannot fail.
-  ⚠ **Residual (not fixed):** an MGL launch runs with the OSD DISABLED (`menu.cpp` calls
-  `OsdDisable()`), so a CSS-encrypted `.iso` mounted by an MGL cracks its keys with the
-  `ProgressMessage` bar invisible. Keys cache, so it is once per disc.
+  ★ **The CSS progress bar survives an MGL launch on a PHYSICAL disc, and the reason is
+  worth knowing because the obvious one is wrong:** `ProgressMessage` → `InfoMessage`, and
+  `InfoMessage` calls `OsdEnable(OSD_MSG)` ITSELF, so the `OsdDisable()` an MGL performs
+  does not hide it. The gate is `if (menustate <= MENU_INFO)`. A physical disc mounts on
+  the VERY FIRST `user_io_poll()` (before HandleUI has run at all, and long before a
+  `delay=N` MGL fires) with `menustate` still at its `MENU_NONE1` initialiser ⇒ bar
+  visible. ⚠ **Residual (not fixed):** only an encrypted `.iso` that the MGL ITSELF mounts
+  loses the bar, because that mount runs inside `MENU_GENERIC_IMAGE_SELECTED` and the
+  guard fails. Keys cache, so it is once per disc.
+  ⚠ **And that same crack is why the watchdog measures TICKS, NOT WALL CLOCK:**
+  `crack_title_keys()` is synchronous inside `user_io_file_mount()` and blocks
+  `user_io_poll()` for MINUTES on an uncached disc, so wall-clock timing would read a
+  physical disc's first-play crack as an MGL stall and destroy a healthy auto-load — the
+  watchdog killing the thing it was added to protect. `dvd_launch_tick()` discounts gaps
+  between its own invocations: a gap means the loop was not running, so it cannot be time
+  the MGL spent stuck.
   Detail: **`docs/mgl_launch.md`**.
 - ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
   `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build

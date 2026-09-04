@@ -232,10 +232,44 @@ reader, and the garbage between flush and pack is bounded by one pack.
    failed mount returns to the bouncing idle logo with the file picker, never a silent
    grey field.
 
-## 7. Known residual
+## 7. The CSS progress bar, and which mounts keep it
 
-An MGL launch runs with the OSD **disabled** (`menu.cpp` calls `OsdDisable()` rather than
-`OsdEnable()` when it opens the menu for the MGL). So a CSS-encrypted `.iso` mounted by
-an MGL runs its key crack with the `ProgressMessage` bar invisible — several seconds to
-minutes of apparent silence on a first play. The keys cache, so it happens once per disc.
-Not fixed; it needs Main-side OSD state we do not currently touch.
+`crack_title_keys()` reports through `ProgressMessage()` → `InfoMessage()`. Two properties
+of `InfoMessage` decide whether that bar is seen, and only one of them is about the OSD:
+
+```c
+void InfoMessage(const char *message, int timeout, const char *title)
+{
+    if (menustate <= MENU_INFO)                       //  ← the gate that matters
+    {
+        if (menustate != MENU_INFO) { OsdSetTitle(title, 0); OsdEnable(OSD_MSG); }
+        …
+```
+
+It **re-enables the OSD itself**, so the `OsdDisable()` an MGL performs when it opens the
+menu invisibly does *not* hide the bar. What hides it is the `menustate <= MENU_INFO`
+guard (`MENU_NONE1 = 0, MENU_NONE2 = 1, MENU_INFO = 2`).
+
+| mount | `menustate` while cracking | bar |
+|---|---|---|
+| **physical disc** (`dvd_phys_tick` → `dvd_css_open`) | `MENU_NONE1` — it mounts on the **very first** `user_io_poll()`, before HandleUI has run at all and long before an MGL's `delay` expires | ✅ visible |
+| `.iso` picked by hand (`dvd_css_open_image`) | `MENU_NONE1`, via the file browser's `MenuHide()` | ✅ visible |
+| **`.iso` mounted by an MGL** | `MENU_GENERIC_IMAGE_SELECTED` — the mount happens *inside* that case | ❌ `InfoMessage` no-ops |
+
+So a **physical disc keeps its progress bar on an MGL launch**; only an encrypted `.iso`
+that the MGL itself mounts loses it. Keys cache, so that is once per disc. Not fixed:
+making it visible means driving `menustate` from a support module mid-dispatch, which is
+more Main-internal surgery than a cosmetic bar is worth.
+
+⚠ An earlier version of this note blamed `OsdDisable()`. That was wrong — the conclusion
+happened to be right for the `.iso` case, which is exactly how a wrong mechanism survives.
+
+### ⚠ Why the watchdog measures ticks, not wall clock
+
+The same crack is why `dvd_launch_tick()` discounts gaps between its own invocations.
+`crack_title_keys()` is **synchronous inside `user_io_file_mount()`** and blocks
+`user_io_poll()` for minutes on an uncached disc. A physical disc mounts on the first poll,
+so with plain wall-clock timing the next tick would see minutes elapsed, call a
+still-pending MGL stalled, and destroy the user's auto-load — a watchdog killing the thing
+it was added to protect. A gap between ticks means the loop was not running, so it cannot
+be time the MGL spent stuck.

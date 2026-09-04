@@ -39,9 +39,22 @@ int dvd_launch_ui_busy(void)
 void dvd_launch_tick(void)
 {
 	static time_t pending_since = 0;
+	static time_t last_tick     = 0;
 	static int    fired         = 0;
 
 	mgl_struct *mgl = mgl_get();
+	time_t now = time(NULL);
+
+	// ⚠ Measure only time the poll loop was actually TURNING. Several things
+	// legitimately block user_io_poll() for minutes -- a CSS title-key crack is
+	// the one that bites here: dvd_phys_tick() mounts an optical disc on the very
+	// first poll, long before a delay=N MGL fires, and crack_title_keys() then
+	// runs synchronously for minutes on an uncached disc. Wall-clock timing would
+	// read that as a stall and kill a perfectly healthy pending MGL, losing the
+	// user's auto-load to a fix meant to protect it. A gap between ticks means we
+	// were not running, so it cannot be time the MGL spent stuck.
+	time_t gap = (last_tick && now > last_tick) ? (now - last_tick) : 0;
+	last_tick = now;
 
 	if (mgl->done)
 	{
@@ -52,8 +65,8 @@ void dvd_launch_tick(void)
 		return;
 	}
 
-	time_t now = time(NULL);
 	if (!pending_since) { pending_since = now; return; }
+	if (gap > 1) pending_since += gap;              // discount the blocked span
 	if (now - pending_since < DVD_MGL_WD_S) return;
 
 	// Stalled. Give the user their input back. The load is lost either way;
