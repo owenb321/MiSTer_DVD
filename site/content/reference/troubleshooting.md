@@ -227,11 +227,10 @@ Rewind, D-Pad Seek, and entering or leaving a menu.
 
 It is a decoder artifact, not a disc or a setting: the player was still predicting each new
 picture from the scene it had just left ([issue
-#45](https://github.com/owenb321/MiSTer_DVD/issues/45)). The development build discards
-those pictures instead of showing them, so the last frame simply holds until the new scene
-is ready.
+#45](https://github.com/owenb321/MiSTer_DVD/issues/45)). v0.4.0 discards those pictures
+instead of showing them, so the last frame simply holds until the new scene is ready.
 
-**What remains on the development build** is much shorter, and confirmed on hardware: the
+**What remains** is much shorter, and confirmed on hardware: the
 picture freezes on the last frame, then cuts to the new position with about **one**
 misaligned frame in between. Report it if you see the old scene *moving* through the new
 one, if the blocking lasts appreciably longer than a frame, or if the picture does not

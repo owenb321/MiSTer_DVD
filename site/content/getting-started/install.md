@@ -54,7 +54,7 @@ what each piece does.
 ├── Scripts/
 │   ├── install_dvdcss.sh       fetches libdvdcss
 │   ├── set_dvd_region.sh       reads/sets a USB drive's region
-│   └── dvd_report.py           builds a bug-report bundle (unreleased)
+│   └── dvd_report.py           builds a bug-report bundle
 └── DVD_INSTALL.txt             the same instructions, on the card
 ```
 
