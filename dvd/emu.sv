@@ -986,19 +986,40 @@ wire [32:0] av_stc;
 wire signed [31:0] av_drift;
 wire [15:0] av_reanchor_cnt;
 
-// Detect image mount event (start streaming)
-reg        img_mounted_prev;
-wire       start_streaming = img_mounted[0] && !img_mounted_prev;
+// Detect image mount event (start streaming).
+//
+// DVD-FORK FIX (issue #48): a mount notification with img_size == 0 is NOT a
+// mount. Main sends UIO_SET_SDSTAT unconditionally -- on a failed FileOpenEx it
+// zeroes sd_image[].size and still notifies -- and hps_io forces img_mounted[0]
+// high even for an all-zero status word, which is how an EJECT arrives too. So
+// the pulse alone says "the slot changed", not "there is media".
+//
+// Left ungated this cost the reported blank screen: media_seen latched, which
+// kills the idle logo and the file picker with it, and the reader started on a
+// zero-length image. disc_ever below has ALWAYS guarded on img_size (it is the
+// one consumer that got this right); the other two now agree with it, so the
+// three cannot disagree about whether a disc arrived.
+wire       img_evt        = img_mounted[0] && !img_mounted_prev;   // slot changed
+wire       start_streaming = img_evt &&  (img_size != 64'd0);      // ...with media
+wire       img_ejected     = img_evt && !(img_size != 64'd0);      // ...without
 // DVD-FORK FIX (single-raster analog): the analog_want latch (see its declaration
 // near the top). Follows the cfg-derived request while nothing is mounted and once
 // Main has actually written cfg (cfg_seen - before that the ini bits read 0), holds
 // while media is mounted. Level-based on purpose: an OSD Reset (status[0]) pulls
 // reset_n with cfg_seen already high and no new cfg write coming, so an edge-armed
 // latch would come back empty.
+//
+// ⚠ DVD-FORK FIX (issue #48): the hold gated on img_mounted[0], which is a PULSE
+// lasting one hps_io transaction (it is cleared on ~io_enable), not a level -- so
+// the latch tracked cfg forever, mid-title included, and the freeze this comment
+// describes was never actually implemented. Main re-sends cfg on every
+// video_mode_adjust, INCLUDING the one the mount's own VIDEO_ARX flip provokes, so
+// a changed ini bit could fire a live il_switch under playing content: the exact
+// failure class of issue #42. media_seen is the level that was meant here.
 reg        analog_want_l;
 always @(posedge clk_sys or negedge reset_n) begin
-    if (!reset_n)                          analog_want_l <= 1'b0;
-    else if (cfg_seen && !img_mounted[0])  analog_want_l <= analog_want_raw;
+    if (!reset_n)                       analog_want_l <= 1'b0;
+    else if (cfg_seen && !media_seen)   analog_want_l <= analog_want_raw;
 end
 assign analog_want = analog_want_l;
 reg [63:0] current_file_size;
@@ -1029,8 +1050,16 @@ end
 // So this is a WAIT-THEN-PULSE instead: arm on the falling edge of
 // status[0] (the framework's core-load reset, released at the END of
 // user_io_init -- after every init-time auto-load), wait ~0.9 s watching
-// for a mount, and only then emit a 100 ms pulse. Any mount cancels it.
+// for a mount, and only then emit a 100 ms pulse.
 // Must stay well under 3 s: a >=3 s hold means "enter Bluetooth pairing".
+//
+// ⚠ "Any mount cancels it" was too strong, and it mattered for issue #48:
+// only a mount BEFORE the window can, because disc_ever is sampled with
+// the counter. An MGL <file> mount arrives `delay` seconds after load, so
+// the pulse always goes out on an MGL launch. Main swallows it there --
+// during an MGL, HandleUI never calls menu_key_get(), which is where the
+// press is turned into KEY_F12 -- so this is benign, but it is benign by
+// someone else's accident, not by design. See docs/mgl_launch.md.
 //
 // One-shot per FPGA configuration (the counter saturates and nothing resets
 // it, so OSD-menu Reset can't re-fire it), and disc_ever has no reset term
@@ -1043,12 +1072,21 @@ reg        hps_rst_seen = 1'b0;   // status[0] observed high since power-up
 reg        disc_ever    = 1'b0;   // any nonzero-size mount since power-up
 reg [24:0] osd_wait     = 25'd0;
 
+//
+// ⚠ DVD-FORK FIX (issue #48): osd_btn must also be gated on ~status[0]. The
+// counter advances only while status[0] is low, but the button was a pure decode
+// of the counter -- so a reset asserted inside the [FIRE, END) window froze the
+// count with the button HELD, indefinitely. Main reads a >=3 s hold as "enter
+// Bluetooth pairing" (menu.cpp), which is an unresponsive state of its own. With
+// this term the button is high exactly while it is counting, so its high time is
+// the 100 ms window and nothing else; a reset merely splits the pulse.
 always @(posedge clk_sys) begin
     if (img_mounted[0] && img_size != 64'd0) disc_ever <= 1'b1;
     if (status[0])                           hps_rst_seen <= 1'b1;
     if (hps_rst_seen && !status[0] && osd_wait != OSD_T_END)
         osd_wait <= osd_wait + 25'd1;
-    osd_btn <= (osd_wait >= OSD_T_FIRE) && (osd_wait != OSD_T_END) && !disc_ever;
+    osd_btn <= (osd_wait >= OSD_T_FIRE) && (osd_wait != OSD_T_END)
+               && !disc_ever && !status[0];
 end
 
 assign BUTTONS = {1'b0, osd_btn};
@@ -2724,6 +2762,21 @@ always @(posedge clk_sys or negedge reset_n) begin
 
         if (start_streaming) begin                    // fresh mount: re-arm
             img_wd_cnt <= 30'd0; img_unplayable <= 1'b0; media_seen <= 1'b1;
+        end else if (img_ejected && !img_streaming && !video_live_s2) begin
+            // DVD-FORK FIX (issue #48): the slot changed and there is no media --
+            // an eject, or a mount whose file never opened (Main notifies either
+            // way, with size 0). Go back to "nothing is loaded" so the idle logo
+            // and its file picker return, instead of leaving media_seen latched
+            // and the screen showing an unwritten framestore with no message.
+            //
+            // Guarded on the delivery/picture signals logo_vis already uses,
+            // because a FAILED mount does not stop whatever was already playing:
+            // clearing media_seen under live content would flip VIDEO_ARX/ARY
+            // mid-title, and Main answers that with a scaler re-init and a cfg
+            // re-send. "The new file did not load, the old one plays on" is the
+            // least surprising outcome there; the idle screen is for a slot that
+            // really is empty.
+            img_wd_cnt <= 30'd0; img_unplayable <= 1'b0; media_seen <= 1'b0;
         end else if (!media_seen || video_live_s2 || iso_mode_w) begin
             img_wd_cnt <= 30'd0;                      // idle, playing, or a real ISO
             if (video_live_s2) img_unplayable <= 1'b0;   // a picture disproves the verdict

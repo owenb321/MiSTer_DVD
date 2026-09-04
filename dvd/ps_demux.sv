@@ -195,7 +195,8 @@ typedef enum logic [4:0] {
     S_M1_HDR,         // MPEG-1 PES optional header: stuffing/STD/timestamp dispatch
     S_M1_STD,         // MPEG-1 STD buffer field second byte
     S_ES_EMIT,        // raw ES: emit reconstructed 00 00 01 <code> preamble
-    S_ES_PASS,        // raw ES: forward every input byte to video (no demux)
+    S_ES_PASS,        // raw ES: forward every input byte to video (no demux);
+                      //   leaves on a 00 00 01 BA pack (issue #48)
     S_VID_FLUSH       // after a sequence_end_code: emit trailing filler so the
                       //   VLD can flush the still's last slice (see below)
 } state_t;
@@ -769,8 +770,33 @@ always_ff @(posedge clk or negedge rst_n) begin
                 if (pes_length == 16'd1) state <= S_HUNT;
             end
 
-            // ---- Raw elementary stream: forward every byte, never leave ----
-            S_ES_PASS: ;  // forwarding handled in the output comb block; stay here
+            // ---- Raw elementary stream: forward every byte ----
+            // Forwarding is handled in the output comb block. Keep watching for
+            // a PS pack anyway.
+            //
+            // DVD-FORK FIX (issue #48): this used to be a TERMINAL state -- once
+            // entered there was no way out for the life of the pipe reset. The
+            // verdict is taken on the FIRST start code after every load_flush
+            // (ever_seen_pack is cleared by pipe_rst_n), so any flush that lands
+            // mid-PES on a byte <= 0xB8 latched "this is a raw ES" and from then
+            // on shoved PES headers, audio, subpicture and NAV packs at the video
+            // decoder: a permanently mis-framed picture with no self-recovery.
+            // The in-place mode_switch fallback is exactly such a flush.
+            //
+            // A genuine bare .m2v cannot contain 00 00 01 BA -- start codes
+            // 0xB9-0xFF are system codes and are illegal inside a video
+            // elementary stream, and MPEG-2 forbids start-code emulation in the
+            // payload -- so this cannot mis-fire on the case the state exists
+            // for. The four bytes of the pack code already forwarded are an
+            // unknown start code to the decoder, which skips them.
+            S_ES_PASS: begin
+                if (start_code_detected && (in_byte == 8'hBA)) begin
+                    ever_seen_pack  <= 1'b1;      // and lock the ES verdict out
+                    stream_id_r     <= in_byte;
+                    bytes_remaining <= 16'd9;
+                    state           <= S_PACK_SKIP;
+                end
+            end
 
             default: state <= S_HUNT;
             endcase
