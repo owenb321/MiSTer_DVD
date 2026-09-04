@@ -188,10 +188,14 @@ static int raw_read10(int fd, uint32_t lba, void *buf, int count)
 	return count;
 }
 
-// Does the drive have a CSS region set? RPC-II drives refuse the title-key ioctl
-// (ReadTitleKey) unless a region matching the disc is set, which forces libdvdcss
-// into the slow, sometimes-failing per-title crack. Read the RPC state via SG_IO
-// REPORT KEY (format 0x08): region_mask 0xff means no region is set.
+// Can the drive answer the CSS key exchange? RPC-II drives refuse the title-key
+// ioctl (ReadTitleKey) unless a region matching the disc is set, which forces
+// libdvdcss into the slow, sometimes-failing per-title crack. Read the RPC state
+// via SG_IO REPORT KEY (format 0x08): region_mask 0xff means no region is set,
+// and rpc_scheme (byte 6) 0 is an RPC-1 drive, which enforces no region AT ALL —
+// it hands keys over whatever the disc's region, so its empty mask is not the
+// problem an RPC-II drive's empty mask is. Treating the two alike labelled a
+// region-free drive "No drive region: cracking", which is the opposite of true.
 static int drive_region_set(const char *dev)
 {
 	int fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -213,7 +217,8 @@ static int drive_region_set(const char *dev)
 
 	int set = 1;
 	if (ioctl(fd, SG_IO, &io) == 0 && io.status == 0)
-		set = (buf[5] != 0xff);   // region_mask == 0xff -> no region set
+		set = (buf[5] != 0xff)    // region_mask == 0xff -> no region set ...
+		   || (buf[6] == 0);      // ... but RPC-1 needs none: nothing to set
 	close(fd);
 	return set;
 }
@@ -522,7 +527,7 @@ int dvd_css_open(void)
 
 	region_set = drive_region_set(dev);
 	if (!region_set)
-		css_log("drive has NO CSS region set — title keys must be cracked (slow); see README");
+		css_log("drive is RPC-II with NO region set — title keys must be cracked (slow); see README");
 
 	if (load_library())
 	{
