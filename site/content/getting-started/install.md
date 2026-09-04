@@ -140,9 +140,14 @@ or grabbing a single piece:
 
 ## Checking what you are running
 
-The core's version is shown in the OSD as `v0.3.0 260901` — the semantic version followed
-by the build date. Quote that line in any bug report; it is the only thing that identifies
-a build unambiguously.
+The core's version is shown in the OSD as `v0.3.0 260901` — the version followed by the
+build date. Quote that line in any bug report; it is the only thing that identifies a
+build unambiguously.
+
+If you are running a **test build** — one handed out for feedback before a release — the
+line names the feature instead of a version, like `dev-seekrealign 260903`. That is
+correct, not a fault: a test build is not a release and deliberately cannot be mistaken
+for one. Quote it the same way.
 
 ## Updating
 
