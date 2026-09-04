@@ -22,6 +22,7 @@ module seek_time_tb;
     reg         pm_we = 0;    reg [6:0] pm_waddr = 0;  reg [7:0]  pm_wdata = 0;
     reg         cellf_we = 0; reg [6:0] cellf_idx = 0; reg [31:0] cellf_rbn = 0;
     reg  [15:0] cellf_secs = 0;
+    reg         cellf_lwe = 0; reg [31:0] cellf_last = 0;
     reg  [15:0] title_secs = 0;
     reg  [31:0] title_first = 0, title_last = 0;
 
@@ -46,7 +47,8 @@ module seek_time_tb;
         .clk(clk), .rst_n(rst_n),
         .pm_we(pm_we), .pm_waddr(pm_waddr), .pm_wdata(pm_wdata),
         .cellf_we(cellf_we), .cellf_idx(cellf_idx), .cellf_rbn(cellf_rbn),
-        .cellf_secs(cellf_secs), .title_secs(title_secs),
+        .cellf_secs(cellf_secs), .cellf_lwe(cellf_lwe), .cellf_last(cellf_last),
+        .title_secs(title_secs),
         .title_first_rbn(title_first), .title_last_rbn(title_last),
         .dpad_pend(dpad_pend), .dpad_dir(dpad_dir),
         .dpad_min(dpad_min), .dpad_sec(dpad_sec),
@@ -100,6 +102,11 @@ module seek_time_tb;
                 cellf_secs = i * dur;
                 @(negedge clk);
                 cellf_we   = 1'b0;
+                // the reader emits last_sector on its own later strobe
+                cellf_lwe  = 1'b1;
+                cellf_last = BASE + i * STEP + STEP - 1;   // contiguous cells
+                @(negedge clk);
+                cellf_lwe  = 1'b0;
             end
             for (i = 0; i < nprog; i = i + 1) begin
                 @(negedge clk);
@@ -224,6 +231,39 @@ module seek_time_tb;
         chk_t(24'h00_15_00, "past the new end = new total");
         ask_chap(8'd2); chk_t(24'h00_10_00, "new chap 2 = cell 2 = 0:10:00");
         ask_chap(8'd3); chk(!prev_ok, "old chapter 3 is gone");
+
+        // ---- T10: a PGC whose cells have a GAP -- the real regression --------
+        // AFTER_EARTH VTS_13 PGC1, the title that loads with menus off, is two
+        // cells with 105,696 UNPLAYED sectors between them:
+        //     cell 0: RBN    142..172843 (172702 sectors)  532 s  <- all content
+        //     cell 1: RBN 278540..278681 (   142 sectors)    0 s  <- trailing stub
+        // title span 278,540 sectors vs 172,702 played = 1.612x. Bracketing a
+        // position between consecutive FIRST sectors spreads cell 0's 532 s over
+        // the gap too, so every timestamp read 1.61x short -- a scrub showing
+        // 0:00:22 landed at 0:00:34 and 0:02:42 landed at 0:04:33 on hardware.
+        // Both of those measured points are asserted below.
+        $display("TEST 10: gapped PGC (AFTER_EARTH VTS_13 PGC1)");
+        @(negedge clk);
+        cellf_we=1; cellf_idx=0; cellf_rbn=32'd142;    cellf_secs=16'd0;   @(negedge clk);
+        cellf_we=0; cellf_lwe=1; cellf_last=32'd172843;                    @(negedge clk);
+        cellf_lwe=0;
+        cellf_we=1; cellf_idx=1; cellf_rbn=32'd278540; cellf_secs=16'd532; @(negedge clk);
+        cellf_we=0; cellf_lwe=1; cellf_last=32'd278681;                    @(negedge clk);
+        cellf_lwe=0;
+        title_secs = 16'd532; title_first = 32'd142; title_last = 32'd278681;
+        @(negedge clk);
+        // 22 s of real content sits at RBN 142 + 22/532*172702 = 7284
+        ask_bar(32'd7284);   chk_t(24'h00_00_22, "gap: RBN 7284 = 0:00:22");
+        // 162 s -> RBN 142 + 162/532*172702 = 52725
+        ask_bar(32'd52725);  chk_t(24'h00_02_42, "gap: RBN 52725 = 0:02:42");
+        // the two RBNs the OLD code previewed those times at must now read TRUE
+        ask_bar(32'd11017);  chk_t(24'h00_00_33, "gap: old 0:22 point = 0:00:33");
+        ask_bar(32'd84966);  chk_t(24'h00_04_21, "gap: old 2:42 point = 0:04:21");
+        // the cell end, and a target INSIDE the gap: unplayed sectors carry no
+        // time, so anything past the cell end holds at that cell's end time.
+        ask_bar(32'd172843); chk_t(24'h00_08_52, "gap: cell 0 end = 0:08:52");
+        ask_bar(32'd225000); chk_t(24'h00_08_52, "gap: inside the gap holds");
+        ask_bar(32'd278600); chk_t(24'h00_08_52, "gap: trailing stub = 0:08:52");
 
         if (errors == 0) $display("\nseek_time_tb: ALL TESTS PASSED");
         else begin

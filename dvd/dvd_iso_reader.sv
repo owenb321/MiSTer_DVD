@@ -354,6 +354,16 @@ module dvd_iso_reader #(
     // total, which is the upper bracket when interpolating inside the final
     // cell. See dvd/seek_time.sv.
     output reg [15:0] cellf_secs,
+    // ...and the cell's LAST sector, on its own strobe. It is only known at cell
+    // byte 23, twelve bytes after first_sector, so it cannot ride cellf_we.
+    // ⚠ It is NOT redundant with the next cell's first_sector: a PGC's cells can
+    // be scattered across the VOBS with large unplayed GAPS between them (real
+    // case: AFTER_EARTH VTS_13 PGC1 is 172,702 played sectors inside a 278,540
+    // sector span -- 61% gap), so bracketing a position between consecutive
+    // first_sectors spreads a cell's duration over sectors that carry no time
+    // at all and every derived timestamp reads short by that ratio.
+    output reg        cellf_lwe,
+    output reg [31:0] cellf_last,
     output     [15:0] title_secs_o,
     output     [7:0]  cur_cell_still,   // current cell's still_time (cell@2)
     output     [7:0]  cur_cell_cmdnr,   // current cell's cell_cmd_nr (cell@3)
@@ -1572,11 +1582,14 @@ always @(posedge clk)
         run_eltm        <= 32'd0;
         run_secs        <= 16'd0;
         cellf_secs      <= 16'd0;
+        cellf_lwe       <= 1'b0;
+        cellf_last      <= 32'd0;
         cellf_we        <= 1'b0;
         cellf_idx       <= 7'd0;
         cellf_rbn       <= 32'd0;
     end else begin
-        cellf_we <= 1'b0;                 // 1-cycle stream pulses
+        cellf_we  <= 1'b0;                // 1-cycle stream pulses
+        cellf_lwe <= 1'b0;
         // Linear/raw transport: the whole file is the "title" — publish its
         // block span for the seek bar / scrub clamp (inclusive last block).
         // Stops the moment an ISO is recognised (iso_mode); the cell walk
@@ -1610,6 +1623,10 @@ always @(posedge clk)
         end
         if (cell_bi == 5'd23) begin
             cell_last_mem[cell_wi] <= {wacc, pb_rdata};
+            // same cell_wi as the byte-11 cellf_we above (the index advances
+            // only after the 24-byte record), so the two strobes pair up.
+            cellf_lwe  <= 1'b1;
+            cellf_last <= {wacc, pb_rdata};
             // title_last tracks the last-written cell's last_sector (cells are
             // captured in order, so after the walk this is the title's end RBN).
             title_last_rbn <= {wacc, pb_rdata};

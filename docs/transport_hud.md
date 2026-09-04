@@ -221,6 +221,33 @@ landed time by minutes and the number would visibly jump when the seek
 completed. That is a worse bug than the frozen clock it replaces. Interpolating
 *inside a cell* is accurate because bitrate varies little over one cell.
 
+⚠⚠ **A cell's span is its OWN `first..last`, never the distance to the next
+cell's first.** `seek_time.sv` used to call that difference "an approximation;
+for a preview it is immaterial" — **that was wrong and it shipped as a bug.** A
+PGC's cells can sit anywhere in the VOBS with large UNPLAYED gaps between them,
+and bracketing across a gap spreads a cell's duration over sectors that carry no
+playback time, so every timestamp reads short by the span/played ratio. Measured
+on AFTER_EARTH VTS_13 PGC1 — the title that loads with menus off — cell 0 is RBN
+142..172,843 carrying all 532 s and cell 1 is a 142-sector 0 s stub at 278,540:
+**172,702 played sectors inside a 278,540 span, ratio 1.612**. Field reports
+matched to the second (a scrub reading 0:00:22 landed at 0:00:34, 0:02:42 landed
+at 0:04:33). The reader now streams `cellf_last` on its own strobe — last_sector
+is known only at cell byte 23, twelve bytes after first_sector — and a target
+inside a gap clamps to that cell's END time.
+★ Two process lessons, both cheap next time: the claim was written from a reading
+of the format rather than a measurement of a disc; and the first attempt to
+re-check it measured the **wrong VTS** (05, which has no gaps) instead of the one
+actually playing, which the core's own `O[2]` debug readout names in one glance
+(`CH 1/13` = PGCN 1, VTS 13).
+
+**The interpolation fraction is 14 bits, not 8.** Resolution is
+`cell_duration / 2^N`, so 8 bits costs 2 s inside a 9-minute cell and **28 s
+inside a single-cell two-hour title** — a common authoring shape, not a corner
+case. The product is rounded rather than truncated. ⚠ The rounding constant is
+added at publish, never seeded into `ml_acc`: that accumulator shifts left every
+iteration, so a seed would be scaled by 2^15 (it was, briefly, and the readout
+became garbage).
+
 **Binary seconds until the last step.** `dvd/bcd_time_add.sv` has no subtract
 port and cannot cheaply get one, and both a backward jump and a prev-chapter
 burst need one; meanwhile `cell_meta_mem[31:16]` is *already* binary seconds. So

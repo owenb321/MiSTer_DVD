@@ -1194,6 +1194,8 @@ wire        cellf_we_w;               // Phase 11 bar: cell first_sector stream 
 wire [6:0]  cellf_idx_w;
 wire [31:0] cellf_rbn_w;
 wire [15:0] cellf_secs_w;             // ...and the same cell's start, in seconds
+wire        cellf_lwe_w;              // ...and its LAST sector, on a later strobe
+wire [31:0] cellf_last_w;
 wire [15:0] title_secs_w;             // title total in seconds (dvd/seek_time.sv)
 wire        vm_pm_we;
 wire [6:0]  vm_pm_waddr;
@@ -2397,6 +2399,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     .cellf_idx      (cellf_idx_w),
     .cellf_rbn      (cellf_rbn_w),
     .cellf_secs     (cellf_secs_w),       // + dvd/seek_time.sv's preview clock
+    .cellf_lwe      (cellf_lwe_w),
+    .cellf_last     (cellf_last_w),
     .title_secs_o   (title_secs_w),
     .cur_cell_still (),
     .cur_cell_cmdnr (cur_cell_cmdnr_w),
@@ -4677,6 +4681,8 @@ seek_time seek_time_inst (
     .cellf_idx       (cellf_idx_w),
     .cellf_rbn       (cellf_rbn_w),
     .cellf_secs      (cellf_secs_w),
+    .cellf_lwe       (cellf_lwe_w),
+    .cellf_last      (cellf_last_w),
     .title_first_rbn (title_first_rbn_w),
     .title_last_rbn  (title_last_rbn_w),
     // The D-pad's own request is an exact signed MM:S0, so its preview needs no
