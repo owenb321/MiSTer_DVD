@@ -26,17 +26,20 @@ which makes it look like a size or filesystem problem.
 !!! note "Fixed in v0.4.0"
     If you are on v0.3.0 or earlier, this is what you are seeing.
 
-Older builds could freeze during an MGL launch. Two separate faults, and both are fixed:
+Older builds could freeze during an MGL launch. The fault we found and fixed: the core's
+own on-screen notices could stall MiSTer's shortcut handling. While a shortcut is still
+running, MiSTer reads no input at all — so the gamepad, the keyboard and the OSD button
+were all dead and only a restart cleared it. There is now a 20-second backstop: even if a
+shortcut fails, the OSD always comes back so you can load the file by hand.
 
-- The core's own on-screen notices could stall MiSTer's shortcut handling. While a
-  shortcut is still running, MiSTer reads no input at all — so the gamepad, the keyboard
-  and the OSD button were all dead and only a restart cleared it. There is now a 20-second
-  backstop: even if a shortcut fails, the OSD always comes back so you can load the file
-  by hand.
-- If the file did not open — a wrong path, or a share that was not ready yet — the core
-  was still told a disc had arrived, hid the idle screen and showed a flat grey or green
-  field with no message. A load that fails now returns to the idle screen and the file
-  picker.
+A load that fails — a wrong path, or a share that was not ready yet — also now returns to
+the idle screen and the file picker rather than leaving the idle screen hidden.
+
+!!! question "Still seeing a flat grey or green field?"
+    That symptom was reported and **could not be reproduced here**, so we do not know
+    whether the changes above address it. If an MGL launch still leaves you looking at a
+    blank coloured screen on v0.4.0, [please report it](reporting-a-bug.md) — with the
+    `.mgl` file itself, and whether loading the same file by hand works.
 
 If a shortcut still does not load the movie, check the `path` in the `.mgl`: it is
 relative to `/media/fat/games/DVD/` unless it starts with `/`. Raising `delay` to 5 helps
