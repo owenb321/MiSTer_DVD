@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut and publish a GitHub release of the MiSTer DVD core — build the timing-clean .rbf and the MiSTer_DVDcss Main, assemble the ready-to-extract zip, gather release notes from every PR merged since the previous release, publish with the right assets, and bump CORE_VERSION. Use when the user asks to cut, make, or publish a release.
+description: Cut and publish a GitHub release of the MiSTer DVD core — gather release notes from every PR merged since the previous release, land the one release commit that sets CORE_VERSION and reconciles the manual, build the timing-clean .rbf, create the draft that CI packages (Main + install zip), smoke-test it, publish, and set the version back to dev-main. Use when the user asks to cut, make, or publish a release.
 ---
 
 # Cutting a DVD core release
@@ -9,12 +9,17 @@ Publishes a GitHub release for `owenb321/MiSTer_DVD`. Two build outputs (FPGA `.
 Quartus, `MiSTer_DVDcss` Main via the ARM toolchain) plus a packaged zip, with notes drawn
 from the PRs merged since the last release.
 
-## Versioning — semver, with one hard exception
+## Versioning — the one-commit invariant
 
-- **`CORE_VERSION` in `dvd/emu.sv` = semver `MAJOR.MINOR.PATCH`** (e.g. `0.2.0`). Shown in
-  the OSD as `` v`CORE_VERSION` `BUILD_DATE` ``. Bump it the **moment a release publishes**,
-  so no dev build ever advertises a version that already exists on the releases page.
-- **Release tag = `v<semver>`** (e.g. `v0.2.0`); title = `v<semver> — <headline>`.
+> A bare semver lives in **exactly one commit per release** — the release commit. Any
+> build whose OSD shows `v0.4.0` came from that commit and no other.
+
+- **`CORE_VERSION` in `dvd/emu.sv`** carries `dev-<slug>` on a feature branch and
+  `dev-main` on `main`. Step 0 below sets it to `v<semver>` for the release; the last step
+  sets it back to `dev-main`. Shown in the OSD as `` `CORE_VERSION` `BUILD_DATE` ``.
+  `build_release.sh` refuses a `dev-` string on a publishable `--release` build and refuses
+  a bare semver on a dev build, so the invariant is mechanical rather than remembered.
+- **Release tag = `v<semver>`** (e.g. `v0.4.0`); title = `v<semver> — <headline>`.
   (This replaces the older `v<version>-<yyyymmdd>` tag format — pure semver now.)
 - **Zip = `MiSTer_DVD_v<semver>.zip`** (produced by `tools/package_release.sh`).
 - **★ The `.rbf` filename stays `DVD_YYYYMMDD.rbf` — date only, NEVER a version.** This is
@@ -23,8 +28,10 @@ from the PRs merged since the last release.
   detection. `build_release.sh --release` already produces this name. Date and semver never
   collide: date lives in the filename (for MiSTer), semver lives in the tag/zip/OSD (for
   humans).
-- `BUILD_DATE` (`yymmdd`) is regenerated per compile; do not extend it — it is part of
-  `CONF_STR`, so any change re-rolls the fitter seed lottery.
+- `BUILD_DATE` (`yymmdd`) is regenerated per compile; do not extend it. Both it and
+  `CORE_VERSION` are part of `CONF_STR` = part of the netlist, so either changing re-rolls
+  the fitter seed lottery — which is why the version edit rides in ONE commit with the docs
+  sweep, so the release needs exactly one compile.
 
 ## Preconditions
 
@@ -33,8 +40,10 @@ from the PRs merged since the last release.
 - **The manual matches what is shipping.** `python3 tools/docs_check.py` and
   `mkdocs build --strict` both pass. If a release note would claim something the manual
   does not say, fix the manual first — it is the published contract.
-- `CORE_VERSION` is AHEAD of the latest published tag (`gh release list`). If it still
-  equals a published version, bump it first and commit.
+- `CORE_VERSION` currently reads `dev-main` (it is set to the semver by step 0, not
+  before). Decide the number against the **whole** unreleased delta on `main`, not the last
+  branch merged — several patch-looking merges can add up to a minor release. The
+  patch/minor/major rules are in `CLAUDE.md` "Versioning and publishing releases".
 
 ## gh auth
 
@@ -47,59 +56,73 @@ export GH_TOKEN=$(printf "host=github.com\nprotocol=https\n\n" | git credential 
 
 ## Steps
 
-1. **Build the core (timing-clean).** Quartus, in the pinned container:
+In execution order. Steps 1-2 come before any build because the version number depends on
+what the notes say, and because `CORE_VERSION` is part of the netlist — deciding it late
+would cost a second compile.
+
+1. **Gather the notes.** Every PR merged since the last release (recipe in "Release notes"
+   below), grouped into human sentences. Then run the `docs-sweep` skill over
+   `<prev_tag>..HEAD`: you have just read every PR, so asking of each one "does this change
+   controls, an OSD option, an on-screen message, install steps, or compatibility?" is
+   nearly free. Fix the owning page in `site/content/` for anything stale.
+   The headline you write here decides the version (patch / minor / major — see `CLAUDE.md`).
+
+2. **Land ONE release commit** on `main`, containing the docs-sweep edits **and**:
+   - `CORE_VERSION` in `dvd/emu.sv` → `"v<semver>"` (from `"dev-main"`).
+   - `extra.released_version` in `mkdocs.yml` → `<semver>` (no `v`). The release workflow
+     **refuses to package** if this disagrees with the tag: it drives the "latest release is
+     vX.Y.Z" banner on every manual page.
+   - the "Current as of **vX.Y.Z**" line in `site/content/reference/compatibility.md`.
+   - sweep out `!!! info "Unreleased"` admonitions for anything this release ships.
+
+   **One commit, one netlist, one compile.** `CORE_VERSION` lives in `CONF_STR`, so
+   splitting the bump from the docs commit buys a second netlist and a second seed decision
+   for nothing. Push it — the workflow checks out this exact commit, so anything uncommitted
+   would silently not be in the released Main, Scripts or `DVD_INSTALL.txt`.
+   Verify locally first: `python3 tools/docs_check.py && mkdocs build --strict`.
+
+3. **Build the core (timing-clean).** Quartus, in the pinned container:
    ```bash
-   USE_DOCKER=1 ./build_release.sh --release --compile   # -> releases/DVD_YYYYMMDD.rbf
+   USE_DOCKER=1 ./build_release.sh --release --compile   # -> releases/DVD_YYYYMMDD.rbf + .rbf.json
    ```
-   The `--release` gate refuses to pack a timing-marginal netlist. **Never ship a
-   `_MARGINAL_` .rbf.** If it comes back marginal, re-roll the seed (`tools/seed_sweep.sh`)
-   until clean. (Long compile — run in the background and report the result.)
+   `--release` refuses to pack a timing-marginal netlist, and now also refuses to build at
+   all unless `CORE_VERSION` is the release semver. **Never ship a `_MARGINAL_` .rbf** — if
+   it comes back marginal, re-roll with `tools/seed_sweep.sh` until clean. (Long compile —
+   run it in the background and report the result.) It writes a provenance manifest beside
+   the `.rbf`; the workflow needs both files.
 
-2. **Build the Main:**
+4. **Record the fit in `DVD.qsf`'s seed ledger.** `jq . releases/DVD_YYYYMMDD.rbf.json` has
+   every number the entry quotes (seed, both clk_dec corners, ALM/RAM/DSP), and the workflow
+   reprints them as a table in its run summary.
+
+5. **Create the draft and package it:**
    ```bash
-   USE_DOCKER=1 ./main/build_main.sh                      # -> main/.build/MiSTer_DVDcss
+   ./tools/publish_draft.sh v<semver> --notes /tmp/relnotes.md --title "v<semver> — <headline>"
    ```
+   It pre-flights locally (version matches the tag, tree clean and pushed, core
+   non-marginal, manifest matches the `.rbf`), creates the **draft** with the `.rbf` +
+   manifest attached, and dispatches `.github/workflows/package.yml`. CI validates the core,
+   builds `MiSTer_DVDcss`, re-runs `docs_check.py` + `mkdocs --strict`, packages the zip and
+   attaches the four assets it owns.
 
-3. **Assemble the package:**
+   ⚠ **A draft cannot trigger a workflow** (GitHub does not fire `release:created` for
+   drafts) and **has no git tag** — hence the explicit dispatch, and hence the workflow
+   checking out the SHA from the manifest rather than `refs/tags/`. Do not "simplify" it to
+   `on: release`.
+
+6. **Smoke-test the draft, then publish.** This is the point of drafting: download the zip
+   CI attached, flash the `.rbf`, confirm the core boots, mounts a disc and plays, and that
+   the OSD About line reads `DVD v<semver> <yymmdd>`.
    ```bash
-   ./tools/package_release.sh                             # -> releases/MiSTer_DVD_v<ver>.zip
+   gh release view v<semver> --web        # confirm all five assets are attached
+   gh release edit v<semver> --draft=false
    ```
-   It picks the newest non-MARGINAL `DVD_*.rbf` (or pass `--rbf`), bundles the Main and
-   both `Scripts/` tools (`install_dvdcss.sh`, `set_dvd_region.sh`), and **prints the exact
-   files to attach**.
+   Publishing creates the tag. The `/releases/latest` URL the README links to updates
+   automatically — no README edit per release.
 
-4. **Draft release notes from the PRs since the last release** (see the section below).
-
-4b. **Reconcile the manual against the notes.** You have just read every PR in the range,
-   so this is nearly free. Invoke the `docs-sweep` skill over `<prev_tag>..HEAD`. For each
-   PR ask: does it change controls, an OSD option, an on-screen message, install steps, or
-   compatibility? Confirm the owning page in `site/content/` is current.
-
-   Then, in the same commit:
-   - Update `extra.released_version` in `mkdocs.yml` to the version being cut — it drives
-     the "latest release is vX.Y.Z" banner on every page.
-   - Update the "Current as of **vX.Y.Z**" line in `site/content/reference/compatibility.md`.
-   - Sweep out `!!! info "Unreleased"` admonitions for anything this release ships.
-
-   **Commit these to `main` BEFORE tagging.** The Pages deploy is triggered by that push,
-   so the manual goes live as the release is announced rather than after it.
-
-5. **Publish** (attach the zip AND the bare components — most users want only the `.rbf`):
-   ```bash
-   gh release create v<semver> \
-     --title "v<semver> — <headline>" \
-     --notes-file /tmp/relnotes.md \
-     releases/MiSTer_DVD_v<semver>.zip \
-     releases/DVD_YYYYMMDD.rbf \
-     main/.build/MiSTer_DVDcss \
-     main/Scripts/install_dvdcss.sh \
-     main/Scripts/set_dvd_region.sh
-   ```
-   The `/releases/latest` URL the README links to updates automatically — no README edit
-   needed per release.
-
-6. **Bump `CORE_VERSION`** in `dvd/emu.sv` to the next planned version and commit (so the
-   next dev build's OSD line is already distinct from what you just shipped).
+7. **Set `CORE_VERSION` back to `"dev-main"`** in `dvd/emu.sv` and commit. This is what
+   preserves the invariant: the semver now exists in exactly one commit, so no later dev
+   build can advertise a released version.
 
 ## Release assets (attach all five)
 
