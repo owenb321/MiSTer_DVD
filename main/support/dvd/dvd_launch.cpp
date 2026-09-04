@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "../../user_io.h"
+#include "../../hardware.h"   // GetTimer() — the same clock the MGL timer is set from
 #include "../../menu.h"
 #include "../arcade/mra_loader.h"
 #include "dvd_launch.h"
@@ -76,6 +77,12 @@ void dvd_launch_tick(void)
 
 	if (mgl->done)
 	{
+		// Say how long it actually took, once. The delay is the whole reason an
+		// MGL can name a file on a share that is not awake yet, so "did it wait"
+		// should be answerable from a log rather than a stopwatch.
+		if (pending_since)
+			launch_log("DVD_LAUNCH: MGL finished after ~%ds", (int)(now - pending_since));
+
 		// Re-arm for a hypothetical second MGL in the same process. `fired`
 		// deliberately does NOT reset: once the watchdog has spoken, saying it
 		// again adds nothing and the log stays readable.
@@ -83,7 +90,27 @@ void dvd_launch_tick(void)
 		return;
 	}
 
-	if (!pending_since) { pending_since = now; return; }
+	if (!pending_since)
+	{
+		pending_since = now;
+
+		// What the MGL asked for, against what is left to wait. `timer` is an
+		// absolute deadline on the same millisecond clock GetTimer(0) reads, so
+		// this says whether the delay was armed at all.
+		//
+		// ⚠ mgl_parse() memsets the struct, so an UNARMED timer is 0 -- and
+		// CheckTimer(0) returns TRUE. Anything that runs HandleUI() between
+		// mgl_parse() and the arming at the end of user_io_init() therefore fires
+		// the MGL with no delay whatsoever. Nothing on the normal path does today
+		// (Info() does not re-enter HandleUI; InfoMessage() does, but none of our
+		// ticks are running yet) -- which is precisely why this is logged rather
+		// than assumed. A "TIMER NOT ARMED" line here is that hazard, live.
+		launch_log("DVD_LAUNCH: MGL pending -- delay=%ds, %ld ms remaining%s",
+		           mgl->item[mgl->current].delay,
+		           (long)(mgl->timer - GetTimer(0)),
+		           mgl->timer ? "" : "  (TIMER NOT ARMED -- fires immediately)");
+		return;
+	}
 	if (gap > 1) pending_since += gap;              // discount the blocked span
 	if (now - pending_since < DVD_MGL_WD_S) return;
 
