@@ -62,6 +62,14 @@ set-top player would not.
 **Interactive DVD games are incomplete.** Some game discs mis-navigate their dispatcher
 logic, and individual minigames can misbehave. Film and TV discs are the supported path.
 
+**Seeking on a seamless-branch disc is unreliable.** Some special editions store two cuts
+of the film — theatrical and extended — woven together in the same part of the disc, and
+the player chooses between them as it goes. Seeking into a woven stretch can drop you into
+the wrong cut, and the elapsed time will not match where you actually are. Normal playback
+of these discs is fine; it is only seeking that is affected. Chapter skip is the reliable
+way to move around one of these discs for now. Tracked as
+[issue #49](https://github.com/owenb321/MiSTer_DVD/issues/49).
+
 !!! success "One large class of this was fixed in 0.2.1"
     Many discs — interactive ones especially — build menus so that every button sends the
     same instruction, and a small hidden program on the disc decides where you actually go

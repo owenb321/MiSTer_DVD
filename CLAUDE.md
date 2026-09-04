@@ -326,8 +326,10 @@ worse maintenance burden than targeted in-place edits. So:
   is NOT from this branch. ⚠ **First seen on PAL and recorded here as PAL-only; that was
   WRONG — it reproduces on NTSC (2026-09-03), which is what disproved the `pal_eff`-only
   hypothesis and pointed at the standard-neutral cause.** Now **🔧 FIXED (issue #42,
-  branch `fix/mode-switch-realign`), sim-proven RED/GREEN, ⏳ HW-confirm pending** — see
-  the mode-switch re-align bullet below and `docs/single_raster_analog.md` §6.
+  branch `fix/mode-switch-realign`), ✅ HW-CONFIRMED 2026-09-03** — see the
+  mode-switch re-align bullet below and `docs/single_raster_analog.md` §6.
+  (Marker corrected 2026-09-04: this still read "⏳ HW-confirm pending" after the
+  bullet below had already recorded the hardware confirmation.)
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
@@ -566,9 +568,9 @@ worse maintenance burden than targeted in-place edits. So:
   Measured, not asserted: 4 starvation events cost **4** repeated fields with the shipped
   corrector, **0** with the gate and **0** with the corrector off. Detail:
   `docs/field_parity.md`.
-- 🔧 **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02, branch
-  `feature/video-output-consolidation`) — sim-proven (RED/GREEN), ⏳ HW-confirm pending
-  (gate = the two CRT field reports below reproduce clean).** Two CRT field reports
+- ✅ **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02,
+  PR #37) — ✅ HW-CONFIRMED (rounds 1-2 recorded further down this bullet; the
+  field-parity half was then repaired and re-confirmed by PR #44).** Two CRT field reports
   (SuperStationOne→YPbPr→Sony CRT; a second user on The Shining) exposed (a) the weave
   analog path "extremely wobbly" = the known caveat-2 pairing defect, and (b) Native
   Fields going "super aliased" after chapter skip/FF/aspect changes, healed only by
@@ -1682,7 +1684,26 @@ worse maintenance burden than targeted in-place edits. So:
   `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
   **`docs/dvd_nav.md` §2b**.
 - ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
-  `feature/flat-file-time-seek`) — sim-proven, ⏳ HW-confirm pending.**
+  `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build
+  `DVD_timeline_20260904_0059.rbf`, SEED 5 first roll, clk_dec 94.06/93.11).
+  ★ **HW round 1 found a REAL bug the sim could not: the timeline read 1.6× SHORT on
+  some discs** — `seek_time` bracketed each position between CONSECUTIVE cells'
+  first_sectors, but a PGC's cells can sit anywhere in the VOBS with large UNPLAYED
+  gaps between them. AFTER_EARTH VTS_13 PGC1: cell 0 is RBN 142..172,843 holding all
+  532 s, cell 1 a 142-sector 0 s stub at 278,540 — **172,702 played sectors in a
+  278,540 span, 1.612**. Reported readings reproduced to the second (a scrub showing
+  0:00:22 landed at 0:00:34; 0:02:42 at 0:04:33). Fixed: a cell's span is its OWN
+  `first..last` (the reader streams `cellf_last` on its own strobe — last_sector is
+  known only at cell byte 23), a target inside a gap clamps to that cell's end time,
+  and the fraction went 8 → **14 bits** with rounding (8 bits cost 28 s inside a
+  single-cell two-hour title). ⚠ **I had documented that exact case as "an
+  approximation; for a preview it is immaterial" — written from reading the format
+  rather than measuring a disc.** ⚠ **And the first re-check measured the WRONG VTS**
+  (the largest-VTS heuristic names VTS_05, which has no gaps; the title that actually
+  loads is VTS_13, which the core's own `O[2]` debug readout names in one glance —
+  `CH 1/13` = PGCN 1, VTS 13). Ask the core what it is playing before analysing a disc.
+  ⚠ **Seamless-branch discs are STILL wrong and it is a SEEK bug, not a readout one —
+  issue #49**, see the note further down.
   (1) **`dvd/seek_time.sv`**: the HUD clock showed the live playhead only, so it sat
   FROZEN through every seek while the seek bar's cursor travelled. Two causes, one
   symptom — a held FF/REW asserts `hold_freeze` → the governor stops → DSI packets stop

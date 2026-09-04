@@ -93,6 +93,10 @@ That coalescing is the whole design: one seek per gesture, however long. Seeking
 tap would mean a flush and re-lock per press, which is a regime that does not survive
 rapid input.
 
+!!! info "Unreleased"
+    Seeking on flat `.mpg`/`.VOB` files, and the gentler acceleration curve on the
+    Fast Fwd/Rewind scrub, are in development builds; not in v0.3.0.
+
 On a DVD the targets come from the **disc's own seek tables**, so they land on real frame
 boundaries rather than approximate byte offsets. On a VCD/SVCD, exact CD geometry is used
 instead. On a flat `.mpg` or `.VOB` there is neither, so the player measures how fast the
