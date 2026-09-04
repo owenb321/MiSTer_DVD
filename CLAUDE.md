@@ -1922,10 +1922,15 @@ worse maintenance burden than targeted in-place edits. So:
   (cap 10 s) and a fast one restores 1 s; while a foreign image owns the slot the
   floor is 5 s (the scan then exists only to notice an INSERTION). Measured
   (`dvd_phys_test.cpp` [8], 400 ms probe): **60 blocking calls a minute → 7.**
-  ⚠ **Recorded as a HYPOTHESIS WITH INSTRUMENTATION, not a confirmed root cause** —
-  it fits every observation but has not been measured on the reporter's drive, so
-  `dvd_phys` logs any probe over 50 ms to `/tmp/dvd_report.log` with its duration.
-  No such line at the freeze ⇒ the scan is exonerated and the search moves core-side.
+  ✅ **HW-CONFIRMED 2026-09-04** (*"ejecting during .mpg playback works now"*). It
+  shipped as a hypothesis with instrumentation and the instrument STAYS: any probe
+  over 50 ms is logged to `/tmp/dvd_report.log` with its duration, which is the
+  fastest way to tell a slow drive from a core-side stall next time.
+  ★★ **THE DIAGNOSIS CAME FROM ONE CLAUSE IN THE REPORT — "the OSD still works".**
+  Main alive + HandleUI running rules out every unmount/reset hypothesis at a stroke
+  and leaves starvation as the only shape that fits. **Ask it explicitly next time:
+  "is the PICTURE frozen or is the MACHINE frozen" separates the HPS side from the
+  core side before a line of code is read.**
   ★ **The durable rule, worth applying to any future overlay tick: `user_io_poll()`
   is the core's data pump. Blocking I/O there is a video artefact, not a latency
   nit.** `dvd_report` already forks for this reason; `crack_title_keys` gets away

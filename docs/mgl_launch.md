@@ -277,12 +277,16 @@ Fix: the scan is self-limiting. A probe over 50 ms doubles the period (capped at
 exists only to notice an *insertion*, so its floor is 5 s rather than 1 s. Measured
 in `dvd_phys_test.cpp` [8]: with a 400 ms probe, **60 blocking calls a minute → 7**.
 
-⚠ **This one is a hypothesis with instrumentation attached, not a confirmed
-root-cause.** It fits every observation — frozen picture, live OSD, starts at the
-eject, never recovers, unaffected by the slot-ownership fix — but it has not been
-measured on the reporter's drive. `dvd_phys` therefore logs any probe over 50 ms to
-`/tmp/dvd_report.log` with its duration. If that line is absent when the freeze
-happens, the drive scan is exonerated and the search moves to the core side.
+✅ **HW-CONFIRMED** (2026-09-04, reporter: *"ejecting during .mpg playback works
+now"*). It shipped as a hypothesis with instrumentation — `dvd_phys` still logs any
+probe over 50 ms to `/tmp/dvd_report.log` with its duration, which is worth keeping:
+it is the fastest way to tell a slow drive from a core-side stall next time.
+
+★ The diagnosis came from **one clause in the report** — "the OSD still works".
+Main alive and HandleUI running ruled out every unmount and reset hypothesis at a
+stroke and left starvation as the only shape that fits. Worth asking for
+explicitly: "is the picture frozen or is the machine frozen" separates the HPS side
+from the core side before any code is read.
 
 ## 5. Gates
 
