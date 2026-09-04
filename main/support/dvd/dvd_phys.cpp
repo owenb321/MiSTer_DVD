@@ -6,6 +6,7 @@
 // dvd_detect.*. This file adds only "when to mount / unmount".
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -40,6 +41,23 @@ static time_t reset_release_at = 0; // >0 while an eject reset pulse is being he
 static int    foreign = 0;
 static int    prev_ready = 0;      // the drive reported a disc ready on the last scan
 static int    probed_not_video = 0; // this disc was probed and is not DVD-Video
+
+// Shares /tmp/dvd_report.log with dvd_report.cpp -- one file to ask a reporter for.
+// Only decisions get a line, never the 1 Hz scan, so the log stays readable across
+// a whole session. This exists because "eject froze playback" has two completely
+// different causes depending on WHICH image was playing, and the console is not
+// something most users can capture.
+static void phys_log(const char *fmt, ...)
+{
+	va_list ap;
+	FILE *f = fopen("/tmp/dvd_report.log", "a");
+	if (!f) return;
+	va_start(ap, fmt);
+	vfprintf(f, fmt, ap);
+	va_end(ap);
+	fprintf(f, "\n");
+	fclose(f);
+}
 
 // Find the first /dev/srN that currently holds a disc reported ready. Fills `out`
 // (size >= 16) and returns an fd opened O_RDONLY|O_NONBLOCK, or -1. Mirrors the
@@ -89,7 +107,7 @@ void dvd_phys_note_mount(const char *path, unsigned char index)
 	// it any more -- user_io_file_mount() has already called dvd_css_close() on
 	// our source. Forgetting `mounted` here is what stops a later eject from
 	// unmounting the user's file and resetting the core out from under it.
-	if (mounted) printf("DVD_PHYS: slot taken by %s, releasing the drive\n", path);
+	if (mounted) phys_log("DVD_PHYS: slot taken by %s -- releasing the drive", path);
 	mounted = 0;
 	mounted_dev[0] = 0;
 	foreign = 1;
@@ -117,6 +135,7 @@ void dvd_phys_tick(void)
 
 	if (fd < 0)
 	{
+		int was_ready = prev_ready;
 		prev_ready = 0;
 
 		// No ready disc. If WE still own the slot, the disc was ejected/removed:
@@ -128,16 +147,23 @@ void dvd_phys_tick(void)
 		// the user had loaded since -- freezing playback (the file handle is gone)
 		// and resetting the core. dvd_phys_note_mount() now clears `mounted` the
 		// moment another image takes the slot.
-		if (mounted)
+		if (!mounted)
 		{
-			printf("DVD_PHYS: disc removed, unmounting + reset to idle\n");
-			user_io_file_mount("", 0);
-			dvd_css_close();
-			mounted_dev[0] = 0;
-			user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
-			reset_release_at = now + 1;      // release after ~1 s (see the tick top)
-			mounted = 0;
+			// Nothing of ours to tear down. Say so once per removal: if playback
+			// froze at this moment anyway, this line proves it was not us.
+			if (was_ready)
+				phys_log("DVD_PHYS: disc removed, but the drive does not own slot 0 "
+				         "(foreign=%d) -- leaving playback alone", foreign);
+			return;
 		}
+
+		phys_log("DVD_PHYS: disc removed while playing it -- unmount + reset to idle");
+		user_io_file_mount("", 0);
+		dvd_css_close();
+		mounted_dev[0] = 0;
+		user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
+		reset_release_at = now + 1;      // release after ~1 s (see the tick top)
+		mounted = 0;
 		return;
 	}
 
@@ -176,7 +202,7 @@ void dvd_phys_tick(void)
 	close(fd);
 	if (!is_dvd_video) { probed_not_video = 1; return; }
 
-	printf("DVD_PHYS: DVD-Video on %s, mounting\n", dev);
+	phys_log("DVD_PHYS: DVD-Video on %s -- mounting", dev);
 	// The sentinel routes user_io_file_mount() to the CSS-decrypted drive path
 	// (see the SD_TYPE_DVDCSS handling in user_io.cpp). dvd_css_open() inside it
 	// re-scans for the drive and runs the CSS handshake; a failure there (no
