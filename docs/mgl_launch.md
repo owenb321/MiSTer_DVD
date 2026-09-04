@@ -249,6 +249,41 @@ that window would be cancelled by it. Much harder to reach now that the teardown
 only runs for a disc the drive still owns, but it is not *impossible* and it is a
 candidate if "Reset does nothing" is ever reported.
 
+### The drive probe runs on the thread that feeds the decoder
+
+Reported after 4.4 landed: the MGL launch was clean (no key crack), but **ejecting
+an unrelated disc still froze the `.mpg` — while the OSD kept working**.
+
+The OSD working is the whole diagnosis. Main is alive and HandleUI is running, so
+nothing unmounted the file and the core is not in reset: it is being **starved**.
+And with 4.4 in place `dvd_phys_tick()` does nothing at all on that eject — the
+drive does not own the slot. So the only thing left touching the drive is the scan
+itself:
+
+```c
+open("/dev/sr0", O_RDONLY|O_NONBLOCK);   // once a second, forever
+ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT);
+```
+
+That is **blocking I/O on the same thread as `user_io_poll()`'s SD block service**,
+so however long it takes is time the core gets no data. On a settled drive it is
+microseconds. With the **tray open** it is not: the kernel's `sr` driver answers
+TEST UNIT READY with a media-change unit attention and retries, which can run to
+hundreds of milliseconds — every second, for as long as the tray stays open,
+because the state never settles.
+
+Fix: the scan is self-limiting. A probe over 50 ms doubles the period (capped at
+10 s); a fast one restores 1 s. And while a foreign image owns the slot the scan
+exists only to notice an *insertion*, so its floor is 5 s rather than 1 s. Measured
+in `dvd_phys_test.cpp` [8]: with a 400 ms probe, **60 blocking calls a minute → 7**.
+
+⚠ **This one is a hypothesis with instrumentation attached, not a confirmed
+root-cause.** It fits every observation — frozen picture, live OSD, starts at the
+eject, never recovers, unaffected by the slot-ownership fix — but it has not been
+measured on the reporter's drive. `dvd_phys` therefore logs any probe over 50 ms to
+`/tmp/dvd_report.log` with its duration. If that line is absent when the freeze
+happens, the drive scan is exonerated and the search moves to the core side.
+
 ## 5. Gates
 
 - `bench/dvd/run_mgl.sh` — `iso_reader_mount_tb` (RED: 10 reads against an empty slot,

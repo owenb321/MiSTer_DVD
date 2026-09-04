@@ -33,6 +33,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 #include "dvd_phys.h"      // staged on the include path by run_tests.sh
@@ -45,10 +46,15 @@ static int  probe_calls       = 0;   // how often we READ the disc
 static int  mount_calls       = 0;
 static int  reset_asserts     = 0;
 static char last_mount[256]   = {0};
+static int  scan_calls        = 0;   // how often the drive was probed for readiness
+static unsigned fake_probe_ms = 0;   // how long that probe takes (a stalled drive)
+static unsigned fake_ms       = 0;   // the millisecond clock the module measures with
 
 #define DVD_PHYS_TEST 1
 static int open_ready_drive(char *out, int out_sz)
 {
+    scan_calls++;
+    fake_ms += fake_probe_ms;         // blocking I/O: the clock moves inside the call
     if (!fake_disc_ready) return -1;
     if (out && out_sz > 0) { strncpy(out, "/dev/sr0", out_sz - 1); out[out_sz-1] = 0; }
     return 99;                        // a token fd; close(99) is a harmless EBADF
@@ -80,6 +86,8 @@ void user_io_status_set(const char *name, uint32_t value, int = 0)
 // macro cannot mangle the real declaration.
 static time_t fake_now = 1000;
 #define time(p) (fake_now)
+#define gettimeofday(tv, tz) (((tv)->tv_sec = fake_ms / 1000), \
+                              ((tv)->tv_usec = (fake_ms % 1000) * 1000), 0)
 
 #include "dvd_phys.cpp"
 
@@ -91,12 +99,18 @@ static void check(const char *what, long got, long want)
     else             { printf("  ok   %-46s %ld\n", what, got); }
 }
 
-// The tick is rate-limited to one scan a second; step() walks the clock so each
-// call is a real scan rather than a no-op.
-static void step(int n = 1)
+// The tick rate-limits itself, and the period varies (1 s normally, 5 s while
+// somebody else owns the slot, backing off further if the drive probe turns out to
+// be slow). So the harness walks the clock in seconds and lets the module decide
+// when to scan, rather than assuming one tick == one scan.
+static void run_for(int seconds)
 {
-    for (int i = 0; i < n; i++) { fake_now += 2; dvd_phys_tick(); }
+    for (int i = 0; i < seconds; i++) { fake_now += 1; dvd_phys_tick(); }
 }
+
+// How long a disc may sit in the drive before we notice it. The scan backs off to
+// at most this, so nothing may take longer.
+#define NOTICE_WINDOW_S 10
 
 static void reset_counters(void)
 {
@@ -108,7 +122,7 @@ int main(void)
     printf("=== [1] MGL launch with a disc in the drive: no disc reads, no mount ===\n");
     fake_disc_ready = 1; fake_launch_busy = 1;
     reset_counters();
-    step(5);                                   // five seconds of MGL delay
+    run_for(5);                                // five seconds of MGL delay
     check("[1] disc reads while the MGL is pending", probe_calls, 0);
     check("[1] mounts while the MGL is pending",     mount_calls, 0);
 
@@ -116,21 +130,21 @@ int main(void)
     dvd_phys_note_mount("/media/fat/cifs/Movies/Terminator.mpg", 0);
     fake_launch_busy = 0;
     reset_counters();
-    step(10);                                  // ten more seconds, disc still sitting there
+    run_for(30);                               // half a minute, disc still sitting there
     check("[2] disc reads after the file is mounted", probe_calls, 0);
     check("[2] mounts after the file is mounted",     mount_calls, 0);
 
     printf("=== [3] ejecting that disc must not touch the playing file ===\n");
     reset_counters();
     fake_disc_ready = 0;
-    step(2);
+    run_for(NOTICE_WINDOW_S);
     check("[3] unmounts on eject",       mount_calls,   0);
     check("[3] core resets on eject",    reset_asserts, 0);
 
     printf("=== [4] inserting a disc afterwards still plays it ===\n");
     reset_counters();
     fake_disc_ready = 1;
-    step(2);
+    run_for(NOTICE_WINDOW_S);
     check("[4] disc reads (probed once)", probe_calls, 1);
     check("[4] mounts",                   mount_calls, 1);
     if (strcmp(last_mount, DVD_PHYS_SENTINEL)) {
@@ -140,7 +154,7 @@ int main(void)
     printf("=== [5] ejecting the disc WE are playing does reset to idle ===\n");
     reset_counters();
     fake_disc_ready = 0;
-    step(2);
+    run_for(NOTICE_WINDOW_S);
     check("[5] unmounts", mount_calls, 1);
     check("[5] resets",   reset_asserts, 1);
     if (last_mount[0]) { printf("  FAIL [5] unmount path passed %s, want \"\"\n", last_mount); errs++; }
@@ -149,18 +163,42 @@ int main(void)
     printf("=== [6] plain launch, disc in the drive: mounts, probing once ===\n");
     reset_counters();
     fake_disc_ready = 1;
-    step(4);
-    check("[6] disc reads over four scans", probe_calls, 1);
-    check("[6] mounts",                     mount_calls, 1);
+    run_for(NOTICE_WINDOW_S);
+    check("[6] disc reads over ten seconds", probe_calls, 1);
+    check("[6] mounts",                      mount_calls, 1);
 
     printf("=== [7] an audio CD is probed once per insertion, not once a second ===\n");
     // eject the DVD, then present a non-DVD-Video disc
-    fake_disc_ready = 0; step(2);
+    fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
     reset_counters();
     fake_disc_is_dvd = 0; fake_disc_ready = 1;
-    step(6);
-    check("[7] disc reads over six scans", probe_calls, 1);
-    check("[7] mounts",                    mount_calls, 0);
+    run_for(30);
+    check("[7] disc reads over half a minute", probe_calls, 1);
+    check("[7] mounts",                        mount_calls, 0);
+
+    printf("=== [8] a slow drive probe must back off ===\n");
+    // The field case: a .mpg is playing, the tray is OPEN, and every probe costs
+    // hundreds of ms on the same thread that feeds the decoder. Un-backed-off that
+    // is ~60 blocking calls a minute, which is what froze the picture.
+    fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+    dvd_phys_note_mount("/media/fat/cifs/Movies/Terminator.mpg", 0);
+    fake_disc_is_dvd = 1;
+    fake_probe_ms = 400;                       // an open tray, retrying
+    reset_counters(); scan_calls = 0;
+    run_for(60);
+    if (scan_calls > 12) { printf("  FAIL [8] %d probes in 60 s, want <= 12\n", scan_calls); errs++; }
+    else printf("  ok   [8] probes in 60 s of a stalled drive       %d (was 60)\n", scan_calls);
+
+    printf("=== [9] ...and recovers once the drive settles ===\n");
+    fake_probe_ms = 0;
+    run_for(NOTICE_WINDOW_S);                  // let one fast probe reset the backoff
+    scan_calls = 0;
+    run_for(20);
+    // foreign is still set (the .mpg is playing), so the floor is the 5 s
+    // insertion-watch period, not 1 s. Four scans is the whole point: fast enough
+    // to notice a disc, rare enough to be invisible.
+    if (scan_calls < 4) { printf("  FAIL [9] %d probes in 20 s, want >= 4\n", scan_calls); errs++; }
+    else printf("  ok   [9] probes in 20 s of a healthy drive       %d\n", scan_calls);
 
     printf("\n=== dvd_phys tests: %d error(s) ===\n", errs);
     if (errs) { printf("FAILED\n"); return 1; }

@@ -1906,6 +1906,30 @@ worse maintenance burden than targeted in-place edits. So:
   disc. ⚠ The module carries exactly ONE `#ifdef DVD_PHYS_TEST`, around
   `open_ready_drive` — a real `/dev/srN` cannot be faked (a regular file opens fine
   and then fails `CDROM_DRIVE_STATUS`).
+  ★★ **AND A THIRD ROUND: THE DRIVE PROBE RUNS ON THE THREAD THAT FEEDS THE
+  DECODER.** Report after the slot-ownership fix: the MGL launch was clean, but
+  ejecting an UNRELATED disc still froze the `.mpg` — **while the OSD kept
+  working**. ★ That last clause IS the diagnosis: Main alive + HandleUI running
+  ⇒ nothing unmounted the file and the core is not in reset, so it is being
+  STARVED. And with the slot fix in place `dvd_phys_tick()` does nothing on that
+  eject, which leaves exactly one thing still touching the drive — the 1 Hz scan
+  itself. `open("/dev/srN", O_NONBLOCK)` + `ioctl(CDROM_DRIVE_STATUS)` is
+  **BLOCKING I/O on the same thread as `user_io_poll()`'s SD block service**, so
+  however long it takes is time the core gets no data. Microseconds on a settled
+  drive; with the **TRAY OPEN** the `sr` driver answers TEST UNIT READY with a
+  media-change unit attention and RETRIES — hundreds of ms, every second, forever,
+  because the state never settles. Fix: a probe over 50 ms doubles the scan period
+  (cap 10 s) and a fast one restores 1 s; while a foreign image owns the slot the
+  floor is 5 s (the scan then exists only to notice an INSERTION). Measured
+  (`dvd_phys_test.cpp` [8], 400 ms probe): **60 blocking calls a minute → 7.**
+  ⚠ **Recorded as a HYPOTHESIS WITH INSTRUMENTATION, not a confirmed root cause** —
+  it fits every observation but has not been measured on the reporter's drive, so
+  `dvd_phys` logs any probe over 50 ms to `/tmp/dvd_report.log` with its duration.
+  No such line at the freeze ⇒ the scan is exonerated and the search moves core-side.
+  ★ **The durable rule, worth applying to any future overlay tick: `user_io_poll()`
+  is the core's data pump. Blocking I/O there is a video artefact, not a latency
+  nit.** `dvd_report` already forks for this reason; `crack_title_keys` gets away
+  with it only because nothing is playing yet.
   Detail: **`docs/mgl_launch.md`**.
 - ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
   `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build

@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
@@ -41,6 +42,36 @@ static time_t reset_release_at = 0; // >0 while an eject reset pulse is being he
 static int    foreign = 0;
 static int    prev_ready = 0;      // the drive reported a disc ready on the last scan
 static int    probed_not_video = 0; // this disc was probed and is not DVD-Video
+
+// ---------------------------------------------------------------------------
+// Scan backoff — the drive probe runs on the thread that feeds the decoder
+// ---------------------------------------------------------------------------
+// open_ready_drive() is BLOCKING I/O on the same thread as user_io_poll()'s SD
+// block service, so however long it takes is time the core gets no data. With a
+// settled drive that is microseconds and nobody notices. With an OPEN TRAY it is
+// not: the kernel's sr driver answers TEST UNIT READY with a media-change unit
+// attention and retries, which can run to hundreds of milliseconds -- every
+// second, for as long as the tray stays open, because the state never settles.
+//
+// Field report that produced this: an MGL-loaded .mpg played fine, and ejecting an
+// unrelated disc froze the picture for good while the OSD kept working. Main was
+// alive; the core was being starved a large fraction of every second.
+//
+// So the probe is now self-limiting. A slow scan backs the period off (doubling,
+// capped), a fast one restores it. Worst case is one hiccup per DVD_PHYS_SCAN_MAX_S
+// instead of one per second, and a disc insertion is still noticed within that.
+#define DVD_PHYS_SLOW_MS      50   // above this, the probe is disturbing playback
+#define DVD_PHYS_SCAN_MAX_S   10   // hard cap on the backoff
+
+static int    scan_period = DVD_PHYS_SCAN_PERIOD_S;
+static int    slow_logged = 0;
+
+static unsigned now_ms(void)
+{
+	struct timeval tv;
+	gettimeofday(&tv, 0);
+	return (unsigned)(tv.tv_sec * 1000u + tv.tv_usec / 1000u);
+}
 
 // Shares /tmp/dvd_report.log with dvd_report.cpp -- one file to ask a reporter for.
 // Only decisions get a line, never the 1 Hz scan, so the log stays readable across
@@ -127,11 +158,38 @@ void dvd_phys_tick(void)
 		reset_release_at = 0;
 	}
 
-	if (now - last_scan < DVD_PHYS_SCAN_PERIOD_S) return;
+	// Only watching for an INSERTION while somebody else owns the slot, so there
+	// is nothing to be quick about; a disc going in is noticed a few seconds later
+	// and nothing else changes.
+	int period = foreign ? 5 : scan_period;
+	if (period < scan_period) period = scan_period;
+	if (now - last_scan < period) return;
 	last_scan = now;
 
+	unsigned t0 = now_ms();
 	char dev[16] = {0};
 	int fd = open_ready_drive(dev, sizeof(dev));
+	unsigned took = now_ms() - t0;
+
+	if (took >= DVD_PHYS_SLOW_MS)
+	{
+		int was = scan_period;
+		scan_period *= 2;
+		if (scan_period > DVD_PHYS_SCAN_MAX_S) scan_period = DVD_PHYS_SCAN_MAX_S;
+		if (!slow_logged || scan_period != was)
+		{
+			slow_logged = 1;
+			phys_log("DVD_PHYS: drive probe took %u ms (blocking the poll loop) -- "
+			         "backing the scan off to %ds", took, scan_period);
+		}
+	}
+	else if (scan_period != DVD_PHYS_SCAN_PERIOD_S)
+	{
+		scan_period = DVD_PHYS_SCAN_PERIOD_S;
+		slow_logged = 0;
+		phys_log("DVD_PHYS: drive probe is fast again (%u ms) -- back to %ds",
+		         took, scan_period);
+	}
 
 	if (fd < 0)
 	{
