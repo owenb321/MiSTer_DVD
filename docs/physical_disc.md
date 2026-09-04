@@ -381,10 +381,14 @@ scenario — these are string assertions on console output, exactly the shape th
 without proving anything.
 
 The **read** ioctl and the gamepad-driven console are ✅ **HW-CONFIRMED** (2026-08-31, and
-again 2026-09-04 on the rewritten script). The **set** ioctl is ⏳ **still ungated**: every
-attempt so far carried the malformed `pdrc`, so nothing yet proves the corrected command is
-accepted. The next attempt on a real drive is the gate — and it costs one of that drive's
-permanent changes, which is why it has not been spent casually.
+again 2026-09-04 on the rewritten script). The **command** is ✅ HW-proven too: correct
+`pdrc`, matching disc, accepted with Good status over SG_IO. ⏳ What remains ungated is
+narrow and exact — **the script itself issuing a successful set**. Every refusal it has
+produced was the drive declining for a reason it named; it has not yet been the thing that
+sends a change a drive accepts. Closing that needs a drive whose owner wants a region it can
+actually reach, which on a disc-follows-the-disc drive means owning a disc from that region.
+⚠ Do not spend the unset drive on it (the cracking-path rig) — the next user with a genuinely
+unset drive gates it for free, since any disc they own matches a region they would pick.
 
 ## HW status / open items
 
@@ -411,11 +415,12 @@ Remaining:
    the multi-drive warning listed both, and (2026-09-04) the rewritten script reads and
    pauses correctly on the board. That confirms the `DVD_AUTH` read, drive enumeration, and
    the uinput key injection on tty2, which was the design's riskiest assumption.
-   **Write: not yet proven with a correct command.** Every attempt before 2026-09-04 sent
-   the malformed `pdrc` (the region number instead of the mask) and was rejected on the
-   maintainer's drive with sense 05/26/00; issue #52's drive errored too, and why it ended
-   up regioned anyway is unexplained. The gate is one run of the corrected script on a drive
-   whose owner has decided to commit a change.
+   **Write: the command is proven, the script issuing one successfully is not.** The
+   corrected `pdrc` with a matching disc loaded is accepted (Good status, SG_IO, 2026-09-04);
+   the script's own runs have all been refusals the drive explained (`05/6f/04`, `02/3a/01`),
+   because the local drive is region 1 and no region-2 disc exists here to switch it with.
+   The gate is one run on a drive that can reach the region asked of it. Issue #52's LG
+   errored and ended up regioned anyway, which remains unexplained.
    A **set is one-way and spends one of the drive's ~5 permanent changes**. Bench plan for
    the Q2 rig is still three drives — one left unset (keeps the `No drive region: cracking`
    path testable, which a set would destroy forever), one matching the local library, one

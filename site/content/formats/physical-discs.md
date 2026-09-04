@@ -103,7 +103,8 @@ the cursor starts on *Cancel*.
     region`.
 
     The tool shows the loaded disc's region next to the drive's, and warns before you commit
-    if the two do not agree.
+    if the two do not agree. If you do not own a disc from the region you want yet, wait
+    until you do — such a drive will not switch without one.
 
 Every screen waits for a button before it closes, and everything it prints is also written
 to `DVD_reports/set_dvd_region.log` on the SD card (or `/tmp` if the SD card is not
