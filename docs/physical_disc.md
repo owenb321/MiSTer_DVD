@@ -305,10 +305,13 @@ THE TRAY.** Measured on a TSSTcorp TS-L633C, drive at region 1:
 | region-1 disc | region 1 | **Good** (this was the PC success) |
 | region-1 disc | region 2 | `05/6f/04` media region code is mismatched to logical unit region |
 | empty | region 2 | `02/3a/01` medium not present, tray closed |
+| disc with RMI `40` (allows 1-6, 8) | region 2 | **Good** — ✅ and this is the end-to-end gate |
 
 That is the Windows model — insert a foreign disc and the OS offers to switch the drive to
-match — and it means **the region a drive will accept is the region of the disc you put in
-it**. Neither "with a disc" nor "without a disc" is the rule; *matching* is.
+match. ★ **The exact rule is that the loaded disc must ALLOW the target region, not that it
+name exactly that region**: the fourth row is a multi-region disc (`RMI 40` = every region
+but 7) and it satisfied a switch to region 2. Neither "with a disc" nor "without a disc" is
+the rule, and neither is "a disc of that region" — *allows* is.
 
 ★ **The diagnostic lesson is bigger than the bug, and it bit twice.** The evidence was
 "accepted on a PC over SG_IO, refused on the MiSTer over the ioctl", and both variables that
@@ -380,15 +383,13 @@ called a failure, raw bytes dropped, RPC-1 treated as unset) are each caught by 
 scenario — these are string assertions on console output, exactly the shape that passes
 without proving anything.
 
-The **read** ioctl and the gamepad-driven console are ✅ **HW-CONFIRMED** (2026-08-31, and
-again 2026-09-04 on the rewritten script). The **command** is ✅ HW-proven too: correct
-`pdrc`, matching disc, accepted with Good status over SG_IO. ⏳ What remains ungated is
-narrow and exact — **the script itself issuing a successful set**. Every refusal it has
-produced was the drive declining for a reason it named; it has not yet been the thing that
-sends a change a drive accepts. Closing that needs a drive whose owner wants a region it can
-actually reach, which on a disc-follows-the-disc drive means owning a disc from that region.
-⚠ Do not spend the unset drive on it (the cracking-path rig) — the next user with a genuinely
-unset drive gates it for free, since any disc they own matches a region they would pick.
+✅ **THE WHOLE TOOL IS NOW HW-CONFIRMED (2026-09-04), READ AND WRITE.** The read ioctl and
+the gamepad-driven console were confirmed 2026-08-31 and again on the rewritten script; the
+**write** closed the same day on a TSSTcorp TS-L633C — `route: SG_IO, accepted`,
+`verify 0: 51 fd 01`, `Done. The drive is now region 2, with 2 changes left`, `ucca` 3 → 2.
+★ Two details worth keeping from that log: the drive answered the read-back **on the first
+attempt** (`verify 0`), so the 6 × 0.5 s retry is insurance rather than a routine need; and
+`disc_regions()` ran on real iron for the first time, reading `RMI 40` correctly.
 
 ## HW status / open items
 
@@ -415,12 +416,10 @@ Remaining:
    the multi-drive warning listed both, and (2026-09-04) the rewritten script reads and
    pauses correctly on the board. That confirms the `DVD_AUTH` read, drive enumeration, and
    the uinput key injection on tty2, which was the design's riskiest assumption.
-   **Write: the command is proven, the script issuing one successfully is not.** The
-   corrected `pdrc` with a matching disc loaded is accepted (Good status, SG_IO, 2026-09-04);
-   the script's own runs have all been refusals the drive explained (`05/6f/04`, `02/3a/01`),
-   because the local drive is region 1 and no region-2 disc exists here to switch it with.
-   The gate is one run on a drive that can reach the region asked of it. Issue #52's LG
-   errored and ended up regioned anyway, which remains unexplained.
+   **Write: ✅ HW-CONFIRMED 2026-09-04** — the script set a TSSTcorp TS-L633C from region 1
+   to region 2 with a disc loaded that allowed region 2, read the new region back on the
+   first attempt, and the change counter went 3 → 2. Issue #52's LG errored and ended up
+   regioned anyway, which remains unexplained and is the only loose end left here.
    A **set is one-way and spends one of the drive's ~5 permanent changes**. Bench plan for
    the Q2 rig is still three drives — one left unset (keeps the `No drive region: cracking`
    path testable, which a set would destroy forever), one matching the local library, one

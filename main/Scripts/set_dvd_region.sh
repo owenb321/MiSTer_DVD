@@ -198,6 +198,32 @@ def raw_hex(state):
     return " ".join("%02x" % b for b in state.raw)
 
 
+def region_span(regions):
+    """[1,2,3,4,5,6,8] -> "1-6,8". A multi-region disc should not print as a list."""
+    if not regions:
+        return "none"
+    parts, start, prev = [], regions[0], regions[0]
+    for r in list(regions[1:]) + [None]:
+        if r != prev + 1:
+            parts.append(str(start) if start == prev else
+                         "%d,%d" % (start, prev) if prev == start + 1 else
+                         "%d-%d" % (start, prev))
+            start = r
+        prev = r
+    return ",".join(parts)
+
+
+def region_words(regions):
+    """How a loaded disc's regions are named in prose, singular or plural."""
+    if regions is None:
+        return "unknown"
+    if len(regions) == 8:
+        return "all regions"
+    if len(regions) == 1:
+        return "region %d" % regions[0]
+    return "regions %s" % region_span(regions)
+
+
 def region_pdrc(region):
     """Region 1-8 -> the Preferred Drive Region Code byte SEND KEY wants.
 
@@ -337,6 +363,7 @@ class Drive:
     def __init__(self, path, fd):
         self.path = path
         self.fd = fd
+        self._discs = ()        # () = not looked at yet, distinct from None
 
     def reopen(self):
         """Fresh handle, used before reading back a change.
@@ -349,6 +376,7 @@ class Drive:
         except OSError:
             pass
         self.fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
+        self._discs = ()
 
     def media_present(self):
         try:
@@ -357,7 +385,10 @@ class Drive:
             return False    # can't tell -> say nothing rather than nag wrongly
 
     def disc_regions(self):
-        return disc_regions(self.fd) if self.media_present() else None
+        # Cached: every screen asks, and each miss is a real SCSI command.
+        if self._discs == ():
+            self._discs = disc_regions(self.fd) if self.media_present() else None
+        return self._discs
 
     def read_state(self):
         buf = bytearray(AUTHINFO_SIZE)
@@ -410,8 +441,10 @@ class FakeDrive:
     def __init__(self, spec, index=0):
         parts = spec.split(":")
         self.fault = parts[4] if len(parts) > 4 else ""
-        # "discN" loads a region-N disc in the tray; the drive follows the disc.
-        self.disc = int(self.fault[4:]) if self.fault.startswith("disc") else None
+        # "disc25" loads a disc allowing regions 2 and 5 — a real disc often
+        # allows several (a measured one read RMI 40: everything but region 7).
+        self.disc = ([int(c) for c in self.fault[4:]]
+                     if self.fault.startswith("disc") and self.fault[4:].isdigit() else None)
         region, changes, resets, scheme = (int(p) for p in (parts + ["0", "5", "4", "1"])[:4])
         self.path = "(simulated sr%d)" % index
         self.region, self.changes, self.resets, self.scheme = region, changes, resets, scheme
@@ -431,7 +464,7 @@ class FakeDrive:
         return self.disc is not None
 
     def disc_regions(self):
-        return [self.disc] if self.disc else None
+        return list(self.disc) if self.disc else None
 
     def read_state(self):
         if self.fault == "rbfail" and self.changed:
@@ -451,7 +484,7 @@ class FakeDrive:
         if self.fault.startswith("disc") or self.fault == "nodisc":
             if self.disc is None:
                 raise SenseError(2, 0x3a, 0x01)
-            if self.disc != region:
+            if region not in self.disc:
                 raise SenseError(5, 0x6f, 0x04)
         if self.fault == "setfail" or self.changes <= 0:
             raise OSError(5, "Input/output error")
@@ -632,14 +665,10 @@ def status_lines(drive, state):
     lines.append("  RPC state      : %s   (%s)" % (raw_hex(state), describe_rpc(state)))
     regions = drive.disc_regions()
     if regions is None:
-        lines.append("  Disc in drive  : %s"
-                     % ("yes (region unreadable)" if drive.media_present() else "none"))
-    elif len(regions) == 8:
-        lines.append("  Disc in drive  : all regions")
+        what = "yes (region unreadable)" if drive.media_present() else "none"
     else:
-        lines.append("  Disc in drive  : region %s"
-                     % ",".join(str(r) for r in regions) if regions else
-                     "  Disc in drive  : no region allowed")
+        what = region_words(regions)
+    lines.append("  Disc in drive  : %s" % what)
     return lines
 
 
@@ -704,9 +733,9 @@ def interactive(drive, state, extra=()):
         return 0
 
     header += ["",
-               "  Many drives take the new region FROM THE DISC in the tray: put a",
-               "  disc from the region you want in the drive before changing it.",
-               "  An empty tray or a disc from another region is refused."]
+               "  Many drives take the new region FROM THE DISC in the tray: the",
+               "  disc must ALLOW the region you are setting. An empty tray, or a",
+               "  disc that bars that region, is refused. Many discs allow several."]
     header += ["", "  Pick the region your discs come from:"]
     items = ["%d  %s" % (num, name) for num, name in CHOOSABLE] + ["Cancel - change nothing"]
     footer = ["  D-pad = move    B1 = select    B2 = cancel",
@@ -736,10 +765,10 @@ def interactive(drive, state, extra=()):
     regions = drive.disc_regions()
     if regions is not None and want not in regions:
         confirm_header += ["",
-                           "  !! The disc in the drive is region %s. A drive that takes its"
-                           % ",".join(str(r) for r in regions),
-                           "  !! region from the disc will REFUSE this - swap in a region",
-                           "  !! %d disc first if it does." % want]
+                           "  !! The disc in the drive is for %s and does not"
+                           % region_words(regions),
+                           "  !! allow region %d. A drive that takes its region from the" % want,
+                           "  !! disc REFUSES that - put in a disc that allows region %d." % want]
     elif regions is None and drive.media_present() is False:
         confirm_header += ["",
                            "  !! The drive is empty. A drive that takes its region from the",

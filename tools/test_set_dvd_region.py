@@ -113,6 +113,16 @@ unit("pdrc is a mask with one bit clear",
                                                  0xef, 0xdf, 0xbf, 0x7f],
      repr([hex(M.region_pdrc(n)) for n in range(1, 9)]))
 
+unit("region spans read as spans, not lists",
+     [M.region_span(r) for r in ([1, 2, 3, 4, 5, 6, 8], [2], [1, 2], [1, 3, 5], [])]
+     == ["1-6,8", "2", "1,2", "1,3,5", "none"],
+     repr([M.region_span(r) for r in ([1, 2, 3, 4, 5, 6, 8], [2], [1, 2], [1, 3, 5], [])]))
+
+# MEASURED: a real disc read RMI 40 — every region except 7. So the rule is that
+# the loaded disc must ALLOW the region being set, not that it names exactly it.
+unit("an RMI of 40 allows everything but region 7",
+     [n + 1 for n in range(8) if not (0x40 >> n) & 1] == [1, 2, 3, 4, 5, 6, 8])
+
 st = M.decode_state(b"\x91\xfd\x01")
 unit("RPC state decodes as the kernel packs it",
      (st.region, st.changes, st.resets, st.scheme, st.rpc_type) == (2, 4, 4, 1, 1),
@@ -278,21 +288,27 @@ check_pdrc(4, 0xf7)
 # warns before the user spends the trip, not after.
 check("the loaded disc's region is on the status screen", [ESC],
       ["Disc in drive  : region 2"], fake="1:3:4:1:disc2")
+check("a multi-region disc reads as a span", [ESC],
+      ["Disc in drive  : regions 1-6"], fake="1:3:4:1:disc123456")
+check("a disc that allows the target region is accepted, not just an exact match",
+      [b"2", ENTER, DOWN, ENTER],
+      ["Done. The drive is now region 2"], ["does not allow region"],
+      fake="1:3:4:1:disc123456")
 check("an empty tray says so", [ESC],
       ["Disc in drive  : none"], fake="1:3:4:1")
 check("the menu explains that the drive follows the disc", [ESC],
       ["take the new region FROM THE DISC"], fake="1:3:4:1")
 check("confirming a region the loaded disc cannot support warns first",
       [b"3", ENTER, ESC],
-      ["The disc in the drive is region 2", "swap in a region", "3 disc first"],
+      ["The disc in the drive is for region 2", "does not", "allow region 3"],
       fake="1:3:4:1:disc2")
 check("confirming the region the loaded disc allows does not warn",
       [b"2", ENTER, ESC], ["Set (simulated sr0) to region 2?"],
-      ["swap in a region"], fake="1:3:4:1:disc2")
+      ["does not allow region"], fake="1:3:4:1:disc2")
 check("an empty tray warns on the confirm screen too", [b"2", ENTER, ESC],
       ["The drive is empty", "put a region 2 disc in"], fake="1:3:4:1")
 # ... and when the drive refuses anyway, it says which of the two it was.
-check("a disc from the wrong region is named as the reason",
+check("a disc that bars the target region is named as the reason",
       [b"3", ENTER, DOWN, ENTER],
       ["the disc in the drive is from a different region"],
       fake="1:3:4:1:disc2", rc=1)

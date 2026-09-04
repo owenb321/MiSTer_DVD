@@ -97,14 +97,14 @@ the cursor starts on *Cancel*.
 
 !!! tip "Put a disc from the region you want in the drive first"
     Many drives take their new region **from the disc in the tray** — the same way Windows
-    offers to switch a drive when you insert a disc from elsewhere. On such a drive, setting
-    region 2 needs a region 2 disc loaded: an empty tray is refused with `no disc in the
-    drive`, and a disc from another region with `the disc in the drive is from a different
-    region`.
+    offers to switch a drive when you insert a disc from elsewhere. The disc has to *allow*
+    the region you are setting, which plenty of discs do for several regions at once. An
+    empty tray is refused with `no disc in the drive`, and a disc that bars that region with
+    `the disc in the drive is from a different region`.
 
     The tool shows the loaded disc's region next to the drive's, and warns before you commit
-    if the two do not agree. If you do not own a disc from the region you want yet, wait
-    until you do — such a drive will not switch without one.
+    if the two do not agree. If nothing you own allows the region you want, such a drive
+    will not switch to it.
 
 Every screen waits for a button before it closes, and everything it prints is also written
 to `DVD_reports/set_dvd_region.log` on the SD card (or `/tmp` if the SD card is not
@@ -117,21 +117,15 @@ into a bug report. The script names the file on its last line.
     own firmware, so it is not reset by a different PC, a reformat, or a different operating
     system. Pick the region matching the discs you own and set it once.
 
-!!! warning "Reading is proven; setting is not — but it is fixed"
-    Reading a drive's region is confirmed on real hardware. **Setting one is not yet**, and
-    the first user to try it found out why: the script sent the drive a malformed request,
-    which most drives reject outright. Thank you — that report is what found it.
+!!! success "Reading and setting are both confirmed on real hardware"
+    Reading a drive's region has long been confirmed; **setting one now is too**, and the
+    first user to try it is why. Their attempt failed, which uncovered a malformed request
+    the script had always sent — most drives reject it outright. Thank you for reporting it.
 
-    That is now fixed, along with the two things that made it hard to see: the script used
-    to treat a drive that was slow to answer as a failure, and it closed before its last
-    screen could be read. It now retries, says plainly whether it could confirm the new
-    region, and **waits for a keypress before it closes**.
-
-    So setting a region should work now, but nobody has confirmed it on a real drive yet —
-    each attempt spends one of a drive's permanent changes, which is not something to spend
-    on a test. Reading is safe to try freely. If you do set one, please
-    [open an issue](https://github.com/owenb321/MiSTer_DVD/issues) saying whether it
-    worked.
+    Fixed, along with the two things that hid it: the script used to treat a drive that was
+    slow to answer as a failure, and it closed before its last screen could be read. It now
+    retries, says plainly whether it could confirm the new region, tells you what the drive
+    actually said when it refuses, and **waits for a keypress before it closes**.
 
 **Region codes:** **1** US/Canada · **2** Europe/Japan/Middle East/South Africa ·
 **3** SE Asia · **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia ·

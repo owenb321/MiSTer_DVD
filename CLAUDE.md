@@ -2083,7 +2083,8 @@ T13. Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
 
 **DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ✅ READ +
 gamepad menu HW-CONFIRMED (2026-08-31, re-confirmed 2026-09-04 on the rewritten script);
-⏳ the SET ioctl STILL UNGATED — and issue #52 found out why: ★★ **the command was
+✅ **the SET path is HW-CONFIRMED 2026-09-04 too** (region 1 → 2, read back first try,
+counter 3 → 2) — after issue #52 found TWO reasons it never had been: ★★ **the command was
 MALFORMED. `pdrc` is a region MASK with one bit CLEAR (region 1 = `0xfe`), NOT the region
 number**, which as a mask claims seven playable regions. MEASURED with `sg_raw` sending the
 byte-identical command: sense **05/26/00, "invalid field in PARAMETER LIST"** — ★ *parameter
@@ -2093,9 +2094,16 @@ has always sent the mask (`regionset.c` `~(1 << (n-1))` → `dvd_udf.c:UDFRPCSet
 not build on either reading of that.** ★ **The write now goes out over SG_IO with `DVD_AUTH`
 as the fallback** — byte-identical commands, but `sr_do_ioctl` collapses every refusal into a
 bare `EIO` (Illegal Request and most Not Ready alike), so the ioctl route CANNOT say why a
-one-way operation failed. ⏳ It is also the open suspect: the corrected `pdrc` was accepted
-over SG_IO on a PC and refused with `EIO` over the ioctl on the board — ⚠ two variables at
-once (route AND machine), which the SG_IO path exists to separate.
+one-way operation failed. ★★ **And it earned its keep on the first run: the second reason was THE DISC IN THE TRAY.**
+Sense `05/6f/04` — a drive takes its new region from the loaded disc, which must **ALLOW**
+the region being set (measured: a disc with `RMI 40`, everything but region 7, satisfied a
+switch to region 2; an empty tray gives `02/3a/01`). ⚠⚠ **The diagnostic lesson cost two HW
+rounds and is the durable part:** the evidence read "accepted on a PC over SG_IO, refused on
+the MiSTer over the ioctl", and BOTH variables that framing offers — route and machine — were
+wrong; the cause was a third nobody had written down. Then the first correction ("take the
+disc out") was wrong TOO, because one refuting measurement was read as establishing its
+opposite. A drive that can *explain itself* outranks any amount of A/B reasoning, and `EIO`
+is all the ioctl route can ever say.
 A drive with no region set refuses the CSS title-key ioctl, so every physical disc pays a
 multi-second crack (`No drive region: cracking`); the Scripts-menu tool reads the region
 (and the remaining-change count) and can set it, via `DVD_AUTH` — no compiled helper, since
