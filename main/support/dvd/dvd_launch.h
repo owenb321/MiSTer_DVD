@@ -30,4 +30,13 @@ int dvd_launch_ui_busy(void);
 // Called once per user_io_poll(). Bounds how long an MGL may sit unfinished.
 void dvd_launch_tick(void);
 
+// Call from user_io_status_set() with what it was asked to write. Observes only.
+//
+// status[0] is the core's reset. Both the OSD "Reset" row and the disc-eject
+// teardown go through it, and when neither appears to work there are exactly two
+// possibilities -- Main never dispatched, or it dispatched and the core ignored it
+// -- which are fixed in completely different places. The console cannot be
+// captured on most setups, so this lands in /tmp/dvd_report.log instead.
+void dvd_launch_note_status(const char *opt, unsigned value);
+
 #endif

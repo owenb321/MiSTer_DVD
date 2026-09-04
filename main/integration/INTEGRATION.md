@@ -232,6 +232,7 @@ Notes that matter on a `MAIN_MISTER_REF` bump:
 | 28 | `user_io.cpp` | `dvd_launch_tick()` **first** of the DVD ticks in `user_io_poll()` |
 | 29 | `user_io.cpp` | `dvd_report_note_mount_result(...)` immediately before `UIO_SET_SDSTAT` |
 | 30 | `user_io.cpp` | `dvd_phys_note_mount(name, index)` beside step 26, so the drive can see slot 0 being taken |
+| 31 | `user_io.cpp` | `dvd_launch_note_status(opt, value)` in `user_io_status_set()` — logs writes to the core's reset bit |
 
 The rule these steps exist to enforce, and it applies to **any** future overlay
 code that runs from a `user_io_poll()` tick:
@@ -279,3 +280,20 @@ which reproduces both symptoms against the pre-fix module.
 0–3 during init, and the drive only ever binds slot 0 — without the index a
 `boot.vhd` in `games/DVD/` would read as a claim on the drive's slot and silently
 disable physical-disc playback.
+
+### Step 31 — who asked for the reset
+
+`status[0]` is the core's reset, and both the OSD **Reset** row and the disc-eject
+teardown reach it through `user_io_status_set()`. When neither appears to work
+there are exactly two possibilities — Main never dispatched, or it dispatched and
+the core ignored it — and they are fixed in completely different places. This logs
+the write to `/tmp/dvd_report.log` so the next test says which.
+
+⚠ **The anchor is `if (!size) return;`**, which is the only line in
+`user_io_status_set()` that is unique in the file: `user_io_status_get()` opens with
+the same two body lines and first differs at its `return 0;`. It cannot be the
+signature either — `insert_after()` splits on the first newline *after* the anchor,
+so a `signature\n{` anchor lands the call between the signature and its brace (the
+same trap as step 24). One consequence, and it is acceptable: a write whose option
+string fails to parse logs nothing, but that is still on Main's side of the line
+this exists to draw.

@@ -288,6 +288,45 @@ stroke and left starvation as the only shape that fits. Worth asking for
 explicitly: "is the picture frozen or is the machine frozen" separates the HPS side
 from the core side before any code is read.
 
+### Returning to the idle screen must not depend on the HPS reset
+
+Reported: after an MGL launch the **OSD Reset row does nothing**, so neither the
+button nor an eject gets back to the idle screen.
+
+The core side cannot be launch-dependent — `status[0]` goes through one flip-flop:
+
+```verilog
+reg user_rst_q; always @(posedge clk_sys) user_rst_q <= status[0];
+wire reset_n = locked & ~RESET & ~user_rst_q;
+```
+
+and `user_io_status_set()` sends unconditionally, with `hps_io` latching
+`status[15:0]` on the *first* word of the transaction — so the OSD row's
+back-to-back `set(1); set(0)` still leaves the bit high for the rest of a
+transaction, hundreds of `clk_sys` cycles. Neither end has an MGL dependency, which
+is why this is instrumented (integration step 31) rather than guessed at: every
+`status[0]` write now logs to `/tmp/dvd_report.log` with the MGL state, so "Main
+never dispatched" and "the core ignored it" stop looking the same.
+
+**Independently of that**, the eject path had a defect of its own, and it was mine:
+
+```verilog
+// before
+end else if (img_ejected && !img_streaming && !video_live_s2) begin
+```
+
+`img_ejected` is a **one-cycle pulse**, and an eject arrives while the last frames
+are still on screen — so `video_live_s2` was still high at exactly the instant the
+condition was evaluated, and the clear was thrown away every time. The test was
+right; sampling it at the pulse was wrong. `slot_empty` now latches the emptied
+slot and the clear fires once the picture actually runs out, so **the return to the
+idle screen depends on nothing but the core** — notably not on the HPS reset, which
+is how the eject path used to get there.
+
+The latch keeps the original guard honest, too: a *failed mount over live content*
+leaves the old image playing, `video_live` high and `media_seen` undisturbed, so
+`VIDEO_ARX/ARY` does not flip mid-title and Main does not re-init the scaler.
+
 ## 5. Gates
 
 - `bench/dvd/run_mgl.sh` — `iso_reader_mount_tb` (RED: 10 reads against an empty slot,

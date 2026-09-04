@@ -2748,11 +2748,19 @@ reg [29:0] img_wd_cnt;
 reg [24:0] img_idle_cnt;                           // saturating "time since last sector byte"
 reg        img_unplayable;
 reg        media_seen;
+// The slot has been emptied and no new media has arrived. LATCHED, not acted on
+// at the instant it happens: an eject arrives while the last frames are still on
+// screen, so the "is anything still playing" test below would say yes and the
+// clear would be lost for ever (img_ejected is a one-cycle pulse). Held until the
+// picture actually runs out, which is what makes the return to the idle screen
+// depend on nothing but the core itself -- notably not on the HPS reset, which is
+// how the eject path used to get there.
+reg        slot_empty;
 wire       img_streaming = (img_idle_cnt != IMG_IDLE);
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin
         img_wd_cnt <= 30'd0; img_idle_cnt <= IMG_IDLE;
-        img_unplayable <= 1'b0; media_seen <= 1'b0;
+        img_unplayable <= 1'b0; media_seen <= 1'b0; slot_empty <= 1'b0;
     end else begin
         // Delivery-activity detector (free-running, mount-independent): every
         // sector-buffer write re-arms it; it saturates at IMG_IDLE = "nothing has
@@ -2760,23 +2768,31 @@ always @(posedge clk_sys or negedge reset_n) begin
         if (sd_buff_wr)                     img_idle_cnt <= 25'd0;
         else if (img_idle_cnt != IMG_IDLE)  img_idle_cnt <= img_idle_cnt + 25'd1;
 
+        if (img_ejected) slot_empty <= 1'b1;        // remembered until it can act
+
         if (start_streaming) begin                    // fresh mount: re-arm
             img_wd_cnt <= 30'd0; img_unplayable <= 1'b0; media_seen <= 1'b1;
-        end else if (img_ejected && !img_streaming && !video_live_s2) begin
-            // DVD-FORK FIX (issue #48): the slot changed and there is no media --
-            // an eject, or a mount whose file never opened (Main notifies either
-            // way, with size 0). Go back to "nothing is loaded" so the idle logo
-            // and its file picker return, instead of leaving media_seen latched
-            // and the screen showing an unwritten framestore with no message.
+            slot_empty <= 1'b0;
+        end else if (slot_empty && !img_streaming && !video_live_s2) begin
+            // DVD-FORK FIX (issue #48): the slot has been emptied -- a disc
+            // ejected, or a mount whose file never opened, which Main reports the
+            // same way (SDSTAT with size 0). Once the picture has actually run
+            // out, go back to "nothing is loaded" so the idle logo and its file
+            // picker return, instead of leaving media_seen latched and a dead
+            // framestore on screen with no message.
             //
-            // Guarded on the delivery/picture signals logo_vis already uses,
-            // because a FAILED mount does not stop whatever was already playing:
-            // clearing media_seen under live content would flip VIDEO_ARX/ARY
-            // mid-title, and Main answers that with a scaler re-init and a cfg
-            // re-send. "The new file did not load, the old one plays on" is the
-            // least surprising outcome there; the idle screen is for a slot that
-            // really is empty.
+            // ⚠ Waiting for the picture to stop is the point, not politeness.
+            // img_ejected is a one-cycle pulse and an eject lands while frames are
+            // still being displayed, so testing these signals AT the pulse threw
+            // the clear away every time -- which is how "eject leaves the core
+            // stuck" survived the first fix. Latching it also keeps the guard
+            // honest for a FAILED mount over live content: the old image keeps
+            // playing, video_live stays high, and media_seen is not disturbed
+            // (clearing it would flip VIDEO_ARX/ARY mid-title and make Main
+            // re-init the scaler). "The new file did not load, the old one plays
+            // on" is still the outcome there.
             img_wd_cnt <= 30'd0; img_unplayable <= 1'b0; media_seen <= 1'b0;
+            slot_empty <= 1'b0;
         end else if (!media_seen || video_live_s2 || iso_mode_w) begin
             img_wd_cnt <= 30'd0;                      // idle, playing, or a real ISO
             if (video_live_s2) img_unplayable <= 1'b0;   // a picture disproves the verdict

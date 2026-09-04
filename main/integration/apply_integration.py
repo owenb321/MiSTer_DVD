@@ -436,6 +436,20 @@ u = insert_after(u, '\tdvd_report_note_mount(name);   // dvd:report — observe 
     '\tdvd_phys_note_mount(name, index);   // dvd:phys — observe only\n',
     30, 'dvd_phys_note_mount(name)')
 
+# 31. observe status[0] (the core reset) writes. Both the OSD Reset row and the
+# disc-eject teardown go through user_io_status_set(); when neither appears to work,
+# this line separates "Main never dispatched" from "the core ignored it".
+# ⚠ The anchor is 'if (!size) return;' because it is the only line in this
+# function that is UNIQUE in the file: user_io_status_get() opens with the same two
+# body lines and differs first at its 'return 0;'. And it cannot be the signature --
+# insert_after() splits on the first newline AFTER the anchor, so a 'signature\n{'
+# anchor lands the call between the signature and its brace (the step-24 note).
+# Consequence: a write whose option string does not parse logs nothing. That is
+# still on Main's side of the line this exists to draw, so it does not blunt it.
+u = insert_after(u, '\tif (!size) return;',
+    '\tdvd_launch_note_status(opt, value);   // dvd:launch — observe only\n',
+    31, 'dvd_launch_note_status')
+
 # 29. say what the mount actually did. UIO_SET_SDSTAT is sent even when the open
 # FAILED, so without this line a blank screen is ambiguous between "never opened"
 # and "opened and produced nothing".

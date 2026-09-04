@@ -1935,6 +1935,30 @@ worse maintenance burden than targeted in-place edits. So:
   is the core's data pump. Blocking I/O there is a video artefact, not a latency
   nit.** `dvd_report` already forks for this reason; `crack_title_keys` gets away
   with it only because nothing is playing yet.
+  ★★ **FOURTH ROUND: RETURNING TO THE IDLE SCREEN MUST NOT DEPEND ON THE HPS RESET.**
+  Report: after an MGL launch the OSD **Reset row does nothing**, so neither the
+  button nor an eject reaches the idle screen. ⚠ **The core side CANNOT be
+  launch-dependent** — `status[0]` goes through ONE flip-flop into `reset_n`, and
+  `user_io_status_set()` sends unconditionally with `hps_io` latching `status[15:0]`
+  on the FIRST word of the transaction (so even the OSD row's back-to-back
+  `set(1); set(0)` leaves the bit high for the rest of a transaction = hundreds of
+  clk_sys cycles). Neither end has an MGL dependency, so this half is
+  **INSTRUMENTED, not guessed**: integration step 31 logs every `status[0]` write to
+  `/tmp/dvd_report.log` with the MGL state, which splits "Main never dispatched"
+  from "the core ignored it" — they are fixed in completely different places.
+  ★★ **But the eject path had a defect of its own, and it was MINE from round two:**
+  `img_ejected` is a ONE-CYCLE PULSE and an eject arrives while the last frames are
+  still on screen, so `(img_ejected && !img_streaming && !video_live_s2)` evaluated
+  `video_live_s2` as still HIGH at exactly that instant and threw the clear away
+  every time. **The test was right; sampling it at the pulse was wrong.** New
+  `slot_empty` latches the emptied slot and the clear fires once the picture
+  actually runs out — so the return to idle now depends on nothing but the core.
+  ★ The latch also keeps the original guard honest: a FAILED MOUNT over live content
+  still leaves the old image playing and `media_seen` undisturbed, so `VIDEO_ARX/ARY`
+  does not flip mid-title and Main does not re-init the scaler.
+  ⚠ **Durable shape, and this is the second time this session:** a one-cycle event
+  ANDed with a level that is only settled LATER is a condition that never fires.
+  Latch the event, test the level when it can answer.
   Detail: **`docs/mgl_launch.md`**.
 - ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
   `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build

@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <time.h>
+#include <string.h>
 
 #include "../../user_io.h"
 #include "../../menu.h"
@@ -29,6 +30,23 @@ static void launch_log(const char *fmt, ...)
 	va_end(ap);
 	fprintf(f, "\n");
 	fclose(f);
+}
+
+void dvd_launch_note_status(const char *opt, unsigned value)
+{
+	if (!opt) return;
+
+	// Only the reset bit, and only for our core. Every other status write is an
+	// ordinary OSD option change and would bury the one line that matters.
+	// "[0]" is what dvd_phys and the framework pass; the generic menu hands the
+	// option string past its type letter, so an "R0,Reset" row arrives as
+	// "0,Reset".
+	int is_bit0 = !strncmp(opt, "[0]", 3) ||
+	              (opt[0] == '0' && (opt[1] == 0 || opt[1] == ','));
+	if (!is_bit0 || !is_dvd()) return;
+
+	launch_log("DVD_LAUNCH: status[0] <= %u (opt \"%s\", mgl done=%d)",
+	           value, opt, mgl_get()->done);
 }
 
 int dvd_launch_ui_busy(void)
