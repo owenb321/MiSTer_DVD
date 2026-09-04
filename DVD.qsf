@@ -810,4 +810,14 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # 88.28, 88.35, 88.88, 89.69, 89.91, 90.26, 91.27, 91.29, 92.11). It passes, and the trims
 # did not cause it -- but if a future branch wants headroom back, this is the netlist to
 # re-roll, not one to build further on top of.
+# 2026-09-03i (feature/flat-file-time-seek -- the seek-preview timeline fix: a cell's span is
+# its own first..last rather than the distance to the next cell's first, gap targets clamp to
+# the cell end, and the interpolation fraction goes 8 -> 14 bits with rounding. dvd_iso_reader
+# gains a cellf_last strobe; seek_time gains a clast_ram (128x32 = 1 M10K) and wider divide/
+# multiply): SEED 5 held FIRST roll -- clk_dec 94.06 @100C / 93.11 @-40C (gate 86.0, PASS both
+# corners) at 90% ALM (37,846), RAM 498/553 (+1 M10K for clast_ram) and DSP 92/112 unchanged.
+# EIGHTEENTH consecutive first-roll fit. Build DVD_timeline_20260904_0059.rbf (4331 KB).
+# ★ The cold corner RECOVERED to 93.11 from the 87.84 of the previous netlist, which the
+# 2026-09-03h entry had flagged as the thinnest margin in this ledger -- more evidence that
+# 87.84 was fit variance rather than anything structural, since this build ADDS logic.
 set_global_assignment -name SEED 5
