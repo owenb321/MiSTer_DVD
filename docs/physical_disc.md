@@ -116,6 +116,21 @@ still reads `bitstream=1` and cracks + plays, and a decrypted/unencrypted ISO re
 the mount but still shows `CSS ENCRYPTED`, that is the separate `DVDCSS_METHOD`-on-a-file
 question — per-title cracking on a file may need `DVDCSS_METHOD=title`.)
 
+**⚠ The cache directory must be created two levels deep, and the result checked.**
+`mkdir()` creates one level, and `/media/fat/dvdcss` only exists if libdvdcss was
+installed by our own `Scripts/install_dvdcss.sh` — `css_lib_names` also finds the
+library in `/media/fat/linux/` or on the system path, and then the parent is
+missing, `mkdir("/media/fat/dvdcss/cache")` fails `ENOENT`, and the return was not
+checked. libdvdcss then does its own single-level `mkdir` on the same path, fails
+identically, and **disables caching silently** — so every play re-extracts the
+keys, which on a no-region drive or an image file means the full crack every time.
+`setup_cache()` now creates both levels, proves the directory is writable (a
+removable card can be mounted read-only after an unclean shutdown, which looks
+identical from `mkdir` alone), unsets `DVDCSS_CACHE` rather than leaving it
+pointing somewhere unusable, and logs which of those happened. It also logs the
+entry count either side of key extraction, so `/tmp/dvd_css.log` distinguishes
+"the cache is not being written" from "it is being written but not read back".
+
 **CSS key cache — legal guardrail.** Recovered keys are cached at
 `/media/fat/dvdcss/cache` (device-local, runtime-generated). Caching adds no legal
 exposure beyond the decryption itself — it is the standard `DVDCSS_CACHE` behaviour VLC
