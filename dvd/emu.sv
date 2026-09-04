@@ -533,18 +533,40 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // date matters for a public release: it is the only way a bug report can identify
 // WHICH build the reporter is running.
 `include "build_id.v"
-// VERSIONING (2026-08-25): bump this the moment a release is PUBLISHED, not when
-// the next one is cut. `0.1a` shipped as tag v0.1a-20260825, so every build made
-// after that point must advertise 0.1b or it lies about which build it is - and
-// this OSD line is the only thing a bug report can quote. Keeping the next
-// version open also means the latest .rbf already matches the tag when you decide
-// to release, instead of forcing a rebuild (and a fitter re-sweep) at release
-// time. BUILD_DATE below still separates dev builds within the series.
-// ⚠ Do NOT add a time-of-day or git SHA to BUILD_DATE to separate same-day
-// builds: it is part of CONF_STR = part of the netlist, so every compile would
-// become a new netlist and re-roll the fitter seed lottery (DVD.qsf's ledger).
-// Same-day dev builds are identified by their build_release.sh --name filename.
-`define CORE_VERSION "0.4.0"
+// VERSIONING (revised 2026-09-04). THE INVARIANT:
+//
+//     A bare semver lives in EXACTLY ONE COMMIT per release - the release
+//     commit. Any build whose OSD shows "v0.4.0" came from that commit and no
+//     other.
+//
+//   feature branch       "dev-<slug>"   -> OSD "DVD dev-seekrealign 260903"
+//   main between rels    "dev-main"     -> OSD "DVD dev-main 260903"
+//   the release commit   "v0.4.0"       -> OSD "DVD v0.4.0 260903"
+//
+// This REPLACES the old rule ("bump to the speculated next semver at the start
+// of a feature branch"). That rule made every pre-release test build advertise
+// a version that did not exist yet: testers - and the sessions reading their
+// reports - quoted a build as "0.4.0" when the real 0.4.0 would ship far ahead
+// of it. Its stated payoff, that the release build then needs no CONF_STR
+// change, was illusory: a release is cut from main after N branches merge, so
+// the release build is a fresh netlist and a fresh seed decision regardless.
+// build_release.sh gates the shape and refuses the wrong one for the build type.
+//
+// TWO HARD LIMITS on the string, both measured against stock Main:
+//   * <= 18 chars. menu.cpp's About screen (MENU_ABOUT2) truncates the whole
+//     "DVD <ver> <date>" line at 30, and "DVD " + " " + "260903" already eats 12.
+//   * no ','  ';'  '"'. CONF_STR delimits entries on ';', and user_io.cpp's
+//     p[0]=='V' arm calls substrcpy(...,1), which splits on commas - a comma
+//     silently truncates the version rather than failing.
+//
+// ⚠ CORE_VERSION and BUILD_DATE are both inside CONF_STR = inside the netlist,
+// so either one changing re-rolls DVD.qsf's pinned fitter SEED (measured:
+// DVD.qsf's ledger records "0.1a"->"0.1b" alone dropping SEED 8 below the hot-
+// corner gate). CORE_VERSION may therefore change ONCE PER BRANCH - free, since
+// the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
+// either from a git SHA or a timestamp: every compile would become a new
+// netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
+`define CORE_VERSION "dev-main"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -782,7 +804,7 @@ parameter CONF_STR = {
     // navigation (menu/game button walk) and never conflicts with a game that
     // wants left/right input over seekable video. See docs/dvd_nav.md.
     "J1,Pause,Prev Chapter,Next Chapter,Select,Menu,Angle,Audio,Subtitle,Display,Fast Fwd,Rewind,Title,Return;",
-    "V,v",`CORE_VERSION," ",`BUILD_DATE,";"
+    "V,",`CORE_VERSION," ",`BUILD_DATE,";"
 };
 
 wire [26:0] ioctl_addr;

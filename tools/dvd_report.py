@@ -77,7 +77,7 @@
 # Usage (reporter, on a PC, with their own rip -- encrypted or decrypted):
 #   python3 dvd_report.py disc.iso
 #   python3 dvd_report.py disc.iso --nav-packs        # menu highlight bugs
-#   python3 dvd_report.py disc.iso --core-version "0.3.0 260830" --no-prompt
+#   python3 dvd_report.py disc.iso --core-version "v0.4.0 260910" --no-prompt
 #
 # Usage (maintainer, on a received bundle):
 #   python3 tools/dvd_report.py info    dvdreport-*.zip
@@ -447,7 +447,8 @@ def cmd_make(args):
         print()
         if not core_version:
             core_version = prompt(
-                "Core version, exactly as shown in the OSD (e.g. 0.3.0 260830)")
+                "Core version, exactly as shown in the OSD "
+                "(e.g. v0.4.0 260910, or dev-seekrealign 260903)")
         if not symptom:
             symptom = prompt("What happened")
         if not expected:
@@ -654,7 +655,8 @@ def main():
         p.add_argument("iso", help="DVD-Video .iso rip (encrypted or decrypted)")
         p.add_argument("-o", "--out", help="output .zip (default: auto-named)")
         p.add_argument("--core-version",
-                       help="core version line from the OSD, e.g. '0.3.0 260830'")
+                       help="core version line from the OSD, e.g. 'v0.4.0 260910' "
+                            "for a release or 'dev-seekrealign 260903' for a test build")
         p.add_argument("--symptom", help="what happened")
         p.add_argument("--expected", help="what you expected")
         p.add_argument("--steps", help="how to reach it")

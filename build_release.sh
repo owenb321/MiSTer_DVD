@@ -64,6 +64,63 @@ if [[ -z "$CORE_VERSION" ]]; then
     exit 1
 fi
 
+# --- Version identity gate --------------------------------------------------
+# Runs BEFORE the compile so a wrong version costs a second, not 40 minutes.
+# The invariant (dvd/emu.sv, CLAUDE.md "Versioning"): a bare semver lives in
+# exactly ONE commit per release; every other commit carries dev-<slug>.
+#
+# "Publishable" is --release WITHOUT --name — the same condition that selects the
+# DVD_YYYYMMDD.rbf naming below. tools/seed_sweep.sh passes --release WITH --name
+# purely for the hard timing gate, so it lands in the dev arm and is unaffected;
+# that is the one non-obvious caller.
+if [[ ${#CORE_VERSION} -gt 18 ]]; then
+    echo "ERROR: CORE_VERSION '$CORE_VERSION' is ${#CORE_VERSION} chars; the limit is 18." >&2
+    echo "       stock menu.cpp (MENU_ABOUT2) truncates the whole 'DVD <ver> <date>'" >&2
+    echo "       About line at 30 chars, and 'DVD ' + ' ' + 'yymmdd' already uses 12." >&2
+    exit 1
+fi
+case "$CORE_VERSION" in
+    *,*|*\;*|*\"*)
+        echo "ERROR: CORE_VERSION '$CORE_VERSION' contains , ; or \" — all three break CONF_STR." >&2
+        echo "       ';' ends the entry and user_io.cpp's V arm splits on commas, so the" >&2
+        echo "       version would be silently TRUNCATED rather than rejected." >&2
+        exit 1 ;;
+esac
+
+if [[ "$RELEASE_GATE" -eq 1 && "$NAME_SET" -eq 0 ]]; then
+    if [[ ! "$CORE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "ERROR: a publishable --release build needs the release semver in dvd/emu.sv," >&2
+        echo "       e.g. \`define CORE_VERSION \"v0.4.0\"  — found \"$CORE_VERSION\"." >&2
+        echo "       Set it on the release commit, together with the mkdocs.yml and manual" >&2
+        echo "       updates, so one commit and one compile carry the whole release." >&2
+        exit 1
+    fi
+else
+    if [[ ! "$CORE_VERSION" =~ ^dev-[a-z0-9][a-z0-9.-]*$ ]]; then
+        echo "ERROR: dev builds must carry a feature-identifying CORE_VERSION 'dev-<slug>'," >&2
+        echo "       e.g. \`define CORE_VERSION \"dev-seekrealign\"  — found \"$CORE_VERSION\"." >&2
+        echo "       A bare semver on a dev build is exactly the bug this gate exists to" >&2
+        echo "       stop: testers quote the OSD line and report it as a released version." >&2
+        exit 1
+    fi
+    # Advisory only — a slug and a branch name legitimately differ, but a slug left
+    # over from ANOTHER branch is a real and easy mistake.
+    _br="${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')}"
+    _brslug="$(printf '%s' "${_br##*/}" | tr -cd 'a-z0-9')"
+    _vslug="$(printf '%s' "${CORE_VERSION#dev-}" | tr -cd 'a-z0-9')"
+    if [[ -n "$_brslug" && "$_brslug" != "main" && "$_brslug" != *"$_vslug"* && "$_vslug" != *"$_brslug"* ]]; then
+        echo "NOTE: CORE_VERSION '$CORE_VERSION' does not resemble branch '$_br' — left over from another branch?" >&2
+    fi
+fi
+
+# The .rbf, the zip and the OSD should all name the same thing, so a dev build's
+# name FOLLOWS the version slug instead of needing --name every time. (This
+# replaces the old "always pass --name" rule, and the meaningless DVD_ps_demux
+# default it existed to work around.) An explicit --name still wins.
+if [[ "$NAME_SET" -eq 0 && "$RELEASE_GATE" -eq 0 ]]; then
+    NAME="${PROJECT}_${CORE_VERSION#dev-}"
+fi
+
 SOF="output_files/${PROJECT}.sof"
 mkdir -p releases
 # Release builds take the MiSTer convention (CoreName_YYYYMMDD.rbf); feature builds keep
