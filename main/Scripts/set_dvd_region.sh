@@ -81,6 +81,8 @@ SG_IO           = 0x2285       # scsi/sg.h: send one SCSI command
 SG_DXFER_TO_DEV = -2
 SEND_KEY        = 0xa3         # MMC: SEND KEY
 KF_RPC_STATE    = 6            # ... key format 6 = Send RPC State
+CHECK_CONDITION = 0x02         # SCSI status: the drive has something to say
+DRIVER_SENSE    = 0x08         # driver_status: ... and the sense data is attached
 
 # Sense codes worth naming. Everything else is printed as its raw triple, which is
 # what a bug report needs anyway.
@@ -208,6 +210,30 @@ class SenseError(OSError):
                          % (key, asc, ascq, " (%s)" % text if text else ""))
 
 
+def sg_check(status, host_status, driver_status, sense):
+    """Classify one completed SG_IO command. Returns None if it succeeded.
+
+    Kept pure and separate because getting this wrong is silent and expensive:
+    ⚠ **`DRIVER_SENSE` (0x08) lives in the LOW nibble of driver_status and means
+    "sense data is attached", i.e. the drive answered — NOT a transport error.**
+    Reading it as one threw away the drive's own explanation and fell back to the
+    ioctl, which could then only say EIO. That is the whole reason this function
+    is testable.
+    """
+    if host_status:
+        raise OSError(5, "SG_IO transport error (host %02x)" % host_status)
+    driver = driver_status & 0x0f
+    if driver not in (0, DRIVER_SENSE):
+        raise OSError(5, "SG_IO driver error (driver %02x)" % driver_status)
+    if status == 0:
+        return None
+    if len(sense) >= 14 and (sense[0] & 0x7e) == 0x70:        # fixed format
+        raise SenseError(sense[2] & 0x0f, sense[12], sense[13])
+    if len(sense) >= 4 and (sense[0] & 0x7e) == 0x72:         # descriptor format
+        raise SenseError(sense[1] & 0x0f, sense[2], sense[3])
+    raise OSError(5, "the drive refused it (SCSI status %02x, no sense)" % status)
+
+
 def sg_send_key(fd, payload, key_format=KF_RPC_STATE, timeout_ms=15000):
     """SEND KEY over SG_IO, the way sg_raw does it.
 
@@ -263,19 +289,10 @@ def sg_send_key(fd, payload, key_format=KF_RPC_STATE, timeout_ms=15000):
     note("  SG_IO status %02x host %02x driver %02x sb_len %d"
          % (hdr.status, hdr.host_status, hdr.driver_status, hdr.sb_len_wr))
 
-    if hdr.host_status or hdr.driver_status & 0x0f:
-        raise OSError(5, "SG_IO transport error (host %02x driver %02x)"
-                      % (hdr.host_status, hdr.driver_status))
-    if hdr.status == 0:
-        return None
-
-    sb = sense.raw[:hdr.sb_len_wr or 18]
-    note("  SG_IO sense %s" % " ".join("%02x" % b for b in sb))
-    if len(sb) >= 14 and (sb[0] & 0x7e) == 0x70:        # fixed format
-        raise SenseError(sb[2] & 0x0f, sb[12], sb[13])
-    if len(sb) >= 4 and (sb[0] & 0x7e) == 0x72:         # descriptor format
-        raise SenseError(sb[1] & 0x0f, sb[2], sb[3])
-    raise OSError(5, "the drive refused it (SCSI status %02x)" % hdr.status)
+    sb = sense.raw[:hdr.sb_len_wr] if hdr.sb_len_wr else b""
+    if sb:
+        note("  SG_IO sense %s" % " ".join("%02x" % b for b in sb))
+    return sg_check(hdr.status, hdr.host_status, hdr.driver_status, sb)
 
 
 class Drive:

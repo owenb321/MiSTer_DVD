@@ -304,6 +304,15 @@ unmoved and *nothing* logged by `sr` in dmesg. ⚠ **That is two variables at on
 machine — so it does not yet convict the ioctl.** The SG_IO path is what isolates it: same
 board, same drive, one variable.
 
+⚠⚠ **`DRIVER_SENSE` (0x08) is in the LOW nibble of `driver_status` and means the drive
+ANSWERED — sense attached — not that the transport failed.** Reading it as a transport error
+cost a hardware round: the board logged `SG_IO status 02 host 00 driver 08 sb_len 18`, i.e.
+a Check Condition with 18 bytes of sense sitting right there, and the guard threw it away
+and fell back to the ioctl, which could then only say `EIO` — the exact information the
+SG_IO route existed to recover. Classification now lives in a pure `sg_check()` precisely so
+it can be tested: a synthetic `(status 02, host 00, driver 08, sense 05/26/00)` must decode,
+and the mutation that reinstates the bug is caught by it.
+
 `sg_io_hdr` is built with `ctypes`, so it lays itself out for whatever ABI it runs on (88
 bytes on x86-64, 64 on the MiSTer's armv7). Both were checked against the C ABI rather than
 assumed — the field list reproduces `sizeof`/`offsetof` exactly on x86-64, and the armv7

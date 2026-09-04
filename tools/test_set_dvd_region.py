@@ -120,6 +120,37 @@ unit("RPC state decodes as the kernel packs it",
 unit("an all-ones mask is no region set", M.decode_state(b"\xb0\xff\x01").region is None)
 unit("rpc_scheme 0 is carried through", M.decode_state(b"\xb0\xff\x00").scheme == 0)
 
+# The regression that cost a hardware round: DRIVER_SENSE (0x08) sits in the LOW
+# nibble of driver_status and means "the drive answered, sense attached". Reading
+# it as a transport error discards the drive's own explanation and falls back to
+# the ioctl, which can then only say EIO. Exactly the log line from the board:
+#   SG_IO status 02 host 00 driver 08 sb_len 18
+SENSE_26 = bytes([0x70, 0, 0x05, 0, 0, 0, 0, 0x0a, 0, 0, 0, 0, 0x26, 0x00, 0, 0, 0, 0])
+try:
+    M.sg_check(0x02, 0x00, 0x08, SENSE_26)
+    ok, why = False, "accepted a Check Condition as success"
+except M.SenseError as e:
+    ok, why = (e.key, e.asc, e.ascq) == (5, 0x26, 0), str(e)
+except OSError as e:
+    ok, why = False, "read DRIVER_SENSE as a transport error: %s" % e
+unit("a Check Condition with sense is decoded, not called a transport error", ok, why)
+
+unit("the named sense text is used",
+     "invalid field in parameter list" in why, why)
+
+for name, args in (("a host error is a transport error", (0x02, 0x07, 0x00, b"")),
+                   ("a driver error is a transport error", (0x02, 0x00, 0x04, b""))):
+    try:
+        M.sg_check(*args)
+        ok, why = False, "no error"
+    except M.SenseError as e:
+        ok, why = False, "blamed the drive: %s" % e
+    except OSError as e:
+        ok, why = True, str(e)
+    unit(name, ok, why)
+
+unit("a Good status is success", M.sg_check(0x00, 0x00, 0x00, b"") is None)
+
 # SG_IO on something that is not a SCSI device must raise a plain OSError, not a
 # SenseError — that is what makes set_region() fall back to the ioctl rather than
 # reporting a refusal the drive never made.
