@@ -220,3 +220,40 @@ Notes that matter on a `MAIN_MISTER_REF` bump:
   `$(wildcard ./support/*/*.cpp)`.
 - The work forks; it must never run inline in the poll loop, which also services
   SD blocks for the core.
+
+## Steps 27-29 — MGL launch (issue #48)
+
+`main/support/dvd/dvd_launch.{h,cpp}`. Design and the full launch timeline:
+`MiSTer_DVD/docs/mgl_launch.md`.
+
+| # | File | Edit |
+|---|---|---|
+| 27 | `user_io.cpp` | include `support/dvd/dvd_launch.h` |
+| 28 | `user_io.cpp` | `dvd_launch_tick()` **first** of the DVD ticks in `user_io_poll()` |
+| 29 | `user_io.cpp` | `dvd_report_note_mount_result(...)` immediately before `UIO_SET_SDSTAT` |
+
+The rule these steps exist to enforce, and it applies to **any** future overlay
+code that runs from a `user_io_poll()` tick:
+
+> **Never raise `Info()` / `InfoMessage()` / `ProgressMessage()` while
+> `mgl_get()->done == 0`.** Check `dvd_launch_ui_busy()` first and defer.
+
+Why it is not merely cosmetic: during an MGL launch `HandleUI()` takes the MGL
+branch and **never calls `menu_key_get()`**, which is the sole source of every
+input event — keyboard menu key, gamepad menu key, the physical OSD button and
+the core's own virtual one. The MGL's only forward edge out of `state == 1`
+requires `menustate == MENU_NONE2`, and `InfoMessage()` pins
+`menustate = MENU_INFO`. So a notice raised from a poll tick stalls the load
+**and** every input path on the machine — the reported "completely unresponsive,
+the MiSTer must be restarted".
+
+- **Step 28 is placed first** so that when the watchdog releases a stalled MGL,
+  the notice pumps see `done == 1` in the same poll iteration.
+- **The watchdog is a floor, not the fix.** It bounds a stall at ~20 s and hands
+  the UI back; the fix is the `dvd_launch_ui_busy()` gate in the pumps
+  (`dvd_css_tick`, `report_pump`). Keep both: the gate covers the causes we know
+  about, the watchdog covers the ones we do not.
+- **Step 29 is a log line only.** It matters because `UIO_SET_SDSTAT` is sent
+  even when the open FAILED (with size 0), so from the core's side a failed mount
+  and a real one are the same pulse. `/tmp/dvd_report.log` then says which
+  happened, which is the difference between a Main-side and a core-side bug.

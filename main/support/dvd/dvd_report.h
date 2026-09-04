@@ -44,4 +44,13 @@ void dvd_report_tick(void);
 // Observes only; the empty string (an unmount) clears it.
 void dvd_report_note_mount(const char *path);
 
+// Call from user_io_file_mount() just before it notifies the core, with what the
+// mount actually achieved. Purely a log line, and it earns its keep: Main sends
+// UIO_SET_SDSTAT even when the open FAILED (with size 0), and the core cannot
+// tell that apart from a real mount by looking at the pulse. When a load produces
+// a blank screen, this line is the difference between "the file never opened" and
+// "the file opened and the core did nothing with it" -- which are fixed in
+// completely different places. Issue #48; see docs/mgl_launch.md.
+void dvd_report_note_mount_result(const char *path, int index, int ok, uint64_t size);
+
 #endif

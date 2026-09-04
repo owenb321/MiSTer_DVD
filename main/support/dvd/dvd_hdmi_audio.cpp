@@ -12,6 +12,7 @@
 #include "../../hardware.h"
 #include "../../menu.h"
 #include "dvd_hdmi_audio.h"
+#include "dvd_launch.h"
 
 // ---------------------------------------------------------------------------
 // EDID: does the sink actually accept a compressed bitstream?
@@ -102,11 +103,15 @@ static int sink_supports_bitstream(void)
 static const char *stage_msg = 0;
 static time_t      show_until = 0;
 
-// ⚠ InfoMessage no-ops unless the menu FSM is idle, and the user changes Audio
-// Out from INSIDE the OSD - so a single call at the transition is dropped every
-// time. dvd_css hit this exact trap with its libdvdcss popup and solved it by
-// re-asserting once a second until the launch settles; do the same. The log file
-// is the reliable channel regardless of menu state.
+// ⚠ InfoMessage renders nothing unless the menu FSM is idle, and the user changes
+// Audio Out from INSIDE the OSD - so a single call at the transition is dropped
+// every time. dvd_css hit this exact trap with its libdvdcss popup and solved it
+// by re-asserting once a second until the launch settles; do the same. The log
+// file is the reliable channel regardless of menu state.
+//
+// ⚠ "Dropped" is the WRONG word for the idle case and that mistake cost issue #48:
+// when menustate IS idle, InfoMessage does not no-op, it PINS menustate = MENU_INFO.
+// See report_pump() below.
 static void report(const char *msg)
 {
 	if (stage_msg == msg) return;      // only on transition
@@ -117,11 +122,17 @@ static void report(const char *msg)
 	if (f) { fprintf(f, "%s\n", msg); fclose(f); }
 }
 
+// ⚠ InfoMessage() PINS menustate = MENU_INFO. An MGL launch advances only out of
+// MENU_NONE2, and while it has not finished HandleUI() never calls menu_key_get()
+// — the sole source of every input event. So a notice raised from this tick froze
+// both the load and the whole UI: issue #48. Defer while the launch is running,
+// pushing the window along rather than spending it. See docs/mgl_launch.md.
 static void report_pump(void)
 {
 	if (!show_until || !stage_msg) return;
 	time_t now = time(NULL);
 	if (now >= show_until) { show_until = 0; return; }
+	if (dvd_launch_ui_busy()) { show_until = now + 2; return; }
 
 	static time_t last = 0;
 	if (now != last)                   // 2 s timeout bridges the 1 s cadence

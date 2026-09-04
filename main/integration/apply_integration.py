@@ -411,6 +411,31 @@ u = insert_after(u, '\tint len = strlen(name);',
     '\tdvd_report_note_mount(name);   // dvd:report — observe only\n',
     26, 'dvd_report_note_mount(name)')
 
+# ---------------------------------------------------------- launch / MGL (#48)
+# An MGL launch puts HandleUI() into a branch that never calls menu_key_get(),
+# the sole source of every input event, and the MGL's only forward edge needs
+# menustate == MENU_NONE2. Anything that pins menustate elsewhere -- an
+# InfoMessage from one of our own poll ticks -- therefore stalls the load AND
+# the whole UI. See docs/mgl_launch.md.
+
+# 27. include
+u = insert_after(u, '#include "support/dvd/dvd_report.h"',
+    '#include "support/dvd/dvd_launch.h"\n',
+    27, 'support/dvd/dvd_launch.h')
+
+# 28. poll tick, FIRST of the DVD ticks so a released MGL is visible to the
+# notice pumps in the same iteration.
+u = insert_before(u, 'dvd_css_tick();    // deferred "install libdvdcss" popup once launch settles',
+    'dvd_launch_tick();      // MGL watchdog: a stalled launch must not cost a reboot\n',
+    28, 'dvd_launch_tick();')
+
+# 29. say what the mount actually did. UIO_SET_SDSTAT is sent even when the open
+# FAILED, so without this line a blank screen is ambiguous between "never opened"
+# and "opened and produced nothing".
+u = insert_before(u, '\tspi_uio_cmd8(UIO_SET_SDSTAT, (1 << index) | (writable ? 0 : 0x80));',
+    'dvd_report_note_mount_result(name, index, ret ? 1 : 0, (uint64_t)size);   // dvd:report\n',
+    29, 'dvd_report_note_mount_result')
+
 write(uio_path, u)
 print("[integration] user_io.cpp patched (support bundle)")
 

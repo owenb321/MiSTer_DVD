@@ -21,6 +21,7 @@
 #include <linux/fs.h>
 
 #include "dvd_css.h"
+#include "dvd_launch.h"
 #include "../../menu.h"      // ProgressMessage() — on-screen feedback during key crack
 #include "../../file_io.h"   // getFullPath() — resolve MiSTer's storage-relative mount path
 
@@ -488,6 +489,10 @@ int dvd_css_open(void)
 			// the mount runs mid-launch when the menu FSM is in a high state, so a
 			// call here is dropped. Defer it: dvd_css_tick() (from user_io_poll)
 			// re-asserts it until the launch settles to MENU_NONE1 and it shows.
+			// ⚠ And that tick must NOT re-assert while an MGL launch is still
+			// running -- pinning menustate there stalls the load and every input
+			// path on the machine (issue #48). dvd_css_tick() gates on
+			// dvd_launch_ui_busy(); this 8 s window is pushed along, not spent.
 			warn_until = time(NULL) + 8;
 		}
 		raw_fd = open(dev, O_RDONLY | O_CLOEXEC);
@@ -597,13 +602,24 @@ int dvd_css_active(void)
 }
 
 // Called every user_io_poll. Re-asserts the "encrypted disc, install libdvdcss"
-// popup ~once/second until its window closes — InfoMessage no-ops while the
-// launch FSM is busy and renders once menustate settles to idle (core running).
+// popup ~once/second until its window closes, and renders once menustate settles
+// to idle (core running).
+//
+// ⚠ The original comment here claimed "InfoMessage no-ops while the launch FSM is
+// busy". It does not — it PINS menustate = MENU_INFO whenever menustate is idle,
+// which is exactly the state an MGL launch needs to advance out of. That belief
+// cost issue #48: a notice raised from this tick froze the MGL and, with it,
+// every input path on the machine. Hence the dvd_launch_ui_busy() gate, which
+// holds the window open rather than consuming it. See docs/mgl_launch.md.
 void dvd_css_tick(void)
 {
 	if (!warn_until) return;
 	time_t now = time(NULL);
 	if (now >= warn_until) { warn_until = 0; return; }
+
+	// Defer, don't spend: push the window along so the notice still appears
+	// once the launch settles.
+	if (dvd_launch_ui_busy()) { warn_until = now + 2; return; }
 
 	static time_t last = 0;
 	if (now != last)   // at most once per second — the 2 s InfoMessage timeout bridges the gap
