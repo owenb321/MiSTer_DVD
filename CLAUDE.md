@@ -2107,7 +2107,11 @@ reported" (exit 3) instead of failure, and only the change command itself refusi
 error. ★ The same round found `dvd_css.cpp:drive_region_set()` reading `region_mask` alone,
 which labels an **RPC-1 (region-free) drive** — empty mask, `rpc_scheme == 0`, no region
 enforced at all — as having no region, i.e. the best case reported as the worst; it now
-also passes on `rpc_scheme == 0`.
+also passes on `rpc_scheme == 0`. ⏳ **That arm is UNGATED — every local drive is RPC-2, so
+it cannot run here**; what was re-checked on HW (2026-09-04) is that an RPC-2 no-region drive
+still cracks and still says so. It moves a MESSAGE only (`region_set` never picks a code
+path), and a zeroed REPORT KEY reply already read as "set" before, so it adds no new way to
+be wrong.
 Tested by `tools/test_set_dvd_region.py` (fakes the drive incl. post-change faults, drives
 the menus through a pty, **mutation-checked** 5/5, `SET_DVD_REGION_SH=` points it at another
 copy to prove RED). Design + ioctl details: `docs/physical_disc.md`.

@@ -62,6 +62,15 @@ while the core is open plays it (`dvd_phys` polls for media change).
   read only the mask until 2026-09-04, so a region-free drive (the best case there is) was
   labelled `No drive region: cracking` and logged as having no region set. The verdict now
   also passes on `rpc_scheme == 0` (REPORT KEY byte 6).
+  ⏳ **The RPC-1 arm is UNGATED and cannot be gated here — every local drive reports RPC-2**
+  (the new arm is unreachable on them by construction). What WAS re-checked on hardware
+  2026-09-04 is the arm that could regress: an RPC-2 drive with no region set still cracks
+  and still says `No drive region: cracking`. The blast radius is one message: `region_set`
+  feeds the progress text and the log, never a code path, and a degenerate REPORT KEY reply
+  (status 0, buffer left zeroed) already read as "set" under the mask-only test, so the new
+  term adds no new way to be wrong. To gate it, a region-free drive is needed — the updated
+  `set_dvd_region.sh` names one on sight (`RPC state` third byte `00`), so a user can say so
+  without owning any of this.
 - **CSS-without-libdvdcss:** READ DVD STRUCTURE copyright byte detects CSS upfront; a
   deferred popup asks the user to run `install_dvdcss.sh` (immediate reads would black-screen
   on many drives). The fabric core's own `pes_scrambled` → `CSS ENCRYPTED` + mute is the
@@ -328,10 +337,18 @@ Remaining:
    path testable, which a set would destroy forever), one matching the local library, one
    deliberately mismatched. `DVDCSS_METHOD=title` forces the crack path on any drive if the
    physical unset state is not available.
-3. **Eject → idle reset (just added):** confirm the `status[0]` pulse returns to the idle
+3. **RPC-1 message arm ungated (2026-09-04):** `drive_region_set()` now treats
+   `rpc_scheme == 0` as "no region needed", but no local drive is RPC-1, so the arm has never
+   run. Needs a region-free drive — or a user's report, since `set_dvd_region.sh` now prints
+   the scheme byte. Expected on such a drive: `Preparing disc` instead of
+   `No drive region: cracking`, no "RPC-II with NO region set" line in `/tmp/dvdcss.log`, and
+   — the falsifiable part — keys actually arriving fast with the cache cleared. If it still
+   crawls VOB by VOB, key the message on measured key-fetch behaviour rather than the RPC
+   bits.
+4. **Eject → idle reset (just added):** confirm the `status[0]` pulse returns to the idle
    logo cleanly and a subsequent insert plays.
-4. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open.
-5. **libdvdcss-absent fallback:** confirm `CSS ENCRYPTED` still triggers (disc **and** ISO)
+5. **Drive lifecycle across re-exec:** confirm `/dev/srN` is free for our Main to re-open.
+6. **libdvdcss-absent fallback:** confirm `CSS ENCRYPTED` still triggers (disc **and** ISO)
    when libdvdcss is missing.
-6. **Then** fold physical-disc + encrypted-ISO + libdvdcss into the top-level `README.md`
+7. **Then** fold physical-disc + encrypted-ISO + libdvdcss into the top-level `README.md`
    "What works" and drop the "CSS is not handled in-core" limitation — only once HW-confirmed.
