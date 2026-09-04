@@ -72,6 +72,16 @@ Check, in order:
 
 See [Physical discs](../formats/physical-discs.md).
 
+### `set_dvd_region` refuses to change the region
+
+Read what the drive said — the script prints it. `no disc in the drive` and `the disc in the
+drive is from a different region` both mean the same thing: **many drives take their new
+region from the disc in the tray**, and will only switch to a region the loaded disc allows.
+Put in a disc that allows the region you want and run it again. `the drive will not accept
+another region change` means its counter is spent, and nothing can be done.
+
+See [Set the drive region](../formats/physical-discs.md#set-the-drive-region).
+
 ## No sound
 
 ### Silent on every track
