@@ -1703,6 +1703,17 @@ worse maintenance burden than targeted in-place edits. So:
   hardcoded ternary, pinned by `scrub_ctrl_tb` T13–T15 so a retune is deliberate.
   ⚠ A retune must also move `dvd/dpad_seek.sv`'s header, `docs/dvd_nav.md` §2a and
   `docs/transport_hud.md` — the numbers are quoted in all four.
+  ⚠ **SEAMLESS-BRANCH DISCS ARE STILL WRONG and it is NOT the readout — it is the
+  SEEK.** The 2026-09-03 cell-gap fix (a cell's span is its own `first..last`, not
+  the distance to the next cell's first — AFTER_EARTH VTS_13 PGC1, 1.612× short,
+  ✅ HW-confirmed good afterwards) does NOT cover ALIEN_VS_PREDATOR_SE: **23 of its
+  66 cells are interleaved** (seamless branching), so a cell's sector range holds
+  the other branch's ILVUs and the cells compute at 885–1679 sectors/s against a
+  ~600 ceiling. Worse, a raw-RBN seek into that space can resolve to the WRONG
+  BRANCH — the live clock reading "a couple of seconds in" when playback is much
+  further means `cell_i` is wrong, i.e. playback resumed in the wrong cut. ⚠ ILVU
+  *playback* is HW-confirmed (PR fj#112); ILVU *seeking* never was. Detail and the
+  starting point: `docs/dvd_nav.md` §2e.
   ⚠ **Trick play (continuous 2×/4×) is a SEPARATE feature and is NOT this**: it must be
   flush-FREE (a jump per VOBU is the regime HW rounds 1–2 of the scrub proved fatal), so
   it needs an I-frame-only VOBU splice in the reader. `dsi_1stref_ea` is already parsed

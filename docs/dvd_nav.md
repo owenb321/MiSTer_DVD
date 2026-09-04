@@ -1559,6 +1559,52 @@ flat and VCD sources have no DSI and would need GOP-header scanning instead.
 It also carries a UX decision — whether hold-FF *becomes* trick play or the proven
 scrub-to-target keeps B10/B11 — and it needs its own HW round.
 
+### 2e. Seamless-branch discs break the position→time map — ❌ OPEN (2026-09-03)
+
+Recorded from a field report on `ALIEN_VS_PREDATOR_SE_DISC1` after the cell-gap
+fix (§2d/`docs/transport_hud.md`) resolved the simpler case. **This is a
+different defect and it affects SEEKING, not just the readout.**
+
+**Measured** (`tools/iso_nav_check.py` + a direct IFO walk of VTS_03 PGC1):
+
+- 66 cells, monotonic, non-overlapping, only 2.7 % gaps — so the §2d gap fix
+  does **not** cover it.
+- **23 of the 66 cells have the `interleaved` bit set** (cell category `0x0c` /
+  `0x0e`, bit 2 of playback byte 0). The disc is a seamless-branch title:
+  theatrical and extended cuts share sectors, interleaved in ILVUs.
+- Consequence: an interleaved cell's `first…last` range **contains the other
+  branch's ILVUs**, so `last − first` overstates its played sectors. Those cells
+  compute at **885–1679 sectors/s against a DVD ceiling of ~600**, a 12.7× spread
+  across the title. Any RBN→time model that trusts the cell extent is wrong there
+  by roughly the interleave factor.
+
+**Two distinct problems, and the second is the important one:**
+
+1. *The preview interpolates over sectors that are not the cell's.* Bounded and
+   cosmetic. Cheap mitigation if wanted: the reader already parses the category
+   byte into `cell_cat_mem`, so `seek_time` could refuse to interpolate inside an
+   interleaved cell and report the cell boundary instead of a confidently wrong
+   time. Exact interpolation needs ILVU-level knowledge (the DSI carries ILVU
+   pointers, parsed by `nav_dsi`).
+2. **A raw-RBN seek into an interleaved region can resolve to the wrong branch.**
+   Field report: "seeking back and forth I can get it in a state where the live
+   timeline reports a couple of seconds in when it's really much further". The
+   live clock is `cur_cell_start + dsi_c_eltm`, which is EXACT when `cell_i` is
+   right — so a wrong readout there means the reader's RBN→cell scan
+   (`S_RBN_SCAN`) landed on the wrong cell, which means playback itself resumed
+   in the wrong branch. ⚠ Note the asymmetry: normal ILVU **playback** is
+   HW-CONFIRMED (PR fj#112, see "Seamless-branch interleaved blocks" below)
+   because it follows the DSI's ILVU pointers. Raw-RBN **seeking** into that
+   space is a different path and was never covered.
+
+**Where to start:** `S_RBN_SCAN` (`dvd_iso_reader.sv` ~3714-3766) and the
+`seek_is_rbn` landing contract in §2a. The likely shape is that a seek target
+inside an interleaved block must be snapped to an ILVU boundary of the branch
+being played, the way `S_NAV_SEEK` already snaps a scrub target to the next NAV
+pack. ⚠ That is the reader's seek path — the boot path for every disc — so it
+wants the full 33-testbench gate and its own HW round, not a rider on a readout
+fix.
+
 ### HW status — ✅ CONFIRMED (PR fj#96)
 
 On a real disc: **B2/B3** jump chapters cleanly (audio+video resync, no stale frame);
