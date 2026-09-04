@@ -1,9 +1,10 @@
 # Video Output
 
-!!! info "Unreleased"
-    `Video Output` replaces the previous `Interlaced Out` and `Analog Out` settings.
-    Releases up to and including v0.3.0 still have the old pair — this page describes
-    the current development build.
+!!! warning "New in v0.4.0 — your settings reset once"
+    `Video Output` replaces the previous `Interlaced Out` and `Analog Out` settings, which
+    overlapped confusingly. The relayout moves saved settings to a new file, so **every
+    OSD setting returns to its default the first time you run v0.4.0**. Releases up to and
+    including v0.3.0 still have the old pair.
 
 `Video Output` is the core's one output-mode choice:
 
@@ -68,15 +69,14 @@ everything.
     it** — that re-anchors the audio to the picture. Setting the mode before loading avoids
     it entirely.
 
-    On v0.4.0 and earlier this could occasionally **freeze the picture** on a malformed
-    frame instead, on any disc; skipping a chapter recovered it. The same thing happens on
-    older releases when changing `Analog Out`.
+    On v0.3.0 this could occasionally **freeze the picture** on a malformed frame instead,
+    on any disc; skipping a chapter recovered it. The same thing happens on older releases
+    when changing `Analog Out`.
 
-!!! info "Unreleased"
-    The current development build fixes that freeze. A mid-title switch now steps playback
-    back to the start of the chunk it was reading — up to about a second — and resumes
-    from there, so the picture always restarts from a clean point. On a VCD or SVCD the
-    step back can be a little longer.
+    **Since v0.4.0** that freeze is fixed. A mid-title switch steps playback back to the
+    start of the chunk it was reading — up to about a second — and resumes from there, so
+    the picture always restarts from a clean point. On a VCD or SVCD the step back can be
+    a little longer.
 
     The screen also **goes black for the changeover** instead of showing the picture
     breaking up while the display re-locks — about a second, and the OSD stays visible
@@ -96,25 +96,32 @@ interruption. On older releases the workaround is to **toggle `Video Output` awa
 back**, sometimes taking a few attempts. Not every set shows it — a television with a
 tolerant sync separator may never see it at all.
 
-!!! info "Unreleased"
-    The current development build corrects this automatically — the toggle is no longer
-    needed. (v0.4.0's first attempt at the corrector had to be switched off again: it made
-    both interlaced fields carry the same picture lines, which showed as a combed still
-    image and a picture that jumped a line at field rate on every set, HDMI included. The
-    repaired version only steps in for a misalignment that persists, so it cannot do
-    that.) The same coin flip decided whether **HDMI with `480i Deint` = `Weave`** came up
-    combed on a still; that is fixed too, by a separate correction to the field flag the
-    core hands the framework scaler. Both are confirmed on hardware.
+**Since v0.4.0** the core corrects this itself and the toggle is no longer needed. (An
+earlier development build's first attempt at the corrector had to be switched off again:
+it made both interlaced fields carry the same picture lines, which showed as a combed
+still image and a picture that jumped a line at field rate on every set, HDMI included.
+The repaired version only steps in for a misalignment that persists, so it cannot do
+that.) The same coin flip decided whether **HDMI with `480i Deint` = `Weave`** came up
+combed on a still; that is fixed too, by a separate correction to the field flag the core
+hands the framework scaler.
 
-    The correction now also applies **while a picture is being held** — a disc menu, an
-    authored copyright or warning card, or a paused frame. Until it did, a disc that
-    booted straight to a several-second warning screen could show that screen misaligned
-    for its whole duration and then play perfectly, because the correction only ran when
-    a new frame arrived and a held picture never delivers one. A held picture now
-    straightens itself within about half a second.
+The correction also applies **while a picture is being held** — a disc menu, an authored
+copyright or warning card, or a paused frame. Until v0.4.0 it did not, so a disc that
+boots straight to a several-second warning screen could show that screen misaligned for
+its whole duration and then play perfectly: the correction only ran when a new frame
+arrived, and a held picture never delivers one. A held picture now straightens itself
+within about half a second, so you may still catch it settling.
 
-    Televisions differ, so if a skip still leaves the picture aliased, or a still combs
-    under Weave, [please report it](../reference/reporting-a-bug.md).
+!!! question "CRT owners: please report what you see"
+    This is verified here on a **composite** set and over HDMI. It is not yet confirmed on
+    the other analog sync modes, and the original reports came from rigs we cannot
+    reproduce — a set's sync separator is exactly what decides whether the fault ever
+    showed. Untested: **RGB SCART** (`composite_sync=1`), **YPbPr** (`ypbpr=1`), **sync on
+    green** (`vga_sog=1`), **15 kHz RGBHV**, and **PAL on any analog CRT**.
+
+    If you run one of those, [a short report](../reference/reporting-a-bug.md) is worth a
+    great deal — please paste the analog lines from your `MiSTer.ini` and name your set,
+    and say whether a chapter skip or a paused frame ever leaves the fields wrong.
 
 ## What changed from the old settings
 

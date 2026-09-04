@@ -22,11 +22,11 @@ Settings are saved to `/media/fat/config/DVD_v2.CFG` and persist across core rel
 | **Analog Aspect** | **Auto** / Fit / Letterbox / Crop | How anamorphic content fits a 4:3 analog TV — see [Analog Aspect](../video/analog-crt.md#analog-aspect). |
 | **Video Standard** | **Auto** / NTSC / PAL | Auto detects from the stream's vertical size (480 = NTSC, 576 = PAL). |
 
-!!! info "Unreleased"
+!!! warning "New in v0.4.0 — your settings reset once"
     **Video Output** replaces the previous `Interlaced Out` and `Analog Out` settings
     (which overlapped confusingly), and this relayout bumps the saved-settings file to
-    `DVD_v2.CFG` — [settings reset once](#settings-that-reset-after-an-update) on
-    updating. Releases up to and including v0.3.0 still have the old pair.
+    `DVD_v2.CFG` — [settings reset once](#settings-that-reset-after-an-update) the first
+    time you run v0.4.0. Releases up to and including v0.3.0 still have the old pair.
 
 ### Reset
 

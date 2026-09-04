@@ -26,8 +26,8 @@ themselves; the ones that persist are describing a condition, not an event.
 
 ## Support bundle
 
-!!! info "Unreleased"
-    Available in development builds; not in v0.3.0. Needs `MiSTer_DVDcss`.
+!!! note "Needs `MiSTer_DVDcss`"
+    New in v0.4.0, and only with the custom Main installed.
 
 Shown when you hold **Audio + Subtitle** for two seconds to write a
 [support bundle](../reference/reporting-a-bug.md#or-make-one-on-the-mister-itself).
@@ -56,10 +56,6 @@ These appear briefly when you change something, and are not errors:
 The status line along the bottom — `► 0:12:34/1:37:05 CH 12/23` — is toggled with **B9**
 and also auto-shows for a couple of seconds on any of the above. `❚❚` replaces `►` when
 paused.
-
-!!! info "Unreleased"
-    The seek-target time readout below, and the elapsed/total clock on `.mpg`,
-    `.VOB` and VCD/SVCD, are in development builds; not in v0.3.0.
 
 **While a seek is pending the time shows where you are going, not where you are.** Hold
 Fast Fwd or Rewind, step chapters, or tap out a D-pad seek and the elapsed time tracks the

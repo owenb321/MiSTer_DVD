@@ -23,8 +23,8 @@ which makes it look like a size or filesystem problem.
 
 ### Launched from an MGL: blank screen, nothing responds
 
-!!! info "Unreleased"
-    Fixed in this build. If you are on v0.4.0 or earlier, this is what you are seeing.
+!!! note "Fixed in v0.4.0"
+    If you are on v0.3.0 or earlier, this is what you are seeing.
 
 Older builds could freeze during an MGL launch. Two separate faults, and both are fixed:
 
@@ -177,10 +177,10 @@ builds' other analog modes have a known field-pairing wobble on video-sourced co
 
 ### The picture shakes or tears about once a second on a CRT or scaler
 
-Seen on RGB SCART and YPbPr connections (composite sync / sync-on-Y) with v0.4.0 and the
+Seen on RGB SCART and YPbPr connections (composite sync / sync-on-Y) on v0.3.0 and the
 PR #37 prerelease, including at the idle logo, often with a RetroTINK reporting the
 vertical sync length or line count toggling and MiSTer reading `1441x478i` or
-`59.8 <-> 60.1 Hz`. The current development build reworks the analog path — the main
+`59.8 <-> 60.1 Hz`. v0.4.0 reworks the analog path — the main
 interlaced raster carries the half-line that interleaves the fields and drives the pins
 directly, and several internal events that could restart the raster are fixed — and
 reports a steady `720x480i @ 59.94 Hz`. If it still happens on a current build, turn on
@@ -195,30 +195,27 @@ Toggle `Video Output` away and back to re-roll the field phase — sometimes it 
 attempts. On builds up to v0.3.0 the same trick works on `Analog Out`. Many televisions
 never show this; it depends on the set.
 
-!!! info "Unreleased"
-    The current development build corrects the field phase automatically — confirmed on
-    hardware, and the toggle is no longer needed. (v0.4.0's first attempt at that
-    corrector was switched off again: it was making both fields carry the same picture
-    lines, which combed still images on every output including HDMI.) The same fix run
-    also corrected HDMI `480i Deint` = `Weave`, which used to comb on a still about half
-    the time.
+!!! note "Fixed in v0.4.0"
+    The core corrects the field phase itself and the toggle is no longer needed. (An
+    earlier development build's first attempt at that corrector was switched off again: it
+    was making both fields carry the same picture lines, which combed still images on
+    every output including HDMI.) The same fix run also corrected HDMI `480i Deint` =
+    `Weave`, which used to comb on a still about half the time, and extends to **held
+    pictures** — disc menus, authored copyright and warning cards, and paused frames.
+    Before that, a disc booting straight to a several-second warning screen could show it
+    misaligned for the whole card and then play cleanly, because the correction only ran
+    when a new frame arrived and a held picture never delivers one.
 
-    A later fix extends the correction to **held pictures** — disc menus, authored
-    copyright and warning cards, and paused frames. Before it, a disc that boots straight
-    to a several-second warning screen could show that screen misaligned for its whole
-    duration and then play cleanly, because the correction only ran when a new frame
-    arrived; a held picture never delivers one. Held pictures now straighten themselves
-    within about half a second.
-
-    Televisions differ, so if either symptom survives on a current build, please
-    [report it](reporting-a-bug.md). See
-    [Field alignment](../video/interlaced.md#field-alignment).
+    Verified here on a composite set and over HDMI. **RGB SCART, YPbPr, sync-on-green,
+    15 kHz RGBHV and PAL on a CRT are not yet confirmed** — televisions differ, and a
+    set's sync separator is what decides whether this ever showed. If either symptom
+    survives on v0.4.0, please [report it](reporting-a-bug.md) with the analog lines from
+    your `MiSTer.ini`. See [Field alignment](../video/interlaced.md#field-alignment).
 
 ### The picture blocks up briefly right after a chapter skip or seek
 
-!!! info "Unreleased"
-    Fixed in the development build; not in v0.3.0. On a release build you will still see
-    the artifact described below.
+!!! note "Fixed in v0.4.0"
+    On v0.3.0 you will still see the artifact described below.
 
 On v0.3.0, for roughly six frames — about a tenth of a second — the new scene decodes and
 moves correctly but the old one shows through it as a blocky residual, then it clears on
@@ -250,8 +247,8 @@ Also confirm **`Frame Drop` is On** — the cadence corrector runs on that path.
 
 ### MiSTer reports 1441x478i, or the resolution changes when a disc loads
 
-An off-by-one in the idle raster window on v0.4.0 and the PR #37 prerelease. Fixed in
-the current development build: the idle logo and playback both report `720x480i`.
+An off-by-one in the idle raster window on v0.3.0 and the PR #37 prerelease. Fixed in
+v0.4.0: the idle logo and playback both report `720x480i`.
 
 ### The idle logo bounces in a small box on a widescreen display
 
@@ -300,8 +297,8 @@ with zero contrast, which is intentional on their part.
 
 ### Subtitle edges look jagged on a CRT
 
-!!! info "Unreleased"
-    Fixed in the development build: with `Analog Aspect` on Auto or Letterbox for a 16:9
+!!! note "Fixed in v0.4.0"
+    With `Analog Aspect` on Auto or Letterbox for a 16:9
     disc, subtitle edges used to stair-step (the subtitle layer was repositioned by a
     nearest-line map while the picture got a proper blend). Subtitles now draw unscaled
     at full resolution and may reach into the black bars — see
@@ -311,9 +308,9 @@ with zero contrast, which is intentional on their part.
 
 ### My keyboard does nothing
 
-!!! info "Unreleased"
-    Keyboard control arrived after v0.3.0; on that release only the number keys work, and
-    only inside a menu.
+!!! note "New in v0.4.0"
+    Keyboard and remote control arrived in v0.4.0; on v0.3.0 only the number keys work,
+    and only inside a menu.
 
 Check the [key list](../playback/controls.md#keyboard-and-tv-remote) — the keys are fixed,
 not derived from your gamepad mapping. Two things reasonably often explain it:

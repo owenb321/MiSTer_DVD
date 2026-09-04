@@ -1,23 +1,31 @@
 # Analog and CRT output
 
-!!! info "Unreleased"
-    The `Analog Out` setting described here for releases up to v0.3.0 has been replaced
-    by the single [`Video Output`](interlaced.md) option. This page describes the
-    current development build.
+!!! note "Changed in v0.4.0"
+    The `Analog Out` setting used up to v0.3.0 has been replaced by the single
+    [`Video Output`](interlaced.md) option, and updating **resets your saved settings
+    once**.
 
 The core drives a real CRT natively: with
 [`Video Output = Interlaced`](interlaced.md) (or Auto with the ini below), the analog
 pins carry a native 15 kHz 480i/576i raster of the disc's **authored fields** — the
 same presentation a set-top player feeds a TV.
 
-!!! info "Unreleased"
+!!! note "Rebuilt in v0.4.0"
     The analog raster is now the core's main interlaced raster driven straight to the
-    pins, like every other MiSTer 480i core — the separate re-timed second raster of
-    v0.4.0 and the PR #37 prerelease is gone. Together with a set of timing fixes this
-    addresses the RGB SCART / YPbPr / RetroTINK reports of a picture that shakes or
-    tears about once a second, sawtooth edges, and MiSTer reporting `1441x478i` /
-    `59.8 <-> 60.1 Hz`. MiSTer now reports **`720x480i @ 59.94 Hz`** (also on the idle
-    logo). The composite and S-video paths are unchanged in substance.
+    pins, like every other MiSTer 480i core — the separate re-timed second raster used by
+    v0.3.0 and the PR #37 prerelease is gone.
+
+    The measurable result is that the signal is now what it claims to be: MiSTer reports a
+    steady **`720x480i @ 59.94 Hz`** (on the idle logo too), where before it could read
+    `1441x478i` at a rate wandering between `59.8` and `60.1 Hz`. The raster carries a
+    true half-line, so vsync falls exactly 262.5 lines apart on every field. Interlaced at
+    boot also used to come up as `719x…i @ 31.48 kHz` with no picture at all on a CRT;
+    that is fixed.
+
+    Those numbers are what the reports of a picture that shakes or tears about once a
+    second, and of sawtooth edges, were describing — but whether your set is happy is
+    something only you can tell us, and reports are welcome. The composite and S-video
+    paths are unchanged in substance.
 
 ## Turning it on
 
@@ -49,15 +57,15 @@ In Progressive mode the analog pins carry the plain progressive raster through t
 path — a **31 kHz** signal a 15 kHz CRT cannot sync — and the analog-only extras
 (line-21 captions, sub-720 fill, Analog Aspect) are off.
 
-!!! info "Unreleased"
+!!! note "Changed in v0.4.0"
     On a rig configured for analog in `MiSTer.ini` (`vga_scaler=0` plus a sync mode) but
     set to Progressive, an **Auto** [Film 24p](film-24p.md) verdict no longer engages, so
     a film disc cannot switch the pins to a 23.976/25 Hz raster the display drops when the
     feature starts. Setting **`Film 24p Out = On`** overrides that — it is an explicit
     choice, and it is how you watch 24p over HDMI with the CRT switched off while leaving
     the analog lines in your ini. HDMI-only setups (`vga_scaler=1`, or no analog sync mode
-    set) are unaffected on any setting. On v0.4.0 and earlier, set `Film 24p Out = Off`
-    on such a rig to avoid the signal loss.
+    set) are unaffected on any setting. On v0.3.0, set `Film 24p Out = Off` on such a rig
+    to avoid the signal loss.
 
 !!! warning "HDMI shows 480i while a CRT is active"
     Interlaced mode puts the whole core in field mode, so HDMI drops to 480i via the
@@ -103,7 +111,7 @@ image is smooth rather than aliased.
 **Auto never selects Crop** — it chooses between Letterbox and Fit. Crop is a deliberate
 manual choice.
 
-!!! info "Unreleased"
+!!! note "Changed in v0.4.0"
     **Subtitles are no longer scaled by Letterbox or Crop.** Dialogue subtitles now draw
     at their authored position and full resolution, with clean edges — like a set-top
     player, they may reach into the black bars rather than being squeezed with the

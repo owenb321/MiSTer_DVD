@@ -104,7 +104,7 @@ extra:
   # The manual documents the development build on main. This is the newest
   # PUBLISHED release, shown in the announcement bar so a reader running a
   # release knows what they are looking at. The release process bumps it.
-  released_version: "0.3.0"
+  released_version: "0.4.0"
   social:
     - icon: fontawesome/brands/github
       link: https://github.com/owenb321/MiSTer_DVD

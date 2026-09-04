@@ -69,8 +69,8 @@ play physical discs, the next section is for you.
 
 ### Or make one on the MiSTer itself
 
-!!! info "Unreleased"
-    Available in development builds; not in v0.3.0. Needs `MiSTer_DVDcss`.
+!!! note "Needs `MiSTer_DVDcss`"
+    New in v0.4.0, and only with the custom Main installed.
 
 While a disc is playing, **hold Audio + Subtitle together for two seconds**. The player
 writes a bundle to `/media/fat/DVD_reports/` and tells you the filename on screen. Copy it

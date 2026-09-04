@@ -27,8 +27,13 @@ the version line the OSD shows. `--name` overrides it.
 
 A development build's version is the feature it came from, never a version number — the OSD
 reads `DVD dev-seekrealign 260903`. A bare semver appears in exactly one commit per release,
-so a build advertising `v0.4.0` can only have come from the v0.4.0 release commit.
+so a build advertising `v0.5.0` can only have come from the v0.5.0 release commit.
 `build_release.sh` refuses to build if the two are mixed up.
+
+!!! note "One exception, for builds handed out before v0.4.0"
+    Development builds made between v0.3.0 and v0.4.0 predate that rule and carry a bare
+    `v0.4.0` in the OSD. If you are quoting a version from a build you were given rather
+    than one you downloaded from the releases page, mention the date beside it.
 
 ## Simulation
 

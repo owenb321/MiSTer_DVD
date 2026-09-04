@@ -1,6 +1,6 @@
 # Compatibility
 
-What plays, what does not, and what is untested. Current as of **v0.3.0**.
+What plays, what does not, and what is untested. Current as of **v0.4.0**.
 
 ## Formats
 

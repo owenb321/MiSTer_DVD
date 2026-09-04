@@ -20,9 +20,6 @@ walking a menu with the D-pad.
 
 ## Keyboard and TV remote
 
-!!! info "Unreleased"
-    Available in development builds; not in v0.3.0.
-
 Nothing to configure — plug in a keyboard and these keys work. Anything that presents
 itself to MiSTer as a keyboard counts, which is how a **remote** drives the player too.
 
@@ -46,9 +43,6 @@ itself to MiSTer as a keyboard counts, which is how a **remote** drives the play
     information — a bare `.m2v` — have no keyboard seek.
 
 ## Using a remote
-
-!!! info "Unreleased"
-    Needs the keyboard support above; not in v0.3.0.
 
 The reliable way is an **infrared receiver that presents itself as a USB keyboard** — a
 Flirc, a generic MCE-style USB IR dongle, or the receiver built into a console dock. It
@@ -186,8 +180,8 @@ naming what you switched to, with the language where the disc provides one — `
 
 ## Support bundle chord
 
-!!! info "Unreleased"
-    Available in development builds; not in v0.3.0. Needs `MiSTer_DVDcss`.
+!!! note "Needs `MiSTer_DVDcss`"
+    New in v0.4.0, and only with the custom Main installed.
 
 **Audio + Subtitle held together for two seconds** writes a navigation support bundle for
 the disc you are playing to `/media/fat/DVD_reports/` — a small file that makes a menu or
@@ -213,10 +207,6 @@ readout shows the running total as you tap, and the jump happens once you stop.
 That coalescing is the whole design: one seek per gesture, however long. Seeking once per
 tap would mean a flush and re-lock per press, which is a regime that does not survive
 rapid input.
-
-!!! info "Unreleased"
-    Seeking on flat `.mpg`/`.VOB` files, and the gentler acceleration curve on the
-    Fast Fwd/Rewind scrub, are in development builds; not in v0.3.0.
 
 On a DVD the targets come from the **disc's own seek tables**, so they land on real frame
 boundaries rather than approximate byte offsets. On a VCD/SVCD, exact CD geometry is used
