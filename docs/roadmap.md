@@ -2068,6 +2068,34 @@ Downside: makes the whole share read-only to MiSTer, breaking cores that write s
 the `.iso` and its errno. Keep that trick for any future "core won't load a file" mystery: the
 framework's file syscalls (open mode + errno) are the ground truth the RTL side can't see.
 
+## ✅ DONE: full keyboard + TV-remote transport control (issue #35) — ⏳ HW-confirm pending
+
+Every transport action now has a built-in key. `dvd/kbd_map.sv` decodes `ps2_key` into a
+17-bit vector in `joystick_0`'s bit order and `emu.sv` ORs it into a new `joy_eff` that every
+button wire, edge detector and consumer reads — so a key and a gamepad button are the same
+signal by the time anything acts on them, and no consumer changed.
+
+**The bug that forced it:** MiSTer's own *Define buttons* **cannot bind `Enter` or `Esc` to
+any button** (`input.cpp:3276`), and `Enter` additionally *ends and saves* the mapping
+session, which is why it looks like it registered. Reproduced on a stock MiSTer with a plain
+USB keyboard. On a console dock remote `OK` and `Exit` **are** those two keys. HDMI-CEC
+remotes are affected doubly: their presses only ever arrive as scancodes, never as joystick
+bits, so before this a TV remote could drive nothing here but menu digits.
+
+★ Keyboard **Fast Fwd / Rewind go to `dvd/dpad_seek.sv`** (±10 s per press, coalescing), not
+to `scrub_ctrl`'s hold-to-scrub — an IR remote's "hold" is really ~9 taps a second, which
+against the hold path is ~9 flush/re-locks a second. `scrub_ctrl.sv` and `dpad_seek.sv` are
+both unmodified. **No OSD option** (2026-09-03, user decision): CEC is already opt-in and off
+by default in `MiSTer.ini`, a user's own mapping already shadows the built-in keys, and a
+core-side switch could only be all-or-nothing because a CEC press is indistinguishable from a
+keyboard press. `O[46]` stays free and appending it later is forward-compatible.
+
+Gate: `bench/dvd/run_kbd.sh` (`kbd_map_tb` mutation-checked; `dpad_seek_tb` T19a/T19b own the
+IR-burst routing; `scrub_ctrl_tb` unchanged is the gate that the gamepad scrub was untouched).
+**HW gate:** with no Define-buttons mapping in place, `Enter` activates the highlighted button
+in a DVD menu; a dock remote's held Fast Fwd produces one jump, not a burst of seeks. Design:
+**`docs/dvd_nav.md` "Keyboard / CEC input"**.
+
 ## ✅ DONE: numeric button entry via keyboard (easter eggs / direct chapter select) — ✅ HW-CONFIRMED (PR fj#134)
 
 **Shipped + HW-CONFIRMED (2026-07-27, PR fj#134). Confirmed on HW by unlocking the T2

@@ -1,7 +1,8 @@
 # Controls
 
-Playback is driven from the gamepad. The button numbers below are MiSTer's standard
-numbering — whatever you mapped B1 to in the MiSTer menu is what "B1" means here.
+Playback is driven from a gamepad, a USB keyboard, or a TV or set-top remote — all three
+work at once, and none of them needs setting up. The button numbers below are MiSTer's
+standard numbering — whatever you mapped B1 to in the MiSTer menu is what "B1" means here.
 
 | Button | Action | | Button | Action |
 |---|---|---|---|---|
@@ -13,8 +14,74 @@ numbering — whatever you mapped B1 to in the MiSTer menu is what "B1" means he
 | B6 | Angle (cycle) | | B13 | Return (go up) |
 | B7 | Audio (cycle) | | D-pad | Menu navigation |
 
+Every one of those actions also has a **[keyboard and remote key](#keyboard-and-tv-remote)**.
 A USB keyboard's **number keys select menu buttons directly**, which is often quicker than
 walking a menu with the D-pad.
+
+## Keyboard and TV remote
+
+!!! info "Unreleased"
+    Available in development builds; not in v0.3.0.
+
+Nothing to configure — plug in a keyboard, or point a remote at the receiver, and these keys
+work. Anything that presents itself to MiSTer as a keyboard counts: a USB keyboard, an
+HDMI-CEC TV remote, or a console dock's infrared remote.
+
+| Key | Action | | Key | Action |
+|---|---|---|---|---|
+| ↑ ↓ ← → | Menu navigation | | ++"A"++ | Audio (cycle) |
+| ++enter++ | Select | | ++"S"++ | Subtitle (cycle) |
+| ++space++ | Pause | | ++"G"++ | Angle (cycle) |
+| ++page-up++ / ++"P"++ | Prev Chapter | | ++"D"++ | Display (toggle status line) |
+| ++page-down++ / ++"N"++ | Next Chapter | | ++tab++ / ++"F"++ | Fast Fwd (10 s per press) |
+| ++"M"++ / ++"X"++ | Menu | | ++backspace++ / ++"R"++ | Rewind (10 s per press) |
+| ++"T"++ | Title menu | | ++esc++ / ++"B"++ | Return (go up) |
+| ++0++ – ++9++ | Select menu button by number | | | |
+
+!!! warning "Fast Fwd and Rewind work differently here"
+    On a gamepad you *hold* them to scrub. On a keyboard or remote each press jumps **10
+    seconds**, and presses add up the same way [D-pad seek](#d-pad-seek) does — six quick
+    taps is one minute, and one seek happens when you stop. That is deliberate: a remote's
+    "hold" is really a rapid stream of taps, which a scrub would turn into dozens of
+    separate seeks. This works whether or not D-Pad Seek is switched on. Files with no seek
+    information — a bare `.m2v` — have no keyboard seek.
+
+### Things MiSTer keeps for itself
+
+- **++f12++ and a remote's Menu button open the MiSTer OSD**, always. They can never be
+  given a disc function.
+- While the OSD is open, **no key reaches the player**.
+- On a **CEC remote, Exit / Root Menu also opens the MiSTer OSD** rather than the disc menu.
+  Use the **colour keys** instead: blue = Menu, red = Title, green = Audio, yellow =
+  Subtitle.
+
+!!! note "Turning CEC on, and off again"
+    CEC is off unless you asked for it — MiSTer needs `hdmi_cec=1` in `MiSTer.ini` before a
+    TV remote reaches any core. To stop a TV remote controlling playback without giving up
+    CEC's power-on and standby handling, set `hdmi_cec_input_mode=0` instead. There is no
+    setting for this in the player's own menu, because a CEC keypress arrives as an
+    ordinary keystroke — the core cannot tell it apart from a USB keyboard.
+- The [support bundle chord](#support-bundle-chord) is **gamepad-only** — it is handled
+  outside the core, so the keyboard's Audio and Subtitle keys cannot trigger it.
+
+### Rebinding
+
+Use MiSTer's own **Define buttons**, which maps any key onto any of the buttons in the first
+table. A key you map there takes over completely, so it replaces whatever the built-in list
+above gave it.
+
+!!! note "++enter++ and ++esc++ cannot be rebound"
+    MiSTer reserves both as its own confirm and cancel keys and will not assign them to a
+    button — pressing ++enter++ during Define buttons *ends* the session rather than
+    capturing it, which looks like it worked. That is exactly why the player reads them
+    itself, and it is why a dock remote's **OK** and **Exit** buttons now work at all.
+
+### Console dock remotes
+
+A dock's infrared remote usually sends only a handful of keys — on a SuperStation One
+SuperDock, the arrows plus **OK** (++enter++), **Exit** (++esc++), **Cancel** (++"X"++) and
+one function key. That is enough to walk a disc's menus and pick a title. **Cancel** is
+mapped to Menu precisely because that remote's own Menu button belongs to the MiSTer OSD.
 
 ## In a menu
 

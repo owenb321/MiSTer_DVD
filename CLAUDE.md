@@ -1634,6 +1634,62 @@ worse maintenance burden than targeted in-place edits. So:
   no UDF-only-image support. (Phase-8b TMAP absolute seek: RETIRED 2026-07-10 by user
   decision. The seek UX gained ONE opt-in layer since — `O[45]` D-Pad Seek, below — which
   rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
+- 🔧 **KEYBOARD / TV-REMOTE TRANSPORT (2026-09-03, issue #35, branch
+  `feature/keyboard-controls`) — sim-proven + mutation-checked, ⏳ HW-confirm pending.**
+  Every transport action gained a built-in key: `dvd/kbd_map.sv` decodes `ps2_key` into a
+  17-bit vector in `joystick_0`'s bit order and `emu.sv` ORs it into a new `joy_eff` that
+  every button wire, edge detector, the chapter debounce, the menu walk, the HUD and
+  `vm_entropy_stir` now read — a key and a gamepad button are the same signal by the time
+  anything acts on them, so **no consumer changed**.
+  ★★ **THE BUG WAS IN MAIN, NOT IN US, AND NOT IN THE DISC: MiSTer's "Define buttons"
+  CANNOT BIND `Enter` OR `Esc` TO ANY BUTTON.** `input.cpp:3276` guards the capture block
+  with `!((mapping_type < 2 || !mapping_button) && (cancel || enter))` and a keyboard
+  session is `mapping_type == 0`, so both keys are excluded for *every* button — and
+  `Enter`, being the OSD's own confirm key, additionally reaches `menu.cpp:4419` and **ends
+  and saves the mapping session**, which is exactly why a user reports it "registered" and
+  then does nothing. ✅ Reproduced on a stock MiSTer with a plain USB keyboard (a mapped
+  `Enter` will not activate a highlighted DVD-menu button while the gamepad's Select does,
+  same menu). ⚠ The first two diagnoses were wrong and both were disc-shaped — a nav bundle
+  was nearly requested. **On a console dock remote `OK` and `Exit` ARE those two keys**, so
+  its two most important buttons were the two MiSTer refuses to map.
+  ★ **HDMI-CEC remotes could drive NOTHING here before this** — Main injects CEC presses as
+  keyboard events (`hdmi_cec.cpp:290-319`) and never runs them through the joystick mapper,
+  so scancodes were their only route. ⚠ CEC's own Root Menu/Exit is unreachable
+  (`menu_present() ? KEY_BACK : KEY_MENU`; during playback that is `KEY_MENU` = the OSD
+  toggle, and `KEY_BACK` has `NONE` in the PS/2 table), hence Menu/Title/Audio/Subtitle ride
+  the CEC **colour keys** `F1`-`F4`.
+  ★★ **KEYBOARD FAST FWD / REWIND GO TO `dvd/dpad_seek.sv`, NOT `scrub_ctrl`'s
+  hold-to-scrub — and that is the whole reason `kbd_map` has NO LEVELS.** MEASURED: Retro
+  Remake's SuperDock receiver firmware (`Retro-Remake/DockIR`, `src/main.c`) sends
+  `key-down -> 80 ms -> key-up` PER NEC REPEAT FRAME, ~110 ms apart, so an IR "hold" is ~9
+  discrete taps a second. `scrub_ctrl`'s accumulate tick is 60 ms, so each 80 ms tap leaves
+  `pending_off != 0` and every release issues a REAL seek = ~9 flush/re-locks per second,
+  the regime HW rounds 1-2 recorded as fatal. Second hazard: a stuck level leaves
+  `hold_freeze` high forever (frozen picture, no seek) and the reflex recovery — tap again —
+  releases with `pending_off` at the title span = **one seek to the END OF THE TITLE**.
+  Both vanish with pulses. `scrub_ctrl.sv` and `dpad_seek.sv` are **unmodified**; `emu.sv`
+  masks `kbd_joy[14:13]` out of `joy_eff`, ties `dpad_seek.en` to 1 (it is read in exactly
+  one place) and moves the `O[45]` gate onto the four D-PAD edges, so keyboard seek is
+  ungated — `O[45]` exists to stop the *D-pad* fighting a game disc, which a dedicated seek
+  key cannot do.
+  ⚠ **The extended bit is load-bearing:** six codes are bit-identical to numpad digits and
+  differ only by `E0` (`75`/np-8, `72`/np-2, `6B`/np-4, `74`/np-6, `7D`/np-9, `7A`/np-3).
+  The pre-existing digit block requires `!ps2_key[8]`; `kbd_map` requires `ps2_key[8]` for
+  exactly those six, and decodes **no digits at all**.
+  ⛔ **No OSD option (user decision 2026-09-03):** CEC is opt-in and OFF by default in
+  `MiSTer.ini` (`memset` + no default; `hdmi_cec.cpp:1268`), a user's own mapping already
+  shadows the built-in keys (Main returns early, `input.cpp:3807-3821`, so a key is a
+  joystick bit OR a scancode, never both — which is also why OR-ing cannot double-fire), and
+  a core-side switch could only be all-or-nothing because **a CEC press is indistinguishable
+  from a keyboard press on the wire**. `O[46]` stays free; appending it later is
+  forward-compatible so `"v,2"` would not need bumping.
+  Gate: `bench/dvd/run_kbd.sh` — `kbd_map_tb` is **mutation-checked** (5 targeted RTL
+  mutations each caught; level assertions on a decoder are exactly the shape that passes
+  without proving anything), `dpad_seek_tb` **T19a/T19b** replay the IR burst and prove ONE
+  `jump_fire`, and `scrub_ctrl_tb` passing **unchanged** is the gate that the gamepad scrub
+  was untouched. ⚠ `emu.sv`'s `joy_eff` substitution has NO sim gate (no emu-level bench) —
+  review-only plus Quartus elaboration; `joy_prev <= joy_eff` is the line that silently
+  breaks everything if missed. Detail: **`docs/dvd_nav.md` "Keyboard / CEC input"**.
 - ✅ **D-PAD FIXED-TIME SEEK (`O[45]`, default Off) — HW-CONFIRMED 2026-08-27
   (PR #15; user report; SEED 7, clk_dec 90.97 @100C / 89.5 @-40C).** VLC-style jumps on the D-pad
   while a title plays: **Left/Right ∓10 s, Down/Up ∓60 s**. Presses inside ~400 ms coalesce

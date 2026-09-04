@@ -402,6 +402,43 @@ module dpad_seek_tb;
             errors = errors + 1; end
         tick(COAL + 3000);
 
+        // ---- T19: the TAP-REPEATING REMOTE burst (issue #35 keyboard path) --
+        // dvd/emu.sv now ORs the keyboard/remote Fast Fwd + Rewind keys onto
+        // rt_edge/lf_edge instead of scrub_ctrl's held levels, precisely because
+        // an IR receiver does not send a hold: Retro Remake's SuperDock firmware
+        // (DockIR src/main.c) emits key-down -> 80 ms -> key-up PER NEC REPEAT
+        // FRAME, ~110 ms apart, so a long press is ~9 discrete taps a second.
+        // Against scrub_ctrl that is ~9 complete seek gestures a second (its
+        // accumulate tick is 60 ms, so each 80 ms tap leaves pending_off != 0 and
+        // every release issues a real seek) -- the rapid flush/re-lock regime the
+        // headers of scrub_ctrl.sv and dpad_seek.sv record as fatal. Here the
+        // identical burst must produce EXACTLY ONE jump.
+        // Spacing is scaled like the window: ~110/400 of COALESCE.
+        arm;
+        for (i = 0; i < 9; i = i + 1) begin press(2'd0); tick(COAL/4); end
+        tick(120);      // let the MM:SS subtract loop settle
+        if (pend_min !== 7'd1 || pend_sec !== 3'd3) begin
+            $display("FAIL T19a readout %0d:%0d0 want 1:30", pend_min, pend_sec);
+            errors = errors + 1; end
+        // 9 units = 6 + 3 -> fwda[1] + fwda[2] = 15000 + 7500
+        expect_fire("T19a 9-tap IR burst = ONE seek", 32'd22500, 1'b1, LBN0);
+
+        // ---- T19b: ...and the window really does close ---------------------
+        // The bound on T17a: taps spaced WIDER than the window are separate
+        // gestures, so coalescing cannot silently swallow a deliberate second
+        // press. Two isolated taps = two seeks.
+        arm;
+        press(2'd0); tick(COAL + 400);
+        press(2'd0); tick(COAL + 400);
+        if (fires !== 2) begin
+            $display("FAIL T19b: expected 2 fires from 2 spaced taps, got %0d", fires);
+            errors = errors + 1;
+        end else if (f_off !== 32'd2500) begin
+            $display("FAIL T19b: last off=%0d want 2500 (one 10 s rung)", f_off);
+            errors = errors + 1;
+        end else
+            $display("PASS T19b: spaced taps stay separate (2 fires, off=%0d)", f_off);
+
         if (errors == 0) $display("DPAD_SEEK_TB: ALL TESTS PASSED");
         else begin $display("DPAD_SEEK_TB: %0d FAILURE(S)", errors); $fatal(1); end
         $finish;
