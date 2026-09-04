@@ -1759,6 +1759,229 @@ worse maintenance burden than targeted in-place edits. So:
   `bench/dvd/dpad_seek_tb.sv` (24 scenarios incl. the trap), `scrub_ctrl_tb` T9–T12,
   `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
   **`docs/dvd_nav.md` §2b**.
+- 🔧 **MGL LAUNCH (issue #48, 2026-09-04, branch `fix/mgl-launch`) — sim-proven
+  RED/GREEN, ⏳ HW-confirm pending.** Report: launching the core from an MGL shortcut
+  gave "a grey or green screen" and a MiSTer that was "completely unresponsive" and had
+  to be restarted, while the same `.mpg` played when picked by hand from Load Video.
+  ★★ **THE UNRESPONSIVENESS WAS OUR OWN `InfoMessage` PUMPS, and the coupling is worth
+  knowing before writing ANY Main-side tick:** while `mgl->done == 0`, `HandleUI()` takes
+  the MGL branch and **never calls `menu_key_get()`** — the SOLE source of every input
+  event (keyboard menu key, gamepad menu key, the physical OSD button, and the core's own
+  virtual one; the `KEY_F12|UPSTROKE` synthesis lives inside it). The MGL's only forward
+  edge out of state 1 requires `menustate == MENU_NONE2` **exactly**, states 1/2 have no
+  handler in the MGL switch, and there is **no timeout**. `InfoMessage()` pins
+  `menustate = MENU_INFO`. Two overlay pumps call it once a second from `user_io_poll()`,
+  BEFORE `HandleUI` runs — `dvd_css_tick` (8 s) and `dvd_hdmi_audio`'s `report_pump`
+  (6 s per arm, **re-armed on every stage transition**, and the stage moves with the
+  scaler re-init a mount itself provokes). A `delay="5"` MGL fires squarely inside them:
+  nothing mounted, nothing responded. **That is why MGL misbehaved on THIS core and not on
+  stock ones.** ⚠ **The rule, now in `INTEGRATION.md` and `docs/mgl_launch.md`: never
+  raise `Info`/`InfoMessage`/`ProgressMessage` from a poll tick while
+  `mgl_get()->done == 0` — check `dvd_launch_ui_busy()` and DEFER (push the window
+  forward, don't spend it).** New `main/support/dvd/dvd_launch.{h,cpp}` (steps 27-29) also
+  adds a 20 s MGL watchdog — a floor under the fix, not the fix: a stall we haven't
+  thought of now costs a failed load, not a reboot.
+  ⚠ **Two comments in those files said `InfoMessage` "no-ops"/"is dropped" when the menu
+  FSM is busy. For the IDLE case that is exactly backwards, and believing it is what let
+  this ship.** Both corrected in place. Same class: `docs/idle_screen.md` claimed Main
+  skips `boot.rom` for an MGL launch — it does not (an MGL leaves `path` empty, so
+  boot.rom downloads normally and the `<file>` mount arrives seconds later by another
+  route).
+  ★ **The MGL dispatch itself was SOUND for this core** — `type="s" index="0"` matches the
+  `S0` row at `selentry 0`, `user_io_ext_idx` resolves `.mpg` to extension 0, the index
+  byte is `0x01` in BOTH flows, `make_fullpath` passes an absolute path through. Nothing
+  about the MGL format needed changing; ruling that out first is what left the real
+  asymmetry visible (the MGL flow is the one that opens a COLD path — the manual flow
+  always walks the directory with `ScanDirectory` first, warming the CIFS cache).
+  ★★ **COLOUR IS A DIAGNOSTIC and it is measurable, not folklore** (traced through
+  `yuv2rgb.v`, SMPTE-170M, `cy=38155`): **black** (0,0,0) = nothing scanning at all
+  (`mixer` emits Y=16,U=V=128 when not displaying) = reader wedged; **green** (0,136,0) =
+  a framestore slot being scanned that was NEVER WRITTEN (Y=Cb=Cr=0); **grey**
+  (130,130,130) = an intra picture DECODED OUT OF MIS-FRAMED BYTES (MPEG-2 resets the
+  intra DC predictor to 128 per slice) ⇒ suspect `ps_demux` framing. Splits three bugs
+  apart before any instrumentation. ⚠ `mode_realign`'s switch blank is NOT a candidate for
+  any of them — hard ~1.5 s `BLANK_MAX`, cleared on `start_streaming`, gated off before
+  the first mount, and it produces black.
+  **Core-side, three defects the launch exposed** (none MGL-specific in mechanism):
+  (1) **A MOUNT WITH NO MEDIA WAS TREATED AS A MOUNT.** Main sends `UIO_SET_SDSTAT` even
+  when the open FAILED (size zeroed) and `hps_io` raises `img_mounted` for an all-zero
+  word — which is also how an EJECT arrives — so the pulse means "the slot changed", not
+  "there is media". `disc_ever` always guarded on `img_size != 0`; `start_streaming` and
+  `media_seen` did not, so a failed mount killed the idle logo AND its file picker,
+  flipped `VIDEO_ARX`, and started the reader on a zero-length image, where
+  `total_blocks == 0` took the "< 17 sectors" branch and `S_STREAM`'s
+  `strm_blk + 1 == ext_blocks_q` terminator can NEVER be satisfied ⇒ an unbounded walk of
+  LBA 0,1,2,… of an empty slot. ⚠ **And it could not be reported: `img_unplayable`'s
+  window only advances while `img_streaming`, so a reader that requests and receives
+  nothing SILENCES the one notice that would have named it.** Fixed in three places on
+  purpose (`start_streaming` gated on size; a new `img_ejected` clears `media_seen`,
+  itself guarded on the delivery/picture signals `logo_vis` uses so a failed mount can't
+  flip `VIDEO_ARX` under live content; `S_INIT` → `S_DONE` on zero blocks; terminator
+  relaxed to `>=`).
+  (2) **`ps_demux`'s `S_ES_PASS` WAS A ONE-WAY DOOR.** The raw-ES verdict is taken on the
+  first start code after a pipe reset and `ever_seen_pack` is cleared by EVERY
+  `load_flush`, so it is retaken after each one — and a flush does not always land on a
+  pack boundary (the in-place `mode_switch` fallback flushes without moving the reader,
+  and is chosen exactly when `ps_saw_pack` is 0, i.e. right after a mount). Landing
+  mid-PES on `00 00 01 B3` latched it for the rest of the title and handed PES headers,
+  audio, subpicture and NAV packs to the video decoder = the grey picture, no
+  self-recovery from any seek or watchdog. Now leaves on `00 00 01 BA`; a genuine bare ES
+  cannot contain one (`0xB9`-`0xFF` are system codes, illegal in a video ES, and MPEG-2
+  forbids emulation in the payload). ★ The 4 already-forwarded pack-code bytes LEAK ON
+  PURPOSE — the first three went out on earlier cycles, so suppressing only the `BA` emits
+  a headless `00 00 01` and the decoder eats the next real byte as its code. This also
+  subsumes arming the reader's `hunt_active` on the in-place `mode_switch`.
+  (3) **Two latches that did not do what their comments said.** `osd_btn` was a pure
+  decode of `osd_wait`, which advances only while `~status[0]` — so a reset inside the
+  `[FIRE, END)` window froze the count with the button HELD, and Main reads a ≥3 s hold as
+  "enter Bluetooth pairing"; now gated on `~status[0]`. And **`analog_want_l`'s "freeze
+  while a disc is mounted" NEVER FROZE**: `img_mounted` is a one-transaction PULSE, not a
+  level, so the latch tracked cfg forever, mid-title included — Main re-sends cfg on every
+  `video_mode_adjust`, INCLUDING the one the mount's own `VIDEO_ARX` flip provokes, so a
+  changed ini bit could fire a live `il_switch` under playing content (the issue #42
+  class). `media_seen` is the level that was meant.
+  **Gate: `bench/dvd/run_mgl.sh`.** `iso_reader_mount_tb` — RED 10 reads against an empty
+  slot and still `S_STREAM` (10 is only what fitted in the window; the walk has no end),
+  GREEN 0 reads and `S_DONE`. `ps_demux_esrecover_tb` — RED **48 video bytes and 0 AUDIO
+  bytes** after the next pack (the whole pack handed to the video decoder; 0 audio is the
+  sharp end, since raw-ES mode routes nothing to audio at all), GREEN 12 and 4. Both
+  measure what the hardware DOES (requests issued, bytes demuxed onto WHICH PORT), not a
+  signal the fix names, and each carries a control arm against over-reach (a real bare ES
+  must stay in ES mode; an empty mount must leave the reader able to start again).
+  ⚠ **`iso_reader_mount_tb` ships its OWN mock HPS because it POLLS.** The mock in
+  `iso_reader_tb.sv` and its clones latches the request on the first cycle `sd_rd` is high
+  and always serves it; the real `hps_io` picks requests up by polling cmd `'h16` at
+  Main's poll rate, so a request withdrawn in between is LOST. Without a polling mock the
+  "mount over an in-flight read" arm is a bench that cannot fail.
+  ★ **The CSS progress bar survives an MGL launch on a PHYSICAL disc, and the reason is
+  worth knowing because the obvious one is wrong:** `ProgressMessage` → `InfoMessage`, and
+  `InfoMessage` calls `OsdEnable(OSD_MSG)` ITSELF, so the `OsdDisable()` an MGL performs
+  does not hide it. The gate is `if (menustate <= MENU_INFO)`. A physical disc mounts on
+  the VERY FIRST `user_io_poll()` (before HandleUI has run at all, and long before a
+  `delay=N` MGL fires) with `menustate` still at its `MENU_NONE1` initialiser ⇒ bar
+  visible. ⚠ **Residual (not fixed):** only an encrypted `.iso` that the MGL ITSELF mounts
+  loses the bar, because that mount runs inside `MENU_GENERIC_IMAGE_SELECTED` and the
+  guard fails. Keys cache, so it is once per disc.
+  ⚠ **And that same crack is why the watchdog measures TICKS, NOT WALL CLOCK:**
+  `crack_title_keys()` is synchronous inside `user_io_file_mount()` and blocks
+  `user_io_poll()` for MINUTES on an uncached disc, so wall-clock timing would read a
+  physical disc's first-play crack as an MGL stall and destroy a healthy auto-load — the
+  watchdog killing the thing it was added to protect. `dvd_launch_tick()` discounts gaps
+  between its own invocations: a gap means the loop was not running, so it cannot be time
+  the MGL spent stuck.
+  ★★ **FOLLOW-UP (same branch, from the HW round): THE OPTICAL DRIVE FIGHTS FOR THE
+  SAME SLOT.** Report: an MGL for a `.mpg` worked, but with a disc in the drive it
+  waited for key extraction first, and removing that disc froze the `.mpg` and left
+  the core unable to reach the idle screen. Both are `dvd_phys.cpp` treating slot 0
+  as its own when it shares it with every image the user can load. (1)
+  `dvd_phys_tick()` auto-mounted on the VERY FIRST poll, and an MGL's `<file>` lands
+  `delay` seconds later — so the drive won that race every time, and on an encrypted
+  disc that is minutes of `crack_title_keys()` (SYNCHRONOUS, blocking
+  `user_io_poll()`) for a disc the MGL then replaces anyway. (2) `mounted` meant "we
+  mounted a disc at some point", NOT "we still own the slot", so after any later
+  mount an eject still ran the teardown: `user_io_file_mount("", 0)` closed the file
+  that WAS playing (the reader starves = the freeze) and pulsed `status[0]`.
+  ⚠ **Note (2) is INDEPENDENT of MGL** — auto-mount a disc, then pick a file from
+  the OSD, then eject: same bug, and it predates all of this.
+  Fix = new `dvd_phys_note_mount(path, index)` from `user_io_file_mount()`
+  (integration step 30). ★ **Every reason not to mount is now checked BEFORE
+  `dvd_video_probe()`**, the first thing that actually reads the disc — "no disc
+  operations when launched to play a file" has to mean no READS, not just no mount,
+  or a spinning drive is probed once a second all session. ★ **An insertion EDGE
+  (not the level) clears the `foreign` latch:** putting a disc in is deliberate and
+  the auto-mount is the only way to play one, so an insertion still wins, while a
+  disc merely SITTING there never takes the slot back from an image the user chose.
+  Readiness is the edge, so it costs one ioctl and reads nothing. ⚠ **Pass the
+  INDEX** — Main mounts `boot*.vhd` across slots 0-3 at init and the drive only ever
+  binds slot 0; without it a `boot.vhd` in `games/DVD/` would silently disable
+  physical-disc playback. ⚠ Still open, and a candidate if "Reset does nothing" is
+  ever reported: the eject path's `reset_release_at` releases `status[0]`
+  unconditionally ~1 s later, so an OSD Reset pressed inside that window is
+  cancelled by it.
+  **Gate: `main/tests/run_tests.sh`** — HOST-side (plain `g++`, no MiSTer, no ARM
+  toolchain, no Docker), the overlay's first such test. `dvd_phys_test.cpp` includes
+  the module and stubs the rest of Main at link time, so it exercises the real
+  logic; RED against the pre-fix module reproduces BOTH field symptoms. [4]-[6] are
+  controls, because every one of these bugs is trivially "fixed" by never mounting a
+  disc. ⚠ The module carries exactly ONE `#ifdef DVD_PHYS_TEST`, around
+  `open_ready_drive` — a real `/dev/srN` cannot be faked (a regular file opens fine
+  and then fails `CDROM_DRIVE_STATUS`).
+  ★★ **AND A THIRD ROUND: THE DRIVE PROBE RUNS ON THE THREAD THAT FEEDS THE
+  DECODER.** Report after the slot-ownership fix: the MGL launch was clean, but
+  ejecting an UNRELATED disc still froze the `.mpg` — **while the OSD kept
+  working**. ★ That last clause IS the diagnosis: Main alive + HandleUI running
+  ⇒ nothing unmounted the file and the core is not in reset, so it is being
+  STARVED. And with the slot fix in place `dvd_phys_tick()` does nothing on that
+  eject, which leaves exactly one thing still touching the drive — the 1 Hz scan
+  itself. `open("/dev/srN", O_NONBLOCK)` + `ioctl(CDROM_DRIVE_STATUS)` is
+  **BLOCKING I/O on the same thread as `user_io_poll()`'s SD block service**, so
+  however long it takes is time the core gets no data. Microseconds on a settled
+  drive; with the **TRAY OPEN** the `sr` driver answers TEST UNIT READY with a
+  media-change unit attention and RETRIES — hundreds of ms, every second, forever,
+  because the state never settles. Fix: a probe over 50 ms doubles the scan period
+  (cap 10 s) and a fast one restores 1 s; while a foreign image owns the slot the
+  floor is 5 s (the scan then exists only to notice an INSERTION). Measured
+  (`dvd_phys_test.cpp` [8], 400 ms probe): **60 blocking calls a minute → 7.**
+  ✅ **HW-CONFIRMED 2026-09-04** (*"ejecting during .mpg playback works now"*). It
+  shipped as a hypothesis with instrumentation and the instrument STAYS: any probe
+  over 50 ms is logged to `/tmp/dvd_report.log` with its duration, which is the
+  fastest way to tell a slow drive from a core-side stall next time.
+  ★★ **THE DIAGNOSIS CAME FROM ONE CLAUSE IN THE REPORT — "the OSD still works".**
+  Main alive + HandleUI running rules out every unmount/reset hypothesis at a stroke
+  and leaves starvation as the only shape that fits. **Ask it explicitly next time:
+  "is the PICTURE frozen or is the MACHINE frozen" separates the HPS side from the
+  core side before a line of code is read.**
+  ★ **The durable rule, worth applying to any future overlay tick: `user_io_poll()`
+  is the core's data pump. Blocking I/O there is a video artefact, not a latency
+  nit.** `dvd_report` already forks for this reason; `crack_title_keys` gets away
+  with it only because nothing is playing yet.
+  ★★ **FOURTH ROUND: RETURNING TO THE IDLE SCREEN MUST NOT DEPEND ON THE HPS RESET.**
+  Report: after an MGL launch the OSD **Reset row does nothing**, so neither the
+  button nor an eject reaches the idle screen. ⚠ **The core side CANNOT be
+  launch-dependent** — `status[0]` goes through ONE flip-flop into `reset_n`, and
+  `user_io_status_set()` sends unconditionally with `hps_io` latching `status[15:0]`
+  on the FIRST word of the transaction (so even the OSD row's back-to-back
+  `set(1); set(0)` leaves the bit high for the rest of a transaction = hundreds of
+  clk_sys cycles). Neither end has an MGL dependency, so this half is
+  **INSTRUMENTED, not guessed**: integration step 31 logs every `status[0]` write to
+  `/tmp/dvd_report.log` with the MGL state, which splits "Main never dispatched"
+  from "the core ignored it" — they are fixed in completely different places.
+  ★★ **But the eject path had a defect of its own, and it was MINE from round two:**
+  `img_ejected` is a ONE-CYCLE PULSE and an eject arrives while the last frames are
+  still on screen, so `(img_ejected && !img_streaming && !video_live_s2)` evaluated
+  `video_live_s2` as still HIGH at exactly that instant and threw the clear away
+  every time. **The test was right; sampling it at the pulse was wrong.** New
+  `slot_empty` latches the emptied slot and the clear fires once the picture
+  actually runs out — so the return to idle now depends on nothing but the core.
+  ★ The latch also keeps the original guard honest: a FAILED MOUNT over live content
+  still leaves the old image playing and `media_seen` undisturbed, so `VIDEO_ARX/ARY`
+  does not flip mid-title and Main does not re-init the scaler.
+  ⚠ **Durable shape, and this is the second time this session:** a one-cycle event
+  ANDed with a level that is only settled LATER is a condition that never fires.
+  Latch the event, test the level when it can answer.
+  ★★ **FIFTH ROUND: THE `delay` WAS BEING CONSUMED BEFORE IT WAS SET.** Report: the
+  clip plays immediately with `delay="5"`. The log settled it in three lines —
+  `MGL pending -- delay=5s, 5000 ms remaining` … `mount result: slot 0 OK` …
+  `MGL finished after ~0s`. The timer was armed CORRECTLY and the mount still
+  happened inside the same second, so `CheckTimer` was never the gate: the FSM had
+  been advanced past `case 0` before the main loop even started.
+  ★★ **`CheckTimer(t)` is `(!t) || (GetTimer(0) >= t)` — AN UNARMED TIMER READS AS
+  AN EXPIRED ONE.** `mgl_parse()` memsets the struct, so `mgl->timer` is 0 from the
+  parse (`user_io_init` ~1516) until the arming at that function's very END (~1760);
+  anything re-entering `HandleUI()` in that window runs `case 0` with
+  `CheckTimer(0) == true`. **`user_io_file_tx()` ends with
+  `ProgressMessage(0,0,0,0)` → `MenuHide()` → `HandleUI()`, so a `boot.rom` transfer
+  does exactly that — and this fork ships a `boot.rom` for the idle logo.** Fixed at
+  the invariant: `if (mgl->timer && CheckTimer(mgl->timer))` (integration step 32,
+  the FIRST edit outside `user_io.cpp`; new `replace_once()` helper fails loudly if
+  the anchor moves). ⚠ `delay="0"` still works — that yields `GetTimer(0)`, a live
+  millisecond count, never literally zero.
+  ★★★ **THE PATTERN ACROSS ALL FIVE ROUNDS, AND IT IS THE MOST REUSABLE THING HERE:
+  the stock mechanism was fine every time, and THIS CORE'S OWN ADDITIONS are what
+  tipped it over** — our `InfoMessage` pumps froze the MGL FSM, our drive scan
+  starved the decoder, our `boot.rom` ate the delay. **Ask what THIS core does that
+  a stock core does not, before reading stock code for a defect.**
+  Detail: **`docs/mgl_launch.md`**.
 - ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
   `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build
   `DVD_timeline_20260904_0059.rbf`, SEED 5 first roll, clk_dec 94.06/93.11).

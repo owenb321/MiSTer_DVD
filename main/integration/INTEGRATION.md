@@ -220,3 +220,109 @@ Notes that matter on a `MAIN_MISTER_REF` bump:
   `$(wildcard ./support/*/*.cpp)`.
 - The work forks; it must never run inline in the poll loop, which also services
   SD blocks for the core.
+
+## Steps 27-29 — MGL launch (issue #48)
+
+`main/support/dvd/dvd_launch.{h,cpp}`. Design and the full launch timeline:
+`MiSTer_DVD/docs/mgl_launch.md`.
+
+| # | File | Edit |
+|---|---|---|
+| 27 | `user_io.cpp` | include `support/dvd/dvd_launch.h` |
+| 28 | `user_io.cpp` | `dvd_launch_tick()` **first** of the DVD ticks in `user_io_poll()` |
+| 29 | `user_io.cpp` | `dvd_report_note_mount_result(...)` immediately before `UIO_SET_SDSTAT` |
+| 30 | `user_io.cpp` | `dvd_phys_note_mount(name, index)` beside step 26, so the drive can see slot 0 being taken |
+| 31 | `user_io.cpp` | `dvd_launch_note_status(opt, value)` in `user_io_status_set()` — logs writes to the core's reset bit |
+
+The rule these steps exist to enforce, and it applies to **any** future overlay
+code that runs from a `user_io_poll()` tick:
+
+> **Never raise `Info()` / `InfoMessage()` / `ProgressMessage()` while
+> `mgl_get()->done == 0`.** Check `dvd_launch_ui_busy()` first and defer.
+
+Why it is not merely cosmetic: during an MGL launch `HandleUI()` takes the MGL
+branch and **never calls `menu_key_get()`**, which is the sole source of every
+input event — keyboard menu key, gamepad menu key, the physical OSD button and
+the core's own virtual one. The MGL's only forward edge out of `state == 1`
+requires `menustate == MENU_NONE2`, and `InfoMessage()` pins
+`menustate = MENU_INFO`. So a notice raised from a poll tick stalls the load
+**and** every input path on the machine — the reported "completely unresponsive,
+the MiSTer must be restarted".
+
+- **Step 28 is placed first** so that when the watchdog releases a stalled MGL,
+  the notice pumps see `done == 1` in the same poll iteration.
+- **The watchdog is a floor, not the fix.** It bounds a stall at ~20 s and hands
+  the UI back; the fix is the `dvd_launch_ui_busy()` gate in the pumps
+  (`dvd_css_tick`, `report_pump`). Keep both: the gate covers the causes we know
+  about, the watchdog covers the ones we do not.
+- **Step 29 is a log line only.** It matters because `UIO_SET_SDSTAT` is sent
+  even when the open FAILED (with size 0), so from the core's side a failed mount
+  and a real one are the same pulse. `/tmp/dvd_report.log` then says which
+  happened, which is the difference between a Main-side and a core-side bug.
+
+### Step 30 — slot 0 has more than one claimant
+
+The optical drive shares slot 0 with every image the user can load, and
+`dvd_phys.cpp` used to track only *"we mounted a disc at some point"*. Two field
+bugs came out of that on an MGL launch with a disc in the drive:
+
+- the drive auto-mounted on the first poll, so a `.mpg` named by the MGL waited
+  minutes for CSS key extraction nobody asked for — on a disc that was then
+  replaced by the file anyway;
+- ejecting that disc unmounted the file that *was* playing (freezing it) and reset
+  the core.
+
+`dvd_phys_note_mount()` gives the module the one fact it was missing. The rules it
+now follows are pinned by `main/tests/run_tests.sh` (host-side, no MiSTer needed),
+which reproduces both symptoms against the pre-fix module.
+
+⚠ It takes the **index** as well as the path. Main mounts `boot*.vhd` across slots
+0–3 during init, and the drive only ever binds slot 0 — without the index a
+`boot.vhd` in `games/DVD/` would read as a claim on the drive's slot and silently
+disable physical-disc playback.
+
+### Step 31 — who asked for the reset
+
+`status[0]` is the core's reset, and both the OSD **Reset** row and the disc-eject
+teardown reach it through `user_io_status_set()`. When neither appears to work
+there are exactly two possibilities — Main never dispatched, or it dispatched and
+the core ignored it — and they are fixed in completely different places. This logs
+the write to `/tmp/dvd_report.log` so the next test says which.
+
+⚠ **The anchor is `if (!size) return;`**, which is the only line in
+`user_io_status_set()` that is unique in the file: `user_io_status_get()` opens with
+the same two body lines and first differs at its `return 0;`. It cannot be the
+signature either — `insert_after()` splits on the first newline *after* the anchor,
+so a `signature\n{` anchor lands the call between the signature and its brace (the
+same trap as step 24). One consequence, and it is acceptable: a write whose option
+string fails to parse logs nothing, but that is still on Main's side of the line
+this exists to draw.
+
+## Step 32 — an unarmed MGL timer is not an expired one
+
+**The first edit outside `user_io.cpp`.** `menu.cpp`, one condition:
+
+```c
+-  if (CheckTimer(mgl->timer))
++  if (mgl->timer && CheckTimer(mgl->timer))
+```
+
+`mgl_parse()` memsets the struct, so `mgl->timer` is **0** from the moment the MGL
+is parsed (`user_io_init` line ~1516) until it is armed at that function's very end
+(~line 1760). And `CheckTimer(0)` returns **true** — its `(!time) ||` clause reads an
+unarmed timer as an expired one.
+
+So anything that re-enters `HandleUI()` inside that window advances the MGL state
+machine past its `case 0` and **consumes the delay before it is ever set**. The file
+then mounts as soon as the menu opens, with no wait at all. `user_io_file_tx()`
+finishes with `ProgressMessage(0, 0, 0, 0)`, whose zero-argument form calls
+`MenuHide()`, which calls `HandleUI()` — so a `boot.rom` transfer does exactly this,
+and this fork ships a `boot.rom` (the idle logo).
+
+This is stock behaviour, not something the overlay introduced; it just costs *this*
+core its MGL delay more readily than most, because of the idle logo. The fix states
+the invariant where the bug is rather than working around it elsewhere, and the
+`replace_once()` helper fails loudly if the three-line anchor ever moves.
+
+⚠ `mgl->timer` is only ever 0 while unarmed: `delay="0"` still yields
+`GetTimer(0)`, a live millisecond count, so a zero delay keeps working.

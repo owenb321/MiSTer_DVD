@@ -16,11 +16,13 @@
 #include <dlfcn.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <dirent.h>
 #include <scsi/sg.h>
 #include <linux/cdrom.h>
 #include <linux/fs.h>
 
 #include "dvd_css.h"
+#include "dvd_launch.h"
 #include "../../menu.h"      // ProgressMessage() — on-screen feedback during key crack
 #include "../../file_io.h"   // getFullPath() — resolve MiSTer's storage-relative mount path
 
@@ -367,6 +369,75 @@ static int enumerate_vobs(void)
 	return g_nvobs > 0;
 }
 
+// ---------------------------------------------------------------------------
+// libdvdcss title-key cache
+// ---------------------------------------------------------------------------
+// A key that had to be CRACKED costs minutes; read back from the cache it costs
+// nothing, so this is the difference between "a first play is slow" and "every
+// play is slow". libdvdcss does the caching itself -- all we owe it is a writable
+// directory in DVDCSS_CACHE before dvdcss_open().
+//
+// ⚠ We owed it more than the old two lines gave. mkdir() creates ONE level, and
+// /media/fat/dvdcss only exists if libdvdcss was installed by our own Scripts
+// entry -- css_lib_names also finds it in /media/fat/linux or on the system path,
+// and then the parent is missing, mkdir fails ENOENT, and the return was not
+// checked. libdvdcss then does its own single-level mkdir on the same path, fails
+// the same way, and disables the cache SILENTLY. Every play re-cracked.
+//
+// So: create both levels, prove the directory is writable, and say so in the log
+// either way. `DVDCSS_CACHE` is unset rather than left pointing at somewhere
+// unusable, so the behaviour is at least defined.
+#define CSS_CACHE_ROOT "/media/fat/dvdcss"
+#define CSS_CACHE_DIR  CSS_CACHE_ROOT "/cache"
+
+// How many per-disc entries libdvdcss has stored. Logged either side of key
+// extraction: growing means the cache took, and a non-zero count at open time on a
+// disc that is still slow means it is being written but not read back.
+static int cache_entries(void)
+{
+	DIR *d = opendir(CSS_CACHE_DIR);
+	if (!d) return -1;
+	int n = 0;
+	struct dirent *e;
+	while ((e = readdir(d)) != NULL)
+		if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..")) n++;
+	closedir(d);
+	return n;
+}
+
+static void setup_cache(void)
+{
+	if (mkdir(CSS_CACHE_ROOT, 0755) && errno != EEXIST)
+		css_log("cache: cannot create %s (%s)", CSS_CACHE_ROOT, strerror(errno));
+
+	if (mkdir(CSS_CACHE_DIR, 0755) && errno != EEXIST)
+	{
+		css_log("cache: cannot create %s (%s) -- keys will be re-extracted every play",
+		        CSS_CACHE_DIR, strerror(errno));
+		unsetenv("DVDCSS_CACHE");
+		return;
+	}
+
+	// Writable, not merely present: /media/fat is removable and can be mounted
+	// read-only after an unclean shutdown, which looks identical from mkdir alone.
+	char probe[sizeof(CSS_CACHE_DIR) + 16];
+	snprintf(probe, sizeof(probe), "%s/.wtest", CSS_CACHE_DIR);
+	int fd = open(probe, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+	if (fd < 0)
+	{
+		css_log("cache: %s is not writable (%s) -- keys will be re-extracted every play",
+		        CSS_CACHE_DIR, strerror(errno));
+		unsetenv("DVDCSS_CACHE");
+		return;
+	}
+	close(fd);
+	unlink(probe);
+
+	setenv("DVDCSS_CACHE", CSS_CACHE_DIR, 1);
+	css_log("cache: %s ready, %d entr%s", CSS_CACHE_DIR,
+	        cache_entries(), cache_entries() == 1 ? "y" : "ies");
+}
+
 // Pre-crack each VOB's title key at its start sector (fast cached lookups thereafter).
 // With a drive region set this is instant (ioctl); with none — or an image file with no
 // drive at all — it is a slow crack, so show a bar (it blocks the main loop) with the
@@ -382,7 +453,9 @@ static void crack_title_keys(const char *text)
 		if (p_seek(css, (int)g_vobs[i].start, DVDCSS_SEEK_KEY) >= 0) keyed++;
 	}
 	ProgressMessage();   // clear
-	css_log("%d VOBs, %d title keys (region %s)", g_nvobs, keyed, region_set ? "set" : "NOT set");
+	css_log("%d VOBs, %d title keys (region %s), cache now %d entr%s",
+	        g_nvobs, keyed, region_set ? "set" : "NOT set",
+	        cache_entries(), cache_entries() == 1 ? "y" : "ies");
 	css_pos = -1;
 }
 
@@ -463,8 +536,7 @@ int dvd_css_open(void)
 
 		// Persist keys per disc: a slow crack becomes a one-time cost, and
 		// re-inserting the same disc reads the keys back instantly.
-		mkdir("/media/fat/dvdcss/cache", 0755);
-		setenv("DVDCSS_CACHE", "/media/fat/dvdcss/cache", 1);
+		setup_cache();
 
 		// Default method: fetch each title key from the drive via the CSS ioctls
 		// (instant) when a region is set, falling back to cracking otherwise.
@@ -488,6 +560,10 @@ int dvd_css_open(void)
 			// the mount runs mid-launch when the menu FSM is in a high state, so a
 			// call here is dropped. Defer it: dvd_css_tick() (from user_io_poll)
 			// re-asserts it until the launch settles to MENU_NONE1 and it shows.
+			// ⚠ And that tick must NOT re-assert while an MGL launch is still
+			// running -- pinning menustate there stalls the load and every input
+			// path on the machine (issue #48). dvd_css_tick() gates on
+			// dvd_launch_ui_busy(); this 8 s window is pushed along, not spent.
 			warn_until = time(NULL) + 8;
 		}
 		raw_fd = open(dev, O_RDONLY | O_CLOEXEC);
@@ -547,8 +623,7 @@ int dvd_css_open_image(const char *path)
 	if (stat(full, &st) != 0 || st.st_size <= 0) { css_log("image %s: stat(%s) failed", path, full); return 0; }
 
 	// Persist cracked keys per disc (shared with the drive path).
-	mkdir("/media/fat/dvdcss/cache", 0755);
-	setenv("DVDCSS_CACHE", "/media/fat/dvdcss/cache", 1);
+	setup_cache();
 
 	dvdcss_t h = p_open(full);
 	if (!h) { css_log("dvdcss_open(image) FAILED: %s", full); return 0; }
@@ -597,13 +672,24 @@ int dvd_css_active(void)
 }
 
 // Called every user_io_poll. Re-asserts the "encrypted disc, install libdvdcss"
-// popup ~once/second until its window closes — InfoMessage no-ops while the
-// launch FSM is busy and renders once menustate settles to idle (core running).
+// popup ~once/second until its window closes, and renders once menustate settles
+// to idle (core running).
+//
+// ⚠ The original comment here claimed "InfoMessage no-ops while the launch FSM is
+// busy". It does not — it PINS menustate = MENU_INFO whenever menustate is idle,
+// which is exactly the state an MGL launch needs to advance out of. That belief
+// cost issue #48: a notice raised from this tick froze the MGL and, with it,
+// every input path on the machine. Hence the dvd_launch_ui_busy() gate, which
+// holds the window open rather than consuming it. See docs/mgl_launch.md.
 void dvd_css_tick(void)
 {
 	if (!warn_until) return;
 	time_t now = time(NULL);
 	if (now >= warn_until) { warn_until = 0; return; }
+
+	// Defer, don't spend: push the window along so the notice still appears
+	// once the launch settles.
+	if (dvd_launch_ui_busy()) { warn_until = now + 2; return; }
 
 	static time_t last = 0;
 	if (now != last)   // at most once per second — the 2 s InfoMessage timeout bridges the gap

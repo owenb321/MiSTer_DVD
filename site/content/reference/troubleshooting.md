@@ -21,6 +21,28 @@ which makes it look like a size or filesystem problem.
     all, the core never got the file; if you get `UNSUPPORTED IMAGE`, it read the file and
     could not play it. Those are different problems.
 
+### Launched from an MGL: blank screen, nothing responds
+
+!!! info "Unreleased"
+    Fixed in this build. If you are on v0.4.0 or earlier, this is what you are seeing.
+
+Older builds could freeze during an MGL launch. Two separate faults, and both are fixed:
+
+- The core's own on-screen notices could stall MiSTer's shortcut handling. While a
+  shortcut is still running, MiSTer reads no input at all — so the gamepad, the keyboard
+  and the OSD button were all dead and only a restart cleared it. There is now a 20-second
+  backstop: even if a shortcut fails, the OSD always comes back so you can load the file
+  by hand.
+- If the file did not open — a wrong path, or a share that was not ready yet — the core
+  was still told a disc had arrived, hid the idle screen and showed a flat grey or green
+  field with no message. A load that fails now returns to the idle screen and the file
+  picker.
+
+If a shortcut still does not load the movie, check the `path` in the `.mgl`: it is
+relative to `/media/fat/games/DVD/` unless it starts with `/`. Raising `delay` to 5 helps
+when the file is on a network share that takes a moment to wake. See
+[Launching from an MGL shortcut](../getting-started/loading.md#launching-from-an-mgl-shortcut).
+
 ### `UNSUPPORTED IMAGE`
 
 Either the image is not ISO9660 — a **UDF-only** image will not load — or the file is not a

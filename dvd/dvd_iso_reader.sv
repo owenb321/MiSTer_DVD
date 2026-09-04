@@ -2465,7 +2465,17 @@ always @(posedge clk or negedge rst_n) begin
 
             // ------------------------------------------------------------
             S_INIT: begin
-                if (total_blocks < 32'd17) begin
+                // DVD-FORK FIX (issue #48): an empty image is not playable, and
+                // it must not be treated as a tiny one. Main notifies the core of
+                // a mount even when the file never opened (size 0), and with
+                // total_blocks == 0 the extent below is zero-length -- which the
+                // S_STREAM terminator (strm_blk + 1 == ext_blocks_q) can never
+                // satisfy, so the reader walked LBA 0,1,2,... of an empty slot
+                // for ever. Stop here instead; emu.sv now also declines to start
+                // on a zero size, so this is the second of two locks.
+                if (total_blocks == 32'd0) begin
+                    state <= S_DONE;
+                end else if (total_blocks < 32'd17) begin
                     ext_mem[0] <= {32'd0, total_blocks};
                     best_base <= 7'd0; best_cnt <= 7'd1;
                     strm_idx  <= 7'd0; strm_left <= 7'd1;
@@ -4073,7 +4083,10 @@ always @(posedge clk or negedge rst_n) begin
                                 end
                             end
                         end else begin
-                            if (strm_blk + 32'd1 == ext_blocks_q) begin
+                            // >= not ==: a zero-length extent would otherwise
+                            // stream for ever (issue #48). Equality is the normal
+                            // case; the inequality is the floor under it.
+                            if (strm_blk + 32'd1 >= ext_blocks_q) begin
                                 strm_blk <= 32'd0;
                                 if (strm_left == 7'd1) strm_done <= 1'b1;
                                 else begin

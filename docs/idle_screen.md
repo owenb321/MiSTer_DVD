@@ -99,8 +99,15 @@ Delivery is the framework's zero-CONF_STR **boot.rom convention**: Main
 sends `/media/fat/games/DVD/boot.rom` (fallbacks `<rbf_dir>/DVD.ROM`,
 `DVD.ROM`, `bootrom/DVD.ROM`) over `ioctl_download` with `ioctl_index==0`
 at every core load. Caveat: Main skips boot.rom when the core is launched
-with a direct file path (file association / MGL with a file element) — the
-default logo shows in that session's brief idle moments instead.
+with a **direct file path** (a file association) — the default logo shows in
+that session's brief idle moments instead.
+
+⚠ That caveat does **not** cover MGL, which was recorded here wrongly and read
+as fact for months. An MGL launch leaves `path` empty in `user_io_init()`, so
+`user_io_file_tx(path, …)` is never attempted and boot.rom **is** downloaded
+normally; the MGL's own `<file>` mount arrives seconds later through
+`user_io_file_mount()`, a different path entirely. See `docs/mgl_launch.md`
+for the full launch timeline.
 
 Format (max 528 bytes) — `tools/idle_logo.py` is the reference
 implementation:

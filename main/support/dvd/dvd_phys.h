@@ -22,9 +22,30 @@
 // Call every user_io_poll (only meaningful while the DVD core is loaded — it
 // self-gates on is_dvd()). Debounced drive scan:
 //   - DVD-Video disc appears  -> user_io_file_mount(DVD_PHYS_SENTINEL, 0)
-//   - disc removed while mounted -> user_io_file_mount("", 0) + dvd_css_close()
+//   - disc removed while WE own the slot -> user_io_file_mount("", 0) + dvd_css_close()
 // No-op on non-DVD cores and while nothing changes.
+//
+// ⚠ "while WE own the slot" is load-bearing and was not always true. The drive
+// shares slot 0 with every image the user can load, so an auto-mounted disc that
+// is later replaced by a file must be FORGOTTEN, not remembered: otherwise
+// ejecting a disc nobody is watching tears down the file that IS playing and
+// resets the core. See dvd_phys_note_mount().
 void dvd_phys_tick(void);
+
+// Call from user_io_file_mount() with the path and slot it was handed, so this
+// module can see slot 0 being taken by something that is not the drive. Slots
+// other than 0 are ignored -- the drive only ever binds slot 0, and the core
+// declares no other file entry, but Main mounts boot*.vhd across slots 0-3 at
+// init and this module must not read one of those as a claim on its slot.
+//
+// Two things depend on it:
+//   - an eject only tears down and resets when the drive still owns the slot;
+//   - the auto-mount does not fire over an image the user asked for, which is
+//     what an MGL launch does (its <file> mount lands `delay` seconds after the
+//     core comes up, so without this the drive would win the race, crack keys
+//     for minutes, and then be replaced by the file anyway).
+// Observes only.
+void dvd_phys_note_mount(const char *path, unsigned char index);
 
 // The /dev/srN node of the disc currently mounted by this module, or NULL when
 // nothing is mounted. Exported for dvd_report.cpp, which hands it to

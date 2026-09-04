@@ -159,6 +159,16 @@ void dvd_report_note_mount(const char *path)
 	rep_log("DVD_REPORT: mount hook: %s -> %s", path, mounted_path);
 }
 
+void dvd_report_note_mount_result(const char *path, int index, int ok, uint64_t size)
+{
+	rep_log("DVD_REPORT: mount result: slot %d %s size=%llu path=%s",
+	        index, ok ? "OK" : "FAILED", (unsigned long long)size,
+	        (path && path[0]) ? path : "(eject)");
+	if (!ok || !size)
+		rep_log("DVD_REPORT:   ^ the core is still told a disc arrived (UIO_SET_SDSTAT "
+		        "is sent regardless) -- expect no picture");
+}
+
 static const char *find_source(void)
 {
 	// A physical disc first: dvd_phys owns the drive and its node is what the

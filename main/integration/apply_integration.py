@@ -41,6 +41,15 @@ def insert_after(text, anchor, block, step, marker):
         fail(step, "anchor at EOF")
     return text[:eol + 1] + block + text[eol + 1:]
 
+def replace_once(text, old, new, step, marker):
+    if marker in text:
+        print(f"[integration] step {step}: already applied, skipping")
+        return text
+    n = text.count(old)
+    if n != 1:
+        fail(step, f"anchor matched {n} times, expected exactly 1: {old!r}")
+    return text.replace(old, new, 1)
+
 def insert_before(text, anchor, block, step, marker):
     if marker in text:
         print(f"[integration] step {step}: already applied, skipping")
@@ -411,6 +420,52 @@ u = insert_after(u, '\tint len = strlen(name);',
     '\tdvd_report_note_mount(name);   // dvd:report — observe only\n',
     26, 'dvd_report_note_mount(name)')
 
+# ---------------------------------------------------------- launch / MGL (#48)
+# An MGL launch puts HandleUI() into a branch that never calls menu_key_get(),
+# the sole source of every input event, and the MGL's only forward edge needs
+# menustate == MENU_NONE2. Anything that pins menustate elsewhere -- an
+# InfoMessage from one of our own poll ticks -- therefore stalls the load AND
+# the whole UI. See docs/mgl_launch.md.
+
+# 27. include
+u = insert_after(u, '#include "support/dvd/dvd_report.h"',
+    '#include "support/dvd/dvd_launch.h"\n',
+    27, 'support/dvd/dvd_launch.h')
+
+# 28. poll tick, FIRST of the DVD ticks so a released MGL is visible to the
+# notice pumps in the same iteration.
+u = insert_before(u, 'dvd_css_tick();    // deferred "install libdvdcss" popup once launch settles',
+    'dvd_launch_tick();      // MGL watchdog: a stalled launch must not cost a reboot\n',
+    28, 'dvd_launch_tick();')
+
+# 30. let dvd_phys see slot 0 being taken by something that is not the drive, so
+# an eject only tears down what the drive still owns and the auto-mount does not
+# fire over an image the user asked for (an MGL <file>, say). Observes only.
+u = insert_after(u, '\tdvd_report_note_mount(name);   // dvd:report — observe only',
+    '\tdvd_phys_note_mount(name, index);   // dvd:phys — observe only\n',
+    30, 'dvd_phys_note_mount(name)')
+
+# 31. observe status[0] (the core reset) writes. Both the OSD Reset row and the
+# disc-eject teardown go through user_io_status_set(); when neither appears to work,
+# this line separates "Main never dispatched" from "the core ignored it".
+# ⚠ The anchor is 'if (!size) return;' because it is the only line in this
+# function that is UNIQUE in the file: user_io_status_get() opens with the same two
+# body lines and differs first at its 'return 0;'. And it cannot be the signature --
+# insert_after() splits on the first newline AFTER the anchor, so a 'signature\n{'
+# anchor lands the call between the signature and its brace (the step-24 note).
+# Consequence: a write whose option string does not parse logs nothing. That is
+# still on Main's side of the line this exists to draw, so it does not blunt it.
+u = insert_after(u, '\tif (!size) return;',
+    '\tdvd_launch_note_status(opt, value);   // dvd:launch — observe only\n',
+    31, 'dvd_launch_note_status')
+
+# 29. say what the mount actually did. UIO_SET_SDSTAT is sent even when the open
+# FAILED, so without this line a blank screen is ambiguous between "never opened"
+# and "opened and produced nothing".
+u = insert_before(u, '\tspi_uio_cmd8(UIO_SET_SDSTAT, (1 << index) | (writable ? 0 : 0x80));',
+    'dvd_report_note_mount_result(name, index, ret ? 1 : 0, (uint64_t)size);   // dvd:report\n',
+    29, 'dvd_report_note_mount_result')
+
 write(uio_path, u)
 print("[integration] user_io.cpp patched (support bundle)")
 
@@ -420,5 +475,32 @@ h = insert_after(h, 'char is_dvd();',
     25, 'user_io_last_lba')
 write(h_path, h)
 print("[integration] user_io.h patched (support bundle)")
+
+# ------------------------------------------------------------------ menu.cpp
+# 32. An UNARMED MGL timer is not an expired one.
+m_path = os.path.join(ROOT, "menu.cpp")
+if not os.path.exists(m_path):
+    fail(32, f"{m_path} not found")
+m = read(m_path)
+
+m = replace_once(m,
+    "\t\t\tif (CheckTimer(mgl->timer))\n"
+    "\t\t\t{\n"
+    "\t\t\t\tmgl->state = (mgl->item[mgl->current].action == MGL_ACTION_LOAD) ? 1 : 4;\n",
+
+    "\t\t\t// dvd:mgl \u2014 an UNARMED timer is not an EXPIRED one. mgl_parse()\n"
+    "\t\t\t// memsets the struct, so mgl->timer is 0 until user_io_init() arms it\n"
+    "\t\t\t// at its very end -- and CheckTimer(0) returns TRUE. Anything that\n"
+    "\t\t\t// re-enters HandleUI() in between consumes the delay before it is\n"
+    "\t\t\t// ever set, and the file mounts immediately: ProgressMessage()/\n"
+    "\t\t\t// MenuHide() at the end of a boot.rom transfer does exactly that.\n"
+    "\t\t\t// See MiSTer_DVD/docs/mgl_launch.md.\n"
+    "\t\t\tif (mgl->timer && CheckTimer(mgl->timer))\n"
+    "\t\t\t{\n"
+    "\t\t\t\tmgl->state = (mgl->item[mgl->current].action == MGL_ACTION_LOAD) ? 1 : 4;\n",
+    32, "mgl->timer && CheckTimer")
+
+write(m_path, m)
+print("[integration] menu.cpp patched (MGL delay)")
 
 print("[integration] done")
