@@ -51,9 +51,15 @@ HDMI-CEC TV remote, or a console dock's infrared remote.
 - **++f12++ and a remote's Menu button open the MiSTer OSD**, always. They can never be
   given a disc function.
 - While the OSD is open, **no key reaches the player**.
-- On a **CEC remote, Exit / Root Menu also opens the MiSTer OSD** rather than the disc menu.
-  Use the **colour keys** instead: blue = Menu, red = Title, green = Audio, yellow =
-  Subtitle.
+- On a **CEC remote, Menu / Exit is the MiSTer OSD button**, not the disc menu. It is a
+  proper toggle: pressing it again steps back a level and closes the OSD at the top, so it
+  is how you get in and out. **Stop** also closes the OSD from any level. To reach the
+  *disc's* menus, use the **colour keys**: blue = Menu, red = Title, green = Audio,
+  yellow = Subtitle.
+
+    Which physical button sends which code is up to the TV, not MiSTer — most sets send
+    Exit for Back/Return and Root Menu for Home/Menu while a source is selected, and some
+    pass only a few keys through CEC at all.
 
 !!! note "Turning CEC on, and off again"
     CEC is off unless you asked for it — MiSTer needs `hdmi_cec=1` in `MiSTer.ini` before a
