@@ -429,6 +429,13 @@ u = insert_before(u, 'dvd_css_tick();    // deferred "install libdvdcss" popup o
     'dvd_launch_tick();      // MGL watchdog: a stalled launch must not cost a reboot\n',
     28, 'dvd_launch_tick();')
 
+# 30. let dvd_phys see slot 0 being taken by something that is not the drive, so
+# an eject only tears down what the drive still owns and the auto-mount does not
+# fire over an image the user asked for (an MGL <file>, say). Observes only.
+u = insert_after(u, '\tdvd_report_note_mount(name);   // dvd:report — observe only',
+    '\tdvd_phys_note_mount(name, index);   // dvd:phys — observe only\n',
+    30, 'dvd_phys_note_mount(name)')
+
 # 29. say what the mount actually did. UIO_SET_SDSTAT is sent even when the open
 # FAILED, so without this line a blank screen is ambiguous between "never opened"
 # and "opened and produced nothing".

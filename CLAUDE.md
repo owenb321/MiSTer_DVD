@@ -1869,6 +1869,43 @@ worse maintenance burden than targeted in-place edits. So:
   watchdog killing the thing it was added to protect. `dvd_launch_tick()` discounts gaps
   between its own invocations: a gap means the loop was not running, so it cannot be time
   the MGL spent stuck.
+  ★★ **FOLLOW-UP (same branch, from the HW round): THE OPTICAL DRIVE FIGHTS FOR THE
+  SAME SLOT.** Report: an MGL for a `.mpg` worked, but with a disc in the drive it
+  waited for key extraction first, and removing that disc froze the `.mpg` and left
+  the core unable to reach the idle screen. Both are `dvd_phys.cpp` treating slot 0
+  as its own when it shares it with every image the user can load. (1)
+  `dvd_phys_tick()` auto-mounted on the VERY FIRST poll, and an MGL's `<file>` lands
+  `delay` seconds later — so the drive won that race every time, and on an encrypted
+  disc that is minutes of `crack_title_keys()` (SYNCHRONOUS, blocking
+  `user_io_poll()`) for a disc the MGL then replaces anyway. (2) `mounted` meant "we
+  mounted a disc at some point", NOT "we still own the slot", so after any later
+  mount an eject still ran the teardown: `user_io_file_mount("", 0)` closed the file
+  that WAS playing (the reader starves = the freeze) and pulsed `status[0]`.
+  ⚠ **Note (2) is INDEPENDENT of MGL** — auto-mount a disc, then pick a file from
+  the OSD, then eject: same bug, and it predates all of this.
+  Fix = new `dvd_phys_note_mount(path, index)` from `user_io_file_mount()`
+  (integration step 30). ★ **Every reason not to mount is now checked BEFORE
+  `dvd_video_probe()`**, the first thing that actually reads the disc — "no disc
+  operations when launched to play a file" has to mean no READS, not just no mount,
+  or a spinning drive is probed once a second all session. ★ **An insertion EDGE
+  (not the level) clears the `foreign` latch:** putting a disc in is deliberate and
+  the auto-mount is the only way to play one, so an insertion still wins, while a
+  disc merely SITTING there never takes the slot back from an image the user chose.
+  Readiness is the edge, so it costs one ioctl and reads nothing. ⚠ **Pass the
+  INDEX** — Main mounts `boot*.vhd` across slots 0-3 at init and the drive only ever
+  binds slot 0; without it a `boot.vhd` in `games/DVD/` would silently disable
+  physical-disc playback. ⚠ Still open, and a candidate if "Reset does nothing" is
+  ever reported: the eject path's `reset_release_at` releases `status[0]`
+  unconditionally ~1 s later, so an OSD Reset pressed inside that window is
+  cancelled by it.
+  **Gate: `main/tests/run_tests.sh`** — HOST-side (plain `g++`, no MiSTer, no ARM
+  toolchain, no Docker), the overlay's first such test. `dvd_phys_test.cpp` includes
+  the module and stubs the rest of Main at link time, so it exercises the real
+  logic; RED against the pre-fix module reproduces BOTH field symptoms. [4]-[6] are
+  controls, because every one of these bugs is trivially "fixed" by never mounting a
+  disc. ⚠ The module carries exactly ONE `#ifdef DVD_PHYS_TEST`, around
+  `open_ready_drive` — a real `/dev/srN` cannot be faked (a regular file opens fine
+  and then fails `CDROM_DRIVE_STATUS`).
   Detail: **`docs/mgl_launch.md`**.
 - ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
   `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build

@@ -231,6 +231,7 @@ Notes that matter on a `MAIN_MISTER_REF` bump:
 | 27 | `user_io.cpp` | include `support/dvd/dvd_launch.h` |
 | 28 | `user_io.cpp` | `dvd_launch_tick()` **first** of the DVD ticks in `user_io_poll()` |
 | 29 | `user_io.cpp` | `dvd_report_note_mount_result(...)` immediately before `UIO_SET_SDSTAT` |
+| 30 | `user_io.cpp` | `dvd_phys_note_mount(name, index)` beside step 26, so the drive can see slot 0 being taken |
 
 The rule these steps exist to enforce, and it applies to **any** future overlay
 code that runs from a `user_io_poll()` tick:
@@ -257,3 +258,24 @@ the MiSTer must be restarted".
   even when the open FAILED (with size 0), so from the core's side a failed mount
   and a real one are the same pulse. `/tmp/dvd_report.log` then says which
   happened, which is the difference between a Main-side and a core-side bug.
+
+### Step 30 — slot 0 has more than one claimant
+
+The optical drive shares slot 0 with every image the user can load, and
+`dvd_phys.cpp` used to track only *"we mounted a disc at some point"*. Two field
+bugs came out of that on an MGL launch with a disc in the drive:
+
+- the drive auto-mounted on the first poll, so a `.mpg` named by the MGL waited
+  minutes for CSS key extraction nobody asked for — on a disc that was then
+  replaced by the file anyway;
+- ejecting that disc unmounted the file that *was* playing (freezing it) and reset
+  the core.
+
+`dvd_phys_note_mount()` gives the module the one fact it was missing. The rules it
+now follows are pinned by `main/tests/run_tests.sh` (host-side, no MiSTer needed),
+which reproduces both symptoms against the pre-fix module.
+
+⚠ It takes the **index** as well as the path. Main mounts `boot*.vhd` across slots
+0–3 during init, and the drive only ever binds slot 0 — without the index a
+`boot.vhd` in `games/DVD/` would read as a claim on the drive's slot and silently
+disable physical-disc playback.

@@ -202,6 +202,53 @@ reader, and the garbage between flush and pack is bounded by one pack.
 
 ---
 
+## 4.4 The optical drive fights for the same slot
+
+Reported after the first fix landed: an MGL for a `.mpg` *worked*, but with a disc
+in the drive it waited for key extraction first — and removing that disc froze the
+`.mpg` and left the core unable to reach the idle screen.
+
+Both come from `dvd_phys.cpp` treating slot 0 as its own. It is not: the drive
+shares it with every image the user can load.
+
+- **`dvd_phys_tick()` auto-mounted on the very first poll.** An MGL's `<file>`
+  lands `delay` seconds later, so the drive won that race every time. On an
+  encrypted disc that is minutes of `crack_title_keys()` — synchronous, blocking
+  `user_io_poll()` — for a disc the MGL then replaces anyway.
+- **`mounted` meant "we mounted a disc at some point", not "we still own the
+  slot".** After any later mount took slot 0, an eject still ran the teardown:
+  `user_io_file_mount("", 0)` closed the file that *was* playing (so the reader
+  starved — the freeze) and pulsed `status[0]`.
+
+New `dvd_phys_note_mount(path, index)`, called from `user_io_file_mount()`
+(integration step 30), supplies the missing fact. The rules now:
+
+| condition | auto-mount? | eject tears down? |
+|---|---|---|
+| nothing in the slot, disc ready | ✅ | ✅ |
+| an MGL launch is pending (`dvd_launch_ui_busy()`) | ❌ deferred | — |
+| a file the user asked for is in the slot (`foreign`) | ❌ | ❌ |
+| the disc was already sitting there when the file loaded | ❌ | ❌ |
+| a disc is **inserted** while a file plays | ✅ (insertion edge clears `foreign`) | ✅ |
+
+★ **Every reason not to mount is checked before `dvd_video_probe()`**, which is the
+first thing that actually reads the disc. "Do no disc operations when we were
+launched to play a file" has to mean no *reads*, not just no mount — otherwise a
+spinning drive is probed once a second for the whole session. A non-DVD-Video disc
+(an audio CD) is likewise probed once per insertion, not once per scan.
+
+★ **The insertion EDGE, not the level, clears `foreign`.** Putting a disc in is a
+deliberate act and the auto-mount is the only way to play one, so an insertion
+still wins; a disc merely *sitting* in the drive never takes the slot back from an
+image the user chose. Readiness is the edge, so it costs one ioctl and reads
+nothing.
+
+⚠ The eject path also pulses `status[0]` and releases it ~1 s later from
+`reset_release_at`. That release is unconditional, so an OSD Reset pressed inside
+that window would be cancelled by it. Much harder to reach now that the teardown
+only runs for a disc the drive still owns, but it is not *impossible* and it is a
+candidate if "Reset does nothing" is ever reported.
+
 ## 5. Gates
 
 - `bench/dvd/run_mgl.sh` — `iso_reader_mount_tb` (RED: 10 reads against an empty slot,
@@ -215,7 +262,16 @@ reader, and the garbage between flush and pack is bounded by one pack.
   high and always serves it; the real `hps_io` picks requests up by polling command
   `'h16` at Main's poll rate, so a request withdrawn in between is simply lost. Without a
   polling mock, the "mount over an in-flight read" arm is a bench that cannot fail.
-- The Main-side half is not simulatable. It is gated on hardware, and
+- `main/tests/run_tests.sh` — host-side (plain `g++`, no MiSTer, no ARM toolchain,
+  no Docker). `dvd_phys_test.cpp` includes the module and stubs the rest of Main at
+  link time, so it exercises the real logic. Seven scenarios; RED against the
+  pre-fix module reproduces **both** field symptoms (disc read and mounted during
+  the MGL delay; eject unmounting and resetting over a playing file). [4]–[6] are
+  controls: every one of these bugs is trivially "fixed" by never mounting a disc.
+  ⚠ The module carries exactly one `#ifdef DVD_PHYS_TEST`, around `open_ready_drive`
+  — a real `/dev/srN` cannot be faked (a regular file opens fine and then fails
+  `CDROM_DRIVE_STATUS`). Everything else is an ordinary extern.
+- The rest of the Main-side half is not simulatable. It is gated on hardware, and
   `/tmp/dvd_report.log` now records what each mount achieved
   (`dvd_report_note_mount_result`) precisely so the next round is not another guess.
 
