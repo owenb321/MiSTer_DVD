@@ -327,6 +327,54 @@ The latch keeps the original guard honest, too: a *failed mount over live conten
 leaves the old image playing, `video_live` high and `media_seen` undisturbed, so
 `VIDEO_ARX/ARY` does not flip mid-title and Main does not re-init the scaler.
 
+## 4.5 Retrospect: what the original report probably was
+
+Asked late in the investigation — *could the core have been loading something other
+than a DVD from the physical drive?* The answer is instructive, because the near
+miss is not the one the question expects.
+
+**Non-DVD discs are guarded, and the guard is sound.** `dvd_video_probe()`
+(`dvd_detect.cpp`) requires an ISO9660 primary volume descriptor — `CD001` at sector
+16 — **and** a `VIDEO_TS` directory entry in the root, read over READ(10). An audio
+CD, a data disc, a Blu-ray (BDMV, and UDF-only anyway) are all rejected, and nothing
+is mounted that does not look like DVD-Video. A UDF-only DVD-Video is rejected too,
+which is conservative and correct — the core cannot navigate one either.
+
+**The gap is not "not a DVD", it is "a DVD we cannot decrypt".** `dvd_css_open()`
+detects a CSS-encrypted disc, finds no libdvdcss, arms an 8-second "Run
+install_dvdcss" warning — **and mounts it anyway**, over `raw_fd`, serving scrambled
+sectors. The core's own detector then fires `CSS ENCRYPTED` and mutes the audio, and
+the picture is the documented green field.
+
+That composes into a complete account of the original report, and it needs all three
+of this note's fixes to explain:
+
+1. An encrypted disc sits in the drive; libdvdcss is not installed.
+2. `dvd_phys_tick()` auto-mounts it on the **first poll** — seconds before the MGL's
+   `delay` expires (§4.4).
+3. Served raw, the core shows a **green screen**.
+4. The warning pump calls `InfoMessage` once a second, pinning
+   `menustate = MENU_INFO` (§2) — so the MGL freezes at state 1, `menu_key_get()`
+   never runs, **nothing responds**, and the `.mpg` is never mounted at all.
+5. Selecting the same file by hand works, because none of the MGL state machine is
+   involved.
+
+Grey or green, completely unresponsive, needs a restart, fine when loaded manually —
+all of it.
+
+It is closed three times over now: the pump defers while a launch is pending, the
+auto-mount defers with it, and once the MGL's file owns the slot the drive stands
+down for good.
+
+⚠ **One judgement call is left, deliberately unchanged.** On a *plain* launch, an
+encrypted disc with no libdvdcss still mounts raw and green-screens. That is the
+documented behaviour and it is a choice, not an oversight — video keeps playing so
+the disc is identifiable, the same reasoning as the `CSS ENCRYPTED` notice for
+images (`docs/fabric_audio.md` "CSS mute"). Refusing the mount instead would show
+the install prompt over the idle screen, which is arguably kinder; it is a
+behaviour change to an HW-confirmed path, so it should be decided rather than
+drifted into.
+
 ## 5. Gates
 
 - `bench/dvd/run_mgl.sh` — `iso_reader_mount_tb` (RED: 10 reads against an empty slot,
