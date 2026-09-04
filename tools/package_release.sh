@@ -15,7 +15,8 @@
 # Options:
 #   --rbf PATH    core .rbf to bundle (default: newest releases/DVD_*.rbf, non-MARGINAL)
 #   --main PATH   MiSTer_DVDcss binary (default: main/.build/MiSTer_DVDcss)
-#   --out PATH    output zip (default: releases/MiSTer_DVD_v<CORE_VERSION>.zip)
+#   --out PATH    output zip (default: releases/MiSTer_DVD_<CORE_VERSION>.zip;
+#                 a dev build appends the .rbf date, e.g. dev-seekrealign_20260903)
 
 set -euo pipefail
 
