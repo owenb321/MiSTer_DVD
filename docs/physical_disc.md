@@ -297,22 +297,35 @@ device that refuses SG_IO, so this can only add outcomes, never remove the one t
 A `SenseError` is never retried on the other route — the drive explained itself, and a
 second send could spend a change.
 
-★★ **AND IT PAID FOR ITSELF ON THE FIRST RUN. The blocker was a DISC IN THE TRAY:
-sense `05/6f/04`, "media region code is mismatched to logical unit region".** A drive set to
-region 1, asked for region 2 with a region-1 disc loaded, refuses — the change would orphan
-the disc in its own tray. The same drive took the same change with an empty tray.
+★★ **AND IT PAID FOR ITSELF IN TWO RUNS. THE DRIVE TAKES ITS NEW REGION FROM THE DISC IN
+THE TRAY.** Measured on a TSSTcorp TS-L633C, drive at region 1:
 
-★ **The diagnostic lesson is bigger than the bug.** The evidence was "accepted on a PC over
-SG_IO, refused on the MiSTer over the ioctl", and both of the variables that framing offers —
-route and machine — were **wrong**. The real one was a third that nobody had written down:
-the PC attempt had an empty tray. Two hardware rounds went into route-vs-machine before one
-sense byte settled it. ⚠ When a comparison has two obvious differences, the cause can still
-be a third; a drive that can *explain* itself outranks any amount of A/B reasoning. Everything
-before this point was inference from `EIO`, and `EIO` is what the ioctl gives you.
+| tray | asked for | answer |
+|---|---|---|
+| region-1 disc | region 1 | **Good** (this was the PC success) |
+| region-1 disc | region 2 | `05/6f/04` media region code is mismatched to logical unit region |
+| empty | region 2 | `02/3a/01` medium not present, tray closed |
 
-The script now checks `CDROM_DRIVE_STATUS` and says "take the disc out first" **before** the
-menu, and `05/6f/04` is a named sense so the refusal explains itself if a drive reports it
-anyway.
+That is the Windows model — insert a foreign disc and the OS offers to switch the drive to
+match — and it means **the region a drive will accept is the region of the disc you put in
+it**. Neither "with a disc" nor "without a disc" is the rule; *matching* is.
+
+★ **The diagnostic lesson is bigger than the bug, and it bit twice.** The evidence was
+"accepted on a PC over SG_IO, refused on the MiSTer over the ioctl", and both variables that
+framing offers — route and machine — were **wrong**; the real one was a third nobody had
+written down, the disc in the tray. Then the first correction was wrong TOO ("take the disc
+out"), because a single new data point (`6f/04`) was read as the whole rule when it was one
+row of a table that needed three. ⚠ When a comparison has two obvious differences, the cause
+can still be a third — and one measurement that refutes a hypothesis does not establish its
+opposite. Everything before the sense data was inference from `EIO`, which is all the ioctl
+route can ever give you.
+
+The script now reads the loaded disc's own region (`READ DVD STRUCTURE` format 1, byte 5 =
+Region Management Information, a clear bit per allowed region), shows it beside the drive's
+(`Disc in drive  : region 2`), says on the menu that the drive follows the disc, and warns on
+the confirm screen when the chosen region is one the loaded disc cannot support — a warning,
+not a block, since other drives may not care. `6f/04`, `3a/00`, `3a/01` and `3a/02` are all
+named sense codes, so a refusal names which of the two mistakes it was.
 
 ⚠⚠ **`DRIVER_SENSE` (0x08) is in the LOW nibble of `driver_status` and means the drive
 ANSWERED — sense attached — not that the transport failed.** Reading it as a transport error

@@ -79,8 +79,11 @@ AUTHINFO_SIZE       = 16       # sizeof(dvd_authinfo) — 16 on x86-64 AND armv7
 
 SG_IO           = 0x2285       # scsi/sg.h: send one SCSI command
 SG_DXFER_TO_DEV = -2
+SG_DXFER_FROM_DEV = -3
 SEND_KEY        = 0xa3         # MMC: SEND KEY
 KF_RPC_STATE    = 6            # ... key format 6 = Send RPC State
+READ_DVD_STRUCT = 0xad         # MMC: READ DVD STRUCTURE
+DVDS_COPYRIGHT  = 0x01         # ... format 1 = copyright info, incl. the disc region
 CHECK_CONDITION = 0x02         # SCSI status: the drive has something to say
 DRIVER_SENSE    = 0x08         # driver_status: ... and the sense data is attached
 
@@ -90,14 +93,16 @@ CDS_DISC_OK        = 4
 # Sense codes worth naming. Everything else is printed as its raw triple, which is
 # what a bug report needs anyway.
 SENSE_TEXT = {
-    (5, 0x6f, 0x04): "a disc in the drive has a different region - EJECT IT and retry",
+    (5, 0x6f, 0x04): "the disc in the drive is from a different region",
+    (2, 0x3a, 0x00): "no disc in the drive",
+    (2, 0x3a, 0x01): "no disc in the drive (tray closed)",
+    (2, 0x3a, 0x02): "the tray is open",
     (5, 0x6f, 0x05): "the drive will not accept another region change",
     (5, 0x6f, 0x00): "copy protection key exchange failure",
     (5, 0x26, 0x00): "invalid field in parameter list",
     (5, 0x24, 0x00): "invalid field in CDB",
     (5, 0x20, 0x00): "the drive does not support this command",
     (5, 0x6f, 0x05): "the drive's region-change counter is exhausted",
-    (2, 0x3a, 0x00): "no disc in the drive",
     (2, 0x04, 0x01): "the drive is still becoming ready - try again in a moment",
 }
 
@@ -240,8 +245,8 @@ def sg_check(status, host_status, driver_status, sense):
     raise OSError(5, "the drive refused it (SCSI status %02x, no sense)" % status)
 
 
-def sg_send_key(fd, payload, key_format=KF_RPC_STATE, timeout_ms=15000):
-    """SEND KEY over SG_IO, the way sg_raw does it.
+def sg_do(fd, cdb, to_dev, data, timeout_ms=15000):
+    """Run one SCSI command over SG_IO. `data` is bytes to send, or a read length.
 
     WHY THIS EXISTS: the `DVD_AUTH` ioctl builds the identical command, but the
     kernel funnels every drive refusal through `sr_do_ioctl`, which collapses
@@ -251,8 +256,9 @@ def sg_send_key(fd, payload, key_format=KF_RPC_STATE, timeout_ms=15000):
     refusing the ioctl is what sent us looking; either way this is the route that
     can explain itself.)
 
-    Returns None on success, raises SenseError on a refusal the drive explained,
-    and lets OSError through if SG_IO is unusable — the caller falls back then.
+    Returns the bytes read (empty for a send), raises SenseError on a refusal the
+    drive explained, and lets OSError through if SG_IO is unusable — the caller
+    falls back then.
     """
     import ctypes
 
@@ -271,26 +277,26 @@ def sg_send_key(fd, payload, key_format=KF_RPC_STATE, timeout_ms=15000):
                     ("driver_status", ctypes.c_ushort), ("resid", ctypes.c_int),
                     ("duration", ctypes.c_uint), ("info", ctypes.c_uint)]
 
-    n = len(payload)
-    cdb = bytes((SEND_KEY, 0, 0, 0, 0, 0, 0, 0, (n >> 8) & 0xff, n & 0xff, key_format, 0))
-    cdb_buf = ctypes.create_string_buffer(cdb, len(cdb))
-    data    = ctypes.create_string_buffer(bytes(payload), n)
+    n = len(data) if to_dev else int(data)
+    cdb_buf = ctypes.create_string_buffer(bytes(cdb), len(cdb))
+    buf     = ctypes.create_string_buffer(bytes(data) if to_dev else n, n)
     sense   = ctypes.create_string_buffer(32)
 
     hdr = sg_io_hdr()
     ctypes.memset(ctypes.byref(hdr), 0, ctypes.sizeof(hdr))
     hdr.interface_id = ord("S")
-    hdr.dxfer_direction = SG_DXFER_TO_DEV
+    hdr.dxfer_direction = SG_DXFER_TO_DEV if to_dev else SG_DXFER_FROM_DEV
     hdr.cmd_len = len(cdb)
     hdr.mx_sb_len = ctypes.sizeof(sense)
     hdr.dxfer_len = n
-    hdr.dxferp = ctypes.cast(data, ctypes.c_void_p)
+    hdr.dxferp = ctypes.cast(buf, ctypes.c_void_p)
     hdr.cmdp = ctypes.cast(cdb_buf, ctypes.c_void_p)
     hdr.sbp = ctypes.cast(sense, ctypes.c_void_p)
     hdr.timeout = timeout_ms
 
-    note("  SG_IO cdb %s payload %s"
-         % (" ".join("%02x" % b for b in cdb), " ".join("%02x" % b for b in payload)))
+    note("  SG_IO cdb %s%s"
+         % (" ".join("%02x" % b for b in cdb),
+            "" if not to_dev else " payload " + " ".join("%02x" % b for b in data)))
     fcntl.ioctl(fd, SG_IO, hdr)   # OSError here = SG_IO unusable, not a refusal
     note("  SG_IO status %02x host %02x driver %02x sb_len %d"
          % (hdr.status, hdr.host_status, hdr.driver_status, hdr.sb_len_wr))
@@ -298,7 +304,33 @@ def sg_send_key(fd, payload, key_format=KF_RPC_STATE, timeout_ms=15000):
     sb = sense.raw[:hdr.sb_len_wr] if hdr.sb_len_wr else b""
     if sb:
         note("  SG_IO sense %s" % " ".join("%02x" % b for b in sb))
-    return sg_check(hdr.status, hdr.host_status, hdr.driver_status, sb)
+    sg_check(hdr.status, hdr.host_status, hdr.driver_status, sb)
+    return b"" if to_dev else buf.raw[:n]
+
+
+def sg_send_key(fd, payload, key_format=KF_RPC_STATE):
+    n = len(payload)
+    cdb = (SEND_KEY, 0, 0, 0, 0, 0, 0, 0, (n >> 8) & 0xff, n & 0xff, key_format, 0)
+    return sg_do(fd, cdb, True, payload)
+
+
+def disc_regions(fd):
+    """Which regions the loaded disc allows, or None if it cannot be read.
+
+    READ DVD STRUCTURE format 1 (copyright info): byte 4 is the protection type,
+    byte 5 the Region Management Information — a CLEAR bit per allowed region,
+    the same polarity as everything else here. An RMI of 0 is an all-region disc.
+    """
+    cdb = (READ_DVD_STRUCT, 0, 0, 0, 0, 0, 0, DVDS_COPYRIGHT, 0, 8, 0, 0)
+    try:
+        buf = sg_do(fd, cdb, False, 8)
+    except (OSError, ImportError, AttributeError):
+        return None
+    if len(buf) < 6:
+        return None
+    rmi = buf[5]
+    note("  disc RMI %02x" % rmi)
+    return [n + 1 for n in range(8) if not (rmi >> n) & 1]
 
 
 class Drive:
@@ -319,18 +351,13 @@ class Drive:
         self.fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
 
     def media_present(self):
-        """A loaded disc blocks a region change on at least some drives.
-
-        MEASURED: a TSSTcorp TS-L633C set to region 1, asked for region 2 with a
-        region-1 disc loaded, answers sense 05/6f/04 — "media region code is
-        mismatched to logical unit region". The change it is being asked to make
-        would orphan the disc in its own tray, so it refuses. The same drive took
-        the same change with an empty tray.
-        """
         try:
             return fcntl.ioctl(self.fd, CDROM_DRIVE_STATUS, 0) == CDS_DISC_OK
         except OSError:
             return False    # can't tell -> say nothing rather than nag wrongly
+
+    def disc_regions(self):
+        return disc_regions(self.fd) if self.media_present() else None
 
     def read_state(self):
         buf = bytearray(AUTHINFO_SIZE)
@@ -383,6 +410,8 @@ class FakeDrive:
     def __init__(self, spec, index=0):
         parts = spec.split(":")
         self.fault = parts[4] if len(parts) > 4 else ""
+        # "discN" loads a region-N disc in the tray; the drive follows the disc.
+        self.disc = int(self.fault[4:]) if self.fault.startswith("disc") else None
         region, changes, resets, scheme = (int(p) for p in (parts + ["0", "5", "4", "1"])[:4])
         self.path = "(simulated sr%d)" % index
         self.region, self.changes, self.resets, self.scheme = region, changes, resets, scheme
@@ -399,7 +428,10 @@ class FakeDrive:
         pass
 
     def media_present(self):
-        return self.fault == "disc"
+        return self.disc is not None
+
+    def disc_regions(self):
+        return [self.disc] if self.disc else None
 
     def read_state(self):
         if self.fault == "rbfail" and self.changed:
@@ -414,6 +446,13 @@ class FakeDrive:
         clear = [n + 1 for n in range(8) if not (pdrc >> n) & 1]
         if clear != [region]:
             raise OSError(22, "Invalid argument")   # sense 05/26/00 on real iron
+        # MEASURED on a TSSTcorp TS-L633C: the drive takes its new region from
+        # the disc in the tray. No disc -> 02/3a/01, wrong disc -> 05/6f/04.
+        if self.fault.startswith("disc") or self.fault == "nodisc":
+            if self.disc is None:
+                raise SenseError(2, 0x3a, 0x01)
+            if self.disc != region:
+                raise SenseError(5, 0x6f, 0x04)
         if self.fault == "setfail" or self.changes <= 0:
             raise OSError(5, "Input/output error")
         self.changes -= 1
@@ -591,6 +630,16 @@ def status_lines(drive, state):
         lines.append("                   CSS keys must be cracked - slow first play")
     lines.append("  Changes left   : %d       (vendor resets: %d)" % (state.changes, state.resets))
     lines.append("  RPC state      : %s   (%s)" % (raw_hex(state), describe_rpc(state)))
+    regions = drive.disc_regions()
+    if regions is None:
+        lines.append("  Disc in drive  : %s"
+                     % ("yes (region unreadable)" if drive.media_present() else "none"))
+    elif len(regions) == 8:
+        lines.append("  Disc in drive  : all regions")
+    else:
+        lines.append("  Disc in drive  : region %s"
+                     % ",".join(str(r) for r in regions) if regions else
+                     "  Disc in drive  : no region allowed")
     return lines
 
 
@@ -654,11 +703,10 @@ def interactive(drive, state, extra=()):
         pause()
         return 0
 
-    if drive.media_present():
-        header += ["",
-                   "  !! There is a disc in the drive. Take it out first - a drive",
-                   "  !! refuses to change region while a disc of a different region",
-                   "  !! is loaded, because the change would orphan that disc."]
+    header += ["",
+               "  Many drives take the new region FROM THE DISC in the tray: put a",
+               "  disc from the region you want in the drive before changing it.",
+               "  An empty tray or a disc from another region is refused."]
     header += ["", "  Pick the region your discs come from:"]
     items = ["%d  %s" % (num, name) for num, name in CHOOSABLE] + ["Cancel - change nothing"]
     footer = ["  D-pad = move    B1 = select    B2 = cancel",
@@ -685,6 +733,18 @@ def interactive(drive, state, extra=()):
     confirm_header += ["",
                        "  This uses one of the %d changes the drive has left" % state.changes,
                        "  and CANNOT be undone."]
+    regions = drive.disc_regions()
+    if regions is not None and want not in regions:
+        confirm_header += ["",
+                           "  !! The disc in the drive is region %s. A drive that takes its"
+                           % ",".join(str(r) for r in regions),
+                           "  !! region from the disc will REFUSE this - swap in a region",
+                           "  !! %d disc first if it does." % want]
+    elif regions is None and drive.media_present() is False:
+        confirm_header += ["",
+                           "  !! The drive is empty. A drive that takes its region from the",
+                           "  !! disc will REFUSE this - put a region %d disc in if it does."
+                           % want]
     if state.changes == 1:
         confirm_header += ["",
                            "  *** This is the LAST change this drive allows.",

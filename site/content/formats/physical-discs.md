@@ -95,10 +95,15 @@ shows the drive's current region and how many changes it has left. Setting one i
 drive with the **D-pad and B1** — no keyboard needed. Nothing changes until you confirm, and
 the cursor starts on *Cancel*.
 
-**Take the disc out of the drive first.** A drive refuses to change its region while a disc
-of a different region is loaded — the change would leave that disc unplayable — so with one
-in the tray the change fails with `a disc in the drive has a different region`. An empty
-drive also avoids the core holding it open while a disc is mounted.
+!!! tip "Put a disc from the region you want in the drive first"
+    Many drives take their new region **from the disc in the tray** — the same way Windows
+    offers to switch a drive when you insert a disc from elsewhere. On such a drive, setting
+    region 2 needs a region 2 disc loaded: an empty tray is refused with `no disc in the
+    drive`, and a disc from another region with `the disc in the drive is from a different
+    region`.
+
+    The tool shows the loaded disc's region next to the drive's, and warns before you commit
+    if the two do not agree.
 
 Every screen waits for a button before it closes, and everything it prints is also written
 to `DVD_reports/set_dvd_region.log` on the SD card (or `/tmp` if the SD card is not

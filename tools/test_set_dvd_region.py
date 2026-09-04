@@ -141,7 +141,8 @@ try:
     detail = "no error"
 except M.SenseError as e:
     detail = str(e)
-unit("the loaded-disc refusal explains itself", "EJECT IT" in detail, detail)
+unit("the loaded-disc refusal explains itself",
+     "is from a different region" in detail, detail)
 
 unit("the named sense text is used",
      "invalid field in parameter list" in why, why)
@@ -271,12 +272,34 @@ def check_pdrc(region, want_byte):
 check_pdrc(1, 0xfe)
 check_pdrc(4, 0xf7)
 
-# A loaded disc blocks the change on at least some drives (sense 05/6f/04,
-# measured), so say so before the user spends the trip rather than after.
-check("a loaded disc is called out before the menu", [ESC],
-      ["There is a disc in the drive. Take it out first"], fake="1:3:4:1:disc")
-check("an empty tray says nothing about discs", [ESC],
-      ["Pick the region"], ["There is a disc in the drive"], fake="1:3:4:1")
+# MEASURED on a TSSTcorp TS-L633C: the drive takes its new region FROM THE DISC
+# in the tray — empty tray gives 02/3a/01, a disc from another region 05/6f/04,
+# and a matching disc succeeds. So the tool reports the disc beside the drive and
+# warns before the user spends the trip, not after.
+check("the loaded disc's region is on the status screen", [ESC],
+      ["Disc in drive  : region 2"], fake="1:3:4:1:disc2")
+check("an empty tray says so", [ESC],
+      ["Disc in drive  : none"], fake="1:3:4:1")
+check("the menu explains that the drive follows the disc", [ESC],
+      ["take the new region FROM THE DISC"], fake="1:3:4:1")
+check("confirming a region the loaded disc cannot support warns first",
+      [b"3", ENTER, ESC],
+      ["The disc in the drive is region 2", "swap in a region", "3 disc first"],
+      fake="1:3:4:1:disc2")
+check("confirming the region the loaded disc allows does not warn",
+      [b"2", ENTER, ESC], ["Set (simulated sr0) to region 2?"],
+      ["swap in a region"], fake="1:3:4:1:disc2")
+check("an empty tray warns on the confirm screen too", [b"2", ENTER, ESC],
+      ["The drive is empty", "put a region 2 disc in"], fake="1:3:4:1")
+# ... and when the drive refuses anyway, it says which of the two it was.
+check("a disc from the wrong region is named as the reason",
+      [b"3", ENTER, DOWN, ENTER],
+      ["the disc in the drive is from a different region"],
+      fake="1:3:4:1:disc2", rc=1)
+check("an empty tray is named as the reason", [b"2", ENTER, DOWN, ENTER],
+      ["no disc in the drive (tray closed)"], fake="1:3:4:1:nodisc", rc=1)
+check("a matching disc is accepted", [b"2", ENTER, DOWN, ENTER],
+      ["Done. The drive is now region 2"], fake="1:3:4:1:disc2")
 
 # --- issue #52: the result screen must outlive the press that caused it -------
 # MiSTer closes the framebuffer terminal on the first key RELEASE after the
