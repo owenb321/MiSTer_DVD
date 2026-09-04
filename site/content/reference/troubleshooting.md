@@ -201,8 +201,17 @@ never show this; it depends on the set.
     corrector was switched off again: it was making both fields carry the same picture
     lines, which combed still images on every output including HDMI.) The same fix run
     also corrected HDMI `480i Deint` = `Weave`, which used to comb on a still about half
-    the time. Televisions differ, so if either symptom survives on a current build,
-    please [report it](reporting-a-bug.md). See
+    the time.
+
+    A later fix extends the correction to **held pictures** — disc menus, authored
+    copyright and warning cards, and paused frames. Before it, a disc that boots straight
+    to a several-second warning screen could show that screen misaligned for its whole
+    duration and then play cleanly, because the correction only ran when a new frame
+    arrived; a held picture never delivers one. Held pictures now straighten themselves
+    within about half a second.
+
+    Televisions differ, so if either symptom survives on a current build, please
+    [report it](reporting-a-bug.md). See
     [Field alignment](../video/interlaced.md#field-alignment).
 
 ### The picture blocks up briefly right after a chapter skip or seek

@@ -568,6 +568,47 @@ worse maintenance burden than targeted in-place edits. So:
   Measured, not asserted: 4 starvation events cost **4** repeated fields with the shipped
   corrector, **0** with the gate and **0** with the corrector off. Detail:
   `docs/field_parity.md`.
+  ✅ **HOLD ARM — THE CORRECTOR COULD NOT ACT WHILE THE PICTURE WAS HELD (2026-09-04,
+  branch `fix/field-parity-hold`); sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-04
+  (build `DVD_holdparity_20260904_1902.rbf`, SEED 5 first roll, clk_dec 91.72/87.62 —
+  the reported card on HDMI Weave AND the CRT, the cards behind it, pause, menu stills,
+  compute-heavy playback for the churn budget, and chapter skips: all good).**
+  Field report: a disc (`RINGER_WS`) combed under Weave and jittered on a CRT **only on
+  the FOX warning card it boots to**, clean once the movie started.
+  ★★ **THE BLIND SPOT WAS WRITTEN DOWN AS A REASSURANCE.** `docs/field_parity.md`'s root
+  cause says the `STATE_REPEAT` persistence re-scan "preserves strict TOP/BOTTOM
+  alternation, so content parity and raster parity stay locked". True — and that is the
+  bug: preserving alternation **freezes a bad phase**, and the corrector's only cure
+  (defer a pickup) needs a pickup a hold does not have. `par_slip` requires
+  `STATE_INIT && ofv_pickup`; `STATE_REPEAT` returns straight to `STATE_NEXT_IMG` while a
+  frame is held, and for a menu still `output_frame_valid` is 0 **by construction**
+  (`mpeg2video.v`'s `freeze_wd`: a still is an end-of-stream hold) — so the mount's
+  coin-flip landing displays uncorrected for as long as the still lasts. MEASURED
+  360/360 held fields misaligned over a 6 s hold vs 0/360 for a hold entered aligned.
+  ★ **A still is the worst case TWICE: frozen dense text is the content most sensitive to
+  a one-line error, and it is the state in which the corrector is most disabled** — which
+  is why a general defect read as disc-specific. The disc is ordinary: its boot cells are
+  single clean I-frames (`progressive_frame=1`, ffprobe `interlaced_frame=0`).
+  FIX = `par_hold_ins` reuses `par_fb` UNCHANGED (so the hold arm adds opportunities to
+  act, not permissions — `PAR_CONFIRM`/`PAR_HOLD` still bound it) and the `STATE_REPEAT`
+  image build emits the held pair in the OTHER ORDER for one visit. The junction repeats
+  a field = an ODD slot shift = the re-alignment, and on a frozen picture a repeated
+  field is invisible.
+  ⛔ **NOT the obvious one-field form** (`image_0 <= last_image; image_1 <= NO_OUTPUT`):
+  identical emitted stream, but `late_pair`/`late_ext` stretch `frame_late` to two cycles
+  BECAUSE a repeat visit is a PAIR, so a one-field visit banks a refresh of phantom drop
+  debt per correction (an unearned B-drop); it also leaves the tail parity unchanged, so
+  a `tff=1` resume re-fires `alt_break` for a phase already fixed. ⚠ **Both counters must
+  clear on the insertion** — the verdict is 1–2 refreshes + CDC stale, so clearing only
+  `par_cnt` lets the first `STATE_INIT` after the hold re-break the phase it just fixed.
+  ⚠ **No `frame_late` from this arm**: the addrgen free-runs against the raster, so
+  re-ordering a held pair adds no raster field, no scan and no STC tick.
+  Gate: `field_phase_tb` **[8-hold-heal]** — ★ `force_misaligned()` MEASURES the phase
+  break and retries, because a stall eats one field or two and a scenario keyed on the
+  cold-start landing would be VACUOUS on whichever `+phase` arm started aligned (exactly
+  why `[7-post-stutter]` passes on both arms today). ⚠ **`[6-stutter]` did not guard the
+  new arm at all** — its `mem_stall` parks the FSM in `STATE_WAIT`, which never reaches
+  the persistence branch; it now drops `output_frame_valid` through each stall.
 - ✅ **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02,
   PR #37) — ✅ HW-CONFIRMED (rounds 1-2 recorded further down this bullet; the
   field-parity half was then repaired and re-confirmed by PR #44).** Two CRT field reports

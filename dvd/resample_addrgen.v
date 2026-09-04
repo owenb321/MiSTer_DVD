@@ -635,6 +635,52 @@ module resample_addrgen (
    * it must still advance to scan the inserted field. */
   wire       pickup_go = ofv_pickup && ~par_ins;
 
+  /* ★ THE FEEDBACK ARM, INSIDE A PERSISTENCE HOLD (2026-09-04).
+   * Everything above cures a phase error by DEFERRING A PICKUP. While a frame is being
+   * HELD there is no pickup to defer: STATE_REPEAT goes straight back to STATE_NEXT_IMG
+   * (the next-state arc below), so STATE_INIT — and with it par_slip — is unreachable
+   * for the whole hold, and the repeat branch re-scans an EVEN field pair, which
+   * PRESERVES whatever phase the hold started in. A hold entered misaligned therefore
+   * stayed misaligned for every held field: 360/360 measured over a 6-second hold,
+   * against 0/360 for a hold entered aligned. (The committed gate,
+   * bench/dvd/field_phase_tb scenario [8], is the shorter form of the same experiment —
+   * pre-fix it burns its whole settle cap and then reports 16/16.)
+   * That is the whole of a DVD menu STILL — and a disc whose first content after a mount
+   * is a 7 s warning card (one I-frame, then the reader parks) shows the mount's
+   * coin-flip landing, combed under Weave and jittering a line on a CRT, for the whole
+   * card. A still is also the WORST case for it: frozen dense text is where a one-line
+   * error is most visible, which is why it reads as a disc-specific bug.
+   * ⚠ For a menu still this is not merely un-entered but unreachable BY CONSTRUCTION:
+   * mpeg2video.v's freeze_wd comment records that a still is an end-of-stream hold, so
+   * output_frame_valid is 0 — there is no frame to pick up, ever.
+   * Cure: emit the held pair in the OTHER order for one visit (see the STATE_REPEAT
+   * image-build branch). That repeats one field at the junction — an ODD shift of the
+   * content-to-slot mapping, i.e. the re-alignment — while keeping the visit two fields
+   * long. On a frozen picture a repeated field is invisible, which is why this arm can
+   * be cheap where the pickup-time one is not.
+   * Same par_fb budget as the pickup arm, and the counters are SHARED, so the two arms
+   * can never double-correct one verdict. */
+  wire       par_hold_ins = (state == STATE_REPEAT) && (next == STATE_NEXT_IMG) &&
+                            (repeat_cnt == 5'd0) && ~hold_freeze && par_fb;
+  /* No combinational loop: next's cone is {state, repeat_cnt, ofv_paced, persistence,
+   * last_image, image_0..5} and par_fb's is {interlaced, raster_par_err, par_cnt,
+   * par_age, last_image} — all registers and inputs, none of them fed by this wire.
+   * (It is also the same qualifier the repeat branch itself already uses.)
+   * ~hold_freeze: a clip-load hold belongs to the OUTGOING clip, and spending the
+   * PAR_HOLD budget on it could delay the incoming clip's correction by up to 2 s —
+   * exactly the latency par_age's saturated reset exists to avoid.
+   * repeat_cnt == 0 keeps the decoder's native freeze/slow-motion path bit-identical.
+   * `pause` is deliberately NOT excluded: a paused still is precisely when someone is
+   * staring at the comb, and av_sync freezes the STC under pause anyway.
+   * ⛔ Rejected, so they are not re-proposed: (1) routing the hold through STATE_INIT —
+   * there is no valid frame, so it parks there, the pixel queue drains and the mixer
+   * goes BLACK, which is the failure hold_freeze was written to prevent; (2) re-picking
+   * up the held frame to synthesise a STATE_INIT visit — it would re-latch cur_show and
+   * fire the pickup into vid_content_refr for a frame that never advanced, corrupting
+   * vid_err and the drop reclaim to fix a cosmetic phase; (3) an emu-side "a still is
+   * starting" hint — the error is only observable AFTER the first field displays, by
+   * which time the reader has already parked. */
+
   /* PAR_CONFIRM stability counter: one tick per completed image scan (the same refresh
    * event the governor counts), cleared whenever the mixer's verdict clears — so the
    * count only reaches PAR_CONFIRM for an error that held that whole time — and cleared
@@ -643,20 +689,33 @@ module resample_addrgen (
   always @(posedge clk)
     if (~rst) par_cnt <= 6'd0;
     else if (clk_en) begin
-      if (par_slip || ~raster_par_err)             par_cnt <= 6'd0;
+      if (par_slip || par_hold_ins || ~raster_par_err) par_cnt <= 6'd0;
       else if (refresh_done && ~par_stable)        par_cnt <= par_cnt + 6'd1;
     end
 
   /* par_age starts SATURATED so the first correction of a session (the cold-start
-   * landing, the one case the schedule cannot see at all) is not delayed by the budget. */
+   * landing, the one case the schedule cannot see at all) is not delayed by the budget.
+   * ★ BOTH counters must clear on par_hold_ins too, and that is the anti-double-
+   * correction mechanism rather than bookkeeping hygiene: the mixer's verdict is 1-2
+   * refreshes + a CDC stale, so if only par_cnt cleared, the first STATE_INIT after the
+   * hold would fire par_fb again on the SAME error and re-break the phase it just fixed.
+   * The three events cannot collide — refresh_done is STATE_NEXT_MB, par_hold_ins is
+   * STATE_REPEAT, par_slip is STATE_INIT — so the if/else ordering hides no priority. */
   always @(posedge clk)
     if (~rst) par_age <= PAR_HOLD;
     else if (clk_en) begin
-      if (par_slip && par_fb)                      par_age <= 8'd0;
+      if ((par_slip && par_fb) || par_hold_ins)    par_age <= 8'd0;
       else if (refresh_done && (par_age != PAR_HOLD)) par_age <= par_age + 8'd1;
     end
 
   reg par_late_r;                      // hand the inserted refresh to the frame-drop ledger (cad_late_r pattern)
+  /* ⚠ par_slip ONLY — a hold insertion must NOT pulse frame_late. The addrgen free-runs
+   * against the raster, so re-ordering a held pair adds no raster field, no STC tick
+   * (emu.sv derives av_refresh_tick from core_v_sync, not from this schedule) and no
+   * image scan: nothing was retarded, unlike a deferred pickup, which genuinely diverts
+   * one refresh away from a pending frame. Pulsing it here would also land one clk after
+   * a STATE_REPEAT cycle — exactly where late_ext asserts — and since frame_late is an OR
+   * of pulses the two would merge into one high cycle and UNDER-bank a real late. */
   always @(posedge clk)
     if (~rst) par_late_r <= 1'b0;
     else if (clk_en) par_late_r <= par_slip;
@@ -1134,24 +1193,37 @@ module resample_addrgen (
        * Repeat last shown image.
        * If last shown image was a frame, show frame.
        * If last shown image was a field image, show both fields.
+       *
+       * DVD-FORK (field-parity corrector, hold arm, 2026-09-04): on par_hold_ins the
+       * pair is emitted in the OTHER ORDER for this one visit. The junction then repeats
+       * a field (…T | T…), which is an ODD shift of the content-to-slot mapping = the
+       * re-alignment, and the tail parity flips so the stream stays strictly alternating
+       * from there. See the par_hold_ins comment above for why this arm exists.
+       * ⛔ NOT the obvious "image_0 <= last_image; image_1 <= NO_OUTPUT" one-field form.
+       * It emits the identical stream, but it makes the visit ONE field long, and
+       * late_pair/late_ext below stretch frame_late to two cycles precisely BECAUSE a
+       * repeat visit is a field PAIR — so a plain decode-stall hold would bank one
+       * refresh of phantom drop debt per correction (an unearned B-drop, ~33 ms). It
+       * also leaves the tail on the same parity, so a tff=1 resume re-fires alt_break
+       * for a phase already fixed. Swapping the pair costs nothing in either ledger.
        */
       begin
         image   <= NO_OUTPUT;
         case (last_image)
-          FRAME: 
+          FRAME:
             begin
               image_0 <= FRAME;
               image_1 <= NO_OUTPUT;
             end
           TOP:
             begin
-              image_0 <= BOTTOM;
-              image_1 <= TOP;
+              image_0 <= par_hold_ins ? TOP    : BOTTOM;
+              image_1 <= par_hold_ins ? BOTTOM : TOP;
             end
           BOTTOM:
             begin
-              image_0 <= TOP;
-              image_1 <= BOTTOM;
+              image_0 <= par_hold_ins ? BOTTOM : TOP;
+              image_1 <= par_hold_ins ? TOP    : BOTTOM;
             end
           NO_OUTPUT:
             begin
