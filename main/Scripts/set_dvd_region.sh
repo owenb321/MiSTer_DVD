@@ -75,7 +75,23 @@ from collections import namedtuple
 DVD_AUTH            = 0x5392   # linux/cdrom.h: DVD authentication ioctl
 LU_SEND_RPC_STATE   = 10       # drive -> host: report the current RPC state
 HOST_SEND_RPC_STATE = 11       # host -> drive: set the region
-AUTHINFO_SIZE       = 16       # sizeof(dvd_authinfo)
+AUTHINFO_SIZE       = 16       # sizeof(dvd_authinfo) — 16 on x86-64 AND armv7 EABI
+
+SG_IO           = 0x2285       # scsi/sg.h: send one SCSI command
+SG_DXFER_TO_DEV = -2
+SEND_KEY        = 0xa3         # MMC: SEND KEY
+KF_RPC_STATE    = 6            # ... key format 6 = Send RPC State
+
+# Sense codes worth naming. Everything else is printed as its raw triple, which is
+# what a bug report needs anyway.
+SENSE_TEXT = {
+    (5, 0x26, 0x00): "invalid field in parameter list",
+    (5, 0x24, 0x00): "invalid field in CDB",
+    (5, 0x20, 0x00): "the drive does not support this command",
+    (5, 0x6f, 0x05): "the drive's region-change counter is exhausted",
+    (2, 0x3a, 0x00): "no disc in the drive",
+    (2, 0x04, 0x01): "the drive is still becoming ready - try again in a moment",
+}
 
 VERIFY_TRIES = 6               # read-backs after a change ...
 VERIFY_WAIT  = 0.5             # ... spaced this far apart
@@ -183,6 +199,85 @@ def region_pdrc(region):
     return ~(1 << (region - 1)) & 0xff
 
 
+class SenseError(OSError):
+    """A drive refusal we can actually explain, unlike the ioctl's bare EIO."""
+    def __init__(self, key, asc, ascq):
+        self.key, self.asc, self.ascq = key, asc, ascq
+        text = SENSE_TEXT.get((key, asc, ascq))
+        OSError.__init__(self, "sense %02x/%02x/%02x%s"
+                         % (key, asc, ascq, " (%s)" % text if text else ""))
+
+
+def sg_send_key(fd, payload, key_format=KF_RPC_STATE, timeout_ms=15000):
+    """SEND KEY over SG_IO, the way sg_raw does it.
+
+    WHY THIS EXISTS: the `DVD_AUTH` ioctl builds the identical command, but the
+    kernel funnels every drive refusal through `sr_do_ioctl`, which collapses
+    Illegal Request and most Not Ready conditions alike into a bare **EIO** — no
+    use at all when the operation is one-way and the user needs to know WHY. Here
+    the sense data comes straight back. (A drive that answered this route while
+    refusing the ioctl is what sent us looking; either way this is the route that
+    can explain itself.)
+
+    Returns None on success, raises SenseError on a refusal the drive explained,
+    and lets OSError through if SG_IO is unusable — the caller falls back then.
+    """
+    import ctypes
+
+    class sg_io_hdr(ctypes.Structure):
+        # ctypes lays this out for whatever ABI it is running on, which is the
+        # point: 64 bytes on the MiSTer's armv7, 88 on an x86-64 desktop.
+        _fields_ = [("interface_id", ctypes.c_int), ("dxfer_direction", ctypes.c_int),
+                    ("cmd_len", ctypes.c_ubyte), ("mx_sb_len", ctypes.c_ubyte),
+                    ("iovec_count", ctypes.c_ushort), ("dxfer_len", ctypes.c_uint),
+                    ("dxferp", ctypes.c_void_p), ("cmdp", ctypes.c_void_p),
+                    ("sbp", ctypes.c_void_p), ("timeout", ctypes.c_uint),
+                    ("flags", ctypes.c_uint), ("pack_id", ctypes.c_int),
+                    ("usr_ptr", ctypes.c_void_p), ("status", ctypes.c_ubyte),
+                    ("masked_status", ctypes.c_ubyte), ("msg_status", ctypes.c_ubyte),
+                    ("sb_len_wr", ctypes.c_ubyte), ("host_status", ctypes.c_ushort),
+                    ("driver_status", ctypes.c_ushort), ("resid", ctypes.c_int),
+                    ("duration", ctypes.c_uint), ("info", ctypes.c_uint)]
+
+    n = len(payload)
+    cdb = bytes((SEND_KEY, 0, 0, 0, 0, 0, 0, 0, (n >> 8) & 0xff, n & 0xff, key_format, 0))
+    cdb_buf = ctypes.create_string_buffer(cdb, len(cdb))
+    data    = ctypes.create_string_buffer(bytes(payload), n)
+    sense   = ctypes.create_string_buffer(32)
+
+    hdr = sg_io_hdr()
+    ctypes.memset(ctypes.byref(hdr), 0, ctypes.sizeof(hdr))
+    hdr.interface_id = ord("S")
+    hdr.dxfer_direction = SG_DXFER_TO_DEV
+    hdr.cmd_len = len(cdb)
+    hdr.mx_sb_len = ctypes.sizeof(sense)
+    hdr.dxfer_len = n
+    hdr.dxferp = ctypes.cast(data, ctypes.c_void_p)
+    hdr.cmdp = ctypes.cast(cdb_buf, ctypes.c_void_p)
+    hdr.sbp = ctypes.cast(sense, ctypes.c_void_p)
+    hdr.timeout = timeout_ms
+
+    note("  SG_IO cdb %s payload %s"
+         % (" ".join("%02x" % b for b in cdb), " ".join("%02x" % b for b in payload)))
+    fcntl.ioctl(fd, SG_IO, hdr)   # OSError here = SG_IO unusable, not a refusal
+    note("  SG_IO status %02x host %02x driver %02x sb_len %d"
+         % (hdr.status, hdr.host_status, hdr.driver_status, hdr.sb_len_wr))
+
+    if hdr.host_status or hdr.driver_status & 0x0f:
+        raise OSError(5, "SG_IO transport error (host %02x driver %02x)"
+                      % (hdr.host_status, hdr.driver_status))
+    if hdr.status == 0:
+        return None
+
+    sb = sense.raw[:hdr.sb_len_wr or 18]
+    note("  SG_IO sense %s" % " ".join("%02x" % b for b in sb))
+    if len(sb) >= 14 and (sb[0] & 0x7e) == 0x70:        # fixed format
+        raise SenseError(sb[2] & 0x0f, sb[12], sb[13])
+    if len(sb) >= 4 and (sb[0] & 0x7e) == 0x72:         # descriptor format
+        raise SenseError(sb[1] & 0x0f, sb[2], sb[3])
+    raise OSError(5, "the drive refused it (SCSI status %02x)" % hdr.status)
+
+
 class Drive:
     def __init__(self, path, fd):
         self.path = path
@@ -207,12 +302,33 @@ class Drive:
         return decode_state(bytes(buf[:3]))
 
     def set_region(self, region):
-        """struct dvd_host_send_rpcstate is {type, pdrc} — see region_pdrc()."""
+        """Set the region, over SG_IO if we can and DVD_AUTH if we cannot.
+
+        Both routes carry the SAME bytes — the kernel builds this exact command
+        from the ioctl (cdrom.c: setup_send_key, then buf[1] = 6, buf[4] = pdrc).
+        SG_IO is preferred only because it hands back the drive's sense data
+        instead of the ioctl's bare EIO. The ioctl remains the fallback for a
+        python without ctypes or a device that refuses SG_IO, so this can only
+        add outcomes, never remove the one that worked before.
+        """
+        pdrc = region_pdrc(region)
+        payload = bytes((0, 6, 0, 0, pdrc, 0, 0, 0))
+        note("  send pdrc %02x for region %d" % (pdrc, region))
+        try:
+            sg_send_key(self.fd, payload)
+            note("  route: SG_IO, accepted")
+            return
+        except SenseError:
+            note("  route: SG_IO, refused with sense")
+            raise                    # the drive explained itself; do not re-send
+        except (OSError, ImportError, AttributeError) as err:
+            note("  SG_IO unusable (%s) - falling back to DVD_AUTH" % err)
+
         buf = bytearray(AUTHINFO_SIZE)
         buf[0] = HOST_SEND_RPC_STATE
-        buf[1] = region_pdrc(region)
-        note("  send pdrc %02x for region %d" % (buf[1], region))
+        buf[1] = pdrc
         fcntl.ioctl(self.fd, DVD_AUTH, buf, True)
+        note("  route: DVD_AUTH, accepted")
 
 
 class FakeDrive:
@@ -633,23 +749,27 @@ def main():
     return apply_region(drive, want)
 
 
-log_open()
-try:
-    code = main()
-except KeyboardInterrupt:
-    code = 1
-except Exception as exc:
-    # A traceback on a television tells the user nothing and scrolls the useful
-    # part off the screen. One line here, the whole thing in the log.
-    out()
-    out("  Something went wrong: %s: %s" % (type(exc).__name__, exc))
-    if log_path:
-        out("  The details are in %s" % log_path)
-    note(traceback.format_exc())
-    pause()
-    code = 1
-note("exit %s" % code)
-sys.exit(code)
+# Guarded so the payload can be IMPORTED as a module and its pure functions
+# tested directly (tools/test_set_dvd_region.py extracts it) — running it the
+# normal way, `python3 <file>`, is unaffected.
+if __name__ == "__main__":
+    log_open()
+    try:
+        code = main()
+    except KeyboardInterrupt:
+        code = 1
+    except Exception as exc:
+        # A traceback on a television tells the user nothing and scrolls the
+        # useful part off the screen. One line here, the whole thing in the log.
+        out()
+        out("  Something went wrong: %s: %s" % (type(exc).__name__, exc))
+        if log_path:
+            out("  The details are in %s" % log_path)
+        note(traceback.format_exc())
+        pause()
+        code = 1
+    note("exit %s" % code)
+    sys.exit(code)
 PYEOF
 
 python3 "$PY" "$@"

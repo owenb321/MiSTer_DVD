@@ -17,7 +17,7 @@ error. The fake drive can now reproduce all three post-change behaviours — the
 read-back raising (rbfail), the region_mask lagging (stale), and the change itself
 failing (setfail) — and only the last of those may be reported as a failure.
 """
-import os, pty, subprocess, select, time, sys
+import os, pty, subprocess, select, time, sys, importlib.util
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # SET_DVD_REGION_SH points the suite at another copy — used to prove the issue-52
@@ -83,6 +83,56 @@ def run(keys, fake="0:5:4:1", args=(), expect_pause=True, dismiss=True):
     return out.decode(errors="replace"), p.returncode
 
 FAIL = 0
+
+# --- unit checks on the payload's pure functions ------------------------------
+# The script is a python payload inside a shell heredoc; extract it and import
+# it (its entry point is under a __main__ guard) so the encoders and the SG_IO
+# structure can be checked directly rather than only through the menus.
+def load_payload():
+    src = open(SCRIPT).read()
+    body = src.split('cat > "$PY" <<\'PYEOF\'\n', 1)[1].split("\nPYEOF\n", 1)[0]
+    path = os.path.join(os.getenv("TMPDIR", "/tmp"), "set_dvd_region_payload.py")
+    open(path, "w").write(body)
+    spec = importlib.util.spec_from_file_location("set_dvd_region_payload", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+def unit(name, ok, detail=""):
+    global FAIL
+    print(("PASS  " if ok else "FAIL  ") + name)
+    if not ok:
+        if detail:
+            print("        " + detail)
+        FAIL += 1
+
+M = load_payload()
+
+unit("pdrc is a mask with one bit clear",
+     [M.region_pdrc(n) for n in range(1, 9)] == [0xfe, 0xfd, 0xfb, 0xf7,
+                                                 0xef, 0xdf, 0xbf, 0x7f],
+     repr([hex(M.region_pdrc(n)) for n in range(1, 9)]))
+
+st = M.decode_state(b"\x91\xfd\x01")
+unit("RPC state decodes as the kernel packs it",
+     (st.region, st.changes, st.resets, st.scheme, st.rpc_type) == (2, 4, 4, 1, 1),
+     repr(st))
+unit("an all-ones mask is no region set", M.decode_state(b"\xb0\xff\x01").region is None)
+unit("rpc_scheme 0 is carried through", M.decode_state(b"\xb0\xff\x00").scheme == 0)
+
+# SG_IO on something that is not a SCSI device must raise a plain OSError, not a
+# SenseError — that is what makes set_region() fall back to the ioctl rather than
+# reporting a refusal the drive never made.
+with open(os.devnull, "rb") as devnull:
+    try:
+        M.sg_send_key(devnull.fileno(), bytes(8))
+        ok, why = False, "no error at all"
+    except M.SenseError as e:
+        ok, why = False, "raised SenseError (%s) - would suppress the fallback" % e
+    except OSError as e:
+        ok, why = True, str(e)
+unit("SG_IO on a non-SCSI fd falls back rather than blaming the drive", ok, why)
+
 def check(name, keys, must_have, must_not=(), fake="0:5:4:1", rc=0, expect_pause=True):
     global FAIL
     text, code = run(keys, fake, expect_pause=expect_pause)
@@ -143,7 +193,7 @@ check("a lagging region_mask is not a failure", [DOWN, ENTER, DOWN, ENTER],
       ["Traceback", "FAILED", "did not take the change"],
       fake="0:5:4:1:stale", rc=3)
 # The one thing that IS a failure: the change command itself refused.
-check("a rejected change says so, and says nothing was spent",
+check("a rejected change says so, and does not claim the counter",
       [DOWN, ENTER, DOWN, ENTER],
       ["The drive REJECTED the change", "The region was not changed"],
       ["Traceback", "Done."], fake="0:5:4:1:setfail", rc=1)

@@ -2090,7 +2090,12 @@ byte-identical command: sense **05/26/00, "invalid field in PARAMETER LIST"** �
 list*, not *CDB*, which localised it to one byte of the payload in a single shot. `regionset`
 has always sent the mask (`regionset.c` `~(1 << (n-1))` → `dvd_udf.c:UDFRPCSet`). ⚠ Issue
 #52's LG GS40N errored AND ended up regioned, which the encoding bug does not explain; do
-not build on either reading of that.**
+not build on either reading of that.** ★ **The write now goes out over SG_IO with `DVD_AUTH`
+as the fallback** — byte-identical commands, but `sr_do_ioctl` collapses every refusal into a
+bare `EIO` (Illegal Request and most Not Ready alike), so the ioctl route CANNOT say why a
+one-way operation failed. ⏳ It is also the open suspect: the corrected `pdrc` was accepted
+over SG_IO on a PC and refused with `EIO` over the ioctl on the board — ⚠ two variables at
+once (route AND machine), which the SG_IO path exists to separate.
 A drive with no region set refuses the CSS title-key ioctl, so every physical disc pays a
 multi-second crack (`No drive region: cracking`); the Scripts-menu tool reads the region
 (and the remaining-change count) and can set it, via `DVD_AUTH` — no compiled helper, since

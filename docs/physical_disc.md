@@ -285,6 +285,30 @@ for the `No drive region: cracking` path, and a set destroys it forever.
 ended up regioned, so either it tolerates the malformed number (firmware varies) or it
 rejected the change and the region came from somewhere else. Do not build on either reading.
 
+**The write goes out over SG_IO, with `DVD_AUTH` as the fallback (2026-09-04).** Both
+routes carry byte-identical commands — the kernel builds this exact one from the ioctl
+(`cdrom.c`: `setup_send_key`, then `buf[1] = 6`, `buf[4] = pdrc`) — so this is not a
+correctness change but an **observability** one: `sr_do_ioctl` funnels every drive refusal
+into a bare **`EIO`** (Illegal Request *and* most Not Ready conditions alike), which is
+useless when the operation is one-way and the user needs to know why. SG_IO hands the sense
+data back, so a refusal now reads `sense 05/26/00 (invalid field in parameter list)` instead
+of `Input/output error`. The ioctl remains the fallback for a python without `ctypes` or a
+device that refuses SG_IO, so this can only add outcomes, never remove the one that worked.
+A `SenseError` is never retried on the other route — the drive explained itself, and a
+second send could spend a change.
+
+⏳ **It is also the current suspect.** On the maintainer's TSSTcorp TS-L633C behind an Initio
+`13fd:0840` USB bridge (`ANSI: 0`), the corrected `pdrc` was accepted over **SG_IO on a PC**
+and refused with `EIO` over the **ioctl on the MiSTer**, twice, with the change counter
+unmoved and *nothing* logged by `sr` in dmesg. ⚠ **That is two variables at once — route and
+machine — so it does not yet convict the ioctl.** The SG_IO path is what isolates it: same
+board, same drive, one variable.
+
+`sg_io_hdr` is built with `ctypes`, so it lays itself out for whatever ABI it runs on (88
+bytes on x86-64, 64 on the MiSTer's armv7). Both were checked against the C ABI rather than
+assumed — the field list reproduces `sizeof`/`offsetof` exactly on x86-64, and the armv7
+sizes come from a `_Static_assert` compiled with the MiSTer toolchain's own headers.
+
 **Reporting a change.** Two further defects, real regardless of the encoding, sharing one
 durable rule — **a failure to read the region back is not a failure to set it**: the SEND KEY
 either succeeded or it did not, and everything after it is reporting.
