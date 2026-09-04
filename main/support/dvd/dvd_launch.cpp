@@ -5,6 +5,7 @@
 #include <time.h>
 
 #include "../../user_io.h"
+#include "../../menu.h"
 #include "../arcade/mra_loader.h"
 #include "dvd_launch.h"
 
@@ -67,4 +68,12 @@ void dvd_launch_tick(void)
 	}
 	mgl->done = 1;
 	pending_since = 0;
+
+	// Leave the menu FSM somewhere sane. Without this the stall is usually
+	// abandoned in MENU_GENERIC_MAIN2 with the OSD disabled (an MGL opens the
+	// menu invisibly), so the user's first Menu press is spent closing a menu
+	// they cannot see. MenuHide() re-enters HandleUI once -- the same thing
+	// InfoMessage does, and by now mgl->done is 1, so it takes the ordinary
+	// branch.
+	MenuHide();
 }
