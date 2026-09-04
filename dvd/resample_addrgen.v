@@ -641,8 +641,10 @@ module resample_addrgen (
    * (the next-state arc below), so STATE_INIT — and with it par_slip — is unreachable
    * for the whole hold, and the repeat branch re-scans an EVEN field pair, which
    * PRESERVES whatever phase the hold started in. A hold entered misaligned therefore
-   * stayed misaligned for every held field: measured 360/360 in bench/dvd/field_phase_tb
-   * scenario [8], against 0/360 for a hold entered aligned.
+   * stayed misaligned for every held field: 360/360 measured over a 6-second hold,
+   * against 0/360 for a hold entered aligned. (The committed gate,
+   * bench/dvd/field_phase_tb scenario [8], is the shorter form of the same experiment —
+   * pre-fix it burns its whole settle cap and then reports 16/16.)
    * That is the whole of a DVD menu STILL — and a disc whose first content after a mount
    * is a 7 s warning card (one I-frame, then the reader parks) shows the mount's
    * coin-flip landing, combed under Weave and jittering a line on a CRT, for the whole

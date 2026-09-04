@@ -581,7 +581,7 @@ worse maintenance burden than targeted in-place edits. So:
   frame is held, and for a menu still `output_frame_valid` is 0 **by construction**
   (`mpeg2video.v`'s `freeze_wd`: a still is an end-of-stream hold) — so the mount's
   coin-flip landing displays uncorrected for as long as the still lasts. MEASURED
-  360/360 held fields misaligned vs 0/360 for a hold entered aligned.
+  360/360 held fields misaligned over a 6 s hold vs 0/360 for a hold entered aligned.
   ★ **A still is the worst case TWICE: frozen dense text is the content most sensitive to
   a one-line error, and it is the state in which the corrector is most disabled** — which
   is why a general defect read as disc-specific. The disc is ordinary: its boot cells are

@@ -7,7 +7,8 @@ coin flip — and exposed an inverted `VGA_F1`; round 2 confirmed that fix
 
 🔧 **HOLD ARM (2026-09-04, branch `fix/field-parity-hold`): the corrector could not act
 while the picture was HELD — a menu still, a warning card, a pause — because its cure is
-to defer a pickup and a hold has none. Measured 360/360 held fields misaligned. Fixed by
+to defer a pickup and a hold has none. Measured 360/360 held fields misaligned over a
+6-second hold (the committed gate is the shorter form of that experiment). Fixed by
 swapping the held pair's order for one visit; sim-proven RED/GREEN by the new
 `field_phase_tb` scenario [8], ⏳ HW-confirm pending. See "The hold gap" below.**
 
@@ -279,8 +280,11 @@ end-of-stream hold, so `output_frame_valid` is 0 — there is no frame to pick u
 So the mount's coin-flip landing is displayed, uncorrected, for as long as the still
 lasts.
 
-**Measured** (`field_phase_tb` scenario [8], cold start at the `+phase`-selected raster
-parity, ONE pickup, then a 6-second hold):
+**Measured** — the diagnostic form of the experiment: a `field_phase_tb` variant that
+cold-starts at the `+phase`-selected raster parity, takes ONE pickup, then holds for six
+seconds. (Scenario [8] below is the short, committed form of the same thing; it reports
+16/16 after burning its settle cap rather than 360/360, because it stops measuring
+sooner.)
 
 | landing phase | misaligned fields during the hold | on resume |
 |---|---|---|
