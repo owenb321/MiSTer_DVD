@@ -297,12 +297,22 @@ device that refuses SG_IO, so this can only add outcomes, never remove the one t
 A `SenseError` is never retried on the other route — the drive explained itself, and a
 second send could spend a change.
 
-⏳ **It is also the current suspect.** On the maintainer's TSSTcorp TS-L633C behind an Initio
-`13fd:0840` USB bridge (`ANSI: 0`), the corrected `pdrc` was accepted over **SG_IO on a PC**
-and refused with `EIO` over the **ioctl on the MiSTer**, twice, with the change counter
-unmoved and *nothing* logged by `sr` in dmesg. ⚠ **That is two variables at once — route and
-machine — so it does not yet convict the ioctl.** The SG_IO path is what isolates it: same
-board, same drive, one variable.
+★★ **AND IT PAID FOR ITSELF ON THE FIRST RUN. The blocker was a DISC IN THE TRAY:
+sense `05/6f/04`, "media region code is mismatched to logical unit region".** A drive set to
+region 1, asked for region 2 with a region-1 disc loaded, refuses — the change would orphan
+the disc in its own tray. The same drive took the same change with an empty tray.
+
+★ **The diagnostic lesson is bigger than the bug.** The evidence was "accepted on a PC over
+SG_IO, refused on the MiSTer over the ioctl", and both of the variables that framing offers —
+route and machine — were **wrong**. The real one was a third that nobody had written down:
+the PC attempt had an empty tray. Two hardware rounds went into route-vs-machine before one
+sense byte settled it. ⚠ When a comparison has two obvious differences, the cause can still
+be a third; a drive that can *explain* itself outranks any amount of A/B reasoning. Everything
+before this point was inference from `EIO`, and `EIO` is what the ioctl gives you.
+
+The script now checks `CDROM_DRIVE_STATUS` and says "take the disc out first" **before** the
+menu, and `05/6f/04` is a named sense so the refusal explains itself if a drive reports it
+anyway.
 
 ⚠⚠ **`DRIVER_SENSE` (0x08) is in the LOW nibble of `driver_status` and means the drive
 ANSWERED — sense attached — not that the transport failed.** Reading it as a transport error

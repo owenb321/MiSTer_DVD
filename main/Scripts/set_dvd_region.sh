@@ -84,9 +84,15 @@ KF_RPC_STATE    = 6            # ... key format 6 = Send RPC State
 CHECK_CONDITION = 0x02         # SCSI status: the drive has something to say
 DRIVER_SENSE    = 0x08         # driver_status: ... and the sense data is attached
 
+CDROM_DRIVE_STATUS = 0x5326    # linux/cdrom.h: is there a disc in the drive?
+CDS_DISC_OK        = 4
+
 # Sense codes worth naming. Everything else is printed as its raw triple, which is
 # what a bug report needs anyway.
 SENSE_TEXT = {
+    (5, 0x6f, 0x04): "a disc in the drive has a different region - EJECT IT and retry",
+    (5, 0x6f, 0x05): "the drive will not accept another region change",
+    (5, 0x6f, 0x00): "copy protection key exchange failure",
     (5, 0x26, 0x00): "invalid field in parameter list",
     (5, 0x24, 0x00): "invalid field in CDB",
     (5, 0x20, 0x00): "the drive does not support this command",
@@ -312,6 +318,20 @@ class Drive:
             pass
         self.fd = os.open(self.path, os.O_RDONLY | os.O_NONBLOCK)
 
+    def media_present(self):
+        """A loaded disc blocks a region change on at least some drives.
+
+        MEASURED: a TSSTcorp TS-L633C set to region 1, asked for region 2 with a
+        region-1 disc loaded, answers sense 05/6f/04 — "media region code is
+        mismatched to logical unit region". The change it is being asked to make
+        would orphan the disc in its own tray, so it refuses. The same drive took
+        the same change with an empty tray.
+        """
+        try:
+            return fcntl.ioctl(self.fd, CDROM_DRIVE_STATUS, 0) == CDS_DISC_OK
+        except OSError:
+            return False    # can't tell -> say nothing rather than nag wrongly
+
     def read_state(self):
         buf = bytearray(AUTHINFO_SIZE)
         buf[0] = LU_SEND_RPC_STATE
@@ -377,6 +397,9 @@ class FakeDrive:
 
     def reopen(self):
         pass
+
+    def media_present(self):
+        return self.fault == "disc"
 
     def read_state(self):
         if self.fault == "rbfail" and self.changed:
@@ -631,6 +654,11 @@ def interactive(drive, state, extra=()):
         pause()
         return 0
 
+    if drive.media_present():
+        header += ["",
+                   "  !! There is a disc in the drive. Take it out first - a drive",
+                   "  !! refuses to change region while a disc of a different region",
+                   "  !! is loaded, because the change would orphan that disc."]
     header += ["", "  Pick the region your discs come from:"]
     items = ["%d  %s" % (num, name) for num, name in CHOOSABLE] + ["Cancel - change nothing"]
     footer = ["  D-pad = move    B1 = select    B2 = cancel",

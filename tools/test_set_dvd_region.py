@@ -135,6 +135,14 @@ except OSError as e:
     ok, why = False, "read DRIVER_SENSE as a transport error: %s" % e
 unit("a Check Condition with sense is decoded, not called a transport error", ok, why)
 
+SENSE_6F04 = bytes([0x70, 0, 0x05, 0, 0, 0, 0, 0x0a, 0, 0, 0, 0, 0x6f, 0x04, 0, 0, 0, 0])
+try:
+    M.sg_check(0x02, 0x00, 0x08, SENSE_6F04)
+    detail = "no error"
+except M.SenseError as e:
+    detail = str(e)
+unit("the loaded-disc refusal explains itself", "EJECT IT" in detail, detail)
+
 unit("the named sense text is used",
      "invalid field in parameter list" in why, why)
 
@@ -262,6 +270,13 @@ def check_pdrc(region, want_byte):
 
 check_pdrc(1, 0xfe)
 check_pdrc(4, 0xf7)
+
+# A loaded disc blocks the change on at least some drives (sense 05/6f/04,
+# measured), so say so before the user spends the trip rather than after.
+check("a loaded disc is called out before the menu", [ESC],
+      ["There is a disc in the drive. Take it out first"], fake="1:3:4:1:disc")
+check("an empty tray says nothing about discs", [ESC],
+      ["Pick the region"], ["There is a disc in the drive"], fake="1:3:4:1")
 
 # --- issue #52: the result screen must outlive the press that caused it -------
 # MiSTer closes the framebuffer terminal on the first key RELEASE after the

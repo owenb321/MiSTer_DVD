@@ -95,7 +95,10 @@ shows the drive's current region and how many changes it has left. Setting one i
 drive with the **D-pad and B1** — no keyboard needed. Nothing changes until you confirm, and
 the cursor starts on *Cancel*.
 
-Run it with no disc playing, since the core holds the drive open while one is mounted.
+**Take the disc out of the drive first.** A drive refuses to change its region while a disc
+of a different region is loaded — the change would leave that disc unplayable — so with one
+in the tray the change fails with `a disc in the drive has a different region`. An empty
+drive also avoids the core holding it open while a disc is mounted.
 
 Every screen waits for a button before it closes, and everything it prints is also written
 to `DVD_reports/set_dvd_region.log` on the SD card (or `/tmp` if the SD card is not
