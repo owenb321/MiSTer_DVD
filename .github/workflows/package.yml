@@ -1,0 +1,286 @@
+name: package release
+
+# Assembles the distributable artifacts around an .rbf the maintainer has ALREADY
+# built and uploaded to a release DRAFT: validates the core, builds the
+# MiSTer_DVDcss Main, packages the install zip, and attaches everything back to
+# the draft. The maintainer then downloads it, flashes, smoke-tests, and publishes.
+#
+# ⚠ WHY workflow_dispatch AND NOT `on: release: types: [created]`:
+# GitHub does not run workflows for the created/edited/deleted activity types on
+# DRAFT releases — only `published` fires for a draft, which is after the point of
+# no return. The whole design here is smoke-test-THEN-publish, so a draft cannot
+# be the trigger. A draft also has NO GIT TAG, which is why nothing below checks
+# out refs/tags/$TAG; the tree comes from the SHA in the build manifest instead.
+# Do not "fix" either of these.
+#
+# ⚠ QUARTUS IS NOT RUN HERE, and cannot be. raetro/quartus:mister is 17 GB
+# unpacked / 6 GB pulled against a hosted runner's ~14 GB of free disk, the fitter
+# peaks ~6 GB RAM, and a fit that lands timing-MARGINAL needs a human-judged seed
+# sweep (DVD.qsf's ledger). The .rbf is always built locally with
+# `USE_DOCKER=1 ./build_release.sh --release --compile`.
+#
+# Usage — normally via tools/publish_draft.sh, which does both steps:
+#   gh release create v0.4.0 --draft --notes-file notes.md \
+#       releases/DVD_YYYYMMDD.rbf releases/DVD_YYYYMMDD.rbf.json
+#   gh workflow run package.yml -f tag=v0.4.0
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag of the release draft holding the .rbf (e.g. v0.4.0)'
+        required: true
+        type: string
+      rbf_asset:
+        description: 'Which DVD_*.rbf asset to package (only if the draft holds more than one)'
+        required: false
+        type: string
+  # Safety net only: catch a release published without ever having been packaged.
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+# Never cancel a run mid-upload: a half-uploaded asset set is worse than a queue.
+concurrency:
+  group: package-${{ inputs.tag || github.event.release.tag_name }}
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+  TAG: ${{ inputs.tag || github.event.release.tag_name }}
+
+jobs:
+  # ------------------------------------------------------------------ validate
+  validate:
+    name: Validate the uploaded core
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.check.outputs.sha }}
+      rbf: ${{ steps.check.outputs.rbf }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      # No checkout — a draft has no tag, so there is nothing to check out yet.
+      - name: Download the .rbf and its provenance manifest
+        run: |
+          set -euo pipefail
+          mkdir -p incoming
+          # `gh release view` finds a DRAFT by its pending tag name (it falls back
+          # to GraphQL for exactly this case), so the whole gh half works on drafts.
+          if ! gh release view "$TAG" --json isDraft,assets > rel.json 2>/dev/null; then
+            echo "::error::No release or draft tagged '$TAG' in $GH_REPO."
+            exit 1
+          fi
+          echo "Assets currently on '$TAG':"
+          jq -r '.assets[].name | "  " + .' rel.json
+          PAT='${{ inputs.rbf_asset }}'
+          [ -n "$PAT" ] || PAT='DVD_*.rbf'
+          if ! gh release download "$TAG" --dir incoming --clobber \
+                 --pattern "$PAT" --pattern "$PAT.json"; then
+            echo "::error::'$TAG' has no $PAT asset. Build the core and upload it first:"
+            echo "::error::  USE_DOCKER=1 ./build_release.sh --release --compile"
+            echo "::error::  gh release upload $TAG releases/DVD_YYYYMMDD.rbf releases/DVD_YYYYMMDD.rbf.json"
+            exit 1
+          fi
+
+      - name: Validate the core and its manifest
+        id: check
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          rbfs=(incoming/DVD_*.rbf); mans=(incoming/*.rbf.json)
+          if [ ${#rbfs[@]} -ne 1 ]; then
+            echo "::error::Expected exactly one DVD_*.rbf asset, found ${#rbfs[@]}. Pass rbf_asset to disambiguate."
+            exit 1
+          fi
+          if [ ${#mans[@]} -ne 1 ]; then
+            echo "::error::Missing the .rbf.json provenance manifest. build_release.sh emits it beside the .rbf; upload both."
+            exit 1
+          fi
+          RBF="${rbfs[0]}"; MAN="${mans[0]}"; BASE="$(basename "$RBF")"
+
+          # 1. MiSTer's core browser and update scripts parse YYYYMMDD out of the
+          #    filename to decide which build is newest, so the name is date-only,
+          #    never a version — and never a _MARGINAL tag.
+          if [[ ! "$BASE" =~ ^DVD_[0-9]{8}\.rbf$ ]]; then
+            echo "::error::'$BASE' is not DVD_YYYYMMDD.rbf. MiSTer parses that date to rank builds; a version or a _MARGINAL tag there breaks update detection."
+            exit 1
+          fi
+
+          # 2. The manifest must describe THIS file, and describe a clean fit.
+          want=$(jq -r '.rbf.sha256' "$MAN"); got=$(sha256sum "$RBF" | cut -d' ' -f1)
+          if [ "$want" != "$got" ]; then
+            echo "::error::sha256 mismatch — manifest says $want, asset is $got. The manifest belongs to a different build."
+            exit 1
+          fi
+          if [ "$(jq -r '.rbf.marginal' "$MAN")" = "true" ] || [ "$(jq -r '.timing.pass' "$MAN")" != "true" ]; then
+            echo "::error::This is a TIMING-MARGINAL build ($(jq -r '.timing.clk_dec_100c_mhz' "$MAN") MHz @100C / $(jq -r '.timing.clk_dec_m40c_mhz' "$MAN") MHz @-40C, gate $(jq -r '.timing.threshold_mhz' "$MAN")). Never ship one — re-roll with tools/seed_sweep.sh."
+            exit 1
+          fi
+
+          # 3. Size band. An UNCOMPRESSED pack is ~7 MB and silently fails to
+          #    configure the FPGA (no video at all) — that is what this catches.
+          #    The band is deliberately wide: shipped releases measure 4.44-4.56 MB,
+          #    so a 4.5 MB ceiling would have rejected v0.1a.
+          sz=$(stat -c%s "$RBF")
+          if [ "$sz" -lt 3500000 ] || [ "$sz" -gt 5000000 ]; then
+            echo "::error::.rbf is $sz bytes, outside the 3.5-5.0 MB band. An uncompressed pack (~7 MB) does not configure the FPGA."
+            exit 1
+          fi
+          [ "$sz" -le 4500000 ] || echo "::warning::.rbf is $sz bytes (> 4.5 MB) — larger than typical for this core."
+
+          # 4. BUILD_DATE vs the filename date. WARNING, not an error, and the
+          #    reason is a real trap: BUILD_DATE is generated by sys/build_id.tcl
+          #    inside the Quartus container (UTC) while the filename comes from
+          #    `date` in whichever context ran the pack. They agree when both run
+          #    under USE_DOCKER, but a native pack of a container-built .sof can
+          #    legitimately straddle UTC midnight. A real mismatch still means
+          #    something worth seeing: an old .sof packed under today's name.
+          fdate=$(echo "$BASE" | sed 's/DVD_\([0-9]*\)\.rbf/\1/')
+          bdate="20$(jq -r '.build_date' "$MAN")"
+          [ "$bdate" = "$fdate" ] || echo "::warning::manifest BUILD_DATE $bdate != filename date $fdate (timezone straddle, or a stale .sof was packed)."
+
+          # 5. The version in the bitstream IS the tag. This is the invariant:
+          #    a bare semver lives in exactly one commit per release.
+          VER=$(jq -r '.core_version' "$MAN")
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag '$TAG' must be vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          if [ "$VER" != "$TAG" ]; then
+            echo "::error::The core was built with CORE_VERSION '$VER' but this release is '$TAG'. Set it in dvd/emu.sv on the release commit and rebuild — the OSD would otherwise advertise the wrong version."
+            exit 1
+          fi
+
+          [ "$(jq -r '.git.dirty' "$MAN")" = "false" ] || \
+            echo "::warning::Built from a DIRTY working tree — the shipped artifacts may not match any commit."
+
+          { echo "version=$VER"; echo "rbf=$BASE"; echo "sha=$(jq -r '.git.sha' "$MAN")"; } >> "$GITHUB_OUTPUT"
+          echo "OK: $BASE, $VER, $(jq -r '.git.sha' "$MAN" | cut -c1-12)"
+
+      # Paste-able into the release notes and into DVD.qsf's seed ledger, whose
+      # entries quote exactly these numbers.
+      - name: Provenance summary
+        run: |
+          jq -r '"### Build provenance\n\n| | |\n|---|---|\n"
+            + "| version | `\(.core_version) \(.build_date)` |\n"
+            + "| commit | `\(.git.sha[0:12])` on `\(.git.branch)`\(if .git.dirty then " **(dirty)**" else "" end) |\n"
+            + "| fitter seed | \(.fit.seed) |\n"
+            + "| clk_dec Fmax | \(.timing.clk_dec_100c_mhz) MHz @100C / \(.timing.clk_dec_m40c_mhz) MHz @-40C (gate \(.timing.threshold_mhz)) |\n"
+            + "| utilization | ALM \(.fit.alm) · RAM \(.fit.ram_blocks) · DSP \(.fit.dsp_blocks) |\n"
+            + "| toolchain | \(.toolchain.quartus) |\n"
+            + "| image | `\(.toolchain.image)` |"' incoming/*.rbf.json >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: incoming
+          path: incoming/
+          retention-days: 7
+
+  # ------------------------------------------------------------------ assemble
+  assemble:
+    name: Build the Main and package
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      # The MANIFEST's SHA, not refs/tags/$TAG: a draft has no tag, and this
+      # guarantees the Main, the Scripts and DVD_INSTALL.txt come from the exact
+      # tree the .rbf was synthesised from.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.sha }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: incoming
+          path: incoming
+
+      - name: The source at this commit agrees with the manifest
+        run: |
+          set -euo pipefail
+          got=$(sed -n 's/.*`define CORE_VERSION "\([^"]*\)".*/\1/p' dvd/emu.sv | head -1)
+          if [ "$got" != "${{ needs.validate.outputs.version }}" ]; then
+            echo "::error::dvd/emu.sv at ${{ needs.validate.outputs.sha }} says CORE_VERSION '$got', the manifest says '${{ needs.validate.outputs.version }}'."
+            exit 1
+          fi
+          # The manual's release banner is built from main and read by every user.
+          rv=$(sed -n 's/^ *released_version: *"\(.*\)".*/\1/p' mkdocs.yml | head -1)
+          if [ "v$rv" != "$TAG" ]; then
+            echo "::error::mkdocs.yml extra.released_version is '$rv' but this release is '$TAG'. The manual would announce the wrong version on every page."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: site/requirements.txt
+
+      - run: pip install -r site/requirements.txt
+
+      # The manual is the published contract, and a release is exactly when it
+      # must be true. Same two commands as docs.yml and as the local pre-commit.
+      - name: The manual matches the OSD definition
+        run: |
+          python3 tools/docs_check.py
+          mkdocs build --strict
+
+      # ~4-6 min on a cold runner: main/docker_reexec.sh builds the pinned ARM
+      # toolchain image from main/docker/Dockerfile on first use. build_main.sh
+      # needs no CI-specific changes — it already pins MAIN_MISTER_REF and clones
+      # stock Main itself.
+      - name: Build MiSTer_DVDcss
+        run: USE_DOCKER=1 ./main/build_main.sh
+
+      - name: Package the install zip
+        run: ./tools/package_release.sh --rbf "incoming/${{ needs.validate.outputs.rbf }}"
+
+      - name: Attach the assets to the draft
+        run: |
+          set -euo pipefail
+          zip=$(ls -t releases/MiSTer_DVD_*.zip | head -1)
+          # --clobber makes re-runs idempotent. The .rbf and its manifest are
+          # already on the release (the maintainer uploaded them); these are the
+          # four this workflow owns.
+          gh release upload "$TAG" --clobber \
+            "$zip" \
+            main/.build/MiSTer_DVDcss \
+            main/Scripts/install_dvdcss.sh \
+            main/Scripts/set_dvd_region.sh
+          {
+            echo ""
+            echo "### Packaged"
+            echo ""
+            echo "Attached \`$(basename "$zip")\` + \`MiSTer_DVDcss\` + 2 Scripts to **$TAG**."
+            echo ""
+            echo "Next: download, flash, smoke-test, then publish with"
+            echo '```'
+            echo "gh release edit $TAG --draft=false"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # -------------------------------------------------------------- safety net
+  published-check:
+    name: Published release has its assets
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      # Nothing can be fixed automatically at this point — the release is public.
+      # This exists so "published a draft that was never packaged" is loud rather
+      # than discovered by the first user who downloads it.
+      - name: Check the asset set
+        run: |
+          set -euo pipefail
+          names=$(gh release view "$TAG" --json assets --jq '.assets[].name')
+          echo "$names"
+          missing=""
+          echo "$names" | grep -q '^MiSTer_DVD_.*\.zip$'  || missing="$missing install-zip"
+          echo "$names" | grep -q '^DVD_[0-9]\{8\}\.rbf$' || missing="$missing core-rbf"
+          echo "$names" | grep -q '^MiSTer_DVDcss$'       || missing="$missing MiSTer_DVDcss"
+          if [ -n "$missing" ]; then
+            echo "::error::Release $TAG is missing:$missing. It was published without being packaged — run: gh workflow run package.yml -f tag=$TAG (assets can still be added to a published release)."
+            exit 1
+          fi

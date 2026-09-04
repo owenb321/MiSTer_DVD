@@ -224,9 +224,12 @@ static void start(void)
 	const char *cfg = find_cfg(cfgbuf, sizeof(cfgbuf));
 
 	// The core version, without a human having to read it off the OSD and type
-	// it. CONF_STR's "V,v0.4.0 260901" line is appended to the OSD core name at
-	// init (user_io.cpp, the p[0]=='V' arm), so OsdCoreNameGet() reads back
-	// "DVD v0.4.0 260901" and everything after the first space is the version.
+	// it. CONF_STR's "V,<version> <yymmdd>" line is appended to the OSD core name
+	// at init (user_io.cpp, the p[0]=='V' arm), so OsdCoreNameGet() reads back
+	// "DVD v0.4.0 260901" (a release) or "DVD dev-seekrealign 260903" (a test
+	// build), and everything after the FIRST space is the version. The two shapes
+	// are deliberate and distinguishable: a bundle from a pre-release build can
+	// no longer look like one from a release. See dvd/emu.sv "VERSIONING".
 	// This matters more here than on the PC route: there is no reporter in the
 	// loop to supply it, and it is the only thing that identifies a build.
 	const char *ver = 0;

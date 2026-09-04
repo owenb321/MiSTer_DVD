@@ -26,6 +26,9 @@
 #   * Memory is left UNBOUNDED — the fitter peaks ~6 GB; a low --memory OOM-kills it.
 #   * SEEDS/FMAX_MIN/SWEEP_ALL/NOTIFY_* are forwarded so seed_sweep's env knobs and
 #     notifications still work; positional args (--compile, NAME, ...) pass via "$@".
+#   * GIT_* are resolved on the HOST and forwarded: the image may have no git, and
+#     build_release.sh's provenance manifest needs branch/sha/dirty. QUARTUS_DOCKER_IMAGE
+#     rides along so the manifest can record which image actually built the .rbf.
 
 maybe_reexec_in_docker() {
     [ "${USE_DOCKER:-0}" = "1" ] || return 0        # opt-in only
@@ -43,6 +46,18 @@ maybe_reexec_in_docker() {
         exit 1
     fi
 
+    # Git facts for the build provenance manifest (build_release.sh writes
+    # <rbf>.json). Resolved HERE, on the host, because the Quartus image is not
+    # guaranteed to carry a git binary and build_release.sh runs INSIDE it. Any
+    # value already exported by the caller wins, so CI can inject its own.
+    export GIT_BRANCH="${GIT_BRANCH:-$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
+    export GIT_SHA="${GIT_SHA:-$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)}"
+    # --untracked-files=no on purpose: an untracked scratch file cannot be in the
+    # bitstream (anything that pulls one in is itself tracked and would show as
+    # modified), and counting them marked every build dirty, which made the flag
+    # useless. Only tracked modifications mean "this .rbf matches no commit".
+    export GIT_DIRTY="${GIT_DIRTY:-$([ -n "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ] && echo true || echo false)}"
+
     echo ">> [docker] re-exec in ${image}  (repo ${repo}, uid $(id -u):$(id -g))" >&2
     echo ">> [docker] cancel with: docker stop quartus_$(basename "$self" .sh)_$$" >&2
     exec docker run --rm \
@@ -50,6 +65,7 @@ maybe_reexec_in_docker() {
         -u "$(id -u):$(id -g)" \
         -e IN_QUARTUS_DOCKER=1 -e HOME=/tmp \
         -e SEEDS -e FMAX_MIN -e SWEEP_ALL -e FIT_TIMEOUT -e NOTIFY_URL -e NOTIFY_SILENT \
+        -e GIT_BRANCH -e GIT_SHA -e GIT_DIRTY -e QUARTUS_DOCKER_IMAGE \
         -v "$repo":"$repo" -w "$repo" \
         "$image" "$self" "$@"
 }

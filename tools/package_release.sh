@@ -15,7 +15,8 @@
 # Options:
 #   --rbf PATH    core .rbf to bundle (default: newest releases/DVD_*.rbf, non-MARGINAL)
 #   --main PATH   MiSTer_DVDcss binary (default: main/.build/MiSTer_DVDcss)
-#   --out PATH    output zip (default: releases/MiSTer_DVD_v<CORE_VERSION>.zip)
+#   --out PATH    output zip (default: releases/MiSTer_DVD_<CORE_VERSION>.zip;
+#                 a dev build appends the .rbf date, e.g. dev-seekrealign_20260903)
 
 set -euo pipefail
 
@@ -39,7 +40,9 @@ done
 # Normalise "." / "" to "SD root".
 case "$RBF_DIR" in .|"") RBF_DIR="" ;; esac
 
-# Core version from the RTL, for the zip name (falls back to the date).
+# Core version from the RTL, for the zip name (falls back to the date). It now
+# carries its own sigil — "v0.4.0" on a release commit, "dev-<slug>" everywhere
+# else — so nothing here prepends a "v" (see dvd/emu.sv "VERSIONING").
 VER="$(sed -n 's/.*`define CORE_VERSION "\([^"]*\)".*/\1/p' "$REPO/dvd/emu.sv" 2>/dev/null | head -1)"
 [ -n "$VER" ] || VER="$(date +%Y%m%d)"
 
@@ -66,9 +69,20 @@ REGIONTOOL="$REPO/main/Scripts/set_dvd_region.sh"
 
 command -v python3 >/dev/null 2>&1 || { echo "!! 'python3' not found on PATH" >&2; exit 1; }
 
-[ -n "$OUT" ] || OUT="$REPO/releases/MiSTer_DVD_v${VER}.zip"
+# A release zip is MiSTer_DVD_v0.4.0.zip — version alone, since the tag pins the
+# rest. A DEV zip appends the .rbf's date, because a slug is reused across a
+# branch's whole life: "dev-seekrealign_20260903" is exactly what that build's
+# OSD shows ("DVD dev-seekrealign 260903"), so a tester quoting the OSD line
+# names one file and no other.
+case "$VER" in
+    dev-*) RBF_DATE="$(basename "$RBF" | sed -n 's/.*_\([0-9]\{8\}\)\(_[0-9]\{4\}\)\{0,1\}\.rbf$/\1/p')"
+           ZIPVER="${VER}${RBF_DATE:+_$RBF_DATE}" ;;
+    *)     ZIPVER="$VER" ;;
+esac
 
-echo "== packaging MiSTer DVD Player v${VER}"
+[ -n "$OUT" ] || OUT="$REPO/releases/MiSTer_DVD_${ZIPVER}.zip"
+
+echo "== packaging MiSTer DVD Player ${VER}"
 echo "   core : $(basename "$RBF")"
 echo "   main : $(basename "$MAIN_BIN")"
 
@@ -92,7 +106,7 @@ chmod +x "$STAGE/Scripts/dvd_report.py"
 
 RBF_SHOWN="${RBF_DIR:+$RBF_DIR/}$(basename "$RBF")"
 cat > "$STAGE/DVD_INSTALL.txt" <<EOF
-MiSTer DVD Player v${VER}
+MiSTer DVD Player ${VER}
 
 1. Extract this zip to the ROOT of your MiSTer SD card. If you copy files over the
    network (SSH/SFTP) instead of pulling the card, that root is /media/fat. You get:

@@ -6,8 +6,8 @@ Requires **Quartus 17.0.2 exactly** — newer versions break MiSTer project comp
 Either a native install or the pinned Docker image:
 
 ```bash
-./build_release.sh --compile --name DVD_myfeature              # native Quartus
-USE_DOCKER=1 ./build_release.sh --compile --name DVD_myfeature # pinned container
+./build_release.sh --compile              # native Quartus
+USE_DOCKER=1 ./build_release.sh --compile # pinned container
 ```
 
 The Docker path needs no local Quartus install — it re-executes inside
@@ -21,8 +21,14 @@ running as your own user so build artifacts stay yours.
     which looks like a completely different class of bug. The script always passes the
     compression flag and warns if the output looks too large.
 
-Every build should get a distinct `--name DVD_<feature>`; a date and time suffix is added
-automatically, so builds can be told apart on the SD card.
+Builds name themselves after the `dev-<slug>` in `CORE_VERSION` (`dvd/emu.sv`), with a date
+and time suffix added automatically, so they can be told apart on the SD card **and** match
+the version line the OSD shows. `--name` overrides it.
+
+A development build's version is the feature it came from, never a version number — the OSD
+reads `DVD dev-seekrealign 260903`. A bare semver appears in exactly one commit per release,
+so a build advertising `v0.4.0` can only have come from the v0.4.0 release commit.
+`build_release.sh` refuses to build if the two are mixed up.
 
 ## Simulation
 

@@ -2122,11 +2122,12 @@ giveaway for a bad pack). A correct compressed `.rbf` for this device is
 ./build_release.sh --name DVD_foo  # override the release base name
 ```
 
-**★ Always name builds uniquely (`--name`).** Every build MUST get a distinct,
-descriptive `--name DVD_<feature>` tied to the feature/branch (e.g.
-`--compile --name DVD_ilauto`) — never leave the generic default, which produces a
-meaningless name like `DVD_ps_demux_<date>.rbf` that collides across features and can't be
-told apart on the SD card. The date/time suffix is appended automatically.
+**★ Builds name themselves (`--name` is now optional).** A dev build's name defaults to
+the `dev-<slug>` in `` `CORE_VERSION `` — `dev-seekrealign` gives
+`releases/DVD_seekrealign_<date>_<time>.rbf` — so the OSD line, the `.rbf` and the zip all
+name the same thing without anyone remembering a flag. (This replaces the old "always pass
+`--name`" rule and the meaningless `DVD_ps_demux` default it existed to work around.) Pass
+`--name` only to override.
 
 The script always passes `-o bitstream_compression=on` and warns if the output
 exceeds ~4 MB. Copy the resulting `releases/*.rbf` to the SD card to load it.
@@ -2135,23 +2136,42 @@ exceeds ~4 MB. Copy the resulting `releases/*.rbf` to the SD card to load it.
 
 Two identifiers, deliberately at different granularities:
 
-- **`` `CORE_VERSION `` in `dvd/emu.sv`** — the series (`0.1b`), shown in the OSD as
-  ``v`CORE_VERSION` `BUILD_DATE` `` (e.g. `v0.1b 260825`). **Bump it the moment a release
-  is PUBLISHED, not when the next one is cut**, so no dev build ever advertises a version
-  that already exists on the releases page — that line is the only thing a bug report can
-  quote. Keeping the next version open also means the latest `.rbf` already matches the
-  tag when you decide to release, instead of forcing a rebuild (and a possible fitter
-  re-sweep) at release time.
-  **★ Corollary — check at the START of every feature branch (instituted 2026-08-26, by
-  user decision):** before building a new feature, verify `` `CORE_VERSION `` is AHEAD of
-  the latest published release (`gh release list`); if it still equals a published tag,
-  bump it as the branch's first commit. The point is that ANY feature build must be
-  publishable as-is as the next release — its version line already distinct from
-  everything on the releases page. This costs nothing extra in the seed lottery: a
-  feature branch changes the netlist anyway, and folding the bump into the branch means
-  ONE re-roll instead of a second one at release time. (The saved-settings `"v,N;"`
-  config version is a SEPARATE, coarser counter — bump that one only on an incompatible
-  `O[..]` relayout, see `docs/idle_screen.md`.)
+- **`` `CORE_VERSION `` in `dvd/emu.sv`** — shown in the OSD as
+  `` `CORE_VERSION` `BUILD_DATE` `` (e.g. `v0.4.0 260910`). **★ THE INVARIANT (revised
+  2026-09-04, by user decision):**
+
+  > A bare semver lives in **exactly one commit per release** — the release commit. Any
+  > build whose OSD shows `v0.4.0` came from that commit and no other.
+
+  | Where | `` `CORE_VERSION `` | OSD line |
+  |---|---|---|
+  | feature branch | `dev-<slug>` | `DVD dev-seekrealign 260903` |
+  | `main` between releases | `dev-main` | `DVD dev-main 260903` |
+  | the release commit, only | `v0.4.0` | `DVD v0.4.0 260903` |
+
+  Set `dev-<slug>` as the **first commit of a feature branch**, named after the feature.
+  `build_release.sh` **gates this mechanically** before the compile (so a wrong value costs
+  a second, not 40 minutes): a bare semver on a dev build and a `dev-` string on a
+  publishable `--release` build are both refused.
+  **⛔ This REPLACES the retired 2026-08-26 rule ("bump `` `CORE_VERSION `` to the
+  speculated next semver at the start of every feature branch").** That rule made every
+  pre-release test build advertise a version that did not exist yet: a build sent out for
+  testing showed `v0.4.0`, testers and the sessions reading their reports called it 0.4.0,
+  and the real 0.4.0 shipped far ahead of it. **Its stated payoff was illusory** — "the
+  latest `.rbf` already matches the tag, avoiding a rebuild and re-sweep at release time"
+  is only true if a release is cut from one branch's exact tree, and it never is: a release
+  is cut from `main` after N branches merge, so the release build is a fresh netlist and a
+  fresh seed decision regardless. Do not reinstate it.
+  **Two hard limits on the string**, both measured against stock Main and both enforced by
+  `build_release.sh`:
+  - **≤ 18 characters.** `menu.cpp`'s About screen (`MENU_ABOUT2`) truncates the whole
+    `"DVD <ver> <date>"` line at 30, and `"DVD "` + `" "` + `"260903"` already uses 12.
+  - **No `,` `;` `"`.** `CONF_STR` delimits entries on `;`, and `user_io.cpp`'s `p[0]=='V'`
+    arm calls `substrcpy(...,1)`, which splits on commas — either character **silently
+    truncates** the version rather than failing.
+
+  (The saved-settings `"v,N;"` config version is a SEPARATE, coarser counter — bump that
+  one only on an incompatible `O[..]` relayout, see `docs/idle_screen.md`.)
   **★ HOW FAR to bump (instituted 2026-08-31, by user decision — the rule existed only
   as precedent until someone had to ask):**
   - **patch** (`0.2.0` → `0.2.1`) — bug fixes, doc-only changes, internal rework with no
@@ -2168,15 +2188,56 @@ Two identifiers, deliberately at different granularities:
   ⚠ Judge the bump against the WHOLE unreleased delta on `main`, not just the branch in
   hand — several patch-looking merges can add up to a minor release.
 - **`BUILD_DATE`** — `yymmdd`, regenerated per compile by `sys/build_id.tcl`. ⚠ Do NOT
-  extend it with a time or a git SHA to separate same-day builds: it is part of
-  `CONF_STR`, hence part of the netlist, so every compile would become a new netlist and
-  re-roll the fitter seed lottery (see `DVD.qsf`'s seed ledger). Same-day dev builds are
-  told apart by their `build_release.sh --name` filename, which already carries
-  `<date>_<time>`.
+  extend it with a time or a git SHA to separate same-day builds. Same-day dev builds are
+  told apart by their `build_release.sh --name` filename (which carries `<date>_<time>`),
+  and a second build sent to testers on one day appends a digit to the slug
+  (`dev-seekrealign2`).
+  ⚠ `BUILD_DATE` is generated **inside the Quartus container, in UTC**, while the `.rbf`
+  filename comes from `date` wherever the pack ran. They agree when both run under
+  `USE_DOCKER=1`; a native pack of a container-built `.sof` can straddle UTC midnight and
+  disagree by a day. That is why the release workflow warns rather than fails on it.
 
-Publishing (GitHub, `gh`): tag `v<version>-<yyyymmdd>` (the first release was
-`v0.1a-20260825`), title `<version> (<date>) — <headline>`, attach the **timing-clean**
-`.rbf` only — never a `_MARGINAL_` one. Then bump `` `CORE_VERSION `` in the same session.
+**⚠ BOTH `` `CORE_VERSION `` AND `BUILD_DATE` ARE INSIDE `CONF_STR` = INSIDE THE NETLIST.**
+Either one changing re-rolls `DVD.qsf`'s pinned fitter `SEED` — measured, not theoretical:
+the ledger records `"0.1a"`→`"0.1b"` alone dropping SEED 8 below the hot-corner gate. So
+`` `CORE_VERSION `` may change **once per branch** (free — the branch changes the netlist
+anyway) and **never per commit**. Never derive either from a git SHA, a branch name read at
+build time, or a timestamp: every compile would become a new netlist, and the seed ledger's
+hand-written measurements would stop describing the thing that was built.
+
+**Publishing** — see `.claude/skills/release/SKILL.md`. It is the single source of truth
+for the tag format, the asset list and the draft→smoke-test→publish flow; this file
+deliberately does not restate it, because the copy that used to live here went stale (it
+still described the retired `v<version>-<yyyymmdd>` tag scheme long after v0.2.0 moved to
+plain semver). In outline: build the core locally, `tools/publish_draft.sh v<semver>`
+creates the draft and dispatches `.github/workflows/package.yml`, which validates the core
+and attaches the Main + install zip; flash and smoke-test the draft; then publish.
+
+### Sending a build to testers
+
+Pre-release builds go out to testers directly (Discord); they are deliberately **not**
+GitHub releases, so the releases page shows only real releases. Traceability comes from the
+version string instead — two commands, no flags:
+
+```bash
+USE_DOCKER=1 ./build_release.sh --compile     # --name defaults to the dev-<slug>
+USE_DOCKER=1 ./main/build_main.sh             # only if the Main also changed
+./tools/package_release.sh                    # -> MiSTer_DVD_dev-<slug>_<date>.zip
+```
+
+The OSD line, the `.rbf` name and the zip name all carry the same slug and date, so a report
+saying *"I'm on dev-seekrealign 260903"* names exactly one build:
+
+| | |
+|---|---|
+| OSD | `DVD dev-seekrealign 260903` |
+| `.rbf` (inside the zip, name unchanged for MiSTer's core browser) | `DVD_20260903.rbf` |
+| zip | `MiSTer_DVD_dev-seekrealign_20260903.zip` |
+| `dvd_report` bundle manifest | `core_version: "dev-seekrealign 260903"` |
+
+Sending a **second** build from the same branch on the same day: append a digit to the slug
+(`dev-seekrealign2`), or the two are indistinguishable in the OSD. The `.rbf.json` beside
+each pack records the exact commit, seed and timing if a build ever needs identifying later.
 
 > **Always build after completing a requested feature.** When an RTL/feature change is
 > finished (committed, PR opened), run `./build_release.sh --compile` to produce a fresh
@@ -2282,6 +2343,12 @@ long markdown with backticks and checklists does not survive shell quoting relia
 ```bash
 gh pr merge <number> --merge        # or --squash / --rebase
 ```
+
+**★ After the merge, reset `` `CORE_VERSION `` to `"dev-main"`** in `dvd/emu.sv` on `main`
+(a one-line commit) if the merged branch left its own `dev-<slug>` there. Otherwise a build
+made from `main` advertises the last-merged feature's slug while containing much more than
+that feature. It costs nothing: `main` is not compiled between merges, so the netlist change
+is absorbed by whichever build comes next. See "Versioning and publishing releases".
 
 ### Updating a PR description
 
