@@ -326,8 +326,10 @@ worse maintenance burden than targeted in-place edits. So:
   is NOT from this branch. ⚠ **First seen on PAL and recorded here as PAL-only; that was
   WRONG — it reproduces on NTSC (2026-09-03), which is what disproved the `pal_eff`-only
   hypothesis and pointed at the standard-neutral cause.** Now **🔧 FIXED (issue #42,
-  branch `fix/mode-switch-realign`), sim-proven RED/GREEN, ⏳ HW-confirm pending** — see
-  the mode-switch re-align bullet below and `docs/single_raster_analog.md` §6.
+  branch `fix/mode-switch-realign`), ✅ HW-CONFIRMED 2026-09-03** — see the
+  mode-switch re-align bullet below and `docs/single_raster_analog.md` §6.
+  (Marker corrected 2026-09-04: this still read "⏳ HW-confirm pending" after the
+  bullet below had already recorded the hardware confirmation.)
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
@@ -566,9 +568,9 @@ worse maintenance burden than targeted in-place edits. So:
   Measured, not asserted: 4 starvation events cost **4** repeated fields with the shipped
   corrector, **0** with the gate and **0** with the corrector off. Detail:
   `docs/field_parity.md`.
-- 🔧 **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02, branch
-  `feature/video-output-consolidation`) — sim-proven (RED/GREEN), ⏳ HW-confirm pending
-  (gate = the two CRT field reports below reproduce clean).** Two CRT field reports
+- ✅ **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02,
+  PR #37) — ✅ HW-CONFIRMED (rounds 1-2 recorded further down this bullet; the
+  field-parity half was then repaired and re-confirmed by PR #44).** Two CRT field reports
   (SuperStationOne→YPbPr→Sony CRT; a second user on The Shining) exposed (a) the weave
   analog path "extremely wobbly" = the known caveat-2 pairing defect, and (b) Native
   Fields going "super aliased" after chapter skip/FF/aspect changes, healed only by
@@ -1650,9 +1652,21 @@ worse maintenance burden than targeted in-place edits. So:
   lookups (1×R=`fwda[3]`, 3×R=`fwda[2]`, 1×U=`fwda[1]`, 2×U=`fwda[0]`) instead of
   compounding the 10 s entry; it hands the target to a new **jump mode in
   `dvd/scrub_ctrl.sv`**, reusing the title-span clamp, the seek bar and the one proven
-  `seek_rbn` issue. Raw VCD/SVCD has no DSI and uses the exact CD geometry instead
-  (75 sectors/s × 2352 B ÷ 2048 = **861 blocks per 10 s**); flat `.mpg`/`.VOB` is
-  deliberately inert. **⚠ Default Off ON PURPOSE** — the 2026-07-28 decision to move
+  `seek_rbn` issue. Non-DVD sources have no DSI and take the step from the
+  **`lin_blk10` port** (`dvd/lin_rate.sv`, 2026-09-03): a raw VCD/SVCD image uses the
+  exact CD geometry (75 sectors/s × 2352 B ÷ 2048 = **861 blocks per 10 s**, a
+  combinational bypass so that path is structurally unchanged), and a flat
+  `.mpg`/`.VOB` uses a rate **measured from the stream's own PTS against blocks
+  consumed** — that was **issue #39** (the D-pad did nothing on a `.mpg`; the one
+  blocking term was `emu.sv`'s `.lin_mode` ANDed with `raw_mode_w`). Bare `.m2v` stays
+  inert **structurally, not by policy** (no packs ⇒ `saw_pack` never asserts ⇒
+  `lin_seek_ok` is 0, which blocks FF/REW too). Same measurement also gives linear
+  modes their first **HUD clock** (they read `0:00:00` before). ★ The rate is DIVIDED,
+  not scaled by a shift: a window closes on the first PTS sample past its length and
+  samples are a picture apart, so a fixed scale would bake the overshoot in as a
+  systematic over-estimate. ⚠ Reset domain is `reset_n`, never `pipe_rst_n` — the
+  estimate must survive the seeks it enables. Detail: `docs/vcd_svcd.md` §3a.
+  **⚠ Default Off ON PURPOSE** — the 2026-07-28 decision to move
   seeking OFF the D-pad (game DVDs play seekable video while expecting directional input)
   becomes CONDITIONAL, not wrong; it is also suppressed by `menu_nav`/`in_title_menu`.
   ★ **THE STALE-TABLE TRAP** it had to guard is worth knowing beyond this feature:
@@ -1669,6 +1683,62 @@ worse maintenance burden than targeted in-place edits. So:
   `bench/dvd/dpad_seek_tb.sv` (24 scenarios incl. the trap), `scrub_ctrl_tb` T9–T12,
   `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
   **`docs/dvd_nav.md` §2b**.
+- ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
+  `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build
+  `DVD_timeline_20260904_0059.rbf`, SEED 5 first roll, clk_dec 94.06/93.11).
+  ★ **HW round 1 found a REAL bug the sim could not: the timeline read 1.6× SHORT on
+  some discs** — `seek_time` bracketed each position between CONSECUTIVE cells'
+  first_sectors, but a PGC's cells can sit anywhere in the VOBS with large UNPLAYED
+  gaps between them. AFTER_EARTH VTS_13 PGC1: cell 0 is RBN 142..172,843 holding all
+  532 s, cell 1 a 142-sector 0 s stub at 278,540 — **172,702 played sectors in a
+  278,540 span, 1.612**. Reported readings reproduced to the second (a scrub showing
+  0:00:22 landed at 0:00:34; 0:02:42 at 0:04:33). Fixed: a cell's span is its OWN
+  `first..last` (the reader streams `cellf_last` on its own strobe — last_sector is
+  known only at cell byte 23), a target inside a gap clamps to that cell's end time,
+  and the fraction went 8 → **14 bits** with rounding (8 bits cost 28 s inside a
+  single-cell two-hour title). ⚠ **I had documented that exact case as "an
+  approximation; for a preview it is immaterial" — written from reading the format
+  rather than measuring a disc.** ⚠ **And the first re-check measured the WRONG VTS**
+  (the largest-VTS heuristic names VTS_05, which has no gaps; the title that actually
+  loads is VTS_13, which the core's own `O[2]` debug readout names in one glance —
+  `CH 1/13` = PGCN 1, VTS 13). Ask the core what it is playing before analysing a disc.
+  ⚠ **Seamless-branch discs are STILL wrong and it is a SEEK bug, not a readout one —
+  issue #49**, see the note further down.
+  (1) **`dvd/seek_time.sv`**: the HUD clock showed the live playhead only, so it sat
+  FROZEN through every seek while the seek bar's cursor travelled. Two causes, one
+  symptom — a held FF/REW asserts `hold_freeze` → the governor stops → DSI packets stop
+  → `dsi_c_eltm` coasts and `cell_i` cannot move; a chapter burst does not pause at all
+  and simply does not seek until its ~500 ms debounce closes. `seek_bar` had already
+  fixed this for the CURSOR; this fixes the number, from the same maps. Three sources:
+  the D-pad's own signed MM:S0 delta (⚠ `pend_sec` is **tens** of seconds), a chapter's
+  authored start via `pmap→cell_start` (exact), and per-cell interpolation of an RBN.
+  ⛔ Scaling the title total by the bar's 0..512 fraction was REJECTED — constant-bitrate
+  across a whole title means the number visibly jumps by minutes when a VBR seek lands.
+  ★ Everything is BINARY SECONDS until the last step because `bcd_time_add` has no
+  subtract; the reader now carries a binary prefix sum beside its BCD one (`cellf_secs`,
+  `title_secs_o`). Design: `docs/transport_hud.md` "Preview clock".
+  (2) **Scrub ramp relaxed** (user report: "it ramps up too fast"): the old
+  `{10,8,6,5}` / 0-1.5-3-5 s ladder moved ~2 MINUTES of a 2 h title per second even in
+  tier 0 — no fine-positioning tier existed and 5 s of holding crossed 77 minutes. Now
+  `{12,10,8,6}` / 0-2-4.5-8 s, and the ladder is `SH0..SH3` PARAMETERS rather than a
+  hardcoded ternary, pinned by `scrub_ctrl_tb` T13–T15 so a retune is deliberate.
+  ⚠ A retune must also move `dvd/dpad_seek.sv`'s header, `docs/dvd_nav.md` §2a and
+  `docs/transport_hud.md` — the numbers are quoted in all four.
+  ⚠ **SEAMLESS-BRANCH DISCS ARE STILL WRONG and it is NOT the readout — it is the
+  SEEK.** The 2026-09-03 cell-gap fix (a cell's span is its own `first..last`, not
+  the distance to the next cell's first — AFTER_EARTH VTS_13 PGC1, 1.612× short,
+  ✅ HW-confirmed good afterwards) does NOT cover ALIEN_VS_PREDATOR_SE: **23 of its
+  66 cells are interleaved** (seamless branching), so a cell's sector range holds
+  the other branch's ILVUs and the cells compute at 885–1679 sectors/s against a
+  ~600 ceiling. Worse, a raw-RBN seek into that space can resolve to the WRONG
+  BRANCH — the live clock reading "a couple of seconds in" when playback is much
+  further means `cell_i` is wrong, i.e. playback resumed in the wrong cut. ⚠ ILVU
+  *playback* is HW-confirmed (PR fj#112); ILVU *seeking* never was. Detail and the
+  starting point: `docs/dvd_nav.md` §2e.
+  ⚠ **Trick play (continuous 2×/4×) is a SEPARATE feature and is NOT this**: it must be
+  flush-FREE (a jump per VOBU is the regime HW rounds 1–2 of the scrub proved fatal), so
+  it needs an I-frame-only VOBU splice in the reader. `dsi_1stref_ea` is already parsed
+  and currently unconnected/dead-stripped. See `docs/dvd_nav.md` §2d.
 
 ---
 

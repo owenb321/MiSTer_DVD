@@ -136,15 +136,94 @@ branch restarts the single-extent stream at the target:
 emu: transport gates widened `cell_ready` → `(cell_ready || lin_seek_ok)`; the
 scrub/seek-bar playhead muxes to the reader's linear block; the linear title span
 (0..total_blocks−1) publishes on `title_first/last_rbn`. Chapters/angles stay
-DVD-only. HUD time shows 0:00 in linear modes (no DSI timecodes — see limitations).
+DVD-only. HUD time used to show 0:00 here — **it no longer does; see §3a**.
 
-**D-Pad Seek (`O[45]`, 2026-08-27)** works on **raw** images too, without any DSI: a
-CD is a fixed **75 sectors/s** of 2352 B and the reader's linear `seek_rbn` unit is a
+**D-Pad Seek (`O[45]`, 2026-08-27)** works on **raw** images without any DSI: a CD is
+a fixed **75 sectors/s** of 2352 B and the reader's linear `seek_rbn` unit is a
 2048-byte **file block**, so `75·2352/2048 = 86.13 blk/s` → **10 s = 861 blocks**,
-60 s = 6×861. Constants, no divider (`dvd/dpad_seek.sv` `LIN_10S`); `lin_blk` is the
-base. Exact for VCD's CBR mux; approximate on VBR SVCD. A flat `.mpg`/`.VOB` has no
-derivable byte rate, so the D-pad is **deliberately inert** there — the Fast Fwd /
-Rewind span-relative scrub still covers it. See `docs/dvd_nav.md` §2b.
+60 s = 6×861. Exact for VCD's CBR mux; approximate on VBR SVCD. `lin_blk` is the base.
+It used to be **inert on a flat `.mpg`/`.VOB`** for want of a derivable byte rate —
+**that was issue #39, and §3a is the fix.** See also `docs/dvd_nav.md` §2b.
+
+## 3a. Linear rate estimate + HUD clock — `dvd/lin_rate.sv` (2026-09-03, issue #39)
+
+Two products from one measurement, for every linear source:
+
+1. **`blk10`** — blocks per 10 s of file, the step `dvd/dpad_seek.sv` takes on its
+   `lin_blk10` port to turn "+10 s" into a raw-RBN target. `LIN_10S` is gone from
+   that module; 861 has exactly one home now.
+2. **`cur_time` / `total_time` / `prev_time`** — the elapsed, total and seek-preview
+   clock the transport HUD reads. Before this, `.mpg`, `.VOB` and VCD/SVCD all showed
+   `0:00:00/0:00:00`.
+
+**Raw VCD/SVCD is a combinational bypass, not a measurement.** `raw_mode` routes the
+`BLK10_RAW = 861` constant straight out with no FSM and no reset dependency, so
+`dpad_seek` sees the identical value with the identical timing it saw when 861 was a
+parameter inside it. That is deliberate: it makes the module a *structural* no-op on
+the one linear path that already worked, which is the whole VCD/SVCD regression story.
+
+**Why PTS against blocks, and not a wall clock.** A flat file has no seek tables and
+no fixed geometry, so its rate must be measured. Both `lin_blk` (the reader's fetch
+front) and `ps_demux.vid_pts` (the demux's parse front) are *stream positions*, and
+the reader's cache is 16 KB = 8 blocks, so they never separate by more than that.
+Buffer fill, pause, STD backpressure and governor drops therefore move the two fronts
+**together**, and their ratio stays the true file rate through every one of them — no
+gating needed, and the estimate arms in far less wall time than its window suggests
+because a startup burst advances PTS fast. A `sec_tick` block count would need
+explicit gating against each of those and would inherit the display governor's own
+rate error.
+
+**Windows.** `WIN_ARM = 45_000` ticks (0.5 s) so the D-pad is usable almost
+immediately after a load, then `WIN_REF = 720_000` (8 s) for stability, smoothed by a
+shift-only EMA (`x - x>>2 + m>>2`). A window is rejected — and the estimate kept — if
+the PTS goes backwards, jumps more than `PTS_MAX` (20 s), the playhead goes backwards,
+or the block delta exceeds `DBLK_MAX`; a published figure must also land inside
+`[BLK10_MIN, BLK10_MAX]` (~20 KB/s … ~2.4 MB/s).
+
+**The ratio is divided, not scaled by a shift.** A window closes on the first
+`vid_pts` sample at or past its length, and samples are one picture apart (~3003
+ticks), so `d_pts` *overshoots* — by up to 6.7 % of the 0.5 s arm window. Scaling
+`d_blk` by a fixed factor would bake that in as a **systematic** over-estimate of the
+rate. Dividing by the measured `d_pts` costs one pass of a serial engine the clock
+needs anyway, and is exact. That engine (multiply by a 20-bit constant, then a
+restoring divide, then seconds→BCD by repeated subtraction) serves all four jobs; the
+module holds no arrays and uses no `*`, `/` or `%` operator.
+
+⚠ **Reset domain: `reset_n`, never `pipe_rst_n`.** `pipe_rst_n` pulses on
+`load_flush`, which is exactly what a D-pad seek causes — on that domain the estimate
+would be wiped by every jump and the next tap refused, the same trap `dpad_seek`'s own
+`reset_n` comment exists to avoid. `flush` restarts only the measurement *window*
+(the position jumped; the file's rate did not); only `mount` clears the estimate.
+
+⚠ **The first-arm trigger must be an EDGE.** As a level (`blk10_ok && !tot_seen`) it
+re-raised the elapsed-time request every cycle until the total resolved, and since
+elapsed outranks total the total never reached the engine — so `time_ok` never rose
+and the clock simply never appeared. Gated by `lin_rate_tb` T8.
+
+⛔ **Rejected, so nobody re-proposes them:** `program_mux_rate` from the pack header
+(needs surgery in `ps_demux`, the module every DVD, VCD and flat path runs through; it
+is the *peak* rate on VBR so every jump would undershoot; MPEG-1 and MPEG-2 packs put
+it at different offsets and widths); SCR (same objection, buys nothing); a `sec_tick`
+wall clock (above); PTS-derived *elapsed* for the clock (exact even on VBR, but it
+would disagree with a rate-derived seek bar and a rate-derived ±10 s jump — on a VBR
+file a "+10 s" would move the clock by something other than 10 s, which reads as
+broken; one model keeps clock, bar and D-pad coherent, and coherence is worth more
+here than absolute accuracy).
+
+**Accuracy, stated honestly.** The clock is a rate *model*, not a decoded timecode. On
+a bursty VBR file the elapsed reading drifts against real time within the file, and a
+"+10 s" can land ±20 % out; it always agrees with the seek bar and with a D-pad jump,
+by construction. It also **leads the picture by the decoder VBUF (~1–3 s)** because
+`lin_blk` is the reader's fetch front — the same characteristic the DVD `c_eltm`
+readout has. A stream whose video is not `stream_id 0xE0` never asserts
+`vid_pts_valid`, so it never arms: the D-pad stays inert and the clock stays 0, i.e.
+exactly the old behaviour. An `aud_pts` fallback is cheap but deliberately not built
+(area, and mixing two PTS timelines into one window adds error). `total_time` on a raw
+CD image is file-length based, so a single-bin image with a leading ISO track reads
+slightly long.
+
+Gate: `bench/dvd/lin_rate_tb.sv` (13 tests, stimulus is a stream model, mutation-proven
+against nine targeted RTL faults) under `bench/dvd/run_dpad_seek.sh`.
 
 ## 4. Tests
 
@@ -167,12 +246,17 @@ goldens against `ffmpeg -c copy` at generation time. Plus: `crt_ov_map_tb`,
 - **23.976-coded NTSC film VCDs play ~25 % fast**: MPEG-1 has no repeat_first_field,
   so the film detector cannot see them and the governor shows every frame for 2
   refreshes. Rare; revisit if a real disc surfaces (would key on frame_rate_code).
-- **HUD time blank/zero in linear modes** (no DSI). A VCD-only elapsed clock from the
-  75-sector/s CBR geometry is a possible follow-up; SVCD is VBR. (That same geometry
-  *is* already used for `O[45]` D-Pad Seek — exact on VCD, and on a max-rate SVCD a
-  10 s jump can fall short by up to ~2× because the mux is VBR.)
-- **D-Pad Seek is inert on flat `.mpg`/`.VOB`** — no derivable byte rate. Raw `.bin`
-  (VCD/SVCD) and DVD titles are covered; use Fast Fwd/Rewind on flat files.
+- ~~**HUD time blank/zero in linear modes**~~ — **FIXED 2026-09-03** by `dvd/lin_rate.sv`
+  (§3a). It is an estimate from the file's measured rate, not a decoded timecode: on a
+  bursty VBR file it drifts against real time within the file, and it leads the picture
+  by the decoder VBUF (~1–3 s).
+- ~~**D-Pad Seek is inert on flat `.mpg`/`.VOB`**~~ — **FIXED 2026-09-03 (issue #39)**,
+  same module. The residual caveat is accuracy, not availability: a 10 s jump on a
+  bursty VBR file can land ±20 % out, and on a max-rate SVCD the fixed CD geometry can
+  still fall short because the mux is VBR.
+- **Bare `.m2v` is still linear-only** — and structurally so, not by policy: no packs
+  means `ps_demux.saw_pack` never asserts, so `lin_seek_ok` is 0 and neither the D-pad
+  nor Fast Fwd/Rewind engage. See `docs/dvd_nav.md` §2b for what enabling it would take.
 - **EOF tail**: the final partial 2048-block may emit a few stale in-window bytes —
   end-of-play junk, harmless.
 - IEC 61937 MP2 passthrough unchanged (passthrough mode silences MP2, as on DVD).

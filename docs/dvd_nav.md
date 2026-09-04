@@ -1269,9 +1269,20 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   (`dvd_audio_decode.pause` + drain-watchdog freeze). This is the *same* stable hold as a manual
   pause (the watchdog is suppressed the whole time), so there is no re-lock/watchdog problem.
 - **Accumulate** = on the press edge it latches `base_rbn = cur_rbn` (the live playhead
-  `dsi_nv_pck_lbn`); every ~0.06 s tick it adds a **tier-scaled** step `span >> {10,8,6,5}`
-  sectors (tier 0→3 by hold time 0/1.5/3/5 s) to a signed offset, capped at the title span. A
+  `dsi_nv_pck_lbn`); every ~0.06 s tick it adds a **tier-scaled** step `span >> {12,10,8,6}`
+  sectors (tier 0→3 by hold time 0/2/4.5/8 s) to a signed offset, capped at the title span. A
   direction flip restarts the accumulation the other way.
+  ⚠ **The ladder and the dwells are `scrub_ctrl` parameters (`SH0..SH3`, `T1..T3`), and they
+  were relaxed on 2026-09-03** after a user report that the scrub "ramps up too fast". The
+  original `{10,8,6,5}` / 0-1.5-3-5 s ladder moved ~2 **minutes** of a 2 h title per second
+  even in tier 0 — there was no fine-positioning tier at all, and 5 s of holding crossed 77
+  minutes. The shipped ladder gives ~29 s → 2 min → 7.8 min → 31 min per second held, and the
+  far end of a 2 h film is ~11 s of holding away. Steps are span-RELATIVE, so the feel is the
+  same fraction-of-title on a 5-minute clip and a 3-hour epic — keep it that way. Pinned by
+  `scrub_ctrl_tb` T13 (the ladder, MEASURED off `bar_tgt_rbn` rather than read out of the
+  DUT), T14 (the tier boundaries) and T15 (the shipped default parameters, so a retune is
+  deliberate). A retune must also move `dvd/scrub_ctrl.sv`'s header, `dvd/dpad_seek.sv`'s
+  header and `docs/transport_hud.md`.
 - **Release** = `target = clamp(base_rbn ± offset, first, last)`; if anything accumulated it
   pulses **one** `seek_rbn` (the reader's `S_RBN_SCAN` finds the containing cell). A sub-tick
   tap accumulates nothing → no-op.
@@ -1371,11 +1382,34 @@ playback, watchdog resync — see §2a). The debounce shape is the chapter-skip 
 Unlike the scrub, a D-pad tap does **not** freeze video (an instantaneous hop has nothing to
 freeze for, and the chapter-skip precedent doesn't either).
 
-**Non-DVD content.** Raw VCD/SVCD `.bin` has no DSI, but a CD is a fixed 75 sectors/s of
-2352 B and the reader's linear `seek_rbn` unit is a 2048-byte **file block**, so
-`75·2352/2048 = 86.13 blk/s` → **10 s = 861 blocks** (exact for VCD's CBR mux; approximate on
-VBR SVCD). Flat `.mpg`/`.VOB` has no derivable rate and is **deliberately inert** on the
-D-pad — B10/B11 still scrub it.
+**Non-DVD content — ✅ ALL LINEAR SOURCES WITH PACKS, since 2026-09-03 (issue #39).** There
+is no DSI outside a DVD title, so `lin_mode` takes its step from the **`lin_blk10` port**
+(blocks per 10 s of file) instead of a constant. `dvd/lin_rate.sv` supplies it:
+
+- **Raw VCD/SVCD `.bin`** — a CD is a fixed 75 sectors/s of 2352 B and the reader's linear
+  `seek_rbn` unit is a 2048-byte **file block**, so `75·2352/2048 = 86.13 blk/s` →
+  **10 s = 861 blocks**. Exact for VCD's CBR mux, approximate on VBR SVCD. This is a
+  *combinational bypass* in `lin_rate` — the same constant with the same timing it had when
+  it was `dpad_seek`'s own `LIN_10S` parameter, so the path that already worked is
+  structurally unchanged.
+- **Flat `.mpg` / directly-selected `.VOB`** — the rate is **measured** from the stream's own
+  PTS against blocks consumed. This was issue #39: the D-pad was inert here for want of a
+  derivable rate, and the one blocking term was `emu.sv`'s `.lin_mode` being ANDed with
+  `raw_mode_w`. Design, windows, rejection rules and the accuracy caveat:
+  **`docs/vcd_svcd.md` §3a**.
+- **Bare `.m2v`** — still inert, and **structurally so rather than by policy**: an elementary
+  stream carries no packs, so `ps_demux.saw_pack` never asserts, `lin_seek_ok` is 0, and
+  *neither* the D-pad *nor* B10/B11 engage. Enabling it is a real piece of work, not a flag:
+  the post-seek hunt would have to target `00 00 01 B3` (a sequence header) instead of the
+  pack code so the decoder has somewhere to re-lock, and the rate would need a source with no
+  PTS available — either `bit_rate` exported out of `rtl/mpeg2/vld.v` (parsed at `vld.v:293`,
+  currently consumed by nothing) or wall-clock block counting. Deliberately deferred; `.m2v`
+  is an ffmpeg-extraction debug format, not something users load.
+
+Note that the step is a **rate**, so a flat-file jump is only as good as the rate model: on a
+bursty VBR file a "+10 s" can land ±20 % out. `emu.sv` gates `lin_mode` on the estimate being
+valid, so a tap in the ~0.5 s before it arms does nothing rather than firing a jump resolved
+against nothing.
 
 **Conflict containment.** The D-pad is taken **only** where the nav layer has not claimed it:
 `menu_nav` (disc menu) and `in_title_menu` (in-title game menu) both suppress it, exactly like
@@ -1494,6 +1528,82 @@ why `still_active` has to be excluded explicitly: a re-align would otherwise fir
 
 Design + the RED/GREEN evidence: `docs/single_raster_analog.md` §6. Suite:
 `bench/dvd/run_mode_realign.sh`.
+
+### 2d. Trick play (continuous 2×/4×/… playback) — ❌ NOT BUILT, and NOT a variation on seeking
+
+Recorded 2026-09-03 so the next session starts from facts. Everything above **repositions**
+the reader and lets the flush contract re-lock; trick play must do the opposite — never flush
+at all — and that is why it is a separate feature rather than another seek mode.
+
+**Scaffolding that already exists** (check the map report after wiring any of it):
+
+- `dvd/nav_dsi.sv` already parses **`dsi_1stref_ea`** — the end of each VOBU's first reference
+  picture, i.e. the I-frame-masking field a trick mode needs (`nav_dsi.sv:51`; the comment
+  says exactly that). It is **unconnected in `emu.sv`** and therefore dead-stripped today.
+  Wiring it back will resurrect logic, exactly as re-wiring `dsi_tbl_raddr` did for D-Pad Seek
+  — that one showed `nav_dsi` at **16 ALMs / 0 memory bits** in the fit report beforehand.
+- The decoder's upstream `REG_WR_TRICK` register carries `repeat_frame[9:5]` + `persistence`
+  and is already used to hold a picture during pause — the native hook for showing each
+  I-frame for N refreshes.
+- `dvd/transport_hud.sv` already renders a `►►×n` tier, and `dvd/scrub_ctrl.sv` already owns
+  FF/REW with an acceleration tier.
+
+**The hard constraint.** The splice must be **flush-free**. `dvd/dpad_seek.sv`'s header
+records that a jump per VOBU is "exactly the rapid flush/re-lock regime that HW rounds 1–2 of
+the scrub proved fatal (mostly-black playback + watchdog resync)" — so the reader must deliver
+`[nv_pck_lbn .. +1stref_ea]` per VOBU and splice VOBUs back to back into **one continuous
+bitstream** (every splice is a pack boundary, so `ps_demux` is fine), with `av_sync`
+free-running and audio muted. Reverse uses `bwda`/`prev_vobu` the same way. It is **DVD-only**:
+flat and VCD sources have no DSI and would need GOP-header scanning instead.
+
+It also carries a UX decision — whether hold-FF *becomes* trick play or the proven
+scrub-to-target keeps B10/B11 — and it needs its own HW round.
+
+### 2e. Seamless-branch discs break the position→time map — ❌ OPEN (2026-09-03)
+
+Recorded from a field report on `ALIEN_VS_PREDATOR_SE_DISC1` after the cell-gap
+fix (§2d/`docs/transport_hud.md`) resolved the simpler case. **This is a
+different defect and it affects SEEKING, not just the readout.**
+
+**Measured** (`tools/iso_nav_check.py` + a direct IFO walk of VTS_03 PGC1):
+
+- 66 cells, monotonic, non-overlapping, only 2.7 % gaps — so the §2d gap fix
+  does **not** cover it.
+- **23 of the 66 cells have the `interleaved` bit set** (cell category `0x0c` /
+  `0x0e`, bit 2 of playback byte 0). The disc is a seamless-branch title:
+  theatrical and extended cuts share sectors, interleaved in ILVUs.
+- Consequence: an interleaved cell's `first…last` range **contains the other
+  branch's ILVUs**, so `last − first` overstates its played sectors. Those cells
+  compute at **885–1679 sectors/s against a DVD ceiling of ~600**, a 12.7× spread
+  across the title. Any RBN→time model that trusts the cell extent is wrong there
+  by roughly the interleave factor.
+
+**Two distinct problems, and the second is the important one:**
+
+1. *The preview interpolates over sectors that are not the cell's.* Bounded and
+   cosmetic. Cheap mitigation if wanted: the reader already parses the category
+   byte into `cell_cat_mem`, so `seek_time` could refuse to interpolate inside an
+   interleaved cell and report the cell boundary instead of a confidently wrong
+   time. Exact interpolation needs ILVU-level knowledge (the DSI carries ILVU
+   pointers, parsed by `nav_dsi`).
+2. **A raw-RBN seek into an interleaved region can resolve to the wrong branch.**
+   Field report: "seeking back and forth I can get it in a state where the live
+   timeline reports a couple of seconds in when it's really much further". The
+   live clock is `cur_cell_start + dsi_c_eltm`, which is EXACT when `cell_i` is
+   right — so a wrong readout there means the reader's RBN→cell scan
+   (`S_RBN_SCAN`) landed on the wrong cell, which means playback itself resumed
+   in the wrong branch. ⚠ Note the asymmetry: normal ILVU **playback** is
+   HW-CONFIRMED (PR fj#112, see "Seamless-branch interleaved blocks" below)
+   because it follows the DSI's ILVU pointers. Raw-RBN **seeking** into that
+   space is a different path and was never covered.
+
+**Where to start:** `S_RBN_SCAN` (`dvd_iso_reader.sv` ~3714-3766) and the
+`seek_is_rbn` landing contract in §2a. The likely shape is that a seek target
+inside an interleaved block must be snapped to an ILVU boundary of the branch
+being played, the way `S_NAV_SEEK` already snaps a scrub target to the next NAV
+pack. ⚠ That is the reader's seek path — the boot path for every disc — so it
+wants the full 33-testbench gate and its own HW round, not a rider on a readout
+fix.
 
 ### HW status — ✅ CONFIRMED (PR fj#96)
 

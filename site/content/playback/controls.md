@@ -43,7 +43,8 @@ once, Menu behaves exactly as the disc specifies.
 
 **B2 / B3** step chapters. **B10 / B11** (`Fast Fwd` / `Rewind`) tapped step forward and back; **held**, they
 scrub — a seek bar appears showing where you are and where you will land, and the seek
-happens when you release.
+happens when you release. The target accelerates the longer you hold, so a brief hold nudges
+you along and a long one crosses the whole disc.
 
 **B9 (Display)** toggles the status line — the elapsed/total time and chapter readout along
 the bottom. It also appears by itself for a couple of seconds whenever something changes.
@@ -92,10 +93,20 @@ That coalescing is the whole design: one seek per gesture, however long. Seeking
 tap would mean a flush and re-lock per press, which is a regime that does not survive
 rapid input.
 
+!!! info "Unreleased"
+    Seeking on flat `.mpg`/`.VOB` files, and the gentler acceleration curve on the
+    Fast Fwd/Rewind scrub, are in development builds; not in v0.3.0.
+
 On a DVD the targets come from the **disc's own seek tables**, so they land on real frame
 boundaries rather than approximate byte offsets. On a VCD/SVCD, exact CD geometry is used
-instead. Flat `.mpg` and `.VOB` files are deliberately inert here — they have no seek
-tables to consult.
+instead. On a flat `.mpg` or `.VOB` there is neither, so the player measures how fast the
+file is playing and jumps by that — accurate on a steady-bitrate file, and on a very
+variable one a ten-second jump may land a second or two out. It needs about half a second
+of playback to take that measurement, so a jump attempted the instant a file starts does
+nothing; tap again.
+
+Bare `.m2v` files are the exception: they carry no timing information at all, so neither
+the D-pad nor Fast Fwd/Rewind can seek in them.
 
 !!! info "Why it is off by default"
     Some interactive and game DVDs play seekable video while expecting the D-pad as game

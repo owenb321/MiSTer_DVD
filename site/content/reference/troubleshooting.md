@@ -293,6 +293,19 @@ The auto-selection picks the largest title set, which is not always right. `Titl
 and `Title VTS Units` on the Debug page force a specific one. The core shows `TITLE VTS nn`
 to say what it picked.
 
+### The elapsed time is wrong after seeking
+
+On most discs the time readout follows the disc's own timing tables and is accurate. On a
+**seamless-branch disc** — a special edition that stores two cuts of the film woven together
+in the same sectors — a seek can land in the wrong cut, and the clock then reports a
+position that does not match what you are watching. Use chapter skip (B2/B3) instead of the
+scrub or D-pad seek on those discs. Tracked as
+[issue #49](https://github.com/owenb321/MiSTer_DVD/issues/49).
+
+On a `.mpg`, `.VOB` or VCD/SVCD the clock is an **estimate** derived from how fast the file
+plays, not a timecode read from the disc, so on a very variable-bitrate file it can drift by
+a few seconds through the title. That is expected, not a fault.
+
 ## Support bundles
 
 ### The chord does nothing

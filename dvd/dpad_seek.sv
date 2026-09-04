@@ -3,7 +3,7 @@
 // ============================================================================
 // Left/Right = -/+10 s, Down/Up = -/+60 s while a TITLE plays. Unlike the
 // hold-to-seek scrub (dvd/scrub_ctrl.sv), whose step is SPAN-relative
-// (span >> {10,8,6,5} sectors per tick = "percent of title"), this module seeks
+// (span >> {12,10,8,6} sectors per tick = "percent of title"), this module seeks
 // by SECONDS, using the disc's OWN authored seek tables.
 //
 // ★ WHERE THE TARGET COMES FROM. Every DVD NAV pack's DSI carries the VOBU_SRI
@@ -65,16 +65,19 @@
 //    so +10 s lands ~+11 s and -10 s ~-9 s relative to what is on screen.
 //  - bwda's 60 s rung is END_OF_CELL for the first 60 s of every cell, so a
 //    backward 60 s there cascades down to ~10 s or the cell start.
-//  - Raw VCD/SVCD (no DSI) uses the exact CD geometry instead: 75 sectors/s of
-//    2352 B over the reader's 2048-byte linear block unit = 86.13 blk/s, so
-//    10 s = 861 blocks. Exact for VCD (CBR); approximate for SVCD (VBR).
-//    Flat .mpg/.VOB has no derivable rate and is deliberately inert here.
+//  - Non-DVD content has no DSI, so lin_mode takes its step from the lin_blk10
+//    PORT -- blocks per 10 s of file, supplied by dvd/lin_rate.sv. For a raw
+//    VCD/SVCD image that is the exact CD geometry (75 sectors/s of 2352 B over
+//    the reader's 2048-byte linear block unit = 86.13 blk/s => 861); for a flat
+//    .mpg/.VOB it is a rate MEASURED from the stream's own PTS against blocks
+//    consumed. This module does not care which, and must not: the one thing it
+//    owes the caller is that lin_blk10 == 0 refuses (S_FIRE's off_acc != 0
+//    guard) rather than guessing. Flat files were inert here until issue #39.
 // ============================================================================
 
 module dpad_seek #(
     parameter COALESCE = 24'd10_800_000,  // ~400 ms @ 27 MHz coalesce window
     parameter FRESH_TO = 26'd54_000_000,  // ~2 s wait-for-fresh, then drop
-    parameter LIN_10S  = 24'd861,         // 10 s of raw-CD file blocks (75*2352/2048)
     parameter UNIT_CAP = 12'd599,         // 599 units = 99:50, the widest MM:SS
                                           // readout. Not a seek limit: the title
                                           // span clamp in scrub_ctrl is.
@@ -107,6 +110,10 @@ module dpad_seek #(
     input  wire [31:0] tbl_rdata,         // <- nav_dsi.tbl_rdata  (1-cycle latency)
 
     input  wire [31:0] lin_blk,           // linear playhead (base in lin_mode)
+    input  wire [23:0] lin_blk10,         // blocks per 10 s of linear file.
+                                          // 0 = no rate known -> off_acc stays 0
+                                          // and S_FIRE's existing guard turns
+                                          // the gesture into pend_fail.
 
     // ---- -> scrub_ctrl jump mode ------------------------------------------
     output reg         jump_fire,         // 1-cyc: resolved, go
@@ -347,7 +354,7 @@ module dpad_seek #(
                 // ---- pick the next rung (DVD) / accumulate (linear) ----------
                 S_PICK: begin
                     if (lin_mode) begin
-                        off_acc <= sat_add(off_acc, {6'd0, LIN_10S});
+                        off_acc <= sat_add(off_acc, {6'd0, lin_blk10});
                         if (units_left <= 12'd1) state <= S_FIRE;
                         else units_left <= units_left - 12'd1;
                     end else begin
