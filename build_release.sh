@@ -58,7 +58,8 @@ done
 # CONF_STR = part of the synthesis netlist, so it changes at most ONCE PER BRANCH
 # (see CLAUDE.md "Versioning"). Recorded in the provenance manifest below, and
 # gated for shape further down.
-CORE_VERSION="$(sed -n 's/.*`define CORE_VERSION "\([^"]*\)".*/\1/p' dvd/emu.sv | head -1)"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+CORE_VERSION="$(sed -n 's/.*`define CORE_VERSION "\([^"]*\)".*/\1/p' "$HERE/dvd/emu.sv" | head -1)"
 if [[ -z "$CORE_VERSION" ]]; then
     echo "ERROR: no \`define CORE_VERSION found in dvd/emu.sv." >&2
     exit 1
@@ -218,21 +219,21 @@ fi
 MANIFEST="${OUT}.json"
 FIT_SUMMARY="output_files/${PROJECT}.fit.summary"
 # `Key : value` lookup in the fitter summary. Keys contain ( ) which are literal in BRE.
-fitval() { sed -n "s/^$1 : *//p" "$FIT_SUMMARY" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//'; }
+fitval() { sed -n "s/^$1 : *//p" "$FIT_SUMMARY" 2>/dev/null | head -1 | sed 's/[[:space:]]*$//' || true; }
 # The pinned fitter seed. quartus_fit --seed=N writes this assignment back into the
 # qsf, so the LAST one is what actually built this netlist.
-SEED_V=$(sed -n 's/^set_global_assignment -name SEED  *//p' "${PROJECT}.qsf" 2>/dev/null | tail -1)
+SEED_V=$(sed -n 's/^set_global_assignment -name SEED  *//p' "$HERE/${PROJECT}.qsf" 2>/dev/null | tail -1 || true)
 # From "clk_dec Restricted Fmax: 94.06 MHz @100C, 93.11 MHz @-40C (target 86.0)".
 F100=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*Fmax: *\([0-9.]*\) MHz @100C.*/\1/p')
 FM40=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*, *\([0-9.]*\) MHz @-40C.*/\1/p')
 FTGT=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*(target *\([0-9.]*\)).*/\1/p')
-BDATE=$(sed -n 's/.*`define BUILD_DATE "\([^"]*\)".*/\1/p' build_id.v 2>/dev/null || true)
+BDATE=$(sed -n 's/.*`define BUILD_DATE "\([^"]*\)".*/\1/p' "$HERE/build_id.v" 2>/dev/null || true)
 RBF_SHA=$(sha256sum "$OUT" 2>/dev/null | cut -d' ' -f1 || true)
 # GIT_* normally arrive from tools/docker_reexec.sh, which resolves them on the
 # host. This fallback covers a direct (non-Docker) run.
 G_BRANCH="${GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
 G_SHA="${GIT_SHA:-$(git rev-parse HEAD 2>/dev/null || echo unknown)}"
-G_DIRTY="${GIT_DIRTY:-$([ -n "$(git status --porcelain 2>/dev/null)" ] && echo true || echo false)}"
+G_DIRTY="${GIT_DIRTY:-$([ -n "$(git -C "$HERE" status --porcelain --untracked-files=no 2>/dev/null)" ] && echo true || echo false)}"
 [[ "$G_DIRTY" == "true" || "$G_DIRTY" == "false" ]] || G_DIRTY=null
 
 cat > "$MANIFEST" <<EOF

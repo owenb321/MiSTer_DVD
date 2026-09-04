@@ -52,7 +52,11 @@ maybe_reexec_in_docker() {
     # value already exported by the caller wins, so CI can inject its own.
     export GIT_BRANCH="${GIT_BRANCH:-$(git -C "$repo" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
     export GIT_SHA="${GIT_SHA:-$(git -C "$repo" rev-parse HEAD 2>/dev/null || echo unknown)}"
-    export GIT_DIRTY="${GIT_DIRTY:-$([ -n "$(git -C "$repo" status --porcelain 2>/dev/null)" ] && echo true || echo false)}"
+    # --untracked-files=no on purpose: an untracked scratch file cannot be in the
+    # bitstream (anything that pulls one in is itself tracked and would show as
+    # modified), and counting them marked every build dirty, which made the flag
+    # useless. Only tracked modifications mean "this .rbf matches no commit".
+    export GIT_DIRTY="${GIT_DIRTY:-$([ -n "$(git -C "$repo" status --porcelain --untracked-files=no 2>/dev/null)" ] && echo true || echo false)}"
 
     echo ">> [docker] re-exec in ${image}  (repo ${repo}, uid $(id -u):$(id -g))" >&2
     echo ">> [docker] cancel with: docker stop quartus_$(basename "$self" .sh)_$$" >&2
