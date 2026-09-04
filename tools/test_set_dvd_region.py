@@ -159,6 +159,29 @@ check("a set region reads back in both fields", [ESC],
 check("RPC-1 drive is described as region-free", [],
       ["RPC-1: it enforces no region at all"], ["Pick the region"], fake="0:5:4:0")
 
+# The byte on the wire. pdrc is a region MASK with one bit CLEAR, not the region
+# number — a real drive answers the number with sense 05/26/00, "invalid field in
+# parameter list". The fake drive decodes the mask strictly, so the scenarios above
+# already fail if this regresses; this pins the actual value so the next reader can
+# see what is meant to go out.
+def check_pdrc(region, want_byte):
+    global FAIL
+    logs = ["/media/fat/DVD_reports/set_dvd_region.log", "/tmp/set_dvd_region.log"]
+    logs = [f for f in logs if os.path.isdir(os.path.dirname(f))]
+    for f in logs:
+        if os.path.exists(f):
+            os.truncate(f, 0)
+    run([str(region).encode(), ENTER, DOWN, ENTER], fake="0:5:4:1")
+    want = "send pdrc %02x for region %d" % (want_byte, region)
+    seen = any(want in open(f).read() for f in logs if os.path.exists(f))
+    print(("PASS  " if seen else "FAIL  ") + "region %d goes out as pdrc %02x"
+          % (region, want_byte))
+    if not seen:
+        FAIL += 1
+
+check_pdrc(1, 0xfe)
+check_pdrc(4, 0xf7)
+
 # --- issue #52: the result screen must outlive the press that caused it -------
 # MiSTer closes the framebuffer terminal on the first key RELEASE after the
 # script exits, so a script that returns immediately loses its last screen. The

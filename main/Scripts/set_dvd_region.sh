@@ -169,6 +169,20 @@ def raw_hex(state):
     return " ".join("%02x" % b for b in state.raw)
 
 
+def region_pdrc(region):
+    """Region 1-8 -> the Preferred Drive Region Code byte SEND KEY wants.
+
+    ⚠ pdrc is a MASK with one bit CLEAR — the same polarity as the region_mask
+    REPORT KEY returns — and NOT the region number. Region 1 is 0xfe, region 2
+    is 0xfd. Sending the plain number is what a drive answers with sense
+    05/26/00, "invalid field in parameter list": as a mask, 0x01 claims seven
+    playable regions. Measured on a real drive via sg_raw, and it is what
+    regionset has always sent (regionset.c `~(1 << (n-1))` -> dvd_udf.c
+    UDFRPCSet -> `ai.hrpcs.pdrc`).
+    """
+    return ~(1 << (region - 1)) & 0xff
+
+
 class Drive:
     def __init__(self, path, fd):
         self.path = path
@@ -193,10 +207,11 @@ class Drive:
         return decode_state(bytes(buf[:3]))
 
     def set_region(self, region):
-        """struct dvd_host_send_rpcstate is {type, pdrc}; pdrc is the region 1-8."""
+        """struct dvd_host_send_rpcstate is {type, pdrc} — see region_pdrc()."""
         buf = bytearray(AUTHINFO_SIZE)
         buf[0] = HOST_SEND_RPC_STATE
-        buf[1] = region
+        buf[1] = region_pdrc(region)
+        note("  send pdrc %02x for region %d" % (buf[1], region))
         fcntl.ioctl(self.fd, DVD_AUTH, buf, True)
 
 
@@ -236,6 +251,13 @@ class FakeDrive:
         return decode_state(self.encode())
 
     def set_region(self, region):
+        # Encode exactly what the ioctl would carry and decode it back, so a
+        # wrong pdrc fails here the way a real drive fails: strictly.
+        pdrc = region_pdrc(region)
+        note("  send pdrc %02x for region %d" % (pdrc, region))
+        clear = [n + 1 for n in range(8) if not (pdrc >> n) & 1]
+        if clear != [region]:
+            raise OSError(22, "Invalid argument")   # sense 05/26/00 on real iron
         if self.fault == "setfail" or self.changes <= 0:
             raise OSError(5, "Input/output error")
         self.changes -= 1

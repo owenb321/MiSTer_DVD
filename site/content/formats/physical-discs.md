@@ -108,17 +108,21 @@ into a bug report. The script names the file on its last line.
     own firmware, so it is not reset by a different PC, a reformat, or a different operating
     system. Pick the region matching the discs you own and set it once.
 
-!!! success "Setting a region works"
-    Reading a drive's region has long been confirmed on real hardware; **setting one is now
-    confirmed too**, by the first user to try it — thank you. The change reached the drive
-    and stuck.
+!!! warning "Reading is proven; setting is not — but it is fixed"
+    Reading a drive's region is confirmed on real hardware. **Setting one is not yet**, and
+    the first user to try it found out why: the script sent the drive a malformed request,
+    which most drives reject outright. Thank you — that report is what found it.
 
-    That first attempt also showed an error afterwards and closed too quickly to read, even
-    though the region had been set correctly. That was the script mis-reporting a change
-    that had worked: some drives will not answer for a moment after a change, and it treated
-    the silence as a failure. Fixed — the script now retries, says plainly whether it could
-    confirm the new region, and **waits for a keypress before it closes**, so no result
-    disappears again.
+    That is now fixed, along with the two things that made it hard to see: the script used
+    to treat a drive that was slow to answer as a failure, and it closed before its last
+    screen could be read. It now retries, says plainly whether it could confirm the new
+    region, and **waits for a keypress before it closes**.
+
+    So setting a region should work now, but nobody has confirmed it on a real drive yet —
+    each attempt spends one of a drive's permanent changes, which is not something to spend
+    on a test. Reading is safe to try freely. If you do set one, please
+    [open an issue](https://github.com/owenb321/MiSTer_DVD/issues) saying whether it
+    worked.
 
 **Region codes:** **1** US/Canada · **2** Europe/Japan/Middle East/South Africa ·
 **3** SE Asia · **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia ·

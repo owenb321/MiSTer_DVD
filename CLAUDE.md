@@ -2082,9 +2082,15 @@ identifiable. Sim: `ps_demux_scram_tb`, `iec61937_wrap_tb` T8, `transport_hud_tb
 T13. Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
 
 **DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ✅ READ +
-gamepad menu HW-CONFIRMED 2026-08-31 (Scripts menu, gamepad-driven, 1 and 2 drives);
-✅ the SET ioctl FIELD-CONFIRMED 2026-09-04 (issue #52: a user's LG GS40N took the region
-and a PC confirmed it).**
+gamepad menu HW-CONFIRMED (2026-08-31, re-confirmed 2026-09-04 on the rewritten script);
+⏳ the SET ioctl STILL UNGATED — and issue #52 found out why: ★★ **the command was
+MALFORMED. `pdrc` is a region MASK with one bit CLEAR (region 1 = `0xfe`), NOT the region
+number**, which as a mask claims seven playable regions. MEASURED with `sg_raw` sending the
+byte-identical command: sense **05/26/00, "invalid field in PARAMETER LIST"** — ★ *parameter
+list*, not *CDB*, which localised it to one byte of the payload in a single shot. `regionset`
+has always sent the mask (`regionset.c` `~(1 << (n-1))` → `dvd_udf.c:UDFRPCSet`). ⚠ Issue
+#52's LG GS40N errored AND ended up regioned, which the encoding bug does not explain; do
+not build on either reading of that.**
 A drive with no region set refuses the CSS title-key ioctl, so every physical disc pays a
 multi-second crack (`No drive region: cracking`); the Scripts-menu tool reads the region
 (and the remaining-change count) and can set it, via `DVD_AUTH` — no compiled helper, since
@@ -2099,9 +2105,9 @@ while the script's process lives, then closes the framebuffer terminal on the fi
 press. Every exit must wait for a FRESH keypress. A region set is
 **irreversible** (no un-set, ~5 changes ever), hence cursor-starts-on-Cancel/No throughout.
 ★★ **And the reporting rule issue #52 earned, which generalises past this tool: a failure to
-READ BACK a change is not a failure to MAKE it.** The set succeeded on that drive; the
-script's unguarded re-read hit the drive's post-SEND-KEY unit attention, threw an uncaught
-traceback, and the user reasonably reported it as a failed region set. Verification now
+READ BACK a change is not a failure to MAKE it.** The script's unguarded re-read would hit
+the drive's post-SEND-KEY unit attention and throw an uncaught traceback over a change that
+had worked. Verification now
 re-opens the device and retries 6 × 0.5 s, an unconfirmed read reports "accepted, not yet
 reported" (exit 3) instead of failure, and only the change command itself refusing is an
 error. ★ The same round found `dvd_css.cpp:drive_region_set()` reading `region_mask` alone,

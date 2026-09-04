@@ -200,7 +200,7 @@ into the SCSI REPORT KEY / SEND KEY commands for RPC state:
 | | value | struct |
 |---|---|---|
 | read  | `DVD_LU_SEND_RPC_STATE` = **10** | `{type:2, vra:3, ucca:3, region_mask, rpc_scheme}` — 3 bytes, bitfields packed from the low end |
-| write | `DVD_HOST_SEND_RPC_STATE` = **11** | `{type, pdrc}` — `pdrc` is the region, 1–8 |
+| write | `DVD_HOST_SEND_RPC_STATE` = **11** | `{type, pdrc}` — ⚠ `pdrc` is a region **MASK with one bit CLEAR**, not the region number: region 1 is `0xfe`, region 2 `0xfd`. Same polarity as the `region_mask` the read returns |
 
 `sizeof(dvd_authinfo)` is 16. `region_mask` has a **clear** bit per playable region, so
 `0xff` = no region set (the same test `dvd_css.cpp:drive_region_set()` already makes over
@@ -256,11 +256,29 @@ built: the drives are told apart by device node, which says nothing about which 
 unit it is, so connecting only the target drive is the reliable habit and the warning
 nudges toward it.
 
-**Reporting a change, after issue #52 (2026-09-04).** The reporter's LG GS40N *took* the
-region — Windows confirmed it afterwards — and the script called it an error. Two causes,
-and the durable rule they share is that **a failure to read the region back is not a failure
-to set it**: the SEND KEY either succeeded or it did not, and everything after it is
-reporting.
+**Issue #52 (2026-09-04): the change command itself was malformed.** ★★ **`pdrc` is a
+region MASK with one bit CLEAR, not the region number.** We sent the number, and as a mask
+`0x01` claims *seven* playable regions — so a conforming drive rejects it. MEASURED on the
+maintainer's RPC-2 drive with `sg_raw` sending the byte-identical command the kernel builds:
+
+```
+sudo sg_raw -v -s 8 -i /tmp/rpc.bin /dev/sr0 a3 00 00 00 00 00 00 00 00 08 06 00
+  Sense key: Illegal Request / Additional sense: Invalid field in PARAMETER LIST  (05/26/00)
+```
+
+★ **The sense code is what localised it in one shot**: *parameter list*, not *CDB*, so the
+command reached the drive and parsed — only byte 4 of the 8-byte payload was wrong. And
+`regionset`, which has worked on Linux for twenty years, has always sent the mask:
+`regionset.c` computes `~(1 << (n-1))` and `dvd_udf.c:UDFRPCSet()` assigns it straight to
+`ai.hrpcs.pdrc`. `region_pdrc()` now does the same.
+
+⚠ **The reporter's LG GS40N behaved differently and that is not explained.** It errored AND
+ended up regioned, so either it tolerates the malformed number (firmware varies) or it
+rejected the change and the region came from somewhere else. Do not build on either reading.
+
+**Reporting a change.** Two further defects, real regardless of the encoding, sharing one
+durable rule — **a failure to read the region back is not a failure to set it**: the SEND KEY
+either succeeded or it did not, and everything after it is reporting.
 
 - `apply_region()` re-read the drive with no `try` at all. A drive answers the command after
   SEND KEY with a unit attention (its RPC state just changed), so that read raising is
@@ -297,10 +315,11 @@ called a failure, raw bytes dropped, RPC-1 treated as unset) are each caught by 
 scenario — these are string assertions on console output, exactly the shape that passes
 without proving anything.
 
-The **read** ioctl and the gamepad-driven console were ✅ **HW-CONFIRMED 2026-08-31**; the
-**set** ioctl is ✅ **FIELD-CONFIRMED 2026-09-04** by issue #52 — the change reached the drive
-and stuck, which is the one part of this tool nobody could gate locally without spending a
-permanent change.
+The **read** ioctl and the gamepad-driven console are ✅ **HW-CONFIRMED** (2026-08-31, and
+again 2026-09-04 on the rewritten script). The **set** ioctl is ⏳ **still ungated**: every
+attempt so far carried the malformed `pdrc`, so nothing yet proves the corrected command is
+accepted. The next attempt on a real drive is the gate — and it costs one of that drive's
+permanent changes, which is why it has not been spent casually.
 
 ## HW status / open items
 
@@ -321,17 +340,17 @@ Remaining:
    against the drive's set region (`REPORT KEY` RPC state) and show the cracking text on a
    mismatch. Needs a region-mismatched disc to verify — a second drive set to a region the
    local library does **not** match is the practical rig (see item 2).
-2. **`set_dvd_region.sh` on hardware — ✅ READ HW-CONFIRMED 2026-08-31, ✅ SET
-   FIELD-CONFIRMED 2026-09-04 (issue #52).** Read: run from the Scripts menu and driven with
-   a **gamepad**, with one drive connected and with two — regions read correctly (an unset
-   drive and a region-1 drive each identified), and the multi-drive warning listed both.
-   That confirmed the `DVD_AUTH` read, drive enumeration, and the uinput key injection on
-   tty2, which was the design's riskiest assumption. Write: a user set region on an LG GS40N
-   from the Scripts menu and a PC confirmed the drive was locked to it — so
-   `DVD_HOST_SEND_RPC_STATE` reaches the drive and sticks. The *reporting* around it was
-   wrong and is fixed above; what remains ungated is only the **happy read-back path** (a
-   drive that answers immediately with the new region), which cannot be gated without
-   spending another permanent change and is not worth one.
+2. **`set_dvd_region.sh` on hardware — ✅ READ HW-CONFIRMED, ⏳ SET STILL UNGATED.** Read:
+   run from the Scripts menu and driven with a **gamepad**, with one drive connected and
+   with two — regions read correctly (an unset drive and a region-1 drive each identified),
+   the multi-drive warning listed both, and (2026-09-04) the rewritten script reads and
+   pauses correctly on the board. That confirms the `DVD_AUTH` read, drive enumeration, and
+   the uinput key injection on tty2, which was the design's riskiest assumption.
+   **Write: not yet proven with a correct command.** Every attempt before 2026-09-04 sent
+   the malformed `pdrc` (the region number instead of the mask) and was rejected on the
+   maintainer's drive with sense 05/26/00; issue #52's drive errored too, and why it ended
+   up regioned anyway is unexplained. The gate is one run of the corrected script on a drive
+   whose owner has decided to commit a change.
    A **set is one-way and spends one of the drive's ~5 permanent changes**. Bench plan for
    the Q2 rig is still three drives — one left unset (keeps the `No drive region: cracking`
    path testable, which a set would destroy forever), one matching the local library, one
