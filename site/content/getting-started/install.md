@@ -131,6 +131,13 @@ or grabbing a single piece:
 | `MiSTer_DVDcss` | The custom Main only — physical discs and encrypted ISOs |
 | `install_dvdcss.sh` | The libdvdcss installer (also inside the zip's `Scripts/`) |
 | `set_dvd_region.sh` | Drive-region tool (also inside the zip's `Scripts/`) |
+| `dvd_report.py` | [Repro-bundle](../reference/reporting-a-bug.md) collector (also inside the zip's `Scripts/`) |
+
+!!! warning "Taking `MiSTer_DVDcss` on its own? Take `dvd_report.py` too"
+    The on-player bundle chord (**Audio + Subtitle**, held) runs `dvd_report.py` rather
+    than reimplementing it, and looks for it at `/media/fat/Scripts/dvd_report.py`. The zip
+    puts it there for you; if you are placing files by hand, the chord does nothing without
+    it.
 
 !!! note "Why the `.rbf` filename has a date and not a version"
     MiSTer's core browser and update scripts parse the `YYYYMMDD` out of the filename to

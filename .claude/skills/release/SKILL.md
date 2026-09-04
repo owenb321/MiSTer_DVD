@@ -124,7 +124,7 @@ would cost a second compile.
    preserves the invariant: the semver now exists in exactly one commit, so no later dev
    build can advertise a released version.
 
-## Release assets (attach all five)
+## Release assets (attach all six)
 
 | Asset | For |
 |---|---|
@@ -133,6 +133,7 @@ would cost a second compile.
 | `MiSTer_DVDcss` | Custom Main only — physical discs + encrypted ISOs; needs `[DVD] main=MiSTer_DVDcss` |
 | `install_dvdcss.sh` | libdvdcss installer (also inside the zip's `Scripts/`) |
 | `set_dvd_region.sh` | DVD drive-region tool — physical-disc users (also inside the zip's `Scripts/`). Documented in `site/content/formats/physical-discs.md`; keep it that way — it shipped as an asset for a release before it appeared in any prose. |
+| `dvd_report.py` | Repro-bundle collector (also inside the zip's `Scripts/`). Ships standalone because `MiSTer_DVDcss` **shells out to it**: anyone taking the Main alone gets the Audio+Subtitle chord and nothing for it to run, and it fails silently. |
 
 ## Release notes from every PR since the previous release
 

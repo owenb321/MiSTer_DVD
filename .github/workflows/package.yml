@@ -244,17 +244,25 @@ jobs:
           zip=$(ls -t releases/MiSTer_DVD_*.zip | head -1)
           # --clobber makes re-runs idempotent. The .rbf and its manifest are
           # already on the release (the maintainer uploaded them); these are the
-          # four this workflow owns.
+          # five this workflow owns.
+          #
+          # dvd_report.py ships standalone as well as inside the zip's Scripts/,
+          # because MiSTer_DVDcss SHELLS OUT to it: anyone who takes the Main on
+          # its own (the a-la-carte physical-disc path) would otherwise get the
+          # Audio+Subtitle bundle chord and no script for it to run, which fails
+          # silently. It is also the tool a reporter runs on a PC, and 30 KB is a
+          # friendlier download than the whole zip for that.
           gh release upload "$TAG" --clobber \
             "$zip" \
             main/.build/MiSTer_DVDcss \
             main/Scripts/install_dvdcss.sh \
-            main/Scripts/set_dvd_region.sh
+            main/Scripts/set_dvd_region.sh \
+            tools/dvd_report.py
           {
             echo ""
             echo "### Packaged"
             echo ""
-            echo "Attached \`$(basename "$zip")\` + \`MiSTer_DVDcss\` + 2 Scripts to **$TAG**."
+            echo "Attached \`$(basename "$zip")\` + \`MiSTer_DVDcss\` + 3 Scripts to **$TAG**."
             echo ""
             echo "Next: download, flash, smoke-test, then publish with"
             echo '```'
