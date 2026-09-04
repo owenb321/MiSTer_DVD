@@ -281,9 +281,12 @@ and the kernel building the identical CDB from it is read from `cdrom.c` (`setup
 measured. ⚠ **Do not spend the unset drive to close that gap** — it is the only local rig
 for the `No drive region: cracking` path, and a set destroys it forever.
 
-⚠ **The reporter's LG GS40N behaved differently and that is not explained.** It errored AND
-ended up regioned, so either it tolerates the malformed number (firmware varies) or it
-rejected the change and the region came from somewhere else. Do not build on either reading.
+★ **Drives differ in what they accept here, which is why this survived so long.** Issue
+#52's LG GS40N **took** the plain number — the reporter's change succeeded and a PC confirmed
+the drive was regioned; what failed on that drive was only the read-back afterwards (below).
+The TSSTcorp rejects the same byte outright. So the number worked by luck on tolerant
+firmware, and the mask is the encoding that is actually correct — it is what `regionset` has
+always sent, and what a strict drive demands.
 
 **The write goes out over SG_IO, with `DVD_AUTH` as the fallback (2026-09-04).** Both
 routes carry byte-identical commands — the kernel builds this exact one from the ioctl
@@ -344,8 +347,9 @@ bytes on x86-64, 64 on the MiSTer's armv7). Both were checked against the C ABI 
 assumed — the field list reproduces `sizeof`/`offsetof` exactly on x86-64, and the armv7
 sizes come from a `_Static_assert` compiled with the MiSTer toolchain's own headers.
 
-**Reporting a change.** Two further defects, real regardless of the encoding, sharing one
-durable rule — **a failure to read the region back is not a failure to set it**: the SEND KEY
+**Reporting a change — the defect issue #52 actually hit.** On a drive that accepts the
+change, these two are what turn a success into an apparent failure. Both share one durable
+rule — **a failure to read the region back is not a failure to set it**: the SEND KEY
 either succeeded or it did not, and everything after it is reporting.
 
 - `apply_region()` re-read the drive with no `try` at all. A drive answers the command after
@@ -418,8 +422,9 @@ Remaining:
    the uinput key injection on tty2, which was the design's riskiest assumption.
    **Write: ✅ HW-CONFIRMED 2026-09-04** — the script set a TSSTcorp TS-L633C from region 1
    to region 2 with a disc loaded that allowed region 2, read the new region back on the
-   first attempt, and the change counter went 3 → 2. Issue #52's LG errored and ended up
-   regioned anyway, which remains unexplained and is the only loose end left here.
+   first attempt, and the change counter went 3 → 2. Issue #52's LG GS40N had already set its
+   region successfully on the pre-fix script (tolerant firmware, plain number accepted); the
+   corrected encoding is what makes strict drives work too.
    A **set is one-way and spends one of the drive's ~5 permanent changes**. Bench plan for
    the Q2 rig is still three drives — one left unset (keeps the `No drive region: cracking`
    path testable, which a set would destroy forever), one matching the local library, one

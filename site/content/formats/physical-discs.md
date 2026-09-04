@@ -118,14 +118,15 @@ into a bug report. The script names the file on its last line.
     system. Pick the region matching the discs you own and set it once.
 
 !!! success "Reading and setting are both confirmed on real hardware"
-    Reading a drive's region has long been confirmed; **setting one now is too**, and the
-    first user to try it is why. Their attempt failed, which uncovered a malformed request
-    the script had always sent — most drives reject it outright. Thank you for reporting it.
+    Reading a drive's region has long been confirmed; **setting one now is too**. The first
+    user to try it had it work on their drive but saw an error afterwards and reported it —
+    thank you, because that report uncovered several things.
 
-    Fixed, along with the two things that hid it: the script used to treat a drive that was
-    slow to answer as a failure, and it closed before its last screen could be read. It now
-    retries, says plainly whether it could confirm the new region, tells you what the drive
-    actually said when it refuses, and **waits for a keypress before it closes**.
+    The script used to treat a drive that was slow to answer as a failure, and it closed
+    before its last screen could be read. It now retries, says plainly whether it could
+    confirm the new region, tells you what the drive actually said when it refuses, and
+    **waits for a keypress before it closes**. It also sends the change in the form stricter
+    drives require — some accept either, some reject one of them.
 
 **Region codes:** **1** US/Canada · **2** Europe/Japan/Middle East/South Africa ·
 **3** SE Asia · **4** Latin America/Australia/NZ · **5** Africa/Russia/South Asia ·

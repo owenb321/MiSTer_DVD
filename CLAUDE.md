@@ -2089,9 +2089,11 @@ MALFORMED. `pdrc` is a region MASK with one bit CLEAR (region 1 = `0xfe`), NOT t
 number**, which as a mask claims seven playable regions. MEASURED with `sg_raw` sending the
 byte-identical command: sense **05/26/00, "invalid field in PARAMETER LIST"** — ★ *parameter
 list*, not *CDB*, which localised it to one byte of the payload in a single shot. `regionset`
-has always sent the mask (`regionset.c` `~(1 << (n-1))` → `dvd_udf.c:UDFRPCSet`). ⚠ Issue
-#52's LG GS40N errored AND ended up regioned, which the encoding bug does not explain; do
-not build on either reading of that.** ★ **The write now goes out over SG_IO with `DVD_AUTH`
+has always sent the mask (`regionset.c` `~(1 << (n-1))` → `dvd_udf.c:UDFRPCSet`). ★ **Drives DIFFER on this
+byte, which is why it survived so long:** issue #52's LG GS40N *took* the plain number (that
+user's region change succeeded — only the read-back afterwards failed), while the TSSTcorp
+rejects it. The number worked by luck on tolerant firmware; the mask is what a strict drive
+demands.** ★ **The write now goes out over SG_IO with `DVD_AUTH`
 as the fallback** — byte-identical commands, but `sr_do_ioctl` collapses every refusal into a
 bare `EIO` (Illegal Request and most Not Ready alike), so the ioctl route CANNOT say why a
 one-way operation failed. ★★ **And it earned its keep on the first run: the second reason was THE DISC IN THE TRAY.**
