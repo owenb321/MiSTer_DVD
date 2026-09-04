@@ -375,6 +375,50 @@ the install prompt over the idle screen, which is arguably kinder; it is a
 behaviour change to an HW-confirmed path, so it should be decided rather than
 drifted into.
 
+### The `delay` was being consumed before it was set
+
+Reported: the clip plays immediately, with `delay="5"`. The log settled it in three
+lines:
+
+```
+DVD_LAUNCH: MGL pending -- delay=5s, 5000 ms remaining
+DVD_REPORT: mount result: slot 0 OK size=83605900 path=...
+DVD_LAUNCH: MGL finished after ~0s
+```
+
+The timer was armed correctly — a full 5000 ms still to run at the first
+`user_io_poll()` — and the mount happened inside the same second anyway. So
+`CheckTimer` was never the gate; the state machine had already been advanced past
+`case 0` before the main loop ever started.
+
+```c
+unsigned long CheckTimer(unsigned long time)
+{
+    return (!time) || (GetTimer(0) >= time);   // ← an unarmed timer reads as expired
+}
+```
+
+`mgl_parse()` memsets the struct, so `mgl->timer` is **0** from the parse
+(`user_io_init` ~1516) until the arming at that function's very end (~1760).
+Anything that re-enters `HandleUI()` in that window runs `case 0` with
+`CheckTimer(0) == true` and sets `state = 1`. `user_io_file_tx()` ends with
+`ProgressMessage(0, 0, 0, 0)` → `MenuHide()` → `HandleUI()`, so a **`boot.rom`
+transfer does exactly that** — and this fork ships a `boot.rom` for the idle logo.
+
+Fixed at the invariant (integration step 32, the first edit outside `user_io.cpp`):
+
+```c
+if (mgl->timer && CheckTimer(mgl->timer))
+```
+
+`delay="0"` still works — that yields `GetTimer(0)`, a live millisecond count, never
+literally zero.
+
+★ **This is the third time in this note that a stock mechanism was fine and the
+overlay's own presence is what tipped it over** — the notice pumps, the drive scan,
+and now the idle logo's `boot.rom`. Worth carrying into the next one: ask what *this
+core* does that a stock core does not, before reading the stock code for a defect.
+
 ## 5. Gates
 
 - `bench/dvd/run_mgl.sh` — `iso_reader_mount_tb` (RED: 10 reads against an empty slot,

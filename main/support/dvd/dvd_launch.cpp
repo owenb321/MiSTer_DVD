@@ -105,9 +105,13 @@ void dvd_launch_tick(void)
 		// (Info() does not re-enter HandleUI; InfoMessage() does, but none of our
 		// ticks are running yet) -- which is precisely why this is logged rather
 		// than assumed. A "TIMER NOT ARMED" line here is that hazard, live.
-		launch_log("DVD_LAUNCH: MGL pending -- delay=%ds, %ld ms remaining%s",
+		// state is the tell. 0 means the timer has not been consulted yet and the
+		// wait is genuinely ahead; anything higher means the FSM was already
+		// advanced during user_io_init(), before the timer existed -- which is a
+		// completely different bug from a timer that expired early.
+		launch_log("DVD_LAUNCH: MGL pending -- delay=%ds, %ld ms remaining, state=%d%s",
 		           mgl->item[mgl->current].delay,
-		           (long)(mgl->timer - GetTimer(0)),
+		           (long)(mgl->timer - GetTimer(0)), mgl->state,
 		           mgl->timer ? "" : "  (TIMER NOT ARMED -- fires immediately)");
 		return;
 	}

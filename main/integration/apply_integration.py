@@ -41,6 +41,15 @@ def insert_after(text, anchor, block, step, marker):
         fail(step, "anchor at EOF")
     return text[:eol + 1] + block + text[eol + 1:]
 
+def replace_once(text, old, new, step, marker):
+    if marker in text:
+        print(f"[integration] step {step}: already applied, skipping")
+        return text
+    n = text.count(old)
+    if n != 1:
+        fail(step, f"anchor matched {n} times, expected exactly 1: {old!r}")
+    return text.replace(old, new, 1)
+
 def insert_before(text, anchor, block, step, marker):
     if marker in text:
         print(f"[integration] step {step}: already applied, skipping")
@@ -466,5 +475,32 @@ h = insert_after(h, 'char is_dvd();',
     25, 'user_io_last_lba')
 write(h_path, h)
 print("[integration] user_io.h patched (support bundle)")
+
+# ------------------------------------------------------------------ menu.cpp
+# 32. An UNARMED MGL timer is not an expired one.
+m_path = os.path.join(ROOT, "menu.cpp")
+if not os.path.exists(m_path):
+    fail(32, f"{m_path} not found")
+m = read(m_path)
+
+m = replace_once(m,
+    "\t\t\tif (CheckTimer(mgl->timer))\n"
+    "\t\t\t{\n"
+    "\t\t\t\tmgl->state = (mgl->item[mgl->current].action == MGL_ACTION_LOAD) ? 1 : 4;\n",
+
+    "\t\t\t// dvd:mgl \u2014 an UNARMED timer is not an EXPIRED one. mgl_parse()\n"
+    "\t\t\t// memsets the struct, so mgl->timer is 0 until user_io_init() arms it\n"
+    "\t\t\t// at its very end -- and CheckTimer(0) returns TRUE. Anything that\n"
+    "\t\t\t// re-enters HandleUI() in between consumes the delay before it is\n"
+    "\t\t\t// ever set, and the file mounts immediately: ProgressMessage()/\n"
+    "\t\t\t// MenuHide() at the end of a boot.rom transfer does exactly that.\n"
+    "\t\t\t// See MiSTer_DVD/docs/mgl_launch.md.\n"
+    "\t\t\tif (mgl->timer && CheckTimer(mgl->timer))\n"
+    "\t\t\t{\n"
+    "\t\t\t\tmgl->state = (mgl->item[mgl->current].action == MGL_ACTION_LOAD) ? 1 : 4;\n",
+    32, "mgl->timer && CheckTimer")
+
+write(m_path, m)
+print("[integration] menu.cpp patched (MGL delay)")
 
 print("[integration] done")

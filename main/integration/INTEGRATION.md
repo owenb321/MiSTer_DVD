@@ -297,3 +297,32 @@ so a `signature\n{` anchor lands the call between the signature and its brace (t
 same trap as step 24). One consequence, and it is acceptable: a write whose option
 string fails to parse logs nothing, but that is still on Main's side of the line
 this exists to draw.
+
+## Step 32 — an unarmed MGL timer is not an expired one
+
+**The first edit outside `user_io.cpp`.** `menu.cpp`, one condition:
+
+```c
+-  if (CheckTimer(mgl->timer))
++  if (mgl->timer && CheckTimer(mgl->timer))
+```
+
+`mgl_parse()` memsets the struct, so `mgl->timer` is **0** from the moment the MGL
+is parsed (`user_io_init` line ~1516) until it is armed at that function's very end
+(~line 1760). And `CheckTimer(0)` returns **true** — its `(!time) ||` clause reads an
+unarmed timer as an expired one.
+
+So anything that re-enters `HandleUI()` inside that window advances the MGL state
+machine past its `case 0` and **consumes the delay before it is ever set**. The file
+then mounts as soon as the menu opens, with no wait at all. `user_io_file_tx()`
+finishes with `ProgressMessage(0, 0, 0, 0)`, whose zero-argument form calls
+`MenuHide()`, which calls `HandleUI()` — so a `boot.rom` transfer does exactly this,
+and this fork ships a `boot.rom` (the idle logo).
+
+This is stock behaviour, not something the overlay introduced; it just costs *this*
+core its MGL delay more readily than most, because of the idle logo. The fix states
+the invariant where the bug is rather than working around it elsewhere, and the
+`replace_once()` helper fails loudly if the three-line anchor ever moves.
+
+⚠ `mgl->timer` is only ever 0 while unarmed: `delay="0"` still yields
+`GetTimer(0)`, a live millisecond count, so a zero delay keeps working.

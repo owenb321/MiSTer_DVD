@@ -1959,6 +1959,28 @@ worse maintenance burden than targeted in-place edits. So:
   ⚠ **Durable shape, and this is the second time this session:** a one-cycle event
   ANDed with a level that is only settled LATER is a condition that never fires.
   Latch the event, test the level when it can answer.
+  ★★ **FIFTH ROUND: THE `delay` WAS BEING CONSUMED BEFORE IT WAS SET.** Report: the
+  clip plays immediately with `delay="5"`. The log settled it in three lines —
+  `MGL pending -- delay=5s, 5000 ms remaining` … `mount result: slot 0 OK` …
+  `MGL finished after ~0s`. The timer was armed CORRECTLY and the mount still
+  happened inside the same second, so `CheckTimer` was never the gate: the FSM had
+  been advanced past `case 0` before the main loop even started.
+  ★★ **`CheckTimer(t)` is `(!t) || (GetTimer(0) >= t)` — AN UNARMED TIMER READS AS
+  AN EXPIRED ONE.** `mgl_parse()` memsets the struct, so `mgl->timer` is 0 from the
+  parse (`user_io_init` ~1516) until the arming at that function's very END (~1760);
+  anything re-entering `HandleUI()` in that window runs `case 0` with
+  `CheckTimer(0) == true`. **`user_io_file_tx()` ends with
+  `ProgressMessage(0,0,0,0)` → `MenuHide()` → `HandleUI()`, so a `boot.rom` transfer
+  does exactly that — and this fork ships a `boot.rom` for the idle logo.** Fixed at
+  the invariant: `if (mgl->timer && CheckTimer(mgl->timer))` (integration step 32,
+  the FIRST edit outside `user_io.cpp`; new `replace_once()` helper fails loudly if
+  the anchor moves). ⚠ `delay="0"` still works — that yields `GetTimer(0)`, a live
+  millisecond count, never literally zero.
+  ★★★ **THE PATTERN ACROSS ALL FIVE ROUNDS, AND IT IS THE MOST REUSABLE THING HERE:
+  the stock mechanism was fine every time, and THIS CORE'S OWN ADDITIONS are what
+  tipped it over** — our `InfoMessage` pumps froze the MGL FSM, our drive scan
+  starved the decoder, our `boot.rom` ate the delay. **Ask what THIS core does that
+  a stock core does not, before reading stock code for a defect.**
   Detail: **`docs/mgl_launch.md`**.
 - ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
   `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build
