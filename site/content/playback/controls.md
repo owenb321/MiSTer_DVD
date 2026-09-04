@@ -14,7 +14,7 @@ standard numbering — whatever you mapped B1 to in the MiSTer menu is what "B1"
 | B6 | Angle (cycle) | | B13 | Return (go up) |
 | B7 | Audio (cycle) | | D-pad | Menu navigation |
 
-Every one of those actions also has a **[keyboard and remote key](#keyboard-and-tv-remote)**.
+Every one of those actions also has a **[keyboard or remote key](#keyboard-and-tv-remote)**.
 A USB keyboard's **number keys select menu buttons directly**, which is often quicker than
 walking a menu with the D-pad.
 
@@ -23,9 +23,8 @@ walking a menu with the D-pad.
 !!! info "Unreleased"
     Available in development builds; not in v0.3.0.
 
-Nothing to configure — plug in a keyboard, or point a remote at the receiver, and these keys
-work. Anything that presents itself to MiSTer as a keyboard counts: a USB keyboard, an
-HDMI-CEC TV remote, or a console dock's infrared remote.
+Nothing to configure — plug in a keyboard and these keys work. Anything that presents
+itself to MiSTer as a keyboard counts, which is how a **remote** drives the player too.
 
 | Key | Action | | Key | Action |
 |---|---|---|---|---|
@@ -46,31 +45,84 @@ HDMI-CEC TV remote, or a console dock's infrared remote.
     separate seeks. This works whether or not D-Pad Seek is switched on. Files with no seek
     information — a bare `.m2v` — have no keyboard seek.
 
-### Things MiSTer keeps for itself
+## Using a remote
+
+The reliable way is an **infrared receiver that presents itself as a USB keyboard** — a
+Flirc, a generic MCE-style USB IR dongle, or the receiver built into a console dock. It
+learns whatever remote you already own, emits ordinary keystrokes, and needs no setting up
+on the MiSTer side at all: the keys in the table above simply work.
+
+That is also what a console dock does. A dock remote usually sends only a handful of keys —
+on a SuperStation One SuperDock, the arrows plus **OK** (++enter++), **Exit** (++esc++),
+**Cancel** (++"X"++) and one function key — which is enough to walk a disc's menus and start
+a title. **Cancel** is mapped to Menu precisely because that remote's own Menu button
+belongs to the MiSTer OSD.
+
+### Using your TV's remote over HDMI-CEC
+
+A TV remote can drive the player over CEC instead, with no extra hardware — **but whether
+CEC works at all depends on your board**, so treat it as worth trying rather than as a
+supported path.
+
+Enable it under `[MiSTer]` in `MiSTer.ini`:
+
+```ini
+hdmi_cec=1
+```
+
+Then map the colour keys to the disc's own menus: **blue** = Menu, **red** = Title,
+**green** = Audio, **yellow** = Subtitle. You need those because the remote's Menu / Exit
+button belongs to the MiSTer OSD (see below).
+
+!!! failure "If nothing happens, check the log before changing anything else"
+    MiSTer throws its own log away by default. Add `debug=2` under `[MiSTer]`, reboot, and
+    read `/tmp/debug.txt`:
+
+    ```
+    grep -i cec /tmp/debug.txt
+    ```
+
+    | What you see | What it means |
+    |---|---|
+    | `CEC: no clock detected` then `CEC: init failed.` | **Your board's CEC hardware is not usable.** Nothing in the ini changes this — see below. |
+    | `CEC: main register setup failed` | The HDMI transmitter could not be reached at all. |
+    | `CEC: no EDID and power-on disabled` | Set `hdmi_cec_power_on=1`. |
+    | `CEC: logical=… physical=1.0.0.0` | CEC is working. If the remote still does nothing, the **TV** is not routing it — usually because MiSTer is not the selected input. |
+    | *no `CEC:` lines at all* | `hdmi_cec=1` is not being read. It must be under `[MiSTer]`, not below another core's section heading. |
+
+    To see whether the TV sends anything at all, press keys **from the MiSTer main menu**
+    rather than inside the player — button codes are only logged there, as
+    `CEC button: 0x09, pressed=1`.
+
+!!! warning "`no clock detected` cannot be fixed in the ini"
+    It means the HDMI transmitter's CEC engine never completed a transmission, which is a
+    wiring or clock-source question on the board itself. In particular **`hdmi_cec_clock=`
+    does not help**: that setting only chooses between clock rates *after* a successful
+    probe, so it cannot revive an engine that is not running. Set `hdmi_cec=0` to skip the
+    probe and its startup delay, and use a USB infrared receiver instead — it gives you the
+    same remote control and does not involve the HDMI transmitter at all.
+
+!!! note "Turning CEC off again"
+    `hdmi_cec=0` disables the whole thing. To stop a TV remote controlling playback while
+    keeping CEC's power-on and standby handling, set `hdmi_cec_input_mode=0` instead. There
+    is no setting for either in the player's own menu, because a CEC keypress arrives as an
+    ordinary keystroke — the core cannot tell it apart from a USB keyboard.
+
+## Things MiSTer keeps for itself
 
 - **++f12++ and a remote's Menu button open the MiSTer OSD**, always. They can never be
   given a disc function.
 - While the OSD is open, **no key reaches the player**.
 - On a **CEC remote, Menu / Exit is the MiSTer OSD button**, not the disc menu. It is a
   proper toggle: pressing it again steps back a level and closes the OSD at the top, so it
-  is how you get in and out. **Stop** also closes the OSD from any level. To reach the
-  *disc's* menus, use the **colour keys**: blue = Menu, red = Title, green = Audio,
-  yellow = Subtitle.
-
-    Which physical button sends which code is up to the TV, not MiSTer — most sets send
-    Exit for Back/Return and Root Menu for Home/Menu while a source is selected, and some
-    pass only a few keys through CEC at all.
-
-!!! note "Turning CEC on, and off again"
-    CEC is off unless you asked for it — MiSTer needs `hdmi_cec=1` in `MiSTer.ini` before a
-    TV remote reaches any core. To stop a TV remote controlling playback without giving up
-    CEC's power-on and standby handling, set `hdmi_cec_input_mode=0` instead. There is no
-    setting for this in the player's own menu, because a CEC keypress arrives as an
-    ordinary keystroke — the core cannot tell it apart from a USB keyboard.
+  is how you get in and out. **Stop** also closes the OSD from any level. Which physical
+  button sends which code is up to the TV, not MiSTer — most sets send Exit for Back/Return
+  and Root Menu for Home/Menu while a source is selected, and some pass only a few keys
+  through CEC at all.
 - The [support bundle chord](#support-bundle-chord) is **gamepad-only** — it is handled
   outside the core, so the keyboard's Audio and Subtitle keys cannot trigger it.
 
-### Rebinding
+## Rebinding
 
 Use MiSTer's own **Define buttons**, which maps any key onto any of the buttons in the first
 table. A key you map there takes over completely, so it replaces whatever the built-in list
@@ -81,13 +133,6 @@ above gave it.
     button — pressing ++enter++ during Define buttons *ends* the session rather than
     capturing it, which looks like it worked. That is exactly why the player reads them
     itself, and it is why a dock remote's **OK** and **Exit** buttons now work at all.
-
-### Console dock remotes
-
-A dock's infrared remote usually sends only a handful of keys — on a SuperStation One
-SuperDock, the arrows plus **OK** (++enter++), **Exit** (++esc++), **Cancel** (++"X"++) and
-one function key. That is enough to walk a disc's menus and pick a title. **Cancel** is
-mapped to Menu precisely because that remote's own Menu button belongs to the MiSTer OSD.
 
 ## In a menu
 

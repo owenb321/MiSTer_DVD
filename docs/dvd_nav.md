@@ -837,6 +837,33 @@ right now" (`menu.cpp:8137`) — so during playback it is `KEY_MENU`, which Main
 OSD toggle, while `KEY_BACK` has `NONE` in the PS/2 table. Hence Menu/Title/Audio/Subtitle
 ride the CEC **colour keys** (`F1`–`F4`). Verified against `hdmi_cec.cpp` as of 2026-09.
 
+⚠⚠ **CEC IS NOT AVAILABLE ON EVERY BOARD, AND THE MAINTAINER'S IS ONE IT FAILS ON — do NOT
+treat it as a supported path or gate this feature on it.** MEASURED 2026-09-04: I2C to the
+ADV7513 is fine (no `main register setup failed`), but the clock probe reports
+`clock probe TX elapsed=150 finished=0` → `CEC: no clock detected.` → `CEC: init failed.`
+The chip's CEC transmitter never completes a frame, i.e. its CEC engine has no working clock
+(or the CEC line is not routed/pulled up, so arbitration never sees the bus idle). Either
+way it is a board fact, not a configuration one.
+⛔ **`hdmi_cec_clock=` DOES NOT FIX IT — and that wrong suggestion was already made once.**
+`cec_detect_clock` takes the ini value as `proposed_clock` and only consults it in the
+`else if (proposed_clock)` branch (`hdmi_cec.cpp:559`), which is reached **after** a
+successful probe TX. A failing probe fails identically whatever is configured: the setting
+picks *between* clock rates once the engine is known to run, it cannot start one.
+★ It fails CLEANLY, worth knowing before anyone chases a startup hang: `cec_can_try` is set
+true only *after* `cec_clock()` succeeds (`hdmi_cec.cpp:1060`), so a clock failure prints
+`CEC: init failed.`, sets `cfg.hdmi_cec = 0` and gives up — no 3 s retry loop, just a one-off
+~300 ms probe. `hdmi_cec=0` skips even that.
+★★ **The recommended remote route is a USB IR receiver that presents as a HID keyboard**
+(Flirc, a generic MCE dongle, or a console dock's own receiver): no CEC, no ini, and it lands
+on exactly the `ps2_key` path this module already decodes. The manual leads with that and
+files CEC under "worth trying".
+⚠ **Main discards its own log by default** (`cfg.cpp:452`:
+`stdout = (cfg.debug == 2) ? debug_file : cfg.debug ? orig_stdout : dev_null`), so any CEC
+diagnosis starts with `debug=2` under `[MiSTer]` and reading `/tmp/debug.txt`. Raw button
+codes are logged **only in the menu core** (`if (is_menu())`, `hdmi_cec.cpp:276`), so "is the
+TV sending anything at all?" has to be tested from the MiSTer main menu, not from inside the
+player.
+
 **Shape.** `kbd_map` emits a 17-bit vector in `joystick_0`'s own bit order and `emu.sv` ORs
 it in: `joy_eff = joystick_0 | {15'd0, kbd_joy & ~17'h0_6000}`. Every button wire, edge
 detector, the chapter debounce, the menu walk, the HUD and `vm_entropy_stir` then read

@@ -1658,6 +1658,18 @@ worse maintenance burden than targeted in-place edits. So:
   (`menu_present() ? KEY_BACK : KEY_MENU`; during playback that is `KEY_MENU` = the OSD
   toggle, and `KEY_BACK` has `NONE` in the PS/2 table), hence Menu/Title/Audio/Subtitle ride
   the CEC **colour keys** `F1`-`F4`.
+  ⚠⚠ **BUT CEC DOES NOT WORK ON THE MAINTAINER'S BOARD, so it is NOT a supported path and
+  must NOT gate this feature.** MEASURED 2026-09-04: I2C to the ADV7513 is fine, but the
+  clock probe reports `TX elapsed=150 finished=0` -> `CEC: no clock detected.` ->
+  `CEC: init failed.` — the chip's CEC engine never completes a frame. ⛔ `hdmi_cec_clock=`
+  CANNOT fix it (that suggestion was made once and was wrong): the ini value is only
+  consulted AFTER a successful probe TX (`hdmi_cec.cpp:559`), so it picks between clock
+  rates rather than starting an engine. It fails cleanly (`cfg.hdmi_cec = 0`, no retry
+  loop). ★★ The recommended remote is a **USB IR receiver presenting as a HID keyboard**
+  (Flirc / MCE dongle / a dock's own receiver) — same `ps2_key` path, no CEC, no ini.
+  ⚠ **Main discards its own log by default** (`cfg.cpp:452`) — a CEC diagnosis needs
+  `debug=2` under `[MiSTer]` then `/tmp/debug.txt`, and raw button codes are printed
+  **only in the menu core** (`hdmi_cec.cpp:276`).
   ★★ **KEYBOARD FAST FWD / REWIND GO TO `dvd/dpad_seek.sv`, NOT `scrub_ctrl`'s
   hold-to-scrub — and that is the whole reason `kbd_map` has NO LEVELS.** MEASURED: Retro
   Remake's SuperDock receiver firmware (`Retro-Remake/DockIR`, `src/main.c`) sends
