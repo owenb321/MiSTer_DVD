@@ -835,4 +835,16 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # button wire, edge detector and the D-pad seek path already existed and simply re-source
 # from joy_eff. That is the fit evidence for the design claim that OR-ing into one vector
 # costs nothing over parallel pulse plumbing.
+# 2026-09-04 (fix/mgl-launch, issue #48 -- three small emu.sv edits: start_streaming split
+# into img_evt/start_streaming/img_ejected on img_size, an img_ejected arm in the media_seen
+# block, analog_want_l's hold moved from the img_mounted pulse to the media_seen level, and
+# osd_btn ANDed with ~status[0]; plus dvd_iso_reader's zero-block S_INIT exit and a `==` ->
+# `>=` terminator, and one new arm in ps_demux's S_ES_PASS): SEED 5 held FIRST roll --
+# clk_dec 92.42 @100C / 88.35 @-40C (gate 86.0, PASS both corners) at 90% ALM (37,927),
+# RAM 498/553 and DSP 92/112 both UNCHANGED. TWENTIETH consecutive first-roll fit.
+# Build DVD_mgl_20260904_0435.rbf (4361 KB).
+# ★ +274 ALMs against the keyboard netlist, which is more than the logic added and worth
+# knowing: the new terms sit on img_size (64 bits) and on media_seen, a signal declared
+# ~1700 lines later and already feeding VIDEO_ARX, logo_vis and mode_realign -- so the cost
+# is fan-out and routing on an existing high-fan-out net, not the comparators.
 set_global_assignment -name SEED 5
