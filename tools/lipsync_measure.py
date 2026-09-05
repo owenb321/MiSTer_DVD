@@ -1,0 +1,562 @@
+#!/usr/bin/env python3
+"""
+lipsync_measure.py -- measure A/V sync from a sync-clip capture.
+
+Companion to tools/sync_disc.py. Finds every video flash and every audio click,
+pairs them by the clip's own frame counter, and reports the error over time --
+a drift CURVE, not a single number, because the defect this exists to catch
+(docs/lipsync_pickup.md) was a ramp that froze, not a constant offset.
+
+Two modes, deliberately sharing ONE detector:
+
+  source <file>    measure the generated clip itself. This is CALIBRATION, not
+                   a sanity check: encoder and codec delay are real and
+                   constant, so the reported answer for a capture is
+                   (capture offset - source offset) and those terms cancel by
+                   construction. Running a different detector over the source
+                   would defeat that entirely.
+
+  capture <file>   measure a recording of the core's output.
+
+WHAT THIS TOOL CANNOT DO ALONE. The capture chain has its own A/V skew: v4l2
+video and ALSA audio are separately clocked and separately buffered, and that
+offset is very likely larger than the thing being measured. It MUST be
+calibrated once -- feed the capture card a known-synchronous source and record
+the result in tools/.mister_capture.json -- or the harness measures the capture
+card and reports it as a core defect. `capture` refuses to print an absolute
+figure until that number exists; --raw overrides for exploratory use.
+
+Detection:
+
+  video   mean luma per frame. The flash is a whole-region step, so this needs
+          no alignment, no calibration and no OCR, and survives scaling,
+          letterboxing and interlacing. Sub-frame timing comes from the luma
+          CENTROID across the frames the flash straddles -- at 60 fps capture,
+          whole-frame quantisation alone would be 16.7 ms, which is the same
+          order as the thing being measured.
+  audio   energy in a narrow band around the tone, then the steepest rise. The
+          tone's onset is rectangular in the source for exactly this reason.
+  ident   the binary counter strip, read after locating the active picture from
+          a flash frame's own white bounding box -- so geometry is derived from
+          the content and a scaled or letterboxed capture needs no config.
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from sync_disc import (COUNTER_BITS, FPS, MEAS_FRAC, SAMPLE_RATE,  # noqa: E402
+                       TONE_HZ, TONE_MS)
+
+CAL_FILE = os.path.join(HERE, '.mister_capture.json')
+ALLOW_DRIFT = False
+
+# A DVD's DECODED output rate is always one of these, whatever it was
+# coded at -- 23.976 film with 3:2 pulldown decodes to 30000/1001.
+STD_RATES = (30000 / 1001.0, 25.0, 24000 / 1001.0, 24.0,
+             60000 / 1001.0, 50.0)
+
+
+# ---------------------------------------------------------------------------
+def frame_times(path):
+    """Per-frame presentation timestamps, in seconds.
+
+    NOT frame_index / nominal_fps. MEASURED: a 60 fps capture of this core's
+    59.94 Hz output drifts by (1/59.94 - 1/60) * 60 = exactly 1.0 ms per second
+    against an index-derived clock, and the capture card duplicates a frame
+    every ~17 s to make up the difference -- which showed up as a +1 ms/s ramp
+    with periodic 16.7 ms steps and would have been read as core drift. The
+    container's own timestamps carry both effects correctly.
+    """
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+         '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', path],
+        capture_output=True, text=True, check=True).stdout
+    ts = [float(v) for v in out.replace(',', ' ').split() if v not in ('N/A',)]
+    # SORT. ffprobe reports frames in DECODE order while the raw decode below
+    # is in PRESENTATION order, and an MPEG-2 source has B-frames, so the two
+    # disagree. A capture is MJPEG and never shows this.
+    return np.sort(np.array(ts, dtype=np.float64))
+
+
+def stream_start(path, kind):
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', kind, '-show_entries',
+         'stream=start_time', '-of', 'csv=p=0', path],
+        capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        return float(out.split(',')[0])
+    except ValueError:
+        return 0.0
+
+
+def audio_clock(path):
+    """Map audio sample index -> host-clock time, from packet timestamps.
+
+    Counting samples from the start assumes the capture device's audio clock is
+    exactly nominal. It is not: MEASURED on this rig, the card's audio clock
+    runs against the host video clock at ~1.5 ms/s, which appeared as a drifting
+    sawtooth in the per-marker error and is indistinguishable from real A/V
+    drift in the core. Anchoring on packet timestamps puts audio and video on
+    the SAME host clock, so that term cancels instead of accumulating.
+
+    Returns (cumulative sample index array, packet pts array), or None when the
+    container carries no usable audio packet timing.
+    """
+    # DECODED FRAME sample counts. Two other fields look usable and are not:
+    # packet `size` is bytes, which only maps to samples for PCM (it drifted
+    # badly on the AC-3 source); packet `duration_time` is quantised to the
+    # container timebase, which for 1.96 ms PCM packets in a 1 ms-timebase
+    # matroska under-counts time by nearly 2x. nb_samples is exact for both
+    # (AC-3 1536, PCM 94 here).
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+         '-show_entries', 'frame=pts_time,nb_samples', '-of', 'csv=p=0',
+         path], capture_output=True, text=True, check=True).stdout
+    pts, cum, total = [], [], 0
+    for line in out.splitlines():
+        parts = line.split(',')
+        if len(parts) < 2:
+            continue
+        try:
+            t, n = float(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        pts.append(t)
+        cum.append(total)
+        total += n
+    if len(pts) < 8 or total <= 0:
+        return None
+    return np.array(cum, dtype=np.float64), np.array(pts, dtype=np.float64)
+
+
+def video_duration(path):
+    """Duration of the VIDEO stream, not the container.
+
+    The container runs to the end of the LONGEST stream, and the AC-3 tail here
+    is ~1 s past the video. Using it under-estimated the decoded frame rate by
+    0.4%, which accumulated past the pairing window and mispaired the tail of a
+    4-minute clip.
+    """
+    for entries in ('stream=duration', 'format=duration'):
+        sel = ['-select_streams', 'v:0'] if entries.startswith('stream') else []
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', *sel, '-show_entries', entries,
+             '-of', 'csv=p=0', path], capture_output=True, text=True,
+            check=True).stdout.strip()
+        try:
+            d = float(out.split(',')[0])
+            if d > 0:
+                return d
+        except ValueError:
+            continue
+    return 0.0
+
+
+def probe(path):
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
+         'stream=width,height,r_frame_rate', '-of', 'json', path],
+        capture_output=True, text=True, check=True).stdout
+    s = json.loads(out)['streams'][0]
+    num, den = (int(v) for v in s['r_frame_rate'].split('/'))
+    return s['width'], s['height'], num / den
+
+
+def video_luma(path, w, h, scale=4):
+    """Mean luma per frame, plus a downscaled gray frame stack for geometry.
+
+    Decoded at reduced size: the flash is a whole-region step, so resolution
+    buys nothing and full-size frames of a 5-minute capture would not fit in
+    memory.
+    """
+    sw, sh = w // scale, h // scale
+    p = subprocess.Popen(
+        ['ffmpeg', '-v', 'error', '-i', path, '-f', 'rawvideo',
+         '-pix_fmt', 'gray', '-s', f'{sw}x{sh}', '-'],
+        stdout=subprocess.PIPE)
+    frames, sz = [], sw * sh
+    while True:
+        buf = p.stdout.read(sz)
+        if len(buf) < sz:
+            break
+        frames.append(np.frombuffer(buf, dtype=np.uint8).reshape(sh, sw))
+    p.wait()
+    if not frames:
+        sys.exit(f'lipsync: no video frames decoded from {path}')
+    stack = np.stack(frames)
+    # Measure only the top MEAS_FRAC: the counter strip below it changes per
+    # marker and would modulate the very quantity used for interpolation.
+    return stack[:, :int(sh * MEAS_FRAC), :].mean(axis=(1, 2)), stack
+
+
+def audio_env(path):
+    """Envelope of the tone band, at sample rate."""
+    raw = subprocess.run(
+        ['ffmpeg', '-v', 'error', '-i', path, '-f', 's16le', '-ac', '1',
+         '-ar', str(SAMPLE_RATE), '-'],
+        capture_output=True, check=True).stdout
+    x = np.frombuffer(raw, dtype='<i2').astype(np.float32) / 32768.0
+    if x.size == 0:
+        sys.exit(f'lipsync: no audio decoded from {path}')
+    # Quadrature mix down from the tone frequency, then a short moving average:
+    # a matched filter for "is the tone present", insensitive to phase.
+    n = np.arange(x.size, dtype=np.float32)
+    ph = 2 * np.pi * TONE_HZ * n / SAMPLE_RATE
+    i = x * np.cos(ph)
+    q = x * np.sin(ph)
+    win = max(8, int(SAMPLE_RATE * 0.002))
+    k = np.ones(win, dtype=np.float32) / win
+    env = np.hypot(np.convolve(i, k, 'same'), np.convolve(q, k, 'same'))
+    return env
+
+
+def find_flashes(luma, fps, pts=None):
+    """-> [(marker frame index, sub-frame refined time in seconds)].
+
+    `pts` is the container's per-frame timestamps; the sub-frame centroid is
+    interpolated within them, so a dropped or duplicated capture frame does not
+    move the answer.
+    """
+    base = np.median(luma)
+    peak = luma.max()
+    if peak - base < 8:
+        sys.exit('lipsync: no flashes found -- is this a sync clip?')
+    thr = base + (peak - base) * 0.35
+    above = luma > thr
+    events, i, n = [], 0, len(luma)
+    while i < n:
+        if not above[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and above[j]:
+            j += 1
+        # Luma-weighted centroid over the run and one frame either side. A
+        # 1-frame flash split across two capture frames lands between them in
+        # proportion to the overlap, which is what recovers sub-frame timing.
+        lo, hi = max(0, i - 1), min(n, j + 1)
+        seg = luma[lo:hi] - base
+        seg = np.clip(seg, 0, None)
+        idx = np.arange(lo, hi)
+        centre = float((seg * idx).sum() / seg.sum())
+        # Both modes must report the MIDDLE of the flash's on-screen interval,
+        # or the difference does not cancel between source and capture.
+        #
+        # A decoded SOURCE frame's timestamp is the START of its display, and
+        # the flash is exactly one frame, so half a frame must be added. A
+        # capture card SAMPLES (it holds the last complete frame rather than
+        # integrating), so when the flash spans several captured frames their
+        # sample instants already average to the middle and nothing must be
+        # added. Adding half a frame in both -- which is what this did -- left
+        # an 8.3 ms systematic between the two modes that no calibration
+        # removes, because it is a difference OF the calibration.
+        run_len = j - i
+        if pts is not None and len(pts) > 1:
+            lo_i = min(max(int(np.floor(centre)), 0), len(pts) - 2)
+            frac = centre - int(np.floor(centre))
+            t = pts[lo_i] + frac * (pts[lo_i + 1] - pts[lo_i])
+            # median period, not the local gap: USB delivery jitters 8-25 ms
+            # and using the local value injects that straight into the answer.
+            if run_len <= 1:
+                t += float(np.median(np.diff(pts))) / 2.0
+            events.append((i, float(t)))
+        else:
+            events.append((i, (centre + (0.5 if run_len <= 1 else 0.0)) / fps))
+        i = j
+    return events
+
+
+def find_clicks(env):
+    """-> [onset time in seconds], from the steepest rise of each burst."""
+    thr = env.max() * 0.30
+    above = env > thr
+    out, i, n = [], 0, len(env)
+    guard = int(SAMPLE_RATE * TONE_MS / 1000.0 * 3)
+    while i < n:
+        if not above[i]:
+            i += 1
+            continue
+        j = min(n, i + guard)
+        seg = env[max(0, i - guard // 2):j]
+        d = np.diff(seg)
+        onset = max(0, i - guard // 2) + (int(np.argmax(d)) if d.size else 0)
+        out.append(onset / float(SAMPLE_RATE))
+        while i < n and above[i]:
+            i += 1
+        i += guard // 4
+    return out
+
+
+def read_counters(stack, flash_frames):
+    """Read the binary counter strip, locating the picture from a flash frame.
+
+    The white region of a flash frame IS the measurement area, so its bounding
+    box gives the active picture without knowing the capture's scaling or
+    letterboxing.
+    """
+    if not flash_frames:
+        return {}
+    f = stack[flash_frames[0]]
+    thr = (int(f.max()) + int(np.median(f))) // 2
+    ys, xs = np.where(f > thr)
+    if ys.size == 0:
+        return {}
+    x0, x1, y0, y1 = xs.min(), xs.max(), ys.min(), ys.max()
+    pic_h = (y1 - y0 + 1) / MEAS_FRAC
+    cy = int(y0 + pic_h * (MEAS_FRAC + 1.0) / 2.0)      # middle of the strip
+    cy = min(cy, stack.shape[1] - 1)
+    bw = (x1 - x0 + 1) / COUNTER_BITS
+    out = {}
+    for fi in flash_frames:
+        row = stack[fi, cy, :]
+        val = 0
+        for b in range(COUNTER_BITS):
+            cx = int(x0 + (b + 0.5) * bw)
+            if row[min(cx, row.size - 1)] > thr:
+                val |= 1 << b
+        out[fi] = val
+    return out
+
+
+# ---------------------------------------------------------------------------
+def measure(path, label):
+    w, h, fps = probe(path)
+    luma, stack = video_luma(path, w, h)
+    env = audio_env(path)
+    pts = frame_times(path)
+    if len(pts) >= len(luma):
+        pts = pts[:len(luma)]          # ffprobe may report one frame more
+    else:
+        # Derive the rate from what was actually DECODED, never from
+        # r_frame_rate. Soft-pulldown film reports r_frame_rate as the FIELD
+        # rate (59.94) while ffmpeg decodes 29.97 output frames, which halved
+        # every timestamp and left half the markers unpairable. The decoded
+        # count over the container duration is right for any content.
+        dur = video_duration(path)
+        if dur > 0:
+            fps_dec = len(luma) / dur
+            # SNAP to a standard rate. A DVD's decoded output is exactly
+            # 30000/1001 or 25 regardless of what it was CODED at, so an
+            # estimate from frames/duration -- good to ~0.03% -- should be
+            # rounded to the exact value rather than used raw. Left raw it put
+            # a 330 ppm rate error into the answer, which is the same size as
+            # the effect being measured.
+            fps = min(STD_RATES, key=lambda r: abs(r - fps_dec))
+            if abs(fps - fps_dec) / fps > 0.01:
+                fps = fps_dec                       # nothing standard is close
+            print(f'  note: {len(pts)} timestamps for {len(luma)} frames; '
+                  f'decoded rate {fps_dec:.4f} -> using {fps:.5f} fps '
+                  f'(probe said {fps:.4f})' if fps == fps_dec else
+                  f'  note: {len(pts)} timestamps for {len(luma)} frames; '
+                  f'decoded {fps_dec:.4f} fps, snapped to {fps:.5f}')
+        else:
+            print(f'  note: only {len(pts)} timestamps for {len(luma)} frames; '
+                  'falling back to nominal fps')
+        pts = None
+    flashes = find_flashes(luma, fps, pts)
+    # Put audio on the same timeline as those timestamps: the audio stream has
+    # its own start_time in the container and need not begin at zero.
+    clicks_s = find_clicks(env)                    # seconds, by sample count
+    aclk = audio_clock(path) if pts is not None else None
+    if aclk is not None:
+        cum, apts = aclk
+        clicks = []
+        for c in clicks_s:
+            n = c * SAMPLE_RATE
+            i = int(np.searchsorted(cum, n)) - 1
+            i = min(max(i, 0), len(cum) - 1)
+            clicks.append(float(apts[i] + (n - cum[i]) / SAMPLE_RATE))
+    elif pts is not None:
+        clicks = [c + stream_start(path, 'a:0') for c in clicks_s]
+    else:
+        clicks = clicks_s
+    counters = read_counters(stack, [f for f, _ in flashes])
+
+    print(f'{label}: {os.path.basename(path)}  {w}x{h} @ {fps:.3f} fps')
+    print(f'  flashes {len(flashes)}   clicks {len(clicks)}')
+    if not flashes or not clicks:
+        sys.exit('lipsync: nothing to pair')
+
+    # Pair by TIME, never by index. Index pairing is silently catastrophic:
+    # one missing marker -- a click clipped at t=0, or a capture started
+    # mid-clip -- shifts every pair by one whole marker period and yields a
+    # plausible-looking number that is out by ~1000 ms. MEASURED: an injected
+    # -80 ms error came back as +910 ms that way.
+    period = float(np.median(np.diff([v for _, v in flashes]))) if len(flashes) > 1 else 1.0
+    window = period / 2.0
+    ca = np.array(clicks)
+    rows, used = [], set()
+    for fi, vt in flashes:
+        if ca.size == 0:
+            break
+        k = int(np.argmin(np.abs(ca - vt)))
+        if abs(ca[k] - vt) > window or k in used:
+            continue                      # no click for this flash
+        used.add(k)
+        rows.append({'marker': counters.get(fi), 'frame': fi,
+                     'video_s': round(vt, 5), 'audio_s': round(float(ca[k]), 5),
+                     'error_ms': round((float(ca[k]) - vt) * 1000.0, 2)})
+    unpaired_v = len(flashes) - len(rows)
+    unpaired_a = len(clicks) - len(used)
+    if unpaired_v or unpaired_a:
+        print(f'  unpaired: {unpaired_v} flash(es), {unpaired_a} click(s) '
+              '(clipped at the ends, or dropped markers)')
+    if not rows:
+        sys.exit('lipsync: no flash/click pairs within half a marker period -- '
+                 'the offset may exceed +/-%.0f ms' % (window * 1000))
+    errs = np.array([r['error_ms'] for r in rows])
+    # Drift is the slope, in ms per minute -- the shape that matters, since the
+    # defect this replaces was a ramp rather than a constant offset.
+    t = np.array([r['video_s'] for r in rows])
+    slope = (np.polyfit(t, errs, 1)[0] * 60.0) if len(rows) > 2 else float('nan')
+    stats = {'n': len(rows), 'mean_ms': float(errs.mean()),
+             'median_ms': float(np.median(errs)), 'std_ms': float(errs.std()),
+             'first_ms': float(errs[0]), 'last_ms': float(errs[-1]),
+             'drift_ms_per_min': float(slope)}
+    print(f'  error: mean {stats["mean_ms"]:+.1f} ms  median '
+          f'{stats["median_ms"]:+.1f}  std {stats["std_ms"]:.1f}  '
+          f'first {stats["first_ms"]:+.1f} -> last {stats["last_ms"]:+.1f}')
+    # ⚠ A sampled capture card measures OFFSETS, not RATES: it holds the last
+    # complete frame rather than integrating, and its sampling beats against the
+    # source. MEASURED: the same playback gives +31.4 ms/min captured at 60 fps
+    # and +40.2 ms/min at 50 fps -- a knob unconnected to the core moving the
+    # answer by 30%. A drift figure from here is not evidence about the core;
+    # use the core's own counters (mister.py telem).
+    if label == 'source' or ALLOW_DRIFT:
+        print(f'  drift: {stats["drift_ms_per_min"]:+.2f} ms/min')
+    else:
+        print('  drift: (suppressed -- a sampled capture cannot measure a rate; '
+              'use `mister.py telem`, or pass --allow-drift)')
+    # Near half a period, nearest-in-time pairing becomes ambiguous and could
+    # be off by a whole marker. Say so rather than reporting with confidence.
+    if abs(stats['median_ms']) > window * 1000.0 * 0.66:
+        print(f'  !! WARNING: |error| approaches half a marker period '
+              f'({window * 1000:.0f} ms) -- pairing may be off by one marker')
+    if counters:
+        seq = [r['marker'] for r in rows if r['marker'] is not None]
+        gaps = sum(1 for a, b in zip(seq, seq[1:]) if b != a + 1)
+        print(f'  counter: {seq[0]}..{seq[-1]}, {gaps} discontinuities'
+              + ('  (dropped/repeated markers)' if gaps else ''))
+    return rows, stats
+
+
+def load_cal(source):
+    if not os.path.exists(CAL_FILE):
+        return None
+    return json.load(open(CAL_FILE)).get(source)
+
+
+def cmd_source(args):
+    rows, stats = measure(args.file, 'source')
+    if args.save:
+        cal = json.load(open(CAL_FILE)) if os.path.exists(CAL_FILE) else {}
+        cal['source_offset_ms'] = stats['median_ms']
+        cal['source_file'] = os.path.basename(args.file)
+        json.dump(cal, open(CAL_FILE, 'w'), indent=2)
+        print(f'  saved source offset {stats["median_ms"]:+.2f} ms -> '
+              f'{os.path.basename(CAL_FILE)}')
+    write_csv(args.csv, rows)
+    return 0
+
+
+def cmd_capture(args):
+    rows, stats = measure(args.file, 'capture')
+    cal = json.load(open(CAL_FILE)) if os.path.exists(CAL_FILE) else {}
+    src = cal.get('source_offset_ms')
+    chain = cal.get(args.source, {}).get('skew_ms') if cal else None
+    if src is None or chain is None:
+        msg = ('lipsync: no calibration. The capture chain has its own A/V skew '
+               '(separately clocked v4l2 and ALSA), and it is very likely '
+               'larger than the effect being measured -- without it this number '
+               'describes the capture card.\n'
+               f'  missing: '
+               + ', '.join(x for x, v in (('source_offset_ms', src),
+                                          (f'{args.source}.skew_ms', chain))
+                           if v is None))
+        if not args.raw:
+            sys.exit(msg + '\n  Re-run with --raw only for exploration.')
+        print(msg)
+    else:
+        corrected = stats['median_ms'] - src - chain
+        print(f'  CORRECTED lip-sync error: {corrected:+.1f} ms '
+              f'(raw {stats["median_ms"]:+.1f} - source {src:+.1f} '
+              f'- chain {chain:+.1f})')
+    write_csv(args.csv, rows)
+    return 0
+
+
+def write_csv(path, rows):
+    if not path:
+        return
+    with open(path, 'w') as f:
+        f.write('marker,frame,video_s,audio_s,error_ms\n')
+        for r in rows:
+            f.write(f'{r["marker"]},{r["frame"]},{r["video_s"]},'
+                    f'{r["audio_s"]},{r["error_ms"]}\n')
+    print(f'  wrote {path}')
+
+
+def cmd_selftest(args):
+    """Generate clips with KNOWN injected errors and check they come back.
+
+    An instrument that has never been shown to report a wrong answer correctly
+    is not an instrument. This also pins the two failure modes already found:
+    a negative offset clips the first click at t=0, and index-based pairing
+    turned that into a plausible +910 ms instead of -90.6 ms.
+    """
+    import tempfile
+    sync = os.path.join(HERE, 'sync_disc.py')
+    fails, base = 0, None
+    with tempfile.TemporaryDirectory() as tmp:
+        for off in (0.0, 50.0, -80.0):
+            vob = os.path.join(tmp, f'sync{off:+.0f}.VOB')
+            subprocess.run([sys.executable, sync, 'make', '--minutes', '0.25',
+                            '--audio-offset-ms', str(off), '-o', vob],
+                           check=True, capture_output=True)
+            _, st = measure(vob, f'selftest {off:+.0f}ms')
+            if base is None:
+                base = st['median_ms']
+            got = st['median_ms'] - base
+            ok = abs(got - off) < 2.0 and st['std_ms'] < 2.0
+            print(f"  {'PASS' if ok else 'FAIL'} injected {off:+.0f} ms -> "
+                  f"recovered {got:+.1f} ms (std {st['std_ms']:.2f})")
+            if not ok:
+                fails += 1
+    print('lipsync selftest:', 'ALL GREEN' if not fails else f'{fails} FAILURE(S)')
+    return 1 if fails else 0
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest='cmd', required=True)
+    p = sub.add_parser('source')
+    p.add_argument('file')
+    p.add_argument('--csv')
+    p.add_argument('--save', action='store_true',
+                   help='record the offset as the calibration baseline')
+    p.set_defaults(fn=cmd_source)
+    p = sub.add_parser('capture')
+    p.add_argument('file')
+    p.add_argument('--csv')
+    p.add_argument('--source', default='hdmi', choices=('hdmi', 'analog'))
+    p.add_argument('--raw', action='store_true')
+    p.add_argument('--allow-drift', action='store_true',
+                   help='print the drift figure anyway (see the warning in measure())')
+    p.set_defaults(fn=cmd_capture)
+    sub.add_parser('selftest').set_defaults(fn=cmd_selftest)
+    args = ap.parse_args()
+    global ALLOW_DRIFT
+    ALLOW_DRIFT = getattr(args, 'allow_drift', False)
+    return args.fn(args)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

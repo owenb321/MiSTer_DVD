@@ -566,7 +566,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-main"
+`define CORE_VERSION "dev-telem"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -850,6 +850,7 @@ wire [63:0] img_size;
 hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     .clk_sys        (clk_sys),
     .HPS_BUS        (HPS_BUS),
+    .EXT_BUS        (ext_bus),      // DVD-FORK (telemetry bridge): see dvd_telem below
 
     .ioctl_download (ioctl_download),
     .ioctl_wr       (ioctl_wr),
@@ -895,6 +896,51 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     // The DVD-game entropy seed - see the entropy source below.
     .TIMESTAMP      (hps_timestamp)
 );
+
+// =========================================================================
+// TELEMETRY BRIDGE (core -> HPS, dvd/dvd_telem.sv)
+// -------------------------------------------------------------------------
+// Exposes the decoder's pacing counters to the host over the hps_io EXT_BUS
+// extension, so tools/mister.py can read them directly instead of decoding a
+// photographed debug overlay. Answers, in particular, whether the governor
+// really shows each content frame for exactly show_next refreshes: the
+// refreshes/pickups ratio must be 2.000 for 29.97 content on a 59.94 raster,
+// and a measured ~450 ppm video-fast A/V drift says it may not be.
+//
+// This is NOT behind `ifdef DEBUG_OVERLAY on purpose: gating it would mean a
+// rebuild and a fitter-seed re-roll every time telemetry is wanted, which is
+// the cost the bridge exists to remove.
+//
+// hps_io drives EXT_BUS[35:33] (fp_enable, io_enable, io_strobe) and
+// EXT_BUS[31:16] (io_din); the core drives EXT_BUS[32] to take the reply bus
+// and EXT_BUS[15:0] with the data (sys/hps_io.sv:203-220).
+// =========================================================================
+wire [35:0] ext_bus;
+wire        telem_drive;
+wire [15:0] telem_dout;
+assign ext_bus[32]   = telem_drive;
+assign ext_bus[15:0] = telem_dout;
+
+dvd_telem dvd_telem_inst (
+    .clk        (clk_sys),
+    .io_enable  (ext_bus[34]),
+    .io_strobe  (ext_bus[33]),
+    .io_din     (ext_bus[31:16]),
+    .drive      (telem_drive),
+    .dout       (telem_dout),
+    .refreshes  (core_frame_cnt),        // clk_mem: raster vsyncs
+    .pickups    (core_pickups),          // clk_dec: content frames displayed
+    .lates      (core_frames_late),      // clk_dec
+    .drops      (core_frames_dropped),   // clk_dec
+    .vid_err    (core_vid_err),          // clk_dec, signed
+    .drop_costs (core_drop_costs),       // clk_dec: {debt, drop_req, probe}
+    .vbuf_fill  (core_vbuf_fill),
+    .aud_frames (aud_frames_avail),
+    .flags      ({3'b0, menu_active, still_active, video_live_s2, pause_q, media_seen}),
+    .aud_play   (aud_play_cnt),          // clk_sys: play ticks/16 reaching the DAC
+    .aud_gate   (aud_gate_cnt)           // clk_sys: drain-gate closures
+);
+
 
 // =========================================================================
 // MPG Sector Streamer: sd_* interface -> stream_data for mpeg2video
@@ -3087,6 +3133,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     // 48 kHz NCO trim: 0 (free-run) when Audio Genlock=Off; otherwise av_sync's
     // genlock slew. See dec_nco_trim above.
     .nco_trim           (dec_nco_trim),
+    .dbg_play_cnt       (aud_play_cnt),          // DVD-FORK (telemetry)
+    .dbg_gate_cnt       (aud_gate_cnt),          // DVD-FORK (telemetry)
     .dispatch_pts       (aud_dispatch_pts),
     .dispatch_pts_valid (aud_dispatch_pts_valid),
     // PTS-scheduled playback START (lip-sync v3): the 48 kHz drain is held until
@@ -3731,6 +3779,7 @@ mpeg2video mpeg2video_inst (
     .ref_prefetch_en   (1'b1),                         // O[18] baked: deep ref run-ahead always on
     .frame_drop_en     (frame_drop_s2),                // DVD-FORK (frame-drop O[12]): clk_dec-synced enable
     .dbg_frames_late   (core_frames_late),             // DVD-FORK (frame-drop O[12]): governor deadline-miss count (clk_dec)
+    .dbg_pickups       (core_pickups),                 // DVD-FORK (telemetry): content frames picked up for display (clk_dec)
     .dbg_frames_dropped(core_frames_dropped),          // DVD-FORK (frame-drop O[12]): B-frames dropped count (clk_dec)
     .dbg_vid_err       (core_vid_err),                 // DVD-FORK (vid_err instrument): video content vs wall (clk_dec)
     .dbg_drop_costs    (core_drop_costs),              // DVD-FORK (round 9): drop acks split by debit {cost3, cost2}
@@ -3774,6 +3823,9 @@ assign film_det_pal_sync  = film_det_pal_s2;
 // A/B on BBB-PAL / high-motion (O[12] Off vs On). See docs/motcomp_throughput.md.
 wire [15:0] core_frames_late, core_frames_dropped;
 wire [15:0] core_vid_err;   // vid_err instrument: signed, 1 unit = 1 refresh (16.7 ms); negative = video content AHEAD
+wire [15:0] core_pickups;   // DVD-FORK (telemetry): content frames picked up for display (clk_dec, free-running)
+wire [15:0] aud_play_cnt;   // DVD-FORK (telemetry): audio play ticks/16 (clk_sys, free-running)
+wire [15:0] aud_gate_cnt;   // DVD-FORK (telemetry): audio drain-gate closures (clk_sys)
 wire [15:0] core_drop_costs; // round-9 debit discriminator: {acks debited 3 [15:8], debited 2 [7:0]}, saturating
 wire  [7:0] core_vbuf_fill;   // VBUF occupancy tap (framestore_request), eyeball-grade CDC
 // =========================================================================
@@ -4123,7 +4175,15 @@ reg        core_vs_prev = 0;
 wire       core_video_active = (core_vs_edge_cnt >= 3'd3);
 reg [15:0] core_frame_cnt = 0;  // free-running frame counter (all vsync rising edges)
 
-// core_v_sync is in clk_mem domain (dot_clk=clk_mem), so sample here on clk_mem
+// ⚠ CORRECTED 2026-09-05: dot_clk is clk_sys (27 MHz), NOT clk_mem -- see the
+// mpeg2video instantiation, .dot_clk(clk_sys) with .dot_ce(1'b1). core_v_sync
+// therefore originates in clk_sys and is sampled here on clk_mem (90 MHz),
+// which is a CDC. It is safe as written -- vsync is ~60 Hz against a 90 MHz
+// sampler, and the edge detector needs only that each edge be seen once -- but
+// the old comment claimed the two were the same domain, and reading it that way
+// sends you looking for a clock split between audio and video that does not
+// exist (they share clk_sys). Do not re-derive that.
+
 always @(posedge clk_mem or negedge reset_n) begin
     if (!reset_n) begin
         core_vs_edge_cnt <= 0;

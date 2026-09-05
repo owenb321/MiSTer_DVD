@@ -39,6 +39,7 @@ module resample(
   pixel_wr_almost_full, interlaced, deinterlace, persistence, repeat_frame,
   y, u, v, osd_out, position_out, pixel_wr_en,
   frame_late,                                       // DVD-FORK (frame-drop governor O[19])
+  pickup_cnt,                                       // DVD-FORK (telemetry): frames picked up for display
   video_live,                                       // DVD-FORK (av_sync STC reference)
   pickup_hold,                                      // DVD-FORK (STD mux-lead hold)
   pause,                                            // DVD-FORK (gamepad transport): freeze frame while paused
@@ -95,6 +96,9 @@ module resample(
   output        [2:0]position_out;
   output             pixel_wr_en;
   output             frame_late;                 // DVD-FORK (frame-drop governor O[19]): decode deadline-miss pulse
+  /* DVD-FORK (telemetry): free-running count of frames picked up for display,
+   * passed straight through from resample_addrgen. See dvd/dvd_telem.sv. */
+  output    [15:0] pickup_cnt;
   output             video_live;                 // DVD-FORK (av_sync STC reference): sticky "first frame displayed"
   input              pickup_hold;                 // DVD-FORK (STD mux-lead hold): defer the FIRST display pickup
   input              pause;                        // DVD-FORK (gamepad transport): freeze the displayed frame while paused
@@ -160,6 +164,7 @@ module resample(
     .resample_wr_almost_full(resample_wr_almost_full),
     .busy(resample_addr_busy),
     .frame_late(frame_late),                       // DVD-FORK (frame-drop governor O[19])
+    .pickup_cnt(pickup_cnt),                       // DVD-FORK (telemetry)
     .video_live(video_live),                       // DVD-FORK (av_sync STC reference)
     .pickup_hold(pickup_hold),                     // DVD-FORK (STD mux-lead hold)
     .pause(pause),                                 // DVD-FORK (gamepad transport): freeze frame while paused
