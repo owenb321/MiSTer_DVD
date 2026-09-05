@@ -89,6 +89,9 @@ class Explorer:
         # Steps to skip telemetry oracles for after the harness perturbs the
         # core itself. A seek or a menu hop legitimately disturbs every counter.
         self.quiet = 0
+        # Downsampled previous frame, for "is the picture actually moving?".
+        self.prev_small = None
+        self.frozen_for = 0
 
     def log(self, **kw):
         kw['step'] = self.step
@@ -147,6 +150,15 @@ exit 1
         # the most diagnostic signature of the three would never have registered
         # as flat. Caught by the selftest's green arm, not by a soak.
         std = float(a.std(axis=(0, 1)).max())
+        # Track picture motion. A still is not a fault, and the core does not
+        # always say it is on one: a title-domain interactive still (Cluedo,
+        # Scooby's maze) sets neither `menu` nor `still`, so the flags alone
+        # cannot distinguish "parked on a menu" from "video died".
+        small = a[::8, ::8].mean(axis=2)
+        if self.prev_small is not None and small.shape == self.prev_small.shape:
+            moved = float(np.abs(small - self.prev_small).mean())
+            self.frozen_for = self.frozen_for + 1 if moved < 1.0 else 0
+        self.prev_small = small
         if std < FLAT_STD:
             for name, ref in FAULT_COLOURS:
                 if all(abs(m - r) <= COLOUR_TOL for m, r in zip(mean, ref)):
@@ -194,6 +206,15 @@ exit 1
                      and not f.get('still') and not f.get('menu')
                      for f in (flags, pflags))
         if not steady:
+            return
+
+        # ⚠ A FROZEN PICTURE IS A STILL, NOT A STALLED TIMELINE. On a still the
+        # governor misses its deadline every refresh (there is no new picture to
+        # show), so vid_err climbs at exactly the refresh rate -- 50.0/s on PAL,
+        # which is what Cluedo's interactive board screen produced. Judging that
+        # by the flags alone fails, because a title-domain still sets neither
+        # `menu` nor `still`. The picture itself is the reliable witness.
+        if self.frozen_for:
             return
 
         d_gate = (tel.get('aud_gate', 0) - prev.get('aud_gate', 0)) & 0xFFFF

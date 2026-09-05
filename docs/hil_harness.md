@@ -295,8 +295,30 @@ telemetry, and notifies via `tools/notify.sh`.
 Suite: `bench/dvd/run_telem.sh` (the telemetry bench plus all three host-tool
 selftests; no hardware needed).
 
-Clean first runs: MEN_IN_BLACK 34 steps, SCENEIT_HP 43, ULTIMATE_T2 26, zero
-findings.
+### First unattended hour (2026-09-05)
+
+Six discs x 10 min, ~475 steps: Akira (NTSC film), The Office UK (PAL), Atmosfear
+(NTSC interactive), Paw Patrol (TV), Batman Begins (film), Cluedo (PAL
+interactive).
+
+**No core defects found.** Five discs clean; Cluedo produced 11 findings that
+were all one false-positive class, now fixed:
+
+⚠ **A FROZEN PICTURE IS A STILL, NOT A STALLED TIMELINE.** On a still the
+governor misses its deadline every refresh -- there is no new picture to show --
+so `vid_err` climbs at exactly the refresh rate. Cluedo's interactive board
+screen produced a textbook 50.0/s on PAL, with `vbuf_fill` 0 and 63% lates,
+which reads alarmingly and is entirely normal. The flags cannot settle it: a
+TITLE-DOMAIN interactive still (Cluedo, Scooby's maze -- see
+`docs/dvd_menu_refinements.md`) sets neither `menu` nor `still`. The picture
+itself is the reliable witness, so the telemetry oracles are now gated on the
+frame actually having changed.
+
+That makes three false-positive classes found and fixed by running the thing:
+harness-perturbation, the green-frame flatness bug (found by the selftest, not
+by soaking), and title-domain stills. The oracles fire on synthetic faults and
+stay quiet across six real discs -- which is the balance worth having before a
+finding from this tool is worth believing.
 
 ## What is not here yet
 
