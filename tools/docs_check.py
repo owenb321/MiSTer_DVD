@@ -122,6 +122,73 @@ def parse(literals: list[str]):
     return options, buttons, exts
 
 
+def parse_bits(literals: list[str]):
+    """Like parse(), but KEEPS each option's status-bit span.
+
+    parse() deliberately throws the bit spec away -- it only cares whether an
+    option is documented. The hardware-in-the-loop harness (tools/mister.py)
+    needs the bits, because it sets OSD options by writing the core's saved
+    settings file, which is a raw dump of Main's 128-bit `cur_status` word.
+
+    Returns [(label, start, end, values)] with bit indices decoded exactly as
+    Main_MiSTer/user_io.cpp:502 `user_io_status_bits()` does:
+
+      "[hi:lo]"   -> start=lo, end=hi        (note sscanf reads end FIRST)
+      "[b]"       -> start=end=b
+      "5" / "B"   -> one base-32 char, '0'-'9' = 0-9, 'A'-'V' = 10-31
+      "12"        -> two chars: start=first, end=second
+      lowercase o -> +32 on both ends ("ex")
+      X           -> "also handled by the HPS"; carries no bits, skipped
+
+    This is parsed rather than hand-listed on purpose: emu.sv carries
+    commented-out CONF_STR history, so a hand-maintained table drifts and a
+    naive grep invents options that do not exist.
+    """
+    def base32(c: str) -> int | None:
+        if "0" <= c <= "9":
+            return ord(c) - ord("0")
+        if "A" <= c <= "V":
+            return ord(c) - ord("A") + 10
+        return None
+
+    out: list[tuple[str, int, int, list[str]]] = []
+    for lit in literals:
+        s = lit.rstrip(";")
+        if not s:
+            continue
+        head = s.split(",")[0]
+        m = re.fullmatch(r"(?:P\d)?([Oo])(X?)(\[[\d:]+\]|[0-9A-Za-z]{1,2})", head)
+        if not m:
+            continue
+        parts = [p.strip() for p in s.split(",")]
+        if len(parts) < 2 or not parts[1]:
+            continue
+        ex = 32 if m.group(1) == "o" else 0
+        spec = m.group(3)
+
+        if spec.startswith("["):
+            nums = [int(v) for v in spec[1:-1].split(":")]
+            if len(nums) == 2:
+                end, start = nums          # "[hi:lo]"
+            else:
+                start = end = nums[0]
+        else:
+            start = base32(spec[0])
+            if start is None:
+                continue
+            end = base32(spec[1]) if len(spec) > 1 else None
+            if end is None:
+                end = start
+            start += ex
+            end += ex
+
+        if end < start or end > 127 or end - start > 8:
+            continue                        # Main rejects these too
+        out.append((parts[1], start, end, parts[2:]))
+    return out
+
+
+
 def page_text(rel: str) -> str:
     p = CONTENT / rel
     if not p.is_file():

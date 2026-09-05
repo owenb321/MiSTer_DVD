@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""
+mister.py -- drive a MiSTer running the DVD core, over ssh.
+
+The hardware-in-the-loop harness: deploy a build, launch a disc, press buttons,
+and pull back a screenshot -- so a session can SEE the core instead of asking
+someone to test and report. Design notes and the facts it relies on are in
+docs/hil_harness.md.
+
+Nothing here needs a change to the core or to MiSTer's Main. It composes four
+stock mechanisms:
+
+  load_core   /dev/MiSTer_cmd accepts an .mgl, which loads a core AND mounts
+              media in one command (input.cpp:6238, user_io.cpp:1518).
+  screenshot  the same FIFO writes a PNG of the CORE's raw raster -- read from
+              ascal's INPUT buffer (sys_top.v:680), so it carries no MiSTer OSD
+              (composited after ascal, sys_top.v:1149), no popups and no
+              scaling. MEASURED: a shot taken with the OSD open shows no OSD.
+  DVD_v2.CFG  the core's saved settings are a raw dump of Main's 128-bit status
+              word (user_io.cpp:600), read at core init before reset is released
+              -- so writing 16 bytes sets any OSD option for the next launch.
+  uinput      a virtual keyboard on the target reaches dvd/kbd_map.sv, which
+              maps every transport action (see tools/mister_keyd.py).
+
+Configuration, in precedence order -- NEVER hardcode a host, this repo is
+public:
+    $MISTER_HOST                 e.g. root@192.168.1.10
+    tools/.mister_host           one line, gitignored
+    $MISTER_CORE_DIR             default /media/fat/_Other
+    $MISTER_CFG_DIR              default /media/fat/config
+
+Usage:
+    mister.py state
+    mister.py deploy [--rbf PATH] [--agent]
+    mister.py launch <image> [--opt "Video Output=Progressive"] ... [--delay N]
+    mister.py key <name> [<name> ...]
+    mister.py shot [-o FILE] [--decode]
+    mister.py log [-n N]
+    mister.py options
+    mister.py shell -- <command>
+"""
+
+import argparse
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+import docs_check                                    # noqa: E402  (CONF_STR parser)
+
+CORE_DIR = os.environ.get('MISTER_CORE_DIR', '/media/fat/_Other')
+CFG_DIR = os.environ.get('MISTER_CFG_DIR', '/media/fat/config')
+SHOT_DIR = '/media/fat/screenshots'
+# A FIXED name, deliberately. MGL <rbf> resolution takes the lexicographically
+# GREATEST match (mra_loader.cpp:1288), not the newest file -- with ~75 DVD_*
+# builds in _Other/ a bare "DVD" selects whichever sorts last, which on this rig
+# is a MARGINAL build from weeks ago. The core name comes from CONF_STR[0], not
+# the filename, so renaming costs nothing: it is still "DVD" and still uses
+# DVD_v2.CFG.
+HIL_RBF = 'DVD_hil.rbf'
+HIL_MGL = 'DVD_hil.mgl'
+CFG_NAME = 'DVD_v2.CFG'
+AGENT_SRC = os.path.join(HERE, 'mister_keyd.py')
+AGENT_DST = '/tmp/mister_keyd.py'
+AGENT_FIFO = '/tmp/mister_hil'
+
+SSH_OPTS = [
+    '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=8',
+    '-o', 'StrictHostKeyChecking=accept-new',
+    '-o', 'ControlMaster=auto', '-o', 'ControlPath=~/.ssh/cm-mister-%C',
+    '-o', 'ControlPersist=120',
+]
+
+
+# ---------------------------------------------------------------------------
+# transport
+# ---------------------------------------------------------------------------
+def host():
+    h = os.environ.get('MISTER_HOST')
+    if h:
+        return h.strip()
+    path = os.path.join(HERE, '.mister_host')
+    if os.path.exists(path):
+        h = open(path).read().strip()
+        if h:
+            return h
+    sys.exit('mister: no host. Set $MISTER_HOST or write tools/.mister_host '
+             '(one line, e.g. root@192.168.1.10). It is gitignored.')
+
+
+def ssh(script, check=True, timeout=120):
+    """Run a shell script on the target. Returns (rc, stdout)."""
+    p = subprocess.run(['ssh', *SSH_OPTS, host(), 'bash -s'],
+                       input=script, capture_output=True, text=True,
+                       timeout=timeout)
+    # ssh chatters on stderr (host-key notes, PQ warnings); only surface it on
+    # failure, and never let it contaminate stdout.
+    if check and p.returncode != 0:
+        sys.stderr.write(p.stderr)
+        sys.exit(f'mister: remote command failed (rc={p.returncode})')
+    return p.returncode, p.stdout
+
+
+def scp(src, dst, to_target=True, timeout=180):
+    a, b = (src, f'{host()}:{dst}') if to_target else (f'{host()}:{src}', dst)
+    p = subprocess.run(['scp', *SSH_OPTS, '-q', a, b],
+                       capture_output=True, text=True, timeout=timeout)
+    if p.returncode != 0:
+        sys.stderr.write(p.stderr)
+        sys.exit(f'mister: scp failed ({a} -> {b})')
+
+
+def fifo(cmd):
+    """Write ONE command to /dev/MiSTer_cmd.
+
+    One per write, always: Main does a single read() then a single if/else-if
+    chain (input.cpp:6230), so two commands in one write means the second is
+    silently discarded.
+    """
+    ssh(f'echo {shlex.quote(cmd)} > /dev/MiSTer_cmd\n')
+
+
+# ---------------------------------------------------------------------------
+# key names, derived from the RTL rather than hand-listed
+# ---------------------------------------------------------------------------
+# PS/2 set-2 -> Linux keycode, inverted from Main's own ev2ps2[]
+# (input.cpp:366). Regenerate with tools/tests/test_mister.py if Main's table
+# ever changes.
+PS2_TO_LINUX = {
+    (0x04, False): 61, (0x05, False): 59, (0x06, False): 60, (0x0C, False): 62,
+    (0x0D, False): 15, (0x1B, False): 31, (0x1C, False): 30, (0x22, False): 45,
+    (0x23, False): 32, (0x29, False): 57, (0x2B, False): 33, (0x2C, False): 20,
+    (0x2D, False): 19, (0x31, False): 49, (0x32, False): 48, (0x34, False): 34,
+    (0x3A, False): 50, (0x4D, False): 25, (0x5A, False): 28, (0x66, False): 14,
+    (0x76, False): 1,
+    (0x5A, True): 96, (0x6B, True): 105, (0x72, True): 108, (0x74, True): 106,
+    (0x75, True): 103, (0x7A, True): 109, (0x7D, True): 104,
+}
+DPAD = {0: 'right', 1: 'left', 2: 'down', 3: 'up'}
+KEY_F12 = 88
+
+
+def kbd_map_table():
+    """Parse dvd/kbd_map.sv -> {joy bit: [(ps2 code, extended), ...]}.
+
+    Derived, not transcribed: a new binding in the RTL is usable the same day,
+    and the two cannot drift apart.
+    """
+    src = open(os.path.join(ROOT, 'dvd', 'kbd_map.sv')).read()
+    m = re.search(r'if \(ps2_key\[8\]\) begin(.*?)\n\s*end else begin(.*?)\n\s*end\b',
+                  src, re.S)
+    if not m:
+        sys.exit('mister: could not find the kbd_map.sv decode table')
+    out = {}
+    for extended, body in ((True, m.group(1)), (False, m.group(2))):
+        body = re.sub(r'//[^\n]*', '', body)
+        for code, bit in re.findall(r"8'h([0-9A-Fa-f]{2}):\s*hit\[(\d+)\]", body):
+            out.setdefault(int(bit), []).append((int(code, 16), extended))
+    return out
+
+
+def key_names():
+    """{name: linux keycode} for every transport action the core exposes."""
+    lits = docs_check.extract_conf_str(open(os.path.join(ROOT, 'dvd', 'emu.sv')).read())
+    _, buttons, _ = docs_check.parse(lits)
+    table = kbd_map_table()
+    names = {}
+    for bit, codes in sorted(table.items()):
+        # A bit may have several keys (M / X / F1 all mean Menu). Pick
+        # deterministically: the first entry the RTL lists for that bit.
+        linux = None
+        for code, ext in codes:
+            linux = PS2_TO_LINUX.get((code, ext))
+            if linux is not None:
+                break
+        if linux is None:
+            continue
+        if bit in DPAD:
+            label = DPAD[bit]
+        elif bit - 4 < len(buttons):
+            label = buttons[bit - 4]
+        else:
+            continue
+        names[label.lower().replace(' ', '-')] = linux
+    names['osd'] = KEY_F12          # Main's OSD toggle, not a core action
+    for d in range(10):             # digits select+activate menu button N
+        names[str(d)] = (11 if d == 0 else 1 + d)
+    return names
+
+
+# ---------------------------------------------------------------------------
+# OSD options -> the 16-byte saved-settings blob
+# ---------------------------------------------------------------------------
+def options():
+    lits = docs_check.extract_conf_str(open(os.path.join(ROOT, 'dvd', 'emu.sv')).read())
+    return docs_check.parse_bits(lits)
+
+
+def build_status(opts):
+    """[('Video Output', 'Progressive'), ...] -> 16 bytes of cur_status.
+
+    ALL 16 bytes are always written from the full option set: the blob carries
+    no version or checksum, so patching bytes in place would silently give a
+    bit a new meaning if CONF_STR were ever relaid out.
+    """
+    table = options()
+    by_label = {label.lower(): (label, s, e, vals) for label, s, e, vals in table}
+    word = 0
+    for name, value in opts:
+        entry = by_label.get(name.strip().lower())
+        if entry is None:
+            sys.exit(f'mister: unknown option {name!r}. Try: mister.py options')
+        label, start, end, vals = entry
+        value = value.strip()
+        idx = None
+        for i, v in enumerate(vals):
+            if v.strip().lower() == value.lower():
+                idx = i
+                break
+        if idx is None:
+            if re.fullmatch(r'\d+', value):
+                idx = int(value)
+            else:
+                sys.exit(f'mister: {label!r} has no value {value!r}. '
+                         f'Choices: {", ".join(vals)}')
+        width = end - start + 1
+        if idx >= (1 << width):
+            sys.exit(f'mister: value {idx} does not fit {label!r} ({width} bits)')
+        word |= idx << start
+    return word.to_bytes(16, 'little')
+
+
+# ---------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------
+def newest_rbf():
+    rel = os.path.join(ROOT, 'releases')
+    cands = [os.path.join(rel, f) for f in os.listdir(rel)] if os.path.isdir(rel) else []
+    cands = [c for c in cands if c.endswith('.rbf')]
+    if not cands:
+        sys.exit('mister: no .rbf in releases/ -- build one, or pass --rbf')
+    return max(cands, key=os.path.getmtime)
+
+
+def cmd_deploy(args):
+    ssh(f'mkdir -p {SHOT_DIR}\n')
+    if args.agent or not args.rbf_only:
+        scp(AGENT_SRC, AGENT_DST)
+        # restart it: one device for its lifetime, so a stale one must go first
+        _, out = ssh(f'''
+pkill -f {AGENT_DST} 2>/dev/null
+rm -f {AGENT_FIFO}
+setsid python3 {AGENT_DST} </dev/null >>/tmp/mister_keyd.log 2>&1 &
+sleep 2
+[ -p {AGENT_FIFO} ] && echo "agent: listening" || echo "agent: FIFO MISSING"
+''')
+        print(out.strip())
+    if not args.agent:
+        rbf = args.rbf or newest_rbf()
+        print(f'deploy: {os.path.basename(rbf)} -> {CORE_DIR}/{HIL_RBF}')
+        scp(rbf, f'{CORE_DIR}/{HIL_RBF}')
+        meta = rbf + '.json'
+        state = {'rbf': os.path.basename(rbf), 'deployed': time.strftime('%F %T')}
+        if os.path.exists(meta):
+            try:
+                j = json.load(open(meta))
+                state.update({k: j.get(k) for k in
+                              ('core_version', 'git_sha', 'git_branch', 'seed',
+                               'fmax_slow_100c', 'marginal') if k in j})
+            except Exception:
+                pass
+        with open(os.path.join(HERE, '.mister_state.json'), 'w') as f:
+            json.dump(state, f, indent=2)
+        for k, v in state.items():
+            print(f'  {k}: {v}')
+
+
+def cmd_launch(args):
+    img = args.image
+    opts = [tuple(o.split('=', 1)) for o in (args.opt or [])]
+    for o in opts:
+        if len(o) != 2:
+            sys.exit('mister: --opt takes "Name=Value"')
+    blob = build_status(opts)
+    print(f'launch: {img}')
+    if opts:
+        print('  options: ' + ', '.join(f'{k}={v}' for k, v in opts))
+    print(f'  status word: {blob.hex()}')
+    mgl = (f'<mistergamedescription>\n'
+           f'  <rbf>{os.path.basename(CORE_DIR)}/{HIL_RBF[:-4]}</rbf>\n'
+           f'  <file delay="{args.delay}" type="s" index="0" '
+           f'path="{img}"/>\n'
+           f'</mistergamedescription>\n')
+    ssh(f'''
+python3 -c "import sys;open('{CFG_DIR}/{CFG_NAME}','wb').write(bytes.fromhex('{blob.hex()}'))"
+cat > {CORE_DIR}/{HIL_MGL} <<'MGLEOF'
+{mgl}MGLEOF
+''')
+    fifo(f'load_core {CORE_DIR}/{HIL_MGL}')
+    if not args.no_wait:
+        cmd_wait(args)
+
+
+def cmd_wait(args):
+    deadline = time.time() + args.timeout
+    while time.time() < deadline:
+        _, out = ssh('cat /tmp/CORENAME 2>/dev/null\n', check=False, timeout=30)
+        if out.strip() == 'DVD':
+            break
+        time.sleep(0.5)
+    else:
+        sys.exit('mister: timed out waiting for the DVD core')
+    # then wait for the MGL to finish mounting -- never a fixed sleep
+    while time.time() < deadline:
+        _, out = ssh('tail -20 /tmp/dvd_report.log 2>/dev/null\n', check=False, timeout=30)
+        if 'MGL finished' in out:
+            print('  ' + [l for l in out.splitlines() if 'MGL finished' in l][-1].strip())
+            return
+        time.sleep(0.5)
+    print('  (no "MGL finished" seen; continuing)')
+
+
+def cmd_key(args):
+    names = key_names()
+    codes = []
+    for n in args.names:
+        n = n.lower()
+        if n not in names:
+            sys.exit(f'mister: unknown key {n!r}. Known: {", ".join(sorted(names))}')
+        codes.append(names[n])
+    rc, out = ssh(f'''
+[ -p {AGENT_FIFO} ] || {{ echo "NOAGENT"; exit 0; }}
+echo "keys {' '.join(str(c) for c in codes)}" > {AGENT_FIFO}
+echo sent
+''')
+    if 'NOAGENT' in out:
+        sys.exit('mister: key daemon is not running -- `mister.py deploy --agent`')
+    print(f'key: {" ".join(args.names)}  ({", ".join(str(c) for c in codes)})')
+
+
+def cmd_shot(args):
+    name = 'hil.png'
+    ssh(f'''
+rm -f {SHOT_DIR}/{name}
+echo 'screenshot {name}' > /dev/MiSTer_cmd
+for i in $(seq 1 20); do
+  sleep 0.25
+  if [ -f {SHOT_DIR}/{name} ]; then
+    a=$(stat -c %s {SHOT_DIR}/{name}); sleep 0.25
+    b=$(stat -c %s {SHOT_DIR}/{name})
+    [ "$a" = "$b" ] && [ "$a" != 0 ] && exit 0
+  fi
+done
+echo "NOSHOT"; exit 1
+''', check=False)
+    out = args.out or os.path.join(
+        os.environ.get('TMPDIR', '/tmp'), f'mister_{time.strftime("%H%M%S")}.png')
+    scp(f'{SHOT_DIR}/{name}', out, to_target=False)
+    print(f'shot: {out}')
+    if args.decode:
+        subprocess.run([sys.executable, os.path.join(HERE, 'hud_read.py'),
+                        'read', out])
+
+
+def cmd_state(args):
+    _, out = ssh('''
+echo "corename=$(cat /tmp/CORENAME 2>/dev/null)"
+echo "osd_visible=$(cat /tmp/OSD_VISIBLE 2>/dev/null || echo '(needs log_file_entry=1 in MiSTer.ini)')"
+for p in $(ls /proc | grep -E '^[0-9]+$'); do
+  e=$(readlink /proc/$p/exe 2>/dev/null)
+  case "$e" in *MiSTer*) echo "main=$e";; esac
+done
+[ -p ''' + AGENT_FIFO + ''' ] && echo "agent=listening" || echo "agent=down"
+echo "--- dvd_report.log ---"
+tail -5 /tmp/dvd_report.log 2>/dev/null
+''')
+    print(out.rstrip())
+    st = os.path.join(HERE, '.mister_state.json')
+    if os.path.exists(st):
+        print('--- deployed ---')
+        for k, v in json.load(open(st)).items():
+            print(f'{k}={v}')
+
+
+def cmd_log(args):
+    _, out = ssh(f'tail -{args.n} /tmp/dvd_report.log 2>/dev/null\n')
+    print(out.rstrip())
+
+
+def cmd_options(args):
+    print('OSD options (from dvd/emu.sv CONF_STR):')
+    for label, s, e, vals in options():
+        print(f'  {label:<20} bits[{e}:{s}]  {", ".join(vals)}')
+    print('\nKeys (from dvd/kbd_map.sv):')
+    print('  ' + ', '.join(sorted(key_names())))
+
+
+def cmd_shell(args):
+    rc, out = ssh(' '.join(args.rest) + '\n', check=False)
+    print(out.rstrip())
+    return rc
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest='cmd', required=True)
+
+    p = sub.add_parser('deploy', help='copy a build (and the key daemon) to the rig')
+    p.add_argument('--rbf', help='default: newest releases/*.rbf')
+    p.add_argument('--agent', action='store_true', help='only (re)start the key daemon')
+    p.add_argument('--rbf-only', action='store_true')
+    p.set_defaults(fn=cmd_deploy)
+
+    p = sub.add_parser('launch', help='set options, mount an image, load the core')
+    p.add_argument('image', help='absolute path ON THE MISTER')
+    p.add_argument('--opt', action='append', metavar='"Name=Value"')
+    p.add_argument('--delay', type=int, default=2)
+    p.add_argument('--timeout', type=int, default=60)
+    p.add_argument('--no-wait', action='store_true')
+    p.set_defaults(fn=cmd_launch)
+
+    p = sub.add_parser('wait')
+    p.add_argument('--timeout', type=int, default=60)
+    p.set_defaults(fn=cmd_wait)
+
+    p = sub.add_parser('key', help='press one or more transport keys')
+    p.add_argument('names', nargs='+')
+    p.set_defaults(fn=cmd_key)
+
+    p = sub.add_parser('shot', help='screenshot and pull it back')
+    p.add_argument('-o', '--out')
+    p.add_argument('--decode', action='store_true')
+    p.set_defaults(fn=cmd_shot)
+
+    for name, fn in (('state', cmd_state), ('options', cmd_options)):
+        sub.add_parser(name).set_defaults(fn=fn)
+
+    p = sub.add_parser('log')
+    p.add_argument('-n', type=int, default=20)
+    p.set_defaults(fn=cmd_log)
+
+    p = sub.add_parser('shell')
+    p.add_argument('rest', nargs=argparse.REMAINDER)
+    p.set_defaults(fn=cmd_shell)
+
+    args = ap.parse_args()
+    return args.fn(args) or 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
