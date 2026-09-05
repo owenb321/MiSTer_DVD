@@ -133,77 +133,28 @@ primary reader: the numeric `DEBUG_OVERLAY` lattice it decodes is compiled out
   Setting it to 1 would give the harness OSD state, which it otherwise cannot
   see at all.
 
-## Track C status (lip-sync) — VALIDATED, and it found something
+## Track C status (lip-sync)
 
-`tools/sync_disc.py` + `tools/lipsync_measure.py` measure A/V sync end to end.
+`tools/sync_disc.py` generates DVD-authored marker clips (29.97 progressive,
+23.976 with genuine soft 3:2 pulldown, PAL, AC-3/LPCM/MP2) and
+`tools/lipsync_measure.py` measures A/V from a capture of them.
 
-**Instrument validation, offline and on hardware:**
+**What it is validated for: OFFSETS.**
 
 | check | result |
 |---|---|
 | injected +50 / -80 ms in the generated file | recovered to **0.1 ms**, std 0.00 |
-| the generated file measured as-authored | flash interval **1.001000 s (0.0000%)** |
-| commanded `A/V Offset` +200 ms on the board | measured **+199.2 ms** (0.4% error) |
+| the generated clip measured as-authored | flash interval **1.001000 s (0.0000%)** |
+| commanded `A/V Offset +200 ms` on the board | measured **+199.2 ms** (0.4% error) |
 
-That last row is the acceptance test: a known input producing a known change,
-on real hardware. The instrument measures the core, not itself.
+**What it is NOT valid for: RATES / drift.** See the retraction below -- a
+sampled capture card cannot measure a clock rate, and the tool now suppresses
+the drift figure for captures. For anything rate-shaped use `mister.py telem`.
 
-### ~~FINDING 1: video content runs ~430-570 ppm FAST against audio~~ (RETRACTED -- see below)
-
-On linear `.VOB` playback, measured against the authored 1.001000 s marker
-interval:
-
-| clip | video | audio | drift |
-|---|---|---|---|
-| demanding (6 Mbit/s, moving) | **-0.0566%** | +0.0007% | **+34 ms/min** |
-| nearly static (2 Mbit/s) | **-0.0436%** | +0.0003% | **+26 ms/min** |
-
-The audio timeline is right to within 7 ppm every time; the video is fast. That
-is ~one content frame per minute, and after half an hour it is ~900 ms — the
-same magnitude as the field complaint that drove the drift saga in
-`docs/lipsync_pickup.md`, which closed on the basis that `vid_err` read flat.
-
-**It survives every variable reachable from outside the core** (slope, ms/min):
-
-| variable | values | result |
-|---|---|---|
-| container | flat `.VOB` / real DVD ISO, nav path | +32.0 / +31.3 |
-| content | 29.97 progressive / **23.976 film + soft 3:2 pulldown** | +31 / +29 |
-| decode load | demanding / nearly static | +34 / +26 |
-| `Frame Drop` | On / Off | +30.2 / +30.8 |
-| `Video Output` | Progressive / Interlaced | +28.7 / +28.6 |
-| `Film 24p Out` | Off / On / Auto | +29.1 / +28.2 / +27.5 |
-
-The film arm matters most: `tools/sync_disc.py --standard film` authors genuine
-soft 3:2 pulldown via mjpegtools (ffmpeg cannot -- see the function comment),
-and `tools/film_evidence_probe.py` confirms the core's own detector calls it
-FILM+. That is the case real DVDs actually are, and it drifts like the rest.
-
-**Four things it is NOT**, each measured rather than argued:
-
-1. **Not the estimator or the 60 fps sampling grid.** Resampling the
-   known-perfect source to 60.028 fps by frame duplication -- exactly what a
-   sampling capture card does -- and measuring THAT gives **-2.2 ms/min**.
-2. **Not the capture card's clocks.** Over a 150 s capture with no source at
-   all, its video PTS and audio PTS spans agree to **7 ppm**, and audio sample
-   count vs audio PTS to 16 ppm.
-3. **Not decode load.** A nearly static 2 Mbit/s clip still drifts +26 ms/min.
-4. **Not the frame-drop governor.** `Frame Drop` On vs Off: **+30.16 vs
-   +30.77 ms/min**.
-
-⚠ **Scope:** measured on synthetic marker clips. They are now DVD-authored
-(dvdauthor + genisoimage) and cover both 29.97 progressive and 23.976 film with
-soft pulldown, played through the real nav path -- so the earlier caveat about
-linear-only playback is discharged. What remains untested is commercial content
-with its own encoding quirks, which carries no markers; the `DEBUG_OVERLAY`
-`vid_err` row is the instrument for that.
-
-### ~~FINDING 2 (preliminary): negative A/V Offset applies only partially~~ (WITHDRAWN with Finding 1)
-
-Commanded `+200 ms` measured `+199.2 ms`; commanded `-100 ms` measured
-`-44.6 ms`, with the same instrument in the same session. One measurement each,
-so treat it as a lead rather than a result -- but the asymmetry is large and the
-positive direction is exact.
+An earlier version of this section reported a ~30 ms/min core A/V drift as a
+confirmed finding, with tables of per-mode figures. All of it was the capture
+chain. The numbers have been removed rather than struck through, so they cannot
+be quoted by accident.
 
 ### Capture recipe
 
