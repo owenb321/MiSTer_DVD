@@ -68,6 +68,10 @@ GOLDEN   = os.path.join(ROOT, 'bench', 'dvd', 'hud_frame.ppm')
 REAL_BAND = os.path.join(ROOT, 'bench', 'dvd', 'hud_real_band.png')
 REAL_BAND_H = 112          # crop height; status row top sits at 112-64
 REAL_BAND_XOFF = -14       # measured on hardware, build DVD_holdparity_20260904
+# Top-left corner of the same real screenshot, carrying the O[2] blocks. The
+# block lattice is shifted by the SAME -14 px, which made the nominal-centre
+# reader label every block with its left-hand neighbour's name.
+REAL_BLOCKS = os.path.join(ROOT, 'bench', 'dvd', 'hud_real_blocks.png')
 
 # ---- layout, from dvd/transport_hud.sv:137-145 -----------------------------
 X0     = 104          # (720 - 32*16)/2
@@ -381,31 +385,69 @@ BLOCKS = [
 VBAR_Y0, VBAR_Y1, VBAR_X0 = 50, 58, 8
 
 
+def _block_state(frame, cx, cy, tol):
+    r, g, b = frame.px(cx, cy)
+    if g > 128 and r <= tol and b <= tol:
+        return True
+    if r > 128 and g <= tol and b <= tol:
+        return False
+    return None
+
+
+def find_block_offset(frame, tol=8, xrange=24):
+    """Locate the O[2] block lattice.
+
+    The blocks are painted at the SAME horizontal offset as the HUD -- measured
+    at -14 px on the shipped build, which puts the first block partly off the
+    left edge. Sampling the nominal centres therefore reads each block one
+    POSITION to the left of the one it names: 'hl_btns_armed GREEN' when the
+    truth is 'video_live GREEN'. That is a silent mislabelling of every flag,
+    so the lattice is located from the pixels rather than assumed.
+    """
+    scores = {}
+    for xoff in range(-xrange, xrange + 1):
+        scores[xoff] = sum(1 for _, x0, x1, y0, y1, _ in BLOCKS
+                           if _block_state(frame, (x0 + x1) // 2 + xoff,
+                                           (y0 + y1) // 2, tol) is not None)
+    best_hits = max(scores.values())
+    if best_hits == 0:
+        return 0, 0
+    # Blocks are 16 px wide on a 20 px pitch, so a whole BAND of offsets scores
+    # equally. Take the middle of that band, not the end nearest nominal: the
+    # nearest-nominal choice sat 1 px from a block edge on the real -14 px
+    # lattice, which is a sampling error away from reading the picture instead.
+    band = sorted(x for x, n in scores.items() if n == best_hits)
+    return band[len(band) // 2], best_hits
+
+
 def read_blocks(frame, tol=8):
     """Decode the O[2] blocks. Green = true, red = false, absent = not shown.
 
-    dbg_px_q is REGISTERED (emu.sv:5280), so the painted blocks sit ~1 px right
-    of the coordinates above; sampling each block's centre absorbs that.
+    A block whose gate is off is reported with value None and shown=False --
+    NEVER as red. Blocks 1-8 need `menus_on` and 9-13 need `interlaced_eff`
+    (emu.sv:5153, :5211), and reading "not displayed" as "false" is the kind of
+    misreading that has cost this project hardware rounds.
     """
-    out = {}
+    xoff, hits = find_block_offset(frame, tol)
+    out = {'_xoff': xoff, '_blocks_found': hits}
     for name, x0, x1, y0, y1, gate in BLOCKS:
-        cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
-        r, g, b = frame.px(cx, cy)
-        if g > 128 and r <= tol and b <= tol:
-            out[name] = {'value': True, 'gate': gate}
-        elif r > 128 and g <= tol and b <= tol:
-            out[name] = {'value': False, 'gate': gate}
-        else:
-            # NOT the same as False: the gate is off, so nothing was drawn.
-            out[name] = {'value': None, 'gate': gate, 'shown': False}
-    # VBUF bar: width IS the 8-bit fill value (emu.sv:5219).
+        cx, cy = (x0 + x1) // 2 + xoff, (y0 + y1) // 2
+        val = _block_state(frame, cx, cy, tol)
+        out[name] = ({'value': val, 'gate': gate} if val is not None
+                     else {'value': None, 'gate': gate, 'shown': False})
+    # VBUF bar: its WIDTH is the 8-bit fill value (emu.sv:5219), so it is
+    # measured from the bar's own start, not from a fixed column.
     y = (VBAR_Y0 + VBAR_Y1) // 2
+    x0 = VBAR_X0 + xoff
     width = 0
-    for x in range(VBAR_X0, min(VBAR_X0 + 256, frame.w)):
-        r, g, b = frame.px(x, y)
+    for x in range(x0, min(x0 + 300, frame.w)):
+        r, g, b = frame.px(max(x, 0), y)
         if not (r > 128 or g > 128):
             break
         width += 1
+    # the bar can start off-screen when xoff is negative; count what is clipped
+    if x0 < 0 and width:
+        width += -x0
     out['vbuf_fill'] = width if width else None
     return out
 
@@ -492,6 +534,28 @@ def selftest():
     else:
         print(f'[real] SKIP -- {REAL_BAND} not present')
 
+    if os.path.exists(REAL_BLOCKS):
+        w3, h3, buf3 = load_image(REAL_BLOCKS)
+        b = read_blocks(Frame(w3, h3, buf3))
+        print(f'[real] {os.path.basename(REAL_BLOCKS)} '
+              f'xoff={b["_xoff"]} drawn={b["_blocks_found"]}')
+        # A First Play logo cell: video is live and the VBUF is deep, but no
+        # menu highlight is armed and no subpicture is on screen. The row-3
+        # blocks are gated off (Progressive), so they must read "not shown"
+        # rather than False -- that distinction is the point of the fixture.
+        want = {'_blocks_found': 8, 'hl_btns_armed': False, 'video_live': True,
+                'subpic_shown': False, 'vbuf_deep': True, 'still_active': False,
+                'watchdog_fired': None, 'cfg_rewritten': None}
+        for k, v in want.items():
+            got = b[k] if k.startswith('_') else b[k]['value']
+            ok = got == v
+            print(f"  {'PASS' if ok else 'FAIL'} {k} = {got!r}")
+            if not ok:
+                fails += 1
+                print(f'       expected {v!r}')
+    else:
+        print(f'[real] SKIP -- {REAL_BLOCKS} not present')
+
     print('hud_read selftest:', 'ALL GREEN' if not fails else f'{fails} FAILURE(S)')
     return 1 if fails else 0
 
@@ -537,10 +601,12 @@ def main():
         if args.json:
             print(json.dumps(res, indent=2))
         else:
-            for name, _, _, _, _, _ in BLOCKS:
+            print(f"  (lattice xoff {res['_xoff']}, "
+                  f"{res['_blocks_found']}/{len(BLOCKS)} blocks drawn)")
+            for name, _, _, _, _, gate in BLOCKS:
                 v = res[name]['value']
                 state = 'not shown' if v is None else ('GREEN' if v else 'red')
-                print(f'  {name:20s} {state}')
+                print(f'  {name:20s} {state:<9} [gate: {gate}]')
             print(f"  vbuf_fill            {res['vbuf_fill']}")
     return 0
 
