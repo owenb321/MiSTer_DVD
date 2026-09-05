@@ -163,6 +163,22 @@ is ~one content frame per minute, and after half an hour it is ~900 ms — the
 same magnitude as the field complaint that drove the drift saga in
 `docs/lipsync_pickup.md`, which closed on the basis that `vid_err` read flat.
 
+**It survives every variable reachable from outside the core** (slope, ms/min):
+
+| variable | values | result |
+|---|---|---|
+| container | flat `.VOB` / real DVD ISO, nav path | +32.0 / +31.3 |
+| content | 29.97 progressive / **23.976 film + soft 3:2 pulldown** | +31 / +29 |
+| decode load | demanding / nearly static | +34 / +26 |
+| `Frame Drop` | On / Off | +30.2 / +30.8 |
+| `Video Output` | Progressive / Interlaced | +28.7 / +28.6 |
+| `Film 24p Out` | Off / On / Auto | +29.1 / +28.2 / +27.5 |
+
+The film arm matters most: `tools/sync_disc.py --standard film` authors genuine
+soft 3:2 pulldown via mjpegtools (ffmpeg cannot -- see the function comment),
+and `tools/film_evidence_probe.py` confirms the core's own detector calls it
+FILM+. That is the case real DVDs actually are, and it drifts like the rest.
+
 **Four things it is NOT**, each measured rather than argued:
 
 1. **Not the estimator or the 60 fps sampling grid.** Resampling the
@@ -175,12 +191,12 @@ same magnitude as the field complaint that drove the drift saga in
 4. **Not the frame-drop governor.** `Frame Drop` On vs Off: **+30.16 vs
    +30.77 ms/min**.
 
-⚠ **Scope, and it matters:** measured only on a synthetic clip played as a flat
-`.VOB` (linear playback), with `Video Output=Progressive`. Whether real DVD
-content on the nav path behaves the same is UNTESTED -- real content carries no
-markers, so it needs a different method (the `DEBUG_OVERLAY` `vid_err` row, or
-a marker clip authored into a real ISO). Do not generalise this to disc
-playback without that test.
+⚠ **Scope:** measured on synthetic marker clips. They are now DVD-authored
+(dvdauthor + genisoimage) and cover both 29.97 progressive and 23.976 film with
+soft pulldown, played through the real nav path -- so the earlier caveat about
+linear-only playback is discharged. What remains untested is commercial content
+with its own encoding quirks, which carries no markers; the `DEBUG_OVERLAY`
+`vid_err` row is the instrument for that.
 
 ### ⚠ FINDING 2 (preliminary): negative A/V Offset applies only partially
 

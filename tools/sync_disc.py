@@ -57,8 +57,8 @@ import tempfile
 
 # --- geometry, shared with tools/lipsync_measure.py -------------------------
 W = 720
-H = {'ntsc': 480, 'pal': 576}
-FPS = {'ntsc': 30000 / 1001.0, 'pal': 25.0}
+H = {'ntsc': 480, 'pal': 576, 'film': 480}
+FPS = {'ntsc': 30000 / 1001.0, 'pal': 25.0, 'film': 24000 / 1001.0}
 # Fraction of frame height used for the luma measurement. The counter strip
 # lives below it and is never included.
 MEAS_FRAC = 0.80
@@ -149,6 +149,64 @@ def gen_audio(path, standard, nframes, period, offset_ms=0.0):
     stereo.tofile(path)
 
 
+def make_film(args, out, nframes, period):
+    """23.976 fps with SOFT 3-2 pulldown -- what a film DVD actually is.
+
+    This is the case that matters most and the one ffmpeg cannot author: its
+    mpeg2video encoder has no soft-telecine option, and the `telecine` filter
+    does HARD telecine, which bakes the cadence into the fields and sets none of
+    the flags. The core's film detector reads `progressive_frame` and
+    `repeat_first_field` (docs/film_24p_plan.md), so hard telecine would not
+    exercise it at all. mjpegtools' mpeg2enc -p writes those flags.
+
+    Chain: y4m -> mpeg2enc (soft pulldown) -> mplex with the AC-3 -> DVD PS.
+    """
+    h = H['film']
+    with tempfile.TemporaryDirectory() as tmp:
+        apath = os.path.join(tmp, 'a.raw')
+        gen_audio(apath, 'film', nframes, period, args.audio_offset_ms)
+        ac3 = os.path.join(tmp, 'a.ac3')
+        subprocess.run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+                        '-f', 's16le', '-ar', str(SAMPLE_RATE), '-ac', '2',
+                        '-i', apath, '-c:a', 'ac3', '-b:a', '448k', ac3],
+                       check=True)
+        m2v = os.path.join(tmp, 'v.m2v')
+        enc = subprocess.Popen(
+            # No '-' argument: mjpegtools reads stdin by default and treats a
+            # bare '-' as an unknown option, dumping its help and exiting.
+            ['mpeg2enc', '-f', '8', '-F', '1', '-p', '-b',
+             str(int(args.bitrate.rstrip('k'))), '-o', m2v],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        enc.stdin.write(f'YUV4MPEG2 W{W} H{h} F24000:1001 Ip A8:9 C420mpeg2\n'
+                        .encode())
+
+        class FrameSink:
+            """gen_video writes Y, U, V per frame; y4m wants a FRAME header."""
+
+            def __init__(self, fh):
+                self.fh, self.n = fh, 0
+
+            def write(self, b):
+                if self.n % 3 == 0:
+                    self.fh.write(b'FRAME\n')
+                self.n += 1
+                self.fh.write(b)
+
+        try:
+            gen_video(FrameSink(enc.stdin), 'film', nframes, period,
+                      args.load == 'easy')
+            enc.stdin.close()
+        except BrokenPipeError:
+            pass
+        if enc.wait() != 0:
+            sys.exit('sync_disc: mpeg2enc failed')
+        r = subprocess.run(['mplex', '-f', '8', '-o', out, m2v, ac3],
+                           capture_output=True)
+        if r.returncode != 0:
+            sys.exit('sync_disc: mplex failed\n' + r.stderr.decode()[:400])
+
+
 def cmd_make(args):
     std = args.standard
     fps = FPS[std]
@@ -162,6 +220,13 @@ def cmd_make(args):
           f'({args.minutes} min), flash every {period} frames')
     print(f'  measurement region: rows 0..{meas_h(std) - 1}  '
           f'counter strip below it')
+
+    if std == 'film':
+        make_film(args, out, nframes, period)
+        print(f'  wrote {out} ({os.path.getsize(out) / 1e6:.1f} MB)'
+              ' -- 23.976 + soft 3:2 pulldown')
+        print(f'  markers: {nframes // period}')
+        return 0
 
     with tempfile.TemporaryDirectory() as tmp:
         apath = os.path.join(tmp, 'a.raw')
@@ -214,7 +279,9 @@ def main():
     p = sub.add_parser('make')
     p.add_argument('-o', '--out')
     p.add_argument('--minutes', type=float, default=5.0)
-    p.add_argument('--standard', choices=('ntsc', 'pal'), default='ntsc')
+    p.add_argument('--standard', choices=('ntsc', 'pal', 'film'),
+                   default='ntsc',
+                   help="'film' = 23.976 with soft 3:2 pulldown")
     p.add_argument('--audio', choices=('ac3', 'lpcm', 'mp2'), default='ac3')
     p.add_argument('--period', type=int, help='frames between flashes')
     p.add_argument('--bitrate', default='6000k')

@@ -56,6 +56,11 @@ from sync_disc import (COUNTER_BITS, FPS, MEAS_FRAC, SAMPLE_RATE,  # noqa: E402
 
 CAL_FILE = os.path.join(HERE, '.mister_capture.json')
 
+# A DVD's DECODED output rate is always one of these, whatever it was
+# coded at -- 23.976 film with 3:2 pulldown decodes to 30000/1001.
+STD_RATES = (30000 / 1001.0, 25.0, 24000 / 1001.0, 24.0,
+             60000 / 1001.0, 50.0)
+
 
 # ---------------------------------------------------------------------------
 def frame_times(path):
@@ -128,6 +133,29 @@ def audio_clock(path):
     if len(pts) < 8 or total <= 0:
         return None
     return np.array(cum, dtype=np.float64), np.array(pts, dtype=np.float64)
+
+
+def video_duration(path):
+    """Duration of the VIDEO stream, not the container.
+
+    The container runs to the end of the LONGEST stream, and the AC-3 tail here
+    is ~1 s past the video. Using it under-estimated the decoded frame rate by
+    0.4%, which accumulated past the pairing window and mispaired the tail of a
+    4-minute clip.
+    """
+    for entries in ('stream=duration', 'format=duration'):
+        sel = ['-select_streams', 'v:0'] if entries.startswith('stream') else []
+        out = subprocess.run(
+            ['ffprobe', '-v', 'error', *sel, '-show_entries', entries,
+             '-of', 'csv=p=0', path], capture_output=True, text=True,
+            check=True).stdout.strip()
+        try:
+            d = float(out.split(',')[0])
+            if d > 0:
+                return d
+        except ValueError:
+            continue
+    return 0.0
 
 
 def probe(path):
@@ -305,8 +333,31 @@ def measure(path, label):
     if len(pts) >= len(luma):
         pts = pts[:len(luma)]          # ffprobe may report one frame more
     else:
-        print(f'  note: only {len(pts)} timestamps for {len(luma)} frames; '
-              'falling back to nominal fps')
+        # Derive the rate from what was actually DECODED, never from
+        # r_frame_rate. Soft-pulldown film reports r_frame_rate as the FIELD
+        # rate (59.94) while ffmpeg decodes 29.97 output frames, which halved
+        # every timestamp and left half the markers unpairable. The decoded
+        # count over the container duration is right for any content.
+        dur = video_duration(path)
+        if dur > 0:
+            fps_dec = len(luma) / dur
+            # SNAP to a standard rate. A DVD's decoded output is exactly
+            # 30000/1001 or 25 regardless of what it was CODED at, so an
+            # estimate from frames/duration -- good to ~0.03% -- should be
+            # rounded to the exact value rather than used raw. Left raw it put
+            # a 330 ppm rate error into the answer, which is the same size as
+            # the effect being measured.
+            fps = min(STD_RATES, key=lambda r: abs(r - fps_dec))
+            if abs(fps - fps_dec) / fps > 0.01:
+                fps = fps_dec                       # nothing standard is close
+            print(f'  note: {len(pts)} timestamps for {len(luma)} frames; '
+                  f'decoded rate {fps_dec:.4f} -> using {fps:.5f} fps '
+                  f'(probe said {fps:.4f})' if fps == fps_dec else
+                  f'  note: {len(pts)} timestamps for {len(luma)} frames; '
+                  f'decoded {fps_dec:.4f} fps, snapped to {fps:.5f}')
+        else:
+            print(f'  note: only {len(pts)} timestamps for {len(luma)} frames; '
+                  'falling back to nominal fps')
         pts = None
     flashes = find_flashes(luma, fps, pts)
     # Put audio on the same timeline as those timestamps: the audio stream has
