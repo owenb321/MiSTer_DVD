@@ -148,7 +148,7 @@ primary reader: the numeric `DEBUG_OVERLAY` lattice it decodes is compiled out
 That last row is the acceptance test: a known input producing a known change,
 on real hardware. The instrument measures the core, not itself.
 
-### ★ FINDING 1: video content runs ~430-570 ppm FAST against audio
+### ~~FINDING 1: video content runs ~430-570 ppm FAST against audio~~ (RETRACTED -- see below)
 
 On linear `.VOB` playback, measured against the authored 1.001000 s marker
 interval:
@@ -198,7 +198,7 @@ linear-only playback is discharged. What remains untested is commercial content
 with its own encoding quirks, which carries no markers; the `DEBUG_OVERLAY`
 `vid_err` row is the instrument for that.
 
-### ⚠ FINDING 2 (preliminary): negative A/V Offset applies only partially
+### ~~FINDING 2 (preliminary): negative A/V Offset applies only partially~~ (WITHDRAWN with Finding 1)
 
 Commanded `+200 ms` measured `+199.2 ms`; commanded `-100 ms` measured
 `-44.6 ms`, with the same instrument in the same session. One measurement each,
@@ -210,45 +210,66 @@ positive direction is exact.
 Use `mister.py capture` -- it encodes the two non-obvious settings. Details and
 the reasons are under "Facts that will bite".
 
-## ★★ FINDING 3: the governor is innocent -- video is locked to the raster,
-## audio is not
+## ★★ RETRACTED: there is no A/V drift. The core is locked; my instrument was not.
 
-The telemetry bridge answered its question on the first build, and the answer
-was the opposite of the working hypothesis.
+**Findings 1 and 2 as originally written are WRONG and are withdrawn.** The
+~30 ms/min drift measured through the capture card is an artefact of the capture
+chain. What follows is what actually holds, and how the error was made, because
+the second part is the more useful half.
 
-| clip | refreshes / pickups | ideal | lates | drops |
-|---|---|---|---|---|
-| 29.97 progressive | **2.00032** | 2.000 | **0** | **0** |
-| 23.976 film + 3:2 | **2.50017** | 2.500 | **0** | **0** |
+### What is true
 
-Both are exact within window quantisation (6177 refreshes for 3088 pickups is
-one refresh off perfect; 7418 for 2967 is half a refresh), over ~2 minutes each,
-with the governor neither repeating nor dropping a single frame.
+Measured by the telemetry bridge -- ratios of counters in ONE clock domain, so
+no external reference and no assumption about which clock is right -- with a
+least-squares fit over 240 samples across ~124 s:
 
-**So the display governor paces video perfectly, and the frame-drop ledger --
-the prime suspect, and the thing mpeg2video.v:1089 documents a known leak in --
-is not involved at all.**
+| quantity | measured | ideal | error |
+|---|---|---|---|
+| refreshes per pickup | 2.00001 | 2.00000 | **+7 ppm** |
+| audio samples per content frame | 1601.6202 | 1601.6000 | **+13 ppm** |
+| audio samples per raster refresh | 800.8042 | 800.8000 | **+5 ppm** |
 
-Putting that with the capture measurement gives a reference-free chain, since
-each step is a RATIO of two quantities measured against one clock:
+with **0 lates, 0 drops, 0 drain-gate closures** over the whole window. Implied
+A/V drift: **+0.8 ms/min**, i.e. nothing. The 23.976 film clip is equally clean
+(2.50017 refreshes per pickup).
 
-1. in the core, video content rate / raster rate is exact (this table);
-2. in the capture, audio event rate and video event rate -- both timestamped by
-   the same capture chain -- differ by ~450-570 ppm;
-3. therefore the AUDIO rate and the RASTER rate differ by ~450-570 ppm.
+**The core's A/V pacing is correct.** The frame-drop governor, the drain gate
+and the audio NCO are all doing exactly what they should.
 
-⚠ **That contradicts the assumption on which the NCO trim was retired.**
-`docs/av_sync.md` records the trim being removed because audio and video share a
-crystal, so there is "no drift to correct". These measurements say the two rates
-differ by ~500 ppm, which is ~1 second of lip-sync error every 30 minutes and
-matches the field complaint that started the drift saga.
+### How I got it wrong
 
-**Next step, and it needs one more RTL round:** a cumulative count of audio
-samples (or NCO ticks) alongside the existing counters. That makes audio/raster
-an internal ratio like the two above -- reference-free, and precise enough to
-say whether the error is in the NCO increment constant, the audio PLL ratio, or
-the raster modeline. Until then the ~500 ppm figure rests on the capture chain,
-which is calibrated but not as clean as an internal ratio.
+1. **I validated the instrument for OFFSETS and then used it for RATES.** The
+   acceptance test -- commanded `A/V Offset +200 ms`, measured +199.2 ms -- is a
+   genuine validation of a constant offset and says nothing whatever about
+   whether the chain measures a *rate* correctly. Every drift figure rested on
+   an unvalidated capability.
+
+2. **My control for the capture chain was VACUOUS.** I compared the card's video
+   PTS span against its audio PTS span over a 150 s recording, got 7 ppm, and
+   concluded its clocks agreed. But ffmpeg recorded both streams for the same
+   wall-clock duration *by construction*, so their spans agree trivially. The
+   test could not have failed. That is the same shape as the benches
+   `docs/field_parity.md` warns about, and I walked straight into it while
+   quoting the lesson elsewhere in this very file.
+
+**The test that settles it:** capture the SAME playback at a different capture
+frame rate. 60 fps gives +31.4 ms/min; 50 fps gives +40.2 ms/min. A knob with no
+connection to the core moves the answer by 30%, so the answer is about the knob.
+
+### The rule this earns
+
+⚠ **A sampled capture card measures OFFSETS, not RATES.** It holds the last
+complete frame rather than integrating, and its sampling beats against the
+source; that is fine for "how far apart are these two events" and unusable for
+"how fast is this clock". For rate questions use the core's own counters, which
+is why the telemetry bridge exists. `lipsync_measure.py` now refuses to print a
+drift figure from a capture unless `--allow-drift` is passed.
+
+⚠ **The internal ratios need a least-squares fit, not endpoint differencing.**
+Endpoint deltas carry +/-1 count on each counter, which over 3709 pickups is
++/-270 ppm -- larger than anything worth measuring. The fit over 240 samples
+brings that to single-digit ppm and is what turned "audio vs raster +46 ppm"
+(endpoints, meaningless) into +5 ppm (fit, real).
 
 ## Telemetry bridge (core -> HPS)
 

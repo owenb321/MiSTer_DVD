@@ -55,6 +55,7 @@ from sync_disc import (COUNTER_BITS, FPS, MEAS_FRAC, SAMPLE_RATE,  # noqa: E402
                        TONE_HZ, TONE_MS)
 
 CAL_FILE = os.path.join(HERE, '.mister_capture.json')
+ALLOW_DRIFT = False
 
 # A DVD's DECODED output rate is always one of these, whatever it was
 # coded at -- 23.976 film with 3:2 pulldown decodes to 30000/1001.
@@ -422,7 +423,17 @@ def measure(path, label):
     print(f'  error: mean {stats["mean_ms"]:+.1f} ms  median '
           f'{stats["median_ms"]:+.1f}  std {stats["std_ms"]:.1f}  '
           f'first {stats["first_ms"]:+.1f} -> last {stats["last_ms"]:+.1f}')
-    print(f'  drift: {stats["drift_ms_per_min"]:+.2f} ms/min')
+    # ⚠ A sampled capture card measures OFFSETS, not RATES: it holds the last
+    # complete frame rather than integrating, and its sampling beats against the
+    # source. MEASURED: the same playback gives +31.4 ms/min captured at 60 fps
+    # and +40.2 ms/min at 50 fps -- a knob unconnected to the core moving the
+    # answer by 30%. A drift figure from here is not evidence about the core;
+    # use the core's own counters (mister.py telem).
+    if label == 'source' or ALLOW_DRIFT:
+        print(f'  drift: {stats["drift_ms_per_min"]:+.2f} ms/min')
+    else:
+        print('  drift: (suppressed -- a sampled capture cannot measure a rate; '
+              'use `mister.py telem`, or pass --allow-drift)')
     # Near half a period, nearest-in-time pairing becomes ambiguous and could
     # be off by a whole marker. Say so rather than reporting with confidence.
     if abs(stats['median_ms']) > window * 1000.0 * 0.66:
@@ -537,9 +548,13 @@ def main():
     p.add_argument('--csv')
     p.add_argument('--source', default='hdmi', choices=('hdmi', 'analog'))
     p.add_argument('--raw', action='store_true')
+    p.add_argument('--allow-drift', action='store_true',
+                   help='print the drift figure anyway (see the warning in measure())')
     p.set_defaults(fn=cmd_capture)
     sub.add_parser('selftest').set_defaults(fn=cmd_selftest)
     args = ap.parse_args()
+    global ALLOW_DRIFT
+    ALLOW_DRIFT = getattr(args, 'allow_drift', False)
     return args.fn(args)
 
 
