@@ -368,6 +368,43 @@ echo "NOSHOT"; exit 1
                         'read', out])
 
 
+def cmd_capture(args):
+    """Record A/V from the capture card with the settings known to work here.
+
+    Centralised because two of the settings are non-obvious and both cost time
+    when guessed:
+
+      * DISCARD A WARM-UP. The card emits ~1 s of black while it locks, at every
+        resolution. Grabbing a frame inside that window looks exactly like "no
+        signal" and led to a round of blaming the cable -- ffplay appeared to
+        work only because it kept running past the lock.
+      * 720x480 rather than 1080p. Detection is a whole-region luma step, so
+        resolution buys nothing, while 1080p60 MJPEG is ~4x the USB bandwidth
+        and delivery jitter is what actually limits timing precision.
+    """
+    cal = {}
+    if os.path.exists(os.path.join(HERE, '.mister_capture.json')):
+        cal = json.load(open(os.path.join(HERE, '.mister_capture.json')))
+    vdev = args.vdev or cal.get('video_device', '/dev/video0')
+    adev = args.adev or cal.get('audio_device', 'hw:1,0')
+    out = args.out or os.path.join(os.environ.get('TMPDIR', '/tmp'),
+                                   f'hilcap_{time.strftime("%H%M%S")}.mkv')
+    total = args.seconds + args.warmup
+    cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-y',
+           '-f', 'v4l2', '-input_format', args.pixfmt,
+           '-video_size', args.video_size, '-framerate', str(args.fps),
+           '-i', vdev,
+           '-f', 'alsa', '-ac', '2', '-ar', '48000', '-i', adev,
+           '-t', str(total), '-c:v', 'copy', '-c:a', 'pcm_s16le', out]
+    print(f'capture: {args.video_size}@{args.fps} {args.pixfmt} from {vdev} + {adev}')
+    print(f'  {args.seconds}s (+{args.warmup}s warm-up) -> {out}')
+    rc = subprocess.run(cmd).returncode
+    if rc != 0:
+        sys.exit(f'mister: ffmpeg capture failed (rc={rc})')
+    print(f'  measure with: tools/lipsync_measure.py capture {out} --raw')
+    return 0
+
+
 def cmd_state(args):
     _, out = ssh('''
 echo "corename=$(cat /tmp/CORENAME 2>/dev/null)"
@@ -441,6 +478,17 @@ def main():
 
     for name, fn in (('state', cmd_state), ('options', cmd_options)):
         sub.add_parser(name).set_defaults(fn=fn)
+
+    p = sub.add_parser('capture', help='record A/V from the capture card')
+    p.add_argument('-t', '--seconds', type=float, default=45)
+    p.add_argument('-o', '--out')
+    p.add_argument('--warmup', type=float, default=2.0)
+    p.add_argument('--video-size', default='720x480')
+    p.add_argument('--fps', type=int, default=60)
+    p.add_argument('--pixfmt', default='mjpeg')
+    p.add_argument('--vdev')
+    p.add_argument('--adev')
+    p.set_defaults(fn=cmd_capture)
 
     p = sub.add_parser('log')
     p.add_argument('-n', type=int, default=20)

@@ -159,9 +159,20 @@ this chain yet.
 
 ### What the capture chain does, measured
 
-- **The card returns blank frames at 1920x1080** on this rig, in both YUYV and
-  MJPEG. 720x480 and 1440x1080 work in both. A "no signal" conclusion from the
-  1080p mode alone is wrong — check another mode before touching a cable.
+- **★ The card emits ~1 s of BLACK while it locks, at every resolution.** A
+  grab taken inside that window is indistinguishable from "no signal" and cost
+  a round of blaming the cable here. `ffplay` appears to work where an
+  equivalent `ffmpeg -frames:v N` does not, purely because it keeps running
+  past the lock — that difference is the tell. `mister.py capture` discards a
+  warm-up by default. (An earlier version of this note claimed the card was
+  blank at 1920x1080 and fine at 720x480; that was the same warm-up bug, and
+  the mode had nothing to do with it.)
+- **1080p is not worth capturing.** Detection is a whole-region luma step, so
+  resolution buys nothing; 60 fps is the binding constraint at either size; and
+  1080p60 MJPEG is ~4x the USB bandwidth, so it jitters and drops more — and
+  delivery jitter is precisely what limits timing precision. The core's raster
+  is 720x480, so 1080p only means ascal upscales and the measurer downscales
+  again. For pixel-exact frames use `mister.py shot`, not the capture card.
 - **Video timestamps are real**, not synthesised: dt varies 8-25 ms (USB
   delivery jitter), mean 60.046 fps over a 60 s span.
 - **Do NOT derive video time from frame_index / nominal_fps.** A 60 fps capture
