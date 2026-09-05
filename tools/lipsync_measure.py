@@ -73,7 +73,10 @@ def frame_times(path):
          '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', path],
         capture_output=True, text=True, check=True).stdout
     ts = [float(v) for v in out.replace(',', ' ').split() if v not in ('N/A',)]
-    return np.array(ts, dtype=np.float64)
+    # SORT. ffprobe reports frames in DECODE order while the raw decode below
+    # is in PRESENTATION order, and an MPEG-2 source has B-frames, so the two
+    # disagree. A capture is MJPEG and never shows this.
+    return np.sort(np.array(ts, dtype=np.float64))
 
 
 def stream_start(path, kind):
@@ -85,6 +88,46 @@ def stream_start(path, kind):
         return float(out.split(',')[0])
     except ValueError:
         return 0.0
+
+
+def audio_clock(path):
+    """Map audio sample index -> host-clock time, from packet timestamps.
+
+    Counting samples from the start assumes the capture device's audio clock is
+    exactly nominal. It is not: MEASURED on this rig, the card's audio clock
+    runs against the host video clock at ~1.5 ms/s, which appeared as a drifting
+    sawtooth in the per-marker error and is indistinguishable from real A/V
+    drift in the core. Anchoring on packet timestamps puts audio and video on
+    the SAME host clock, so that term cancels instead of accumulating.
+
+    Returns (cumulative sample index array, packet pts array), or None when the
+    container carries no usable audio packet timing.
+    """
+    # DECODED FRAME sample counts. Two other fields look usable and are not:
+    # packet `size` is bytes, which only maps to samples for PCM (it drifted
+    # badly on the AC-3 source); packet `duration_time` is quantised to the
+    # container timebase, which for 1.96 ms PCM packets in a 1 ms-timebase
+    # matroska under-counts time by nearly 2x. nb_samples is exact for both
+    # (AC-3 1536, PCM 94 here).
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', 'a:0',
+         '-show_entries', 'frame=pts_time,nb_samples', '-of', 'csv=p=0',
+         path], capture_output=True, text=True, check=True).stdout
+    pts, cum, total = [], [], 0
+    for line in out.splitlines():
+        parts = line.split(',')
+        if len(parts) < 2:
+            continue
+        try:
+            t, n = float(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        pts.append(t)
+        cum.append(total)
+        total += n
+    if len(pts) < 8 or total <= 0:
+        return None
+    return np.array(cum, dtype=np.float64), np.array(pts, dtype=np.float64)
 
 
 def probe(path):
@@ -174,18 +217,29 @@ def find_flashes(luma, fps, pts=None):
         seg = np.clip(seg, 0, None)
         idx = np.arange(lo, hi)
         centre = float((seg * idx).sum() / seg.sum())
+        # Both modes must report the MIDDLE of the flash's on-screen interval,
+        # or the difference does not cancel between source and capture.
+        #
+        # A decoded SOURCE frame's timestamp is the START of its display, and
+        # the flash is exactly one frame, so half a frame must be added. A
+        # capture card SAMPLES (it holds the last complete frame rather than
+        # integrating), so when the flash spans several captured frames their
+        # sample instants already average to the middle and nothing must be
+        # added. Adding half a frame in both -- which is what this did -- left
+        # an 8.3 ms systematic between the two modes that no calibration
+        # removes, because it is a difference OF the calibration.
+        run_len = j - i
         if pts is not None and len(pts) > 1:
-            # interpolate the real timestamp, then advance half a frame so the
-            # figure refers to the MIDDLE of the flash's on-screen interval --
-            # the same convention in source and capture, so it cancels.
-            lo_i = int(np.floor(centre))
-            frac = centre - lo_i
-            lo_i = min(max(lo_i, 0), len(pts) - 2)
+            lo_i = min(max(int(np.floor(centre)), 0), len(pts) - 2)
+            frac = centre - int(np.floor(centre))
             t = pts[lo_i] + frac * (pts[lo_i + 1] - pts[lo_i])
-            half = (pts[lo_i + 1] - pts[lo_i]) / 2.0
-            events.append((i, float(t + half)))
+            # median period, not the local gap: USB delivery jitters 8-25 ms
+            # and using the local value injects that straight into the answer.
+            if run_len <= 1:
+                t += float(np.median(np.diff(pts))) / 2.0
+            events.append((i, float(t)))
         else:
-            events.append((i, (centre + 0.5) / fps))
+            events.append((i, (centre + (0.5 if run_len <= 1 else 0.0)) / fps))
         i = j
     return events
 
@@ -257,9 +311,20 @@ def measure(path, label):
     flashes = find_flashes(luma, fps, pts)
     # Put audio on the same timeline as those timestamps: the audio stream has
     # its own start_time in the container and need not begin at zero.
-    clicks = find_clicks(env)
-    if pts is not None:
-        clicks = [c + stream_start(path, 'a:0') for c in clicks]
+    clicks_s = find_clicks(env)                    # seconds, by sample count
+    aclk = audio_clock(path) if pts is not None else None
+    if aclk is not None:
+        cum, apts = aclk
+        clicks = []
+        for c in clicks_s:
+            n = c * SAMPLE_RATE
+            i = int(np.searchsorted(cum, n)) - 1
+            i = min(max(i, 0), len(cum) - 1)
+            clicks.append(float(apts[i] + (n - cum[i]) / SAMPLE_RATE))
+    elif pts is not None:
+        clicks = [c + stream_start(path, 'a:0') for c in clicks_s]
+    else:
+        clicks = clicks_s
     counters = read_counters(stack, [f for f, _ in flashes])
 
     print(f'{label}: {os.path.basename(path)}  {w}x{h} @ {fps:.3f} fps')
