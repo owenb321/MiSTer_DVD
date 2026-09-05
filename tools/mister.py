@@ -113,6 +113,7 @@ done
 
 RESTORE_SCRIPT = _INI_REWRITE.replace('@TARGET@', 'MiSTer_DVDcss') + """
 pkill -f @AGENT@ 2>/dev/null
+rm -f /media/fat/dvd_hil
 rm -f @FIFO@ @AGENT@ @COREDIR@/@RBF@ @COREDIR@/@MGL@
 for f in /media/fat/MiSTer_DVDcss_hil_*; do
   [ -e "$f" ] || continue
@@ -357,7 +358,7 @@ def cmd_deploy(args):
         deploy_main(args.main)
         if not args.rbf and not args.agent:
             return 0
-    ssh(f'mkdir -p {SHOT_DIR}\n')
+    ssh(f'mkdir -p {SHOT_DIR}; touch /media/fat/dvd_hil\n')   # arms dvd_ctl
     if args.agent or not args.rbf_only:
         scp(AGENT_SRC, AGENT_DST)
         # restart it: one device for its lifetime, so a stale one must go first

@@ -15,6 +15,19 @@
 #include "../../hardware.h"
 #include "dvd_ctl.h"
 
+// Presence of this file ARMS the channel. Absent -- the shipped default -- this
+// module does nothing at all: no SPI, no file writes, no FIFO.
+//
+// A runtime gate rather than an ifdef, deliberately. The whole point of the
+// bridge is that telemetry costs no rebuild and no fitter-seed re-roll; a build
+// toggle on the HOST side would reinstate a rebuild of the Main for the same
+// benefit. This way `touch` enables it and nothing ships active.
+//
+// It matters because this runs on the poll thread that also services the core's
+// SD block reads, where unnecessary work is a video artefact rather than a
+// latency nit (see the dvd_phys drive-scan post-mortem in docs/mgl_launch.md).
+#define DVD_CTL_ARM    "/media/fat/dvd_hil"
+
 #define DVD_CTL_FIFO   "/tmp/dvd_ctl"
 #define DVD_TELEM_FILE "/tmp/dvd_telem.json"
 #define DVD_CTL_LOG    "/tmp/dvd_report.log"
@@ -139,9 +152,33 @@ static void ctl_exec(char *line)
 	}
 }
 
+// Re-checked periodically so the channel can be armed without restarting Main,
+// but not on every poll: this is a stat() on the SD card.
+static int armed = 0;
+static unsigned last_arm_ms = 0;
+
 void dvd_ctl_tick()
 {
 	if (!is_dvd()) return;
+
+	unsigned now = now_ms();
+	if (!last_arm_ms || now - last_arm_ms >= 2000)
+	{
+		last_arm_ms = now ? now : 1;
+		struct stat st;
+		int was = armed;
+		armed = (stat(DVD_CTL_ARM, &st) == 0);
+		if (armed != was) ctl_log("DVD_CTL: %s (%s)",
+		                          armed ? "armed" : "disarmed", DVD_CTL_ARM);
+		if (!armed && ctl_fd >= 0)
+		{
+			close(ctl_fd);
+			ctl_fd = -1;
+			unlink(DVD_CTL_FIFO);
+			unlink(DVD_TELEM_FILE);
+		}
+	}
+	if (!armed) return;
 
 	ctl_open();
 	if (ctl_fd >= 0)

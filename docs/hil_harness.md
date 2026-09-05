@@ -340,6 +340,45 @@ harness core, MGL and spare Mains. It does NOT revert `config/DVD_v2.CFG`, which
 still holds whatever options the harness last set, and the running Main stays
 until the next core load.
 
+## Is it safe to leave in a release build?
+
+**RTL: yes, and it stays.** MEASURED against the previous build:
+
+| | pre-telem | with telemetry | delta |
+|---|---|---|---|
+| ALMs | 37,902 (90%) | 37,979 (91%) | **+77 (+0.2%)** |
+| registers | 48,822 | 49,655 | +833 |
+| RAM blocks | 498 (90%) | 498 (90%) | 0 |
+| DSP | 92 | 92 | 0 |
+| clk_dec 100C / -40C | 91.72 / 87.62 | 91.73 / 92.43 | passes (gate 86.0) |
+
+The counters are pure observation -- they increment on conditions that already
+exist and feed nothing -- and the responder only drives the bus on command
+`0x7A`, which stock Main never sends (it uses 0x00-0x44, 0x61-63, 0xF0-F9), with
+a bench arm proving it stays off the bus otherwise. Putting it behind an `ifdef`
+would reinstate exactly the cost it exists to remove: a rebuild and a
+fitter-seed re-roll every time telemetry is wanted.
+
+⚠ **Re-verify on a `MAIN_MISTER_REF` bump:** that command number is free today.
+If a future stock Main claims `0x7A`, this core would answer traffic that is not
+its own -- `dvd_telem_tb`'s non-matching-command arm is the guard, but only if
+the constant is re-checked against the new `user_io.h`.
+
+**Main: no -- it is armed at RUNTIME and ships inert.** `dvd_ctl_tick()` would
+otherwise poll a FIFO every iteration and do an SPI read plus a JSON write every
+250 ms, forever, on the thread that also services the core's SD block reads --
+where unnecessary work is a video artefact rather than a latency nit (the
+`dvd_phys` drive-scan post-mortem). It also leaves a command channel open that
+can change OSD options and mount images, which is unexpected in a shipped
+player.
+
+So the channel does nothing unless `/media/fat/dvd_hil` exists: no SPI, no file
+writes, no FIFO. Presence is re-checked every 2 s, so it can be armed and
+disarmed without restarting Main, and enabling it still costs no rebuild --
+which was the point. `mister.py deploy` arms it; `mister.py restore` removes it.
+HW-verified both ways: disarmed, neither `/tmp/dvd_telem.json` nor
+`/tmp/dvd_ctl` is recreated; armed, both appear within 4 s.
+
 ## Tests
 
 ```bash
