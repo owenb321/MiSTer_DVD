@@ -29,6 +29,12 @@
 //     word 6  {debt, drop_costs}
 //     word 7  {vbuf_fill, flags}
 //     word 8  aud_frames     -- audio frames queued
+//     word 9  aud_play       -- audio play ticks / 16 (what reaches the DAC)
+//     word 10 aud_gate       -- drain-gate closures
+//   Word 9 over word 1 is the audio-vs-raster ratio, the companion to
+//   refreshes/pickups: both are ratios of counters in ONE clock domain, so
+//   neither needs an external reference or an assumption about which clock is
+//   right.
 //   All counters are free-running 16-bit and WRAP; the host unwraps. Word 1
 //   over word 2 is the number this exists to answer: for 29.97 content on a
 //   59.94 Hz raster it must be exactly 2.000.
@@ -82,7 +88,9 @@ module dvd_telem #(
     input  [15:0] drop_costs,            // {debt[4:0], drop_req, probe} as emu packs it
     input   [7:0] vbuf_fill,
     input  [15:0] aud_frames,
-    input   [7:0] flags
+    input   [7:0] flags,
+    input  [15:0] aud_play,
+    input  [15:0] aud_gate
 );
 
     wire [15:0] s_refresh, s_pickup, s_late, s_drop, s_viderr, s_costs, s_aud;
@@ -96,13 +104,16 @@ module dvd_telem #(
     telem_sync #(16) u_aud (clk, aud_frames, s_aud);
     telem_sync #(8)  u_vbf (clk, vbuf_fill,  s_vbuf);
     telem_sync #(8)  u_flg (clk, flags,      s_flags);
+    wire [15:0] s_play, s_gate;
+    telem_sync #(16) u_ply (clk, aud_play,   s_play);
+    telem_sync #(16) u_gat (clk, aud_gate,   s_gate);
 
     reg  [3:0] wcnt;
     reg        active;
     reg [15:0] dout_r;
 
     // the atomic snapshot
-    reg [15:0] q1, q2, q3, q4, q5, q6, q7, q8;
+    reg [15:0] q1, q2, q3, q4, q5, q6, q7, q8, q9, q10;
 
     always @(posedge clk) begin
         if (!io_enable) begin
@@ -120,6 +131,8 @@ module dvd_telem #(
                 q6 <= s_costs;
                 q7 <= {s_vbuf, s_flags};
                 q8 <= s_aud;
+                q9 <= s_play;
+                q10 <= s_gate;
                 dout_r <= MAGIC;
             end else begin
                 case (wcnt)
@@ -131,6 +144,8 @@ module dvd_telem #(
                     4'd6:    dout_r <= q6;
                     4'd7:    dout_r <= q7;
                     4'd8:    dout_r <= q8;
+                    4'd9:    dout_r <= q9;
+                    4'd10:   dout_r <= q10;
                     default: dout_r <= 16'd0;
                 endcase
             end

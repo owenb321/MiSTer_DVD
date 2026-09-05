@@ -26,16 +26,18 @@ module dvd_telem_tb;
     reg [15:0] drops = 16'h4444, vid_err = 16'h5555, drop_costs = 16'h6666;
     reg [15:0] aud_frames = 16'h8888;
     reg  [7:0] vbuf_fill = 8'h77, flags = 8'h07;
+    reg [15:0] aud_play = 16'h9999, aud_gate = 16'hA0A0;
 
     integer errors = 0;
-    reg [15:0] got [0:9];
+    reg [15:0] got [0:11];
 
     dvd_telem dut (
         .clk(clk), .io_enable(io_enable), .io_strobe(io_strobe),
         .io_din(io_din), .drive(drive), .dout(dout),
         .refreshes(refreshes), .pickups(pickups), .lates(lates),
         .drops(drops), .vid_err(vid_err), .drop_costs(drop_costs),
-        .vbuf_fill(vbuf_fill), .aud_frames(aud_frames), .flags(flags));
+        .vbuf_fill(vbuf_fill), .aud_frames(aud_frames), .flags(flags),
+        .aud_play(aud_play), .aud_gate(aud_gate));
 
     task strobe(input [15:0] d);
         begin
@@ -60,7 +62,7 @@ module dvd_telem_tb;
                 drops = 16'hDDDD; vid_err = 16'hEEEE;
                 repeat (8) @(negedge clk);     // let the syncs settle too
             end
-            for (i = 1; i <= 8; i = i + 1) begin
+            for (i = 1; i <= 10; i = i + 1) begin
                 strobe(16'd0);
                 got[i] = dout;
                 if (drive) drove = 1;
@@ -95,6 +97,8 @@ module dvd_telem_tb;
         check("costs",     got[6], 16'h6666);
         check("vbuf|flags",got[7], 16'h7707);
         check("aud",       got[8], 16'h8888);
+        check("aud_play",  got[9], 16'h9999);
+        check("aud_gate",  got[10], 16'hA0A0);
         if (!drove) begin
             $display("  FAIL: never drove the bus for its own command");
             errors = errors + 1;

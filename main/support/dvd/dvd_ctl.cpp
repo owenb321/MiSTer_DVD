@@ -56,9 +56,9 @@ static void telem_read()
 	// the words below are one consistent SNAPSHOT rather than samples taken a
 	// few hundred microseconds apart. That matters because the number this
 	// exists to produce is a RATIO of two of them.
-	uint16_t w[9];
+	uint16_t w[11];
 	w[0] = spi_uio_cmd_cont(UIO_DVD_TELEM);
-	for (int i = 1; i < 9; i++) w[i] = spi_w(0);
+	for (int i = 1; i < 11; i++) w[i] = spi_w(0);
 	DisableIO();
 
 	if (w[0] != DVD_TELEM_MAGIC) return;      // no bridge in this core build
@@ -77,13 +77,14 @@ static void telem_read()
 		"{\"t\":%.6f,\"refreshes\":%u,\"pickups\":%u,\"lates\":%u,"
 		"\"drops\":%u,\"vid_err\":%d,\"debt\":%d,\"drop_req\":%u,"
 		"\"vbuf_fill\":%u,\"aud_frames\":%u,"
+		"\"aud_play\":%u,\"aud_gate\":%u,"
 		"\"flags\":{\"media\":%u,\"pause\":%u,\"video_live\":%u,"
 		"\"still\":%u,\"menu\":%u}}\n",
 		t, w[1], w[2], w[3], w[4],
 		(int)(int16_t)w[5],                       // vid_err is SIGNED
 		(int)((w[6] >> 11) & 0x1F) - (((w[6] >> 15) & 1) ? 32 : 0),
 		(unsigned)((w[6] >> 10) & 1),
-		(unsigned)(w[7] >> 8), w[8],
+		(unsigned)(w[7] >> 8), w[8], w[9], w[10],
 		(unsigned)(w[7] & 1), (unsigned)((w[7] >> 1) & 1),
 		(unsigned)((w[7] >> 2) & 1), (unsigned)((w[7] >> 3) & 1),
 		(unsigned)((w[7] >> 4) & 1));

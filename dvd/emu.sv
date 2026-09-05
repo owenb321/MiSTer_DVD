@@ -936,7 +936,9 @@ dvd_telem dvd_telem_inst (
     .drop_costs (core_drop_costs),       // clk_dec: {debt, drop_req, probe}
     .vbuf_fill  (core_vbuf_fill),
     .aud_frames (aud_frames_avail),
-    .flags      ({3'b0, menu_active, still_active, video_live_s2, pause_q, media_seen})
+    .flags      ({3'b0, menu_active, still_active, video_live_s2, pause_q, media_seen}),
+    .aud_play   (aud_play_cnt),          // clk_sys: play ticks/16 reaching the DAC
+    .aud_gate   (aud_gate_cnt)           // clk_sys: drain-gate closures
 );
 
 
@@ -3131,6 +3133,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     // 48 kHz NCO trim: 0 (free-run) when Audio Genlock=Off; otherwise av_sync's
     // genlock slew. See dec_nco_trim above.
     .nco_trim           (dec_nco_trim),
+    .dbg_play_cnt       (aud_play_cnt),          // DVD-FORK (telemetry)
+    .dbg_gate_cnt       (aud_gate_cnt),          // DVD-FORK (telemetry)
     .dispatch_pts       (aud_dispatch_pts),
     .dispatch_pts_valid (aud_dispatch_pts_valid),
     // PTS-scheduled playback START (lip-sync v3): the 48 kHz drain is held until
@@ -3820,6 +3824,8 @@ assign film_det_pal_sync  = film_det_pal_s2;
 wire [15:0] core_frames_late, core_frames_dropped;
 wire [15:0] core_vid_err;   // vid_err instrument: signed, 1 unit = 1 refresh (16.7 ms); negative = video content AHEAD
 wire [15:0] core_pickups;   // DVD-FORK (telemetry): content frames picked up for display (clk_dec, free-running)
+wire [15:0] aud_play_cnt;   // DVD-FORK (telemetry): audio play ticks/16 (clk_sys, free-running)
+wire [15:0] aud_gate_cnt;   // DVD-FORK (telemetry): audio drain-gate closures (clk_sys)
 wire [15:0] core_drop_costs; // round-9 debit discriminator: {acks debited 3 [15:8], debited 2 [7:0]}, saturating
 wire  [7:0] core_vbuf_fill;   // VBUF occupancy tap (framestore_request), eyeball-grade CDC
 // =========================================================================

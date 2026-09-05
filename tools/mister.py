@@ -470,6 +470,20 @@ def cmd_telem(args):
                         ('23.976', 24000 / 1001.0)):
         if abs(rrate - ideal) / ideal < 0.02:
             print(f'    vs nominal {name} Hz: {(rrate / ideal - 1) * 1e6:+.0f} ppm')
+    # --- audio, and the ratio that needs no external reference ------------
+    if 'aud_play' in rows[0]:
+        samples = unwrap('aud_play') * 16          # counter is prescaled by 16
+        gates = unwrap('aud_gate')
+        print(f'  audio samples {samples}  ({samples / span:9.3f} Hz)')
+        print(f'    vs nominal 48000 Hz: {(samples / span / 48000 - 1) * 1e6:+.0f} ppm')
+        if refr:
+            per = samples / refr
+            ideal = 48000.0 / (60000 / 1001.0)     # 800.8008 samples per refresh
+            print(f'  samples per raster refresh: {per:.4f}  (ideal {ideal:.4f})')
+            print(f'    -> AUDIO vs RASTER: {(per / ideal - 1) * 1e6:+.0f} ppm'
+                  '   <-- internal ratio, no external clock')
+        print(f'  drain-gate closures: {gates}'
+              + ('   <-- audio is being held' if gates else ''))
     print(f'  lates {late} ({late / span:.2f}/s)   drops {drop} ({drop / span:.2f}/s)')
     print(f'  vid_err {min(errs):+d} .. {max(errs):+d} refreshes')
     if args.csv:

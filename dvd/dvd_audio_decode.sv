@@ -61,6 +61,9 @@ module dvd_audio_decode #(
     // A/V sync (dvd/av_sync.sv): signed trim added to the 48 kHz NCO increment to
     // genlock audio to the video-referenced STC; PTS of each dispatched frame out.
     input  logic signed [21:0] nco_trim,
+    // DVD-FORK (telemetry): free-running observation counters, see below
+    output logic        [15:0] dbg_play_cnt,   // aud_ce_play ticks / 16
+    output logic        [15:0] dbg_gate_cnt,   // drain-gate closures
     output logic [32:0] dispatch_pts,
     output logic        dispatch_pts_valid,  // pulse when a PTS-tagged frame dispatches
 
@@ -203,6 +206,39 @@ module dvd_audio_decode #(
     // so phase is preserved. The video side freezes in lock-step (governor +
     // watchdog-suppress + frozen STC), so nothing drifts while held.
     wire aud_ce_play = aud_ce && drain_en && ~pause;
+
+    /* DVD-FORK (telemetry, dvd/dvd_telem.sv): count the play tick and the gate
+     * closures. Pure observation.
+     *
+     * The NCO itself is exact -- (48000<<32)/27e6 truncates to an increment
+     * worth 47999.9973 Hz, 0.06 ppm -- and it shares clk_sys with the raster,
+     * so on paper audio and video cannot drift. Measured A/V drift is ~500 ppm,
+     * so the discrepancy has to be downstream of the NCO: aud_ce_play is what
+     * actually drains PCM, and every tick the gate swallows is a sample the
+     * timeline loses. play_cnt/refreshes is that, measured internally as a
+     * ratio of two counters in one clock domain -- no external reference, and
+     * no assumption about which clock is right.
+     *
+     * Prescaled by 16 so a 16-bit counter wraps every ~21 s rather than every
+     * 1.4 s, which is comfortably longer than the host's sampling interval.
+     * 16 samples is 0.33 ms; over a 100 s window that is ~3 ppm of resolution. */
+    logic [3:0]  dbg_play_pre;
+    logic        drain_en_q;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            dbg_play_pre <= 4'd0;
+            dbg_play_cnt <= 16'd0;
+            dbg_gate_cnt <= 16'd0;
+            drain_en_q   <= 1'b0;
+        end else begin
+            if (aud_ce_play) begin
+                dbg_play_pre <= dbg_play_pre + 4'd1;
+                if (dbg_play_pre == 4'd15) dbg_play_cnt <= dbg_play_cnt + 16'd1;
+            end
+            drain_en_q <= drain_en;
+            if (drain_en_q && ~drain_en) dbg_gate_cnt <= dbg_gate_cnt + 16'd1;
+        end
+    end
 
     // ---------------------------------------------------------------------
     // Dispatch FSM: pop a descriptor, then route exactly frame_len bytes from
