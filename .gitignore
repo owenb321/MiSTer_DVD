@@ -100,3 +100,8 @@ bench/dvd/test_mp2/
 .venv/
 venv/
 bench/dvd/csync_ref_gen.v
+
+# hardware-in-the-loop harness: rig-specific, never committed
+tools/.mister_host
+tools/.mister_state.json
+tools/.mister_capture.json

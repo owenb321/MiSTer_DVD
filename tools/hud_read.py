@@ -61,6 +61,13 @@ from hud_font import GLYPH_ORDER, NGLYPH, CELL_W, CELL_H   # noqa: E402
 
 FONT_MEM = os.path.join(ROOT, 'dvd', 'hud_font.mem')
 GOLDEN   = os.path.join(ROOT, 'bench', 'dvd', 'hud_frame.ppm')
+# A real 720x480 screenshot's bottom 112 rows (popup + seek bar + status),
+# captured off the board. The shipped build draws the HUD 14 px LEFT of the
+# nominal X0 -- close enough to the 16 px cell pitch that a grid one cell over
+# also fits every glyph exactly. This fixture locks that case.
+REAL_BAND = os.path.join(ROOT, 'bench', 'dvd', 'hud_real_band.png')
+REAL_BAND_H = 112          # crop height; status row top sits at 112-64
+REAL_BAND_XOFF = -14       # measured on hardware, build DVD_holdparity_20260904
 
 # ---- layout, from dvd/transport_hud.sv:137-145 -----------------------------
 X0     = 104          # (720 - 32*16)/2
@@ -76,6 +83,10 @@ POPUP_DY  = -112      # popup  row top    = active_h - 112
 # MASK ALONE -- the outline is a dilation of the fill, so the fill IS the shape.
 FILL_WHITE  = (255, 255, 255)
 FILL_ACCENT = (255, 200, 32)
+
+# A real HUD row matches exactly; anything above this is picture content
+# being mistaken for glyphs, not a HUD.
+MAXERR_OK = 4
 
 ICONS = {'PLAY': 42, 'PAUSE': 43, 'REV': 44}
 ICON_NAME = {42: 'PLAY', 43: 'PAUSE', 44: 'REV'}
@@ -238,7 +249,7 @@ def _glyph_char(g):
     return ' '
 
 
-def decode_row(frame, y_top, masks, tol=8, xrange=8, yrange=2, hint=None):
+def decode_row(frame, y_top, masks, tol=8, xrange=24, yrange=2, hint=None):
     """Decode one 32-cell text row, auto-aligning x/y.
 
     The alignment search exists because HUD_QX_ADJ (a pipeline lead) differs
@@ -249,9 +260,12 @@ def decode_row(frame, y_top, masks, tol=8, xrange=8, yrange=2, hint=None):
     def attempt(xoff, yoff):
         cells, accents = _sample_row(frame, y_top, xoff, yoff, tol)
         res = [_match(c, masks) for c in cells]
-        return {'total': sum(d for _, d in res), 'xoff': xoff, 'yoff': yoff,
-                'glyphs': [g for g, _ in res], 'dist': [d for _, d in res],
-                'accent': accents}
+        glyphs = [g for g, _ in res]
+        # Cells carrying actual information. Used to break ties -- see below.
+        content = sum(1 for g in glyphs if g not in (14, 63))
+        return {'total': sum(d for _, d in res), 'content': content,
+                'xoff': xoff, 'yoff': yoff, 'glyphs': glyphs,
+                'dist': [d for _, d in res], 'accent': accents}
 
     # The offset is constant for a given build+capture path, so a caller that
     # has already aligned one row passes it as a hint. A perfect match ends the
@@ -263,12 +277,30 @@ def decode_row(frame, y_top, masks, tol=8, xrange=8, yrange=2, hint=None):
     best = None
     for xoff, yoff in order:
         cand = attempt(xoff, yoff)
-        if best is None or cand['total'] < best['total']:
+        # MEASURED on hardware: this build's HUD sits ~15 px left of the nominal
+        # X0, which is close enough to the 16 px cell pitch that a grid one cell
+        # to the right ALSO matches every glyph exactly -- it just shifts the
+        # leading icon off the left edge. So a perfect fit is NOT sufficient to
+        # stop, and among equally-perfect fits the right one is the one that
+        # decodes the MOST content. (A search that ended at the first zero-error
+        # hit read a real '[PLAY] 0:01:56/...' as '    0:01:56/...'.)
+        # Rank: fewest mismatched pixels, then most content decoded, then
+        # closest to the nominal geometry. The last term matters because two
+        # alignments a whole cell apart can tie on BOTH of the first two (the
+        # same glyphs, shifted, with a blank falling off either end) -- without
+        # it the winner is just whichever the loop reached first.
+        key = (cand['total'], -cand['content'], abs(cand['xoff']), abs(cand['yoff']))
+        if best is None or key < best['_key']:
+            cand['_key'] = key
             best = cand
-        if best['total'] == 0:
-            break
     best['text'] = ''.join(_glyph_char(g) for g in best['glyphs'])
     best['maxerr'] = max(best['dist'])
+    # Is a HUD actually on screen? The fill class is digital-exact, so a genuine
+    # row matches with zero error; bright PICTURE content in the HUD band can
+    # otherwise be matched to plausible-looking glyphs (a real capture with no
+    # HUD decoded as '[REV]' at maxerr 44). Require both an exact fit AND some
+    # content -- an all-space row is a hidden HUD, not a reading.
+    best['present'] = best['maxerr'] <= MAXERR_OK and best['content'] > 0
     return best
 
 
@@ -282,12 +314,17 @@ def decode(frame, tol=8):
         'width': frame.w, 'height': frame.h,
         'standard': 'PAL' if active_h >= 576 else 'NTSC',
         'status': {'text': status['text'], 'maxerr': status['maxerr'],
-                   'xoff': status['xoff'], 'yoff': status['yoff']},
+                   'xoff': status['xoff'], 'yoff': status['yoff'],
+                   'present': status['present']},
         'popup': {'text': popup['text'], 'maxerr': popup['maxerr'],
-                  'xoff': popup['xoff'], 'yoff': popup['yoff']},
+                  'xoff': popup['xoff'], 'yoff': popup['yoff'],
+                  'present': popup['present']},
+        'hud_visible': status['present'] or popup['present'],
     }
-    out.update(parse_status(status))
-    out['popup_text'] = popup['text'].strip()
+    out.update(parse_status(status) if status['present'] else
+               {'icon': None, 'elapsed': None, 'total': None,
+                'chapter': None, 'chapters': None})
+    out['popup_text'] = popup['text'].strip() if popup['present'] else None
     return out
 
 
@@ -430,6 +467,31 @@ def selftest():
             print(f"       {res2[key]['text']!r}")
             fails += 1
 
+    # --- real hardware geometry -------------------------------------------
+    # The golden frame is rendered by the testbench at the NOMINAL X0. Only a
+    # real screenshot exercises the cell-pitch aliasing, so this arm is what
+    # actually guards the alignment tie-break.
+    if os.path.exists(REAL_BAND):
+        w2, h2, buf2 = load_image(REAL_BAND)
+        masks = fill_masks(load_font())
+        row = decode_row(Frame(w2, h2, buf2), REAL_BAND_H + STATUS_DY, masks)
+        print(f'[real] {os.path.basename(REAL_BAND)} {w2}x{h2}')
+        checks = [
+            ('present', row['present'], True),
+            ('xoff', row['xoff'], REAL_BAND_XOFF),
+            ('maxerr', row['maxerr'], 0),
+            ('icon kept', row['text'].startswith('[PLAY]'), True),
+            ('time', '0:01:24/0:09:59' in row['text'], True),
+        ]
+        for name, got, want in checks:
+            ok = got == want
+            print(f"  {'PASS' if ok else 'FAIL'} {name}: {got!r}")
+            if not ok:
+                fails += 1
+                print(f'       expected {want!r}  (text {row["text"]!r})')
+    else:
+        print(f'[real] SKIP -- {REAL_BAND} not present')
+
     print('hud_read selftest:', 'ALL GREEN' if not fails else f'{fails} FAILURE(S)')
     return 1 if fails else 0
 
@@ -458,11 +520,18 @@ def main():
         if args.json:
             print(json.dumps(res, indent=2))
         else:
-            print(f"{res['standard']} {w}x{h}")
-            print(f"  status: {res['status']['text']!r} (maxerr {res['status']['maxerr']})")
-            print(f"  popup : {res['popup']['text']!r} (maxerr {res['popup']['maxerr']})")
-            print(f"  icon={res['icon']} elapsed={res['elapsed']} total={res['total']} "
-                  f"ch={res['chapter']}/{res['chapters']}")
+            print(f"{res['standard']} {w}x{h}  hud_visible={res['hud_visible']}")
+            for key in ('status', 'popup'):
+                r = res[key]
+                if r['present']:
+                    print(f"  {key:6s}: {r['text']!r} (maxerr {r['maxerr']}, "
+                          f"xoff {r['xoff']})")
+                else:
+                    print(f"  {key:6s}: -- not on screen -- "
+                          f"(best fit maxerr {r['maxerr']})")
+            if res['status']['present']:
+                print(f"  icon={res['icon']} elapsed={res['elapsed']} "
+                      f"total={res['total']} ch={res['chapter']}/{res['chapters']}")
     else:
         res = read_blocks(frame, args.tol)
         if args.json:
