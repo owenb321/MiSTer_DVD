@@ -458,10 +458,11 @@ def cmd_telem(args):
     print(f'  lates {late} ({late / span:.2f}/s)   drops {drop} ({drop / span:.2f}/s)')
     print(f'  vid_err {min(errs):+d} .. {max(errs):+d} refreshes')
     if args.csv:
+        cols = [k for k in rows[0] if k != 'flags']      # dict order, not a set
         with open(args.csv, 'w') as f:
-            f.write(','.join(rows[0].keys() - {'flags'}) + '\n')
+            f.write(','.join(cols) + '\n')
             for r in rows:
-                f.write(','.join(str(v) for k, v in r.items() if k != 'flags') + '\n')
+                f.write(','.join(str(r[k]) for k in cols) + '\n')
         print(f'  wrote {args.csv}')
     return 0
 

@@ -210,6 +210,42 @@ positive direction is exact.
 Use `mister.py capture` -- it encodes the two non-obvious settings. Details and
 the reasons are under "Facts that will bite".
 
+## Telemetry bridge (core -> HPS)
+
+Built 2026-09-05, when every OSD-reachable variable had been exhausted and the
+drift still would not move. `dvd/dvd_telem.sv` answers over the hps_io EXT_BUS
+extension (command `0x7A`); `main/support/dvd/dvd_ctl.cpp` publishes
+`/tmp/dvd_telem.json` at 4 Hz and serves a command FIFO; `mister.py telem` and
+`mister.py osd` are the host end.
+
+```bash
+tools/mister.py telem --watch 120      # rates, incl. refreshes-per-pickup in ppm
+tools/mister.py osd "A/V Offset=+50ms" # set an option LIVE, no relaunch
+```
+
+**The number it exists for is refreshes / pickups.** The governor is supposed to
+show each content frame for exactly `show_next` refreshes, so for 29.97 content
+on a 59.94 Hz raster that ratio must be 2.000. If it reads low by ~450 ppm the
+drift is the display governor; if it is exactly 2.000 the raster itself is fast,
+and since audio measures correct the suspicion moves to the audio NCO divider.
+
+Things worth knowing before touching it:
+
+- **`status_in` is NOT the channel.** It looks like the obvious one and is not:
+  stock Main polls `UIO_GET_STATUS` every frame and writes the result straight
+  into `cur_status` (`user_io.cpp:2640`), so a core driving it would overwrite
+  the user's OSD settings. EXT_BUS is the sanctioned core-specific extension.
+- **The snapshot is atomic and the CDC is a stability filter, not a 2-FF sync.**
+  These are multi-bit binary counters in three clock domains: sampled
+  mid-increment, 0x00FF reads as 0x01FF, and one bad sample ruins a rate.
+- **`mpeg2video` does not instantiate `resample_addrgen` directly** -- `resample`
+  wraps it, and the `resample` instance ALSO has a `.frame_late` port, so
+  anchoring an edit on that name lands one level too high. Quartus caught it
+  ("Port pickup_cnt does not exist in macrofunction resample") where an iverilog
+  elaboration check did not, because that module had not resolved.
+- **Not behind an `ifdef`.** Gating it would mean a rebuild and a fitter-seed
+  re-roll every time telemetry is wanted, which is the cost it exists to remove.
+
 ## What is not here yet
 
 - **Track C, lip-sync**: a generated sync clip (per-frame flash carrying a
