@@ -133,77 +133,66 @@ primary reader: the numeric `DEBUG_OVERLAY` lattice it decodes is compiled out
   Setting it to 1 would give the harness OSD state, which it otherwise cannot
   see at all.
 
-## Track C status (lip-sync) — instrument built, NOT yet validated
+## Track C status (lip-sync) — VALIDATED, and it found something
 
-`tools/sync_disc.py` and `tools/lipsync_measure.py` work end to end: a real HDMI
-capture of the core playing the sync clip yields every flash and every click,
-and the measurer reports a per-marker error curve.
+`tools/sync_disc.py` + `tools/lipsync_measure.py` measure A/V sync end to end.
 
-**Offline the instrument is exact.** On the generated file itself, injected
-errors of +50 ms and -80 ms come back as themselves to 0.1 ms with std 0.00
-(`lipsync_measure.py selftest`).
+**Instrument validation, offline and on hardware:**
 
-**On the capture chain it is not yet good enough to trust**, and the numbers say
-so:
-
-| | |
+| check | result |
 |---|---|
-| run-to-run repeatability (same setting, 45 s) | **~10 ms** (-89.6 vs -100.1) |
-| commanded `A/V Offset` 0 -> -100 ms | measured **-75 ms** |
-| commanded `A/V Offset` +100 -> 0 ms | measured **-109 ms** |
+| injected +50 / -80 ms in the generated file | recovered to **0.1 ms**, std 0.00 |
+| the generated file measured as-authored | flash interval **1.001000 s (0.0000%)** |
+| commanded `A/V Offset` +200 ms on the board | measured **+199.2 ms** (0.4% error) |
 
-Directionally right and roughly the right size, but the scatter is larger than
-the repeatability, so the plan's acceptance test ("a known input produces a
-known change") is **not passed**. Do not quote absolute lip-sync figures from
-this chain yet.
+That last row is the acceptance test: a known input producing a known change,
+on real hardware. The instrument measures the core, not itself.
 
-### What the capture chain does, measured
+### ★ FINDING 1: video content runs ~430-570 ppm FAST against audio
 
-- **★ The card emits ~1 s of BLACK while it locks, at every resolution.** A
-  grab taken inside that window is indistinguishable from "no signal" and cost
-  a round of blaming the cable here. `ffplay` appears to work where an
-  equivalent `ffmpeg -frames:v N` does not, purely because it keeps running
-  past the lock — that difference is the tell. `mister.py capture` discards a
-  warm-up by default. (An earlier version of this note claimed the card was
-  blank at 1920x1080 and fine at 720x480; that was the same warm-up bug, and
-  the mode had nothing to do with it.)
-- **1080p is not worth capturing.** Detection is a whole-region luma step, so
-  resolution buys nothing; 60 fps is the binding constraint at either size; and
-  1080p60 MJPEG is ~4x the USB bandwidth, so it jitters and drops more — and
-  delivery jitter is precisely what limits timing precision. The core's raster
-  is 720x480, so 1080p only means ascal upscales and the measurer downscales
-  again. For pixel-exact frames use `mister.py shot`, not the capture card.
-- **Video timestamps are real**, not synthesised: dt varies 8-25 ms (USB
-  delivery jitter), mean 60.046 fps over a 60 s span.
-- **Do NOT derive video time from frame_index / nominal_fps.** A 60 fps capture
-  of this core's 59.94 Hz output drifts by exactly
-  `(1/59.94 - 1/60) x 60 = 1.0 ms per second` against an index clock, and the
-  card duplicates a frame every ~17 s to make up the difference. That produced
-  a textbook +1 ms/s ramp with periodic 16.7 ms steps — which, unrecognised,
-  would have been reported as core drift. `lipsync_measure` uses the
-  container's per-frame timestamps.
-- **A residual sawtooth remains** after that fix: the card's audio clock drifts
-  against the host video clock at ~1.5 ms/s, resetting every ~16 ms. It is
-  BOUNDED and self-resetting, so the median over a long window is stable while
-  instantaneous values wander — hence median, not mean, and hence the ~10 ms
-  repeatability floor.
+On linear `.VOB` playback, measured against the authored 1.001000 s marker
+interval:
 
-### To finish Track C
+| clip | video | audio | drift |
+|---|---|---|---|
+| demanding (6 Mbit/s, moving) | **-0.0566%** | +0.0007% | **+34 ms/min** |
+| nearly static (2 Mbit/s) | **-0.0436%** | +0.0003% | **+26 ms/min** |
 
-1. **Longer captures** (3-5 min rather than 45 s) to beat the sawtooth down,
-   and several repeats per setting, before re-running the acceptance test.
-2. **Fix the audio timeline properly**: take the click time from the audio
-   stream's own packet timestamps rather than counting samples from the start,
-   so both streams sit on the host clock. This is the principled cure for the
-   residual drift and should collapse the noise floor.
-3. **Probe 3 proper** — the chain's absolute A/V skew still needs a
-   known-synchronous reference (this PC's HDMI into the card), which is a cable
-   swap. Until then `capture` refuses to print an absolute figure, by design;
-   relative comparisons between modes are already usable.
+The audio timeline is right to within 7 ppm every time; the video is fast. That
+is ~one content frame per minute, and after half an hour it is ~900 ms — the
+same magnitude as the field complaint that drove the drift saga in
+`docs/lipsync_pickup.md`, which closed on the basis that `vid_err` read flat.
 
-⚠ The historical bug this replaces was ~1200 ms of accumulated skew
-(docs/lipsync_pickup.md), so the chain is already good enough to catch a
-regression of that class. It is not good enough to certify a 10 ms claim.
+**Four things it is NOT**, each measured rather than argued:
+
+1. **Not the estimator or the 60 fps sampling grid.** Resampling the
+   known-perfect source to 60.028 fps by frame duplication -- exactly what a
+   sampling capture card does -- and measuring THAT gives **-2.2 ms/min**.
+2. **Not the capture card's clocks.** Over a 150 s capture with no source at
+   all, its video PTS and audio PTS spans agree to **7 ppm**, and audio sample
+   count vs audio PTS to 16 ppm.
+3. **Not decode load.** A nearly static 2 Mbit/s clip still drifts +26 ms/min.
+4. **Not the frame-drop governor.** `Frame Drop` On vs Off: **+30.16 vs
+   +30.77 ms/min**.
+
+⚠ **Scope, and it matters:** measured only on a synthetic clip played as a flat
+`.VOB` (linear playback), with `Video Output=Progressive`. Whether real DVD
+content on the nav path behaves the same is UNTESTED -- real content carries no
+markers, so it needs a different method (the `DEBUG_OVERLAY` `vid_err` row, or
+a marker clip authored into a real ISO). Do not generalise this to disc
+playback without that test.
+
+### ⚠ FINDING 2 (preliminary): negative A/V Offset applies only partially
+
+Commanded `+200 ms` measured `+199.2 ms`; commanded `-100 ms` measured
+`-44.6 ms`, with the same instrument in the same session. One measurement each,
+so treat it as a lead rather than a result -- but the asymmetry is large and the
+positive direction is exact.
+
+### Capture recipe
+
+Use `mister.py capture` -- it encodes the two non-obvious settings. Details and
+the reasons are under "Facts that will bite".
 
 ## What is not here yet
 

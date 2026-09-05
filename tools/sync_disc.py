@@ -74,7 +74,7 @@ def meas_h(standard):
     return int(H[standard] * MEAS_FRAC) // 2 * 2
 
 
-def gen_video(out, standard, nframes, period):
+def gen_video(out, standard, nframes, period, easy=False):
     """Write yuv420p frames to `out`. Chroma is flat: only luma is measured."""
     import numpy as np
     h = H[standard]
@@ -89,13 +89,20 @@ def gen_video(out, standard, nframes, period):
     bit_w = W // COUNTER_BITS
 
     for n in range(nframes):
-        ph = n * 0.11
-        # A smooth drifting pattern plus a hard-edged sweeping bar: the gradient
-        # gives real residual, the bar forces real motion vectors.
-        frame = (96 + 40 * np.sin(2 * math.pi * (xx / 48.0 + yy / 64.0 + ph))
-                 ).astype(np.float32)
-        bar = int((n * 7) % W)
-        frame[:, bar:bar + 40] = 200
+        if easy:
+            # Nearly static: cheap to decode. The A/B against the demanding
+            # background is what separates "the core has a rate error" from
+            # "the core drops frames under decode load".
+            frame = np.full((h, W), 110, dtype=np.float32)
+            frame[:, (n % 8) * 90:(n % 8) * 90 + 20] = 150
+        else:
+            ph = n * 0.11
+            # A smooth drifting pattern plus a hard-edged sweeping bar: the
+            # gradient gives real residual, the bar forces real motion vectors.
+            frame = (96 + 40 * np.sin(2 * math.pi * (xx / 48.0 + yy / 64.0 + ph))
+                     ).astype(np.float32)
+            bar = int((n * 7) % W)
+            frame[:, bar:bar + 40] = 200
         frame = np.clip(frame, BLACK_Y, 220).astype(np.uint8)
 
         marker = n // period
@@ -176,7 +183,7 @@ def cmd_make(args):
         ]
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         try:
-            gen_video(p.stdin, std, nframes, period)
+            gen_video(p.stdin, std, nframes, period, args.load == 'easy')
             p.stdin.close()
         except BrokenPipeError:
             pass
@@ -211,6 +218,8 @@ def main():
     p.add_argument('--audio', choices=('ac3', 'lpcm', 'mp2'), default='ac3')
     p.add_argument('--period', type=int, help='frames between flashes')
     p.add_argument('--bitrate', default='6000k')
+    p.add_argument('--load', choices=('hard', 'easy'), default='hard',
+                   help="'easy' = nearly static, cheap to decode")
     p.add_argument('--audio-offset-ms', type=float, default=0.0,
                    help='inject a known A/V error, to validate the measurer')
     p.set_defaults(fn=cmd_make)
