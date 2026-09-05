@@ -36,6 +36,7 @@ module resample_addrgen (
   disp_wr_addr_almost_full, resample_wr_almost_full,
   busy,
   frame_late,                                       // DVD-FORK (frame-drop governor O[19])
+  pickup_cnt,                                       // DVD-FORK (telemetry): content frames picked up for display
   video_live,                                       // DVD-FORK (av_sync STC reference)
   pickup_hold,                                      // DVD-FORK (STD mux-lead hold)
   pause,                                            // DVD-FORK (gamepad transport): freeze frame while paused
@@ -56,6 +57,17 @@ module resample_addrgen (
   input        [2:0]output_frame;              /* frame to be displayed */
   input             output_frame_valid;        /* asserted when output_frame valid */
   output reg        output_frame_rd;
+  /* DVD-FORK (telemetry, dvd/dvd_telem.sv): free-running count of frames actually
+   * PICKED UP for display. Pure observation -- it is the same condition that sets
+   * output_frame_rd, so it cannot change behaviour.
+   *
+   * Needed because refreshes alone cannot answer the question. The governor is
+   * supposed to show each content frame for exactly show_next refreshes; a
+   * measured ~450 ppm video-fast drift says the average may be slightly under.
+   * refreshes/pickups is that average, measured rather than inferred from the
+   * lates and drops ledger -- which is the thing under suspicion, so deriving it
+   * from that ledger would assume the answer. */
+  output reg [15:0] pickup_cnt;
 
   input             progressive_sequence;
   input             progressive_frame;
@@ -776,6 +788,11 @@ module resample_addrgen (
     if (~rst) output_frame_rd <= 1'd0;
     else if (clk_en) output_frame_rd <= (state == STATE_INIT) && pickup_go; // INIT is reached at hold release (the held frame re-scans in STATE_REPEAT), or during a cold start with nothing to hold; parity insertion defers the read one refresh
     else output_frame_rd <= output_frame_rd;
+
+  /* DVD-FORK (telemetry): count the same event, in the same clk_en domain. */
+  always @(posedge clk)
+    if (~rst) pickup_cnt <= 16'd0;
+    else if (clk_en && (state == STATE_INIT) && pickup_go) pickup_cnt <= pickup_cnt + 16'd1;
 
   /*
    * DVD-FORK (frame-drop governor, O[19]/O[12]): deadline-miss detector. STATE_REPEAT is a

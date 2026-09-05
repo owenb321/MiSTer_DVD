@@ -67,6 +67,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              ref_prefetch_en,                                     // DVD-FORK (ref prefetch O[18]): 1=deep ref run-ahead, 0=baseline fill
              frame_drop_en,                                       // DVD-FORK (frame-drop O[12]): 1=drop B-frames when behind
              dbg_frames_late, dbg_frames_dropped,                 // DVD-FORK (frame-drop O[12]): overlay counters
+             dbg_pickups,                                         // DVD-FORK (telemetry): content frames picked up for display
              dbg_vid_err,                                         // DVD-FORK (vid_err instrument): video content vs wall, refreshes
              dbg_drop_costs,                                      // DVD-FORK (round 9): drop acks split by the debit actually applied
              dbg_vbuf_fill,                                        // DVD-FORK DEBUG: VBUF occupancy (slideshow-decay diagnosis)
@@ -144,6 +145,12 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   input            frame_drop_en;
   output     [7:0] dbg_vbuf_fill;        // VBUF (bitstream cushion) occupancy, 0xFF = full
   output    [15:0] dbg_frames_late;      // running count of governor deadline misses
+  /* DVD-FORK (telemetry): frames the governor actually PICKED UP. With
+   * dbg_frames_late/dropped it gives refreshes-per-frame as a MEASURED
+   * average rather than one inferred from the late/drop ledger, which is
+   * itself the thing under suspicion (see the film24 leak note at the
+   * frame_drop_ctl instance below). */
+  output    [15:0] dbg_pickups;
   /* DVD-FORK (vid_err instrument, 2026-07-03): wall refreshes minus content
    * duration presented (pickups' show + dropped frames' durations), signed,
    * 1 unit = 1 display refresh (16.7 ms NTSC). Positive = video LATE (slipped
@@ -1433,6 +1440,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .pixel_wr_en(pixel_wr_en),                               // to pixel queue
     .pixel_wr_almost_full(pixel_wr_almost_full),             // to pixel queue
     .frame_late(frame_late),                                 // DVD-FORK (frame-drop O[12]): to frame_drop_ctl
+    .pickup_cnt(dbg_pickups),                                // DVD-FORK (telemetry): from resample_addrgen, out to emu
     .video_live(video_live),                                 // DVD-FORK (av_sync STC reference): to emu -> av_sync
     .pickup_hold(pickup_hold),                               // DVD-FORK (STD mux-lead hold): from emu (2-FF, clk_sys origin)
     .pause(pause),                                           // DVD-FORK (gamepad transport): freeze frame while paused

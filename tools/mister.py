@@ -405,6 +405,88 @@ def cmd_capture(args):
     return 0
 
 
+def cmd_telem(args):
+    """Read the core's pacing counters (dvd/dvd_telem.sv -> dvd_ctl -> JSON).
+
+    `--watch N` samples for N seconds in ONE ssh session and reports rates. The
+    number this exists for is refreshes/pickups: the governor is supposed to
+    show each content frame for exactly show_next refreshes, so for 29.97
+    content on a 59.94 Hz raster it must be 2.000. A measured ~450 ppm
+    video-fast A/V drift says it may be slightly under.
+    """
+    if not args.watch:
+        _, out = ssh('cat /tmp/dvd_telem.json 2>/dev/null\n')
+        if not out.strip():
+            sys.exit('mister: no telemetry. Needs a core build with dvd_telem '
+                     'and a Main with dvd_ctl (mister.py state).')
+        print(out.strip())
+        return 0
+
+    n = int(args.watch / 0.5)
+    _, out = ssh(f'for i in $(seq 1 {n}); do cat /tmp/dvd_telem.json 2>/dev/null; '
+                 f'sleep 0.5; done\n', timeout=args.watch + 60)
+    rows = []
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith('{'):
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                pass
+    if len(rows) < 4:
+        sys.exit(f'mister: only {len(rows)} telemetry samples -- is the core playing?')
+
+    def unwrap(key):
+        """16-bit counters wrap; sum the deltas modulo 65536."""
+        total, prev = 0, rows[0][key]
+        for r in rows[1:]:
+            total += (r[key] - prev) & 0xFFFF
+            prev = r[key]
+        return total
+
+    span = rows[-1]['t'] - rows[0]['t']
+    refr, pick = unwrap('refreshes'), unwrap('pickups')
+    late, drop = unwrap('lates'), unwrap('drops')
+    errs = [r['vid_err'] for r in rows]
+    print(f'telemetry over {span:.1f} s ({len(rows)} samples)')
+    print(f'  refreshes {refr:6d}  ({refr / span:7.3f}/s)')
+    print(f'  pickups   {pick:6d}  ({pick / span:7.3f}/s)')
+    if pick:
+        ratio = refr / pick
+        print(f'  refreshes per picked-up frame: {ratio:.5f}')
+        print(f'    -> {(ratio / 2.0 - 1) * 1e6:+.0f} ppm vs an exact 2.000')
+    print(f'  lates {late} ({late / span:.2f}/s)   drops {drop} ({drop / span:.2f}/s)')
+    print(f'  vid_err {min(errs):+d} .. {max(errs):+d} refreshes')
+    if args.csv:
+        with open(args.csv, 'w') as f:
+            f.write(','.join(rows[0].keys() - {'flags'}) + '\n')
+            for r in rows:
+                f.write(','.join(str(v) for k, v in r.items() if k != 'flags') + '\n')
+        print(f'  wrote {args.csv}')
+    return 0
+
+
+def cmd_osd(args):
+    """Set an OSD option LIVE, without relaunching the core."""
+    name, _, value = args.setting.partition('=')
+    table = {label.lower(): (label, s, e, vals) for label, s, e, vals in options()}
+    ent = table.get(name.strip().lower())
+    if ent is None:
+        sys.exit(f'mister: unknown option {name!r}. Try: mister.py options')
+    label, start, end, vals = ent
+    idx = next((i for i, v in enumerate(vals)
+                if v.strip().lower() == value.strip().lower()), None)
+    if idx is None:
+        if not re.fullmatch(r'\d+', value.strip()):
+            sys.exit(f'mister: {label!r} has no value {value!r}. '
+                     f'Choices: {", ".join(vals)}')
+        idx = int(value)
+    opt = f'[{end}:{start}]' if end != start else f'[{start}]'
+    ssh(f'echo "osd {opt} {idx}" > /tmp/dvd_ctl\n')
+    print(f'osd: {label} = {vals[idx] if idx < len(vals) else idx}  ({opt} <= {idx})')
+    return 0
+
+
 def cmd_state(args):
     _, out = ssh('''
 echo "corename=$(cat /tmp/CORENAME 2>/dev/null)"
@@ -478,6 +560,15 @@ def main():
 
     for name, fn in (('state', cmd_state), ('options', cmd_options)):
         sub.add_parser(name).set_defaults(fn=fn)
+
+    p = sub.add_parser('telem', help="read the core's pacing counters")
+    p.add_argument('--watch', type=float, help='sample for N seconds and report rates')
+    p.add_argument('--csv')
+    p.set_defaults(fn=cmd_telem)
+
+    p = sub.add_parser('osd', help='set an OSD option live (no relaunch)')
+    p.add_argument('setting', metavar='"Name=Value"')
+    p.set_defaults(fn=cmd_osd)
 
     p = sub.add_parser('capture', help='record A/V from the capture card')
     p.add_argument('-t', '--seconds', type=float, default=45)

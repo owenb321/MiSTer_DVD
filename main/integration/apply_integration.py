@@ -438,6 +438,20 @@ u = insert_before(u, 'dvd_css_tick();    // deferred "install libdvdcss" popup o
     'dvd_launch_tick();      // MGL watchdog: a stalled launch must not cost a reboot\n',
     28, 'dvd_launch_tick();')
 
+# 33. host control + telemetry channel (dvd/dvd_telem.sv on the core side).
+# Both anchors are lines the overlay itself owns, so this adds NO new stock
+# anchor to re-verify on a MAIN_MISTER_REF bump.
+u = insert_after(u, '#include "support/dvd/dvd_launch.h"',
+    '#include "support/dvd/dvd_ctl.h"\n',
+    33, 'support/dvd/dvd_ctl.h')
+
+# 34. poll tick, LAST of the DVD ticks: it reads core counters over SPI and
+# services a FIFO, neither of which any other tick depends on, and running it
+# last keeps it out of the way of the launch/mount ordering above.
+u = insert_after(u, '\tdvd_report_tick();      // support-bundle chord: fire + reap',
+    '\tdvd_ctl_tick();         // host control FIFO + /tmp/dvd_telem.json\n',
+    34, 'dvd_ctl_tick();')
+
 # 30. let dvd_phys see slot 0 being taken by something that is not the drive, so
 # an eject only tears down what the drive still owns and the auto-mount does not
 # fire over an image the user asked for (an MGL <file>, say). Observes only.
