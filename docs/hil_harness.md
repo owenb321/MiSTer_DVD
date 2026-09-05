@@ -210,6 +210,46 @@ positive direction is exact.
 Use `mister.py capture` -- it encodes the two non-obvious settings. Details and
 the reasons are under "Facts that will bite".
 
+## ★★ FINDING 3: the governor is innocent -- video is locked to the raster,
+## audio is not
+
+The telemetry bridge answered its question on the first build, and the answer
+was the opposite of the working hypothesis.
+
+| clip | refreshes / pickups | ideal | lates | drops |
+|---|---|---|---|---|
+| 29.97 progressive | **2.00032** | 2.000 | **0** | **0** |
+| 23.976 film + 3:2 | **2.50017** | 2.500 | **0** | **0** |
+
+Both are exact within window quantisation (6177 refreshes for 3088 pickups is
+one refresh off perfect; 7418 for 2967 is half a refresh), over ~2 minutes each,
+with the governor neither repeating nor dropping a single frame.
+
+**So the display governor paces video perfectly, and the frame-drop ledger --
+the prime suspect, and the thing mpeg2video.v:1089 documents a known leak in --
+is not involved at all.**
+
+Putting that with the capture measurement gives a reference-free chain, since
+each step is a RATIO of two quantities measured against one clock:
+
+1. in the core, video content rate / raster rate is exact (this table);
+2. in the capture, audio event rate and video event rate -- both timestamped by
+   the same capture chain -- differ by ~450-570 ppm;
+3. therefore the AUDIO rate and the RASTER rate differ by ~450-570 ppm.
+
+⚠ **That contradicts the assumption on which the NCO trim was retired.**
+`docs/av_sync.md` records the trim being removed because audio and video share a
+crystal, so there is "no drift to correct". These measurements say the two rates
+differ by ~500 ppm, which is ~1 second of lip-sync error every 30 minutes and
+matches the field complaint that started the drift saga.
+
+**Next step, and it needs one more RTL round:** a cumulative count of audio
+samples (or NCO ticks) alongside the existing counters. That makes audio/raster
+an internal ratio like the two above -- reference-free, and precise enough to
+say whether the error is in the NCO increment constant, the audio PLL ratio, or
+the raster modeline. Until then the ~500 ppm figure rests on the capture chain,
+which is calibrated but not as clean as an internal ratio.
+
 ## Telemetry bridge (core -> HPS)
 
 Built 2026-09-05, when every OSD-reachable variable had been exhausted and the

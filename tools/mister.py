@@ -452,9 +452,24 @@ def cmd_telem(args):
     print(f'  refreshes {refr:6d}  ({refr / span:7.3f}/s)')
     print(f'  pickups   {pick:6d}  ({pick / span:7.3f}/s)')
     if pick:
-        ratio = refr / pick
-        print(f'  refreshes per picked-up frame: {ratio:.5f}')
-        print(f'    -> {(ratio / 2.0 - 1) * 1e6:+.0f} ppm vs an exact 2.000')
+        print(f'  refreshes per picked-up frame: {refr / pick:.5f}')
+    # pickups/s IS the content display rate, and comparing it to the rate the
+    # disc was authored at is the whole measurement -- no assumed ratio needed.
+    # (A ratio of 2.000 only holds for 29.97 progressive; 23.976 film displayed
+    # via 3:2 on a 59.94 raster averages 2.5.)
+    rate = pick / span
+    print(f'  content display rate: {rate:.5f} fps')
+    for name, ideal in (('29.97 (30000/1001)', 30000 / 1001.0),
+                        ('23.976 (24000/1001)', 24000 / 1001.0),
+                        ('25 (PAL)', 25.0)):
+        if abs(rate - ideal) / ideal < 0.02:
+            print(f'    vs authored {name}: {(rate / ideal - 1) * 1e6:+.0f} ppm')
+    rrate = refr / span
+    print(f'  raster refresh rate:  {rrate:.5f} Hz')
+    for name, ideal in (('59.94', 60000 / 1001.0), ('50', 50.0),
+                        ('23.976', 24000 / 1001.0)):
+        if abs(rrate - ideal) / ideal < 0.02:
+            print(f'    vs nominal {name} Hz: {(rrate / ideal - 1) * 1e6:+.0f} ppm')
     print(f'  lates {late} ({late / span:.2f}/s)   drops {drop} ({drop / span:.2f}/s)')
     print(f'  vid_err {min(errs):+d} .. {max(errs):+d} refreshes')
     if args.csv:
