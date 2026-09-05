@@ -258,6 +258,46 @@ Things worth knowing before touching it:
 - **Not behind an `ifdef`.** Gating it would mean a rebuild and a fitter-seed
   re-roll every time telemetry is wanted, which is the cost it exists to remove.
 
+## Track E: exploratory soak (`tools/dvd_explore.py`)
+
+Drives a disc unattended and watches for anything wrong. Seeded and fully
+logged, so a finding replays exactly; state-aware, so it spends its time where
+bugs are rather than mashing buttons at a paused screen.
+
+```bash
+tools/dvd_explore.py /media/fat/games/DVD/SOME.iso --minutes 30 --seed 1234
+tools/dvd_explore.py selftest      # proves every oracle can fire
+```
+
+Oracles: the three MEASURED failure colours (black = reader wedged, green =
+framestore slot never written, grey = intra picture from mis-framed bytes),
+self-reporting popups (LINK FAIL, CSS ENCRYPTED, unsupported), the HUD clock,
+and the telemetry counters (drain-gate closures, vid_err slope, drop bursts).
+A finding captures the frame, the last 30 actions, the decoded HUD and the
+telemetry, and notifies via `tools/notify.sh`.
+
+⚠ **Two lessons from building it, both about the oracles rather than the core:**
+
+- **An oracle must know what the harness just pressed.** The first version
+  reported 15 faults in 24 steps, every one of them its own doing: `vid_err`
+  measures video against the STC, so a menu, still or pause legitimately stalls
+  video while the clock runs on, and a seek re-arms the audio drain gate by
+  design. The checks are now gated on steady playback AND on the harness not
+  having just perturbed anything, and `vid_err` is judged by SLOPE, not
+  magnitude -- its magnitude carries whatever the last menu left behind.
+- **Then check the gated oracles can still fire.** `dvd_explore.py selftest`
+  gives every oracle a fault arm and a control arm, and it immediately caught a
+  real bug: flatness was computed as `std` over all three channels at once, so a
+  uniform GREEN frame measured std 64 (its channels are 0/136/0) and never
+  registered as flat. The single most diagnostic signature would have been dead
+  in production, and no amount of soaking would have revealed it.
+
+Suite: `bench/dvd/run_telem.sh` (the telemetry bench plus all three host-tool
+selftests; no hardware needed).
+
+Clean first runs: MEN_IN_BLACK 34 steps, SCENEIT_HP 43, ULTIMATE_T2 26, zero
+findings.
+
 ## What is not here yet
 
 - **Track C, lip-sync**: a generated sync clip (per-frame flash carrying a
