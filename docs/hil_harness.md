@@ -133,6 +133,67 @@ primary reader: the numeric `DEBUG_OVERLAY` lattice it decodes is compiled out
   Setting it to 1 would give the harness OSD state, which it otherwise cannot
   see at all.
 
+## Track C status (lip-sync) — instrument built, NOT yet validated
+
+`tools/sync_disc.py` and `tools/lipsync_measure.py` work end to end: a real HDMI
+capture of the core playing the sync clip yields every flash and every click,
+and the measurer reports a per-marker error curve.
+
+**Offline the instrument is exact.** On the generated file itself, injected
+errors of +50 ms and -80 ms come back as themselves to 0.1 ms with std 0.00
+(`lipsync_measure.py selftest`).
+
+**On the capture chain it is not yet good enough to trust**, and the numbers say
+so:
+
+| | |
+|---|---|
+| run-to-run repeatability (same setting, 45 s) | **~10 ms** (-89.6 vs -100.1) |
+| commanded `A/V Offset` 0 -> -100 ms | measured **-75 ms** |
+| commanded `A/V Offset` +100 -> 0 ms | measured **-109 ms** |
+
+Directionally right and roughly the right size, but the scatter is larger than
+the repeatability, so the plan's acceptance test ("a known input produces a
+known change") is **not passed**. Do not quote absolute lip-sync figures from
+this chain yet.
+
+### What the capture chain does, measured
+
+- **The card returns blank frames at 1920x1080** on this rig, in both YUYV and
+  MJPEG. 720x480 and 1440x1080 work in both. A "no signal" conclusion from the
+  1080p mode alone is wrong — check another mode before touching a cable.
+- **Video timestamps are real**, not synthesised: dt varies 8-25 ms (USB
+  delivery jitter), mean 60.046 fps over a 60 s span.
+- **Do NOT derive video time from frame_index / nominal_fps.** A 60 fps capture
+  of this core's 59.94 Hz output drifts by exactly
+  `(1/59.94 - 1/60) x 60 = 1.0 ms per second` against an index clock, and the
+  card duplicates a frame every ~17 s to make up the difference. That produced
+  a textbook +1 ms/s ramp with periodic 16.7 ms steps — which, unrecognised,
+  would have been reported as core drift. `lipsync_measure` uses the
+  container's per-frame timestamps.
+- **A residual sawtooth remains** after that fix: the card's audio clock drifts
+  against the host video clock at ~1.5 ms/s, resetting every ~16 ms. It is
+  BOUNDED and self-resetting, so the median over a long window is stable while
+  instantaneous values wander — hence median, not mean, and hence the ~10 ms
+  repeatability floor.
+
+### To finish Track C
+
+1. **Longer captures** (3-5 min rather than 45 s) to beat the sawtooth down,
+   and several repeats per setting, before re-running the acceptance test.
+2. **Fix the audio timeline properly**: take the click time from the audio
+   stream's own packet timestamps rather than counting samples from the start,
+   so both streams sit on the host clock. This is the principled cure for the
+   residual drift and should collapse the noise floor.
+3. **Probe 3 proper** — the chain's absolute A/V skew still needs a
+   known-synchronous reference (this PC's HDMI into the card), which is a cable
+   swap. Until then `capture` refuses to print an absolute figure, by design;
+   relative comparisons between modes are already usable.
+
+⚠ The historical bug this replaces was ~1200 ms of accumulated skew
+(docs/lipsync_pickup.md), so the chain is already good enough to catch a
+regression of that class. It is not good enough to certify a 10 ms claim.
+
 ## What is not here yet
 
 - **Track C, lip-sync**: a generated sync clip (per-frame flash carrying a

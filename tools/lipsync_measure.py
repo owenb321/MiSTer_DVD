@@ -58,6 +58,35 @@ CAL_FILE = os.path.join(HERE, '.mister_capture.json')
 
 
 # ---------------------------------------------------------------------------
+def frame_times(path):
+    """Per-frame presentation timestamps, in seconds.
+
+    NOT frame_index / nominal_fps. MEASURED: a 60 fps capture of this core's
+    59.94 Hz output drifts by (1/59.94 - 1/60) * 60 = exactly 1.0 ms per second
+    against an index-derived clock, and the capture card duplicates a frame
+    every ~17 s to make up the difference -- which showed up as a +1 ms/s ramp
+    with periodic 16.7 ms steps and would have been read as core drift. The
+    container's own timestamps carry both effects correctly.
+    """
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
+         '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', path],
+        capture_output=True, text=True, check=True).stdout
+    ts = [float(v) for v in out.replace(',', ' ').split() if v not in ('N/A',)]
+    return np.array(ts, dtype=np.float64)
+
+
+def stream_start(path, kind):
+    out = subprocess.run(
+        ['ffprobe', '-v', 'error', '-select_streams', kind, '-show_entries',
+         'stream=start_time', '-of', 'csv=p=0', path],
+        capture_output=True, text=True, check=True).stdout.strip()
+    try:
+        return float(out.split(',')[0])
+    except ValueError:
+        return 0.0
+
+
 def probe(path):
     out = subprocess.run(
         ['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
@@ -116,8 +145,13 @@ def audio_env(path):
     return env
 
 
-def find_flashes(luma, fps):
-    """-> [(marker frame index, sub-frame refined time in seconds)]."""
+def find_flashes(luma, fps, pts=None):
+    """-> [(marker frame index, sub-frame refined time in seconds)].
+
+    `pts` is the container's per-frame timestamps; the sub-frame centroid is
+    interpolated within them, so a dropped or duplicated capture frame does not
+    move the answer.
+    """
     base = np.median(luma)
     peak = luma.max()
     if peak - base < 8:
@@ -140,7 +174,18 @@ def find_flashes(luma, fps):
         seg = np.clip(seg, 0, None)
         idx = np.arange(lo, hi)
         centre = float((seg * idx).sum() / seg.sum())
-        events.append((i, (centre + 0.5) / fps))
+        if pts is not None and len(pts) > 1:
+            # interpolate the real timestamp, then advance half a frame so the
+            # figure refers to the MIDDLE of the flash's on-screen interval --
+            # the same convention in source and capture, so it cancels.
+            lo_i = int(np.floor(centre))
+            frac = centre - lo_i
+            lo_i = min(max(lo_i, 0), len(pts) - 2)
+            t = pts[lo_i] + frac * (pts[lo_i + 1] - pts[lo_i])
+            half = (pts[lo_i + 1] - pts[lo_i]) / 2.0
+            events.append((i, float(t + half)))
+        else:
+            events.append((i, (centre + 0.5) / fps))
         i = j
     return events
 
@@ -202,8 +247,19 @@ def measure(path, label):
     w, h, fps = probe(path)
     luma, stack = video_luma(path, w, h)
     env = audio_env(path)
-    flashes = find_flashes(luma, fps)
+    pts = frame_times(path)
+    if len(pts) >= len(luma):
+        pts = pts[:len(luma)]          # ffprobe may report one frame more
+    else:
+        print(f'  note: only {len(pts)} timestamps for {len(luma)} frames; '
+              'falling back to nominal fps')
+        pts = None
+    flashes = find_flashes(luma, fps, pts)
+    # Put audio on the same timeline as those timestamps: the audio stream has
+    # its own start_time in the container and need not begin at zero.
     clicks = find_clicks(env)
+    if pts is not None:
+        clicks = [c + stream_start(path, 'a:0') for c in clicks]
     counters = read_counters(stack, [f for f, _ in flashes])
 
     print(f'{label}: {os.path.basename(path)}  {w}x{h} @ {fps:.3f} fps')
