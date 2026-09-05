@@ -4175,7 +4175,15 @@ reg        core_vs_prev = 0;
 wire       core_video_active = (core_vs_edge_cnt >= 3'd3);
 reg [15:0] core_frame_cnt = 0;  // free-running frame counter (all vsync rising edges)
 
-// core_v_sync is in clk_mem domain (dot_clk=clk_mem), so sample here on clk_mem
+// ⚠ CORRECTED 2026-09-05: dot_clk is clk_sys (27 MHz), NOT clk_mem -- see the
+// mpeg2video instantiation, .dot_clk(clk_sys) with .dot_ce(1'b1). core_v_sync
+// therefore originates in clk_sys and is sampled here on clk_mem (90 MHz),
+// which is a CDC. It is safe as written -- vsync is ~60 Hz against a 90 MHz
+// sampler, and the edge detector needs only that each edge be seen once -- but
+// the old comment claimed the two were the same domain, and reading it that way
+// sends you looking for a clock split between audio and video that does not
+// exist (they share clk_sys). Do not re-derive that.
+
 always @(posedge clk_mem or negedge reset_n) begin
     if (!reset_n) begin
         core_vs_edge_cnt <= 0;

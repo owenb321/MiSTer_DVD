@@ -78,6 +78,56 @@ SSH_OPTS = [
 ]
 
 
+# Remote helpers kept as plain strings: they contain shell heredocs, which do
+# not survive being nested inside f-strings.
+_INI_REWRITE = """
+python3 - <<'PYEND'
+import re
+p = '/media/fat/MiSTer.ini'
+s = open(p, encoding='utf-8', errors='replace').read()
+s = re.sub(r'(?s)(\\[DVD\\]\\n)(.*?)(?=\\n\\[|\\Z)',
+           lambda m: m.group(1) + re.sub(r'(?m)^main=.*$', 'main=@TARGET@', m.group(2)),
+           s, count=1)
+open(p, 'w').write(s)
+print('  [DVD] ' + [l for l in s.splitlines() if l.startswith('main=')][0])
+PYEND
+"""
+
+INI_MAIN_SCRIPT = """
+chmod +x /media/fat/@NAME@
+[ -f /media/fat/MiSTer.ini.hilbak ] || cp /media/fat/MiSTer.ini /media/fat/MiSTer.ini.hilbak
+""" + _INI_REWRITE.replace('@TARGET@', '@NAME@') + """
+# Garbage-collect earlier harness binaries that are neither the target nor
+# currently running -- /media/fat is nearly full and these are 1 MB each.
+for f in /media/fat/MiSTer_DVDcss_hil_*; do
+  [ -e "$f" ] || continue
+  b=$(basename "$f")
+  [ "$b" = "@NAME@" ] && continue
+  running=0
+  for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+    [ "$(readlink /proc/$pid/exe 2>/dev/null)" = "$f" ] && running=1
+  done
+  [ $running = 0 ] && rm -f "$f" && echo "  removed stale $b"
+done
+"""
+
+RESTORE_SCRIPT = _INI_REWRITE.replace('@TARGET@', 'MiSTer_DVDcss') + """
+pkill -f @AGENT@ 2>/dev/null
+rm -f @FIFO@ @AGENT@ @COREDIR@/@RBF@ @COREDIR@/@MGL@
+for f in /media/fat/MiSTer_DVDcss_hil_*; do
+  [ -e "$f" ] || continue
+  running=0
+  for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+    [ "$(readlink /proc/$pid/exe 2>/dev/null)" = "$f" ] && running=1
+  done
+  [ $running = 0 ] && rm -f "$f"
+done
+echo "  harness files removed (core, mgl, agent, spare Mains)"
+echo "  NOTE: config/@CFG@ still holds whatever options the harness last set,"
+echo "        and the running Main stays until the next core load."
+"""
+
+
 # ---------------------------------------------------------------------------
 # transport
 # ---------------------------------------------------------------------------
@@ -248,7 +298,65 @@ def newest_rbf():
     return max(cands, key=os.path.getmtime)
 
 
+def deploy_main(path):
+    """Install a new custom Main SAFELY, without a reboot.
+
+    NEVER overwrite /media/fat/MiSTer_DVDcss in place. Once the DVD core has
+    been entered, that binary is the RUNNING process for the rest of the boot
+    (returning to the menu re-execs the same exe via getappname()). Writing over
+    it makes readlink /proc/self/exe return "... (deleted)", so the next
+    load_core's execl fails and app_restart falls through to reboot(1)
+    (fpga_io.cpp:611-645); writing in place instead fails with ETXTBSY.
+
+    So: install under a name derived from the binary's own hash -- which is
+    definitionally not the running one -- and point [DVD] main= at it.
+    fpga_load_rbf then execs the still-present current binary, whose
+    user_io_init() sees cfg.main != getappname() and re-execs into the new one
+    (user_io.cpp:1483-1488). No reboot, and fully reversible with `restore`.
+    """
+    import hashlib
+    sha = hashlib.sha256(open(path, 'rb').read()).hexdigest()[:8]
+    name = 'MiSTer_DVDcss_hil_' + sha
+    target = '/media/fat/' + name
+    print('deploy: %s -> %s' % (os.path.basename(path), target))
+    # ⚠ The hash-derived name is normally not the running binary -- but it IS if
+    # the same build is deployed twice, and then the scp would overwrite the
+    # running process, which is precisely the reboot landmine this function
+    # exists to avoid. Identical content, so there is nothing to copy anyway.
+    _, running = ssh("for p in $(ls /proc | grep -E '^[0-9]+$'); do "
+                     "readlink /proc/$p/exe 2>/dev/null; done | grep MiSTer | head -1\n",
+                     check=False)
+    if running.strip() == target:
+        print('  already running this exact binary -- nothing to copy')
+        return
+    scp(path, target)
+    script = INI_MAIN_SCRIPT.replace('@NAME@', name).replace('@AGENT@', AGENT_DST)
+    _, out = ssh(script)
+    print(out.rstrip())
+    print('  (takes effect on the next core load; the running Main is untouched)')
+
+
+def cmd_restore(args):
+    """Put the rig back to stock: main=MiSTer_DVDcss, harness files removed."""
+    script = RESTORE_SCRIPT.replace('@AGENT@', AGENT_DST) \
+                           .replace('@FIFO@', AGENT_FIFO) \
+                           .replace('@COREDIR@', CORE_DIR) \
+                           .replace('@RBF@', HIL_RBF).replace('@MGL@', HIL_MGL) \
+                           .replace('@CFG@', CFG_NAME)
+    _, out = ssh(script)
+    print('restore:')
+    print(out.rstrip())
+    st = os.path.join(HERE, '.mister_state.json')
+    if os.path.exists(st):
+        os.remove(st)
+    return 0
+
+
 def cmd_deploy(args):
+    if args.main:
+        deploy_main(args.main)
+        if not args.rbf and not args.agent:
+            return 0
     ssh(f'mkdir -p {SHOT_DIR}\n')
     if args.agent or not args.rbf_only:
         scp(AGENT_SRC, AGENT_DST)
@@ -563,9 +671,15 @@ def main():
 
     p = sub.add_parser('deploy', help='copy a build (and the key daemon) to the rig')
     p.add_argument('--rbf', help='default: newest releases/*.rbf')
+    p.add_argument('--main', metavar='PATH',
+                   help='install a custom Main safely (never overwrites the running one)')
     p.add_argument('--agent', action='store_true', help='only (re)start the key daemon')
     p.add_argument('--rbf-only', action='store_true')
     p.set_defaults(fn=cmd_deploy)
+
+    sub.add_parser('restore',
+                   help='put the rig back to stock Main and remove harness files') \
+       .set_defaults(fn=cmd_restore)
 
     p = sub.add_parser('launch', help='set options, mount an image, load the core')
     p.add_argument('image', help='absolute path ON THE MISTER')

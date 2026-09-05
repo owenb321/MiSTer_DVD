@@ -320,6 +320,46 @@ by soaking), and title-domain stills. The oracles fire on synthetic faults and
 stay quiet across six real discs -- which is the balance worth having before a
 finding from this tool is worth believing.
 
+## Deploying a new Main, and putting the rig back
+
+```bash
+tools/mister.py deploy --main main/.build/MiSTer_DVDcss   # safe swap, no reboot
+tools/mister.py restore                                   # back to stock Main
+```
+
+`deploy --main` installs under a name derived from the binary's own hash and
+repoints `[DVD] main=`, because **the running Main must never be overwritten**
+(see "Facts that will bite"). It also refuses to copy when the hash-derived name
+IS the running binary -- deploying the same build twice would otherwise walk
+straight into the landmine the function exists to avoid -- and garbage-collects
+older `MiSTer_DVDcss_hil_*` that are neither the target nor running, since
+`/media/fat` is nearly full.
+
+`restore` puts `main=MiSTer_DVDcss` back, stops the key daemon and removes the
+harness core, MGL and spare Mains. It does NOT revert `config/DVD_v2.CFG`, which
+still holds whatever options the harness last set, and the running Main stays
+until the next core load.
+
+## Tests
+
+```bash
+bench/dvd/run_telem.sh     # everything below, plus the RTL bench
+tools/tests/run_tests.sh   # host-side only
+```
+
+`tools/tests/` covers the two tables `mister.py` DERIVES rather than
+transcribes, because a wrong value there produces a symptom that looks like a
+core bug:
+
+- `test_status_bits.py` -- every OSD option's bit span against positions
+  documented independently in CLAUDE.md, plus the CONF_STR forms the live
+  string does not contain (two base-32 chars, lowercase `o` +32, a page prefix
+  with `X`, and `[hi:lo]`, whose sscanf reads END first). A wrong span sets the
+  wrong option on the hardware.
+- `test_key_table.py` -- every `hit[]` bit in `kbd_map.sv` is reachable by name,
+  every PS/2 code in the RTL has a Linux keycode, and spot checks against Main's
+  `ev2ps2[]`. An unreachable binding presents as "the core ignored my keypress".
+
 ## What is not here yet
 
 - **Track C, lip-sync**: a generated sync clip (per-frame flash carrying a

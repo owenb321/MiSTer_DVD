@@ -33,5 +33,12 @@ run_py hud_read     python3 tools/hud_read.py selftest
 run_py lipsync      python3 tools/lipsync_measure.py selftest
 run_py dvd_explore  python3 tools/dvd_explore.py selftest
 
+echo "== derived tables (CONF_STR / kbd_map) =="
+if ./tools/tests/run_tests.sh 2>&1 | grep -q "ALL GREEN"; then
+    echo "  PASS tools/tests"
+else
+    echo "  FAIL tools/tests"; ./tools/tests/run_tests.sh 2>&1 | tail -15; fail=1
+fi
+
 [ $fail = 0 ] && echo "run_telem: ALL GREEN" || echo "run_telem: FAILURES"
 exit $fail
