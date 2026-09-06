@@ -702,6 +702,107 @@ module resample_addrgen (
     else pickup_tick_r <= clk_en && (state == STATE_INIT) && pickup_go;
   assign pickup_tick = pickup_tick_r;
 
+  /* ================= DVD-FORK (Film 24p Out — auto film detector) =================
+   * Recognise soft-telecined film from the per-frame display flags — no pixel
+   * analysis. Evaluated once per display pickup (the same strobe that latches
+   * cur_show/pickup_show), so it sees the flags_commit-correct per-picture values.
+   *
+   * NTSC 23.976 fps film is coded as progressive_frame=1 with repeat_first_field
+   * ALTERNATING 1,0,1,0 (the 3:2 / 5-fields-per-2-frames cadence). 30 fps progressive
+   * video is progressive_frame=1 but rff NEVER toggles; 60i video is progressive_
+   * frame=0. So "progressive AND rff toggled vs the previous frame" is the specific
+   * telecine signature (film_det_ntsc). PAL 25p film is native 2:2 (progressive_frame
+   * =1, rff=0), indistinguishable from 25 fps progressive video by flags — and both
+   * WANT 25p — so a sustained progressive run alone is the PAL signal (film_det_pal);
+   * only 50i video (progressive_frame=0) is excluded.
+   *
+   * Hysteresis via a SATURATING CONFIDENCE accumulator (NOT a strict consecutive-run
+   * counter). Each pickup nudges the confidence: +UP for a confirming frame, -DN for a
+   * non-confirming one, clamped to [0, CONF_MAX]. `det` sets at ENGAGE_TH, clears at
+   * DISENGAGE_TH. Why confidence, not a consecutive run (2026-07-25 HW fix): a strict
+   * "reset the run to 0 on any break" detector engaged fine on a clean menus-OFF stream
+   * but NOT when the film title was reached through the disc MENU/VM — the nav layer
+   * (NAV packs, cell/PGC boundaries, VM POST, brief stills) injects periodic cadence
+   * hiccups during title playback that kept zeroing the run before it reached lock. A
+   * confidence that DECAYS on a hiccup (instead of resetting) rides through them and
+   * still locks, while the FALSE-POSITIVE GUARD is preserved: 30 fps progressive video
+   * produces ZERO confirming frames (rff never toggles), so its confidence only ever
+   * decays — it can never reach ENGAGE_TH. The NTSC non-confirming step is split:
+   * DN_HARD for an interlaced frame (definitely not film) vs the gentler DN_SOFT for a
+   * progressive-but-not-toggling frame (a telecine hiccup OR 30p video — the duration,
+   * via the accumulator, tells them apart). Bias stays toward NON-film. */
+  localparam [7:0] CONF_MAX     = 8'd127;
+  localparam [7:0] ENGAGE_TH    = 8'd120;  // ~40 clean film frames from 0 (~1.7 s) to lock
+  localparam [7:0] DISENGAGE_TH = 8'd24;   // deep hysteresis: ~50 non-film frames from full to release
+  localparam [7:0] UP_STEP      = 8'd3;
+  localparam [7:0] DN_SOFT      = 8'd2;    // progressive but rff didn't toggle (hiccup / 30p video)
+  localparam [7:0] DN_HARD      = 8'd8;    // interlaced frame (progressive_frame=0)
+  reg        rff_q;                        // previous frame's rff (for the toggle test)
+  reg  [7:0] conf_ntsc, conf_pal;
+  // (det_ntsc/det_pal are DECLARED EARLIER, beside the PTS-scheduling note —
+  //  iverilog rejects declaration-after-use.)
+  wire       film_pickup = (state == STATE_INIT) && pickup_go;
+  wire       rff_toggled = (repeat_first_field != rff_q);
+  wire       good_ntsc   = progressive_frame && rff_toggled;   // clean 3:2 telecine frame
+  always @(posedge clk)
+    if (~rst) begin
+      rff_q     <= 1'b0;
+      conf_ntsc <= 8'd0; conf_pal <= 8'd0;
+      det_ntsc  <= 1'b0; det_pal  <= 1'b0;
+    /* ★ DVD-FORK (film evidence gate, 2026-08-30) — the `informative` term.
+     *
+     * progressive_frame is the ENCODER's claim, not a measurement, and on a
+     * near-black picture there is nothing to measure: the encoder takes the
+     * MPEG-2 default and marks it interlaced. Counting that claim is what made
+     * APOLLO_13's fading credits knock this detector out of film lock NINE
+     * times in the first 46 s of the title, re-walking the raster each time.
+     *
+     * VLC's IVTC hits the same content and rides through it, because it reads
+     * pixels and refuses to score a frame it cannot trust — "If no motion, the
+     * result from this algorithm cannot be reliable ... we do nothing, as it's
+     * not a good idea to act on unreliable data". `informative` is that rule
+     * with coded picture size standing in for motion (measured in the vld; see
+     * rtl/mpeg2/vld.v). An uninformative pickup updates NOTHING — not the
+     * confidences and not rff_q, so the 3:2 toggle test resumes across the gap
+     * rather than seeing a false edge.
+     *
+     * Measured effect (tools/film_evidence_probe.py, real discs, this exact
+     * arithmetic): APOLLO_13 credits 9 raster changes -> 1. FERRIS_BUELLER's
+     * special feature, which really does turn from film to video mid-title,
+     * keeps BOTH of its transitions at the same timestamps as before — so the
+     * detector still follows genuine changes in about a second, and none of
+     * this needs the per-title latch that cost 12 s to leave film mode.
+     * Library sweep, 123 discs: 15 better, 0 worse. */
+    end else if (clk_en && film_pickup && informative) begin
+      rff_q <= repeat_first_field;
+      // ---- NTSC telecine confidence ----
+      begin : ntsc_conf
+        reg [7:0] cn;
+        if (good_ntsc)
+          cn = (conf_ntsc > (CONF_MAX - UP_STEP)) ? CONF_MAX : conf_ntsc + UP_STEP;
+        else if (!progressive_frame)
+          cn = (conf_ntsc < DN_HARD) ? 8'd0 : conf_ntsc - DN_HARD;
+        else
+          cn = (conf_ntsc < DN_SOFT) ? 8'd0 : conf_ntsc - DN_SOFT;
+        conf_ntsc <= cn;
+        if      (cn >= ENGAGE_TH)    det_ntsc <= 1'b1;
+        else if (cn <= DISENGAGE_TH) det_ntsc <= 1'b0;
+      end
+      // ---- PAL 25p confidence (progressive alone; rff irrelevant for 2:2) ----
+      begin : pal_conf
+        reg [7:0] cp;
+        if (progressive_frame)
+          cp = (conf_pal > (CONF_MAX - UP_STEP)) ? CONF_MAX : conf_pal + UP_STEP;
+        else
+          cp = (conf_pal < DN_HARD) ? 8'd0 : conf_pal - DN_HARD;
+        conf_pal <= cp;
+        if      (cp >= ENGAGE_TH)    det_pal <= 1'b1;
+        else if (cp <= DISENGAGE_TH) det_pal <= 1'b0;
+      end
+    end
+  assign film_det_ntsc = det_ntsc;
+  assign film_det_pal  = det_pal;
+
   /* DVD-FORK (av_sync STC reference): sticky "display has shown a decoded frame".
    * Same pickup condition as cur_show above — the first real frame entering the
    * image build is, one scan later, on the screen. */

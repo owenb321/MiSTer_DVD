@@ -111,8 +111,16 @@ module film_detect_tb;
     end
 
   integer errors = 0;
+  // ⚠ `if (!cond)` is FALSE when cond is x or z, so this task used to pass every
+  // check on an UNDRIVEN verdict -- and it did: the whole detector was deleted
+  // from resample_addrgen by the PTS-scheduling surgery (2026-09-06) and this
+  // bench stayed green while Film 24p Auto could never engage on hardware.
+  // Require a known 1: x/z now fails like a wrong answer, which is what it is.
   task chk(input cond, input [255:0] msg);
-    if (!cond) begin $display("  FAIL: %0s", msg); errors = errors + 1; end
+    if (cond !== 1'b1) begin
+      $display("  FAIL: %0s%0s", msg, (cond === 1'bx || cond === 1'bz) ? " (verdict is x/z -- UNDRIVEN?)" : "");
+      errors = errors + 1;
+    end
   endtask
 
   // (The det_video true-interlaced verdict and its mutual-exclusion guard were removed

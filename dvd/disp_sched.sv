@@ -40,13 +40,28 @@
 //  pickup, so the half-period rounding is what makes the compare robust.
 //
 //  DISCONTINUITY.  A tagged picture more than one frame BEHIND the timeline or
-//  more than FWD_MAX (0.5 s) ahead of it re-anchors (a cell/PGC boundary, a
-//  menu loop, an authored gap too long to wait out); a picture more than
-//  LATE_MAX behind the clock re-anchors too (a reader-held still or a cell PTS
-//  reset would otherwise leave every later picture late forever). Small gaps
-//  are waited out; small lateness is displayed now and recovered by the frame
-//  drop governor, which makes the decoder run early so later pictures WAIT --
-//  the loop that a refresh-counting ledger could only approximate.
+//  more than FWD_MAX (0.5 s) ahead of it re-anchors: a cell/PGC boundary, a menu
+//  loop, an authored gap too long to wait out. Small gaps are waited out.
+//
+//  ⚠⚠ LATENESS IS NOT A DISCONTINUITY, and treating it as one was a real defect
+//  (HW round B, 2026-09-06: "everything out of sync, and not by a fixed amount",
+//  plus judder after a seek). When the decoder is starved the picture that
+//  finally arrives is overdue; the RIGHT response is to show it now -- it is
+//  already due -- and let the frame-drop governor drop pictures so the decoder
+//  runs ahead, after which pictures WAIT and the display is back on schedule.
+//  That closed loop is the whole point of scheduling by PTS. Re-anchoring
+//  instead redefines "now" as the late picture and drags the AUDIO back with
+//  it, permanently, every time it fires -- and on this compute-bound core a
+//  sub-second stall is routine (docs/lipsync_pickup.md measures ~4 lates/s on
+//  healthy content, and a heavy scene starves the VBUF for longer), so it fired
+//  repeatedly at unpredictable times: an error that varies, that a seek does not
+//  clear, and that judders while the clock is yanked backwards.
+//  LATE_MAX therefore only covers lateness the governor CANNOT work off: a
+//  reader-held still parks the display for SECONDS while the clock runs, and if
+//  the content then resumes on a continuous PTS neither jump test fires. 2.7 s
+//  is past any starvation the drop path recovers from and well under a timed
+//  still. bench/dvd/disp_sched_tb [8b] is the regression: a 400 ms starvation
+//  must re-anchor ZERO times.
 //
 //  RESET DOMAIN.  rst_n is the decoder reset; `flush` is the VBUF flush
 //  (seek/mount). Deliberately NOT the keep_vbuf menu hop's pipe reset: across a
@@ -61,7 +76,7 @@
 
 module disp_sched #(
     parameter signed [33:0] FWD_MAX_TICKS  = 34'sd45000,   // wait out gaps shorter than this (0.5 s)
-    parameter signed [33:0] LATE_MAX_TICKS = 34'sd31500    // re-anchor past this much lateness (350 ms)
+    parameter signed [33:0] LATE_MAX_TICKS = 34'sd243000   // re-anchor past this much lateness (2.7 s) -- see the DISCONTINUITY note
 ) (
     input  wire        clk,                   // clk_dec
     input  wire        rst_n,                 // sync_rst

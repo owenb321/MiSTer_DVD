@@ -321,10 +321,34 @@ module disp_sched_tb;
     //     continuous timeline resumes -> the first picture is 1 s late -> re-anchor, then on time
     reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
     film_32(120, 100000, 12, 20000);
-    for (i = 60; i < 120; i = i + 1) s_ready[i] = s_pts[i] - 20000 + 90000;   // decoded 1 s after its PTS: a reader-held still
+    for (i = 60; i < 120; i = i + 1) s_ready[i] = s_pts[i] - 20000 + 360000;  // decoded 4 s after its PTS: a reader-held still (past LATE_MAX)
     settle = 62;
     run_until_done(200);
     report("[8] LATE_MAX after a held still", 0, 2, 752);
+
+    // [8b] ⚠ THE REGRESSION FOR THE HW ROUND-B DEFECT: a 400 ms starvation is
+    //      RECOVERABLE lateness, not a discontinuity. It must re-anchor ZERO times
+    //      (only the initial anchor), or the clock is dragged backwards and the
+    //      audio with it -- "out of sync by a varying amount" that a seek cannot fix.
+    //      The governor's drops are what put the display back on schedule.
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(120, 100000, 12, 20000);
+    // ⚠ Model BOTH halves or the scenario asserts something the design never claimed:
+    // a BURST of starvation (not a permanent delivery delay -- the decoder gets ahead
+    // again, which is what the drops buy it), and the DROPS themselves, because on the
+    // interlaced path a picture always occupies its own field count and the display
+    // cannot fast-forward through a backlog on its own.
+    for (i = 40; i < 60; i = i + 1) s_ready[i] = s_pts[i] - 20000 + 36000;   // 400 ms late, 20 pictures
+    for (i = 61; i < 85; i = i + 2) if ((i % 12) != 0) s_drop[i] = 1;        // the governor works it off
+    settle = 88;
+    run_until_done(200);
+    if (reanchors != 1) begin
+      $display("FAIL [8b] a 400 ms starvation re-anchored %0d time(s) -- lateness is not a discontinuity", reanchors);
+      errors = errors + 1;
+    end
+    if (max_abs_lag > 752) begin
+      $display("FAIL [8b] after the drops pictures still off by %0d", max_abs_lag); errors = errors + 1; end
+    $display("  [8b] 400 ms starvation: lates=%0d reanchors=%0d max|lag|=%0d (must be 1 re-anchor)", lates, reanchors, max_abs_lag);
 
     // [9] second-field tags: the tag names the SECOND field (one field later)
     reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
@@ -364,7 +388,7 @@ module disp_sched_tb;
     if (anchor_delta != 0) begin $display("FAIL [12] first pickup delta %0d, expected 0", anchor_delta); errors = errors + 1; end
     report("[12] provisional anchor", 1, 1, 752);
 
-    if (errors == 0) $display("PASS: disp_sched_tb — 13 scenarios");
+    if (errors == 0) $display("PASS: disp_sched_tb — 14 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end
     $finish;
   end

@@ -272,6 +272,66 @@ just-in-time decoder — and 5 mutations each caught by its own scenario),
 `av_sync_tb` (the mirror), `dvd_audio_decode_tb`, `flush_ctl_tb`, the
 telemetry bench, and the display suites re-paced with `sched_due` tied high.
 
+## 3.7 HW round B found two defects (2026-09-06) — both fixed, both my errors
+
+**Round B was reported by the maintainer, not by me: I shipped Stage 0 and Stage 1
+on simulation evidence and never ran `tools/mister.py` against the rig.** Symptoms:
+everything out of sync by an amount that was not fixed and that a chapter seek did
+not clear; heavy judder in APOLLO_13's second chapter after seeking to it; Ferris
+Bueller never switching to film and out of sync in the interview.
+
+### (1) The film detector was DELETED by the governor surgery
+
+`resample_addrgen`'s auto film detector (the confidence accumulators, `film_pickup`,
+`rff_toggled`, and `assign film_det_ntsc/pal`) sat between the `vid_err` instrument
+and the `video_live` block. The Stage 1 cut ran from one to the other and took the
+detector with it. `film_det_ntsc`/`film_det_pal` were left as outputs with NO DRIVER,
+which Quartus ties low, so **`Film 24p Out = Auto` could never engage** — exactly the
+Ferris report. Restored verbatim from the pre-surgery commit.
+
+⚠⚠ **`bench/dvd/film_detect_tb.sv` PASSED THROUGHOUT.** Its checker was
+`task chk(input cond, ...); if (!cond) fail;` — and `!1'bz` is `x`, so `if (x)` is
+false and **every check silently passed on a completely undriven verdict**. The task
+now requires `cond === 1'b1` and names x/z in the failure text; verified RED (17
+errors) against the dead RTL and GREEN against the restored detector. This is the
+`bench-that-cannot-fail` family again, in a third disguise: not constant stimulus and
+not a golden model copied from the RTL, but a **pass condition that cannot represent
+"unknown"**. Any `if (!cond)` checker in this repo has the same hole.
+
+### (2) Lateness was treated as a discontinuity (`LATE_MAX` 350 ms)
+
+`disc_w` re-anchored the STC whenever the waiting picture was more than 350 ms late.
+That is wrong in principle: **when the decoder is starved the right response is to
+show the overdue picture — it is already due — and let the frame-drop governor drop
+pictures so the decoder runs ahead, after which pictures WAIT and the display returns
+to schedule.** That closed loop is the whole point of scheduling by PTS. Re-anchoring
+instead redefines "now" as the late picture and drags the AUDIO back with it,
+permanently, every time it fires. On this compute-bound core a sub-second stall is
+routine (`docs/lipsync_pickup.md` measures ~4 lates/s on healthy content, and a heavy
+scene starves the VBUF for longer), so it fired repeatedly at unpredictable times:
+an error that varies, that a seek does not clear, and — during the post-seek re-lock,
+when starvation is guaranteed — repeated backward yanks of the clock, which is the
+judder. One rule explains all three of those observations.
+
+`LATE_MAX` is now 2.7 s: past any starvation the drop path recovers from, and well
+under a timed still, which is the case the rule exists for (a reader-held still parks
+the display for seconds while the clock runs, and if content then resumes on a
+continuous PTS neither jump test fires). Regression: `disp_sched_tb` **[8b]** — a
+400 ms starvation burst must re-anchor ZERO extra times and be back on schedule after
+it; mutation **M6** puts the threshold back to 350 ms and must fail [8b].
+
+### Still open after these fixes
+
+The reported residual — "APOLLO_13 interlaced better than 24p, both wrong at 0 ms
+offset" — is NOT explained by either fix and needs a measurement, not a guess. Word
+11 `disp_lag` (displayed PTS − STC at each pickup) is the instrument: ~0 means the
+scheduler is placing pictures correctly and any remaining error is downstream
+(pickup-to-screen latency, which is one raster scan and therefore ~25 ms LARGER at
+23.976 Hz than at 59.94 Hz — the right shape for "interlaced better than 24p", but far
+too small to be the whole story on its own). ⚠ The rig must be running the MATCHING
+Main: the archived branch's `dvd_ctl` reads 16 words with different labels, so this
+core's `disp_lag` prints there as `av_drift_ms`.
+
 ## 4. HW rounds
 
 - **Round A (Stage 0 build `DVD_stcfree_20260906_1357.rbf`, SEED 5 first roll,

@@ -2,7 +2,7 @@
 # run_disp_sched.sh — the display scheduler (dvd/disp_sched.sv), GREEN then MUTATED.
 #
 # disp_sched_tb builds a decoder + raster + clock model from first principles and
-# requires every pickup to land within half a scan of its PTS across 13 scenarios.
+# requires every pickup to land within half a scan of its PTS across 14 scenarios.
 # Level assertions on a scheduler are exactly the shape that passes without
 # proving anything, so five targeted RTL mutations are applied to a COPY of the
 # shipping source and each must make its own scenario FAIL:
@@ -14,6 +14,7 @@
 #       also trips LATE_MAX, so [7a] cannot see this)
 #   M5  every picture counts as 2 fields        -> [6]/[11] false starvation lates (the image
 #       list pins each picture's fields on the raster, so the timeline error shows as lates)
+#   M6  LATE_MAX back to 350 ms                 -> [8b] a recoverable starvation re-anchors
 set -u
 cd "$(dirname "$0")/../.."
 fail=0
@@ -51,6 +52,8 @@ mut M1 "(d_stc_want >= -half_s)" "(d_stc_want >= half_s)" "FAIL \[1\]"
 mut M2 "if (pic_valid) defer_q3 <= defer_q3 + {18'd0, skip_dur_q3};" "if (1'b0) defer_q3 <= defer_q3 + {18'd0, skip_dur_q3};" "FAIL \[6\]"
 mut M3 "pic_pts_eff <= pic_pts - (pic_pts_2nd ? field_ticks : 33'd0);" "pic_pts_eff <= pic_pts;" "FAIL \[9\]"
 mut M4 "((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s))" "((d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s))" "FAIL \[7d\]"
+# M6 is the HW round-B defect itself: lateness treated as a discontinuity again.
+mut M6 "34'sd243000" "34'sd31500" "FAIL \[8b\]"
 mut M5 "pic_dur_q3  <= field_q3 * pic_fields;" "pic_dur_q3  <= field_q3 * 3'd2;" "FAIL \[6\]"
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="
