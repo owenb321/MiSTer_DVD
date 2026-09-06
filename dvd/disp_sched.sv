@@ -108,17 +108,32 @@ module disp_sched #(
     output reg  signed [33:0] disp_lag        // pic_pts - stc at that pickup
 );
 
-    // ---- field period in Q3 (eighth) ticks, from frame_rate_code -------------
+    // ---- PIPELINE NOTE (2026-09-06, the first Stage 1 fit) -------------------
+    // Fully combinational, this module's cone from frame_rate_code (a vld
+    // register) through the field-period mux, the field-count multiply and the
+    // four-operand add into next_q3 measured 13.3 ns against clk_dec's 12.3 ns
+    // (tools/timing_paths.sh: clk_dec fell 87.7 -> 73.8 MHz), and the same cone
+    // fed pic_due into the display FSM. Nothing here needs to be decided in one
+    // cycle -- a picture waits at the output for thousands of cycles, the STC
+    // moves once per ~1000, and the pickup pulse arrives a cycle after the FSM's
+    // decision -- so every stage below is REGISTERED: period, products, the
+    // differences, then the compares. The outputs lag their inputs by 3-4 clocks
+    // (~40 ns against an 11 us tick), which the bench cannot even see.
+
+    // ---- stage A: field period in Q3 (eighth) ticks, from frame_rate_code ----
     //   1 23.976 -> 15015   2 24 -> 15000   3 25 -> 14400   4 29.97 -> 12012
     //   5 30     -> 12000   6 50 -> 7200    7 59.94 -> 6006 8 60 -> 6000
-    wire [14:0] field_q3 = (frame_rate_code == 4'd1) ? 15'd15015 :
-                           (frame_rate_code == 4'd2) ? 15'd15000 :
-                           (frame_rate_code == 4'd3) ? 15'd14400 :
-                           (frame_rate_code == 4'd5) ? 15'd12000 :
-                           (frame_rate_code == 4'd6) ? 15'd7200  :
-                           (frame_rate_code == 4'd7) ? 15'd6006  :
-                           (frame_rate_code == 4'd8) ? 15'd6000  : 15'd12012;
+    reg [14:0] field_q3;
+    always_ff @(posedge clk)
+        field_q3 <= (frame_rate_code == 4'd1) ? 15'd15015 :
+                    (frame_rate_code == 4'd2) ? 15'd15000 :
+                    (frame_rate_code == 4'd3) ? 15'd14400 :
+                    (frame_rate_code == 4'd5) ? 15'd12000 :
+                    (frame_rate_code == 4'd6) ? 15'd7200  :
+                    (frame_rate_code == 4'd7) ? 15'd6006  :
+                    (frame_rate_code == 4'd8) ? 15'd6000  : 15'd12012;
     wire [15:0] frame_ticks = {3'b0, field_q3[14:2]};       // field_q3/4 = 2 fields in ticks (floor)
+    wire [32:0] field_ticks = {21'd0, field_q3[14:3]};
 
     // content field count, the image-build rules
     wire [2:0] pic_fields  = pic_ps  ? (pic_rff  ? (pic_tff  ? 3'd6 : 3'd4) : 3'd2)
@@ -126,43 +141,61 @@ module disp_sched #(
     wire [2:0] skip_fields = skip_field ? 3'd1 :
                              skip_ps    ? (skip_rff ? (skip_tff ? 3'd6 : 3'd4) : 3'd2)
                                         : ((skip_pf && skip_rff) ? 3'd3 : 3'd2);
-    wire [17:0] pic_dur_q3  = field_q3 * pic_fields;
-    wire [17:0] skip_dur_q3 = field_q3 * skip_fields;
+
+    // ---- stage B: products and the effective picture PTS (registered) --------
+    reg  [17:0] pic_dur_q3;
+    reg  [17:0] skip_dur_q3;
+    reg         skip_ack_r;                  // the ack, delayed to meet its product
+    reg  [32:0] pic_pts_eff;
+    always_ff @(posedge clk) begin
+        pic_dur_q3  <= field_q3 * pic_fields;
+        skip_dur_q3 <= field_q3 * skip_fields;
+        skip_ack_r  <= skip_ack;
+        // a second-field tag names the second field: one field period after the frame
+        pic_pts_eff <= pic_pts - (pic_pts_2nd ? field_ticks : 33'd0);
+    end
 
     // ---- the timeline -----------------------------------------------------
     reg  [35:0] next_q3;                     // PTS of the next picture, Q3
     reg         next_valid;                  // a picture has been displayed since the anchor
     reg  [35:0] defer_q3;                    // skipped durations belonging after the waiting picture
     reg         prov_seen;                   // a parse-front PTS has been seen since the flush
-
     wire [32:0] next_pts = next_q3[35:3];
-    // a second-field tag names the second field: one field period after the frame
-    wire [32:0] field_ticks = {21'd0, field_q3[14:3]};
-    wire [32:0] pic_pts_eff = pic_pts - (pic_pts_2nd ? field_ticks : 33'd0);
 
-    // signed, modular 33-bit differences
-    wire signed [33:0] d_pic_next  = $signed({1'b0, pic_pts_eff}) - $signed({1'b0, next_pts});
-    wire signed [33:0] d_stc_pic   = $signed({1'b0, stc}) - $signed({1'b0, pic_pts_eff});
-    wire signed [33:0] d_stc_next  = $signed({1'b0, stc}) - $signed({1'b0, next_pts});
-    wire signed [33:0] half_s      = $signed({18'd0, half_scan});
+    // ---- stage C: the differences (registered) -----------------------------
+    wire has_tag = pic_valid && pic_pts_valid;
+    reg  signed [33:0] d_pic_next, d_stc_pic, d_stc_next, d_stc_want;
+    reg  [32:0] want_pts;
+    reg  [35:0] want_dur_q3;                 // {want_pts, 3'b0} + pic_dur_q3, precomputed
+    wire [32:0] want_pts_w = has_tag ? pic_pts_eff : (next_valid ? next_pts : stc);
+    always_ff @(posedge clk) begin
+        d_pic_next  <= $signed({1'b0, pic_pts_eff}) - $signed({1'b0, next_pts});
+        d_stc_pic   <= $signed({1'b0, stc}) - $signed({1'b0, pic_pts_eff});
+        d_stc_next  <= $signed({1'b0, stc}) - $signed({1'b0, next_pts});
+        d_stc_want  <= $signed({1'b0, stc}) - $signed({1'b0, want_pts_w});
+        want_pts    <= want_pts_w;
+        want_dur_q3 <= {want_pts, 3'd0} + {18'd0, pic_dur_q3};
+    end
+    wire signed [33:0] half_s     = $signed({18'd0, half_scan});
     wire signed [33:0] fwd_max_s  = FWD_MAX_TICKS;          // pre-sized parameters (no runtime casts)
     wire signed [33:0] late_max_s = LATE_MAX_TICKS;
-    wire signed [33:0] frame_s     = $signed({18'd0, frame_ticks});
+    wire signed [33:0] frame_s    = $signed({18'd0, frame_ticks});
 
-    wire has_tag = pic_valid && pic_pts_valid;
+    // ---- stage D: the decisions (registered) --------------------------------
     // a tagged picture that does not belong to the current timeline
-    wire disc   = has_tag && anchored && next_valid &&
+    reg  disc, anchor_now, pic_due_r, next_due_r;
+    wire disc_w = has_tag && anchored && next_valid &&
                   ((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s));
-    // where this picture wants to be shown
-    wire [32:0] want_pts = has_tag ? pic_pts_eff : (next_valid ? next_pts : stc);
-    wire signed [33:0] d_stc_want = $signed({1'b0, stc}) - $signed({1'b0, want_pts});
-
-    // anchor at this pickup?
-    wire anchor_now = pic_valid && (!anchored || (has_tag && (!next_valid || disc)));
+    wire anchor_now_w = pic_valid && (!anchored || (has_tag && (!next_valid || disc_w)));
+    always_ff @(posedge clk) begin
+        disc       <= disc_w;
+        anchor_now <= anchor_now_w;
+        pic_due_r  <= !sched_en || !pic_valid || anchor_now_w || (d_stc_want >= -half_s);
+        next_due_r <= !sched_en || (anchored && next_valid && (d_stc_next >= -half_s));
+    end
     wire [32:0] anchor_val = has_tag ? pic_pts_eff : (prov_seen ? stc : 33'd0);
-
-    assign pic_due  = !sched_en || !pic_valid || anchor_now || (d_stc_want >= -half_s);
-    assign next_due = !sched_en || (anchored && next_valid && (d_stc_next >= -half_s));
+    assign pic_due  = pic_due_r;
+    assign next_due = next_due_r;
 
     always_ff @(posedge clk) begin
         anchor_req     <= 1'b0;
@@ -187,8 +220,8 @@ module disp_sched #(
                 prov_seen <= 1'b1;
             end else if (prov_valid) prov_seen <= 1'b1;
 
-            // dropped pictures
-            if (skip_ack) begin
+            // dropped pictures (the delayed ack meets its registered product)
+            if (skip_ack_r) begin
                 if (pic_valid) defer_q3 <= defer_q3 + {18'd0, skip_dur_q3};
                 else           next_q3  <= next_q3  + {18'd0, skip_dur_q3};
             end
@@ -205,8 +238,8 @@ module disp_sched #(
                     next_q3      <= {anchor_val, 3'd0} + {18'd0, pic_dur_q3};   // realign drops precede the anchor
                     defer_q3     <= 36'd0;
                 end else begin
-                    next_q3      <= {want_pts, 3'd0} + {18'd0, pic_dur_q3} + defer_q3
-                                  + (skip_ack && pic_valid ? {18'd0, skip_dur_q3} : 36'd0);
+                    next_q3      <= want_dur_q3 + defer_q3
+                                  + (skip_ack_r && pic_valid ? {18'd0, skip_dur_q3} : 36'd0);
                     defer_q3     <= 36'd0;
                 end
                 next_valid <= 1'b1;

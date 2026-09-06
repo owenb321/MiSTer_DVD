@@ -910,4 +910,14 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # 5.5 MHz) -- but the widened picbuf output register and the header-position path are the
 # new terms, so if Stage 1 lands under 86 run tools/timing_paths.sh before re-rolling and
 # look there first; the hdr_pos subtract is already registered off the vld's latched value.
+#
+# 2026-09-06 (feature/stc-freerun, dev-stcfree -- STAGE 1: dvd/disp_sched.sv, the free-running
+# STC, the refresh-counting governor deleted, av_sync a mirror): SEED 5 -- clk_dec 73.77 @100C /
+# 72.6 @-40C, ⛔ FAIL against the 86.0 gate by 12 MHz, packed only as
+# DVD_stcfree_MARGINAL_20260906_1724.rbf (not for testers). NOT seed noise: tools/timing_paths.sh
+# names one cone -- vld frame_rate_code -> disp_sched's field-period mux -> field-count multiply
+# -> the four-operand add into next_q3, 13.3 ns against the 12.3 ns period, and the same cone
+# through pic_due -> resample_addrgen's FSM -> par_age. Fix = pipeline the scheduler (period,
+# products, differences, compares each registered; its decisions tolerate cycles of latency).
+# The entry after this one is the re-fit.
 set_global_assignment -name SEED 5
