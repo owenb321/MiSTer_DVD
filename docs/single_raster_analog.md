@@ -376,13 +376,28 @@ guarantee, and what a separator integrates over, is that the **block itself** is
 **RED arms**, each required to fail — three are sed-mutated copies of the generator, since
 a bench cannot mutate a module it merely instantiates:
 
-| arm | mutation | breaks |
+| arm | mutation | measured failure |
 |---|---|---|
-| `grid` | block not offset by a half-line on field B (the stock defect, reintroduced) | G5, G6 |
-| `eqwide` | equalizing pulses emitted at broad width | G4 |
-| `nopre` | pre-equalizing segment dropped (2H presented as SMPTE) | G4 |
-| `lag` | generated sync one clock late | G1/G3 |
+| `grid` | block not offset by a half-line on field B (the stock defect, reintroduced) | **G6**: 11 per-field width-detector errors, 10 integrator |
+| `eqwide` | equalizing pulses emitted at broad width | **G4** census |
+| `nopre` | pre-equalizing segment dropped (2H presented as SMPTE) | **G4** census |
+| `lag` | generated sync one clock late | **G1/G3**: 5174 mismatches / 4439292 clocks |
 | `CS_PIPE` | wrong value in `sys_top.v` | `csync_pipe_tb` |
+
+★ **`grid` is caught by G6 and NOT by G5, and that is the two gates being genuinely
+complementary rather than one being weak.** G5 anchors each field on its own first broad
+pulse, so it measures the block's **shape**; `grid` leaves the shape identical in both
+fields and moves its **placement** relative to the raster, which is what G6's absolute
+262.5-line spacing measures. (The design note predicted "G5 and G6" for this arm. Wrong,
+and worth correcting rather than quietly widening a gate to match the prediction: shape and
+placement are separate properties and it takes both gates to cover them.)
+
+⚠ **`eqwide` and `nopre` fail through the same route and print nearly identical output**,
+because both move the width detector's anchor: with the equalizing pulses widened to broad
+width, or absent, the first pulse the detector locks onto is no longer the first *broad*
+one, so the census then reads ordinary hsyncs (125 clk27) where it expects equalizing
+pulses. The detection is real — a separator that cannot find where the vertical sync begins
+is exactly the failure — but the two arms are not distinguished from each other by the log.
 
 ★ **The bench earned its keep on the first run.** A registered counter reset by the hsync
 edge does not read zero until the cycle *after* the edge, so the block's pulses that start

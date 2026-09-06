@@ -54,13 +54,21 @@ if [ "${1:-}" = "--red" ]; then
     fi
   }
 
-  # 1. Block anchored on the plain line grid: field B loses its half-line offset, so
-  #    the two fields no longer present the same waveform and the separators no longer
-  #    see 262.5 lines. Breaks [G5] and [G6] — the stock defect, reintroduced.
+  # 1. Block anchored on the plain line grid: field B loses its half-line offset, so the
+  #    separators no longer see 262.5 lines. The stock defect, reintroduced.
+  #    ★ Caught by [G6], NOT by [G5], and that is the two gates being complementary rather
+  #    than one being weak: G5 anchors on each field's own first broad pulse, so it
+  #    measures the block's SHAPE, which this mutation leaves identical in both fields;
+  #    G6 measures its PLACEMENT against the raster, which is what moves.
   red_case "grid: block not offset by a half-line on field B" \
            's/+ {11.d0, fpar_now};/+ 12'"'"'d0;/' "+arm=0"
-  # 2. Equalizing pulses emitted at broad-pulse width. Breaks [G4] only — the gate that
-  #    checks we built the SPECIFIED shape rather than merely a symmetric one.
+  # 2. Equalizing pulses emitted at broad-pulse width. Breaks [G4] — the gate that checks
+  #    we built the SPECIFIED shape rather than merely a symmetric one.
+  #    ⚠ It and arm 3 fail through the same route and print nearly identical output: both
+  #    move the width detector's anchor (the first pulse it locks onto is no longer the
+  #    first BROAD one), so the census reads ordinary hsyncs where it expects equalizing
+  #    pulses. Real detection — a separator that cannot find where vertical sync begins is
+  #    precisely the failure — but the log does not tell the two arms apart.
   red_case "eqwide: equalizing pulses at broad width" \
            's/is_broad ? broad_w : eq_w;/is_broad ? broad_w : broad_w;/' "+arm=0"
   # 3. The pre-equalizing segment dropped: the 2H shape presented as SMPTE.
