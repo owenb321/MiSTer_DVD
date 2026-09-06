@@ -325,6 +325,49 @@ it; mutation **M6** puts the threshold back to 350 ms and must fail [8b].
 `DVD_stcfree_20260906_1932.rbf` (SEED 5 first roll, clk_dec 90.4/90.84, 92 % ALM),
 with the matching Main in `MiSTer_DVD_dev-stcfree_20260906.zip`.
 
+### (3) The pipeline I added for timing closure lost timeline advances
+
+MEASURED on the rig (this is what the round I skipped would have caught): with
+APOLLO_13 playing in Film 24p, telemetry word 11 `disp_lag` drifts **−96 ms per
+second** — steadily, without bound. During the still/logo phase before playback
+it reads ±8 ms, and the STC ticks at exactly 1.00× real time, so neither the
+clock nor the anchor is at fault. The timeline (`next_pts`) is advancing slower
+than real time, by about 9.5 %.
+
+Cause: **`disp_sched`'s pipeline was a ROLLING one, and its correctness argument
+was false.** The header said a picture "waits at the output for thousands of
+cycles" so the stages would always be settled. That holds only while the display
+is ahead of the content. At MAXIMUM display rate — one pickup per raster scan,
+which is the normal state in Film 24p and the state after any starvation — the
+pickup lands within a cycle or two of `output_frame_valid` rising, and
+`resample_addrgen`'s FSM leaves `STATE_REPEAT` on a REGISTERED `frame_due` that
+was computed while `pic_valid` was still 0 (and is therefore true). The pickup
+then applied the PREVIOUS picture's registered duration and want value, so
+`next_q3` was re-set to the value it already held: **the timeline lost that
+picture's advance entirely.** About 10 % of pickups did so, which is the measured
+9.5 %. Every picture is then overdue, the display free-runs at raster rate, and
+the audio — slaved to a clock now running ahead of the content — drifts further
+out every second. That is "everything out of sync, and not by a fixed amount".
+Interlaced was less bad only because 2–3 field scans per picture usually let the
+pipeline settle, which is precisely "interlaced better than 24p".
+
+Fix: the pipeline is **edge-captured, not rolling**. `cur_fields`/`cur_pts`/
+`cur_2nd`/`cur_tag` are captured on the rising edge of `pic_valid` — one stable
+event per picture — the products are computed from the captured copy, and
+`pic_due` is gated COMBINATIONALLY on `cur_rdy` (`pic_due_r && (!pic_valid ||
+cur_rdy)`) so a pickup cannot beat the capture. Two clk_dec cycles of latency
+against a ≥16 ms frame. The timing closure the pipeline bought is kept: the
+arithmetic is still registered, just off a value that stops changing.
+
+⚠ **This fix has NO SIMULATION GATE, and saying so is the point.** A faithful
+model needs the picture to appear at picbuf's output in the same cycle the
+display looks at it, at a realistic RATE. Two attempts are recorded in the git
+history: the first deadlocked (it relied on inter-`always`-block ordering, which
+Icarus does not guarantee), the second failed IDENTICALLY with and without the
+fix — i.e. proved nothing, and would have been a bench-that-cannot-fail shipped
+as a gate. The acceptance evidence is the measured `disp_lag` slope on hardware:
+it must be flat, not −96 ms/s.
+
 ### Still open after these fixes
 
 The reported residual — "APOLLO_13 interlaced better than 24p, both wrong at 0 ms

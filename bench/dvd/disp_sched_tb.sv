@@ -107,9 +107,10 @@ module disp_sched_tb;
   endtask
 
   integer scan_len;
+  reg tight = 0;                          // hand pictures over in the opportunity's own tick
   always @(posedge clk) if (rst_n && tick) begin
     // decoder side: hand the next ready picture to the output, or drop it
-    if (di < n_pic && s_ready[di] <= now) begin
+    if (di < n_pic && s_ready[di] <= now && !(tight && ((di % 4) == 0))) begin
       if (s_drop[di]) begin
         skip_ack <= 1'b1; skip_field <= s_field[di]; skip_ps <= s_ps[di]; skip_pf <= s_pf[di];
         skip_tff <= s_tff[di]; skip_rff <= s_rff[di];
@@ -131,6 +132,15 @@ module disp_sched_tb;
     endcase
     scan_i = scan_i + 1;
     next_opp = next_opp + scan_len;
+    // `tight`: EVERY FOURTH picture appears at picbuf's output in the SAME cycle the
+    // display looks at it -- the coincidence that happens whenever the decoder is
+    // running at the display's own rate. Done HERE, inside the raster block, so the
+    // ordering is deterministic (relying on inter-always-block order is not). Making
+    // EVERY picture coincide is pathological: the decoder could then never run ahead
+    // and a one-cycle capture gate would cost a whole opportunity per picture.
+    if (tight && ((di % 4) == 0) && !pic_valid && di < n_pic && s_ready[di] <= now && !s_drop[di]) begin
+      set_out(di); di = di + 1;
+    end
     if (busy > 0) busy = busy - 1;
     else if (pic_valid && pic_due) begin
       pickup <= 1'b1;

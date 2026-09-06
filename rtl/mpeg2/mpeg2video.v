@@ -52,7 +52,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              rst,                                                                                                                 // clocked with clk
              stream_data, stream_valid,                                                                                           // clocked with clk
              stream_mark, pts_in, pts_in_valid,                                                                                  // DVD-FORK (PTS association): PES mark + PTS in
-             stc_tick, sched_en, half_scan, stc, stc_anchored, anchor_req, anchor_delta, disp_lag, disp_lag_valid,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
+             stc_tick, sched_en, half_scan, stc, stc_anchored, anchor_req, anchor_delta, disp_lag, disp_lag_valid, sched_dbg_flags, sched_dbg_dur,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
 	     reg_addr, reg_wr_en, reg_dta_in, reg_rd_en, reg_dta_out,                                                             // clocked with clk
              busy, error, interrupt, watchdog_rst,                                                                                // clocked with clk
              r, g, b, y, u, v, pixel_en, h_sync, v_sync, c_sync, h_pos, v_pos,                                                     // clocked with dot_clk
@@ -120,6 +120,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   output signed [33:0]anchor_delta;
   output signed [33:0]disp_lag;
   output           disp_lag_valid;
+  output     [7:0] sched_dbg_flags;      // {frame_rate_code, ps, pf, tff, rff} at the last pickup
+  output    [15:0] sched_dbg_dur;        // the duration it applied, ticks
 
   /* RGB output */
   output      [7:0]r;                       // red component
@@ -1536,7 +1538,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .anchor_req(anchor_req),
     .anchor_delta(anchor_delta),
     .disp_lag_valid(disp_lag_valid),
-    .disp_lag(disp_lag)
+    .disp_lag(disp_lag),
+    .dbg_flags(sched_dbg_flags),
+    .dbg_dur(sched_dbg_dur)
     );
 
   resample resample (

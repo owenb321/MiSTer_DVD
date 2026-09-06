@@ -103,7 +103,9 @@ module dvd_telem #(
     // wraps at +/-0.36 s and cannot represent the offsets these exist to show.
     input  [15:0] disp_lag,              // word 11: PTS of the picture just DISPLAYED - STC
     input  [15:0] play_err,              // word 12: audio playback position vs its anchor
-    input  [15:0] av_drift               // word 13: dispatched audio PTS - STC
+    input  [15:0] av_drift,              // word 13: dispatched audio PTS - STC
+    input  [15:0] sched_flags,           // word 14: {frame_rate_code, ps, pf, tff, rff} at the last pickup
+    input  [15:0] sched_dur               // word 15: the duration the scheduler applied, ticks
 );
 
     wire [15:0] s_refresh, s_pickup, s_late, s_drop, s_viderr, s_costs, s_aud;
@@ -124,13 +126,16 @@ module dvd_telem #(
     telem_sync #(16) u_dlg (clk, disp_lag,   s_dlag);
     telem_sync #(16) u_per (clk, play_err,   s_perr);
     telem_sync #(16) u_dft (clk, av_drift,   s_drift);
+    wire [15:0] s_sfl, s_sdu;
+    telem_sync #(16) u_sfl (clk, sched_flags, s_sfl);
+    telem_sync #(16) u_sdu (clk, sched_dur,   s_sdu);
 
     reg  [3:0] wcnt;
     reg        active;
     reg [15:0] dout_r;
 
     // the atomic snapshot
-    reg [15:0] q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13;
+    reg [15:0] q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15;
 
     always @(posedge clk) begin
         if (!io_enable) begin
@@ -153,6 +158,8 @@ module dvd_telem #(
                 q11 <= s_dlag;
                 q12 <= s_perr;
                 q13 <= s_drift;
+                q14 <= s_sfl;
+                q15 <= s_sdu;
                 dout_r <= MAGIC;
             end else begin
                 case (wcnt)
@@ -169,6 +176,8 @@ module dvd_telem #(
                     4'd11:   dout_r <= q11;
                     4'd12:   dout_r <= q12;
                     4'd13:   dout_r <= q13;
+                    4'd14:   dout_r <= q14;
+                    4'd15:   dout_r <= q15;
                     default: dout_r <= 16'd0;
                 endcase
             end

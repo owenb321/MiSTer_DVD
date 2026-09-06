@@ -120,7 +120,13 @@ module disp_sched #(
     output reg         anchor_req,            // one clk: stc was (re)anchored
     output reg  signed [33:0] anchor_delta,   // new - old
     output reg         disp_lag_valid,        // one clk at a pickup
-    output reg  signed [33:0] disp_lag        // pic_pts - stc at that pickup
+    output reg  signed [33:0] disp_lag,       // pic_pts - stc at that pickup
+    // INSTRUMENT (HW round B): exactly what the scheduler saw at the last pickup --
+    // {frame_rate_code, progressive_sequence, progressive_frame, tff, rff} and the
+    // duration it applied. Three wrong guesses at the duration model were made from
+    // rates alone; this reports the inputs so the next one is not a guess.
+    output reg   [7:0] dbg_flags,
+    output reg  [15:0] dbg_dur
 );
 
     // ---- PIPELINE NOTE (2026-09-06, the first Stage 1 fit) -------------------
@@ -157,18 +163,49 @@ module disp_sched #(
                              skip_ps    ? (skip_rff ? (skip_tff ? 3'd6 : 3'd4) : 3'd2)
                                         : ((skip_pf && skip_rff) ? 3'd3 : 3'd2);
 
-    // ---- stage B: products and the effective picture PTS (registered) --------
-    reg  [17:0] pic_dur_q3;
-    reg  [17:0] skip_dur_q3;
-    reg         skip_ack_r;                  // the ack, delayed to meet its product
-    reg  [32:0] pic_pts_eff;
+    // ---- durations: registered CONSTANTS, so the pickup path has no multiply ----
+    // THE PICKUP'S BOOKKEEPING READS THE LIVE PICBUF OUTPUTS, COMBINATIONALLY, AND
+    // THAT IS DELIBERATE (HW round B, 2026-09-06 -- three attempts, all measured):
+    //
+    //   v1 rolling pipeline: everything recomputed continuously from the live
+    //      inputs and consumed several cycles later. Its stated premise -- a picture
+    //      "waits at the output for thousands of cycles" -- is FALSE at maximum
+    //      display rate (one pickup per scan: normal in Film 24p, and after any
+    //      starvation), where the pickup lands a cycle or two after
+    //      output_frame_valid rises. The pickup then applied the PREVIOUS picture's
+    //      duration and want value, so next_q3 was re-set to the value it already
+    //      held and the timeline LOST that picture's advance. MEASURED: disp_lag
+    //      drifted -96 ms/s in Film 24p, audio ran away from the picture, and
+    //      interlaced looked better only because 2-3 field scans per picture usually
+    //      let the pipeline settle.
+    //   v2 edge-captured + a due gate: DEADLOCKED the display (measured: pickups
+    //      0/s against a live 23.978 Hz raster). The flush clears the ready flag but
+    //      pic_valid can already be HIGH when the flush lifts, so the rising edge
+    //      never comes. Removing the edge dependence then cost an opportunity per
+    //      picture (measured 1.53 refreshes/picture where film24 wants 1.00).
+    //   v3 (this): the DUE decision stays registered -- it only gates the FSM's
+    //      transition, and being a cycle or two late costs nothing -- while the
+    //      BOOKKEEPING at the pickup reads the live values, which are correct at
+    //      that instant by definition. A picture picked up slightly "early" is
+    //      harmless; a timeline that loses an advance is not.
+    //
+    // The timing that forced v1 is bought back by removing the MULTIPLY from the
+    // pickup path: the four possible field counts are precomputed as registers off
+    // field_q3 (which changes once per sequence header), so the live path is one
+    // 4:1 mux of registers plus the adds.
+    reg [17:0] dur2, dur3, dur4, dur6;
     always_ff @(posedge clk) begin
-        pic_dur_q3  <= field_q3 * pic_fields;
-        skip_dur_q3 <= field_q3 * skip_fields;
-        skip_ack_r  <= skip_ack;
-        // a second-field tag names the second field: one field period after the frame
-        pic_pts_eff <= pic_pts - (pic_pts_2nd ? field_ticks : 33'd0);
+        dur2 <= {2'd0, field_q3, 1'b0};                                  // x2
+        dur3 <= {2'd0, field_q3, 1'b0} + {3'd0, field_q3};                // x3
+        dur4 <= {1'd0, field_q3, 2'b0};                                   // x4
+        dur6 <= {1'd0, field_q3, 2'b0} + {2'd0, field_q3, 1'b0};          // x6
     end
+    wire [17:0] pic_dur_q3  = pic_ps  ? (pic_rff  ? (pic_tff  ? dur6 : dur4) : dur2)
+                                      : ((pic_pf  && pic_rff)  ? dur3 : dur2);
+    wire [17:0] skip_dur_q3 = skip_field ? {4'd0, field_q3[14:1]} :   // one field
+                              skip_ps    ? (skip_rff ? (skip_tff ? dur6 : dur4) : dur2)
+                                         : ((skip_pf && skip_rff) ? dur3 : dur2);
+    wire [32:0] pic_pts_eff = pic_pts - (pic_pts_2nd ? field_ticks : 33'd0);
 
     // ---- the timeline -----------------------------------------------------
     reg  [35:0] next_q3;                     // PTS of the next picture, Q3
@@ -177,19 +214,16 @@ module disp_sched #(
     reg         prov_seen;                   // a parse-front PTS has been seen since the flush
     wire [32:0] next_pts = next_q3[35:3];
 
-    // ---- stage C: the differences (registered) -----------------------------
     wire has_tag = pic_valid && pic_pts_valid;
+    wire [32:0] want_pts = has_tag ? pic_pts_eff : (next_valid ? next_pts : stc);
+
+    // ---- the DUE compares stay registered (they only gate the FSM transition) ----
     reg  signed [33:0] d_pic_next, d_stc_pic, d_stc_next, d_stc_want;
-    reg  [32:0] want_pts;
-    reg  [35:0] want_dur_q3;                 // {want_pts, 3'b0} + pic_dur_q3, precomputed
-    wire [32:0] want_pts_w = has_tag ? pic_pts_eff : (next_valid ? next_pts : stc);
     always_ff @(posedge clk) begin
         d_pic_next  <= $signed({1'b0, pic_pts_eff}) - $signed({1'b0, next_pts});
         d_stc_pic   <= $signed({1'b0, stc}) - $signed({1'b0, pic_pts_eff});
         d_stc_next  <= $signed({1'b0, stc}) - $signed({1'b0, next_pts});
-        d_stc_want  <= $signed({1'b0, stc}) - $signed({1'b0, want_pts_w});
-        want_pts    <= want_pts_w;
-        want_dur_q3 <= {want_pts, 3'd0} + {18'd0, pic_dur_q3};
+        d_stc_want  <= $signed({1'b0, stc}) - $signed({1'b0, want_pts});
     end
     wire signed [33:0] half_s     = $signed({18'd0, half_scan});
     wire signed [33:0] fwd_max_s  = FWD_MAX_TICKS;          // pre-sized parameters (no runtime casts)
@@ -236,13 +270,15 @@ module disp_sched #(
             end else if (prov_valid) prov_seen <= 1'b1;
 
             // dropped pictures (the delayed ack meets its registered product)
-            if (skip_ack_r) begin
+            if (skip_ack) begin
                 if (pic_valid) defer_q3 <= defer_q3 + {18'd0, skip_dur_q3};
                 else           next_q3  <= next_q3  + {18'd0, skip_dur_q3};
             end
 
             // a pickup
             if (pickup) begin
+                dbg_flags      <= {frame_rate_code, pic_ps, pic_pf, pic_tff, pic_rff};
+                dbg_dur        <= {1'b0, pic_dur_q3[17:3]};   // the applied duration, ticks
                 disp_lag_valid <= 1'b1;
                 disp_lag       <= $signed({1'b0, want_pts}) - $signed({1'b0, stc});
                 if (anchor_now) begin
@@ -253,8 +289,7 @@ module disp_sched #(
                     next_q3      <= {anchor_val, 3'd0} + {18'd0, pic_dur_q3};   // realign drops precede the anchor
                     defer_q3     <= 36'd0;
                 end else begin
-                    next_q3      <= want_dur_q3 + defer_q3
-                                  + (skip_ack_r && pic_valid ? {18'd0, skip_dur_q3} : 36'd0);
+                    next_q3      <= {want_pts, 3'd0} + {18'd0, pic_dur_q3} + defer_q3;
                     defer_q3     <= 36'd0;
                 end
                 next_valid <= 1'b1;

@@ -941,7 +941,9 @@ dvd_telem dvd_telem_inst (
     .aud_gate   (aud_gate_cnt),          // clk_sys: drain-gate closures
     .disp_lag   (av_disp_lag[19:4]),     // clk_sys: displayed PTS - STC (word 11)
     .play_err   (dbg_aud_play_err),      // clk_sys: audio position vs anchor (word 12)
-    .av_drift   (av_drift[19:4])         // clk_sys: dispatched audio PTS - STC (word 13)
+    .av_drift   (av_drift[19:4]),        // clk_sys: dispatched audio PTS - STC (word 13)
+    .sched_flags({8'd0, core_sched_flags}),   // clk_dec: what the scheduler saw (word 14)
+    .sched_dur  (core_sched_dur)              // clk_dec: the duration it applied (word 15)
 );
 
 
@@ -3473,6 +3475,7 @@ always @(posedge clk_dec) begin sched_en_s1 <= ~av_freerun; sched_en_dec <= sche
 wire [32:0] core_stc;            wire core_stc_anchored;                 // clk_dec
 wire        core_anchor_req;     wire signed [33:0] core_anchor_delta;   // clk_dec
 wire signed [33:0] core_disp_lag; wire core_disp_lag_valid;              // clk_dec
+wire  [7:0] core_sched_flags; wire [15:0] core_sched_dur;               // clk_dec instrument
 wire [33:0] stc_mirror_sys;      wire stc_mirror_valid;                  // clk_sys
 wire signed [33:0] av_anchor_delta_w; wire av_anchor_delta_valid;
 wire signed [33:0] disp_lag_sys;  wire disp_lag_sys_valid;
@@ -3790,6 +3793,8 @@ mpeg2video mpeg2video_inst (
     .anchor_delta (core_anchor_delta),
     .disp_lag     (core_disp_lag),     // DVD-FORK (PTS scheduling): displayed PTS - STC at each pickup
     .disp_lag_valid (core_disp_lag_valid),
+    .sched_dbg_flags (core_sched_flags),
+    .sched_dbg_dur   (core_sched_dur),
 
     .reg_addr   (seq_run ? wr_addr : 4'b0),    // DVD-FORK FIX (interlaced cadence): modeline writes
     .reg_wr_en  (seq_run),

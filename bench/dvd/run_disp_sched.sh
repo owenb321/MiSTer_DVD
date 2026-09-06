@@ -7,6 +7,12 @@
 # proving anything, so five targeted RTL mutations are applied to a COPY of the
 # shipping source and each must make its own scenario FAIL:
 #
+# ⚠ NOT COVERED HERE: the pickup-beats-the-capture race (docs/stc_freerun.md 3.8). A
+# faithful model needs the picture to appear at picbuf's output in the same cycle the
+# display looks, at a realistic RATE, and the two attempts at it either deadlocked or
+# failed identically with and without the fix -- i.e. proved nothing. The acceptance
+# evidence for that fix is the measured disp_lag slope on hardware, not this suite.
+#
 #   M1  due compare flipped to +half_scan       -> every picture one scan late ([1]-[4] lag)
 #   M2  deferred skip ordering removed          -> [6] drops break the timeline
 #   M3  second-field offset removed             -> [9] second-field tags off by a field
@@ -50,11 +56,11 @@ PYEOF
 echo "== MUTATIONS (each must FAIL) =="
 mut M1 "(d_stc_want >= -half_s)" "(d_stc_want >= half_s)" "FAIL \[1\]"
 mut M2 "if (pic_valid) defer_q3 <= defer_q3 + {18'd0, skip_dur_q3};" "if (1'b0) defer_q3 <= defer_q3 + {18'd0, skip_dur_q3};" "FAIL \[6\]"
-mut M3 "pic_pts_eff <= pic_pts - (pic_pts_2nd ? field_ticks : 33'd0);" "pic_pts_eff <= pic_pts;" "FAIL \[9\]"
+mut M3 "wire [32:0] pic_pts_eff = pic_pts - (pic_pts_2nd ? field_ticks : 33'd0);" "wire [32:0] pic_pts_eff = pic_pts;" "FAIL \[9\]"
 mut M4 "((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s))" "((d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s))" "FAIL \[7d\]"
 # M6 is the HW round-B defect itself: lateness treated as a discontinuity again.
 mut M6 "34'sd243000" "34'sd31500" "FAIL \[8b\]"
-mut M5 "pic_dur_q3  <= field_q3 * pic_fields;" "pic_dur_q3  <= field_q3 * 3'd2;" "FAIL \[6\]"
+mut M5 "((pic_pf  && pic_rff)  ? dur3 : dur2);" "dur2;" "FAIL \[6\]"
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="
 exit $fail
