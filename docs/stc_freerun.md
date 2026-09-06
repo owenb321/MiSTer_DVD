@@ -368,6 +368,59 @@ fix — i.e. proved nothing, and would have been a bench-that-cannot-fail shippe
 as a gate. The acceptance evidence is the measured `disp_lag` slope on hardware:
 it must be flat, not −96 ms/s.
 
+### (3b) MEASURED AFTER THE FIX — and a correction to my own diagnosis
+
+With all three fixes in, on the rig, APOLLO_13 in `Video Output=Progressive`,
+`Film 24p Out=Auto`, `A/V Offset=0ms`, settled steady state over 60 s:
+
+| measure | reading | expected |
+|---|---|---|
+| refreshes per picked-up frame | 2.00054 | 2.000 |
+| content display rate | 29.962 fps | 29.97 |
+| audio samples per raster refresh | 800.795 | 800.800 (6 ppm) |
+| `disp_lag` (word 11) | **−16.7 ms, FLAT** | a constant, not a drift |
+| `play_err` (word 12) | 0.0 | 0 |
+| drain-gate closures | 0 | 0 |
+| lates / drops | 0 / 0 | — |
+
+Earlier in the same run, with the raster on 23.976 Hz, `disp_lag` **converged**
+from −1174 ms to −17 ms rather than drifting. The runaway is gone.
+
+⚠⚠ **A correction to what §3.7(3) says above, because I got the second half of
+that diagnosis wrong and the record should say so.** The −96 ms/s I measured on
+the pre-fix build was real, and the rolling pipeline was a real defect. But my
+follow-up conclusion — that the *duration model* was also wrong, because the
+scheduler was applying ~62 ms where the disc says 42.0 ms — was an artefact of
+**my own test**: I had forced `Film 24p Out=On`, and the material at that point
+in the title is 30p/60i (studio logos, and a video-sourced section), not 3:2
+film. A 23.976 Hz raster cannot present 29.97 fps content, so the display
+falls behind by 20 % by construction and `disp_lag` slews at −200 ms/s. That is
+the mode being misused, not the scheduler being wrong.
+
+Two things followed from that mistake and are worth keeping:
+- **The duration formula is CONFIRMED correct**, independently, against
+  ffmpeg's `mpeg_field_start()` (`repeat_pict`, where fields = `repeat_pict + 2`)
+  and libmpeg2's `nb_fields`: progressive_sequence ⇒ rff ? (tff ? 6 : 4) : 2;
+  else frame picture ⇒ (progressive_frame && rff) ? 3 : 2; field picture ⇒ 1.
+  The field period is 1/(2 × frame_rate_code rate) — 16.683 ms for an NTSC DVD,
+  *including* 24p film, where the coded rate is 29.97 and the pulldown lives
+  entirely in `rff`. (ffmpeg gates the 3-field case on `progressive_frame` and
+  libmpeg2 does not; they can only differ on a stream that is non-conformant
+  anyway. We match ffmpeg.)
+- **Instrument before concluding.** Three samples of `rff` read 0 and I nearly
+  called the flag broken; 45 samples showed `rff` toggling and the durations
+  alternating 4504/3003 ticks exactly as they should. Telemetry words 14/15
+  (`{frame_rate_code, ps, pf, tff, rff}` and the applied duration) exist because
+  of this and should be the first thing read next time.
+
+**The −16.7 ms residual is one field period, exactly, and it is CONSTANT.** That
+is the pickup-to-screen latency: the scheduler releases a picture at its PTS and
+the raster scans it out over the following field. It is a fixed offset, which is
+what `A/V Offset` is for — unlike everything above it does not accumulate. Whether
+to fold it into the scheduler (release half a field early) or leave it to the
+knob is an open question, and it should be settled with the authored SYNC disc
+rather than by taste.
+
 ### Still open after these fixes
 
 The reported residual — "APOLLO_13 interlaced better than 24p, both wrong at 0 ms
