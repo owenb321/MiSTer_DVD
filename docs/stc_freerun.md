@@ -320,6 +320,11 @@ continuous PTS neither jump test fires). Regression: `disp_sched_tb` **[8b]** â€
 400 ms starvation burst must re-anchor ZERO extra times and be back on schedule after
 it; mutation **M6** puts the threshold back to 350 ms and must fail [8b].
 
+### Build
+
+`DVD_stcfree_20260906_1932.rbf` (SEED 5 first roll, clk_dec 90.4/90.84, 92 % ALM),
+with the matching Main in `MiSTer_DVD_dev-stcfree_20260906.zip`.
+
 ### Still open after these fixes
 
 The reported residual â€” "APOLLO_13 interlaced better than 24p, both wrong at 0 ms
