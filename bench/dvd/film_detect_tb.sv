@@ -65,7 +65,7 @@ module film_detect_tb;
     .busy(busy), .frame_late(frame_late),
     .film_det_ntsc(film_det_ntsc), .film_det_pal(film_det_pal),
     .video_live(), .pickup_hold(1'b0), .pause(1'b0),
-    .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(1'b0));
+    .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .sched_due(1'b1), .sched_next_due(1'b1));
 
   always #5 clk = ~clk;
 

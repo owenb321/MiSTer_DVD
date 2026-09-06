@@ -30,7 +30,7 @@ module resample_addrgen (
   output_frame, output_frame_valid, output_frame_rd,
   progressive_sequence, progressive_frame, top_field_first, repeat_first_field, mb_width, mb_height, horizontal_size, vertical_size,
   informative,               // DVD-FORK (film evidence gate): this displayed picture carried real evidence
-  output_pts, output_pts_valid, output_pts_2nd, disp_pts, disp_pts_valid,   // DVD-FORK (PTS association)
+  output_pts, output_pts_valid, output_pts_2nd,     // DVD-FORK (PTS association): the waiting picture's tag (disp_sched reads it in mpeg2video)
   interlaced, deinterlace, persistence, repeat_frame,
   disp_wr_addr_full, disp_wr_addr_en, disp_wr_addr_ack, disp_wr_addr,
   resample_wr_dta, resample_wr_en,
@@ -41,14 +41,12 @@ module resample_addrgen (
   video_live,                                       // DVD-FORK (av_sync STC reference)
   pickup_hold,                                      // DVD-FORK (STD mux-lead hold)
   pause,                                            // DVD-FORK (gamepad transport): freeze frame while paused
-  cur_show_out,                                     // DVD-FORK (film-aware drop reclaim)
-  pickup_tick, pickup_show, refresh_tick_dbg,       // DVD-FORK (vid_err instrument)
+  pickup_tick,                                      // DVD-FORK (PTS scheduling): one pulse per pickup, to disp_sched
+  sched_due, sched_next_due,                        // DVD-FORK (PTS scheduling): from disp_sched
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect): cadence verdicts
   raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
-  hcrop_en,                                         // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
-  menu_ff,                                          // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
-  film24                                            // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
+  hcrop_en                                         // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
   );
 
   input              clk;                      // clock
@@ -80,8 +78,6 @@ module resample_addrgen (
   input       [32:0]output_pts;
   input             output_pts_valid;
   input             output_pts_2nd;
-  output reg  [32:0]disp_pts;
-  output reg        disp_pts_valid;
   input             top_field_first;
   input             repeat_first_field;
   input         [7:0]mb_width;                 // par. 6.3.3. width of the encoded luminance component of pictures in macroblocks
@@ -158,17 +154,19 @@ module resample_addrgen (
    * audio-late creep on droppy NTSC film (MiB). Sampling the on-display frame's
    * cur_show instead of the dropped B's own rff is statistically identical on
    * uniform-cadence film and exact on PAL (always 2). */
-  output      [3:0]  cur_show_out;
-  /* DVD-FORK (vid_err instrument, 2026-07-03): the last unmeasured lip-sync
-   * leg is the VIDEO CONTENT timeline vs wall clock (audio is instrumented
-   * five ways and provably schedule-locked; the -900 ms crash step survives).
-   * pickup_tick pulses once per frame entering display with pickup_show = its
-   * display duration (show_next); refresh_tick_dbg pulses once per completed
-   * display scan while video_live. mpeg2video sums content (pickups + dropped
-   * frames' durations) against wall refreshes -> dbg_vid_err. */
+  /* DVD-FORK (PTS scheduling, docs/stc_freerun.md): the display no longer paces
+   * itself by counting refreshes. dvd/disp_sched.sv (in mpeg2video) owns a
+   * free-running STC and says, from the waiting picture's own PTS, whether it is
+   * DUE (sched_due) and whether the timeline has already passed the NEXT picture
+   * (sched_next_due -- a starved persistence visit while that holds is a late).
+   * pickup_tick reports every pickup back to it. The refresh counter, cur_show,
+   * show_next, the film24 one-refresh override, the cadence-slip corrector and
+   * the vid_err instrument all lived here and are gone: with PTS as ground truth
+   * a late is measured, not inferred, and a drop simply makes the decoder early
+   * so later pictures WAIT. */
   output             pickup_tick;
-  output      [3:0]  pickup_show;
-  output             refresh_tick_dbg;
+  input              sched_due;
+  input              sched_next_due;
 
   /* DVD-FORK (Film 24p Out — auto detect, issue #124 Phase 2): sticky cadence
    * verdicts, evaluated once per display pickup over the committed (flags_commit-
@@ -221,24 +219,6 @@ module resample_addrgen (
    * full 480 lines of VERTICAL resolution (vertical stays 1:1 — Crop is horizontal-only),
    * sides cropped, no bars. Independent of vscale_mode (Crop uses Fit vertically). */
   input              hcrop_en;
-  /* DVD-FORK (menu VBUF-lag §5): when high, FAST-DRAIN the display — pick up a new
-   * decoded frame every refresh (frame_due at refresh_cnt>=1) instead of the normal
-   * cur_show cadence, so a deeply-buffered menu transition PLAYS OUT at up to display
-   * rate (~2-2.5x) and the settled still (baked menu numbers / first slide) is reached
-   * promptly WITHOUT cutting the transition. emu asserts it only while a menu is up AND
-   * the compressed VBUF is deeply backed up (hysteresis), and drops it as the backlog
-   * drains, so it self-limits: over-triggering just plays a transition slightly faster.
-   * Menus aren't lip-synced (no audio to desync), so overriding the pacing is safe; the
-   * gate is menu-only so title A/V sync is untouched. */
-  input              menu_ff;
-  /* DVD-FORK (Film 24p Out, issue #124): the core raster is already the 23.976 Hz film
-   * rate (emu's modeline 24p branch), so there is NO in-core 3:2 pulldown — advance ONE
-   * decoded frame per refresh and let the framework scaler (ascal) do the 3:2 to 59.94 Hz
-   * HDMI. Forces cur_show=1 (via show_next below), which collapses the rff-based display
-   * target and the drop-debit to 1 refresh/frame — the deadline becomes "produce a frame
-   * every ~41.7 ms" (huge slack vs 60 Hz), so the decoder stops missing it. HDMI-NTSC-film
-   * only (emu gates it ~pal & ~crt & progressive). See docs/film_24p_plan.md §3b. */
-  input              film24;
 
 `include "vld_codes.v"
 `include "mem_codes.v"
@@ -423,123 +403,10 @@ module resample_addrgen (
   reg         [3:0]state;
   reg         [3:0]next;
 
-  /* ---------------------------------------------------------------------------
-   * DVD-FORK FIX: frame-rate governor (A/V sync / playback speed) — DISPLAY-LOCKED.
-   *
-   * The upstream decoder has no rate control — it releases each decoded frame as
-   * soon as it is scanned out, calibrated for the old ~27 MHz clock. At 54 MHz,
-   * easily-decoded content out-runs real time, so video plays FAST and (now that we
-   * have correct-rate HPS audio) audio progressively lags.
-   *
-   * A first attempt used a free-running 54 MHz cycle counter (PACE_N). But a frame
-   * can only be RELEASED at the end of a display scan, so the period quantized to
-   * scan boundaries -> ~75% speed + jitter, and interlaced (2 field-scans/frame)
-   * ran ~half speed. The correct method is to lock to the DISPLAY REFRESH: count
-   * completed image scans (each = one refresh: a progressive frame OR an interlaced
-   * field) and release a new source frame every SHOW_N refreshes.
-   *
-   * On a 59.94 Hz display SHOW_N=2 gives exactly 29.97 fps for BOTH:
-   *   progressive: frame scan + 1 persistence re-scan          = 2 refreshes
-   *   interlaced : top field scan + bottom field scan          = 2 refreshes
-   * so progressive and interlaced run at the same correct rate, no beat/jitter.
-   *
-   * No-regression: still only ever SLOWS over-fast content — if the next frame is
-   * not decoded when due (output_frame_valid=0) the persistence path keeps holding.
-   *
-   * PAL: SHOW_N=2 ALSO works unchanged — on a 50 Hz display it releases at 50/2 =
-   * 25 fps, exactly the PAL DVD source rate (progressive frame + 1 re-scan, or 2
-   * fields). The 50 Hz display itself is selected via the PAL modeline (O[16],
-   * emu.sv) + av_sync's 50 Hz STC tick; the governor needs no PAL-specific constant.
-   * (A future film/3:2 or PAL-speedup-25-from-24 path would still want SHOW_N work.)
-   * See docs/frame_rate_governor.md.
-   * --------------------------------------------------------------------------- */
-  localparam [3:0]  SHOW_N = 4'd2;            // baseline refreshes/source frame: 29.97@59.94 (NTSC), 25@50 (PAL)
-  reg        [3:0]  refresh_cnt;
-
-  /*
-   * DVD-FORK FIX (film 3:2 pulldown cadence): the per-frame display target. Baseline is
-   * SHOW_N (2), but a soft-telecined frame with repeat_first_field must occupy 3 refreshes
-   * so 24 fps film displays with the correct 3:2 cadence (3,2,3,2 = 2.5 avg = 60/24) instead
-   * of a flat 2 refreshes (= 30 fps, ~25 % too fast).
-   *
-   * IMPORTANT: our default 480p output runs the decoder with deinterlace=1, interlaced=0
-   * (regfile default; see emu.sv), and DVDs are coded interlaced (progressive_sequence=0)
-   * with film carried on progressive_frame + repeat_first_field. That path takes the
-   * `deinterlace && ~interlaced` image-build branch, which emits a single FRAME image and
-   * ignores rff entirely — so EVERY frame showed 2 refreshes (30 fps) and film ran fast.
-   * (Upstream only honoured rff on the progressive_sequence / interlaced-output branches,
-   * and there gated the 3rd refresh on rff && top_field_first — tff is a field-order flag,
-   * irrelevant for progressive frame display.) So the gate is simply `~interlaced && rff`:
-   * on ANY progressive-display path, an rff frame is held one extra refresh via the
-   * persistence re-scan (paces to `cur_show`), independent of the image-build. Interlaced
-   * OUTPUT (interlaced=1, the 480i mode) is untouched (stays SHOW_N) — no 480i regression.
-   * `cur_show` is latched per frame at pickup.
-   */
-  /* DVD-FORK FIX (480i field-path timeline accounting, 2026-07-05): the interlaced arm
-   * of show_next must be the TRUE image count the pickup loads, not a flat SHOW_N —
-   * the image builds below emit one refresh per FIELD image:
-   *   progressive_sequence on interlaced display: 2 fields, 4 with rff, 6 with rff+tff
-   *   progressive_frame (soft-telecine film):     2 fields, 3 with rff (the 3:2 cadence)
-   *   interlaced frame:                           2 fields
-   * With the old flat 2, an rff film frame occupied 3 field scans while cur_show said 2:
-   * frame_due/late decisions and (via cur_show_out/pickup_show) the drop debit and the
-   * vid_err content credit were all one refresh short PER RFF FRAME in 480i — a large
-   * slice of the HW-measured "480i drops reclaim ~1.1 refreshes instead of 2" A/V drift
-   * (the other slice is the pair-repeat late undercount, fixed below). The progressive
-   * arm is untouched (the HW-proven film-3:2 behavior, incl. its deliberate 3 for the
-   * rare progressive_sequence rff+~tff 2-image case). */
-  wire       [3:0]  show_next_prog  = repeat_first_field ? 4'd3 : SHOW_N;
-  wire       [3:0]  show_next_ilace = progressive_sequence
-                                        ? (repeat_first_field ? (top_field_first ? 4'd6 : 4'd4) : 4'd2)
-                                        : ((progressive_frame && repeat_first_field) ? 4'd3 : 4'd2);
-  /* DVD-FORK (Film 24p Out): raster == film rate => exactly 1 refresh per frame, no in-core
-   * 3:2 (ascal owns the pulldown). Overrides the rff cadence AND the interlaced arm.
-   *
-   * DVD-FORK FIX (2026-08-02, CADENCE-SLIP corrector — the Film-24p A/V drift root
-   * cause): a flat 1 refresh/picture is only timeline-exact if the disc's telecine
-   * cadence is PERFECT (rff alternating 1,0,1,0 => avg picture duration 2.5 fields =
-   * 1/23.976 s). Real discs break cadence at shot edits: MEN_IN_BLACK measures rff
-   * density 0.499158 over 63,531 pictures (~107 anomalies, one per ~25 s), and each
-   * "missing" rff=1 is a 2-field (33.4 ms) picture displayed for a full 41.7 ms
-   * refresh = +8.34 ms of video retard. Content-level measurement of a 48-min HW
-   * capture: predicted +0.893 s, measured +0.884 s (audio xcorr + motion-envelope
-   * matching vs the source VOB) — audio plays exactly real time, video content
-   * retards, audio ends ~1 s AHEAD. At 60 Hz this cannot happen: cur_show honours
-   * each picture's OWN rff (2 or 3 refreshes), exact for ANY cadence. Invisible to
-   * vid_err (pickups stay on schedule — the error is in the flat ASSUMED duration),
-   * to the raster (measured exact), and to the audio counters (all zero).
-   *
-   * FIX: accumulate the per-picture duration error in 0.5-field units
-   * (rff=1 -> +1, rff=0 -> -1; a perfect cadence oscillates 0,±1) and correct with
-   * WHOLE refreshes when it reaches ±2.5 fields (±5 units):
-   *   deficit (acc <= -5, the common direction): pulse ONE frame_late into the
-   *     frame-drop ledger -> frame_drop_ctl banks 1 refresh of debt -> the VLD drops
-   *     one B (drop_cost = 1 in film24) -> content advances 1 picture in 0 refreshes.
-   *     Reuses the whole HW-proven drop path; a ~42 ms skip once per ~2 min on MiB.
-   *   surplus (acc >= +5): show THIS picture 2 refreshes (cur_show = 2) once.
-   * GATE = film24 && det_ntsc: the detector's own NTSC-telecine verdict. PAL 25p film
-   * (rff = 0 every picture, exact 2 fields = one 25p refresh) never raises det_ntsc,
-   * so the corrector is inert there (a step model of 2.5 fields/refresh would be
-   * wrong); same for true 30p video mistakenly left in 24p. Bounded by construction:
-   * |acc| < 5 => the residual A/V error can never exceed ~1 refresh (42 ms).
-   * NOTE: the deficit correction rides the B-drop path, so it needs O[12] Frame Drop
-   * ON (the default) — with dropping off, imperfect-cadence discs still drift.
-   * Measurement + design: docs/film_24p_plan.md §12. */
-  reg               det_ntsc, det_pal;      // film detector verdicts (logic below; hoisted for the corrector)
-  reg signed [3:0]  cad_acc;                  // cadence phase error, 0.5-field units
-  wire              cad_gate   = film24 && det_ntsc;
-  wire signed [4:0] cad_next   = cad_acc + (repeat_first_field ? 5'sd1 : -5'sd1);
-  wire              cad_hold_w = cad_gate && (cad_next >= 5'sd5);   // surplus: 2-refresh show
-  wire       [3:0]  show_next = film24 ? (cad_hold_w ? 4'd2 : 4'd1)
-                              : interlaced ? show_next_ilace : show_next_prog;
-  reg        [3:0]  cur_show;                 // display target (refreshes) of the frame on display
-  /* DVD-FORK (menu VBUF-lag §5): fast-drain override. Only once video is live (never
-   * during the cold-start hold). Lowers the per-frame display target to 1 refresh so the
-   * governor advances through the buffered menu transition at up to display rate. */
-  wire              menu_ff_go = menu_ff && video_live;
-  wire              frame_due = menu_ff_go ? (refresh_cnt >= 4'd1)
-                                           : (refresh_cnt >= cur_show);
-  assign cur_show_out = cur_show;               // DVD-FORK (film-aware drop reclaim)
+  /* DVD-FORK (PTS scheduling): the deadline is the picture's own PTS against the
+   * free-running STC, decided in dvd/disp_sched.sv. */
+  reg               det_ntsc, det_pal;      // film detector verdicts (logic below)
+  wire              frame_due = sched_due;
   /* DVD-FORK (STD mux-lead hold): the hold window — asserted from every load/seek/
    * jump until the audio catches the new STC anchor (emu.sv av_vid_hold), re-armed
    * per load by the video_live clear below. Shared by ofv_paced AND ofv_pickup so
@@ -804,18 +671,6 @@ module resample_addrgen (
     if (~rst) pickup_cnt <= 16'd0;
     else if (clk_en && (state == STATE_INIT) && pickup_go) pickup_cnt <= pickup_cnt + 16'd1;
 
-  /* DVD-FORK (PTS association): the picked-up picture's tag, one pulse per
-   * pickup that carried one (a second-field tag names the second field: one
-   * field period later than the frame's first field). */
-  always @(posedge clk)
-    if (~rst) begin
-      disp_pts       <= 33'd0;
-      disp_pts_valid <= 1'b0;
-    end else begin
-      disp_pts_valid <= clk_en && (state == STATE_INIT) && pickup_go && output_pts_valid;
-      if (clk_en && (state == STATE_INIT) && pickup_go) disp_pts <= output_pts;
-    end
-
   /*
    * DVD-FORK (frame-drop governor, O[19]/O[12]): deadline-miss detector. STATE_REPEAT is a
    * single-cycle decision state; when it takes the persistence re-scan branch
@@ -837,193 +692,15 @@ module resample_addrgen (
    */
   wire       late_raw    = (state == STATE_REPEAT) && (repeat_cnt == 5'd0) &&
                            persistence && (last_image != NO_OUTPUT) &&
-                           frame_due && ~output_frame_valid && ~pause &&  // DVD-FORK: no debt while paused
-                           ~hold_freeze &&  // DVD-FORK (hold-frame transitions): hold-window lateness is mux-lead policy, not decode debt — without this, lates bank drop debt once the refilling VBUF passes vbuf_healthy but before the new clip's first frame decodes, dropping B-frames right at clip start
-                           ~menu_ff_go;  // DVD-FORK (menu §5): fast-drain waits aren't real A/V deadline misses
+                           sched_next_due && ~output_frame_valid && ~pause &&  // DVD-FORK (PTS scheduling): the timeline has passed the next picture and there is none -- a real decode miss
+                           ~hold_freeze;  // DVD-FORK (hold-frame transitions): hold-window lateness is mux-lead policy, not decode debt — without this, lates bank drop debt once the refilling VBUF passes vbuf_healthy but before the new clip's first frame decodes, dropping B-frames right at clip start
 
-  /* latch the display target (refreshes) of the frame at pickup: 3 for rff pulldown
-   * frames (progressive display), else SHOW_N. Paces the 3:2 cadence via persistence. */
+  /* DVD-FORK (PTS scheduling): one registered pulse per pickup, for disp_sched. */
+  reg       pickup_tick_r;
   always @(posedge clk)
-    if (~rst) cur_show <= SHOW_N;
-    else if (clk_en && (state == STATE_INIT) && pickup_go) cur_show <= show_next;
-    else cur_show <= cur_show;
-
-  /* DVD-FORK FIX (cadence-slip corrector, see the show_next comment): step the
-   * accumulator once per pickup with the PICKED picture's rff (the same instant
-   * show_next/cur_show sample it — flags_commit-correct). On a deficit crossing
-   * (acc would reach -2.5 fields) pulse cad_late_r for one clk_en cycle and refund
-   * one refresh (+5); on a surplus crossing the refund is the 2-refresh show that
-   * cad_hold_w already granted combinationally to THIS pickup (-5). Gate off (and
-   * hold at 0) when not in NTSC film24 — a seek's cadence-phase jump is bounded by
-   * |acc|<5 (< 1 refresh) and self-corrects, so no flush plumbing is needed. */
-  reg cad_late_r;
-  always @(posedge clk)
-    if (~rst) begin
-      cad_acc    <= 4'sd0;
-      cad_late_r <= 1'b0;
-    end else if (clk_en) begin
-      cad_late_r <= 1'b0;
-      if ((state == STATE_INIT) && pickup_go) begin
-        if (!cad_gate)                  cad_acc <= 4'sd0;
-        else if (cad_next <= -5'sd5) begin
-                                        cad_acc <= cad_next[3:0] + 4'sd5;
-                                        cad_late_r <= 1'b1;   // -> frame-drop ledger: drop one B
-        end
-        else if (cad_next >=  5'sd5)    cad_acc <= cad_next[3:0] - 4'sd5;  // 2-refresh show granted
-        else                            cad_acc <= cad_next[3:0];
-      end
-    end
-
-  /* DVD-FORK (vid_err instrument): registered one-clk pulses (clk_en is 1 in
-   * this instantiation; registering keeps them clean single-cycle strobes). */
-  reg       pickup_tick_r, refresh_tick_r;
-  reg [3:0] pickup_show_r;
-  always @(posedge clk)
-    if (~rst) begin
-      pickup_tick_r  <= 1'b0;
-      pickup_show_r  <= 4'd0;
-      refresh_tick_r <= 1'b0;
-    end else if (clk_en) begin
-      pickup_tick_r  <= (state == STATE_INIT) && pickup_go;
-      if ((state == STATE_INIT) && pickup_go) pickup_show_r <= show_next;
-      refresh_tick_r <= (state == STATE_NEXT_MB) && last_mb && last_y && video_live;
-    end else begin
-      pickup_tick_r  <= 1'b0;
-      refresh_tick_r <= 1'b0;
-    end
-  assign pickup_tick      = pickup_tick_r;
-  assign pickup_show      = pickup_show_r;
-  assign refresh_tick_dbg = refresh_tick_r;
-
-  /* ================= DVD-FORK (Film 24p Out — auto film detector) =================
-   * Recognise soft-telecined film from the per-frame display flags — no pixel
-   * analysis. Evaluated once per display pickup (the same strobe that latches
-   * cur_show/pickup_show), so it sees the flags_commit-correct per-picture values.
-   *
-   * NTSC 23.976 fps film is coded as progressive_frame=1 with repeat_first_field
-   * ALTERNATING 1,0,1,0 (the 3:2 / 5-fields-per-2-frames cadence). 30 fps progressive
-   * video is progressive_frame=1 but rff NEVER toggles; 60i video is progressive_
-   * frame=0. So "progressive AND rff toggled vs the previous frame" is the specific
-   * telecine signature (film_det_ntsc). PAL 25p film is native 2:2 (progressive_frame
-   * =1, rff=0), indistinguishable from 25 fps progressive video by flags — and both
-   * WANT 25p — so a sustained progressive run alone is the PAL signal (film_det_pal);
-   * only 50i video (progressive_frame=0) is excluded.
-   *
-   * Hysteresis via a SATURATING CONFIDENCE accumulator (NOT a strict consecutive-run
-   * counter). Each pickup nudges the confidence: +UP for a confirming frame, -DN for a
-   * non-confirming one, clamped to [0, CONF_MAX]. `det` sets at ENGAGE_TH, clears at
-   * DISENGAGE_TH. Why confidence, not a consecutive run (2026-07-25 HW fix): a strict
-   * "reset the run to 0 on any break" detector engaged fine on a clean menus-OFF stream
-   * but NOT when the film title was reached through the disc MENU/VM — the nav layer
-   * (NAV packs, cell/PGC boundaries, VM POST, brief stills) injects periodic cadence
-   * hiccups during title playback that kept zeroing the run before it reached lock. A
-   * confidence that DECAYS on a hiccup (instead of resetting) rides through them and
-   * still locks, while the FALSE-POSITIVE GUARD is preserved: 30 fps progressive video
-   * produces ZERO confirming frames (rff never toggles), so its confidence only ever
-   * decays — it can never reach ENGAGE_TH. The NTSC non-confirming step is split:
-   * DN_HARD for an interlaced frame (definitely not film) vs the gentler DN_SOFT for a
-   * progressive-but-not-toggling frame (a telecine hiccup OR 30p video — the duration,
-   * via the accumulator, tells them apart). Bias stays toward NON-film. */
-  localparam [7:0] CONF_MAX     = 8'd127;
-  localparam [7:0] ENGAGE_TH    = 8'd120;  // ~40 clean film frames from 0 (~1.7 s) to lock
-  localparam [7:0] DISENGAGE_TH = 8'd24;   // deep hysteresis: ~50 non-film frames from full to release
-  localparam [7:0] UP_STEP      = 8'd3;
-  localparam [7:0] DN_SOFT      = 8'd2;    // progressive but rff didn't toggle (hiccup / 30p video)
-  localparam [7:0] DN_HARD      = 8'd8;    // interlaced frame (progressive_frame=0)
-  reg        rff_q;                        // previous frame's rff (for the toggle test)
-  reg  [7:0] conf_ntsc, conf_pal;
-  // (det_ntsc/det_pal are DECLARED EARLIER, above the cadence-slip corrector that
-  //  consumes det_ntsc — iverilog rejects declaration-after-use.)
-  wire       film_pickup = (state == STATE_INIT) && pickup_go;
-  wire       rff_toggled = (repeat_first_field != rff_q);
-  wire       good_ntsc   = progressive_frame && rff_toggled;   // clean 3:2 telecine frame
-  always @(posedge clk)
-    if (~rst) begin
-      rff_q     <= 1'b0;
-      conf_ntsc <= 8'd0; conf_pal <= 8'd0;
-      det_ntsc  <= 1'b0; det_pal  <= 1'b0;
-    /* ★ DVD-FORK (film evidence gate, 2026-08-30) — the `informative` term.
-     *
-     * progressive_frame is the ENCODER's claim, not a measurement, and on a
-     * near-black picture there is nothing to measure: the encoder takes the
-     * MPEG-2 default and marks it interlaced. Counting that claim is what made
-     * APOLLO_13's fading credits knock this detector out of film lock NINE
-     * times in the first 46 s of the title, re-walking the raster each time.
-     *
-     * VLC's IVTC hits the same content and rides through it, because it reads
-     * pixels and refuses to score a frame it cannot trust — "If no motion, the
-     * result from this algorithm cannot be reliable ... we do nothing, as it's
-     * not a good idea to act on unreliable data". `informative` is that rule
-     * with coded picture size standing in for motion (measured in the vld; see
-     * rtl/mpeg2/vld.v). An uninformative pickup updates NOTHING — not the
-     * confidences and not rff_q, so the 3:2 toggle test resumes across the gap
-     * rather than seeing a false edge.
-     *
-     * Measured effect (tools/film_evidence_probe.py, real discs, this exact
-     * arithmetic): APOLLO_13 credits 9 raster changes -> 1. FERRIS_BUELLER's
-     * special feature, which really does turn from film to video mid-title,
-     * keeps BOTH of its transitions at the same timestamps as before — so the
-     * detector still follows genuine changes in about a second, and none of
-     * this needs the per-title latch that cost 12 s to leave film mode.
-     * Library sweep, 123 discs: 15 better, 0 worse. */
-    end else if (clk_en && film_pickup && informative) begin
-      rff_q <= repeat_first_field;
-      // ---- NTSC telecine confidence ----
-      begin : ntsc_conf
-        reg [7:0] cn;
-        if (good_ntsc)
-          cn = (conf_ntsc > (CONF_MAX - UP_STEP)) ? CONF_MAX : conf_ntsc + UP_STEP;
-        else if (!progressive_frame)
-          cn = (conf_ntsc < DN_HARD) ? 8'd0 : conf_ntsc - DN_HARD;
-        else
-          cn = (conf_ntsc < DN_SOFT) ? 8'd0 : conf_ntsc - DN_SOFT;
-        conf_ntsc <= cn;
-        if      (cn >= ENGAGE_TH)    det_ntsc <= 1'b1;
-        else if (cn <= DISENGAGE_TH) det_ntsc <= 1'b0;
-      end
-      // ---- PAL 25p confidence (progressive alone; rff irrelevant for 2:2) ----
-      begin : pal_conf
-        reg [7:0] cp;
-        if (progressive_frame)
-          cp = (conf_pal > (CONF_MAX - UP_STEP)) ? CONF_MAX : conf_pal + UP_STEP;
-        else
-          cp = (conf_pal < DN_HARD) ? 8'd0 : conf_pal - DN_HARD;
-        conf_pal <= cp;
-        if      (cp >= ENGAGE_TH)    det_pal <= 1'b1;
-        else if (cp <= DISENGAGE_TH) det_pal <= 1'b0;
-      end
-    end
-  assign film_det_ntsc = det_ntsc;
-  assign film_det_pal  = det_pal;
-
-  /*
-   * Emit frame_late in units of REFRESHES of hold, for frame_drop_ctl's debt ledger
-   * (debt += 1 per clk frame_late is high).
-   *
-   * DVD-FORK FIX (480i field-path late undercount, 2026-07-05): on a progressive
-   * display a late repeat re-scans one FRAME image = ONE refresh of timeline slip, and
-   * late_raw fires once per repeat — 1:1. But on an interlaced display the repeat
-   * branch below re-scans a FIELD PAIR (last_image TOP -> {BOTTOM, TOP}) = TWO
-   * refreshes of slip per single STATE_REPEAT visit, so a 1-cycle pulse banks only
-   * HALF the accrued lateness. That was the dominant term in the HW-measured 480i
-   * A/V drift (audio rode ahead ~1.3 s over 43 s with the SAME lates/drops rates as
-   * the drift-free progressive run — each drop's reclaim was honest, the LATES were
-   * undercounted 2x). Fix: stretch frame_late to two cycles when the late repeat is
-   * a field pair, so debt (and frames_late_cnt, and the overlay lates/s row) count
-   * refreshes in both modes. late_raw cannot re-fire on the extension cycle (the FSM
-   * has left STATE_REPEAT and won't return until the pair finishes scanning).
-   */
-  wire late_pair = (last_image == TOP) || (last_image == BOTTOM);
-  reg  late_ext;
-  always @(posedge clk)
-    if (~rst) late_ext <= 1'b0;
-    else if (clk_en) late_ext <= late_raw && late_pair;
-    else late_ext <= late_ext;
-
-  always @(posedge clk)
-    if (~rst) frame_late <= 1'b0;
-    else if (clk_en) frame_late <= late_raw | late_ext | cad_late_r | par_late_r;  // DVD-FORK: cadence-slip deficit correction (film24) + field-parity insertion — both pulse on pickup cycles, can't collide with late_raw (REPEAT cycles)
-    else frame_late <= frame_late;
+    if (~rst) pickup_tick_r <= 1'b0;
+    else pickup_tick_r <= clk_en && (state == STATE_INIT) && pickup_go;
+  assign pickup_tick = pickup_tick_r;
 
   /* DVD-FORK (av_sync STC reference): sticky "display has shown a decoded frame".
    * Same pickup condition as cur_show above — the first real frame entering the
@@ -1047,26 +724,6 @@ module resample_addrgen (
     else if (clk_en && (state == STATE_REPEAT) && (repeat_cnt == 5'd31)) repeat_cnt <= repeat_frame;
     else if (clk_en && (state == STATE_REPEAT) && (repeat_cnt != 5'd0)) repeat_cnt <= repeat_cnt - 5'd1;
     else repeat_cnt <= repeat_cnt;
-
-  /*
-   * DVD-FORK FIX: display-refresh counter. Increments once per completed image scan
-   * (one display refresh: a progressive frame or an interlaced field), detected at
-   * the last macroblock of the image. Reset on each source-frame release. frame_due
-   * asserts after SHOW_N refreshes, pacing releases to (display rate / SHOW_N).
-   */
-  /* DVD-FORK FIX (2026-07-05, found by gov_field_late_tb): SATURATE refresh_cnt
-   * instead of letting the 4-bit counter wrap. During a sustained decode stall the
-   * count passes 15 -> wrapped to 0 -> frame_due went FALSE for the next cur_show
-   * refreshes, so those repeat scans were misclassified as within-cadence holds and
-   * banked NO lateness (a ~12% debt undercount every 16 refreshes of stall, both
-   * display modes). Saturating keeps an overdue frame permanently "due". */
-  always @(posedge clk)
-    if (~rst) refresh_cnt <= 4'd0;
-    else if (clk_en) begin
-      if ((state == STATE_INIT) && pickup_go)                 refresh_cnt <= 4'd0;             // new frame picked up -> restart count (a parity insertion keeps counting: the frame stays due)
-      else if ((state == STATE_NEXT_MB) && last_mb && last_y)
-        refresh_cnt <= (refresh_cnt == 4'd15) ? 4'd15 : refresh_cnt + 4'd1; // one refresh (image scan) done; saturate (see above)
-    end
 
   /* counters */
 

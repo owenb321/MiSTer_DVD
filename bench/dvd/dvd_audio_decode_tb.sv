@@ -65,6 +65,7 @@ module dvd_audio_decode_tb;
         .sched_en(sched_en), .stc_anchored(stc_anchored), .video_live(video_live),
         .arr_pts(arr_pts), .arr_pts_valid(arr_pts_valid),
         .stc(stc), .av_ofs(av_ofs),
+        .anchor_pulse(1'b0), .anchor_delta(34'sd0),   // THE STC IS A CLOCK: no display re-anchor in this bench
         .audio_l(audio_l), .audio_r(audio_r),
         .ac3_synced(ac3_synced), .ac3_err(ac3_err),
         // drift-instrument counters (Phase C7)

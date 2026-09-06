@@ -54,7 +54,7 @@ module pts_chain_tb;
   // ---------------------------------------------------------------- fixture
   parameter integer MAXW = 200000;
   parameter integer PRE_PICS = 8;           // flush after this many pre-flush pictures (the short fixture has 19)
-  parameter integer RD_LAT   = 40;          // memory read latency, cycles (reads in flight at the flush)
+  parameter integer RD_LAT   = 400;         // memory read latency, cycles: LONGER than the ~192-cycle flush level, so stale responses land after the read fifo reset (the hazard; on hardware this is queueing behind other traffic)
   reg [63:0] es [0:MAXW-1];
   integer    es_words = 0;
   localparam MAXP = 8192;
@@ -237,7 +237,7 @@ module pts_chain_tb;
     hdr_second_r <= pic_hdr_second;
   end
   wire        tag_valid, tag_second, tag_commit; wire [32:0] tag_pts;
-  pts_assoc #(.DEPTH(16), .PW(24), .MIN_GAP_W(17)) pts_assoc (
+  pts_assoc #(.DEPTH(16), .PW(24), .MIN_GAP_W(16)) pts_assoc (
     .clk(clk), .rst_n(rst), .flush(flush_lvl),
     .stamp_valid(st_valid), .stamp_pts(st_pts), .stamp_pos(st_pos),
     .hdr_pulse(hdr_pulse_r), .hdr_pos(hdr_pos_r), .hdr_second(hdr_second_r),
@@ -245,9 +245,16 @@ module pts_chain_tb;
     .dbg_ovf());
   integer n_tagpic = 0, tag_err = 0, tags_seen = 0;
   reg [71:0] g;
+  // the stamp rate rule, replayed from the marks (see pts_assoc_tb): a mark
+  // within 64 KB of the previously accepted one is expected UNTAGGED
+  reg  mark_acc [0:MAXP-1];
+  integer mk, last_acc, qq;
+  reg  exp_valid;
   always @(posedge clk) if (tag_commit) begin
     g = (n_tagpic < n_golden) ? gold[n_tagpic] : 72'd0;
-    if ((tag_valid !== g[39]) || (tag_valid && (tag_pts !== g[32:0]))) begin
+    exp_valid = 0;
+    if (g[39]) for (qq = 0; qq < n_marks; qq = qq + 1) if (marks[qq][32:0] == g[32:0] && mark_acc[qq]) exp_valid = 1;
+    if ((tag_valid !== exp_valid) || (tag_valid && (tag_pts !== g[32:0]))) begin
       tag_err = tag_err + 1;
       if (tag_err < 8) $display("FAIL [D] pic %0d (seg%0d): tag valid=%0d pts=%0d, golden valid=%0d pts=%0d",
                                 n_tagpic, seg, tag_valid, tag_pts, g[39], g[32:0]);
@@ -312,6 +319,11 @@ module pts_chain_tb;
     i = 0; while (i < MAXW && es[i]    !== 64'hx) i = i + 1; es_words = i;
     i = 0; while (i < MAXP && gold[i]  !== 72'hx) i = i + 1; n_golden = i;
     i = 0; while (i < MAXP && marks[i] !== 72'hx) i = i + 1; n_marks  = i;
+    last_acc = -1;
+    for (mk = 0; mk < n_marks; mk = mk + 1) begin
+      mark_acc[mk] = (last_acc < 0) || ((marks[mk][71:40] - last_acc) >= (1 << 16));
+      if (mark_acc[mk]) last_acc = marks[mk][71:40];
+    end
     if (es_words == 0 || n_golden == 0) begin
       $display("SKIP: pts_chain_tb — fixture %0s missing; run bench/dvd/run_pts_assoc.sh", stem);
       $finish;

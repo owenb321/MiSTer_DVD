@@ -97,6 +97,14 @@ module dvd_audio_decode #(
     // this on video DISPLAY. The fallback timer covers video-less streams.
     input  logic        video_live,
     input  logic [32:0] stc,
+    // THE STC IS A CLOCK (docs/stc_freerun.md): when the display re-anchors the
+    // clock (a PTS discontinuity -- a menu loop, a cell boundary, a held still),
+    // it jumps by anchor_delta. A sample-continuous audio stream across the same
+    // discontinuity is still IN SYNC, so the playback-position reference moves
+    // with the clock instead of reading the jump as a phase error. Only the
+    // measurement (play_err) is re-based; nothing here re-times any sample.
+    input  logic        anchor_pulse,
+    input  logic signed [33:0] anchor_delta,
     input  logic signed [17:0] av_ofs,   // 90 kHz ticks; >0 = audio later (OSD "A/V Offset"; 18b: +/-2.9s)
 
     // decoded stereo PCM (held; update at aud_ce ~48 kHz)
@@ -842,6 +850,7 @@ module dvd_audio_decode #(
             end else begin
                 armed_data <= 1'b0;
                 arm_timer  <= '0;
+                if (anchor_pulse) play_anchor <= play_anchor + anchor_delta[32:0];   // modular 33-bit
                 // playback-position tracker: advance the rate-exact ticks/sample
                 // (integer + fraction) per play tick and publish the error while
                 // playing (held across armed gaps)

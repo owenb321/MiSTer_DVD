@@ -58,7 +58,7 @@ module vld(clk, clk_en, rst,
   mpeg1,                                                                                    // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
   vbuf_flush,                                                                               // DVD-FORK FIX (seek realign, issue #45): a VBUF flush happened — the references are now stale
   bitpos, pic_hdr_pulse, pic_hdr_bitpos, pic_hdr_upd, pic_hdr_second,                      // DVD-FORK (PTS association): where in the stream each picture header was parsed
-  skip_ack, skip_rff, skip_field                                                            // DVD-FORK (PTS scheduling): a picture was dropped for ANY reason (governor or realign)
+  skip_ack, skip_rff, skip_field, skip_tff, skip_pf                                         // DVD-FORK (PTS scheduling): a picture was dropped for ANY reason (governor or realign)
   );
 
   input            clk;                           // clock
@@ -331,6 +331,8 @@ module vld(clk, clk_en, rst,
   output reg       skip_ack;
   output reg       skip_rff;
   output reg       skip_field;
+  output reg       skip_tff;       // the dropped picture's own tff / progressive_frame (its coding
+  output reg       skip_pf;        // extension has parsed by its first slice), for its duration
 
   /* in sequence header */
   output wire[13:0]horizontal_size;
@@ -2653,6 +2655,8 @@ module vld(clk, clk_en, rst,
       skip_ack   <= 1'b0;
       skip_rff   <= 1'b0;
       skip_field <= 1'b0;
+      skip_tff   <= 1'b0;
+      skip_pf    <= 1'b0;
       skip_acked <= 1'b0;
     end else if (clk_en) begin
       if (state == STATE_PICTURE_HEADER) skip_acked <= 1'b0;
@@ -2661,6 +2665,8 @@ module vld(clk, clk_en, rst,
         skip_acked <= 1'b1;
         skip_rff   <= drop_rff_lat;
         skip_field <= (drop_ps_lat == 2'd1) || (drop_ps_lat == 2'd2);
+        skip_tff   <= top_field_first;
+        skip_pf    <= progressive_frame;
       end
     end else skip_ack <= 1'b0;
 

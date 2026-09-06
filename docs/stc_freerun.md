@@ -2,10 +2,11 @@
 
 > **Status (2026-09-06, branch `feature/stc-freerun`, `dev-stcfree`):**
 > **Stage 0 — exact PTS→picture association + `disp_lag` telemetry — IN FABRIC,
-> sim-proven, no behaviour change; ⏳ HW round A pending.**
-> Stage 1 (the display scheduler, the free-running STC, one clock for every
-> consumer, menus included) — 🔧 next. Plan: `~/.claude/plans/` is not the record;
-> this file is. Supersedes the timing model in `docs/av_sync.md` ("Model: a
+> sim-proven, built (`DVD_stcfree_20260906_1357.rbf`), no behaviour change;
+> ⏳ HW round A pending.** **Stage 1 — the display scheduler, the free-running
+> STC, one clock for every consumer, menus included — IN FABRIC, sim-proven
+> (`bench/dvd/run_stc_freerun.sh`); ⏳ HW round B pending.** This file is the
+> design and status record. Supersedes the timing model in `docs/av_sync.md` ("Model: a
 > commercial DVD player") and the two-clocks amendment on the archived branch
 > `feature/audio-delay-ddr` (never merged; its §14.9 investigation is summarised
 > in §1 below).
@@ -90,8 +91,10 @@ code to sit at the golden byte offset exactly — 57/57 on an APOLLO_13 cut,
 **The flush** is where the two coordinates could silently diverge, and did:
 up to 2^MEMTAG_DEPTH (32) VBUF reads can be in flight in the memory controller
 when `vb_flush` lands, and their responses arrive AFTER `vbuf_read_fifo` was
-reset — the decoder used to swallow up to 256 stale bytes of the old stream as
-the first words of the new one. Reads now carry the flush parity in their
+reset. That reset is a ~192-cycle level, so on hardware the stale words land only
+when the memory latency exceeds it (queued behind other traffic under load) —
+then the decoder swallowed up to 256 bytes of the old stream as the first words
+of the new one. Exactness must not depend on the controller's mood, so reads now carry the flush parity in their
 memory tag (`TAG_VBUF`/`TAG_VBUF1`, spare code 7; the epoch flips on the flush's
 RISING EDGE — the flush is a ~192-cycle level, a per-cycle toggle would flip an
 even number of times) and `framestore_response` routes only the current epoch
@@ -108,8 +111,9 @@ code (24-bit modular MSB-of-difference test) and that is this picture's tag.
 Entries still at or before the LAST header during the picture body belong to no
 picture (a PES carrying a PTS but no access-unit start; or a stamp that arrived
 after the vld already passed it) and are popped and discarded: a lost tag, never
-a wrong one. A 128 KB stamp rate limit keeps a per-picture-PTS `.mpg` from
-overflowing DEPTH 16 across a 2 MB VBUF.
+a wrong one. A 64 KB stamp rate limit keeps a per-picture-PTS `.mpg` from
+overflowing DEPTH 16 across a 2 MB VBUF (DVDs at ~284 KB/PTS and ffmpeg `-f dvd`
+at ~85 KB/PTS are untouched; a lost tag is extrapolated, never replaced).
 
 **Carry** (`rtl/mpeg2/motcomp_picbuf.v`): `current_frame_pts{,_valid,_2nd}` are
 latched at `STATE_UPDATE` — ordered by construction, because the tag register is
@@ -158,15 +162,126 @@ Fixtures are cut from real media by `tools/pts_map.py` (gitignored;
 
 ## 3. Stage 1 — the display scheduler and the free-running STC
 
-🔧 Not yet built. Design as approved in the plan: `dvd/disp_sched.sv` (clk_dec)
-owns the master STC (+1 per 90 kHz tick, gated by `video_live` and pause; reset
-domain = VBUF flush and mount only, NOT the `keep_vbuf` pipe reset), extrapolates
-`next_pts` from the displayed picture's flags and `frame_rate_code` plus
-`skip_ack` durations, picks up when `stc − pic_pts ≥ −half_scan` (half the
-image-SCAN period of the raster: 750 / 900 / 1877 / 1800 ticks), re-anchors on a
-tagged discontinuity (< −1 frame, > +0.5 s) or on `LATE_MAX` lateness; no cadence
-fallback (a PTS-less stream anchors at its first pickup and is scheduled by
-extrapolation). `av_sync.sv` becomes a mirror + telemetry; every consumer reads
-one `stc`; the menu exemptions go and the STD hold becomes universal with an
-audio-presence early release. The retirement list is in the plan and will be
-recorded here when it lands.
+**Status: IN FABRIC, sim-proven (`bench/dvd/run_stc_freerun.sh`), ⏳ HW round B
+pending.** One timing path, one clock, every consumer — menus included.
+
+### 3.1 The clock (`dvd/disp_sched.sv`, hosted in `mpeg2video`)
+
+`stc` is a 33-bit counter of a 90 kHz tick. The tick is `clk_sys/300` exactly
+(`emu.sv`, a 9-bit divider), crossed into clk_dec by a toggle: ticks are ~1000
+clk_dec cycles apart, so none is ever lost. It counts while `video_live &&
+!pause`. Its phase is set by ANCHORS, never slewed:
+
+| anchor | when | value |
+|---|---|---|
+| provisional | the first parse-front PTS after a flush, before `video_live` | that PTS, frozen — exactly today's pre-live behaviour, so the STD mux-lead hold and the audio priming work unchanged |
+| pickup | the first pickup of a TAGGED picture, or a pickup that is a DISCONTINUITY | the picture's PTS (minus a field if the tag named the second field) |
+| untagged first pickup | a stream that never carried a PTS (bare `.m2v`) | 0 |
+
+Every anchor exports its signed delta (`anchor_req`/`anchor_delta`).
+
+**Reset domain: the VBUF flush and the decoder reset — NOT the `keep_vbuf`
+pipe reset.** Across a menu→menu hop the display keeps its timeline, old-
+timeline audio in the ring becomes due and drains, and the new menu's first
+picture re-anchors as a discontinuity. That is what dissolves the menu
+exemptions (§3.4) without re-creating the measured ~20 s passthrough stall.
+
+### 3.2 The timeline and the due test
+
+`next_pts` = the last displayed picture's PTS + its content duration, in
+eighth-ticks (Q3, so 23.976 fps is exact). Duration = the field count the
+image build uses (2/3/4/6 fields from ps/pf/tff/rff; MPEG-1 = 2) × the field
+period from `frame_rate_code`, PLUS the duration of every picture the vld
+dropped (`skip_ack` with the dropped picture's own flags — governor B-drops AND
+post-flush realign drops). Ordering for the depth-1 display queue: an ack that
+lands while a picture is waiting at the output belongs AFTER that picture and
+is deferred to its pickup; otherwise it is added at once. An anchoring pickup
+clears the deferred amount (realign drops all precede the anchor).
+
+A tagged picture RESYNCS the timeline (the once-per-VOBU tag corrects any
+cadence drift); an untagged one takes `next_pts`. **Due** when
+`stc − pic_pts ≥ −half_scan`, where `half_scan` is half the raster's
+IMAGE-SCAN period (750 ticks at 480p and per 480i field, 900 PAL, 1877 film24,
+1800 film25 — `emu.sv`, from the resolved mode flags). It is the opportunity
+grid, not the content period: on 480i a frame's opportunity comes after two or
+three FIELD scans. `resample_addrgen`'s `frame_due` IS `sched_due`; a starved
+persistence visit while `sched_next_due` holds is a late (`frame_late` →
+`frame_drop_ctl`, unchanged).
+
+**Discontinuity**: a tagged picture more than one frame BEHIND the timeline or
+more than 0.5 s AHEAD of it, or more than `LATE_MAX` (350 ms) behind the clock,
+re-anchors. Small gaps are waited out (an authored dropped frame); small
+lateness is displayed now and recovered by the frame-drop governor, which
+makes the decoder run early so later pictures WAIT — the closed loop the
+refresh ledger could only approximate. `LATE_MAX` covers a reader-held still
+and a cell PTS reset (otherwise every later picture is late forever); it lands
+the audio in the early-side path (a gap) rather than the late-side discard.
+
+### 3.3 The mirror (`dvd/av_sync.sv`) and the consumers
+
+`av_sync` is now a clk_sys mirror: `{anchored, stc}` crosses on every tick
+(`pts_cdc`, ≤ 11 µs stale), each anchor delta on its own crossing. Its reset
+is the core reset only. Consumers of the one clock: `dvd_audio_decode` (the
+drain gate, `head_stale`, `head_catchup` unchanged), `iec61937_wrap`,
+`spu_decode`, the STD mux-lead hold, `nav_pci`, telemetry. `dvd_audio_decode`
+re-bases `play_anchor` by each anchor delta, so a sample-continuous audio
+stream across a PTS discontinuity (a menu loop, a cell boundary) is not read
+as a phase error by `play_err`.
+
+### 3.4 Menus follow the same rule
+
+`sched_en` and `sync_armed` lost their `~menu_active`; `hl_stc_fresh` is
+always 1 (the clock survives a `keep_vbuf` hop and re-anchors on the picture,
+so it is always display-coherent — `nav_pci`'s settle/timer fallbacks remain
+as safety nets); the STD mux-lead hold is UNIVERSAL with an audio-presence
+early release: a load whose ring has received no audio frame within ~155 ms of
+the anchor releases at once (menu stills, silent titles, bare ES), a load with
+audio waits for it as titles always did. That is the lip-sync menu clips with
+speech never had.
+
+### 3.5 What this retired
+
+Deleted: `av_sync`'s refresh-counted STC (`TPR_Q16`, the per-mode tick mux,
+`refresh_tick`), the dead PI/`nco_trim`, the parse-front seek detector
+(`vbig`); `resample_addrgen`'s `refresh_cnt` and its saturation fix,
+`SHOW_N`/`show_next`/`cur_show`/`frame_due`, the film24 one-refresh override,
+the `cad_acc` cadence-slip corrector, `menu_ff`; the `vid_err` instrument
+(telemetry word 5 now reads 0; word 11 `disp_lag` measures the thing directly);
+`emu`'s menu exemptions and `keep_vbuf` distrust of the STC. Retired benches:
+`cadence_slip_tb`, `cadence_phase_tb`, `film_drift_tb`, `gov_field_late_tb`,
+`menu_ff_tb`, `resample_cadence*_tb` (they tested the deleted machinery).
+Demoted to safety nets: `frame_drop_ctl`'s debt ledger and drop cost, the film
+detector's role in sync (`filmp_eff` only picks a raster now; §13's "flush on a
+film edge" requirement is moot), `nav_pci`'s promotion fallbacks. Kept on
+purpose: the persistence hold, the STD backpressure and its watchdog, every
+audio hold/gate, the flush trio, `keep_vbuf` audio continuity, the field-parity
+corrector (it defers pickups; composes with the due gate unchanged).
+
+### 3.6 Gate
+
+`bench/dvd/run_stc_freerun.sh`: the association suite (§2), `disp_sched_tb`
+(13 scenarios: 3:2 on 480i and on the film24 raster, PAL, per-picture PTS, a
+late decoder with governor-drop recovery, drops in both orderings, a 5 s and a
+200 ms backward jump, 0.3 s gap waited out, 2 s gap re-anchored, `LATE_MAX` after a held
+still, second-field tags, a PTS-less stream, pause, the provisional anchor —
+every pickup scored against the scenario's TRUE PTS and the DUT's clock, never
+the DUT's own wanted time, with the scripted decoder PRE-DECODED so a timeline that
+runs early can show a picture early — two mutations were invisible with a
+just-in-time decoder — and 5 mutations each caught by its own scenario),
+`av_sync_tb` (the mirror), `dvd_audio_decode_tb`, `flush_ctl_tb`, the
+telemetry bench, and the display suites re-paced with `sched_due` tied high.
+
+## 4. HW rounds
+
+- **Round A (Stage 0 build `DVD_stcfree_20260906_1357.rbf`, SEED 5 first roll,
+  clk_dec 87.73/89.67, 91 % ALM):** `disp_lag` per mode on APOLLO_13 and MiB —
+  must be per-picture stable with the known ≈ −1 s film24 / ≈ −0.2 s
+  interlaced shape. ⏳
+- **Round B (Stage 1):** film24 vs interlaced A/V difference ≈ 0 ± one picture
+  on APOLLO_13 and MiB (`tools/av_mode_diff.py`); PAL; Thayer (field-coded);
+  a VCD; seek storms; timed stills; menus — T2/MiB/Matrix transitions, Harry
+  Potter stills, a menu clip with speech; passthrough through menus; Ferris
+  film↔video. Then re-measure the `A/V Offset` default at 0 ms (+100 ms was
+  the null of the old parse-front residual). ⏳ Manual pages (`film-24p.md`
+  limitations, `settings.md` A/V Offset, `compatibility.md` 23.976 VCD, menu
+  lip-sync) are updated when round B confirms, not before.

@@ -142,17 +142,45 @@ module pts_assoc_tb;
     hdr_second_r <= pic_hdr_second;
   end
   wire        tag_valid, tag_second, tag_commit; wire [32:0] tag_pts;
-  pts_assoc #(.DEPTH(16), .PW(24), .MIN_GAP_W(17)) pts_assoc (
+  pts_assoc #(.DEPTH(16), .PW(24), .MIN_GAP_W(16)) pts_assoc (
     .clk(clk), .rst_n(rst), .flush(1'b0),
     .stamp_valid(st_valid), .stamp_pts(st_pts), .stamp_pos(st_pos),
     .hdr_pulse(hdr_pulse_r), .hdr_pos(hdr_pos_r), .hdr_second(hdr_second_r),
     .tag_valid(tag_valid), .tag_pts(tag_pts), .tag_second(tag_second), .tag_commit(tag_commit),
     .dbg_ovf());
-  integer n_tagpic = 0, tag_err = 0, tags_seen = 0, second_tags = 0;
+  integer n_tagpic = 0, tag_err = 0, tags_seen = 0, second_tags = 0, exp_tags = 0;
   reg [71:0] g;
+  // The stamp RATE LIMIT is documented policy (pts_assoc.sv): a mark closer
+  // than MIN_GAP bytes to the previously ACCEPTED one is not stamped, so its
+  // picture is expected UNTAGGED. Replayed here from the marks' positions --
+  // independently of the RTL's own bookkeeping -- and a rate-dropped tag must
+  // be ABSENT, never replaced by a neighbour's PTS.
+  reg  mark_acc [0:MAXP-1];
+  integer mk, last_acc;
+  reg  exp_valid;
+  task automatic replay_rate;
+    begin
+      last_acc = -1;
+      for (mk = 0; mk < n_marks; mk = mk + 1) begin
+        mark_acc[mk] = (last_acc < 0) || ((marks[mk][71:40] - last_acc) >= (1 << 16));
+        if (mark_acc[mk]) last_acc = marks[mk][71:40];
+      end
+    end
+  endtask
+  task automatic expect_of(input [71:0] gg);   // golden tag -> expected after the rate rule
+    integer q;
+    begin
+      exp_valid = 0;
+      if (gg[39])
+        for (q = 0; q < n_marks; q = q + 1)
+          if (marks[q][32:0] == gg[32:0] && mark_acc[q]) exp_valid = 1;
+    end
+  endtask
   always @(posedge clk) if (rst && tag_commit) begin
     g = (n_tagpic < n_golden) ? gold[n_tagpic] : 72'd0;
-    if ((tag_valid !== g[39]) || (tag_valid && (tag_pts !== g[32:0]))) begin
+    expect_of(g);
+    if (exp_valid) exp_tags = exp_tags + 1;
+    if ((tag_valid !== exp_valid) || (tag_valid && (tag_pts !== g[32:0]))) begin
       tag_err = tag_err + 1;
       if (tag_err < 8) $display("FAIL [B] pic %0d: tag valid=%0d pts=%0d, golden valid=%0d pts=%0d",
                                 n_tagpic, tag_valid, tag_pts, g[39], g[32:0]);
@@ -216,6 +244,7 @@ module pts_assoc_tb;
     $display("pts_assoc_tb: %0s — %0d ES words, %0d pictures, %0d PTS marks",
              stem, es_words, n_golden, n_marks);
     if ($test$plusargs("VERBOSE")) verbose = 1;
+    replay_rate;
     #100 rst = 1;
     guard = 0;
     while ((n_seen < n_golden) && (guard < (es_words * 192))) begin
@@ -231,13 +260,13 @@ module pts_assoc_tb;
       $display("FAIL [B]: %0d picture tags disagree with the golden", tag_err);
       errors = errors + 1;
     end
-    if (tags_seen != n_marks) begin
-      $display("FAIL [B]: %0d pictures tagged but the fixture has %0d marks", tags_seen, n_marks);
+    if (tags_seen != exp_tags) begin
+      $display("FAIL [B]: %0d pictures tagged but %0d expected (%0d marks, rate rule applied)", tags_seen, exp_tags, n_marks);
       errors = errors + 1;
     end
     if (errors == 0)
-      $display("PASS: pts_assoc_tb [A] position %0d/%0d start codes exact (delta %0d..%0d); [B] %0d/%0d marks landed on the golden picture with the golden PTS (%0d second-field)",
-               n_seen, n_golden, min_delta, max_delta, tags_seen, n_marks, second_tags);
+      $display("PASS: pts_assoc_tb [A] position %0d/%0d start codes exact (delta %0d..%0d); [B] %0d/%0d marks landed on the golden picture with the golden PTS (%0d second-field, %0d rate-limited)",
+               n_seen, n_golden, min_delta, max_delta, tags_seen, n_marks, second_tags, n_marks - exp_tags);
     else begin
       $display("FAIL: pts_assoc_tb — %0d error(s) (%0d position; delta range %0d..%0d)",
                errors, pos_err, min_delta, max_delta);

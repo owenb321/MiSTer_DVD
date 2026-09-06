@@ -151,6 +151,7 @@ module vcd_chain_tb;
         .frame_pts(frame_pts), .frame_pts_valid(frame_pts_valid),
         .frame_pop(frame_pop),
         .nco_trim(22'sd0),
+        .anchor_pulse(1'b0), .anchor_delta(34'sd0),   // THE STC IS A CLOCK: no display re-anchor in this bench
         .dispatch_pts(), .dispatch_pts_valid(),
         .sched_en(sched_mode),
         .stc_anchored(sched_mode),

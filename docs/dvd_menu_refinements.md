@@ -1,5 +1,7 @@
 # DVD menu refinements — per-disc follow-up track (post Phase 4)
 
+> ★ **2026-09-06 amendment (`docs/stc_freerun.md`): the menu exemptions this file records — `sched_en`/`sync_armed` off in menus, `av_vid_hold` forced off, `hl_stc_fresh` cleared by a keep_vbuf hop, the §5c highlight-vs-picture lag — are REMOVED on branch `feature/stc-freerun`. They existed because the parse-anchored STC stalled or lagged across keep_vbuf hops; the free-running STC is reset only by the VBUF flush, keeps its timeline across a hop and re-anchors on the new menu's first displayed picture, so menus follow the same rule as titles (menu clips with speech become lip-synced). ⏳ HW round B is the gate; the mechanisms below remain the record of why the exemptions were needed.
+
 Phase 4 (the DVD-VM interpreter, PR fj#82) shipped the **core** menu navigation:
 First Play boot, real command execution, button dispatch, CallSS/RSM resume,
 JumpTT/VTS_PTT title resolve, SetSTN stream selection, and VOB-less VMGM/VTSM

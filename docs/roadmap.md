@@ -952,10 +952,11 @@ fit/STA reports to zero — consistent with the project's "validate on hardware"
 > 90 kHz counter off the same crystal as the raster and the audio NCO, the display is
 > scheduled by each picture's own PTS (threaded through the decoder as a fifth picbuf
 > attribute), and every consumer — menus included — reads the one clock. **Stage 0
-> (exact PTS→picture association + `disp_lag` telemetry, no behaviour change) is in
-> fabric, sim-proven, ⏳ HW round A pending.** Stage 1 (`dvd/disp_sched.sv`, the
-> free-running STC, the menu exemptions removed, the refresh-counting governor
-> deleted) follows. The archived `feature/audio-delay-ddr` work (decoder-front proxy
+> (exact PTS→picture association + `disp_lag` telemetry, no behaviour change) is
+> built (`DVD_stcfree_20260906_1357.rbf`), ⏳ HW round A pending. Stage 1
+> (`dvd/disp_sched.sv`, the free-running STC, the menu exemptions removed, the
+> refresh-counting governor DELETED) is in fabric, sim-proven by
+> `bench/dvd/run_stc_freerun.sh`, ⏳ HW round B pending.** The archived `feature/audio-delay-ddr` work (decoder-front proxy
 > clock, DDR audio-delay ring) is NOT merged and is superseded.
 
 The fabric audio path (`docs/fabric_audio.md`) outputs at a fixed 48 kHz

@@ -749,8 +749,28 @@ worse maintenance burden than targeted in-place edits. So:
   nothing). An imported "anchor the STC on the screen" fix made it WORSE (1800 ms + stream
   freezes) and is not merged — see `docs/av_sync.md` "HW round 3" before touching it.
 - 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06,
-  branch `feature/stc-freerun`, `dev-stcfree`). STAGE 0 IN FABRIC, sim-proven, ⏳ HW
-  round A pending; Stage 1 next. Design + status record: `docs/stc_freerun.md`.**
+  branch `feature/stc-freerun`, `dev-stcfree`). STAGE 0 (association + telemetry, no
+  behaviour change) BUILT `DVD_stcfree_20260906_1357.rbf` ⏳ HW round A; STAGE 1 (the
+  scheduler, the clock, menus included) IN FABRIC, sim-proven by
+  `bench/dvd/run_stc_freerun.sh`, ⏳ HW round B. Design + status record:
+  `docs/stc_freerun.md` — read §3.5 for what was DELETED before touching any A/V code.**
+  ★ **Stage 1 in one paragraph:** `dvd/disp_sched.sv` (in `mpeg2video`) counts a
+  90 kHz tick (`clk_sys/300`, toggle-crossed) and anchors it at pickups of tagged
+  pictures; `resample_addrgen`'s `frame_due` IS its `sched_due` (`stc − pts ≥ −half_scan`,
+  half the raster's IMAGE-SCAN period: 750/900/1877/1800); `next_pts` extrapolates from
+  the flags × `frame_rate_code` plus every `skip_ack` (deferred if a picture is waiting
+  at the output — the depth-1 queue's ordering rule); a tagged picture > 1 frame behind,
+  > 0.5 s ahead, or > 350 ms late re-anchors. `av_sync.sv` is a clk_sys MIRROR now;
+  every consumer reads the one `stc`; `sched_en`/`sync_armed` lost `~menu_active`,
+  `hl_stc_fresh` is always 1, the STD hold is universal with a ~155 ms no-audio release,
+  and `dvd_audio_decode` re-bases `play_anchor` by each anchor delta. The scheduler's
+  reset is the VBUF flush, NOT the keep_vbuf pipe reset — that is what makes menus
+  safe. ⚠ `disp_sched_tb` scores every pickup against the scenario's TRUE PTS, not the
+  DUT's own wanted time: two of five mutations were invisible until it did.
+  DELETED: the refresh-counted STC, `TPR_Q16`, the PI, `vbig`; `refresh_cnt`,
+  `cur_show`/`show_next`/`SHOW_N`, the film24 override, `cad_acc`, `menu_ff`, the
+  `vid_err` instrument (word 5 reads 0); benches `cadence_slip/phase`, `film_drift`,
+  `gov_field_late`, `menu_ff`, `resample_cadence*`.
   ★★ **Every A/V-sync defect since the governor shipped is ONE defect: the STC counted
   refreshes from a PARSE-front anchor and the display never consulted a PTS after
   it**, so whatever sat between the demux and the screen (the VBUF, 0.5–1.8 s,

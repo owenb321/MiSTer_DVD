@@ -50,7 +50,7 @@
 module pts_assoc #(
     parameter int DEPTH     = 16,
     parameter int PW        = 24,        // compared position width, bytes (modular)
-    parameter int MIN_GAP_W = 17         // 2^17 = 128 KB between accepted stamps
+    parameter int MIN_GAP_W = 16         // 2^16 = 64 KB between accepted stamps
 ) (
     input  wire          clk,            // clk_dec
     input  wire          rst_n,          // sync_rst (decoder)
