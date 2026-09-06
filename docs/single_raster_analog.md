@@ -494,6 +494,37 @@ separately.
 - [ ] Idle logo reports `720x480i`; no resolution popup on disc load.
 - [ ] Toggling `Video Output` mid-title: the chapter-seek-style interruption, then clean.
 
+**§3.10 / §3.11 (SMPTE composite sync + Field Order), added 2026-09-05.** ★ The build ships
+with `Analog CSync = SMPTE`, which replaces a path that is HW-confirmed good, so the
+maintainer's CRT is the **regression gate and goes first** — and `Stock` is one OSD row
+away if it regresses.
+
+- [ ] **Maintainer's composite CRT, `Analog CSync = SMPTE`:** stable, no pairing or bounce,
+      `720x480i @ 59.9` steady, line-21 CC still decoding, overlays / HUD / menus intact.
+- [ ] Sweep all three `Analog CSync` arms from the OSD (no reload needed) on the same set.
+- [ ] **Composite / S-video on the SMPTE arm** — `vga_cs_osd` also feeds `yc_out`, an
+      unmeasured second consumer. A real CVBS signal *should* carry equalizing pulses, but
+      that is a prediction, not a measurement.
+- [ ] Progressive (480p) unaffected — `cs_en` is gated on `interlaced_eff`, so it must take
+      the stock path; confirm no change at all.
+- [ ] **RT4K reporter, in CRT Simulation** (Bob masks the fault — his workaround is the
+      wrong mode to measure in): walk all four cells of `Analog CSync` × `Field Order`.
+- [ ] **RT4K readouts per arm** — pixel clock, vsync length, lines/frame, frame rate. The
+      earlier report was "vsync length toggling about once a second"; that readout directly
+      measures the 50/18 µs asymmetry, so the SMPTE arm should stop it toggling. This is
+      the measurement that turns the bench's separator models into a field result.
+- [ ] **Ask the RT4K reporter what field offset each arm needs, and whether ±1 alone ever
+      suffices.** A pure field swap is a ONE-unit correction; he needs −2. If −2 survives
+      both the SMPTE arm and `Field Order = Swap`, there is a third thing (a line-position
+      offset) — chase it separately, do not absorb it into "field order".
+- [ ] **Trinitron reporter:** does the sawtooth appear on the **idle logo with no disc**? A
+      yes exonerates the decoder, the governor and the parity corrector outright. Still vs
+      motion? Does N64/PSX 480i do it on the same set (same `csync`, same raster model)?
+      And his `MiSTer.ini` — `vga_scaler=1` would mean none of this reaches his pins.
+- [ ] `Field Order` A/B on **video-sourced 29.97i** content
+      (`tools/video_cadence_census.py`), fast horizontal motion, Weave or CRT Simulation.
+      Allow ~2 s to settle. A film disc is not a valid negative result.
+
 ## 6. A mid-title `Video Output` change froze the decoder — FIXED (issue #42)
 
 **Status: sim-proven RED/GREEN on branch `fix/mode-switch-realign`, ⏳ HW-confirm

@@ -114,7 +114,14 @@ wire [3:0]  n_pre   = smpte ? (pal ? SEG_P : SEG_N) : 4'd0;
 wire [3:0]  n_broad = smpte ? (pal ? SEG_P : SEG_N) : 4'd6;
 wire [3:0]  n_post  = n_pre;
 
-assign cs_en = en & (mode != 2'd2) & (mode != 2'd3);
+// ⚠ Gated on rst_n as well as `en`. If cs_en could assert while the counters are still
+// held in reset, sys_top would take a `cs` that is not yet tracking hsync — i.e. the
+// analog output would lose SYNC, not just picture, which is the re_interlace S_HUNT
+// defect class (docs/single_raster_analog.md §3.2) and the one failure here that a
+// television cannot ride out. In practice interlaced_eff is 0 through reset anyway
+// (status is zero and analog_want_l resets low), so this costs nothing and removes the
+// question.
+assign cs_en = rst_n & en & (mode != 2'd2) & (mode != 2'd3);
 
 // ---------------------------------------------------------------------------
 // Dot counter locked to the emitted hsync, plus the line/field it introduces.

@@ -35,15 +35,22 @@ if [ "${1:-}" = "--red" ]; then
   red_case() {   # $1 = label, $2 = sed program (empty for none), $3 = extra plusargs
     echo "== RED [$1] =="
     if [ -n "$2" ]; then sed "$2" "$SRC_GEN" > "$mut"; else cp "$SRC_GEN" "$mut"; fi
-    cmp -s "$mut" "$SRC_GEN" && [ -n "$2" ] && { echo "  mutation did not apply"; exit 1; }
+    # ⚠ A sed pattern that no longer matches the source silently produces an UNMUTATED
+    # copy, which then passes — a RED arm that quietly became a second GREEN arm. This has
+    # already happened once here (a `fpar` -> `fpar_now` rename in the module), so it is a
+    # hard failure, not a warning.
+    if [ -n "$2" ] && cmp -s "$mut" "$SRC_GEN"; then
+      echo "  FAIL: the mutation did not apply — the pattern no longer matches $SRC_GEN"
+      fails=$((fails+1)); return
+    fi
     build "$mut"
-    if vvp "$SIM" $3 > /tmp/csync_red.log 2>&1; then
+    if vvp "$SIM" $3 > bench/dvd/csync_red_arm.log 2>&1; then
       echo "  FAIL: the RED arm PASSED — the bench cannot detect this defect"
-      grep -E "^(PASS|FAIL|csync_field_tb: \[)" /tmp/csync_red.log | head -6
+      grep -E "^(PASS|FAIL|csync_field_tb: \[)" bench/dvd/csync_red_arm.log | head -6
       fails=$((fails+1))
     else
       echo "  failed as required:"
-      grep -E "^FAIL" /tmp/csync_red.log | head -3 | sed 's/^/    /'
+      grep -E "^FAIL" bench/dvd/csync_red_arm.log | head -3 | sed 's/^/    /'
     fi
   }
 
@@ -51,7 +58,7 @@ if [ "${1:-}" = "--red" ]; then
   #    the two fields no longer present the same waveform and the separators no longer
   #    see 262.5 lines. Breaks [G5] and [G6] — the stock defect, reintroduced.
   red_case "grid: block not offset by a half-line on field B" \
-           's/+ {11.d0, fpar};/+ 12'"'"'d0;/' "+arm=0"
+           's/+ {11.d0, fpar_now};/+ 12'"'"'d0;/' "+arm=0"
   # 2. Equalizing pulses emitted at broad-pulse width. Breaks [G4] only — the gate that
   #    checks we built the SPECIFIED shape rather than merely a symmetric one.
   red_case "eqwide: equalizing pulses at broad width" \
