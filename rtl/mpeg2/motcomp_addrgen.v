@@ -46,6 +46,7 @@ module motcomp_addrgen(
   second_field, progressive_sequence, progressive_frame, top_field_first, repeat_first_field, last_frame, update_picture_buffers, motion_vector_valid,
   flags_commit,                                            // DVD-FORK (round 11): per-picture display flags valid (direct from vld)
   pic_informative, informative_commit, output_informative, // DVD-FORK (film evidence gate): per-picture evidence verdict
+  vld_pic_pts, vld_pic_pts_valid, vld_pic_pts_2nd, pts_commit, output_pts, output_pts_valid, output_pts_2nd,   // DVD-FORK (PTS association)
   source_select,
   fwd_wr_addr_en, fwd_wr_addr, fwd_wr_addr_almost_full,
   bwd_wr_addr_en, bwd_wr_addr, bwd_wr_addr_almost_full,
@@ -107,6 +108,13 @@ module motcomp_addrgen(
   input              pic_informative;   // DVD-FORK (film evidence gate)
   input              informative_commit;// DVD-FORK (film evidence gate)
   output             output_informative;// DVD-FORK (film evidence gate)
+  input        [32:0]vld_pic_pts;       // DVD-FORK (PTS association): straight through to picbuf
+  input              vld_pic_pts_valid;
+  input              vld_pic_pts_2nd;
+  input              pts_commit;
+  output       [32:0]output_pts;
+  output             output_pts_valid;
+  output             output_pts_2nd;
   input              motion_vector_valid;
   /* trick modes */
   input         [2:0]source_select;                 /* select video out source */
@@ -381,6 +389,13 @@ module motcomp_addrgen(
     .pic_informative(pic_informative),                       // DVD-FORK (film evidence gate)
     .informative_commit(informative_commit),                 // DVD-FORK (film evidence gate): later pulse, same slot
     .output_informative(output_informative),                 // DVD-FORK (film evidence gate)
+    .vld_pic_pts(vld_pic_pts),                               // DVD-FORK (PTS association)
+    .vld_pic_pts_valid(vld_pic_pts_valid),
+    .vld_pic_pts_2nd(vld_pic_pts_2nd),
+    .pts_commit(pts_commit),
+    .output_pts(output_pts),
+    .output_pts_valid(output_pts_valid),
+    .output_pts_2nd(output_pts_2nd),
     .forward_reference_frame(forward_reference_frame), 
     .backward_reference_frame(backward_reference_frame), 
     .current_frame(current_frame), 

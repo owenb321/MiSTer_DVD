@@ -31,6 +31,13 @@
 //     word 8  aud_frames     -- audio frames queued
 //     word 9  aud_play       -- audio play ticks / 16 (what reaches the DAC)
 //     word 10 aud_gate       -- drain-gate closures
+//     word 11 disp_lag       -- SIGNED, PTS of the picture just DISPLAYED - STC, 1 LSB = 16 ticks
+//     word 12 play_err       -- SIGNED, audio playback position vs its anchor, same scale
+//     word 13 av_drift       -- SIGNED, dispatched audio PTS - STC, same scale
+//   Word 11 is the measurement docs/av_sync.md "THE STC IS A CLOCK" is built
+//   on: the picture on SCREEN against the clock the audio is scheduled by. It
+//   is ~0 when the display is scheduled by PTS (Stage 1) and reads the whole
+//   buffering lead (about -1 s in Film 24p) before that.
 //   Word 9 over word 1 is the audio-vs-raster ratio, the companion to
 //   refreshes/pickups: both are ratios of counters in ONE clock domain, so
 //   neither needs an external reference or an assumption about which clock is
@@ -90,7 +97,13 @@ module dvd_telem #(
     input  [15:0] aud_frames,
     input   [7:0] flags,
     input  [15:0] aud_play,
-    input  [15:0] aud_gate
+    input  [15:0] aud_gate,
+    // A/V phase, SIGNED, the source value's bits [19:4] (1 LSB = 16 ticks of
+    // the 90 kHz STC = 0.178 ms, full scale +/-5.8 s). Do NOT take [15:0]: that
+    // wraps at +/-0.36 s and cannot represent the offsets these exist to show.
+    input  [15:0] disp_lag,              // word 11: PTS of the picture just DISPLAYED - STC
+    input  [15:0] play_err,              // word 12: audio playback position vs its anchor
+    input  [15:0] av_drift               // word 13: dispatched audio PTS - STC
 );
 
     wire [15:0] s_refresh, s_pickup, s_late, s_drop, s_viderr, s_costs, s_aud;
@@ -107,13 +120,17 @@ module dvd_telem #(
     wire [15:0] s_play, s_gate;
     telem_sync #(16) u_ply (clk, aud_play,   s_play);
     telem_sync #(16) u_gat (clk, aud_gate,   s_gate);
+    wire [15:0] s_dlag, s_perr, s_drift;
+    telem_sync #(16) u_dlg (clk, disp_lag,   s_dlag);
+    telem_sync #(16) u_per (clk, play_err,   s_perr);
+    telem_sync #(16) u_dft (clk, av_drift,   s_drift);
 
     reg  [3:0] wcnt;
     reg        active;
     reg [15:0] dout_r;
 
     // the atomic snapshot
-    reg [15:0] q1, q2, q3, q4, q5, q6, q7, q8, q9, q10;
+    reg [15:0] q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13;
 
     always @(posedge clk) begin
         if (!io_enable) begin
@@ -133,6 +150,9 @@ module dvd_telem #(
                 q8 <= s_aud;
                 q9 <= s_play;
                 q10 <= s_gate;
+                q11 <= s_dlag;
+                q12 <= s_perr;
+                q13 <= s_drift;
                 dout_r <= MAGIC;
             end else begin
                 case (wcnt)
@@ -146,6 +166,9 @@ module dvd_telem #(
                     4'd8:    dout_r <= q8;
                     4'd9:    dout_r <= q9;
                     4'd10:   dout_r <= q10;
+                    4'd11:   dout_r <= q11;
+                    4'd12:   dout_r <= q12;
+                    4'd13:   dout_r <= q13;
                     default: dout_r <= 16'd0;
                 endcase
             end

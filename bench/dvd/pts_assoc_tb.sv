@@ -23,7 +23,7 @@
 //
 // Build:
 //   iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/pts_assoc_sim \
-//       rtl/mpeg2/vld.v rtl/mpeg2/getbits.v bench/dvd/pts_assoc_tb.sv
+//       rtl/mpeg2/vld.v rtl/mpeg2/getbits.v dvd/pts_assoc.sv bench/dvd/pts_assoc_tb.sv
 //   vvp bench/dvd/pts_assoc_sim +STEM=bench/dvd/test_vobs/pts_apollo
 // =============================================================================
 module pts_assoc_tb;
@@ -121,6 +121,47 @@ module pts_assoc_tb;
   // The start code's own 32 bits precede the header the vld is parsing.
   localparam integer SC_BITS = 32;
 
+  // ---- [B] the association FIFO over the same run ----
+  // Stamps are pushed as the feeder delivers the word holding each mark (the
+  // hardware stamps at the packer, always ahead of the parse); the tag decided
+  // at every header must match the golden's MPEG-rule assignment.
+  reg         st_valid = 0; reg [32:0] st_pts = 0; reg [23:0] st_pos = 0;
+  integer     st_ptr = 0;
+  always @(posedge clk) begin
+    st_valid <= 1'b0;
+    if (rst && (st_ptr < n_marks) && ((rd_ptr * 8) > marks[st_ptr][71:40])) begin
+      st_valid <= 1'b1; st_pts <= marks[st_ptr][32:0]; st_pos <= marks[st_ptr][63:40];
+      st_ptr <= st_ptr + 1;
+    end
+  end
+  reg  [23:0] hdr_pos_r = 0; reg hdr_pulse_r = 0, hdr_second_r = 0;
+  wire [31:0] hdr_sc_bits = pic_hdr_bitpos - 32'd32;
+  always @(posedge clk) begin
+    hdr_pulse_r  <= rst && pic_hdr_pulse;
+    hdr_pos_r    <= hdr_sc_bits[26:3];
+    hdr_second_r <= pic_hdr_second;
+  end
+  wire        tag_valid, tag_second, tag_commit; wire [32:0] tag_pts;
+  pts_assoc #(.DEPTH(16), .PW(24), .MIN_GAP_W(17)) pts_assoc (
+    .clk(clk), .rst_n(rst), .flush(1'b0),
+    .stamp_valid(st_valid), .stamp_pts(st_pts), .stamp_pos(st_pos),
+    .hdr_pulse(hdr_pulse_r), .hdr_pos(hdr_pos_r), .hdr_second(hdr_second_r),
+    .tag_valid(tag_valid), .tag_pts(tag_pts), .tag_second(tag_second), .tag_commit(tag_commit),
+    .dbg_ovf());
+  integer n_tagpic = 0, tag_err = 0, tags_seen = 0, second_tags = 0;
+  reg [71:0] g;
+  always @(posedge clk) if (rst && tag_commit) begin
+    g = (n_tagpic < n_golden) ? gold[n_tagpic] : 72'd0;
+    if ((tag_valid !== g[39]) || (tag_valid && (tag_pts !== g[32:0]))) begin
+      tag_err = tag_err + 1;
+      if (tag_err < 8) $display("FAIL [B] pic %0d: tag valid=%0d pts=%0d, golden valid=%0d pts=%0d",
+                                n_tagpic, tag_valid, tag_pts, g[39], g[32:0]);
+    end
+    if (tag_valid) tags_seen = tags_seen + 1;
+    if (tag_valid && tag_second) second_tags = second_tags + 1;
+    n_tagpic = n_tagpic + 1;
+  end
+
   integer got_off, want_off, delta;
   reg [31:0] want_off_r;
   integer max_delta = 0, min_delta = 0;
@@ -186,9 +227,17 @@ module pts_assoc_tb;
       $display("FAIL: saw %0d picture headers, golden has %0d", n_seen, n_golden);
       errors = errors + 1;
     end
+    if (tag_err != 0) begin
+      $display("FAIL [B]: %0d picture tags disagree with the golden", tag_err);
+      errors = errors + 1;
+    end
+    if (tags_seen != n_marks) begin
+      $display("FAIL [B]: %0d pictures tagged but the fixture has %0d marks", tags_seen, n_marks);
+      errors = errors + 1;
+    end
     if (errors == 0)
-      $display("PASS: pts_assoc_tb [A] position — %0d/%0d picture start codes at the golden byte offset exactly (delta range %0d..%0d)",
-               n_seen, n_golden, min_delta, max_delta);
+      $display("PASS: pts_assoc_tb [A] position %0d/%0d start codes exact (delta %0d..%0d); [B] %0d/%0d marks landed on the golden picture with the golden PTS (%0d second-field)",
+               n_seen, n_golden, min_delta, max_delta, tags_seen, n_marks, second_tags);
     else begin
       $display("FAIL: pts_assoc_tb — %0d error(s) (%0d position; delta range %0d..%0d)",
                errors, pos_err, min_delta, max_delta);

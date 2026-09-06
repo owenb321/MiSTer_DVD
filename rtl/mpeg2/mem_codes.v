@@ -45,7 +45,8 @@
     TAG_RECON = 3'd3,
     TAG_DISP  = 3'd4,
     TAG_OSD   = 3'd5,
-    TAG_VBUF  = 3'd6;
+    TAG_VBUF  = 3'd6,
+    TAG_VBUF1 = 3'd7;   // DVD-FORK (PTS association): the other VBUF read EPOCH -- see framestore_request.v
 
 /*
  * Frame store layout. 

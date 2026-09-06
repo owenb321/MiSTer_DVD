@@ -51,6 +51,7 @@
 module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              rst,                                                                                                                 // clocked with clk
              stream_data, stream_valid,                                                                                           // clocked with clk
+             stream_mark, pts_in, pts_in_valid, disp_pts, disp_pts_valid,                                                        // DVD-FORK (PTS association): PES mark + PTS in, displayed PTS out
 	     reg_addr, reg_wr_en, reg_dta_in, reg_rd_en, reg_dta_out,                                                             // clocked with clk
              busy, error, interrupt, watchdog_rst,                                                                                // clocked with clk
              r, g, b, y, u, v, pixel_en, h_sync, v_sync, c_sync, h_pos, v_pos,                                                     // clocked with dot_clk
@@ -96,6 +97,17 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* MPEG stream input */
   input       [7:0]stream_data;             // packetized elementary stream input
   input            stream_valid;            // stream_data valid
+  /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"):
+   * stream_mark rides with the first payload byte of a PTS-bearing video PES;
+   * pts_in is that PTS, already crossed into clk (emu pts_cdc). They may arrive
+   * in either order (the byte path stalls on busy, the PTS path does not), so a
+   * 4-deep in-order queue pairs them before the stamp is pushed to pts_assoc.
+   * disp_pts pulses with the tag of each picture the display picks up. */
+  input            stream_mark;
+  input      [32:0]pts_in;
+  input            pts_in_valid;
+  output     [32:0]disp_pts;
+  output           disp_pts_valid;
 
   /* RGB output */
   output      [7:0]r;                       // red component
@@ -443,6 +455,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire              pic_informative;    // DVD-FORK (film evidence gate): this picture carried real evidence
   wire              informative_commit; // DVD-FORK (film evidence gate): pic_informative valid for the current slot
   wire              output_informative; // DVD-FORK (film evidence gate): display-order verdict, from picbuf
+  wire        [32:0]output_pts;         // DVD-FORK (PTS association): tag of the picture at picbuf's output
+  wire              output_pts_valid;
+  wire              output_pts_2nd;
   /* DVD-FORK (line-21 CC): straight passthrough of the VLD's user_data snoop to
    * the top level. Sniffed in the clk_dec domain and crossed to clk_sys by the
    * inserter's own fifo_dc — see dvd/cc_line21.sv. */
@@ -886,7 +901,107 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .vid_in(stream_data),                                    // program stream input
     .vid_in_wr_en(stream_valid),                             // program stream input
     .vid_out(vbw_wr_dta),                                    // to vbuf_write_fifo
-    .vid_out_wr_en(vbw_wr_en)                                // to vbuf_write_fifo
+    .vid_out_wr_en(vbw_wr_en),                               // to vbuf_write_fifo
+    .phase(vbw_phase)                                        // DVD-FORK (PTS association): packer byte phase
+    );
+
+  /* DVD-FORK (PTS association): the exact byte position the NEXT stream byte
+   * will occupy in the VBUF, in the vld's parse-position coordinate. The
+   * arithmetic lives in dvd/vbuf_pos.sv so bench/dvd/pts_chain_tb.sv exercises
+   * the same module this core builds. */
+  wire  [7:0] vbw_phase;
+  wire [25:0] vbuf_wr_cnt;
+  wire        vbuf_wr_pulse;
+  wire [28:0] stream_pos;
+  vbuf_pos vbuf_pos (
+    .clk(clk),
+    .vbuf_rst(vbuf_rst),
+    .vbw_wr_en(vbw_wr_en),
+    .vbuf_wr_pulse(vbuf_wr_pulse),
+    .vbuf_wr_cnt(vbuf_wr_cnt),
+    .phase(vbw_phase),
+    .stream_pos(stream_pos)
+    );
+
+  /* DVD-FORK (PTS association): pair each PTS with its mark. Marks arrive
+   * through the byte path (stream_valid && stream_mark) at the packer, PTS
+   * values through pts_cdc; whichever comes second completes a stamp. Two
+   * small in-order queues; both are reset with the write fifo's flush reset so
+   * a stale half from before a seek can never pair with a fresh one after it. */
+  reg  [32:0] ptsq_pts [0:3];
+  reg  [28:0] mrkq_pos [0:3];
+  reg   [2:0] ptsq_cnt, mrkq_cnt;
+  wire        mark_now  = stream_valid && stream_mark;
+  wire        pair_now  = (ptsq_cnt != 3'd0) && (mrkq_cnt != 3'd0);
+  reg         stamp_valid;
+  reg  [32:0] stamp_pts;
+  reg  [28:0] stamp_pos;
+  integer     pq;
+  always @(posedge clk)
+    if (~vbuf_rst) begin
+      ptsq_cnt <= 3'd0; mrkq_cnt <= 3'd0; stamp_valid <= 1'b0;
+      stamp_pts <= 33'd0; stamp_pos <= 29'd0;
+    end else begin
+      stamp_valid <= pair_now;
+      if (pair_now) begin
+        stamp_pts <= ptsq_pts[0];
+        stamp_pos <= mrkq_pos[0];
+      end
+      // PTS queue: shift on pair, land the new one after the shift
+      if (pair_now)
+        for (pq = 0; pq < 3; pq = pq + 1) ptsq_pts[pq] <= ptsq_pts[pq+1];
+      if (pts_in_valid && (ptsq_cnt != 3'd4))
+        for (pq = 0; pq < 4; pq = pq + 1)
+          if (pq == (pair_now ? ptsq_cnt - 3'd1 : ptsq_cnt)) ptsq_pts[pq] <= pts_in;
+      case ({pts_in_valid && (ptsq_cnt != 3'd4), pair_now})
+        2'b10:   ptsq_cnt <= ptsq_cnt + 3'd1;
+        2'b01:   ptsq_cnt <= ptsq_cnt - 3'd1;
+        default: ptsq_cnt <= ptsq_cnt;
+      endcase
+      // mark queue
+      if (pair_now)
+        for (pq = 0; pq < 3; pq = pq + 1) mrkq_pos[pq] <= mrkq_pos[pq+1];
+      if (mark_now && (mrkq_cnt != 3'd4))
+        for (pq = 0; pq < 4; pq = pq + 1)
+          if (pq == (pair_now ? mrkq_cnt - 3'd1 : mrkq_cnt)) mrkq_pos[pq] <= stream_pos;
+      case ({mark_now && (mrkq_cnt != 3'd4), pair_now})
+        2'b10:   mrkq_cnt <= mrkq_cnt + 3'd1;
+        2'b01:   mrkq_cnt <= mrkq_cnt - 3'd1;
+        default: mrkq_cnt <= mrkq_cnt;
+      endcase
+    end
+
+  /* DVD-FORK (PTS association): the picture header's start-code position in
+   * bytes (the vld saw the header 32 bits past it), registered off the vld's
+   * latched value so nothing new hangs off the header state itself. */
+  reg  [23:0] hdr_pos;
+  reg         hdr_pulse_r, hdr_second_r;
+  wire [31:0] hdr_sc_bits = pic_hdr_bitpos - 32'd32;
+  always @(posedge clk)
+    if (~sync_rst) begin hdr_pulse_r <= 1'b0; hdr_pos <= 24'd0; hdr_second_r <= 1'b0; end
+    else begin
+      hdr_pulse_r  <= pic_hdr_pulse;
+      hdr_pos      <= hdr_sc_bits[26:3];
+      hdr_second_r <= pic_hdr_second;
+    end
+
+  wire [32:0] vld_pic_pts;
+  wire        vld_pic_pts_valid, vld_pic_pts_2nd, pts_commit;
+  pts_assoc #(.DEPTH(16), .PW(24), .MIN_GAP_W(17)) pts_assoc (
+    .clk(clk),
+    .rst_n(sync_rst),
+    .flush(flush_vbuf_eff),
+    .stamp_valid(stamp_valid),
+    .stamp_pts(stamp_pts),
+    .stamp_pos(stamp_pos[23:0]),
+    .hdr_pulse(hdr_pulse_r),
+    .hdr_pos(hdr_pos),
+    .hdr_second(hdr_second_r),
+    .tag_valid(vld_pic_pts_valid),
+    .tag_pts(vld_pic_pts),
+    .tag_second(vld_pic_pts_2nd),
+    .tag_commit(pts_commit),
+    .dbg_ovf()
     );
 
   /* vbuf write fifo */
@@ -938,6 +1053,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire [31:0] vld_bitpos;
   wire        pic_hdr_pulse, pic_hdr_upd, pic_hdr_second;
   wire [31:0] pic_hdr_bitpos;
+  wire        skip_ack, skip_rff, skip_field;
 
   getbits_fifo getbits_fifo (
     .clk(clk), 
@@ -1058,7 +1174,10 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .pic_hdr_pulse(pic_hdr_pulse),
     .pic_hdr_bitpos(pic_hdr_bitpos),
     .pic_hdr_upd(pic_hdr_upd),
-    .pic_hdr_second(pic_hdr_second)
+    .pic_hdr_second(pic_hdr_second),
+    .skip_ack(skip_ack),                                     // DVD-FORK (PTS scheduling): any-reason drop, for the display scheduler
+    .skip_rff(skip_rff),
+    .skip_field(skip_field)
     );
 
   /* DVD-FORK (frame-drop governor, O[19]): catch-up credit controller. Banks a "drop
@@ -1313,6 +1432,13 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .pic_informative(pic_informative),                       // DVD-FORK (film evidence gate): from vld
     .informative_commit(informative_commit),                 // DVD-FORK (film evidence gate): from vld
     .output_informative(output_informative),                 // DVD-FORK (film evidence gate): to resample
+    .vld_pic_pts(vld_pic_pts),                               // DVD-FORK (PTS association): from pts_assoc
+    .vld_pic_pts_valid(vld_pic_pts_valid),
+    .vld_pic_pts_2nd(vld_pic_pts_2nd),
+    .pts_commit(pts_commit),
+    .output_pts(output_pts),                                 // DVD-FORK (PTS association): to resample
+    .output_pts_valid(output_pts_valid),
+    .output_pts_2nd(output_pts_2nd),
     .progressive_sequence(progressive_sequence),             // from vld
     .progressive_frame(progressive_frame),                   // from vld
     .top_field_first(top_field_first),                       // from vld
@@ -1427,6 +1553,11 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .progressive_sequence(output_progressive_sequence),      // from motcomp_picbuf
     .progressive_frame(output_progressive_frame),            // from motcomp_picbuf
     .informative(output_informative),                        // DVD-FORK (film evidence gate): from motcomp_picbuf
+    .output_pts(output_pts),                                 // DVD-FORK (PTS association): from motcomp_picbuf
+    .output_pts_valid(output_pts_valid),
+    .output_pts_2nd(output_pts_2nd),
+    .disp_pts(disp_pts),                                     // DVD-FORK (PTS association): out
+    .disp_pts_valid(disp_pts_valid),
     .top_field_first(output_top_field_first),                // from motcomp_picbuf
     .repeat_first_field(output_repeat_first_field),          // from motcomp_picbuf
     .mb_width(mb_width),                                     // from vld
@@ -1865,7 +1996,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .tag_wr_almost_full(tag_wr_almost_full),
     .tag_wr_full(tag_wr_full),
     .tag_wr_overflow(tag_wr_overflow),
-    .dbg_vbuf_fill(dbg_vbuf_fill)                     // DVD-FORK DEBUG: VBUF occupancy tap
+    .dbg_vbuf_fill(dbg_vbuf_fill),                    // DVD-FORK DEBUG: VBUF occupancy tap
+    .vbuf_wr_cnt(vbuf_wr_cnt),                        // DVD-FORK (PTS association): words written since the flush
+    .vbuf_wr_pulse(vbuf_wr_pulse)
     );
 
   /*

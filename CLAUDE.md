@@ -748,6 +748,46 @@ worse maintenance burden than targeted in-place edits. So:
   the raster switch (`Film 24p = On` shows it too), and NOT the VBUF cap (Shallow changed
   nothing). An imported "anchor the STC on the screen" fix made it WORSE (1800 ms + stream
   freezes) and is not merged — see `docs/av_sync.md` "HW round 3" before touching it.
+- 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06,
+  branch `feature/stc-freerun`, `dev-stcfree`). STAGE 0 IN FABRIC, sim-proven, ⏳ HW
+  round A pending; Stage 1 next. Design + status record: `docs/stc_freerun.md`.**
+  ★★ **Every A/V-sync defect since the governor shipped is ONE defect: the STC counted
+  refreshes from a PARSE-front anchor and the display never consulted a PTS after
+  it**, so whatever sat between the demux and the screen (the VBUF, 0.5–1.8 s,
+  bitrate-dependent) became the A/V offset — Film 24p −945 ms, every "skew cured by a
+  chapter skip" report, the menu lip-sync exemptions. The archived branch
+  `feature/audio-delay-ddr` (never merged) got film24 to ~−175 ms with a decoder-front
+  proxy clock and designed a 2 MB DDR audio-delay ring; both treat the buffer as the
+  problem. This does what a set-top box does: **a 90 kHz clock off the same 27 MHz
+  crystal as the raster and the audio NCO (rate locked by construction), and both media
+  presented at their PTS against it.** Buffer depth becomes latency, not offset.
+  ⛔ The "video is the master timebase / two crystals" premise in `docs/av_sync.md` was
+  false and is superseded; the EXONERATED / FAILED lists there still hold.
+  **Stage 0 (no behaviour change):** exact PTS→picture association through the decoder.
+  The demux marks the first payload byte of a PTS-bearing PES (`vid_mark`, riding the
+  byte through a 9-bit `vidfeed_cdc`); `dvd/vbuf_pos.sv` gives that byte's VBUF position
+  exactly (words written + write-fifo pending + this cycle's push + packer phase);
+  `getbits_fifo.bitpos` gives the vld's parse position from the same flush;
+  `dvd/pts_assoc.sv` pops a stamp at the first picture header at/after it (the MPEG
+  rule, ISO 13818-1 2.4.3.7) and the tag rides `motcomp_picbuf` as a fifth slot
+  attribute (`output_pts`) to `resample_addrgen`. Telemetry word 11 `disp_lag` =
+  displayed PTS − STC is the acceptance signal: ≈ −1 s film24 / −0.2 s interlaced
+  before Stage 1, ~0 after.
+  ★ **Two things measured, not assumed:** the start code sits 32 bits before the
+  header position (57/57 + 220/220 exact, `pts_assoc_tb [A]`), and `vbuf_write`
+  raises its push strobe the cycle AFTER a word's eighth byte, so a mark on the next
+  byte counted one word short (−8 B, `pts_chain_tb`) until the strobe was added.
+  ★ **A real pre-existing defect fixed en route: up to 32 VBUF reads are in flight at a
+  flush and their responses landed in the read FIFO AFTER its reset** — the decoder
+  swallowed up to 256 stale bytes of the old stream after every seek. Reads now carry
+  the flush parity in their memory tag (`TAG_VBUF1`, spare code 7, toggled on the
+  flush's RISING edge — it is a 192-cycle level) and `framestore_response` drops the
+  other epoch. Gate: `bench/dvd/run_pts_assoc.sh` (RED arm rebuilds the response with
+  the epoch compare removed and must fail).
+  ⚠ DVDs carry a video PTS about once per VOBU (~11 pictures; 260–372 KB/PTS measured
+  on four discs), so Stage 1 extrapolates between tags from the picture flags and
+  `frame_rate_code` and needs the vld's new any-reason `skip_ack` (governor AND realign
+  drops) to keep that timeline honest.
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
   PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
   no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**

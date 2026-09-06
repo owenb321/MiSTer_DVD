@@ -33,9 +33,14 @@ if [ -f "$VOB" ]; then
   python3 tools/pts_map.py --file "$VOB" --skip 4000000 --bytes 2000000 --cut "$FIX/pts_sync"
 fi
 
-iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/pts_assoc_sim \
-    rtl/mpeg2/vld.v rtl/mpeg2/getbits.v bench/dvd/pts_assoc_tb.sv
+CHAIN_SRC="rtl/mpeg2/vld.v rtl/mpeg2/getbits.v rtl/mpeg2/vbuf.v rtl/mpeg2/framestore.v \
+  rtl/mpeg2/framestore_request.v rtl/mpeg2/framestore_response.v rtl/mpeg2/synchronizer.v \
+  rtl/mpeg2/wrappers.v rtl/mpeg2/fwft.v rtl/mpeg2/xfifo_sc.v rtl/mpeg2/xilinx_fifo_dc.v \
+  rtl/mpeg2/read_write.v dvd/vbuf_pos.sv dvd/pts_assoc.sv"
 
+# ---- [A] position, real vld over the ES ------------------------------------
+iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/pts_assoc_sim \
+    rtl/mpeg2/vld.v rtl/mpeg2/getbits.v dvd/pts_assoc.sv bench/dvd/pts_assoc_tb.sv
 for stem in pts_apollo pts_sync; do
   if [ -f "$FIX/$stem.hex" ]; then
     echo "== pts_assoc_tb $stem =="
@@ -44,6 +49,45 @@ for stem in pts_apollo pts_sync; do
     echo "== pts_assoc_tb $stem: SKIPPED (no fixture) =="
   fi
 done
+
+# ---- [C] the VBUF path across a flush (epoch-tagged reads, vbuf_pos) --------
+# A shorter cut: the real vld through the real framestore is slow, and the
+# flush hazard needs only a few pictures either side of it.
+if [ -n "$APOLLO" ]; then
+  python3 tools/pts_map.py "$APOLLO" --start-frac 0.05 --sectors 330 --cut "$FIX/pts_apollo_s"
+fi
+if [ -f "$FIX/pts_apollo_s.hex" ]; then
+  echo "== pts_chain_tb (GREEN) =="
+  iverilog -g2012 -D__IVERILOG__ -I dvd/mem_override -I rtl/mpeg2 -o bench/dvd/pts_chain_sim \
+      $CHAIN_SRC bench/dvd/pts_chain_tb.sv
+  vvp bench/dvd/pts_chain_sim +STEM="$FIX/pts_apollo_s" | grep -v '^VCD' || rc=1
+
+  # RED: framestore_response accepting BOTH epochs = the pre-fix routing (every
+  # in-flight read lands in the read fifo after the flush). Rebuilt from the
+  # shipping source so the arm cannot rot into a copy of an RTL that no longer
+  # exists; it must FAIL [C2]/[C3].
+  echo "== pts_chain_tb (RED: epoch compare removed; must FAIL) =="
+  red=$(mktemp -d)
+  python3 - "$red" <<'PYEOF'
+import sys
+s = open('rtl/mpeg2/framestore_response.v').read()
+old = "vbr_wr_en <= (tag_rd_dta == (vbuf_epoch ? TAG_VBUF1 : TAG_VBUF)) && tag_rd_valid;"
+assert old in s, "RED patch anchor moved -- update run_pts_assoc.sh"
+s = s.replace(old, "vbr_wr_en <= ((tag_rd_dta == TAG_VBUF) || (tag_rd_dta == TAG_VBUF1)) && tag_rd_valid;")
+open(sys.argv[1] + '/framestore_response.v', 'w').write(s)
+PYEOF
+  iverilog -g2012 -D__IVERILOG__ -I dvd/mem_override -I rtl/mpeg2 -o "$red/pts_chain_red" \
+      $(echo $CHAIN_SRC | sed "s#rtl/mpeg2/framestore_response.v#$red/framestore_response.v#") \
+      bench/dvd/pts_chain_tb.sv
+  if vvp "$red/pts_chain_red" +STEM="$FIX/pts_apollo_s" | grep -v '^VCD' | tee "$red/red.log" | grep -q "^FAIL \[C[23]\]"; then
+    echo "  RED arm failed as it must ($(grep -c '^FAIL' "$red/red.log") FAIL lines)"
+  else
+    echo "  RED arm did NOT fail -- the epoch check is not load-bearing"; rc=1
+  fi
+  rm -rf "$red"
+else
+  echo "== pts_chain_tb: SKIPPED (no fixture) =="
+fi
 
 [ $rc -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES (rc=$rc) =="
 exit $rc

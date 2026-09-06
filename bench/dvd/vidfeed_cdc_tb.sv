@@ -22,14 +22,15 @@ module vidfeed_cdc_tb;
     reg  [7:0] wr_data;
     reg        wr_valid;
     wire       wr_ready;
-    wire [7:0] rd_data;
+    wire [8:0] rd_data9;          // 9 bits since the PTS mark rides with the byte (docs/stc_freerun.md)
+    wire [7:0] rd_data = rd_data9[7:0];
     wire       rd_valid;
     reg        rd_ready;
 
     vidfeed_cdc dut (
         .rst_n(rst_n),
-        .wr_clk(wr_clk), .wr_data(wr_data), .wr_valid(wr_valid), .wr_ready(wr_ready),
-        .rd_clk(rd_clk), .rd_data(rd_data), .rd_valid(rd_valid), .rd_ready(rd_ready)
+        .wr_clk(wr_clk), .wr_data({1'b0, wr_data}), .wr_valid(wr_valid), .wr_ready(wr_ready),
+        .rd_clk(rd_clk), .rd_data(rd_data9), .rd_valid(rd_valid), .rd_ready(rd_ready)
     );
 
     // ---- write side: present bytes in order, advance only on valid&ready ----

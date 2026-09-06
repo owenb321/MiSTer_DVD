@@ -35,6 +35,7 @@ module resample(
   output_frame, output_frame_valid, output_frame_rd,
   progressive_sequence, progressive_frame, top_field_first, repeat_first_field, mb_width, mb_height, horizontal_size, vertical_size, resample_wr_overflow,
   informative,                    // DVD-FORK (film evidence gate): this displayed picture carried real evidence
+  output_pts, output_pts_valid, output_pts_2nd, disp_pts, disp_pts_valid,   // DVD-FORK (PTS association): the picture's PTS tag in, the picked-up picture's PTS out
   disp_wr_addr_full, disp_wr_addr_almost_full, disp_wr_addr_en, disp_wr_addr_ack, disp_wr_addr, disp_rd_dta_empty, disp_rd_dta_en, disp_rd_dta_valid, disp_rd_dta,
   pixel_wr_almost_full, interlaced, deinterlace, persistence, repeat_frame,
   y, u, v, osd_out, position_out, pixel_wr_en,
@@ -63,6 +64,11 @@ module resample(
   input             progressive_sequence;
   input             progressive_frame;
   input             informative;  // DVD-FORK (film evidence gate)
+  input       [32:0]output_pts;       // DVD-FORK (PTS association): tag of the picture at picbuf's output
+  input             output_pts_valid;
+  input             output_pts_2nd;
+  output      [32:0]disp_pts;         // DVD-FORK (PTS association): the tag of the picture just picked up (pulse)
+  output            disp_pts_valid;
   input             top_field_first;
   input             repeat_first_field;
   input        [7:0]mb_width;                  // par. 6.3.3. width of the encoded luminance component of pictures in macroblocks
@@ -140,6 +146,11 @@ module resample(
     .progressive_sequence(progressive_sequence), 
     .progressive_frame(progressive_frame), 
     .informative(informative),                               // DVD-FORK (film evidence gate)
+    .output_pts(output_pts),                                 // DVD-FORK (PTS association)
+    .output_pts_valid(output_pts_valid),
+    .output_pts_2nd(output_pts_2nd),
+    .disp_pts(disp_pts),
+    .disp_pts_valid(disp_pts_valid),
     .top_field_first(top_field_first), 
     .repeat_first_field(repeat_first_field), 
     .mb_width(mb_width),

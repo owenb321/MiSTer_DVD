@@ -947,6 +947,17 @@ fit/STA reports to zero — consistent with the project's "validate on hardware"
 
 ### A/V Sync & audio clock (drift handling)
 
+> 🔧 **2026-09-06 — THE STC IS A CLOCK (`docs/stc_freerun.md`, branch `feature/stc-freerun`).**
+> The tiers below are superseded as the timing model: the STC becomes a free-running
+> 90 kHz counter off the same crystal as the raster and the audio NCO, the display is
+> scheduled by each picture's own PTS (threaded through the decoder as a fifth picbuf
+> attribute), and every consumer — menus included — reads the one clock. **Stage 0
+> (exact PTS→picture association + `disp_lag` telemetry, no behaviour change) is in
+> fabric, sim-proven, ⏳ HW round A pending.** Stage 1 (`dvd/disp_sched.sv`, the
+> free-running STC, the menu exemptions removed, the refresh-counting governor
+> deleted) follows. The archived `feature/audio-delay-ddr` work (decoder-front proxy
+> clock, DDR audio-delay ring) is NOT merged and is superseded.
+
 The fabric audio path (`docs/fabric_audio.md`) outputs at a fixed 48 kHz
 crystal-derived tick, while audio DATA arrives paced by the frame-rate governor
 (locked to the display refresh). If the display field rate doesn't exactly match the

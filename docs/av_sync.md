@@ -1,5 +1,22 @@
 # PTS-driven A/V sync — design & status
 
+> ## ★ 2026-09-06 — THE STC IS A CLOCK (`docs/stc_freerun.md`, branch `feature/stc-freerun`)
+>
+> The model below ("video is the master timebase; the STC counts refreshes from a
+> parse-front anchor; the display never consults a PTS after that") is being
+> REPLACED. Its premise — that video and audio could not share a crystal — was
+> never true: raster, audio NCO and now the STC all derive from the 27 MHz
+> `clk_sys`, so rate is locked by construction and only PHASE needs managing.
+> Every "skew cured by a chapter skip" report in this file, the Film 24p
+> audio-ahead defect and the menu lip-sync exemptions are one defect: buffer
+> depth leaking into the A/V offset because the picture was shown at a cadence,
+> not at its PTS. `docs/stc_freerun.md` is the design and status record:
+> Stage 0 (exact PTS→picture association through the decoder, `disp_lag`
+> telemetry) is in fabric; Stage 1 (the display scheduler and the free-running
+> STC, one clock for every consumer, menus included) follows. The sections
+> below remain the record of how the current design came to be and of what was
+> tried on the way; the EXONERATED / FAILED lists still hold.
+
 > ## ✅ WHERE THIS STANDS (2026-07-04, end of the PR fj#62 drift saga — READ THIS FIRST)
 >
 > **THE LIP-SYNC DRIFT SAGA IS CLOSED — HW-CONFIRMED (rounds 7–12,

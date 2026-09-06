@@ -104,6 +104,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/ac3/imdct_512.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ac3/pcm_out.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ddr_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/vidfeed_cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/vbuf_pos.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/pts_cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/pts_assoc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/debug_overlay.sv
 # DVD-FORK (subpicture/subtitle O15 + O[26:24]): SPU decoder + reusable alpha blend.
 # See docs/subpicture.md.

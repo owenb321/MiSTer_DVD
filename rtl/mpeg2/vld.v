@@ -57,7 +57,8 @@ module vld(clk, clk_en, rst,
   cc_pair_valid, cc_pair, cc_pair_field,                                                    // DVD-FORK (line-21 CC): EIA-608 byte pairs sniffed out of user_data
   mpeg1,                                                                                    // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
   vbuf_flush,                                                                               // DVD-FORK FIX (seek realign, issue #45): a VBUF flush happened — the references are now stale
-  bitpos, pic_hdr_pulse, pic_hdr_bitpos, pic_hdr_upd, pic_hdr_second                       // DVD-FORK (PTS association): where in the stream each picture header was parsed
+  bitpos, pic_hdr_pulse, pic_hdr_bitpos, pic_hdr_upd, pic_hdr_second,                      // DVD-FORK (PTS association): where in the stream each picture header was parsed
+  skip_ack, skip_rff, skip_field                                                            // DVD-FORK (PTS scheduling): a picture was dropped for ANY reason (governor or realign)
   );
 
   input            clk;                           // clock
@@ -320,6 +321,16 @@ module vld(clk, clk_en, rst,
   output reg [31:0]pic_hdr_bitpos;
   output reg       pic_hdr_upd;
   output reg       pic_hdr_second;
+
+  /* DVD-FORK (PTS scheduling): a picture was dropped, for EITHER reason -- the
+   * governor's B-drop or the post-flush reference re-align. drop_pic_ack below
+   * fires only for the governor's (it pays into the frame-drop ledger); the
+   * display scheduler needs every dropped picture's duration to keep its
+   * extrapolated timeline honest, so this pulses at the first skipped slice of
+   * any dropped picture, with the dropped picture's own rff and structure. */
+  output reg       skip_ack;
+  output reg       skip_rff;
+  output reg       skip_field;
 
   /* in sequence header */
   output wire[13:0]horizontal_size;
@@ -2632,6 +2643,26 @@ module vld(clk, clk_en, rst,
       end
     else
       informative_commit <= 1'b0;
+
+  /* DVD-FORK (PTS scheduling): the any-reason sibling of drop_pic_ack. */
+  wire skip_slice_hit = (state == STATE_START_CODE) && drop_this_picture &&
+                        (getbits[7:0] >= 8'h01) && (getbits[7:0] <= 8'haf);
+  reg  skip_acked;
+  always @(posedge clk)
+    if (~rst) begin
+      skip_ack   <= 1'b0;
+      skip_rff   <= 1'b0;
+      skip_field <= 1'b0;
+      skip_acked <= 1'b0;
+    end else if (clk_en) begin
+      if (state == STATE_PICTURE_HEADER) skip_acked <= 1'b0;
+      skip_ack <= skip_slice_hit && ~skip_acked;
+      if (skip_slice_hit && ~skip_acked) begin
+        skip_acked <= 1'b1;
+        skip_rff   <= drop_rff_lat;
+        skip_field <= (drop_ps_lat == 2'd1) || (drop_ps_lat == 2'd2);
+      end
+    end else skip_ack <= 1'b0;
 
   always @(posedge clk)
     if (~rst) begin

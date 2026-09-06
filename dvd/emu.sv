@@ -938,7 +938,10 @@ dvd_telem dvd_telem_inst (
     .aud_frames (aud_frames_avail),
     .flags      ({3'b0, menu_active, still_active, video_live_s2, pause_q, media_seen}),
     .aud_play   (aud_play_cnt),          // clk_sys: play ticks/16 reaching the DAC
-    .aud_gate   (aud_gate_cnt)           // clk_sys: drain-gate closures
+    .aud_gate   (aud_gate_cnt),          // clk_sys: drain-gate closures
+    .disp_lag   (av_disp_lag[19:4]),     // clk_sys: displayed PTS - STC (word 11)
+    .play_err   (dbg_aud_play_err),      // clk_sys: audio position vs anchor (word 12)
+    .av_drift   (av_drift[19:4])         // clk_sys: dispatched audio PTS - STC (word 13)
 );
 
 
@@ -955,6 +958,7 @@ wire [7:0] demux_in_byte;     // ps_stream_fifo -> ps_demux
 wire       demux_in_valid;
 wire       demux_in_ready;
 wire [7:0] ps_vid_byte;       // ps_demux -> mpeg2video
+wire       ps_vid_mark;       // DVD-FORK (PTS association): first payload byte of a PTS-bearing video PES
 wire       ps_vid_valid;
 
 wire       ps_demux_in_ready;   // ps_demux's own ready (input handshake)
@@ -2666,6 +2670,7 @@ ps_demux ps_demux_inst (
     // stream crosses domains through a dual-clock FIFO. vid_ready = FIFO not full.
     .vid_byte     (ps_vid_byte),
     .vid_valid    (ps_vid_valid),
+    .vid_mark     (ps_vid_mark),        // DVD-FORK (PTS association)
     .vid_ready    (vidfeed_wr_ready),
 
     // Audio path -> audio_ring (clk_sys). aud_ready stays high (audio_ring
@@ -3431,16 +3436,37 @@ ddr_arb ddr_arb_inst (
 // core_busy toggled mid-pop, garbling EVERY clip incl. susi.)
 wire       vidfeed_wr_ready;
 wire [7:0] dec_stream_data;
+wire       dec_stream_mark;    // DVD-FORK (PTS association): rides with its byte through the CDC
 wire       dec_stream_valid;   // 1 = byte consumed by decoder this cycle
+
+// DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"): the video
+// PTS crosses into the decoder clock beside its marked byte (mpeg2video pairs
+// them), and the tag of every picture the display picks up crosses back so
+// telemetry word 11 can report disp_lag = displayed PTS - STC: the picture on
+// SCREEN against the clock the audio is scheduled by. Stage 0 measures it;
+// Stage 1 (the display scheduler) is what drives it to ~0.
+wire [32:0] dec_pts_in;     wire dec_pts_in_valid;       // clk_dec
+wire [32:0] dec_disp_pts;   wire dec_disp_pts_valid;     // clk_dec
+wire [32:0] disp_pts_sys;   wire disp_pts_sys_valid;     // clk_sys
+pts_cdc #(.W(33)) pts_cdc_in (
+    .src_clk(clk_sys), .src_rst_n(pipe_rst_n), .src_data(ps_vid_pts), .src_valid(ps_vid_pts_valid),
+    .dst_clk(clk_dec), .dst_rst_n(pipe_rst_n), .dst_data(dec_pts_in), .dst_valid(dec_pts_in_valid));
+pts_cdc #(.W(33)) pts_cdc_disp (
+    .src_clk(clk_dec), .src_rst_n(reset_n), .src_data(dec_disp_pts), .src_valid(dec_disp_pts_valid),
+    .dst_clk(clk_sys), .dst_rst_n(reset_n), .dst_data(disp_pts_sys), .dst_valid(disp_pts_sys_valid));
+reg signed [33:0] av_disp_lag;                            // latched at each pickup, modular 33-bit
+always @(posedge clk_sys)
+    if (!reset_n)                av_disp_lag <= 34'sd0;
+    else if (disp_pts_sys_valid) av_disp_lag <= $signed({1'b0, disp_pts_sys}) - $signed({1'b0, av_stc});
 
 vidfeed_cdc vidfeed_cdc_inst (
     .rst_n    (reset_n),
     .wr_clk   (clk_sys),
-    .wr_data  (ps_vid_byte),
+    .wr_data  ({ps_vid_mark, ps_vid_byte}),   // DVD-FORK (PTS association): 9 bits, the mark rides with its byte
     .wr_valid (ps_vid_valid),
     .wr_ready (vidfeed_wr_ready),
     .rd_clk   (clk_dec),
-    .rd_data  (dec_stream_data),
+    .rd_data  ({dec_stream_mark, dec_stream_data}),
     .rd_valid (dec_stream_valid),
     .rd_ready (~core_busy)
 );
@@ -3721,6 +3747,11 @@ mpeg2video mpeg2video_inst (
 
     .stream_data  (dec_stream_data),   // <- vidfeed_dc CDC (clk_sys -> clk_dec)
     .stream_valid (dec_stream_valid),  // byte actually consumed this cycle (1:1)
+    .stream_mark  (dec_stream_mark),   // DVD-FORK (PTS association): first payload byte of a PTS-bearing PES
+    .pts_in       (dec_pts_in),        // DVD-FORK (PTS association): that PES's PTS, crossed into clk_dec
+    .pts_in_valid (dec_pts_in_valid),
+    .disp_pts     (dec_disp_pts),      // DVD-FORK (PTS association): tag of each picture the display picks up
+    .disp_pts_valid (dec_disp_pts_valid),
 
     .reg_addr   (seq_run ? wr_addr : 4'b0),    // DVD-FORK FIX (interlaced cadence): modeline writes
     .reg_wr_en  (seq_run),

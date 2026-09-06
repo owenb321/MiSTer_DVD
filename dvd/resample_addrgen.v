@@ -30,6 +30,7 @@ module resample_addrgen (
   output_frame, output_frame_valid, output_frame_rd,
   progressive_sequence, progressive_frame, top_field_first, repeat_first_field, mb_width, mb_height, horizontal_size, vertical_size,
   informative,               // DVD-FORK (film evidence gate): this displayed picture carried real evidence
+  output_pts, output_pts_valid, output_pts_2nd, disp_pts, disp_pts_valid,   // DVD-FORK (PTS association)
   interlaced, deinterlace, persistence, repeat_frame,
   disp_wr_addr_full, disp_wr_addr_en, disp_wr_addr_ack, disp_wr_addr,
   resample_wr_dta, resample_wr_en,
@@ -72,6 +73,15 @@ module resample_addrgen (
   input             progressive_sequence;
   input             progressive_frame;
   input             informative;      // DVD-FORK (film evidence gate) — see the gate note at the detector
+  /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"): the PTS
+   * tag of the picture waiting at picbuf's output, and -- pulsed at the pickup --
+   * the tag of the picture the display just took. Stage 0 only reports it
+   * (telemetry disp_lag = disp_pts - STC); the display scheduler is Stage 1. */
+  input       [32:0]output_pts;
+  input             output_pts_valid;
+  input             output_pts_2nd;
+  output reg  [32:0]disp_pts;
+  output reg        disp_pts_valid;
   input             top_field_first;
   input             repeat_first_field;
   input         [7:0]mb_width;                 // par. 6.3.3. width of the encoded luminance component of pictures in macroblocks
@@ -793,6 +803,18 @@ module resample_addrgen (
   always @(posedge clk)
     if (~rst) pickup_cnt <= 16'd0;
     else if (clk_en && (state == STATE_INIT) && pickup_go) pickup_cnt <= pickup_cnt + 16'd1;
+
+  /* DVD-FORK (PTS association): the picked-up picture's tag, one pulse per
+   * pickup that carried one (a second-field tag names the second field: one
+   * field period later than the frame's first field). */
+  always @(posedge clk)
+    if (~rst) begin
+      disp_pts       <= 33'd0;
+      disp_pts_valid <= 1'b0;
+    end else begin
+      disp_pts_valid <= clk_en && (state == STATE_INIT) && pickup_go && output_pts_valid;
+      if (clk_en && (state == STATE_INIT) && pickup_go) disp_pts <= output_pts;
+    end
 
   /*
    * DVD-FORK (frame-drop governor, O[19]/O[12]): deadline-miss detector. STATE_REPEAT is a
