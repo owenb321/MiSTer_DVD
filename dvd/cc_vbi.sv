@@ -22,13 +22,20 @@
  *     inserter used to live in. Field 1 = ~v_pos[0]: the SYNC-SIGNATURE
  *     derivation pinned by bench/dvd/cc_field_map_tb.sv (SMPTE 170M field 1 =
  *     the line-aligned vsync; NTSC content is bottom-field-first, so picture
- *     parity never identifies the broadcast field).
+ *     parity never identifies the broadcast field). ★ WHICH v_pos parity that is now
+ *     comes from `FIELD1_VPOS` in rtl/mpeg2/field_polarity.vh, shared with syncgen.v
+ *     and csync_smpte.sv — it changed 2026-09-06 on a hardware measurement, and the
+ *     three must move together or the analog output tells a television one thing about
+ *     field order while this inserter believes another. ⚠ Line-21 CC is NOT a test of
+ *     that: our whole disc census finds FIELD 2 EMPTY on every disc, so nothing competes
+ *     for the slot and a consumer decoder shows C1 whichever field the data lands in.
  *   - `on` is asserted only outside active video (a mis-derived line number can
  *     cost a blanking line, never punch a hole in the picture) unless `test`
  *     (P1O[44] CC Test Line) deliberately paints it on visible line 20.
  * NTSC only (EIA-608 line 21); `pal` forces it off.
  */
 `include "timescale.v"
+`include "field_polarity.vh"   // FIELD1_VPOS — shared with syncgen.v and csync_smpte.sv
 `default_nettype none   // see the note in dvd/cc_line21.sv (round-3 lesson)
 
 module cc_vbi (
@@ -58,7 +65,7 @@ module cc_vbi (
 
 wire [11:0] cc_vline  = test ? 12'd20 : 12'd261;      // NTSC vertical_length
 wire        cc_line_w = ~pal & (v_pos[11:1] == cc_vline);
-wire        cc_fld1_w = ~v_pos[0];
+wire        cc_fld1_w = (v_pos[0] == `FIELD1_VPOS);
 wire        level_en;
 
 cc_line21 cc (

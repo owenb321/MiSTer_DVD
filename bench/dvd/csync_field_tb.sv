@@ -205,6 +205,9 @@ module csync_field_tb;
   // pulse the detector happened to lock onto and hides the one that caused the miss.
   localparam integer WIDE_MIN = 250;               // ~9 us: wider than any hsync
   integer first_wide_a = -1, first_wide_b = -1;
+  integer fb_line_a = -1, fb_line_b = -1;
+  integer blk_ph_a, blk_ph_b;
+  reg     raster_first_a, blk_first_a;
   reg     wide_armed = 1'b1;
   integer wide_narrow = 0;
   reg     wd_armed = 1'b1;
@@ -226,8 +229,8 @@ module csync_field_tb;
       if ((dot - cs_rise) >= BROAD_MIN) begin
         if (wd_armed) begin
           wd_armed = 1'b0;
-          if (v_pos[0] == 1'b0) begin first_broad_a = dot - cs_rise; fb_rise_a = cs_rise; end
-          else                  begin first_broad_b = dot - cs_rise; fb_rise_b = cs_rise; end
+          if (v_pos[0] == 1'b0) begin first_broad_a = dot - cs_rise; fb_rise_a = cs_rise; fb_line_a = v_pos[11:1]; end
+          else                  begin first_broad_b = dot - cs_rise; fb_rise_b = cs_rise; fb_line_b = v_pos[11:1]; end
           wd_n = wd_n + 1;
           if (wd_last >= 0 && wd_n > 2) begin
             if (wd_n[0]) wd_sp_a = cs_rise - wd_last; else wd_sp_b = cs_rise - wd_last;
@@ -361,6 +364,24 @@ module csync_field_tb;
     $display("csync_field_tb: FIRST BROAD PULSE per field: A %0d clk27 (%0d.%0d us), B %0d clk27 (%0d.%0d us)",
              first_broad_a, first_broad_a/27, (first_broad_a*10/27)%10,
              first_broad_b, first_broad_b/27, (first_broad_b*10/27)%10);
+    // ---- [G8] the emitted block and the raster must name the SAME field as first ----
+    // Both sides are MEASURED, and neither reads FIELD1_VPOS: the raster's line-aligned
+    // field is whichever has the smaller vsync-to-hsync offset, and the emitted block's
+    // is whichever starts nearer an hsync. rtl/mpeg2/field_polarity.vh defines the
+    // polarity once for syncgen.v, csync_smpte.sv and cc_vbi.sv precisely so these
+    // cannot drift; this is the gate that proves they did not. A disagreement means the
+    // analog output tells a television one thing about field order while the raster and
+    // the caption inserter believe another — invisible in any single-module bench.
+    blk_ph_a = ((fb_rise_a % LINE) + LINE - HSS) % LINE;
+    blk_ph_b = ((fb_rise_b % LINE) + LINE - HSS) % LINE;
+    raster_first_a = (vs_off_a < vs_off_b);
+    blk_first_a    = (blk_ph_a  < blk_ph_b);
+    $display("csync_field_tb: [G8] line-aligned field — raster says %s (vsync %0d vs %0d clk27 after an hsync), emitted block says %s (block %0d vs %0d after an hsync)",
+             raster_first_a ? "A" : "B", vs_off_a, vs_off_b,
+             blk_first_a ? "A" : "B", blk_ph_a, blk_ph_b);
+    $display("csync_field_tb: EMITTED vertical interval per field: A starts in line %0d at H-phase %0d/%0d (%0d%% of a line), B in line %0d at H-phase %0d/%0d (%0d%%) — a CRT reads field order from THIS: one field must be line-aligned and the other half a line off",
+             fb_line_a, fb_rise_a % LINE, LINE, ((fb_rise_a % LINE) * 100) / LINE,
+             fb_line_b, fb_rise_b % LINE, LINE, ((fb_rise_b % LINE) * 100) / LINE);
     $display("csync_field_tb: first pulse WIDER THAN AN HSYNC per field: A %0d clk27 (%0d.%0d us), B %0d clk27 (%0d.%0d us) — where these differ from the line above, a 20 us width detector MISSED one field's first broad pulse and locked a line late",
              first_wide_a, first_wide_a/27, (first_wide_a*10/27)%10,
              first_wide_b, first_wide_b/27, (first_wide_b*10/27)%10);
@@ -449,12 +470,12 @@ module csync_field_tb;
     end else begin
       if (eq_bad == 0 && eq_n > 1000 && cen_bad == 0 && cong_bad == 0 && cong_n >= (N_PRE + N_BROAD + N_POST)
           && wd_bad == 0 && wd_pair_bad == 0 && wd_n >= 8 && int_bad == 0
-          && bad_hs == 0 && bad_vsw == 0)
+          && bad_hs == 0 && bad_vsw == 0 && (raster_first_a == blk_first_a))
         $display("PASS: csync_field_tb [%s] — both fields present the SAME sync waveform, both separator models trigger 262.5 lines apart every field, and picture lines are untouched",
                  (arm==0)?"SMPTE":"2H");
       else begin
-        $display("FAIL: csync_field_tb [%s] — [G1/G3] %0d mismatches/%0d clocks, [G4] %0d bad, [G5] %0d differ of %0d, [G6] width %0d per-field / %0d per-pair over %0d triggers, integrator %0d, [G7] %0d hsync / %0d vsync",
-                 (arm==0)?"SMPTE":"2H", eq_bad, eq_n, cen_bad, cong_bad, cong_n,
+        $display("FAIL: csync_field_tb [%s] — [G8] raster/block first-field agree: %0d; [G1/G3] %0d mismatches/%0d clocks, [G4] %0d bad, [G5] %0d differ of %0d, [G6] width %0d per-field / %0d per-pair over %0d triggers, integrator %0d, [G7] %0d hsync / %0d vsync",
+                 (arm==0)?"SMPTE":"2H", (raster_first_a == blk_first_a), eq_bad, eq_n, cen_bad, cong_bad, cong_n,
                  wd_bad, wd_pair_bad, wd_n, int_bad, bad_hs, bad_vsw);
         $fatal(1);
       end

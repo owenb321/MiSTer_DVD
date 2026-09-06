@@ -412,7 +412,15 @@ computes position combinationally for the cycle in progress (`pos`, `line_now`,
 ### 3.11 Field order: a knob, because the convention was asserted and never measured
 
 **Status (2026-09-05): `P1O[48] Field Order = Normal / Swap`, default Normal — no
-behavioural delta. ⏳ HW verdict pending.**
+behavioural delta.**
+
+⛔ **AMENDED 2026-09-06 — the central claim of this section is WRONG and §3.12 is the
+correction.** The RASTER's field assignment was the fault, and `syncgen.v`'s "flip both
+terms" advice was right. The knob itself stays and earned its keep: it is what ISOLATED the
+fault, because a control that moves both outputs together cannot fix a disagreement between
+them — when `Swap` fixed the CRT and broke HDMI, the fault had to be on the analog side
+alone. It remains a diagnostic and must not be shipped flipped. The reasoning below is kept
+because the error is the instructive part.
 
 `rtl/mpeg2/syncgen.v`'s derivation ends *"(If HW shows the fields spatially swapped, flip
 both terms.)"*, meaning `vs_ref_dot` and `eff_vertical_length`. **We flip the content
@@ -500,6 +508,87 @@ order":** a pure field swap is a **one**-unit correction, and the RT4K reporter 
 **−2**. If −2 survives both the SMPTE arm and `Field Order = Swap`, there is a third
 thing — a line-position offset in the vertical block or the DE window — and it gets chased
 separately.
+
+### 3.12 The field order was wrong, and the broken sync had been hiding it
+
+**Status (2026-09-06, same branch): found by HARDWARE, fixed, sim-gated, ⏳ HW-confirm
+pending.** `rtl/mpeg2/field_polarity.vh` `FIELD1_VPOS` 0 → 1.
+
+**The field report that found it**, on the §3.10 build, on the reference CRT:
+
+| `Analog CSync` | `Field Order` | CRT | HDMI |
+|---|---|---|---|
+| Stock | Normal | correct (= v0.4.0) | correct |
+| SMPTE / 2H | Normal | **wrong** | correct |
+| SMPTE / 2H | Swap | correct | **combed** |
+
+★ **Two outputs wanting opposite settings is the whole diagnosis.** `Field Order` moves the
+CONTENT mapping, which feeds both outputs, so it can never reconcile a disagreement
+*between* them — it can only move both. So something had moved the ANALOG field assignment
+relative to HDMI's, and that something was §3.10.
+
+**Measured** (`csync_field_tb`, the new `EMITTED vertical interval` and `[G8]` lines):
+
+| arm | field separation a separator sees | which field it calls first |
+|---|---|---|
+| Stock | **0.857 line** | the **opposite** one from the raster's |
+| SMPTE | **0.500 line** ✓ | the raster's own |
+
+Stock's width detector misses one field's 18 µs broad pulse and locks onto the next one a
+line later, which lands right at an H — so a television reading stock sync concludes the
+*other* field is field 1. **With that misreading in place, a content mapping that is off by
+one field looked correct.** Fixing the sync removed the misreading and exposed the error.
+HDMI never reads composite sync, so it was never mis-corrected — which is exactly why it
+stayed right while the CRT flipped.
+
+★★ **So `syncgen.v`'s original advice — "if HW shows the fields spatially swapped, flip both
+terms" — was RIGHT, and §3.11's "DO NOT" was wrong.** The reasoning behind the DO NOT was
+that the raster is inherited from the known-good N64 core. What is inherited is the
+262/263 + mid-line-vsync **mechanism**; the assignment of *our* two fields to it is ours,
+and it had never been tested, because until §3.10 no display could read it.
+
+★★★ **And the durable lesson, which cost a wrong "correction" in the previous change:**
+`bench/dvd/cc_field_map_tb.sv`'s header said *"TOP content displays inside SYNC field 2
+(NTSC is bottom-field-first: field 1 shows the bottom lines)"*. On 2026-09-05 that was
+deleted as an inverted stale comment, because **three other sites agreed against it**
+(`mixer.v:216`, `cc_vbi.sv:60`, `syncgen.v`). It was right. All three had been calibrated
+against a composite sync no display could read correctly, so **their agreement was not
+evidence** — it was three readings of one untested reference. Under `FIELD1_VPOS = 1` the
+raster puts TOP content (v_pos-even, per `mixer.v` and `VGA_F1`) in sync field 2, which is
+what that sentence always said. It is restored, with the history.
+
+**The fix is ONE constant, three consumers** — `rtl/mpeg2/field_polarity.vh`:
+
+| consumer | what it decides |
+|---|---|
+| `rtl/mpeg2/syncgen.v` | which field gets the line-aligned vsync and the SHORT total (the longer field must carry the mid-line vsync, or spacing becomes 263.5/261.5) |
+| `dvd/csync_smpte.sv` | which field's block opens on a line boundary rather than half a line in |
+| `dvd/cc_vbi.sv` | which field carries the line-21 field-1 services |
+
+⛔ **Not `mixer.v` and not `VGA_F1`** — those move HDMI and analog *together*, so they
+cannot fix a disagreement *between* them. `P1O[48] Field Order` remains a diagnostic; it is
+not the fix and must not be shipped flipped.
+
+**Gates.** New **[G8]** in `csync_field_tb`: the raster's line-aligned field and the emitted
+block's must be the same `v_pos` parity — **both measured, neither reading the constant**
+(the raster's is whichever vsync sits nearer an hsync; the block's likewise), so a consumer
+flipped in isolation fails. `cc_field_map_tb` and `cc_e2e_tb` now read the constant instead
+of hardcoding a polarity, so they check the *relationship* rather than pinning whatever was
+true when they were written; `cc_field_map_tb` is mutation-checked (invert `syncgen`'s
+`field1` alone → 8 errors). `crt_syncgen_tb` passes **unchanged**, which is the evidence
+that the flip preserves every timing invariant — 262.5-line spacing, 3.0-line widths, exact
+field-pair totals — and swaps only *which* field is which.
+
+⚠⚠ **LINE-21 CC IS NOT A TEST OF FIELD ORDER, and it was proposed as one.** Our census finds
+**field 2 empty on every disc**, so nothing competes for the slot and a consumer decoder
+shows C1 whichever field the data lands in. Captions decoded correctly in all six
+combinations of sync arm × field order on hardware — which says the chain works and says
+**nothing** about the mapping. A prediction whose failure mode is unobservable is not a
+prediction.
+
+⏳ **The HW test is now a single A/B:** `Field Order = Normal` must be correct on **both**
+HDMI and the CRT. `Analog CSync = Stock` will now look *wrong* on a CRT where it used to
+look right — that is expected and is the two errors no longer cancelling.
 
 ## 4. Tests
 

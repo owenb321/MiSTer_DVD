@@ -448,9 +448,48 @@ worse maintenance burden than targeted in-place edits. So:
   because a swap at phase 0 gives the corrector the same work as no swap at phase 1; a
   corrector that ignored the inverted verdict would leave content in the old slot and fail
   check C outright.
-  **Build:** `DVD_smptesync_20260906_0222.rbf`, SEED 5 FIRST roll despite two new CONF_STR
-  rows, clk_dec 95.35 @100C / 92.55 @-40C (gate 86.0), 91 % ALM.
-  Detail: `docs/single_raster_analog.md` §3.10 (sync shape) and §3.11 (field order).
+  ★★★ **AND FIXING THE SYNC EXPOSED A FIELD-ORDER ERROR THE BROKEN SYNC HAD BEEN HIDING
+  SINCE THE BEGINNING (2026-09-06, HW-found, `rtl/mpeg2/field_polarity.vh` `FIELD1_VPOS`
+  0 → 1).** Field report on the §3.10 build: `Stock`+`Normal` correct on both outputs
+  (= v0.4.0); `SMPTE`/`2H`+`Normal` **wrong on the CRT**, right on HDMI;
+  `SMPTE`/`2H`+`Swap` right on the CRT, **combed on HDMI**.
+  ★ **Two outputs wanting opposite settings IS the diagnosis:** `Field Order` moves the
+  CONTENT mapping, which feeds both, so it can never reconcile a disagreement BETWEEN
+  them — something had moved the ANALOG assignment alone. MEASURED (`csync_field_tb`
+  `[G8]`): stock leaves the fields **0.857 line** apart and its width detector misses one
+  field's 18 µs pulse, locking onto the next one a line later — so a TV concludes the
+  **opposite** field is field 1. **With that misreading in place, a content mapping off by
+  one field looked correct.** SMPTE gives 0.500 and the true assignment, exposing it.
+  HDMI never reads composite sync, so it was never mis-corrected.
+  ⛔ **The fix is the RASTER, not `mixer.v` and not `VGA_F1`** — those move HDMI and analog
+  together. ONE constant, three consumers (`syncgen.v` line-aligned vsync + short field
+  total; `csync_smpte.sv` block phase; `cc_vbi.sv` field-1 captions).
+  ★★ **`syncgen.v`'s original "flip both terms" advice was RIGHT and my §3.11 "DO NOT" was
+  wrong**: what is inherited from N64 is the 262/263 + mid-line-vsync MECHANISM, not the
+  assignment of OUR fields to it — and that had never been tested because no display could
+  read it.
+  ★★★ **THE DURABLE LESSON: `cc_field_map_tb`'s header said "TOP content displays inside
+  SYNC field 2 (NTSC is bottom-field-first)". On 2026-09-05 I deleted it as an inverted
+  stale comment because THREE other sites agreed against it. It was right — all three had
+  been calibrated against a sync no display could read, so their agreement was not
+  evidence, it was three readings of one untested reference.** Restored, with the history.
+  ⚠⚠ **LINE-21 CC IS NOT A TEST OF FIELD ORDER, and I proposed it as a decisive one.**
+  The census finds **field 2 empty on every disc**, so nothing competes for the slot and a
+  decoder shows C1 whichever field the data lands in — captions decoded in all six
+  sync × field-order combinations on HW, which says the chain works and NOTHING about the
+  mapping. A prediction whose failure mode is unobservable is not a prediction.
+  **New gate [G8]:** the raster's line-aligned field and the emitted block's must be the
+  same `v_pos` parity, **both measured, neither reading the constant**, so a consumer
+  flipped in isolation fails. `cc_field_map_tb` (mutation-checked) and `cc_e2e_tb` now read
+  the constant instead of pinning a polarity; `crt_syncgen_tb` passes UNCHANGED, which is
+  the evidence the flip preserves every timing invariant and swaps only which field is
+  which. ⏳ HW test is one A/B: `Field Order = Normal` correct on BOTH outputs.
+  ⚠ `Analog CSync = Stock` will now look WRONG on a CRT where it used to look right —
+  expected, the two errors no longer cancel.
+  **Build:** `DVD_smptesync_20260906_0222.rbf` (pre-field-fix), SEED 5 FIRST roll despite
+  two new CONF_STR rows, clk_dec 95.35 @100C / 92.55 @-40C (gate 86.0), 91 % ALM.
+  Detail: `docs/single_raster_analog.md` §3.10 (sync shape), §3.11 (the knob, and the
+  reasoning error), §3.12 (the field-order fix).
 - ✅ **MODE-SWITCH READER RE-ALIGN + PAL/NTSC VERDICT HARDENING (2026-09-03, issue #42,
   branch `fix/mode-switch-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03
   (user report: the freeze is gone; build `DVD_modeswitch_20260903_1538.rbf`, SEED 5 first

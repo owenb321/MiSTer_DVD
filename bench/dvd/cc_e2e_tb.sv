@@ -21,10 +21,11 @@
  * model, sampling at the pixel enable (858 samples per line):
  *
  *   [1] finds caption bursts in the VBI (never during DE),
- *   [2] classifies each field by the raster's own field marker (v_pos[0], which is
- *       what VGA_F1 carries since 2026-09-03);
- *       that it is the broadcast field 1 is proven by cc_field_map_tb (sync signature)
- *       and csync_field_tb (the analog pin),
+ *   [2] classifies each field by the raster's own field marker (v_pos[0]) against
+ *       `FIELD1_VPOS` (rtl/mpeg2/field_polarity.vh) — the ONE constant syncgen.v,
+ *       csync_smpte.sv and cc_vbi.sv all read. That the named field really is
+ *       broadcast field 1 is proven by cc_field_map_tb (sync signature) and
+ *       csync_field_tb [G8] (the analog pin, raster and emitted block agreeing),
  *   [3] demodulates each burst (slice at ~25 IRE, sample at bit centres) and
  *       requires the FIELD-1 pair on the field-1 line and the FIELD-2 pair on
  *       the field-2 line — the full slot-routing contract at the pins,
@@ -41,6 +42,7 @@
  *   vvp bench/dvd/cc_e2e_sim
  */
 `include "timescale.v"
+`include "field_polarity.vh"
 
 module cc_e2e_tb;
   // ---------------------------------------------------------------- clocks
@@ -219,19 +221,23 @@ module cc_e2e_tb;
     end
 
     if (out_vs && !vs_q) begin
-      // Classify the field. The MAIN raster is line-aligned in both fields on purpose
-      // (a half-line here combs ascal's weave — HW round 3), so the vsync position no
-      // longer distinguishes them; the 2:1 half-line is applied downstream, to the
-      // analog composite sync, by sys_top's csync. The raster's own field marker is
-      // v_pos[0] (what VGA_F1 carries since 2026-09-03), and that it marks the
-      // BROADCAST field-1 line-aligned
-      // vsync is proven by bench/dvd/cc_field_map_tb.sv (sync_gen with the analog
-      // half-line) and bench/dvd/csync_field_tb.sv (the csync pin, both fields
-      // 262.5 lines apart).
-      f1_field <= ~v_pos[0];
+      // Classify the field by the raster's own marker, v_pos[0], against the shared
+      // FIELD1_VPOS constant.
+      // ⚠ The paragraph that used to sit here said the main raster is "line-aligned in
+      // both fields on purpose (a half-line here combs ascal's weave — HW round 3), so
+      // the vsync position no longer distinguishes them; the 2:1 half-line is applied
+      // downstream by sys_top's csync". That describes the HW-round-3 arrangement, which
+      // was REVERTED: the half-line is on the main raster (the whole single-raster
+      // design, docs/single_raster_analog.md §3.1), so vsync position DOES distinguish
+      // the fields here.
+      // ⚠ FIELD1_VPOS changed 2026-09-06 on a hardware measurement; this bench must
+      // follow it rather than hardcode a polarity, or it pins whatever was true when it
+      // was written. cc_field_map_tb proves the constant names the line-aligned-vsync
+      // field; this bench proves the caption payloads are routed to the right slots.
+      f1_field <= (v_pos[0] == `FIELD1_VPOS);
       line_no  <= 0;
       if (verbose) $display("  vsync rise at h_dot=%0d v_pos=%0d (field %0s) line_no was %0d",
-                            h_dot, v_pos, (~v_pos[0]) ? "1" : "2", line_no);
+                            h_dot, v_pos, (v_pos[0] == `FIELD1_VPOS) ? "1" : "2", line_no);
     end
 
     // capture non-active luma; captions must NEVER coincide with out_de

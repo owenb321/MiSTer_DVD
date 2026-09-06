@@ -192,10 +192,18 @@ the same sync as RGB/component, so they change with it.
 **Debug page → `Field Order` → `Normal` (default) / `Swap`.**
 
 An interlaced picture is two half-pictures a fiftieth or sixtieth of a second apart, and
-they have to be drawn in the right order and in the right place. `Normal` is the core's
-long-standing behaviour. If an interlaced picture looks like the two halves are
-interleaved wrongly — combing on movement that no amount of adjusting your display fixes,
-or a scaler that reports the fields as out of order — try `Swap`.
+they have to be drawn in the right order and in the right place. `Normal` is correct, and
+you should not need to change it.
+
+!!! warning "This is a diagnostic, not a fix — it moves HDMI and analog together"
+
+    `Swap` changes which decoded field goes where for **both** outputs at once, so it can
+    never make a television and an HDMI display agree if they currently disagree — it just
+    moves the problem from one to the other. If you find yourself needing `Swap` to make
+    one output right while the other goes wrong, that is a bug in the core and we want to
+    hear about it: please [report it](../reference/reporting-a-bug.md) with which
+    combination you tried and what each output did. That is exactly how the field-order
+    error fixed in this version was found.
 
 !!! warning "Give it a couple of seconds, and test on the right material"
 

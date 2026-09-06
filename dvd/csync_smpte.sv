@@ -75,6 +75,7 @@
  * RTL, not by user discipline.
  */
 `include "timescale.v"
+`include "field_polarity.vh"   // FIELD1_VPOS — shared with syncgen.v and cc_vbi.sv
 `default_nettype none   // see the note in dvd/cc_line21.sv (round-3 lesson)
 
 module csync_smpte (
@@ -172,7 +173,12 @@ wire [11:0] phase       = second_half ? (pos - half_w) : pos;
 // The block's first half-line: the broad segment opens at the start of line `vss`,
 // which is the half-line whose index is 2*(vss-1); the pre-equalizing segment opens
 // n_pre half-lines earlier; and field B's whole block sits half a line later.
-wire [11:0] blk0  = {vss[10:0], 1'b0} - 12'd2 - {8'd0, n_pre} + {11'd0, fpar_now};
+// Field 1 opens its block on a LINE boundary (even half-line index); the other field
+// opens half a line later. Which one that is comes from the single shared constant, so
+// this can never disagree with the raster's own vs_ref_dot — bench/dvd/csync_field_tb.sv
+// gates that agreement directly.
+wire        blk_half = (fpar_now != `FIELD1_VPOS);
+wire [11:0] blk0  = {vss[10:0], 1'b0} - 12'd2 - {8'd0, n_pre} + {11'd0, blk_half};
 wire [11:0] n_tot = {8'd0, n_pre} + {8'd0, n_broad} + {8'd0, n_post};
 wire        in_blk = cs_en & (shl >= blk0) & (shl < (blk0 + n_tot));
 wire [11:0] off    = shl - blk0;

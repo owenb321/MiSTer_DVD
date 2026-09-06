@@ -12,17 +12,36 @@
  * So this bench watches sync_gen's OUTPUT sync stream exactly as a TV would:
  * classify each vsync leading edge by the h_pos it rises at (line-aligned vs
  * mid-line), then check that the caption line inside the line-aligned-vsync
- * field is the one dvd/cc_vbi.sv's formula (cc_fld1 = ~v_pos[0]) marks
- * for the field-1 (CC1) slot.
+ * field is the one dvd/cc_vbi.sv's formula marks for the field-1 (CC1) slot.
+ *
+ * ★ WHICH v_pos parity that is comes from `FIELD1_VPOS` (rtl/mpeg2/field_polarity.vh),
+ * the single constant syncgen.v, csync_smpte.sv and cc_vbi.sv all read — so this bench
+ * checks the RELATIONSHIP (the line-aligned-vsync field is the one CC calls field 1)
+ * rather than a hardcoded polarity that can go stale. Flip only one of the three
+ * consumers and this fails.
+ *
+ * ⚠⚠ AND LINE-21 CC IS NOT A HARDWARE TEST OF THIS. Our whole disc census finds FIELD 2
+ * EMPTY on every disc (tools/cc_scan.py), so nothing competes for the slot and a
+ * consumer decoder shows C1 whichever field the data physically lands in. Captions
+ * decoding on hardware therefore says the chain works, NOT that the field mapping is
+ * right. That was proposed as a decisive check on 2026-09-06 and it is not one.
  *
  * ⚠ HISTORY, so nobody re-derives the wrong premise: the first version of this
  * bench asserted "field 1 = the line preceding TOP-field active video" — the DVD
  * decoder-side labeling, where TOP = field 1 in the picture-coding sense. That
- * is a statement about picture geometry, not sync phase, and in this raster TOP
- * content displays inside SYNC field 2 (NTSC is bottom-field-first: field 1
- * shows the bottom lines). Encoding that premise "pinned" an inverted mapping,
- * and on hardware every field-1 service (C1/C2/T1/T2) showed nothing while the
- * CC Test Line proved the rest of the chain worked.
+ * is a statement about picture geometry, not sync phase. Encoding that premise
+ * "pinned" an inverted mapping, and on hardware every field-1 service
+ * (C1/C2/T1/T2) showed nothing while the CC Test Line proved the rest worked.
+ *
+ * ★★ AND THE SENTENCE THAT SURVIVED IT — "in this raster TOP content displays inside
+ * SYNC field 2 (NTSC is bottom-field-first: field 1 shows the bottom lines)" — was
+ * DELETED on 2026-09-05 as an inverted stale comment, because three other sites
+ * (mixer.v, cc_vbi.sv, syncgen.v) agreed against it. It is restored here because it was
+ * RIGHT: all three had been calibrated against a composite sync no display could read
+ * correctly (docs/single_raster_analog.md §3.10), so their agreement was not evidence.
+ * Under FIELD1_VPOS = 1 the raster now puts TOP content (v_pos-even, per mixer.v and
+ * VGA_F1) in sync field 2, which is what this sentence always said.
+ * ⚠ Agreement among modules sharing an untested reference is not evidence.
  *
  * Build:
  *   iverilog -g2012 -I rtl/mpeg2 -o bench/dvd/cc_field_map_sim \
@@ -30,6 +49,7 @@
  *   vvp bench/dvd/cc_field_map_sim
  */
 `timescale 1ns/1ps
+`include "field_polarity.vh"
 
 module cc_field_map_tb;
 
@@ -77,13 +97,13 @@ module cc_field_map_tb;
     // next active region, so f1_period still describes the field it belongs to.
     if (have_class && vp[11:1] == 12'd261 && hp == 12'd0) begin
       // (a) raster sanity: field 1's VBI must carry v_pos[0]==0 here
-      if (f1_period !== ~vp[0]) begin
+      if (f1_period !== (vp[0] == `FIELD1_VPOS)) begin
         $display("FAIL: %0s-vsync field has caption-line v_pos[0]=%0d",
                  f1_period ? "line-aligned (field 1)" : "mid-line (field 2)", vp[0]);
         errors = errors + 1;
       end
       // (b) the DUT formula: cc_fld1 = ~sg_vpos[0] must mark exactly field 1
-      if ((~vp[0]) !== f1_period) begin
+      if ((vp[0] == `FIELD1_VPOS) !== f1_period) begin
         $display("FAIL: cc_fld1 formula (~v_pos[0]=%0d) disagrees with the TV's field (field1=%0d)",
                  ~vp[0], f1_period);
         errors = errors + 1;
