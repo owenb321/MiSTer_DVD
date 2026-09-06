@@ -457,6 +457,21 @@ field-order misidentification. One build carrying both settles it:
 ⚠ **Not instant**: the corrector's feedback arm needs `PAR_CONFIRM` (~0.5 s) and spends a
 `PAR_HOLD` budget, so allow ~2 s before judging an A/B.
 
+**Gate: `bench/dvd/run_field_phase.sh` gains a `+swap=1` arm.** It replicates the XOR in
+the same CDC the bench already models and inverts **check C's** expectation with it, while
+leaving checks A and B (consecutive fields carry different source lines; the emitted
+content repeats with period 2) untouched. So it proves two things at once: the knob really
+does move content to the other raster slot, and **alternation survives** — a swap that
+broke the interleave would be a regression, not a diagnostic.
+
+★ It is not a vacuous pass, and the numbers show why. Inverting both the stimulus and the
+expectation would pass regardless *if the corrector ignored the verdict*; instead the arm
+measures **1 repeat / 28 misaligned in its worst settle window** — identical to the
+`+phase=1` arm, and quite different from `+phase=0`'s 0/0, because a swap at phase 0 gives
+the corrector exactly the same amount of work to do as no swap at phase 1. The check
+windows are clean in all three. A corrector that did not follow the inverted verdict would
+leave content in the original slot and fail check C outright.
+
 ⚠⚠ **A rig can be genuinely insensitive to this, so an uninformative "looks the same"
 result must not be read as "the knob does nothing".** Film-sourced content barely cares —
 3:2 material is progressive frames *split* into fields, so both fields of a frame are the

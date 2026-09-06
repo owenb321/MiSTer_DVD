@@ -440,6 +440,16 @@ worse maintenance burden than targeted in-place edits. So:
   cannot speak to today's default. ⚠ **The RT4K needs field offset −2 and a pure swap is a
   ONE-unit correction**; if −2 survives both arms there is a third thing (a line-position
   offset) — chase it separately, do not absorb it into "field order".
+  **Field-order gate: `run_field_phase.sh` gains a `+swap=1` arm** — it XORs the same CDC
+  the bench already replicates and inverts CHECK C with it, while leaving checks A and B
+  (fields carry different source lines; period 2) alone: the knob must move content to the
+  other raster slot AND alternation must survive. ★ Not vacuous — measured **1 repeat /
+  28 misaligned worst settle window, identical to `+phase=1` and unlike `+phase=0`'s 0/0**,
+  because a swap at phase 0 gives the corrector the same work as no swap at phase 1; a
+  corrector that ignored the inverted verdict would leave content in the old slot and fail
+  check C outright.
+  **Build:** `DVD_smptesync_20260906_0222.rbf`, SEED 5 FIRST roll despite two new CONF_STR
+  rows, clk_dec 95.35 @100C / 92.55 @-40C (gate 86.0), 91 % ALM.
   Detail: `docs/single_raster_analog.md` §3.10 (sync shape) and §3.11 (field order).
 - ✅ **MODE-SWITCH READER RE-ALIGN + PAL/NTSC VERDICT HARDENING (2026-09-03, issue #42,
   branch `fix/mode-switch-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03
