@@ -237,7 +237,8 @@ between every combed capture and every clean one was the corrector.
 
 **Status (2026-09-05, branch `feature/smpte-csync`): sim-proven RED/GREEN, ⏳ HW-confirm
 pending.** New `dvd/csync_smpte.sv`; `P1O[47:46] Analog CSync = SMPTE / 2H / Stock`,
-**SMPTE is the default**.
+**SMPTE is the default**. Build `DVD_smptesync_20260906_0222.rbf`, SEED 5 first roll,
+clk_dec 95.35 @100C / 92.55 @-40C (gate 86.0), 91 % ALM.
 
 **The gap.** SMPTE 170M-2004 §13.3 / Table 3 / Fig 7 and ITU-R BT.470-6 Table 2 both
 specify a vertical block of pre-equalizing pulses, serrated vertical sync, and
