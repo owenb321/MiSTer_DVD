@@ -37,4 +37,17 @@ for p in 0 1; do
   echo "============ +phase=$p ============"
   vvp bench/dvd/field_phase_sim +phase=$p | grep -vE '^\s*$' || fail=1
 done
+
+# ---- P1O[48] Field Order = Swap ------------------------------------------------------
+# The knob XORs mpeg2video's sync_raster_par_err, which is equivalent to inverting
+# mixer.v's content-vs-raster parity comparison. This arm inverts check C's expectation
+# with it and leaves A and B alone, so it proves the content really does land in the
+# OTHER raster slot AND that alternation survives — a swap that broke the interleave
+# would be a regression, not a diagnostic. One phase is enough: the knob is a polarity,
+# not a timing change. Add --swap-only to run just this arm.
+if [ "${1:-}" != "--no-swap" ]; then
+  echo
+  echo "============ +swap=1 (Field Order = Swap) ============"
+  vvp bench/dvd/field_phase_sim +phase=0 +swap=1 | grep -vE '^\s*$' || fail=1
+fi
 exit $fail

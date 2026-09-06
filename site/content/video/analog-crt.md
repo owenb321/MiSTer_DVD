@@ -23,9 +23,10 @@ same presentation a set-top player feeds a TV.
     that is fixed.
 
     Those numbers are what the reports of a picture that shakes or tears about once a
-    second, and of sawtooth edges, were describing — but whether your set is happy is
-    something only you can tell us, and reports are welcome. The composite and S-video
-    paths are unchanged in substance.
+    second were describing. Reports of **sawtooth edges** turned out to be a second,
+    separate thing — the shape of the composite sync itself — and there is now a setting
+    for it: see [Analog CSync](#analog-csync-if-your-set-jitters-or-shows-sawtooth-edges)
+    below. The composite and S-video paths carry the same sync as RGB and component.
 
 ## Turning it on
 
@@ -134,6 +135,83 @@ upscale.
     requires the raster to run at exactly the content rate against a fixed audio clock, and
     no exact-rate 240p modeline exists at the 27 MHz dot clock. Line-doubled 480i carries
     the same content to a CRT — which is what actual DVD players do with sub-D1 material.
+
+## Analog CSync — if your set jitters or shows sawtooth edges
+
+!!! info "Unreleased"
+
+    This setting is not in v0.4.0. It is on `main` and will be in the next release.
+
+**Debug page → `Analog CSync` → `SMPTE` (default) / `2H` / `Stock`.**
+
+Composite sync is the single signal that tells a television where every line *and* every
+field begins. A broadcast signal surrounds its vertical sync with **equalizing pulses** —
+short pulses at twice line rate, before and after — and splits the vertical sync itself
+into six serrations. They exist for one job: to make the two fields of an interlaced
+picture look identical to the circuit inside your television that decides where a field
+starts.
+
+Up to and including v0.4.0 this core emitted neither. The consequence is measurable: the
+two fields presented first sync pulses of about **50 µs and 18 µs**, because their vertical
+syncs begin half a line apart while the pulse pattern around them does not move with them.
+18 µs is right at the threshold some televisions use to recognise the pulse at all — so a
+set could read the two fields differently, and lay the second field's lines *on top of* the
+first field's instead of between them.
+
+That is what a **sawtooth or ragged look on vertical edges** is, and why it also costs half
+the vertical detail the picture should have. It is display-dependent: a set with a tolerant
+sync separator never notices, which is why the same build can look perfect on one
+television and wrong on another.
+
+`SMPTE` emits the full standard block (SMPTE 170M on NTSC, ITU-R BT.470 on PAL) and is the
+default. `2H` adds the serrations but not the equalizing pulses. `Stock` is exactly what
+v0.4.0 and earlier put on the pins.
+
+!!! tip "You should not need to change this"
+
+    `SMPTE` is what a real player, a broadcast signal and a DVD deck all put out. `2H` and
+    `Stock` are there because televisions of this age vary, and because we would rather you
+    could get a picture back from the OSD than have to wait for a new build. If your set is
+    happier on one of the others, please say so — that is a useful report.
+
+!!! warning "It has no effect if `vga_scaler=1`"
+
+    With the scaler on the analog pins, or a framebuffer active, sync comes from a
+    different place entirely and this setting does nothing. It applies to the direct analog
+    path — `vga_scaler=0` — which is the CRT case.
+
+HDMI is completely unaffected by this setting, on every option. Composite and S-video use
+the same sync as RGB/component, so they change with it.
+
+## Field order
+
+!!! info "Unreleased"
+
+    This setting is not in v0.4.0. It is on `main` and will be in the next release.
+
+**Debug page → `Field Order` → `Normal` (default) / `Swap`.**
+
+An interlaced picture is two half-pictures a fiftieth or sixtieth of a second apart, and
+they have to be drawn in the right order and in the right place. `Normal` is the core's
+long-standing behaviour. If an interlaced picture looks like the two halves are
+interleaved wrongly — combing on movement that no amount of adjusting your display fixes,
+or a scaler that reports the fields as out of order — try `Swap`.
+
+!!! warning "Give it a couple of seconds, and test on the right material"
+
+    The change is applied by the same mechanism that keeps field alignment steady during
+    playback, so it can take up to about two seconds to settle. Judge it after that, not
+    immediately.
+
+    More importantly, **most films will not show a difference at all.** Film is shot at 24
+    frames a second and split into fields for the disc, so both fields of a frame are the
+    same instant — swapping them changes almost nothing you can see. Use something shot on
+    video at 30 frames a second: a concert, a TV series, a documentary, a making-of. Pick a
+    scene with fast sideways movement, and use your display's weave or CRT-simulation
+    deinterlacing rather than bob, which hides the effect by design.
+
+If `Swap` is clearly better on your set, please tell us which disc and which display —
+we are trying to establish whether the default itself is wrong.
 
 ## Known limitations
 

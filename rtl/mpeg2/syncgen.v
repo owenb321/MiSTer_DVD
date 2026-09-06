@@ -143,7 +143,24 @@ module sync_gen    (clk, clk_en, rst,
    * LA + 0.5 lines, B->A = LB - 0.5 lines; both equal 262.5 iff LA=262, LB=263.
    * odd_field=1 scans v_pos even lines (TOP content, the upper field), so it is the
    * reference field A; odd_field=0 (BOTTOM content) is B: one extra line and the
-   * mid-line vsync. (If HW shows the fields spatially swapped, flip both terms.) */
+   * mid-line vsync.
+   *
+   * ⚠ AMENDED 2026-09-05. That last sentence — which content field rides which raster
+   * field — is the ONE part of this model this fork invented. The 262/263 + half-line
+   * mechanism above is inherited from the known-good N64 core, which has no notion of
+   * "TOP content" at all: it scans a framebuffer, so the line displayed is fixed by the
+   * raster line being scanned and no mapping decision exists. The assertion was also
+   * validated exactly once (docs/crt_480i.md, 2026-07-05) BEFORE the field-parity
+   * corrector existed — the content phase was a coin flip then, so a wrong convention was
+   * right half the time and could not be seen. That is precisely how VGA_F1 stayed
+   * inverted on HDMI until PR #44.
+   * ⛔ So this note used to end "if HW shows the fields spatially swapped, flip both
+   * terms" — DO NOT. Flipping vs_ref_dot/eff_vertical_length moves the RASTER, i.e. the
+   * one part inherited from a known-good source, and drags dvd/cc_vbi.sv's field-1
+   * derivation with it (CC rounds 1-2: a field-mapping flip made every field-1 caption
+   * service go dark). P1O[48] Field Order flips the CONTENT mapping instead, by XORing
+   * mpeg2video.v's sync_raster_par_err input — sync waveform bit-identical, cc_vbi
+   * untouched. See docs/single_raster_analog.md §3.11. */
   wire        crt_ilace   = interlaced && (horizontal_halfline != 12'd0);
   /* DVD-FORK (single-raster analog): the vertical-sync sample dot. Dot 0 on the
    * reference field, mid-line (halfline) on the other — the upstream N64-model

@@ -78,6 +78,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              freeze_wd,                                            // DVD-FORK (disc-menu still): watchdog-suppress ONLY (no governor freeze)
              vbuf_flush,                                           // DVD-FORK (gamepad transport): discard the buffered bitstream on a seek
              soft_flush,                                           // DVD-FORK (mount soft reset): watchdog-equivalent decode-pipeline reset on a file mount
+             field_swap,                                           // DVD-FORK (field-order diagnostic): invert the mixer's content-vs-raster parity convention
              disp_vscale_mode,                                     // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox(dormant) 2=SIF 2x line repeat
              disp_vscale_en,                                       // DVD-FORK (CRT anamorphic letterbox AA): enable downstream disp_vscale 2-tap blend
              disp_hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
@@ -237,6 +238,21 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * leading B-frames motion-compensated against the previous file = macroblock garbage at
    * load; the truncated in-flight picture completes on the new file's first start code). */
   input            soft_flush;
+  /* DVD-FORK (field-order diagnostic, P1O[48] Field Order, 2026-09-05): inverts the
+   * CONTENT-to-raster parity convention — which decoded field lands in which raster
+   * field — by flipping the sense of the mixer's verdict before the corrector sees it.
+   * Applied here rather than inside mixer.v because the verdict is a held LEVEL, so
+   * XORing it outside is identical to inverting the comparison inside, and this keeps
+   * mixer.v untouched.
+   * ⚠ Deliberately does NOT touch the raster (syncgen's vs_ref_dot / eff_vertical_length,
+   * whose own comment suggests flipping those instead). The raster's 262/263 + half-line
+   * model is inherited from the known-good N64 core; what this fork INVENTED is the next
+   * sentence in that comment — "odd_field=1 scans v_pos even lines (TOP content)" — and
+   * that is the untested claim. Flipping content instead keeps the sync waveform
+   * bit-identical, leaves dvd/cc_vbi.sv naming the same field 1, and keeps this knob
+   * orthogonal to P1O[47:46] Analog CSync.
+   * Quasi-static OSD level in the dot domain (dot_clk == clk_sys in this fork). */
+  input            field_swap;
   /* DVD-FORK (CRT anamorphic vertical scaler, emu clk_sys origin — quasi-static menu
    * level). disp_vscale_mode selects the resample_addrgen display mapping (0=fit,
    * 1=letterbox, 2=zoom); 0 outside CRT mode => bit-identical to the pre-scaler path.
@@ -838,7 +854,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * A field-rate level (holds until the next displayed frame-top), so a plain 2-FF
    * synchronizer is safe. */
   wire       raster_par_err;
-  sync_reg #(.width(1))  sync_raster_par_err          (clk, sync_rst, dot_frame_top_par_err && dot_interlaced, raster_par_err);
+  sync_reg #(.width(1))  sync_raster_par_err          (clk, sync_rst, (dot_frame_top_par_err ^ field_swap) && dot_interlaced, raster_par_err);
 
   /* flush video buffer */
   wire       flush_vbuf;                              /* flush video buffer (regfile REG_WR_TRICK bit0) */

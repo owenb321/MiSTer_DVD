@@ -215,6 +215,40 @@ never show this; it depends on the set.
     survives on v0.4.0, please [report it](reporting-a-bug.md) with the analog lines from
     your `MiSTer.ini`. See [Field alignment](../video/interlaced.md#field-alignment).
 
+!!! info "Unreleased — and a second, separate cause"
+
+    Reports of a **sawtooth or ragged look on a CRT** kept coming in after v0.4.0, and they
+    turned out not to be this at all: the composite sync itself was missing its equalizing
+    pulses, so some televisions could not tell the two fields apart reliably. There is now
+    an `Analog CSync` setting for it, and a `Field Order` setting for the related question
+    of which field goes where. Both are on the debug page — see
+    [Analog CSync](../video/analog-crt.md#analog-csync-if-your-set-jitters-or-shows-sawtooth-edges)
+    and [Field order](../video/analog-crt.md#field-order).
+
+### Sawtooth or ragged vertical edges on a CRT, and adjusting the picture does not help
+
+!!! info "Unreleased"
+
+    The settings below are not in v0.4.0. They are on `main` and will be in the next
+    release.
+
+If vertical edges look stepped or ragged, the picture seems to have half the detail it
+should, or a scaler tells you the fields are out of order, the sync is the first thing to
+try — not the picture settings.
+
+1. Debug page → **`Analog CSync`**. `SMPTE` is the default and is what a broadcast signal
+   carries; if your set prefers `2H` or `Stock`, that is worth telling us.
+2. If it still looks wrong, Debug page → **`Field Order`** → `Swap`. Give it about two
+   seconds to settle, and test it on something shot on video rather than a film — see
+   [Field order](../video/analog-crt.md#field-order) for why that matters.
+
+Neither setting does anything if your `MiSTer.ini` has `vga_scaler=1`, and neither affects
+HDMI.
+
+If one of them fixes it, please [report it](reporting-a-bug.md) with the setting that
+worked, your display, and the analog lines from your `MiSTer.ini` — we are trying to work
+out whether the defaults themselves are wrong.
+
 ### The picture blocks up briefly right after a chapter skip or seek
 
 !!! note "Fixed in v0.4.0"

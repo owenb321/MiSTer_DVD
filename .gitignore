@@ -107,6 +107,8 @@ bench/dvd/test_mp2/
 .venv/
 venv/
 bench/dvd/csync_ref_gen.v
+bench/dvd/csync_pipe_gen.vh
+bench/dvd/csync_smpte_red.sv
 
 # hardware-in-the-loop harness: rig-specific, never committed
 tools/.mister_host

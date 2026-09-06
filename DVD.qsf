@@ -46,6 +46,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/crt_ov_map.sv
 #  the analog pins take the main half-line 480i/576i raster, docs/single_raster_analog.md)
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/cc_line21.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/cc_vbi.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/csync_smpte.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ps_stream_fifo.sv
 # AC-3 reframer: re-frame demuxed AC-3 on 0x0B77 boundaries so audio_ring drops
 # whole AC-3 frames (clean) instead of PES chunks (pop). See dvd/ac3_reframer.sv.
