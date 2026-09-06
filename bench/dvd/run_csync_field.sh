@@ -61,7 +61,14 @@ if [ "${1:-}" = "--red" ]; then
   #    measures the block's SHAPE, which this mutation leaves identical in both fields;
   #    G6 measures its PLACEMENT against the raster, which is what moves.
   red_case "grid: block not offset by a half-line on field B" \
-           's/+ {11.d0, fpar_now};/+ 12'"'"'d0;/' "+arm=0"
+           's/= (fpar_now != .FIELD1_VPOS);/= 1'"'"'b0;/' "+arm=0"
+  # 5. The block's field polarity inverted while the raster keeps its own: the emitted
+  #    sync then tells a television the OPPOSITE field is first from the one syncgen.v
+  #    and cc_vbi.sv believe. This is the drift rtl/mpeg2/field_polarity.vh exists to
+  #    prevent and [G8] exists to catch — measured on BOTH sides, neither reading the
+  #    constant, so flipping one consumer alone must fail.
+  red_case "polarity: block disagrees with the raster about which field is first" \
+           's/= (fpar_now != .FIELD1_VPOS);/= (fpar_now == `FIELD1_VPOS);/' "+arm=0"
   # 2. Equalizing pulses emitted at broad-pulse width. Breaks [G4] — the gate that checks
   #    we built the SPECIFIED shape rather than merely a symmetric one.
   #    ⚠ It and arm 3 fail through the same route and print nearly identical output: both
