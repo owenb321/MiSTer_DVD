@@ -74,7 +74,8 @@ module film_evidence_tb;
     .advance(advance), .align(align), .wait_state(wait_state),
     .rld_wr_almost_full(1'b0), .mvec_wr_almost_full(1'b0), .motcomp_busy(1'b0),
     .getbits(getbits), .signbit(signbit),
-    .getbits_valid(), .vld_en(vld_en)
+    .getbits_valid(), .vld_en(vld_en),
+    .pos_clr(1'b0), .bitpos()
   );
 
   wire pic_informative, informative_commit;
@@ -113,7 +114,8 @@ module film_evidence_tb;
     .pic_informative(pic_informative), .informative_commit(informative_commit),
     .cc_pair_valid(), .cc_pair(), .cc_pair_field(),
     .mpeg1(),
-    .vbuf_flush(1'b0)   // DVD-FORK FIX (seek realign, issue #45): not exercised here
+    .vbuf_flush(1'b0),   // DVD-FORK FIX (seek realign, issue #45): not exercised here
+    .bitpos(32'd0), .pic_hdr_pulse(), .pic_hdr_bitpos(), .pic_hdr_upd(), .pic_hdr_second()
   );
 
   // The counter measures from STATE_PICTURE_HEADER to the terminating start

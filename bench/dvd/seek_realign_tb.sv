@@ -111,7 +111,8 @@ module seek_realign_tb;
     .rld_wr_almost_full(1'b0), .mvec_wr_almost_full(1'b0),
     .motcomp_busy(motcomp_busy),
     .getbits(getbits), .signbit(signbit),
-    .getbits_valid(getbits_valid), .vld_en(vld_en)
+    .getbits_valid(getbits_valid), .vld_en(vld_en),
+    .pos_clr(1'b0), .bitpos()
   );
 
   reg  flush_lvl = 1'b0;                  // the ~192 clk_dec VBUF flush level
@@ -160,7 +161,8 @@ module seek_realign_tb;
     .flags_commit(flags_commit),
     .pic_informative(pic_informative), .informative_commit(informative_commit),
     .cc_pair_valid(), .cc_pair(), .cc_pair_field(), .mpeg1(),
-    .vbuf_flush(SEEK_REALIGN ? flush_lvl : 1'b0)
+    .vbuf_flush(SEEK_REALIGN ? flush_lvl : 1'b0),
+    .bitpos(32'd0), .pic_hdr_pulse(), .pic_hdr_bitpos(), .pic_hdr_upd(), .pic_hdr_second()
   );
 
   // motcomp.v's freeze interlock, replicated (see the fidelity note above).

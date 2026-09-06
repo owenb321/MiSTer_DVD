@@ -934,6 +934,11 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     );           
 
   /* read elementary stream from circular buffer, one bitfield at a time */
+  /* DVD-FORK (PTS association): getbits parse position -> vld -> pts_assoc */
+  wire [31:0] vld_bitpos;
+  wire        pic_hdr_pulse, pic_hdr_upd, pic_hdr_second;
+  wire [31:0] pic_hdr_bitpos;
+
   getbits_fifo getbits_fifo (
     .clk(clk), 
     .clk_en(1'b1), 
@@ -950,7 +955,12 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .getbits(getbits),                                       // to vld
     .signbit(signbit),                                       // to vld
     .getbits_valid(getbits_valid),                           // to probe
-    .vld_en(vld_en)                                          // to vld
+    .vld_en(vld_en),                                         // to vld
+    /* DVD-FORK (PTS association): parse position, counted from the same flush
+     * that resets the VBUF read fifo (vbuf_rst is active-low), so it and the
+     * write-side byte stamp share an origin. */
+    .pos_clr(~vbuf_rst),
+    .bitpos(vld_bitpos)                                      // to vld
     );
 
   /* variable length decoder */
@@ -1042,7 +1052,13 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
      * pictures instead of displaying them motion-compensated against the scene
      * we just left. Already clk_dec and already 2-FF synced upstream
      * (dvd/emu.sv vbuf_flush_dec) — no new CDC. See docs/seek_realign.md. */
-    .vbuf_flush(flush_vbuf_eff)
+    .vbuf_flush(flush_vbuf_eff),
+    /* DVD-FORK (PTS association): where each picture header was parsed */
+    .bitpos(vld_bitpos),                                     // from getbits
+    .pic_hdr_pulse(pic_hdr_pulse),
+    .pic_hdr_bitpos(pic_hdr_bitpos),
+    .pic_hdr_upd(pic_hdr_upd),
+    .pic_hdr_second(pic_hdr_second)
     );
 
   /* DVD-FORK (frame-drop governor, O[19]): catch-up credit controller. Banks a "drop

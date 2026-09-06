@@ -29,7 +29,8 @@ module getbits_fifo (clk, clk_en, rst,
    vid_in, vid_in_rd_en, vid_in_rd_valid,
    advance, align,
    getbits, signbit, getbits_valid,
-   wait_state, rld_wr_almost_full, mvec_wr_almost_full, motcomp_busy, vld_en);
+   wait_state, rld_wr_almost_full, mvec_wr_almost_full, motcomp_busy, vld_en,
+   pos_clr, bitpos);                                                                       // DVD-FORK (PTS association): exact bit position of the parse point
 
   input            clk;                      // clock
   input            clk_en;                   // clock enable
@@ -53,6 +54,23 @@ module getbits_fifo (clk, clk_en, rst,
 
   output reg       getbits_valid;            // getbits_valid is asserted when getbits is valid.
   output reg       vld_en;                   // vld clock enable
+
+  /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"): the exact
+   * bit position of the vld's parse point, counted from the last pos_clr (the
+   * VBUF flush). words_loaded counts 64-bit words shifted into the window since
+   * then; cursor is the index of the next unconsumed bit in the 129-bit window,
+   * and a freshly loaded word leaves 128 - cursor bits unconsumed. So
+   *   bitpos = 64*words_loaded - (128 - cursor)
+   * is the offset of the bit the vld is looking at, relative to the first bit
+   * loaded after the clear. Stale bits still in the window at a clear read as
+   * NEGATIVE positions, which is exactly right: they precede byte 0 of the new
+   * stream. The write side (mpeg2video.v) counts the same bytes from the same
+   * flush, so a PTS stamped at a write position can be matched against a
+   * picture start code at a parse position with no fudge -- the whole point.
+   * 26 bits of words = 512 MB before wrap; the consumer compares modularly. */
+  input            pos_clr;                  // clear the position (VBUF flush)
+  output    [31:0] bitpos;                   // combinational off the registered window state
+  reg       [25:0] words_loaded;
 
   reg       [128:0]dta;                      // 129 bits. No typo.
   reg       [103:0]dummy;                    // dummy variable, not used.
@@ -119,6 +137,16 @@ module getbits_fifo (clk, clk_en, rst,
     if (~rst) cursor <= 8'd128;
     else if (clk_en) cursor <= next_cursor;
     else cursor <= cursor;
+
+  /* DVD-FORK (PTS association): count the words that enter the window. The
+   * load happens on exactly the cycle next_dta takes vid_in (STATE_INIT with
+   * vid_in_rd_valid), so this counter and `cursor` describe the same window. */
+  always @(posedge clk)
+    if (~rst || pos_clr) words_loaded <= 26'd0;
+    else if (clk_en && (state == STATE_INIT) && vid_in_rd_valid) words_loaded <= words_loaded + 26'd1;
+    else words_loaded <= words_loaded;
+
+  assign bitpos = {words_loaded, 6'b0} + {24'b0, cursor} - 32'd128;
 
   always @(posedge clk)
     if (~rst) signbit <= 1'b0;
