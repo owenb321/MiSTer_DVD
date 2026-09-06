@@ -5,7 +5,8 @@
 > sim-proven, built (`DVD_stcfree_20260906_1357.rbf`), no behaviour change;
 > ⏳ HW round A pending.** **Stage 1 — the display scheduler, the free-running
 > STC, one clock for every consumer, menus included — IN FABRIC, sim-proven
-> (`bench/dvd/run_stc_freerun.sh`); ⏳ HW round B pending.** This file is the
+> (`bench/dvd/run_stc_freerun.sh`), built `DVD_stcfree_20260906_1737.rbf` (SEED 5
+> first roll after pipelining the scheduler, clk_dec 89.75/86.02); ⏳ HW round B pending.** This file is the
 > design and status record. Supersedes the timing model in `docs/av_sync.md` ("Model: a
 > commercial DVD player") and the two-clocks amendment on the archived branch
 > `feature/audio-delay-ddr` (never merged; its §14.9 investigation is summarised
@@ -277,7 +278,7 @@ telemetry bench, and the display suites re-paced with `sched_due` tied high.
   clk_dec 87.73/89.67, 91 % ALM):** `disp_lag` per mode on APOLLO_13 and MiB —
   must be per-picture stable with the known ≈ −1 s film24 / ≈ −0.2 s
   interlaced shape. ⏳
-- **Round B (Stage 1):** film24 vs interlaced A/V difference ≈ 0 ± one picture
+- **Round B (Stage 1 build `DVD_stcfree_20260906_1737.rbf`):** film24 vs interlaced A/V difference ≈ 0 ± one picture
   on APOLLO_13 and MiB (`tools/av_mode_diff.py`); PAL; Thayer (field-coded);
   a VCD; seek storms; timed stills; menus — T2/MiB/Matrix transitions, Harry
   Potter stills, a menu clip with speech; passthrough through menus; Ferris

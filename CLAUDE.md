@@ -751,7 +751,9 @@ worse maintenance burden than targeted in-place edits. So:
 - 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06,
   branch `feature/stc-freerun`, `dev-stcfree`). STAGE 0 (association + telemetry, no
   behaviour change) BUILT `DVD_stcfree_20260906_1357.rbf` ⏳ HW round A; STAGE 1 (the
-  scheduler, the clock, menus included) IN FABRIC, sim-proven by
+  scheduler, the clock, menus included) BUILT `DVD_stcfree_20260906_1737.rbf` (⚠ the FIRST
+  Stage 1 fit failed the gate by 12 MHz on one measured cone — pipelined, then SEED 5 first
+  roll 89.75/86.02, the cold corner right on the gate), sim-proven by
   `bench/dvd/run_stc_freerun.sh`, ⏳ HW round B. Design + status record:
   `docs/stc_freerun.md` — read §3.5 for what was DELETED before touching any A/V code.**
   ★ **Stage 1 in one paragraph:** `dvd/disp_sched.sv` (in `mpeg2video`) counts a

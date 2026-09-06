@@ -920,4 +920,13 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # through pic_due -> resample_addrgen's FSM -> par_age. Fix = pipeline the scheduler (period,
 # products, differences, compares each registered; its decisions tolerate cycles of latency).
 # The entry after this one is the re-fit.
+#
+# 2026-09-06 (feature/stc-freerun, dev-stcfree -- STAGE 1 re-fit with disp_sched PIPELINED:
+# period, products, differences and compares each registered): SEED 5 held FIRST roll --
+# clk_dec 89.75 @100C / 86.02 @-40C (gate 86.0, PASS both corners -- the cold corner by
+# 0.02 MHz) at 91% ALM (38,238), RAM 498/553 unchanged, DSP 94/112 (+2: the scheduler's two
+# 15x3 field-count multiplies landed in DSP blocks). Build DVD_stcfree_20260906_1737.rbf
+# (4399 KB). Confirms the entry above: pipelining recovered 16 MHz; the -40C margin is now the
+# thinnest the ledger records, so a later round on this branch should expect a seed roll and
+# should run tools/timing_paths.sh first rather than attribute it to the last edit.
 set_global_assignment -name SEED 5
