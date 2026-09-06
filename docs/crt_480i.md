@@ -117,8 +117,20 @@ bit-identical; only the new CRT modeline takes the path. No regfile changes.
   262 lines, vsync at dot 0) and B (263 lines, vsync at dot 429), vsync spacing is
   `262 + 0.5 = 262.5` and `263 − 0.5 = 262.5` lines — constant every field, which is
   the whole 2:1 lock. (LA=263/LB=262 would give 263.5/261.5 — wrong; the LONGER field
-  must carry the mid-line vsync.) If HW shows the two fields spatially swapped
-  (1-line comb), flip BOTH terms (`~odd_field` ↔ `odd_field`) together.
+  must carry the mid-line vsync.) ⛔ **AMENDED 2026-09-05 — this used to end "if HW shows
+  the two fields spatially swapped (1-line comb), flip BOTH terms together". DO NOT.**
+  That moves the RASTER, which is the half inherited from the known-good N64 core, and
+  drags `dvd/cc_vbi.sv`'s field-1 derivation with it (CC rounds 1–2: a field-mapping flip
+  made every field-1 caption service go dark). The invented half is the *content* mapping
+  — "v_pos even = TOP content" — and it is flipped by `P1O[48] Field Order`, which XORs
+  `mpeg2video.v`'s `sync_raster_par_err`: sync waveform bit-identical, `cc_vbi` untouched.
+  ⚠ Note also that the "field order was correct as shipped" verdict recorded further down
+  this document was taken **before the field-parity corrector existed**, when the content
+  phase was a coin flip — so a wrong convention was right half the time and could not be
+  seen. See `docs/single_raster_analog.md` §3.11.
+- **Composite sync shape** is a separate matter and was wrong for longer: the framework
+  emitted no equalizing pulses at all. `P1O[47:46] Analog CSync` and
+  `docs/single_raster_analog.md` §3.10.
 - The old pulse-delay expression remains the non-CRT behavior (bit-identical).
 
 **Sim proof** (`bench/dvd/crt_syncgen_tb.sv`): consecutive vsync rising edges exactly

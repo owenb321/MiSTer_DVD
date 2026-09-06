@@ -304,9 +304,25 @@ own vsync window covers), equalizing on 247–249 — inside the 22 blanked line
 0–239 of 262). PAL: 289.5–297 inside 24. **Line 21 (`v_cntr` 261) does not move**, so
 `cc_vbi` is untouched.
 
-**Measured, NTSC, both fields (`csync_field_tb`):** first broad pulse **731 / 731** clk27
-where stock gives **1348 / 490** (49.9 / 18.1 µs); width-detector and RC-integrator trigger
-spacings both **450450 / 450450** (= 262.5 lines) with zero per-field errors.
+★★ **MEASURED, and this is the table that settles the 2H question.** The RC integrator is
+the mechanism an analog CRT actually uses, and its field-to-field trigger error is:
+
+| arm | NTSC | PAL | field error |
+|---|---|---|---|
+| **Stock** | 450172 / 450728 | 539720 / 540280 | **±278 clk = 0.16 line**, 10 triggers out of tolerance |
+| **2H** | 450484 / 450416 | 540034 / 539966 | ±34 clk = 0.020 line |
+| **SMPTE** | **450450 / 450450** | 539998 / 540002 | **0 / ±2 clk = 0.001 line** |
+
+★ **The equalizing pulses buy a further ~17× over 2H alone, and take NTSC to exact.** That
+is the number nobody had when the 2H variant was built and reverted — the argument then was
+"2H fixes the width asymmetry", which it does, and the question of whether the *rest* of the
+block is worth having was never asked because it was believed impossible to build.
+
+The width-based separator tells the same story more bluntly: on Stock it **misses field B's
+first broad pulse entirely** (1347 vs **489** clk27 = 49.9 vs **18.1 µs**, under any 20 µs
+threshold) and locks a line late — spacings 449837 / 451063, 11 per-field errors. On SMPTE
+and 2H both fields present 731 clk27 (27.07 µs) and the spacings are exactly 450450 / 450450.
+
 
 **Routing.** `dvd/emu.sv` gains `VGA_CS` / `VGA_CS_EN` (non-standard emu ports, like
 `SPDIF_PASS`), emitted in the **same clock as `VGA_HS`**. `sys/sys_top.v` delays them by

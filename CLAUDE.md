@@ -352,6 +352,13 @@ worse maintenance burden than targeted in-place edits. So:
   **449837 / 451063** instead of 450450/450450 (11 per-field errors), RC integrator
   450172 / 450728 (10 out of tolerance). With the block: **450450 / 450450, zero errors on
   both models**, both fields' broad pulse 731 clk27 (27.07 µs).
+  ★★ **AND THE TABLE THAT SETTLES THE 2H QUESTION — the RC integrator's field-to-field
+  trigger error, which is the mechanism an analog CRT actually uses: Stock ±278 clk
+  (0.16 line, 10 out of tolerance) → 2H ±34 clk (0.020 line) → SMPTE 0 (NTSC) / ±2 clk
+  (PAL). The equalizing pulses buy a further ~17× over 2H alone and take NTSC to exact.**
+  Nobody had that number when 2H was built and reverted: the argument then was "2H fixes
+  the width asymmetry", which it does, and whether the REST of the block was worth having
+  was never asked because it was believed impossible to build.
   ★★ **THE RECORDED BLOCKER WAS TRUE OF ONE MODULE AND FALSE OF THE CORE.**
   `sys/sys_top.v` said equalizing pulses *"would need advance knowledge of vsync"* — true
   of a module that derives sync from a FINISHED hsync/vsync pair, which structurally
