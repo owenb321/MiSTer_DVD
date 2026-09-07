@@ -90,8 +90,13 @@ left to detect. Nothing can infer it from the stream, which is why the manual **
 
 ## Known limitations
 
-- **When Auto engages a couple of seconds into a title, audio can end up slightly offset**
-  until the next seek re-syncs it. A chapter jump or a D-pad seek clears it.
+!!! info "Unreleased — fixed"
+    The offset that used to appear when Auto engaged a couple of seconds into a title,
+    and cleared on the next seek, is **gone**. It was not a film-detection problem: the
+    player's clock counted displayed frames from a point in the *demux*, so everything
+    buffered between there and the screen turned into an audio offset, and engaging the
+    24p raster was simply where it became audible. The clock now runs on its own and both
+    picture and sound are presented against it, so there is nothing for a seek to fix.
 - **Film 24p needs `Video Output = Progressive`** (or Auto on an HDMI rig) — a 23.976 Hz
   raster cannot carry interlaced fields, so it is unavailable while
   [Interlaced mode](interlaced.md) is active. Film on a CRT plays with its normal 3:2
