@@ -87,6 +87,26 @@ See [Set the drive region](../formats/physical-discs.md#set-the-drive-region).
 
 ## No sound
 
+### Everything plays, but much quieter than other cores
+
+DVD soundtracks are mastered well below full scale — dialogue typically sits 20 dB or more
+under the peaks, so that explosions have somewhere to go. Retro console cores emit chip audio
+close to full scale more or less continuously, so the DVD core really is quieter at the same
+TV volume, and that is faithful to the disc rather than a fault.
+
+Use MiSTer's own **Core Volume** control, in the OSD's system menu (the one you reach with the
+menu button, not the core's own OSD). Press **right** past maximum and it starts adding boost,
+shown as a `+` and then `++` after the bar. Each step is roughly +6 dB, and it is a compressor
+rather than a plain gain — quiet passages come up while peaks stay just under full scale, so
+it does not clip. The setting is remembered per core.
+
+!!! info "Unreleased"
+    Boost needs **MiSTer Main 20260603 or newer**, and core support that arrives in the next
+    release. On older builds the boost steps simply do not appear.
+
+Boost applies to decoded audio only. In `Audio Out = Passthru` the core sends an untouched
+bitstream and your receiver's volume owns the level.
+
 ### Silent on every track
 
 - **`Audio Out` is on `Passthru`** and your display cannot decode bitstreams. Passthru is

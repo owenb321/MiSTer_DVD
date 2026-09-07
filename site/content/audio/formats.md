@@ -82,6 +82,34 @@ shown are the disc's rather than a simple count. See
     Switching audio while a disc menu is open silences the menu's audio until you leave the
     menu. Menu audio otherwise plays normally on the default track.
 
+## Output level
+
+DVD soundtracks are mastered a long way below full scale. Dialogue commonly sits 20 dB or
+more beneath the peaks so that loud scenes have headroom, which is why a film disc sounds
+quieter than a console core at the same TV volume — those emit chip audio near full scale
+almost continuously. The core reproduces what the disc holds rather than turning it up.
+
+MiSTer's **Core Volume** control (in the MiSTer OSD's system menu, not this core's own OSD)
+can compensate. Press **right** past the top of the bar and it begins adding boost, displayed
+as `+` then `++`. Each step is roughly +6 dB. It is a compressor rather than a plain gain:
+quiet material comes up while peaks are curved to land just under full scale, so pushing it
+does not clip. The level is stored per core, so setting it here does not affect anything else.
+
+!!! info "Unreleased"
+    Boost requires **MiSTer Main 20260603 or newer** together with core support that arrives
+    in the next release. On an older Main, or an older core, the boost steps do not appear and
+    the control behaves as a plain attenuator.
+
+Two limits worth knowing:
+
+- **It does not apply in `Passthru`.** The core sends an untouched bitstream, so level is
+  entirely your receiver's business — see [Bitstream passthrough](passthrough.md).
+- **It is a playback control, not a repair.** It sits at the very end of the chain, after
+  decoding and after the audio filter.
+
+The same OSD change also enables MiSTer's **audio filter** for this core, which had never been
+advertised to the firmware and so never appeared.
+
 ## A/V sync
 
 Audio is locked to the video presentation timeline — the core builds a system clock
@@ -102,5 +130,8 @@ If a disc plays with no sound:
    cannot decode.
 3. **`CSS ENCRYPTED` on screen** means audio is muted deliberately — see
    [What you need](../getting-started/what-you-need.md).
+
+If sound is present but simply too quiet, that is normal for DVD and is covered under
+[Output level](#output-level) above.
 
 [Troubleshooting](../reference/troubleshooting.md) covers these in more detail.

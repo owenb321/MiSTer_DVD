@@ -50,7 +50,11 @@ module emu (
 	output [15:0] AUDIO_L,
 	output [15:0] AUDIO_R,
 	output        AUDIO_S,
-	output        AUDIO_MIX,
+	// DVD-FORK: 2 bits, matching sys_top's `wire [1:0] audio_mix`.  This was declared
+	// 1-bit since the fork began, leaving audio_mix[1] undriven; Quartus tied it low,
+	// which happened to be the wanted value (no crossfeed), so it never bit - but it
+	// reads as x in simulation.
+	output  [1:0] AUDIO_MIX,
 
 	// DVD-FORK: IEC 61937 S/PDIF bitstream passthrough (docs/audio.md Path B).
 	// SPDIF_PASS is a biphase-encoded (IEC 60958, non-PCM) bitstream that
@@ -355,7 +359,7 @@ wire signed [15:0] dec_audio_l, dec_audio_r;
 wire        pass_mode  = status[6];   // O6: 1 = IEC 61937 passthrough
 wire        pass_bswap = status[7];   // O7: 1 = swap payload byte order
 assign AUDIO_S      = 1;
-assign AUDIO_MIX    = 0;
+assign AUDIO_MIX    = 2'd0;
 // css_scrambled: CSS-encrypted source detected (sticky latch by the demux
 // instance below) — mute the PCM out (scrambled AC-3 decodes to loud static).
 // probe taps (declared unconditionally — the instantiation below always
@@ -577,7 +581,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-main"
+`define CORE_VERSION "dev-audioboost"
 
 parameter CONF_STR = {
     "DVD;;",
