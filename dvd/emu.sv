@@ -779,12 +779,21 @@ parameter CONF_STR = {
     // EARLY -> go positive; heard LATE -> negative. APPLIES AT THE NEXT (RE)START
     // (clip load / underrun re-entry) — mid-play phase is locked by sample
     // continuity, and a mid-play re-arm deadlocks on full FIFOs (v5.2 reverted).
-    // DEFAULT +100 ms (index 0): after the flags_commit drift fix (PR #62, round
-    // 12 HW-confirmed) the true residual on NTSC film is ~100 ms audio-EARLY, so
-    // +100 nulls it — the recommended NTSC-film setting. The old deep-negative
-    // entries (-300/-400/-500) chased the stale-flag RAMP, which is now fixed;
-    // the range is rebalanced around +/-200 ms. See docs/av_sync.md.
-    "P1O[23:21],A/V Offset,+100ms,-200ms,-100ms,-50ms,0ms,+50ms,+150ms,+200ms;",
+    // ★ DEFAULT 0 ms (index 0) as of 2026-09-07 — CHANGED, and the reason the old
+    // default existed is gone. +100 ms was the null of the PARSE-FRONT residual:
+    // the STC used to be anchored on the demux front and advanced by counting
+    // refreshes, so audio sat ~100 ms early and +100 cancelled it. THE STC IS A
+    // CLOCK (docs/stc_freerun.md) removes that residual at its source -- the clock
+    // is anchored on the DISPLAYED picture's own PTS -- so the correction now
+    // over-corrects by exactly the amount it used to fix.
+    // MEASURED on APOLLO_13, 2026-09-07: play_err (clock minus audio playback
+    // position, i.e. the lip-sync error itself) reads -0.0 ms at 0 ms and +99.9 ms
+    // at +100 ms. HW-confirmed by ear the same day.
+    // The old deep-negative entries (-300/-400/-500) chased the stale-flag RAMP
+    // fixed in PR #62; the range stays balanced at +/-200 ms.
+    // ⚠ Re-ordering an option's value list REMAPS every saved setting, so the
+    // "v,N" config version below is bumped with it. See docs/av_sync.md.
+    "P1O[23:21],A/V Offset,0ms,-200ms,-100ms,-50ms,+50ms,+100ms,+150ms,+200ms;",
     "R0,Reset;",
     // Saved-settings version (lowercase v = user_io.cpp config_ver, DISTINCT
     // from the display-only uppercase V line below): the framework persists
@@ -794,7 +803,10 @@ parameter CONF_STR = {
     // Menus polarity flip did exactly that pre-versioning). Bumping orphans
     // the old file and falls everyone back to defaults -- there is no per-bit
     // migration, so audit the index-0 label of every option when bumping.
-    "v,2;",   // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
+    "v,3;",   // v3: 2026-09-07 A/V Offset value list re-ordered so 0 ms is index 0 (the
+              //     parse-front residual it used to null is gone). A re-order REMAPS every
+              //     saved value, so the version bumps and all settings reset once.
+              // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
     // disc-menu nav (Phase 2). The J1 list names buttons B1..B13 for the MiSTer
     // "Define buttons" menu (bits 4..16 of joystick_0; D-pad = bits 3:0). The
@@ -980,18 +992,20 @@ wire       av_freerun = status[13];
 wire signed [21:0] dec_nco_trim = 22'sd0;
 
 // O[23:21] A/V Offset: signed playback-start trim in 90 kHz ticks (1 ms = 90).
-// >0 = audio later. Index 0 = +100 ms (the NTSC-film residual null) power-on
-// default. 18-bit SIGNED (the earlier 16-bit width wrapped -400/-500 positive,
-// but those entries are retired now that the drift ramp is fixed — PR #62).
+// >0 = audio later. Index 0 = 0 ms (nominal) power-on default as of 2026-09-07:
+// the +100 ms that used to sit here nulled the PARSE-FRONT residual, which the
+// free-running display-anchored STC removes at source (measured: play_err -0.0 ms
+// at 0, +99.9 ms at +100). 18-bit SIGNED (the earlier 16-bit width wrapped
+// -400/-500 positive, but those entries are retired — PR #62).
 reg signed [17:0] av_ofs;
 always @(*) begin
     case (status[23:21])
-        3'd0:    av_ofs = 18'sd9000;     // +100 ms (default; nulls the NTSC-film residual)
+        3'd0:    av_ofs = 18'sd0;        //    0 ms (DEFAULT; the STC is display-anchored)
         3'd1:    av_ofs = -18'sd18000;   // -200 ms
         3'd2:    av_ofs = -18'sd9000;    // -100 ms
         3'd3:    av_ofs = -18'sd4500;    //  -50 ms
-        3'd4:    av_ofs = 18'sd0;        //    0 ms (nominal)
-        3'd5:    av_ofs = 18'sd4500;     //  +50 ms
+        3'd4:    av_ofs = 18'sd4500;     //  +50 ms
+        3'd5:    av_ofs = 18'sd9000;     // +100 ms (the old default; the parse-front null)
         3'd6:    av_ofs = 18'sd13500;    // +150 ms
         default: av_ofs = 18'sd18000;    // +200 ms
     endcase

@@ -30,7 +30,7 @@ MGL is parse it and arm a timer at the very end, *after* the core's reset is rel
 | — | `user_io_status_set("[0]", 1)` — core held in reset |
 | — | `cfg_parse()`, `video_init()`, first cfg word (`UIO_BUT_SW`) |
 | — | `mgl_parse(xml)` |
-| — | saved `DVD_v2.CFG` pushed as the status word |
+| — | saved `DVD_v<N>.CFG` pushed as the status word |
 | — | `boot.rom` download (the idle logo — **this happens for an MGL too**) |
 | **0** | `user_io_status_set("[0]", 0)` — reset released; `mgl->timer = delay × 1000` |
 | 0.9–1.0 s | the core pulses its virtual OSD button (`BUTTONS[0]`, `dvd/emu.sv`) |

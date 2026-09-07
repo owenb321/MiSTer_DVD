@@ -319,7 +319,7 @@ Chapter/stream/flag data from `tools/dvd_census.py` (2026-07-31). Predictions fr
   memories `paw-patrol-vm-matches-libdvdnav`, `cluedo-select-resume-park`.)
 - **Title end (POST):** VTSM vts=1 PGCN 5 → `LinkPGCN 22` → `JumpSS_VMGM_PGC 2` → `JumpTT 2`
 - **Watch:** the only straight *film* disc of the eight — use it as the A/V regression: 3:2
-  film cadence, A/V Offset default +100 ms, subtitle render, chapter skip, scrub. If testing
+  film cadence, A/V Offset default 0 ms (was +100 ms before 2026-09-07), subtitle render, chapter skip, scrub. If testing
   the **Film 24p** progressive raster, the PR fj#158 cadence-slip corrector needs **Frame Drop
   On** (memory `hdmi-progressive-film-cadence-judder`); drift-free was HW-proven on a 45-min
   MiB clip — Akira is the second-disc confirmation.

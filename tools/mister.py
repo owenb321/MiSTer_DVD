@@ -16,7 +16,7 @@ stock mechanisms:
               ascal's INPUT buffer (sys_top.v:680), so it carries no MiSTer OSD
               (composited after ascal, sys_top.v:1149), no popups and no
               scaling. MEASURED: a shot taken with the OSD open shows no OSD.
-  DVD_v2.CFG  the core's saved settings are a raw dump of Main's 128-bit status
+  DVD_vN.CFG  the core's saved settings are a raw dump of Main's 128-bit status
               word (user_io.cpp:600), read at core init before reset is released
               -- so writing 16 bytes sets any OSD option for the next launch.
   uinput      a virtual keyboard on the target reaches dvd/kbd_map.sv, which
@@ -62,11 +62,31 @@ REMOTE_TELEM_LOG = '/tmp/dvd_telemlog.jsonl'
 # GREATEST match (mra_loader.cpp:1288), not the newest file -- with ~75 DVD_*
 # builds in _Other/ a bare "DVD" selects whichever sorts last, which on this rig
 # is a MARGINAL build from weeks ago. The core name comes from CONF_STR[0], not
-# the filename, so renaming costs nothing: it is still "DVD" and still uses
-# DVD_v2.CFG.
+# the filename, so renaming costs nothing: it is still "DVD".
 HIL_RBF = 'DVD_hil.rbf'
 HIL_MGL = 'DVD_hil.mgl'
-CFG_NAME = 'DVD_v2.CFG'
+
+
+def _cfg_name():
+    """The saved-settings filename, READ FROM emu.sv's CONF_STR "v,N" line.
+
+    ⚠ This was hardcoded 'DVD_v2.CFG' and the 2026-09-07 bump to v3 would have
+    left it writing a file the core no longer reads -- so every --opt would have
+    silently done nothing and the harness would have measured DEFAULTS while
+    reporting the options it thought it set. Derive it; a constant here can only
+    go stale, and a stale one fails silently rather than loudly.
+    """
+    try:
+        src = open(os.path.join(ROOT, 'dvd', 'emu.sv')).read()
+        m = re.search(r'"v,(\d+);"', src)
+        if m:
+            return 'DVD_v%s.CFG' % m.group(1)
+    except Exception:
+        pass
+    return 'DVD.CFG'          # framework default when no "v,N" line exists
+
+
+CFG_NAME = _cfg_name()
 AGENT_SRC = os.path.join(HERE, 'mister_keyd.py')
 AGENT_DST = '/tmp/mister_keyd.py'
 AGENT_FIFO = '/tmp/mister_hil'

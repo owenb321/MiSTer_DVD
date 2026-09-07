@@ -61,6 +61,9 @@
 > 1. **Start offset — SHIPPED (`feature/lipsync-followups`).** The old "≈500 ms
 >    audio-late start constant" was mostly the stale-flag ramp in disguise; the
 >    TRUE residual is ≈100 ms audio-EARLY (nulled at `A/V Offset = +100` on MiB).
+>    ⛔ SUPERSEDED 2026-09-07: the default is now **0 ms**. +100 ms nulled the
+>    PARSE-FRONT residual, which the display-anchored STC removes at source
+>    (measured: play_err -0.0 ms at 0, +99.9 ms at +100). Historic text follows.
 >    The **`A/V Offset` default is now +100 ms** (index 0), the recommended
 >    NTSC-film setting, and the menu is rebalanced around ±200 ms
 >    (+100/-200/-100/-50/0/+50/+150/+200) — the retired deep-negative

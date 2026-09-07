@@ -1612,7 +1612,7 @@ T18–T20 the popup. `bench/dvd/run_dpad_seek.sh` runs the lot.
 > affected — cell/chapter seeks, menu jumps, and the ILVU angle jump are untouched. Sim:
 > `bench/dvd/iso_reader_seek_tb.sv` TEST4-8. **✅ HW-CONFIRMED (2026-07-10): scrub-release lands
 > clean (no lasting pixelation) and audio stays in sync after a scrub in both directions;
-> chapter/menu/angle unchanged.** (A/V Offset baseline is +100 ms.)
+> chapter/menu/angle unchanged.** (A/V Offset baseline was +100 ms; it is 0 ms from 2026-09-07.)
 - `tools/iso_nav_check.py`: PGC `program_map` → chapter → entry cell → sd sector.
 - `bench/dvd/nav_dsi_tb.sv`: the +10 s target math byte-exact (`RBN 9580`) vs the fixture.
 - `bench/dvd/iso_reader_chapter_tb.sv`: 3-chapter disc — next/prev/no-op-at-ends land on

@@ -85,8 +85,8 @@ left to detect. Nothing can infer it from the stream, which is why the manual **
 - **`Frame Drop` must stay On.** The cadence-slip corrector, which keeps imperfect
   real-world telecine in step with the display, runs on the frame-drop governor's path and
   does nothing without it. See [Settings](../playback/settings.md#frame-drop).
-- **`A/V Offset` defaults to +100 ms**, the correct null for NTSC film, which also measures
-  correctly on PAL. There should be no need to change it.
+- **`A/V Offset` defaults to 0 ms.** There should be no need to change it. (It was
+  +100 ms in v0.4.0 and earlier, nulling an offset the current clock no longer has.)
 
 ## Known limitations
 
