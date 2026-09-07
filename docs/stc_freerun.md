@@ -1,6 +1,6 @@
 # The STC is a clock — free-running STC, PTS-scheduled display
 
-> **Status (2026-09-06, branch `feature/stc-freerun`, `dev-stcfree`):**
+> **Status (2026-09-06, PR #63, `dev-stcfree`):**
 > **Stage 0 — exact PTS→picture association + `disp_lag` telemetry — IN FABRIC,
 > sim-proven, built (`DVD_stcfree_20260906_1357.rbf`), no behaviour change;
 > ✅ HW-confirmed (superseded by the Stage 1 rounds below).** **Stage 1 — the display scheduler, the free-running

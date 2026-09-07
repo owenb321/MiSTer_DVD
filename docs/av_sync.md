@@ -1,6 +1,6 @@
 # PTS-driven A/V sync — design & status
 
-> ## ★ 2026-09-06 — THE STC IS A CLOCK (`docs/stc_freerun.md`, branch `feature/stc-freerun`)
+> ## ★ 2026-09-06 — THE STC IS A CLOCK (`docs/stc_freerun.md`, PR #63)
 >
 > The model below ("video is the master timebase; the STC counts refreshes from a
 > parse-front anchor; the display never consults a PTS after that") is being

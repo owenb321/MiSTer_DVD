@@ -749,7 +749,7 @@ worse maintenance burden than targeted in-place edits. So:
   nothing). An imported "anchor the STC on the screen" fix made it WORSE (1800 ms + stream
   freezes) and is not merged — see `docs/av_sync.md` "HW round 3" before touching it.
 - 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06/07,
-  branch `feature/stc-freerun`, `dev-stcfree`). BUILT `DVD_stcfree_20260907_0335.rbf`
+  PR #63, `dev-stcfree`). BUILT `DVD_stcfree_20260907_0335.rbf`
   (SEED 5 first roll, clk_dec 91.41/90.51, 92 % ALM), sim-proven by
   `bench/dvd/run_stc_freerun.sh`, and ✅ **HW-CONFIRMED 2026-09-07** across titles
   (APOLLO_13/MiB/Ferris in sync, no judder after a chapter skip), menus (Thayer's Quest

@@ -947,7 +947,7 @@ fit/STA reports to zero — consistent with the project's "validate on hardware"
 
 ### A/V Sync & audio clock (drift handling)
 
-> ✅ **2026-09-06/07 — THE STC IS A CLOCK (`docs/stc_freerun.md`, branch `feature/stc-freerun`).**
+> ✅ **2026-09-06/07 — THE STC IS A CLOCK (`docs/stc_freerun.md`, PR #63).**
 > The tiers below are superseded as the timing model: the STC becomes a free-running
 > 90 kHz counter off the same crystal as the raster and the audio NCO, the display is
 > scheduled by each picture's own PTS (threaded through the decoder as a fifth picbuf

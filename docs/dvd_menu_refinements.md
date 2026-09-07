@@ -2,7 +2,7 @@
 
 > ★ **2026-09-06 amendment, CORRECTED 2026-09-07 (`docs/stc_freerun.md` §9-§11).** The
 > 2026-09-06 note said the menu exemptions this file records were all REMOVED on branch
-> `feature/stc-freerun`. **Two of them were removed and had to be put back**, and the
+> PR #63. **Two of them were removed and had to be put back**, and the
 > hardware said so: `av_vid_hold`'s `menu_active` force-off and `hl_stc_fresh` are
 > RESTORED. Removing the first froze Thayer's Quest and Tomb Raider before they reached a
 > menu (the ~1.24 s hold returned per keep_vbuf hop, and hops arrive faster than that);
