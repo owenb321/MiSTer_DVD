@@ -18,11 +18,20 @@
 #
 # Requires: iverilog, a52dec.  Skips (rc 0) if a52dec is missing -- it is not
 # part of the core toolchain.
+#
+# RUNTIME ~12 min, nearly all of it the 5.1 vector.  This is a verification gate,
+# not a per-commit smoke test.
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 TOL_DB=0.15
+# Sample pairs to capture per arm.  ★ This bounds the RUNTIME, which is dominated
+# by the 5.1 vector: five IMDCTs per block means ~10 minutes for this many pairs,
+# against seconds for stereo.  1792 is well past the leading silence and gives a
+# few hundred loud samples, which is ample for a median.  Decoding whole files
+# would push the suite past half an hour and nobody would run it.
+NPAIRS=1792
 OUT=bench/ac3/.level
 mkdir -p "$OUT"
 rc=0
@@ -62,7 +71,7 @@ open(sys.argv[2],'w').write('\n'.join('%02x' % b for b in d))
 
     # GREEN: shipped scalar -- must MATCH the reference
     vvp bench/ac3/ac3_level_sim "+hex=$OUT/$B.hex" "+out=$OUT/$B.dut.txt" \
-        > "$OUT/$B.green.log" 2>&1
+        "+n=$NPAIRS" > "$OUT/$B.green.log" 2>&1
     grep -E "^ac3_level:" "$OUT/$B.green.log" | sed 's/^/  /'
     python3 bench/ac3/level_cmp.py "$OUT/$B.ref.wav" "$OUT/$B.dut.txt" \
         1.0 "$TOL_DB" "GREEN $B" || rc=1
@@ -80,7 +89,7 @@ open(sys.argv[2],'w').write('\n'.join('%02x' % b for b in d))
     else
         EXP=$(python3 -c "print(16384.0/$LVLQ)")
         vvp bench/ac3/ac3_level_sim "+hex=$OUT/$B.hex" "+out=$OUT/$B.pre.txt" \
-            +lvl=16384 > /dev/null 2>&1
+            +lvl=16384 "+n=$NPAIRS" > /dev/null 2>&1
         python3 bench/ac3/level_cmp.py "$OUT/$B.ref.wav" "$OUT/$B.pre.txt" \
             "$EXP" "$TOL_DB" "RED   $B" || rc=1
     fi

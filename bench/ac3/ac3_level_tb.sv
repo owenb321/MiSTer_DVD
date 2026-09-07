@@ -83,6 +83,12 @@ module ac3_level_tb;
     end
 
     integer fout, npairs, nmax, peak, idle;
+    // ★ The pair budget is counted from the FIRST NON-SILENT sample, not from
+    // reset.  bbb_mono.ac3 opens with ~4200 samples of digital silence, so a
+    // budget counted from zero stopped the capture before any audio arrived and
+    // the gate measured peak=0.  Every pair is still WRITTEN, silence included,
+    // because level_cmp.py aligns the two captures by index.
+    integer nactive; reg started;
     reg [1023:0] hexf, outf;
 
     initial begin
@@ -90,7 +96,7 @@ module ac3_level_tb;
             $display("FAIL: +hex=<file> required"); $fatal;
         end
         if (!$value$plusargs("out=%s", outf)) outf = "ac3_level_out.txt";
-        if (!$value$plusargs("n=%d", nmax))   nmax = 200000;
+        if (!$value$plusargs("n=%d", nmax))   nmax = 4096;
         if (!$value$plusargs("lvl=%d", lvl_force)) lvl_force = 0;
 
         $readmemh(hexf, mem);
@@ -99,6 +105,7 @@ module ac3_level_tb;
 
         fout = $fopen(outf, "w");
         peak = 0; npairs = 0; wp = 0; wr_en = 0; idle = 0;
+        nactive = 0; started = 1'b0;
 
         repeat (10) @(posedge clk);
         rst = 0;
@@ -116,24 +123,34 @@ module ac3_level_tb;
 
     // collect output
     always @(posedge clk) begin
-        if (!rst && aud_valid && npairs < nmax) begin
+        // No nmax guard here on purpose: the budget is owned by the finish
+        // condition below, which counts from the first non-silent pair.  Guarding
+        // the collector instead truncated the capture during the leading silence,
+        // so `started` never set and the budget could never begin.
+        if (!rst && aud_valid) begin
             $fwrite(fout, "%0d %0d\n", $signed(audio_l), $signed(audio_r));
             if ($signed(audio_l)  > peak) peak =  $signed(audio_l);
             if (-$signed(audio_l) > peak) peak = -$signed(audio_l);
             if ($signed(audio_r)  > peak) peak =  $signed(audio_r);
             if (-$signed(audio_r) > peak) peak = -$signed(audio_r);
             npairs = npairs + 1;
+            if (!started && (audio_l !== 16'sd0 || audio_r !== 16'sd0)) started = 1'b1;
+            if (started) nactive = nactive + 1;
         end
     end
 
-    // finish once the feed is drained and output has gone quiet
+    // Finish as soon as enough pairs are captured, or the feed has drained and
+    // output has gone quiet.  ★ The pair cap matters: a 5.1 stream is five IMDCTs
+    // per block and decoding a whole file takes minutes of wall clock, but a few
+    // thousand pairs already give a solid median ratio -- so the cap is what makes
+    // this gate usable rather than something nobody runs.
     always @(posedge clk) begin
         if (!rst) begin
             if (aud_valid) idle = 0;
             else           idle = idle + 1;
-            if (wp >= nbytes && idle > 400000) begin
-                $display("ac3_level: acmod=%0d lvl_q=%0d (dut %0d) pairs=%0d peak=%0d err=%0d",
-                         acmod, lvl_q, lvl_q_dut, npairs, peak, ac3_err);
+            if ((started && nactive >= nmax) || (wp >= nbytes && idle > 400000)) begin
+                $display("ac3_level: acmod=%0d lvl_q=%0d (dut %0d) pairs=%0d active=%0d peak=%0d err=%0d",
+                         acmod, lvl_q, lvl_q_dut, npairs, nactive, peak, ac3_err);
                 $fclose(fout);
                 $finish;
             end

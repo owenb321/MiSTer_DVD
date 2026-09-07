@@ -61,7 +61,11 @@ def compare(ref_wav, dut_txt, expect, tol_db, name):
         return False
 
     n = min(len(ref), len(dut))
-    thr = max(map(abs, ref)) // 10
+    # ★ Threshold relative to the COMPARED SPAN, not the whole reference file.
+    # The bench captures a bounded window that may sit entirely inside a quiet
+    # passage; a threshold taken from the file's global peak then selects almost
+    # no samples and the gate fails for lack of data rather than on the level.
+    thr = max(map(abs, ref[:n])) // 10
     ratios = [dut[i] / ref[i] for i in range(n) if abs(ref[i]) >= thr and ref[i] != 0]
     if len(ratios) < 20:
         print("  FAIL %s: only %d loud samples to compare" % (name, len(ratios)))
