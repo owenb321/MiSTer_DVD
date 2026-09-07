@@ -63,8 +63,17 @@ for tb in resample_persist_tb resample_addr_realstride_tb; do
   iv /tmp/${tb}_sim dvd/resample_addrgen.v rtl/mpeg2/mem_addr.v bench/dvd/$tb.sv \
     && vvp /tmp/${tb}_sim >/dev/null 2>&1 && echo "  ran $tb (observational -- asserts nothing)"
 done
-bash bench/dvd/run_field_phase.sh  | tail -1
-bash bench/dvd/run_field_parity.sh | tail -1
+# ⚠ These were `| tail -1`, which prints the last line and DISCARDS the exit status:
+# in a pipeline $? is tail's, and `fail` was never set. Both suites could fail and the
+# driver reported ALL GREEN. Same defect class as the RED arm that read an empty log as
+# a verdict -- a gate that cannot report failure is not a gate.
+for fs in field_phase field_parity; do
+  if bash "bench/dvd/run_${fs}.sh" > "/tmp/${fs}_run.log" 2>&1; then
+    echo "  PASS $fs ($(grep -c 'PASS' "/tmp/${fs}_run.log") pass lines)"
+  else
+    echo "  FAIL $fs"; grep -v 'sorry' "/tmp/${fs}_run.log" | tail -10; fail=1
+  fi
+done
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="
 exit $fail
