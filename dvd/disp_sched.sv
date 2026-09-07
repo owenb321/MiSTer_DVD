@@ -151,6 +151,17 @@ module disp_sched #(
     // duration it applied. Three wrong guesses at the duration model were made from
     // rates alone; this reports the inputs so the next one is not a guess.
     output reg   [7:0] dbg_flags,
+    // ★ CAPTION CREDIT (2026-09-07). One pulse per pickup carrying the number of
+    // FIELDS the picture just taken will occupy. EIA-608 carries one byte pair per
+    // field and the encoder has already expanded 3:2 into the caption block
+    // (cc_count counts DISPLAY frames, not coded pictures), so "release this many
+    // pairs" and "display this picture" are the same event. That is what puts
+    // captions on this clock: without it cc_line21 drains on RASTER fields, whose
+    // RATE matches but whose PHASE is just the queue's standing occupancy -- and
+    // that is a whole GOP, because the block arrives as one burst at the GOP header
+    // (cc_line21's own comment says so) and nothing ever re-aligns it.
+    output reg         cc_credit_valid,
+    output reg  [2:0]  cc_credit,
     output reg  [15:0] dbg_dur,
     // Discharge accumulated lateness by DROPPING a picture, never by moving the
     // clock. One pulse per drop request, into resample's frame_late -> frame_drop_ctl.
@@ -392,9 +403,10 @@ module disp_sched #(
     end
 
     always_ff @(posedge clk) begin
-        anchor_req     <= 1'b0;
-        anchor_disc    <= 1'b0;
-        disp_lag_valid <= 1'b0;
+        anchor_req      <= 1'b0;
+        anchor_disc     <= 1'b0;
+        cc_credit_valid <= 1'b0;
+        disp_lag_valid  <= 1'b0;
         if (!rst_n || flush) begin
             stc          <= 33'd0;
             anchored     <= 1'b0;
@@ -426,6 +438,8 @@ module disp_sched #(
 
             // a pickup
             if (pickup) begin
+                cc_credit_valid <= 1'b1;
+                cc_credit       <= pic_fields;   // pairs owed to this picture
                 dbg_flags      <= {frame_rate_code, pic_ps, pic_pf, pic_tff, pic_rff};
 
                 disp_lag_valid <= 1'b1;

@@ -3564,6 +3564,7 @@ wire [32:0] core_stc;            wire core_stc_anchored;                 // clk_
 wire        core_disp_anchored;   // clk_dec: the clock is on the DISPLAY timeline, not the parse front
 wire        core_anchor_req;     wire signed [33:0] core_anchor_delta;   // clk_dec
 wire        core_anchor_disc;    // clk_dec: that re-anchor was a CONTENT PTS jump
+wire        core_cc_credit_valid; wire [2:0] core_cc_credit;   // clk_dec: captions owed to the picture just picked up
 wire signed [33:0] core_disp_lag; wire core_disp_lag_valid;              // clk_dec
 wire  [7:0] core_sched_flags; wire [15:0] core_sched_dur;               // clk_dec instrument
 wire [34:0] stc_mirror_sys;      wire stc_mirror_valid;                  // clk_sys
@@ -3914,6 +3915,8 @@ mpeg2video mpeg2video_inst (
     .disp_anchored (core_disp_anchored),
     .anchor_req   (core_anchor_req),
     .anchor_disc  (core_anchor_disc),
+    .cc_credit_valid (core_cc_credit_valid),
+    .cc_credit       (core_cc_credit),
     .anchor_delta (core_anchor_delta),
     .disp_lag     (core_disp_lag),     // DVD-FORK (PTS scheduling): displayed PTS - STC at each pickup
     .disp_lag_valid (core_disp_lag_valid),
@@ -5614,6 +5617,9 @@ cc_vbi cc_vbi_inst (
     .dec_pair_valid (core_cc_valid),
     .dec_pair       (core_cc_pair),
     .dec_pair_field (core_cc_field),
+    // THE STC IS A CLOCK: captions drain on display pickups, not raster fields
+    .dec_credit_valid (core_cc_credit_valid),
+    .dec_credit       (core_cc_credit),
     .enable         (interlaced_eff & ~status[14]),
     .test           (status[44]),
     .flush          (load_flush),

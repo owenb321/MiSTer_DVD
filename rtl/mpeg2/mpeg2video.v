@@ -52,7 +52,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              rst,                                                                                                                 // clocked with clk
              stream_data, stream_valid,                                                                                           // clocked with clk
              stream_mark, pts_in, pts_in_valid,                                                                                  // DVD-FORK (PTS association): PES mark + PTS in
-             stc_tick, sched_en, half_scan, stc, stc_anchored, disp_anchored, anchor_req, anchor_disc, anchor_delta, disp_lag, disp_lag_valid, sched_dbg_flags, sched_dbg_dur,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
+             stc_tick, sched_en, half_scan, stc, stc_anchored, disp_anchored, anchor_req, anchor_disc, cc_credit_valid, cc_credit, anchor_delta, disp_lag, disp_lag_valid, sched_dbg_flags, sched_dbg_dur,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
 	     reg_addr, reg_wr_en, reg_dta_in, reg_rd_en, reg_dta_out,                                                             // clocked with clk
              busy, error, interrupt, watchdog_rst,                                                                                // clocked with clk
              r, g, b, y, u, v, pixel_en, h_sync, v_sync, c_sync, h_pos, v_pos,                                                     // clocked with dot_clk
@@ -116,6 +116,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   input      [15:0]half_scan;
   output     [32:0]stc;
   output           stc_anchored;
+  output           cc_credit_valid; // DVD-FORK (captions on the STC): one pulse per pickup
+  output     [2:0] cc_credit;       // ... carrying that picture's field count = pairs owed
   output           anchor_disc;     // DVD-FORK: that re-anchor was a CONTENT PTS JUMP (cell/menu/PGC), not lateness
   output           disp_anchored;   // DVD-FORK: the clock is on the DISPLAY timeline (a tagged picture anchored it), not the parse front
   output           anchor_req;
@@ -1540,6 +1542,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .disp_anchored(disp_anchored),
     .anchor_req(anchor_req),
     .anchor_disc(anchor_disc),
+    .cc_credit_valid(cc_credit_valid),
+    .cc_credit(cc_credit),
     .anchor_delta(anchor_delta),
     .disp_lag_valid(disp_lag_valid),
     .disp_lag(disp_lag),
