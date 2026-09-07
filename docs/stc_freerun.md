@@ -671,6 +671,54 @@ evidence than before — the clock history cannot report health when the path is
 `av_drift` is referenced to the audio stream's own timestamps — but the verdict is a
 listening test.
 
+### (9) MENU REGRESSION (2026-09-07) — the exemptions were load-bearing, and the deleted comment said so
+
+HW report after (8): titles confirmed good (APOLLO_13, MiB, Ferris; no judder after a
+chapter skip) and **four interactive discs regressed** — Thayer's Quest and Tomb Raider
+froze before reaching a menu, Harry Potter Interactive and Scene It lost their highlights
+(Scene It reporting no highlight TARGETS at all).
+
+**Both classes came from two Stage-1 changes, and in each case the text that was deleted
+or overridden had already described the failure.**
+
+1. **`av_vid_hold`'s `menu_active` force-off.** Stage 1 removed it and substituted an
+   escape that fires only when NO audio has arrived (`!aud_seen && tmr[22]`, ~155 ms).
+   Menus with an intro, a logo chain or background music HAVE audio, so for exactly those
+   the full ~1.24 s hold returned — **per `keep_vbuf` hop**, and hops can arrive faster
+   than that, so it never released. The deleted comment: *"freezing deep menus (numbers
+   never picked up) and keeping video_live=0 (which blocks the highlight render gate +
+   nav_pci fallback)"* — which is both reported classes in one sentence.
+2. **`hl_stc_fresh` tied to 1.** That makes `nav_pci`'s `stc_trusted` permanently true, and
+   `nav_pci`'s own comment records the cost: a stale per-VOBU `ss=0` DISARM is then
+   perpetually due, and `off_due` OUTRANKS `nxt_due` in the apply block, so it clears arms
+   and starves promotions. That is "no highlight targets present" — a teardown, not a
+   render failure. ★ Display-coherence is necessary to trust the clock, **not sufficient**:
+   an HLI's `s_ptm` belongs to the timeline its NAV pack was parsed on, and a `keep_vbuf`
+   hop crosses timelines without a flush.
+
+**MEASURED, before → after (`DVD_stcfree_20260907_1249`, SEED 5, 93.18/92.01):**
+
+| | before | after |
+|---|---|---|
+| Tomb Raider pickups in 60 s | 410, then **0/s from t≈32 s** (`video_live`=0, `av_drift` frozen) | **1313, never stalls**, `video_live` high throughout |
+| Thayer pickups / `av_drift` | 928 / **+1500 ms** | 1357 / **+270…+465 ms** |
+| Harry Potter highlight | absent | **present, and MOVES on a D-pad press** (screenshot A→B) |
+
+★ The highlight was verified by **pressing Down and watching the underline move from
+"Play Game" to "Trailers"** — an interactive check that touches no core-derived
+instrument, which is the standard this session had to learn.
+
+⚠ **STILL OPEN: menu AUDIO scheduling.** `sched_en`/`sync_armed` keep their menu
+exemption removed (that is what the maintainer asked for), but menus re-anchor the clock
+**4–6 times a minute** — every `keep_vbuf` hop, cell and PGC boundary — and **nothing
+re-times audio across a re-anchor**, so each one leaves a step the system cannot heal.
+`play_err` is correspondingly meaningless there (Thayer mean −3123 ms; Tomb Raider ranging
+−3562…+4975 ms): it accumulates the sum of every clock jump since its one-shot anchor.
+⛔ Do NOT "fix" that by re-basing `play_anchor` on a re-anchor — see (5); that hides a real
+title-domain error. Menu lip-sync needs either far fewer re-anchors or a genuine audio
+re-time at one, and neither exists yet. The fallback, if the offset is still audible, is to
+restore `~menu_active` on `sched_en`/`sync_armed` and accept free-running menu audio.
+
 ### Still open after these fixes
 
 ⏳ **The provisional-anchor fix is BUILT AND SIM-PROVEN, NOT HW-CONFIRMED.** The evidence
