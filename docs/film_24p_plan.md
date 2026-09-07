@@ -8,7 +8,7 @@
 > content rate so the start-up VBUF over-fill never drained, and the STC was anchored
 > at the parse front. With the display scheduled by each picture's PTS against a
 > free-running STC the buffer depth is latency, not offset, in every mode; the
-> cadence-slip corrector is deleted. ⏳ HW round B is the gate.
+> cadence-slip corrector is deleted. ✅ **HW-CONFIRMED 2026-09-07**: APOLLO_13, MiB and Ferris all hold sync, and the film-engage offset that a chapter skip used to clear is gone — it was never detection, it was the clock counting displayed frames from a demux-front anchor (`docs/stc_freerun.md`).
 
 > **Status:** ✅ **Phase 0 + Phase 1 SHIPPED + HW-CONFIRMED (2026-07-25, PR #TBD).** The
 > `P1O[24],Film 24p Out` manual toggle works on real hardware: NTSC film plays at correct

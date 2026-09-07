@@ -3,10 +3,10 @@
 > **Status (2026-09-06, branch `feature/stc-freerun`, `dev-stcfree`):**
 > **Stage 0 — exact PTS→picture association + `disp_lag` telemetry — IN FABRIC,
 > sim-proven, built (`DVD_stcfree_20260906_1357.rbf`), no behaviour change;
-> ⏳ HW round A pending.** **Stage 1 — the display scheduler, the free-running
+> ✅ HW-confirmed (superseded by the Stage 1 rounds below).** **Stage 1 — the display scheduler, the free-running
 > STC, one clock for every consumer, menus included — IN FABRIC, sim-proven
 > (`bench/dvd/run_stc_freerun.sh`), built `DVD_stcfree_20260906_1737.rbf` (SEED 5
-> first roll after pipelining the scheduler, clk_dec 89.75/86.02); ⏳ HW round B pending.** This file is the
+> first roll after pipelining the scheduler, clk_dec 89.75/86.02); ✅ **HW-CONFIRMED 2026-09-07** (build `DVD_stcfree_20260907_1646`) after the six defects in §3.7 and §9-§11.** This file is the
 > design and status record. Supersedes the timing model in `docs/av_sync.md` ("Model: a
 > commercial DVD player") and the two-clocks amendment on the archived branch
 > `feature/audio-delay-ddr` (never merged; its §14.9 investigation is summarised
@@ -163,7 +163,7 @@ Fixtures are cut from real media by `tools/pts_map.py` (gitignored;
 
 ## 3. Stage 1 — the display scheduler and the free-running STC
 
-**Status: IN FABRIC, sim-proven (`bench/dvd/run_stc_freerun.sh`), ⏳ HW round B
+**Status: IN FABRIC, sim-proven (`bench/dvd/run_stc_freerun.sh`), ✅ **HW-CONFIRMED 2026-09-07** (build `DVD_stcfree_20260907_1646`) — HW round B
 pending.** One timing path, one clock, every consumer — menus included.
 
 ### 3.1 The clock (`dvd/disp_sched.sv`, hosted in `mpeg2video`)
@@ -753,6 +753,61 @@ this is where they were measured; they want their own issue.
 OUR OWN BUILDS.** Four symptoms arrived in one report, all in the menu domain, all
 plausible consequences of the same change — and two of them had nothing to do with it. A
 shared symptom class is not shared causation.
+
+## 11. EVERYTHING ON ONE CLOCK (2026-09-07) — nav_pci and the captions
+
+Asked to make the whole design uniform, an audit found exactly two presentation paths
+still off the STC. Both are now on it, and both are ✅ HW-CONFIRMED
+(`DVD_stcfree_20260907_1646`, SEED 5 first roll, clk_dec 94.46/89.01, 92 % ALM).
+
+**`nav_pci` — trust that measures the clock instead of guessing.** An HLI's `s_ptm`
+belongs to the timeline its NAV pack was parsed on, so comparing `stc` against it is
+informative only while `stc` still measures that timeline. `nav_pci` now takes
+`stc_reanchor` (`disp_sched`'s `anchor_disc`) and tracks `hli_coherent`: was this PTM
+committed AFTER the clock's most recent re-anchor. That is what `stc_fresh <= ~keep_vbuf`
+was reaching for and could not express — a guess about which HOPS tend to skew the clock,
+made when no signal existed for "the clock moved".
+⚠ **The settle/timer fallbacks STAY**, and are not redundant: they cover the incoherent
+case, which is real. Tying `stc_fresh` to 1 effectively deleted them and that is what cost
+Harry Potter and Scene It their highlights (§9). Gate: `nav_pci_tb` T18 requires no
+scheduled promotion after a re-anchor; **T18b requires the fallback to promote it anyway**,
+so coherence gates the scheduled path only and never strands a highlight.
+⚠ Wired to `rephase_req`, not the rate-limited `aud_disc_rephase`: coherence is a fact
+about the clock, not something to throttle.
+
+**Captions — released by the display, not the raster.** `cc_line21`'s own comment already
+had the mechanism: the pairs for a whole GOP arrive as ONE BURST at the GOP header and then
+leave two per frame, so the queue's steady occupancy is a GOP (~0.5 s). Draining on raster
+fields matches the RATE — same crystal — and preserves whatever phase the queue settled at,
+for ever. `disp_sched` now emits a credit per display pickup carrying that picture's FIELD
+count; EIA-608 is one pair per field with the 3:2 already expanded by the encoder, so
+"release this many pairs" and "display this picture" are the same event.
+⚠ Failure mode is deliberate: credits SATURATE so un-captioned content cannot bank them,
+and a ~1 s watchdog frees the drain if a non-empty queue stops being served — worst case
+degrades to the old free-running behaviour, never to silence.
+⚠ **`[1]`–`[7]` of `cc_line21_tb` ALL PASS with the credit gate removed** — they grant a
+credit per frame anyway, so they cannot tell display-paced from free-running. `[8]` is the
+arm that makes it load-bearing, and it fails both halves without the gate.
+
+**Three traps, all mine, all recorded at their sites:**
+
+- The `dec_clk` toggle had **no reset**: X forever in simulation (`~X` is X) and undefined
+  at power-up in silicon. Every pop blocked; it presented as a completely dead DUT.
+  ★ Verilator would NOT have caught this — it 2-states X — which is the reason it is a
+  fast second opinion here and not a replacement for the Icarus gate.
+- `hli_commit_p`'s default clear sat before an async-reset `if`, which **Quartus refuses to
+  infer** (Error 10818) while Icarus accepts it happily. Caught by the build, not by sim.
+- `bench` stimulus must be driven from the **negedge** and in the **producer's** clock
+  domain. Both violations made scenarios fail against correct RTL.
+
+### What is deliberately NOT on the STC
+
+Named so the next audit does not re-litigate them: still durations and the reader's cell
+clock (raster vsyncs ÷ `disp_fps` — a WALL clock, which is what a `still_time` needs), the
+HUD/seek-bar clock (DSI `c_eltm`), and every timeout (`av_vid_hold`, `DRAIN_WD`,
+`arm_timer`, `vmw_tmr` — plain `clk_sys` counters, rate-exact, none of which schedules
+presentation). `spu_decode`'s `menu_mode` bypass also stays: a menu subpicture is shown for
+as long as the menu is up, not on an authored window.
 
 ### Still open after these fixes
 

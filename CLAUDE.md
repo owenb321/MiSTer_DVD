@@ -751,8 +751,11 @@ worse maintenance burden than targeted in-place edits. So:
 - 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06/07,
   branch `feature/stc-freerun`, `dev-stcfree`). BUILT `DVD_stcfree_20260907_0335.rbf`
   (SEED 5 first roll, clk_dec 91.41/90.51, 92 % ALM), sim-proven by
-  `bench/dvd/run_stc_freerun.sh`, telemetry-measured on the rig, ⏳ LISTENING TEST PENDING
-  — the verdict here is ears, not instruments (see the ★★ below). Design + status record:
+  `bench/dvd/run_stc_freerun.sh`, and ✅ **HW-CONFIRMED 2026-09-07** across titles
+  (APOLLO_13/MiB/Ferris in sync, no judder after a chapter skip), menus (Thayer's Quest
+  and Tomb Raider no longer freeze, D&D holds sync through menu choices, T2 clean,
+  FAMILY FEUD II's questions read to the end), captions (MiB + Matrix) and the new
+  0 ms A/V Offset default. Design + status record:
   `docs/stc_freerun.md` — read §3.5 for what was DELETED before touching any A/V code, and
   §3.7 (1)–(8) for six defects found across three HW rounds, all of them mine.**
   ★★ **THE ONE THAT MATTERS MOST: `dvd/emu.sv` DECLARED `dec_pts_in`/`dec_pts_in_valid`,
@@ -797,6 +800,27 @@ worse maintenance burden than targeted in-place edits. So:
   0 ms and +99.9 at +100, so the +100 ms default was the null of the OLD parse-front
   residual, exactly as the plan predicted. ⏳ Not changed yet — it is user-visible, the
   verdict is ears, and `CONF_STR` is in the netlist so it re-rolls the pinned seed.
+  ★ **EVERYTHING THAT PRESENTS TO THE VIEWER IS NOW ON THIS ONE CLOCK** — video, audio
+  decode, IEC 61937 passthrough, subpictures, highlight promotion and line-21 captions.
+  The last two were an explicit uniformity pass (`docs/stc_freerun.md` §11):
+  `nav_pci` trusts the scheduled path only while the pending HLI was committed AFTER the
+  clock's most recent re-anchor (`hli_coherent`) — a measurement, where `~keep_vbuf` was
+  a guess; and `cc_line21` spends a credit per display PICKUP instead of draining on
+  raster fields, which fixed a **GOP-sized (~0.5 s) standing phase error** the old
+  "same clock" reasoning could not see because it only ever argued about RATE.
+  ⚠ **The nav_pci settle/timer FALLBACKS STAY.** They are not redundant: they cover the
+  incoherent case, and deleting them (which tying `hl_stc_fresh` to 1 effectively did) is
+  what cost Harry Potter and Scene It their highlights.
+  ⚠ **Deliberately NOT on the STC, so the next audit does not re-litigate them:** still
+  durations and the reader's cell clock (raster vsyncs ÷ `disp_fps` — a WALL clock, which
+  is what a `still_time` needs), the HUD/seek-bar clock (DSI `c_eltm`), `spu_decode`'s
+  `menu_mode` bypass (a menu subpicture shows for as long as the menu is up), and every
+  timeout (`av_vid_hold`, `DRAIN_WD`, `arm_timer`, `vmw_tmr` — plain clk_sys counters that
+  schedule nothing).
+  ⚠ **Two PRE-EXISTING highlight bugs were found while testing this and are NOT from it**
+  (A/B'd against `dev-main`, identical there): Harry Potter Interactive's Player Mode
+  screen and Scene It's Play-game menu render no highlight. Diagnostic state for both is
+  in `docs/stc_freerun.md` §10; they want their own issue.
   ⛔ **RETRACTED en route, and worth knowing before re-deriving either:** (a) re-basing
   `play_anchor` on a clock re-anchor — `play_err` IS the lip-sync error, and dragging its
   anchor along forces it toward zero, so it read −98 ms while the real error was 1.6 s;
@@ -1336,11 +1360,16 @@ worse maintenance burden than targeted in-place edits. So:
   untouchable by construction). ★ In the VLD and NOT `ps_demux` — ps_demux is in
   FRONT of the ~1 s VBUF, so a demux-side sniff is the stale-display-flags bug
   (drift rounds 11-12) in a new hat; the VLD is where `flags_commit` had to move for
-  the same reason. (2) **pacing** = one pair per displayed FIELD, no PTS/STC/NCO at
-  all — MEASURED on real discs: the block sits on the GOP header and `cc_count`
-  counts DISPLAY frames not coded pictures (15 vs 12 following pictures = 3:2 already
-  expanded by the encoder), so the caption clock and the raster are the same clock
-  and governor drops/repeats are absorbed for free. (3) **waveform**
+  the same reason. (2) **pacing** = one pair per displayed FIELD — MEASURED on real
+  discs: the block sits on the GOP header and `cc_count` counts DISPLAY frames not
+  coded pictures (15 vs 12 following pictures = 3:2 already expanded by the encoder).
+  ⚠ **AMENDED 2026-09-07:** the RATE argument holds, but "no PTS/STC at all, the
+  caption clock and the raster are the same clock" was only ever true of the rate —
+  it says nothing about PHASE, and the phase was out by about a GOP, because the
+  pairs arrive as ONE BURST at the GOP header and nothing re-aligned the queue.
+  `disp_sched` now emits a credit per display PICKUP carrying that picture's field
+  count and `cc_line21` spends one per pair: same rate, the display's phase.
+  ✅ HW-confirmed 2026-09-07 on MiB and Matrix. See `docs/stc_freerun.md` §11. (3) **waveform**
   (`dvd/cc_line21.sv`) — exact by construction: 13.5 MHz = 858·fH and the bit rate is
   32·fH, so one bit is **858/32 = 26.8125 dots EXACTLY**; a 16-bit NCO at 2444/dot
   hits that to +0.0002% and its top 4 bits index the run-in sine LUT. Line number
