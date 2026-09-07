@@ -49,7 +49,23 @@ else
   echo "  FAIL disp_sched_tb"; tail -20 /tmp/disp_sched_green.log; fail=1
 fi
 
+# ★ MUTATIONS RUN IN PARALLEL (2026-09-07). Each arm is an independent
+# build+run, and one disp_sched_tb run is MEASURED at 4m42s pegged on ONE core --
+# so ten sequential arms spent ~47 minutes using 1/24th of this machine. They share
+# nothing but the shipping source they copy, so they fan out with no interaction.
+# Verdicts go to files because a background subshell cannot set `fail` in the parent.
+# ⚠ Icarus is single-threaded per process; this parallelises ACROSS arms, which is
+# where the idle cores were. Verilator runs the same bench ~13x faster end to end
+# and would compound with this, but it is NOT a drop-in: its X handling would have
+# hidden the uninitialised cc_line21 toggle that presented as a completely dead DUT
+# earlier today. Fast second opinion, not a replacement for the gate.
+MUTJOBS=${MUTJOBS:-10}
+RESDIR=$(mktemp -d)
 mut() {   # name  python-expression(old->new)  expected-failing-scenario-regex
+  while [ "$(jobs -rp | wc -l)" -ge "$MUTJOBS" ]; do wait -n 2>/dev/null || break; done
+  _mut_one "$@" &
+}
+_mut_one() {
   local name=$1 old=$2 new=$3 pat=$4
   local d; d=$(mktemp -d)
   python3 - "$d" "$old" "$new" <<'PYEOF'
@@ -62,9 +78,10 @@ PYEOF
   iverilog -g2012 -o "$d/sim" "$d/disp_sched.sv" bench/dvd/disp_sched_tb.sv || { echo "  $name: build failed"; fail=1; rm -rf "$d"; return; }
   vvp "$d/sim" | grep -v '^VCD' > "$d/log"
   if grep -q "^FAIL" "$d/log" && grep -q "$pat" "$d/log"; then
-    echo "  $name: caught ($(grep -c '^FAIL' "$d/log") FAIL lines, incl. $pat)"
+    echo "  $name: caught ($(grep -c '^FAIL' "$d/log") FAIL lines, incl. $pat)" > "$RESDIR/$name"
   else
-    echo "  $name: NOT CAUGHT -- the bench cannot see this defect"; grep "FAIL\|PASS" "$d/log" | head -5; fail=1
+    { echo "  $name: NOT CAUGHT -- the bench cannot see this defect"
+      grep "FAIL\|PASS" "$d/log" | head -5; echo "MUTFAIL"; } > "$RESDIR/$name"
   fi
   rm -rf "$d"
 }
@@ -92,6 +109,14 @@ mut M11 "disc       <= disc_jump_w;" "disc       <= disc_w;" "FAIL \[14c\]"
 # FORWARD PTS gap too, so an authored still or held frame cut the middle out of whatever
 # audio was playing over it (FAMILY FEUD II: "Name ... windy").
 mut M12 "wire disc_jump_w = has_tag && anchored && next_valid && (d_pic_next < -frame_s);" "wire disc_jump_w = has_tag && anchored && next_valid && ((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s));" "FAIL \[14d\]"
+
+wait
+for f in "$RESDIR"/*; do
+  [ -e "$f" ] || continue
+  grep -v '^MUTFAIL$' "$f"
+  grep -q '^MUTFAIL$' "$f" && fail=1
+done
+rm -rf "$RESDIR"
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="
 exit $fail
