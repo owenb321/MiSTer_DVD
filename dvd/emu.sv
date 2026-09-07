@@ -1033,6 +1033,7 @@ wire        aud_frame_pts_valid_w;
 wire [32:0] aud_dispatch_pts;       // dvd_audio_decode -> av_sync
 wire        aud_dispatch_pts_valid;
 wire        av_stc_anchored;        // av_sync STC locked -> dispatch schedule gate
+wire        av_disp_anchored;       // ... and on the DISPLAY timeline -> audio PLAYBACK release
 wire [32:0] av_stc;
 wire signed [31:0] av_drift;
 wire [15:0] av_reanchor_cnt;
@@ -3155,6 +3156,7 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     // docs/dvd_menu_refinements.md §5c.
     .sched_en           (~av_freerun),          // THE STC IS A CLOCK: menus follow the same rule (docs/stc_freerun.md)
     .stc_anchored       (av_stc_anchored),
+    .disp_anchored      (av_disp_anchored),  // THE STC IS A CLOCK: playback releases only once the clock is on the DISPLAY timeline
     // Arrival front for the mid-play catch-up (Shea-Stadium ratchet fix): the
     // newest PARSE-time audio PTS — audio may skip forward only when current
     // audio has actually arrived. See head_catchup in dvd_audio_decode.sv.
@@ -3243,7 +3245,14 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     // parity) and cannot wedge; title entry pulses aud_flush, so title sync
     // re-arms cleanly.
     .sync_armed   (~av_freerun),        // THE STC IS A CLOCK: menus follow the same rule (docs/stc_freerun.md)
-    .stc_anchored (av_stc_anchored),
+    // ★ disp_anchored, NOT stc_anchored. Releasing on the provisional parse-front
+    // anchor emits real bursts and then holds ~1.6 s when the display's first tagged
+    // picture pulls the clock back -- a real->hold->real flap, which is exactly the
+    // receiver-acquisition failure this module's own sync_en comment describes.
+    // (The wrapper is otherwise SELF-CORRECTING, unlike the decode path: it paces
+    // every frame against the clock instead of latching a phase once, which is why
+    // the permanent 1.6 s lead was a decoded-audio defect only.)
+    .stc_anchored (av_disp_anchored),
     .stc          (av_stc),
     .av_ofs       (av_ofs),
     .clk_audio    (CLK_AUDIO),
@@ -3284,6 +3293,12 @@ reg         av_vid_hold;
 reg  [24:0] av_vid_hold_tmr;                    // 2^25 / 27 MHz ~ 1.24 s fallback
 wire signed [34:0] play_vs_anchor =
     $signed({2'b0, dbg_aud_play_pts}) - $signed({2'b0, av_stc});
+// ⚠ STAYS on av_stc_anchored, deliberately. This is the video pickup-hold's release,
+// and audio's playback release now waits for the FIRST PICKUP (disp_anchored). Making
+// this wait for disp_anchored too would close the loop: no pickup without audio, no
+// audio without a pickup, broken only by the 1.24 s fallback on every single load.
+// It is not circular as written -- this reads the play_pts LATCH, taken at DISPATCH,
+// which runs freely while the drain gate is shut.
 wire aud_caught = av_stc_anchored && dbg_aud_play_pts_valid &&
                   (play_vs_anchor >= -35'sd4500);   // within ~50 ms of the anchor
 // THE STC IS A CLOCK (docs/stc_freerun.md): the hold is UNIVERSAL — menus follow
@@ -3374,6 +3389,7 @@ av_sync av_sync_inst (
     .dispatch_pts_valid (aud_dispatch_pts_valid),
     .stc                (av_stc),
     .stc_anchored       (av_stc_anchored),
+    .disp_anchored      (av_disp_anchored),
     .anchor_pulse       (av_anchor_pulse),
     .anchor_delta       (av_anchor_delta),
     .drift              (av_drift),
@@ -3473,14 +3489,15 @@ reg  sched_en_s1, sched_en_dec;
 always @(posedge clk_dec) begin sched_en_s1 <= ~av_freerun; sched_en_dec <= sched_en_s1; end
 
 wire [32:0] core_stc;            wire core_stc_anchored;                 // clk_dec
+wire        core_disp_anchored;   // clk_dec: the clock is on the DISPLAY timeline, not the parse front
 wire        core_anchor_req;     wire signed [33:0] core_anchor_delta;   // clk_dec
 wire signed [33:0] core_disp_lag; wire core_disp_lag_valid;              // clk_dec
 wire  [7:0] core_sched_flags; wire [15:0] core_sched_dur;               // clk_dec instrument
-wire [33:0] stc_mirror_sys;      wire stc_mirror_valid;                  // clk_sys
+wire [34:0] stc_mirror_sys;      wire stc_mirror_valid;                  // clk_sys
 wire signed [33:0] av_anchor_delta_w; wire av_anchor_delta_valid;
 wire signed [33:0] disp_lag_sys;  wire disp_lag_sys_valid;
-pts_cdc #(.W(34)) pts_cdc_stc (          // the clock, every tick
-    .src_clk(clk_dec), .src_rst_n(reset_n), .src_data({core_stc_anchored, core_stc}), .src_valid(stc_tick_dec),
+pts_cdc #(.W(35)) pts_cdc_stc (          // the clock, every tick
+    .src_clk(clk_dec), .src_rst_n(reset_n), .src_data({core_disp_anchored, core_stc_anchored, core_stc}), .src_valid(stc_tick_dec),
     .dst_clk(clk_sys), .dst_rst_n(reset_n), .dst_data(stc_mirror_sys), .dst_valid(stc_mirror_valid));
 pts_cdc #(.W(34)) pts_cdc_delta (        // each re-anchor's delta
     .src_clk(clk_dec), .src_rst_n(reset_n), .src_data(core_anchor_delta), .src_valid(core_anchor_req),
@@ -3789,6 +3806,7 @@ mpeg2video mpeg2video_inst (
     .half_scan    (half_scan_dec),     // DVD-FORK (PTS scheduling): half the raster's image-scan period, ticks
     .stc          (core_stc),          // DVD-FORK (PTS scheduling): the clock (clk_dec)
     .stc_anchored (core_stc_anchored),
+    .disp_anchored (core_disp_anchored),
     .anchor_req   (core_anchor_req),
     .anchor_delta (core_anchor_delta),
     .disp_lag     (core_disp_lag),     // DVD-FORK (PTS scheduling): displayed PTS - STC at each pickup

@@ -421,7 +421,7 @@ to fold it into the scheduler (release half a field early) or leave it to the
 knob is an open question, and it should be settled with the authored SYNC disc
 rather than by taste.
 
-### (4) A raster change is a discontinuity, and it was not being treated as one
+### (4) A raster change is a discontinuity — the diagnosis was right, the FIX WAS WRONG (retracted, see (5))
 
 After the three fixes above the timeline was FLAT — and sitting a constant
 **−1.83 s** behind the clock, with audio (slaved to that clock) a fixed 1.83 s
@@ -437,7 +437,9 @@ and nothing is displayed. **And at 24p the display is already at maximum rate**
 — one picture per raster scan IS the content rate — so the wall time lost there
 can never be worked off.
 
-**Fix: re-anchor at the raster change, which costs no dropped frames.** This is
+**Fix TRIED AND RETRACTED — re-anchor at the raster change.** ⛔ See (5).
+
+**The reasoning at the time, preserved because it is exactly the trap:** This is
 a re-anchor on a KNOWN EVENT, not on lateness, and that distinction is the whole
 of §3.9: every reference player re-anchors on a discontinuity it can name and
 none moves the clock merely because output was late. `disp_sched` watches
@@ -454,8 +456,94 @@ event to key on; a mode change now never reaches it.
 
 MEASURED on the rig after this fix, APOLLO_13 launched straight into the feature
 (the natural video→film transition), 100 s: **`disp_lag` −15.8 → −16.7 ms, slope
-−0.01 ms/s**, `play_err` 0.0, drain-gate closures 0. The 1.83 s step is gone and
-the residual is the one-field pickup-to-screen latency.
+−0.01 ms/s**, `play_err` 0.0, drain-gate closures 0. ⚠⚠ **AND THE USER STILL HEARD
+AUDIO 1.6 s AHEAD.** Every instrument read clean and the defect was untouched. That
+is (5).
+
+### (5) ★★ AUDIO COMMITTED ITS PHASE TO THE PROVISIONAL (PARSE-FRONT) CLOCK — the measured root cause
+
+Report, in the exact configuration: APOLLO_13, Film 24p Auto, **Disc Menus off**,
+Progressive, A/V Offset 0 — *"the audio is still 1.6 s ahead of the video"*. Reproduced
+on the rig, where `disp_lag` read **−27 ms** and `play_err` **−98 ms**. Both instruments
+said the player was in sync while it was 1.6 s out.
+
+**★ First, `play_err` had been made unable to report.** It computes
+`stc − play_anchor − pos_ticks`: the clock, minus the PTS playback started at, minus how
+far into that audio the DAC has got — precisely how far apart the two media are. Step 4
+of the plan said to *"re-base `play_anchor` by the re-anchor delta so a sample-continuous
+stream across a PTS discontinuity is not misread as a phase error"*. That is true of a
+genuine stream discontinuity, but it was applied at **every** re-anchor, so every
+re-anchor forced `play_err` back toward zero. Removed; the reasoning is a ⛔ comment at
+the site so it cannot be re-derived.
+
+**★ Then the defect itself, MEASURED rather than reasoned.** Two 90 s captures through
+`tools/mister.py launch --telem-log`, watching word 13 `av_drift` (dispatched audio PTS
+− STC):
+
+| run | raster | what av_drift did |
+|---|---|---|
+| Film 24p Auto | changes 59.94 → 23.976 at t≈10.9 s | decays to +98 ms, **steps to +1640 ms** at t=12.3 s, holds |
+| Film 24p **Off** | 59.94 throughout, no change at all | decays to +319 ms, **steps to +1615 ms** at t=11.3 s, holds |
+
+The second run settles it: the step happens with **no raster change**, so it is not a
+mode switch, and `pickups`, `refreshes`, `lates`, `drops` and `vbuf_fill` are undisturbed
+across it, so nothing stalled. `disp_lag` also reads −18 ms on both sides of the step —
+**by construction**, because a re-anchor sets `stc := pic_pts` and forces that difference
+to zero. `disp_lag` cannot see a re-anchor; only a clock-to-audio measure can.
+
+**The sequence.** On a cold mount `disp_sched` anchors **provisionally** on the first
+parse-front PTS, and the parse front is up to ~1.6 s ahead of the display — that lead
+*is* the VBUF depth, the very thing this design exists to remove. `dvd_audio_decode`'s
+drain gate released against that clock (`stc_anchored`, which the provisional anchor
+sets), and **`play_anchor` is latched exactly once at release and playback is never
+re-phased**. The display's first pickup was **untagged**, so it anchored to the clock's
+own parse-front value and changed nothing; the first **tagged** picture then arrived and
+re-anchored the clock ~1.6 s backward. Audio, already committed, stayed where it was.
+Permanent, with no correcting force anywhere in the system.
+
+> **A clock that is ahead of the display must never be the reference against which audio
+> commits a one-shot phase.** Retarding the clock afterwards does not move audio: those
+> samples have already left the DAC.
+
+**Fix: a second flag, `disp_anchored`** — set only when an anchor is taken at a pickup of
+a **TAGGED** picture, i.e. when the clock is genuinely on the display's own timeline.
+Audio's playback release waits for that instead of `stc_anchored`.
+⚠ **Not circular with the video pickup-hold.** That hold releases on audio *arrival* —
+the `play_pts` latch, taken at DISPATCH, which runs freely while the drain gate is shut.
+The order is dispatch → `play_pts` → `pickup_hold` releases → first pickup →
+`disp_anchored` → playback releases. `aud_caught` therefore stays on `stc_anchored`, with
+a comment saying why.
+⚠ A stream that never yields a tagged picture (bare `.m2v`) never sets the flag and takes
+the existing ~2.5 s `arm_timer` fallback, which is what it does today.
+
+**★ The passthrough wrapper had the same trigger but not the same disease, and the
+difference is worth keeping.** `iec61937_wrap` paces **every frame** against the clock
+(`hold_frame` on `head_delta < 0`) instead of latching a phase once, so a backward
+re-anchor costs it a hold and it re-syncs. It was still released on the provisional
+anchor, which makes it emit real bursts and then hold ~1.6 s — a real→hold→real flap,
+exactly the receiver-acquisition failure its own `sync_en` comment describes. It now
+takes `disp_anchored` too. ⏳ HW-gate that on a receiver; the decoded path is the
+user-reported case.
+
+**★ Also retracted from (4): the backward raster re-anchor.** It was not the cause of the
+1.6 s — run 2 above has no raster change and the same defect — and it is wrong on its own
+terms, for the reason in the rule above. Deleted. Lateness with no event to key on keeps
+its own discharge (`catchup_late` → `frame_late` → a VLD B-drop, one request per 4
+pickups, armed past ~50 ms), which advances the video to meet the audio rather than
+moving the clock away from it.
+
+**Gates.** `disp_sched_tb` **[13]** asserts the flag in three parts — not set by the
+provisional anchor, **not set by an untagged pickup** (the case that actually bit), set at
+the first tagged one — with mutation **M9** (`disp_anchored` set on any pickup) caught by
+it. `dvd_audio_decode_tb` **[C1]** gains a step that holds `disp_anchored` low with
+`stc_anchored` and `video_live` both high and the schedule reached, and requires no
+samples to leave; `run_stc_freerun.sh` carries a **RED arm** that rebuilds the module with
+the old release condition and requires that step to fail.
+⚠ **Word 15 was repurposed** from `sched_dur` (whose job, pinning the duration model, is
+done, and whose picture flags survive in word 14) to the clock's own history:
+`{reanchors, first_anchor_tagged, first_seen, prov_seen}`. Every instrument in this
+design referenced the clock to itself, which is how two rounds in a row shipped a fix that
+measured clean and was wrong.
 
 ### Still open after these fixes
 

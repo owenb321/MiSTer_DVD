@@ -117,6 +117,15 @@ module disp_sched #(
     output wire        next_due,              // the timeline has reached the next picture (starvation = late)
     output reg  [32:0] stc,
     output reg         anchored,
+    // ★ TAGGED-DISPLAY anchor: the clock is on the DISPLAY's own timeline, not the
+    // parse front. `anchored` alone is NOT that -- it is set by the provisional
+    // parse-front anchor, which on a cold mount sits up to ~1.6 s AHEAD of the
+    // picture (that lead IS the VBUF depth, the defect this whole design exists to
+    // remove). Audio must not commit its playback phase against the provisional
+    // value: MEASURED on the rig 2026-09-07, audio released against it, the first
+    // TAGGED picture then re-anchored the clock ~1.6 s backward, and the audio was
+    // left permanently that far ahead with nothing able to re-time it.
+    output reg         disp_anchored,
     output reg         anchor_req,            // one clk: stc was (re)anchored
     output reg  signed [33:0] anchor_delta,   // new - old
     output reg         disp_lag_valid,        // one clk at a pickup
@@ -215,6 +224,12 @@ module disp_sched #(
     reg         next_valid;                  // a picture has been displayed since the anchor
     reg  [35:0] defer_q3;                    // skipped durations belonging after the waiting picture
     reg         prov_seen;                   // a parse-front PTS has been seen since the flush
+    // Word-15 instrument. The previous two rounds each shipped a fix that MEASURED
+    // clean and was wrong, because every instrument referenced the clock to itself.
+    // These name the clock's own history instead: how many times it moved, and
+    // whether its first display anchor was a real picture PTS or the parse front.
+    reg  [7:0]  dbg_reanch;
+    reg         dbg_first_tagged, dbg_first_seen;
     wire [32:0] next_pts = next_q3[35:3];
 
     wire has_tag = pic_valid && pic_pts_valid;
@@ -222,6 +237,8 @@ module disp_sched #(
 
     // ---- the DUE compares stay registered (they only gate the FSM transition) ----
     reg  signed [33:0] d_pic_next, d_stc_pic, d_stc_next, d_stc_want;
+    always_ff @(posedge clk)
+        dbg_dur <= {dbg_reanch, 4'd0, dbg_first_tagged, dbg_first_seen, prov_seen, 1'b0};
     always_ff @(posedge clk) begin
         d_pic_next  <= $signed({1'b0, pic_pts_eff}) - $signed({1'b0, next_pts});
         d_stc_pic   <= $signed({1'b0, stc}) - $signed({1'b0, pic_pts_eff});
@@ -260,17 +277,22 @@ module disp_sched #(
     // half_scan IS the raster: it changes exactly when the modeline does.
     // The resync waits for a TAGGED picture, because anchoring on an untagged one
     // would re-anchor to the clock's own value and change nothing.
-    reg [15:0] half_scan_q;
-    reg        resync_pend;
-    always_ff @(posedge clk) begin
-        half_scan_q <= half_scan;
-        if (!rst_n || flush)                    resync_pend <= 1'b0;
-        else if (half_scan != half_scan_q)      resync_pend <= 1'b1;
-        else if (pickup && anchor_now)          resync_pend <= 1'b0;
-    end
-
+    // ⛔ A BACKWARD RE-ANCHOR HERE WAS TRIED AND IS WRONG (2026-09-07). Re-anchoring
+    // the clock at the raster change made the telemetry look perfect -- disp_lag ~0,
+    // the scheduler internally consistent -- and did NOT fix the sync, because
+    // MOVING THE CLOCK BACK DOES NOT MOVE THE AUDIO. Audio had already been
+    // dispatched against the clock while it ran ahead through the transition; pulling
+    // the clock back to the displayed picture leaves audio exactly as far ahead as it
+    // was, and now nothing can see the error (disp_lag reads 0, so the catch-up drop
+    // never arms). MEASURED: user hears audio 1.6 s ahead while disp_lag reads -27 ms.
+    // ★ The general rule, which this is the third demonstration of: a clock that is
+    // AHEAD of the display because the display stalled must be answered by ADVANCING
+    // THE VIDEO (drops), never by retarding the clock -- audio has already consumed
+    // that time and cannot un-consume it. Only a re-anchor that moves the clock
+    // FORWARD, onto content that genuinely jumped, is safe. That is what disc_w's
+    // jump tests do, and they stay.
     wire anchor_now_w = pic_valid &&
-                        (!anchored || (has_tag && (resync_pend || !next_valid || disc_w)));
+                        (!anchored || (has_tag && (!next_valid || disc_w)));
     always_ff @(posedge clk) begin
         disc       <= disc_w;
         anchor_now <= anchor_now_w;
@@ -320,6 +342,8 @@ module disp_sched #(
         if (!rst_n || flush) begin
             stc          <= 33'd0;
             anchored     <= 1'b0;
+            disp_anchored <= 1'b0;
+            dbg_reanch <= 8'd0; dbg_first_tagged <= 1'b0; dbg_first_seen <= 1'b0;
             next_q3      <= 36'd0;
             next_valid   <= 1'b0;
             defer_q3     <= 36'd0;
@@ -346,7 +370,7 @@ module disp_sched #(
             // a pickup
             if (pickup) begin
                 dbg_flags      <= {frame_rate_code, pic_ps, pic_pf, pic_tff, pic_rff};
-                dbg_dur        <= {1'b0, pic_dur_q3[17:3]};   // the applied duration, ticks
+
                 disp_lag_valid <= 1'b1;
                 disp_lag       <= $signed({1'b0, want_pts}) - $signed({1'b0, stc});
                 if (anchor_now) begin
@@ -354,6 +378,15 @@ module disp_sched #(
                     anchor_delta <= $signed({1'b0, anchor_val}) - $signed({1'b0, stc});
                     stc          <= anchor_val;
                     anchored     <= 1'b1;
+                    if (!dbg_first_seen) begin
+                        dbg_first_seen   <= 1'b1;
+                        dbg_first_tagged <= has_tag;
+                    end
+                    if (dbg_reanch != 8'hFF) dbg_reanch <= dbg_reanch + 8'd1;
+                    // only a TAGGED picture puts the clock on the display timeline;
+                    // an untagged first pickup anchors to the clock's own (parse-front)
+                    // value and changes nothing, which is the case that bit.
+                    if (has_tag) disp_anchored <= 1'b1;
                     next_q3      <= {anchor_val, 3'd0} + {18'd0, pic_dur_q3};   // realign drops precede the anchor
                     defer_q3     <= 36'd0;
                 end else begin

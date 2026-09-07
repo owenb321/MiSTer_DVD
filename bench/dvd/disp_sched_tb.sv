@@ -42,7 +42,7 @@ module disp_sched_tb;
   reg         pickup = 0;
   reg         skip_ack = 0, skip_field = 0, skip_ps = 0, skip_pf = 1, skip_tff = 1, skip_rff = 0;
   reg  [15:0] half_scan = 750;
-  wire        pic_due, next_due, anchored, anchor_req, disp_lag_valid, catchup_late;
+  wire        pic_due, next_due, anchored, disp_anchored, anchor_req, disp_lag_valid, catchup_late;
   wire [32:0] stc;
   wire signed [33:0] anchor_delta, disp_lag;
 
@@ -56,7 +56,7 @@ module disp_sched_tb;
     .skip_ack(skip_ack), .skip_field(skip_field), .skip_ps(skip_ps), .skip_pf(skip_pf),
     .skip_tff(skip_tff), .skip_rff(skip_rff),
     .half_scan(half_scan),
-    .pic_due(pic_due), .next_due(next_due), .stc(stc), .anchored(anchored),
+    .pic_due(pic_due), .next_due(next_due), .stc(stc), .anchored(anchored), .disp_anchored(disp_anchored),
     .anchor_req(anchor_req), .anchor_delta(anchor_delta),
     .disp_lag_valid(disp_lag_valid), .disp_lag(disp_lag),
     .dbg_flags(), .dbg_dur(), .catchup_late(catchup_late));
@@ -413,15 +413,19 @@ module disp_sched_tb;
       run_until_done(200);
     join
     settle = 0;
-    if (catchups > 8) begin
-      $display("FAIL [8f] raster change cost %0d drop requests -- it should re-anchor, not drop", catchups);
+    // ⚠ REVERSED 2026-09-07: this used to require a RE-ANCHOR here. That made the
+    // telemetry perfect and the sync wrong -- pulling the clock back does not move
+    // the audio, which has already played that time. The display must ADVANCE to
+    // meet the audio, i.e. request drops, and must NOT re-anchor.
+    if (catchups == 0) begin
+      $display("FAIL [8f] raster change: no drop requested -- the display can never meet the audio");
       errors = errors + 1;
     end
-    if (reanchors < 2) begin
-      $display("FAIL [8f] raster change did not re-anchor (%0d anchors)", reanchors);
+    if (reanchors > 1) begin
+      $display("FAIL [8f] raster change re-anchored (%0d) -- that moves the clock away from the audio", reanchors);
       errors = errors + 1;
     end
-    $display("  [8f] raster change: reanchors=%0d catchups=%0d max|lag|=%0d", reanchors, catchups, max_abs_lag);
+    $display("  [8f] raster change: reanchors=%0d catchups=%0d (want 1 anchor, >0 drops)", reanchors, catchups);
 
     // [9] second-field tags: the tag names the SECOND field (one field later)
     reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
@@ -461,7 +465,48 @@ module disp_sched_tb;
     if (anchor_delta != 0) begin $display("FAIL [12] first pickup delta %0d, expected 0", anchor_delta); errors = errors + 1; end
     report("[12] provisional anchor", 1, 1, 752);
 
-    if (errors == 0) $display("PASS: disp_sched_tb — 17 scenarios");
+    // [13] disp_anchored: THE PROVISIONAL ANCHOR MUST NOT SET IT.
+    //      On a cold mount the parse front runs up to ~1.6 s ahead of the picture, so
+    //      a clock anchored provisionally is NOT on the display's timeline. Audio's
+    //      playback phase is latched ONCE against this flag, so a flag that rises
+    //      early leaves audio permanently that far ahead -- MEASURED on APOLLO_13,
+    //      2026-09-07, with the raster unchanged throughout.
+    //      Asserted in three parts: not set by prov alone; not set by an UNTAGGED
+    //      pickup (the case that actually bit -- the clock anchors to its own
+    //      parse-front value and nothing changes); set at the first TAGGED pickup.
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(30, 100000, 4, 20000);                    // tag_every=4 -> tags at 0,4,8,...
+    for (i = 0; i < 4; i = i + 1) s_tag[i] = 0;        // ...so picture 4 is the FIRST tagged one
+    prov_pts <= 900000; prov_valid <= 1; @(posedge clk); prov_valid <= 0;   // parse front, ~10 s ahead
+    repeat (4) @(posedge clk);
+    if (!anchored) begin
+      $display("FAIL [13] the provisional pulse did not anchor the clock at all");
+      errors = errors + 1;
+    end
+    if (disp_anchored) begin
+      $display("FAIL [13] provisional anchor set disp_anchored -- audio would start against the parse front");
+      errors = errors + 1;
+    end
+    fork
+      begin
+        wait (pickups >= 1);
+        repeat (4) @(posedge clk);
+        if (disp_anchored) begin
+          $display("FAIL [13] an UNTAGGED pickup set disp_anchored -- that anchor keeps the parse-front value");
+          errors = errors + 1;
+        end
+        wait (pickups >= 6);                            // past the untagged run
+        repeat (4) @(posedge clk);
+        if (!disp_anchored) begin
+          $display("FAIL [13] disp_anchored never set after a tagged pickup -- audio would wait for the fallback on every load");
+          errors = errors + 1;
+        end
+      end
+      run_until_done(200);
+    join
+    $display("  [13] disp_anchored: prov=no, untagged=no, tagged=yes");
+
+    if (errors == 0) $display("PASS: disp_sched_tb — 18 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end
     $finish;
   end

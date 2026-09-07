@@ -29,8 +29,8 @@ module av_sync (
     input  wire        clk,               // clk_sys
     input  wire        rst_n,             // core reset (NOT the pipe reset)
 
-    // the clock, mirrored from disp_sched: {anchored, stc} on every tick
-    input  wire [33:0] mirror_data,
+    // the clock, mirrored from disp_sched: {disp_anchored, anchored, stc} every tick
+    input  wire [34:0] mirror_data,
     input  wire        mirror_valid,
     // a (re)anchor: its signed delta (new - old), once per event
     input  wire signed [33:0] delta_data,
@@ -44,6 +44,11 @@ module av_sync (
 
     output logic [32:0] stc,
     output logic        stc_anchored,
+    // ★ The clock is on the DISPLAY's timeline (a TAGGED picture anchored it), not
+    // the provisional parse front. Audio's playback release waits for this: see the
+    // long note in dvd/dvd_audio_decode.sv. stc_anchored is true a second or more
+    // earlier, while the clock still sits a VBUF-depth ahead of the picture.
+    output logic        disp_anchored,
     output logic        anchor_pulse,     // one clk: stc just jumped by anchor_delta
     output logic signed [33:0] anchor_delta,
     output wire  signed [31:0] drift,     // dispatched audio PTS - stc
@@ -55,6 +60,7 @@ module av_sync (
         if (!rst_n) begin
             stc            <= '0;
             stc_anchored   <= 1'b0;
+            disp_anchored  <= 1'b0;
             anchor_pulse   <= 1'b0;
             anchor_delta   <= '0;
             reanchor_count <= '0;
@@ -62,7 +68,8 @@ module av_sync (
             anchor_pulse <= 1'b0;
             if (mirror_valid) begin
                 stc          <= mirror_data[32:0];
-                stc_anchored <= mirror_data[33];
+                stc_anchored  <= mirror_data[33];
+                disp_anchored <= mirror_data[34];
             end
             if (delta_valid) begin
                 anchor_pulse   <= 1'b1;

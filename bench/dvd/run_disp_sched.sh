@@ -22,6 +22,14 @@
 #       list pins each picture's fields on the raster, so the timeline error shows as lates)
 #   M6  LATE_MAX back to 350 ms                 -> [8b] a recoverable starvation re-anchors
 #   M8  catch-up drop request removed           -> [8d] a display stuck behind at max rate
+#   M9  an UNTAGGED pickup sets disp_anchored   -> [13] audio would commit its phase to
+#       the parse front (the measured 1.6 s lead)
+#
+# ⚠ NOT COVERED HERE, and it cost a hardware round: dvd_audio_decode's play_err is the
+# LIP-SYNC measurement (clock minus audio playback position). Re-basing play_anchor on a
+# clock re-anchor forces it toward zero and makes it structurally unable to report an
+# accumulated error -- it read -98 ms while the real error was 1.6 s. There is no audio
+# model in this bench to catch that; the guard is that play_err must be left alone.
 set -u
 cd "$(dirname "$0")/../.."
 fail=0
@@ -63,6 +71,10 @@ mut M4 "((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > lat
 mut M6 "34'sd243000" "34'sd31500" "FAIL \[8b\]"
 mut M8 "if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end" "if (1'b0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end" "FAIL \[8d\]"
 mut M5 "((pic_pf  && pic_rff)  ? dur3 : dur2);" "dur2;" "FAIL \[6\]"
+# M9 is the measured HW defect of 2026-09-07: the clock reports itself "on the display
+# timeline" while it still holds the parse-front value, so audio latches its playback
+# phase ~1.6 s ahead of the picture and nothing ever re-times it.
+mut M9 "if (has_tag) disp_anchored <= 1'b1;" "disp_anchored <= 1'b1;" "FAIL \[13\]"
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="
 exit $fail
