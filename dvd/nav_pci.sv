@@ -401,7 +401,6 @@ wire [10:0] col_base = 11'h016 +
                        {9'd0, (b_coln == 2'd0 ? 2'd0 : b_coln - 2'd1), 3'b000};
 
 always @(posedge clk or negedge rst_n) begin
-    hli_commit_p <= 1'b0;                  // one-cycle pulse (overridden at the commit below)
     if (!rst_n) begin
         hli_commit_p <= 1'b0;
         fidx      <= 10'd0;
@@ -460,6 +459,12 @@ always @(posedge clk or negedge rst_n) begin
         h_g1ty    <= 3'd0; h_g2ty <= 3'd0; h_g3ty <= 3'd0;
         grp_q     <= 2'd0;
     end else begin
+        // ⚠ INSIDE the else, not before the `if`. An assignment ahead of an
+        // async-reset `if (!rst_n)` leaves the signal not holding its value outside
+        // the clock edge, and Quartus refuses to infer the register at all
+        // (Error 10818) -- while Icarus accepts it happily. Caught by the build,
+        // not by simulation.
+        hli_commit_p  <= 1'b0;                 // default: one-cycle pulse
         btn_cmd_valid <= 1'b0;                 // default: one-cycle pulse
         if (act_tmr != 24'd0) act_tmr <= act_tmr - 24'd1;
 
