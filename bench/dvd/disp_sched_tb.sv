@@ -215,6 +215,19 @@ module disp_sched_tb;
     end
   endtask
 
+  // ⚠ BOUNDED. A bare `wait (pickups >= n)` inside a fork never returns under a
+  // mutation that stops pickups, and the mutation arm then hangs FOREVER rather
+  // than failing -- measured, 2026-09-07: one arm ran over an hour before it was
+  // noticed. A mutation suite must fail fast; a hang is indistinguishable from a
+  // slow machine and silently stalls the whole run.
+  task automatic wait_pickups(input integer n);
+    integer guard;
+    begin
+      guard = 0;
+      while (pickups < n && guard < 4000000) begin @(posedge clk); guard = guard + 1; end
+    end
+  endtask
+
   task automatic run_until_done(input integer extra);
     integer guard;
     begin
@@ -489,13 +502,13 @@ module disp_sched_tb;
     end
     fork
       begin
-        wait (pickups >= 1);
+        wait_pickups(1);
         repeat (4) @(posedge clk);
         if (disp_anchored) begin
           $display("FAIL [13] an UNTAGGED pickup set disp_anchored -- that anchor keeps the parse-front value");
           errors = errors + 1;
         end
-        wait (pickups >= 6);                            // past the untagged run
+        wait_pickups(6);                                // past the untagged run
         repeat (4) @(posedge clk);
         if (!disp_anchored) begin
           $display("FAIL [13] disp_anchored never set after a tagged pickup -- audio would wait for the fallback on every load");
@@ -520,7 +533,7 @@ module disp_sched_tb;
     prov_pts <= 100000 + 2000; prov_valid <= 1; @(posedge clk); prov_valid <= 0;   // 22 ms < one frame
     fork
       begin
-        wait (pickups >= 8);                            // 4 untagged, then tagged from 4
+        wait_pickups(8);                                // 4 untagged, then tagged from 4
         repeat (4) @(posedge clk);
         if (!disp_anchored) begin
           $display("FAIL [13b] a small provisional error never yielded a display anchor -- audio takes the fallback against the parse front");
