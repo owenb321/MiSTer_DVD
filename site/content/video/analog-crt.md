@@ -164,15 +164,17 @@ sync separator never notices, which is why the same build can look perfect on on
 television and wrong on another.
 
 `SMPTE` emits the full standard block (SMPTE 170M on NTSC, ITU-R BT.470 on PAL) and is the
-default. `2H` adds the serrations but not the equalizing pulses. `Stock` is exactly what
-v0.4.0 and earlier put on the pins.
+default. `2H` adds the serrations but not the equalizing pulses — closer to correct than
+what earlier versions emitted, but still measurably behind `SMPTE`, and it is here only
+until we know whether any real display prefers it.
 
 !!! tip "You should not need to change this"
 
-    `SMPTE` is what a real player, a broadcast signal and a DVD deck all put out. `2H` and
-    `Stock` are there because televisions of this age vary, and because we would rather you
-    could get a picture back from the OSD than have to wait for a new build. If your set is
-    happier on one of the others, please say so — that is a useful report.
+    `SMPTE` is what a real player, a broadcast signal and a DVD deck all put out. `2H` is
+    there because televisions of this age vary, and because we would rather you could get a
+    picture back from the OSD than have to wait for a new build. **If your set is happier on
+    `2H`, please say so** — that is exactly the report we are looking for, and it decides
+    whether the setting stays at all.
 
 !!! warning "It has no effect if `vga_scaler=1`"
 
@@ -182,44 +184,6 @@ v0.4.0 and earlier put on the pins.
 
 HDMI is completely unaffected by this setting, on every option. Composite and S-video use
 the same sync as RGB/component, so they change with it.
-
-## Field order
-
-!!! info "Unreleased"
-
-    This setting is not in v0.4.0. It is on `main` and will be in the next release.
-
-**Debug page → `Field Order` → `Normal` (default) / `Swap`.**
-
-An interlaced picture is two half-pictures a fiftieth or sixtieth of a second apart, and
-they have to be drawn in the right order and in the right place. `Normal` is correct, and
-you should not need to change it.
-
-!!! warning "This is a diagnostic, not a fix — it moves HDMI and analog together"
-
-    `Swap` changes which decoded field goes where for **both** outputs at once, so it can
-    never make a television and an HDMI display agree if they currently disagree — it just
-    moves the problem from one to the other. If you find yourself needing `Swap` to make
-    one output right while the other goes wrong, that is a bug in the core and we want to
-    hear about it: please [report it](../reference/reporting-a-bug.md) with which
-    combination you tried and what each output did. That is exactly how the field-order
-    error fixed in this version was found.
-
-!!! warning "Give it a couple of seconds, and test on the right material"
-
-    The change is applied by the same mechanism that keeps field alignment steady during
-    playback, so it can take up to about two seconds to settle. Judge it after that, not
-    immediately.
-
-    More importantly, **most films will not show a difference at all.** Film is shot at 24
-    frames a second and split into fields for the disc, so both fields of a frame are the
-    same instant — swapping them changes almost nothing you can see. Use something shot on
-    video at 30 frames a second: a concert, a TV series, a documentary, a making-of. Pick a
-    scene with fast sideways movement, and use your display's weave or CRT-simulation
-    deinterlacing rather than bob, which hides the effect by design.
-
-If `Swap` is clearly better on your set, please tell us which disc and which display —
-we are trying to establish whether the default itself is wrong.
 
 ## Known limitations
 

@@ -135,18 +135,17 @@ module field_phase_tb;
   wire        h_sync_out, v_sync_out, pixel_en_out;
 
   // ---- the parity feedback loop (mpeg2video's sync_reg CDC, replicated) ----
-  // +swap=1 replicates P1O[48] Field Order: mpeg2video.v XORs field_swap into this same
-  // node, which is exactly equivalent to inverting mixer.v's content-vs-raster parity
-  // comparison. Check C's expectation below inverts with it — so the swap arm proves the
-  // knob actually moves content to the OTHER raster slot, measured from the emitted data,
-  // while checks A and B (fields differ; period 2) must hold UNCHANGED. A swap that broke
-  // alternation would be a regression, not a diagnostic.
-  integer swap = 0;
-  initial void'($value$plusargs("swap=%d", swap));
+  // ⛔ A +swap arm lived here while P1O[48] Field Order existed: it XORed this node the
+  // way mpeg2video did and inverted check C's expectation with it. The knob was removed
+  // before release (it moves HDMI and analog together, so it can never reconcile a
+  // disagreement between them — it only relocates it), and with the RTL term gone the arm
+  // would have XORed only the bench's own model, testing nothing. Removed with it.
+  // The polarity it was diagnosing now lives in rtl/mpeg2/field_polarity.vh and is gated
+  // by csync_field_tb [G8] and cc_field_map_tb instead.
 `ifndef NO_PARITY_FIX
   wire mixer_par_err;
   reg  pe_s1 = 0, pe_s2 = 0;
-  always @(posedge clk) begin pe_s1 <= mixer_par_err ^ (swap != 0); pe_s2 <= pe_s1; end
+  always @(posedge clk) begin pe_s1 <= mixer_par_err; pe_s2 <= pe_s1; end
   wire par_err_sync = pe_s2;
 `endif
 
@@ -364,7 +363,7 @@ module field_phase_tb;
         end else if (!clean_head(i-1)) begin
           // neighbour was resumed mid-picture: nothing to compare against, but the
           // alignment of THIS field still is a verdict.
-          if ((((rec_code[i] - base_code) & 1) ^ (swap != 0)) != rec_vpar[i]) v_mis = v_mis + 1;
+          if (((rec_code[i] - base_code) & 1) != rec_vpar[i]) v_mis = v_mis + 1;
         end else begin
         if (rec_code[i] == rec_code[i-1]) begin
           v_same = v_same + 1;
@@ -378,12 +377,11 @@ module field_phase_tb;
             $display("  field %0d breaks period 2: hash %08x != field %0d's %08x",
                      i, rec_hash[i], i-2, rec_hash[i-2]);
         end
-        if (((((rec_code[i] - base_code) & 1) ^ (swap != 0))) != rec_vpar[i]) begin
+        if (((rec_code[i] - base_code) & 1) != rec_vpar[i]) begin
           v_mis = v_mis + 1;
           if (verbose)
-            $display("  field %0d MISALIGNED%s: %s source line %0d displayed in the %s raster field",
-                     i, swap ? " (Field Order = Swap)" : "",
-                     ((rec_code[i]-base_code) & 1) ? "odd (bottom)" : "even (top)",
+            $display("  field %0d MISALIGNED: %s source line %0d displayed in the %s raster field",
+                     i, ((rec_code[i]-base_code) & 1) ? "odd (bottom)" : "even (top)",
                      rec_code[i] - base_code, rec_vpar[i] ? "BOTTOM" : "TOP");
         end
         end

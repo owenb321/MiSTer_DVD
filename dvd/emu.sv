@@ -784,29 +784,20 @@ parameter CONF_STR = {
     //                                  repeating fields several times a second, so it
     //                                  was never a controlled A/B. It is here to be
     //                                  re-measured, not because it is expected to win.
-    //   Stock                        — the framework module, i.e. pre-change behaviour,
-    //                                  one OSD row away as a regression escape hatch.
-    // Interlaced + analog only (progressive always takes the stock path, gated in RTL).
+    // ⛔ A third arm, `Stock` (the framework module unchanged), was carried through
+    // bring-up and REMOVED before release: it leaves the two fields 0.857 line apart
+    // instead of 0.500 and makes a television mis-identify which field is first, so it
+    // is a measurably broken signal rather than a fallback. It was only ever usable as a
+    // comparison point, and it kept its value for that ONLY while the field order was
+    // also wrong — the two errors cancelled (docs/single_raster_analog.md §3.12).
+    // Interlaced + analog only. A PROGRESSIVE raster still takes the framework module,
+    // gated by cs_en in RTL rather than by user discipline: a nine-line vertical block
+    // is meaningless there, and that is also the path csync_field_tb's stock arm now
+    // exercises.
     // ⚠ A rig running vga_scaler=1 or a framebuffer takes sync from hdmi_cs_osd and
     // never sees this at all — expect "the setting does nothing" reports from those.
-    // status[47:46]. See docs/single_raster_analog.md §3.10.
-    "P1O[47:46],Analog CSync,SMPTE,2H,Stock;",
-    // DVD-FORK (field-order diagnostic, 2026-09-05). Which DECODED field lands in
-    // which raster field. Inverts rtl/mpeg2/mixer.v's content-parity comparison, NOT
-    // the raster: the sync waveform stays bit-identical, dvd/cc_vbi.sv keeps naming
-    // the same field 1, and syncgen's N64-inherited 262/263 + half-line model is
-    // untouched — so this knob and Analog CSync above stay orthogonal.
-    // ⚠ The convention it flips (rtl/mpeg2/syncgen.v: "odd_field=1 scans v_pos even
-    // lines (TOP content)") was ASSERTED, never measured, and the one HW validation
-    // (docs/crt_480i.md, 2026-07-05) predates the field-parity corrector — the phase
-    // was a coin flip then, so a wrong convention was right half the time and could
-    // not be seen. Exactly how VGA_F1 stayed inverted on HDMI until PR #44.
-    // ⚠ Not instant: the corrector's feedback arm needs PAR_CONFIRM (~0.5 s) and
-    // spends a PAR_HOLD budget, so allow ~2 s before judging an A/B.
-    // ⚠ Film-sourced content barely shows it (both fields of a 3:2 frame are the same
-    // instant) — test on video-sourced 29.97i material, Weave or CRT Simulation, never
-    // Bob. tools/video_cadence_census.py says which a disc is. status[48].
-    "P1O[48],Field Order,Normal,Swap;",
+    // status[46]. See docs/single_raster_analog.md §3.10.
+    "P1O[46],Analog CSync,SMPTE,2H;",
     // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
     // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
     // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
@@ -4041,7 +4032,6 @@ mpeg2video mpeg2video_inst (
     .freeze_wd         (still_dec),                    // DVD-FORK (disc-menu still): watchdog-suppress only (clk_dec-synced)
     .vbuf_flush        (vbuf_flush_dec),               // DVD-FORK (gamepad transport): discard VBUF on a seek (clk_dec-synced)
     .soft_flush        (mount_flush),                  // DVD-FORK (mount soft reset): watchdog-equivalent decode reset on a file mount (async, synchronizers inside)
-    .field_swap        (status[48]),                   // DVD-FORK (field-order diagnostic): P1O[48] Field Order — inverts the CONTENT-to-raster parity convention, not the raster
     .disp_vscale_mode  (disp_vscale_mode),             // DVD-FORK (CRT anamorphic vscale): 0 Fit / 2 SIF 2x line repeat
     .disp_vscale_en    (disp_vscale_en),               // DVD-FORK (CRT anamorphic letterbox AA): downstream 2-tap blend enable
     .disp_hcrop_en     (disp_hcrop_en),                // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
@@ -5686,7 +5676,7 @@ cc_vbi cc_vbi_inst (
 
 // =========================================================================
 // SMPTE 170M / BT.470 composite sync for the analog pins (dvd/csync_smpte.sv,
-// P1O[47:46] Analog CSync; docs/single_raster_analog.md §3.10)
+// P1O[46] Analog CSync; docs/single_raster_analog.md §3.10)
 // =========================================================================
 // Same coordinate tap as cc_vbi above, and for the same reason: this is glue
 // between the raster and an output stage, so it is a module the bench can drive
@@ -5703,7 +5693,7 @@ wire csync_smpte_cs, csync_smpte_en;
 csync_smpte csync_smpte_inst (
     .clk    (clk_sys),
     .rst_n  (reset_n),
-    .mode   (status[47:46]),
+    .mode   (status[46]),
     .en     (interlaced_eff),
     .pal    (pal_eff),
     .h_sync (core_h_sync),

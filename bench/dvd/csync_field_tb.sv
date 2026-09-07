@@ -123,9 +123,14 @@ module csync_field_tb;
   csync_ref csync_i (.clk(clk), .hsync(h_sync), .vsync(v_sync), .csync(cs_stock));
 
   wire cs_gen, cs_gen_en;
+  // ★ arm 2 ("Stock") drives en=0, not a removed mode value. The OSD's third arm was
+  // deleted before release (a measurably broken signal, not a fallback), but the
+  // framework module is STILL the live path on a progressive raster — cs_en follows
+  // `en` — so this arm now exercises the configuration the shipped core actually has,
+  // rather than one a user can no longer select.
   csync_smpte gen_i (
     .clk(clk), .rst_n(rst),
-    .mode(arm[1:0]), .en(1'b1), .pal(pal != 0),
+    .mode(arm[0]), .en(arm != 2), .pal(pal != 0),
     .h_sync(h_sync), .v_pos(v_pos),
     .cs(cs_gen), .cs_en(cs_gen_en));
 

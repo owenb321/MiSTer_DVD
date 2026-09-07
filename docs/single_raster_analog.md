@@ -344,11 +344,21 @@ bench caught it before a line of it reached hardware.
 bit-identical" is a claim about the shipped escape hatch, and it can only be a claim about
 the module the bench was given.
 
-**Modes.** `SMPTE` (index 0, default) / `2H` (serrations only — §3.8's reverted variant,
-here to be *re-measured* rather than argued about) / `Stock` (`cs_en` low; sys_top keeps
-the framework output, i.e. pre-change behaviour one OSD row away). Interlaced only — a
-nine-line vertical block is meaningless on a progressive raster, gated in RTL rather than
-by user discipline.
+**Modes.** `P1O[46] Analog CSync` = `SMPTE` (index 0, default) / `2H` (serrations only —
+§3.8's reverted variant, kept only until field reports say whether any display prefers it;
+it measures ~17× worse than the full block).
+
+⛔ **A third arm, `Stock`, was carried through bring-up and REMOVED before release**
+(2026-09-07, user decision). It is a measurably broken signal — 0.857 line between the
+fields instead of 0.500, and a mis-identified first field — not a fallback. Its only value
+was as a comparison point, and it held that value **only while the field order was also
+wrong**, because the two errors cancelled (§3.12). Shipping it would have meant shipping a
+mode that makes a television read the fields backwards.
+
+⚠ **The framework module is still the live path on a PROGRESSIVE raster** — `cs_en` follows
+`en` (= `interlaced_eff`), because a nine-line vertical block is meaningless there. Gated in
+RTL, not by user discipline, and it is the configuration `csync_field_tb`'s stock arm
+exercises now that the OSD value is gone.
 
 ⚠ **A rig running `vga_scaler=1` or a framebuffer never sees any of this**: the pins then
 take `vgas_cs` from `hdmi_cs_osd`, the *other* `csync` instance. Expect "the setting does
@@ -412,8 +422,16 @@ computes position combinationally for the cycle in progress (`pos`, `line_now`,
 
 ### 3.11 Field order: a knob, because the convention was asserted and never measured
 
-**Status (2026-09-05): `P1O[48] Field Order = Normal / Swap`, default Normal — no
-behavioural delta.**
+**Status: `P1O[48] Field Order` was added 2026-09-05 and REMOVED 2026-09-07 (user decision)
+once it had done its job. This section is kept for the reasoning, not the knob.**
+
+★ **Why it could never ship:** field order is a correctness constant with exactly one right
+value, not a per-display preference, and the knob moves HDMI and analog *together* — so it
+can never reconcile a disagreement between them, only relocate it. A user reaching for it to
+fix a CRT would silently break their HDMI, which is exactly what the hardware round
+demonstrated. Its diagnostic value was spent the moment it isolated the fault to the analog
+side; the polarity now lives in `rtl/mpeg2/field_polarity.vh` and is gated by
+`csync_field_tb` [G8] and `cc_field_map_tb`.
 
 ⛔ **AMENDED 2026-09-06 — the central claim of this section is WRONG and §3.12 is the
 correction.** The RASTER's field assignment was the fault, and `syncgen.v`'s "flip both
@@ -587,9 +605,22 @@ combinations of sync arm × field order on hardware — which says the chain wor
 **nothing** about the mapping. A prediction whose failure mode is unobservable is not a
 prediction.
 
-⏳ **The HW test is now a single A/B:** `Field Order = Normal` must be correct on **both**
-HDMI and the CRT. `Analog CSync = Stock` will now look *wrong* on a CRT where it used to
-look right — that is expected and is the two errors no longer cancelling.
+⚠⚠ **OPEN: `FIELD1_VPOS` is ONE constant for both standards, derived from an NTSC
+measurement.** Neither it nor its three consumers has a `pal` term. The block **shape** is
+standards-correct on both (BT.470's 5/5/5 half-lines and its widths, gated by the PAL arms)
+— that part is not in question. But *which* raster field is field 1 is a separate question,
+and 525- and 625-line systems are not obliged to answer it the same way. ⚠ **[G8] cannot
+catch this**: it gates that the raster and the emitted block AGREE, and on PAL they would be
+wrong together. PAL on an analog CRT has never been HW-confirmed at all (no PAL CRT; the
+raster numbers have been sim-derived since PR fj#146), so this is **untested rather than
+known-good**. ★ If a PAL CRT report says the fields are swapped, make the constant
+**per-standard** (`pal ? … : …` in all three consumers) — do not flip it globally, which
+would break the NTSC case it was measured on.
+
+⏳ **The HW test is now a single observation:** the picture must be correct on **both** HDMI
+and the CRT at once, with nothing to set. Both knobs the diagnosis used are gone — `Field
+Order` entirely, and `Analog CSync`'s `Stock` arm — so there is no combination left to get
+wrong.
 
 ## 4. Tests
 
@@ -615,36 +646,45 @@ look right — that is expected and is the two errors no longer cancelling.
 - [ ] Idle logo reports `720x480i`; no resolution popup on disc load.
 - [ ] Toggling `Video Output` mid-title: the chapter-seek-style interruption, then clean.
 
-**§3.10 / §3.11 (SMPTE composite sync + Field Order), added 2026-09-05.** ★ The build ships
-with `Analog CSync = SMPTE`, which replaces a path that is HW-confirmed good, so the
-maintainer's CRT is the **regression gate and goes first** — and `Stock` is one OSD row
-away if it regresses.
+**§3.10 / §3.12 (SMPTE composite sync + the field-order fix).** ★ The build ships with
+`Analog CSync = SMPTE` and the corrected `FIELD1_VPOS`, replacing a path that was
+HW-confirmed good, so the maintainer's CRT is the **regression gate and goes first**.
+⚠ There is no longer an OSD escape hatch — `Stock` and `Field Order` were both removed
+(§3.10, §3.11) — so a regression here means a rebuild, not a menu change. That is the
+accepted cost of not shipping a measurably broken mode.
 
 - [ ] **Maintainer's composite CRT, `Analog CSync = SMPTE`:** stable, no pairing or bounce,
       `720x480i @ 59.9` steady, line-21 CC still decoding, overlays / HUD / menus intact.
-- [ ] Sweep all three `Analog CSync` arms from the OSD (no reload needed) on the same set.
+- [ ] A/B both `Analog CSync` arms from the OSD (no reload needed) on the same set.
 - [ ] **Composite / S-video on the SMPTE arm** — `vga_cs_osd` also feeds `yc_out`, an
       unmeasured second consumer. A real CVBS signal *should* carry equalizing pulses, but
       that is a prediction, not a measurement.
 - [ ] Progressive (480p) unaffected — `cs_en` is gated on `interlaced_eff`, so it must take
       the stock path; confirm no change at all.
 - [ ] **RT4K reporter, in CRT Simulation** (Bob masks the fault — his workaround is the
-      wrong mode to measure in): walk all four cells of `Analog CSync` × `Field Order`.
+      wrong mode to measure in): both `Analog CSync` arms. ★ The field-order question he
+      raised is fixed in RTL (§3.12) with **no setting**, so what is wanted from him is
+      whether the fields read in order *at all*, not which knob position achieves it.
 - [ ] **RT4K readouts per arm** — pixel clock, vsync length, lines/frame, frame rate. The
       earlier report was "vsync length toggling about once a second"; that readout directly
       measures the 50/18 µs asymmetry, so the SMPTE arm should stop it toggling. This is
       the measurement that turns the bench's separator models into a field result.
 - [ ] **Ask the RT4K reporter what field offset each arm needs, and whether ±1 alone ever
       suffices.** A pure field swap is a ONE-unit correction; he needs −2. If −2 survives
-      both the SMPTE arm and `Field Order = Swap`, there is a third thing (a line-position
+      the SMPTE arm and the corrected `FIELD1_VPOS`, there is a third thing (a line-position
       offset) — chase it separately, do not absorb it into "field order".
 - [ ] **Trinitron reporter:** does the sawtooth appear on the **idle logo with no disc**? A
       yes exonerates the decoder, the governor and the parity corrector outright. Still vs
       motion? Does N64/PSX 480i do it on the same set (same `csync`, same raster model)?
       And his `MiSTer.ini` — `vga_scaler=1` would mean none of this reaches his pins.
-- [ ] `Field Order` A/B on **video-sourced 29.97i** content
-      (`tools/video_cadence_census.py`), fast horizontal motion, Weave or CRT Simulation.
-      Allow ~2 s to settle. A film disc is not a valid negative result.
+- [ ] **Field order, on video-sourced 29.97i content** (`tools/video_cadence_census.py`),
+      fast horizontal motion, Weave or CRT Simulation — never Bob, and never a film disc
+      (both fields of a 3:2 frame are the same instant, so a film title cannot show it).
+      There is no setting to try: the picture is either in order or it is not, on **both**
+      outputs at once.
+- [ ] ⚠ **PAL on a CRT, if anyone has one.** `FIELD1_VPOS` is one constant for both
+      standards and was measured on NTSC; the block *shape* is BT.470-correct and gated,
+      but which field is first on 625 lines is untested. See the open note in §3.12.
 
 ## 6. A mid-title `Video Output` change froze the decoder — FIXED (issue #42)
 

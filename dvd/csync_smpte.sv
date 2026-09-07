@@ -63,16 +63,19 @@
  * 22 blanked lines (active 0-239 of 262). PAL: 289.5-297 inside 24. Line 21
  * (v_cntr 261) is untouched, so dvd/cc_vbi.sv does not move.
  *
- * MODES (P1O[47:46] Analog CSync).  Mode 0 SMPTE is the shipped default; mode 1 is
- * the 2H-serration-only variant (the shape that was built as commit a2b72fb and
- * reverted in 48c00cb — a verdict taken while the field-parity corrector was
- * defective and repeating fields several times a second, so it was never a controlled
- * A/B); mode 2 leaves `cs_en` low and sys_top keeps the stock module's output, so the
- * pre-change behaviour is one OSD row away.
+ * MODES (P1O[46] Analog CSync).  Mode 0 SMPTE is the shipped default; mode 1 is the
+ * 2H-serration-only variant (the shape built as commit a2b72fb and reverted in 48c00cb —
+ * a verdict taken while the field-parity corrector was defective and repeating fields
+ * several times a second, so it was never a controlled A/B; it measures ~17x worse than
+ * the full block and is kept only until field reports say whether any display prefers it).
+ * ⛔ A third arm returning the framework's own csync was carried through bring-up and
+ * REMOVED before release — it is a measurably broken signal (0.857 line between the
+ * fields instead of 0.500, and a mis-identified first field), not a fallback.
  *
- * Interlaced only: `en` is interlaced_eff. A nine-line vertical block is meaningless
- * on a progressive raster, so progressive always takes the stock path — gated here in
- * RTL, not by user discipline.
+ * Interlaced only: `en` is interlaced_eff, and `cs_en` follows it, so a PROGRESSIVE
+ * raster still takes the framework module — a nine-line vertical block is meaningless
+ * there. That is gated in RTL rather than by user discipline, and it is the path
+ * csync_field_tb's stock arm exercises now that the OSD value is gone.
  */
 `include "timescale.v"
 `include "field_polarity.vh"   // FIELD1_VPOS — shared with syncgen.v and cc_vbi.sv
@@ -82,7 +85,7 @@ module csync_smpte (
     input  wire        clk,        // clk_sys 27 MHz (the dot clock)
     input  wire        rst_n,
 
-    input  wire [1:0]  mode,       // 0 SMPTE, 1 2H serrations, 2/3 stock (inert)
+    input  wire        mode,       // 0 SMPTE block, 1 2H serrations only
     input  wire        en,         // interlaced_eff: the 15 kHz raster is up
     input  wire        pal,        // 625-line raster
 
@@ -110,7 +113,7 @@ wire [11:0] vss     = pal ? VSS_P   : VSS_N;
 
 // Mode 1 (2H) keeps today's three-line vertical sync window and adds no equalizing
 // pulses: it is the SAME generator with the two outer segments set to zero.
-wire        smpte   = (mode == 2'd0);
+wire        smpte   = ~mode;
 wire [3:0]  n_pre   = smpte ? (pal ? SEG_P : SEG_N) : 4'd0;
 wire [3:0]  n_broad = smpte ? (pal ? SEG_P : SEG_N) : 4'd6;
 wire [3:0]  n_post  = n_pre;
@@ -122,7 +125,7 @@ wire [3:0]  n_post  = n_pre;
 // television cannot ride out. In practice interlaced_eff is 0 through reset anyway
 // (status is zero and analog_want_l resets low), so this costs nothing and removes the
 // question.
-assign cs_en = rst_n & en & (mode != 2'd2) & (mode != 2'd3);
+assign cs_en = rst_n & en;
 
 // ---------------------------------------------------------------------------
 // Dot counter locked to the emitted hsync, plus the line/field it introduces.

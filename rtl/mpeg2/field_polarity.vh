@@ -47,7 +47,24 @@
  *
  * ⛔ Do NOT "fix" a field-order report by flipping mixer.v's parity comparison or
  * VGA_F1: those move HDMI and analog TOGETHER, so they cannot resolve a disagreement
- * BETWEEN them. P1O[48] Field Order exists to diagnose, not to ship flipped.
+ * BETWEEN them. (P1O[48] Field Order existed to diagnose exactly that and was removed
+ * once it had; see docs/single_raster_analog.md §3.11.)
+ *
+ * ⚠⚠ OPEN RISK: THIS IS ONE CONSTANT FOR BOTH STANDARDS, DERIVED FROM AN NTSC
+ * MEASUREMENT. Nothing here or in its three consumers has a `pal` term, so a 625-line
+ * raster gets the 525-line answer. That is an assumption, not a result:
+ *   - The BLOCK SHAPE is standards-correct on both (BT.470's 5/5/5 half-lines and its
+ *     pulse widths, gated by csync_field_tb's PAL arms) -- that part is not in question.
+ *   - WHICH raster field is field 1 is a separate question, and 525-line and 625-line
+ *     systems are not obliged to answer it the same way; their frame line numbering
+ *     differs, and NTSC and PAL differ in authored field dominance besides.
+ *   - [G8] only gates that the raster and the emitted block AGREE about which field is
+ *     first. Both being wrong together on PAL would pass it.
+ * PAL on an analog CRT has never been hardware-confirmed at all (no PAL CRT available --
+ * the raster numbers have been sim-derived since PR fj#146), so this is untested rather
+ * than known-good. If a PAL CRT report says the fields are swapped, the fix is to make
+ * this constant per-standard (`pal ? ... : ...` in all three consumers) rather than to
+ * flip it globally -- flipping it globally would break the NTSC case this was measured on.
  */
 `ifndef FIELD_POLARITY_VH
 `define FIELD_POLARITY_VH

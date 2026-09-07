@@ -53,8 +53,7 @@ playback and are documented properly below; the rest exist for narrowing down pr
 | **Force 4:3 Subpics** | **Off** / On | Forces subpicture geometry to 4:3 for discs that author it inconsistently. |
 | **Line-21 CC** | **On** / Off | Re-inserts closed captions on line 21 of the analog output — see [Closed captions](../video/closed-captions.md). |
 | **CC Test Line** | **Off** / On | Paints the caption waveform on a *visible* line to prove the chain works — see [the CC diagnostic](../video/closed-captions.md#is-it-working-the-test-line). |
-| **Analog CSync** | **SMPTE** / 2H / Stock | The shape of the composite sync on the analog output. **SMPTE** is the default and is what a broadcast signal carries. Change it only if your television or scaler is unhappy — see [Analog / CRT output](../video/analog-crt.md#analog-csync-if-your-set-jitters-or-shows-sawtooth-edges). |
-| **Field Order** | **Normal** / Swap | Which decoded field lands in which raster field. Try **Swap** if an interlaced picture looks out of order — see [Analog / CRT output](../video/analog-crt.md#field-order). |
+| **Analog CSync** | **SMPTE** / 2H | The shape of the composite sync on the analog output. **SMPTE** is the default and is what a broadcast signal carries. Change it only if your television or scaler is unhappy — see [Analog / CRT output](../video/analog-crt.md#analog-csync-if-your-set-jitters-or-shows-sawtooth-edges). |
 | **Film 24p Out** | **Auto** / Off / On | 23.976 Hz output for film content — see [Film (24p)](../video/film-24p.md). |
 | **A/V Offset** | **0 ms** / −200 / −100 / −50 / +50 / +100 / +150 / +200 | Lip-sync trim. |
 

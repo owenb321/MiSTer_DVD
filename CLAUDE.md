@@ -416,8 +416,18 @@ worse maintenance burden than targeted in-place edits. So:
   `hdmi_cs_osd` from the other `csync` instance) — expect "the setting does nothing"
   reports. `vga_cs_osd` also feeds `yc_out`, so composite/S-video get the new sync too:
   an unmeasured second consumer, on the HW checklist.
-  ★ **Second knob, same build: `P1O[48] Field Order` (default Normal, no behavioural
-  delta) flips the CONTENT mapping, NOT the raster** — it XORs `mpeg2video.v`'s
+  ⛔ **`P1O[48] Field Order` and `Analog CSync`'s `Stock` arm were REMOVED before release
+  (2026-09-07, user decision), once each had done its diagnostic job.** Field order is a
+  correctness constant with ONE right value, and the knob moved HDMI and analog TOGETHER —
+  so it could never reconcile a disagreement between them, only relocate it, and a user
+  reaching for it to fix a CRT would silently break their HDMI. `Stock` is a measurably
+  broken signal (0.857 line between the fields, mis-identified first field), not a
+  fallback; it held comparison value ONLY while the field order was also wrong, because
+  the two errors cancelled. `Analog CSync` ships as `SMPTE`/`2H` on `P1O[46]`, and the
+  framework module remains the live path on a PROGRESSIVE raster (`cs_en` follows `en`) —
+  which is the configuration `csync_field_tb`'s stock arm now exercises.
+  ★ **The removed knob is described below because the REASONING is the durable part.**
+  ★ **`P1O[48] Field Order` flipped the CONTENT mapping, NOT the raster** — it XORs `mpeg2video.v`'s
   `sync_raster_par_err` input, equivalent to inverting `mixer.v`'s comparison while
   leaving `mixer.v` untouched. ⛔ `syncgen.v`'s own advice ("flip both terms",
   `vs_ref_dot` + `eff_vertical_length`) is now marked DO NOT: that moves the raster, which
