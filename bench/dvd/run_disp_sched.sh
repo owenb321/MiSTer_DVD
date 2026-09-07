@@ -22,8 +22,10 @@
 #       list pins each picture's fields on the raster, so the timeline error shows as lates)
 #   M6  LATE_MAX back to 350 ms                 -> [8b] a recoverable starvation re-anchors
 #   M8  catch-up drop request removed           -> [8d] a display stuck behind at max rate
-#   M9  an UNTAGGED pickup sets disp_anchored   -> [13] audio would commit its phase to
-#       the parse front (the measured 1.6 s lead)
+#   M9  an UNTAGGED pickup sets disp_anchored   -> [13c] audio would commit its phase to a
+#       clock pinned at 0. ⚠ NOT [13]: that arm fires a provisional pulse, so `anchored`
+#       is already 1 and an untagged pickup never reaches the mutated line -- the check
+#       there cannot fail. M9 is what proved it. [13c] is the rig's own case (prov_seen=0).
 #   M10 first tag anchors only on disc_w    -> [13b] a SMALL provisional error never
 #       yields a display anchor at all
 #
@@ -76,7 +78,7 @@ mut M5 "((pic_pf  && pic_rff)  ? dur3 : dur2);" "dur2;" "FAIL \[6\]"
 # M9 is the measured HW defect of 2026-09-07: the clock reports itself "on the display
 # timeline" while it still holds the parse-front value, so audio latches its playback
 # phase ~1.6 s ahead of the picture and nothing ever re-times it.
-mut M9 "if (has_tag) disp_anchored <= 1'b1;" "disp_anchored <= 1'b1;" "FAIL \[13\]"
+mut M9 "if (has_tag) disp_anchored <= 1'b1;" "disp_anchored <= 1'b1;" "FAIL \[13c\]"
 # M10: the first tagged picture only anchors if it ALSO looks like a discontinuity, so a
 # small provisional error never yields a display anchor and audio takes the fallback.
 mut M10 "(has_tag && (!disp_anchored || !next_valid || disc_w))" "(has_tag && (!next_valid || disc_w))" "FAIL \[13b\]"

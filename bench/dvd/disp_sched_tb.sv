@@ -544,7 +544,41 @@ module disp_sched_tb;
     join
     $display("  [13b] disp_anchored arrives without a discontinuity");
 
-    if (errors == 0) $display("PASS: disp_sched_tb — 18 scenarios");
+    // [13c] THE HARDWARE CASE: no provisional PTS at all.
+    //       ⚠ [13]'s "an untagged pickup must not set disp_anchored" CANNOT FAIL, and
+    //       mutation M9 proved it: [13] fires a provisional pulse, so `anchored` is
+    //       already 1 and an untagged pickup takes no anchor branch at all -- the line
+    //       M9 mutates is never reached. The real rig read prov_seen=0 (the PTS never
+    //       arrived), where the first pickup anchors through `!anchored` WHILE UNTAGGED
+    //       and pins the clock to zero. That is the arm that has to exist.
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(30, 100000, 4, 20000);
+    for (i = 0; i < 4; i = i + 1) s_tag[i] = 0;
+    // deliberately NO prov_valid pulse
+    fork
+      begin
+        wait_pickups(1);
+        repeat (4) @(posedge clk);
+        if (!anchored) begin
+          $display("FAIL [13c] the first pickup did not anchor at all with no provisional PTS");
+          errors = errors + 1;
+        end
+        if (disp_anchored) begin
+          $display("FAIL [13c] an UNTAGGED anchor set disp_anchored -- the clock is pinned to 0 and audio would commit to it");
+          errors = errors + 1;
+        end
+        wait_pickups(8);
+        repeat (4) @(posedge clk);
+        if (!disp_anchored) begin
+          $display("FAIL [13c] the first tagged picture did not set disp_anchored");
+          errors = errors + 1;
+        end
+      end
+      run_until_done(200);
+    join
+    $display("  [13c] no provisional PTS: untagged anchor=no, tagged=yes");
+
+    if (errors == 0) $display("PASS: disp_sched_tb — 19 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end
     $finish;
   end

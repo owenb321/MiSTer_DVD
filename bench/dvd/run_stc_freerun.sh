@@ -49,8 +49,19 @@ echo "== 5. contracts =="
 iv /tmp/flush_ctl_sim dvd/flush_ctl.sv bench/dvd/flush_ctl_tb.sv && run flush_ctl "PASS" vvp /tmp/flush_ctl_sim
 bash bench/dvd/run_telem.sh || fail=1
 echo "== 6. display =="
-for tb in pickup_hold_tb resample_persist_tb resample_addr_realstride_tb film_detect_tb; do
+for tb in pickup_hold_tb film_detect_tb; do
   iv /tmp/${tb}_sim dvd/resample_addrgen.v rtl/mpeg2/mem_addr.v bench/dvd/$tb.sv && run $tb "PASS" vvp /tmp/${tb}_sim
+done
+# ⚠ resample_persist_tb and resample_addr_realstride_tb ASSERT NOTHING. They print
+# [scan] lines and a "check the [scan] lines" instruction -- no PASS, no FAIL, no
+# self-check at all. They were listed above with a "PASS" match, so they reported a
+# permanent FAIL that said nothing about the RTL. Run them for their traces (they are
+# the 256-line strobe and stride diagnostics) but do not pretend they gate anything.
+# ⏳ Worth making self-checking: resample_persist_tb's own header states the property
+# ("addr must stay monotonic past disp_y=256"), which is a checkable assertion.
+for tb in resample_persist_tb resample_addr_realstride_tb; do
+  iv /tmp/${tb}_sim dvd/resample_addrgen.v rtl/mpeg2/mem_addr.v bench/dvd/$tb.sv \
+    && vvp /tmp/${tb}_sim >/dev/null 2>&1 && echo "  ran $tb (observational -- asserts nothing)"
 done
 bash bench/dvd/run_field_phase.sh  | tail -1
 bash bench/dvd/run_field_parity.sh | tail -1
