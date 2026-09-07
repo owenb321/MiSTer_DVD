@@ -74,10 +74,16 @@ module cc_e2e_tb;
   reg         dec_pair_field = 0;
   wire [7:0]  cc_level;
   wire        cc_on, cc_active;
+  // display-pickup credits — see the note below the instantiation
+  localparam integer DEC_PER_FRAME = 900900/6;   // one frame of clk27 in dec_clk ticks
+  reg        dec_credit_valid = 1'b0;
+  reg  [2:0] dec_credit       = 3'd2;
+
   cc_vbi dut (
     .clk(clk), .rst_n(rst_n),
     .dec_clk(dec_clk), .dec_pair_valid(dec_pair_valid),
     .dec_pair(dec_pair), .dec_pair_field(dec_pair_field),
+    .dec_credit_valid(dec_credit_valid), .dec_credit(dec_credit),
     .enable(1'b1), .test(1'b0), .flush(1'b0), .pal(1'b0),
     .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
     .level(cc_level), .on(cc_on), .active(cc_active));
@@ -91,6 +97,30 @@ module cc_e2e_tb;
     out_vs <= v_sync;
     out_de <= pixel_en;
     out_ce <= ~h_pos[0];                    // first clock of each pixrep pair
+  end
+
+  // ------------------------------------------- display-pickup credits (dec_clk)
+  // ⚠ THESE WERE LEFT UNCONNECTED when dvd/cc_line21.sv gained credit-gated draining
+  // (PR #63, "drain the caption queue on display pickups, not raster fields"), so the
+  // queue was never released and this bench demodulated ZERO caption lines — on
+  // origin/main as well as here, verified by running main's own copy. An unconnected
+  // input reads x, `dec_credit_valid` never asserts, and the only escape is the
+  // module's ~1 s CREDIT_WD, far beyond this bench's 80 ms run. A silently unconnected
+  // port in an instantiation is the same failure class as an implicit net: it does not
+  // warn, and the bench keeps reporting on everything except the thing that stopped.
+  //
+  // A credit is one display PICKUP carrying that picture's field count, so a plain
+  // 2-field picture at frame rate is what dvd/disp_sched.sv issues here. The module
+  // CDCs it with a toggle, so exact phase against the raster does not matter — only
+  // the rate, which must keep up with one pair per field or the queue starves.
+  always begin
+    @(posedge dec_clk);
+    if (rst_n) begin
+      dec_credit_valid <= 1'b1;
+      @(posedge dec_clk);
+      dec_credit_valid <= 1'b0;
+      repeat (DEC_PER_FRAME) @(posedge dec_clk);
+    end
   end
 
   // ------------------------------------------- caption producer (dec_clk)
