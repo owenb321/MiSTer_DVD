@@ -748,14 +748,62 @@ worse maintenance burden than targeted in-place edits. So:
   the raster switch (`Film 24p = On` shows it too), and NOT the VBUF cap (Shallow changed
   nothing). An imported "anchor the STC on the screen" fix made it WORSE (1800 ms + stream
   freezes) and is not merged — see `docs/av_sync.md` "HW round 3" before touching it.
-- 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06,
-  branch `feature/stc-freerun`, `dev-stcfree`). STAGE 0 (association + telemetry, no
-  behaviour change) BUILT `DVD_stcfree_20260906_1357.rbf` ⏳ HW round A; STAGE 1 (the
-  scheduler, the clock, menus included) BUILT `DVD_stcfree_20260906_1737.rbf` (⚠ the FIRST
-  Stage 1 fit failed the gate by 12 MHz on one measured cone — pipelined, then SEED 5 first
-  roll 89.75/86.02, the cold corner right on the gate), sim-proven by
-  `bench/dvd/run_stc_freerun.sh`, ⏳ HW round B. Design + status record:
-  `docs/stc_freerun.md` — read §3.5 for what was DELETED before touching any A/V code.**
+- 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06/07,
+  branch `feature/stc-freerun`, `dev-stcfree`). BUILT `DVD_stcfree_20260907_0335.rbf`
+  (SEED 5 first roll, clk_dec 91.41/90.51, 92 % ALM), sim-proven by
+  `bench/dvd/run_stc_freerun.sh`, telemetry-measured on the rig, ⏳ LISTENING TEST PENDING
+  — the verdict here is ears, not instruments (see the ★★ below). Design + status record:
+  `docs/stc_freerun.md` — read §3.5 for what was DELETED before touching any A/V code, and
+  §3.7 (1)–(8) for six defects found across three HW rounds, all of them mine.**
+  ★★ **THE ONE THAT MATTERS MOST: `dvd/emu.sv` DECLARED `dec_pts_in`/`dec_pts_in_valid`,
+  WIRED THEM INTO `mpeg2video`, AND NEVER INSTANTIATED THE CDC THAT DRIVES THEM.**
+  `mpeg2video`'s own port comment said the PTS was *"already crossed into clk (emu
+  pts_cdc)"* — naming an instance that did not exist. Quartus tied both low, so the
+  decoder NEVER RECEIVED A VIDEO PTS: the scheduler anchored its clock to **0** at the
+  first (untagged) pickup and ran open-loop on extrapolation, for every disc, in every
+  mode, through TWO hardware rounds. The reported "audio 1.6 s ahead" was simply the audio
+  PTS at the start of playback — it measured **1599.9 ms and 1601.5 ms** in two different
+  raster configurations, identical to a millisecond, which a dynamic mechanism does not do
+  and a stream constant does. One `pts_cdc #(.W(33))` fixes it; `av_drift` went to
+  **−0.3 / +0.2 ms**.
+  ★★ **WHY FOUR INSTRUMENTS AND TWO HW ROUNDS MISSED IT — the durable lesson.** Not an
+  implicit net (the wire was declared, so `default_nettype none` and the 10236 gate are
+  silent: those catch a missing DECLARATION, this was a missing DRIVER). No bench sees it
+  (`pts_assoc_tb`/`pts_chain_tb` drive `pts_in` directly and are byte-exact — the
+  association was correct, it was never given anything to associate; there is no emu-level
+  bench). And the telemetry read HEALTHY, because **with no tags `want_pts` falls back to
+  the scheduler's own extrapolation, so `disp_lag` compares the clock against a number
+  derived from the clock** — it read ≈0 and that was taken as proof the scheduler worked.
+  > **An instrument derived from the thing it measures reports health at exactly the
+  > moment that thing is absent.** Telemetry word 15 found this on its FIRST run because
+  > it reports the clock's own HISTORY (`prov_seen`, `first_tagged`, `reanchors`) rather
+  > than a difference against it. Prefer instruments that can say "nothing real happened".
+  ★ **Two gates now catch this class mechanically, both proven against the real defects,
+  both advisory on a dev build and fatal on `--release`:** `tools/lint_undriven.sh`
+  (verilator `-Wwarn-UNDRIVEN` over **the file list in `DVD.qsf`** — a glob would lint the
+  upstream `resample_addrgen` instead of the fork's; validated by naming `dec_pts_in` on
+  the commit before the fix; runs BEFORE the compile so it costs seconds) and
+  `tools/netlist_canary.sh` (a wide data register Quartus constant-folded —
+  `pts_assoc|tag_pts[1..32]` "Merged with `tag_pts[0]`" was in the map report the whole
+  time; catches a path driven BY A CONSTANT, which the lint cannot see).
+  ★ **The audit those gates came from found a SECOND dead path in the same surgery:**
+  `frame_late` was left `output reg` with its `always` block deleted, so the entire
+  lateness → `frame_drop_ctl` ledger was dead — `late_raw` computed correctly and consumed
+  by nothing, O[12] Frame Drop unable to act on a real decode miss, and the `lates`/`drops`
+  telemetry reporting only the scheduler's own catch-up request while looking like a
+  working governor. Restored as `late_raw | late_ext | par_late_r`; `late_ext` KEPT against
+  the plan (a field-path REPEAT re-scans a PAIR, so one miss costs two refreshes).
+  ★ **A/V Offset should now default to 0 ms, MEASURED:** `play_err` reads **−0.0 ms** at
+  0 ms and +99.9 at +100, so the +100 ms default was the null of the OLD parse-front
+  residual, exactly as the plan predicted. ⏳ Not changed yet — it is user-visible, the
+  verdict is ears, and `CONF_STR` is in the netlist so it re-rolls the pinned seed.
+  ⛔ **RETRACTED en route, and worth knowing before re-deriving either:** (a) re-basing
+  `play_anchor` on a clock re-anchor — `play_err` IS the lip-sync error, and dragging its
+  anchor along forces it toward zero, so it read −98 ms while the real error was 1.6 s;
+  (b) re-anchoring the clock at a raster change — it made every instrument read correct and
+  changed nothing audible, because **retarding the clock does not move audio that has
+  already left the DAC**. A clock ahead of the display must be answered by ADVANCING THE
+  VIDEO (drops), never by moving the clock back.
   ★ **Stage 1 in one paragraph:** `dvd/disp_sched.sv` (in `mpeg2video`) counts a
   90 kHz tick (`clk_sys/300`, toggle-crossed) and anchors it at pickups of tagged
   pictures; `resample_addrgen`'s `frame_due` IS its `sched_due` (`stc − pts ≥ −half_scan`,
