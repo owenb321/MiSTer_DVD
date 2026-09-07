@@ -193,6 +193,24 @@ else
     OUT="releases/${NAME}${FMAX_TAG}_$(date +%Y%m%d_%H%M).rbf"
 fi
 
+# Undriven-signal gate (tools/lint_undriven.sh): a declared, consumed signal with no
+# driver. Quartus ties it low and everything downstream keeps working, so it survives
+# synthesis, fit, and every module bench that drives the input directly. Two shipped
+# in one feature (dec_pts_in's missing CDC, frame_late's deleted always block) and
+# both survived two HW rounds. Runs BEFORE the compile so it costs seconds, not 40
+# minutes. Advisory on a dev build, fatal on --release.
+if LINT_OUT=$("$(dirname "$0")/tools/lint_undriven.sh" 2>&1); then
+    echo "$LINT_OUT"
+else
+    echo "$LINT_OUT" >&2
+    if [[ "$RELEASE_GATE" -eq 1 ]]; then
+        echo "ERROR: --release build refused: an undriven signal means a dead data path." >&2
+        trap - EXIT
+        exit 1
+    fi
+    echo "WARNING: packing a build with an UNDRIVEN signal (see above)." >&2
+fi
+
 # Netlist canary (tools/netlist_canary.sh): a wide data register that Quartus
 # constant-folded is a data path that is DEAD in silicon and healthy in every
 # simulation. This gate exists because dec_pts_in/dec_pts_in_valid were connected

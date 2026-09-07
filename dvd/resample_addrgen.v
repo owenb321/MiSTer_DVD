@@ -695,6 +695,31 @@ module resample_addrgen (
                            sched_next_due && ~output_frame_valid && ~pause &&  // DVD-FORK (PTS scheduling): the timeline has passed the next picture and there is none -- a real decode miss
                            ~hold_freeze;  // DVD-FORK (hold-frame transitions): hold-window lateness is mux-lead policy, not decode debt — without this, lates bank drop debt once the refilling VBUF passes vbuf_healthy but before the new clip's first frame decodes, dropping B-frames right at clip start
 
+  /* ⚠⚠ frame_late's DRIVER WAS DELETED BY THE STAGE-1 GOVERNOR SURGERY AND RESTORED
+   * 2026-09-07. The cut that removed refresh_cnt/cur_show/cad_acc took this
+   * always block with it, leaving `output reg frame_late` declared and never
+   * assigned -- so Quartus tied it low and the ENTIRE lateness->drop ledger was
+   * dead. frame_drop_ctl saw only the scheduler's catch-up request, O[12] Frame
+   * Drop could not act on a real decode miss, and late_raw (computed above, and
+   * correct) drove nothing at all. Found by `verilator --lint-only -Wwarn-UNDRIVEN`
+   * over the .qsf's own file list, in the audit that followed the missing pts_cdc.
+   * ⚠ late_ext is KEPT. On the field path a REPEAT visit re-scans a PAIR, so one
+   * miss costs TWO refreshes and the ledger must count two; the plan listed the
+   * stretch as retired, but nothing measured said it should be, and an
+   * under-counting ledger still starves the drops that PTS scheduling needs to
+   * catch a late display up. cad_late_r is genuinely gone with the cadence
+   * corrector; par_late_r stays, because the field-parity corrector stays. */
+  wire late_pair = (last_image == TOP) || (last_image == BOTTOM);
+  reg  late_ext;
+  always @(posedge clk)
+    if (~rst) late_ext <= 1'b0;
+    else if (clk_en) late_ext <= late_raw && late_pair;
+    else late_ext <= late_ext;
+  always @(posedge clk)
+    if (~rst) frame_late <= 1'b0;
+    else if (clk_en) frame_late <= late_raw | late_ext | par_late_r;
+    else frame_late <= frame_late;
+
   /* DVD-FORK (PTS scheduling): one registered pulse per pickup, for disp_sched. */
   reg       pickup_tick_r;
   always @(posedge clk)

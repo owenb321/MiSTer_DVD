@@ -592,6 +592,50 @@ constant-folded, advisory on a dev build and fatal on `--release`. It is proven 
 the broken build's own report. Same family as the dead-stripped `dsi_tbl` (16 ALMs / 0
 memory bits) that the D-pad seek work had to notice by hand — but mechanical this time.
 
+### (7) THE AUDIT — a second dead path, and two gates so this class stops being found by hand
+
+The missing `pts_cdc` was found by an instrument. Asked whether anything else was
+disconnected, the answer came from `verilator --lint-only -Wwarn-UNDRIVEN` over
+**the file list in `DVD.qsf`** — not a glob, because the fork swaps
+`dvd/resample_addrgen.v` in for the upstream copy and a glob lints whichever it
+reaches first, i.e. possibly not the one that is built.
+
+**★ It found a second one, in the same surgery: `frame_late` had no driver.** It is
+declared `output reg` in `dvd/resample_addrgen.v`, and the cut that removed
+`refresh_cnt`/`cur_show`/`cad_acc` took its `always` block with it. So the **entire
+lateness → `frame_drop_ctl` ledger was dead**: `late_raw` was computed correctly and
+consumed by nothing, O[12] Frame Drop could not act on a real decode miss, and the
+`lates`/`drops` counters in telemetry were reporting only `sched_catchup_late` — my own
+catch-up request — while looking exactly like a working governor.
+
+Restored as `late_raw | late_ext | par_late_r`. ⚠ `late_ext` is **kept**, against the
+plan, which listed the two-cycle stretch as retired: on the field path a REPEAT visit
+re-scans a PAIR, so one miss costs two refreshes and the ledger must count two. Nothing
+measured said to remove it, and an under-counting ledger starves exactly the drops that
+PTS scheduling needs to catch a late display up. `cad_late_r` is genuinely gone with the
+cadence corrector; `par_late_r` stays because the field-parity corrector stays.
+
+**Two gates, both cheap, both proven against the real defects:**
+
+- **`tools/lint_undriven.sh`** — fails on any declared, consumed, undriven signal, with a
+  two-name allowlist for stock `hps_io`'s disabled `PS2DIV` block. Validated by running it
+  against the commit before the CDC fix, where it names `dec_pts_in` and
+  `dec_pts_in_valid`. Runs **before** the compile, so it costs seconds.
+- **`tools/netlist_canary.sh`** — fails when a wide data register is constant-folded
+  (`pts_assoc|tag_pts[1..32]` "Merged with `tag_pts[0]`"). Catches the case where a path is
+  driven but by a constant, which the lint cannot see. Proven RED on the broken build's own
+  map report.
+
+Both are advisory on a dev build and fatal on `--release`.
+
+⚠ **Deliberately NOT changed, but recorded.** `vld.pic_hdr_upd` is exported to
+`mpeg2video` and consumed by nothing — `pts_assoc` pops on `hdr_pulse` and distinguishes
+fields with `hdr_second` instead. It looks like a leftover probe rather than a defect
+(the association is byte-exact against `tools/pts_map.py` over real disc bytes), but it is
+the one place the audit could not fully clear by inspection, so it is written down: if
+field-coded content mis-associates, start here. Same for `dvd_audio_decode`'s now-inert
+`anchor_pulse`/`anchor_delta` ports, left in place with the ⛔ note at the old use site.
+
 ### Still open after these fixes
 
 ⏳ **The provisional-anchor fix is BUILT AND SIM-PROVEN, NOT HW-CONFIRMED.** The evidence
