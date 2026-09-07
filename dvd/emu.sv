@@ -4940,6 +4940,11 @@ nav_pci nav_pci_inst (
                                          // MiB stills read slightly LATE on HW waiting for
                                          // the last few KB + the cold re-decode round trip.
     .stc_fresh  (hl_stc_fresh),          // last load flushed => STC display-coherent
+    // ⚠ rephase_req, NOT aud_disc_rephase. The latter is RATE LIMITED to one per
+    // ~0.62 s so a burst of re-anchors cannot machine-gun the audio; coherence is a
+    // fact about the clock, not a thing to throttle, and a suppressed second
+    // re-anchor would leave nav_pci trusting a timeline the clock had already left.
+    .stc_reanchor (rephase_req),           // THE STC IS A CLOCK: it just moved to another timeline
                                          // (keep_vbuf hop => scheduled path blocked
                                          //  until a still park proves catch-up)
     .sel_force  (vm_btn_force),          // Phase 4: SetHL_BTNN / link buttons

@@ -130,6 +130,14 @@ module nav_pci #(
     // (settled_seen: a still park since the load) — promotion until then is
     // settle/timer only.
     input  wire        stc_fresh,
+    // ★ THE CLOCK RE-ANCHORED ON A CONTENT PTS JUMP (dvd/disp_sched.sv anchor_disc,
+    // crossed to clk_sys). An HLI's s_ptm belongs to the timeline its NAV pack was
+    // parsed on; a re-anchor moves the clock ONTO A DIFFERENT ONE, so every PTM
+    // committed before it is now being compared against a clock that no longer
+    // measures the same thing. That is a property of the CLOCK, which is why it
+    // replaces the old keep_vbuf guess: keep_vbuf asked "was this hop the kind that
+    // usually skews the clock", this asks whether the clock actually moved.
+    input  wire        stc_reanchor,
 
     // gamepad (1-cycle pulses from emu edge detect)
     // Phase-4 VM selection force (SetHL_BTNN / link button fields): sets the
@@ -313,7 +321,33 @@ reg settled_seen;
 always @(posedge clk)
     if (!rst_n)            settled_seen <= 1'b0;
     else if (menu_settled) settled_seen <= 1'b1;
-wire stc_trusted = stc_fresh || settled_seen;
+
+// ★ TIMELINE COHERENCE (2026-09-07). The scheduled path compares stc against an
+// s_ptm, and that comparison is only meaningful while both name the same timeline.
+// `hli_coherent` says the pending HLI was committed AFTER the clock's most recent
+// content re-anchor -- i.e. nothing has moved the clock off the timeline the PTM
+// was authored against since it arrived.
+//
+// This is what stc_fresh was reaching for with `~keep_vbuf` and could not express:
+// that was a guess about which HOPS tend to skew the clock, made when the clock was
+// anchored on the demux front and no signal existed for "the clock moved". The
+// free-running display-anchored STC exports one, so ask it directly.
+//
+// ⚠ The fallbacks below STAY. They are not redundant -- they are what covers the
+// incoherent case, which still exists: a menu hop re-anchors, and any HLI parsed
+// before that re-anchor is genuinely unschedulable. Deleting them (which tying
+// stc_fresh to 1 effectively did) is what cost Harry Potter and Scene It their
+// highlights on 20260907_1249 -- a stale ss=0 disarm is perpetually "due" against a
+// clock it does not share a timeline with, and off_due OUTRANKS nxt_due below.
+reg hli_commit_p;                       // one clk: a PTM was committed
+wire hli_commit = hli_commit_p;
+reg hli_coherent;
+always @(posedge clk)
+    if (!rst_n)           hli_coherent <= 1'b0;
+    else if (stc_reanchor) hli_coherent <= 1'b0;   // the clock left this timeline
+    else if (hli_commit)   hli_coherent <= 1'b1;   // a PTM arrived on the current one
+
+wire stc_trusted = (stc_fresh || settled_seen) && hli_coherent;
 wire nxt_sched = nxt_v && nxt_pre && !nxt_dist[31] && stc_trusted;
 // FALLBACK promotion: an armed pending that has waited > PROMOTE_FALLBACK with
 // video live but the STC never became due (keep_vbuf STC/parse-front skew).
@@ -367,7 +401,9 @@ wire [10:0] col_base = 11'h016 +
                        {9'd0, (b_coln == 2'd0 ? 2'd0 : b_coln - 2'd1), 3'b000};
 
 always @(posedge clk or negedge rst_n) begin
+    hli_commit_p <= 1'b0;                  // one-cycle pulse (overridden at the commit below)
     if (!rst_n) begin
+        hli_commit_p <= 1'b0;
         fidx      <= 10'd0;
         facc      <= 24'd0;
         f_ss      <= 2'd0;
@@ -485,6 +521,7 @@ always @(posedge clk or negedge rst_n) begin
                     // with stc < s_ptm, then the STC reaches it — the Matrix
                     // finite-window case) may use the scheduled path; an
                     // already-due commit waits for menu_settled / the timer.
+                    hli_commit_p <= 1'b1;        // this PTM is on the clock's CURRENT timeline
                     nxt_pre   <= $signed(stc[31:0] - f_sptm) < 0;
                     nxt_bank  <= fill_bank;
                     nxt_ss    <= f_ss;

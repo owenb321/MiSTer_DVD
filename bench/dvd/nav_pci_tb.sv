@@ -21,6 +21,11 @@ module nav_pci_tb;
     logic [7:0] pci_byte = 0;
     logic pci_valid = 0, pci_frame_start = 0;
     logic [32:0] stc = 33'd0;
+    // the clock moved to another timeline (dvd/disp_sched anchor_disc, via emu).
+    // ⚠ Default 0 and TEST 18 is the only scenario that raises it: every existing
+    // test models a clean flushed load, where the clock has not left the timeline
+    // its PTMs were authored on.
+    logic stc_reanchor = 1'b0;
     // display-mode verdict (Phase-3 button groups). Defaults model the HW common
     // case: 16:9 content presented wide -> group 1, which is also what the MiB
     // fixture's golden values were HW-validated against (its dsp_ty=(1,4): group
@@ -51,6 +56,7 @@ module nav_pci_tb;
         .video_live(video_live),
         .menu_settled(menu_settled),
         .stc_fresh(1'b1),   // TB scenarios model full-flush loads (display-coherent STC)
+        .stc_reanchor(stc_reanchor),
         .sel_force(1'b0), .sel_force_btn(6'd0),
         .num_sel(num_sel), .num_btn(num_btn),
         .nav_up(nav_up), .nav_dn(nav_dn), .nav_lf(nav_lf), .nav_rt(nav_rt),
@@ -401,6 +407,43 @@ module nav_pci_tb;
         $display("T17: sel=%0d (continuation fosl must NOT move the player)",
                  btn_sel);
         chk(btn_sel == 6'd4, "T17 fosl on an hli_ss=2 continuation is ignored");
+
+        // ---- TEST 18: TIMELINE COHERENCE. A PTM is only schedulable while the
+        //      clock still measures the timeline it was authored against. If the
+        //      display re-anchors on a content PTS jump between the commit and the
+        //      crossing, stc has moved to a DIFFERENT timeline and the compare
+        //      carries no information -- so the scheduled path must not fire, and
+        //      the settle/timer fallbacks (which is what they are for) cover it.
+        //      ⚠ This replaces the old `~keep_vbuf` guess, which asked which kind of
+        //      HOP tends to skew the clock rather than whether the clock moved.
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+        stc_reanchor = 1'b0; video_live = 1'b0; stc = 33'd0;
+        feed_pci(0);                                     // commit the HLI at stc=0
+        // ⚠ 200, not 8: feed_pci returns when the BYTES are fed, and the fill FSM
+        // commits the PTM some cycles later. Pulsing the re-anchor at 8 cycles fired
+        // it BEFORE the commit, so hli_coherent was set afterwards and the scenario
+        // measured nothing -- it failed against correct RTL until the wait was right.
+        repeat (200) @(posedge clk);
+        // ⚠ Driven from the NEGEDGE. A blocking assignment made right after a
+        // `repeat(N) @(posedge clk)` lands ON the edge and races the DUT's own
+        // posedge block, so the pulse can be missed entirely -- measured here as
+        // "clears=0" while the scenario failed against correct RTL. Same trap as
+        // disp_sched_tb's first version.
+        @(negedge clk); stc_reanchor = 1'b1;
+        @(negedge clk); stc_reanchor = 1'b0;                        // clock leaves the timeline
+        stc = 33'd2579300;                               // its s_ptm is now "due"
+        repeat (120) @(posedge clk);
+        chk(btns_armed === 1'b0,
+            "T18 a PTM from before a re-anchor must NOT promote on the scheduled path");
+
+        // ---- TEST 18b: the fallback still covers it. video_live plus the settle
+        //      signal promotes the same pending HLI, so coherence gates the
+        //      SCHEDULED path only and never strands a highlight.
+        video_live = 1'b1;
+        menu_settled = 1'b1; @(posedge clk); menu_settled = 1'b0;
+        repeat (200) @(posedge clk);
+        chk(btns_armed === 1'b1, "T18b the fallback promotes it anyway");
+        video_live = 1'b0;
 
         if (errors == 0) $display("NAV_PCI_TB: ALL TESTS PASSED");
         else             $display("NAV_PCI_TB: FAILED with %0d errors", errors);
