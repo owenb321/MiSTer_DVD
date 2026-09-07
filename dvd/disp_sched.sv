@@ -127,6 +127,22 @@ module disp_sched #(
     // left permanently that far ahead with nothing able to re-time it.
     output reg         disp_anchored,
     output reg         anchor_req,            // one clk: stc was (re)anchored
+    // ★ CONTENT DISCONTINUITY, not merely a re-anchor. Pulses with anchor_req only
+    // when the anchor was taken because a TAGGED picture's PTS JUMPED off the
+    // current timeline -- a cell change, a menu hop, a PGC boundary. It drives the
+    // audio-only re-phase (flush_ctl.aud_resync), which is what VLC does at exactly
+    // these points: modules/access/dvdnav.c raises ES_OUT_RESET_PCR at every
+    // CELL_CHANGE and HOP_CHANNEL, and es_out.c's EsOutChangePosition then calls
+    // vlc_input_decoder_Flush on EVERY es (audio included), resets the clock and
+    // re-enters buffering. VLC never carries buffered audio across a discontinuity;
+    // we did, which left an un-healed lip-sync step at every one of them.
+    // ⚠ The LATE_MAX leg of disc_w is EXCLUDED. A picture more than 2.7 s late is a
+    // starved decoder, not a jump in the content -- flushing audio there punishes the
+    // viewer for our own slowness, and it is the same "lateness is not a
+    // discontinuity" rule that 3.7(2) had to learn on hardware.
+    // ⚠ The FIRST anchor after a flush is excluded too (disc_jump_w requires
+    // next_valid): the flush that caused it has already reset the audio chain.
+    output reg         anchor_disc,
     output reg  signed [33:0] anchor_delta,   // new - old
     output reg         disp_lag_valid,        // one clk at a pickup
     output reg  signed [33:0] disp_lag,       // pic_pts - stc at that pickup
@@ -255,6 +271,9 @@ module disp_sched #(
     reg  disc, anchor_now, pic_due_r, next_due_r;
     wire disc_w = has_tag && anchored && next_valid &&
                   ((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s));
+    // the CONTENT-JUMP subset: the same test without the lateness leg.
+    wire disc_jump_w = has_tag && anchored && next_valid &&
+                       ((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s));
     // ---- RE-ANCHOR AT A KNOWN RASTER CHANGE ------------------------------------
     // A video->film engage restarts the raster (the modeline walk keys on
     // il_eff|pal_eff|filmp_eff) but deliberately fires NO FLUSH: a bare filmp edge
@@ -303,7 +322,7 @@ module disp_sched #(
     wire anchor_now_w = pic_valid &&
                         (!anchored || (has_tag && (!disp_anchored || !next_valid || disc_w)));
     always_ff @(posedge clk) begin
-        disc       <= disc_w;
+        disc       <= disc_jump_w;   // (was disc_w and never read; now the jump-only qualifier)
         anchor_now <= anchor_now_w;
         pic_due_r  <= !sched_en || !pic_valid || anchor_now_w || (d_stc_want >= -half_s);
         next_due_r <= !sched_en || (anchored && next_valid && (d_stc_next >= -half_s));
@@ -347,6 +366,7 @@ module disp_sched #(
 
     always_ff @(posedge clk) begin
         anchor_req     <= 1'b0;
+        anchor_disc    <= 1'b0;
         disp_lag_valid <= 1'b0;
         if (!rst_n || flush) begin
             stc          <= 33'd0;
@@ -384,6 +404,7 @@ module disp_sched #(
                 disp_lag       <= $signed({1'b0, want_pts}) - $signed({1'b0, stc});
                 if (anchor_now) begin
                     anchor_req   <= 1'b1;
+                    anchor_disc  <= disc;        // a PTS jump, not a first anchor or a late picture
                     anchor_delta <= $signed({1'b0, anchor_val}) - $signed({1'b0, stc});
                     stc          <= anchor_val;
                     anchored     <= 1'b1;

@@ -2275,6 +2275,7 @@ wire       sw_blank;                    // hold the picture black across a mode 
 // Keeping it out of the netlist now is the point -- one behavioural delta per HW round.
 wire       realign_pend;                // an arm is open (see above)
 wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
+reg  aud_disc_rephase;   // content PTS jump -> audio-only re-phase (driven below, beside the anchor CDC)
 wire pipe_rst_n, aud_rst_n;
 mode_realign mode_realign_i (
     .clk             (clk_sys),
@@ -2329,6 +2330,7 @@ flush_ctl flush_ctl_i (
     .aud_switch      (aud_switch),
     .keep_vbuf       (keep_vbuf),
     .load_flush      (load_flush),
+    .disc_rephase    (aud_disc_rephase),   // content PTS jump -> audio-only re-phase (VLC's RESET_PCR analogue)
     .aud_flush       (aud_flush),
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
@@ -3416,7 +3418,7 @@ av_sync av_sync_inst (
     .rst_n              (reset_n),       // the core reset ONLY: a keep_vbuf menu hop must not blank the clock the ring drains against
     .mirror_data        (stc_mirror_sys),
     .mirror_valid       (stc_mirror_valid),
-    .delta_data         (av_anchor_delta_w),
+    .delta_data         (av_anchor_delta_w[33:0]),
     .delta_valid        (av_anchor_delta_valid),
     .vid_pts            (ps_vid_pts),
     .vid_pts_valid      (ps_vid_pts_valid),
@@ -3547,17 +3549,50 @@ always @(posedge clk_dec) begin sched_en_s1 <= ~av_freerun; sched_en_dec <= sche
 wire [32:0] core_stc;            wire core_stc_anchored;                 // clk_dec
 wire        core_disp_anchored;   // clk_dec: the clock is on the DISPLAY timeline, not the parse front
 wire        core_anchor_req;     wire signed [33:0] core_anchor_delta;   // clk_dec
+wire        core_anchor_disc;    // clk_dec: that re-anchor was a CONTENT PTS jump
 wire signed [33:0] core_disp_lag; wire core_disp_lag_valid;              // clk_dec
 wire  [7:0] core_sched_flags; wire [15:0] core_sched_dur;               // clk_dec instrument
 wire [34:0] stc_mirror_sys;      wire stc_mirror_valid;                  // clk_sys
-wire signed [33:0] av_anchor_delta_w; wire av_anchor_delta_valid;
+wire [34:0] av_anchor_delta_w; wire av_anchor_delta_valid;
 wire signed [33:0] disp_lag_sys;  wire disp_lag_sys_valid;
 pts_cdc #(.W(35)) pts_cdc_stc (          // the clock, every tick
     .src_clk(clk_dec), .src_rst_n(reset_n), .src_data({core_disp_anchored, core_stc_anchored, core_stc}), .src_valid(stc_tick_dec),
     .dst_clk(clk_sys), .dst_rst_n(reset_n), .dst_data(stc_mirror_sys), .dst_valid(stc_mirror_valid));
-pts_cdc #(.W(34)) pts_cdc_delta (        // each re-anchor's delta
-    .src_clk(clk_dec), .src_rst_n(reset_n), .src_data(core_anchor_delta), .src_valid(core_anchor_req),
+pts_cdc #(.W(35)) pts_cdc_delta (        // each re-anchor's delta + whether it was a content jump
+    .src_clk(clk_dec), .src_rst_n(reset_n), .src_data({core_anchor_disc, core_anchor_delta}), .src_valid(core_anchor_req),
     .dst_clk(clk_sys), .dst_rst_n(reset_n), .dst_data(av_anchor_delta_w), .dst_valid(av_anchor_delta_valid));
+
+// ---- CONTENT-DISCONTINUITY AUDIO RE-PHASE (2026-09-07) ---------------------
+// The display re-anchored because a tagged picture's PTS jumped off the current
+// timeline -- a cell change, a menu hop, a PGC boundary. Re-phase the audio chain
+// so it lands on the NEW timeline instead of continuing on the old one.
+//
+// ★ This is what VLC does at the same points, and reading it is what settled the
+// design: modules/access/dvdnav.c raises ES_OUT_RESET_PCR on every
+// DVDNAV_CELL_CHANGE and DVDNAV_HOP_CHANNEL, and es_out.c's EsOutChangePosition
+// flushes EVERY es (audio included), resets the clock and re-enters buffering.
+// VLC keeps one clock for menus and titles alike -- there is no menu exemption --
+// but it never carries buffered audio across a discontinuity. We did, and each
+// re-anchor left a lip-sync step nothing could heal (4-6 a minute in menus).
+//
+// ⚠ RATE LIMITED to one re-phase per ~0.5 s. A re-phase costs a short audio gap
+// (the drain gate re-fills), and disc_w can fire twice around one junction as the
+// new timeline settles; without the cooldown a burst of re-anchors would machine-gun
+// the audio. Titles are unaffected either way -- they re-anchor about once per
+// playback (MEASURED: reanchors=1 over 80 s on APOLLO_13).
+reg  [23:0] rephase_cool;                       // 2^24 / 27 MHz ~ 0.62 s
+wire        rephase_req = av_anchor_delta_valid && av_anchor_delta_w[34];
+always @(posedge clk_sys or negedge reset_n)
+    if (!reset_n) begin
+        rephase_cool <= 24'd0; aud_disc_rephase <= 1'b0;
+    end else begin
+        aud_disc_rephase <= 1'b0;
+        if (rephase_cool != 24'd0) rephase_cool <= rephase_cool - 24'd1;
+        else if (rephase_req) begin
+            aud_disc_rephase <= 1'b1;
+            rephase_cool     <= 24'hFFFFFF;
+        end
+    end
 pts_cdc #(.W(34)) pts_cdc_disp (         // telemetry word 11
     .src_clk(clk_dec), .src_rst_n(reset_n), .src_data(core_disp_lag), .src_valid(core_disp_lag_valid),
     .dst_clk(clk_sys), .dst_rst_n(reset_n), .dst_data(disp_lag_sys), .dst_valid(disp_lag_sys_valid));
@@ -3864,6 +3899,7 @@ mpeg2video mpeg2video_inst (
     .stc_anchored (core_stc_anchored),
     .disp_anchored (core_disp_anchored),
     .anchor_req   (core_anchor_req),
+    .anchor_disc  (core_anchor_disc),
     .anchor_delta (core_anchor_delta),
     .disp_lag     (core_disp_lag),     // DVD-FORK (PTS scheduling): displayed PTS - STC at each pickup
     .disp_lag_valid (core_disp_lag_valid),

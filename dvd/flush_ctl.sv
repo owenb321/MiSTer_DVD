@@ -45,11 +45,13 @@ module flush_ctl (
     input  wire jump_ack,         // 1-cycle pulse: reader executed a VM jump
     input  wire mode_switch,      // 1-cycle pulse: live raster-regime change (interlace/film)
     input  wire aud_switch,       // 1-cycle pulse: audio track switch
+    input  wire disc_rephase,     // display re-anchored on a content PTS jump (dvd/disp_sched.sv)
     input  wire keep_vbuf,        // level (reader): menu->menu transition keeps the VBUF
 
     output wire load_flush,       // ~64-cycle level -> pipe_rst_n scope (demux/av_sync/nav)
     output wire aud_flush,        // ~64-cycle level -> audio chain reset (with aud_resync)
     output wire aud_resync,       // ~64-cycle level -> audio-only re-phase
+    // one-cycle: the display re-anchored on a CONTENT PTS jump -> re-phase audio
     output wire seek_flush,       // ~64-cycle level -> 2-FF into clk_dec = mpeg2video.vbuf_flush
     output wire mount_flush,      // ~64-cycle level, MOUNT ONLY -> mpeg2video.soft_flush (decoder soft reset)
     output wire pipe_rst_n,       // reset_n & ~load_flush
@@ -100,7 +102,24 @@ reg [6:0] aud_resync_cnt = 7'd0;
 assign    aud_resync = aud_resync_cnt != 7'd0;
 always @(posedge clk) begin
     if (~rst_n)              aud_resync_cnt <= 7'd0;
-    else if (aud_switch)     aud_resync_cnt <= 7'd64;
+    // ★ A CONTENT DISCONTINUITY RE-PHASES AUDIO, which is what VLC does at exactly
+    // this point. modules/access/dvdnav.c raises ES_OUT_RESET_PCR at every
+    // DVDNAV_CELL_CHANGE and DVDNAV_HOP_CHANNEL; es_out.c's EsOutChangePosition then
+    // calls vlc_input_decoder_Flush on EVERY es (audio included), resets the clock
+    // and re-enters buffering, so buffered audio is NEVER carried across a
+    // discontinuity. We carried it, and the display's re-anchor then left a lip-sync
+    // step that nothing healed -- MEASURED at 4-6 re-anchors a minute in menus.
+    // ⚠ aud_resync, NOT aud_flush: video is continuous here (the whole point of
+    // keep_vbuf is that the authored transition plays out), so only the audio side
+    // may re-phase. aud_flush would also reset the video-side demux path.
+    // ⚠ This deliberately trades some of the §5d "menu audio continuity" behaviour
+    // (T2's "next clip's audio missing at the junction") for alignment. The trade is
+    // the maintainer's call, taken 2026-09-07: menu lip-sync over gapless menu audio.
+    // ⚠ A bare re-arm of the drain gate WITHOUT this reset deadlocks into permanent
+    // silence -- play_pts can only re-latch from a NEW dispatch, and dispatch stalls
+    // on the full decode FIFOs (v5.3, HW-observed). Resetting the chain is what makes
+    // the re-phase safe, and is exactly why VLC flushes rather than re-times.
+    else if (aud_switch || disc_rephase) aud_resync_cnt <= 7'd64;
     else if (aud_resync)     aud_resync_cnt <= aud_resync_cnt - 7'd1;
 end
 

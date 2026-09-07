@@ -16,6 +16,7 @@
 //   seek_ack / jump_ack, keep_vbuf=1        x     -     -     -        -   (menu hop)
 //   mode_switch (interlace/film raster)     x     x     x     -        -
 //   aud_switch (audio track)                -     -     -     -        x
+//   disc_rephase (content PTS jump)         -     -     -     -        x
 //
 // mount_flush = the decoder soft-reset request (mpeg2video.soft_flush): fires on a
 // MOUNT ONLY, never on seeks/jumps/mode switches (those need display continuity).
@@ -33,7 +34,7 @@ module flush_ctl_tb;
   reg  clk = 0;
   reg  rst_n = 0;
   reg  start_streaming = 0, seek_ack = 0, jump_ack = 0;
-  reg  mode_switch = 0, aud_switch = 0, keep_vbuf = 0;
+  reg  mode_switch = 0, aud_switch = 0, keep_vbuf = 0, disc_rephase = 0;
   wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
   wire pipe_rst_n, aud_rst_n;
 
@@ -45,6 +46,7 @@ module flush_ctl_tb;
     .jump_ack        (jump_ack),
     .mode_switch     (mode_switch),
     .aud_switch      (aud_switch),
+    .disc_rephase    (disc_rephase),
     .keep_vbuf       (keep_vbuf),
     .load_flush      (load_flush),
     .aud_flush       (aud_flush),
@@ -194,6 +196,17 @@ module flush_ctl_tb;
     aud_switch = 1;
     fork pulse_and_measure; begin @(posedge clk); aud_switch <= 0; end join
     check_row(0, 0, 0, 1, 0, "[10] aud_switch must fire aud_resync only");
+
+    // [10b] a CONTENT PTS JUMP re-phases audio ONLY. It is the analogue of VLC's
+    //       ES_OUT_RESET_PCR at a DVDNAV_CELL_CHANGE / HOP_CHANNEL, which flushes
+    //       every es so buffered audio is never carried across a discontinuity.
+    //       ⚠ It must NOT raise load_flush, seek_flush or mount_flush: the video is
+    //       continuous here (that is the whole point of keep_vbuf -- the authored
+    //       transition plays out), so touching the video path would undo it.
+    expect_idle("[10b] not idle before disc_rephase");
+    disc_rephase = 1;
+    fork pulse_and_measure; begin @(posedge clk); disc_rephase <= 0; end join
+    check_row(0, 0, 0, 1, 0, "[10b] disc_rephase must fire aud_resync only");
 
     // [11] core reset mid-flush clears every counter
     start_streaming = 1;

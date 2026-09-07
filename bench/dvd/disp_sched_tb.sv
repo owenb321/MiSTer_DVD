@@ -42,7 +42,7 @@ module disp_sched_tb;
   reg         pickup = 0;
   reg         skip_ack = 0, skip_field = 0, skip_ps = 0, skip_pf = 1, skip_tff = 1, skip_rff = 0;
   reg  [15:0] half_scan = 750;
-  wire        pic_due, next_due, anchored, disp_anchored, anchor_req, disp_lag_valid, catchup_late;
+  wire        pic_due, next_due, anchored, disp_anchored, anchor_req, anchor_disc, disp_lag_valid, catchup_late;
   wire [32:0] stc;
   wire signed [33:0] anchor_delta, disp_lag;
 
@@ -57,7 +57,7 @@ module disp_sched_tb;
     .skip_tff(skip_tff), .skip_rff(skip_rff),
     .half_scan(half_scan),
     .pic_due(pic_due), .next_due(next_due), .stc(stc), .anchored(anchored), .disp_anchored(disp_anchored),
-    .anchor_req(anchor_req), .anchor_delta(anchor_delta),
+    .anchor_req(anchor_req), .anchor_disc(anchor_disc), .anchor_delta(anchor_delta),
     .disp_lag_valid(disp_lag_valid), .disp_lag(disp_lag),
     .dbg_flags(), .dbg_dur(), .catchup_late(catchup_late));
 
@@ -174,6 +174,8 @@ module disp_sched_tb;
     end
   end
   always @(posedge clk) if (anchor_req) reanchors = reanchors + 1;
+  integer disc_pulses = 0;
+  always @(posedge clk) if (anchor_req && anchor_disc) disc_pulses = disc_pulses + 1;
   integer catchups = 0;
   always @(posedge clk) if (catchup_late) catchups = catchups + 1;
 
@@ -186,7 +188,7 @@ module disp_sched_tb;
     begin
       half_scan = hs; scan_a = sa; scan_b = sb; scan_c = sc; scan_d = sd; scan_pat = pat; ilace = il; frc = code;
       n_pic = 0; di = 0; cur = -1; pic_valid = 0; video_live = 0; pause = 0; prov_valid = 0;
-      lates = 0; pickups = 0; reanchors = 0; catchups = 0; max_abs_lag = 0; worst_pic = -1; busy = 0; scan_i = 0; settle = 2;
+      lates = 0; pickups = 0; reanchors = 0; disc_pulses = 0; catchups = 0; max_abs_lag = 0; worst_pic = -1; busy = 0; scan_i = 0; settle = 2;
       flush = 1; repeat (4) @(posedge clk); flush = 0;
       now = 0; next_opp = 20;
       repeat (4) @(posedge clk);
@@ -577,6 +579,45 @@ module disp_sched_tb;
       run_until_done(200);
     join
     $display("  [13c] no provisional PTS: untagged anchor=no, tagged=yes");
+
+    // [14] anchor_disc: the CONTENT-DISCONTINUITY qualifier that re-phases audio.
+    //      It must fire on a PTS JUMP and on nothing else. Three arms, because each
+    //      wrong trigger costs a real audio gap on hardware:
+    //        (a) a clean run re-anchors ONCE at the start and must pulse ZERO times
+    //            -- the first anchor's flush has already reset the audio chain;
+    //        (b) a 5 s forward jump (a cell change) must pulse exactly once;
+    //        (c) a STARVED display, which re-anchors via disc_w's LATE_MAX leg, must
+    //            pulse ZERO times. Lateness is our slowness, not the content jumping,
+    //            and flushing audio there punishes the viewer for it.
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(60, 100000, 4, 20000);
+    run_until_done(200);
+    if (disc_pulses != 0) begin
+      $display("FAIL [14a] a clean run pulsed anchor_disc %0d time(s) -- audio would re-phase for nothing", disc_pulses);
+      errors = errors + 1;
+    end
+
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(60, 100000, 4, 20000);
+    for (i = 30; i < 60; i = i + 1) begin                 // a 5 s forward jump at picture 30
+      s_pts[i]  = s_pts[i]  + 450000;
+      s_true[i] = s_true[i] + 450000;
+    end
+    run_until_done(200);
+    if (disc_pulses != 1) begin
+      $display("FAIL [14b] a 5 s content jump pulsed anchor_disc %0d time(s), expected 1", disc_pulses);
+      errors = errors + 1;
+    end
+
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(60, 100000, 4, 20000);
+    for (i = 20; i < 60; i = i + 1) s_ready[i] = s_pts[i] - 20000 + 400000;   // 4.4 s starvation
+    run_until_done(300);
+    if (disc_pulses != 0) begin
+      $display("FAIL [14c] a starved display pulsed anchor_disc %0d time(s) -- lateness is not a content jump", disc_pulses);
+      errors = errors + 1;
+    end
+    $display("  [14] anchor_disc: clean=0, jump=1, starvation=0");
 
     if (errors == 0) $display("PASS: disp_sched_tb — 19 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end

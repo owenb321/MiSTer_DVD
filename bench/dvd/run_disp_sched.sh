@@ -28,6 +28,7 @@
 #       there cannot fail. M9 is what proved it. [13c] is the rig's own case (prov_seen=0).
 #   M10 first tag anchors only on disc_w    -> [13b] a SMALL provisional error never
 #       yields a display anchor at all
+#   M11 anchor_disc keyed on the FULL disc_w -> [14c] a starved display re-phases audio
 #
 # ⚠ NOT COVERED HERE, and it cost a hardware round: dvd_audio_decode's play_err is the
 # LIP-SYNC measurement (clock minus audio playback position). Re-basing play_anchor on a
@@ -82,6 +83,9 @@ mut M9 "if (has_tag) disp_anchored <= 1'b1;" "disp_anchored <= 1'b1;" "FAIL \[13
 # M10: the first tagged picture only anchors if it ALSO looks like a discontinuity, so a
 # small provisional error never yields a display anchor and audio takes the fallback.
 mut M10 "(has_tag && (!disp_anchored || !next_valid || disc_w))" "(has_tag && (!next_valid || disc_w))" "FAIL \[13b\]"
+# M11: anchor_disc qualified by the FULL disc_w (lateness included), so a starved
+# display re-phases the audio -- a real audio gap as a punishment for our own slowness.
+mut M11 "disc       <= disc_jump_w;" "disc       <= disc_w;" "FAIL \[14c\]"
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="
 exit $fail
