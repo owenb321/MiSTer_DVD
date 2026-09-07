@@ -961,4 +961,15 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ⚠ Per the rule the v0.4.0 entry earns, the ALM figure is NOT attributed to this change:
 # 91% against v0.4.0's 90% is one point on a design whose placement has moved clk_dec by
 # 5.5 MHz on a pure string edit, and the new logic is ~60 registers. Recorded, not explained.
+#
+# 2026-09-07 (feature/smpte-csync REBASED onto main after PR #63 -- the SMPTE composite-sync
+# generator, the FIELD1_VPOS raster flip, and two CONF_STR rows, now on top of the
+# free-running STC): SEED 5 held FIRST roll -- clk_dec 93.35 @100C / 89.89 @-40C (gate 86.0,
+# PASS both corners) at 93% ALM (38,811), registers 51,940, RAM 498/553, DSP 92/112.
+# Build DVD_smptesync3_20260907_2053.rbf (4389 KB), git 5b31920, tree clean.
+# ★ Worth noting only because the expectation was the other way: the STC branch's own
+# entries record a Stage-1 fit FAILING at 73.77 MHz and needing the scheduler pipelined,
+# and its final -40C margin was 0.02 MHz. Adding ~60 registers of sync generator on top of
+# that closed first roll with 3.9 MHz of cold-corner margin. Per the v0.4.0 rule, that is
+# placement, not a measurement of either change.
 set_global_assignment -name SEED 5
