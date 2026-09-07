@@ -76,10 +76,21 @@ assert old in s, "RED patch anchor moved -- update run_pts_assoc.sh"
 s = s.replace(old, "vbr_wr_en <= ((tag_rd_dta == TAG_VBUF) || (tag_rd_dta == TAG_VBUF1)) && tag_rd_valid;")
 open(sys.argv[1] + '/framestore_response.v', 'w').write(s)
 PYEOF
-  iverilog -g2012 -D__IVERILOG__ -I dvd/mem_override -I rtl/mpeg2 -o "$red/pts_chain_red" \
+  # ⚠ CHECK THE BUILD. Without this, a RED arm that fails to COMPILE produces no
+  # output, the grep finds no FAIL line, and the arm reports "the epoch check is not
+  # load-bearing" -- which is indistinguishable from the check genuinely being inert
+  # and is exactly how a broken gate reads as a finding about the RTL. Same for a sim
+  # that is killed: an empty log must be an ERROR, never a verdict.
+  if ! iverilog -g2012 -D__IVERILOG__ -I dvd/mem_override -I rtl/mpeg2 -o "$red/pts_chain_red" \
       $(echo $CHAIN_SRC | sed "s#rtl/mpeg2/framestore_response.v#$red/framestore_response.v#") \
-      bench/dvd/pts_chain_tb.sv
-  if vvp "$red/pts_chain_red" +STEM="$FIX/pts_apollo_s" | grep -v '^VCD' | tee "$red/red.log" | grep -q "^FAIL \[C[23]\]"; then
+      bench/dvd/pts_chain_tb.sv; then
+    echo "  RED arm BUILD FAILED -- the arm proves nothing; fix the build before reading this suite"; rc=1
+    rm -rf "$red"; return 2>/dev/null || exit 1
+  fi
+  vvp "$red/pts_chain_red" +STEM="$FIX/pts_apollo_s" 2>&1 | grep -v '^VCD' > "$red/red.log"
+  if [ ! -s "$red/red.log" ]; then
+    echo "  RED arm produced NO OUTPUT (killed, or the fixture is missing) -- not a verdict"; rc=1
+  elif grep -q "^FAIL \[C[23]\]" "$red/red.log"; then
     echo "  RED arm failed as it must ($(grep -c '^FAIL' "$red/red.log") FAIL lines)"
   else
     echo "  RED arm did NOT fail -- the epoch check is not load-bearing"; rc=1
