@@ -719,6 +719,41 @@ title-domain error. Menu lip-sync needs either far fewer re-anchors or a genuine
 re-time at one, and neither exists yet. The fallback, if the offset is still audible, is to
 restore `~menu_active` on `sched_en`/`sync_armed` and accept free-running menu audio.
 
+### (10) THE HIGHLIGHT HALF WAS NOT THIS BRANCH — A/B'd against pre-STC `main`
+
+Of the four discs reported after (8), **two regressions were ours and two were not**, and
+the separation was made by deploying `DVD_main_20260906_0112` (`dev-main`, predating all
+of this work) and reaching the same screen by the same key sequence.
+
+| disc | verdict |
+|---|---|
+| Tomb Raider — freeze | **OURS. FIXED.** 410 pickups then 0/s permanently → **1313, no stall** |
+| Thayer's Quest — freeze + 1.4 s | **OURS. FIXED.** `av_drift` +1500 ms → +270…465 ms, 928 → 1357 pickups |
+| Harry Potter — Player Mode highlight | **PRE-EXISTING.** Identical on pre-STC: same missing highlight, same block pattern, same partial rect |
+| Scene It — Play game highlight | **PRE-EXISTING.** Visually identical on pre-STC at matched timing |
+
+★ **The Harry Potter ROOT menu highlight does work**, verified interactively: pressing Down
+moved the underline from "Play Game" to "Trailers". The failing one is the screen AFTER
+selecting Play Game, and it fails the same way on `main`.
+
+**What the O[2] diagnostic says about the two pre-existing ones**, decoded from a
+screenshot rather than read by eye (blocks are 16 px squares at x 8/28/48/68):
+
+- Harry Potter Player Mode: `blk1` armed **GREEN**, `blk2` video_live GREEN, `blk3`
+  subpicture shown GREEN, but **`blk7` (`hl_on_w` = armed AND FETCHED) RED** — the button
+  RECORD fetch never completes, which is also why the magenta rect draws as a partial
+  L instead of a box.
+- Scene It Play game: `blk1`/`blk2`/`blk3`/**`blk7` all GREEN** — armed, fetched,
+  subpicture shown — and still no visible recolour. That points at the coli/alpha end
+  (`hl_use = hl_hit_q && (hl_a != 4'd0)`), not at promotion or delivery.
+
+⏳ Both are real open bugs and neither belongs to this branch. Recorded here only because
+this is where they were measured; they want their own issue.
+⚠ **The technique is the point, and it is the one CLAUDE.md already recommends: A/B TWO OF
+OUR OWN BUILDS.** Four symptoms arrived in one report, all in the menu domain, all
+plausible consequences of the same change — and two of them had nothing to do with it. A
+shared symptom class is not shared causation.
+
 ### Still open after these fixes
 
 ⏳ **The provisional-anchor fix is BUILT AND SIM-PROVEN, NOT HW-CONFIRMED.** The evidence
