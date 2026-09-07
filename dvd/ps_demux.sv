@@ -77,6 +77,11 @@ module ps_demux (
     output logic [7:0]  vid_byte,
     output logic        vid_valid,
     input  wire         vid_ready,
+    // PTS association (docs/av_sync.md "THE STC IS A CLOCK"): asserted with the
+    // FIRST payload byte of a video PES that carried a PTS. The MPEG rule is
+    // positional (the PTS belongs to the first picture start code at or after
+    // this byte), so the byte's position in the VBUF is what gets stamped.
+    output logic        vid_mark,
 
     // Output: audio frames → audio_ring.sv
     // aud_type: 0=AC3, 1=DTS, 2=LPCM, 3=MP2 (MPEG-1 Layer II)
@@ -225,6 +230,7 @@ logic [15:0] pes_length;       // bytes left in current PES packet (after length
 logic  [7:0] pes_len_hi;       // captured PES length high byte
 logic [15:0] bytes_remaining;  // generic countdown (pack/header/sub-header skip)
 logic  [7:0] stream_id_r;      // captured stream_id
+logic         mark_pending;   // a video PTS was parsed; its PES payload has not started yet
 logic  [7:0] pts_buf [4:0];    // 5-byte PTS buffer (bytes 0..3; byte 4 used directly)
 logic  [2:0] pts_byte_count;
 logic        pts_present;
@@ -256,6 +262,7 @@ always_comb begin
     in_ready  = 1'b1;
     vid_valid = 1'b0;
     vid_byte  = in_byte;
+    vid_mark  = (state == S_VIDEO_DATA) && mark_pending;
     case (state)
         // Forward input bytes to the decoder (PS video payload or raw ES)
         S_VIDEO_DATA,
@@ -414,6 +421,7 @@ always_ff @(posedge clk or negedge rst_n) begin
         flush_cnt      <= 8'd0;
         vid_pts        <= 33'd0;
         vid_pts_valid  <= 1'b0;
+        mark_pending   <= 1'b0;
         aud_pts        <= 33'd0;
         aud_pts_valid  <= 1'b0;
         pes_scrambled  <= 1'b0;
@@ -586,6 +594,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                         vid_pts <= {pts_buf[0][3], pts_buf[0][2:1], pts_buf[1],
                                     pts_buf[2][7:1], pts_buf[3], in_byte[7:1]};
                         vid_pts_valid <= 1'b1;
+                        mark_pending  <= (pes_length != 16'd1);   // a PES that ends at its PTS marks nothing
                     end else begin
                         aud_pts <= {pts_buf[0][3], pts_buf[0][2:1], pts_buf[1],
                                     pts_buf[2][7:1], pts_buf[3], in_byte[7:1]};
@@ -747,6 +756,7 @@ always_ff @(posedge clk or negedge rst_n) begin
 
             // ---- Forward elementary stream payloads ----
             S_VIDEO_DATA: begin
+                mark_pending <= 1'b0;                      // the first payload byte carried the mark
                 vid_hist   <= {vid_hist[23:0], in_byte};   // track forwarded bytes
                 pes_length <= pes_length - 16'd1;
                 if (pes_length == 16'd1) begin

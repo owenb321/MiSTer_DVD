@@ -66,6 +66,13 @@ bench/dvd/prefetch_sweep_fine.txt
 releases/*.rbf
 releases/*.rbf.json
 releases/*.zip
+# ⚠ Everything else in releases/ too. Only .gitkeep is tracked, and the directory
+# accumulates things a public repo must never take: the A/V sync test clips that
+# tools/sync_disc.py generates are 74 MB and 250 MB, and package_release.sh leaves
+# an unpacked tree behind. `git add -A` from the repo root would have committed
+# 330 MB of media permanently -- caught 2026-09-07 during a pre-ship audit, and only
+# not already done because every commit this session was path-scoped.
+releases/*
 !releases/.gitkeep
 
 # --- Test media (copyrighted VOB extracts — keep out of the repo) ---

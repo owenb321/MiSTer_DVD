@@ -85,6 +85,23 @@ module dvd_audio_decode #(
     // yields a schedulable reference free-runs via the ~2.5 s fallback timer.
     input  logic        sched_en,
     input  logic        stc_anchored,
+    // ★ THE CLOCK IS ON THE DISPLAY'S TIMELINE (not the parse front). The scheduled
+    // playback release waits for THIS, not for stc_anchored. stc_anchored is set by
+    // the provisional parse-front anchor, which on a cold mount is up to ~1.6 s ahead
+    // of the picture; releasing against it commits the playback phase to the parse
+    // front, and the display's own first tagged picture then pulls the clock back
+    // that far -- leaving audio permanently ahead, with nothing to re-time it
+    // (play_anchor is latched once and playback is never re-phased mid-flow).
+    // MEASURED 2026-09-07 on APOLLO_13: av_drift decayed to ~0 as the clock caught up
+    // to play_pts, then STEPPED to +1.6 s at the tagged anchor and held there for the
+    // rest of the title -- with the raster unchanged, so it was not a mode switch.
+    // ⚠ NOT circular with emu's video pickup-hold. That hold releases on audio
+    // ARRIVAL (the play_pts latch, taken at DISPATCH, which runs freely while the
+    // drain gate is shut); this releases on video DISPLAY. Order: dispatch -> play_pts
+    // -> pickup_hold releases -> first pickup -> disp_anchored -> playback releases.
+    // ⚠ A stream that never yields a tagged picture (bare .m2v) never sets this and
+    // takes the existing ~2.5 s arm_timer fallback, which is what it does today.
+    input  logic        disp_anchored,
     // Newest PARSE-time audio PTS from ps_demux (arrival front; pulse). Gates
     // the mid-play CATCH-UP skip: audio may only jump forward when current
     // audio has actually ARRIVED — see the catch-up comment at head_catchup.
@@ -97,6 +114,14 @@ module dvd_audio_decode #(
     // this on video DISPLAY. The fallback timer covers video-less streams.
     input  logic        video_live,
     input  logic [32:0] stc,
+    // THE STC IS A CLOCK (docs/stc_freerun.md): when the display re-anchors the
+    // clock (a PTS discontinuity -- a menu loop, a cell boundary, a held still),
+    // it jumps by anchor_delta. A sample-continuous audio stream across the same
+    // discontinuity is still IN SYNC, so the playback-position reference moves
+    // with the clock instead of reading the jump as a phase error. Only the
+    // measurement (play_err) is re-based; nothing here re-times any sample.
+    input  logic        anchor_pulse,
+    input  logic signed [33:0] anchor_delta,
     input  logic signed [17:0] av_ofs,   // 90 kHz ticks; >0 = audio later (OSD "A/V Offset"; 18b: +/-2.9s)
 
     // decoded stereo PCM (held; update at aud_ce ~48 kHz)
@@ -825,7 +850,7 @@ module dvd_audio_decode #(
                 if ((armed_data || frame_valid || (state != S_IDLE)) && ~&arm_timer)
                     arm_timer <= arm_timer + 1'b1;
 
-                if (play_pts_valid && stc_anchored && video_live && (start_delta >= 0)) begin
+                if (play_pts_valid && disp_anchored && video_live && (start_delta >= 0)) begin
                     draining    <= 1'b1;       // scheduled release (the normal path)
                     seen_valid  <= 1'b0;
                     play_anchor <= play_pts;
@@ -842,6 +867,14 @@ module dvd_audio_decode #(
             end else begin
                 armed_data <= 1'b0;
                 arm_timer  <= '0;
+                // ⛔ DO NOT re-base play_anchor on a clock re-anchor. That was added
+                // 2026-09-06 reasoning that a sample-continuous stream across a PTS
+                // discontinuity is still in sync -- but play_err IS the lip-sync
+                // measurement (clock minus audio playback position), so dragging the
+                // anchor along with every re-anchor forces it toward zero and makes it
+                // STRUCTURALLY UNABLE to show an accumulated error. MEASURED: play_err
+                // read -98 ms while the user heard audio 1.6 s ahead. The instrument
+                // must be able to report the thing it exists to report.
                 // playback-position tracker: advance the rate-exact ticks/sample
                 // (integer + fraction) per play tick and publish the error while
                 // playing (held across armed gaps)

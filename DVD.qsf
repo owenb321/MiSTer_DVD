@@ -104,6 +104,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/ac3/imdct_512.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ac3/pcm_out.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ddr_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/vidfeed_cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/vbuf_pos.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/pts_cdc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/pts_assoc.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/disp_sched.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/debug_overlay.sv
 # DVD-FORK (subpicture/subtitle O15 + O[26:24]): SPU decoder + reusable alpha blend.
 # See docs/subpicture.md.
@@ -894,4 +898,53 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # either re-fit the SAME netlist on another seed or use tools/timing_paths.sh to check the
 # term actually appears in the critical path. Attributing from a single fit reads as rigour
 # and is guesswork with numbers attached.
+#
+# 2026-09-06 (feature/stc-freerun, dev-stcfree -- PTS association STAGE 0: the demux mark
+# through a 9-bit vidfeed_cdc, vbuf_pos + the epoch-tagged VBUF reads, pts_assoc, a fifth
+# picbuf attribute (33-bit PTS + 2 flags, three mirrors) out to resample_addrgen, two
+# pts_cdc, telemetry words 11-13): SEED 5 held FIRST roll -- clk_dec 87.73 @100C /
+# 89.67 @-40C (gate 86.0, PASS both corners) at 91% ALM (38,287, +371 over v0.4.0), RAM
+# 498/553 and DSP 92/112 UNCHANGED. Build DVD_stcfree_20260906_1357.rbf (4365 KB), git c5e49c3.
+# ⚠ The smallest clk_dec margin the recent ledger records (1.7 MHz). By the rule two entries
+# up, a one-point delta is not a measurement (v0.4.0's own CONF_STR-only edit moved it
+# 5.5 MHz) -- but the widened picbuf output register and the header-position path are the
+# new terms, so if Stage 1 lands under 86 run tools/timing_paths.sh before re-rolling and
+# look there first; the hdr_pos subtract is already registered off the vld's latched value.
+#
+# 2026-09-06 (feature/stc-freerun, dev-stcfree -- STAGE 1: dvd/disp_sched.sv, the free-running
+# STC, the refresh-counting governor deleted, av_sync a mirror): SEED 5 -- clk_dec 73.77 @100C /
+# 72.6 @-40C, ⛔ FAIL against the 86.0 gate by 12 MHz, packed only as
+# DVD_stcfree_MARGINAL_20260906_1724.rbf (not for testers). NOT seed noise: tools/timing_paths.sh
+# names one cone -- vld frame_rate_code -> disp_sched's field-period mux -> field-count multiply
+# -> the four-operand add into next_q3, 13.3 ns against the 12.3 ns period, and the same cone
+# through pic_due -> resample_addrgen's FSM -> par_age. Fix = pipeline the scheduler (period,
+# products, differences, compares each registered; its decisions tolerate cycles of latency).
+# The entry after this one is the re-fit.
+#
+# 2026-09-06 (feature/stc-freerun, dev-stcfree -- STAGE 1 re-fit with disp_sched PIPELINED:
+# period, products, differences and compares each registered): SEED 5 held FIRST roll --
+# clk_dec 89.75 @100C / 86.02 @-40C (gate 86.0, PASS both corners -- the cold corner by
+# 0.02 MHz) at 92% ALM (38,408), registers 50,617, RAM 498/553 unchanged, DSP 94/112 (+2: the
+# scheduler's two 15x3 field-count multiplies landed in DSP blocks). Build
+# DVD_stcfree_20260906_1737.rbf (4399 KB), tree = commit 401f6e1 (the manifest records
+# 2b548b0+dirty: the pipelining edit was committed after the build).
+# Against v0.4.0 (37,916 ALM / 90% / DSP 92): Stage 0 +371 ALM, Stage 1 a further +121.
+# ★ Registers went DOWN 51,025 -> 50,617 across Stage 1 while ALMs went UP: the deleted
+# governor is counters (refresh_cnt, cur_show, cad_acc, the vid_err accumulators) and what
+# replaces it is arithmetic (wide adders and modular compares), which packs as logic.
+# Confirms the entry above: pipelining recovered 16 MHz; the -40C margin is now the thinnest
+# the ledger records, so a later round on this branch should expect a seed roll and should run
+# tools/timing_paths.sh first rather than attribute it to the last edit.
+# ⚠ THE AREA FIGURES IN THIS ENTRY WERE WRONG WHEN FIRST WRITTEN (38,238 / 50,665 -- the
+# MARGINAL build's). Cause: `cat releases/DVD_stcfree_*.rbf.json | tail` globbed three
+# manifests and read the wrong one. Read the manifest for the build BY NAME.
+#
+# 2026-09-06 (feature/stc-freerun -- HW ROUND B fixes: the film detector restored into
+# resample_addrgen, LATE_MAX 350 ms -> 2.7 s): SEED 5 held FIRST roll -- clk_dec 90.4 @100C /
+# 90.84 @-40C (gate 86.0, PASS both corners, and 4.8 MHz better at the cold corner than the
+# entry above, which had sat 0.02 MHz over) at 91% ALM (37,957 -- 451 LOWER than the entry
+# above despite restoring ~90 lines), registers 51,040, RAM 498/553, DSP 94/112.
+# Build DVD_stcfree_20260906_1932.rbf (4345 KB).
+# ★ Restoring ~90 lines of detector logic IMPROVED clk_dec. Placement noise again, exactly as
+# the v0.4.0 entry warns: do not read a one-point fmax delta as a measurement of the change.
 set_global_assignment -name SEED 5

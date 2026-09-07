@@ -250,7 +250,23 @@ demux-side sniff is the **stale-display-flags** bug (drift saga rounds 11–12) 
 new hat — data captured at parse time, presented against a different picture. The VLD sits
 *behind* the VBUF, which is precisely why `flags_commit` had to move there.
 
-### 4.2 Pacing — one pair per displayed field, and nothing else
+### 4.2 Pacing — one pair per displayed field, released by the DISPLAY
+
+> ⛔ **AMENDED 2026-09-07 (`docs/stc_freerun.md` §11).** The rate argument below is
+> right and still holds. The claim that follows from it — "no PTS, no STC compare",
+> the raster and the caption clock being *literally* the same clock — was only ever
+> true of the RATE. It says nothing about the PHASE, and the phase was wrong by
+> about a GOP.
+>
+> This file's own §4.3 gives the reason: the pairs for a whole GOP arrive as ONE
+> BURST when the VLD parses the GOP header and then leave two per frame, so the
+> queue's steady-state occupancy is a GOP's worth (~0.5 s) — and nothing ever
+> re-aligned it. Draining on raster fields matches the rate perfectly and preserves
+> whatever offset the queue happened to settle at.
+>
+> `dvd/disp_sched.sv` now emits a credit per display **pickup** carrying that
+> picture's field count, and `cc_line21` spends one per pair. Rate unchanged;
+> the phase is now the display's. ✅ HW-confirmed 2026-09-07 on MiB and Matrix.
 
 This is where the §1 measurements pay off. Because `cc_count` counts **display frames** and
 the encoder has already expanded the stream over the 3:2 cadence, one byte pair belongs to

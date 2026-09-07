@@ -748,6 +748,140 @@ worse maintenance burden than targeted in-place edits. So:
   the raster switch (`Film 24p = On` shows it too), and NOT the VBUF cap (Shallow changed
   nothing). An imported "anchor the STC on the screen" fix made it WORSE (1800 ms + stream
   freezes) and is not merged — see `docs/av_sync.md` "HW round 3" before touching it.
+- 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06/07,
+  PR #63, `dev-stcfree`). BUILT `DVD_stcfree_20260907_0335.rbf`
+  (SEED 5 first roll, clk_dec 91.41/90.51, 92 % ALM), sim-proven by
+  `bench/dvd/run_stc_freerun.sh`, and ✅ **HW-CONFIRMED 2026-09-07** across titles
+  (APOLLO_13/MiB/Ferris in sync, no judder after a chapter skip), menus (Thayer's Quest
+  and Tomb Raider no longer freeze, D&D holds sync through menu choices, T2 clean,
+  FAMILY FEUD II's questions read to the end), captions (MiB + Matrix) and the new
+  0 ms A/V Offset default. Design + status record:
+  `docs/stc_freerun.md` — read §3.5 for what was DELETED before touching any A/V code, and
+  §3.7 (1)–(8) for six defects found across three HW rounds, all of them mine.**
+  ★★ **THE ONE THAT MATTERS MOST: `dvd/emu.sv` DECLARED `dec_pts_in`/`dec_pts_in_valid`,
+  WIRED THEM INTO `mpeg2video`, AND NEVER INSTANTIATED THE CDC THAT DRIVES THEM.**
+  `mpeg2video`'s own port comment said the PTS was *"already crossed into clk (emu
+  pts_cdc)"* — naming an instance that did not exist. Quartus tied both low, so the
+  decoder NEVER RECEIVED A VIDEO PTS: the scheduler anchored its clock to **0** at the
+  first (untagged) pickup and ran open-loop on extrapolation, for every disc, in every
+  mode, through TWO hardware rounds. The reported "audio 1.6 s ahead" was simply the audio
+  PTS at the start of playback — it measured **1599.9 ms and 1601.5 ms** in two different
+  raster configurations, identical to a millisecond, which a dynamic mechanism does not do
+  and a stream constant does. One `pts_cdc #(.W(33))` fixes it; `av_drift` went to
+  **−0.3 / +0.2 ms**.
+  ★★ **WHY FOUR INSTRUMENTS AND TWO HW ROUNDS MISSED IT — the durable lesson.** Not an
+  implicit net (the wire was declared, so `default_nettype none` and the 10236 gate are
+  silent: those catch a missing DECLARATION, this was a missing DRIVER). No bench sees it
+  (`pts_assoc_tb`/`pts_chain_tb` drive `pts_in` directly and are byte-exact — the
+  association was correct, it was never given anything to associate; there is no emu-level
+  bench). And the telemetry read HEALTHY, because **with no tags `want_pts` falls back to
+  the scheduler's own extrapolation, so `disp_lag` compares the clock against a number
+  derived from the clock** — it read ≈0 and that was taken as proof the scheduler worked.
+  > **An instrument derived from the thing it measures reports health at exactly the
+  > moment that thing is absent.** Telemetry word 15 found this on its FIRST run because
+  > it reports the clock's own HISTORY (`prov_seen`, `first_tagged`, `reanchors`) rather
+  > than a difference against it. Prefer instruments that can say "nothing real happened".
+  ★ **Two gates now catch this class mechanically, both proven against the real defects,
+  both advisory on a dev build and fatal on `--release`:** `tools/lint_undriven.sh`
+  (verilator `-Wwarn-UNDRIVEN` over **the file list in `DVD.qsf`** — a glob would lint the
+  upstream `resample_addrgen` instead of the fork's; validated by naming `dec_pts_in` on
+  the commit before the fix; runs BEFORE the compile so it costs seconds) and
+  `tools/netlist_canary.sh` (a wide data register Quartus constant-folded —
+  `pts_assoc|tag_pts[1..32]` "Merged with `tag_pts[0]`" was in the map report the whole
+  time; catches a path driven BY A CONSTANT, which the lint cannot see).
+  ★ **The audit those gates came from found a SECOND dead path in the same surgery:**
+  `frame_late` was left `output reg` with its `always` block deleted, so the entire
+  lateness → `frame_drop_ctl` ledger was dead — `late_raw` computed correctly and consumed
+  by nothing, O[12] Frame Drop unable to act on a real decode miss, and the `lates`/`drops`
+  telemetry reporting only the scheduler's own catch-up request while looking like a
+  working governor. Restored as `late_raw | late_ext | par_late_r`; `late_ext` KEPT against
+  the plan (a field-path REPEAT re-scans a PAIR, so one miss costs two refreshes).
+  ★ **A/V Offset should now default to 0 ms, MEASURED:** `play_err` reads **−0.0 ms** at
+  0 ms and +99.9 at +100, so the +100 ms default was the null of the OLD parse-front
+  residual, exactly as the plan predicted. ⏳ Not changed yet — it is user-visible, the
+  verdict is ears, and `CONF_STR` is in the netlist so it re-rolls the pinned seed.
+  ★ **EVERYTHING THAT PRESENTS TO THE VIEWER IS NOW ON THIS ONE CLOCK** — video, audio
+  decode, IEC 61937 passthrough, subpictures, highlight promotion and line-21 captions.
+  The last two were an explicit uniformity pass (`docs/stc_freerun.md` §11):
+  `nav_pci` trusts the scheduled path only while the pending HLI was committed AFTER the
+  clock's most recent re-anchor (`hli_coherent`) — a measurement, where `~keep_vbuf` was
+  a guess; and `cc_line21` spends a credit per display PICKUP instead of draining on
+  raster fields, which fixed a **GOP-sized (~0.5 s) standing phase error** the old
+  "same clock" reasoning could not see because it only ever argued about RATE.
+  ⚠ **The nav_pci settle/timer FALLBACKS STAY.** They are not redundant: they cover the
+  incoherent case, and deleting them (which tying `hl_stc_fresh` to 1 effectively did) is
+  what cost Harry Potter and Scene It their highlights.
+  ⚠ **Deliberately NOT on the STC, so the next audit does not re-litigate them:** still
+  durations and the reader's cell clock (raster vsyncs ÷ `disp_fps` — a WALL clock, which
+  is what a `still_time` needs), the HUD/seek-bar clock (DSI `c_eltm`), `spu_decode`'s
+  `menu_mode` bypass (a menu subpicture shows for as long as the menu is up), and every
+  timeout (`av_vid_hold`, `DRAIN_WD`, `arm_timer`, `vmw_tmr` — plain clk_sys counters that
+  schedule nothing).
+  ⚠ **Two PRE-EXISTING highlight bugs were found while testing this and are NOT from it**
+  (A/B'd against `dev-main`, identical there): Harry Potter Interactive's Player Mode
+  screen and Scene It's Play-game menu render no highlight. Diagnostic state for both is
+  in `docs/stc_freerun.md` §10; they want their own issue.
+  ⛔ **RETRACTED en route, and worth knowing before re-deriving either:** (a) re-basing
+  `play_anchor` on a clock re-anchor — `play_err` IS the lip-sync error, and dragging its
+  anchor along forces it toward zero, so it read −98 ms while the real error was 1.6 s;
+  (b) re-anchoring the clock at a raster change — it made every instrument read correct and
+  changed nothing audible, because **retarding the clock does not move audio that has
+  already left the DAC**. A clock ahead of the display must be answered by ADVANCING THE
+  VIDEO (drops), never by moving the clock back.
+  ★ **Stage 1 in one paragraph:** `dvd/disp_sched.sv` (in `mpeg2video`) counts a
+  90 kHz tick (`clk_sys/300`, toggle-crossed) and anchors it at pickups of tagged
+  pictures; `resample_addrgen`'s `frame_due` IS its `sched_due` (`stc − pts ≥ −half_scan`,
+  half the raster's IMAGE-SCAN period: 750/900/1877/1800); `next_pts` extrapolates from
+  the flags × `frame_rate_code` plus every `skip_ack` (deferred if a picture is waiting
+  at the output — the depth-1 queue's ordering rule); a tagged picture > 1 frame behind,
+  > 0.5 s ahead, or > 350 ms late re-anchors. `av_sync.sv` is a clk_sys MIRROR now;
+  every consumer reads the one `stc`; `sched_en`/`sync_armed` lost `~menu_active`,
+  `hl_stc_fresh` is always 1, the STD hold is universal with a ~155 ms no-audio release,
+  and `dvd_audio_decode` re-bases `play_anchor` by each anchor delta. The scheduler's
+  reset is the VBUF flush, NOT the keep_vbuf pipe reset — that is what makes menus
+  safe. ⚠ `disp_sched_tb` scores every pickup against the scenario's TRUE PTS, not the
+  DUT's own wanted time: two of five mutations were invisible until it did.
+  DELETED: the refresh-counted STC, `TPR_Q16`, the PI, `vbig`; `refresh_cnt`,
+  `cur_show`/`show_next`/`SHOW_N`, the film24 override, `cad_acc`, `menu_ff`, the
+  `vid_err` instrument (word 5 reads 0); benches `cadence_slip/phase`, `film_drift`,
+  `gov_field_late`, `menu_ff`, `resample_cadence*`.
+  ★★ **Every A/V-sync defect since the governor shipped is ONE defect: the STC counted
+  refreshes from a PARSE-front anchor and the display never consulted a PTS after
+  it**, so whatever sat between the demux and the screen (the VBUF, 0.5–1.8 s,
+  bitrate-dependent) became the A/V offset — Film 24p −945 ms, every "skew cured by a
+  chapter skip" report, the menu lip-sync exemptions. The archived branch
+  `feature/audio-delay-ddr` (never merged) got film24 to ~−175 ms with a decoder-front
+  proxy clock and designed a 2 MB DDR audio-delay ring; both treat the buffer as the
+  problem. This does what a set-top box does: **a 90 kHz clock off the same 27 MHz
+  crystal as the raster and the audio NCO (rate locked by construction), and both media
+  presented at their PTS against it.** Buffer depth becomes latency, not offset.
+  ⛔ The "video is the master timebase / two crystals" premise in `docs/av_sync.md` was
+  false and is superseded; the EXONERATED / FAILED lists there still hold.
+  **Stage 0 (no behaviour change):** exact PTS→picture association through the decoder.
+  The demux marks the first payload byte of a PTS-bearing PES (`vid_mark`, riding the
+  byte through a 9-bit `vidfeed_cdc`); `dvd/vbuf_pos.sv` gives that byte's VBUF position
+  exactly (words written + write-fifo pending + this cycle's push + packer phase);
+  `getbits_fifo.bitpos` gives the vld's parse position from the same flush;
+  `dvd/pts_assoc.sv` pops a stamp at the first picture header at/after it (the MPEG
+  rule, ISO 13818-1 2.4.3.7) and the tag rides `motcomp_picbuf` as a fifth slot
+  attribute (`output_pts`) to `resample_addrgen`. Telemetry word 11 `disp_lag` =
+  displayed PTS − STC is the acceptance signal: ≈ −1 s film24 / −0.2 s interlaced
+  before Stage 1, ~0 after.
+  ★ **Two things measured, not assumed:** the start code sits 32 bits before the
+  header position (57/57 + 220/220 exact, `pts_assoc_tb [A]`), and `vbuf_write`
+  raises its push strobe the cycle AFTER a word's eighth byte, so a mark on the next
+  byte counted one word short (−8 B, `pts_chain_tb`) until the strobe was added.
+  ★ **A real pre-existing defect fixed en route: up to 32 VBUF reads are in flight at a
+  flush and their responses landed in the read FIFO AFTER its reset** — the decoder
+  swallowed up to 256 stale bytes of the old stream after every seek. Reads now carry
+  the flush parity in their memory tag (`TAG_VBUF1`, spare code 7, toggled on the
+  flush's RISING edge — it is a 192-cycle level) and `framestore_response` drops the
+  other epoch. Gate: `bench/dvd/run_pts_assoc.sh` (RED arm rebuilds the response with
+  the epoch compare removed and must fail).
+  ⚠ DVDs carry a video PTS about once per VOBU (~11 pictures; 260–372 KB/PTS measured
+  on four discs), so Stage 1 extrapolates between tags from the picture flags and
+  `frame_rate_code` and needs the vld's new any-reason `skip_ack` (governor AND realign
+  drops) to keep that timeline honest.
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
   PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
   no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**
@@ -1226,11 +1360,16 @@ worse maintenance burden than targeted in-place edits. So:
   untouchable by construction). ★ In the VLD and NOT `ps_demux` — ps_demux is in
   FRONT of the ~1 s VBUF, so a demux-side sniff is the stale-display-flags bug
   (drift rounds 11-12) in a new hat; the VLD is where `flags_commit` had to move for
-  the same reason. (2) **pacing** = one pair per displayed FIELD, no PTS/STC/NCO at
-  all — MEASURED on real discs: the block sits on the GOP header and `cc_count`
-  counts DISPLAY frames not coded pictures (15 vs 12 following pictures = 3:2 already
-  expanded by the encoder), so the caption clock and the raster are the same clock
-  and governor drops/repeats are absorbed for free. (3) **waveform**
+  the same reason. (2) **pacing** = one pair per displayed FIELD — MEASURED on real
+  discs: the block sits on the GOP header and `cc_count` counts DISPLAY frames not
+  coded pictures (15 vs 12 following pictures = 3:2 already expanded by the encoder).
+  ⚠ **AMENDED 2026-09-07:** the RATE argument holds, but "no PTS/STC at all, the
+  caption clock and the raster are the same clock" was only ever true of the rate —
+  it says nothing about PHASE, and the phase was out by about a GOP, because the
+  pairs arrive as ONE BURST at the GOP header and nothing re-aligned the queue.
+  `disp_sched` now emits a credit per display PICKUP carrying that picture's field
+  count and `cc_line21` spends one per pair: same rate, the display's phase.
+  ✅ HW-confirmed 2026-09-07 on MiB and Matrix. See `docs/stc_freerun.md` §11. (3) **waveform**
   (`dvd/cc_line21.sv`) — exact by construction: 13.5 MHz = 858·fH and the bit rate is
   32·fH, so one bit is **858/32 = 26.8125 dots EXACTLY**; a 16-bit NCO at 2444/dot
   hits that to +0.0002% and its top 4 bits index the run-in sine LUT. Line number

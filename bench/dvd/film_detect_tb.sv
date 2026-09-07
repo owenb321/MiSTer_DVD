@@ -65,7 +65,7 @@ module film_detect_tb;
     .busy(busy), .frame_late(frame_late),
     .film_det_ntsc(film_det_ntsc), .film_det_pal(film_det_pal),
     .video_live(), .pickup_hold(1'b0), .pause(1'b0),
-    .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(1'b0));
+    .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .sched_due(1'b1), .sched_next_due(1'b1));
 
   always #5 clk = ~clk;
 
@@ -111,8 +111,16 @@ module film_detect_tb;
     end
 
   integer errors = 0;
+  // ⚠ `if (!cond)` is FALSE when cond is x or z, so this task used to pass every
+  // check on an UNDRIVEN verdict -- and it did: the whole detector was deleted
+  // from resample_addrgen by the PTS-scheduling surgery (2026-09-06) and this
+  // bench stayed green while Film 24p Auto could never engage on hardware.
+  // Require a known 1: x/z now fails like a wrong answer, which is what it is.
   task chk(input cond, input [255:0] msg);
-    if (!cond) begin $display("  FAIL: %0s", msg); errors = errors + 1; end
+    if (cond !== 1'b1) begin
+      $display("  FAIL: %0s%0s", msg, (cond === 1'bx || cond === 1'bz) ? " (verdict is x/z -- UNDRIVEN?)" : "");
+      errors = errors + 1;
+    end
   endtask
 
   // (The det_video true-interlaced verdict and its mutual-exclusion guard were removed

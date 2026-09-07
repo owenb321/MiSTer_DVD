@@ -566,7 +566,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-main"
+`define CORE_VERSION "dev-stcfree"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -779,12 +779,21 @@ parameter CONF_STR = {
     // EARLY -> go positive; heard LATE -> negative. APPLIES AT THE NEXT (RE)START
     // (clip load / underrun re-entry) — mid-play phase is locked by sample
     // continuity, and a mid-play re-arm deadlocks on full FIFOs (v5.2 reverted).
-    // DEFAULT +100 ms (index 0): after the flags_commit drift fix (PR #62, round
-    // 12 HW-confirmed) the true residual on NTSC film is ~100 ms audio-EARLY, so
-    // +100 nulls it — the recommended NTSC-film setting. The old deep-negative
-    // entries (-300/-400/-500) chased the stale-flag RAMP, which is now fixed;
-    // the range is rebalanced around +/-200 ms. See docs/av_sync.md.
-    "P1O[23:21],A/V Offset,+100ms,-200ms,-100ms,-50ms,0ms,+50ms,+150ms,+200ms;",
+    // ★ DEFAULT 0 ms (index 0) as of 2026-09-07 — CHANGED, and the reason the old
+    // default existed is gone. +100 ms was the null of the PARSE-FRONT residual:
+    // the STC used to be anchored on the demux front and advanced by counting
+    // refreshes, so audio sat ~100 ms early and +100 cancelled it. THE STC IS A
+    // CLOCK (docs/stc_freerun.md) removes that residual at its source -- the clock
+    // is anchored on the DISPLAYED picture's own PTS -- so the correction now
+    // over-corrects by exactly the amount it used to fix.
+    // MEASURED on APOLLO_13, 2026-09-07: play_err (clock minus audio playback
+    // position, i.e. the lip-sync error itself) reads -0.0 ms at 0 ms and +99.9 ms
+    // at +100 ms. HW-confirmed by ear the same day.
+    // The old deep-negative entries (-300/-400/-500) chased the stale-flag RAMP
+    // fixed in PR #62; the range stays balanced at +/-200 ms.
+    // ⚠ Re-ordering an option's value list REMAPS every saved setting, so the
+    // "v,N" config version below is bumped with it. See docs/av_sync.md.
+    "P1O[23:21],A/V Offset,0ms,-200ms,-100ms,-50ms,+50ms,+100ms,+150ms,+200ms;",
     "R0,Reset;",
     // Saved-settings version (lowercase v = user_io.cpp config_ver, DISTINCT
     // from the display-only uppercase V line below): the framework persists
@@ -794,7 +803,10 @@ parameter CONF_STR = {
     // Menus polarity flip did exactly that pre-versioning). Bumping orphans
     // the old file and falls everyone back to defaults -- there is no per-bit
     // migration, so audit the index-0 label of every option when bumping.
-    "v,2;",   // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
+    "v,3;",   // v3: 2026-09-07 A/V Offset value list re-ordered so 0 ms is index 0 (the
+              //     parse-front residual it used to null is gone). A re-order REMAPS every
+              //     saved value, so the version bumps and all settings reset once.
+              // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
     // disc-menu nav (Phase 2). The J1 list names buttons B1..B13 for the MiSTer
     // "Define buttons" menu (bits 4..16 of joystick_0; D-pad = bits 3:0). The
@@ -932,13 +944,18 @@ dvd_telem dvd_telem_inst (
     .pickups    (core_pickups),          // clk_dec: content frames displayed
     .lates      (core_frames_late),      // clk_dec
     .drops      (core_frames_dropped),   // clk_dec
-    .vid_err    (core_vid_err),          // clk_dec, signed
+    .vid_err    (16'd0),                 // retired: the display is scheduled by PTS; see word 11
     .drop_costs (core_drop_costs),       // clk_dec: {debt, drop_req, probe}
     .vbuf_fill  (core_vbuf_fill),
     .aud_frames (aud_frames_avail),
     .flags      ({3'b0, menu_active, still_active, video_live_s2, pause_q, media_seen}),
     .aud_play   (aud_play_cnt),          // clk_sys: play ticks/16 reaching the DAC
-    .aud_gate   (aud_gate_cnt)           // clk_sys: drain-gate closures
+    .aud_gate   (aud_gate_cnt),          // clk_sys: drain-gate closures
+    .disp_lag   (av_disp_lag[19:4]),     // clk_sys: displayed PTS - STC (word 11)
+    .play_err   (dbg_aud_play_err),      // clk_sys: audio position vs anchor (word 12)
+    .av_drift   (av_drift[19:4]),        // clk_sys: dispatched audio PTS - STC (word 13)
+    .sched_flags({8'd0, core_sched_flags}),   // clk_dec: what the scheduler saw (word 14)
+    .sched_dur  (core_sched_dur)              // clk_dec: the duration it applied (word 15)
 );
 
 
@@ -955,6 +972,7 @@ wire [7:0] demux_in_byte;     // ps_stream_fifo -> ps_demux
 wire       demux_in_valid;
 wire       demux_in_ready;
 wire [7:0] ps_vid_byte;       // ps_demux -> mpeg2video
+wire       ps_vid_mark;       // DVD-FORK (PTS association): first payload byte of a PTS-bearing video PES
 wire       ps_vid_valid;
 
 wire       ps_demux_in_ready;   // ps_demux's own ready (input handshake)
@@ -974,18 +992,20 @@ wire       av_freerun = status[13];
 wire signed [21:0] dec_nco_trim = 22'sd0;
 
 // O[23:21] A/V Offset: signed playback-start trim in 90 kHz ticks (1 ms = 90).
-// >0 = audio later. Index 0 = +100 ms (the NTSC-film residual null) power-on
-// default. 18-bit SIGNED (the earlier 16-bit width wrapped -400/-500 positive,
-// but those entries are retired now that the drift ramp is fixed — PR #62).
+// >0 = audio later. Index 0 = 0 ms (nominal) power-on default as of 2026-09-07:
+// the +100 ms that used to sit here nulled the PARSE-FRONT residual, which the
+// free-running display-anchored STC removes at source (measured: play_err -0.0 ms
+// at 0, +99.9 ms at +100). 18-bit SIGNED (the earlier 16-bit width wrapped
+// -400/-500 positive, but those entries are retired — PR #62).
 reg signed [17:0] av_ofs;
 always @(*) begin
     case (status[23:21])
-        3'd0:    av_ofs = 18'sd9000;     // +100 ms (default; nulls the NTSC-film residual)
+        3'd0:    av_ofs = 18'sd0;        //    0 ms (DEFAULT; the STC is display-anchored)
         3'd1:    av_ofs = -18'sd18000;   // -200 ms
         3'd2:    av_ofs = -18'sd9000;    // -100 ms
         3'd3:    av_ofs = -18'sd4500;    //  -50 ms
-        3'd4:    av_ofs = 18'sd0;        //    0 ms (nominal)
-        3'd5:    av_ofs = 18'sd4500;     //  +50 ms
+        3'd4:    av_ofs = 18'sd4500;     //  +50 ms
+        3'd5:    av_ofs = 18'sd9000;     // +100 ms (the old default; the parse-front null)
         3'd6:    av_ofs = 18'sd13500;    // +150 ms
         default: av_ofs = 18'sd18000;    // +200 ms
     endcase
@@ -1026,8 +1046,8 @@ wire [32:0] aud_frame_pts_w;        // audio_ring read-side frame PTS
 wire        aud_frame_pts_valid_w;
 wire [32:0] aud_dispatch_pts;       // dvd_audio_decode -> av_sync
 wire        aud_dispatch_pts_valid;
-wire signed [21:0] av_nco_trim;     // av_sync -> dvd_audio_decode NCO slew
 wire        av_stc_anchored;        // av_sync STC locked -> dispatch schedule gate
+wire        av_disp_anchored;       // ... and on the DISPLAY timeline -> audio PLAYBACK release
 wire [32:0] av_stc;
 wire signed [31:0] av_drift;
 wire [15:0] av_reanchor_cnt;
@@ -1443,6 +1463,15 @@ wire [15:0] rd_dbg_pgcerr;    // reader pgc_error reason latch (overlay row 26)
 // cycle as the ack (the seek_flush_now precedent).
 reg hl_stc_fresh = 1'b1;
 always @(posedge clk_sys) begin
+    // ⚠⚠ RESTORED 2026-09-07. Tying this to 1 made nav_pci's `stc_trusted` always
+    // true, and the RTL's own comment in dvd/nav_pci.sv had already recorded what
+    // that costs: a stale per-VOBU ss=0 DISARM is then perpetually "due", and
+    // because off_due OUTRANKS nxt_due in the apply block it clears arms and
+    // starves pending promotions. That is the reported "no highlight, and no
+    // highlight targets present". The clock being display-coherent is necessary
+    // for trusting it, not sufficient: an HLI's s_ptm belongs to the timeline the
+    // NAV pack was parsed on, and a keep_vbuf hop crosses timelines without a
+    // flush, so a comparison against it carries no timing information either way.
     if (seek_ack || jump_ack) hl_stc_fresh <= ~keep_vbuf;
 end
 wire [63:0] hl_btn_cmd;
@@ -2260,6 +2289,7 @@ wire       sw_blank;                    // hold the picture black across a mode 
 // Keeping it out of the netlist now is the point -- one behavioural delta per HW round.
 wire       realign_pend;                // an arm is open (see above)
 wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
+reg  aud_disc_rephase;   // content PTS jump -> audio-only re-phase (driven below, beside the anchor CDC)
 wire pipe_rst_n, aud_rst_n;
 mode_realign mode_realign_i (
     .clk             (clk_sys),
@@ -2314,6 +2344,7 @@ flush_ctl flush_ctl_i (
     .aud_switch      (aud_switch),
     .keep_vbuf       (keep_vbuf),
     .load_flush      (load_flush),
+    .disc_rephase    (aud_disc_rephase),   // content PTS jump -> audio-only re-phase (VLC's RESET_PCR analogue)
     .aud_flush       (aud_flush),
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
@@ -2666,6 +2697,7 @@ ps_demux ps_demux_inst (
     // stream crosses domains through a dual-clock FIFO. vid_ready = FIFO not full.
     .vid_byte     (ps_vid_byte),
     .vid_valid    (ps_vid_valid),
+    .vid_mark     (ps_vid_mark),        // DVD-FORK (PTS association)
     .vid_ready    (vidfeed_wr_ready),
 
     // Audio path -> audio_ring (clk_sys). aud_ready stays high (audio_ring
@@ -3147,8 +3179,9 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     // starves the drain = the "audio dropout during T2 transitions". Free-running the
     // menu audio decouples it (harmless in Snappy, where the video is already current).
     // docs/dvd_menu_refinements.md §5c.
-    .sched_en           (~av_freerun & ~(menus_on & menu_active)),
+    .sched_en           (~av_freerun),          // THE STC IS A CLOCK: menus follow the same rule (docs/stc_freerun.md)
     .stc_anchored       (av_stc_anchored),
+    .disp_anchored      (av_disp_anchored),  // THE STC IS A CLOCK: playback releases only once the clock is on the DISPLAY timeline
     // Arrival front for the mid-play catch-up (Shea-Stadium ratchet fix): the
     // newest PARSE-time audio PTS — audio may skip forward only when current
     // audio has actually arrived. See head_catchup in dvd_audio_decode.sv.
@@ -3158,6 +3191,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
                                            // also confines the stale-skip to the load window
                                            // (treadmill fix — see head_stale in dvd_audio_decode.sv)
     .stc                (av_stc),
+    .anchor_pulse       (av_anchor_pulse),   // THE STC IS A CLOCK: re-base play_err across a display re-anchor
+    .anchor_delta       (av_anchor_delta),
     .av_ofs             (av_ofs),
     .audio_l     (dec_audio_l),
     .audio_r     (dec_audio_r),
@@ -3234,8 +3269,15 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     // Free-running menus plays the continuity audio immediately (decode-path
     // parity) and cannot wedge; title entry pulses aud_flush, so title sync
     // re-arms cleanly.
-    .sync_armed   (~av_freerun && ~menu_active),
-    .stc_anchored (av_stc_anchored),
+    .sync_armed   (~av_freerun),        // THE STC IS A CLOCK: menus follow the same rule (docs/stc_freerun.md)
+    // ★ disp_anchored, NOT stc_anchored. Releasing on the provisional parse-front
+    // anchor emits real bursts and then holds ~1.6 s when the display's first tagged
+    // picture pulls the clock back -- a real->hold->real flap, which is exactly the
+    // receiver-acquisition failure this module's own sync_en comment describes.
+    // (The wrapper is otherwise SELF-CORRECTING, unlike the decode path: it paces
+    // every frame against the clock instead of latching a phase once, which is why
+    // the permanent 1.6 s lead was a decoded-audio defect only.)
+    .stc_anchored (av_disp_anchored),
     .stc          (av_stc),
     .av_ofs       (av_ofs),
     .clk_audio    (CLK_AUDIO),
@@ -3276,21 +3318,48 @@ reg         av_vid_hold;
 reg  [24:0] av_vid_hold_tmr;                    // 2^25 / 27 MHz ~ 1.24 s fallback
 wire signed [34:0] play_vs_anchor =
     $signed({2'b0, dbg_aud_play_pts}) - $signed({2'b0, av_stc});
+// ⚠ STAYS on av_stc_anchored, deliberately. This is the video pickup-hold's release,
+// and audio's playback release now waits for the FIRST PICKUP (disp_anchored). Making
+// this wait for disp_anchored too would close the loop: no pickup without audio, no
+// audio without a pickup, broken only by the 1.24 s fallback on every single load.
+// It is not circular as written -- this reads the play_pts LATCH, taken at DISPATCH,
+// which runs freely while the drain gate is shut.
 wire aud_caught = av_stc_anchored && dbg_aud_play_pts_valid &&
                   (play_vs_anchor >= -35'sd4500);   // within ~50 ms of the anchor
+// THE STC IS A CLOCK (docs/stc_freerun.md): the hold is UNIVERSAL — menus follow
+// the same rule as titles (a menu clip with speech is lip-synced the same way).
+// What made the old menu exemption necessary was the fallback: a menu with no
+// audio ate the full ~1.24 s every keep_vbuf hop. Now a load whose ring has
+// received NO audio frame within ~155 ms of the anchor releases at once (a
+// still, a silent title, a bare ES); a load with audio waits for it as before.
+reg aud_seen;
+always @(posedge clk_sys)
+    if (!aud_rst_n)          aud_seen <= 1'b0;
+    else if (aud_frame_valid) aud_seen <= 1'b1;
 always @(posedge clk_sys) begin
-    // MENUS: never assert the STD mux-lead hold. It exists to defer the first
-    // FEATURE frame ~0.5 s so lip-synced audio (muxed behind the video) can catch
-    // up; menus aren't lip-synced. Worse, it re-arms on EVERY load flush and, when
-    // `aud_caught` never fires (menus have little/no dispatchable audio), holds the
-    // full ~1.24 s fallback PER keep_vbuf menu hop — freezing deep menus (numbers
-    // never picked up) and keeping video_live=0 (which blocks the highlight render
-    // gate + nav_pci fallback). Forcing it off for menu_active makes the menu
-    // display immediately and video_live stay set. Titles are unaffected.
-    // A file MOUNT cannot be swallowed by this branch even if a menu was up on
-    // the old disc: the reader's `start` clears menu_dom (-> menu_active) on the
-    // first cycle of the mount while pipe_rst_n stays low for ~64 cycles, so the
+    // ⚠⚠ RESTORED 2026-09-07 after a HW report. Stage 1 deleted this arm on the
+    // theory that "menus follow the same rule", and replaced it with the
+    // !aud_seen escape below. That escape only fires when NO audio has arrived at
+    // all -- and menus with an intro, a logo chain or background music have
+    // audio, so for exactly those the full ~1.24 s hold came back PER keep_vbuf
+    // hop. The comment deleted with this block had already named both reported
+    // symptoms: "freezing deep menus (numbers never picked up) and keeping
+    // video_live=0 (which blocks the highlight render gate + nav_pci fallback)".
+    // MEASURED as: Thayer's Quest and Tomb Raider freeze before reaching a menu
+    // with the VBUF full; Harry Potter Interactive and Scene It lose their
+    // highlights entirely (Scene It reports no highlight TARGETS at all, which is
+    // the nav_pci fallback being starved, not a render problem).
+    //
+    // The STD hold exists to defer the first FEATURE frame ~0.5 s so lip-synced
+    // audio muxed behind the video can catch up. A menu hop is not that, and the
+    // hold re-arms on EVERY load flush -- so on a menu it is pure latency with a
+    // video_live=0 side effect that other subsystems read as "no picture yet".
+    // A file MOUNT cannot be swallowed here even if a menu was up on the old
+    // disc: the reader's `start` clears menu_dom (-> menu_active) on the first
+    // cycle of the mount while pipe_rst_n stays low for ~64 cycles, so the
     // !pipe_rst_n arm below always latches the hold (verified 2026-08-28).
+    // ⚠ The !aud_seen escape is KEPT -- it is a real improvement for a silent
+    // TITLE, which used to eat the whole 1.24 s fallback for nothing.
     if (menu_active) begin
         av_vid_hold     <= 1'b0;
         av_vid_hold_tmr <= '0;
@@ -3299,7 +3368,9 @@ always @(posedge clk_sys) begin
         av_vid_hold_tmr <= '0;
     end else if (av_vid_hold) begin
         av_vid_hold_tmr <= av_vid_hold_tmr + 1'b1;
-        if (aud_caught || (&av_vid_hold_tmr)) av_vid_hold <= 1'b0;   // sticky-off until next load
+        if (aud_caught || (&av_vid_hold_tmr) ||
+            (!aud_seen && av_vid_hold_tmr[22]))        // ~155 ms and no audio has arrived at all
+            av_vid_hold <= 1'b0;                        // sticky-off until next load
     end
 end
 // 2-FF into the decoder clock for the governor
@@ -3341,11 +3412,11 @@ end
 wire dbg_aud_draining, dbg_aud_play_pts_valid, dbg_aud_armed_data, dbg_aud_skip_run;
 
 // =========================================================================
-// A/V sync (dvd/av_sync.sv): PTS-driven video-referenced STC + audio-NCO genlock.
-// Anchors an STC to the video PTS, advances it one TICKS_PER_REFRESH per displayed
-// image (refresh_tick = rising edge of core_v_sync, clk_sys / dot_clk domain), and
-// slews the audio 48 kHz NCO (av_nco_trim) so the dispatched audio PTS tracks it.
-// Gated by the same O5 Audio enable. See docs/av_sync.md.
+// The presentation clock in clk_sys (dvd/av_sync.sv): a MIRROR of the
+// free-running STC dvd/disp_sched.sv keeps in clk_dec, plus the A/V phase
+// telemetry. Nothing here anchors, counts or slews anything any more — see
+// docs/stc_freerun.md. av_refresh_tick stays: the VM's cell clock, the idle
+// logo and the subpicture walk still count raster frames.
 // =========================================================================
 reg  core_vs_prev_sys;
 wire av_refresh_tick = ~core_vs_prev_sys & core_v_sync;   // one pulse per displayed image
@@ -3354,29 +3425,26 @@ always @(posedge clk_sys or negedge reset_n) begin
     else          core_vs_prev_sys <= core_v_sync;
 end
 
-av_sync #(.CLK_HZ(27000000), .AUD_HZ(48000),
-          .REFRESH_MHZ(59940), .REFRESH_MHZ_PAL(50000)) av_sync_inst (
+wire        av_anchor_pulse;
+wire signed [33:0] av_anchor_delta;
+av_sync av_sync_inst (
     .clk                (clk_sys),
-    .rst_n              (pipe_rst_n),    // STC is video-continuous through an audio switch; no re-anchor needed
-    .enable             (aud_dec_en),
-    .pause              (pause_gov),     // manual pause / held seek gesture: freeze the presentation STC
-    .refresh_50hz       (pal_eff),      // resolved PAL flag -> 50 Hz STC tick rate
-    .refresh_24hz       (film24_eff),   // DVD-FORK (Film 24p Out): NTSC 23.976 Hz STC tick rate (wins over all)
-    .refresh_25hz       (film25_eff),   // DVD-FORK (Film 25p Out): PAL 25.000 Hz STC tick rate (wins over refresh_50hz)
-    // trim is retired (see dec_nco_trim above); lead only shapes the unused PI/drift
-    // telemetry set-point, so feed 0 => drift output reads "0 = in sync".
-    .lead_target        (16'd0),
-
+    .rst_n              (reset_n),       // the core reset ONLY: a keep_vbuf menu hop must not blank the clock the ring drains against
+    .mirror_data        (stc_mirror_sys),
+    .mirror_valid       (stc_mirror_valid),
+    .delta_data         (av_anchor_delta_w[33:0]),
+    .delta_valid        (av_anchor_delta_valid),
     .vid_pts            (ps_vid_pts),
     .vid_pts_valid      (ps_vid_pts_valid),
-    .refresh_tick       (av_refresh_tick),
-    .video_live         (video_live_s2),    // STC holds at anchor until display shows a frame
     .dispatch_pts       (aud_dispatch_pts),
     .dispatch_pts_valid (aud_dispatch_pts_valid),
-    .nco_trim           (av_nco_trim),
-    .stc_anchored       (av_stc_anchored),
     .stc                (av_stc),
+    .stc_anchored       (av_stc_anchored),
+    .disp_anchored      (av_disp_anchored),
+    .anchor_pulse       (av_anchor_pulse),
+    .anchor_delta       (av_anchor_delta),
     .drift              (av_drift),
+    .buf_lag            (),
     .reanchor_count     (av_reanchor_cnt)
 );
 
@@ -3431,16 +3499,131 @@ ddr_arb ddr_arb_inst (
 // core_busy toggled mid-pop, garbling EVERY clip incl. susi.)
 wire       vidfeed_wr_ready;
 wire [7:0] dec_stream_data;
+wire       dec_stream_mark;    // DVD-FORK (PTS association): rides with its byte through the CDC
 wire       dec_stream_valid;   // 1 = byte consumed by decoder this cycle
+
+// DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"): the video
+// PTS crosses into the decoder clock beside its marked byte (mpeg2video pairs
+// them), and the tag of every picture the display picks up crosses back so
+// telemetry word 11 can report disp_lag = displayed PTS - STC: the picture on
+// SCREEN against the clock the audio is scheduled by. Stage 0 measures it;
+// Stage 1 (the display scheduler) is what drives it to ~0.
+wire [32:0] dec_pts_in;     wire dec_pts_in_valid;       // clk_dec
+// ⚠⚠ THIS CDC WAS MISSING FOR THE WHOLE OF STAGE 0 AND STAGE 1 (fixed 2026-09-07).
+// The wires were declared here and consumed by mpeg2video, and mpeg2video's own
+// comment even said the PTS was "already crossed into clk (emu pts_cdc)" -- but no
+// such instance existed, so Quartus tied both low and the decoder NEVER RECEIVED A
+// VIDEO PTS. The scheduler therefore anchored its clock to 0 at the first (untagged)
+// pickup and ran open-loop on extrapolation alone for every disc.
+// ★ It hid because every A/V instrument referenced the clock to itself: with no tags,
+// disp_lag compares the clock against the scheduler's own extrapolation, so it reads
+// ~0 no matter how wrong the clock is, and that "~0" was read as the scheduler
+// working. It was found by adding word 15 -- the clock's own HISTORY (prov_seen=0,
+// first_tagged=0, reanchors=1) -- which is the first instrument here that could
+// disagree with the clock instead of being derived from it.
+// ⚠ No bench could have caught it: pts_assoc_tb and pts_chain_tb drive pts_in
+// directly, and there is no emu-level bench. A missing INSTANCE also raises no
+// implicit-net warning, because the wire is properly declared (cf. the
+// implicit-net-silent-kill lesson, which the 10236 gate does cover).
+// Video PTS arrive about once per VOBU (~0.5 s), orders of magnitude slower than the
+// toggle handshake, so nothing is dropped.
+pts_cdc #(.W(33)) pts_cdc_vid (
+    .src_clk(clk_sys), .src_rst_n(reset_n), .src_data(ps_vid_pts), .src_valid(ps_vid_pts_valid),
+    .dst_clk(clk_dec), .dst_rst_n(reset_n), .dst_data(dec_pts_in), .dst_valid(dec_pts_in_valid));
+
+// ---- THE STC IS A CLOCK (docs/stc_freerun.md) -------------------------------
+// The 90 kHz tick: clk_sys/300 exactly, the same crystal the raster and the
+// audio NCO run from, so the clock's RATE is theirs by construction. It is
+// crossed into clk_dec by a toggle (ticks are ~1000 clk_dec apart; none is ever
+// lost) and counted by dvd/disp_sched.sv inside mpeg2video, which owns the
+// clock's phase. Everything in clk_sys reads a MIRROR that the scheduler sends
+// across on every tick.
+reg  [8:0] stc_div;
+reg        stc_tog;
+always @(posedge clk_sys or negedge reset_n)
+    if (!reset_n) begin stc_div <= 9'd0; stc_tog <= 1'b0; end
+    else if (stc_div == 9'd299) begin stc_div <= 9'd0; stc_tog <= ~stc_tog; end
+    else stc_div <= stc_div + 9'd1;
+reg  stc_t1, stc_t2, stc_t3;
+always @(posedge clk_dec or negedge reset_n)
+    if (!reset_n) begin stc_t1 <= 1'b0; stc_t2 <= 1'b0; stc_t3 <= 1'b0; end
+    else begin stc_t1 <= stc_tog; stc_t2 <= stc_t1; stc_t3 <= stc_t2; end
+wire stc_tick_dec = stc_t2 ^ stc_t3;
+
+// half the raster's image-scan period in ticks: 1501.5/2 at 480p and per 480i
+// field, 900 PAL, 1876.9 film24, 1800 film25 -- the pickup-opportunity grid.
+// Mode flags are levels that change at human speed; a 2-FF sync suffices.
+reg  pal_s1_dec, pal_dec_l;
+always @(posedge clk_dec) begin pal_s1_dec <= pal_eff; pal_dec_l <= pal_s1_dec; end
+wire [15:0] half_scan_dec = filmp_dec ? (pal_dec_l ? 16'd1800 : 16'd1877)
+                                      : (pal_dec_l ? 16'd900  : 16'd750);
+reg  sched_en_s1, sched_en_dec;
+always @(posedge clk_dec) begin sched_en_s1 <= ~av_freerun; sched_en_dec <= sched_en_s1; end
+
+wire [32:0] core_stc;            wire core_stc_anchored;                 // clk_dec
+wire        core_disp_anchored;   // clk_dec: the clock is on the DISPLAY timeline, not the parse front
+wire        core_anchor_req;     wire signed [33:0] core_anchor_delta;   // clk_dec
+wire        core_anchor_disc;    // clk_dec: that re-anchor was a CONTENT PTS jump
+wire        core_cc_credit_valid; wire [2:0] core_cc_credit;   // clk_dec: captions owed to the picture just picked up
+wire signed [33:0] core_disp_lag; wire core_disp_lag_valid;              // clk_dec
+wire  [7:0] core_sched_flags; wire [15:0] core_sched_dur;               // clk_dec instrument
+wire [34:0] stc_mirror_sys;      wire stc_mirror_valid;                  // clk_sys
+wire [34:0] av_anchor_delta_w; wire av_anchor_delta_valid;
+wire signed [33:0] disp_lag_sys;  wire disp_lag_sys_valid;
+pts_cdc #(.W(35)) pts_cdc_stc (          // the clock, every tick
+    .src_clk(clk_dec), .src_rst_n(reset_n), .src_data({core_disp_anchored, core_stc_anchored, core_stc}), .src_valid(stc_tick_dec),
+    .dst_clk(clk_sys), .dst_rst_n(reset_n), .dst_data(stc_mirror_sys), .dst_valid(stc_mirror_valid));
+pts_cdc #(.W(35)) pts_cdc_delta (        // each re-anchor's delta + whether it was a content jump
+    .src_clk(clk_dec), .src_rst_n(reset_n), .src_data({core_anchor_disc, core_anchor_delta}), .src_valid(core_anchor_req),
+    .dst_clk(clk_sys), .dst_rst_n(reset_n), .dst_data(av_anchor_delta_w), .dst_valid(av_anchor_delta_valid));
+
+// ---- CONTENT-DISCONTINUITY AUDIO RE-PHASE (2026-09-07) ---------------------
+// The display re-anchored because a tagged picture's PTS jumped off the current
+// timeline -- a cell change, a menu hop, a PGC boundary. Re-phase the audio chain
+// so it lands on the NEW timeline instead of continuing on the old one.
+//
+// ★ This is what VLC does at the same points, and reading it is what settled the
+// design: modules/access/dvdnav.c raises ES_OUT_RESET_PCR on every
+// DVDNAV_CELL_CHANGE and DVDNAV_HOP_CHANNEL, and es_out.c's EsOutChangePosition
+// flushes EVERY es (audio included), resets the clock and re-enters buffering.
+// VLC keeps one clock for menus and titles alike -- there is no menu exemption --
+// but it never carries buffered audio across a discontinuity. We did, and each
+// re-anchor left a lip-sync step nothing could heal (4-6 a minute in menus).
+//
+// ⚠ RATE LIMITED to one re-phase per ~0.5 s. A re-phase costs a short audio gap
+// (the drain gate re-fills), and disc_w can fire twice around one junction as the
+// new timeline settles; without the cooldown a burst of re-anchors would machine-gun
+// the audio. Titles are unaffected either way -- they re-anchor about once per
+// playback (MEASURED: reanchors=1 over 80 s on APOLLO_13).
+reg  [23:0] rephase_cool;                       // 2^24 / 27 MHz ~ 0.62 s
+wire        rephase_req = av_anchor_delta_valid && av_anchor_delta_w[34];
+always @(posedge clk_sys or negedge reset_n)
+    if (!reset_n) begin
+        rephase_cool <= 24'd0; aud_disc_rephase <= 1'b0;
+    end else begin
+        aud_disc_rephase <= 1'b0;
+        if (rephase_cool != 24'd0) rephase_cool <= rephase_cool - 24'd1;
+        else if (rephase_req) begin
+            aud_disc_rephase <= 1'b1;
+            rephase_cool     <= 24'hFFFFFF;
+        end
+    end
+pts_cdc #(.W(34)) pts_cdc_disp (         // telemetry word 11
+    .src_clk(clk_dec), .src_rst_n(reset_n), .src_data(core_disp_lag), .src_valid(core_disp_lag_valid),
+    .dst_clk(clk_sys), .dst_rst_n(reset_n), .dst_data(disp_lag_sys), .dst_valid(disp_lag_sys_valid));
+reg signed [33:0] av_disp_lag;
+always @(posedge clk_sys)
+    if (!reset_n)                av_disp_lag <= 34'sd0;
+    else if (disp_lag_sys_valid) av_disp_lag <= disp_lag_sys;
 
 vidfeed_cdc vidfeed_cdc_inst (
     .rst_n    (reset_n),
     .wr_clk   (clk_sys),
-    .wr_data  (ps_vid_byte),
+    .wr_data  ({ps_vid_mark, ps_vid_byte}),   // DVD-FORK (PTS association): 9 bits, the mark rides with its byte
     .wr_valid (ps_vid_valid),
     .wr_ready (vidfeed_wr_ready),
     .rd_clk   (clk_dec),
-    .rd_data  (dec_stream_data),
+    .rd_data  ({dec_stream_mark, dec_stream_data}),
     .rd_valid (dec_stream_valid),
     .rd_ready (~core_busy)
 );
@@ -3721,6 +3904,24 @@ mpeg2video mpeg2video_inst (
 
     .stream_data  (dec_stream_data),   // <- vidfeed_dc CDC (clk_sys -> clk_dec)
     .stream_valid (dec_stream_valid),  // byte actually consumed this cycle (1:1)
+    .stream_mark  (dec_stream_mark),   // DVD-FORK (PTS association): first payload byte of a PTS-bearing PES
+    .pts_in       (dec_pts_in),        // DVD-FORK (PTS association): that PES's PTS, crossed into clk_dec
+    .pts_in_valid (dec_pts_in_valid),
+    .stc_tick     (stc_tick_dec),      // DVD-FORK (PTS scheduling): the 90 kHz tick, clk_sys/300 crossed into clk_dec
+    .sched_en     (sched_en_dec),      // DVD-FORK (PTS scheduling): 0 = free-run (Audio Genlock Off diagnostic)
+    .half_scan    (half_scan_dec),     // DVD-FORK (PTS scheduling): half the raster's image-scan period, ticks
+    .stc          (core_stc),          // DVD-FORK (PTS scheduling): the clock (clk_dec)
+    .stc_anchored (core_stc_anchored),
+    .disp_anchored (core_disp_anchored),
+    .anchor_req   (core_anchor_req),
+    .anchor_disc  (core_anchor_disc),
+    .cc_credit_valid (core_cc_credit_valid),
+    .cc_credit       (core_cc_credit),
+    .anchor_delta (core_anchor_delta),
+    .disp_lag     (core_disp_lag),     // DVD-FORK (PTS scheduling): displayed PTS - STC at each pickup
+    .disp_lag_valid (core_disp_lag_valid),
+    .sched_dbg_flags (core_sched_flags),
+    .sched_dbg_dur   (core_sched_dur),
 
     .reg_addr   (seq_run ? wr_addr : 4'b0),    // DVD-FORK FIX (interlaced cadence): modeline writes
     .reg_wr_en  (seq_run),
@@ -3781,7 +3982,6 @@ mpeg2video mpeg2video_inst (
     .dbg_frames_late   (core_frames_late),             // DVD-FORK (frame-drop O[12]): governor deadline-miss count (clk_dec)
     .dbg_pickups       (core_pickups),                 // DVD-FORK (telemetry): content frames picked up for display (clk_dec)
     .dbg_frames_dropped(core_frames_dropped),          // DVD-FORK (frame-drop O[12]): B-frames dropped count (clk_dec)
-    .dbg_vid_err       (core_vid_err),                 // DVD-FORK (vid_err instrument): video content vs wall (clk_dec)
     .dbg_drop_costs    (core_drop_costs),              // DVD-FORK (round 9): drop acks split by debit {cost3, cost2}
     .dbg_vbuf_fill     (core_vbuf_fill),               // DVD-FORK DEBUG: VBUF bitstream-cushion occupancy (0xFF = full)
     .video_live        (core_video_live),              // DVD-FORK (av_sync STC): "first frame displayed" (clk_dec; re-armed per load)
@@ -3794,7 +3994,6 @@ mpeg2video mpeg2video_inst (
     .disp_vscale_en    (disp_vscale_en),               // DVD-FORK (CRT anamorphic letterbox AA): downstream 2-tap blend enable
     .disp_hcrop_en     (disp_hcrop_en),                // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
     .disp_hfill_en     (disp_hfill_en),                // DVD-FORK FIX (SIF analog fill): 352->720 stretch + 720 DE window
-    .menu_ff           (1'b0),                         // DVD-FORK (menu VBUF-lag §5): fast-drain RETIRED (HW-inert); menu_ff=0 = bit-identical governor
     .film24            (filmp_dec),                    // DVD-FORK (Film 24p/25p Out): 1 frame/refresh in the governor; ascal does the pulldown
     .film_det_ntsc     (core_film_det_ntsc),           // DVD-FORK (Film 24p auto-detect): 3:2 telecine verdict (clk_dec)
     .film_det_pal      (core_film_det_pal)             // DVD-FORK (Film 24p auto-detect): sustained-progressive verdict (clk_dec)
@@ -3822,7 +4021,6 @@ assign film_det_pal_sync  = film_det_pal_s2;
 // 4-bit-addressed overlay is fragile to expand). Initial HW validation is the visual
 // A/B on BBB-PAL / high-motion (O[12] Off vs On). See docs/motcomp_throughput.md.
 wire [15:0] core_frames_late, core_frames_dropped;
-wire [15:0] core_vid_err;   // vid_err instrument: signed, 1 unit = 1 refresh (16.7 ms); negative = video content AHEAD
 wire [15:0] core_pickups;   // DVD-FORK (telemetry): content frames picked up for display (clk_dec, free-running)
 wire [15:0] aud_play_cnt;   // DVD-FORK (telemetry): audio play ticks/16 (clk_sys, free-running)
 wire [15:0] aud_gate_cnt;   // DVD-FORK (telemetry): audio drain-gate closures (clk_sys)
@@ -4745,6 +4943,11 @@ nav_pci nav_pci_inst (
                                          // MiB stills read slightly LATE on HW waiting for
                                          // the last few KB + the cold re-decode round trip.
     .stc_fresh  (hl_stc_fresh),          // last load flushed => STC display-coherent
+    // ⚠ rephase_req, NOT aud_disc_rephase. The latter is RATE LIMITED to one per
+    // ~0.62 s so a burst of re-anchors cannot machine-gun the audio; coherence is a
+    // fact about the clock, not a thing to throttle, and a suppressed second
+    // re-anchor would leave nav_pci trusting a timeline the clock had already left.
+    .stc_reanchor (rephase_req),           // THE STC IS A CLOCK: it just moved to another timeline
                                          // (keep_vbuf hop => scheduled path blocked
                                          //  until a still park proves catch-up)
     .sel_force  (vm_btn_force),          // Phase 4: SetHL_BTNN / link buttons
@@ -5414,6 +5617,9 @@ cc_vbi cc_vbi_inst (
     .dec_pair_valid (core_cc_valid),
     .dec_pair       (core_cc_pair),
     .dec_pair_field (core_cc_field),
+    // THE STC IS A CLOCK: captions drain on display pickups, not raster fields
+    .dec_credit_valid (core_cc_credit_valid),
+    .dec_credit       (core_cc_credit),
     .enable         (interlaced_eff & ~status[14]),
     .test           (status[44]),
     .flush          (load_flush),

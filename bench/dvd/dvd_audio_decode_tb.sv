@@ -38,6 +38,7 @@ module dvd_audio_decode_tb;
     // PTS-scheduled drain controls (Phase C; off for Phases A/B)
     logic        sched_en     = 1'b0;
     logic        stc_anchored = 1'b0;
+    logic        disp_anchored = 1'b1;   // default: on the display timeline (C1 exercises the gate)
     logic        video_live   = 1'b1;   // display live (C1 exercises the 0 hold)
     logic [32:0] stc          = '0;
     logic signed [17:0] av_ofs = 18'sd0;
@@ -62,9 +63,10 @@ module dvd_audio_decode_tb;
         .frame_pts(frame_pts), .frame_pts_valid(frame_pts_valid),
         .frame_pop(frame_pop),
         .nco_trim(22'sd0), .dispatch_pts(), .dispatch_pts_valid(),
-        .sched_en(sched_en), .stc_anchored(stc_anchored), .video_live(video_live),
+        .sched_en(sched_en), .stc_anchored(stc_anchored), .disp_anchored(disp_anchored), .video_live(video_live),
         .arr_pts(arr_pts), .arr_pts_valid(arr_pts_valid),
         .stc(stc), .av_ofs(av_ofs),
+        .anchor_pulse(1'b0), .anchor_delta(34'sd0),   // THE STC IS A CLOCK: no display re-anchor in this bench
         .audio_l(audio_l), .audio_r(audio_r),
         .ac3_synced(ac3_synced), .ac3_err(ac3_err),
         // drift-instrument counters (Phase C7)
@@ -221,7 +223,17 @@ module dvd_audio_decode_tb;
             stc = desc_pts[2];                                // schedule reached but must HOLD
             repeat (1000) @(posedge clk);
             if (cap != cap0) begin $display("FAIL C1: released while video not live"); errs=errs+1; end
+            // ★ AND held while the clock is not yet on the DISPLAY's own timeline.
+            // stc_anchored rises on the PROVISIONAL parse-front anchor, which on a
+            // cold mount sits up to ~1.6 s ahead of the picture. play_anchor is
+            // latched ONCE at release and playback is never re-phased, so releasing
+            // here leaves audio permanently that far ahead -- MEASURED on APOLLO_13
+            // 2026-09-07 (av_drift stepped to +1.6 s and held for the whole title).
+            disp_anchored = 1'b0;
             video_live = 1'b1;                                // display shows its first frame
+            repeat (2000) @(posedge clk);
+            if (cap != cap0) begin $display("FAIL C1: released against the PROVISIONAL anchor (parse front), not the display timeline"); errs=errs+1; end
+            disp_anchored = 1'b1;                             // a tagged picture anchors the clock
             t = 0;
             while (cap < cap0+1 && t < 200000) begin @(posedge clk); t = t + 1; end
             if (cap < cap0+1) begin $display("FAIL C1: samples did not play at schedule"); errs=errs+1; end

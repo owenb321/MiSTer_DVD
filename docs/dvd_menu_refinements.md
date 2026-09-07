@@ -1,5 +1,20 @@
 # DVD menu refinements — per-disc follow-up track (post Phase 4)
 
+> ★ **2026-09-06 amendment, CORRECTED 2026-09-07 (`docs/stc_freerun.md` §9-§11).** The
+> 2026-09-06 note said the menu exemptions this file records were all REMOVED on branch
+> PR #63. **Two of them were removed and had to be put back**, and the
+> hardware said so: `av_vid_hold`'s `menu_active` force-off and `hl_stc_fresh` are
+> RESTORED. Removing the first froze Thayer's Quest and Tomb Raider before they reached a
+> menu (the ~1.24 s hold returned per keep_vbuf hop, and hops arrive faster than that);
+> removing the second starved highlight promotions on Harry Potter Interactive and Scene
+> It, because a stale `ss=0` disarm is perpetually "due" against a clock it does not share
+> a timeline with. Both failures were described in the very comments that were deleted.
+> **What DID stay removed**: `sched_en`/`sync_armed`'s menu exemption, so menu audio is
+> PTS-scheduled like a title's. And `hl_stc_fresh`'s `~keep_vbuf` guess is now a real
+> measurement — `nav_pci` takes the clock's re-anchor pulse and trusts the scheduled path
+> only while the pending HLI was committed after it. ✅ HW-confirmed 2026-09-07. The
+> mechanisms below remain the record of why the exemptions were needed — because they are.
+
 Phase 4 (the DVD-VM interpreter, PR fj#82) shipped the **core** menu navigation:
 First Play boot, real command execution, button dispatch, CallSS/RSM resume,
 JumpTT/VTS_PTT title resolve, SetSTN stream selection, and VOB-less VMGM/VTSM

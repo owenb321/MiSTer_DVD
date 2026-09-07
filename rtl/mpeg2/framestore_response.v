@@ -46,7 +46,7 @@ module framestore_response(rst, clk,
                   disp_wr_dta_full, disp_wr_dta_en, disp_wr_dta_ack, disp_wr_dta, disp_wr_dta_almost_full,
                   vbr_wr_full, vbr_wr_en, vbr_wr_ack, vbr_wr_dta, vbr_wr_almost_full, 
                   mem_res_rd_dta, mem_res_rd_en, mem_res_rd_empty, mem_res_rd_valid, 
-                  tag_rd_dta, tag_rd_empty, tag_rd_en, tag_rd_valid
+                  tag_rd_dta, vbuf_epoch, tag_rd_empty, tag_rd_en, tag_rd_valid
                   );
 
   input            rst;
@@ -184,9 +184,13 @@ module framestore_response(rst, clk,
     else if (mem_res_rd_valid) disp_wr_dta <= mem_res_rd_dta;
     else disp_wr_dta <= disp_wr_dta;
 
+  /* DVD-FORK (PTS association): only the CURRENT epoch's VBUF reads reach the
+   * read fifo; a response tagged with the other parity was issued before the
+   * flush and belongs to a stream that no longer exists. See framestore_request. */
+  input            vbuf_epoch;
   always @(posedge clk)
     if (~rst) vbr_wr_en <= 1'b0;
-    else vbr_wr_en <= (tag_rd_dta == TAG_VBUF) && tag_rd_valid;
+    else vbr_wr_en <= (tag_rd_dta == (vbuf_epoch ? TAG_VBUF1 : TAG_VBUF)) && tag_rd_valid;
 
   always @(posedge clk)
     if (~rst) vbr_wr_dta <= 64'b0;
@@ -253,7 +257,7 @@ module framestore_response(rst, clk,
       end
 
   always @(posedge clk)
-    if (tag_rd_valid && (tag_rd_dta != TAG_FWD) && (tag_rd_dta != TAG_BWD) && (tag_rd_dta != TAG_DISP) && (tag_rd_dta != TAG_VBUF)) 
+    if (tag_rd_valid && (tag_rd_dta != TAG_FWD) && (tag_rd_dta != TAG_BWD) && (tag_rd_dta != TAG_DISP) && (tag_rd_dta != TAG_VBUF) && (tag_rd_dta != TAG_VBUF1)) 
       begin
         #0 $display("%m\t*** error: unknown tag %d ***", tag_rd_dta);
         $stop;

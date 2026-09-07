@@ -4,7 +4,7 @@ Everything here is in the core's OSD. The **default is shown in bold**, and the
 defaults are chosen to be correct for most setups — on a normal HDMI installation you
 should not need to change anything.
 
-Settings are saved to `/media/fat/config/DVD_v2.CFG` and persist across core reloads.
+Settings are saved to `/media/fat/config/DVD_v3.CFG` and persist across core reloads.
 
 ## Main page
 
@@ -28,6 +28,11 @@ Settings are saved to `/media/fat/config/DVD_v2.CFG` and persist across core rel
     `DVD_v2.CFG` — [settings reset once](#settings-that-reset-after-an-update) the first
     time you run v0.4.0. Releases up to and including v0.3.0 still have the old pair.
 
+!!! info "Unreleased — they reset once more"
+    **A/V Offset** now defaults to **0 ms** instead of +100 ms. Re-ordering the values so
+    0 ms comes first remaps every saved setting, so the file bumps again to `DVD_v3.CFG`
+    and settings reset one further time.
+
 ### Reset
 
 **`Reset`** stops playback, unloads the current image, resets the DVD navigation VM, and
@@ -49,7 +54,7 @@ playback and are documented properly below; the rest exist for narrowing down pr
 | **Line-21 CC** | **On** / Off | Re-inserts closed captions on line 21 of the analog output — see [Closed captions](../video/closed-captions.md). |
 | **CC Test Line** | **Off** / On | Paints the caption waveform on a *visible* line to prove the chain works — see [the CC diagnostic](../video/closed-captions.md#is-it-working-the-test-line). |
 | **Film 24p Out** | **Auto** / Off / On | 23.976 Hz output for film content — see [Film (24p)](../video/film-24p.md). |
-| **A/V Offset** | **+100 ms** / −200 / −100 / −50 / 0 / +50 / +150 / +200 | Lip-sync trim. |
+| **A/V Offset** | **0 ms** / −200 / −100 / −50 / +50 / +100 / +150 / +200 | Lip-sync trim. |
 
 ### Frame Drop
 
@@ -67,8 +72,13 @@ exists to isolate the governor when diagnosing a pacing problem, not as a qualit
 
 ### A/V Offset
 
-Default **+100 ms**, which is the measured null for NTSC film and also measures correctly
-on PAL. Treat it as universal — there should be no need to change it.
+Default **0 ms**. There should be no need to change it.
+
+!!! info "Unreleased"
+    This default was **+100 ms** in v0.4.0 and earlier. That was the correct null for a
+    player whose clock was anchored on the demux front, which left audio about 100 ms
+    early; the clock is now anchored on the picture actually being displayed, so the
+    correction is no longer needed and would over-correct by the same amount.
 
 It shifts audio relative to video, positive meaning audio later. If you genuinely need it,
 the thing to know is that **it binds at start and re-start events only** — changing it
@@ -79,7 +89,7 @@ If lip sync is wrong in a way this does not fix, that is a bug rather than a set
 
 ## Settings that reset after an update
 
-Saved settings live in `/media/fat/config/DVD_v2.CFG`, where `v2` is a **layout version**.
+Saved settings live in `/media/fat/config/DVD_v3.CFG`, where `v3` is a **layout version**.
 
 When a release changes the OSD option layout incompatibly, that number is bumped, and your
 settings fall back to the defaults rather than being silently misread — an old file's bits

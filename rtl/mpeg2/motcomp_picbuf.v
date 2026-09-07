@@ -39,7 +39,9 @@ module motcomp_picbuf(
   forward_reference_frame, backward_reference_frame, current_frame,
   output_frame, output_frame_valid, output_frame_rd, output_progressive_sequence, output_progressive_frame, output_top_field_first, output_repeat_first_field, output_informative,
   update_picture_buffers, picbuf_busy,
-  flags_commit                             // DVD-FORK (round 11): per-picture display flags valid (coding ext parsed)
+  flags_commit,                            // DVD-FORK (round 11): per-picture display flags valid (coding ext parsed)
+  vld_pic_pts, vld_pic_pts_valid, vld_pic_pts_2nd, pts_commit,   // DVD-FORK (PTS association): this picture's PTS tag, from pts_assoc
+  output_pts, output_pts_valid, output_pts_2nd                    // DVD-FORK (PTS association): the tag of the picture at the output
   );
 
   input              clk;                          // clock
@@ -58,6 +60,30 @@ module motcomp_picbuf(
    * commits counts exactly as it does today. */
   input              pic_informative;
   input              informative_commit;
+  /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"): a fifth
+   * per-slot attribute, the picture's PTS. The tag is a REGISTER in pts_assoc,
+   * decided one cycle after the vld's picture header and held until the next
+   * header; STATE_UPDATE for this picture lands >= 3 cycles after the header
+   * (update_picture_buffers -> mvec fifo -> here) and before the next one
+   * (the vld is frozen at the header until this rotation), so latching it at
+   * STATE_UPDATE is ordered by construction -- the same argument as flags_commit.
+   * A tag that lands on the SECOND field of a pair arrives after the rotation;
+   * pts_commit with vld_pic_pts_2nd re-latches it into the slot that is still
+   * current. It rides current -> prev_i_p -> output exactly as the flags do,
+   * including the STATE_LAST_FRAME path (a menu still is SEQ GOP PIC:I SEQ_END). */
+  input        [32:0]vld_pic_pts;
+  input              vld_pic_pts_valid;
+  input              vld_pic_pts_2nd;
+  input              pts_commit;
+  output reg   [32:0]output_pts;
+  output reg         output_pts_valid;
+  output reg         output_pts_2nd;
+  reg          [32:0]current_frame_pts;
+  reg                current_frame_pts_valid;
+  reg                current_frame_pts_2nd;
+  reg          [32:0]prev_i_p_frame_pts;
+  reg                prev_i_p_frame_pts_valid;
+  reg                prev_i_p_frame_pts_2nd;
   input              top_field_first;
   input              repeat_first_field;
   input              last_frame;                   // asserted when frame is the last frame of a bitstream
@@ -258,6 +284,69 @@ module motcomp_picbuf(
         vld_top_field_first <= vld_top_field_first;
         vld_repeat_first_field <= vld_repeat_first_field;
         vld_last_frame <= vld_last_frame;
+      end
+
+  /* DVD-FORK (PTS association): the PTS attribute, in three mirrors of the
+   * flag blocks below -- current (at STATE_UPDATE, plus the second-field
+   * re-latch), prev_i_p (at update_picture_buffers), output (at each emit). */
+  always @(posedge clk)
+    if (~rst)
+      begin
+        current_frame_pts       <= 33'd0;
+        current_frame_pts_valid <= 1'b0;
+        current_frame_pts_2nd   <= 1'b0;
+      end
+    else if (clk_en && (state == STATE_UPDATE) && ~vld_last_frame)
+      begin
+        current_frame_pts       <= vld_pic_pts;
+        current_frame_pts_valid <= vld_pic_pts_valid;
+        current_frame_pts_2nd   <= vld_pic_pts_2nd;
+      end
+    else if (clk_en && pts_commit && vld_pic_pts_valid && vld_pic_pts_2nd && current_frame_valid)
+      begin
+        current_frame_pts       <= vld_pic_pts;
+        current_frame_pts_valid <= 1'b1;
+        current_frame_pts_2nd   <= 1'b1;
+      end
+
+  always @(posedge clk)
+    if (~rst)
+      begin
+        prev_i_p_frame_pts       <= 33'd0;
+        prev_i_p_frame_pts_valid <= 1'b0;
+        prev_i_p_frame_pts_2nd   <= 1'b0;
+      end
+    else if (clk_en && update_picture_buffers && (current_frame_coding_type != B_TYPE) && ~vld_last_frame)
+      begin
+        prev_i_p_frame_pts       <= current_frame_pts;
+        prev_i_p_frame_pts_valid <= current_frame_pts_valid;
+        prev_i_p_frame_pts_2nd   <= current_frame_pts_2nd;
+      end
+
+  always @(posedge clk)
+    if (~rst)
+      begin
+        output_pts       <= 33'd0;
+        output_pts_valid <= 1'b0;
+        output_pts_2nd   <= 1'b0;
+      end
+    else if (clk_en && (state == STATE_LAST_FRAME))
+      begin
+        output_pts       <= prev_i_p_frame_pts;
+        output_pts_valid <= prev_i_p_frame_pts_valid;
+        output_pts_2nd   <= prev_i_p_frame_pts_2nd;
+      end
+    else if (clk_en && (state == STATE_B_FRAME_1) && (next == STATE_WAIT_0))
+      begin
+        output_pts       <= current_frame_pts;
+        output_pts_valid <= current_frame_pts_valid;
+        output_pts_2nd   <= current_frame_pts_2nd;
+      end
+    else if (clk_en && (state == STATE_UPDATE) && (next == STATE_IP_FRAME_0))
+      begin
+        output_pts       <= prev_i_p_frame_pts;
+        output_pts_valid <= prev_i_p_frame_pts_valid;
+        output_pts_2nd   <= prev_i_p_frame_pts_2nd;
       end
 
   /*

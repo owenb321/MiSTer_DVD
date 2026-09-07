@@ -35,7 +35,8 @@
 module vbuf_write (
   clk, clk_en, rst, 
   vid_in, vid_in_wr_en,
-  vid_out, vid_out_wr_en
+  vid_out, vid_out_wr_en,
+  phase                                       // DVD-FORK (PTS association): packer phase, see below
   );
 
   input              clk;
@@ -49,6 +50,14 @@ module vbuf_write (
   output reg         vid_out_wr_en;
 
   reg           [7:0]loop;
+  /* DVD-FORK (PTS association): the packer's byte phase. `loop` is a one-hot
+   * ring: 0x00/0x80 before the first byte of a word, 0x01 after it, ... 0x40
+   * after the seventh, so the index of the set bit in loop[6:0] plus one is
+   * how many bytes of the current word are already packed -- i.e. the byte
+   * offset within its 64-bit word that the NEXT incoming byte will occupy.
+   * mpeg2video.v turns that into an exact byte position for a PTS stamp. */
+  output        [7:0]phase;
+  assign phase = loop;
 
   always @(posedge clk)
     if (~rst) vid_out <= 64'b0;

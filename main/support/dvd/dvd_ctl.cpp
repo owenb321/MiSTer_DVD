@@ -69,9 +69,12 @@ static void telem_read()
 	// the words below are one consistent SNAPSHOT rather than samples taken a
 	// few hundred microseconds apart. That matters because the number this
 	// exists to produce is a RATIO of two of them.
-	uint16_t w[11];
+	// Words 11-13 (A/V phase) were added with the PTS-scheduled display work.
+	// Reading them from an OLDER core is safe: dvd_telem's readout mux answers
+	// 16'd0 for any index it does not implement, so they read 0, not garbage.
+	uint16_t w[16];
 	w[0] = spi_uio_cmd_cont(UIO_DVD_TELEM);
-	for (int i = 1; i < 11; i++) w[i] = spi_w(0);
+	for (int i = 1; i < 16; i++) w[i] = spi_w(0);
 	DisableIO();
 
 	if (w[0] != DVD_TELEM_MAGIC) return;      // no bridge in this core build
@@ -91,6 +94,13 @@ static void telem_read()
 		"\"drops\":%u,\"vid_err\":%d,\"debt\":%d,\"drop_req\":%u,"
 		"\"vbuf_fill\":%u,\"aud_frames\":%u,"
 		"\"aud_play\":%u,\"aud_gate\":%u,"
+		// A/V PHASE, ms. Each is the source value's bits [19:4]: 1 LSB = 16 ticks
+		// of the 90 kHz STC = 0.17778 ms. SIGNED. disp_lag = PTS of the picture
+		// just displayed minus the STC (the acceptance signal for PTS-scheduled
+		// display: ~0 once the display follows its PTS); play_err = audio
+		// playback position vs its anchor; av_drift = dispatched audio PTS - STC.
+		"\"disp_lag_ms\":%.2f,\"play_err_ms\":%.2f,\"av_drift_ms\":%.2f,"
+		"\"sched_frc\":%u,\"sched_ps\":%u,\"sched_pf\":%u,\"sched_tff\":%u,\"sched_rff\":%u,\"reanchors\":%u,\"anch_fwd\":%u,\"anch_bwd\":%u,\"first_tagged\":%u,\"first_seen\":%u,\"prov_seen\":%u,"
 		"\"flags\":{\"media\":%u,\"pause\":%u,\"video_live\":%u,"
 		"\"still\":%u,\"menu\":%u}}\n",
 		t, w[1], w[2], w[3], w[4],
@@ -98,6 +108,13 @@ static void telem_read()
 		(int)((w[6] >> 11) & 0x1F) - (((w[6] >> 15) & 1) ? 32 : 0),
 		(unsigned)((w[6] >> 10) & 1),
 		(unsigned)(w[7] >> 8), w[8], w[9], w[10],
+		(double)(int16_t)w[11] * 16.0 / 90.0,     // ticks/16 -> ms
+		(double)(int16_t)w[12] * 16.0 / 90.0,
+		(double)(int16_t)w[13] * 16.0 / 90.0,
+		(unsigned)((w[14] >> 4) & 0xF), (unsigned)((w[14] >> 3) & 1), (unsigned)((w[14] >> 2) & 1),
+		(unsigned)((w[14] >> 1) & 1), (unsigned)(w[14] & 1),
+		(unsigned)(w[15] >> 8), (unsigned)((w[15] >> 6) & 3), (unsigned)((w[15] >> 4) & 3),
+		(unsigned)((w[15] >> 3) & 1), (unsigned)((w[15] >> 2) & 1), (unsigned)((w[15] >> 1) & 1),
 		(unsigned)(w[7] & 1), (unsigned)((w[7] >> 1) & 1),
 		(unsigned)((w[7] >> 2) & 1), (unsigned)((w[7] >> 3) & 1),
 		(unsigned)((w[7] >> 4) & 1));

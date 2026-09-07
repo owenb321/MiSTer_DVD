@@ -146,7 +146,7 @@ module field_parity_tb;
 `ifndef NO_PARITY_FIX
     .raster_par_err(par_err_sync),
 `endif
-    .vscale_mode(2'd0), .hcrop_en(1'b0), .menu_ff(1'b0), .film24(1'b0)
+    .vscale_mode(2'd0), .hcrop_en(1'b0), .sched_due(1'b1), .sched_next_due(1'b1)
   );
 
   // framestore_reader + full-rate behavioural memory (constant non-black word)

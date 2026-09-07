@@ -16,7 +16,7 @@ stock mechanisms:
               ascal's INPUT buffer (sys_top.v:680), so it carries no MiSTer OSD
               (composited after ascal, sys_top.v:1149), no popups and no
               scaling. MEASURED: a shot taken with the OSD open shows no OSD.
-  DVD_v2.CFG  the core's saved settings are a raw dump of Main's 128-bit status
+  DVD_vN.CFG  the core's saved settings are a raw dump of Main's 128-bit status
               word (user_io.cpp:600), read at core init before reset is released
               -- so writing 16 bytes sets any OSD option for the next launch.
   uinput      a virtual keyboard on the target reaches dvd/kbd_map.sv, which
@@ -57,15 +57,36 @@ import docs_check                                    # noqa: E402  (CONF_STR par
 CORE_DIR = os.environ.get('MISTER_CORE_DIR', '/media/fat/_Other')
 CFG_DIR = os.environ.get('MISTER_CFG_DIR', '/media/fat/config')
 SHOT_DIR = '/media/fat/screenshots'
+REMOTE_TELEM_LOG = '/tmp/dvd_telemlog.jsonl'
 # A FIXED name, deliberately. MGL <rbf> resolution takes the lexicographically
 # GREATEST match (mra_loader.cpp:1288), not the newest file -- with ~75 DVD_*
 # builds in _Other/ a bare "DVD" selects whichever sorts last, which on this rig
 # is a MARGINAL build from weeks ago. The core name comes from CONF_STR[0], not
-# the filename, so renaming costs nothing: it is still "DVD" and still uses
-# DVD_v2.CFG.
+# the filename, so renaming costs nothing: it is still "DVD".
 HIL_RBF = 'DVD_hil.rbf'
 HIL_MGL = 'DVD_hil.mgl'
-CFG_NAME = 'DVD_v2.CFG'
+
+
+def _cfg_name():
+    """The saved-settings filename, READ FROM emu.sv's CONF_STR "v,N" line.
+
+    ⚠ This was hardcoded 'DVD_v2.CFG' and the 2026-09-07 bump to v3 would have
+    left it writing a file the core no longer reads -- so every --opt would have
+    silently done nothing and the harness would have measured DEFAULTS while
+    reporting the options it thought it set. Derive it; a constant here can only
+    go stale, and a stale one fails silently rather than loudly.
+    """
+    try:
+        src = open(os.path.join(ROOT, 'dvd', 'emu.sv')).read()
+        m = re.search(r'"v,(\d+);"', src)
+        if m:
+            return 'DVD_v%s.CFG' % m.group(1)
+    except Exception:
+        pass
+    return 'DVD.CFG'          # framework default when no "v,N" line exists
+
+
+CFG_NAME = _cfg_name()
 AGENT_SRC = os.path.join(HERE, 'mister_keyd.py')
 AGENT_DST = '/tmp/mister_keyd.py'
 AGENT_FIFO = '/tmp/mister_hil'
@@ -109,6 +130,12 @@ for f in /media/fat/MiSTer_DVDcss_hil_*; do
   done
   [ $running = 0 ] && rm -f "$f" && echo "  removed stale $b"
 done
+# ⚠ The loop above ends on a short-circuit `&&` chain, and for the RUNNING binary
+# `[ $running = 0 ]` is FALSE -- which becomes the whole script's exit status. That
+# made a SUCCESSFUL deploy report "remote command failed (rc=1)" and abort before
+# the .rbf was copied: the Main landed, the core did not, and the two silently
+# disagreed. Terminate explicitly.
+true
 """
 
 RESTORE_SCRIPT = _INI_REWRITE.replace('@TARGET@', 'MiSTer_DVDcss') + """
@@ -390,6 +417,118 @@ sleep 2
             print(f'  {k}: {v}')
 
 
+TELEM_POLL_SH  = '/tmp/dvd_telem_poll.sh'
+
+
+def telem_poll_start(path, seconds, hz):
+    """Start a detached on-target telemetry poller and return once it is running.
+
+    It has to start BEFORE load_core: `launch` only returns after cmd_wait has
+    round-tripped ssh for /tmp/CORENAME and then for "MGL finished", so a poller
+    started afterwards misses the first few seconds -- which is exactly the window
+    a startup transient lives in.
+
+    A file rather than an open ssh session, because the session would have to stay
+    up across the core load. Poll faster than dvd_ctl publishes (250 ms) and dedupe
+    on `t`: over-sampling costs nothing and under-sampling cannot be undone.
+    """
+    n  = max(1, int(seconds * hz))
+    iv = round(1.0 / hz, 3)
+    ssh(f"""
+pkill -f dvd_telem_poll 2>/dev/null
+rm -f {path}
+cat > {TELEM_POLL_SH} <<'POLLEOF'
+i=0
+while [ $i -lt {n} ]; do
+  cat /tmp/dvd_telem.json 2>/dev/null
+  sleep {iv}
+  i=$((i+1))
+done
+POLLEOF
+setsid sh {TELEM_POLL_SH} > {path} 2>/dev/null < /dev/null &
+echo poller-started
+""")
+
+
+def telem_poll_collect(path):
+    """Pull the poller's log back and return de-duplicated sample dicts."""
+    _, out = ssh(f'cat {path} 2>/dev/null\n', check=False, timeout=180)
+    rows, seen = [], set()
+    for line in out.splitlines():
+        line = line.strip()
+        if not line.startswith('{'):
+            continue
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get('t') in seen:
+            continue
+        seen.add(r.get('t'))
+        rows.append(r)
+    return rows
+
+
+def telem_startup_report(rows, marks=(2, 5, 10, 30, 120)):
+    """Print counters re-based on the first sample where the PICTURE IS MOVING.
+
+    ⚠ video_live alone is NOT a safe t0 for vid_err. On a STILL the governor misses
+    its deadline every refresh -- there is no new picture -- so vid_err climbs at the
+    full refresh rate (Cluedo: 50.0/s on PAL, entirely normal), and a TITLE-DOMAIN
+    still sets neither the `menu` nor the `still` flag (commit 9613582). An authored
+    opening card therefore looks exactly like the transient under test, and an
+    authored still is legitimate wall time the audio spends too -- it is not lip-sync
+    error at all.
+
+    ★ The witness needs no screenshots: on a still the decoder produces no new
+    pictures, so `pickups` STALLS while `refreshes` keeps advancing. Requiring
+    pickups to have advanced is the same test dvd_explore.py makes with a downsampled
+    frame, available directly in the counters. (MEASURED on the idle rig: 7191
+    pickups against 53053 refreshes, 38425 lates -- a long still, and every one of
+    those lates is honest.)
+    """
+    live = [r for r in rows if r.get('flags', {}).get('video_live')]
+    if not live:
+        print('  telem: no sample with video_live -- nothing to re-base on')
+        return
+    moving = [b for a, b in zip(live, live[1:]) if b['pickups'] != a['pickups']]
+    if not moving:
+        print(f'  telem: {len(live)} video_live samples but pickups NEVER advanced -- '
+              f'the picture is a still for the whole window. vid_err here is the still, '
+              f'not governor lateness; nothing to measure.')
+        return
+    t0 = moving[0]
+    stall = t0['t'] - live[0]['t']
+    print(f'  telemetry: {len(rows)} samples, video_live at t={live[0]["t"]:.2f}, '
+          f'picture MOVING at t={t0["t"]:.2f} (+{stall:.2f}s of still first)')
+    has_phase = 'av_drift_ms' in t0
+    print('    dt      lates  vid_err  refr-pick   drops  debt  vbuf  aud_gate'
+          + ('  av_drift  play_err   buf_lag   dec_lag' if has_phase else '') + '  flags')
+    def row(r):
+        d  = r['t'] - t0['t']
+        rp = (r['refreshes'] - t0['refreshes']) - (r['pickups'] - t0['pickups'])
+        fl = ''.join(k[0].upper() for k, v in sorted(r['flags'].items()) if v)
+        phase = ''
+        if has_phase:
+            # av_drift = dispatched audio PTS - STC. This is the ONLY value that
+            # relates the audio timeline to the video one; every other column is a
+            # rate or a count and reads clean through the fault being chased.
+            phase = (f'  {r.get("av_drift_ms", 0):8.1f}  {r.get("play_err_ms", 0):8.1f}'
+                     f'  {r.get("buf_lag_ms", 0):8.1f}  {r.get("dec_lag_ms", 0):8.1f}')
+        print(f'    {d:6.2f}  {r["lates"]-t0["lates"]:5d}  {r["vid_err"]:7d}  '
+              f'{rp:9d}  {r["drops"]-t0["drops"]:6d}  {r["debt"]:4d}  '
+              f'{r["vbuf_fill"]:4d}  {r["aud_gate"]-t0["aud_gate"]:8d}{phase}  {fl}')
+    row(t0)
+    for m in marks:
+        cand = [r for r in moving if r['t'] - t0['t'] >= m]
+        if cand:
+            row(cand[0])
+    row(moving[-1])
+    gate = moving[-1]['aud_gate'] - t0['aud_gate']
+    if gate:
+        print(f'    ** aud_gate moved {gate} -- audio re-armed; the A/V phase argument is void')
+
+
 def cmd_launch(args):
     img = args.image
     opts = [tuple(o.split('=', 1)) for o in (args.opt or [])]
@@ -397,6 +536,7 @@ def cmd_launch(args):
         if len(o) != 2:
             sys.exit('mister: --opt takes "Name=Value"')
     blob = build_status(opts)
+    t_launch = time.time()
     print(f'launch: {img}')
     if opts:
         print('  options: ' + ', '.join(f'{k}={v}' for k, v in opts))
@@ -411,9 +551,21 @@ python3 -c "import sys;open('{CFG_DIR}/{CFG_NAME}','wb').write(bytes.fromhex('{b
 cat > {CORE_DIR}/{HIL_MGL} <<'MGLEOF'
 {mgl}MGLEOF
 ''')
+    if getattr(args, 'telem_log', None):
+        telem_poll_start(REMOTE_TELEM_LOG, args.telem_seconds, args.telem_hz)
+        print(f'  telemetry poller: {args.telem_seconds}s @ {args.telem_hz} Hz')
     fifo(f'load_core {CORE_DIR}/{HIL_MGL}')
     if not args.no_wait:
         cmd_wait(args)
+    if getattr(args, 'telem_log', None):
+        # let the poller run out its window before collecting
+        time.sleep(max(0, args.telem_seconds - (time.time() - t_launch)) + 1)
+        rows = telem_poll_collect(REMOTE_TELEM_LOG)
+        with open(args.telem_log, 'w') as f:
+            for r in rows:
+                f.write(json.dumps(r) + '\n')
+        print(f'  telemetry log: {args.telem_log} ({len(rows)} samples)')
+        telem_startup_report(rows)
 
 
 def cmd_wait(args):
@@ -660,7 +812,16 @@ def cmd_options(args):
 
 
 def cmd_shell(args):
-    rc, out = ssh(' '.join(args.rest) + '\n', check=False)
+    # ⚠ argparse.REMAINDER KEEPS the `--` separator, so `mister.py shell -- 'echo A; echo B'`
+    # sent `-- echo A; echo B` to bash. `--` is not a command: bash reported "command not
+    # found" on stderr -- which ssh() only surfaces when the call FAILS, and the script's
+    # exit status is that of the LAST command, so it never failed -- and SILENTLY ATE the
+    # first command of every probe. MEASURED: `echo A; echo B` printed only "B", and an
+    # `ls` of a file that existed reported nothing, which reads exactly like a missing file.
+    rest = args.rest
+    if rest and rest[0] == '--':
+        rest = rest[1:]
+    rc, out = ssh(' '.join(rest) + '\n', check=False)
     print(out.rstrip())
     return rc
 
@@ -688,6 +849,11 @@ def main():
     p.add_argument('--delay', type=int, default=2)
     p.add_argument('--timeout', type=int, default=60)
     p.add_argument('--no-wait', action='store_true')
+    p.add_argument('--telem-log', metavar='FILE',
+                   help='log core telemetry from BEFORE the core loads (the startup '
+                        'transient is invisible to a telem --watch started after)')
+    p.add_argument('--telem-seconds', type=int, default=120)
+    p.add_argument('--telem-hz', type=float, default=10.0)
     p.set_defaults(fn=cmd_launch)
 
     p = sub.add_parser('wait')

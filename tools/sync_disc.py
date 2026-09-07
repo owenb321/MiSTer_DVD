@@ -174,8 +174,15 @@ def make_film(args, out, nframes, period):
         enc = subprocess.Popen(
             # No '-' argument: mjpegtools reads stdin by default and treats a
             # bare '-' as an unknown option, dumping its help and exiting.
+            # ⚠ `-b` is a VBR PEAK, not a target: on this synthetic content mpeg2enc
+            # reaches its quality goal at ~1.7 Mbps and never uses the headroom --
+            # MEASURED identical output size for -b 6000 and -b 9000. A disc meant to
+            # over-fill the VBUF the way a real feature does needs `-q` (quantisation
+            # floor): -q 1 forces the finest quantiser on every frame.
             ['mpeg2enc', '-f', '8', '-F', '1', '-p', '-b',
-             str(int(args.bitrate.rstrip('k'))), '-o', m2v],
+             str(int(args.bitrate.rstrip('k')))]
+            + (['-q', str(args.quant)] if args.quant else [])
+            + ['-o', m2v],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL)
         enc.stdin.write(f'YUV4MPEG2 W{W} H{h} F24000:1001 Ip A8:9 C420mpeg2\n'
@@ -201,8 +208,13 @@ def make_film(args, out, nframes, period):
             pass
         if enc.wait() != 0:
             sys.exit('sync_disc: mpeg2enc failed')
-        r = subprocess.run(['mplex', '-f', '8', '-o', out, m2v, ac3],
-                           capture_output=True)
+        # --vbuf: mplex's assumed DECODER buffer (kB; DVD default 232). A larger value
+        # lets the muxer schedule video further AHEAD of its audio -- the "mux
+        # geometry" a real feature has and a tight synthetic mux lacks (§14.9.17).
+        mplex_cmd = ['mplex', '-f', '8']
+        if args.vbuf:
+            mplex_cmd += ['-b', str(args.vbuf)]
+        r = subprocess.run(mplex_cmd + ['-o', out, m2v, ac3], capture_output=True)
         if r.returncode != 0:
             sys.exit('sync_disc: mplex failed\n' + r.stderr.decode()[:400])
 
@@ -285,6 +297,12 @@ def main():
     p.add_argument('--audio', choices=('ac3', 'lpcm', 'mp2'), default='ac3')
     p.add_argument('--period', type=int, help='frames between flashes')
     p.add_argument('--bitrate', default='6000k')
+    p.add_argument('--vbuf', type=int, default=0,
+                   help='mplex -b decoder buffer kB (20..2000; DVD default 232). Larger = '
+                        'video muxed further ahead of its audio')
+    p.add_argument('--quant', type=int, default=0,
+                   help='mpeg2enc -q quantisation floor (1 = finest = highest bitrate); '
+                        '0 = leave VBR to hit its quality target (~1.7 Mbps here)')
     p.add_argument('--load', choices=('hard', 'easy'), default='hard',
                    help="'easy' = nearly static, cheap to decode")
     p.add_argument('--audio-offset-ms', type=float, default=0.0,

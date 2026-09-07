@@ -24,18 +24,18 @@ module vidfeed_cdc (
 
     // write side — ps_demux / clk_sys (27 MHz)
     input        wr_clk,
-    input  [7:0] wr_data,      // ps_vid_byte
+    input  [8:0] wr_data,      // {ps_vid_mark, ps_vid_byte} -- the PTS mark rides with its byte
     input        wr_valid,     // ps_vid_valid
     output       wr_ready,     // -> ps_demux vid_ready (= FIFO not full)
 
     // read side — decoder / clk_dec (54 MHz)
     input        rd_clk,
-    output [7:0] rd_data,      // -> mpeg2video stream_data
+    output [8:0] rd_data,      // -> {mpeg2video stream_mark, stream_data}
     output       rd_valid,     // -> mpeg2video stream_valid (byte consumed this cycle)
     input        rd_ready      // <- ~core_busy
 );
     wire        full, empty, fifo_valid;
-    wire [7:0]  fifo_dout;
+    wire [8:0]  fifo_dout;
 
     assign wr_ready = ~full;
 
@@ -44,7 +44,7 @@ module vidfeed_cdc (
                      S_WAIT = 2'd1,   // pop issued: wait for its data (fifo_valid)
                      S_FULL = 2'd2;   // head holds a byte: present until consumed
     reg [1:0] st;
-    reg [7:0] head;
+    reg [8:0] head;
 
     wire take  = (st == S_FULL) & rd_ready;       // decoder consumes the head byte
     wire rd_en = (st == S_IDLE) & ~empty;         // exactly one pop, only from IDLE
@@ -52,7 +52,7 @@ module vidfeed_cdc (
     always @(posedge rd_clk or negedge rst_n) begin
         if (!rst_n) begin
             st   <= S_IDLE;
-            head <= 8'd0;
+            head <= 9'd0;
         end else begin
             case (st)
             S_IDLE: if (~empty)      st <= S_WAIT;            // rd_en high this cycle
@@ -69,7 +69,7 @@ module vidfeed_cdc (
     // 32-deep is ample for a CDC + the per-byte handshake (upstream ps_stream_fifo
     // and the decoder's vbuf provide the real buffering); keeping it small relieves
     // routing congestion in the dense HPS-bridge region.
-    fifo_dc #(.dta_width(9'd8), .addr_width(9'd5)) u_fifo (
+    fifo_dc #(.dta_width(9'd9), .addr_width(9'd5)) u_fifo (   // 9 = byte + PTS mark (docs/av_sync.md)
         .rst       (rst_n),            // low-active
         .wr_clk    (wr_clk),
         .din       (wr_data),

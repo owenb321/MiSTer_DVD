@@ -49,7 +49,7 @@ module framestore_request(rst, clk,
                   osd_rd_empty, osd_rd_almost_empty, osd_rd_en, osd_rd_valid, osd_rd_addr, osd_rd_dta, osd_wr_almost_full,
                   vbw_rd_empty, vbw_rd_almost_empty, vbw_rd_en, vbw_rd_valid, vbw_rd_dta, vbw_wr_almost_full,
                   vbr_wr_full, vbr_wr_almost_full, vbr_rd_almost_empty,
-                  vb_flush,
+                  vb_flush, vbuf_epoch, vbuf_wr_cnt, vbuf_wr_pulse,
                   mem_req_wr_cmd, mem_req_wr_addr, mem_req_wr_dta, mem_req_wr_en, mem_req_wr_almost_full, 
                   tag_wr_dta, tag_wr_en, tag_wr_almost_full,
                   dbg_vbuf_fill                                     // DVD-FORK DEBUG: VBUF occupancy tap
@@ -102,6 +102,32 @@ module framestore_request(rst, clk,
   input             vbr_rd_almost_empty;
   /* video buffer: flushing circular buffer */
   input             vb_flush;
+
+  /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK").
+   *
+   * vbuf_epoch: a VBUF flush is an instant, but up to 2**MEMTAG_DEPTH (32)
+   * VBUF reads can be in flight in the memory controller when it lands, and
+   * their responses arrive AFTER vbuf_read_fifo has been reset -- so the
+   * decoder used to swallow up to 256 stale bytes of the old stream as the
+   * first words of the new one, and any byte-position bookkeeping that counts
+   * words leaving that fifo was off by exactly those words. Reads now carry
+   * the flush parity in their tag (TAG_VBUF / TAG_VBUF1, alternating on every
+   * vb_flush) and framestore_response only routes the CURRENT epoch's tag into
+   * the read fifo. A read scheduled in the flush cycle itself is already
+   * suppressed by vbuf_empty at the registered issue stage below.
+   *
+   * vbuf_wr_cnt / vbuf_wr_pulse: MONOTONIC count of 64-bit words actually
+   * written to the VBUF since the last vb_flush (unlike vbuf_wr_addr it never
+   * wraps within a title). A word popped from the write fifo just before the
+   * flush and written just after it counts as word 0 -- correctly, since the
+   * new epoch will read it as word 0 too. mpeg2video.v adds the write fifo's
+   * pending words and the packer phase to place a PTS stamp on the exact
+   * byte. 26 bits = 512 MB before wrap; consumers compare modularly. */
+  output reg        vbuf_epoch;
+  output reg [25:0] vbuf_wr_cnt;
+  output            vbuf_wr_pulse;
+  reg               vb_flush_q;
+  /* (logic below, after the state encodings it reads) */
   /*  register file: writing on-screen display */
   input             osd_rd_empty;
   input             osd_rd_almost_empty;
@@ -317,7 +343,7 @@ module framestore_request(rst, clk,
         STATE_IDLE:        tag_wr_dta <= TAG_CTRL;
         STATE_REFRESH:     tag_wr_dta <= TAG_CTRL;
         STATE_DISP:        tag_wr_dta <= TAG_DISP;
-        STATE_VBR:         tag_wr_dta <= TAG_VBUF;
+        STATE_VBR:         tag_wr_dta <= vbuf_epoch ? TAG_VBUF1 : TAG_VBUF;   // DVD-FORK (PTS association): epoch-tagged read
         STATE_FWD:         tag_wr_dta <= TAG_FWD;
         STATE_BWD:         tag_wr_dta <= TAG_BWD;
         STATE_RECON:       tag_wr_dta <= TAG_RECON;
@@ -465,6 +491,24 @@ module framestore_request(rst, clk,
   reg [21:0]next_vbuf_rd_addr;
   reg next_vbuf_full;
   reg next_vbuf_empty;
+
+  /* DVD-FORK (PTS association): see the port comment above */
+  assign vbuf_wr_pulse = (previous == STATE_VBW) && vbw_rd_valid;
+  /* vb_flush is a ~192-cycle LEVEL on hardware (flush_vbuf_eff), so the epoch
+   * flips on its RISING EDGE only -- a per-cycle toggle would flip an even
+   * number of times and end where it started. */
+  always @(posedge clk)
+    if (~rst) vb_flush_q <= 1'b0;
+    else vb_flush_q <= vb_flush;
+  always @(posedge clk)
+    if (~rst) vbuf_epoch <= 1'b0;
+    else if (vb_flush && ~vb_flush_q) vbuf_epoch <= ~vbuf_epoch;
+    else vbuf_epoch <= vbuf_epoch;
+  always @(posedge clk)
+    if (~rst) vbuf_wr_cnt <= 26'd0;
+    else if (vb_flush) vbuf_wr_cnt <= 26'd0;
+    else if (vbuf_wr_pulse) vbuf_wr_cnt <= vbuf_wr_cnt + 26'd1;
+    else vbuf_wr_cnt <= vbuf_wr_cnt;
 
   always @*
     if ((previous == STATE_VBW) && vbw_rd_valid) next_vbuf_wr_addr = (vbuf_wr_addr == VBUF_END) ? VBUF : (vbuf_wr_addr + 22'd1);

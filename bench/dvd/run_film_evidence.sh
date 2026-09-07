@@ -11,7 +11,6 @@
 #      vld's per-picture size match tools/film_evidence_probe.py, and does its
 #      informativeness verdict match the golden model, picture for picture?
 #   2. film_detect_tb   — the detector arithmetic on top of that verdict.
-#   3. cadence_slip_tb  — the cadence-slip corrector must be unaffected.
 #
 # The fixture is cut from a real disc and is NOT committed (bench/dvd/test_vobs/
 # is gitignored). Point DVD_ISO_DIR at an ISO library containing APOLLO_13 and
@@ -50,10 +49,6 @@ iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/film_detect_sim \
     dvd/resample_addrgen.v rtl/mpeg2/mem_addr.v bench/dvd/film_detect_tb.sv
 vvp bench/dvd/film_detect_sim || rc=1
 
-echo "== cadence_slip_tb (corrector unaffected by the gate) =="
-iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/cadence_slip_sim \
-    dvd/resample_addrgen.v rtl/mpeg2/mem_addr.v bench/dvd/cadence_slip_tb.sv
-vvp bench/dvd/cadence_slip_sim || rc=1
 
 [ $rc -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES (rc=$rc) =="
 exit $rc

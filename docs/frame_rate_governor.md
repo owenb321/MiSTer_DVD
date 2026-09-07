@@ -1,5 +1,15 @@
 # Frame-rate governor — design spec (playback-speed fix)
 
+> ## ⛔ SUPERSEDED (2026-09-06, `docs/stc_freerun.md`)
+>
+> The refresh-counting deadline this document specifies (`SHOW_N`, `cur_show`,
+> `show_next`, `refresh_cnt`, the film24 one-refresh override, the cadence-slip
+> corrector) is DELETED. The display is scheduled by each picture's own PTS
+> against a free-running STC (`dvd/disp_sched.sv`); `resample_addrgen` keeps
+> only the persistence hold, the pickup, the starvation late and the field-parity
+> corrector. Kept as the record of how playback speed was first fixed and of the
+> field-path ledger lessons (still relevant to `frame_drop_ctl`'s drop cost).
+
 > **Related (2026-06-28):** audio is now genlocked to the video presentation timeline
 > by **`docs/av_sync.md`** (`dvd/av_sync.sv`). The governor still paces video to the
 > display refresh; av_sync builds an STC from that same refresh cadence (anchored on

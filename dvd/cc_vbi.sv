@@ -39,6 +39,8 @@ module cc_vbi (
     input  wire        dec_pair_valid,
     input  wire [15:0] dec_pair,
     input  wire        dec_pair_field,
+    input  wire        dec_credit_valid,   // display pickup: pairs owed (dvd/disp_sched.sv)
+    input  wire [2:0]  dec_credit,
 
     input  wire        enable,          // fields raster up and captions wanted
     input  wire        test,            // paint on visible line 20
@@ -67,6 +69,8 @@ cc_line21 cc (
     .dec_pair_valid (dec_pair_valid),
     .dec_pair       (dec_pair),
     .dec_pair_field (dec_pair_field),
+    .dec_credit_valid (dec_credit_valid),
+    .dec_credit     (dec_credit),
     .enable         (enable & ~pal),
     .flush          (flush),
     .hpos           ({1'b0, h_pos[11:1]}),          // 0..857

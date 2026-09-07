@@ -98,7 +98,8 @@ module vld_mpeg1_tb;
     .mvec_wr_almost_full(1'b0),
     .motcomp_busy(motcomp_busy),
     .getbits(getbits), .signbit(signbit),
-    .getbits_valid(getbits_valid), .vld_en(vld_en)
+    .getbits_valid(getbits_valid), .vld_en(vld_en),
+    .pos_clr(1'b0), .bitpos()
   );
 
   reg  drop_pic_req = 1'b0;
@@ -144,7 +145,8 @@ module vld_mpeg1_tb;
     .drop_pic_field(drop_pic_field),
     .flags_commit(flags_commit),
     .mpeg1(mpeg1_flag),
-    .vbuf_flush(1'b0)   // DVD-FORK FIX (seek realign, issue #45): not exercised here
+    .vbuf_flush(1'b0),   // DVD-FORK FIX (seek realign, issue #45): not exercised here
+    .bitpos(32'd0), .pic_hdr_pulse(), .pic_hdr_bitpos(), .pic_hdr_upd(), .pic_hdr_second()
   );
 
   // ---- REAL motcomp_picbuf + the motcomp.v freeze interlock ----

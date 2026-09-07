@@ -138,7 +138,8 @@ module framestore(rst, clk, mem_clk,
                   mem_res_wr_dta, mem_res_wr_en, mem_res_wr_almost_full, mem_res_wr_full, mem_res_wr_overflow,
                   mem_req_wr_almost_full, mem_req_wr_full, mem_req_wr_overflow, 
 		  tag_wr_almost_full, tag_wr_full, tag_wr_overflow,
-                  dbg_vbuf_fill                                     // DVD-FORK DEBUG: VBUF occupancy tap
+                  dbg_vbuf_fill,
+                  vbuf_wr_cnt, vbuf_wr_pulse                        // DVD-FORK (PTS association): monotonic VBUF write position                                     // DVD-FORK DEBUG: VBUF occupancy tap
                   );
 
   input            rst;
@@ -147,6 +148,9 @@ module framestore(rst, clk, mem_clk,
   /* motion compensation: reading forward reference frame */
   input             fwd_rd_addr_empty;
   output      [7:0] dbg_vbuf_fill;   // DVD-FORK DEBUG: VBUF occupancy (0xFF = full), from framestore_request
+  output     [25:0] vbuf_wr_cnt;      // DVD-FORK (PTS association): words written since the flush
+  output            vbuf_wr_pulse;    // DVD-FORK (PTS association): one per word written
+  wire              vbuf_epoch;       // DVD-FORK (PTS association): flush parity, request -> response
   output            fwd_rd_addr_en;
   input             fwd_rd_addr_valid;
   input       [21:0]fwd_rd_addr;
@@ -330,6 +334,9 @@ module framestore(rst, clk, mem_clk,
     .vbr_wr_almost_full(vbr_wr_almost_full),
     .vbr_rd_almost_empty(vbr_rd_almost_empty),
     .vb_flush(vb_flush),
+    .vbuf_epoch(vbuf_epoch),                          // DVD-FORK (PTS association)
+    .vbuf_wr_cnt(vbuf_wr_cnt),
+    .vbuf_wr_pulse(vbuf_wr_pulse),
     .mem_req_wr_cmd(mem_req_wr_cmd),
     .mem_req_wr_addr(mem_req_wr_addr),
     .mem_req_wr_dta(mem_req_wr_dta),
@@ -370,6 +377,7 @@ module framestore(rst, clk, mem_clk,
     .mem_res_rd_empty(mem_res_rd_empty),
     .mem_res_rd_valid(mem_res_rd_valid),
     .tag_rd_dta(tag_rd_dta),
+    .vbuf_epoch(vbuf_epoch),                          // DVD-FORK (PTS association)
     .tag_rd_en(tag_rd_en),
     .tag_rd_empty(tag_rd_empty),
     .tag_rd_valid(tag_rd_valid)

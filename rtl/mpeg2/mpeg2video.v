@@ -51,6 +51,8 @@
 module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              rst,                                                                                                                 // clocked with clk
              stream_data, stream_valid,                                                                                           // clocked with clk
+             stream_mark, pts_in, pts_in_valid,                                                                                  // DVD-FORK (PTS association): PES mark + PTS in
+             stc_tick, sched_en, half_scan, stc, stc_anchored, disp_anchored, anchor_req, anchor_disc, cc_credit_valid, cc_credit, anchor_delta, disp_lag, disp_lag_valid, sched_dbg_flags, sched_dbg_dur,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
 	     reg_addr, reg_wr_en, reg_dta_in, reg_rd_en, reg_dta_out,                                                             // clocked with clk
              busy, error, interrupt, watchdog_rst,                                                                                // clocked with clk
              r, g, b, y, u, v, pixel_en, h_sync, v_sync, c_sync, h_pos, v_pos,                                                     // clocked with dot_clk
@@ -68,7 +70,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              frame_drop_en,                                       // DVD-FORK (frame-drop O[12]): 1=drop B-frames when behind
              dbg_frames_late, dbg_frames_dropped,                 // DVD-FORK (frame-drop O[12]): overlay counters
              dbg_pickups,                                         // DVD-FORK (telemetry): content frames picked up for display
-             dbg_vid_err,                                         // DVD-FORK (vid_err instrument): video content vs wall, refreshes
              dbg_drop_costs,                                      // DVD-FORK (round 9): drop acks split by the debit actually applied
              dbg_vbuf_fill,                                        // DVD-FORK DEBUG: VBUF occupancy (slideshow-decay diagnosis)
              video_live,                                           // DVD-FORK (av_sync STC reference): sticky "first frame displayed"
@@ -81,7 +82,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              disp_vscale_en,                                       // DVD-FORK (CRT anamorphic letterbox AA): enable downstream disp_vscale 2-tap blend
              disp_hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
              disp_hfill_en,                                        // DVD-FORK FIX (SIF analog fill): stretch sub-D1 lines to the 720 raster
-             menu_ff,                                              // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
              film24,                                               // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
              film_det_ntsc, film_det_pal                           // DVD-FORK (Film 24p auto-detect): cadence verdicts (up to emu)
 	     );
@@ -96,6 +96,36 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* MPEG stream input */
   input       [7:0]stream_data;             // packetized elementary stream input
   input            stream_valid;            // stream_data valid
+  /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"):
+   * stream_mark rides with the first payload byte of a PTS-bearing video PES;
+   * pts_in is that PTS, already crossed into clk (emu pts_cdc). They may arrive
+   * in either order (the byte path stalls on busy, the PTS path does not), so a
+   * 4-deep in-order queue pairs them before the stamp is pushed to pts_assoc.
+   * disp_pts pulses with the tag of each picture the display picks up. */
+  input            stream_mark;
+  input      [32:0]pts_in;
+  input            pts_in_valid;
+  /* DVD-FORK (PTS scheduling, docs/stc_freerun.md): dvd/disp_sched.sv is hosted
+   * here -- it needs the picture tag at picbuf's output, the vld's skip pulses,
+   * frame_rate_code, video_live and the flush, all of which are local. stc_tick
+   * is the 90 kHz pulse (clk_sys/300, crossed by emu); half_scan is half the
+   * raster's image-scan period in ticks; the outputs are mirrored into clk_sys by
+   * emu for every consumer of the clock. */
+  input            stc_tick;
+  input            sched_en;
+  input      [15:0]half_scan;
+  output     [32:0]stc;
+  output           stc_anchored;
+  output           cc_credit_valid; // DVD-FORK (captions on the STC): one pulse per pickup
+  output     [2:0] cc_credit;       // ... carrying that picture's field count = pairs owed
+  output           anchor_disc;     // DVD-FORK: that re-anchor was a CONTENT PTS JUMP (cell/menu/PGC), not lateness
+  output           disp_anchored;   // DVD-FORK: the clock is on the DISPLAY timeline (a tagged picture anchored it), not the parse front
+  output           anchor_req;
+  output signed [33:0]anchor_delta;
+  output signed [33:0]disp_lag;
+  output           disp_lag_valid;
+  output     [7:0] sched_dbg_flags;      // {frame_rate_code, ps, pf, tff, rff} at the last pickup
+  output    [15:0] sched_dbg_dur;        // the duration it applied, ticks
 
   /* RGB output */
   output      [7:0]r;                       // red component
@@ -151,15 +181,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * itself the thing under suspicion (see the film24 leak note at the
    * frame_drop_ctl instance below). */
   output    [15:0] dbg_pickups;
-  /* DVD-FORK (vid_err instrument, 2026-07-03): wall refreshes minus content
-   * duration presented (pickups' show + dropped frames' durations), signed,
-   * 1 unit = 1 display refresh (16.7 ms NTSC). Positive = video LATE (slipped
-   * behind real time); NEGATIVE = video content ran AHEAD (the lip-sync
-   * "audio delayed" direction). The last unmeasured lip-sync leg: audio is
-   * instrumented five ways and provably schedule-locked while the crash step
-   * persists, so this row decides video-side. Steady state reads a small
-   * constant (display pipeline offset) — the READ is the step/slope. */
-  output    [15:0] dbg_vid_err;
   /* DVD-FORK (round 9, 2026-07-04 — the drop-debit leak discriminator): drop
    * acks split by the DEBIT ACTUALLY APPLIED, {debited-3 [15:8], debited-2
    * [7:0]}, 8-bit saturating. Round-8 measurement (rec5.mkv vs the source
@@ -250,11 +271,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * Quasi-static (settles at load/flush boundaries). 0 => bit-identical legacy path. */
   input            disp_hfill_en;
 
-  /* DVD-FORK (menu VBUF-lag §5): fast-drain the display through a deeply-buffered menu
-   * transition (governor picks up a new frame every refresh) so the settled still is
-   * reached promptly without cutting the transition. From emu (2-FF into this clock);
-   * menu-only, so title A/V sync is untouched. */
-  input            menu_ff;
   /* DVD-FORK (Film 24p Out, issue #124): high => the core raster is the 23.976 Hz film
    * rate, so the governor advances one decoded frame per refresh (no in-core 3:2; ascal
    * does the pulldown to 59.94 Hz HDMI). From emu (2-FF into this clock). */
@@ -443,6 +459,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire              pic_informative;    // DVD-FORK (film evidence gate): this picture carried real evidence
   wire              informative_commit; // DVD-FORK (film evidence gate): pic_informative valid for the current slot
   wire              output_informative; // DVD-FORK (film evidence gate): display-order verdict, from picbuf
+  wire        [32:0]output_pts;         // DVD-FORK (PTS association): tag of the picture at picbuf's output
+  wire              output_pts_valid;
+  wire              output_pts_2nd;
   /* DVD-FORK (line-21 CC): straight passthrough of the VLD's user_data snoop to
    * the top level. Sniffed in the clk_dec domain and crossed to clk_sys by the
    * inserter's own fifo_dc — see dvd/cc_line21.sv. */
@@ -593,51 +612,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
 
   /* DVD-FORK (frame-drop governor O[19]): resample governor <-> frame_drop_ctl <-> vld */
   wire       frame_late;                     // resample: decode deadline miss (1-cycle pulse)
-  wire [3:0] gov_cur_show;                   // resample: on-display frame duration (telemetry; no longer the drop debit)
-  wire       gov_pickup_tick;                // resample: frame entered display (vid_err instrument)
-  wire [3:0] gov_pickup_show;                // its display duration (refreshes)
-  wire       gov_refresh_tick;               // one pulse per displayed refresh (video_live-gated)
-
-  /* DVD-FORK (vid_err instrument): content vs wall accounting. Same clock as
-   * the VLD and the governor (see frame_drop_ctl comment) — no CDC. Content
-   * credits every picture that PASSES the display point or is DROPPED at the
-   * VLD (a dropped frame's content is presented in zero refreshes); wall
-   * counts video_live-gated display refreshes. */
-  reg [16:0] vid_wall_refr;
-  reg [16:0] vid_content_refr;
-  /* dropped picture's true display duration in refreshes (film24: always 1) */
-  /* field-pair drop (2026-08-05): a dropped FIELD frees 1 refresh (its pair
-   * acks separately), so credit/cost 1 per field ack — a pair nets exactly 2. */
-  wire [16:0] drop_credit = film24 ? 17'd1 :
-                            (drop_pic_field ? 17'd1 : (drop_pic_rff ? 17'd3 : 17'd2));
-  always @(posedge clk)
-    if (~sync_rst) begin
-      vid_wall_refr    <= 17'd0;
-      vid_content_refr <= 17'd0;
-    end else begin
-      if (gov_refresh_tick)
-        vid_wall_refr <= vid_wall_refr + 17'd1;
-      /* DVD-FORK FIX (480i, 2026-07-05): drop credit is the dropped picture's own
-       * duration IN EITHER DISPLAY MODE — an rff frame is 3 refreshes on the
-       * interlaced field path too (3 field scans), so the `~interlaced &&` gate is
-       * dropped (matches frame_drop_ctl's drop_cost below). Without it, film in
-       * 480i under-credited content 1 refresh per rff event and vid_err read a
-       * phantom climb on top of the real pair-repeat slip. */
-      /* DVD-FORK FIX (2026-08-02, Film 24p): same film24 correction as drop_cost
-       * below — a dropped picture occupies ONE refresh in film24, so crediting
-       * rff?3:2 over-credits content by 1-2 per drop. That made vid_err read video
-       * AHEAD in 24p while it was really falling behind, i.e. the instrument was
-       * MASKING the drift it exists to detect. */
-      case ({gov_pickup_tick, drop_pic_ack})
-        2'b10: vid_content_refr <= vid_content_refr + {13'd0, gov_pickup_show};
-        2'b01: vid_content_refr <= vid_content_refr + drop_credit;
-        2'b11: vid_content_refr <= vid_content_refr + {13'd0, gov_pickup_show}
-                                                    + drop_credit;
-        default: ;
-      endcase
-    end
-  wire [16:0] vid_err_w = vid_wall_refr - vid_content_refr;
-  assign dbg_vid_err = vid_err_w[15:0];
+  wire       gov_pickup_tick;                // resample: one pulse per pickup -> disp_sched
   wire       drop_pic_req;                   // frame_drop_ctl -> vld: drop next B-frame
   wire       drop_pic_ack;                   // vld -> frame_drop_ctl: a B-frame was dropped
   wire       drop_pic_rff;                   // vld: the DROPPED picture's repeat_first_field (valid with ack)
@@ -886,7 +861,107 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .vid_in(stream_data),                                    // program stream input
     .vid_in_wr_en(stream_valid),                             // program stream input
     .vid_out(vbw_wr_dta),                                    // to vbuf_write_fifo
-    .vid_out_wr_en(vbw_wr_en)                                // to vbuf_write_fifo
+    .vid_out_wr_en(vbw_wr_en),                               // to vbuf_write_fifo
+    .phase(vbw_phase)                                        // DVD-FORK (PTS association): packer byte phase
+    );
+
+  /* DVD-FORK (PTS association): the exact byte position the NEXT stream byte
+   * will occupy in the VBUF, in the vld's parse-position coordinate. The
+   * arithmetic lives in dvd/vbuf_pos.sv so bench/dvd/pts_chain_tb.sv exercises
+   * the same module this core builds. */
+  wire  [7:0] vbw_phase;
+  wire [25:0] vbuf_wr_cnt;
+  wire        vbuf_wr_pulse;
+  wire [28:0] stream_pos;
+  vbuf_pos vbuf_pos (
+    .clk(clk),
+    .vbuf_rst(vbuf_rst),
+    .vbw_wr_en(vbw_wr_en),
+    .vbuf_wr_pulse(vbuf_wr_pulse),
+    .vbuf_wr_cnt(vbuf_wr_cnt),
+    .phase(vbw_phase),
+    .stream_pos(stream_pos)
+    );
+
+  /* DVD-FORK (PTS association): pair each PTS with its mark. Marks arrive
+   * through the byte path (stream_valid && stream_mark) at the packer, PTS
+   * values through pts_cdc; whichever comes second completes a stamp. Two
+   * small in-order queues; both are reset with the write fifo's flush reset so
+   * a stale half from before a seek can never pair with a fresh one after it. */
+  reg  [32:0] ptsq_pts [0:3];
+  reg  [28:0] mrkq_pos [0:3];
+  reg   [2:0] ptsq_cnt, mrkq_cnt;
+  wire        mark_now  = stream_valid && stream_mark;
+  wire        pair_now  = (ptsq_cnt != 3'd0) && (mrkq_cnt != 3'd0);
+  reg         stamp_valid;
+  reg  [32:0] stamp_pts;
+  reg  [28:0] stamp_pos;
+  integer     pq;
+  always @(posedge clk)
+    if (~vbuf_rst) begin
+      ptsq_cnt <= 3'd0; mrkq_cnt <= 3'd0; stamp_valid <= 1'b0;
+      stamp_pts <= 33'd0; stamp_pos <= 29'd0;
+    end else begin
+      stamp_valid <= pair_now;
+      if (pair_now) begin
+        stamp_pts <= ptsq_pts[0];
+        stamp_pos <= mrkq_pos[0];
+      end
+      // PTS queue: shift on pair, land the new one after the shift
+      if (pair_now)
+        for (pq = 0; pq < 3; pq = pq + 1) ptsq_pts[pq] <= ptsq_pts[pq+1];
+      if (pts_in_valid && (ptsq_cnt != 3'd4))
+        for (pq = 0; pq < 4; pq = pq + 1)
+          if (pq == (pair_now ? ptsq_cnt - 3'd1 : ptsq_cnt)) ptsq_pts[pq] <= pts_in;
+      case ({pts_in_valid && (ptsq_cnt != 3'd4), pair_now})
+        2'b10:   ptsq_cnt <= ptsq_cnt + 3'd1;
+        2'b01:   ptsq_cnt <= ptsq_cnt - 3'd1;
+        default: ptsq_cnt <= ptsq_cnt;
+      endcase
+      // mark queue
+      if (pair_now)
+        for (pq = 0; pq < 3; pq = pq + 1) mrkq_pos[pq] <= mrkq_pos[pq+1];
+      if (mark_now && (mrkq_cnt != 3'd4))
+        for (pq = 0; pq < 4; pq = pq + 1)
+          if (pq == (pair_now ? mrkq_cnt - 3'd1 : mrkq_cnt)) mrkq_pos[pq] <= stream_pos;
+      case ({mark_now && (mrkq_cnt != 3'd4), pair_now})
+        2'b10:   mrkq_cnt <= mrkq_cnt + 3'd1;
+        2'b01:   mrkq_cnt <= mrkq_cnt - 3'd1;
+        default: mrkq_cnt <= mrkq_cnt;
+      endcase
+    end
+
+  /* DVD-FORK (PTS association): the picture header's start-code position in
+   * bytes (the vld saw the header 32 bits past it), registered off the vld's
+   * latched value so nothing new hangs off the header state itself. */
+  reg  [23:0] hdr_pos;
+  reg         hdr_pulse_r, hdr_second_r;
+  wire [31:0] hdr_sc_bits = pic_hdr_bitpos - 32'd32;
+  always @(posedge clk)
+    if (~sync_rst) begin hdr_pulse_r <= 1'b0; hdr_pos <= 24'd0; hdr_second_r <= 1'b0; end
+    else begin
+      hdr_pulse_r  <= pic_hdr_pulse;
+      hdr_pos      <= hdr_sc_bits[26:3];
+      hdr_second_r <= pic_hdr_second;
+    end
+
+  wire [32:0] vld_pic_pts;
+  wire        vld_pic_pts_valid, vld_pic_pts_2nd, pts_commit;
+  pts_assoc #(.DEPTH(16), .PW(24), .MIN_GAP_W(16)) pts_assoc (
+    .clk(clk),
+    .rst_n(sync_rst),
+    .flush(flush_vbuf_eff),
+    .stamp_valid(stamp_valid),
+    .stamp_pts(stamp_pts),
+    .stamp_pos(stamp_pos[23:0]),
+    .hdr_pulse(hdr_pulse_r),
+    .hdr_pos(hdr_pos),
+    .hdr_second(hdr_second_r),
+    .tag_valid(vld_pic_pts_valid),
+    .tag_pts(vld_pic_pts),
+    .tag_second(vld_pic_pts_2nd),
+    .tag_commit(pts_commit),
+    .dbg_ovf()
     );
 
   /* vbuf write fifo */
@@ -934,6 +1009,12 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     );           
 
   /* read elementary stream from circular buffer, one bitfield at a time */
+  /* DVD-FORK (PTS association): getbits parse position -> vld -> pts_assoc */
+  wire [31:0] vld_bitpos;
+  wire        pic_hdr_pulse, pic_hdr_upd, pic_hdr_second;
+  wire [31:0] pic_hdr_bitpos;
+  wire        skip_ack, skip_rff, skip_field, skip_tff, skip_pf;
+
   getbits_fifo getbits_fifo (
     .clk(clk), 
     .clk_en(1'b1), 
@@ -950,7 +1031,12 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .getbits(getbits),                                       // to vld
     .signbit(signbit),                                       // to vld
     .getbits_valid(getbits_valid),                           // to probe
-    .vld_en(vld_en)                                          // to vld
+    .vld_en(vld_en),                                         // to vld
+    /* DVD-FORK (PTS association): parse position, counted from the same flush
+     * that resets the VBUF read fifo (vbuf_rst is active-low), so it and the
+     * write-side byte stamp share an origin. */
+    .pos_clr(~vbuf_rst),
+    .bitpos(vld_bitpos)                                      // to vld
     );
 
   /* variable length decoder */
@@ -1042,7 +1128,18 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
      * pictures instead of displaying them motion-compensated against the scene
      * we just left. Already clk_dec and already 2-FF synced upstream
      * (dvd/emu.sv vbuf_flush_dec) — no new CDC. See docs/seek_realign.md. */
-    .vbuf_flush(flush_vbuf_eff)
+    .vbuf_flush(flush_vbuf_eff),
+    /* DVD-FORK (PTS association): where each picture header was parsed */
+    .bitpos(vld_bitpos),                                     // from getbits
+    .pic_hdr_pulse(pic_hdr_pulse),
+    .pic_hdr_bitpos(pic_hdr_bitpos),
+    .pic_hdr_upd(pic_hdr_upd),
+    .pic_hdr_second(pic_hdr_second),
+    .skip_ack(skip_ack),                                     // DVD-FORK (PTS scheduling): any-reason drop, for the display scheduler
+    .skip_rff(skip_rff),
+    .skip_field(skip_field),
+    .skip_tff(skip_tff),
+    .skip_pf(skip_pf)
     );
 
   /* DVD-FORK (frame-drop governor, O[19]): catch-up credit controller. Banks a "drop
@@ -1074,7 +1171,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .clk_en(1'b1),
     .rst(sync_rst),
     .enable(frame_drop_en),
-    .frame_late(frame_late),
+    .frame_late(frame_late | sched_catchup_late),   // DVD-FORK (PTS scheduling): + the scheduler's catch-up request
     .drop_ack(drop_pic_ack),
     // DVD-FORK (2026-07-03, Shea-Stadium over-advance fix): debit the DROPPED
     // frame's own would-be display duration — rff ? 3 : 2, the same formula the
@@ -1297,6 +1394,13 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .pic_informative(pic_informative),                       // DVD-FORK (film evidence gate): from vld
     .informative_commit(informative_commit),                 // DVD-FORK (film evidence gate): from vld
     .output_informative(output_informative),                 // DVD-FORK (film evidence gate): to resample
+    .vld_pic_pts(vld_pic_pts),                               // DVD-FORK (PTS association): from pts_assoc
+    .vld_pic_pts_valid(vld_pic_pts_valid),
+    .vld_pic_pts_2nd(vld_pic_pts_2nd),
+    .pts_commit(pts_commit),
+    .output_pts(output_pts),                                 // DVD-FORK (PTS association): to resample
+    .output_pts_valid(output_pts_valid),
+    .output_pts_2nd(output_pts_2nd),
     .progressive_sequence(progressive_sequence),             // from vld
     .progressive_frame(progressive_frame),                   // from vld
     .top_field_first(top_field_first),                       // from vld
@@ -1400,6 +1504,54 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     );
 
   /* Chroma resampling */
+  /* DVD-FORK (PTS scheduling, docs/stc_freerun.md): the display scheduler and
+   * the free-running STC. Reset by the VBUF flush (a seek/mount), never by the
+   * keep_vbuf menu hop's pipe reset -- see the module header. */
+  wire        sched_due, sched_next_due, sched_catchup_late;
+  disp_sched disp_sched (
+    .clk(clk),
+    .rst_n(sync_rst),
+    .flush(flush_vbuf_eff),
+    .sched_en(sched_en),
+    .tick(stc_tick),
+    .video_live(video_live),
+    .pause(pause),
+    .prov_pts(pts_in),
+    .prov_valid(pts_in_valid),
+    .pic_valid(output_frame_valid),
+    .pic_pts_valid(output_pts_valid),
+    .pic_pts(output_pts),
+    .pic_pts_2nd(output_pts_2nd),
+    .pic_ps(output_progressive_sequence),
+    .pic_pf(output_progressive_frame),
+    .pic_tff(output_top_field_first),
+    .pic_rff(output_repeat_first_field),
+    .frame_rate_code(frame_rate_code),
+    .pickup(gov_pickup_tick),
+    .skip_ack(skip_ack),
+    .skip_field(skip_field),
+    .skip_ps(progressive_sequence),
+    .skip_pf(skip_pf),
+    .skip_tff(skip_tff),
+    .skip_rff(skip_rff),
+    .half_scan(half_scan),
+    .pic_due(sched_due),
+    .next_due(sched_next_due),
+    .stc(stc),
+    .anchored(stc_anchored),
+    .disp_anchored(disp_anchored),
+    .anchor_req(anchor_req),
+    .anchor_disc(anchor_disc),
+    .cc_credit_valid(cc_credit_valid),
+    .cc_credit(cc_credit),
+    .anchor_delta(anchor_delta),
+    .disp_lag_valid(disp_lag_valid),
+    .disp_lag(disp_lag),
+    .dbg_flags(sched_dbg_flags),
+    .dbg_dur(sched_dbg_dur),
+    .catchup_late(sched_catchup_late)
+    );
+
   resample resample (
     .clk(clk), 
     .rst(sync_rst), 
@@ -1411,6 +1563,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .progressive_sequence(output_progressive_sequence),      // from motcomp_picbuf
     .progressive_frame(output_progressive_frame),            // from motcomp_picbuf
     .informative(output_informative),                        // DVD-FORK (film evidence gate): from motcomp_picbuf
+    .output_pts(output_pts),                                 // DVD-FORK (PTS association): from motcomp_picbuf
+    .output_pts_valid(output_pts_valid),
+    .output_pts_2nd(output_pts_2nd),
     .top_field_first(output_top_field_first),                // from motcomp_picbuf
     .repeat_first_field(output_repeat_first_field),          // from motcomp_picbuf
     .mb_width(mb_width),                                     // from vld
@@ -1444,17 +1599,15 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .video_live(video_live),                                 // DVD-FORK (av_sync STC reference): to emu -> av_sync
     .pickup_hold(pickup_hold),                               // DVD-FORK (STD mux-lead hold): from emu (2-FF, clk_sys origin)
     .pause(pause),                                           // DVD-FORK (gamepad transport): freeze frame while paused
-    .cur_show_out(gov_cur_show),                             // DVD-FORK (film-aware drop reclaim): to frame_drop_ctl
-    .pickup_tick(gov_pickup_tick),                           // DVD-FORK (vid_err instrument)
-    .pickup_show(gov_pickup_show),
-    .refresh_tick_dbg(gov_refresh_tick),
+                             // DVD-FORK (film-aware drop reclaim): to frame_drop_ctl
+    .pickup_tick(gov_pickup_tick),                           // DVD-FORK (PTS scheduling): to disp_sched
+    .sched_due(sched_due),                                   // DVD-FORK (PTS scheduling): from disp_sched
+    .sched_next_due(sched_next_due),                           // DVD-FORK (vid_err instrument)
     .film_det_ntsc(film_det_ntsc),                           // DVD-FORK (Film 24p auto-detect)
     .film_det_pal(film_det_pal),
     .raster_par_err(raster_par_err),                         // DVD-FORK (field-parity corrector): mixer verdict, synced
     .vscale_mode(disp_vscale_mode),                          // DVD-FORK (CRT anamorphic vscale)
-    .hcrop_en(disp_hcrop_en),                                // DVD-FORK (CRT anamorphic horizontal crop)
-    .menu_ff(menu_ff),                                       // DVD-FORK (menu VBUF-lag §5): fast-drain a deeply-buffered menu
-    .film24(film24)                                          // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
+    .hcrop_en(disp_hcrop_en)                                // DVD-FORK (CRT anamorphic horizontal crop)
     );
 
   /* DVD-FORK (CRT anamorphic Letterbox AA): vertical 2-tap downscale stage (480->360 /
@@ -1849,7 +2002,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .tag_wr_almost_full(tag_wr_almost_full),
     .tag_wr_full(tag_wr_full),
     .tag_wr_overflow(tag_wr_overflow),
-    .dbg_vbuf_fill(dbg_vbuf_fill)                     // DVD-FORK DEBUG: VBUF occupancy tap
+    .dbg_vbuf_fill(dbg_vbuf_fill),                    // DVD-FORK DEBUG: VBUF occupancy tap
+    .vbuf_wr_cnt(vbuf_wr_cnt),                        // DVD-FORK (PTS association): words written since the flush
+    .vbuf_wr_pulse(vbuf_wr_pulse)
     );
 
   /*

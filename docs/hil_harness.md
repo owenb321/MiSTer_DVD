@@ -36,7 +36,7 @@ Four stock mechanisms, all verified on hardware before any code was written:
 |---|---|
 | **`load_core` an `.mgl`** | `/dev/MiSTer_cmd` is a FIFO Main polls (`input.cpp:5140`, dispatcher `:6228`). `load_core` accepts a `.mgl` (`user_io.cpp:1518`), which loads a core **and** mounts media in one command. |
 | **`screenshot`** | The same FIFO writes a PNG of the **core's raw raster**, read from ascal's *input* VBUF (`scaler.h:31`, `sys_top.v:680`). A name ending in `.png` is used verbatim under `screenshots/` (`file_io.cpp:885`) — a deterministic path. |
-| **`config/DVD_v2.CFG`** | The core's saved settings are a raw 16-byte dump of Main's 128-bit `cur_status` (`user_io.cpp:600`), loaded at core init *before* reset is released, and written only by two explicit menu actions (`menu.cpp:3058`, `:5789`). So the harness owns the file, and writing it sets any OSD option for the next launch. |
+| **`config/DVD_v3.CFG`** | The core's saved settings are a raw 16-byte dump of Main's 128-bit `cur_status` (`user_io.cpp:600`), loaded at core init *before* reset is released, and written only by two explicit menu actions (`menu.cpp:3058`, `:5789`). So the harness owns the file, and writing it sets any OSD option for the next launch. |
 | **uinput** | Main enumerates new `/dev/input` devices via inotify (`input.cpp:5164`), skipping only its own, named `"MiSTer virtual input"` (`:41`, `:5207`). Classification is purely `ev->code < 256` (`:3601`) → `user_io_kbd()` (`:3894`) → `ps2_key` → `dvd/kbd_map.sv`. HDMI-CEC already uses this exact non-HID route (`hdmi_cec.cpp:331`). |
 
 ## Facts that will bite, and did
@@ -71,7 +71,9 @@ it.** `killall MiSTer` is therefore NOT a recovery; it needs a reboot.
 `_Other/`, so a bare `DVD` selects a `MARGINAL` build from weeks ago. The
 harness deploys under the fixed name `DVD_hil.rbf` and names it exactly. Free,
 because the core name comes from `CONF_STR[0]`, not the filename — it is still
-`DVD` and still uses `DVD_v2.CFG`.
+`DVD` and still uses the versioned CFG (`DVD_v3.CFG` today -- `tools/mister.py` READS
+the `"v,N"` line out of `dvd/emu.sv` rather than hardcoding it, because a stale constant
+there writes a file the core does not read and every `--opt` silently does nothing).
 
 **★ One command per FIFO write.** Main does a single `read()` then a single
 if/else-if chain (`input.cpp:6230`); a second command in the same write is
@@ -336,7 +338,7 @@ older `MiSTer_DVDcss_hil_*` that are neither the target nor running, since
 `/media/fat` is nearly full.
 
 `restore` puts `main=MiSTer_DVDcss` back, stops the key daemon and removes the
-harness core, MGL and spare Mains. It does NOT revert `config/DVD_v2.CFG`, which
+harness core, MGL and spare Mains. It does NOT revert `config/DVD_v3.CFG`, which
 still holds whatever options the harness last set, and the running Main stays
 until the next core load.
 

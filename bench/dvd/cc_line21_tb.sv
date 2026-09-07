@@ -43,6 +43,9 @@ module cc_line21_tb;
   // ---- synthetic raster -----------------------------------------------------
   reg [11:0] hpos = 0;
   reg        field1 = 1;
+  reg        credits_off = 1'b0;   // [8]: model a display that produces nothing
+  reg        dec_credit_valid = 1'b0;
+  reg  [2:0] dec_credit = 3'd0;
   reg        cc_line = 0;
   reg        enable = 1, flush = 0;
 
@@ -76,6 +79,7 @@ module cc_line21_tb;
     .dec_clk(dec_clk), .dec_pair_valid(dec_pair_valid),
     .dec_pair(dec_pair), .dec_pair_field(dec_pair_field),
     .enable(enable), .flush(flush),
+    .dec_credit_valid(dec_credit_valid), .dec_credit(dec_credit),
     .hpos(hpos), .cc_line(cc_line), .field1(field1),
     .level(level), .level_en(level_en), .active(active)
   );
@@ -98,9 +102,26 @@ module cc_line21_tb;
     end
   endtask
 
+  // ★ The DISPLAY grants a caption credit per picture, one pair per field, so the
+  // bench models one credit of 2 fields per FRAME (on field 1). Without this the
+  // DUT correctly refuses to pop -- captions now drain on the display's clock, not
+  // the raster's, and a bench that does not display anything is a bench with
+  // nothing to caption.
+  task grant_credit(input [2:0] fields);
+    begin
+      // ⚠ dec_clk, not clk. The credit is captured in the PRODUCER domain (same as
+      // the pairs), and dec_clk here is a separate, slower clock -- a pulse driven
+      // on clk can miss its edge entirely. Measured as cr_pulses=0 with every pop
+      // blocked, which looked exactly like a broken DUT.
+      @(posedge dec_clk); dec_credit <= fields; dec_credit_valid <= 1'b1;
+      @(posedge dec_clk); dec_credit_valid <= 1'b0;
+    end
+  endtask
+
   // Run one field: assert cc_line for a whole line, then a few idle lines.
   task run_field(input fld);
     begin
+      if (fld && !credits_off) grant_credit(3'd2);      // a frame's worth, at its first field
       field1 = fld;
       @(negedge hpos[0]);
       while (hpos != 12'd0) @(posedge clk);
@@ -243,6 +264,33 @@ module cc_line21_tb;
     for (i = 0; i < HLEN; i = i + 1) if (capv[i]) n_on = n_on + 1;
     check(n_on == 0, "[4] flush did not drop the caption backlog");
     if (errors == 0) $display("PASS [4] flush drops the backlog");
+
+    // ---- [8] THE DRAIN IS PACED BY THE DISPLAY, NOT THE RASTER ---------------
+    // The pairs for a whole GOP arrive as ONE burst at the GOP header. Draining
+    // them on raster fields matches the rate but leaves the PHASE at whatever the
+    // queue's occupancy happens to be -- about a GOP, and never re-aligned. So a
+    // queued pair must NOT go out on a raster field the display did not produce a
+    // picture for, and must go out on the one it did.
+    // ⚠ This is the arm that makes the credit gate load-bearing: [1]-[7] all pass
+    // with the gate removed, because they grant a credit per frame anyway.
+    @(posedge clk) flush = 1'b1;
+    repeat (4) @(posedge clk);
+    flush = 1'b0;
+    repeat (200) @(posedge clk);
+    push(1'b1, 8'h41, 8'h42);
+    push(1'b1, 8'h43, 8'h44);
+    repeat (200) @(posedge dec_clk);
+    credits_off = 1'b1;                       // the display shows nothing
+    run_field(1'b1); run_field(1'b0); run_field(1'b1);
+    n_on = 0;
+    for (i = 0; i < HLEN; i = i + 1) if (capv[i]) n_on = n_on + 1;
+    check(n_on == 0, "[8] a pair went out on a field the display did not produce");
+    credits_off = 1'b0;                       // now the display picks a picture up
+    run_field(1'b1);
+    n_on = 0;
+    for (i = 0; i < HLEN; i = i + 1) if (capv[i]) n_on = n_on + 1;
+    check(n_on != 0, "[8] the pair did not go out once the display produced a picture");
+    if (errors == 0) $display("PASS [8] the caption drain follows the display, not the raster");
 
     // ---------------------------------------------------------------- [5] ----
     enable = 1'b0;

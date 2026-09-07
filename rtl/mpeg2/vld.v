@@ -56,7 +56,9 @@ module vld(clk, clk_en, rst,
   pic_informative, informative_commit,                                                      // DVD-FORK (film evidence gate): this picture carried real evidence
   cc_pair_valid, cc_pair, cc_pair_field,                                                    // DVD-FORK (line-21 CC): EIA-608 byte pairs sniffed out of user_data
   mpeg1,                                                                                    // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
-  vbuf_flush                                                                                // DVD-FORK FIX (seek realign, issue #45): a VBUF flush happened — the references are now stale
+  vbuf_flush,                                                                               // DVD-FORK FIX (seek realign, issue #45): a VBUF flush happened — the references are now stale
+  bitpos, pic_hdr_pulse, pic_hdr_bitpos, pic_hdr_upd, pic_hdr_second,                      // DVD-FORK (PTS association): where in the stream each picture header was parsed
+  skip_ack, skip_rff, skip_field, skip_tff, skip_pf                                         // DVD-FORK (PTS scheduling): a picture was dropped for ANY reason (governor or realign)
   );
 
   input            clk;                           // clock
@@ -301,6 +303,36 @@ module vld(clk, clk_en, rst,
    * ~192 clk_dec-cycle LEVEL (dvd/flush_ctl.sv issues ~64 clk_sys cycles; the
    * 2-FF CDC into clk_dec is in dvd/emu.sv). Level, not pulse — see the arm. */
   input            vbuf_flush;
+
+  /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"). The exact
+   * parse position (getbits_fifo.bitpos) latched at every picture header, so the
+   * association FIFO (dvd/pts_assoc.sv) can answer "does the head stamp lie at or
+   * before this picture's start code?" with a plain compare. At
+   * STATE_PICTURE_HEADER the window has moved past the 4-byte start code (the
+   * hunt aligned one byte onto the prefix and STATE_START_CODE advanced 24), so
+   * the start code itself sits at pic_hdr_bitpos - 32; bench/dvd/pts_assoc_tb.sv
+   * pins that constant against tools/pts_map.py rather than trusting this
+   * sentence. pic_hdr_upd mirrors hdr_upd_slot (a frame picture or the first
+   * field of a pair -- the node picbuf rotates on), so a tag can be attached to
+   * the picture that will actually be displayed; the other header of a field
+   * pair is flagged pic_hdr_second. */
+  input      [31:0]bitpos;
+  output reg       pic_hdr_pulse;
+  output reg [31:0]pic_hdr_bitpos;
+  output reg       pic_hdr_upd;
+  output reg       pic_hdr_second;
+
+  /* DVD-FORK (PTS scheduling): a picture was dropped, for EITHER reason -- the
+   * governor's B-drop or the post-flush reference re-align. drop_pic_ack below
+   * fires only for the governor's (it pays into the frame-drop ledger); the
+   * display scheduler needs every dropped picture's duration to keep its
+   * extrapolated timeline honest, so this pulses at the first skipped slice of
+   * any dropped picture, with the dropped picture's own rff and structure. */
+  output reg       skip_ack;
+  output reg       skip_rff;
+  output reg       skip_field;
+  output reg       skip_tff;       // the dropped picture's own tff / progressive_frame (its coding
+  output reg       skip_pf;        // extension has parsed by its first slice), for its duration
 
   /* in sequence header */
   output wire[13:0]horizontal_size;
@@ -2342,6 +2374,28 @@ module vld(clk, clk_en, rst,
    * the Thayer drops=0 round (see drop_ps_lat above). MPEG-1 comes free:
    * picture_structure is forced to FRAME_PICTURE in mpeg1 mode. */
   assign hdr_upd_slot = (state == STATE_PICTURE_HEADER) && ((picture_structure == FRAME_PICTURE) || second_field) && ~hdr_is_d_m1;
+
+  /* DVD-FORK (PTS association): latch the parse position at the header. The
+   * pulse is one clk wide regardless of clk_en (the header state itself lasts
+   * one enabled cycle, and the next state is always PICTURE_HEADER0). */
+  always @(posedge clk)
+    if (~rst)
+      begin
+        pic_hdr_pulse  <= 1'b0;
+        pic_hdr_bitpos <= 32'd0;
+        pic_hdr_upd    <= 1'b0;
+        pic_hdr_second <= 1'b0;
+      end
+    else
+      begin
+        pic_hdr_pulse <= clk_en && (state == STATE_PICTURE_HEADER);
+        if (clk_en && (state == STATE_PICTURE_HEADER))
+          begin
+            pic_hdr_bitpos <= bitpos;
+            pic_hdr_upd    <= hdr_upd_slot;
+            pic_hdr_second <= ~hdr_upd_slot && ~hdr_is_d_m1;
+          end
+      end
   always @(posedge clk)
     if (~rst) update_picture_buffers <= 1'b0;
     else if (clk_en) update_picture_buffers <= (hdr_upd_slot && ~drop_now_comb && ~realign_now_comb) // emit frame at picture header
@@ -2591,6 +2645,30 @@ module vld(clk, clk_en, rst,
       end
     else
       informative_commit <= 1'b0;
+
+  /* DVD-FORK (PTS scheduling): the any-reason sibling of drop_pic_ack. */
+  wire skip_slice_hit = (state == STATE_START_CODE) && drop_this_picture &&
+                        (getbits[7:0] >= 8'h01) && (getbits[7:0] <= 8'haf);
+  reg  skip_acked;
+  always @(posedge clk)
+    if (~rst) begin
+      skip_ack   <= 1'b0;
+      skip_rff   <= 1'b0;
+      skip_field <= 1'b0;
+      skip_tff   <= 1'b0;
+      skip_pf    <= 1'b0;
+      skip_acked <= 1'b0;
+    end else if (clk_en) begin
+      if (state == STATE_PICTURE_HEADER) skip_acked <= 1'b0;
+      skip_ack <= skip_slice_hit && ~skip_acked;
+      if (skip_slice_hit && ~skip_acked) begin
+        skip_acked <= 1'b1;
+        skip_rff   <= drop_rff_lat;
+        skip_field <= (drop_ps_lat == 2'd1) || (drop_ps_lat == 2'd2);
+        skip_tff   <= top_field_first;
+        skip_pf    <= progressive_frame;
+      end
+    end else skip_ack <= 1'b0;
 
   always @(posedge clk)
     if (~rst) begin

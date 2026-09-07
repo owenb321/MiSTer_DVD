@@ -228,8 +228,8 @@ module resample_chain_tb;
     .video_live(), .pickup_hold(1'b0), .pause(1'b0),
     .raster_par_err(1'b0), .vscale_mode(rs_vscale_mode),              // DVD-FORK (CRT anamorphic vscale: letterbox)
     .hcrop_en(rs_hcrop_en),                    // DVD-FORK (CRT anamorphic horizontal crop)
-    .menu_ff(1'b0),                            // DVD-FORK (menu VBUF-lag §5): not exercised here
-    .film24(1'b0)                              // DVD-FORK (Film 24p Out): not exercised here
+    .sched_due(1'b1),                          // THE STC IS A CLOCK: free-run (every picture due at once) -- pacing is not what this bench measures
+    .sched_next_due(1'b1)
   );
 
   // ---- disp_vscale: vertical 2-tap letterbox downscale (480->360 / field 240->180). Pure
