@@ -87,7 +87,14 @@ PYEOF
     echo "  RED arm BUILD FAILED -- the arm proves nothing; fix the build before reading this suite"; rc=1
     rm -rf "$red"; return 2>/dev/null || exit 1
   fi
-  vvp "$red/pts_chain_red" +STEM="$FIX/pts_apollo_s" 2>&1 | grep -v '^VCD' > "$red/red.log"
+  # ⚠ `|| true` IS LOAD-BEARING. This script runs under `set -euo pipefail` and the
+  # RED sim is SUPPOSED to exit non-zero ($fatal) -- that is the whole point of the
+  # arm. The original ran it inside an `if`, which set -e exempts; hardening it into
+  # a bare statement made the script DIE SILENTLY here, before any verdict printed,
+  # and the suite reported "== FAILURES ==" with nothing to point at. A gate that was
+  # rewritten to stop it reporting a non-verdict was made to abort instead, which is
+  # strictly worse. Measured 2026-09-07.
+  vvp "$red/pts_chain_red" +STEM="$FIX/pts_apollo_s" 2>&1 | grep -v '^VCD' > "$red/red.log" || true
   if [ ! -s "$red/red.log" ]; then
     echo "  RED arm produced NO OUTPUT (killed, or the fixture is missing) -- not a verdict"; rc=1
   elif grep -q "^FAIL \[C[23]\]" "$red/red.log"; then
