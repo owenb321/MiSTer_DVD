@@ -562,8 +562,26 @@ Disc Menus off, Progressive, A/V Offset 0):
 - `play_err` is now an honest instrument, so if any residual remains it will show it.
 - `first_tagged` says whether the first display anchor came from a real picture PTS.
 
-⏳ Untouched by this round and still open: the `iec61937_wrap` half (HW-gate on a receiver),
-and the pre-existing film-detector flapping on mixed content.
+★ **THE NAMED NEXT SUSPECT, if a residual survives: `head_stale`.** It is the OTHER
+one-shot decision taken against the provisional clock, and it has the same shape.
+`head_stale` discards arriving audio when `stc − frame_pts > 50 ms`, gated on
+`!video_live` — i.e. exactly the window in which `stc` holds the parse-front value, up to
+~1.6 s ahead of the display. DVD muxes audio ~470–667 ms behind video, so every frame
+arriving in that window looks late against a parse-front clock and can be discarded. Audio
+that is discarded is audio the display will still need, and the result is audio content
+running ahead by however much was thrown away — the same symptom by a different route.
+
+It is **NOT** changed in this round, deliberately, for two reasons. First, this project's
+own rule: one behavioural delta per hardware round, or a green result names nothing.
+Second, the data favours the release mechanism over this one — `av_drift` steps at the end
+of its decay to zero, i.e. at the moment of RELEASE, not during the earlier discard window,
+and the step size matches the parse-front lead. Gating it on `disp_anchored` would be safe
+(the `play_pts` latch does not depend on skipping, so the documented deadlock is not
+reachable), and `dbg_skip_cnt` is already exported, so a round that still shows a residual
+can check the skip count before changing anything.
+
+⏳ Also untouched and still open: the `iec61937_wrap` half (HW-gate on a receiver), and the
+pre-existing film-detector flapping on mixed content.
 
 ## 4. HW rounds
 
