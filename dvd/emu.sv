@@ -1449,7 +1449,16 @@ wire [15:0] rd_dbg_pgcerr;    // reader pgc_error reason latch (overlay row 26)
 // cycle as the ack (the seek_flush_now precedent).
 reg hl_stc_fresh = 1'b1;
 always @(posedge clk_sys) begin
-    if (seek_ack || jump_ack) hl_stc_fresh <= 1'b1;   // THE STC IS A CLOCK: the clock survives a keep_vbuf hop and re-anchors on the picture, so it is always display-coherent
+    // ⚠⚠ RESTORED 2026-09-07. Tying this to 1 made nav_pci's `stc_trusted` always
+    // true, and the RTL's own comment in dvd/nav_pci.sv had already recorded what
+    // that costs: a stale per-VOBU ss=0 DISARM is then perpetually "due", and
+    // because off_due OUTRANKS nxt_due in the apply block it clears arms and
+    // starves pending promotions. That is the reported "no highlight, and no
+    // highlight targets present". The clock being display-coherent is necessary
+    // for trusting it, not sufficient: an HLI's s_ptm belongs to the timeline the
+    // NAV pack was parsed on, and a keep_vbuf hop crosses timelines without a
+    // flush, so a comparison against it carries no timing information either way.
+    if (seek_ack || jump_ack) hl_stc_fresh <= ~keep_vbuf;
 end
 wire [63:0] hl_btn_cmd;
 wire        hl_btn_cmd_valid;
@@ -3312,7 +3321,33 @@ always @(posedge clk_sys)
     if (!aud_rst_n)          aud_seen <= 1'b0;
     else if (aud_frame_valid) aud_seen <= 1'b1;
 always @(posedge clk_sys) begin
-    if (!pipe_rst_n) begin
+    // ⚠⚠ RESTORED 2026-09-07 after a HW report. Stage 1 deleted this arm on the
+    // theory that "menus follow the same rule", and replaced it with the
+    // !aud_seen escape below. That escape only fires when NO audio has arrived at
+    // all -- and menus with an intro, a logo chain or background music have
+    // audio, so for exactly those the full ~1.24 s hold came back PER keep_vbuf
+    // hop. The comment deleted with this block had already named both reported
+    // symptoms: "freezing deep menus (numbers never picked up) and keeping
+    // video_live=0 (which blocks the highlight render gate + nav_pci fallback)".
+    // MEASURED as: Thayer's Quest and Tomb Raider freeze before reaching a menu
+    // with the VBUF full; Harry Potter Interactive and Scene It lose their
+    // highlights entirely (Scene It reports no highlight TARGETS at all, which is
+    // the nav_pci fallback being starved, not a render problem).
+    //
+    // The STD hold exists to defer the first FEATURE frame ~0.5 s so lip-synced
+    // audio muxed behind the video can catch up. A menu hop is not that, and the
+    // hold re-arms on EVERY load flush -- so on a menu it is pure latency with a
+    // video_live=0 side effect that other subsystems read as "no picture yet".
+    // A file MOUNT cannot be swallowed here even if a menu was up on the old
+    // disc: the reader's `start` clears menu_dom (-> menu_active) on the first
+    // cycle of the mount while pipe_rst_n stays low for ~64 cycles, so the
+    // !pipe_rst_n arm below always latches the hold (verified 2026-08-28).
+    // ⚠ The !aud_seen escape is KEPT -- it is a real improvement for a silent
+    // TITLE, which used to eat the whole 1.24 s fallback for nothing.
+    if (menu_active) begin
+        av_vid_hold     <= 1'b0;
+        av_vid_hold_tmr <= '0;
+    end else if (!pipe_rst_n) begin
         av_vid_hold     <= 1'b1;                // held from every load/reset
         av_vid_hold_tmr <= '0;
     end else if (av_vid_hold) begin
