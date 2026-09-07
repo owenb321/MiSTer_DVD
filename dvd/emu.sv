@@ -3782,6 +3782,17 @@ wire [10:0] trick_w = { il_prev ? 1'b0 : 1'b1, // [10] deinterlace
 //                              VER_SYNC/VID_MODE reuse the progressive 480p values;
 //                              extra ~762 lines + 17 dots/line = blanking.
 //     ** DVD-FORK FIX (2026-08-02, A/V drift in 24p) — WHY 875 AND NOT 858: **
+//     ⚠⚠ AMENDED 2026-09-07: THE SENTENCE BELOW WAS TRUE PRE-#63 AND IS NOT NOW.
+//     It described an architecture in which the STC advanced one TICKS_PER_REFRESH per
+//     displayed image — i.e. the clock was DERIVED FROM THE RASTER, so a raster that was
+//     not the content rate walked the audio. dvd/disp_sched.sv replaced that with a
+//     free-running 90 kHz clock off the same crystal as the 48 kHz NCO: the two cannot
+//     drift from each other, and the raster now supplies pickup OPPORTUNITIES rather than
+//     the clock. A raster off by 0.19 % therefore costs an occasional HELD FRAME, not a
+//     drift. The 875-dot film line is still the right choice (an exact raster is free and
+//     costs nothing), but "the raster MUST equal the content rate" is no longer a
+//     constraint on new modes — which is what unblocks native 240p, see docs/mpeg1.md
+//     §B.3a. ⚠ That reading is from disp_sched's design note, not a traced audio path.
 //     The audio NCO is a fixed 48 kHz off the same crystal (nco_trim is RETIRED —
 //     see docs/av_sync.md), so the ONLY thing holding A/V together over a long title
 //     is that the core raster period equals the true content rate. Every other mode

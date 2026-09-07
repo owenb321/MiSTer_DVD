@@ -471,7 +471,11 @@ space; raw coordinates would render them quarter-screen).
 
 - ~~`disp_hstretch` 2-tap horizontal blend (Crop edge quality)~~ — **DONE, see §8b.**
 - Native 240p (a ×2 vertical downscale + centre) — reuses the `disp_vscale` blend datapath with
-  a step of 2 instead of 4/3.
+  a step of 2 instead of 4/3. ★ This is only the CONTENT half. The sync/rate half was rejected
+  in 2026-08 on a premise that **expired with PR #63**, and the current position — what 240p
+  actually needs, why 262 lines rather than an impossible exact-59.94 modeline, and what still
+  wants verifying — is written up in `docs/mpeg1.md` §B.3a. Read that before re-deriving the
+  old "no".
 - Optional: blend `osd` as nearest in **`disp_vscale`** (crisper debug overlay text under
   Letterbox) — currently the overlay is blended like the picture. `disp_hstretch` already does
   this (§8b), so it is a 3-line back-port.

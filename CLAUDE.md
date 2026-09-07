@@ -2608,7 +2608,22 @@ mode 2 (2× line repeat) + a syncgen-only effective-size mux in `mpeg2video.v` �
 on `analog_eff` (HDMI keeps ascal's scale; also fixes direct-video + un-clips the HUD).
 True 240p output was REJECTED: no exact-59.94 Hz 240p modeline exists at 1716
 dots/line, so it would drift against the fixed 48 kHz audio NCO — line-doubled 480i
-carries the same content. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
+carries the same content.
+★★ **THAT REJECTION'S PREMISE EXPIRED WITH PR #63 (noted 2026-09-07) — do NOT re-derive
+it; read `docs/mpeg1.md` §B.3a first.** Two things are wrong with it now. (1) **240p is
+not 59.94 Hz** — 59.94 is the interlaced FIELD rate; console 240p omits the half-line and
+runs **262 lines = 60.055 Hz**, which is what every CRT takes (`CDi_MiSTer`'s
+`rtl/video_timing.sv`: `v_total = 262; v_active = 240;`, `vga_f1` pinned 0 when
+non-interlaced). Asking for an exact 59.94 progressive modeline was asking for 262.5
+lines. (2) **The drift argument depended on the STC being RASTER-derived**, which it no
+longer is: `disp_sched` free-runs off the crystal that also feeds the 48 kHz NCO, so the
+raster supplies pickup OPPORTUNITIES, not the clock. A 0.19 % rate error now costs one
+held frame every ~9 s instead of walking the audio. ⚠ Consequently `dvd/emu.sv`'s "the
+ONLY thing holding A/V together over a long title is that the core raster period equals
+the true content rate" is STALE — it describes the pre-#63 architecture.
+⚠ The §B.3a note is analysis, not a build: it is read from `disp_sched`'s design note and
+the `half_scan` mux, and the held-frame claim wants confirming against the audio path
+before anyone relies on it. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
 scope REVERSED 2026-08-24 by user decision: the predicate is now `< 720` (any sub-720
 width fills; SVCD 480 = exact 2:3), shipped with the VCD/SVCD feature below. Design:
 `docs/mpeg1.md` §B.3; overlay inverse contract: `docs/crt_anamorphic.md` §9b. Sim:
