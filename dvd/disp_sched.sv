@@ -245,6 +245,7 @@ module disp_sched #(
     // These name the clock's own history instead: how many times it moved, and
     // whether its first display anchor was a real picture PTS or the parse front.
     reg  [7:0]  dbg_reanch;
+    reg  [1:0]  dbg_bwd, dbg_fwd;   // which leg drove each re-anchor (saturating)
     reg         dbg_first_tagged, dbg_first_seen;
     wire [32:0] next_pts = next_q3[35:3];
 
@@ -254,7 +255,7 @@ module disp_sched #(
     // ---- the DUE compares stay registered (they only gate the FSM transition) ----
     reg  signed [33:0] d_pic_next, d_stc_pic, d_stc_next, d_stc_want;
     always_ff @(posedge clk)
-        dbg_dur <= {dbg_reanch, 4'd0, dbg_first_tagged, dbg_first_seen, prov_seen, 1'b0};
+        dbg_dur <= {dbg_reanch, dbg_fwd, dbg_bwd, dbg_first_tagged, dbg_first_seen, prov_seen, 1'b0};
     always_ff @(posedge clk) begin
         d_pic_next  <= $signed({1'b0, pic_pts_eff}) - $signed({1'b0, next_pts});
         d_stc_pic   <= $signed({1'b0, stc}) - $signed({1'b0, pic_pts_eff});
@@ -268,12 +269,37 @@ module disp_sched #(
 
     // ---- stage D: the decisions (registered) --------------------------------
     // a tagged picture that does not belong to the current timeline
-    reg  disc, anchor_now, pic_due_r, next_due_r;
+    reg  disc, disc_fwd, anchor_now, pic_due_r, next_due_r;
     wire disc_w = has_tag && anchored && next_valid &&
                   ((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s));
-    // the CONTENT-JUMP subset: the same test without the lateness leg.
-    wire disc_jump_w = has_tag && anchored && next_valid &&
-                       ((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s));
+    // the CONTENT-JUMP subset that may re-phase AUDIO. BACKWARD ONLY, and the
+    // forward leg's exclusion is the whole point (HW report, 2026-09-07):
+    //
+    // ★ A FORWARD PTS GAP IS AMBIGUOUS. It is produced by a real cell change, and
+    // equally by content the author simply did not code pictures for -- a menu
+    // still, or a low-motion segment where the encoder holds a frame while audio
+    // streams on. `next_pts` extrapolates at the frame rate, so any authored gap
+    // walks `pic_pts` forward of it and trips `> fwd_max_s` with nothing having
+    // jumped at all. MEASURED on FAMILY FEUD II: av_drift climbs to ~577 ms -- just
+    // past the 0.5 s bound -- and re-anchors, twice in 100 s, with the video
+    // perfectly continuous. Each of those re-phased the audio, which DISCARDS the
+    // ring, so the host's question lost its middle: "Name ... windy".
+    //
+    // A BACKWARD jump carries no such ambiguity: nothing authored makes the next
+    // picture's PTS go DOWN except a genuinely new timeline (a new cell, PGC or
+    // menu). So the audio re-phase keys on that alone.
+    //
+    // ⚠ The CLOCK's re-anchor (disc_w, above) still uses all three legs -- it must,
+    // or a real forward jump would leave the display waiting. Only the AUDIO
+    // re-phase narrows. That separation is why anchor_disc is a distinct qualifier
+    // and not just `disc_w`.
+    // ⚠ VLC does not infer this at all: it re-phases on the NAVIGATION EVENT
+    // (DVDNAV_CELL_CHANGE / DVDNAV_HOP_CHANNEL), which is authored and cannot be
+    // faked by a still. If backward-only proves to under-cover, that -- not a wider
+    // PTS bound -- is the direction: emu has seek_ack/jump_ack/keep_vbuf already.
+    wire disc_jump_w = has_tag && anchored && next_valid && (d_pic_next < -frame_s);
+    // which leg fired, so the next round can MEASURE this instead of arguing it
+    wire disc_fwd_w  = has_tag && anchored && next_valid && (d_pic_next > fwd_max_s);
     // ---- RE-ANCHOR AT A KNOWN RASTER CHANGE ------------------------------------
     // A video->film engage restarts the raster (the modeline walk keys on
     // il_eff|pal_eff|filmp_eff) but deliberately fires NO FLUSH: a bare filmp edge
@@ -322,7 +348,8 @@ module disp_sched #(
     wire anchor_now_w = pic_valid &&
                         (!anchored || (has_tag && (!disp_anchored || !next_valid || disc_w)));
     always_ff @(posedge clk) begin
-        disc       <= disc_jump_w;   // (was disc_w and never read; now the jump-only qualifier)
+        disc       <= disc_jump_w;   // backward-only: the audio re-phase qualifier
+        disc_fwd   <= disc_fwd_w;    // instrument only
         anchor_now <= anchor_now_w;
         pic_due_r  <= !sched_en || !pic_valid || anchor_now_w || (d_stc_want >= -half_s);
         next_due_r <= !sched_en || (anchored && next_valid && (d_stc_next >= -half_s));
@@ -373,6 +400,7 @@ module disp_sched #(
             anchored     <= 1'b0;
             disp_anchored <= 1'b0;
             dbg_reanch <= 8'd0; dbg_first_tagged <= 1'b0; dbg_first_seen <= 1'b0;
+            dbg_bwd <= 2'd0; dbg_fwd <= 2'd0;
             next_q3      <= 36'd0;
             next_valid   <= 1'b0;
             defer_q3     <= 36'd0;
@@ -413,6 +441,8 @@ module disp_sched #(
                         dbg_first_tagged <= has_tag;
                     end
                     if (dbg_reanch != 8'hFF) dbg_reanch <= dbg_reanch + 8'd1;
+                    if (disc     && (dbg_bwd != 2'd3)) dbg_bwd <= dbg_bwd + 2'd1;
+                    if (disc_fwd && (dbg_fwd != 2'd3)) dbg_fwd <= dbg_fwd + 2'd1;
                     // only a TAGGED picture puts the clock on the display timeline;
                     // an untagged first pickup anchors to the clock's own (parse-front)
                     // value and changes nothing, which is the case that bit.

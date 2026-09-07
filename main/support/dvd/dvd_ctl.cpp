@@ -100,7 +100,7 @@ static void telem_read()
 		// display: ~0 once the display follows its PTS); play_err = audio
 		// playback position vs its anchor; av_drift = dispatched audio PTS - STC.
 		"\"disp_lag_ms\":%.2f,\"play_err_ms\":%.2f,\"av_drift_ms\":%.2f,"
-		"\"sched_frc\":%u,\"sched_ps\":%u,\"sched_pf\":%u,\"sched_tff\":%u,\"sched_rff\":%u,\"reanchors\":%u,\"first_tagged\":%u,\"first_seen\":%u,\"prov_seen\":%u,"
+		"\"sched_frc\":%u,\"sched_ps\":%u,\"sched_pf\":%u,\"sched_tff\":%u,\"sched_rff\":%u,\"reanchors\":%u,\"anch_fwd\":%u,\"anch_bwd\":%u,\"first_tagged\":%u,\"first_seen\":%u,\"prov_seen\":%u,"
 		"\"flags\":{\"media\":%u,\"pause\":%u,\"video_live\":%u,"
 		"\"still\":%u,\"menu\":%u}}\n",
 		t, w[1], w[2], w[3], w[4],
@@ -113,7 +113,8 @@ static void telem_read()
 		(double)(int16_t)w[13] * 16.0 / 90.0,
 		(unsigned)((w[14] >> 4) & 0xF), (unsigned)((w[14] >> 3) & 1), (unsigned)((w[14] >> 2) & 1),
 		(unsigned)((w[14] >> 1) & 1), (unsigned)(w[14] & 1),
-		(unsigned)(w[15] >> 8), (unsigned)((w[15] >> 3) & 1), (unsigned)((w[15] >> 2) & 1), (unsigned)((w[15] >> 1) & 1),
+		(unsigned)(w[15] >> 8), (unsigned)((w[15] >> 6) & 3), (unsigned)((w[15] >> 4) & 3),
+		(unsigned)((w[15] >> 3) & 1), (unsigned)((w[15] >> 2) & 1), (unsigned)((w[15] >> 1) & 1),
 		(unsigned)(w[7] & 1), (unsigned)((w[7] >> 1) & 1),
 		(unsigned)((w[7] >> 2) & 1), (unsigned)((w[7] >> 3) & 1),
 		(unsigned)((w[7] >> 4) & 1));

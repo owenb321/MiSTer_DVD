@@ -29,6 +29,8 @@
 #   M10 first tag anchors only on disc_w    -> [13b] a SMALL provisional error never
 #       yields a display anchor at all
 #   M11 anchor_disc keyed on the FULL disc_w -> [14c] a starved display re-phases audio
+#   M12 the audio re-phase also keys on a    -> [14d] an authored still/held frame cuts the
+#       FORWARD PTS gap                          audio playing over it
 #
 # ⚠ NOT COVERED HERE, and it cost a hardware round: dvd_audio_decode's play_err is the
 # LIP-SYNC measurement (clock minus audio playback position). Re-basing play_anchor on a
@@ -86,6 +88,10 @@ mut M10 "(has_tag && (!disp_anchored || !next_valid || disc_w))" "(has_tag && (!
 # M11: anchor_disc qualified by the FULL disc_w (lateness included), so a starved
 # display re-phases the audio -- a real audio gap as a punishment for our own slowness.
 mut M11 "disc       <= disc_jump_w;" "disc       <= disc_w;" "FAIL \[14c\]"
+# M12 is the shipped 20260907_1350 build's own predicate: the audio re-phase keyed on a
+# FORWARD PTS gap too, so an authored still or held frame cut the middle out of whatever
+# audio was playing over it (FAMILY FEUD II: "Name ... windy").
+mut M12 "wire disc_jump_w = has_tag && anchored && next_valid && (d_pic_next < -frame_s);" "wire disc_jump_w = has_tag && anchored && next_valid && ((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s));" "FAIL \[14d\]"
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="
 exit $fail

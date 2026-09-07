@@ -599,13 +599,40 @@ module disp_sched_tb;
 
     reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
     film_32(60, 100000, 4, 20000);
-    for (i = 30; i < 60; i = i + 1) begin                 // a 5 s forward jump at picture 30
-      s_pts[i]  = s_pts[i]  + 450000;
-      s_true[i] = s_true[i] + 450000;
+    // ⚠ 1 s, not 5 s: film_32 starts at PTS 100000, so picture 30 sits near 212000
+    // and a 5 s subtraction goes NEGATIVE and wraps in the 33-bit unsigned PTS --
+    // which the DUT then reads as a huge FORWARD jump and correctly ignores. The
+    // first version of this arm failed for exactly that reason and the RTL was right.
+    for (i = 30; i < 60; i = i + 1) begin                 // a 1 s BACKWARD jump at picture 30
+      s_pts[i]  = s_pts[i]  - 90000;
+      s_true[i] = s_true[i] - 90000;
     end
     run_until_done(200);
     if (disc_pulses != 1) begin
-      $display("FAIL [14b] a 5 s content jump pulsed anchor_disc %0d time(s), expected 1", disc_pulses);
+      $display("FAIL [14b] a 5 s BACKWARD content jump pulsed anchor_disc %0d time(s), expected 1", disc_pulses);
+      errors = errors + 1;
+    end
+
+    // [14d] ★ AN AUTHORED FORWARD GAP MUST NOT RE-PHASE AUDIO. A menu still, or a
+    //       low-motion stretch the encoder held a frame through, walks pic_pts ahead
+    //       of the frame-rate extrapolation with nothing having jumped. The CLOCK
+    //       must still re-anchor (or the display waits), but discarding the audio
+    //       ring there cuts the middle out of whatever is playing over it --
+    //       MEASURED on FAMILY FEUD II as the host's question losing its middle.
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(60, 100000, 4, 20000);
+    for (i = 30; i < 60; i = i + 1) begin                 // a 3 s authored FORWARD gap
+      s_pts[i]   = s_pts[i]  + 270000;
+      s_true[i]  = s_true[i] + 270000;
+      s_ready[i] = s_ready[i] + 270000;
+    end
+    run_until_done(300);
+    if (disc_pulses != 0) begin
+      $display("FAIL [14d] an authored forward gap pulsed anchor_disc %0d time(s) -- audio would be cut mid-clip", disc_pulses);
+      errors = errors + 1;
+    end
+    if (reanchors < 2) begin
+      $display("FAIL [14d] the CLOCK did not re-anchor across the forward gap (%0d) -- the display would wait", reanchors);
       errors = errors + 1;
     end
 
@@ -617,7 +644,7 @@ module disp_sched_tb;
       $display("FAIL [14c] a starved display pulsed anchor_disc %0d time(s) -- lateness is not a content jump", disc_pulses);
       errors = errors + 1;
     end
-    $display("  [14] anchor_disc: clean=0, jump=1, starvation=0");
+    $display("  [14] anchor_disc: clean=0, backward jump=1, starvation=0, forward gap=0 (clock still re-anchors)");
 
     if (errors == 0) $display("PASS: disp_sched_tb — 19 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end
