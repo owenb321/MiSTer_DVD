@@ -111,6 +111,10 @@ module imdct_512 (
     // PCM output read port (Q8.23, {ch[2:0], idx[7:0]}) for pcm_out + TB
     input  logic [10:0] pcm_rd_addr,
     output logic signed [31:0] pcm_rd_data,
+    // DVD-FORK FIX: per-frame output level scalar, Q2.14 (see the block that
+    // computes it).  pcm_out multiplies by this so the s16 output lands on the
+    // liba52 reference level instead of 6 dB under it.
+    output logic [15:0] lvl_q,
 
     output logic        done            // 1-cycle pulse: both channels done
 );
@@ -242,6 +246,61 @@ module imdct_512 (
             default: slev = 18'sd0;
         endcase
         if (!has_surr) slev = 18'sd0;
+    end
+
+    // ---- DVD-FORK FIX (2026-09-07): per-frame OUTPUT LEVEL scalar ------------
+    // liba52 reconstructs coefficients as coeff = state->dynrng * m16 *
+    // 2^-(15+exp), where a52_frame() sets state->level = 2 * (*level) and
+    // a52_downmix_init() has ALREADY folded its ADJUST_LEVEL `adjust` into
+    // *level.  The conventional caller passes *level = 1, so every normal
+    // decoder (a52dec, ffmpeg, and this repo's own retired HPS path) runs at
+    //     state->level = 2 / (1 + clev + slev)
+    // This datapath implements only the `m16 * 2^-(15+exp)` half, i.e. it is
+    // pinned at state->level = 1.0 with no downmix normalisation.  MEASURED
+    // against a52dec/ffmpeg on this repo's own vectors: exactly 6.02 dB BELOW
+    // the reference on 1/0 and 2/0 content, and (1+clev+slev)/2 ABOVE it on 5.1
+    // (the two errors partly cancel there, which is why 5.1 sounded fine and
+    // stereo did not).  pcm_out multiplies by this scalar so the s16 output
+    // lands on the reference level for every acmod.
+    //
+    // ★ ONE formula covers every acmod because clev/slev above are already the
+    // EFFECTIVE values: zeroed for roles this acmod does not carry, and
+    // pre-scaled by LEVEL_3DB for a mono surround.  Verified against every
+    // CONVERT(..., A52_STEREO) case in liba52's a52_downmix_init:
+    //   acmod 1,2 -> no case (adjust 1)        clev+slev == 0
+    //   acmod 3   -> 1/(1+clev)                slev == 0
+    //   acmod 4   -> 1/(1+slev*LEVEL_3DB)      clev == 0, slev pre-scaled
+    //   acmod 5   -> 1/(1+clev+slev*LEVEL_3DB) slev pre-scaled
+    //   acmod 6   -> 1/(1+slev)                clev == 0
+    //   acmod 7   -> 1/(1+clev+slev)
+    //
+    // Q2.14, lvl_q = round(2^32 / (131072 + clev + slev)).  A CASE, not a
+    // divider: clev and slev each take one of four values, so the denominator
+    // has only 13 possibilities.  Deriving it from the summed VALUES rather
+    // than from the acmod/mixlev conditions keeps clev/slev the single source
+    // of truth -- re-deriving the role logic here would be a second copy to
+    // keep in sync.
+    wire [18:0] lvl_den = 19'd131072 + {2'b00, clev[16:0]} + {2'b00, slev[16:0]};
+    always_comb begin
+        case (lvl_den)
+            19'd131072: lvl_q = 16'd32768;   // 2.000000  (no downmix: acmod 1,2)
+            19'd177413: lvl_q = 16'd24209;   // 1.477592
+            19'd196608: lvl_q = 16'd21845;   // 1.333333
+            19'd209005: lvl_q = 16'd20550;   // 1.254248
+            19'd223754: lvl_q = 16'd19195;   // 1.171572
+            19'd242949: lvl_q = 16'd17678;   // 1.079008
+            19'd255346: lvl_q = 16'd16820;   // 1.026623
+            19'd262144: lvl_q = 16'd16384;   // 1.000000
+            19'd270095: lvl_q = 16'd15902;   // 0.970562
+            19'd274541: lvl_q = 16'd15644;   // 0.954845
+            19'd289290: lvl_q = 16'd14847;   // 0.906163
+            19'd301687: lvl_q = 16'd14237;   // 0.868927
+            19'd316436: lvl_q = 16'd13573;   // 0.828427  (3/2 at clev=slev=.707)
+            // Unreachable -- clev/slev come from the cases above.  1.0 is the
+            // deliberately conservative fallback: it leaves the pre-fix level,
+            // which is quiet but cannot clip.
+            default:    lvl_q = 16'd16384;
+        endcase
     end
     logic [8:0]  dmx_idx;                       // downmix walk 0..255
     // M15: the 5 fbw channels are read one-per-cycle through the single pcm read

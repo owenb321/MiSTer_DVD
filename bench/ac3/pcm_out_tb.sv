@@ -35,13 +35,34 @@ module pcm_out_tb;
     logic        aud_ce, aud_valid;
     logic signed [15:0] audio_l, audio_r;
     logic mono = 1'b0;          // DVD-FORK: acmod-1 ch0-duplication mode
+    // DVD-FORK: per-frame output level scalar (Q2.14).  16384 == 1.0 == the
+    // pre-fix identity, so every pre-existing scenario below is unaffected; the
+    // scalar itself is exercised by the [LVL] arm at the end of this file.
+    logic [15:0] lvl_q = 16'd16384;
 
     pcm_out #(.FIFO_AW(7)) dut (
-        .clk(clk), .rst(rst), .start(start), .mono(mono),
+        .clk(clk), .rst(rst), .start(start), .mono(mono), .lvl_q(lvl_q),
         .pcm_rd_addr(pcm_rd_addr), .pcm_rd_data(pcm_rd_data), .busy(busy),
         .aud_clk(aud_clk), .aud_rst(aud_rst), .aud_ce(aud_ce),
         .audio_l(audio_l), .audio_r(audio_r), .aud_valid(aud_valid)
     );
+
+    // ---- independent reference for the DVD-FORK level scalar ----------------
+    // Computed in REAL arithmetic from the DEFINITION (value * G, then the same
+    // rounding/saturation), not by re-running the RTL's shift-and-slice -- a
+    // golden that repeats the implementation agrees with it by construction.
+    function automatic integer ref_s16_lvl(input integer raw, input integer lq);
+        real v; real t; integer fl;
+        begin
+            v  = (raw / 256.0) * (lq / 16384.0);
+            t  = v + 0.5;
+            fl = $rtoi(t);
+            if (fl > t) fl = fl - 1;          // floor(v+0.5)
+            if      (fl >  32767) fl =  32767;
+            else if (fl < -32768) fl = -32768;
+            ref_s16_lvl = fl;
+        end
+    endfunction
 
     // ---- independent reference: Q8.23 -> s16 (round half toward +inf, sat) ----
     function automatic integer ref_s16(input integer raw);
@@ -98,6 +119,15 @@ module pcm_out_tb;
     end
 
     integer timeout;
+    integer li, lvl_errs;
+    // every distinct lvl_q imdct_512 can emit (see its lvl_den case)
+    integer lvl_tab [0:12];
+    initial begin
+        lvl_tab[0]=32768; lvl_tab[1]=24209; lvl_tab[2]=21845; lvl_tab[3]=20550;
+        lvl_tab[4]=19195; lvl_tab[5]=17678; lvl_tab[6]=16820; lvl_tab[7]=16384;
+        lvl_tab[8]=15902; lvl_tab[9]=15644; lvl_tab[10]=14847; lvl_tab[11]=14237;
+        lvl_tab[12]=13573;
+    end
     initial begin
         // -------- build the input PCM pattern + golden --------
         for (i = 0; i < 512; i = i + 1) pcm_src[i] = 0;
@@ -182,6 +212,64 @@ module pcm_out_tb;
         end
         if (errs == 0) $display("PASS: pcm_out mono duplicates ch0 to L and R");
         else           $display("FAIL: mono pass, %0d error(s)", errs);
+
+        // ============ [LVL] OUTPUT LEVEL SCALAR (DVD-FORK 2026-09-07) ==========
+        // The 6.02 dB fix: this datapath decodes at liba52's state->level = 1.0,
+        // so pcm_out scales by lvl_q = 2/(1+clev+slev) (Q2.14) on the way to s16.
+        // Checked against a real-arithmetic reference over the whole ramp, for
+        // every distinct lvl_q imdct_512 can emit.
+        //
+        // ★ The load-bearing case is lvl[0] = 32768 (x2, acmod 1/2 -- no
+        //   downmix).  That is the arm that was WRONG before this fix, and it is
+        //   the one that must take a full-scale-in-pcm_mem sample (+/-0.5, i.e.
+        //   +/-2^22) all the way to +/-32767.
+        mono = 1'b0;
+        for (i = 0; i < 256; i = i + 1)
+            pcm_src[{1'b1, i[7:0]}] = -(i - 128) * 191;    // undo the mono poison
+        // pcm_mem full scale is +/-0.5 == +/-2^22 once the level fix is in place
+        pcm_src[{1'b0, 8'd0}] =  32'sd4194304;
+        pcm_src[{1'b1, 8'd0}] = -32'sd4194304;
+        lvl_errs = 0;
+        for (li = 0; li < 13; li = li + 1) begin
+            lvl_q = lvl_tab[li];
+            for (i = 0; i < 256; i = i + 1) begin
+                gL[i] = ref_s16_lvl(pcm_src[{1'b0, i[7:0]}], lvl_tab[li]);
+                gR[i] = ref_s16_lvl(pcm_src[{1'b1, i[7:0]}], lvl_tab[li]);
+            end
+            gi = 0; errs = 0;
+            rst = 1; aud_rst = 1; start = 0;
+            repeat (5) @(posedge clk);
+            rst = 0;
+            repeat (5) @(posedge aud_clk);
+            aud_rst = 0;
+            @(posedge clk); start = 1; @(posedge clk); #1 start = 0;
+            timeout = 0;
+            while (gi < 256 && timeout < 2000000) begin
+                @(posedge aud_clk); timeout = timeout + 1;
+            end
+            if (gi < 256) begin
+                $display("FAIL[LVL]: lvl_q=%0d only %0d/256 pairs", lvl_tab[li], gi);
+                errs = errs + 1;
+            end
+            // ★ The x2 arm must take a full-scale pcm_mem sample (+/-0.5) all
+            // the way to +/-32767.  If it does not, the level fix is inert and
+            // every other comparison above would still pass, since they only
+            // check dut-vs-reference and both would be scaled alike.
+            // (+2^22 x2 = +2^23 -> +32768 -> saturates to +32767; -2^22 x2
+            //  = -2^23 -> -32768, which IS representable, so it is exact.)
+            if (li == 0 && (gL[0] !== 32767 || gR[0] !== -32768)) begin
+                $display("FAIL[LVL]: x2 does not reach full scale (L=%0d R=%0d)",
+                         gL[0], gR[0]);
+                errs = errs + 1;
+            end
+            if (errs != 0) lvl_errs = lvl_errs + errs;
+        end
+        lvl_q = 16'd16384;
+        if (lvl_errs == 0)
+            $display("PASS: pcm_out level scalar exact over 13 lvl_q values x 256 samples");
+        else
+            $display("FAIL: level scalar, %0d error(s)", lvl_errs);
+        if (lvl_errs != 0) $fatal(1, "pcm_out level scalar FAILED");
         $finish;
     end
 

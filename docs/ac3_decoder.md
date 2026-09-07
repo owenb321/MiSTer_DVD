@@ -79,6 +79,36 @@ durable scope/decisions/verification knowledge from that repo so it isn't lost.
 - Fits Cyclone V comfortably: ~**40 % ALMs** standalone (post resource-minimization;
   ALMs are the scarce shared resource — trade ALMs→M10K aggressively).
 
+## Output level (fixed 2026-09-07 — was 6.02 dB under every normal decoder)
+
+`pcm_mem` sits at liba52's `state->level = 1.0`; a52dec, ffmpeg and a set-top
+player all run at `2/(1+clev+slev)` (`a52_frame` doubles `*level`, and
+`a52_downmix_init` has already folded `A52_ADJUST_LEVEL` into it). `pcm_out` now
+multiplies by that scalar, computed in `imdct_512` where `clev`/`slev` live.
+
+MEASURED against a52dec, median per-sample ratio over loud samples:
+
+| stream | acmod | before | after |
+|---|---|---|---|
+| `noise_48k_stereo_640k.ac3` | 2 | 0.5000 (−6.02 dB) | 1.0000 (0.00 dB) |
+| `bbb_mono.ac3` | 1 | 0.5000 (−6.02 dB) | 1.0000 (0.00 dB) |
+| `bbb_short_5p1.ac3` | 7 | see below | 1.0000 (0.00 dB) |
+
+★ **5.1 was NOT 6 dB quiet**, because the omitted downmix normalisation pushed
+the other way and the two errors partly cancelled — which is exactly why the
+defect read as "stereo sounds wrong, 5.1 sounds fine" and went unnoticed.
+
+⚠ **No existing gate could see this.** The cosim and every unit TB compare
+`pcm_mem`, which is upstream of the scalar. `bench/ac3/run_ac3_level.sh` is the
+only gate on absolute output level; it compares against a52dec (an independent
+decoder, so it cannot agree with our arithmetic by construction) and carries a
+RED arm that forces the pre-fix scalar and requires the measured ratio to change.
+
+⚠ **`dialnorm` is still parsed and not applied** (`bsi_parse.sv:230` →
+`dvd_audio_decode.sv:544`, unconnected). That matches liba52/a52dec and is a
+separate decision from the level convention; applying it would only ever
+attenuate.
+
 ## NOT supported — each currently **fails loud** (`err_unsupported`)
 
 - **`acmod 0` (1+1 dual mono)** — deliberately still refused. It carries a

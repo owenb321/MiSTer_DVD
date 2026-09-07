@@ -77,6 +77,7 @@ module ac3_front #(
     output logic        imdct_done,
     input  logic [10:0] pcm_rd_addr,      // {ch[2:0], idx[7:0]}
     output logic signed [31:0] pcm_rd_data,
+    output logic [15:0] lvl_q,          // DVD-FORK: per-frame output level (Q2.14)
 
     // output-stage metering handshake (see ac3_parse): the sequencer waits for
     // `pcm_done` after each block's IMDCT before starting the next.  Drive from
@@ -137,6 +138,7 @@ module ac3_front #(
         .coeff_rd_addr(coeff_rd_addr), .coeff_rd_data(coeff_rd_data),
         .imdct_done(imdct_done),
         .pcm_rd_addr(pcm_rd_addr), .pcm_rd_data(pcm_rd_data),
+        .lvl_q(lvl_q),
         .pcm_done(pcm_done),
         .err_unsupported(err_unsupported)
     );

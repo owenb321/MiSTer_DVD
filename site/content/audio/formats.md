@@ -84,6 +84,19 @@ shown are the disc's rather than a simple count. See
 
 ## Output level
 
+!!! info "Unreleased — AC-3 levels were wrong, and are corrected in the next release"
+    Dolby Digital tracks were decoded **6 dB quieter than they should have been**
+    on stereo and mono soundtracks. 5.1 soundtracks were slightly *loud* for a
+    separate reason, and the two faults partly cancelled — which is why the
+    problem showed up as "stereo sounds weak" rather than as an obvious fault.
+
+    Both are fixed. After updating, expect **stereo and mono Dolby Digital to be
+    noticeably louder**, and **5.1 to be a little quieter** (about 1.5 dB). All
+    of them now match what a set-top DVD player or VLC produces from the same
+    disc, so levels are consistent between tracks and between discs. LPCM and MP2
+    were always correct and are unchanged.
+
+
 DVD soundtracks are mastered a long way below full scale. Dialogue commonly sits 20 dB or
 more beneath the peaks so that loud scenes have headroom, which is why a film disc sounds
 quieter than a console core at the same TV volume — those emit chip audio near full scale

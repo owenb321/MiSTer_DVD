@@ -470,6 +470,7 @@ module dvd_audio_decode #(
     wire        imdct_done, pcm_done_w;
     wire [8:0]  pcm_rd_addr9;             // {ch, idx[7:0]} from pcm_out
     wire signed [31:0] pcm_rd_data;
+    wire [15:0] ac3_lvl_q;               // DVD-FORK: per-frame output level (Q2.14)
     wire signed [15:0] ac3_l, ac3_r;
     wire        ac3_aud_valid;
 
@@ -598,6 +599,7 @@ module dvd_audio_decode #(
         .imdct_done      (imdct_done),
         .pcm_rd_addr     ({2'b00, pcm_rd_addr9}),
         .pcm_rd_data     (pcm_rd_data),
+        .lvl_q           (ac3_lvl_q),
 
         .pcm_done        (pcm_done_w),
         .err_unsupported (ac3_err)
@@ -615,6 +617,7 @@ module dvd_audio_decode #(
         .mono        (ac3_mono),
         .pcm_rd_addr (pcm_rd_addr9),
         .pcm_rd_data (pcm_rd_data),
+        .lvl_q       (ac3_lvl_q),
         .busy        (),
         .done        (pcm_done_w),
 

@@ -12,13 +12,18 @@
 //  full block (>=256 pairs); DEPTH defaults to 512.
 //
 //  FORMAT (architecture.md §5 — PCM output rounding, pinned at M9):
-//    pcm_mem is Q8.23 (32-bit, value = raw/2^23, nominal full-scale +/-1.0).
-//    s16 = round_half_up(raw / 2^8) then saturate to [-32768, 32767]:
-//      raw = +2^23 (==+1.0) -> +32768 -> saturates to +32767 (the only sat a
-//      well-formed in-scope decode hits; out-of-range only from accumulation
-//      headroom).  Rounding is round-half-toward-+inf ((raw+128)>>>8): cheap, no
-//      DC bias of concern at s16 (the half-LSB add is 2^-16 of full scale).  The
-//      bounded-error vs liba52's s16 is measured in the cosim (run_front_cosim).
+//    pcm_mem is Q8.23 (32-bit, value = raw/2^23).  ** Full scale in pcm_mem is
+//    +/-0.5, NOT +/-1.0 ** -- this datapath reconstructs coefficients at liba52's
+//    state->level = 1.0, while a reference decoder runs at 2/(1+clev+slev).  The
+//    `lvl_q` scalar (from imdct_512) makes up that difference before conversion,
+//    so a full-scale 2/0 sample arrives here as 0.5, is scaled x2, and lands on
+//    +/-32767.  (The original text claimed full scale was +/-1.0 here; that was
+//    the mistaken assumption behind the 6 dB deficit, corrected 2026-09-07.)
+//    s16 = round_half_up(scaled_raw / 2^8) then saturate to [-32768, 32767].
+//    Rounding is round-half-toward-+inf ((raw+128)>>>8): cheap, no DC bias of
+//    concern at s16 (the half-LSB add is 2^-16 of full scale).  The bounded
+//    error vs liba52's s16 is measured in the cosim (run_front_cosim), which
+//    compares pcm_mem PRE-scale and so is unaffected by lvl_q.
 //
 //  HANDSHAKE / domains:
 //    decode domain (clk, rst): `start` pulse (driven by imdct_512.done) kicks the
@@ -52,6 +57,13 @@ module pcm_out #(
     input  logic        mono,            // 1 = read ch0 for BOTH L and R
     output logic [8:0]  pcm_rd_addr,     // {ch, idx[7:0]} into imdct_512.pcm_mem
     input  logic signed [31:0] pcm_rd_data,  // Q8.23
+    // DVD-FORK FIX (2026-09-07): per-frame OUTPUT LEVEL scalar, Q2.14, from
+    // imdct_512 (which owns clev/slev).  This datapath reconstructs coefficients
+    // at liba52's state->level = 1.0; every normal decoder runs at
+    // 2/(1+clev+slev).  Scaling here -- the single point every output sample
+    // passes through, at drain rate rather than per coefficient -- puts the s16
+    // output on the reference level.  16'd16384 == 1.0 == pre-fix behaviour.
+    input  logic [15:0] lvl_q,
     output logic        busy,            // drain in progress
     output logic        done,            // 1-cycle pulse: block fully pushed to FIFO
 
@@ -63,6 +75,21 @@ module pcm_out #(
     output logic signed [15:0] audio_r,
     output logic        aud_valid        // 1 = a real pair was popped this aud_ce
 );
+
+    // ---- DVD-FORK FIX: apply the level scalar BEFORE the s16 conversion ----
+    // Q8.23 * Q2.14 -> Q8.23.  Deliberately a wire feeding the EXISTING to_s16
+    // rather than a new argument to it: `function automatic` helpers in this
+    // subtree have twice been miscompiled silently by Quartus 17 (acmod 1 and 5
+    // were silent on hardware while every sim gate stayed green -- see CLAUDE.md
+    // and memory verilog-function-hazards), so to_s16 keeps the exact shape that
+    // is proven in silicon.
+    //
+    // Range: |pcm_rd_data| <= ~2.4 (the downmix sum, imdct_512 header) and
+    // lvl_q <= 2.0, so the product stays well inside Q8.23's +/-256 and the
+    // [45:14] slice cannot lose a significant bit.  Built from a concatenation,
+    // NOT an N'() size cast (Quartus 17 miscompiles those -- see docs/mpeg1.md).
+    wire signed [47:0] lvl_prod = pcm_rd_data * $signed({1'b0, lvl_q});
+    wire signed [31:0] pcm_lvl  = lvl_prod[45:14];
 
     // ---- Q8.23 -> s16 : round half toward +inf, then saturate ----
     function automatic logic signed [15:0] to_s16(input logic signed [31:0] q);
@@ -107,7 +134,7 @@ module pcm_out #(
     // push is atomic in the decode domain: data, mem-write, and wptr advance all
     // happen the same cycle D_R fires with space available — no skew/desync.
     wire        do_push   = (st == D_R) && !fifo_full;
-    wire [31:0] push_data = {lat_l, to_s16(pcm_rd_data)};
+    wire [31:0] push_data = {lat_l, to_s16(pcm_lvl)};
 
     wire fifo_pop  = aud_ce & ~fifo_empty;
     wire [31:0] fifo_rdata = mem[rbin[FIFO_AW-1:0]];
@@ -137,7 +164,7 @@ module pcm_out #(
                 D_LW: st <= D_L;
                 // L (ch0) on pcm_rd_data this cycle; capture, point at R.
                 D_L: begin
-                    lat_l       <= to_s16(pcm_rd_data);
+                    lat_l       <= to_s16(pcm_lvl);
                     pcm_rd_addr <= {~mono, idx};        // R of sample idx (mono: ch0)
                     st          <= D_RW;               // wait one cycle for the read
                 end

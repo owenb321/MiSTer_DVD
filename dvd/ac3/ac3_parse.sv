@@ -114,6 +114,7 @@ module ac3_parse (
     output logic        imdct_done,       // 1-cycle pulse: IMDCT complete (per block)
     input  logic [10:0] pcm_rd_addr,      // {ch[2:0], idx[7:0]}
     output logic signed [31:0] pcm_rd_data,
+    output logic [15:0] lvl_q,          // DVD-FORK: per-frame output level (Q2.14)
 
     // output-stage metering handshake.  After a block's IMDCT the sequencer
     // waits in P_DRAIN for `pcm_done` before starting the next block — the next
@@ -345,6 +346,7 @@ module ac3_parse (
         .cmixlev(cmixlev), .surmixlev(surmixlev), .acmod(acmod),
         .coeff_rd_addr(imdct_coeff_rd_addr), .coeff_rd_data(imdct_coeff_rd_data),
         .pcm_rd_addr(pcm_rd_addr), .pcm_rd_data(pcm_rd_data),
+        .lvl_q(lvl_q),
         .done(imdct_done)
     );
 
