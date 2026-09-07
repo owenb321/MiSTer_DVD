@@ -272,7 +272,7 @@ just-in-time decoder — and 5 mutations each caught by its own scenario),
 `av_sync_tb` (the mirror), `dvd_audio_decode_tb`, `flush_ctl_tb`, the
 telemetry bench, and the display suites re-paced with `sched_due` tied high.
 
-## 3.7 HW round B found two defects (2026-09-06) — both fixed, both my errors
+## 3.7 HW rounds B and C (2026-09-06/07) — five defects, all of them mine
 
 **Round B was reported by the maintainer, not by me: I shipped Stage 0 and Stage 1
 on simulation evidence and never ran `tools/mister.py` against the rig.** Symptoms:
@@ -421,7 +421,7 @@ to fold it into the scheduler (release half a field early) or leave it to the
 knob is an open question, and it should be settled with the authored SYNC disc
 rather than by taste.
 
-### (4) A raster change is a discontinuity — the diagnosis was right, the FIX WAS WRONG (retracted, see (5))
+### (4) ⛔ RETRACTED IN FULL — "a raster change is a discontinuity" (the diagnosis was wrong too; see (5))
 
 After the three fixes above the timeline was FLAT — and sitting a constant
 **−1.83 s** behind the clock, with audio (slaved to that clock) a fixed 1.83 s
@@ -547,15 +547,23 @@ measured clean and was wrong.
 
 ### Still open after these fixes
 
-The reported residual — "APOLLO_13 interlaced better than 24p, both wrong at 0 ms
-offset" — is NOT explained by either fix and needs a measurement, not a guess. Word
-11 `disp_lag` (displayed PTS − STC at each pickup) is the instrument: ~0 means the
-scheduler is placing pictures correctly and any remaining error is downstream
-(pickup-to-screen latency, which is one raster scan and therefore ~25 ms LARGER at
-23.976 Hz than at 59.94 Hz — the right shape for "interlaced better than 24p", but far
-too small to be the whole story on its own). ⚠ The rig must be running the MATCHING
-Main: the archived branch's `dvd_ctl` reads 16 words with different labels, so this
-core's `disp_lag` prints there as `av_drift_ms`.
+⏳ **The provisional-anchor fix is BUILT AND SIM-PROVEN, NOT HW-CONFIRMED.** The evidence
+for it is a hardware measurement of the DEFECT (word 13 stepping to +1.6 s and holding, in
+two configurations, one with no raster change at all) plus RED/GREEN benches for the fix.
+Neither of those is a measurement of the fix working. Word 15 now reports the clock's own
+history — `{reanchors, first_anchor_tagged, first_seen, prov_seen}` — specifically so the
+next round can say which of these actually happened instead of inferring it from the
+absence of a symptom.
+
+Expected on the next capture, in the user's exact configuration (APOLLO_13, Film 24p Auto,
+Disc Menus off, Progressive, A/V Offset 0):
+
+- `av_drift` settles near 0 and does **not** step by ~1.6 s.
+- `play_err` is now an honest instrument, so if any residual remains it will show it.
+- `first_tagged` says whether the first display anchor came from a real picture PTS.
+
+⏳ Untouched by this round and still open: the `iec61937_wrap` half (HW-gate on a receiver),
+and the pre-existing film-detector flapping on mixed content.
 
 ## 4. HW rounds
 
