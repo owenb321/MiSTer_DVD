@@ -42,7 +42,7 @@ module disp_sched_tb;
   reg         pickup = 0;
   reg         skip_ack = 0, skip_field = 0, skip_ps = 0, skip_pf = 1, skip_tff = 1, skip_rff = 0;
   reg  [15:0] half_scan = 750;
-  wire        pic_due, next_due, anchored, anchor_req, disp_lag_valid;
+  wire        pic_due, next_due, anchored, anchor_req, disp_lag_valid, catchup_late;
   wire [32:0] stc;
   wire signed [33:0] anchor_delta, disp_lag;
 
@@ -58,7 +58,8 @@ module disp_sched_tb;
     .half_scan(half_scan),
     .pic_due(pic_due), .next_due(next_due), .stc(stc), .anchored(anchored),
     .anchor_req(anchor_req), .anchor_delta(anchor_delta),
-    .disp_lag_valid(disp_lag_valid), .disp_lag(disp_lag));
+    .disp_lag_valid(disp_lag_valid), .disp_lag(disp_lag),
+    .dbg_flags(), .dbg_dur(), .catchup_late(catchup_late));
 
   // ------------------------------------------------------------- the clock
   integer now = 0;                       // ticks since scenario start
@@ -173,6 +174,8 @@ module disp_sched_tb;
     end
   end
   always @(posedge clk) if (anchor_req) reanchors = reanchors + 1;
+  integer catchups = 0;
+  always @(posedge clk) if (catchup_late) catchups = catchups + 1;
 
   // ------------------------------------------------------------ scenarios
   integer errors = 0;
@@ -183,7 +186,7 @@ module disp_sched_tb;
     begin
       half_scan = hs; scan_a = sa; scan_b = sb; scan_c = sc; scan_d = sd; scan_pat = pat; ilace = il; frc = code;
       n_pic = 0; di = 0; cur = -1; pic_valid = 0; video_live = 0; pause = 0; prov_valid = 0;
-      lates = 0; pickups = 0; reanchors = 0; max_abs_lag = 0; worst_pic = -1; busy = 0; scan_i = 0; settle = 2;
+      lates = 0; pickups = 0; reanchors = 0; catchups = 0; max_abs_lag = 0; worst_pic = -1; busy = 0; scan_i = 0; settle = 2;
       flush = 1; repeat (4) @(posedge clk); flush = 0;
       now = 0; next_opp = 20;
       repeat (4) @(posedge clk);
@@ -360,6 +363,66 @@ module disp_sched_tb;
       $display("FAIL [8b] after the drops pictures still off by %0d", max_abs_lag); errors = errors + 1; end
     $display("  [8b] 400 ms starvation: lates=%0d reanchors=%0d max|lag|=%0d (must be 1 re-anchor)", lates, reanchors, max_abs_lag);
 
+    // [8d] CATCH-UP: at maximum display rate the display cannot recover a phase
+    //      error on its own (one picture per scan IS the content rate in film24),
+    //      so a picture picked up while more than a frame late must REQUEST A DROP.
+    //      Measured on hardware before this existed: the timeline sat flat but
+    //      1.83 s behind the clock, audio a fixed 1.83 s ahead of the picture.
+    //      Here the film24 raster is started 1 s behind the content; the scheduler
+    //      must ask for drops, and must stop asking once it is back in step.
+    //      ⚠ The offset must appear AFTER the timeline is established: a clock
+    //      skewed before the first pickup is simply erased by the anchor. So the
+    //      display is starved for ~1 s mid-run, which at max rate it can never
+    //      work off -- exactly the hardware case.
+    reset_world(1877, 3754, 3754, 3753, 3754, 4, 0, 4);
+    film_32(200, 100000, 12, 20000);
+    for (i = 40; i < 64; i = i + 1) s_ready[i] = s_pts[i] - 20000 + 90000;   // 1 s of starvation
+    settle = 70;
+    run_until_done(200);
+    if (catchups == 0) begin
+      $display("FAIL [8d] display 1 s behind at max rate: no drop requested -- it can never recover");
+      errors = errors + 1;
+    end
+    $display("  [8d] catch-up: %0d drop requests, %0d pickups, reanchors=%0d", catchups, pickups, reanchors);
+
+    // [8e] the steady state must NOT request drops
+    reset_world(1877, 3754, 3754, 3753, 3754, 4, 0, 4);
+    film_32(200, 100000, 12, 20000);
+    run_until_done(200);
+    if (catchups != 0) begin
+      $display("FAIL [8e] steady state requested %0d drops -- the threshold is too tight", catchups);
+      errors = errors + 1;
+    end
+    $display("  [8e] steady state: %0d drop requests (must be 0)", catchups);
+
+    // [8f] A RASTER CHANGE IS A KNOWN DISCONTINUITY: a video->film engage restarts
+    //      the raster and fires no flush, so the clock free-runs across a transition
+    //      in which nothing is displayed. The scheduler must re-anchor at the next
+    //      TAGGED picture -- without dropping anything -- instead of carrying the
+    //      lost time forever. Modelled by switching half_scan mid-run while the
+    //      decoder stalls across the change.
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(160, 100000, 12, 20000);
+    for (i = 60; i < 76; i = i + 1) s_ready[i] = s_pts[i] - 20000 + 72000;   // 0.8 s dark transition
+    fork
+      begin
+        wait (pickups >= 60);
+        half_scan = 1877; scan_a = 3754; scan_b = 3754; scan_c = 3753; scan_d = 3754;
+        scan_pat = 4; ilace = 0;                       // the film raster
+      end
+      run_until_done(200);
+    join
+    settle = 0;
+    if (catchups > 8) begin
+      $display("FAIL [8f] raster change cost %0d drop requests -- it should re-anchor, not drop", catchups);
+      errors = errors + 1;
+    end
+    if (reanchors < 2) begin
+      $display("FAIL [8f] raster change did not re-anchor (%0d anchors)", reanchors);
+      errors = errors + 1;
+    end
+    $display("  [8f] raster change: reanchors=%0d catchups=%0d max|lag|=%0d", reanchors, catchups, max_abs_lag);
+
     // [9] second-field tags: the tag names the SECOND field (one field later)
     reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
     film_32(120, 100000, 12, 20000);
@@ -398,7 +461,7 @@ module disp_sched_tb;
     if (anchor_delta != 0) begin $display("FAIL [12] first pickup delta %0d, expected 0", anchor_delta); errors = errors + 1; end
     report("[12] provisional anchor", 1, 1, 752);
 
-    if (errors == 0) $display("PASS: disp_sched_tb — 14 scenarios");
+    if (errors == 0) $display("PASS: disp_sched_tb — 17 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end
     $finish;
   end

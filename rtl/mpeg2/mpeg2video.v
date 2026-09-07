@@ -1167,7 +1167,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .clk_en(1'b1),
     .rst(sync_rst),
     .enable(frame_drop_en),
-    .frame_late(frame_late),
+    .frame_late(frame_late | sched_catchup_late),   // DVD-FORK (PTS scheduling): + the scheduler's catch-up request
     .drop_ack(drop_pic_ack),
     // DVD-FORK (2026-07-03, Shea-Stadium over-advance fix): debit the DROPPED
     // frame's own would-be display duration — rff ? 3 : 2, the same formula the
@@ -1503,7 +1503,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* DVD-FORK (PTS scheduling, docs/stc_freerun.md): the display scheduler and
    * the free-running STC. Reset by the VBUF flush (a seek/mount), never by the
    * keep_vbuf menu hop's pipe reset -- see the module header. */
-  wire        sched_due, sched_next_due;
+  wire        sched_due, sched_next_due, sched_catchup_late;
   disp_sched disp_sched (
     .clk(clk),
     .rst_n(sync_rst),
@@ -1540,7 +1540,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .disp_lag_valid(disp_lag_valid),
     .disp_lag(disp_lag),
     .dbg_flags(sched_dbg_flags),
-    .dbg_dur(sched_dbg_dur)
+    .dbg_dur(sched_dbg_dur),
+    .catchup_late(sched_catchup_late)
     );
 
   resample resample (

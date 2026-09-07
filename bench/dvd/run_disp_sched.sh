@@ -2,7 +2,7 @@
 # run_disp_sched.sh — the display scheduler (dvd/disp_sched.sv), GREEN then MUTATED.
 #
 # disp_sched_tb builds a decoder + raster + clock model from first principles and
-# requires every pickup to land within half a scan of its PTS across 14 scenarios.
+# requires every pickup to land within half a scan of its PTS across 16 scenarios.
 # Level assertions on a scheduler are exactly the shape that passes without
 # proving anything, so five targeted RTL mutations are applied to a COPY of the
 # shipping source and each must make its own scenario FAIL:
@@ -21,6 +21,7 @@
 #   M5  every picture counts as 2 fields        -> [6]/[11] false starvation lates (the image
 #       list pins each picture's fields on the raster, so the timeline error shows as lates)
 #   M6  LATE_MAX back to 350 ms                 -> [8b] a recoverable starvation re-anchors
+#   M8  catch-up drop request removed           -> [8d] a display stuck behind at max rate
 set -u
 cd "$(dirname "$0")/../.."
 fail=0
@@ -60,6 +61,7 @@ mut M3 "wire [32:0] pic_pts_eff = pic_pts - (pic_pts_2nd ? field_ticks : 33'd0);
 mut M4 "((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s))" "((d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s))" "FAIL \[7d\]"
 # M6 is the HW round-B defect itself: lateness treated as a discontinuity again.
 mut M6 "34'sd243000" "34'sd31500" "FAIL \[8b\]"
+mut M8 "if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end" "if (1'b0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end" "FAIL \[8d\]"
 mut M5 "((pic_pf  && pic_rff)  ? dur3 : dur2);" "dur2;" "FAIL \[6\]"
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="

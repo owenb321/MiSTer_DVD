@@ -421,6 +421,42 @@ to fold it into the scheduler (release half a field early) or leave it to the
 knob is an open question, and it should be settled with the authored SYNC disc
 rather than by taste.
 
+### (4) A raster change is a discontinuity, and it was not being treated as one
+
+After the three fixes above the timeline was FLAT — and sitting a constant
+**−1.83 s** behind the clock, with audio (slaved to that clock) a fixed 1.83 s
+ahead of the picture. It was never a runaway: it is a one-off STEP taken at the
+video→film transition, which is then carried forever.
+
+**Why the step happens.** A film engage restarts the raster (the modeline walk
+keys on `il_eff | pal_eff | filmp_eff`) but deliberately fires **no flush** — a
+bare `filmp_eff` edge into the flush trio broke T2's logo chain and is
+explicitly forbidden (`dvd/emu.sv`, `docs/film_24p_plan.md` §13). So the clock
+free-runs across a transition in which the raster restarts, the decoder re-locks
+and nothing is displayed. **And at 24p the display is already at maximum rate**
+— one picture per raster scan IS the content rate — so the wall time lost there
+can never be worked off.
+
+**Fix: re-anchor at the raster change, which costs no dropped frames.** This is
+a re-anchor on a KNOWN EVENT, not on lateness, and that distinction is the whole
+of §3.9: every reference player re-anchors on a discontinuity it can name and
+none moves the clock merely because output was late. `disp_sched` watches
+`half_scan` — which IS the raster, changing exactly when the modeline does — and
+forces an anchor at the next TAGGED picture (anchoring on an untagged one would
+re-anchor to the clock's own value and change nothing). ⚠ It touches the CLOCK
+ONLY: no demux, VBUF or audio-ring reset, so it cannot reopen the T2 failure,
+which was caused by flushing the parse.
+
+**Kept as the fallback: discharge lateness by DROPPING** (`catchup_late` →
+`frame_late` → `frame_drop_ctl` → a VLD B-drop), rate-limited to one request per
+4 pickups and armed only past ~50 ms. That is for lateness which arrives with no
+event to key on; a mode change now never reaches it.
+
+MEASURED on the rig after this fix, APOLLO_13 launched straight into the feature
+(the natural video→film transition), 100 s: **`disp_lag` −15.8 → −16.7 ms, slope
+−0.01 ms/s**, `play_err` 0.0, drain-gate closures 0. The 1.83 s step is gone and
+the residual is the one-field pickup-to-screen latency.
+
 ### Still open after these fixes
 
 The reported residual — "APOLLO_13 interlaced better than 24p, both wrong at 0 ms

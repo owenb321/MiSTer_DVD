@@ -126,7 +126,10 @@ module disp_sched #(
     // duration it applied. Three wrong guesses at the duration model were made from
     // rates alone; this reports the inputs so the next one is not a guess.
     output reg   [7:0] dbg_flags,
-    output reg  [15:0] dbg_dur
+    output reg  [15:0] dbg_dur,
+    // Discharge accumulated lateness by DROPPING a picture, never by moving the
+    // clock. One pulse per drop request, into resample's frame_late -> frame_drop_ctl.
+    output reg         catchup_late
 );
 
     // ---- PIPELINE NOTE (2026-09-06, the first Stage 1 fit) -------------------
@@ -235,7 +238,39 @@ module disp_sched #(
     reg  disc, anchor_now, pic_due_r, next_due_r;
     wire disc_w = has_tag && anchored && next_valid &&
                   ((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > late_max_s));
-    wire anchor_now_w = pic_valid && (!anchored || (has_tag && (!next_valid || disc_w)));
+    // ---- RE-ANCHOR AT A KNOWN RASTER CHANGE ------------------------------------
+    // A video->film engage restarts the raster (the modeline walk keys on
+    // il_eff|pal_eff|filmp_eff) but deliberately fires NO FLUSH: a bare filmp edge
+    // into the flush trio broke T2's logo chain and is explicitly forbidden
+    // (dvd/emu.sv, docs/film_24p_plan.md 13). So the clock free-runs across a
+    // transition during which the raster restarts, the decoder re-locks and NOTHING
+    // IS DISPLAYED -- and at 24p, where one picture per scan already IS the content
+    // rate, the wall time lost there can never be worked off. MEASURED: a flat
+    // timeline sitting a constant 1.83 s behind the clock.
+    //
+    // ★ This is a re-anchor on a KNOWN EVENT, not on lateness, and that distinction
+    // is the whole of docs/stc_freerun.md 3.9: every reference player re-anchors on a
+    // discontinuity it can name (VLC on a stream-clock gap, Kodi on a DTS jump,
+    // ffplay past AV_NOSYNC_THRESHOLD) and none of them moves the clock merely
+    // because output was late. It also costs no dropped frames, which the catch-up
+    // below does -- so this is the mechanism that should handle a mode change, and
+    // the drop path is only for lateness that arrives with no event to key on.
+    // ⚠ It touches the CLOCK ONLY -- no demux, VBUF or audio-ring reset -- so it
+    // cannot reopen the T2 failure, which was caused by flushing the parse.
+    // half_scan IS the raster: it changes exactly when the modeline does.
+    // The resync waits for a TAGGED picture, because anchoring on an untagged one
+    // would re-anchor to the clock's own value and change nothing.
+    reg [15:0] half_scan_q;
+    reg        resync_pend;
+    always_ff @(posedge clk) begin
+        half_scan_q <= half_scan;
+        if (!rst_n || flush)                    resync_pend <= 1'b0;
+        else if (half_scan != half_scan_q)      resync_pend <= 1'b1;
+        else if (pickup && anchor_now)          resync_pend <= 1'b0;
+    end
+
+    wire anchor_now_w = pic_valid &&
+                        (!anchored || (has_tag && (resync_pend || !next_valid || disc_w)));
     always_ff @(posedge clk) begin
         disc       <= disc_w;
         anchor_now <= anchor_now_w;
@@ -245,6 +280,39 @@ module disp_sched #(
     wire [32:0] anchor_val = has_tag ? pic_pts_eff : (prov_seen ? stc : 33'd0);
     assign pic_due  = pic_due_r;
     assign next_due = next_due_r;
+
+    // ---- CATCH-UP: lateness is discharged by DROPPING, never by moving the clock --
+    // MEASURED (HW round B): in Film 24p the display is ALREADY at maximum rate --
+    // one picture per raster scan IS the content rate -- so once it falls behind
+    // during a startup or mode transition it can never recover on its own, and
+    // nothing asks it to: frame_late only fires when the display is STARVED, and
+    // here it is not starved, it has pictures and they are all simply overdue. The
+    // measured result was a timeline flat but stuck 1.83 s behind the clock, with
+    // audio (slaved to that clock) a fixed 1.83 s ahead of the picture.
+    // ★ The cure is a DROP, not a re-anchor, and that is not a preference: VLC,
+    // ffplay, Kodi and GStreamer all discharge accumulated lateness by dropping and
+    // NONE of them moves the media clock for output lateness (docs/stc_freerun.md
+    // 3.9). A dropped picture advances the content timeline by its own duration
+    // without spending a raster scan, so the display walks back to zero and stops.
+    // Rate-limited to one request per DROP_COOL pickups (~6/s at 24p, ~250 ms of
+    // catch-up per second) so a large offset clears in seconds without a drop storm,
+    // and armed only past LATE_DROP -- more than one film frame -- so the steady
+    // state never triggers it.
+    localparam signed [33:0] LATE_DROP_S = 34'sd4504;   // ~50 ms, > one 24p frame
+    localparam [3:0]         DROP_COOL   = 4'd3;
+    reg [3:0] cool;
+    always_ff @(posedge clk) begin
+        catchup_late <= 1'b0;
+        if (!rst_n || flush) begin
+            cool <= 4'd0;
+        end else if (pickup) begin
+            if (sched_en && anchored && next_valid && !anchor_now
+                && (d_stc_want > LATE_DROP_S)) begin
+                if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end
+                else                    cool <= cool - 4'd1;
+            end else cool <= 4'd0;
+        end
+    end
 
     always_ff @(posedge clk) begin
         anchor_req     <= 1'b0;
