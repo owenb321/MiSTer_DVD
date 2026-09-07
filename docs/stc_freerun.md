@@ -636,6 +636,41 @@ the one place the audit could not fully clear by inspection, so it is written do
 field-coded content mis-associates, start here. Same for `dvd_audio_decode`'s now-inert
 `anchor_pulse`/`anchor_delta` ports, left in place with the ⛔ note at the old use site.
 
+### (8) MEASURED WITH A LIVE PTS PATH (2026-09-07, build `DVD_stcfree_20260907_0335`)
+
+SEED 5 first roll, clk_dec 91.41 @100C / 90.51 @-40C, 92 % ALM. `netlist_canary` PASS
+(`tag_pts` no longer constant-folded). Same two configurations as (5), same script:
+
+| | before (dead PTS path) | after |
+|---|---|---|
+| `av_drift`, Film 24p Auto | **+1599.9 ms** | **−0.3 ms** |
+| `av_drift`, Film 24p Off | **+1601.5 ms** | **+0.2 ms** |
+| clock history | `prov_seen=0 first_tagged=0` | `prov_seen=1 first_tagged=1` |
+| re-anchors over 80 s | 1 (to zero, untagged) | 1 (to a real picture PTS) |
+
+The clock history line is the part that is not self-referential: it says a real tagged
+picture anchored the clock, rather than the clock agreeing with a number derived from it.
+
+**★ And the A/V Offset default should now be 0 ms, measured rather than assumed.** The
+plan's Step 5 predicted this ("+100 ms was the null of the old parse-front residual") and
+it holds exactly:
+
+| A/V Offset | `play_err` (clock − audio playback position) | `av_drift` |
+|---|---|---|
+| **0 ms** | **−0.0 ms** | +100.1 ms |
+| +100 ms | +99.9 ms | −0.3 ms |
+
+At 0 ms audio plays exactly at its PTS against a clock anchored on the displayed
+picture's PTS, which is the definition of correct. The +100 ms residual on `av_drift`
+there is the dispatch-to-DAC latency — a real buffer, not an error. ⏳ **Not changed in
+the CONF_STR yet: the default is user-visible, the verdict is ears, and changing it also
+re-rolls the pinned fitter seed** (`CONF_STR` is in the netlist).
+
+⚠ **This is telemetry, and telemetry is what was wrong twice today.** It is much stronger
+evidence than before — the clock history cannot report health when the path is absent, and
+`av_drift` is referenced to the audio stream's own timestamps — but the verdict is a
+listening test.
+
 ### Still open after these fixes
 
 ⏳ **The provisional-anchor fix is BUILT AND SIM-PROVEN, NOT HW-CONFIRMED.** The evidence
