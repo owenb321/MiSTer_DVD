@@ -3458,6 +3458,27 @@ wire       dec_stream_valid;   // 1 = byte consumed by decoder this cycle
 // SCREEN against the clock the audio is scheduled by. Stage 0 measures it;
 // Stage 1 (the display scheduler) is what drives it to ~0.
 wire [32:0] dec_pts_in;     wire dec_pts_in_valid;       // clk_dec
+// ⚠⚠ THIS CDC WAS MISSING FOR THE WHOLE OF STAGE 0 AND STAGE 1 (fixed 2026-09-07).
+// The wires were declared here and consumed by mpeg2video, and mpeg2video's own
+// comment even said the PTS was "already crossed into clk (emu pts_cdc)" -- but no
+// such instance existed, so Quartus tied both low and the decoder NEVER RECEIVED A
+// VIDEO PTS. The scheduler therefore anchored its clock to 0 at the first (untagged)
+// pickup and ran open-loop on extrapolation alone for every disc.
+// ★ It hid because every A/V instrument referenced the clock to itself: with no tags,
+// disp_lag compares the clock against the scheduler's own extrapolation, so it reads
+// ~0 no matter how wrong the clock is, and that "~0" was read as the scheduler
+// working. It was found by adding word 15 -- the clock's own HISTORY (prov_seen=0,
+// first_tagged=0, reanchors=1) -- which is the first instrument here that could
+// disagree with the clock instead of being derived from it.
+// ⚠ No bench could have caught it: pts_assoc_tb and pts_chain_tb drive pts_in
+// directly, and there is no emu-level bench. A missing INSTANCE also raises no
+// implicit-net warning, because the wire is properly declared (cf. the
+// implicit-net-silent-kill lesson, which the 10236 gate does cover).
+// Video PTS arrive about once per VOBU (~0.5 s), orders of magnitude slower than the
+// toggle handshake, so nothing is dropped.
+pts_cdc #(.W(33)) pts_cdc_vid (
+    .src_clk(clk_sys), .src_rst_n(reset_n), .src_data(ps_vid_pts), .src_valid(ps_vid_pts_valid),
+    .dst_clk(clk_dec), .dst_rst_n(reset_n), .dst_data(dec_pts_in), .dst_valid(dec_pts_in_valid));
 
 // ---- THE STC IS A CLOCK (docs/stc_freerun.md) -------------------------------
 // The 90 kHz tick: clk_sys/300 exactly, the same crystal the raster and the

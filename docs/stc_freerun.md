@@ -545,6 +545,53 @@ done, and whose picture flags survive in word 14) to the clock's own history:
 design referenced the clock to itself, which is how two rounds in a row shipped a fix that
 measured clean and was wrong.
 
+### (6) ★★★ THE PTS NEVER REACHED THE DECODER AT ALL — the CDC was never instantiated
+
+The round-C build was deployed and measured, and word 15 answered in one line:
+
+    reanchors=1  first_tagged=0  first_seen=1  prov_seen=0
+
+`prov_seen=0` — no parse-front PTS ever arrived. `first_tagged=0` — no picture ever
+carried a tag. One anchor, ever, taken at an **untagged** pickup, whose `anchor_val` is
+`(prov_seen ? stc : 0)` = **zero**. The clock was anchored to 0 at the first picture and
+free-ran from there, for every disc, in every mode.
+
+**Cause: `dvd/emu.sv` declared `dec_pts_in` / `dec_pts_in_valid`, wired them into
+`mpeg2video`, and never instantiated the CDC that drives them.** `mpeg2video`'s own port
+comment reads *"pts_in is that PTS, already crossed into clk (emu pts_cdc)"* — naming an
+instance that did not exist. Quartus tied both low. One `pts_cdc #(.W(33))` fixes it.
+
+That also explains the +1.6 s exactly, and better than (5) did: with the clock starting at
+0 and audio anchoring on its own real PTS via the fallback, the offset is simply the
+audio PTS at the start of playback — which is why it measured **1599.9 ms and 1601.5 ms in
+two different raster configurations**, identical to within a millisecond. A dynamic
+mechanism does not reproduce to 0.1 %; a stream constant does.
+
+**★★ Why four instruments and two hardware rounds missed it, which is the lesson.**
+
+- Not an implicit net: the wire was properly declared, so `default_nettype none` and the
+  Quartus 10236 gate were both silent. Those catch a missing DECLARATION; this was a
+  missing DRIVER.
+- No bench sees it: `pts_assoc_tb` and `pts_chain_tb` drive `pts_in` directly and are
+  byte-exact, and there is no emu-level bench. **The association was correct; it was
+  simply never given anything to associate.**
+- And the telemetry read healthy, because **with no tags `want_pts` falls back to the
+  scheduler's own extrapolation, so `disp_lag` compares the clock against a number
+  derived from the clock**. It read ≈0 and was taken as evidence the scheduler worked.
+
+> **An instrument derived from the thing it measures reports health at exactly the moment
+> that thing is absent.** Word 15 found this on its first run precisely because it reports
+> the clock's own HISTORY — how many times it moved, and whether anything real ever moved
+> it — rather than a difference against it.
+
+**★ And the netlist had said so plainly all along.** The map report's register-merging
+table listed `pts_assoc|tag_pts[1..32]` as *"Merged with tag_pts[0]"* — 33 bits of PTS
+collapsed into one, which only happens when the input is constant. That is now a build
+gate: **`tools/netlist_canary.sh`**, a short allowlist of wide registers that must not be
+constant-folded, advisory on a dev build and fatal on `--release`. It is proven RED against
+the broken build's own report. Same family as the dead-stripped `dsi_tbl` (16 ALMs / 0
+memory bits) that the D-pad seek work had to notice by hand — but mechanical this time.
+
 ### Still open after these fixes
 
 ⏳ **The provisional-anchor fix is BUILT AND SIM-PROVEN, NOT HW-CONFIRMED.** The evidence

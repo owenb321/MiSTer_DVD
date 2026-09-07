@@ -193,6 +193,25 @@ else
     OUT="releases/${NAME}${FMAX_TAG}_$(date +%Y%m%d_%H%M).rbf"
 fi
 
+# Netlist canary (tools/netlist_canary.sh): a wide data register that Quartus
+# constant-folded is a data path that is DEAD in silicon and healthy in every
+# simulation. This gate exists because dec_pts_in/dec_pts_in_valid were connected
+# but never DRIVEN -- no missing declaration, so no implicit-net warning; no
+# emu-level bench, so nothing in sim; and the telemetry read clean because it was
+# derived from the same clock the dead path was supposed to steer. The netlist
+# said it in one line. Advisory on a dev build, fatal on --release.
+if CANARY_OUT=$("$(dirname "$0")/tools/netlist_canary.sh" "output_files/${PROJECT}.map.rpt" 2>&1); then
+    echo "$CANARY_OUT"
+else
+    echo "$CANARY_OUT" >&2
+    if [[ "$RELEASE_GATE" -eq 1 ]]; then
+        echo "ERROR: --release build refused: a load-bearing data path is constant in the netlist." >&2
+        trap - EXIT
+        exit 1
+    fi
+    echo "WARNING: packing a build with a DEAD data path (see above) — it will look correct in sim." >&2
+fi
+
 echo ">> Packing compressed .rbf -> ${OUT}"
 quartus_cpf -c -o bitstream_compression=on "$SOF" "$OUT"
 
