@@ -24,6 +24,8 @@
 #   M8  catch-up drop request removed           -> [8d] a display stuck behind at max rate
 #   M9  an UNTAGGED pickup sets disp_anchored   -> [13] audio would commit its phase to
 #       the parse front (the measured 1.6 s lead)
+#   M10 first tag anchors only on disc_w    -> [13b] a SMALL provisional error never
+#       yields a display anchor at all
 #
 # ⚠ NOT COVERED HERE, and it cost a hardware round: dvd_audio_decode's play_err is the
 # LIP-SYNC measurement (clock minus audio playback position). Re-basing play_anchor on a
@@ -75,6 +77,9 @@ mut M5 "((pic_pf  && pic_rff)  ? dur3 : dur2);" "dur2;" "FAIL \[6\]"
 # timeline" while it still holds the parse-front value, so audio latches its playback
 # phase ~1.6 s ahead of the picture and nothing ever re-times it.
 mut M9 "if (has_tag) disp_anchored <= 1'b1;" "disp_anchored <= 1'b1;" "FAIL \[13\]"
+# M10: the first tagged picture only anchors if it ALSO looks like a discontinuity, so a
+# small provisional error never yields a display anchor and audio takes the fallback.
+mut M10 "(has_tag && (!disp_anchored || !next_valid || disc_w))" "(has_tag && (!next_valid || disc_w))" "FAIL \[13b\]"
 
 [ $fail -eq 0 ] && echo "== ALL GREEN ==" || echo "== FAILURES =="
 exit $fail

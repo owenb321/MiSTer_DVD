@@ -506,6 +506,31 @@ module disp_sched_tb;
     join
     $display("  [13] disp_anchored: prov=no, untagged=no, tagged=yes");
 
+    // [13b] disp_anchored must arrive PROMPTLY, not only on a discontinuity.
+    //       [13] uses a 10 s provisional lead, which trips disc_w, so it would pass
+    //       even if the first tagged picture only anchored when it also looked like a
+    //       jump. The dangerous case is a SMALL provisional error (here 22 ms, inside
+    //       one frame): disc_w never fires, so without the !disp_anchored term the
+    //       flag can go unset for the whole title and audio falls through to the
+    //       ~2.5 s arm_timer fallback -- which releases against the provisional clock,
+    //       i.e. straight back to the defect this whole change removes.
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(30, 100000, 4, 20000);
+    for (i = 0; i < 4; i = i + 1) s_tag[i] = 0;
+    prov_pts <= 100000 + 2000; prov_valid <= 1; @(posedge clk); prov_valid <= 0;   // 22 ms < one frame
+    fork
+      begin
+        wait (pickups >= 8);                            // 4 untagged, then tagged from 4
+        repeat (4) @(posedge clk);
+        if (!disp_anchored) begin
+          $display("FAIL [13b] a small provisional error never yielded a display anchor -- audio takes the fallback against the parse front");
+          errors = errors + 1;
+        end
+      end
+      run_until_done(200);
+    join
+    $display("  [13b] disp_anchored arrives without a discontinuity");
+
     if (errors == 0) $display("PASS: disp_sched_tb — 18 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end
     $finish;

@@ -291,8 +291,17 @@ module disp_sched #(
     // that time and cannot un-consume it. Only a re-anchor that moves the clock
     // FORWARD, onto content that genuinely jumped, is safe. That is what disc_w's
     // jump tests do, and they stay.
+    // ★ `!disp_anchored` is load-bearing, not belt-and-braces. Until a TAGGED picture
+    // has set the clock, the clock still holds the PROVISIONAL parse-front value --
+    // a VBUF depth ahead of the picture -- and audio is waiting on disp_anchored
+    // before it may commit its one-shot playback phase. Without this term the first
+    // tagged picture only anchors if it also trips disc_w, so on a stream whose lead
+    // happens to fall inside the discontinuity window the flag could take seconds to
+    // arrive and audio would fall through to the ~2.5 s arm_timer fallback -- which
+    // releases against the provisional clock, i.e. straight back to the defect.
+    // The first real tag owns the clock; after that, normal discontinuity rules.
     wire anchor_now_w = pic_valid &&
-                        (!anchored || (has_tag && (!next_valid || disc_w)));
+                        (!anchored || (has_tag && (!disp_anchored || !next_valid || disc_w)));
     always_ff @(posedge clk) begin
         disc       <= disc_w;
         anchor_now <= anchor_now_w;
