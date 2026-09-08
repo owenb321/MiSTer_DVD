@@ -14,7 +14,7 @@
 #
 # Why it's built this way:
 #   * SAME-PATH mount (-v REPO:REPO -w REPO): the scripts use relative paths AND
-#     seed_sweep.sh has a hardcoded `cd <repo>`; mounting at the identical absolute
+#     seed_sweep.sh resolves its own root from BASH_SOURCE; mounting at the identical absolute
 #     path makes both resolve in-container, and $0 in log lines stays meaningful.
 #   * -u host UID/GID + HOME=/tmp: Quartus writes output_files/ db/ incremental_db/
 #     into the repo — as root that leaves root-owned files that break the host

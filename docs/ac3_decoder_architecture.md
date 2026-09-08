@@ -781,6 +781,50 @@ landed exactly on the documented 1648 LSB once the convention was fixed).
 
 ## 5. Fixed-point convention (pin BEFORE datapath RTL)
 
+> ### ★ OUTPUT LEVEL CONVENTION (added 2026-09-07 — this was MISSING, and its
+> ### absence is why the fork shipped 6.02 dB quiet)
+>
+> **`pcm_mem` is at liba52's `state->level = 1.0`. Full scale there is ±0.5, not
+> ±1.0.** `pcm_out` multiplies by a per-frame scalar `lvl_q` (Q2.14, computed in
+> `imdct_512`) to reach the level a reference decoder produces:
+>
+> ```
+> lvl_q = 2 / (1 + clev_eff + slev_eff)
+> ```
+>
+> liba52 reconstructs coefficients as `coeff = state->dynrng · m16 · 2^-(15+exp)`,
+> where `a52_frame()` sets `state->level = 2 × (*level)` and `a52_downmix_init()`
+> has already folded its `A52_ADJUST_LEVEL` `adjust` into `*level`. The
+> conventional caller passes `*level = 1`, so a52dec, ffmpeg and this repo's own
+> retired HPS path (`docs/audio.md:100-110`, which specified
+> `A52_STEREO | A52_ADJUST_LEVEL`) all run at `2/(1+clev+slev)`.
+>
+> This datapath implements only the `m16 · 2^-(15+exp)` half. The contract below
+> states that reconstruction verbatim and **never mentions a level**, so the
+> convention was pinned at 1.0 by omission rather than by decision — and
+> `bench/ac3/cosim_main.cpp` was calibrated to match it (`level = 0.5` →
+> `state->level = 1.0`), which locked the error in place behind a green test.
+>
+> MEASURED against a52dec on this repo's own vectors, median per-sample ratio:
+> **0.5000 (−6.02 dB) before the fix, 1.0000 (0.00 dB) after**, on acmod 1, 2 and
+> 7 alike. The 5.1 case is not simply −6 dB out because the missing downmix
+> normalisation pushes the other way — the two errors partly cancel, which is why
+> 5.1 sounded acceptable while stereo did not.
+>
+> One formula covers every acmod because `clev`/`slev` in `imdct_512` are already
+> the EFFECTIVE values (zeroed for absent roles, mono surround pre-scaled by
+> `LEVEL_3DB`). Checked against every `CONVERT(..., A52_STEREO)` case in
+> `a52_downmix_init`.
+>
+> ⚠ **The scalar is applied in `pcm_out`, deliberately AFTER `pcm_mem`.** That
+> keeps the cosim's coefficient and PCM comparisons at `state->level = 1.0`
+> exactly as they were, so no golden needed regenerating and the existing gates
+> keep proving what they always proved. It also means those gates still cannot
+> see an output-level error — hence `bench/ac3/run_ac3_level.sh`, which compares
+> the s16 output against a52dec end to end and carries a RED arm forcing
+> `lvl_q = 1.0` that must measure 0.5.
+>
+
 liba52's reference path is float; our fabric path is fixed-point, so we **cannot**
 be bit-exact to liba52 — the pass criterion is bounded error (see roadmap). To
 keep divergence controlled and located, we pin formats up front and test the
