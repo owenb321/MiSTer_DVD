@@ -235,8 +235,10 @@ between every combed capture and every clean one was the corrector.
 
 ### 3.10 Analog sync shape: the equalizing pulses we were never emitting
 
-**Status (2026-09-05, branch `feature/smpte-csync`): sim-proven RED/GREEN, ⏳ HW-confirm
-pending.** New `dvd/csync_smpte.sv`; `P1O[47:46] Analog CSync = SMPTE / 2H / Stock`,
+**Status (2026-09-05, branch `feature/smpte-csync`): sim-proven RED/GREEN and ✅
+HW-CONFIRMED 2026-09-07 on the maintainer's rig** (composite CRT and HDMI both correct,
+build `DVD_smptesync4_20260907_2305.rbf`). ⏳ The two reporters whose sets found the
+defect have not retested; that is what the next release is for. New `dvd/csync_smpte.sv`; `P1O[47:46] Analog CSync = SMPTE / 2H / Stock`,
 **SMPTE is the default**, and after the 2026-09-07 option removal it is one of only two
 arms. Rebased onto main after PR #63 (the free-running STC); shipping build
 `DVD_smptesync4_20260907_2305.rbf`, SEED 5 first roll, clk_dec 93.45 @100C / 91.35 @-40C
@@ -531,8 +533,10 @@ separately.
 
 ### 3.12 The field order was wrong, and the broken sync had been hiding it
 
-**Status (2026-09-06, same branch): found by HARDWARE, fixed, sim-gated, ⏳ HW-confirm
-pending.** `rtl/mpeg2/field_polarity.vh` `FIELD1_VPOS` 0 → 1.
+**Status (2026-09-06, same branch): found by HARDWARE, fixed, sim-gated, and ✅
+HW-CONFIRMED 2026-09-07** — `Field Order = Normal` (now the only behaviour) is correct on
+HDMI **and** the CRT at once, which is the single observation the whole diagnosis reduced
+to. `rtl/mpeg2/field_polarity.vh` `FIELD1_VPOS` 0 → 1.
 
 **The field report that found it**, on the §3.10 build, on the reference CRT:
 
@@ -618,10 +622,10 @@ known-good**. ★ If a PAL CRT report says the fields are swapped, make the cons
 **per-standard** (`pal ? … : …` in all three consumers) — do not flip it globally, which
 would break the NTSC case it was measured on.
 
-⏳ **The HW test is now a single observation:** the picture must be correct on **both** HDMI
-and the CRT at once, with nothing to set. Both knobs the diagnosis used are gone — `Field
-Order` entirely, and `Analog CSync`'s `Stock` arm — so there is no combination left to get
-wrong.
+✅ **The HW test was a single observation and it passed (2026-09-07):** the picture is
+correct on **both** HDMI and the CRT at once, with nothing to set. Both knobs the diagnosis
+used are gone — `Field Order` entirely, and `Analog CSync`'s `Stock` arm — so there was no
+combination left to get wrong.
 
 ## 4. Tests
 

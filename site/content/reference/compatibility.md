@@ -99,6 +99,15 @@ headroom because the frames are taller.
 analogy with the hardware-proven NTSC ones and no PAL CRT was available to test them. PAL
 over HDMI is confirmed working.
 
+!!! info "Unreleased"
+
+    One extra part of this is unconfirmed on PAL as of the next release: **which of the two
+    interlaced fields the television treats as the first one**. The composite sync now
+    carries the full standard vertical block on both standards, and the *shape* of it is
+    correct for 625 lines — but the choice of which field leads was measured on NTSC and
+    applied to both. If a PAL CRT shows the two fields interleaved the wrong way round,
+    that is a known gap and a [report](reporting-a-bug.md) would settle it.
+
 **Changing the audio track inside a disc menu** silences the menu's audio until you leave
 the menu.
 

@@ -116,12 +116,29 @@ within about half a second, so you may still catch it settling.
     This is verified here on a **composite** set and over HDMI. It is not yet confirmed on
     the other analog sync modes, and the original reports came from rigs we cannot
     reproduce — a set's sync separator is exactly what decides whether the fault ever
-    showed. Untested: **RGB SCART** (`composite_sync=1`), **YPbPr** (`ypbpr=1`), **sync on
-    green** (`vga_sog=1`), **15 kHz RGBHV**, and **PAL on any analog CRT**.
+    showed. Untested: **YPbPr** (`ypbpr=1`), **sync on green** (`vga_sog=1`), **15 kHz
+    RGBHV**, and **PAL on any analog CRT**.
 
     If you run one of those, [a short report](../reference/reporting-a-bug.md) is worth a
     great deal — please paste the analog lines from your `MiSTer.ini` and name your set,
     and say whether a chapter skip or a paused frame ever leaves the fields wrong.
+
+!!! info "Unreleased — those reports came in, and found two more faults"
+
+    **RGB SCART** and a **RetroTINK 4K** did report, and between them turned up two
+    problems that were *not* the field-parity coin flip above:
+
+    - The composite sync carried **no equalizing pulses**, which left the two fields
+      0.86 of a line apart instead of exactly half a line. Televisions differ in how much
+      of that they tolerate, which is why some sets showed **sawtooth or ragged vertical
+      edges** and others never did. The sync now carries the full standard vertical block.
+    - Fixing that uncovered a **field-order error the broken sync had been hiding** — the
+      two faults had been cancelling each other out. Both are corrected, with no setting
+      to change.
+
+    Verified here on a composite CRT and over HDMI. The two sets that found the faults have
+    not retested yet, so if you are on RGB SCART or a scaler, that report is still the one
+    worth having.
 
 ## What changed from the old settings
 

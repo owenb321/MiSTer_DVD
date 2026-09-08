@@ -336,11 +336,16 @@ worse maintenance burden than targeted in-place edits. So:
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
-- 🔧 **SMPTE 170M / BT.470 ANALOG COMPOSITE SYNC — we were emitting no equalizing pulses
-  at all (2026-09-05, branch `feature/smpte-csync`); sim-proven RED/GREEN, ⏳ HW-confirm
-  pending.** Field reports: a PAL Sony Trinitron on RGB SCART with *"jitter + sawtooth
+- ✅ **SMPTE 170M / BT.470 ANALOG COMPOSITE SYNC — we were emitting no equalizing pulses
+  at all (2026-09-05, branch `feature/smpte-csync`); sim-proven RED/GREEN and ✅
+  HW-CONFIRMED 2026-09-07** (maintainer's rig: composite CRT and HDMI both correct with
+  nothing to set, build `DVD_smptesync4_20260907_2305.rbf`, SEED 5 first roll, clk_dec
+  93.45/91.35). ⏳ **The two reporters whose sets FOUND the defect have not retested** —
+  that is what the next release is for, and their sets are the ones that matter here,
+  since the maintainer's CRT never showed the original sawtooth.
+  Field reports that started it: a PAL Sony Trinitron on RGB SCART with *"jitter + sawtooth
   edges"* that flicking aspect ratios no longer clears, and a RetroTINK 4K user reporting
-  *"the fields are out of order by default"*. The maintainer's CRT is clean on the same
+  *"the fields are out of order by default"*. The maintainer's CRT was clean on the same
   builds.
   ★★ **THE STANDARD SPECIFIES A NINE-LINE BLOCK AND WE SHIPPED A THIRD OF IT.** SMPTE
   170M §13.3 / Table 3 / Fig 7 (525-line) and ITU-R BT.470-6 Table 2 (625-line): 3 lines
