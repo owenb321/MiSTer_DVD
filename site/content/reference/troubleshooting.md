@@ -57,12 +57,26 @@ what you will see from slow media.
 
 ### `CSS ENCRYPTED`
 
-The image or disc is encrypted and nothing available can decrypt it. Audio is muted
-deliberately so you get silence rather than static; video keeps playing so you can still
-identify the disc.
+The core is seeing scrambled sectors, so nothing available is decrypting this disc or
+image. Audio is muted deliberately so you get silence rather than static; video keeps
+playing so you can still identify the disc.
 
 **Fix:** install `MiSTer_DVDcss` and libdvdcss, or use a decrypted rip. See
 [What you need](../getting-started/what-you-need.md).
+
+!!! warning "If the picture is perfect and only the sound is gone"
+
+    Then the message is wrong. A scrambled disc looks obviously broken — blocky green
+    rubbish over most of the picture — so a clean picture with silent audio means the
+    core mis-read a handful of bytes and muted for no reason.
+
+    Releases up to **v0.4.0** could do this: the warning latched after only four
+    suspicious bytes anywhere in a whole session, which a perfectly good disc can
+    produce. Later builds require sustained evidence instead, so an isolated glitch no
+    longer trips it.
+
+    If you see it on a build after v0.4.0, please
+    [send a report](reporting-a-bug.md) — it means something is still wrong.
 
 ### The core loads but a physical disc does nothing
 
