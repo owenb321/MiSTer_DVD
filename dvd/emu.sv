@@ -581,7 +581,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-main"
+`define CORE_VERSION "dev-audbphold"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -3216,7 +3216,36 @@ always @(posedge clk_sys) begin
     // reaching the front frame's PTS, so this cannot wedge the stream on any
     // stream whose video plays; the decode path is unaffected (its stale-skip
     // pops keep the watchdog fed the same way it always was).
-    else if (aud_frame_pop || (pass_mode && pass_hold_active))
+    // ⚠ AND the same is true of the DECODE path (issue: Harry Potter Hogwarts
+    // Challenge, 2026-09-08). The comment above claimed "the decode path is
+    // unaffected (its stale-skip pops keep the watchdog fed the same way it
+    // always was)". That was true while the drain gate opened at the PARSE front.
+    // PR #63 moved the playback release to disp_anchored -- the DISPLAY's first
+    // tagged pickup -- which is later, so on a screen whose display anchors
+    // slowly the gate stays shut longer. A shut gate withholds the 48 kHz tick,
+    // the codec's PCM FIFO fills, sink_ready drops, the dispatcher stalls in
+    // S_ROUTE and NEVER reaches S_POP -- so frame_pop stops, and after ~1.24 s
+    // this watchdog reads a deliberate hold as a wedged consumer, exactly the
+    // failure the passthrough term above was added to fix.
+    // MEASURED consequence (user, HW): backpressure disengages, the shared demux
+    // races through the cell at disc speed, the ring drops whole frames
+    // (truncated speech) and the parse front runs away -- visible as the HUD
+    // timecode SPEEDING UP and jumping to the cell's end (00:01:19) before
+    // stopping. Both symptoms, one cause.
+    // ⚠⚠ The predicate is NOT a bare `~draining`. `draining` is 0 both when the
+    // gate is deliberately shut AND before the decode side has ever produced
+    // anything -- including when it is DEAD. Re-arming on that would pin
+    // backpressure on, stall the shared demux and with it VIDEO, which is
+    // exactly the wedge the "unarmed until the first pop proves the decode side
+    // is alive" rule above exists to prevent. `play_pts_valid` is the proof of
+    // life: it is latched when a PTS-tagged frame has DISPATCHED, so
+    // `play_pts_valid && ~draining` reads "audio arrived and the gate is holding
+    // it back" -- a deliberate hold, the decode-path twin of pass_hold_active.
+    // Bounded the same way: the gate opens on the release compare or the ~2.5 s
+    // arm_timer fallback. ⚠ aud_dec_en is load-bearing too -- with audio OFF the
+    // decode path never drains and never pops.
+    else if (aud_frame_pop || (pass_mode && pass_hold_active)
+                           || (aud_dec_en && dbg_aud_play_pts_valid && ~dbg_aud_draining))
                              aud_bp_wd <= 25'h1FFFFFF;
     // Freeze the drain watchdog while paused: the audio decoder is held (no
     // frame_pop), so without this the watchdog would expire after ~1.24 s,

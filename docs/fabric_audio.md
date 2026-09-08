@@ -383,6 +383,78 @@ negative), `iec61937_wrap_tb` TEST 8/8b (mute = zero words + drain + consume,
 unmute resumes real bursts), `transport_hud_tb` T13 (popup text, menu
 exemption, slot yield/re-arm, clear).
 
+## Demux backpressure vs a HELD decoder — `aud_bp_wd` (2026-09-08)
+
+**Status: ✅ HW-CONFIRMED 2026-09-08** on Family Feud II, Weakest Link, Thayer's Quest and
+Harry Potter (Hogwarts Challenge). Branch `fix/aud-bp-decode-hold`.
+
+**Report.** On Harry Potter's player-selection screen the speech was **truncated**, and the
+HUD timecode **sped up and jumped to the cell's end (00:01:19)** before stopping. Correct in
+v0.4.0; introduced by PR #63.
+
+★ **The racing timecode is what identified it.** A clock that runs fast means the PARSE
+FRONT is running fast — nothing is throttling delivery — which points at flow control, not
+at the audio decoder. Both symptoms are then one cause.
+
+**Mechanism.** `emu.sv` re-arms the ring drain watchdog `aud_bp_wd` on `aud_frame_pop`, and
+`frame_pop` only fires in the dispatcher's `S_POP` state. While the drain gate is shut the
+48 kHz tick is withheld, the codec's PCM FIFO fills, `sink_ready` drops, `consume` stops and
+the dispatcher stalls in `S_ROUTE` — **never reaching `S_POP`**. After ~1.24 s the watchdog
+reads that deliberate hold as a wedged consumer and disengages demux backpressure
+(`ps_aud_ready` is forced high). The shared stream then races through the cell at disc
+speed: the ring overflows and drops whole frames (the truncated speech) while the parse
+front runs away (the racing timecode, stopping when the cell's data is exhausted).
+
+⚠ **Why PR #63 exposed it.** That PR moved the playback release from `stc_anchored` (the
+parse front) to `disp_anchored` (the display's first tagged pickup), which is strictly
+later — so on a screen whose display anchors slowly the gate stays shut past the watchdog.
+The gate itself is older; what changed is how long it can stay shut.
+
+★★ **The identical failure had already been found and fixed on the PASSTHROUGH path** —
+the IEC 61937 lock flap, where a deliberate A/V-sync hold produced no pop, backpressure
+stayed disengaged and the ring dropped ~25 frames/s for ~46 s (`docs/iec61937.md` "FLAP
+ROOT CAUSE"). Its fix added `pass_hold_active` to the re-arm term, and its comment states
+*"the decode path is unaffected (its stale-skip pops keep the watchdog fed the same way it
+always was)"*. That was true while the gate opened at the parse front. **PR #63 made it
+false, and the comment kept asserting it.** This fix is the decode-path twin of that term.
+
+**Change.** One extra re-arm term:
+
+```
+else if (aud_frame_pop || (pass_mode && pass_hold_active)
+                       || (aud_dec_en && dbg_aud_play_pts_valid && ~dbg_aud_draining))
+```
+
+⚠⚠ **The predicate is NOT a bare `~draining`, and that distinction is load-bearing.**
+`draining` is 0 both when the gate is deliberately shut AND before the decode side has ever
+produced anything — **including when it is dead**. Re-arming on that alone would pin
+backpressure on, stall the shared demux and with it VIDEO: exactly the wedge that the
+"unarmed until the first pop proves the decode side is alive" rule exists to prevent.
+`play_pts_valid` is the proof of life — latched when a PTS-tagged frame has DISPATCHED — so
+`play_pts_valid && ~draining` reads "audio arrived and the gate is holding it back". Bounded
+the same way as the passthrough hold: the gate opens on the release compare or the ~2.5 s
+`arm_timer` fallback. `aud_dec_en` is load-bearing too: with audio OFF the decode path never
+drains and never pops.
+
+⚠ **No sim gate, deliberately.** A bench case was written to pin the premise (a shut gate
+starves `frame_pop`). It measured `frame_pop x0` with the gate shut — but its **control
+failed**: pops did not resume when the gate reopened, so it could not distinguish "held"
+from "dead", and it was removed rather than shipped as false proof. The premise rests on the
+code (`frame_pop = (state == S_POP)`; a full PCM FIFO drops `sink_ready`, so `consume`
+stops) plus the two measured HW symptoms. `emu.sv` has no bench, so the HW A/B is the gate —
+the same standing recorded for `joy_eff` and the subpicture glue.
+
+★ **Choosing the HW discs was a measurement, not a guess.** The failure needs a short cell
+carrying speech that parks on a still, so `tools/dvd_probe_title_stills.py` was run across
+the interactive library and ranked by title-domain still count: Family Feud II/III **936**
+stills / 890 short cells, Weakest Link 76/76, Harry Potter 25/54, Thayer's Quest 20/55.
+Family Feud is ~37× the density of the reported disc, so it fails within seconds if the
+watchdog still mis-fires. ⚠ Atmosfear reads **0** title stills — its stills are
+menu-domain, which is why it was the issue #65 repro and is NOT a test for this one.
+⚠ A film disc is the negative control: this changes when backpressure engages on EVERY
+disc, and the failure mode of an insufficient guard is the opposite symptom — a FREEZE of
+picture and sound together, since backpressure stalls the shared demux and video with it.
+
 ## Open follow-ups
 - DTS in-fabric + IEC 61937 bitstream → Digital I/O board (Toslink).
 - LPCM: 20/24-bit @ 48 kHz stereo ✅ HW-CONFIRMED (PR fj#133, top-16 truncation for HDMI;
