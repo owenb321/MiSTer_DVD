@@ -522,8 +522,8 @@ module iso_reader_timedstill_tb;
         // 3 s heuristic timed still (0xD0) and cell1 an indefinite still (0xD1).
         // Expect: stream 0xD0 -> HOLD ~3 s (still_active, timed) -> auto-advance
         // and stream 0xD1 -> park on the indefinite still. SEC_DIV=1000 -> 3s=3000 clk.
-        // A menu still is COLD RE-DECODED (clean frame) on vbuf_empty; the timer then
-        // counts down.
+        // The still is HELD, not re-decoded (issue #65 removed the cold re-decode);
+        // the timer counts down and the PGC advances.
         // =============================================================
         vbuf_empty = 1'b0; menu_snap = 1'b0;
         cap_mark = cap_n;
@@ -539,18 +539,23 @@ module iso_reader_timedstill_tb;
         chk(cap_n - cap_mark == 2048,   "only cell0 (0xD0) streamed on the first pass");
         expect_range(cap_mark, 2048, 8'hD0);
 
-        // 2) FRAME-DISPLAY FIX: with vbuf_empty=1 a TIMED still cold-re-decodes
-        //    (seek_ack) and RE-STREAMS its cell so the frame shows clean (else pixelated).
+        // 2) NO COLD RE-DECODE (issue #65). vbuf_empty used to flush and re-stream
+        //    the timed still's cell so its frame displayed clean. That re-decode is
+        //    gone -- ps_demux S_VID_FLUSH now supplies the trailing bytes past the
+        //    cell's 00 00 01 B7 that the VLD needs to reach STATE_SEQUENCE_END and
+        //    emit the held frame, and motcomp_picbuf's ~vld_last_frame guard removed
+        //    the corrupt-frame case. So the still must simply HOLD, and crucially the
+        //    TIMER must keep running (a stalled timer would strand the still forever).
+        //    RED against the pre-fix reader: seek_acks=1 and 2048 bytes re-streamed.
         n_seek_ack = 0; cap_mark = cap_n;
         vbuf_empty = 1'b1;
-        t = 0; while ((cap_n-cap_mark) < 2048 && t < 4000000) begin @(posedge clk); t = t + 1; end
-        repeat (100) @(posedge clk);
-        $display("T2 cold re-decode: seek_acks=%0d re-streamed=%0d timed=%b",
-                 n_seek_ack, cap_n-cap_mark, dut.still_timed);
-        chk(n_seek_ack >= 1,            "timed still cold-re-decoded (frame displays clean)");
-        chk(cap_n - cap_mark == 2048,   "still cell (0xD0) re-streamed for display");
-        expect_range(cap_mark, 2048, 8'hD0);
-        chk(dut.still_timed === 1'b1,   "still TIMED after the re-decode (timer intact)");
+        repeat (2000) @(posedge clk);
+        $display("T2 no re-decode: seek_acks=%0d re-streamed=%0d timed=%b still=%b",
+                 n_seek_ack, cap_n-cap_mark, dut.still_timed, still_active);
+        chk(n_seek_ack == 0,            "timed still is NOT cold-re-decoded");
+        chk(cap_n - cap_mark == 0,      "timed still cell is NOT re-streamed");
+        chk(dut.still_timed === 1'b1,   "still TIMED (timer intact)");
+        chk(still_active === 1'b1,      "still parked while the timer runs");
         vbuf_empty = 1'b0;
 
         // 3) after the timer the still advances to cell1 (0xD1, indefinite)

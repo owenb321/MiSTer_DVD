@@ -910,7 +910,6 @@ reg [31:0] menu_blocks;               // menu VOB length in 2048-sectors (cell b
 reg [7:0]  play_vtsn;                 // VTS of the loaded TITLE (cur_vts export)
 reg        nav_ready;                 // VIDEO_TS walk finished (jumps accepted)
 reg        still_pend;                // menu still reached: drain cache then S_STILL
-reg        still_flushed;             // menu still already cold-re-decoded (§5, once per entry)
 // TIMED STILLS (Phase 5): an authored ad/copyright/menu-intro still holds for a
 // bounded time then auto-advances (libdvdnav honours the same). still_timed marks
 // a finite (1..254 s) hold; still_secs counts it down at 1 Hz in S_STILL;
@@ -1839,7 +1838,6 @@ always @(posedge clk or negedge rst_n) begin
         sel_ret      <= 1'b0;
         nav_ready    <= 1'b0;
         still_pend   <= 1'b0;
-        still_flushed <= 1'b0;
         adv_pend     <= 1'b0;
         jttn_l       <= 7'd0;
         jpgn_l       <= 8'd0;
@@ -2268,7 +2266,6 @@ always @(posedge clk or negedge rst_n) begin
             sel_ret         <= 1'b0;
             nav_ready       <= 1'b0;
             still_pend      <= 1'b0;
-            still_flushed   <= 1'b0;
             adv_pend        <= 1'b0;
             follow_cnt      <= 2'd0;
             jttn_l          <= 7'd0;
@@ -2283,7 +2280,6 @@ always @(posedge clk or negedge rst_n) begin
             jump_pending <= 1'b0;
             seek_pending <= 1'b0;       // a jump outranks a pending seek
             still_pend   <= 1'b0;
-            still_flushed <= 1'b0;      // new menu entry: re-arm the still-cell cold re-decode
             adv_pend     <= 1'b0;
             vmw_pgc_pend <= 1'b0;
             jump_ack     <= 1'b1;
@@ -2401,7 +2397,6 @@ always @(posedge clk or negedge rst_n) begin
             // (ps_demux/audio_ring/av_sync) re-anchors on the new cell's PTS.
             strm_done    <= 1'b0;
             still_pend   <= 1'b0;
-            still_flushed <= 1'b0;         // new cell target: re-arm the still-cell cold re-decode
             adv_pend     <= 1'b0;
             vmw_pgc_pend <= 1'b0;
             wr_ptr       <= 0;
@@ -3667,7 +3662,6 @@ always @(posedge clk or negedge rst_n) begin
                 cell_i     <= (use_jcell && jcell_l < cell_count) ? jcell_l : 8'd0;
                 cell_raddr <= (use_jcell && jcell_l < cell_count) ? jcell_l : 8'd0;
                 use_jcell  <= 1'b0;
-                still_flushed <= 1'b0;  // fresh PGC = new menu: re-arm the still-cell cold re-decode
                 jpgn_l     <= 8'd0;    // program-start latch consumed
                 strm_done  <= 1'b0;
                 wr_ptr     <= 0;
@@ -4128,7 +4122,6 @@ always @(posedge clk or negedge rst_n) begin
                         state        <= S_VM_WAIT;
                     end else if (adv_pend) begin
                         adv_pend   <= 1'b0;
-                        still_flushed <= 1'b0;    // next_pgcn = new menu: re-arm cold re-decode
                         seek_ack   <= 1'b1;   // emu: load_flush (+vbuf if not menu)
                         keep_vbuf  <= menu_dom;   // menu next_pgcn advance: hold VBUF
                         wr_ptr     <= 0;
@@ -4154,29 +4147,34 @@ always @(posedge clk or negedge rst_n) begin
             // watchdog so the last decoded frame - the authored menu still -
             // stays on screen indefinitely. Exits via jump_go / seek_jump.
             //
-            // The still's FINAL frame (T2 numbered scene-range cubes, mission-profile
-            // slides, ad/copyright/menu-end frames) was decoded MID-STREAM (entered via a
-            // keep_vbuf transition, so with stale references) and would show PIXELATED if
-            // merely flushed to the display. So COLD RE-DECODE it: re-stream JUST this still
-            // cell (from its own sequence header) as a clean decode - the I-frame
-            // reconstructs correctly and the frame displays sharp. Trigger:
-            //   - menu_snap (P1O[18] Snappy): fire IMMEDIATELY - the emu deep-flush already
-            //     emptied the buffer, so the re-decode is fast (a buffered transition is cut,
-            //     which Snappy accepts).
-            //   - else vbuf_empty (Smooth): wait until the authored transition has fully
-            //     played out (buffer drained), THEN re-decode - transition NOT cut.
-            // Once per entry (still_flushed); menu stills only; a real jump/seek exits first.
+            //
+            // ⛔ NO COLD RE-DECODE (issue #65, 2026-09-08). §5 used to flush and
+            // re-stream the whole still cell here, once per menu entry, because a
+            // still never reached the display on its own: getbits starves at the
+            // cell's terminating 00 00 01 B7 with no trailing bytes, so the VLD
+            // never reaches STATE_SEQUENCE_END, never asserts last_frame, and
+            // motcomp_picbuf never emits the held frame
+            // (docs/dvd_menu_refinements.md §5b). BOTH halves of that were fixed
+            // elsewhere, AFTER §5 was validated:
+            //   * ps_demux S_VID_FLUSH emits 24 filler bytes whenever a video PES
+            //     ends on a B7 -- which is exactly how these cells end (MEASURED
+            //     on Atmosfear: SEQ_END at ES offset 156469 of 156473, i.e. the
+            //     last 4 bytes of the video ES);
+            //   * motcomp_picbuf's fwd/bwd swap gained ~vld_last_frame
+            //     (2026-08-26), removing the corrupt-flushed-frame case that sank
+            //     the §5b primer -- which is the ONLY reason the July attempt to
+            //     drop the re-decode failed.
+            // The re-stream was therefore doing no work the decoder had not
+            // already done, and on a still cell carrying narration (Atmosfear's
+            // character screens: still=255, cell_cmd=0, ~3-4 s of speech) it
+            // replayed the audio, which is what issue #65 reported. The reader
+            // now simply parks and holds, which is what the authored still asks
+            // for. HW-confirmed 2026-09-08: the line reads once.
+            // ⚠ Its only live trigger was vbuf_empty -- menu_snap has been
+            // hardwired 0 since the Snappy/Smooth toggle was removed -- and
+            // vbuf_empty means the decoder had already consumed everything.
             S_STILL: begin
-                if (menu_dom && !still_flushed && (menu_snap || vbuf_empty)) begin
-                    still_flushed <= 1'b1;
-                    cell_raddr    <= cell_i;   // re-load THIS still cell (cell_i unchanged)
-                    strm_done     <= 1'b0;
-                    still_pend    <= 1'b0;
-                    wr_ptr        <= 0;
-                    seek_ack      <= 1'b1;     // emu: load_flush + (keep_vbuf=0) vbuf_flush
-                    keep_vbuf     <= 1'b0;     // FORCE the clean cold decode of the still cell
-                    state         <= S_CELL_LOAD;
-                end else if (still_timed && sec_tick) begin
+                if (still_timed && sec_tick) begin
                     // TIMED hold: count down at 1 Hz, then run the deferred action
                     // (a menu button that fires a VM jump exits earlier via jump_go).
                     if (still_secs <= 16'd1) begin

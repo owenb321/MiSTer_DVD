@@ -671,58 +671,74 @@ module iso_reader_menu_tb;
         chk(kv_last_jump === 1'b1, "T8 keep_vbuf=1 on menu->menu jump");
 
         // =============================================================
-        // TEST 9 - §5 MENU STILL COLD RE-DECODE. A menu still whose frame was decoded
-        // mid-stream shows pixelated unless re-decoded cleanly, so on a still the reader
-        // flushes + re-streams the still cell (a seek_ack with keep_vbuf=0), ONCE per
-        // entry (still_flushed). Trigger = menu_snap (Snappy: immediate) OR vbuf_empty
-        // (Smooth: after the transition drains). Land on the VTSM Root still (PGCN 2 cell
-        // 1 = 0xD1), then:
-        //   (a) menu_snap=0, vbuf_empty=0 -> stays parked, no flush, no re-stream.
-        //   (b) vbuf_empty=1              -> one seek_ack keep_vbuf=0, 0xD1 re-streams.
+        // TEST 9 - A MENU STILL IS PARKED AND HELD, NEVER RE-STREAMED (issue #65).
+        //
+        // §5 used to flush and re-stream the whole still cell here, once per menu
+        // entry, on menu_snap (Snappy) or vbuf_empty (Smooth). It existed because
+        // a still never reached the display on its own -- getbits starved at the
+        // cell's terminating 00 00 01 B7 with no trailing bytes, so the VLD never
+        // reached STATE_SEQUENCE_END and motcomp_picbuf never emitted the held
+        // frame. Both halves of that were fixed elsewhere afterwards (ps_demux
+        // S_VID_FLUSH supplies the trailing bytes; motcomp_picbuf's fwd/bwd swap
+        // gained ~vld_last_frame), so the re-stream did no work the decoder had
+        // not already done -- and on a still carrying narration it replayed the
+        // AUDIO, which is what issue #65 reported.
+        //
+        // These checks are RED against the pre-fix reader: (b) and (c) measured
+        // one seek_ack and a 2048-byte re-stream there.
+        //   (a) idle              -> parked, no flush, no re-stream
+        //   (b) vbuf_empty=1      -> STILL parked, no flush, no re-stream
+        //   (c) menu_snap=1       -> likewise (the Snappy path is gone; emu has
+        //                            hardwired menu_snap 0 since the toggle went)
+        //   (d) a jump still EXITS the still -- the control that stops (a)-(c)
+        //       being satisfied by a wedged reader that can never leave.
         // =============================================================
         menu_snap = 1'b0; vbuf_empty = 1'b0;
         do_jump(2'd2, 8'd1, 8'd0, 4'd3, 8'd0);
         t = 0; while (still_active && t < 200000) begin @(posedge clk); t = t + 1; end
         t = 0; while (!still_active && t < 4000000) begin @(posedge clk); t = t + 1; end
-        // (a) neither trigger armed: no cold re-decode
+        // (a) idle
         cap_mark = cap_n; n_seek_ack = 0;
         repeat (2000) @(posedge clk);
         $display("TEST9a idle: bytes=%0d seek_acks=%0d still=%b",
                  cap_n - cap_mark, n_seek_ack, still_active);
-        chk(still_active === 1'b1, "T9a stays parked while neither trigger is armed");
-        chk(n_seek_ack == 0, "T9a no cold re-decode before vbuf_empty / menu_snap");
-        chk(cap_n - cap_mark <= 2, "T9a no re-stream before the trigger (only pipeline drain)");
-        // (b) vbuf_empty (Smooth) -> cold re-decode fires once
-        cap_mark = cap_n; n_seek_ack = 0; kv_last_seek = 1'bx;
+        chk(still_active === 1'b1, "T9a stays parked while idle");
+        chk(n_seek_ack == 0, "T9a no flush while idle");
+        chk(cap_n - cap_mark <= 2, "T9a no re-stream while idle (only pipeline drain)");
+
+        // (b) vbuf_empty -- the old Smooth trigger. Must now do NOTHING.
+        cap_mark = cap_n; n_seek_ack = 0;
         vbuf_empty = 1'b1;
-        t = 0; while (still_active && t < 200000) begin @(posedge clk); t = t + 1; end  // leaves S_STILL to re-decode
-        t = 0; while (!still_active && t < 4000000) begin @(posedge clk); t = t + 1; end // re-parks
-        repeat (400) @(posedge clk);
-        $display("TEST9b vbuf_empty=1: bytes=%0d seek_acks=%0d kv_seek=%b still=%b",
-                 cap_n - cap_mark, n_seek_ack, kv_last_seek, still_active);
-        chk(n_seek_ack == 1, "T9b exactly one cold re-decode (still_flushed stops a loop)");
-        chk(kv_last_seek === 1'b0, "T9b cold re-decode forces vbuf_flush (keep_vbuf=0)");
-        chk(cap_n - cap_mark == 2048, "T9b re-streamed the still cell (2048 B of 0xD1)");
-        expect_range(cap_mark, 2048, 8'hD1);
-        chk(still_active === 1'b1, "T9b re-parked on the still after the cold re-decode");
+        repeat (200000) @(posedge clk);
+        $display("TEST9b vbuf_empty=1: bytes=%0d seek_acks=%0d still=%b",
+                 cap_n - cap_mark, n_seek_ack, still_active);
+        chk(n_seek_ack == 0, "T9b vbuf_empty does NOT trigger a cold re-decode");
+        chk(cap_n - cap_mark == 0, "T9b the still cell is NOT re-streamed");
+        chk(still_active === 1'b1, "T9b stays parked on the still");
         vbuf_empty = 1'b0;
 
-        // (c) menu_snap (Snappy) fires the cold re-decode IMMEDIATELY (vbuf_empty stays 0).
-        //     Park first with the triggers OFF (still_flushed re-armed by the fresh jump),
-        //     THEN raise menu_snap - so the only seek_ack we count is the snap re-decode.
-        //     Key behaviour: keep_vbuf=0 without waiting for vbuf_empty (re-park itself is
-        //     covered by (b), identical code path).
-        vbuf_empty = 1'b0; menu_snap = 1'b0;
-        do_jump(2'd2, 8'd1, 8'd0, 4'd3, 8'd0);      // fresh entry re-arms still_flushed
-        t = 0; while (!still_active && t < 4000000) begin @(posedge clk); t = t + 1; end
-        repeat (50) @(posedge clk);
-        n_seek_ack = 0;
-        menu_snap = 1'b1;                            // now fire the snap
-        t = 0; while (n_seek_ack == 0 && t < 4000000) begin @(posedge clk); t = t + 1; end
-        $display("TEST9c menu_snap=1 (vbuf_empty=0): seek_acks=%0d", n_seek_ack);
-        // keep_vbuf=0 on this re-decode is proven by (b) - identical S_STILL code path.
-        chk(n_seek_ack >= 1, "T9c Snappy re-decodes the still immediately (no vbuf_empty)");
+        // (c) menu_snap -- the old Snappy trigger. Also gone.
+        cap_mark = cap_n; n_seek_ack = 0;
+        menu_snap = 1'b1;
+        repeat (200000) @(posedge clk);
+        $display("TEST9c menu_snap=1: bytes=%0d seek_acks=%0d still=%b",
+                 cap_n - cap_mark, n_seek_ack, still_active);
+        chk(n_seek_ack == 0, "T9c menu_snap does NOT trigger a cold re-decode");
+        chk(cap_n - cap_mark == 0, "T9c the still cell is NOT re-streamed");
         menu_snap = 1'b0;
+
+        // (d) CONTROL: a real jump must still leave the still. Without this,
+        // (a)-(c) would all pass on a reader that had simply wedged in S_STILL.
+        cap_mark = cap_n;
+        do_jump(2'd2, 8'd1, 8'd0, 4'd3, 8'd0);
+        t = 0; while (still_active && t < 400000) begin @(posedge clk); t = t + 1; end
+        chk(still_active === 1'b0, "T9d a jump EXITS the still (not wedged)");
+        t = 0; while (!still_active && t < 4000000) begin @(posedge clk); t = t + 1; end
+        repeat (200) @(posedge clk);
+        $display("TEST9d after a jump: re-parked still=%b bytes=%0d",
+                 still_active, cap_n - cap_mark);
+        chk(still_active === 1'b1, "T9d re-parks on the new menu still");
+        chk(cap_n - cap_mark > 0,  "T9d the new menu DID stream (the reader still works)");
 
         // =============================================================
         // TEST 10 - subp_control is streamed in the MENU domain (issues #60/#61)
