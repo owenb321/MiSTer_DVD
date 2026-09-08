@@ -213,8 +213,11 @@ module spu_decode #(
     //
     // ⛔ Double-buffering the bitmap is not available: 720*576 at 2 bpp = 829,440
     // bits, and at x2 width an M10K holds 4,096 entries => ~102 M10Ks for a second
-    // copy. The design fits in 498/553 RAM blocks and 41,059/41,910 ALMs, so the
-    // guards have to be free. They are: one counter and two compares.
+    // copy. RAM is the binding constraint and has sat at 498/553 blocks (90%) in
+    // EVERY build since v0.4.0 -- 55 free against the ~102 needed -- so the guards
+    // have to be near-free. They are: one counter and two compares. (MEASURED with
+    // them in: 39,113/41,910 ALMs = 93%, SEED 5 held, clk_dec 95.57/92.68 vs the
+    // 86.0 gate.)
     reg  [24:0] hold_tmr;
 
     // the unit's effective show time (COMMIT's own default when no STA_DSP delay)

@@ -230,7 +230,9 @@ Two symptoms, one bug:
 
 ⛔ **Double-buffering the bitmap is not an option** and should not be re-proposed without
 new numbers: 720×576 at 2 bpp = 829,440 bits, and at ×2 width an M10K holds 4,096 entries
-⇒ ~102 M10Ks for a second copy, against 55 free (498/553) at 98 % ALMs.
+⇒ ~102 M10Ks for a second copy, against 55 free (498/553). RAM is the binding constraint
+here, not ALMs — 498/553 has held in every build since v0.4.0, and the build carrying this
+fix measures 39,113/41,910 ALMs (93 %) with SEED 5 and clk_dec 95.57/92.68 vs the 86.0 gate.
 
 ★ **The hold's bound is measured, not chosen.** Cutting the hold short costs nothing (rule
 2 stops it opening a hole), but being *in* the hold when the next unit arrives costs that

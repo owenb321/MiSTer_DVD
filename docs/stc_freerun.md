@@ -901,8 +901,14 @@ only destructive step and `DCSQ_END` is its single entry point, reached with `w_
 - `S_IDLE` now resumes at a genuine unit start (`sp_frame_start && sp_pts_valid`, the rule
   `S_DRAIN` already used), because the hold lengthens the busy window.
 
-⛔ **Double-buffering was not available**: 720×576 at 2 bpp is ~102 M10Ks for a second copy
-and the design fits in 498/553 RAM blocks at 98 % ALMs.
+⛔ **Double-buffering was not available**: 720×576 at 2 bpp is ~102 M10Ks for a second copy,
+against **55 free RAM blocks** (498/553, a figure unchanged in every build since v0.4.0).
+RAM, not ALMs, is what rules it out.
+⚠ **An earlier draft of this section cited "98 % ALMs" as the design's state. That was wrong**
+— 41,059/41,910 is the *unmerged* `feature/seek-preview` branch, not `main`. The build
+carrying both fixes measures **39,113/41,910 = 93 %**, SEED 5 held on the first roll, clk_dec
+95.57 @100C / 92.68 @-40C against the 86.0 gate. Read a fit number off the branch it came
+from before quoting it as the design's.
 
 ★ **The hold's bound is MEASURED, not picked.** Cutting the hold short costs nothing (the
 clamp stops it opening a hole), but being *in* the hold when the next unit arrives costs
