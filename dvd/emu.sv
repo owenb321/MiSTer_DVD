@@ -667,8 +667,9 @@ parameter CONF_STR = {
     "O[43:40],Player Language,English,French,German,Spanish,Italian,Japanese,Chinese,Korean,Portuguese,Russian,Dutch,Swedish,Danish,Norwegian,Finnish,Polish;",
     // Video Output (DVD-FORK consolidation 2026-09-02, replaces "Interlaced Out"
     // O[10:9] + "Analog Out" O[27:26] — bits [27:26] are left DEAD/reserved one
-    // release so stale saved status can't re-arm the old enum; the relayout is why
-    // the config version below is "v,2"). ONE output-mode choice:
+    // release so stale saved status can't re-arm the old enum; that relayout is what
+    // took the config version below to "v,2" -- it has since moved on to "v,3").
+    // ONE output-mode choice:
     //   Auto (default) = ini-driven: an analog TV configured in MiSTer.ini
     //                    (vga_scaler=0 AND composite_sync/ypbpr/vga_sog, or
     //                    direct_video=1) => Interlaced, else Progressive — the same
