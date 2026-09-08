@@ -349,18 +349,98 @@ round-trip. It sits on the `P1,Debug` page, and the rename is what keeps a user 
 reaching for it to *fix* something — the failure mode that got `Field Order` and the
 `Analog CSync` `Stock` arm deleted before release (see `CLAUDE.md`).
 
-## CSS mute (scrambled-source audio protection, 2026-08-06)
+## CSS mute (scrambled-source audio protection, 2026-08-06; density verdict 2026-09-08)
 
 A CSS-encrypted rip (raw disc copy without decryption) still *plays* — the
 IFOs and PES headers are never scrambled, so navigation works and the ~80%
 unscrambled sectors show recognizable video — but the scrambled AC-3/DTS/LPCM
 payloads decode to **loud static bursts**. Detection: `ps_demux` pulses
-`pes_scrambled` for every video/audio PES whose `PES_scrambling_control != 0`
-(bits [5:4] of the first PES-flags byte, checked with the `'10'` marker bits so
-false positives are impossible); emu accumulates 4 pulses into a sticky
-`css_scrambled` latch that survives jumps (ps_demux itself resets on every
-`load_flush` via `pipe_rst_n` — a demux-local latch would flap and leak pops at
-every menu jump/seek) and clears only on a fresh media mount.
+`pes_scrambled` for a PES whose `PES_scrambling_control != 0` (bits [5:4] of the
+first PES-flags byte, checked with the `'10'` marker bits), and `pes_hdr_ok` for
+every checkable PES header whether marked or not; `dvd/css_detect.sv` turns the
+ratio into a sticky `css_scrambled` verdict. It survives jumps (ps_demux itself
+resets on every `load_flush` via `pipe_rst_n` — a demux-local latch would flap and
+leak pops at every menu jump/seek) and clears only on a fresh media mount, an
+eject, or a core reset.
+
+### ⚠ The rule was "4 markers, ever" until 2026-09-08, and it false-positived (issue #59)
+
+**The sentence that used to stand here said the `'10'` marker gate made "false
+positives impossible". That is true of the marker BITS and false of the VERDICT,
+and believing it is what let this ship.** A random byte passes `'10'` one time in
+four, and three of those four carry a non-zero scrambling field — so any byte the
+demux mistakes for a PES-flags byte is a marker with probability ~3/16. Two ways
+that happens on a disc with nothing wrong with it:
+
+1. **A lost frame.** Payload is length-counted, so a `00 00 01 E0` inside a payload
+   is normally invisible. After a resync it is not: `S_HUNT` locks onto whatever
+   byte-aligned start code it finds. The known hazards are the unhandled
+   `PES_packet_length == 0` and a flush that does not land on a pack boundary.
+2. **A marker that survived decryption.** libdvdcss (`src/libdvdcss.c`) clears the
+   bits with `_p_buffer[0x14] &= 0x8f` — at a FIXED sector offset, and only in the
+   non-zero-title-key branch; an all-zero key takes a branch that neither
+   descrambles nor clears.
+
+Either gives a handful of markers in a session. The old rule counted four, anywhere,
+however far apart, and latched **permanently** — so a disc that plays perfectly lost
+all of its audio and told its owner to go and install libdvdcss they did not need.
+Multiple users reported it; the reported case was a physical disc being decrypted
+correctly by `MiSTer_DVDcss`.
+
+**Two changes fix it.**
+
+**(1) `ps_demux` scores a marker only on a pack's own PES** (`pack_fresh`, armed at
+the `0xBA` dispatch, spent in `S_PES_HDR_FLAGS1`). A DVD pack is 2048 bytes and
+carries exactly one checkable PES — a NAV pack's `0xBB`/`0xBF` and a short PES's
+`0xBE` padding never reach that state — so this loses no genuine marker, while a
+header found after losing framing is by construction not preceded by a pack header.
+⚠ It must be spent in `S_PES_HDR_FLAGS1` and **not** at the `S_HUNT` dispatch: the
+dispatch is two states earlier, so clearing there clears the arm before the flags
+byte is ever examined and nothing can score at all (measured — every bench arm read
+zero). ★ `tools/css_scan.py` had **always** used this model while claiming to mirror
+the RTL; the divergence between an oracle and its subject is what hid the bug, and
+the RTL was changed to match the tool.
+
+**(2) The verdict is a density, not a count** (`dvd/css_detect.sv`): a marker adds
+one to a bucket, every `LEAK_CLEAN` clean headers repay one, and the verdict latches
+at `LATCH_HITS`. The bucket therefore rises only while the scrambled *fraction*
+exceeds `1/(LEAK_CLEAN+1)`. With `LEAK_CLEAN=64`, `LATCH_HITS=16` that knee is
+**1.54 %**, measured by `bench/dvd/css_detect_tb.sv`:
+
+| source | scrambled fraction | headers to latch |
+|---|---|---|
+| real CSS (FAIRYTOPIA, measured by `css_scan.py`) | 0.19 | **92** (~0.15 s of stream) |
+| lightly scrambled | 0.05 | 289 |
+| 0.03 | 0.03 | 543 |
+| knee | 0.0154 | — |
+| one marker per VOBU | ~0.004 | never |
+| a handful per session | ≤1e-4 | never |
+
+⛔ **Not "reset the counter after N consecutive clean headers"**, which is the
+obvious form and was written first. It has no density interpretation, only a longest
+tolerable gap — and **a VOBU is 200–500 packs**, so a stray produced once per VOBU
+never sees an N=512 clean run and latches anyway. Raising N only moves the
+resonance. Bench arm A5 is that adversary and finds the boundary by search.
+
+⚠ **Below the knee the bucket is a random walk with negative drift, not a pinned
+zero.** Measured at p=0.008 (about half the knee): still latched, after ~67,000
+headers. The honest claim is "exponentially longer the further below p\*", and a
+session is finite. The false positive being fixed is three orders of magnitude
+lower. ⚠ The knee rests on **one** measured real-CSS density (19 %, FAIRYTOPIA — the
+image is not in the local library). If a genuinely encrypted rip is ever measured
+below ~5 %, raise `LEAK_CLEAN` (the knee moves as `1/(K+1)`) and move the bench's
+knee band with it; the bench fails if the two disagree.
+
+⚠ **This fix is mechanism-justified, not reproduced.** It closes both routes above
+without knowing which one the reporter's disc took, and if it is the wrong one the
+warning simply persists — nothing regresses, because the change only makes the
+detector harder to trip. The acceptance test is hardware.
+
+**Accepted trade:** a genuinely encrypted source below the 1.5 % knee no longer
+mutes, so the user hears occasional ticks instead of silence. Below the knee fewer
+than one audio frame in 60 is garbage, so the regime where a miss costs least is the
+regime where the rule declines to act — against total, permanent, unexplained
+silence on a disc that plays perfectly, which is what shipped.
 
 While latched:
 
@@ -378,10 +458,13 @@ While latched:
   and the transport HUD shows the persistent `CSS ENCRYPTED` popup
   (`docs/transport_hud.md`).
 
-Sim: `bench/dvd/ps_demux_scram_tb.sv` (detection, video+audio PES, clean
-negative), `iec61937_wrap_tb` TEST 8/8b (mute = zero words + drain + consume,
-unmute resumes real bursts), `transport_hud_tb` T13 (popup text, menu
-exemption, slot yield/re-arm, clear).
+Sim: **`bench/dvd/run_css.sh`** — `css_detect_tb` (10 arms; A1 asserts that the
+DELETED rule latches on 4 strays 4096 headers apart while the new one does not, so
+the issue #59 regression is an assertion and not a comment; mutation-checked, 8
+mutations each caught) and `ps_demux_scram_tb` (8 arms; T2/T4 are RED against the
+pre-fix demux, which `--red` rebuilds out of git). Also `iec61937_wrap_tb` TEST 8/8b
+(mute = zero words + drain + consume, unmute resumes real bursts) and
+`transport_hud_tb` T13 (popup text, menu exemption, slot yield/re-arm, clear).
 
 ## Demux backpressure vs a HELD decoder — `aud_bp_wd` (2026-09-08)
 

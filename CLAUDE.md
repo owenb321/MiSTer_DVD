@@ -2507,15 +2507,63 @@ encrypted data. Works on ISO files, not just physical drives.
 2026-08-06 (PR fj#160).** A raw (undecrypted) rip
 green-screens with loud audio static (FAIRYTOPIA.iso was the motivating case —
 ~19% of packs still scrambled; VLC plays it only because libdvdcss decrypts on
-the fly). The core now detects `PES_scrambling_control != 0` in `ps_demux`
-(`pes_scrambled` pulse), latches sticky `css_scrambled` in emu (4-pulse
-threshold; survives jumps — ps_demux resets per-jump via pipe_rst_n; clears on
-fresh mount only), shows a **persistent `CSS ENCRYPTED` HUD popup** (visible in
+the fly). The core detects `PES_scrambling_control != 0` in `ps_demux`
+(`pes_scrambled` pulse), shows a **persistent `CSS ENCRYPTED` HUD popup** (visible in
 menus too, yields to user popups then re-arms), and **mutes both audio paths**
 (decode: `AUDIO_L/R`=0; passthrough: `iec61937_wrap.mute_i` = PCM-silence bursts
 that still drain the ring — no STD wedge). Video keeps playing so the disc is
-identifiable. Sim: `ps_demux_scram_tb`, `iec61937_wrap_tb` T8, `transport_hud_tb`
-T13. Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
+identifiable.
+🔧 **THE VERDICT IS NOW A DENSITY, NOT A COUNT — issue #59, 2026-09-08, branch
+`fix/css-density`; sim-proven RED/GREEN + mutation-checked, ⏳ HW-confirm pending.**
+Multiple users lost **all audio** on discs that play perfectly, the reported case a
+physical disc `MiSTer_DVDcss` was decrypting correctly. The old rule counted **4
+markers per session, however far apart, and latched permanently** — while a real
+CSS source gives one every ~5 packs. It could not tell 4 from 400,000.
+★★ **THE COMMENT THAT SAID IT WAS SAFE IS WHAT LET IT SHIP:** `docs/fabric_audio.md`
+claimed the `'10'` marker gate made "false positives impossible". True of the marker
+BITS, false of the VERDICT — a random byte passes `'10'` 1 time in 4 and 3 of those
+carry a non-zero scrambling field, so **any byte mistaken for a PES-flags byte is a
+marker with probability ~3/16**. Two routes: a lost frame (after a resync `S_HUNT`
+locks onto any byte-aligned start code — the unhandled `PES_packet_length == 0` and
+a flush that misses a pack boundary), and a marker that survived decryption
+(libdvdcss clears the bits at the **fixed sector offset 0x14** and only in its
+non-zero-title-key branch).
+★★ **AND THE OFFLINE ORACLE HAD BEEN RIGHT ALL ALONG WHILE CLAIMING TO BE THE
+MODEL.** `tools/css_scan.py` said it "mirrors `ps_demux.sv S_PES_HDR_FLAGS1`
+exactly"; it never did — it checks only the **first PES after the pack header**,
+the RTL checked every checkable PES it dispatched. That divergence is why the tool
+called the same media clean while the core flagged it. **The RTL was changed to
+match the tool.** ⚠ Same class as `dvd_vm_ref.py` agreeing with its RTL: a model
+written from, or asserted to mirror, its subject proves nothing.
+**Fix (1)** `pack_fresh` in `ps_demux`: a marker scores only on a pack's own PES
+(a DVD pack is 2048 B = one checkable PES; `0xBB`/`0xBE`/`0xBF` never reach
+`S_PES_HDR_FLAGS1`, so nothing genuine is lost). ⚠ **Spend the arm IN
+`S_PES_HDR_FLAGS1`, not at the `S_HUNT` dispatch** — the dispatch is two states
+earlier, so clearing there clears it before the flags byte is examined and NOTHING
+can ever score (measured: every arm read 0).
+**Fix (2)** new **`dvd/css_detect.sv`** (extracted from `emu.sv`, which has no
+bench — same reason as `flush_ctl.sv`/`dpad_seek.sv`): a **leaky bucket** — a marker
+adds one, every `LEAK_CLEAN=64` clean headers repay one, latch at `LATCH_HITS=16`.
+The bucket rises only above a **density knee of 1/(K+1) = 1.54 %**. Measured: real
+CSS (p=0.19) latches in **92 headers (~0.15 s)**, p=0.05 in 289, ≤0.004 never.
+⛔ **NOT "reset after N consecutive clean headers"** (the obvious form, written
+first): it has no density meaning, only a longest-gap — and **a VOBU is 200–500
+packs**, so a stray once per VOBU never sees an N=512 clean run and latches anyway.
+⚠ **Below the knee the bucket is a negative-drift RANDOM WALK, not a pinned zero:**
+measured at p=0.008 it still latched after ~67,000 headers. "Exponentially longer
+the further below p\*", and a session is finite. ⚠ The knee rests on **one** measured
+real-CSS density (19 %); if an encrypted rip is ever seen below ~5 %, raise
+`LEAK_CLEAN` and move the bench's knee band (the bench fails if they disagree).
+⚠ **Mechanism-justified, NOT reproduced** — a library sweep was dropped by decision;
+it could not have seen the mis-framing route anyway. If it is the wrong route the
+warning persists and nothing regresses, since the change only makes the detector
+harder to trip. **Accepted trade:** genuine CSS below 1.5 % now ticks instead of
+muting — which is the regime where a miss costs least.
+Sim: **`bench/dvd/run_css.sh`** (`css_detect_tb` 10 arms, A1 asserting the DELETED
+rule latches where the new one does not, **8 mutations each caught**;
+`ps_demux_scram_tb` 8 arms, T2/T4 RED against the pre-fix demux which `--red`
+rebuilds out of git), plus `iec61937_wrap_tb` T8, `transport_hud_tb` T13.
+Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
 
 **DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ✅ READ +
 gamepad menu HW-CONFIRMED (2026-08-31, re-confirmed 2026-09-04 on the rewritten script);
