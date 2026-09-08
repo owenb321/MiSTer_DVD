@@ -1963,6 +1963,33 @@ the reported blink when PR #63 put the STC on the displayed picture. Fixed in
 `sp_route_en` (its `SetSTN` pre-command opens routing) and was read as covering
 `menu_mode` too. It does not.
 
+**⚠ THE DISC OFFERS NO SUBTITLES IN RABBIT MODE, AND FORCING ONE USED TO SHOW
+UNREADABLE TEXT (2026-09-08).** Field report: *"subtitles in the white rabbit mode are
+missing the black outline -- white on white and hard to read."* MEASURED, and the cause is
+neither colour sharing with the rabbit nor a decode fault:
+
+| substream | content | authored colours |
+|---|---|---|
+| 0x20 / 0x21 | the real subtitles (wide / letterbox) | `COLOR[0,8,9,0] CONTR[15,15,15,0]` |
+| 0x22 / 0x23 | the rabbit icon ONLY -- no subtitles anywhere | `COLOR[14,14,14,14] CONTR[0,0,0,0]` |
+
+PGCN 1 declares logical stream 0 only; **PGCN 6 declares logical stream 1 only**. Pressing
+the Subtitle button releases the VM's claim (`emu.sv`: `if (sub_edge) vm_owns_sp <= 1'b0`),
+after which the USER path resolves logical 0 **by raw index** to 0x20 -- which really is the
+subtitle stream -- and draws it with **PGCN 6's palette**:
+
+    PGCN 1 palette  [0] Y=16   [8] Y=128  [9] Y=176   -> fill, outline, black edge
+    PGCN 6 palette  [0] Y=128  [8] Y=128  [9] Y=128   -> one flat grey, no outline
+
+PGCN 6's palette has only two meaningful entries (14 = white, the rabbit; 15 = green),
+because nothing else is meant to draw with it. Showing that stream is our invention, not the
+disc's intent. `subp_stream_map` now reports `stream_absent` and `emu` withholds the USER
+path's route. ⚠ **The rule is narrowed on a measurement**: applying the available bit
+unconditionally (as libdvdnav does) would strip subtitles from the **586 class-B PGCs** (up
+to 168 discs) that rely on the identity fallback -- see `dvd/subp_stream_map.sv` for the
+221-disc sweep and the A/B/C classes. Gate: `subp_stream_map_tb`'s six directed
+`stream_absent` arms, whose RED arm is the unconditional version.
+
 **What is done (this branch):**
 - **Render un-gate** (`emu.sv`): `in_title_hli = menus_on && !menu_active && hl_btns_armed`
   feeds `sp_route_en` so an in-title armed HLI routes its button subpicture (the highlight

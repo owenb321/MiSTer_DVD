@@ -59,13 +59,21 @@ module subp_stream_map (
     input  wire [31:0] ctl_sel,       // subp_control[logical], muxed by emu
     input  wire        wide,          // content is 16:9 (ar_wide_auto_eff)
     input  wire [1:0]  disp_mode,     // 0 = wide, 1 = letterbox, 2 = pan&scan
-    output wire [4:0]  phys_streamN   // -> ps_demux.sp_track
+    // OR of the "available" bit across all 16 subp_control entries of the loaded
+    // PGC (emu computes it; this module only ever sees the ONE selected word).
+    input  wire        any_present,
+    output wire [4:0]  phys_streamN,  // -> ps_demux.sp_track
+    // 1 = the loaded PGC has a usable table and it does NOT declare this logical
+    // stream, so there is nothing to show. See the STREAM AVAILABILITY note below.
+    output wire        stream_absent
 );
 
     // The table is trustworthy only when the reader has finished streaming it
     // AND it belongs to the domain this resolution is for.
     wire dom_ok  = ctx_menu ? ~dom_tt : dom_tt;
-    wire use_map = map_valid && dom_ok && ctl_sel[31];
+    // the table is usable for this context (says nothing about THIS entry)
+    wire use_map_dom = map_valid && dom_ok;
+    wire use_map = use_map_dom && ctl_sel[31];
 
     // Explicit case mux, not a variable part-select (the Quartus-17
     // netlist-mangling lesson, docs/mpeg1.md: keep the indexing boring).
@@ -81,6 +89,36 @@ module subp_stream_map (
     assign phys_streamN = !use_map ? {1'b0, logical}     :  // fall back: identity
                           !wide    ? ctl_sel[28:24]      :  // 4:3 content
                                      phys_wide;
+
+    // ---- STREAM AVAILABILITY (2026-09-08) -----------------------------------
+    // libdvdnav guards the WHOLE resolution on the available bit
+    // (vmget.c: `if(pgc->subp_control[subpN] & 0x80000000)`), leaving the stream
+    // unselected when it is clear. This core instead falls back to identity, which
+    // is right when there is no usable table and wrong when there is one that
+    // simply does not offer this stream.
+    //
+    // ★ THE FIELD CASE: The Matrix's "Follow the White Rabbit" PGC (VTS_02 PGCN 6)
+    // declares logical stream 1 ONLY -- the rabbit icon on 0x22. Pressing the
+    // Subtitle button releases the VM's claim (emu: `if (sub_edge) vm_owns_sp<=0`),
+    // the user path resolves logical 0 by raw index to 0x20 (which IS the real
+    // subtitle stream), and it is then drawn with PGCN 6's palette -- where the
+    // three opaque subtitle classes are ALL Y=128. MEASURED on the disc:
+    //   PGCN 1 palette  [0] Y=16  [8] Y=128 [9] Y=176   -> fill/outline/black edge
+    //   PGCN 6 palette  [0] Y=128 [8] Y=128 [9] Y=128   -> one flat grey
+    // Reported as "subtitles are white on white with no black outline".
+    //
+    // ⚠ THE RULE IS NARROWED ON A MEASUREMENT, not on the spec alone. A 221-disc,
+    // 22,733-PGC sweep classified every title PGC:
+    //   A  declares logical 0                     18,801
+    //   B  declares NOTHING                        3,929  (586 in a VTS that has
+    //                                                     subpicture streams)
+    //   C  declares something, but not logical 0       3
+    // Applying the available bit unconditionally would strip subtitles from the 586
+    // class-B PGCs (up to 168 discs) that rely on the identity fallback today. So
+    // `any_present` narrows it to class C: a PGC that declares SOME stream has a
+    // working table, and an entry it omits really is unavailable. Blast radius: 3
+    // PGCs library-wide, which is the case that was reported.
+    assign stream_absent = use_map_dom && any_present && !ctl_sel[31];
 
 endmodule
 

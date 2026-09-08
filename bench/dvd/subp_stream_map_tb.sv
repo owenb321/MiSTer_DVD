@@ -27,6 +27,8 @@ module subp_stream_map_tb;
     reg  [3:0]  logical;
     reg  [31:0] ctl_sel;
     wire [4:0]  phys_streamN;
+    wire        stream_absent;
+    reg         any_present = 1'b0;
 
     subp_stream_map dut (
         .map_valid    (map_valid),
@@ -36,7 +38,9 @@ module subp_stream_map_tb;
         .ctl_sel      (ctl_sel),
         .wide         (wide),
         .disp_mode    (disp_mode),
-        .phys_streamN (phys_streamN)
+        .any_present  (any_present),
+        .phys_streamN (phys_streamN),
+        .stream_absent(stream_absent)
     );
 
     integer i, errors = 0, n = 0;
@@ -76,6 +80,67 @@ module subp_stream_map_tb;
             $display("FAIL: only %0d menu vectors resolve to a NON-ZERO substream --", n_menu_fix);
             $display("      the vectors do not exercise issues #60/#61 at all");
         end
+        // ---- STREAM AVAILABILITY (the white-rabbit subtitle case) ------------
+        // The 2071 packed vectors above pin phys_streamN, which this output does not
+        // touch; they run with any_present=0 and are unaffected. These directed arms
+        // pin stream_absent, using the REAL disc words: The Matrix VTS_02 PGCN 6
+        // declares logical 1 only (0x80020300), so a user asking for logical 0 -- an
+        // entry that reads all-zero -- must be told the stream is absent rather than
+        // being shown 0x20 under a palette that renders every subtitle class as one
+        // flat grey.
+        begin : avail_arms
+            map_valid = 1; dom_tt = 1; ctx_menu = 0; wide = 1; disp_mode = 0;
+
+            // [1] class C: the table declares SOMETHING, but not this entry -> absent
+            any_present = 1; logical = 4'd0; ctl_sel = 32'h00000000; #1;
+            if (stream_absent !== 1'b1) begin
+                errors = errors + 1;
+                $display("FAIL [avail-1]: undeclared entry in a PGC that declares others must be ABSENT");
+            end
+
+            // [2] the SAME entry when the PGC declares NOTHING (class B, 586 PGCs in
+            //     the library sweep) -> NOT absent; the identity fallback must stand,
+            //     or those discs silently lose their subtitles.
+            any_present = 0; logical = 4'd0; ctl_sel = 32'h00000000; #1;
+            if (stream_absent !== 1'b0) begin
+                errors = errors + 1;
+                $display("FAIL [avail-2]: a PGC that declares NO stream must keep the identity fallback");
+            end
+
+            // [3] a declared entry is never absent (the normal case, 18,801 PGCs)
+            any_present = 1; logical = 4'd0; ctl_sel = 32'h80000100; #1;
+            if (stream_absent !== 1'b0) begin
+                errors = errors + 1;
+                $display("FAIL [avail-3]: a DECLARED stream must not be reported absent");
+            end
+
+            // [4] the rabbit's own stream stays selectable (logical 1, 0x80020300)
+            any_present = 1; logical = 4'd1; ctl_sel = 32'h80020300; #1;
+            if (stream_absent !== 1'b0 || phys_streamN !== 5'd2) begin
+                errors = errors + 1;
+                $display("FAIL [avail-4]: the rabbit's declared stream must resolve to 0x22 and not be absent (abs=%b phys=%0d)",
+                         stream_absent, phys_streamN);
+            end
+
+            // [5] no usable table at all -> never absent, whatever any_present says
+            map_valid = 0; any_present = 1; logical = 4'd0; ctl_sel = 32'h00000000; #1;
+            if (stream_absent !== 1'b0) begin
+                errors = errors + 1;
+                $display("FAIL [avail-5]: an unparsed table must not report absence");
+            end
+            map_valid = 1;
+
+            // [6] wrong domain (a menu resolution against a title table) -> not absent
+            ctx_menu = 1; any_present = 1; logical = 4'd0; ctl_sel = 32'h00000000; #1;
+            if (stream_absent !== 1'b0) begin
+                errors = errors + 1;
+                $display("FAIL [avail-6]: an out-of-domain table must not report absence");
+            end
+            ctx_menu = 0;
+
+            if (errors == 0) $display("  stream_absent: 6 directed arms PASS (class C absent, class B preserved)");
+        end
+
         if (errors == 0)
             $display("SUBP_STREAM_MAP_TB: ALL %0d VECTORS PASSED (%0d menu arms map to a non-zero substream)",
                      n, n_menu_fix);

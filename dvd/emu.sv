@@ -2266,6 +2266,16 @@ wire        menu_sp_ctx   = (menus_on && menu_active) || sp_menu_early;
 wire [3:0]  sp_sel_log    = menu_sp_ctx  ? 4'd0 :
                             vm_owns_route ? vm_spstn[3:0] : {1'b0, sp_user_log};
 wire [31:0] subp_ctl_sel  = subp_ctl_mem[sp_sel_log];                 // single 16:1 mux
+// Does the loaded PGC declare ANY subpicture stream? 16 flop reads, no mux -- this is
+// what separates "the table does not offer this stream" from "there is no table".
+wire subp_any_present = subp_ctl_mem[ 0][31] | subp_ctl_mem[ 1][31] |
+                        subp_ctl_mem[ 2][31] | subp_ctl_mem[ 3][31] |
+                        subp_ctl_mem[ 4][31] | subp_ctl_mem[ 5][31] |
+                        subp_ctl_mem[ 6][31] | subp_ctl_mem[ 7][31] |
+                        subp_ctl_mem[ 8][31] | subp_ctl_mem[ 9][31] |
+                        subp_ctl_mem[10][31] | subp_ctl_mem[11][31] |
+                        subp_ctl_mem[12][31] | subp_ctl_mem[13][31] |
+                        subp_ctl_mem[14][31] | subp_ctl_mem[15][31];
 // 16:9 display mode: override -> letterbox; else Crop=pan&scan, Letterbox=letterbox,
 // else wide (Fit/HDMI anamorphic — the common case; O[4:3] refines it, HW-tunable).
 wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
@@ -2280,6 +2290,7 @@ wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
 wire [1:0]  sp_disp_mode_eff = menu_sp_ctx ? 2'd0 : sp_disp_mode;
 
 wire [4:0]  sp_phys_streamN;
+wire        sp_stream_absent;
 subp_stream_map u_subp_map (
     .map_valid    (pgc_ctl_valid),
     .dom_tt       (pgc_dom_tt),
@@ -2290,8 +2301,24 @@ subp_stream_map u_subp_map (
     // decoded stream's; the two are the same signal on every non-menu path.
     .wide         (ar_wide_auto_eff),
     .disp_mode    (sp_disp_mode_eff),
-    .phys_streamN (sp_phys_streamN)
+    .any_present  (subp_any_present),
+    .phys_streamN (sp_phys_streamN),
+    .stream_absent(sp_stream_absent)
 );
+
+// ---- USER-SELECTED STREAM THE PGC DOES NOT DECLARE (2026-09-08) --------------
+// Only the USER path, mirroring sp_track_eff's own condition below: the menu and VM
+// paths resolve a stream the disc itself selected, so an absent entry there is a
+// different question (and menu PGCs were NOT in the sweep that bounded this).
+//
+// The reported case: The Matrix's white-rabbit PGC declares logical 1 only. Pressing
+// the Subtitle button releases the VM's claim (vm_owns_sp above), the user path
+// resolves logical 0 by RAW INDEX to 0x20 -- the real subtitle stream -- and it is
+// then drawn with that PGC's palette, whose three opaque subtitle classes are all
+// Y=128. The text renders as one flat grey with no outline. Showing nothing is what
+// a conforming player does; showing it illegibly is our own invention.
+// Bound: 3 title PGCs in a 221-disc/22,733-PGC sweep (see subp_stream_map.sv).
+wire sp_user_absent = sp_stream_absent & ~(menu_sp_ctx | vm_owns_route | force_43_subp);
 
 // VM streams ALWAYS map (in-title HLI). The user path maps only under Force 4:3 Subpics
 // (a user-selected commentary track -> its letterbox physical substream, MiB logical 3 ->
@@ -4862,10 +4889,11 @@ assign ov_b  = 8'd0;
 // hide the menu - Phase 3). Drives BOTH spu_decode.enable and ps_demux.sp_enable
 // (the demux gate was missed in round 1 -> no button graphics unless subtitles
 // were already on).
-assign sp_route_en = sub_on | (menus_on && menu_active)
+assign sp_route_en = ~sp_user_absent &
+                   ( sub_on | (menus_on && menu_active)
                    | (menus_on && vm_owns_sp && vm_spstn[6]) // Phase 4: SetSTN sp display
                    | in_title_hli                            // in-title button (white rabbit)
-                   | sp_menu_early;                          // in-title multi-button menu (Scene It): open early
+                   | sp_menu_early );                        // in-title multi-button menu (Scene It): open early
 wire       sp_en = sp_route_en;
 wire [1:0] sp_q_idx;
 wire       sp_q_inside;
