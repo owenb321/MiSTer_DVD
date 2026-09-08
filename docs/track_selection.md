@@ -202,7 +202,9 @@ Mechanism:
   @156 header as before). The old `subp_ctl_*` bus is renamed **`pgc_ctl_*`**
   (waddr widened to 5 bits: 0–15 subp words, 16–23 audio words — ONE shared bus,
   net one new wire). audio_control is walked in **every** domain (menus resolve
-  logical 0 through it, per vmget.c); subp_control stays title-only. New outputs
+  logical 0 through it, per vmget.c); **so is subp_control, as of issues
+  #60/#61 — see "Logical→physical SUBPICTURE mapping" below, which also moved
+  the `pgc_ctl_valid` rise to the last SUBP word.** New outputs
   `pgc_ctl_valid` (complete + consistent; rises one cycle after the last word
   lands) and `pgc_dom_tt` (the loaded PGC's domain — `menu_dom` is NOT a
   substitute: it reads 0 for First Play, which must take the non-title rule).
@@ -239,6 +241,145 @@ HW gate: **GET_SMART, Debug Title VTS = 2 — silent before, audio after** (the
 decisive A/B; backups `BATTLEFIELD_EARTH` VTS 4, `NATIONAL_LAMPOONS_VACATION`
 VTS 2); MiB 4-track cycling unregressed; menu→title transitions keep audio
 continuous.
+
+### Logical→physical SUBPICTURE mapping — menus (issues #60/#61)
+
+**Status: 🔧 fixed in fabric, sim-proven RED/GREEN + mutation-checked, ⏳ HW-confirm
+pending** (branch `fix/menu-subp-stream-map`).
+
+Two field reports, both PAL FR Region-2 physical discs on v0.4.0, both worded almost
+identically: *"the disc is playable, but we can't see any highlighted cursor or any
+indication on what we are selecting (blind selection)"* — Once Upon a Time in China
+(#60) and Jin Roh (#61). Both filed `dvd_report.py` bundles, which is what made this
+diagnosable at all: neither disc exists in the local library.
+
+**The highlight is not a layer — it is a RECOLOUR of subpicture pixels.** `emu.sv`
+gates the compositor with `sp_on_q <= ... | sp_q_inside` and `subpic_blend` requires
+`ov_on`, so if no SPU is decoded then `nav_pci` can arm perfectly, fetch the button
+record, compute the right rectangle and the right `coli` nibbles, and **nothing is
+drawn**. That is exactly what "blind selection" means, and it is why the symptom
+looks like a highlight bug while the cause is a demux filter.
+
+**Root cause, measured from the bundles.** Every menu PGC on both discs authors
+
+```
+subp_control[0] = 0x80010200   available=1, 4:3=0, wide=1, letterbox=2, pan&scan=0
+```
+
+with 16:9 PAL menus. libdvdnav's `vm_get_subp_stream` (vmget.c) applies that
+display-mode mapping in **every** domain, so the menu SPU rides physical substream
+**0x21**. This core routed **0x20**, unconditionally, for two independent reasons:
+
+- `emu.sv` short-circuited `sp_track_eff` to `3'd0` for any menu context, and
+- `dvd_iso_reader` never even *walked* `subp_control` outside the title domain —
+  `P_ACTL` rolled into `P_SUBP` only when `dom == DOM_TT`.
+
+Both carried the same justification in a comment: *"menu buttons force subpicture
+stream 0 anyway."* That was true of the NTSC R1 discs it was written against and is
+false in general. ⚠ **A comment asserting an invariant is not evidence for it** — this
+one had been read and left alone through several menu-subpicture rounds.
+
+**Why it was never seen locally, quantified.** `tools/subp_route_sweep.py` computes
+the OLD routing (constant 0) and the NEW routing for **every menu PGC of every menu
+unit** (VMGM plus each VTS's VTSM, each resolved against *its own* V_ATR) across the
+221-disc library: **12,515 menu PGCs, 219 readable discs, and exactly ONE disc whose
+routing changes.** 205 discs author an available map that already resolves to 0, 4
+have no menu subpicture, 2 are unreadable.
+
+Most non-identity discs author `0x80000100` — 4:3=0, **wide=0**, letterbox=1 — so the
+hardcoded 0 was *correct* for them in the wide presentation (T2, Akira, Tomb Raider
+PAL, The Office PAL, Road to Perdition, BBB…). That is why a bug affecting a whole
+class of European anamorphic discs never showed up here.
+
+⚠ **A first pass at this census got it wrong and the sweep tool is what caught it.**
+The disc aspect was read from the **VMGI** attribute and applied to every unit, which
+classified `ATFIRSTSIGHT` as a 4:3 menu and concluded *zero* library discs were
+affected. Its VMGM is 4:3 (`0x4300`) but its **VTS_01 VTSM is 16:9** (`0x4d00`), and
+that unit authors `0x80010000` (wide=1). **Each menu unit carries its own V_ATR and
+must be resolved against it** — a per-disc aspect is not a thing.
+
+★ **That mistake turned into the best test arm available.** ATFIRSTSIGHT's menu VOB
+was scanned and carries **both 0x20 and 0x21** (13 PESs each) — the 4:3 and the 16:9
+wide variants of the same art. So the fix routes its anamorphic menu to the wide
+variant, which demonstrably exists on the disc, where the core previously showed the
+4:3 art on a 16:9 raster. **It is a locally-available, rig-testable disc whose routing
+changes** — worth more than the crafted `_hwtest/` image it replaces, because nothing
+about it is synthetic. Neither reporter's disc can be played locally (their bundles are
+nav-only), so this is the only real disc on which the new path can be exercised here.
+
+**Mechanism of the fix.**
+
+- **`dvd_iso_reader`**: the `P_ACTL` tail now rolls into `P_SUBP` in **every** domain.
+  The two tables are contiguous (0x0C..0x1B, 0x1C..0x5B), and the menu path's old
+  re-seek to @156 is already `P_SUBP`'s own tail — so this is a *deletion*, and the
+  netlist gets slightly smaller. Cost: 64 extra walk bytes per menu PGC load, at parse
+  time.
+- **`pgc_ctl_valid` moved from the last AUDIO word (addr 23) to the last SUBP word
+  (addr 15).** ⚠ This was a **pre-existing latent bug in the title domain too**:
+  `P_ACTL` emits addr 23 *before* `P_SUBP` runs, so `valid` rose while
+  `subp_ctl_mem` still held the **previous** PGC's table. Harmless only while nothing
+  read that table early; not harmless once menus do.
+- **`dvd/subp_stream_map.sv`** (new, combinational, unit-tested) — sibling of
+  `aud_stream_map.sv`. It takes the *already-muxed* `subp_control[logical]` word so the
+  16:1 mux stays in `emu` (routing is tight at ~90% ALM and a second mux has already
+  failed to fit once). Falls back to the logical index whenever the table is absent,
+  mid-parse, or from the other domain.
+- **`emu.sv`**: `menu_sp_ctx` picks *logical* 0 for menus and resolves it through the
+  map instead of pinning *physical* 0.
+- **`ps_demux.sp_track` widened 3→5 bits.** The subpicture branch is already guarded
+  by `in_byte[7:5]==001`, so `in_byte[4:0]` **is** the subpicture index and the compare
+  is now exact. The old 3-bit compare aliased mod 8 — stream 8 would have been served
+  stream 0's art, routine on a multilingual R2 title, and newly reachable now that
+  menus resolve to non-zero ids.
+
+**⛔ The `ctx_menu`/`dom_tt` gate is NOT hygiene.** `subp_ctl_mem` is one store shared
+by both domains and is never cleared. Without a domain match, (a) a menu jump raises
+`menu_active` *before* `S_PGC_HDR` clears `pgc_ctl_valid`, so a menu would briefly
+resolve through the **title's** table, and (b) a menu's table would leak into the
+in-title HLI path (Matrix "Follow the White Rabbit", HW-confirmed PR fj#115). Both now
+fall back to the logical index = the pre-fix behaviour.
+
+**★ DELIBERATE DEVIATION FROM libdvdnav: a menu always resolves through the WIDE
+field**, never letterbox or pan&scan (`sp_disp_mode_eff`). Three reasons, all already
+established in this codebase:
+
+1. This core composites the subpicture in **source space** and scales the composite, so
+   selecting the disc's already-letterboxed variant and then applying `disp_vscale`
+   would letterbox it **twice**.
+2. `nav_pci.disp_mode` was already forced to wide for menus (the analog-overlay HW
+   round-1 lesson: a non-group-1 button-group pick split T2's rects across two options).
+   Both consumers now ride **one shared wire**, so the art and the rects can never come
+   from different presentations.
+3. The regression surface collapses to zero: the 16 `0x80000100` discs stay on 0x20 in
+   *every* display mode, byte-identical to HW-confirmed behaviour.
+
+Consequence to accept: the latent letterbox mis-route on those 16 discs is *not*
+"fixed", because under source-space compositing it is not a bug. Reversible in one line
+(`sp_disp_mode_eff = sp_disp_mode`) — but that moves `nav_pci.disp_mode` with it and
+needs a T2-Letterbox HW round.
+
+`sp_menu_early` (an in-title multi-button game menu, e.g. Scene It) joins the mapping:
+it is a title-domain PGC, so `subp_ctl_mem` is already populated for it and
+`ar_wide_auto_eff == ar_wide_auto` there.
+
+**Golden model** `tools/dvd_vm_ref.py subp_stream_map()`; **offline sweep**
+`tools/subp_route_sweep.py` (old vs new routing for every menu PGC of every disc).
+**Tests:** `bench/dvd/subp_stream_map_tb.sv` (2,071 vectors bit-exact vs the golden
+model, directed cases taken from the real disc census, **5/5 targeted mutations
+caught**, and it fails if fewer than 5 menu vectors resolve non-zero — i.e. it cannot
+pass while agreeing with the old hardcoded 0);
+`bench/dvd/iso_reader_subpctl_tb.sv` gained the probe that could see the early-`valid`
+bug (it watched *audio* writes only, which is why the bug survived);
+`bench/dvd/menu_subp_route_tb.sv` measures which substream's bytes the demux actually
+forwards. Full `run_subpic.sh` + reader suites green.
+
+**HW gate:** ATFIRSTSIGHT is the positive arm (its VTS_01 menu must still show a
+highlight, now from the 16:9 wide art); every other disc is a regression arm and must be
+byte-identical. Assert machine-readably with `Debug Overlay=On` and
+`tools/hud_read.py blocks`, whose `hl_btns_armed / sp_seen / spb_seen / hl_on` booleans
+are exactly the discriminator: pre-fix on an affected disc the highlight arms and
+fetches while the SPU blocks read RED. The reporters remain the final word for
+#60/#61 themselves.
 
 ### Audio-substream observation tap (shipped) + the deferred watchdog
 

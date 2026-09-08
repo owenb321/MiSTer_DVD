@@ -13,6 +13,14 @@
 //       CONTIGUOUS with the subp words (audio first - the walk rolls straight
 //       into P_SUBP with no re-seek), subp_control byte-exact as before.
 //   [2] pgc_ctl_valid rises only AFTER the last audio word, with pgc_dom_tt=1.
+//   [4] pgc_ctl_valid stays LOW for the WHOLE walk -- through the subp words too,
+//       not just the audio ones. It means "both tables are complete", and it was
+//       keyed on the last AUDIO word (addr 23), which P_ACTL emits BEFORE P_SUBP
+//       runs -- so it rose ~128 cycles early with subp_ctl_mem still holding the
+//       PREVIOUS PGC's table. Latent while only titles read that table; a real
+//       stale-read once menus do (issues #60/#61). The probe below is the RED arm:
+//       it fires on pre-fix RTL and is the ONLY check that can see this, because
+//       [2] deliberately watches audio writes only.
 //   [3] title PGC with audio_control[0]=0x8300 resolves like GET_SMART (the
 //       shadow check mirrors tools/nav_extract.py --audio-map).
 
@@ -46,6 +54,7 @@ module iso_reader_subpctl_tb;
     reg [15:0] cap_aud  [0:7];       // audio_control words
     reg        cap_aseen[0:7];
     reg        valid_at_aud_write;   // pgc_ctl_valid sampled DURING an audio write
+    reg        valid_at_subp_write;  // ... and DURING a subp write (must also stay 0)
     reg        aud_before_subp_ok;   // all 8 audio words landed before subp word 0
     reg        dom_tt_at_valid;
     integer    aud_writes;
@@ -65,6 +74,11 @@ module iso_reader_subpctl_tb;
                 cap_mem [pgc_ctl_waddr[3:0]] <= pgc_ctl_wdata;
                 cap_seen[pgc_ctl_waddr[3:0]] <= 1'b1;
                 if (aud_writes != 8) aud_before_subp_ok <= 1'b0; // audio must precede
+                if (pgc_ctl_valid) begin
+                    valid_at_subp_write <= 1'b1;  // must stay 0
+                    $display("  [probe] t=%0t subp write addr=%0d while valid=1",
+                             $time, pgc_ctl_waddr[3:0]);
+                end
             end
         end
         if (pgc_ctl_valid) dom_tt_at_valid <= pgc_dom_tt;
@@ -171,7 +185,8 @@ module iso_reader_subpctl_tb;
     initial begin
         for (k=0;k<16;k=k+1) begin cap_mem[k]=0; cap_seen[k]=0; end
         for (k=0;k<8;k=k+1)  begin cap_aud[k]=0; cap_aseen[k]=0; end
-        valid_at_aud_write=0; aud_before_subp_ok=1; dom_tt_at_valid=0; aud_writes=0;
+        valid_at_aud_write=0; valid_at_subp_write=0;
+        aud_before_subp_ok=1; dom_tt_at_valid=0; aud_writes=0;
         rst_n=0; repeat(4) @(posedge clk); rst_n=1; @(posedge clk);
         build; file_size=IMG_BYTES;
         @(posedge clk); start=1; @(posedge clk); start=0;
@@ -203,6 +218,11 @@ module iso_reader_subpctl_tb;
             errors=errors+1; $display("  FAIL: a subp word arrived before all 8 audio words"); end
         if (valid_at_aud_write) begin
             errors=errors+1; $display("  FAIL: pgc_ctl_valid high during the audio walk"); end
+        if (valid_at_subp_write) begin
+            errors=errors+1;
+            $display("  FAIL: pgc_ctl_valid high during the SUBP walk -- it must mean");
+            $display("        'both tables complete', so a consumer can read a stale");
+            $display("        subp_ctl_mem while it is asserted"); end
         if (!pgc_ctl_valid) begin
             errors=errors+1; $display("  FAIL: pgc_ctl_valid low after the parse"); end
         if (!dom_tt_at_valid) begin

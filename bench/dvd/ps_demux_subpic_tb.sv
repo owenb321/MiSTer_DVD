@@ -26,7 +26,7 @@ module ps_demux_subpic_tb;
     logic       in_valid;
     wire        in_ready;
     logic [2:0] aud_track;
-    logic [2:0] sp_track;
+    logic [4:0] sp_track;
     logic       sp_enable;
 
     wire [7:0]  vid_byte;  wire vid_valid;  logic vid_ready = 1;

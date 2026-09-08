@@ -415,18 +415,20 @@ module dvd_iso_reader #(
     //                  the user's track pick is a RAW substream index and any
     //                  disc with a non-identity map (GET_SMART VTS2: everything
     //                  -> 0x83) plays SILENT. audio_control is walked in EVERY
-    //                  domain (menus resolve logical 0 through it, per vmget.c);
-    //                  subp_control stays title-only. See docs/dvd_nav.md.
+    //                  domain (menus resolve logical 0 through it, per vmget.c),
+    //                  and so is subp_control -- see the S_PGC_HDR walk arm.
+    //                  See docs/dvd_nav.md, docs/track_selection.md.
     output reg        pgc_ctl_we,
     output reg [4:0]  pgc_ctl_waddr,
     output reg [31:0] pgc_ctl_wdata,
-    // High while the streamed audio_control words above are COMPLETE and
-    // consistent with the loaded PGC: cleared at S_PGC_HDR (a new PGC's parse),
-    // set when the P_ACTL walk finishes. Doubles as "any PGC has been parsed" -
+    // High while the streamed audio_control AND subp_control words above are
+    // COMPLETE and consistent with the loaded PGC: cleared at S_PGC_HDR (a new
+    // PGC's parse), set when the P_SUBP walk finishes (which now follows P_ACTL
+    // in every domain). Doubles as "any PGC has been parsed" -
     // 0 from reset until the first PGC (linear .VOB/.mpg playback stays 0
     // forever), which emu maps to the IDENTITY mapping = pre-fork behaviour.
     output reg        pgc_ctl_valid,
-    // Domain of the audio_control above (1 = title). Latched WITH pgc_ctl_valid
+    // Domain of the tables above (1 = title). Latched WITH pgc_ctl_valid
     // because libdvdnav's rule differs by domain (menus force logical 0). NOTE:
     // menu_dom is NOT a substitute - it reads 0 for DOM_FP, which must also
     // take the non-title rule.
@@ -1884,12 +1886,17 @@ always @(posedge clk or negedge rst_n) begin
         seek_ack <= 1'b0;               // default: one-cycle pulses
         pal_we   <= 1'b0;
         pgc_ctl_we <= 1'b0;
-        // audio_control completion: the P_ACTL walk's LAST write (addr 23 =
-        // audio_control[7]) is registered, so this fires the cycle it lands at
-        // the consumer - pgc_ctl_valid rises strictly AFTER all 8 words are
-        // stable. dom is still the loaded PGC's domain here (it only changes
-        // at jump dispatch).
-        if (pgc_ctl_we && pgc_ctl_waddr == 5'd23) begin
+        // Control-table completion: the LAST write of the whole walk is
+        // subp_control[15] (addr 15), emitted by P_SUBP, which now follows
+        // P_ACTL in EVERY domain. It is registered, so this fires the cycle it
+        // lands at the consumer - pgc_ctl_valid rises strictly AFTER all 8
+        // audio words AND all 16 subpicture words are stable. dom is still the
+        // loaded PGC's domain here (it only changes at jump dispatch).
+        // DVD-FORK FIX (issues #60/#61): this used to key on addr 23 = the last
+        // AUDIO word, which P_ACTL emits BEFORE P_SUBP runs -- so valid rose
+        // ~128 cycles early and subp_ctl_mem still held the PREVIOUS PGC's
+        // table. Latent while menus never read it; not latent once they do.
+        if (pgc_ctl_we && pgc_ctl_waddr == 5'd15) begin
             pgc_ctl_valid <= 1'b1;
             pgc_dom_tt    <= (dom == DOM_TT);
         end
@@ -3301,15 +3308,23 @@ always @(posedge clk or negedge rst_n) begin
                     cmd_tbl_off    <= 16'd0;
                     cell_pb_off16  <= 16'd0;
                     prog_map_off16 <= 16'd0;
-                    // EVERY domain first walks audio_control[8] (PGC@0x0C, 16 B)
-                    // -> pgc_ctl_we addr 16..23 (menus resolve logical audio 0
-                    // through it too, per libdvdnav vmget.c). audio_control is
-                    // CONTIGUOUS with subp_control @0x1C, so a TITLE PGC then
-                    // rolls straight into P_SUBP with no re-seek; menu/FP
-                    // domains re-seek to the @156 header (P_HDR) - menu buttons
-                    // force subpicture stream 0 anyway. pgc_ctl_valid drops for
-                    // the duration of the parse (emu gates aud_switch on it so
-                    // the streaming words can't glitch a track resync).
+                    // EVERY domain walks audio_control[8] (PGC@0x0C, 16 B) ->
+                    // pgc_ctl_we addr 16..23, then rolls straight into
+                    // subp_control[16] (PGC@0x1C, 64 B) -> addr 0..15. The two
+                    // tables are CONTIGUOUS, so this is one walk with no re-seek.
+                    // DVD-FORK FIX (issues #60/#61): subp_control used to be
+                    // TITLE-ONLY, justified by "menu buttons force subpicture
+                    // stream 0 anyway". That is false on a disc whose menu PGC
+                    // maps logical stream 0 to a NON-ZERO physical substream for
+                    // the presented display mode -- libdvdnav's
+                    // vm_get_subp_stream() applies pgc->subp_control in EVERY
+                    // domain. Two PAL 16:9 discs author 0x80010200 (4:3=0,
+                    // wide=1, letterbox=2), so their menu SPU rides 0x21 and the
+                    // core filtered 0x20 -> no subpicture -> no button highlight
+                    // at all. See docs/track_selection.md.
+                    // pgc_ctl_valid drops for the duration of the parse (emu
+                    // gates aud_switch on it so the streaming words can't glitch
+                    // a track resync).
                     pgc_ctl_valid <= 1'b0;
                     walk_sec  <= pgc_sec + (({1'b0,pgc_off} + 12'd12) >> 11);
                     walk_off  <= ({1'b0,pgc_off} + 12'd12) & 12'h7FF;
@@ -3360,22 +3375,16 @@ always @(posedge clk or negedge rst_n) begin
                         pgc_ctl_wdata <= {16'd0, wacc[7:0], pb_rdata};
                     end
                     if (walk_left == 13'd1) begin
-                        // (pgc_ctl_valid rises one cycle later, off the last
-                        // write pulse itself - see the we/waddr==23 clause -
-                        // so a consumer never sees valid=1 while word 7 is
-                        // still in flight.)
-                        if (dom == DOM_TT) begin
-                            // walk_off/walk_sec continue naturally into 0x1C
-                            walk_left <= 13'd64;       // 16 streams x 4 bytes
-                            walk_idx  <= 13'd0;
-                            wphase    <= P_SUBP;
-                        end else begin
-                            walk_sec  <= pgc_sec + (({1'b0,pgc_off} + 12'd156) >> 11);
-                            walk_off  <= ({1'b0,pgc_off} + 12'd156) & 12'h7FF;
-                            walk_left <= 13'd78;
-                            walk_idx  <= 13'd0;
-                            wphase    <= P_HDR;
-                        end
+                        // DVD-FORK FIX (issues #60/#61): EVERY domain now rolls
+                        // into P_SUBP. subp_control is CONTIGUOUS with
+                        // audio_control, so walk_off/walk_sec continue naturally
+                        // into 0x1C and no domain needs a re-seek here (P_SUBP's
+                        // own tail does the @156 hop that the menu path used to
+                        // do itself). pgc_ctl_valid rises at the END of P_SUBP
+                        // now - see the we/waddr==15 clause.
+                        walk_left <= 13'd64;           // 16 streams x 4 bytes
+                        walk_idx  <= 13'd0;
+                        wphase    <= P_SUBP;
                     end
                 end
 

@@ -581,7 +581,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-audioboost"
+`define CORE_VERSION "dev-menusubp"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -2258,19 +2258,39 @@ wire        force_43_subp = status[15];
 wire        vm_owns_route = menus_on && vm_owns_sp && vm_spstn[6];
 wire [2:0]  sp_user_log   = ({1'b0,sp_sel} >= subp_ntracks_w)
                             ? (subp_ntracks_w[2:0] - 3'd1) : sp_sel;   // clamped user index
-wire [3:0]  sp_sel_log    = vm_owns_route ? vm_spstn[3:0] : {1'b0, sp_user_log};
+// A MENU context (menu-domain menu, or an in-title multi-button game menu like
+// Scene It) resolves LOGICAL stream 0 -- but through the map, not as a constant.
+// DVD-FORK FIX (issues #60/#61): this used to short-circuit to physical 0.
+wire        menu_sp_ctx   = (menus_on && menu_active) || sp_menu_early;
+wire [3:0]  sp_sel_log    = menu_sp_ctx  ? 4'd0 :
+                            vm_owns_route ? vm_spstn[3:0] : {1'b0, sp_user_log};
 wire [31:0] subp_ctl_sel  = subp_ctl_mem[sp_sel_log];                 // single 16:1 mux
 // 16:9 display mode: override -> letterbox; else Crop=pan&scan, Letterbox=letterbox,
 // else wide (Fit/HDMI anamorphic — the common case; O[4:3] refines it, HW-tunable).
 wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
                            (status[4:3] == 2'd3) ? 2'd2 :
                            (status[4:3] == 2'd2) ? 2'd1 : 2'd0;
-wire [4:0]  sp_phys_streamN =
-      !subp_ctl_sel[31]      ? {1'b0, sp_sel_log}    :   // undefined -> logical (as before)
-      !ar_wide_auto          ? subp_ctl_sel[28:24]   :   // 4:3 content
-      (sp_disp_mode == 2'd1) ? subp_ctl_sel[12:8]    :   // 16:9 letterbox
-      (sp_disp_mode == 2'd2) ? subp_ctl_sel[4:0]     :   // 16:9 pan&scan
-                               subp_ctl_sel[20:16];       // 16:9 wide
+// ONE shared display-mode wire for the subpicture VARIANT and nav_pci's BUTTON
+// GROUP. A menu forces wide for both: this core composites in source space and
+// scales the composite, so the disc's pre-letterboxed variant would letterbox
+// TWICE -- and driving both consumers from one wire makes it structurally
+// impossible for the art and the rects to come from different presentations
+// (the HW round-1 lesson recorded at nav_pci's .disp_mode below).
+wire [1:0]  sp_disp_mode_eff = menu_sp_ctx ? 2'd0 : sp_disp_mode;
+
+wire [4:0]  sp_phys_streamN;
+subp_stream_map u_subp_map (
+    .map_valid    (pgc_ctl_valid),
+    .dom_tt       (pgc_dom_tt),
+    .ctx_menu     (menu_sp_ctx),
+    .logical      (sp_sel_log),
+    .ctl_sel      (subp_ctl_sel),
+    // A menu's aspect is the MENU's own IFO V_ATR (ar_wide_auto_eff), not the
+    // decoded stream's; the two are the same signal on every non-menu path.
+    .wide         (ar_wide_auto_eff),
+    .disp_mode    (sp_disp_mode_eff),
+    .phys_streamN (sp_phys_streamN)
+);
 
 // VM streams ALWAYS map (in-title HLI). The user path maps only under Force 4:3 Subpics
 // (a user-selected commentary track -> its letterbox physical substream, MiB logical 3 ->
@@ -2278,12 +2298,17 @@ wire [4:0]  sp_phys_streamN =
 // match stays unambiguous here (active substreams 0x20/21/22/23/24 -> 0/1/2/3/4). Off =
 // user path byte-identical (raw clamped logical index).
 // An in-title multi-button game menu (Scene It) is a MENU: its highlight rides
-// subpicture stream 0 like a menu-domain menu, so force stream 0 for it too
-// (the single-button white rabbit keeps its SetSTN vm_owns_route mapping).
-wire [2:0] sp_track_eff  = (menus_on && menu_active) || sp_menu_early ? 3'd0 :
-                           vm_owns_route                  ? sp_phys_streamN[2:0] :
-                           force_43_subp                  ? sp_phys_streamN[2:0] :
-                                                            sp_user_log;
+// LOGICAL subpicture stream 0 like a menu-domain menu (sp_sel_log above), and
+// resolves through the same map (it is a title-domain PGC, so subp_ctl_mem is
+// already populated for it and ar_wide_auto_eff == ar_wide_auto there).
+// DVD-FORK FIX (issues #60/#61): menus were pinned to PHYSICAL 0 here. On a disc
+// whose menu PGC maps logical 0 to a non-zero physical id for the presented
+// display mode, that filtered the wrong substream, decoded no subpicture, and
+// left the button highlight with nothing to recolour. The map falls back to the
+// logical index whenever the table is absent, mid-parse or from the other
+// domain, so every disc that worked before is byte-identical.
+wire [4:0] sp_track_eff  = (menu_sp_ctx | vm_owns_route | force_43_subp)
+                           ? sp_phys_streamN : {2'b0, sp_user_log};
 
 // =========================================================================
 // DVD-FORK (live output-mode switch — built for Interlaced Out Auto, now serving the
@@ -5007,8 +5032,7 @@ nav_pci nav_pci_inst (
     // Force 4:3: letterbox art + letterbox rects). Same menu term as
     // sp_track_eff's stream-0 force, WITHOUT force_43_subp (menus outrank it
     // there too).
-    .disp_mode  (((menus_on && menu_active) || sp_menu_early) ? 2'd0
-                                                              : sp_disp_mode),
+    .disp_mode  (sp_disp_mode_eff),
     .video_live (video_live_s2),         // fallback promotion trigger (keep_vbuf STC skew)
     .menu_settled (still_active && (vbuf_fill_s1 <= 8'h03)),
                                          // SETTLED = reader parked AND the decoder's tail
