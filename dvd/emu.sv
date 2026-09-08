@@ -577,7 +577,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-main"
+`define CORE_VERSION "dev-avsyncname"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -729,17 +729,33 @@ parameter CONF_STR = {
     // cadence on compute-bound (high-motion / PAL) content, drop the next B-frame in the
     // VLD to catch up instead of the governor irregularly repeating late frames. B is
     // never a reference so this cannot corrupt the picture; worst case is a rare dropped
-    // frame for a steadier cadence. Default On — the PR #158 film cadence-slip corrector
-    // rides this path and does NOT run with Frame Drop Off. O[12] (freed when the AC-3
-    // File Test was removed); O[19] is now Aspect Ratio. See docs/motcomp_throughput.md.
+    // frame for a steadier cadence. Default On. The drop request is also how the PTS
+    // scheduler asks the display to catch up (mpeg2video ORs sched_catchup_late into
+    // frame_late), so Frame Drop Off leaves a behind-schedule timeline to recover by
+    // repeating late frames alone. O[12] (freed when the AC-3 File Test was removed);
+    // O[19] is now Aspect Ratio. See docs/motcomp_throughput.md.
+    // ⚠ The pre-2026-09-07 note here credited "the PR #158 film cadence-slip corrector"
+    // to this path; PR #63 deleted that corrector (cad_acc) along with the refresh-counted
+    // STC — see resample_addrgen.v's removal note.
     "P1O[12],Frame Drop,On,Off;",
-    // Audio Genlock: On (default) = av_sync slews the 48 kHz audio NCO to track the
-    // video-referenced STC (PTS-driven A/V sync). Off = free-run the NCO (nco_trim
-    // forced 0) while still playing a VOB through the full pipeline — a diagnostic
-    // to isolate the av_sync/governor PACING variable from audio_ring overflow /
-    // ps_demux filtering. av_sync keeps running so the overlay still shows the drift
-    // it WOULD correct. See docs/av_sync.md / docs/fabric_audio.md.
-    "P1O[13],Audio Genlock,On,Off;",
+    // A/V Sync: On (default) = everything that presents to the viewer is scheduled
+    // against the free-running 90 kHz STC at its PTS (docs/stc_freerun.md). Off is a
+    // DIAGNOSTIC that disables that scheduling wholesale, in three places at once:
+    //   * disp_sched.sched_en  — every picture is due immediately, so the display
+    //     free-runs at raster rate with no PTS pacing (VIDEO, not just audio);
+    //   * dvd_audio_decode.sched_en — bypasses the PTS-scheduled drain start, plus
+    //     the stale-skip / mid-play catch-up / pre-anchor hold;
+    //   * iec61937_wrap.sync_armed — passthrough free-runs, no A/V hold.
+    // It is the only on-hardware way to take the whole scheduler out of the picture,
+    // which is what makes it worth a menu row: "set A/V Sync Off and tell me if it
+    // plays" separates a scheduler fault from a source/decode one in one message.
+    // Off is strictly worse for playback (no lip sync at all) — it is not a fallback.
+    // ⚠ RENAMED from "Audio Genlock" 2026-09-07. The original meaning — slew the
+    // 48 kHz NCO via av_sync's nco_trim — has been dead since the 2026-07-02 trim
+    // retirement (dec_nco_trim is hardwired 0 below, independent of this bit), and the
+    // old name hid the fact that Off also stops pacing the VIDEO. Bit span unchanged.
+    // See docs/stc_freerun.md, docs/av_sync.md, docs/fabric_audio.md.
+    "P1O[13],A/V Sync,On,Off;",
     // Force 4:3 Subpics: present as a 4:3/LETTERBOX display so a disc that authors
     // mode-specific subpicture streams serves its 4:3-mode art instead of the 16:9
     // stream. Motivating case: the MiB "visual commentary" - subpicture logical
@@ -1019,9 +1035,12 @@ wire       ps_vid_valid;
 
 wire       ps_demux_in_ready;   // ps_demux's own ready (input handshake)
 
-// O[13] Audio Genlock: index 1 = "Off" = free-run the audio NCO (ignore av_sync's
-// nco_trim). Lets a VOB play through the full pipeline with the genlock disabled,
-// to tell av_sync/governor pacing apart from audio_ring overflow / ps_demux.
+// O[13] A/V Sync (named "Audio Genlock" before 2026-09-07): index 1 = "Off" = free-run
+// EVERYTHING that the STC schedules — disp_sched (video pictures become due on arrival),
+// dvd_audio_decode's drain gate, and iec61937_wrap's passthrough hold. See the CONF_STR
+// entry above for why the row survives and what it is for.
+// ⚠ The signal keeps its "free-run" name because that is still exactly what it does; it
+// has NOT driven the audio NCO since the trim was retired (dec_nco_trim just below).
 wire       av_freerun = status[13];
 // NCO TRIM RETIRED (2026-07-02, lip-sync v3): the 48 kHz audio NCO and the display
 // raster both derive from the same 27 MHz clk_sys crystal and the governor plays
@@ -3204,8 +3223,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .frame_pts       (aud_frame_pts_w),
     .frame_pts_valid (aud_frame_pts_valid_w),
     .frame_pop   (dec_frame_pop),
-    // 48 kHz NCO trim: 0 (free-run) when Audio Genlock=Off; otherwise av_sync's
-    // genlock slew. See dec_nco_trim above.
+    // 48 kHz NCO trim: hardwired 0 since the 2026-07-02 trim retirement — NOT a
+    // function of O[13]. See dec_nco_trim above for why the slew is gone.
     .nco_trim           (dec_nco_trim),
     .dbg_play_cnt       (aud_play_cnt),          // DVD-FORK (telemetry)
     .dbg_gate_cnt       (aud_gate_cnt),          // DVD-FORK (telemetry)
@@ -3214,7 +3233,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     // PTS-scheduled playback START (lip-sync v3): the 48 kHz drain is held until
     // STC >= first_buffered_pts + av_ofs, setting phase at the PCM-FIFO EXIT (the
     // only place it's settable); underruns re-arm so audio re-enters at phase.
-    // Off together with the genlock (O13) so free-run stays a clean diagnostic.
+    // Off together with the rest of the scheduler (O[13] A/V Sync Off) so free-run
+    // stays a clean diagnostic.
     // ALSO free-run while a DISC MENU is active: menu audio is background music (no
     // lip-sync), and in Smooth mode (keep_vbuf) the video buffer runs deep during a
     // transition so the STC lags - STC-gating the menu audio to that lagging clock
@@ -3961,7 +3981,7 @@ mpeg2video mpeg2video_inst (
     .pts_in       (dec_pts_in),        // DVD-FORK (PTS association): that PES's PTS, crossed into clk_dec
     .pts_in_valid (dec_pts_in_valid),
     .stc_tick     (stc_tick_dec),      // DVD-FORK (PTS scheduling): the 90 kHz tick, clk_sys/300 crossed into clk_dec
-    .sched_en     (sched_en_dec),      // DVD-FORK (PTS scheduling): 0 = free-run (Audio Genlock Off diagnostic)
+    .sched_en     (sched_en_dec),      // DVD-FORK (PTS scheduling): 0 = free-run (O[13] A/V Sync Off diagnostic)
     .half_scan    (half_scan_dec),     // DVD-FORK (PTS scheduling): half the raster's image-scan period, ticks
     .stc          (core_stc),          // DVD-FORK (PTS scheduling): the clock (clk_dec)
     .stc_anchored (core_stc_anchored),

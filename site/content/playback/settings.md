@@ -41,15 +41,16 @@ again. A custom `boot.rom` logo survives the reset.
 
 ## Debug page
 
-The second OSD page. These are tuning and diagnostic levers — two of them affect normal
-playback and are documented properly below; the rest exist for narrowing down problems.
+The second OSD page. These are tuning and diagnostic levers. The three with sections below
+are the ones worth understanding before you touch them; the rest exist for narrowing down
+problems.
 
 | Setting | Options | What it does |
 |---|---|---|
 | **Debug Overlay** | **Off** / On | In a release build this shows the menu-highlight diagnostic blocks. |
 | **Title VTS Tens** / **Title VTS Units** | **0** / **Auto** | Forces a specific title set instead of the auto-selected one. Diagnostic, for discs where the wrong title is picked with Disc Menus off. |
 | **Frame Drop** | **On** / Off | **Leave this on.** See below. |
-| **Audio Genlock** | **On** / Off | Off free-runs the audio clock instead of slaving it to the video timeline. Diagnostic only. |
+| **A/V Sync** | **On** / Off | Off stops scheduling *both* picture and sound against the disc's timestamps. Diagnostic only — see below. |
 | **Force 4:3 Subpics** | **Off** / On | Forces subpicture geometry to 4:3 for discs that author it inconsistently. |
 | **Line-21 CC** | **On** / Off | Re-inserts closed captions on line 21 of the analog output — see [Closed captions](../video/closed-captions.md). |
 | **CC Test Line** | **Off** / On | Paints the caption waveform on a *visible* line to prove the chain works — see [the CC diagnostic](../video/closed-captions.md#is-it-working-the-test-line). |
@@ -66,10 +67,34 @@ the heaviest content it can fall behind the display cadence. The frame-rate gove
 absorbs this by dropping a B-frame to stay in step. B-frames are never used as references,
 so the picture cannot be corrupted by this, and in practice it is not something you notice.
 
-More importantly, the **cadence-slip corrector runs on the same path**. That is what keeps
-imperfect real-world telecine — discs where the 3:2 pattern is not clean — in step with the
-display. Turning Frame Drop off disables it, so film content drifts. The Off position
-exists to isolate the governor when diagnosing a pacing problem, not as a quality setting.
+It is also how the player catches up when it has fallen behind the disc's own timeline:
+advancing past a frame is the only way to recover time that has already been lost. With
+Frame Drop off there is no such mechanism, so on heavy content the picture simply runs
+progressively later and lip sync drifts with it. The Off position exists to isolate the
+governor when diagnosing a pacing problem, not as a quality setting.
+
+### A/V Sync
+
+Default **On**, and it should stay on.
+
+!!! info "Unreleased"
+    This setting was called **Audio Genlock** in v0.4.0 and earlier. It was renamed
+    because the old name described only half of what it does — and the half it named
+    had not been true for some time.
+
+With it on, everything the player shows you — picture, sound, subtitles, menu highlights,
+captions and bitstream passthrough — is presented at the time the disc asks for, measured
+against one clock. That is what lip sync *is* on this core.
+
+Off switches that scheduling off wholesale, for video as well as audio: pictures are shown
+as soon as they are decoded rather than when they are due, and sound plays as soon as it
+is available. The result is a player with no lip sync at all. It is not a fallback for
+sync problems and it will not improve one.
+
+What it is for is answering one question quickly: if a disc misbehaves and it behaves
+differently with A/V Sync off, the problem is in the player's timing rather than in
+reading or decoding the disc. That is worth a great deal when a bug can only be
+reproduced on someone else's disc, which is why the setting still has a row.
 
 ### A/V Offset
 

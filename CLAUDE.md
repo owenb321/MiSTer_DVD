@@ -1463,11 +1463,25 @@ worse maintenance burden than targeted in-place edits. So:
     FAILED (do NOT retry): entry-side dispatch scheduling, pre-anchor gate bypass,
     mid-play gate re-arm (full-FIFO deadlock), fractional vbuf thresholds, 16-bit
     offset constants.
-  - **`O[13],Audio Genlock,On,Off`** (2026-06-28, branch
-  `feature/vob-audio-freerun`): set Off to free-run the audio NCO (`nco_trim=0`)
-  while a VOB plays through the full pipeline — a diagnostic to tell av_sync/governor
-  PACING apart from `audio_ring` overflow / `ps_demux` filtering, now that AC-3 File
-  Test has HW-exonerated the decoder. See `docs/fabric_audio.md` §"Audio Genlock toggle".
+  - **`P1O[13],A/V Sync,On,Off`** — ⚠ **RENAMED from `Audio Genlock` 2026-09-07**
+  (bit span unchanged; `wire av_freerun = status[13]` keeps its name, which is still
+  accurate). Its original job — free-run the 48 kHz NCO via `nco_trim=0` (2026-06-28,
+  branch `feature/vob-audio-freerun`) — **has been dead since the 2026-07-02 trim
+  retirement**: `emu.sv` declares `dec_nco_trim = 22'sd0` unconditionally, so that
+  reading was stale for two months while the CONF_STR comment, `docs/`, and the manual
+  all still taught it. What the bit does NOW (since PR #63) is disable the PTS scheduler
+  **wholesale, video included**: `disp_sched.sched_en` (every picture due on arrival ⇒
+  the display free-runs at raster rate), `dvd_audio_decode.sched_en` (drain gate,
+  stale-skip, catch-up, pre-anchor hold) and `iec61937_wrap.sync_armed` (passthrough
+  hold). Off is "no lip sync at all" — a diagnostic arm, never a fallback.
+  ★ **Kept rather than hardwired on (reviewed 2026-09-07, user decision) because it is
+  the only on-hardware way to take the whole scheduler out of a bug report** — the
+  alternative is a custom build per investigation. The rename is what makes keeping it
+  safe: `Field Order` and `Analog CSync = Stock` were DELETED before release precisely
+  because a user could reach for them as a *fix*, and "Audio Genlock" invited exactly
+  that while naming half the behaviour. ⚠ **Any CONF_STR edit re-rolls the pinned fitter
+  SEED**, so this rename was batched into a release build rather than spent on its own.
+  See `docs/fabric_audio.md` §"A/V Sync toggle".
   - *(Prior HPS-decode path, retired: FPGA wrote compressed frames to a DDR3 ring at byte
     `0x30800000` for the standalone `hps/dvd_audio.c` daemon (liba52) to mmap/decode/ALSA.
     HW-confirmed 2026-06-25; see `docs/audio_ddr_path.md` for history.)*

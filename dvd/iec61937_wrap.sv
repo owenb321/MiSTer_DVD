@@ -64,7 +64,7 @@ module iec61937_wrap #(
     // delayed to the video display timeline instead of free-running at the demux
     // parse front. Holding until the anchor keeps the receiver's first real burst
     // at the start of the sustained stream (no startup real->null->real flap). ----
-    input  wire        sync_armed,     // sync intended (~av_freerun); holds until anchored
+    input  wire        sync_armed,     // sync intended (~av_freerun = O[13] A/V Sync On); holds until anchored
     input  wire        stc_anchored,   // av_sync STC has anchored on the video timeline
     input  wire [32:0] stc,            // av_sync video-referenced STC
     input  wire signed [17:0] av_ofs,  // A/V offset (90 kHz ticks, O[23:21])
