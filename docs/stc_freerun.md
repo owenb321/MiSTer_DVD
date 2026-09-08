@@ -984,8 +984,10 @@ against correct RTL.
 
 ### 12.3 What is still open here
 
-⏳ **Neither fix is HW-confirmed.** Both are sim-proven with RED/GREEN arms against measured
-disc data.
+✅ **Both fixes are HW-CONFIRMED (2026-09-08, PR #75)** — build
+`DVD_spuwindow_20260908_1955.rbf`: audio plays smoothly through the white-rabbit clips and
+the icon is solid. A third fix rode along in the same PR (a stream the PGC does not declare
+was being displayed — the "white on white" rabbit-mode subtitles); see `docs/dvd_nav.md`.
 ⏳ **`nav_pci`'s `hli_coherent` is untouched and may be a second contributor to the icon.**
 The icon needs the highlight as well as the subpicture (`SET_CONTR[0,0,0,0]` — the SPU is
 invisible on its own), and #63 tightened `stc_trusted` from a disjunction to a conjunction

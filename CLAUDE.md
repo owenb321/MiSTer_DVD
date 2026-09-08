@@ -1061,11 +1061,14 @@ worse maintenance burden than targeted in-place edits. So:
   on four discs), so Stage 1 extrapolates between tags from the picture flags and
   `frame_rate_code` and needs the vld's new any-reason `skip_ack` (governor AND realign
   drops) to keep that timeline honest.
-  - 🔧 **THE PARSE-FRONT AUDIT (2026-09-08, branch `fix/spu-display-window`) — two
-    consumers #63 changed WITHOUT TOUCHING; sim-proven RED/GREEN against measured disc
-    data, ⏳ HW-confirm pending.** Field report on The Matrix: the "Follow the White
-    Rabbit" icon FLASHES instead of staying solid, and there is an AUDIO DROPOUT at each
-    white-rabbit point *whether or not* white-rabbit mode is entered.
+  - ✅ **THE PARSE-FRONT AUDIT (2026-09-08, PR #75) — two consumers #63 changed WITHOUT
+    TOUCHING; sim-proven RED/GREEN against measured disc data and ✅ HW-CONFIRMED
+    2026-09-08** (build `DVD_spuwindow_20260908_1955.rbf`, SEED 5 first roll, 92 % ALM,
+    clk_dec 87.40/88.85 — passing but the thinnest margin in recent history, worth a
+    seed sweep if a later branch lands near the 86.0 gate). Field report on The Matrix:
+    the "Follow the White Rabbit" icon FLASHES instead of staying solid, and there is an
+    AUDIO DROPOUT at each white-rabbit point *whether or not* white-rabbit mode is
+    entered.
     ★★ **§11 asked which presentation paths were still off the STC. It did not ask the
     other question: which consumers compare a PARSE-FRONT value AGAINST `stc`, and so
     changed meaning when `stc` moved onto the display.** Both defects are that question's
@@ -1105,6 +1108,20 @@ worse maintenance burden than targeted in-place edits. So:
     against the reader's own `cell_i`, not the delivered byte pattern (the reader runs ~2
     sectors ahead). ⏳ `nav_pci`'s `hli_coherent` is untouched and may be a second
     contributor to the icon — `O[2]` `blk1`/`blk7` vs `blk3`/`blk8` separates them on HW.
+    **(3) A STREAM THE PGC DOES NOT DECLARE WAS BEING DISPLAYED (pre-existing, same PR).**
+    Rabbit-mode subtitles read "white on white". PGCN 6 declares logical stream 1 only;
+    pressing Subtitle releases the VM's claim, the user path resolves logical 0 by RAW
+    INDEX to 0x20 (the real subtitle stream) and draws it with PGCN 6's palette, whose
+    three opaque subtitle classes are all `Y=128` (PGCN 1: `[0] Y=16 [8] Y=128 [9] Y=176`).
+    ⚠ **The rule is NARROWED ON A SWEEP, not on the spec alone:** 221 discs / 22,733 title
+    PGCs — class A (declares logical 0) 18,801, class B (declares NOTHING) 3,929 of which
+    **586 rely on the identity fallback**, class C (declares something, not 0) **3**.
+    libdvdnav's unconditional available-bit guard would strip subtitles from those 586
+    across up to 168 discs, so `subp_stream_map.any_present` narrows it to class C —
+    blast radius 3 PGCs. Only the USER path is gated (menu/VM resolutions pick a stream
+    the disc itself chose). Gate: `subp_stream_map_tb`'s 6 directed `stream_absent` arms,
+    RED against BOTH the unconditional version and the pre-fix one; the 2071-vector
+    `phys_streamN` golden contract is untouched.
     Detail: **`docs/stc_freerun.md` §12**, `docs/subpicture.md`, `docs/dvd_nav.md`.
 
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
