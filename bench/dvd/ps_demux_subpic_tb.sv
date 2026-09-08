@@ -164,6 +164,23 @@ module ps_demux_subpic_tb;
                      sp_log.size(), sp_log.size()?sp_log[0]:8'hxx); errors++;
         end else $display("  case3 OK: sp_track=1 forwards 0x21 (E0..E3)");
 
+        // ---- Case 4: sp_track=9 -> only 0x29, NOT 0x21 (the mod-8 alias) ----
+        // The compare used to be in_byte[2:0] == sp_track, so substream 0x28+
+        // aliased onto 0..7 and stream 9 was served stream 1's art. Routine on a
+        // multilingual R2 title, and newly reachable now that a menu can resolve
+        // to a non-zero physical id (issues #60/#61). RED before the 3->5 bit
+        // widening: 0x21 is forwarded here.
+        sp_enable = 1; sp_track = 9;
+        sp_log.delete(); sp_frame_starts = 0;
+        send_pack();
+        send_subpic(8'h21, 8'hE0);   // the ALIAS: 9 & 7 == 1 -> must be dropped
+        send_subpic(8'h29, 8'hF0);   // the real stream 9 -> selected
+        repeat (60) @(posedge clk);
+        if (sp_log.size() != 4 || sp_log[0] !== 8'hF0) begin
+            $display("  FAIL: sp_track=9 got %0d bytes first=%02h (expected 4, F0 -- 0x21 aliased?)",
+                     sp_log.size(), sp_log.size()?sp_log[0]:8'hxx); errors++;
+        end else $display("  case4 OK: sp_track=9 forwards 0x29 and drops the 0x21 alias");
+
         if (errors == 0) $display("RESULT: PASS (subpicture routing correct)");
         else             $display("RESULT: FAIL (%0d errors)", errors);
         $finish;

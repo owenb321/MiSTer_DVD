@@ -369,9 +369,24 @@ model, directed cases taken from the real disc census, **5/5 targeted mutations
 caught**, and it fails if fewer than 5 menu vectors resolve non-zero — i.e. it cannot
 pass while agreeing with the old hardcoded 0);
 `bench/dvd/iso_reader_subpctl_tb.sv` gained the probe that could see the early-`valid`
-bug (it watched *audio* writes only, which is why the bug survived);
-`bench/dvd/menu_subp_route_tb.sv` measures which substream's bytes the demux actually
-forwards. Full `run_subpic.sh` + reader suites green.
+bug — it watched *audio* writes only, which is exactly why the bug survived (proven RED
+on the pre-fix reader); `bench/dvd/iso_reader_menu_tb.sv` **TEST 10** proves the reader
+streams a menu PGC's `subp_control` byte-exact with `pgc_dom_tt=0`, using the real
+`0x80010200` word on a PGC that straddles a sector boundary (**RED: 0 menu subp words
+pre-fix**); `bench/dvd/ps_demux_subpic_tb.sv` **case 4** proves the 5-bit compare drops
+the `0x21` mod-8 alias when `sp_track=9` (**RED: the 3-bit compare forwards both**).
+Full `run_subpic.sh` + a baseline-vs-fixed A/B of all 31 reader benches (27 unchanged,
+3 pre-existing UNKNOWN in both arms, 1 changed = the new probe catching the latent bug).
+
+⚠ **The `emu.sv` glue itself has NO sim gate** — there is no emu-level bench in this
+project — so `menu_sp_ctx`, `sp_disp_mode_eff`, the `subp_stream_map` instantiation and
+the widened `sp_track_eff` are **review-only plus Quartus elaboration**, the same standing
+this codebase records for the keyboard feature's `joy_eff` substitution. The three links
+either side of it are gated (reader streams the table; the map resolves it; the demux
+filters on it), and `tools/lint_undriven.sh` passes, which is what catches the specific
+failure mode of a declared-but-undriven wire. A chain bench was considered and dropped as
+low-value: it would have to *replicate* emu's glue rather than instantiate it, which is a
+bench agreeing with a copy of the thing it is meant to check.
 
 **HW gate:** ATFIRSTSIGHT is the positive arm (its VTS_01 menu must still show a
 highlight, now from the 16:9 wide art); every other disc is a regression arm and must be
