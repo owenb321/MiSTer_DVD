@@ -235,7 +235,7 @@ between every combed capture and every clean one was the corrector.
 
 ### 3.10 Analog sync shape: the equalizing pulses we were never emitting
 
-**Status (2026-09-05, branch `feature/smpte-csync`): sim-proven RED/GREEN and ✅
+**Status (2026-09-05, PR #64): sim-proven RED/GREEN and ✅
 HW-CONFIRMED 2026-09-07 on the maintainer's rig** (composite CRT and HDMI both correct,
 build `DVD_smptesync4_20260907_2305.rbf`). ⏳ The two reporters whose sets found the
 defect have not retested; that is what the next release is for. New `dvd/csync_smpte.sv`; `P1O[47:46] Analog CSync = SMPTE / 2H / Stock`,

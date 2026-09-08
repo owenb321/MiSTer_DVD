@@ -337,7 +337,7 @@ worse maintenance burden than targeted in-place edits. So:
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
 - ✅ **SMPTE 170M / BT.470 ANALOG COMPOSITE SYNC — we were emitting no equalizing pulses
-  at all (2026-09-05, branch `feature/smpte-csync`); sim-proven RED/GREEN and ✅
+  at all (2026-09-05, PR #64); sim-proven RED/GREEN and ✅
   HW-CONFIRMED 2026-09-07** (maintainer's rig: composite CRT and HDMI both correct with
   nothing to set, build `DVD_smptesync4_20260907_2305.rbf`, SEED 5 first roll, clk_dec
   93.45/91.35). ⏳ **The two reporters whose sets FOUND the defect have not retested** —
