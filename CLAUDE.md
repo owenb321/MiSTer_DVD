@@ -2867,7 +2867,7 @@ Two identifiers, deliberately at different granularities:
   | Where | `` `CORE_VERSION `` | OSD line |
   |---|---|---|
   | feature branch | `dev-<slug>` | `DVD dev-seekrealign 260903` |
-  | `main` between releases | `dev-main` | `DVD dev-main 260903` |
+  | `main` between releases | whatever the last merge left (no reset — see "Merging a PR") | `DVD dev-seekrealign 260903` |
   | the release commit, only | `v0.4.0` | `DVD v0.4.0 260903` |
 
   Set `dev-<slug>` as the **first commit of a feature branch**, named after the feature.
@@ -3065,11 +3065,15 @@ long markdown with backticks and checklists does not survive shell quoting relia
 gh pr merge <number> --merge        # or --squash / --rebase
 ```
 
-**★ After the merge, reset `` `CORE_VERSION `` to `"dev-main"`** in `dvd/emu.sv` on `main`
-(a one-line commit) if the merged branch left its own `dev-<slug>` there. Otherwise a build
-made from `main` advertises the last-merged feature's slug while containing much more than
-that feature. It costs nothing: `main` is not compiled between merges, so the netlist change
-is absorbed by whichever build comes next. See "Versioning and publishing releases".
+**⛔ Do NOT open a follow-up commit or PR to reset `` `CORE_VERSION `` after a merge**
+(rule retired 2026-09-08, by user decision — it used to say "reset it to `dev-main` on
+`main`"). `main` simply keeps whatever the last merged feature or release left there, and
+the next feature branch overwrites it with its own `dev-<slug>` in its first commit.
+Accepted consequence: a dev build cut from `main` between features advertises the
+last-merged slug while containing more than that feature — which is why a build for testing
+should come from a named feature branch, not from `main`. The release invariant is
+unaffected: a bare semver still lives in exactly one commit per release, and
+`build_release.sh` still refuses a `dev-` string on a `--release` build.
 
 ### Updating a PR description
 
