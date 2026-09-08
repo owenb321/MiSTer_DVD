@@ -47,6 +47,11 @@ module flush_ctl (
     input  wire aud_switch,       // 1-cycle pulse: audio track switch
     input  wire disc_rephase,     // display re-anchored on a content PTS jump (dvd/disp_sched.sv)
     input  wire keep_vbuf,        // level (reader): menu->menu transition keeps the VBUF
+    // level (reader): the cell being streamed is authored seamless_play, so its
+    // content continues the previous cell even when the timestamps restart. See the
+    // disc_rephase block below -- this is what stops a seamless-branch junction being
+    // read as a content change.
+    input  wire cell_seamless,
 
     output wire load_flush,       // ~64-cycle level -> pipe_rst_n scope (demux/av_sync/nav)
     output wire aud_flush,        // ~64-cycle level -> audio chain reset (with aud_resync)
@@ -119,7 +124,30 @@ always @(posedge clk) begin
     // silence -- play_pts can only re-latch from a NEW dispatch, and dispatch stalls
     // on the full decode FIFOs (v5.3, HW-observed). Resetting the chain is what makes
     // the re-phase safe, and is exactly why VLC flushes rather than re-times.
-    else if (aud_switch || disc_rephase) aud_resync_cnt <= 7'd64;
+    // ⚠⚠ NOT ON AN AUTHORED-SEAMLESS CELL (2026-09-08). disc_rephase was accepted on
+    // the measurement "titles re-anchor about once per playback (reanchors=1 over 80 s
+    // on APOLLO_13)". APOLLO_13 is one continuous title; a SEAMLESS-BRANCH title is
+    // not. The field reported an audio dropout at every "white rabbit" point of The
+    // Matrix -- in the PLAIN movie as much as the rabbit branch, because PGCN 1
+    // carries the same 9 interleaved cell-pairs.
+    // MEASURED on the disc: entering each interleaved cell the PTS RESTARTS near zero
+    // (audio steps -2 s to -64 s), which trips disc_jump_w every time; the ILVU
+    // splices INSIDE the block are continuous (0 irregular steps in 238 AC-3 samples)
+    // and the disc authors NO audio gap (every sml_pbi.vob_a[] entry is zero). Nothing
+    // about the sound is broken there -- the numbers renumber, the soundtrack plays on.
+    // Flushing costs ~1 s of audio twice over: the queued ring frames are discarded,
+    // and the drain gate then cannot re-open until the display clock walks up to a
+    // play_pts re-latched from the parse front. Video runs through it untouched
+    // (av_vid_hold arms off load_flush, not aud_resync) -- the reported shape exactly.
+    // cell_playback_t byte 0 bit 3 `seamless_play` is the author saying so; every
+    // white-rabbit cell is byte0=0x0e (seamless_play=1 AND stc_discontinuity=1). The
+    // CLOCK still re-anchors -- the display must follow a real timeline change -- only
+    // the audio flush is withheld.
+    // ⛔ Deliberately NOT a "was there a seek/jump recently" window: a looping menu
+    // cell re-anchors with genuinely restarting audio and pulses no seek_ack, so a
+    // navigation-event gate would silently drop the menu case #63 was built for.
+    // cell_seamless is 0 in every menu, so menus keep their re-phase untouched.
+    else if (aud_switch || (disc_rephase && !cell_seamless)) aud_resync_cnt <= 7'd64;
     else if (aud_resync)     aud_resync_cnt <= aud_resync_cnt - 7'd1;
 end
 

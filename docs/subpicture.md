@@ -195,6 +195,57 @@ SET_COLOR/CONTR/DAREA/DSPXA (show it); DCSQ1 (delay = duration) issues STP_DSP (
 
 ---
 
+## The COMMIT contract — display order, not parse order (2026-09-08)
+
+A subpicture unit is **decoded when it arrives** but must **become visible when it is
+due**, and those are not the same moment. `spu_decode` has ONE full-frame bitmap, so the
+RLE decode is destructive: decoding an arriving unit replaces whatever is on screen.
+
+Until PR #63 that was invisible. `stc` was anchored on the demux parse front and LED the
+displayed picture by the VBUF depth, so a unit arriving at the parse front was already due
+(`stc >= c_show`) at the moment it committed. PR #63 put `stc` on the displayed picture
+(`disp_lag ≈ 0`), and the same commit now installs a window **~a VBUF depth in the future**
+— blanking the outgoing unit and showing nothing until the clock catches up.
+
+Two symptoms, one bug:
+
+- **A re-sent button graphic blinks.** The Matrix's white-rabbit icon is re-sent
+  byte-identically every 1.001 s (measured), so it blanked once per re-send.
+- **Every ordinary subtitle is truncated** by up to a VBUF depth when the next line
+  arrives early. Less visible only because dialogue gaps usually exceed the lead.
+
+**The contract now enforced:**
+
+1. **Hold** — between `DCSQ_END` (where `w_show`/`w_hide`/DAREA/palette are all known) and
+   `RLE_LINE` (the destructive step), defer while a unit is committed and this one is not
+   yet due. Leave on due, on a new genuine unit start, or on a bounded cap.
+2. **Never open a hole the author did not write** — at `COMMIT`, if the outgoing unit's
+   window abuts or contains this one's start (`w_show <= c_hide`, or the outgoing unit is
+   persistent), commit as already-due. If the author DID write a gap, keep the authored
+   time and let the outgoing unit hide on its own schedule.
+3. **Resume at a unit boundary** — `S_IDLE` requires `sp_frame_start && sp_pts_valid` (the
+   rule `S_DRAIN` already used). `spu_decode` does not backpressure `ps_demux`, so bytes
+   arriving while it is busy are dropped; the hold lengthens that window, and resuming at
+   an arbitrary byte would read a continuation byte as an `SPDSZ` header.
+
+⛔ **Double-buffering the bitmap is not an option** and should not be re-proposed without
+new numbers: 720×576 at 2 bpp = 829,440 bits, and at ×2 width an M10K holds 4,096 entries
+⇒ ~102 M10Ks for a second copy, against 55 free (498/553) at 98 % ALMs.
+
+★ **The hold's bound is measured, not chosen.** Cutting the hold short costs nothing (rule
+2 stops it opening a hole), but being *in* the hold when the next unit arrives costs that
+unit its head bytes. On a real subtitle stream consecutive units are **never closer than
+1034 ms** (n=36, p10 1335 ms, median 2369 ms; the mux lead itself is ≈0, median −50 ms), so
+a bound below that minimum can never be why a line was lost. Re-measure before retuning it.
+
+⚠ **`menu_mode` is excluded from the hold and unchanged.** It bypasses the window entirely
+and has its own re-send discriminator; menus stay bit-identical. ⚠ Note the menu re-send
+discriminator (`sp_pts <= c_pts`) does **not** catch the white-rabbit chain — those
+re-sends carry *increasing* PTS — so "just reuse the menu skip" is not a fix.
+
+Gate: `bench/dvd/run_spu_window.sh` (+ `--red`); design history in `docs/stc_freerun.md`
+§12.1.
+
 ## v1 scope & decisions to make (write them down as you go)
 
 - **Palette (the main deferral):** the real 4 colours + alpha come from the **IFO PGC

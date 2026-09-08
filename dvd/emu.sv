@@ -1238,6 +1238,7 @@ assign BUTTONS = {1'b0, osd_btn};
 // "next" at the last cell, causes no glitch). See docs/dvd_nav.md "Transport".
 wire [7:0] cur_cell;         // from dvd_iso_reader
 wire       cell_ready;       // from dvd_iso_reader (cell-mode active)
+wire       cell_seamless;    // from dvd_iso_reader: this cell is authored seamless_play
 // Linear transport (VCD/SVCD raw .bin, flat .mpg/.VOB): the reader seeks the
 // whole file by RBN — raw mode snaps to a CD sector (= MPEG pack) boundary,
 // flat mode is qualified by ps_demux having seen a pack (ps_saw_pack) and
@@ -2436,6 +2437,7 @@ flush_ctl flush_ctl_i (
     .keep_vbuf       (keep_vbuf),
     .load_flush      (load_flush),
     .disc_rephase    (aud_disc_rephase),   // content PTS jump -> audio-only re-phase (VLC's RESET_PCR analogue)
+    .cell_seamless   (cell_seamless),      // ...unless the author says this cell continues the last one
     .aud_flush       (aud_flush),
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
@@ -2618,6 +2620,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .seek_ack       (seek_ack),
     .cur_cell       (cur_cell),
     .cell_ready     (cell_ready),
+    .cell_seamless  (cell_seamless),
 
     .jump_pulse     (vm_jump_pulse),      // Phase 4: the DVD-VM owns all jumps
     .jump_domain    (vm_jump_domain),
@@ -3711,11 +3714,22 @@ pts_cdc #(.W(35)) pts_cdc_delta (        // each re-anchor's delta + whether it 
 // but it never carries buffered audio across a discontinuity. We did, and each
 // re-anchor left a lip-sync step nothing could heal (4-6 a minute in menus).
 //
+// ⚠ A SEAMLESS-BRANCH junction must NOT flush audio: the qualifier lives in
+// dvd/flush_ctl.sv (cell_seamless), which is where every flush decision is made
+// and the only one of the two with a bench. The full reasoning and the disc
+// measurements behind it are at that site.
+// ⚠ A suppressed pulse still burns the cooldown below. That is deliberate and
+// conservative -- the alternative is the same test written in two places.
 // ⚠ RATE LIMITED to one re-phase per ~0.5 s. A re-phase costs a short audio gap
 // (the drain gate re-fills), and disc_w can fire twice around one junction as the
 // new timeline settles; without the cooldown a burst of re-anchors would machine-gun
-// the audio. Titles are unaffected either way -- they re-anchor about once per
-// playback (MEASURED: reanchors=1 over 80 s on APOLLO_13).
+// the audio.
+// ⛔ THIS USED TO READ "Titles are unaffected either way -- they re-anchor about once per
+// playback (MEASURED: reanchors=1 over 80 s on APOLLO_13)". APOLLO_13 is ONE CONTINUOUS
+// TITLE. A seamless-branch title re-anchors at every branch point -- The Matrix has nine,
+// in the plain movie as well as the rabbit branch -- and each one cost about a second of
+// audio. That is the measurement the cell_seamless gate above exists for; do not read the
+// old sentence as evidence that a title cannot re-anchor often.
 reg  [23:0] rephase_cool;                       // 2^24 / 27 MHz ~ 0.62 s
 wire        rephase_req = av_anchor_delta_valid && av_anchor_delta_w[34];
 always @(posedge clk_sys or negedge reset_n)

@@ -59,8 +59,28 @@ module iso_reader_ilvu_tb;
     integer cap_n = 0;
     integer n_a1 = 0, n_bb = 0, n_cc = 0;
     reg         seam_seen = 0;                   // did seamless_active ever assert?
+    // The AUTHORED seamless_play bit (cell_playback_t byte 0 bit 3), exported so
+    // flush_ctl can keep a seamless-branch junction from flushing audio. Sampled
+    // against the reader's OWN current cell while it streams, so this measures what
+    // the reader exports per cell rather than restating an RTL expression.
+    wire        cell_seamless;
+    integer     cs_hi_a1 = 0, cs_lo_a1 = 0, cs_hi_cc = 0, cs_lo_cc = 0;
+    integer     cs_hi_dd = 0, cs_lo_dd = 0;
     always @(posedge clk) begin
         if (dut.seamless_active) seam_seen <= 1'b1;
+        // ⚠ SAMPLE AGAINST THE READER'S OWN cell_i, NOT THE BYTE'S VALUE. The reader
+        // runs ~2 sectors ahead of the captured byte stream, so keying off the
+        // delivered byte pattern compares cell N's level with cell N+1's data and
+        // fails against correct RTL. The first version of this arm did exactly that.
+        if (stream_valid) begin
+            if (dut.cell_i == 8'd0) begin
+                if (cell_seamless) cs_hi_a1 = cs_hi_a1 + 1; else cs_lo_a1 = cs_lo_a1 + 1;
+            end else if (dut.cell_i == 8'd1) begin
+                if (cell_seamless) cs_hi_cc = cs_hi_cc + 1; else cs_lo_cc = cs_lo_cc + 1;
+            end else if (dut.cell_i == 8'd2) begin
+                if (cell_seamless) cs_hi_dd = cs_hi_dd + 1; else cs_lo_dd = cs_lo_dd + 1;
+            end
+        end
         if (stream_valid) begin
             cap_n = cap_n + 1;
             case (stream_data)
@@ -83,7 +103,7 @@ module iso_reader_ilvu_tb;
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1), .chap_at_start(1'b0),
         .angle_pulse(1'b0), .cur_angle(cur_angle), .angle_count(angle_count),
         .keep_vbuf(),
-        .cur_cell(), .cell_ready(),
+        .cur_cell(), .cell_ready(), .cell_seamless(cell_seamless),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
@@ -219,15 +239,25 @@ module iso_reader_ilvu_tb;
             put_rec(cur,17,2048,8'h02,128'h01,1,cur);
             put_rec(cur,19,4096,       8'h00,"VIDEO_TS.IFO;1",14,cur);
             put_rec(cur,21,6144,       8'h00,"VTS_01_0.IFO;1",14,cur);
-            put_rec(cur,24,12*2048,    8'h00,"VTS_01_1.VOB;1",14,cur);
+            put_rec(cur,24,14*2048,    8'h00,"VTS_01_1.VOB;1",14,cur);
 
             put_vmgi(19, 32'd1);
             put_tt_srpt(20, 16'd1, 8'd1);
             put_vtsi_mat(21, 32'd1);
-            put_pgcit(22, 32'd16, 8'd2, 16'd256);
+            put_pgcit(22, 32'd16, 8'd3, 16'd256);
             // cells: 0 interleaved (seamless branch) first=0 last=9 ; 1 common
-            put_cell(22, 32'd16, 16'd256, 0, 8'h04, 32'd0, 32'd9);    // interleaved bit
+            // 0x0E = seamless_play(3) | interleaved(2) | stc_discontinuity(1) — the
+            // EXACT category byte measured on every Matrix white-rabbit cell
+            // (VTS_02 PGCN 1, cells 4/23/35/55/60/74/80/86/91). Only bit 2 changes the
+            // ILVU walk, so the branch-follow checks below are unaffected.
+            put_cell(22, 32'd16, 16'd256, 0, 8'h0E, 32'd0, 32'd9);    // interleaved
             put_cell(22, 32'd16, 16'd256, 1, 8'h00, 32'd10, 32'd11);  // common
+            // 0x08 = seamless_play ONLY (no interleaved bit) -- the commonest category
+            // on a real feature (68 of the Matrix's 106 cells). This cell is what makes
+            // the arm able to tell bit 3 from bit 2: without it, cells 0/1 have both
+            // bits set / both clear, and reading `interleaved` instead of
+            // `seamless_play` passes unnoticed. (It did, the first time.)
+            put_cell(22, 32'd16, 16'd256, 2, 8'h08, 32'd12, 32'd13);  // seamless, plain
 
             // interleaved VOB: branch A ILVUs + sibling B ILVUs, round-robin.
             // next_vobu is FORWARD-only (bit31 = SRI valid). Branch A skips past
@@ -244,6 +274,8 @@ module iso_reader_ilvu_tb;
             fill_sec(24+9, 8'hA1);
             fill_sec(24+10, 8'hCC);
             fill_sec(24+11, 8'hCC);
+            fill_sec(24+12, 8'hDD);
+            fill_sec(24+13, 8'hDD);
         end
     endtask
 
@@ -272,6 +304,29 @@ module iso_reader_ilvu_tb;
         if (n_a1 !== 3*2048)     begin errors=errors+1; $display("  FAIL: branch-A body != 3 ILVUs (%0d)", n_a1); end
         if (n_cc !== 2*2048)     begin errors=errors+1; $display("  FAIL: common cell != 2 sectors (%0d)", n_cc); end
         if (errors == 0) $display("  ok: branch A followed via next_vobu, sibling ILVUs skipped");
+
+        // cell_seamless must track the AUTHORED bit, per cell, for the whole cell.
+        $display("ILVU seamless_play export: interleaved(0x0E) hi=%0d lo=%0d | plain(0x00) hi=%0d lo=%0d | seamless-only(0x08) hi=%0d lo=%0d",
+                 cs_hi_a1, cs_lo_a1, cs_hi_cc, cs_lo_cc, cs_hi_dd, cs_lo_dd);
+        if (cs_lo_a1 > 8 || cs_hi_a1 === 0) begin
+            errors=errors+1;
+            $display("  FAIL: cell_seamless was LOW for %0d cycles of the seamless cell", cs_lo_a1);
+        end
+        // A few cycles of skew at the boundary are expected and harmless: the level is
+        // re-latched in S_CELL_LOAD2, a couple of cycles after cell_i advances, and its
+        // only consumer (flush_ctl) reads it when the DISPLAY reaches the junction --
+        // about a VBUF depth later. A stuck-high bug would show ~11k, not a handful.
+        if (cs_hi_cc > 8) begin
+            errors=errors+1;
+            $display("  FAIL: cell_seamless stayed HIGH for %0d cycles of the NON-seamless cell", cs_hi_cc);
+        end
+        // Same one-cycle boundary skew as the plain cell above (re-latched in
+        // S_CELL_LOAD2, a couple of cycles after cell_i advances).
+        if (cs_lo_dd > 8 || cs_hi_dd === 0) begin
+            errors=errors+1;
+            $display("  FAIL: cell_seamless LOW for %0d cycles of a seamless-but-NOT-interleaved cell (bit 3 vs bit 2)", cs_lo_dd);
+        end
+        if (errors == 0) $display("  ok: cell_seamless follows the authored seamless_play bit per cell");
 
         if (errors == 0) $display("ISO_READER_ILVU_TB: ALL TESTS PASSED");
         else             $display("ISO_READER_ILVU_TB: %0d FAILURE(S)", errors);

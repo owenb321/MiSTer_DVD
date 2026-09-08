@@ -101,6 +101,7 @@ module mode_realign_chain_tb;
 
     // NAV_CAP(8): a small VOBU-align probe budget so TEST7 can exhaust it on this
     // 40-sector title (TEST8 exercises the title-end clamp before the budget runs).
+    wire cell_seamless;   // reader's authored seamless_play level -> flush_ctl
     dvd_iso_reader #(.NAV_CAP(8)) dut (
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
         // Phase-4 DVD-VM ports: legacy mode (vm_mode=0 keeps prior behaviour)
@@ -111,6 +112,7 @@ module mode_realign_chain_tb;
         .seek_pulse(seek_pulse), .seek_natural(1'b0), .seek_cell(seek_cell), .seek_ack(seek_ack),
         .seek_rbn_pulse(rd_seek_pulse), .seek_rbn(rd_seek_rbn),
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1),
+        .cell_seamless(cell_seamless),
         .keep_vbuf(keep_vbuf),
         .cur_cell(cur_cell), .cell_ready(cell_ready),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
@@ -449,6 +451,9 @@ module mode_realign_chain_tb;
         .clk(clk), .rst_n(rst_n),
         .start_streaming(start), .seek_ack(seek_ack), .jump_ack(1'b0),
         .mode_switch(fc_mode_sw), .aud_switch(1'b0), .keep_vbuf(keep_vbuf),
+        // the reader's own authored-seamless level, not a tie-off: this chain bench
+        // is the one place the two modules are wired together outside emu.sv
+        .cell_seamless(cell_seamless),
         .load_flush(load_flush), .aud_flush(aud_flush), .aud_resync(aud_resync),
         .seek_flush(seek_flush), .mount_flush(mount_flush),
         .pipe_rst_n(pipe_rst_n), .aud_rst_n(aud_rst_n)
