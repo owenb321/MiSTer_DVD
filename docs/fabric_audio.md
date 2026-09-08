@@ -349,7 +349,7 @@ round-trip. It sits on the `P1,Debug` page, and the rename is what keeps a user 
 reaching for it to *fix* something — the failure mode that got `Field Order` and the
 `Analog CSync` `Stock` arm deleted before release (see `CLAUDE.md`).
 
-## CSS mute (scrambled-source audio protection, 2026-08-06; density verdict 2026-09-08)
+## CSS mute (scrambled-source audio protection, 2026-08-06; density verdict 2026-09-08 — ✅ HW-CONFIRMED)
 
 A CSS-encrypted rip (raw disc copy without decryption) still *plays* — the
 IFOs and PES headers are never scrambled, so navigation works and the ~80%
@@ -434,7 +434,13 @@ knee band with it; the bench fails if the two disagree.
 ⚠ **This fix is mechanism-justified, not reproduced.** It closes both routes above
 without knowing which one the reporter's disc took, and if it is the wrong one the
 warning simply persists — nothing regresses, because the change only makes the
-detector harder to trip. The acceptance test is hardware.
+detector harder to trip. The acceptance test was therefore hardware, and it passed:
+✅ **HW-CONFIRMED 2026-09-08** (`DVD_cssdensity_20260908_2056.rbf`) in **both**
+directions — encrypted discs still detected and muted, unencrypted discs no longer
+flagged. ⏳ Not separately reported, so still open: whether a static burst is
+audible at mount on an encrypted disc now the latch takes ~92 checked headers
+rather than ~21. If one ever is, the answer is **not** a smaller `LATCH_HITS` but a
+provisional mute on the first marker that the bucket confirms or releases.
 
 **Accepted trade:** a genuinely encrypted source below the 1.5 % knee no longer
 mutes, so the user hears occasional ticks instead of silence. Below the knee fewer

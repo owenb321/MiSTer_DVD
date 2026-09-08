@@ -2513,8 +2513,15 @@ menus too, yields to user popups then re-arms), and **mutes both audio paths**
 (decode: `AUDIO_L/R`=0; passthrough: `iec61937_wrap.mute_i` = PCM-silence bursts
 that still drain the ring — no STD wedge). Video keeps playing so the disc is
 identifiable.
-🔧 **THE VERDICT IS NOW A DENSITY, NOT A COUNT — issue #59, 2026-09-08, branch
-`fix/css-density`; sim-proven RED/GREEN + mutation-checked, ⏳ HW-confirm pending.**
+✅ **THE VERDICT IS NOW A DENSITY, NOT A COUNT — issue #59, 2026-09-08;
+sim-proven RED/GREEN + mutation-checked, and ✅ HW-CONFIRMED 2026-09-08** (build
+`DVD_cssdensity_20260908_2056.rbf`, SEED 5 first roll, clk_dec 92.07/91.16):
+**both** directions on the maintainer's rig — the encrypted discs tried were still
+detected and muted, and several unencrypted discs were no longer flagged.
+⏳ **NOT specifically reported, so still open: whether a static BURST is audible at
+mount** on an encrypted disc now that the latch takes ~92 checked headers instead
+of ~21. If one ever is, the answer is NOT a smaller `LATCH_HITS` — it is a
+provisional mute on the first marker that the bucket confirms or releases.
 Multiple users lost **all audio** on discs that play perfectly, the reported case a
 physical disc `MiSTer_DVDcss` was decrypting correctly. The old rule counted **4
 markers per session, however far apart, and latched permanently** — while a real
