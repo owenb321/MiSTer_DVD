@@ -5,6 +5,14 @@
 set -e
 cd "$(dirname "$0")/../.."
 
+# subp_stream_map's vectors are GENERATED (bench/dvd/test_vobs/ is gitignored, the
+# same convention as aud_map_vec.hex) -- regenerate so the bench can never run
+# against a stale fixture.
+echo "=== subp_stream_map: logical->physical subpicture map vs the golden model ==="
+python3 tools/gen_subp_map_vec.py >/dev/null
+iverilog -g2012 -o bench/dvd/subp_stream_map_sim dvd/subp_stream_map.sv bench/dvd/subp_stream_map_tb.sv 2>/dev/null
+vvp bench/dvd/subp_stream_map_sim | grep -E "PASSED|FAILURE"
+
 echo "=== ps_demux subpicture routing ==="
 iverilog -g2012 -o bench/dvd/ps_demux_subpic_sim dvd/ps_demux.sv bench/dvd/ps_demux_subpic_tb.sv 2>/dev/null
 vvp bench/dvd/ps_demux_subpic_sim | grep RESULT

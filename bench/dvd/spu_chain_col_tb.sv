@@ -18,7 +18,7 @@ module spu_chain_col_tb;
     wire [7:0] sp_byte; wire sp_valid, sp_frame_start; wire [32:0] sp_pts; wire sp_pts_valid;
 
     // sp_track selectable via +track (default 0 -> substream 0x20)
-    reg [2:0] sp_track = 3'd0;
+    reg [4:0] sp_track = 5'd0;
 
     ps_demux dmx (
         .clk(clk), .rst_n(rst_n),
@@ -53,7 +53,7 @@ module spu_chain_col_tb;
 
     initial begin
         in_byte=0; in_valid=0;
-        if ($value$plusargs("track=%d", tr)) sp_track = tr[2:0];
+        if ($value$plusargs("track=%d", tr)) sp_track = tr[4:0];
         repeat(4) @(posedge clk); rst_n=1; @(posedge clk);
 
         if (!$value$plusargs("slice=%s", slicepath)) begin $display("RESULT: FAIL no +slice="); $finish; end

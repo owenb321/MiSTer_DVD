@@ -525,6 +525,49 @@ def aud_stream_map(logical, audio_ctl, dom_title, map_valid=True):
     return logical & 7                             # DEVIATION: identity, not -1
 
 
+def subp_stream_map(logical, ctl_sel, dom_title, ctx_menu, wide,
+                    disp_mode=0, map_valid=True):
+    """Golden model of dvd/subp_stream_map.sv: resolve a LOGICAL subpicture
+    stream number to the PHYSICAL substream index the demux filters on, through
+    one word of the PGC's subp_control[16] table.
+
+    `ctl_sel` is subp_control[logical] as a 32-bit int:
+        [31]    available
+        [28:24] 4:3 physical id
+        [20:16] 16:9 wide
+        [12:8]  16:9 letterbox
+        [4:0]   16:9 pan&scan
+    (libdvdnav vm_get_subp_stream, vmget.c.)
+
+    `ctx_menu` says this resolution is for a MENU context, and `dom_title` is
+    the domain the loaded table came FROM. They must agree, else the table is
+    the other domain's and we fall back to identity -- subp_ctl_mem is one store
+    shared by both domains and is never cleared, so this is what stops a menu's
+    table leaking into the in-title HLI path and vice versa.
+
+    DEVIATION FROM libdvdnav, deliberate: the caller passes disp_mode, and emu
+    forces 0 (wide) for every menu. This core composites the subpicture in
+    SOURCE space and scales the composite, so the disc's already-letterboxed
+    variant would be letterboxed twice; forcing wide also keeps the SPU variant
+    and nav_pci's button-group pick on one signal. See
+    docs/track_selection.md and dvd/subp_stream_map.sv.
+
+    Falling back to the logical index (rather than libdvdnav's -1) keeps every
+    disc that authors no usable map bit-identical to the pre-mapping core.
+    """
+    logical &= 0xF
+    dom_ok = (not dom_title) if ctx_menu else dom_title
+    if not (map_valid and dom_ok and (ctl_sel >> 31) & 1):
+        return logical
+    if not wide:
+        return (ctl_sel >> 24) & 0x1F          # 4:3 content
+    if disp_mode == 1:
+        return (ctl_sel >> 8) & 0x1F           # 16:9 letterbox
+    if disp_mode == 2:
+        return ctl_sel & 0x1F                  # 16:9 pan&scan
+    return (ctl_sel >> 16) & 0x1F              # 16:9 wide
+
+
 class VM(object):
     def __init__(self, nav, verbose=True):
         self.nav = nav

@@ -144,6 +144,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/mpg_streamer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dvd_iso_reader.sv
 # audio logical->physical stream mapping (PGC audio_control, libdvdnav vmget.c)
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/aud_stream_map.sv
+# subpicture logical->physical stream mapping (PGC subp_control, libdvdnav
+# vm_get_subp_stream) -- issues #60/#61, docs/track_selection.md
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/subp_stream_map.sv
 
 
 

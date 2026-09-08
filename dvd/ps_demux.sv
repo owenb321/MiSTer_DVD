@@ -67,10 +67,15 @@ module ps_demux (
 
     // Subpicture (DVD subtitle) substream select. Subpicture rides in the same
     // private_stream_1 (0xBD) as audio but with substream_id 0x20-0x3F (up to 32
-    // streams). Only the substream whose low-3-bit track number == sp_track is
-    // forwarded, and only when sp_enable is high; otherwise the PES is discarded
-    // (mirrors the aud_track filter). See dvd/spu_decode.sv for the SPU decoder.
-    input  wire  [2:0]  sp_track,
+    // streams). Only the substream whose 5-bit index == sp_track is forwarded,
+    // and only when sp_enable is high; otherwise the PES is discarded (mirrors
+    // the aud_track filter). See dvd/spu_decode.sv for the SPU decoder.
+    // ⚠ FIVE bits, not three (DVD-FORK FIX, issues #60/#61): the branch below is
+    // already guarded by in_byte[7:5]==001, so in_byte[4:0] IS the subpicture
+    // index and the compare is exact. A 3-bit compare aliased mod 8, so stream 8
+    // would have been served stream 0's art -- routine on a multilingual R2
+    // title, and reachable now that menus resolve to non-zero physical ids.
+    input  wire  [4:0]  sp_track,
     input  wire         sp_enable,
 
     // Output: video elementary stream → MPEG-2 decoder
@@ -669,7 +674,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                     // Subpicture (subtitle) substream 0x20-0x3F. Intercepted BEFORE
                     // the audio-track filter below. Subpicture has NO sub-header, so
                     // the SPU payload begins with the NEXT byte -> S_SP_DATA directly.
-                    if (sp_enable && (in_byte[2:0] == sp_track)) begin
+                    if (sp_enable && (in_byte[4:0] == sp_track)) begin
                         first_sp_byte <= 1'b1;
                         state         <= S_SP_DATA;
                     end else begin
