@@ -2628,6 +2628,21 @@ Tested by `tools/test_set_dvd_region.py` (fakes the drive incl. post-change faul
 the menus through a pty, **mutation-checked** 5/5, `SET_DVD_REGION_SH=` points it at another
 copy to prove RED). Design + ioctl details: `docs/physical_disc.md`.
 
+### ★ There is a real MiSTer you can drive — use it instead of asking
+
+The maintainer's rig is reachable over ssh and the harness in `tools/` flashes a build,
+launches a disc, presses transport keys, pulls back a decoded screenshot, reads the
+decoder's live pacing counters, soaks a disc unattended, and diffs the core's navigation
+against libdvdnav. **Skill: `.claude/skills/hil-testing/`** (operating manual + the traps).
+Design record and evidence: `docs/hil_harness.md`.
+
+Prefer measuring to asking. Two rules worth carrying even if you read nothing else:
+**telemetry field names come from `main/support/dvd/dvd_ctl.cpp`'s `fprintf`, not the RTL
+port names** (a renamed field reads as a constant zero and silently kills the oracle
+reading it — this has happened twice), and **a sampled capture card measures OFFSETS, not
+RATES** (its drift figure changes with the capture frame rate). Put the rig back with
+`tools/mister.py restore` — the maintainer uses it.
+
 ### User bug reports arrive as sparse-sector nav bundles, not ISOs
 
 **`tools/dvd_report.py` (2026-08-31) — the answer to "the disc that breaks it is

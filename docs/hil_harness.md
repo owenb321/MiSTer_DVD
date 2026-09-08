@@ -260,6 +260,59 @@ Things worth knowing before touching it:
 - **Not behind an `ifdef`.** Gating it would mean a rebuild and a fitter-seed
   re-roll every time telemetry is wanted, which is the cost it exists to remove.
 
+## ★ There is a SKILL for this: `.claude/skills/hil-testing/`
+
+Sessions kept re-deriving the tooling from this note. The skill is the operating
+manual (commands, traps, how to put the rig back); this file stays the design
+record and evidence trail. Read the skill first.
+
+## Track E phase 2: navigation differential (`tools/nav_diff.py`)
+
+The soak can see a core that has CRASHED. It cannot see one that navigated
+somewhere WRONG, because a wrong menu looks exactly like a right one. `nav_diff`
+drives **libdvdnav** and the **board** with the same button path and diffs the
+landing.
+
+```bash
+tools/nav_diff.py interactive/SOME.iso --script "1 2" --settle 3
+tools/nav_diff.py <disc> --script "1" --red 2    # prove the comparison can fail
+tools/nav_diff.py <disc> --no-board              # oracle only
+```
+
+**libdvdnav is the oracle, not `tools/dvd_vm_ref.py`.** The golden model was
+written from the RTL and holds its assumptions -- through the POST-only PGC
+dispatcher bug (70 of 505 discs) it agreed with the hardware the whole way.
+libdvdnav settled that bug and it is what this diffs against.
+
+**The button NUMBER is the unit.** libdvdnav's `<N>` token is
+`dvdnav_button_select_and_activate(N)` and the core decodes a DIGIT KEY to
+exactly that, so neither side has to walk a D-pad -- a walk would leave any
+disagreement ambiguous between "wrong landing" and "different route".
+
+⚠ **Four ways it lied before it worked, all of them the harness:**
+
+| attempt at "the board has landed" | why it was wrong |
+|---|---|
+| fixed sleep | the board was still walking its boot chain (PGC 90 -> 2 -> 1) while the script pressed buttons -- two confident false differences |
+| picture stopped moving | a MOTION menu loops forever, so it times out on exactly the discs worth testing |
+| PGCN settled | a First Play LOGO cell holds one PGCN for many seconds |
+| **highlight armed AND settled** | correct -- `buttons=N` in libdvdnav, `hl_btns_armed` (O[2] block 1) on the board: the same question |
+
+⚠ **libdvdnav runs at CPU speed; the board PLAYS every cell in real time**, so a
+boot chain costing the oracle milliseconds costs the board minutes. The budget is
+240 s and the tool now REFUSES to compare from an unsettled start rather than
+reporting itself as the core.
+
+⚠ **Only well-defined inputs are comparable.** Pressing button 2 at a park with
+`buttons=1` gave a reproducible, confident "difference" that was undefined input
+-- the board correctly ignores a digit for a button that does not exist and
+libdvdnav does something else, and neither is wrong. Out-of-range buttons are
+skipped, never diffed.
+
+**Result so far (SHERLOCK_HOLMES):** the board and libdvdnav agree on both paths
+tested -- button 1 -> PGC 3, button 2 -> PGC 27 -- and `--red` proves the
+comparison can fail.
+
 ## Track E: exploratory soak (`tools/dvd_explore.py`)
 
 Drives a disc unattended and watches for anything wrong. Seeded and fully
