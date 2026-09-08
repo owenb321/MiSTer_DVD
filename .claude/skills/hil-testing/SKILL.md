@@ -42,12 +42,20 @@ tools/mister.py restore         # stock Main, harness files gone, saved settings
 | `mister.py options` | every OSD option and key name, derived from the RTL |
 | `hud_read.py read/blocks <png>` | decode a screenshot's HUD / `O[2]` diagnostic blocks |
 | `dvd_explore.py <iso> --minutes 30` | unattended soak with self-tested oracles |
+| `audio_check.py <iso>` | is every audio track the disc offers actually audible? |
 | `nav_diff.py <disc> --script "1 2"` | diff the core's navigation against libdvdnav |
 | `lipsync_measure.py` + `sync_disc.py` | A/V **offset** measurement (see the warning below) |
 
 Gates, all hardware-free: `bench/dvd/run_telem.sh`.
 
 ## Traps that have cost real time
+
+**★ Resolve the capture card BY NAME, and go through PipeWire.** ALSA card numbers and
+`/dev/videoN` are USB enumeration order and they move; a stale index does not error, it
+records the *wrong device* and hands back a confident silent file. And a raw `hw:N,0`
+fails "Device or resource busy" when the sound server owns the card, which ffmpeg reports
+as an input error rather than as "something else has it". `mister.py capture_devices()`
+handles both.
 
 **★ Telemetry field names come from `main/support/dvd/dvd_ctl.cpp`'s `fprintf`, never from
 the RTL port names.** Word 11 is `disp_lag` in `dvd_telem.sv` and `disp_lag_ms` in the JSON
@@ -112,6 +120,26 @@ tools/nav_diff.py <disc> --no-board                # oracle only, no hardware
 - **Do not compare VTS.** libdvdnav's is domain-relative (-1 in VMGM), the board's is the
   reader's absolute VTS; on a board game with 70+ title sets one says 72 where the other
   says 1 and neither is wrong. PGCN is the comparable field.
+
+## Checking audio is actually there (audio_check)
+
+```bash
+tools/audio_check.py <iso-on-the-mister> --secs 6
+tools/audio_check.py <iso> --red            # prove the finding path fires
+```
+
+Cycles the core's own `AUDIO n/N` popup, captures each track and measures its
+level. **The disc's other tracks are the control** — a quiet passage silences all of
+them equally, so a track that is digitally silent while its siblings are audible did
+not decode. That is the acmod signature (`dvd/ac3` supports acmod 2 and 7 only; quad
+and others are silent), which historically reached us as user reports.
+
+- A capture card **is** the right instrument here. The offsets-not-rates rule is about
+  frame sampling; silence is an amplitude question and amplitude is measured faithfully.
+- Digital silence reads **−999 dBFS**; genuinely quiet programme material measured
+  **−66 dBFS**. The gate is −80.
+- If *every* track is silent the result is INCONCLUSIVE, not a finding — there is no
+  working control on that disc.
 
 ## Before believing a finding
 
