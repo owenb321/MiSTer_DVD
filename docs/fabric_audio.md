@@ -317,7 +317,7 @@ normal VOB path is unchanged: `mpg_streamer → ps_stream_fifo → ps_demux → 
 
 ## A/V Sync toggle (scheduler free-run) — `O[13]`
 
-⚠ **RENAMED 2026-09-07: `Audio Genlock` → `A/V Sync`** (`P1O[13],A/V Sync,On,Off`; bit
+⚠ **RENAMED 2026-09-07 (PR #66): `Audio Genlock` → `A/V Sync`** (`P1O[13],A/V Sync,On,Off`; bit
 span unchanged, `wire av_freerun = status[13]` unchanged). The old name described a
 mechanism that had been dead for two months and hid the one this bit actually controls.
 

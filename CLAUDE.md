@@ -1463,7 +1463,7 @@ worse maintenance burden than targeted in-place edits. So:
     FAILED (do NOT retry): entry-side dispatch scheduling, pre-anchor gate bypass,
     mid-play gate re-arm (full-FIFO deadlock), fractional vbuf thresholds, 16-bit
     offset constants.
-  - **`P1O[13],A/V Sync,On,Off`** — ⚠ **RENAMED from `Audio Genlock` 2026-09-07**
+  - **`P1O[13],A/V Sync,On,Off`** — ⚠ **RENAMED from `Audio Genlock` 2026-09-07 (PR #66)**
   (bit span unchanged; `wire av_freerun = status[13]` keeps its name, which is still
   accurate). Its original job — free-run the 48 kHz NCO via `nco_trim=0` (2026-06-28,
   branch `feature/vob-audio-freerun`) — **has been dead since the 2026-07-02 trim

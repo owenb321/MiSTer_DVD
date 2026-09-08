@@ -577,7 +577,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-avsyncname"
+`define CORE_VERSION "dev-main"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -750,7 +750,7 @@ parameter CONF_STR = {
     // which is what makes it worth a menu row: "set A/V Sync Off and tell me if it
     // plays" separates a scheduler fault from a source/decode one in one message.
     // Off is strictly worse for playback (no lip sync at all) — it is not a fallback.
-    // ⚠ RENAMED from "Audio Genlock" 2026-09-07. The original meaning — slew the
+    // ⚠ RENAMED from "Audio Genlock" 2026-09-07 (PR #66). The original meaning — slew the
     // 48 kHz NCO via av_sync's nco_trim — has been dead since the 2026-07-02 trim
     // retirement (dec_nco_trim is hardwired 0 below, independent of this bit), and the
     // old name hid the fact that Off also stops pacing the VIDEO. Bit span unchanged.
