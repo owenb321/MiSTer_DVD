@@ -26,7 +26,7 @@
 module spu_decode #(
     parameter int BMP_N   = 414720,   // 720*576 (covers NTSC 720*480 and PAL 720*576)
     parameter int STRIDE  = 720,
-    parameter int SPU_CAP = 53248      // max buffered SPU bytes >= the DVD-Video SPEC
+    parameter int SPU_CAP = 53248,     // max buffered SPU bytes >= the DVD-Video SPEC
                                        // MAXIMUM of 53,220 (spec-hardening Phase 2).
                                        // Subtitles are < 2 KB, but MENU subpictures
                                        // (full-frame button/highlight graphics) are large,
@@ -42,6 +42,11 @@ module spu_decode #(
                                        // a malformed > SPU_CAP unit whose DCSQ start lies
                                        // beyond the cap is DROPPED cleanly (pre-Phase-2 the
                                        // 15-bit truncation aliased it into garbage).
+    parameter int HOLD_CYCLES = 18_900_000  // ~700 ms at 27 MHz: the display-order
+                                       // hold's hard bound. A PARAMETER so a bench can
+                                       // shrink it -- at 27 MHz the real value is 70 M
+                                       // simulation cycles, which no Icarus run reaches.
+                                       // Bound rationale at the S_HOLD state below.
 ) (
     input  wire        clk,           // clk_sys 27 MHz
     input  wire        rst_n,
@@ -67,8 +72,21 @@ module spu_decode #(
     // yet - the on-screen menu graphic (and with it the button highlight)
     // blinks at the stream's stall cadence. In menu mode a NEW packet is
     // only accepted once ITS PTS is due; early re-sends are discarded
-    // (lossless: they repeat). Titles keep the decode-early pipeline
-    // (their subpics are muxed near their PTS and are NOT re-sent).
+    // (lossless: they repeat). Titles keep the decode-early pipeline.
+    //
+    // ⚠ THAT LAST CLAUSE USED TO READ "their subpics are muxed near their PTS and
+    // are NOT re-sent" AND IT IS FALSE FOR AN IN-TITLE HLI BUTTON GRAPHIC. The Matrix's
+    // "Follow the White Rabbit" icon is authored exactly like a menu's: MEASURED on the
+    // disc, one FSTA_DSP at PTS 101885 and one STP_DSP at 866659 (8.4975 s solid), with
+    // the SAME unit re-sent BYTE-IDENTICALLY 8 times, 90090 ticks (1.001 s) apart. It is
+    // a single-button HLI (btn_ns==1), so nav_pci's hli_seen (>1 button) never fires and
+    // emu's menu_mode stays 0 -- it runs the windowed path below.
+    // That was harmless while the STC LED the display: a re-send arriving at the parse
+    // front was already due at commit. PR #63 moved the STC onto the displayed picture
+    // (disp_lag ~0), so each re-send began committing a show window ~a VBUF depth in the
+    // FUTURE and blanked the icon until the clock caught up -- the ~1 s blink reported
+    // from the field. The fix is not another menu_mode exemption: see the HOLD and the
+    // CONTIGUITY CLAMP below, which fix the mechanism for subtitles too.
     input  wire        menu_mode,
     input  wire [32:0] sp_pts,
     input  wire        sp_pts_valid,
@@ -139,7 +157,7 @@ module spu_decode #(
         GETB0, GETB1,
         D_DLY0, D_DLY1, D_NXT0, D_NXT1, D_CMD,
         RP_LOOP, RP_STORE, RP_DONE, SKIP_LOOP,
-        DCSQ_END,
+        DCSQ_END, S_HOLD,
         RLE_LINE, RLE_ACC, RLE_LOAD, RLE_EMIT, RLE_EOL,
         COMMIT
     } state_t;
@@ -179,6 +197,42 @@ module spu_decode #(
     reg  [32:0] c_show, c_hide;
     reg         c_valid;
     reg  [32:0] c_pts;         // PTS of the committed SPU (menu re-send discriminator)
+
+    // ------------------------------------------------------------------
+    // DISPLAY-ORDER COMMIT (2026-09-08). The RLE decode is the ONLY destructive
+    // step -- it overwrites the single full-frame bitmap, so committing a unit
+    // early destroys the one on screen before its authored window has expired.
+    // Two guards, both keyed off values the DCSQ walk has already produced by the
+    // time DCSQ_END is reached (w_show/w_hide/DAREA/palette are all known there,
+    // strictly BEFORE `state <= RLE_LINE`).
+    //
+    // ⛔ Double-buffering the bitmap is not available: 720*576 at 2 bpp = 829,440
+    // bits, and at x2 width an M10K holds 4,096 entries => ~102 M10Ks for a second
+    // copy. The design fits in 498/553 RAM blocks and 41,059/41,910 ALMs, so the
+    // guards have to be free. They are: one counter and two compares.
+    reg  [24:0] hold_tmr;
+
+    // the unit's effective show time (COMMIT's own default when no STA_DSP delay)
+    wire [32:0] w_show_eff = w_has_show ? w_show : pts_latched;
+    // due against the DISPLAY clock. Signed on the low 32 bits so a 33-bit PTS wrap
+    // cannot park the hold (the bounded timer is the backstop, not the primary).
+    wire        spu_due    = $signed(w_show_eff[31:0] - stc[31:0]) <= 0;
+    // "stay if no STP_DSP" is encoded as an all-ones c_hide; a plain compare against
+    // that sentinel wraps and reads as NOT contiguous, which is the one case that
+    // matters most here (a persistent button graphic), so test it explicitly.
+    wire        c_hide_inf = &c_hide;
+    // CONTIGUITY: the author wrote no gap between the committed unit and this one,
+    // so blanking between them would invent a hole that is not on the disc. A
+    // persistent unit (c_hide_inf) is contiguous with every successor by
+    // construction -- which is exactly the white-rabbit re-send chain.
+    wire        spu_contig = c_valid &&
+                             (c_hide_inf ||
+                              ($signed(w_show_eff[31:0] - c_hide[31:0]) <= 0));
+    // a genuine SPU START: sp_frame_start pulses on the first byte of EVERY
+    // subpicture PES, but only the first PES of a unit carries a PTS (see the
+    // sp_frame_start port comment in ps_demux.sv), so this is the same boundary
+    // rule S_DRAIN already uses.
+    wire        spu_unit_start = sp_valid && sp_frame_start && sp_pts_valid;
 
     // RLE state
     reg  [11:0] width, height;
@@ -276,6 +330,7 @@ module spu_decode #(
             bmp_we   <= 1'b0;
             wr_ptr   <= '0;
             rd_ptr   <= '0;
+            hold_tmr <= 25'd0;
             c_a0 <= 0; c_a1 <= 0; c_a2 <= 0; c_a3 <= 0;
             // Default palette indices = identity (idx k -> palette entry k) so a SPU
             // lacking SET_COLOR (rare) still maps to distinct entries.
@@ -288,7 +343,16 @@ module spu_decode #(
             case (state)
             // ---- wait for the first byte of a new SPU ----
             S_IDLE: begin
-                if (sp_valid) begin
+                // ⚠ spu_unit_start, NOT a bare sp_valid. spu_decode does not
+                // backpressure ps_demux, so every byte arriving while it is busy is
+                // dropped and S_IDLE used to resume at an ARBITRARY byte -- reading a
+                // continuation byte as an SPDSZ header. That was survivable while
+                // "busy" was one RLE pass; the display-order hold below makes the busy
+                // window far longer, so resume at a real unit boundary instead.
+                // Every SPU's first PES carries a PTS by construction (MEASURED: 37
+                // PTS-bearing subpicture PES = 37 units over 40,000 sectors of a real
+                // title), which is why S_DRAIN has always been able to use this rule.
+                if (spu_unit_start) begin
                     // MENU re-send discriminator (fixes "highlight only on the 2nd loop
                     // after returning from a submenu"): a menu cell RE-SENDS the same
                     // subpicture(s) every loop, and some menus author MORE THAN ONE per
@@ -473,7 +537,18 @@ module spu_decode #(
                         field    <= 1'b0; lif <= 12'd0; abs_line <= 12'd0;
                         nib_cnt  <= 2'd0;
                         rd_ptr   <= w_top;
-                        state    <= RLE_LINE;
+                        hold_tmr <= 25'd0;
+                        // HOLD when committing now would destroy a unit that is still
+                        // inside its authored window. Every register the RLE pass needs
+                        // is set above, so S_HOLD only defers the transition.
+                        // menu_mode is excluded: it bypasses the window entirely and
+                        // has its own re-send discriminator, so menus stay bit-identical.
+                        // (if/else, not a ternary: an enum-typed ternary needs an
+                        // explicit cast, and this project has been bitten by Quartus 17
+                        // mis-compiling casts that simulate correctly -- memory
+                        // quartus-sizecast-netlist-cosim.)
+                        if (c_valid && !spu_due && !menu_mode) state <= S_HOLD;
+                        else                                   state <= RLE_LINE;
                     end else begin
                         state <= S_IDLE;   // malformed; drop
                     end
@@ -483,6 +558,27 @@ module spu_decode #(
                     ret      <= D_DLY0;
                     state    <= GETB0;
                 end
+            end
+
+            // ---- DISPLAY-ORDER HOLD: wait until this unit is actually due ----
+            // Leaves on whichever comes first:
+            //   spu_due        - the authored moment; the outgoing unit got its full
+            //                    window and this one lands on time (the fix);
+            //   spu_unit_start - a NEW unit is arriving and there is only one buffer,
+            //                    so decode this one now rather than strand it;
+            //   HOLD_MAX       - a hard ~700 ms bound.
+            // ⚠ THE BOUND IS MEASURED, NOT PICKED. Cutting the hold short costs
+            // nothing (the contiguity clamp at COMMIT stops it opening a hole), but
+            // being IN the hold when the next unit arrives costs that unit its head
+            // bytes. On a real subtitle stream consecutive units are never closer than
+            // 1034 ms (n=36; p10 1335 ms, median 2369 ms), so a bound safely under
+            // that minimum keeps the hold from ever being the reason a line is lost,
+            // while still covering the VBUF lead in the normal case.
+            S_HOLD: begin
+                if (spu_due || spu_unit_start || (hold_tmr == HOLD_CYCLES[24:0]))
+                    state <= RLE_LINE;
+                else
+                    hold_tmr <= hold_tmr + 25'd1;
             end
 
             // ---- start a new RLE line ----
@@ -567,7 +663,14 @@ module spu_decode #(
                 c_sx <= w_sx; c_ex <= w_ex; c_sy <= w_sy; c_ey <= w_ey;
                 c_a0 <= w_a0; c_a1 <= w_a1; c_a2 <= w_a2; c_a3 <= w_a3;
                 c_c0 <= w_c0; c_c1 <= w_c1; c_c2 <= w_c2; c_c3 <= w_c3;
-                c_show  <= w_has_show ? w_show : pts_latched;
+                // CONTIGUITY CLAMP: never open a hole the author did not write. If
+                // the hold was cut short, w_show_eff is still in the future and
+                // committing it would blank the outgoing unit -- which is the whole
+                // defect. When the two windows abut (or the outgoing one is
+                // persistent), show immediately instead; when the author DID write a
+                // gap, keep the authored time and let the outgoing unit hide on its
+                // own schedule.
+                c_show  <= (spu_contig && !spu_due) ? stc : w_show_eff;
                 c_hide  <= w_has_hide ? w_hide : 33'h1_FFFF_FFFF;  // stay if no STP_DSP
                 c_valid <= 1'b1;
                 c_pts   <= pts_latched;    // remember this unit's PTS (menu re-send guard)
