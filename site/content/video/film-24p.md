@@ -82,9 +82,10 @@ left to detect. Nothing can infer it from the stream, which is why the manual **
 
 ## Related settings
 
-- **`Frame Drop` must stay On.** The cadence-slip corrector, which keeps imperfect
-  real-world telecine in step with the display, runs on the frame-drop governor's path and
-  does nothing without it. See [Settings](../playback/settings.md#frame-drop).
+- **`Frame Drop` must stay On.** Advancing past a frame is how the player recovers time
+  it has lost, and film content on a demanding disc is exactly where it needs to. With it
+  off, the picture runs progressively later and lip sync goes with it. See
+  [Settings](../playback/settings.md#frame-drop).
 - **`A/V Offset` defaults to 0 ms.** There should be no need to change it. (It was
   +100 ms in v0.4.0 and earlier, nulling an offset the current clock no longer has.)
 

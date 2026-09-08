@@ -41,8 +41,9 @@ again. A custom `boot.rom` logo survives the reset.
 
 ## Debug page
 
-The second OSD page. These are tuning and diagnostic levers — two of them affect normal
-playback and are documented properly below; the rest exist for narrowing down problems.
+The second OSD page. These are tuning and diagnostic levers. The three with sections below
+are the ones worth understanding before you touch them; the rest exist for narrowing down
+problems.
 
 | Setting | Options | What it does |
 |---|---|---|

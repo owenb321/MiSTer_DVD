@@ -275,7 +275,9 @@ Set **`Film 24p Out` = `On`**. The disc is probably **hard-telecined**, meaning 
 was baked in at authoring time and carries no flags for Auto to detect. See
 [Film (24p)](../video/film-24p.md).
 
-Also confirm **`Frame Drop` is On** — the cadence corrector runs on that path.
+Also confirm **`Frame Drop` is On** — advancing past a frame is the only way the player
+can recover time once it has fallen behind, so with it off the picture just runs later and
+later.
 
 ### MiSTer reports 1441x478i, or the resolution changes when a disc loads
 
