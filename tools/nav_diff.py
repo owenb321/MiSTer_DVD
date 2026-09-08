@@ -260,6 +260,31 @@ def resolve(disc):
     return local, os.path.join(BOARD_ROOT, rel)
 
 
+def auto_script(iso, steps, seed):
+    """Build a script of VALID button presses by asking the oracle, one step at
+    a time.
+
+    Which buttons exist depends on where you are, and where you are depends on
+    which buttons you pressed -- so the script cannot be written up front. Each
+    iteration runs libdvdnav over the script so far, reads how many buttons the
+    park it ended at offers, and appends one that exists. That is also what
+    keeps a sweep honest: a script generated this way never contains the
+    undefined input that produced a false difference by hand.
+    """
+    import random
+    rng = random.Random(seed)
+    script = []
+    for _ in range(steps):
+        rows, raw = trace_landings(iso, ' '.join(script) if script else 'w1', seed)
+        # buttons offered at the park we are sitting at now
+        parks = re.findall(r'^===== PARK #\d+.*?buttons=(\d+)', raw, re.M)
+        n = int(parks[-1]) if parks else 0
+        if n < 1:
+            break
+        script.append(str(rng.randint(1, n)))
+    return script
+
+
 def cmd_list():
     hits = []
     for dirpath, _, files in os.walk(LOCAL_ROOT):
@@ -276,6 +301,8 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('disc', nargs='?')
+    ap.add_argument('--auto', type=int, metavar='N',
+                    help='derive an N-step script of VALID buttons from the oracle')
     ap.add_argument('--script', default='w2 1',
                     help='e.g. "w3 1 w2 2" (see the token table above)')
     ap.add_argument('--settle', type=float, default=3.0,
@@ -301,7 +328,13 @@ def main():
     tmpdir = args.out or os.path.join(
         os.environ.get('TMPDIR', '/tmp'), f'navdiff_{time.strftime("%H%M%S")}')
     os.makedirs(tmpdir, exist_ok=True)
-    tokens = args.script.split()
+    if args.auto:
+        tokens = auto_script(local, args.auto, args.seed or 1)
+        if not tokens:
+            print('nav_diff: the oracle found no button menu on this disc')
+            return 2
+    else:
+        tokens = args.script.split()
 
     print(f'nav_diff: {os.path.basename(local)}')
     print(f'  script : {" ".join(tokens)}')
