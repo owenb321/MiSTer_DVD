@@ -343,7 +343,18 @@ Matrix submenus similarly; MiB/BBB menus unchanged; normal playback (O[1] Off) u
 
 ---
 
-## 5. Menu stills don't reach their final frame — cold re-decode (clean), with a FAST trigger
+## 5. Menu stills don't reach their final frame — cold re-decode ⛔ REMOVED 2026-09-08
+
+> **⛔ STATUS 2026-09-08 (issue #65): THE COLD RE-DECODE IS REMOVED. It was
+> VESTIGIAL — both problems it compensated for had been fixed elsewhere, months
+> after §5 was validated, and nobody re-checked whether it was still needed.**
+> HW-confirmed on Atmosfear and Harry Potter: the stills land and hold with the
+> re-decode gone. Everything below is kept as the record of why it existed; read
+> §5g for what replaced it and why the July attempt to remove it failed for an
+> unrelated reason.
+
+### 5 (historical). The cold re-decode as it was built
+
 
 > **★ 2026-08-26 — SEPARATE ROOT CAUSE FOUND for the PIXELATED half: the decoder was
 > writing the new picture INTO the frame slot the display was scanning out.**
@@ -379,7 +390,8 @@ Matrix submenus similarly; MiB/BBB menus unchanged; normal playback (O[1] Off) u
 > a blocky flash of a frame or two). Any residual after the fix has a second cause.
 
 
-> **Status (2026-07-12): the PR fj#85 cold re-decode is the CORRECT mechanism and is KEPT.**
+> **Status (2026-07-12, SUPERSEDED — see the 2026-09-08 removal above): the PR fj#85
+> cold re-decode is the CORRECT mechanism and is KEPT.**
 > The §5b trailing-byte flush primer that briefly replaced it was **HW-reverted** — it made
 > the still appear fast but **PIXELATED** (see §5b), because it shoves out the *mid-stream*
 > decoded frame (stale references) instead of re-decoding the cell cleanly. So the cold
@@ -838,6 +850,85 @@ reader/menu/nav/vm/ps2 suites green. **HW-CONFIRMED (2026-07-14):** MiB root men
 loops indefinitely with the highlight armed and Select responsive; Matrix menu still works.
 
 ---
+
+### 5g. The cold re-decode was vestigial — removed (issue #65)
+
+**Status: ✅ HW-CONFIRMED 2026-09-08** (Atmosfear reads its line once; Harry Potter's
+still menus land). Branch `fix/menu-still-no-redecode`.
+
+**Report.** On Atmosfear's character-selection screens the host's voice-over played
+through to the end and then **played a second time** before the screen settled. Present
+in v0.4.0, so it predates the free-running STC work.
+
+**Both hypotheses in the issue were wrong, and the disc's own IFO ruled them out offline.**
+The screens are VTS_01 VTSM **PGCN 8..13**, one cell each,
+`still=255  cell_cmd=0  pbtime=3..4s`:
+
+- `cell_cmd_nr == 0`, so the Phase-3 CELL-LOOP heuristic cannot fire (it needs
+  `cm_rd[7:0] != 0`, and it would loop forever rather than twice).
+- `still == 255`, so `S_STILL` **is** reached — the authored still was being honoured.
+
+**Cause: the §5 cold re-decode itself.** It re-streamed the entire still cell — video *and*
+audio — once per menu entry, gated on `vbuf_empty`, i.e. only after the clip had already
+played out. Hence exactly two plays, then a park.
+
+★★ **Why it was no longer needed, and why nobody noticed.** §5b records the real reason a
+still used to need a nudge: the cell ends `00 00 01 B7` followed by padding packs the demux
+drops, and `getbits` needs a full 64-bit word **past** the B7 to reach `vld.v`'s
+`STATE_SEQUENCE_END`, which asserts `last_frame` so `motcomp_picbuf`'s `STATE_LAST_FRAME`
+emits the held frame. Without trailing bytes the VLD starves at the B7 and the screen keeps
+showing the previous frame. **Both halves of that were fixed elsewhere, after §5 was
+validated:**
+
+1. **`ps_demux` `S_VID_FLUSH`** emits 24 filler bytes whenever a video PES ends on a B7 —
+   which is exactly how these cells end. MEASURED on Atmosfear: `SEQ_END` at ES offset
+   **156,469 of 156,473**, i.e. the last 4 bytes of the video ES.
+2. **`motcomp_picbuf`'s fwd/bwd swap gained `~vld_last_frame`** (2026-08-26), removing the
+   corrupt-flushed-frame case.
+
+★★ **And (2) is precisely why the July attempt to remove it failed.** §5b replaced the
+re-decode with the `vidfeed_flush_primer`, which was HW-reverted because the frame it
+flushed was **pixelated** — corrupted by the picbuf slot-alias bug that was not fixed for
+another six weeks. So the primer was judged on a decoder defect, not on its own merits, and
+**"remove the re-decode and let `S_VID_FLUSH` finish the sequence" had never been tried.**
+
+⚠ **A stale status marker hid this for weeks.** §5's header said the re-decode "is the
+CORRECT mechanism and is KEPT", written 2026-07-12 and never revisited after either fix
+landed. The 2026-08-26 addendum in §5 even states *"the filler fires, so the still's I-frame
+does fully decode"* — the evidence was recorded in the same document and not acted on.
+
+⚠ **Its only live trigger was `vbuf_empty`.** `menu_snap` has been hardwired 0 in `emu.sv`
+since the Snappy/Smooth toggle was removed ("universal Smooth"), and `vbuf_empty` means the
+decoder has already consumed everything — so by the time it fired, the work was done.
+
+**Change.** `S_STILL` now simply parks and holds. `still_flushed` and its six re-arm sites
+are deleted (it was exclusive to the re-decode); `vbuf_empty` stays — it is load-bearing for
+the Phase-B tail drain.
+
+**⛔ Two alternatives rejected, recorded so they are not re-proposed:**
+
+1. **Mute the re-decode's audio** (a `ps_demux.aud_mute` driven by `still_flushed`). Built,
+   gated and working — but it suppresses the *symptom* of an action that should not happen,
+   and leaves the 193-sector re-stream and the settle delay in place. Abandoned once the
+   re-decode was shown to be vestigial.
+2. **Re-decode only the cell's last VOBU.** MEASURED and impossible: each cell is 6-8 VOBUs
+   with the entire `SEQ GOP PIC:I SEQ_END` inside **VOBU 0** (ending at sector 81 of 193),
+   and sectors 82→end carry **AC-3 only**. The last VOBU has **no I-frame at all**.
+
+**Gate.** `iso_reader_menu_tb` TEST 9 rewritten to measure the new contract, and it is RED
+against the pre-fix reader (T9b measured `seek_acks=1`, `bytes=2048` there):
+
+| check | asserts |
+|---|---|
+| T9a | parked while idle: no flush, no re-stream |
+| T9b | `vbuf_empty` — the old Smooth trigger — does nothing |
+| T9c | `menu_snap` — the old Snappy trigger — does nothing |
+| **T9d** | **control: a jump still EXITS the still.** Without it, T9a-T9c would all pass on a reader that had simply wedged in `S_STILL` |
+
+**HW.** Atmosfear PGCN 8-13: narration once, screen settles. Harry Potter's still menus
+land. ⏳ T2's Jump-Into-Timeline cubes and mission-profile slides, and Matrix/MiB scene
+pages, are the remaining §5 cases worth a look — they are what the mechanism was originally
+built for.
 
 ## 6. Menu aspect ratio — 16:9 anamorphic menu shown squished as 4:3 — ✅ HW-CONFIRMED 2026-07-10 (PR fj#86, IFO V_ATR)
 

@@ -401,6 +401,22 @@ it also closes the OSD again.
 
 ## Navigation
 
+### A menu screen says something, finishes, then says it again
+
+!!! info "Unreleased"
+
+    Fixed after v0.4.0.
+
+On menu screens that hold on a still picture with a voice-over — character-selection
+screens on DVD games are the usual case — the audio played through, then played a second
+time before the screen settled.
+
+The core used to re-read that part of the disc once, to make sure the still picture came up
+sharp rather than half-drawn. That re-read stopped being necessary a while ago, when two
+unrelated fixes landed in the decoder, but it was still happening — and it replayed the
+sound along with the picture. It no longer runs at all, so menu stills settle a little
+faster too.
+
 ### A menu option does the wrong thing, or `LINK FAIL`
 
 `LINK FAIL nn` means a menu jump failed and the core recovered by re-entering the last
