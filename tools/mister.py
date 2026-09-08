@@ -151,7 +151,11 @@ for f in /media/fat/MiSTer_DVDcss_hil_*; do
   [ $running = 0 ] && rm -f "$f"
 done
 echo "  harness files removed (core, mgl, agent, spare Mains)"
-echo "  NOTE: config/@CFG@ still holds whatever options the harness last set,"
+if [ -f /media/fat/config/@CFG@.hilbak ]; then
+  mv -f /media/fat/config/@CFG@.hilbak /media/fat/config/@CFG@
+  echo "  restored the saved settings the harness had overwritten"
+fi
+echo "  NOTE: config/@CFG@ is back to the user's own settings,"
 echo "        and the running Main stays until the next core load."
 """
 
@@ -546,7 +550,11 @@ def cmd_launch(args):
            f'  <file delay="{args.delay}" type="s" index="0" '
            f'path="{img}"/>\n'
            f'</mistergamedescription>\n')
+    # ⚠ This OVERWRITES the user's saved OSD settings for the core. Back them up
+    # once, so a harness session on someone's own rig is not destructive.
     ssh(f'''
+[ -f {CFG_DIR}/{CFG_NAME}.hilbak ] || [ ! -f {CFG_DIR}/{CFG_NAME} ] || \
+    cp {CFG_DIR}/{CFG_NAME} {CFG_DIR}/{CFG_NAME}.hilbak
 python3 -c "import sys;open('{CFG_DIR}/{CFG_NAME}','wb').write(bytes.fromhex('{blob.hex()}'))"
 cat > {CORE_DIR}/{HIL_MGL} <<'MGLEOF'
 {mgl}MGLEOF
