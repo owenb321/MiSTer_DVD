@@ -1006,9 +1006,16 @@ worse maintenance burden than targeted in-place edits. So:
   half the raster's IMAGE-SCAN period: 750/900/1877/1800); `next_pts` extrapolates from
   the flags × `frame_rate_code` plus every `skip_ack` (deferred if a picture is waiting
   at the output — the depth-1 queue's ordering rule); a tagged picture > 1 frame behind,
-  > 0.5 s ahead, or > 350 ms late re-anchors. `av_sync.sv` is a clk_sys MIRROR now;
+  > 0.5 s ahead, or > 2.7 s late re-anchors (`LATE_MAX_TICKS`; the 350 ms of the original
+  plan was raised in HW round B -- "lateness is not a discontinuity",
+  `docs/stc_freerun.md` §3.7(2)). `av_sync.sv` is a clk_sys MIRROR now;
   every consumer reads the one `stc`; `sched_en`/`sync_armed` lost `~menu_active`,
-  `hl_stc_fresh` is always 1, the STD hold is universal with a ~155 ms no-audio release,
+  the STD hold gained a ~155 ms no-audio release,
+  ⚠ **(corrected 2026-09-08: two items here described the mid-branch commit `2b548b0`, not
+  what merged -- commit `5f49c29` walked both back. `hl_stc_fresh` is NOT tied to 1; it is
+  `~keep_vbuf` as before (`dvd/emu.sv:1541`). The STD hold's `menu_active` exemption was
+  RESTORED; only the `!aud_seen` release is new. `sched_en`/`sync_armed` did lose
+  `~menu_active`.)**
   and `dvd_audio_decode` re-bases `play_anchor` by each anchor delta. The scheduler's
   reset is the VBUF flush, NOT the keep_vbuf pipe reset — that is what makes menus
   safe. ⚠ `disp_sched_tb` scores every pickup against the scenario's TRUE PTS, not the
@@ -1054,6 +1061,69 @@ worse maintenance burden than targeted in-place edits. So:
   on four discs), so Stage 1 extrapolates between tags from the picture flags and
   `frame_rate_code` and needs the vld's new any-reason `skip_ack` (governor AND realign
   drops) to keep that timeline honest.
+  - ✅ **THE PARSE-FRONT AUDIT (2026-09-08, PR #75) — two consumers #63 changed WITHOUT
+    TOUCHING; sim-proven RED/GREEN against measured disc data and ✅ HW-CONFIRMED
+    2026-09-08** (build `DVD_spuwindow_20260908_1955.rbf`, SEED 5 first roll, 92 % ALM,
+    clk_dec 87.40/88.85 — passing but the thinnest margin in recent history, worth a
+    seed sweep if a later branch lands near the 86.0 gate). Field report on The Matrix:
+    the "Follow the White Rabbit" icon FLASHES instead of staying solid, and there is an
+    AUDIO DROPOUT at each white-rabbit point *whether or not* white-rabbit mode is
+    entered.
+    ★★ **§11 asked which presentation paths were still off the STC. It did not ask the
+    other question: which consumers compare a PARSE-FRONT value AGAINST `stc`, and so
+    changed meaning when `stc` moved onto the display.** Both defects are that question's
+    answer and neither module was edited by #63.
+    **(1) `spu_decode` commits at the parse front into a SINGLE bitmap.** With `stc`
+    leading, an arriving unit was already due at commit; with `disp_lag ≈ 0` it installs a
+    window ~a VBUF depth in the FUTURE and blanks what is on screen. MEASURED: the icon is
+    one `FSTA_DSP` at PTS 101885 + one `STP_DSP` at 866659 = **8.4975 s solid**, re-sent
+    **byte-identically 8 times, 90090 ticks (1.001 s) apart** — so solid IS the authored
+    behaviour and the blink period is the re-send period. ⚠ The same bug **truncates every
+    ordinary subtitle** by up to a VBUF depth. Fixed at the mechanism (a display-order
+    HOLD at `DCSQ_END` + a CONTIGUITY CLAMP at `COMMIT` + `S_IDLE` resuming at a real unit
+    boundary), NOT by widening `menu_mode`. ⛔ Double-buffering the bitmap is ~102 M10Ks
+    against 55 free. ★ The hold's bound is MEASURED: real subtitle units are never closer
+    than 1034 ms (n=36, median 2369 ms). Gate `bench/dvd/run_spu_window.sh --red`
+    (3 mutations, each caught by its own arm; the harness FAILS a mutation that does not
+    compile — two arms first "passed" on a build error).
+    **(2) A seamless-branch junction is not a content change.** #63's `disc_rephase`
+    resets `audio_ring` + `dvd_audio_decode`, accepted on *"titles re-anchor about once per
+    playback (APOLLO_13)"*. APOLLO_13 is one continuous title; **Matrix VTS_02 PGCN 1 —
+    the PLAIN movie — has the same 9 interleaved cell-pairs as the rabbit PGCN 6**, which
+    is why the dropout ignores white-rabbit mode. MEASURED: the ILVU splices INSIDE a block
+    are continuous (0 irregular steps in 238 AC-3 PTS samples) and the disc authors NO
+    audio gap (`sml_pbi.vob_a[]` all zero), but **entering the cell the PTS restarts near
+    zero (−2 s to −64 s)**; every such cell is byte0 `0x0e` = `seamless_play=1` AND
+    `stc_discontinuity=1`. Fix = ask the disc: `dvd_iso_reader` decodes
+    `cell_playback_t` byte 0 **bit 3** (the byte was already in `cell_cat_mem`; three bits
+    were used) and `flush_ctl` withholds the audio flush there. The CLOCK still
+    re-anchors. ⛔ NOT a "was there a seek/jump recently" window — a looping menu cell
+    re-anchors with genuinely restarting audio and pulses no `seek_ack`. Menus are
+    structurally untouched (`menu_dom` never latches the level). ⚠ 104/106 cells are
+    seamless, so inside a feature the re-phase now fires only at the 2 authored breaks —
+    consistent with the FAMILY FEUD II measurement. Gate
+    `bench/dvd/run_seamless_audio.sh --red`. ⚠ Two bench lessons: the fixture needed a
+    third cell that is seamless but NOT interleaved (byte0 `0x08`) or bits 3 and 2
+    coincide and the wrong bit passes (it did); and a per-cell sample must be phased
+    against the reader's own `cell_i`, not the delivered byte pattern (the reader runs ~2
+    sectors ahead). ⏳ `nav_pci`'s `hli_coherent` is untouched and may be a second
+    contributor to the icon — `O[2]` `blk1`/`blk7` vs `blk3`/`blk8` separates them on HW.
+    **(3) A STREAM THE PGC DOES NOT DECLARE WAS BEING DISPLAYED (pre-existing, same PR).**
+    Rabbit-mode subtitles read "white on white". PGCN 6 declares logical stream 1 only;
+    pressing Subtitle releases the VM's claim, the user path resolves logical 0 by RAW
+    INDEX to 0x20 (the real subtitle stream) and draws it with PGCN 6's palette, whose
+    three opaque subtitle classes are all `Y=128` (PGCN 1: `[0] Y=16 [8] Y=128 [9] Y=176`).
+    ⚠ **The rule is NARROWED ON A SWEEP, not on the spec alone:** 221 discs / 22,733 title
+    PGCs — class A (declares logical 0) 18,801, class B (declares NOTHING) 3,929 of which
+    **586 rely on the identity fallback**, class C (declares something, not 0) **3**.
+    libdvdnav's unconditional available-bit guard would strip subtitles from those 586
+    across up to 168 discs, so `subp_stream_map.any_present` narrows it to class C —
+    blast radius 3 PGCs. Only the USER path is gated (menu/VM resolutions pick a stream
+    the disc itself chose). Gate: `subp_stream_map_tb`'s 6 directed `stream_absent` arms,
+    RED against BOTH the unconditional version and the pre-fix one; the 2071-vector
+    `phys_streamN` golden contract is untouched.
+    Detail: **`docs/stc_freerun.md` §12**, `docs/subpicture.md`, `docs/dvd_nav.md`.
+
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
   PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
   no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**

@@ -581,7 +581,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-audbphold"
+`define CORE_VERSION "dev-spuwindow"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1238,6 +1238,7 @@ assign BUTTONS = {1'b0, osd_btn};
 // "next" at the last cell, causes no glitch). See docs/dvd_nav.md "Transport".
 wire [7:0] cur_cell;         // from dvd_iso_reader
 wire       cell_ready;       // from dvd_iso_reader (cell-mode active)
+wire       cell_seamless;    // from dvd_iso_reader: this cell is authored seamless_play
 // Linear transport (VCD/SVCD raw .bin, flat .mpg/.VOB): the reader seeks the
 // whole file by RBN — raw mode snaps to a CD sector (= MPEG pack) boundary,
 // flat mode is qualified by ps_demux having seen a pack (ps_saw_pack) and
@@ -2265,6 +2266,16 @@ wire        menu_sp_ctx   = (menus_on && menu_active) || sp_menu_early;
 wire [3:0]  sp_sel_log    = menu_sp_ctx  ? 4'd0 :
                             vm_owns_route ? vm_spstn[3:0] : {1'b0, sp_user_log};
 wire [31:0] subp_ctl_sel  = subp_ctl_mem[sp_sel_log];                 // single 16:1 mux
+// Does the loaded PGC declare ANY subpicture stream? 16 flop reads, no mux -- this is
+// what separates "the table does not offer this stream" from "there is no table".
+wire subp_any_present = subp_ctl_mem[ 0][31] | subp_ctl_mem[ 1][31] |
+                        subp_ctl_mem[ 2][31] | subp_ctl_mem[ 3][31] |
+                        subp_ctl_mem[ 4][31] | subp_ctl_mem[ 5][31] |
+                        subp_ctl_mem[ 6][31] | subp_ctl_mem[ 7][31] |
+                        subp_ctl_mem[ 8][31] | subp_ctl_mem[ 9][31] |
+                        subp_ctl_mem[10][31] | subp_ctl_mem[11][31] |
+                        subp_ctl_mem[12][31] | subp_ctl_mem[13][31] |
+                        subp_ctl_mem[14][31] | subp_ctl_mem[15][31];
 // 16:9 display mode: override -> letterbox; else Crop=pan&scan, Letterbox=letterbox,
 // else wide (Fit/HDMI anamorphic — the common case; O[4:3] refines it, HW-tunable).
 wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
@@ -2279,6 +2290,7 @@ wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
 wire [1:0]  sp_disp_mode_eff = menu_sp_ctx ? 2'd0 : sp_disp_mode;
 
 wire [4:0]  sp_phys_streamN;
+wire        sp_stream_absent;
 subp_stream_map u_subp_map (
     .map_valid    (pgc_ctl_valid),
     .dom_tt       (pgc_dom_tt),
@@ -2289,8 +2301,24 @@ subp_stream_map u_subp_map (
     // decoded stream's; the two are the same signal on every non-menu path.
     .wide         (ar_wide_auto_eff),
     .disp_mode    (sp_disp_mode_eff),
-    .phys_streamN (sp_phys_streamN)
+    .any_present  (subp_any_present),
+    .phys_streamN (sp_phys_streamN),
+    .stream_absent(sp_stream_absent)
 );
+
+// ---- USER-SELECTED STREAM THE PGC DOES NOT DECLARE (2026-09-08) --------------
+// Only the USER path, mirroring sp_track_eff's own condition below: the menu and VM
+// paths resolve a stream the disc itself selected, so an absent entry there is a
+// different question (and menu PGCs were NOT in the sweep that bounded this).
+//
+// The reported case: The Matrix's white-rabbit PGC declares logical 1 only. Pressing
+// the Subtitle button releases the VM's claim (vm_owns_sp above), the user path
+// resolves logical 0 by RAW INDEX to 0x20 -- the real subtitle stream -- and it is
+// then drawn with that PGC's palette, whose three opaque subtitle classes are all
+// Y=128. The text renders as one flat grey with no outline. Showing nothing is what
+// a conforming player does; showing it illegibly is our own invention.
+// Bound: 3 title PGCs in a 221-disc/22,733-PGC sweep (see subp_stream_map.sv).
+wire sp_user_absent = sp_stream_absent & ~(menu_sp_ctx | vm_owns_route | force_43_subp);
 
 // VM streams ALWAYS map (in-title HLI). The user path maps only under Force 4:3 Subpics
 // (a user-selected commentary track -> its letterbox physical substream, MiB logical 3 ->
@@ -2436,6 +2464,7 @@ flush_ctl flush_ctl_i (
     .keep_vbuf       (keep_vbuf),
     .load_flush      (load_flush),
     .disc_rephase    (aud_disc_rephase),   // content PTS jump -> audio-only re-phase (VLC's RESET_PCR analogue)
+    .cell_seamless   (cell_seamless),      // ...unless the author says this cell continues the last one
     .aud_flush       (aud_flush),
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
@@ -2618,6 +2647,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .seek_ack       (seek_ack),
     .cur_cell       (cur_cell),
     .cell_ready     (cell_ready),
+    .cell_seamless  (cell_seamless),
 
     .jump_pulse     (vm_jump_pulse),      // Phase 4: the DVD-VM owns all jumps
     .jump_domain    (vm_jump_domain),
@@ -3711,11 +3741,22 @@ pts_cdc #(.W(35)) pts_cdc_delta (        // each re-anchor's delta + whether it 
 // but it never carries buffered audio across a discontinuity. We did, and each
 // re-anchor left a lip-sync step nothing could heal (4-6 a minute in menus).
 //
+// ⚠ A SEAMLESS-BRANCH junction must NOT flush audio: the qualifier lives in
+// dvd/flush_ctl.sv (cell_seamless), which is where every flush decision is made
+// and the only one of the two with a bench. The full reasoning and the disc
+// measurements behind it are at that site.
+// ⚠ A suppressed pulse still burns the cooldown below. That is deliberate and
+// conservative -- the alternative is the same test written in two places.
 // ⚠ RATE LIMITED to one re-phase per ~0.5 s. A re-phase costs a short audio gap
 // (the drain gate re-fills), and disc_w can fire twice around one junction as the
 // new timeline settles; without the cooldown a burst of re-anchors would machine-gun
-// the audio. Titles are unaffected either way -- they re-anchor about once per
-// playback (MEASURED: reanchors=1 over 80 s on APOLLO_13).
+// the audio.
+// ⛔ THIS USED TO READ "Titles are unaffected either way -- they re-anchor about once per
+// playback (MEASURED: reanchors=1 over 80 s on APOLLO_13)". APOLLO_13 is ONE CONTINUOUS
+// TITLE. A seamless-branch title re-anchors at every branch point -- The Matrix has nine,
+// in the plain movie as well as the rabbit branch -- and each one cost about a second of
+// audio. That is the measurement the cell_seamless gate above exists for; do not read the
+// old sentence as evidence that a title cannot re-anchor often.
 reg  [23:0] rephase_cool;                       // 2^24 / 27 MHz ~ 0.62 s
 wire        rephase_req = av_anchor_delta_valid && av_anchor_delta_w[34];
 always @(posedge clk_sys or negedge reset_n)
@@ -4848,10 +4889,11 @@ assign ov_b  = 8'd0;
 // hide the menu - Phase 3). Drives BOTH spu_decode.enable and ps_demux.sp_enable
 // (the demux gate was missed in round 1 -> no button graphics unless subtitles
 // were already on).
-assign sp_route_en = sub_on | (menus_on && menu_active)
+assign sp_route_en = ~sp_user_absent &
+                   ( sub_on | (menus_on && menu_active)
                    | (menus_on && vm_owns_sp && vm_spstn[6]) // Phase 4: SetSTN sp display
                    | in_title_hli                            // in-title button (white rabbit)
-                   | sp_menu_early;                          // in-title multi-button menu (Scene It): open early
+                   | sp_menu_early );                        // in-title multi-button menu (Scene It): open early
 wire       sp_en = sp_route_en;
 wire [1:0] sp_q_idx;
 wire       sp_q_inside;

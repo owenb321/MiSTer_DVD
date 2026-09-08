@@ -147,6 +147,9 @@ module dvd_iso_reader #(
     output reg        seek_ack,      // pulse: a seek was accepted (drives load_flush)
     output     [7:0]  cur_cell,      // currently-playing cell index (for UI)
     output            cell_ready,    // 1 = cell-mode active (seek available)
+    // 1 = the cell being streamed is authored seamless_play (see cc_seamless_play):
+    // its content continues the previous cell even if the timestamps restart.
+    output            cell_seamless,
 
     // ---------------------------------------------------------------------
     // MULTI-ANGLE (Phase 9). A multi-angle segment is an interleaved block:
@@ -692,6 +695,21 @@ reg [7:0]  cc_rd;                          // registered category byte for cell_
 wire       cc_is_angle = (cc_rd[5:4] == 2'd1);        // block_type == angle block
 wire       cc_blk_first= cc_is_angle && (cc_rd[7:6] == 2'd1);
 wire       cc_interleaved = cc_rd[2];                 // interleaved (seamless-branch) cell
+// ★ SEAMLESS PLAY (libdvdread cell_playback_t byte 0: [7:6] block_mode, [5:4]
+// block_type, [3] seamless_play, [2] interleaved, [1] stc_discontinuity,
+// [0] seamless_angle). The whole byte has always been stored in cell_cat_mem;
+// only the three bits above were ever decoded.
+//
+// This bit is the author saying "this cell continues the previous one WITHOUT a
+// break", and it is what tells a player that a timestamp restart at the cell
+// boundary is a NUMBERING change, not a content change. MEASURED on The Matrix
+// VTS_02 PGCN 1: every white-rabbit interleaved cell (4/23/35/55/60/74/80/86/91)
+// is byte0=0x0e -- seamless_play=1 AND stc_discontinuity=1 -- and the PTS
+// restarts near zero there (audio steps measured -2 s to -64 s). The soundtrack
+// across that boundary is unbroken; only the numbers jump.
+// emu.sv uses this to keep the display's re-anchor from flushing audio that is
+// still perfectly good -- see the CONTENT-DISCONTINUITY AUDIO RE-PHASE block.
+wire       cc_seamless_play = cc_rd[3];               // seamless with the previous cell
 reg [7:0]  block_first;                     // first (angle-1) cell of the block
 reg [7:0]  block_last;                      // last angle cell (block_first+count-1)
 reg        angle_active;                    // 1 = streaming an angle-block cell
@@ -699,6 +717,7 @@ reg        angle_resolved;                  // 1 = angle cell chosen (skip re-sc
 reg [7:0]  ang_scan_i;                      // angle-count scan cursor
 reg        angle_pulse_d;                   // rising-edge detect for angle_pulse
 reg        seamless_active;                 // 1 = streaming an interleaved (non-angle) cell
+reg        cell_seamless_r;                 // 1 = this cell is authored seamless_play
 
 // NV_PCK snoop: capture DSI fields off the sd_buff write stream of a nav
 // sector's DSI region (sector bytes 0x400..0x5FF, DSI data @0x407). Angle + seamless.
@@ -1772,6 +1791,7 @@ always @(posedge clk or negedge rst_n) begin
         angle_active <= 1'b0;
         angle_resolved <= 1'b0;
         seamless_active <= 1'b0;
+        cell_seamless_r <= 1'b0;
         block_first  <= 8'd0;
         block_last   <= 8'd0;
         ang_scan_i   <= 8'd0;
@@ -2405,6 +2425,7 @@ always @(posedge clk or negedge rst_n) begin
             angle_active   <= 1'b0;
             angle_count    <= 4'd0;
             seamless_active <= 1'b0;
+            cell_seamless_r <= 1'b0;
             ilvu_armed     <= 1'b0;
             seek_pending <= 1'b0;
             seek_ack     <= 1'b1;          // tell emu.sv to pulse load_flush
@@ -3675,6 +3696,7 @@ always @(posedge clk or negedge rst_n) begin
                 angle_active   <= 1'b0;
                 angle_count    <= 4'd0;
                 seamless_active <= 1'b0;
+                cell_seamless_r <= 1'b0;
                 ilvu_armed     <= 1'b0;
                 cur_angle      <= 4'd1;
                 state      <= S_CELL_LOAD;
@@ -3726,6 +3748,7 @@ always @(posedge clk or negedge rst_n) begin
                     // two are mutually exclusive (cc_is_angle vs !cc_is_angle).
                     angle_active    <= cc_is_angle && angle_resolved;
                     seamless_active <= cc_interleaved && !cc_is_angle;
+                    cell_seamless_r <= cc_seamless_play;
                     ilvu_armed  <= 1'b0;
                     strm_idx    <= eff_base;
                     seek_cum    <= 32'd0;
@@ -4543,6 +4566,7 @@ end
 // Transport read-backs (for gamepad seek + future UI)
 assign cur_cell             = cell_i;
 assign cell_ready           = cell_mode;
+assign cell_seamless        = cell_seamless_r;
 
 // Menu-domain read-backs (Phase 2)
 assign menu_active          = menu_dom;

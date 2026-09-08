@@ -62,6 +62,17 @@ set-top player would not.
 **Interactive DVD games are incomplete.** Some game discs mis-navigate their dispatcher
 logic, and individual minigames can misbehave. Film and TV discs are the supported path.
 
+**Some discs offer no subtitles in an alternate viewing mode.** A few titles build a second
+version of the film as its own program chain — The Matrix's "Follow the White Rabbit" is the
+best-known — and that version can declare a different subpicture stream from the main one, or
+none at all. Where the disc offers no subtitle stream for the mode you are in, the subtitle
+button will not produce subtitles. This matches a set-top player.
+
+!!! info "Unreleased"
+    Before this change the player would show such a stream anyway, using a colour palette
+    that was never meant for it — the text came out as flat grey with no black outline and
+    was very hard to read. It is now simply not shown.
+
 **Seeking on a seamless-branch disc is unreliable.** Some special editions store two cuts
 of the film — theatrical and extended — woven together in the same part of the disc, and
 the player chooses between them as it goes. Seeking into a woven stretch can drop you into

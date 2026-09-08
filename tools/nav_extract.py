@@ -134,6 +134,28 @@ def be16(b, o): return struct.unpack('>H', b[o:o+2])[0]
 #
 # This is the golden reference for dvd/dvd_iso_reader.sv (cc_interleaved /
 # seamless_active snoop->arm->jump) and bench/dvd/iso_reader_ilvu_tb.sv.
+# sml_pbi (DSI-rel 0x20 -> sector 0x427), libdvdread dsi.h dsi_sml_pbi_t:
+#   category u16 @0x00, ilvu_ea u32 @0x02, ilvu_sa u32 @0x06, size u16 @0x0a,
+#   vob_v_s_s_ptm u32 @0x0c, vob_v_e_e_ptm u32 @0x10,
+#   vob_a[8] @0x14, 16 B each: {stp_ptm1, stp_ptm2, gap_len1, gap_len2} (all u32)
+# The vob_a[] entries are the AUTHORED AUDIO GAP at a seamless junction -- the span a
+# player is told to mute because the two branches' audio cannot both be sample-continuous.
+# NOTHING in the RTL parses them (dvd/nav_dsi.sv reads only sml_pbi.category), so they are
+# printed here to answer "does this disc author a gap at all?" without a scratch script.
+# MEASURED on The Matrix: every entry is zero on every white-rabbit junction, which is what
+# ruled the authored gap out as the cause of the PR #63 audio dropout (docs/stc_freerun.md
+# section 12.2).
+def _sml_audio_gap(sec):
+    """Return the non-zero sml_pbi.vob_a[] entries as [(idx, stp1, stp2, gap1, gap2)]."""
+    b, out = 0x427 + 0x14, []
+    for i in range(8):
+        o = b + i * 16
+        e = (be32(sec, o), be32(sec, o + 4), be32(sec, o + 8), be32(sec, o + 12))
+        if any(e):
+            out.append((i,) + e)
+    return out
+
+
 def _dsi_fields(sec):
     """Return (is_nav, category, vobu_ea, next_vobu) from a 2048-B sector's DSI."""
     isnav = sec[0x400:0x404] == b'\x00\x00\x01\xbf' and sec[0x406] == 0x01
@@ -176,13 +198,24 @@ def dump_ilvu(f, vts):
         if not interleaved or block_type == 1:      # skip normal + multi-angle cells
             continue
         n_inter += 1
+        b0 = e[0]
+        print("  cell %2d: category byte0=0x%02x [block_mode=%d block_type=%d "
+              "seamless_play=%d interleaved=%d stc_discontinuity=%d seamless_angle=%d]"
+              % (c, b0, b0 >> 6, (b0 >> 4) & 3, (b0 >> 3) & 1, (b0 >> 2) & 1,
+                 (b0 >> 1) & 1, b0 & 1))
         first = be32(e, 8); ile = be32(e, 12); last = be32(e, 20)
         rbn = first; played = 0; jumps = 0; skipped = 0; hops = 0; nav_ok = True
         chain = []
+        gaps = 0
         while hops < 4000:
             good, cat, ea, nxt = dsi_at(rbn)
             if not good:
                 nav_ok = False; break
+            f.seek((vob_lba + rbn) * 2048)
+            for g in _sml_audio_gap(f.read(2048)):
+                gaps += 1
+                print("      RBN %d sml_pbi.vob_a[%d]: stp_ptm=%d/%d gap_len=%d/%d"
+                      % (rbn, g[0], g[1], g[2], g[3], g[4]))
             off = nxt & 0x3fffffff
             is_last = (cat & 0xf000) == 0x5000
             iend = rbn + ea                          # last sector of this VOBU
@@ -199,9 +232,9 @@ def dump_ilvu(f, vts):
             if rbn > last + 3000:
                 nav_ok = False; break
         ok = nav_ok and chain and chain[-1][2] is None
-        print("  cell %2d: first=%d ilvu_end=%d last=%d | ILVUs=%d jumps=%d "
-              "played=%d skipped(sibling)=%d nav_ok=%s %s"
-              % (c, first, ile, last, len(chain), jumps, played, skipped, nav_ok,
+        print("      first=%d ilvu_end=%d last=%d | ILVUs=%d jumps=%d "
+              "played=%d skipped(sibling)=%d audio_gap_entries=%d nav_ok=%s %s"
+              % (first, ile, last, len(chain), jumps, played, skipped, gaps, nav_ok,
                  "OK" if ok else "*** CHAIN DID NOT REACH END_OF_CELL ***"))
     if n_inter == 0:
         print("  (no interleaved cells in PGCN 1 - this title is not seamless-branch)")

@@ -847,6 +847,156 @@ can check the skip count before changing anything.
 ⏳ Also untouched and still open: the `iec61937_wrap` half (HW-gate on a receiver), and the
 pre-existing film-detector flapping on mixed content.
 
+## 12. THE PARSE-FRONT AUDIT (2026-09-08) — two consumers #63 changed without touching
+
+Reported from the field on The Matrix, after #63: **the "Follow the White Rabbit" icon
+flashes instead of staying solid, and there is an audio dropout at each white-rabbit
+point — whether or not white-rabbit mode is entered.**
+
+Two separate defects, one shared cause class. §11 audited which presentation paths were
+still off the STC. It did not ask the other question:
+
+> **which consumers were comparing a PARSE-FRONT value against `stc`, and therefore
+> changed meaning when `stc` moved onto the display?**
+
+Both defects here are that question's answer, and neither module was edited by #63.
+
+### 12.1 `spu_decode` — a single bitmap committed at the parse front
+
+`spu_decode` decodes an arriving SPU straight into its one full-frame bitmap and commits
+`c_show` from the SPU PES's parse-front PTS, while visibility is
+`stc >= c_show && stc < c_hide`. While `stc` LED the display by the VBUF depth a unit was
+already due at commit; with `disp_lag ≈ 0` each unit now commits a window ~a VBUF depth in
+the FUTURE, and the arriving unit destroys the one on screen before its authored window
+has expired.
+
+**MEASURED on the disc.** The icon is one `FSTA_DSP` at PTS 101885 and one `STP_DSP` at
+866659 — **8.4975 s solid, no intermediate stop** — with the same unit re-sent
+**byte-identically 8 times, 90090 ticks (1.001 s) apart**, and an HLI whose 17 records
+alternate `hli_ss = 1,2,1,2…` over windows that are exactly back-to-back
+(`s_ptm[n] == e_ptm[n-1]`). Solid is unambiguously the authored behaviour, and the
+predicted blink period is the re-send period. `spu_decode.sv`'s own header had already
+described this failure for MENUS and scoped its guard to them, ending *"Titles keep the
+decode-early pipeline (their subpics are muxed near their PTS and are NOT re-sent)"* —
+false for an in-title HLI button graphic, which is authored exactly like a menu's.
+
+The rabbit escapes the menu guard because `menu_mode` rides `nav_pci.hli_seen`, which
+requires **more than one button** (`nxt_btn_ns > 1`); the rabbit is a single `fosl=1`
+button.
+
+⚠ **The same defect quietly truncates every ordinary subtitle** — line B arrives a VBUF
+depth early and blanks line A before A's window ends. Nobody reported it because dialogue
+gaps usually exceed the lead.
+
+**Fixed at the mechanism, not with another `menu_mode` exemption.** The RLE decode is the
+only destructive step and `DCSQ_END` is its single entry point, reached with `w_show` /
+`w_hide` / DAREA / palette all known:
+
+- a **hold** between `DCSQ_END` and `RLE_LINE`, leaving on due / a new unit start / a
+  bounded ~700 ms cap;
+- a **contiguity clamp** at `COMMIT`: when the author wrote no gap between the outgoing
+  unit and this one, show immediately rather than invent a hole. A persistent unit (no
+  `STP_DSP` ⇒ all-ones `c_hide`) is contiguous with every successor by construction, which
+  is exactly the re-send chain;
+- `S_IDLE` now resumes at a genuine unit start (`sp_frame_start && sp_pts_valid`, the rule
+  `S_DRAIN` already used), because the hold lengthens the busy window.
+
+⛔ **Double-buffering was not available**: 720×576 at 2 bpp is ~102 M10Ks for a second copy,
+against **55 free RAM blocks** (498/553, a figure unchanged in every build since v0.4.0).
+RAM, not ALMs, is what rules it out.
+⚠ **An earlier draft of this section cited "98 % ALMs" as the design's state. That was wrong**
+— 41,059/41,910 is the *unmerged* `feature/seek-preview` branch, not `main`. The build
+carrying both fixes measures **39,113/41,910 = 93 %**, SEED 5 held on the first roll, clk_dec
+95.57 @100C / 92.68 @-40C against the 86.0 gate. Read a fit number off the branch it came
+from before quoting it as the design's.
+
+★ **The hold's bound is MEASURED, not picked.** Cutting the hold short costs nothing (the
+clamp stops it opening a hole), but being *in* the hold when the next unit arrives costs
+that unit its head bytes — `spu_decode` has no backpressure onto `ps_demux`. On a real
+subtitle stream consecutive units are **never closer than 1034 ms** (n=36, p10 1335 ms,
+median 2369 ms; mux lead measured at ≈0, median −50 ms), so a bound below that can never
+be the reason a line is lost.
+
+**Gate: `bench/dvd/run_spu_window.sh` (+ `--red`).** Three mutations, each caught by the
+arm it exists for: `red-clamp` by [A] (the icon blinks — the bench reports exactly 7 blinks
+across the 7 re-sends), `red-hold` by [B] (the subtitle truncates), `red-both` by all. [D]
+is the control: an authored gap must still go dark, or a fix that simply never blanks would
+pass. ⚠ The RED harness **fails a mutation that does not compile**, because that proves
+nothing about the bench — two arms initially "passed" on a build error.
+⚠ [B] first passed against broken RTL because the watcher was armed *after* feeding line B,
+sampling an already-low `sp_active`. `red-hold` is what reported it.
+
+### 12.2 A seamless-branch junction is not a content change
+
+`disc_rephase` (§3.7) turns the display's re-anchor into `aud_resync`, which resets
+`audio_ring` **and** `dvd_audio_decode`. It was accepted on the note at `dvd/emu.sv`:
+*"titles re-anchor about once per playback (MEASURED: reanchors=1 over 80 s on
+APOLLO_13)"*.
+
+**APOLLO_13 is one continuous title. A seamless-branch title is not.** Matrix VTS_02 PGCN 1
+— the PLAIN movie — carries **9 interleaved cell-pairs**, the same ones as the rabbit
+PGCN 6, which is why the dropout is independent of white-rabbit mode.
+
+**MEASURED on the disc:**
+
+| | |
+|---|---|
+| entering each interleaved cell (4/23/35/55/60/74/80/86/91) | the PTS **restarts near zero** — audio steps of **−2 s to −64 s** |
+| the ILVU splices *inside* the block | **continuous**: 0 irregular steps in 238 AC-3 PTS samples along the real played sector walk |
+| authored audio gap (`sml_pbi.vob_a[8]`) | **none** — every entry zero on every junction |
+| cell category byte | **0x0e** on all nine: `seamless_play=1` AND `stc_discontinuity=1` |
+
+So the timestamps renumber and the soundtrack plays straight through. Flushing costs ~1 s
+of audio twice over: the queued ring frames are discarded, and the drain gate then cannot
+re-open until the display clock walks up to a `play_pts` re-latched from the parse front.
+Video runs through the silence untouched (`av_vid_hold` arms off `load_flush`, not
+`aud_resync`) — the reported shape exactly.
+
+**Fix: ask the disc.** `cell_playback_t` byte 0 bit 3 `seamless_play` is the author saying
+"this cell continues the previous one". The whole byte was already in `cell_cat_mem`; only
+three bits were ever decoded. `dvd_iso_reader` now exports `cell_seamless`, and
+`flush_ctl` withholds the audio flush on such a cell. **The CLOCK still re-anchors** — the
+display must follow a real timeline change — only the audio flush narrows, which is why
+`anchor_disc` is a distinct qualifier from `disc_w` in the first place.
+
+★ This is the direction `dvd/disp_sched.sv` already named — key on the AUTHORED event
+rather than an inferred PTS step — reached from the opposite side: the backward leg does
+not under-cover, it **over-covers**.
+⛔ **Deliberately NOT a "was there a seek/jump recently" window**: a looping menu cell
+re-anchors with genuinely restarting audio and pulses no `seek_ack`, so a navigation-event
+gate would silently drop the menu case #63 was built for. `cell_seamless` is 0 in every
+menu — the `menu_dom` branch of `S_CELL_LOAD2` never latches it — so menus are untouched
+structurally, not by luck.
+
+⚠ **The gate is broad inside a title and that is deliberate:** 104 of the Matrix's 106
+cells are `seamless_play=1`, so within a feature the audio re-phase now fires only at the
+2 authored non-seamless cells. That is consistent with the FAMILY FEUD II measurement,
+where a title-domain re-phase discarded the ring and cost the host's question its middle.
+
+**Gate: `bench/dvd/run_seamless_audio.sh` (+ `--red`).** ⚠ Two bench lessons worth keeping:
+the fixture needed a **third** cell that is `seamless_play=1` but NOT `interleaved`
+(byte0 `0x08`, the commonest category on a real feature — 68 of 106) because with only the
+white-rabbit category bits 3 and 2 coincide and reading the wrong bit passes unnoticed —
+it did. And the per-cell sample must be phased against **the reader's own `cell_i`**, not
+against the delivered byte pattern: the reader runs ~2 sectors ahead of the byte stream, so
+the first version of the arm compared cell N's level with cell N+1's data and failed
+against correct RTL.
+
+### 12.3 What is still open here
+
+✅ **Both fixes are HW-CONFIRMED (2026-09-08, PR #75)** — build
+`DVD_spuwindow_20260908_1955.rbf`: audio plays smoothly through the white-rabbit clips and
+the icon is solid. A third fix rode along in the same PR (a stream the PGC does not declare
+was being displayed — the "white on white" rabbit-mode subtitles); see `docs/dvd_nav.md`.
+⏳ **`nav_pci`'s `hli_coherent` is untouched and may be a second contributor to the icon.**
+The icon needs the highlight as well as the subpicture (`SET_CONTR[0,0,0,0]` — the SPU is
+invisible on its own), and #63 tightened `stc_trusted` from a disjunction to a conjunction
+whose new term clears on every re-anchor. It should *delay* an arm rather than make it
+flap, because `off_due` requires the same trust and disarms are held off too — but it is
+not measured. Fixing 12.2 removes most re-anchors at these junctions and so quiets it
+either way. The `O[2]` blocks separate the two on hardware: `blk1`/`blk7` flickering is
+`nav_pci`; `blk1`/`blk7` steady with `blk3`/`blk8` flickering is `spu_decode`.
+
 ## 4. HW rounds
 
 - **Round A (Stage 0 build `DVD_stcfree_20260906_1357.rbf`, SEED 5 first roll,

@@ -1934,6 +1934,62 @@ the movie you are watching — it is an entire **alternate branch** you switch t
    except via the HLI highlight colour), command **`SetGPRM g[9]=1; LinkTailPGC`** → the PGC
    POST commands `CallSS VMGM (pgc 10..18)` based on `g[9]` → the behind-the-scenes featurette.
 
+**THE ICON IS AUTHORED SOLID — MEASURED, so it never has to be re-established
+(2026-09-08).** A field report after PR #63 said the icon had started flashing. It had, and
+the disc settles what "correct" means:
+
+| | |
+|---|---|
+| subpicture (physical 0x22, via `SetSTN SPSTN=0x41` -> `subp_control[1]=0x80020300`) | `SPDSZ=1572`, ONE DCSQ: `FSTA_DSP SET_COLOR[14,14,14,14] SET_CONTR[0,0,0,0] SET_DSPXA(4,769) SET_DAREA(0,719,2,479)` |
+| display window | one `FSTA_DSP` at PTS **101885**, one `STP_DSP` at **866659** = **8.4975 s continuous**, with **no intermediate stop command anywhere** |
+| delivery | the same unit re-sent **byte-identically 8 times**, exactly **90090 ticks (1.001 s)** apart -- a conforming player treats a re-send as a no-op |
+| HLI | 17 records alternating `hli_ss = 1,2,1,2...` whose windows are **exactly back-to-back** (`s_ptm[n] == e_ptm[n-1]`: 101885 -> 191975 -> ... -> 867650), identical button content throughout, `fosl` 1 then 0 = arm once and hold |
+
+★ The re-sends and the repeated `ss=1` exist for random access and ILVU branch entry, not
+to blink. ⚠ `SET_CONTR[0,0,0,0]` means the SPU is **invisible on its own** -- the icon
+appears only through the HLI recolour -- so a flash can come from EITHER the subpicture or
+the highlight, and the `O[2]` blocks are what separate them (`blk1`/`blk7` = the arm,
+`blk3`/`blk8` = the subpicture).
+
+**⚠ THE SINGLE-BUTTON HLI FALLS OUTSIDE `menu_mode`, AND THAT MATTERED.** `emu.sv`'s
+`sp_menu_early` rides `nav_pci.hli_seen`, which requires **more than one button**
+(`nxt_btn_ns > 1`); the rabbit is one `fosl=1` button, so `menu_mode` is 0 and it runs
+`spu_decode`'s windowed path. That was harmless while the STC led the display, and became
+the reported blink when PR #63 put the STC on the displayed picture. Fixed in
+`spu_decode` itself (a display-order hold + a contiguity clamp) rather than by widening
+`menu_mode` -- the same defect was truncating ordinary subtitles. See
+`docs/stc_freerun.md` §12.1 and `docs/subpicture.md`.
+⚠ `dvd/emu.sv`'s note that the rabbit "doesn't need" the early gate is true of
+`sp_route_en` (its `SetSTN` pre-command opens routing) and was read as covering
+`menu_mode` too. It does not.
+
+**⚠ THE DISC OFFERS NO SUBTITLES IN RABBIT MODE, AND FORCING ONE USED TO SHOW
+UNREADABLE TEXT (2026-09-08).** Field report: *"subtitles in the white rabbit mode are
+missing the black outline -- white on white and hard to read."* MEASURED, and the cause is
+neither colour sharing with the rabbit nor a decode fault:
+
+| substream | content | authored colours |
+|---|---|---|
+| 0x20 / 0x21 | the real subtitles (wide / letterbox) | `COLOR[0,8,9,0] CONTR[15,15,15,0]` |
+| 0x22 / 0x23 | the rabbit icon ONLY -- no subtitles anywhere | `COLOR[14,14,14,14] CONTR[0,0,0,0]` |
+
+PGCN 1 declares logical stream 0 only; **PGCN 6 declares logical stream 1 only**. Pressing
+the Subtitle button releases the VM's claim (`emu.sv`: `if (sub_edge) vm_owns_sp <= 1'b0`),
+after which the USER path resolves logical 0 **by raw index** to 0x20 -- which really is the
+subtitle stream -- and draws it with **PGCN 6's palette**:
+
+    PGCN 1 palette  [0] Y=16   [8] Y=128  [9] Y=176   -> fill, outline, black edge
+    PGCN 6 palette  [0] Y=128  [8] Y=128  [9] Y=128   -> one flat grey, no outline
+
+PGCN 6's palette has only two meaningful entries (14 = white, the rabbit; 15 = green),
+because nothing else is meant to draw with it. Showing that stream is our invention, not the
+disc's intent. `subp_stream_map` now reports `stream_absent` and `emu` withholds the USER
+path's route. ⚠ **The rule is narrowed on a measurement**: applying the available bit
+unconditionally (as libdvdnav does) would strip subtitles from the **586 class-B PGCs** (up
+to 168 discs) that rely on the identity fallback -- see `dvd/subp_stream_map.sv` for the
+221-disc sweep and the A/B/C classes. Gate: `subp_stream_map_tb`'s six directed
+`stream_absent` arms, whose RED arm is the unconditional version.
+
 **What is done (this branch):**
 - **Render un-gate** (`emu.sv`): `in_title_hli = menus_on && !menu_active && hl_btns_armed`
   feeds `sp_route_en` so an in-title armed HLI routes its button subpicture (the highlight
@@ -2084,6 +2140,34 @@ angles and normal titles are byte-for-byte unchanged).
 
 **HW verdict (✅ 2026-07-12):** Matrix white-rabbit chapters + T2 extended scenes play smoothly
 at the problem spots (skipping gone). Confirmed on real hardware.
+
+**★ THE JUNCTION IS TIME-CONTINUOUS, AND SINCE 2026-09-08 THAT IS ENFORCED AGAINST THE
+DISPLAY SCHEDULER TOO.** The reader has always performed the ILVU hop with no flush, no
+`seek_ack` and no A/V re-anchor because it is continuous. PR #63 then added a path that
+INFERRED a discontinuity from the stream and flushed audio behind the reader's back
+(`disp_sched.anchor_disc` -> `flush_ctl.disc_rephase` -> `aud_resync`), which is what the
+field reported as an audio dropout at every white-rabbit point -- in the PLAIN movie as
+much as the rabbit branch, because **PGCN 1 carries the same 9 interleaved cell-pairs**.
+
+MEASURED on the disc, and worth recording because the obvious guess is wrong:
+
+| | |
+|---|---|
+| the ILVU splices *inside* a block | **continuous** -- 0 irregular steps in 238 AC-3 PTS samples along the real played sector walk of cell 4 |
+| entering the interleaved cell | the PTS **restarts near zero**: audio steps of **-2 s to -64 s** across cells 4/23/35/55/60/74/80/86/91 |
+| authored audio gap (`sml_pbi.vob_a[8].{stp_ptm,gap_len}`, DSI-rel 0x34) | **none** -- every entry zero. ⚠ Neither `nav_dsi.sv` nor `nav_extract.py` parses these fields at all; that is a real gap, just not this bug |
+| cell category byte | **0x0e** on all nine -- `seamless_play=1` AND `stc_discontinuity=1` |
+
+So the timestamps renumber at the block entry while the soundtrack plays straight through.
+`dvd_iso_reader` now decodes `cell_playback_t` byte 0 **bit 3 `seamless_play`** (the whole
+byte was already in `cell_cat_mem`; only three bits were ever used) and exports
+`cell_seamless`, which `flush_ctl` uses to withhold the audio flush. The clock still
+re-anchors -- the display must follow a real timeline change -- only the audio flush
+narrows. Gate: `bench/dvd/run_seamless_audio.sh`. Full reasoning and the measurements:
+`docs/stc_freerun.md` §12.2.
+⚠ 104 of the Matrix's 106 cells are `seamless_play=1`, so inside a feature the re-phase now
+fires only at the 2 authored non-seamless cells. Menus are structurally untouched: the
+`menu_dom` branch of `S_CELL_LOAD2` never latches the level.
 
 **Not in scope (deferred, separate feature gaps that share the "in-title, not menu" theme):**
 the in-title PCI/HLI **button highlight** (the white-rabbit *icon* itself; `nav_pci` arms

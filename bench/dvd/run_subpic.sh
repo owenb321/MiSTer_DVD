@@ -39,3 +39,8 @@ iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/crt_ov_map_sim \
   rtl/mpeg2/wrappers.v rtl/mpeg2/fwft.v rtl/mpeg2/xfifo_sc.v rtl/mpeg2/xilinx_fifo_dc.v \
   bench/dvd/crt_ov_map_tb.sv 2>/dev/null
 vvp bench/dvd/crt_ov_map_sim | grep -E "PASS|FAIL"
+
+echo "=== display-order commit (PR #63 regression: the white-rabbit blink + subtitle tails) ==="
+# Kept as its own script because it carries RED arms; run it with --red when touching
+# spu_decode's commit path. See docs/subpicture.md "The COMMIT contract".
+bash "$(dirname "$0")/run_spu_window.sh"
