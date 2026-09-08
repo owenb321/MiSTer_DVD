@@ -191,7 +191,10 @@ module ps_demux_scram_tb;
         push_pes(8'hE0, 8'h80, 2);                 // real, clean, ends here
         push_fake_hdr(8'hE0, 8'hB0);               // planted scrambled video
         push_fake_hdr(8'hBD, 8'h90);               // planted scrambled audio
-        send; check("T4 planted headers after a PES", 0, 0);
+        // hdr_ok is 1, not 0: the pack's own clean E0 is a legitimate checkable
+        // header and belongs in the denominator. It is the two PLANTED headers
+        // that must score nothing -- pre-fix they scored 2.
+        send; check("T4 planted headers after a PES", 0, 1);
         start_arm;
         push_pack; push_pes(8'hE0, 8'hB0, 4);      // a genuine one still scores
         send; check("T4b genuine pack after the garbage", 1, 1);

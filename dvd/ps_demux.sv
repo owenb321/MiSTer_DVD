@@ -153,10 +153,27 @@ module ps_demux (
     // CSS detection: one-cycle pulse when a video/audio PES header carries
     // PES_scrambling_control != 0 (bits [5:4] of the first PES-flags byte) — the
     // payload is CSS-scrambled and will decode as garbage (green macroblocks /
-    // audio static). emu.sv accumulates these into a sticky per-mount latch
-    // (ps_demux itself resets on every jump via pipe_rst_n, so the latch can't
-    // live here) that drives the HUD "CSS ENCRYPTED" popup + the audio mute.
+    // audio static). dvd/css_detect.sv accumulates these into a sticky per-mount
+    // latch (ps_demux itself resets on every jump via pipe_rst_n, so the latch
+    // can't live here) that drives the HUD "CSS ENCRYPTED" popup + the audio mute.
+    //
+    // ⚠ ONLY THE FIRST CHECKABLE PES AFTER A PACK HEADER CAN SCORE (`pack_fresh`,
+    // issue #59). A DVD pack is 2048 bytes and carries exactly ONE checkable PES —
+    // a NAV pack's 0xBB/0xBF and a short PES's 0xBE padding never reach here — so
+    // this loses no genuine marker, while a header the hunt found after LOSING
+    // FRAMING is by construction not preceded by a pack header. Without it, one
+    // desync inside a payload manufactures markers at ~3/16 per false header
+    // (a random byte passes the '10' marker 1 time in 4, and 3 of those 4 have a
+    // non-zero scrambling field), which is how discs that play perfectly came to
+    // show CSS ENCRYPTED and lose all their audio.
     output logic        pes_scrambled,
+
+    // The DENOMINATOR: one-cycle pulse, in the same cycle pes_scrambled would
+    // pulse, for every checkable PES header carrying a valid '10' marker in the
+    // position where a genuine CSS marker can appear — scrambled or not.
+    // css_detect divides one by the other, because a threshold on the numerator
+    // alone cannot tell 4 strays in a session from 4 packs in a row.
+    output logic        pes_hdr_ok,
 
     // ---- Audio-substream observation (2026-08-27, menu-link/audio-map fix) ----
     // A PASSIVE tap beside the FSM (which is untouched): which audio-class
@@ -254,6 +271,9 @@ logic        aud_pes_has_pts;  // current PES carried a PTS (set at PES_HDR_FLAG
 logic  [7:0] es_code;          // saved video start-code byte (e.g. 0xB3 seq header)
 logic  [1:0] es_emit_idx;      // index into reconstructed 00 00 01 <code> preamble
 logic        ever_seen_pack;   // a 0xBA pack was seen -> stream is PS, lock out ES mode
+logic        pack_fresh;       // a pack header has been dispatched and its one
+                               // checkable PES has not been parsed yet -> only that
+                               // PES may score a CSS marker (see pes_scrambled)
 logic        mpeg1_ps;         // stream flavour, re-latched at every pack marker:
                                // 1 = MPEG-1 system stream (VCD), 0 = MPEG-2 PS (DVD)
 assign saw_pack = ever_seen_pack;
@@ -430,11 +450,14 @@ always_ff @(posedge clk or negedge rst_n) begin
         aud_pts        <= 33'd0;
         aud_pts_valid  <= 1'b0;
         pes_scrambled  <= 1'b0;
+        pes_hdr_ok     <= 1'b0;
+        pack_fresh     <= 1'b0;
     end else begin
         // PTS-valid strobes are one-cycle pulses
         vid_pts_valid <= 1'b0;
         aud_pts_valid <= 1'b0;
         pes_scrambled <= 1'b0;
+        pes_hdr_ok    <= 1'b0;
 
         // ES preamble emit advances on the OUTPUT handshake (input is held).
         if (state == S_ES_EMIT) begin
@@ -457,7 +480,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                 if (start_code_detected) begin
                     stream_id_r <= in_byte;
                     casez (in_byte)
-                        8'hBA:   begin ever_seen_pack <= 1'b1; bytes_remaining <= 16'd9; state <= S_PACK_SKIP; end
+                        8'hBA:   begin ever_seen_pack <= 1'b1; pack_fresh <= 1'b1; bytes_remaining <= 16'd9; state <= S_PACK_SKIP; end
                         8'hE0:   state <= S_PES_LEN_HI;   // video
                         8'hBD:   state <= S_PES_LEN_HI;   // private stream 1 (audio)
                         // MPEG audio 0xC0-0xC7 (DVD-spec MP2, MPEG-1 Layer II).
@@ -559,8 +582,20 @@ always_ff @(posedge clk or negedge rst_n) begin
             S_PES_HDR_FLAGS1: begin
                 // '10' marker bits + PES_scrambling_control[1:0] in bits [5:4]:
                 // nonzero = this PES payload is CSS-scrambled (undecryptable here).
-                if (in_byte[7:6] == 2'b10 && in_byte[5:4] != 2'b00)
-                    pes_scrambled <= 1'b1;
+                // pack_fresh: and this is the pack's own PES, not something the
+                // hunt found after losing framing — see the pes_scrambled port.
+                if (in_byte[7:6] == 2'b10 && pack_fresh) begin
+                    pes_hdr_ok <= 1'b1;
+                    if (in_byte[5:4] != 2'b00) pes_scrambled <= 1'b1;
+                end
+                // ⚠ SPEND THE ARM HERE, not at the S_HUNT dispatch: the dispatch is
+                // two states earlier, so clearing there would clear it before this
+                // byte is ever examined and nothing could ever score. This state is
+                // reached ONLY by 0xE0 / 0xBD / a selected MP2 track, so 0xBB, 0xBE,
+                // 0xBF and an unselected MP2 cannot disarm a pack they share a
+                // sector with. Spent even on a bad marker: the pack's PES has been
+                // seen either way, and the next 0xBA re-arms.
+                pack_fresh <= 1'b0;
                 pes_length <= pes_length - 16'd1;
                 state <= S_PES_HDR_FLAGS2;
             end
