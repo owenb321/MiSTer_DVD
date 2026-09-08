@@ -2867,13 +2867,24 @@ Two identifiers, deliberately at different granularities:
   | Where | `` `CORE_VERSION `` | OSD line |
   |---|---|---|
   | feature branch | `dev-<slug>` | `DVD dev-seekrealign 260903` |
-  | `main` between releases | whatever the last merge left (no reset — see "Merging a PR") | `DVD dev-seekrealign 260903` |
+  | `main` between releases | whatever the last merge left — no reset | `DVD dev-seekrealign 260903` |
+  | `main` after a release | the release semver — no reset | `DVD v0.4.0 260903` |
   | the release commit, only | `v0.4.0` | `DVD v0.4.0 260903` |
 
-  Set `dev-<slug>` as the **first commit of a feature branch**, named after the feature.
+  **★ SET `dev-<slug>` AS THE FIRST COMMIT OF EVERY FEATURE BRANCH, named after the
+  feature. This is mandatory, not conventional.** Nothing resets `` `CORE_VERSION `` any
+  more — not after a merge, and not after a release (both resets retired 2026-09-08, by
+  user decision) — so `main` carries whatever the last feature or release left, and setting
+  the slug on the branch is the ONLY thing that keeps a build labelled correctly.
+  It is also what UNBLOCKS the build: after a release `main` carries a bare semver, and
+  `build_release.sh` **refuses** a bare semver on a dev build, so the first build on a
+  branch that skipped this step fails immediately with a message naming the fix. That is
+  the intended failure — fast and self-explanatory, rather than a build that quietly
+  advertises a released version.
   `build_release.sh` **gates this mechanically** before the compile (so a wrong value costs
   a second, not 40 minutes): a bare semver on a dev build and a `dev-` string on a
-  publishable `--release` build are both refused.
+  publishable `--release` build are both refused. It additionally WARNS when the slug does
+  not resemble the branch name — the "left over from another branch" mistake.
   **⛔ This REPLACES the retired 2026-08-26 rule ("bump `` `CORE_VERSION `` to the
   speculated next semver at the start of every feature branch").** That rule made every
   pre-release test build advertise a version that did not exist yet: a build sent out for
@@ -2997,6 +3008,11 @@ undone by a later commit. The publishing rules below exist because of that, and 
 override the default instinct to push early and open a PR as soon as a branch exists.
 
 - **Never commit directly to `main`.** If `main` is checked out when a feature is requested, automatically create a feature branch (e.g. `feature/<short-description>`) before writing any code.
+- **Set `` `CORE_VERSION `` to `dev-<slug>` in that branch's FIRST commit** (`dvd/emu.sv`),
+  named after the feature. Nothing resets it any more, so `main` carries the last feature's
+  slug or the last release's semver — and after a release `build_release.sh` will REFUSE to
+  build until the branch sets its own slug. Details and the reasoning: "Versioning and
+  publishing releases".
 - **Never push a branch or open a PR until explicitly asked to.** Work locally and commit
   freely; a feature branch is a private workspace until its author decides otherwise.
   Experimental and dead-end branches must not reach the public remote at all. Do not
@@ -3067,8 +3083,10 @@ gh pr merge <number> --merge        # or --squash / --rebase
 
 **⛔ Do NOT open a follow-up commit or PR to reset `` `CORE_VERSION `` after a merge**
 (rule retired 2026-09-08, by user decision — it used to say "reset it to `dev-main` on
-`main`"). `main` simply keeps whatever the last merged feature or release left there, and
-the next feature branch overwrites it with its own `dev-<slug>` in its first commit.
+`main`"). The post-release reset is retired too, so `main` simply keeps whatever the last
+merged feature **or release** left there, and the next feature branch overwrites it with
+its own `dev-<slug>` in its first commit — which is now mandatory, see "Versioning and
+publishing releases".
 Accepted consequence: a dev build cut from `main` between features advertises the
 last-merged slug while containing more than that feature — which is why a build for testing
 should come from a named feature branch, not from `main`. The release invariant is

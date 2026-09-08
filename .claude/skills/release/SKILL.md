@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut and publish a GitHub release of the MiSTer DVD core — gather release notes from every PR merged since the previous release, land the one release commit that sets CORE_VERSION and reconciles the manual, build the timing-clean .rbf, create the draft that CI packages (Main + install zip), smoke-test it, and move the version off the semver. Use when the user asks to cut, make, or publish a release.
+description: Cut and publish a GitHub release of the MiSTer DVD core — gather release notes from every PR merged since the previous release, land the one release commit that sets CORE_VERSION and reconciles the manual, build the timing-clean .rbf, create the draft that CI packages (Main + install zip), and smoke-test it. Use when the user asks to cut, make, or publish a release.
 ---
 
 # Cutting a DVD core release
@@ -17,8 +17,8 @@ from the PRs merged since the last release.
 - **`CORE_VERSION` in `dvd/emu.sv`** carries `dev-<slug>` on a feature branch. On `main` it
   carries **whatever the last merged feature left** — there is no post-merge reset (retired
   2026-09-08, by user decision; see `CLAUDE.md` "Merging a PR"). Step 0 below sets it to
-  `v<semver>` for the release; the last step moves it OFF the semver again, which is the one
-  remaining reset and is not optional (see step 7). Shown in the OSD as
+  `v<semver>` for the release, and it STAYS there — nothing resets it afterwards. The next
+  feature branch sets its own `dev-<slug>` in its first commit. Shown in the OSD as
   `` `CORE_VERSION` `BUILD_DATE` ``.
   `build_release.sh` refuses a `dev-` string on a publishable `--release` build and refuses
   a bare semver on a dev build, so the invariant is mechanical rather than remembered.
@@ -123,12 +123,12 @@ would cost a second compile.
    Publishing creates the tag. The `/releases/latest` URL the README links to updates
    automatically — no README edit per release.
 
-7. **Move `CORE_VERSION` OFF the semver** in `dvd/emu.sv` and commit — `"dev-main"` is the
-   conventional value. ⚠ This is the ONE version reset that survives (the post-merge one was
-   retired 2026-09-08): it preserves the invariant that the semver exists in exactly one
-   commit, so no later dev build can advertise a released version. Leaving it would also
-   make the next `build_release.sh` **refuse** — it rejects a bare semver on a dev build —
-   so skipping this step blocks the next build rather than merely mislabelling it.
+⛔ **There is NO version-reset step after publishing** (retired 2026-09-08, by user
+decision). `main` keeps the release semver until the next feature branch sets its own
+`dev-<slug>`, which is that branch's FIRST commit — see `CLAUDE.md` "Versioning and
+publishing releases". The invariant still holds mechanically: `build_release.sh` **refuses**
+a bare semver on a dev build, so the first build on the next branch fails fast with a
+message naming the fix, rather than shipping a build that advertises a released version.
 
 ## Release assets (attach all three)
 
