@@ -26,6 +26,17 @@ module emu (
 	output  [1:0] VGA_SL,
 	output        VGA_SCALER,
 
+	// DVD-FORK (SMPTE 170M / BT.470 analog composite sync, 2026-09-05):
+	// composite sync generated from the core's OWN raster by dvd/csync_smpte.sv,
+	// carrying the equalizing pulses and 2H serrations the framework's `csync`
+	// module structurally cannot produce (it derives sync post-hoc from a finished
+	// hsync/vsync pair, so it has no lookahead). sys_top delays this by CS_PIPE to
+	// match the framework's own hsync latency and uses it in place of the stock
+	// composite sync whenever VGA_CS_EN is high. Non-standard emu ports, like
+	// SPDIF_PASS/SPDIF_PASS_EN above. Emitted in the SAME clock as VGA_HS.
+	output        VGA_CS,
+	output        VGA_CS_EN,
+
 	// DVD-FORK FIX: canonical MiSTer direction is OUTPUT (core -> HPS virtual
 	// buttons; b[0] = OSD button). This fork inherited it as an input, leaving
 	// sys_top's btn wire undriven -- which is why the core could never pop the
@@ -566,7 +577,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-main"
+`define CORE_VERSION "dev-smptesync4"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -756,6 +767,37 @@ parameter CONF_STR = {
     // freed when O[14] "CRT 480i Out" was retired.
     "P1O[14],Line-21 CC,On,Off;",
     "P1O[44],CC Test Line,Off,On;",
+    // DVD-FORK (SMPTE 170M / BT.470 analog composite sync, 2026-09-05).
+    // The framework `csync` module emits NO equalizing pulses and serrates the
+    // vertical sync at LINE rate, so the two fields of the 2:1 raster present first
+    // broad pulses of ~50 us and ~18 us — their vsyncs start half a line apart while
+    // the serration grid does not move with them (MEASURED, bench/dvd/csync_field_tb.sv).
+    // 18 us is at or below a width-based sync separator's trigger threshold, so a
+    // television can read the two fields differently and pair or swap them:
+    // line-pairing jitter, "sawtooth" edges, half the vertical resolution.
+    // dvd/csync_smpte.sv builds the standards-specified block instead.
+    //   SMPTE (index 0, the default) — 6/6/6 half-lines NTSC, 5/5/5 PAL.
+    //   2H                           — serrations only, no equalizing pulses. This is
+    //                                  the shape built as a2b72fb and reverted in
+    //                                  48c00cb; that verdict was taken while the
+    //                                  field-parity corrector was defective and
+    //                                  repeating fields several times a second, so it
+    //                                  was never a controlled A/B. It is here to be
+    //                                  re-measured, not because it is expected to win.
+    // ⛔ A third arm, `Stock` (the framework module unchanged), was carried through
+    // bring-up and REMOVED before release: it leaves the two fields 0.857 line apart
+    // instead of 0.500 and makes a television mis-identify which field is first, so it
+    // is a measurably broken signal rather than a fallback. It was only ever usable as a
+    // comparison point, and it kept its value for that ONLY while the field order was
+    // also wrong — the two errors cancelled (docs/single_raster_analog.md §3.12).
+    // Interlaced + analog only. A PROGRESSIVE raster still takes the framework module,
+    // gated by cs_en in RTL rather than by user discipline: a nine-line vertical block
+    // is meaningless there, and that is also the path csync_field_tb's stock arm now
+    // exercises.
+    // ⚠ A rig running vga_scaler=1 or a framebuffer takes sync from hdmi_cs_osd and
+    // never sees this at all — expect "the setting does nothing" reports from those.
+    // status[46]. See docs/single_raster_analog.md §3.10.
+    "P1O[46],Analog CSync,SMPTE,2H;",
     // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
     // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
     // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
@@ -3740,6 +3782,17 @@ wire [10:0] trick_w = { il_prev ? 1'b0 : 1'b1, // [10] deinterlace
 //                              VER_SYNC/VID_MODE reuse the progressive 480p values;
 //                              extra ~762 lines + 17 dots/line = blanking.
 //     ** DVD-FORK FIX (2026-08-02, A/V drift in 24p) — WHY 875 AND NOT 858: **
+//     ⚠⚠ AMENDED 2026-09-07: THE SENTENCE BELOW WAS TRUE PRE-#63 AND IS NOT NOW.
+//     It described an architecture in which the STC advanced one TICKS_PER_REFRESH per
+//     displayed image — i.e. the clock was DERIVED FROM THE RASTER, so a raster that was
+//     not the content rate walked the audio. dvd/disp_sched.sv replaced that with a
+//     free-running 90 kHz clock off the same crystal as the 48 kHz NCO: the two cannot
+//     drift from each other, and the raster now supplies pickup OPPORTUNITIES rather than
+//     the clock. A raster off by 0.19 % therefore costs an occasional HELD FRAME, not a
+//     drift. The 875-dot film line is still the right choice (an exact raster is free and
+//     costs nothing), but "the raster MUST equal the content rate" is no longer a
+//     constraint on new modes — which is what unblocks native 240p, see docs/mpeg1.md
+//     §B.3a. ⚠ That reading is from disp_sched's design note, not a traced audio path.
 //     The audio NCO is a fixed 48 kHz off the same crystal (nco_trim is RETIRED —
 //     see docs/av_sync.md), so the ONLY thing holding A/V together over a long title
 //     is that the core raster period equals the true content rate. Every other mode
@@ -5631,6 +5684,36 @@ cc_vbi cc_vbi_inst (
     .on             (cc_on),
     .active         ()
 );
+
+// =========================================================================
+// SMPTE 170M / BT.470 composite sync for the analog pins (dvd/csync_smpte.sv,
+// P1O[46] Analog CSync; docs/single_raster_analog.md §3.10)
+// =========================================================================
+// Same coordinate tap as cc_vbi above, and for the same reason: this is glue
+// between the raster and an output stage, so it is a module the bench can drive
+// end to end rather than inline logic no bench ever sees.
+// The block is anchored on core_h_sync, so `cs` is the emitted hsync delayed one
+// clock everywhere outside the vertical interval — the same relationship the stock
+// module has to VGA_HS — which is what lets sys_top mux the two behind one fixed
+// CS_PIPE delay and lets bench/dvd/csync_field_tb.sv gate the stock arm as a
+// clock-by-clock equality rather than a hand-tuned constant.
+// ⚠ core_h_sync / core_v_pos are the UNREGISTERED raster outputs (cc_vbi reads the
+// same ones); the module registers internally, so VGA_CS lands in the same clock as
+// vga_hs_q below. Do NOT re-register it in the output stage.
+wire csync_smpte_cs, csync_smpte_en;
+csync_smpte csync_smpte_inst (
+    .clk    (clk_sys),
+    .rst_n  (reset_n),
+    .mode   (status[46]),
+    .en     (interlaced_eff),
+    .pal    (pal_eff),
+    .h_sync (core_h_sync),
+    .v_pos  (core_v_pos),
+    .cs     (csync_smpte_cs),
+    .cs_en  (csync_smpte_en)
+);
+assign VGA_CS    = csync_smpte_cs;
+assign VGA_CS_EN = csync_smpte_en;
 
 // Registered video output stage (DVD-FORK FIX, 2026-06-28): registering the final mux at
 // the boundary cuts the route to the VGA_* pins to a short reg->pin hop (cured the faint

@@ -1394,8 +1394,42 @@ osd vga_osd
 	.de_out(vga_de_osd)
 );
 
-wire vga_cs_osd;
-csync csync_vga(clk_vid, vga_hs_osd, vga_vs_osd, vga_cs_osd);
+// DVD-FORK (SMPTE 170M / BT.470 analog composite sync, 2026-09-05):
+// The stock `csync` module below emits NO equalizing pulses and serrates the vertical
+// sync at LINE rate, so the two fields of a 2:1 interlaced raster present first broad
+// pulses of ~50 us and ~18 us — their vsyncs start half a line apart while the serration
+// grid does not move with them. 18 us is at or below the trigger threshold of a
+// width-based sync separator, which is how a television ends up pairing or swapping the
+// two fields (line-pairing jitter, "sawtooth" edges). The module cannot be fixed in
+// place: it derives composite sync from a FINISHED hsync/vsync pair, so it has no way to
+// emit a pulse before vsync starts. dvd/csync_smpte.sv builds the standards-specified
+// block from the core's own raster instead and hands it over on VGA_CS.
+//
+// ⚠ CS_PIPE is the whole integration risk. cs_emu is emitted in the same clock as
+// VGA_HS, while the stock composite sync is built AFTER the framework has delayed hsync
+// through sync_fix (combinational), scanlines (3) and osd (4), plus csync's own register
+// (1). Get it wrong and every analog sync edge moves 37 ns per clock. So it is MEASURED
+// through the real modules by bench/dvd/csync_pipe_tb.sv, which greps this very constant
+// out of this file and fails if the two disagree — do not hand-edit it without rerunning
+// bench/dvd/run_csync_pipe.sh.
+//
+// `module csync` itself is deliberately NOT modified: leaving it byte-for-byte stock is
+// what lets csync_field_tb.sv gate the "Stock" arm as a clock-by-clock equality against
+// the real thing (run_csync_field.sh extracts it from this file at run time and
+// checksums it). Two earlier attempts DID edit it — 2H serrations, and synthesising the
+// half-line from VGA_F1 — and both were reverted; see the note above the module.
+localparam integer CS_PIPE = 8;   // VGA_HS -> vga_cs_osd, in clk_vid cycles
+
+wire vga_cs_stock;
+csync csync_vga(clk_vid, vga_hs_osd, vga_vs_osd, vga_cs_stock);
+
+reg [CS_PIPE-1:0] cs_pipe = 0, csen_pipe = 0;
+always @(posedge clk_vid) begin
+	cs_pipe   <= {cs_pipe  [CS_PIPE-2:0], cs_emu};
+	csen_pipe <= {csen_pipe[CS_PIPE-2:0], cs_emu_en};
+end
+
+wire vga_cs_osd = csen_pipe[CS_PIPE-1] ? cs_pipe[CS_PIPE-1] : vga_cs_stock;
 
 `ifndef MISTER_DISABLE_YC
 	reg         pal_en;
@@ -1682,6 +1716,7 @@ wire  [1:0] audio_mix;
 wire  [1:0] scanlines;
 wire  [7:0] r_out, g_out, b_out, hr_out, hg_out, hb_out;
 wire        vs_fix, hs_fix, de_emu, vs_emu, hs_emu, f1;
+wire        cs_emu, cs_emu_en;   // DVD-FORK: analog composite sync from dvd/csync_smpte.sv
 wire        hvs_fix, hhs_fix, hde_emu;
 wire        clk_vid, ce_pix, clk_ihdmi, ce_hpix;
 wire        vga_force_scaler;
@@ -1772,6 +1807,11 @@ emu emu
 	.VGA_DE(de_emu),
 	.VGA_F1(f1),
 	.VGA_SCALER(vga_force_scaler),
+
+	// DVD-FORK (SMPTE 170M / BT.470 analog composite sync, 2026-09-05): see the
+	// vga_cs_osd mux below and dvd/csync_smpte.sv.
+	.VGA_CS(cs_emu),
+	.VGA_CS_EN(cs_emu_en),
 
 `ifndef MISTER_DUAL_SDRAM
 	.VGA_DISABLE(VGA_DISABLE),
@@ -1905,13 +1945,28 @@ endmodule
 // CSync generation
 // Shifts HSync left by 1 HSync period during VSync
 //
-// DVD-FORK note (2026-09-03): this is the STOCK module. The 2:1 half-line that makes a
-// CRT interleave the two fields comes from the raster itself (dvd/emu.sv writes halfline
-// 429/432 into the interlaced modeline, the N64 model), exactly as the N64 and PSX cores
-// do — so nothing is needed here. Two variants were tried while chasing what turned out
-// to be a field-parity corrector defect, and BOTH are reverted: serrating at 2H during
-// vsync (the composite CRT that is the reference display disliked it), and synthesising
-// the half-line here from VGA_F1 (unnecessary once the raster carries it).
+// DVD-FORK note (2026-09-03, amended 2026-09-05): this is the STOCK module and it must
+// STAY stock — bench/dvd/csync_extract.sh checksums it, because csync_field_tb.sv's
+// "Stock" arm asserts the pre-change analog sync is bit-identical to THIS text, and that
+// claim is only meaningful about the module the bench was handed. Two variants were tried
+// while chasing what turned out to be a field-parity corrector defect, and BOTH are
+// reverted: serrating at 2H during vsync, and synthesising the half-line here from
+// VGA_F1 (unnecessary once the raster carries it).
+//
+// The 2:1 half-line that makes a CRT interleave the two fields comes from the raster
+// itself (dvd/emu.sv writes halfline 429/432 into the interlaced modeline, the N64
+// model), exactly as the N64 and PSX cores do.
+//
+// ⚠ What this module CANNOT do — and the reason is structural, not an oversight — is emit
+// EQUALIZING PULSES: it derives composite sync from a FINISHED hsync/vsync pair, so it has
+// no way to place a pulse BEFORE vsync starts. Without them the two fields of a 2:1 raster
+// present first broad pulses of ~50 us and ~18 us (MEASURED, bench/dvd/csync_field_tb.sv),
+// and 18 us is at or below a width-based sync separator's threshold — which is how a
+// television ends up pairing or swapping the fields. dvd/csync_smpte.sv builds the
+// SMPTE 170M / BT.470 block from the core's OWN raster instead, and the vga_cs_osd mux
+// above selects it. An earlier version of this note said equalizing pulses "would need
+// advance knowledge of vsync"; that is true of this module and false of the core, which is
+// the whole point.
 // bench/dvd/csync_field_tb.sv measures what this produces from the shipped raster.
 
 module csync

@@ -284,8 +284,11 @@ worse maintenance burden than targeted in-place edits. So:
   half-line in `sys_top`'s `csync` instead — both detours REVERTED; `csync` is stock.
   ⚠ 2H serrations were also tried (they equalise the two fields' broad pulses, 27/27 µs
   vs 50/18 µs — the measured shape behind the RetroTINK "vsync length toggling" report)
-  and REVERTED: the composite CRT was worse with them. Two lines to re-add if a rig needs
-  it — `docs/single_raster_analog.md` §3.8.
+  and REVERTED: the composite CRT was worse with them. ⛔ **THAT VERDICT IS NOW KNOWN TO
+  BE CONFOUNDED** (2026-09-05): the A/B ran while the field-parity corrector was
+  defective, and the 2H code was deleted in the same commit that disabled it. Superseded
+  by `P1O[47:46] Analog CSync` — see the SMPTE composite-sync bullet below and
+  `docs/single_raster_analog.md` §3.10.
   Deleted with the second raster: `dvd/re_interlace.sv` (~10 M10K line buffer + a second
   `sync_gen` + a lock FSM that emitted NO sync at all while hunting), the `sys_top.v`
   VGA2 block, `re_interlace_tb`. Line-21 CC moved into **`dvd/cc_vbi.sv`** on the main
@@ -333,6 +336,175 @@ worse maintenance burden than targeted in-place edits. So:
   ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
   the parity coin flip (the maintainer's late-model CRT has never shown it — the two
   Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
+- ✅ **SMPTE 170M / BT.470 ANALOG COMPOSITE SYNC — we were emitting no equalizing pulses
+  at all (2026-09-05, branch `feature/smpte-csync`); sim-proven RED/GREEN and ✅
+  HW-CONFIRMED 2026-09-07** (maintainer's rig: composite CRT and HDMI both correct with
+  nothing to set, build `DVD_smptesync4_20260907_2305.rbf`, SEED 5 first roll, clk_dec
+  93.45/91.35). ⏳ **The two reporters whose sets FOUND the defect have not retested** —
+  that is what the next release is for, and their sets are the ones that matter here,
+  since the maintainer's CRT never showed the original sawtooth.
+  Field reports that started it: a PAL Sony Trinitron on RGB SCART with *"jitter + sawtooth
+  edges"* that flicking aspect ratios no longer clears, and a RetroTINK 4K user reporting
+  *"the fields are out of order by default"*. The maintainer's CRT was clean on the same
+  builds.
+  ★★ **THE STANDARD SPECIFIES A NINE-LINE BLOCK AND WE SHIPPED A THIRD OF IT.** SMPTE
+  170M §13.3 / Table 3 / Fig 7 (525-line) and ITU-R BT.470-6 Table 2 (625-line): 3 lines
+  of pre-equalizing pulses, 3 lines of vertical sync serrated at **2H**, 3 lines of
+  post-equalizing (PAL: 2.5 lines each). Stock MiSTer `csync` emits **no equalizing
+  pulses and serrates at 1H**. MEASURED consequence (`csync_field_tb`, NTSC): the two
+  fields' first wide pulses are **1347 vs 489 clk27 = 49.9 µs vs 18.1 µs**, so a 20 µs
+  width detector MISSES field B's and locks a line late — trigger spacings
+  **449837 / 451063** instead of 450450/450450 (11 per-field errors), RC integrator
+  450172 / 450728 (10 out of tolerance). With the block: **450450 / 450450, zero errors on
+  both models**, both fields' broad pulse 731 clk27 (27.07 µs).
+  ★★ **AND THE TABLE THAT SETTLES THE 2H QUESTION — the RC integrator's field-to-field
+  trigger error, which is the mechanism an analog CRT actually uses: Stock ±278 clk
+  (0.16 line, 10 out of tolerance) → 2H ±34 clk (0.020 line) → SMPTE 0 (NTSC) / ±2 clk
+  (PAL). The equalizing pulses buy a further ~17× over 2H alone and take NTSC to exact.**
+  Nobody had that number when 2H was built and reverted: the argument then was "2H fixes
+  the width asymmetry", which it does, and whether the REST of the block was worth having
+  was never asked because it was believed impossible to build.
+  ★★ **THE RECORDED BLOCKER WAS TRUE OF ONE MODULE AND FALSE OF THE CORE.**
+  `sys/sys_top.v` said equalizing pulses *"would need advance knowledge of vsync"* — true
+  of a module that derives sync from a FINISHED hsync/vsync pair, which structurally
+  cannot place a pulse before vsync starts. `v_pos` carries the raster's line index and
+  field parity a field ahead. **The sync was being assembled in the wrong place, not
+  withheld for a good reason.** New `dvd/csync_smpte.sv` builds it from the core's own
+  raster; `dvd/emu.sv` exports `VGA_CS`/`VGA_CS_EN`; `sys/sys_top.v` delays by `CS_PIPE`
+  and muxes. **`module csync` is NOT edited** and is CHECKSUMMED by the bench — "Stock is
+  bit-identical" is only a claim about the module the bench was handed.
+  ★★ **AND THE EVIDENCE THAT HAD CONDEMNED 2H WAS CONFOUNDED.** The 2H variant was built
+  (`a2b72fb`) and reverted (`48c00cb`) because *"the reference composite CRT was worse
+  with it"* — but that A/B ran in HW rounds 1–3 **while the field-parity corrector was
+  defective and repeating fields several times a second**, and the 2H code was deleted in
+  the SAME COMMIT that disabled the corrector. It bounced with 2H and without it, so 2H
+  was never the variable. It ships as a selectable arm to be re-measured, not re-argued.
+  ★ **Counting the block in HALF-LINES is what makes one generator serve both standards**
+  (BT.470's `l`/`m`/`n` = 3H / 2.5H → 6/6/6 and 5/5/5), and **every width derives from
+  modeline registers the raster already carries — no new constants** — each inside
+  tolerance for both: serration = hsync width (4.704 µs vs 4.7 ±0.1), equalizing =
+  hsync/2 (2.296 / 2.333 µs vs 2.3 ±0.1 / 2.35 ±0.1), broad = half-line − serration
+  (27.074 / 27.296 µs vs 27.1 / 27.3).
+  ★ **ANCHORED ON THE OUTPUT HSYNC, so "did we break anything" is an equality gate.**
+  Outside the block the module is `h_sync` delayed one clock — bit-identical to what stock
+  emits outside vsync — so [G1]/[G3] check it clock by clock (0 mismatches over 5.8 M
+  clocks) instead of trusting a hand-tuned constant. ⚠ Places the analog vertical interval
+  245 dots (0.14 line) earlier; that is the standards-correct placement and it touches
+  **only the analog composite-sync bit** — `VGA_HS/VS/DE/F1` and `CE_PIXEL` are untouched,
+  so **HDMI is bit-identical on every arm**. That decoupling is what HW round 2's
+  raster-level re-anchoring lacked.
+  ⚠⚠ **`CS_PIPE` was the one number worth not trusting, and the design note got it
+  wrong.** The note hand-counted 7 (`sync_fix` 0 + `scanlines` 3 + `osd` 4) and forgot
+  `csync`'s own register. New `bench/dvd/csync_pipe_tb.sv` drives the **real**
+  scanlines/osd/csync and greps the constant out of `sys_top.v`: **measured 8, sys_top
+  uses 8**, RED arm proven. A wrong value moves every analog sync edge 37 ns per clock and
+  is invisible in every other bench.
+  ★ **The bench caught a real defect on its first run, and it was a boundary error a
+  width census would have passed:** a registered counter reset by the hsync edge does not
+  read zero until the cycle AFTER it, so block pulses starting at a **line** boundary rose
+  one clock early and measured one clock wide while the **half-line** ones did not — the
+  two fields disagreed by exactly one clock, first spacing 859 instead of 858. Position is
+  now computed combinationally for the cycle in progress. ★ **Also worth keeping: the
+  Stock arm's first "the defect is still here" assertion was wrong** — it asserted a >2×
+  width ratio on the *detected* first broad pulse, but the detector quite correctly SKIPS
+  field B's 18 µs pulse and locks onto the next one. That miss IS the defect; the ratio
+  was a worse proxy. The gate now measures what a **separator does** (both models must
+  disagree field to field on Stock, and agree on SMPTE).
+  **Gate: `bench/dvd/run_csync_field.sh`** (3 modes × NTSC/PAL) + `--red` (4 mutations:
+  block not half-line-offset, equalizing pulses at broad width, pre-eq dropped, one clock
+  late — three are sed-mutated copies of the generator, since a bench cannot mutate a
+  module it instantiates) + `bench/dvd/run_csync_pipe.sh`. ⚠ [G5] field congruence stops
+  at the block ON PURPOSE: the entry hsync is a full line before it in one field and half
+  a line in the other (measured 1716 vs 858), which is interlace itself, not an asymmetry
+  any standard removes.
+  ⚠ **`vga_scaler=1` or a framebuffer BYPASSES this entirely** (the pins take
+  `hdmi_cs_osd` from the other `csync` instance) — expect "the setting does nothing"
+  reports. `vga_cs_osd` also feeds `yc_out`, so composite/S-video get the new sync too:
+  an unmeasured second consumer, on the HW checklist.
+  ⛔ **`P1O[48] Field Order` and `Analog CSync`'s `Stock` arm were REMOVED before release
+  (2026-09-07, user decision), once each had done its diagnostic job.** Field order is a
+  correctness constant with ONE right value, and the knob moved HDMI and analog TOGETHER —
+  so it could never reconcile a disagreement between them, only relocate it, and a user
+  reaching for it to fix a CRT would silently break their HDMI. `Stock` is a measurably
+  broken signal (0.857 line between the fields, mis-identified first field), not a
+  fallback; it held comparison value ONLY while the field order was also wrong, because
+  the two errors cancelled. `Analog CSync` ships as `SMPTE`/`2H` on `P1O[46]`, and the
+  framework module remains the live path on a PROGRESSIVE raster (`cs_en` follows `en`) —
+  which is the configuration `csync_field_tb`'s stock arm now exercises.
+  ★ **The removed knob is described below because the REASONING is the durable part.**
+  ★ **`P1O[48] Field Order` flipped the CONTENT mapping, NOT the raster** — it XORs `mpeg2video.v`'s
+  `sync_raster_par_err` input, equivalent to inverting `mixer.v`'s comparison while
+  leaving `mixer.v` untouched. ⛔ `syncgen.v`'s own advice ("flip both terms",
+  `vs_ref_dot` + `eff_vertical_length`) is now marked DO NOT: that moves the raster, which
+  is the one part **inherited from the known-good N64 core**, and drags `cc_vbi`'s field-1
+  derivation with it (the CC round-1/2 failure). What this fork INVENTED is the next
+  sentence — *"odd_field=1 scans v_pos even lines (TOP content)"* — and **its one HW
+  validation (2026-07-05) predates the field-parity corrector, so the phase was a coin
+  flip and a wrong convention was right half the time. That is the `VGA_F1` story on the
+  analog side.**
+  ⚠ **Testing field order needs VIDEO-sourced content** (`tools/video_cadence_census.py`),
+  Weave or CRT Simulation, never Bob: film is progressive frames split into fields, so
+  both halves are the same instant and swapping them shows almost nothing — a rig can be
+  genuinely insensitive, and "looks the same" must not be read as "the knob does nothing".
+  ★ **The RT4K reading is the deciding vote on the default, not the maintainer's CRT** —
+  an instrument that reports field order outranks impressions; the CRT is the regression
+  check (this is the inverse of the usual arrangement, and deliberate).
+  ⚠ **Count the evidence honestly:** ONE unambiguous field-order report (RT4K), one
+  ambiguous (the Trinitron sawtooth, equally consistent with the sync asymmetry), and
+  older reports that predate the deterministic corrector and describe the coin flip — they
+  cannot speak to today's default. ⚠ **The RT4K needs field offset −2 and a pure swap is a
+  ONE-unit correction**; if −2 survives both arms there is a third thing (a line-position
+  offset) — chase it separately, do not absorb it into "field order".
+  **Field-order gate: `run_field_phase.sh` gains a `+swap=1` arm** — it XORs the same CDC
+  the bench already replicates and inverts CHECK C with it, while leaving checks A and B
+  (fields carry different source lines; period 2) alone: the knob must move content to the
+  other raster slot AND alternation must survive. ★ Not vacuous — measured **1 repeat /
+  28 misaligned worst settle window, identical to `+phase=1` and unlike `+phase=0`'s 0/0**,
+  because a swap at phase 0 gives the corrector the same work as no swap at phase 1; a
+  corrector that ignored the inverted verdict would leave content in the old slot and fail
+  check C outright.
+  ★★★ **AND FIXING THE SYNC EXPOSED A FIELD-ORDER ERROR THE BROKEN SYNC HAD BEEN HIDING
+  SINCE THE BEGINNING (2026-09-06, HW-found, `rtl/mpeg2/field_polarity.vh` `FIELD1_VPOS`
+  0 → 1).** Field report on the §3.10 build: `Stock`+`Normal` correct on both outputs
+  (= v0.4.0); `SMPTE`/`2H`+`Normal` **wrong on the CRT**, right on HDMI;
+  `SMPTE`/`2H`+`Swap` right on the CRT, **combed on HDMI**.
+  ★ **Two outputs wanting opposite settings IS the diagnosis:** `Field Order` moves the
+  CONTENT mapping, which feeds both, so it can never reconcile a disagreement BETWEEN
+  them — something had moved the ANALOG assignment alone. MEASURED (`csync_field_tb`
+  `[G8]`): stock leaves the fields **0.857 line** apart and its width detector misses one
+  field's 18 µs pulse, locking onto the next one a line later — so a TV concludes the
+  **opposite** field is field 1. **With that misreading in place, a content mapping off by
+  one field looked correct.** SMPTE gives 0.500 and the true assignment, exposing it.
+  HDMI never reads composite sync, so it was never mis-corrected.
+  ⛔ **The fix is the RASTER, not `mixer.v` and not `VGA_F1`** — those move HDMI and analog
+  together. ONE constant, three consumers (`syncgen.v` line-aligned vsync + short field
+  total; `csync_smpte.sv` block phase; `cc_vbi.sv` field-1 captions).
+  ★★ **`syncgen.v`'s original "flip both terms" advice was RIGHT and my §3.11 "DO NOT" was
+  wrong**: what is inherited from N64 is the 262/263 + mid-line-vsync MECHANISM, not the
+  assignment of OUR fields to it — and that had never been tested because no display could
+  read it.
+  ★★★ **THE DURABLE LESSON: `cc_field_map_tb`'s header said "TOP content displays inside
+  SYNC field 2 (NTSC is bottom-field-first)". On 2026-09-05 I deleted it as an inverted
+  stale comment because THREE other sites agreed against it. It was right — all three had
+  been calibrated against a sync no display could read, so their agreement was not
+  evidence, it was three readings of one untested reference.** Restored, with the history.
+  ⚠⚠ **LINE-21 CC IS NOT A TEST OF FIELD ORDER, and I proposed it as a decisive one.**
+  The census finds **field 2 empty on every disc**, so nothing competes for the slot and a
+  decoder shows C1 whichever field the data lands in — captions decoded in all six
+  sync × field-order combinations on HW, which says the chain works and NOTHING about the
+  mapping. A prediction whose failure mode is unobservable is not a prediction.
+  **New gate [G8]:** the raster's line-aligned field and the emitted block's must be the
+  same `v_pos` parity, **both measured, neither reading the constant**, so a consumer
+  flipped in isolation fails. `cc_field_map_tb` (mutation-checked) and `cc_e2e_tb` now read
+  the constant instead of pinning a polarity; `crt_syncgen_tb` passes UNCHANGED, which is
+  the evidence the flip preserves every timing invariant and swaps only which field is
+  which. ⏳ HW test is one A/B: `Field Order = Normal` correct on BOTH outputs.
+  ⚠ `Analog CSync = Stock` will now look WRONG on a CRT where it used to look right —
+  expected, the two errors no longer cancel.
+  **Build:** `DVD_smptesync_20260906_0222.rbf` (pre-field-fix), SEED 5 FIRST roll despite
+  two new CONF_STR rows, clk_dec 95.35 @100C / 92.55 @-40C (gate 86.0), 91 % ALM.
+  Detail: `docs/single_raster_analog.md` §3.10 (sync shape), §3.11 (the knob, and the
+  reasoning error), §3.12 (the field-order fix).
 - ✅ **MODE-SWITCH READER RE-ALIGN + PAL/NTSC VERDICT HARDENING (2026-09-03, issue #42,
   branch `fix/mode-switch-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03
   (user report: the freeze is gone; build `DVD_modeswitch_20260903_1538.rbf`, SEED 5 first
@@ -2441,7 +2613,22 @@ mode 2 (2× line repeat) + a syncgen-only effective-size mux in `mpeg2video.v` �
 on `analog_eff` (HDMI keeps ascal's scale; also fixes direct-video + un-clips the HUD).
 True 240p output was REJECTED: no exact-59.94 Hz 240p modeline exists at 1716
 dots/line, so it would drift against the fixed 48 kHz audio NCO — line-doubled 480i
-carries the same content. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
+carries the same content.
+★★ **THAT REJECTION'S PREMISE EXPIRED WITH PR #63 (noted 2026-09-07) — do NOT re-derive
+it; read `docs/mpeg1.md` §B.3a first.** Two things are wrong with it now. (1) **240p is
+not 59.94 Hz** — 59.94 is the interlaced FIELD rate; console 240p omits the half-line and
+runs **262 lines = 60.055 Hz**, which is what every CRT takes (`CDi_MiSTer`'s
+`rtl/video_timing.sv`: `v_total = 262; v_active = 240;`, `vga_f1` pinned 0 when
+non-interlaced). Asking for an exact 59.94 progressive modeline was asking for 262.5
+lines. (2) **The drift argument depended on the STC being RASTER-derived**, which it no
+longer is: `disp_sched` free-runs off the crystal that also feeds the 48 kHz NCO, so the
+raster supplies pickup OPPORTUNITIES, not the clock. A 0.19 % rate error now costs one
+held frame every ~9 s instead of walking the audio. ⚠ Consequently `dvd/emu.sv`'s "the
+ONLY thing holding A/V together over a long title is that the core raster period equals
+the true content rate" is STALE — it describes the pre-#63 architecture.
+⚠ The §B.3a note is analysis, not a build: it is read from `disp_sched`'s design note and
+the `half_scan` mux, and the held-frame claim wants confirming against the audio path
+before anyone relies on it. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
 scope REVERSED 2026-08-24 by user decision: the predicate is now `< 720` (any sub-720
 width fills; SVCD 480 = exact 2:3), shipped with the VCD/SVCD feature below. Design:
 `docs/mpeg1.md` §B.3; overlay inverse contract: `docs/crt_anamorphic.md` §9b. Sim:

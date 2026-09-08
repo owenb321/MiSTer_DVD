@@ -135,6 +135,13 @@ module field_phase_tb;
   wire        h_sync_out, v_sync_out, pixel_en_out;
 
   // ---- the parity feedback loop (mpeg2video's sync_reg CDC, replicated) ----
+  // ⛔ A +swap arm lived here while P1O[48] Field Order existed: it XORed this node the
+  // way mpeg2video did and inverted check C's expectation with it. The knob was removed
+  // before release (it moves HDMI and analog together, so it can never reconcile a
+  // disagreement between them — it only relocates it), and with the RTL term gone the arm
+  // would have XORed only the bench's own model, testing nothing. Removed with it.
+  // The polarity it was diagnosing now lives in rtl/mpeg2/field_polarity.vh and is gated
+  // by csync_field_tb [G8] and cc_field_map_tb instead.
 `ifndef NO_PARITY_FIX
   wire mixer_par_err;
   reg  pe_s1 = 0, pe_s2 = 0;

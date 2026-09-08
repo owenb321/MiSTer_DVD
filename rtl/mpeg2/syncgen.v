@@ -21,6 +21,7 @@
  */
 
 `include "timescale.v"
+`include "field_polarity.vh"
 
 `undef DEBUG
 //`define DEBUG 1
@@ -143,7 +144,28 @@ module sync_gen    (clk, clk_en, rst,
    * LA + 0.5 lines, B->A = LB - 0.5 lines; both equal 262.5 iff LA=262, LB=263.
    * odd_field=1 scans v_pos even lines (TOP content, the upper field), so it is the
    * reference field A; odd_field=0 (BOTTOM content) is B: one extra line and the
-   * mid-line vsync. (If HW shows the fields spatially swapped, flip both terms.) */
+   * mid-line vsync.
+   *
+   * ⚠ AMENDED 2026-09-05. That last sentence — which content field rides which raster
+   * field — is the ONE part of this model this fork invented. The 262/263 + half-line
+   * mechanism above is inherited from the known-good N64 core, which has no notion of
+   * "TOP content" at all: it scans a framebuffer, so the line displayed is fixed by the
+   * raster line being scanned and no mapping decision exists. The assertion was also
+   * validated exactly once (docs/crt_480i.md, 2026-07-05) BEFORE the field-parity
+   * corrector existed — the content phase was a coin flip then, so a wrong convention was
+   * right half the time and could not be seen. That is precisely how VGA_F1 stayed
+   * inverted on HDMI until PR #44.
+   * ★★ RESOLVED 2026-09-06 BY MEASUREMENT, and the original advice was RIGHT: the two
+   * terms ARE flipped, and the polarity now lives in ONE place, `FIELD1_VPOS` in
+   * rtl/mpeg2/field_polarity.vh, shared with dvd/csync_smpte.sv and dvd/cc_vbi.sv so the
+   * three cannot drift. ⚠ An intermediate version of this note said "DO NOT flip both
+   * terms" on the grounds that the raster is inherited from the known-good N64 core.
+   * That was wrong: what is inherited is the 262/263 + mid-line-vsync MECHANISM, not the
+   * assignment of OUR two fields to it, and the assignment had never been tested because
+   * until the composite sync carried equalizing pulses no display could read it (see
+   * field_polarity.vh for the measurement and docs/single_raster_analog.md §3.10-§3.12).
+   * ⛔ P1O[48] Field Order is a DIAGNOSTIC, not the fix for this: it moves HDMI and
+   * analog together, so it cannot resolve a disagreement between them. */
   wire        crt_ilace   = interlaced && (horizontal_halfline != 12'd0);
   /* DVD-FORK (single-raster analog): the vertical-sync sample dot. Dot 0 on the
    * reference field, mid-line (halfline) on the other — the upstream N64-model
@@ -158,7 +180,12 @@ module sync_gen    (clk, clk_en, rst,
    * they now show both placements within a clock of each other once the serrations
    * run at 2H (the real asymmetry fix, sys/sys_top.v csync). The CRT is the reference
    * for the analog path: do not re-anchor without one to test on. */
-  wire [11:0] vs_ref_dot  = odd_field ? 12'd0 : horizontal_halfline;   /* vertical-event sample dot */
+  /* `field1` is THIS field's identity, from the one shared constant. Field 1 takes the
+   * line-aligned vertical sync and the SHORT field total; the other takes the mid-line
+   * vsync and the extra line (the longer field must carry the mid-line vsync, or the
+   * spacing becomes 263.5/261.5 instead of 262.5 every field). v_pos[0] == ~odd_field. */
+  wire        field1      = ((~odd_field) == `FIELD1_VPOS);
+  wire [11:0] vs_ref_dot  = field1 ? 12'd0 : horizontal_halfline;       /* vertical-event sample dot */
   /* (the half-line-referenced vsync sampler itself lives below, after the h/v
    *  counters it samples — see "CRT vsync sampler") */
 
@@ -237,7 +264,7 @@ module sync_gen    (clk, clk_en, rst,
    * pins share ONE half-line raster, docs/single_raster_analog.md.) Nothing else asserts `interlaced` —
    * modeline.v's default is VID_MODE 3'b000.
    * Pinned by bench/dvd/crt_syncgen_tb.sv PHASE 2 (480i) and PHASE 2b (576i). */
-  wire [11:0] eff_vertical_length = vertical_length + {11'd0, interlaced & ~odd_field};
+  wire [11:0] eff_vertical_length = vertical_length + {11'd0, interlaced & ~field1};
   always @(posedge clk)
     if (~rst) v_cntr <= 12'd0;
     else if (clk_en && (h_cntr >= horizontal_length)) v_cntr <= (v_cntr >= eff_vertical_length) ? 12'd0 : (v_cntr + 1);

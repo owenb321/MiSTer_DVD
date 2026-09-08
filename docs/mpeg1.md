@@ -307,6 +307,67 @@ NTSC + PAL SIF fill the CRT cleanly, normal DVDs unregressed.** In-core 2× fill
   fill engages (Letterbox-engage class); while analog is engaged HDMI sees the
   in-core 2× instead of ascal (Letterbox/Crop trade-off class).
 
+### B.3a Native 240p — the rejection's premise EXPIRED with PR #63 (2026-09-07)
+
+**Do not re-derive the old "no". It was correct when written and its reason no longer
+holds.** Nothing here is built; this exists so the next session starts from the current
+architecture instead of the 2026-08 one.
+
+**What was rejected, and why.** `CLAUDE.md`'s SIF bullet says *"True 240p output was
+REJECTED: no exact-59.94 Hz 240p modeline exists at 1716 dots/line, so it would drift
+against the fixed 48 kHz audio NCO."* Both halves need unpicking.
+
+★ **The rate target was wrong. 240p is not 59.94 Hz.** 59.94 is the interlaced FIELD rate.
+Console 240p is a non-standard "double-strike" mode that omits the half-line: **262 lines at
+the normal line rate = 60.055 Hz**, and every CRT accepts it. Asking for an exact 59.94
+progressive modeline was asking for 262.5 lines — a half-line, unrepresentable — when the
+thing to build is 262.
+
+★ **How every other core does it, checked rather than assumed.** `CDi_MiSTer`'s
+`rtl/video_timing.sv` is the local example: `v_total = 262; v_active = 240;` for NTSC, with
+`parity` pinned and `assign vga_f1 = sm ? !vt_field_parity : 0` — non-interlaced simply
+means the field flag is 0. No core targets 59.94 for 240p, because a console *generates its
+content in lockstep with its own raster*, so whatever rate falls out is by definition
+correct, and MiSTer's `vsync_adjust` retimes the HDMI PLL to match.
+
+⚠ **That is exactly why we could not copy them, and it is the part that changed.** Our
+content arrives at a fixed 29.97 fps. Under the pre-#63 architecture the STC advanced one
+`TICKS_PER_REFRESH` per displayed image — **the clock was derived from the raster** — so a
+raster that was not the content rate drifted the audio. Hence `dvd/emu.sv`'s invariant
+("the ONLY thing holding A/V together over a long title is that the core raster period
+equals the true content rate"), and hence 60.055 Hz being unusable.
+
+★★ **PR #63 removed that dependency.** `dvd/disp_sched.sv`'s own design note: *"one 90 kHz
+clock that just runs, derived from the same 27 MHz crystal as the raster and the 48 kHz
+audio NCO… **Rate is therefore locked by construction**; this module owns PHASE"*, and a
+picture is due against *"**the opportunity grid, not the content period**"*. The STC and the
+audio NCO now share the crystal directly and cannot drift from each other; the raster only
+supplies pickup opportunities. A raster 0.19 % fast therefore costs **one held frame every
+~9 s**, not a drift — a different and much cheaper trade.
+
+⚠ **VERIFY BEFORE BUILDING ON THIS.** The paragraph above is read from `disp_sched`'s design
+note and the `half_scan` mux, not from tracing the audio path end to end. Confirm that a
+raster whose period is not the content period really does degrade to a held frame — that is
+the whole load-bearing claim.
+
+**What a 240p mode would still need:**
+
+- A modeline branch: 262 lines, `halfline = 0`. Mechanically the easiest part.
+- `dvd/csync_smpte.sv` emitting on a progressive raster with `blk_half` forced 0 — 240p's
+  vertical interval **is** the same nine-line block minus the half-line offset, and
+  `blk_half` is already the single bit that controls it. ⚠ `cs_en` currently gates
+  progressive off, which is right for 480p (31 kHz, where a 15 kHz block is meaningless), so
+  this needs a third case rather than simply ungating.
+- A `half_scan` entry (`dvd/emu.sv`, the film24/film25/PAL/NTSC mux). 262 × 63.556 µs = 749
+  ticks against the 750 already there for a 480i field — very nearly free.
+- The content side: a ×2 vertical downscale + centre, already listed as a follow-up in
+  `docs/crt_anamorphic.md` §10 with `disp_vscale` step 2.
+- **A choice**: plain 262 (60.055 Hz, one held frame every ~9 s) versus **262/263
+  alternating**, which averages exactly 262.5 and hits 59.94 precisely, trading the held
+  frame for one line of frame-period jitter at 30 Hz. `rtl/mpeg2/syncgen.v` already
+  alternates field totals for interlace (`eff_vertical_length`), so the mechanism exists;
+  whether a CRT's vertical oscillator rides it without visible bounce is a measurement.
+
 ### B.4 Verification
 
 **Tier 1 (parse + value level) — ✅ DONE (2026-08-24), all green:**

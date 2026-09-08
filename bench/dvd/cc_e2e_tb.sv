@@ -21,10 +21,11 @@
  * model, sampling at the pixel enable (858 samples per line):
  *
  *   [1] finds caption bursts in the VBI (never during DE),
- *   [2] classifies each field by the raster's own field marker (v_pos[0], which is
- *       what VGA_F1 carries since 2026-09-03);
- *       that it is the broadcast field 1 is proven by cc_field_map_tb (sync signature)
- *       and csync_field_tb (the analog pin),
+ *   [2] classifies each field by the raster's own field marker (v_pos[0]) against
+ *       `FIELD1_VPOS` (rtl/mpeg2/field_polarity.vh) — the ONE constant syncgen.v,
+ *       csync_smpte.sv and cc_vbi.sv all read. That the named field really is
+ *       broadcast field 1 is proven by cc_field_map_tb (sync signature) and
+ *       csync_field_tb [G8] (the analog pin, raster and emitted block agreeing),
  *   [3] demodulates each burst (slice at ~25 IRE, sample at bit centres) and
  *       requires the FIELD-1 pair on the field-1 line and the FIELD-2 pair on
  *       the field-2 line — the full slot-routing contract at the pins,
@@ -41,6 +42,7 @@
  *   vvp bench/dvd/cc_e2e_sim
  */
 `include "timescale.v"
+`include "field_polarity.vh"
 
 module cc_e2e_tb;
   // ---------------------------------------------------------------- clocks
@@ -72,10 +74,16 @@ module cc_e2e_tb;
   reg         dec_pair_field = 0;
   wire [7:0]  cc_level;
   wire        cc_on, cc_active;
+  // display-pickup credits — see the note below the instantiation
+  localparam integer DEC_PER_FRAME = 900900/6;   // one frame of clk27 in dec_clk ticks
+  reg        dec_credit_valid = 1'b0;
+  reg  [2:0] dec_credit       = 3'd2;
+
   cc_vbi dut (
     .clk(clk), .rst_n(rst_n),
     .dec_clk(dec_clk), .dec_pair_valid(dec_pair_valid),
     .dec_pair(dec_pair), .dec_pair_field(dec_pair_field),
+    .dec_credit_valid(dec_credit_valid), .dec_credit(dec_credit),
     .enable(1'b1), .test(1'b0), .flush(1'b0), .pal(1'b0),
     .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
     .level(cc_level), .on(cc_on), .active(cc_active));
@@ -89,6 +97,30 @@ module cc_e2e_tb;
     out_vs <= v_sync;
     out_de <= pixel_en;
     out_ce <= ~h_pos[0];                    // first clock of each pixrep pair
+  end
+
+  // ------------------------------------------- display-pickup credits (dec_clk)
+  // ⚠ THESE WERE LEFT UNCONNECTED when dvd/cc_line21.sv gained credit-gated draining
+  // (PR #63, "drain the caption queue on display pickups, not raster fields"), so the
+  // queue was never released and this bench demodulated ZERO caption lines — on
+  // origin/main as well as here, verified by running main's own copy. An unconnected
+  // input reads x, `dec_credit_valid` never asserts, and the only escape is the
+  // module's ~1 s CREDIT_WD, far beyond this bench's 80 ms run. A silently unconnected
+  // port in an instantiation is the same failure class as an implicit net: it does not
+  // warn, and the bench keeps reporting on everything except the thing that stopped.
+  //
+  // A credit is one display PICKUP carrying that picture's field count, so a plain
+  // 2-field picture at frame rate is what dvd/disp_sched.sv issues here. The module
+  // CDCs it with a toggle, so exact phase against the raster does not matter — only
+  // the rate, which must keep up with one pair per field or the queue starves.
+  always begin
+    @(posedge dec_clk);
+    if (rst_n) begin
+      dec_credit_valid <= 1'b1;
+      @(posedge dec_clk);
+      dec_credit_valid <= 1'b0;
+      repeat (DEC_PER_FRAME) @(posedge dec_clk);
+    end
   end
 
   // ------------------------------------------- caption producer (dec_clk)
@@ -219,19 +251,23 @@ module cc_e2e_tb;
     end
 
     if (out_vs && !vs_q) begin
-      // Classify the field. The MAIN raster is line-aligned in both fields on purpose
-      // (a half-line here combs ascal's weave — HW round 3), so the vsync position no
-      // longer distinguishes them; the 2:1 half-line is applied downstream, to the
-      // analog composite sync, by sys_top's csync. The raster's own field marker is
-      // v_pos[0] (what VGA_F1 carries since 2026-09-03), and that it marks the
-      // BROADCAST field-1 line-aligned
-      // vsync is proven by bench/dvd/cc_field_map_tb.sv (sync_gen with the analog
-      // half-line) and bench/dvd/csync_field_tb.sv (the csync pin, both fields
-      // 262.5 lines apart).
-      f1_field <= ~v_pos[0];
+      // Classify the field by the raster's own marker, v_pos[0], against the shared
+      // FIELD1_VPOS constant.
+      // ⚠ The paragraph that used to sit here said the main raster is "line-aligned in
+      // both fields on purpose (a half-line here combs ascal's weave — HW round 3), so
+      // the vsync position no longer distinguishes them; the 2:1 half-line is applied
+      // downstream by sys_top's csync". That describes the HW-round-3 arrangement, which
+      // was REVERTED: the half-line is on the main raster (the whole single-raster
+      // design, docs/single_raster_analog.md §3.1), so vsync position DOES distinguish
+      // the fields here.
+      // ⚠ FIELD1_VPOS changed 2026-09-06 on a hardware measurement; this bench must
+      // follow it rather than hardcode a polarity, or it pins whatever was true when it
+      // was written. cc_field_map_tb proves the constant names the line-aligned-vsync
+      // field; this bench proves the caption payloads are routed to the right slots.
+      f1_field <= (v_pos[0] == `FIELD1_VPOS);
       line_no  <= 0;
       if (verbose) $display("  vsync rise at h_dot=%0d v_pos=%0d (field %0s) line_no was %0d",
-                            h_dot, v_pos, (~v_pos[0]) ? "1" : "2", line_no);
+                            h_dot, v_pos, (v_pos[0] == `FIELD1_VPOS) ? "1" : "2", line_no);
     end
 
     // capture non-active luma; captions must NEVER coincide with out_de

@@ -46,6 +46,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/crt_ov_map.sv
 #  the analog pins take the main half-line 480i/576i raster, docs/single_raster_analog.md)
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/cc_line21.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/cc_vbi.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/csync_smpte.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ps_stream_fifo.sv
 # AC-3 reframer: re-frame demuxed AC-3 on 0x0B77 boundaries so audio_ring drops
 # whole AC-3 frames (clean) instead of PES chunks (pop). See dvd/ac3_reframer.sv.
@@ -947,4 +948,35 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # Build DVD_stcfree_20260906_1932.rbf (4345 KB).
 # ★ Restoring ~90 lines of detector logic IMPROVED clk_dec. Placement noise again, exactly as
 # the v0.4.0 entry warns: do not read a one-point fmax delta as a measurement of the change.
+#
+# ⚠ THE ENTRY BELOW PREDATES THE REBASE ONTO THE STC WORK and its numbers describe a
+# netlist that no longer exists (branch base e98a077, before PR #63). Kept for the
+# ~60-register cost of the sync generator itself; the post-rebase re-fit follows it.
+# 2026-09-06 (feature/smpte-csync -- dvd/csync_smpte.sv (~60 regs: a 12-bit dot counter,
+# a 12-bit line latch, and the half-line block comparators), two new emu ports, an 8-deep
+# shift register + 2:1 mux in sys_top, one XOR on mpeg2video's sync_raster_par_err, and two
+# new CONF_STR rows): SEED 5 held FIRST roll -- clk_dec 95.35 @100C / 92.55 @-40C (gate
+# 86.0, PASS both corners) at 91% ALM (38,052), block memory 63%, DSP 92/112 unchanged.
+# Build DVD_smptesync_20260906_0222.rbf (4361 KB).
+# ⚠ Per the rule the v0.4.0 entry earns, the ALM figure is NOT attributed to this change:
+# 91% against v0.4.0's 90% is one point on a design whose placement has moved clk_dec by
+# 5.5 MHz on a pure string edit, and the new logic is ~60 registers. Recorded, not explained.
+#
+# 2026-09-07 (feature/smpte-csync REBASED onto main after PR #63 -- the SMPTE composite-sync
+# generator, the FIELD1_VPOS raster flip, and two CONF_STR rows, now on top of the
+# free-running STC): SEED 5 held FIRST roll -- clk_dec 93.35 @100C / 89.89 @-40C (gate 86.0,
+# PASS both corners) at 93% ALM (38,811), registers 51,940, RAM 498/553, DSP 92/112.
+# Build DVD_smptesync3_20260907_2053.rbf (4389 KB), git 5b31920, tree clean.
+# ★ Worth noting only because the expectation was the other way: the STC branch's own
+# entries record a Stage-1 fit FAILING at 73.77 MHz and needing the scheduler pipelined,
+# and its final -40C margin was 0.02 MHz. Adding ~60 registers of sync generator on top of
+# that closed first roll with 3.9 MHz of cold-corner margin. Per the v0.4.0 rule, that is
+# placement, not a measurement of either change.
+#
+# 2026-09-07b (same branch -- Field Order and Analog CSync's Stock arm REMOVED before
+# release: one CONF_STR row deleted, one reduced from 2 bits to 1, mpeg2video's field_swap
+# port and its XOR gone, csync_smpte's mode narrowed to 1 bit): SEED 5 held FIRST roll --
+# clk_dec 93.45 @100C / 91.35 @-40C (gate 86.0, PASS both corners) at 92% ALM (38,741),
+# registers 51,965, RAM 498/553, DSP 92/112.
+# Build DVD_smptesync4_20260907_2305.rbf (4391 KB) -- the shipping configuration.
 set_global_assignment -name SEED 5

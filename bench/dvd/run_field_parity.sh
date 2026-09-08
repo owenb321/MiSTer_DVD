@@ -37,10 +37,14 @@ iverilog -g2012 -D__IVERILOG__ $DEFS -I rtl/mpeg2 -o "$OUT" \
   rtl/mpeg2/xilinx_fifo_dc.v rtl/mpeg2/xfifo_sc.v \
   bench/dvd/field_parity_tb.sv
 
+# ⚠ `vvp ... | grep ... || fail=1` reads GREP's exit status, never vvp's: a $fatal arm
+# prints FAIL, exits non-zero, and the pipe swallows it while the suite reports success.
+# That is the defect PR #63 fixed in the STC field suites (a9b8bb6); it was still here.
+# PIPESTATUS[0] is the simulator's own status.
 fail=0
 for p in 0 1; do
   echo
   echo "============ +phase=$p ============"
-  vvp "$OUT" +phase=$p | grep -vE '^\s*$' || fail=1
+  vvp "$OUT" +phase=$p | grep -vE '^\s*$'; [ "${PIPESTATUS[0]}" -eq 0 ] || fail=1
 done
 exit $fail
