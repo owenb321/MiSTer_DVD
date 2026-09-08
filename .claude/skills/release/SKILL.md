@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut and publish a GitHub release of the MiSTer DVD core — gather release notes from every PR merged since the previous release, land the one release commit that sets CORE_VERSION and reconciles the manual, build the timing-clean .rbf, create the draft that CI packages (Main + install zip), smoke-test it, publish, and set the version back to dev-main. Use when the user asks to cut, make, or publish a release.
+description: Cut and publish a GitHub release of the MiSTer DVD core — gather release notes from every PR merged since the previous release, land the one release commit that sets CORE_VERSION and reconciles the manual, build the timing-clean .rbf, create the draft that CI packages (Main + install zip), smoke-test it, and move the version off the semver. Use when the user asks to cut, make, or publish a release.
 ---
 
 # Cutting a DVD core release
@@ -14,9 +14,12 @@ from the PRs merged since the last release.
 > A bare semver lives in **exactly one commit per release** — the release commit. Any
 > build whose OSD shows `v0.4.0` came from that commit and no other.
 
-- **`CORE_VERSION` in `dvd/emu.sv`** carries `dev-<slug>` on a feature branch and
-  `dev-main` on `main`. Step 0 below sets it to `v<semver>` for the release; the last step
-  sets it back to `dev-main`. Shown in the OSD as `` `CORE_VERSION` `BUILD_DATE` ``.
+- **`CORE_VERSION` in `dvd/emu.sv`** carries `dev-<slug>` on a feature branch. On `main` it
+  carries **whatever the last merged feature left** — there is no post-merge reset (retired
+  2026-09-08, by user decision; see `CLAUDE.md` "Merging a PR"). Step 0 below sets it to
+  `v<semver>` for the release; the last step moves it OFF the semver again, which is the one
+  remaining reset and is not optional (see step 7). Shown in the OSD as
+  `` `CORE_VERSION` `BUILD_DATE` ``.
   `build_release.sh` refuses a `dev-` string on a publishable `--release` build and refuses
   a bare semver on a dev build, so the invariant is mechanical rather than remembered.
 - **Release tag = `v<semver>`** (e.g. `v0.4.0`); title = `v<semver> — <headline>`.
@@ -40,8 +43,8 @@ from the PRs merged since the last release.
 - **The manual matches what is shipping.** `python3 tools/docs_check.py` and
   `mkdocs build --strict` both pass. If a release note would claim something the manual
   does not say, fix the manual first — it is the published contract.
-- `CORE_VERSION` currently reads `dev-main` (it is set to the semver by step 0, not
-  before). Decide the number against the **whole** unreleased delta on `main`, not the last
+- `CORE_VERSION` currently reads whatever the last merged feature left (a `dev-<slug>`);
+  it is set to the semver by step 0, not before. Decide the number against the **whole** unreleased delta on `main`, not the last
   branch merged — several patch-looking merges can add up to a minor release. The
   patch/minor/major rules are in `CLAUDE.md` "Versioning and publishing releases".
 
@@ -68,7 +71,7 @@ would cost a second compile.
    The headline you write here decides the version (patch / minor / major — see `CLAUDE.md`).
 
 2. **Land ONE release commit** on `main`, containing the docs-sweep edits **and**:
-   - `CORE_VERSION` in `dvd/emu.sv` → `"v<semver>"` (from `"dev-main"`).
+   - `CORE_VERSION` in `dvd/emu.sv` → `"v<semver>"` (from whatever `dev-<slug>` main carries).
    - `extra.released_version` in `mkdocs.yml` → `<semver>` (no `v`). The release workflow
      **refuses to package** if this disagrees with the tag: it drives the "latest release is
      vX.Y.Z" banner on every manual page.
@@ -120,9 +123,12 @@ would cost a second compile.
    Publishing creates the tag. The `/releases/latest` URL the README links to updates
    automatically — no README edit per release.
 
-7. **Set `CORE_VERSION` back to `"dev-main"`** in `dvd/emu.sv` and commit. This is what
-   preserves the invariant: the semver now exists in exactly one commit, so no later dev
-   build can advertise a released version.
+7. **Move `CORE_VERSION` OFF the semver** in `dvd/emu.sv` and commit — `"dev-main"` is the
+   conventional value. ⚠ This is the ONE version reset that survives (the post-merge one was
+   retired 2026-09-08): it preserves the invariant that the semver exists in exactly one
+   commit, so no later dev build can advertise a released version. Leaving it would also
+   make the next `build_release.sh` **refuse** — it rejects a bare semver on a dev build —
+   so skipping this step blocks the next build rather than merely mislabelling it.
 
 ## Release assets (attach all three)
 
