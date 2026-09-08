@@ -47,6 +47,11 @@ module spu_decode #(
                                        // shrink it -- at 27 MHz the real value is 70 M
                                        // simulation cycles, which no Icarus run reaches.
                                        // Bound rationale at the S_HOLD state below.
+                                       // ⚠ Must stay under 2^25 (hold_tmr's width); a
+                                       // larger value truncates. That fails SAFE -- a
+                                       // shorter hold degrades toward the pre-fix
+                                       // behaviour rather than stalling -- but it would
+                                       // silently not be the bound you wrote.
 ) (
     input  wire        clk,           // clk_sys 27 MHz
     input  wire        rst_n,
