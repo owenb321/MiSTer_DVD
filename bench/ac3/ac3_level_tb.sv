@@ -158,8 +158,15 @@ module ac3_level_tb;
     end
 
     initial begin
-        #2000000000;
-        $display("ac3_level: TIMEOUT (pairs=%0d peak=%0d)", npairs, peak);
+        // ★ 5.1 is five IMDCTs per block and does not reach its pair budget inside
+        // the old 2 s of sim time, so this is the path it actually takes.  It must
+        // therefore print the SAME diagnostic fields as the normal finish -- the
+        // gate scales its RED arm from "(dut N)", and without it the arm was
+        // skipped and the whole suite reported FAILURES on a vector whose GREEN
+        // measurement had passed.
+        #12000000000;
+        $display("ac3_level: TIMEOUT acmod=%0d lvl_q=%0d (dut %0d) pairs=%0d active=%0d peak=%0d err=%0d",
+                 acmod, lvl_q, lvl_q_dut, npairs, nactive, peak, ac3_err);
         $fclose(fout);
         $finish;
     end
