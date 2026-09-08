@@ -144,6 +144,23 @@ If sound drifts out of sync **without** a mode change, that is a different probl
 `A/V Offset` on the debug page first, and [report it](reporting-a-bug.md) with the disc and
 roughly how far into the title it started.
 
+### Speech is cut off on a game disc's question or selection screen
+
+!!! info "Unreleased"
+
+    Fixed after v0.4.0. Affects DVD game discs with spoken screens — quiz and board
+    games especially.
+
+A screen that reads a question or a list of choices aloud stopped part-way through. With
+the on-screen display up you could also see the time counter suddenly race ahead and then
+stop, instead of ticking along normally.
+
+The core throttles how fast it reads from the disc so that sound and picture stay together.
+It was mistaking a deliberate pause — audio waiting for its moment to play — for a jammed
+decoder, and switching the throttle off. The disc was then read as fast as it could be, the
+sound buffer overflowed, and whatever did not fit was lost. The racing counter was the same
+thing showing on screen.
+
 ### Menu audio went silent
 
 You changed the audio track while the menu was open. It comes back when you leave the menu.
