@@ -2513,7 +2513,7 @@ menus too, yields to user popups then re-arms), and **mutes both audio paths**
 (decode: `AUDIO_L/R`=0; passthrough: `iec61937_wrap.mute_i` = PCM-silence bursts
 that still drain the ring — no STD wedge). Video keeps playing so the disc is
 identifiable.
-✅ **THE VERDICT IS NOW A DENSITY, NOT A COUNT — issue #59, 2026-09-08;
+✅ **THE VERDICT IS NOW A DENSITY, NOT A COUNT — issue #59, PR #76, 2026-09-08;
 sim-proven RED/GREEN + mutation-checked, and ✅ HW-CONFIRMED 2026-09-08** (build
 `DVD_cssdensity_20260908_2056.rbf`, SEED 5 first roll, clk_dec 92.07/91.16):
 **both** directions on the maintainer's rig — the encrypted discs tried were still

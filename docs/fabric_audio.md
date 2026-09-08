@@ -363,7 +363,7 @@ resets on every `load_flush` via `pipe_rst_n` — a demux-local latch would flap
 leak pops at every menu jump/seek) and clears only on a fresh media mount, an
 eject, or a core reset.
 
-### ⚠ The rule was "4 markers, ever" until 2026-09-08, and it false-positived (issue #59)
+### ⚠ The rule was "4 markers, ever" until 2026-09-08, and it false-positived (issue #59, PR #76)
 
 **The sentence that used to stand here said the `'10'` marker gate made "false
 positives impossible". That is true of the marker BITS and false of the VERDICT,
