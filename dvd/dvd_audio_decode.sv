@@ -80,7 +80,7 @@ module dvd_audio_decode #(
     //   scheduling the ENTRY to an elastic buffer does not control its EXIT time;
     //   playback phase was dispatch phase minus buffer occupancy, and the occupancy
     //   absorbed any lead change in either direction. See docs/av_sync.md.)
-    // Bypassed only when sched_en is low (O13 Audio Genlock Off). Held from reset
+    // Bypassed only when sched_en is low (O[13] A/V Sync Off). Held from reset
     // otherwise (v3.1 — see the drain-gate controller comment); a stream that never
     // yields a schedulable reference free-runs via the ~2.5 s fallback timer.
     input  logic        sched_en,
@@ -754,7 +754,7 @@ module dvd_audio_decode #(
     //     stalled ring backpressured the shared stream for the ~1.2 s watchdog
     //     window, freezing video ~1 s). Arming from reset guarantees the FIFOs
     //     are EMPTY when the phase reference latches — the transition can't exist.
-    //   BYPASS: only sched_en low (O13 Audio Genlock Off) free-runs the drain.
+    //   BYPASS: only sched_en low (O[13] A/V Sync Off) free-runs the drain.
     //
     // Liveness: STC advances every refresh once video is live, so a held start
     // always releases; and a FALLBACK timer (~2.5 s armed-with-data but no
@@ -780,7 +780,7 @@ module dvd_audio_decode #(
     wire signed [34:0] start_delta =
         $signed({2'b0, stc}) - $signed({2'b0, play_pts}) - 35'($signed(av_ofs));
 
-    // Held from reset; only O13 Genlock Off bypasses (see comment above).
+    // Held from reset; only O[13] A/V Sync Off bypasses (see comment above).
     assign drain_en = draining || !sched_en;
 
     // ---- Playback-position tracker (drift instrument; see dbg_play_err port) ----
@@ -834,7 +834,7 @@ module dvd_audio_decode #(
             end
 
             if (!sched_en) begin
-                // O13 free-run diagnostic: keep the state clear for a clean re-arm
+                // O[13] free-run diagnostic: keep the state clear for a clean re-arm
                 draining       <= 1'b0;
                 play_pts_valid <= 1'b0;
                 seen_valid     <= 1'b0;

@@ -315,24 +315,39 @@ routing mux were removed as cruft (branch `feature/remove-diagnostic-cruft`). Th
 normal VOB path is unchanged: `mpg_streamer → ps_stream_fifo → ps_demux → ac3_reframer
 → audio_ring → dvd_audio_decode → ac3_front → AUDIO_L/R`.
 
-## Audio Genlock toggle (av_sync free-run) — `O[13]`
+## A/V Sync toggle (scheduler free-run) — `O[13]`
 
-Plays a **VOB through the full pipeline** (video + audio via
-`ps_demux`→`audio_ring`→`dvd_audio_decode`) but lets you **disable the av_sync
-genlock**: `O[13],Audio Genlock,On,Off`. Off forces the decoder's `nco_trim` to 0,
-so the 48 kHz audio NCO **free-runs** instead of being slewed to track the
-video-referenced STC.
+⚠ **RENAMED 2026-09-07: `Audio Genlock` → `A/V Sync`** (`P1O[13],A/V Sync,On,Off`; bit
+span unchanged, `wire av_freerun = status[13]` unchanged). The old name described a
+mechanism that had been dead for two months and hid the one this bit actually controls.
 
-- Implementation (emu.sv): `dec_nco_trim = av_freerun ? 0 : av_nco_trim` feeds
-  `dvd_audio_decode.nco_trim`. That's the decoder's documented free-run fallback
-  (`nco_trim=0`), so no new logic in the decoder.
-- `av_sync` is left **enabled** so the overlay still shows the drift/STC it *would*
-  correct — you can watch how far audio would have drifted while running free.
-- Diagnostic logic (now that the decoder is HW-exonerated, see above):
-  - Pops/cutouts **vanish** with genlock Off → the culprit is av_sync/governor
-    **pacing** (the NCO slew or the governor's bursty delivery).
-  - Pops/cutouts **persist** with genlock Off → it's `audio_ring` drop-on-overflow
-    or `ps_demux` substream filtering, independent of the genlock.
+**What it was.** Off forced `dvd_audio_decode.nco_trim` to 0 so the 48 kHz audio NCO
+free-ran instead of being slewed to track the video-referenced STC — a diagnostic to tell
+`av_sync`/governor *pacing* apart from `audio_ring` overflow and `ps_demux` filtering.
+That reading died with the **NCO trim retirement** (2026-07-02, lip-sync v3): `emu.sv` now
+declares `wire signed [21:0] dec_nco_trim = 22'sd0` unconditionally, so the trim is 0 with
+the option On or Off. See `docs/av_sync.md` for why the slew is gone and must stay gone.
+
+**What it is.** PR #63 (`docs/stc_freerun.md`) made the free-running 90 kHz STC the single
+clock everything presents against, and wired this bit to the enable of that scheduling in
+three places at once:
+
+| Consumer | `sched_en`/`sync_armed` = 0 | Effect |
+|---|---|---|
+| `disp_sched.sv` (`sched_en_dec`, 2-FF into clk_dec) | `pic_due_r`/`next_due_r` forced 1 | every picture is due immediately ⇒ **the display free-runs at raster rate with no PTS pacing** — video, not audio |
+| `dvd_audio_decode.sv` | `drain_en = draining \|\| !sched_en` | bypasses the PTS-scheduled drain start, plus `head_stale`, `head_catchup` and `pre_anchor_hold` |
+| `iec61937_wrap.sv` (`sync_armed`) | `sync_en = sync_armed && stc_anchored` | passthrough free-runs, no A/V hold |
+
+So Off is **"no A/V sync at all"**, for both media — not an audio-rate experiment. It is
+strictly worse for playback and is not a fallback for a sync complaint.
+
+**Why the row survives** (reviewed 2026-09-07): it is the only on-hardware way to remove
+the whole scheduler as a variable, on a scheduler that is three days old at time of
+writing. "Set A/V Sync Off and tell me if the disc plays" separates a scheduler fault from
+a source/decode one in one message, where the alternative is a custom build and a tester
+round-trip. It sits on the `P1,Debug` page, and the rename is what keeps a user from
+reaching for it to *fix* something — the failure mode that got `Field Order` and the
+`Analog CSync` `Stock` arm deleted before release (see `CLAUDE.md`).
 
 ## CSS mute (scrambled-source audio protection, 2026-08-06)
 

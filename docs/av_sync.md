@@ -342,8 +342,9 @@ MiB's large (~500 ms, compute-marginal start with underruns re-pinning it random
   active would be harmful: its entry-side set-point differs from the drain-set phase by
   the (variable) buffer occupancy, so the integrator would grind the correct phase away
   at ±0.5 %. `av_sync` remains as the STC generator + re-anchor + drift telemetry
-  (`lead_target` fed 0 so drift reads 0 = in sync); `O[13]` Genlock Off now bypasses the
-  drain gate (free-run, the legacy behaviour).
+  (`lead_target` fed 0 so drift reads 0 = in sync); `O[13]` (renamed `A/V Sync`
+  2026-09-07 — it no longer touches the NCO at all) bypasses the drain gate when Off
+  (free-run, the legacy behaviour).
 - **Bypasses / liveness:** gate inactive when `sched_en` low or STC un-anchored (raw ES).
   A held start always releases (STC advances every refresh once `video_live`); the ring
   drain-watchdog remains the outer guard.
@@ -546,10 +547,12 @@ sched_hold = sched_en && stc_anchored && frame_pts_valid
   than `HOLD_MAX` (≈4 s) ahead is treated as a discontinuity and dispatched (av_sync
   re-anchors off the accompanying video PTS). The `audio_ring` almost_full backpressure +
   ~1.2 s drain watchdog in emu remain the outer safety net.
-- **Composition with the genlock:** the schedule sets phase, the PI holds rate — once the
-  gate places dispatch at `STC + lead_target`, the loop sees error ≈ 0 and trims only
-  residual crystal drift. `sched_en = ~status[13]`, so `O[13] Audio Genlock Off` disables
-  BOTH mechanisms and stays a clean free-run diagnostic.
+- **Composition with the genlock** (HISTORICAL — the PI is retired, see the NCO-trim
+  bullet above): the schedule set phase, the PI held rate — once the gate placed dispatch
+  at `STC + lead_target`, the loop saw error ≈ 0 and trimmed only residual crystal drift.
+  `sched_en = ~status[13]`, so `O[13]` Off disabled both mechanisms. Today only the
+  schedule exists, and that bit (now labelled **A/V Sync**) disables the scheduler for
+  video and passthrough as well — see `docs/fabric_audio.md` "A/V Sync toggle".
 - In steady state (ring parked near-full by backpressure) the gate is what *times* each
   frame's release — the ring becomes a genuine presentation buffer instead of a pure
   elasticity buffer.

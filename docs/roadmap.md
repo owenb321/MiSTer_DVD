@@ -1646,7 +1646,7 @@ disc's authored menus by default reads as "menus don't work", and the menus-off 
 falls back to the largest-VTS heuristic, which is documented to pick the wrong title on
 some discs. Every other default audited and left as-is (Aspect Auto, Audio On, Audio Out
 Decode HDMI, Player Language English, Interlaced Out Off, Analog Out Auto, Analog Aspect
-Auto, Video Standard Auto, Frame Drop On, Audio Genlock On, Film 24p Auto, A/V Offset
+Auto, Video Standard Auto, Frame Drop On, A/V Sync On, Film 24p Auto, A/V Offset
 +100 ms, Debug Overlay Off, Title VTS Auto). *(2026-09-02: Interlaced Out + Analog Out
 have since been consolidated into `Video Output`, default Auto — see the reversal note
 further down.)*

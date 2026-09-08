@@ -25,7 +25,7 @@ EXPECTED = {
     'Video Output': (9, 10),
     '480i Deint': (11, 11),           # OB -- 'B' is base-32 11
     'Frame Drop': (12, 12),
-    'Audio Genlock': (13, 13),
+    'A/V Sync': (13, 13),
     'Line-21 CC': (14, 14),
     'Force 4:3 Subpics': (15, 15),
     'Video Standard': (16, 17),
