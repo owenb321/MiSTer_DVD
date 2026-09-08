@@ -104,6 +104,14 @@ tools/nav_diff.py <disc> --no-board                # oracle only, no hardware
   that cost the oracle milliseconds cost the board minutes.
 - **Only well-defined inputs are comparable.** Pressing a button that does not exist at
   that park is undefined, not a difference.
+- **A step that never parked was not measured.** Excluded, not diffed.
+- **After the first divergence, nothing downstream is an independent finding** — the next
+  button is pressed at two different menus, so a difference is guaranteed and meaningless.
+- **A disc whose navigation uses `rnd` cannot be diffed** (the core's LFSR and libdvdnav's
+  RNG disagree by design). Detected by running the oracle twice under different seeds.
+- **Do not compare VTS.** libdvdnav's is domain-relative (-1 in VMGM), the board's is the
+  reader's absolute VTS; on a board game with 70+ title sets one says 72 where the other
+  says 1 and neither is wrong. PGCN is the comparable field.
 
 ## Before believing a finding
 

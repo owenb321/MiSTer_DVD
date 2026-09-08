@@ -309,6 +309,14 @@ reporting itself as the core.
 libdvdnav does something else, and neither is wrong. Out-of-range buttons are
 skipped, never diffed.
 
+⚠ **And three more the first sweep found, all the same shape** -- a step that
+never parked was compared anyway; everything downstream of a divergence was
+counted as an independent finding when the next press lands at two different
+menus; and a disc whose navigation uses `rnd` cannot be diffed at all (detected
+by running the oracle twice under different seeds, not by parsing commands).
+⚠ **VTS is NOT comparable**: libdvdnav's is domain-relative, the board's is the
+reader's absolute VTS. Only PGCN is diffed.
+
 **Result so far (SHERLOCK_HOLMES):** the board and libdvdnav agree on both paths
 tested -- button 1 -> PGC 3, button 2 -> PGC 27 -- and `--red` proves the
 comparison can fail.
