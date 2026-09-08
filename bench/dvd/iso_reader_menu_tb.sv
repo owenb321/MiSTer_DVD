@@ -134,6 +134,36 @@ module iso_reader_menu_tb;
         if (seek_ack)   begin n_seek_ack   = n_seek_ack + 1; kv_last_seek <= keep_vbuf; end
     end
 
+    // ---- menu-domain subp_control capture (issues #60/#61) -------------------
+    // The reader used to walk subp_control in the TITLE domain ONLY, so a menu
+    // PGC's logical->physical subpicture map never reached emu and every menu was
+    // pinned to physical substream 0x20. Two PAL 16:9 discs map logical 0 -> 1,
+    // so their menu SPU (0x21) was discarded and no button highlight could render.
+    wire        pgc_ctl_we;
+    wire [4:0]  pgc_ctl_waddr;
+    wire [31:0] pgc_ctl_wdata;
+    wire        pgc_ctl_valid;
+    wire        pgc_dom_tt;
+    reg  [31:0] mcap [0:15];        // subp words seen while in the MENU domain
+    reg         mseen[0:15];
+    integer     msubp_writes = 0;   // subp writes with menu_active high
+    integer     tsubp_writes = 0;   // subp writes with menu_active low (title)
+    reg         mdom_tt_at_subp;    // pgc_dom_tt sampled at a menu subp write
+    reg         mvalid_at_subp;     // pgc_ctl_valid during ANY subp write (must be 0)
+    integer     mk;
+    always @(posedge clk) begin
+        if (pgc_ctl_we && !pgc_ctl_waddr[4]) begin
+            if (pgc_ctl_valid) mvalid_at_subp <= 1'b1;
+            if (menu_active) begin
+                mcap [pgc_ctl_waddr[3:0]] <= pgc_ctl_wdata;
+                mseen[pgc_ctl_waddr[3:0]] <= 1'b1;
+                msubp_writes <= msubp_writes + 1;
+                mdom_tt_at_subp <= pgc_dom_tt;
+            end else
+                tsubp_writes <= tsubp_writes + 1;
+        end
+    end
+
     dvd_iso_reader dut (
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0),
         .vbuf_empty(vbuf_empty), .menu_snap(menu_snap),
@@ -157,6 +187,9 @@ module iso_reader_menu_tb;
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
+        .pgc_ctl_we(pgc_ctl_we), .pgc_ctl_waddr(pgc_ctl_waddr),
+        .pgc_ctl_wdata(pgc_ctl_wdata), .pgc_ctl_valid(pgc_ctl_valid),
+        .pgc_dom_tt(pgc_dom_tt),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
         .debug_active(), .debug_sd_rd(), .debug_sd_ack(), .debug_cache_has_data(),
         .debug_file_size(), .debug_total_sectors(), .debug_next_lba(),
@@ -414,6 +447,21 @@ module iso_reader_menu_tb;
                         64'h0, 1);
             // the straddler: PGC byte base = 23*2048+16+1900 (in-sector off 1916)
             put_pgc(23*2048+16+1900, 8'd2, 16'd0, 8'd0, 8'h20, 16'd0, 16'd300);
+            // subp_control[0] @ PGC+0x1C = 0x80010200 -- EXACTLY what both issue
+            // #60/#61 discs author on every menu PGC (available; 4:3->0, wide->1,
+            // letterbox->2). With the VTSM V_ATR set to 16:9 above, logical 0 must
+            // resolve to PHYSICAL 1 = substream 0x21. Note this PGC STRADDLES the
+            // sector boundary, so the walk has to cross it to collect the table.
+            img[23*2048+16+1900+16'h1C+0] = 8'h80;
+            img[23*2048+16+1900+16'h1C+1] = 8'h01;
+            img[23*2048+16+1900+16'h1C+2] = 8'h02;
+            img[23*2048+16+1900+16'h1C+3] = 8'h00;
+            // subp_control[2] = 0x80030400 so a per-index check can't pass by
+            // accident on a walk that emits one word 16 times.
+            img[23*2048+16+1900+16'h24+0] = 8'h80;
+            img[23*2048+16+1900+16'h24+1] = 8'h03;
+            img[23*2048+16+1900+16'h24+2] = 8'h04;
+            img[23*2048+16+1900+16'h24+3] = 8'h00;
             put_cell(23*2048+16+1900, 16'd300, 0, 8'd0,   8'd0, 32'd0, 32'd0);
             put_cell(23*2048+16+1900, 16'd300, 1, 8'd255, 8'd0, 32'd1, 32'd1);
 
@@ -468,6 +516,8 @@ module iso_reader_menu_tb;
     integer cap_mark;
 
     initial begin
+        for (mk=0; mk<16; mk=mk+1) begin mcap[mk]=0; mseen[mk]=0; end
+        mdom_tt_at_subp = 1'b1; mvalid_at_subp = 1'b0;
         build_iso();
         rst_n = 0;
         repeat (4) @(posedge clk);
@@ -673,6 +723,34 @@ module iso_reader_menu_tb;
         // keep_vbuf=0 on this re-decode is proven by (b) - identical S_STILL code path.
         chk(n_seek_ack >= 1, "T9c Snappy re-decodes the still immediately (no vbuf_empty)");
         menu_snap = 1'b0;
+
+        // =============================================================
+        // TEST 10 - subp_control is streamed in the MENU domain (issues #60/#61)
+        // -------------------------------------------------------------
+        // The reader used to walk subp_control for DOM_TT only, so a menu PGC's
+        // logical->physical subpicture map never existed and emu pinned every
+        // menu to physical substream 0x20. On a disc that maps logical 0 to a
+        // non-zero physical id, the menu's SPU was discarded, spu_decode never
+        // committed, and the button highlight -- which is a RECOLOUR of
+        // subpicture pixels -- had nothing to draw on. RED arm: pre-fix
+        // msubp_writes is 0 and every check below fails.
+        $display("TEST10 menu subp_control: menu_writes=%0d title_writes=%0d [0]=%08x [2]=%08x",
+                 msubp_writes, tsubp_writes, mcap[0], mcap[2]);
+        // Every menu PGC load streams all 16 words, and this test performs many
+        // menu jumps -- so the invariant is "a whole number of complete tables",
+        // never a partial walk.
+        chk(msubp_writes >= 16 && (msubp_writes % 16) == 0,
+            "T10a menu subp_control streams in complete 16-word tables");
+        chk(mseen[0] && mcap[0] === 32'h80010200,
+            "T10b menu subp_control[0] byte-exact (the issue #60/#61 word)");
+        chk(mseen[2] && mcap[2] === 32'h80030400,
+            "T10c menu subp_control[2] byte-exact (not one word repeated)");
+        chk(!mdom_tt_at_subp,
+            "T10d pgc_dom_tt reads 0 for a menu PGC (else emu refuses the table)");
+        chk(tsubp_writes > 0,
+            "T10e the TITLE domain still streams subp_control (no regression)");
+        chk(!mvalid_at_subp,
+            "T10f pgc_ctl_valid stays LOW across the whole subp walk");
 
         // =============================================================
         if (errors == 0) $display("ISO_READER_MENU_TB: ALL TESTS PASSED");
