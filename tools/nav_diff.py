@@ -260,6 +260,22 @@ def resolve(disc):
     return local, os.path.join(BOARD_ROOT, rel)
 
 
+def is_nondeterministic(iso, script):
+    """Run the oracle twice under different RNG seeds. Different landings mean
+    the disc's navigation uses `rnd`, and a differential cannot be trusted on it.
+
+    ⚠ MEASURED, not parsed out of the command table: ATMOSFEAR's boot chain ends
+    in `rnd 6; JumpTT 1` (CLAUDE.md), so the core's LFSR and libdvdnav's RNG
+    disagree by design and every landing after that point is a coin flip. A
+    sweep that reports those as defects is worse than one that skips the disc.
+    """
+    a, _ = trace_landings(iso, script, seed=1)
+    b, _ = trace_landings(iso, script, seed=99)
+    pa = [r.get('pgcn') for r in a]
+    pb = [r.get('pgcn') for r in b]
+    return pa != pb, pa, pb
+
+
 def auto_script(iso, steps, seed):
     """Build a script of VALID button presses by asking the oracle, one step at
     a time.
@@ -340,6 +356,15 @@ def main():
     print(f'  script : {" ".join(tokens)}')
     print(f'  oracle : libdvdnav (independent of our RTL and of dvd_vm_ref)')
 
+    nd, pa, pb = is_nondeterministic(local, ' '.join(tokens))
+    if nd:
+        print(f'\n  ⚠ THIS DISC IS NON-DETERMINISTIC: the oracle lands '
+              f'{pa} under one RNG seed and {pb} under another.')
+        print('    Its navigation uses `rnd`, so the core\'s LFSR and '
+              "libdvdnav's RNG disagree BY DESIGN.")
+        print('    A differential cannot be trusted here; skipping the board.')
+        return 2
+
     oracle, raw = trace_landings(local, ' '.join(tokens), args.seed)
     open(os.path.join(tmpdir, 'trace_nav.txt'), 'w').write(raw)
     print(f'  libdvdnav produced {len(oracle)} landing(s)')
@@ -402,9 +427,16 @@ def main():
         rows.append(dict(token=tok, did=did, board=got))
 
     # --- diff -------------------------------------------------------------
-    print('\n  landing comparison (PGCN is the headline; pg/cell are not '
-          'observable from the board)')
-    findings, expected, unknown, invalid = [], [], [], []
+    print('\n  landing comparison -- PGCN is compared; VTS is shown for context '
+          'ONLY.')
+    # ⚠ The two VTS numbers do not mean the same thing and must not be diffed.
+    # libdvdnav reports vtsN relative to the DOMAIN (-1 in VMGM, the menu's own
+    # VTS in VTSM), while the board reports the reader's absolute VTS -- on a
+    # DVD board game with 70+ title sets that reads 72 where libdvdnav says 1,
+    # and neither is wrong. pg and cell are not observable from the board at all.
+    print('     (libdvdnav\'s VTS is domain-relative, the board\'s is absolute)')
+    findings, expected, unknown, invalid, downstream = [], [], [], [], []
+    diverged = False
     acted = [r for r in rows if not r['token'].startswith('w')]
     for n, r in enumerate(acted):
         o = oracle[n] if n < len(oracle) else None
@@ -414,6 +446,25 @@ def main():
             continue
         if b is None:
             unknown.append(f'{r["did"]}: no readable HUD on the board')
+            continue
+        if b.get('unsettled'):
+            # It never reached an armed park, so it was still in transit. The
+            # boot case already aborts; an ACTION that never settles was being
+            # compared anyway, which is the same error one step later.
+            unknown.append(f'{r["did"]}: never reached an armed park '
+                           f'(trajectory {" ".join(b.get("traj", []))})')
+            print(f'    [....] {r["did"]:<12} never parked -- not compared')
+            diverged = True
+            continue
+        if diverged:
+            # ⚠ ONCE THE TWO ARE IN DIFFERENT PLACES, NOTHING AFTER IS AN
+            # INDEPENDENT FINDING: the next button is pressed at two different
+            # menus, so a "difference" is guaranteed and says nothing. The
+            # Sherlock sweep reported two, of which only the first could
+            # possibly have meant anything.
+            downstream.append(f'{r["did"]}: after an earlier divergence')
+            print(f'    [----] {r["did"]:<12} downstream of a divergence '
+                  '-- not compared')
             continue
         # An out-of-range button is not a comparable input.
         nb = o.get('applied_buttons')
@@ -437,13 +488,17 @@ def main():
         else:
             findings.append(f'{r["did"]}: libdvdnav landed in PGC {o["pgcn"]} '
                             f'(VTS {o["vts"]}), the board in PGC {b["pgcn"]} '
-                            f'(VTS {b["vts"]})')
+                            f'(VTS {b["vts"]})  [board trajectory: '
+                            f'{" ".join(b.get("traj", []))}]')
+            diverged = True
 
     print()
     for e in expected:
         print(f'  note (documented deviation): {e}')
     for iv in invalid:
         print(f'  skipped: {iv}')
+    for d in downstream:
+        print(f'  not compared: {d}')
     for u in unknown:
         print(f'  unknown: {u}')
     for f in findings:
@@ -462,7 +517,7 @@ def main():
     json.dump(dict(disc=os.path.basename(local), script=tokens,
                    oracle=oracle, board=[r['board'] for r in rows],
                    findings=findings, expected=expected, unknown=unknown,
-                   invalid=invalid),
+                   invalid=invalid, downstream=downstream),
               open(os.path.join(tmpdir, 'nav_diff.json'), 'w'), indent=2)
     print(f'  artifacts: {tmpdir}')
     return 1 if findings else 0
