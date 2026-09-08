@@ -5,7 +5,7 @@ themselves; the ones that persist are describing a condition, not an event.
 
 | Message | Meaning | What to do |
 |---|---|---|
-| `CSS ENCRYPTED` | The image or disc is CSS-encrypted and nothing available can decrypt it. Audio is muted so you get silence rather than static; video keeps playing so the disc stays identifiable. | Install libdvdcss, or use a decrypted rip — see [What you need](../getting-started/what-you-need.md). |
+| `CSS ENCRYPTED` | The core is seeing scrambled sectors, so nothing available is decrypting this disc or image. Audio is muted to give you silence rather than static; video keeps playing so the disc stays identifiable. | Install libdvdcss, or use a decrypted rip — see [What you need](../getting-started/what-you-need.md). If the picture is perfect and only the sound is missing, the message is wrong — please [report it](../reference/reporting-a-bug.md). |
 | `UNSUPPORTED IMAGE` | Not an ISO9660 DVD image — a UDF-only image, for instance — or not a playable stream at all. | Check the file is a whole-disc DVD image. See [Compatibility](../reference/compatibility.md). |
 | `AUDIO UNSUPPORTED` | The selected audio track is in a format the core cannot decode. | Cycle to another track with B7, or use [passthrough](../audio/passthrough.md) if it is DTS. |
 | `TITLE VTS nn` | Which title was auto-selected. Only shown with **Disc Menus** off. | Informational. If it picked the wrong one, `Title VTS` on the Debug page forces a choice. |

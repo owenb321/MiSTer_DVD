@@ -1677,7 +1677,8 @@ Phase-2 proto-nav with "no button highlights (Phase 3) or nav-command execution
 Three failure modes produced no explanation on screen, each an undiagnosable bug
 report. All three reuse the proven `CSS ENCRYPTED` persistent-HUD path (PR fj#160):
 `transport_hud`'s `pop_type` gains 5/6/7 (it was already 3 bits, so 0..7 fits with no
-width change), and the detectors live next to the `css_scrambled` latch in `emu.sv`.
+width change), and the detectors live next to the CSS verdict in `emu.sv` (the
+verdict itself moved to `dvd/css_detect.sv` on 2026-09-08, issue #59).
 
 1. **Unplayable image** → persistent **`UNSUPPORTED IMAGE`**, menu-exempt.
    **★ The discriminator is deliberately BEHAVIOURAL, not the file extension.** The
@@ -1730,7 +1731,8 @@ it**); warnings re-appear after a user audio/subtitle popup. Two defects found:
    `media_seen`, set by the first `start_streaming`, gates the counter.
 2. **On a CSS-scrambled disc the audio notice appeared first, then CSS.** These levels
    do not assert together: `aud_warn` arms at `nav_ready` (IFO parsed) while
-   `css_scrambled` needs 4 scrambled PES, i.e. a moment of real stream — so the
+   `css_scrambled` needs a sustained scrambled DENSITY (4 markers outright until
+   2026-09-08, issue #59), i.e. a moment of real stream — so the
    narrower notice won the slot and held it for its full 2.5 s before the root cause
    could speak. Two-part fix: `aud_unsupported` is now gated on `~css_scrambled` (CSS
    already mutes audio, so a format notice is redundant AND misleading about the

@@ -360,7 +360,7 @@ wire        pass_mode  = status[6];   // O6: 1 = IEC 61937 passthrough
 wire        pass_bswap = status[7];   // O7: 1 = swap payload byte order
 assign AUDIO_S      = 1;
 assign AUDIO_MIX    = 2'd0;
-// css_scrambled: CSS-encrypted source detected (sticky latch by the demux
+// css_scrambled: CSS-encrypted source detected (dvd/css_detect.sv, fed by the demux
 // instance below) — mute the PCM out (scrambled AC-3 decodes to loud static).
 // probe taps (declared unconditionally — the instantiation below always
 // connects them; the tone logic itself is behind the define)
@@ -581,7 +581,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-spuwindow"
+`define CORE_VERSION "dev-cssdensity"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -2865,43 +2865,51 @@ ps_demux ps_demux_inst (
     // before samples drain, and track switches reset audio_ring+dvd_audio_decode.
     .aud_lpcm_quant   (ps_aud_lpcm_quant),
 
-    // CSS detection pulse -> the css_scrambled sticky latch below
+    // CSS detection: marker + denominator -> the css_detect density verdict below
     .pes_scrambled    (ps_pes_scrambled),
+    .pes_hdr_ok       (ps_pes_hdr_ok),
     .saw_pack         (ps_saw_pack)
 );
 
 // =========================================================================
 // CSS-SCRAMBLED SOURCE DETECTION. A CSS-encrypted rip (raw disc copy without
 // decryption — VLC plays it because libdvdcss decrypts on the fly; this core
-// never sees keys BY DESIGN, decryption is a PC-side rip step) decodes as
-// green macroblock garbage + loud audio static. Detect it from the PES
-// headers (PES_scrambling_control != 0; headers themselves are never
-// scrambled), warn via the transport HUD popup ("CSS ENCRYPTED", persistent,
-// visible in menus too), and MUTE both audio paths (decode PCM forced to 0;
-// passthrough emits PCM-silence bursts while draining the ring normally).
-// Video keeps playing — the ~80% unscrambled sectors let the user identify
-// the disc. The latch lives HERE (not in ps_demux, which resets on every
-// jump via pipe_rst_n) and clears only on a fresh media mount, so the mute
-// can't flap (and leak static pops) across menu jumps and seeks. A 4-pack
-// threshold debounces against stray corruption; at real CSS density (~20%
-// of packs) it trips within a few sectors of mount.
+// never sees keys BY DESIGN, decryption is a PC-side rip step or the
+// MiSTer_DVDcss Main's job) decodes as green macroblock garbage + loud audio
+// static, so the verdict drives the HUD popup ("CSS ENCRYPTED", persistent,
+// visible in menus too) and MUTES both audio paths. Video keeps playing so
+// the disc stays identifiable.
+//
+// The verdict lives in dvd/css_detect.sv, NOT here and NOT in ps_demux:
+//  - not in ps_demux, which resets on every jump via pipe_rst_n, so a
+//    demux-local latch would flap and leak static pops across menu jumps;
+//  - not inline here, because emu.sv has no testbench and the rule that used
+//    to sit at this spot — four scrambled PES headers per session, however
+//    far apart — could not be gated. It false-positived on discs that play
+//    perfectly and cost their owners all audio (issue #59).
+// The rule, its density knee and the measured numbers are in that file's
+// header and in docs/fabric_audio.md "CSS mute". Gate: bench/dvd/run_css.sh.
 // =========================================================================
 wire ps_pes_scrambled;
+wire ps_pes_hdr_ok;
 wire ps_saw_pack;
-reg  [2:0] css_det_cnt;
-reg        css_scrambled;
-always @(posedge clk_sys or negedge reset_n) begin
-    if (!reset_n) begin
-        css_det_cnt   <= 3'd0;
-        css_scrambled <= 1'b0;
-    end else if (start_streaming) begin      // fresh media mount: re-evaluate
-        css_det_cnt   <= 3'd0;
-        css_scrambled <= 1'b0;
-    end else if (ps_pes_scrambled && !css_scrambled) begin
-        css_det_cnt <= css_det_cnt + 3'd1;
-        if (css_det_cnt == 3'd3) css_scrambled <= 1'b1;   // 4th scrambled PES
-    end
-end
+wire css_scrambled;
+// Saturating census of what the verdict was decided on. ⚠ CURRENTLY UNCONSUMED,
+// so Quartus dead-strips both counters -- they exist so that surfacing them (a
+// DEBUG_OVERLAY row, or the delivered-vs-medium census sketched in
+// docs/bug_reports.md) is a one-line change rather than an RTL round trip.
+wire [15:0] css_hdr_census, css_scram_census;
+css_detect #(.LATCH_HITS(16), .LEAK_CLEAN(64)) css_det (
+    .clk           (clk_sys),
+    .rst_n         (reset_n),
+    .mount         (start_streaming),   // fresh media: re-evaluate
+    .eject         (img_ejected),       // slot emptied: drop the verdict
+    .hdr_ok        (ps_pes_hdr_ok),
+    .scrambled     (ps_pes_scrambled),
+    .css_scrambled (css_scrambled),
+    .hdr_census    (css_hdr_census),
+    .scram_census  (css_scram_census)
+);
 
 // =========================================================================
 // Phase-2 failure messaging (docs/roadmap.md "Public alpha release prep").

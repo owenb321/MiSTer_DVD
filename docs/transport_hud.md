@@ -99,7 +99,7 @@ Rendered with `a2g()` letters only — `hud_font.mem` untouched. Tests:
 `transport_hud_tb` T21.
 
 **CSS warning popup (`css_warn`, 2026-08-06):** popup type 4 renders
-`CSS ENCRYPTED` (accent, cols 0–12) when emu's sticky `css_scrambled` latch is
+`CSS ENCRYPTED` (accent, cols 0–12) when the sticky `css_scrambled` verdict is
 set — the loaded image still carries CSS-scrambled sectors
 (`PES_scrambling_control != 0` seen by `ps_demux`; such a rip decodes as green
 macroblock garbage, so the popup is the "your rip isn't decrypted" diagnostic —
@@ -108,8 +108,15 @@ keys by design). Two deliberate exceptions to the normal popup rules: it is
 **persistent** (a level input, lowest priority — user popups take the slot for
 their 2.5 s, then the warning re-arms) and it is **NOT menu-suppressed**
 (scrambled discs green-screen in the menu domain first — that's where the user
-is staring). Clears only on a fresh media mount. The same latch mutes both
-audio paths (see `docs/fabric_audio.md` "CSS mute").
+is staring). Clears on a fresh media mount, an eject, or a core reset. The same
+verdict mutes both audio paths (see `docs/fabric_audio.md` "CSS mute").
+
+⚠ **The verdict is a DENSITY, and since 2026-09-08 it lives in
+`dvd/css_detect.sv`, not in `emu.sv`** (issue #59). Until then it latched on the
+4th scrambled PES header of a session however far apart they were, so a stray
+marker raised this popup — and muted all audio — on discs that play perfectly.
+A stray can no longer raise it; a genuinely scrambled source still does, within
+about 90 checked packs of the mount.
 
 ### `dvd/seek_bar.sv` — scrub feedback + progress popup
 
