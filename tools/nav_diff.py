@@ -61,7 +61,7 @@ TRACE_NAV = os.path.join(HERE, 'bin', 'trace_nav')
 
 # The disc library is one SMB share mounted in two places. Both sides must open
 # the same bytes, so a run names one disc and each side resolves its own path.
-LOCAL_ROOT = os.environ.get('DVD_ISO_DIR', '/mnt/sattler/games/DVD')
+LOCAL_ROOT = os.environ.get('DVD_ISO_DIR', os.path.expanduser('~/dvd-isos'))
 BOARD_ROOT = os.environ.get('MISTER_ISO_DIR', '/media/fat/cifs/games/DVD')
 
 # ⚠ DOCUMENTED DELIBERATE DEVIATION (CLAUDE.md, docs/dvd_vm.md "Boot-chain menu
