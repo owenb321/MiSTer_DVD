@@ -819,6 +819,23 @@ parameter CONF_STR = {
     // never sees this at all — expect "the setting does nothing" reports from those.
     // status[46]. See docs/single_raster_analog.md §3.10.
     "P1O[46],Analog CSync,SMPTE,2H;",
+    // ⛔ TEMPORARY - DIAGNOSTIC ONLY, DELETE BEFORE THE PR.
+    // What Passthru puts on the wire in a GAP (pause, authored menu silence, an
+    // A/V hold, a ring underrun) once a codec stream is running. The three styles
+    // were built and judged once before (6861327) and the verdict was retracted:
+    // the arming latch cleared on every seek and track switch, so all three
+    // degraded to PCM silence in the two windows that mattered and could not have
+    // measured differently (docs/iec61937.md:243-251). Session state is now
+    // mount-scoped, so this A/B finally means something. One HW round decides it,
+    // then this row goes and the winner becomes unconditional - the Field Order /
+    // Analog CSync Stock pattern. status[27:26].
+    //   PCM Silence  today's shipped behaviour: the receiver re-negotiates per gap
+    //   NonPCM Hold  zero words, format flag held: no re-negotiation, no data
+    //   Pause Pd=Per a real 61937 pause burst, Pd = the burst's own span
+    //   Pause Pd=0   the same burst with the Pd that shipped in 6861327, so the
+    //                round can separate "receivers ignore pause bursts" from
+    //                "that pause burst was malformed"
+    "P1O[27:26],BS Hold Fill,PCM Silence,NonPCM Hold,Pause Pd=Per,Pause Pd=0;",
     // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
     // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
     // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
@@ -3399,10 +3416,19 @@ wire rst_audio_n = aud_rsync[1];
 // dbg wires so the ports are always connected).
 wire bs_burst_stb, bs_burst_real, bs_burst_held;
 
+// The gap-fill session state must outlive aud_rst_n (every seek, jump and audio
+// track switch pulses it) but must NOT outlive a new disc: before the first real
+// burst of a title the wire has to be PCM or the receiver cannot acquire.
+// mount_flush is MOUNT-ONLY by construction (dvd/flush_ctl.sv), which is exactly
+// that scope. See docs/iec61937.md:243-251 for what clearing it too often cost.
+wire bs_sess_rst_n = reset_n & ~mount_flush;
+
 iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .clk_sys      (clk_sys),
     .rst_sys_n    (aud_rst_n),
+    .rst_sess_n   (bs_sess_rst_n),
     .enable       (pass_mode),
+    .hold_fill    (status[27:26]),   // ⛔ TEMPORARY diagnostic, see CONF_STR
     .byte_swap    (pass_bswap),
     .mute_i       (css_scrambled),   // CSS source: drain frames, emit PCM silence
     .ring_byte    (aud_ring_byte),
