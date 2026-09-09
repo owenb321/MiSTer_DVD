@@ -13,6 +13,9 @@
  *   mR    dvdnav_menu_call(Root)      mT = Title
  *   wK    passive: let K more cell-changes pass before the next park is honored
  *
+ * A button-bearing cell is only a PROVISIONAL park -- see the PROBATION note
+ * above main() -- so it is confirmed before it is dumped or acted on.
+ *
  * When the script is exhausted the tracer dumps the final park and exits, so
  *   trace_nav disc.iso ""          # just show the first interactive screen
  *   trace_nav disc.iso "2"         # press button 2 on the first screen, show next
@@ -121,11 +124,54 @@ static int apply_action(dvdnav_t *nav) {
   return 1;
 }
 
+/* --- PROBATION: a cell with buttons is only a PROVISIONAL park -------------
+ *
+ * "A cell whose PCI carries buttons is an interactive screen" is a HEURISTIC,
+ * and it is FALSE for a short authored clip that happens to carry an HLI. The
+ * two are indistinguishable at the instant the buttons appear.
+ *
+ * MEASURED (SHERLOCK_HOLMES, VMGM PGC 26): cells=1, cell still=0, pbtime=9s,
+ * POST = `HL_BTNN = button 4; LinkPGCN 15`. The disc AUTHORS a 9 s clip with a
+ * highlight up which then links itself to PGC 15, whose cell still=255 -- the
+ * real, indefinite menu still. Same shape on 24_DVD_BOARD_GAME, whose boot
+ * VMGM PGC 2 is a 5-cell ~24 s intro with POST `JumpSS VTSM (vts 1, menu 4)`.
+ *
+ * Stopping at the first button-bearing cell cost twice over. It reported the
+ * transient clip as the LANDING (making the board's correct 26 -> 15 look like
+ * a divergence when the divergence was the tracer's), and it APPLIED THE NEXT
+ * BUTTON THERE -- on a screen the board never sits on, so every step after it
+ * compared two different walks.
+ *
+ * So a candidate is confirmed only when it behaves like a screen rather than a
+ * clip. Confirmed by ANY of:
+ *   - the VM reaching a STILL on it. A still is the picture STOPPING, which is
+ *     exactly what the board's own park rule measures, and it counts whether
+ *     the still is indefinite or FINITE: PAW_PATROL_MEET_EVEREST's VMGM PGC 14
+ *     is one button with fosl=1 behind a 10 s still -- a screen the viewer
+ *     really can press, which is why the tracer's blanket "auto-skip finite
+ *     stills" must not apply while buttons are up;
+ *   - the VM returning to the same (domain, vts, pgc, CELL) after a cell change
+ *     -- a loop, which is what a looping video menu is and what a clip's cells
+ *     never do (they ADVANCE, which is why the identity includes the cell: a
+ *     multi-cell intro would otherwise read as a loop on its own pgc number);
+ *   - or surviving PROBE_MAX_BLOCKS without leaving.
+ * An indefinite (0xff) still needs no candidate at all: it is a park by
+ * construction, so that path is unchanged.
+ *
+ * ⚠ Cheap in practice despite the cap, because the question is normally settled
+ * at the candidate cell's own END, not at the cap: PGC 26 resolves in its 211
+ * sectors and PGC 15 in its 88. The cap only bites on a long menu cell that
+ * neither stills nor loops. */
+#define PROBE_MAX_BLOCKS 16000
+
 int main(int argc, char **argv) {
   dvdnav_t *nav;
   uint8_t mem[DVD_VIDEO_LB_LEN];
   int finished = 0, parkno = 0, parked = 0, acted = 0;
   int wait_cells = 0, cells = 0;
+  int cand_on = 0, cand_dom = -1, cand_vts = -1, cand_pgc = -1, cand_cell = -1;
+  int cand_loops = 0;
+  long cand_blocks = 0;
   long blocks = 0, blocks_in_cell = 0;
 
   if (argc < 2) { printf("usage: %s <iso> [\"script\"] [rnd_seed]\n", argv[0]); return 1; }
@@ -152,11 +198,25 @@ int main(int argc, char **argv) {
       if (!parked && !acted && wait_cells == 0 && blocks_in_cell > 4) {
         pci_t *pci = dvdnav_get_current_nav_pci(nav);
         if (pci && pci->hli.hl_gi.hli_ss && (pci->hli.hl_gi.btn_ns & 0x3f)) {
-          dump_screen(nav, ++parkno); parked = 1;
-          int r = apply_action(nav);
-          if (r == 0) { printf("\n[script done -> stop]\n"); finished = 1; }
-          else if (r >= 2) { wait_cells = r - 2; parked = 0; }
-          else { acted = 1; }
+          dvd_state_t *st = &nav->vm->state;
+          if (!cand_on || st->domain != cand_dom || st->vtsN != cand_vts ||
+              st->pgcN != cand_pgc || st->cellN != cand_cell) {
+            cand_on = 1; cand_dom = st->domain; cand_vts = st->vtsN;
+            cand_pgc = st->pgcN; cand_cell = st->cellN;
+            cand_blocks = 0; cand_loops = 0;
+          } else {
+            cand_blocks++;
+          }
+          if (cand_loops > 0 || cand_blocks > PROBE_MAX_BLOCKS) {
+            printf("[park confirmed: pgc %d cell %d %s]\n", cand_pgc, cand_cell,
+                   cand_loops ? "looped" : "held past the probation cap");
+            cand_on = 0;
+            dump_screen(nav, ++parkno); parked = 1;
+            int r = apply_action(nav);
+            if (r == 0) { printf("\n[script done -> stop]\n"); finished = 1; }
+            else if (r >= 2) { wait_cells = r - 2; parked = 0; }
+            else { acted = 1; }
+          }
         }
       }
       if (blocks > 400000) { printf("[block cap]\n"); finished = 1; }
@@ -165,6 +225,7 @@ int main(int argc, char **argv) {
       dvdnav_still_event_t *s = (dvdnav_still_event_t *)buf;
       if (len == 0 && s->length == 0xff) { /* len field is in the event struct */ }
       if (s->length == 0xff) {                 /* indefinite still = a park */
+        cand_on = 0;   /* a still is a park by construction; no probation */
         if (!parked) {
           dump_screen(nav, ++parkno); parked = 1;
           int r = apply_action(nav);
@@ -175,6 +236,21 @@ int main(int argc, char **argv) {
           /* already acted on this still; if the VM didn't leave, force it */
           dvdnav_still_skip(nav);
         }
+      } else if (cand_on && !parked && nav->vm &&
+                 nav->vm->state.domain == cand_dom &&
+                 nav->vm->state.vtsN   == cand_vts &&
+                 nav->vm->state.pgcN   == cand_pgc) {
+        /* A FINITE still under a live candidate: the picture has stopped with
+         * buttons up, so this is an interactive screen on a timer, not a
+         * transition. Confirm it rather than skipping past it. */
+        printf("[park confirmed: pgc %d  %ds still with buttons up]\n",
+               cand_pgc, s->length);
+        cand_on = 0;
+        dump_screen(nav, ++parkno); parked = 1;
+        int r = apply_action(nav);
+        if (r == 0) { printf("\n[script done -> stop]\n"); finished = 1; }
+        else if (r >= 2) { wait_cells = r - 2; parked = 0; dvdnav_still_skip(nav); }
+        else acted = 1;
       } else {
         printf("[skip %ds still]\n", s->length);
         dvdnav_still_skip(nav);
@@ -186,6 +262,12 @@ int main(int argc, char **argv) {
       printf("[CELL #%d] title=%d part=%d  (blocks_in_prev_cell=%ld)\n",
              ++cells, tt, ptt, blocks_in_cell);
       dump_vm(nav, "cell");
+      if (cand_on) {
+        dvd_state_t *st = &nav->vm->state;
+        if (st->domain == cand_dom && st->vtsN == cand_vts &&
+            st->pgcN == cand_pgc && st->cellN == cand_cell)
+          cand_loops++;      /* came back to the same cell -> a real loop */
+      }
       blocks_in_cell = 0; parked = 0; acted = 0;
       if (wait_cells > 0) wait_cells--;
       if (cells > 4000) { printf("[cell cap]\n"); finished = 1; }

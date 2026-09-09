@@ -317,9 +317,59 @@ by running the oracle twice under different seeds, not by parsing commands).
 ⚠ **VTS is NOT comparable**: libdvdnav's is domain-relative, the board's is the
 reader's absolute VTS. Only PGCN is diffed.
 
-**Result so far (SHERLOCK_HOLMES):** the board and libdvdnav agree on both paths
-tested -- button 1 -> PGC 3, button 2 -> PGC 27 -- and `--red` proves the
-comparison can fail.
+### ★ A CELL WITH BUTTONS IS NOT YET A PARK -- the fifth and worst way it lied
+
+The four rows above are about the BOARD's park detection. The fifth was the
+ORACLE's, it survived them all, and it is the one that produced the last
+surviving "difference" in the first sweep.
+
+`trace_nav` parked on "a cell whose PCI carries buttons". That is true of a
+looping video menu and **false of a short authored clip that happens to carry an
+HLI**, and the two are indistinguishable at the instant the buttons appear.
+
+MEASURED, from the discs themselves:
+
+| disc | PGC | what it really is |
+|---|---|---|
+| SHERLOCK_HOLMES | VMGM 26 | 1 cell, `still=0`, `pbtime=9s`, POST `HL_BTNN=btn4; LinkPGCN 15` -- a 9 s clip that links itself to PGC 15, whose cell is `still=255` (the real menu) |
+| 24_DVD_BOARD_GAME | VMGM 2 | 5-cell ~24 s intro, POST `JumpSS VTSM (vts 1, menu 4)` |
+| 24_DVD_BOARD_GAME | VTSM 3 / 78 / 79 | `cell_cmd=1` -> `LinkPGN 1` -- the cell REPLAYS ITSELF. This is what a looping menu looks like |
+| INCREDIBLE_HULK | VTSM 11 | 39 s transition, POST `LinkPGCN 10`; PGC 10 is `cell_cmd=1` -> `LinkCN 1`, a self-loop |
+| PAW_PATROL_MEET_EVEREST | VMGM 14 | ONE button, `fosl=1`, behind a **10 s FINITE still** -- a screen the viewer really can press |
+
+It cost twice over. The transient clip was reported as the LANDING (so the
+board's correct 26 -> 15 read as a divergence when the divergence was the
+tracer's), and **the next button was applied there** -- on a screen the board
+never sits on, so every step after it compared two different walks.
+
+`trace_nav` now puts a button-bearing cell on **PROBATION** and confirms it only
+when it behaves like a screen rather than a clip -- by reaching a STILL (finite
+or indefinite: PAW_PATROL is why finite counts, and the blanket "auto-skip
+finite stills" must not apply while buttons are up), by the VM RETURNING to the
+same `(domain, vts, pgc, cell)` after a cell change (a loop), or by surviving
+`PROBE_MAX_BLOCKS`. ⚠ The identity includes the **cell**, or a multi-cell intro
+reads as a loop on its own PGC number. ⚠ It is normally settled at the candidate
+cell's own END rather than at the cap, so it is CHEAPER than the old rule, not
+dearer (BACKPACKER3DVD 6.3 s -> 0.3 s).
+
+**Validated against a disc or the board on every case where old and new
+disagree** -- an IFO reading for the table above, and for the two discs where the
+new tracer reports NO PARK at all, the board itself:
+
+| disc | old tracer | new | evidence |
+|---|---|---|---|
+| BATMAN_BEGINS | parks VTSM v3 PGC 1 | no park | **board** walks it through to the feature (`CH 1/ 1`, 2:19:52) and never parks |
+| Beverly_Hills_Chihuahua_3 | parks VTSM v6 PGC 21 | no park | **board** walks a trailer chain (VTS 12 -> 16), never parks |
+
+⚠ **`tools/bin/` is GITIGNORED** -- after editing `tools/dvd_trace/*.c` you must
+rebuild or you are testing the old binary:
+`DVD_REPOS=<path> tools/build_dvd_trace.sh`.
+
+**Result (SHERLOCK_HOLMES):** every path tested agrees -- button 1 -> PGC 3,
+button 2 -> PGC 27, button 3 -> PGC 15, and `3 3` -> PGC 15 (the case that used
+to differ; the board's trajectory `26 15* 15* 15*` shows it passing THROUGH the
+clip exactly as the disc authors it). `--red` still proves the comparison can
+fail.
 
 ## Track E: exploratory soak (`tools/dvd_explore.py`)
 

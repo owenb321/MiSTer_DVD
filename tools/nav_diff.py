@@ -128,20 +128,34 @@ def trace_landings(iso, script, seed=None):
     # ignores a digit for a button that does not exist, libdvdnav does something
     # else with it, and neither is wrong because the input is undefined. Only
     # well-defined inputs can be diffed.
-    out_rows, pending, at_park = [], None, None
+    #
+    # ⚠ THE **LAST** PARK BEFORE THE NEXT ACTION IS THE LANDING, NOT THE FIRST.
+    # For an intermediate action those are the same park (the next park spends
+    # the next script token, so exactly one sits between two actions). They
+    # differ only if the tracer emits more than one -- and then the later one is
+    # the settled screen, which is what the board's own SETTLE_REPEATS rule
+    # reports. Taking the first would compare a transient against a settled
+    # state, which is the shape of every false difference this tool has produced.
+    out_rows, pending, at_park, row_idx = [], None, None, None
     for kind, val in events:
         if kind == 'park':
             if pending is not None:
-                out_rows.append(dict(action=pending, applied_buttons=at_park,
-                                     buttons=val['buttons'], **val['state']))
-                pending = None
+                row = dict(action=pending, applied_buttons=applied_at,
+                           buttons=val['buttons'], **val['state'])
+                if row_idx is None:
+                    out_rows.append(row)
+                    row_idx = len(out_rows) - 1
+                else:
+                    out_rows[row_idx] = row
             at_park = val['buttons']
         elif kind == 'action':
             pending = val
-    if pending is not None:                      # script ended before a re-park
+            applied_at = at_park       # buttons at the park it is applied AT
+            row_idx = None
+    if pending is not None and row_idx is None:   # script ended before a re-park
         tail = [v for k, v in events if k == 'park']
         st = tail[-1]['state'] if tail else {}
-        out_rows.append(dict(action=pending, applied_buttons=at_park,
+        out_rows.append(dict(action=pending, applied_buttons=applied_at,
                              buttons=0, **st))
     return out_rows, out
 
