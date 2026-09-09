@@ -43,6 +43,7 @@ tools/mister.py restore         # stock Main, harness files gone, saved settings
 | `hud_read.py read/blocks <png>` | decode a screenshot's HUD / `O[2]` diagnostic blocks |
 | `dvd_explore.py <iso> --minutes 30` | unattended soak with self-tested oracles |
 | `audio_check.py <iso>` | is every audio track the disc offers actually audible? |
+| `acmod_scan.py [iso...]` | what acmod does each AC-3 track really carry, vs what the RTL accepts? (no hardware) |
 | `nav_diff.py <disc> --script "1 2"` | diff the core's navigation against libdvdnav |
 | `lipsync_measure.py` + `sync_disc.py` | A/V **offset** measurement (see the warning below) |
 
@@ -131,8 +132,20 @@ tools/audio_check.py <iso> --red            # prove the finding path fires
 Cycles the core's own `AUDIO n/N` popup, captures each track and measures its
 level. **The disc's other tracks are the control** — a quiet passage silences all of
 them equally, so a track that is digitally silent while its siblings are audible did
-not decode. That is the acmod signature (`dvd/ac3` supports acmod 2 and 7 only; quad
-and others are silent), which historically reached us as user reports.
+not decode. That is the acmod signature, which historically reached us as user reports.
+
+⛔ **DO NOT go hunting acmod silence without running `tools/acmod_scan.py` first.**
+`dvd/ac3` has decoded **acmod 1..7 since 2026-08-31**; only acmod 0 (1+1 dual mono)
+is still rejected, and prose saying otherwise (including an older line in this file
+and in CLAUDE.md) cost a session real hardware time. `acmod_scan.py` reads the
+accepted set out of `bsi_parse.sv` so it cannot go stale, and a 223-image sweep on
+2026-09-08 found **zero** unsupported streams in the local library.
+
+⚠ **The IFO's channel count is NOT the acmod** — it is a number the authoring tool
+wrote, the `progressive_frame` class again. Screening on the IFO flagged three discs;
+the bitstream cleared one outright (declares 4ch, carries plain acmod 2). And locate
+the syncframe via the PES `first_access_unit_pointer`, never by searching `0x0B77` —
+that pattern appears inside payload and yields a plausible WRONG acmod.
 
 - A capture card **is** the right instrument here. The offsets-not-rates rule is about
   frame sampling; silence is an amplitude question and amplitude is measured faithfully.

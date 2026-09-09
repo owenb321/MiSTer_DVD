@@ -1294,11 +1294,42 @@ worse maintenance burden than targeted in-place edits. So:
   functions elsewhere (`to_s16`, `bin2gray`, `bndtab`, `compute_mask`) ship fine —
   functions are not banned, but **when sim says correct and silicon says broken,
   suspect a recently-added function FIRST.** Memory: `verilog-function-hazards`.
-  **Still unsupported (and "unsupported" means SILENCE, not distortion): acmod
-  0/3/4/5/6** — only **2** library discs have such a DEFAULT track (both 2/2 quad)
-  plus the Residents, whose entire AC-3 layer is acmod 6.
-  Those need real multichannel downmix coefficients, unlike mono which needed none.
-  All three bug ISOs are clean rips (`css_scan` 0 scrambled packs).
+  ⛔ **THE "still unsupported: acmod 0/3/4/5/6" LINE THAT STOOD HERE WAS STALE and
+  sent a later session hunting a defect that no longer exists.** `bsi_parse.sv`
+  has decoded **acmod 1..7** since 2026-08-31 (the same commit as mono); the only
+  value still rejected is **acmod 0 (1+1 dual mono)**, and deliberately — it
+  carries a SECOND dialnorm/compr/langcod/audprodi block that the bsi FSM does
+  not walk, so accepting it would desync bsi and produce GARBAGE instead of
+  silence, a strictly worse failure. Read `dvd/ac3/bsi_parse.sv:186-204`, which
+  says exactly this; the CLAUDE.md summary simply had not been flipped with it.
+  ✅ **AND THE "absent from the measured library" CLAIM THAT REJECTION RESTS ON IS
+  NOW MEASURED, NOT ASSERTED (2026-09-08), BY A COMMITTED TOOL: `tools/acmod_scan.py`
+  over 223 images / 1521 AC-3 streams found acmod 2 ×1150, 7 ×354, 1 ×11, 5 ×3,
+  6 ×3, and ZERO acmod 0, 3 or 4** — so every AC-3 stream in the library is inside
+  what the core decodes today, and it exits 0.
+  ★ **THE TOOL READS THE ACCEPTED SET OUT OF `bsi_parse.sv` INSTEAD OF RESTATING
+  IT, and that is the actual lesson of this round.** The previous census's verdict
+  lived only as prose here; when the RTL grew acmod 3..6 the prose did not follow,
+  and a later session spent hardware time hunting a defect fixed months earlier.
+  A table that cannot go stale beats a correct one. (RED-proven: mutate the guard
+  back to the old `{2,7}` rule and the tool reports acmod 5 as silent and exits 1.)
+  ⚠ Scope stated honestly in the tool: it samples the head of each VTS's VOBS, so
+  a substream first appearing later is not sampled; acmod is a per-stream constant,
+  which is what makes that sound.
+  ⚠⚠ **AND THE IFO's CHANNEL COUNT IS NOT THE ACMOD — it is a number the AUTHORING
+  TOOL wrote, the `progressive_frame` failure class again.** Screening the library
+  on the IFO flagged 3 discs; the bitstream cleared one of them outright
+  (life_of_brian declares 4ch on VTS_03 and carries plain acmod 2) and moved
+  another's (DVD_VIDEO_20260806 VTS_08 declares 6ch, carries acmod 5). Locate the
+  syncframe through the PES `first_access_unit_pointer`, never by searching for
+  `0x0B77` — that pattern occurs inside payload and yields a plausible wrong acmod.
+  ✅ **HW-MEASURED on the rig 2026-09-08** with `tools/audio_check.py`, which reads
+  the capture card rather than an ear: The Residents (the disc that reported the
+  bug; HUD `CH 1/30` under `Debug Overlay=On` confirms the playing VTS is 30,
+  which the sweep confirms is acmod 6 quad) → **−29.5 dBFS**; THSCOUT VTS_05, the
+  one genuine acmod 5 (3/1) default track → both tracks audible; and a 6-track
+  disc whose track 6 is **mono** → all 6 audible. Nothing in this library is
+  silent any more.
 - 🔧 **FAILED MENU LINK RE-ENTERS THE MENU, NEVER THE MOVIE (2026-08-27, PR #17)
   — MERGED; HW no-regression pass 2026-08-27 (menus/boot unaffected); ⏳ the
   positive case (a disc whose menu link actually fails — the reporter's Blade
