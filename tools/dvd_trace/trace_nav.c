@@ -154,15 +154,24 @@ static int apply_action(dvdnav_t *nav) {
  *     -- a loop, which is what a looping video menu is and what a clip's cells
  *     never do (they ADVANCE, which is why the identity includes the cell: a
  *     multi-cell intro would otherwise read as a loop on its own pgc number);
- *   - or surviving PROBE_MAX_BLOCKS without leaving.
+ * ⛔ AND *NOT* "it survived a block budget". That arm was tried and REMOVED:
+ * SHERLOCK_HOLMES VMGM PGC 13 is a 117 s clip (cells=1, still=0, pbtime=117s)
+ * whose POST is `HL_BTNN = button 1; LinkPGCN 27`, and 117 s of video is far
+ * more than any sane cap -- so the budget confirmed the clip as a park and the
+ * board, which plays it out and lands on 27, was reported as diverging. Same
+ * shape on SPEED RACER (title PGC 8 -> 13) and tomb_raider (1 -> 2).
+ * A screen that never stills AND never loops is not a screen: every genuine
+ * interactive park does one or the other, by construction. So a candidate that
+ * does neither is simply never confirmed, the trace ends at the global block
+ * cap with no park, and nav_diff reports the step as unreadable instead of
+ * inventing a landing. An honest "I could not tell" beats a confident wrong
+ * answer -- which is the whole reason this differential exists.
  * An indefinite (0xff) still needs no candidate at all: it is a park by
  * construction, so that path is unchanged.
  *
- * ⚠ Cheap in practice despite the cap, because the question is normally settled
- * at the candidate cell's own END, not at the cap: PGC 26 resolves in its 211
- * sectors and PGC 15 in its 88. The cap only bites on a long menu cell that
- * neither stills nor loops. */
-#define PROBE_MAX_BLOCKS 16000
+ * ⚠ Cheap in practice, because the question is normally settled at the
+ * candidate cell's own END: PGC 26 resolves in its 211 sectors, PGC 15 in
+ * its 88. */
 
 int main(int argc, char **argv) {
   dvdnav_t *nav;
@@ -205,11 +214,11 @@ int main(int argc, char **argv) {
             cand_pgc = st->pgcN; cand_cell = st->cellN;
             cand_blocks = 0; cand_loops = 0;
           } else {
-            cand_blocks++;
+            cand_blocks++;      /* diagnostic only -- never confirms a park */
           }
-          if (cand_loops > 0 || cand_blocks > PROBE_MAX_BLOCKS) {
-            printf("[park confirmed: pgc %d cell %d %s]\n", cand_pgc, cand_cell,
-                   cand_loops ? "looped" : "held past the probation cap");
+          if (cand_loops > 0) {
+            printf("[park confirmed: pgc %d cell %d looped]\n",
+                   cand_pgc, cand_cell);
             cand_on = 0;
             dump_screen(nav, ++parkno); parked = 1;
             int r = apply_action(nav);

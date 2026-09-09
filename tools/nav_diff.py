@@ -166,7 +166,8 @@ def trace_landings(iso, script, seed=None):
 def board_landing(tmpdir, step):
     """Screenshot the board and read {PGCN, VTS} off the HUD. -> dict or None."""
     png = os.path.join(tmpdir, f'nav{step:03d}.png')
-    rc, _ = M.ssh('''
+    try:
+        rc, _ = M.ssh('''
 rm -f /media/fat/screenshots/navd.png
 echo 'screenshot navd.png' > /dev/MiSTer_cmd
 for i in $(seq 1 20); do
@@ -179,6 +180,12 @@ for i in $(seq 1 20); do
 done
 exit 1
 ''', check=False)
+    except subprocess.TimeoutExpired:
+        # ⚠ A DROPPED SSH ROUND-TRIP IS NOT A NAVIGATION DIFFERENCE.
+        # One 120 s timeout during a 24-disc sweep aborted the whole run
+        # with a traceback, and the sweep driver scored that exit code as
+        # a FINDING. A lost screenshot is a retry, not evidence.
+        return None
     if rc != 0:
         return None
     r = subprocess.run(['scp', *M.SSH_OPTS, '-q',
@@ -197,7 +204,23 @@ exit 1
     blk = H.read_blocks(frame)
     return dict(pgcn=res['dbg_pgcn'], vts=res['dbg_vts'],
                 armed=blk['hl_btns_armed']['value'],
-                elapsed=res.get('elapsed'), png=png)
+                still=blk['still_active']['value'],
+                elapsed=res.get('elapsed'), total=res.get('total'),
+                png=png)
+
+
+def _secs(t):
+    """'0:01:33' -> 93. None or unparseable -> None."""
+    if not t:
+        return None
+    try:
+        parts = [int(x) for x in t.split(':')]
+    except ValueError:
+        return None
+    v = 0
+    for q in parts:
+        v = v * 60 + q
+    return v
 
 
 def board_park(tmpdir, step, settle, timeout=45, want_armed=True):
@@ -227,24 +250,69 @@ def board_park(tmpdir, step, settle, timeout=45, want_armed=True):
     still fired mid-transition -- the board read the pass-through PGC while
     libdvdnav reported the PGC it came to rest in, one step further on. The
     trajectory is printed so this is visible rather than inferred.
+
+    ★★ AND STABLE + ARMED IS STILL NOT A PARK -- THE FIFTH ATTEMPT, and it is
+    the exact mirror of the defect fixed in trace_nav. A disc may author a
+    TRANSIENT CLIP WITH A HIGHLIGHT UP: 24_DVD_BOARD_GAME boots into VMGM PGC 2,
+    a ~24 s intro whose POST is `JumpSS VTSM (vts 1, menu 4)`, and holds one
+    PGCN with buttons armed for the whole of it. Every rule above passes there,
+    so the sweep pressed its button during the intro and reported the resulting
+    mismatch as a navigation defect on SIX discs.
+
+    MEASURED on the board (screenshots, 8 s apart, `Debug Overlay=On`):
+
+        t= 8..32s   CH 2  0:04/0:24 -> 0:19/0:24, then 0:08/0:35 -> 0:22/0:35
+        t=40..96s   CH 3  0:00/0:29 0:13 0:26 | 0:10 0:24 | 0:08 0:21 0:04
+
+    PGC 3 is where it comes to rest, and the IFO says why: `cell_cmd=1 ->
+    LinkPGN 1`, a cell that replays itself. libdvdnav settles there too.
+
+    So a park is confirmed the same way the oracle confirms one -- BY A STILL OR
+    BY A LOOP:
+      - `still_active` (O[2] block 6) -- the reader parked on a still;
+      - or the HUD clock WRAPPED with the total unchanged -- the cell replayed.
+    ⚠ The total must be unchanged, or a multi-cell intro reads as a loop: PGC 2
+    above resets its clock too, but its total moves 0:24 -> 0:35 because a new
+    CELL started. A real loop replays the same cell, so the total holds.
+    ⚠ Neither can be required alone: a still-only rule times out on a looping
+    motion menu (the mistake in row 2 of this list), and a loop-only rule never
+    fires on a menu still, whose clock does not run at all.
+    A landing that reaches the timeout without either is returned FLAGGED
+    (`unconfirmed`) rather than silently trusted.
     """
     deadline = time.time() + timeout
     prev, stable, traj = None, 0, []
+    prev_el, prev_tot, looped = None, None, False
     got = None
     while time.time() < deadline:
         got = board_landing(tmpdir, step)
         if got is not None:
             key = (got['pgcn'], got['vts'])
             traj.append(f"{got['pgcn']}{'*' if got.get('armed') else ''}")
-            stable = stable + 1 if key == prev else 0
-            prev = key
-            if (got.get('armed') or not want_armed) and stable >= SETTLE_REPEATS:
+            el, tot = _secs(got.get('elapsed')), _secs(got.get('total'))
+            if key == prev:
+                stable += 1
+                # a LOOP: the same cell replayed -- clock went backwards while
+                # the cell's own length stayed put (see the docstring).
+                if (el is not None and prev_el is not None and el < prev_el
+                        and tot is not None and tot == prev_tot):
+                    looped = True
+            else:
+                stable, looped = 0, False
+            prev, prev_el, prev_tot = key, el, tot
+            settled = got.get('still') is True or looped
+            if ((got.get('armed') or not want_armed)
+                    and stable >= SETTLE_REPEATS and settled):
                 got['traj'] = traj
+                got['why'] = 'still' if got.get('still') else 'loop'
                 return got
         time.sleep(settle)
     if got is not None:
         got['traj'] = traj
-        got['unsettled'] = True
+        # Stable and armed but neither still nor looping: it may be a transient
+        # clip that simply outlasted the budget. Say so instead of trusting it.
+        got['unconfirmed'] = True
+        got['unsettled'] = not (stable >= SETTLE_REPEATS and got.get('armed'))
     return got                               # best effort; caller reports it
 
 
@@ -311,7 +379,11 @@ def auto_script(iso, steps, seed):
         n = int(parks[-1]) if parks else 0
         if n < 1:
             break
-        script.append(str(rng.randint(1, n)))
+        # ⚠ THE BOARD PRESSES BUTTONS WITH DIGIT KEYS, so only 1..9 exist:
+        # `emu.sv` decodes ONE digit per key. A menu with more buttons made
+        # auto_script emit `10`, which aborted the run on 4 of 24 discs in a
+        # sweep -- and the driver scored the exit code as a finding.
+        script.append(str(rng.randint(1, min(n, 9))))
     return script
 
 
@@ -405,6 +477,7 @@ def main():
     start = board_park(tmpdir, 0, args.settle, timeout=args.boot_timeout)
     if start:
         print(f'    booted to pgc={start["pgcn"]} vts={start["vts"]}'
+              f' ({start.get("why", "?")})'
               f'   trajectory: {" ".join(start.get("traj", []))}'
               + ('  [UNSETTLED]' if start.get('unsettled') else ''))
     else:
@@ -413,9 +486,12 @@ def main():
     # ⛔ REFUSE to compare from an unknown starting state. Every landing after an
     # unsettled boot is measured against a board that is somewhere else entirely,
     # and the differences are the harness's, not the core's.
-    if start is None or start.get('unsettled') or not start.get('armed'):
-        print('\n  ABORT: the board never reached an armed park within '
+    if (start is None or start.get('unsettled') or not start.get('armed')
+            or start.get('unconfirmed')):
+        print('\n  ABORT: the board never reached a CONFIRMED park within '
               f'{args.boot_timeout}s -- nothing to compare against.')
+        print('    A park is confirmed by a still or by the cell looping; '
+              'stable+armed alone is a transient clip with a highlight up.')
         print('    Either the boot chain is longer than the budget (raise '
               '--boot-timeout) or this disc does not present a button menu.')
         print('    Comparing from here would report the harness, not the core.')
@@ -460,6 +536,17 @@ def main():
             continue
         if b is None:
             unknown.append(f'{r["did"]}: no readable HUD on the board')
+            continue
+        if b.get('unconfirmed') and not b.get('unsettled'):
+            # Stable and armed, but neither still nor looping inside the
+            # budget -- i.e. possibly a transient clip that outlasted it. That
+            # is exactly the state that produced six false differences, so it
+            # is reported, never compared.
+            unknown.append(f'{r["did"]}: park not confirmed (no still, no '
+                           f'loop) within the budget '
+                           f'(trajectory {" ".join(b.get("traj", []))})')
+            print(f'    [....] {r["did"]:<12} park unconfirmed -- not compared')
+            diverged = True
             continue
         if b.get('unsettled'):
             # It never reached an armed park, so it was still in transit. The
