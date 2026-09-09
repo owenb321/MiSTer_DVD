@@ -1396,10 +1396,23 @@ worse maintenance burden than targeted in-place edits. So:
   line is also why **multichannel LPCM is impossible** here — the board routes no other
   audio data pin; confirmed in its pin table.) `dvd/i2s_iec958.sv` serializes the SAME
   subframes `spdif_pass` biphase-encodes — one source, two link layers, so they cannot
-  drift. ★ **Chosen route is IEC958-direct (`0x0C[1:0]=3`), NOT an I2C channel-status bit**:
-  it is what mainline Linux uses for IEC958 subframes, and crucially it keeps the non-PCM
-  flag **DYNAMIC**, preserving the fj#110 ROUND 2 fix (receivers cannot acquire across
-  non-PCM null bursts) instead of pinning the flag high for a session. ★ **Stock Main is
+  drift. ⛔ **STALE AS WRITTEN — CORRECTED 2026-09-09. The route below was BUILT AND THEN
+  REMOVED, and the claim that follows it is now false.** `dvd/hdmi_bs_i2s.sv:14-19`:
+  IEC958-direct "was built, documented from the Programming Guide, sim-correct, and never
+  produced a decodable stream across four hardware rounds. It has been removed rather than
+  carried as dead weight." What SHIPS is route (i) — plain 16-bit standard I2S with the
+  channel status taken from the ADV7513 **register map**, `0x0C` = `0x44`/`0x04` and the
+  non-PCM bit in `0x12[7]` = `0xA0`/`0x20`, both written by Main over I2C in
+  `hdmi_config_set_audio()` (integration step 20). **So over HDMI the non-PCM flag is a
+  STATIC per-session I2C setting, not a per-block wire bit** — `emu.sv` ties `bs_nonpcm_o`
+  off entirely. Only optical S/PDIF carries it dynamically (`spdif_pass`, per 192-frame
+  block). Anything that needs HDMI to switch between PCM and a bitstream must therefore go
+  through Main, at its poll rate. ⚠ `dvd_hdmi_audio.cpp`'s own success message still says
+  "IEC958-direct mode", and `docs/hdmi_bitstream.md`'s §2 and register table still describe
+  the removed route.
+  ★ *(Superseded original text, kept for the reasoning:* chosen route is IEC958-direct
+  `0x0C[1:0]=3`, because it is what mainline Linux uses for IEC958 subframes and keeps the
+  non-PCM flag DYNAMIC, preserving the fj#110 ROUND 2 fix.*)* ★ **Stock Main is
   safe BY CONSTRUCTION**: the ADV7513's I2C is HPS-only, so a bitstream sent to a sink still
   expecting PCM is full-scale noise — the core therefore refuses to emit one without the
   `cfg[14]` ack that only MiSTer_DVDcss sets (after checking EDID Short Audio Descriptors,

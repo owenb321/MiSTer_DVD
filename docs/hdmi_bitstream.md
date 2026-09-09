@@ -37,6 +37,20 @@ the payload needs no new formatting at all; only the link layer changes.
 
 ## 2. Route decision: IEC958-direct, not an I2C channel-status bit
 
+> ⛔ **THIS SECTION DESCRIBES A ROUTE THAT WAS REMOVED (corrected 2026-09-09).**
+> IEC958-direct was built, sim-correct, and **never produced a decodable stream across
+> four hardware rounds** (`dvd/hdmi_bs_i2s.sv:14-19`). The shipping path is route **(i)**:
+> plain 16-bit standard I2S with the channel status from the register map — `0x0C` =
+> `0x44` (bitstream) / `0x04` (PCM) and the non-PCM bit in `0x12[7]` = `0xA0` / `0x20`.
+> The register table later in this file still lists the removed route's values
+> (`0x0C` = `0x07`, no `0x12` row, `0x73` inverted); the authority is
+> `hdmi_config_set_audio()` in `main/integration/apply_integration.py`.
+> **Consequence, and it is load-bearing for any future work here:** the non-PCM flag over
+> HDMI is a STATIC per-session I2C setting written by Main, *not* the per-block wire bit
+> `spdif_pass` carries on optical. `dvd/emu.sv` leaves `bs_nonpcm_o` unconnected.
+> §6's testbench list also names `i2s_iec958_tb`, which was deleted with the route.
+
+
 There were two ways to tell the ADV7513 "this is not PCM".
 
 **(i) Keep I2S Standard, set channel status from I2C registers** (`0x0C[6]=1`
