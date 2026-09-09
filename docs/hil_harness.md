@@ -365,11 +365,76 @@ new tracer reports NO PARK at all, the board itself:
 rebuild or you are testing the old binary:
 `DVD_REPOS=<path> tools/build_dvd_trace.sh`.
 
-**Result (SHERLOCK_HOLMES):** every path tested agrees -- button 1 -> PGC 3,
-button 2 -> PGC 27, button 3 -> PGC 15, and `3 3` -> PGC 15 (the case that used
-to differ; the board's trajectory `26 15* 15* 15*` shows it passing THROUGH the
-clip exactly as the disc authors it). `--red` still proves the comparison can
-fail.
+### ★ AND THE BOARD'S PARK RULE HAD THE SAME DEFECT -- the sixth way it lied
+
+Fixing the oracle exposed it, because the two errors had been CANCELLING. The
+board rule was `hl_btns_armed` + a stable `(PGCN, VTS)` -- the exact mirror of
+the tracer's old rule, and just as unable to tell a menu from a transient clip
+with a highlight up. The first re-sweep reported SIX differences; all six were
+this.
+
+MEASURED on the board (screenshots 8 s apart, `Debug Overlay=On`):
+
+```
+24_DVD_BOARD_GAME   t= 8..32s  CH 2  0:04/0:24 -> 0:19/0:24, 0:08/0:35 -> 0:22/0:35
+                    t=40..96s  CH 3  0:00/0:29 0:13 0:26 | 0:10 0:24 | 0:08 0:21
+tomb_raider_pal     25 -> 26 -> 24 (1:33) -> PGC 1 VTS 3 at t=80s
+```
+
+Both come to rest exactly where libdvdnav does. A park is now confirmed the same
+way the oracle confirms one -- **by a still or by a loop**: `still_active`
+(O[2] block 6), or the HUD clock WRAPPING with the **total unchanged**. Both
+signals were already being read.
+⚠ The total must be unchanged or a multi-cell intro reads as a loop: PGC 2 above
+resets its clock too, but its total moves `0:24 -> 0:35` because a new CELL
+started. ⚠ Neither test works alone -- still-only times out on a looping motion
+menu (row 2 of the table above), loop-only never fires on a menu still. A landing
+that reaches the budget with neither is FLAGGED and reported, never compared.
+
+**And the same bug one level up, in the tracer's own probation:** it could still
+confirm a park by SURVIVING A BLOCK BUDGET, and SHERLOCK_HOLMES VMGM PGC 13 is a
+**117 s clip** (`cells=1 still=0 pbtime=117s`, POST `HL_BTNN=btn1; LinkPGCN 27`)
+-- past any sane cap. Same shape on SPEED RACER (title PGC 8 -> 13) and
+tomb_raider (1 -> 2). **The budget arm is REMOVED**: every genuine interactive
+screen either stills or loops, so a candidate that does neither is never
+confirmed and the step is reported unreadable rather than given an invented
+landing.
+
+Two more the sweep exposed, both scored as findings by exit code: `auto_script`
+could emit **button 10** (the board presses buttons with DIGIT KEYS, so only 1-9
+exist) which aborted 4 of 24 discs; and a 120 s **ssh timeout** raised through
+`board_landing` and killed a run with a traceback. A lost screenshot is a retry,
+not evidence.
+
+## Sweep result (24 interactive discs, 2026-09-09)
+
+Run with `--auto 3 --seed 1 --boot-timeout 300 --action-timeout 180`, ~2.5 h of
+board time.
+
+| verdict | n | meaning |
+|---|---|---|
+| CLEAN | 16 | every comparable step agreed with libdvdnav |
+| NONDET | 3 | disc navigation uses `rnd`; a differential cannot apply |
+| SKIPPED | 5 | no confirmed park to compare from -- reported, not guessed |
+| **DIFFERENCE** | **0** | |
+
+⚠ **The SKIPPED five are a coverage cost, and it is the deliberate trade.** Three
+(THEBRAINGAME, Scourge Disc 2, Thayer's Quest) are "the oracle found no button
+menu"; Mad Dog 2 holds one PGCN armed for 300 s without ever stilling or looping;
+deal_or_no_deal never produced a readable HUD. Each previously produced an answer
+that was not trustworthy. An honest "cannot tell" is the point -- but Thayer's
+timed-still choice cells in particular are worth revisiting, since the finite-
+still arm ought to catch them.
+
+⚠ **The earlier "fully clean" verdicts on this set are VOID** -- they were
+reached when both sides made the same mistake. That is this project's recurring
+shape (see the field-order/sync entry in `CLAUDE.md`): two errors that cancel
+read as agreement, and fixing one is what exposes the other.
+
+**Per-path result (SHERLOCK_HOLMES):** button 1 -> PGC 3, button 2 -> PGC 27,
+button 3 -> PGC 15, `3 3` -> PGC 15, and button 5 -> PGC 27 with the board's
+trajectory visibly playing through the 117 s clip (`13` x15) first. `--red` still
+proves the comparison can fail.
 
 ## Track E: exploratory soak (`tools/dvd_explore.py`)
 
