@@ -151,7 +151,11 @@ for f in /media/fat/MiSTer_DVDcss_hil_*; do
   [ $running = 0 ] && rm -f "$f"
 done
 echo "  harness files removed (core, mgl, agent, spare Mains)"
-echo "  NOTE: config/@CFG@ still holds whatever options the harness last set,"
+if [ -f /media/fat/config/@CFG@.hilbak ]; then
+  mv -f /media/fat/config/@CFG@.hilbak /media/fat/config/@CFG@
+  echo "  restored the saved settings the harness had overwritten"
+fi
+echo "  NOTE: config/@CFG@ is back to the user's own settings,"
 echo "        and the running Main stays until the next core load."
 """
 
@@ -317,6 +321,60 @@ def build_status(opts):
 # ---------------------------------------------------------------------------
 # commands
 # ---------------------------------------------------------------------------
+def capture_devices():
+    """Resolve the capture card by NAME, not by index.
+
+    ⚠ ALSA card numbers and /dev/videoN are USB enumeration order and they MOVE.
+    The recorded default `hw:1,0` was correct when it was written and the card is
+    now hw:0 -- a stale index does not error, it records the WRONG DEVICE
+    (a webcam, or the motherboard's line-in) and hands back a confident silent
+    file. Same class as the hardcoded DVD_v2.CFG that stopped being read.
+
+    $MISTER_CAPTURE_NAME overrides the card name to match on.
+    """
+    want = os.environ.get('MISTER_CAPTURE_NAME', 'Hagibis')
+    adev = vdev = None
+    afmt = 'alsa'
+    # ⚠ PREFER THE SOUND SERVER. PipeWire/Pulse opens the USB capture card
+    # exclusively, so a raw `hw:N,0` fails with "Device or resource busy" -- and
+    # ffmpeg reports that as an input error, not as "something else has it".
+    # The server re-exposes the same card as a source; go through it.
+    try:
+        out = subprocess.run(['pactl', 'list', 'short', 'sources'],
+                             capture_output=True, text=True).stdout
+        for line in out.splitlines():
+            f = line.split('\t')
+            if len(f) > 1 and want.lower() in f[1].lower() and '.monitor' not in f[1]:
+                adev, afmt = f[1], 'pulse'
+                break
+    except Exception:
+        pass
+    if adev is None:
+        try:
+            out = subprocess.run(['arecord', '-l'], capture_output=True,
+                                 text=True).stdout
+            m = re.search(r'card (\d+): (\S*%s\S*)' % re.escape(want), out, re.I)
+            if m:
+                adev = 'hw:%s,0' % m.group(1)
+        except Exception:
+            pass
+    try:
+        out = subprocess.run(['v4l2-ctl', '--list-devices'], capture_output=True,
+                             text=True).stdout
+        block = None
+        for chunk in out.split('\n\n'):
+            if want.lower() in chunk.lower():
+                block = chunk
+                break
+        if block:
+            m = re.search(r'(/dev/video\d+)', block)
+            if m:
+                vdev = m.group(1)
+    except Exception:
+        pass
+    return vdev, adev, afmt
+
+
 def newest_rbf():
     rel = os.path.join(ROOT, 'releases')
     cands = [os.path.join(rel, f) for f in os.listdir(rel)] if os.path.isdir(rel) else []
@@ -546,7 +604,11 @@ def cmd_launch(args):
            f'  <file delay="{args.delay}" type="s" index="0" '
            f'path="{img}"/>\n'
            f'</mistergamedescription>\n')
+    # ⚠ This OVERWRITES the user's saved OSD settings for the core. Back them up
+    # once, so a harness session on someone's own rig is not destructive.
     ssh(f'''
+[ -f {CFG_DIR}/{CFG_NAME}.hilbak ] || [ ! -f {CFG_DIR}/{CFG_NAME} ] || \
+    cp {CFG_DIR}/{CFG_NAME} {CFG_DIR}/{CFG_NAME}.hilbak
 python3 -c "import sys;open('{CFG_DIR}/{CFG_NAME}','wb').write(bytes.fromhex('{blob.hex()}'))"
 cat > {CORE_DIR}/{HIL_MGL} <<'MGLEOF'
 {mgl}MGLEOF
@@ -646,8 +708,11 @@ def cmd_capture(args):
     cal = {}
     if os.path.exists(os.path.join(HERE, '.mister_capture.json')):
         cal = json.load(open(os.path.join(HERE, '.mister_capture.json')))
-    vdev = args.vdev or cal.get('video_device', '/dev/video0')
-    adev = args.adev or cal.get('audio_device', 'hw:1,0')
+    auto_v, auto_a, auto_fmt = capture_devices()
+    vdev = args.vdev or cal.get('video_device') or auto_v or '/dev/video0'
+    adev = args.adev or cal.get('audio_device') or auto_a or 'hw:0,0'
+    if not args.vdev and not cal.get('video_device') and auto_v:
+        print(f'  (resolved capture card by name: {auto_v} / {auto_a})')
     out = args.out or os.path.join(os.environ.get('TMPDIR', '/tmp'),
                                    f'hilcap_{time.strftime("%H%M%S")}.mkv')
     total = args.seconds + args.warmup
@@ -655,7 +720,8 @@ def cmd_capture(args):
            '-f', 'v4l2', '-input_format', args.pixfmt,
            '-video_size', args.video_size, '-framerate', str(args.fps),
            '-i', vdev,
-           '-f', 'alsa', '-ac', '2', '-ar', '48000', '-i', adev,
+           '-f', (args.afmt or auto_fmt), '-ac', '2', '-ar', '48000',
+           '-i', adev,
            '-t', str(total), '-c:v', 'copy', '-c:a', 'pcm_s16le', out]
     print(f'capture: {args.video_size}@{args.fps} {args.pixfmt} from {vdev} + {adev}')
     print(f'  {args.seconds}s (+{args.warmup}s warm-up) -> {out}')
@@ -890,6 +956,8 @@ def main():
     p.add_argument('--pixfmt', default='mjpeg')
     p.add_argument('--vdev')
     p.add_argument('--adev')
+    p.add_argument('--afmt', choices=('alsa', 'pulse'),
+                   help='ffmpeg audio input format (auto-detected)')
     p.set_defaults(fn=cmd_capture)
 
     p = sub.add_parser('log')

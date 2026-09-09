@@ -61,6 +61,27 @@ BAD_POPUPS = ('LINK FAIL', 'CSS ENCRYPTED', 'UNSUPPORTED', 'BAD IMAGE')
 
 # Actions that legitimately disturb the counters: a seek flushes buffers and
 # re-arms the audio drain gate, a menu hop stalls video against the STC.
+# ⚠ THE JSON KEY IS `disp_lag_ms`, NOT `disp_lag`, AND IT IS ALREADY IN
+# MILLISECONDS -- main/support/dvd/dvd_ctl.cpp converts word 11 (signed, 1 LSB =
+# 16 ticks of the 90 kHz STC) before publishing. Reading `disp_lag` gets a
+# MISSING KEY, which `.get(k, 0)` turns into a constant zero and a dead oracle.
+# That is exactly how this check's predecessor died, and I repeated it here on
+# the first attempt; the liveness report below is what surfaced it. Take field
+# names from dvd_ctl.cpp's fprintf, never from the RTL port names.
+DISP_LAG_KEY = 'disp_lag_ms'
+# Threshold, MEASURED not guessed: 90/90 steady-playback samples of a real film
+# sat at -16.7 ms (exactly one 59.94 Hz refresh -- a fire-when-due scheduler is
+# one frame behind by construction), worst excursion 25.1 ms, 3 distinct values.
+# 120 ms is ~5x that worst case: quiet on healthy content, and still catches a
+# display several frames off its schedule.
+DISP_LAG_MAX_MS = 120.0
+
+# Fields that MUST move while a picture is playing. A constant one is a RETIRED
+# INSTRUMENT, not a quiet disc, and any oracle reading it is dead. Fields that
+# may legitimately stay put (aud_gate, drops, lates on healthy content) are
+# deliberately NOT listed -- flagging those would cry wolf on every clean run.
+MUST_VARY = ('refreshes', 'pickups', DISP_LAG_KEY)
+
 PERTURBING = {'next-chapter', 'prev-chapter', 'menu', 'title', 'return',
               'select', 'pause', 'up', 'down', 'left', 'right'}
 
@@ -92,6 +113,8 @@ class Explorer:
         # Downsampled previous frame, for "is the picture actually moving?".
         self.prev_small = None
         self.frozen_for = 0
+        # key -> (min, max) across the run, for the liveness report
+        self.telem_range = {}
 
     def log(self, **kw):
         kw['step'] = self.step
@@ -221,14 +244,23 @@ exit 1
         if d_gate:
             raise Finding(f'audio drain gate closed {d_gate}x during steady '
                           'playback -- audio is being held')
-        # RATE of change, not the absolute value: vid_err carries whatever it
-        # accumulated across the last menu or seek until the next re-anchor, so
-        # its magnitude says nothing. Its slope during steady play does.
-        dt = max(0.5, tel.get('t', 0) - prev.get('t', 0))
-        d_err = abs(tel.get('vid_err', 0) - prev.get('vid_err', 0)) / dt
-        if d_err > 8:
-            raise Finding(f'vid_err moving {d_err:.1f} refresh/s during steady '
-                          'playback (video losing the timeline)')
+        # ⚠⚠ THIS ORACLE USED TO READ `vid_err`, WHICH PR #63 RETIRED -- emu.sv
+        # now ties telemetry word 5 to a literal 16'd0. The check therefore
+        # computed a slope of exactly zero on every sample and COULD NOT FIRE,
+        # on hardware, silently, for as long as it shipped. The selftest kept
+        # passing because it feeds synthetic dicts: it proves the oracle's LOGIC
+        # fires, and says nothing about whether its INPUT is alive. See the
+        # liveness report at the end of a run, which is the guard for that.
+        #
+        # `disp_lag` (word 11) is the modern signal and a better one: it is the
+        # displayed picture's PTS minus the STC, so it is a BOUNDED error, not
+        # an accumulator -- an absolute threshold means something, where
+        # vid_err's magnitude never did.
+        if DISP_LAG_KEY in tel:
+            lag_ms = tel[DISP_LAG_KEY]
+            if abs(lag_ms) > DISP_LAG_MAX_MS:
+                raise Finding(f'display {lag_ms:+.0f} ms from its schedule '
+                              'during steady playback')
         d_drop = (tel.get('drops', 0) - prev.get('drops', 0)) & 0xFFFF
         if d_drop > 60:
             raise Finding(f'{d_drop} frames dropped between samples')
@@ -281,6 +313,10 @@ exit 1
             png, tel, hud = None, {}, {}
             try:
                 tel = self.telem()
+                for k, v in tel.items():
+                    if isinstance(v, (int, float)):
+                        lo, hi = self.telem_range.get(k, (v, v))
+                        self.telem_range[k] = (min(lo, v), max(hi, v))
                 png = self.shot()
                 if png:
                     hud = self.check_frame(png)
@@ -310,6 +346,24 @@ exit 1
             if png and os.path.exists(png):
                 os.remove(png)                          # keep only findings
             time.sleep(self.args.settle)
+
+        # ⚠ LIVENESS: an oracle whose input never moved could not have fired,
+        # however green its selftest is. This is what would have caught the
+        # retired vid_err word within one run instead of shipping dead.
+        if self.telem_range:
+            dead = [k for k in MUST_VARY
+                    if k in self.telem_range
+                    and self.telem_range[k][0] == self.telem_range[k][1]]
+            missing = [k for k in MUST_VARY if k not in self.telem_range]
+            if dead or missing:
+                print('\n  !! TELEMETRY LIVENESS:')
+                for k in dead:
+                    print(f'     {k} never changed (constant '
+                          f'{self.telem_range[k][0]}) -- retired instrument? '
+                          'any oracle reading it is DEAD')
+                for k in missing:
+                    print(f'     {k} absent from the telemetry -- core/Main '
+                          'older than the field, or the word was removed')
 
         print(f'\ndvd_explore: {self.step} steps, {len(self.findings)} finding(s)')
         for i, f in enumerate(self.findings, 1):
@@ -388,7 +442,8 @@ def selftest():
     arm('CONTROL: clock held in a menu', held_in_menu, False)
 
     print('[telemetry]')
-    base = dict(t=0.0, aud_gate=0, vid_err=0, drops=0, flags=playing['flags'])
+    base = dict(t=0.0, aud_gate=0, **{DISP_LAG_KEY: 0.0},
+                drops=0, flags=playing['flags'])
     def gate():
         e.quiet = 0
         e.check_telem(dict(base, t=2.0, aud_gate=3), base)
@@ -397,15 +452,49 @@ def selftest():
         e.quiet = 2
         e.check_telem(dict(base, t=2.0, aud_gate=3), base)
     arm('CONTROL: same, just after a seek', gate_quiet, False)
-    def slope():
+    # disp_lag is in units of 16 STC ticks; 1000 LSB = 178 ms, over the threshold.
+    def lag():
         e.quiet = 0
-        e.check_telem(dict(base, t=2.0, vid_err=60), base)
-    arm('vid_err slope during steady play', slope, True)
-    def slope_menu():
+        e.check_telem(dict(base, t=2.0, **{DISP_LAG_KEY: 178.0}), base)
+    arm('display far from its schedule', lag, True)
+    def lag_ok():
+        e.quiet = 0
+        e.check_telem(dict(base, t=2.0, **{DISP_LAG_KEY: 36.0}), base)  # healthy
+    arm('CONTROL: small lag is normal', lag_ok, False)
+    def lag_menu():
         e.quiet = 0
         menu = dict(base, flags={'video_live': 1, 'pause': 0, 'still': 0, 'menu': 1})
-        e.check_telem(dict(menu, t=2.0, vid_err=60), menu)
-    arm('CONTROL: same, but in a menu', slope_menu, False)
+        e.check_telem(dict(menu, t=2.0, **{DISP_LAG_KEY: 178.0}), menu)
+    arm('CONTROL: same, but in a menu', lag_menu, False)
+    def lag_frozen():
+        e.quiet = 0
+        e.frozen_for = 3
+        e.check_telem(dict(base, t=2.0, **{DISP_LAG_KEY: 178.0}), base)
+        e.frozen_for = 0
+    arm('CONTROL: same, but the picture is a still', lag_frozen, False)
+
+    print('[liveness guard]')
+    # The failure this exists for: an oracle wired to a RETIRED telemetry word.
+    e2 = Explorer(args)
+    for _ in range(4):
+        e2.telem_range = {'refreshes': (1, 900), 'pickups': (1, 450),
+                          DISP_LAG_KEY: (0.0, 0.0)}
+    dead = [k for k in MUST_VARY
+            if k in e2.telem_range
+            and e2.telem_range[k][0] == e2.telem_range[k][1]]
+    ok = dead == [DISP_LAG_KEY]
+    print(f"  {'PASS' if ok else 'FAIL'} names a constant field as dead: {dead}")
+    if not ok:
+        fails += 1
+    e2.telem_range = {'refreshes': (1, 900), 'pickups': (1, 450),
+                      DISP_LAG_KEY: (-40.0, 55.0)}
+    dead = [k for k in MUST_VARY
+            if k in e2.telem_range
+            and e2.telem_range[k][0] == e2.telem_range[k][1]]
+    ok = dead == []
+    print(f"  {'PASS' if ok else 'FAIL'} CONTROL: a live field is not flagged")
+    if not ok:
+        fails += 1
 
     print('dvd_explore selftest:', 'ALL GREEN' if not fails else f'{fails} FAILURE(S)')
     return 1 if fails else 0

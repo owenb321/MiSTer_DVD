@@ -260,6 +260,182 @@ Things worth knowing before touching it:
 - **Not behind an `ifdef`.** Gating it would mean a rebuild and a fitter-seed
   re-roll every time telemetry is wanted, which is the cost it exists to remove.
 
+## ★ There is a SKILL for this: `.claude/skills/hil-testing/`
+
+Sessions kept re-deriving the tooling from this note. The skill is the operating
+manual (commands, traps, how to put the rig back); this file stays the design
+record and evidence trail. Read the skill first.
+
+## Track E phase 2: navigation differential (`tools/nav_diff.py`)
+
+The soak can see a core that has CRASHED. It cannot see one that navigated
+somewhere WRONG, because a wrong menu looks exactly like a right one. `nav_diff`
+drives **libdvdnav** and the **board** with the same button path and diffs the
+landing.
+
+```bash
+tools/nav_diff.py interactive/SOME.iso --script "1 2" --settle 3
+tools/nav_diff.py <disc> --script "1" --red 2    # prove the comparison can fail
+tools/nav_diff.py <disc> --no-board              # oracle only
+```
+
+**libdvdnav is the oracle, not `tools/dvd_vm_ref.py`.** The golden model was
+written from the RTL and holds its assumptions -- through the POST-only PGC
+dispatcher bug (70 of 505 discs) it agreed with the hardware the whole way.
+libdvdnav settled that bug and it is what this diffs against.
+
+**The button NUMBER is the unit.** libdvdnav's `<N>` token is
+`dvdnav_button_select_and_activate(N)` and the core decodes a DIGIT KEY to
+exactly that, so neither side has to walk a D-pad -- a walk would leave any
+disagreement ambiguous between "wrong landing" and "different route".
+
+⚠ **Four ways it lied before it worked, all of them the harness:**
+
+| attempt at "the board has landed" | why it was wrong |
+|---|---|
+| fixed sleep | the board was still walking its boot chain (PGC 90 -> 2 -> 1) while the script pressed buttons -- two confident false differences |
+| picture stopped moving | a MOTION menu loops forever, so it times out on exactly the discs worth testing |
+| PGCN settled | a First Play LOGO cell holds one PGCN for many seconds |
+| **highlight armed AND settled** | correct -- `buttons=N` in libdvdnav, `hl_btns_armed` (O[2] block 1) on the board: the same question |
+
+⚠ **libdvdnav runs at CPU speed; the board PLAYS every cell in real time**, so a
+boot chain costing the oracle milliseconds costs the board minutes. The budget is
+240 s and the tool now REFUSES to compare from an unsettled start rather than
+reporting itself as the core.
+
+⚠ **Only well-defined inputs are comparable.** Pressing button 2 at a park with
+`buttons=1` gave a reproducible, confident "difference" that was undefined input
+-- the board correctly ignores a digit for a button that does not exist and
+libdvdnav does something else, and neither is wrong. Out-of-range buttons are
+skipped, never diffed.
+
+⚠ **And three more the first sweep found, all the same shape** -- a step that
+never parked was compared anyway; everything downstream of a divergence was
+counted as an independent finding when the next press lands at two different
+menus; and a disc whose navigation uses `rnd` cannot be diffed at all (detected
+by running the oracle twice under different seeds, not by parsing commands).
+⚠ **VTS is NOT comparable**: libdvdnav's is domain-relative, the board's is the
+reader's absolute VTS. Only PGCN is diffed.
+
+### ★ A CELL WITH BUTTONS IS NOT YET A PARK -- the fifth and worst way it lied
+
+The four rows above are about the BOARD's park detection. The fifth was the
+ORACLE's, it survived them all, and it is the one that produced the last
+surviving "difference" in the first sweep.
+
+`trace_nav` parked on "a cell whose PCI carries buttons". That is true of a
+looping video menu and **false of a short authored clip that happens to carry an
+HLI**, and the two are indistinguishable at the instant the buttons appear.
+
+MEASURED, from the discs themselves:
+
+| disc | PGC | what it really is |
+|---|---|---|
+| SHERLOCK_HOLMES | VMGM 26 | 1 cell, `still=0`, `pbtime=9s`, POST `HL_BTNN=btn4; LinkPGCN 15` -- a 9 s clip that links itself to PGC 15, whose cell is `still=255` (the real menu) |
+| 24_DVD_BOARD_GAME | VMGM 2 | 5-cell ~24 s intro, POST `JumpSS VTSM (vts 1, menu 4)` |
+| 24_DVD_BOARD_GAME | VTSM 3 / 78 / 79 | `cell_cmd=1` -> `LinkPGN 1` -- the cell REPLAYS ITSELF. This is what a looping menu looks like |
+| INCREDIBLE_HULK | VTSM 11 | 39 s transition, POST `LinkPGCN 10`; PGC 10 is `cell_cmd=1` -> `LinkCN 1`, a self-loop |
+| PAW_PATROL_MEET_EVEREST | VMGM 14 | ONE button, `fosl=1`, behind a **10 s FINITE still** -- a screen the viewer really can press |
+
+It cost twice over. The transient clip was reported as the LANDING (so the
+board's correct 26 -> 15 read as a divergence when the divergence was the
+tracer's), and **the next button was applied there** -- on a screen the board
+never sits on, so every step after it compared two different walks.
+
+`trace_nav` now puts a button-bearing cell on **PROBATION** and confirms it only
+when it behaves like a screen rather than a clip -- by reaching a STILL (finite
+or indefinite: PAW_PATROL is why finite counts, and the blanket "auto-skip
+finite stills" must not apply while buttons are up), by the VM RETURNING to the
+same `(domain, vts, pgc, cell)` after a cell change (a loop), or by surviving
+`PROBE_MAX_BLOCKS`. ⚠ The identity includes the **cell**, or a multi-cell intro
+reads as a loop on its own PGC number. ⚠ It is normally settled at the candidate
+cell's own END rather than at the cap, so it is CHEAPER than the old rule, not
+dearer (BACKPACKER3DVD 6.3 s -> 0.3 s).
+
+**Validated against a disc or the board on every case where old and new
+disagree** -- an IFO reading for the table above, and for the two discs where the
+new tracer reports NO PARK at all, the board itself:
+
+| disc | old tracer | new | evidence |
+|---|---|---|---|
+| BATMAN_BEGINS | parks VTSM v3 PGC 1 | no park | **board** walks it through to the feature (`CH 1/ 1`, 2:19:52) and never parks |
+| Beverly_Hills_Chihuahua_3 | parks VTSM v6 PGC 21 | no park | **board** walks a trailer chain (VTS 12 -> 16), never parks |
+
+⚠ **`tools/bin/` is GITIGNORED** -- after editing `tools/dvd_trace/*.c` you must
+rebuild or you are testing the old binary:
+`DVD_REPOS=<path> tools/build_dvd_trace.sh`.
+
+### ★ AND THE BOARD'S PARK RULE HAD THE SAME DEFECT -- the sixth way it lied
+
+Fixing the oracle exposed it, because the two errors had been CANCELLING. The
+board rule was `hl_btns_armed` + a stable `(PGCN, VTS)` -- the exact mirror of
+the tracer's old rule, and just as unable to tell a menu from a transient clip
+with a highlight up. The first re-sweep reported SIX differences; all six were
+this.
+
+MEASURED on the board (screenshots 8 s apart, `Debug Overlay=On`):
+
+```
+24_DVD_BOARD_GAME   t= 8..32s  CH 2  0:04/0:24 -> 0:19/0:24, 0:08/0:35 -> 0:22/0:35
+                    t=40..96s  CH 3  0:00/0:29 0:13 0:26 | 0:10 0:24 | 0:08 0:21
+tomb_raider_pal     25 -> 26 -> 24 (1:33) -> PGC 1 VTS 3 at t=80s
+```
+
+Both come to rest exactly where libdvdnav does. A park is now confirmed the same
+way the oracle confirms one -- **by a still or by a loop**: `still_active`
+(O[2] block 6), or the HUD clock WRAPPING with the **total unchanged**. Both
+signals were already being read.
+⚠ The total must be unchanged or a multi-cell intro reads as a loop: PGC 2 above
+resets its clock too, but its total moves `0:24 -> 0:35` because a new CELL
+started. ⚠ Neither test works alone -- still-only times out on a looping motion
+menu (row 2 of the table above), loop-only never fires on a menu still. A landing
+that reaches the budget with neither is FLAGGED and reported, never compared.
+
+**And the same bug one level up, in the tracer's own probation:** it could still
+confirm a park by SURVIVING A BLOCK BUDGET, and SHERLOCK_HOLMES VMGM PGC 13 is a
+**117 s clip** (`cells=1 still=0 pbtime=117s`, POST `HL_BTNN=btn1; LinkPGCN 27`)
+-- past any sane cap. Same shape on SPEED RACER (title PGC 8 -> 13) and
+tomb_raider (1 -> 2). **The budget arm is REMOVED**: every genuine interactive
+screen either stills or loops, so a candidate that does neither is never
+confirmed and the step is reported unreadable rather than given an invented
+landing.
+
+Two more the sweep exposed, both scored as findings by exit code: `auto_script`
+could emit **button 10** (the board presses buttons with DIGIT KEYS, so only 1-9
+exist) which aborted 4 of 24 discs; and a 120 s **ssh timeout** raised through
+`board_landing` and killed a run with a traceback. A lost screenshot is a retry,
+not evidence.
+
+## Sweep result (24 interactive discs, 2026-09-09)
+
+Run with `--auto 3 --seed 1 --boot-timeout 300 --action-timeout 180`, ~2.5 h of
+board time.
+
+| verdict | n | meaning |
+|---|---|---|
+| CLEAN | 16 | every comparable step agreed with libdvdnav |
+| NONDET | 3 | disc navigation uses `rnd`; a differential cannot apply |
+| SKIPPED | 5 | no confirmed park to compare from -- reported, not guessed |
+| **DIFFERENCE** | **0** | |
+
+⚠ **The SKIPPED five are a coverage cost, and it is the deliberate trade.** Three
+(THEBRAINGAME, Scourge Disc 2, Thayer's Quest) are "the oracle found no button
+menu"; Mad Dog 2 holds one PGCN armed for 300 s without ever stilling or looping;
+deal_or_no_deal never produced a readable HUD. Each previously produced an answer
+that was not trustworthy. An honest "cannot tell" is the point -- but Thayer's
+timed-still choice cells in particular are worth revisiting, since the finite-
+still arm ought to catch them.
+
+⚠ **The earlier "fully clean" verdicts on this set are VOID** -- they were
+reached when both sides made the same mistake. That is this project's recurring
+shape (see the field-order/sync entry in `CLAUDE.md`): two errors that cancel
+read as agreement, and fixing one is what exposes the other.
+
+**Per-path result (SHERLOCK_HOLMES):** button 1 -> PGC 3, button 2 -> PGC 27,
+button 3 -> PGC 15, `3 3` -> PGC 15, and button 5 -> PGC 27 with the board's
+trajectory visibly playing through the 117 s clip (`13` x15) first. `--red` still
+proves the comparison can fail.
+
 ## Track E: exploratory soak (`tools/dvd_explore.py`)
 
 Drives a disc unattended and watches for anything wrong. Seeded and fully
