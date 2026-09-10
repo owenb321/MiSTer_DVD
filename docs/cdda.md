@@ -295,13 +295,79 @@ which passes whether the upload is rejected *or* accepted; the second used an
 alternate table whose "truncated" length happened to be exactly valid for the
 ntracks it declared.
 
-## Next (branch 2)
+## HW gate (branch 2) — RUN 2026-09-10, track skip PROVEN, one item blocked
 
-`main/support/dvd/dvd_cdda.cpp`: TOC via `CDROMREADTOCHDR`/`CDROMREADTOCENTRY`,
-audio sectors via SG_IO `READ CD` (0xBE, `cdb[9]=0x10`, `cdb[1]=0x04`), repacked
-2352→2048 behind the synthetic WAV header, served through the existing
-`SD_TYPE_DVDCSS` hooks so `apply_integration.py` needs **zero** new steps. A
-track table rides the generic ioctl-download channel (the PSX `disk_t`
-precedent) to a new `dvd/cdda_toc.sv`, feeding tracks-as-chapters and the
-seek-bar notches. **Run an SG_IO smoke test on the board before writing any of
-it** — that 0xBE audio reads work on the user's drive is the one real unknown.
+Build `DVD_cddaphys_20260910_2242.rbf` (SEED 9, clk_dec 90.72/88.04), a real
+4-track music CD in the drive, `Debug Overlay = Off`.
+
+| # | Gate | Result |
+|---|---|---|
+| 1 | CD auto-mounts while the core runs | ✅ `audio CD on /dev/sr0 -- mounting`, `slot 0 OK size=447891404` = **exactly** `44 + 190430x2352` |
+| 2 | Plays, HUD reads the track | ✅ `[PLAY] 0:00:42/0:11:57 CH  1/ 4` |
+| 3 | Clock is TRACK time, not disc time | ✅ total changed 11:57 -> 10:41 across a skip; disc is 42:19 |
+| 4 | Next track | ✅ `CH 2/ 4`, clock reset |
+| 5 | Prev, >3 s into a track | ✅ restarts the current track |
+| 6 | Prev, <3 s into a track | ✅ steps to `CH 1/ 4` |
+| 7 | Next on the LAST track | ⛔ **BLOCKED — the drive faulted**, see below |
+
+★ **Gates 5 and 6 are one key producing two different outcomes purely as a
+function of playhead position, which is the `skip_tgt` resolver's whole job**
+(`(lin_blk - s_lo) > RESTART_BLK ? s_lo : s_prev`, `RESTART_BLK = 258` blocks
+~= 3 s). Either result alone proves nothing — a resolver stuck on "restart"
+passes gate 5, one stuck on "previous" passes gate 6.
+
+⚠⚠ **AND GATE 6 CANNOT BE DRIVEN OVER SSH — the harness latency is longer than
+the window it is testing.** Each `mister.py key` is a fresh ssh round trip
+(~1-2 s), so two presses land 2-4 s apart, which is *outside* the 3 s restart
+window: both presses restart, every time, and the previous-track arm never
+fires. Measured — two ssh-driven presses left the playhead on track 2 twice,
+and the identical pair driven **on the target** (`echo "keys 104" >
+/tmp/mister_hil; sleep 1.2; echo "keys 104" > ...`) landed on track 1 first try.
+★ Generalise it: **when a gate tests a time window, the harness's own latency is
+part of the instrument** — an ssh-paced test of a 3 s rule is a bench that
+cannot fail, and it would have been read as "the previous-track arm is broken".
+
+### The blocked gate, and what it is NOT
+
+The drive dropped the disc during gate 7 and never came back:
+
+```
+sr 0:0:0:0: [sr0] disc change detected.
+sr 0:0:0:0: Power-on or device reset occurred
+sr 0:0:0:0: [sr0] CDROM not ready yet.      (repeating)
+usb 1-1.1: reset high-speed USB device number 9 using dwc2
+```
+
+⚠ **The escalation to a USB-level reset is what places this outside our code** —
+that is the host re-enumerating the device, not a SCSI command being refused.
+Same fault stopped an earlier attempt this session, and it reproduced with the
+**MENU core** loaded. Suspect power; a powered hub is the next thing to try.
+
+★ **The symptom it produced first was MISSING SCREENSHOTS, and that is worth
+knowing because it reads like a core hang.** `mister.py shot` began failing with
+"No such file or directory" while `state` still answered — Main was alive
+(pid confirmed) but blocked in the `sr` retry loop, so `user_io_poll()` never
+serviced `/dev/MiSTer_cmd`. This is the documented blocking-I/O coupling
+(`CLAUDE.md`, MGL round three) arriving through a new symptom. **"Is the picture
+frozen or is the machine frozen" does not separate these two** — ask instead
+whether *Main's own command FIFO* is being serviced.
+
+⛔ **Reading past the lead-out is NOT the cause** — checked directly rather than
+assumed, because the timing invited it. `dvd_cdda_read()` refuses `b0 >= size`,
+clamps and zero-fills `b1 > size`, breaks when `dvd_cdda_map_sector()` goes out
+of range, and clamps every burst to `room` (the track edge), so no `READ CD`
+is ever issued beyond the last audio sector.
+
+## Branch 2 — BUILT (2026-09-10)
+
+Shipped as described: TOC via `CDROMREADTOCHDR`/`CDROMREADTOCENTRY`, audio
+sectors via SG_IO `READ CD` (0xBE, `cdb[1]=0x04`, `cdb[9]=0x10`) repacked
+2352->2048 behind the synthetic WAV header, served through the existing
+`SD_TYPE_DVDCSS` hooks so `apply_integration.py` needed **zero** new steps; the
+track table rides the generic ioctl-download channel into `dvd/cdda_toc.sv`.
+The SG_IO smoke test (`main/tools/cdda_smoke.c`) was run first and passed, which
+is what let the rest be written as plumbing.
+
+**Remaining:** gate 7 above (next on the last track), blocked on the drive, and
+the fork's one-line `AUDIOCD=DVD` arm in `menu_audio_mgl()` (opt-in; not needed
+for a disc inserted while our core is already running).

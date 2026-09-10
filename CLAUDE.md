@@ -2060,10 +2060,30 @@ worse maintenance burden than targeted in-place edits. So:
   Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`; design **`docs/cdda.md`**.
 
 - 🔧 **PHYSICAL AUDIO CDs (2026-09-10, branch `feature/cdda-physical`) — a music CD
-  inserted while the core is running PLAYS on the board; ⏳ track skip on a real
-  disc is the one gate still open** (the drive dropped its disc mid-test — sense
-  0x02/0x04/0x01 "becoming ready", then "No medium found", reproduced with the MENU
-  core loaded, so NOT our code).
+  inserted while the core is running PLAYS on the board, and ✅ TRACK SKIP IS
+  HW-PROVEN** (build `DVD_cddaphys_20260910_2242.rbf`, SEED 9, clk_dec 90.72/88.04):
+  auto-mount at exactly `44 + 190430x2352` bytes, `CH 1/ 4`, next-track, and BOTH
+  arms of the prev resolver — restart-current above ~3 s, previous-track below it.
+  ⏳ **One gate still open: next on the LAST track** — the drive dropped its disc
+  again and escalated to `usb 1-1.1: reset high-speed USB device number 9`, which is
+  the host re-enumerating the device, not a refused command; the same fault
+  reproduced earlier with the MENU core loaded, so NOT our code. Suspect power.
+  ⛔ Reading past the lead-out was CHECKED and is not the cause: `dvd_cdda_read()`
+  refuses `b0 >= size`, clamps `b1 > size`, and clamps every burst to the track edge.
+  ⚠⚠ **THAT GATE CANNOT BE DRIVEN OVER SSH AND THE REASON GENERALISES: the harness's
+  own latency is part of the instrument.** Each `mister.py key` is a fresh ssh round
+  trip (~1-2 s), so two presses land 2-4 s apart — OUTSIDE the 3 s `RESTART_BLK`
+  window being tested, so both restart and the previous-track arm can never fire.
+  Measured: ssh-paced presses stayed on track 2 twice; the identical pair driven ON
+  the target (`echo "keys 104" > /tmp/mister_hil; sleep 1.2; ...`) reached track 1
+  first try. An ssh-paced test of a 3 s rule is a bench that cannot fail, and it
+  reads as "the feature is broken".
+  ★ **And the drive fault presented as MISSING SCREENSHOTS, which reads like a core
+  hang:** `shot` failed while `state` still answered — Main alive but blocked in the
+  `sr` retry loop, so `user_io_poll()` never serviced `/dev/MiSTer_cmd`. The
+  documented blocking-I/O coupling, arriving through a new symptom. ⚠ "Is the picture
+  frozen or is the machine frozen" does NOT separate these; ask whether Main's own
+  command FIFO is being serviced.
   ★★ **THE WHOLE FEATURE NEEDED NO NEW CORE MODE AND NO NEW INTEGRATION STEP.** The
   Main serves the disc as **ONE GIANT WAV** — a synthetic 44-byte canonical RIFF
   header in front of the audio sectors repacked 2352→2048 — so the core reuses the
