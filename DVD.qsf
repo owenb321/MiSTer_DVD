@@ -1000,5 +1000,24 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ⚠⚠ SEED 7 has previous on this project: on the SUBPICTURE netlist (PR #71) it was
 # STA-clean and FROZE playback on hardware. STA closure is not functional
 # confirmation; this build needs the HW round before it is trusted.
+# ---- v0.5.0 RELEASE netlist (2026-09-10, release commit b7753c0: CORE_VERSION
+# "dev-passthrupcm" -> "v0.5.0", a string inside CONF_STR, on top of the merged
+# passthru-pcm tree): SEED 7 held FIRST roll -- clk_dec 89.94 @100C / 90.16 @-40C
+# (gate 86.0, PASS both corners) at 93% ALM (38,802), registers 52,269,
+# RAM 498/553 (90%), DSP 94/112 (84%).
+# Build DVD_20260910.rbf (4401 KB) -- the SHIPPING v0.5.0 core.
+# ⚠ The version string alone cost ~4.3 MHz at the hot corner against the branch
+# build it inherited the seed from (DVD_passthrupcm_20260910_0441, same SEED 7,
+# 94.23 / 93.82). Nothing else changed in the netlist -- the release commit is
+# otherwise docs-only. That is the CONF_STR-is-in-the-netlist effect the top of
+# this ledger warns about, measured once more: a bare version-string edit is a
+# new lottery ticket, not a no-op.
+# ⚠ 89.94 is the thinnest hot-corner margin any SHIPPED release has had (v0.4.0
+# was 97.19). It clears the gate by 3.9 MHz and the PR #75 build shipped at
+# 87.40, so this is not new territory -- but the next branch to land near the
+# gate should sweep rather than assume SEED 7 still holds.
+# ⚠ The SEED 7 caveat above still stands and is NOT discharged by this fit: PR
+# #79 HW-confirmed SEED 7 on the passthru netlist, but this is a different
+# netlist. The release smoke-test is what discharges it.
 
 set_global_assignment -name SEED 7
