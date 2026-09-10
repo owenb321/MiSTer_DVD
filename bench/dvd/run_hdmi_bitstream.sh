@@ -69,6 +69,23 @@ red_case() {
     rm -rf "$dir"
 }
 
+# Same contract as red_case, but the defect being reproduced lived in emu's
+# WIRING rather than inside the module, so the arm is a plusarg on the real build.
+red_plusarg() {
+    local name="$1" expect="$2" plus="$3"
+    local dir; dir=$(mktemp -d)
+    vvp "$OUT/iec61937_wrap_sim" "$plus" > "$dir/log" 2>&1 || true
+    if grep -q "ALL TESTS PASSED" "$dir/log"; then
+        echo "  !! RED $name: bench PASSED with the defect restored"; fail=1
+    elif ! grep -q "$expect" "$dir/log"; then
+        echo "  !! RED $name: caught, but not by $expect"
+        grep -E '^  FAIL' "$dir/log" | head -3; fail=1
+    else
+        echo "  RED $name -> caught by $expect"
+    fi
+    rm -rf "$dir"
+}
+
 if [ "$RED" -eq 1 ]; then
     echo
     echo "=== RED arm"
@@ -96,7 +113,14 @@ if [ "$RED" -eq 1 ]; then
     # 5. Burst period reset per track switch - the Pa/Pb grid jumps 512 -> 1536
     #    on the first gap after a track change inside a DTS title.
     red_case period-on-rst_sys_n "FAIL: burst period reverted" \
-        's/pc_val      <= PC_AC3;$/pc_val      <= PC_AC3; cur_period <= PERIOD_AC3;/'
+        's/cur_period <= period_sel;/cur_period <= PERIOD_AC3;/'
+
+    # 6. The CARRIER defect, reproduced at the wiring level: put the encoder,
+    #    the CE divider and the FIFO back on the flush reset. This is the one the
+    #    user hit -- a chapter skip restarting the biphase stream -- and no
+    #    hold_fill arm can mask it.
+    red_plusarg carrier-on-flush "FAIL: carrier disturbed by a track switch" \
+        "+carrier_legacy=1"
 fi
 
 if [ "$fail" -ne 0 ]; then echo; echo "SUITE FAILED"; exit 1; fi

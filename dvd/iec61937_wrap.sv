@@ -81,7 +81,18 @@ module iec61937_wrap #(
 
     // ---- audio domain (clk_audio, 24.576 MHz) ----
     input  wire        clk_audio,
-    input  wire        rst_audio_n,
+    // SESSION-scope reset in the audio domain (emu's clk_audio synchronizer of
+    // rst_sess_n). Everything that forms the IEC 60958 CARRIER hangs off this and
+    // NOT off rst_audio_n: the CE divider, cur_pair, the pair FIFO and both
+    // serializers. rst_audio_n pulses on every seek, jump and audio-track switch,
+    // and tearing the encoder down there restarts the biphase stream, re-phases
+    // the subframe grid (the measured 509-vs-512 step) and restarts the 192-frame
+    // channel-status block -- so the receiver re-acquires. That is a CARRIER
+    // discontinuity, and no amount of changing what the burst CONTAINS can fix it;
+    // it is why a chapter skip drops receiver lock under every hold_fill arm.
+    // docs/iec61937.md "A track switch is a hard wire discontinuity" recorded the
+    // mechanism; this input is what stops it being one.
+    input  wire        rst_audio_sess_n,
     output wire        spdif_o,
 
     // ---- HDMI bitstream tap (clk_audio) ----
@@ -162,12 +173,12 @@ module iec61937_wrap #(
 
     iec_dcfifo32 #(.AW(FIFO_AW), .DW(33)) u_fifo (
         .wr_clk   (clk_sys),
-        .wr_rst_n (rst_sys_n),
+        .wr_rst_n (rst_sess_n),
         .wr_en    (wr_en),
         .wr_data  (wr_pair),
         .full     (fifo_full),
         .rd_clk   (clk_audio),
-        .rd_rst_n (rst_audio_n),
+        .rd_rst_n (rst_audio_sess_n),
         .rd_en    (fifo_rd_en),
         .rd_data  (fifo_rd_data),
         .empty    (fifo_empty)
@@ -320,8 +331,15 @@ module iec61937_wrap #(
     // hold_fill 2 states the burst's own span in sample pairs, 3 reproduces the 0.
     wire [15:0] fill_pd    = (hold_fill == 2'd2) ? cur_period : 16'd0;
 
-    always @(posedge clk_sys or negedge rst_sys_n) begin
-        if (!rst_sys_n) begin
+    // The producer resets on the SESSION scope too. rst_sys_n is now a synchronous
+    // ABORT rather than a reset: restarting the FSM mid-burst leaves a partial
+    // burst in the FIFO with the next Pa/Pb immediately behind it, which slips the
+    // repetition grid -- the very thing keeping the carrier alive is meant to stop.
+    // On a flush the burst is finished with zero padding instead, so the grid is
+    // preserved and the cost is ONE corrupt frame (the receiver reads Pd bytes of
+    // zeros where the payload was) rather than a re-acquisition.
+    always @(posedge clk_sys or negedge rst_sess_n) begin
+        if (!rst_sess_n) begin
             st          <= S_IDLE;
             words_total <= {PERIOD_AC3, 1'b0};
             widx        <= 17'd0;
@@ -347,7 +365,14 @@ module iec61937_wrap #(
             dbg_word_stb <= 1'b0;
             dbg_burst_stb<= 1'b0;
 
-            if (!enable) begin
+            if (!rst_sys_n) begin
+                // FLUSH (seek / jump / mount / audio-track switch). audio_ring is
+                // being reset under us, so the payload in flight is gone; abandon
+                // it but keep this burst's framing.
+                bytes_left <= 16'd0;
+                if (st == S_SKIP)                    st <= S_PA;   // nothing emitted yet
+                else if (st == S_B0 || st == S_B1)   st <= S_PAD;  // pad out the burst
+            end else if (!enable) begin
                 st   <= S_IDLE;
                 half <= 1'b0;
                 widx <= 17'd0;
@@ -487,16 +512,16 @@ module iec61937_wrap #(
     // Consumer (clk_audio) — 6.144 MHz CE + spdif_pass encoder
     // =============================================================
     reg [1:0] ce_cnt;
-    always @(posedge clk_audio or negedge rst_audio_n)
-        if (!rst_audio_n) ce_cnt <= 2'd0; else ce_cnt <= ce_cnt + 2'd1;
+    always @(posedge clk_audio or negedge rst_audio_sess_n)
+        if (!rst_audio_sess_n) ce_cnt <= 2'd0; else ce_cnt <= ce_cnt + 2'd1;
     wire bit_ce = (ce_cnt == 2'd0); // 24.576/4 = 6.144 MHz
 
     wire        sample_req;
     reg  [32:0] cur_pair;
 
     assign fifo_rd_en = sample_req && !fifo_empty;
-    always @(posedge clk_audio or negedge rst_audio_n)
-        if (!rst_audio_n) cur_pair <= 33'd0;       // underflow -> PCM zeros (flag 0)
+    always @(posedge clk_audio or negedge rst_audio_sess_n)
+        if (!rst_audio_sess_n) cur_pair <= 33'd0;  // underflow -> PCM zeros (flag 0)
         else if (sample_req) cur_pair <= fifo_empty ? 33'd0 : fifo_rd_data;
 
     // HDMI bitstream tap: pure aliases, no added logic. `sample_req` is the same
@@ -509,7 +534,7 @@ module iec61937_wrap #(
 
     spdif_pass u_spdif (
         .clk_i       (clk_audio),
-        .rst_i       (~rst_audio_n),
+        .rst_i       (~rst_audio_sess_n),
         .bit_out_en_i(bit_ce),
         .spdif_o     (spdif_o),
         .nonpcm_i    (cur_pair[32]),  // per-pair PCM/non-PCM flag (latched per block)
@@ -521,7 +546,7 @@ module iec61937_wrap #(
     // One word source feeds both outputs, so they cannot drift apart.
     hdmi_bs_i2s u_hdmi_i2s (
         .clk    (clk_audio),
-        .rst_n  (rst_audio_n),
+        .rst_n  (rst_audio_sess_n),
         .ce_i   (bit_ce),
         .pcm_l_i(cur_pair[15:0]),
         .pcm_r_i(cur_pair[31:16]),

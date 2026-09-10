@@ -12,6 +12,9 @@ module iec61937_wrap_tb;
 
     reg         clk_sys = 0, clk_audio = 0;
     reg         rst_sys_n = 0, rst_audio_n = 0;
+    // Carrier-scope reset. do_reset drives it; do_track_switch deliberately does
+    // NOT -- that asymmetry is the whole point of the change under test.
+    reg         rst_audio_sess_n = 0;
     reg         enable = 0, byte_swap = 0, mute = 0;
 
     // ring model
@@ -61,7 +64,7 @@ module iec61937_wrap_tb;
         .frame_pts(fpts_r), .frame_pts_valid(fptsv_r),
         .sync_armed(sync_armed_r), .stc_anchored(stc_anch_r), .stc(stc_r), .av_ofs(avofs_r),
         .frame_pop(frame_pop),
-        .clk_audio(clk_audio), .rst_audio_n(rst_audio_n), .spdif_o(spdif_o),
+        .clk_audio(clk_audio), .rst_audio_sess_n(rst_audio_sess_n), .spdif_o(spdif_o),
         .bs_l_o(bs_l), .bs_r_o(bs_r), .bs_nonpcm_o(bs_nonpcm), .bs_stb_o(bs_stb),
         .dbg_word(dbg_word), .dbg_word_stb(dbg_word_stb),
         .dbg_burst_stb(dbg_b_stb), .dbg_burst_real(dbg_b_real), .dbg_burst_held(dbg_b_held),
@@ -105,7 +108,7 @@ module iec61937_wrap_tb;
     integer tap_resets     = 0;
     always @(posedge clk_audio) begin : tap_mon
         reg [15:0] gap;
-        if (!rst_audio_n) begin
+        if (!rst_audio_sess_n) begin
             if (tap_strobes != 0) tap_resets = tap_resets + 1;
             gap = 16'd0; tap_strobes = 0;
         end else begin
@@ -121,6 +124,23 @@ module iec61937_wrap_tb;
                 tap_total   = tap_total + 1;
                 gap = 16'd0;
             end
+        end
+    end
+
+    // ---- reset-IMMUNE wire monitor (TEST 16) -------------------------------
+    // The tap_* monitor above clears itself on rst_audio_sess_n and forgives a
+    // few strobes after it, which is right for a genuine carrier reset -- and
+    // fatal as an instrument for "did a track switch disturb the carrier",
+    // because the RED arm pulses exactly that signal and the deviation is
+    // excused. This one is cleared ONLY by the test that reads it, so it reports
+    // what the wire did regardless of what any reset was doing.
+    integer wire_gap = 0, wire_dev = 0, wire_seen = 0;
+    always @(posedge clk_audio) begin
+        wire_gap = wire_gap + 1;
+        if (bs_stb) begin
+            if (wire_seen > 0 && wire_gap != 512) wire_dev = wire_dev + 1;
+            wire_seen = wire_seen + 1;
+            wire_gap  = 0;
         end
     end
 
@@ -161,9 +181,9 @@ module iec61937_wrap_tb;
 
     task do_reset; begin
         enable = 0;                 // hold the producer idle across reset so the
-        rst_sys_n = 0; rst_audio_n = 0; rst_sess_n = 0;  // first post-reset burst reflects the new frame
+        rst_sys_n = 0; rst_audio_n = 0; rst_sess_n = 0; rst_audio_sess_n = 0;
         repeat (4) @(posedge clk_sys);
-        rst_sys_n = 1; rst_audio_n = 1; rst_sess_n = 1;
+        rst_sys_n = 1; rst_audio_n = 1; rst_sess_n = 1; rst_audio_sess_n = 1;
         repeat (2) @(posedge clk_sys);
     end endtask
 
@@ -179,15 +199,26 @@ module iec61937_wrap_tb;
 
     task settle; begin @(negedge clk_sys); end endtask
 
+    // +carrier_legacy=1 restores the PRE-FIX wiring: the carrier reset follows the
+    // flush, as it did when spdif_pass took ~aud_rst_n. The defect lived in emu's
+    // wiring, not inside the module, so the RED arm reproduces it here rather than
+    // by mutating RTL.
+    reg carrier_legacy = 0;
+    initial if ($value$plusargs("carrier_legacy=%d", carrier_legacy)) ;
+
     task do_track_switch; begin
         rst_sys_n = 0; rst_audio_n = 0;   // rst_sess_n deliberately UNTOUCHED
+        if (carrier_legacy) rst_audio_sess_n = 0;
         repeat (4) @(posedge clk_sys);
         rst_sys_n = 1; rst_audio_n = 1;
+        if (carrier_legacy) rst_audio_sess_n = 1;
         repeat (2) @(posedge clk_sys);
     end endtask
 
     integer i, errors = 0;
     integer t11_rr, t11_pop;
+    integer t16_bad;
+    reg [8:0] t16_blk;
     integer t10_held, t10_real, t10_under;
     // Drive a real data-burst through so the session is armed, then leave the
     // caller to starve it. Bounded so a regression fails loudly instead of hanging.
@@ -624,6 +655,44 @@ module iec61937_wrap_tb;
         if (dut.cur_period !== 16'd512) begin
             $display("  FAIL: burst period reverted to AC-3 1536 inside a DTS title");
             errors = errors + 1; end
+        hold_fill = 2'd0;
+
+
+        // ================= TEST 16: the CARRIER survives a track switch =========
+        // A seek/track switch used to reset spdif_pass, the CE divider and the
+        // pair FIFO, restarting the biphase stream and re-phasing the subframe
+        // grid (the measured 509-vs-512 step). No hold FILL can survive that --
+        // it is why a chapter skip drops receiver lock under every fill arm.
+        // Measured as what the WIRE does: the 48 kHz pair spacing must not deviate
+        // once across the switch, and the encoder's 192-frame channel-status block
+        // must keep counting rather than restart.
+        frame_valid = 0; free_run_sync; do_reset; settle;
+        hold_fill = 2'd1;
+        plen = 8; frame_len = 16'd8; frame_type = 2'd0; frame_valid = 1; enable = 1;
+        arm_session;
+        repeat (4000) @(posedge clk_sys);       // let the carrier settle
+        wire_dev = 0; wire_seen = 0;            // clear the reset-immune monitor
+        t16_blk  = dut.u_spdif.subframe_count_q;
+        do_track_switch;                        // <-- seek / audio-track switch
+        repeat (30000) @(posedge clk_sys);      // ~1 ms of wire either side
+        $display("TEST 16: pair-period deviations across a track switch = %0d (over %0d pairs)",
+                 wire_dev, wire_seen);
+        if (wire_seen < 20) begin
+            $display("  FAIL: monitor saw almost no pairs - the test is not measuring");
+            errors = errors + 1; end
+        if (wire_dev != 0) begin
+            $display("  FAIL: carrier disturbed by a track switch (phase step on the wire)");
+            errors = errors + 1; end
+        if (dut.u_spdif.subframe_count_q == 9'd0 && t16_blk != 9'd0) begin
+            $display("  FAIL: channel-status block restarted at the track switch");
+            errors = errors + 1; end
+        // ...and a MOUNT still resets it: that is a real new-media boundary.
+        t16_bad = tap_resets;
+        do_reset; settle;
+        if (tap_resets == t16_bad) begin
+            $display("  FAIL: a mount no longer resets the carrier");
+            errors = errors + 1; end
+        $display("TEST 16b: a mount still resets the carrier");
         hold_fill = 2'd0;
 
         if (errors==0) $display("\nALL TESTS PASSED");
