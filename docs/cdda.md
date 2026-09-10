@@ -250,6 +250,34 @@ average over a transition does not.
 ⏳ Not covered by this round: VCD regression (sim-green only), and the
 seek-preview clock during a held FF/REW gesture.
 
+## Branch 2 progress — the Main-side source is WORKING on hardware
+
+✅ **Step 0, the gate: 0xBE works on the maintainer's drive** (2026-09-10).
+`main/tools/cdda_smoke.c` read the TOC (4 audio tracks, 42:19), pulled 750
+frames in 8-sector bursts via READ CD, and the data validated as real audio
+rather than something that merely passes a crude test: **97.2 % of frames have
+L≠R** (so not a duplicated or mono-ised buffer), **750/750 sectors distinct** (so
+not a stuck read), and the envelope runs −70 → −25 dBFS with 45 dB of range —
+that first silent window being track 1's lead-in at LBA 37, exactly where it
+belongs.
+
+✅ **A physical CD auto-mounts and plays.** `DVD_PHYS: audio CD on /dev/sr0 --
+mounting`, and the reported image size is **447891404 bytes — exact**:
+44 + 190430 × 2352 for a 42:19 disc. The HUD reads `0:42:20` total (the
+documented ≤1 s truncation) and the progress bar fills. Captured audio is
+continuous at −27 dBFS on both channels with a varying envelope and **no dropout
+windows**.
+
+⚠ **A `CH 0/ 0` on screen was NOT a defect** and is worth recording because it
+looked exactly like one. `dbg_mode` (O[2] Debug Overlay) forces the CH field
+visible and repurposes it as `{reader PGCN, VTS}`, which on a CD is `0/0`; the
+rig's saved config had it on. With it off the field hides as designed. Check the
+saved OSD config before believing a HUD anomaly.
+
+⏳ **Still to do: tracks.** The disc currently plays as one continuous 42-minute
+WAV — `dvd/cdda_toc.sv`, tracks-as-chapters, the seek-bar notches and
+track-relative time are the remaining work.
+
 ## Next (branch 2)
 
 `main/support/dvd/dvd_cdda.cpp`: TOC via `CDROMREADTOCHDR`/`CDROMREADTOCENTRY`,
