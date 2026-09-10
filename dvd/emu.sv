@@ -2174,16 +2174,18 @@ wire [31:0] ab_jump_base, ab_jump_off;
 wire [1:0]  ab_state_w;
 wire        ab_evt_w;
 // Audio-CD track skip is the THIRD producer on this port (declared here so the
-// mux can see it; driven further down, beside the track resolver). It takes
-// priority, but only defensively: on a CD the other two cannot fire at all --
-// ab_repeat is gated on cell_ready, which a CD never asserts, and dpad_seek
-// needs either a DSI or a measured linear rate.
+// mux can see it; DRIVEN by cdda_toc's resolver, instantiated further down --
+// the resolver lives in that module because emu has no bench and "where does a
+// track skip land" is exactly what a testbench answers best). It takes priority,
+// but only defensively: on a CD the other two cannot fire at all -- ab_repeat is
+// gated on cell_ready, which a CD never asserts, and dpad_seek needs either a
+// DSI or a measured linear rate.
 // ⚠ jump_dir is 1 = FORWARD (dvd/scrub_ctrl.sv:174, applied as base +/- off).
 // With off = 0 the direction cannot move the landing, so 1 is a safe constant --
 // but it is written as the consumer's convention, not guessed, because getting
 // that bit backwards is exactly what shipped broken in A-B repeat.
-reg         cdda_jump_fire;
-reg  [31:0] cdda_jump_base;
+wire        cdda_jump_fire;
+wire [31:0] cdda_jump_base;
 wire        jmp_fire = cdda_jump_fire | ab_jump_fire | dpad_jump_fire;
 wire        jmp_dir  = cdda_jump_fire ? 1'b1           :
                        ab_jump_fire   ? ab_jump_dir    : dpad_jump_dir;
@@ -2219,6 +2221,8 @@ wire [31:0] cdda_cur_start_w, cdda_cur_end_w, cdda_prev_start_w, cdda_next_start
 wire        cdda_notch_we_w;
 wire [6:0]  cdda_notch_idx_w;
 wire [31:0] cdda_notch_blk_w;
+// cdda_jump_fire / cdda_jump_base are declared UP with the jump mux (the mux
+// reads them before this point), so they are not re-declared here.
 
 cdda_toc cdda_toc_inst (
     .clk            (clk_sys),
@@ -2239,42 +2243,22 @@ cdda_toc cdda_toc_inst (
     .next_start     (cdda_next_start_w),
     .notch_we       (cdda_notch_we_w),
     .notch_idx      (cdda_notch_idx_w),
-    .notch_blk      (cdda_notch_blk_w)
+    .notch_blk      (cdda_notch_blk_w),
+    .skip_req       (chap_pulse & cdda_mode_w),
+    .skip_fwd       (chap_dir),
+    .skip_fire      (cdda_jump_fire),
+    .skip_tgt       (cdda_jump_base)
 );
 
 // Tracks behave as chapters: the SAME debounced burst the chapter FSM already
-// produces (chap_pulse/chap_dir/chap_mag) resolves to a track start, and the
-// jump rides scrub_ctrl's existing pre-resolved port -- so the clamp, the seek
-// bar and the preview clock all come for free.
+// produces (chap_pulse/chap_dir) resolves to a track start inside cdda_toc, and
+// the jump rides scrub_ctrl's existing pre-resolved port -- so the clamp, the
+// seek bar and the preview clock all come for free.
 //
 // ★ base = the target and off = 0. scrub_ctrl computes `base +/- off` and clamps
 // it into the title span, so handing it the absolute target reuses every one of
 // those behaviours without a second code path.
-//
-// ⚠ "Previous" on a track restarts THIS track unless you are near its start --
-// what every CD player does, and what makes a double-press mean "the one
-// before". chap_at_start carries the same idea for DVD chapters.
 wire cdda_tracks_on = cdda_mode_w && cdda_toc_valid_w;
-localparam [31:0] CDDA_RESTART_BLK = 32'd258;   // ~3 s at 86.13 blk/s
-
-wire [31:0] cdda_skip_tgt =
-      chap_dir                                   ? cdda_next_start_w
-    : ((lin_blk_w - cdda_cur_start_w) > CDDA_RESTART_BLK) ? cdda_cur_start_w
-                                                          : cdda_prev_start_w;
-
-// (cdda_jump_fire / cdda_jump_base are declared up with the jump mux.)
-always @(posedge clk_sys or negedge reset_n) begin
-    if (!reset_n) begin
-        cdda_jump_fire <= 1'b0;
-        cdda_jump_base <= 32'd0;
-    end else begin
-        cdda_jump_fire <= 1'b0;
-        if (chap_pulse && cdda_tracks_on) begin
-            cdda_jump_fire <= 1'b1;
-            cdda_jump_base <= cdda_skip_tgt;
-        end
-    end
-end
 
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),

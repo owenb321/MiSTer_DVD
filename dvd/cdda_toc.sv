@@ -87,10 +87,23 @@ module cdda_toc #(
     // generic cellf_* write ports draw a tick at every track boundary.
     output reg         notch_we,
     output reg  [6:0]  notch_idx,
-    output reg  [31:0] notch_blk
+    output reg  [31:0] notch_blk,
+
+    // ---- track skip -------------------------------------------------------
+    // The resolver lives HERE, not in emu.sv, for the reason flush_ctl.sv,
+    // css_detect.sv and dpad_seek.sv were each extracted: emu has no bench, and
+    // "where does a track skip land" is exactly the question a hardware round is
+    // worst at answering and a testbench is best at.
+    input  wire        skip_req,       // 1-cyc: the debounced chapter burst
+    input  wire        skip_fwd,       // 1 = next, 0 = previous
+    output reg         skip_fire,      // 1-cyc: skip_tgt is valid
+    output reg  [31:0] skip_tgt        // absolute block to seek to
 );
 
     localparam MAXT = 100;
+    // ~3 s at 86.13 blocks/s: the window in which "previous" means the previous
+    // track rather than the start of this one.
+    localparam [31:0] RESTART_BLK = 32'd258;
 
     reg [31:0] start_ram [0:MAXT-1];
     reg [31:0] total_blk;
@@ -244,6 +257,24 @@ module cdda_toc #(
                         s_next <= ev_next;
                     end
                 end
+            end
+        end
+    end
+
+    // ⚠ "Previous" restarts the CURRENT track unless you are near its start --
+    // what every CD player does, and what makes a double-press mean "the one
+    // before". Without it, Previous from the middle of a track would skip music
+    // the listener is in the middle of.
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            skip_fire <= 1'b0;
+            skip_tgt  <= 32'd0;
+        end else begin
+            skip_fire <= 1'b0;
+            if (skip_req && toc_valid) begin
+                skip_fire <= 1'b1;
+                skip_tgt  <= skip_fwd ? s_next
+                           : ((lin_blk - s_lo) > RESTART_BLK) ? s_lo : s_prev;
             end
         end
     end

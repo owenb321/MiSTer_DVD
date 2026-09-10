@@ -31,6 +31,9 @@ module cdda_toc_tb;
     wire        notch_we;
     wire [6:0]  notch_idx;
     wire [31:0] notch_blk;
+    reg         skip_req = 0, skip_fwd = 0;
+    wire        skip_fire;
+    wire [31:0] skip_tgt;
 
     cdda_toc dut (
         .clk(clk), .rst_n(rst_n),
@@ -40,7 +43,9 @@ module cdda_toc_tb;
         .toc_valid(toc_valid), .n_tracks(n_tracks), .cur_track(cur_track),
         .cur_start(cur_start), .cur_end(cur_end),
         .prev_start(prev_start), .next_start(next_start),
-        .notch_we(notch_we), .notch_idx(notch_idx), .notch_blk(notch_blk)
+        .notch_we(notch_we), .notch_idx(notch_idx), .notch_blk(notch_blk),
+        .skip_req(skip_req), .skip_fwd(skip_fwd),
+        .skip_fire(skip_fire), .skip_tgt(skip_tgt)
     );
 
     integer errors = 0;
@@ -138,6 +143,23 @@ module cdda_toc_tb;
 
     // let the one-track-per-clock scan settle on a new position
     task settle; repeat (300) @(posedge clk); endtask
+
+    reg skip_fire_seen = 0;
+    always @(posedge clk) if (skip_fire) skip_fire_seen <= 1'b1;
+
+    // one debounced burst, and wait for the resolved target
+    task do_skip(input fwd);
+        begin
+            skip_fwd = fwd;
+            skip_fire_seen = 0;          // ⚠ per-arm: a stale flag would let a
+                                         // silent no-fire pass on the next arm
+            @(negedge clk); skip_req = 1; @(negedge clk); skip_req = 0;
+            repeat (4) @(posedge clk);
+            if (!skip_fire_seen) begin
+                errors = errors + 1; $display("  FAIL skip did not fire");
+            end
+        end
+    endtask
 
     // ---- notch capture ----
     reg [31:0] nb [0:99];
@@ -244,6 +266,61 @@ module cdda_toc_tb;
         repeat (4) @(posedge clk);
         chk("[5] toc_valid cleared", toc_valid, 0);
         chk("[5] cur_track cleared", cur_track, 0);
+
+        // ---- [6] WHERE DOES A SKIP LAND? --------------------------------
+        // This is the question the hardware round could not answer -- the drive
+        // dropped the disc mid-test -- and it is the one a bench answers best,
+        // because "the audio changed" does not tell you WHICH block you reached.
+        $display("=== [6] track-skip targets ===");
+        // ⚠ [5] deliberately invalidated the table, so re-upload before asking
+        // where a skip lands -- otherwise every arm here measures "no table"
+        // and passes for the wrong reason.
+        upload_src(0, blob_n, -1, 8'd0, 16'd250);
+        chk("[6] table reloaded", toc_valid, 1);
+        begin : skip_arms
+            integer t2, t3, t4;
+            t2 = {blob[12+4*1+3], blob[12+4*1+2], blob[12+4*1+1], blob[12+4*1]};
+            t3 = {blob[12+4*2+3], blob[12+4*2+2], blob[12+4*2+1], blob[12+4*2]};
+            t4 = {blob[12+4*3+3], blob[12+4*3+2], blob[12+4*3+1], blob[12+4*3]};
+
+            // mid-track 2 -> NEXT lands exactly on track 3's first block
+            lin_blk = t2 + 5000; settle;
+            do_skip(1'b1);
+            chk("[6a] next -> track 3", skip_tgt, t3);
+
+            // ...and PREVIOUS from there RESTARTS track 2 (we are >3 s in)
+            do_skip(1'b0);
+            chk("[6b] prev -> restart", skip_tgt, t2);
+
+            // but within ~3 s of the start, PREVIOUS goes to the track before --
+            // so a double-press reaches it, exactly like a CD player.
+            lin_blk = t3 + 100; settle;
+            do_skip(1'b0);
+            chk("[6c] prev near start -> prev trk", skip_tgt, t2);
+
+            // the very first track has nothing before it: clamp to its own start
+            lin_blk = 32'd50; settle;
+            do_skip(1'b0);
+            chk("[6d] prev on trk 1", skip_tgt, 0);
+
+            // and NEXT on the last track clamps to the image end rather than
+            // running off the table
+            lin_blk = t4 + 100; settle;
+            do_skip(1'b1);
+            chk("[6e] next on last -> end", skip_tgt, meta_total);
+
+            // a skip with no table must not fire at all
+            @(negedge clk); mount = 1; @(negedge clk); mount = 0;
+            repeat (4) @(posedge clk);
+            // ⚠ Watch the LATCH, not the wire: skip_fire is a one-cycle pulse,
+            // so sampling it a few cycles later reads 0 whether or not it fired
+            // -- a check that cannot fail. (A mutation that fired a skip with no
+            // table passed against exactly that mistake.)
+            skip_fire_seen = 0;
+            skip_req = 1; @(negedge clk); skip_req = 0;
+            repeat (4) @(posedge clk);
+            chk("[6f] no table, no skip", skip_fire_seen, 0);
+        end
 
         if (errors == 0) $display("CDDA_TOC_TB: ALL TESTS PASSED");
         else begin $display("CDDA_TOC_TB: FAILED with %0d errors", errors); $fatal(1); end
