@@ -515,16 +515,26 @@ the split is deliberate:
   `rt_pcm_session`, which `aud_route` latches from RING frames — and CD-DA never
   enters the ring, so a `.wav` in Passthru would be SILENT without the
   `pass_mode` force-off. That is the newest HW gate.
-- **❌ Branch 2 `feature/cdda-physical` — the MAIN half, not started.** TOC +
-  SG_IO `READ CD` (0xBE) in a new `main/support/dvd/dvd_cdda.cpp`, repacked
-  2352→2048 behind a **synthetic 44-byte WAV header** so the disc presents to
-  the core as one giant WAV and needs no new mode, no `cfg[15]`, no `hps_io`
-  fork. Served through the existing `SD_TYPE_DVDCSS` hooks = zero new
-  `apply_integration.py` steps. A track table rides the generic ioctl-download
-  channel (PSX `disk_t` precedent) into a new `dvd/cdda_toc.sv` for
-  tracks-as-chapters + seek-bar notches.
-  **Start with an SG_IO smoke test on the board** — whether the drive honours
-  0xBE audio reads is the one real unknown, and it gates the branch.
+- **✅ Branch 2 `feature/cdda-physical` — the MAIN half, BUILT; a physical
+  audio CD plays on the board (2026-09-10).** TOC + SG_IO `READ CD` (0xBE) in a
+  new `main/support/dvd/dvd_cdda.cpp`, repacked 2352→2048 behind a **synthetic
+  44-byte WAV header** so the disc presents to the core as one giant WAV and
+  needs no new mode, no `cfg[15]`, no `hps_io` fork. Served through the existing
+  `SD_TYPE_DVDCSS` hooks = **zero new `apply_integration.py` steps**, via a
+  two-source front in `dvd_css.cpp` that reuses `DVD_PHYS_SENTINEL` (a second
+  sentinel would read as a foreign mount and silently disable physical playback).
+  A track table rides the generic ioctl-download channel (PSX `disk_t`
+  precedent) into `dvd/cdda_toc.sv` for tracks-as-chapters + seek-bar notches;
+  the clock shows TRACK time and the bar the whole disc.
+  ★ **The SG_IO smoke test passed first** (`main/tools/cdda_smoke.c`) — whether
+  the drive honours 0xBE audio reads was the one real unknown, and it gated the
+  branch.
+  ⚠ **`cdda_toc` had to be rewritten to ONE sync read port**: async-read at 5
+  sites cost 3733 ALUTs and the fitter needed 4558 LABs against 4191 — the
+  documented `parse_buf` LUT-RAM lesson, walked into anyway. One sync port: 214.
+  ⏳ **Still ungated on HW: track skip on a real disc** (the drive dropped its
+  disc mid-test with sense 0x02/0x04/0x01, reproduced under the MENU core, so
+  not our code).
 
 ⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
 CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.

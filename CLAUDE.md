@@ -2011,7 +2011,7 @@ worse maintenance burden than targeted in-place edits. So:
   `dvd_audio_decode`. Screen = the bouncing idle logo, a forced-on HUD status line
   and the seek bar as a progress bar. ★ **This is deliberately the CORE HALF OF
   MUSIC-CD SUPPORT shipped first as its own feature**: branch 2
-  (`feature/cdda-physical`, NOT started) has the Main serve a physical audio CD as
+  (`feature/cdda-physical`, the bullet below) has the Main serve a physical audio CD as
   ONE GIANT WAV — a synthetic 44-byte header in front of the repacked 2352→2048
   audio sectors — so the disc reuses this exact probe and needs no new core mode,
   no `cfg[15]` (the last free config bit stays free), and no `hps_io` mount-word
@@ -2058,6 +2058,84 @@ worse maintenance burden than targeted in-place edits. So:
   ⛔ **bin/cue + CHD images REJECTED** (user decision): ISO9660 cannot hold CD-DA so
   it means parsing `.cue` sheets, and nobody archives music that way.
   Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`; design **`docs/cdda.md`**.
+
+- 🔧 **PHYSICAL AUDIO CDs (2026-09-10, branch `feature/cdda-physical`) — a music CD
+  inserted while the core is running PLAYS on the board; ⏳ track skip on a real
+  disc is the one gate still open** (the drive dropped its disc mid-test — sense
+  0x02/0x04/0x01 "becoming ready", then "No medium found", reproduced with the MENU
+  core loaded, so NOT our code).
+  ★★ **THE WHOLE FEATURE NEEDED NO NEW CORE MODE AND NO NEW INTEGRATION STEP.** The
+  Main serves the disc as **ONE GIANT WAV** — a synthetic 44-byte canonical RIFF
+  header in front of the audio sectors repacked 2352→2048 — so the core reuses the
+  `riff_wave` probe branch 1 already shipped. `cfg[15]` stays free, `hps_io` is
+  unforked, and `apply_integration.py` is **untouched**: `dvd_css.cpp` grew a
+  two-source front (`SRC_NONE / SRC_CSS / SRC_CDDA`) behind the six functions
+  `user_io.cpp` already calls.
+  ⛔ **REUSE `DVD_PHYS_SENTINEL` — do NOT invent a second sentinel string.**
+  `dvd_phys_note_mount()` special-cases exactly one string; any *other* mount path is
+  read as a **foreign** mount and clears `mounted`, which would silently disable
+  physical playback altogether. `dvd_css_open()` decides DVD-vs-CD internally.
+  ⚠ **Keep `find_dvd_device()` off the CD-DA path** — it sets `css_size` from
+  `BLKGETSIZE64` as a SIDE EFFECT of scanning, which is the raw device size, not our
+  synthetic `44 + n×2352`, and the core's WAV EOF clamp is load-bearing on the
+  reported size being exact. `find_audio_cd()` returns an open fd and touches nothing.
+  ★ **A failed read is already silence, for free:** `user_io` zero-fills the window
+  when the hook returns ≤0, so a scratched sector plays as a dropout rather than
+  stalling — correct CD behaviour, no code. ★ And the drive speed is **capped**
+  (`CDROM_SELECT_SPEED`, 4×): CD-DA needs 172 KB/s and an uncapped drive spins to 48×
+  and screams through a music disc.
+  ⚠ **`dvd_report` regression, guarded:** `find_source()` couples `dvd_css_active()`
+  with `dvd_phys_device()` and then reads 2048-byte ISO sectors off `/dev/srN` — on a
+  CD-DA mount both answer truthfully and the support-bundle chord would produce a
+  BROKEN bundle instead of its "nothing to bundle" diagnostic. New `dvd_css_is_cdda()`
+  gates it.
+  **Detection** is `cd_audio_probe(int fd)` in `dvd_detect.cpp` — TOC-only, no disc
+  read, and deliberately BROADER than stock's "the TOC contains no data track": ours
+  is "**has ≥1 audio track**", so an enhanced/mixed-mode disc plays its audio tracks,
+  which is what real players did. The cheap probe sits in the once-per-insertion latch;
+  the full TOC read happens in the MOUNT path, which already expects to block.
+  **Tracks** ride the generic ioctl-download channel into new `dvd/cdda_toc.sv`
+  (tracks-as-chapters via the existing `seek_rbn`, `TRACK n/N` on the HUD with no HUD
+  change, seek-bar notches through `seek_bar`'s generic `pm_*` ports). ★ **The clock
+  shows TRACK time and the bar shows the DISC** (user decision) — track-relative time
+  was FREE, because `lin_rate`'s measurement path is bypassed in cdda mode, so muxing
+  its `lin_blk`/`total_blk` inputs to `(lin_blk − track_start)` cannot corrupt a rate
+  estimate: two subtracts and two muxes, no new arithmetic.
+  ★★ **`cdda_toc` DID NOT FIT ON ITS FIRST WRITE, AND IT IS THE `parse_buf` LESSON
+  VERBATIM.** Async-read of the track-start array at **5 sites** → 3733 ALUTs / 3463
+  regs / **0 block memory bits**, and the fitter wanted 4558 LABs against 4191 — the
+  LUT-RAM explosion this file has documented since 2026-07-05, walked into anyway.
+  Rewritten around **ONE synchronous read port** with a 3-deep pipeline
+  (`rd`/`rd_p`/`rd_pp`, address history `ra_q`): **214 ALUTs**. ⚠ The off-by-one that
+  fell out of it: `first_pass` must clear on **`ra_q`**, not `ra`, or the last track's
+  notch is dropped — caught by the bench.
+  ★ **The bench found a real never-garbage defect:** entry RAM was written as bytes
+  ARRIVED, so a malformed upload corrupted track starts while `toc_valid` stayed set
+  from the previous good table. The table is invalidated at DOWNLOAD START (the
+  `idle_logo` rule).
+  ⚠⚠ **FOUR separate `bench-that-cannot-fail` instances in ONE bench**, all found and
+  fixed by mutation: (a) malformed uploads carrying identical payload, so "unchanged"
+  was indistinguishable from "changed to the same value"; (b) a "truncated" blob whose
+  length was exactly valid for its own declared track count; (c) scenarios that ran
+  AFTER an earlier one had invalidated the table; (d) a one-cycle `skip_fire` pulse
+  sampled 4 cycles late. Gate: `bench/dvd/cdda_toc_tb.sv`, golden
+  `tools/cdda_toc_ref.py`, host-side `main/tests/dvd_cdda_test.cpp` (the 2048/2352
+  phase cycle repeats every **128 sectors / 147 blocks** — gcd 16 — and the mapping is
+  pure arithmetic, so it needed no `#define` seam).
+  ★ **Step 0 was an SG_IO smoke test on the board** (`main/tools/cdda_smoke.c`) and it
+  earned its place: whether the drive honours **`READ CD` (0xBE)** audio reads was the
+  only real unknown. `cdb[1]=0x04` (expected sector type CD-DA), `cdb[9]=0x10` (user
+  data only ⇒ exactly 2352 B/sector of raw PCM, little-endian, **no byte swap** — that
+  is a CHD thing); `CDROMREADRAW` (MSF, `lba+150`) is the fallback.
+  ⚠ **`CH 0/ 0` on the HUD looked like a bug and was not** — `Debug Overlay=On`
+  repurposes that field as `{PGCN, VTS}`. Check the saved config before "fixing" a
+  readout.
+  ★ **The fork CAN hand a CD to us**: `menu_audio_mgl()` in
+  Main_MiSTer_Physical_Disc maps `[physical_disc] AUDIOCD=` onto a core MGL and needs
+  only a one-line `DVD → "DVD.mgl"` arm; the DVD handoff already releases the drive
+  before `xml_load`, so our `dvd_phys_tick()` claims it. Not a blocker for a disc
+  inserted while we are already running.
+  Design **`docs/cdda.md`**; manual `site/content/formats/physical-discs.md`.
 
 - 🔧 **SINGLE-RASTER ANALOG OUTPUT — the second raster (`re_interlace`/VGA2) is
   RETIRED; the interlaced MAIN raster carries the N64 half-line and drives the CRT
