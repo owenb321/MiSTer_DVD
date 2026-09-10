@@ -42,7 +42,7 @@ advertises AC-3/DTS support in its EDID.
 | **LPCM** | Sent as PCM | Decoded in the core and sent as ordinary stereo — see below |
 | **MP2** | Sent as PCM | Same; this is what VCD and SVCD discs carry |
 
-!!! info "Unreleased — LPCM and MP2 no longer go silent"
+!!! info "New in v0.5.0 — LPCM and MP2 no longer go silent"
     These two used to be silent in Passthru, so a concert disc or a VCD needed a trip
     back to `Decode PCM`. They now come out as ordinary PCM, which is what a set-top
     player does with them. The switch is automatic and happens per track.

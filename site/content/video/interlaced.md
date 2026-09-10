@@ -108,7 +108,7 @@ so you may still catch it settling.
     great deal — please paste the analog lines from your `MiSTer.ini` and name your set,
     and say whether a chapter skip or a paused frame ever leaves the fields wrong.
 
-!!! info "Unreleased — those reports came in, and found two more faults"
+!!! info "Fixed in v0.5.0 — those reports came in, and found two more faults"
 
     **RGB SCART** and a **RetroTINK 4K** did report, and between them turned up two
     problems that were *not* the field-parity coin flip above:

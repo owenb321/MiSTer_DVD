@@ -66,7 +66,7 @@ playing so you can still identify the disc.
     produce. Later builds require sustained evidence instead, so an isolated glitch no
     longer trips it.
 
-    If you see it on a build after v0.4.0, please
+    If you see it on v0.5.0 or later, please
     [send a report](reporting-a-bug.md) — it means something is still wrong.
 
 ### The core loads but a physical disc does nothing
@@ -151,9 +151,9 @@ roughly how far into the title it started.
 
 ### Speech is cut off on a game disc's question or selection screen
 
-!!! info "Unreleased"
+!!! info "Fixed in v0.5.0"
 
-    Fixed after v0.4.0. Affects DVD game discs with spoken screens — quiz and board
+    Affects DVD game discs with spoken screens — quiz and board
     games especially.
 
 A screen that reads a question or a list of choices aloud stopped part-way through. With
@@ -234,7 +234,7 @@ you may catch it doing so. Many televisions never show it at all; it depends on 
     [report it](reporting-a-bug.md) with the analog lines from your `MiSTer.ini`. See
     [Field alignment](../video/interlaced.md#field-alignment).
 
-!!! info "Unreleased — and a second, separate cause"
+!!! info "Fixed in v0.5.0 — and a second, separate cause"
 
     Reports of a **sawtooth or ragged look on a CRT** kept coming in after v0.4.0, and they
     turned out not to be this at all: the composite sync itself was missing its equalizing
@@ -245,11 +245,6 @@ you may catch it doing so. Many televisions never show it at all; it depends on 
     corrected in the same version and needs no setting.
 
 ### Sawtooth or ragged vertical edges on a CRT, and adjusting the picture does not help
-
-!!! info "Unreleased"
-
-    The settings below are not in v0.4.0. They are on `main` and will be in the next
-    release.
 
 If vertical edges look stepped or ragged, the picture seems to have half the detail it
 should, or a scaler tells you the fields are out of order, the sync is the first thing to
@@ -368,9 +363,7 @@ it also closes the OSD again.
 
 ### A menu screen says something, finishes, then says it again
 
-!!! info "Unreleased"
-
-    Fixed after v0.4.0.
+!!! info "Fixed in v0.5.0"
 
 On menu screens that hold on a still picture with a voice-over — character-selection
 screens on DVD games are the usual case — the audio played through, then played a second

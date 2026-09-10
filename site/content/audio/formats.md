@@ -84,7 +84,7 @@ shown are the disc's rather than a simple count. See
 
 ## Output level
 
-!!! info "Unreleased — AC-3 levels were wrong, and are corrected in the next release"
+!!! info "Changed in v0.5.0 — Dolby Digital levels were wrong, and are corrected"
     Dolby Digital tracks were decoded **6 dB quieter than they should have been**
     on stereo and mono soundtracks. 5.1 soundtracks were slightly *loud* for a
     separate reason, and the two faults partly cancelled — which is why the
@@ -108,10 +108,10 @@ as `+` then `++`. Each step is roughly +6 dB. It is a compressor rather than a p
 quiet material comes up while peaks are curved to land just under full scale, so pushing it
 does not clip. The level is stored per core, so setting it here does not affect anything else.
 
-!!! info "Unreleased"
-    Boost requires **MiSTer Main 20260603 or newer** together with core support that arrives
-    in the next release. On an older Main, or an older core, the boost steps do not appear and
-    the control behaves as a plain attenuator.
+!!! info "Requirements"
+    Boost requires **MiSTer Main 20260603 or newer** together with core support added in
+    **v0.5.0**. On an older Main, or a core older than that, the boost steps do not appear
+    and the control behaves as a plain attenuator.
 
 Two limits worth knowing:
 
@@ -120,7 +120,7 @@ Two limits worth knowing:
 - **It is a playback control, not a repair.** It sits at the very end of the chain, after
   decoding and after the audio filter.
 
-The same OSD change also enables MiSTer's **audio filter** for this core, which had never been
+The same change also enables MiSTer's **audio filter** for this core, which had never been
 advertised to the firmware and so never appeared.
 
 ## A/V sync

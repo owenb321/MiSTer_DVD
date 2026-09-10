@@ -1,6 +1,6 @@
 # Compatibility
 
-What plays, what does not, and what is untested. Current as of **v0.4.0**.
+What plays, what does not, and what is untested. Current as of **v0.5.0**.
 
 ## Formats
 
@@ -68,7 +68,7 @@ best-known — and that version can declare a different subpicture stream from t
 none at all. Where the disc offers no subtitle stream for the mode you are in, the subtitle
 button will not produce subtitles. This matches a set-top player.
 
-!!! info "Unreleased"
+!!! info "Changed in v0.5.0"
     Before this change the player would show such a stream anyway, using a colour palette
     that was never meant for it — the text came out as flat grey with no black outline and
     was very hard to read. It is now simply not shown.
@@ -100,9 +100,9 @@ headroom because the frames are taller.
 analogy with the hardware-proven NTSC ones and no PAL CRT was available to test them. PAL
 over HDMI is confirmed working.
 
-!!! info "Unreleased"
+!!! info "Unconfirmed on PAL"
 
-    One extra part of this is unconfirmed on PAL as of the next release: **which of the two
+    One part of this is unconfirmed on PAL as of v0.5.0: **which of the two
     interlaced fields the television treats as the first one**. The composite sync now
     carries the full standard vertical block on both standards, and the *shape* of it is
     correct for 625 lines — but the choice of which field leads was measured on NTSC and

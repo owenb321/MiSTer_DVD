@@ -28,7 +28,7 @@ Settings are saved to `/media/fat/config/DVD_v3.CFG` and persist across core rel
     `DVD_v2.CFG` — [settings reset once](#settings-that-reset-after-an-update) the first
     time you run v0.4.0. Releases up to and including v0.3.0 still have the old pair.
 
-!!! info "Unreleased — they reset once more"
+!!! warning "New in v0.5.0 — they reset once more"
     **A/V Offset** now defaults to **0 ms** instead of +100 ms. Re-ordering the values so
     0 ms comes first remaps every saved setting, so the file bumps again to `DVD_v3.CFG`
     and settings reset one further time.
@@ -77,7 +77,7 @@ governor when diagnosing a pacing problem, not as a quality setting.
 
 Default **On**, and it should stay on.
 
-!!! info "Unreleased"
+!!! info "Renamed in v0.5.0"
     This setting was called **Audio Genlock** in v0.4.0 and earlier. It was renamed
     because the old name described only half of what it does — and the half it named
     had not been true for some time.
@@ -100,7 +100,7 @@ reproduced on someone else's disc, which is why the setting still has a row.
 
 Default **0 ms**. There should be no need to change it.
 
-!!! info "Unreleased"
+!!! info "Changed in v0.5.0"
     This default was **+100 ms** in v0.4.0 and earlier. That was the correct null for a
     player whose clock was anchored on the demux front, which left audio about 100 ms
     early; the clock is now anchored on the picture actually being displayed, so the

@@ -91,7 +91,7 @@ left to detect. Nothing can infer it from the stream, which is why the manual **
 
 ## Known limitations
 
-!!! info "Unreleased — fixed"
+!!! info "Fixed in v0.5.0"
     The offset that used to appear when Auto engaged a couple of seconds into a title,
     and cleared on the next seek, is **gone**. It was not a film-detection problem: the
     player's clock counted displayed frames from a point in the *demux*, so everything

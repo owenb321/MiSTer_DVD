@@ -138,11 +138,11 @@ upscale.
 
 ## Analog CSync — if your set jitters or shows sawtooth edges
 
-!!! info "Unreleased"
+!!! info "New in v0.5.0"
 
-    This setting is not in v0.4.0. It is on `main` and will be in the next release.
+    This setting is not in v0.4.0 or earlier.
 
-**Debug page → `Analog CSync` → `SMPTE` (default) / `2H` / `Stock`.**
+**Debug page → `Analog CSync` → `SMPTE` (default) / `2H`.**
 
 Composite sync is the single signal that tells a television where every line *and* every
 field begins. A broadcast signal surrounds its vertical sync with **equalizing pulses** —
