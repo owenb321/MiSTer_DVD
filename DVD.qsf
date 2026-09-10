@@ -1325,4 +1325,22 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #     (build_release.sh's testing mode). Do not flash it -- below the gate is the
 #     chroma-fringe lottery, which would confound a field-order eye test.
 
+# 2026-09-10b (feature/cdda-physical, dev-cddaphys -- physical audio-CD
+# playback: dvd/cdda_toc.sv plus the emu wiring for track skip, TRACK n/N,
+# seek-bar notches and track-relative time): SEED 7 held FIRST roll -- clk_dec
+# 92.30 @100C / 90.48 @-40C (gate 86.0) at 98% ALM (41,233), RAM 499/553,
+# DSP 94. Build DVD_cddaphys_20260910_2100.rbf.
+# ★★ THE FIRST ROLL OF THIS NETLIST DID NOT FIT AT ALL, and the reason is the
+# one this file and CLAUDE.md both already warned about. cdda_toc's 100x32
+# track table was read COMBINATIONALLY at five sites, so Quartus could not use
+# an M10K and built it from flops + address muxes: MEASURED 3733 ALUTs / 3463
+# registers / 0 block memory bits, and the fitter wanted 4558 LABs against the
+# device's 4191. Rewritten around ONE registered read port (a walk that keeps
+# entries k, k-1, k-2 as the address advances, serving bounds, both neighbours
+# AND the notch replay from that single port): 3733 -> 214 ALUTs, +1 M10K.
+# ⚠ Note the timing came out BETTER than the WAV branch's 87.61 at the same 98%
+# ALM. Do not read that as the rewrite buying headroom -- this ledger records
+# ~0.7 MHz of roll-to-roll variance on unrelated netlists and a 4.3 MHz swing
+# from a version-string edit alone. It is a fresh netlist, not an improvement.
+
 set_global_assignment -name SEED 9
