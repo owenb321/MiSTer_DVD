@@ -90,32 +90,17 @@ if [ "$RED" -eq 1 ]; then
     echo
     echo "=== RED arm"
 
-    # 1. THE retracted defect (docs/iec61937.md:243-251): session state clocked
-    #    off rst_sys_n, so a seek or an audio-track switch disarms the fill in
-    #    precisely the two windows it exists for.
-    red_case session-on-rst_sys_n "FAIL: session disarmed by a track switch" \
-        's/negedge rst_sess_n) begin/negedge rst_sys_n) begin/; s/if (!rst_sess_n) begin/if (!rst_sys_n) begin/'
-
     # 2. The pre-existing byte-drain defect: pop the descriptor, strand the
     #    payload, desync audio_ring's two pointers for the rest of the title.
     red_case no-payload-drain "FAIL: LPCM payload not drained" \
         '/LPCM\/unknown -> not wrappable/,/S_SKIP;/ s/bytes_left  <= frame_len;/bytes_left  <= 16'"'"'d0;/'
 
-    # 3. Pa/Pb suppressed on a pause burst - the receiver has no preamble to
-    #    find it by, which is what a width-only check would have missed.
-    red_case pause-without-preamble "FAIL pause-Pa" \
-        's/burst_silent<= ~fill_pause;/burst_silent<= 1'"'"'b1;/'
-
-    # 4. The fill drops the non-PCM flag, so the format re-negotiates per gap.
-    red_case fill-drops-nonpcm "FAIL: fill 1 dropped the non-PCM flag" \
-        's/cur_nonpcm  <= fill_nonpcm;/cur_nonpcm  <= 1'"'"'b0;/'
-
-    # 5. Burst period reset per track switch - the Pa/Pb grid jumps 512 -> 1536
+    # 2. Burst period reset per track switch - the Pa/Pb grid jumps 512 -> 1536
     #    on the first gap after a track change inside a DTS title.
     red_case period-on-rst_sys_n "FAIL: burst period reverted" \
         's/cur_period <= period_sel;/cur_period <= PERIOD_AC3;/'
 
-    # 6. The CARRIER defect, reproduced at the wiring level: put the encoder,
+    # 3. The CARRIER defect, reproduced at the wiring level: put the encoder,
     #    the CE divider and the FIFO back on the flush reset. This is the one the
     #    user hit -- a chapter skip restarting the biphase stream -- and no
     #    hold_fill arm can mask it.

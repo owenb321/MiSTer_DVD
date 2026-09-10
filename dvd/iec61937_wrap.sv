@@ -47,9 +47,6 @@ module iec61937_wrap #(
     // silence there and the A/B that judged them could not have shown a difference.
     input  wire        rst_sess_n,
     input  wire        enable,        // passthrough active (else producer idles)
-    // How to fill a gap once a codec stream is established (see hold_fill below).
-    //   0 PCM silence   1 NonPCM hold   2 Pause burst Pd=period   3 Pause burst Pd=0
-    input  wire [1:0]  hold_fill,
     input  wire        byte_swap,     // 0: first byte in word[15:8]; 1: swapped
     input  wire        mute_i,        // CSS-scrambled source: consume frames but
                                       // emit PCM silence (scrambled AC-3/DTS sent
@@ -152,7 +149,6 @@ module iec61937_wrap #(
     localparam [15:0] PB = 16'h4E1F;
     localparam [15:0] PC_AC3 = 16'h0001; // burst-info data type 1
     localparam [15:0] PC_DTS = 16'h000B; // burst-info data type 11 (DTS I/II/III)
-    localparam [15:0] PC_PAUSE = 16'h0003; // data type 3 = PAUSE (hold_fill 2/3)
 
     localparam [15:0] PERIOD_AC3 = 16'd1536; // samples (6144 bytes)
     localparam [15:0] PERIOD_DTS = 16'd512;  // samples (2048 bytes, core DTS)
@@ -294,42 +290,33 @@ module iec61937_wrap #(
     wire [15:0] null_period = (frame_valid && is_codec) ? period_sel : cur_period;
 
     // ---- SESSION state (rst_sess_n, NOT rst_sys_n) -------------------------
-    // "A codec stream is running, and it is this one." Chooses the gap FILL, and
-    // must therefore outlive the very events that create the gaps: a track switch
-    // and a seek both pulse rst_sys_n. Clearing here is what made the old
-    // burst_seen latch useless (docs/iec61937.md:243-251) — every fill degraded to
-    // PCM silence in exactly the flap windows, so the three styles were
-    // indistinguishable by construction and the A/B that retired two of them proved
-    // nothing. cur_period rides along for the same reason: resetting it to
-    // PERIOD_AC3 mid-DTS-title jumps the Pa/Pb grid 512 -> 1536 on the next gap.
-    reg        sess_armed;   // a real data-burst has been emitted since the mount
-    reg        sess_dts;     // ...and it was DTS (else AC-3)
+    // Session-scoped so a track switch inside a DTS title cannot revert the silence
+    // quantum to AC-3's 1536: rst_sys_n pulses on every seek, jump and track switch.
+    //
+    // ⛔ A GAP FILL LIVED HERE AND WAS REMOVED. Keep the reasoning, because the
+    // question looks obviously worth solving and is not.
+    // The old burst_seen latch cleared on rst_sys_n, so every fill style degraded
+    // to PCM silence in exactly the two windows a fill exists for and the A/B that
+    // retired two of them was vacuous (docs/iec61937.md:243-251). Re-measured over
+    // OPTICAL with the arming fixed (2026-09-09): PCM silence flips the receiver to
+    // PCM, and both a non-PCM hold and a compliant IEC 61937 pause burst -- Pd =
+    // span AND Pd = 0 -- drop it to "Decoder Off". Only real data bursts hold it,
+    // which pointed at canned silent frames ("digital black"), and those are cheap:
+    // every silent frame is byte-identical and AC-3 is 1536 samples at ANY bitrate,
+    // so ~1.3 KB of ROM covers AC-3 2/0, AC-3 3/2 and DTS with the Pa/Pb grid
+    // unchanged.
+    // ★ IT WAS STILL NOT BUILT: a PS5 playing a DVD was then measured doing the
+    // same thing -- dropping the decoder on a pause and between menus. Leaving DD
+    // during a gap is what a shipping player does, so there was nothing to fix.
+    // ⚠ Do not re-derive this from docs/iec61937.md's "the only fix would be
+    // digital black ... as some real players do": that sentence started this, and
+    // it is wrong about real players.
     always @(posedge clk_sys or negedge rst_sess_n) begin
-        if (!rst_sess_n) begin
-            sess_armed <= 1'b0;
-            sess_dts   <= 1'b0;
+        if (!rst_sess_n)
             cur_period <= PERIOD_AC3;
-        end else if (enable && st == S_IDLE && frame_valid && is_codec) begin
-            // Latched even while HOLDING, so the grid is right before the first burst.
-            cur_period <= period_sel;
-            if (!hold_frame && !mute_i) begin
-                sess_armed <= 1'b1;
-                sess_dts   <= (frame_type == 2'd1);
-            end
-        end
+        else if (enable && st == S_IDLE && frame_valid && is_codec)
+            cur_period <= period_sel;   // latched even while HOLDING
     end
-
-    // Gap fill, decoded once. Inert until sess_armed: before the first real burst
-    // the wire must be PCM (fj#110 round 2 — the receiver cannot ACQUIRE across
-    // non-PCM silence), and promising a Dolby stream that never arrives is worse
-    // than saying PCM. `hold_fill` only ever changes what a gap looks like.
-    wire       fill_pause  = sess_armed && (hold_fill == 2'd2 || hold_fill == 2'd3);
-    wire       fill_nonpcm = sess_armed && (hold_fill != 2'd0);
-    // Pd for a pause burst. IEC 61937-2 carries the pause length here; the value
-    // shipped in 6861327 was 0, which a receiver may read as "pause for nothing" and
-    // ignore — a second candidate confound behind "pause bursts do not hold lock".
-    // hold_fill 2 states the burst's own span in sample pairs, 3 reproduces the 0.
-    wire [15:0] fill_pd    = (hold_fill == 2'd2) ? cur_period : 16'd0;
 
     // The producer resets on the SESSION scope too. rst_sys_n is now a synchronous
     // ABORT rather than a reset: restarting the FSM mid-burst leaves a partial
@@ -441,12 +428,10 @@ module iec61937_wrap #(
                         // hold_fill can keep the format steady instead.
                         bytes_left  <= 16'd0;
                         words_total <= {null_period, 1'b0};
-                        pd_bits     <= fill_pause ? fill_pd  : 16'd0;
-                        pc_val      <= fill_pause ? PC_PAUSE : 16'd0;
-                        // burst_silent suppresses Pa/Pb, so a pause burst must clear
-                        // it or the receiver has no preamble to find it by.
-                        burst_silent<= ~fill_pause;
-                        cur_nonpcm  <= fill_nonpcm;
+                        pd_bits     <= 16'd0;
+                        pc_val      <= 16'd0;
+                        burst_silent<= 1'b1;
+                        cur_nonpcm  <= 1'b0;
                         // Classify: a queued codec frame reaching here is HELD
                         // (pacing); no frame queued = ring underrun / priming.
                         dbg_burst_stb  <= 1'b1;

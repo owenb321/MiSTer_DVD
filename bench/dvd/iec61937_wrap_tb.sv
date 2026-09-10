@@ -52,11 +52,10 @@ module iec61937_wrap_tb;
     // behaviour exactly (fill 0 = PCM silence), so TESTs 1-10 passing unchanged is
     // the evidence that the shipped path is untouched.
     reg        rst_sess_n = 1'b0;
-    reg  [1:0] hold_fill  = 2'd0;
 
     iec61937_wrap #(.FIFO_AW(12)) dut (
         .clk_sys(clk_sys), .rst_sys_n(rst_sys_n), .rst_sess_n(rst_sess_n),
-        .enable(enable), .hold_fill(hold_fill), .byte_swap(byte_swap),
+        .enable(enable), .byte_swap(byte_swap),
         .mute_i(mute),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
@@ -158,6 +157,9 @@ module iec61937_wrap_tb;
         end
     end
 
+    integer real_bursts = 0;
+    always @(posedge clk_sys) if (dbg_b_stb && dbg_b_real) real_bursts = real_bursts + 1;
+
     // frame_pop counter (for the A/V-sync hold test)
     integer pop_count = 0;
     always @(posedge clk_sys) if (frame_pop) pop_count = pop_count + 1;
@@ -216,16 +218,19 @@ module iec61937_wrap_tb;
     end endtask
 
     integer i, errors = 0;
-    integer t11_rr, t11_pop;
+    integer t11_rr, t11_pop, t_burst;
     integer t16_bad;
     reg [8:0] t16_blk;
     integer t10_held, t10_real, t10_under;
-    // Drive a real data-burst through so the session is armed, then leave the
-    // caller to starve it. Bounded so a regression fails loudly instead of hanging.
-    task arm_session; begin
-        for (i=0; i<200000 && !dut.sess_armed; i=i+1) @(posedge clk_sys);
-        if (!dut.sess_armed) begin
-            $display("  FAIL: session never armed (no real burst emitted)");
+    // Drive one real data-burst through, then leave the caller to starve it.
+    // Waits on the module's own burst-classification output rather than internal
+    // state, and is bounded so a regression fails loudly instead of hanging.
+    task run_one_burst; begin
+        @(negedge clk_sys);   // settle stimulus off the edge the DUT latches on
+        t_burst = real_bursts;
+        for (i=0; i<200000 && real_bursts == t_burst; i=i+1) @(posedge clk_sys);
+        if (real_bursts == t_burst) begin
+            $display("  FAIL: no real data-burst was emitted");
             errors = errors + 1;
         end
     end endtask
@@ -558,95 +563,13 @@ module iec61937_wrap_tb;
             $display("  FAIL: LPCM payload not drained -> audio_ring rd_ptr desync");
             errors = errors + 1; end
 
-        // ================= TEST 12: fill 1 = NonPCM hold ========================
-        // Zero words (no Pa/Pb) but the format flag STAYS SET, so the receiver
-        // never re-negotiates PCM<->DD across the gap.
-        frame_valid = 0; free_run_sync; do_reset; settle;
-        hold_fill = 2'd1;
-        plen = 8; frame_len = 16'd8; frame_type = 2'd0; frame_valid = 1; enable = 1;
-        arm_session;                 // arm the session with a real burst
-        frame_valid = 0;                      // ...then starve it
-        wait (pulses >= 3072*2);
-        @(posedge clk_sys);
-        $display("TEST 12: nonpcm hold: sess_armed=%0b cur_nonpcm=%0b",
-                 dut.sess_armed, dut.cur_nonpcm);
-        if (dut.cur_nonpcm !== 1'b1) begin
-            $display("  FAIL: fill 1 dropped the non-PCM flag"); errors=errors+1; end
-        if (dut.burst_silent !== 1'b1) begin
-            $display("  FAIL: fill 1 should emit zero words"); errors=errors+1; end
-
-        // ================= TEST 13: fill 2 = PAUSE burst, Pd = period ===========
-        // Pa/Pb MUST be emitted or the receiver cannot find the burst at all.
-        frame_valid = 0; free_run_sync; do_reset; settle;
-        hold_fill = 2'd2;
-        plen = 8; frame_len = 16'd8; frame_type = 2'd0; frame_valid = 1; enable = 1;
-        arm_session;
-        frame_valid = 0;
-        wait (pulses >= 3072*2);
-        @(posedge clk_sys);
-        $display("TEST 13: pause burst: Pc=%04h Pd=%04h nonpcm=%0b",
-                 cap[2], cap[3], dut.cur_nonpcm);
-        expect_word(0, PA, "pause-Pa");
-        expect_word(1, PB, "pause-Pb");
-        expect_word(2, 16'h0003, "pause-Pc");
-        expect_word(3, 16'd1536, "pause-Pd-period");
-        if (dut.cur_nonpcm !== 1'b1) begin
-            $display("  FAIL: pause burst cleared the non-PCM flag"); errors=errors+1; end
-
-        // fill 3 reproduces the Pd=0 that shipped in 6861327, so the HW round can
-        // separate "receivers ignore pause bursts" from "that pause burst was malformed".
-        frame_valid = 0; free_run_sync; do_reset; settle;
-        hold_fill = 2'd3;
-        plen = 8; frame_len = 16'd8; frame_type = 2'd0; frame_valid = 1; enable = 1;
-        arm_session;
-        frame_valid = 0;
-        wait (pulses >= 3072*2);
-        @(posedge clk_sys);
-        $display("TEST 13b: pause burst Pd=%04h (legacy zero)", cap[3]);
-        expect_word(3, 16'd0, "pause-Pd-zero");
-
-        // ================= TEST 14: THE ARMING TEST =============================
-        // The one check that would have caught the original defect. A track switch
-        // pulses rst_sys_n but not rst_sess_n; the fill must still be armed on the
-        // very first gap AFTER it. With the old burst_seen latch this read PCM
-        // silence, which is precisely why the three fill styles measured identical
-        // in the two windows that mattered.
-        frame_valid = 0; free_run_sync; do_reset; settle;
-        hold_fill = 2'd1;
-        plen = 8; frame_len = 16'd8; frame_type = 2'd0; frame_valid = 1; enable = 1;
-        arm_session;                          // session armed
-        frame_valid = 0;                      // old track gone BEFORE the reset --
-        do_track_switch;                      // <-- seek / audio-track switch
-        enable = 1;                           // gap immediately after it
-        wait (pulses >= 3072);
-        @(posedge clk_sys);
-        $display("TEST 14: after a track switch: sess_armed=%0b cur_nonpcm=%0b",
-                 dut.sess_armed, dut.cur_nonpcm);
-        if (dut.sess_armed !== 1'b1) begin
-            $display("  FAIL: session disarmed by a track switch (the retracted defect)");
-            errors = errors + 1; end
-        if (dut.cur_nonpcm !== 1'b1) begin
-            $display("  FAIL: fill degraded to PCM silence after a track switch");
-            errors = errors + 1; end
-        // ...and a MOUNT must still disarm it: before any real burst the wire has to
-        // be PCM, or the receiver cannot acquire (fj#110 round 2).
-        frame_valid = 0; do_reset; settle;
-        enable = 1;
-        wait (pulses >= 3072);
-        @(posedge clk_sys);
-        $display("TEST 14b: after a mount: sess_armed=%0b cur_nonpcm=%0b",
-                 dut.sess_armed, dut.cur_nonpcm);
-        if (dut.sess_armed !== 1'b0 || dut.cur_nonpcm !== 1'b0) begin
-            $display("  FAIL: fill armed before the first real burst"); errors=errors+1; end
-
         // ================= TEST 15: DTS period survives a track switch ==========
         // cur_period used to reset to PERIOD_AC3 on rst_sys_n, so the first gap
         // after a track switch inside a DTS title jumped the Pa/Pb grid 512->1536.
         frame_valid = 0; free_run_sync; do_reset; settle;
-        hold_fill = 2'd1;
         plen = 8; frame_len = 16'd8; frame_type = 2'd1;   // DTS
         frame_valid = 1; enable = 1;
-        arm_session;
+        run_one_burst;
         frame_valid = 0;
         do_track_switch;
         enable = 1;
@@ -655,7 +578,6 @@ module iec61937_wrap_tb;
         if (dut.cur_period !== 16'd512) begin
             $display("  FAIL: burst period reverted to AC-3 1536 inside a DTS title");
             errors = errors + 1; end
-        hold_fill = 2'd0;
 
 
         // ================= TEST 16: the CARRIER survives a track switch =========
@@ -667,9 +589,8 @@ module iec61937_wrap_tb;
         // once across the switch, and the encoder's 192-frame channel-status block
         // must keep counting rather than restart.
         frame_valid = 0; free_run_sync; do_reset; settle;
-        hold_fill = 2'd1;
         plen = 8; frame_len = 16'd8; frame_type = 2'd0; frame_valid = 1; enable = 1;
-        arm_session;
+        run_one_burst;
         repeat (4000) @(posedge clk_sys);       // let the carrier settle
         wire_dev = 0; wire_seen = 0;            // clear the reset-immune monitor
         t16_blk  = dut.u_spdif.subframe_count_q;
@@ -693,7 +614,6 @@ module iec61937_wrap_tb;
             $display("  FAIL: a mount no longer resets the carrier");
             errors = errors + 1; end
         $display("TEST 16b: a mount still resets the carrier");
-        hold_fill = 2'd0;
 
         if (errors==0) $display("\nALL TESTS PASSED");
         else           $display("\n%0d FAILURES", errors);

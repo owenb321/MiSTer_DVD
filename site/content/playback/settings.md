@@ -55,34 +55,8 @@ problems.
 | **Line-21 CC** | **On** / Off | Re-inserts closed captions on line 21 of the analog output — see [Closed captions](../video/closed-captions.md). |
 | **CC Test Line** | **Off** / On | Paints the caption waveform on a *visible* line to prove the chain works — see [the CC diagnostic](../video/closed-captions.md#is-it-working-the-test-line). |
 | **Analog CSync** | **SMPTE** / 2H | The shape of the composite sync on the analog output. **SMPTE** is the default and is what a broadcast signal carries. Change it only if your television or scaler is unhappy — see [Analog / CRT output](../video/analog-crt.md#analog-csync-if-your-set-jitters-or-shows-sawtooth-edges). |
-| **BS Hold Fill** | **PCM Silence** / NonPCM Hold / Pause Pd=Per / Pause Pd=0 | Diagnostic. What bitstream passthrough puts on the wire during a gap — see below. |
 | **Film 24p Out** | **Auto** / Off / On | 23.976 Hz output for film content — see [Film (24p)](../video/film-24p.md). |
 | **A/V Offset** | **0 ms** / −200 / −100 / −50 / +50 / +100 / +150 / +200 | Lip-sync trim. |
-
-### BS Hold Fill
-
-!!! info "Unreleased — diagnostic, and temporary"
-
-    This setting exists to answer one question on real hardware and will be removed
-    once it has. It does nothing unless **Audio Out** is set to *Passthru*.
-
-With `Audio Out = Passthru` the core sends the disc's Dolby Digital or DTS straight to
-your receiver. When the audio stops — you pause, a menu has no music, the disc is between
-titles — there is no bitstream to send, and today the core sends digital silence instead.
-Many receivers treat that as the stream ending: they drop out of Dolby, show *PCM* or
-*Decoder Off*, and take a moment to re-lock when the sound comes back.
-
-This setting changes what fills that gap:
-
-| Value | What goes on the wire |
-|---|---|
-| **PCM Silence** | Silence marked as ordinary PCM. Today's behaviour. |
-| **NonPCM Hold** | Silence still marked as a compressed stream, so the format never changes. |
-| **Pause Pd=Per** | A real IEC 61937 pause burst — what the standard defines for a gap. |
-| **Pause Pd=0** | The same pause burst with a different length field, for comparison. |
-
-If your receiver drops out of Dolby or DTS when you pause, try **NonPCM Hold**, then the
-two **Pause** options, and report which one keeps it locked.
 
 ### Frame Drop
 
