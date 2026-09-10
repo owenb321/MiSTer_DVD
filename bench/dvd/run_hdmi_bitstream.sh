@@ -67,6 +67,10 @@ if [ "$RED" -eq 1 ]; then
     # audio_ring's two pointers for the rest of the title.
     red_case no-payload-drain "FAIL: LPCM payload not drained" \
         '/LPCM\/unknown -> not wrappable/,/S_SKIP;/ s/bytes_left  <= frame_len;/bytes_left  <= 16'"'"'d0;/'
+    # The PCM path must not still be flagged as a data burst: PCM into a sink that
+    # expects non-PCM is full-scale noise, which is the worst failure here.
+    red_case pcm-flagged-nonpcm "FAIL: PCM mode still flags the stream non-PCM" \
+        "s/cur_pair <= pcm_mode  ? {1'b0, pcm_hold}/cur_pair <= pcm_mode  ? {1'b1, pcm_hold}/"
 fi
 
 if [ "$fail" -ne 0 ]; then echo; echo "SUITE FAILED"; exit 1; fi

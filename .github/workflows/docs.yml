@@ -1,5 +1,27 @@
 name: docs
 
+# Two jobs with two different jobs to do:
+#
+#   build  — the parity gate. Runs on every PR and every push to main that could
+#            invalidate the manual, so `tools/docs_check.py` and
+#            `mkdocs build --strict` fail fast, next to the change that broke them.
+#   deploy — publishes to GitHub Pages, and ONLY when a release is published.
+#
+# ⚠ WHY THE SITE IS NOT DEPLOYED FROM `main` (changed 2026-09-09, by user
+# decision): the manual is what a user reads while holding the .rbf from the
+# latest release. Deploying every merge meant the published manual described
+# options, buttons and formats that were not in ANY released core — the reader
+# has no way to tell which half applies to them, and the "Unreleased" admonition
+# convention put the burden on the writer to remember. A release event checks out
+# the tagged commit, so what is published is exactly the manual for the core that
+# was published with it.
+#
+# Consequence worth knowing: a doc fix merged to main does not reach users until
+# the next release. To push one out sooner, publish the release again or dispatch
+# this workflow **with the release tag as the ref** — never from main, which would
+# reintroduce exactly the leak above:
+#   gh workflow run docs.yml --ref v0.4.0
+
 on:
   push:
     branches: [main]
@@ -16,17 +38,19 @@ on:
       - 'tools/docs_check.py'
       - 'dvd/emu.sv'
       - '.github/workflows/docs.yml'
+  release:
+    types: [published]
   workflow_dispatch:
 
 # Least privilege by default; the deploy job adds only what it needs.
 permissions:
   contents: read
 
-# Keyed on ref so a PR build never queues behind a main deploy. Never cancel a
-# deployment mid-flight; PR builds are cheap to cancel.
+# Keyed on ref so a check build never queues behind a deploy. Never cancel a
+# deployment mid-flight; check builds are cheap to cancel.
 concurrency:
   group: pages-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
   build:
@@ -59,14 +83,14 @@ jobs:
         run: mkdocs build --strict
 
       - name: Upload Pages artifact
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-pages-artifact@v3
         with:
           path: .site-build
 
   deploy:
     name: Deploy to GitHub Pages
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
     permissions:

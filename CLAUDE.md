@@ -58,9 +58,13 @@ the wrong one is itself a documentation bug:
   a 3-step quick start, licensing, and where to read more. Deliberately short (~155 lines).
   **It is not the manual — do not grow it back.**
 - **`site/content/`** — the **user manual**, published to
-  <https://owenb321.github.io/MiSTer_DVD/> by `.github/workflows/docs.yml` on every push to
-  `main` that touches `site/**`, `mkdocs.yml`, `tools/docs_check.py` or `dvd/emu.sv`.
-  Every user-visible detail lives here: controls, every OSD setting, on-screen messages,
+  <https://owenb321.github.io/MiSTer_DVD/> by `.github/workflows/docs.yml`, **only when a
+  release is published**, and built from that release's own tagged commit. A push to `main`
+  or a PR touching `site/**`, `mkdocs.yml`, `tools/docs_check.py` or `dvd/emu.sv` still
+  *builds* the manual as a CI check — it just does not deploy it. ⚠ **So a doc fix merged
+  to `main` does not reach users until the next release**; to push one out sooner, dispatch
+  the workflow **with the release tag as the ref** (`gh workflow run docs.yml --ref
+  v0.4.0`), never from `main`. Every user-visible detail lives here: controls, every OSD setting, on-screen messages,
   analog/CRT modes, closed captions, audio passthrough, VCD/SVCD, physical discs,
   compatibility, troubleshooting.
 - **`docs/`** — engineering design notes. **NOT published, NOT user documentation.** Never
@@ -103,10 +107,16 @@ CONF_STR history further down the file (a retired `Direct Video` row among other
 loose grep invents options that do not exist. That mistake was made by hand while writing
 the manual and nearly shipped three fictional OSD settings.
 
-**Mark unreleased features.** The site is built from `main`, so it documents the
-development build while readers run a release. Anything not yet released gets an
-`!!! info "Unreleased"` admonition, and `extra.released_version` in `mkdocs.yml` drives the
-announcement bar. The release process bumps it and sweeps the stale admonitions.
+**Unreleased features no longer need marking** (changed 2026-09-09, by user decision).
+The `!!! info "Unreleased"` admonition existed because the site was deployed from `main`, so
+the published manual described a development build nobody could download — a reader had no
+way to tell which half applied to them, and remembering the admonition was the writer's
+burden. Deploying only on a release publish removes the divergence at the source: what is
+published is the tagged commit's manual for the core released beside it. Write manual pages
+in the present tense as the feature lands. Existing admonitions are harmless and the release
+process still sweeps them; `extra.released_version` in `mkdocs.yml` stays — it names the
+version on the announcement bar and `package.yml` refuses to package a release whose tag
+disagrees with it.
 
 **Authoring rules** (full set in `site/README.md`): keep `.md` extensions on cross-links so
 pages resolve in MkDocs *and* natively on GitHub; links to repo files must be absolute

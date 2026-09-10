@@ -1,15 +1,21 @@
 {% extends "base.html" %}
 
 {#
-  Announcement bar: the manual is built from `main`, so it documents the
-  development build, while nearly every reader is running the latest release.
-  `released_version` lives in mkdocs.yml `extra:` and is bumped by the release
-  process. Without this, someone reads about an option their .rbf does not have
-  and files a bug.
+  Announcement bar: names the version this manual describes.
+
+  Since 2026-09-09 the site is deployed only when a release is published
+  (.github/workflows/docs.yml), and it is built from that release's own tagged
+  commit — so the manual a reader is looking at always matches the .rbf they can
+  download. `released_version` lives in mkdocs.yml `extra:`, is bumped by the
+  release commit, and .github/workflows/package.yml refuses to package a release
+  whose tag disagrees with it.
+
+  Keep the bar even though the two can no longer diverge: a reader arriving from
+  a search result needs to know which core version the page describes before
+  they act on it.
 #}
 {% block announce %}
-  This manual documents the current <strong>development build</strong>.
-  The latest release is
-  <a href="https://github.com/owenb321/MiSTer_DVD/releases/latest"><strong>v{{ config.extra.released_version }}</strong></a>.
-  Features marked <em>Unreleased</em> are not in it yet.
+  This manual documents
+  <a href="https://github.com/owenb321/MiSTer_DVD/releases/latest"><strong>v{{ config.extra.released_version }}</strong></a>,
+  the latest release.
 {% endblock %}

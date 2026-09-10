@@ -45,8 +45,15 @@ module iec61937_wrap_tb;
 
     // Large FIFO so the producer never stalls waiting on the consumer during
     // the layout capture.
+    // PCM-mode inputs. Tied off explicitly: a new INPUT left unconnected floats Z,
+    // and here that made pcm_mode X, which made fifo_rd_en X, which stalled the
+    // producer into a bench TIMEOUT rather than a clean failure.
+    reg        pcm_mode = 0;
+    reg [15:0] pcm_l = 0, pcm_r = 0;
+
     iec61937_wrap #(.FIFO_AW(12)) dut (
         .clk_sys(clk_sys), .rst_sys_n(rst_sys_n), .enable(enable), .byte_swap(byte_swap),
+        .pcm_mode(pcm_mode), .pcm_l_i(pcm_l), .pcm_r_i(pcm_r),
         .mute_i(mute),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
@@ -491,6 +498,29 @@ module iec61937_wrap_tb;
         end else if ((rr_count - t11_rr) != 40*(pop_count - t11_pop)) begin
             $display("  FAIL: LPCM payload not drained -> audio_ring rd_ptr desync");
             errors = errors + 1; end
+
+
+        // ================= TEST 12: PCM mode bypasses the burst path ============
+        // LPCM/MP2 in Passthru: the decoder's samples go out as linear PCM with the
+        // non-PCM flag CLEAR. Read back off the pair the encoder is presenting, so
+        // this measures the wire rather than an internal register.
+        frame_valid = 0; do_reset;
+        @(negedge clk_sys);
+        pcm_mode = 1; pcm_l = 16'h1234; pcm_r = 16'h5678; enable = 1;
+        repeat (4000) @(posedge clk_audio);
+        $display("TEST 12: PCM mode: L=%04h R=%04h nonpcm=%0b", bs_l, bs_r, bs_nonpcm);
+        if (bs_l !== 16'h1234 || bs_r !== 16'h5678) begin
+            $display("  FAIL: PCM samples did not reach the encoder"); errors=errors+1; end
+        if (bs_nonpcm !== 1'b0) begin
+            $display("  FAIL: PCM mode still flags the stream non-PCM"); errors=errors+1; end
+        // A changed sample must follow, or the hold is stuck rather than holding.
+        pcm_l = 16'hABCD; pcm_r = 16'hEF01;
+        repeat (4000) @(posedge clk_audio);
+        if (bs_l !== 16'hABCD || bs_r !== 16'hEF01) begin
+            $display("  FAIL: PCM output froze instead of tracking the decoder");
+            errors=errors+1; end
+        $display("TEST 12b: PCM output tracks the decoder");
+        pcm_mode = 0;
 
         if (errors==0) $display("\nALL TESTS PASSED");
         else           $display("\n%0d FAILURES", errors);
