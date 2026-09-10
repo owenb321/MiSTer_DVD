@@ -416,8 +416,17 @@ assign SPDIF_PASS_EN = pass_mode;
 // hdmi_bs_ack joins the mute term above instead of pass_mode alone.
 wire pcm_mute = pass_mode | css_scrambled | hdmi_bs_ack;
 
-// bs_hold / HDMI_BS_EN moved down beside the wrapper: they now depend on
-// rst_audio_sess_n, which is derived from mount_flush and cannot be built here.
+// Post-reset hold-off. rst_audio_n pulses on every audio-track switch and
+// aud_flush, and it re-phases the subframe pacing (MEASURED: the first interval
+// after a reset is 509 clk_audio, not 512 - see bench/dvd/iec61937_wrap_tb.sv
+// TEST 9). Mute the HDMI leg for ~100 ms across that so a receiver sees clean
+// silence and one switch, never a torn subframe.
+reg [12:0] bs_hold;
+always @(posedge CLK_AUDIO or negedge rst_audio_n)
+    if (!rst_audio_n)                 bs_hold <= 13'd4800;   // ~100 ms at 48 kHz
+    else if (bs_stb_w && |bs_hold)    bs_hold <= bs_hold - 13'd1;
+
+assign HDMI_BS_EN = pass_mode & hdmi_bs_ack & ~|bs_hold;
 
 assign SD_SCK       = 0;
 assign SD_MOSI      = 0;
@@ -572,7 +581,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-bscarrier"
+`define CORE_VERSION "dev-bsdrain"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -3379,38 +3388,11 @@ wire [15:0] dbg_aud_play_err;
 // 1536; DTS 512 until the DTS reframer supplies the real sample count).
 // =========================================================================
 // clk_audio (24.576 MHz) reset synchronizer: async assert, sync deassert.
-// The gap-fill session state must outlive aud_rst_n (every seek, jump and audio
-// track switch pulses it) but must NOT outlive a new disc: before the first real
-// burst of a title the wire has to be PCM or the receiver cannot acquire.
-// mount_flush is MOUNT-ONLY by construction (dvd/flush_ctl.sv), which is exactly
-// that scope. See docs/iec61937.md:243-251 for what clearing it too often cost.
-wire bs_sess_rst_n = reset_n & ~mount_flush;
-
-// SESSION scope (core reset / mount only). The IEC 60958 carrier hangs off this
-// so a seek or track switch cannot restart the biphase stream -- see the
-// rst_audio_sess_n port comment in dvd/iec61937_wrap.sv.
-reg [1:0] aud_sess_rsync = 2'b00;
-always @(posedge CLK_AUDIO or negedge bs_sess_rst_n)
-    if (!bs_sess_rst_n) aud_sess_rsync <= 2'b00;
-    else                aud_sess_rsync <= {aud_sess_rsync[0], 1'b1};
-wire rst_audio_sess_n = aud_sess_rsync[1];
-
-// Post-reset hold-off across the encoder's phase step (MEASURED: the first
-// interval after a reset is 509 clk_audio, not 512 - bench/dvd/iec61937_wrap_tb.sv
-// TEST 9). Mute the HDMI leg ~100 ms so a receiver sees clean silence and one
-// switch, never a torn subframe.
-// ⚠ SESSION scope, deliberately. This used to key on rst_audio_n, which pulses on
-// every seek, jump and audio-track switch - 100 ms of blanked HDMI at each one.
-// Now that the carrier survives those (rst_audio_sess_n), there is no phase step
-// to hide there, and leaving the hold-off on the old reset would have thrown away
-// the fix on the very output the user tests.
-reg [12:0] bs_hold;
-always @(posedge CLK_AUDIO or negedge rst_audio_sess_n)
-    if (!rst_audio_sess_n)            bs_hold <= 13'd4800;   // ~100 ms at 48 kHz
-    else if (bs_stb_w && |bs_hold)    bs_hold <= bs_hold - 13'd1;
-
-assign HDMI_BS_EN = pass_mode & hdmi_bs_ack & ~|bs_hold;
-
+reg [1:0] aud_rsync = 2'b00;
+always @(posedge CLK_AUDIO or negedge aud_rst_n)
+    if (!aud_rst_n) aud_rsync <= 2'b00;
+    else            aud_rsync <= {aud_rsync[0], 1'b1};
+wire rst_audio_n = aud_rsync[1];
 
 // Flap-probe burst classification taps (fed to the DEBUG_OVERLAY gap/underrun
 // counters, rows 23/24 in Passthru; declared unconditionally like the other
@@ -3420,7 +3402,6 @@ wire bs_burst_stb, bs_burst_real, bs_burst_held;
 iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .clk_sys      (clk_sys),
     .rst_sys_n    (aud_rst_n),
-    .rst_sess_n   (bs_sess_rst_n),
     .enable       (pass_mode),
     .byte_swap    (pass_bswap),
     .mute_i       (css_scrambled),   // CSS source: drain frames, emit PCM silence
@@ -3459,7 +3440,7 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .stc          (av_stc),
     .av_ofs       (av_ofs),
     .clk_audio    (CLK_AUDIO),
-    .rst_audio_sess_n (rst_audio_sess_n),
+    .rst_audio_n  (rst_audio_n),
     .spdif_o      (SPDIF_PASS),
     .hdmi_sck_o   (HDMI_BS_SCK),
     .hdmi_ws_o    (HDMI_BS_WS),

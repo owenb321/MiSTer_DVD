@@ -39,13 +39,6 @@ module iec61937_wrap #(
     // ---- ring domain (clk_sys) ----
     input  wire        clk_sys,
     input  wire        rst_sys_n,
-    // SESSION-scope reset: core reset or a MOUNT, and nothing else. rst_sys_n is
-    // aud_rst_n, which pulses on every seek, jump and audio-track switch — far too
-    // often to hold "a codec stream is running" across, and that is exactly the
-    // defect docs/iec61937.md:243-251 retracts: the old burst_seen latch cleared in
-    // the two windows the hold FILL exists for, so every fill style degraded to PCM
-    // silence there and the A/B that judged them could not have shown a difference.
-    input  wire        rst_sess_n,
     input  wire        enable,        // passthrough active (else producer idles)
     input  wire        byte_swap,     // 0: first byte in word[15:8]; 1: swapped
     input  wire        mute_i,        // CSS-scrambled source: consume frames but
@@ -78,18 +71,7 @@ module iec61937_wrap #(
 
     // ---- audio domain (clk_audio, 24.576 MHz) ----
     input  wire        clk_audio,
-    // SESSION-scope reset in the audio domain (emu's clk_audio synchronizer of
-    // rst_sess_n). Everything that forms the IEC 60958 CARRIER hangs off this and
-    // NOT off rst_audio_n: the CE divider, cur_pair, the pair FIFO and both
-    // serializers. rst_audio_n pulses on every seek, jump and audio-track switch,
-    // and tearing the encoder down there restarts the biphase stream, re-phases
-    // the subframe grid (the measured 509-vs-512 step) and restarts the 192-frame
-    // channel-status block -- so the receiver re-acquires. That is a CARRIER
-    // discontinuity, and no amount of changing what the burst CONTAINS can fix it;
-    // it is why a chapter skip drops receiver lock under every hold_fill arm.
-    // docs/iec61937.md "A track switch is a hard wire discontinuity" recorded the
-    // mechanism; this input is what stops it being one.
-    input  wire        rst_audio_sess_n,
+    input  wire        rst_audio_n,
     output wire        spdif_o,
 
     // ---- HDMI bitstream tap (clk_audio) ----
@@ -169,12 +151,12 @@ module iec61937_wrap #(
 
     iec_dcfifo32 #(.AW(FIFO_AW), .DW(33)) u_fifo (
         .wr_clk   (clk_sys),
-        .wr_rst_n (rst_sess_n),
+        .wr_rst_n (rst_sys_n),
         .wr_en    (wr_en),
         .wr_data  (wr_pair),
         .full     (fifo_full),
         .rd_clk   (clk_audio),
-        .rd_rst_n (rst_audio_sess_n),
+        .rd_rst_n (rst_audio_n),
         .rd_en    (fifo_rd_en),
         .rd_data  (fifo_rd_data),
         .empty    (fifo_empty)
@@ -193,10 +175,10 @@ module iec61937_wrap #(
                      S_PAD  = 4'd7;  // emit zero words to fill the period
 
     // Draining a non-codec frame's payload needs its own state, NOT the S_B0/S_B1
-    // burst path: those consume one byte per emitted word, i.e. one frame per burst
-    // period, and LPCM arrives ~3x faster than that — the ring would back up into
-    // STD backpressure. S_SKIP runs at clk_sys, so ~2 KB clears in ~74 us against
-    // the CDC FIFO's 5.3 ms of slack, and the wire never notices.
+    // burst path: that consumes one byte per emitted word, i.e. one frame per burst
+    // period, and LPCM arrives ~3x faster than that -- the ring would back up into
+    // STD backpressure. S_SKIP runs at clk_sys, so a ~2 KB PES clears in ~74 us
+    // against the CDC FIFO's ~5.3 ms of slack and the wire never notices.
     localparam [3:0] S_SKIP = 4'd8;
 
     reg  [3:0]  st;
@@ -271,6 +253,11 @@ module iec61937_wrap #(
     wire sync_en = sync_armed && stc_anchored;
     wire signed [34:0] head_delta =
         $signed({2'b0, stc}) - $signed({2'b0, frame_pts}) - 35'($signed(av_ofs));
+    // Set by the first real burst since a flush; cleared by rst_sys_n (= aud_rst_n,
+    // which pulses on seeks, track switches and aud_flush). Used ONLY to choose the
+    // hold FILL above - it must never gate hold_frame itself, which is the pacing
+    // loop (docs/iec61937.md "one-shot hold gate" records what that cost).
+
     wire hold_frame = is_codec &&
         ( (sync_armed && !stc_anchored)                              // wait for the anchor
        || (sync_en && frame_pts_valid && (head_delta < 35'sd0)) );   // anchored but not yet due
@@ -289,50 +276,15 @@ module iec61937_wrap #(
     reg  [15:0] cur_period;
     wire [15:0] null_period = (frame_valid && is_codec) ? period_sel : cur_period;
 
-    // ---- SESSION state (rst_sess_n, NOT rst_sys_n) -------------------------
-    // Session-scoped so a track switch inside a DTS title cannot revert the silence
-    // quantum to AC-3's 1536: rst_sys_n pulses on every seek, jump and track switch.
-    //
-    // ⛔ A GAP FILL LIVED HERE AND WAS REMOVED. Keep the reasoning, because the
-    // question looks obviously worth solving and is not.
-    // The old burst_seen latch cleared on rst_sys_n, so every fill style degraded
-    // to PCM silence in exactly the two windows a fill exists for and the A/B that
-    // retired two of them was vacuous (docs/iec61937.md:243-251). Re-measured over
-    // OPTICAL with the arming fixed (2026-09-09): PCM silence flips the receiver to
-    // PCM, and both a non-PCM hold and a compliant IEC 61937 pause burst -- Pd =
-    // span AND Pd = 0 -- drop it to "Decoder Off". Only real data bursts hold it,
-    // which pointed at canned silent frames ("digital black"), and those are cheap:
-    // every silent frame is byte-identical and AC-3 is 1536 samples at ANY bitrate,
-    // so ~1.3 KB of ROM covers AC-3 2/0, AC-3 3/2 and DTS with the Pa/Pb grid
-    // unchanged.
-    // ★ IT WAS STILL NOT BUILT: a PS5 playing a DVD was then measured doing the
-    // same thing -- dropping the decoder on a pause and between menus. Leaving DD
-    // during a gap is what a shipping player does, so there was nothing to fix.
-    // ⚠ Do not re-derive this from docs/iec61937.md's "the only fix would be
-    // digital black ... as some real players do": that sentence started this, and
-    // it is wrong about real players.
-    always @(posedge clk_sys or negedge rst_sess_n) begin
-        if (!rst_sess_n)
-            cur_period <= PERIOD_AC3;
-        else if (enable && st == S_IDLE && frame_valid && is_codec)
-            cur_period <= period_sel;   // latched even while HOLDING
-    end
-
-    // The producer resets on the SESSION scope too. rst_sys_n is now a synchronous
-    // ABORT rather than a reset: restarting the FSM mid-burst leaves a partial
-    // burst in the FIFO with the next Pa/Pb immediately behind it, which slips the
-    // repetition grid -- the very thing keeping the carrier alive is meant to stop.
-    // On a flush the burst is finished with zero padding instead, so the grid is
-    // preserved and the cost is ONE corrupt frame (the receiver reads Pd bytes of
-    // zeros where the payload was) rather than a re-acquisition.
-    always @(posedge clk_sys or negedge rst_sess_n) begin
-        if (!rst_sess_n) begin
+    always @(posedge clk_sys or negedge rst_sys_n) begin
+        if (!rst_sys_n) begin
             st          <= S_IDLE;
             words_total <= {PERIOD_AC3, 1'b0};
             widx        <= 17'd0;
             bytes_left  <= 16'd0;
             pd_bits     <= 16'd0;
             pc_val      <= PC_AC3;
+            cur_period  <= PERIOD_AC3;
             b0          <= 8'd0;
             half        <= 1'b0;
             pair_lo     <= 16'd0;
@@ -352,14 +304,7 @@ module iec61937_wrap #(
             dbg_word_stb <= 1'b0;
             dbg_burst_stb<= 1'b0;
 
-            if (!rst_sys_n) begin
-                // FLUSH (seek / jump / mount / audio-track switch). audio_ring is
-                // being reset under us, so the payload in flight is gone; abandon
-                // it but keep this burst's framing.
-                bytes_left <= 16'd0;
-                if (st == S_SKIP)                    st <= S_PA;   // nothing emitted yet
-                else if (st == S_B0 || st == S_B1)   st <= S_PAD;  // pad out the burst
-            end else if (!enable) begin
+            if (!enable) begin
                 st   <= S_IDLE;
                 half <= 1'b0;
                 widx <= 17'd0;
@@ -368,7 +313,9 @@ module iec61937_wrap #(
                 S_IDLE: begin
                     widx <= 17'd0;
                     half <= 1'b0;
-                    // cur_period / sess_* are latched in the session block above.
+                    // Track the active codec's burst period so null/hold bursts keep
+                    // a constant Pa/Pb repetition period (latched even while holding).
+                    if (frame_valid && is_codec) cur_period <= period_sel;
                     if (frame_valid && is_codec && !hold_frame && !mute_i) begin
                         // AC-3/DTS frame, due -> wrap it into a real 61937 burst
                         bytes_left  <= frame_len;
@@ -400,14 +347,12 @@ module iec61937_wrap #(
                         st <= S_PA;
                     end else if (frame_valid && !is_codec) begin
                         // LPCM/unknown -> not wrappable here. Pop the descriptor AND
-                        // drain its payload: the byte ring and the descriptor ring
-                        // have independent pointers (audio_ring.sv advances rd_ptr
-                        // only on out_ready, :339), so popping alone leaves rd_ptr
-                        // frame_len bytes behind — PERMANENTLY, since nothing ever
-                        // resyncs them. Every later burst then wraps a shifted byte
-                        // window. The drain runs in S_SKIP, not the S_B0/S_B1 path
-                        // the mute branch uses, because that consumes one byte per
-                        // emitted word and LPCM arrives ~3x faster than that.
+                        // drain its payload: audio_ring's byte and descriptor rings
+                        // have independent pointers (rd_ptr advances only on
+                        // out_ready, audio_ring.sv:339), so popping alone leaves
+                        // rd_ptr frame_len bytes behind -- PERMANENTLY, since
+                        // nothing resyncs them, and every later burst then wraps a
+                        // shifted byte window.
                         bytes_left  <= frame_len;
                         pc_val      <= 16'd0;
                         pd_bits     <= 16'd0;
@@ -419,16 +364,15 @@ module iec61937_wrap #(
                         st <= (frame_len == 16'd0) ? S_PA : S_SKIP;
                     end else begin
                         // No frame ready, OR a codec frame HELD (pre-anchor / not due).
-                        // BEFORE the first real burst (sess_armed = 0) this is always
-                        // LINEAR-PCM SILENCE — the fj#110 round-2 fix: a real player
-                        // presents PCM before the bitstream starts, and HW showed the
-                        // receiver cannot ACQUIRE across non-PCM silence. AFTER the
-                        // stream is running the problem inverts: dropping back to PCM
-                        // makes the receiver re-negotiate the format on every gap, so
-                        // hold_fill can keep the format steady instead.
+                        // BEFORE the first real burst this is LINEAR-PCM SILENCE, which
+                        // is the fj#110 round-2 fix: a real player presents PCM before
+                        // the bitstream starts, and HW showed the receiver cannot
+                        // ACQUIRE across non-PCM null bursts. AFTER the stream is
+                        // running, a hold is a genuine gap in the data and PCM silence
+                        // is still what goes out.
                         bytes_left  <= 16'd0;
-                        words_total <= {null_period, 1'b0};
                         pd_bits     <= 16'd0;
+                        words_total <= {null_period, 1'b0};
                         pc_val      <= 16'd0;
                         burst_silent<= 1'b1;
                         cur_nonpcm  <= 1'b0;
@@ -472,9 +416,6 @@ module iec61937_wrap #(
                 end
 
                 // Drain a non-codec frame's payload at clk_sys, emitting nothing.
-                // Nothing is committed here, so the CDC FIFO free-wheels; at 27 MHz a
-                // 2 KB LPCM PES clears in ~74 us against ~5.3 ms of FIFO, so the
-                // 48 kHz drain side never sees the pause.
                 S_SKIP: if (ring_valid) begin
                     bytes_left <= bytes_left - 16'd1;
                     if (bytes_left == 16'd1) st <= S_PA;  // then emit the silent burst
@@ -497,16 +438,16 @@ module iec61937_wrap #(
     // Consumer (clk_audio) — 6.144 MHz CE + spdif_pass encoder
     // =============================================================
     reg [1:0] ce_cnt;
-    always @(posedge clk_audio or negedge rst_audio_sess_n)
-        if (!rst_audio_sess_n) ce_cnt <= 2'd0; else ce_cnt <= ce_cnt + 2'd1;
+    always @(posedge clk_audio or negedge rst_audio_n)
+        if (!rst_audio_n) ce_cnt <= 2'd0; else ce_cnt <= ce_cnt + 2'd1;
     wire bit_ce = (ce_cnt == 2'd0); // 24.576/4 = 6.144 MHz
 
     wire        sample_req;
     reg  [32:0] cur_pair;
 
     assign fifo_rd_en = sample_req && !fifo_empty;
-    always @(posedge clk_audio or negedge rst_audio_sess_n)
-        if (!rst_audio_sess_n) cur_pair <= 33'd0;  // underflow -> PCM zeros (flag 0)
+    always @(posedge clk_audio or negedge rst_audio_n)
+        if (!rst_audio_n) cur_pair <= 33'd0;       // underflow -> PCM zeros (flag 0)
         else if (sample_req) cur_pair <= fifo_empty ? 33'd0 : fifo_rd_data;
 
     // HDMI bitstream tap: pure aliases, no added logic. `sample_req` is the same
@@ -519,7 +460,7 @@ module iec61937_wrap #(
 
     spdif_pass u_spdif (
         .clk_i       (clk_audio),
-        .rst_i       (~rst_audio_sess_n),
+        .rst_i       (~rst_audio_n),
         .bit_out_en_i(bit_ce),
         .spdif_o     (spdif_o),
         .nonpcm_i    (cur_pair[32]),  // per-pair PCM/non-PCM flag (latched per block)
@@ -531,7 +472,7 @@ module iec61937_wrap #(
     // One word source feeds both outputs, so they cannot drift apart.
     hdmi_bs_i2s u_hdmi_i2s (
         .clk    (clk_audio),
-        .rst_n  (rst_audio_sess_n),
+        .rst_n  (rst_audio_n),
         .ce_i   (bit_ce),
         .pcm_l_i(cur_pair[15:0]),
         .pcm_r_i(cur_pair[31:16]),
