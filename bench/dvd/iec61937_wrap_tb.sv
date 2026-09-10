@@ -45,8 +45,15 @@ module iec61937_wrap_tb;
 
     // Large FIFO so the producer never stalls waiting on the consumer during
     // the layout capture.
+    // PCM-mode inputs. Tied off explicitly: a new INPUT left unconnected floats Z,
+    // and here that made pcm_mode X, which made fifo_rd_en X, which stalled the
+    // producer into a bench TIMEOUT rather than a clean failure.
+    reg        pcm_mode = 0;
+    reg [15:0] pcm_l = 0, pcm_r = 0;
+
     iec61937_wrap #(.FIFO_AW(12)) dut (
         .clk_sys(clk_sys), .rst_sys_n(rst_sys_n), .enable(enable), .byte_swap(byte_swap),
+        .pcm_mode(pcm_mode), .pcm_l_i(pcm_l), .pcm_r_i(pcm_r),
         .mute_i(mute),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
@@ -161,6 +168,7 @@ module iec61937_wrap_tb;
     end endtask
 
     integer i, errors = 0;
+    integer t11_rr, t11_pop;
     integer t10_held, t10_real, t10_under;
     task expect_word(input integer idx, input [15:0] exp, input [8*16:1] name);
         begin
@@ -464,6 +472,77 @@ module iec61937_wrap_tb;
         if (cnt_under == t10_under) begin
             $display("  FAIL: dry-ring silent burst not classified as underrun");
             errors=errors+1; end
+
+
+        // ================= TEST 11: non-codec frame DRAINS its payload ==========
+        // Popping the descriptor without draining the bytes desyncs audio_ring's
+        // two independent pointers permanently. Measured as ring_ready pulses --
+        // bytes actually taken off the ring -- and asserted as the INVARIANT
+        // "every popped descriptor takes exactly frame_len bytes", not a fixed
+        // count, which would be timing-dependent (the frame repeats every burst).
+        frame_valid = 0;
+        sync_armed_r = 0; stc_anch_r = 0; fptsv_r = 0; mute = 0;   // TESTs 6-10 leave these armed
+        do_reset;
+        @(negedge clk_sys);            // settle stimulus off the edge the DUT latches on
+        plen = 40; frame_len = 16'd40; frame_type = 2'd2;  // LPCM
+        frame_valid = 1; enable = 1;
+        t11_rr = rr_count; t11_pop = pop_count;
+        repeat (8000) @(posedge clk_sys);
+        frame_valid = 0;
+        repeat (200) @(posedge clk_sys);
+        $display("TEST 11: %0d descriptors popped, %0d payload bytes drained (expect %0d)",
+                 pop_count - t11_pop, rr_count - t11_rr, 40*(pop_count - t11_pop));
+        if ((pop_count - t11_pop) == 0) begin
+            $display("  FAIL: no non-codec descriptor was popped at all");
+            errors = errors + 1;
+        end else if ((rr_count - t11_rr) != 40*(pop_count - t11_pop)) begin
+            $display("  FAIL: LPCM payload not drained -> audio_ring rd_ptr desync");
+            errors = errors + 1; end
+
+
+        // ================= TEST 12: PCM mode bypasses the burst path ============
+        // LPCM/MP2 in Passthru: the decoder's samples go out as linear PCM with the
+        // non-PCM flag CLEAR. Read back off the pair the encoder is presenting, so
+        // this measures the wire rather than an internal register.
+        frame_valid = 0; do_reset;
+        @(negedge clk_sys);
+        pcm_mode = 1; pcm_l = 16'h1234; pcm_r = 16'h5678; enable = 1;
+        repeat (4000) @(posedge clk_audio);
+        $display("TEST 12: PCM mode: L=%04h R=%04h nonpcm=%0b", bs_l, bs_r, bs_nonpcm);
+        if (bs_l !== 16'h1234 || bs_r !== 16'h5678) begin
+            $display("  FAIL: PCM samples did not reach the encoder"); errors=errors+1; end
+        if (bs_nonpcm !== 1'b0) begin
+            $display("  FAIL: PCM mode still flags the stream non-PCM"); errors=errors+1; end
+        // A changed sample must follow, or the hold is stuck rather than holding.
+        pcm_l = 16'hABCD; pcm_r = 16'hEF01;
+        repeat (4000) @(posedge clk_audio);
+        if (bs_l !== 16'hABCD || bs_r !== 16'hEF01) begin
+            $display("  FAIL: PCM output froze instead of tracking the decoder");
+            errors=errors+1; end
+        $display("TEST 12b: PCM output tracks the decoder");
+
+        // ---- 12c: the HDMI leg must be SILENT in PCM mode -------------------
+        // The HDMI non-PCM flag is an ADV7513 register, static while the HPS ack
+        // is set -- so an older Main that does not know about PCM content leaves
+        // the ack up, and real samples here would be clocked into a sink told to
+        // expect a data burst: full-scale noise. Demodulate the serial output and
+        // require digital silence, so the bad combination is silent by
+        // construction rather than by the HPS behaving.
+        begin : hdmi_silence
+            integer nz; integer k; reg [15:0] sr;
+            nz = 0; sr = 16'd0;
+            for (k = 0; k < 20000; k = k + 1) begin
+                @(posedge clk_audio);
+                if (dut.u_hdmi_i2s.sck_o === 1'b1) sr = {sr[14:0], dut.u_hdmi_i2s.sd_o};
+                if (dut.u_hdmi_i2s.sd_o === 1'b1) nz = nz + 1;
+            end
+            $display("TEST 12c: HDMI serial data bits high in PCM mode = %0d", nz);
+            if (nz != 0) begin
+                $display("  FAIL: PCM samples reach the HDMI serializer (noise on an old Main)");
+                errors = errors + 1;
+            end
+        end
+        pcm_mode = 0;
 
         if (errors==0) $display("\nALL TESTS PASSED");
         else           $display("\n%0d FAILURES", errors);

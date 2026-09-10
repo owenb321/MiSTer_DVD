@@ -40,6 +40,19 @@ module iec61937_wrap #(
     input  wire        clk_sys,
     input  wire        rst_sys_n,
     input  wire        enable,        // passthrough active (else producer idles)
+    // PCM MODE. LPCM and MP2 cannot be wrapped in IEC 61937, so in Passthru they
+    // are decoded by dvd_audio_decode and sent as ordinary linear PCM instead of
+    // silence. `pcm_mode` selects that; the samples arrive on pcm_l_i/pcm_r_i in
+    // clk_sys and are re-sampled here at the encoder's own 48 kHz frame rate.
+    // ⚠ SAMPLE-AND-HOLD, NOT A FIFO, and that is the load-bearing choice: the
+    // decoder's NCO is a truncated fraction of 27 MHz while this side is exactly
+    // 48 kHz off clk_audio, so a rate-matched queue would drift and eventually
+    // over- or underflow -- and MP2 legitimately runs at 44.1 or 32 kHz, which no
+    // amount of queueing reconciles. Zero-order hold is rate-agnostic and is
+    // exactly what the framework already does with AUDIO_L/R (sys/audio_out.sv).
+    input  wire        pcm_mode,
+    input  wire [15:0] pcm_l_i,
+    input  wire [15:0] pcm_r_i,
     input  wire        byte_swap,     // 0: first byte in word[15:8]; 1: swapped
     input  wire        mute_i,        // CSS-scrambled source: consume frames but
                                       // emit PCM silence (scrambled AC-3/DTS sent
@@ -165,16 +178,23 @@ module iec61937_wrap #(
     // =============================================================
     // Producer FSM (clk_sys) — emit the 61937 word stream
     // =============================================================
-    localparam [2:0] S_IDLE = 3'd0,
-                     S_PA   = 3'd1,
-                     S_PB   = 3'd2,
-                     S_PC   = 3'd3,
-                     S_PD   = 3'd4,
-                     S_B0   = 3'd5,  // fetch first byte of a payload word
-                     S_B1   = 3'd6,  // fetch second byte, emit payload word
-                     S_PAD  = 3'd7;  // emit zero words to fill the period
+    localparam [3:0] S_IDLE = 4'd0,
+                     S_PA   = 4'd1,
+                     S_PB   = 4'd2,
+                     S_PC   = 4'd3,
+                     S_PD   = 4'd4,
+                     S_B0   = 4'd5,  // fetch first byte of a payload word
+                     S_B1   = 4'd6,  // fetch second byte, emit payload word
+                     S_PAD  = 4'd7;  // emit zero words to fill the period
 
-    reg  [2:0]  st;
+    // Draining a non-codec frame's payload needs its own state, NOT the S_B0/S_B1
+    // burst path: that consumes one byte per emitted word, i.e. one frame per burst
+    // period, and LPCM arrives ~3x faster than that -- the ring would back up into
+    // STD backpressure. S_SKIP runs at clk_sys, so a ~2 KB PES clears in ~74 us
+    // against the CDC FIFO's ~5.3 ms of slack and the wire never notices.
+    localparam [3:0] S_SKIP = 4'd8;
+
+    reg  [3:0]  st;
     reg  [16:0] words_total;  // period*2
     reg  [16:0] widx;         // words emitted this burst
     reg  [15:0] bytes_left;   // payload bytes remaining
@@ -197,7 +217,9 @@ module iec61937_wrap #(
 
     // Pop a ring byte only in the fetch states, when a byte is available and
     // emission can proceed.
-    assign ring_ready = enable && (st == S_B0 || st == S_B1) && ring_valid && emit_ok;
+    assign ring_ready = enable && ring_valid &&
+                        ( ((st == S_B0 || st == S_B1) && emit_ok)
+                       || (st == S_SKIP) );   // S_SKIP drains at clk_sys, no emit
 
     function [15:0] mkword(input [7:0] first, input [7:0] second);
         mkword = byte_swap ? {second, first} : {first, second};
@@ -337,8 +359,14 @@ module iec61937_wrap #(
                         dbg_burst_stb <= 1'b1; dbg_burst_real <= 1'b0; dbg_burst_held <= 1'b0;
                         st <= S_PA;
                     end else if (frame_valid && !is_codec) begin
-                        // LPCM/unknown -> not wrappable: consume + emit PCM silence
-                        bytes_left  <= 16'd0;
+                        // LPCM/unknown -> not wrappable here. Pop the descriptor AND
+                        // drain its payload: audio_ring's byte and descriptor rings
+                        // have independent pointers (rd_ptr advances only on
+                        // out_ready, audio_ring.sv:339), so popping alone leaves
+                        // rd_ptr frame_len bytes behind -- PERMANENTLY, since
+                        // nothing resyncs them, and every later burst then wraps a
+                        // shifted byte window.
+                        bytes_left  <= frame_len;
                         pc_val      <= 16'd0;
                         pd_bits     <= 16'd0;
                         words_total <= {null_period, 1'b0};
@@ -346,7 +374,7 @@ module iec61937_wrap #(
                         cur_nonpcm  <= 1'b0;
                         frame_pop_r <= 1'b1;   // drop it (no backpressure buildup)
                         dbg_burst_stb <= 1'b1; dbg_burst_real <= 1'b0; dbg_burst_held <= 1'b0;
-                        st <= S_PA;
+                        st <= (frame_len == 16'd0) ? S_PA : S_SKIP;
                     end else begin
                         // No frame ready, OR a codec frame HELD (pre-anchor / not due).
                         // BEFORE the first real burst this is LINEAR-PCM SILENCE, which
@@ -400,6 +428,12 @@ module iec61937_wrap #(
                     st <= (bytes_left == 16'd1) ? S_PAD : S_B0;
                 end
 
+                // Drain a non-codec frame's payload at clk_sys, emitting nothing.
+                S_SKIP: if (ring_valid) begin
+                    bytes_left <= bytes_left - 16'd1;
+                    if (bytes_left == 16'd1) st <= S_PA;  // then emit the silent burst
+                end
+
                 // zero-pad to fill the burst period
                 S_PAD: if (emit_ok) begin
                     commit_word(16'd0);
@@ -424,10 +458,26 @@ module iec61937_wrap #(
     wire        sample_req;
     reg  [32:0] cur_pair;
 
-    assign fifo_rd_en = sample_req && !fifo_empty;
+    // clk_sys -> clk_audio for the decoded samples. Two-flop accept-when-stable,
+    // the same idiom sys/audio_out.sv:166-173 uses for this exact crossing: the
+    // value is held for a whole sample period, so a pair that disagrees between
+    // two consecutive reads is mid-update and is simply not taken yet.
+    reg [31:0] pcm_s1, pcm_s2, pcm_hold;
+    always @(posedge clk_audio) begin
+        pcm_s1 <= {pcm_r_i, pcm_l_i};
+        pcm_s2 <= pcm_s1;
+        if (pcm_s2 == pcm_s1) pcm_hold <= pcm_s2;
+    end
+
+    // In PCM mode the burst FSM and its FIFO are bypassed entirely: there are no
+    // bursts to assemble, just a sample per 48 kHz frame with the non-PCM flag
+    // clear. The FIFO keeps running underneath so leaving PCM mode resumes mid
+    // stream rather than from a stale queue.
+    assign fifo_rd_en = sample_req && !fifo_empty && !pcm_mode;
     always @(posedge clk_audio or negedge rst_audio_n)
         if (!rst_audio_n) cur_pair <= 33'd0;       // underflow -> PCM zeros (flag 0)
-        else if (sample_req) cur_pair <= fifo_empty ? 33'd0 : fifo_rd_data;
+        else if (sample_req) cur_pair <= pcm_mode  ? {1'b0, pcm_hold}
+                                       : fifo_empty ? 33'd0 : fifo_rd_data;
 
     // HDMI bitstream tap: pure aliases, no added logic. `sample_req` is the same
     // strobe that reloads cur_pair, so bs_stb_o marks the frame boundary of the
@@ -449,12 +499,23 @@ module iec61937_wrap #(
 
     // HDMI leg: the same 61937 words, as plain 16-bit I2S for the ADV7513.
     // One word source feeds both outputs, so they cannot drift apart.
+    // ⚠ THE HDMI LEG CAN ONLY EVER CARRY A BITSTREAM, so it is fed digital silence
+    // in PCM mode rather than the samples. The non-PCM flag over HDMI is the
+    // ADV7513's 0x12[7] REGISTER, static while the ack is set -- unlike S/PDIF,
+    // where it is a per-block wire bit. A Main that knows about PCM content drops
+    // the ack and HDMI takes the framework's own I2S path instead; a Main that does
+    // NOT (an older overlay, or a .rbf flashed without updating it) leaves the ack
+    // set, and putting real samples here would clock PCM into a sink told to expect
+    // a data burst = full-scale noise. Zeros make that combination SILENT instead,
+    // by construction rather than by the HPS behaving.
+    wire [31:0] hdmi_pair = pcm_mode ? 32'd0 : cur_pair[31:0];
+
     hdmi_bs_i2s u_hdmi_i2s (
         .clk    (clk_audio),
         .rst_n  (rst_audio_n),
         .ce_i   (bit_ce),
-        .pcm_l_i(cur_pair[15:0]),
-        .pcm_r_i(cur_pair[31:16]),
+        .pcm_l_i(hdmi_pair[15:0]),
+        .pcm_r_i(hdmi_pair[31:16]),
         .sck_o  (hdmi_sck_o),
         .ws_o   (hdmi_ws_o),
         .sd_o   (hdmi_sd_o)

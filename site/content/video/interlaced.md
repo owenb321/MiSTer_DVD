@@ -69,14 +69,9 @@ everything.
     it** — that re-anchors the audio to the picture. Setting the mode before loading avoids
     it entirely.
 
-    On v0.3.0 this could occasionally **freeze the picture** on a malformed frame instead,
-    on any disc; skipping a chapter recovered it. The same thing happens on older releases
-    when changing `Analog Out`.
-
-    **Since v0.4.0** that freeze is fixed. A mid-title switch steps playback back to the
-    start of the chunk it was reading — up to about a second — and resumes from there, so
-    the picture always restarts from a clean point. On a VCD or SVCD the step back can be
-    a little longer.
+    A mid-title switch steps playback back to the start of the chunk it was reading — up
+    to about a second — and resumes from there, so the picture always restarts from a
+    clean point. On a VCD or SVCD the step back can be a little longer.
 
     The screen also **goes black for the changeover** instead of showing the picture
     breaking up while the display re-locks — about a second, and the OSD stays visible
@@ -92,25 +87,15 @@ everything.
 On some televisions the picture could come back from a chapter skip, fast-forward or
 aspect change looking **aliased, like a screen door**. It is a field-parity coin flip in
 the display pipeline: the two interlaced fields land the wrong way round after an
-interruption. On older releases the workaround is to **toggle `Video Output` away and
-back**, sometimes taking a few attempts. Not every set shows it — a television with a
-tolerant sync separator may never see it at all.
-
-**Since v0.4.0** the core corrects this itself and the toggle is no longer needed. (An
-earlier development build's first attempt at the corrector had to be switched off again:
-it made both interlaced fields carry the same picture lines, which showed as a combed
-still image and a picture that jumped a line at field rate on every set, HDMI included.
-The repaired version only steps in for a misalignment that persists, so it cannot do
-that.) The same coin flip decided whether **HDMI with `480i Deint` = `Weave`** came up
-combed on a still; that is fixed too, by a separate correction to the field flag the core
-hands the framework scaler.
+interruption. The core corrects this itself. Not every set shows it in the first place —
+a television with a tolerant sync separator may never see it at all.
 
 The correction also applies **while a picture is being held** — a disc menu, an authored
-copyright or warning card, or a paused frame. Until v0.4.0 it did not, so a disc that
-boots straight to a several-second warning screen could show that screen misaligned for
-its whole duration and then play perfectly: the correction only ran when a new frame
-arrived, and a held picture never delivers one. A held picture now straightens itself
-within about half a second, so you may still catch it settling.
+copyright or warning card, or a paused frame. A disc that boots straight to a
+several-second warning screen would otherwise show that screen misaligned for its whole
+duration and then play perfectly, because a held picture never delivers a new frame for
+the correction to act on. A held picture straightens itself within about half a second,
+so you may still catch it settling.
 
 !!! question "CRT owners: please report what you see"
     This is verified here on a **composite** set and over HDMI. It is not yet confirmed on

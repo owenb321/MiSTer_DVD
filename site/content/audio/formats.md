@@ -8,7 +8,7 @@ same as the video path.
 | **AC-3 (Dolby Digital)** | yes | yes | Every channel mode from 1.0 mono to 5.1, downmixed to stereo |
 | **MPEG-1 Layer II (MP2)** | yes | no | Rare on DVD, universal on Video CD. 48/44.1/32 kHz |
 | **LPCM** | yes | no | 48 kHz stereo. 20/24-bit tracks play, truncated to 16-bit |
-| **DTS** | **no** | yes | Passthrough to a receiver only |
+| **DTS** | **no** | yes | Passthrough to a receiver only — the one format with no fallback |
 
 By default the core decodes to stereo and sends it over HDMI, which works on any display.
 For multichannel you want [bitstream passthrough](passthrough.md) to an AV receiver.

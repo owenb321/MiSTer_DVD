@@ -142,6 +142,37 @@ static void report_pump(void)
 	}
 }
 
+// The core reports what the audio wire is really carrying, which is NOT what the
+// OSD bit says: in Passthru an LPCM or MP2 track is decoded and leaves as linear
+// PCM, and the ADV7513 must be taken OUT of non-PCM mode for it or the sink
+// renders PCM as a data burst -- full-scale noise.
+//
+// ⚠ Its own SPI command (0x7B), not the 0x7A telemetry snapshot: that one's
+// reader is gated behind /media/fat/dvd_hil, so a feature depending on it would
+// work only on a hardware-in-the-loop rig. Self-limited to ~20 ms because
+// user_io_poll() spins with no sleep, and a format change is a track switch --
+// rare, and already accompanied by a receiver re-lock.
+#define UIO_DVD_AUDFMT   0x7B
+#define DVD_TELEM_MAGIC  0xD7D1
+
+static int core_pcm_session = 0;   // 1 = Passthru is carrying PCM content
+
+static void poll_audio_format(void)
+{
+	static unsigned long next_at = 0;
+	if (next_at && !CheckTimer(next_at)) return;
+	next_at = GetTimer(20);
+
+	uint16_t magic = spi_uio_cmd_cont(UIO_DVD_AUDFMT);
+	uint16_t fmt   = spi_w(0);
+	DisableIO();
+
+	// An older core does not answer this command; leave the format unknown and
+	// behave exactly as before rather than guessing.
+	if (magic != DVD_TELEM_MAGIC) { core_pcm_session = 0; return; }
+	core_pcm_session = (fmt >> 1) & 1;   // bit0 = passthru, bit1 = pcm session
+}
+
 static int declared   = 0;   // the core declared OX6, so it has the HDMI tap
 static int acked      = 0;   // cfg[14] is currently set
 static int seen_gen   = -1;  // last hdmi_config_init() generation we applied over
@@ -185,25 +216,34 @@ void dvd_hdmi_audio_tick(void)
 	int mode = cfg.dvd_hdmi_bitstream;
 	int passthru = user_io_status_get("6");       // Audio Out = Passthru
 	int sink_ok  = (mode == 2) || sink_supports_bitstream();
-	int want = (mode != 1) && passthru && sink_ok;
+
+	// Passthru is no longer all-or-nothing: the core bitstreams AC-3/DTS and sends
+	// LPCM/MP2 as PCM, so the chip has to follow the CONTENT, not the OSD bit.
+	// Releasing the ack here puts the ADV7513 back into PCM mode and hands HDMI
+	// audio to the framework's own I2S path, which is where the decoded samples
+	// already are. The existing release ordering (ack first, registers 50 ms
+	// later) is what keeps the gap silent rather than noisy.
+	poll_audio_format();
+	int want = (mode != 1) && passthru && sink_ok && !core_pcm_session;
 
 	// Name the stage whenever the user has ASKED for passthru but we are not
 	// engaging - that is exactly the "no sound and the receiver says PCM" case.
 	static int last_dbg = -1;
-	int dbg = (passthru ? 1 : 0) | (sink_ok ? 2 : 0) | (declared ? 4 : 0) | (mode << 3);
+	int dbg = (passthru ? 1 : 0) | (sink_ok ? 2 : 0) | (declared ? 4 : 0) | (mode << 3)
+	        | (core_pcm_session ? 0x100 : 0);
 	if (dbg != last_dbg)
 	{
 		last_dbg = dbg;
 		FILE *f = fopen(HDMI_LOG_PATH, "a");
 		if (f)
 		{
-			fprintf(f, "state: passthru=%d sink_ok=%d declared=%d ini_mode=%d acked=%d\n",
-			        passthru, sink_ok, declared, mode, acked);
+			fprintf(f, "state: passthru=%d sink_ok=%d declared=%d ini_mode=%d acked=%d pcm_session=%d\n",
+			        passthru, sink_ok, declared, mode, acked, core_pcm_session);
 			fclose(f);
 		}
 	}
 
-	if (passthru && !want)
+	if (passthru && !want && !core_pcm_session)
 	{
 		if (mode == 1)      report("Bitstream disabled\n\ndvd_hdmi_bitstream=1 in MiSTer.ini");
 		else if (!sink_ok)  report("Sink does not list AC-3/DTS\n\nSet dvd_hdmi_bitstream=2 to force");
@@ -230,7 +270,19 @@ void dvd_hdmi_audio_tick(void)
 		// ORDER MATTERS: configure the chip FIRST, then let the core start.
 		hdmi_config_set_audio(1);
 		set_ack(1);
-		report("HDMI bitstream ENGAGED\n\nADV7513 in IEC958-direct mode");
+		// ⚠ NO ON-SCREEN NOTICE HERE, deliberately. Engaging used to be a
+		// once-per-session event worth confirming, so it raised one. It is now a
+		// per-TRACK event: Passthru follows the content, so every AC-3 <-> LPCM
+		// change releases and re-engages, and a disc that alternates (The
+		// Residents Commercial DVD does, repeatedly) would paper the screen with
+		// a message reporting that things are working. A success notice on a
+		// routine event is noise. The failure notices below stay -- those are the
+		// cases the user cannot otherwise explain.
+		// The log keeps the full record: /tmp/dvd_hdmi_audio.log.
+		// NOT "IEC958-direct" -- that route was removed after four failed HW
+		// rounds (dvd/hdmi_bs_i2s.sv:14-19). What we set is standard I2S with the
+		// channel status taken from the register map (0x0C[6]=1, non-PCM 0x12[7]).
+		printf("dvd_hdmi_audio: HDMI bitstream ENGAGED (ADV7513 set to non-PCM)\n");
 	}
 	else if (!want && acked)
 	{
@@ -239,7 +291,10 @@ void dvd_hdmi_audio_tick(void)
 		// the core presents digital silence, never PCM into a non-PCM link.
 		set_ack(0);
 		restore_at = GetTimer(50);
-		stage_msg = 0;   // re-arm reporting for the next engage attempt
+		// Let an explanatory notice be shown again after a state change, even if
+		// it repeats an earlier string. (It no longer re-arms an engage message --
+		// there isn't one.)
+		stage_msg = 0;
 		printf("dvd_hdmi_audio: HDMI bitstream released\n");
 	}
 

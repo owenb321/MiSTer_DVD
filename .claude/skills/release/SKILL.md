@@ -76,7 +76,9 @@ would cost a second compile.
      **refuses to package** if this disagrees with the tag: it drives the "latest release is
      vX.Y.Z" banner on every manual page.
    - the "Current as of **vX.Y.Z**" line in `site/content/reference/compatibility.md`.
-   - sweep out `!!! info "Unreleased"` admonitions for anything this release ships.
+   - sweep out any leftover `!!! info "Unreleased"` admonitions (the convention was
+     retired 2026-09-09 now that the site deploys only on a release publish, but old ones
+     may still be lying around).
 
    **One commit, one netlist, one compile.** `CORE_VERSION` lives in `CONF_STR`, so
    splitting the bump from the docs commit buys a second netlist and a second seed decision
@@ -122,6 +124,22 @@ would cost a second compile.
    ```
    Publishing creates the tag. The `/releases/latest` URL the README links to updates
    automatically — no README edit per release.
+
+   ★ **Publishing is also what deploys the manual.** `.github/workflows/docs.yml` runs on
+   `release: published` and builds the site from this release's tagged commit
+   (`site/content/` was last deployed at the PREVIOUS release, so every doc change merged
+   since goes live here). Check it landed:
+   ```bash
+   gh run list --workflow=docs.yml --limit 3
+   ```
+   If the manual then needs a correction before the next release, merge it to `main` as
+   usual, then deploy from a branch cut off THIS tag with only that fix cherry-picked onto
+   it — never from `main`, which would publish features nobody can download yet, and never
+   by force-moving the tag, which the release assets and theypsilon's downloader db pin:
+   ```bash
+   git switch -c docs-v<semver> v<semver> && git cherry-pick <fix-sha> && git push -u origin docs-v<semver>
+   gh workflow run docs.yml --ref docs-v<semver>
+   ```
 
 ⛔ **There is NO version-reset step after publishing** (retired 2026-09-08, by user
 decision). `main` keeps the release semver until the next feature branch sets its own

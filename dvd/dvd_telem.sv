@@ -75,6 +75,12 @@ endmodule
 
 module dvd_telem #(
     parameter [15:0] CMD   = 16'h007A,   // free: Main uses 0x00-0x44, 0x61-63, 0xF0-F9
+    // A SECOND command, for state Main needs in order to act rather than to log.
+    // It is answered on the same EXT_BUS and is deliberately NOT part of the 0x7A
+    // snapshot: that one is diagnostic telemetry whose HPS reader is gated behind
+    // the /media/fat/dvd_hil arm file, so a feature that depended on it would work
+    // only on a rig set up for hardware-in-the-loop testing.
+    parameter [15:0] CMD_AF = 16'h007B,
     parameter [15:0] MAGIC = 16'hD7D1
 ) (
     input         clk,
@@ -105,7 +111,14 @@ module dvd_telem #(
     input  [15:0] play_err,              // word 12: audio playback position vs its anchor
     input  [15:0] av_drift,              // word 13: dispatched audio PTS - STC
     input  [15:0] sched_flags,           // word 14: {frame_rate_code, ps, pf, tff, rff} at the last pickup
-    input  [15:0] sched_dur               // word 15: the duration the scheduler applied, ticks
+    input  [15:0] sched_dur,              // word 15: the duration the scheduler applied, ticks
+
+    // --- audio link format (CMD_AF) -------------------------------------
+    // What the wire is actually carrying, which is NOT what the OSD bit says: in
+    // Passthru an LPCM or MP2 track leaves as linear PCM, and the ADV7513 has to
+    // be taken out of non-PCM mode for it. Main polls this to decide.
+    input         af_passthru,            // Audio Out = Passthru
+    input         af_pcm_session          // ...and the current content is LPCM/MP2
 );
 
     wire [15:0] s_refresh, s_pickup, s_late, s_drop, s_viderr, s_costs, s_aud;
@@ -130,21 +143,30 @@ module dvd_telem #(
     telem_sync #(16) u_sfl (clk, sched_flags, s_sfl);
     telem_sync #(16) u_sdu (clk, sched_dur,   s_sdu);
 
+    // Two-consecutive-agree filter, same as the counters: these cross from clk_sys
+    // and Main reads them asynchronously.
+    wire [15:0] s_afmt;
+    telem_sync #(16) u_afm (clk, {14'd0, af_pcm_session, af_passthru}, s_afmt);
+
     reg  [3:0] wcnt;
     reg        active;
     reg [15:0] dout_r;
 
     // the atomic snapshot
     reg [15:0] q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15;
+    reg [15:0] q_afmt;
+    reg        af_sel;
 
     always @(posedge clk) begin
         if (!io_enable) begin
             wcnt   <= 4'd0;
             active <= 1'b0;
+            af_sel <= 1'b0;
             dout_r <= 16'd0;
         end else if (io_strobe) begin
             if (wcnt == 4'd0) begin
-                active <= (io_din == CMD);
+                active <= (io_din == CMD) || (io_din == CMD_AF);
+                af_sel <= (io_din == CMD_AF);
                 q1 <= s_refresh;
                 q2 <= s_pickup;
                 q3 <= s_late;
@@ -160,8 +182,11 @@ module dvd_telem #(
                 q13 <= s_drift;
                 q14 <= s_sfl;
                 q15 <= s_sdu;
+                q_afmt <= s_afmt;
                 dout_r <= MAGIC;
             end else begin
+                if (af_sel) dout_r <= (wcnt == 4'd1) ? q_afmt : 16'd0;
+                else
                 case (wcnt)
                     4'd1:    dout_r <= q1;
                     4'd2:    dout_r <= q2;

@@ -73,10 +73,6 @@ supports them.
 The name of the `.mgl` file is what shows in the menu, so it can differ from the movie's
 filename.
 
-!!! note "Fixed in v0.4.0"
-    MGL launching did not work on v0.3.0: the core could come up blank and stop responding
-    to the gamepad, needing a restart. If that is what you saw, update.
-
 ## Loading something else
 
 **`Reset`** in the OSD stops playback, unloads the current image, resets the navigation

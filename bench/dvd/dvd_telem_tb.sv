@@ -31,13 +31,18 @@ module dvd_telem_tb;
     integer errors = 0;
     reg [15:0] got [0:11];
 
+    // CMD_AF inputs. Tied off explicitly: a new INPUT left unconnected floats Z
+    // and quietly poisons whatever reads it (see CLAUDE.md's note on new ports).
+    reg af_pt = 0, af_pcm = 0;
+
     dvd_telem dut (
         .clk(clk), .io_enable(io_enable), .io_strobe(io_strobe),
         .io_din(io_din), .drive(drive), .dout(dout),
         .refreshes(refreshes), .pickups(pickups), .lates(lates),
         .drops(drops), .vid_err(vid_err), .drop_costs(drop_costs),
         .vbuf_fill(vbuf_fill), .aud_frames(aud_frames), .flags(flags),
-        .aud_play(aud_play), .aud_gate(aud_gate));
+        .aud_play(aud_play), .aud_gate(aud_gate),
+        .af_passthru(af_pt), .af_pcm_session(af_pcm));
 
     task strobe(input [15:0] d);
         begin
@@ -127,6 +132,25 @@ module dvd_telem_tb;
         run_xact(16'h007A, 1'b0, drove);
         check("refreshes", got[1], 16'hAAAA);
         check("pickups",   got[2], 16'hBBBB);
+
+        $display("[5] CMD_AF reports the audio link format, independently of 0x7A");
+        af_pt = 1; af_pcm = 0;                 // Passthru, bitstream content
+        repeat (8) @(negedge clk);
+        run_xact(16'h007B, 1'b0, drove);
+        if (!drove) begin
+            $display("  FAIL: CMD_AF did not drive the bus"); errors = errors + 1; end
+        check("afmt-bitstream", got[1], 16'h0001);
+        af_pcm = 1;                            // ...now an LPCM/MP2 track
+        repeat (8) @(negedge clk);
+        run_xact(16'h007B, 1'b0, drove);
+        check("afmt-pcm", got[1], 16'h0003);
+        af_pt = 0; af_pcm = 0;                 // back to Decode
+        repeat (8) @(negedge clk);
+        run_xact(16'h007B, 1'b0, drove);
+        check("afmt-decode", got[1], 16'h0000);
+        // ...and the diagnostic snapshot is untouched by any of it.
+        run_xact(16'h007A, 1'b0, drove);
+        check("0x7A still reports counters", got[1], 16'hAAAA);
 
         if (errors == 0) $display("dvd_telem_tb: ALL GREEN");
         else             $display("dvd_telem_tb: FAILURES");

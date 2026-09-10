@@ -5,8 +5,17 @@ This directory is the **source of the user manual** published at
 git. The build writes to `.site-build/`, which is gitignored.
 
 `site/content/` is the manual. `mkdocs.yml` at the repo root configures it, and
-`.github/workflows/docs.yml` builds and deploys it on every push to `main` that touches
-either.
+`.github/workflows/docs.yml` owns it. That workflow does two separate things:
+
+- **Builds it as a CI check** on every PR and every push to `main` that touches the manual,
+  `mkdocs.yml`, `tools/docs_check.py` or `dvd/emu.sv`. This is the parity gate — a broken
+  cross-link or an undocumented OSD option fails next to the change that caused it.
+- **Deploys it to GitHub Pages only when a release is published**, from that release's own
+  tagged commit — so the published manual always matches the `.rbf` a reader can download.
+
+⚠ A doc fix merged to `main` therefore does not reach users until the next release. To push
+one out sooner, dispatch the workflow **with the release tag as the ref**
+(`gh workflow run docs.yml --ref v0.4.0`) — never from `main`.
 
 ## Preview it locally
 
@@ -50,16 +59,16 @@ escapes `docs_dir`, so a relative `../../LICENSE` will not work. Use the full
 `https://github.com/owenb321/MiSTer_DVD/blob/main/…` URL for `LICENSE`, `NOTICE`,
 `main/README.md`, and anything in `docs/`.
 
-**Mark unreleased features.** The site is built from `main`, so it describes the
-development build. Anything not in the newest release gets:
+**Unreleased features no longer need marking.** The `!!! info "Unreleased"` admonition
+existed because the site was deployed from `main` and so described a build nobody could
+download. Since 2026-09-09 it is deployed only when a release is published, from that
+release's tagged commit, so the divergence is gone at the source — write pages in the
+present tense as the feature lands. Existing admonitions are harmless and the release
+process still sweeps them.
 
-```markdown
-!!! info "Unreleased"
-    Available in development builds; not in v0.3.0.
-```
-
-The announcement bar carries the released version from `extra.released_version` in
-`mkdocs.yml`. The release process bumps it and sweeps out the stale admonitions.
+The announcement bar names the version the manual describes, from `extra.released_version`
+in `mkdocs.yml`; the release commit bumps it, and `.github/workflows/package.yml` refuses to
+package a release whose tag disagrees with it.
 
 **`assets/img/default-logo.png` is generated, not drawn.** It is a copy of
 `tools/idle_logo_preview.png`, which `tools/idle_logo.py` regenerates from the built-in art

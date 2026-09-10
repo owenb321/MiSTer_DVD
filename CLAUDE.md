@@ -58,9 +58,13 @@ the wrong one is itself a documentation bug:
   a 3-step quick start, licensing, and where to read more. Deliberately short (~155 lines).
   **It is not the manual — do not grow it back.**
 - **`site/content/`** — the **user manual**, published to
-  <https://owenb321.github.io/MiSTer_DVD/> by `.github/workflows/docs.yml` on every push to
-  `main` that touches `site/**`, `mkdocs.yml`, `tools/docs_check.py` or `dvd/emu.sv`.
-  Every user-visible detail lives here: controls, every OSD setting, on-screen messages,
+  <https://owenb321.github.io/MiSTer_DVD/> by `.github/workflows/docs.yml`, **only when a
+  release is published**, and built from that release's own tagged commit. A push to `main`
+  or a PR touching `site/**`, `mkdocs.yml`, `tools/docs_check.py` or `dvd/emu.sv` still
+  *builds* the manual as a CI check — it just does not deploy it. ⚠ **So a doc fix merged
+  to `main` does not reach users until the next release**; to push one out sooner, dispatch
+  the workflow **with the release tag as the ref** (`gh workflow run docs.yml --ref
+  v0.4.0`), never from `main`. Every user-visible detail lives here: controls, every OSD setting, on-screen messages,
   analog/CRT modes, closed captions, audio passthrough, VCD/SVCD, physical discs,
   compatibility, troubleshooting.
 - **`docs/`** — engineering design notes. **NOT published, NOT user documentation.** Never
@@ -103,10 +107,16 @@ CONF_STR history further down the file (a retired `Direct Video` row among other
 loose grep invents options that do not exist. That mistake was made by hand while writing
 the manual and nearly shipped three fictional OSD settings.
 
-**Mark unreleased features.** The site is built from `main`, so it documents the
-development build while readers run a release. Anything not yet released gets an
-`!!! info "Unreleased"` admonition, and `extra.released_version` in `mkdocs.yml` drives the
-announcement bar. The release process bumps it and sweeps the stale admonitions.
+**Unreleased features no longer need marking** (changed 2026-09-09, by user decision).
+The `!!! info "Unreleased"` admonition existed because the site was deployed from `main`, so
+the published manual described a development build nobody could download — a reader had no
+way to tell which half applied to them, and remembering the admonition was the writer's
+burden. Deploying only on a release publish removes the divergence at the source: what is
+published is the tagged commit's manual for the core released beside it. Write manual pages
+in the present tense as the feature lands. Existing admonitions are harmless and the release
+process still sweeps them; `extra.released_version` in `mkdocs.yml` stays — it names the
+version on the announcement bar and `package.yml` refuses to package a release whose tag
+disagrees with it.
 
 **Authoring rules** (full set in `site/README.md`): keep `.md` extensions on cross-links so
 pages resolve in MkDocs *and* natively on GitHub; links to repo files must be absolute
@@ -165,7 +175,7 @@ MiSTer_DVD/
 │   ├── requirements.txt       ← pinned mkdocs-material
 │   └── README.md              ← local preview + authoring rules
 ├── .github/
-│   └── workflows/docs.yml     ← build + deploy the manual on push to main
+│   └── workflows/docs.yml     ← check the manual on push/PR; deploy it on a release
 ├── rtl/                       ← UPSTREAM: existing mpeg2fpga decoder (do not modify)
 ├── sys/                       ← UPSTREAM: MiSTer framework (do not modify)
 ├── dvd/                       ← YOUR NEW RTL MODULES go here
@@ -1396,10 +1406,23 @@ worse maintenance burden than targeted in-place edits. So:
   line is also why **multichannel LPCM is impossible** here — the board routes no other
   audio data pin; confirmed in its pin table.) `dvd/i2s_iec958.sv` serializes the SAME
   subframes `spdif_pass` biphase-encodes — one source, two link layers, so they cannot
-  drift. ★ **Chosen route is IEC958-direct (`0x0C[1:0]=3`), NOT an I2C channel-status bit**:
-  it is what mainline Linux uses for IEC958 subframes, and crucially it keeps the non-PCM
-  flag **DYNAMIC**, preserving the fj#110 ROUND 2 fix (receivers cannot acquire across
-  non-PCM null bursts) instead of pinning the flag high for a session. ★ **Stock Main is
+  drift. ⛔ **STALE AS WRITTEN — CORRECTED 2026-09-09. The route below was BUILT AND THEN
+  REMOVED, and the claim that follows it is now false.** `dvd/hdmi_bs_i2s.sv:14-19`:
+  IEC958-direct "was built, documented from the Programming Guide, sim-correct, and never
+  produced a decodable stream across four hardware rounds. It has been removed rather than
+  carried as dead weight." What SHIPS is route (i) — plain 16-bit standard I2S with the
+  channel status taken from the ADV7513 **register map**, `0x0C` = `0x44`/`0x04` and the
+  non-PCM bit in `0x12[7]` = `0xA0`/`0x20`, both written by Main over I2C in
+  `hdmi_config_set_audio()` (integration step 20). **So over HDMI the non-PCM flag is a
+  STATIC per-session I2C setting, not a per-block wire bit** — `emu.sv` ties `bs_nonpcm_o`
+  off entirely. Only optical S/PDIF carries it dynamically (`spdif_pass`, per 192-frame
+  block). Anything that needs HDMI to switch between PCM and a bitstream must therefore go
+  through Main, at its poll rate. ⚠ `dvd_hdmi_audio.cpp`'s own success message still says
+  "IEC958-direct mode", and `docs/hdmi_bitstream.md`'s §2 and register table still describe
+  the removed route.
+  ★ *(Superseded original text, kept for the reasoning:* chosen route is IEC958-direct
+  `0x0C[1:0]=3`, because it is what mainline Linux uses for IEC958 subframes and keeps the
+  non-PCM flag DYNAMIC, preserving the fj#110 ROUND 2 fix.*)* ★ **Stock Main is
   safe BY CONSTRUCTION**: the ADV7513's I2C is HPS-only, so a bitstream sent to a sink still
   expecting PCM is full-scale noise — the core therefore refuses to emit one without the
   `cfg[14]` ack that only MiSTer_DVDcss sets (after checking EDID Short Audio Descriptors,
