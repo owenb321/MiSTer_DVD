@@ -516,6 +516,8 @@ layout change, by design, rather than silently misreading an old file.
 
 ### A feature in the documentation is not in my build
 
-This manual documents the **development build**. The banner at the top of every page names
-the latest release, and anything newer is marked *Unreleased*. Check the version line in the
-OSD against it.
+This manual is published with each release and documents that release — the banner at the
+top of every page names which one. Check it against
+[the version line the OSD shows](../getting-started/install.md#checking-what-you-are-running).
+If they differ you are running an older core, or a test build handed out before a release;
+[install the latest release](../getting-started/install.md).

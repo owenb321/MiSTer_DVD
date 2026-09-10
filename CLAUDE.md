@@ -175,7 +175,7 @@ MiSTer_DVD/
 │   ├── requirements.txt       ← pinned mkdocs-material
 │   └── README.md              ← local preview + authoring rules
 ├── .github/
-│   └── workflows/docs.yml     ← build + deploy the manual on push to main
+│   └── workflows/docs.yml     ← check the manual on push/PR; deploy it on a release
 ├── rtl/                       ← UPSTREAM: existing mpeg2fpga decoder (do not modify)
 ├── sys/                       ← UPSTREAM: MiSTer framework (do not modify)
 ├── dvd/                       ← YOUR NEW RTL MODULES go here
