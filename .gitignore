@@ -123,3 +123,4 @@ bench/dvd/test_vobs/menu_junction*
 bench/dvd/menu_junction_sim
 bench/dvd/menudrain_sim
 bench/dvd/menudrain_vm_sim
+bench/dvd/test_cdda/
