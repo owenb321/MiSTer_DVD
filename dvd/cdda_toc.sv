@@ -36,6 +36,21 @@
 //  far below anything a listener can notice on a track skip, and it lets every
 //  comparison here happen in the reader's own linear-block units with no
 //  conversion.
+//
+//  ⚠⚠ THE TABLE IS READ THROUGH ONE SYNCHRONOUS PORT, AND THAT IS NOT A STYLE
+//  CHOICE. The first version read start_ram combinationally at five sites (the
+//  scan bounds, prev/next, the notch replay). Quartus cannot map an async-read
+//  array to an M10K, so it built all 100x32 bits out of FLOPS plus the address
+//  muxes: 3733 ALUTs and 3463 registers, 0 block memory bits, and the design --
+//  already at 98% ALM -- FAILED TO FIT (4558 LABs needed, 4191 on the device).
+//  This is the same LUT-RAM explosion that once put dvd_iso_reader's parse_buf
+//  at 226% ALM. One registered read port, walked one entry per cycle, is what
+//  makes it an M10K.
+//
+//  The walk is free: the playhead moves ~86 blocks/second and there are at most
+//  99 tracks, so a full pass settles thousands of times faster than the answer
+//  can go stale. Reading entries k, k-1 and k-2 as the address advances gives
+//  the current track's bounds AND its neighbours' starts from that single port.
 //============================================================================
 
 `timescale 1ns/1ps
@@ -166,65 +181,77 @@ module cdda_toc #(
         end
     end
 
-    // ---- notch replay ------------------------------------------------------
-    // seek_bar takes boundaries on a generic write port, so the table is simply
-    // replayed into it once per commit. One entry per cycle; nothing downstream
-    // is timing-critical.
-    reg       replay;
-    reg [6:0] rp;
+    // Current track's bounds and its neighbours' starts, all REGISTERED off the
+    // single read port below.
+    reg [31:0] s_lo, s_hi, s_prev, s_next;
+
+    // ---- the walk: one sync read port serves bounds, neighbours and notches --
+    // ra sweeps 0..n_tracks. `rd` is start_ram[ra_q] one cycle later, with rd_p
+    // and rd_pp trailing it, so at ra_q == k we hold start[k], start[k-1] and
+    // start[k-2] -- everything track k-1 needs, from ONE port.
+    reg [6:0]  ra, ra_q;
+    reg [31:0] rd, rd_p, rd_pp;
+    reg        first_pass;        // emit notches on the pass after a commit
+
+    always @(posedge clk) begin
+        rd   <= start_ram[ra];
+        ra_q <= ra;
+        rd_p <= rd;
+        rd_pp<= rd_p;
+    end
+
+    // Track index under evaluation this cycle, and its bounds. The LAST track's
+    // upper bound is the image end -- there is no start[n] to read.
+    wire [6:0]  ev_i    = ra_q - 7'd1;
+    wire        ev_ok   = toc_valid && (ra_q >= 7'd1) && (ra_q <= n_tracks[6:0]);
+    wire        ev_last = (ra_q == n_tracks[6:0]);
+    wire [31:0] ev_lo   = rd_p;
+    wire [31:0] ev_hi   = ev_last ? total_blk : rd;
+    wire [31:0] ev_next = ev_last ? total_blk : rd;
+    wire [31:0] ev_prev = (ev_i == 7'd0) ? rd_p : rd_pp;
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            replay <= 1'b0; rp <= 7'd0;
+            ra <= 7'd0; first_pass <= 1'b0;
+            cur_track <= 8'd0;
+            s_lo <= 32'd0; s_hi <= 32'd0; s_prev <= 32'd0; s_next <= 32'd0;
             notch_we <= 1'b0; notch_idx <= 7'd0; notch_blk <= 32'd0;
         end else begin
             notch_we <= 1'b0;
-            if (toc_valid & ~replay & (rp == 7'd0)) begin replay <= 1'b1; rp <= 7'd0; end
-            else if (replay) begin
-                notch_we  <= 1'b1;
-                notch_idx <= rp;
-                notch_blk <= start_ram[rp];
-                if (rp + 7'd1 >= n_tracks[6:0]) replay <= 1'b0;
-                rp <= rp + 7'd1;
+
+            if (!toc_valid) begin
+                ra <= 7'd0; cur_track <= 8'd0; first_pass <= 1'b1;
+            end else begin
+                ra <= (ra >= n_tracks[6:0]) ? 7'd0 : (ra + 7'd1);
+                // ⚠ Clear on ra_q, NOT ra: the read port is a cycle behind, so
+                // the pass is not finished until the LAST track has been
+                // EVALUATED. Clearing on ra dropped the final track's notch --
+                // the seek bar was one tick short on every disc.
+                if (ra_q >= n_tracks[6:0]) first_pass <= 1'b0;
+
+                if (ev_ok) begin
+                    // seek-bar notch: one per track, on the first pass only
+                    if (first_pass) begin
+                        notch_we  <= 1'b1;
+                        notch_idx <= ev_i;
+                        notch_blk <= ev_lo;
+                    end
+                    if (lin_blk >= ev_lo && lin_blk < ev_hi) begin
+                        cur_track <= {1'b0, ev_i} + 8'd1;
+                        s_lo   <= ev_lo;
+                        s_hi   <= ev_hi;
+                        s_prev <= ev_prev;
+                        s_next <= ev_next;
+                    end
+                end
             end
-            if (mount) begin replay <= 1'b0; rp <= 7'd0; end
         end
     end
 
-    // ---- where are we? -----------------------------------------------------
-    // A linear scan updated one track per clock: the playhead moves at 86 blocks
-    // a second and there are at most 99 tracks, so this settles thousands of
-    // times faster than it can go stale, and it costs one comparator instead of
-    // 99 of them (this design fits at 98% ALM).
-    reg [6:0]  scan;
-    reg [31:0] s_lo, s_hi;
-    // Bounds of the track the scan cursor is on. Plain wires, NOT block-local
-    // regs and NOT a function: Quartus 17 miscompiled five `function automatic`
-    // helpers on this project SILENTLY (sim bit-exact, silicon mute), so the
-    // house style here is wires and inline ternaries.
-    wire [31:0] scan_lo = start_ram[scan];
-    wire [31:0] scan_hi = (scan + 7'd1 >= n_tracks[6:0]) ? total_blk
-                                                         : start_ram[scan + 7'd1];
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            scan <= 7'd0; cur_track <= 8'd0; s_lo <= 32'd0; s_hi <= 32'd0;
-        end else if (!toc_valid) begin
-            cur_track <= 8'd0; scan <= 7'd0;
-        end else begin
-            if (lin_blk >= scan_lo && lin_blk < scan_hi) begin
-                cur_track <= {1'b0, scan} + 8'd1;
-                s_lo <= scan_lo;
-                s_hi <= scan_hi;
-            end
-            scan <= (scan + 7'd1 >= n_tracks[6:0]) ? 7'd0 : (scan + 7'd1);
-        end
-    end
-
-    wire [6:0] ci = (cur_track == 8'd0) ? 7'd0 : (cur_track[6:0] - 7'd1);
     assign cur_start  = s_lo;
     assign cur_end    = s_hi;
-    assign next_start = (cur_track == 8'd0 || cur_track >= n_tracks)
-                        ? total_blk : start_ram[ci + 7'd1];
-    assign prev_start = (cur_track <= 8'd1) ? start_ram[0] : start_ram[ci - 7'd1];
+    assign next_start = s_next;
+    assign prev_start = s_prev;
 
 endmodule
 
