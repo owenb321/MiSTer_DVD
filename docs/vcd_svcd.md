@@ -259,7 +259,9 @@ goldens against `ffmpeg -c copy` at generation time. Plus: `crt_ov_map_tb`,
   nor Fast Fwd/Rewind engage. See `docs/dvd_nav.md` §2b for what enabling it would take.
 - **EOF tail**: the final partial 2048-block may emit a few stale in-window bytes —
   end-of-play junk, harmless.
-- IEC 61937 MP2 passthrough unchanged (passthrough mode silences MP2, as on DVD).
+- IEC 61937 MP2 bitstreaming unchanged (still not implemented). ⚠ STALE AS WRITTEN:
+  passthrough mode no longer SILENCES MP2 — since PR #79 it decodes MP2 and sends PCM,
+  as on DVD. See `docs/iec61937.md`.
 
 ## 6. HW gate checklist (✅ core gate passed 2026-08-24, user report)
 

@@ -2794,7 +2794,7 @@ machine — used for `tools/nav_extract.py`, `tools/spu_dump_iso.py`, etc.). Cur
 | AC-3 (Dolby Digital) | 0x80–0x87 | liba52 | ✅ stereo PCM | IEC 61937-3, Pc=0x0001 |
 | DTS | 0x88–0x8F | libdca | ✅ stereo PCM | IEC 61937-5, Pc=0x000B |
 | LPCM | 0xA0–0xA7 | none (raw PCM) | ✅ direct | N/A |
-| MP2 (MPEG-1 Layer II) | stream_id 0xC0–0xC7 (no substream byte) | none — in-fabric `dvd/mp2/mp2_decode.sv` | ✅ stereo PCM ✅ HW-CONFIRMED 2026-08-24 | IEC 61937, Pc=0x0004 (not implemented; passthrough mode silences MP2) |
+| MP2 (MPEG-1 Layer II) | stream_id 0xC0–0xC7 (no substream byte) | none — in-fabric `dvd/mp2/mp2_decode.sv` | ✅ stereo PCM ✅ HW-CONFIRMED 2026-08-24 | IEC 61937 Pc=0x0004 bitstreaming not implemented — but since PR #79 Passthru DECODES MP2 and sends PCM, it no longer silences it |
 
 DTS support is essentially free once AC-3 works — same IEC 61937 wrapper, different
 preamble constant and library. Always detect substream ID before routing audio PES.

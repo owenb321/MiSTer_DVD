@@ -51,7 +51,8 @@ the output NCO now muxes on the MP2 header rate (44.1/48/32 kHz), see
 (`feature/vcd-svcd-playback`, `docs/vcd_svcd.md`): MPEG-1 **system** stream parsing
 (ps_demux auto-detects the pack flavour), .bin/.cue MODE2/2352 sector deblocking
 (in-fabric, `dvd_iso_reader` raw mode), and the 44.1 kHz output rate all shipped.
-Still out of scope: IEC 61937 MP2 passthrough (passthrough mode silences MP2).
+Still out of scope: IEC 61937 MP2 bitstreaming (Pc=0x0004). ⚠ Since PR #79 Passthru
+decodes MP2 to PCM rather than silencing it — the BITSTREAM path is what is missing.
 
 ## Test material
 
@@ -413,8 +414,8 @@ in-loop effect of the mismatch-control difference is visible.
 - ~~44.1 kHz MP2 (VCD) plays 8.8% fast (fixed 48 kHz NCO)~~ — **✅ FIXED
   2026-08-24** (`feature/vcd-svcd-playback`): the NCO muxes on the MP2 header rate
   (44.1/48/32 kHz), glitch-free at drain re-arm; see `docs/vcd_svcd.md` §2c.
-- MP2 passthrough (IEC 61937 Pc=0x0004) not implemented; passthrough mode silences
-  MP2 (correct fallback).
+- MP2 bitstreaming (IEC 61937 Pc=0x0004) not implemented. ⚠ Since PR #79 Passthru
+  decodes MP2 and sends PCM (the correct fallback) rather than silencing it.
 - MPEG-2 multichannel extension (attr format 3) stays unsupported (HUD notice).
 - Analog CRT with SIF sources: ✅ fixed by the in-core 2× fill (B.3,
   ✅ HW-CONFIRMED 2026-08-24, PR #2). ~~Wider sub-D1 MPEG-2 (704/544) still shows

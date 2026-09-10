@@ -42,6 +42,12 @@ advertises AC-3/DTS support in its EDID.
 | **LPCM** | Sent as PCM | Decoded in the core and sent as ordinary stereo — see below |
 | **MP2** | Sent as PCM | Same; this is what VCD and SVCD discs carry |
 
+!!! warning "The HDMI half needs a matching `MiSTer_DVDcss`"
+    Over HDMI the wire format is set from the ARM side, so LPCM and MP2 come out as PCM
+    only when the core and `MiSTer_DVDcss` are from the same release. Pairing a v0.5.0
+    core with an older Main leaves those two **silent over HDMI** — extract the release
+    zip so both update together. Optical S/PDIF works with either.
+
 !!! info "New in v0.5.0 — LPCM and MP2 no longer go silent"
     These two used to be silent in Passthru, so a concert disc or a VCD needed a trip
     back to `Decode PCM`. They now come out as ordinary PCM, which is what a set-top

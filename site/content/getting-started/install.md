@@ -168,8 +168,14 @@ as you wrote it, and libdvdcss — along with any disc keys it has cached — is
 The `.rbf` filenames differ by date, so old builds are not overwritten; delete them by hand
 if you want them gone. MiSTer offers the newest by date either way.
 
+!!! warning "If you use bitstream passthrough over HDMI, update the core and `MiSTer_DVDcss` together"
+    The HDMI audio format is set from the ARM side, not by the core alone, so the two are a
+    matched pair on that path. Updating only the `.rbf` can leave **LPCM and MP2 tracks
+    silent over HDMI Passthru** — extracting the zip updates both and avoids it. Optical
+    S/PDIF is unaffected, and so is `Audio Out = Decode PCM`.
+
 !!! warning "Your settings may reset after an update"
-    Saved settings live in `/media/fat/config/DVD_v1.CFG`, and the `v1` is a layout
+    Saved settings live in `/media/fat/config/DVD_v3.CFG`, and the `v3` is a layout
     version. When a release changes the option layout incompatibly, that number is bumped
     and your options fall back to their defaults rather than being misread. This is
     deliberate — it replaces the older "please delete your config file" release note. Your
@@ -177,7 +183,7 @@ if you want them gone. MiSTer offers the newest by date either way.
 
 ## Uninstalling
 
-Delete `DVD_*.rbf`, `MiSTer_DVDcss`, the two scripts, and `config/DVD_v1.CFG`. If you added
+Delete `DVD_*.rbf`, `MiSTer_DVDcss`, the two scripts, and `config/DVD_v3.CFG`. If you added
 a `[DVD]` section to `MiSTer.ini`, remove that too. Nothing else on the card is touched —
 the core does not write outside its own config, except for the libdvdcss key cache at
 `/media/fat/dvdcss/` if you used encrypted media.
