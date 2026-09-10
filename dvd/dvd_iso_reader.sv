@@ -1835,7 +1835,11 @@ wire raw_keep = raw_sec_pass && (raw_pos >= 12'd24) && (raw_pos < 12'd2348);
 // CD-DA/WAV keep filter: absolute file position of the byte being written
 // (flat single extent from 0, so strm_blk IS the file block) inside the
 // pair-aligned data-payload window. Compacted through raw_wcnt like raw mode.
-wire [31:0] cdda_bpos = {strm_blk[20:0], 11'd0} + {21'd0, sd_buff_addr[10:0]};
+// The block base has 11 zero low bits and the offset is 11 bits wide, so this
+// is a CONCATENATION, not an addition -- writing it as a sum cost a 32-bit
+// adder on the per-byte cache-write path for nothing. (The design is at 98%
+// ALM; free area here is worth taking.)
+wire [31:0] cdda_bpos = {strm_blk[20:0], sd_buff_addr[10:0]};
 wire        cdda_keep = (cdda_bpos >= cdda_astart) && (cdda_bpos < wav_dend);
 always @(posedge clk)
     if (sd_buff_wr && state==S_STREAM && (!raw_mode || raw_keep)
