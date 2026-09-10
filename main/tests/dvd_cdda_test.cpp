@@ -26,6 +26,16 @@ static void check(const char *what, long long got, long long want)
 #define DVD_CDDA_TEST 1
 #include "dvd_cdda.h"
 
+// The harness stages an EMPTY user_io.h, so anything the module calls from Main
+// must be defined here first. The upload path is exercised in [8] below.
+static int      up_index = -1, up_dl = -1;
+static uint8_t  up_blob[512];
+static uint32_t up_len = 0;
+void user_io_set_index(unsigned char i)                 { up_index = i; }
+void user_io_set_download(unsigned char e, int = 0)     { up_dl = e; }
+void user_io_file_tx_data(const uint8_t *a, uint32_t n)
+{ up_len = n; if (n <= sizeof(up_blob)) memcpy(up_blob, a, n); }
+
 // A synthetic disc: every byte is a pure function of (disc LBA, offset), so any
 // byte of the virtual image can be checked against the sector it MUST have come
 // from. A mis-ordered burst, a wrong offset or a track-edge overrun all show up
@@ -216,6 +226,42 @@ int main(void)
 		memset(&z, 0, sizeof(z));
 		check("[6d] empty toc has no size", (long long)dvd_cdda_image_size(&z), 0);
 		check("[6e] empty toc maps nothing", dvd_cdda_map_sector(&z, 0), -1);
+	}
+
+	// ---- [8] the track-table blob the core will parse -----------------------
+	// Checked against the FORMAT (tools/cdda_toc_ref.py states it independently),
+	// not against dvd/cdda_toc.sv -- so the two sides cannot drift together.
+	{
+		memset(&g_toc, 0, sizeof(g_toc));
+		g_toc = toc;
+		g_open = 1;
+		up_index = -1; up_len = 0;
+		dvd_cdda_toc_upload();
+
+		check("[8a] sent at the agreed index", up_index, DVD_CDDA_TOC_INDEX);
+		check("[8b] length = 12 + 4*ntracks",  (long long)up_len, 12 + 4LL * toc.ntracks);
+		check("[8c] magic",  memcmp(up_blob, "CDTC", 4) == 0, 1);
+		check("[8d] version", up_blob[4], 1);
+		check("[8e] ntracks", up_blob[5], toc.ntracks);
+
+		uint32_t total = up_blob[8] | (up_blob[9]<<8) | (up_blob[10]<<16) | ((uint32_t)up_blob[11]<<24);
+		uint64_t sz = dvd_cdda_image_size(&toc);
+		check("[8f] total_blocks rounds UP", (long long)total, (long long)((sz + 2047) / 2048));
+
+		// Every start must be the block holding that track's first audio byte,
+		// and they must be strictly increasing.
+		int bad = 0; uint32_t prev = 0;
+		for (int i = 0; i < toc.ntracks; i++)
+		{
+			uint32_t got = up_blob[12+4*i] | (up_blob[12+4*i+1]<<8) |
+			               (up_blob[12+4*i+2]<<16) | ((uint32_t)up_blob[12+4*i+3]<<24);
+			uint64_t byte = 44ULL + (uint64_t)toc.tr[i].vsec * 2352;
+			if (got != (uint32_t)(byte / 2048)) bad++;
+			if (i && got <= prev) bad++;
+			prev = got;
+		}
+		check("[8g] every start is its track's block, increasing", bad, 0);
+		g_open = 0;
 	}
 
 	printf(fail ? "dvd_cdda_test: FAILED\n" : "dvd_cdda_test: PASSED\n");

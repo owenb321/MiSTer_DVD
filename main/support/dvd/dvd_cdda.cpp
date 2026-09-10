@@ -26,6 +26,7 @@
 #include <limits.h>   // INT_MAX -- CDSL_CURRENT expands to it via <linux/cdrom.h>
 
 #include "dvd_cdda.h"
+#include "../../user_io.h"
 
 // Bursts are capped at what one 16 KB window can possibly touch: 16384 payload
 // bytes span at most ceil(16384/2352)+1 = 8 CD frames. 16 is headroom, not need.
@@ -342,4 +343,45 @@ int dvd_cdda_read(void *buf, uint32_t lba, uint32_t cnt)
 	}
 
 	return (int)cnt;
+}
+
+// ---------------------------------------------------------------- toc upload
+
+void dvd_cdda_toc_upload(void)
+{
+	if (!g_open || !g_toc.ntracks) return;
+
+	// 12-byte header + one 4-byte start per track. Little-endian throughout,
+	// matching tools/cdda_toc_ref.py, which is the independent statement of this
+	// format -- deliberately not derived from this code or from the RTL.
+	uint8_t blob[12 + DVD_CDDA_MAX_TRACKS * 4];
+	int n = 0;
+
+	blob[n++] = 'C'; blob[n++] = 'D'; blob[n++] = 'T'; blob[n++] = 'C';
+	blob[n++] = 1;                                   // version
+	blob[n++] = (uint8_t)g_toc.ntracks;
+	blob[n++] = 0; blob[n++] = 0;                    // reserved
+
+	// The image end, so the LAST track has an upper bound. Blocks, rounded up:
+	// the final CD frame does not fill its 2048-byte block.
+	uint64_t size = dvd_cdda_image_size(&g_toc);
+	uint32_t total_blocks = (uint32_t)((size + 2047) / 2048);
+	put_le32(blob + n, total_blocks); n += 4;
+
+	for (int i = 0; i < g_toc.ntracks; i++)
+	{
+		// First BLOCK of this track's first audio byte. Block granularity is
+		// ~12 ms of audio -- inaudible on a skip, and it keeps every comparison
+		// in the reader's own linear-block units.
+		uint64_t byte = (uint64_t)DVD_CDDA_HDR + (uint64_t)g_toc.tr[i].vsec * DVD_CDDA_RAW;
+		put_le32(blob + n, (uint32_t)(byte / 2048)); n += 4;
+	}
+
+	user_io_set_index(DVD_CDDA_TOC_INDEX);
+	user_io_set_download(1);
+	user_io_file_tx_data(blob, (uint32_t)n);
+	user_io_set_download(0);
+
+	printf("DVD_CDDA: sent %d-track table (%d bytes, %u blocks)\n",
+	       g_toc.ntracks, n, total_blocks);
 }

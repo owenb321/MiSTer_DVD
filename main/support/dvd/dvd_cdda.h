@@ -79,4 +79,15 @@ int  dvd_cdda_read(void *buf, uint32_t lba, uint32_t cnt);
 
 void dvd_cdda_close(void);
 
+// Push the track table to the core over the generic ioctl-download channel, so
+// it can turn the linear playhead back into "track 7 of 12". Wire format and the
+// never-garbage rules live in dvd/cdda_toc.sv; the golden statement of the
+// format that neither side derives from the other is tools/cdda_toc_ref.py.
+//
+// Call AFTER the mount succeeds: the core clears any previous table on
+// img_mounted, so an upload sent before it would be thrown away.
+void dvd_cdda_toc_upload(void);
+
+#define DVD_CDDA_TOC_INDEX 250   // clear of PSX's 251
+
 #endif

@@ -1671,7 +1671,7 @@ wire sel_edge   = joy_sel   & ~joy_prev[7];
 // frame-step pause must not raise the line AT ALL (see `step_paused`). B9 is the only
 // way to bring it up there, which is what the user asked for.
 wire hud_user_evt = pause_edge
-                  | ((chnext_edge | chprev_edge) && cell_ready && !menu_active)
+                  | ((chnext_edge | chprev_edge) && (cell_ready || cdda_tracks_on) && !menu_active)
                   | scrub_seek_pulse
                   | dpad_pend_evt;
 wire menu_edge  = joy_menu  & ~joy_prev[8];
@@ -1991,7 +1991,7 @@ always @(posedge clk_sys or negedge reset_n) begin
         if (start_streaming) begin
             chap_net   <= 6'sd0;
             chap_timer <= 24'd0;
-        end else if (cell_ready && !menu_active && !in_title_menu &&
+        end else if ((cell_ready || cdda_tracks_on) && !menu_active && !in_title_menu &&
                      (chnext_edge || chprev_edge)) begin
             // register the press (next wins if both edges land the same cycle) and
             // (re)start the debounce window.
@@ -2173,10 +2173,24 @@ wire        ab_jump_fire, ab_jump_dir;
 wire [31:0] ab_jump_base, ab_jump_off;
 wire [1:0]  ab_state_w;
 wire        ab_evt_w;
-wire        jmp_fire = ab_jump_fire | dpad_jump_fire;
-wire        jmp_dir  = ab_jump_fire ? ab_jump_dir  : dpad_jump_dir;
-wire [31:0] jmp_base = ab_jump_fire ? ab_jump_base : dpad_jump_base;
-wire [31:0] jmp_off  = ab_jump_fire ? ab_jump_off  : dpad_jump_off;
+// Audio-CD track skip is the THIRD producer on this port (declared here so the
+// mux can see it; driven further down, beside the track resolver). It takes
+// priority, but only defensively: on a CD the other two cannot fire at all --
+// ab_repeat is gated on cell_ready, which a CD never asserts, and dpad_seek
+// needs either a DSI or a measured linear rate.
+// ⚠ jump_dir is 1 = FORWARD (dvd/scrub_ctrl.sv:174, applied as base +/- off).
+// With off = 0 the direction cannot move the landing, so 1 is a safe constant --
+// but it is written as the consumer's convention, not guessed, because getting
+// that bit backwards is exactly what shipped broken in A-B repeat.
+reg         cdda_jump_fire;
+reg  [31:0] cdda_jump_base;
+wire        jmp_fire = cdda_jump_fire | ab_jump_fire | dpad_jump_fire;
+wire        jmp_dir  = cdda_jump_fire ? 1'b1           :
+                       ab_jump_fire   ? ab_jump_dir    : dpad_jump_dir;
+wire [31:0] jmp_base = cdda_jump_fire ? cdda_jump_base :
+                       ab_jump_fire   ? ab_jump_base   : dpad_jump_base;
+wire [31:0] jmp_off  = cdda_jump_fire ? 32'd0          :
+                       ab_jump_fire   ? ab_jump_off    : dpad_jump_off;
 wire        bar_active_w;                          // Phase 11: seek-bar visible
 wire [31:0] bar_base_rbn_w, bar_tgt_rbn_w;         // Phase 11: bar fill + cursor
 wire [31:0] title_first_rbn_w, title_last_rbn_w;
@@ -2192,6 +2206,76 @@ wire        lin_blk10_ok_w;
 wire [16:0] lin_cur_secs_w, lin_total_secs_w, lin_prev_secs_w;
 wire        lin_time_ok_w, lin_prev_ok_w;
 wire [31:0] lin_cur_bcd_w, lin_tot_bcd_w, lin_prev_bcd_w, seek_prev_time_w;
+// =========================================================================
+// AUDIO-CD TRACKS — dvd/cdda_toc.sv
+// =========================================================================
+// A physical CD arrives as one giant WAV, which is what makes it play at all
+// (the reader needs no CD mode) and is also why the core cannot see where one
+// track ends. The Main sends the boundaries over the ioctl-download channel and
+// this turns lin_blk back into "track 7 of 12".
+wire        cdda_toc_valid_w;
+wire [7:0]  cdda_ntracks_w, cdda_curtrk_w;
+wire [31:0] cdda_cur_start_w, cdda_cur_end_w, cdda_prev_start_w, cdda_next_start_w;
+wire        cdda_notch_we_w;
+wire [6:0]  cdda_notch_idx_w;
+wire [31:0] cdda_notch_blk_w;
+
+cdda_toc cdda_toc_inst (
+    .clk            (clk_sys),
+    .rst_n          (reset_n),
+    .ioctl_download (ioctl_download),
+    .ioctl_wr       (ioctl_wr),
+    .ioctl_addr     (ioctl_addr),
+    .ioctl_dout     (ioctl_dout),
+    .ioctl_index    (ioctl_index),
+    .mount          (start_streaming),   // a table belongs to ONE disc
+    .lin_blk        (lin_blk_w),
+    .toc_valid      (cdda_toc_valid_w),
+    .n_tracks       (cdda_ntracks_w),
+    .cur_track      (cdda_curtrk_w),
+    .cur_start      (cdda_cur_start_w),
+    .cur_end        (cdda_cur_end_w),
+    .prev_start     (cdda_prev_start_w),
+    .next_start     (cdda_next_start_w),
+    .notch_we       (cdda_notch_we_w),
+    .notch_idx      (cdda_notch_idx_w),
+    .notch_blk      (cdda_notch_blk_w)
+);
+
+// Tracks behave as chapters: the SAME debounced burst the chapter FSM already
+// produces (chap_pulse/chap_dir/chap_mag) resolves to a track start, and the
+// jump rides scrub_ctrl's existing pre-resolved port -- so the clamp, the seek
+// bar and the preview clock all come for free.
+//
+// ★ base = the target and off = 0. scrub_ctrl computes `base +/- off` and clamps
+// it into the title span, so handing it the absolute target reuses every one of
+// those behaviours without a second code path.
+//
+// ⚠ "Previous" on a track restarts THIS track unless you are near its start --
+// what every CD player does, and what makes a double-press mean "the one
+// before". chap_at_start carries the same idea for DVD chapters.
+wire cdda_tracks_on = cdda_mode_w && cdda_toc_valid_w;
+localparam [31:0] CDDA_RESTART_BLK = 32'd258;   // ~3 s at 86.13 blk/s
+
+wire [31:0] cdda_skip_tgt =
+      chap_dir                                   ? cdda_next_start_w
+    : ((lin_blk_w - cdda_cur_start_w) > CDDA_RESTART_BLK) ? cdda_cur_start_w
+                                                          : cdda_prev_start_w;
+
+// (cdda_jump_fire / cdda_jump_base are declared up with the jump mux.)
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        cdda_jump_fire <= 1'b0;
+        cdda_jump_base <= 32'd0;
+    end else begin
+        cdda_jump_fire <= 1'b0;
+        if (chap_pulse && cdda_tracks_on) begin
+            cdda_jump_fire <= 1'b1;
+            cdda_jump_base <= cdda_skip_tgt;
+        end
+    end
+end
+
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),
     .rst_n           (reset_n),
@@ -6225,8 +6309,14 @@ lin_rate lin_rate_inst (
     .sec_tick      (sec_tick),
     .vid_pts       (ps_vid_pts),
     .vid_pts_valid (ps_vid_pts_valid),
-    .lin_blk       (lin_blk_w),
-    .total_blk     (title_last_rbn_w + 32'd1),
+    // ★ On an audio CD the CLOCK is TRACK-relative -- a CD player counts within
+    // the track -- while the seek bar stays disc-relative with track notches.
+    // This costs two subtracts and two muxes and no new arithmetic: lin_rate's
+    // MEASUREMENT path is bypassed in cdda mode (the fixed-rate arm), so
+    // shifting its position inputs cannot corrupt the rate estimate.
+    .lin_blk       (cdda_tracks_on ? (lin_blk_w - cdda_cur_start_w) : lin_blk_w),
+    .total_blk     (cdda_tracks_on ? (cdda_cur_end_w - cdda_cur_start_w)
+                                   : (title_last_rbn_w + 32'd1)),
     // Seek preview: the bar's own cursor target, so the clock and the cursor
     // can never disagree about where a gesture is heading.
     .prev_rbn      (bar_tgt_rbn_w),
@@ -6306,15 +6396,19 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // readable on-screen -- e.g. how-to-play looping on Title 33 shows "CH 01/07"
     // (VTS7 PGCN1) vs reaching the VMGM segment menu "CH 03/xx" (PGCN3); a boot
     // question-detour shows a question VTS (01/05/06). Normal (O[2] off) = the real CH.
-    .cur_pgm      (hud_dbg ? cur_pgcn_rd : hud_cur_ch),  // projected target while a multi-press debounces
-    .nr_pgm       (hud_dbg ? cur_vts     : hud_nr_ch),   // Phase 6: exact PTT total
+    // On an audio CD these carry the TRACK, which the HUD renders with the same
+    // "CH n/N" field -- so tracks cost the HUD nothing.
+    .cur_pgm      (hud_dbg      ? cur_pgcn_rd
+                   : cdda_tracks_on ? cdda_curtrk_w : hud_cur_ch),
+    .nr_pgm       (hud_dbg      ? cur_vts
+                   : cdda_tracks_on ? cdda_ntracks_w : hud_nr_ch),
     // popups: B7/B8 cycle popups mirror the gamepad state (aud_cur/sub_idx —
     // the same selectors that drive the reader's attr_* language readout);
     // angle only inside a real multi-angle block; chapter matches the skip guard.
     .aud_evt      (audio_edge),
     .sub_evt      (sub_edge),
     .angle_evt    (angle_edge && (angle_count != 4'd0)),
-    .chap_evt     ((chnext_edge | chprev_edge) && cell_ready && !menu_active),
+    .chap_evt     ((chnext_edge | chprev_edge) && (cell_ready || cdda_tracks_on) && !menu_active),
     .css_warn     (css_scrambled),   // persistent "CSS ENCRYPTED" popup
     .img_warn     (img_unplayable),  // persistent "UNSUPPORTED IMAGE" popup
     .aud_warn     (aud_unsupported), // persistent "AUDIO UNSUPPORTED" popup
@@ -6380,13 +6474,15 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),
-    .nr_pgm     (hud_nr_ch),          // Phase 6: exact PTT total for chapter notches
+    .nr_pgm     (cdda_tracks_on ? cdda_ntracks_w : hud_nr_ch),  // notch count
     .pm_we      (vm_pm_we),
     .pm_waddr   (vm_pm_waddr),
     .pm_wdata   (vm_pm_wdata),
-    .cellf_we   (cellf_we_w),
-    .cellf_idx  (cellf_idx_w),
-    .cellf_rbn  (cellf_rbn_w),
+    // Track boundaries reuse the chapter-notch write ports: seek_bar needs no
+    // change at all, it just receives boundaries from a different source.
+    .cellf_we   (cdda_tracks_on ? cdda_notch_we_w  : cellf_we_w),
+    .cellf_idx  (cdda_tracks_on ? cdda_notch_idx_w : cellf_idx_w),
+    .cellf_rbn  (cdda_tracks_on ? cdda_notch_blk_w : cellf_rbn_w),
     // chapter-skip preview: the same projected target the HUD's "CH n/N" field
     // counts through during a multi-press burst, so the bar's amber cursor
     // shows WHERE that chapter starts (tick_col[n-1]) while the number moves --

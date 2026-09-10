@@ -91,6 +91,10 @@ char is_dvd() { return 1; }
 int  dvd_video_probe(int) { probe_calls++; return fake_disc_is_dvd; }
 int  dvd_vcd_probe(int) { probe_calls++; return fake_disc_is_vcd; }
 int  cd_audio_probe(int) { probe_calls++; return fake_disc_is_cdda; }
+// Counted so [7] can assert the table is pushed for a CD and NOT for a DVD --
+// the core throws away any table that arrives before its mount.
+static int toc_uploads = 0;
+void dvd_cdda_toc_upload(void)  { toc_uploads++; }
 void dvd_css_close(void) {}
 void dvd_vcd_close(void) { vcd_close_calls++; }
 int  dvd_launch_ui_busy(void) { return fake_launch_busy; }
@@ -154,6 +158,7 @@ static void run_for(int seconds)
 static void reset_counters(void)
 {
     probe_calls = mount_calls = reset_asserts = vcd_close_calls = 0; last_mount[0] = 0;
+    toc_uploads = 0;
 }
 
 int main(void)
@@ -205,6 +210,11 @@ int main(void)
     run_for(NOTICE_WINDOW_S);
     check("[6] disc reads over ten seconds", probe_calls, 1);
     check("[6] mounts",                      mount_calls, 1);
+    // A DVD mounts through the same call, so the upload runs for it too. It must
+    // NO-OP rather than send a stale table -- dvd_cdda_toc_upload's own
+    // !g_open guard is what makes that safe, and this pins that it is called
+    // exactly once either way.
+    check("[6] upload attempted once",       toc_uploads, 1);
 
     printf("=== [7] an AUDIO CD now mounts (it did not before) ===\n");
     // eject the DVD, then present an audio CD. All three detectors run: the DVD
@@ -217,6 +227,7 @@ int main(void)
     check("[7] disc reads over half a minute (three detectors, once each)", probe_calls, 3);
     check("[7] mounts the audio CD",   mount_calls, 1);
     check("[7] via the SAME sentinel", !strcmp(last_mount, DVD_PHYS_SENTINEL), 1);
+    check("[7] pushes the track table", toc_uploads, 1);
 
     printf("=== [7b] a DATA disc is still refused, and probed once per insertion ===\n");
     fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);

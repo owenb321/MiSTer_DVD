@@ -22,6 +22,7 @@
 #include "dvd_phys.h"
 #include "dvd_detect.h"
 #include "dvd_vcd_detect.h"
+#include "dvd_cdda.h"
 #include "dvd_css.h"
 #include "dvd_vcd.h"
 #include "dvd_launch.h"
@@ -315,6 +316,10 @@ void dvd_phys_tick(void)
 	{
 		mounted = 1;
 		snprintf(mounted_dev, sizeof(mounted_dev), "%s", dev);
+		// The track table goes AFTER the mount: the core clears any previous
+		// table on img_mounted, so an upload sent before this would be thrown
+		// away. Harmless on a DVD -- it no-ops unless the CD source is open.
+		dvd_cdda_toc_upload();
 	}
 }
 
