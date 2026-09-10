@@ -23,22 +23,13 @@ which makes it look like a size or filesystem problem.
 
 ### Launched from an MGL: blank screen, nothing responds
 
-!!! note "Fixed in v0.4.0"
-    If you are on v0.3.0 or earlier, this is what you are seeing.
-
-Older builds could freeze during an MGL launch. The fault we found and fixed: the core's
-own on-screen notices could stall MiSTer's shortcut handling. While a shortcut is still
-running, MiSTer reads no input at all — so the gamepad, the keyboard and the OSD button
-were all dead and only a restart cleared it. There is now a 20-second backstop: even if a
-shortcut fails, the OSD always comes back so you can load the file by hand.
-
-A load that fails — a wrong path, or a share that was not ready yet — also now returns to
-the idle screen and the file picker rather than leaving the idle screen hidden.
+A shortcut that stalls has a 20-second backstop: the OSD always comes back, so you can
+load the file by hand. A load that fails — a wrong path, or a share that was not ready
+yet — returns to the idle screen and the file picker.
 
 !!! question "Still seeing a flat grey or green field?"
-    That symptom was reported and **could not be reproduced here**, so we do not know
-    whether the changes above address it. If an MGL launch still leaves you looking at a
-    blank coloured screen on v0.4.0, [please report it](reporting-a-bug.md) — with the
+    This was reported and **could not be reproduced here**. If an MGL launch leaves you
+    looking at a blank coloured screen, [please report it](reporting-a-bug.md) — with the
     `.mgl` file itself, and whether loading the same file by hand works.
 
 If a shortcut still does not load the movie, check the `path` in the `.mgl`: it is
@@ -114,9 +105,9 @@ shown as a `+` and then `++` after the bar. Each step is roughly +6 dB, and it i
 rather than a plain gain — quiet passages come up while peaks stay just under full scale, so
 it does not clip. The setting is remembered per core.
 
-!!! info "Unreleased"
-    Boost needs **MiSTer Main 20260603 or newer**, and core support that arrives in the next
-    release. On older builds the boost steps simply do not appear.
+!!! info "Needs a recent MiSTer Main"
+    Boost needs **MiSTer Main 20260603 or newer**. Without it the boost steps do not
+    appear in the OSD.
 
 Boost applies to decoded audio only. In `Audio Out = Passthru` the core sends an untouched
 bitstream and your receiver's volume owns the level.
@@ -204,10 +195,6 @@ dvd_hdmi_bitstream=2      ; 0=auto (default), 1=off, 2=force
 Read `/tmp/dvd_hdmi_audio.log` to see what it decided and why — it records the EDID result
 and each stage of the handoff.
 
-### The receiver drops out at a title start or on a track change
-
-An already-fixed bug — update to a newer build.
-
 ## Picture problems
 
 ### 16:9 content looks tall and thin on a CRT
@@ -221,18 +208,13 @@ into a 4:3 raster and needs unsqueezing. See
 Make sure **`Video Output`** is `Interlaced` (or `Auto` with the
 [analog ini bits](../video/analog-crt.md#turning-it-on) set) —
 the CRT then gets the disc's authored fields. See [Video Output](../video/interlaced.md).
-On builds up to v0.3.0 the equivalent setting is `Analog Out = Native Fields`; those
-builds' other analog modes have a known field-pairing wobble on video-sourced content.
 
 ### The picture shakes or tears about once a second on a CRT or scaler
 
-Seen on RGB SCART and YPbPr connections (composite sync / sync-on-Y) on v0.3.0 and the
-PR #37 prerelease, including at the idle logo, often with a RetroTINK reporting the
-vertical sync length or line count toggling and MiSTer reading `1441x478i` or
-`59.8 <-> 60.1 Hz`. v0.4.0 reworks the analog path — the main
-interlaced raster carries the half-line that interleaves the fields and drives the pins
-directly, and several internal events that could restart the raster are fixed — and
-reports a steady `720x480i @ 59.94 Hz`. If it still happens on a current build, turn on
+Seen on RGB SCART and YPbPr connections (composite sync / sync-on-Y), including at the
+idle logo, often with a RetroTINK reporting the vertical sync length or line count
+toggling. The core should report a steady `720x480i @ 59.94 Hz`; if you see `1441x478i`
+or `59.8 <-> 60.1 Hz` instead, or it still happens, turn on
 `Debug Overlay` (`O[2]`): a third row of small blocks appears in the top-left while
 Interlaced — green means an internal raster event fired. Please
 [report](reporting-a-bug.md) which blocks are green, your connection type and the
@@ -240,26 +222,17 @@ Interlaced — green means an internal raster event fired. Please
 
 ### The picture goes aliased / screen-door after a chapter skip on a CRT
 
-Toggle `Video Output` away and back to re-roll the field phase — sometimes it takes a few
-attempts. On builds up to v0.3.0 the same trick works on `Analog Out`. Many televisions
-never show this; it depends on the set.
+The two interlaced fields can land the wrong way round after an interruption. The core
+corrects this itself, including while a picture is **held** — a disc menu, an authored
+copyright or warning card, a paused frame — which settles within about half a second, so
+you may catch it doing so. Many televisions never show it at all; it depends on the set.
 
-!!! note "Fixed in v0.4.0"
-    The core corrects the field phase itself and the toggle is no longer needed. (An
-    earlier development build's first attempt at that corrector was switched off again: it
-    was making both fields carry the same picture lines, which combed still images on
-    every output including HDMI.) The same fix run also corrected HDMI `480i Deint` =
-    `Weave`, which used to comb on a still about half the time, and extends to **held
-    pictures** — disc menus, authored copyright and warning cards, and paused frames.
-    Before that, a disc booting straight to a several-second warning screen could show it
-    misaligned for the whole card and then play cleanly, because the correction only ran
-    when a new frame arrived and a held picture never delivers one.
-
+!!! question "CRT owners: please report what you see"
     Verified here on a composite set and over HDMI. **RGB SCART, YPbPr, sync-on-green,
     15 kHz RGBHV and PAL on a CRT are not yet confirmed** — televisions differ, and a
-    set's sync separator is what decides whether this ever showed. If either symptom
-    survives on v0.4.0, please [report it](reporting-a-bug.md) with the analog lines from
-    your `MiSTer.ini`. See [Field alignment](../video/interlaced.md#field-alignment).
+    set's sync separator is what decides whether this ever shows. If you see it, please
+    [report it](reporting-a-bug.md) with the analog lines from your `MiSTer.ini`. See
+    [Field alignment](../video/interlaced.md#field-alignment).
 
 !!! info "Unreleased — and a second, separate cause"
 
@@ -293,24 +266,12 @@ from your `MiSTer.ini`.
 
 ### The picture blocks up briefly right after a chapter skip or seek
 
-!!! note "Fixed in v0.4.0"
-    On v0.3.0 you will still see the artifact described below.
+The picture freezes on the last frame, then cuts to the new position with about **one**
+misaligned frame in between. That is expected on every disc and every way of jumping:
+chapter skip, Fast Fwd / Rewind, D-Pad Seek, and entering or leaving a menu.
 
-On v0.3.0, for roughly six frames — about a tenth of a second — the new scene decodes and
-moves correctly but the old one shows through it as a blocky residual, then it clears on
-its own. It happens on every disc and on every way of jumping: chapter skip, Fast Fwd /
-Rewind, D-Pad Seek, and entering or leaving a menu.
-
-It is a decoder artifact, not a disc or a setting: the player was still predicting each new
-picture from the scene it had just left ([issue
-#45](https://github.com/owenb321/MiSTer_DVD/issues/45)). v0.4.0 discards those pictures
-instead of showing them, so the last frame simply holds until the new scene is ready.
-
-**What remains** is much shorter, and confirmed on hardware: the
-picture freezes on the last frame, then cuts to the new position with about **one**
-misaligned frame in between. Report it if you see the old scene *moving* through the new
-one, if the blocking lasts appreciably longer than a frame, or if the picture does not
-recover on its own.
+Report it if you see the old scene *moving* through the new one, if the blocking lasts
+appreciably longer than a frame, or if the picture does not recover on its own.
 
 Changing `Video Output` mid-title goes through the same landing sequence — see
 [Switching mid-title](../video/interlaced.md).
@@ -324,15 +285,6 @@ was baked in at authoring time and carries no flags for Auto to detect. See
 Also confirm **`Frame Drop` is On** — advancing past a frame is the only way the player
 can recover time once it has fallen behind, so with it off the picture just runs later and
 later.
-
-### MiSTer reports 1441x478i, or the resolution changes when a disc loads
-
-An off-by-one in the idle raster window on v0.3.0 and the PR #37 prerelease. Fixed in
-v0.4.0: the idle logo and playback both report `720x480i`.
-
-### The idle logo bounces in a small box on a widescreen display
-
-Fixed in current builds. Update the core.
 
 ### Black & white picture over composite or S-video
 
@@ -375,22 +327,9 @@ Subtitles are separate from captions and are drawn by the core, so they work on 
 **B8** to cycle them; `SUB OFF` means they are disabled. Some discs author menu subpictures
 with zero contrast, which is intentional on their part.
 
-### Subtitle edges look jagged on a CRT
-
-!!! note "Fixed in v0.4.0"
-    With `Analog Aspect` on Auto or Letterbox for a 16:9
-    disc, subtitle edges used to stair-step (the subtitle layer was repositioned by a
-    nearest-line map while the picture got a proper blend). Subtitles now draw unscaled
-    at full resolution and may reach into the black bars — see
-    [Analog and CRT output](../video/analog-crt.md#analog-aspect).
-
 ## Controls
 
 ### My keyboard does nothing
-
-!!! note "New in v0.4.0"
-    Keyboard and remote control arrived in v0.4.0; on v0.3.0 only the number keys work,
-    and only inside a menu.
 
 Check the [key list](../playback/controls.md#keyboard-and-tv-remote) — the keys are fixed,
 not derived from your gamepad mapping. Two things reasonably often explain it:

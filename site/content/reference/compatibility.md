@@ -81,16 +81,6 @@ of these discs is fine; it is only seeking that is affected. Chapter skip is the
 way to move around one of these discs for now. Tracked as
 [issue #49](https://github.com/owenb321/MiSTer_DVD/issues/49).
 
-!!! success "One large class of this was fixed in 0.2.1"
-    Many discs — interactive ones especially — build menus so that every button sends the
-    same instruction, and a small hidden program on the disc decides where you actually go
-    based on *which* button you pressed. The core did not run that program, so every option
-    led to the same place, or the menu showed `LINK FAIL` and went nowhere.
-
-    Six discs in a 505-disc library went from failing at startup to reaching their menus
-    normally, four of which nobody had ever reported. If you tried a disc before 0.2.1 and
-    it misbehaved this way, it is worth trying again.
-
 !!! tip "A game disc that repeats the same question"
     Some game discs put their randomisation setup in the boot sequence, and pressing
     **Menu** to skip the intro jumps past it — so the game repeats one question. That is

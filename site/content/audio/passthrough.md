@@ -97,9 +97,8 @@ else.
 ## Track changes and startup
 
 The receiver needs a moment to lock onto the bitstream, and switching audio tracks
-re-establishes it. This used to be visibly bad — several seconds of dropouts at every title
-start, and audible flapping on track changes — and is now fixed: titles lock within a couple
-of seconds and track changes are near-instant.
+re-establishes it. A title locks within a couple of seconds and track changes are
+near-instant.
 
 ## Limitations
 

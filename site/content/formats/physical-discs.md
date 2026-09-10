@@ -89,12 +89,6 @@ best case. The script recognises one and tells you there is nothing to set.
 
 An encrypted *image* is always cracked from the data, so this only affects physical discs.
 
-!!! note "Fixed in v0.4.0"
-    **On v0.3.0 the change is refused by some drives** — it sends the request in a form
-    stricter drives reject — and when it does work the script can still report it as an
-    error and close before you can read it. Everything below describes the fixed version;
-    take the v0.4.0 `set_dvd_region.sh` if you intend to set a region.
-
 ### Put a disc in the drive first
 
 !!! warning "The disc in the drive usually has to allow the region you are setting"
