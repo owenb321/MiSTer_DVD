@@ -122,10 +122,6 @@ over HDMI is confirmed working.
 **Changing the audio track inside a disc menu** silences the menu's audio until you leave
 the menu.
 
-**In Passthru, menus with no background audio drop to PCM** — the receiver may show
-"decoder off" until the next menu with sound. Authored silence has no bitstream to carry;
-the receiver re-acquires in under a second when audio returns.
-
 ## Reporting a disc that does not work
 
 [Open an issue](https://github.com/owenb321/MiSTer_DVD/issues) with the core version from

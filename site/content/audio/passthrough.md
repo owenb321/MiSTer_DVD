@@ -107,8 +107,3 @@ of seconds and track changes are near-instant.
   variants. DVDs do not carry those.
 - **LPCM is 48 kHz stereo, 16-bit.** 96 kHz and multichannel LPCM are not decoded;
   24-bit is truncated to 16. Those discs are rare and the format is a DVD-Audio corner.
-- **Authored silence drops the receiver out of decode mode.** Where a disc authors silence
-  — a menu with no background audio, a gap between programmes — the receiver shows
-  "Decoder Off" until audio returns, under a second later. There is no bitstream to send,
-  and a receiver holds lock only on real data; a non-PCM hold and a pause burst were both
-  tested and neither works. Many set-top players do the same.

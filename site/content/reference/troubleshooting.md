@@ -204,14 +204,9 @@ dvd_hdmi_bitstream=2      ; 0=auto (default), 1=off, 2=force
 Read `/tmp/dvd_hdmi_audio.log` to see what it decided and why — it records the EDID result
 and each stage of the handoff.
 
-### The receiver shows "decoder off" during silent menus or gaps
+### The receiver drops out at a title start or on a track change
 
-Expected, with no current fix: authored silence carries no bitstream, and a receiver holds
-lock only on real data. It re-acquires in under a second when audio returns. See
-[Limitations](../audio/passthrough.md#limitations).
-
-Dropouts at a **title start** or on a **track change** are a different, already-fixed bug —
-update to a newer build.
+An already-fixed bug — update to a newer build.
 
 ## Picture problems
 
