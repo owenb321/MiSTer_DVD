@@ -184,6 +184,44 @@ int main(void)
     if (after < 1) {
         printf("  FAIL: no SPI read after the interval elapsed\n"); errors++; }
 
+    printf("[8] a track-format switch raises NO on-screen notice\n");
+    // Passthru follows the CONTENT now, so AC-3 <-> LPCM releases and re-engages
+    // per track. A disc that alternates (The Residents Commercial DVD) would
+    // otherwise paper the screen with a message saying things are working.
+    //
+    // ⚠ Counted on `stage_msg`, the module's own "a notice is pending" state, NOT
+    // on InfoMessage calls: report_pump() rate-limits with time(NULL), the REAL
+    // wall clock, and this whole test runs inside one second -- so an
+    // InfoMessage-based count reads zero whether the fix is present or not. The
+    // first version of this test did exactly that and was vacuous.
+    reset_world();
+    fake_edid[133] = (2 << 3); fake_edid[134] = 0x04;   // a good sink again
+    fake_edid_ver++;
+    fake_afmt = 0x1; settle();                          // engage on a codec track
+    check("acked before the switches", dvd_hdmi_audio_ack(), 1);
+    stage_msg = 0;
+    for (int i = 0; i < 6; i++) {                       // six alternations
+        fake_afmt = (i & 1) ? 0x1 : 0x3;
+        settle();
+        if (stage_msg) break;
+    }
+    if (stage_msg) {
+        printf("  FAIL: a format switch queued a notice: \"%s\"\n", stage_msg);
+        errors++;
+    } else printf("  ok   no notice queued across 6 format switches\n");
+
+    // ...and the notices that EXPLAIN a silent output must still work, or this
+    // would be "fixed" by muting the module entirely.
+    reset_world();
+    cfg.dvd_hdmi_bitstream = 1;            // disabled in the ini
+    fake_afmt = 0x1;
+    stage_msg = 0;
+    settle();
+    if (!stage_msg) {
+        printf("  FAIL: the 'why is it silent' notice was suppressed too\n"); errors++;
+    } else printf("  ok   explanatory notice still queued: \"%s\"\n", stage_msg);
+    cfg.dvd_hdmi_bitstream = 0;
+
     if (errors) { printf("dvd_hdmi_audio_test: FAILURES\n"); return 1; }
     printf("dvd_hdmi_audio_test: ALL GREEN\n");
     return 0;

@@ -270,10 +270,19 @@ void dvd_hdmi_audio_tick(void)
 		// ORDER MATTERS: configure the chip FIRST, then let the core start.
 		hdmi_config_set_audio(1);
 		set_ack(1);
+		// ⚠ NO ON-SCREEN NOTICE HERE, deliberately. Engaging used to be a
+		// once-per-session event worth confirming, so it raised one. It is now a
+		// per-TRACK event: Passthru follows the content, so every AC-3 <-> LPCM
+		// change releases and re-engages, and a disc that alternates (The
+		// Residents Commercial DVD does, repeatedly) would paper the screen with
+		// a message reporting that things are working. A success notice on a
+		// routine event is noise. The failure notices below stay -- those are the
+		// cases the user cannot otherwise explain.
+		// The log keeps the full record: /tmp/dvd_hdmi_audio.log.
 		// NOT "IEC958-direct" -- that route was removed after four failed HW
 		// rounds (dvd/hdmi_bs_i2s.sv:14-19). What we set is standard I2S with the
 		// channel status taken from the register map (0x0C[6]=1, non-PCM 0x12[7]).
-		report("HDMI bitstream ENGAGED\n\nADV7513 set to non-PCM");
+		printf("dvd_hdmi_audio: HDMI bitstream ENGAGED (ADV7513 set to non-PCM)\n");
 	}
 	else if (!want && acked)
 	{
@@ -282,7 +291,10 @@ void dvd_hdmi_audio_tick(void)
 		// the core presents digital silence, never PCM into a non-PCM link.
 		set_ack(0);
 		restore_at = GetTimer(50);
-		stage_msg = 0;   // re-arm reporting for the next engage attempt
+		// Let an explanatory notice be shown again after a state change, even if
+		// it repeats an earlier string. (It no longer re-arms an engage message --
+		// there isn't one.)
+		stage_msg = 0;
 		printf("dvd_hdmi_audio: HDMI bitstream released\n");
 	}
 
