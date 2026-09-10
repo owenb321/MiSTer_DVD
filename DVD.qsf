@@ -1343,4 +1343,23 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ~0.7 MHz of roll-to-roll variance on unrelated netlists and a 4.3 MHz swing
 # from a version-string edit alone. It is a fresh netlist, not an improvement.
 
+
+# 2026-09-10c (same branch, after moving the track-skip resolver OUT of emu.sv
+# and INTO cdda_toc.sv so a bench could reach it): SEED 7 FELL OFF THE GATE --
+# clk_dec 74.16 @100C / 77.20 @-40C, an 18 MHz drop for a change that moved 41
+# ALUTs and took the DESIGN DOWN 42 ALMs (41,233 -> 41,191, still 98%).
+# Swept: SEED 5 -> 78.92/82.77 (also FAIL), SEED 9 -> 90.72 @100C / 88.04 @-40C
+# PASS, pinned. Build DVD_cddaphys_20260910_2242.rbf.
+# ★★ THIS IS THE ENTRY TO POINT AT WHEN SOMEONE ASKS WHETHER A TIMING DROP
+# MEANS THEY BROKE SOMETHING. Two seeds failed and one passed on ONE netlist
+# whose logic is within 42 ALMs of a netlist that closed at 92.30 -- so at 98%
+# ALM the seed is worth more than 18 MHz, which is larger than any logic delta
+# on this ledger. A marginal fit here is a FIT result, not a design verdict:
+# sweep before reading it as a regression, and do not "optimise" logic to chase
+# a number the next roll of the dice would have given you.
+# ⚠ The corners INVERTED on the two failing seeds (hot faster than cold on
+# SEED 5, 78.92 vs 82.77) -- normal for a congested fit where the critical path
+# moves between rolls, and not a sign of anything else. fmax_check gates BOTH
+# corners for exactly this reason.
+
 set_global_assignment -name SEED 9
