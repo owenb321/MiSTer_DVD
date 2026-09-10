@@ -1121,6 +1121,31 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   bit_allocation -1,453, mantissa_dequant -484, bit_readers -366, dvd_iso_reader
 #   -251, dvd_vm -150, imdct -80, pgc_palette -55/-359 regs, pts_assoc -732 regs,
 #   dvd_telem -264 regs, alsa gone. Record: docs/logic_reclaim.md.
+# 2026-09-10 (feature/wav-audio, dev-wavaudio -- WAV/CD-DA raw-PCM playback,
+# REBASED onto the v0.5.0 tree: the reader's S_WAV_HDR chunk walk + keep filter,
+# lpcm_unpack's le/afull, the dvd_audio_decode cdda_* port, lin_rate's
+# fixed-rate arm, seek_bar/transport_hud force_show, and a CONF_STR
+# extension-list change): SEED 7 held FIRST roll -- clk_dec 87.61 @100C /
+# 88.42 @-40C (gate 86.0, PASS both corners) at 98% ALM (40,978),
+# RAM 498/553 (90%), DSP 94/112 (84%).
+# Build DVD_wavaudio_20260910_1900.rbf (4420 KB).
+# ⚠⚠ 98% ALM is +2,176 over the v0.5.0 release fit (93%, 38,802) and is the
+# CONGESTION REGIME this file and CLAUDE.md both warn about -- the design sat
+# here before the mem_shim reclaim and the two branches either side of that
+# each needed fit-rescue work. The margin (1.6 MHz) is the thinnest on this
+# ledger bar PR #75's 87.40. It PASSES, and the release entry above asked the
+# next branch near the gate to sweep; the user's call (2026-09-10) was to test
+# this fit on hardware first and sweep only if it shows fit-lottery symptoms.
+# ⚠ MEASURED NEGATIVE, so nobody re-tries it as an area fix: rewriting the
+# per-byte CD-DA position from `{blk,11'd0} + {21'd0,off}` to the concatenation
+# it actually is changed NOTHING -- a byte-identical re-fit, same 40,978 ALMs
+# and the same 87.61/88.42. Quartus already constant-propagates the zero low
+# bits. The extra area is the feature plus congestion-driven duplication, not a
+# stray adder on a hot path.
+# ⚠ The +2,176 was NOT separated into "my logic" vs "fitter duplication" -- that
+# needs a baseline fit of main, which was not run. Do not quote it as a logic
+# cost.
+
 # 2026-09-12 (fix/hdmi-audio-teardown, dev-hdmiteardown -- aud_route.bs_session +
 # the CMD_AF format word; the HDMI non-PCM flag was inherited by the next core):
 # SEED 7 held FIRST roll -- clk_dec 92.77 @100C / 88.9 @-40C (gate 86.0, PASS both
