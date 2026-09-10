@@ -296,7 +296,13 @@ static const char *find_source(void)
 {
 	// A physical disc first: dvd_phys owns the drive and its node is what the
 	// tool should read (every sector it touches is unscrambled).
-	if (dvd_css_active())
+	//
+	// ⚠ ...unless it is an AUDIO CD. The bundle tool walks 2048-byte ISO9660
+	// sectors looking for IFO/NAV structures, and a music disc has none — it
+	// would produce a confidently BROKEN bundle instead of the honest "nothing
+	// to bundle" a reporter can act on. A CD-DA fault is a video/audio-path
+	// report, not a navigation one, so there is nothing here worth collecting.
+	if (dvd_css_active() && !dvd_css_is_cdda())
 	{
 		const char *dev = dvd_phys_device();
 		if (dev && *dev) return dev;

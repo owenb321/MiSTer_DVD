@@ -275,31 +275,42 @@ void dvd_phys_tick(void)
 		return;
 	}
 
-	// DVD-Video first, VCD/SVCD second -- both probes are cheap READ(10)s of the
-	// ISO9660 root, and a disc is at most one of the two. Leave audio CDs / data
-	// discs alone (they are not ours to play).
+	// DVD-Video first, VCD/SVCD second, an audio CD last. The first two are cheap
+	// READ(10)s of the ISO9660 root and a disc is at most one of them.
+	// ⚠ The audio-CD probe goes LAST on purpose, for two reasons. It answers "the
+	// first track is not a DATA track", which an ENHANCED CD (a data track plus
+	// audio tracks) also satisfies -- so probing it before the VCD walk would claim
+	// a Video CD that happens to carry bonus audio tracks. And it is the expensive
+	// one: CDROMREADTOCENTRY can block for seconds while the drive spins up, which
+	// is why it stays behind the once-per-insertion latch with the others.
 	int is_dvd_video = dvd_video_probe(fd);
 	int is_vcd = !is_dvd_video && dvd_vcd_probe(fd);
+	int is_audio_cd = !is_dvd_video && !is_vcd && cd_audio_probe(fd);
 	close(fd);
-	if (!is_dvd_video && !is_vcd)
+	if (!is_dvd_video && !is_vcd && !is_audio_cd)
 	{
 		// Say so once per insertion. Without this, "I put a disc in and nothing
 		// happened" has no record at all, and the two explanations -- we rejected
 		// it, or we never saw it -- look identical from the outside.
 		probed_unrecognized = 1;
-		phys_log("DVD_PHYS: disc on %s is not DVD-Video or VCD/SVCD "
+		phys_log("DVD_PHYS: disc on %s is not DVD-Video, VCD/SVCD or an audio CD "
 		         "-- not mounting", dev);
 		return;
 	}
 
-	const char *sentinel = is_dvd_video ? DVD_PHYS_SENTINEL : DVD_PHYS_VCD_SENTINEL;
+	// ⚠ An audio CD mounts through the DVD-VIDEO sentinel, not one of its own:
+	// dvd_css_open() tries the CD source first and routes the six source calls to
+	// it (see the two-source note in dvd_css.cpp). So DVD_PHYS_SENTINEL means "the
+	// CSS / CD-DA door", and which of the two is behind it depends on what is in
+	// the drive.
+	const char *sentinel = is_vcd ? DVD_PHYS_VCD_SENTINEL : DVD_PHYS_SENTINEL;
 	phys_log("DVD_PHYS: %s on %s -- mounting",
-	         is_dvd_video ? "DVD-Video" : "VCD/SVCD", dev);
+	         is_dvd_video ? "DVD-Video" : is_vcd ? "VCD/SVCD" : "audio CD", dev);
 	// The sentinel routes user_io_file_mount() to the matching drive-backed
 	// source (SD_TYPE_DVDCSS / SD_TYPE_VCD in user_io.cpp). dvd_css_open()/
 	// dvd_vcd_open() inside it re-scan for the drive; a CSS failure (no
 	// libdvdcss on an encrypted disc) surfaces the on-screen install prompt --
-	// VCD/SVCD has no such handshake to fail.
+	// VCD/SVCD and CD-DA have no such handshake to fail.
 	if (user_io_file_mount(sentinel, 0))
 	{
 		mounted = 1;

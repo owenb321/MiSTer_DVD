@@ -4,6 +4,8 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <scsi/sg.h>
+#include <linux/cdrom.h>
+#include <limits.h>
 
 #include "dvd_detect.h"
 
@@ -54,6 +56,25 @@ int dvd_video_probe(int fd)
 			if ((flags & 0x02) && nlen == 8 && !memcmp(sec + off + 33, "VIDEO_TS", 8)) return 1;
 			off += rlen;
 		}
+	}
+	return 0;
+}
+
+// See dvd_detect.h. TOC only: no disc data is read, so this is safe to run on a
+// disc we may turn out not to want.
+int cd_audio_probe(int fd)
+{
+	struct cdrom_tochdr hdr;
+	if (ioctl(fd, CDROMREADTOCHDR, &hdr) < 0) return 0;
+
+	for (int t = hdr.cdth_trk0; t <= hdr.cdth_trk1; t++)
+	{
+		struct cdrom_tocentry e;
+		memset(&e, 0, sizeof(e));
+		e.cdte_track  = t;
+		e.cdte_format = CDROM_LBA;
+		if (ioctl(fd, CDROMREADTOCENTRY, &e) < 0) return 0;
+		if (!(e.cdte_ctrl & CDROM_DATA_TRACK)) return 1;   // an audio track
 	}
 	return 0;
 }

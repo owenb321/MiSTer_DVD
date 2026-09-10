@@ -48,6 +48,9 @@ static int   dvd_launch_ui_busy(void)                  { return 0; }
 // Declared by the real dvd_css.h / dvd_phys.h the module includes, so these are
 // DEFINITIONS of those, not shadowing stubs -- the linker takes them.
 int         dvd_css_active(void)                       { return 0; }
+// A music disc has no IFO/NAV to bundle, so find_source() asks. 0 = the open
+// source is a DVD, which is what every arm of this test is about.
+int         dvd_css_is_cdda(void)                      { return 0; }
 const char *dvd_phys_device(void)                      { return 0; }
 
 #define DVD_REPORT_TEST 1
