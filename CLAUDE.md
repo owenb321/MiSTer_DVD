@@ -1993,8 +1993,18 @@ worse maintenance burden than targeted in-place edits. So:
   pre-change baseline, plus each unit suite. Detail: `docs/ac3_decoder_architecture.md`
   §4.12, `DVD.qsf` ledger. Plan for the remaining branches (nav/VM/glue, reader,
   block-RAM packing) is in the audit record there.
-- 🔧 **WAV / CD-DA RAW-PCM PLAYBACK (2026-09-10, branch `feature/wav-audio`) —
-  sim-complete, ⏳ HW-confirm pending.** `.wav` files (16-bit stereo PCM,
+- ✅ **WAV / CD-DA RAW-PCM PLAYBACK (2026-09-10, branch `feature/wav-audio`) —
+  ✅ HW-CONFIRMED 2026-09-10** (build `DVD_wavaudio_20260910_1900.rbf`, SEED 7,
+  clk_dec 87.61/88.42 at 98% ALM; all seven gates green over the HIL harness).
+  ★ **The two gates worth knowing about:** the 48 kHz rate constant was measured
+  by READING THE TOTAL DURATION of a file of known length — 180.0 s reads
+  `0:02:59`, where the parked branch's reused 44.1 kHz constant would read
+  `0:03:16`; and the Passthru gate measured **−15.3 dBFS flat**, indistinguishable
+  from Decode PCM, **with `Audio=Off` proven to read −999.0 dBFS on the same path**
+  so the control arm could actually fail. ⚠ The whole-capture RMS was MISLEADING
+  there (−36.9 dBFS with the peak unchanged, because the setting landed partway
+  through the capture) — a 0.25 s envelope answers cleanly where an average over a
+  transition does not. `.wav` files (16-bit stereo PCM,
   44.1/48 kHz) play through a new raw-PCM mode that bypasses `ps_demux` and every
   codec: `dvd_iso_reader` chunk-walks the RIFF header (`S_WAV_HDR`) and streams the
   data payload straight into `lpcm_unpack` via a new `cdda_*` port on

@@ -4,7 +4,8 @@ Engineering note for `feature/wav-audio` (branch 1 of the music-CD work). The
 user-facing text lives in `site/content/getting-started/loading.md` and
 `site/content/audio/formats.md` — this file is the *why*.
 
-**Status: 🔧 sim-complete, ⏳ HW-confirm pending.** Branch 2
+**Status: ✅ HW-CONFIRMED 2026-09-10** (build
+`DVD_wavaudio_20260910_1900.rbf`, SEED 7, clk_dec 87.61/88.42 at 98% ALM).** Branch 2
 (`feature/cdda-physical`, the physical audio-CD source in `MiSTer_DVDcss`) is
 NOT started; this branch deliberately ships the whole core-side path first so
 that branch adds only a Main-side sector source on top of a HW-proven fabric.
@@ -221,18 +222,33 @@ set a byte and *then* waited for the edge, racing the DUT's own `always_ff` at
 that timestep — bytes silently duplicated. Drive after the edge (`@(posedge);
 #1;`).
 
-## HW gate (branch 1)
+## HW gate (branch 1) — ✅ RUN 2026-09-10, all green
 
-1. 44.1 kHz and 48 kHz `.wav` play clean; pitch matches a PC playing the same file.
-2. Pause/resume; D-pad time jumps (**now exact at 48 kHz too**); logo bounces with
-   the HUD time advancing and the progress bar filling, both surviving seeks.
-3. A reject fixture shows `UNSUPPORTED IMAGE` immediately.
-4. **`Audio Out = Passthru` with a `.wav`** — the PR #79 interaction. Expect
-   ordinary PCM on both legs, not silence. This is the one gate that is new since
-   the branch was parked and it is the one most likely to fail.
-5. DVD + VCD regression pass on the same build, including an AC-3 disc in
-   Passthru (proving `pass_mode` is only suppressed for CD-DA) and an LPCM/MP2
-   track in Passthru (proving PR #79 still works alongside this).
+Driven from here over the HIL harness rather than handed to the maintainer, with
+purpose-built material (`tools/wav_testgen.py`): a chromatic ladder stepping one
+semitone per 10 s, left and right an octave apart. Both choices are load-bearing
+below.
+
+| # | Gate | Result |
+|---|---|---|
+| 1 | 44.1 kHz plays; screen correct | ✅ logo + status line + progress bar all render; HUD reads `0:00:12/0:03:00` on a file that is exactly 180.0 s |
+| 2 | 48 kHz rate constant | ✅ total reads **0:02:59** on the same 180.0 s file. **This is the sharp one:** with the parked branch's 861 it would read **0:03:16** |
+| 3 | D-pad 10 s jump | ✅ at both rates (+10 s over the natural elapse, 44.1 kHz and 48 kHz) |
+| 4 | Pause | ✅ icon flips and the clock FREEZES (`0:00:25` across 4 s) |
+| 5 | Unsupported shape | ✅ mono → `UNSUPPORTED IMAGE` immediately, and NO status line (cdda_mode never engaged) |
+| 6 | **`Audio Out = Passthru`** | ✅ **−15.3 dBFS flat across 20 windows**, indistinguishable from Decode PCM (−16.0) |
+| 7 | DVD regression, same build | ✅ MEN_IN_BLACK plays clean video, and the HUD is correctly HIDDEN — proving `force_show` does not leak out of CD-DA mode |
+
+★ **Gate 6's control arm is what makes it evidence.** "Audio is present" proves
+nothing unless the instrument can report its absence, so `Audio=Off` was measured
+on the same path: **−999.0 dBFS** (digital silence) across every window after the
+capture buffer drained. ⚠ And the AGGREGATE was misleading — whole-capture RMS
+read −36.9 dBFS with the peak unchanged, because the setting landed partway
+through. The 0.25 s **envelope** is the instrument that answers cleanly; an
+average over a transition does not.
+
+⏳ Not covered by this round: VCD regression (sim-green only), and the
+seek-preview clock during a held FF/REW gesture.
 
 ## Next (branch 2)
 

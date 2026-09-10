@@ -498,8 +498,10 @@ Standalone DVD players played audio CDs; ours ignores them (`dvd_phys.cpp` skips
 any non-DVD-Video disc). The work splits into a core half and a Main half, and
 the split is deliberate:
 
-- **🔧 Branch 1 `feature/wav-audio` — the CORE half, sim-complete, ⏳ HW-confirm
-  pending.** `.wav` playback (16-bit stereo, 44.1/48 kHz) through a new raw-PCM
+- **✅ Branch 1 `feature/wav-audio` — the CORE half, HW-CONFIRMED 2026-09-10**
+  (build `DVD_wavaudio_20260910_1900.rbf`; all seven gates green over the HIL
+  harness, incl. the Passthru one with a validated silence control — see
+  `docs/cdda.md`).** `.wav` playback (16-bit stereo, 44.1/48 kHz) through a new raw-PCM
   mode in `dvd_iso_reader` + `lpcm_unpack`, with the idle logo, a forced-on HUD
   status line and the seek bar held up as a progress bar. Ships as a real feature
   AND is the whole fabric path CD-DA needs. Suite `bench/dvd/run_wav.sh`, golden
