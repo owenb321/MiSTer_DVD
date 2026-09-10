@@ -48,7 +48,8 @@ and MP2 and LPCM decode in the core; **DTS is passthrough-only**; AC-3 1+1 dual 
 deliberately refused; the MPEG-2 multichannel MP2 extension is unverified.
 
 **WAV files** play through the same PCM path (16-bit stereo, 44.1/48 kHz); unsupported
-shapes are refused rather than played as noise.
+shapes are refused rather than played as noise, and they play as PCM on both outputs
+whichever way `Audio Out` is set.
 
 Two limits worth knowing: **LPCM is 48 kHz stereo**, and 20/24-bit tracks play but are
 truncated to 16 bits, so there is real fidelity loss on high-bit-depth music discs. 96 kHz

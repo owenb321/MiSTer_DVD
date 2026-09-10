@@ -500,10 +500,19 @@ the split is deliberate:
 
 - **🔧 Branch 1 `feature/wav-audio` — the CORE half, sim-complete, ⏳ HW-confirm
   pending.** `.wav` playback (16-bit stereo, 44.1/48 kHz) through a new raw-PCM
-  mode in `dvd_iso_reader` + `lpcm_unpack`, with the idle logo and a forced-on
-  HUD status line. Ships as a real feature AND is the whole fabric path CD-DA
-  needs. Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`.
-  Design: **`docs/cdda.md`**.
+  mode in `dvd_iso_reader` + `lpcm_unpack`, with the idle logo, a forced-on HUD
+  status line and the seek bar held up as a progress bar. Ships as a real feature
+  AND is the whole fabric path CD-DA needs. Suite `bench/dvd/run_wav.sh`, golden
+  `tools/wav_ref.py`. Design: **`docs/cdda.md`**.
+  ★ **Rebased onto post-v0.5.0 `main` 2026-09-10, and the rebase DELETED code:**
+  `main` had grown `dvd/lin_rate.sv` (one time model for every linear source), so
+  the branch's own `dvd/cdda_time.sv` was retired and CD-DA became a second
+  fixed-rate arm of that module's exact bypass — which also made the 48 kHz D-pad
+  step exact and brought the seek-preview clock along for free. ⚠ **And the
+  Passthru interaction inverted with PR #79**: `pcm_mute` now keys on
+  `rt_pcm_session`, which `aud_route` latches from RING frames — and CD-DA never
+  enters the ring, so a `.wav` in Passthru would be SILENT without the
+  `pass_mode` force-off. That is the newest HW gate.
 - **❌ Branch 2 `feature/cdda-physical` — the MAIN half, not started.** TOC +
   SG_IO `READ CD` (0xBE) in a new `main/support/dvd/dvd_cdda.cpp`, repacked
   2352→2048 behind a **synthetic 44-byte WAV header** so the disc presents to
