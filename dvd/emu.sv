@@ -414,7 +414,15 @@ assign SPDIF_PASS_EN = pass_mode;
 // instant in fabric but the chip stays in non-PCM mode until Main's next poll, so
 // that window has to be digital silence rather than decoded audio. Hence
 // hdmi_bs_ack joins the mute term above instead of pass_mode alone.
-wire pcm_mute = pass_mode | css_scrambled | hdmi_bs_ack;
+// aud_route's grants + content class (driven by the instance further down; declared
+// here because pcm_mute and HDMI_BS_EN both need the class).
+wire rt_dec_owns, rt_wrap_owns, rt_pcm_session;
+
+// ⚠ pass_mode alone no longer mutes: in Passthru with LPCM/MP2 content the sink
+// is in PCM mode and AUDIO_L/R is how HDMI carries it. hdmi_bs_ack stays in the
+// term unconditionally, so the core still cannot present PCM while the ADV7513
+// has been told to expect a bitstream -- the ack, not pass_mode, owns the format.
+wire pcm_mute = (pass_mode & ~rt_pcm_session) | css_scrambled | hdmi_bs_ack;
 
 // Post-reset hold-off. rst_audio_n pulses on every audio-track switch and
 // aud_flush, and it re-phases the subframe pacing (MEASURED: the first interval
@@ -1018,7 +1026,11 @@ dvd_telem dvd_telem_inst (
     .play_err   (dbg_aud_play_err),      // clk_sys: audio position vs anchor (word 12)
     .av_drift   (av_drift[19:4]),        // clk_sys: dispatched audio PTS - STC (word 13)
     .sched_flags({8'd0, core_sched_flags}),   // clk_dec: what the scheduler saw (word 14)
-    .sched_dur  (core_sched_dur)              // clk_dec: the duration it applied (word 15)
+    .sched_dur  (core_sched_dur),             // clk_dec: the duration it applied (word 15)
+    // CMD_AF: what the audio wire is really carrying, so Main can put the ADV7513
+    // into PCM mode for an LPCM/MP2 track in Passthru.
+    .af_passthru    (pass_mode),
+    .af_pcm_session (rt_pcm_session)
 );
 
 
@@ -3181,15 +3193,36 @@ wire        aud_frame_valid, aud_frame_pop;
 wire [15:0] aud_frame_len;
 wire  [1:0] aud_frame_type;
 
-// Ring read-side arbitration: in Decode mode the in-fabric decoder drains the
-// ring; in Passthru mode the IEC 61937 formatter does. Only the selected
-// consumer's ready/pop reach the ring (aud_frame_pop still re-arms the demux
-// backpressure watchdog either way — the STD model holds in both modes).
+// Ring read-side arbitration. In Decode mode the in-fabric decoder drains the
+// ring. In Passthru the CODEC decides per frame: AC-3/DTS to the IEC 61937
+// formatter, LPCM/MP2 to the decoder so they leave as ordinary PCM instead of the
+// silence they used to be. dvd/aud_route.sv grants one consumer per frame and
+// holds the grant until the payload has actually left the ring; each consumer's
+// frame_valid is gated by its grant so neither can see a frame it does not own.
+// (aud_frame_pop still re-arms the demux backpressure watchdog either way — the
+// STD model holds in both modes.)
 wire        dec_ring_ready, dec_frame_pop;   // dvd_audio_decode's ring handshake
 wire        pass_ring_ready, pass_frame_pop; // iec61937_wrap's ring handshake
 wire        pass_hold_active;                // wrapper A/V-sync hold level (watchdog feed)
-assign aud_ring_ready = pass_mode ? pass_ring_ready : dec_ring_ready;
-assign aud_frame_pop  = pass_mode ? pass_frame_pop  : dec_frame_pop;
+
+aud_route aud_route_i (
+    .clk         (clk_sys),
+    .rst_n       (aud_rst_n),
+    .split_en    (pass_mode),
+    .frame_valid (aud_frame_valid),
+    .frame_type  (aud_frame_type),
+    .frame_len   (aud_frame_len),
+    .ring_ready  (aud_ring_ready),
+    .dec_owns    (rt_dec_owns),
+    .wrap_owns   (rt_wrap_owns),
+    .pcm_session (rt_pcm_session)
+);
+
+wire dec_frame_valid  = aud_frame_valid & rt_dec_owns;
+wire pass_frame_valid = aud_frame_valid & rt_wrap_owns;
+
+assign aud_ring_ready = rt_wrap_owns ? pass_ring_ready : dec_ring_ready;
+assign aud_frame_pop  = rt_wrap_owns ? pass_frame_pop  : dec_frame_pop;
 
 // BYTE_DEPTH raised 8192->32768 (FRAME_DEPTH 64->128) for more elastic buffering
 // of compressed frames ahead of the in-fabric decoder (rides out bursty demux
@@ -3284,6 +3317,9 @@ always @(posedge clk_sys) begin
     // decode path never drains and never pops.
     else if (aud_frame_pop || (pass_mode && pass_hold_active)
                            || (aud_dec_en && dbg_aud_play_pts_valid && ~dbg_aud_draining))
+    // ⚠ the decode-side term above no longer excludes Passthru, because in
+    // Passthru the decoder is a real consumer for LPCM/MP2 and its deliberate
+    // holds must feed this watchdog exactly as the wrapper's do.
                              aud_bp_wd <= 25'h1FFFFFF;
     // Freeze the drain watchdog while paused: the audio decoder is held (no
     // frame_pop), so without this the watchdog would expire after ~1.24 s,
@@ -3301,7 +3337,10 @@ assign ps_aud_ready = ~(aud_ring_almost_full && aud_bp_armed);
 // are dropped (no fabric DTS decoder yet; future: IEC 61937 bitstream to the
 // Digital I/O board). Gated by "O5,Audio" (default On). See docs/fabric_audio.md.
 // =========================================================================
-wire        aud_dec_en = ~status[5] & ~pass_mode;   // O5 On (default) AND not passthrough
+// O5 On (default). The ~pass_mode term is GONE: in Passthru the decoder handles
+// the LPCM/MP2 frames aud_route routes to it. Costs no fabric -- the module was
+// always instantiated and never reset by the mode; `enable` only parked its FSM.
+wire        aud_dec_en = ~status[5];
 wire        ac3_synced_dbg, ac3_err_dbg;
 wire [15:0] dbg_ac3_resets, dbg_ac3_err_resets;
 
@@ -3313,7 +3352,7 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .ring_byte   (aud_ring_byte),
     .ring_valid  (aud_ring_valid),
     .ring_ready  (dec_ring_ready),
-    .frame_valid (aud_frame_valid),
+    .frame_valid (dec_frame_valid),   // gated by the aud_route grant
     .frame_len   (aud_frame_len),
     .frame_type  (aud_frame_type),
     .lpcm_quant  (ps_aud_lpcm_quant),   // LPCM word length -> lpcm_unpack (20/24-bit depack)
@@ -3403,12 +3442,17 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .clk_sys      (clk_sys),
     .rst_sys_n    (aud_rst_n),
     .enable       (pass_mode),
+    // LPCM/MP2 in Passthru: the decoder's stereo output, re-sampled inside the
+    // wrapper at its own 48 kHz frame rate and sent with the non-PCM flag clear.
+    .pcm_mode     (pass_mode & rt_pcm_session),
+    .pcm_l_i      (dec_audio_l),
+    .pcm_r_i      (dec_audio_r),
     .byte_swap    (pass_bswap),
     .mute_i       (css_scrambled),   // CSS source: drain frames, emit PCM silence
     .ring_byte    (aud_ring_byte),
     .ring_valid   (aud_ring_valid),
     .ring_ready   (pass_ring_ready),
-    .frame_valid  (aud_frame_valid),
+    .frame_valid  (pass_frame_valid),  // gated by the aud_route grant
     .frame_len    (aud_frame_len),
     .frame_type   (aud_frame_type),
     .frame_samples(16'd0),

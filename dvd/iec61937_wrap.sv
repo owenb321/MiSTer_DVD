@@ -40,6 +40,19 @@ module iec61937_wrap #(
     input  wire        clk_sys,
     input  wire        rst_sys_n,
     input  wire        enable,        // passthrough active (else producer idles)
+    // PCM MODE. LPCM and MP2 cannot be wrapped in IEC 61937, so in Passthru they
+    // are decoded by dvd_audio_decode and sent as ordinary linear PCM instead of
+    // silence. `pcm_mode` selects that; the samples arrive on pcm_l_i/pcm_r_i in
+    // clk_sys and are re-sampled here at the encoder's own 48 kHz frame rate.
+    // ⚠ SAMPLE-AND-HOLD, NOT A FIFO, and that is the load-bearing choice: the
+    // decoder's NCO is a truncated fraction of 27 MHz while this side is exactly
+    // 48 kHz off clk_audio, so a rate-matched queue would drift and eventually
+    // over- or underflow -- and MP2 legitimately runs at 44.1 or 32 kHz, which no
+    // amount of queueing reconciles. Zero-order hold is rate-agnostic and is
+    // exactly what the framework already does with AUDIO_L/R (sys/audio_out.sv).
+    input  wire        pcm_mode,
+    input  wire [15:0] pcm_l_i,
+    input  wire [15:0] pcm_r_i,
     input  wire        byte_swap,     // 0: first byte in word[15:8]; 1: swapped
     input  wire        mute_i,        // CSS-scrambled source: consume frames but
                                       // emit PCM silence (scrambled AC-3/DTS sent
@@ -445,10 +458,26 @@ module iec61937_wrap #(
     wire        sample_req;
     reg  [32:0] cur_pair;
 
-    assign fifo_rd_en = sample_req && !fifo_empty;
+    // clk_sys -> clk_audio for the decoded samples. Two-flop accept-when-stable,
+    // the same idiom sys/audio_out.sv:166-173 uses for this exact crossing: the
+    // value is held for a whole sample period, so a pair that disagrees between
+    // two consecutive reads is mid-update and is simply not taken yet.
+    reg [31:0] pcm_s1, pcm_s2, pcm_hold;
+    always @(posedge clk_audio) begin
+        pcm_s1 <= {pcm_r_i, pcm_l_i};
+        pcm_s2 <= pcm_s1;
+        if (pcm_s2 == pcm_s1) pcm_hold <= pcm_s2;
+    end
+
+    // In PCM mode the burst FSM and its FIFO are bypassed entirely: there are no
+    // bursts to assemble, just a sample per 48 kHz frame with the non-PCM flag
+    // clear. The FIFO keeps running underneath so leaving PCM mode resumes mid
+    // stream rather than from a stale queue.
+    assign fifo_rd_en = sample_req && !fifo_empty && !pcm_mode;
     always @(posedge clk_audio or negedge rst_audio_n)
         if (!rst_audio_n) cur_pair <= 33'd0;       // underflow -> PCM zeros (flag 0)
-        else if (sample_req) cur_pair <= fifo_empty ? 33'd0 : fifo_rd_data;
+        else if (sample_req) cur_pair <= pcm_mode  ? {1'b0, pcm_hold}
+                                       : fifo_empty ? 33'd0 : fifo_rd_data;
 
     // HDMI bitstream tap: pure aliases, no added logic. `sample_req` is the same
     // strobe that reloads cur_pair, so bs_stb_o marks the frame boundary of the
