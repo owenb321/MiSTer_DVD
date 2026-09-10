@@ -3,6 +3,12 @@
 // ============================================================================
 // Two duties on one renderer:
 //
+// 3. PROGRESS BAR (force_show): held up for a whole session by an audio-only
+//    source (WAV / CD-DA), where there is no picture and this bar plus the
+//    status line ARE the playback screen. Costs nothing extra -- the position
+//    model below already resolves a linear file, because the reader publishes
+//    the whole file as the title span and lin_blk as the playhead.
+//
 // 1. SCRUB FEEDBACK (core): the visual for the Phase-8a SEEK-ON-RELEASE scrub
 //    (PR #101) -- while D-pad Left/Right is held the video is just paused, so
 //    the only indication of where the release lands is this bar. scrub_ctrl
@@ -74,6 +80,12 @@ module seek_bar #(
     input  wire [31:0] first_rbn,           // title span (reader)
     input  wire [31:0] last_rbn,
 
+    // Level: keep the bar up for the whole session. Set for WAV/CD-DA, where
+    // there is no picture and the bar IS the playback screen -- the same role
+    // transport_hud's force_show plays for the status line. Still yields to
+    // menu_active below, so it cannot fight the HLI layer.
+    input  wire        force_show,
+
     // progress-popup state (stretch)
     // Visibility-only here (this module has no pause icon), so it is named for what it
     // MEANS rather than for the register it usually comes from: a pause the user started
@@ -141,7 +153,7 @@ module seek_bar #(
         else if (show_evt) pop_tmr <= POP_TICKS;
         else if (pop_tmr != 27'd0) pop_tmr <= pop_tmr - 27'd1;
     end
-    wire vis = (bar_active | pause_vis | (pop_tmr != 27'd0)) && !menu_active;
+    wire vis = (force_show | bar_active | pause_vis | (pop_tmr != 27'd0)) && !menu_active;
 
     // ---- shadow maps + tick columns (stretch) -------------------------------
     reg [7:0]  pmap_ram  [0:127];           // program -> entry cell (1-based)

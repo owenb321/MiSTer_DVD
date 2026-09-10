@@ -6372,6 +6372,11 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     // line cannot disagree about one pause (seek_bar has no display_edge of its own)
     .pause_vis  (hud_pause_show_w),
     .show_evt   (hud_user_evt),
+    // WAV/CD-DA: no picture, so the bar is the playback screen and stays up
+    // for the session. The position model needs nothing extra -- the reader
+    // publishes the whole file as the title span in linear mode, and cur_rbn
+    // is already lin_blk there.
+    .force_show (cdda_mode_w),
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),

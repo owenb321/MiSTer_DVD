@@ -55,6 +55,11 @@ iverilog -g2012 -o bench/dvd/lin_rate_sim \
     dvd/lin_rate.sv dvd/secs_bcd.sv bench/dvd/lin_rate_tb.sv
 vvp bench/dvd/lin_rate_sim | tail -2 || rc=1
 
+echo "== 3c-bar. progress bar (seek_bar force_show) =="
+iverilog -g2012 -o bench/dvd/seek_bar_sim \
+    dvd/seek_bar.sv bench/dvd/seek_bar_tb.sv
+vvp bench/dvd/seek_bar_sim | tail -2 || rc=1
+
 echo "== 3c. regression: transport HUD (force_show port) =="
 iverilog -g2012 -o bench/dvd/transport_hud_sim \
     dvd/transport_hud.sv bench/dvd/transport_hud_tb.sv 2>/dev/null

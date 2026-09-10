@@ -68,6 +68,7 @@ module seek_bar_tb;
     // thing that differs between them -- the drawn coordinates are identical.
     reg  [11:0] act_w_tb;
     initial      act_w_tb = 12'd720;
+    reg force_show = 1'b0;   // WAV/CD-DA: hold the bar up
     seek_bar #(.POP_TICKS(27'd2000)) dut (
         .clk(clk), .rst_n(rst_n),
         .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0), .act_h_i(act_h_tb), .act_w_i(act_w_tb),
@@ -75,6 +76,7 @@ module seek_bar_tb;
         .base_rbn(base_rbn), .tgt_rbn(tgt_rbn),
         .first_rbn(first_rbn), .last_rbn(last_rbn),
         .pause_vis(pause_q), .show_evt(show_evt), .menu_active(menu_active),
+        .force_show(force_show),
         .cur_rbn(cur_rbn),
         .pgc_loaded(pgc_loaded), .nr_pgm(nr_pgm),
         .pm_we(pm_we), .pm_waddr(pm_waddr), .pm_wdata(pm_wdata),
@@ -296,6 +298,37 @@ module seek_bar_tb;
         begin errors = errors + 1; $display("  FAIL T9e scrub cursor lost to the chapter preview"); end
         else $display("  ok  T9e scrub cursor wins over the preview");
         bar_active = 0; chap_prev = 0;
+
+        // ---- T10: force_show = the audio-only progress bar --------------
+        // WAV/CD-DA has no picture, so the bar must stay up with no gesture,
+        // no pause and no event -- and must still yield to a disc menu.
+        bar_active = 0; pause_q = 0; chap_prev = 0;
+        first_rbn = 32'd0; last_rbn = 32'd1000; cur_rbn = 32'd500;
+        tgt_rbn = 32'd500;                 // pin the cursor too, so the check
+                                           // below asserts a value rather than
+                                           // whatever T9 happened to leave
+        repeat (4000) @(posedge clk);      // let any popup timer lapse
+        settle;
+        render_line(bar_y0 + 12'd3);
+        if (on_l[128] || on_l[384])
+        begin errors = errors + 1; $display("  FAIL T10a bar visible with nothing asserted"); end
+        else $display("  ok  T10a idle: bar hidden");
+
+        force_show = 1; settle;
+        render_line(bar_y0 + 12'd3);
+        if (!on_l[128])
+        begin errors = errors + 1; $display("  FAIL T10b force_show did not raise the bar"); end
+        else $display("  ok  T10b force_show holds the bar up with no gesture");
+
+        // ...and the fill tracks the playhead: 500/1000 of the 512-px bar.
+        check_px("T10c half fill", 10'd256, 10'd256);
+
+        menu_active = 1; settle;
+        render_line(bar_y0 + 12'd3);
+        if (on_l[128])
+        begin errors = errors + 1; $display("  FAIL T10d force_show overrode menu_active"); end
+        else $display("  ok  T10d a disc menu still wins");
+        menu_active = 0; force_show = 0;
 
         // ---- T11: an UNSORTED tick list must still draw every notch -------
         // ★ tick_col[] is built in PROGRAM order but holds PHYSICAL columns, so
