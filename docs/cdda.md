@@ -127,32 +127,72 @@ FSM. Instead `cdda_mode` takes `lpcm_unpack` over wholesale:
 `cdda_mode=0` is bit-identical to before (proven by the unchanged
 `lpcm_unpack_tb` / `dvd_audio_decode_tb` / VCD suite). The mode also forces
 `sched_en` low (no PTS to schedule against — the drain gate would only ever
-release via its ~2.5 s fallback timer) and forces `pass_mode` **off**, because
-Passthru would hand the audio ring's read side to `iec61937_wrap` and there is
-no bitstream to wrap.
+release via its ~2.5 s fallback timer) and forces `pass_mode` **off**.
+
+⚠⚠ **That last one now has the OPPOSITE reasoning from the one it was written
+with, and it matters.** When this branch was parked, Passthru meant bitstream-only
+and forcing it off simply avoided handing the ring to `iec61937_wrap`. Since
+PR #79 Passthru is per-frame: `aud_route` classifies each RING frame and sends
+LPCM/MP2 to the decoder as ordinary PCM. CD-DA/WAV never enters the ring at all,
+so no frame ever arrives to classify — `rt_pcm_session` would sit at its reset
+value 0 for the entire session and
+`pcm_mute = (pass_mode & ~rt_pcm_session) | …` would **mute a `.wav` outright in
+Passthru**. Forcing `pass_mode` off is how a ring-bypassing source reaches the
+same answer PR #79 gives an LPCM track: `af_passthru` then tells Main to put the
+ADV7513 in PCM mode, and `SPDIF_PASS_EN`/`HDMI_BS_EN` drop so both legs carry
+plain PCM. **HW gate: play a `.wav` with `Audio Out = Passthru`.**
 
 Backpressure composes with no new mechanism: `lpcm_unpack.afull` → `reader_busy`
 → cache fills → `cache_has_room` false → `sd_rd` stops. In this mode
 `reader_busy` is *only* that tap; the video-side terms reference a pipeline the
 mode never feeds.
 
-## Time readout (`dvd/cdda_time.sv`)
+## Time readout — `dvd/lin_rate.sv`, not a module of our own
 
-Linear audio has no DSI/PGC clock — the known "HUD time zero in linear modes"
-gap. Time comes from **stream position**, `seconds = (blocks × K) >> 20`, which
-is seek-proof and monotonic; a sample counter would desync on every seek.
-Worst-case error is ≤1 s over a 700k-block sweep and is bounded by the shift
-truncation, not the constant, so a finer K buys nothing. Output is dvd_time BCD
-so it drops onto the existing HUD ports.
+★ **The branch shipped its own `dvd/cdda_time.sv` and the rebase DELETED it.**
+While this work was parked, `main` grew `dvd/lin_rate.sv`: one time model shared
+by every linear source, with an exact combinational bypass for raw VCD/SVCD and
+a measured-PTS path for flat `.mpg`/`.VOB`. CD-DA is the same shape as the
+raw-CD arm — a fixed geometry — so it became a **second fixed-rate arm of that
+bypass** instead of a parallel module.
+
+Three things fell out for free: the HUD elapsed/total clock, the **seek-preview**
+clock (the number tracks the bar's cursor during a gesture instead of freezing),
+and a **48 kHz D-pad step that is now exact**. The parked branch had reused the
+44.1 kHz constant 861 for both rates — about 8.6 % short at 48 kHz — and had
+shipped that as a documented limitation; `lin_rate` carries `BLK10_441 = 861`
+and `BLK10_48 = 938` and picks on `cdda_fs`.
+
+⚠ **The bypass is not an optimisation, it is required.** A PCM source carries no
+PTS at all, so `lin_rate`'s measurement window can never close on one. Gating the
+D-pad on a *measured* rate (which is what `main`'s `lin_mode_w && lin_blk10_ok_w`
+does) would leave the D-pad permanently inert and the clock at `0:00:00` on every
+`.wav` and every audio CD.
+
+★ The general lesson for the next parked branch: **rebasing is a chance to delete
+your own code.** The question to ask of every module the branch added is not "does
+it still apply cleanly" but "did `main` grow the right home for this while I was
+away".
 
 ## Screen
 
 There is no video, so the **idle logo keeps bouncing** (`logo_vis` gains a
 `cdda_mode` term — `media_seen`/`img_streaming` would otherwise hide it the
-moment blocks start arriving) and the **HUD status line is forced on** for the
-session via a new `force_show` input, giving elapsed/total time like a player's
-front panel. Both composite through the existing register stage; the raster
-free-runs black underneath, so this costs nothing in the display hotspot.
+moment blocks start arriving), the **HUD status line is forced on** for the
+session, and so is the **seek bar, acting as a progress bar**. Both got the same
+one-line treatment: a `force_show` level input ORed into their existing `vis`
+expression, still yielding to `menu_active` so neither can fight the HLI layer.
+
+★ The progress bar needed **no position work at all**. `seek_bar` resolves
+`cur_rbn` against `title_first_rbn..title_last_rbn`, and the reader already
+publishes the whole file as the title span in linear mode while `cur_rbn` is
+already `lin_blk` there — so the bar was correct the moment it was allowed to
+draw. Chapter notches come from `nr_pgm`, which is 0 for a WAV, so it renders as
+a plain progress bar rather than a chaptered one. That is why this was cheap:
+the ask was for a *display* change, and every input it needed was already right.
+
+Both composite through the existing register stage; the raster free-runs black
+underneath, so this costs nothing in the display hotspot.
 
 ## Tests
 
@@ -167,7 +207,12 @@ xorshift32 PCM: no float/libm variance, nothing large committed).
   **bit-exact** vs the golden; 44.1/48 kHz NCO cadence measured (612.24 /
   562.50 cycles per pair); pause continuity; post-seek channel-swap guard; the
   **RED-first `le` proof** (the same bytes with `le=0` must NOT match, so the
-  test cannot pass by accident); `cdda_time` BCD spot checks.
+  test cannot pass by accident).
+* `lin_rate_tb` TEST 14 — the fixed-rate arm: 861 at 44.1 kHz and **938** at
+  48 kHz with **no PTS ever presented**, plus the clock arming off the same
+  edge. Presenting no PTS is the point: it is what the measured path cannot do.
+* `seek_bar_tb` T10 — the progress bar: hidden with nothing asserted, up on
+  `force_show` alone, fill tracking the playhead, and still yielding to a menu.
 * Regressions in the same script: `lpcm_unpack`, `dvd_audio_decode`,
   `transport_hud`, `hud_frame`, and the whole VCD/MP2 suite.
 
@@ -179,10 +224,15 @@ that timestep — bytes silently duplicated. Drive after the edge (`@(posedge);
 ## HW gate (branch 1)
 
 1. 44.1 kHz and 48 kHz `.wav` play clean; pitch matches a PC playing the same file.
-2. Pause/resume; D-pad time jumps; logo bounces with the HUD time advancing and
-   surviving seeks.
+2. Pause/resume; D-pad time jumps (**now exact at 48 kHz too**); logo bounces with
+   the HUD time advancing and the progress bar filling, both surviving seeks.
 3. A reject fixture shows `UNSUPPORTED IMAGE` immediately.
-4. DVD + VCD regression pass on the same build.
+4. **`Audio Out = Passthru` with a `.wav`** — the PR #79 interaction. Expect
+   ordinary PCM on both legs, not silence. This is the one gate that is new since
+   the branch was parked and it is the one most likely to fail.
+5. DVD + VCD regression pass on the same build, including an AC-3 disc in
+   Passthru (proving `pass_mode` is only suppressed for CD-DA) and an LPCM/MP2
+   track in Passthru (proving PR #79 still works alongside this).
 
 ## Next (branch 2)
 
