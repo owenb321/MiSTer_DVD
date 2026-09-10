@@ -5,7 +5,22 @@
 #
 # Build:  docker build -t mister-dvd-main:gcc-arm-10.2 main/docker
 # (build_main.sh builds it automatically on first USE_DOCKER=1 run.)
-FROM debian:bullseye-slim
+#
+# ⚠ The BASE is bookworm, not bullseye, since 2026-09-10: bullseye went EOL and its
+# security repo's InRelease EXPIRED, so `apt-get update` started failing with exit 100
+# and the v0.5.0 release packaging broke on it. The base distro only supplies wget /
+# make / git / python3 — the ARM cross-compiler below is a self-contained pinned
+# tarball, so it is NOT the codegen pin and bumping it does not re-roll the binary.
+# MEASURED at the time of the bump, because "the base cannot matter" deserved a
+# number: bullseye and bookworm builds differ in exactly 2-3 bytes, all inside the
+# 4-byte window at offset ~971614 -- and TWO BULLSEYE BUILDS DIFFER THE SAME WAY.
+# The window is dvd_report's embedded __TIME__ ("--- dvd_report built Sep 10 2026
+# 17:56:58 ---"), i.e. a build clock, not codegen. Sizes identical (1,080,108 B).
+# So the base image contributes ZERO difference; the binary is simply not
+# byte-reproducible. ⚠ Note bullseye can no longer be built at all for comparison:
+# its security pool 404s, so the control above came from the locally cached
+# pre-bump image. Re-measure the same way if the base moves again.
+FROM debian:bookworm-slim
 
 # Toolchain pin — must match the version CLAUDE.md / the local build uses. Bumping
 # it changes codegen (and can change the VFP baseline), so treat like a seed re-roll.
