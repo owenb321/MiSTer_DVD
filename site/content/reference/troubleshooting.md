@@ -133,8 +133,8 @@ Press **B7** to cycle audio tracks. The disc's default may be:
 
 - **DTS** — there is no DTS decoder in the core. Use
   [Passthru](../audio/passthrough.md) to a receiver, or pick the disc's AC-3 track.
-- **LPCM or MP2 while in Passthru** — those have no bitstream form and are silent in that
-  mode. Use Decode PCM.
+- **96 kHz or multichannel LPCM** — only 48 kHz stereo is decoded. (LPCM and MP2 at
+  48 kHz play in *both* modes; in Passthru they are sent as ordinary PCM.)
 - **AC-3 1+1 dual mono** — deliberately refused, since it carries two independent
   programmes with no correct way to combine them.
 

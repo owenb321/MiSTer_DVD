@@ -39,13 +39,26 @@ advertises AC-3/DTS support in its EDID.
 |---|---|---|
 | **AC-3 (Dolby Digital)** | Bitstreamed | All channel modes |
 | **DTS** | Bitstreamed | **The only way to hear DTS** — there is no DTS decoder in the core |
-| **LPCM** | Silent | Use Decode PCM |
-| **MP2** | Silent | Has no passthrough encoding |
+| **LPCM** | Sent as PCM | Decoded in the core and sent as ordinary stereo — see below |
+| **MP2** | Sent as PCM | Same; this is what VCD and SVCD discs carry |
 
-!!! warning "Passthru is not a better version of Decode"
-    On a display that cannot decode AC-3 or DTS — an ordinary television, a monitor —
-    Passthru is **silent**. Decode PCM works on anything. Only switch to Passthru if the
-    audio is reaching a receiver that says it handles these formats.
+!!! info "Unreleased — LPCM and MP2 no longer go silent"
+    These two used to be silent in Passthru, so a concert disc or a VCD needed a trip
+    back to `Decode PCM`. They now come out as ordinary PCM, which is what a set-top
+    player does with them. The switch is automatic and happens per track.
+
+Passthru is no longer all-or-nothing. It sends whatever the disc's current audio track
+needs: a Dolby Digital or DTS track goes out as an undecoded bitstream for your receiver,
+and an LPCM or MP2 track is decoded in the core and goes out as ordinary PCM. Changing
+audio track with **B7** switches the format on the wire, and your receiver will re-lock —
+a second or so of silence at the change is normal, and a real player does the same.
+
+!!! warning "DTS still needs a receiver"
+    **There is no DTS decoder in the core**, so DTS is the one format with no fallback:
+    on a plain television or monitor a DTS track is silent in *both* modes. Most DTS
+    discs also carry a Dolby Digital track — cycling audio with **B7** will usually find
+    one. AC-3 has the same limitation in Passthru specifically, but `Decode PCM` handles
+    it on any display.
 
 ## If the receiver names the format but plays static
 
@@ -92,7 +105,8 @@ of seconds and track changes are near-instant.
 
 - **Core DTS only** — 48 kHz, up to 16-bit. No DTS-HD, no 96 kHz, no high-bit-depth
   variants. DVDs do not carry those.
-- **LPCM and MP2 are silent** in Passthru; use Decode PCM for those discs.
+- **LPCM is 48 kHz stereo, 16-bit.** 96 kHz and multichannel LPCM are not decoded;
+  24-bit is truncated to 16. Those discs are rare and the format is a DVD-Audio corner.
 - **Authored silence drops the receiver out of decode mode.** Where a disc authors silence
   — a menu with no background audio, a gap between programmes — the receiver shows
   "Decoder Off" until audio returns, under a second later. There is no bitstream to send,
