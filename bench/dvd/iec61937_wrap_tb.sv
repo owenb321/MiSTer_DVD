@@ -520,6 +520,28 @@ module iec61937_wrap_tb;
             $display("  FAIL: PCM output froze instead of tracking the decoder");
             errors=errors+1; end
         $display("TEST 12b: PCM output tracks the decoder");
+
+        // ---- 12c: the HDMI leg must be SILENT in PCM mode -------------------
+        // The HDMI non-PCM flag is an ADV7513 register, static while the HPS ack
+        // is set -- so an older Main that does not know about PCM content leaves
+        // the ack up, and real samples here would be clocked into a sink told to
+        // expect a data burst: full-scale noise. Demodulate the serial output and
+        // require digital silence, so the bad combination is silent by
+        // construction rather than by the HPS behaving.
+        begin : hdmi_silence
+            integer nz; integer k; reg [15:0] sr;
+            nz = 0; sr = 16'd0;
+            for (k = 0; k < 20000; k = k + 1) begin
+                @(posedge clk_audio);
+                if (dut.u_hdmi_i2s.sck_o === 1'b1) sr = {sr[14:0], dut.u_hdmi_i2s.sd_o};
+                if (dut.u_hdmi_i2s.sd_o === 1'b1) nz = nz + 1;
+            end
+            $display("TEST 12c: HDMI serial data bits high in PCM mode = %0d", nz);
+            if (nz != 0) begin
+                $display("  FAIL: PCM samples reach the HDMI serializer (noise on an old Main)");
+                errors = errors + 1;
+            end
+        end
         pcm_mode = 0;
 
         if (errors==0) $display("\nALL TESTS PASSED");

@@ -499,12 +499,23 @@ module iec61937_wrap #(
 
     // HDMI leg: the same 61937 words, as plain 16-bit I2S for the ADV7513.
     // One word source feeds both outputs, so they cannot drift apart.
+    // ⚠ THE HDMI LEG CAN ONLY EVER CARRY A BITSTREAM, so it is fed digital silence
+    // in PCM mode rather than the samples. The non-PCM flag over HDMI is the
+    // ADV7513's 0x12[7] REGISTER, static while the ack is set -- unlike S/PDIF,
+    // where it is a per-block wire bit. A Main that knows about PCM content drops
+    // the ack and HDMI takes the framework's own I2S path instead; a Main that does
+    // NOT (an older overlay, or a .rbf flashed without updating it) leaves the ack
+    // set, and putting real samples here would clock PCM into a sink told to expect
+    // a data burst = full-scale noise. Zeros make that combination SILENT instead,
+    // by construction rather than by the HPS behaving.
+    wire [31:0] hdmi_pair = pcm_mode ? 32'd0 : cur_pair[31:0];
+
     hdmi_bs_i2s u_hdmi_i2s (
         .clk    (clk_audio),
         .rst_n  (rst_audio_n),
         .ce_i   (bit_ce),
-        .pcm_l_i(cur_pair[15:0]),
-        .pcm_r_i(cur_pair[31:16]),
+        .pcm_l_i(hdmi_pair[15:0]),
+        .pcm_r_i(hdmi_pair[31:16]),
         .sck_o  (hdmi_sck_o),
         .ws_o   (hdmi_ws_o),
         .sd_o   (hdmi_sd_o)

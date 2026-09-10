@@ -71,6 +71,10 @@ if [ "$RED" -eq 1 ]; then
     # expects non-PCM is full-scale noise, which is the worst failure here.
     red_case pcm-flagged-nonpcm "FAIL: PCM mode still flags the stream non-PCM" \
         "s/cur_pair <= pcm_mode  ? {1'b0, pcm_hold}/cur_pair <= pcm_mode  ? {1'b1, pcm_hold}/"
+    # Remove the PCM-mode gate on the HDMI serializer: an older Main leaves the ack
+    # up, so real samples would be clocked into a sink expecting a data burst.
+    red_case hdmi-carries-pcm "FAIL: PCM samples reach the HDMI serializer" \
+        "s/wire \[31:0\] hdmi_pair = pcm_mode ? 32'd0 : cur_pair\[31:0\];/wire [31:0] hdmi_pair = cur_pair[31:0];/"
 fi
 
 if [ "$fail" -ne 0 ]; then echo; echo "SUITE FAILED"; exit 1; fi
