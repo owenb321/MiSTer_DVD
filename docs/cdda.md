@@ -274,9 +274,26 @@ visible and repurposes it as `{reader PGCN, VTS}`, which on a CD is `0/0`; the
 rig's saved config had it on. With it off the field hides as designed. Check the
 saved OSD config before believing a HUD anomaly.
 
-⏳ **Still to do: tracks.** The disc currently plays as one continuous 42-minute
-WAV — `dvd/cdda_toc.sv`, tracks-as-chapters, the seek-bar notches and
-track-relative time are the remaining work.
+✅ **Tracks are in.** `dvd/cdda_toc.sv` receives the boundaries over the generic
+ioctl-download channel and turns `lin_blk` back into "track 7 of 12". Everything
+downstream reuses machinery that already existed, which is why it is small: track
+skip rides `scrub_ctrl`'s pre-resolved jump port (`base` = the absolute track
+start, `off` = 0, so the clamp/bar/preview come free), the chapter FSM's existing
+debounce becomes the track burst, `TRACK n/N` reuses the HUD's CH field, notches
+ride `seek_bar`'s generic `cellf_*` ports, and track-relative time is two
+subtracts on `lin_rate`'s position inputs. `transport_hud` and `seek_bar` are
+**untouched**.
+
+★ **And the bench for it found a real defect.** `cdda_toc`'s entry RAM is written
+as bytes ARRIVE, so gating only the header fields at commit was not enough: a
+malformed upload overwrote the track starts while leaving `toc_valid` set,
+producing a table that passed every header check and pointed at the wrong blocks
+— a track skip would have jumped somewhere random. The download START now
+invalidates. Getting the bench to see that took two goes, both worth recording:
+the first sent the SAME blob with one byte broken and asserted "unchanged",
+which passes whether the upload is rejected *or* accepted; the second used an
+alternate table whose "truncated" length happened to be exactly valid for the
+ntracks it declared.
 
 ## Next (branch 2)
 

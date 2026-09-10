@@ -13,6 +13,7 @@ What plays, what does not, and what is untested. Current as of **v0.6.1**.
 | **Video CD / SVCD** | [Basic playback](../formats/vcd-svcd.md) — no menus/PBC |
 | **`.VOB` / `.mpg` / `.m2v`** | Linear playback, no navigation |
 | **`.wav` audio file** | 16-bit stereo PCM at 44.1/48 kHz only — audio, no picture |
+| **Audio CD (physical)** | Plays with track skip and a progress bar, needs [`MiSTer_DVDcss`](../formats/physical-discs.md#audio-cds) |
 
 !!! note "ISO9660 only"
     Practically every DVD-Video image is ISO9660 (usually with a UDF structure alongside
