@@ -54,23 +54,13 @@
 // ⚠ CDC IS A STABILITY FILTER, NOT A PLAIN 2-FF SYNC. These are multi-bit
 // BINARY counters from clk_dec/clk_mem: catching one mid-increment can read
 // 0x00FF as 0x01FF -- not a small error, a wild one, and a single bad sample
-// corrupts a rate measurement. telem_sync commits a value only when two
+// corrupts a rate measurement. The sampler commits a value only when two
 // consecutive samples agree, which is cheap and sufficient because nothing here
 // advances faster than ~60 Hz against a 27 MHz clock.
 //============================================================================
 
-module telem_sync #(parameter W = 16) (
-    input              clk,
-    input      [W-1:0] d,
-    output reg [W-1:0] q
-);
-    reg [W-1:0] s1, s2;
-    always @(posedge clk) begin
-        s1 <= d;
-        s2 <= s1;
-        if (s1 == s2) q <= s2;      // commit only a value seen twice running
-    end
-endmodule
+// (telem_sync, the per-source 3-register filter, was retired by the 2026-09-10
+//  area pass in favour of the shared round-robin sampler inside dvd_telem.)
 
 
 module dvd_telem #(
@@ -121,32 +111,69 @@ module dvd_telem #(
     input         af_pcm_session          // ...and the current content is LPCM/MP2
 );
 
-    wire [15:0] s_refresh, s_pickup, s_late, s_drop, s_viderr, s_costs, s_aud;
-    wire  [7:0] s_vbuf, s_flags;
-    telem_sync #(16) u_ref (clk, refreshes,  s_refresh);
-    telem_sync #(16) u_pck (clk, pickups,    s_pickup);
-    telem_sync #(16) u_lat (clk, lates,      s_late);
-    telem_sync #(16) u_drp (clk, drops,      s_drop);
-    telem_sync #(16) u_err (clk, vid_err,    s_viderr);
-    telem_sync #(16) u_cst (clk, drop_costs, s_costs);
-    telem_sync #(16) u_aud (clk, aud_frames, s_aud);
-    telem_sync #(8)  u_vbf (clk, vbuf_fill,  s_vbuf);
-    telem_sync #(8)  u_flg (clk, flags,      s_flags);
-    wire [15:0] s_play, s_gate;
-    telem_sync #(16) u_ply (clk, aud_play,   s_play);
-    telem_sync #(16) u_gat (clk, aud_gate,   s_gate);
-    wire [15:0] s_dlag, s_perr, s_drift;
-    telem_sync #(16) u_dlg (clk, disp_lag,   s_dlag);
-    telem_sync #(16) u_per (clk, play_err,   s_perr);
-    telem_sync #(16) u_dft (clk, av_drift,   s_drift);
-    wire [15:0] s_sfl, s_sdu;
-    telem_sync #(16) u_sfl (clk, sched_flags, s_sfl);
-    telem_sync #(16) u_sdu (clk, sched_dur,   s_sdu);
+    // ---- ONE round-robin two-consecutive-agree sampler (area pass 2026-09-10) --
+    // This used to be 19 telem_sync instances, each holding s1/s2/q = three
+    // copies of its word (864 flops for 288 bits of data). The filter needs
+    // two consecutive samples of ONE source to agree; nothing here changes
+    // faster than ~60 Hz, so one sampler can walk the 19 sources in turn --
+    // sample source n at cycle A, sample it again at cycle B, commit q[n] at
+    // C if the two registered samples agree -- and every q is refreshed every
+    // 57 cycles (2.1 us at 27 MHz) instead of every cycle. Same filter, same
+    // registered-sample commit (never the raw asynchronous input), 1/3 the
+    // flops. The atomic snapshot below is untouched: q[] is latched together
+    // on the command strobe exactly as the 19 outputs were.
+    localparam int NSRC = 19;
+    wire [15:0] src [0:NSRC-1];
+    assign src[0]  = refreshes;
+    assign src[1]  = pickups;
+    assign src[2]  = lates;
+    assign src[3]  = drops;
+    assign src[4]  = vid_err;
+    assign src[5]  = drop_costs;
+    assign src[6]  = aud_frames;
+    assign src[7]  = {8'd0, vbuf_fill};
+    assign src[8]  = {8'd0, flags};
+    assign src[9]  = aud_play;
+    assign src[10] = aud_gate;
+    assign src[11] = disp_lag;
+    assign src[12] = play_err;
+    assign src[13] = av_drift;
+    assign src[14] = sched_flags;
+    assign src[15] = sched_dur;
+    assign src[16] = {14'd0, af_pcm_session, af_passthru};
+    assign src[17] = 16'd0;                 // spare slots keep the walk a plain counter
+    assign src[18] = 16'd0;
 
-    // Two-consecutive-agree filter, same as the counters: these cross from clk_sys
-    // and Main reads them asynchronously.
-    wire [15:0] s_afmt;
-    telem_sync #(16) u_afm (clk, {14'd0, af_pcm_session, af_passthru}, s_afmt);
+    reg  [4:0]  cur;                        // source being sampled
+    reg  [1:0]  sph;                        // 0: sample A, 1: sample B, 2: compare+commit
+    reg  [15:0] s1, s2;
+    reg  [15:0] q [0:NSRC-1];
+    integer qi;
+    // Power-up state (this module has no reset; telem_sync never needed one
+    // because its samplers free-ran, but a walk needs a defined cursor).
+    initial begin
+        cur = 5'd0; sph = 2'd0;
+        for (qi = 0; qi < NSRC; qi = qi + 1) q[qi] = 16'd0;
+    end
+    always @(posedge clk) begin
+        case (sph)
+            2'd0: begin s1 <= src[cur]; sph <= 2'd1; end
+            2'd1: begin s2 <= src[cur]; sph <= 2'd2; end
+            default: begin
+                if (s1 == s2) q[cur] <= s2;   // commit only a value seen twice running
+                cur <= (cur == NSRC - 1) ? 5'd0 : cur + 5'd1;
+                sph <= 2'd0;
+            end
+        endcase
+    end
+
+    wire [15:0] s_refresh = q[0],  s_pickup = q[1],  s_late  = q[2],  s_drop  = q[3];
+    wire [15:0] s_viderr  = q[4],  s_costs  = q[5],  s_aud   = q[6];
+    wire  [7:0] s_vbuf    = q[7][7:0], s_flags = q[8][7:0];
+    wire [15:0] s_play    = q[9],  s_gate   = q[10];
+    wire [15:0] s_dlag    = q[11], s_perr   = q[12], s_drift = q[13];
+    wire [15:0] s_sfl     = q[14], s_sdu    = q[15];
+    wire [15:0] s_afmt    = q[16];
 
     reg  [3:0] wcnt;
     reg        active;
