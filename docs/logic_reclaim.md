@@ -56,16 +56,7 @@ The recurring pattern this time was not memory but **Quartus muxing RESULTS acro
 mutually exclusive FSM states**: every inlined function call, every per-state copy of an
 adder, is its own datapath.
 
-## 3. Branch A — `feature/alm-reclaim-ac3` (✅ built, ✅ HW-CONFIRMED 2026-09-11)
-
-**HW round (maintainer's rig, `DVD_almreclaim_20260911_0138.rbf`):** `audio_check` on Men
-in Black — all four AC-3 tracks audible (5.1 main −26.2 dBFS RMS, the others −31 to −42,
-gate −80, digital silence reads −999); a controlled single capture of an LPCM VOB
-(−51.9 dBFS RMS, −35 peak) and of an MP2 VCD (−44.3 / −20.3 at 44.1 kHz); Passthru with
-steady telemetry (ring parked at 34 frames, video 2.497 refreshes/frame, no drain-gate
-closures — no AC-3 receiver on the rig, so the bitstream itself is not decodable there, as
-always); video pacing on the feature 2.49955 refreshes per picked-up frame, 23.973 fps,
-audio 47,997.6 Hz, zero lates, zero drops over 46 s.
+## 3. Branch A — `feature/alm-reclaim-ac3` (✅ built, ⏳ HW gate)
 
 Detail in `docs/ac3_decoder_architecture.md` §4.12 and the DVD.qsf ledger. Every commit
 gated by `bench/ac3/run_front_cosim.sh` (bap bit-exact vs liba52 on 13 streams) **and PCM
@@ -75,7 +66,15 @@ Synthesis result **−2,544 ALUTs**; fit SEED 7 first roll, clk_dec 93.66 / 90.8
 Found en route: `bench/ac3/run_balloc.sh` had been failing silently since M19d (stale
 combinational delta-BA model, vvp exit 0). Fixed and `$fatal`ed before the refactor.
 
-## 4. Branch B — `feature/alm-reclaim-nav` (in progress)
+## 4. Branch B — `feature/alm-reclaim-nav` (✅ built, ⏳ HW gate)
+
+**Fit (SEED 7, first roll, cut from `main`):** clk_dec 89.73 / 89.42, "needed" 38,768,
+placed 40,823 (unchanged), registers 51,954 → 50,578 (**−1,376**), ALUTs +774 — **of
+which +799 is the IMDCT mapping cliff on RTL this branch does not touch** (3,228 on
+`main`, 4,027 here). Own modules: pts_assoc −732 regs, pgc_palette −359 regs / −55
+ALUTs, dvd_telem −264 regs, dvd_vm −148 ALUTs. ⚠ Read no ALM figure off this fit until
+the branch is re-fit on top of Branch A, whose regular operand-mux form held the IMDCT
+at 3,147–3,254 across two netlists. Build `DVD_almreclaimnav_20260911_0214.rbf`.
 
 | item | change | gate |
 |---|---|---|

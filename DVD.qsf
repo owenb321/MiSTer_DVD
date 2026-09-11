@@ -1045,4 +1045,20 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # that operand mux. The regular (x,y,w1,w2) form should hold at ~3,147; if a
 # later unrelated netlist shows it near 4,000 again, that is the cliff, not
 # the branch.
+# 2026-09-11 (feature/alm-reclaim-nav, dev-almreclaimnav -- LOGIC RECLAIM BRANCH B:
+# pts_assoc ring, pgc_palette convert-on-write, dvd_vm serial tick, O[2] block
+# factoring, dvd_telem round-robin sampler, nav_pci f_forever; cut from main, NOT
+# on top of branch A): SEED 7 held FIRST roll -- clk_dec 89.73 @100C / 89.42 @-40C
+# (gate 86.0, PASS both corners) at 93% ALM (38,768 needed; 40,823 PLACED = 97%),
+# registers 50,926, RAM 500/553, DSP 94/112. Build DVD_almreclaimnav_20260911_0214.rbf.
+# Synthesis vs v0.5.0 main: registers 51,954 -> 50,578 (-1,376: pts_assoc -732,
+# pgc_palette -359, dvd_telem -264, nav_pci -31); ALUTs 60,224 -> 60,998 (+774), of
+# which imdct_512 is +799 ON UNCHANGED RTL -- the same Quartus 17 mapping cliff the
+# branch-A ledger entry describes (3,228 on main, 4,014 on the cdda branch, 4,027
+# here; same memories/regs/DSPs). Without it the branch is ~ -25 ALUTs (dvd_vm
+# -148, pgc_palette -55, pts_assoc +29, dvd_telem +5, the rest noise).
+# ⚠ So this fit does NOT show the branch's ALM effect: placed ALMs are unchanged
+# (40,821 -> 40,823) because the reclaimed flops were paid straight back into the
+# imdct cliff. Re-fit after branch A merges (its (x,y,w1,w2) form held at
+# 3,147-3,254 on two netlists) before reading any ALM number off this branch.
 set_global_assignment -name SEED 7
