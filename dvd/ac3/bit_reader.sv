@@ -48,10 +48,13 @@ module bit_reader #(
 );
 
     // Bit accumulator, LEFT-justified: acc[ACC_W-1] is the next bit out.
-    // Must hold up to (MAXW-1) leftover bits plus a freshly appended byte, so
-    // 64 bits is comfortable for MAXW<=32 (worst case need<=32, cnt can reach
-    // need+7 = 39 < 64).
-    localparam int ACC_W = 64;
+    // Must hold up to (MAXW-1) leftover bits plus a freshly appended byte:
+    // a byte is only appended while cnt < need <= MAXW, so cnt <= MAXW-1 and
+    // after the append cnt <= MAXW+7.  ACC_W = MAXW+8 is therefore exact
+    // (40 for the AC-3 instance, 24 for MP2).  It was 64 "for comfort", which
+    // bought nothing and cost three 64-bit barrel shifters per instance
+    // (~500 ALUTs each at MAXW=32, ~450 at MAXW=16) -- area pass 2026-09-10.
+    localparam int ACC_W = MAXW + 8;
 
     logic [ACC_W-1:0] acc;     // valid bits are the top `cnt`, MSB-first
     logic [6:0]       cnt;     // number of valid bits in acc (0..ACC_W)
