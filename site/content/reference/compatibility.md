@@ -73,6 +73,12 @@ button will not produce subtitles. This matches a set-top player.
     that was never meant for it — the text came out as flat grey with no black outline and
     was very hard to read. It is now simply not shown.
 
+**Audio played by the MiSTer's Linux side is not heard while this core is loaded.** The
+framework path that mixes Linux-side audio (a background-music script, for example) into
+a core's output is left out of this core to free logic for the player itself. Every
+disc, file and audio CD the core plays is decoded in the FPGA, so nothing the player does
+depends on it.
+
 **Seeking on a seamless-branch disc is unreliable.** Some special editions store two cuts
 of the film — theatrical and extended — woven together in the same part of the disc, and
 the player chooses between them as it goes. Seeking into a woven stretch can drop you into

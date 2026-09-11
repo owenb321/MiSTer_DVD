@@ -257,6 +257,7 @@ wire [15:0] lfsr_seed = (|rnd_seed) ? rnd_seed : 16'hACE1;
 // 1 Hz counter-mode GPRM tick, idle-gated: a sec_tick sets tick_pending, which
 // is applied in V_IDLE (never during a command, so it can't race a GPRM write).
 reg tick_pending;
+reg [3:0] tick_i;              // serial walk cursor (area pass 2026-09-10)
 
 // SPRM read mux (eval_reg, system half). Constants per libdvdnav vm_reset.
 function [15:0] sprm_read(input [4:0] r);
@@ -662,6 +663,7 @@ always @(posedge clk or negedge rst_n) begin
         sprm9 <= 16'd0;  sprm10 <= 16'd0; sprm13 <= 16'd15;
         lfsr  <= lfsr_seed;
         tick_pending <= 1'b0;
+        tick_i <= 4'd0;
         ins   <= 64'd0;
         blk   <= BLK_PRE;
         nat_src <= 1'b0;
@@ -786,6 +788,7 @@ always @(posedge clk or negedge rst_n) begin
             sprm9 <= 16'd0;  sprm10 <= 16'd0; sprm13 <= 16'd15;
             lfsr  <= lfsr_seed;         // re-seed rnd from the mount-time entropy
             tick_pending <= 1'b0;
+            tick_i <= 4'd0;
             rsm_vts <= 8'd0;
             vm_dom <= DOM_TT; vm_vts <= 8'd0;
             skip_pre <= 1'b0;
@@ -815,10 +818,20 @@ always @(posedge clk or negedge rst_n) begin
                 //  - fold user-input timing into the rnd LFSR so rnd varies
                 //    per play even for discs (e.g. Scene It HP) that seed only
                 //    from rnd. See docs/dvd_vm.md "DVD-game entropy".
+                // Area pass 2026-09-10: the tick used to increment all 16
+                // GPRMs in one cycle -- 16 parallel 16-bit incrementers plus a
+                // unique data source on every GPRM write mux -- for a 1 Hz
+                // event. It now walks one GPRM per V_IDLE cycle (tick_i) and
+                // holds event dispatch below until the walk completes, so no
+                // command can observe a half-applied tick; the walk takes 16
+                // cycles at 27 MHz, invisible against a 1 s tick. A sec_tick
+                // arriving mid-walk re-arms tick_pending exactly as before
+                // (one flag, merged), and the NBA ordering with the set at the
+                // end of this block is unchanged.
                 if (tick_pending) begin
-                    for (gi = 0; gi < 16; gi = gi + 1)
-                        if (gprm_mode[gi]) gprm[gi] <= gprm[gi] + 16'd1;
-                    tick_pending <= 1'b0;
+                    if (gprm_mode[tick_i]) gprm[tick_i] <= gprm[tick_i] + 16'd1;
+                    tick_i <= tick_i + 4'd1;
+                    if (tick_i == 4'd15) tick_pending <= 1'b0;
                 end
                 // Zero-guard: an all-zero LFSR is a LOCKUP (lfsr_next of 0 is
                 // 0, so every later rnd returns 1 forever). The XOR can land
@@ -827,7 +840,9 @@ always @(posedge clk or negedge rst_n) begin
                 if (entropy_stir)
                     lfsr <= (|(lfsr ^ entropy_val)) ? (lfsr ^ entropy_val)
                                                     : 16'hACE1;
-                if (!enable) begin
+                if (tick_pending) begin
+                    // counter-mode walk in progress: hold dispatch (see above)
+                end else if (!enable) begin
                     ev_boot <= 1'b0; ev_loaded <= 1'b0; ev_error <= 1'b0;
                     ev_btn  <= 1'b0; ev_menu <= 1'b0; ev_resume <= 1'b0;
                     ev_title <= 1'b0; ev_return <= 1'b0;

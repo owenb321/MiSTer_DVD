@@ -65,7 +65,7 @@ module dvd_telem_tb;
             if (disturb) begin
                 refreshes = 16'hAAAA; pickups = 16'hBBBB; lates = 16'hCCCC;
                 drops = 16'hDDDD; vid_err = 16'hEEEE;
-                repeat (8) @(negedge clk);     // let the syncs settle too
+                repeat (64) @(negedge clk);    // let the sampler walk all 19 sources (57 cycles since the 2026-09-10 area pass)
             end
             for (i = 1; i <= 10; i = i + 1) begin
                 strobe(16'd0);
@@ -89,7 +89,7 @@ module dvd_telem_tb;
 
     reg drove;
     initial begin
-        repeat (20) @(negedge clk);
+        repeat (64) @(negedge clk);   // sampler rotation is 57 cycles (2026-09-10 area pass)
 
         $display("[1] matching command returns MAGIC then the counters");
         run_xact(16'h007A, 1'b0, drove);
@@ -120,7 +120,7 @@ module dvd_telem_tb;
         $display("[3] snapshot is atomic across a disturbed transaction");
         refreshes = 16'h1111; pickups = 16'h2222; lates = 16'h3333;
         drops = 16'h4444; vid_err = 16'h5555;
-        repeat (8) @(negedge clk);
+        repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007A, 1'b1, drove);       // counters change mid-readout
         check("refreshes", got[1], 16'h1111);
         check("pickups",   got[2], 16'h2222);
@@ -135,17 +135,17 @@ module dvd_telem_tb;
 
         $display("[5] CMD_AF reports the audio link format, independently of 0x7A");
         af_pt = 1; af_pcm = 0;                 // Passthru, bitstream content
-        repeat (8) @(negedge clk);
+        repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
         if (!drove) begin
             $display("  FAIL: CMD_AF did not drive the bus"); errors = errors + 1; end
         check("afmt-bitstream", got[1], 16'h0001);
         af_pcm = 1;                            // ...now an LPCM/MP2 track
-        repeat (8) @(negedge clk);
+        repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
         check("afmt-pcm", got[1], 16'h0003);
         af_pt = 0; af_pcm = 0;                 // back to Decode
-        repeat (8) @(negedge clk);
+        repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
         check("afmt-decode", got[1], 16'h0000);
         // ...and the diagnostic snapshot is untouched by any of it.

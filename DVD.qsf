@@ -387,6 +387,13 @@ set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
 
 # Verilog define for PLL instantiation
 set_global_assignment -name VERILOG_MACRO "QUARTUS=1"
+# MISTER_DISABLE_ALSA (2026-09-11, user decision, logic reclaim branch B): drops
+# sys/alsa.sv + its ddr_svc channel (~290 ALMs, 544 regs). It is the HPS->core audio
+# path (Linux-side players mixed into the core output); this core decodes every codec in
+# fabric and the HPS audio daemon is retired, so nothing here feeds it. Consequence: a
+# Linux-side audio player (a BGM script, say) is silent while the DVD core is loaded --
+# documented in site/content/reference/compatibility.md.
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
 # DVD-FORK DEBUG: to bring back the Atmosfear wrong-title diagnosis overlay
 # (dvd/debug_overlay.sv rows 21..26; O[2] + Disc Menus On to view), uncomment the
 # next line and rebuild (--compile). It re-tightens the congested fit and may
@@ -1045,4 +1052,36 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # that operand mux. The regular (x,y,w1,w2) form should hold at ~3,147; if a
 # later unrelated netlist shows it near 4,000 again, that is the cliff, not
 # the branch.
+# 2026-09-11 (feature/alm-reclaim-nav, dev-almreclaimnav -- LOGIC RECLAIM BRANCH B:
+# pts_assoc ring, pgc_palette convert-on-write, dvd_vm serial tick, O[2] block
+# factoring, dvd_telem round-robin sampler, nav_pci f_forever; cut from main, NOT
+# on top of branch A): SEED 7 held FIRST roll -- clk_dec 89.73 @100C / 89.42 @-40C
+# (gate 86.0, PASS both corners) at 93% ALM (38,768 needed; 40,823 PLACED = 97%),
+# registers 50,926, RAM 500/553, DSP 94/112. Build DVD_almreclaimnav_20260911_0214.rbf.
+# Synthesis vs v0.5.0 main: registers 51,954 -> 50,578 (-1,376: pts_assoc -732,
+# pgc_palette -359, dvd_telem -264, nav_pci -31); ALUTs 60,224 -> 60,998 (+774), of
+# which imdct_512 is +799 ON UNCHANGED RTL -- the same Quartus 17 mapping cliff the
+# branch-A ledger entry describes (3,228 on main, 4,014 on the cdda branch, 4,027
+# here; same memories/regs/DSPs). Without it the branch is ~ -25 ALUTs (dvd_vm
+# -148, pgc_palette -55, pts_assoc +29, dvd_telem +5, the rest noise).
+# ⚠ So this fit does NOT show the branch's ALM effect: placed ALMs are unchanged
+# (40,821 -> 40,823) because the reclaimed flops were paid straight back into the
+# imdct cliff. Re-fit after branch A merges (its (x,y,w1,w2) form held at
+# 3,147-3,254 on two netlists) before reading any ALM number off this branch.
+# 2026-09-11b (feature/alm-reclaim-nav + MISTER_DISABLE_ALSA): SEED 7 held FIRST
+# roll -- clk_dec 92.64 @100C / 91.97 @-40C (gate 86.0, PASS both corners) at 92%
+# ALM (38,601 needed; 40,615 PLACED = 97%, -206 vs main), registers 50,167 (-2,071
+# vs main), RAM 501/553, DSP 94/112. Build DVD_almreclaimnav_20260911_0244.rbf.
+# Synthesis vs v0.5.0 main: regs 51,954 -> 49,890 (-2,064), ALUTs +551 with the
+# imdct cliff at +782 again (same RTL). The alsa entity is gone from the netlist.
+# 2026-09-11c (feature/alm-reclaim-nav REBASED ONTO main after branch A merged as
+# PR #82): SEED 7 held FIRST roll -- clk_dec 96.76 @100C / 92.13 @-40C (gate 86.0,
+# PASS both corners; the widest hot-corner margin this ledger records) at 88% ALM
+# (36,833 needed; 40,059 PLACED = 96%), registers 50,328, RAM 501/553, DSP 94/112.
+# Build DVD_almreclaimnav_20260911_2010.rbf.
+# Synthesis vs v0.5.0 main: ALUTs 60,224 -> 57,342 (-2,882), regs 51,954 -> 49,736
+# (-2,218). imdct_512 is 3,148 -- the cliff the two entries above describe is GONE
+# with branch A's operand-mux form underneath, so the two branches now simply add:
+# bit_allocation 2,497 -> 1,044, mantissa_dequant 1,861 -> 1,377, dvd_vm -150,
+# pgc_palette -55/-359 regs, pts_assoc -732 regs, dvd_telem -264 regs, alsa gone.
 set_global_assignment -name SEED 7

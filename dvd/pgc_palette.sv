@@ -8,13 +8,16 @@
 // captures the 16 raw entries and converts them to 24-bit RGB so the display path
 // only does a flat 16:1 lookup.
 //
-// AREA/HOTSPOT NOTE: the conversion is NOT done per-pixel. A single round-robin
-// converter walks one entry per clk_sys cycle (cvt_i 0..15), so the whole table
-// re-derives within 16 cycles of a palette load — long before any pixel query that
-// matters — using ONE small constant-coefficient multiply datapath (shared across
-// all 16 entries). The per-pixel side is just `rgb[idx]`, 16 registers -> a 16:1
-// mux the caller pipelines. This keeps the display-path (X33_Y11..X44_Y22) cost to
-// a plain mux, not a colour-space converter.
+// AREA/HOTSPOT NOTE: the conversion is NOT done per-pixel. Each entry is
+// converted ONCE, the cycle after the reader writes it (convert-on-write), by
+// ONE small constant-coefficient multiply datapath. The per-pixel side is just
+// `rgb[idx]`, 16 registers -> a 16:1 mux the caller pipelines. This keeps the
+// display-path (X33_Y11..X44_Y22) cost to a plain mux, not a colour-space
+// converter. (Area pass 2026-09-10: this used to be a free-running round-robin
+// over a raw {Y,Cr,Cb} shadow of the table -- 384 flops plus three 16:1 read
+// muxes whose only purpose was to feed that walk. Converting the entry being
+// written removes the shadow outright; the reset defaults are now written
+// pre-converted.)
 //
 // Conversion: BT.601 studio-swing (DVD is limited-range Y in [16,235]):
 //   R = 1.164(Y-16) + 1.596(Cr-128)
@@ -39,11 +42,6 @@ module pgc_palette (
     output wire [7:0]  rgb_g,
     output wire [7:0]  rgb_b
 );
-    // Raw {Y, Cr, Cb} store (written 1 entry/cycle by the reader).
-    reg [7:0] raw_y  [0:15];
-    reg [7:0] raw_cr [0:15];
-    reg [7:0] raw_cb [0:15];
-
     // Converted RGB (the display-path lookup table).
     reg [7:0] r_mem [0:15];
     reg [7:0] g_mem [0:15];
@@ -53,14 +51,16 @@ module pgc_palette (
     assign rgb_g = g_mem[idx];
     assign rgb_b = b_mem[idx];
 
-    // Round-robin converter cursor.
-    reg [3:0] cvt_i;
+    // Convert-on-write pipeline: the entry the reader wrote last cycle.
+    reg        cv_we;
+    reg [3:0]  cv_addr;
+    reg [7:0]  cv_y, cv_cr, cv_cb;
 
-    // Signed differences for the current entry.
-    wire signed [9:0] yt  = $signed({2'b00, raw_y [cvt_i]}) - 10'sd16;   // Y-16  (>=0 clamp below)
-    wire signed [9:0] crm = $signed({2'b00, raw_cr[cvt_i]}) - 10'sd128;  // Cr-128
-    wire signed [9:0] cbm = $signed({2'b00, raw_cb[cvt_i]}) - 10'sd128;  // Cb-128
-    wire signed [9:0] ycl = (yt < 0) ? 10'sd0 : yt;                      // clamp Y-16 at 0
+    // Signed differences for the entry being converted.
+    wire signed [9:0] yt  = $signed({2'b00, cv_y })  - 10'sd16;   // Y-16  (>=0 clamp below)
+    wire signed [9:0] crm = $signed({2'b00, cv_cr})  - 10'sd128;  // Cr-128
+    wire signed [9:0] cbm = $signed({2'b00, cv_cb})  - 10'sd128;  // Cb-128
+    wire signed [9:0] ycl = (yt < 0) ? 10'sd0 : yt;               // clamp Y-16 at 0
 
     wire signed [31:0] r_acc = 298*ycl + 409*crm;
     wire signed [31:0] g_acc = 298*ycl - 100*cbm - 208*crm;
@@ -77,31 +77,42 @@ module pgc_palette (
         end
     endfunction
 
+    // Reset default, PRE-CONVERTED: entry 0 black, then the chroma-neutral
+    // grayscale ramp Y = 16 + 15k that the old raw defaults converted to --
+    // R = G = B = clip8(298 * 15k) (crm = cbm = 0), i.e. entries 1..15 =
+    // 17 34 52 69 87 104 122 139 157 174 192 209 226 244 255. Same table the
+    // round-robin used to produce, just present from the first cycle instead
+    // of the 16th. A literal, not a function: Quartus 17 has miscompiled small
+    // functions in this project before.
+    localparam [127:0] RAMP_TBL = {8'd255, 8'd244, 8'd226, 8'd209, 8'd192, 8'd174, 8'd157, 8'd139, 8'd122, 8'd104, 8'd87, 8'd69, 8'd52, 8'd34, 8'd17, 8'd0};   // entry 15 .. entry 0
+
     integer k;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            cvt_i <= 4'd0;
-            // Default: entry 0 black, entry 1 white, 2..15 a neutral grayscale ramp
-            // (all chroma-neutral). So a SPU shown before/without a PGC palette load
-            // (rare: palette straddles the PGC sector) still renders legibly with the
-            // spu_decode identity col map, rather than black-on-black. Round-robin
-            // conversion below keeps r/g/b in sync with these raws.
+            cv_we   <= 1'b0;
+            cv_addr <= 4'd0;
+            cv_y    <= 8'd0; cv_cr <= 8'd128; cv_cb <= 8'd128;
+            // Default (see RAMP_TBL): a SPU shown before/without a PGC palette load
+            // (rare: palette straddles the PGC sector) still renders legibly
+            // with the spu_decode identity col map, rather than black-on-black.
             for (k = 0; k < 16; k = k + 1) begin
-                raw_cr[k] <= 8'd128; raw_cb[k] <= 8'd128;   // neutral chroma
-                raw_y [k] <= (k == 0) ? 8'd16 : (8'd16 + k[3:0] * 8'd15);
-                r_mem [k] <= 8'd0;  g_mem [k] <= 8'd0;   b_mem [k] <= 8'd0;
+                r_mem[k] <= RAMP_TBL[k*8 +: 8];
+                g_mem[k] <= RAMP_TBL[k*8 +: 8];
+                b_mem[k] <= RAMP_TBL[k*8 +: 8];
             end
         end else begin
-            if (pal_we) begin
-                raw_y [pal_waddr] <= pal_wdata[23:16];
-                raw_cr[pal_waddr] <= pal_wdata[15:8];
-                raw_cb[pal_waddr] <= pal_wdata[7:0];
+            // Stage 1: capture the written entry.
+            cv_we   <= pal_we;
+            cv_addr <= pal_waddr;
+            cv_y    <= pal_wdata[23:16];
+            cv_cr   <= pal_wdata[15:8];
+            cv_cb   <= pal_wdata[7:0];
+            // Stage 2: convert it into the lookup table.
+            if (cv_we) begin
+                r_mem[cv_addr] <= clip8(r_acc);
+                g_mem[cv_addr] <= clip8(g_acc);
+                b_mem[cv_addr] <= clip8(b_acc);
             end
-            // Convert one entry per cycle (round-robin, continuous).
-            r_mem[cvt_i] <= clip8(r_acc);
-            g_mem[cvt_i] <= clip8(g_acc);
-            b_mem[cvt_i] <= clip8(b_acc);
-            cvt_i        <= cvt_i + 4'd1;
         end
     end
 

@@ -13,19 +13,15 @@
 //    header the byte position of the picture start code the vld just parsed
 //           (getbits_fifo.bitpos - 32, same origin -- pinned by pts_assoc_tb)
 //
-//  A shift-register FIFO of {pts, stamp} (head always in slot 0, so the
-//  compare is a register read, never an async array read -- the LUT-RAM
-//  pattern this project keeps paying for). At every picture header ONE
+//  A FIFO of {pts, stamp}. The HEAD (and the entry behind it) live in
+//  registers so the compare below is a register read, never an async array
+//  read -- the LUT-RAM pattern this project keeps paying for; the rest of the
+//  queue is a sync-read circular buffer (area pass 2026-09-10: this was a
+//  16-deep shift register of 57-bit entries = 912 flops that packed at under
+//  two per ALM, 563 ALMs for a queue that is rarely more than 3 deep). At
+//  every picture header ONE
 //  decision, in one cycle: if the head stamp lies at or before the start code,
 //  pop it and it is this picture's tag; otherwise this picture has none.
-//  Entries that are still at or before the LAST header while the vld is
-//  parsing the picture body belong to no picture (a PES carrying a PTS but no
-//  access-unit start -- illegal, but seen) and are popped and discarded, so
-//  they can never be attached to a later picture. A stamp pushed after the
-//  vld already passed it (the PTS value arriving late through its CDC while
-//  the VBUF ran nearly empty) is discarded the same way: a lost tag, never a
-//  wrong one.
-//
 //  The tag is REGISTERED and held until the next header. motcomp_picbuf reads
 //  it at its STATE_UPDATE for the picture, which is >= 3 cycles after the
 //  header (update_picture_buffers -> mvec fifo -> picbuf) and can be no later
@@ -76,10 +72,26 @@ module pts_assoc #(
 );
 
     localparam int CW = $clog2(DEPTH + 1);
+    localparam int AW = $clog2(DEPTH);
+    localparam int EW = 33 + PW;               // one entry: {pts, pos}
 
-    logic [32:0]   pts_q   [DEPTH];
-    logic [PW-1:0] pos_q   [DEPTH];
+    // ---- entry store ----------------------------------------------------------
+    // Every accepted stamp is written to the ring at wr_ptr; the two entries at
+    // the read side (head = rd_ptr, nxt = rd_ptr+1) are ALSO held in registers
+    // so a pop needs no RAM latency: head <= nxt, nxt <= the entry at rd_ptr+2,
+    // which the ring read port fetched the cycle before. The read address is
+    // computed from the POST-pop pointer, so back-to-back pops (a pop_tag at a
+    // header followed by a pop_drop the next cycle) each find their third entry
+    // ready. A same-cycle write to the address being read is bypassed
+    // (byp_*), the one read-during-write case a sync RAM cannot serve itself.
+    // No init, no reset of the ring: entries beyond cnt are unreachable.
+    (* ramstyle = "no_rw_check" *) logic [EW-1:0] mem [DEPTH];
+    logic [AW-1:0] rd_ptr, wr_ptr;
     logic [CW-1:0] cnt;
+    logic [32:0]   head_pts, nxt_pts;
+    logic [PW-1:0] head_pos, nxt_pos;
+    logic [EW-1:0] ram_q, byp_q;
+    logic          byp_v;
     logic [PW-1:0] last_hdr;             // position of the last header parsed
     logic          hdr_seen;
 
@@ -87,8 +99,8 @@ module pts_assoc #(
     wire empty = (cnt == '0);
 
     // head stamp at or before a position: (pos - head) has its MSB clear
-    wire [PW-1:0] d_hdr  = hdr_pos  - pos_q[0];
-    wire [PW-1:0] d_last = last_hdr - pos_q[0];
+    wire [PW-1:0] d_hdr  = hdr_pos  - head_pos;
+    wire [PW-1:0] d_last = last_hdr - head_pos;
     wire head_le_hdr  = !empty && !d_hdr[PW-1];
     wire head_le_last = !empty && hdr_seen && !d_last[PW-1];
 
@@ -104,11 +116,25 @@ module pts_assoc #(
     wire gap_ok  = !gap_armed || (gap_d >= MIN_GAP);
     wire do_push = stamp_valid && !full && gap_ok;
 
-    integer i;
+    wire [EW-1:0] push_d  = {stamp_pts, stamp_pos};
+    wire [CW-1:0] cnt_pp  = do_pop ? (cnt - 1'b1) : cnt;        // count after this pop
+    wire [AW-1:0] rd_nxt  = do_pop ? (rd_ptr + 1'b1) : rd_ptr;  // rd_ptr after this pop
+    wire [AW-1:0] rd_addr = rd_nxt + 2'd2;                       // entry that becomes `third`
+    wire [EW-1:0] third   = byp_v ? byp_q : ram_q;               // entry at rd_ptr+2 (valid when cnt >= 3)
+
+    always_ff @(posedge clk) begin
+        if (do_push) mem[wr_ptr] <= push_d;
+        ram_q <= mem[rd_addr];
+        byp_v <= do_push && (wr_ptr == rd_addr);
+        byp_q <= push_d;
+    end
+
     always_ff @(posedge clk) begin
         tag_commit <= 1'b0;
         if (!rst_n || flush) begin
             cnt        <= '0;
+            rd_ptr     <= '0;
+            wr_ptr     <= '0;
             gap_armed  <= 1'b0;
             hdr_seen   <= 1'b0;
             last_hdr   <= '0;
@@ -116,42 +142,36 @@ module pts_assoc #(
             tag_valid  <= 1'b0;
             tag_pts    <= '0;
             tag_second <= 1'b0;
+            head_pts   <= '0;
+            head_pos   <= '0;
+            nxt_pts    <= '0;
+            nxt_pos    <= '0;
             if (!rst_n) dbg_ovf <= '0;
-            for (i = 0; i < DEPTH; i = i + 1) begin
-                pts_q[i] <= '0;
-                pos_q[i] <= '0;
-            end
         end else begin
             if (hdr_pulse) begin
                 last_hdr   <= hdr_pos;
                 hdr_seen   <= 1'b1;
                 tag_valid  <= head_le_hdr;
-                tag_pts    <= pts_q[0];
+                tag_pts    <= head_pts;
                 tag_second <= hdr_second;
                 tag_commit <= 1'b1;
             end
             if (do_push) begin
                 last_stamp <= stamp_pos;
                 gap_armed  <= 1'b1;
-            end
-            if (do_pop)
-                for (i = 0; i < DEPTH - 1; i = i + 1) begin
-                    pts_q[i] <= pts_q[i+1];
-                    pos_q[i] <= pos_q[i+1];
-                end
-            if (do_push) begin
-                for (i = 0; i < DEPTH; i = i + 1)
-                    if (i == (do_pop ? cnt - 1 : cnt)) begin
-                        pts_q[i] <= stamp_pts;
-                        pos_q[i] <= stamp_pos;
-                    end
+                wr_ptr     <= wr_ptr + 1'b1;
             end else if (stamp_valid && full && gap_ok && ~&dbg_ovf)
                 dbg_ovf <= dbg_ovf + 1'b1;
-            case ({do_push, do_pop})
-                2'b10:   cnt <= cnt + 1'b1;
-                2'b01:   cnt <= cnt - 1'b1;
-                default: cnt <= cnt;
-            endcase
+            if (do_pop) rd_ptr <= rd_ptr + 1'b1;
+            cnt <= cnt_pp + (do_push ? 1'b1 : 1'b0);
+            // the registered window
+            if (do_pop) begin
+                {head_pts, head_pos} <= (cnt_pp >= 1) ? {nxt_pts, nxt_pos} : push_d;
+                {nxt_pts,  nxt_pos}  <= (cnt_pp >= 2) ? third              : push_d;
+            end else begin
+                if (do_push && (cnt == 0)) {head_pts, head_pos} <= push_d;
+                if (do_push && (cnt == 1)) {nxt_pts,  nxt_pos}  <= push_d;
+            end
         end
     end
 

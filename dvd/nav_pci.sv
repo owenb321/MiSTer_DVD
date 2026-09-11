@@ -213,7 +213,9 @@ wire [9:0] cur = pci_frame_start ? 10'd0 : fidx;
 reg [23:0] facc;               // rolling accumulator (BE u32 assembly)
 reg [1:0]  f_ss;
 reg [31:0] f_vptm;             // pci_gi.vobu_s_ptm (schedules ss=0 disarms)
-reg [31:0] f_sptm, f_eptm;
+reg [31:0] f_sptm;
+reg        f_forever;          // hli_e_ptm == 0xFFFFFFFF (area pass 2026-09-10: the only
+                               // use of the 32-bit e_ptm was this all-ones test)
 reg [5:0]  f_btn_ns, f_fosl, f_foac;
 reg [1:0]  f_grns;             // hl_gi.btngr_ns (1..3; 0 treated as 1)
 reg [2:0]  f_g1ty, f_g2ty, f_g3ty;   // btngrX_dsp_ty (bit0 wide, bit1 LB, bit2 P&S)
@@ -261,7 +263,7 @@ endfunction
 // Committed (display) HLI state
 // =========================================================================
 reg        armed;
-reg [31:0] h_sptm;
+// (h_sptm, the committed HLI's s_ptm, was write-only and is gone -- area pass 2026-09-10)
 reg [5:0]  h_btn_ns, h_foac;
 reg [1:0]  h_grns;             // committed btngr_ns + per-group display types
 reg [2:0]  h_g1ty, h_g2ty, h_g3ty;
@@ -424,7 +426,6 @@ always @(posedge clk or negedge rst_n) begin
         armed     <= 1'b0;
         h_btn_ns  <= 6'd0;
         h_foac    <= 6'd0;
-        h_sptm    <= 32'd0;
         h_forever <= 1'b0;
         btn_sel   <= 6'd1;
         fstate    <= F_IDLE;
@@ -447,7 +448,7 @@ always @(posedge clk or negedge rst_n) begin
         coli_act  <= 32'd0;
         bsh       <= 56'd0;
         f_sptm    <= 32'd0;
-        f_eptm    <= 32'd0;
+        f_forever <= 1'b0;
         f_btn_ns  <= 6'd0;
         f_fosl    <= 6'd0;
         f_foac    <= 6'd0;
@@ -486,7 +487,7 @@ always @(posedge clk or negedge rst_n) begin
             10'h00F: f_vptm   <= {facc, pci_byte};   // pci_gi.vobu_s_ptm
             10'h061: f_ss     <= pci_byte[1:0];      // hli_ss (low 2 of u16)
             10'h065: f_sptm   <= {facc, pci_byte};   // hli_s_ptm
-            10'h069: f_eptm   <= {facc, pci_byte};   // hli_e_ptm
+            10'h069: f_forever<= (&facc) && (&pci_byte); // hli_e_ptm == 0xFFFFFFFF
             10'h06E: begin                           // btn_md hi: btngr_ns + gr1_dsp_ty
                 f_grns <= pci_byte[5:4];
                 f_g1ty <= pci_byte[2:0];
@@ -534,7 +535,7 @@ always @(posedge clk or negedge rst_n) begin
                     nxt_btn_ns<= f_btn_ns;
                     nxt_fosl  <= f_fosl;
                     nxt_foac  <= (f_ss == 2'd1) ? f_foac : 6'd0;
-                    nxt_forever<= (f_eptm == 32'hFFFF_FFFF);
+                    nxt_forever<= f_forever;
                     nxt_grns  <= f_grns;
                     nxt_g1ty  <= f_g1ty;
                     nxt_g2ty  <= f_g2ty;
@@ -566,7 +567,6 @@ always @(posedge clk or negedge rst_n) begin
             end else begin
                 disp_bank <= nxt_bank;
                 armed     <= 1'b1;
-                h_sptm    <= nxt_sptm;
                 h_btn_ns  <= nxt_btn_ns;
                 h_foac    <= nxt_foac;
                 h_forever <= nxt_forever;
