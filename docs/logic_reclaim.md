@@ -56,7 +56,16 @@ The recurring pattern this time was not memory but **Quartus muxing RESULTS acro
 mutually exclusive FSM states**: every inlined function call, every per-state copy of an
 adder, is its own datapath.
 
-## 3. Branch A — `feature/alm-reclaim-ac3` (✅ built, ⏳ HW gate)
+## 3. Branch A — `feature/alm-reclaim-ac3` (✅ built, ✅ HW-CONFIRMED 2026-09-11)
+
+**HW round (maintainer's rig, `DVD_almreclaim_20260911_0138.rbf`):** `audio_check` on Men
+in Black — all four AC-3 tracks audible (5.1 main −26.2 dBFS RMS, the others −31 to −42,
+gate −80, digital silence reads −999); a controlled single capture of an LPCM VOB
+(−51.9 dBFS RMS, −35 peak) and of an MP2 VCD (−44.3 / −20.3 at 44.1 kHz); Passthru with
+steady telemetry (ring parked at 34 frames, video 2.497 refreshes/frame, no drain-gate
+closures — no AC-3 receiver on the rig, so the bitstream itself is not decodable there, as
+always); video pacing on the feature 2.49955 refreshes per picked-up frame, 23.973 fps,
+audio 47,997.6 Hz, zero lates, zero drops over 46 s.
 
 Detail in `docs/ac3_decoder_architecture.md` §4.12 and the DVD.qsf ledger. Every commit
 gated by `bench/ac3/run_front_cosim.sh` (bap bit-exact vs liba52 on 13 streams) **and PCM
