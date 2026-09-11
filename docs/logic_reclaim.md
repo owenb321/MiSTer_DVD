@@ -66,7 +66,24 @@ Synthesis result **−2,544 ALUTs**; fit SEED 7 first roll, clk_dec 93.66 / 90.8
 Found en route: `bench/ac3/run_balloc.sh` had been failing silently since M19d (stale
 combinational delta-BA model, vvp exit 0). Fixed and `$fatal`ed before the refactor.
 
-## 4. Branch B — `feature/alm-reclaim-nav` (✅ built, ⏳ HW gate)
+## 4. Branch B — `feature/alm-reclaim-nav` (✅ built, ✅ HW-CONFIRMED 2026-09-11)
+
+**HW round (maintainer's rig, `DVD_almreclaimnav_20260911_0244.rbf`):** Men in Black
+navigation diffed against libdvdnav (FP → 1 → 2, no differences); the `O[2]` blocks decode
+exactly as before (highlight armed, subpicture shown, recolour fired — the 2-bit colour code
+expands to the same four colours); the palette convert-on-write renders the MiB menu's
+button/text colours correctly by eye; the rewritten telemetry sampler reads 47,999.5 Hz
+audio (−11 ppm) and 2.496 refreshes per frame on the feature — identical to Branch A —
+and a direct three-sample delta of `aud_play` gave exactly 3,000 counts/s; Scene It boots
+to its main menu (PGC 14, armed) with the serialised counter tick and button 1 starts the
+game. ⚠ A 30 s `telem --watch` over the MiB MENU read 69.5 kHz: that is the harness's
+16-bit unwrap being fooled by the counter reset at a menu-loop restart, not the sampler
+(the same window on the feature reads 48 kHz).
+⚠ **Pre-existing, NOT this branch:** `nav_diff` on ULTIMATE_T2 (`--script "1 2"`) reports
+button 1 landing in PGC 5 / VTS 4 on the board where libdvdnav lands in VTSM PGC 1 — the
+v0.5.0 build on the same rig gives the identical result. libdvdnav presses 1 at a
+two-button VTSM menu; the board parks on a title-domain still first (trajectory 3 3 1 1 1*),
+so the same digit is pressed at different menus. Worth its own issue.
 
 **Fit (SEED 7, first roll, cut from `main`):** clk_dec 89.73 / 89.42, "needed" 38,768,
 placed 40,823 (unchanged), registers 51,954 → 50,578 (**−1,376**), ALUTs +774 — **of
