@@ -37,7 +37,7 @@ RPT=${1:-output_files/DVD.map.rpt}
 # name-in-report                            what it means if it collapsed
 CANARIES=(
   "pts_assoc:pts_assoc|tag_pts|the picture PTS tag is constant -- no video PTS reaches the decoder"
-  "pts_assoc:pts_assoc|pts_q|the PTS association queue is constant -- ps_demux PTS never crosses to clk_dec"
+  "pts_assoc:pts_assoc|head_pts|the PTS association queue head is constant -- ps_demux PTS never crosses to clk_dec"
 )
 
 fail=0
