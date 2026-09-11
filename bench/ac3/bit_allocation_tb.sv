@@ -52,11 +52,15 @@ module bit_allocation_tb;
     wire [10:0] ba_exp_rd_addr;
     // exp now comes from exponent_decode's M10K (registered, 1-cycle latency);
     // model that here so the prefetch pipeline (C_COPY/C_CCOPY) is exercised as
-    // it is in hardware.  deltba stays combinational (audblk_parse.deltba_mem).
+    // it is in hardware.  deltba is ALSO a registered read since M19d
+    // (audblk_parse.deltba_mem, 1-cycle latency) -- this bench modelled it
+    // combinationally after that change and had been failing silently
+    // (17 bap mismatches, all inside the delta-BA bands, vvp exit 0).
     reg  [4:0]  ba_exp_rd_data;
     always @(posedge clk) ba_exp_rd_data <= exp_prov[ba_exp_rd_addr[8:0]];
     wire [8:0]  deltba_rd_addr;
-    wire signed [3:0] deltba_rd_data = dba_prov[deltba_rd_addr];
+    reg  signed [3:0] deltba_rd_data;
+    always @(posedge clk) deltba_rd_data <= dba_prov[deltba_rd_addr];
 
     logic [10:0] bap_rd_addr = 11'd0;
     wire  signed [7:0] bap_rd_data;
@@ -128,7 +132,7 @@ module bit_allocation_tb;
             $display("bit_allocation_tb: PASS (bap bit-exact vs liba52, endmant=%0d,%0d)",
                      endmant0, endmant1);
         else
-            $display("bit_allocation_tb: FAIL (%0d mismatches)", errors);
+            $fatal(1, "bit_allocation_tb: FAIL (%0d mismatches)", errors);
         $finish;
     end
 endmodule
