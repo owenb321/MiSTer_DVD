@@ -471,179 +471,113 @@ module imdct_512 (
     wire signed [31:0] dly1 = dly1_r;       // delay[2i+1]
 
     // ---- multiplier-operand mux (combinational) ----
+    // Area pass 2026-09-10.  This used to select all eight multiplier inputs
+    // (4 x 34-bit ma, 4 x 18-bit mb = 208 bits) independently across 19
+    // (state, phase) cases.  Sixteen of those cases are the same complex-
+    // multiply shape: pick a sample pair (x, y) and a twiddle pair (w1, w2)
+    // and form x*w1, y*w2, x*w2, y*w1 -- OP_BFULL is the one variant with
+    // lanes 2/3 swapped (y*w1, x*w2), selected by `sw`.  So the wide mux is
+    // now on (x, y, w1, w2) = 104 bits, and the lane assignment is fixed.
+    // Two forms fall outside it and are overlaid on the lanes explicitly:
+    // OP_BHALF's a-operands are the four pre-added sums (all b = swr), and the
+    // M19e downmix puts a third sample (dmx_rs) on lane 2.  Every (ma, mb)
+    // pair is bit-identical to the old table in every cycle a product is
+    // consumed; cycles with no case still drive zeros as before.
+    logic signed [33:0] mx, my;
+    logic signed [17:0] mw1, mw2;
+    logic               sw, bh, dm;
     always_comb begin
-        ma0 = '0; ma1 = '0; ma2 = '0; ma3 = '0;
-        mb0 = '0; mb1 = '0; mb2 = '0; mb3 = '0;
+        mx = '0; my = '0; mw1 = '0; mw2 = '0; sw = 1'b0; bh = 1'b0; dm = 1'b0;
         unique case (st)
             S_PRE: if (ph == 3'd5) begin
                 // buf.re = d255k*pre_im + dk*pre_re ; buf.im = d255k*pre_re - dk*pre_im
-                ma0 = 34'(d255k); mb0 = pre_im;
-                ma1 = 34'(dk);    mb1 = pre_re;
-                ma2 = 34'(d255k); mb2 = pre_re;
-                ma3 = 34'(dk);    mb3 = pre_im;
+                mx = 34'(d255k); my = 34'(dk); mw1 = pre_im; mw2 = pre_re;
             end
             S_IFFT: begin
                 if (op == OP_BHALF) begin
-                    ma0 = 34'(c2r) + 34'(c2i); mb0 = swr;   // (a2.r+a2.i)*w
-                    ma1 = 34'(c2i) - 34'(c2r); mb1 = swr;
-                    ma2 = 34'(c3r) - 34'(c3i); mb2 = swr;
-                    ma3 = 34'(c3i) + 34'(c3r); mb3 = swr;
+                    bh = 1'b1; mw1 = swr; mw2 = swr;          // (a.r+/-a.i)*w
                 end else if (op == OP_BFULL) begin
-                    if (ph == 3'd3) begin       // c2 products -> tt5/tt6
-                        ma0 = 34'(c2r); mb0 = swr;  // a2.r*wr
-                        ma1 = 34'(c2i); mb1 = swi;  // a2.i*wi
-                        ma2 = 34'(c2i); mb2 = swr;  // a2.i*wr
-                        ma3 = 34'(c2r); mb3 = swi;  // a2.r*wi
-                    end else begin              // c3 products (write cycles)
-                        ma0 = 34'(c3r); mb0 = swr;  // a3.r*wr
-                        ma1 = 34'(c3i); mb1 = swi;  // a3.i*wi
-                        ma2 = 34'(c3i); mb2 = swr;  // a3.i*wr
-                        ma3 = 34'(c3r); mb3 = swi;  // a3.r*wi
-                    end
+                    sw = 1'b1; mw1 = swr; mw2 = swi;
+                    if (ph == 3'd3) begin mx = 34'(c2r); my = 34'(c2i); end // c2 -> tt5/tt6
+                    else            begin mx = 34'(c3r); my = 34'(c3i); end // c3 (write cycles)
                 end
             end
             S_POST: case (ph)
-                3'd2: begin                       // a_r,a_i from buf[i]
-                    ma0 = 34'(bir); mb0 = po_re;
-                    ma1 = 34'(bii); mb1 = po_im;
-                    ma2 = 34'(bir); mb2 = po_im;
-                    ma3 = 34'(bii); mb3 = po_re;
-                end
-                3'd3: begin                       // b_r,b_i from buf[127-i]
-                    ma0 = 34'(b1r); mb0 = po_im;
-                    ma1 = 34'(b1i); mb1 = po_re;
-                    ma2 = 34'(b1r); mb2 = po_re;
-                    ma3 = 34'(b1i); mb3 = po_im;
-                end
-                3'd4: begin                       // a-pair window (wa=w[2i], wb=w[255-2i])
-                    ma0 = 34'(dly0); mb0 = wb_q;  // delay*window[255-2i]
-                    ma1 = 34'(ar);   mb1 = wa_q;  // a_r*window[2i]
-                    ma2 = 34'(dly0); mb2 = wa_q;
-                    ma3 = 34'(ar);   mb3 = wb_q;
-                end
-                3'd5: begin                       // b-pair window (wa=w[2i+1], wb=w[254-2i])
-                    ma0 = 34'(dly1); mb0 = wb_q;  // delay*window[254-2i]
-                    ma1 = 34'(br);   mb1 = wa_q;  // b_r*window[2i+1]
-                    ma2 = 34'(dly1); mb2 = wa_q;
-                    ma3 = 34'(br);   mb3 = wb_q;
-                end
+                3'd2: begin mx = 34'(bir);  my = 34'(bii); mw1 = po_re; mw2 = po_im; end // a from buf[i]
+                3'd3: begin mx = 34'(b1r);  my = 34'(b1i); mw1 = po_im; mw2 = po_re; end // b from buf[127-i]
+                3'd4: begin mx = 34'(dly0); my = 34'(ar);  mw1 = wb_q;  mw2 = wa_q;  end // a-pair window
+                3'd5: begin mx = 34'(dly1); my = 34'(br);  mw1 = wb_q;  mw2 = wa_q;  end // b-pair window
                 default: ;
             endcase
             // ---- M16 short-block POST (a52_imdct_256) ----
-            // post2 products (a/b from buf1, c/d from buf2), each _r = p0+p1,
-            // _i = p2-p3; then four windowed output pairs.  See the FF block.
             S_POST256: case (ph)
-                5'd3: begin                       // a_r,a_i from buf1[i]
-                    ma0 = 34'(q1ir); mb0 = po_re;
-                    ma1 = 34'(q1ii); mb1 = po_im;
-                    ma2 = 34'(q1ir); mb2 = po_im;
-                    ma3 = 34'(q1ii); mb3 = po_re;
-                end
-                5'd4: begin                       // b_r,b_i from buf1[63-i]
-                    ma0 = 34'(q1mr); mb0 = po_im;
-                    ma1 = 34'(q1mi); mb1 = po_re;
-                    ma2 = 34'(q1mr); mb2 = po_re;
-                    ma3 = 34'(q1mi); mb3 = po_im;
-                end
-                5'd5: begin                       // c_r,c_i from buf2[i]
-                    ma0 = 34'(q2ir); mb0 = po_re;
-                    ma1 = 34'(q2ii); mb1 = po_im;
-                    ma2 = 34'(q2ir); mb2 = po_im;
-                    ma3 = 34'(q2ii); mb3 = po_re;
-                end
-                5'd6: begin                       // d_r,d_i from buf2[63-i]
-                    ma0 = 34'(q2mr); mb0 = po_im;
-                    ma1 = 34'(q2mi); mb1 = po_re;
-                    ma2 = 34'(q2mr); mb2 = po_re;
-                    ma3 = 34'(q2mi); mb3 = po_im;
-                end
-                5'd7: begin                       // window a-pair (wa=w[2i], wb=w[255-2i])
-                    ma0 = 34'(s_dly2i); mb0 = wb_q; // delay[2i]*window[255-2i]
-                    ma1 = 34'(s_ar);    mb1 = wa_q; // a_r*window[2i]
-                    ma2 = 34'(s_dly2i); mb2 = wa_q;
-                    ma3 = 34'(s_ar);    mb3 = wb_q;
-                end
-                5'd8: begin                       // a_i-pair (wa=w[127-2i], wb=w[128+2i])
-                    ma0 = 34'(s_dly127); mb0 = wa_q;
-                    ma1 = 34'(s_ai);     mb1 = wb_q;
-                    ma2 = 34'(s_dly127); mb2 = wb_q;
-                    ma3 = 34'(s_ai);     mb3 = wa_q;
-                end
-                5'd9: begin                       // b_i-pair (wa=w[2i+1], wb=w[254-2i])
-                    ma0 = 34'(s_dly2i1); mb0 = wb_q; // delay[2i+1]*window[254-2i]
-                    ma1 = 34'(s_bi);     mb1 = wa_q; // b_i*window[2i+1]
-                    ma2 = 34'(s_dly2i1); mb2 = wa_q;
-                    ma3 = 34'(s_bi);     mb3 = wb_q;
-                end
-                5'd10: begin                      // b_r-pair (wa=w[126-2i], wb=w[129+2i])
-                    ma0 = 34'(s_dly126); mb0 = wa_q;
-                    ma1 = 34'(s_br);     mb1 = wb_q;
-                    ma2 = 34'(s_dly126); mb2 = wb_q;
-                    ma3 = 34'(s_br);     mb3 = wa_q;
-                end
+                5'd3:  begin mx = 34'(q1ir);     my = 34'(q1ii); mw1 = po_re; mw2 = po_im; end
+                5'd4:  begin mx = 34'(q1mr);     my = 34'(q1mi); mw1 = po_im; mw2 = po_re; end
+                5'd5:  begin mx = 34'(q2ir);     my = 34'(q2ii); mw1 = po_re; mw2 = po_im; end
+                5'd6:  begin mx = 34'(q2mr);     my = 34'(q2mi); mw1 = po_im; mw2 = po_re; end
+                5'd7:  begin mx = 34'(s_dly2i);  my = 34'(s_ar); mw1 = wb_q;  mw2 = wa_q;  end
+                5'd8:  begin mx = 34'(s_dly127); my = 34'(s_ai); mw1 = wa_q;  mw2 = wb_q;  end
+                5'd9:  begin mx = 34'(s_dly2i1); my = 34'(s_bi); mw1 = wb_q;  mw2 = wa_q;  end
+                5'd10: begin mx = 34'(s_dly126); my = 34'(s_br); mw1 = wa_q;  mw2 = wb_q;  end
                 default: ;
             endcase
             // M19e: 5.1->stereo fold on the shared bank (Lo written ph6, Ro ph7;
-            // hold the operands through both cycles)
+            // hold the operands through both cycles).  Lane 3 is unused here.
             S_DMX: if (ph == 4'd6 || ph == 4'd7) begin
-                ma0 = 34'(dmx_c);  mb0 = clev;
-                ma1 = 34'(dmx_ls); mb1 = slev;
-                ma2 = 34'(dmx_rs); mb2 = slev;
+                dm = 1'b1; mx = 34'(dmx_c); my = 34'(dmx_ls); mw1 = clev; mw2 = slev;
             end
             default: ;
         endcase
+        // Fixed lane assignment (see above).
+        ma0 = bh ? (34'(c2r) + 34'(c2i)) : mx;                          mb0 = mw1;
+        ma1 = bh ? (34'(c2i) - 34'(c2r)) : my;                          mb1 = mw2;
+        ma2 = bh ? (34'(c3r) - 34'(c3i)) : dm ? 34'(dmx_rs) : sw ? my : mx;
+        mb2 = sw ? mw1 : mw2;
+        ma3 = bh ? (34'(c3i) + 34'(c3r)) : sw ? mx : my;
+        mb3 = sw ? mw2 : mw1;
     end
 
     // ---- butterfly result words (combinational, from registered operands) ----
     // Identical arithmetic to M8; produced combinationally so the two write
     // micro-cycles (ph4 -> a,b ; ph5 -> c,d) just drive the RAM ports.
+    // Area pass 2026-09-10: the five ops used to spell out their own adder
+    // trees (58 x 34-bit add/sub, results muxed).  They are one structure:
+    //   A = c0 (+ c1 for the IFFT ops), B = c1 (c0 - c1 for the IFFT ops),
+    //   T/U = the op's two complex terms, then a = A+T, c = A-T, b = B+U,
+    //   d = B-U.  Two's-complement addition is associative and commutative
+    //   modulo 2^34, and each result is truncated to 32 bits, so regrouping
+    //   the terms is bit-identical.  OP_IFFT2 sets T = U = 0; its c/d words
+    //   are never written (ph5 is gated on op != OP_IFFT2).
     logic [63:0] res_a, res_b, res_c, res_d;
     always_comb begin
-        logic signed [33:0] t1,t2,t3,t4,t5,t6,t7,t8;
-        t1='0;t2='0;t3='0;t4='0;t5='0;t6='0;t7='0;t8='0;
-        res_a = '0; res_b = '0; res_c = '0; res_d = '0;
+        logic signed [33:0] Ar, Ai, Br, Bi, Tr, Ti, Ur, Ui, f7, f8;
+        if (op == OP_IFFT2 || op == OP_IFFT4) begin
+            Ar = 34'(c0r) + 34'(c1r); Ai = 34'(c0i) + 34'(c1i);
+            Br = 34'(c0r) - 34'(c1r); Bi = 34'(c0i) - 34'(c1i);
+        end else begin
+            Ar = 34'(c0r); Ai = 34'(c0i); Br = 34'(c1r); Bi = 34'(c1i);
+        end
+        f7 = p0 - p1;     // OP_BFULL: a3.r*wr - a3.i*wi
+        f8 = p2 + p3;     //           a3.i*wr + a3.r*wi
         unique case (op)
-            OP_IFFT2: begin
-                res_a = {32'(34'(c0r) + 34'(c1r)), 32'(34'(c0i) + 34'(c1i))};
-                res_b = {32'(34'(c0r) - 34'(c1r)), 32'(34'(c0i) - 34'(c1i))};
-            end
-            OP_IFFT4: begin
-                t1 = 34'(c0r)+34'(c1r); t2 = 34'(c3r)+34'(c2r);
-                t3 = 34'(c0i)+34'(c1i); t4 = 34'(c2i)+34'(c3i);
-                t5 = 34'(c0r)-34'(c1r); t6 = 34'(c0i)-34'(c1i);
-                t7 = 34'(c2i)-34'(c3i); t8 = 34'(c3r)-34'(c2r);
-                res_a = {32'(t1+t2), 32'(t3+t4)};
-                res_c = {32'(t1-t2), 32'(t3-t4)};
-                res_b = {32'(t5+t7), 32'(t6+t8)};
-                res_d = {32'(t5-t7), 32'(t6-t8)};
-            end
-            OP_BZERO: begin
-                t1 = 34'(c2r)+34'(c3r); t2 = 34'(c2i)+34'(c3i);
-                t3 = 34'(c2i)-34'(c3i); t4 = 34'(c3r)-34'(c2r);
-                res_c = {32'(34'(c0r)-t1), 32'(34'(c0i)-t2)};
-                res_d = {32'(34'(c1r)-t3), 32'(34'(c1i)-t4)};
-                res_a = {32'(34'(c0r)+t1), 32'(34'(c0i)+t2)};
-                res_b = {32'(34'(c1r)+t3), 32'(34'(c1i)+t4)};
+            OP_IFFT4, OP_BZERO: begin
+                Tr = 34'(c2r) + 34'(c3r); Ti = 34'(c2i) + 34'(c3i);
+                Ur = 34'(c2i) - 34'(c3i); Ui = 34'(c3r) - 34'(c2r);
             end
             OP_BHALF: begin
-                t5 = p0; t6 = p1; t7 = p2; t8 = p3;
-                t1 = t5+t7; t2 = t6+t8; t3 = t6-t8; t4 = t7-t5;
-                res_c = {32'(34'(c0r)-t1), 32'(34'(c0i)-t2)};
-                res_d = {32'(34'(c1r)-t3), 32'(34'(c1i)-t4)};
-                res_a = {32'(34'(c0r)+t1), 32'(34'(c0i)+t2)};
-                res_b = {32'(34'(c1r)+t3), 32'(34'(c1i)+t4)};
+                Tr = p0 + p2; Ti = p1 + p3; Ur = p1 - p3; Ui = p2 - p0;
             end
-            default: begin   // OP_BFULL: t5/t6 latched (tt5/tt6), t7/t8 from c3
-                t5 = tt5; t6 = tt6;
-                t7 = p0 - p1;     // a3.r*wr - a3.i*wi
-                t8 = p2 + p3;     // a3.i*wr + a3.r*wi
-                t1 = t5+t7; t2 = t6+t8; t3 = t6-t8; t4 = t7-t5;
-                res_c = {32'(34'(c0r)-t1), 32'(34'(c0i)-t2)};
-                res_d = {32'(34'(c1r)-t3), 32'(34'(c1i)-t4)};
-                res_a = {32'(34'(c0r)+t1), 32'(34'(c0i)+t2)};
-                res_b = {32'(34'(c1r)+t3), 32'(34'(c1i)+t4)};
+            OP_BFULL: begin   // t5/t6 latched (tt5/tt6), t7/t8 from c3
+                Tr = tt5 + f7; Ti = tt6 + f8; Ur = tt6 - f8; Ui = f7 - tt5;
+            end
+            default: begin    // OP_IFFT2
+                Tr = '0; Ti = '0; Ur = '0; Ui = '0;
             end
         endcase
+        res_a = {32'(Ar + Tr), 32'(Ai + Ti)};
+        res_c = {32'(Ar - Tr), 32'(Ai - Ti)};
+        res_b = {32'(Br + Ur), 32'(Bi + Ui)};
+        res_d = {32'(Br - Ur), 32'(Bi - Ui)};
     end
 
     // ---- buffer RAM port drive (combinational) ----
