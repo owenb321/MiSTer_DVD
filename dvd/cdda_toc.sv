@@ -83,11 +83,10 @@ module cdda_toc #(
     output wire [31:0] prev_start,     // target for a "previous track" skip
     output wire [31:0] next_start,     // target for a "next track" skip
 
-    // seek-bar notch feed: replayed once after each commit so seek_bar's
-    // generic cellf_* write ports draw a tick at every track boundary.
-    output reg         notch_we,
-    output reg  [6:0]  notch_idx,
-    output reg  [31:0] notch_blk,
+    // ⛔ No seek-bar notch feed any more (removed 2026-09-10, user decision):
+    // the progress bar spans the CURRENT track, so a per-track notch has
+    // nowhere to go. It also never rendered on hardware -- seek_bar rebuilds
+    // its tick list only on a pgc_loaded rise, which a CD never produces.
 
     // ---- track skip -------------------------------------------------------
     // The resolver lives HERE, not in emu.sv, for the reason flush_ctl.sv,
@@ -198,13 +197,12 @@ module cdda_toc #(
     // single read port below.
     reg [31:0] s_lo, s_hi, s_prev, s_next;
 
-    // ---- the walk: one sync read port serves bounds, neighbours and notches --
+    // ---- the walk: one sync read port serves the bounds and both neighbours --
     // ra sweeps 0..n_tracks. `rd` is start_ram[ra_q] one cycle later, with rd_p
     // and rd_pp trailing it, so at ra_q == k we hold start[k], start[k-1] and
     // start[k-2] -- everything track k-1 needs, from ONE port.
     reg [6:0]  ra, ra_q;
     reg [31:0] rd, rd_p, rd_pp;
-    reg        first_pass;        // emit notches on the pass after a commit
 
     always @(posedge clk) begin
         rd   <= start_ram[ra];
@@ -225,30 +223,15 @@ module cdda_toc #(
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            ra <= 7'd0; first_pass <= 1'b0;
+            ra <= 7'd0;
             cur_track <= 8'd0;
             s_lo <= 32'd0; s_hi <= 32'd0; s_prev <= 32'd0; s_next <= 32'd0;
-            notch_we <= 1'b0; notch_idx <= 7'd0; notch_blk <= 32'd0;
         end else begin
-            notch_we <= 1'b0;
-
             if (!toc_valid) begin
-                ra <= 7'd0; cur_track <= 8'd0; first_pass <= 1'b1;
+                ra <= 7'd0; cur_track <= 8'd0;
             end else begin
                 ra <= (ra >= n_tracks[6:0]) ? 7'd0 : (ra + 7'd1);
-                // ⚠ Clear on ra_q, NOT ra: the read port is a cycle behind, so
-                // the pass is not finished until the LAST track has been
-                // EVALUATED. Clearing on ra dropped the final track's notch --
-                // the seek bar was one tick short on every disc.
-                if (ra_q >= n_tracks[6:0]) first_pass <= 1'b0;
-
                 if (ev_ok) begin
-                    // seek-bar notch: one per track, on the first pass only
-                    if (first_pass) begin
-                        notch_we  <= 1'b1;
-                        notch_idx <= ev_i;
-                        notch_blk <= ev_lo;
-                    end
                     if (lin_blk >= ev_lo && lin_blk < ev_hi) begin
                         cur_track <= {1'b0, ev_i} + 8'd1;
                         s_lo   <= ev_lo;

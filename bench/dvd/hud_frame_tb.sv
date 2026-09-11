@@ -62,7 +62,7 @@ module hud_frame_tb;
         .menu_active(1'b0), .pause_q(1'b0), .pause_seed(1'b1), .pause_show_o(), .bar_active(1'b0),
         .scrub_held(1'b0), .scrub_dir(1'b0), .scrub_tier(2'd0),
         .display_edge(display_edge), .load_evt(1'b0), .show_evt(1'b0),
-        .force_show(1'b0),
+        .force_show(1'b0), .trk_mode(1'b0),
         .cur_time({8'h00, 8'h12, 8'h34, 8'h00}),
         .total_time({8'h01, 8'h37, 8'h05, 8'hC0}),
         .cur_pgm(8'd12), .nr_pgm(8'd23),

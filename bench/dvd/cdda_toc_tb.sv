@@ -6,7 +6,7 @@
 // is how dvd_vm_ref.py once agreed with a real navigation bug for months.
 //
 //  [1] a good upload commits, and every boundary lookup matches the golden
-//  [2] the notch replay emits one boundary per track, in order
+//  [2] (retired 2026-09-10 with the seek-bar notches -- the replay is gone)
 //  [3] track skip targets: next/prev/current bounds at the edges
 //  [4] NEVER-GARBAGE: a truncated, a bad-magic, a bad-version and an
 //      absurd-ntracks upload each leave the PREVIOUS table intact
@@ -28,9 +28,6 @@ module cdda_toc_tb;
     wire        toc_valid;
     wire [7:0]  n_tracks, cur_track;
     wire [31:0] cur_start, cur_end, prev_start, next_start;
-    wire        notch_we;
-    wire [6:0]  notch_idx;
-    wire [31:0] notch_blk;
     reg         skip_req = 0, skip_fwd = 0;
     wire        skip_fire;
     wire [31:0] skip_tgt;
@@ -43,7 +40,6 @@ module cdda_toc_tb;
         .toc_valid(toc_valid), .n_tracks(n_tracks), .cur_track(cur_track),
         .cur_start(cur_start), .cur_end(cur_end),
         .prev_start(prev_start), .next_start(next_start),
-        .notch_we(notch_we), .notch_idx(notch_idx), .notch_blk(notch_blk),
         .skip_req(skip_req), .skip_fwd(skip_fwd),
         .skip_fire(skip_fire), .skip_tgt(skip_tgt)
     );
@@ -161,10 +157,6 @@ module cdda_toc_tb;
         end
     endtask
 
-    // ---- notch capture ----
-    reg [31:0] nb [0:99];
-    integer nn = 0;
-    always @(posedge clk) if (notch_we) begin nb[notch_idx] = notch_blk; nn = nn + 1; end
 
     integer i, want_trk;
     initial begin
@@ -176,7 +168,6 @@ module cdda_toc_tb;
 
         // ---- [1] a good upload commits ----
         $display("=== [1] a good upload commits and every boundary matches ===");
-        nn = 0;
         upload(blob_n, -1, 8'd0, 16'd250);
         chk("[1] toc_valid", toc_valid, 1);
         chk("[1] n_tracks",  n_tracks,  meta_ntr);
@@ -191,16 +182,6 @@ module cdda_toc_tb;
             end
         end
         $display("  ok   [1] %0d boundary lookups all match the golden", npr);
-
-        // ---- [2] notch replay ----
-        $display("=== [2] one notch per track, in order ===");
-        chk("[2] notches emitted", nn >= meta_ntr, 1);
-        for (i = 0; i < meta_ntr; i = i + 1)
-            if (nb[i] !== {blob[12+4*i+3], blob[12+4*i+2], blob[12+4*i+1], blob[12+4*i]}) begin
-                errors = errors + 1;
-                $display("  FAIL notch %0d = %0d", i, nb[i]);
-            end
-        $display("  ok   [2] every notch equals its track start");
 
         // ---- [3] skip targets ----
         $display("=== [3] track-skip targets ===");

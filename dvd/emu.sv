@@ -655,7 +655,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cddaphys"
+`define CORE_VERSION "dev-cddaphys2"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -2241,9 +2241,6 @@ cdda_toc cdda_toc_inst (
     .cur_end        (cdda_cur_end_w),
     .prev_start     (cdda_prev_start_w),
     .next_start     (cdda_next_start_w),
-    .notch_we       (cdda_notch_we_w),
-    .notch_idx      (cdda_notch_idx_w),
-    .notch_blk      (cdda_notch_blk_w),
     .skip_req       (chap_pulse & cdda_mode_w),
     .skip_fwd       (chap_dir),
     .skip_fire      (cdda_jump_fire),
@@ -2260,6 +2257,28 @@ cdda_toc cdda_toc_inst (
 // those behaviours without a second code path.
 wire cdda_tracks_on = cdda_mode_w && cdda_toc_valid_w;
 
+// ★ AUDIO CD: FF/REW (and a D-pad time jump) are clamped to the CURRENT TRACK
+// (user decision 2026-09-10) -- and that one substitution gives both rules the
+// user asked for with no new logic in scrub_ctrl:
+//   - REW stops at the track's start: the clamp's lower bound IS cur_start.
+//   - FF that reaches the end lands on the NEXT track: the upper bound is
+//     cur_end, which is the first block of the following track. On the last
+//     track it is clipped to the disc's own end, so playback simply finishes.
+// ⚠ A TRACK SKIP must NOT see the narrowed span -- "previous track" targets a
+// block BEFORE cur_start and the clamp would pin it to this track's start. The
+// skip rides the same jump port, and scrub_ctrl resolves its target in the
+// cycle AFTER jump_fire (jump_go), so the disc span is held for a short window
+// from the fire. cdda_trk_last is shared with the seek bar below.
+reg  [1:0]  cdda_skip_win;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)                    cdda_skip_win <= 2'd0;
+    else if (cdda_jump_fire)         cdda_skip_win <= 2'd3;
+    else if (cdda_skip_win != 2'd0)  cdda_skip_win <= cdda_skip_win - 2'd1;
+end
+wire        cdda_trk_span = cdda_tracks_on && !cdda_jump_fire && (cdda_skip_win == 2'd0);
+wire [31:0] cdda_trk_last = (cdda_cur_end_w > title_last_rbn_w) ? title_last_rbn_w
+                                                                : cdda_cur_end_w;
+
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),
     .rst_n           (reset_n),
@@ -2267,8 +2286,12 @@ scrub_ctrl scrub_ctrl_inst (
     .held_left       (joy_rew),                  // B11 Rewind   = seek backward
     .in_title        ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu),  // title OR linear (VCD/SVCD/.mpg) playback
     .cur_rbn         (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
-    .title_first_rbn (title_first_rbn_w),
-    .title_last_rbn  (title_last_rbn_w),
+    // On an audio CD the bar and the clamp span the CURRENT TRACK, not the
+    // disc: that one substitution also implements both edge rules -- REW stops
+    // at the track start because that is the clamp's lower bound, and FF run to
+    // the end lands on cur_end, which IS the next track's first block.
+    .title_first_rbn (cdda_trk_span ? cdda_cur_start_w : title_first_rbn_w),
+    .title_last_rbn  (cdda_trk_span ? cdda_trk_last    : title_last_rbn_w),
     .title_start_rbn (title_start_rbn_w),
     .title_end_rbn   (title_end_rbn_w),
     // ---- what the span is WORTH, so the ramp is an absolute content rate ----
@@ -6294,7 +6317,7 @@ lin_rate lin_rate_inst (
     .vid_pts       (ps_vid_pts),
     .vid_pts_valid (ps_vid_pts_valid),
     // ★ On an audio CD the CLOCK is TRACK-relative -- a CD player counts within
-    // the track -- while the seek bar stays disc-relative with track notches.
+    // the track -- and so is the seek bar (per-track since 2026-09-10).
     // This costs two subtracts and two muxes and no new arithmetic: lin_rate's
     // MEASUREMENT path is bypassed in cdda mode (the fixed-rate arm), so
     // shifting its position inputs cannot corrupt the rate estimate.
@@ -6366,6 +6389,7 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // WAV/CD-DA: the status line is the only picture besides the logo -- keep
     // it up for the whole session (time = the player's front panel).
     .force_show   (cdda_mode_w),
+    .trk_mode     (cdda_tracks_on),         // "TR n/N" instead of "CH n/N"
     // Three LIVE sources, in the order they can be trusted: a linear file's
     // clock is derived from its measured rate (lin_time_ok_w implies
     // !cell_ready, so the DVD arms are untouched); a DVD title's is the reader's
@@ -6380,8 +6404,8 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // readable on-screen -- e.g. how-to-play looping on Title 33 shows "CH 01/07"
     // (VTS7 PGCN1) vs reaching the VMGM segment menu "CH 03/xx" (PGCN3); a boot
     // question-detour shows a question VTS (01/05/06). Normal (O[2] off) = the real CH.
-    // On an audio CD these carry the TRACK, which the HUD renders with the same
-    // "CH n/N" field -- so tracks cost the HUD nothing.
+    // On an audio CD these carry the TRACK, which the HUD labels "TR n/N"
+    // (trk_mode) -- a CD has no chapters.
     .cur_pgm      (hud_dbg      ? cur_pgcn_rd
                    : cdda_tracks_on ? cdda_curtrk_w : hud_cur_ch),
     .nr_pgm       (hud_dbg      ? cur_vts
@@ -6442,8 +6466,8 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .bar_active (bar_active_w),
     .base_rbn   (bar_base_rbn_w),
     .tgt_rbn    (bar_tgt_rbn_w),
-    .first_rbn  (title_first_rbn_w),
-    .last_rbn   (title_last_rbn_w),
+    .first_rbn  (cdda_tracks_on ? cdda_cur_start_w : title_first_rbn_w),
+    .last_rbn   (cdda_tracks_on ? cdda_trk_last    : title_last_rbn_w),
     // progress popup (stretch): pops on pause/landed seek/chapter with the
     // LIVE playhead + chapter notches, suppressed in menus like the HUD
     // the SAME pause-scoped latch transport_hud toggles, so the bar and the status
@@ -6451,22 +6475,25 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .pause_vis  (hud_pause_show_w),
     .show_evt   (hud_user_evt),
     // WAV/CD-DA: no picture, so the bar is the playback screen and stays up
-    // for the session. The position model needs nothing extra -- the reader
-    // publishes the whole file as the title span in linear mode, and cur_rbn
-    // is already lin_blk there.
+    // for the session. A WAV uses the whole file (the reader publishes it as
+    // the title span, and cur_rbn is already lin_blk). An audio CD with a
+    // track table spans the CURRENT TRACK instead (user decision 2026-09-10,
+    // reversing the earlier whole-disc bar) -- matching its track-relative
+    // clock, and matching the per-track FF/REW clamp above.
     .force_show (cdda_mode_w),
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),
-    .nr_pgm     (cdda_tracks_on ? cdda_ntracks_w : hud_nr_ch),  // notch count
+    .nr_pgm     (hud_nr_ch),                                    // notch count
     .pm_we      (vm_pm_we),
     .pm_waddr   (vm_pm_waddr),
     .pm_wdata   (vm_pm_wdata),
-    // Track boundaries reuse the chapter-notch write ports: seek_bar needs no
-    // change at all, it just receives boundaries from a different source.
-    .cellf_we   (cdda_tracks_on ? cdda_notch_we_w  : cellf_we_w),
-    .cellf_idx  (cdda_tracks_on ? cdda_notch_idx_w : cellf_idx_w),
-    .cellf_rbn  (cdda_tracks_on ? cdda_notch_blk_w : cellf_rbn_w),
+    .cellf_we   (cellf_we_w),
+    .cellf_idx  (cellf_idx_w),
+    .cellf_rbn  (cellf_rbn_w),
+    // Audio CD: no notches (a one-track bar has nowhere to put them) and no
+    // chapter-skip cursor. See ticks_off in seek_bar.sv for why this is a gate.
+    .ticks_off  (cdda_mode_w),
     // chapter-skip preview: the same projected target the HUD's "CH n/N" field
     // counts through during a multi-press burst, so the bar's amber cursor
     // shows WHERE that chapter starts (tick_col[n-1]) while the number moves --
@@ -6514,17 +6541,28 @@ end
 // still apply (an unplayable image, a download in flight and the boot delay all
 // outrank it).
 // ★ STOP SHOWS THE IDLE LOGO, which is what a set-top player does when it stops
-// -- it spins down and puts its own screen up. The first build blanked the
-// picture to black instead and the field report was immediate: "one stop was
-// supposed to drop you to the idle logo". The position is still remembered
-// (nothing is torn down; see dvd/stop_ctl.sv), so this is display-only.
-// ★ CD-DA/WAV playback joins them for the same structural reason: there is no
-// video to show, so the logo + persistent HUD ARE the screen, and media_seen /
-// img_streaming would otherwise hide it the moment the mount starts delivering.
-wire logo_vis = (saver_on_w || stopped_w || cdda_mode_w ||
-                 (!media_seen && !video_live_s2 && !img_streaming)) &&
+// -- it spins down and puts its own screen up.
+// ★ CD-DA/WAV playback has no video either, so its screen is an audio-reactive
+// VISUALIZER (dvd/cdda_viz.sv) or the bouncing logo, cycled by Angle (which does
+// nothing else on a CD -- the angle switch acts only while cell_ready).
+// ⚠ The screensaver and Stop OUTRANK the visualizer: both mean "put our own
+// screen up", so they force the logo and viz_vis yields to them.
+reg  [1:0] viz_mode;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)                       viz_mode <= 2'd0;
+    else if (cdda_mode_w && angle_edge) viz_mode <= viz_mode + 2'd1;
+end
+wire viz_logo  = (viz_mode == 2'd3);
+wire logo_hold = saver_on_w || stopped_w;
+wire logo_vis = (logo_hold ||
+                 (cdda_mode_w ? viz_logo
+                              : (!media_seen && !video_live_s2 && !img_streaming))) &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
+wire viz_vis  = cdda_mode_w && !viz_logo && !logo_hold &&
+                !img_unplayable && !ioctl_download &&
+                (logo_boot_dly == 25'd0);
+
 
 wire       logo_on_w;
 wire [7:0] logo_r_w, logo_g_w, logo_b_w;
@@ -6551,6 +6589,31 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .logo_g         (logo_g_w),
     .logo_b         (logo_b_w)
 );
+
+// Audio visualizers share the logo's overlay slot: the two are mutually
+// exclusive by viz_mode, and cdda_viz has the same 3-stage latency and lead.
+wire       viz_on_w;
+wire [7:0] viz_r_w, viz_g_w, viz_b_w;
+cdda_viz #(.VIZ_QX_LEAD(12'd12)) cdda_viz_inst (
+    .clk        (clk_sys),
+    .rst_n      (reset_n),
+    .h_pos      (ov_h_gen),
+    .v_pos      (core_v_pos),
+    .pal_mode   (pal_eff),
+    .frame_tick (av_refresh_tick),
+    .vis        (viz_vis),
+    .mode       (viz_mode),
+    .audio_l    (dec_audio_l),       // pre-mute: pictures follow the music
+    .audio_r    (dec_audio_r),       // even with Audio = Off
+    .viz_on     (viz_on_w),
+    .viz_r      (viz_r_w),
+    .viz_g      (viz_g_w),
+    .viz_b      (viz_b_w)
+);
+wire       bg_on_w = logo_on_w | viz_on_w;
+wire [7:0] bg_r_w  = viz_on_w ? viz_r_w : logo_r_w;
+wire [7:0] bg_g_w  = viz_on_w ? viz_g_w : logo_g_w;
+wire [7:0] bg_b_w  = viz_on_w ? viz_b_w : logo_b_w;
 
 // Pipeline the palette RGB + alpha + on/idx one clk_sys stage before the combinational
 // blend, so the blend stays a flat mux (no colour-space math) in the output hotspot.
@@ -6624,14 +6687,14 @@ wire pic_blank = stopped_w | saver_on_w;
 wire sp_on_e   = sp_q_inside & ~pic_blank;
 wire hl_use_e  = hl_use      & ~pic_blank;
 always @(posedge clk_sys) begin
-    sp_r_q     <= hud_on_e ? hud_r_w     : bar_on_e ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
-    sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
-    sp_b_q     <= hud_on_e ? hud_b_w     : bar_on_e ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
-    sp_alpha_q <= hud_on_e ? hud_alpha_w : bar_on_e ? bar_alpha_w : logo_on_w ? 4'd15
+    sp_r_q     <= hud_on_e ? hud_r_w     : bar_on_e ? bar_r_w     : bg_on_w ? bg_r_w : pal_r;
+    sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : bg_on_w ? bg_g_w : pal_g;
+    sp_b_q     <= hud_on_e ? hud_b_w     : bar_on_e ? bar_b_w     : bg_on_w ? bg_b_w : pal_b;
+    sp_alpha_q <= hud_on_e ? hud_alpha_w : bar_on_e ? bar_alpha_w : bg_on_w ? 4'd15
                            : (hl_use_e ? hl_a : sp_spu_alpha); // HLI contrast for a recoloured pixel
     sp_idx_q   <= sp_q_idx;
-    sp_on_q    <= hud_on_e | bar_on_e | logo_on_w | sp_on_e;
-    sp_force_q <= hud_on_e | bar_on_e | logo_on_w | hl_use_e; // + logo: bypass the idx0 key
+    sp_on_q    <= hud_on_e | bar_on_e | bg_on_w | sp_on_e;
+    sp_force_q <= hud_on_e | bar_on_e | bg_on_w | hl_use_e; // + logo: bypass the idx0 key
 end
 
 // Alpha-composite the subtitle over the decoded video, COMBINATIONALLY, right before

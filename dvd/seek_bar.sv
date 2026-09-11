@@ -111,6 +111,13 @@ module seek_bar #(
     input  wire        chap_prev,           // a chapter skip is pending/settling
     input  wire [7:0]  chap_pgm,            // projected target chapter
 
+    // Level: never draw chapter notches or the chapter-skip cursor. Set on an
+    // audio CD, whose bar spans ONE track. ⚠ It is a gate rather than relying
+    // on nr_pgm = 0 because tick_ok is only rebuilt on a pgc_loaded RISE, which
+    // a CD never produces -- so a DVD played earlier in the session would
+    // otherwise leave ITS notches on the CD's bar.
+    input  wire        ticks_off,
+
     // pixel out, REGISTERED (feeds emu's pre-blend register stage)
     output reg         bar_on,
     output reg  [7:0]  bar_r,
@@ -295,7 +302,8 @@ module seek_bar #(
         ch_tk_q  <= tick_col[ch_raddr];
         chap_px  <= ch_tk_q;
     end
-    wire chap_cur = chap_prev && tick_ok && (chap_pgm != 8'd0) &&
+    wire tick_show = tick_ok & ~ticks_off;
+    wire chap_cur = chap_prev && tick_show && (chap_pgm != 8'd0) &&
                     (chap_pgm <= {1'b0, tick_n});
 
     // Selected cursor (registered, event-rate) so the display path keeps its
@@ -357,7 +365,8 @@ module seek_bar #(
                     // seek target / chapter-skip target cursor: 5 px, opaque amber
                     bar_r <= 8'hFF; bar_g <= 8'hC8; bar_b <= 8'h20;
                     bar_alpha <= 4'd15;
-                end else if (tick_ok && s0_low && tk_bit) begin
+                end else if (tick_show && s0_low && tk_bit) begin
+
                     // chapter notch: 2 px, lower half
                     bar_r <= 8'hE8; bar_g <= 8'hE8; bar_b <= 8'hE8;
                     bar_alpha <= 4'd14;
