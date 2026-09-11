@@ -126,7 +126,16 @@ STRIDE (already shift-adds); `nav_pci`'s duplicate subtracts are CSE'd by Quartu
 SetSTN triple read (~60 ALMs, needs a latched condition) and the seek_time/seek_bar table
 sharing (~4 M10K, cross-module ports) are deferred.
 
-## 5. Branch C — `feature/alm-reclaim-reader` (✅ built, ✅ HW-CONFIRMED 2026-09-11)
+## 5. Branch C — `feature/alm-reclaim-reader` (✅ built, ✅ HW-CONFIRMED 2026-09-11, rebased onto A+B)
+
+**Re-fit on top of A and B (SEED 7, first roll):** clk_dec **96.06 / 91.84**, "needed"
+36,636 (87 %), placed 39,890 (95 %), ALUTs 57,465, registers 50,497; the extent table
+infers as two `altsyncram`s. Build `DVD_almreclaimrdr_20260911_2046.rbf`.
+
+**All three branches together against the v0.5.0 baseline fit on the same seed:** ALUTs
+60,642 → **57,465 (−3,177, −5.2 %)**, registers 52,238 → **50,497 (−1,741)**, placed ALMs
+40,821 → 39,890, "ALMs needed" 38,802 → 36,636 (93 % → 87 %), clk_dec hot corner 89.94
+(the v0.5.0 release fit) → 96.06.
 
 **HW round (maintainer's rig, `DVD_almreclaimrdr_20260911_0335.rbf`):** Men in Black
 navigation diffed against libdvdnav (FP → button 1 → button 2: no differences); the feature
