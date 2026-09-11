@@ -253,7 +253,10 @@ worse maintenance burden than targeted in-place edits. So:
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **LOGIC RECLAIM, BRANCH A — AC-3 duplicated arithmetic (2026-09-11, branch
-  `feature/alm-reclaim-ac3`, unpushed) — sim-proven bit-exact, ⏳ HW-confirm pending**
+  `feature/alm-reclaim-ac3`, unpushed) — sim-proven bit-exact and ✅ HW-CONFIRMED 2026-09-11**
+  (maintainer's rig: all four MiB AC-3 tracks audible on the capture card, −26 to −42 dBFS;
+  LPCM VOB −52 dBFS; MP2 VCD −44 dBFS at 44.1 kHz; Passthru telemetry steady; video pacing
+  2.4996 refreshes/frame, 48 kHz −51 ppm, 0 lates/drops over 46 s)
   (build `DVD_almreclaim_20260911_0138.rbf`, SEED 7 first roll, clk_dec 93.66/90.86).
   Zero value changes: **−2,544 ALUTs** (60,642 → 58,098), "ALMs needed" 93 % → 89 %.
   ★★ **THE HEADLINE PERCENTAGE WAS LYING IN BOTH DIRECTIONS.** A same-seed fit of

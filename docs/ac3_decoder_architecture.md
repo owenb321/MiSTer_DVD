@@ -828,9 +828,12 @@ spent).
 **Fit result (SEED 7, first roll):** clk_dec 93.66 / 90.86 MHz (gate 86.0),
 ALUTs 60,642 → **58,098 (−2,544)**, "ALMs needed" 38,802 → 37,358 (93 % → 89 %),
 placed ALMs 40,821 → 40,231, RAM 498 and DSP 94 unchanged, `lint_undriven` and
-`netlist_canary` PASS. Build `DVD_almreclaim_20260911_0138.rbf`. ⏳ HW gate: an
-AC-3 5.1 disc, a mono/2-2 disc, an MP2 VCD and an LPCM disc through both decode
-and Passthru (the cosim proves the numbers; the board proves the netlist).
+`netlist_canary` PASS. Build `DVD_almreclaim_20260911_0138.rbf`. ✅ HW-CONFIRMED
+2026-09-11 on the maintainer's rig: all four MiB AC-3 tracks audible on the capture card,
+an LPCM VOB and an MP2 VCD audible, Passthru telemetry steady, video pacing and A/V
+unchanged (`docs/logic_reclaim.md` §3 has the numbers). Mono / 2-2 discs were not
+re-run on hardware — the cosim decodes both bit-exactly and nothing in this pass is
+acmod-specific.
 
 ## 5. Fixed-point convention (pin BEFORE datapath RTL)
 
