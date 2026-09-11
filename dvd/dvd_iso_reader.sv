@@ -1118,9 +1118,8 @@ localparam S_DONE      = 6'd11;
 localparam S_ERROR     = 6'd12;
 // IFO title-selection states (appended at the end so S_STREAM/DONE/ERROR keep
 // their numbers and existing testbenches' magic numbers stay valid)
-localparam S_IFO_MAT      = 6'd13;   // setup: read VMGI sector, shadow @196
-localparam S_IFO_MAT_PARSE= 6'd14;   // tt_srpt ptr -> read TT_SRPT sector
-localparam S_IFO_TSRPT    = 6'd15;   // nr_of_srpts + title 1 title_set_nr
+localparam S_FLAT_INIT    = 6'd13;   // whole-file single-extent setup -> S_EXT_LOAD (area pass 2026-09-10)
+// (6'd14, 6'd15 were S_IFO_MAT_PARSE / S_IFO_TSRPT, unreachable, deleted 2026-09-10)
 localparam S_SELECT       = 6'd16;   // scan group table for target VTS
 // PGC / cell-timeline states (Phase 7; appended)
 localparam S_PGC_BEGIN    = 6'd17;   // decide PGC-parse vs linear fallback; read VTSI_MAT
@@ -1257,6 +1256,26 @@ reg [11:0] raw_pos;        // sector byte position (mod 2352) of the next byte
 reg        raw_m2;         // this sector's mode byte (@15) == 2
 reg        raw_sec_pass;   // Form-2 sector: pass payload window [24, 2348)
 reg [11:0] raw_wcnt;       // compact cache write index within the current block
+
+// ---- PGC-window walk address (area pass 2026-09-10) ----------------------------
+// Seven walk starts computed `pgc_sec + ((pgc_off + OFF) >> 11)` and
+// `(pgc_off + OFF) & 0x7FF` each with their own 17-bit and 32-bit adders, OFF
+// being one of six offsets. Quartus muxes results across FSM states, never
+// the operators, so this was seven adder pairs. The offset is a function of
+// the state / walker phase the site sits in, so select it once and share the
+// pair. Every site latches the wires in the same cycle it used to compute the
+// expression, from the same registers, so the values are identical (the two
+// 12-bit-wide originals cannot exceed 2^12 either: pgc_off < 2048 and
+// OFF <= 156).
+wire [15:0] pgc_woff   = (state == S_PGC_HDR)     ? 16'd12 :
+                         (state == S_PGC_CELLCHK) ? cell_pb_off16 :
+                         (wphase == P_SUBP)       ? 16'd156 :    // ACTL+SUBP walk done -> header
+                         (wphase == P_HDR)        ? ((cmd_tbl_off != 16'd0) ? cmd_tbl_off
+                                                                            : prog_map_off16) :
+                                                    prog_map_off16;      // P_CMDH / P_CMD
+wire [16:0] pgc_wsum   = {6'b0, pgc_off} + {1'b0, pgc_woff};
+wire [31:0] walk_sec_w = pgc_sec + {15'b0, pgc_wsum[16:11]};
+wire [10:0] walk_off_w = pgc_wsum[10:0];
 
 // Linear-transport seek math (combinational off the latched target; consumed
 // by the !cell_mode seek_jump branch). Raw mode: a target file block r maps to
@@ -2499,12 +2518,7 @@ always @(posedge clk or negedge rst_n) begin
                 if (total_blocks == 32'd0) begin
                     state <= S_DONE;
                 end else if (total_blocks < 32'd17) begin
-                    ext_mem[0] <= {32'd0, total_blocks};
-                    best_base <= 7'd0; best_cnt <= 7'd1;
-                    strm_idx  <= 7'd0; strm_left <= 7'd1;
-                    strm_blk  <= 32'd0; strm_done <= 1'b0;
-                    wr_ptr    <= 0;
-                    state     <= S_EXT_LOAD;   // let ext_start_q/ext_blocks_q refresh first
+                    state     <= S_FLAT_INIT;             // shared whole-file extent setup
                 end else begin
                     // Probe file byte 0 first: a raw MODE2/2352 image (VCD/SVCD
                     // .bin) starts with the 12-byte CD sync there, block-aligned.
@@ -2529,12 +2543,7 @@ always @(posedge clk or negedge rst_n) begin
                     raw_m2       <= 1'b0;
                     raw_sec_pass <= 1'b0;
                     raw_wcnt     <= 12'd0;
-                    ext_mem[0] <= {32'd0, total_blocks};
-                    best_base <= 7'd0; best_cnt <= 7'd1;
-                    strm_idx  <= 7'd0; strm_left <= 7'd1;
-                    strm_blk  <= 32'd0; strm_done <= 1'b0;
-                    wr_ptr    <= 0;
-                    state     <= S_EXT_LOAD;
+                    state     <= S_FLAT_INIT;             // shared whole-file extent setup
                 end else begin
                     sec_lba   <= 32'd16;
                     fetch_base<= 11'd0;      // CD001 / type at sector start
@@ -2610,12 +2619,7 @@ always @(posedge clk or negedge rst_n) begin
             S_CHK_VD0: begin
                 if (!cd001) begin
                     // Not ISO9660 -> flat-file fallback (whole file linear)
-                    ext_mem[0] <= {32'd0, total_blocks};
-                    best_base <= 7'd0; best_cnt <= 7'd1;
-                    strm_idx  <= 7'd0; strm_left <= 7'd1;
-                    strm_blk  <= 32'd0; strm_done <= 1'b0;
-                    wr_ptr    <= 0;
-                    state     <= S_EXT_LOAD;   // let ext_start_q/ext_blocks_q refresh first
+                    state     <= S_FLAT_INIT;             // shared whole-file extent setup
                 end else if (vd_type == 8'd1) begin
                     // PVD present in parse_buf; shadow its root record @156
                     iso_mode   <= 1'b1;
@@ -2836,45 +2840,21 @@ always @(posedge clk or negedge rst_n) begin
                 end
             end
 
-            // ------------------------------------------------------------
-            // IFO title selection: read the VMGI (VIDEO_TS.IFO) sector and
-            // shadow bytes @196.. to get the TT_SRPT sector pointer.
-            S_IFO_MAT: begin
-                sec_lba    <= vmgi_lba;
-                fetch_base <= 11'd196;
-                fetch_ret  <= S_IFO_MAT_PARSE;
-                fi         <= 6'd0;
-                fi_cap_v   <= 1'b0;
-                state      <= S_SECREAD;
-            end
+            // (S_IFO_MAT / S_IFO_MAT_PARSE / S_IFO_TSRPT -- the pre-VM "title 1"
+            //  selection -- were unreachable and are deleted; area pass 2026-09-10.)
 
             // ------------------------------------------------------------
-            // tt_srpt is a sector ptr relative to the IFO start (BE). Read the
-            // TT_SRPT sector; bail to the largest-VTS fallback if it's absent.
-            S_IFO_MAT_PARSE: begin
-                if (tt_srpt_ptr == 32'd0 || tt_srpt_ptr > 32'd65535) begin
-                    state <= S_PGC_BEGIN;              // malformed -> largest-VTS
-                end else begin
-                    sec_lba    <= vmgi_lba + tt_srpt_ptr;
-                    fetch_base <= 11'd0;
-                    fetch_ret  <= S_IFO_TSRPT;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
-                    state      <= S_SECREAD;
-                end
-            end
-
-            // ------------------------------------------------------------
-            // TT_SRPT: nr_of_srpts@0 (BE) + TT_SRP[0].title_set_nr@14 = the VTS
-            // that holds title 1 (the conventional main feature).
-            S_IFO_TSRPT: begin
-                target_vtsn <= ttsrp0_vtsn;
-                if (nr_of_srpts == 16'd0 || ttsrp0_vtsn == 8'd0) begin
-                    state <= S_PGC_BEGIN;              // no titles -> largest-VTS
-                end else begin
-                    sel_i <= 7'd0;
-                    state <= S_SELECT2;   // wait for gmem_q to refresh, then scan
-                end
+            // Whole-file single-extent setup, shared by the three flat
+            // fallbacks (tiny image, raw MODE2/2352, not-ISO9660). One extra
+            // cycle at mount; the three copies were three sources on each of
+            // seven register muxes (area pass 2026-09-10).
+            S_FLAT_INIT: begin
+                ext_mem[0] <= {32'd0, total_blocks};
+                best_base <= 7'd0; best_cnt <= 7'd1;
+                strm_idx  <= 7'd0; strm_left <= 7'd1;
+                strm_blk  <= 32'd0; strm_done <= 1'b0;
+                wr_ptr    <= 0;
+                state     <= S_EXT_LOAD;   // let ext_start_q/ext_blocks_q refresh first
             end
 
             // ------------------------------------------------------------
@@ -3342,8 +3322,8 @@ always @(posedge clk or negedge rst_n) begin
                     // gates aud_switch on it so the streaming words can't glitch
                     // a track resync).
                     pgc_ctl_valid <= 1'b0;
-                    walk_sec  <= pgc_sec + (({1'b0,pgc_off} + 12'd12) >> 11);
-                    walk_off  <= ({1'b0,pgc_off} + 12'd12) & 12'h7FF;
+                    walk_sec  <= walk_sec_w;              // pgc + 12 (shared adder, see pgc_woff)
+                    walk_off  <= walk_off_w;
                     walk_left <= 13'd16;               // 8 streams x 2 bytes
                     walk_idx  <= 13'd0;
                     wphase    <= P_ACTL;
@@ -3414,8 +3394,8 @@ always @(posedge clk or negedge rst_n) begin
                     end
                     if (walk_left == 13'd1) begin
                         // subp_control done -> the @156 PGC header window (P_HDR).
-                        walk_sec  <= pgc_sec + (({1'b0,pgc_off} + 12'd156) >> 11);
-                        walk_off  <= ({1'b0,pgc_off} + 12'd156) & 12'h7FF;
+                        walk_sec  <= walk_sec_w;          // pgc + 156 (shared adder)
+                        walk_off  <= walk_off_w;
                         walk_left <= 13'd78;
                         walk_idx  <= 13'd0;
                         wphase    <= P_HDR;
@@ -3453,8 +3433,8 @@ always @(posedge clk or negedge rst_n) begin
                         // (if any) -> cell check. cell_pb_off16 is being written
                         // THIS cycle; later states read the registered value.
                         if (cmd_tbl_off != 16'd0) begin
-                            walk_sec  <= pgc_sec + (({6'b0,pgc_off} + {1'b0,cmd_tbl_off}) >> 11);
-                            walk_off  <= (({6'b0,pgc_off} + {1'b0,cmd_tbl_off})) & 17'h07FF;
+                            walk_sec  <= walk_sec_w;      // pgc + cmd_tbl_off (shared adder)
+                            walk_off  <= walk_off_w;
                             walk_left <= 13'd8;        // counts@0-5 + last_byte@6-7
                             walk_idx  <= 13'd0;
                             wphase    <= P_CMDH;
@@ -3464,8 +3444,8 @@ always @(posedge clk or negedge rst_n) begin
                             cmd_nr_cell <= 8'd0;
                             if (prog_map_off16 != 16'd0 && cmd_nr_pgm != 8'd0 &&
                                 dom != DOM_FP) begin
-                                walk_sec  <= pgc_sec + (({6'b0,pgc_off} + {1'b0,prog_map_off16}) >> 11);
-                                walk_off  <= (({6'b0,pgc_off} + {1'b0,prog_map_off16})) & 17'h07FF;
+                                walk_sec  <= walk_sec_w;  // pgc + prog_map_off (shared adder)
+                                walk_off  <= walk_off_w;
                                 walk_left <= {5'd0, cmd_nr_pgm};
                                 walk_idx  <= 13'd0;
                                 wphase    <= P_PMAP;
@@ -3493,8 +3473,8 @@ always @(posedge clk or negedge rst_n) begin
                             // empty or absurd -> skip to the program map / cells
                             if (prog_map_off16 != 16'd0 && cmd_nr_pgm != 8'd0 &&
                                 dom != DOM_FP) begin
-                                walk_sec  <= pgc_sec + (({6'b0,pgc_off} + {1'b0,prog_map_off16}) >> 11);
-                                walk_off  <= (({6'b0,pgc_off} + {1'b0,prog_map_off16})) & 17'h07FF;
+                                walk_sec  <= walk_sec_w;  // pgc + prog_map_off (shared adder)
+                                walk_off  <= walk_off_w;
                                 walk_left <= {5'd0, cmd_nr_pgm};
                                 walk_idx  <= 13'd0;
                                 wphase    <= P_PMAP;
@@ -3533,8 +3513,8 @@ always @(posedge clk or negedge rst_n) begin
                     if (walk_left == 13'd1) begin
                         if (prog_map_off16 != 16'd0 && cmd_nr_pgm != 8'd0 &&
                             dom != DOM_FP) begin
-                            walk_sec  <= pgc_sec + (({6'b0,pgc_off} + {1'b0,prog_map_off16}) >> 11);
-                            walk_off  <= (({6'b0,pgc_off} + {1'b0,prog_map_off16})) & 17'h07FF;
+                            walk_sec  <= walk_sec_w;      // pgc + prog_map_off (shared adder)
+                            walk_off  <= walk_off_w;
                             walk_left <= {5'd0, cmd_nr_pgm};
                             walk_idx  <= 13'd0;
                             wphase    <= P_PMAP;
@@ -3665,8 +3645,8 @@ always @(posedge clk or negedge rst_n) begin
                         state <= S_FINAL2;             // title linear fallback (palette kept)
                 end else begin
                     // start the P_CELL walk at pgc + cell_playback_offset
-                    walk_sec  <= pgc_sec + (({6'b0,pgc_off} + {1'b0,cell_pb_off16}) >> 11);
-                    walk_off  <= (({6'b0,pgc_off} + {1'b0,cell_pb_off16})) & 17'h07FF;
+                    walk_sec  <= walk_sec_w;              // pgc + cell_pb_off (shared adder)
+                    walk_off  <= walk_off_w;
                     walk_left <= {nr_cells, 5'd0} - {2'd0, nr_cells, 3'd0};  // nr_cells*24
                     walk_idx  <= 13'd0;
                     wphase    <= P_CELL;
