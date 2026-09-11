@@ -56,7 +56,16 @@ The recurring pattern this time was not memory but **Quartus muxing RESULTS acro
 mutually exclusive FSM states**: every inlined function call, every per-state copy of an
 adder, is its own datapath.
 
-## 3. Branch A — `feature/alm-reclaim-ac3` (✅ built, ⏳ HW gate)
+## 3. Branch A — `feature/alm-reclaim-ac3` (✅ built, ✅ HW-CONFIRMED 2026-09-11)
+
+**HW round (maintainer's rig, `DVD_almreclaim_20260911_0138.rbf`):** `audio_check` on Men
+in Black — all four AC-3 tracks audible (5.1 main −26.2 dBFS RMS, the others −31 to −42,
+gate −80, digital silence reads −999); a controlled single capture of an LPCM VOB
+(−51.9 dBFS RMS, −35 peak) and of an MP2 VCD (−44.3 / −20.3 at 44.1 kHz); Passthru with
+steady telemetry (ring parked at 34 frames, video 2.497 refreshes/frame, no drain-gate
+closures — no AC-3 receiver on the rig, so the bitstream itself is not decodable there, as
+always); video pacing on the feature 2.49955 refreshes per picked-up frame, 23.973 fps,
+audio 47,997.6 Hz, zero lates, zero drops over 46 s.
 
 Detail in `docs/ac3_decoder_architecture.md` §4.12 and the DVD.qsf ledger. Every commit
 gated by `bench/ac3/run_front_cosim.sh` (bap bit-exact vs liba52 on 13 streams) **and PCM
@@ -66,7 +75,41 @@ Synthesis result **−2,544 ALUTs**; fit SEED 7 first roll, clk_dec 93.66 / 90.8
 Found en route: `bench/ac3/run_balloc.sh` had been failing silently since M19d (stale
 combinational delta-BA model, vvp exit 0). Fixed and `$fatal`ed before the refactor.
 
-## 4. Branch B — `feature/alm-reclaim-nav` (in progress)
+## 4. Branch B — `feature/alm-reclaim-nav` (✅ built, ✅ HW-CONFIRMED 2026-09-11, rebased onto A)
+
+**Re-fit on top of Branch A (SEED 7, first roll):** clk_dec **96.76 / 92.13**, "needed"
+36,833 (88 %), placed 40,059, ALUTs 60,642 → **57,723** and registers 52,238 → **50,328**
+against v0.5.0 — the IMDCT cliff is gone (3,148 ALUTs) and the two branches' savings add.
+Build `DVD_almreclaimnav_20260911_2010.rbf`. The two paragraphs below record the earlier
+`main`-based fits and remain true of them.
+
+**HW round (maintainer's rig, `DVD_almreclaimnav_20260911_0244.rbf`):** Men in Black
+navigation diffed against libdvdnav (FP → 1 → 2, no differences); the `O[2]` blocks decode
+exactly as before (highlight armed, subpicture shown, recolour fired — the 2-bit colour code
+expands to the same four colours); the palette convert-on-write renders the MiB menu's
+button/text colours correctly by eye; the rewritten telemetry sampler reads 47,999.5 Hz
+audio (−11 ppm) and 2.496 refreshes per frame on the feature — identical to Branch A —
+and a direct three-sample delta of `aud_play` gave exactly 3,000 counts/s; Scene It boots
+to its main menu (PGC 14, armed) with the serialised counter tick and button 1 starts the
+game. ⚠ A 30 s `telem --watch` over the MiB MENU read 69.5 kHz: that is the harness's
+16-bit unwrap being fooled by the counter reset at a menu-loop restart, not the sampler
+(the same window on the feature reads 48 kHz).
+⚠ **Pre-existing, NOT this branch:** `nav_diff` on ULTIMATE_T2 (`--script "1 2"`) reports
+button 1 landing in PGC 5 / VTS 4 on the board where libdvdnav lands in VTSM PGC 1 — the
+v0.5.0 build on the same rig gives the identical result. libdvdnav presses 1 at a
+two-button VTSM menu; the board parks on a title-domain still first (trajectory 3 3 1 1 1*),
+so the same digit is pressed at different menus. Worth its own issue.
+
+**Fit (SEED 7, first roll, cut from `main`):** clk_dec 89.73 / 89.42, "needed" 38,768,
+placed 40,823 (unchanged), registers 51,954 → 50,578 (**−1,376**), ALUTs +774 — **of
+which +799 is the IMDCT mapping cliff on RTL this branch does not touch** (3,228 on
+`main`, 4,027 here). Own modules: pts_assoc −732 regs, pgc_palette −359 regs / −55
+ALUTs, dvd_telem −264 regs, dvd_vm −148 ALUTs. ⚠ Read no ALM figure off this fit until
+the branch is re-fit on top of Branch A, whose regular operand-mux form held the IMDCT
+at 3,147–3,254 across two netlists. Build `DVD_almreclaimnav_20260911_0214.rbf`.
+**Rebuilt with `MISTER_DISABLE_ALSA` (SEED 7, first roll):** clk_dec 92.64 / 91.97,
+registers **52,238 → 50,167**, placed ALMs 40,821 → 40,615, the `alsa` entity gone; ALUTs
++551 of which the IMDCT cliff is +782. Build `DVD_almreclaimnav_20260911_0244.rbf`.
 
 | item | change | gate |
 |---|---|---|
