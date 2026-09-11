@@ -779,6 +779,55 @@ landed exactly on the documented 1648 LSB once the convention was fixed).
 
 ---
 
+### 4.12 Logic-reclaim area pass (2026-09-10, branch `feature/alm-reclaim-ac3`)
+
+**Motivation:** the design reached 98 % ALM on two consecutive feature branches
+(`feature/wav-audio`, `feature/cdda-physical`) and a fresh fit of `main`
+showed v0.5.0 itself already PLACED 40,821 ALMs (97 %) — its reported "93 %"
+was the fitter's dense-packing estimate, not free space. A per-entity audit
+found the AC-3 subtree's remaining fat was no longer memory (M19 finished
+that) but **duplicated arithmetic**: Quartus muxes RESULTS across mutually
+exclusive FSM states, never the operators, so every inlined function call is
+its own datapath. **Zero value changes — every commit gated by
+`run_front_cosim.sh` (bap bit-exact vs liba52 on all 13 streams) AND by the
+PCM dumps of blocks 0–5 of every stream being BYTE-IDENTICAL to a pre-change
+baseline**, plus each module's unit suite.
+
+| commit | what | ALUTs (synthesis, vs v0.5.0) |
+|---|---|---|
+| `bit_allocation` shared datapath | `compute_mask` was inlined at 5 states, `upd_fast/slow` at 4; now ONE combinational path (`nlc_w / cm_psd / fl_w / sl_w / cm_pre / cm_mask`) with state-selected operands | 2,491 → 1,348 (**−1,143**) |
+| `bit_allocation` 20-bit datapath | literal 32-bit transcription of liba52 `int`; bounds proven in the file header (largest intermediate < 70 k) | see fit table below |
+| `mantissa_dequant` one `scale_coeff` | called at 19 sites over 4 states, each a 32-bit shifter; one state-selected operand mux + a 25-bit shifter. Dither path 41 → 32 bits (|dith_prod| < 2^30, so shifts ≥ 31 are exactly 0). `m16_direct` 16-bit shifter | 1,594 → 1,110 (**−484**) |
+| `bit_reader` ×2 `ACC_W = MAXW+8` | the header already stated the bound; 64 bits bought nothing but three 64-bit barrel shifters per instance | 536 → 360 and 450 → 260 (**−366**) |
+| `imdct_512` (x, y, w1, w2) operand mux + one butterfly core | 19-case × 208-bit mux → 104-bit mux with fixed lanes; five per-op adder trees (58 adders) → one `A±T / B±U` core. Max-error figures IDENTICAL (1648 / 879 / 1116) | 3,228 → 3,147 (**−81**) — Quartus was already sharing most of it; the module's bulk is the 34×18 products spilling past a 27×27 DSP, which precision rules out |
+| `audblk_parse` group counts + `cplco` | `x/(3<<k) == (x/3)>>k`; one 22-bit right shifter for the Q5.18 placement | −14 (already cheap) |
+| `subpic_blend` (outside AC-3) | `in*16 + wt*(c-in)`: one multiply per channel, not two | flattened into `emu` |
+
+**Two findings worth more than their ALMs:**
+
+1. **`bench/ac3/run_balloc.sh` had been failing silently since M19d** — it still
+   presented delta-BA combinationally after `audblk_parse.deltba_mem` became a
+   registered read, so the DUT's `C_COPY` prefetch stored every delta-BA band
+   one slot early: 17 bap mismatches, all in the delta-BA bands, masked by
+   vvp's exit 0. The RTL was right (the cosim is bap bit-exact); the bench was
+   stale. Fixed (registered provider, `$fatal` on mismatch) BEFORE the refactor
+   so it could gate it. Same class as the M17 `run_imdct/imdct256/drc` masking.
+2. **The IMDCT's ALUT count swung +786 between two netlists with identical
+   RTL** (v0.5.0 `main` 3,228 vs the cdda branch 4,014; same M10Ks, regs,
+   DSPs). Quartus 17's mapping of that operand mux sat on a heuristic cliff.
+   The (x, y, w1, w2) form is smaller by only 81 ALUTs but is a regular
+   structure, so the cliff should be gone — check the next unrelated
+   branch's imdct row against 3,147.
+
+**Kept, deliberately:** the 4-mult DSP bank (M19e: never serialise it);
+`exponent_decode` / `pcm_out` / `bsi_parse` (120 / 120 / 45 ALMs — not worth a
+netlist roll); the `S_POST256` register set aliasing onto `S_POST`'s (~150–250
+ALMs, touches the M16 short-block path, deferred until the cheaper levers are
+spent).
+
+Fit result: _(filled in from the branch build — see the `DVD.qsf` seed ledger
+entry for `dev-almreclaim`)_.
+
 ## 5. Fixed-point convention (pin BEFORE datapath RTL)
 
 > ### ★ OUTPUT LEVEL CONVENTION (added 2026-09-07 — this was MISSING, and its
