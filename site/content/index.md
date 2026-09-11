@@ -3,11 +3,13 @@
 A **DVD player core for the MiSTer FPGA platform** (DE10-Nano / Intel Cyclone V).
 
 Put a decrypted DVD image on the SD card and it plays — with the disc's own menus, button
-highlights, chapters, subtitles, and multi-channel audio. Everything runs in FPGA fabric:
-there is no HPS-side daemon and no Linux helper process. The ARM only serves SD blocks
-through the standard framework interface, exactly like any other core.
+highlights, chapters, subtitles, and multi-channel audio. Decoding and navigation run
+entirely in FPGA fabric, with no HPS-side daemon. On the bare core the ARM only serves SD
+blocks through the standard framework interface, exactly like any other core; the optional
+[`MiSTer_DVDcss`](formats/physical-discs.md) Main adds physical discs, CSS decryption and
+HDMI bitstream audio on the ARM side.
 
-!!! warning "Status: pre-release alpha"
+!!! warning "Status: alpha"
     Film and TV playback is the supported path and is exercised across a library of
     hundreds of commercial discs. Interactive DVD *games* are known-incomplete — see
     [Compatibility](reference/compatibility.md).
@@ -38,8 +40,9 @@ honest list of what works and what does not.
 
 **Video** — MPEG-2 decode at full rate, plus MPEG-1 (the DVD spec's other permitted video
 format, 352×240 / 352×288). NTSC and PAL are auto-detected from the stream. Progressive
-and native 480i/576i output, 3:2 pulldown handling for film, and PTS-driven A/V sync with
-a display-refresh-locked frame-rate governor.
+and native 480i/576i output, and 3:2 pulldown handling for film. Picture, sound,
+subtitles and captions are all presented against one clock, so lip sync holds across
+seeks, menus and mode changes.
 
 **DVD navigation** — the core reads an ISO directly, parses the IFOs, and runs a real
 **DVD virtual machine** validated command-by-command against libdvdnav's behaviour. The
@@ -52,7 +55,8 @@ infrared remote, with an on-screen HUD and seek bar.
 **Audio** — AC-3 and MPEG-1 Layer II decoded entirely in fabric (every AC-3 channel mode,
 downmixed to stereo) to HDMI; 48 kHz LPCM; AC-3 and DTS as
 [IEC 61937 bitstream](audio/passthrough.md) to a receiver — over optical S/PDIF, or over
-HDMI itself with the custom Main, so 5.1 needs no add-on board.
+HDMI itself with the custom Main, so 5.1 needs no add-on board. Tracks with no bitstream
+format — LPCM and MP2 — still play as PCM in that mode.
 
 **Physical discs and encrypted ISOs** — with the optional
 [`MiSTer_DVDcss`](formats/physical-discs.md) add-on, the core plays a **physical DVD**
@@ -66,8 +70,9 @@ the data-track `.bin` and the core strips the raw CD sectors in fabric, demuxes 
 pause.
 
 **Analog / CRT** — a native 15 kHz 480i/576i raster on the analog pins, built from the
-disc's [authored fields](video/analog-crt.md), re-timed 1:1 — the presentation a set-top
-player feeds a TV. It engages from `MiSTer.ini` alone, like any other core.
+disc's [authored fields](video/analog-crt.md), with broadcast-standard composite sync — the
+presentation a set-top player feeds a TV. It engages from `MiSTer.ini` alone, like any
+other core.
 
 **Closed captions** — NTSC discs carry EIA-608 captions hidden in the MPEG-2 video stream,
 separately from subtitles. The core extracts them and re-modulates them onto
@@ -82,7 +87,7 @@ specification and libdvdnav's source to establish correct behaviour, deciding wh
 and in what order, and then running each build on real hardware, finding what broke, and
 narrowing it down to a root cause.
 
-That last part is the bulk of the work: roughly 890 commits and 280 hardware builds since
+That last part is the bulk of the work, and there has been a great deal of it since
 development began in June 2026. The
 [`docs/` directory](https://github.com/owenb321/MiSTer_DVD/tree/main/docs) records the
 reasoning behind most non-trivial decisions, including the long diagnostic hunts (A/V

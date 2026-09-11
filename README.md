@@ -3,17 +3,19 @@
 A **DVD player core for the MiSTer FPGA platform** (DE10-Nano / Intel Cyclone V).
 
 Put a decrypted DVD image on the SD card and it plays — with the disc's own menus,
-button highlights, chapters, subtitles, and multi-channel audio. Everything runs in
-FPGA fabric: there is no HPS-side daemon and no Linux helper process. The ARM only
-serves SD blocks through the standard framework interface, exactly like any other core.
+button highlights, chapters, subtitles, and multi-channel audio. Decoding and navigation
+run entirely in FPGA fabric, with no HPS-side daemon. On the bare core the ARM only serves
+SD blocks through the standard framework interface, exactly like any other core; the
+optional `MiSTer_DVDcss` Main adds physical discs, CSS decryption and HDMI bitstream audio
+on the ARM side.
 
 Built as a fork of [`mrchrisster/MiSTer_MPEG2`](https://github.com/mrchrisster/MiSTer_MPEG2),
 itself a MiSTer port of **Koen De Vleeschauwer's `mpeg2fpga`** hardware MPEG-2 decoder
 (2007). The video decode datapath is theirs and is largely unmodified; this project adds
 everything needed to turn a decoder into a player.
 
-> **Status: pre-release alpha.** Film and TV playback is the supported path and is
-> exercised across a library of ~34 commercial discs. Interactive DVD *games* are
+> **Status: alpha.** Film and TV playback is the supported path and is exercised across a
+> library of hundreds of commercial discs. Interactive DVD *games* are
 > known-incomplete — see [Known limitations](#known-limitations).
 
 
@@ -28,7 +30,7 @@ DVD-Video specification and libdvdnav's source to establish correct behaviour, d
 what to build and in what order, and then running each build on real hardware, finding
 what broke, and narrowing it down to a root cause.
 
-That last part is the bulk of the work: roughly 890 commits and 280 hardware builds since
+That last part is the bulk of the work, and there has been a great deal of it since
 development began in June 2026. The `docs/` directory records the reasoning behind most
 non-trivial decisions, including the long diagnostic hunts (A/V drift, film cadence,
 field-coded discs) where the root cause turned out to be several layers away from the
@@ -47,11 +49,13 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   [`MiSTer_DVDcss`](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/) add-on — no PC decrypt step, and
   encrypted images need no optical drive at all.
 - **Video** — MPEG-2 and MPEG-1, NTSC and PAL auto-detected, progressive or native
-  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/), PTS-driven A/V sync.
+  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/), and one clock for
+  picture, sound, subtitles and captions — so lip sync holds across seeks, menus and mode changes.
 - **Audio** — AC-3 (every channel mode) and MP2 and LPCM decoded
   [entirely in fabric](https://owenb321.github.io/MiSTer_DVD/audio/formats/); AC-3 and DTS as
   [IEC 61937 bitstream](https://owenb321.github.io/MiSTer_DVD/audio/passthrough/) to a receiver — over optical S/PDIF,
-  or over HDMI with the custom Main, so 5.1 needs no add-on board.
+  or over HDMI with the custom Main, so 5.1 needs no add-on board. Tracks with no bitstream
+  format still play as PCM in that mode.
 - **Analog / CRT** — a native 15 kHz 480i/576i raster built from the disc's
   [authored fields](https://owenb321.github.io/MiSTer_DVD/video/analog-crt/), with broadcast-standard composite
   sync: the presentation a set-top player feeds a TV. Engages from `MiSTer.ini` like any
@@ -62,9 +66,6 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 - **Gamepad, keyboard or infrared remote** — every transport action has a
   [built-in key](https://owenb321.github.io/MiSTer_DVD/playback/controls/), so a USB IR receiver
   turns any remote you already own into a DVD remote with nothing to configure.
-
-Everything runs in FPGA fabric: no HPS-side daemon, no Linux helper process. The ARM only
-serves SD blocks through the standard framework interface.
 
 ## Known limitations
 
@@ -144,6 +145,7 @@ That falls out of what it is built from rather than being a preference:
 | `sys/` — MiSTer framework | GPL, mixed "v2 or later" and "v3 or later" |
 | `rtl/` — MPEG-2 decoder, © 2007 Koen De Vleeschauwer | **BSD** ([`mpeg2fpga`](https://opencores.org/projects/mpeg2fpga)) |
 | `dvd/`, `bench/dvd/`, `tools/`, `docs/`, `site/` | Original to this project — GPL-3.0-or-later |
+| `dvd/ac3/` — the AC-3 decoder | Original RTL, but a **derivative work of liba52** (GPL-2.0-or-later) — see [NOTICE](NOTICE) |
 
 The `sys/` files that are "v2 or later" can be taken to v3, but the "v3 or later" ones
 cannot go down to v2, so the combination resolves to GPLv3-or-later. BSD is
@@ -170,6 +172,8 @@ This core is built on **Koen De Vleeschauwer's** [`mpeg2fpga`](https://opencores
 MPEG-2 decoder (2007), ported to MiSTer by **mrchrisster** as
 [`MiSTer_MPEG2`](https://github.com/mrchrisster/MiSTer_MPEG2), on the **MiSTer-devel**
 framework. Much of what looks like original engineering here is the result of having good
-references — libdvdnav, libdvdread, liba52 and others — to check against.
+references — libdvdnav, libdvdread and others — to check against. The AC-3 decoder goes
+further than checking: it follows **liba52** closely enough to be a derivative work of it,
+as [NOTICE](NOTICE) records.
 
 [Full credits, specs and verification oracles →](https://owenb321.github.io/MiSTer_DVD/about/acknowledgements/)

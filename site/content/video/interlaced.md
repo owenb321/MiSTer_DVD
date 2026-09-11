@@ -44,7 +44,7 @@ what a CRT is built to show.
 
 While it is active:
 
-- The **CRT** gets the fields re-timed 1:1 on a native 15 kHz raster — the smoothest
+- The **CRT** gets each authored field directly on a native 15 kHz raster — the smoothest
   presentation for video-sourced discs, and the same thing a set-top player outputs.
 - **HDMI** drops to 480i for the session, deinterlaced by the framework scaler.
   `480i Deint` picks Bob (smooth motion, half vertical resolution) or Weave (full
