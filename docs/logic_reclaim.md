@@ -83,7 +83,15 @@ STRIDE (already shift-adds); `nav_pci`'s duplicate subtracts are CSE'd by Quartu
 SetSTN triple read (~60 ALMs, needs a latched condition) and the seek_time/seek_bar table
 sharing (~4 M10K, cross-module ports) are deferred.
 
-## 5. Branch C — `feature/alm-reclaim-reader` (✅ built, ⏳ HW gate)
+## 5. Branch C — `feature/alm-reclaim-reader` (✅ built, ✅ HW-CONFIRMED 2026-09-11)
+
+**HW round (maintainer's rig, `DVD_almreclaimrdr_20260911_0335.rbf`):** Men in Black
+navigation diffed against libdvdnav (FP → button 1 → button 2: no differences); the feature
+with chapter skips 1→3, a D-pad +10 s seek and prev-chapter restarting the chapter, all read
+off the pinned HUD; a flat `.VOB` mount through the consolidated `S_FLAT_INIT` (HUD clock
+live, D-pad seek advancing it); a VCD `.bin` mount and seek (44.1 kHz, 2.00 refreshes per
+frame). Telemetry after every seek: 2.496–2.498 refreshes per picked-up frame, 48 kHz,
+zero lates, zero drops, zero drain-gate closures.
 
 Shipped: shared PGC-window walk adder (7 sites → 1 mux + 1 adder pair), the unreachable
 `S_IFO_MAT/_PARSE/_TSRPT` states deleted, one `S_FLAT_INIT` state for the three flat
