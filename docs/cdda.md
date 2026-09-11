@@ -488,3 +488,40 @@ leaving it live would be a second copy of the same state, and the two would drif
 the first time one of them was reset without the other.
 Gate: `bench/dvd/cdda_screen_tb.sv` (cycle, per-mode default, Display in both
 kinds of mode, new-disc reset, and no effect outside CD mode), in `run_wav.sh`.
+
+## Follow-up 3 (`dev-cddaphys4`) — track skips stack
+
+**Report:** pressing Next or Previous several times quickly on a CD moved one track,
+where the same burst on a DVD skips that many chapters. **Sim-green, ⏳ not yet run on
+hardware.**
+
+The press counting was never the problem. `emu.sv`'s chapter debounce already turns a
+burst into ONE `chap_pulse` carrying `chap_mag`, and the DVD reader uses it — but
+`cdda_toc`'s resolver only ever took the pulse and the direction, so it always
+answered "the next track" or "the previous track".
+
+`cdda_toc` now takes `skip_mag` and resolves the burst to a track **index**: `cur + N`
+forward (past the last track = the disc's end, as a single press already did), and
+backward the restart of the current track counts as the first step when more than
+~3 s in, then one track per press, clamped at track 1. ★ The table has ONE read port
+(the fit-failure lesson in this module's header), so an arbitrary entry cannot be read
+on demand — the resolver waits for the continuous walk to reach the index and captures
+its start then. That is at most two sweeps, a few hundred clocks, invisible after a
+500 ms debounce. ⚠ `cdda_toc_tb`'s skip helper had waited 4 cycles for the fire, which
+this latency would have failed; its "no table, no skip" arm now waits as long as a real
+fire may take, or a late spurious fire would pass it.
+
+**The HUD counts through tracks as you press.** The chapter projection in `emu.sv`
+(`chap_proj_clamp` → `chap_disp_hold` → `hud_cur_ch`) was keyed on the DVD chapter
+number, which is 0 on a CD, so it never engaged. On a CD it now uses the current track,
+the track total and — for the restart rule — `cdda_toc`'s own exported `past_start`,
+so the number on screen and the place the skip lands come from one rule. DVDs see the
+exact same terms as before. `seek_time`'s chapter arm reads DVD maps, so its
+`chap_prev` is gated off on a CD.
+
+The track-table wires moved up beside the chapter burst in `emu.sv`, which read
+`cdda_tracks_on` above its declaration — something both tools tolerated.
+
+Gate: `cdda_toc_tb` [7] — next ×3, prev ×2 past and at a track start, overshoot at both
+ends, and the exported `past_start` verdict — each arm starting where a single press
+would land somewhere else, so an implementation ignoring `skip_mag` fails.

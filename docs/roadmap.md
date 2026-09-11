@@ -543,6 +543,9 @@ the split is deliberate:
   🔧 **`dev-cddaphys3`:** the HUD is hidden over a visualizer (Display toggles,
   `dvd/cdda_screen.sv`) and the FF/REW seek preview is track-relative (it was
   showing disc time). Sim-green, ⏳ HW-untested.
+  🔧 **`dev-cddaphys4`:** track skips STACK like DVD chapter skips — a burst of
+  N presses moves N tracks, and the HUD counts through them. Sim-green,
+  ⏳ HW-untested.
 
 ⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
 CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.

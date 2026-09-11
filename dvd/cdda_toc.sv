@@ -95,6 +95,8 @@ module cdda_toc #(
     // worst at answering and a testbench is best at.
     input  wire        skip_req,       // 1-cyc: the debounced chapter burst
     input  wire        skip_fwd,       // 1 = next, 0 = previous
+    input  wire [4:0]  skip_mag,       // presses in the debounced burst (0 = 1)
+    output wire        past_start,     // >~3 s in: Previous restarts this track first
     output reg         skip_fire,      // 1-cyc: skip_tgt is valid
     output reg  [31:0] skip_tgt        // absolute block to seek to
 );
@@ -247,17 +249,62 @@ module cdda_toc #(
     // ⚠ "Previous" restarts the CURRENT track unless you are near its start --
     // what every CD player does, and what makes a double-press mean "the one
     // before". Without it, Previous from the middle of a track would skip music
-    // the listener is in the middle of.
+    // the listener is in the middle of. Exported so emu's HUD burst projection
+    // counts with the SAME rule rather than a copy of it.
+    assign past_start = ((lin_blk - s_lo) > RESTART_BLK);
+
+    // ★ A BURST STACKS, like DVD chapter skips (user report 2026-09-11: CD track
+    // skips moved one track however many times you pressed). emu's debounce
+    // already counts the presses into chap_mag; this resolves "N tracks" to a
+    // track INDEX, and the walk above delivers that entry's start. The table has
+    // ONE read port (see the header), so an arbitrary entry is captured when the
+    // sweep reaches it: at most two passes, a few hundred clocks, which nothing
+    // can see after a 500 ms debounce.
+    //   next  x N : cur + N; past the last track = the disc's end (as for one press)
+    //   prev  x N : the restart of the current track counts as the first step when
+    //               past_start, then one track per press; clamps at track 1
+    wire [6:0] cur_i   = (cur_track != 8'd0) ? (cur_track[6:0] - 7'd1) : 7'd0;
+    wire [6:0] last_i  = n_tracks[6:0] - 7'd1;
+    wire [5:0] mag1    = (skip_mag == 5'd0) ? 6'd1 : {1'b0, skip_mag};
+    wire [7:0] fwd_sum = {1'b0, cur_i} + {2'b00, mag1};
+    wire       fwd_end = (fwd_sum > {1'b0, last_i});
+    wire [5:0] back    = past_start ? (mag1 - 6'd1) : mag1;
+    wire [6:0] prev_i  = ({1'b0, back} >= cur_i) ? 7'd0 : (cur_i - {1'b0, back});
+
+    reg        pend;                   // a resolved index is waiting for the walk
+    reg  [6:0] pend_i;
+    reg  [7:0] pend_age;               // give up after two full sweeps
+
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             skip_fire <= 1'b0;
             skip_tgt  <= 32'd0;
+            pend      <= 1'b0;
+            pend_i    <= 7'd0;
+            pend_age  <= 8'd0;
         end else begin
             skip_fire <= 1'b0;
-            if (skip_req && toc_valid) begin
-                skip_fire <= 1'b1;
-                skip_tgt  <= skip_fwd ? s_next
-                           : ((lin_blk - s_lo) > RESTART_BLK) ? s_lo : s_prev;
+            if (!toc_valid) begin
+                pend <= 1'b0;
+            end else if (skip_req) begin
+                if (skip_fwd && fwd_end) begin
+                    skip_fire <= 1'b1;
+                    skip_tgt  <= total_blk;
+                    pend      <= 1'b0;
+                end else begin
+                    pend     <= 1'b1;
+                    pend_i   <= skip_fwd ? fwd_sum[6:0] : prev_i;
+                    pend_age <= 8'd0;
+                end
+            end else if (pend) begin
+                if (ev_ok && (ev_i == pend_i)) begin
+                    skip_fire <= 1'b1;
+                    skip_tgt  <= ev_lo;
+                    pend      <= 1'b0;
+                end else if (pend_age == 8'd255)
+                    pend <= 1'b0;
+                else
+                    pend_age <= pend_age + 8'd1;
             end
         end
     end

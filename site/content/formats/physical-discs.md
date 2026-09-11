@@ -108,9 +108,11 @@ The screen shows an audio visualizer, because there is no picture on the disc:
 - **Track number and track time.** `TR 3/12` with the elapsed time counting
   *within* the current track, like a CD player's front panel.
 - **The progress bar shows the current track**, not the whole disc.
-- **Next / Previous Chapter skip tracks.** Previous restarts the current track
-  unless you press it within the first few seconds, so a double-press goes to
-  the track before — again, what a CD player does.
+- **Next / Previous Chapter skip tracks.** Press either several times in quick
+  succession to skip that many tracks in one go — the status line counts
+  through them as you press, just like chapters on a DVD. Previous restarts the
+  current track unless you press it within the first few seconds, so a
+  double-press goes to the track before — again, what a CD player does.
 - **Fast Fwd / Rewind stay inside the track.** Rewinding stops at the start of
   the track; fast-forwarding all the way to its end carries on into the next
   track. The D-pad time jumps follow the same track edges.

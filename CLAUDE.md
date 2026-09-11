@@ -2155,6 +2155,12 @@ worse maintenance burden than targeted in-place edits. So:
   the HUD (status line + bar) is hidden over a visualizer, shown over the logo, Display
   toggles — new `dvd/cdda_screen.sv` + bench; the HUD's own Display toggle is gated off
   on a CD so there is ONE copy of that state. ⏳ HW-untested.
+  🔧 **`dev-cddaphys4`: track skips STACK** (user report — N quick presses moved ONE
+  track). emu's debounce already counted presses into `chap_mag`; `cdda_toc` simply
+  never took it. It now resolves "N tracks" to an INDEX and captures that entry as the
+  single-port table walk passes it (≤ two sweeps), with the restart-counts-as-one rule;
+  the HUD projection counts tracks and reads `cdda_toc.past_start`, so preview and
+  resolver share ONE rule. DVD bit-identical. `cdda_toc_tb` [7]. ⏳ HW-untested.
   ★★ **`cdda_toc` DID NOT FIT ON ITS FIRST WRITE, AND IT IS THE `parse_buf` LESSON
   VERBATIM.** Async-read of the track-start array at **5 sites** → 3733 ALUTs / 3463
   regs / **0 block memory bits**, and the fitter wanted 4558 LABs against 4191 — the

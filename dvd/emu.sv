@@ -655,7 +655,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cddaphys3"
+`define CORE_VERSION "dev-cddaphys4"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1437,6 +1437,13 @@ wire [5:0] chap_net_abs = chap_net[5] ? (6'd0 - chap_net) : chap_net;
 wire       chap_at_start;            // 1 = <~5 s into the current chapter (from DSI
                                      // c_eltm) -> prev steps back; else prev restarts
                                      // the current chapter. Assigned near nav_dsi below.
+// Audio-CD track table (driven by dvd/cdda_toc.sv further down). Declared HERE
+// because the chapter burst and its HUD projection read it, and they sit above
+// the instance -- a CD's track skip IS this burst.
+wire        cdda_toc_valid_w;
+wire [7:0]  cdda_ntracks_w, cdda_curtrk_w;
+wire        cdda_past_start_w;       // >~3 s into the track (cdda_toc's own rule)
+wire        cdda_tracks_on = cdda_mode_w && cdda_toc_valid_w;
 // The reader has ONE raw-RBN seek port and two producers now: the user's hold-to-seek
 // scrub and dvd/mode_realign.sv's re-align on a raster-mode change. mode_realign owns the
 // arbitration (the scrub always wins) -- see its header. scrub_seek_* are the scrub's own
@@ -1505,14 +1512,20 @@ wire [7:0]  hud_nr_ch = (nr_ptt_w != 11'd0)
 // past_start ~ !chap_at_start (>~5 s into the chapter -> first prev restarts it,
 // matching the reader; the reader's extra cell_i>best_cell test can't be seen from
 // emu, but the c_eltm gate dominates on real discs -> the preview tracks the seek).
-wire        chap_past_start = ~chap_at_start;
+// On an audio CD the burst counts TRACKS: the current track, the track total and
+// cdda_toc's own restart verdict replace the DVD chapter terms, so the HUD counts
+// through tracks as you press (user report 2026-09-11) and the projection cannot
+// disagree with where cdda_toc resolves the burst. DVD: unchanged.
+wire [7:0]  burst_cur       = cdda_tracks_on ? cdda_curtrk_w     : cur_pgm_w;
+wire [7:0]  burst_nr        = cdda_tracks_on ? cdda_ntracks_w    : hud_nr_ch;
+wire        chap_past_start = cdda_tracks_on ? cdda_past_start_w : ~chap_at_start;
 wire [5:0]  chap_prev_dec   = (chap_past_start && chap_net_abs != 6'd0)
                               ? (chap_net_abs - 6'd1) : chap_net_abs;
 wire signed [9:0] chap_proj_raw = (chap_net > 6'sd0)
-        ?  ($signed({2'b0, cur_pgm_w}) + $signed({4'b0, chap_net_abs}))
-        :  ($signed({2'b0, cur_pgm_w}) - $signed({4'b0, chap_prev_dec}));
+        ?  ($signed({2'b0, burst_cur}) + $signed({4'b0, chap_net_abs}))
+        :  ($signed({2'b0, burst_cur}) - $signed({4'b0, chap_prev_dec}));
 wire [7:0]  chap_proj_clamp = (chap_proj_raw < 10'sd1)                       ? 8'd1
-                            : (chap_proj_raw > $signed({2'b0, hud_nr_ch})) ? hud_nr_ch
+                            : (chap_proj_raw > $signed({2'b0, burst_nr}))  ? burst_nr
                             : chap_proj_raw[7:0];
 // Registered display value: track the projection LIVE while a burst debounces, then
 // HOLD the final target through the seek settle (until cur_pgm_w catches up, or a
@@ -1528,17 +1541,17 @@ always @(posedge clk_sys or negedge reset_n) begin
         chap_disp_tmr  <= 25'd0;
     end else if (start_streaming) begin
         chap_disp_act  <= 1'b0;                       // fresh load clears the hold
-    end else if (chap_timer != 24'd0 && chap_net != 6'sd0 && cur_pgm_w != 8'd0) begin
+    end else if (chap_timer != 24'd0 && chap_net != 6'sd0 && burst_cur != 8'd0) begin
         chap_disp_hold <= chap_proj_clamp;            // live preview during debounce
         chap_disp_act  <= 1'b1;
         chap_disp_tmr  <= 25'd27_000_000;             // ~1 s @ 27 MHz settle timeout
     end else if (chap_disp_act) begin
         // burst fired (or cancelled): hold the target until the reader lands on it
-        if (cur_pgm_w == chap_disp_hold || chap_disp_tmr == 25'd0) chap_disp_act <= 1'b0;
+        if (burst_cur == chap_disp_hold || chap_disp_tmr == 25'd0) chap_disp_act <= 1'b0;
         else chap_disp_tmr <= chap_disp_tmr - 25'd1;
     end
 end
-wire [7:0]  hud_cur_ch = chap_disp_act ? chap_disp_hold : cur_pgm_w;
+wire [7:0]  hud_cur_ch = chap_disp_act ? chap_disp_hold : burst_cur;
 wire [31:0] cur_cell_start_w;         // Phase 11 HUD: BCD start time of the playing cell
 wire        cellf_we_w;               // Phase 11 bar: cell first_sector stream tap
 wire [7:0]  cellf_idx_w;
@@ -2215,8 +2228,6 @@ wire [31:0] lin_cur_bcd_w, lin_tot_bcd_w, lin_prev_bcd_w, seek_prev_time_w;
 // (the reader needs no CD mode) and is also why the core cannot see where one
 // track ends. The Main sends the boundaries over the ioctl-download channel and
 // this turns lin_blk back into "track 7 of 12".
-wire        cdda_toc_valid_w;
-wire [7:0]  cdda_ntracks_w, cdda_curtrk_w;
 wire [31:0] cdda_cur_start_w, cdda_cur_end_w, cdda_prev_start_w, cdda_next_start_w;
 wire        cdda_notch_we_w;
 wire [6:0]  cdda_notch_idx_w;
@@ -2243,6 +2254,8 @@ cdda_toc cdda_toc_inst (
     .next_start     (cdda_next_start_w),
     .skip_req       (chap_pulse & cdda_mode_w),
     .skip_fwd       (chap_dir),
+    .skip_mag       (chap_mag),          // presses in the burst: skips STACK
+    .past_start     (cdda_past_start_w),
     .skip_fire      (cdda_jump_fire),
     .skip_tgt       (cdda_jump_base)
 );
@@ -2255,7 +2268,7 @@ cdda_toc cdda_toc_inst (
 // ★ base = the target and off = 0. scrub_ctrl computes `base +/- off` and clamps
 // it into the title span, so handing it the absolute target reuses every one of
 // those behaviours without a second code path.
-wire cdda_tracks_on = cdda_mode_w && cdda_toc_valid_w;
+// (cdda_tracks_on is declared with the track-table wires by the chapter burst.)
 
 // ★ AUDIO CD: FF/REW (and a D-pad time jump) are clamped to the CURRENT TRACK
 // (user decision 2026-09-10) -- and that one substitution gives both rules the
@@ -6288,7 +6301,7 @@ seek_time seek_time_inst (
     .dpad_dir        (dpad_pend_dir),
     .dpad_min        (dpad_pend_min),
     .dpad_sec        (dpad_pend_sec),
-    .chap_prev       (chap_disp_act),
+    .chap_prev       (chap_disp_act & ~cdda_tracks_on),   // DVD maps only
     .chap_pgm        (hud_cur_ch),
     .bar_active      (bar_active_w),
     .bar_tgt_rbn     (bar_tgt_rbn_w),
@@ -6434,9 +6447,9 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // On an audio CD these carry the TRACK, which the HUD labels "TR n/N"
     // (trk_mode) -- a CD has no chapters.
     .cur_pgm      (hud_dbg      ? cur_pgcn_rd
-                   : cdda_tracks_on ? cdda_curtrk_w : hud_cur_ch),
+                   : hud_cur_ch),                     // track on a CD
     .nr_pgm       (hud_dbg      ? cur_vts
-                   : cdda_tracks_on ? cdda_ntracks_w : hud_nr_ch),
+                   : burst_nr),
     // popups: B7/B8 cycle popups mirror the gamepad state (aud_cur/sub_idx —
     // the same selectors that drive the reader's attr_* language readout);
     // angle only inside a real multi-angle block; chapter matches the skip guard.
