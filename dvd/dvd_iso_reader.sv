@@ -572,6 +572,19 @@ localparam MAXEXT = 100;
 // fresh before use. sd reads are ~ms apart, so the extra idle cycle is free.
 reg [63:0] ext_mem [0:MAXEXT-1];       // {start[63:32], blocks[31:0]}
 reg [31:0] ext_start_q, ext_blocks_q;  // registered read of ext_mem[strm_idx]
+// ONE registered write port (area pass 2026-09-10). The FSM used to write
+// ext_mem at several sites (three constant-address `ext_mem[0] <=` and the
+// directory scan's `ext_mem[all_n] <=`); after those were consolidated Quartus
+// 17 stopped inferring the M10K and built the 100x64 table from flops
+// (+5,373 registers, the design no longer fit). An explicit port with one
+// address expression is the form it always infers. Writes land one cycle
+// after the site sets ext_w_*: the scan's writes are consumed many cycles
+// later, and the flat-init path waits one extra state (S_FLAT_INIT2) before
+// S_EXT_LOAD refreshes the read.
+reg        ext_w_en;
+reg [6:0]  ext_w_addr;
+reg [63:0] ext_w_data;
+always @(posedge clk) if (ext_w_en) ext_mem[ext_w_addr] <= ext_w_data;
 reg [6:0]  all_n;
 
 reg [6:0]  best_base;
@@ -1119,7 +1132,8 @@ localparam S_ERROR     = 6'd12;
 // IFO title-selection states (appended at the end so S_STREAM/DONE/ERROR keep
 // their numbers and existing testbenches' magic numbers stay valid)
 localparam S_FLAT_INIT    = 6'd13;   // whole-file single-extent setup -> S_EXT_LOAD (area pass 2026-09-10)
-// (6'd14, 6'd15 were S_IFO_MAT_PARSE / S_IFO_TSRPT, unreachable, deleted 2026-09-10)
+localparam S_FLAT_INIT2   = 6'd14;   // one-cycle wait for the ext_mem write port
+// (6'd15 was S_IFO_TSRPT, unreachable, deleted 2026-09-10)
 localparam S_SELECT       = 6'd16;   // scan group table for target VTS
 // PGC / cell-timeline states (Phase 7; appended)
 localparam S_PGC_BEGIN    = 6'd17;   // decide PGC-parse vs linear fallback; read VTSI_MAT
@@ -1864,6 +1878,7 @@ always @(posedge clk or negedge rst_n) begin
         pgc_loaded   <= 1'b0;
         pgc_error    <= 1'b0;
         cmd_we       <= 1'b0;
+        ext_w_en     <= 1'b0;
         cell_end_pulse <= 1'b0;
         pgc_end_pulse  <= 1'b0;
         still_timed  <= 1'b0;
@@ -1945,6 +1960,7 @@ always @(posedge clk or negedge rst_n) begin
         cmd_we   <= 1'b0;
         pm_we    <= 1'b0;
         ptt_we   <= 1'b0;
+        ext_w_en <= 1'b0;                   // one-cycle write strobe (see ext_mem)
         jump_ack <= 1'b0;
         pgc_loaded <= 1'b0;
         pgc_error  <= 1'b0;
@@ -2753,7 +2769,8 @@ always @(posedge clk or negedge rst_n) begin
                         end else begin
                             grp_total <= grp_total + rec_datalen;
                         end
-                        ext_mem[all_n] <= {rec_startblk, rec_blocks};
+                        ext_w_en <= 1'b1; ext_w_addr <= all_n;
+                        ext_w_data <= {rec_startblk, rec_blocks};
                         all_n          <= all_n + 7'd1;
                     end
                     p          <= p + rec_len_b;
@@ -2854,13 +2871,15 @@ always @(posedge clk or negedge rst_n) begin
             // cycle at mount; the three copies were three sources on each of
             // seven register muxes (area pass 2026-09-10).
             S_FLAT_INIT: begin
-                ext_mem[0] <= {32'd0, total_blocks};
+                ext_w_en <= 1'b1; ext_w_addr <= 7'd0;
+                ext_w_data <= {32'd0, total_blocks};
                 best_base <= 7'd0; best_cnt <= 7'd1;
                 strm_idx  <= 7'd0; strm_left <= 7'd1;
                 strm_blk  <= 32'd0; strm_done <= 1'b0;
                 wr_ptr    <= 0;
-                state     <= S_EXT_LOAD;   // let ext_start_q/ext_blocks_q refresh first
+                state     <= S_FLAT_INIT2;
             end
+            S_FLAT_INIT2: state <= S_EXT_LOAD;   // the write lands; S_EXT_LOAD then refreshes ext_*_q
 
             // ------------------------------------------------------------
             // Scan the group table for a target VTS (sync-read M10K: gmem_q
