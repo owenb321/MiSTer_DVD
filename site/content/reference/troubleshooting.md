@@ -114,8 +114,10 @@ bitstream and your receiver's volume owns the level.
 
 ### Silent on every track
 
-- **`Audio Out` is on `Passthru`** and your display cannot decode bitstreams. Passthru is
-  silent on an ordinary television. Switch to **Decode PCM**.
+- **`Audio Out` is on `Passthru`** and your display cannot decode bitstreams. Dolby
+  Digital and DTS leave as a bitstream in that mode, which an ordinary television cannot
+  decode. Switch to **Decode PCM**. (LPCM and MP2 are sent as ordinary PCM in both modes,
+  so a disc carrying only those stays audible either way.)
 - **`Audio` is Off** on the main OSD page.
 
 ### Silent on one track only

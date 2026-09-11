@@ -1,8 +1,10 @@
 # Bitstream passthrough
 
-Set **`Audio Out` = `Passthru (SPDIF+HDMI)`** and the core stops decoding audio, sending the
-disc's **undecoded AC-3 or DTS bitstream** to an AV receiver to decode instead. This is what
-gets you real 5.1 rather than a stereo downmix, and it is the only way to hear DTS at all.
+Set **`Audio Out` = `Passthru (SPDIF+HDMI)`** and the disc's **undecoded AC-3 or DTS
+bitstream** goes to an AV receiver to decode instead of being decoded in the core. This is
+what gets you real 5.1 rather than a stereo downmix, and it is the only way to hear DTS at
+all. Tracks with no bitstream format — LPCM and MP2 — are still decoded and sent as
+ordinary PCM, so the setting never costs you sound.
 
 The format is **IEC 61937**, the standard wrapper for carrying compressed audio inside what
 otherwise looks like an ordinary PCM stream. It is what a set-top DVD player's optical
