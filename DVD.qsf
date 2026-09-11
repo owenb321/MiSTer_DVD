@@ -387,6 +387,13 @@ set_global_assignment -name PARTITION_COLOR 16764057 -section_id Top
 
 # Verilog define for PLL instantiation
 set_global_assignment -name VERILOG_MACRO "QUARTUS=1"
+# MISTER_DISABLE_ALSA (2026-09-11, user decision, logic reclaim branch B): drops
+# sys/alsa.sv + its ddr_svc channel (~290 ALMs, 544 regs). It is the HPS->core audio
+# path (Linux-side players mixed into the core output); this core decodes every codec in
+# fabric and the HPS audio daemon is retired, so nothing here feeds it. Consequence: a
+# Linux-side audio player (a BGM script, say) is silent while the DVD core is loaded --
+# documented in site/content/reference/compatibility.md.
+set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
 # DVD-FORK DEBUG: to bring back the Atmosfear wrong-title diagnosis overlay
 # (dvd/debug_overlay.sv rows 21..26; O[2] + Disc Menus On to view), uncomment the
 # next line and rebuild (--compile). It re-tightens the congested fit and may
