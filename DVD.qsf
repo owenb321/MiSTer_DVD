@@ -153,6 +153,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/bcd_time_add.sv
 # Audio-CD track table (feature/cdda-physical)
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/cdda_toc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/cdda_viz.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/cdda_screen.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dvd_vm.sv
 # DVD-FORK (frame-drop governor O[19]): catch-up credit controller. See
 # dvd/frame_drop_ctl.sv / docs/motcomp_throughput.md.

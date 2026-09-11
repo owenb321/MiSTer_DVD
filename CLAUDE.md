@@ -2149,6 +2149,12 @@ worse maintenance burden than targeted in-place edits. So:
   copper solver, `TR` stuck on, `ticks_off` ignored). ⚠ Its first "continuity" check
   counted lit COLUMNS — which a dotted plot also lights; it now counts pixels (~4,700
   continuous vs ~720 dotted). Suite: `run_wav.sh` (now also runs `cdda_toc_tb`).
+  🔧 **`dev-cddaphys3`:** the FF/REW seek preview showed DISC time — `lin_rate`'s
+  `lin_blk`/`total_blk` were re-based to the track but its `prev_rbn` sibling was not
+  (D-pad previews were fine: `seek_time` reads the already track-relative clock). And
+  the HUD (status line + bar) is hidden over a visualizer, shown over the logo, Display
+  toggles — new `dvd/cdda_screen.sv` + bench; the HUD's own Display toggle is gated off
+  on a CD so there is ONE copy of that state. ⏳ HW-untested.
   ★★ **`cdda_toc` DID NOT FIT ON ITS FIRST WRITE, AND IT IS THE `parse_buf` LESSON
   VERBATIM.** Async-read of the track-start array at **5 sites** → 3733 ALUTs / 3463
   regs / **0 block memory bits**, and the fitter wanted 4558 LABs against 4191 — the

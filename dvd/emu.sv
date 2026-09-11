@@ -655,7 +655,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cddaphys2"
+`define CORE_VERSION "dev-cddaphys3"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -2278,6 +2278,30 @@ end
 wire        cdda_trk_span = cdda_tracks_on && !cdda_jump_fire && (cdda_skip_win == 2'd0);
 wire [31:0] cdda_trk_last = (cdda_cur_end_w > title_last_rbn_w) ? title_last_rbn_w
                                                                 : cdda_cur_end_w;
+
+// What an audio CD / WAV puts on screen: the visualizer (Angle cycles copper ->
+// xor -> scope -> logo) and whether the status line + progress bar are held up
+// (hidden over a visualizer, shown over the logo, Display toggles). The rules
+// live in dvd/cdda_screen.sv so bench/dvd/cdda_screen_tb.sv can reach them.
+wire [1:0] viz_mode;
+wire       viz_logo;
+wire       cd_hud_show;
+cdda_screen cdda_screen_inst (
+    .clk          (clk_sys),
+    .rst_n        (reset_n),
+    .cdda_mode    (cdda_mode_w),
+    .angle_edge   (angle_edge),
+    .display_edge (display_edge),
+    .mount        (start_streaming),
+    .viz_mode     (viz_mode),
+    .viz_logo     (viz_logo),
+    .hud_show     (cd_hud_show)
+);
+// Seek-preview position on a CD is TRACK-relative like the clock it feeds
+// (lin_blk/total_blk below). Floored at the track start: a previous-track skip's
+// target lies before it, and an unsigned subtract would preview ~2^32 blocks.
+wire [31:0] cdda_prev_rel = (bar_tgt_rbn_w <= cdda_cur_start_w) ? 32'd0
+                                                                : (bar_tgt_rbn_w - cdda_cur_start_w);
 
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),
@@ -6326,7 +6350,7 @@ lin_rate lin_rate_inst (
                                    : (title_last_rbn_w + 32'd1)),
     // Seek preview: the bar's own cursor target, so the clock and the cursor
     // can never disagree about where a gesture is heading.
-    .prev_rbn      (bar_tgt_rbn_w),
+    .prev_rbn      (cdda_tracks_on ? cdda_prev_rel : bar_tgt_rbn_w),
     .prev_req      (bar_active_w),
     .blk10         (lin_blk10_w),
     .blk10_ok      (lin_blk10_ok_w),
@@ -6377,7 +6401,10 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // Nothing is lost -- the popup line shows the gesture's real magnitude
     // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
     .scrub_tier   (hold_freeze ? hud_tier_w : 2'd0),
-    .display_edge (display_edge),
+    // On a CD, Display belongs to cdda_screen (it drives force_show below);
+    // letting the HUD's own persist toggle run too would be a second copy of
+    // the same state, free to disagree.
+    .display_edge (display_edge & ~cdda_mode_w),
     .stop_on      (stopped_w & stop_kept_w),   // stage 1 only; stage 2 is bare logo
     .aspct_evt    (aspct_evt_w),
     .aspct_analog (aspct_evt_analog_w),
@@ -6386,9 +6413,9 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .ab_state     (ab_state_w),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
-    // WAV/CD-DA: the status line is the only picture besides the logo -- keep
-    // it up for the whole session (time = the player's front panel).
-    .force_show   (cdda_mode_w),
+    // WAV/CD-DA: held up over the logo, hidden over a visualizer, Display
+    // toggles (dvd/cdda_screen.sv). Pause/skip/seek still pop it as usual.
+    .force_show   (cdda_mode_w && cd_hud_show),
     .trk_mode     (cdda_tracks_on),         // "TR n/N" instead of "CH n/N"
     // Three LIVE sources, in the order they can be trusted: a linear file's
     // clock is derived from its measured rate (lin_time_ok_w implies
@@ -6480,7 +6507,7 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     // track table spans the CURRENT TRACK instead (user decision 2026-09-10,
     // reversing the earlier whole-disc bar) -- matching its track-relative
     // clock, and matching the per-track FF/REW clamp above.
-    .force_show (cdda_mode_w),
+    .force_show (cdda_mode_w && cd_hud_show),   // shown/hidden with the status line
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),
@@ -6543,16 +6570,10 @@ end
 // ★ STOP SHOWS THE IDLE LOGO, which is what a set-top player does when it stops
 // -- it spins down and puts its own screen up.
 // ★ CD-DA/WAV playback has no video either, so its screen is an audio-reactive
-// VISUALIZER (dvd/cdda_viz.sv) or the bouncing logo, cycled by Angle (which does
-// nothing else on a CD -- the angle switch acts only while cell_ready).
+// VISUALIZER (dvd/cdda_viz.sv) or the bouncing logo, cycled by Angle.
+// (viz_mode / viz_logo come from dvd/cdda_screen.sv, up beside the track table.)
 // ⚠ The screensaver and Stop OUTRANK the visualizer: both mean "put our own
 // screen up", so they force the logo and viz_vis yields to them.
-reg  [1:0] viz_mode;
-always @(posedge clk_sys or negedge reset_n) begin
-    if (!reset_n)                       viz_mode <= 2'd0;
-    else if (cdda_mode_w && angle_edge) viz_mode <= viz_mode + 2'd1;
-end
-wire viz_logo  = (viz_mode == 2'd3);
 wire logo_hold = saver_on_w || stopped_w;
 wire logo_vis = (logo_hold ||
                  (cdda_mode_w ? viz_logo

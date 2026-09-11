@@ -214,6 +214,9 @@ you along and a long one crosses the whole disc.
 the bottom. It also appears by itself for a couple of seconds whenever something changes.
 Pressing it again hides the line straight away.
 
+On an audio CD or a `.wav` it shows or hides the status line together with the progress bar,
+which are hidden while a visualizer is on screen.
+
 **B7 / B8 / B6** cycle audio track, subtitle track and camera angle. Each shows a popup
 naming what you switched to, with the language where the disc provides one — `AUDIO 2/4 FR`,
 `SUB OFF`, `ANGLE 2/3`. Angle only does anything on a multi-angle disc — or while music is

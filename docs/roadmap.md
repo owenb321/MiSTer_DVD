@@ -540,6 +540,9 @@ the split is deliberate:
   with Angle), a **per-track** progress bar (reversing the whole-disc bar), FF/REW
   stopping at the track edges with FF-to-end landing on the next track, no track
   notches, and the HUD reading **`TR n/N`**. Detail: `docs/cdda.md`.
+  🔧 **`dev-cddaphys3`:** the HUD is hidden over a visualizer (Display toggles,
+  `dvd/cdda_screen.sv`) and the FF/REW seek preview is track-relative (it was
+  showing disc time). Sim-green, ⏳ HW-untested.
 
 ⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
 CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.

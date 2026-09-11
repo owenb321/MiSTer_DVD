@@ -19,7 +19,8 @@
 #                       transport_hud + hud_frame (force_show port), and the
 #                       whole VCD/MP2 suite (reader raw mode + MP2 chain)
 #   4. audio CD    — cdda_toc (track table + skip resolver) and cdda_viz
-#                       (the copper / xor / scope visualizers)
+#                       (the copper / xor / scope visualizers) and cdda_screen
+#                       (visualizer cycle + HUD show/hide)
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -81,6 +82,10 @@ out=$(vvp bench/dvd/cdda_toc_sim || true); tail -2 <<<"$out"; passed "$out" || r
 echo "== 4b. audio visualizers (cdda_viz: copper / xor / scope) =="
 iverilog -g2012 -o bench/dvd/cdda_viz_sim dvd/cdda_viz.sv bench/dvd/cdda_viz_tb.sv
 out=$(vvp bench/dvd/cdda_viz_sim || true); grep -E "FAIL|ok  " <<<"$out" | tail -20; tail -1 <<<"$out"; passed "$out" || rc=1
+
+echo "== 4c. CD screen state (cdda_screen: visualizer cycle + HUD show/hide) =="
+iverilog -g2012 -o bench/dvd/cdda_screen_sim dvd/cdda_screen.sv bench/dvd/cdda_screen_tb.sv
+out=$(vvp bench/dvd/cdda_screen_sim || true); tail -1 <<<"$out"; passed "$out" || rc=1
 
 echo "== 3d. regression: VCD/SVCD suite (reader raw mode + MP2 chain) =="
 ./bench/dvd/run_vcd.sh | tail -3 || rc=1

@@ -453,3 +453,38 @@ the skip popup. `Debug Overlay` keeps `CH`, since it repurposes that field.
 - `transport_hud_tb` T22 (label on and back off), `seek_bar_tb` T8d/T9f (a
   converted tick list stays hidden, and the chapter cursor drops).
 - `run_wav.sh` now runs `cdda_toc_tb` and `cdda_viz_tb`.
+
+## Follow-up 2 (`dev-cddaphys3`) — HUD out of the way; a track-relative seek preview
+
+Two reports from the first hardware look at `dev-cddaphys2`. **Sim-green, ⏳ not yet
+re-run on hardware.**
+
+**The seek preview showed DISC time.** Holding FF/REW over a track read, say,
+`0:24:10` in a 10-minute track. `lin_rate` had been handed a track-relative
+`lin_blk` and `total_blk` for the clock, but its preview input `prev_rbn` was still
+the absolute `bar_tgt_rbn`, so the preview converted a disc position against a track
+origin. Now it gets `bar_tgt_rbn − cur_start` too, floored at zero because a
+previous-track skip's target lies before `cur_start` (the unsigned subtract would
+otherwise preview ~2³² blocks for the moment before the skip lands). ★ D-pad
+previews were already right, and it is worth knowing why rather than assuming the
+fix covered them: `seek_time`'s delta arm reads `lin_cur_bcd` and
+`lin_total_secs`, which were track-relative from the start — so only the
+FF/REW path, which goes through `lin_rate`'s preview, was wrong.
+⚠ No bench covers it: the mapping lives in `emu.sv`, two lines from the clock
+mapping that had the same shape. It is the kind of asymmetry to look for whenever
+one of a module's inputs is re-based and its siblings are not.
+
+**The HUD is hidden over a visualizer** (user request) and **Display toggles it**
+in any mode. New `dvd/cdda_screen.sv` holds both the visualizer mode (moved out of
+`emu.sv`) and `hud_show`: cycling into a visualizer hides the status line and
+progress bar, cycling into the logo shows them, Display flips them, and a new disc
+resets them to match the mode. Both overlays go together — a lone progress bar
+floating over copper bars looks like a glitch. Transport events (pause, skip,
+seek) still pop them for a couple of seconds, via `transport_hud`'s and
+`seek_bar`'s own auto-show, unchanged.
+⚠ **On a CD the HUD's own Display toggle is gated off** (`display_edge &
+~cdda_mode`). `transport_hud` already keeps a `persist_q` that Display flips;
+leaving it live would be a second copy of the same state, and the two would drift
+the first time one of them was reset without the other.
+Gate: `bench/dvd/cdda_screen_tb.sv` (cycle, per-mode default, Display in both
+kinds of mode, new-disc reset, and no effect outside CD mode), in `run_wav.sh`.
