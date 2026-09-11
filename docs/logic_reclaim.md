@@ -75,7 +75,13 @@ Synthesis result **−2,544 ALUTs**; fit SEED 7 first roll, clk_dec 93.66 / 90.8
 Found en route: `bench/ac3/run_balloc.sh` had been failing silently since M19d (stale
 combinational delta-BA model, vvp exit 0). Fixed and `$fatal`ed before the refactor.
 
-## 4. Branch B — `feature/alm-reclaim-nav` (✅ built, ✅ HW-CONFIRMED 2026-09-11)
+## 4. Branch B — `feature/alm-reclaim-nav` (✅ built, ✅ HW-CONFIRMED 2026-09-11, rebased onto A)
+
+**Re-fit on top of Branch A (SEED 7, first roll):** clk_dec **96.76 / 92.13**, "needed"
+36,833 (88 %), placed 40,059, ALUTs 60,642 → **57,723** and registers 52,238 → **50,328**
+against v0.5.0 — the IMDCT cliff is gone (3,148 ALUTs) and the two branches' savings add.
+Build `DVD_almreclaimnav_20260911_2010.rbf`. The two paragraphs below record the earlier
+`main`-based fits and remain true of them.
 
 **HW round (maintainer's rig, `DVD_almreclaimnav_20260911_0244.rbf`):** Men in Black
 navigation diffed against libdvdnav (FP → 1 → 2, no differences); the `O[2]` blocks decode

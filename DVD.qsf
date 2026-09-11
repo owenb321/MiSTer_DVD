@@ -1074,4 +1074,14 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # vs main), RAM 501/553, DSP 94/112. Build DVD_almreclaimnav_20260911_0244.rbf.
 # Synthesis vs v0.5.0 main: regs 51,954 -> 49,890 (-2,064), ALUTs +551 with the
 # imdct cliff at +782 again (same RTL). The alsa entity is gone from the netlist.
+# 2026-09-11c (feature/alm-reclaim-nav REBASED ONTO main after branch A merged as
+# PR #82): SEED 7 held FIRST roll -- clk_dec 96.76 @100C / 92.13 @-40C (gate 86.0,
+# PASS both corners; the widest hot-corner margin this ledger records) at 88% ALM
+# (36,833 needed; 40,059 PLACED = 96%), registers 50,328, RAM 501/553, DSP 94/112.
+# Build DVD_almreclaimnav_20260911_2010.rbf.
+# Synthesis vs v0.5.0 main: ALUTs 60,224 -> 57,342 (-2,882), regs 51,954 -> 49,736
+# (-2,218). imdct_512 is 3,148 -- the cliff the two entries above describe is GONE
+# with branch A's operand-mux form underneath, so the two branches now simply add:
+# bit_allocation 2,497 -> 1,044, mantissa_dequant 1,861 -> 1,377, dvd_vm -150,
+# pgc_palette -55/-359 regs, pts_assoc -732 regs, dvd_telem -264 regs, alsa gone.
 set_global_assignment -name SEED 7
