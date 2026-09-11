@@ -1363,4 +1363,15 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # moves between rolls, and not a sign of anything else. fmax_check gates BOTH
 # corners for exactly this reason.
 
+
+# 2026-09-10d (same branch, dev-cddaphys2 -- audio visualizers (dvd/cdda_viz.sv),
+# per-track progress bar + FF/REW track clamp, TR n/N, and the track notches
+# deleted): SEED 9 held FIRST roll -- clk_dec 89.28 @100C / 90.41 @-40C (gate
+# 86.0) at 99% ALM (41,474), RAM 500/553, DSP 94 (unchanged -- the visualizers
+# use no multiplier, by design). Build DVD_cddaphys2_20260911_0208.rbf.
+# ★ The whole follow-up cost +201 ALMs and +1 M10K net of the deleted notch
+# replay, which is what "no framebuffer, per-line serial copper, rows-not-samples
+# scope" bought. ⚠ 436 ALMs now remain -- the ALM reclaim is not optional before
+# the next feature lands on top of this branch.
+
 set_global_assignment -name SEED 9
