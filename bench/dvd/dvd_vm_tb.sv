@@ -1437,7 +1437,11 @@ module dvd_vm_tb;
         for (k = 0; k < n; k = k + 1) begin
             @(negedge clk); sec_tick = 1;
             @(negedge clk); sec_tick = 0;
-            repeat (4) @(negedge clk);   // let V_IDLE apply tick_pending
+            // let V_IDLE apply tick_pending: since the 2026-09-10 area pass
+            // the tick is a 16-cycle walk (one GPRM per cycle), not a single
+            // cycle, so consecutive ticks need > 16 idle cycles between them
+            // to each be applied -- real ticks are 27 million cycles apart.
+            repeat (20) @(negedge clk);
         end
     end
     endtask
