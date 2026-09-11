@@ -48,12 +48,20 @@ module subpic_blend (
 
     // out = (c*wt + in*(16-wt)) / 16   (unsigned linear interp; wt in [0..16], so the
     // sum never exceeds max(c,in)*16 = 4080 -> fits 13 bits, >>4 back to 8 bits).
+    // Computed as in*16 + wt*(c - in), which is the same integer (expand the
+    // product), so ONE multiply per channel instead of two -- area pass
+    // 2026-09-10.  (c - in) is a signed 9-bit difference; the sum is provably
+    // in [0, 4080] because it equals the original non-negative expression.
     // c/wt are explicit args so the continuous assigns below stay sensitive to them.
     function automatic [7:0] mix(input [7:0] v_in, input [7:0] c, input [4:0] wt);
-        logic [12:0] acc;
+        logic signed [9:0]  d;
+        logic signed [15:0] prod;
+        logic signed [13:0] acc;
         begin
-            acc = c * wt + v_in * (5'd16 - wt);
-            mix = acc[11:4];
+            d    = $signed({2'b00, c}) - $signed({2'b00, v_in});   // -255..255
+            prod = d * $signed({1'b0, wt});                          // x 0..16
+            acc  = $signed({1'b0, v_in, 4'b0000}) + prod;            // in*16 + wt*(c-in)
+            mix  = acc[11:4];
         end
     endfunction
 
