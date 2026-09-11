@@ -34,9 +34,11 @@ It is a DVD-legal audio format and was used on some early PAL-region discs. It i
 On **Video CD and SVCD** it is the opposite: MP2 is the only audio format those use, so
 every VCD depends on it.
 
-!!! warning "MP2 has no passthrough encoding"
-    In `Passthru` mode an MP2 track is **silent on both outputs**. Use `Decode PCM` for MP2
-    content.
+!!! note "MP2 has no bitstream encoding, but it is not silent"
+    There is no IEC 61937 bitstream format for MP2 in this core, so in `Passthru` an MP2
+    track is **decoded and sent as ordinary PCM** instead — the same audio `Decode PCM`
+    produces. Nothing to change, and a VCD needs no trip back to `Decode PCM`.
+    (Before v0.5.0 it really was silent.)
 
 The one gap is the MPEG-2 multichannel *extension* — a rare 5.1 variant. Its
 backwards-compatible stereo core should play, but no disc carrying one was available to
@@ -137,8 +139,10 @@ takes effect at the next seek or reload.
 
 If a disc plays with no sound:
 
-1. **`Audio` is On** and **`Audio Out` is `Decode PCM`** — Passthru is silent on a display
-   that cannot decode bitstreams, and on LPCM and MP2 tracks.
+1. **`Audio` is On**, and if the track is Dolby Digital or DTS, **`Audio Out` is
+   `Decode PCM`** unless you have a receiver — Passthru sends those two as a bitstream,
+   which an ordinary television cannot decode. LPCM and MP2 come out as PCM in either
+   mode, so they are never silenced by this setting.
 2. **Try another track with B7** — the disc's default may be DTS, or a format the core
    cannot decode.
 3. **`CSS ENCRYPTED` on screen** means audio is muted deliberately — see
