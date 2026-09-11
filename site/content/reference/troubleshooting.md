@@ -138,18 +138,25 @@ language — the fault is likely in how the disc maps tracks to soundtracks, whi
 its navigation tables. A [repro bundle](reporting-a-bug.md) captures those, so that report
 can be reproduced without the disc.
 
-### Sound is out of sync after changing `Video Output` mid-title
+### Sound is out of sync
 
-**Skip a chapter.** That re-anchors the audio to the picture and clears it.
+!!! info "Fixed in v0.5.0 — and the old advice no longer applies"
+    Changing `Video Output` mid-title used to leave the audio off the picture's timeline
+    until you skipped a chapter. Earlier versions of this page told you to do exactly
+    that. **It is fixed**: the player now keeps one clock for everything it presents, so
+    a mode change no longer costs lip sync and a chapter skip is not a workaround for
+    anything.
 
-Changing the output mode under a playing disc restarts the raster and the A/V timing
-together, and the audio does not always come back on the picture's timeline. It is
-long-standing behaviour on every release. Setting `Video Output` before loading the disc
-avoids it entirely. See [Video Output](../video/interlaced.md).
+Picture, sound, subtitles, menu highlights, captions and bitstream passthrough are all
+presented against a single clock, so lip sync should hold from the start of a title and
+stay there — including across chapter skips, seeks, menus and a mid-title `Video Output`
+change.
 
-If sound drifts out of sync **without** a mode change, that is a different problem — try
-`A/V Offset` on the debug page first, and [report it](reporting-a-bug.md) with the disc and
-roughly how far into the title it started.
+If it does not, that is a bug rather than something to work around. Try `A/V Offset` on
+the debug page to see whether a fixed correction lines it up, then
+[report it](reporting-a-bug.md) with the disc and roughly how far into the title it
+started — and say whether a chapter skip changes anything, because that distinguishes two
+quite different faults.
 
 ### Speech is cut off on a game disc's question or selection screen
 

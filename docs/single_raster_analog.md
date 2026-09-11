@@ -996,19 +996,25 @@ fixes the symptom on one path while leaving the class open. **That last objectio
 exactly what sent the fix to the vld:** the class is shared, so the fix should be too.
 
 ## 7. Follow-ups
-- ⚠ **A/V SYNC after a `Video Output` change — OPEN, pre-existing, NOT from issue #42 or
-  #45.** Reported on the 2026-09-03 seek-realign round: *"Many video output changes can
-  cause sync issues, but that is existing behavior and is cleared by a chapter skip."*
-  Note what this is **not**: not the mode-switch FREEZE (§6, fixed and HW-confirmed), and
-  not the stale-reference macroblocking (`docs/seek_realign.md`, fixed and HW-confirmed on
-  the same build). It is lip-sync drift that survives the switch and is cured by a
-  re-anchor. ★ **That "cured by a chapter skip" detail is the diagnosis pointing at
-  `av_sync`, not at the raster:** a chapter skip re-anchors the STC, so the switch is
-  leaving the STC on a timeline the new raster no longer matches. The mode switch already
-  fires the full trio plus a re-align seek, so the suspect is the refresh-rate change
-  itself — `TICKS_PER_REFRESH` / `refresh_50hz` are picked from the mode, and an
-  Interlaced↔Progressive change alters how many refreshes a displayed frame costs. Not
-  investigated; recorded so the next session starts from the right layer.
+- ✅ **A/V SYNC after a `Video Output` change — FIXED BY PR #63, confirmed by the
+  maintainer 2026-09-10.** A mode change no longer costs lip sync and a chapter skip is
+  not needed. The manual's "skip a chapter to clear it" advice was retired with the
+  v0.5.0 release (`reference/troubleshooting.md`, `video/interlaced.md`).
+  ⚠⚠ **THIS MARKER READ "OPEN" FOR THREE DAYS AFTER THE FIX MERGED, AND IT MISLED A
+  RELEASE.** `docs/stc_freerun.md`'s own defect table lists *"Video Output change skews,
+  cured by a chapter skip"* as one of the things the free-running STC was built to
+  fix — so the two notes contradicted each other, and the release doc sweep found the
+  contradiction, could not resolve it from the repo, and shipped the stale user-facing
+  advice rather than guess. **The fix and the marker were in different files, and only
+  the fix moved.** Exactly the failure `CLAUDE.md` "Update status markers when a feature
+  completes" exists to prevent: update the marker in the SAME change, including markers
+  in OTHER notes that the change falsifies.
+  ★ **The original diagnosis recorded here was right, and is worth keeping** — the
+  "cured by a chapter skip" detail pointed at `av_sync` rather than the raster, since a
+  skip re-anchors the STC; the suspect named was the refresh-rate change itself
+  (`TICKS_PER_REFRESH` / `refresh_50hz` picked from the mode). PR #63 deleted the
+  refresh-counted STC and `TPR_Q16` outright, which is that mechanism removed rather
+  than repaired. The layer was identified correctly and the rewrite reached it first.
 
 - **✅ Blank the video during a `Video Output` switch — IMPLEMENTED 2026-09-03 (user
   request after the issue #42 HW round; ⏳ HW-confirm pending).** See §6.8. The proposal
