@@ -1388,4 +1388,10 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # the 313/418 fitted/estimated ratio for the whole module). If area is needed
 # back, copper frees the most logic and scope also frees a memory block.
 
+
+# 2026-09-11b (same branch, dev-cddaphys4 -- CD track skips stack: cdda_toc takes
+# the burst size, emu's HUD projection counts tracks): SEED 9 held FIRST roll a
+# FOURTH time on this branch -- clk_dec 89.78 @100C / 89.6 @-40C (gate 86.0) at
+# 99% ALM (41,399), RAM 500/553, DSP 94. Build DVD_cddaphys4_20260911_0352.rbf.
+
 set_global_assignment -name SEED 9
