@@ -1257,6 +1257,11 @@ reg        raw_m2;         // this sector's mode byte (@15) == 2
 reg        raw_sec_pass;   // Form-2 sector: pass payload window [24, 2348)
 reg [11:0] raw_wcnt;       // compact cache write index within the current block
 
+// ---- S_STREAM request address (area pass 2026-09-10) ---------------------------
+wire [31:0] sd_base_w = cell_mode ? (menu_dom ? menu_base_blk : (ext_start_q - ext_cum))
+                                  : ext_start_q;
+wire [31:0] sd_off_w  = cell_mode ? play_blk : strm_blk;
+
 // ---- PGC-window walk address (area pass 2026-09-10) ----------------------------
 // Seven walk starts computed `pgc_sec + ((pgc_off + OFF) >> 11)` and
 // `(pgc_off + OFF) & 0x7FF` each with their own 17-bit and 32-bit adders, OFF
@@ -3866,9 +3871,13 @@ always @(posedge clk or negedge rst_n) begin
                     // ext_start_q = ext_mem[strm_idx][start]; valid because every
                     // strm_idx change detours through S_EXT_LOAD before returning
                     // here. Menu domain bypasses the extent table (single VOB).
-                    sd_lba       <= cell_mode ? (menu_dom ? (menu_base_blk + play_blk)
-                                                          : (ext_start_q + (play_blk - ext_cum)))
-                                              : (ext_start_q + strm_blk);
+                    // One adder: base + offset, where the menu-domain base is
+                    // menu_base_blk, the title-domain base is the extent's
+                    // start rebased by ext_cum (modulo 2^32 the same as the
+                    // old ext_start_q + (play_blk - ext_cum)), and the linear
+                    // base is the extent start -- area pass 2026-09-10 (this
+                    // was three adders, a subtract and a 3-way 32-bit mux).
+                    sd_lba       <= sd_base_w + sd_off_w;
                     sd_rd        <= 1'b1;
                     blk_inflight <= 1'b1;
                 end else if (blk_inflight) begin
