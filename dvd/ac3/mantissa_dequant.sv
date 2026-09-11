@@ -191,14 +191,17 @@ module mantissa_dequant (
     wire signed [31:0] dith_prod = $signed(dith_next) * 32'sd23170;
 
     // ---- coefficient scaler: coeff = (m16 << 8) >> exp, Q1.23 (truncating) ----
+    // (Area pass 2026-09-10: the shifted value is 17+8 = 25 bits, so a 25-bit
+    //  arithmetic shift yields the same low 24 bits as the old 32-bit one.)
     function automatic signed [23:0] scale_coeff
         (input signed [16:0] m16v, input [4:0] e);
-        logic signed [31:0] s;
+        logic signed [24:0] s;
         begin
-            s = ($signed({{15{m16v[16]}}, m16v}) <<< 8) >>> e;
+            s = ($signed({{8{m16v[16]}}, m16v}) <<< 8) >>> e;
             scale_coeff = s[23:0];
         end
     endfunction
+
 
     // ---- full-precision dither coefficient (Q1.23) -----------------------------
     // The old path computed a 17-bit m16 = (ns*23170)>>15 (truncating) and then
@@ -212,13 +215,21 @@ module mantissa_dequant (
     // (m16<<8>>e == (ns*23170)/2^(7+e) algebraically, but without the early
     //  17-bit clamp/floor).  Max |coeff| at e=0 ≈ 32768*181 ≈ 5.9e6 < 2^23, so no
     // saturation is possible (liba52 dither can't clip either).
+    // Area pass 2026-09-10: |dith_prod| <= 32768*23170 < 2^30, so for
+    // sh >= 31 the rounded quotient (x + 2^(sh-1)) >> sh is exactly 0 (the sum
+    // lies in (0, 2^sh)), and for sh <= 30 the sum fits 32 bits without
+    // overflow.  A 32-bit adder + shifter therefore reproduces the old 41-bit
+    // computation bit for bit; the wide form existed only to hold 2^(sh-1) for
+    // shifts that can never contribute.
     function automatic signed [23:0] dither_coeff(input [4:0] e);
         logic [5:0]         sh;
-        logic signed [40:0] s;
+        logic signed [31:0] s;
         begin
             sh = 6'd7 + {1'b0, e};                       // shift = 7 + exp
-            s  = ($signed({{9{dith_prod[31]}}, dith_prod})
-                  + (41'sd1 <<< (sh - 6'd1))) >>> sh;     // round-to-nearest
+            if (sh > 6'd30)
+                s = 32'sd0;
+            else
+                s = (dith_prod + (32'sd1 <<< (sh - 6'd1))) >>> sh;  // round-to-nearest
             dither_coeff = s[23:0];
         end
     endfunction
@@ -264,8 +275,13 @@ module mantissa_dequant (
     wire [3:0]  i4b = code % 7'd11;
     // direct (signed) mantissa for bap 5..16: sext(bits)<<(16-bap).
     wire [5:0]  bw  = bap[5:0];                     // bit width == bap value
-    wire signed [16:0] m16_direct =
-        17'($signed(data_in << (6'd32 - bw)) >>> 6'd16);
+    // The old form shifted all 32 bits of data_in left by (32-bw) and back
+    // right by 16; the value that survives is data_in[bw-1:0] left-aligned in
+    // a 16-bit field (direct baps are 5..15 bits, so 16-bw >= 1), sign-
+    // extended to 17.  A 16-bit shifter is the same number -- area pass
+    // 2026-09-10.
+    wire [15:0] m16_sh = data_in[15:0] << (6'd16 - bw);
+    wire signed [16:0] m16_direct = {m16_sh[15], m16_sh};
 
     // ---- FSM ----
     typedef enum logic [4:0] {
@@ -326,6 +342,38 @@ module mantissa_dequant (
             M_REMRDR: cm_raddr = {3'd1, rem_j[7:0]};   // present R (slot 1)
             default:  cm_raddr = coeff_rd2_addr;       // IMDCT
         endcase
+    end
+
+    // ---- ONE scale_coeff for the whole module (area pass 2026-09-10) ----------
+    // sc_out was called at 14 sites across M_EXAM / M_WAIT / M_CPLEXAM /
+    // M_CPLWAIT, each an inlined 32-bit barrel shifter (Quartus muxes results,
+    // not arithmetic).  The states are mutually exclusive and every operand is
+    // stable for the cycle, so the mantissa and exponent are selected here by
+    // the SAME conditions the call sites test, and each site latches sc_out.
+    // In any state/branch that does not latch it the value is don't-care.
+    logic signed [16:0] sc_m16;
+    logic        [4:0]  sc_exp;
+    logic signed [23:0] sc_out;
+    wire sc_wait = (st == M_WAIT) || (st == M_CPLWAIT);
+    always_comb begin
+        sc_exp = sc_wait ? pend_exp : exp;
+        if (sc_wait) begin
+            case (bap)
+                -8'sd1:  sc_m16 = q1lev[i1a];
+                -8'sd2:  sc_m16 = q2lev[i2a];
+                -8'sd3:  sc_m16 = q4lev[i4a];
+                8'sd3:   sc_m16 = q3lev[code3];
+                8'sd4:   sc_m16 = q5lev[code4];
+                default: sc_m16 = m16_direct;
+            endcase
+        end else begin
+            case (bap)
+                -8'sd2:  sc_m16 = q2_cache[q2_ptr[0]];
+                -8'sd3:  sc_m16 = q4_cache;
+                default: sc_m16 = q1_cache[q1_ptr[0]];   // bap1 (-1)
+            endcase
+        end
+        sc_out = scale_coeff(sc_m16, sc_exp);
     end
 
     always_ff @(posedge clk) begin
@@ -442,7 +490,7 @@ module mantissa_dequant (
                             -8'sd1: begin   // bap1, 3-level
                                 if (q1_ptr >= 0) begin
                                     cm_we <= 1'b1; cm_waddr <= {ch, idx[7:0]};
-                                    cm_wdata <= scale_coeff(q1_cache[q1_ptr[0]], exp);
+                                    cm_wdata <= sc_out;
                                     q1_ptr <= q1_ptr - 2'sd1;
                                     idx <= idx + 9'd1;
                                 end else begin
@@ -455,7 +503,7 @@ module mantissa_dequant (
                             -8'sd2: begin   // bap2, 5-level
                                 if (q2_ptr >= 0) begin
                                     cm_we <= 1'b1; cm_waddr <= {ch, idx[7:0]};
-                                    cm_wdata <= scale_coeff(q2_cache[q2_ptr[0]], exp);
+                                    cm_wdata <= sc_out;
                                     q2_ptr <= q2_ptr - 2'sd1;
                                     idx <= idx + 9'd1;
                                 end else begin
@@ -468,7 +516,7 @@ module mantissa_dequant (
                             -8'sd3: begin   // bap4, 11-level
                                 if (q4_ptr == 0) begin
                                     cm_we <= 1'b1; cm_waddr <= {ch, idx[7:0]};
-                                    cm_wdata <= scale_coeff(q4_cache, exp);
+                                    cm_wdata <= sc_out;
                                     q4_ptr <= -2'sd1;
                                     idx <= idx + 9'd1;
                                 end else begin
@@ -500,25 +548,25 @@ module mantissa_dequant (
                     cm_we <= 1'b1; cm_waddr <= {pend_ch, pend_idx};
                     case (bap)
                         -8'sd1: begin   // bap1 group of 3
-                            cm_wdata <= scale_coeff(q1lev[i1a], pend_exp);
+                            cm_wdata <= sc_out;
                             q1_cache[1] <= q1lev[i1b];
                             q1_cache[0] <= q1lev[i1c];
                             q1_ptr <= 2'sd1;
                         end
                         -8'sd2: begin   // bap2 group of 3
-                            cm_wdata <= scale_coeff(q2lev[i2a], pend_exp);
+                            cm_wdata <= sc_out;
                             q2_cache[1] <= q2lev[i2b];
                             q2_cache[0] <= q2lev[i2c];
                             q2_ptr <= 2'sd1;
                         end
                         -8'sd3: begin   // bap4 group of 2
-                            cm_wdata <= scale_coeff(q4lev[i4a], pend_exp);
+                            cm_wdata <= sc_out;
                             q4_cache <= q4lev[i4b];
                             q4_ptr <= 2'sd0;
                         end
-                        8'sd3:  cm_wdata <= scale_coeff(q3lev[code3], pend_exp);
-                        8'sd4:  cm_wdata <= scale_coeff(q5lev[code4], pend_exp);
-                        default:cm_wdata <= scale_coeff(m16_direct, pend_exp);
+                        8'sd3:  cm_wdata <= sc_out;
+                        8'sd4:  cm_wdata <= sc_out;
+                        default:cm_wdata <= sc_out;
                     endcase
                     idx <= idx + 9'd1;
                     st  <= M_FETCH;
@@ -572,7 +620,7 @@ module mantissa_dequant (
 
                         -8'sd1: begin   // bap1, 3-level grouped
                             if (q1_ptr >= 0) begin
-                                cc_r   <= scale_coeff(q1_cache[q1_ptr[0]], exp);
+                                cc_r   <= sc_out;
                                 q1_ptr <= q1_ptr - 2'sd1;
                                 st     <= M_CPLWR;
                             end else begin
@@ -581,7 +629,7 @@ module mantissa_dequant (
                         end
                         -8'sd2: begin   // bap2, 5-level grouped
                             if (q2_ptr >= 0) begin
-                                cc_r   <= scale_coeff(q2_cache[q2_ptr[0]], exp);
+                                cc_r   <= sc_out;
                                 q2_ptr <= q2_ptr - 2'sd1;
                                 st     <= M_CPLWR;
                             end else begin
@@ -590,7 +638,7 @@ module mantissa_dequant (
                         end
                         -8'sd3: begin   // bap4, 11-level grouped
                             if (q4_ptr == 0) begin
-                                cc_r   <= scale_coeff(q4_cache, exp);
+                                cc_r   <= sc_out;
                                 q4_ptr <= -2'sd1;
                                 st     <= M_CPLWR;
                             end else begin
@@ -610,22 +658,22 @@ module mantissa_dequant (
                 M_CPLWAIT: if (ack) begin
                     case (bap)
                         -8'sd1: begin
-                            cc_r <= scale_coeff(q1lev[i1a], pend_exp);
+                            cc_r <= sc_out;
                             q1_cache[1] <= q1lev[i1b]; q1_cache[0] <= q1lev[i1c];
                             q1_ptr <= 2'sd1;
                         end
                         -8'sd2: begin
-                            cc_r <= scale_coeff(q2lev[i2a], pend_exp);
+                            cc_r <= sc_out;
                             q2_cache[1] <= q2lev[i2b]; q2_cache[0] <= q2lev[i2c];
                             q2_ptr <= 2'sd1;
                         end
                         -8'sd3: begin
-                            cc_r <= scale_coeff(q4lev[i4a], pend_exp);
+                            cc_r <= sc_out;
                             q4_cache <= q4lev[i4b]; q4_ptr <= 2'sd0;
                         end
-                        8'sd3:  cc_r <= scale_coeff(q3lev[code3], pend_exp);
-                        8'sd4:  cc_r <= scale_coeff(q5lev[code4], pend_exp);
-                        default:cc_r <= scale_coeff(m16_direct, pend_exp);
+                        8'sd3:  cc_r <= sc_out;
+                        8'sd4:  cc_r <= sc_out;
+                        default:cc_r <= sc_out;
                     endcase
                     st <= M_CPLWR;
                 end

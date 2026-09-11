@@ -1020,4 +1020,29 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # #79 HW-confirmed SEED 7 on the passthru netlist, but this is a different
 # netlist. The release smoke-test is what discharges it.
 
+# 2026-09-11 (feature/alm-reclaim-ac3, dev-almreclaim -- LOGIC RECLAIM BRANCH A:
+# AC-3 duplicated-arithmetic pass, zero value changes; docs/ac3_decoder_architecture.md
+# §4.12): SEED 7 held FIRST roll -- clk_dec 93.66 @100C / 90.86 @-40C (gate 86.0,
+# PASS both corners) at 89% ALM (37,358 needed; 40,231 PLACED = 96%), registers
+# 52,404, RAM 498/553, DSP 94/112. Build DVD_almreclaim_20260911_0138.rbf.
+# ★★ MEASURE THIS BRANCH IN ALUTs, NOT THE HEADLINE PERCENTAGE. A baseline fit of
+# main (v0.5.0, same seed) reproduces 38,802 "needed" exactly -- but that build
+# PLACED 40,821 ALMs (97%) in 4,188/4,191 LABs; the "93%" was the fitter's
+# dense-packing estimate ([B] 2,703) subtracted from a device that was already
+# full. The two speculative branches then placed only ~400 more ALMs and the
+# estimate collapsed to 637, which is the whole 93->98% story.
+#   v0.5.0 main :  60,642 ALUTs / 52,238 regs / 40,821 placed / 38,802 needed
+#   this branch :  58,098 ALUTs / 52,404 regs / 40,231 placed / 37,358 needed
+# = -2,544 ALUTs (-4.2%), attributed at synthesis (DVD.map.rpt) per module:
+# bit_allocation 2,491->1,348 (one compute_mask/UPDATE_LEAK datapath, then a
+# 20-bit width), mantissa_dequant 1,594->1,110 (one scale_coeff shifter for 19
+# call sites), the two bit_readers -366 (ACC_W 64->MAXW+8), imdct_512 -81 (the
+# (x,y,w1,w2) operand mux -- Quartus was already sharing most of it), audblk
+# -14. Gate at every commit: run_front_cosim.sh bap bit-exact on 13 streams AND
+# PCM dumps of blocks 0-5 byte-identical to a pre-change baseline.
+# ⚠ imdct_512 measured 3,228 ALUTs on v0.5.0 main and 4,014 on the cdda branch
+# with IDENTICAL RTL, memories, regs and DSPs -- a Quartus 17 mapping cliff on
+# that operand mux. The regular (x,y,w1,w2) form should hold at ~3,147; if a
+# later unrelated netlist shows it near 4,000 again, that is the cliff, not
+# the branch.
 set_global_assignment -name SEED 7

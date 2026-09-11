@@ -264,33 +264,44 @@ module audblk_parse (
 
     // fbw endmant/nchgrps from chbwcod (the chbwcod read is on data_in).
     wire [8:0]  endmant_w     = ({3'd0, data_in[5:0]} * 9'd3) + 9'd73;
-    wire [4:0]  grpsz_w       = 5'd3 << (cur_chexpstr - 2'd1);
+    // grpsz is 3 << (expstr-1) with the 2-bit wrap (expstr==0 / REUSE gives
+    // 3<<3 = 24; that quotient is never consumed but is reproduced exactly).
+    // The group count is x / (3 << k) == (x / 3) >> k for non-negative
+    // integers (nested floor division), so the three variable 9-by-5-bit
+    // restoring dividers this used to build (~100-130 ALUTs each) are now one
+    // constant divide-by-3 plus a shift apiece -- area pass 2026-09-10.
+    wire [1:0]  grp_sh        = cur_chexpstr - 2'd1;
+    wire [4:0]  grpsz_w       = 5'd3 << grp_sh;
     wire [8:0]  ngnum_w       = endmant_w + {4'd0, grpsz_w} - 9'd4;
-    wire [8:0]  nchgrps_full  = ngnum_w / {4'd0, grpsz_w};
+    wire [8:0]  nchgrps_full  = (ngnum_w / 9'd3) >> grp_sh;
     wire [6:0]  nchgrps_w     = nchgrps_full[6:0];
 
     // coupled fbw channel: endmant = cplstrtmant, nchgrps from that.
     wire [8:0]  ngnum_cpl     = cplstrtmant + {4'd0, grpsz_w} - 9'd4;
-    wire [8:0]  nchgrps_cplf  = ngnum_cpl / {4'd0, grpsz_w};
+    wire [8:0]  nchgrps_cplf  = (ngnum_cpl / 9'd3) >> grp_sh;
     wire [6:0]  nchgrps_cpl   = nchgrps_cplf[6:0];
 
     // coupling-channel exponent geometry: ncplgrps = (cplendmant - cplstrtmant)
     //  / (3 << (cplexpstr - 1)).
-    wire [4:0]  cpl_grpsz     = 5'd3 << (cplexpstr - 2'd1);
+    wire [1:0]  cpl_sh        = cplexpstr - 2'd1;
     wire [8:0]  cpl_nmant     = cplendmant - cplstrtmant;
-    wire [8:0]  ncplgrps_full = cpl_nmant / {4'd0, cpl_grpsz};
+    wire [8:0]  ncplgrps_full = (cpl_nmant / 9'd3) >> cpl_sh;
     wire [6:0]  ncplgrps      = ncplgrps_full[6:0];
 
     // cplco compute (A/52 §5.4.3.5): cplcomant magnitude then * scale_factor.
     // scale_factor[i] = 2^-(15+i); store cplco as Q5.18 -> shift = 3 - exp_idx.
-    wire [31:0] cplcomant_full = (cplcoexp_r == 4'd15)
-                                   ? ({28'd0, data_in[3:0]} << 14)
-                                   : (({28'd0, data_in[3:0]} | 32'h10) << 13);
+    // cplcomant_full is a 5-bit mantissa placed at bit 13 or 14 (<= 2^19), and
+    // the Q5.18 placement is "<< (3 - exp_idx)" for exp_idx in 0..24.  Written
+    // as ((v << 3) >> exp_idx) it is one right shifter on a 22-bit value; the
+    // old sign-split form instantiated a 32-bit left AND a 32-bit right barrel
+    // shifter plus a mux.  Identical: v<<3 cannot overflow 22 bits, and for
+    // exp_idx > 3 the three zero low bits shift out first -- area pass
+    // 2026-09-10.  Consumed as cplco_val[23:0] (cplco_mem write below).
+    wire [21:0] cplcomant_full = (cplcoexp_r == 4'd15)
+                                   ? ({18'd0, data_in[3:0]} << 14)
+                                   : (({18'd0, data_in[3:0]} | 22'h10) << 13);
     wire [5:0]  cpl_exp_idx    = {1'b0, cplcoexp_r} + {2'd0, mstrcplco_r};   // 0..24
-    wire signed [6:0] cpl_shift = 7'sd3 - $signed({1'b0, cpl_exp_idx});
-    wire [31:0] cplco_val      = cpl_shift[6]
-                                   ? (cplcomant_full >> (-cpl_shift))
-                                   : (cplcomant_full << cpl_shift[4:0]);
+    wire [24:0] cplco_val      = {cplcomant_full, 3'b000} >> cpl_exp_idx;
 
     // rematrixing band edges + this-block end (do-while termination).
     wire [8:0]  remat_end      = (chincpl != 5'b0) ? cplstrtmant : 9'd253;

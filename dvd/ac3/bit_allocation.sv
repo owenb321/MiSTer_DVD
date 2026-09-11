@@ -108,6 +108,23 @@ module bit_allocation (
     output logic        done          // 1-cycle pulse: all channels allocated
 );
 
+    // ---- datapath width (area pass 2026-09-10) ----
+    // liba52 computes bit allocation in C `int`, and this file was a literal
+    // 32-bit transcription.  The values are small.  Bounds, from the tables
+    // and codes: psd = 128*exp <= 3968; lowcomp <= 384 (16-bit reg);
+    // fgain <= 1024, fdecay <= 123, sgain < 4096, sdecay <= 21, so the leaks
+    // are <= ~8100; dbknee < 8192; snroffset in [-3132, 9151]; floor_s <= 255;
+    // 128*deltba in [-1024, 896]; the hearing threshold hth_q is a 16-bit ROM
+    // word (<= 65535).  compute_mask's largest intermediate is therefore the
+    // hth-capped mask minus snroffset, |m| < 70,000, before it is clamped to
+    // <= 0 and shifted; bl_idx <= 156 + 344 + 124 before its own clamp; the
+    // phase-5 log-add psd stays below 8k.  20-bit signed (+/-524,287) holds
+    // every one with 7x margin.  Literals stay 32-bit: Verilog evaluates the
+    // expression at 32 bits and truncates on assignment, which is identical
+    // whenever the value fits -- and the bap cosim is bit-exact.
+    localparam int BW = 20;
+
+
     localparam logic [2:0] CPL = AC3_CH_CPL[2:0];   // 5
     localparam logic [2:0] LFE = AC3_CH_LFE[2:0];   // 6
     wire [2:0] nfm1 = nfchans - 3'd1;
@@ -152,7 +169,7 @@ module bit_allocation (
     logic               pend_we;
     logic [10:0]        pend_waddr;
     logic               pend_lookup;     // 1: bap_lookup(pend_mask,pend_e); 0: pend_lit
-    logic signed [31:0] pend_mask;
+    logic signed [BW-1:0] pend_mask;
     logic        [4:0]  pend_e;
     logic signed [7:0]  pend_lit;
     logic        [1:0]  flush_cnt;
@@ -194,8 +211,9 @@ module bit_allocation (
     logic [4:0]        ex_qa, ex_qb;   // sync reads: expc[raddr_a/b]
     logic signed [3:0] db_q;           // sync read: dbc[i]
 
+
     // ---- per-channel constants (latched at channel start) ----
-    logic signed [31:0] fdecay, fgain, sdecay, sgain, dbknee, floor_s, snroffset;
+    logic signed [BW-1:0] fdecay, fgain, sdecay, sgain, dbknee, floor_s, snroffset;
     logic        [8:0]  end_r;
 
     // ---- FSM ----
@@ -220,12 +238,12 @@ module bit_allocation (
     logic [7:0]  i;                    // band/bin index (<=49; 8b for clean idx)
     logic [8:0]  jcap;                 // end-1 (phase 1/2 lowcomp guard)
     logic signed [15:0] lowcomp;
-    logic signed [31:0] psd_r, fastleak_r, slowleak_r, mask_r;
+    logic signed [BW-1:0] psd_r, fastleak_r, slowleak_r, mask_r;
     logic [8:0]  j, jw, sb, eb;        // phase-5 read / write / band bounds
     logic [1:0]  ph;                   // M19 micro-phase: 0=fetch RAM operands,
                                        // 1=execute the original state body
                                        // (2 = C_P5ACC log-add apply, M19b)
-    logic signed [31:0] vnext_r, vdelta_r;  // M19b: C_P5ACC ph1->ph2 operands
+    logic signed [BW-1:0] vnext_r, vdelta_r;  // M19b: C_P5ACC ph1->ph2 operands
 
     // destination channel slot for bap writes (fbw / coupling / LFE).
     wire [2:0] cur_slot = lfe ? LFE : cpl ? CPL : cur_ch;
@@ -237,23 +255,23 @@ module bit_allocation (
     wire [3:0] sel_fsnroffst= lfe ? lfeba_bai[6:3] : fsnroffst[cur_ch*4 +: 4];
     wire [1:0] sel_deltbae  = lfe ? 2'd2 : deltbae[cur_ch*2 +: 2];  // lfe: no delta-BA
 
-    wire signed [31:0] w_fdecay = 32'sd63 + 32'sd20 * $signed({30'd0, fdcycod});
-    wire signed [31:0] w_sdecay = 32'sd15 + 32'sd2  * $signed({30'd0, sdcycod});
-    wire signed [31:0] w_sgain  = $signed({20'd0, slowgain_t[sgaincod]});
-    wire signed [31:0] w_dbknee = $signed({19'd0, dbpbtab_t[dbpbcod]});
-    wire signed [31:0] w_fgain  = 32'sd128 + 32'sd128 * $signed({29'd0, sel_fgaincod});
-    wire signed [31:0] w_floorf = $signed({19'd0, floortab_t[floorcod]});
-    wire signed [31:0] w_snr    = 32'sd960 - 32'sd64 * $signed({26'd0, csnroffst})
+    wire signed [BW-1:0] w_fdecay = 32'sd63 + 32'sd20 * $signed({30'd0, fdcycod});
+    wire signed [BW-1:0] w_sdecay = 32'sd15 + 32'sd2  * $signed({30'd0, sdcycod});
+    wire signed [BW-1:0] w_sgain  = $signed({20'd0, slowgain_t[sgaincod]});
+    wire signed [BW-1:0] w_dbknee = $signed({19'd0, dbpbtab_t[dbpbcod]});
+    wire signed [BW-1:0] w_fgain  = 32'sd128 + 32'sd128 * $signed({29'd0, sel_fgaincod});
+    wire signed [BW-1:0] w_floorf = $signed({19'd0, floortab_t[floorcod]});
+    wire signed [BW-1:0] w_snr    = 32'sd960 - 32'sd64 * $signed({26'd0, csnroffst})
                                           - 32'sd4  * $signed({28'd0, sel_fsnroffst})
                                           + w_floorf;
-    wire signed [31:0] w_floors = w_floorf >>> 5;
+    wire signed [BW-1:0] w_floors = w_floorf >>> 5;
 
     // coupling-channel constants (M12 Stage B): fgain/snroffset use cplba.bai's
     // sub-codes; fdecay/sdecay/sgain/dbknee/floor are channel-independent.
     wire [2:0] cpl_fgaincod  = cplba_bai[2:0];
     wire [3:0] cpl_fsnroffst = cplba_bai[6:3];
-    wire signed [31:0] w_fgain_cpl = 32'sd128 + 32'sd128 * $signed({29'd0, cpl_fgaincod});
-    wire signed [31:0] w_snr_cpl   = 32'sd960 - 32'sd64 * $signed({26'd0, csnroffst})
+    wire signed [BW-1:0] w_fgain_cpl = 32'sd128 + 32'sd128 * $signed({29'd0, cpl_fgaincod});
+    wire signed [BW-1:0] w_snr_cpl   = 32'sd960 - 32'sd64 * $signed({26'd0, csnroffst})
                                               - 32'sd4  * $signed({28'd0, cpl_fsnroffst})
                                               + w_floorf;
 
@@ -309,7 +327,7 @@ module bit_allocation (
     // baptab: address formed combinationally from the pend_* stage (valid the
     // cycle after a state stages a lookup); baptab_q registers alongside p2_*.
     // This is the old bap_lookup() clamp, relocated ahead of the ROM.
-    wire signed [31:0] bl_idx  = 32'sd156 + pend_mask
+    wire signed [BW-1:0] bl_idx  = 32'sd156 + pend_mask
                                + (32'sd4 * $signed({27'd0, pend_e}));
     wire        [8:0]  bl_addr = (bl_idx < 0)         ? 9'd0
                                : (bl_idx > 32'sd304)  ? 9'd304
@@ -320,9 +338,9 @@ module bit_allocation (
     // latab: the C_P5ACC log-add operand.  Address is the old vid clamp,
     // computed from ex_qb (expc[j], valid at C_P5ACC ph1) and the accumulated
     // psd_r; la_q registers at the ph1 edge and is applied at ph2.
-    wire signed [31:0] la_vnext  = 32'sd128 * $signed({27'd0, ex_qb});
-    wire signed [31:0] la_vdelta = la_vnext - psd_r;
-    wire signed [31:0] la_vid    = ((la_vdelta >>> 9) == -32'sd1)
+    wire signed [BW-1:0] la_vnext  = 32'sd128 * $signed({27'd0, ex_qb});
+    wire signed [BW-1:0] la_vdelta = la_vnext - psd_r;
+    wire signed [BW-1:0] la_vid    = ((la_vdelta >>> 9) == -32'sd1)
                                  ? ((-la_vdelta) >>> 1) : (la_vdelta >>> 1);
     wire        [7:0]  la_addr   = (la_vid > 32'sd255) ? 8'd255 : la_vid[7:0];
     logic signed [7:0] la_q;
@@ -338,10 +356,10 @@ module bit_allocation (
     // per-channel constants).  M19b: the hearing-threshold value is passed in
     // (hth_q sync-ROM read, band == i at every call site) instead of read from
     // the ROM inside the function.
-    function automatic signed [31:0] compute_mask
-        (input signed [31:0] psd_in, input signed [31:0] mask_in,
-         input signed [31:0] hthv, input signed [3:0] db);
-        logic signed [31:0] m;
+    function automatic signed [BW-1:0] compute_mask
+        (input signed [BW-1:0] psd_in, input signed [BW-1:0] mask_in,
+         input signed [BW-1:0] hthv, input signed [3:0] db);
+        logic signed [BW-1:0] m;
         begin
             m    = mask_in;
             if (psd_in > dbknee) m = m - ((psd_in - dbknee) >>> 2);
@@ -356,29 +374,64 @@ module bit_allocation (
     // (M19b: the old bap_lookup() function — (baptab+156)[mask+4*exp] with the
     //  clamp — is now the bl_addr wire + sync baptab_q read + p2_* stage above.)
 
-    // UPDATE_LEAK (liba52 macro), split per leak.
-    function automatic signed [31:0] upd_fast
-        (input signed [31:0] fl, input signed [31:0] psd_in);
-        logic signed [31:0] x;
-        begin
-            x = fl + fdecay;
-            if (x > psd_in + fgain) x = psd_in + fgain;
-            upd_fast = x;
-        end
-    endfunction
-    function automatic signed [31:0] upd_slow
-        (input signed [31:0] sl, input signed [31:0] psd_in);
-        logic signed [31:0] x;
-        begin
-            x = sl + sdecay;
-            if (x > psd_in + sgain) x = psd_in + sgain;
-            upd_slow = x;
-        end
-    endfunction
+    // ---- SHARED MASK DATAPATH (area pass, 2026-09-10) -------------------------
+    // compute_mask() used to be instantiated at FIVE call sites (C_P1..C_P4,
+    // C_P5MASK) and UPDATE_LEAK (upd_fast/upd_slow) at four -- the states are
+    // mutually exclusive, but Quartus muxes RESULTS, never arithmetic, so the
+    // fitter built ~2,000 ALUTs of duplicated 32-bit add/compare trees
+    // (bit_allocation measured 2,482 ALUTs against 390 registers).  Every
+    // operand is a register that is stable for the whole ph1 cycle (st, i,
+    // jcap, ex_qa/ex_qb, lowcomp, psd_r, the leaks, hth_q, db_q, cpl), so the
+    // five bodies are the SAME expression with state-selected inputs.  Build
+    // it once, combinationally, and let each state consume the wires.
+    //
+    //   cm_psd  : 128*expc[i]            (C_P1..C_P4)   | psd_r  (C_P5MASK)
+    //   nlc_w   : the per-phase lowcomp term (phase 1/2 jcap-guarded, phase 3
+    //             seed 320 unguarded, phase 4 lowcomp-128, phase 5 none)
+    //   fl_w/sl_w: UPDATE_LEAK on cm_psd (unused by C_P1, which seeds instead)
+    //   cm_pre  : C_P1 = psd+fgain+nlc; C_P2..4 = min(fl+nlc, sl);
+    //             C_P5MASK = min(fl, sl)   (nlc_w == 0 there)
+    //   cm_mask : compute_mask(cm_psd, cm_pre, hth_q, db)  with the coupling
+    //             channel's delta-BA forced to 0 exactly as before.
+    // Values are IDENTICAL to the per-state copies (same 32-bit modular
+    // arithmetic, same operation order); only the sharing changed.  Gate:
+    // bench/ac3/run_balloc.sh (bap bit-exact) + run_front_cosim.sh.
+    // The leak update is written as plain ternaries, not a function: Quartus
+    // 17 has miscompiled small scalar-argument functions in this decoder
+    // before (the acmod helpers, 2026-08-31).
+    logic signed [BW-1:0] cm_psd, cm_pre, cm_mask, fl_w, sl_w, psd_fg, psd_sg;
+    logic signed [BW-1:0] fl_dec, sl_dec, a_nlc;
+    logic signed [15:0] nlc_w;
+    logic signed [3:0]  db_sel;
+    always_comb begin
+        nlc_w = lowcomp;
+        case (st)
+            C_P1, C_P2:
+                if ({1'b0, i} < jcap) begin
+                    if (ex_qb == ex_qa - 5'd2)                 nlc_w = 16'sd384;
+                    else if (lowcomp != 0 && ex_qb > ex_qa)    nlc_w = lowcomp - 16'sd64;
+                end
+            C_P3: begin
+                if (ex_qb == ex_qa - 5'd2)                     nlc_w = 16'sd320;
+                else if (lowcomp != 0 && ex_qb > ex_qa)        nlc_w = lowcomp - 16'sd64;
+            end
+            C_P4:    nlc_w = lowcomp - 16'sd128;
+            default: nlc_w = 16'sd0;
+        endcase
+        cm_psd = (st == C_P5MASK) ? psd_r : 32'sd128 * $signed({27'd0, ex_qa});
+        psd_fg = cm_psd + fgain;
+        psd_sg = cm_psd + sgain;
+        fl_dec = fastleak_r + fdecay;
+        sl_dec = slowleak_r + sdecay;
+        fl_w   = (fl_dec > psd_fg) ? psd_fg : fl_dec;      // UPDATE_LEAK fast
+        sl_w   = (sl_dec > psd_sg) ? psd_sg : sl_dec;      // UPDATE_LEAK slow
+        a_nlc  = ((st == C_P1) ? psd_fg : fl_w) + $signed(nlc_w);
+        cm_pre = (st == C_P1) ? a_nlc : ((a_nlc < sl_w) ? a_nlc : sl_w);
+        db_sel = ((st == C_P5MASK) && cpl) ? 4'sd0 : db_q;
+        cm_mask = compute_mask(cm_psd, cm_pre, $signed({16'd0, hth_q}), db_sel);
+    end
 
-    // scratch (combinational temporaries inside the FF; written before read)
-    logic signed [31:0] vpsd, vmaskpre, vmask, vfl, vsl;
-    logic signed [15:0] vnlc;
+    // scratch (combinational temporary inside the FF; written before read)
     logic        [8:0]  veb;
 
     always_ff @(posedge clk) begin
@@ -464,27 +517,19 @@ module bit_allocation (
                 // ---- phase 1: do { bin i } while (i<3 || (i<7 && exp rising)) ----
                 // (M19: ph0 fetches ex_qa=expc[i], ex_qb=expc[i+1], db_q=dbc[i];
                 //  ph1 is the original body with those substitutions.)
+                // (Shared datapath: nlc_w / cm_psd / cm_mask, see above.)
                 C_P1: if (!ph) ph <= 1'b1; else begin
                     ph <= 1'b0;
-                    vnlc = lowcomp;
-                    if ({1'b0, i} < jcap) begin
-                        if (ex_qb == ex_qa - 5'd2)                 vnlc = 16'sd384;
-                        else if (lowcomp != 0 && ex_qb > ex_qa)
-                                                                   vnlc = lowcomp - 16'sd64;
-                    end
-                    vpsd     = 32'sd128 * $signed({27'd0, ex_qa});
-                    vmaskpre = vpsd + fgain + $signed(vnlc);
-                    vmask    = compute_mask(vpsd, vmaskpre, $signed({16'd0, hth_q}), db_q);
                     pend_we <= 1'b1; pend_waddr <= {cur_slot, i};
-                    pend_lookup <= 1'b1; pend_mask <= vmask; pend_e <= ex_qa;
+                    pend_lookup <= 1'b1; pend_mask <= cm_mask; pend_e <= ex_qa;
 
-                    lowcomp <= vnlc;
-                    psd_r   <= vpsd;
+                    lowcomp <= nlc_w;
+                    psd_r   <= cm_psd;
                     i       <= i + 8'd1;
                     if (!(((i + 8'd1) < 8'd3) ||
                           (((i + 8'd1) < 8'd7) && (ex_qb > ex_qa)))) begin
-                        fastleak_r <= vpsd + fgain;
-                        slowleak_r <= vpsd + sgain;
+                        fastleak_r <= psd_fg;
+                        slowleak_r <= psd_sg;
                         st         <= C_P2;
                     end
                 end
@@ -498,23 +543,11 @@ module bit_allocation (
                         if (lfe) begin st <= C_FLUSH; flush_cnt <= 2'd0; end
                         else st <= C_P3;
                     end else begin
-                        vnlc = lowcomp;
-                        if ({1'b0, i} < jcap) begin
-                            if (ex_qb == ex_qa - 5'd2)             vnlc = 16'sd384;
-                            else if (lowcomp != 0 && ex_qb > ex_qa)
-                                                                   vnlc = lowcomp - 16'sd64;
-                        end
-                        vpsd     = 32'sd128 * $signed({27'd0, ex_qa});
-                        vfl      = upd_fast(fastleak_r, vpsd);
-                        vsl      = upd_slow(slowleak_r, vpsd);
-                        vmaskpre = ((vfl + $signed(vnlc)) < vsl) ?
-                                   (vfl + $signed(vnlc)) : vsl;
-                        vmask    = compute_mask(vpsd, vmaskpre, $signed({16'd0, hth_q}), db_q);
                         pend_we <= 1'b1; pend_waddr <= {cur_slot, i};
-                        pend_lookup <= 1'b1; pend_mask <= vmask; pend_e <= ex_qa;
+                        pend_lookup <= 1'b1; pend_mask <= cm_mask; pend_e <= ex_qa;
 
-                        fastleak_r <= vfl; slowleak_r <= vsl;
-                        lowcomp <= vnlc; psd_r <= vpsd;
+                        fastleak_r <= fl_w; slowleak_r <= sl_w;
+                        lowcomp <= nlc_w; psd_r <= cm_psd;
                         i <= i + 8'd1;
                     end
                 end
@@ -524,21 +557,11 @@ module bit_allocation (
                     ph <= 1'b0;
                     if (i >= 8'd20) st <= C_P4;
                     else begin
-                        vnlc = lowcomp;
-                        if (ex_qb == ex_qa - 5'd2)                 vnlc = 16'sd320;
-                        else if (lowcomp != 0 && ex_qb > ex_qa)
-                                                                   vnlc = lowcomp - 16'sd64;
-                        vpsd     = 32'sd128 * $signed({27'd0, ex_qa});
-                        vfl      = upd_fast(fastleak_r, vpsd);
-                        vsl      = upd_slow(slowleak_r, vpsd);
-                        vmaskpre = ((vfl + $signed(vnlc)) < vsl) ?
-                                   (vfl + $signed(vnlc)) : vsl;
-                        vmask    = compute_mask(vpsd, vmaskpre, $signed({16'd0, hth_q}), db_q);
                         pend_we <= 1'b1; pend_waddr <= {cur_slot, i};
-                        pend_lookup <= 1'b1; pend_mask <= vmask; pend_e <= ex_qa;
+                        pend_lookup <= 1'b1; pend_mask <= cm_mask; pend_e <= ex_qa;
 
-                        fastleak_r <= vfl; slowleak_r <= vsl;
-                        lowcomp <= vnlc; psd_r <= vpsd;
+                        fastleak_r <= fl_w; slowleak_r <= sl_w;
+                        lowcomp <= nlc_w; psd_r <= cm_psd;
                         i <= i + 8'd1;
                     end
                 end
@@ -550,18 +573,11 @@ module bit_allocation (
                         j  <= {1'b0, i};
                         st <= C_P5SETUP;
                     end else begin
-                        vnlc     = lowcomp - 16'sd128;
-                        vpsd     = 32'sd128 * $signed({27'd0, ex_qa});
-                        vfl      = upd_fast(fastleak_r, vpsd);
-                        vsl      = upd_slow(slowleak_r, vpsd);
-                        vmaskpre = ((vfl + $signed(vnlc)) < vsl) ?
-                                   (vfl + $signed(vnlc)) : vsl;
-                        vmask    = compute_mask(vpsd, vmaskpre, $signed({16'd0, hth_q}), db_q);
                         pend_we <= 1'b1; pend_waddr <= {cur_slot, i};
-                        pend_lookup <= 1'b1; pend_mask <= vmask; pend_e <= ex_qa;
+                        pend_lookup <= 1'b1; pend_mask <= cm_mask; pend_e <= ex_qa;
 
-                        fastleak_r <= vfl; slowleak_r <= vsl;
-                        lowcomp <= vnlc;
+                        fastleak_r <= fl_w; slowleak_r <= sl_w;
+                        lowcomp <= nlc_w;
                         i <= i + 8'd1;
                     end
                 end
@@ -609,15 +625,10 @@ module bit_allocation (
 
                 C_P5MASK: if (!ph) ph <= 1'b1; else begin
                     ph <= 1'b0;
-                    vfl      = upd_fast(fastleak_r, psd_r);
-                    vsl      = upd_slow(slowleak_r, psd_r);
-                    vmaskpre = (vfl < vsl) ? vfl : vsl;
                     // coupling channel has no delta-BA in scope (cpl deltbae NEW
-                    // fails loud upstream), so its deltba term is 0.
-                    mask_r   <= compute_mask(psd_r, vmaskpre,
-                                             $signed({16'd0, hth_q}),
-                                             cpl ? 4'sd0 : db_q);
-                    fastleak_r <= vfl; slowleak_r <= vsl;
+                    // fails loud upstream), so its deltba term is 0 (db_sel).
+                    mask_r   <= cm_mask;
+                    fastleak_r <= fl_w; slowleak_r <= sl_w;
                     i  <= i + 8'd1;
                     jw <= sb;
                     st <= C_P5WRITE;
