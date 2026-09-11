@@ -825,8 +825,12 @@ netlist roll); the `S_POST256` register set aliasing onto `S_POST`'s (~150–250
 ALMs, touches the M16 short-block path, deferred until the cheaper levers are
 spent).
 
-Fit result: _(filled in from the branch build — see the `DVD.qsf` seed ledger
-entry for `dev-almreclaim`)_.
+**Fit result (SEED 7, first roll):** clk_dec 93.66 / 90.86 MHz (gate 86.0),
+ALUTs 60,642 → **58,098 (−2,544)**, "ALMs needed" 38,802 → 37,358 (93 % → 89 %),
+placed ALMs 40,821 → 40,231, RAM 498 and DSP 94 unchanged, `lint_undriven` and
+`netlist_canary` PASS. Build `DVD_almreclaim_20260911_0138.rbf`. ⏳ HW gate: an
+AC-3 5.1 disc, a mono/2-2 disc, an MP2 VCD and an LPCM disc through both decode
+and Passthru (the cosim proves the numbers; the board proves the netlist).
 
 ## 5. Fixed-point convention (pin BEFORE datapath RTL)
 

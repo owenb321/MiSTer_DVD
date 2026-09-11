@@ -252,6 +252,34 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **LOGIC RECLAIM, BRANCH A — AC-3 duplicated arithmetic (2026-09-11, branch
+  `feature/alm-reclaim-ac3`, unpushed) — sim-proven bit-exact, ⏳ HW-confirm pending**
+  (build `DVD_almreclaim_20260911_0138.rbf`, SEED 7 first roll, clk_dec 93.66/90.86).
+  Zero value changes: **−2,544 ALUTs** (60,642 → 58,098), "ALMs needed" 93 % → 89 %.
+  ★★ **THE HEADLINE PERCENTAGE WAS LYING IN BOTH DIRECTIONS.** A same-seed fit of
+  v0.5.0 `main` PLACED 40,821 ALMs (97 %) in 4,188/4,191 LABs — its "93 %" was the
+  fitter's dense-packing estimate subtracted from a full device — and the two
+  speculative branches that "hit 98 %" placed only ~400 more; the estimate collapsed and
+  the percentage jumped. **Measure reclaim in synthesis ALUTs (`DVD.map.rpt` per entity)
+  and placed ALMs, never the headline.** Cutting the CD player would have recovered
+  ~300 ALMs; declined.
+  ★ **Where the AC-3 area actually was: not memory (M19 finished that) but Quartus
+  muxing RESULTS across mutually exclusive FSM states, so every inlined function call
+  was its own datapath.** `bit_allocation` had `compute_mask` at five states and
+  `UPDATE_LEAK` at four (2,491 → 1,348 ALUTs with ONE shared path, then a 20-bit width
+  with the range proof in the file); `mantissa_dequant` had `scale_coeff` at 19 sites
+  (1,594 → 1,110); both `bit_reader`s carried 64-bit barrel shifters for a stated
+  40/24-bit bound (−366). The IMDCT operand-mux/butterfly rewrite was worth only −81:
+  Quartus already shared it — but that module swung **+786 ALUTs between two netlists
+  with identical RTL**, a mapping cliff the regular form should remove.
+  ⚠ **`bench/ac3/run_balloc.sh` had been failing silently since M19d** (it modelled
+  delta-BA combinationally after the read became registered; 17 bap mismatches inside
+  the delta-BA bands, vvp exit 0). RTL was right, bench was stale; fixed and `$fatal`ed
+  BEFORE the refactor so it could gate it. Gate at every commit: `run_front_cosim.sh`
+  bap bit-exact on 13 streams **and PCM dumps of blocks 0–5 byte-identical** to a
+  pre-change baseline, plus each unit suite. Detail: `docs/ac3_decoder_architecture.md`
+  §4.12, `DVD.qsf` ledger. Plan for the remaining branches (nav/VM/glue, reader,
+  block-RAM packing) is in the audit record there.
 - 🔧 **SINGLE-RASTER ANALOG OUTPUT — the second raster (`re_interlace`/VGA2) is
   RETIRED; the interlaced MAIN raster carries the N64 half-line and drives the CRT
   directly (2026-09-03, branch `feature/single-raster-analog`). ✅ HW-CONFIRMED on the
