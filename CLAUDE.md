@@ -252,8 +252,16 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **LOGIC RECLAIM, BRANCH A — AC-3 duplicated arithmetic (2026-09-11, branch
-  `feature/alm-reclaim-ac3`, unpushed) — sim-proven bit-exact and ✅ HW-CONFIRMED 2026-09-11**
+- ✅ **LOGIC RECLAIM — three branches, ALL MERGED 2026-09-11 (PR #82 AC-3, PR #83 nav/VM/
+  telemetry + `MISTER_DISABLE_ALSA`, PR #84 reader) and ✅ HW-CONFIRMED on the rig.** Together,
+  against the v0.5.0 baseline fit on the same seed: ALUTs 60,642 → **57,465 (−3,177)**,
+  registers 52,238 → 50,497, "ALMs needed" 93 % → 87 %, clk_dec hot corner 89.94 → 96.06.
+  Full record and the unstarted follow-ups (subpicture bitmap 5-px packing for −20 M10K,
+  seek-table sharing, the reader's `sec_lba` mux): **`docs/logic_reclaim.md`**.
+  ⚠ Trap recorded there and in the ledger: consolidating a memory's write sites made Quartus
+  17 stop inferring `ext_mem` as RAM with NO warning (+5,373 registers, no fit) — after any
+  edit near a memory's writes, grep `DVD.map.rpt` for its "Inferred altsyncram" line before
+  spending a fit. Branch A detail (the AC-3 half, originally written as its own bullet):
   (maintainer's rig: all four MiB AC-3 tracks audible on the capture card, −26 to −42 dBFS;
   LPCM VOB −52 dBFS; MP2 VCD −44 dBFS at 44.1 kHz; Passthru telemetry steady; video pacing
   2.4996 refreshes/frame, 48 kHz −51 ppm, 0 lates/drops over 46 s)
