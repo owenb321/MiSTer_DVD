@@ -108,6 +108,23 @@ module bit_allocation (
     output logic        done          // 1-cycle pulse: all channels allocated
 );
 
+    // ---- datapath width (area pass 2026-09-10) ----
+    // liba52 computes bit allocation in C `int`, and this file was a literal
+    // 32-bit transcription.  The values are small.  Bounds, from the tables
+    // and codes: psd = 128*exp <= 3968; lowcomp <= 384 (16-bit reg);
+    // fgain <= 1024, fdecay <= 123, sgain < 4096, sdecay <= 21, so the leaks
+    // are <= ~8100; dbknee < 8192; snroffset in [-3132, 9151]; floor_s <= 255;
+    // 128*deltba in [-1024, 896]; the hearing threshold hth_q is a 16-bit ROM
+    // word (<= 65535).  compute_mask's largest intermediate is therefore the
+    // hth-capped mask minus snroffset, |m| < 70,000, before it is clamped to
+    // <= 0 and shifted; bl_idx <= 156 + 344 + 124 before its own clamp; the
+    // phase-5 log-add psd stays below 8k.  20-bit signed (+/-524,287) holds
+    // every one with 7x margin.  Literals stay 32-bit: Verilog evaluates the
+    // expression at 32 bits and truncates on assignment, which is identical
+    // whenever the value fits -- and the bap cosim is bit-exact.
+    localparam int BW = 20;
+
+
     localparam logic [2:0] CPL = AC3_CH_CPL[2:0];   // 5
     localparam logic [2:0] LFE = AC3_CH_LFE[2:0];   // 6
     wire [2:0] nfm1 = nfchans - 3'd1;
@@ -152,7 +169,7 @@ module bit_allocation (
     logic               pend_we;
     logic [10:0]        pend_waddr;
     logic               pend_lookup;     // 1: bap_lookup(pend_mask,pend_e); 0: pend_lit
-    logic signed [31:0] pend_mask;
+    logic signed [BW-1:0] pend_mask;
     logic        [4:0]  pend_e;
     logic signed [7:0]  pend_lit;
     logic        [1:0]  flush_cnt;
@@ -194,8 +211,9 @@ module bit_allocation (
     logic [4:0]        ex_qa, ex_qb;   // sync reads: expc[raddr_a/b]
     logic signed [3:0] db_q;           // sync read: dbc[i]
 
+
     // ---- per-channel constants (latched at channel start) ----
-    logic signed [31:0] fdecay, fgain, sdecay, sgain, dbknee, floor_s, snroffset;
+    logic signed [BW-1:0] fdecay, fgain, sdecay, sgain, dbknee, floor_s, snroffset;
     logic        [8:0]  end_r;
 
     // ---- FSM ----
@@ -220,12 +238,12 @@ module bit_allocation (
     logic [7:0]  i;                    // band/bin index (<=49; 8b for clean idx)
     logic [8:0]  jcap;                 // end-1 (phase 1/2 lowcomp guard)
     logic signed [15:0] lowcomp;
-    logic signed [31:0] psd_r, fastleak_r, slowleak_r, mask_r;
+    logic signed [BW-1:0] psd_r, fastleak_r, slowleak_r, mask_r;
     logic [8:0]  j, jw, sb, eb;        // phase-5 read / write / band bounds
     logic [1:0]  ph;                   // M19 micro-phase: 0=fetch RAM operands,
                                        // 1=execute the original state body
                                        // (2 = C_P5ACC log-add apply, M19b)
-    logic signed [31:0] vnext_r, vdelta_r;  // M19b: C_P5ACC ph1->ph2 operands
+    logic signed [BW-1:0] vnext_r, vdelta_r;  // M19b: C_P5ACC ph1->ph2 operands
 
     // destination channel slot for bap writes (fbw / coupling / LFE).
     wire [2:0] cur_slot = lfe ? LFE : cpl ? CPL : cur_ch;
@@ -237,23 +255,23 @@ module bit_allocation (
     wire [3:0] sel_fsnroffst= lfe ? lfeba_bai[6:3] : fsnroffst[cur_ch*4 +: 4];
     wire [1:0] sel_deltbae  = lfe ? 2'd2 : deltbae[cur_ch*2 +: 2];  // lfe: no delta-BA
 
-    wire signed [31:0] w_fdecay = 32'sd63 + 32'sd20 * $signed({30'd0, fdcycod});
-    wire signed [31:0] w_sdecay = 32'sd15 + 32'sd2  * $signed({30'd0, sdcycod});
-    wire signed [31:0] w_sgain  = $signed({20'd0, slowgain_t[sgaincod]});
-    wire signed [31:0] w_dbknee = $signed({19'd0, dbpbtab_t[dbpbcod]});
-    wire signed [31:0] w_fgain  = 32'sd128 + 32'sd128 * $signed({29'd0, sel_fgaincod});
-    wire signed [31:0] w_floorf = $signed({19'd0, floortab_t[floorcod]});
-    wire signed [31:0] w_snr    = 32'sd960 - 32'sd64 * $signed({26'd0, csnroffst})
+    wire signed [BW-1:0] w_fdecay = 32'sd63 + 32'sd20 * $signed({30'd0, fdcycod});
+    wire signed [BW-1:0] w_sdecay = 32'sd15 + 32'sd2  * $signed({30'd0, sdcycod});
+    wire signed [BW-1:0] w_sgain  = $signed({20'd0, slowgain_t[sgaincod]});
+    wire signed [BW-1:0] w_dbknee = $signed({19'd0, dbpbtab_t[dbpbcod]});
+    wire signed [BW-1:0] w_fgain  = 32'sd128 + 32'sd128 * $signed({29'd0, sel_fgaincod});
+    wire signed [BW-1:0] w_floorf = $signed({19'd0, floortab_t[floorcod]});
+    wire signed [BW-1:0] w_snr    = 32'sd960 - 32'sd64 * $signed({26'd0, csnroffst})
                                           - 32'sd4  * $signed({28'd0, sel_fsnroffst})
                                           + w_floorf;
-    wire signed [31:0] w_floors = w_floorf >>> 5;
+    wire signed [BW-1:0] w_floors = w_floorf >>> 5;
 
     // coupling-channel constants (M12 Stage B): fgain/snroffset use cplba.bai's
     // sub-codes; fdecay/sdecay/sgain/dbknee/floor are channel-independent.
     wire [2:0] cpl_fgaincod  = cplba_bai[2:0];
     wire [3:0] cpl_fsnroffst = cplba_bai[6:3];
-    wire signed [31:0] w_fgain_cpl = 32'sd128 + 32'sd128 * $signed({29'd0, cpl_fgaincod});
-    wire signed [31:0] w_snr_cpl   = 32'sd960 - 32'sd64 * $signed({26'd0, csnroffst})
+    wire signed [BW-1:0] w_fgain_cpl = 32'sd128 + 32'sd128 * $signed({29'd0, cpl_fgaincod});
+    wire signed [BW-1:0] w_snr_cpl   = 32'sd960 - 32'sd64 * $signed({26'd0, csnroffst})
                                               - 32'sd4  * $signed({28'd0, cpl_fsnroffst})
                                               + w_floorf;
 
@@ -309,7 +327,7 @@ module bit_allocation (
     // baptab: address formed combinationally from the pend_* stage (valid the
     // cycle after a state stages a lookup); baptab_q registers alongside p2_*.
     // This is the old bap_lookup() clamp, relocated ahead of the ROM.
-    wire signed [31:0] bl_idx  = 32'sd156 + pend_mask
+    wire signed [BW-1:0] bl_idx  = 32'sd156 + pend_mask
                                + (32'sd4 * $signed({27'd0, pend_e}));
     wire        [8:0]  bl_addr = (bl_idx < 0)         ? 9'd0
                                : (bl_idx > 32'sd304)  ? 9'd304
@@ -320,9 +338,9 @@ module bit_allocation (
     // latab: the C_P5ACC log-add operand.  Address is the old vid clamp,
     // computed from ex_qb (expc[j], valid at C_P5ACC ph1) and the accumulated
     // psd_r; la_q registers at the ph1 edge and is applied at ph2.
-    wire signed [31:0] la_vnext  = 32'sd128 * $signed({27'd0, ex_qb});
-    wire signed [31:0] la_vdelta = la_vnext - psd_r;
-    wire signed [31:0] la_vid    = ((la_vdelta >>> 9) == -32'sd1)
+    wire signed [BW-1:0] la_vnext  = 32'sd128 * $signed({27'd0, ex_qb});
+    wire signed [BW-1:0] la_vdelta = la_vnext - psd_r;
+    wire signed [BW-1:0] la_vid    = ((la_vdelta >>> 9) == -32'sd1)
                                  ? ((-la_vdelta) >>> 1) : (la_vdelta >>> 1);
     wire        [7:0]  la_addr   = (la_vid > 32'sd255) ? 8'd255 : la_vid[7:0];
     logic signed [7:0] la_q;
@@ -338,10 +356,10 @@ module bit_allocation (
     // per-channel constants).  M19b: the hearing-threshold value is passed in
     // (hth_q sync-ROM read, band == i at every call site) instead of read from
     // the ROM inside the function.
-    function automatic signed [31:0] compute_mask
-        (input signed [31:0] psd_in, input signed [31:0] mask_in,
-         input signed [31:0] hthv, input signed [3:0] db);
-        logic signed [31:0] m;
+    function automatic signed [BW-1:0] compute_mask
+        (input signed [BW-1:0] psd_in, input signed [BW-1:0] mask_in,
+         input signed [BW-1:0] hthv, input signed [3:0] db);
+        logic signed [BW-1:0] m;
         begin
             m    = mask_in;
             if (psd_in > dbknee) m = m - ((psd_in - dbknee) >>> 2);
@@ -381,8 +399,8 @@ module bit_allocation (
     // The leak update is written as plain ternaries, not a function: Quartus
     // 17 has miscompiled small scalar-argument functions in this decoder
     // before (the acmod helpers, 2026-08-31).
-    logic signed [31:0] cm_psd, cm_pre, cm_mask, fl_w, sl_w, psd_fg, psd_sg;
-    logic signed [31:0] fl_dec, sl_dec, a_nlc;
+    logic signed [BW-1:0] cm_psd, cm_pre, cm_mask, fl_w, sl_w, psd_fg, psd_sg;
+    logic signed [BW-1:0] fl_dec, sl_dec, a_nlc;
     logic signed [15:0] nlc_w;
     logic signed [3:0]  db_sel;
     always_comb begin
