@@ -1068,4 +1068,10 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # (40,821 -> 40,823) because the reclaimed flops were paid straight back into the
 # imdct cliff. Re-fit after branch A merges (its (x,y,w1,w2) form held at
 # 3,147-3,254 on two netlists) before reading any ALM number off this branch.
+# 2026-09-11b (feature/alm-reclaim-nav + MISTER_DISABLE_ALSA): SEED 7 held FIRST
+# roll -- clk_dec 92.64 @100C / 91.97 @-40C (gate 86.0, PASS both corners) at 92%
+# ALM (38,601 needed; 40,615 PLACED = 97%, -206 vs main), registers 50,167 (-2,071
+# vs main), RAM 501/553, DSP 94/112. Build DVD_almreclaimnav_20260911_0244.rbf.
+# Synthesis vs v0.5.0 main: regs 51,954 -> 49,890 (-2,064), ALUTs +551 with the
+# imdct cliff at +782 again (same RTL). The alsa entity is gone from the netlist.
 set_global_assignment -name SEED 7

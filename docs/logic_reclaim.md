@@ -75,6 +75,9 @@ which +799 is the IMDCT mapping cliff on RTL this branch does not touch** (3,228
 ALUTs, dvd_telem −264 regs, dvd_vm −148 ALUTs. ⚠ Read no ALM figure off this fit until
 the branch is re-fit on top of Branch A, whose regular operand-mux form held the IMDCT
 at 3,147–3,254 across two netlists. Build `DVD_almreclaimnav_20260911_0214.rbf`.
+**Rebuilt with `MISTER_DISABLE_ALSA` (SEED 7, first roll):** clk_dec 92.64 / 91.97,
+registers **52,238 → 50,167**, placed ALMs 40,821 → 40,615, the `alsa` entity gone; ALUTs
++551 of which the IMDCT cliff is +782. Build `DVD_almreclaimnav_20260911_0244.rbf`.
 
 | item | change | gate |
 |---|---|---|
