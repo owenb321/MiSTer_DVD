@@ -1084,4 +1084,19 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # with branch A's operand-mux form underneath, so the two branches now simply add:
 # bit_allocation 2,497 -> 1,044, mantissa_dequant 1,861 -> 1,377, dvd_vm -150,
 # pgc_palette -55/-359 regs, pts_assoc -732 regs, dvd_telem -264 regs, alsa gone.
+# 2026-09-11 (feature/alm-reclaim-reader, dev-almreclaimrdr -- LOGIC RECLAIM BRANCH C:
+# dvd_iso_reader shared PGC-window adder, unreachable IFO states deleted, one
+# flat-init state, one sd_lba adder, explicit ext_mem write port): SEED 7 held
+# FIRST roll -- clk_dec 88.75 @100C / 88.62 @-40C (gate 86.0, PASS both corners) at
+# 92% ALM (38,765 needed; 40,706 PLACED = 97%), registers 52,378, RAM 498/553,
+# DSP 94/112. Build DVD_almreclaimrdr_20260911_0335.rbf. Synthesis vs v0.5.0 main:
+# reader 6,680 -> 6,421 ALUTs (-259), design ALUTs 60,224 -> 60,151.
+# ★★ THE FIRST BUILD OF THIS BRANCH DID NOT FIT (4,261 LABs against 4,191) AND
+# QUARTUS SAID NOTHING: consolidating the reader's ext_mem write sites made it stop
+# inferring the 100x64 extent table as RAM -- +5,373 registers, four M10Ks gone,
+# no warning; the map report merely listed ext_mem[n][b] as registers. An explicit
+# registered write port with one address expression restored the altsyncram
+# (verified by a synthesis-only run before re-fitting). The parse_buf lesson in a
+# new form: after ANY edit near a memory's write sites, grep DVD.map.rpt for its
+# "Inferred altsyncram" line before spending a fit on it.
 set_global_assignment -name SEED 7
