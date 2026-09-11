@@ -1985,11 +1985,11 @@ wire pause_aud = pause_q | hold_freeze;
 // instant does not. Falls back to the counter alone if the framework never
 // sends it (TIMESTAMP stays 0). See docs/dvd_vm.md "DVD-game entropy".
 wire [32:0] hps_timestamp;
-reg  [31:0] entropy_ctr = 32'd0;
+reg  [15:0] entropy_ctr = 16'd0;   // 16 bits: every consumer reads [15:0] or less (area pass 2026-09-10)
 reg  [24:0] sec_div     = 25'd0;
 reg         sec_tick    = 1'b0;
 always @(posedge clk_sys) begin
-    entropy_ctr <= entropy_ctr + 32'd1;
+    entropy_ctr <= entropy_ctr + 16'd1;
     if (sec_div == 25'd26_999_999) begin   // clk_sys = 27 MHz -> 1 Hz
         sec_div  <= 25'd0;
         sec_tick <= 1'b1;
@@ -5566,7 +5566,7 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .il_mode        (il_eff),
     .frame_tick     (av_refresh_tick),
     .vis            (logo_vis),
-    .entropy        (entropy_ctr),
+    .entropy        ({16'd0, entropy_ctr}),
     .ioctl_download (ioctl_download),
     .ioctl_wr       (ioctl_wr),
     .ioctl_addr     (ioctl_addr),
@@ -5642,17 +5642,24 @@ subpic_blend subpic_blend_inst (
 //     coli + subpicture): its PRESENCE = armed, its POSITION = the rect coords.
 // Registered => hotspot-safe; zero effect with O[2] Off.
 wire        dbg_hl_en = status[2] && menus_on;
-wire        dbg_blk1  = (ov_h_gen >= 12'd8)  && (ov_h_gen < 12'd24) &&
-                        (core_v_pos >= 12'd8)  && (core_v_pos < 12'd24);
-wire        dbg_blk2  = (ov_h_gen >= 12'd28) && (ov_h_gen < 12'd44) &&
-                        (core_v_pos >= 12'd8)  && (core_v_pos < 12'd24);
-wire        dbg_blk3  = (ov_h_gen >= 12'd48) && (ov_h_gen < 12'd64) &&
-                        (core_v_pos >= 12'd8)  && (core_v_pos < 12'd24);
+// Area pass 2026-09-10: the 13 blocks used to carry FOUR independent 12-bit
+// magnitude compares each (52 comparators) for what is 5 X-windows x 3 Y-bands;
+// factor the windows once and AND them. Bit-identical.
+wire        dbg_x0 = (ov_h_gen >= 12'd8)  && (ov_h_gen < 12'd24);
+wire        dbg_x1 = (ov_h_gen >= 12'd28) && (ov_h_gen < 12'd44);
+wire        dbg_x2 = (ov_h_gen >= 12'd48) && (ov_h_gen < 12'd64);
+wire        dbg_x3 = (ov_h_gen >= 12'd68) && (ov_h_gen < 12'd84);
+wire        dbg_x4 = (ov_h_gen >= 12'd88) && (ov_h_gen < 12'd104);
+wire        dbg_y0 = (core_v_pos >= 12'd8)  && (core_v_pos < 12'd24);
+wire        dbg_y1 = (core_v_pos >= 12'd30) && (core_v_pos < 12'd46);
+wire        dbg_y2 = (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
+wire        dbg_blk1  = dbg_x0 && dbg_y0;
+wire        dbg_blk2  = dbg_x1 && dbg_y0;
+wire        dbg_blk3  = dbg_x2 && dbg_y0;
 // block 4: SPU bytes reached spu_decode this frame (ps_demux routed the substream).
 // GREEN + block3 RED = SPU arrives but spu_decode won't commit/show (decode/PTS);
 // RED = ps_demux filtered it out (sp_track) or it isn't in the stream.
-wire        dbg_blk4  = (ov_h_gen >= 12'd68) && (ov_h_gen < 12'd84) &&
-                        (core_v_pos >= 12'd8)  && (core_v_pos < 12'd24);
+wire        dbg_blk4  = dbg_x3 && dbg_y0;
 // VBUF-LAG DIAGNOSIS (docs/dvd_menu_refinements.md §5) — second row + a bar.
 //   blk5 (v30..46, x8..24)  = vbuf_deep: GREEN = the fast-drain threshold tripped
 //                             (menu_ff engaged), RED = VBUF below 0x40 (menu_ff never
@@ -5663,10 +5670,8 @@ wire        dbg_blk4  = (ov_h_gen >= 12'd68) && (ov_h_gen < 12'd84) &&
 //     ~x72 (0x40) vbuf_deep should be set. HIGH bar at the blank frame => cell 0 IS
 //     buffered but not displayed (pickup/decode issue); LOW => cell 0 never reached the
 //     VBUF (keep_vbuf LinkPGCN junction dropped it).
-wire        dbg_blk5  = (ov_h_gen >= 12'd8)  && (ov_h_gen < 12'd24) &&
-                        (core_v_pos >= 12'd30) && (core_v_pos < 12'd46);
-wire        dbg_blk6  = (ov_h_gen >= 12'd28) && (ov_h_gen < 12'd44) &&
-                        (core_v_pos >= 12'd30) && (core_v_pos < 12'd46);
+wire        dbg_blk5  = dbg_x0 && dbg_y1;
+wire        dbg_blk6  = dbg_x1 && dbg_y1;
 // §7 return-highlight probes (2nd row): blk7 = hl_on_w (nav_pci armed AND fetched -
 // the render gate needs BOTH; block1 green + blk7 RED => the FETCH isn't completing).
 // blk8 = a highlight RECOLOUR pixel fired this frame (hl_use = inside the rect, class
@@ -5674,10 +5679,8 @@ wire        dbg_blk6  = (ov_h_gen >= 12'd28) && (ov_h_gen < 12'd44) &&
 // blk7 GREEN + blk8 RED => armed+fetched but no
 // class-1/2 subpicture pixel is landing in the button rect on the displayed frame
 // (the keep_vbuf display/parse skew), NOT a promotion/fetch fault.
-wire        dbg_blk7  = (ov_h_gen >= 12'd48) && (ov_h_gen < 12'd64) &&
-                        (core_v_pos >= 12'd30) && (core_v_pos < 12'd46);
-wire        dbg_blk8  = (ov_h_gen >= 12'd68) && (ov_h_gen < 12'd84) &&
-                        (core_v_pos >= 12'd30) && (core_v_pos < 12'd46);
+wire        dbg_blk7  = dbg_x2 && dbg_y1;
+wire        dbg_blk8  = dbg_x3 && dbg_y1;
 wire        dbg_vbar  = (core_v_pos >= 12'd50) && (core_v_pos < 12'd58) &&
                         (ov_h_gen >= 12'd8)  && (ov_h_gen < (12'd8 + {4'd0, vbuf_fill_s1}));
 // RASTER-TRIGGER ROW (single-raster analog, 2026-09-03; the RGBS/YPbPr "shake every
@@ -5693,16 +5696,11 @@ wire        dbg_vbar  = (core_v_pos >= 12'd50) && (core_v_pos < 12'd58) &&
 //   blk13 (x 88..104) Main re-wrote the cfg word AFTER its first write (OSD leave,
 //                     video_mode_adjust, [video=] section re-parse — informational)
 wire        dbg_r3_en = status[2] && interlaced_eff;
-wire        dbg_blk9  = (ov_h_gen >= 12'd8)  && (ov_h_gen < 12'd24) &&
-                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
-wire        dbg_blk10 = (ov_h_gen >= 12'd28) && (ov_h_gen < 12'd44) &&
-                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
-wire        dbg_blk11 = (ov_h_gen >= 12'd48) && (ov_h_gen < 12'd64) &&
-                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
-wire        dbg_blk12 = (ov_h_gen >= 12'd68) && (ov_h_gen < 12'd84) &&
-                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
-wire        dbg_blk13 = (ov_h_gen >= 12'd88) && (ov_h_gen < 12'd104) &&
-                        (core_v_pos >= 12'd62) && (core_v_pos < 12'd78);
+wire        dbg_blk9  = dbg_x0 && dbg_y2;
+wire        dbg_blk10 = dbg_x1 && dbg_y2;
+wire        dbg_blk11 = dbg_x2 && dbg_y2;
+wire        dbg_blk12 = dbg_x3 && dbg_y2;
+wire        dbg_blk13 = dbg_x4 && dbg_y2;
 // clk_dec events -> toggles (one flip per event), 2-FF synced, edge-detected in clk_sys
 reg         wd_rst_q, wd_tgl, vs0_q, vs0_tgl;
 always @(posedge clk_dec) begin
@@ -5764,57 +5762,35 @@ always @(posedge clk_sys) begin
     if (~core_vs_prev_sys & core_v_sync) begin hlvis_seen_l <= hlvis_seen; hlvis_seen <= 1'b0; end
     else if (hl_use_q)                   hlvis_seen <= 1'b1;
 end
-reg  [7:0]  dbg_r_q, dbg_g_q, dbg_b_q;
+// Area pass 2026-09-10: the blocks only ever show four colours, so the
+// priority chain below resolves to a 2-bit code and the output mux expands it
+// (was three 8-bit registers fed by a 14-way 24-bit chain).
+localparam [1:0] DBG_RED = 2'd0, DBG_GREEN = 2'd1, DBG_CYAN = 2'd2, DBG_MAGENTA = 2'd3;
+reg  [1:0]  dbg_col_q;
 reg         dbg_px_q;
+wire [7:0]  dbg_r_q = (dbg_col_q == DBG_RED   || dbg_col_q == DBG_MAGENTA) ? 8'hFF : 8'h00;
+wire [7:0]  dbg_g_q = (dbg_col_q == DBG_GREEN || dbg_col_q == DBG_CYAN)    ? 8'hFF : 8'h00;
+wire [7:0]  dbg_b_q = (dbg_col_q == DBG_CYAN  || dbg_col_q == DBG_MAGENTA) ? 8'hFF : 8'h00;
 always @(posedge clk_sys) begin
     dbg_px_q <= (dbg_hl_en && (dbg_blk1 || dbg_blk2 || dbg_blk3 || dbg_blk4 ||
                                dbg_blk5 || dbg_blk6 || dbg_blk7 || dbg_blk8 || dbg_vbar ||
                                (hl_btns_armed && dbg_rectb)))
              || (dbg_r3_en && (dbg_blk9 || dbg_blk10 || dbg_blk11 || dbg_blk12 || dbg_blk13));
-    if (dbg_blk1) begin
-        dbg_r_q <= hl_btns_armed ? 8'h00 : 8'hFF;
-        dbg_g_q <= hl_btns_armed ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk2) begin
-        dbg_r_q <= video_live_s2 ? 8'h00 : 8'hFF;
-        dbg_g_q <= video_live_s2 ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk3) begin
-        dbg_r_q <= sp_seen_l ? 8'h00 : 8'hFF;
-        dbg_g_q <= sp_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk4) begin
-        dbg_r_q <= spb_seen_l ? 8'h00 : 8'hFF;
-        dbg_g_q <= spb_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk5) begin                                 // vbuf_deep (menu_ff engaged)
-        dbg_r_q <= vbuf_deep ? 8'h00 : 8'hFF;
-        dbg_g_q <= vbuf_deep ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk6) begin                                 // still_active (reader parked)
-        dbg_r_q <= still_active ? 8'h00 : 8'hFF;
-        dbg_g_q <= still_active ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk7) begin                                 // hl_on_w = armed AND fetched
-        dbg_r_q <= hl_on_w ? 8'h00 : 8'hFF;
-        dbg_g_q <= hl_on_w ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk8) begin                                 // recolour fired this frame
-        dbg_r_q <= hlvis_seen_l ? 8'h00 : 8'hFF;
-        dbg_g_q <= hlvis_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk9) begin                                 // raster row: watchdog expired
-        dbg_r_q <= wd_seen_l ? 8'h00 : 8'hFF;
-        dbg_g_q <= wd_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk10) begin                                // raster row: il_switch fired
-        dbg_r_q <= ils_seen_l ? 8'h00 : 8'hFF;
-        dbg_g_q <= ils_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk11) begin                                // raster row: pal_eff changed
-        dbg_r_q <= pal_seen_l ? 8'h00 : 8'hFF;
-        dbg_g_q <= pal_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk12) begin                                // raster row: vertical_size hit 0
-        dbg_r_q <= vs0_seen_l ? 8'h00 : 8'hFF;
-        dbg_g_q <= vs0_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_blk13) begin                                // raster row: cfg re-written
-        dbg_r_q <= cfg_seen_l ? 8'h00 : 8'hFF;
-        dbg_g_q <= cfg_seen_l ? 8'hFF : 8'h00; dbg_b_q <= 8'h00;
-    end else if (dbg_vbar) begin                                 // VBUF occupancy bar (cyan)
-        dbg_r_q <= 8'h00; dbg_g_q <= 8'hFF; dbg_b_q <= 8'hFF;
-    end else begin
-        dbg_r_q <= 8'hFF; dbg_g_q <= 8'h00; dbg_b_q <= 8'hFF;   // magenta rect border
-    end
+    if (dbg_blk1) dbg_col_q <= hl_btns_armed ? DBG_GREEN : DBG_RED;
+    else if (dbg_blk2) dbg_col_q <= video_live_s2 ? DBG_GREEN : DBG_RED;
+    else if (dbg_blk3) dbg_col_q <= sp_seen_l ? DBG_GREEN : DBG_RED;
+    else if (dbg_blk4) dbg_col_q <= spb_seen_l ? DBG_GREEN : DBG_RED;
+    else if (dbg_blk5) dbg_col_q <= vbuf_deep ? DBG_GREEN : DBG_RED;   // vbuf_deep (menu_ff engaged)
+    else if (dbg_blk6) dbg_col_q <= still_active ? DBG_GREEN : DBG_RED; // still_active (reader parked)
+    else if (dbg_blk7) dbg_col_q <= hl_on_w ? DBG_GREEN : DBG_RED;     // hl_on_w = armed AND fetched
+    else if (dbg_blk8) dbg_col_q <= hlvis_seen_l ? DBG_GREEN : DBG_RED; // recolour fired this frame
+    else if (dbg_blk9) dbg_col_q <= wd_seen_l ? DBG_GREEN : DBG_RED;   // raster row: watchdog expired
+    else if (dbg_blk10) dbg_col_q <= ils_seen_l ? DBG_GREEN : DBG_RED; // raster row: il_switch fired
+    else if (dbg_blk11) dbg_col_q <= pal_seen_l ? DBG_GREEN : DBG_RED; // raster row: pal_eff changed
+    else if (dbg_blk12) dbg_col_q <= vs0_seen_l ? DBG_GREEN : DBG_RED; // raster row: vertical_size hit 0
+    else if (dbg_blk13) dbg_col_q <= cfg_seen_l ? DBG_GREEN : DBG_RED; // raster row: cfg re-written
+    else if (dbg_vbar) dbg_col_q <= DBG_CYAN;                            // VBUF occupancy bar
+    else               dbg_col_q <= DBG_MAGENTA;                         // rect border
 end
 
 // =========================================================================
