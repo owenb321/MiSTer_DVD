@@ -64,10 +64,9 @@ everything.
     bits at boot and while nothing is mounted; it does not change the output mode under a
     playing disc.
 
-    **Sound can come back out of sync**, and often does. This is long-standing behaviour on
-    every release, not something the recent fixes introduced. **Skip a chapter to clear
-    it** — that re-anchors the audio to the picture. Setting the mode before loading avoids
-    it entirely.
+    **Sound stays in sync across the switch** as of v0.5.0. Earlier releases could come
+    back with the audio off the picture's timeline until you skipped a chapter; that is
+    fixed, and there is nothing to do about it any more.
 
     A mid-title switch steps playback back to the start of the chunk it was reading — up
     to about a second — and resumes from there, so the picture always restarts from a
@@ -77,10 +76,9 @@ everything.
     breaking up while the display re-locks — about a second, and the OSD stays visible
     over it. Sound continues throughout. A brief glitch as the picture comes back is
     normal, and is the same one a chapter skip produces — see
-    [Troubleshooting](../reference/troubleshooting.md). The lip-sync caveat above still
-    applies: that one is not fixed. If the black lasts noticeably longer than a second or
-    so, or a mid-title switch still freezes,
-    [please report it](../reference/reporting-a-bug.md).
+    [Troubleshooting](../reference/troubleshooting.md). If the black lasts noticeably
+    longer than a second or so, if a mid-title switch still freezes, or if sound comes
+    back out of sync, [please report it](../reference/reporting-a-bug.md).
 
 ## Field alignment
 
