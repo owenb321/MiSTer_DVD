@@ -56,7 +56,9 @@ These appear briefly when you change something, and are not errors:
 | `SUB 1/3 EN` / `SUB OFF` | Subtitle track, or subtitles disabled |
 | `ANGLE 2/3` | Camera angle on a multi-angle disc |
 | `CH 12/23` | Chapter, on a chapter step |
+| `TR 3/12` | Track, on an audio CD — it replaces `CH`, since a CD has no chapters |
 | `►►►` | Scrub speed while fast-forwarding or rewinding — two to five arrows, more the longer you hold |
+
 
 The status line along the bottom — `► 0:12:34/1:37:05 CH 12/23` — is toggled with **B9**
 and also auto-shows for a couple of seconds on any of the above. `❚❚` replaces `►` when

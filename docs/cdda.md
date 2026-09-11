@@ -279,10 +279,10 @@ ioctl-download channel and turns `lin_blk` back into "track 7 of 12". Everything
 downstream reuses machinery that already existed, which is why it is small: track
 skip rides `scrub_ctrl`'s pre-resolved jump port (`base` = the absolute track
 start, `off` = 0, so the clamp/bar/preview come free), the chapter FSM's existing
-debounce becomes the track burst, `TRACK n/N` reuses the HUD's CH field, notches
-ride `seek_bar`'s generic `cellf_*` ports, and track-relative time is two
-subtracts on `lin_rate`'s position inputs. `transport_hud` and `seek_bar` are
-**untouched**.
+debounce becomes the track burst, the track number reuses the HUD's CH field,
+and track-relative time is two subtracts on `lin_rate`'s position inputs.
+*(Superseded in part by the follow-up below: the field is now labelled `TR`, the
+bar is per-track, and the notches are gone.)*
 
 ★ **And the bench for it found a real defect.** `cdda_toc`'s entry RAM is written
 as bytes ARRIVE, so gating only the header fields at commit was not enough: a
@@ -371,3 +371,85 @@ is what let the rest be written as plumbing.
 **Remaining:** gate 7 above (next on the last track), blocked on the drive, and
 the fork's one-line `AUDIOCD=DVD` arm in `menu_audio_mgl()` (opt-in; not needed
 for a disc inserted while our core is already running).
+
+## Follow-up (`dev-cddaphys2`, 2026-09-10) — visualizers, a per-track bar, `TR`
+
+Five user-requested changes after the first CD build. **Sim-green, ⏳ not yet run
+on hardware.**
+
+### Visualizers — `dvd/cdda_viz.sv`
+
+Angle cycles **copper bars → XOR "munching squares" → scope → logo**, starting on
+copper; an OSD Reset returns there. Angle was free: the angle switch acts only
+while `cell_ready`, which a CD never is. The mode register lives in `emu.sv`, and
+the visualizer shares `idle_logo`'s overlay slot — the two are mutually exclusive
+by mode, and `cdda_viz` has the same three registered display stages and the same
+`VIZ_QX_LEAD = 12`.
+
+All three read ONE analysis: a peak envelope of `(|L|+|R|)` (instant attack at
+~6.6 kHz, ~12 %/frame decay), a slow average of it, and a `kick` timer armed when
+the envelope jumps well above the average.
+
+★ **The budget is the design** — the core is at 98 % ALM:
+
+- **No framebuffer.** Every pixel is a function of `(x, y)` and a few per-frame
+  registers, so nothing scales with screen area.
+- **Copper is per LINE, not per pixel.** On a `v_pos` change the five bars are
+  tested serially — one comparator, six clocks, all inside the first dozen
+  clocks of the line (the display lead hides them) — and the colour is held for
+  the line. Bar positions are solved once per FRAME, also serially, through one
+  64-entry quarter-wave sine table and shift-add amplitude steps (×0.5 / 0.75 /
+  1 / 1.25 by loudness). No multiplier, no DSP block.
+- **The scope stores screen ROWS, not samples** — `row = centre + s>>9 + s>>10`
+  (±96 rows) is computed at write time, so the display path only compares.
+  360 entries × 20 bits is exactly one M10K. Each column is 2 px wide and joins
+  its row to the previous column's, so it draws a line rather than dots. Capture
+  triggers on L's rising zero crossing (with a timeout so silence still draws).
+
+⛔ **Lissajous (L against R) was not built:** it needs a 2-D bitplane, and even a
+small one costs several M10Ks. The two-trace scope fits in one.
+
+⚠ The scope decimates to ~6.6 kHz with no anti-alias filter. It is a picture, not
+a measurement.
+
+### Per-track bar, FF/REW at the track edges
+
+Both the seek bar and `scrub_ctrl`'s clamp take `[cur_start, cur_end]` on a CD
+with a track table. ★ **That single substitution implements both edge rules:**
+REW stops at the track start because that is the clamp's lower bound, and FF
+that runs to the end lands on `cur_end` — which is the **next track's first
+block**, so "FF to the end skips to the next track" needed no new logic. On the
+last track `cur_end` is clipped to the disc's end and playback finishes. D-pad
+time jumps ride the same clamp.
+
+⚠ **A track skip must not see the narrowed span**: previous-track targets a block
+before `cur_start`, which the clamp would pin to this track's start. The skip uses
+the same jump port and `scrub_ctrl` resolves it in the cycle after `jump_fire`, so
+`cdda_skip_win` holds the disc span for that window.
+
+### No notches — and why they never worked
+
+The disc bar's track notches never rendered on hardware. `seek_bar` converts its
+tick list only on a `pgc_loaded` **rise**, and a CD never produces one — so the
+boundaries `cdda_toc` replayed into the `cellf_*` ports were never converted.
+Worse, a DVD played earlier in the session leaves `tick_ok` set with ITS list,
+which would have drawn the DVD's notches on the CD bar. The replay is deleted from
+`cdda_toc`, and new `seek_bar.ticks_off` gates both the notches and the
+chapter-skip cursor.
+
+### `TR n/N`
+
+`transport_hud.trk_mode` swaps the `CH` label for `TR` on the status line and on
+the skip popup. `Debug Overlay` keeps `CH`, since it repurposes that field.
+`tools/hud_read.py` accepts both and reports which in `label`.
+
+### Tests
+
+- `bench/dvd/cdda_viz_tb.sv` rasters real frames and checks **rendered pixels**,
+  not internal state: scope spread / flat silent channel / continuity (pixel
+  count, since a dotted plot also lights every column) / rising-zero trigger /
+  nothing below; copper full coverage, one colour per line, bar cores that move;
+  XOR variation and scroll; both gates.
+- `transport_hud_tb` T22 (label on and back off), `seek_bar_tb` T8d/T9f (a
+  converted tick list stays hidden, and the chapter cursor drops).
+- `run_wav.sh` now runs `cdda_toc_tb` and `cdda_viz_tb`.

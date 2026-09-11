@@ -2115,12 +2115,40 @@ worse maintenance burden than targeted in-place edits. So:
   which is what real players did. The cheap probe sits in the once-per-insertion latch;
   the full TOC read happens in the MOUNT path, which already expects to block.
   **Tracks** ride the generic ioctl-download channel into new `dvd/cdda_toc.sv`
-  (tracks-as-chapters via the existing `seek_rbn`, `TRACK n/N` on the HUD with no HUD
-  change, seek-bar notches through `seek_bar`'s generic `pm_*` ports). ★ **The clock
-  shows TRACK time and the bar shows the DISC** (user decision) — track-relative time
-  was FREE, because `lin_rate`'s measurement path is bypassed in cdda mode, so muxing
-  its `lin_blk`/`total_blk` inputs to `(lin_blk − track_start)` cannot corrupt a rate
+  (tracks-as-chapters via the existing `seek_rbn`; the HUD reads **`TR n/N`**, not
+  `CH`, via `transport_hud.trk_mode`). Track-relative time was FREE, because
+  `lin_rate`'s measurement path is bypassed in cdda mode, so muxing its
+  `lin_blk`/`total_blk` inputs to `(lin_blk − track_start)` cannot corrupt a rate
   estimate: two subtracts and two muxes, no new arithmetic.
+  🔧 **FOLLOW-UP BUILD `dev-cddaphys2` (2026-09-10) — sim-green + mutation-checked,
+  ⏳ HW-untested.** Five user requests; detail `docs/cdda.md` "Follow-up".
+  ★ **The progress bar is PER-TRACK and FF/REW stop at the track edges** (REVERSING
+  the first build's whole-disc bar). ONE substitution gives both edge rules:
+  `scrub_ctrl`'s clamp takes `[cur_start, cur_end]`, so REW stops at the track start
+  and FF saturates at `cur_end` — which IS the next track's first block, so "FF to the
+  end skips to the next track" needed no logic. REW at a track start deliberately does
+  NOT step back (user decision). ⚠ A TRACK SKIP must not see that span
+  (previous-track targets a block before `cur_start`): `cdda_skip_win` holds the disc
+  span for the cycles `scrub_ctrl` resolves a jump in.
+  ⚠ **The disc-bar notches NEVER rendered on hardware:** `seek_bar` rebuilds its tick
+  list only on a `pgc_loaded` RISE, which a CD never produces — and the stale list a
+  DVD leaves behind would have drawn the DVD's notches on the CD bar. Notches are gone
+  (`cdda_toc`'s replay deleted) and new `seek_bar.ticks_off` gates notches AND the
+  chapter cursor.
+  ★ **AUDIO VISUALIZERS — `dvd/cdda_viz.sv`, cycled with Angle** (dead on a CD, since
+  the angle switch needs `cell_ready`): copper bars → XOR "munching squares" → a
+  two-trace scope → the logo; also on `.wav`. One envelope/kick analysis drives all
+  three. **The budget IS the design at 98 % ALM:** no framebuffer; copper is solved
+  per LINE serially (one comparator, six clocks, held for the line) and its bar
+  positions per FRAME through one quarter-wave sine table with shift-add amplitudes
+  (no DSP); the scope stores precomputed screen ROWS (360 × 20 bits = one M10K),
+  triggered on L's rising zero crossing. Shares `idle_logo`'s overlay slot (same
+  3-stage latency and lead). ⛔ Lissajous not built: it needs a bitplane.
+  ★ **Gate `bench/dvd/cdda_viz_tb.sv` checks RENDERED PIXELS, and 7/7 mutations are
+  caught** (scope never writes, L/R swap, free-running capture, dotted trace, frozen
+  copper solver, `TR` stuck on, `ticks_off` ignored). ⚠ Its first "continuity" check
+  counted lit COLUMNS — which a dotted plot also lights; it now counts pixels (~4,700
+  continuous vs ~720 dotted). Suite: `run_wav.sh` (now also runs `cdda_toc_tb`).
   ★★ **`cdda_toc` DID NOT FIT ON ITS FIRST WRITE, AND IT IS THE `parse_buf` LESSON
   VERBATIM.** Async-read of the track-start array at **5 sites** → 3733 ALUTs / 3463
   regs / **0 block memory bits**, and the fitter wanted 4558 LABs against 4191 — the

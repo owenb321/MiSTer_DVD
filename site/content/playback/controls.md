@@ -216,7 +216,9 @@ Pressing it again hides the line straight away.
 
 **B7 / B8 / B6** cycle audio track, subtitle track and camera angle. Each shows a popup
 naming what you switched to, with the language where the disc provides one — `AUDIO 2/4 FR`,
-`SUB OFF`, `ANGLE 2/3`. Angle only does anything on a multi-angle disc.
+`SUB OFF`, `ANGLE 2/3`. Angle only does anything on a multi-angle disc — or while music is
+playing from an audio CD or a `.wav` file, where it cycles the visualizer instead (see
+[Physical discs](../formats/physical-discs.md)).
 
 !!! note "Some discs choose the angle for you"
     A few discs use the camera-angle mechanism to hold two versions of the same scene —

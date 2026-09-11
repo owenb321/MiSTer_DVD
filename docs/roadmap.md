@@ -535,6 +535,11 @@ the split is deliberate:
   ⏳ **Still ungated on HW: track skip on a real disc** (the drive dropped its
   disc mid-test with sense 0x02/0x04/0x01, reproduced under the MENU core, so
   not our code).
+  🔧 **Follow-up build `dev-cddaphys2` (2026-09-10), sim-green, ⏳ HW-untested:**
+  audio **visualizers** (`dvd/cdda_viz.sv`: copper / XOR / scope / logo, cycled
+  with Angle), a **per-track** progress bar (reversing the whole-disc bar), FF/REW
+  stopping at the track edges with FF-to-end landing on the next track, no track
+  notches, and the HUD reading **`TR n/N`**. Detail: `docs/cdda.md`.
 
 ⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
 CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.

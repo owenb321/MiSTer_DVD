@@ -94,17 +94,24 @@ the process is seek-heavy and random reads from a file beat optical seek latency
 Put a music CD in the drive and the core plays it, the way a DVD player always
 did. There is nothing to configure — it is detected and starts on its own.
 
-The screen shows the bouncing logo with a progress bar and the status line
+The screen shows an audio visualizer with a progress bar and the status line
 underneath, because there is no picture on the disc:
 
-- **Track number and track time.** `TRACK 3/12` with the elapsed time counting
+- **Visualizers.** Press **Angle** (B6, or ++"G"++ on a keyboard) to cycle
+  through them: *copper bars*, a scrolling *XOR pattern*, a two-channel
+  *oscilloscope* (left channel on top, right underneath) and the bouncing
+  *logo*. All of them move with the music. Playback starts on copper bars, and
+  an OSD Reset goes back to them.
+- **Track number and track time.** `TR 3/12` with the elapsed time counting
   *within* the current track, like a CD player's front panel.
-- **The progress bar spans the whole disc**, with a notch at every track
-  boundary, so you can see where you are overall.
+- **The progress bar shows the current track**, not the whole disc.
 - **Next / Previous Chapter skip tracks.** Previous restarts the current track
   unless you press it within the first few seconds, so a double-press goes to
   the track before — again, what a CD player does.
-- Pause and the time-jump controls work exactly as they do for video.
+- **Fast Fwd / Rewind stay inside the track.** Rewinding stops at the start of
+  the track; fast-forwarding all the way to its end carries on into the next
+  track. The D-pad time jumps follow the same track edges.
+- Pause works exactly as it does for video.
 
 `Audio Out` can be left on either setting: CD audio is PCM, so it plays as PCM
 on both outputs even in `Passthru`.
