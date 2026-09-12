@@ -379,14 +379,16 @@ on hardware.**
 
 ### Visualizers — `dvd/cdda_viz.sv`
 
-Angle cycles **copper bars → XOR "munching squares" → logo**, starting on
-copper; an OSD Reset returns there. Angle was free: the angle switch acts only
-while `cell_ready`, which a CD never is. The mode register lives in `emu.sv`, and
+A CD starts on the **bouncing logo**, and Angle switches to **copper bars** and
+back (user decision 2026-09-12 — the visualizer is opt-in rather than something
+to dismiss); an OSD Reset returns to the logo. Angle was free: the angle switch
+acts only while `cell_ready`, which a CD never is. The mode register lives in
+`dvd/cdda_screen.sv`, and
 the visualizer shares `idle_logo`'s overlay slot — the two are mutually exclusive
 by mode, and `cdda_viz` has the same three registered display stages and the same
 `VIZ_QX_LEAD = 12`.
 
-Both read ONE analysis: a peak envelope of `(|L|+|R|)` (instant attack at
+It reads ONE analysis: a peak envelope of `(|L|+|R|)` (instant attack at
 ~6.6 kHz, ~12 %/frame decay), a slow average of it, and a `kick` timer armed when
 the envelope jumps well above the average.
 
@@ -394,12 +396,17 @@ the envelope jumps well above the average.
 
 - **No framebuffer.** Every pixel is a function of `(x, y)` and a few per-frame
   registers, so nothing scales with screen area.
-- **Copper is per LINE, not per pixel.** On a `v_pos` change the five bars are
-  tested serially — one comparator, six clocks, all inside the first dozen
+- **Copper is per LINE, not per pixel.** On a `v_pos` change the three bars are
+  tested serially — one comparator, four clocks, all inside the first dozen
   clocks of the line (the display lead hides them) — and the colour is held for
-  the line. Bar positions are solved once per FRAME, also serially, through one
-  64-entry quarter-wave sine table and shift-add amplitude steps (×0.5 / 0.75 /
-  1 / 1.25 by loudness). No multiplier, no DSP block.
+  the line. Bar positions are solved once per FRAME, also serially, with
+  shift-add amplitude steps (×0.5 / 0.75 / 1 / 1.25 by loudness). No multiplier,
+  no DSP block.
+- **The oscillator is a TRIANGLE** (2026-09-12). The quarter-wave mirror was
+  already there for the sine, so the magnitude is now a doubled ramp —
+  `sq = {sq_i, 1'b0}`, a wire — instead of a 64-entry LUT. The bars bounce
+  linearly instead of easing at the ends, which is the look that was asked for,
+  and the table was the largest single cost in this file.
 ⛔ **Lissajous (L against R) was not built:** it needs a 2-D bitplane, and even a
 small one costs several M10Ks.
 
@@ -425,9 +432,60 @@ RAM at 90 % and the design in the congestion regime at 98 % ALM, **the memory bl
 was the expensive half**, and that is why the scope went rather than a cheaper-
 looking arm.
 
-⚠ **The cycle is now three stops, not four:** `viz_mode` wraps at 2 and the logo is
-mode 2. Leaving a dead fourth mode in place would have made Angle appear to hang on
-a blank screen — the renumbering is the point of the change, not tidying.
+## Follow-up 5 (`dev-cddaphys6`, 2026-09-12) — XOR dropped, copper slimmed, logo default
+
+Three more user decisions, all on the same theme of being conservative with logic.
+
+**The XOR pattern is gone.** ~60 ALMs on its own, but it was the **only per-PIXEL
+consumer** in the module, so dropping it also retired the `a_xv`/`a_yv`/`b_m`
+coordinate pipeline and the `sx`/`sy`/`tc` scroll registers. Copper's colour is a
+per-LINE register, so nothing rides the display pipeline any more — its two stages
+survive purely to match `idle_logo`'s 3-cycle output latency.
+
+**Copper was slimmed rather than dropped:** a **triangle** oscillator instead of the
+quarter-wave sine (bars bounce linearly), and **three bars instead of five**. The
+triangle is the bigger win — the mirror already existed, so the 64-entry LUT became
+`{sq_i, 1'b0}`, a wire.
+
+**The logo is now the default** and Angle opts into the visualizer. Implemented by
+NUMBERING the logo as mode 0 rather than resetting a copper-is-0 register to 1, so
+"reset value = default" stays true.
+
+⚠ **The cycle is now TWO stops** (`viz_mode` wraps at 1). It was four, then three
+when the scope went, and the explicit wrap has been load-bearing every time:
+`viz_mode` is 2 bits because emu passes it through, so letting the counter roll on
+its width leaves dead modes and Angle lands on a blank screen — which reads as the
+player having hung. `cdda_screen_tb` `[3b]` is RED-proven against that mutation.
+
+### Ejecting a disc did not return the core to idle — and Main was not at fault
+
+Field report on `dev-cddaphys5`. The Main-side log settled the blame immediately:
+it detected the eject, unmounted the slot and pulsed `status[0]`. The defect was
+core-side and had two halves.
+
+`dvd_iso_reader` cleared `cdda_mode` **only in its `start` branch**, and issue #48
+gates `start_streaming` on a non-zero `img_size` — but an **eject arrives as a
+ZERO-SIZE mount**, so `start` never fires. The bit was not in the reset branch
+either, so it survived even the eject's own reset. ★ `iso_mode` *was* reset there
+all along; `cdda_mode` and `raw_mode` were simply the odd ones out, which is what
+marks this as an oversight rather than a decision.
+
+Then `emu.sv`'s `logo_vis` takes a CD branch that follows `viz_logo` alone and
+**ignores `media_seen`**, so with the mode bit stuck the screen stayed on the
+visualizer for ever.
+
+Fixed at both ends — the reader resets `cdda_mode`/`raw_mode`/`wav_bad`, and the
+screen arm is gated on `media_seen` (`cd_screen`), so a stale mode cannot strand the
+display on its own.
+
+⚠ **Making the logo the default would have MASKED this.** `viz_logo` is 1 after a
+reset, so the picture looks right while `cdda_mode` stays high and every other
+consumer of it — HUD `force_show`, `ticks_off`, the transport's CD arms, `pass_mode`
+suppression — remains wrongly in CD mode. Fix the bit, not the symptom.
+
+**Gate:** `wav_probe_tb` **TEST 8** — a reset with no `start`, which is exactly the
+eject case. RED-proven against the pre-fix reader (`cdda=1` survives), and it carries
+a precondition that `cdda_mode` was set going in, so it cannot pass vacuously.
 
 ### Per-track bar, FF/REW at the track edges
 

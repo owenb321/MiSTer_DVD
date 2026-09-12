@@ -2242,6 +2242,17 @@ always @(posedge clk or negedge rst_n) begin
         fi_save      <= 6'd0;
         iso_mode     <= 1'b0;
         iso_error    <= 1'b0;
+        // ⚠ The CD/raw siblings belong here too, and their ABSENCE was a real
+        // defect (2026-09-12): they were cleared ONLY by `start`, which issue
+        // #48 gates on a non-zero img_size -- and an EJECT arrives as a
+        // ZERO-SIZE mount, so `start` never fires and the mode bit survived the
+        // removal. cdda_mode then stayed high for ever, emu's logo_vis kept
+        // taking its CD branch, and the eject's own status[0] pulse looked like
+        // it had done nothing. iso_mode was reset here all along; these were the
+        // odd ones out.
+        raw_mode     <= 1'b0;
+        cdda_mode    <= 1'b0;
+        wav_bad      <= 1'b0;
         all_n        <= 7'd0;
         best_base    <= 7'd0;
         best_cnt     <= 7'd0;

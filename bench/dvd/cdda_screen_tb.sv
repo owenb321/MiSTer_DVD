@@ -1,12 +1,13 @@
 // cdda_screen_tb.sv -- dvd/cdda_screen.sv: visualizer cycle + HUD show/hide.
 //
-//  [1] reset: copper, HUD hidden
+//  [1] reset: the LOGO, HUD shown -- the logo is the default screen and Angle
+//      opts into the visualizer, not the other way round
 //  [2] outside cdda_mode, Angle and Display change nothing (they belong to the DVD)
-//  [3] Angle cycles copper -> xor -> logo -> copper (THREE stops since the scope
-//      was dropped); the HUD is hidden over every visualizer and SHOWN over the
-//      logo. [3c] is the arm that fails if the counter is left to wrap on its
-//      2-bit width, which would put a dead mode 3 in the cycle.
-//  [4] Display toggles the HUD over a visualizer AND over the logo
+//  [3] Angle cycles logo -> copper -> logo (TWO stops, since the scope and then
+//      the XOR pattern were dropped); the HUD is hidden over the visualizer and
+//      SHOWN over the logo. [3b] is the arm that fails if the counter is left to
+//      wrap on its 2-bit width, which would put dead modes 2 and 3 in the cycle.
+//  [4] Display toggles the HUD over the visualizer AND over the logo
 //  [5] a new disc resets the HUD to match the mode, and keeps the mode
 //  [6] leaving cdda_mode freezes both
 //
@@ -38,27 +39,27 @@ module cdda_screen_tb;
 
     initial begin
         repeat (3) @(negedge clk); rst_n = 1; @(negedge clk);
-        chk("[1] reset: copper, HUD hidden", vm == 2'd0 && hs == 1'b0);
+        chk("[1] reset: the LOGO, HUD shown", vm == 2'd0 && vl && hs == 1'b1);
 
         p_ang; p_disp;
-        chk("[2] outside cdda_mode Angle/Display do nothing", vm == 2'd0 && hs == 1'b0);
+        chk("[2] outside cdda_mode Angle/Display do nothing", vm == 2'd0 && hs == 1'b1);
 
         cdda = 1;
-        p_ang; chk("[3a] Angle -> xor, HUD hidden",          vm == 2'd1 && hs == 1'b0);
-        p_ang; chk("[3b] Angle -> logo, HUD SHOWN",          vm == 2'd2 && vl && hs == 1'b1);
-        p_ang; chk("[3c] Angle wraps to copper, HUD hidden", vm == 2'd0 && !vl && hs == 1'b0);
+        p_ang; chk("[3a] Angle -> copper, HUD hidden",      vm == 2'd1 && !vl && hs == 1'b0);
+        p_ang; chk("[3b] Angle wraps to the logo, HUD SHOWN", vm == 2'd0 && vl && hs == 1'b1);
 
-        p_disp; chk("[4a] Display shows the HUD over a visualizer", hs == 1'b1);
-        p_disp; chk("[4b] ...and hides it again",                  hs == 1'b0);
-        p_disp;                                                    // shown
-        p_mnt;  chk("[5a] new disc re-hides it over a visualizer", hs == 1'b0 && vm == 2'd0);
+        p_disp; chk("[4c] Display hides the HUD over the logo", hs == 1'b0);
+        p_mnt;  chk("[5b] new disc re-shows it over the logo, mode kept", vm == 2'd0 && hs == 1'b1);
 
-        p_ang; p_ang;                                              // -> logo, shown
-        p_disp; chk("[4c] Display hides the HUD over the logo", vm == 2'd2 && hs == 1'b0);
-        p_mnt;  chk("[5b] new disc re-shows it over the logo, mode kept", vm == 2'd2 && hs == 1'b1);
+        p_ang;                                                        // -> copper, hidden
+        chk("[3a2] Angle -> copper again, HUD hidden", vm == 2'd1 && hs == 1'b0);
+        p_disp; chk("[4a] Display shows the HUD over the visualizer", hs == 1'b1);
+        p_disp; chk("[4b] ...and hides it again",                     hs == 1'b0);
+        p_disp;                                                       // shown
+        p_mnt;  chk("[5a] new disc re-hides it over the visualizer",  hs == 1'b0 && vm == 2'd1);
 
         cdda = 0; p_disp; p_ang;
-        chk("[6] leaving cdda_mode freezes both", vm == 2'd2 && hs == 1'b1);
+        chk("[6] leaving cdda_mode freezes both", vm == 2'd1 && hs == 1'b0);
 
         if (errors == 0) $display("CDDA_SCREEN_TB: ALL TESTS PASSED");
         else begin $display("CDDA_SCREEN_TB: FAILED (%0d errors)", errors); $fatal(1); end

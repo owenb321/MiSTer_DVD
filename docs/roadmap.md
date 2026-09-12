@@ -561,6 +561,16 @@ the split is deliberate:
   `cdda_screen` 5, the ~346 residual being the reader's WAV walk and emu glue.
   ⚠ That is **double** the reclaim audit's "~300 ALMs", which predates the
   visualizers — quote the measured figure. Sim-green, ⏳ HW-untested.
+  🔧 **`dev-cddaphys6`:** the **XOR pattern dropped** and copper **slimmed** — a
+  triangle oscillator instead of the quarter-wave sine (the 64-entry LUT collapses to
+  a wire) and **three bars instead of five** — with the **bouncing logo now the
+  DEFAULT** and Angle opting into the visualizer. Two stops, `viz_mode` wrapping at 1.
+  ★ Also fixes a real defect found on the rig: **ejecting a disc did not return the
+  core to idle.** Main was exonerated by its own log (eject detected, slot unmounted,
+  `status[0]` pulsed); `cdda_mode` was cleared only by `start`, which never fires on a
+  zero-size eject mount, and was missing from the reader's reset branch that already
+  held `iso_mode`. Fixed at both ends (reader reset + a `media_seen` gate on the
+  screen arm); gate `wav_probe_tb` TEST 8, RED-proven. Sim-green, ⏳ HW-untested.
 
 ⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
 CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.

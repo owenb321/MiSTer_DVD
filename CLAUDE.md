@@ -2135,14 +2135,19 @@ worse maintenance burden than targeted in-place edits. So:
   DVD leaves behind would have drawn the DVD's notches on the CD bar. Notches are gone
   (`cdda_toc`'s replay deleted) and new `seek_bar.ticks_off` gates notches AND the
   chapter cursor.
-  ★ **AUDIO VISUALIZERS — `dvd/cdda_viz.sv`, cycled with Angle** (dead on a CD, since
-  the angle switch needs `cell_ready`): copper bars → XOR "munching squares" → the
-  logo; also on `.wav`. One envelope/kick analysis drives both. **The budget IS the
-  design at 98 % ALM:** no framebuffer; copper is solved per LINE serially (one
-  comparator, six clocks, held for the line) and its bar positions per FRAME through
-  one quarter-wave sine table with shift-add amplitudes (no DSP). Shares
+  ★ **AUDIO VISUALIZER — `dvd/cdda_viz.sv`, reached with Angle** (dead on a CD, since
+  the angle switch needs `cell_ready`): the bouncing **logo is the DEFAULT** and Angle
+  opts INTO **copper bars**; also on `.wav`. **The budget IS the design:** no
+  framebuffer; copper is solved per LINE serially (one comparator, four clocks, held
+  for the line) and its three bar positions per FRAME, shift-adds only, no DSP. Shares
   `idle_logo`'s overlay slot (same 3-stage latency and lead). ⛔ Lissajous not built:
   it needs a bitplane.
+  ★ **The oscillator is a TRIANGLE, not a sine (2026-09-12, user decision — the bars
+  bounce linearly instead of easing at the ends), and that DELETED the 64-entry
+  quarter-wave LUT outright:** the mirror already existed for the sine, so the
+  magnitude collapsed to `{sq_i, 1'b0}`, which is a wire rather than logic. Three
+  bars, not five. Both changes were asked for as area savings and both are; the LUT
+  was the larger of the two.
   ⛔ **THE SCOPE WAS BUILT AND THEN DROPPED (2026-09-11, user decision — be
   conservative with logic).** It was a two-trace oscilloscope, L above R, triggered on
   L's rising zero crossing, storing precomputed screen ROWS (360 × 20 bits) rather than
@@ -2150,9 +2155,17 @@ worse maintenance burden than targeted in-place edits. So:
   not estimated:** synthesising `cdda_viz` alone with `mode` tied to each constant (so
   Quartus prunes the other arms) gives copper ~120, scope ~105, xor ~60 ALMs — and the
   scope additionally owned **one whole M10K**. With RAM at 90 % and the design in the
-  congestion regime, that memory block was the expensive half. ⚠ The cycle is now
-  **three stops** (`viz_mode` wraps at 2, logo is mode 2): leaving a dead fourth mode
-  would have made Angle appear to hang on a blank screen.
+  congestion regime, that memory block was the expensive half.
+  ⛔ **AND THE XOR PATTERN WENT TOO (2026-09-12, same reason): ~60 ALMs on its own,
+  but it was the ONLY per-PIXEL consumer**, so dropping it also retired the
+  `a_xv`/`a_yv`/`b_m` coordinate pipeline and the `sx`/`sy`/`tc` scroll registers —
+  copper's colour is a per-LINE register, so nothing rides the pipeline now and its
+  two stages exist purely to match `idle_logo`'s 3-cycle latency.
+  ⚠ **The cycle is now TWO stops, and the LOGO is mode 0 = the default** (`viz_mode`
+  wraps at 1). `viz_mode` is still 2 bits because emu passes it straight through, so
+  it MUST be wrapped explicitly: letting the counter roll on its width leaves dead
+  modes in the cycle and Angle lands on a blank screen, which reads as the player
+  having hung. `cdda_screen_tb` `[3b]` is RED-proven against exactly that mutation.
   ★★ **AND THE FIRST HONEST COST FOR THE WHOLE CD FEATURE, measured on the reclaimed
   netlist (`dev-cddaphys5`, SEED 9 first roll, clk_dec 96.51/91.70 at 89 % ALM):
   +1,046 synthesis ALUTs / +659 ALMs / +1 M10K** over main's reclaim fit — `cdda_viz`
@@ -2162,10 +2175,31 @@ worse maintenance burden than targeted in-place edits. So:
   figure and should not be quoted** — it predates the visualizers, and `cdda_viz` alone is
   414. Every earlier CD fit sat at 98–99 % ALM, where packing variance swamped the
   signal; this is the first uncongested one.
-  ★ **Gate `bench/dvd/cdda_viz_tb.sv` checks RENDERED PIXELS** — copper full coverage,
-  one colour per line, bar cores that MOVE between frames; XOR variation and scroll;
-  both gates — and the copper/XOR mutations it catches (frozen solver, `TR` stuck on,
-  `ticks_off` ignored) still stand. ⚠ **The retired scope arm left a lesson worth more
+  ★ **Gate `bench/dvd/cdda_viz_tb.sv` checks RENDERED PIXELS** — full coverage, one
+  colour per line, bar cores that MOVE between frames, and **exactly three bars**.
+  ⚠ **That bar count is runs of the 3-line WHITE CORE, MAXIMISED over six frames, and
+  both halves were learned by getting it wrong:** 31-line bar BODIES overlap, so two
+  adjacent bars merge and a body-run count reads 2; and with a TRIANGLE two bars can
+  land on the same row outright at particular phases. A single-frame exact count is
+  therefore flaky by construction — the max over several phases is stable and still
+  fails if the bar count changes.
+  ⛔ **EJECTING A DISC DID NOT RETURN THE CORE TO IDLE (2026-09-12, user report), and
+  MAIN WAS NOT AT FAULT** — its own log shows the eject detected, the slot unmounted
+  and `status[0]` pulsed, which is exactly what that instrumentation exists to settle.
+  `dvd_iso_reader` cleared `cdda_mode` ONLY in its `start` branch, and issue #48 gates
+  `start_streaming` on a non-zero `img_size`; **an eject arrives as a ZERO-SIZE
+  mount**, so `start` never fired — and the bit was not in the reset branch either
+  (`iso_mode` was; `cdda_mode`/`raw_mode` were the odd ones out). `emu.sv`'s
+  `logo_vis` then kept taking its CD arm, which ignores `media_seen`, so the screen
+  stayed on the visualizer and the reset looked inert. Fixed at BOTH ends: the reader
+  resets `cdda_mode`/`raw_mode`/`wav_bad`, and the screen arm is gated on `media_seen`
+  (`cd_screen`) so a stale mode can never strand the display on its own. Gate:
+  `wav_probe_tb` **TEST 8**, RED-proven (pre-fix reader reports `cdda=1` surviving the
+  reset) and carrying a precondition so it cannot pass vacuously.
+  ⚠ **Making the logo the default would have MASKED this** — `viz_logo` is 1 after a
+  reset, so the screen looks right while `cdda_mode` stays high and every other
+  consumer of it (HUD `force_show`, `ticks_off`, the transport's CD arms, `pass_mode`
+  suppression) remains wrongly in CD mode. Fix the bit, not the symptom. ⚠ **The retired scope arm left a lesson worth more
   than the feature:** its "continuity" check first counted lit COLUMNS, which a dotted
   plot also lights, so it passed a plot that drew dots instead of a line; counting
   PIXELS (~4,700 continuous vs ~720 dotted) is what made it able to fail. Suite:

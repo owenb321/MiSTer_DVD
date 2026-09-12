@@ -655,7 +655,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cddaphys5"
+`define CORE_VERSION "dev-cddaphys6"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -6582,18 +6582,29 @@ end
 // outrank it).
 // ★ STOP SHOWS THE IDLE LOGO, which is what a set-top player does when it stops
 // -- it spins down and puts its own screen up.
-// ★ CD-DA/WAV playback has no video either, so its screen is an audio-reactive
-// VISUALIZER (dvd/cdda_viz.sv) or the bouncing logo, cycled by Angle.
+// ★ CD-DA/WAV playback has no video either, so its screen is the bouncing idle
+// logo BY DEFAULT, and Angle opts into the audio-reactive VISUALIZER
+// (dvd/cdda_viz.sv). Angle does nothing else on a CD (the angle switch acts only
+// while cell_ready). An OSD Reset returns to the logo.
 // (viz_mode / viz_logo come from dvd/cdda_screen.sv, up beside the track table.)
+// ⚠ THE CD ARM IS GATED ON media_seen, and that is a FIX, not a tidy-up
+// (2026-09-12, user report "ejecting the disc does not soft reset the core"):
+// cdda_mode was cleared only by `start`, which issue #48 gates on a non-zero
+// img_size, and an EJECT arrives as a ZERO-SIZE mount -- so the bit survived the
+// removal, this expression kept taking its CD branch, and the screen stayed on
+// whatever visualizer mode was selected while Main's eject reset looked inert.
+// The reader now clears the bit on rst_n as well; this gate is the SECOND lock,
+// so a stale mode can never strand the display on its own.
 // ⚠ The screensaver and Stop OUTRANK the visualizer: both mean "put our own
 // screen up", so they force the logo and viz_vis yields to them.
+wire cd_screen = cdda_mode_w && media_seen;
 wire logo_hold = saver_on_w || stopped_w;
 wire logo_vis = (logo_hold ||
-                 (cdda_mode_w ? viz_logo
-                              : (!media_seen && !video_live_s2 && !img_streaming))) &&
+                 (cd_screen ? viz_logo
+                            : (!media_seen && !video_live_s2 && !img_streaming))) &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
-wire viz_vis  = cdda_mode_w && !viz_logo && !logo_hold &&
+wire viz_vis  = cd_screen && !viz_logo && !logo_hold &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
 

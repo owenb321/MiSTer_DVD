@@ -318,6 +318,34 @@ module wav_probe_tb;
                     $display("  SEEK0 MISMATCH @%0d: got %02x want %02x", i, cap[i], gold[i]);
             end
 
+        // ===== TEST 8: an EJECT must not leave the CD mode bit latched =====
+        // Field report 2026-09-12: "ejecting the disc does not soft reset the
+        // core". Main DOES pulse status[0] on an eject -- its own log proves it
+        // -- but cdda_mode was cleared ONLY by `start`, and issue #48 gates
+        // start_streaming on a non-zero img_size. An eject arrives as a
+        // ZERO-SIZE mount, so `start` never fires; the bit then had to survive
+        // rst_n too, and it did (iso_mode was in the reset branch, cdda_mode and
+        // raw_mode were not). emu's logo_vis kept taking its CD branch and the
+        // screen stayed on the visualizer while the reset looked inert.
+        // A reset with NO start is exactly the eject case.
+        // ⚠ The precondition is load-bearing: without it this arm passes
+        // vacuously whenever cdda_mode happens to be clear already.
+        if (cdda_mode_o !== 1'b1) begin
+            errors = errors + 1;
+            $display("  ERR TEST8 precondition: cdda_mode was not set going in");
+        end
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; repeat (4) @(posedge clk);
+        $display("TEST8 eject (rst_n with no start): cdda=%b raw=%b bad=%b (expect 0 0 0)",
+                 cdda_mode_o, raw_mode_o, wav_bad_o);
+        if (cdda_mode_o !== 1'b0) begin
+            errors = errors + 1;
+            $display("  ERR cdda_mode survived rst_n -- the screen would stay on the visualizer");
+        end
+        if (raw_mode_o !== 1'b0) begin
+            errors = errors + 1;
+            $display("  ERR raw_mode survived rst_n");
+        end
+
         // =============================================================
         if (errors == 0) $display("WAV_PROBE_TB: ALL TESTS PASSED");
         else begin
