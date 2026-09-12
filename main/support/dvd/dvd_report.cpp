@@ -71,7 +71,24 @@
 //
 // Needs the playhead: with no LBA there is nothing to window around, so the flag
 // is omitted rather than passed with a meaningless base.
-#define NAV_WINDOW_SECTORS "2048"
+// The window's CAP, in sectors. Two values, because the media differ by ~50x and
+// MEASURING said so rather than taste:
+//
+//   image on SD/USB/CIFS   the whole child runs in 1.4-2.0 s, the window costing
+//                          ~0.5 s of that. 2048 sectors is free, so take the wide
+//                          one and capture several VOBUs.
+//   optical disc           the drive sustains ~90-285 KB/s -- about a SEVENTH of
+//                          DVD 1x -- measured while the core was streaming it, and
+//                          steady over 84 s, so it is not spin-up. 2048 sectors is
+//                          15.7-29.1 s. 512 bounds the no-NAV-pack tail to ~5-10 s,
+//                          and the early stop (dvd_report.py --nav-stop, default 2)
+//                          means the usual case exits after ~300-500 sectors anyway.
+//
+// ⚠ The cap is what you pay when the playhead sits somewhere with NO NAV packs --
+// a still, a gap, the end of a cell. The early stop cannot help there, which is
+// the whole reason the cap is media-dependent rather than just large.
+#define NAV_WINDOW_IMAGE   "2048"
+#define NAV_WINDOW_OPTICAL "512"
 
 // ⚠⚠ THE INSTALLED SCRIPT MAY PREDATE THE FLAG, AND argparse DOES NOT SHRUG.
 // MEASURED on the rig against a release-installed dvd_report.py: the new argv gives
@@ -118,6 +135,16 @@ int dvd_report_script_supports(const char *script, const char *token)
 	return found;
 }
 
+// A block device here is the optical drive: dvd_phys binds /dev/srN and nothing
+// else in this core hands a block device to the collector. stat() rather than a
+// "/dev/sr" prefix match, because the fact that matters is the medium, not the name.
+const char *nav_window_for(const char *src)
+{
+	struct stat st;
+	if (src && !stat(src, &st) && S_ISBLK(st.st_mode)) return NAV_WINDOW_OPTICAL;
+	return NAV_WINDOW_IMAGE;
+}
+
 void dvd_report_build_argv(const char **argv, const char *script, const char *src,
                            const char *out, const char *lba, const char *cfg,
                            const char *ver, int want_window)
@@ -132,7 +159,7 @@ void dvd_report_build_argv(const char **argv, const char *script, const char *sr
 	argv[i++] = "-o";
 	argv[i++] = out;
 	if (lba)               { argv[i++] = "--lba";          argv[i++] = lba; }
-	if (lba && want_window){ argv[i++] = "--nav-window";   argv[i++] = NAV_WINDOW_SECTORS; }
+	if (lba && want_window){ argv[i++] = "--nav-window";   argv[i++] = nav_window_for(src); }
 	if (cfg)               { argv[i++] = "--cfg";          argv[i++] = cfg; }
 	if (ver)               { argv[i++] = "--core-version"; argv[i++] = ver; }
 	argv[i] = 0;

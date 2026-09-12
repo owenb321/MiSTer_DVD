@@ -380,7 +380,7 @@ def audit(iso, extents):
 
 
 def collect(iso, nav_packs=False, nav_scan_mb=512, verbose=True,
-            nav_window=0, playhead=None):
+            nav_window=0, playhead=None, nav_stop=2):
     lbas = list(iso.vd_lbas)
     for lba, nsec in iso.dir_spans:
         lbas.extend(range(lba, lba + nsec))
@@ -407,18 +407,42 @@ def collect(iso, nav_packs=False, nav_scan_mb=512, verbose=True,
     # A VOBU is at most 1 s of video, so 2048 sectors always spans several of
     # them; an HLI is re-sent every VOBU while a menu is up (measured on The
     # Matrix: the same unit 8 times, 1.001 s apart), so forward-only is enough.
+    #
+    # ★ AND IT STOPS EARLY, because on an OPTICAL DISC the window is not free.
+    # MEASURED on a real DVD in a real drive, while the core was streaming it:
+    # the drive sustains ~90-285 KB/s (about a seventh of DVD 1x) and holds that
+    # rate for 84 s, so it is not a spin-up transient. The consequence, from a
+    # scan of three different playheads on that disc:
+    #
+    #     1st NAV pack   +51..+230 sectors    2.1 - 5.5 s
+    #     2nd NAV pack   +304..+465 sectors   3.9 - 7.0 s
+    #     8th NAV pack  +1701..+1903 sectors 19.1 - 29.1 s
+    #
+    # An HLI is re-sent byte-identically in every VOBU while a menu is up, so the
+    # FIRST record already carries the whole button set -- rects, link graph,
+    # colours and the command per button. The second is corroboration and covers a
+    # first VOBU that happens to carry `hli_ss = 0` (no buttons). The eighth buys
+    # nothing and costs 20 s of a user's life.
+    #
+    # So `nav_window` is a CAP, not a target, and the scan stops at `nav_stop`.
+    # On an image both are irrelevant (the whole thing runs in ~0.5 s); on optical
+    # this is the difference between ~5 s and ~25 s.
     if nav_window and playhead is not None:
         found = 0
+        scanned = 0
         for i in range(nav_window):
             lba = playhead + i
             if lba >= iso.volume_sectors:
                 break
+            scanned += 1
             if is_nav_pack(iso.sec(lba)):
                 lbas.append(lba)
                 found += 1
+                if nav_stop and found >= nav_stop:
+                    break
         if verbose:
-            print("  playhead NAV packs captured: %d (window %d sectors from %d)"
-                  % (found, nav_window, playhead))
+            print("  playhead NAV packs captured: %d (%d sectors read from %d, "
+                  "cap %d)" % (found, scanned, playhead, nav_window))
 
     if nav_packs:
         budget = (nav_scan_mb * 1024 * 1024) // SEC
@@ -492,7 +516,8 @@ def cmd_make(args):
         print()
 
     extents = collect(iso, args.nav_packs, args.nav_scan_mb,
-                      nav_window=args.nav_window, playhead=args.lba)
+                      nav_window=args.nav_window, playhead=args.lba,
+                      nav_stop=args.nav_stop)
     n_sec = sum(c for _, c in extents)
     n_meta, n_nav = audit(iso, extents)
 
@@ -539,6 +564,9 @@ def cmd_make(args):
             "playhead_window": (args.nav_window
                                 if (args.nav_window and args.lba is not None)
                                 else 0),
+            "playhead_stop_after": (args.nav_stop
+                                    if (args.nav_window and args.lba is not None)
+                                    else 0),
         },
         "sector_count": n_sec,
         "content_audit": {
@@ -729,7 +757,13 @@ def main():
                        help="with --lba: capture the NAV packs in SECTORS "
                             "sectors forward of the playhead (0 = off). This is "
                             "the only capture that reaches an IN-TITLE menu's "
-                            "buttons; 2048 spans several VOBUs for ~40 KB")
+                            "buttons. A CAP, not a target -- see --nav-stop")
+        p.add_argument("--nav-stop", type=int, default=2, metavar="N",
+                       help="stop the --nav-window scan after N NAV packs "
+                            "(default 2, 0 = read the whole cap). An HLI repeats "
+                            "in every VOBU, so the first record already carries "
+                            "the whole button set; on an optical disc reading to "
+                            "the 8th costs ~25 s instead of ~5")
         p.add_argument("--no-prompt", action="store_true",
                        help="do not ask any questions")
         # Set by MiSTer_DVDcss when it generates a bundle on the player; see

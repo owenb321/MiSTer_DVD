@@ -255,15 +255,60 @@ MEASURED on the rig (image media, core not running): the chord's child takes **1
 on SCENEIT_HP and **1.98 s** on MEN_IN_BLACK with the window, against 0.86 s for the nav
 tables alone. So the window costs about **half a second** and the whole gesture is ~2 s.
 
-⚠ **The PHYSICAL-DISC case is NOT measured** — the rig's tray held an audio CD (TOC 1-12,
-so raw ISO9660 reads give EIO) when this was written. The estimate is 4 MB sequential from
-the playhead on a drive that is already spinning and already positioned there, which is
-~3 s at DVD 1x and well under 1 s at 4x+; but that is arithmetic, not a measurement, and
-the reporter of issue #81 was on a physical disc. Measure it when a DVD is in the tray.
-⚠ There is also a second cost there that is not wait time: the collector reads the SAME
-drive the core is streaming from. The child is forked so it cannot starve the poll loop
-(the `dvd_phys` lesson), but the DRIVE is shared and a long read could still hiccup
-playback.
+★★ **AND THE PHYSICAL-DISC CASE IS 50× SLOWER, WHICH THE ARITHMETIC GOT WRONG.** This
+section first carried an *estimate* — "4 MB from a spinning, already-positioned drive is
+~3 s at DVD 1x and under 1 s at 4x" — and it was wrong by an order of magnitude. MEASURED
+on a real DVD in the rig's drive, **while the core was streaming it**:
+
+| | |
+|---|---|
+| sustained read rate | **~90–285 KB/s** — about a SEVENTH of DVD 1x |
+| is it spin-up? | **no** — 8192 sectors held 195 KB/s for 84 s |
+| does chunking help? | **no** — 1-sector reads 13.9 s, 64-sector 17.0 s, 256-sector 17.8 s. It is the drive, not syscalls |
+| 2048-sector window | **15.7 – 29.1 s** |
+| pure seek, 1 sector | 0.73 s |
+
+⚠ **Re-reading the same region takes 0.02 s.** Any timing that does not use a FRESH LBA is
+measuring the page cache, and an early attempt here read 0.26 s for a window that really
+costs 16 s. Use an LBA nothing has touched.
+
+⚠ **Authentication and a spinning drive do NOT rescue it.** The obvious hypothesis was that
+cold unauthenticated reads are slow and a streaming, CSS-authenticated drive would be fast.
+Measured while the core played the disc: 2048 sectors still took 15.7 s. The hypothesis was
+wrong and the measurement is what said so.
+
+**So the window stops early and the cap follows the medium.** A scan of three playheads on
+that disc shows why:
+
+| | sectors from the playhead | time |
+|---|---|---|
+| 1st NAV pack | +51 .. +230 | 2.1 – 5.5 s |
+| 2nd NAV pack | +304 .. +465 | 3.9 – 7.0 s |
+| 8th NAV pack | +1701 .. +1903 | 19.1 – 29.1 s |
+
+An HLI is re-sent byte-identically in every VOBU while a menu is up, so the **first** record
+already carries the whole button set; the second covers a first VOBU that happens to carry
+`hli_ss = 0`. The eighth buys nothing and costs 20 s of someone's life. Hence
+`dvd_report.py --nav-stop` (default **2**) and a cap of **512** on optical against 2048 on
+an image (`nav_window_for()`, on `S_ISBLK` — the fact that matters is the medium, not the
+path spelling).
+
+**Result, measured on the same playing disc:**
+
+| chord on a physical DVD | |
+|---|---|
+| before this branch (nav tables only) | **0.91 – 0.96 s** |
+| unbounded 2048 window | **+15.7 to +29.1 s** |
+| bounded (cap 512, stop after 2) | **2.73 / 4.92 s total** |
+
+⚠ The cap is what you pay when the playhead sits somewhere with NO NAV packs — a still, a
+gap, a cell end — because the early stop cannot help there. That is the whole reason the cap
+is media-dependent rather than merely large. One measured run hit 14.35 s when the drive was
+in a bad patch, so treat 3–5 s as typical and not as a bound.
+
+⚠ There is also a second cost that is not wait time: the collector reads the SAME drive the
+core is streaming from. The child is forked so it cannot starve the poll loop (the
+`dvd_phys` lesson), but the DRIVE is shared.
 
 ★ **The thing that would actually annoy a user is not the duration — it is silence.**
 `start()` posted "Generating support bundle..." for **2000 ms** and then nothing until

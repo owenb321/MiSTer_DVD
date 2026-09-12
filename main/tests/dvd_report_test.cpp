@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <sys/stat.h>
+#include <dirent.h>
 
 // ---------------------------------------------------------------- fake world
 // dvd_report.cpp reaches into Main for the chord, the mount and the OSD. None of
@@ -135,7 +137,7 @@ int main(void)
     // ---- [1] the full case: a playhead, a CFG and a version ---------------
     // --nav-window is the arm this test exists for. 2048 sectors is ~4 MB, one
     // sequential run, measured at 0.28 s end to end and a 38 KB bundle.
-    build(argv, "/media/fat/Scripts/dvd_report.py", "/dev/sr0",
+    build(argv, "/media/fat/Scripts/dvd_report.py", "/media/fat/games/DVD/x.iso",
           "/media/fat/DVD_reports/x.zip", "903500",
           "/media/fat/config/DVD_v2.CFG", "dev-subpmapdom 260912");
     want_pair(argv, "--lba", "903500", "[1] full");
@@ -151,7 +153,7 @@ int main(void)
     // The image/device is positional and must be argv[2], after python3 and the
     // script -- a flag inserted ahead of it would make the tool read the script
     // as its disc.
-    if (argc_of(argv) < 3 || strcmp(argv[2], "/dev/sr0")) {
+    if (argc_of(argv) < 3 || strcmp(argv[2], "/media/fat/games/DVD/x.iso")) {
         errors++;
         printf("  FAIL [1] full: argv[2] = \"%s\" (want the source path)\n",
                argc_of(argv) > 2 ? argv[2] : "(end)");
@@ -199,6 +201,47 @@ int main(void)
     want_absent(argv, "--nav-window", "[4] old script");
     printf("  [4] old script: --lba kept, --nav-window dropped\n");
 
+    // ---- [4b] the cap follows the MEDIUM ------------------------------------
+    // An optical disc reads ~50x slower than an image (MEASURED on the rig while
+    // the core streamed a real DVD: ~90-285 KB/s, and 2048 sectors = 15.7-29.1 s).
+    // The cap is what you pay when the playhead sits where there are NO NAV packs,
+    // which the early stop cannot help with -- so it has to be smaller there.
+    {
+        // A REAL block device is needed -- a regular file is not S_ISBLK, which is
+        // the whole point of using stat() rather than matching on "/dev/sr". Find
+        // one rather than naming one: /dev/loop0 does not exist on every host, and
+        // a skipped arm is a bench that cannot fail. A machine with no block device
+        // at all is not a machine this builds on, so an empty scan is a FAILURE.
+        char blk[280] = {0};
+        DIR *dp = opendir("/dev");
+        if (dp) {
+            struct dirent *e;
+            while (!blk[0] && (e = readdir(dp))) {
+                char path[280];
+                struct stat st;
+                snprintf(path, sizeof(path), "/dev/%s", e->d_name);
+                if (!stat(path, &st) && S_ISBLK(st.st_mode))
+                    snprintf(blk, sizeof(blk), "%s", path);
+            }
+            closedir(dp);
+        }
+        if (!blk[0]) {
+            errors++;
+            printf("  FAIL [4b]: no block device found under /dev -- this arm "
+                   "cannot test the optical cap and must not silently skip\n");
+        } else {
+            build(argv, "s.py", blk, "/o.zip", "42", 0, 0);
+            want_pair(argv, "--nav-window", "512", "[4b] optical");
+            printf("  [4b] %s (block) -> cap 512, image -> cap 2048\n", blk);
+        }
+        build(argv, "s.py", "/media/fat/games/DVD/x.iso", "/o.zip", "42", 0, 0);
+        want_pair(argv, "--nav-window", "2048", "[4b] image");
+        // A source that does not exist at all must not be treated as optical --
+        // stat() fails and the image cap is the safe default.
+        build(argv, "s.py", "/no/such/path.iso", "/o.zip", "42", 0, 0);
+        want_pair(argv, "--nav-window", "2048", "[4b] missing source");
+    }
+
     // ---- [5] the probe reads the script, in both directions -----------------
     // A substring search is sound because argparse cannot accept a flag it does
     // not name. Both arms use real files so the chunking is exercised, and the
@@ -238,6 +281,6 @@ int main(void)
         printf("dvd_report_test: %d FAILURE(S)\n", errors);
         return 1;
     }
-    printf("dvd_report_test: ALL GREEN (6 arms)\n");
+    printf("dvd_report_test: ALL GREEN (7 arms)\n");
     return 0;
 }

@@ -76,4 +76,9 @@ void dvd_report_build_argv(const char **argv, const char *script, const char *sr
 // file I/O, and user_io_poll() is the core's data pump.
 int dvd_report_script_supports(const char *script, const char *token);
 
+// The --nav-window cap for this source, as a string. An optical disc reads ~50x
+// slower than an image (MEASURED on the rig), so it gets a smaller cap; see the
+// note above the constants in dvd_report.cpp.
+const char *nav_window_for(const char *src);
+
 #endif

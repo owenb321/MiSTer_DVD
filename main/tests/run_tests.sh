@@ -122,7 +122,7 @@ if [ "$RED" -eq 1 ]; then
     # see an in-title menu's buttons, which is the whole point of the window.
     red_case dvd_report.cpp dvd_report_test.cpp \
         "--nav-packs must NOT be passed" \
-        "s/argv\[i++\] = \"--nav-window\";   argv\[i++\] = NAV_WINDOW_SECTORS;/argv[i++] = \"--nav-packs\";/" \
+        "s/argv\[i++\] = \"--nav-window\";   argv\[i++\] = nav_window_for(src);/argv[i++] = \"--nav-packs\";/" \
         expensive-capture
 
     # Forget the terminator. execvp reads past the end of the array.
@@ -142,6 +142,20 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_report.cpp dvd_report_test.cpp \
         "straddling a read boundary" \
         "s/keep = (tlen > 1) ? (tlen - 1) : 0;/keep = 0;/" probe-no-overlap
+
+    # One cap for both media. MEASURED on the rig: 2048 sectors of a real DVD, read
+    # while the core streamed it, took 15.7-29.1 s -- the wait this cap exists to
+    # bound. An image pays ~0.5 s for the same thing.
+    red_case dvd_report.cpp dvd_report_test.cpp \
+        "--nav-window = \"2048\" (want \"512\")" \
+        "s/if (src \&\& !stat(src, \&st) \&\& S_ISBLK(st.st_mode)) return NAV_WINDOW_OPTICAL;//" \
+        one-cap-both-media
+
+    # ...and the inverse: treat an IMAGE as optical and every PC-route bundle loses
+    # three quarters of its window for no reason.
+    red_case dvd_report.cpp dvd_report_test.cpp \
+        "--nav-window = \"512\" (want \"2048\")" \
+        "s/return NAV_WINDOW_IMAGE;/return NAV_WINDOW_OPTICAL;/" everything-optical
     echo
 fi
 

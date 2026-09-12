@@ -2944,7 +2944,27 @@ too": the window costs 1.38 s against 0.86 s for no capture at all (SCENEIT_HP,
 16 NAV packs, a 37 KB bundle), while `--nav-packs` on MEN_IN_BLACK costs 37.7 s —
 19× the window's 1.98 s on the same disc**, from local storage with the core not
 even running. It yields 13–20 of ~20 packs carrying multi-button HLI on Scene It's
-game VTSes, which `--nav-packs` cannot reach at all. Proven end to end: a window bundle reconstructs to
+game VTSes, which `--nav-packs` cannot reach at all.
+★★ **AN OPTICAL DRIVE IS ~50× SLOWER AND THE ARITHMETIC SAID OTHERWISE — MEASURED
+ON A REAL DVD WHILE THE CORE STREAMED IT: ~90–285 KB/s, a SEVENTH of DVD 1x**,
+steady over 84 s (so not spin-up), and chunking does NOT help (1-sector reads
+13.9 s, 256-sector 17.8 s — it is the drive, not syscalls). A 2048-sector window
+costs **15.7–29.1 s** there against ~0.5 s on an image. ⚠ **Authentication and a
+spinning drive do NOT rescue it** — that was the obvious hypothesis and the
+measurement killed it. ⚠⚠ **Re-reading a region takes 0.02 s, so any timing on an
+LBA something already touched is measuring the PAGE CACHE** — a first attempt here
+read 0.26 s for a window that really costs 16 s.
+✅ **Bounded: `--nav-stop` (default 2) ends the scan at the 2nd NAV pack, and the
+cap follows the MEDIUM** (`nav_window_for()`, on `S_ISBLK` — the medium, not the
+path spelling): 512 sectors optical, 2048 image. Measured on that disc: 1st NAV
+pack +51..+230 sectors (2.1–5.5 s), 2nd +304..+465 (3.9–7.0 s), 8th +1701..+1903
+(19.1–29.1 s) — and an HLI repeats byte-identically every VOBU, so the FIRST
+record already carries the whole button set. **Chord on a physical DVD: 0.91–0.96 s
+before this branch, 2.73/4.92 s with the bounded window, vs +15.7–29.1 s
+unbounded.** ⚠ The cap is what you pay where there are NO NAV packs (a still, a
+gap) — the early stop cannot help there, which is why it is media-dependent rather
+than merely large; one run hit 14.35 s on a bad patch, so 3–5 s is typical, not a
+bound. Proven end to end: a window bundle reconstructs to
 an ISO whose `nav_extract.py` walk decodes a complete 7-button in-title menu.
 ⚠ A VOBU is ≤1 s, so 2048 sectors spans several, and an HLI is re-sent every VOBU
 while a menu is up — forward-only is enough. ⚠ The content guarantee is unchanged
