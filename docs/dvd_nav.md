@@ -1435,11 +1435,16 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   was left (`15504 >> 12 = 3`, losing 21 %; `2584 >> 12 = 0`, losing all of it — the `| 1`
   floor was the only thing still moving the cursor).
   Two step sources now, both in content-seconds:
-  - **Linear** (`.mpg`/VCD/SVCD, `lin_rate_ok`): `lin_blk10 >> LSn`. `lin_blk10` is blocks
-    per 10 s (`dvd/lin_rate.sv`), so the shift **is** the rate — `166.7 / 2^LSn` s/s. Shipped
-    `{5,3,1,0}` ≈ **5 / 21 / 83 / 167 s/s**. ⚠ Gated on the rate being VALID (the
-    `dpad_seek` precedent), never on a zero slipping through; an untrusted rate falls back to
-    the span path, which is exactly what shipped before.
+  - **Linear** (`.mpg`/VCD/SVCD, `lin_rate_ok`): `(lin_blk10 * 6) >> LSn`. `lin_blk10` is
+    blocks per 10 s (`dvd/lin_rate.sv`), so the shift **is** the rate — `1000 / 2^LSn` s/s,
+    and `{6,4,2,0}` ≈ **16 / 63 / 250 / 1000 s/s**.
+    ★★ **The `* 6` aligns two lattices that otherwise cannot meet.** Unscaled this path can
+    only produce `166.7 / 2^n` while the DVD path produces `120000 / 2^m` at the anchor;
+    those differ by `720 = 2^9.49` — **half a power of two** — so no choice of `SHn`/`LSn`
+    brings them closer than **41 %**. Scaling by 6 lands them on one lattice (7 % apart) and
+    removes the negative shifts the unscaled match would need at the top tiers. Cost: two
+    shifts and an adder. ⚠ Gated on the rate being VALID (the `dpad_seek` precedent), never
+    on a zero slipping through; an untrusted rate falls back to the span path.
   - **DVD**: `span >> (SHn + log2(title_secs) − SECS_REF)`. The span **cancels** out of the
     content rate algebraically — `(span >> sh)` divided by `(span / title_secs)` is
     `title_secs / 2^sh` — so biasing the shift by the title's **duration bucket** (a
@@ -1453,10 +1458,22 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   **identically** — the divide fixes nothing and costs area. ⚠ The *area* objection to a
   divide has expired (post-reclaim `main` fits at ~87 %); area was never the load-bearing
   reason, so do not re-derive "we have area now, so divide".
-  ⚠ **The two ladders do not agree** — a DVD runs 29/117/469/1875 s/s and a linear file
-  5/21/83/167 — because the DVD numbers are the ones a hardware round signed off and the
-  anchor exists to preserve them. If the top tier reads as inconsistent on hardware, retune
-  `LS0..LS3` upward; do not unpick the anchor.
+  ★ **THE TWO LADDERS AGREE, AND THAT COST THE 2 h IDENTITY — deliberately** (maintainer,
+  2026-09-12: *"these both should have the same seek steps — maybe we meet in the middle"*).
+  The first cut pinned `SHn = {12,10,8,6}` so a 2 h title's step was bit-identical to the
+  hardware-signed-off build, but that left a DVD at 29/117/469/1875 s/s against a `.mpg` at
+  5/21/83/167 — the same tier meaning a 5–10× different speed depending on what was mounted,
+  which is the defect this whole section exists to remove. Meeting in the middle **halves the
+  DVD ladder**: both sources now run **~15 / 60 / 240 / 960 s/s**. The anchor MECHANISM is
+  untouched and still load-bearing — it is what makes the rate absolute rather than
+  span-relative; only its value moved.
+  ⚠ **Residual, and it is now the LARGER error:** the bucket is a power of two, so within one
+  bucket the DVD rate still varies **2×** with title length (a 68-minute title scrubs at
+  8.3 s/s in tier 0, a 2h16 title at 16.7). Removing that means dividing by `title_secs`, and
+  since the step is in SECTORS that is `span / title_secs` — the divide this design refuses.
+  The DVD/linear gap is now smaller than this spread, which is the honest place to stop.
+  ⚠ To retune the feel, move **`SHn` and `LSn` together** — one shift is one factor of two on
+  either side. `scrub_ctrl_tb` T19 fails if they drift apart.
   ⚠ **The ladders and the dwells are `scrub_ctrl` parameters (`SH0..SH3`, `LS0..LS3`,
   `T1..T3`, `SECS_REF`).** The span ladder was relaxed once already on 2026-09-03 after a
   user report that the scrub "ramps up too fast": the original `{10,8,6,5}` / 0-1.5-3-5 s

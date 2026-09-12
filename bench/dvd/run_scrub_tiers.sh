@@ -5,9 +5,10 @@
 #
 # The step used to be a fraction of the title span, so the shorter the title the
 # slower the scrub (0.58 content-seconds per second on a 3-minute clip, 0.19 on a
-# 30-second one, against 29 for a 2 h feature). It is now an absolute rate:
-# lin_blk10 >> LSn for a linear file, and span >> (SHn + duration bucket) for a
-# DVD title, anchored so a ~2 h title's step is BIT-IDENTICAL to what shipped.
+# 30-second one, against 29 for a 2 h feature). It is now an absolute rate, and
+# ONE rate whatever is mounted: ~15 / 60 / 240 / 960 content-seconds per second,
+# from (lin_blk10 * 6) >> LSn on a linear file and span >> (SHn + duration
+# bucket) on a DVD. T19 is the arm that pins them together.
 #
 # It also gates how that tier READS: dvd/transport_hud.sv draws it as 2..5
 # arrows, because the field used to print "xN" from the tier ordinal -- "x1" for
@@ -89,6 +90,13 @@ if [ "${1:-}" = "--red" ]; then
          's/(sh_sum > 8'"'"'sd31)     ? 5'"'"'d31 : sh_sum\[4:0\];/(sh_sum > 8'"'"'sd31)     ? 5'"'"'d31 : sh;/' \
          "rate: a 3-minute clip"
   # ...anchored where the hardware-signed-off feel lives.
+  # The claim the ladder change exists for: both sources ramp at one speed.
+  mutant "the linear lattice is unscaled" \
+         's/parameter LIN_K  = 3'"'"'d6,/parameter LIN_K  = 3'"'"'d1,/' \
+         "parity:"
+  mutant "the ladders drift apart" \
+         's/parameter LS0    = 5'"'"'d6,/parameter LS0    = 5'"'"'d5,/' \
+         "parity:"
   mutant "the anchor moved off 2 h" \
          's/parameter SECS_REF = 5'"'"'d12,/parameter SECS_REF = 5'"'"'d10,/' \
          "anchor: 4096 s"

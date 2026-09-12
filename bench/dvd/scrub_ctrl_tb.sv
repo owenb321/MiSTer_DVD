@@ -123,7 +123,24 @@ module scrub_ctrl_tb;
         end
     endtask
 
-    integer fwd_short, fwd_long, ms_tick, ss;
+    integer fwd_short, fwd_long, ms_tick, ss, ti;
+    integer d_ms [0:3];                  // DVD content-ms per tick, by tier
+    integer l_ms [0:3];                  // ...and the linear path's, same unit
+
+    // A measured step converted to CONTENT-MILLISECONDS PER TICK, from each
+    // source's own geometry: a DVD step is sectors against span/title_secs, a
+    // linear step is blocks against blk10/10 s. Same unit at the end, which is
+    // what makes TEST 19 a comparison rather than a restatement.
+    // ⚠ Folded as (stp * 7200) / 1000, NOT (stp * 7200 * 1000) / 1000000: a
+    // Verilog `integer` is 32 bits, and the literal form overflows at tier 2
+    // (1953 * 7200 * 1000 = 1.4e10). It reported 1176 ms/tick against a true
+    // 14061 -- i.e. the parity arm failed on its own arithmetic, not the RTL's.
+    function automatic integer dvd_ms(input [31:0] stp);
+        dvd_ms = (stp * 7200) / 1000;          // span is 1_000_000 in these arms
+    endfunction
+    function automatic integer lin_ms(input [31:0] stp);
+        lin_ms = (stp * 10000) / 861;
+    endfunction
 
     // A measured linear step, converted into CONTENT-SECONDS PER SECOND using
     // the SHIPPED tick period -- step blocks is step * 10000 / blk10 content-ms,
@@ -131,7 +148,7 @@ module scrub_ctrl_tb;
     function automatic integer lin_rate(input [31:0] stp);
         integer ms_per_tick;
         begin
-            ms_per_tick = (stp * 10000) / 861;
+            ms_per_tick = lin_ms(stp);
             lin_rate    = (ms_per_tick * (27_000_000 / dut_def.TICK)) / 1000;
         end
     endfunction
@@ -258,16 +275,16 @@ module scrub_ctrl_tb;
         in_title = 1; tick(2);
 
         // ---------- TEST 13: the acceleration ladder, MEASURED ----------
-        // span = 1_000_000, so the shipped {12,10,8,6} ladder gives
-        // (span>>SH)|1 = 245 / 977 / 3907 / 15625 sectors per tick. Measured off
+        // span = 1_000_000, so the shipped {13,11,9,7} ladder gives
+        // (span>>SH)|1 = 123 / 489 / 1953 / 7813 sectors per tick. Measured off
         // bar_tgt_rbn, not read out of the DUT, so a changed ladder fails here.
-        $display("TEST 13: acceleration ladder (span >> {12,10,8,6})");
+        $display("TEST 13: acceleration ladder (span >> {13,11,9,7})");
         cur_rbn = 32'd100000; tick(4);
         held_right = 1'b1;
-        tick(60);   chk(last_delta == 32'd245,   "ladder: tier 0 step = span>>12");
-        tick(100);  chk(last_delta == 32'd977,   "ladder: tier 1 step = span>>10");
-        tick(100);  chk(last_delta == 32'd3907,  "ladder: tier 2 step = span>>8");
-        tick(120);  chk(last_delta == 32'd15625, "ladder: tier 3 step = span>>6");
+        tick(60);   chk(last_delta == 32'd123,  "ladder: tier 0 step = span>>13");
+        tick(100);  chk(last_delta == 32'd489,  "ladder: tier 1 step = span>>11");
+        tick(100);  chk(last_delta == 32'd1953, "ladder: tier 2 step = span>>9");
+        tick(120);  chk(last_delta == 32'd7813, "ladder: tier 3 step = span>>7");
         held_right = 1'b0; tick(6);
 
         // ---------- TEST 14: the tier boundaries sit on T1/T2/T3 ----------
@@ -279,12 +296,12 @@ module scrub_ctrl_tb;
         $display("TEST 14: tier boundaries");
         cur_rbn = 32'd100000; tick(4);
         hc = 0; held_right = 1'b1;
-        hold_until(T1_C - 2);        chk(last_delta == 32'd245,   "bound: tier 0 holds to T1");
-        hold_until(T1_C + SETTLE);   chk(last_delta == 32'd977,   "bound: tier 1 after T1");
-        hold_until(T2_C - 2);        chk(last_delta == 32'd977,   "bound: tier 1 holds to T2");
-        hold_until(T2_C + SETTLE);   chk(last_delta == 32'd3907,  "bound: tier 2 after T2");
-        hold_until(T3_C - 2);        chk(last_delta == 32'd3907,  "bound: tier 2 holds to T3");
-        hold_until(T3_C + SETTLE);   chk(last_delta == 32'd15625, "bound: tier 3 after T3");
+        hold_until(T1_C - 2);        chk(last_delta == 32'd123,  "bound: tier 0 holds to T1");
+        hold_until(T1_C + SETTLE);   chk(last_delta == 32'd489,  "bound: tier 1 after T1");
+        hold_until(T2_C - 2);        chk(last_delta == 32'd489,  "bound: tier 1 holds to T2");
+        hold_until(T2_C + SETTLE);   chk(last_delta == 32'd1953, "bound: tier 2 after T2");
+        hold_until(T3_C - 2);        chk(last_delta == 32'd1953, "bound: tier 2 holds to T3");
+        hold_until(T3_C + SETTLE);   chk(last_delta == 32'd7813, "bound: tier 3 after T3");
         held_right = 1'b0; tick(6);
 
         // ---------- TEST 15: the SHIPPED defaults are the intended feel ----------
@@ -295,42 +312,54 @@ module scrub_ctrl_tb;
         chk(dut_def.T1  == 54_000_000,  "defaults: T1 = 2.0 s @ 27 MHz");
         chk(dut_def.T2  == 121_500_000, "defaults: T2 = 4.5 s @ 27 MHz");
         chk(dut_def.T3  == 216_000_000, "defaults: T3 = 8.0 s @ 27 MHz");
-        chk(dut_def.SH0 == 5'd12,       "defaults: SH0 = 12");
-        chk(dut_def.SH1 == 5'd10,       "defaults: SH1 = 10");
-        chk(dut_def.SH2 == 5'd8,        "defaults: SH2 = 8");
-        chk(dut_def.SH3 == 5'd6,        "defaults: SH3 = 6");
-        chk(dut_def.LS0 == 5'd5,        "defaults: LS0 = 5");
-        chk(dut_def.LS1 == 5'd3,        "defaults: LS1 = 3");
-        chk(dut_def.LS2 == 5'd1,        "defaults: LS2 = 1");
+        chk(dut_def.SH0 == 5'd13,       "defaults: SH0 = 13");
+        chk(dut_def.SH1 == 5'd11,       "defaults: SH1 = 11");
+        chk(dut_def.SH2 == 5'd9,        "defaults: SH2 = 9");
+        chk(dut_def.SH3 == 5'd7,        "defaults: SH3 = 7");
+        chk(dut_def.LS0 == 5'd6,        "defaults: LS0 = 6");
+        chk(dut_def.LS1 == 5'd4,        "defaults: LS1 = 4");
+        chk(dut_def.LS2 == 5'd2,        "defaults: LS2 = 2");
         chk(dut_def.LS3 == 5'd0,        "defaults: LS3 = 0");
+        chk(dut_def.LIN_K == 3'd6,      "defaults: LIN_K = 6 (the lattice scale)");
+        // SHn - LSn must be the SAME at every tier, or the two sources ramp at
+        // different shapes however well tier 0 is matched.
+        chk((dut_def.SH0 - dut_def.LS0) == (dut_def.SH1 - dut_def.LS1) &&
+            (dut_def.SH1 - dut_def.LS1) == (dut_def.SH2 - dut_def.LS2) &&
+            (dut_def.SH2 - dut_def.LS2) == (dut_def.SH3 - dut_def.LS3),
+            "defaults: the two ladders step in lockstep");
         chk(dut_def.SECS_REF == 5'd12,  "defaults: SECS_REF = 12 (the 2 h anchor)");
         // T3 must fit hold_cnt (28 bits) or the ramp would never reach tier 3.
         chk(dut_def.T3  < 28'h fff_ffff, "defaults: T3 fits hold_cnt");
 
-        // ---------- TEST 16: the 2 h ANCHOR -- an unchanged step -----------
+        // ---------- TEST 16: the 2 h ANCHOR is where SHn means what it says --
         // The duration bucket may only move titles AWAY from two hours. Every
         // title whose leading one sits at bit 12 (4096..8191 s = 68..136 min)
-        // must produce the step that shipped, and so must a title whose length
-        // is not known yet. Measured against the same numbers TEST 13 pins.
-        $display("TEST 16: the 2 h anchor is bit-identical");
+        // must take SHn unbiased, and so must a title whose length is not known
+        // yet. Measured against the same numbers TEST 13 pins.
+        // ⚠ This arm used to be titled "bit-identical" -- it meant identical to
+        // the pre-2026-09-12 build, and that property was given up deliberately
+        // when the two sources were made to ramp at the same speed (the DVD
+        // ladder halved). The anchor still exists and is still load-bearing; it
+        // just anchors the ladder rather than preserving an old one.
+        $display("TEST 16: the 2 h anchor takes SHn unbiased");
         title_first = 32'd0; title_last = 32'd1000000;
         tsecs = 16'd4096; cur_rbn = 32'd100000; tick(4);
         held_right = 1'b1; tick(60);
-        chk(last_delta == 32'd245, "anchor: 4096 s (the bucket's floor) = span>>12");
+        chk(last_delta == 32'd123, "anchor: 4096 s (the bucket's floor) = span>>13");
         held_right = 1'b0; tick(8);
         tsecs = 16'd8191; cur_rbn = 32'd100000; tick(4);
         held_right = 1'b1; tick(60);
-        chk(last_delta == 32'd245, "anchor: 8191 s (the bucket's ceiling) = span>>12");
+        chk(last_delta == 32'd123, "anchor: 8191 s (the bucket's ceiling) = span>>13");
         held_right = 1'b0; tick(8);
         tsecs = 16'd0; cur_rbn = 32'd100000; tick(4);
         held_right = 1'b1; tick(60);
-        chk(last_delta == 32'd245, "anchor: an unknown duration keeps the old step");
+        chk(last_delta == 32'd123, "anchor: an unknown duration takes SHn unbiased");
         held_right = 1'b0; tick(8);
         // ...and a title well away from the anchor must NOT be unchanged, or the
         // bucket is inert and this whole arm proves nothing.
         tsecs = 16'd180; cur_rbn = 32'd100000; tick(4);
         held_right = 1'b1; tick(60);
-        chk(last_delta != 32'd245, "anchor: a 3-minute title does move off the shipped step");
+        chk(last_delta != 32'd123, "anchor: a 3-minute title does move off the anchor step");
         held_right = 1'b0; tick(8);
         tsecs = 16'd7200;
 
@@ -348,10 +377,10 @@ module scrub_ctrl_tb;
         held_right = 1'b0; tick(8);
         $display("  tier 0 on a 3-minute clip: step=%0d sectors = %0d content-ms/tick",
                  last_delta, ms_tick);
-        // The 2 h reference is 1054 * 7200 * 1000 / 4320000 = 1757 ms/tick. Half
-        // to double that is the band; the pre-change RTL scores 34 and the `| 1`
-        // floor alone scores 11, so both failure shapes are outside it.
-        chk(ms_tick >= 878 && ms_tick <= 3514,
+        // The 2 h reference is title_secs / 2^13 = 7200000/8192 = 879 ms/tick.
+        // Half to double that is the band; the pre-change RTL scores 34 and the
+        // `| 1` floor alone scores 11, so both failure shapes are outside it.
+        chk(ms_tick >= 439 && ms_tick <= 1758,
             "rate: a 3-minute clip scrubs within 2x of the 2 h rate at tier 0");
         title_first = 32'd0; title_last = 32'd1000000; tsecs = 16'd7200;
 
@@ -365,18 +394,18 @@ module scrub_ctrl_tb;
         lrate_ok = 1'b1;
         cur_rbn = 32'd100000; tick(4);
         held_right = 1'b1;
-        tick(60);   ss = lin_rate(last_delta);
+        tick(60);   ss = lin_rate(last_delta); l_ms[0] = lin_ms(last_delta);
         $display("  tier 0: step=%0d blocks = %0d content-s/s", last_delta, ss);
-        chk(last_delta == 32'd27 && ss >= 4 && ss <= 7,   "linear: tier 0 ~5 s/s");
-        tick(100);  ss = lin_rate(last_delta);
+        chk(last_delta == 32'd81 && ss >= 13 && ss <= 19,  "linear: tier 0 ~16 s/s");
+        tick(100);  ss = lin_rate(last_delta); l_ms[1] = lin_ms(last_delta);
         $display("  tier 1: step=%0d blocks = %0d content-s/s", last_delta, ss);
-        chk(last_delta == 32'd107 && ss >= 17 && ss <= 26, "linear: tier 1 ~21 s/s");
-        tick(100);  ss = lin_rate(last_delta);
+        chk(last_delta == 32'd323 && ss >= 53 && ss <= 75, "linear: tier 1 ~63 s/s");
+        tick(100);  ss = lin_rate(last_delta); l_ms[2] = lin_ms(last_delta);
         $display("  tier 2: step=%0d blocks = %0d content-s/s", last_delta, ss);
-        chk(last_delta == 32'd431 && ss >= 70 && ss <= 100, "linear: tier 2 ~83 s/s");
-        tick(120);  ss = lin_rate(last_delta);
+        chk(last_delta == 32'd1291 && ss >= 210 && ss <= 290, "linear: tier 2 ~250 s/s");
+        tick(120);  ss = lin_rate(last_delta); l_ms[3] = lin_ms(last_delta);
         $display("  tier 3: step=%0d blocks = %0d content-s/s", last_delta, ss);
-        chk(last_delta == 32'd861 && ss >= 140 && ss <= 200, "linear: tier 3 ~167 s/s");
+        chk(last_delta == 32'd5167 && ss >= 850 && ss <= 1150, "linear: tier 3 ~1000 s/s");
         held_right = 1'b0; tick(8);
         // ...and the rate must be TRUSTED, not merely present: with the valid
         // flag low the module falls back to the span path exactly as it shipped.
@@ -385,8 +414,37 @@ module scrub_ctrl_tb;
         lrate_ok = 1'b0; lblk10 = 24'd0;
         cur_rbn = 32'd100000; tick(4);
         held_right = 1'b1; tick(60);
-        chk(last_delta == 32'd245, "linear: an untrusted rate falls back to the span step");
+        chk(last_delta == 32'd123, "linear: an untrusted rate falls back to the span step");
         held_right = 1'b0; tick(8);
+
+        // ---------- TEST 19: THE TWO SOURCES RAMP AT THE SAME SPEED ----------
+        // The reason the ladder moved at all (maintainer, 2026-09-12: "these both
+        // should have the same seek steps -- maybe we meet in the middle"). Before
+        // it, a DVD ran 29/117/469/1875 content-s/s and a .mpg 5/21/83/167, so the
+        // same tier meant a 5-10x different speed depending on what was mounted.
+        // Scored by converting BOTH measured steps into content-MILLISECONDS PER
+        // TICK -- the same unit, derived from each source's own geometry, so this
+        // cannot pass by restating either shift.
+        $display("TEST 19: the DVD and linear ladders agree");
+        lrate_ok = 1'b0; tsecs = 16'd7200;
+        title_first = 32'd0; title_last = 32'd1000000;
+        cur_rbn = 32'd100000; tick(4);
+        held_right = 1'b1;
+        tick(60);  d_ms[0] = dvd_ms(last_delta);
+        tick(100); d_ms[1] = dvd_ms(last_delta);
+        tick(100); d_ms[2] = dvd_ms(last_delta);
+        tick(120); d_ms[3] = dvd_ms(last_delta);
+        held_right = 1'b0; tick(8);
+        for (ti = 0; ti < 4; ti = ti + 1) begin
+            $display("  tier %0d: DVD %0d ms/tick vs linear %0d ms/tick",
+                     ti, d_ms[ti], l_ms[ti]);
+            // Within 25% either way. The floor on how close they CAN be is set by
+            // arithmetic, not by tuning: unscaled, the linear lattice is 166.7/2^n
+            // and the DVD one 120000/2^m, which are half a power of two (41%)
+            // apart -- LIN_K = 6 is what brings them to ~7%.
+            chk((d_ms[ti] * 4 <= l_ms[ti] * 5) && (l_ms[ti] * 4 <= d_ms[ti] * 5),
+                "parity: this tier scrubs at the same speed on both sources");
+        end
 
         if (errors == 0) $display("\nscrub_ctrl_tb: ALL TESTS PASSED");
         else begin

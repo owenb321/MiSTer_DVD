@@ -53,9 +53,10 @@ arrows**, 0/2/4.5/8 s of holding.
 (2026-09-12).** On a set-top box `×N` means N times real time; this field was the
 tier ORDINAL plus one, so it printed `×1` — which reads as NORMAL SPEED — for a
 tier that moves **~29 content-seconds per second of wall clock**. Measured at the
-2 h anchor the ladder is **29 / 117 / 469 / 1875** s/s on a DVD and **5 / 21 /
-83 / 167** on a linear file, so every label was wrong by one to three orders of
-magnitude and `×1` was wrong in the one direction a viewer would act on.
+2 h anchor the ladder is **~15 / 60 / 240 / 960** content-seconds per second (and
+was 29 / 117 / 469 / 1875 on a DVD when the readout was written), so every label
+was wrong by one to three orders of magnitude and `×1` was wrong in the one
+direction a viewer would act on.
 ★ **It could not have been a true rate before that day either:** the step was a
 fraction of the title span, so the multiple differed on every disc and no
 constant could have been printed. `scrub_ctrl`'s content-rate change is what made

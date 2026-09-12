@@ -43,14 +43,22 @@
 //
 // So the step is now derived per SOURCE, and both answers are in content-seconds:
 //
-//   LINEAR (.mpg / VCD / SVCD, lin_rate_ok):  step = lin_blk10 >> LSn
+//   LINEAR (.mpg / VCD / SVCD, lin_rate_ok):  step = (lin_blk10 * 6) >> LSn
 //     lin_blk10 is blocks per 10 s of file (dvd/lin_rate.sv -- exact CD geometry
 //     for a raw image, a measured rate for a flat program stream), so the shift
-//     IS the rate: 10 s / 2^LSn per tick = 166.7 / 2^LSn content-seconds per
-//     second. The shipped {5,3,1,0} gives ~5 / 21 / 83 / 167 s/s.
+//     IS the rate: 60 s / 2^LSn per tick = 1000 / 2^LSn content-seconds per
+//     second, and {6,4,2,0} gives ~16 / 63 / 250 / 1000 s/s.
+//     ★★ THE *6 IS NOT A FUDGE -- IT ALIGNS TWO LATTICES THAT OTHERWISE CANNOT
+//     MEET. Unscaled, this path can only ever produce 166.7 / 2^n, while the DVD
+//     path below produces 120000 / 2^m at the anchor; those differ by a factor of
+//     720 = 2^9.49, i.e. HALF A POWER OF TWO, so no choice of SHn and LSn brings
+//     them closer than 41%. Scaling the base by 6 moves this lattice onto that
+//     one (worst case 7% apart, far inside the DVD side's own bucket spread) and
+//     removes the NEGATIVE shifts the unscaled match would otherwise need for the
+//     top tiers. It costs two shifts and an adder: 6x = (x<<2) + (x<<1).
 //     ⚠ Gated on the rate being VALID, never on a zero slipping through -- the
 //     dvd/dpad_seek.sv precedent (its own .lin_mode is ANDed with lin_blk10_ok).
-//     An invalid rate falls back to the span path below, which is what shipped.
+//     An invalid rate falls back to the span path below.
 //
 //   DVD (a PGC title):  step = span >> (SHn + log2(title_secs) - SECS_REF)
 //     span cancels out of the content rate ALGEBRAICALLY -- (span >> sh) divided
@@ -63,12 +71,27 @@
 //     bucketed shift and the divide IDENTICALLY -- the divide fixes nothing and
 //     costs area. The area objection to a divide has expired (post-reclaim main
 //     fits at ~87 %); area was never the load-bearing reason.
-//     ★ SECS_REF = 12 is the ANCHOR, and it is chosen so that a title in
-//     [4096, 8192) seconds -- 68 to 136 minutes, i.e. every ordinary feature,
-//     including the 2 h films this ladder was signed off on in hardware -- gets
-//     bias 0 and a BIT-IDENTICAL step to what shipped. Nothing about the feel
-//     that was tested on hardware changes; only titles far from 2 h move.
-//     title_secs == 0 (not yet known) also means bias 0, i.e. the old behaviour.
+//     ★ SECS_REF = 12 is the ANCHOR: a title in [4096, 8192) seconds -- 68 to
+//     136 minutes, i.e. every ordinary feature -- gets bias 0, so SHn means
+//     exactly what it says there and shorter or longer titles bend around it.
+//     title_secs == 0 (not yet known) also means bias 0.
+//     ⚠⚠ THE ANCHOR NO LONGER MEANS "BIT-IDENTICAL TO WHAT SHIPPED", AND THAT IS
+//     A DELIBERATE REVERSAL (maintainer, 2026-09-12: "these both should have the
+//     same seek steps -- maybe we meet in the middle"). The first cut of this
+//     module kept SHn = {12,10,8,6} precisely so a 2 h title's step was unchanged
+//     from the hardware-signed-off build; but that pinned the DVD ladder at
+//     29/117/469/1875 s/s while the linear one ran 5/21/83/167, and a tier that
+//     means two different speeds depending on the source is the defect this
+//     module exists to remove. Meeting in the middle costs the identity: the DVD
+//     ladder is now HALVED at every tier. The anchor MECHANISM is untouched and
+//     still load-bearing -- it is what makes the rate absolute rather than
+//     span-relative; only its value moved.
+//     ⚠ The bucket is a power of two, so within one bucket the DVD rate still
+//     varies 2x with title length (a 68-minute title scrubs at 8.3 s/s in tier 0,
+//     a 2h16 title at 16.7). That is inherent: correcting it means dividing by
+//     title_secs, and the step is in SECTORS, so that is span/title_secs -- the
+//     divide this design refuses. The DVD/linear gap is now SMALLER than this
+//     residual spread, which is the honest place to stop.
 //
 // ★ THE LADDERS AND THE DWELLS ARE PARAMETERS (SH0..SH3, LS0..LS3, T1..T3), not
 // magic numbers in a ternary, because this is a FEEL setting that gets retuned
@@ -77,12 +100,12 @@
 // too fast"): the old {10,8,6,5} / 1.5-3-5 s ladder moved ~2 MINUTES of a 2 h
 // title per second even in tier 0 -- there was no fine-positioning tier at all,
 // and 5 s of holding crossed 77 minutes.
-// ⚠ There are two ladders and they do NOT agree: a DVD runs 29/117/469/1875 s/s
-// and a linear file 5/21/83/167. That is deliberate for now -- the DVD numbers
-// are the ones a hardware round signed off and the anchor exists to preserve
-// them -- but it means the top tier feels an order of magnitude faster on a disc
-// than on a .mpg, and if that reads as a bug on hardware the fix is to retune
-// LS0..LS3 upward, not to unpick the anchor.
+// ★ THE TWO LADDERS NOW AGREE, which is the point: ~15 / 60 / 240 / 960
+// content-seconds per second on a DVD and ~16 / 63 / 250 / 1000 on a linear
+// file. x1..x4 of the tier means the same speed whatever is mounted.
+// ⚠ If a hardware round wants the whole ramp faster or slower, move BOTH -- SHn
+// and LSn step in lockstep (one shift = one factor of two on either side), and
+// scrub_ctrl_tb's ladder-parity arm fails if they drift apart.
 // If you retune, update dvd/dpad_seek.sv's header (it contrasts its fixed-time
 // step against this one), docs/dvd_nav.md "Seeking / Phase 8a" and
 // docs/transport_hud.md -- and NOT the user manual, which deliberately says only
@@ -95,18 +118,25 @@ module scrub_ctrl #(
     parameter T1     = 54_000_000,   // 2.0 s -> tier 1
     parameter T2     = 121_500_000,  // 4.5 s -> tier 2
     parameter T3     = 216_000_000,  // 8.0 s -> tier 3  (hold_cnt is 28 bits: max 268M)
-    parameter SH0    = 5'd12,        // DVD: step = span >> (SHn + duration bias)
-    parameter SH1    = 5'd10,
-    parameter SH2    = 5'd8,
-    parameter SH3    = 5'd6,
-    // Linear sources: step = lin_blk10 >> LSn, so the number IS the rate --
-    // 166.7 / 2^LSn content-seconds per second. {5,3,1,0} = ~5/21/83/167 s/s.
-    parameter LS0    = 5'd5,
-    parameter LS1    = 5'd3,
-    parameter LS2    = 5'd1,
+    // ONE ladder, ~15 / 60 / 240 / 960 content-seconds per second, expressed
+    // twice because the two sources measure the content differently.
+    // DVD: step = span >> (SHn + duration bias) -- 120000 / 2^SHn s/s at the
+    // anchor, so {13,11,9,7} = ~15/59/234/938.
+    parameter SH0    = 5'd13,
+    parameter SH1    = 5'd11,
+    parameter SH2    = 5'd9,
+    parameter SH3    = 5'd7,
+    // Linear: step = (lin_blk10 * LIN_K) >> LSn -- 1000 / 2^LSn s/s with
+    // LIN_K = 6, so {6,4,2,0} = ~16/63/250/1000. ⚠ Move SHn and LSn TOGETHER:
+    // one shift is one factor of two on either side, and they are only 7% apart
+    // because LIN_K puts them on the same lattice (see the header).
+    parameter LS0    = 5'd6,
+    parameter LS1    = 5'd4,
+    parameter LS2    = 5'd2,
     parameter LS3    = 5'd0,
+    parameter LIN_K  = 3'd6,
     // The duration anchor: a title whose leading one sits at bit SECS_REF
-    // (4096..8191 s = 68..136 min) keeps the pre-2026-09-12 step EXACTLY.
+    // (4096..8191 s = 68..136 min) takes SHn unbiased.
     parameter SECS_REF = 5'd12,
     parameter TICK   = 1_620_000,    // ~0.06 s accumulate tick
     parameter LINGER = 40_000_000    // ~1.5 s show the bar after release
@@ -214,7 +244,12 @@ module scrub_ctrl #(
     // The `| 1` floor stays on BOTH arms: a step that rounds to zero is a scrub
     // that does not move, which is how the 30-second case failed.
     wire [31:0] step_span = (span >> sh_eff) | 32'd1;
-    wire [31:0] step_lin  = ({8'd0, lin_blk10} >> ls) | 32'd1;
+    // *6 before the shift, so the linear ladder lands on the DVD one. 24 bits of
+    // rate times 6 needs 27; the product is taken at full width and only then
+    // shifted, because doing it the other way round would throw away the low bits
+    // the scaling exists to keep.
+    wire [31:0] lin_scaled = {8'd0, lin_blk10} * {29'd0, LIN_K};
+    wire [31:0] step_lin  = (lin_scaled >> ls) | 32'd1;
     wire [31:0] step      = lin_rate_ok ? step_lin : step_span;
 
     reg  [31:0] pending_off;                   // magnitude (sectors), 0..span

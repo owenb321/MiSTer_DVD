@@ -2715,7 +2715,8 @@ worse maintenance burden than targeted in-place edits. So:
   (2) **Scrub ramp relaxed** (user report: "it ramps up too fast"): the old
   `{10,8,6,5}` / 0-1.5-3-5 s ladder moved ~2 MINUTES of a 2 h title per second even in
   tier 0 — no fine-positioning tier existed and 5 s of holding crossed 77 minutes. Now
-  `{12,10,8,6}` / 0-2-4.5-8 s, and the ladder is `SH0..SH3` PARAMETERS rather than a
+  `{12,10,8,6}` / 0-2-4.5-8 s (⚠ superseded again 2026-09-12 — see the content-rate note
+  below), and the ladder is `SH0..SH3` PARAMETERS rather than a
   hardcoded ternary, pinned by `scrub_ctrl_tb` T13–T15 so a retune is deliberate.
   ⚠ A retune must also move `dvd/dpad_seek.sv`'s header, `docs/dvd_nav.md` §2a and
   `docs/transport_hud.md` — the numbers are quoted in all four.
@@ -2725,8 +2726,9 @@ worse maintenance burden than targeted in-place edits. So:
   feature moved **29 content-seconds per second**, a 3-minute clip **0.58**, a 30-second
   clip **0.19**, and the shift truncated what little was left (`2584 >> 12 = 0` — the
   `| 1` floor was the only thing still moving the cursor). Now a linear file steps
-  `lin_blk10 >> {5,3,1,0}` (blocks per 10 s, so the shift IS the rate ≈ 5/21/83/167 s/s,
-  gated on the rate being VALID — the `dpad_seek` precedent), and a DVD steps
+  `(lin_blk10 * 6) >> {6,4,2,0}` (blocks per 10 s, so the shift IS the rate ≈
+  16/63/250/1000 s/s, gated on the rate being VALID — the `dpad_seek` precedent), and a DVD
+  steps
   `span >> (SHn + log2(title_secs) − SECS_REF)`: **span cancels out of the content rate
   algebraically**, so a duration BUCKET (a leading-one position, no divide) fixes the rate.
   ★ `SECS_REF = 12` anchors it so every title in **4096–8191 s (68–136 min)** keeps a
@@ -2735,10 +2737,20 @@ worse maintenance burden than targeted in-place edits. So:
   seamless-branch disc the span holds the other branch's ILVUs (issue #49) and that
   inflation hits the shift and the divide IDENTICALLY, so the divide fixes nothing — and
   the AREA objection to it expired with the reclaim, so do not re-derive "we have area
-  now, so divide". ⚠ The two ladders deliberately disagree (DVD 29/117/469/1875 s/s vs
-  linear 5/21/83/167) because the DVD numbers are the ones hardware signed off; if the top
-  tier reads as inconsistent on HW, retune `LS0..LS3`, do not unpick the anchor. Gate:
-  `bench/dvd/run_scrub_tiers.sh --red`.
+  now, so divide".
+  ★★ **BOTH SOURCES NOW RAMP AT ONE LADDER — ~15 / 60 / 240 / 960 content-s/s — and that
+  COST THE 2 h BIT-IDENTITY, deliberately** (maintainer: *"these both should have the same
+  seek steps — maybe we meet in the middle"*). The first cut kept `SHn = {12,10,8,6}` to
+  preserve the signed-off 2 h feel exactly, which left a DVD at 29/117/469/1875 s/s against
+  a `.mpg` at 5/21/83/167 — a tier meaning a 5–10× different speed by source. The DVD ladder
+  is HALVED (`{13,11,9,7}`); the anchor mechanism is untouched, only its value moved.
+  ★ **The `* 6` on the linear base is arithmetic, not taste:** unscaled, the linear lattice
+  is `166.7/2^n` and the DVD one `120000/2^m`, half a power of two apart, so nothing brings
+  them closer than **41 %**; ×6 lands them on one lattice at **7 %**. ⚠ Retune `SHn` and
+  `LSn` TOGETHER. ⚠ Residual, now the larger error: the power-of-two bucket still lets the
+  DVD rate vary **2× within a bucket** (68 min → 8.3 s/s, 2h16 → 16.7); removing it needs
+  the forbidden `span / title_secs`. Gate: `bench/dvd/run_scrub_tiers.sh --red` (T19 pins the
+  parity; 7 mutants, including an unscaled lattice and a drifted ladder).
   ⚠ **SEAMLESS-BRANCH DISCS ARE STILL WRONG and it is NOT the readout — it is the
   SEEK.** The 2026-09-03 cell-gap fix (a cell's span is its own `first..last`, not
   the distance to the next cell's first — AFTER_EARTH VTS_13 PGC1, 1.612× short,
