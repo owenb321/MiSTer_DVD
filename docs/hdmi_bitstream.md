@@ -547,8 +547,9 @@ Two mechanisms, and the second is the one that reaches other cores:
 1. **`0x12` is written by nobody else.** Stock `hdmi_config_init()` rewrites `0x0C`
    — so the *route* reverts — but its `init_data` has **no `0x12` entry at all**.
    Whatever we last wrote there stands, through a core load and through a warm
-   reboot (which resets the HPS, not the transmitter). A power cut should clear
-   it; that is the chip's reset value, not something any code here can assert.
+   reboot (which resets the HPS, not the transmitter). **A power cut does clear it
+   — MEASURED 2026-09-12** (see §6 gate (e)), which was assumed from the chip's
+   reset value until someone pulled the plug and checked.
 2. **Nothing ran on the way out.** Every other core runs **stock Main** via
    `main=`, and our own re-exec cannot help either: `user_io_init()` hands off to
    the core's `main=` binary at stock `user_io.cpp:~1484`, **before `video_init()`
@@ -577,9 +578,9 @@ ordering invariant, applied to an exit.
 
 ⚠ **Residual, by construction:** a Main crash, a kernel panic, or the board's
 reset button *while a DD/DTS track is playing* leaves the flag set, and the next
-stock-Main boot will not clear it. Recovery is a power cycle or loading this core
-again. Layer 1 is what makes that window small instead of "any session in which
-Passthru was ever selected".
+stock-Main boot will not clear it. **Recovery is a power cycle (measured: the
+register does not survive one) or loading this core again.** Layer 1 is what makes
+that window small instead of "any session in which Passthru was ever selected".
 
 ⚠ **Accepted trade:** every title start is now one PCM→DD switch, which is the
 fj#110 shape (*"receiver sees PCM then one clean switch, like a real player"*) and
@@ -657,10 +658,16 @@ The §5a engage policy and teardown are covered off-hardware in two places:
    ★ **Count `adv7513:` lines in `/tmp/dvd_hdmi_audio.log` for the churn arms, not
    register samples** — the log records every write, so it catches a release/engage
    pair that a 0.5 s sampler would step over. Exactly 1 across six transport events.
-   ⏳ **Still unexercised: (e) the `reboot()` arm** — same one-line call, present in the
-   built binary, but the OSD Reboot row cannot be driven from the harness and a reboot
-   wipes `/tmp` along with the log. ⏳ And **(f)**, what a receiver does with the
-   PCM→DD switch at a title start: this sink has no AC-3/DTS decoder, so it cannot say.
+
+   ✅ **(e) the `reboot()` arm and the power-cut question — CONFIRMED BY THE MAINTAINER
+   2026-09-12**, both out of the harness's reach: rebooting while a DD track plays
+   restores PCM for the next core, and **a power cut does not retain the register** (a
+   game core has audio afterwards). ★ The power-cut behaviour had been asserted three
+   times in these notes as the chip's reset value *"not something any code here can
+   assert"* — it is now measured, and it is the one layer no code can provide, which is
+   why the residual below is bounded by it rather than by anything we wrote.
+   ⏳ **(f) remains unreported:** what a receiver makes of the PCM→DD switch at a title
+   start. This rig's sink has no AC-3/DTS decoder, so nothing here can hear it.
 
 If (1) fails with the receiver naming nothing or mis-locking, try the §3
 preamble table before anything else.

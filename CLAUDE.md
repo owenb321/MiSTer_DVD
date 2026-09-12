@@ -274,11 +274,15 @@ worse maintenance burden than targeted in-place edits. So:
   engaged read `0x20`, with `teardown: restoring PCM mode` in the log** (layer 2 = the
   fix). Pacing unregressed: Decode 59.955 Hz / 24.01 fps / audio −12 ppm / 0 lates /
   0 drops; Passthru 59.953 Hz, 2.505 refreshes per frame.
-  ⚠ **NOT exercised: the `reboot()` arm (step 37).** Same one-line call, verified
-  present in the built binary, but the OSD Reboot row cannot be driven from the
-  harness and a reboot would wipe `/tmp` (and the log with it). Also untested: what a
-  real receiver does with the PCM→DD switch at a title start, since this sink has no
-  AC-3/DTS decoder at all.
+  ✅ **THE TWO ARMS THE HARNESS COULD NOT REACH WERE CLOSED BY THE MAINTAINER
+  2026-09-12:** rebooting while a DD track plays restores PCM for the next core (the
+  `reboot()` arm, step 37 — the OSD Reboot row cannot be driven from the harness, and
+  a reboot wipes `/tmp` and the log with it), **and a POWER CUT does not retain the
+  register** — a game core has audio after it. ★ That second one had been written here
+  three times as *"a power cut should clear it, which is the chip's reset value, not
+  anything code here can assert"*; it is now MEASURED, and it is the only layer no
+  code can provide. ⏳ Still unreported: whether the PCM→DD switch clips the start of a
+  title — this rig's sink has no AC-3/DTS decoder, so nothing here can hear it.
   ⚠ **Harness trap seen twice here: telemetry sampled across the launch transient is
   GARBAGE** (1003 refreshes/s, 65,524 drain-gate closures — counters read across the
   core's reset). Re-measure on settled playback; a second window read perfectly clean.
