@@ -97,10 +97,9 @@ did. There is nothing to configure — it is detected and starts on its own.
 The screen shows an audio visualizer, because there is no picture on the disc:
 
 - **Visualizers.** Press **Angle** (B6, or ++"G"++ on a keyboard) to cycle
-  through them: *copper bars*, a scrolling *XOR pattern*, a two-channel
-  *oscilloscope* (left channel on top, right underneath) and the bouncing
-  *logo*. All of them move with the music. Playback starts on copper bars, and
-  an OSD Reset goes back to them.
+  through them: *copper bars*, a scrolling *XOR pattern* and the bouncing
+  *logo*. Both visualizers move with the music. Playback starts on copper bars,
+  and an OSD Reset goes back to them.
 - **The status line and progress bar stay out of the way** while a visualizer
   is showing, and appear over the logo. Press **Display** (B9) to show or hide
   them in any mode; they also pop up for a couple of seconds whenever you

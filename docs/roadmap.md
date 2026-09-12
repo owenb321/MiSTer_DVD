@@ -537,14 +537,24 @@ the split is deliberate:
   not our code).
   🔧 **Follow-up build `dev-cddaphys2` (2026-09-10), sim-green, ⏳ HW-untested:**
   audio **visualizers** (`dvd/cdda_viz.sv`: copper / XOR / scope / logo, cycled
-  with Angle), a **per-track** progress bar (reversing the whole-disc bar), FF/REW
-  stopping at the track edges with FF-to-end landing on the next track, no track
-  notches, and the HUD reading **`TR n/N`**. Detail: `docs/cdda.md`.
+  with Angle; the scope is dropped again in `dev-cddaphys5` below), a **per-track**
+  progress bar (reversing the whole-disc bar), FF/REW stopping at the track edges
+  with FF-to-end landing on the next track, no track notches, and the HUD reading
+  **`TR n/N`**. Detail: `docs/cdda.md`.
   🔧 **`dev-cddaphys3`:** the HUD is hidden over a visualizer (Display toggles,
   `dvd/cdda_screen.sv`) and the FF/REW seek preview is track-relative (it was
   showing disc time). Sim-green, ⏳ HW-untested.
   🔧 **`dev-cddaphys4`:** track skips STACK like DVD chapter skips — a burst of
   N presses moves N tracks, and the HUD counts through them. Sim-green,
+  ⏳ HW-untested.
+  🔧 **`dev-cddaphys5`:** the whole stack **REBASED onto `main`** after the three
+  logic-reclaim branches merged (PRs #82/#83/#84), and the **scope visualizer is
+  REMOVED** (user decision, to be conservative with logic). The cycle is now copper →
+  XOR → logo — **three stops**, `viz_mode` wrapping at 2, so Angle never lands on a
+  dead mode. Measured cost of the arm that went: **~105 ALMs and one M10K**, the
+  memory being the expensive half with RAM at 90 %. ⚠ The branch's pinned SEED 9 and
+  its 99 % ALM ledger figures describe the PRE-reclaim netlist and no longer apply —
+  this tree needs a fresh fit before any area or timing claim. Sim-green,
   ⏳ HW-untested.
 
 ⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold

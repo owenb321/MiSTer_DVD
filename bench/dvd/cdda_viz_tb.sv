@@ -5,20 +5,19 @@
 // nothing (or draws them in the wrong place) still fails. Each arm is written
 // so the obvious broken implementation FAILS it:
 //
-//  [1] SCOPE   L = full-scale tone, R = silence:
-//        a  the L trace spans most of its +/-96-row window  (dead capture = 0)
-//        b  the R trace is flat on its centre row           (L/R swap fails)
-//        c  the trace is continuous: its pixel count is ~the vertical travel
-//           (a dotted plot lights every column too, so COLUMNS alone prove nothing)
-//        d  it starts on L's RISING zero crossing            (free-run fails)
-//        e  nothing below the traces                         (stray fill fails)
 //  [2] COPPER  loud music:
 //        a  the whole active area is drawn
 //        b  every line is ONE colour                         (per-pixel drift)
 //        c  white bar cores exist                            (no bars fails)
 //        d  the cores MOVE between frames                    (frozen solver fails)
 //  [3] XOR     colour varies along x AND the pattern scrolls between frames
-//  [4] GATES   vis = 0 and mode = 3 each draw nothing at all
+//  [4] GATES   vis = 0 and mode = 2 (the logo) each draw nothing at all
+//
+// ⛔ The [1] SCOPE arms went with the scope itself (2026-09-11). Their durable
+// lesson is kept in docs/cdda.md and is worth re-reading before anything here
+// draws a line again: the continuity check first counted lit COLUMNS, which a
+// dotted plot also lights, so it passed a trace drawn as dots; only counting
+// PIXELS (~4,700 continuous vs ~720 dotted) could fail it.
 //
 // Run: iverilog -g2012 -o /tmp/viz_sim dvd/cdda_viz.sv bench/dvd/cdda_viz_tb.sv
 `timescale 1ns/1ps
@@ -31,13 +30,13 @@ module cdda_viz_tb;
 
     reg  [11:0] h_pos = 0, v_pos = 0;
     reg         frame_tick = 0, vis = 1;
-    reg  [1:0]  mode = 2'd2;
+    reg  [1:0]  mode = 2'd0;
     reg  [15:0] audio_l = 0, audio_r = 0;
     wire        viz_on;
     wire [7:0]  viz_r, viz_g, viz_b;
 
-    // SDIV_W 8: a sample tick every 256 clocks, so a 360-sample capture takes
-    // ~92k clocks instead of 1.5M. Nothing else depends on the tick rate.
+    // SDIV_W 8: a sample tick every 256 clocks instead of 4096, so the envelope
+    // attacks in a reasonable number of simulated clocks.
     cdda_viz #(.VIZ_QX_LEAD(LEAD), .SDIV_W(8)) dut (
         .clk(clk), .rst_n(rst_n), .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0),
         .frame_tick(frame_tick), .vis(vis), .mode(mode),
@@ -60,9 +59,7 @@ module cdda_viz_tb;
     end
 
     // ---- per-frame accumulators, filled by render() -------------------------
-    integer l_min, l_max, r_min, r_max, below, lit_cols, on_px, px_n, l_px;
-    integer col0_row, col10_hi, line_mismatch, white_lines;
-    reg [359:0] col_hit;
+    integer on_px, px_n, line_mismatch, white_lines;
     reg [479:0] white_row, white_prev;
     reg [255:0] r_seen;
     reg [7:0]   xor_r100 [0:719], xor_prev [0:719];
@@ -75,10 +72,8 @@ module cdda_viz_tb;
     task render(input integer hmax);
         integer v, h, hq, vq;
         begin
-            l_min = 9999; l_max = -1; r_min = 9999; r_max = -1;
-            below = 0; lit_cols = 0; on_px = 0; px_n = 0; l_px = 0;
-            col0_row = -1; col10_hi = -1; line_mismatch = 0; white_lines = 0;
-            col_hit = 0; white_row = 0; r_seen = 0; line_c10 = 0;
+            on_px = 0; px_n = 0; line_mismatch = 0; white_lines = 0;
+            white_row = 0; r_seen = 0; line_c10 = 0;
             for (v = 0; v < 525; v = v + 1)
                 for (h = 0; h < hmax; h = h + 1) begin
                     @(negedge clk);
@@ -87,20 +82,6 @@ module cdda_viz_tb;
                     if (hp3 >= LEAD && hq < 720 && vq < 480) begin
                         px_n = px_n + 1;
                         if (viz_on) on_px = on_px + 1;
-                        // scope traces
-                        if (viz_on && viz_r == 8'h40 && viz_g == 8'hFF) begin
-                            if (vq < l_min) l_min = vq;
-                            if (vq > l_max) l_max = vq;
-                            col_hit[hq/2] = 1'b1;
-                            l_px = l_px + 1;
-                            if (hq == 0 && col0_row < 0) col0_row = vq;
-                            if (hq == 20 && vq > col10_hi) col10_hi = vq;
-                        end
-                        if (viz_on && viz_r == 8'hFF && viz_g == 8'hB0) begin
-                            if (vq < r_min) r_min = vq;
-                            if (vq > r_max) r_max = vq;
-                        end
-                        if (viz_on && vq >= 380 && vq < 470) below = below + 1;
                         // copper: one colour per line; white cores
                         if (hq == 10) line_c10 = {viz_r, viz_g, viz_b};
                         if (hq == 300 && {viz_r, viz_g, viz_b} !== line_c10)
@@ -117,7 +98,6 @@ module cdda_viz_tb;
                     vp3 = vp2; vp2 = vp1; vp1 = v;
                     h_pos = h; v_pos = v;
                 end
-            for (v = 0; v < 360; v = v + 1) if (col_hit[v]) lit_cols = lit_cols + 1;
             for (v = 0; v < 480; v = v + 1) if (white_row[v]) white_lines = white_lines + 1;
             @(negedge clk) frame_tick = 1; @(negedge clk) frame_tick = 0;
         end
@@ -135,23 +115,6 @@ module cdda_viz_tb;
     initial begin
         hp1 = 0; hp2 = 0; hp3 = 0; vp1 = 0; vp2 = 0; vp3 = 0;
         repeat (5) @(negedge clk); rst_n = 1;
-
-        // ================= [1] SCOPE =================
-        $display("=== [1] scope: L tone, R silent ===");
-        mode = 2'd2; amp_l = 30000.0; amp_r = 0.0;
-        repeat (300000) @(negedge clk);            // several triggered captures
-        render(760);
-        $display("  L rows %0d..%0d  R rows %0d..%0d  cols lit %0d  L px %0d  col0 %0d  col10hi %0d  below %0d",
-                 l_min, l_max, r_min, r_max, lit_cols, l_px, col0_row, col10_hi, below);
-        chk("[1a] L trace spans >= 150 rows of its +/-96 window", (l_max - l_min) >= 150);
-        chk("[1a] ...and stays inside it (112 +/- 97)", l_min >= 15 && l_max <= 209);
-        chk("[1b] R trace is flat on row 262", r_min == 262 && r_max == 262);
-        chk("[1c] trace continuous: >= 350 columns lit AND >= 2000 L px (dotted ~720)",
-            lit_cols >= 350 && l_px >= 2000);
-        chk("[1d] starts at L's zero crossing (col 0 within 112 +/- 12)",
-            col0_row >= 100 && col0_row <= 124);
-        chk("[1d] ...on the RISING side (col 10 well below col 0)", col10_hi > col0_row + 40);
-        chk("[1e] nothing drawn below the traces", below == 0);
 
         // ================= [2] COPPER =================
         $display("=== [2] copper bars, loud ===");
@@ -189,9 +152,9 @@ module cdda_viz_tb;
         mode = 2'd0; vis = 0;
         render(760);
         chk("[4a] vis = 0 draws nothing", on_px == 0 && px_n > 0);
-        vis = 1; mode = 2'd3;
+        vis = 1; mode = 2'd2;
         render(760);
-        chk("[4b] mode 3 (logo) draws nothing", on_px == 0 && px_n > 0);
+        chk("[4b] mode 2 (logo) draws nothing", on_px == 0 && px_n > 0);
 
         if (errors == 0) $display("CDDA_VIZ_TB: ALL TESTS PASSED");
         else begin

@@ -2136,19 +2136,31 @@ worse maintenance burden than targeted in-place edits. So:
   (`cdda_toc`'s replay deleted) and new `seek_bar.ticks_off` gates notches AND the
   chapter cursor.
   ★ **AUDIO VISUALIZERS — `dvd/cdda_viz.sv`, cycled with Angle** (dead on a CD, since
-  the angle switch needs `cell_ready`): copper bars → XOR "munching squares" → a
-  two-trace scope → the logo; also on `.wav`. One envelope/kick analysis drives all
-  three. **The budget IS the design at 98 % ALM:** no framebuffer; copper is solved
-  per LINE serially (one comparator, six clocks, held for the line) and its bar
-  positions per FRAME through one quarter-wave sine table with shift-add amplitudes
-  (no DSP); the scope stores precomputed screen ROWS (360 × 20 bits = one M10K),
-  triggered on L's rising zero crossing. Shares `idle_logo`'s overlay slot (same
-  3-stage latency and lead). ⛔ Lissajous not built: it needs a bitplane.
-  ★ **Gate `bench/dvd/cdda_viz_tb.sv` checks RENDERED PIXELS, and 7/7 mutations are
-  caught** (scope never writes, L/R swap, free-running capture, dotted trace, frozen
-  copper solver, `TR` stuck on, `ticks_off` ignored). ⚠ Its first "continuity" check
-  counted lit COLUMNS — which a dotted plot also lights; it now counts pixels (~4,700
-  continuous vs ~720 dotted). Suite: `run_wav.sh` (now also runs `cdda_toc_tb`).
+  the angle switch needs `cell_ready`): copper bars → XOR "munching squares" → the
+  logo; also on `.wav`. One envelope/kick analysis drives both. **The budget IS the
+  design at 98 % ALM:** no framebuffer; copper is solved per LINE serially (one
+  comparator, six clocks, held for the line) and its bar positions per FRAME through
+  one quarter-wave sine table with shift-add amplitudes (no DSP). Shares
+  `idle_logo`'s overlay slot (same 3-stage latency and lead). ⛔ Lissajous not built:
+  it needs a bitplane.
+  ⛔ **THE SCOPE WAS BUILT AND THEN DROPPED (2026-09-11, user decision — be
+  conservative with logic).** It was a two-trace oscilloscope, L above R, triggered on
+  L's rising zero crossing, storing precomputed screen ROWS (360 × 20 bits) rather than
+  samples so the display path only compared. It worked. **What it cost was MEASURED,
+  not estimated:** synthesising `cdda_viz` alone with `mode` tied to each constant (so
+  Quartus prunes the other arms) gives copper ~120, scope ~105, xor ~60 ALMs — and the
+  scope additionally owned **one whole M10K**. With RAM at 90 % and the design in the
+  congestion regime, that memory block was the expensive half. ⚠ The cycle is now
+  **three stops** (`viz_mode` wraps at 2, logo is mode 2): leaving a dead fourth mode
+  would have made Angle appear to hang on a blank screen.
+  ★ **Gate `bench/dvd/cdda_viz_tb.sv` checks RENDERED PIXELS** — copper full coverage,
+  one colour per line, bar cores that MOVE between frames; XOR variation and scroll;
+  both gates — and the copper/XOR mutations it catches (frozen solver, `TR` stuck on,
+  `ticks_off` ignored) still stand. ⚠ **The retired scope arm left a lesson worth more
+  than the feature:** its "continuity" check first counted lit COLUMNS, which a dotted
+  plot also lights, so it passed a plot that drew dots instead of a line; counting
+  PIXELS (~4,700 continuous vs ~720 dotted) is what made it able to fail. Suite:
+  `run_wav.sh` (also runs `cdda_toc_tb`).
   🔧 **`dev-cddaphys3`:** the FF/REW seek preview showed DISC time — `lin_rate`'s
   `lin_blk`/`total_blk` were re-based to the track but its `prev_rbn` sibling was not
   (D-pad previews were fine: `seek_time` reads the already track-relative clock). And

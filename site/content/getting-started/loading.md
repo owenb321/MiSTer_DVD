@@ -29,8 +29,8 @@ carries none.
 ## Playing a `.wav`
 
 A `.wav` plays as **audio only**: an audio visualizer fills the screen — press **Angle**
-to cycle copper bars, an XOR pattern, an oscilloscope and the bouncing logo. The status
-line and a progress bar show where you are in the file, like a CD player's front panel;
+to cycle copper bars, an XOR pattern and the bouncing logo. The status line and a
+progress bar show where you are in the file, like a CD player's front panel;
 they sit over the logo, and **Display** brings them up over a visualizer. Pause, the seek bar and the D-pad time jumps all work as they do for video; there
 are no chapters.
 

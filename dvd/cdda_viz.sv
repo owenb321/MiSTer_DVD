@@ -2,19 +2,27 @@
 //  dvd/cdda_viz.sv -- audio-reactive visualizers for WAV / CD-DA playback.
 //
 //  An audio CD has no picture, so the screen used to be the bouncing idle logo.
-//  This adds three demoscene-style alternatives, cycled with the Angle button
-//  (which does nothing on a CD otherwise -- emu.sv owns the mode register):
+//  This adds two demoscene-style alternatives, cycled with the Angle button
+//  (which does nothing on a CD otherwise -- dvd/cdda_screen.sv owns the mode):
 //
 //    mode 0  COPPER BARS -- five sine-driven gradient bars over a dark ramp,
 //                           the Amiga "copper list" look
 //    mode 1  XOR PATTERN -- scrolling (x ^ y) "munching squares"
-//    mode 2  SCOPE       -- two oscilloscope traces, L above R, triggered on
-//                           L's rising zero crossing so a steady tone stands still
-//    mode 3  off         -- emu shows the idle logo instead
+//    mode 2  off         -- emu shows the idle logo instead
 //
-//  All three react to the music through ONE shared analysis: a peak envelope of
+//  Both react to the music through ONE shared analysis: a peak envelope of
 //  (|L|+|R|) with a per-frame decay, a slow average of it, and a "kick" timer
 //  armed when the envelope jumps well above that average.
+//
+//  ⛔ A THIRD MODE -- a two-trace SCOPE, L above R, triggered on L's rising zero
+//  crossing -- shipped in dev-cddaphys2..4 and was REMOVED (2026-09-11, user
+//  decision: be conservative with logic). Measured by synthesising this module
+//  alone with `mode` tied to each constant so Quartus prunes the other arms:
+//  copper ~120, scope ~105, xor ~60 ALMs -- and the scope additionally owned a
+//  WHOLE M10K, because it stored precomputed screen ROWS rather than samples.
+//  With RAM at 90 % the memory block was the expensive half. Do not re-add it
+//  without that budget in hand. The cycle is THREE stops now: cdda_screen wraps
+//  viz_mode at 2, so Angle can never land on a mode that draws nothing.
 //
 //  ★ THE BUDGET IS THE DESIGN (the core sits at ~98 % ALM):
 //   - NO FRAMEBUFFER. Every pixel is a function of (x, y) and a few per-frame
@@ -24,14 +32,9 @@
 //     blanking) and the colour is held for the whole line. Per-pixel cost: 0.
 //   - Bar POSITIONS are serial too, once per FRAME, through ONE quarter-wave
 //     sine table and shift-add amplitudes -- no multiplier, no DSP block.
-//   - SCOPE stores precomputed SCREEN ROWS, not samples, so the display path
-//     only compares; 360 x 20 bits fits one M10K.
 //   - Three registered display stages, the same as idle_logo, so both share
 //     emu's overlay slot with the same horizontal lead (VIZ_QX_LEAD).
 //
-//  ⚠ The scope decimates dec_audio_l/r to ~6.6 kHz with no anti-alias filter.
-//  It is a picture, not a measurement: aliasing just makes bright material draw
-//  a slightly busier trace.
 //  ⚠ No `function`s and no N'(expr) casts anywhere in this file -- both have
 //  been silently miscompiled by Quartus 17 in this project (see CLAUDE.md).
 //============================================================================
@@ -51,7 +54,7 @@ module cdda_viz #(
     input  wire        pal_mode,
     input  wire        frame_tick,            // av_refresh_tick
     input  wire        vis,                   // emu's viz_vis gate
-    input  wire  [1:0] mode,                  // 0 copper, 1 xor, 2 scope, 3 off
+    input  wire  [1:0] mode,                  // 0 copper, 1 xor, 2 logo (off)
 
     input  wire [15:0] audio_l,               // signed PCM, held between samples
     input  wire [15:0] audio_r,
@@ -62,7 +65,7 @@ module cdda_viz #(
     output reg   [7:0] viz_b
 );
 
-    localparam [1:0] M_COPPER = 2'd0, M_XOR = 2'd1, M_SCOPE = 2'd2;
+    localparam [1:0] M_COPPER = 2'd0, M_XOR = 2'd1;
 
     wire [11:0] act_h = pal_mode ? 12'd576 : 12'd480;
 
@@ -284,77 +287,13 @@ module cdda_viz #(
     wire [7:0] thr = p8;                       // munching threshold sweeps
 
     // =====================================================================
-    // SCOPE: triggered capture of screen rows
-    // =====================================================================
-    localparam [8:0] CAP_N = 9'd360;           // one sample per 2-px column
-    (* ramstyle = "M10K, no_rw_check" *) reg [19:0] sc_ram [0:511];
-
-    wire [9:0] c_l = pal_mode ? 10'd136 : 10'd112;
-    wire [9:0] c_r = pal_mode ? 10'd316 : 10'd262;
-    // +/-96 rows at full scale = s>>9 + s>>10, sign-extended
-    wire [9:0] off_l = {{3{audio_l[15]}}, audio_l[15:9]} + {{4{audio_l[15]}}, audio_l[15:10]};
-    wire [9:0] off_r = {{3{audio_r[15]}}, audio_r[15:9]} + {{4{audio_r[15]}}, audio_r[15:10]};
-    wire [9:0] row_l = c_l + off_l;
-    wire [9:0] row_r = c_r + off_r;
-
-    reg  [8:0] wa;
-    reg        cap, l_neg_q;
-    reg [10:0] trig_to;
-    wire       sc_we = s_tick && cap;
-
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            wa <= 9'd0; cap <= 1'b1; l_neg_q <= 1'b0; trig_to <= 11'd0;
-        end else if (s_tick) begin
-            l_neg_q <= audio_l[15];
-            if (cap) begin
-                if (wa == CAP_N - 9'd1) begin
-                    wa <= 9'd0; cap <= 1'b0; trig_to <= 11'd0;
-                end else
-                    wa <= wa + 9'd1;
-            end else begin
-                trig_to <= trig_to + 11'd1;
-                // L rising through zero -- or give up, so silence still draws
-                if ((l_neg_q && !audio_l[15]) || (trig_to == 11'h7FF))
-                    cap <= 1'b1;
-            end
-        end
-    end
-
-    reg  [8:0] ra;
-    reg [19:0] sc_q;
-    always @(posedge clk) begin                // sync RAM, no reset (M10K)
-        if (sc_we) sc_ram[wa] <= {row_l, row_r};
-        sc_q <= sc_ram[ra];
-    end
-
-    // =====================================================================
-    // Display pipeline: A (region, coords) -> B (RAM read, xor) -> C (resolve)
+    // Display pipeline: A (region, coords) -> B (xor) -> C (resolve)
     // =====================================================================
     wire [11:0] hq     = h_pos - VIZ_QX_LEAD;
     wire        in_act = (hq < 12'd720) && (v_pos < act_h);
 
     reg        a_in, b_in;
-    reg [11:0] a_v, b_v;
-    reg  [8:0] a_xv, a_yv, b_m, b_ci;
-    reg  [8:0] c_ci_last;
-    reg [19:0] col_cur, col_prev;
-
-    // scope span: each column is 2 px wide, so the trace joins this column's
-    // row to the previous column's -- a line, not a dotted plot
-    wire        new_col = (b_ci != c_ci_last);
-    wire [19:0] s_now   = new_col ? sc_q : col_cur;
-    wire [19:0] s_prv   = (b_ci == 9'd0) ? s_now : (new_col ? col_cur : col_prev);
-    wire  [9:0] nl = s_now[19:10], pl = s_prv[19:10];
-    wire  [9:0] nr = s_now[9:0],   pr = s_prv[9:0];
-    wire  [9:0] lo_l = (nl < pl) ? nl : pl;
-    wire  [9:0] hi_l = (nl < pl) ? pl : nl;
-    wire  [9:0] lo_r = (nr < pr) ? nr : pr;
-    wire  [9:0] hi_r = (nr < pr) ? pr : nr;
-    wire        vok  = (b_v[11:10] == 2'b00);
-    wire        on_l = vok && (b_v[9:0] >= lo_l) && (b_v[9:0] <= hi_l);
-    wire        on_r = vok && (b_v[9:0] >= lo_r) && (b_v[9:0] <= hi_r);
-    wire        on_g = vok && b_ci[1] && ((b_v[9:0] == c_l) || (b_v[9:0] == c_r));
+    reg  [8:0] a_xv, a_yv, b_m;
 
     wire [7:0] xc   = b_m[7:0] + tc;
     wire       xlit = (b_m[7:0] < thr) ^ kick[3];
@@ -364,28 +303,18 @@ module cdda_viz #(
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            a_in <= 1'b0; a_v <= 12'd0; a_xv <= 9'd0; a_yv <= 9'd0; ra <= 9'd0;
-            b_in <= 1'b0; b_v <= 12'd0; b_m <= 9'd0; b_ci <= 9'd0;
-            c_ci_last <= 9'h1FF; col_cur <= 20'd0; col_prev <= 20'd0;
+            a_in <= 1'b0; a_xv <= 9'd0; a_yv <= 9'd0;
+            b_in <= 1'b0; b_m <= 9'd0;
             viz_on <= 1'b0; viz_r <= 8'd0; viz_g <= 8'd0; viz_b <= 8'd0;
         end else begin
-            // A
-            a_in <= vis && in_act && (mode != 2'd3);
-            a_v  <= v_pos;
+            // A -- mode 2 is the logo, so only 0/1 draw (bit 1 set = not us)
+            a_in <= vis && in_act && !mode[1];
             a_xv <= hq[9:1] + sx;
             a_yv <= v_pos[9:1] + sy;
-            ra   <= hq[9:1];
-            // B (sc_q lands here, read at ra)
+            // B
             b_in <= a_in;
-            b_v  <= a_v;
             b_m  <= a_xv ^ a_yv;
-            b_ci <= ra;
             // C
-            if (new_col) begin
-                c_ci_last <= b_ci;
-                col_prev  <= col_cur;
-                col_cur   <= sc_q;
-            end
             viz_on <= 1'b0;
             if (b_in) begin
                 case (mode)
@@ -401,13 +330,6 @@ module cdda_viz #(
                             viz_g <= {3'b000, xg[7:3]};
                             viz_b <= {3'b000, xb[7:3]};
                         end
-                    end
-                    M_SCOPE: begin
-                        viz_on <= on_l | on_r | on_g;
-                        if (on_l && on_r)  begin viz_r <= 8'hFF; viz_g <= 8'hFF; viz_b <= 8'hFF; end
-                        else if (on_l)     begin viz_r <= 8'h40; viz_g <= 8'hFF; viz_b <= 8'h60; end
-                        else if (on_r)     begin viz_r <= 8'hFF; viz_g <= 8'hB0; viz_b <= 8'h30; end
-                        else               begin viz_r <= 8'h38; viz_g <= 8'h38; viz_b <= 8'h38; end
                     end
                     default: ;
                 endcase

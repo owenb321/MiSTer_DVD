@@ -379,14 +379,14 @@ on hardware.**
 
 ### Visualizers — `dvd/cdda_viz.sv`
 
-Angle cycles **copper bars → XOR "munching squares" → scope → logo**, starting on
+Angle cycles **copper bars → XOR "munching squares" → logo**, starting on
 copper; an OSD Reset returns there. Angle was free: the angle switch acts only
 while `cell_ready`, which a CD never is. The mode register lives in `emu.sv`, and
 the visualizer shares `idle_logo`'s overlay slot — the two are mutually exclusive
 by mode, and `cdda_viz` has the same three registered display stages and the same
 `VIZ_QX_LEAD = 12`.
 
-All three read ONE analysis: a peak envelope of `(|L|+|R|)` (instant attack at
+Both read ONE analysis: a peak envelope of `(|L|+|R|)` (instant attack at
 ~6.6 kHz, ~12 %/frame decay), a slow average of it, and a `kick` timer armed when
 the envelope jumps well above the average.
 
@@ -400,17 +400,34 @@ the envelope jumps well above the average.
   the line. Bar positions are solved once per FRAME, also serially, through one
   64-entry quarter-wave sine table and shift-add amplitude steps (×0.5 / 0.75 /
   1 / 1.25 by loudness). No multiplier, no DSP block.
-- **The scope stores screen ROWS, not samples** — `row = centre + s>>9 + s>>10`
-  (±96 rows) is computed at write time, so the display path only compares.
-  360 entries × 20 bits is exactly one M10K. Each column is 2 px wide and joins
-  its row to the previous column's, so it draws a line rather than dots. Capture
-  triggers on L's rising zero crossing (with a timeout so silence still draws).
-
 ⛔ **Lissajous (L against R) was not built:** it needs a 2-D bitplane, and even a
-small one costs several M10Ks. The two-trace scope fits in one.
+small one costs several M10Ks.
 
-⚠ The scope decimates to ~6.6 kHz with no anti-alias filter. It is a picture, not
-a measurement.
+### The scope was built, then dropped (`dev-cddaphys5`, 2026-09-11)
+
+A third visualizer — a two-trace oscilloscope, L above R, triggered on L's rising
+zero crossing — shipped in `dev-cddaphys2` through `dev-cddaphys4`. It worked. It
+was removed at the user's request, to be conservative with logic.
+
+**What it cost was measured, not estimated.** Synthesising `cdda_viz` alone with
+`mode` tied to each constant, so Quartus prunes the other arms:
+
+| arm | ALMs | memory |
+|---|---|---|
+| copper | ~120 | — |
+| scope | ~105 | **1 M10K** |
+| xor | ~60 | — |
+
+The scope stored precomputed screen ROWS, not samples (`row = centre + s>>9 +
+s>>10`, ±96 rows, 360 entries × 20 bits = exactly one M10K), so the display path
+only compared — which is what made it cheap in ALMs and expensive in memory. With
+RAM at 90 % and the design in the congestion regime at 98 % ALM, **the memory block
+was the expensive half**, and that is why the scope went rather than a cheaper-
+looking arm.
+
+⚠ **The cycle is now three stops, not four:** `viz_mode` wraps at 2 and the logo is
+mode 2. Leaving a dead fourth mode in place would have made Angle appear to hang on
+a blank screen — the renumbering is the point of the change, not tidying.
 
 ### Per-track bar, FF/REW at the track edges
 
@@ -446,10 +463,12 @@ the skip popup. `Debug Overlay` keeps `CH`, since it repurposes that field.
 ### Tests
 
 - `bench/dvd/cdda_viz_tb.sv` rasters real frames and checks **rendered pixels**,
-  not internal state: scope spread / flat silent channel / continuity (pixel
-  count, since a dotted plot also lights every column) / rising-zero trigger /
-  nothing below; copper full coverage, one colour per line, bar cores that move;
-  XOR variation and scroll; both gates.
+  not internal state: copper full coverage, one colour per line, bar cores that
+  move between frames; XOR variation and scroll; both gates. ⚠ **The retired scope
+  arm left a lesson worth more than the feature:** its continuity check first
+  counted lit COLUMNS — which a dotted plot also lights, so it passed a trace drawn
+  as dots — and only counting PIXELS (~4,700 continuous vs ~720 dotted) could fail
+  it. Reach for the pixel count the next time anything draws a line.
 - `transport_hud_tb` T22 (label on and back off), `seek_bar_tb` T8d/T9f (a
   converted tick list stays hidden, and the chapter cursor drops).
 - `run_wav.sh` now runs `cdda_toc_tb` and `cdda_viz_tb`.
