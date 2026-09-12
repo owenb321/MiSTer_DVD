@@ -455,7 +455,14 @@ sleep 2
 [ -p {AGENT_FIFO} ] && echo "agent: listening" || echo "agent: FIFO MISSING"
 ''')
         print(out.strip())
-    if not args.agent:
+    # ⚠ `--agent` means "agent only" ONLY when no core was named. The skill's own
+    # documented usage is `deploy --agent --rbf releases/X.rbf`, and this read
+    # `if not args.agent`, so that line started the daemon, installed the Main and
+    # SILENTLY SKIPPED THE CORE -- the exact outcome the RESTORE_SCRIPT comment
+    # above was written about ("the Main landed, the core did not, and the two
+    # silently disagreed"), reached by a different route and with no warning at
+    # all. An explicit --rbf is an instruction, so it wins.
+    if args.rbf or not args.agent:
         rbf = args.rbf or newest_rbf()
         print(f'deploy: {os.path.basename(rbf)} -> {CORE_DIR}/{HIL_RBF}')
         scp(rbf, f'{CORE_DIR}/{HIL_RBF}')
@@ -854,7 +861,11 @@ for p in $(ls /proc | grep -E '^[0-9]+$'); do
 done
 [ -p ''' + AGENT_FIFO + ''' ] && echo "agent=listening" || echo "agent=down"
 echo "--- dvd_report.log ---"
-tail -5 /tmp/dvd_report.log 2>/dev/null
+# ⚠ `|| true`: the script's status is its LAST command's, and this log does not
+# exist until the DVD core has run once -- so on a freshly booted box `state`,
+# the first thing the skill tells you to run, aborted with an opaque
+# "remote command failed (rc=1)" and printed nothing it had already gathered.
+tail -5 /tmp/dvd_report.log 2>/dev/null || true
 ''')
     print(out.rstrip())
     st = os.path.join(HERE, '.mister_state.json')
@@ -901,7 +912,9 @@ def main():
     p.add_argument('--rbf', help='default: newest releases/*.rbf')
     p.add_argument('--main', metavar='PATH',
                    help='install a custom Main safely (never overwrites the running one)')
-    p.add_argument('--agent', action='store_true', help='only (re)start the key daemon')
+    p.add_argument('--agent', action='store_true',
+                   help='(re)start the key daemon; alone = that and nothing else, '
+                        'but an explicit --rbf is still flashed')
     p.add_argument('--rbf-only', action='store_true')
     p.set_defaults(fn=cmd_deploy)
 
