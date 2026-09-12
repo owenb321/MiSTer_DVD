@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate for issue #81: check WHICH FACT emu.sv puts on subp_stream_map.menu_dom.
+"""Gate for issue #81: check WHICH FACTS emu.sv puts on subp_stream_map's inputs.
 
 WHY THIS EXISTS, AND WHY IT IS NOT A UNIT TEST
 ----------------------------------------------
@@ -16,8 +16,19 @@ is no emu-level testbench in this project. This reads the port connection out of
 `csync_pipe_tb` pattern: a gate that cannot go stale, because the thing it
 asserts is the source file.
 
-It is RED on the pre-fix file (no `.menu_dom` port at all), and RED on the
-plausible re-regression (`.menu_dom (menu_sp_ctx)` -- a context, not a domain).
+Two ports are checked, both of which carried the wrong fact before #81:
+
+  .menu_dom  must be the menu DOMAIN (menus_on && menu_active), never the menu
+             CONTEXT (which includes sp_menu_early, the in-title game/motion menu)
+  .wide      must reach the TITLE VTS's IFO aspect (title_ar_wide) in the in-title
+             MENU context, because libdvdnav's vm_get_video_attr() returns
+             vtsi_mat->vts_video_attr in DVD_DOMAIN_VTSTitle -- the MPEG sequence
+             header is not what a conforming player reads, and a menu authored 16:9
+             anamorphic with a 4:3 sequence-header code would take the 4:3 field
+
+It is RED on the pre-fix file (no `.menu_dom` port at all, and `.wide` on the
+sequence header) and RED on the plausible re-regressions (`.menu_dom
+(menu_sp_ctx)` -- a context, not a domain; `.wide (ar_wide_auto_eff)`).
 
     python3 tools/check_subp_map_wiring.py [emu.sv]     # exit 0 = wired right
     git show <pre-fix>:dvd/emu.sv > /tmp/old.sv && \
@@ -154,6 +165,34 @@ def main():
                              'context in the TITLE domain. This is issue #81.'
                              % (expr, bad))
 
+    # ---- .wide: the IFO's aspect for a menu, not the sequence header's --------
+    # Same class of defect as .menu_dom -- a port carrying the wrong FACT -- and it
+    # is the one that decides whether #81's fix does anything: the map picks the
+    # [28:24] (4:3) field when `wide` is 0, and DVD menus are routinely authored
+    # 16:9 anamorphic with a 4:3 sequence-header code. libdvdnav's
+    # vm_get_video_attr() returns vtsi_mat->vts_video_attr in DVD_DOMAIN_VTSTitle,
+    # so an in-title menu must resolve against the IFO.
+    wexpr = conn.get('wide')
+    if wexpr is None:
+        if body is not None:
+            fails.append('port .wide is not connected on %s' % (inst,))
+    else:
+        wrhs = wexpr
+        if re.fullmatch(r'\w+', wexpr):
+            a = assign_of(src, wexpr)
+            if a is not None:
+                wrhs = a
+        wt = terms(wrhs)
+        if not any('title_ar_wide' in x for x in wt):
+            fails.append('.wide (%s) never reaches the TITLE VTS\'s IFO aspect '
+                         '(title_ar_wide) -- an in-title menu would resolve its '
+                         'subpicture variant against the MPEG sequence header, which '
+                         'is not what a conforming player reads (issue #81)' % wexpr)
+        if 'sp_menu_early' not in wt:
+            fails.append('.wide (%s) does not distinguish the in-title MENU context '
+                         '(sp_menu_early) -- the IFO aspect must apply THERE and '
+                         'nowhere else, or every subtitle path moves with it' % wexpr)
+
     if fails:
         print('FAIL  subp_stream_map wiring in %s' % path)
         for f in fails:
@@ -162,6 +201,8 @@ def main():
 
     print('PASS  subp_stream_map.menu_dom <- %s  (a DOMAIN fact, not a menu context)'
           % expr)
+    print('PASS  subp_stream_map.wide     <- %s  (the IFO aspect in a menu context)'
+          % wexpr)
     return 0
 
 

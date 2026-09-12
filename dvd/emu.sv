@@ -1342,6 +1342,7 @@ wire [6:0]  res_ttn_w;
 wire [15:0] rd_next_pgcn, rd_prev_pgcn, rd_goup_pgcn;
 wire [7:0]  cur_cell_cmdnr_w;
 wire        menu_ar_wide_w;      // 1 = loaded menu is 16:9 (IFO V_ATR, not seq hdr)
+wire        title_ar_wide_w;     // 1 = loaded TITLE's VTS is 16:9 (IFO VTS_V_ATTR@0x200)
 wire        vm_cmd_we;
 wire [11:0] vm_cmd_waddr;
 wire [7:0]  vm_cmd_wdata;
@@ -2313,6 +2314,13 @@ wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
 // (the HW round-1 lesson recorded at nav_pci's .disp_mode below).
 wire [1:0]  sp_disp_mode_eff = menu_sp_ctx ? 2'd0 : sp_disp_mode;
 
+// Which aspect the subpicture variant is resolved against. Menu-domain menu:
+// the menu's VTSM/VMGM V_ATR (as before, via ar_wide_auto_eff). In-title menu:
+// the TITLE VTS's own IFO attribute, which is what libdvdnav reads in
+// DVD_DOMAIN_VTSTitle. Everything else: unchanged.
+wire        sp_map_wide = sp_menu_early && !menu_dom_live ? title_ar_wide_w
+                                                          : ar_wide_auto_eff;
+
 wire [4:0]  sp_phys_streamN;
 wire        sp_stream_absent;
 subp_stream_map u_subp_map (
@@ -2326,9 +2334,16 @@ subp_stream_map u_subp_map (
     .menu_dom     (menu_dom_live),
     .logical      (sp_sel_log),
     .ctl_sel      (subp_ctl_sel),
-    // A menu's aspect is the MENU's own IFO V_ATR (ar_wide_auto_eff), not the
-    // decoded stream's; the two are the same signal on every non-menu path.
-    .wide         (ar_wide_auto_eff),
+    // A menu's aspect is the MENU's own IFO V_ATR, not the decoded stream's -- and
+    // that is true of a TITLE-domain menu too (issue #81). libdvdnav's
+    // vm_get_video_attr() returns vtsi_mat->vts_video_attr in DVD_DOMAIN_VTSTitle,
+    // so a conforming player resolves an in-title PGC's subpicture variant against
+    // VTS_V_ATTR@0x200; we used the MPEG sequence header there, and DVD menus are
+    // routinely authored 16:9 anamorphic with a 4:3 sequence-header code -- which
+    // would take the [28:24] field (usually 0) and leave the highlight with
+    // nothing again. Scoped to the MENU context only: every other path, the
+    // white-rabbit SetSTN included, keeps the HW-proven ar_wide_auto_eff.
+    .wide         (sp_map_wide),
     .disp_mode    (sp_disp_mode_eff),
     .any_present  (subp_any_present),
     .phys_streamN (sp_phys_streamN),
@@ -2757,6 +2772,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .title_first_rbn (title_first_rbn_w),         // seek-bar: title RBN span
     .title_last_rbn  (title_last_rbn_w),
     .menu_ar_wide   (menu_ar_wide_w),
+    .title_ar_wide  (title_ar_wide_w),
 
     .sd_lba         (sd_lba),
     .sd_rd          (sd_rd),

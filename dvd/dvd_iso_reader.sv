@@ -385,6 +385,15 @@ module dvd_iso_reader #(
     // Auto aspect while a menu is active (titles keep the seq-header path).
     // 1 = the loaded menu domain is 16:9 (display aspect bits 11:10 == 3).
     output reg        menu_ar_wide,
+    // TITLE-domain aspect, from VTS_V_ATTR@0x200 of the same VTSI_MAT sector the
+    // Phase-10 attribute sweep already has resident. Same reason menu_ar_wide
+    // exists, one domain over: libdvdnav's vm_get_video_attr() returns
+    // vtsi_mat->vts_video_attr in DVD_DOMAIN_VTSTitle, so a conforming player
+    // resolves a TITLE PGC's subpicture variant against the IFO, not against the
+    // MPEG sequence header. emu consumes it only for an IN-TITLE MENU's
+    // subp_control lookup (issue #81) -- the display aspect keeps the proven
+    // sequence-header path.
+    output reg        title_ar_wide,
 
     // hps_io sd_* interface (directly connected)
     output reg [31:0] sd_lba,
@@ -547,6 +556,7 @@ reg [10:0] attr_addr;
 reg [2:0]  attr_idx;
 reg [2:0]  attr_j;
 reg        attr_phase;           // 0 = audio table, 1 = subpicture table
+reg        attr_vatr;            // 1 = the pending read is VTS_V_ATTR@0x200 (one-shot)
 reg        attr_cnt_pending;     // 1 = the pending read is a stream-count byte
 reg [5:0]  attr_resume;          // FSM state to resume after the sweep
 reg [5:0]  ptt_resume;           // Phase 6: state to resume after the PTT-table load
@@ -1888,6 +1898,8 @@ always @(posedge clk or negedge rst_n) begin
         dom          <= DOM_TT;
         menu_dom     <= 1'b0;
         menu_ar_wide <= 1'b0;             // default 4:3 until a menu V_ATR is read
+        title_ar_wide<= 1'b0;             // default 4:3 until a title V_ATR is read
+        attr_vatr    <= 1'b0;
         use_jcell    <= 1'b0;
         want_pgcn    <= 16'd1;
         want_entry   <= 4'd0;
@@ -2959,7 +2971,10 @@ always @(posedge clk or negedge rst_n) begin
                     fetch_ret  <= S_ATTR_RD;
                     attr_resume<= S_PTTLD_MAT;
                     attr_phase <= 1'b0; attr_cnt_pending <= 1'b1;
-                    attr_addr  <= 11'd515;             // nr_of_vts_audio_streams
+                    // ONE extra byte before the audio count: VTS_V_ATTR@0x200's
+                    // high byte, in the same resident sector (issue #81).
+                    attr_vatr  <= 1'b1;
+                    attr_addr  <= 11'd512;             // VTS_V_ATTR @0x200 (high byte)
                     attr_idx   <= 3'd0; attr_j <= 3'd0;
                     fi         <= 6'd0;
                     fi_cap_v   <= 1'b0;
@@ -2978,7 +2993,15 @@ always @(posedge clk or negedge rst_n) begin
             // cycles, one-off at the title mount. Resumes attr_resume.
             S_ATTR_RD: state <= S_ATTR_CAP;   // pb_raddr = attr_addr; latch next cycle
             S_ATTR_CAP: begin
-                if (attr_cnt_pending) begin
+                if (attr_vatr) begin
+                    // VTS_V_ATTR@0x200 high byte. display_aspect_ratio is bits
+                    // 11:10 of the BE u16 (both set = 3 = 16:9) = 0x0C here --
+                    // the same decode S_MENU_VATR does for the menu domains.
+                    title_ar_wide <= (pb_rdata & 8'h0C) == 8'h0C;
+                    attr_vatr <= 1'b0;
+                    attr_addr <= 11'd515;              // on to the audio count
+                    state     <= S_ATTR_RD;
+                end else if (attr_cnt_pending) begin
                     // stream-count byte. Clamp to 1..8 (a switch needs >=1 valid
                     // target; only the low-8 substreams are routable).
                     if (!attr_phase)
