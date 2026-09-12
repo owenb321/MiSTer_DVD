@@ -1300,7 +1300,14 @@ worse maintenance burden than targeted in-place edits. So:
   ⚠ **No local repro, quantified: 958 ISOs → 7 discs have a title-domain PGC resolving
   logical 0 non-zero, and NONE of the 7 carries an in-title HLI** (`nav_extract.py
   --title-vob`), so they are untouched either way — the same standing as #60/#61, which
-  also could not be reproduced locally. ⚠ The reporter did not pass `--nav-packs`, so the
+  also could not be reproduced locally.
+  ★ **The one class this touches is MEASURED bit-identical, not argued so: Scene It's game
+  VTS declares `nr_of_vts_subp_streams = 0` with the AVAILABLE BIT CLEAR on every
+  `subp_control[0]`**, and `use_map` requires `ctl_sel[31]` — so it stays on the identity
+  fallback → physical 0 and the domain gate never gets to matter. (Its highlight works
+  because the disc sends an SPU on `0x20` whatever its IFO table says.) The discs this can
+  move are exactly: available bit SET **and** a non-zero id for the presented aspect
+  **and** an in-title HLI menu. ⚠ The reporter did not pass `--nav-packs`, so the
   HLI itself is not in evidence and the diagnosis is structural.
   ⚠ **NEXT SUSPECT IF THE HW ROUND FAILS: `wide`.** An in-title menu takes it from
   `ar_wide_auto` (the DECODED sequence header) while a menu-domain menu uses the IFO's

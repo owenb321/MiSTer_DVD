@@ -461,6 +461,17 @@ locally" standing as #60/#61 itself. Those 7 are unaffected either way: with no 
 `menu_sp_ctx` never asserts and the user subtitle path resolves by raw index exactly as
 before.
 
+★ **And the one class this change actually touches is measured bit-identical, not argued
+so.** Scene It is the in-title-menu reference disc, and its game VTS declares
+`nr_of_vts_subp_streams = 0` with the **available bit clear on every PGC's
+`subp_control[0]`** (`VTS_V_ATTR = 0x4300`, NTSC 4:3). `use_map = use_map_dom &&
+ctl_sel[31]`, so the availability term keeps it on the identity fallback → physical 0,
+exactly as before — the domain gate never gets to matter. Its highlight works today
+because the disc sends an SPU on `0x20` regardless of what its IFO subp table says, and
+that is untouched. So the set of discs this change can move is precisely: a title-domain
+PGC with the available bit SET, a non-zero physical id for the presented aspect, **and**
+an in-title HLI menu.
+
 ⚠ **The next suspect if the HW round fails is `wide`.** For an in-title menu it is
 `ar_wide_auto` — the **decoded sequence header** — while a menu-domain menu uses the
 IFO's `VTSM_V_ATR` precisely because "DVD menus are routinely authored 16:9 anamorphic
