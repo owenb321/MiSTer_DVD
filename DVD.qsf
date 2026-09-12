@@ -1111,4 +1111,12 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   bit_allocation -1,453, mantissa_dequant -484, bit_readers -366, dvd_iso_reader
 #   -251, dvd_vm -150, imdct -80, pgc_palette -55/-359 regs, pts_assoc -732 regs,
 #   dvd_telem -264 regs, alsa gone. Record: docs/logic_reclaim.md.
+# 2026-09-12 (fix/hdmi-audio-teardown, dev-hdmiteardown -- aud_route.bs_session +
+# the CMD_AF format word; the HDMI non-PCM flag was inherited by the next core):
+# SEED 7 held FIRST roll -- clk_dec 92.77 @100C / 88.9 @-40C (gate 86.0, PASS both
+# corners) at 87% ALM (36,632 needed), registers 50,565 (+68), RAM 501/553,
+# DSP 94/112. Build DVD_hdmiteardown_20260912_0320.rbf.
+# ⚠ The hot corner gives back 3.3 MHz against branch C's 96.06 for one flop and a
+# few wires -- netlist variance at this density, not a cost of the change; still
+# 6.8 MHz clear of the gate. Detail: docs/hdmi_bitstream.md §5a.
 set_global_assignment -name SEED 7
