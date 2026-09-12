@@ -249,6 +249,38 @@ system header, padding or `private_stream_2`. Nothing about this relaxes that.
 answers a different question, and the expensive one. The manual's on-player section says
 so to users.
 
+### How long the user waits, and why the NOTICE was the real risk
+
+MEASURED on the rig (image media, core not running): the chord's child takes **1.38 s**
+on SCENEIT_HP and **1.98 s** on MEN_IN_BLACK with the window, against 0.86 s for the nav
+tables alone. So the window costs about **half a second** and the whole gesture is ~2 s.
+
+⚠ **The PHYSICAL-DISC case is NOT measured** — the rig's tray held an audio CD (TOC 1-12,
+so raw ISO9660 reads give EIO) when this was written. The estimate is 4 MB sequential from
+the playhead on a drive that is already spinning and already positioned there, which is
+~3 s at DVD 1x and well under 1 s at 4x+; but that is arithmetic, not a measurement, and
+the reporter of issue #81 was on a physical disc. Measure it when a DVD is in the tray.
+⚠ There is also a second cost there that is not wait time: the collector reads the SAME
+drive the core is streaming from. The child is forked so it cannot starve the poll loop
+(the `dvd_phys` lesson), but the DRIVE is shared and a long read could still hiccup
+playback.
+
+★ **The thing that would actually annoy a user is not the duration — it is silence.**
+`start()` posted "Generating support bundle..." for **2000 ms** and then nothing until
+`reap()` posted the result. That looked fine only because the job also takes ~2 s: two
+unrelated numbers that happened to match, not a design. Anything slower drops the notice
+before the result arrives, and a user who sees a "generating" message vanish with nothing
+after it concludes it failed and presses the chord again. The notice is **8 s** now; the
+result message replaces it the moment it arrives, so nothing is lost in the fast case.
+
+⚠ **And extending it forced honouring a rule this project already wrote down.**
+`dvd_report_tick()` raises `InfoMessage` from a poll tick, which is the exact shape that
+froze MGL launches (issue #48) — `INTEGRATION.md` says to check `dvd_launch_ui_busy()` and
+defer, and this path never did. In practice the chord needs a deliberate 2 s human hold
+and so cannot collide with a launch, but "cannot happen" is what the pumps that DID freeze
+it were assumed to be. It defers now; the cost is one more press of a chord nobody is
+plausibly holding during a launch.
+
 ### The installed script may predate the flag
 
 ⚠⚠ **MEASURED ON THE RIG, and it is why the flag is not passed unconditionally: an

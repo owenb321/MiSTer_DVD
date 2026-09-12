@@ -22,6 +22,7 @@
 #include "dvd_report.h"
 #include "dvd_css.h"
 #include "dvd_phys.h"
+#include "dvd_launch.h"
 
 // ---------------------------------------------------------------------------
 // The trigger
@@ -368,7 +369,18 @@ static void start(void)
 	}
 
 	child = p;
-	InfoMessage("Generating support bundle...", 2000, "DVD");
+	// ⚠ 8 s, not the 2 s this used to carry. The job takes ~1.4-2.0 s (MEASURED on
+	// the rig, image media), so a 2 s message happened to stay up for exactly as
+	// long as the work took -- but that was a COINCIDENCE of two unrelated numbers,
+	// not a design. Anything slower (an optical disc, a drive spinning up, a bigger
+	// window) drops the message before reap() posts the result, and the user sees
+	// the "Generating" notice vanish with nothing after it -- which reads as a
+	// failure and invites a second chord press. The result message replaces this one
+	// the moment it arrives, so a longer timeout costs nothing in the fast case.
+	//
+	// It stays well under dvd_launch's 20 s MGL watchdog, and the MGL guard below is
+	// why extending it is safe at all.
+	InfoMessage("Generating support bundle...", 8000, "DVD");
 }
 
 static void reap(void)
@@ -417,6 +429,16 @@ void dvd_report_tick(void)
 	if (!is_dvd()) return;
 
 	reap();
+
+	// ⚠ This tick raises InfoMessage, and that is the exact shape that froze MGL
+	// launches (issue #48): while mgl->done == 0, HandleUI takes the MGL branch and
+	// InfoMessage pins menustate = MENU_INFO, so the FSM never reaches MENU_NONE2.
+	// In practice the chord needs a deliberate 2 s human hold and so cannot collide
+	// with a launch -- but "cannot happen" is what the pumps that DID freeze it were
+	// assumed to be, the rule in INTEGRATION.md admits no exception, and the message
+	// above is now 8 s rather than 2. Deferring costs the user one more press of a
+	// chord they are vanishingly unlikely to be holding.
+	if (dvd_launch_ui_busy()) return;
 
 	if (chord_since && !fired && child < 0 && (now_ms() - chord_since) >= HOLD_MS)
 	{

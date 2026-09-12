@@ -41,6 +41,7 @@ static void  InfoMessage(const char *, int, const char * = 0) {}
 static unsigned long GetTimer(unsigned long d)         { return d; }
 static int   CheckTimer(unsigned long)                 { return 1; }
 static const char *getRootDir(void)                    { return "/media/fat"; }
+static int   dvd_launch_ui_busy(void)                  { return 0; }
 
 // Declared by the real dvd_css.h / dvd_phys.h the module includes, so these are
 // DEFINITIONS of those, not shadowing stubs -- the linker takes them.
