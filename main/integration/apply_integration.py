@@ -517,4 +517,55 @@ m = replace_once(m,
 write(m_path, m)
 print("[integration] menu.cpp patched (MGL delay)")
 
+# ---------------------------------------------------------------- fpga_io.cpp
+# Teardown of the ADV7513's non-PCM mode. This process is the ONLY one that can
+# do it: every other core runs stock Main, whose hdmi_config_init() rewrites 0x0C
+# but has no 0x12 entry, so the non-PCM flag is never cleared by anybody else --
+# and our own re-exec cannot help, because user_io_init() hands off to the core's
+# `main=` binary BEFORE video_init() runs (stock user_io.cpp: the handoff at
+# ~1484, video_init() at 1514). See MiSTer_DVD/docs/hdmi_bitstream.md.
+fio_path = os.path.join(ROOT, "fpga_io.cpp")
+if not os.path.exists(fio_path):
+    fail(35, f"{fio_path} not found")
+fio = read(fio_path)
+
+# 35. include
+fio = insert_after(fio, '#include "fpga_io.h"',
+    '#include "support/dvd/dvd_hdmi_audio.h"   // dvd:hdmibs\n',
+    35, 'support/dvd/dvd_hdmi_audio.h')
+
+# 36. app_restart() — every core load reaches here (fpga_load_rbf() ends in it).
+# Placed after this function's fpga_core_reset(1), so the core is already silent
+# and PCM can never be presented into a link still expecting non-PCM.
+fio = insert_before(fio, '\tinput_switch(0);',
+    'dvd_hdmi_audio_teardown();   // dvd:hdmibs - never hand the next core a non-PCM link\n',
+    36, 'dvd_hdmi_audio_teardown')
+
+# 37. reboot() — the OSD Reboot row, `fpga_load_rbf(name, cfg)`, and app_restart's
+# own fallback. A warm reboot resets the HPS, NOT the transmitter, so without this
+# the flag survives into whatever core boots next. Also after fpga_core_reset(1).
+fio = insert_before(fio, '\tusleep(500000);',
+    'dvd_hdmi_audio_teardown();   // dvd:hdmibs - the HPS resets, the ADV7513 does not\n',
+    37, 'dvd:hdmibs - the HPS resets')
+
+write(fio_path, fio)
+print("[integration] fpga_io.cpp patched (hdmi bitstream teardown)")
+
+# ---------------------------------------------------------------- video.cpp
+# 38. Self-heal at our own init. Teardown covers every ORDERLY exit; a crash, a
+# kill, or the board's reset button does not run it. Clearing the flag here means
+# the DVD core itself always starts from PCM, so the machine recovers by loading
+# this core again. It also makes step 19's "the audio block is about to revert to
+# PCM" literally true: stock init_data has no 0x12 entry, which is the whole
+# reason the flag was sticky. The generation watcher re-applies non-PCM straight
+# afterwards if the ack is still held, so an engaged session is unaffected.
+vc = read(vc_path)
+vc = insert_before(vc, 'hdmi_cfg_generation++;',
+    '// dvd:hdmibs - 0x12[7] is the non-PCM flag and init_data does not carry it,\n'
+    '// so nothing else would ever clear it. 0x20 = linear PCM, copyright not asserted.\n'
+    'i2c_smbus_write_byte_data(hdmi_main_fd, 0x12, 0x20);\n',
+    38, 'dvd:hdmibs - 0x12[7] is the non-PCM flag')
+write(vc_path, vc)
+print("[integration] video.cpp patched (non-PCM flag cleared at init)")
+
 print("[integration] done")

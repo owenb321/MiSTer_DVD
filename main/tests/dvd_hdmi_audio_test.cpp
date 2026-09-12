@@ -222,6 +222,103 @@ int main(void)
     } else printf("  ok   explanatory notice still queued: \"%s\"\n", stage_msg);
     cfg.dvd_hdmi_bitstream = 0;
 
+    // -----------------------------------------------------------------------
+    // The reported bug: Passthru left the transmitter in non-PCM mode, and the
+    // next core -- running stock Main, which never writes 0x12 -- inherited it
+    // and played silently. Two halves: PCM is now the resting state, and an
+    // orderly exit restores it. `fake_afmt` bit 15 marks a core that reports
+    // which codec is actually routed; bit 2 is that report.
+    // -----------------------------------------------------------------------
+    printf("[9] v2 core, Passthru selected, nothing playing: the link is NOT claimed\n");
+    // ⚠ Set the word BEFORE reset_world(): its tick runs the real decision, so a
+    // leftover word from the previous arm would engage during the setup and the
+    // preconditions would describe that instead of this test.
+    fake_passthru = 1;
+    fake_afmt = 0x8001;                 // v2 | passthru; no content routed yet
+    reset_world();
+    settle();
+    check("acked", dvd_hdmi_audio_ack(), 0);
+    check("chip left in PCM", cfg_audio_state, 0);
+
+    // ...and it RELEASES when the content stops, which is what an eject looks
+    // like from here: the core forgets the verdict, so this is the state the next
+    // core would otherwise inherit.
+    fake_afmt = 0x8005; settle();
+    check("engaged while a track plays", cfg_audio_state, 1);
+    fake_afmt = 0x8001; settle();
+    check("released once it stops", cfg_audio_state, 0);
+    check("acked after it stops", dvd_hdmi_audio_ack(), 0);
+
+    printf("[10] v2: engage on a bitstream track, release on a PCM one\n");
+    reset_world();
+    fake_afmt = 0x8005;                 // v2 | passthru | bitstream session
+    settle();
+    check("acked", dvd_hdmi_audio_ack(), 1);
+    check("chip in non-PCM", cfg_audio_state, 1);
+    if (trace_index("chip=nonpcm") < 0 || trace_index("ack=1") < 0 ||
+        trace_index("chip=nonpcm") > trace_index("ack=1")) {
+        printf("  FAIL: engage raised the ack before configuring the chip\n"); errors++;
+    } else printf("  ok   engage order: chip then ack\n");
+    reset_world();
+    fake_afmt = 0x8003;                 // v2 | passthru | PCM session
+    settle();
+    check("acked after an LPCM track", dvd_hdmi_audio_ack(), 0);
+    check("chip back in PCM", cfg_audio_state, 0);
+    if (trace_index("ack=0") < 0 || trace_index("chip=pcm") < 0 ||
+        trace_index("ack=0") > trace_index("chip=pcm")) {
+        printf("  FAIL: release restored PCM registers before dropping the ack\n");
+        errors++;
+    } else printf("  ok   release order: ack then chip\n");
+
+    printf("[11] teardown restores PCM for the next core\n");
+    reset_world();
+    fake_afmt = 0x8005; settle();
+    check("engaged first", cfg_audio_state, 1);
+    n_trace = 0;
+    dvd_hdmi_audio_teardown();
+    check("chip after teardown", cfg_audio_state, 0);
+    if (trace_index("chip=pcm") < 0) {
+        printf("  FAIL: teardown did not write the PCM registers\n"); errors++;
+    } else printf("  ok   teardown wrote the PCM registers\n");
+
+    // ...including INSIDE the 50 ms release window, where the ack is already
+    // down but the chip is still non-PCM. A core load landing there is exactly
+    // the case `acked` cannot answer and `chip_nonpcm` can.
+    reset_world();
+    fake_afmt = 0x8005; settle();
+    fake_afmt = 0x8003;                 // switch to PCM content...
+    fake_ms += 20; dvd_hdmi_audio_tick();   // ...ack drops, restore is pending
+    check("ack already down", dvd_hdmi_audio_ack(), 0);
+    check("chip still non-PCM", cfg_audio_state, 1);
+    n_trace = 0;
+    dvd_hdmi_audio_teardown();
+    check("chip after teardown in the window", cfg_audio_state, 0);
+
+    printf("[12] teardown on an untouched chip writes nothing\n");
+    reset_world();
+    fake_passthru = 0; fake_afmt = 0x8000;
+    settle();
+    check("chip in PCM", cfg_audio_state, 0);
+    n_trace = 0;
+    dvd_hdmi_audio_teardown();
+    if (n_trace != 0) {
+        printf("  FAIL: teardown wrote %d time(s) with the chip already in PCM\n", n_trace);
+        errors++;
+    } else printf("  ok   no I2C traffic\n");
+
+    printf("[13] the SAME content word without the v2 flag keeps the old rule\n");
+    // The discriminating pair for [9]: an old core and a new idle one both report
+    // pcm_session = 0, so only the version flag separates "AC-3 is playing" from
+    // "nothing is playing". Without it, engaging is the old, correct guess.
+    reset_world();
+    fake_passthru = 1;
+    fake_afmt = 0x0001;                 // no v2 | passthru, pcm_session = 0
+    settle();
+    check("acked (old core still engages)", dvd_hdmi_audio_ack(), 1);
+    reset_world();
+    fake_passthru = 0; fake_afmt = 0;
+    settle();
+
     if (errors) { printf("dvd_hdmi_audio_test: FAILURES\n"); return 1; }
     printf("dvd_hdmi_audio_test: ALL GREEN\n");
     return 0;

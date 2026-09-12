@@ -152,8 +152,12 @@ sink expects PCM, and a bitstream would arrive as full-scale noise.
 | 19 | `video.cpp` | bump that counter in `hdmi_config_init()` |
 | 20 | `video.cpp` | `hdmi_config_set_audio()` — the audio-only register writer |
 | 21 | `cfg.h` / `cfg.cpp` | `dvd_hdmi_bitstream` ini key (0=auto, 1=off, 2=force) |
+| 35 | `fpga_io.cpp` | include `support/dvd/dvd_hdmi_audio.h` |
+| 36 | `fpga_io.cpp` | `dvd_hdmi_audio_teardown()` in `app_restart()` — every core load ends here |
+| 37 | `fpga_io.cpp` | `dvd_hdmi_audio_teardown()` in `reboot()` — a warm reboot resets the HPS, not the ADV7513 |
+| 38 | `video.cpp` | clear `0x12` (the non-PCM flag) in `hdmi_config_init()` — self-heal after an unclean exit |
 
-Three things here are easy to get subtly wrong:
+Four things here are easy to get subtly wrong:
 
 - **Step 19's anchor is the `for (uint i = 0; ...)` write-loop header, not
   `hdmi_config_set_csc();`.** That second string appears again later in
@@ -166,6 +170,16 @@ Three things here are easy to get subtly wrong:
 - **Bit 14 is nearly the last free `cfg[]` bit.** Stock defines up to
   `CONF_DIRECT_VIDEO2` (bit 13); only 14 and 15 remain. If a future stock version
   claims 14, this step must move rather than collide silently.
+- **Steps 36–38 exist because register `0x12` is STICKY and nobody else clears
+  it.** Stock `init_data` rewrites `0x0C` but has no `0x12` entry at all, so the
+  non-PCM flag we set survives into the next core — which runs stock Main, sends
+  ordinary PCM, and is rendered as a data burst: silent. This process is the only
+  one that can put it back, and it cannot do so on its own re-exec either, because
+  `user_io_init()` hands off to the core's `main=` binary **before** `video_init()`
+  runs. Hence teardown at both exits (36/37), plus 38 so an unclean exit is
+  recovered by loading this core again. Both teardown anchors sit immediately after
+  that function's own `fpga_core_reset(1)`, so the core is already silent when the
+  registers change.
 
 The core marks the option `OX6` rather than `O6`. `OX` means "also handled by the
 HPS": the bit still reaches the core exactly as before, but Main sees the
