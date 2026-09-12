@@ -21,13 +21,17 @@ module aud_route_tb;
     logic [1:0]  frame_type = 0;
     logic [15:0] frame_len = 0;
     logic        ring_ready = 0;
-    logic        dec_owns, wrap_owns, pcm_session;
+    logic        hard_rst_n = 0;
+    logic        sess_clr = 0;
+    logic        dec_owns, wrap_owns, pcm_session, bs_session;
 
     aud_route dut (
-        .clk(clk), .rst_n(rst_n), .split_en(split_en),
+        .clk(clk), .rst_n(rst_n),
+        .hard_rst_n(hard_rst_n), .sess_clr(sess_clr), .split_en(split_en),
         .frame_valid(frame_valid), .frame_type(frame_type), .frame_len(frame_len),
         .ring_ready(ring_ready),
-        .dec_owns(dec_owns), .wrap_owns(wrap_owns), .pcm_session(pcm_session)
+        .dec_owns(dec_owns), .wrap_owns(wrap_owns), .pcm_session(pcm_session),
+        .bs_session(bs_session)
     );
 
     integer errors = 0;
@@ -117,8 +121,15 @@ module aud_route_tb;
         end
     end endtask
 
+    logic boot_bs;      // bs_session as the core comes out of reset
+
     initial begin
-        repeat (4) @(posedge clk); rst_n = 1;
+        repeat (4) @(posedge clk); rst_n = 1; hard_rst_n = 1;
+        repeat (2) @(posedge clk);
+        // PCM is the RESTING state: nothing has played, so the HDMI link must not
+        // be claimed. This is the whole reported bug -- the core used to boot with
+        // the transmitter already in non-PCM mode and leave it there.
+        boot_bs = bs_session;
 
         // ---- TEST 1: a mixed stream routes by codec, byte-exactly -----------
         add(0, 32); add(0, 48); add(2, 40); add(2, 24); add(1, 64); add(3, 16);
@@ -162,6 +173,46 @@ module aud_route_tb;
         if (wrap_frames != 0 || dec_frames != 3) begin
             $display("  FAIL: Decode mode did not give every frame to the decoder");
             errors = errors + 1; end
+
+        // ---- TEST 6: bs_session, the HDMI link-format verdict ---------------
+        // Measured as a LEVEL the ADV7513 would be driven from, at the moments
+        // that actually happen on a disc: boot, a track, a seek, a track change,
+        // an eject. The reset domain is the point -- pcm_session already fails
+        // the seek arm by construction, which is why a second signal exists.
+        split_en = 1;
+        if (boot_bs !== 1'b0) begin
+            $display("  FAIL: bs_session set at boot -- the HDMI link is claimed with nothing playing");
+            errors = errors + 1; end
+
+        add(0, 32); drain_all(200000);          // an AC-3 track starts
+        if (bs_session !== 1'b1) begin
+            $display("  FAIL: bs_session did not follow an AC-3 frame"); errors = errors + 1; end
+
+        // A seek / audio-track switch / aud_flush pulses aud_rst_n. If the
+        // verdict resets there, every chapter skip releases the transmitter to
+        // PCM and re-engages, and the receiver re-locks on each one.
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; repeat (4) @(posedge clk);
+        if (bs_session !== 1'b1) begin
+            $display("  FAIL: an aud_rst_n pulse (seek) dropped bs_session");
+            errors = errors + 1; end
+
+        add(2, 24); drain_all(200000);          // switch to an LPCM track
+        if (bs_session !== 1'b0) begin
+            $display("  FAIL: bs_session stayed set on an LPCM track"); errors = errors + 1; end
+
+        add(0, 32); drain_all(200000);          // back to AC-3, then eject
+        if (bs_session !== 1'b1) begin
+            $display("  FAIL: bs_session did not re-arm on AC-3"); errors = errors + 1; end
+        sess_clr = 1; repeat (4) @(posedge clk); sess_clr = 0; @(posedge clk);
+        if (bs_session !== 1'b0) begin
+            $display("  FAIL: an empty slot left the HDMI link claimed"); errors = errors + 1; end
+
+        // Decode mode must never claim the link, whatever the codec is.
+        split_en = 0;
+        add(0, 16); add(1, 16); drain_all(200000);
+        if (bs_session !== 1'b0) begin
+            $display("  FAIL: bs_session set in Decode mode"); errors = errors + 1; end
+        $display("TEST 6: bs_session: boot 0, AC-3 1, survives a seek, LPCM 0, eject 0, Decode 0");
 
         if (errors == 0) $display("\naud_route: ALL TESTS PASSED");
         else             $display("\naud_route: %0d FAILURES", errors);

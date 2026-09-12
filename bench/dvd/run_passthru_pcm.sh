@@ -81,6 +81,29 @@ if [ "$RED" -eq 1 ]; then
     #    and the NEXT frame's first byte goes to the wrong consumer.
     red_case take-byte-uncounted "payload taken by the other consumer" \
         "s/bytes_left <= take_rem;/bytes_left <= frame_len;/"
+
+    # 5. bs_session on the arbiter's own reset instead of its long-lived one.
+    #    This is the seek regression, and it is the ONLY thing separating
+    #    bs_session from pcm_session -- get it wrong and the two are the same
+    #    signal, so the HDMI link releases and re-engages at every chapter skip.
+    red_case bs-session-on-aud-reset "an aud_rst_n pulse (seek) dropped bs_session" \
+        "s/always_ff @(posedge clk or negedge hard_rst_n) begin/always_ff @(posedge clk or negedge rst_n) begin/;
+         s/if (!hard_rst_n)        bs_session <= 1'b0;/if (!rst_n)        bs_session <= 1'b0;/"
+
+    # 6. The verdict powers up SET: exactly the shipped behaviour this fixes --
+    #    the transmitter is put into non-PCM mode with nothing playing at all.
+    red_case bs-session-set-at-boot "bs_session set at boot" \
+        "s/if (!hard_rst_n)        bs_session <= 1'b0;/if (!hard_rst_n)        bs_session <= 1'b1;/"
+
+    # 7. An empty slot no longer forgets. An ejected disc would leave the link
+    #    claimed for as long as the core stayed loaded.
+    red_case bs-session-ignores-eject "an empty slot left the HDMI link claimed" \
+        "s/else if (sess_clr)      bs_session <= 1'b0;//"
+
+    # 8. Decode mode claims the link. The ack must never be raised for a path
+    #    whose audio leaves as PCM.
+    red_case bs-session-in-decode-mode "bs_session set in Decode mode" \
+        "s/else if (take \&\& split_en) bs_session <= is_bitstream;/else if (take) bs_session <= is_bitstream;/"
 fi
 
 if [ "$fail" -ne 0 ]; then echo; echo "SUITE FAILED"; exit 1; fi

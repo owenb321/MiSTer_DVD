@@ -252,6 +252,96 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **HDMI PASSTHRU LEFT THE ADV7513 IN NON-PCM MODE FOR THE NEXT CORE (2026-09-11,
+  branch `fix/hdmi-audio-teardown`) — sim + host-proven RED/GREEN, mutation-checked
+  both sides, and ✅ HW-CONFIRMED 2026-09-12 with the defect REPRODUCED FIRST** (build
+  `DVD_hdmiteardown_20260912_0320.rbf`, SEED 7 first roll, clk_dec 92.77/88.90).
+  ★★ **MEASURED AT THE CHIP, NOT BY EAR: `i2cget -y 1 0x39 0x12` on the rig** (the
+  ADV7513 is on **i2c bus 1**; `0x20` = PCM, `0xA0` = non-PCM). That turns "no audio on
+  the next core" — which sounds like a listening test needing a receiver — into a
+  one-byte read, and it is what let the RED arm run at all: **the rig's sink does not
+  advertise AC-3/DTS** (`sink_ok=0`), so nothing engages until `dvd_hdmi_bitstream=2`
+  is set in `MiSTer.ini` (restore it afterwards; `mister.py restore` does not).
+  **RED (pre-fix core + pre-fix Main): `0x12=0xA0` with the DVD core, and STILL `0xA0`
+  after loading the menu core** — the report, reproduced. **GREEN, in order:** the
+  stuck `0xA0` **self-healed to `0x20` at core load** (layer 3 — the RED arm left it
+  set, so the arm tested itself); `0x20` at t+3 s and t+6 s with nothing routed, then
+  `0xA0` from t+9 s when AC-3 started (layer 1); **3 chapter skips and 3 audio-track
+  switches produced EXACTLY ONE register write in total** (the reset-domain design,
+  confirmed — count `adv7513:` lines in `/tmp/dvd_hdmi_audio.log`, which records every
+  write and so catches blips a sampler would miss); an LPCM VOB in Passthru read
+  `0x20`; Decode PCM with AC-3 playing never engaged; and **loading another core while
+  engaged read `0x20`, with `teardown: restoring PCM mode` in the log** (layer 2 = the
+  fix). Pacing unregressed: Decode 59.955 Hz / 24.01 fps / audio −12 ppm / 0 lates /
+  0 drops; Passthru 59.953 Hz, 2.505 refreshes per frame.
+  ✅ **THE TWO ARMS THE HARNESS COULD NOT REACH WERE CLOSED BY THE MAINTAINER
+  2026-09-12:** rebooting while a DD track plays restores PCM for the next core (the
+  `reboot()` arm, step 37 — the OSD Reboot row cannot be driven from the harness, and
+  a reboot wipes `/tmp` and the log with it), **and a POWER CUT does not retain the
+  register** — a game core has audio after it. ★ That second one had been written here
+  three times as *"a power cut should clear it, which is the chip's reset value, not
+  anything code here can assert"*; it is now MEASURED, and it is the only layer no
+  code can provide. ✅ **And the accepted trade came back clean: the PCM→DD switch at a
+  title start does NOT clip audibly** (maintainer, 2026-09-12, on a real receiver —
+  this rig's sink has no AC-3/DTS decoder, so nothing here could hear it). That was the
+  one cost the design knowingly took on; it is now paid and measured, so the per-track
+  engage policy stands on its own rather than on the fj#110 precedent.
+  ⚠ **Harness trap seen twice here: telemetry sampled across the launch transient is
+  GARBAGE** (1003 refreshes/s, 65,524 drain-gate closures — counters read across the
+  core's reset). Re-measure on settled playback; a second window read perfectly clean.
+  A short clip is the same trap in reverse — a 41 s window on a 66 s clip starting at
+  t+20 s spans the end of the file and reports the audio rate 15 % low.
+  Field report: *"enable passthru with the
+  modified Main installed, load another core, and you get no audio."* Reproduced in
+  code, and it needed **no disc** — selecting `Audio Out = Passthru` was enough.
+  ★★ **`docs/hdmi_bitstream.md` §2 PREDICTED THIS AND THE PREDICTION WAS FILED UNDER
+  THE ROUTE WE DIDN'T SHIP.** Its case for IEC958-direct was that route (i) *"can
+  only pin the flag high for a whole session, putting us straight back in the regime
+  the fj#110 fix exists to avoid"*. Route (ii) was then deleted after four failed HW
+  rounds and we shipped (i) — inheriting the exact property §2 had rejected it for,
+  with the warning still in the file describing the losing option. ⚠ **When a route
+  is abandoned, re-read what was written AGAINST the one that replaces it**; those
+  paragraphs become a defect list, not history.
+  **Three mechanisms, and only the third is ours alone:** (1) `0x12[7]` is the
+  non-PCM flag and **stock `init_data` has no `0x12` entry at all** — it rewrites
+  `0x0C`, so the *route* reverts while the flag stands, through a core load and
+  through a warm reboot (the HPS resets, the transmitter does not); a power cut
+  should clear it, which is the chip's reset value, not anything code here can
+  assert. (2) Nothing ran on the way out: other cores run **stock Main** via `main=`,
+  and our own re-exec cannot help either — `user_io_init()` hands off to the core's
+  `main=` binary at stock `user_io.cpp:~1484`, **before `video_init()` at 1514**.
+  (3) `want` was `passthru && sink_ok && !pcm_session`, and `pcm_session` reads 0
+  **both** when AC-3 is playing and when nothing is.
+  **Fix in three layers, because no single one survives a crash:** PCM is now the
+  RESTING state (new `aud_route.bs_session` = "a bitstream is what is playing right
+  now", so idle/menus/LPCM/ejected never claim the link); `dvd_hdmi_audio_teardown()`
+  at both orderly exits (integration steps 36/37 — `app_restart()`, which every core
+  load ends in, and `reboot()`); and `0x12` cleared in our own `hdmi_config_init()`
+  (step 38) so an unclean exit is recovered by loading this core again.
+  ★ **`bs_session`'s RESET DOMAIN is the whole design and is NOT `aud_rst_n`** — that
+  pulses on every seek, audio-track switch and `aud_flush`, so a verdict reset there
+  would release the transmitter and re-engage at every chapter skip, and the receiver
+  re-locks each time. It clears on `reset_n` and on an empty slot (`~media_seen`).
+  Without that distinction `bs_session` IS `pcm_session` inverted, which is why the
+  bench's seek arm is the load-bearing one.
+  ★ **Teardown keys on `chip_nonpcm`, NOT on `acked`:** they disagree for 50 ms at
+  every release (ack down, registers not yet restored), and a core load landing in
+  that window is exactly the case `acked` answers wrongly — the one host mutation
+  caught by a single arm.
+  ★ **CMD_AF needed a VERSION BIT (15), not just a data bit:** an old core and a new
+  IDLE one both answer `pcm_session = 0`, so without it Main cannot tell "AC-3 is
+  playing" from "this core cannot say", and either choice silently breaks one of
+  them. Old core ⇒ old rule, unchanged.
+  ⚠ **Found by my own test, not by review:** teardown first left `acked` set with the
+  chip in PCM — harmless at a terminal call site, a trap anywhere else. It now drops
+  the ack first, the same order a release uses.
+  Gates: `bench/dvd/run_passthru_pcm.sh --red` (`aud_route_tb` TEST 6 + 4 mutations)
+  and **`main/tests/run_tests.sh --red`**, which gains a RED arm (4 mutations, host
+  `g++`, no MiSTer/Docker). ⚠ **Residual by construction:** a crash, a panic, or the
+  board's reset button *while a DD/DTS track plays* still leaves the flag set for the
+  next stock-Main boot — recovery is a power cycle or reloading this core. ⚠ Accepted
+  trade: each title start is now one PCM→DD switch (the fj#110 shape) and may clip the
+  first moment of audio. Detail: **`docs/hdmi_bitstream.md` §5a**.
 - ✅ **LOGIC RECLAIM — three branches, ALL MERGED 2026-09-11 (PR #82 AC-3, PR #83 nav/VM/
   telemetry + `MISTER_DISABLE_ALSA`, PR #84 reader) and ✅ HW-CONFIRMED on the rig.** Together,
   against the v0.5.0 baseline fit on the same seed: ALUTs 60,642 → **57,465 (−3,177)**,

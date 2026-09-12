@@ -156,6 +156,8 @@ static void report_pump(void)
 #define DVD_TELEM_MAGIC  0xD7D1
 
 static int core_pcm_session = 0;   // 1 = Passthru is carrying PCM content
+static int core_bs_session  = 0;   // 1 = Passthru is carrying AC-3/DTS right now
+static int core_fmt_v2      = 0;   // the core reports bs_session at all
 
 static void poll_audio_format(void)
 {
@@ -169,14 +171,43 @@ static void poll_audio_format(void)
 
 	// An older core does not answer this command; leave the format unknown and
 	// behave exactly as before rather than guessing.
-	if (magic != DVD_TELEM_MAGIC) { core_pcm_session = 0; return; }
-	core_pcm_session = (fmt >> 1) & 1;   // bit0 = passthru, bit1 = pcm session
+	if (magic != DVD_TELEM_MAGIC) { core_pcm_session = 0; core_bs_session = 0;
+	                               core_fmt_v2 = 0; return; }
+	// bit0 = passthru, bit1 = pcm session, bit2 = bitstream session,
+	// bit15 = this word carries bit 2 at all.
+	core_pcm_session = (fmt >> 1) & 1;
+	core_bs_session  = (fmt >> 2) & 1;
+	core_fmt_v2      = (fmt >> 15) & 1;
+}
+
+// What the ADV7513 must be told to expect. ⚠ NOT the inverse of pcm_session:
+// that reads 0 both when AC-3 is playing and when NOTHING is, so engaging on it
+// put the transmitter into non-PCM mode the moment the core booted with Passthru
+// saved -- and the next core inherited it, because stock Main's hdmi_config_init()
+// rewrites 0x0C but has no 0x12 entry at all, and so never clears the flag.
+// A pre-bs_session core keeps the old rule; its word cannot express the
+// difference, and changing behaviour for it would be a guess.
+static int content_is_bitstream(void)
+{
+	return core_fmt_v2 ? core_bs_session : !core_pcm_session;
 }
 
 static int declared   = 0;   // the core declared OX6, so it has the HDMI tap
 static int acked      = 0;   // cfg[14] is currently set
 static int seen_gen   = -1;  // last hdmi_config_init() generation we applied over
 static unsigned long restore_at = 0;
+
+// What the CHIP is set to, which is NOT `acked`: between dropping the ack and the
+// 50 ms register restore the core is already silent while the transmitter is
+// still in non-PCM mode. Teardown has to act on the chip's state, not the ack's,
+// or a core load landing inside that window leaves the flag set.
+static int chip_nonpcm = 0;
+
+static void set_chip(int bitstream)
+{
+	chip_nonpcm = bitstream;
+	hdmi_config_set_audio(bitstream);
+}
 
 void dvd_hdmi_audio_declare(void)
 {
@@ -196,13 +227,34 @@ static void set_ack(int on)
 	user_io_send_buttons(1);        // pushes cfg[], incl. our bit, to the core
 }
 
+// Put the transmitter back before this process hands the machine to another core
+// (app_restart) or reboots. NOTHING ELSE WILL: other cores run stock Main, whose
+// hdmi_config_init() rewrites 0x0C but never writes 0x12, so the non-PCM flag
+// would otherwise survive into a core that is sending plain PCM -- which the sink
+// then renders as a data burst, i.e. silence or noise. Our own re-exec cannot do
+// it either: user_io_init() hands off to the core's `main=` binary BEFORE
+// video_init() runs, so this process never touches the chip again.
+void dvd_hdmi_audio_teardown(void)
+{
+	if (!chip_nonpcm) return;
+	printf("dvd_hdmi_audio: teardown - restoring PCM mode for the next core\n");
+	FILE *f = fopen(HDMI_LOG_PATH, "a");
+	if (f) { fprintf(f, "teardown: restoring PCM mode\n"); fclose(f); }
+	// Ack first, then the registers -- the same order as a release, for the same
+	// reason, and it leaves the module's state coherent rather than "acked but the
+	// chip is PCM". Both call sites have already reset the core, so this is belt
+	// and braces; it matters if teardown is ever called from a path that returns.
+	set_ack(0);
+	set_chip(0);
+}
+
 void dvd_hdmi_audio_tick(void)
 {
 	report_pump();
 
 	if (!declared || !is_dvd())
 	{
-		if (acked) { set_ack(0); hdmi_config_set_audio(0); }
+		if (acked) { set_ack(0); set_chip(0); }
 		// A core built before the HDMI tap never declares OX6. Say so, but only
 		// once the user actually selects passthru, so it cannot nag.
 		if (is_dvd() && !declared && user_io_status_get("6"))
@@ -223,27 +275,37 @@ void dvd_hdmi_audio_tick(void)
 	// audio to the framework's own I2S path, which is where the decoded samples
 	// already are. The existing release ordering (ack first, registers 50 ms
 	// later) is what keeps the gap silent rather than noisy.
+	//
+	// PCM IS THE RESTING STATE: content_is_bitstream() is false at idle, in menus
+	// before any audio, and once a disc is ejected, so the transmitter is only
+	// claimed while a DD/DTS track is actually playing. That bounds what a crash
+	// or a hardware reset (neither of which can run the teardown below) can leave
+	// behind for the next core.
 	poll_audio_format();
-	int want = (mode != 1) && passthru && sink_ok && !core_pcm_session;
+	int want = (mode != 1) && passthru && sink_ok && content_is_bitstream();
 
 	// Name the stage whenever the user has ASKED for passthru but we are not
 	// engaging - that is exactly the "no sound and the receiver says PCM" case.
 	static int last_dbg = -1;
 	int dbg = (passthru ? 1 : 0) | (sink_ok ? 2 : 0) | (declared ? 4 : 0) | (mode << 3)
-	        | (core_pcm_session ? 0x100 : 0);
+	        | (core_pcm_session ? 0x100 : 0) | (core_bs_session ? 0x200 : 0)
+	        | (core_fmt_v2 ? 0x400 : 0);
 	if (dbg != last_dbg)
 	{
 		last_dbg = dbg;
 		FILE *f = fopen(HDMI_LOG_PATH, "a");
 		if (f)
 		{
-			fprintf(f, "state: passthru=%d sink_ok=%d declared=%d ini_mode=%d acked=%d pcm_session=%d\n",
-			        passthru, sink_ok, declared, mode, acked, core_pcm_session);
+			fprintf(f, "state: passthru=%d sink_ok=%d declared=%d ini_mode=%d acked=%d pcm_session=%d bs_session=%d fmt_v2=%d\n",
+			        passthru, sink_ok, declared, mode, acked, core_pcm_session,
+			        core_bs_session, core_fmt_v2);
 			fclose(f);
 		}
 	}
 
-	if (passthru && !want && !core_pcm_session)
+	// Only when the CONTENT wants a bitstream: "we are not engaging because an
+	// LPCM track is playing" is the feature working, not a stage to report.
+	if (passthru && !want && content_is_bitstream())
 	{
 		if (mode == 1)      report("Bitstream disabled\n\ndvd_hdmi_bitstream=1 in MiSTer.ini");
 		else if (!sink_ok)  report("Sink does not list AC-3/DTS\n\nSet dvd_hdmi_bitstream=2 to force");
@@ -258,7 +320,7 @@ void dvd_hdmi_audio_tick(void)
 	{
 		printf("dvd_hdmi_audio: ADV7513 re-initialised, re-applying non-PCM\n");
 		set_ack(0);
-		hdmi_config_set_audio(1);
+		set_chip(1);
 		seen_gen = gen;
 		set_ack(1);
 		return;
@@ -268,7 +330,7 @@ void dvd_hdmi_audio_tick(void)
 	if (want && !acked)
 	{
 		// ORDER MATTERS: configure the chip FIRST, then let the core start.
-		hdmi_config_set_audio(1);
+		set_chip(1);
 		set_ack(1);
 		// ⚠ NO ON-SCREEN NOTICE HERE, deliberately. Engaging used to be a
 		// once-per-session event worth confirming, so it raised one. It is now a
@@ -301,6 +363,6 @@ void dvd_hdmi_audio_tick(void)
 	if (restore_at && CheckTimer(restore_at))
 	{
 		restore_at = 0;
-		if (!acked) hdmi_config_set_audio(0);
+		if (!acked) set_chip(0);
 	}
 }

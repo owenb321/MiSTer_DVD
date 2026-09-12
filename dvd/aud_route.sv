@@ -30,6 +30,10 @@
 //  head refills from the descriptor RAM (audio_ring.sv:139-145). A grant must
 //  only ever be taken while frame_valid is high, or the type read is stale.
 //
+//  IT ALSO OWNS THE HDMI LINK-FORMAT VERDICT (bs_session), because this is the
+//  one place that knows which codec is on the wire. Its reset domain is
+//  deliberately NOT the arbiter's: see the hard_rst_n port comment.
+//
 //  ⚠ A held frame is NOT an idle one. iec61937_wrap holds a codec frame for A/V
 //  sync without popping it, sometimes for many burst periods. The grant stays
 //  with the wrapper throughout: the head really is its frame, and starving the
@@ -41,6 +45,14 @@
 module aud_route (
     input  logic       clk,
     input  logic       rst_n,          // audio-chain reset (aud_rst_n)
+
+    // ⚠ A SECOND, MUCH LONGER-LIVED reset domain, for bs_session ONLY. rst_n is
+    // aud_rst_n, which pulses on every seek, audio-track switch and aud_flush --
+    // fine for the arbiter's own state, fatal for a verdict the HDMI link format
+    // is derived from: a chapter skip would release the ADV7513 to PCM and
+    // re-engage a moment later, and the receiver re-locks on each one.
+    input  logic       hard_rst_n,     // core reset (reset_n)
+    input  logic       sess_clr,       // 1 = no media loaded; forget the verdict
 
     // 1 = Passthru: split by codec. 0 = Decode: the decoder takes everything,
     // which is the pre-existing behaviour, bit for bit.
@@ -60,7 +72,16 @@ module aud_route (
     // Content class of the frames being routed, latched at each grant so it
     // holds through gaps instead of flapping. 1 = LPCM/MP2 (this is a PCM
     // session), 0 = AC-3/DTS. Drives the HDMI link-format request.
-    output logic       pcm_session
+    output logic       pcm_session,
+
+    // 1 = the content being routed right now IS an IEC 61937 bitstream. NOT the
+    // inverse of pcm_session: that one resets to 0 (= "not PCM") and resets on
+    // every aud_rst_n, so "engage on !pcm_session" put the ADV7513 into non-PCM
+    // mode the moment the core booted with Passthru saved -- before any disc was
+    // loaded -- and left it there for the next core to inherit. This one is
+    // FALSE until a bitstream frame has actually been routed, so PCM is the
+    // resting state and the HDMI link is only claimed while DD/DTS is playing.
+    output logic       bs_session
 );
 
     // AC-3 and DTS are the IEC 61937 codecs; everything else is decoded to PCM.
@@ -118,6 +139,17 @@ module aud_route (
             end
             endcase
         end
+    end
+
+    // ---- the HDMI link-format verdict, in its own reset domain ---------------
+    // Same update event as pcm_session (a grant taken under split_en), so the two
+    // can never disagree about the frame they describe; only the reset differs.
+    // sess_clr is synchronous: it is a clk_sys level (~media_seen), and an eject
+    // is not urgent to the nanosecond -- what matters is that it is NOT aud_rst_n.
+    always_ff @(posedge clk or negedge hard_rst_n) begin
+        if (!hard_rst_n)        bs_session <= 1'b0;
+        else if (sess_clr)      bs_session <= 1'b0;
+        else if (take && split_en) bs_session <= is_bitstream;
     end
 
 endmodule

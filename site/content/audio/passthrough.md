@@ -35,6 +35,19 @@ advertises AC-3/DTS support in its EDID.
     the stock Main does not parse at all. The safety is structural rather than a
     convention.
 
+Over HDMI the transmitter is switched out of PCM mode **only while a Dolby Digital or DTS
+track is actually playing**, and switched back when the track changes, when you load
+another core, and when you reboot. You do not need to leave Passthru before loading
+something else.
+
+!!! warning "If another core loses HDMI audio, update both halves and power-cycle"
+    Earlier versions switched the transmitter as soon as Passthru was selected and never
+    switched it back, so the next core was silent — and nothing but removing power cleared
+    it. Update the core and `MiSTer_DVDcss` together: a current Main with an older core
+    falls back to the older behaviour, because an older core cannot tell it which format is
+    playing. See
+    [Troubleshooting](../reference/troubleshooting.md#another-core-has-no-hdmi-audio-after-i-used-the-dvd-core).
+
 ## What passes through and what does not
 
 | Format | In Passthru | Notes |

@@ -27,4 +27,11 @@ void dvd_hdmi_audio_tick(void);
 // The cfg[14] ack, read by user_io_send_buttons().
 int  dvd_hdmi_audio_ack(void);
 
+// Restore the ADV7513 to PCM before this process gives up the machine — called
+// from app_restart() and reboot(). Stock Main, which every other core runs,
+// rewrites 0x0C at startup but never writes 0x12, so the non-PCM flag would
+// otherwise be inherited by a core sending ordinary PCM: silence, or noise.
+// A no-op unless we actually put the chip into non-PCM mode.
+void dvd_hdmi_audio_teardown(void);
+
 #endif

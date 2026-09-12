@@ -507,19 +507,85 @@ falls back to PCM in that case.
 
 Registers written for bitstream / PCM:
 
+Registers written for bitstream / PCM (**the shipping route (i) values**, corrected
+2026-09-11 — this table used to list the removed IEC958-direct route and was flagged
+as stale in §2's banner; the authority is `hdmi_config_set_audio()` in
+`main/integration/apply_integration.py`):
+
 | reg | bitstream | PCM | meaning |
 |---|---|---|---|
 | `0x0A` | `0x00` | `0x00` | audio select = I2S |
-| `0x0C` | `0x07` | `0x04` | I2S0 enable; `[1:0]` 3 = IEC958 direct, 0 = standard |
+| `0x0C` | `0x44` | `0x04` | I2S0 enable; `[6]` 1 = channel status from the register map; `[1:0]` 0 = standard I2S |
+| `0x12` | `0xA0` | `0x20` | channel status byte 0: `[7]` 1 = NOT linear PCM, `[5]` copyright not asserted |
 | `0x14` | `0x02` | `0x02` | word length 16 bit |
 | `0x15` | rate | rate | sampling rate (follows `hdmi_audio_96k`) |
-| `0x73` | `0x00` | `0x01` | InfoFrame CC: 0 = refer to stream header |
+| `0x73` | `0x01` | `0x01` | Channel Count = 1 (stereo) — Programming Guide §4.4.1.1 |
 
 **N and CTS are unchanged.** 61937 at 48 kHz *is* a 48 kHz stream — which is a
 large part of why this feature is small.
 
 MiSTer.ini: `dvd_hdmi_bitstream` — `0` auto (EDID-gated, default), `1` off,
 `2` force. Force exists because sinks do mis-report, especially over ARC.
+
+---
+
+## 5a. The non-PCM flag is STICKY (field report, 2026-09-11)
+
+Report: *"enable passthru with the modified main installed, then load another core
+— the register is still set and you get no audio."* Confirmed, and worse than it
+sounds, because it needed no disc: selecting Passthru was enough.
+
+★★ **§2 PREDICTED THIS AND THE PREDICTION WAS FILED UNDER A ROUTE WE DIDN'T
+SHIP.** Its argument for IEC958-direct was that route (i) *"can only pin the flag
+high for a whole session, putting us straight back in the regime the fj#110 fix
+exists to avoid"*. Route (ii) was then removed after four failed HW rounds and we
+shipped (i) — inheriting exactly the property §2 had rejected it for, with the
+warning still sitting in the file describing the losing option.
+
+Two mechanisms, and the second is the one that reaches other cores:
+
+1. **`0x12` is written by nobody else.** Stock `hdmi_config_init()` rewrites `0x0C`
+   — so the *route* reverts — but its `init_data` has **no `0x12` entry at all**.
+   Whatever we last wrote there stands, through a core load and through a warm
+   reboot (which resets the HPS, not the transmitter). **A power cut does clear it
+   — MEASURED 2026-09-12** (see §6 gate (e)), which was assumed from the chip's
+   reset value until someone pulled the plug and checked.
+2. **Nothing ran on the way out.** Every other core runs **stock Main** via
+   `main=`, and our own re-exec cannot help either: `user_io_init()` hands off to
+   the core's `main=` binary at stock `user_io.cpp:~1484`, **before `video_init()`
+   at 1514**. So this process never touched the chip again.
+
+⚠ A third thing made it fire with nothing playing: `want` was
+`passthru && sink_ok && !pcm_session`, and `pcm_session` reads 0 **both** when
+AC-3 is playing and when nothing is. See `dvd/aud_route.sv`.
+
+**The fix is three-layered, because no single layer can cover a crash:**
+
+| layer | covers | mechanism |
+|---|---|---|
+| PCM is the resting state | idle, menus, LPCM/MP2, ejected, and everything after a crash *unless a DD/DTS track was playing at that instant* | `bs_session` (core) + `content_is_bitstream()` (Main) |
+| teardown at both exits | every core load and every reboot | steps 36/37: `dvd_hdmi_audio_teardown()` in `app_restart()` and `reboot()` |
+| clear at our own init | an unclean exit, recovered by loading this core again | step 38: `0x12 = 0x20` in `hdmi_config_init()` |
+
+★ **Teardown keys on `chip_nonpcm`, not on `acked`.** They disagree for 50 ms on
+every release — ack down, registers not yet restored — and a core load landing in
+that window is precisely the case `acked` answers wrongly. That is the one host
+mutation (`teardown-keyed-on-ack`) caught by a single arm.
+
+★ Both teardown sites sit immediately after their own function's
+`fpga_core_reset(1)`, so the core is silent before the registers move: the §4
+ordering invariant, applied to an exit.
+
+⚠ **Residual, by construction:** a Main crash, a kernel panic, or the board's
+reset button *while a DD/DTS track is playing* leaves the flag set, and the next
+stock-Main boot will not clear it. **Recovery is a power cycle (measured: the
+register does not survive one) or loading this core again.** Layer 1 is what makes
+that window small instead of "any session in which Passthru was ever selected".
+
+✅ **The accepted trade, now paid:** every title start is one PCM→DD switch, the
+fj#110 shape (*"receiver sees PCM then one clean switch, like a real player"*). It
+was expected to cost the first moment of audio while the receiver locks; **on a real
+receiver it does not clip audibly** (2026-09-12, §6 gate (f)).
 
 ---
 
@@ -543,6 +609,20 @@ demodulator was free-running a bit counter from reset instead of framing on
 that fail silently here are bit order and channel mapping, which is exactly why
 they have to be read back off the wire.
 
+⚠ **`i2s_iec958_tb` was DELETED with the IEC958-direct route** (§2's banner says so);
+the runner no longer builds it. The bullet stays because the *reason* it was written
+that way is the reusable part.
+
+The §5a engage policy and teardown are covered off-hardware in two places:
+
+- **`bench/dvd/run_passthru_pcm.sh --red`** — `aud_route_tb` TEST 6 measures
+  `bs_session` as a level at boot / AC-3 / a seek / LPCM / eject / Decode mode, with
+  four mutations each caught by its own assertion. The seek arm is the load-bearing
+  one: it is the only thing separating `bs_session` from `pcm_session`.
+- **`main/tests/run_tests.sh --red`** — the Main decision table, including teardown
+  inside the 50 ms release window and the version-flag fallback, with four mutations.
+  Ordinary host `g++`; no ARM toolchain, no MiSTer, no Docker.
+
 ### HW gate — nothing about the ADV7513 is simulable
 
 1. AVR shows "Dolby Digital" / "DTS" and plays 5.1.
@@ -555,6 +635,42 @@ they have to be read back off the wire.
    **silent, never noisy**, in Passthru. On **stock Main** the same `.rbf` is silent
    over HDMI and optical passthrough still works — i.e. the ack gate holds and a
    user who never installs MiSTer_DVDcss is unaffected.
+6. **§5a stickiness — ✅ HW-CONFIRMED 2026-09-12, defect reproduced first.** Read the
+   flag rather than listening: `i2cget -y 1 0x39 0x12` on the rig (**bus 1**, the
+   ADV7513 main map at `0x39`; chip revision reads `0x13` at register `0x00`, which is
+   how to find the bus). `0x20` = PCM, `0xA0` = non-PCM.
+   ⚠ **The rig's own sink does not advertise AC-3/DTS** (`sink_ok=0` in the log), so
+   nothing engages at all until `dvd_hdmi_bitstream=2` is set under `[DVD]` in
+   `MiSTer.ini` — **back it up and put it back by hand; `mister.py restore` does not
+   touch the ini.**
+
+   | arm | measured |
+   |---|---|
+   | RED: pre-fix core + Main, DVD core running | `0xA0` |
+   | RED: …then load the menu core | **`0xA0`** — the report, reproduced |
+   | GREEN: core load with the flag left stuck at `0xA0` | `0x20` — self-heal (step 38) |
+   | GREEN: Passthru, nothing routed yet (t+3 s, t+6 s) | `0x20` |
+   | GREEN: AC-3 playing (t+9 s onward) | `0xA0` |
+   | GREEN: 3 chapter skips + 3 audio-track switches | `0xA0`, **1 write in total** |
+   | GREEN: LPCM VOB in Passthru | `0x20` |
+   | GREEN: Decode PCM, AC-3 playing | `0x20` |
+   | GREEN: load another core while engaged | **`0x20`** + `teardown: restoring PCM mode` |
+
+   ★ **Count `adv7513:` lines in `/tmp/dvd_hdmi_audio.log` for the churn arms, not
+   register samples** — the log records every write, so it catches a release/engage
+   pair that a 0.5 s sampler would step over. Exactly 1 across six transport events.
+
+   ✅ **(e) the `reboot()` arm and the power-cut question — CONFIRMED BY THE MAINTAINER
+   2026-09-12**, both out of the harness's reach: rebooting while a DD track plays
+   restores PCM for the next core, and **a power cut does not retain the register** (a
+   game core has audio afterwards). ★ The power-cut behaviour had been asserted three
+   times in these notes as the chip's reset value *"not something any code here can
+   assert"* — it is now measured, and it is the one layer no code can provide, which is
+   why the residual below is bounded by it rather than by anything we wrote.
+   ✅ **(f) CONFIRMED 2026-09-12 (maintainer, on a real receiver): the PCM→DD switch at
+   a title start does not clip audibly.** This rig's sink has no AC-3/DTS decoder, so
+   nothing here could hear it — the whole per-track policy rested on the fj#110
+   precedent until someone listened.
 
 If (1) fails with the receiver naming nothing or mis-locking, try the §3
 preamble table before anything else.
