@@ -60,7 +60,19 @@ module transport_hud #(
     input  wire        bar_active,          // scrub gesture held + linger
     input  wire        scrub_held,          // D-pad held (FF/REW icon while 1)
     input  wire        scrub_dir,           // 1 = forward
-    input  wire [1:0]  scrub_tier,          // speed tier 0..3 -> x1..x4
+    // Speed tier 0..3, rendered as 2..5 arrows (>> .. >>>>>).
+    // ⚠ NOT "xN". It used to be, and it was a false quantitative claim: on a
+    // set-top box xN means N times real time, while this field was the tier
+    // ORDINAL plus one -- so it printed "x1", which reads as NORMAL SPEED, for a
+    // tier that moves ~29 content-seconds per second of wall clock (the ladder
+    // runs ~29 / 117 / 469 / 1875 on a DVD and ~5 / 21 / 83 / 167 on a linear
+    // file). An arrow count makes no numeric claim, which is the other
+    // convention real players use.
+    // ⚠ It could not have been a true rate before 2026-09-12 anyway: the step
+    // was a fraction of the title span, so the multiple differed on every disc.
+    // dvd/scrub_ctrl.sv's content-rate change is what made a real xN knowable --
+    // and what made the numbers big enough to be worth not printing.
+    input  wire [1:0]  scrub_tier,
     input  wire        display_edge,        // B9: toggle persistent mode
     input  wire        load_evt,            // fresh media load: clear + hide
     input  wire        show_evt,            // transport event: re-arm show_tmr
@@ -249,7 +261,7 @@ module transport_hud #(
     reg [7:0]  f_n, f_nn;                    // CH n / N as {tens,ones} BCD
     reg        f_ch;                         // show the CH section
     reg [1:0]  f_icon;                       // 0 play, 1 pause, 2 ffwd, 3 rev
-    reg [3:0]  f_tier1;                      // tier+1 (1..4)
+    reg [2:0]  f_arrows;                     // arrows to draw (2..5)
     // format snapshot (popup row)
     reg [3:0]  f2_type;
     reg [7:0]  f2_n, f2_nn;                  // n / N as {tens,ones} BCD
@@ -455,33 +467,41 @@ module transport_hud #(
                            (f_icon == 2'd2) ? {1'b1, G_PLAY}  : {1'b0, G_PLAY};
             5'd1:  fmt_g = (f_icon == 2'd2) ? {1'b1, G_PLAY} :
                            (f_icon == 2'd3) ? {1'b1, G_REV}  : {1'b0, G_SPACE};
-            5'd2:  fmt_g = (f_icon[1]) ? {1'b1, G_X} : {1'b0, G_SPACE};
-            5'd3:  fmt_g = (f_icon[1]) ? {1'b1, {2'b00, f_tier1}} : {1'b0, G_SPACE};
-            5'd5:  fmt_g = {1'b0, 2'b00, f_cur[23:20]};    // h
-            5'd6:  fmt_g = {1'b0, G_COLON};
-            5'd7:  fmt_g = {1'b0, 2'b00, f_cur[19:16]};    // m tens
-            5'd8:  fmt_g = {1'b0, 2'b00, f_cur[15:12]};    // m ones
-            5'd9:  fmt_g = {1'b0, G_COLON};
-            5'd10: fmt_g = {1'b0, 2'b00, f_cur[11:8]};     // s tens
-            5'd11: fmt_g = {1'b0, 2'b00, f_cur[7:4]};      // s ones
-            5'd12: fmt_g = {1'b0, G_SLASH};
-            5'd13: fmt_g = {1'b0, 2'b00, f_tot[23:20]};
-            5'd14: fmt_g = {1'b0, G_COLON};
-            5'd15: fmt_g = {1'b0, 2'b00, f_tot[19:16]};
-            5'd16: fmt_g = {1'b0, 2'b00, f_tot[15:12]};
-            5'd17: fmt_g = {1'b0, G_COLON};
-            5'd18: fmt_g = {1'b0, 2'b00, f_tot[11:8]};
-            5'd19: fmt_g = {1'b0, 2'b00, f_tot[7:4]};
-            5'd21: fmt_g = f_ch ? {1'b0, G_C} : {1'b0, G_SPACE};
-            5'd22: fmt_g = f_ch ? {1'b0, G_H} : {1'b0, G_SPACE};
-            5'd24: fmt_g = (f_ch && f_n[7:4] != 4'd0) ? {1'b0, 2'b00, f_n[7:4]}
+            // Arrows 2..5 of the scrub icon. The field is five columns wide
+            // whatever the tier, so the time never moves under the viewer; the
+            // cost is one column, taken from the three no-backing columns at the
+            // right (the line now ends at 29 instead of 28).
+            5'd2:  fmt_g = (f_icon[1] && (f_arrows > 3'd2))
+                           ? {1'b1, f_icon[0] ? G_REV : G_PLAY} : {1'b0, G_SPACE};
+            5'd3:  fmt_g = (f_icon[1] && (f_arrows > 3'd3))
+                           ? {1'b1, f_icon[0] ? G_REV : G_PLAY} : {1'b0, G_SPACE};
+            5'd4:  fmt_g = (f_icon[1] && (f_arrows > 3'd4))
+                           ? {1'b1, f_icon[0] ? G_REV : G_PLAY} : {1'b0, G_SPACE};
+            5'd6:  fmt_g = {1'b0, 2'b00, f_cur[23:20]};    // h
+            5'd7:  fmt_g = {1'b0, G_COLON};
+            5'd8:  fmt_g = {1'b0, 2'b00, f_cur[19:16]};    // m tens
+            5'd9:  fmt_g = {1'b0, 2'b00, f_cur[15:12]};    // m ones
+            5'd10: fmt_g = {1'b0, G_COLON};
+            5'd11: fmt_g = {1'b0, 2'b00, f_cur[11:8]};     // s tens
+            5'd12: fmt_g = {1'b0, 2'b00, f_cur[7:4]};      // s ones
+            5'd13: fmt_g = {1'b0, G_SLASH};
+            5'd14: fmt_g = {1'b0, 2'b00, f_tot[23:20]};
+            5'd15: fmt_g = {1'b0, G_COLON};
+            5'd16: fmt_g = {1'b0, 2'b00, f_tot[19:16]};
+            5'd17: fmt_g = {1'b0, 2'b00, f_tot[15:12]};
+            5'd18: fmt_g = {1'b0, G_COLON};
+            5'd19: fmt_g = {1'b0, 2'b00, f_tot[11:8]};
+            5'd20: fmt_g = {1'b0, 2'b00, f_tot[7:4]};
+            5'd22: fmt_g = f_ch ? {1'b0, G_C} : {1'b0, G_SPACE};
+            5'd23: fmt_g = f_ch ? {1'b0, G_H} : {1'b0, G_SPACE};
+            5'd25: fmt_g = (f_ch && f_n[7:4] != 4'd0) ? {1'b0, 2'b00, f_n[7:4]}
                                                       : {1'b0, G_SPACE};
-            5'd25: fmt_g = f_ch ? {1'b0, 2'b00, f_n[3:0]} : {1'b0, G_SPACE};
-            5'd26: fmt_g = f_ch ? {1'b0, G_SLASH} : {1'b0, G_SPACE};
-            5'd27: fmt_g = (f_ch && f_nn[7:4] != 4'd0) ? {1'b0, 2'b00, f_nn[7:4]}
+            5'd26: fmt_g = f_ch ? {1'b0, 2'b00, f_n[3:0]} : {1'b0, G_SPACE};
+            5'd27: fmt_g = f_ch ? {1'b0, G_SLASH} : {1'b0, G_SPACE};
+            5'd28: fmt_g = (f_ch && f_nn[7:4] != 4'd0) ? {1'b0, 2'b00, f_nn[7:4]}
                                                        : {1'b0, G_SPACE};
-            5'd28: fmt_g = f_ch ? {1'b0, 2'b00, f_nn[3:0]} : {1'b0, G_SPACE};
-            5'd29, 5'd30, 5'd31: fmt_g = {1'b0, G_NONE};   // no backing tail
+            5'd29: fmt_g = f_ch ? {1'b0, 2'b00, f_nn[3:0]} : {1'b0, G_SPACE};
+            5'd30, 5'd31: fmt_g = {1'b0, G_NONE};          // no backing tail
             default: fmt_g = {1'b0, G_SPACE};
         endcase
     end
@@ -491,7 +511,7 @@ module transport_hud #(
             fmt_col  <= 7'd65;
             fmt_wait <= 15'd0;
             f_cur <= 24'd0; f_tot <= 24'd0; f_n <= 8'd0; f_nn <= 8'd0;
-            f_ch <= 1'b0; f_icon <= 2'd0; f_tier1 <= 4'd1;
+            f_ch <= 1'b0; f_icon <= 2'd0; f_arrows <= 3'd2;
             f2_type <= 4'd0; f2_n <= 8'd0; f2_nn <= 8'd0; sk_sec <= 3'd0;
             f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0;
         end else begin
@@ -509,7 +529,7 @@ module transport_hud #(
                 f_ch    <= dbg_mode ? 1'b1 : (cur_pgm != 8'd0) && (nr_pgm != 8'd0);
                 f_icon  <= scrub_held ? (scrub_dir ? 2'd2 : 2'd3)
                                       : (pause_q ? 2'd1 : 2'd0);
-                f_tier1 <= {2'b00, scrub_tier} + 4'd1;
+                f_arrows <= {1'b0, scrub_tier} + 3'd2;
                 f2_type <= pop_type;
                 f2_off  <= 1'b0;
                 f2_l1   <= G_NONE;

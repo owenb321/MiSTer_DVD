@@ -1476,7 +1476,9 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   position for the Phase-11 on-screen position bar — **✅ built: `dvd/seek_bar.sv`**
   (✅ HW-CONFIRMED 2026-07-10, PR fj#103): fill = playhead at hold start, amber cursor = the
   accumulating release target, + a pause/seek progress popup with chapter ticks. The status
-  line shows `►►×n` while held (`hud_tier`/`hud_dir` exports). See `docs/transport_hud.md`.
+  line shows 2-5 direction arrows while held, one per speed tier (`hud_tier`/`hud_dir`
+  exports; it printed `►►×n` until 2026-09-12 — see `docs/transport_hud.md` for why a
+  multiplier was the wrong glyph for an ordinal).
 
 ### Golden references + tests
 
@@ -1604,7 +1606,10 @@ the rest of the title transport. Combined with the default-Off toggle, the 2026-
 guarantee below is preserved for anyone who does not ask for this.
 
 **Feedback.** `pend_evt` joins `hud_user_evt`, so the position bar pops on the **first** press;
-the status line renders the tap count in the shared `►►×n` field; and a new popup type reads
+the status line renders **direction arrows only** in the shared icon field (it rendered the
+tap COUNT there until 2026-09-12 — a count is not a speed, and the field now draws speed as
+an arrow count, so four taps would have read as the fastest scrub tier; the magnitude was
+always the popup's job anyway); and a new popup type reads
 **`SEEK FWD  30S` / `SEEK BACK 60S`** (the sign is *spelled* because the glyph ROM has no `+`,
 which keeps `tools/hud_font.py` and the committed `dvd/hud_font.mem` untouched).
 
@@ -1732,7 +1737,7 @@ at all — and that is why it is a separate feature rather than another seek mod
 - The decoder's upstream `REG_WR_TRICK` register carries `repeat_frame[9:5]` + `persistence`
   and is already used to hold a picture during pause — the native hook for showing each
   I-frame for N refreshes.
-- `dvd/transport_hud.sv` already renders a `►►×n` tier, and `dvd/scrub_ctrl.sv` already owns
+- `dvd/transport_hud.sv` already renders the tier as an arrow count, and `dvd/scrub_ctrl.sv` already owns
   FF/REW with an acceleration tier.
 
 **The hard constraint.** The splice must be **flush-free**. `dvd/dpad_seek.sv`'s header

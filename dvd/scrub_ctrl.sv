@@ -158,7 +158,9 @@ module scrub_ctrl #(
     output wire [31:0] bar_tgt_rbn,     // pending/landed seek target (bar cursor)
 
     // Phase 11 HUD: speed tier (0..3, registered for a glitch-free readout) and
-    // the accumulate direction, for the transport icon (>> x1..x4 / << x1..x4).
+    // the accumulate direction, for the transport icon. dvd/transport_hud.sv
+    // draws the tier as 2..5 ARROWS; it printed "xN" until 2026-09-12, which was
+    // the tier ordinal posing as a rate ("x1" for ~29x real time).
     output reg  [1:0]  hud_tier,
     output wire        hud_dir          // 1 = forward
 );

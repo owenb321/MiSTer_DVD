@@ -4,8 +4,8 @@
 // ASCII against expected strings) plus the visibility ledger:
 //   T1: persist toggle (B9) -> visible; play icon + times + CH n/N formatted
 //   T2: pause -> pause icon
-//   T3: scrub fwd tier2 -> ">>x3" icon field
-//   T4: scrub rev tier0 -> "<<x1"
+//   T3: scrub fwd tier2 -> ">>>>" (arrows COUNT the tier; there is no "xN")
+//   T4: scrub rev tier0 -> "<<"
 //   T5: CH section hidden when cur_pgm = 0
 //   T6: menu_active suppresses visibility (persist survives -> back on resume)
 //   T7: show_evt arms the timer; expires after SHOW_TICKS (shrunk for sim)
@@ -150,25 +150,38 @@ module transport_hud_tb;
         check_vis("T1a hidden at boot", 1'b0);
         @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0;
         check_vis("T1b persist on", 1'b1);
-        check_line("T1c play line", ">    0:12:34/1:37:05 CH 12/23~~~");
+        check_line("T1c play line", ">     0:12:34/1:37:05 CH 12/23~~");
 
         // T2: pause icon
         pause_q = 1;
-        check_line("T2 pause icon", "\"    0:12:34/1:37:05 CH 12/23~~~");
+        check_line("T2 pause icon", "\"     0:12:34/1:37:05 CH 12/23~~");
         pause_q = 0;
 
-        // T3: scrub forward, tier 2 -> ">>x3"
+        // T3: scrub forward, tier 2 -> four arrows.
+        // ★ COUNTED, not decoded from a digit: the whole point of the 2026-09-12
+        // change is that the glyphs themselves carry the tier, so the test has to
+        // read the same thing a viewer does. A digit would have let "x3" pass for
+        // any tier whose ordinal happened to render.
         scrub_held = 1; scrub_dir = 1; scrub_tier = 2'd2; bar_active = 1;
-        check_line("T3 ffwd x3", ">>x3 0:12:34/1:37:05 CH 12/23~~~");
+        check_line("T3 ffwd tier2 = 4 arrows", ">>>>  0:12:34/1:37:05 CH 12/23~~");
 
-        // T4: scrub reverse, tier 0 -> "<<x1"
+        // T4: scrub reverse, tier 0 -> two arrows, and reversed glyphs.
         scrub_dir = 0; scrub_tier = 2'd0;
-        check_line("T4 rev x1", "<<x1 0:12:34/1:37:05 CH 12/23~~~");
+        check_line("T4 rev tier0 = 2 arrows", "<<    0:12:34/1:37:05 CH 12/23~~");
+
+        // T4b: the two ends of the ladder, so a count that ignored the tier or
+        // saturated at one end cannot pass. Tier 0 is 2 arrows (T4); tier 3 is 5,
+        // which is the case that cost the extra column.
+        scrub_dir = 1; scrub_tier = 2'd3;
+        check_line("T4b ffwd tier3 = 5 arrows", ">>>>> 0:12:34/1:37:05 CH 12/23~~");
+        scrub_tier = 2'd1;
+        check_line("T4c ffwd tier1 = 3 arrows", ">>>   0:12:34/1:37:05 CH 12/23~~");
+        scrub_tier = 2'd2;
         scrub_held = 0; bar_active = 0;
 
         // T5: CH hidden when unresolved
         cur_pgm = 8'd0;
-        check_line("T5 no chapter", ">    0:12:34/1:37:05         ~~~");
+        check_line("T5 no chapter", ">     0:12:34/1:37:05         ~~");
         cur_pgm = 8'd12;
 
         // T6: menu suppression (persist survives)
@@ -375,11 +388,16 @@ module transport_hud_tb;
 
         // ---- T20: the status-line icon field renders the tap count -----
         // emu drives scrub_held|dpad_pend / dpad_pend_n into these taps, so a
-        // 3-tap D-pad gesture must read as ">>x3" exactly like a scrub tier.
-        scrub_held = 1; scrub_dir = 1; scrub_tier = 2'd2;
+        // ⚠ A D-PAD GESTURE HAS NO SPEED TIER. emu.sv feeds this port 2'd0 on
+        // that arm (it used to feed the TAP COUNT), so the icon is two plain
+        // direction arrows and the magnitude is the popup's job -- checked below
+        // as "SEEK FWD". Driving 2'd0 here is not a weaker test than the old
+        // 2'd2: what emu puts on the wire is invisible to any module-level bench
+        // (the issue #81 lesson), so run_scrub_tiers.sh greps emu.sv for it.
+        scrub_held = 1; scrub_dir = 1; scrub_tier = 2'd0;
         cur_time = 32'h00123400; total_time = 32'h01370500;
         cur_pgm = 8'd12; nr_pgm = 8'd23; @(posedge clk);
-        check_line("T20 dpad tap count icon", ">>x3 0:12:34/1:37:05 CH 12/23~~~");
+        check_line("T20 dpad = direction only", ">>    0:12:34/1:37:05 CH 12/23~~");
         scrub_held = 0; scrub_tier = 2'd0; @(posedge clk);
 
         if (errors == 0) $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");

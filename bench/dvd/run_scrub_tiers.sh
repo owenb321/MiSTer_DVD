@@ -9,6 +9,11 @@
 # lin_blk10 >> LSn for a linear file, and span >> (SHn + duration bucket) for a
 # DVD title, anchored so a ~2 h title's step is BIT-IDENTICAL to what shipped.
 #
+# It also gates how that tier READS: dvd/transport_hud.sv draws it as 2..5
+# arrows, because the field used to print "xN" from the tier ordinal -- "x1" for
+# a tier moving ~29 content-seconds per wall second, which is what "x1" most
+# specifically is not.
+#
 #   ./bench/dvd/run_scrub_tiers.sh          # GREEN
 #   ./bench/dvd/run_scrub_tiers.sh --red    # ...then a mutation per arm
 #
@@ -26,6 +31,26 @@ trap 'rm -rf "$SCR"' EXIT
 echo "### GREEN"
 $IV -o "$SCR/scrub_sim" dvd/scrub_ctrl.sv bench/dvd/scrub_ctrl_tb.sv || rc=1
 vvp "$SCR/scrub_sim" | tail -12 || rc=1
+
+# The HUD readout of the same tier: 2..5 arrows, never "xN".
+$IV -o "$SCR/hud_sim" dvd/transport_hud.sv bench/dvd/transport_hud_tb.sv || rc=1
+vvp "$SCR/hud_sim" | grep -E "arrows|direction only|TRANSPORT_HUD_TB" || rc=1
+
+# ...and the ONE emu connection the benches cannot see. transport_hud has no way
+# to know a D-pad gesture is not a scrub: emu decides, on one line, and a wrong
+# FACT on a port connection is invisible to every module-level test (the issue
+# #81 lesson, and tools/check_subp_map_wiring.py is the precedent for gating it
+# by reading the file). Feeding dpad_pend_n here -- the TAP COUNT, which is what
+# it used to be -- would draw four taps as the fastest scrub tier.
+echo "-- emu wiring"
+if grep -qE '\.scrub_tier +\(hold_freeze \? hud_tier_w : 2.d0\)' dvd/emu.sv; then
+  echo "  ok  emu feeds no tier on the D-pad arm"
+else
+  echo "  FAIL: dvd/emu.sv must feed .scrub_tier 2'd0 while a D-pad gesture is pending"
+  echo "        (a tap count would render as a speed); found:"
+  grep -n "\.scrub_tier" dvd/emu.sv | sed 's/^/        /'
+  rc=1
+fi
 
 # a mutant must FAIL the bench, and must fail the arm NAMED for it
 mutant() {   # label, sed_expr, expected failing arm (grep string)

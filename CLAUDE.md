@@ -2303,8 +2303,9 @@ worse maintenance burden than targeted in-place edits. So:
   gated green: clk_dec 91.07/88.12 MHz, ALM 90%, DSP unchanged 97/112;
   `releases/DVD_hud_20260710_1955.rbf`). The release-visible playback feedback layer (the multi-row debug
   overlay stays compiled out): `dvd/transport_hud.sv` renders a bottom **status line**
-  (`► 0:12:34/1:37:05 CH 12/23`; ❚❚ pause; `►►×n` scrub with the PR-fj#101 span-relative
-  tiers) + an **event popup line** (`AUDIO 2/4 FR` / `SUB OFF` / `ANGLE 2/3` / `CH n/N`,
+  (`► 0:12:34/1:37:05 CH 12/23`; ❚❚ pause; the scrub tier as 2-5 arrows — it printed
+  `►►×n` until 2026-09-12, a tier ordinal posing as a rate, where `×1` meant ~29× real
+  time; see `docs/transport_hud.md`) + an **event popup line** (`AUDIO 2/4 FR` / `SUB OFF` / `ANGLE 2/3` / `CH n/N`,
   last-event-wins, Phase-10 `attr_*` languages) from a generated glyph ROM
   (`tools/hud_font.py` → `dvd/hud_font.mem`) + 2×32 text plane; **`dvd/seek_bar.sv`**
   gives the seek-on-release scrub its missing feedback (fill = hold start, amber cursor =
@@ -2447,7 +2448,10 @@ worse maintenance burden than targeted in-place edits. So:
   a ~2 s give-up. The contract is now recorded in `nav_dsi.sv`'s header for the next
   consumer. HUD: popup type 8 `SEEK FWD 30S` (the `pop_type` field widened 3→4 bits; the
   sign is SPELLED so the glyph ROM and `dvd/hud_font.mem` stay untouched) + the tap count in
-  the shared `►►×n` field. Golden `tools/nav_extract.py --dpad`; tests
+  the shared icon field — ⛔ NO LONGER: since 2026-09-12 a D-pad gesture renders
+  direction arrows only and `emu.sv` feeds `.scrub_tier` `2'd0`, because that field now
+  draws a SPEED as an arrow count and a tap count is not a speed (the popup carried the
+  magnitude all along). Golden `tools/nav_extract.py --dpad`; tests
   `bench/dvd/dpad_seek_tb.sv` (24 scenarios incl. the trap), `scrub_ctrl_tb` T9–T12,
   `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
   **`docs/dvd_nav.md` §2b**.

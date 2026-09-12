@@ -5474,7 +5474,14 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // pauses the governor/audio below, which a D-pad tap deliberately does not.
     .scrub_held   (hold_freeze | dpad_pend),
     .scrub_dir    (hold_freeze ? hud_dir_w  : dpad_pend_dir),
-    .scrub_tier   (hold_freeze ? hud_tier_w : dpad_pend_n),
+    // ⚠ A D-PAD GESTURE HAS NO SPEED TIER, so it feeds 0 = two plain direction
+    // arrows. It used to feed dpad_pend_n, the TAP COUNT, into a field the HUD
+    // then printed as "xN" -- which was already a category error (a count is not
+    // a rate) and becomes a visible falsehood now that the field draws a speed as
+    // an arrow count: four taps would have rendered as the fastest scrub tier.
+    // Nothing is lost -- the popup line shows the gesture's real magnitude
+    // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
+    .scrub_tier   (hold_freeze ? hud_tier_w : 2'd0),
     .display_edge (display_edge),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),

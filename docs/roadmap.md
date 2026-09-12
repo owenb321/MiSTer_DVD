@@ -1507,10 +1507,11 @@ behind the congestion cleanup and built incrementally on the proven overlay laye
 
 ### What the OSD shows *(✅ HW-CONFIRMED 2026-07-10, PR fj#103; design: `docs/transport_hud.md`)*
 - [x] **Transport state indicator** — play/pause and fast-forward/rewind: `►` / `❚❚` /
-  `►►` / `◄◄` with the current scrub speed tier shown as **×1..×4** (since the PR fj#101
-  seek-on-release rework the tiers are step RATES, not fixed seconds; and since 2026-09-12
-  those rates are absolute content rates rather than a fraction of the title span --
-  `docs/dvd_nav.md` "Phase 8a").
+  `►►` / `◄◄` with the current scrub speed tier shown as **2 to 5 arrows** (since the PR
+  fj#101 seek-on-release rework the tiers are step RATES, not fixed seconds; since
+  2026-09-12 those rates are absolute content rates rather than a fraction of the title
+  span, and the readout stopped printing `×1..×4` — a tier ordinal wearing a multiplier's
+  clothes, where `×1` meant ~29× real time. `docs/dvd_nav.md` "Phase 8a").
   Appears on a transport action and auto-hides after ~2.5 s.
 - [x] **Playback status / timecode** — **whole-title elapsed** (the reader's per-cell
   playback-time BCD prefix sum + DSI `c_eltm`, rate-aware frame carry via
@@ -1522,7 +1523,7 @@ behind the congestion cleanup and built incrementally on the proven overlay laye
   is IMPOSSIBLE post-PR fj#101*: holding is a plain pause (no DSI updates), so feedback is
   `dvd/seek_bar.sv` — fill = the playhead at hold start, an **amber cursor = the
   accumulating release target**, riding scrub_ctrl's `bar_*` outputs against the title
-  RBN span; the status line shows `►►×n` + direction while held.
+  RBN span; the status line shows 2-5 direction arrows while held.
 - [x] **Chapter feedback** — on a chapter skip: the `CH 15/23` popup + the progress bar
   pops with the landed position (current program from the reader's query-only pmap walk).
 - [x] **Track-change popups** — `AUDIO 2/4 FR`, `SUB 1/3 EN` / `SUB OFF`, `ANGLE 2/3`,
