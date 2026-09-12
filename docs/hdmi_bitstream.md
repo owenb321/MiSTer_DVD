@@ -582,9 +582,10 @@ stock-Main boot will not clear it. **Recovery is a power cycle (measured: the
 register does not survive one) or loading this core again.** Layer 1 is what makes
 that window small instead of "any session in which Passthru was ever selected".
 
-⚠ **Accepted trade:** every title start is now one PCM→DD switch, which is the
-fj#110 shape (*"receiver sees PCM then one clean switch, like a real player"*) and
-may clip the first moment of audio while the receiver locks. HW check.
+✅ **The accepted trade, now paid:** every title start is one PCM→DD switch, the
+fj#110 shape (*"receiver sees PCM then one clean switch, like a real player"*). It
+was expected to cost the first moment of audio while the receiver locks; **on a real
+receiver it does not clip audibly** (2026-09-12, §6 gate (f)).
 
 ---
 
@@ -666,8 +667,10 @@ The §5a engage policy and teardown are covered off-hardware in two places:
    times in these notes as the chip's reset value *"not something any code here can
    assert"* — it is now measured, and it is the one layer no code can provide, which is
    why the residual below is bounded by it rather than by anything we wrote.
-   ⏳ **(f) remains unreported:** what a receiver makes of the PCM→DD switch at a title
-   start. This rig's sink has no AC-3/DTS decoder, so nothing here can hear it.
+   ✅ **(f) CONFIRMED 2026-09-12 (maintainer, on a real receiver): the PCM→DD switch at
+   a title start does not clip audibly.** This rig's sink has no AC-3/DTS decoder, so
+   nothing here could hear it — the whole per-track policy rested on the fj#110
+   precedent until someone listened.
 
 If (1) fails with the receiver naming nothing or mis-locking, try the §3
 preamble table before anything else.

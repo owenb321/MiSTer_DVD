@@ -281,8 +281,11 @@ worse maintenance burden than targeted in-place edits. So:
   register** — a game core has audio after it. ★ That second one had been written here
   three times as *"a power cut should clear it, which is the chip's reset value, not
   anything code here can assert"*; it is now MEASURED, and it is the only layer no
-  code can provide. ⏳ Still unreported: whether the PCM→DD switch clips the start of a
-  title — this rig's sink has no AC-3/DTS decoder, so nothing here can hear it.
+  code can provide. ✅ **And the accepted trade came back clean: the PCM→DD switch at a
+  title start does NOT clip audibly** (maintainer, 2026-09-12, on a real receiver —
+  this rig's sink has no AC-3/DTS decoder, so nothing here could hear it). That was the
+  one cost the design knowingly took on; it is now paid and measured, so the per-track
+  engage policy stands on its own rather than on the fj#110 precedent.
   ⚠ **Harness trap seen twice here: telemetry sampled across the launch transient is
   GARBAGE** (1003 refreshes/s, 65,524 drain-gate closures — counters read across the
   core's reset). Re-measure on settled playback; a second window read perfectly clean.
