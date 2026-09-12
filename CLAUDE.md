@@ -2935,7 +2935,26 @@ motion-menu disc authors its menus as TITLE-domain PGCs with the HLI in a title
 VOB's NAV packs (Scene It's game menus; #81's disc, whose boot menus live in
 `VTS_02_1.VOB`), so a highlight bug on such a disc could not be evidenced by
 either route. That is structural, not a tuning matter.
-✅ **FIXED by a PLAYHEAD WINDOW, and the chord now carries button data:**
+✅ **FIXED by a PLAYHEAD WINDOW — ✅ HW-CONFIRMED 2026-09-12 ON A PHYSICAL DISC, BOTH
+ARMS.** Arm 1, the DEGRADE path (new Main + the OLD release-installed collector): bundle
+written, `nav packs: no`, audit clean — that combination wrote NO BUNDLE AT ALL before the
+flag probe, measured on the same rig. Arm 2, the CAPTURE path, chord pressed ON THE DISC'S
+MENU: `hli_ss=2 btn_ns=5`, `btn_coli sel=00005af0`, the full 1↔2↔3↔4↔5↔1 link graph and a
+decoded VM command per button (`LinkPGCN 13/4/14/2/30`, two of them with `HL_BTNN`), in a
+73 KB bundle — **exactly the evidence missing from #60, #61 and #81, all three of which
+were physical-disc reports whose bundles carried ZERO NAV packs.** The second NAV pack 8
+sectors later carries the SAME button set: the per-VOBU HLI re-send that `--nav-stop` rests
+on, now observed on real media.
+★★ **AND THE REAL COST IS FAR BELOW THE COLD MEASUREMENT — both presses finished in ≤1 s**,
+against 2.7-4.9 s cold, because the window reads FORWARD FROM THE PLAYHEAD, which is where
+the core has just been streaming, so most of it is already page-cached. The cold numbers are
+the pessimistic bound, not the typical case.
+⚠ **`/tmp/dvd_report_run.log` was 0 bytes after every press** — the child's stdout is not
+captured, so `reap()`'s "Support bundle FAILED — see /tmp/dvd_report_run.log" points at an
+empty file. PRE-EXISTING and only on the failure path, but it is that path's ONLY
+diagnostic; suspect is `start()`'s `freopen(..., stdout)` before `execvp` (python writes
+fine to a redirect on that box). Own item.
+The mechanism:
 `dvd_report.py --nav-window SECTORS` (with `--lba`) captures every NAV pack in one
 SEQUENTIAL run forward from the sector being served, and `dvd_report.cpp` passes
 `--nav-window 2048` whenever it has a playhead.

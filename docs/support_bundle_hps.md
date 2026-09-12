@@ -179,14 +179,60 @@ say, not by their timestamps. A bundle made on a PC has a real clock behind it;
 
 ## The playhead NAV-pack window (issue #81)
 
-**Status: 🔧 built, host-tested + mutation-checked; the COLLECTOR is HW-measured on the
-rig, the CHORD GESTURE is ⏳ HW-confirm pending.**
+**Status: ✅ HW-CONFIRMED 2026-09-12 on a physical disc, both arms.**
 
-⚠ **The chord cannot be driven from the HIL harness, so that half needs the maintainer's
+⚠ **The chord cannot be driven from the HIL harness, so the gesture needs the maintainer's
 own gamepad.** `dvd_report_joy()` is called from `user_io_digital_joystick()`, and the
 harness's uinput device is a KEYBOARD: its presses become joystick bits inside the FPGA
-(`dvd/kbd_map.sv`) and never pass through Main's `map`. What WAS measured on the target is
-everything the chord's child does — see the table below.
+(`dvd/kbd_map.sv`) and never pass through Main's `map`. Everything the child does was
+measured from the harness; the gesture was pressed by hand.
+
+**Arm 1 — the DEGRADE path, with the OLD release-installed collector still in place.**
+Bundle written, `nav packs: no`, audit clean. That combination (new Main + old script)
+wrote NO BUNDLE AT ALL before the flag probe existed — measured on this same rig — so this
+is the version-skew hardening confirmed on hardware, not merely unit-tested.
+
+**Arm 2 — the CAPTURE path, new collector installed, chord pressed ON THE DISC'S MENU:**
+
+```
+captured 130 sectors, nav packs: playhead window 512 sectors
+audit    128 nav-table sectors, 2 NAV packs, 0 carrying A/V
+playhead sector 405969
+
+NAV @405971  hli_ss=2 btn_ns=5 fosl=0   btn_coli[grp1] sel=00005af0
+  btn 1  up/dn/lf/rt=5/2/1/1   LinkPGCN 13
+  btn 2  up/dn/lf/rt=1/3/2/2   LinkPGCN 4
+  btn 3  up/dn/lf/rt=2/4/3/3   HL_BTNN = button 1, LinkPGCN 14
+  btn 4  up/dn/lf/rt=3/5/4/4   LinkPGCN 2
+  btn 5  up/dn/lf/rt=4/1/5/5   HL_BTNN = button 1, LinkPGCN 30
+NAV @405979  ... the SAME button set, 8 sectors later
+```
+
+A complete menu — button count, link graph (a clean 1↔2↔3↔4↔5↔1 ring), highlight colours
+and the VM command per button — off a physical disc, in a 73 KB bundle. **That is exactly
+the evidence missing from #60, #61 and #81**, all three of which were physical-disc reports
+whose bundles carried zero NAV packs.
+
+★ The second NAV pack carries the same button set 8 sectors later — the per-VOBU HLI
+re-send, now observed on a physical disc. That is the property `--nav-stop` rests on.
+
+★★ **AND THE REAL-WORLD COST IS FAR BELOW THE COLD MEASUREMENT: both presses completed in
+≤1 s** (trace line to bundle, same or next second), against the 2.7-4.9 s measured with
+cold reads. The window reads FORWARD FROM THE PLAYHEAD, which is exactly where the core has
+just been streaming, so most of it is already in the page cache. The cold figures below are
+the pessimistic bound — the state the chord actually fires in is much cheaper.
+
+⚠ Both presses landed `btn_ns=0` when the playhead was mid-movie (sector 476140) and
+`btn_ns=5` when it was on the menu. Correct in both cases, and the reason the manual tells
+users to press the chord *while the menu is on screen*.
+
+⚠ **`/tmp/dvd_report_run.log` was 0 bytes after every press** — the child's stdout is not
+being captured, so `reap()`'s "Support bundle FAILED — see /tmp/dvd_report_run.log" would
+point at an empty file. PRE-EXISTING (nothing in this branch touches it) and it only bites
+on the failure path, but it is the one diagnostic that path has. The suspect is narrow:
+`start()` does `freopen("/tmp/dvd_report_run.log", "w", stdout)` in the forked child before
+`execvp`, and python writes fine to a redirect on that box — so it is the freopen in Main's
+context, not the tool. Worth its own look.
 
 Issue #81 arrived as a menu-highlight bug whose bundle carried **no button data at all**,
 and nothing in it said so. The diagnosis had to be made structurally from the IFO tables
