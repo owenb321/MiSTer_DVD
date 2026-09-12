@@ -1418,4 +1418,27 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ⚠ Placed-ALM and fmax comparisons against main are SEED-CONFOUNDED (this is SEED 9,
 # main's entry is SEED 7). Synthesis ALUTs and M10Ks are the clean A/B.
 
+
+# 2026-09-12b (same branch, dev-cddaphys6 -- XOR visualizer DROPPED and copper
+# SLIMMED to a triangle oscillator with three bars; the logo made the default; plus
+# the eject fix that clears cdda_mode/raw_mode/wav_bad on rst_n): SEED 9 held FIRST
+# roll a SIXTH time on this branch -- clk_dec 92.41 @100C / 88.22 @-40C (gate 86.0,
+# PASS both corners) at 89% ALM (37,222 needed), registers 51,047, RAM 502/553,
+# DSP 93/112. Build DVD_cddaphys6_20260912_0217.rbf, commit 7899008.
+# ★ WHAT THE SLIM BOUGHT, vs dev-cddaphys5 on the SAME seed:
+#   cdda_viz   414 -> 293 ALUTs (-121), 225 -> 156 registers (-69)
+#   design  58,511 -> 58,402 ALUTs (-109), ALMs needed 37,295 -> 37,222 (-73)
+# That is the whole of it: the 64-entry quarter-wave sine LUT collapsing to
+# {sq_i,1'b0} (a wire), and the loss of the per-PIXEL XOR path -- which took the
+# a_xv/a_yv/b_m coordinate pipeline and the sx/sy/tc scroll registers with it, since
+# copper's colour is a per-LINE register. RAM is unchanged at 502: nothing
+# memory-side moved.
+# ★ CD FEATURE TOTAL vs main's reclaim fit (entry 2026-09-11d, SEED 7): +937 ALUTs
+# (was +1,046), ALMs needed +586 (was +659), +1 M10K. Per entity: cdda_viz 293,
+# cdda_toc 280, cdda_screen 3, ~361 residual for the reader's WAV walk and emu glue.
+# ⚠ clk_dec FELL 96.51 -> 92.41 on LESS logic and the SAME seed. That is placement
+# variance at 89% ALM, NOT a regression -- the margin is still 6.4 MHz over the gate,
+# and this ledger's own history (SEED 7 swinging 18 MHz on one netlist) is exactly
+# why a fit result is read as a fit result. Nothing here is marginal.
+
 set_global_assignment -name SEED 9
