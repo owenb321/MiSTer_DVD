@@ -2715,6 +2715,26 @@ worse maintenance burden than targeted in-place edits. So:
   hardcoded ternary, pinned by `scrub_ctrl_tb` T13–T15 so a retune is deliberate.
   ⚠ A retune must also move `dvd/dpad_seek.sv`'s header, `docs/dvd_nav.md` §2a and
   `docs/transport_hud.md` — the numbers are quoted in all four.
+  ★★ **AND THE STEP IS NO LONGER A FRACTION OF THE SPAN AT ALL (2026-09-12, branch
+  `feature/scrub-time-tiers`, `dev-scrubtiers`) — sim-proven with a mutant per claim,
+  ⏳ HW gate pending.** A fraction of a SHORT title is a crawl: MEASURED at tier 0, a 2 h
+  feature moved **29 content-seconds per second**, a 3-minute clip **0.58**, a 30-second
+  clip **0.19**, and the shift truncated what little was left (`2584 >> 12 = 0` — the
+  `| 1` floor was the only thing still moving the cursor). Now a linear file steps
+  `lin_blk10 >> {5,3,1,0}` (blocks per 10 s, so the shift IS the rate ≈ 5/21/83/167 s/s,
+  gated on the rate being VALID — the `dpad_seek` precedent), and a DVD steps
+  `span >> (SHn + log2(title_secs) − SECS_REF)`: **span cancels out of the content rate
+  algebraically**, so a duration BUCKET (a leading-one position, no divide) fixes the rate.
+  ★ `SECS_REF = 12` anchors it so every title in **4096–8191 s (68–136 min)** keeps a
+  **bit-identical** step — the 2 h feel that passed hardware is untouched, and only titles
+  far from 2 h move. ⛔ **Do NOT turn the bucket into `span / title_secs`**: on a
+  seamless-branch disc the span holds the other branch's ILVUs (issue #49) and that
+  inflation hits the shift and the divide IDENTICALLY, so the divide fixes nothing — and
+  the AREA objection to it expired with the reclaim, so do not re-derive "we have area
+  now, so divide". ⚠ The two ladders deliberately disagree (DVD 29/117/469/1875 s/s vs
+  linear 5/21/83/167) because the DVD numbers are the ones hardware signed off; if the top
+  tier reads as inconsistent on HW, retune `LS0..LS3`, do not unpick the anchor. Gate:
+  `bench/dvd/run_scrub_tiers.sh --red`.
   ⚠ **SEAMLESS-BRANCH DISCS ARE STILL WRONG and it is NOT the readout — it is the
   SEEK.** The 2026-09-03 cell-gap fix (a cell's span is its own `first..last`, not
   the distance to the next cell's first — AFTER_EARTH VTS_13 PGC1, 1.612× short,
