@@ -177,22 +177,82 @@ But when ordering two bundles from the same reporter, sequence them by what they
 say, not by their timestamps. A bundle made on a PC has a real clock behind it;
 `player.generated_on == "mister"` marks the ones that may not.
 
+## The playhead NAV-pack window (issue #81)
+
+**Status: 🔧 built, host-tested + mutation-checked, ⏳ HW-confirm pending.**
+
+Issue #81 arrived as a menu-highlight bug whose bundle carried **no button data at all**,
+and nothing in it said so. The diagnosis had to be made structurally from the IFO tables
+instead. That was still the right diagnosis — the IFO's `subp_control` word was the
+evidence — but the confirm was never in evidence, and the silence is the defect: a missing
+capture produces a bundle that is written, self-checks, and looks complete.
+
+★★ **THE OBVIOUS FIX WAS THE WRONG ONE, AND MEASURING SAID SO.** The chord had always
+omitted `--nav-packs`, which the manual tells PC reporters to add for highlight bugs, so
+"just pass it too" is the one-line answer. Two measurements kill it:
+
+| | `--nav-packs` (menu-VOB scan) | `--nav-window` (this) |
+|---|---|---|
+| what it reads | every sector of `VIDEO_TS.VOB` + `VTS_nn_0.VOB`, capped at 512 MB | one **sequential** run forward from the served sector |
+| MEN_IN_BLACK | 4.9 s, 2,810 NAV packs, **5.6 MB** of sectors (its 680 MB of menu VOBs hit the cap) | — |
+| SCENEIT_HP | 0.8 s, 224 NAV packs | **0.28 s end to end, 16 NAV packs, a 38 KB bundle** |
+| in-title menus | **cannot see them at all** | 13–20 of ~20 packs carry multi-button HLI |
+| seeks | many | none |
+
+★ **The second row of that table is the real finding, and it is structural, not a
+tuning matter: `--nav-packs` scans MENU VOBs, so it cannot capture an in-title menu's
+buttons on any route, PC included.** A DVD-game or motion-menu disc authors its menus as
+TITLE-domain PGCs with the HLI in a title VOB's NAV packs — Scene It's game menus, and
+issue #81's disc, whose boot menus live in `VTS_02_1.VOB`. So passing `--nav-packs` to the
+chord would have cost minutes on an optical disc and still not answered this bug.
+
+**What ships instead:** `tools/dvd_report.py --nav-window SECTORS` (with `--lba`) captures
+every NAV pack in a short forward run from the playhead, and `dvd_report.cpp` passes
+`--nav-window 2048` whenever it has one. A VOBU is at most 1 s of video, so 2048 sectors
+(~4 MB) always spans several of them, and an HLI is re-sent every VOBU while a menu is up
+(measured on The Matrix: the same unit 8 times, 1.001 s apart) — so forward-only is
+enough. ★ It also captures **whatever the user was actually looking at**, in either
+domain, which no offline scan can know.
+
+Verified end to end on a real disc: a bundle built with `--lba 903500 --nav-window 2048`
+against SCENEIT_HP reconstructs to a sparse ISO whose `nav_extract.py` walk decodes a
+complete **7-button** in-title menu — rects, link graph, `btn_coli` colours and the VM
+command per button. Audit and self-check both PASS.
+
+⚠ **The content guarantee is unchanged and still structural.** The window only appends
+sectors that pass `is_nav_pack()`, and `audit()` re-checks the FINAL captured set and
+refuses to write a bundle if any sector parses as a media pack carrying anything but a
+system header, padding or `private_stream_2`. Nothing about this relaxes that.
+
+⚠ **No `--nav-packs` on the chord, still** — and now for a better reason than cost: it
+answers a different question, and the expensive one. The manual's on-player section says
+so to users.
+
+### The argv moved out of the fork
+
+`dvd_report_build_argv()` (declared in `dvd_report.h`, `DVD_REPORT_ARGV_MAX`) is built
+outside the `fork()` purely so it can be tested, the same move as
+`cdda_toc`'s track-skip resolver. **The failure mode here is silence**, which is the whole
+reason: a missing or misspelled flag still produces a plausible bundle.
+`main/tests/dvd_report_test.cpp` pins four arms — the full case, no playhead, playhead
+only, and the terminator/bound — with **4 RED mutations each caught by its own
+assertion**: drop `--nav-window`; pass it unconditionally (with no playhead the tool gets
+a base of 0 and captures the NAV packs at the START of the disc — *confidently wrong data
+instead of none*, which is worse than the bug being fixed); reach for `--nav-packs`
+instead; forget the NUL.
+
+⚠ Two harness lessons, both cost a round: `red_case`'s `grep -q "$expect"` read an expect
+string beginning `--` as an option (fixed with `-e`), and a test that walks `argv` until
+its NUL cannot detect a missing NUL — the terminator arm now pre-fills the array with a
+sentinel, runs FIRST, and bounds every scan by `DVD_REPORT_ARGV_MAX`, so a missing
+terminator is reported by its own assertion instead of as noise in an unrelated arm.
+
+⚠ `run_tests.sh` grew `osd.h` and `file_io.h` to its empty-stub list, and the test defines
+`dvd_css_active()` / `dvd_phys_device()` (declared by the real headers the module includes,
+so these are definitions rather than shadowing stubs).
+
 ## What is not done
 
-- ⚠ **No `--nav-packs`, so a HIGHLIGHT bug reported from the player carries no button
-  data.** The child is invoked nav-tables-only on purpose (`dvd_report.cpp:266` — the
-  nav-pack scan walks menu VOBs, which would turn a seconds-long chord into a long one on
-  an optical disc). Demonstrated cost, issue #81: the reported symptom was *"no visible
-  selection on the main menus"* and the bundle could not say whether an HLI was present
-  at all, so the diagnosis had to be made structurally from the IFO tables. It was still
-  the right diagnosis — the IFO's `subp_control` word was the evidence — but the confirm
-  was not in the bundle.
-  The manual now says this in the on-player section (`site/content/reference/reporting-a-bug.md`):
-  send the player bundle anyway, and add a PC bundle with `--nav-packs` when the report is
-  specifically about a highlight. ⛔ Not "just add the flag": measure the scan cost on a
-  physical disc first, and if it is added it wants a bounded scan (`--nav-scan-mb`) plus a
-  progress message, because `dvd_report_tick()` shares the poll loop with SD block service
-  and blocking I/O there is a video artefact (the `dvd_phys` drive-probe lesson).
 - **The live status word is not captured.** `user_io_status_get()` reads at most
   two bytes of `cur_status[]`, so the full 128-bit word would need its own
   accessor. The saved `DVD*.CFG` is passed instead — the same settings, one save

@@ -53,4 +53,17 @@ void dvd_report_note_mount(const char *path);
 // completely different places. Issue #48; see docs/mgl_launch.md.
 void dvd_report_note_mount_result(const char *path, int index, int ok, uint64_t size);
 
+// The argv handed to tools/dvd_report.py, built outside the fork so it can be
+// tested (main/tests/dvd_report_test.cpp). `lba`, `cfg` and `ver` are each
+// optional -- pass 0 to omit the flag and its value.
+//
+// It is out here because a missing flag fails SILENTLY: the bundle is written, it
+// looks fine, and it is simply missing the data the report needed. That is how
+// issue #81 arrived -- a highlight bug whose bundle carried no button data at all,
+// with nothing to say so.
+#define DVD_REPORT_ARGV_MAX 24
+void dvd_report_build_argv(const char **argv, const char *script, const char *src,
+                           const char *out, const char *lba, const char *cfg,
+                           const char *ver);
+
 #endif

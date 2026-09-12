@@ -31,6 +31,8 @@ cp ../support/dvd/*.cpp ../support/dvd/*.h "$TREE/support/dvd/"
 : > "$TREE/video.h"
 : > "$TREE/cfg.h"
 : > "$TREE/hardware.h"
+: > "$TREE/osd.h"
+: > "$TREE/file_io.h"
 
 fail=0
 for t in *_test.cpp; do
@@ -62,9 +64,11 @@ red_case() {
     fi
     local log="$dir/log"
     "$dir/bin" > "$log" 2>&1 && { echo "  !! RED $name: test PASSED against broken code"; fail=1; return; }
-    if ! grep -q "$expect" "$log"; then
+    # -e: an expect string may legitimately START with "--" (a CLI flag being
+    # asserted present or absent), which grep would otherwise read as an option.
+    if ! grep -q -e "$expect" "$log"; then
         echo "  !! RED $name: caught, but not by \"$expect\""
-        grep "FAIL" "$log" | head -3; fail=1
+        grep -e "FAIL" "$log" | head -3; fail=1
     else
         echo "  RED $name -> caught by \"$expect\""
     fi
@@ -98,6 +102,34 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_hdmi_audio.cpp dvd_hdmi_audio_test.cpp \
         "acked (old core still engages)" \
         "s/core_fmt_v2      = (fmt >> 15) \& 1;/core_fmt_v2      = 1;/" assumes-fmt-version
+
+    # ---- the support bundle's argv (issue #81) ---------------------------------
+    # The shipped-until-#81 behaviour: no NAV-pack capture at all, so a highlight
+    # bug's bundle carried no button data and nothing said so.
+    red_case dvd_report.cpp dvd_report_test.cpp \
+        "--nav-window is missing" \
+        "/argv\[i++\] = \"--nav-window\"/d" no-nav-window
+
+    # Pass the window unconditionally: with no playhead the tool gets a base of 0
+    # and captures the NAV packs at the START of the disc -- confidently wrong data
+    # instead of none, which is worse than the bug being fixed.
+    red_case dvd_report.cpp dvd_report_test.cpp \
+        "--nav-window must NOT be passed" \
+        "s/\tif (lba) { argv\[i++\] = \"--nav-window\";/\tif (1)   { argv[i++] = \"--nav-window\";/" \
+        window-without-playhead
+
+    # Reach for the expensive capture instead. Correct data, wrong cost: minutes of
+    # seeking on the optical disc the core is streaming from -- and it still cannot
+    # see an in-title menu's buttons, which is the whole point of the window.
+    red_case dvd_report.cpp dvd_report_test.cpp \
+        "--nav-packs must NOT be passed" \
+        "s/argv\[i++\] = \"--nav-window\"; argv\[i++\] = NAV_WINDOW_SECTORS;/argv[i++] = \"--nav-packs\";/" \
+        expensive-capture
+
+    # Forget the terminator. execvp reads past the end of the array.
+    red_case dvd_report.cpp dvd_report_test.cpp \
+        "not NUL-terminated" \
+        "s/^\targv\[i\] = 0;$/\t\/\* argv[i] = 0; \*\//" no-terminator
     echo
 fi
 

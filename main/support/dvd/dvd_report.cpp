@@ -42,6 +42,56 @@
 
 #define OUT_DIR      "/media/fat/DVD_reports"
 
+// ---------------------------------------------------------------------------
+// The child's argv, built OUTSIDE the fork so it can be tested
+// ---------------------------------------------------------------------------
+// Lives here rather than inline in the child because a missing flag fails
+// SILENTLY -- the bundle is written, looks fine, and is simply missing the data
+// the report needed. That is exactly how issue #81 arrived: the reporter's bundle
+// carried no button data at all and nothing said so. main/tests/dvd_report_test.cpp
+// pins this.
+//
+// ★ --nav-window, not --nav-packs. Both capture NAV packs; they capture DIFFERENT
+// ones, and only one of them is affordable here:
+//   --nav-packs   scans MENU VOBs (VIDEO_TS.VOB, VTS_nn_0.VOB) up to a 512 MB cap.
+//                 It CANNOT see an in-title menu -- a DVD-game or motion-menu disc
+//                 authors its menus as TITLE-domain PGCs with the HLI in a TITLE
+//                 VOB's NAV packs (Scene It's game menus; issue #81's disc, whose
+//                 boot menus live in VTS_02_1.VOB). Measured cost on MEN_IN_BLACK:
+//                 4.9 s and 5.6 MB of sectors on a local disk -- which on an
+//                 optical disc the core is streaming from means minutes of seeking.
+//   --nav-window  one SEQUENTIAL run forward from the sector we were serving,
+//                 capturing every NAV pack in it. Measured: 0.28 s end to end,
+//                 16 NAV packs, a 38 KB bundle -- and on Scene It's game VTSes
+//                 13-20 of ~20 such packs carry MULTI-BUTTON HLI, i.e. exactly
+//                 the records the menu-VOB scan cannot reach. No seeks.
+// 2048 sectors is ~4 MB; a VOBU is at most 1 s of video, so it always spans
+// several, and an HLI is re-sent every VOBU while a menu is up.
+//
+// Needs the playhead: with no LBA there is nothing to window around, so the flag
+// is omitted rather than passed with a meaningless base.
+#define NAV_WINDOW_SECTORS "2048"
+
+void dvd_report_build_argv(const char **argv, const char *script, const char *src,
+                           const char *out, const char *lba, const char *cfg,
+                           const char *ver)
+{
+	int i = 0;
+	argv[i++] = "python3";
+	argv[i++] = script;
+	argv[i++] = src;
+	argv[i++] = "--no-prompt";
+	argv[i++] = "--generated-on";
+	argv[i++] = "mister";
+	argv[i++] = "-o";
+	argv[i++] = out;
+	if (lba) { argv[i++] = "--lba";        argv[i++] = lba; }
+	if (lba) { argv[i++] = "--nav-window"; argv[i++] = NAV_WINDOW_SECTORS; }
+	if (cfg) { argv[i++] = "--cfg";        argv[i++] = cfg; }
+	if (ver) { argv[i++] = "--core-version"; argv[i++] = ver; }
+	argv[i] = 0;
+}
+
 static const char *SCRIPT_PATHS[] = {
 	"/media/fat/Scripts/dvd_report.py",
 	"/media/fat/dvd_report.py",
@@ -263,22 +313,9 @@ static void start(void)
 	}
 	if (!p)
 	{
-		// Child. Nav-tables only: no --nav-packs, because that scans menu VOBs
-		// and this should finish in seconds on SD-card media.
-		const char *argv[20];
-		int i = 0;
-		argv[i++] = "python3";
-		argv[i++] = script;
-		argv[i++] = src;
-		argv[i++] = "--no-prompt";
-		argv[i++] = "--generated-on";
-		argv[i++] = "mister";
-		argv[i++] = "-o";
-		argv[i++] = out_path;
-		if (have_lba) { argv[i++] = "--lba"; argv[i++] = lba; }
-		if (cfg)      { argv[i++] = "--cfg"; argv[i++] = cfg; }
-		if (ver)      { argv[i++] = "--core-version"; argv[i++] = ver; }
-		argv[i] = 0;
+		const char *argv[DVD_REPORT_ARGV_MAX];
+		dvd_report_build_argv(argv, script, src, out_path,
+		                      have_lba ? lba : 0, cfg, ver);
 
 		freopen("/tmp/dvd_report_run.log", "w", stdout);
 		dup2(fileno(stdout), fileno(stderr));

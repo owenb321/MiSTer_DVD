@@ -46,7 +46,7 @@ the issue.
 
 If the problem is specifically about **menu buttons or highlights** — the wrong button
 lit, the highlight in the wrong place, a press doing nothing — add `--nav-packs` so the
-button positions are captured too:
+button positions of the disc's menus are captured too:
 
 ```bash
 python3 dvd_report.py MY_DISC.iso --nav-packs
@@ -83,12 +83,15 @@ OSD, and the **exact point on the disc** you were at when you pressed the chord.
 Holding those two buttons also steps the audio track and the subtitle track once each —
 that is expected, and pressing them again puts things back.
 
-One difference worth knowing: to keep the chord fast it captures the navigation tables
-only, never the menu **button positions** that `--nav-packs` adds above. That is plenty for
-most menu problems, but if the report is about a **highlight that is missing, mispositioned
-or on the wrong button**, a PC bundle made with `--nav-packs` says strictly more. Send the
-player's bundle anyway — it is still the fastest thing you can do, and it names the disc,
-the version and where you were.
+It captures the menu **button positions** too, for the part of the disc you were on when
+you pressed the chord — which is what a highlight problem needs. It does that instead of
+the whole-disc `--nav-packs` sweep above, and for menu highlights it is often the better
+of the two: some discs build their menus as ordinary titles, and a button there is
+invisible to the sweep but sits squarely in what the chord captures.
+
+So for a **highlight that is missing, mispositioned or on the wrong button**, press the
+chord *while that menu is on screen*. If you can also make a PC bundle with
+`--nav-packs`, send both — they cover different parts of the disc.
 
 
 ## Everything else: describe it

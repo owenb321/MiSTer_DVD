@@ -2929,6 +2929,40 @@ bundle over without thinking, and it is the same line as
 `css-key-cache-never-ship`. ⛔ A `--from-drive` mode was considered and REJECTED
 (2026-08-31, user decision): it points users at their optical drive, and a
 reporter who has already ripped their own ISO is a better reporter.
+★★ **`--nav-packs` SCANS MENU VOBs, SO IT CANNOT CAPTURE AN IN-TITLE MENU'S
+BUTTONS AT ALL — on any route (2026-09-12, issue #81).** A DVD-game or
+motion-menu disc authors its menus as TITLE-domain PGCs with the HLI in a title
+VOB's NAV packs (Scene It's game menus; #81's disc, whose boot menus live in
+`VTS_02_1.VOB`), so a highlight bug on such a disc could not be evidenced by
+either route. That is structural, not a tuning matter.
+✅ **FIXED by a PLAYHEAD WINDOW, and the chord now carries button data:**
+`dvd_report.py --nav-window SECTORS` (with `--lba`) captures every NAV pack in one
+SEQUENTIAL run forward from the sector being served, and `dvd_report.cpp` passes
+`--nav-window 2048` whenever it has a playhead.
+★ **Measured, which is what chose it over "just pass `--nav-packs` too":** the
+window costs **0.28 s and a 38 KB bundle** and yields 16 NAV packs of which 13–20
+of ~20 carry multi-button HLI on Scene It's game VTSes, against **4.9 s and 5.6 MB**
+for `--nav-packs` on MEN_IN_BLACK (its 680 MB of menu VOBs hit the 512 MB cap) —
+minutes of seeking on an optical disc the core is streaming from, for data that
+still misses the in-title case. Proven end to end: a window bundle reconstructs to
+an ISO whose `nav_extract.py` walk decodes a complete 7-button in-title menu.
+⚠ A VOBU is ≤1 s, so 2048 sectors spans several, and an HLI is re-sent every VOBU
+while a menu is up — forward-only is enough. ⚠ The content guarantee is unchanged
+and still structural (`is_nav_pack` gates the append; `audit()` re-checks the final
+set). ⛔ `--nav-packs` still NOT on the chord — it answers a different question, and
+the expensive one.
+★ **The argv moved OUT of the `fork()` (`dvd_report_build_argv`) purely so it could
+be tested, because every failure here is SILENT** — a missing flag still produces a
+bundle that is written, self-checks and looks complete, which is exactly how #81
+arrived. `main/tests/dvd_report_test.cpp`: 4 arms, **4 RED mutations each caught by
+its own assertion** (drop the flag; pass it with no playhead — which captures the
+NAV packs at the START of the disc, *confidently wrong data instead of none*; reach
+for `--nav-packs`; forget the NUL).
+⚠ Two harness traps: `red_case`'s `grep -q "$expect"` read an expect string
+beginning `--` as an OPTION (now `-e`), and **a test that walks argv to its NUL
+cannot detect a missing NUL** — the terminator arm pre-fills a sentinel, runs FIRST,
+and bounds every scan, so the mutation is caught by its own assertion instead of as
+noise elsewhere. Detail: `docs/support_bundle_hps.md`.
 ⚠ Two traps recorded in `docs/bug_reports.md`: NAV-pack detection is **not**
 `0x000001BF` at offset 14 (a **system header** pushes PCI to `0x26`; the fixed
 offset found ZERO packs and reported success), and the tool is **deliberately
