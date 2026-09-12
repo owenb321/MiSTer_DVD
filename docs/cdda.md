@@ -368,7 +368,9 @@ track table rides the generic ioctl-download channel into `dvd/cdda_toc.sv`.
 The SG_IO smoke test (`main/tools/cdda_smoke.c`) was run first and passed, which
 is what let the rest be written as plumbing.
 
-**Remaining:** gate 7 above (next on the last track), blocked on the drive, and
+**Remaining:** gate 7 above (next on the last track) — **no longer blocked**: the
+drive that dropped its disc mid-test was a POWER problem, not a faulty unit, and
+was replaced with a lower-power one the MiSTer USB hub sustains (2026-09-12) — and
 the fork's one-line `AUDIOCD=DVD` arm in `menu_audio_mgl()` (opt-in; not needed
 for a disc inserted while our core is already running).
 
