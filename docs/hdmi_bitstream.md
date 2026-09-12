@@ -633,14 +633,34 @@ The §5a engage policy and teardown are covered off-hardware in two places:
    **silent, never noisy**, in Passthru. On **stock Main** the same `.rbf` is silent
    over HDMI and optical passthrough still works — i.e. the ack gate holds and a
    user who never installs MiSTer_DVDcss is unaffected.
-6. **§5a stickiness (⏳ pending).** Read the flag rather than listening where the
-   board has `i2cget` — bus 1 (2 on some boards), address `0x39`, register `0x12`:
-   `0x20` is PCM, `0xA0` non-PCM. (a) Passthru selected, nothing loaded → `0x20`.
-   (b) AC-3 title playing → `0xA0`; a chapter seek must NOT produce a
-   release/engage pair in `/tmp/dvd_hdmi_audio.log`. (c) an LPCM track → `0x20`.
-   (d) load another core while an AC-3 title plays → that core has HDMI audio and
-   `0x12` reads `0x20`. (e) OSD Reboot while engaged → the menu core has audio.
-   (f) listen at a title start for how much DD audio the PCM→DD switch clips.
+6. **§5a stickiness — ✅ HW-CONFIRMED 2026-09-12, defect reproduced first.** Read the
+   flag rather than listening: `i2cget -y 1 0x39 0x12` on the rig (**bus 1**, the
+   ADV7513 main map at `0x39`; chip revision reads `0x13` at register `0x00`, which is
+   how to find the bus). `0x20` = PCM, `0xA0` = non-PCM.
+   ⚠ **The rig's own sink does not advertise AC-3/DTS** (`sink_ok=0` in the log), so
+   nothing engages at all until `dvd_hdmi_bitstream=2` is set under `[DVD]` in
+   `MiSTer.ini` — **back it up and put it back by hand; `mister.py restore` does not
+   touch the ini.**
+
+   | arm | measured |
+   |---|---|
+   | RED: pre-fix core + Main, DVD core running | `0xA0` |
+   | RED: …then load the menu core | **`0xA0`** — the report, reproduced |
+   | GREEN: core load with the flag left stuck at `0xA0` | `0x20` — self-heal (step 38) |
+   | GREEN: Passthru, nothing routed yet (t+3 s, t+6 s) | `0x20` |
+   | GREEN: AC-3 playing (t+9 s onward) | `0xA0` |
+   | GREEN: 3 chapter skips + 3 audio-track switches | `0xA0`, **1 write in total** |
+   | GREEN: LPCM VOB in Passthru | `0x20` |
+   | GREEN: Decode PCM, AC-3 playing | `0x20` |
+   | GREEN: load another core while engaged | **`0x20`** + `teardown: restoring PCM mode` |
+
+   ★ **Count `adv7513:` lines in `/tmp/dvd_hdmi_audio.log` for the churn arms, not
+   register samples** — the log records every write, so it catches a release/engage
+   pair that a 0.5 s sampler would step over. Exactly 1 across six transport events.
+   ⏳ **Still unexercised: (e) the `reboot()` arm** — same one-line call, present in the
+   built binary, but the OSD Reboot row cannot be driven from the harness and a reboot
+   wipes `/tmp` along with the log. ⏳ And **(f)**, what a receiver does with the
+   PCM→DD switch at a title start: this sink has no AC-3/DTS decoder, so it cannot say.
 
 If (1) fails with the receiver naming nothing or mis-locking, try the §3
 preamble table before anything else.

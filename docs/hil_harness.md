@@ -134,6 +134,26 @@ primary reader: the numeric `DEBUG_OVERLAY` lattice it decodes is compiled out
 - `log_file_entry=0` in `MiSTer.ini`, so `/tmp/OSD_VISIBLE` is not written.
   Setting it to 1 would give the harness OSD state, which it otherwise cannot
   see at all.
+- **`i2cget`/`i2cdetect`/`i2cdump` are installed**, and the **ADV7513 main map is on
+  i2c bus 1 at `0x39`** (register `0x00` reads `0x13`, the chip revision — that is how
+  to find the bus; the other two buses error). This makes the HDMI audio path
+  *measurable* instead of a listening test: register `0x12` is `0x20` for PCM and
+  `0xA0` for non-PCM, and it settled the 2026-09-12 teardown bug end to end
+  (`docs/hdmi_bitstream.md` §5a). ⚠ **This rig's display does NOT advertise AC-3/DTS**,
+  so bitstream never engages here unless `dvd_hdmi_bitstream=2` is set under `[DVD]`;
+  **`mister.py restore` does not touch `MiSTer.ini`**, so back it up and put it back
+  by hand.
+
+### ⚠ Telemetry read across a launch is GARBAGE, and it looks like a finding
+
+A `telem --watch` window that starts too soon after `launch` spans the core's reset and
+reports impossibilities: **1003 refreshes/s, 1026 lates/s, 65,524 drain-gate closures**
+(counter deltas taken across the zeroing). A second window on settled playback read
+59.955 Hz, 24.01 fps, audio −12 ppm, 0 lates, 0 drops — the same build, seconds later.
+Settle ~20 s, and re-measure anything that looks catastrophic before believing it.
+
+⚠ The same trap in reverse: a 41 s window on a **66 s clip** starting 20 s in spans the
+end of the file and reports the audio rate 15 % low. Match the window to the material.
 
 ## Track C status (lip-sync)
 

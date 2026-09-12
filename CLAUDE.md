@@ -252,9 +252,39 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **HDMI PASSTHRU LEFT THE ADV7513 IN NON-PCM MODE FOR THE NEXT CORE (2026-09-11,
+- ✅ **HDMI PASSTHRU LEFT THE ADV7513 IN NON-PCM MODE FOR THE NEXT CORE (2026-09-11,
   branch `fix/hdmi-audio-teardown`) — sim + host-proven RED/GREEN, mutation-checked
-  both sides, ⏳ HW-confirm pending.** Field report: *"enable passthru with the
+  both sides, and ✅ HW-CONFIRMED 2026-09-12 with the defect REPRODUCED FIRST** (build
+  `DVD_hdmiteardown_20260912_0320.rbf`, SEED 7 first roll, clk_dec 92.77/88.90).
+  ★★ **MEASURED AT THE CHIP, NOT BY EAR: `i2cget -y 1 0x39 0x12` on the rig** (the
+  ADV7513 is on **i2c bus 1**; `0x20` = PCM, `0xA0` = non-PCM). That turns "no audio on
+  the next core" — which sounds like a listening test needing a receiver — into a
+  one-byte read, and it is what let the RED arm run at all: **the rig's sink does not
+  advertise AC-3/DTS** (`sink_ok=0`), so nothing engages until `dvd_hdmi_bitstream=2`
+  is set in `MiSTer.ini` (restore it afterwards; `mister.py restore` does not).
+  **RED (pre-fix core + pre-fix Main): `0x12=0xA0` with the DVD core, and STILL `0xA0`
+  after loading the menu core** — the report, reproduced. **GREEN, in order:** the
+  stuck `0xA0` **self-healed to `0x20` at core load** (layer 3 — the RED arm left it
+  set, so the arm tested itself); `0x20` at t+3 s and t+6 s with nothing routed, then
+  `0xA0` from t+9 s when AC-3 started (layer 1); **3 chapter skips and 3 audio-track
+  switches produced EXACTLY ONE register write in total** (the reset-domain design,
+  confirmed — count `adv7513:` lines in `/tmp/dvd_hdmi_audio.log`, which records every
+  write and so catches blips a sampler would miss); an LPCM VOB in Passthru read
+  `0x20`; Decode PCM with AC-3 playing never engaged; and **loading another core while
+  engaged read `0x20`, with `teardown: restoring PCM mode` in the log** (layer 2 = the
+  fix). Pacing unregressed: Decode 59.955 Hz / 24.01 fps / audio −12 ppm / 0 lates /
+  0 drops; Passthru 59.953 Hz, 2.505 refreshes per frame.
+  ⚠ **NOT exercised: the `reboot()` arm (step 37).** Same one-line call, verified
+  present in the built binary, but the OSD Reboot row cannot be driven from the
+  harness and a reboot would wipe `/tmp` (and the log with it). Also untested: what a
+  real receiver does with the PCM→DD switch at a title start, since this sink has no
+  AC-3/DTS decoder at all.
+  ⚠ **Harness trap seen twice here: telemetry sampled across the launch transient is
+  GARBAGE** (1003 refreshes/s, 65,524 drain-gate closures — counters read across the
+  core's reset). Re-measure on settled playback; a second window read perfectly clean.
+  A short clip is the same trap in reverse — a 41 s window on a 66 s clip starting at
+  t+20 s spans the end of the file and reports the audio rate 15 % low.
+  Field report: *"enable passthru with the
   modified Main installed, load another core, and you get no audio."* Reproduced in
   code, and it needed **no disc** — selecting `Audio Out = Passthru` was enough.
   ★★ **`docs/hdmi_bitstream.md` §2 PREDICTED THIS AND THE PREDICTION WAS FILED UNDER
