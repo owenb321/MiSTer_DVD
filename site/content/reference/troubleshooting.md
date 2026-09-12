@@ -204,6 +204,25 @@ dvd_hdmi_bitstream=2      ; 0=auto (default), 1=off, 2=force
 Read `/tmp/dvd_hdmi_audio.log` to see what it decided and why — it records the EDID result
 and each stage of the handoff.
 
+### Another core has no HDMI audio after I used the DVD core
+
+Update `MiSTer_DVDcss` to the version that shipped with your `.rbf`, and power-cycle the
+MiSTer once to clear the state you are seeing now.
+
+To send a bitstream, the custom Main switches the HDMI transmitter out of PCM mode. Older
+versions did that as soon as you selected `Audio Out` = `Passthru`, even with nothing
+playing, and never switched it back — so the next core, which sends ordinary PCM, was
+played into a link still expecting compressed audio, and you got silence. Nothing else
+resets that setting: it survives loading another core and it survives a reboot from the
+menu. Only removing power clears it.
+
+Current versions switch the transmitter only while a Dolby Digital or DTS track is actually
+playing, and switch it back when you load another core or reboot.
+
+!!! warning "Update the core and `MiSTer_DVDcss` together"
+    This fix is in both halves. A current Main with an older core still falls back to the
+    older behaviour, because an older core cannot tell it which format is playing.
+
 ## Picture problems
 
 ### 16:9 content looks tall and thin on a CRT
