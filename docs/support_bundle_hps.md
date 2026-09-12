@@ -179,6 +179,20 @@ say, not by their timestamps. A bundle made on a PC has a real clock behind it;
 
 ## What is not done
 
+- ⚠ **No `--nav-packs`, so a HIGHLIGHT bug reported from the player carries no button
+  data.** The child is invoked nav-tables-only on purpose (`dvd_report.cpp:266` — the
+  nav-pack scan walks menu VOBs, which would turn a seconds-long chord into a long one on
+  an optical disc). Demonstrated cost, issue #81: the reported symptom was *"no visible
+  selection on the main menus"* and the bundle could not say whether an HLI was present
+  at all, so the diagnosis had to be made structurally from the IFO tables. It was still
+  the right diagnosis — the IFO's `subp_control` word was the evidence — but the confirm
+  was not in the bundle.
+  The manual now says this in the on-player section (`site/content/reference/reporting-a-bug.md`):
+  send the player bundle anyway, and add a PC bundle with `--nav-packs` when the report is
+  specifically about a highlight. ⛔ Not "just add the flag": measure the scan cost on a
+  physical disc first, and if it is added it wants a bounded scan (`--nav-scan-mb`) plus a
+  progress message, because `dvd_report_tick()` shares the poll loop with SD block service
+  and blocking I/O there is a video artefact (the `dvd_phys` drive-probe lesson).
 - **The live status word is not captured.** `user_io_status_get()` reads at most
   two bytes of `cur_status[]`, so the full 128-bit word would need its own
   accessor. The saved `DVD*.CFG` is passed instead — the same settings, one save

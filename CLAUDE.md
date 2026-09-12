@@ -1263,6 +1263,55 @@ worse maintenance burden than targeted in-place edits. So:
     `phys_streamN` golden contract is untouched.
     Detail: **`docs/stc_freerun.md` §12**, `docs/subpicture.md`, `docs/dvd_nav.md`.
 
+- 🔧 **A MENU CONTEXT IS NOT A MENU DOMAIN — the subpicture map's domain gate asked the
+  wrong question (2026-09-12, issue #81); sim-proven + mutation-checked, ⏳ HW-confirm
+  pending.** Field report on v0.5.0: *Aniki, mon Frère* (**BROTHER**) PAL FR Z2, physical
+  disc, `Disc Menus` On — *"No visible selection on the main menus."*
+  ★★ **THAT IS WORD-FOR-WORD THE #60/#61 SYMPTOM ON A DISC THE #60/#61 FIX COULD NOT
+  REACH, AND THE SENTENCE CLAIMING IT COULD WAS IN `emu.sv` THE WHOLE TIME.** Measured
+  from the repro bundle: the disc's FP is `g[3]=1; JumpTT 3`, so its menus are
+  **TITLE-domain PGCs** (VTS_02, 22 titles of 30–41 s, `PGCN 4` post
+  `if (g[0]==0) JumpVTS_PTT 4:1` = a looping motion menu, and `HL_BTNN = 0x400/0x800` in
+  five PGCs' POSTs = it expects highlights), VTS_02 `V_ATTR = 0x5E00` (PAL 16:9), and
+  `subp_control[0] = 0x80010200` on **every** PGC — **the exact word both #60/#61 discs
+  author**, so the highlight SPU rides `0x21` while the core filtered `0x20`. A highlight
+  is a RECOLOUR of subpicture pixels, so nothing was drawn.
+  ★ **The mechanism: `subp_stream_map`'s gate was `ctx_menu ? ~dom_tt : dom_tt`, driven
+  from `emu.sv`'s `menu_sp_ctx` — and `menu_sp_ctx` is DELIBERATELY WIDER than the menu
+  domain** (it includes `sp_menu_early`, the in-title multi-button HLI menu: Scene It's
+  game menus, and this disc's motion menus). So a menu context in the TITLE domain
+  demanded a menu-domain table, found the title's, and fell back to the logical index.
+  Fix: the input is now `menu_dom` (`menus_on && menu_active` — a fact about the PLAYER)
+  and the test is `dom_ok = (dom_tt != menu_dom)` = "the table belongs to the domain we
+  are in".
+  ⚠⚠ **THE MODULE'S TRUTH TABLE DID NOT CHANGE** (`ctx_menu ? ~dom_tt : dom_tt` is the
+  same function of that bit; verified over 200,000 input points), so
+  `subp_stream_map_tb` **cannot go RED for this defect** — only emu's choice of what to
+  put on the wire changed, and there is no emu-level bench.
+  ★★ **THAT IS THE DURABLE LESSON, AND THE DOC HAD ALREADY TALKED ITSELF OUT OF THE
+  GATE:** `docs/track_selection.md` said a chain bench "would have to *replicate* emu's
+  glue, which is a bench agreeing with a copy of the thing it is meant to check" — true,
+  and it was then read as covering the glue. It did not: a single port connection
+  carrying the wrong FACT is invisible to every module-level test. New
+  **`tools/check_subp_map_wiring.py`** gates that one connection by **reading it out of
+  `dvd/emu.sv`** (the `tools/acmod_scan.py` / `csync_pipe_tb` pattern — a table that
+  cannot go stale beats a correct one), runs from `run_subpic.sh` in milliseconds, and is
+  RED on the pre-#81 file and on 2 targeted re-regressions.
+  ⚠ **No local repro, quantified: 958 ISOs → 7 discs have a title-domain PGC resolving
+  logical 0 non-zero, and NONE of the 7 carries an in-title HLI** (`nav_extract.py
+  --title-vob`), so they are untouched either way — the same standing as #60/#61, which
+  also could not be reproduced locally. ⚠ The reporter did not pass `--nav-packs`, so the
+  HLI itself is not in evidence and the diagnosis is structural.
+  ⚠ **NEXT SUSPECT IF THE HW ROUND FAILS: `wide`.** An in-title menu takes it from
+  `ar_wide_auto` (the DECODED sequence header) while a menu-domain menu uses the IFO's
+  `VTSM_V_ATR` precisely because "DVD menus are routinely authored 16:9 anamorphic with a
+  4:3 sequence-header code". A 4:3 code here would take the `[28:24]` field (0) and the
+  symptom survives. `VTS_V_ATTR@0x200` is already resident in `parse_buf` during the
+  Phase-10 `S_ATTR` sweep, so exporting it is one extra `attr_addr` step — NOT done, one
+  behavioural delta per round. Gate: `subp_stream_map_tb` arms [7]–[10] + 6 new vectors.
+  Detail: **`docs/track_selection.md`** "The domain gate asked the wrong question",
+  `docs/dvd_nav.md` (Scene It section).
+
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
   PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
   no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**

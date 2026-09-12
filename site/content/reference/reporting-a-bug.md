@@ -77,15 +77,18 @@ writes a bundle to `/media/fat/DVD_reports/` and tells you the filename on scree
 off the SD card and attach it to the issue.
 
 This works for **physical discs** as well as images, and it needs no PC. It also records
-something the PC route cannot: the exact point on the disc you were at when you pressed it,
-which for a menu problem is usually the whole answer.
+two things the PC route cannot: the **core version**, so you never have to read it off the
+OSD, and the **exact point on the disc** you were at when you pressed the chord.
 
 Holding those two buttons also steps the audio track and the subtitle track once each —
 that is expected, and pressing them again puts things back.
 
-The bundle it writes also records two things the PC route cannot: the **core version**,
-so you never have to read it off the OSD, and the **exact point on the disc** you were at
-when you pressed the chord.
+One difference worth knowing: to keep the chord fast it captures the navigation tables
+only, never the menu **button positions** that `--nav-packs` adds above. That is plenty for
+most menu problems, but if the report is about a **highlight that is missing, mispositioned
+or on the wrong button**, a PC bundle made with `--nav-packs` says strictly more. Send the
+player's bundle anyway — it is still the fastest thing you can do, and it names the disc,
+the version and where you were.
 
 
 ## Everything else: describe it

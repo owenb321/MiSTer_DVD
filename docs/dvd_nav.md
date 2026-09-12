@@ -1898,6 +1898,16 @@ is suppressed so left/right walks buttons instead of seeking. `btn_ns==1` stays 
 case (scrub + Select-only) so Matrix is unaffected. The highlight subpicture is forced to stream 0
 + windowless (`menu_mode`) like a menu-domain menu so the selected-button highlight renders.
 
+⚠ **"Forced to stream 0" means LOGICAL 0, and until issue #81 (2026-09-12) that logical
+number never reached the disc's `subp_control` map on this path.** `subp_stream_map`'s domain
+gate was handed the menu *context*, so it required a menu-*domain* table and fell back to the
+identity index for every in-title menu — fine while the disc maps logical 0 → physical 0
+(every Scene It disc does), and invisible highlights on one that does not. The reported disc
+is *Aniki, mon Frère* (**BROTHER**) PAL FR R2, whose title-domain motion menus author
+`subp_control[0] = 0x80010200` (wide → `0x21`). Fixed by asking the gate the question it
+needs — "is the table from the domain the player is IN" — see
+`docs/track_selection.md` "The domain gate asked the wrong question".
+
 **Boot ordering (issues #1/#2) is NOT a bug:** `tools/dvd_vm_ref.py runboot` (new full-playback
 driver) parks on PGC18 (main menu) matching libdvdnav; the pre-menu "actor" clip is short
 authored VTS3 intro (2/11/7/19s), never a question VTS. See the `scene-it-in-title-hli-menus` memory.
