@@ -1309,13 +1309,30 @@ worse maintenance burden than targeted in-place edits. So:
   move are exactly: available bit SET **and** a non-zero id for the presented aspect
   **and** an in-title HLI menu. ⚠ The reporter did not pass `--nav-packs`, so the
   HLI itself is not in evidence and the diagnosis is structural.
-  ⚠ **NEXT SUSPECT IF THE HW ROUND FAILS: `wide`.** An in-title menu takes it from
-  `ar_wide_auto` (the DECODED sequence header) while a menu-domain menu uses the IFO's
-  `VTSM_V_ATR` precisely because "DVD menus are routinely authored 16:9 anamorphic with a
-  4:3 sequence-header code". A 4:3 code here would take the `[28:24]` field (0) and the
-  symptom survives. `VTS_V_ATTR@0x200` is already resident in `parse_buf` during the
-  Phase-10 `S_ATTR` sweep, so exporting it is one extra `attr_addr` step — NOT done, one
-  behavioural delta per round. Gate: `subp_stream_map_tb` arms [7]–[10] + 6 new vectors.
+  ★★ **AND libdvdnav — THE INDEPENDENT ORACLE — EXPOSED A SECOND WRONG FACT ON THE SAME
+  LOOKUP, WHICH IS WHY IT GOT FIXED RATHER THAN DEFERRED.** `vm_get_subp_stream`
+  (`vmget.c:138`) has **NO domain condition on the map at all** (the domain only forces
+  `subpN=0` and turns a `-1` into 0), so it applies `subp_control` in
+  `DVD_DOMAIN_VTSTitle` too and resolves this disc to `0x21` — our fix agrees with it.
+  But the aspect it feeds the lookup is `vm_get_video_attr()` =
+  **`vtsi_mat->vts_video_attr` in the title domain (`vmget.c:313`) — the IFO, not the
+  sequence header**, while we used `ar_wide_auto` there. A menu-domain menu already reads
+  the IFO *precisely because* "DVD menus are routinely authored 16:9 anamorphic with a 4:3
+  sequence-header code", and a title-domain menu is the same authoring — so a 4:3 code
+  would take the `[28:24]` field (0) and **the symptom would have survived the domain fix
+  entirely.** New reader output `title_ar_wide` from `VTS_V_ATTR@0x200`, costing ONE extra
+  `attr_addr` step (the Phase-10 `S_ATTR` sweep already has that sector resident), consumed
+  by ONE mux arm: `sp_map_wide = sp_menu_early && !menu_dom_live ? title_ar_wide_w :
+  ar_wide_auto_eff`.
+  ⚠ **Scoped to the in-title MENU only** — the white-rabbit `SetSTN` path, the user
+  subtitle path and `ar_wide_eff`/`VIDEO_ARX` keep the HW-proven sequence-header value.
+  The asymmetry is deliberate: one of those has a working precedent to preserve, the other
+  does not. And it is NOT a second delta in the "one per HW round" sense — its blast radius
+  is the SAME single case as the domain fix.
+  Gates: `subp_stream_map_tb` arms [7]–[10] + 6 vectors; `iso_reader_attr_tb`'s
+  `title_ar_wide` arm, which reads `VTS_V_ATTR` **out of the fixture** rather than
+  restating 1 (MiB VTS_21 = `0x4E80`) and refuses to be vacuous, **3/3 reader mutations
+  caught**; `check_subp_map_wiring.py` on both ports, RED on 3 re-regressions.
   Detail: **`docs/track_selection.md`** "The domain gate asked the wrong question",
   `docs/dvd_nav.md` (Scene It section).
 

@@ -472,23 +472,64 @@ that is untouched. So the set of discs this change can move is precisely: a titl
 PGC with the available bit SET, a non-zero physical id for the presented aspect, **and**
 an in-title HLI menu.
 
-⚠ **The next suspect if the HW round fails is `wide`.** For an in-title menu it is
-`ar_wide_auto` — the **decoded sequence header** — while a menu-domain menu uses the
-IFO's `VTSM_V_ATR` precisely because "DVD menus are routinely authored 16:9 anamorphic
-with a 4:3 sequence-header code". If this disc's title-domain menu VOB carries a 4:3
-code, the map takes the `[28:24]` field (0) and the symptom survives. The reader does
-**not** export `VTS_V_ATTR@0x200` today; the byte is already resident in `parse_buf`
-during the Phase-10 `S_ATTR` sweep, so capturing it is one extra `attr_addr` step. Not
-done deliberately — one behavioural delta per HW round
-(`docs/single_raster_analog.md` §3.9). Weak evidence against it: the reporter did not
-say the menus looked squished, and the same `ar_wide_auto` drives `VIDEO_ARX/ARY`.
+#### The second wrong fact: `wide` came from the sequence header
+
+★★ **libdvdnav settles it, and it is the reason this half got done rather than
+deferred.** `vm_get_subp_stream()` (vmget.c:138) has **no domain condition on the map at
+all** — the domain only decides whether `subpN` is forced to 0 and whether a `-1` becomes
+0 — so a conforming player applies `subp_control` in `DVD_DOMAIN_VTSTitle` exactly as in a
+menu domain. For this disc it resolves `(0x80010200 >> 16) & 0x1f = 1` → `0x21`, which is
+what the fix above now produces: the oracle agrees, independently of our RTL and of a
+golden model derived from it.
+
+But the aspect it feeds that lookup is `vm_get_video_aspect()` →
+`vm_get_video_attr()` → **`vtsi_mat->vts_video_attr` in `DVD_DOMAIN_VTSTitle`**
+(vmget.c:313) — the **IFO**, not the MPEG sequence header. This core used
+`ar_wide_auto_eff`, which for an in-title path is the decoded sequence header. That is a
+divergence, and a consequential one: a menu-domain menu already uses `VTSM_V_ATR`
+*precisely because* "DVD menus are routinely authored 16:9 anamorphic with a 4:3
+sequence-header code", and a title-domain menu is the same kind of authoring. A 4:3 code
+would take the `[28:24]` field (0) and the symptom would survive the domain fix entirely.
+
+So `dvd_iso_reader` gained **`title_ar_wide`** from `VTS_V_ATTR@0x200`. It costs **one
+extra `attr_addr` step**: the Phase-10 `S_ATTR` sweep already runs with that VTSI_MAT
+sector resident in `parse_buf`, so a new `attr_vatr` one-shot reads byte 512 before the
+audio count and decodes bits 11:10 with the same `& 0x0C` test `S_MENU_VATR` uses.
+
+`emu` consumes it through **one mux arm and nowhere else**:
+
+```
+sp_map_wide = sp_menu_early && !menu_dom_live ? title_ar_wide_w   // in-title menu
+                                             : ar_wide_auto_eff;  // unchanged
+```
+
+⚠ **Scoped to the in-title MENU context on purpose.** The white-rabbit `SetSTN` path and
+the user subtitle path are HW-confirmed on the sequence-header value, so they keep it;
+`ar_wide_eff` (the DISPLAY aspect, `VIDEO_ARX/ARY`) is untouched, because titles' own
+sequence headers do carry the true code and that path is proven. The resulting asymmetry
+— in-title *menu* reads the IFO, in-title *white rabbit* reads the stream — is deliberate,
+not an oversight: one of them has a working precedent to preserve and the other does not.
+
+★ **This is not a second behavioural delta in the "one per HW round" sense.** Its blast
+radius is the *same single case* as the domain fix — a menu context in the title domain —
+which the Scene It measurement above shows is inert on every local disc. It completes one
+change rather than adding another.
+
+**Gate:** `iso_reader_attr_tb` gains an arm that reads `VTS_V_ATTR` **out of the fixture**
+and checks `title_ar_wide` against it (MiB VTS_21 = `0x4E80`, aspect 3 = 16:9), plus a
+guard that fails if the fixture ever stops being a 16:9 VTS — so the arm cannot become
+vacuous. **3/3 targeted reader mutations caught** (never arm `attr_vatr`; read byte 513;
+test the wrong aspect bits). `tools/check_subp_map_wiring.py` also gates `.wide`, and is
+RED both on the pre-#81 file and on `.wide (ar_wide_auto_eff)`.
 
 **Tests:** `bench/dvd/subp_stream_map_tb.sv` arms **[7]–[10]** (the reported word in the
 title domain → 0x21; the pre-fix wiring reproduced, proving the gate still fires on a
 genuine domain mismatch; the 4:3 field; and the 16-of-17 library word not moving) plus
-6 new generated vectors; `tools/check_subp_map_wiring.py` (RED on the pre-#81 `emu.sv`
-and on 2 targeted re-regressions). `tools/lint_undriven.sh` and the whole
-`run_subpic.sh` suite green.
+6 new generated vectors; `bench/dvd/iso_reader_attr_tb.sv`'s `title_ar_wide` arm
+(mutation-checked 3/3); `tools/check_subp_map_wiring.py` on both ports (RED on the
+pre-#81 `emu.sv` and on 3 targeted re-regressions). `tools/lint_undriven.sh`,
+`tools/netlist_canary.sh`, the whole `run_subpic.sh` suite, and every reader bench green
+(`iso_reader_atmos_tb` fails identically on the pre-change reader — pre-existing).
 
 **HW gate:** regression only, since no local disc reproduces — every disc with working
 menus must still show its highlight (menu-domain *and* Scene It's in-title game menus,
