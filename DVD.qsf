@@ -1394,4 +1394,28 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # FOURTH time on this branch -- clk_dec 89.78 @100C / 89.6 @-40C (gate 86.0) at
 # 99% ALM (41,399), RAM 500/553, DSP 94. Build DVD_cddaphys4_20260911_0352.rbf.
 
+
+# 2026-09-12 (same branch, dev-cddaphys5 -- the whole stack REBASED onto main after
+# the three logic-reclaim branches merged (#82/#83/#84), and the scope visualizer
+# REMOVED): SEED 9 held FIRST roll a FIFTH time on this branch -- clk_dec 96.51
+# @100C / 91.70 @-40C (gate 86.0, PASS both corners; the WIDEST margin this ledger
+# records) at 89% ALM (37,295 needed), registers 51,278, RAM 502/553 (91%),
+# DSP 93/112. Build DVD_cddaphys5_20260912_0003.rbf (4384 KB), commit 1ed49db.
+# ★★ THIS IS THE FIRST HONEST MEASUREMENT OF WHAT THE CD FEATURE COSTS, because it
+# is the first fit of it on a netlist that was not already congested. Against main's
+# reclaim fit (entry 2026-09-11d, SEED 7): synthesis ALUTs 57,465 -> 58,511 (+1,046),
+# ALMs needed 36,636 -> 37,295 (+659, 87% -> 89%), RAM 501 -> 502 (+1 M10K).
+# Per entity (synthesis ALUTs, which are SEED-INDEPENDENT): cdda_viz 414, cdda_toc
+# 281 (+1 M10K), cdda_screen 5; the ~346 residual is the reader's WAV chunk walk
+# plus the emu glue. lin_rate (621) and lpcm_unpack (101) are NOT CD-only -- both
+# come from main and serve every linear source and the DVD LPCM path respectively.
+# ⚠⚠ THE RECLAIM AUDIT'S "cutting the CD player would have recovered ~300 ALMs" WAS
+# HALF THE TRUE FIGURE, and the reason is dateable: that audit predates the
+# visualizers, and cdda_viz alone is 414 ALUTs. Quote +659 ALMs, never ~300.
+# ★ ext_mem is still inferred as altsyncram (2 instances) after the rebase routed the
+# WAV path's three inline ext_mem[0] writes through main's shared S_FLAT_INIT -- the
+# write-site consolidation trap recorded above is discharged for this netlist.
+# ⚠ Placed-ALM and fmax comparisons against main are SEED-CONFOUNDED (this is SEED 9,
+# main's entry is SEED 7). Synthesis ALUTs and M10Ks are the clean A/B.
+
 set_global_assignment -name SEED 9

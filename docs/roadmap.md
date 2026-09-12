@@ -552,10 +552,15 @@ the split is deliberate:
   REMOVED** (user decision, to be conservative with logic). The cycle is now copper →
   XOR → logo — **three stops**, `viz_mode` wrapping at 2, so Angle never lands on a
   dead mode. Measured cost of the arm that went: **~105 ALMs and one M10K**, the
-  memory being the expensive half with RAM at 90 %. ⚠ The branch's pinned SEED 9 and
-  its 99 % ALM ledger figures describe the PRE-reclaim netlist and no longer apply —
-  this tree needs a fresh fit before any area or timing claim. Sim-green,
-  ⏳ HW-untested.
+  memory being the expensive half with RAM at 90 %.
+  ★ **Now FITTED on the reclaimed netlist** (`DVD_cddaphys5_20260912_0003.rbf`,
+  SEED 9 first roll): clk_dec **96.51 / 91.70** against the 86.0 gate — the widest
+  margin this design has recorded — at **89 % ALM (37,295)**, RAM 502/553, DSP 93.
+  ★★ **So the whole CD feature measures +1,046 ALUTs / +659 ALMs / +1 M10K** against
+  main's reclaim fit; per entity `cdda_viz` 414, `cdda_toc` 281 (+the M10K),
+  `cdda_screen` 5, the ~346 residual being the reader's WAV walk and emu glue.
+  ⚠ That is **double** the reclaim audit's "~300 ALMs", which predates the
+  visualizers — quote the measured figure. Sim-green, ⏳ HW-untested.
 
 ⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
 CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.

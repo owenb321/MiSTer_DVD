@@ -2153,6 +2153,15 @@ worse maintenance burden than targeted in-place edits. So:
   congestion regime, that memory block was the expensive half. ⚠ The cycle is now
   **three stops** (`viz_mode` wraps at 2, logo is mode 2): leaving a dead fourth mode
   would have made Angle appear to hang on a blank screen.
+  ★★ **AND THE FIRST HONEST COST FOR THE WHOLE CD FEATURE, measured on the reclaimed
+  netlist (`dev-cddaphys5`, SEED 9 first roll, clk_dec 96.51/91.70 at 89 % ALM):
+  +1,046 synthesis ALUTs / +659 ALMs / +1 M10K** over main's reclaim fit — `cdda_viz`
+  414, `cdda_toc` 281, `cdda_screen` 5, ~346 for the reader's WAV walk and glue
+  (`lin_rate` and `lpcm_unpack` are NOT CD-only and are excluded). ⚠ **The reclaim
+  audit's "cutting the CD player would have recovered ~300 ALMs" was HALF the true
+  figure and should not be quoted** — it predates the visualizers, and `cdda_viz` alone is
+  414. Every earlier CD fit sat at 98–99 % ALM, where packing variance swamped the
+  signal; this is the first uncongested one.
   ★ **Gate `bench/dvd/cdda_viz_tb.sv` checks RENDERED PIXELS** — copper full coverage,
   one colour per line, bar cores that MOVE between frames; XOR variation and scroll;
   both gates — and the copper/XOR mutations it catches (frozen solver, `TR` stuck on,
