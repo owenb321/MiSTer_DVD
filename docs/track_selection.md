@@ -531,9 +531,28 @@ pre-#81 `emu.sv` and on 3 targeted re-regressions). `tools/lint_undriven.sh`,
 `tools/netlist_canary.sh`, the whole `run_subpic.sh` suite, and every reader bench green
 (`iso_reader_atmos_tb` fails identically on the pre-change reader — pre-existing).
 
-**HW gate:** regression only, since no local disc reproduces — every disc with working
-menus must still show its highlight (menu-domain *and* Scene It's in-title game menus,
-which are the one class this change actually touches). The reporter is the final word.
+**HW round, 2026-09-12** (build `DVD_subpmapdom_20260912_1328.rbf` on the maintainer's
+rig). Regression only, since no local disc reproduces — the reporter is the final word on
+the positive case. All arms read from the `O[2]` blocks via `tools/hud_read.py blocks`,
+which is machine-readable rather than an impression:
+
+| Arm | Why it is the right arm | Result |
+|---|---|---|
+| **ATFIRSTSIGHT** root menu | The ONLY local disc where the map returns NON-ZERO: menu-domain, `VTSM_V_ATTR` 16:9, `subp_control[0] = 0x80010000` ⇒ logical 0 → **0x21**. If the `dom_ok` change had broken the menu-domain path it would fall back to identity → 0x20 → no SPU bytes. | `hl_btns_armed / video_live / subpic_shown / spu_bytes_seen / still_active / hl_on / hl_recolour_fired` all **GREEN** and stable over 98 s; screenshot shows the highlight box around **play** |
+| **SCENEIT_HP** game menu | The one class this change actually touches (in-title, `sp_menu_early`). | 5-button menu renders with the box on **PLAY THE GAME**; two D-pad presses walked the highlight down, MEASURED by its bounding rows (230..346 → 277..314 → 320..356) — so parse → arm → route → decode → recolour → walk all work |
+| **MEN_IN_BLACK** track counts | The readout of the `S_ATTR` sweep the reader change edits (it now reads `VTS_V_ATTR@0x200` before the audio count at 515). The local RED mutation makes this read 8. | `AUDIO 4/4 EN`, `SUB 1/4 EN / 2/4 FR / 3/4 ES / 4/4 EN` — byte-exact against the disc, both tables and the languages |
+| **MEN_IN_BLACK** soak | Incidental but worth recording: the reader streamed a 7.4 GB ISO over CIFS for **~87 minutes** (to 1:26:56 of 1:37:52) unattended after the arms above. | clean, still playing, `CH 1/21` |
+
+⚠ **The ATFIRSTSIGHT arm is a regression arm and cannot be more than that.** For a
+menu-domain menu `dom_ok` is algebraically identical before and after the fix
+(`menu_dom=1, dom_tt=0` ≡ `ctx_menu=1, dom_tt=0`), so it can detect a breakage and can
+never confirm the fix. Nothing local can: that is what "no local repro" means.
+
+⚠ **The gamepad CHORD cannot be driven from the harness**, so the bundle-capture change is
+measured by running the collector on the target instead. `dvd_report_joy()` is called from
+`user_io_digital_joystick()`, and the harness's uinput device is a KEYBOARD — its presses
+become joystick bits inside the FPGA (`kbd_map.sv`) and never pass through Main's `map`.
+Worth knowing before designing any future test around a chord.
 
 ### Audio-substream observation tap (shipped) + the deferred watchdog
 

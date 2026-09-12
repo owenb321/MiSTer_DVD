@@ -179,7 +179,14 @@ say, not by their timestamps. A bundle made on a PC has a real clock behind it;
 
 ## The playhead NAV-pack window (issue #81)
 
-**Status: 🔧 built, host-tested + mutation-checked, ⏳ HW-confirm pending.**
+**Status: 🔧 built, host-tested + mutation-checked; the COLLECTOR is HW-measured on the
+rig, the CHORD GESTURE is ⏳ HW-confirm pending.**
+
+⚠ **The chord cannot be driven from the HIL harness, so that half needs the maintainer's
+own gamepad.** `dvd_report_joy()` is called from `user_io_digital_joystick()`, and the
+harness's uinput device is a KEYBOARD: its presses become joystick bits inside the FPGA
+(`dvd/kbd_map.sv`) and never pass through Main's `map`. What WAS measured on the target is
+everything the chord's child does — see the table below.
 
 Issue #81 arrived as a menu-highlight bug whose bundle carried **no button data at all**,
 and nothing in it said so. The diagnosis had to be made structurally from the IFO tables
@@ -218,6 +225,20 @@ Verified end to end on a real disc: a bundle built with `--lba 903500 --nav-wind
 against SCENEIT_HP reconstructs to a sparse ISO whose `nav_extract.py` walk decodes a
 complete **7-button** in-title menu — rects, link graph, `btn_coli` colours and the VM
 command per button. Audit and self-check both PASS.
+
+**And measured ON THE MISTER ITSELF (2026-09-12), which is the number that decides
+whether it belongs on a chord** — the local figures above are a dev workstation's:
+
+| on the target | window (`--nav-window 2048`) | `--nav-packs` |
+|---|---|---|
+| SCENEIT_HP | **1.38 s**, 16 NAV packs, 37 KB bundle | — |
+| (same, no capture at all) | 0.86 s, 34 KB | — |
+| MEN_IN_BLACK | **1.98 s**, 14 NAV packs, 119 KB | **37.7 s**, 2,524 packs, 358 KB |
+
+So the window costs about **half a second** over no capture at all, and `--nav-packs` is
+**19× slower** than the window on this hardware — reading an ISO from local storage, with
+the core not even running. On an optical disc the core is streaming from, with the CPU
+contended, it is worse. That is the measurement that chose the design.
 
 ⚠ **The content guarantee is unchanged and still structural.** The window only appends
 sectors that pass `is_nav_pack()`, and `audit()` re-checks the FINAL captured set and

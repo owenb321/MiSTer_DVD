@@ -2939,12 +2939,12 @@ either route. That is structural, not a tuning matter.
 `dvd_report.py --nav-window SECTORS` (with `--lba`) captures every NAV pack in one
 SEQUENTIAL run forward from the sector being served, and `dvd_report.cpp` passes
 `--nav-window 2048` whenever it has a playhead.
-★ **Measured, which is what chose it over "just pass `--nav-packs` too":** the
-window costs **0.28 s and a 38 KB bundle** and yields 16 NAV packs of which 13–20
-of ~20 carry multi-button HLI on Scene It's game VTSes, against **4.9 s and 5.6 MB**
-for `--nav-packs` on MEN_IN_BLACK (its 680 MB of menu VOBs hit the 512 MB cap) —
-minutes of seeking on an optical disc the core is streaming from, for data that
-still misses the in-title case. Proven end to end: a window bundle reconstructs to
+★ **Measured ON THE MISTER, which is what chose it over "just pass `--nav-packs`
+too": the window costs 1.38 s against 0.86 s for no capture at all (SCENEIT_HP,
+16 NAV packs, a 37 KB bundle), while `--nav-packs` on MEN_IN_BLACK costs 37.7 s —
+19× the window's 1.98 s on the same disc**, from local storage with the core not
+even running. It yields 13–20 of ~20 packs carrying multi-button HLI on Scene It's
+game VTSes, which `--nav-packs` cannot reach at all. Proven end to end: a window bundle reconstructs to
 an ISO whose `nav_extract.py` walk decodes a complete 7-button in-title menu.
 ⚠ A VOBU is ≤1 s, so 2048 sectors spans several, and an HLI is re-sent every VOBU
 while a menu is up — forward-only is enough. ⚠ The content guarantee is unchanged
