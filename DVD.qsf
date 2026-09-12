@@ -1130,17 +1130,22 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # way the previous entry's -3.3 MHz was not a cost of that one.
 # 2026-09-12 (feature/scrub-time-tiers, dev-scrubtiers -- the hold-to-scrub ramp
 # became an absolute content rate instead of a fraction of the title span):
-# SEED 7 held FIRST roll -- clk_dec 98.31 @100C / 93.78 @-40C (gate 86.0, PASS
-# both corners) at 87% ALM (36,595 needed), registers 50,422, RAM 501/553,
-# DSP 94/112. Build DVD_scrubtiers_20260912_2107.rbf (4,310 KB).
-# ★ +167 ALMs over the branch base: a 16-bit priority encoder, a signed clamp
-# and one 24-bit shifter for the duration bucket (deliberately NOT a divide --
-# rejected on CORRECTNESS, not area: a seamless-branch disc inflates the span,
+# SEED 7 held FIRST roll -- clk_dec 93.04 @100C / 89.08 @-40C (gate 86.0, PASS
+# both corners) at 87% ALM (36,585 needed), registers 50,468, RAM 501/553,
+# DSP 94/112. Build DVD_scrubtiers_20260912_2135.rbf (4,314 KB).
+# ★ +157 ALMs over the branch base, for: a 16-bit priority encoder, a signed
+# clamp and one 24-bit shifter (the duration bucket -- deliberately NOT a divide,
+# rejected on CORRECTNESS not area: a seamless-branch disc inflates the span,
 # which hits the bucketed shift and the divide identically, see
-# dvd/scrub_ctrl.sv), plus the HUD's arrow-count readout.
-# ⚠ Supersedes an earlier fit of this branch at 93.45/89.41 and 36,557 ALMs
-# (DVD_scrubtiers_20260912_2010.rbf), taken before the HUD change. +4.9 MHz on
-# the hot corner for three comparators and a five-column icon field is netlist
-# variance at this density, NOT a benefit of that change -- the same caution the
-# two entries above carry in the other direction.
+# dvd/scrub_ctrl.sv); the x6 lattice scale on the linear base (two shifts and an
+# adder, which is what makes a DVD and a .mpg ramp at the same speed); and the
+# HUD's arrow-count readout.
+# ⚠ THREE FITS OF THIS BRANCH, and the spread between them is the point:
+#   36,557 / 93.45 / 89.41  (2010, span ladder + bit-identical 2 h anchor)
+#   36,595 / 98.31 / 93.78  (2107, + the HUD arrow count)
+#   36,585 / 93.04 / 89.08  (2135, + one ladder for both sources) <- shipped
+# Under 40 ALMs and 5.3 MHz of hot-corner swing across three netlists whose
+# logic differs by a handful of comparators. That is netlist variance at this
+# density -- do NOT read any of it as a cost or a benefit of the change that
+# happened to be in flight, in either direction.
 set_global_assignment -name SEED 7
