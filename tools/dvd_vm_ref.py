@@ -525,7 +525,7 @@ def aud_stream_map(logical, audio_ctl, dom_title, map_valid=True):
     return logical & 7                             # DEVIATION: identity, not -1
 
 
-def subp_stream_map(logical, ctl_sel, dom_title, ctx_menu, wide,
+def subp_stream_map(logical, ctl_sel, dom_title, menu_dom, wide,
                     disp_mode=0, map_valid=True):
     """Golden model of dvd/subp_stream_map.sv: resolve a LOGICAL subpicture
     stream number to the PHYSICAL substream index the demux filters on, through
@@ -539,11 +539,19 @@ def subp_stream_map(logical, ctl_sel, dom_title, ctx_menu, wide,
         [4:0]   16:9 pan&scan
     (libdvdnav vm_get_subp_stream, vmget.c.)
 
-    `ctx_menu` says this resolution is for a MENU context, and `dom_title` is
-    the domain the loaded table came FROM. They must agree, else the table is
-    the other domain's and we fall back to identity -- subp_ctl_mem is one store
-    shared by both domains and is never cleared, so this is what stops a menu's
-    table leaking into the in-title HLI path and vice versa.
+    `menu_dom` says a MENU-DOMAIN PGC is loaded (emu: menus_on && menu_active)
+    and `dom_title` is the domain the loaded table came FROM. They must disagree
+    -- the table has to belong to the domain the player is in -- else it is the
+    other domain's and we fall back to identity; subp_ctl_mem is one store shared
+    by both domains and is never cleared, so this is what stops a menu's table
+    leaking into the in-title HLI path and vice versa.
+
+    ⚠ `menu_dom` is a fact about the PLAYER, not about the caller. It used to be
+    `ctx_menu` ("this resolution is for a menu"), which is a different question:
+    an in-title game/motion menu is a menu context in the TITLE domain, so the
+    gate demanded a menu-domain table, did not find one, and fell back to
+    identity -- issue #81, "no visible selection" on a disc whose title-domain
+    menus put their highlight SPU on 0x21. See dvd/subp_stream_map.sv.
 
     DEVIATION FROM libdvdnav, deliberate: the caller passes disp_mode, and emu
     forces 0 (wide) for every menu. This core composites the subpicture in
@@ -556,7 +564,7 @@ def subp_stream_map(logical, ctl_sel, dom_title, ctx_menu, wide,
     disc that authors no usable map bit-identical to the pre-mapping core.
     """
     logical &= 0xF
-    dom_ok = (not dom_title) if ctx_menu else dom_title
+    dom_ok = bool(dom_title) != bool(menu_dom)
     if not (map_valid and dom_ok and (ctl_sel >> 31) & 1):
         return logical
     if not wide:

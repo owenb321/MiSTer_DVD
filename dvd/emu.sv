@@ -2276,10 +2276,17 @@ wire        force_43_subp = status[15];
 wire        vm_owns_route = menus_on && vm_owns_sp && vm_spstn[6];
 wire [2:0]  sp_user_log   = ({1'b0,sp_sel} >= subp_ntracks_w)
                             ? (subp_ntracks_w[2:0] - 3'd1) : sp_sel;   // clamped user index
+// "A MENU-DOMAIN PGC is loaded" -- the DOMAIN fact, named once so it cannot
+// diverge from the map's domain gate below (issue #81: the context and the domain
+// were two readings of one idea, and only one of them was about the domain).
+wire        menu_dom_live = menus_on && menu_active;
+// "This subpicture resolution is for a MENU" -- the CONTEXT, which is WIDER: a
+// title-domain game/motion menu (sp_menu_early) is a menu context in the TITLE
+// domain, so this is deliberately NOT menu_dom_live.
+wire        menu_sp_ctx   = menu_dom_live || sp_menu_early;
 // A MENU context (menu-domain menu, or an in-title multi-button game menu like
 // Scene It) resolves LOGICAL stream 0 -- but through the map, not as a constant.
 // DVD-FORK FIX (issues #60/#61): this used to short-circuit to physical 0.
-wire        menu_sp_ctx   = (menus_on && menu_active) || sp_menu_early;
 wire [3:0]  sp_sel_log    = menu_sp_ctx  ? 4'd0 :
                             vm_owns_route ? vm_spstn[3:0] : {1'b0, sp_user_log};
 wire [31:0] subp_ctl_sel  = subp_ctl_mem[sp_sel_log];                 // single 16:1 mux
@@ -2311,7 +2318,12 @@ wire        sp_stream_absent;
 subp_stream_map u_subp_map (
     .map_valid    (pgc_ctl_valid),
     .dom_tt       (pgc_dom_tt),
-    .ctx_menu     (menu_sp_ctx),
+    // DVD-FORK FIX (issue #81): this was `menu_sp_ctx` -- the menu CONTEXT -- and
+    // the module read it as "the table must be the MENU domain's". An in-title
+    // game/motion menu is a menu context whose table is the TITLE's, so the gate
+    // rejected a perfectly good table and fell back to the logical index. What the
+    // gate actually needs is the domain the player is IN.
+    .menu_dom     (menu_dom_live),
     .logical      (sp_sel_log),
     .ctl_sel      (subp_ctl_sel),
     // A menu's aspect is the MENU's own IFO V_ATR (ar_wide_auto_eff), not the
@@ -2342,10 +2354,15 @@ wire sp_user_absent = sp_stream_absent & ~(menu_sp_ctx | vm_owns_route | force_4
 // 0x24, instead of the raw index -> 0x23 warning); the 3-bit ps_demux substream_id[2:0]
 // match stays unambiguous here (active substreams 0x20/21/22/23/24 -> 0/1/2/3/4). Off =
 // user path byte-identical (raw clamped logical index).
-// An in-title multi-button game menu (Scene It) is a MENU: its highlight rides
-// LOGICAL subpicture stream 0 like a menu-domain menu (sp_sel_log above), and
-// resolves through the same map (it is a title-domain PGC, so subp_ctl_mem is
-// already populated for it and ar_wide_auto_eff == ar_wide_auto there).
+// An in-title multi-button game menu (Scene It, and the motion menus of
+// Aniki mon Frere / BROTHER) is a MENU: its highlight rides LOGICAL subpicture
+// stream 0 like a menu-domain menu (sp_sel_log above), and resolves through the
+// same map (it is a title-domain PGC, so subp_ctl_mem is already populated for it
+// and ar_wide_auto_eff == ar_wide_auto there).
+// ⚠ THAT LAST CLAUSE WAS FALSE FROM THE DAY IT WAS WRITTEN UNTIL issue #81: the
+// map's domain gate was handed the menu CONTEXT and required a menu-DOMAIN table,
+// so this path always fell back to the logical index. It resolves through the map
+// now because the gate tests the domain the player is in (subp_stream_map.menu_dom).
 // DVD-FORK FIX (issues #60/#61): menus were pinned to PHYSICAL 0 here. On a disc
 // whose menu PGC maps logical 0 to a non-zero physical id for the presented
 // display mode, that filtered the wrong substream, decoded no subpicture, and

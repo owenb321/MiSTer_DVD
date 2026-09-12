@@ -13,7 +13,7 @@ Vector format, one hex word per line, 42 bits:
   bit layout, LSB first:
     [0]     map_valid
     [1]     dom_tt
-    [2]     ctx_menu
+    [2]     menu_dom  (a MENU-DOMAIN PGC is loaded; NOT "menu context" -- #81)
     [3]     wide
     [5:4]   disp_mode
     [9:6]   logical
@@ -39,13 +39,13 @@ from dvd_vm_ref import subp_stream_map
 W_EXPECT = 42
 
 
-def vec(map_valid, dom_tt, ctx_menu, wide, disp_mode, logical, ctl_sel):
+def vec(map_valid, dom_tt, menu_dom, wide, disp_mode, logical, ctl_sel):
     exp = subp_stream_map(logical, ctl_sel, dom_title=bool(dom_tt),
-                          ctx_menu=bool(ctx_menu), wide=bool(wide),
+                          menu_dom=bool(menu_dom), wide=bool(wide),
                           disp_mode=disp_mode, map_valid=bool(map_valid))
     v = (int(map_valid) & 1)
     v |= (int(dom_tt) & 1) << 1
-    v |= (int(ctx_menu) & 1) << 2
+    v |= (int(menu_dom) & 1) << 2
     v |= (int(wide) & 1) << 3
     v |= (disp_mode & 3) << 4
     v |= (logical & 0xF) << 6
@@ -78,12 +78,18 @@ def main():
         out.append(vec(1, 0, 1, 0, dm, 0, REAL['atfirst']))
         out.append(vec(1, 0, 1, 0, dm, 0, REAL['reporters']))
 
-    # ---- the domain gate: a menu context must REFUSE a title table ---------
+    # ---- the domain gate: a MENU-domain player must REFUSE a title table ---
     out.append(vec(1, 1, 1, 1, 0, 0, REAL['reporters']))   # -> identity 0
     out.append(vec(1, 1, 1, 1, 0, 0, REAL['library16']))
-    # ...and a title context must refuse a menu table
+    # ...and a TITLE-domain player must refuse a menu table
     out.append(vec(1, 0, 0, 1, 0, 1, REAL['rabbit']))      # -> identity 1
     out.append(vec(1, 0, 0, 1, 0, 3, REAL['reporters']))
+
+    # ---- issue #81: an IN-TITLE menu is a menu context in the TITLE domain, so
+    # its highlight SPU must resolve through the map. dom_tt=1, menu_dom=0.
+    for dm in (0, 1, 2):
+        out.append(vec(1, 1, 0, 1, dm, 0, REAL['reporters']))   # -> 1 / 2 / 0
+        out.append(vec(1, 1, 0, 1, dm, 0, REAL['library16']))
 
     # ---- mid-parse: map_valid=0 is identity in both contexts ---------------
     for log in range(4):
