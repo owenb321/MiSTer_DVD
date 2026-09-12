@@ -1876,6 +1876,17 @@ scrub_ctrl scrub_ctrl_inst (
     .cur_rbn         (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .title_first_rbn (title_first_rbn_w),
     .title_last_rbn  (title_last_rbn_w),
+    // ---- what the span is WORTH, so the ramp is an absolute content rate ----
+    // The step used to be a fraction of the span, so a short title scrubbed at a
+    // crawl (0.58 content-seconds per second on a 3-minute clip against 29 on a
+    // 2 h feature). A DVD title's duration BUCKET biases the shift, anchored so
+    // a ~2 h title keeps the step that was signed off on hardware; a linear file
+    // has an exact rate already and uses it directly.
+    // ⚠ lin_blk10_ok_w is ANDed here the way dvd/dpad_seek.sv's .lin_mode is:
+    // gate on the rate being VALID, never let a zero through.
+    .title_secs      (title_secs_w),
+    .lin_blk10       (lin_blk10_w),
+    .lin_rate_ok     (lin_mode_w && lin_blk10_ok_w),
     .seek_rbn_pulse  (scrub_seek_pulse),   // arbitrated by mode_realign (issue #42)
     .seek_rbn        (scrub_seek_rbn),
     .hold_freeze     (hold_freeze),

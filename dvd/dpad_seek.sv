@@ -1,10 +1,15 @@
 // ============================================================================
 // dvd/dpad_seek.sv -- VLC-style FIXED-TIME seek on the D-pad (O[45] opt-in)
 // ============================================================================
-// Left/Right = -/+10 s, Down/Up = -/+60 s while a TITLE plays. Unlike the
-// hold-to-seek scrub (dvd/scrub_ctrl.sv), whose step is SPAN-relative
-// (span >> {12,10,8,6} sectors per tick = "percent of title"), this module seeks
+// Left/Right = -/+10 s, Down/Up = -/+60 s while a TITLE plays. This module seeks
 // by SECONDS, using the disc's OWN authored seek tables.
+// ⚠ The contrast this comment used to draw -- against the hold-to-seek scrub's
+// "percent of title" step -- EXPIRED on 2026-09-12: dvd/scrub_ctrl.sv's ramp is
+// an absolute content rate now too (it biases the span shift by the title's
+// duration bucket, and uses lin_blk10 outright on a linear file). The remaining
+// difference is the one that matters here: a scrub picks a RATE and the user
+// stops when the bar looks right, while this module names an EXACT interval and
+// resolves it against a real table entry.
 //
 // ★ WHERE THE TARGET COMES FROM. Every DVD NAV pack's DSI carries the VOBU_SRI
 // +/-time seek tables fwda[19]/bwda[19] (dvd/nav_dsi.sv parses them into the

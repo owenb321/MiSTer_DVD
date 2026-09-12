@@ -1422,16 +1422,49 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   (`dvd_audio_decode.pause` + drain-watchdog freeze). This is the *same* stable hold as a manual
   pause (the watchdog is suppressed the whole time), so there is no re-lock/watchdog problem.
 - **Accumulate** = on the press edge it latches `base_rbn = cur_rbn` (the live playhead
-  `dsi_nv_pck_lbn`); every ~0.06 s tick it adds a **tier-scaled** step `span >> {12,10,8,6}`
-  sectors (tier 0→3 by hold time 0/2/4.5/8 s) to a signed offset, capped at the title span. A
-  direction flip restarts the accumulation the other way.
-  ⚠ **The ladder and the dwells are `scrub_ctrl` parameters (`SH0..SH3`, `T1..T3`), and they
-  were relaxed on 2026-09-03** after a user report that the scrub "ramps up too fast". The
-  original `{10,8,6,5}` / 0-1.5-3-5 s ladder moved ~2 **minutes** of a 2 h title per second
-  even in tier 0 — there was no fine-positioning tier at all, and 5 s of holding crossed 77
-  minutes. The shipped ladder gives ~29 s → 2 min → 7.8 min → 31 min per second held, and the
-  far end of a 2 h film is ~11 s of holding away. Steps are span-RELATIVE, so the feel is the
-  same fraction-of-title on a 5-minute clip and a 3-hour epic — keep it that way. Pinned by
+  `dsi_nv_pck_lbn`); every ~0.06 s tick it adds a **tier-scaled** step (tier 0→3 by hold time
+  0/2/4.5/8 s) to a signed offset, capped at the title span. A direction flip restarts the
+  accumulation the other way.
+  ★★ **THE STEP IS AN ABSOLUTE CONTENT RATE, NOT A FRACTION OF THE TITLE (2026-09-12).**
+  This paragraph used to end *"steps are span-RELATIVE, so the feel is the same
+  fraction-of-title on a 5-minute clip and a 3-hour epic — keep it that way"*, and that is
+  the decision the change overturns. A fraction of a **short** title is a crawl: MEASURED at
+  tier 0 with `span >> 12`, a 2 h feature moves **29 content-seconds per second**, a 3-minute
+  clip **0.58**, a 30-second clip **0.19** — the shorter the title, the slower the scrub,
+  which is backwards from what the gesture is for. The shift also **truncated** what little
+  was left (`15504 >> 12 = 3`, losing 21 %; `2584 >> 12 = 0`, losing all of it — the `| 1`
+  floor was the only thing still moving the cursor).
+  Two step sources now, both in content-seconds:
+  - **Linear** (`.mpg`/VCD/SVCD, `lin_rate_ok`): `lin_blk10 >> LSn`. `lin_blk10` is blocks
+    per 10 s (`dvd/lin_rate.sv`), so the shift **is** the rate — `166.7 / 2^LSn` s/s. Shipped
+    `{5,3,1,0}` ≈ **5 / 21 / 83 / 167 s/s**. ⚠ Gated on the rate being VALID (the
+    `dpad_seek` precedent), never on a zero slipping through; an untrusted rate falls back to
+    the span path, which is exactly what shipped before.
+  - **DVD**: `span >> (SHn + log2(title_secs) − SECS_REF)`. The span **cancels** out of the
+    content rate algebraically — `(span >> sh)` divided by `(span / title_secs)` is
+    `title_secs / 2^sh` — so biasing the shift by the title's **duration bucket** (a
+    leading-one position, a priority encoder, no divide) fixes the rate. `SECS_REF = 12`
+    anchors it: any title in **4096…8191 s (68–136 min)** gets bias 0 and a **bit-identical**
+    step to what shipped, so the 2 h feel that passed hardware is untouched and only titles
+    far from 2 h move. `title_secs == 0` (not yet known) likewise keeps the old step.
+  ⛔ **Do NOT "improve" the bucket into `span / title_secs`.** On a seamless-branch disc the
+  span holds the other branch's ILVUs (885–1679 sectors/s against a ~600 ceiling,
+  ALIEN_VS_PREDATOR_SE, issue #49) and that inflation hits the bucketed shift and the divide
+  **identically** — the divide fixes nothing and costs area. ⚠ The *area* objection to a
+  divide has expired (post-reclaim `main` fits at ~87 %); area was never the load-bearing
+  reason, so do not re-derive "we have area now, so divide".
+  ⚠ **The two ladders do not agree** — a DVD runs 29/117/469/1875 s/s and a linear file
+  5/21/83/167 — because the DVD numbers are the ones a hardware round signed off and the
+  anchor exists to preserve them. If the top tier reads as inconsistent on hardware, retune
+  `LS0..LS3` upward; do not unpick the anchor.
+  ⚠ **The ladders and the dwells are `scrub_ctrl` parameters (`SH0..SH3`, `LS0..LS3`,
+  `T1..T3`, `SECS_REF`).** The span ladder was relaxed once already on 2026-09-03 after a
+  user report that the scrub "ramps up too fast": the original `{10,8,6,5}` / 0-1.5-3-5 s
+  ladder moved ~2 **minutes** of a 2 h title per second even in tier 0 — no fine-positioning
+  tier at all, and 5 s of holding crossed 77 minutes. Gate:
+  `bench/dvd/run_scrub_tiers.sh --red` (T16 the anchor, T17 the short-title rate in
+  content-ms per tick, T18 the linear ladder in content-seconds per second, one mutant per
+  claim). Pinned by
   `scrub_ctrl_tb` T13 (the ladder, MEASURED off `bar_tgt_rbn` rather than read out of the
   DUT), T14 (the tier boundaries) and T15 (the shipped default parameters, so a retune is
   deliberate). A retune must also move `dvd/scrub_ctrl.sv`'s header, `dvd/dpad_seek.sv`'s
@@ -1466,8 +1499,9 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
 ### 2b. D-Pad fixed-time seek — `O[45]` (`dvd/dpad_seek.sv`) — ✅ HW-CONFIRMED 2026-08-27 (PR #15)
 
 **Opt-in, default Off.** With it On, while a title plays: **Left/Right = ∓10 s,
-Down/Up = ∓60 s** — VLC-style *fixed-time* jumps, as opposed to §2a's span-relative
-("percent of title") scrub. Presses inside a **~400 ms window coalesce into ONE seek**,
+Down/Up = ∓60 s** — VLC-style *fixed-time* jumps, as opposed to §2a's hold-to-scrub,
+which picks a RATE and lets the user stop when the bar looks right (that scrub's step
+stopped being "percent of title" on 2026-09-12 — see §2a). Presses inside a **~400 ms window coalesce into ONE seek**,
 and each further tap re-arms the window, so **keep tapping and the total keeps growing** —
 tap Up twenty times and you get one 20-minute jump. There is no small artificial ceiling:
 `UNIT_CAP` exists only so the **MM:SS** readout stays exact (99:50 is the widest it can

@@ -47,9 +47,14 @@ Three layers:
   13.5 MHz pacing halves the effective lead, an imperceptible ~2 px shift).
 
 **Status line** (bottom-anchored): `[icon] H:MM:SS/H:MM:SS CH n/N` — icon =
-▶ / ❚❚ / ▶▶×n / ◀◀×n (scrub tier 0..3 shows ×1..×4; tiers are span-relative
-step rates since PR fj#101, *not* seconds — 0/2/4.5/8 s of holding, step
-`span >> {12,10,8,6}`, relaxed 2026-09-03; see `docs/dvd_nav.md` "Phase 8a").
+▶ / ❚❚ / ▶▶×n / ◀◀×n (scrub tier 0..3 shows ×1..×4; the tiers are step RATES,
+*not* a speed multiplier and *not* seconds — 0/2/4.5/8 s of holding. Since
+2026-09-12 the step is an absolute CONTENT rate rather than a fraction of the
+title span: `lin_blk10 >> {5,3,1,0}` on a linear file (≈5/21/83/167 s/s) and
+`span >> ({12,10,8,6} + the title's duration bucket)` on a DVD, anchored so a
+~2 h title's step is unchanged. ⚠ So ×1..×4 label the same four tiers on every
+source but do NOT denote the same rate on a disc as on a `.mpg`; see
+`docs/dvd_nav.md` "Phase 8a").
 `CH` hides until the reader's `cur_pgm` query resolves (0 = unknown). Shown while: **persistent mode** (B9
 "Display" toggles it), paused, scrubbing, or ~2.5 s after a transport event.
 

@@ -1508,7 +1508,9 @@ behind the congestion cleanup and built incrementally on the proven overlay laye
 ### What the OSD shows *(✅ HW-CONFIRMED 2026-07-10, PR fj#103; design: `docs/transport_hud.md`)*
 - [x] **Transport state indicator** — play/pause and fast-forward/rewind: `►` / `❚❚` /
   `►►` / `◄◄` with the current scrub speed tier shown as **×1..×4** (since the PR fj#101
-  seek-on-release rework the tiers are span-relative step rates, not fixed seconds).
+  seek-on-release rework the tiers are step RATES, not fixed seconds; and since 2026-09-12
+  those rates are absolute content rates rather than a fraction of the title span --
+  `docs/dvd_nav.md` "Phase 8a").
   Appears on a transport action and auto-hides after ~2.5 s.
 - [x] **Playback status / timecode** — **whole-title elapsed** (the reader's per-cell
   playback-time BCD prefix sum + DSI `c_eltm`, rate-aware frame carry via

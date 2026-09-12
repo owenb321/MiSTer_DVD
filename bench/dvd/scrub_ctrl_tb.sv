@@ -5,9 +5,16 @@
 // hold->release seeks in the held direction; a longer hold seeks further
 // (acceleration); backward; clamp at title start/end; a too-short tap does
 // nothing; hold_freeze high only while held; direction-flip restarts; in_title
-// gate; the acceleration LADDER and the tier dwells (T13-T15, 2026-09-03).
-// Time thresholds are shrunk via parameter override -- the SHIFT ladder is NOT,
-// so T13/T14 measure the shipping steps.
+// gate; the acceleration LADDER and the tier dwells (T13-T15, 2026-09-03); the
+// step as an absolute CONTENT RATE rather than a fraction of the title span
+// (T16-T18, 2026-09-12).
+// Time thresholds are shrunk via parameter override -- the SHIFT ladders are
+// NOT, so T13/T14 measure the shipping steps.
+//
+// ★ T13/T14 run with title_secs = 7200 (two hours) and that is load-bearing, not
+// incidental: it is the ANCHOR of the duration bucket, so those two arms double
+// as the proof that the 2 h feel signed off on hardware is BIT-IDENTICAL after
+// the rate change. If they ever need new expected numbers, the anchor moved.
 //
 //   iverilog -g2012 -o /tmp/scrub_sim dvd/scrub_ctrl.sv bench/dvd/scrub_ctrl_tb.sv
 //   vvp /tmp/scrub_sim
@@ -31,12 +38,19 @@ module scrub_ctrl_tb;
     logic        jump_fire = 0, jump_dir = 0;
     logic [31:0] jump_base = 0, jump_off = 0;
 
+    // what the span is worth. 7200 s = the duration anchor, so every scenario
+    // written before 2026-09-12 keeps its original expected numbers.
+    logic [15:0] tsecs    = 16'd7200;
+    logic [23:0] lblk10   = 24'd0;
+    logic        lrate_ok = 1'b0;
+
     always #5 clk = ~clk;
 
     scrub_ctrl #(.T1(T1_C), .T2(T2_C), .T3(T3_C), .TICK(TICK_C), .LINGER(LING_C)) dut (
         .clk(clk), .rst_n(rst_n),
         .held_right(held_right), .held_left(held_left), .in_title(in_title),
         .cur_rbn(cur_rbn), .title_first_rbn(title_first), .title_last_rbn(title_last),
+        .title_secs(tsecs), .lin_blk10(lblk10), .lin_rate_ok(lrate_ok),
         .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn),
         .hold_freeze(hold_freeze),
         .bar_active(bar_active), .bar_base_rbn(bar_base_rbn), .bar_tgt_rbn(bar_tgt_rbn),
@@ -50,6 +64,7 @@ module scrub_ctrl_tb;
         .clk(clk), .rst_n(1'b0),
         .held_right(1'b0), .held_left(1'b0), .in_title(1'b0),
         .cur_rbn(32'd0), .title_first_rbn(32'd0), .title_last_rbn(32'd0),
+        .title_secs(16'd0), .lin_blk10(24'd0), .lin_rate_ok(1'b0),
         .seek_rbn_pulse(), .seek_rbn(),
         .hold_freeze(),
         .bar_active(), .bar_base_rbn(), .bar_tgt_rbn(),
@@ -58,7 +73,10 @@ module scrub_ctrl_tb;
     );
 
     integer errors = 0;
-    task automatic chk(input cond, input [255:0] msg);
+    // ⚠ 128 chars, not the original 32: a [255:0] message SILENTLY TRUNCATES
+    // from the left, so a long assertion label printed as "hin 2x of the 2 h
+    // rate" and nothing downstream could grep for the arm that failed.
+    task automatic chk(input cond, input [1023:0] msg);
         if (!cond) begin $display("  FAIL: %0s", msg); errors = errors + 1; end
     endtask
 
@@ -105,7 +123,18 @@ module scrub_ctrl_tb;
         end
     endtask
 
-    integer fwd_short, fwd_long;
+    integer fwd_short, fwd_long, ms_tick, ss;
+
+    // A measured linear step, converted into CONTENT-SECONDS PER SECOND using
+    // the SHIPPED tick period -- step blocks is step * 10000 / blk10 content-ms,
+    // and there are 27e6 / TICK ticks a second.
+    function automatic integer lin_rate(input [31:0] stp);
+        integer ms_per_tick;
+        begin
+            ms_per_tick = (stp * 10000) / 861;
+            lin_rate    = (ms_per_tick * (27_000_000 / dut_def.TICK)) / 1000;
+        end
+    endfunction
 
     // fire a resolved jump (one cycle), then let the jump_go stage land.
     task automatic jump(input dir, input [31:0] base, input [31:0] off);
@@ -270,8 +299,94 @@ module scrub_ctrl_tb;
         chk(dut_def.SH1 == 5'd10,       "defaults: SH1 = 10");
         chk(dut_def.SH2 == 5'd8,        "defaults: SH2 = 8");
         chk(dut_def.SH3 == 5'd6,        "defaults: SH3 = 6");
+        chk(dut_def.LS0 == 5'd5,        "defaults: LS0 = 5");
+        chk(dut_def.LS1 == 5'd3,        "defaults: LS1 = 3");
+        chk(dut_def.LS2 == 5'd1,        "defaults: LS2 = 1");
+        chk(dut_def.LS3 == 5'd0,        "defaults: LS3 = 0");
+        chk(dut_def.SECS_REF == 5'd12,  "defaults: SECS_REF = 12 (the 2 h anchor)");
         // T3 must fit hold_cnt (28 bits) or the ramp would never reach tier 3.
         chk(dut_def.T3  < 28'h fff_ffff, "defaults: T3 fits hold_cnt");
+
+        // ---------- TEST 16: the 2 h ANCHOR -- an unchanged step -----------
+        // The duration bucket may only move titles AWAY from two hours. Every
+        // title whose leading one sits at bit 12 (4096..8191 s = 68..136 min)
+        // must produce the step that shipped, and so must a title whose length
+        // is not known yet. Measured against the same numbers TEST 13 pins.
+        $display("TEST 16: the 2 h anchor is bit-identical");
+        title_first = 32'd0; title_last = 32'd1000000;
+        tsecs = 16'd4096; cur_rbn = 32'd100000; tick(4);
+        held_right = 1'b1; tick(60);
+        chk(last_delta == 32'd245, "anchor: 4096 s (the bucket's floor) = span>>12");
+        held_right = 1'b0; tick(8);
+        tsecs = 16'd8191; cur_rbn = 32'd100000; tick(4);
+        held_right = 1'b1; tick(60);
+        chk(last_delta == 32'd245, "anchor: 8191 s (the bucket's ceiling) = span>>12");
+        held_right = 1'b0; tick(8);
+        tsecs = 16'd0; cur_rbn = 32'd100000; tick(4);
+        held_right = 1'b1; tick(60);
+        chk(last_delta == 32'd245, "anchor: an unknown duration keeps the old step");
+        held_right = 1'b0; tick(8);
+        // ...and a title well away from the anchor must NOT be unchanged, or the
+        // bucket is inert and this whole arm proves nothing.
+        tsecs = 16'd180; cur_rbn = 32'd100000; tick(4);
+        held_right = 1'b1; tick(60);
+        chk(last_delta != 32'd245, "anchor: a 3-minute title does move off the shipped step");
+        held_right = 1'b0; tick(8);
+        tsecs = 16'd7200;
+
+        // ---------- TEST 17: a short title scrubs at a COMPARABLE RATE -------
+        // The defect, in the units a viewer feels. A 3-minute clip measured
+        // 15504 sectors and 0.58 content-seconds per second at tier 0, against
+        // 29 for a 2 h feature -- the shorter the title, the slower the scrub.
+        // Scored as content-MILLISECONDS PER TICK (step * title_secs / span), so
+        // this is a rate the user experiences and not a restatement of the shift.
+        $display("TEST 17: a 3-minute title, scored as a content rate");
+        title_first = 32'd0; title_last = 32'd15504; tsecs = 16'd180;
+        cur_rbn = 32'd200; tick(4);
+        held_right = 1'b1; tick(40);            // inside tier 0, before the cap
+        ms_tick = (last_delta * 180 * 1000) / 15504;
+        held_right = 1'b0; tick(8);
+        $display("  tier 0 on a 3-minute clip: step=%0d sectors = %0d content-ms/tick",
+                 last_delta, ms_tick);
+        // The 2 h reference is 1054 * 7200 * 1000 / 4320000 = 1757 ms/tick. Half
+        // to double that is the band; the pre-change RTL scores 34 and the `| 1`
+        // floor alone scores 11, so both failure shapes are outside it.
+        chk(ms_tick >= 878 && ms_tick <= 3514,
+            "rate: a 3-minute clip scrubs within 2x of the 2 h rate at tier 0");
+        title_first = 32'd0; title_last = 32'd1000000; tsecs = 16'd7200;
+
+        // ---------- TEST 18: the LINEAR arm, in content-seconds per second ----
+        // lin_blk10 is blocks per 10 s, so the shift IS the rate and the bench
+        // can say so in the user's units. The tick rate comes from the SHIPPED
+        // TICK parameter (read off the defaults instance), not from this bench's
+        // shrunk override -- otherwise "seconds per second" would be fiction.
+        $display("TEST 18: the linear ladder as content-seconds per second");
+        lblk10 = 24'd861;                       // exact CD geometry (VCD/SVCD)
+        lrate_ok = 1'b1;
+        cur_rbn = 32'd100000; tick(4);
+        held_right = 1'b1;
+        tick(60);   ss = lin_rate(last_delta);
+        $display("  tier 0: step=%0d blocks = %0d content-s/s", last_delta, ss);
+        chk(last_delta == 32'd27 && ss >= 4 && ss <= 7,   "linear: tier 0 ~5 s/s");
+        tick(100);  ss = lin_rate(last_delta);
+        $display("  tier 1: step=%0d blocks = %0d content-s/s", last_delta, ss);
+        chk(last_delta == 32'd107 && ss >= 17 && ss <= 26, "linear: tier 1 ~21 s/s");
+        tick(100);  ss = lin_rate(last_delta);
+        $display("  tier 2: step=%0d blocks = %0d content-s/s", last_delta, ss);
+        chk(last_delta == 32'd431 && ss >= 70 && ss <= 100, "linear: tier 2 ~83 s/s");
+        tick(120);  ss = lin_rate(last_delta);
+        $display("  tier 3: step=%0d blocks = %0d content-s/s", last_delta, ss);
+        chk(last_delta == 32'd861 && ss >= 140 && ss <= 200, "linear: tier 3 ~167 s/s");
+        held_right = 1'b0; tick(8);
+        // ...and the rate must be TRUSTED, not merely present: with the valid
+        // flag low the module falls back to the span path exactly as it shipped.
+        // (dvd/dpad_seek.sv's precedent -- a zero rate through this arm would
+        // pin the step at the `| 1` floor and the scrub would look broken.)
+        lrate_ok = 1'b0; lblk10 = 24'd0;
+        cur_rbn = 32'd100000; tick(4);
+        held_right = 1'b1; tick(60);
+        chk(last_delta == 32'd245, "linear: an untrusted rate falls back to the span step");
+        held_right = 1'b0; tick(8);
 
         if (errors == 0) $display("\nscrub_ctrl_tb: ALL TESTS PASSED");
         else begin
