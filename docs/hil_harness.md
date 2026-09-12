@@ -112,6 +112,28 @@ at the nominal geometry and **cannot** catch either.
 — a real frame read as `[REV]` at maxerr 44. `hud_read` requires both an exact
 fit and some non-space content before it reports a reading.
 
+### ⚠ Two harness defects found by using it (2026-09-12, issue #81 round)
+
+Both were in `tools/mister.py`, both silent, and both cost a diagnosis apiece:
+
+- **`deploy --agent --rbf X.rbf` installed the Main and the agent and SILENTLY SKIPPED
+  THE CORE.** The flash was guarded by `if not args.agent`, so `--agent` meant "agent
+  only" even when a core was named — while the skill's own documented usage is exactly
+  that combination. The result is the failure the `RESTORE_SCRIPT` comment right above it
+  was written about ("the Main landed, the core did not, and the two silently disagreed"),
+  reached by a different route and with no warning. Now `if args.rbf or not args.agent` —
+  an explicit `--rbf` is an instruction, so it wins. ★ It was caught only because the
+  deploy output had no `deploy:` line in it; nothing failed.
+- **`state` aborted on a freshly booted box.** Its remote script ends with
+  `tail -5 /tmp/dvd_report.log`, that log does not exist until the DVD core has run once,
+  and a shell script's exit status is its LAST command's — so the first thing the skill
+  tells you to run died with `remote command failed (rc=1)` and threw away everything it
+  had already gathered. `|| true`.
+
+★ The shape both share: **a status or a guard that is right in the common case and
+unexamined in the first-use case.** A harness is used most on a cold box and least on a
+warm one.
+
 ## Set `Debug Overlay=On` for anything that inspects state
 
 `status[2]` drives `hud_dbg` (`emu.sv:1283`, `:4926`), which forces the status

@@ -60,10 +60,30 @@ reads as zero. Consequences, all of which are the point:
 4. With `--nav-packs`: NAV packs (PCI/HLI — the button rectangles) from the menu
    VOBs, for menu-highlight bugs. Off by default; it is the only part that scans
    VOB payload, and it is bounded by `--nav-scan-mb` (default 512).
+5. With `--nav-window SECTORS` **and `--lba`** (so in practice: the player's chord):
+   every NAV pack in one sequential run forward from the sector being served.
+
+★★ **4 and 5 capture DIFFERENT NAV packs, and the difference is structural — not a
+matter of tuning (issue #81).** `--nav-packs` scans MENU VOBs (`VIDEO_TS.VOB`,
+`VTS_nn_0.VOB`), so it **cannot see an in-title menu at all**: a DVD-game or
+motion-menu disc authors its menus as TITLE-domain PGCs with the HLI in a title
+VOB's NAV packs. Scene It's game menus are like this, and so is issue #81's
+disc, whose boot menus live in `VTS_02_1.VOB`. Measured on SCENEIT_HP: a
+2048-sector window from a title VOB yields ~20 NAV packs of which **13–20 carry
+multi-button HLI**, and the menu-VOB scan finds none of those records.
+
+The window is also ~100× cheaper, which is what makes it usable from the chord:
+0.28 s and a 38 KB bundle, against 4.9 s and 5.6 MB for `--nav-packs` on
+MEN_IN_BLACK (whose 680 MB of menu VOBs hit the cap). One forward run means no
+seeks, which matters on a physical disc the core is streaming from at the same
+time. And it captures whatever the user was actually looking at, which no offline
+scan can know. Detail: `docs/support_bundle_hps.md`.
 
 Deliberately **not** captured: title VOB payload. Subpicture, closed-caption,
 film-cadence and A/V-sync evidence all live in the elementary stream, which is
-megabytes and a different problem — those report better in prose.
+megabytes and a different problem — those report better in prose. (The window
+above reads *through* a title VOB but keeps only its NAV packs, and `audit()`
+proves that over the final captured set.)
 
 ## The content guarantee, and why it is structural
 

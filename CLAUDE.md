@@ -1263,6 +1263,79 @@ worse maintenance burden than targeted in-place edits. So:
     `phys_streamN` golden contract is untouched.
     Detail: **`docs/stc_freerun.md` §12**, `docs/subpicture.md`, `docs/dvd_nav.md`.
 
+- 🔧 **A MENU CONTEXT IS NOT A MENU DOMAIN — the subpicture map's domain gate asked the
+  wrong question (2026-09-12, issue #81); sim-proven + mutation-checked, ⏳ HW-confirm
+  pending.** Field report on v0.5.0: *Aniki, mon Frère* (**BROTHER**) PAL FR Z2, physical
+  disc, `Disc Menus` On — *"No visible selection on the main menus."*
+  ★★ **THAT IS WORD-FOR-WORD THE #60/#61 SYMPTOM ON A DISC THE #60/#61 FIX COULD NOT
+  REACH, AND THE SENTENCE CLAIMING IT COULD WAS IN `emu.sv` THE WHOLE TIME.** Measured
+  from the repro bundle: the disc's FP is `g[3]=1; JumpTT 3`, so its menus are
+  **TITLE-domain PGCs** (VTS_02, 22 titles of 30–41 s, `PGCN 4` post
+  `if (g[0]==0) JumpVTS_PTT 4:1` = a looping motion menu, and `HL_BTNN = 0x400/0x800` in
+  five PGCs' POSTs = it expects highlights), VTS_02 `V_ATTR = 0x5E00` (PAL 16:9), and
+  `subp_control[0] = 0x80010200` on **every** PGC — **the exact word both #60/#61 discs
+  author**, so the highlight SPU rides `0x21` while the core filtered `0x20`. A highlight
+  is a RECOLOUR of subpicture pixels, so nothing was drawn.
+  ★ **The mechanism: `subp_stream_map`'s gate was `ctx_menu ? ~dom_tt : dom_tt`, driven
+  from `emu.sv`'s `menu_sp_ctx` — and `menu_sp_ctx` is DELIBERATELY WIDER than the menu
+  domain** (it includes `sp_menu_early`, the in-title multi-button HLI menu: Scene It's
+  game menus, and this disc's motion menus). So a menu context in the TITLE domain
+  demanded a menu-domain table, found the title's, and fell back to the logical index.
+  Fix: the input is now `menu_dom` (`menus_on && menu_active` — a fact about the PLAYER)
+  and the test is `dom_ok = (dom_tt != menu_dom)` = "the table belongs to the domain we
+  are in".
+  ⚠⚠ **THE MODULE'S TRUTH TABLE DID NOT CHANGE** (`ctx_menu ? ~dom_tt : dom_tt` is the
+  same function of that bit; verified over 200,000 input points), so
+  `subp_stream_map_tb` **cannot go RED for this defect** — only emu's choice of what to
+  put on the wire changed, and there is no emu-level bench.
+  ★★ **THAT IS THE DURABLE LESSON, AND THE DOC HAD ALREADY TALKED ITSELF OUT OF THE
+  GATE:** `docs/track_selection.md` said a chain bench "would have to *replicate* emu's
+  glue, which is a bench agreeing with a copy of the thing it is meant to check" — true,
+  and it was then read as covering the glue. It did not: a single port connection
+  carrying the wrong FACT is invisible to every module-level test. New
+  **`tools/check_subp_map_wiring.py`** gates that one connection by **reading it out of
+  `dvd/emu.sv`** (the `tools/acmod_scan.py` / `csync_pipe_tb` pattern — a table that
+  cannot go stale beats a correct one), runs from `run_subpic.sh` in milliseconds, and is
+  RED on the pre-#81 file and on 2 targeted re-regressions.
+  ⚠ **No local repro, quantified: 958 ISOs → 7 discs have a title-domain PGC resolving
+  logical 0 non-zero, and NONE of the 7 carries an in-title HLI** (`nav_extract.py
+  --title-vob`), so they are untouched either way — the same standing as #60/#61, which
+  also could not be reproduced locally.
+  ★ **The one class this touches is MEASURED bit-identical, not argued so: Scene It's game
+  VTS declares `nr_of_vts_subp_streams = 0` with the AVAILABLE BIT CLEAR on every
+  `subp_control[0]`**, and `use_map` requires `ctl_sel[31]` — so it stays on the identity
+  fallback → physical 0 and the domain gate never gets to matter. (Its highlight works
+  because the disc sends an SPU on `0x20` whatever its IFO table says.) The discs this can
+  move are exactly: available bit SET **and** a non-zero id for the presented aspect
+  **and** an in-title HLI menu. ⚠ The reporter did not pass `--nav-packs`, so the
+  HLI itself is not in evidence and the diagnosis is structural.
+  ★★ **AND libdvdnav — THE INDEPENDENT ORACLE — EXPOSED A SECOND WRONG FACT ON THE SAME
+  LOOKUP, WHICH IS WHY IT GOT FIXED RATHER THAN DEFERRED.** `vm_get_subp_stream`
+  (`vmget.c:138`) has **NO domain condition on the map at all** (the domain only forces
+  `subpN=0` and turns a `-1` into 0), so it applies `subp_control` in
+  `DVD_DOMAIN_VTSTitle` too and resolves this disc to `0x21` — our fix agrees with it.
+  But the aspect it feeds the lookup is `vm_get_video_attr()` =
+  **`vtsi_mat->vts_video_attr` in the title domain (`vmget.c:313`) — the IFO, not the
+  sequence header**, while we used `ar_wide_auto` there. A menu-domain menu already reads
+  the IFO *precisely because* "DVD menus are routinely authored 16:9 anamorphic with a 4:3
+  sequence-header code", and a title-domain menu is the same authoring — so a 4:3 code
+  would take the `[28:24]` field (0) and **the symptom would have survived the domain fix
+  entirely.** New reader output `title_ar_wide` from `VTS_V_ATTR@0x200`, costing ONE extra
+  `attr_addr` step (the Phase-10 `S_ATTR` sweep already has that sector resident), consumed
+  by ONE mux arm: `sp_map_wide = sp_menu_early && !menu_dom_live ? title_ar_wide_w :
+  ar_wide_auto_eff`.
+  ⚠ **Scoped to the in-title MENU only** — the white-rabbit `SetSTN` path, the user
+  subtitle path and `ar_wide_eff`/`VIDEO_ARX` keep the HW-proven sequence-header value.
+  The asymmetry is deliberate: one of those has a working precedent to preserve, the other
+  does not. And it is NOT a second delta in the "one per HW round" sense — its blast radius
+  is the SAME single case as the domain fix.
+  Gates: `subp_stream_map_tb` arms [7]–[10] + 6 vectors; `iso_reader_attr_tb`'s
+  `title_ar_wide` arm, which reads `VTS_V_ATTR` **out of the fixture** rather than
+  restating 1 (MiB VTS_21 = `0x4E80`) and refuses to be vacuous, **3/3 reader mutations
+  caught**; `check_subp_map_wiring.py` on both ports, RED on 3 re-regressions.
+  Detail: **`docs/track_selection.md`** "The domain gate asked the wrong question",
+  `docs/dvd_nav.md` (Scene It section).
+
 - ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
   PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
   no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**
@@ -2856,6 +2929,88 @@ bundle over without thinking, and it is the same line as
 `css-key-cache-never-ship`. ⛔ A `--from-drive` mode was considered and REJECTED
 (2026-08-31, user decision): it points users at their optical drive, and a
 reporter who has already ripped their own ISO is a better reporter.
+★★ **`--nav-packs` SCANS MENU VOBs, SO IT CANNOT CAPTURE AN IN-TITLE MENU'S
+BUTTONS AT ALL — on any route (2026-09-12, issue #81).** A DVD-game or
+motion-menu disc authors its menus as TITLE-domain PGCs with the HLI in a title
+VOB's NAV packs (Scene It's game menus; #81's disc, whose boot menus live in
+`VTS_02_1.VOB`), so a highlight bug on such a disc could not be evidenced by
+either route. That is structural, not a tuning matter.
+✅ **FIXED by a PLAYHEAD WINDOW — ✅ HW-CONFIRMED 2026-09-12 ON A PHYSICAL DISC, BOTH
+ARMS.** Arm 1, the DEGRADE path (new Main + the OLD release-installed collector): bundle
+written, `nav packs: no`, audit clean — that combination wrote NO BUNDLE AT ALL before the
+flag probe, measured on the same rig. Arm 2, the CAPTURE path, chord pressed ON THE DISC'S
+MENU: `hli_ss=2 btn_ns=5`, `btn_coli sel=00005af0`, the full 1↔2↔3↔4↔5↔1 link graph and a
+decoded VM command per button (`LinkPGCN 13/4/14/2/30`, two of them with `HL_BTNN`), in a
+73 KB bundle — **exactly the evidence missing from #60, #61 and #81, all three of which
+were physical-disc reports whose bundles carried ZERO NAV packs.** The second NAV pack 8
+sectors later carries the SAME button set: the per-VOBU HLI re-send that `--nav-stop` rests
+on, now observed on real media.
+★★ **AND THE REAL COST IS FAR BELOW THE COLD MEASUREMENT — both presses finished in ≤1 s**,
+against 2.7-4.9 s cold, because the window reads FORWARD FROM THE PLAYHEAD, which is where
+the core has just been streaming, so most of it is already page-cached. The cold numbers are
+the pessimistic bound, not the typical case.
+⚠ **`/tmp/dvd_report_run.log` was 0 bytes after every press** — the child's stdout is not
+captured, so `reap()`'s "Support bundle FAILED — see /tmp/dvd_report_run.log" points at an
+empty file. PRE-EXISTING and only on the failure path, but it is that path's ONLY
+diagnostic; suspect is `start()`'s `freopen(..., stdout)` before `execvp` (python writes
+fine to a redirect on that box). Own item.
+The mechanism:
+`dvd_report.py --nav-window SECTORS` (with `--lba`) captures every NAV pack in one
+SEQUENTIAL run forward from the sector being served, and `dvd_report.cpp` passes
+`--nav-window 2048` whenever it has a playhead.
+★ **Measured ON THE MISTER, which is what chose it over "just pass `--nav-packs`
+too": the window costs 1.38 s against 0.86 s for no capture at all (SCENEIT_HP,
+16 NAV packs, a 37 KB bundle), while `--nav-packs` on MEN_IN_BLACK costs 37.7 s —
+19× the window's 1.98 s on the same disc**, from local storage with the core not
+even running. It yields 13–20 of ~20 packs carrying multi-button HLI on Scene It's
+game VTSes, which `--nav-packs` cannot reach at all.
+★★ **AN OPTICAL DRIVE IS ~50× SLOWER AND THE ARITHMETIC SAID OTHERWISE — MEASURED
+ON A REAL DVD WHILE THE CORE STREAMED IT: ~90–285 KB/s, a SEVENTH of DVD 1x**,
+steady over 84 s (so not spin-up), and chunking does NOT help (1-sector reads
+13.9 s, 256-sector 17.8 s — it is the drive, not syscalls). A 2048-sector window
+costs **15.7–29.1 s** there against ~0.5 s on an image. ⚠ **Authentication and a
+spinning drive do NOT rescue it** — that was the obvious hypothesis and the
+measurement killed it. ⚠⚠ **Re-reading a region takes 0.02 s, so any timing on an
+LBA something already touched is measuring the PAGE CACHE** — a first attempt here
+read 0.26 s for a window that really costs 16 s.
+✅ **Bounded: `--nav-stop` (default 2) ends the scan at the 2nd NAV pack, and the
+cap follows the MEDIUM** (`nav_window_for()`, on `S_ISBLK` — the medium, not the
+path spelling): 512 sectors optical, 2048 image. Measured on that disc: 1st NAV
+pack +51..+230 sectors (2.1–5.5 s), 2nd +304..+465 (3.9–7.0 s), 8th +1701..+1903
+(19.1–29.1 s) — and an HLI repeats byte-identically every VOBU, so the FIRST
+record already carries the whole button set. **Chord on a physical DVD: 0.91–0.96 s
+before this branch, 2.73/4.92 s with the bounded window, vs +15.7–29.1 s
+unbounded.** ⚠ The cap is what you pay where there are NO NAV packs (a still, a
+gap) — the early stop cannot help there, which is why it is media-dependent rather
+than merely large; one run hit 14.35 s on a bad patch, so 3–5 s is typical, not a
+bound. Proven end to end: a window bundle reconstructs to
+an ISO whose `nav_extract.py` walk decodes a complete 7-button in-title menu.
+⚠ A VOBU is ≤1 s, so 2048 sectors spans several, and an HLI is re-sent every VOBU
+while a menu is up — forward-only is enough. ⚠ The content guarantee is unchanged
+and still structural (`is_nav_pack` gates the append; `audit()` re-checks the final
+set). ⛔ `--nav-packs` still NOT on the chord — it answers a different question, and
+the expensive one.
+⚠⚠ **AND THE FLAG IS NOT PASSED UNCONDITIONALLY, because MEASURED ON THE RIG an
+older release-installed `dvd_report.py` given it prints `unrecognized arguments:
+--nav-window 2048` and writes NO BUNDLE AT ALL** — strictly worse than the missing
+button data it adds. The release zip ships `Scripts/dvd_report.py` beside the Main so
+they normally move together, but a Main updated alone must degrade, not break. So the
+child ASKS THE SCRIPT (`dvd_report_script_supports`): argparse cannot accept a flag it
+does not name, so a substring search is sound both ways. In the CHILD, after the fork
+(file I/O on the poll thread is the `dvd_phys` lesson), chunked with a `tlen-1` overlap.
+★ **The argv moved OUT of the `fork()` (`dvd_report_build_argv`) purely so it could
+be tested, because every failure here is SILENT** — a missing flag still produces a
+bundle that is written, self-checks and looks complete, which is exactly how #81
+arrived. `main/tests/dvd_report_test.cpp`: 6 arms, **6 RED mutations each caught by
+its own assertion** (drop the flag; pass it with no playhead — which captures the
+NAV packs at the START of the disc, *confidently wrong data instead of none*; reach
+for `--nav-packs`; forget the NUL; ignore what the installed script accepts; drop the
+probe's chunk overlap, which reports a good tool as too old).
+⚠ Two harness traps: `red_case`'s `grep -q "$expect"` read an expect string
+beginning `--` as an OPTION (now `-e`), and **a test that walks argv to its NUL
+cannot detect a missing NUL** — the terminator arm pre-fills a sentinel, runs FIRST,
+and bounds every scan, so the mutation is caught by its own assertion instead of as
+noise elsewhere. Detail: `docs/support_bundle_hps.md`.
 ⚠ Two traps recorded in `docs/bug_reports.md`: NAV-pack detection is **not**
 `0x000001BF` at offset 14 (a **system header** pushes PCI to `0x26`; the fixed
 offset found ZERO packs and reported success), and the tool is **deliberately

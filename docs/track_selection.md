@@ -242,10 +242,11 @@ decisive A/B; backups `BATTLEFIELD_EARTH` VTS 4, `NATIONAL_LAMPOONS_VACATION`
 VTS 2); MiB 4-track cycling unregressed; menu→title transitions keep audio
 continuous.
 
-### Logical→physical SUBPICTURE mapping — menus (issues #60/#61)
+### Logical→physical SUBPICTURE mapping — menus (issues #60/#61, #81)
 
-**Status: 🔧 fixed in fabric, sim-proven RED/GREEN + mutation-checked, ⏳ HW-confirm
-pending** (branch `fix/menu-subp-stream-map`).
+**Status: ✅ MERGED (PR #68), sim-proven RED/GREEN + mutation-checked, ⏳ HW-confirm
+pending.** Extended by **issue #81** (title-domain menus — see
+"The domain gate asked the wrong question" below), ⏳ HW-confirm pending.
 
 Two field reports, both PAL FR Region-2 physical discs on v0.4.0, both worded almost
 identically: *"the disc is playable, but we can't see any highlighted cursor or any
@@ -332,7 +333,7 @@ nav-only), so this is the only real disc on which the new path can be exercised 
   stream 0's art, routine on a multilingual R2 title, and newly reachable now that
   menus resolve to non-zero ids.
 
-**⛔ The `ctx_menu`/`dom_tt` gate is NOT hygiene.** `subp_ctl_mem` is one store shared
+**⛔ The domain gate is NOT hygiene.** `subp_ctl_mem` is one store shared
 by both domains and is never cleared. Without a domain match, (a) a menu jump raises
 `menu_active` *before* `S_PGC_HDR` clears `pgc_ctl_valid`, so a menu would briefly
 resolve through the **title's** table, and (b) a menu's table would leak into the
@@ -360,7 +361,9 @@ needs a T2-Letterbox HW round.
 
 `sp_menu_early` (an in-title multi-button game menu, e.g. Scene It) joins the mapping:
 it is a title-domain PGC, so `subp_ctl_mem` is already populated for it and
-`ar_wide_auto_eff == ar_wide_auto` there.
+`ar_wide_auto_eff == ar_wide_auto` there. ⚠ **That sentence was written here and in
+`emu.sv` when this shipped, and it was false until issue #81 — see the next
+section.**
 
 **Golden model** `tools/dvd_vm_ref.py subp_stream_map()`; **offline sweep**
 `tools/subp_route_sweep.py` (old vs new routing for every menu PGC of every disc).
@@ -381,7 +384,16 @@ Full `run_subpic.sh` + a baseline-vs-fixed A/B of all 31 reader benches (27 unch
 ⚠ **The `emu.sv` glue itself has NO sim gate** — there is no emu-level bench in this
 project — so `menu_sp_ctx`, `sp_disp_mode_eff`, the `subp_stream_map` instantiation and
 the widened `sp_track_eff` are **review-only plus Quartus elaboration**, the same standing
-this codebase records for the keyboard feature's `joy_eff` substitution. The three links
+this codebase records for the keyboard feature's `joy_eff` substitution.
+★★ **ISSUE #81 CAME THROUGH THAT GAP, AND IT WAS THE ONE CONNECTION NOBODY RE-READ.**
+The paragraph below ("A chain bench was considered and dropped… it would have to
+*replicate* emu's glue") is sound about a chain bench and was taken as covering the
+glue. It did not: the defect was a single port connection carrying the wrong FACT, and
+no amount of module-level testing can see that. `tools/check_subp_map_wiring.py` now
+gates exactly that one connection by **reading it out of `dvd/emu.sv`** (the
+`tools/acmod_scan.py` / `csync_pipe_tb` pattern — a gate that cannot go stale because
+the thing it asserts is the source file), runs from `run_subpic.sh`, and is RED on the
+pre-#81 file and on the plausible re-regression (`.menu_dom (menu_sp_ctx)`). The three links
 either side of it are gated (reader streams the table; the map resolves it; the demux
 filters on it), and `tools/lint_undriven.sh` passes, which is what catches the specific
 failure mode of a declared-but-undriven wire. A chain bench was considered and dropped as
@@ -395,6 +407,152 @@ byte-identical. Assert machine-readably with `Debug Overlay=On` and
 are exactly the discriminator: pre-fix on an affected disc the highlight arms and
 fetches while the SPU blocks read RED. The reporters remain the final word for
 #60/#61 themselves.
+
+#### The domain gate asked the wrong question (issue #81)
+
+**Status: 🔧 fixed in fabric, sim-proven + mutation-checked, ⏳ HW-confirm pending.**
+
+Field report on v0.5.0, *Aniki, mon Frère* (**BROTHER**) PAL FR Region 2, physical disc,
+`Disc Menus` On: *"No visible selection on the main menus."* Repro bundle attached
+(nav tables only — the reporter did not pass `--nav-packs`, so the HLI itself is not in
+evidence and the diagnosis below is structural).
+
+That is word-for-word the #60/#61 symptom, on a disc the #60/#61 fix could not reach.
+Measured from the bundle:
+
+```
+FP PGC:  g[3] = 1 ; JumpTT 3        -> global title 3 -> VTS_02 vts_ttn 1
+VTS_02:  VTS_PGCIT nr_srp=32, 22 titles of 30-41 s     <- the MENUS are TITLE-domain PGCs
+         PGCN 4 post: if (g[0] == 0) JumpVTS_PTT 4:1   <- a looping motion menu
+         PGCN 5/6/7/8/9 post: HL_BTNN = 0x400 / 0x800  <- SetHL_BTNN: it expects HIGHLIGHTS
+VTS_02 V_ATTR@0x200 = 0x5E00                           <- MPEG-2, PAL, 16:9
+VTS_02 subp_control[0] = 0x80010200 on EVERY PGC       <- avail, 4:3=0, wide=1, lbox=2
+```
+
+`0x80010200` is the exact word both #60/#61 discs author, so the menu highlight SPU
+rides substream **0x21**. The core filtered **0x20**, decoded nothing, and a highlight
+is a *recolour of subpicture pixels* — so nothing was drawn.
+
+**Why the #60/#61 fix did not cover it.** The map's domain gate was
+`dom_ok = ctx_menu ? ~dom_tt : dom_tt`, driven from `emu.sv`'s `menu_sp_ctx` — i.e.
+*"a menu resolution requires a MENU-DOMAIN table"*. But `menu_sp_ctx` is deliberately
+**wider than the menu domain**: it includes `sp_menu_early`, the in-title multi-button
+HLI menu. A DVD-game or motion-menu disc authors its menus as title-domain PGCs, so the
+gate demanded a menu-domain table, found the title's, and fell back to the logical
+index — logical 0 → physical 0 → `0x20`.
+
+★ **Menu CONTEXT and menu DOMAIN are not the same question, and the fix is to ask the
+one the gate actually needs:** does the loaded table belong to the domain the player is
+**in**? The input is now `menu_dom` (`emu`: `menus_on && menu_active`) and the test is
+`dom_ok = (dom_tt != menu_dom)`.
+
+⚠ **The module's truth table did not change.** `ctx_menu ? ~dom_tt : dom_tt` is the same
+function of `(dom_tt, that bit)` as `dom_tt != menu_dom` (verified over 200,000 random
+input points). What changed is which of `emu`'s signals is wired to it — which is why
+`subp_stream_map_tb` cannot go RED for this, and why the wiring gate above exists.
+Every previously-working combination is bit-identical, because for a menu-domain menu
+and for every title-domain non-menu path `menu_dom` and the old `ctx_menu` carried the
+same value. **Only the in-title MENU changes**, which is the whole fix.
+
+**Scope, swept.** 958 local ISOs: **7** have a title-domain PGC whose logical 0 resolves
+non-zero for the presented aspect, and **none of the 7 carries an in-title HLI** (scanned
+with `nav_extract.py --title-vob`), so none is a repro — the same "cannot reproduce
+locally" standing as #60/#61 itself. Those 7 are unaffected either way: with no HLI,
+`menu_sp_ctx` never asserts and the user subtitle path resolves by raw index exactly as
+before.
+
+★ **And the one class this change actually touches is measured bit-identical, not argued
+so.** Scene It is the in-title-menu reference disc, and its game VTS declares
+`nr_of_vts_subp_streams = 0` with the **available bit clear on every PGC's
+`subp_control[0]`** (`VTS_V_ATTR = 0x4300`, NTSC 4:3). `use_map = use_map_dom &&
+ctl_sel[31]`, so the availability term keeps it on the identity fallback → physical 0,
+exactly as before — the domain gate never gets to matter. Its highlight works today
+because the disc sends an SPU on `0x20` regardless of what its IFO subp table says, and
+that is untouched. So the set of discs this change can move is precisely: a title-domain
+PGC with the available bit SET, a non-zero physical id for the presented aspect, **and**
+an in-title HLI menu.
+
+#### The second wrong fact: `wide` came from the sequence header
+
+★★ **libdvdnav settles it, and it is the reason this half got done rather than
+deferred.** `vm_get_subp_stream()` (vmget.c:138) has **no domain condition on the map at
+all** — the domain only decides whether `subpN` is forced to 0 and whether a `-1` becomes
+0 — so a conforming player applies `subp_control` in `DVD_DOMAIN_VTSTitle` exactly as in a
+menu domain. For this disc it resolves `(0x80010200 >> 16) & 0x1f = 1` → `0x21`, which is
+what the fix above now produces: the oracle agrees, independently of our RTL and of a
+golden model derived from it.
+
+But the aspect it feeds that lookup is `vm_get_video_aspect()` →
+`vm_get_video_attr()` → **`vtsi_mat->vts_video_attr` in `DVD_DOMAIN_VTSTitle`**
+(vmget.c:313) — the **IFO**, not the MPEG sequence header. This core used
+`ar_wide_auto_eff`, which for an in-title path is the decoded sequence header. That is a
+divergence, and a consequential one: a menu-domain menu already uses `VTSM_V_ATR`
+*precisely because* "DVD menus are routinely authored 16:9 anamorphic with a 4:3
+sequence-header code", and a title-domain menu is the same kind of authoring. A 4:3 code
+would take the `[28:24]` field (0) and the symptom would survive the domain fix entirely.
+
+So `dvd_iso_reader` gained **`title_ar_wide`** from `VTS_V_ATTR@0x200`. It costs **one
+extra `attr_addr` step**: the Phase-10 `S_ATTR` sweep already runs with that VTSI_MAT
+sector resident in `parse_buf`, so a new `attr_vatr` one-shot reads byte 512 before the
+audio count and decodes bits 11:10 with the same `& 0x0C` test `S_MENU_VATR` uses.
+
+`emu` consumes it through **one mux arm and nowhere else**:
+
+```
+sp_map_wide = sp_menu_early && !menu_dom_live ? title_ar_wide_w   // in-title menu
+                                             : ar_wide_auto_eff;  // unchanged
+```
+
+⚠ **Scoped to the in-title MENU context on purpose.** The white-rabbit `SetSTN` path and
+the user subtitle path are HW-confirmed on the sequence-header value, so they keep it;
+`ar_wide_eff` (the DISPLAY aspect, `VIDEO_ARX/ARY`) is untouched, because titles' own
+sequence headers do carry the true code and that path is proven. The resulting asymmetry
+— in-title *menu* reads the IFO, in-title *white rabbit* reads the stream — is deliberate,
+not an oversight: one of them has a working precedent to preserve and the other does not.
+
+★ **This is not a second behavioural delta in the "one per HW round" sense.** Its blast
+radius is the *same single case* as the domain fix — a menu context in the title domain —
+which the Scene It measurement above shows is inert on every local disc. It completes one
+change rather than adding another.
+
+**Gate:** `iso_reader_attr_tb` gains an arm that reads `VTS_V_ATTR` **out of the fixture**
+and checks `title_ar_wide` against it (MiB VTS_21 = `0x4E80`, aspect 3 = 16:9), plus a
+guard that fails if the fixture ever stops being a 16:9 VTS — so the arm cannot become
+vacuous. **3/3 targeted reader mutations caught** (never arm `attr_vatr`; read byte 513;
+test the wrong aspect bits). `tools/check_subp_map_wiring.py` also gates `.wide`, and is
+RED both on the pre-#81 file and on `.wide (ar_wide_auto_eff)`.
+
+**Tests:** `bench/dvd/subp_stream_map_tb.sv` arms **[7]–[10]** (the reported word in the
+title domain → 0x21; the pre-fix wiring reproduced, proving the gate still fires on a
+genuine domain mismatch; the 4:3 field; and the 16-of-17 library word not moving) plus
+6 new generated vectors; `bench/dvd/iso_reader_attr_tb.sv`'s `title_ar_wide` arm
+(mutation-checked 3/3); `tools/check_subp_map_wiring.py` on both ports (RED on the
+pre-#81 `emu.sv` and on 3 targeted re-regressions). `tools/lint_undriven.sh`,
+`tools/netlist_canary.sh`, the whole `run_subpic.sh` suite, and every reader bench green
+(`iso_reader_atmos_tb` fails identically on the pre-change reader — pre-existing).
+
+**HW round, 2026-09-12** (build `DVD_subpmapdom_20260912_1328.rbf` on the maintainer's
+rig). Regression only, since no local disc reproduces — the reporter is the final word on
+the positive case. All arms read from the `O[2]` blocks via `tools/hud_read.py blocks`,
+which is machine-readable rather than an impression:
+
+| Arm | Why it is the right arm | Result |
+|---|---|---|
+| **ATFIRSTSIGHT** root menu | The ONLY local disc where the map returns NON-ZERO: menu-domain, `VTSM_V_ATTR` 16:9, `subp_control[0] = 0x80010000` ⇒ logical 0 → **0x21**. If the `dom_ok` change had broken the menu-domain path it would fall back to identity → 0x20 → no SPU bytes. | `hl_btns_armed / video_live / subpic_shown / spu_bytes_seen / still_active / hl_on / hl_recolour_fired` all **GREEN** and stable over 98 s; screenshot shows the highlight box around **play** |
+| **SCENEIT_HP** game menu | The one class this change actually touches (in-title, `sp_menu_early`). | 5-button menu renders with the box on **PLAY THE GAME**; two D-pad presses walked the highlight down, MEASURED by its bounding rows (230..346 → 277..314 → 320..356) — so parse → arm → route → decode → recolour → walk all work |
+| **MEN_IN_BLACK** track counts | The readout of the `S_ATTR` sweep the reader change edits (it now reads `VTS_V_ATTR@0x200` before the audio count at 515). The local RED mutation makes this read 8. | `AUDIO 4/4 EN`, `SUB 1/4 EN / 2/4 FR / 3/4 ES / 4/4 EN` — byte-exact against the disc, both tables and the languages |
+| **MEN_IN_BLACK** soak | Incidental but worth recording: the reader streamed a 7.4 GB ISO over CIFS for **~87 minutes** (to 1:26:56 of 1:37:52) unattended after the arms above. | clean, still playing, `CH 1/21` |
+
+⚠ **The ATFIRSTSIGHT arm is a regression arm and cannot be more than that.** For a
+menu-domain menu `dom_ok` is algebraically identical before and after the fix
+(`menu_dom=1, dom_tt=0` ≡ `ctx_menu=1, dom_tt=0`), so it can detect a breakage and can
+never confirm the fix. Nothing local can: that is what "no local repro" means.
+
+⚠ **The gamepad CHORD cannot be driven from the harness**, so the bundle-capture change is
+measured by running the collector on the target instead. `dvd_report_joy()` is called from
+`user_io_digital_joystick()`, and the harness's uinput device is a KEYBOARD — its presses
+become joystick bits inside the FPGA (`kbd_map.sv`) and never pass through Main's `map`.
+Worth knowing before designing any future test around a chord.
 
 ### Audio-substream observation tap (shipped) + the deferred watchdog
 

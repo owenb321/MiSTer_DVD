@@ -9,6 +9,14 @@
 // disc byte-for-byte:
 //   audio_ntracks=4  A0 AC3 2ch en / A1 AC3 6ch en / A2 AC3 2ch fr / A3 AC3 2ch en
 //   subp_ntracks =4  S0 en / S1 fr / S2 es / S3 en
+//   title_ar_wide=1  VTS_V_ATTR@0x200 = 0x4E80 -> display_aspect_ratio 3 = 16:9
+//
+// The aspect byte rides the SAME resident sector and the same sweep (issue #81):
+// an in-title menu's subpicture variant must be resolved against the IFO, which is
+// what libdvdnav's vm_get_video_attr() returns in DVD_DOMAIN_VTSTitle, not against
+// the MPEG sequence header. The value here is the real disc's, and the check reads
+// the fixture byte rather than restating 1 -- so it cannot pass on a wrong byte and
+// cannot go stale if the fixture is ever regenerated from a different VTS.
 //
 // Ground truth: tools/nav_extract.py --vts-attr --vts 21 (comment header of
 // bench/dvd/test_vobs/mib_vts21_vtsi_mat.hex).
@@ -41,6 +49,7 @@ module iso_reader_attr_tb;
     wire [2:0]  attr_a_fmt;
     wire [3:0]  attr_a_ch;
     wire [15:0] attr_a_lang, attr_s_lang;
+    wire        title_ar_wide;      // issue #81: TITLE-domain aspect from the IFO
 
     dvd_iso_reader dut (
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
@@ -53,6 +62,7 @@ module iso_reader_attr_tb;
         .audio_ntracks(audio_ntracks), .subp_ntracks(subp_ntracks),
         .attr_a_sel(attr_a_sel), .attr_a_fmt(attr_a_fmt), .attr_a_ch(attr_a_ch),
         .attr_a_lang(attr_a_lang), .attr_s_sel(attr_s_sel), .attr_s_lang(attr_s_lang),
+        .title_ar_wide(title_ar_wide),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
@@ -161,7 +171,28 @@ module iso_reader_attr_tb;
         chk_s(3'd2, 16'h6573);               // Spanish subs
         chk_s(3'd3, 16'h656e);               // English subs
 
-        if (errors == 0) $display("ISO_READER_ATTR_TB: PASSED (MiB VTS_21 4 audio / 4 subp, codec+ch+lang exact)");
+        // ---- issue #81: VTS_V_ATTR@0x200 rides the same sweep ----------------
+        // Expected value is DERIVED FROM THE FIXTURE, not written out: bits 11:10
+        // of the BE u16 are the display_aspect_ratio, 3 = 16:9. So this arm fails
+        // on a wrong byte and stays honest if the fixture is regenerated.
+        begin : vatr_arm
+            reg exp_wide;
+            exp_wide = (((vtsimat[16'h200] << 8) | vtsimat[16'h201]) & 16'h0C00) == 16'h0C00;
+            $display("ATTR: VTS_V_ATTR@0x200 = %02x%02x -> expect title_ar_wide=%b, got %b",
+                     vtsimat[16'h200], vtsimat[16'h201], exp_wide, title_ar_wide);
+            if (title_ar_wide !== exp_wide) begin
+                errors = errors + 1;
+                $display("  ERR title_ar_wide=%b (want %b from VTS_V_ATTR)", title_ar_wide, exp_wide);
+            end
+            // Not vacuous: MiB VTS_21 is 16:9, so the expectation is 1 and a reader
+            // that never captured the byte (or captured the wrong one) reads 0.
+            if (exp_wide !== 1'b1) begin
+                errors = errors + 1;
+                $display("  ERR the fixture is no longer a 16:9 VTS -- this arm cannot fail for the reason it exists");
+            end
+        end
+
+        if (errors == 0) $display("ISO_READER_ATTR_TB: PASSED (MiB VTS_21 4 audio / 4 subp, codec+ch+lang exact, 16:9 from the IFO)");
         else             $display("ISO_READER_ATTR_TB: FAILED with %0d errors", errors);
         $finish;
     end

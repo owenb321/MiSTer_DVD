@@ -593,7 +593,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-hdmiteardown"
+`define CORE_VERSION "dev-subpmapdom"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1342,6 +1342,7 @@ wire [6:0]  res_ttn_w;
 wire [15:0] rd_next_pgcn, rd_prev_pgcn, rd_goup_pgcn;
 wire [7:0]  cur_cell_cmdnr_w;
 wire        menu_ar_wide_w;      // 1 = loaded menu is 16:9 (IFO V_ATR, not seq hdr)
+wire        title_ar_wide_w;     // 1 = loaded TITLE's VTS is 16:9 (IFO VTS_V_ATTR@0x200)
 wire        vm_cmd_we;
 wire [11:0] vm_cmd_waddr;
 wire [7:0]  vm_cmd_wdata;
@@ -2276,10 +2277,17 @@ wire        force_43_subp = status[15];
 wire        vm_owns_route = menus_on && vm_owns_sp && vm_spstn[6];
 wire [2:0]  sp_user_log   = ({1'b0,sp_sel} >= subp_ntracks_w)
                             ? (subp_ntracks_w[2:0] - 3'd1) : sp_sel;   // clamped user index
+// "A MENU-DOMAIN PGC is loaded" -- the DOMAIN fact, named once so it cannot
+// diverge from the map's domain gate below (issue #81: the context and the domain
+// were two readings of one idea, and only one of them was about the domain).
+wire        menu_dom_live = menus_on && menu_active;
+// "This subpicture resolution is for a MENU" -- the CONTEXT, which is WIDER: a
+// title-domain game/motion menu (sp_menu_early) is a menu context in the TITLE
+// domain, so this is deliberately NOT menu_dom_live.
+wire        menu_sp_ctx   = menu_dom_live || sp_menu_early;
 // A MENU context (menu-domain menu, or an in-title multi-button game menu like
 // Scene It) resolves LOGICAL stream 0 -- but through the map, not as a constant.
 // DVD-FORK FIX (issues #60/#61): this used to short-circuit to physical 0.
-wire        menu_sp_ctx   = (menus_on && menu_active) || sp_menu_early;
 wire [3:0]  sp_sel_log    = menu_sp_ctx  ? 4'd0 :
                             vm_owns_route ? vm_spstn[3:0] : {1'b0, sp_user_log};
 wire [31:0] subp_ctl_sel  = subp_ctl_mem[sp_sel_log];                 // single 16:1 mux
@@ -2306,17 +2314,36 @@ wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
 // (the HW round-1 lesson recorded at nav_pci's .disp_mode below).
 wire [1:0]  sp_disp_mode_eff = menu_sp_ctx ? 2'd0 : sp_disp_mode;
 
+// Which aspect the subpicture variant is resolved against. Menu-domain menu:
+// the menu's VTSM/VMGM V_ATR (as before, via ar_wide_auto_eff). In-title menu:
+// the TITLE VTS's own IFO attribute, which is what libdvdnav reads in
+// DVD_DOMAIN_VTSTitle. Everything else: unchanged.
+wire        sp_map_wide = sp_menu_early && !menu_dom_live ? title_ar_wide_w
+                                                          : ar_wide_auto_eff;
+
 wire [4:0]  sp_phys_streamN;
 wire        sp_stream_absent;
 subp_stream_map u_subp_map (
     .map_valid    (pgc_ctl_valid),
     .dom_tt       (pgc_dom_tt),
-    .ctx_menu     (menu_sp_ctx),
+    // DVD-FORK FIX (issue #81): this was `menu_sp_ctx` -- the menu CONTEXT -- and
+    // the module read it as "the table must be the MENU domain's". An in-title
+    // game/motion menu is a menu context whose table is the TITLE's, so the gate
+    // rejected a perfectly good table and fell back to the logical index. What the
+    // gate actually needs is the domain the player is IN.
+    .menu_dom     (menu_dom_live),
     .logical      (sp_sel_log),
     .ctl_sel      (subp_ctl_sel),
-    // A menu's aspect is the MENU's own IFO V_ATR (ar_wide_auto_eff), not the
-    // decoded stream's; the two are the same signal on every non-menu path.
-    .wide         (ar_wide_auto_eff),
+    // A menu's aspect is the MENU's own IFO V_ATR, not the decoded stream's -- and
+    // that is true of a TITLE-domain menu too (issue #81). libdvdnav's
+    // vm_get_video_attr() returns vtsi_mat->vts_video_attr in DVD_DOMAIN_VTSTitle,
+    // so a conforming player resolves an in-title PGC's subpicture variant against
+    // VTS_V_ATTR@0x200; we used the MPEG sequence header there, and DVD menus are
+    // routinely authored 16:9 anamorphic with a 4:3 sequence-header code -- which
+    // would take the [28:24] field (usually 0) and leave the highlight with
+    // nothing again. Scoped to the MENU context only: every other path, the
+    // white-rabbit SetSTN included, keeps the HW-proven ar_wide_auto_eff.
+    .wide         (sp_map_wide),
     .disp_mode    (sp_disp_mode_eff),
     .any_present  (subp_any_present),
     .phys_streamN (sp_phys_streamN),
@@ -2342,10 +2369,15 @@ wire sp_user_absent = sp_stream_absent & ~(menu_sp_ctx | vm_owns_route | force_4
 // 0x24, instead of the raw index -> 0x23 warning); the 3-bit ps_demux substream_id[2:0]
 // match stays unambiguous here (active substreams 0x20/21/22/23/24 -> 0/1/2/3/4). Off =
 // user path byte-identical (raw clamped logical index).
-// An in-title multi-button game menu (Scene It) is a MENU: its highlight rides
-// LOGICAL subpicture stream 0 like a menu-domain menu (sp_sel_log above), and
-// resolves through the same map (it is a title-domain PGC, so subp_ctl_mem is
-// already populated for it and ar_wide_auto_eff == ar_wide_auto there).
+// An in-title multi-button game menu (Scene It, and the motion menus of
+// Aniki mon Frere / BROTHER) is a MENU: its highlight rides LOGICAL subpicture
+// stream 0 like a menu-domain menu (sp_sel_log above), and resolves through the
+// same map (it is a title-domain PGC, so subp_ctl_mem is already populated for it
+// and ar_wide_auto_eff == ar_wide_auto there).
+// ⚠ THAT LAST CLAUSE WAS FALSE FROM THE DAY IT WAS WRITTEN UNTIL issue #81: the
+// map's domain gate was handed the menu CONTEXT and required a menu-DOMAIN table,
+// so this path always fell back to the logical index. It resolves through the map
+// now because the gate tests the domain the player is in (subp_stream_map.menu_dom).
 // DVD-FORK FIX (issues #60/#61): menus were pinned to PHYSICAL 0 here. On a disc
 // whose menu PGC maps logical 0 to a non-zero physical id for the presented
 // display mode, that filtered the wrong substream, decoded no subpicture, and
@@ -2740,6 +2772,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .title_first_rbn (title_first_rbn_w),         // seek-bar: title RBN span
     .title_last_rbn  (title_last_rbn_w),
     .menu_ar_wide   (menu_ar_wide_w),
+    .title_ar_wide  (title_ar_wide_w),
 
     .sd_lba         (sd_lba),
     .sd_rd          (sd_rd),

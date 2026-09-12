@@ -1119,4 +1119,13 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # ⚠ The hot corner gives back 3.3 MHz against branch C's 96.06 for one flop and a
 # few wires -- netlist variance at this density, not a cost of the change; still
 # 6.8 MHz clear of the gate. Detail: docs/hdmi_bitstream.md §5a.
+# 2026-09-12 (fix/subp-map-in-title-menu, dev-subpmapdom -- issue #81: the
+# subpicture map's domain gate, and title_ar_wide from VTS_V_ATTR@0x200):
+# SEED 7 held FIRST roll -- clk_dec 97.48 @100C / 97.30 @-40C (gate 86.0, PASS
+# both corners, the widest margin in this ledger) at 87% ALM (36,428 needed,
+# 39,826 placed), registers 50,557 (-8), RAM 501/553, DSP 94/112.
+# Build DVD_subpmapdom_20260912_1328.rbf (4,311 KB).
+# ⚠ +4.7 MHz on the hot corner for one reader register and one mux arm -- read it
+# as netlist variance at this density, NOT as a benefit of the change, the same
+# way the previous entry's -3.3 MHz was not a cost of that one.
 set_global_assignment -name SEED 7

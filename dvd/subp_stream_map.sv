@@ -30,15 +30,36 @@
 // nav_pci's button-group choice on one shared display-mode wire, which emu
 // already forces to wide for menus — so the rects and the art can never come
 // from different presentations. The caller supplies disp_mode; this module
-// does not know about menus beyond ctx_menu's validity gate.
+// does not know about menus beyond menu_dom's domain-validity gate.
 //
-// THE ctx_menu GATE IS NOT HYGIENE. subp_ctl_mem is a single store shared by
+// THE DOMAIN GATE IS NOT HYGIENE. subp_ctl_mem is a single store shared by
 // both domains and is never cleared. Without a domain match:
 //   - a menu jump raises menu_active BEFORE S_PGC_HDR clears pgc_ctl_valid, so
 //     a menu context would briefly resolve through the TITLE's table;
 //   - a menu's table would leak into the in-title HLI path (Matrix "Follow the
 //     White Rabbit", SetSTN logical 1 -> 0x22).
 // Both fall back to the logical index, which is the pre-fix behaviour.
+//
+// ★ BUT THE GATE MUST TEST THE DOMAIN THE PLAYER IS IN, NOT WHETHER THE
+//   RESOLUTION IS FOR A MENU (issue #81, 2026-09-12). Those are not the same
+//   question, and reading one as the other is what the #60/#61 fix shipped: the
+//   input was `ctx_menu` and the test was `ctx_menu ? ~dom_tt : dom_tt`, i.e.
+//   "a menu context requires a MENU-DOMAIN table". A DVD-game / motion-menu disc
+//   authors its menus as TITLE-domain PGCs with HLI in the NAV packs (Scene It's
+//   game menus; Aniki mon Frere / BROTHER PAL FR R2, the reported disc), and
+//   emu's `menu_sp_ctx` quite correctly calls that a menu context -- so the gate
+//   demanded a menu-domain table, found the title's, and fell back to identity.
+//   Logical 0 -> physical 0 -> substream 0x20, while the disc's menu SPU rides
+//   0x21: the #60/#61 symptom exactly, "no visible selection", on a disc the
+//   #60/#61 fix could not reach. emu.sv's own comment at sp_track_eff claimed
+//   this path "resolves through the same map"; it could not, and the comment had
+//   read as reassurance for four months.
+//   The input is therefore `menu_dom` = "a menu-domain PGC is loaded" (emu:
+//   menus_on && menu_active), a FACT about the player rather than a property of
+//   the caller, and the test is "the table's domain is the domain we are in".
+//   Every previously-working combination is bit-identical, because for a
+//   menu-domain menu and for every title-domain non-menu path menu_dom and the
+//   old ctx_menu carried the same value; only the in-title MENU differs.
 //
 // Golden model: tools/dvd_vm_ref.py subp_stream_map(); TB:
 // bench/dvd/subp_stream_map_tb.sv. Detail: docs/track_selection.md.
@@ -54,7 +75,10 @@
 module subp_stream_map (
     input  wire        map_valid,     // subp_control parsed & consistent (reader)
     input  wire        dom_tt,        // loaded PGC is title-domain (reader)
-    input  wire        ctx_menu,      // this resolution is for a menu context
+    // A MENU-DOMAIN PGC is loaded (emu: menus_on && menu_active). NOT "this is a
+    // menu resolution": an in-title game/motion menu is a menu context in the
+    // TITLE domain, and conflating the two was issue #81 (see the note above).
+    input  wire        menu_dom,
     input  wire [3:0]  logical,       // logical stream index (already selected)
     input  wire [31:0] ctl_sel,       // subp_control[logical], muxed by emu
     input  wire        wide,          // content is 16:9 (ar_wide_auto_eff)
@@ -69,8 +93,9 @@ module subp_stream_map (
 );
 
     // The table is trustworthy only when the reader has finished streaming it
-    // AND it belongs to the domain this resolution is for.
-    wire dom_ok  = ctx_menu ? ~dom_tt : dom_tt;
+    // AND it belongs to the DOMAIN THE PLAYER IS IN -- which is what makes an
+    // in-title menu (menu context, title domain) resolve through the map.
+    wire dom_ok  = (dom_tt != menu_dom);
     // the table is usable for this context (says nothing about THIS entry)
     wire use_map_dom = map_valid && dom_ok;
     wire use_map = use_map_dom && ctl_sel[31];

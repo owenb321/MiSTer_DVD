@@ -8,6 +8,13 @@ cd "$(dirname "$0")/../.."
 # subp_stream_map's vectors are GENERATED (bench/dvd/test_vobs/ is gitignored, the
 # same convention as aud_map_vec.hex) -- regenerate so the bench can never run
 # against a stale fixture.
+# ISSUE #81: the module's truth table is unchanged by that fix -- what changed is
+# which of emu's signals is wired to the domain gate, and there is no emu-level
+# bench. This reads the port connection out of dvd/emu.sv (the acmod_scan.py /
+# csync_pipe_tb pattern) and is RED on the pre-#81 file. Costs milliseconds.
+echo "=== subp_stream_map wiring: emu.sv passes the DOMAIN, not the menu context (#81) ==="
+python3 tools/check_subp_map_wiring.py
+
 echo "=== subp_stream_map: logical->physical subpicture map vs the golden model ==="
 python3 tools/gen_subp_map_vec.py >/dev/null
 iverilog -g2012 -o bench/dvd/subp_stream_map_sim dvd/subp_stream_map.sv bench/dvd/subp_stream_map_tb.sv 2>/dev/null

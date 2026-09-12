@@ -177,6 +177,246 @@ But when ordering two bundles from the same reporter, sequence them by what they
 say, not by their timestamps. A bundle made on a PC has a real clock behind it;
 `player.generated_on == "mister"` marks the ones that may not.
 
+## The playhead NAV-pack window (issue #81)
+
+**Status: ✅ HW-CONFIRMED 2026-09-12 on a physical disc, both arms.**
+
+⚠ **The chord cannot be driven from the HIL harness, so the gesture needs the maintainer's
+own gamepad.** `dvd_report_joy()` is called from `user_io_digital_joystick()`, and the
+harness's uinput device is a KEYBOARD: its presses become joystick bits inside the FPGA
+(`dvd/kbd_map.sv`) and never pass through Main's `map`. Everything the child does was
+measured from the harness; the gesture was pressed by hand.
+
+**Arm 1 — the DEGRADE path, with the OLD release-installed collector still in place.**
+Bundle written, `nav packs: no`, audit clean. That combination (new Main + old script)
+wrote NO BUNDLE AT ALL before the flag probe existed — measured on this same rig — so this
+is the version-skew hardening confirmed on hardware, not merely unit-tested.
+
+**Arm 2 — the CAPTURE path, new collector installed, chord pressed ON THE DISC'S MENU:**
+
+```
+captured 130 sectors, nav packs: playhead window 512 sectors
+audit    128 nav-table sectors, 2 NAV packs, 0 carrying A/V
+playhead sector 405969
+
+NAV @405971  hli_ss=2 btn_ns=5 fosl=0   btn_coli[grp1] sel=00005af0
+  btn 1  up/dn/lf/rt=5/2/1/1   LinkPGCN 13
+  btn 2  up/dn/lf/rt=1/3/2/2   LinkPGCN 4
+  btn 3  up/dn/lf/rt=2/4/3/3   HL_BTNN = button 1, LinkPGCN 14
+  btn 4  up/dn/lf/rt=3/5/4/4   LinkPGCN 2
+  btn 5  up/dn/lf/rt=4/1/5/5   HL_BTNN = button 1, LinkPGCN 30
+NAV @405979  ... the SAME button set, 8 sectors later
+```
+
+A complete menu — button count, link graph (a clean 1↔2↔3↔4↔5↔1 ring), highlight colours
+and the VM command per button — off a physical disc, in a 73 KB bundle. **That is exactly
+the evidence missing from #60, #61 and #81**, all three of which were physical-disc reports
+whose bundles carried zero NAV packs.
+
+★ The second NAV pack carries the same button set 8 sectors later — the per-VOBU HLI
+re-send, now observed on a physical disc. That is the property `--nav-stop` rests on.
+
+★★ **AND THE REAL-WORLD COST IS FAR BELOW THE COLD MEASUREMENT: both presses completed in
+≤1 s** (trace line to bundle, same or next second), against the 2.7-4.9 s measured with
+cold reads. The window reads FORWARD FROM THE PLAYHEAD, which is exactly where the core has
+just been streaming, so most of it is already in the page cache. The cold figures below are
+the pessimistic bound — the state the chord actually fires in is much cheaper.
+
+⚠ Both presses landed `btn_ns=0` when the playhead was mid-movie (sector 476140) and
+`btn_ns=5` when it was on the menu. Correct in both cases, and the reason the manual tells
+users to press the chord *while the menu is on screen*.
+
+⚠ **`/tmp/dvd_report_run.log` was 0 bytes after every press** — the child's stdout is not
+being captured, so `reap()`'s "Support bundle FAILED — see /tmp/dvd_report_run.log" would
+point at an empty file. PRE-EXISTING (nothing in this branch touches it) and it only bites
+on the failure path, but it is the one diagnostic that path has. The suspect is narrow:
+`start()` does `freopen("/tmp/dvd_report_run.log", "w", stdout)` in the forked child before
+`execvp`, and python writes fine to a redirect on that box — so it is the freopen in Main's
+context, not the tool. Worth its own look.
+
+Issue #81 arrived as a menu-highlight bug whose bundle carried **no button data at all**,
+and nothing in it said so. The diagnosis had to be made structurally from the IFO tables
+instead. That was still the right diagnosis — the IFO's `subp_control` word was the
+evidence — but the confirm was never in evidence, and the silence is the defect: a missing
+capture produces a bundle that is written, self-checks, and looks complete.
+
+★★ **THE OBVIOUS FIX WAS THE WRONG ONE, AND MEASURING SAID SO.** The chord had always
+omitted `--nav-packs`, which the manual tells PC reporters to add for highlight bugs, so
+"just pass it too" is the one-line answer. Two measurements kill it:
+
+| | `--nav-packs` (menu-VOB scan) | `--nav-window` (this) |
+|---|---|---|
+| what it reads | every sector of `VIDEO_TS.VOB` + `VTS_nn_0.VOB`, capped at 512 MB | one **sequential** run forward from the served sector |
+| MEN_IN_BLACK | 4.9 s, 2,810 NAV packs, **5.6 MB** of sectors (its 680 MB of menu VOBs hit the cap) | — |
+| SCENEIT_HP | 0.8 s, 224 NAV packs | **0.28 s end to end, 16 NAV packs, a 38 KB bundle** |
+| in-title menus | **cannot see them at all** | 13–20 of ~20 packs carry multi-button HLI |
+| seeks | many | none |
+
+★ **The second row of that table is the real finding, and it is structural, not a
+tuning matter: `--nav-packs` scans MENU VOBs, so it cannot capture an in-title menu's
+buttons on any route, PC included.** A DVD-game or motion-menu disc authors its menus as
+TITLE-domain PGCs with the HLI in a title VOB's NAV packs — Scene It's game menus, and
+issue #81's disc, whose boot menus live in `VTS_02_1.VOB`. So passing `--nav-packs` to the
+chord would have cost minutes on an optical disc and still not answered this bug.
+
+**What ships instead:** `tools/dvd_report.py --nav-window SECTORS` (with `--lba`) captures
+every NAV pack in a short forward run from the playhead, and `dvd_report.cpp` passes
+`--nav-window 2048` whenever it has one. A VOBU is at most 1 s of video, so 2048 sectors
+(~4 MB) always spans several of them, and an HLI is re-sent every VOBU while a menu is up
+(measured on The Matrix: the same unit 8 times, 1.001 s apart) — so forward-only is
+enough. ★ It also captures **whatever the user was actually looking at**, in either
+domain, which no offline scan can know.
+
+Verified end to end on a real disc: a bundle built with `--lba 903500 --nav-window 2048`
+against SCENEIT_HP reconstructs to a sparse ISO whose `nav_extract.py` walk decodes a
+complete **7-button** in-title menu — rects, link graph, `btn_coli` colours and the VM
+command per button. Audit and self-check both PASS.
+
+**And measured ON THE MISTER ITSELF (2026-09-12), which is the number that decides
+whether it belongs on a chord** — the local figures above are a dev workstation's:
+
+| on the target | window (`--nav-window 2048`) | `--nav-packs` |
+|---|---|---|
+| SCENEIT_HP | **1.38 s**, 16 NAV packs, 37 KB bundle | — |
+| (same, no capture at all) | 0.86 s, 34 KB | — |
+| MEN_IN_BLACK | **1.98 s**, 14 NAV packs, 119 KB | **37.7 s**, 2,524 packs, 358 KB |
+
+So the window costs about **half a second** over no capture at all, and `--nav-packs` is
+**19× slower** than the window on this hardware — reading an ISO from local storage, with
+the core not even running. On an optical disc the core is streaming from, with the CPU
+contended, it is worse. That is the measurement that chose the design.
+
+⚠ **The content guarantee is unchanged and still structural.** The window only appends
+sectors that pass `is_nav_pack()`, and `audit()` re-checks the FINAL captured set and
+refuses to write a bundle if any sector parses as a media pack carrying anything but a
+system header, padding or `private_stream_2`. Nothing about this relaxes that.
+
+⚠ **No `--nav-packs` on the chord, still** — and now for a better reason than cost: it
+answers a different question, and the expensive one. The manual's on-player section says
+so to users.
+
+### How long the user waits, and why the NOTICE was the real risk
+
+MEASURED on the rig (image media, core not running): the chord's child takes **1.38 s**
+on SCENEIT_HP and **1.98 s** on MEN_IN_BLACK with the window, against 0.86 s for the nav
+tables alone. So the window costs about **half a second** and the whole gesture is ~2 s.
+
+★★ **AND THE PHYSICAL-DISC CASE IS 50× SLOWER, WHICH THE ARITHMETIC GOT WRONG.** This
+section first carried an *estimate* — "4 MB from a spinning, already-positioned drive is
+~3 s at DVD 1x and under 1 s at 4x" — and it was wrong by an order of magnitude. MEASURED
+on a real DVD in the rig's drive, **while the core was streaming it**:
+
+| | |
+|---|---|
+| sustained read rate | **~90–285 KB/s** — about a SEVENTH of DVD 1x |
+| is it spin-up? | **no** — 8192 sectors held 195 KB/s for 84 s |
+| does chunking help? | **no** — 1-sector reads 13.9 s, 64-sector 17.0 s, 256-sector 17.8 s. It is the drive, not syscalls |
+| 2048-sector window | **15.7 – 29.1 s** |
+| pure seek, 1 sector | 0.73 s |
+
+⚠ **Re-reading the same region takes 0.02 s.** Any timing that does not use a FRESH LBA is
+measuring the page cache, and an early attempt here read 0.26 s for a window that really
+costs 16 s. Use an LBA nothing has touched.
+
+⚠ **Authentication and a spinning drive do NOT rescue it.** The obvious hypothesis was that
+cold unauthenticated reads are slow and a streaming, CSS-authenticated drive would be fast.
+Measured while the core played the disc: 2048 sectors still took 15.7 s. The hypothesis was
+wrong and the measurement is what said so.
+
+**So the window stops early and the cap follows the medium.** A scan of three playheads on
+that disc shows why:
+
+| | sectors from the playhead | time |
+|---|---|---|
+| 1st NAV pack | +51 .. +230 | 2.1 – 5.5 s |
+| 2nd NAV pack | +304 .. +465 | 3.9 – 7.0 s |
+| 8th NAV pack | +1701 .. +1903 | 19.1 – 29.1 s |
+
+An HLI is re-sent byte-identically in every VOBU while a menu is up, so the **first** record
+already carries the whole button set; the second covers a first VOBU that happens to carry
+`hli_ss = 0`. The eighth buys nothing and costs 20 s of someone's life. Hence
+`dvd_report.py --nav-stop` (default **2**) and a cap of **512** on optical against 2048 on
+an image (`nav_window_for()`, on `S_ISBLK` — the fact that matters is the medium, not the
+path spelling).
+
+**Result, measured on the same playing disc:**
+
+| chord on a physical DVD | |
+|---|---|
+| before this branch (nav tables only) | **0.91 – 0.96 s** |
+| unbounded 2048 window | **+15.7 to +29.1 s** |
+| bounded (cap 512, stop after 2) | **2.73 / 4.92 s total** |
+
+⚠ The cap is what you pay when the playhead sits somewhere with NO NAV packs — a still, a
+gap, a cell end — because the early stop cannot help there. That is the whole reason the cap
+is media-dependent rather than merely large. One measured run hit 14.35 s when the drive was
+in a bad patch, so treat 3–5 s as typical and not as a bound.
+
+⚠ There is also a second cost that is not wait time: the collector reads the SAME drive the
+core is streaming from. The child is forked so it cannot starve the poll loop (the
+`dvd_phys` lesson), but the DRIVE is shared.
+
+★ **The thing that would actually annoy a user is not the duration — it is silence.**
+`start()` posted "Generating support bundle..." for **2000 ms** and then nothing until
+`reap()` posted the result. That looked fine only because the job also takes ~2 s: two
+unrelated numbers that happened to match, not a design. Anything slower drops the notice
+before the result arrives, and a user who sees a "generating" message vanish with nothing
+after it concludes it failed and presses the chord again. The notice is **8 s** now; the
+result message replaces it the moment it arrives, so nothing is lost in the fast case.
+
+⚠ **And extending it forced honouring a rule this project already wrote down.**
+`dvd_report_tick()` raises `InfoMessage` from a poll tick, which is the exact shape that
+froze MGL launches (issue #48) — `INTEGRATION.md` says to check `dvd_launch_ui_busy()` and
+defer, and this path never did. In practice the chord needs a deliberate 2 s human hold
+and so cannot collide with a launch, but "cannot happen" is what the pumps that DID freeze
+it were assumed to be. It defers now; the cost is one more press of a chord nobody is
+plausibly holding during a launch.
+
+### The installed script may predate the flag
+
+⚠⚠ **MEASURED ON THE RIG, and it is why the flag is not passed unconditionally: an
+older release-installed `dvd_report.py` given the new argv prints**
+
+```
+dvd_report.py: error: unrecognized arguments: --nav-window 2048
+```
+
+**and writes NO BUNDLE AT ALL** — strictly worse than the missing button data the flag
+exists to add. The release zip ships `Scripts/dvd_report.py` beside the Main
+(`tools/package_release.sh`, and `package.yml` attaches it as its own asset), so they
+normally move together; a Main updated on its own must degrade, not break.
+
+So the child ASKS THE SCRIPT: `dvd_report_script_supports()` reads the file and looks for
+the flag's own name. argparse cannot accept a flag it does not name, so a substring search
+is sound in both directions — no old tool mentions it, and no new tool can support it
+silently. It runs in the CHILD, after the fork, because it is file I/O and
+`user_io_poll()` is the core's data pump (the `dvd_phys` drive-probe lesson); it reads in
+8 KB chunks with a `tlen-1` overlap so a token straddling a boundary is still found.
+
+### The argv moved out of the fork
+
+`dvd_report_build_argv()` (declared in `dvd_report.h`, `DVD_REPORT_ARGV_MAX`) is built
+outside the `fork()` purely so it can be tested, the same move as
+`cdda_toc`'s track-skip resolver. **The failure mode here is silence**, which is the whole
+reason: a missing or misspelled flag still produces a plausible bundle.
+`main/tests/dvd_report_test.cpp` pins six arms — the terminator/bound, the full case, no
+playhead, playhead only, an old script, and the probe itself — with **6 RED mutations each
+caught by its own assertion**: drop `--nav-window`; pass it unconditionally (with no
+playhead the tool gets a base of 0 and captures the NAV packs at the START of the disc —
+*confidently wrong data instead of none*, which is worse than the bug being fixed); reach
+for `--nav-packs` instead; forget the NUL; ignore what the installed script accepts; and
+drop the probe's chunk overlap (which silently reports a perfectly good tool as too old).
+
+⚠ Two harness lessons, both cost a round: `red_case`'s `grep -q "$expect"` read an expect
+string beginning `--` as an option (fixed with `-e`), and a test that walks `argv` until
+its NUL cannot detect a missing NUL — the terminator arm now pre-fills the array with a
+sentinel, runs FIRST, and bounds every scan by `DVD_REPORT_ARGV_MAX`, so a missing
+terminator is reported by its own assertion instead of as noise in an unrelated arm.
+
+⚠ `run_tests.sh` grew `osd.h` and `file_io.h` to its empty-stub list, and the test defines
+`dvd_css_active()` / `dvd_phys_device()` (declared by the real headers the module includes,
+so these are definitions rather than shadowing stubs).
+
 ## What is not done
 
 - **The live status word is not captured.** `user_io_status_get()` reads at most

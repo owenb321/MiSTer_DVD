@@ -21,6 +21,7 @@
 #include "dvd_report.h"
 #include "dvd_css.h"
 #include "dvd_phys.h"
+#include "dvd_launch.h"
 
 // ---------------------------------------------------------------------------
 // The trigger
@@ -41,6 +42,128 @@
 #define HOLD_MS      2000
 
 #define OUT_DIR      "/media/fat/DVD_reports"
+
+// ---------------------------------------------------------------------------
+// The child's argv, built OUTSIDE the fork so it can be tested
+// ---------------------------------------------------------------------------
+// Lives here rather than inline in the child because a missing flag fails
+// SILENTLY -- the bundle is written, looks fine, and is simply missing the data
+// the report needed. That is exactly how issue #81 arrived: the reporter's bundle
+// carried no button data at all and nothing said so. main/tests/dvd_report_test.cpp
+// pins this.
+//
+// ★ --nav-window, not --nav-packs. Both capture NAV packs; they capture DIFFERENT
+// ones, and only one of them is affordable here:
+//   --nav-packs   scans MENU VOBs (VIDEO_TS.VOB, VTS_nn_0.VOB) up to a 512 MB cap.
+//                 It CANNOT see an in-title menu -- a DVD-game or motion-menu disc
+//                 authors its menus as TITLE-domain PGCs with the HLI in a TITLE
+//                 VOB's NAV packs (Scene It's game menus; issue #81's disc, whose
+//                 boot menus live in VTS_02_1.VOB). Measured cost on MEN_IN_BLACK:
+//                 4.9 s and 5.6 MB of sectors on a local disk -- which on an
+//                 optical disc the core is streaming from means minutes of seeking.
+//   --nav-window  one SEQUENTIAL run forward from the sector we were serving,
+//                 capturing every NAV pack in it. Measured: 0.28 s end to end,
+//                 16 NAV packs, a 38 KB bundle -- and on Scene It's game VTSes
+//                 13-20 of ~20 such packs carry MULTI-BUTTON HLI, i.e. exactly
+//                 the records the menu-VOB scan cannot reach. No seeks.
+// 2048 sectors is ~4 MB; a VOBU is at most 1 s of video, so it always spans
+// several, and an HLI is re-sent every VOBU while a menu is up.
+//
+// Needs the playhead: with no LBA there is nothing to window around, so the flag
+// is omitted rather than passed with a meaningless base.
+// The window's CAP, in sectors. Two values, because the media differ by ~50x and
+// MEASURING said so rather than taste:
+//
+//   image on SD/USB/CIFS   the whole child runs in 1.4-2.0 s, the window costing
+//                          ~0.5 s of that. 2048 sectors is free, so take the wide
+//                          one and capture several VOBUs.
+//   optical disc           the drive sustains ~90-285 KB/s -- about a SEVENTH of
+//                          DVD 1x -- measured while the core was streaming it, and
+//                          steady over 84 s, so it is not spin-up. 2048 sectors is
+//                          15.7-29.1 s. 512 bounds the no-NAV-pack tail to ~5-10 s,
+//                          and the early stop (dvd_report.py --nav-stop, default 2)
+//                          means the usual case exits after ~300-500 sectors anyway.
+//
+// ⚠ The cap is what you pay when the playhead sits somewhere with NO NAV packs --
+// a still, a gap, the end of a cell. The early stop cannot help there, which is
+// the whole reason the cap is media-dependent rather than just large.
+#define NAV_WINDOW_IMAGE   "2048"
+#define NAV_WINDOW_OPTICAL "512"
+
+// ⚠⚠ THE INSTALLED SCRIPT MAY PREDATE THE FLAG, AND argparse DOES NOT SHRUG.
+// MEASURED on the rig against a release-installed dvd_report.py: the new argv gives
+//   dvd_report.py: error: unrecognized arguments: --nav-window 2048
+// and NO BUNDLE IS WRITTEN AT ALL -- strictly worse than the missing button data
+// this flag exists to fix. The release zip ships Scripts/dvd_report.py beside the
+// Main so they normally move together, but a Main updated on its own must degrade,
+// not break.
+//
+// So: ask the script. It names every flag it accepts (argparse cannot accept one it
+// does not name), so a substring search over the file is sound in both directions --
+// no old tool mentions it, and no new tool can support it silently.
+//
+// ★ Runs in the CHILD, after the fork: this is file I/O, and user_io_poll() is the
+// core's data pump (the dvd_phys drive-probe lesson). Chunked with an overlap so the
+// token cannot straddle a read boundary.
+int dvd_report_script_supports(const char *script, const char *token)
+{
+	FILE *f = fopen(script, "rb");
+	if (!f) return 0;
+
+	const size_t tlen = strlen(token);
+	if (!tlen || tlen >= 256) { fclose(f); return 0; }
+
+	// memmem() is a GNU extension; g++ defines _GNU_SOURCE implicitly for C++ on
+	// glibc and the Main's build adds it on the command line, so no #define here --
+	// one was added and REMOVED because it warned "redefined" on every build.
+	char buf[8192 + 256];
+	size_t keep = 0;                      // bytes carried over from the last chunk
+	int found = 0;
+	for (;;)
+	{
+		size_t got = fread(buf + keep, 1, 8192, f);
+		if (!got) break;
+		size_t have = keep + got;
+		buf[have < sizeof(buf) ? have : sizeof(buf) - 1] = 0;
+		if (memmem(buf, have, token, tlen)) { found = 1; break; }
+		// Carry the last tlen-1 bytes so a token split across chunks is still seen.
+		keep = (tlen > 1) ? (tlen - 1) : 0;
+		if (keep > have) keep = have;
+		memmove(buf, buf + have - keep, keep);
+	}
+	fclose(f);
+	return found;
+}
+
+// A block device here is the optical drive: dvd_phys binds /dev/srN and nothing
+// else in this core hands a block device to the collector. stat() rather than a
+// "/dev/sr" prefix match, because the fact that matters is the medium, not the name.
+const char *nav_window_for(const char *src)
+{
+	struct stat st;
+	if (src && !stat(src, &st) && S_ISBLK(st.st_mode)) return NAV_WINDOW_OPTICAL;
+	return NAV_WINDOW_IMAGE;
+}
+
+void dvd_report_build_argv(const char **argv, const char *script, const char *src,
+                           const char *out, const char *lba, const char *cfg,
+                           const char *ver, int want_window)
+{
+	int i = 0;
+	argv[i++] = "python3";
+	argv[i++] = script;
+	argv[i++] = src;
+	argv[i++] = "--no-prompt";
+	argv[i++] = "--generated-on";
+	argv[i++] = "mister";
+	argv[i++] = "-o";
+	argv[i++] = out;
+	if (lba)               { argv[i++] = "--lba";          argv[i++] = lba; }
+	if (lba && want_window){ argv[i++] = "--nav-window";   argv[i++] = nav_window_for(src); }
+	if (cfg)               { argv[i++] = "--cfg";          argv[i++] = cfg; }
+	if (ver)               { argv[i++] = "--core-version"; argv[i++] = ver; }
+	argv[i] = 0;
+}
 
 static const char *SCRIPT_PATHS[] = {
 	"/media/fat/Scripts/dvd_report.py",
@@ -263,22 +386,10 @@ static void start(void)
 	}
 	if (!p)
 	{
-		// Child. Nav-tables only: no --nav-packs, because that scans menu VOBs
-		// and this should finish in seconds on SD-card media.
-		const char *argv[20];
-		int i = 0;
-		argv[i++] = "python3";
-		argv[i++] = script;
-		argv[i++] = src;
-		argv[i++] = "--no-prompt";
-		argv[i++] = "--generated-on";
-		argv[i++] = "mister";
-		argv[i++] = "-o";
-		argv[i++] = out_path;
-		if (have_lba) { argv[i++] = "--lba"; argv[i++] = lba; }
-		if (cfg)      { argv[i++] = "--cfg"; argv[i++] = cfg; }
-		if (ver)      { argv[i++] = "--core-version"; argv[i++] = ver; }
-		argv[i] = 0;
+		const char *argv[DVD_REPORT_ARGV_MAX];
+		dvd_report_build_argv(argv, script, src, out_path,
+		                      have_lba ? lba : 0, cfg, ver,
+		                      dvd_report_script_supports(script, "--nav-window"));
 
 		freopen("/tmp/dvd_report_run.log", "w", stdout);
 		dup2(fileno(stdout), fileno(stderr));
@@ -287,7 +398,18 @@ static void start(void)
 	}
 
 	child = p;
-	InfoMessage("Generating support bundle...", 2000, "DVD");
+	// ⚠ 8 s, not the 2 s this used to carry. The job takes ~1.4-2.0 s (MEASURED on
+	// the rig, image media), so a 2 s message happened to stay up for exactly as
+	// long as the work took -- but that was a COINCIDENCE of two unrelated numbers,
+	// not a design. Anything slower (an optical disc, a drive spinning up, a bigger
+	// window) drops the message before reap() posts the result, and the user sees
+	// the "Generating" notice vanish with nothing after it -- which reads as a
+	// failure and invites a second chord press. The result message replaces this one
+	// the moment it arrives, so a longer timeout costs nothing in the fast case.
+	//
+	// It stays well under dvd_launch's 20 s MGL watchdog, and the MGL guard below is
+	// why extending it is safe at all.
+	InfoMessage("Generating support bundle...", 8000, "DVD");
 }
 
 static void reap(void)
@@ -336,6 +458,16 @@ void dvd_report_tick(void)
 	if (!is_dvd()) return;
 
 	reap();
+
+	// ⚠ This tick raises InfoMessage, and that is the exact shape that froze MGL
+	// launches (issue #48): while mgl->done == 0, HandleUI takes the MGL branch and
+	// InfoMessage pins menustate = MENU_INFO, so the FSM never reaches MENU_NONE2.
+	// In practice the chord needs a deliberate 2 s human hold and so cannot collide
+	// with a launch -- but "cannot happen" is what the pumps that DID freeze it were
+	// assumed to be, the rule in INTEGRATION.md admits no exception, and the message
+	// above is now 8 s rather than 2. Deferring costs the user one more press of a
+	// chord they are vanishingly unlikely to be holding.
+	if (dvd_launch_ui_busy()) return;
 
 	if (chord_since && !fired && child < 0 && (now_ms() - chord_since) >= HOLD_MS)
 	{

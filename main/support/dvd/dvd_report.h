@@ -53,4 +53,32 @@ void dvd_report_note_mount(const char *path);
 // completely different places. Issue #48; see docs/mgl_launch.md.
 void dvd_report_note_mount_result(const char *path, int index, int ok, uint64_t size);
 
+// The argv handed to tools/dvd_report.py, built outside the fork so it can be
+// tested (main/tests/dvd_report_test.cpp). `lba`, `cfg` and `ver` are each
+// optional -- pass 0 to omit the flag and its value.
+//
+// It is out here because a missing flag fails SILENTLY: the bundle is written, it
+// looks fine, and it is simply missing the data the report needed. That is how
+// issue #81 arrived -- a highlight bug whose bundle carried no button data at all,
+// with nothing to say so.
+//
+// `want_window` says the installed script accepts --nav-window. It has to be asked
+// rather than assumed: MEASURED against a release-installed dvd_report.py, passing a
+// flag it predates makes argparse exit and NO BUNDLE IS WRITTEN AT ALL -- worse than
+// the missing button data the flag exists to add. dvd_report_script_supports() below
+// answers it by reading the script, which names every flag it accepts.
+#define DVD_REPORT_ARGV_MAX 24
+void dvd_report_build_argv(const char **argv, const char *script, const char *src,
+                           const char *out, const char *lba, const char *cfg,
+                           const char *ver, int want_window);
+
+// 1 if `script` contains `token` (i.e. names that flag). Call from the CHILD: it is
+// file I/O, and user_io_poll() is the core's data pump.
+int dvd_report_script_supports(const char *script, const char *token);
+
+// The --nav-window cap for this source, as a string. An optical disc reads ~50x
+// slower than an image (MEASURED on the rig), so it gets a smaller cap; see the
+// note above the constants in dvd_report.cpp.
+const char *nav_window_for(const char *src);
+
 #endif

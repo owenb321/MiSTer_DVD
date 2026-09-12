@@ -11,18 +11,18 @@
 //     python3 tools/gen_subp_map_vec.py
 //
 // Packed vector, LSB first:
-//   [0] map_valid  [1] dom_tt  [2] ctx_menu  [3] wide
+//   [0] map_valid  [1] dom_tt  [2] menu_dom  [3] wide
 //   [5:4] disp_mode  [9:6] logical  [41:10] ctl_sel  [46:42] expect
 
 `timescale 1ns/1ps
 
 module subp_stream_map_tb;
 
-    localparam NVEC = 2071;               // directed + random (see generator)
+    localparam NVEC = 2077;               // directed + random (see generator)
 
     reg  [47:0] vec [0:NVEC-1];
 
-    reg         map_valid, dom_tt, ctx_menu, wide;
+    reg         map_valid, dom_tt, menu_dom, wide;
     reg  [1:0]  disp_mode;
     reg  [3:0]  logical;
     reg  [31:0] ctl_sel;
@@ -33,7 +33,7 @@ module subp_stream_map_tb;
     subp_stream_map dut (
         .map_valid    (map_valid),
         .dom_tt       (dom_tt),
-        .ctx_menu     (ctx_menu),
+        .menu_dom     (menu_dom),
         .logical      (logical),
         .ctl_sel      (ctl_sel),
         .wide         (wide),
@@ -54,16 +54,16 @@ module subp_stream_map_tb;
                 i = NVEC;                       // short-file guard
             end else begin
                 {unused_hi, expect_v, ctl_sel, logical, disp_mode,
-                 wide, ctx_menu, dom_tt, map_valid} = vec[i];
+                 wide, menu_dom, dom_tt, map_valid} = vec[i];
                 #1;
                 if (phys_streamN !== expect_v) begin
                     errors = errors + 1;
                     if (errors < 20)
-                        $display("FAIL vec %0d: mv=%b tt=%b menu=%b wide=%b dm=%0d log=%0d ctl=%08x -> %0d (expect %0d)",
-                                 i, map_valid, dom_tt, ctx_menu, wide, disp_mode,
+                        $display("FAIL vec %0d: mv=%b tt=%b mdom=%b wide=%b dm=%0d log=%0d ctl=%08x -> %0d (expect %0d)",
+                                 i, map_valid, dom_tt, menu_dom, wide, disp_mode,
                                  logical, ctl_sel, phys_streamN, expect_v);
                 end
-                if (ctx_menu && !dom_tt && map_valid && phys_streamN != 5'd0)
+                if (menu_dom && !dom_tt && map_valid && phys_streamN != 5'd0)
                     n_menu_fix = n_menu_fix + 1;
                 n = n + 1;
             end
@@ -89,7 +89,7 @@ module subp_stream_map_tb;
         // being shown 0x20 under a palette that renders every subtitle class as one
         // flat grey.
         begin : avail_arms
-            map_valid = 1; dom_tt = 1; ctx_menu = 0; wide = 1; disp_mode = 0;
+            map_valid = 1; dom_tt = 1; menu_dom = 0; wide = 1; disp_mode = 0;
 
             // [1] class C: the table declares SOMETHING, but not this entry -> absent
             any_present = 1; logical = 4'd0; ctl_sel = 32'h00000000; #1;
@@ -130,15 +130,73 @@ module subp_stream_map_tb;
             end
             map_valid = 1;
 
-            // [6] wrong domain (a menu resolution against a title table) -> not absent
-            ctx_menu = 1; any_present = 1; logical = 4'd0; ctl_sel = 32'h00000000; #1;
+            // [6] wrong domain (a MENU-DOMAIN player against a title table) -> not absent
+            menu_dom = 1; any_present = 1; logical = 4'd0; ctl_sel = 32'h00000000; #1;
             if (stream_absent !== 1'b0) begin
                 errors = errors + 1;
                 $display("FAIL [avail-6]: an out-of-domain table must not report absence");
             end
-            ctx_menu = 0;
+            menu_dom = 0;
 
             if (errors == 0) $display("  stream_absent: 6 directed arms PASS (class C absent, class B preserved)");
+        end
+
+        // ---- ISSUE #81: AN IN-TITLE MENU IS A MENU CONTEXT IN THE TITLE DOMAIN --
+        // A DVD-game / motion-menu disc authors its menus as TITLE-domain PGCs with
+        // the button HLI in the NAV packs (Scene It's game menus; Aniki mon Frere /
+        // BROTHER PAL FR R2, the reported disc). emu calls that a menu context
+        // (sp_menu_early -> menu_sp_ctx) and resolves LOGICAL stream 0 -- but the
+        // loaded table is the TITLE's, and the player is in the TITLE domain.
+        //
+        // ⚠ THE MODULE'S TRUTH TABLE DID NOT CHANGE for this fix: the old
+        // `ctx_menu ? ~dom_tt : dom_tt` is the same function of (dom_tt, bit 2) as
+        // `dom_tt != menu_dom`. What changed is WHICH FACT emu puts on that bit --
+        // the domain the player is in, not whether the caller wanted a menu. So
+        // these arms pin the CONTRACT, and the thing that can actually regress is
+        // the wiring: gated separately by tools/check_subp_map_wiring.py, which
+        // reads the port connection out of dvd/emu.sv and is RED on the pre-#81 file.
+        begin : in_title_menu_arms
+            map_valid = 1; any_present = 1; wide = 1; disp_mode = 0; logical = 4'd0;
+
+            // [7] the reported disc's word, in the title domain -> 0x21, not 0x20.
+            dom_tt = 1; menu_dom = 0; ctl_sel = 32'h80010200; #1;
+            if (phys_streamN !== 5'd1 || stream_absent !== 1'b0) begin
+                errors = errors + 1;
+                $display("FAIL [81-1]: in-title menu must resolve logical 0 -> physical 1 (got %0d abs=%b)",
+                         phys_streamN, stream_absent);
+            end
+
+            // [8] the PRE-FIX WIRING, reproduced: emu passed the menu CONTEXT (1)
+            //     while the player was in the title domain, so the gate rejected the
+            //     title's table and fell back to identity -> 0x20 -> nothing for the
+            //     highlight to recolour -> "no visible selection". This arm both
+            //     documents the defect and proves the gate still fires on a GENUINE
+            //     domain mismatch (a menu-domain player reading a title table).
+            dom_tt = 1; menu_dom = 1; ctl_sel = 32'h80010200; #1;
+            if (phys_streamN !== 5'd0) begin
+                errors = errors + 1;
+                $display("FAIL [81-2]: a genuine domain mismatch must still fall back to identity (got %0d)",
+                         phys_streamN);
+            end
+
+            // [9] a 4:3 in-title menu takes the >>24 field, like every other 4:3 path
+            dom_tt = 1; menu_dom = 0; wide = 0; ctl_sel = 32'h80010200; #1;
+            if (phys_streamN !== 5'd0) begin
+                errors = errors + 1;
+                $display("FAIL [81-3]: 4:3 in-title menu must take the 4:3 field (got %0d)", phys_streamN);
+            end
+            wide = 1;
+
+            // [10] the 16-of-17 library word must NOT move in the title domain: its
+            //      wide field is 0, so every disc that works today is unchanged.
+            dom_tt = 1; menu_dom = 0; ctl_sel = 32'h80000100; #1;
+            if (phys_streamN !== 5'd0) begin
+                errors = errors + 1;
+                $display("FAIL [81-4]: the common library word must still resolve to 0 in wide mode (got %0d)",
+                         phys_streamN);
+            end
+
+            if (errors == 0) $display("  issue #81: 4 directed in-title-menu arms PASS (logical 0 -> 0x21)");
         end
 
         if (errors == 0)
