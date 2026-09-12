@@ -33,7 +33,7 @@ module dvd_telem_tb;
 
     // CMD_AF inputs. Tied off explicitly: a new INPUT left unconnected floats Z
     // and quietly poisons whatever reads it (see CLAUDE.md's note on new ports).
-    reg af_pt = 0, af_pcm = 0;
+    reg af_pt = 0, af_pcm = 0, af_bs = 0;
 
     dvd_telem dut (
         .clk(clk), .io_enable(io_enable), .io_strobe(io_strobe),
@@ -42,7 +42,7 @@ module dvd_telem_tb;
         .drops(drops), .vid_err(vid_err), .drop_costs(drop_costs),
         .vbuf_fill(vbuf_fill), .aud_frames(aud_frames), .flags(flags),
         .aud_play(aud_play), .aud_gate(aud_gate),
-        .af_passthru(af_pt), .af_pcm_session(af_pcm));
+        .af_passthru(af_pt), .af_pcm_session(af_pcm), .af_bs_session(af_bs));
 
     task strobe(input [15:0] d);
         begin
@@ -134,20 +134,27 @@ module dvd_telem_tb;
         check("pickups",   got[2], 16'hBBBB);
 
         $display("[5] CMD_AF reports the audio link format, independently of 0x7A");
-        af_pt = 1; af_pcm = 0;                 // Passthru, bitstream content
+        // Bit 15 is the FORMAT VERSION and is set in every answer, content or
+        // not: Main uses it to tell a core that reports bs_session from one that
+        // predates it, and both answer bs=0 when nothing is playing.
+        af_pt = 1; af_pcm = 0; af_bs = 1;      // Passthru, an AC-3/DTS track
         repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
         if (!drove) begin
             $display("  FAIL: CMD_AF did not drive the bus"); errors = errors + 1; end
-        check("afmt-bitstream", got[1], 16'h0001);
-        af_pcm = 1;                            // ...now an LPCM/MP2 track
+        check("afmt-bitstream", got[1], 16'h8005);
+        af_pcm = 1; af_bs = 0;                 // ...now an LPCM/MP2 track
         repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
-        check("afmt-pcm", got[1], 16'h0003);
-        af_pt = 0; af_pcm = 0;                 // back to Decode
+        check("afmt-pcm", got[1], 16'h8003);
+        af_pt = 1; af_pcm = 0; af_bs = 0;      // Passthru, nothing playing yet
         repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
-        check("afmt-decode", got[1], 16'h0000);
+        check("afmt-idle", got[1], 16'h8001);
+        af_pt = 0; af_pcm = 0; af_bs = 0;      // back to Decode
+        repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
+        run_xact(16'h007B, 1'b0, drove);
+        check("afmt-decode", got[1], 16'h8000);
         // ...and the diagnostic snapshot is untouched by any of it.
         run_xact(16'h007A, 1'b0, drove);
         check("0x7A still reports counters", got[1], 16'hAAAA);

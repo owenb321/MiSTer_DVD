@@ -417,6 +417,10 @@ assign SPDIF_PASS_EN = pass_mode;
 // aud_route's grants + content class (driven by the instance further down; declared
 // here because pcm_mute and HDMI_BS_EN both need the class).
 wire rt_dec_owns, rt_wrap_owns, rt_pcm_session;
+// rt_bs_session: "a bitstream is what is playing right now". This, NOT
+// ~rt_pcm_session, is what Main engages the ADV7513's non-PCM mode on -- see the
+// port comment in dvd/aud_route.sv and docs/hdmi_bitstream.md.
+wire rt_bs_session;
 
 // ⚠ pass_mode alone no longer mutes: in Passthru with LPCM/MP2 content the sink
 // is in PCM mode and AUDIO_L/R is how HDMI carries it. hdmi_bs_ack stays in the
@@ -1030,7 +1034,8 @@ dvd_telem dvd_telem_inst (
     // CMD_AF: what the audio wire is really carrying, so Main can put the ADV7513
     // into PCM mode for an LPCM/MP2 track in Passthru.
     .af_passthru    (pass_mode),
-    .af_pcm_session (rt_pcm_session)
+    .af_pcm_session (rt_pcm_session),
+    .af_bs_session  (rt_bs_session)
 );
 
 
@@ -3208,6 +3213,10 @@ wire        pass_hold_active;                // wrapper A/V-sync hold level (wat
 aud_route aud_route_i (
     .clk         (clk_sys),
     .rst_n       (aud_rst_n),
+    // bs_session's own domain: it must survive every seek / track switch /
+    // aud_flush, and forget the verdict only when the slot is empty.
+    .hard_rst_n  (reset_n),
+    .sess_clr    (~media_seen),
     .split_en    (pass_mode),
     .frame_valid (aud_frame_valid),
     .frame_type  (aud_frame_type),
@@ -3215,7 +3224,8 @@ aud_route aud_route_i (
     .ring_ready  (aud_ring_ready),
     .dec_owns    (rt_dec_owns),
     .wrap_owns   (rt_wrap_owns),
-    .pcm_session (rt_pcm_session)
+    .pcm_session (rt_pcm_session),
+    .bs_session  (rt_bs_session)
 );
 
 wire dec_frame_valid  = aud_frame_valid & rt_dec_owns;

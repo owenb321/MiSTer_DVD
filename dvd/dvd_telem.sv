@@ -107,8 +107,13 @@ module dvd_telem #(
     // What the wire is actually carrying, which is NOT what the OSD bit says: in
     // Passthru an LPCM or MP2 track leaves as linear PCM, and the ADV7513 has to
     // be taken out of non-PCM mode for it. Main polls this to decide.
+    // ⚠ Bit 15 is a FORMAT VERSION, not data. A core built before bs_session
+    // existed answers with it clear, and Main must then fall back to the old
+    // !pcm_session rule -- the two cannot be told apart otherwise, because an
+    // old core and a new idle one both answer "pcm_session = 0".
     input         af_passthru,            // Audio Out = Passthru
-    input         af_pcm_session          // ...and the current content is LPCM/MP2
+    input         af_pcm_session,         // ...and the current content is LPCM/MP2
+    input         af_bs_session           // ...and the current content IS AC-3/DTS
 );
 
     // ---- ONE round-robin two-consecutive-agree sampler (area pass 2026-09-10) --
@@ -140,7 +145,9 @@ module dvd_telem #(
     assign src[13] = av_drift;
     assign src[14] = sched_flags;
     assign src[15] = sched_dur;
-    assign src[16] = {14'd0, af_pcm_session, af_passthru};
+    // [15] = format v2 (this word carries bit 2), [2] bitstream session,
+    // [1] PCM session, [0] Passthru. See the port comments.
+    assign src[16] = {1'b1, 12'd0, af_bs_session, af_pcm_session, af_passthru};
     assign src[17] = 16'd0;                 // spare slots keep the walk a plain counter
     assign src[18] = 16'd0;
 
