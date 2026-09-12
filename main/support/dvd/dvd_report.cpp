@@ -1,7 +1,6 @@
 // dvd_report.cpp — generate a navigation support bundle from the player itself.
 // See dvd_report.h and MiSTer_DVD/docs/support_bundle_hps.md.
 
-#define _GNU_SOURCE       // memmem(), for the installed-script flag probe
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -97,6 +96,9 @@ int dvd_report_script_supports(const char *script, const char *token)
 	const size_t tlen = strlen(token);
 	if (!tlen || tlen >= 256) { fclose(f); return 0; }
 
+	// memmem() is a GNU extension; g++ defines _GNU_SOURCE implicitly for C++ on
+	// glibc and the Main's build adds it on the command line, so no #define here --
+	// one was added and REMOVED because it warned "redefined" on every build.
 	char buf[8192 + 256];
 	size_t keep = 0;                      // bytes carried over from the last chunk
 	int found = 0;
