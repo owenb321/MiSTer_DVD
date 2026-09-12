@@ -61,9 +61,19 @@ void dvd_report_note_mount_result(const char *path, int index, int ok, uint64_t 
 // looks fine, and it is simply missing the data the report needed. That is how
 // issue #81 arrived -- a highlight bug whose bundle carried no button data at all,
 // with nothing to say so.
+//
+// `want_window` says the installed script accepts --nav-window. It has to be asked
+// rather than assumed: MEASURED against a release-installed dvd_report.py, passing a
+// flag it predates makes argparse exit and NO BUNDLE IS WRITTEN AT ALL -- worse than
+// the missing button data the flag exists to add. dvd_report_script_supports() below
+// answers it by reading the script, which names every flag it accepts.
 #define DVD_REPORT_ARGV_MAX 24
 void dvd_report_build_argv(const char **argv, const char *script, const char *src,
                            const char *out, const char *lba, const char *cfg,
-                           const char *ver);
+                           const char *ver, int want_window);
+
+// 1 if `script` contains `token` (i.e. names that flag). Call from the CHILD: it is
+// file I/O, and user_io_poll() is the core's data pump.
+int dvd_report_script_supports(const char *script, const char *token);
 
 #endif

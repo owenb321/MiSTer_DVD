@@ -2951,13 +2951,22 @@ while a menu is up — forward-only is enough. ⚠ The content guarantee is unch
 and still structural (`is_nav_pack` gates the append; `audit()` re-checks the final
 set). ⛔ `--nav-packs` still NOT on the chord — it answers a different question, and
 the expensive one.
+⚠⚠ **AND THE FLAG IS NOT PASSED UNCONDITIONALLY, because MEASURED ON THE RIG an
+older release-installed `dvd_report.py` given it prints `unrecognized arguments:
+--nav-window 2048` and writes NO BUNDLE AT ALL** — strictly worse than the missing
+button data it adds. The release zip ships `Scripts/dvd_report.py` beside the Main so
+they normally move together, but a Main updated alone must degrade, not break. So the
+child ASKS THE SCRIPT (`dvd_report_script_supports`): argparse cannot accept a flag it
+does not name, so a substring search is sound both ways. In the CHILD, after the fork
+(file I/O on the poll thread is the `dvd_phys` lesson), chunked with a `tlen-1` overlap.
 ★ **The argv moved OUT of the `fork()` (`dvd_report_build_argv`) purely so it could
 be tested, because every failure here is SILENT** — a missing flag still produces a
 bundle that is written, self-checks and looks complete, which is exactly how #81
-arrived. `main/tests/dvd_report_test.cpp`: 4 arms, **4 RED mutations each caught by
+arrived. `main/tests/dvd_report_test.cpp`: 6 arms, **6 RED mutations each caught by
 its own assertion** (drop the flag; pass it with no playhead — which captures the
 NAV packs at the START of the disc, *confidently wrong data instead of none*; reach
-for `--nav-packs`; forget the NUL).
+for `--nav-packs`; forget the NUL; ignore what the installed script accepts; drop the
+probe's chunk overlap, which reports a good tool as too old).
 ⚠ Two harness traps: `red_case`'s `grep -q "$expect"` read an expect string
 beginning `--` as an OPTION (now `-e`), and **a test that walks argv to its NUL
 cannot detect a missing NUL** — the terminator arm pre-fills a sentinel, runs FIRST,

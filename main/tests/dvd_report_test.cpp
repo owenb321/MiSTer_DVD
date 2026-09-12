@@ -68,10 +68,10 @@ static const char SENTINEL[] = "<unwritten>";
 
 static int build(const char **argv, const char *script, const char *src,
                  const char *out, const char *lba, const char *cfg,
-                 const char *ver)
+                 const char *ver, int want_window = 1)
 {
     for (int i = 0; i < DVD_REPORT_ARGV_MAX; i++) argv[i] = SENTINEL;
-    dvd_report_build_argv(argv, script, src, out, lba, cfg, ver);
+    dvd_report_build_argv(argv, script, src, out, lba, cfg, ver, want_window);
     for (int i = 0; i < DVD_REPORT_ARGV_MAX; i++)
         if (!argv[i]) return i;
     errors++;
@@ -188,10 +188,55 @@ int main(void)
     want_absent(argv, "--cfg", "[3] lba only");
     printf("  [3] playhead only: --nav-window still present\n");
 
+    // ---- [4] the installed script predates the flag ------------------------
+    // MEASURED on the rig: passing --nav-window to a release-installed
+    // dvd_report.py makes argparse exit and NO bundle is written at all -- worse
+    // than the missing button data the flag adds. So a Main updated without its
+    // script must degrade to the old argv, not break.
+    build(argv, "s.py", "/dev/sr0", "/o.zip", "903500", 0, 0, /*want_window=*/0);
+    want_pair(argv, "--lba", "903500", "[4] old script");
+    want_absent(argv, "--nav-window", "[4] old script");
+    printf("  [4] old script: --lba kept, --nav-window dropped\n");
+
+    // ---- [5] the probe reads the script, in both directions -----------------
+    // A substring search is sound because argparse cannot accept a flag it does
+    // not name. Both arms use real files so the chunking is exercised, and the
+    // straddle arm puts the token across an 8 KB read boundary -- the one way a
+    // chunked search silently answers "no".
+    {
+        const char *yes = "/tmp/dvd_report_probe_yes.py";
+        const char *no  = "/tmp/dvd_report_probe_no.py";
+        FILE *f = fopen(no, "w");
+        if (f) { for (int i = 0; i < 4000; i++) fputs("# filler line\n", f); fclose(f); }
+        f = fopen(yes, "w");
+        if (f) {
+            // Land the token so it STRADDLES the 8192-byte boundary: 8188 bytes of
+            // filler puts "--nav-window" across it.
+            for (int i = 0; i < 8188; i++) fputc('x', f);
+            fputs("--nav-window", f);
+            for (int i = 0; i < 100; i++) fputs("\n# tail\n", f);
+            fclose(f);
+        }
+        if (dvd_report_script_supports(no, "--nav-window")) {
+            errors++;
+            printf("  FAIL [5] probe: a script that never names the flag must read as unsupported\n");
+        }
+        if (!dvd_report_script_supports(yes, "--nav-window")) {
+            errors++;
+            printf("  FAIL [5] probe: the flag must be found even straddling a read boundary\n");
+        }
+        if (dvd_report_script_supports("/tmp/does-not-exist-at-all.py", "--nav-window")) {
+            errors++;
+            printf("  FAIL [5] probe: a missing script must read as unsupported\n");
+        }
+        remove(yes); remove(no);
+        printf("  [5] probe: absent=no, straddling a chunk boundary=yes, missing file=no\n");
+    }
+
     if (errors) {
         printf("dvd_report_test: %d FAILURE(S)\n", errors);
         return 1;
     }
-    printf("dvd_report_test: ALL GREEN (4 arms)\n");
+    printf("dvd_report_test: ALL GREEN (6 arms)\n");
     return 0;
 }

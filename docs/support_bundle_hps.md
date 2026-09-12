@@ -228,18 +228,40 @@ system header, padding or `private_stream_2`. Nothing about this relaxes that.
 answers a different question, and the expensive one. The manual's on-player section says
 so to users.
 
+### The installed script may predate the flag
+
+⚠⚠ **MEASURED ON THE RIG, and it is why the flag is not passed unconditionally: an
+older release-installed `dvd_report.py` given the new argv prints**
+
+```
+dvd_report.py: error: unrecognized arguments: --nav-window 2048
+```
+
+**and writes NO BUNDLE AT ALL** — strictly worse than the missing button data the flag
+exists to add. The release zip ships `Scripts/dvd_report.py` beside the Main
+(`tools/package_release.sh`, and `package.yml` attaches it as its own asset), so they
+normally move together; a Main updated on its own must degrade, not break.
+
+So the child ASKS THE SCRIPT: `dvd_report_script_supports()` reads the file and looks for
+the flag's own name. argparse cannot accept a flag it does not name, so a substring search
+is sound in both directions — no old tool mentions it, and no new tool can support it
+silently. It runs in the CHILD, after the fork, because it is file I/O and
+`user_io_poll()` is the core's data pump (the `dvd_phys` drive-probe lesson); it reads in
+8 KB chunks with a `tlen-1` overlap so a token straddling a boundary is still found.
+
 ### The argv moved out of the fork
 
 `dvd_report_build_argv()` (declared in `dvd_report.h`, `DVD_REPORT_ARGV_MAX`) is built
 outside the `fork()` purely so it can be tested, the same move as
 `cdda_toc`'s track-skip resolver. **The failure mode here is silence**, which is the whole
 reason: a missing or misspelled flag still produces a plausible bundle.
-`main/tests/dvd_report_test.cpp` pins four arms — the full case, no playhead, playhead
-only, and the terminator/bound — with **4 RED mutations each caught by its own
-assertion**: drop `--nav-window`; pass it unconditionally (with no playhead the tool gets
-a base of 0 and captures the NAV packs at the START of the disc — *confidently wrong data
-instead of none*, which is worse than the bug being fixed); reach for `--nav-packs`
-instead; forget the NUL.
+`main/tests/dvd_report_test.cpp` pins six arms — the terminator/bound, the full case, no
+playhead, playhead only, an old script, and the probe itself — with **6 RED mutations each
+caught by its own assertion**: drop `--nav-window`; pass it unconditionally (with no
+playhead the tool gets a base of 0 and captures the NAV packs at the START of the disc —
+*confidently wrong data instead of none*, which is worse than the bug being fixed); reach
+for `--nav-packs` instead; forget the NUL; ignore what the installed script accepts; and
+drop the probe's chunk overlap (which silently reports a perfectly good tool as too old).
 
 ⚠ Two harness lessons, both cost a round: `red_case`'s `grep -q "$expect"` read an expect
 string beginning `--` as an option (fixed with `-e`), and a test that walks `argv` until

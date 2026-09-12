@@ -1,6 +1,7 @@
 // dvd_report.cpp — generate a navigation support bundle from the player itself.
 // See dvd_report.h and MiSTer_DVD/docs/support_bundle_hps.md.
 
+#define _GNU_SOURCE       // memmem(), for the installed-script flag probe
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -72,9 +73,51 @@
 // is omitted rather than passed with a meaningless base.
 #define NAV_WINDOW_SECTORS "2048"
 
+// ⚠⚠ THE INSTALLED SCRIPT MAY PREDATE THE FLAG, AND argparse DOES NOT SHRUG.
+// MEASURED on the rig against a release-installed dvd_report.py: the new argv gives
+//   dvd_report.py: error: unrecognized arguments: --nav-window 2048
+// and NO BUNDLE IS WRITTEN AT ALL -- strictly worse than the missing button data
+// this flag exists to fix. The release zip ships Scripts/dvd_report.py beside the
+// Main so they normally move together, but a Main updated on its own must degrade,
+// not break.
+//
+// So: ask the script. It names every flag it accepts (argparse cannot accept one it
+// does not name), so a substring search over the file is sound in both directions --
+// no old tool mentions it, and no new tool can support it silently.
+//
+// ★ Runs in the CHILD, after the fork: this is file I/O, and user_io_poll() is the
+// core's data pump (the dvd_phys drive-probe lesson). Chunked with an overlap so the
+// token cannot straddle a read boundary.
+int dvd_report_script_supports(const char *script, const char *token)
+{
+	FILE *f = fopen(script, "rb");
+	if (!f) return 0;
+
+	const size_t tlen = strlen(token);
+	if (!tlen || tlen >= 256) { fclose(f); return 0; }
+
+	char buf[8192 + 256];
+	size_t keep = 0;                      // bytes carried over from the last chunk
+	int found = 0;
+	for (;;)
+	{
+		size_t got = fread(buf + keep, 1, 8192, f);
+		if (!got) break;
+		size_t have = keep + got;
+		buf[have < sizeof(buf) ? have : sizeof(buf) - 1] = 0;
+		if (memmem(buf, have, token, tlen)) { found = 1; break; }
+		// Carry the last tlen-1 bytes so a token split across chunks is still seen.
+		keep = (tlen > 1) ? (tlen - 1) : 0;
+		if (keep > have) keep = have;
+		memmove(buf, buf + have - keep, keep);
+	}
+	fclose(f);
+	return found;
+}
+
 void dvd_report_build_argv(const char **argv, const char *script, const char *src,
                            const char *out, const char *lba, const char *cfg,
-                           const char *ver)
+                           const char *ver, int want_window)
 {
 	int i = 0;
 	argv[i++] = "python3";
@@ -85,10 +128,10 @@ void dvd_report_build_argv(const char **argv, const char *script, const char *sr
 	argv[i++] = "mister";
 	argv[i++] = "-o";
 	argv[i++] = out;
-	if (lba) { argv[i++] = "--lba";        argv[i++] = lba; }
-	if (lba) { argv[i++] = "--nav-window"; argv[i++] = NAV_WINDOW_SECTORS; }
-	if (cfg) { argv[i++] = "--cfg";        argv[i++] = cfg; }
-	if (ver) { argv[i++] = "--core-version"; argv[i++] = ver; }
+	if (lba)               { argv[i++] = "--lba";          argv[i++] = lba; }
+	if (lba && want_window){ argv[i++] = "--nav-window";   argv[i++] = NAV_WINDOW_SECTORS; }
+	if (cfg)               { argv[i++] = "--cfg";          argv[i++] = cfg; }
+	if (ver)               { argv[i++] = "--core-version"; argv[i++] = ver; }
 	argv[i] = 0;
 }
 
@@ -315,7 +358,8 @@ static void start(void)
 	{
 		const char *argv[DVD_REPORT_ARGV_MAX];
 		dvd_report_build_argv(argv, script, src, out_path,
-		                      have_lba ? lba : 0, cfg, ver);
+		                      have_lba ? lba : 0, cfg, ver,
+		                      dvd_report_script_supports(script, "--nav-window"));
 
 		freopen("/tmp/dvd_report_run.log", "w", stdout);
 		dup2(fileno(stdout), fileno(stderr));

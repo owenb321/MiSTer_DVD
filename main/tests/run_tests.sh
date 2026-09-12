@@ -115,21 +115,33 @@ if [ "$RED" -eq 1 ]; then
     # instead of none, which is worse than the bug being fixed.
     red_case dvd_report.cpp dvd_report_test.cpp \
         "--nav-window must NOT be passed" \
-        "s/\tif (lba) { argv\[i++\] = \"--nav-window\";/\tif (1)   { argv[i++] = \"--nav-window\";/" \
-        window-without-playhead
+        "s/if (lba \&\& want_window){/if (want_window)       {/" window-without-playhead
 
     # Reach for the expensive capture instead. Correct data, wrong cost: minutes of
     # seeking on the optical disc the core is streaming from -- and it still cannot
     # see an in-title menu's buttons, which is the whole point of the window.
     red_case dvd_report.cpp dvd_report_test.cpp \
         "--nav-packs must NOT be passed" \
-        "s/argv\[i++\] = \"--nav-window\"; argv\[i++\] = NAV_WINDOW_SECTORS;/argv[i++] = \"--nav-packs\";/" \
+        "s/argv\[i++\] = \"--nav-window\";   argv\[i++\] = NAV_WINDOW_SECTORS;/argv[i++] = \"--nav-packs\";/" \
         expensive-capture
 
     # Forget the terminator. execvp reads past the end of the array.
     red_case dvd_report.cpp dvd_report_test.cpp \
         "not NUL-terminated" \
         "s/^\targv\[i\] = 0;$/\t\/\* argv[i] = 0; \*\//" no-terminator
+
+    # Ignore what the installed script actually accepts. MEASURED on the rig: an
+    # older dvd_report.py exits on the unknown flag and writes NO bundle at all.
+    red_case dvd_report.cpp dvd_report_test.cpp \
+        "--nav-window must NOT be passed" \
+        "s/if (lba \&\& want_window){/if (lba)                {/" ignores-script-version
+
+    # Drop the chunk overlap: the probe then misses a token that straddles an 8 KB
+    # read boundary and silently reports "this script is too old", losing the
+    # capture on a tool that supports it perfectly well.
+    red_case dvd_report.cpp dvd_report_test.cpp \
+        "straddling a read boundary" \
+        "s/keep = (tlen > 1) ? (tlen - 1) : 0;/keep = 0;/" probe-no-overlap
     echo
 fi
 
