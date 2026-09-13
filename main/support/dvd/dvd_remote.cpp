@@ -12,6 +12,7 @@
 #include "../../spi.h"
 #include "../../menu.h"
 #include "../../audio.h"
+#include "../../hardware.h"   // GetTimer / CheckTimer (as dvd_hdmi_audio.cpp does)
 
 #define UIO_DVD_AUDFMT   0x7B
 #define DVD_TELEM_MAGIC  0xD7D1
