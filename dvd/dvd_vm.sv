@@ -1184,8 +1184,14 @@ always @(posedge clk or negedge rst_n) begin
                     // exist on, and 205 of 216 angle menus are empty stubs.)
                     //
                     // fb=FB_VTSM: 58% of discs author no chapter menu, so the
-                    // fallback chain (and ultimately a no-op) is the COMMON
-                    // path, not an error case.
+                    // fallback chain is the COMMON path, not an error case.
+                    // ★ HW round 1 MEASURED what that chain actually does on
+                    // such a disc: it lands on the disc's ROOT menu (verified on
+                    // an image whose VTSM declares only an 0x83 entry -- the
+                    // board parked there with buttons armed and a highlight up).
+                    // So the honest description is "falls back to the main
+                    // menu", not "does nothing"; the manual said the latter and
+                    // has been corrected.
                     ev_cmenu <= 1'b0;
                     fuse <= 13'd0; chain <= 7'd0;
                     blk  <= BLK_BTN;     // user-key jump: never "natural" provenance

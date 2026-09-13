@@ -212,8 +212,11 @@ not make the display re-sync over and over.
 ### Chapter menu
 
 **B16 (Chapter Menu)** jumps straight to the disc's own scene-selection page, rather than
-stepping chapters one at a time with B2/B3. Roughly two discs in five author one; on the
-rest the button does nothing and says `NO MENU`. It needs **Disc Menus** switched on.
+stepping chapters one at a time with B2/B3. It needs **Disc Menus** switched on.
+
+Roughly two discs in five author a chapter menu. On the rest the button falls back to the
+disc's **main menu** instead — the same place B5 (Menu) goes — so it always lands somewhere
+you can navigate out of.
 
 ### A-B repeat
 
