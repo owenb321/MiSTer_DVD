@@ -47,6 +47,14 @@ void dvd_phys_tick(void);
 // Observes only.
 void dvd_phys_note_mount(const char *path, unsigned char index);
 
+// The Eject button (B19), routed here from dvd_remote.cpp so that the unmount
+// and the core reset run the SAME steps as a physical disc removal -- slot
+// ownership lives in dvd_phys.cpp and issue #48 is what happens when it does
+// not. Opens the tray too, but only for a disc this module mounted.
+// Returns 1 if an optical disc was ejected, 0 if it unmounted an image (or
+// there was nothing to unmount).
+int dvd_phys_eject(void);
+
 // The /dev/srN node of the disc currently mounted by this module, or NULL when
 // nothing is mounted. Exported for dvd_report.cpp, which hands it to
 // tools/dvd_report.py: every sector that tool reads is one CSS never scrambles,

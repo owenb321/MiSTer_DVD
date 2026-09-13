@@ -74,6 +74,20 @@ module transport_hud #(
     // and what made the numbers big enough to be worth not printing.
     input  wire [1:0]  scrub_tier,
     input  wire        display_edge,        // B9: toggle persistent mode
+    // DVD-remote Stop (B14). A LEVEL, not a pulse: the disc stays stopped
+    // until PLAY, so the indicator must persist like the CSS warning rather
+    // than expire after SHOW_TICKS the way a user popup does.
+    // ⚠ emu asserts this for STAGE 1 ONLY. A full stop (second press) shows the
+    // bare idle logo with no overlay at all -- "as if you had done a soft
+    // reset" -- so there is deliberately no second caption here.
+    input  wire        stop_on,             // stage-1 stop (a resume is waiting)
+    // B15 Aspect: a pulse, with which control moved and where it is going.
+    input  wire        aspct_evt,
+    input  wire        aspct_analog,        // 1 = Analog Aspect, 0 = Aspect Ratio
+    input  wire [1:0]  aspct_val,
+    // B17 A-B repeat: pulse + the state it moved to (0 off, 1 A set, 2 armed).
+    input  wire        ab_evt,
+    input  wire [1:0]  ab_state,
     input  wire        load_evt,            // fresh media load: clear + hide
     input  wire        show_evt,            // transport event: re-arm show_tmr
 
@@ -139,6 +153,10 @@ module transport_hud #(
 );
 
     // ---- glyph indices (keep in sync with tools/hud_font.py) --------------
+    // G_DOT/G_DASH complete the punctuation run tools/hud_font.py emits at
+    // 10..15 (':' '/' '.' '-' ' ' 'x'); '-' had no localparam until A-B repeat
+    // needed it. The glyphs themselves already existed -- no font change.
+    localparam [5:0] G_DOT   = 6'd12, G_DASH  = 6'd13;
     localparam [5:0] G_COLON = 6'd10, G_SLASH = 6'd11, G_SPACE = 6'd14,
                      G_X     = 6'd15, G_A     = 6'd16,
                      G_PLAY  = 6'd42, G_PAUSE = 6'd43, G_REV = 6'd44,
@@ -174,7 +192,15 @@ module transport_hud #(
         end else begin
             if (display_edge) persist_q <= ~persist_q;
             if (load_evt)     persist_q <= 1'b0;
-            if (show_evt || display_edge) show_tmr <= SHOW_TICKS;
+            // DVD-FORK FIX: the press that turns persistence OFF must HIDE the
+            // line, not re-arm the auto-show timer. vis below is
+            // (persist_q | ... | show_tmr != 0), so arming unconditionally here
+            // left the status line up for SHOW_TICKS after an off-press -- the
+            // user saw nothing happen, pressed again (toggling back ON), and
+            // reported that Display "only turns on, never off". persist_q reads
+            // its PRE-assignment value in this block, so it means "was on".
+            if (display_edge && persist_q)  show_tmr <= 27'd0;   // OFF: hide now
+            else if (show_evt || display_edge) show_tmr <= SHOW_TICKS;
             else if (load_evt)            show_tmr <= 27'd0;
             else if (show_tmr != 27'd0)   show_tmr <= show_tmr - 27'd1;
             // popup: last event wins the single slot
@@ -185,7 +211,17 @@ module transport_hud #(
             else if (chap_evt)  begin pop_type <= 4'd3; pop_tmr <= SHOW_TICKS; end
             else if (vts_evt)   begin pop_type <= 4'd7; pop_tmr <= SHOW_TICKS; end
             else if (seek_evt)  begin pop_type <= 4'd8; pop_tmr <= SHOW_TICKS; end
+            else if (aspct_evt) begin pop_type <= 4'd11; pop_tmr <= SHOW_TICKS; end
+            else if (ab_evt)    begin pop_type <= 4'd12; pop_tmr <= SHOW_TICKS; end
             else if (load_evt)          pop_tmr <= 27'd0;
+            // STOP: a level, above the warnings (a stopped disc cannot be
+            // scrambled-mid-stream or mis-muxed -- nothing is playing) but below
+            // the user pulses, so a chapter/audio popup issued on the way into a
+            // stop still gets its 2.5 s. Re-takes the slot for as long as it holds.
+            else if (stop_on && (pop_tmr == 27'd0 || pop_type == 4'd10 ||
+                                 pop_type == 4'd4 || pop_type == 4'd5 ||
+                                 pop_type == 4'd6))
+                                begin pop_type <= 4'd10; pop_tmr <= SHOW_TICKS; end
             // CSS warning: lowest priority so user popups show for their 2.5 s,
             // then the warning re-takes the slot for as long as css_warn holds.
             // Warnings, in ROOT-CAUSE order: CSS explains a muted/green disc, an
@@ -267,6 +303,9 @@ module transport_hud #(
     reg [7:0]  f2_n, f2_nn;                  // n / N as {tens,ones} BCD
     reg [5:0]  f2_l1, f2_l2;                 // language glyphs (NONE = hidden)
     reg        f2_off;                       // SUB OFF variant
+    reg        f2_aspa;                      // ASPECT: 1 = the analog control
+    reg [1:0]  f2_aspv;                      // ASPECT: the value moved to
+    reg [1:0]  f2_abst;                      // A-B: the state moved to
 
     reg        sk_two, sk_fwd;               // popup 8: 2-digit minutes, direction
     reg [2:0]  sk_sec;                       // popup 8: tens-of-seconds digit
@@ -338,6 +377,92 @@ module transport_hud #(
                 5'd12: fmt_g = sk_two ? {1'b0, G_COLON}          : {1'b0, 3'b000, sk_sec};
                 5'd13: fmt_g = sk_two ? {1'b0, 3'b000, sk_sec}   : {1'b0, 6'd0};
                 5'd14: fmt_g = sk_two ? {1'b0, 6'd0}             : {1'b0, G_NONE};
+                default: fmt_g = {1'b0, G_NONE};
+            endcase
+        end else if (fmt_col[5] && f2_type == 4'd12) begin
+            // ---- popup row, A-B REPEAT -------------------------------------
+            // "A-B  A SET" / "A-B  ON" / "A-B  OFF". The middle state has to be
+            // distinguishable: a user who has pressed once and walked away needs
+            // to know the loop is half-armed, not running.
+            case (fmt_col[4:0])
+                5'd0:  fmt_g = {1'b0, a2g("A")};
+                5'd1:  fmt_g = {1'b0, G_DASH};
+                5'd2:  fmt_g = {1'b0, a2g("B")};
+                5'd3:  fmt_g = {1'b0, G_SPACE};
+                5'd4:  fmt_g = {1'b0, G_SPACE};
+                5'd5:  fmt_g = (f2_abst == 2'd1) ? {1'b0, a2g("A")} :
+                               (f2_abst == 2'd2) ? {1'b0, a2g("O")} : {1'b0, a2g("O")};
+                5'd6:  fmt_g = (f2_abst == 2'd1) ? {1'b0, G_SPACE}  :
+                               (f2_abst == 2'd2) ? {1'b0, a2g("N")} : {1'b0, a2g("F")};
+                5'd7:  fmt_g = (f2_abst == 2'd1) ? {1'b0, a2g("S")} :
+                               (f2_abst == 2'd2) ? {1'b0, G_NONE}   : {1'b0, a2g("F")};
+                5'd8:  fmt_g = (f2_abst == 2'd1) ? {1'b0, a2g("E")} : {1'b0, G_NONE};
+                5'd9:  fmt_g = (f2_abst == 2'd1) ? {1'b0, a2g("T")} : {1'b0, G_NONE};
+                default: fmt_g = {1'b0, G_NONE};
+            endcase
+        end else if (fmt_col[5] && f2_type == 4'd11) begin
+            // ---- popup row, ASPECT ----------------------------------------
+            // Names WHICH control moved, because the button drives two of them
+            // depending on the live output -- without that the same popup would
+            // appear for two different settings and neither would be findable
+            // in the OSD afterwards.
+            //   analog: "ANALOG AUTO|FIT|LETTERBOX|CROP"
+            //   hdmi:   "ASPECT AUTO|4:3|16:9"
+            case (fmt_col[4:0])
+                5'd0:  fmt_g = {1'b0, f2_aspa ? a2g("A") : a2g("A")};
+                5'd1:  fmt_g = {1'b0, f2_aspa ? a2g("N") : a2g("S")};
+                5'd2:  fmt_g = {1'b0, f2_aspa ? a2g("A") : a2g("P")};
+                5'd3:  fmt_g = {1'b0, f2_aspa ? a2g("L") : a2g("E")};
+                5'd4:  fmt_g = {1'b0, f2_aspa ? a2g("O") : a2g("C")};
+                5'd5:  fmt_g = {1'b0, f2_aspa ? a2g("G") : a2g("T")};
+                5'd6:  fmt_g = {1'b0, G_SPACE};
+                // value, left-aligned from col 7
+                5'd7:  fmt_g = f2_aspa ? (f2_aspv == 2'd0 ? {1'b0, a2g("A")} :
+                                          f2_aspv == 2'd1 ? {1'b0, a2g("F")} :
+                                          f2_aspv == 2'd2 ? {1'b0, a2g("L")} :
+                                                            {1'b0, a2g("C")})
+                                       : (f2_aspv == 2'd0 ? {1'b0, a2g("A")} :
+                                          f2_aspv == 2'd1 ? {1'b0, 6'd4}     :  // '4'
+                                                            {1'b0, 6'd1});      // '1'
+                5'd8:  fmt_g = f2_aspa ? (f2_aspv == 2'd0 ? {1'b0, a2g("U")} :
+                                          f2_aspv == 2'd1 ? {1'b0, a2g("I")} :
+                                          f2_aspv == 2'd2 ? {1'b0, a2g("E")} :
+                                                            {1'b0, a2g("R")})
+                                       : (f2_aspv == 2'd0 ? {1'b0, a2g("U")} :
+                                          f2_aspv == 2'd1 ? {1'b0, G_COLON}  :
+                                                            {1'b0, 6'd6});      // '6'
+                5'd9:  fmt_g = f2_aspa ? (f2_aspv == 2'd0 ? {1'b0, a2g("T")} :
+                                          f2_aspv == 2'd1 ? {1'b0, a2g("T")} :
+                                          f2_aspv == 2'd2 ? {1'b0, a2g("T")} :
+                                                            {1'b0, a2g("O")})
+                                       : (f2_aspv == 2'd0 ? {1'b0, a2g("T")} :
+                                          f2_aspv == 2'd1 ? {1'b0, 6'd3}     :  // '3'
+                                                            {1'b0, G_COLON});
+                5'd10: fmt_g = f2_aspa ? (f2_aspv == 2'd0 ? {1'b0, a2g("O")} :
+                                          f2_aspv == 2'd2 ? {1'b0, a2g("T")} :
+                                          f2_aspv == 2'd3 ? {1'b0, a2g("P")} :
+                                                            {1'b0, G_NONE})
+                                       : (f2_aspv == 2'd0 ? {1'b0, a2g("O")} :
+                                          f2_aspv == 2'd2 ? {1'b0, 6'd9}     :  // '9'
+                                                            {1'b0, G_NONE});
+                5'd11: fmt_g = (f2_aspa && f2_aspv == 2'd2) ? {1'b0, a2g("E")} : {1'b0, G_NONE};
+                5'd12: fmt_g = (f2_aspa && f2_aspv == 2'd2) ? {1'b0, a2g("R")} : {1'b0, G_NONE};
+                5'd13: fmt_g = (f2_aspa && f2_aspv == 2'd2) ? {1'b0, a2g("B")} : {1'b0, G_NONE};
+                5'd14: fmt_g = (f2_aspa && f2_aspv == 2'd2) ? {1'b0, a2g("O")} : {1'b0, G_NONE};
+                5'd15: fmt_g = (f2_aspa && f2_aspv == 2'd2) ? {1'b0, a2g("X")} : {1'b0, G_NONE};
+                default: fmt_g = {1'b0, G_NONE};
+            endcase
+        end else if (fmt_col[5] && f2_type == 4'd10) begin
+            // ---- popup row, STOP ------------------------------------------
+            // Stage 1 only: the position is remembered and PLAY resumes in
+            // place, so the screen says so. A full stop shows no overlay at all
+            // (emu gates stop_on), which is the distinction between the two --
+            // not a second caption.
+            case (fmt_col[4:0])
+                5'd0:  fmt_g = {1'b1, a2g("S")};
+                5'd1:  fmt_g = {1'b1, a2g("T")};
+                5'd2:  fmt_g = {1'b1, a2g("O")};
+                5'd3:  fmt_g = {1'b1, a2g("P")};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
         end else if (fmt_col[5] && f2_type == 4'd4) begin
@@ -514,6 +639,7 @@ module transport_hud #(
             f_ch <= 1'b0; f_icon <= 2'd0; f_arrows <= 3'd2;
             f2_type <= 4'd0; f2_n <= 8'd0; f2_nn <= 8'd0; sk_sec <= 3'd0;
             f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0;
+            f2_aspa <= 1'b0; f2_aspv <= 2'd0; f2_abst <= 2'd0;
         end else begin
             if (fmt_col <= 7'd63) begin
                 plane[fmt_col[5:0]] <= fmt_g;
@@ -532,6 +658,9 @@ module transport_hud #(
                 f_arrows <= {1'b0, scrub_tier} + 3'd2;
                 f2_type <= pop_type;
                 f2_off  <= 1'b0;
+                f2_aspa <= aspct_analog;
+                f2_aspv <= aspct_val;
+                f2_abst <= ab_state;
                 f2_l1   <= G_NONE;
                 f2_l2   <= G_NONE;
                 if (pop_type == 4'd7) f2_n <= bin2bcd99(vts_no);

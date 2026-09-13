@@ -221,6 +221,12 @@ PS2_TO_LINUX = {
     (0x2D, False): 19, (0x31, False): 49, (0x32, False): 48, (0x34, False): 34,
     (0x3A, False): 50, (0x4D, False): 25, (0x5A, False): 28, (0x66, False): 14,
     (0x76, False): 1,
+    # DVD-remote buttons B14..B18 (2026-09-13). Verified against Main's own
+    # ev2ps2[] rather than assumed: Q=16, Z=44, F5=63, L=38, DOT=52.
+    (0x15, False): 16, (0x1A, False): 44, (0x03, False): 63,
+    (0x4B, False): 38, (0x49, False): 52,
+    # B19..B21: E=18, keypad +=78, keypad -=74 (also from ev2ps2[]).
+    (0x24, False): 18, (0x79, False): 78, (0x7B, False): 74,
     (0x5A, True): 96, (0x6B, True): 105, (0x72, True): 108, (0x74, True): 106,
     (0x75, True): 103, (0x7A, True): 109, (0x7D, True): 104,
 }

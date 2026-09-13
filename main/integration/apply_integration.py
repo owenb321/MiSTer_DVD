@@ -452,6 +452,18 @@ u = insert_after(u, '\tdvd_report_tick();      // support-bundle chord: fire + r
     '\tdvd_ctl_tick();         // host control FIFO + /tmp/dvd_telem.json\n',
     34, 'dvd_ctl_tick();')
 
+# 39. include for the DVD-remote HPS-side buttons (Eject, Volume).
+u = insert_after(u, '#include "support/dvd/dvd_ctl.h"',
+    '#include "support/dvd/dvd_remote.h"\n',
+    39, 'support/dvd/dvd_remote.h')
+
+# 40. poll tick. AFTER dvd_ctl's, i.e. last of the DVD ticks: it polls the core
+# over SPI for the Eject/Volume request word and may unmount or change the
+# volume, so anything that wants a settled slot should have run already.
+u = insert_after(u, '\tdvd_ctl_tick();         // host control FIFO + /tmp/dvd_telem.json',
+    '\tdvd_remote_tick();      // dvd:remote - B19 Eject, B20/B21 Volume\n',
+    40, 'dvd_remote_tick();')
+
 # 30. let dvd_phys see slot 0 being taken by something that is not the drive, so
 # an eject only tears down what the drive still owns and the auto-mount does not
 # fire over an image the user asked for (an MGL <file>, say). Observes only.
@@ -567,5 +579,59 @@ vc = insert_before(vc, 'hdmi_cfg_generation++;',
     38, 'dvd:hdmibs - 0x12[7] is the non-PCM flag')
 write(vc_path, vc)
 print("[integration] video.cpp patched (non-PCM flag cleared at init)")
+
+# ------------------------------------------------------------- hdmi_cec.cpp
+# 41. CEC remap, so a TV remote can reach the DVD-remote buttons.
+#
+# CEC presses arrive as KEYBOARD events (hdmi_cec.cpp:290-319), so they land on
+# dvd/kbd_map.sv's table -- but stock Main's mapping leaves the new buttons
+# unreachable, and one entry actively collides:
+#
+#   CEC_USER_CONTROL_STOP -> KEY_ESC, which kbd_map binds to RETURN. So a TV
+#   remote's Stop key does GoUp. And because CEC's EXIT resolves to KEY_MENU
+#   (which Main eats as the OSD toggle), that Stop->Esc->Return path is
+#   currently the ONLY back button a TV remote has.
+#
+# ★ The ROOT_MENU / EXIT case must be SPLIT rather than remapped: ROOT_MENU
+# keeps KEY_MENU so a CEC-only user retains a route to the MiSTer OSD, while
+# EXIT becomes a working back button (which it has never been).
+#
+# EJECT (0x4A), DISPLAY_INFO (0x35) and CONTENTS_MENU (0x0B) hit `default:
+# return` today and are simply free to claim.
+#
+# ⚠ This is DVD-scoped: other cores run stock Main via `main=`, so nothing else
+# sees these mappings.
+cec_path = os.path.join(ROOT, "hdmi_cec.cpp")
+cec = read(cec_path)
+
+# 0x4A (Eject) has no constant in stock Main.
+cec = insert_after(cec, '#define CEC_USER_CONTROL_FF                 0x49',
+    '#define CEC_USER_CONTROL_EJECT              0x4A   // dvd:remote\n',
+    41, 'CEC_USER_CONTROL_EJECT')
+
+# Split the shared ROOT_MENU/EXIT case, then add the three free codes.
+cec = replace_once(cec,
+    '\t\tcase CEC_USER_CONTROL_ROOT_MENU:\n'
+    '\t\tcase CEC_USER_CONTROL_EXIT:      key = menu_present() ? KEY_BACK : KEY_MENU; break;',
+    '\t\tcase CEC_USER_CONTROL_ROOT_MENU: key = menu_present() ? KEY_BACK : KEY_MENU; break;\n'
+    '\t\t// dvd:remote - EXIT becomes a real back button. Stock sends KEY_MENU\n'
+    '\t\t// here, which Main eats as the OSD toggle, so a TV remote had no way\n'
+    '\t\t// up a menu level at all. ROOT_MENU above keeps KEY_MENU, so the OSD\n'
+    '\t\t// is still reachable.\n'
+    '\t\tcase CEC_USER_CONTROL_EXIT:      key = menu_present() ? KEY_BACK : KEY_B; break;',
+    41, 'dvd:remote - EXIT becomes a real back button')
+
+cec = replace_once(cec,
+    '\t\tcase CEC_USER_CONTROL_STOP:      key = KEY_ESC; break;',
+    '\t\t// dvd:remote - Stop means STOP, not Return. Stock maps it to KEY_ESC,\n'
+    '\t\t// which kbd_map binds to Return (GoUp).\n'
+    '\t\tcase CEC_USER_CONTROL_STOP:      key = KEY_Q; break;\n'
+    '\t\tcase CEC_USER_CONTROL_EJECT:     key = KEY_E; break;        // dvd:remote\n'
+    '\t\tcase CEC_USER_CONTROL_DISPLAY_INFO: key = KEY_D; break;     // dvd:remote\n'
+    '\t\tcase CEC_USER_CONTROL_CONTENTS_MENU: key = KEY_F5; break;   // dvd:remote',
+    41, 'dvd:remote - Stop means STOP, not Return')
+
+write(cec_path, cec)
+print("[integration] hdmi_cec.cpp patched (DVD-remote CEC mapping)")
 
 print("[integration] done")

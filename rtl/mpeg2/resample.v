@@ -46,6 +46,7 @@ module resample(
   video_live,                                       // DVD-FORK (av_sync STC reference)
   pickup_hold,                                      // DVD-FORK (STD mux-lead hold)
   pause,                                            // DVD-FORK (gamepad transport): freeze frame while paused
+  step_req,                                         // DVD-FORK (frame step B18): advance exactly one picture while paused
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect)
   raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
@@ -106,6 +107,7 @@ module resample(
   output             video_live;                 // DVD-FORK (av_sync STC reference): sticky "first frame displayed"
   input              pickup_hold;                 // DVD-FORK (STD mux-lead hold): defer the FIRST display pickup
   input              pause;                        // DVD-FORK (gamepad transport): freeze the displayed frame while paused
+  input              step_req;                     // DVD-FORK (frame step B18): one-cycle request, clk_dec
   output             pickup_tick;                 // DVD-FORK (PTS scheduling): one pulse per pickup, to disp_sched
   output             film_det_ntsc;               // DVD-FORK (Film 24p auto-detect): sustained 3:2 telecine verdict (NTSC 24p)
   output             film_det_pal;                // DVD-FORK (Film 24p auto-detect): sustained progressive verdict (PAL 25p)
@@ -172,6 +174,7 @@ module resample(
     .video_live(video_live),                       // DVD-FORK (av_sync STC reference)
     .pickup_hold(pickup_hold),                     // DVD-FORK (STD mux-lead hold)
     .pause(pause),                                 // DVD-FORK (gamepad transport): freeze frame while paused
+    .step_req(step_req),                           // DVD-FORK (frame step B18)
     .pickup_tick(pickup_tick),                     // DVD-FORK (PTS scheduling)
     .film_det_ntsc(film_det_ntsc),                 // DVD-FORK (Film 24p auto-detect)
     .film_det_pal(film_det_pal),

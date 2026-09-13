@@ -2338,6 +2338,180 @@ worse maintenance burden than targeted in-place edits. So:
   no UDF-only-image support. (Phase-8b TMAP absolute seek: RETIRED 2026-07-10 by user
   decision. The seek UX gained ONE opt-in layer since — `O[45]` D-Pad Seek, below — which
   rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
+- ✅ **DVD-REMOTE BUTTONS — Stop, Aspect, Chapter Menu, A-B Repeat, Frame Step, a
+  screensaver, and the Display toggle FIX (2026-09-13, branch
+  `feature/remote-buttons`) — sim-proven, mutation-checked 31/31 across five modules,
+  and ✅ HW-CONFIRMED 2026-09-13 over five rounds** (final build
+  `DVD_remotebtns_20260913_2037.rbf`, SEED 7 first roll, 88 % ALM, clk_dec
+  92.49/88.38). **Eject, Volume and the CEC transport mapping shipped with it**
+  (B19-B21 + `main/support/dvd/dvd_remote.cpp`, integration steps 39-41) —
+  eject ✅ HW-CONFIRMED from the maintainer's own log: `DVD_PHYS: eject: tray
+  opened on /dev/sr0`, plus the unmount-an-image case. **Every feature MEASURED, not eyeballed:** Display hidden at 300/800/
+  1500 ms across 3 on/off cycles (all inside the 2.5 s window a pre-fix core stays
+  visible); Stop → `STOP` popup, elapsed frozen over 5 s, resume IN PLACE
+  (0:00:19→0:00:23), `STOP  FROM START`, then restart from First Play (total
+  1:43:41→0:00:14) with the picture **max=0, perfectly black**; Chapter Menu followed
+  `0x87`→PGCN 4→`LinkPGCN 8` onto the real 4-cell scene menu with buttons armed;
+  Frame Step 0 px over 3 s paused, then 1962/2431/1618 px per press, still PAUSE,
+  26,422 px on resume; Aspect cycles all four popups and, PAUSED so content is static,
+  alternates active height 298↔357 px per press exactly as the RTL predicts for 16:9
+  anamorphic; screensaver not armed at 100 s, armed by 145 s, logo MOVING 9,280 px/3 s
+  over a blanked picture; **A-B repeat kept the playhead inside 0:01:46–0:02:04 for
+  96 s** (free-running would reach ~0:03:20) and ran away again after `A-B OFF`.
+  ★★ **STOP SHIPPED AS THE WRONG FEATURE, TWICE, AND BOTH WERE SPEC MISREADS
+  RATHER THAN BUGS.** Round 1 blanked the picture to black; the report was
+  *"one stop was supposed to drop you to the idle logo"* — a set-top player
+  spins down and puts its OWN screen up, and the machinery already existed
+  (the screensaver was doing exactly that five minutes later), so `logo_vis`
+  simply gained `stopped_w`. Round 3 then found the stage READOUT wrong too:
+  *"the second stop should clear all messages... just show the logo as if you
+  had done a soft reset."* The two stages are told apart by the PRESENCE of an
+  overlay, not by two captions — stage 1 keeps `STOP` because a resume is
+  waiting, stage 2 suppresses the HUD and seek bar entirely. The
+  `STOP  FROM START` string, `transport_hud`'s `stop_kept` port and the
+  `f2_keep` snapshot were deleted rather than left as dead weight.
+  ⚠ Measured, so it needs no re-deriving: playing mean 45.90/max 255 → stage 1
+  mean 1.99/max 110 with `STOP` → stage 2 mean ~2.1/max 116 with the HUD gone,
+  held 11 s, logo moving 9,464 px in 2 s.
+  ★★ **EJECT NEEDED TWO FIXES AND THE REPORT NAMED THE SECOND ONE:** *"eject
+  does not eject the disc, instead it reloads it... we see the key cracking
+  message again and the disc starts over."* (1) The tray was asked to open
+  BEFORE the teardown, while the mounted file and the libdvdcss session still
+  hold `/dev/srN` open — the kernel refuses to eject a busy device, so it never
+  moved. (2) With the disc still in the drive the 1 Hz auto-mount re-acquired
+  it and re-cracked the keys. `foreign = 1` blocks that, reusing the existing
+  "do not auto-mount" latch whose clear condition is already right: a disc
+  INSERTION EDGE. No new state, no timer.
+  ⚠⚠ **AND ONE ROUND WAS WASTED BY ME, NOT BY THE CODE:** I described the
+  round-2 logo fix while the core was still compiling and only the Main had
+  been staged, so the maintainer tested the OLD `.rbf` and correctly reported
+  no change. **A fix is not testable until its artefact is ON THE BOARD** —
+  say "building" and wait, and remember which half of a change lives in the
+  `.rbf` and which in the Main (they are flashed separately).
+  ★★ **A-B REPEAT SHIPPED BROKEN AND ONLY HARDWARE COULD FIND IT: `scrub_ctrl`'s
+  `jump_dir` is `1 = forward` (`scrub_ctrl.sv:174`, applied at `:260` as
+  `base ± off`), and `ab_repeat` drove `1'b1` under a comment claiming "1 = backward".**
+  Every loop-back was a forward jump that cleared `title_last_rbn`, got clamped there
+  by `:263`, and ran off into the PGC's post — measured as a jump to **1:43:42 of a
+  1:43:41 title**. One bit.
+  ★★★ **AND THE BENCH COULD NOT CATCH IT, WHICH IS THE DURABLE PART.** Arm `[B2d]`
+  asserted `jump_dir == 1` *because the RTL drove 1* — the expectation was copied from
+  the implementation's own belief rather than from the CONSUMER'S CONTRACT, so bench
+  and RTL shared one wrong convention and agreed perfectly through 7/7 mutations.
+  Same shape as `field_parity_tb` and `dvd_vm_ref.py`
+  ([[bench-that-cannot-fail]]). **When a module hands a value to another module,
+  assert against the consumer's declaration and cite its line** — the arm now reads 0
+  and names `scrub_ctrl.sv:174`.
+  ⚠⚠ **A HARNESS BUG COST THE WHOLE FIRST ROUND, and it looked exactly like a core
+  defect.** `tools/mister_keyd.py` declared a hand-maintained list of Linux keycodes to
+  uinput, and **a uinput device can only emit keys it DECLARED — the kernel drops the
+  rest silently.** All five new keys were injected, accepted by `mister.py key` (whose
+  names derive from `CONF_STR`), and discarded by the kernel; on the board that is
+  indistinguishable from "the core ignores those buttons". It was the one transcribed
+  table in a harness built on derived ones. Now `range(1, 249)` — declaring a key is
+  not emitting it, so a generous range cannot go stale.
+  ⚠ **Three more harness traps, all of which produced a confident wrong reading first:**
+  (1) `Debug Overlay=On` forces `vis = 1` (`transport_hud.sv:202`), so the instrument
+  MASKED the Display test — the baseline read "visible" before any press. (2) A
+  press→screenshot pair over ssh is a RACE: `screenshot` goes straight to
+  `/dev/MiSTer_cmd` while the key goes agent→uinput→Main→core, so a zero-delay capture
+  shows the PRE-press state and reads as the pre-fix bug. Sample several delays inside
+  the window instead. (3) Display persistence CARRIES OVER between runs, so a script
+  that assumes it starts off silently ran an entire Stop test with the HUD hidden.
+  ★ **The screensaver's no-state-change claim is proven two ways:** `cfg_rewritten`,
+  `il_switch_fired` and `watchdog_fired` all stayed RED through it (no scaler re-init,
+  no raster switch, the watchdog never fired across the long hold), and dismissing it
+  restored the **bit-identical** paused frame (0 px different from the original) — the
+  held frame survived untouched, which a `media_seen` clear could not have done.
+  ⚠ **Chapter Menu on a disc with NO chapter menu falls back to the disc's ROOT menu**
+  (`fb=FB_VTSM`), measured on an image whose VTSM declares only an `0x83` entry — the
+  board parked there with buttons armed, not stalled. The manual had claimed "does
+  nothing and says `NO MENU`"; there is no such popup and never was. Corrected.
+  ⚠ The elapsed readout is unreliable for a second or two AFTER a seek (the DSI time
+  interpolation re-syncs on the next NAV pack), so A-B's landing point cannot be
+  timed to the second from the HUD — measure the loop as a BOUNDED BAND over a long
+  window instead, which is also the property a user actually experiences. Field report: *"display button would be nice if it toggled
+  on/off instead of just on"*, plus no Stop, no aspect on a button, no volume, no eject.
+  ★ **The Display defect was ONE LINE, and the bench had encoded it as correct
+  behaviour.** `transport_hud.sv` did toggle `persist_q`; the line below it re-armed the
+  ~2.5 s auto-show timer on EVERY press, and `vis` ORs that timer in — so the press that
+  turned persistence *off* left the line up anyway. T7/T8 both carried a
+  `repeat (2100) // drain the toggle's own timer arm` before checking it was hidden:
+  the bench worked AROUND the defect rather than catching it, which is why no arm was
+  ever red. New T7a0 asserts the off-press hides AT ONCE.
+  ★★ **SCOPE WAS CUT BY MEASUREMENT, TWICE, AND THE TWO CUTS ARE DIFFERENT FAILURES.**
+  Four disc-menu buttons were planned; one shipped. Angle menu: 216 of 956 discs declare
+  one, but only 22 have a multi-angle title and **11 have both — 205 of 216 are empty
+  template stubs** (a declared IFO table is not a capability: the `progressive_frame`
+  family again). Audio/Subtitle menus are *genuine* (317/340 and 301/343 back real
+  multi-stream content) but **DOMINATED**: B7 already serves 603 discs and B8 553, strict
+  supersets of the menus' reach, and the Root menu reaches those pages anyway. Only
+  Chapter Menu (401 discs, 42 %) is a capability we lack — nothing else jumps to a scene.
+  ⛔ **DVD-Text is measured DEAD, not deferred:** 219/956 set `txtdt_mgi` and 149 hold a
+  printable name, but the names are mastering junk (`SONY`, `TEXT_DATA`, `Xess_DATA`,
+  `ACT_O_V`). That supersedes `docs/conformance.md`'s "TXTDT 2/23 — defer until a disc
+  needs it" on a 40× larger sample: no disc needs it.
+  ★ **Stop is built out of the EXISTING pause holds** (`dvd/stop_ctl.sv`): `stopped` ORs
+  into `pause_gov`/`pause_aud`, so the governor freeze, `repeat_frame=31` watchdog
+  suppression, STC stall and audio hold come free and an indefinite stop is the
+  already-proven indefinite pause. Two-stage: press 1 keeps the position (PLAY resumes in
+  place, nothing was torn down, so there is no bookmark to save), press 2 forgets it and
+  the next PLAY re-pulses the reader/VM `start` — ⛔ **NOT a remount**, which the core
+  cannot ask for. ⚠ `dvd_vm.sv` zeroes `rsm_vts` inside `if (start)`, which is correct for
+  stage 2 and must not happen at stage 1.
+  ⛔⛔ **THE SCREENSAVER'S WHOLE DESIGN IS "DO NOT CLEAR `media_seen`".** That is the
+  obvious trigger and it is wrong: `emu.sv:146` derives `idle_wide` from it into
+  `VIDEO_ARX/ARY`, so clearing it mid-title flips the aspect and makes Main re-init the
+  scaler — a resolution popup in the middle of a film. It is a pure display-layer term on
+  `logo_vis`, placed OUTSIDE the `!media_seen` group (a paused title still has live video,
+  so a term ANDed inside could never assert). HUD and seek bar are suppressed while it is
+  up, since a burnt-in status line is what it exists to prevent.
+  ★ **`O[48:47] Screensaver,5min,Off,2min,10min` — the value ORDER is the feature.**
+  `status[]` powers up at zero, so index 0 IS the default; `Off,2min,5min,10min` would
+  ship it disabled. Bits 47/48 were never allocated ⇒ **no `"v,N"` bump, no settings
+  reset**. ⚠ Re-ordering later WOULD force one (that is why v3 exists).
+  ⚠⚠ **The Aspect button exists mostly to CONTAIN a hazard.** The core cannot write
+  `status[]` (`dvd_telem.sv:11-16`), so `dvd/aspect_ctl.sv` publishes an override the OSD
+  reclaims on any change. It cycles whichever control is LIVE because `Analog Aspect` is
+  gated on `interlaced_eff` and would be a dead button on an HDMI-only rig. Every
+  `VIDEO_ARX/ARY` change re-inits the scaler, so the verdict SETTLES 250 ms: ten rapid
+  presses = ONE change. ⚠ `sp_disp_mode` had to follow the override too, or subtitles lay
+  out for an aspect the picture is no longer in.
+  ★ **A-B repeat taught the sharpest lesson.** It seeks by construction, so it lives in
+  the stale-DSI window — but a stale **0 is BELOW B**, so "compare without the freshness
+  guard" was MISSED by the obvious arm. The damage is one level down: our own loop-back
+  seek flushes `nav_dsi`, `cur_rbn` drops to 0, an unguarded LOCKOUT clears (0 < B), and
+  the parse front coming back still past B fires again = the seek storm. Bench arm [B7]
+  replays exactly that.
+  ★ **Frame step needed TWO gates opened, not one.** `ofv_pickup` alone advances nothing:
+  while paused `STATE_REPEAT` loops back to `STATE_NEXT_IMG` forever, so `STATE_INIT` —
+  the only state that consumes a pickup — is unreachable. `ofv_paced` also had to bypass
+  `frame_due`, because `disp_sched` freezes the STC under pause and the next picture is
+  never "due". ⚠ And the arm must clear on the REAL consumption
+  (`(state == STATE_INIT) && pickup_go`, the term behind `output_frame_rd`), not on
+  `pickup_go` — which is a combinational "a frame could be taken", true for many cycles
+  mid-scan. A probe showed the arm living exactly ONE cycle, in state 9.
+  ⛔ **Eject and Volume are NOT here, deliberately.** Both need a core→Main request
+  channel that does not exist (the `CMD_AF` payload word has free bits 3-14); a named
+  button that does nothing is worse than a missing one. ★★ **And volume must NOT be a
+  fabric attenuator: MiSTer already HAS one** — `sys_top.v:293` `vol_att` → `audio_out`,
+  covering I2S, the analog DAC **and S/PDIF** together, driven by Main's `set_volume()`
+  from the OSD, `/dev/MiSTer_cmd` and **HDMI-CEC volume keys, which
+  `user_io.cpp:4283-4296` consumes before they ever reach the core**. A second attenuator
+  would desync from the OSD bar and could not touch passthrough at all.
+  ⚠⚠ **A CEC remote's Stop key currently does GoUp** (`hdmi_cec.cpp:301` maps
+  `CEC_USER_CONTROL_STOP` → `KEY_ESC`, which `kbd_map` binds to Return), and since CEC's
+  `EXIT` resolves to `KEY_MENU` (eaten by Main) that is a TV remote's only back button
+  today. Remapping it belongs with the Main branch, and must SPLIT the shared
+  `ROOT_MENU`/`EXIT` case so `ROOT_MENU` keeps `KEY_MENU` — otherwise a CEC-only user
+  loses every route to the MiSTer OSD.
+  ⚠ **Two build-gate lessons:** Quartus builds from `DVD.qsf`'s FILE LIST, so three new
+  modules were undefined entities — and `tools/lint_undriven.sh` PASSED throughout,
+  because it reads the same list and never saw them. `build_release.sh` also exited **0**
+  on that failed compile; read the log, not the status.
+  Buttons B14-B18 + keys `Q Z F5 L .` (free-checked against `kbd_map`, emu's numpad digit
+  block and the never-bind list); `kbd_joy` 17→22 bits and ⚠ the FF/REW mask widened with
+  it. Detail: `docs/dvd_nav.md` "Keyboard / CEC input", `site/content/playback/controls.md`.
 - ✅ **KEYBOARD / TV-REMOTE TRANSPORT (2026-09-03, issue #35, branch
   `feature/keyboard-controls`) — sim-proven + mutation-checked and ✅ HW-CONFIRMED
   2026-09-04** (build `DVD_kbdmap_20260904_0226.rbf`, SEED 5 first roll, clk_dec

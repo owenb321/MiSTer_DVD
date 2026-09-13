@@ -30,6 +30,11 @@ module transport_hud_tb;
     reg  [7:0]  cur_pgm = 0, nr_pgm = 0;
     reg         aud_evt = 0, sub_evt = 0, angle_evt = 0, chap_evt = 0;
     reg         css_warn = 0;
+    reg         stop_on = 0;
+    reg         aspct_evt = 0, aspct_analog = 0;
+    reg [1:0]   aspct_val = 0;
+    reg         ab_evt = 0;
+    reg [1:0]   ab_state = 0;
     reg         img_warn = 0;      // Phase-2: unplayable image
     reg         aud_warn = 0;      // Phase-2: unsupported audio format
     reg         vts_evt  = 0;      // Phase-2: title-VTS notice pulse
@@ -58,6 +63,9 @@ module transport_hud_tb;
         .cur_pgm(cur_pgm), .nr_pgm(nr_pgm),
         .aud_evt(aud_evt), .sub_evt(sub_evt), .angle_evt(angle_evt),
         .chap_evt(chap_evt), .css_warn(css_warn),
+        .stop_on(stop_on),
+        .aspct_evt(aspct_evt), .aspct_analog(aspct_analog), .aspct_val(aspct_val),
+        .ab_evt(ab_evt), .ab_state(ab_state),
         .img_warn(img_warn), .aud_warn(aud_warn),
         .vts_evt(vts_evt), .vts_no(vts_no),
         .seek_evt(seek_evt), .seek_fwd(seek_fwd),
@@ -192,7 +200,16 @@ module transport_hud_tb;
 
         // T7: timer arm + expiry (persist off first)
         @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0;
-        repeat (2100) @(posedge clk);      // drain the toggle's own timer arm
+        // T7a0 -- the Display off-press fix, and the RED arm for it. Turning
+        // persistence OFF must hide the line AT ONCE. Pre-fix, display_edge
+        // re-armed show_tmr on EVERY press, so an off-press left the status
+        // line up for the full SHOW_TICKS (~2.5 s) and the button read as
+        // "only turns on, never off" -- the reported defect. Note the drain
+        // below USED to be load-bearing here ("drain the toggle's own timer
+        // arm"): the old bench worked around the bug rather than catching it,
+        // which is why this arm had to be added rather than just fixed.
+        check_vis("T7a0 off hides", 1'b0);
+        repeat (2100) @(posedge clk);      // still hidden once the timer drains
         check_vis("T7a hidden (persist off)", 1'b0);
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         check_vis("T7b event shows", 1'b1);
@@ -399,6 +416,78 @@ module transport_hud_tb;
         cur_pgm = 8'd12; nr_pgm = 8'd23; @(posedge clk);
         check_line("T20 dpad = direction only", ">>    0:12:34/1:37:05 CH 12/23~~");
         scrub_held = 0; scrub_tier = 2'd0; @(posedge clk);
+
+        // ---- T22: STOP is a LEVEL, and names which stage it is in --------
+        // Stage 1 keeps the position ("STOP"); stage 2 has forgotten it, so the
+        // readout has to say the next PLAY restarts the disc -- otherwise the two
+        // states are indistinguishable on screen and the button feels broken.
+        $display("== T22: STOP indicator");
+        css_warn = 0; menu_active = 0;
+        repeat (2200) @(posedge clk);        // let any previous popup expire
+        stop_on = 1;
+        check_popup("T22a stop", "STOP~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+        // There is deliberately no second caption: a FULL stop shows the bare
+        // idle logo with no overlay, and emu gates stop_on off to get that. So
+        // the two stages are told apart by presence, not by wording.
+        stop_on = 0;
+        repeat (2200) @(posedge clk);
+        if (dut.pop_vis !== 1'b0) begin
+            errors = errors + 1;
+            $display("  FAIL T22b full stop must show NO popup");
+        end else $display("  ok  T22b full stop shows no popup");
+        stop_on = 1;
+        // It must PERSIST: a user popup expires after ~2.5 s, a stopped disc
+        // does not stop being stopped.
+        repeat (2200) @(posedge clk);
+        if (dut.pop_vis !== 1'b1) begin
+            errors = errors + 1;
+            $display("  FAIL T22c stop popup expired (must hold while stopped)");
+        end else $display("  ok  T22c stop indicator persists");
+        stop_on = 0;
+        repeat (2200) @(posedge clk);
+        if (dut.pop_vis !== 1'b0) begin
+            errors = errors + 1;
+            $display("  FAIL T22d stop popup stuck after resume");
+        end else $display("  ok  T22d stop indicator clears on resume");
+
+        // ---- T23: ASPECT popup names WHICH control moved -----------------
+        // The button drives two different settings depending on the live
+        // output, so a popup that said only "AUTO" would be ambiguous and the
+        // user could not find the setting again in the OSD.
+        $display("== T23: ASPECT popup");
+        stop_on = 0; repeat (2200) @(posedge clk);
+        aspct_analog = 0; aspct_val = 2'd2;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23a hdmi 16:9", "ASPECT 16:9~~~~~~~~~~~~~~~~~~~~~");
+        aspct_val = 2'd1;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23b hdmi 4:3", "ASPECT 4:3~~~~~~~~~~~~~~~~~~~~~~");
+        aspct_analog = 1; aspct_val = 2'd2;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23c letterbox", "ANALOG LETTERBOX~~~~~~~~~~~~~~~~");
+        aspct_val = 2'd3;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23d crop", "ANALOG CROP~~~~~~~~~~~~~~~~~~~~~");
+        aspct_val = 2'd0;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23e analog auto", "ANALOG AUTO~~~~~~~~~~~~~~~~~~~~~");
+        aspct_val = 2'd1;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23f analog fit", "ANALOG FIT~~~~~~~~~~~~~~~~~~~~~~");
+
+        // ---- T24: A-B repeat popup ---------------------------------------
+        // The half-armed state must be distinguishable: a user who pressed once
+        // and walked away needs to see the loop is not running yet.
+        $display("== T24: A-B repeat popup");
+        ab_state = 2'd1;
+        @(posedge clk); ab_evt = 1; @(posedge clk); ab_evt = 0;
+        check_popup("T24a A set", "A-B  A SET~~~~~~~~~~~~~~~~~~~~~~");
+        ab_state = 2'd2;
+        @(posedge clk); ab_evt = 1; @(posedge clk); ab_evt = 0;
+        check_popup("T24b armed", "A-B  ON~~~~~~~~~~~~~~~~~~~~~~~~~");
+        ab_state = 2'd0;
+        @(posedge clk); ab_evt = 1; @(posedge clk); ab_evt = 0;
+        check_popup("T24c cleared", "A-B  OFF~~~~~~~~~~~~~~~~~~~~~~~~");
 
         if (errors == 0) $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
         else             $display("TRANSPORT_HUD_TB: FAILED (%0d errors)", errors);

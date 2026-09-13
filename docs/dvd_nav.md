@@ -934,6 +934,24 @@ spare key and that remote's own Menu button is `F12` = the MiSTer OSD. `Esc` is 
 deliberately: CEC's real back button is unreachable, so without it a CEC user has no way up
 a menu level, and GoUp is a harmless no-op where the disc authors no parent.
 
+**DVD-remote additions (2026-09-13, B14..B18).** `Q 15` → Stop; `Z 1A` → Aspect;
+`F5 03` → Chapter Menu; `L 4B` → A-B Repeat (VLC's "loop"); `. 49` → Frame Step. All five
+were checked free against the three claimants that own this space — `kbd_map`'s existing
+table, emu's numpad digit block, and the never-bind list below. `kbd_map.joy` and emu's
+`kbd_joy` widened 17 → 22 bits for them, and ⚠ **the FF/REW mask widened with them**
+(`17'h0_6000` → `22'h00_6000`): that mask is what keeps bits 14:13 out of `joy_eff`, and a
+mask left at the old width would silently hand the design's only LEVEL consumers to a
+tap-repeating IR remote.
+
+⚠ **Eject and Volume are deliberately NOT in this table.** They need a core→Main request
+channel that does not exist yet (the `CMD_AF` payload word in `dvd/dvd_telem.sv` has free
+bits for it), and a named button that does nothing is worse than a missing one. They append
+as B19..B21 when that lands. Volume additionally cannot use `KEY_MUTE`/`KEY_VOLUMEUP`/
+`KEY_VOLUMEDOWN` at all — Main consumes those in `user_io.cpp:4283-4296` before they reach
+`ps2_key` — and MiSTer already has a framework volume (`sys_top.v` `vol_att` → `audio_out`)
+that attenuates I2S, the analog DAC **and** S/PDIF together, so the right shape is to ask
+Main to call `set_volume()` rather than to build a second attenuator in fabric.
+
 ⚠ **Never bind**, all verified against Main: `F12` (`07`) and `KEY_MENU` (OSD toggle),
 `KEY_PAUSE` (`E1`, no break code at all), `KEY_SYSRQ`, NumLock/ScrollLock (Main's
 `EMU_SWITCH_1/2`), Alt/Meta.

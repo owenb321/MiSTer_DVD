@@ -11,6 +11,7 @@ Base pinned in `build_main.sh`: `MAIN_MISTER_REF` (a MiSTer-devel/Main_MiSTer co
 - `support/dvd/dvd_css.cpp` / `dvd_css.h`   — CSS-decrypted sector reads (dlopen libdvdcss)
 - `support/dvd/dvd_detect.cpp` / `dvd_detect.h` — READ(10) DVD-Video probe
 - `support/dvd/dvd_phys.cpp` / `dvd_phys.h` — standalone auto-mount trigger
+- `support/dvd/dvd_remote.cpp` / `dvd_remote.h` — DVD-remote Eject + Volume buttons
 - `Scripts/install_dvdcss.sh`               — user-run libdvdcss installer
 
 ## Makefile — one edit
@@ -156,6 +157,9 @@ sink expects PCM, and a bitstream would arrive as full-scale noise.
 | 36 | `fpga_io.cpp` | `dvd_hdmi_audio_teardown()` in `app_restart()` — every core load ends here |
 | 37 | `fpga_io.cpp` | `dvd_hdmi_audio_teardown()` in `reboot()` — a warm reboot resets the HPS, not the ADV7513 |
 | 38 | `video.cpp` | clear `0x12` (the non-PCM flag) in `hdmi_config_init()` — self-heal after an unclean exit |
+| 39 | `user_io.cpp` | include `support/dvd/dvd_remote.h` |
+| 40 | `user_io.cpp` | `dvd_remote_tick()` — last of the DVD ticks (it may unmount) |
+| 41 | `hdmi_cec.cpp` | DVD-remote CEC mapping: Stop→`KEY_Q`, Exit→`KEY_B`, Eject/Display/Contents claimed |
 
 Four things here are easy to get subtly wrong:
 
@@ -186,6 +190,55 @@ HPS": the bit still reaches the core exactly as before, but Main sees the
 declaration and learns this build *has* the HDMI path. A core without it never
 declares `OX6`, so Main never reconfigures the chip for a core that cannot drive
 it.
+
+## Steps 39-41 — the DVD-remote buttons that only the HPS can service
+
+`Eject` (B19) and `Vol Up`/`Vol Down` (B20/B21) ask Main to do things the core
+cannot: Main owns the mount slot and the optical drive, and `sys_top.v`'s
+`vol_att` is the framework's ONE attenuator (it covers I2S, the analog DAC and
+S/PDIF together — which is why volume is **not** a second gain stage in fabric).
+
+They ride the existing **`CMD_AF` word (0x7B)**, whose layout is documented in
+`dvd/dvd_telem.sv`. Three things about that protocol are load-bearing:
+
+- ⚠ **Main POLLS, so the requests are not levels.** A level would be re-read as
+  a fresh request every poll and one press would eject repeatedly. Eject is a
+  **toggle** Main edge-detects; the volume requests are **wrapping counters**, so
+  Main applies the *difference* since its last poll — a burst between two polls
+  still yields the right number of steps.
+- ⚠ **Bit 12 is a format version**, for exactly the reason bit 15 is: a core
+  built before these fields existed answers with them clear, which is
+  indistinguishable from "no request". `dvd_remote.cpp` refuses to act without it,
+  and drops its baseline when it disappears so a newer core re-latches.
+- ⚠ **The first valid word acts on NOTHING.** Whatever the counters hold when a
+  core loads is history; acting on it would eject at boot.
+
+`dvd_phys_eject()` is the action, deliberately living in `dvd_phys.cpp` next to
+the slot-ownership state rather than in `dvd_remote.cpp`: `mounted` /
+`mounted_dev` / `reset_release_at` are that file's, and issue #48 is what happens
+when something else decides it owns slot 0. It runs the same teardown as a disc
+removal and additionally opens the tray — but only for a disc *this module*
+mounted.
+
+⛔ **`set_volume()` renders an on-screen bar via `Info()`**, so both actions are
+gated on `dvd_launch_ui_busy()`. UI work from a poll tick while an MGL is still
+walking its state machine is the issue #48 freeze.
+
+★ **Step 41 must SPLIT the shared `ROOT_MENU`/`EXIT` case, not remap the pair.**
+CEC presses arrive as keyboard events, and stock Main maps `STOP` → `KEY_ESC`,
+which `kbd_map` binds to **Return** — so a TV remote's Stop key does GoUp, and
+since `EXIT` resolves to `KEY_MENU` (which Main eats as the OSD toggle) that path
+is currently a TV remote's *only* back button. After the split: `ROOT_MENU` keeps
+`KEY_MENU` so the MiSTer OSD stays reachable, `EXIT` becomes a real back button,
+and `STOP` finally means Stop. `EJECT` (0x4A), `DISPLAY_INFO` (0x35) and
+`CONTENTS_MENU` (0x0B) hit `default: return` in stock and are simply free.
+
+⚠ This is DVD-scoped — other cores run stock Main via `main=`, so nothing else
+sees these mappings. And it **cannot be hardware-gated on the maintainer's rig**,
+whose CEC engine never initialises (`CEC: no clock detected`).
+
+Host tests: `main/tests/dvd_remote_test.cpp`, 12 arms, **7 RED mutations each
+caught by its own arm** (`run_tests.sh --red`).
 
 ## MiSTer.ini (end user)
 

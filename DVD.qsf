@@ -127,6 +127,12 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_pci.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_dsi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/scrub_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dpad_seek.sv
+# DVD-remote buttons (2026-09-13): Stop + screensaver, the Aspect button's
+# OSD-override/settle, and A-B repeat. Extracted from emu.sv rather than written
+# inline for the usual reason -- emu.sv has no bench.
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/stop_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/aspect_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/ab_repeat.sv
 # DVD-FORK (issue #35): keyboard / TV-remote transport. See docs/dvd_nav.md
 # "Keyboard / CEC input".
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/kbd_map.sv
@@ -1148,4 +1154,24 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # logic differs by a handful of comparators. That is netlist variance at this
 # density -- do NOT read any of it as a cost or a benefit of the change that
 # happened to be in flight, in either direction.
+# 2026-09-13 (feature/remote-buttons, dev-remotebtns -- DVD-REMOTE BUTTONS: Stop +
+# screensaver, Aspect, Chapter Menu, A-B repeat, Frame step, Display toggle fix):
+# SEED 7 held FIRST roll -- clk_dec 94.31 @100C / 89.98 @-40C (gate 86.0, PASS both
+# corners) at 88% ALM (36,775 needed), registers 50,727, RAM 63%, DSP 94/112.
+# Build DVD_remotebtns_20260913_2037.rbf (4320 KB) is the FINAL one of this
+# branch: SEED 7 held first roll on every rebuild across five HW rounds
+# (93.41/88.83, 96.06/91.58, 93.08/89.2, 92.49/88.38 -- all PASS), so the
+# Eject/Volume/CEC work and three behavioural fixes cost no seed churn at all.
+# The first build of the branch was DVD_remotebtns_20260913_0445.rbf (4318 KB).
+# Seven user-visible features for ~+1% ALM over the post-reclaim baseline: the three
+# new modules are small control-path FSMs (stop_ctl/aspect_ctl/ab_repeat) and the
+# display-path cost is one extra mux term at the subpic_blend input plus two popup
+# renderer arms -- i.e. it lands in the CHEAP corner, not the congested one, exactly
+# as docs/roadmap.md's UX strategy predicts for gamepad-button work.
+# NOTE the CONF_STR changed twice over (the J1 list gained five names AND the new
+# Screensaver row), so this netlist re-rolled the seed by construction -- and still
+# landed first try.
+# NOTE three new modules had to be ADDED TO THIS FILE's list before they existed to
+# Quartus at all (three 12006 undefined-entity errors); tools/lint_undriven.sh reads
+# the same list and so passed for hours without ever seeing them.
 set_global_assignment -name SEED 7

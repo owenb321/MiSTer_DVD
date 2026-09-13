@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 #include <limits.h>          // INT_MAX — CDSL_CURRENT expands to it via <linux/cdrom.h>
 #include <sys/ioctl.h>
 #include <linux/cdrom.h>
@@ -42,6 +43,24 @@ static time_t reset_release_at = 0; // >0 while an eject reset pulse is being he
 static int    foreign = 0;
 static int    prev_ready = 0;      // the drive reported a disc ready on the last scan
 static int    probed_not_video = 0; // this disc was probed and is not DVD-Video
+
+// ---------------------------------------------------------------------------
+// The one teardown path: unmount, drop the CSS session, reset the core to idle
+// ---------------------------------------------------------------------------
+// Factored out of the disc-removal branch so the Eject BUTTON (B19, arriving
+// via dvd_remote.cpp) runs byte-identical steps. Keeping it here rather than
+// duplicating it in the caller is deliberate: `mounted` / `mounted_dev` /
+// `reset_release_at` are this file's slot-ownership state, and issue #48 was
+// exactly what happens when something else decides it owns slot 0.
+static void teardown_to_idle(time_t now)
+{
+	user_io_file_mount("", 0);
+	dvd_css_close();
+	mounted_dev[0] = 0;
+	user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
+	reset_release_at = now + 1;     // release after ~1 s (see the tick top)
+	mounted = 0;
+}
 
 // ---------------------------------------------------------------------------
 // Scan backoff — the drive probe runs on the thread that feeds the decoder
@@ -216,12 +235,7 @@ void dvd_phys_tick(void)
 		}
 
 		phys_log("DVD_PHYS: disc removed while playing it -- unmount + reset to idle");
-		user_io_file_mount("", 0);
-		dvd_css_close();
-		mounted_dev[0] = 0;
-		user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
-		reset_release_at = now + 1;      // release after ~1 s (see the tick top)
-		mounted = 0;
+		teardown_to_idle(now);
 		return;
 	}
 
@@ -284,4 +298,71 @@ void dvd_phys_tick(void)
 const char *dvd_phys_device(void)
 {
 	return mounted_dev[0] ? mounted_dev : 0;
+}
+
+// ---------------------------------------------------------------------------
+// dvd_phys_eject() -- the Eject button's action (see dvd_phys.h)
+// ---------------------------------------------------------------------------
+int dvd_phys_eject(void)
+{
+	time_t now = time(NULL);
+	int  had_disc = mounted;
+	char dev[sizeof(mounted_dev)];
+
+	// Remember which /dev/srN it was: the teardown clears mounted_dev.
+	dev[0] = 0;
+	if (mounted && mounted_dev[0]) strncpy(dev, mounted_dev, sizeof(dev) - 1);
+	dev[sizeof(dev) - 1] = 0;
+
+	// ⚠⚠ TEARDOWN FIRST, THEN THE TRAY. The first build did the opposite and
+	// the tray never opened: at that point the mounted file and the libdvdcss
+	// session still hold /dev/srN OPEN, so the kernel refuses to eject a busy
+	// device. user_io_file_mount("") + dvd_css_close() are what release it.
+	phys_log("DVD_PHYS: eject button -- unmount + reset to idle%s",
+	         had_disc ? " (optical disc)" : " (image)");
+	teardown_to_idle(now);
+
+	// ⚠⚠ AND STOP THE AUTO-MOUNT TAKING THE SAME DISC STRAIGHT BACK. The scan
+	// runs at ~1 Hz and the disc is still sitting in the drive for at least as
+	// long as the tray takes to open -- and forever if there is no tray motor,
+	// or if the eject is refused. The field report was exactly this: "eject
+	// does not eject the disc, instead it reloads it... we see the key cracking
+	// message again and the disc starts over".
+	//
+	// `foreign` is the existing mechanism for "do not auto-mount", and its
+	// clear condition is already the right one: a disc INSERTION EDGE. So if
+	// the tray opens and a disc is put back, readiness goes 0 -> 1, the edge
+	// clears this, and auto-mount resumes. If the tray never opens, readiness
+	// never drops and the disc stays un-mounted until the user does something
+	// deliberate. No new state, and no timer to tune.
+	foreign = 1;
+	probed_not_video = 0;
+	// (prev_ready is deliberately NOT forced: the last scan already saw the
+	// disc ready, so the next one cannot read an insertion edge anyway, and
+	// forcing it would only delay a genuine re-insertion.)
+
+	// Now the tray, with the device released. Advisory: a failure just means it
+	// stays shut, which is the same outcome as a machine with no drive -- but
+	// log the errno, because "the tray did not open" has several causes and
+	// only this line tells them apart.
+	if (dev[0])
+	{
+		int fd = open(dev, O_RDONLY | O_NONBLOCK);
+		if (fd < 0)
+		{
+			phys_log("DVD_PHYS: eject: cannot open %s (errno %d)", dev, errno);
+		}
+		else
+		{
+			ioctl(fd, CDROM_LOCKDOOR, 0);            // a playing disc may be locked
+			if (ioctl(fd, CDROMEJECT, 0) < 0)
+				phys_log("DVD_PHYS: eject: tray would not open on %s (errno %d)",
+				         dev, errno);
+			else
+				phys_log("DVD_PHYS: eject: tray opened on %s", dev);
+			close(fd);
+		}
+	}
+
+	return had_disc;
 }

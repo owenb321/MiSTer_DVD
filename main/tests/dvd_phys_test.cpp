@@ -35,6 +35,12 @@
 #include <time.h>
 #include <sys/time.h>
 #include <unistd.h>
+// ⚠ These must come in BEFORE the open()/ioctl() macros below, or the macros
+// mangle the system declarations (fcntl.h's open() takes a variadic third
+// argument, so a two-argument macro is a hard error there).
+#include <fcntl.h>
+#include <sys/ioctl.h>
+#include <linux/cdrom.h>
 
 #include "dvd_phys.h"      // staged on the include path by run_tests.sh
 
@@ -49,6 +55,15 @@ static char last_mount[256]   = {0};
 static int  scan_calls        = 0;   // how often the drive was probed for readiness
 static unsigned fake_probe_ms = 0;   // how long that probe takes (a stalled drive)
 static unsigned fake_ms       = 0;   // the millisecond clock the module measures with
+
+// The eject path opens the device by NAME and issues CDROM_LOCKDOOR/CDROMEJECT.
+// Faked so the ORDER can be observed: the tray must be opened only AFTER the
+// unmount, because the mounted file and the CSS session hold /dev/srN open and
+// the kernel refuses to eject a busy device.
+static int eject_ioctls   = 0;
+static int mounts_at_eject = -1;   // mount_calls at the moment CDROMEJECT ran
+#define open(path, flags) test_open(path, flags)
+#define ioctl(fd, req, arg) test_ioctl(fd, req, arg)
 
 #define DVD_PHYS_TEST 1
 static int open_ready_drive(char *out, int out_sz)
@@ -88,6 +103,19 @@ static time_t fake_now = 1000;
 #define time(p) (fake_now)
 #define gettimeofday(tv, tz) (((tv)->tv_sec = fake_ms / 1000), \
                               ((tv)->tv_usec = (fake_ms % 1000) * 1000), 0)
+
+static int test_open(const char *path, int flags)
+{
+    (void)flags;
+    // only the eject path opens by name here
+    return (path && path[0] == '/') ? 98 : -1;
+}
+static int test_ioctl(int fd, unsigned long req, unsigned long arg)
+{
+    (void)arg;
+    if (fd == 98 && req == CDROMEJECT) { eject_ioctls++; mounts_at_eject = mount_calls; }
+    return 0;
+}
 
 #include "dvd_phys.cpp"
 
@@ -199,6 +227,48 @@ int main(void)
     // to notice a disc, rare enough to be invisible.
     if (scan_calls < 4) { printf("  FAIL [9] %d probes in 20 s, want >= 4\n", scan_calls); errs++; }
     else printf("  ok   [9] probes in 20 s of a healthy drive       %d\n", scan_calls);
+
+    // ---------------------------------------------------------------- [10]
+    // The EJECT BUTTON. Two field reports in one: "eject does not eject the
+    // disc, instead it reloads it... we see the key cracking message again and
+    // the disc starts over".
+    printf("=== [10] the eject button: unmount BEFORE the tray, and no re-mount ===\n");
+    // Get back to a clean "we own a mounted optical disc" state.
+    fake_disc_ready = 0; run_for(3);
+    fake_disc_is_dvd = 1; fake_disc_ready = 1; run_for(NOTICE_WINDOW_S);
+    reset_counters(); eject_ioctls = 0; mounts_at_eject = -1;
+    check("[10] we own a mounted disc to start",   dvd_phys_device() != 0, 1);
+
+    int had = dvd_phys_eject();
+    check("[10] reports it ejected an optical disc", had, 1);
+    check("[10] unmounted",                         mount_calls, 1);
+    check("[10] reset the core to idle",            reset_asserts, 1);
+    check("[10] asked the tray to open",            eject_ioctls, 1);
+    // ⚠ THE ORDERING ARM. The tray must be asked to open only after the
+    // unmount has released /dev/srN -- the first build ejected first and the
+    // kernel refused it every time, because the CSS session still held the
+    // device.
+    check("[10] tray opened AFTER the unmount",     mounts_at_eject >= 1, 1);
+
+    // ⚠ THE RE-MOUNT ARM, which is the reported symptom. The disc is STILL in
+    // the drive (a tray that will not open, or simply the seconds before it
+    // does), so the 1 Hz scan must not pick it straight back up -- that is the
+    // "it reloads it, and cracks the keys again" report.
+    reset_counters();
+    run_for(NOTICE_WINDOW_S * 2);
+    check("[10] does NOT re-mount the disc still in the tray", mount_calls, 0);
+    check("[10] ...and does not re-crack it either",           probe_calls, 0);
+
+    // ...but putting a disc IN afterwards still works: readiness 0 -> 1 is the
+    // insertion edge, which is what clears the block.
+    // ⚠ The empty-drive gap must be at least the scan FLOOR, which is 5 s while
+    // `foreign` is set (dvd_phys.cpp: `period = foreign ? 5 : scan_period`).
+    // A 3 s gap here left no scan to observe ready=0, so there was no edge and
+    // this arm failed against correct code.
+    fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+    reset_counters();
+    fake_disc_ready = 1; run_for(NOTICE_WINDOW_S);
+    check("[10] a fresh insertion still mounts",     mount_calls, 1);
 
     printf("\n=== dvd_phys tests: %d error(s) ===\n", errs);
     if (errs) { printf("FAILED\n"); return 1; }

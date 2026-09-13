@@ -81,6 +81,7 @@ module dvd_vm_tb;
     reg [15:0] next_pgcn = 0, prev_pgcn = 0, goup_pgcn = 0;
 
     reg        key_menu = 0, key_resume = 0, key_title = 0, key_return = 0;
+    reg        key_cmenu = 0;
     reg [63:0] btn_cmd = 0;
     reg        btn_cmd_valid = 0;
     reg [5:0]  btn_sel = 6'd1;
@@ -129,7 +130,7 @@ module dvd_vm_tb;
         .cur_vts(cur_vts), .cur_pgcn(cur_pgcn), .cur_cell(cur_cell),
         .cell_count(cell_count),
         .next_pgcn(next_pgcn), .prev_pgcn(prev_pgcn), .goup_pgcn(goup_pgcn),
-        .key_menu(key_menu), .key_resume(key_resume), .key_title(key_title), .key_return(key_return),
+        .key_menu(key_menu), .key_resume(key_resume), .key_title(key_title), .key_return(key_return), .key_cmenu(key_cmenu),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid),
         .btn_sel(btn_sel), .btns_armed(btns_armed),
         .btn_force(btn_force), .btn_force_val(btn_force_val),
@@ -1121,6 +1122,32 @@ module dvd_vm_tb;
             fail("S18b: VM not back in V_IDLE after the gated Return");
         goup_pgcn = 8'd0;
         $display("S18 Return key (GoUp jump / no-op without a parent) PASS");
+
+        // ---------------- [S24] CHAPTER MENU key (B16) -----------------------
+        // The disc's scene-selection page: VTSM entry 7 (PTT menu). The point
+        // of the arm is the DOMAIN and the ENTRY -- the chapter menu belongs to
+        // the title set, so aiming it at VMGM (where the Title key goes) would
+        // land on the wrong menu on every disc that authors both.
+        // nav_ready stays 0 (as in S17/S18): its RISING edge is the boot event,
+        // and letting the VM run the boot chain here would consume the key.
+        nav_ready = 0; vm_restart; wait_idle;
+        dut.vm_dom = 2'd3;                 // DOM_TT (=3; 0 is DOM_FP): playing a title
+        dut.vm_vts = 8'd5;
+        menu_active = 0;
+        cur_vts = 8'd5; cur_pgcn = 8'd9; cur_cell = 8'd3; cell_count = 8'd2;
+        clear_actions;
+        @(negedge clk); key_cmenu = 1;
+        @(negedge clk); key_cmenu = 0;
+        wait_settled;
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jentry != 4'd7)
+            fail("S24a: Chapter Menu must jump to VTSM entry 7 (PTT menu)");
+        // and it must save RSM from a playing title, like the other menu keys,
+        // so Menu/Select can toggle back to the movie afterwards.
+        if (dut.rsm_vts !== 8'd5 || dut.rsm_pgcn !== 16'd9 || dut.rsm_cell !== 8'd3)
+            fail("S24b: Chapter Menu from a title must save RSM");
+        if (dut.came_via_menukey !== 1'b1)
+            fail("S24b: Chapter Menu must set came_via_menukey");
+        $display("S24 Chapter Menu key (VTSM entry 7 + RSM discipline) PASS");
 
         // ---------------- [S19] Hobbit PGCN3 POST trampoline (real block) ----
         // THE_HOBBIT_UNEXPECTED_JOURNEY boots FP -> warnings -> VTSM pre

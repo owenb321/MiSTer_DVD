@@ -128,7 +128,7 @@ module iso_reader_cluedo_menu_tb;
         .cur_vts(cur_vts), .cur_pgcn(cur_pgcn_rd), .cur_cell(cur_cell),
         .cell_count(cell_count_w),
         .next_pgcn(rd_next), .prev_pgcn(rd_prev), .goup_pgcn(rd_goup),
-        .key_menu(key_menu), .key_resume(key_resume), .key_title(key_title), .key_return(key_return),
+        .key_menu(key_menu), .key_resume(key_resume), .key_title(key_title), .key_return(key_return), .key_cmenu(1'b0),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid), .btn_sel(6'd1), .btns_armed(1'b0),
         .btn_force(), .btn_force_val(),
         .jump_pulse(vm_jump_pulse), .jump_domain(vm_jump_domain),

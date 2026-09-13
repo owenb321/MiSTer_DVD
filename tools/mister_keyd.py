@@ -55,13 +55,23 @@ LOG = os.environ.get('MISTER_KEYD_LOG', '/tmp/mister_keyd.log')
 SETTLE = float(os.environ.get('MISTER_KEYD_SETTLE', '1.0'))
 DEV_NAME = b'MiSTer HIL keyboard'      # must NOT be "MiSTer virtual input"
 
-# Every Linux keycode dvd/kbd_map.sv can act on, plus F12 (Main's OSD toggle).
-KEYCODES = sorted({
-    1, 14, 15, 19, 20, 25, 28, 30, 31, 32, 33, 34, 45, 48, 49, 50,
-    57, 59, 60, 61, 62, 88, 96, 103, 104, 105, 106, 108, 109,
-    2, 3, 4, 5, 6, 7, 8, 9, 10, 11,                    # digits: menu buttons
-    71, 72, 73, 75, 76, 77, 79, 80, 81, 82,            # keypad digits
-})
+# ⚠⚠ DECLARE EVERY ORDINARY KEYCODE, NOT A CURATED LIST.
+#
+# A uinput device can only emit keys it declared with UI_SET_KEYBIT -- the
+# kernel drops anything else SILENTLY, with no error at either end. This list
+# used to be a hand-maintained set of "every Linux keycode dvd/kbd_map.sv can
+# act on", which made it the one transcribed table in a harness whose whole
+# design is derived-from-the-RTL (`key_names()` reads kbd_map.sv itself). The
+# two drifted the first time the RTL gained keys: the five DVD-remote buttons
+# (B14..B18 = Q/Z/F5/L/DOT = 16/44/63/38/52) were injected, accepted by
+# `mister.py key` because their NAMES derived fine, and then discarded by the
+# kernel -- which on the board is indistinguishable from "the core ignores
+# those buttons". It cost a HW round chasing a core defect that did not exist.
+#
+# Declaring a key is not emitting it, so a generous range costs nothing and
+# cannot go stale. 1..248 covers the whole ordinary keyboard page; only EV_KEY
+# is set, so Main still classifies this as a plain keyboard.
+KEYCODES = list(range(1, 249))
 
 
 def log(msg):

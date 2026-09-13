@@ -75,6 +75,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              video_live,                                           // DVD-FORK (av_sync STC reference): sticky "first frame displayed"
              pickup_hold,                                          // DVD-FORK (STD mux-lead hold): defer the FIRST display pickup
              pause,                                                // DVD-FORK (gamepad transport): freeze the displayed frame while paused
+             step_req,                                             // DVD-FORK (frame step B18): advance exactly one picture while paused
              freeze_wd,                                            // DVD-FORK (disc-menu still): watchdog-suppress ONLY (no governor freeze)
              vbuf_flush,                                           // DVD-FORK (gamepad transport): discard the buffered bitstream on a seek
              soft_flush,                                           // DVD-FORK (mount soft reset): watchdog-equivalent decode-pipeline reset on a file mount
@@ -211,6 +212,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * accrue during the freeze. av_sync freezes the STC in parallel, so audio dispatch
    * halts too (the presentation clock is the master). */
   input            pause;
+  input            step_req;   // DVD-FORK (frame step B18): one-cycle, clk_dec
   /* DVD-FORK (disc-menu still, Phase 2 - emu clk_dec-synced level): while high,
    * suppress the decoder watchdog EXACTLY like pause does (repeat_frame=31), but
    * WITHOUT freezing the display governor. A menu still is an END-OF-STREAM hold:
@@ -1599,6 +1601,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .video_live(video_live),                                 // DVD-FORK (av_sync STC reference): to emu -> av_sync
     .pickup_hold(pickup_hold),                               // DVD-FORK (STD mux-lead hold): from emu (2-FF, clk_sys origin)
     .pause(pause),                                           // DVD-FORK (gamepad transport): freeze frame while paused
+    .step_req(step_req),                                     // DVD-FORK (frame step B18)
                              // DVD-FORK (film-aware drop reclaim): to frame_drop_ctl
     .pickup_tick(gov_pickup_tick),                           // DVD-FORK (PTS scheduling): to disp_sched
     .sched_due(sched_due),                                   // DVD-FORK (PTS scheduling): from disp_sched

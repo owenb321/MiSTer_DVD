@@ -593,7 +593,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-scrubtiers"
+`define CORE_VERSION "dev-remotebtns"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -722,6 +722,18 @@ parameter CONF_STR = {
     // The governor's SHOW_N=2 gives 25 fps from a 50 Hz display. See
     // docs/frame_rate_governor.md / docs/av_sync.md / docs/interlaced_auto.md.
     "O[17:16],Video Standard,Auto,NTSC,PAL;",
+    // Screensaver: after this long PAUSED or STOPPED, the bouncing idle logo
+    // takes over and any button/key dismisses it (burn-in protection -- this
+    // core drives real CRTs). dvd/stop_ctl.sv owns the timer; the verdict is a
+    // DISPLAY-layer override only (it never touches media_seen, which would
+    // flip VIDEO_ARX/ARY and re-init the scaler mid-film).
+    // ⚠ VALUE ORDER IS LOAD-BEARING: status[] powers up at zero, so index 0 is
+    // the DEFAULT. "5min" sits first deliberately -- a natural-reading
+    // Off,2min,5min,10min list would ship the feature disabled and protect
+    // nobody. Re-ordering these later REMAPS saved values and forces a "v,N"
+    // bump (that is exactly why v3 exists -- see the A/V Offset note below).
+    // Bits 47/48 were never allocated, so adding this row needs no bump.
+    "O[48:47],Screensaver,5min,Off,2min,10min;",
     // (DVD-FORK dual raster: the bogus "O[10],Direct Video,Off,On;" entry that used
     // to sit here is DELETED — it collided with the O[10:9] enum (setting it
     // silently forced native fields), and the real direct_video signal comes from
@@ -883,8 +895,8 @@ parameter CONF_STR = {
               //     saved value, so the version bumps and all settings reset once.
               // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
-    // disc-menu nav (Phase 2). The J1 list names buttons B1..B13 for the MiSTer
-    // "Define buttons" menu (bits 4..16 of joystick_0; D-pad = bits 3:0). The
+    // disc-menu nav (Phase 2). The J1 list names buttons B1..B21 for the MiSTer
+    // "Define buttons" menu (bits 4..24 of joystick_0; D-pad = bits 3:0). The
     // HOLD-to-seek time scrub (accelerating 10->30->60->120 s via
     // dvd/scrub_ctrl.sv) rides its OWN buttons B10 "Fast Fwd" / B11 "Rewind"
     // while a TITLE plays, so the D-pad is ALWAYS free for directional
@@ -894,7 +906,7 @@ parameter CONF_STR = {
     // string, capped at 28 names), so the order is user-visible -- and MiSTer
     // will NOT bind Enter or Esc to any of them (issue #35). dvd/kbd_map.sv
     // gives every one of them a built-in key that bypasses that mapper.
-    "J1,Pause,Prev Chapter,Next Chapter,Select,Menu,Angle,Audio,Subtitle,Display,Fast Fwd,Rewind,Title,Return;",
+    "J1,Pause,Prev Chapter,Next Chapter,Select,Menu,Angle,Audio,Subtitle,Display,Fast Fwd,Rewind,Title,Return,Stop,Aspect,Chapter Menu,A-B Repeat,Frame Step,Eject,Vol Up,Vol Down;",
     "V,",`CORE_VERSION," ",`BUILD_DATE,";"
 };
 
@@ -1035,7 +1047,10 @@ dvd_telem dvd_telem_inst (
     // into PCM mode for an LPCM/MP2 track in Passthru.
     .af_passthru    (pass_mode),
     .af_pcm_session (rt_pcm_session),
-    .af_bs_session  (rt_bs_session)
+    .af_bs_session  (rt_bs_session),
+    .rq_eject_tgl   (rq_eject_tgl),
+    .rq_volup_seq   (rq_volup_seq),
+    .rq_voldn_seq   (rq_voldn_seq)
 );
 
 
@@ -1266,6 +1281,30 @@ wire        lin_seek_ok_w;   // from dvd_iso_reader (linear seek available)
 wire [31:0] lin_blk_w;       // from dvd_iso_reader (linear playhead block)
 wire       seek_ack;         // from dvd_iso_reader (seek accepted this cycle)
 
+// DVD-remote Stop / screensaver (dvd/stop_ctl.sv, instanced further down).
+// Declared HERE because pause_q's block reads stopped_w well before the
+// instance: emu.sv has no `default_nettype none`, so a forward reference would
+// otherwise become a silent 1-bit implicit net and the later explicit
+// declaration a redeclaration.
+wire       stopped_w;        // Stop is asserted (hold + blank the picture)
+wire       stop_restart;     // pulse: stage-2 PLAY -> restart reader + VM at FP
+wire       saver_on_w;       // screensaver owns the screen
+// core -> Main requests (B19..B21). Declared here because the dvd_telem
+// instance reads them ~500 lines before the block that drives them, and
+// emu.sv has no `default_nettype none`.
+reg        rq_eject_tgl;     // flips once per Eject press
+reg  [3:0] rq_volup_seq;     // +1 per Vol Up press (wraps)
+reg  [3:0] rq_voldn_seq;     // +1 per Vol Down press (wraps)
+// Aspect button (B15) effective values -- declared here because the
+// subpicture display-mode wire reads aa_osd_sel ~2200 lines before the
+// aspect_ctl instance, and emu.sv has no `default_nettype none`.
+wire [1:0] ar_osd_sel;       // effective Aspect Ratio   (button override of status[20:19])
+wire [1:0] aa_osd_sel;       // effective Analog Aspect  (button override of status[4:3])
+wire       aspct_evt_w;      // pulse: the aspect target moved (HUD)
+wire       aspct_evt_analog_w;
+wire [1:0] aspct_evt_val_w;
+wire       stop_kept_w;      // stage 1 (position kept) vs stage 2 (forgotten)
+
 // Disc-menu proto-nav read-backs / request lines (Phase 2)
 wire       jump_ack;         // from dvd_iso_reader (jump executing this cycle)
 wire       keep_vbuf;        // level (valid at seek_ack/jump_ack): menu->menu
@@ -1280,6 +1319,12 @@ wire [15:0] cur_pgcn_rd;     // PGCN of the loaded PGC (16-bit: 15-bit DVD field
 
 reg [31:0] joy_prev;
 reg        pause_q;
+// DVD-FORK (frame step B18): clk_sys toggle, edge-detected in clk_dec. Declared
+// here rather than at the CDC below because it is WRITTEN in the transport block
+// a couple of thousand lines earlier, and emu.sv has no `default_nettype none`.
+// Initialised so the clk_dec shift register agrees at power-up and cannot emit a
+// phantom step on the first frames.
+reg        step_tgl = 1'b0;
 reg        seek_pulse;
 reg  [7:0] seek_cell;
 // Phase 8 transport: chapter skip is resolved IN THE READER (its program_map
@@ -1428,7 +1473,7 @@ wire [15:0] vm_dbg_deadend;  // {deadend_vts, deadend_pgcn} = the PGC that dead-
 wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HUD popup)
 wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
 wire [7:0]  rdr_play_vtsn, rdr_target_vtsn;
-reg         key_menu_p, key_resume_p, key_title_p, key_return_p;
+reg         key_menu_p, key_resume_p, key_title_p, key_return_p, key_cmenu_p;
 
 wire menus_on  = ~status[1];                       // O[1] Disc Menus (index 0 = On, default)
 wire hud_dbg   = status[2];                         // O[2]: HUD shows reader PGCN/VTS (nav diagnostic)
@@ -1459,7 +1504,7 @@ wire sp_route_en;                                  // (assigned at the SPU block
 // release freezes the picture. They go to dvd/dpad_seek.sv instead (+/-10 s per
 // press, coalescing into ONE seek), wired at the dpad_seek instance below. The
 // gamepad's hold-to-scrub is untouched. Full reasoning: dvd/kbd_map.sv header.
-wire [16:0] kbd_joy;
+wire [24:0] kbd_joy;
 
 kbd_map kbd_map_inst (
     .clk     (clk_sys),
@@ -1468,7 +1513,7 @@ kbd_map kbd_map_inst (
     .joy     (kbd_joy)
 );
 
-wire [31:0] joy_eff = joystick_0 | {15'd0, (kbd_joy & ~17'h0_6000)};
+wire [31:0] joy_eff = joystick_0 | {7'd0, (kbd_joy & ~25'h000_6000)};
 
 wire joy_pause = joy_eff[4];                       // B1 "Pause"
 wire joy_next  = joy_eff[6];                       // B3 "Next Chapter"
@@ -1492,6 +1537,19 @@ wire joy_ff    = joy_eff[13];                      // B10 "Fast Fwd" (held scrub
 wire joy_rew   = joy_eff[14];                      // B11 "Rewind"   (held scrub bwd)
 wire joy_title = joy_eff[15];                      // B12 "Title"    (VMGM Top Menu)
 wire joy_ret   = joy_eff[16];                      // B13 "Return"   (GoUp)
+// DVD-remote additions. All PRESS edges (never levels): kbd_map emits one-cycle
+// pulses and a tap-repeating IR remote sends ~9 discrete taps a second, so a
+// level here would be the scrub_ctrl failure mode in a new hat.
+wire joy_stop  = joy_eff[17];                      // B14 "Stop"
+wire joy_aspct = joy_eff[18];                      // B15 "Aspect"
+wire joy_cmenu = joy_eff[19];                      // B16 "Chapter Menu"
+wire joy_ab    = joy_eff[20];                      // B17 "A-B Repeat"
+wire joy_step  = joy_eff[21];                      // B18 "Frame Step"
+// B19..B21 ask MAIN to act -- the HPS owns the mount slot, the optical drive
+// and sys_top's vol_att. They reach it over the CMD_AF telemetry word.
+wire joy_eject = joy_eff[22];                      // B19 "Eject"
+wire joy_volup = joy_eff[23];                      // B20 "Vol Up"
+wire joy_voldn = joy_eff[24];                      // B21 "Vol Down"
 wire pause_edge = joy_pause & ~joy_prev[4];
 // Phase 8: B2/B3 = CHAPTER prev/next (program_map); B10/B11 (Fast Fwd/Rewind) =
 // HOLD-to-seek TIME SCRUB (dvd/scrub_ctrl.sv, accelerating 10->30->60->120 s the
@@ -1525,6 +1583,41 @@ wire ff_edge    = joy_ff  & ~joy_prev[13];         // Fast Fwd press (scrub star
 wire rew_edge   = joy_rew & ~joy_prev[14];         // Rewind press  (scrub start)
 wire title_edge = joy_title & ~joy_prev[15];       // Title press   (Top Menu)
 wire ret_edge   = joy_ret   & ~joy_prev[16];       // Return press  (GoUp)
+wire stop_edge  = joy_stop  & ~joy_prev[17];       // Stop press    (two-stage)
+wire aspct_edge = joy_aspct & ~joy_prev[18];       // Aspect press  (cycle)
+wire cmenu_edge = joy_cmenu & ~joy_prev[19];       // Chapter Menu press
+wire ab_edge    = joy_ab    & ~joy_prev[20];       // A-B Repeat press
+wire step_edge  = joy_step  & ~joy_prev[21];       // Frame Step press
+wire eject_edge = joy_eject & ~joy_prev[22];       // Eject press   -> Main
+wire volup_edge = joy_volup & ~joy_prev[23];       // Vol Up press  -> Main
+wire voldn_edge = joy_voldn & ~joy_prev[24];       // Vol Down press-> Main
+
+// ---------------------------------------------------------------------------
+// core -> Main REQUESTS (Eject, Volume) on the CMD_AF telemetry word
+// ---------------------------------------------------------------------------
+// These three buttons ask the HPS to do something the core cannot: Main owns
+// the mount slot, the optical drive, and sys_top's vol_att (one attenuator for
+// I2S, the analog DAC and S/PDIF together -- which is why volume is NOT a
+// second gain stage in fabric; see docs/dvd_nav.md).
+//
+// ⚠ Main POLLS this word, so a level would be re-read as a fresh request every
+// poll. Eject is a toggle Main edge-detects; the volume requests are wrapping
+// counters so Main applies the DIFFERENCE since its last poll -- a burst of
+// presses between polls still yields the right number of steps.
+// ⚠ reset_n, not pipe_rst_n: a request must survive the flush its own action
+// causes. Main compares against the value it last saw, and its own state is
+// re-initialised when the core reloads, so a reset here is not a lost press.
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        rq_eject_tgl <= 1'b0;
+        rq_volup_seq <= 4'd0;
+        rq_voldn_seq <= 4'd0;
+    end else begin
+        if (eject_edge && media_seen) rq_eject_tgl <= ~rq_eject_tgl;
+        if (volup_edge)               rq_volup_seq <= rq_volup_seq + 4'd1;
+        if (voldn_edge)               rq_voldn_seq <= rq_voldn_seq + 4'd1;
+    end
+end
 // D-pad edges (bits 3:0 = up/down/left/right): BUTTON NAV in a menu / in-title
 // HLI with armed buttons (Phase 3). The HOLD-to-seek scrub is on the dedicated
 // Fast Fwd/Rewind buttons, so the D-pad never fights game direction input.
@@ -1636,9 +1729,20 @@ always @(posedge clk_sys or negedge reset_n) begin
         key_resume_p <= 1'b0;
         key_title_p  <= 1'b0;
         key_return_p <= 1'b0;
+        key_cmenu_p  <= 1'b0;
+
+        // FRAME STEP (B18): only meaningful while the picture is held, and it
+        // must NOT clear pause -- the whole point is to land stopped on the next
+        // frame. Placed before the pause_q chain so it cannot be mistaken for
+        // one of the resume conditions below.
+        if (step_edge && (pause_q || stopped_w) && cell_ready && !menu_active)
+            step_tgl <= ~step_tgl;
 
         if (start_streaming)      pause_q <= 1'b0;   // fresh load clears pause
-        else if (pause_edge)      pause_q <= ~pause_q;
+        // ⚠ gated on ~stopped_w: while STOPPED the Pause button means PLAY and
+        // belongs to stop_ctl, which clears `stopped`. Toggling pause_q here as
+        // well would leave the disc paused the instant the stop is released.
+        else if (pause_edge && !stopped_w) pause_q <= ~pause_q;
         // a title-mode Fast Fwd/Rewind time scrub resumes playback (the scrub FSM
         // below issues the actual seek_rbn)
         // A KEYBOARD Fast Fwd/Rewind press must resume too, and it needs its own
@@ -1697,6 +1801,14 @@ always @(posedge clk_sys or negedge reset_n) begin
         // without one - the VM does the check).
         if (menus_on && ret_edge)
             key_return_p <= 1'b1;
+
+        // CHAPTER MENU (B16): the disc's own scene-selection page. Gated on
+        // menus_on like every other menu key -- with Disc Menus off the core
+        // never enters the menu domain at all. 58% of discs author no chapter
+        // menu, so the VM's fallback chain (ending in a no-op) is the ordinary
+        // outcome here, not a failure.
+        if (menus_on && cmenu_edge)
+            key_cmenu_p <= 1'b1;
 
         // CHAPTER skip (TITLE only, B2/B3 - in a menu the D-pad walks buttons):
         // the reader resolves program_map -> entry cell -> cell-seek in fabric and
@@ -1853,6 +1965,18 @@ wire [6:0]  dpad_pend_min;
 wire [2:0]  dpad_pend_sec;
 wire        dpad_jump_fire, dpad_jump_dir;
 wire [31:0] dpad_jump_base, dpad_jump_off;
+// A-B repeat shares scrub_ctrl's ONE jump port with the D-pad fixed-time seek.
+// They are both user gestures on different buttons and cannot sensibly overlap,
+// so a flat priority mux is enough; A-B wins because its jump is AUTOMATIC (the
+// loop reaching B) while the D-pad's is a press the user can simply repeat.
+wire        ab_jump_fire, ab_jump_dir;
+wire [31:0] ab_jump_base, ab_jump_off;
+wire [1:0]  ab_state_w;
+wire        ab_evt_w;
+wire        jmp_fire = ab_jump_fire | dpad_jump_fire;
+wire        jmp_dir  = ab_jump_fire ? ab_jump_dir  : dpad_jump_dir;
+wire [31:0] jmp_base = ab_jump_fire ? ab_jump_base : dpad_jump_base;
+wire [31:0] jmp_off  = ab_jump_fire ? ab_jump_off  : dpad_jump_off;
 wire        bar_active_w;                          // Phase 11: seek-bar visible
 wire [31:0] bar_base_rbn_w, bar_tgt_rbn_w;         // Phase 11: bar fill + cursor
 wire [31:0] title_first_rbn_w, title_last_rbn_w;
@@ -1896,10 +2020,37 @@ scrub_ctrl scrub_ctrl_inst (
     .hud_tier        (hud_tier_w),
     .hud_dir         (hud_dir_w),
     // ---- O[45] D-Pad Seek: pre-resolved fixed-time jumps ----------------
-    .jump_fire       (dpad_jump_fire),
-    .jump_dir        (dpad_jump_dir),
-    .jump_base       (dpad_jump_base),
-    .jump_off        (dpad_jump_off)
+    .jump_fire       (jmp_fire),
+    .jump_dir        (jmp_dir),
+    .jump_base       (jmp_base),
+    .jump_off        (jmp_off)
+);
+
+// =========================================================================
+// A-B REPEAT (B17) - dvd/ab_repeat.sv
+// =========================================================================
+// Press to mark A, again for B, again to clear; the playhead reaching B loops
+// back to A through scrub_ctrl's jump port above, so the title-span clamp and
+// the single proven raw-RBN seek are inherited rather than rebuilt.
+// ⚠ dsi_commit/load_flush are NOT optional here: A-B repeat seeks by
+// construction, so it spends much of its life in the stale-DSI window that
+// nav_dsi.sv's header warns every consumer about. See the module header.
+ab_repeat ab_repeat_inst (
+    .clk        (clk_sys),
+    .rst_n      (reset_n),                   // NOT pipe_rst_n: the loop must
+                                             // survive its own seek
+    .ab_edge    (ab_edge),
+    .in_title   (cell_ready && !menu_active && !in_title_menu && !menu_nav),
+    .cur_rbn    (dsi_nv_pck_lbn),
+    .dsi_commit (dsi_commit),
+    .nav_flush  (load_flush),
+    .cancel     (start_streaming | chap_pulse | stop_restart),
+    .jump_fire  (ab_jump_fire),
+    .jump_base  (ab_jump_base),
+    .jump_off   (ab_jump_off),
+    .jump_dir   (ab_jump_dir),
+    .state_o    (ab_state_w),
+    .evt        (ab_evt_w)
 );
 
 // =========================================================================
@@ -1968,8 +2119,32 @@ dpad_seek dpad_seek_inst (
 // While a seek gesture is held the video simply PAUSES (a plain, proven freeze --
 // no repeated flushing) and audio holds; releasing does one seek. ORed into the
 // manual-pause paths below (governor/STC + audio).
-wire pause_gov = pause_q | hold_freeze;
-wire pause_aud = pause_q | hold_freeze;
+// DVD-remote Stop (B14) + the pause/stop screensaver -- dvd/stop_ctl.sv.
+// `stopped` is a hold exactly like pause_q: it rides the SAME four coordinated
+// holds (governor freeze, watchdog repeat_frame=31, STC stall, audio hold), so
+// an indefinite stop is already the HW-proven indefinite-pause case.
+stop_ctl stop_ctl_inst (
+    .clk             (clk_sys),
+    .rst_n           (reset_n),
+    .stop_edge       (stop_edge),
+    .play_edge       (pause_edge),        // B1 doubles as PLAY while stopped
+    .any_input       (vm_entropy_stir),   // any button/key edge dismisses the saver
+    .start_streaming (start_streaming),
+    .media_seen      (media_seen),
+    .paused          (pause_q),
+    // A chapter skip or VM jump is also a resume, and it names its own
+    // destination -- so it must clear a stage-2 stop WITHOUT the First-Play
+    // restart that a bare PLAY would take.
+    .resume_evt      (jump_ack | chap_pulse),
+    .saver_sel       (status[48:47]),
+    .stopped         (stopped_w),
+    .kept_o          (stop_kept_w),
+    .restart         (stop_restart),
+    .saver_on        (saver_on_w)
+);
+
+wire pause_gov = pause_q | hold_freeze | stopped_w;
+wire pause_aud = pause_q | hold_freeze | stopped_w;
 
 // =========================================================================
 // DVD-VM (Phase 4): executes the disc's navigation commands. Owns all jumps
@@ -2029,7 +2204,7 @@ dvd_vm dvd_vm_inst (
     .entropy_stir  (vm_entropy_stir),
     .entropy_val   (entropy_ctr[15:0]),
     .enable        (menus_on),
-    .start         (start_streaming),
+    .start         (start_streaming | stop_restart),
     .cfg_lang      (player_lang),        // OSD Player Language -> SPRM0/16/18
     .nav_ready     (nav_ready_w),
     .auto_vts      (auto_vts_w),
@@ -2065,6 +2240,7 @@ dvd_vm dvd_vm_inst (
     .key_resume    (key_resume_p),
     .key_title     (key_title_p),
     .key_return    (key_return_p),
+    .key_cmenu     (key_cmenu_p),
 
     .btn_cmd       (hl_btn_cmd),
     .btn_cmd_valid (hl_btn_cmd_valid),
@@ -2314,9 +2490,12 @@ wire subp_any_present = subp_ctl_mem[ 0][31] | subp_ctl_mem[ 1][31] |
                         subp_ctl_mem[14][31] | subp_ctl_mem[15][31];
 // 16:9 display mode: override -> letterbox; else Crop=pan&scan, Letterbox=letterbox,
 // else wide (Fit/HDMI anamorphic — the common case; O[4:3] refines it, HW-tunable).
-wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
-                           (status[4:3] == 2'd3) ? 2'd2 :
-                           (status[4:3] == 2'd2) ? 2'd1 : 2'd0;
+// ⚠ reads aa_osd_sel, NOT status[4:3]: the B15 Aspect button overrides that
+// value, and if the subpicture variant kept following the raw OSD bits the
+// subtitles would be laid out for an aspect the picture is no longer in.
+wire [1:0]  sp_disp_mode = force_43_subp         ? 2'd1 :
+                           (aa_osd_sel == 2'd3) ? 2'd2 :
+                           (aa_osd_sel == 2'd2) ? 2'd1 : 2'd0;
 // ONE shared display-mode wire for the subpicture VARIANT and nav_pci's BUTTON
 // GROUP. A menu forces wide for both: this core composites in source space and
 // scales the composite, so the disc's pre-letterboxed variant would letterbox
@@ -2679,7 +2858,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .clk            (clk_sys),
     .rst_n          (reset_n),
 
-    .start          (start_streaming),
+    .start          (start_streaming | stop_restart),
     .file_size      (current_file_size),
     .lu_lang_pref   (player_lang),        // OSD Player Language -> menu-LU match
     .title_sel      (dbg_title_vts),      // Debug "Title VTS" picker: 0=Auto, else VTS #
@@ -3641,9 +3820,20 @@ end
 // (resample_addrgen freezes the frame while paused; av_sync freezes the STC in
 // clk_sys). pause changes at human speed, so a plain 2-FF sync is sufficient.
 reg pause_s1, pause_dec;
+// DVD-FORK (frame step B18): a clk_sys press crossed into clk_dec as a ONE-CYCLE
+// pulse. ⚠ A level would be wrong twice over -- clk_dec is faster than the press,
+// so a level would permit many pickups, and the arm in resample_addrgen is what
+// makes "one press = one frame" structural. Toggle-crossed so no press is lost to
+// the clock ratio: the clk_sys side flips a bit, the clk_dec side edge-detects it.
+reg  step_t1 = 1'b0, step_t2 = 1'b0, step_t3 = 1'b0;  // clk_dec (step_tgl is declared with the
+                                      // transport regs -- it is written up there)
+wire step_dec = step_t2 ^ step_t3;    // one clk_dec cycle per press
 always @(posedge clk_dec) begin
     pause_s1  <= pause_gov;   // manual pause OR a held seek gesture (freeze the governor frame)
     pause_dec <= pause_s1;
+    step_t1   <= step_tgl;
+    step_t2   <= step_t1;
+    step_t3   <= step_t2;
 end
 
 // 2-FF the resolved Film 24p/25p mode (clk_sys origin) into the decoder clock for the
@@ -4266,6 +4456,7 @@ mpeg2video mpeg2video_inst (
     .video_live        (core_video_live),              // DVD-FORK (av_sync STC): "first frame displayed" (clk_dec; re-armed per load)
     .pickup_hold       (vid_hold_s2),                  // DVD-FORK (STD mux-lead hold): defer first display until audio caught up
     .pause             (pause_dec),                    // DVD-FORK (gamepad transport): freeze frame while paused (clk_dec-synced)
+    .step_req          (step_dec),                     // DVD-FORK (frame step B18): one picture while paused
     .freeze_wd         (still_dec),                    // DVD-FORK (disc-menu still): watchdog-suppress only (clk_dec-synced)
     .vbuf_flush        (vbuf_flush_dec),               // DVD-FORK (gamepad transport): discard VBUF on a seek (clk_dec-synced)
     .soft_flush        (mount_flush),                  // DVD-FORK (mount soft reset): watchdog-equivalent decode reset on a file mount (async, synchronizers inside)
@@ -4496,8 +4687,31 @@ end
 // so VIDEO_ARX/ARY stays stable across the title->menu transition (no scaler
 // re-init) whenever the movie and its menu share an aspect (the common case).
 wire ar_wide_auto_eff = (menus_on && menu_active) ? menu_ar_wide_w : ar_wide_auto;
-assign ar_wide_eff = (status[20:19] == 2'b01) ? 1'b0 :   // force 4:3
-                     (status[20:19] == 2'b10) ? 1'b1 :   // force 16:9
+
+// DVD-remote Aspect button (B15) -- dvd/aspect_ctl.sv. It cycles whichever
+// aspect control is LIVE (Analog Aspect while the analog raster is engaged,
+// Aspect Ratio otherwise), because Analog Aspect is gated on interlaced_eff and
+// so does nothing at all on an HDMI-only rig. The core cannot write status[]
+// (dvd_telem.sv:11-16 -- stock Main polls UIO_GET_STATUS every frame and would
+// overwrite the user's settings), so the module publishes an OVERRIDE that is
+// surrendered the moment the OSD value changes, and both reads below go through
+// it instead of through status[] directly.
+aspect_ctl aspect_ctl_inst (
+    .clk         (clk_sys),
+    .rst_n       (reset_n),
+    .aspct_edge  (aspct_edge),
+    .analog_live (interlaced_eff),   // the only mode where Analog Aspect does anything
+    .osd_ar      (status[20:19]),
+    .osd_aa      (status[4:3]),
+    .ar_sel      (ar_osd_sel),
+    .aa_sel      (aa_osd_sel),
+    .evt         (aspct_evt_w),
+    .evt_analog  (aspct_evt_analog_w),
+    .evt_val     (aspct_evt_val_w)
+);
+
+assign ar_wide_eff = (ar_osd_sel == 2'b01) ? 1'b0 :   // force 4:3
+                     (ar_osd_sel == 2'b10) ? 1'b1 :   // force 16:9
                                                 ar_wide_auto_eff; // Auto: IFO for menus, stream for titles
 
 // DVD-FORK (Analog anamorphic): resolve the Analog Aspect menu (O[4:3]) into two
@@ -4518,7 +4732,7 @@ assign ar_wide_eff = (status[20:19] == 2'b01) ? 1'b0 :   // force 4:3
 // disp_vscale_mode (the OLD addrgen nearest-neighbour vertical decimation) is RETIRED —
 // Letterbox is now the downstream 2-tap blender. It is driven to 0 always (addrgen = FIT
 // vertically); the addrgen NN path is left dormant and prunes under the constant.
-wire [1:0] analog_aspect_sel = status[4:3];   // 0 Auto, 1 Fit, 2 Letterbox, 3 Crop
+wire [1:0] analog_aspect_sel = aa_osd_sel;   // 0 Auto, 1 Fit, 2 Letterbox, 3 Crop (B15 override of status[4:3])
 // DVD-FORK (analog anamorphic overlay align): Auto follows ar_wide_auto_eff (the
 // menu-aware aspect — IFO V_ATR while a menu is up, PR #86) instead of the raw
 // stream aspect, matching what HDMI's ascal path does: an anamorphic menu now
@@ -5483,6 +5697,12 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
     .scrub_tier   (hold_freeze ? hud_tier_w : 2'd0),
     .display_edge (display_edge),
+    .stop_on      (stopped_w & stop_kept_w),   // stage 1 only; stage 2 is bare logo
+    .aspct_evt    (aspct_evt_w),
+    .aspct_analog (aspct_evt_analog_w),
+    .aspct_val    (aspct_evt_val_w),
+    .ab_evt       (ab_evt_w),
+    .ab_state     (ab_state_w),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
     // Three LIVE sources, in the order they can be trusted: a linear file's
@@ -5612,7 +5832,18 @@ always @(posedge clk_sys or negedge reset_n) begin
     else if (logo_boot_dly != 25'd0) logo_boot_dly <= logo_boot_dly - 25'd1;
 end
 
-wire logo_vis = !media_seen && !video_live_s2 && !img_streaming &&
+// DVD-remote screensaver AND Stop: both sit OUTSIDE the !media_seen group on
+// purpose. A paused or stopped title still has live video and a mounted image,
+// so a term ANDed inside that group could never assert. The remaining guards
+// still apply (an unplayable image, a download in flight and the boot delay all
+// outrank it).
+// ★ STOP SHOWS THE IDLE LOGO, which is what a set-top player does when it stops
+// -- it spins down and puts its own screen up. The first build blanked the
+// picture to black instead and the field report was immediate: "one stop was
+// supposed to drop you to the idle logo". The position is still remembered
+// (nothing is torn down; see dvd/stop_ctl.sv), so this is display-only.
+wire logo_vis = (saver_on_w || stopped_w ||
+                 (!media_seen && !video_live_s2 && !img_streaming)) &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
 
@@ -5658,15 +5889,29 @@ reg        sp_force_q;
 // and it MUST assert force: sp_idx_q carries the subpicture's index, which
 // is 0 when idle, and without force the idx-0 transparency key would erase
 // the logo.
+// DVD-remote screensaver: while it owns the screen the HUD and the seek bar are
+// suppressed. A static status line burning into a phosphor is precisely what the
+// screensaver exists to prevent, and logo_on_w sits BELOW both in this chain --
+// so without these gates the logo would bounce around underneath a pinned HUD.
+//
+// ★ A FULL STOP (the second press) suppresses them too. The two stages have to
+// be told apart on screen, and the distinction the user asked for is not two
+// different captions: stage 1 says "STOP" because a resume is waiting, and
+// stage 2 shows the bare logo "as if you had done a soft reset" -- no messages
+// at all. So the readout is the presence or absence of any overlay, which is
+// also why transport_hud no longer has a "STOP FROM START" string.
+wire stop_full = stopped_w & ~stop_kept_w;      // stage 2: position forgotten
+wire hud_on_e  = hud_on_w & ~saver_on_w & ~stop_full;
+wire bar_on_e  = bar_on_w & ~saver_on_w & ~stop_full;
 always @(posedge clk_sys) begin
-    sp_r_q     <= hud_on_w ? hud_r_w     : bar_on_w ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
-    sp_g_q     <= hud_on_w ? hud_g_w     : bar_on_w ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
-    sp_b_q     <= hud_on_w ? hud_b_w     : bar_on_w ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
-    sp_alpha_q <= hud_on_w ? hud_alpha_w : bar_on_w ? bar_alpha_w : logo_on_w ? 4'd15
+    sp_r_q     <= hud_on_e ? hud_r_w     : bar_on_e ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
+    sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
+    sp_b_q     <= hud_on_e ? hud_b_w     : bar_on_e ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
+    sp_alpha_q <= hud_on_e ? hud_alpha_w : bar_on_e ? bar_alpha_w : logo_on_w ? 4'd15
                            : (hl_use ? hl_a : sp_alpha);   // HLI alpha for recoloured classes
     sp_idx_q   <= sp_q_idx;
-    sp_on_q    <= hud_on_w | bar_on_w | logo_on_w | sp_q_inside;
-    sp_force_q <= hud_on_w | bar_on_w | logo_on_w | hl_use; // + logo: bypass the idx0 key
+    sp_on_q    <= hud_on_e | bar_on_e | logo_on_w | sp_q_inside;
+    sp_force_q <= hud_on_e | bar_on_e | logo_on_w | hl_use; // + logo: bypass the idx0 key
 end
 
 // Alpha-composite the subtitle over the decoded video, COMBINATIONALLY, right before
@@ -5677,8 +5922,16 @@ end
 // (only the RGB value now passes through this small blend before the SAME output reg; the
 // reg->pin hop that the 2026-06-28 column-dots fix shortened is unchanged).
 wire [7:0] sub_r, sub_g, sub_b;
+// DVD-remote: Stop and the screensaver blank the PICTURE, not the composited
+// output. Blanking here (the blend INPUT) rather than at the vga_*_q mux -- where
+// sw_blank lives -- is deliberate: sw_blank sits before sub_r and so takes out the
+// HUD and idle logo too, but Stop must still show "STOP" and the screensaver IS
+// the idle logo. So the picture goes black underneath and the overlay survives.
+wire pic_blank = stopped_w | saver_on_w;
 subpic_blend subpic_blend_inst (
-    .in_r(core_r), .in_g(core_g), .in_b(core_b),
+    .in_r(pic_blank ? 8'd0 : core_r),
+    .in_g(pic_blank ? 8'd0 : core_g),
+    .in_b(pic_blank ? 8'd0 : core_b),
     .ov_on(sp_on_q), .ov_idx(sp_idx_q),
     .ov_r(sp_r_q), .ov_g(sp_g_q), .ov_b(sp_b_q),
     .ov_alpha(sp_alpha_q),

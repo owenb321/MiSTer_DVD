@@ -34,6 +34,9 @@ module dvd_telem_tb;
     // CMD_AF inputs. Tied off explicitly: a new INPUT left unconnected floats Z
     // and quietly poisons whatever reads it (see CLAUDE.md's note on new ports).
     reg af_pt = 0, af_pcm = 0, af_bs = 0;
+    // The DVD-remote request fields share this word (B19 Eject, B20/B21 Volume).
+    reg       rq_ej = 0;
+    reg [3:0] rq_up = 0, rq_dn = 0;
 
     dvd_telem dut (
         .clk(clk), .io_enable(io_enable), .io_strobe(io_strobe),
@@ -42,7 +45,8 @@ module dvd_telem_tb;
         .drops(drops), .vid_err(vid_err), .drop_costs(drop_costs),
         .vbuf_fill(vbuf_fill), .aud_frames(aud_frames), .flags(flags),
         .aud_play(aud_play), .aud_gate(aud_gate),
-        .af_passthru(af_pt), .af_pcm_session(af_pcm), .af_bs_session(af_bs));
+        .af_passthru(af_pt), .af_pcm_session(af_pcm), .af_bs_session(af_bs),
+        .rq_eject_tgl(rq_ej), .rq_volup_seq(rq_up), .rq_voldn_seq(rq_dn));
 
     task strobe(input [15:0] d);
         begin
@@ -142,19 +146,46 @@ module dvd_telem_tb;
         run_xact(16'h007B, 1'b0, drove);
         if (!drove) begin
             $display("  FAIL: CMD_AF did not drive the bus"); errors = errors + 1; end
-        check("afmt-bitstream", got[1], 16'h8005);
+        check("afmt-bitstream", got[1], 16'h9005);
         af_pcm = 1; af_bs = 0;                 // ...now an LPCM/MP2 track
         repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
-        check("afmt-pcm", got[1], 16'h8003);
+        check("afmt-pcm", got[1], 16'h9003);
         af_pt = 1; af_pcm = 0; af_bs = 0;      // Passthru, nothing playing yet
         repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
-        check("afmt-idle", got[1], 16'h8001);
+        check("afmt-idle", got[1], 16'h9001);
         af_pt = 0; af_pcm = 0; af_bs = 0;      // back to Decode
         repeat (64) @(negedge clk);   // sampler rotation is 57 cycles
         run_xact(16'h007B, 1'b0, drove);
-        check("afmt-decode", got[1], 16'h8000);
+        check("afmt-decode", got[1], 16'h9000);
+        // ---- [5b] the DVD-remote request fields share this word -----------
+        // Main reads Eject as a TOGGLE and the two volume requests as WRAPPING
+        // COUNTERS, so the word has to carry them without disturbing the audio
+        // format bits below them -- an overlap would make a volume press look
+        // like a bitstream session, or vice versa.
+        $display("[5b] CMD_AF also carries the Eject/Volume requests");
+        rq_ej = 1; rq_up = 4'd0; rq_dn = 4'd0;
+        repeat (64) @(negedge clk);
+        run_xact(16'h007B, 1'b0, drove);
+        check("rq eject toggle -> bit 3", got[1], 16'h9008);
+        rq_ej = 0; rq_up = 4'd5; rq_dn = 4'd0;
+        repeat (64) @(negedge clk);
+        run_xact(16'h007B, 1'b0, drove);
+        check("rq vol-up 5 -> bits 7:4", got[1], 16'h9050);
+        rq_up = 4'd0; rq_dn = 4'd9;
+        repeat (64) @(negedge clk);
+        run_xact(16'h007B, 1'b0, drove);
+        check("rq vol-down 9 -> bits 11:8", got[1], 16'h9900);
+        // All at once, WITH a live bitstream session: the fields must coexist.
+        rq_ej = 1; rq_up = 4'd15; rq_dn = 4'd15;
+        af_pt = 1; af_bs = 1;
+        repeat (64) @(negedge clk);
+        run_xact(16'h007B, 1'b0, drove);
+        check("all fields together", got[1], 16'h9FFD);
+        rq_ej = 0; rq_up = 4'd0; rq_dn = 4'd0; af_pt = 0; af_bs = 0;
+        repeat (64) @(negedge clk);
+
         // ...and the diagnostic snapshot is untouched by any of it.
         run_xact(16'h007A, 1'b0, drove);
         check("0x7A still reports counters", got[1], 16'hAAAA);
