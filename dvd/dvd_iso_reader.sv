@@ -1674,7 +1674,12 @@ always @(posedge clk)
         if (cell_bi == 5'd7) pt_c[7:0]   <= pb_rdata;   // rate | frames
         if (cell_bi == 5'd11) begin
             cell_first_mem[cell_wi] <= {wacc, pb_rdata};
-            // title_first = the FIRST cell's first_sector.
+            // title_first = the FIRST PROGRAM cell's first_sector, deliberately
+            // NOT min(first_sector). scrub_ctrl.sv:262 substitutes this value
+            // when a backward seek UNDERFLOWS, and on an out-of-order PGC the
+            // physical minimum lies INSIDE the displaced trailing cell -- so the
+            // minimum would drop the playhead into the LAST program, i.e. jump
+            // to the end from the other direction. See title_last below.
             if (cell_wi == 8'd0) title_first_rbn <= {wacc, pb_rdata};
             // start time = sum of the cells before this one (pt_c complete @7)
             cell_start_mem[cell_wi] <= (cell_wi == 8'd0) ? 32'd0 : run_eltm;
@@ -1695,9 +1700,39 @@ always @(posedge clk)
             // only after the 24-byte record), so the two strobes pair up.
             cellf_lwe  <= 1'b1;
             cellf_last <= {wacc, pb_rdata};
-            // title_last tracks the last-written cell's last_sector (cells are
-            // captured in order, so after the walk this is the title's end RBN).
-            title_last_rbn <= {wacc, pb_rdata};
+            // title_last = the MAXIMUM last_sector over THIS PGC's cells.
+            // ★ PROGRAM ORDER IS NOT PHYSICAL ORDER. This used to take the
+            // last-WRITTEN cell, on the stated assumption that "cells are
+            // captured in order". MEASURED over 958 library ISOs: 45 publish
+            // last <= first and 6 more publish a short span (51 = 5.3 %). The
+            // dominant shape is first = k, last = k-1, because the LAST PROGRAM
+            // cell sits physically at the FRONT of the VOBS -- A_MILLION_WAYS_
+            // TO_DIE_IN_THE_WEST VTS_07 PGCN 1 runs RBN 4..3,359,267 over cells
+            // 0..20 and then ends on a 4-sector cell at RBN 0..3, so it
+            // published first=4 last=3. Downstream that is scrub_ctrl.sv:214
+            // span=1 -> :263 clamping EVERY target (forward AND backward, since
+            // the playhead is always above it) to title_last_rbn -> S_RBN_SCAN
+            // resolves that to the last program cell = "any seek jumps to the
+            // end of the movie"; and seek_bar.sv:144 saturating = a solid bar
+            // with no chapter notches.
+            // ★ STRUCTURAL, not merely better: max(last) >= cell[0].last >=
+            //   cell[0].first = title_first_rbn, so a degenerate span is now
+            //   IMPOSSIBLE BY CONSTRUCTION for any PGC with a well-formed cell 0.
+            // ★ The cell-0 seed re-arms the max PER PGC and is load-bearing, not
+            //   defensive: cell_wi is zeroed only at S_PGC_CELLCHK, immediately
+            //   before every walk, and NOTHING else clears this register between
+            //   PGCs or across a re-mount (the start re-init does not touch it).
+            //   Without the seed a feature title's span leaks into the menu PGC
+            //   the user returns to (arm F) -- and on the FIRST walk the LINEAR
+            //   branch above has already published total_blocks-1, so a bare max()
+            //   would keep the whole IMAGE's last block and the forward clamp
+            //   would stop clamping at all (arm D). Both measured.
+            // ⚠ Accepted, bounded: the max now lets ANY malformed cell record
+            //   inflate the span, where before only a malformed LAST cell could.
+            //   nr_cells > MAXCELL already routes garbage PGCs to the linear
+            //   fallback and S_CELL_SEEK already skips cf_rd > cl_rd cells.
+            if (cell_wi == 8'd0 || cell_last_w > title_last_rbn)
+                title_last_rbn <= cell_last_w;
             // Store the EFFECTIVE hold (explicit still_time OR the heuristic),
             // so downstream sees a nonzero still for authored menu/ad/copyright
             // stills that carry still_time==0.

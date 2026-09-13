@@ -159,6 +159,16 @@ how the user sees where the release lands. Fill = playhead at hold start
 sector/RBN against `title_first_rbn..title_last_rbn` (the roadmap's design:
 monotonic, no TMAP, slight VBR nonlinearity accepted).
 
+⚠ **`title_last_rbn` is the MAXIMUM `last_sector` over the PGC's cells, not the
+last cell in program order** (`dvd/dvd_iso_reader.sv`, fixed 2026-09-13 —
+`docs/dvd_nav.md` §2f). The bar is where the old rule SHOWED first: on a PGC
+whose final program sits physically at the front of the VOBS the reader
+published `last < first`, `span` collapsed to 1, `dv_delta` saturated and the
+bar rendered as **a solid grey block with every chapter notch pushed off the
+raster**. ★ That was never a renderer bug — `seek_bar`'s arithmetic is correct
+for any sane span, and a defensive floor here would only have hidden the
+producer. 51 of 958 library discs were affected.
+
 **Stretch (severable):** the bar also pops for 2.5 s on pause / landed seek /
 chapter skip, showing the **live** playhead (`dsi_nv_pck_lbn`, no cursor)
 with a notch at each chapter start. Tick columns come from **shadow copies**

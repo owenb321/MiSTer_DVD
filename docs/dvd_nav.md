@@ -1434,7 +1434,11 @@ decoder.** Seek-on-release does exactly **one** flush/re-lock (on release) = rob
 like the confirmed single-seek transport.
 
 Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
-`title_first_rbn..title_last_rbn` from the reader):
+`title_first_rbn..title_last_rbn` from the reader). ⚠ **The two ends are NOT
+symmetric and that is deliberate** — `title_first_rbn` is the FIRST PROGRAM
+cell's `first_sector`, `title_last_rbn` is the **MAXIMUM** `last_sector` over the
+PGC's cells. See §2f for why taking the minimum at the low end would re-create
+the very bug the maximum at the high end removes:
 - **Hold** = a plain pause: `hold_freeze` (= a direction held in a title) is ORed into emu's
   pause holds — `pause_gov` (governor + `av_sync.pause` STC) and `pause_aud`
   (`dvd_audio_decode.pause` + drain-watchdog freeze). This is the *same* stable hold as a manual
@@ -1845,13 +1849,208 @@ different defect and it affects SEEKING, not just the readout.**
    because it follows the DSI's ILVU pointers. Raw-RBN **seeking** into that
    space is a different path and was never covered.
 
-**Where to start:** `S_RBN_SCAN` (`dvd_iso_reader.sv` ~3714-3766) and the
+⚠ **"Seeking jumps to the end" had TWO mechanisms and this is only one of them.**
+The dominant one — the title span itself collapsing on a PGC whose cells are not
+in physical order — is **fixed** (§2f, 2026-09-13) and covered 44 of the 51
+affected library discs. What is left here is the interleave: 7 discs whose PGC
+cells are genuinely SCATTERED, plus the seamless-branch class below, where a
+cell's sector extent lies about how much of it is played.
+
+**Where to start:** `S_RBN_SCAN` (`dvd_iso_reader.sv`, the `S_RBN_SCAN2`/`S_RBN_SCAN`
+pair — ⚠ the old "~3714-3766" here was already stale and is deliberately not
+replaced with another line number) and the
 `seek_is_rbn` landing contract in §2a. The likely shape is that a seek target
 inside an interleaved block must be snapped to an ILVU boundary of the branch
 being played, the way `S_NAV_SEEK` already snaps a scrub target to the next NAV
 pack. ⚠ That is the reader's seek path — the boot path for every disc — so it
 wants the full 33-testbench gate and its own HW round, not a rider on a readout
 fix.
+
+### 2f. Program order is not physical order — the title span must be a MAX — 🔧 FIXED 2026-09-13, ⏳ HW-confirm pending
+
+Field report: on `A_MILLION_WAYS_TO_DIE_IN_THE_WEST` (physical disc *and* the
+decrypted ISO) **any seek jumped to the end of the movie**, the **chapter notches
+were missing** from the seek bar, and the **bar was a solid grey block**. All
+three are one defect, and it is in the reader's span capture, not in any of the
+three modules that show the symptom.
+
+**Root cause.** `dvd_iso_reader.sv`'s PGC cell walk took `title_last_rbn` from the
+LAST-WRITTEN cell, and said so:
+
+```systemverilog
+// title_last tracks the last-written cell's last_sector (cells are
+// captured in order, so after the walk this is the title's end RBN).
+title_last_rbn <= {wacc, pb_rdata};
+```
+
+★ **The assumption is stated in the comment, and it is false.** Program order is
+not physical order. Measured from the disc (VTS_07 PGCN 1, 22 cells, 1:55:54):
+
+| | |
+|---|---|
+| cells 0..20 | RBN 4 … 3,359,267, perfectly ascending |
+| **cell 21 (the LAST program)** | **RBN 0 … 3 — 4 sectors, physically at the FRONT of the VOBS** |
+
+so the reader published `title_first_rbn = 4`, **`title_last_rbn = 3`**.
+
+**One wrong number, three symptoms**, each in a module that is itself correct:
+
+| symptom | mechanism |
+|---|---|
+| any seek jumps to the end | `scrub_ctrl.sv` `span = (last > first) ? last-first : 1` → **1**, and the clamp pins every target at `title_last_rbn` = 3. `S_RBN_SCAN` resolves RBN 3 to **cell 21 — the last program** → 4 sectors play and the PGC ends. |
+| solid grey bar | `seek_bar.sv` `dv_delta = (dv_v >= last_rbn) ? span` → quotient 512 → `fill_px = 512`, the full bar width. |
+| no chapter notches | the same saturation puts every `tick_col[]` at 512, outside the 0…511 raster. |
+
+⚠ The playhead is always above 3, so **backward seeks clamp there too** — the
+report's "will not tolerate a seek" is exact, not loose. And `scrub_ctrl`'s
+**jump port** shares that clamp, so **D-pad fixed-time seek (`O[45]`) and A-B
+repeat are broken by the identical mechanism** on these discs.
+
+#### Blast radius — measured over the 958-ISO library
+
+**51 discs (5.3 %)**: 45 publish `last <= first` (span 1, completely unseekable)
+and 6 more publish a materially short span. Classified by coverage
+(`sum(cell lengths) / (max last − min first + 1)`):
+
+| class | count | the fix below |
+|---|---|---|
+| **CONTIGUOUS** (≥ 95 %) — one physical run plus a displaced cell | **44** | repaired completely |
+| **PARTLY SCATTERED** (~50 %) — GoT S1 D2/D5, GoT S3 D1, ELEMENT_YOGA | 4 | improved, not repaired |
+| **SCATTERED** (< 40 %) — VINYL S1 D2, PAW_PATROL_MEET_EVEREST, CYOA-ABOMINABLE_SNOWMAN | 3 | improved, not repaired |
+
+The dominant shape is `first = k, last = k − 1` — the last program cell occupying
+RBN `[0, k−1]`, with k measured at 4, 5, 30, 78, 142, 145, 200, 248, 373, 430,
+690 and 32,693 on different discs.
+
+Replaying the new rule offline over all 955 parseable images:
+
+| | before | after |
+|---|---|---|
+| discs whose `title_last_rbn` changes | — | 48 |
+| degenerate spans (`last <= first`) | 45 | **0** |
+| mean fraction of played sectors inside the published span | 0.9483 | 0.9948 |
+| discs with < 99 % of played sectors inside the span | 51 | **5** |
+| **discs made worse** | — | **0** |
+
+#### Change 1 — `title_last_rbn` is the MAXIMUM over the PGC's cells
+
+```systemverilog
+if (cell_wi == 8'd0 || cell_last_w > title_last_rbn)
+    title_last_rbn <= cell_last_w;
+```
+
+★ **STRUCTURAL, not merely better.** `max(last) >= cell[0].last >= cell[0].first
+= title_first_rbn`, so a degenerate span is now **impossible by construction** for
+any PGC with a well-formed cell 0 — not merely unlikely, and not dependent on any
+property of the disc.
+
+★ **The `cell_wi == 8'd0` seed is load-bearing twice, and both were measured, not
+argued.** `cell_wi` is zeroed only in `S_PGC_CELLCHK`, immediately before every
+walk, and nothing else clears `title_last_rbn` between PGCs (the mount re-init
+does not touch it). Without the seed:
+
+1. a feature title's span **leaks into the next PGC** — including the menu the
+   user returns to, and a second title after a remount (`title_span_tb` arm F);
+2. on the **first** walk the reader's *linear* branch has already published
+   `total_blocks - 1`, so a bare `max()` keeps the whole IMAGE's last block and
+   the forward clamp stops clamping at all (arm D).
+
+The second one was found by the mutation harness, not by design — the arm was
+expected to catch F alone and caught D as well.
+
+⛔ **`title_first_rbn` stays cell 0's `first_sector` — deliberately NOT
+`min(first_sector)`, and this is the part most likely to be "tidied" later.**
+`scrub_ctrl` substitutes `title_first_rbn` when a backward seek underflows. On
+exactly the discs this section is about, the physical minimum lies **inside the
+displaced trailing cell** — so the symmetric-looking change would land a rewind
+past the start in the LAST program, i.e. jump to the end from the other
+direction. `title_span_tb` arm E is the executable form of that refusal, and
+mutation M4 turns the minimum back on and must fail arm E and nothing else.
+
+⚠ **Accepted, bounded residual:** the max now lets any malformed cell record
+inflate the span, where before only a malformed *last* cell could.
+`nr_cells > MAXCELL` already routes garbage PGCs to the linear fallback and
+`S_CELL_SEEK` already skips `cf_rd > cl_rd` cells, so this was not worth a second
+comparator.
+
+⚠ **Cosmetic residual, predicted before the build:** on these discs the displaced
+trailing cell now sits *outside* `[first, last]`, so its chapter notch pins to
+column 0 and playing it shows the playhead at the left end. That is 4 sectors on
+A_MILLION_WAYS (well under a second) but 51,832 sectors on
+BIG_TROUBLE_LITTLE_CHINA. Fixing it properly is the position-space model, below.
+
+#### Gate — `bench/dvd/run_title_span.sh [--red]`
+
+★ **A reader-only bench CANNOT catch this, and that is the reusable lesson.**
+`title_last_rbn` reaches the reader's own behaviour in exactly one place — the
+`nav_cand > title_last_rbn` bail in `S_NAV_SEEK`, which only shortens the
+VOBU-align probe and then falls back to the raw target anyway. A bench that
+drives `seek_rbn_pulse` directly (`iso_reader_scrub_tb` does) lands at the same
+RBN with or without the fix. The defect lives at the **seam**: the reader
+publishes the span, `scrub_ctrl` clamps to it, the reader lands on the clamped
+value. Same shape as the A-B `jump_dir` miss — *assert against the consumer's
+contract, across the seam*.
+
+`bench/dvd/title_span_tb.sv` therefore instantiates **both** modules over a
+synthetic disc that mirrors the measured shape (4 cells × 10 sectors, program
+cell 3 at RBN 0…9 and cells 0…2 at 10…39, every sector filled with a byte equal
+to its own RBN). Every arm measures the **landing** — the first bytes actually
+delivered plus the cell they came from — never a signal the fix names.
+
+★ The `SHn` ladder is left at its shipping values on purpose: `span 29 >> 13` and
+`span 1 >> 13` both floor to a 1-sector step, so the accumulate is identical
+pre- and post-fix and **the clamp is the only variable**.
+
+| arm | GREEN | RED (pre-fix) |
+|---|---|---|
+| A fixture sanity | RBN 10, cell 0 | same — not a gate |
+| B forward 15 → 23 | RBN 23, cell 1 | RBN 9, **cell 3 = the last program** |
+| C backward 35 → 27 | RBN 27, cell 1 | RBN 9, cell 3 |
+| D forward clamp | RBN 39 (the real end) | RBN 9, cell 3 |
+| E backward underflow | RBN 10 (cell 0's start) | RBN 9, cell 3 |
+| F per-PGC re-seed | VTS_02 clamps to its OWN 9 | (mutation-only) |
+
+⚠ Arm D asserts the **byte only**. Its target *is* the title's final sector, so
+there is one sector of runway and the reader's prefetch has already advanced
+`cell_i` by the time the byte reaches the output. The byte still pins the landing
+uniquely (cell 3 holds RBN 0…9, whose sectors can never contain byte 39).
+
+`--red` runs five sed mutations of the reader and requires that **exactly** the
+designed arms fail — no more, no fewer, because a mutation caught by everything
+says nothing about which arm is load-bearing:
+
+| mutation | must fail |
+|---|---|
+| M1 the pre-fix last-written rule | B C D E |
+| M2 drop the cell-0 re-seed | D and F |
+| M3 take the MIN instead of the MAX | B C D E F |
+| M4 `title_first` becomes `min(first)` | **E only** |
+
+`scrub_ctrl_tb` TEST 20 is a **contract arm, not a gate**: it drives the real
+measured pair (`first = 4, last = 3`) and asserts `scrub_ctrl` pins both
+directions at 3 — i.e. that the consumer is *correct given a correct span*, so a
+future session fixes the producer rather than loosening the clamp.
+
+#### ⛔ Non-goals — do not re-derive these
+
+1. **Position-space progress** (cumulative played sectors instead of physical
+   RBN) is the only model that is correct on the 7 scattered discs and the only
+   thing that puts the displaced cell's notch in the right place. **It is
+   measured useless for the seamless-branch class** — see §2e: an interleaved
+   cell's sector extent contains the other branch's ILVUs, so the per-cell
+   sector length is itself inflated (`ULTIMATE_T2` VTS_01 PGCN 1: 122 cells,
+   physically **monotonic**, 35 interleaved, 32 of them over-stating their
+   playtime by 1.3×–4.6×, up to **2,786 sectors/s** against a ~600 DVD ceiling;
+   `ALIEN_VS_PREDATOR_SE` measures the same way). A **time**-based bar
+   (`C_PBTM` prefix sum, already in `cell_start_mem`/`cellf_secs`, plus DSI
+   `c_eltm`, already used by `transport_hud`) is the model that would cover both
+   classes. Its own change, its own HW round.
+2. **`cellf_idx = cell_wi[6:0]`** is a latent 7-bit alias into `seek_bar`'s
+   `cellf_ram[0:127]`. **Measured unreachable:** zero discs in the 958-image
+   library have a played PGC over 128 cells (the histogram tops out in the
+   96…127 bucket with 8 discs).
+3. **`scrub_ctrl` and `seek_bar` are NOT changed.** Both are correct given a
+   correct span; a defensive span floor there would mask the producer.
 
 ### HW status — ✅ CONFIRMED (PR fj#96)
 
