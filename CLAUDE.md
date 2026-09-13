@@ -2338,10 +2338,66 @@ worse maintenance burden than targeted in-place edits. So:
   no UDF-only-image support. (Phase-8b TMAP absolute seek: RETIRED 2026-07-10 by user
   decision. The seek UX gained ONE opt-in layer since — `O[45]` D-Pad Seek, below — which
   rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
-- 🔧 **DVD-REMOTE BUTTONS — Stop, Aspect, Chapter Menu, A-B Repeat, Frame Step, a
+- ✅ **DVD-REMOTE BUTTONS — Stop, Aspect, Chapter Menu, A-B Repeat, Frame Step, a
   screensaver, and the Display toggle FIX (2026-09-13, branch
   `feature/remote-buttons`) — sim-proven, mutation-checked 31/31 across five modules,
-  ⏳ HW-confirm pending.** Field report: *"display button would be nice if it toggled
+  and ✅ HW-CONFIRMED 2026-09-13 over two HIL rounds** (build
+  `DVD_remotebtns_20260913_1347.rbf`, SEED 7 first roll, 87 % ALM, clk_dec
+  93.41/88.83). **Every feature MEASURED, not eyeballed:** Display hidden at 300/800/
+  1500 ms across 3 on/off cycles (all inside the 2.5 s window a pre-fix core stays
+  visible); Stop → `STOP` popup, elapsed frozen over 5 s, resume IN PLACE
+  (0:00:19→0:00:23), `STOP  FROM START`, then restart from First Play (total
+  1:43:41→0:00:14) with the picture **max=0, perfectly black**; Chapter Menu followed
+  `0x87`→PGCN 4→`LinkPGCN 8` onto the real 4-cell scene menu with buttons armed;
+  Frame Step 0 px over 3 s paused, then 1962/2431/1618 px per press, still PAUSE,
+  26,422 px on resume; Aspect cycles all four popups and, PAUSED so content is static,
+  alternates active height 298↔357 px per press exactly as the RTL predicts for 16:9
+  anamorphic; screensaver not armed at 100 s, armed by 145 s, logo MOVING 9,280 px/3 s
+  over a blanked picture; **A-B repeat kept the playhead inside 0:01:46–0:02:04 for
+  96 s** (free-running would reach ~0:03:20) and ran away again after `A-B OFF`.
+  ★★ **A-B REPEAT SHIPPED BROKEN AND ONLY HARDWARE COULD FIND IT: `scrub_ctrl`'s
+  `jump_dir` is `1 = forward` (`scrub_ctrl.sv:174`, applied at `:260` as
+  `base ± off`), and `ab_repeat` drove `1'b1` under a comment claiming "1 = backward".**
+  Every loop-back was a forward jump that cleared `title_last_rbn`, got clamped there
+  by `:263`, and ran off into the PGC's post — measured as a jump to **1:43:42 of a
+  1:43:41 title**. One bit.
+  ★★★ **AND THE BENCH COULD NOT CATCH IT, WHICH IS THE DURABLE PART.** Arm `[B2d]`
+  asserted `jump_dir == 1` *because the RTL drove 1* — the expectation was copied from
+  the implementation's own belief rather than from the CONSUMER'S CONTRACT, so bench
+  and RTL shared one wrong convention and agreed perfectly through 7/7 mutations.
+  Same shape as `field_parity_tb` and `dvd_vm_ref.py`
+  ([[bench-that-cannot-fail]]). **When a module hands a value to another module,
+  assert against the consumer's declaration and cite its line** — the arm now reads 0
+  and names `scrub_ctrl.sv:174`.
+  ⚠⚠ **A HARNESS BUG COST THE WHOLE FIRST ROUND, and it looked exactly like a core
+  defect.** `tools/mister_keyd.py` declared a hand-maintained list of Linux keycodes to
+  uinput, and **a uinput device can only emit keys it DECLARED — the kernel drops the
+  rest silently.** All five new keys were injected, accepted by `mister.py key` (whose
+  names derive from `CONF_STR`), and discarded by the kernel; on the board that is
+  indistinguishable from "the core ignores those buttons". It was the one transcribed
+  table in a harness built on derived ones. Now `range(1, 249)` — declaring a key is
+  not emitting it, so a generous range cannot go stale.
+  ⚠ **Three more harness traps, all of which produced a confident wrong reading first:**
+  (1) `Debug Overlay=On` forces `vis = 1` (`transport_hud.sv:202`), so the instrument
+  MASKED the Display test — the baseline read "visible" before any press. (2) A
+  press→screenshot pair over ssh is a RACE: `screenshot` goes straight to
+  `/dev/MiSTer_cmd` while the key goes agent→uinput→Main→core, so a zero-delay capture
+  shows the PRE-press state and reads as the pre-fix bug. Sample several delays inside
+  the window instead. (3) Display persistence CARRIES OVER between runs, so a script
+  that assumes it starts off silently ran an entire Stop test with the HUD hidden.
+  ★ **The screensaver's no-state-change claim is proven two ways:** `cfg_rewritten`,
+  `il_switch_fired` and `watchdog_fired` all stayed RED through it (no scaler re-init,
+  no raster switch, the watchdog never fired across the long hold), and dismissing it
+  restored the **bit-identical** paused frame (0 px different from the original) — the
+  held frame survived untouched, which a `media_seen` clear could not have done.
+  ⚠ **Chapter Menu on a disc with NO chapter menu falls back to the disc's ROOT menu**
+  (`fb=FB_VTSM`), measured on an image whose VTSM declares only an `0x83` entry — the
+  board parked there with buttons armed, not stalled. The manual had claimed "does
+  nothing and says `NO MENU`"; there is no such popup and never was. Corrected.
+  ⚠ The elapsed readout is unreliable for a second or two AFTER a seek (the DSI time
+  interpolation re-syncs on the next NAV pack), so A-B's landing point cannot be
+  timed to the second from the HUD — measure the loop as a BOUNDED BAND over a long
+  window instead, which is also the property a user actually experiences. Field report: *"display button would be nice if it toggled
   on/off instead of just on"*, plus no Stop, no aspect on a button, no volume, no eject.
   ★ **The Display defect was ONE LINE, and the bench had encoded it as correct
   behaviour.** `transport_hud.sv` did toggle `persist_q`; the line below it re-armed the
