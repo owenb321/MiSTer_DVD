@@ -2721,8 +2721,8 @@ worse maintenance burden than targeted in-place edits. So:
   ⚠ A retune must also move `dvd/dpad_seek.sv`'s header, `docs/dvd_nav.md` §2a and
   `docs/transport_hud.md` — the numbers are quoted in all four.
   ★★ **AND THE STEP IS NO LONGER A FRACTION OF THE SPAN AT ALL (2026-09-12, branch
-  `feature/scrub-time-tiers`, `dev-scrubtiers`) — sim-proven with a mutant per claim,
-  ⏳ HW gate pending.** A fraction of a SHORT title is a crawl: MEASURED at tier 0, a 2 h
+  `feature/scrub-time-tiers`, `dev-scrubtiers`) — sim-proven with a mutant per claim, and
+  ✅ HW-CONFIRMED for the DVD path (see the round below).** A fraction of a SHORT title is a crawl: MEASURED at tier 0, a 2 h
   feature moved **29 content-seconds per second**, a 3-minute clip **0.58**, a 30-second
   clip **0.19**, and the shift truncated what little was left (`2584 >> 12 = 0` — the
   `| 1` floor was the only thing still moving the cursor). Now a linear file steps
@@ -2751,6 +2751,21 @@ worse maintenance burden than targeted in-place edits. So:
   DVD rate vary **2× within a bucket** (68 min → 8.3 s/s, 2h16 → 16.7); removing it needs
   the forbidden `span / title_secs`. Gate: `bench/dvd/run_scrub_tiers.sh --red` (T19 pins the
   parity; 7 mutants, including an unscaled lattice and a drifted ladder).
+  ✅ **HW-CONFIRMED 2026-09-12 — THE FEEL, WHICH IS THE ONLY THING THAT COULD SETTLE IT**
+  (build `DVD_scrubtiers_20260912_2135.rbf`, flashed to the rig and held on a physical
+  disc; maintainer: *"that scrub speed feels good"*).
+  ★ **The harness could not have answered this and never will:** `dvd/kbd_map.sv`
+  deliberately routes keyboard Fast Fwd/Rewind to `dvd/dpad_seek.sv`, never to
+  `scrub_ctrl`'s hold-to-scrub — an IR "hold" is ~9 discrete taps a second, which on the
+  hold path is ~9 flush/re-locks a second, the regime HW rounds 1–2 proved fatal. So
+  `joy_eff` masks those keys out and the gesture is reachable **only from a gamepad**. A
+  tier ladder is a feel setting whose instrument is a person, and this is the second
+  retune (2026-09-03 was the first) decided the same way.
+  ⏳ **NOT covered by that round, and each needs the same hands:** the LINEAR half (a
+  `.mpg`/VCD held at the same tiers — the parity claim is pinned in sim to 7 % but has
+  never been felt), a SHORT title (the 0.58 s/s case the change exists for), and the
+  arrow readout replacing `×1..×4`. The disc under test was an ordinary feature, i.e. the
+  anchor bucket — the one length whose behaviour moved least.
   ⚠ **SEAMLESS-BRANCH DISCS ARE STILL WRONG and it is NOT the readout — it is the
   SEEK.** The 2026-09-03 cell-gap fix (a cell's span is its own `first..last`, not
   the distance to the next cell's first — AFTER_EARTH VTS_13 PGC1, 1.612× short,

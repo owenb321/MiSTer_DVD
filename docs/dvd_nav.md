@@ -1474,6 +1474,21 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   The DVD/linear gap is now smaller than this spread, which is the honest place to stop.
   ⚠ To retune the feel, move **`SHn` and `LSn` together** — one shift is one factor of two on
   either side. `scrub_ctrl_tb` T19 fails if they drift apart.
+  ✅ **HW-CONFIRMED 2026-09-12 — THE FEEL, WHICH IS THE ONLY THING THAT COULD SETTLE IT**
+  (build `DVD_scrubtiers_20260912_2135.rbf`, flashed to the rig and held on a physical
+  disc; maintainer: *"that scrub speed feels good"*).
+  ★ **The harness could not have answered this and never will:** `dvd/kbd_map.sv`
+  deliberately routes keyboard Fast Fwd/Rewind to `dvd/dpad_seek.sv`, never to
+  `scrub_ctrl`'s hold-to-scrub — an IR "hold" is ~9 discrete taps a second, which on the
+  hold path is ~9 flush/re-locks a second, the regime HW rounds 1–2 proved fatal. So
+  `joy_eff` masks those keys out and the gesture is reachable **only from a gamepad**. A
+  tier ladder is a feel setting whose instrument is a person, and this is the second
+  retune (2026-09-03 was the first) decided the same way.
+  ⏳ **NOT covered by that round, and each needs the same hands:** the LINEAR half (a
+  `.mpg`/VCD held at the same tiers — the parity claim is pinned in sim to 7 % but has
+  never been felt), a SHORT title (the 0.58 s/s case the change exists for), and the
+  arrow readout replacing `×1..×4`. The disc under test was an ordinary feature, i.e. the
+  anchor bucket — the one length whose behaviour moved least.
   ⚠ **The ladders and the dwells are `scrub_ctrl` parameters (`SH0..SH3`, `LS0..LS3`,
   `T1..T3`, `SECS_REF`).** The span ladder was relaxed once already on 2026-09-03 after a
   user report that the scrub "ramps up too fast": the original `{10,8,6,5}` / 0-1.5-3-5 s
