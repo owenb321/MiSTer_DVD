@@ -722,6 +722,18 @@ parameter CONF_STR = {
     // The governor's SHOW_N=2 gives 25 fps from a 50 Hz display. See
     // docs/frame_rate_governor.md / docs/av_sync.md / docs/interlaced_auto.md.
     "O[17:16],Video Standard,Auto,NTSC,PAL;",
+    // Screensaver: after this long PAUSED or STOPPED, the bouncing idle logo
+    // takes over and any button/key dismisses it (burn-in protection -- this
+    // core drives real CRTs). dvd/stop_ctl.sv owns the timer; the verdict is a
+    // DISPLAY-layer override only (it never touches media_seen, which would
+    // flip VIDEO_ARX/ARY and re-init the scaler mid-film).
+    // ⚠ VALUE ORDER IS LOAD-BEARING: status[] powers up at zero, so index 0 is
+    // the DEFAULT. "5min" sits first deliberately -- a natural-reading
+    // Off,2min,5min,10min list would ship the feature disabled and protect
+    // nobody. Re-ordering these later REMAPS saved values and forces a "v,N"
+    // bump (that is exactly why v3 exists -- see the A/V Offset note below).
+    // Bits 47/48 were never allocated, so adding this row needs no bump.
+    "O[48:47],Screensaver,5min,Off,2min,10min;",
     // (DVD-FORK dual raster: the bogus "O[10],Direct Video,Off,On;" entry that used
     // to sit here is DELETED — it collided with the O[10:9] enum (setting it
     // silently forced native fields), and the real direct_video signal comes from
@@ -1266,6 +1278,15 @@ wire        lin_seek_ok_w;   // from dvd_iso_reader (linear seek available)
 wire [31:0] lin_blk_w;       // from dvd_iso_reader (linear playhead block)
 wire       seek_ack;         // from dvd_iso_reader (seek accepted this cycle)
 
+// DVD-remote Stop / screensaver (dvd/stop_ctl.sv, instanced further down).
+// Declared HERE because pause_q's block reads stopped_w well before the
+// instance: emu.sv has no `default_nettype none`, so a forward reference would
+// otherwise become a silent 1-bit implicit net and the later explicit
+// declaration a redeclaration.
+wire       stopped_w;        // Stop is asserted (hold + blank the picture)
+wire       stop_restart;     // pulse: stage-2 PLAY -> restart reader + VM at FP
+wire       saver_on_w;       // screensaver owns the screen
+
 // Disc-menu proto-nav read-backs / request lines (Phase 2)
 wire       jump_ack;         // from dvd_iso_reader (jump executing this cycle)
 wire       keep_vbuf;        // level (valid at seek_ack/jump_ack): menu->menu
@@ -1651,7 +1672,10 @@ always @(posedge clk_sys or negedge reset_n) begin
         key_return_p <= 1'b0;
 
         if (start_streaming)      pause_q <= 1'b0;   // fresh load clears pause
-        else if (pause_edge)      pause_q <= ~pause_q;
+        // ⚠ gated on ~stopped_w: while STOPPED the Pause button means PLAY and
+        // belongs to stop_ctl, which clears `stopped`. Toggling pause_q here as
+        // well would leave the disc paused the instant the stop is released.
+        else if (pause_edge && !stopped_w) pause_q <= ~pause_q;
         // a title-mode Fast Fwd/Rewind time scrub resumes playback (the scrub FSM
         // below issues the actual seek_rbn)
         // A KEYBOARD Fast Fwd/Rewind press must resume too, and it needs its own
@@ -1981,8 +2005,31 @@ dpad_seek dpad_seek_inst (
 // While a seek gesture is held the video simply PAUSES (a plain, proven freeze --
 // no repeated flushing) and audio holds; releasing does one seek. ORed into the
 // manual-pause paths below (governor/STC + audio).
-wire pause_gov = pause_q | hold_freeze;
-wire pause_aud = pause_q | hold_freeze;
+// DVD-remote Stop (B14) + the pause/stop screensaver -- dvd/stop_ctl.sv.
+// `stopped` is a hold exactly like pause_q: it rides the SAME four coordinated
+// holds (governor freeze, watchdog repeat_frame=31, STC stall, audio hold), so
+// an indefinite stop is already the HW-proven indefinite-pause case.
+stop_ctl stop_ctl_inst (
+    .clk             (clk_sys),
+    .rst_n           (reset_n),
+    .stop_edge       (stop_edge),
+    .play_edge       (pause_edge),        // B1 doubles as PLAY while stopped
+    .any_input       (vm_entropy_stir),   // any button/key edge dismisses the saver
+    .start_streaming (start_streaming),
+    .media_seen      (media_seen),
+    .paused          (pause_q),
+    // A chapter skip or VM jump is also a resume, and it names its own
+    // destination -- so it must clear a stage-2 stop WITHOUT the First-Play
+    // restart that a bare PLAY would take.
+    .resume_evt      (jump_ack | chap_pulse),
+    .saver_sel       (status[48:47]),
+    .stopped         (stopped_w),
+    .restart         (stop_restart),
+    .saver_on        (saver_on_w)
+);
+
+wire pause_gov = pause_q | hold_freeze | stopped_w;
+wire pause_aud = pause_q | hold_freeze | stopped_w;
 
 // =========================================================================
 // DVD-VM (Phase 4): executes the disc's navigation commands. Owns all jumps
@@ -2042,7 +2089,7 @@ dvd_vm dvd_vm_inst (
     .entropy_stir  (vm_entropy_stir),
     .entropy_val   (entropy_ctr[15:0]),
     .enable        (menus_on),
-    .start         (start_streaming),
+    .start         (start_streaming | stop_restart),
     .cfg_lang      (player_lang),        // OSD Player Language -> SPRM0/16/18
     .nav_ready     (nav_ready_w),
     .auto_vts      (auto_vts_w),
@@ -2692,7 +2739,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .clk            (clk_sys),
     .rst_n          (reset_n),
 
-    .start          (start_streaming),
+    .start          (start_streaming | stop_restart),
     .file_size      (current_file_size),
     .lu_lang_pref   (player_lang),        // OSD Player Language -> menu-LU match
     .title_sel      (dbg_title_vts),      // Debug "Title VTS" picker: 0=Auto, else VTS #
@@ -5625,7 +5672,12 @@ always @(posedge clk_sys or negedge reset_n) begin
     else if (logo_boot_dly != 25'd0) logo_boot_dly <= logo_boot_dly - 25'd1;
 end
 
-wire logo_vis = !media_seen && !video_live_s2 && !img_streaming &&
+// DVD-remote screensaver: saver_on_w sits OUTSIDE the !media_seen group on
+// purpose. A paused title still has live video and a mounted image, so a term
+// ANDed inside that group could never assert. The remaining guards still apply
+// (an unplayable image, a download in flight and the boot delay all outrank it).
+wire logo_vis = (saver_on_w ||
+                 (!media_seen && !video_live_s2 && !img_streaming)) &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
 
@@ -5671,15 +5723,21 @@ reg        sp_force_q;
 // and it MUST assert force: sp_idx_q carries the subpicture's index, which
 // is 0 when idle, and without force the idx-0 transparency key would erase
 // the logo.
+// DVD-remote screensaver: while it owns the screen the HUD and the seek bar are
+// suppressed. A static status line burning into a phosphor is precisely what the
+// screensaver exists to prevent, and logo_on_w sits BELOW both in this chain --
+// so without these gates the logo would bounce around underneath a pinned HUD.
+wire hud_on_e = hud_on_w & ~saver_on_w;
+wire bar_on_e = bar_on_w & ~saver_on_w;
 always @(posedge clk_sys) begin
-    sp_r_q     <= hud_on_w ? hud_r_w     : bar_on_w ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
-    sp_g_q     <= hud_on_w ? hud_g_w     : bar_on_w ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
-    sp_b_q     <= hud_on_w ? hud_b_w     : bar_on_w ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
-    sp_alpha_q <= hud_on_w ? hud_alpha_w : bar_on_w ? bar_alpha_w : logo_on_w ? 4'd15
+    sp_r_q     <= hud_on_e ? hud_r_w     : bar_on_e ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
+    sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
+    sp_b_q     <= hud_on_e ? hud_b_w     : bar_on_e ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
+    sp_alpha_q <= hud_on_e ? hud_alpha_w : bar_on_e ? bar_alpha_w : logo_on_w ? 4'd15
                            : (hl_use ? hl_a : sp_alpha);   // HLI alpha for recoloured classes
     sp_idx_q   <= sp_q_idx;
-    sp_on_q    <= hud_on_w | bar_on_w | logo_on_w | sp_q_inside;
-    sp_force_q <= hud_on_w | bar_on_w | logo_on_w | hl_use; // + logo: bypass the idx0 key
+    sp_on_q    <= hud_on_e | bar_on_e | logo_on_w | sp_q_inside;
+    sp_force_q <= hud_on_e | bar_on_e | logo_on_w | hl_use; // + logo: bypass the idx0 key
 end
 
 // Alpha-composite the subtitle over the decoded video, COMBINATIONALLY, right before
@@ -5690,8 +5748,16 @@ end
 // (only the RGB value now passes through this small blend before the SAME output reg; the
 // reg->pin hop that the 2026-06-28 column-dots fix shortened is unchanged).
 wire [7:0] sub_r, sub_g, sub_b;
+// DVD-remote: Stop and the screensaver blank the PICTURE, not the composited
+// output. Blanking here (the blend INPUT) rather than at the vga_*_q mux -- where
+// sw_blank lives -- is deliberate: sw_blank sits before sub_r and so takes out the
+// HUD and idle logo too, but Stop must still show "STOP" and the screensaver IS
+// the idle logo. So the picture goes black underneath and the overlay survives.
+wire pic_blank = stopped_w | saver_on_w;
 subpic_blend subpic_blend_inst (
-    .in_r(core_r), .in_g(core_g), .in_b(core_b),
+    .in_r(pic_blank ? 8'd0 : core_r),
+    .in_g(pic_blank ? 8'd0 : core_g),
+    .in_b(pic_blank ? 8'd0 : core_b),
     .ov_on(sp_on_q), .ov_idx(sp_idx_q),
     .ov_r(sp_r_q), .ov_g(sp_g_q), .ov_b(sp_b_q),
     .ov_alpha(sp_alpha_q),
