@@ -1870,7 +1870,7 @@ pack. ⚠ That is the reader's seek path — the boot path for every disc — so
 wants the full 33-testbench gate and its own HW round, not a rider on a readout
 fix.
 
-### 2f. Program order is not physical order — the title span must be a MAX — 🔧 FIXED 2026-09-13, ⏳ HW-confirm pending
+### 2f. Program order is not physical order — the title span must be a MAX — ✅ FIXED + HW-CONFIRMED 2026-09-13
 
 Field report: on `A_MILLION_WAYS_TO_DIE_IN_THE_WEST` (physical disc *and* the
 decrypted ISO) **any seek jumped to the end of the movie**, the **chapter notches
@@ -2069,6 +2069,50 @@ means a degenerate span cannot recur, so a standing sweep would only ever confir
 what the RTL makes impossible. The measurements in this section were taken with
 throwaway scripts; reproduce them by walking each VTS's `VTS_PGCIT` PGC cell
 table and comparing `cell[nr-1].last_sector` against `max(last_sector)`.
+
+#### HW round — ✅ CONFIRMED 2026-09-13, on the reported disc
+
+Build `DVD_titlespan_20260913_2203.rbf` (SEED 7 first roll despite the new
+registers, clk_dec 94.32 @100C / 92.1 @-40C against the 86.0 gate, 88 % ALM),
+driven over the HIL harness on `A_MILLION_WAYS_TO_DIE_IN_THE_WES`. The board
+reported `CH 1/7` under `Debug Overlay=On` — reader PGCN 1, VTS 7, i.e. **the
+exact title this section measures** — with `1:55:54` and `21` chapters matching
+the IFO.
+
+★ **The notches were checked against the DISC, not against the core.**
+`seek_bar`'s own published formula was applied to the chapter table read
+straight out of the ISO, and the expected columns compared with the columns
+measured in a screenshot. A core that placed its notches somewhere
+self-consistent but wrong would still fail this.
+
+| measurement | pre-fix (predicted) | measured on the board |
+|---|---|---|
+| bar fill at 0:02:03 of 1:55:54 | 512/512 — a solid block | **column 5 of 512** |
+| chapter notches | none (all pushed to 512) | **19**, total residual **1 px over 19** |
+| forward burst (8 taps) | jump to the end | **0:07:16 → 0:08:52** (+87 s), playback continues |
+| backward burst (8 taps) | jump to the end | **0:09:24 → 0:08:18** (−75 s) |
+| A-B repeat (shares the clamp) | escapes / runs away | held **0:09:08–0:09:28** for 90 s |
+
+⚠ **The +10 px offset between the nominal `X0` and the captured raster is
+harness geometry, not the core** — it is fitted, not assumed, and it matches the
+`xoff -9` the harness's own HUD decoder reports independently. An unfitted first
+pass read a constant −10 on 18 of 19 notches and looked exactly like a
+systematic placement error.
+
+★ **The predicted residual was confirmed as predicted:** chapters **1 and 21**
+both resolve to column 0 and sit inside the fill. Chapter 21 is the displaced
+4-sector cell — written down before the build, found after it.
+
+⚠ **What this round did NOT test: the gamepad HOLD-to-scrub gesture.**
+`dvd/kbd_map.sv` deliberately masks `kbd_joy[14:13]` out of `joy_eff` and routes
+keyboard Fast Fwd/Rewind to `dvd/dpad_seek.sv`, because an IR "hold" is ~9
+discrete taps a second — the flush/re-lock regime HW rounds 1–2 proved fatal. So
+the measurements above exercise `scrub_ctrl`'s **jump** port. That port shares
+the identical `target` clamp, which is the thing under test, but the held
+gesture itself needs a physical gamepad.
+
+★ Control: a disc from the healthy 903 (`1NIGHT_MCCOOLS`) seeks normally in both
+directions on the same build (+87 s / −37 s, matching the tap counts).
 
 #### ⛔ Non-goals — do not re-derive these
 

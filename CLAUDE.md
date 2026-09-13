@@ -252,10 +252,29 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **PROGRAM ORDER IS NOT PHYSICAL ORDER — the title span collapsed on 51 of 958
+- ✅ **PROGRAM ORDER IS NOT PHYSICAL ORDER — the title span collapsed on 51 of 958
   library discs, making them completely unseekable (2026-09-13, branch
   `fix/title-span-max`); sim-proven RED/GREEN, 5/5 mutations each caught by its own
-  arm, ⏳ HW-confirm pending.** Field report on
+  arm, and ✅ HW-CONFIRMED 2026-09-13 ON THE REPORTED DISC** (build
+  `DVD_titlespan_20260913_2203.rbf`, SEED 7 first roll, clk_dec 94.32/92.1, 88 % ALM).
+  ★★ **THE NOTCHES WERE SCORED AGAINST THE DISC, NOT AGAINST THE CORE:**
+  `seek_bar`'s own formula applied to the chapter table read straight out of the ISO,
+  compared with the columns measured in a screenshot — **19 notches, total residual
+  1 px over 19**, where the old rule drew none. Bar fill at 0:02:03 of 1:55:54 read
+  **column 5 of 512** (it was a solid 512 block). Forward burst **0:07:16 → 0:08:52**
+  (+87 s) and backward **0:09:24 → 0:08:18** (−75 s), both bounded, playback
+  continuing; **A-B repeat**, which shares the clamp, held **0:09:08–0:09:28 for
+  90 s**. `Debug Overlay=On` reported `CH 1/7` = reader PGCN 1, VTS 7, confirming the
+  board was playing the exact title analysed. Control from the healthy 903
+  (`1NIGHT_MCCOOLS`) unregressed.
+  ⚠ **The +10 px offset between the nominal `X0` and the captured raster is HARNESS
+  GEOMETRY** — fitted, not assumed, and matching the `xoff -9` the harness's HUD
+  decoder reports independently. An unfitted first pass read a constant −10 on 18 of
+  19 notches and looked exactly like a systematic placement error.
+  ⚠ **NOT tested: the gamepad HOLD-to-scrub gesture** — `kbd_map.sv` deliberately
+  masks `kbd_joy[14:13]` out of `joy_eff` and routes keyboard FF/REW to `dpad_seek`,
+  so the round exercised `scrub_ctrl`'s JUMP port. Same `target` clamp (the thing
+  under test), different gesture. Field report on
   `A_MILLION_WAYS_TO_DIE_IN_THE_WEST` (physical disc AND the decrypted ISO): *"any
   forward seeking will jump all the way to the end of the movie. The chapter markers
   are missing and the hud bar is solid gray."*
