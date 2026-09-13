@@ -2341,9 +2341,12 @@ worse maintenance burden than targeted in-place edits. So:
 - ✅ **DVD-REMOTE BUTTONS — Stop, Aspect, Chapter Menu, A-B Repeat, Frame Step, a
   screensaver, and the Display toggle FIX (2026-09-13, branch
   `feature/remote-buttons`) — sim-proven, mutation-checked 31/31 across five modules,
-  and ✅ HW-CONFIRMED 2026-09-13 over two HIL rounds** (build
-  `DVD_remotebtns_20260913_1347.rbf`, SEED 7 first roll, 87 % ALM, clk_dec
-  93.41/88.83). **Every feature MEASURED, not eyeballed:** Display hidden at 300/800/
+  and ✅ HW-CONFIRMED 2026-09-13 over five rounds** (final build
+  `DVD_remotebtns_20260913_2037.rbf`, SEED 7 first roll, 88 % ALM, clk_dec
+  92.49/88.38). **Eject, Volume and the CEC transport mapping shipped with it**
+  (B19-B21 + `main/support/dvd/dvd_remote.cpp`, integration steps 39-41) —
+  eject ✅ HW-CONFIRMED from the maintainer's own log: `DVD_PHYS: eject: tray
+  opened on /dev/sr0`, plus the unmount-an-image case. **Every feature MEASURED, not eyeballed:** Display hidden at 300/800/
   1500 ms across 3 on/off cycles (all inside the 2.5 s window a pre-fix core stays
   visible); Stop → `STOP` popup, elapsed frozen over 5 s, resume IN PLACE
   (0:00:19→0:00:23), `STOP  FROM START`, then restart from First Play (total
@@ -2355,6 +2358,36 @@ worse maintenance burden than targeted in-place edits. So:
   anamorphic; screensaver not armed at 100 s, armed by 145 s, logo MOVING 9,280 px/3 s
   over a blanked picture; **A-B repeat kept the playhead inside 0:01:46–0:02:04 for
   96 s** (free-running would reach ~0:03:20) and ran away again after `A-B OFF`.
+  ★★ **STOP SHIPPED AS THE WRONG FEATURE, TWICE, AND BOTH WERE SPEC MISREADS
+  RATHER THAN BUGS.** Round 1 blanked the picture to black; the report was
+  *"one stop was supposed to drop you to the idle logo"* — a set-top player
+  spins down and puts its OWN screen up, and the machinery already existed
+  (the screensaver was doing exactly that five minutes later), so `logo_vis`
+  simply gained `stopped_w`. Round 3 then found the stage READOUT wrong too:
+  *"the second stop should clear all messages... just show the logo as if you
+  had done a soft reset."* The two stages are told apart by the PRESENCE of an
+  overlay, not by two captions — stage 1 keeps `STOP` because a resume is
+  waiting, stage 2 suppresses the HUD and seek bar entirely. The
+  `STOP  FROM START` string, `transport_hud`'s `stop_kept` port and the
+  `f2_keep` snapshot were deleted rather than left as dead weight.
+  ⚠ Measured, so it needs no re-deriving: playing mean 45.90/max 255 → stage 1
+  mean 1.99/max 110 with `STOP` → stage 2 mean ~2.1/max 116 with the HUD gone,
+  held 11 s, logo moving 9,464 px in 2 s.
+  ★★ **EJECT NEEDED TWO FIXES AND THE REPORT NAMED THE SECOND ONE:** *"eject
+  does not eject the disc, instead it reloads it... we see the key cracking
+  message again and the disc starts over."* (1) The tray was asked to open
+  BEFORE the teardown, while the mounted file and the libdvdcss session still
+  hold `/dev/srN` open — the kernel refuses to eject a busy device, so it never
+  moved. (2) With the disc still in the drive the 1 Hz auto-mount re-acquired
+  it and re-cracked the keys. `foreign = 1` blocks that, reusing the existing
+  "do not auto-mount" latch whose clear condition is already right: a disc
+  INSERTION EDGE. No new state, no timer.
+  ⚠⚠ **AND ONE ROUND WAS WASTED BY ME, NOT BY THE CODE:** I described the
+  round-2 logo fix while the core was still compiling and only the Main had
+  been staged, so the maintainer tested the OLD `.rbf` and correctly reported
+  no change. **A fix is not testable until its artefact is ON THE BOARD** —
+  say "building" and wait, and remember which half of a change lives in the
+  `.rbf` and which in the Main (they are flashed separately).
   ★★ **A-B REPEAT SHIPPED BROKEN AND ONLY HARDWARE COULD FIND IT: `scrub_ctrl`'s
   `jump_dir` is `1 = forward` (`scrub_ctrl.sv:174`, applied at `:260` as
   `base ± off`), and `ab_repeat` drove `1'b1` under a comment claiming "1 = backward".**
