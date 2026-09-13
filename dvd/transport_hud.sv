@@ -83,6 +83,9 @@ module transport_hud #(
     input  wire        aspct_evt,
     input  wire        aspct_analog,        // 1 = Analog Aspect, 0 = Aspect Ratio
     input  wire [1:0]  aspct_val,
+    // B17 A-B repeat: pulse + the state it moved to (0 off, 1 A set, 2 armed).
+    input  wire        ab_evt,
+    input  wire [1:0]  ab_state,
     input  wire        load_evt,            // fresh media load: clear + hide
     input  wire        show_evt,            // transport event: re-arm show_tmr
 
@@ -148,6 +151,10 @@ module transport_hud #(
 );
 
     // ---- glyph indices (keep in sync with tools/hud_font.py) --------------
+    // G_DOT/G_DASH complete the punctuation run tools/hud_font.py emits at
+    // 10..15 (':' '/' '.' '-' ' ' 'x'); '-' had no localparam until A-B repeat
+    // needed it. The glyphs themselves already existed -- no font change.
+    localparam [5:0] G_DOT   = 6'd12, G_DASH  = 6'd13;
     localparam [5:0] G_COLON = 6'd10, G_SLASH = 6'd11, G_SPACE = 6'd14,
                      G_X     = 6'd15, G_A     = 6'd16,
                      G_PLAY  = 6'd42, G_PAUSE = 6'd43, G_REV = 6'd44,
@@ -203,6 +210,7 @@ module transport_hud #(
             else if (vts_evt)   begin pop_type <= 4'd7; pop_tmr <= SHOW_TICKS; end
             else if (seek_evt)  begin pop_type <= 4'd8; pop_tmr <= SHOW_TICKS; end
             else if (aspct_evt) begin pop_type <= 4'd11; pop_tmr <= SHOW_TICKS; end
+            else if (ab_evt)    begin pop_type <= 4'd12; pop_tmr <= SHOW_TICKS; end
             else if (load_evt)          pop_tmr <= 27'd0;
             // STOP: a level, above the warnings (a stopped disc cannot be
             // scrambled-mid-stream or mis-muxed -- nothing is playing) but below
@@ -296,6 +304,7 @@ module transport_hud #(
     reg        f2_keep;                      // STOP: 1 = position kept
     reg        f2_aspa;                      // ASPECT: 1 = the analog control
     reg [1:0]  f2_aspv;                      // ASPECT: the value moved to
+    reg [1:0]  f2_abst;                      // A-B: the state moved to
 
     reg        sk_two, sk_fwd;               // popup 8: 2-digit minutes, direction
     reg [2:0]  sk_sec;                       // popup 8: tens-of-seconds digit
@@ -367,6 +376,27 @@ module transport_hud #(
                 5'd12: fmt_g = sk_two ? {1'b0, G_COLON}          : {1'b0, 3'b000, sk_sec};
                 5'd13: fmt_g = sk_two ? {1'b0, 3'b000, sk_sec}   : {1'b0, 6'd0};
                 5'd14: fmt_g = sk_two ? {1'b0, 6'd0}             : {1'b0, G_NONE};
+                default: fmt_g = {1'b0, G_NONE};
+            endcase
+        end else if (fmt_col[5] && f2_type == 4'd12) begin
+            // ---- popup row, A-B REPEAT -------------------------------------
+            // "A-B  A SET" / "A-B  ON" / "A-B  OFF". The middle state has to be
+            // distinguishable: a user who has pressed once and walked away needs
+            // to know the loop is half-armed, not running.
+            case (fmt_col[4:0])
+                5'd0:  fmt_g = {1'b0, a2g("A")};
+                5'd1:  fmt_g = {1'b0, G_DASH};
+                5'd2:  fmt_g = {1'b0, a2g("B")};
+                5'd3:  fmt_g = {1'b0, G_SPACE};
+                5'd4:  fmt_g = {1'b0, G_SPACE};
+                5'd5:  fmt_g = (f2_abst == 2'd1) ? {1'b0, a2g("A")} :
+                               (f2_abst == 2'd2) ? {1'b0, a2g("O")} : {1'b0, a2g("O")};
+                5'd6:  fmt_g = (f2_abst == 2'd1) ? {1'b0, G_SPACE}  :
+                               (f2_abst == 2'd2) ? {1'b0, a2g("N")} : {1'b0, a2g("F")};
+                5'd7:  fmt_g = (f2_abst == 2'd1) ? {1'b0, a2g("S")} :
+                               (f2_abst == 2'd2) ? {1'b0, G_NONE}   : {1'b0, a2g("F")};
+                5'd8:  fmt_g = (f2_abst == 2'd1) ? {1'b0, a2g("E")} : {1'b0, G_NONE};
+                5'd9:  fmt_g = (f2_abst == 2'd1) ? {1'b0, a2g("T")} : {1'b0, G_NONE};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
         end else if (fmt_col[5] && f2_type == 4'd11) begin
@@ -623,7 +653,7 @@ module transport_hud #(
             f_ch <= 1'b0; f_icon <= 2'd0; f_arrows <= 3'd2;
             f2_type <= 4'd0; f2_n <= 8'd0; f2_nn <= 8'd0; sk_sec <= 3'd0;
             f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0; f2_keep <= 1'b0;
-            f2_aspa <= 1'b0; f2_aspv <= 2'd0;
+            f2_aspa <= 1'b0; f2_aspv <= 2'd0; f2_abst <= 2'd0;
         end else begin
             if (fmt_col <= 7'd63) begin
                 plane[fmt_col[5:0]] <= fmt_g;
@@ -645,6 +675,7 @@ module transport_hud #(
                 f2_keep <= stop_kept;
                 f2_aspa <= aspct_analog;
                 f2_aspv <= aspct_val;
+                f2_abst <= ab_state;
                 f2_l1   <= G_NONE;
                 f2_l2   <= G_NONE;
                 if (pop_type == 4'd7) f2_n <= bin2bcd99(vts_no);

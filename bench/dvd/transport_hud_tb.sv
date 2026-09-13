@@ -33,6 +33,8 @@ module transport_hud_tb;
     reg         stop_on = 0, stop_kept = 0;
     reg         aspct_evt = 0, aspct_analog = 0;
     reg [1:0]   aspct_val = 0;
+    reg         ab_evt = 0;
+    reg [1:0]   ab_state = 0;
     reg         img_warn = 0;      // Phase-2: unplayable image
     reg         aud_warn = 0;      // Phase-2: unsupported audio format
     reg         vts_evt  = 0;      // Phase-2: title-VTS notice pulse
@@ -63,6 +65,7 @@ module transport_hud_tb;
         .chap_evt(chap_evt), .css_warn(css_warn),
         .stop_on(stop_on), .stop_kept(stop_kept),
         .aspct_evt(aspct_evt), .aspct_analog(aspct_analog), .aspct_val(aspct_val),
+        .ab_evt(ab_evt), .ab_state(ab_state),
         .img_warn(img_warn), .aud_warn(aud_warn),
         .vts_evt(vts_evt), .vts_no(vts_no),
         .seek_evt(seek_evt), .seek_fwd(seek_fwd),
@@ -463,6 +466,20 @@ module transport_hud_tb;
         aspct_val = 2'd1;
         @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
         check_popup("T23f analog fit", "ANALOG FIT~~~~~~~~~~~~~~~~~~~~~~");
+
+        // ---- T24: A-B repeat popup ---------------------------------------
+        // The half-armed state must be distinguishable: a user who pressed once
+        // and walked away needs to see the loop is not running yet.
+        $display("== T24: A-B repeat popup");
+        ab_state = 2'd1;
+        @(posedge clk); ab_evt = 1; @(posedge clk); ab_evt = 0;
+        check_popup("T24a A set", "A-B  A SET~~~~~~~~~~~~~~~~~~~~~~");
+        ab_state = 2'd2;
+        @(posedge clk); ab_evt = 1; @(posedge clk); ab_evt = 0;
+        check_popup("T24b armed", "A-B  ON~~~~~~~~~~~~~~~~~~~~~~~~~");
+        ab_state = 2'd0;
+        @(posedge clk); ab_evt = 1; @(posedge clk); ab_evt = 0;
+        check_popup("T24c cleared", "A-B  OFF~~~~~~~~~~~~~~~~~~~~~~~~");
 
         if (errors == 0) $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
         else             $display("TRANSPORT_HUD_TB: FAILED (%0d errors)", errors);

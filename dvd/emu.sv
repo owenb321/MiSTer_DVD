@@ -1908,6 +1908,18 @@ wire [6:0]  dpad_pend_min;
 wire [2:0]  dpad_pend_sec;
 wire        dpad_jump_fire, dpad_jump_dir;
 wire [31:0] dpad_jump_base, dpad_jump_off;
+// A-B repeat shares scrub_ctrl's ONE jump port with the D-pad fixed-time seek.
+// They are both user gestures on different buttons and cannot sensibly overlap,
+// so a flat priority mux is enough; A-B wins because its jump is AUTOMATIC (the
+// loop reaching B) while the D-pad's is a press the user can simply repeat.
+wire        ab_jump_fire, ab_jump_dir;
+wire [31:0] ab_jump_base, ab_jump_off;
+wire [1:0]  ab_state_w;
+wire        ab_evt_w;
+wire        jmp_fire = ab_jump_fire | dpad_jump_fire;
+wire        jmp_dir  = ab_jump_fire ? ab_jump_dir  : dpad_jump_dir;
+wire [31:0] jmp_base = ab_jump_fire ? ab_jump_base : dpad_jump_base;
+wire [31:0] jmp_off  = ab_jump_fire ? ab_jump_off  : dpad_jump_off;
 wire        bar_active_w;                          // Phase 11: seek-bar visible
 wire [31:0] bar_base_rbn_w, bar_tgt_rbn_w;         // Phase 11: bar fill + cursor
 wire [31:0] title_first_rbn_w, title_last_rbn_w;
@@ -1951,10 +1963,37 @@ scrub_ctrl scrub_ctrl_inst (
     .hud_tier        (hud_tier_w),
     .hud_dir         (hud_dir_w),
     // ---- O[45] D-Pad Seek: pre-resolved fixed-time jumps ----------------
-    .jump_fire       (dpad_jump_fire),
-    .jump_dir        (dpad_jump_dir),
-    .jump_base       (dpad_jump_base),
-    .jump_off        (dpad_jump_off)
+    .jump_fire       (jmp_fire),
+    .jump_dir        (jmp_dir),
+    .jump_base       (jmp_base),
+    .jump_off        (jmp_off)
+);
+
+// =========================================================================
+// A-B REPEAT (B17) - dvd/ab_repeat.sv
+// =========================================================================
+// Press to mark A, again for B, again to clear; the playhead reaching B loops
+// back to A through scrub_ctrl's jump port above, so the title-span clamp and
+// the single proven raw-RBN seek are inherited rather than rebuilt.
+// ⚠ dsi_commit/load_flush are NOT optional here: A-B repeat seeks by
+// construction, so it spends much of its life in the stale-DSI window that
+// nav_dsi.sv's header warns every consumer about. See the module header.
+ab_repeat ab_repeat_inst (
+    .clk        (clk_sys),
+    .rst_n      (reset_n),                   // NOT pipe_rst_n: the loop must
+                                             // survive its own seek
+    .ab_edge    (ab_edge),
+    .in_title   (cell_ready && !menu_active && !in_title_menu && !menu_nav),
+    .cur_rbn    (dsi_nv_pck_lbn),
+    .dsi_commit (dsi_commit),
+    .nav_flush  (load_flush),
+    .cancel     (start_streaming | chap_pulse | stop_restart),
+    .jump_fire  (ab_jump_fire),
+    .jump_base  (ab_jump_base),
+    .jump_off   (ab_jump_off),
+    .jump_dir   (ab_jump_dir),
+    .state_o    (ab_state_w),
+    .evt        (ab_evt_w)
 );
 
 // =========================================================================
@@ -5594,6 +5633,8 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .aspct_evt    (aspct_evt_w),
     .aspct_analog (aspct_evt_analog_w),
     .aspct_val    (aspct_evt_val_w),
+    .ab_evt       (ab_evt_w),
+    .ab_state     (ab_state_w),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
     // Three LIVE sources, in the order they can be trusted: a linear file's
