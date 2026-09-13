@@ -67,6 +67,7 @@ module stop_ctl #(
     input  wire [1:0] saver_sel,        // O[48:47]: 0=5min 1=Off 2=2min 3=10min
 
     output reg        stopped,          // hold + blank the picture
+    output wire       kept_o,           // 1 = stage 1 (position kept), for the HUD
     output reg        restart,          // one-cycle: re-start reader + VM from FP
     output reg        saver_on          // show the idle logo over everything
 );
@@ -103,6 +104,8 @@ module stop_ctl #(
             end
         end
     end
+
+    assign kept_o = kept;
 
     // ---- screensaver -------------------------------------------------------
     // Armed whenever nothing is moving on a loaded disc. The timer is a plain

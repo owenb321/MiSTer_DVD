@@ -1286,6 +1286,7 @@ wire       seek_ack;         // from dvd_iso_reader (seek accepted this cycle)
 wire       stopped_w;        // Stop is asserted (hold + blank the picture)
 wire       stop_restart;     // pulse: stage-2 PLAY -> restart reader + VM at FP
 wire       saver_on_w;       // screensaver owns the screen
+wire       stop_kept_w;      // stage 1 (position kept) vs stage 2 (forgotten)
 
 // Disc-menu proto-nav read-backs / request lines (Phase 2)
 wire       jump_ack;         // from dvd_iso_reader (jump executing this cycle)
@@ -2024,6 +2025,7 @@ stop_ctl stop_ctl_inst (
     .resume_evt      (jump_ack | chap_pulse),
     .saver_sel       (status[48:47]),
     .stopped         (stopped_w),
+    .kept_o          (stop_kept_w),
     .restart         (stop_restart),
     .saver_on        (saver_on_w)
 );
@@ -5543,6 +5545,8 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
     .scrub_tier   (hold_freeze ? hud_tier_w : 2'd0),
     .display_edge (display_edge),
+    .stop_on      (stopped_w),
+    .stop_kept    (stop_kept_w),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
     // Three LIVE sources, in the order they can be trusted: a linear file's

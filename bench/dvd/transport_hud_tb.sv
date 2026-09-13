@@ -30,6 +30,7 @@ module transport_hud_tb;
     reg  [7:0]  cur_pgm = 0, nr_pgm = 0;
     reg         aud_evt = 0, sub_evt = 0, angle_evt = 0, chap_evt = 0;
     reg         css_warn = 0;
+    reg         stop_on = 0, stop_kept = 0;
     reg         img_warn = 0;      // Phase-2: unplayable image
     reg         aud_warn = 0;      // Phase-2: unsupported audio format
     reg         vts_evt  = 0;      // Phase-2: title-VTS notice pulse
@@ -58,6 +59,7 @@ module transport_hud_tb;
         .cur_pgm(cur_pgm), .nr_pgm(nr_pgm),
         .aud_evt(aud_evt), .sub_evt(sub_evt), .angle_evt(angle_evt),
         .chap_evt(chap_evt), .css_warn(css_warn),
+        .stop_on(stop_on), .stop_kept(stop_kept),
         .img_warn(img_warn), .aud_warn(aud_warn),
         .vts_evt(vts_evt), .vts_no(vts_no),
         .seek_evt(seek_evt), .seek_fwd(seek_fwd),
@@ -408,6 +410,31 @@ module transport_hud_tb;
         cur_pgm = 8'd12; nr_pgm = 8'd23; @(posedge clk);
         check_line("T20 dpad = direction only", ">>    0:12:34/1:37:05 CH 12/23~~");
         scrub_held = 0; scrub_tier = 2'd0; @(posedge clk);
+
+        // ---- T22: STOP is a LEVEL, and names which stage it is in --------
+        // Stage 1 keeps the position ("STOP"); stage 2 has forgotten it, so the
+        // readout has to say the next PLAY restarts the disc -- otherwise the two
+        // states are indistinguishable on screen and the button feels broken.
+        $display("== T22: STOP indicator");
+        css_warn = 0; menu_active = 0;
+        repeat (2200) @(posedge clk);        // let any previous popup expire
+        stop_on = 1; stop_kept = 1;
+        check_popup("T22a stop kept", "STOP~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+        stop_kept = 0;
+        check_popup("T22b cleared", "STOP  FROM START~~~~~~~~~~~~~~~~");
+        // It must PERSIST: a user popup expires after ~2.5 s, a stopped disc
+        // does not stop being stopped.
+        repeat (2200) @(posedge clk);
+        if (dut.pop_vis !== 1'b1) begin
+            errors = errors + 1;
+            $display("  FAIL T22c stop popup expired (must hold while stopped)");
+        end else $display("  ok  T22c stop indicator persists");
+        stop_on = 0;
+        repeat (2200) @(posedge clk);
+        if (dut.pop_vis !== 1'b0) begin
+            errors = errors + 1;
+            $display("  FAIL T22d stop popup stuck after resume");
+        end else $display("  ok  T22d stop indicator clears on resume");
 
         if (errors == 0) $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
         else             $display("TRANSPORT_HUD_TB: FAILED (%0d errors)", errors);

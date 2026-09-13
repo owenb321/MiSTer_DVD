@@ -74,6 +74,11 @@ module transport_hud #(
     // and what made the numbers big enough to be worth not printing.
     input  wire [1:0]  scrub_tier,
     input  wire        display_edge,        // B9: toggle persistent mode
+    // DVD-remote Stop (B14). A LEVEL, not a pulse: the disc stays stopped
+    // until PLAY, so the indicator must persist like the CSS warning rather
+    // than expire after SHOW_TICKS the way a user popup does.
+    input  wire        stop_on,             // stopped right now
+    input  wire        stop_kept,           // 1 = position kept (stage 1)
     input  wire        load_evt,            // fresh media load: clear + hide
     input  wire        show_evt,            // transport event: re-arm show_tmr
 
@@ -194,6 +199,14 @@ module transport_hud #(
             else if (vts_evt)   begin pop_type <= 4'd7; pop_tmr <= SHOW_TICKS; end
             else if (seek_evt)  begin pop_type <= 4'd8; pop_tmr <= SHOW_TICKS; end
             else if (load_evt)          pop_tmr <= 27'd0;
+            // STOP: a level, above the warnings (a stopped disc cannot be
+            // scrambled-mid-stream or mis-muxed -- nothing is playing) but below
+            // the user pulses, so a chapter/audio popup issued on the way into a
+            // stop still gets its 2.5 s. Re-takes the slot for as long as it holds.
+            else if (stop_on && (pop_tmr == 27'd0 || pop_type == 4'd10 ||
+                                 pop_type == 4'd4 || pop_type == 4'd5 ||
+                                 pop_type == 4'd6))
+                                begin pop_type <= 4'd10; pop_tmr <= SHOW_TICKS; end
             // CSS warning: lowest priority so user popups show for their 2.5 s,
             // then the warning re-takes the slot for as long as css_warn holds.
             // Warnings, in ROOT-CAUSE order: CSS explains a muted/green disc, an
@@ -275,6 +288,7 @@ module transport_hud #(
     reg [7:0]  f2_n, f2_nn;                  // n / N as {tens,ones} BCD
     reg [5:0]  f2_l1, f2_l2;                 // language glyphs (NONE = hidden)
     reg        f2_off;                       // SUB OFF variant
+    reg        f2_keep;                      // STOP: 1 = position kept
 
     reg        sk_two, sk_fwd;               // popup 8: 2-digit minutes, direction
     reg [2:0]  sk_sec;                       // popup 8: tens-of-seconds digit
@@ -346,6 +360,34 @@ module transport_hud #(
                 5'd12: fmt_g = sk_two ? {1'b0, G_COLON}          : {1'b0, 3'b000, sk_sec};
                 5'd13: fmt_g = sk_two ? {1'b0, 3'b000, sk_sec}   : {1'b0, 6'd0};
                 5'd14: fmt_g = sk_two ? {1'b0, 6'd0}             : {1'b0, G_NONE};
+                default: fmt_g = {1'b0, G_NONE};
+            endcase
+        end else if (fmt_col[5] && f2_type == 4'd10) begin
+            // ---- popup row, STOP ------------------------------------------
+            // Stage 1 "STOP" (position kept, PLAY resumes in place); stage 2
+            // "STOP  FROM START" (forgotten, PLAY boots the disc from First
+            // Play). Spelled out of glyphs that already exist -- no new font
+            // entry, so tools/hud_font.py and the committed dvd/hud_font.mem
+            // stay untouched (the same rule the SEEK popup follows).
+            case (fmt_col[4:0])
+                5'd0:  fmt_g = {1'b1, a2g("S")};
+                5'd1:  fmt_g = {1'b1, a2g("T")};
+                5'd2:  fmt_g = {1'b1, a2g("O")};
+                5'd3:  fmt_g = {1'b1, a2g("P")};
+                // col 4 is conditional too: a trailing SPACE is not blank, it
+                // paints the translucent backing one cell wider than the word.
+                5'd4:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, G_SPACE};
+                5'd5:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, G_SPACE};
+                5'd6:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("F")};
+                5'd7:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("R")};
+                5'd8:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("O")};
+                5'd9:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("M")};
+                5'd10: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, G_SPACE};
+                5'd11: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("S")};
+                5'd12: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("T")};
+                5'd13: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("A")};
+                5'd14: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("R")};
+                5'd15: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("T")};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
         end else if (fmt_col[5] && f2_type == 4'd4) begin
@@ -521,7 +563,7 @@ module transport_hud #(
             f_cur <= 24'd0; f_tot <= 24'd0; f_n <= 8'd0; f_nn <= 8'd0;
             f_ch <= 1'b0; f_icon <= 2'd0; f_arrows <= 3'd2;
             f2_type <= 4'd0; f2_n <= 8'd0; f2_nn <= 8'd0; sk_sec <= 3'd0;
-            f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0;
+            f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0; f2_keep <= 1'b0;
         end else begin
             if (fmt_col <= 7'd63) begin
                 plane[fmt_col[5:0]] <= fmt_g;
@@ -540,6 +582,7 @@ module transport_hud #(
                 f_arrows <= {1'b0, scrub_tier} + 3'd2;
                 f2_type <= pop_type;
                 f2_off  <= 1'b0;
+                f2_keep <= stop_kept;
                 f2_l1   <= G_NONE;
                 f2_l2   <= G_NONE;
                 if (pop_type == 4'd7) f2_n <= bin2bcd99(vts_no);
