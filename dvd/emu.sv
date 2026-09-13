@@ -883,8 +883,8 @@ parameter CONF_STR = {
               //     saved value, so the version bumps and all settings reset once.
               // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
-    // disc-menu nav (Phase 2). The J1 list names buttons B1..B13 for the MiSTer
-    // "Define buttons" menu (bits 4..16 of joystick_0; D-pad = bits 3:0). The
+    // disc-menu nav (Phase 2). The J1 list names buttons B1..B18 for the MiSTer
+    // "Define buttons" menu (bits 4..21 of joystick_0; D-pad = bits 3:0). The
     // HOLD-to-seek time scrub (accelerating 10->30->60->120 s via
     // dvd/scrub_ctrl.sv) rides its OWN buttons B10 "Fast Fwd" / B11 "Rewind"
     // while a TITLE plays, so the D-pad is ALWAYS free for directional
@@ -894,7 +894,7 @@ parameter CONF_STR = {
     // string, capped at 28 names), so the order is user-visible -- and MiSTer
     // will NOT bind Enter or Esc to any of them (issue #35). dvd/kbd_map.sv
     // gives every one of them a built-in key that bypasses that mapper.
-    "J1,Pause,Prev Chapter,Next Chapter,Select,Menu,Angle,Audio,Subtitle,Display,Fast Fwd,Rewind,Title,Return;",
+    "J1,Pause,Prev Chapter,Next Chapter,Select,Menu,Angle,Audio,Subtitle,Display,Fast Fwd,Rewind,Title,Return,Stop,Aspect,Chapter Menu,A-B Repeat,Frame Step;",
     "V,",`CORE_VERSION," ",`BUILD_DATE,";"
 };
 
@@ -1459,7 +1459,7 @@ wire sp_route_en;                                  // (assigned at the SPU block
 // release freezes the picture. They go to dvd/dpad_seek.sv instead (+/-10 s per
 // press, coalescing into ONE seek), wired at the dpad_seek instance below. The
 // gamepad's hold-to-scrub is untouched. Full reasoning: dvd/kbd_map.sv header.
-wire [16:0] kbd_joy;
+wire [21:0] kbd_joy;
 
 kbd_map kbd_map_inst (
     .clk     (clk_sys),
@@ -1468,7 +1468,7 @@ kbd_map kbd_map_inst (
     .joy     (kbd_joy)
 );
 
-wire [31:0] joy_eff = joystick_0 | {15'd0, (kbd_joy & ~17'h0_6000)};
+wire [31:0] joy_eff = joystick_0 | {10'd0, (kbd_joy & ~22'h00_6000)};
 
 wire joy_pause = joy_eff[4];                       // B1 "Pause"
 wire joy_next  = joy_eff[6];                       // B3 "Next Chapter"
@@ -1492,6 +1492,14 @@ wire joy_ff    = joy_eff[13];                      // B10 "Fast Fwd" (held scrub
 wire joy_rew   = joy_eff[14];                      // B11 "Rewind"   (held scrub bwd)
 wire joy_title = joy_eff[15];                      // B12 "Title"    (VMGM Top Menu)
 wire joy_ret   = joy_eff[16];                      // B13 "Return"   (GoUp)
+// DVD-remote additions. All PRESS edges (never levels): kbd_map emits one-cycle
+// pulses and a tap-repeating IR remote sends ~9 discrete taps a second, so a
+// level here would be the scrub_ctrl failure mode in a new hat.
+wire joy_stop  = joy_eff[17];                      // B14 "Stop"
+wire joy_aspct = joy_eff[18];                      // B15 "Aspect"
+wire joy_cmenu = joy_eff[19];                      // B16 "Chapter Menu"
+wire joy_ab    = joy_eff[20];                      // B17 "A-B Repeat"
+wire joy_step  = joy_eff[21];                      // B18 "Frame Step"
 wire pause_edge = joy_pause & ~joy_prev[4];
 // Phase 8: B2/B3 = CHAPTER prev/next (program_map); B10/B11 (Fast Fwd/Rewind) =
 // HOLD-to-seek TIME SCRUB (dvd/scrub_ctrl.sv, accelerating 10->30->60->120 s the
@@ -1525,6 +1533,11 @@ wire ff_edge    = joy_ff  & ~joy_prev[13];         // Fast Fwd press (scrub star
 wire rew_edge   = joy_rew & ~joy_prev[14];         // Rewind press  (scrub start)
 wire title_edge = joy_title & ~joy_prev[15];       // Title press   (Top Menu)
 wire ret_edge   = joy_ret   & ~joy_prev[16];       // Return press  (GoUp)
+wire stop_edge  = joy_stop  & ~joy_prev[17];       // Stop press    (two-stage)
+wire aspct_edge = joy_aspct & ~joy_prev[18];       // Aspect press  (cycle)
+wire cmenu_edge = joy_cmenu & ~joy_prev[19];       // Chapter Menu press
+wire ab_edge    = joy_ab    & ~joy_prev[20];       // A-B Repeat press
+wire step_edge  = joy_step  & ~joy_prev[21];       // Frame Step press
 // D-pad edges (bits 3:0 = up/down/left/right): BUTTON NAV in a menu / in-title
 // HLI with armed buttons (Phase 3). The HOLD-to-seek scrub is on the dedicated
 // Fast Fwd/Rewind buttons, so the D-pad never fights game direction input.
