@@ -15,6 +15,9 @@ standard numbering — whatever you mapped B1 to in the MiSTer menu is what "B1"
 | B7 | Audio (cycle) | | B16 | Chapter Menu |
 | B8 | Subtitle (cycle) | | B17 | A-B Repeat |
 | B9 | Display (toggle status line) | | B18 | Frame Step |
+| | | | B19 | Eject |
+| | | | B20 | Vol Up |
+| | | | B21 | Vol Down |
 | | | | D-pad | Menu navigation |
 
 Every one of those actions also has a **[keyboard or remote key](#keyboard-and-tv-remote)**.
@@ -36,9 +39,10 @@ itself to MiSTer as a keyboard counts, which is how a **remote** drives the play
 | ++"M"++ / ++"X"++ | Menu | | ++f5++ | Chapter Menu |
 | ++"T"++ | Title menu | | ++"L"++ | A-B Repeat |
 | ++"A"++ | Audio (cycle) | | ++"."++ | Frame Step |
-| ++"S"++ | Subtitle (cycle) | | ++0++ – ++9++ | Select menu button by number |
-| ++"G"++ | Angle (cycle) | | | |
-| ++"D"++ | Display (toggle status line) | | | |
+| ++"S"++ | Subtitle (cycle) | | ++"E"++ | Eject |
+| ++"G"++ | Angle (cycle) | | Keypad ++"+"++ | Vol Up |
+| ++"D"++ | Display (toggle status line) | | Keypad ++"-"++ | Vol Down |
+| | | | ++0++ – ++9++ | Select menu button by number |
 
 !!! warning "Fast Fwd and Rewind work differently here"
     On a gamepad you *hold* them to scrub. On a keyboard or remote each press jumps **10
@@ -74,8 +78,29 @@ hdmi_cec=1
 ```
 
 Then map the colour keys to the disc's own menus: **blue** = Menu, **red** = Title,
-**green** = Audio, **yellow** = Subtitle. You need those because the remote's Menu / Exit
-button belongs to the MiSTer OSD (see below).
+**green** = Audio, **yellow** = Subtitle.
+
+Your remote's **transport keys** work as you would expect:
+
+| Remote key | Does |
+|---|---|
+| Play / Pause | Pause and resume |
+| Stop | Stop (two-stage — see [Stopping a disc](#stopping-a-disc)) |
+| Fast Fwd / Rewind | Seek ±10 s per press |
+| Prev / Next | Chapter back and forward |
+| Exit / Back | Return (up one menu level) |
+| Eject | Eject |
+| Info / Display | Toggle the status line |
+| Contents / Title list | Chapter Menu |
+| Volume, Mute | MiSTer's own volume — handled before the core sees it |
+
+!!! note "Needs `MiSTer_DVDcss`"
+    Those transport mappings come from the custom Main. On stock Main a remote's Stop
+    key does **Return** instead, and Eject / Info / Contents do nothing.
+
+!!! warning "Menu / Home still belongs to the MiSTer OSD"
+    The remote's **Root Menu / Home** key opens the MiSTer OSD and always will — that is
+    how you get in and out of it. Use the **blue** colour key for the disc's menu.
 
 !!! failure "If nothing happens, check the log before changing anything else"
     MiSTer throws its own log away by default. Add `debug=2` under `[MiSTer]`, reboot, and
@@ -224,6 +249,27 @@ you can navigate out of.
 end to mark **B**, and playback loops between them. A third press turns it off. The popup
 tracks the state — `A-B  A SET`, `A-B  ON`, `A-B  OFF` — so a half-set loop is never a
 mystery. Leaving the title or loading another disc clears it.
+
+### Eject
+
+**B19 (Eject)** unloads whatever is in the drive or the slot and returns you to the
+idle screen. With a **physical disc** it also opens the tray. With a disc image it
+simply unmounts it.
+
+!!! note "Needs `MiSTer_DVDcss`"
+    Eject and the volume buttons are serviced by the custom Main — the core cannot
+    unmount a file or open a tray by itself. Without it, these three buttons do nothing.
+
+### Volume
+
+**B20 / B21 (Vol Up / Vol Down)** change **MiSTer's own** volume, the same one the OSD's
+volume row sets. That is deliberate: it is a single control that covers HDMI, the analog
+output *and* S/PDIF together, and it is the only one that can affect a bitstream being
+passed through to a receiver. A press burst is applied in full, so tapping four times
+moves four steps.
+
+Your TV remote's own volume keys already work too, and always did — MiSTer handles those
+itself, before the core ever sees them.
 
 ### Frame step
 

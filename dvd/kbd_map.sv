@@ -2,8 +2,8 @@
 // dvd/kbd_map.sv -- keyboard / TV-remote transport control
 // ============================================================================
 // Decodes the framework's ps2_key stream into a VIRTUAL JOYSTICK VECTOR with
-// exactly the bit layout of hps_io's joystick_0[21:0] (D-pad = [3:0], the J1
-// CONF_STR buttons B1..B18 = [4]..[21]), which dvd/emu.sv ORs into joy_eff.
+// exactly the bit layout of hps_io's joystick_0[24:0] (D-pad = [3:0], the J1
+// CONF_STR buttons B1..B21 = [4]..[24]), which dvd/emu.sv ORs into joy_eff.
 // Every transport action therefore gains a key for free -- edge detection,
 // chapter coalescing, the menu button walk, the HUD and vm_entropy_stir all
 // consume joy_eff and need no change.
@@ -98,16 +98,16 @@ module kbd_map (
     // Bit 10 flips on every new key event; bit 9 is make/break; bit 8 is E0.
     input  wire [10:0] ps2_key,
 
-    // One-cycle pulse per PRESS, in joystick_0[21:0] bit order.
-    output reg  [21:0] joy
+    // One-cycle pulse per PRESS, in joystick_0[24:0] bit order.
+    output reg  [24:0] joy
 );
 
     // ---- scancode -> bit index (combinational) -----------------------------
     // hit is a one-hot vector, not an index, because emu.sv wants the vector
     // and several keys share a destination (M / X / F1 all mean Menu).
-    reg [21:0] hit;
+    reg [24:0] hit;
     always @(*) begin
-        hit = 22'd0;
+        hit = 25'd0;
         if (ps2_key[8]) begin
             // ---- E0-extended --------------------------------------------
             case (ps2_key[7:0])
@@ -160,6 +160,14 @@ module kbd_map (
             8'h03: hit[19] = 1'b1;   // F5          -> B16 Chapter Menu
             8'h4B: hit[20] = 1'b1;   // L           -> B17 A-B Repeat (VLC "loop")
             8'h49: hit[21] = 1'b1;   // .           -> B18 Frame Step
+            8'h24: hit[22] = 1'b1;   // E           -> B19 Eject
+            // ⚠ Volume rides the KEYPAD +/- (0x79/0x7B), NOT the media keys:
+            // Main consumes KEY_MUTE/KEY_VOLUMEUP/KEY_VOLUMEDOWN itself
+            // (user_io.cpp:4283-4296) and they never reach ps2_key. Note
+            // 0x79/0x7B are NOT in the keypad-DIGIT block (70 69 72 7A 6B 73
+            // 74 6C 75 7D), which is reserved for menu button numbers.
+            8'h79: hit[23] = 1'b1;   // KP +        -> B20 Vol Up
+            8'h7B: hit[24] = 1'b1;   // KP -        -> B21 Vol Down
             default: ;
             endcase
         end
@@ -174,10 +182,10 @@ module kbd_map (
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            joy       <= 22'd0;
+            joy       <= 25'd0;
             ps2_tgl_q <= 1'b0;
         end else begin
-            joy       <= 22'd0;                 // default: one-cycle pulse
+            joy       <= 25'd0;                 // default: one-cycle pulse
             ps2_tgl_q <= ps2_key[10];
             // new key event (toggle flipped) + PRESSED (break events ignored)
             if ((ps2_key[10] ^ ps2_tgl_q) && ps2_key[9]) joy <= hit;

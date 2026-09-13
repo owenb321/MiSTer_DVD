@@ -33,6 +33,10 @@ cp ../support/dvd/*.cpp ../support/dvd/*.h "$TREE/support/dvd/"
 : > "$TREE/hardware.h"
 : > "$TREE/osd.h"
 : > "$TREE/file_io.h"
+# dvd_remote.cpp reaches for these two as well (spi_uio_cmd_cont/spi_w, and
+# set_volume -- the framework's ONE attenuator).
+: > "$TREE/spi.h"
+: > "$TREE/audio.h"
 
 fail=0
 for t in *_test.cpp; do
@@ -76,6 +80,47 @@ red_case() {
 
 if [ "$RED" -eq 1 ]; then
     echo "### RED arm"
+
+    # ---- dvd_remote: the Eject/Volume request protocol -------------------
+    # Every one of these is a way the polled protocol degrades into "acts on a
+    # level", which is what makes one press eject repeatedly.
+    red_case dvd_remote.cpp dvd_remote_test.cpp \
+        "first word: no eject" \
+        "s/\t\thave_ref = 1; ref_eject = e; ref_volup = u; ref_voldn = d;/\t\thave_ref = 1;/" \
+        remote-no-baseline
+
+    red_case dvd_remote.cpp dvd_remote_test.cpp \
+        "the other flip ejects too" \
+        "s/\tif (e != ref_eject)/\tif (e \&\& !ref_eject)/" \
+        remote-eject-level
+
+    red_case dvd_remote.cpp dvd_remote_test.cpp \
+        "three presses between polls -> three steps" \
+        "s/\twhile (nu--) set_volume(VOL_CMD_UP);/\tif (nu) set_volume(VOL_CMD_UP);/" \
+        remote-vol-one-step
+
+    red_case dvd_remote.cpp dvd_remote_test.cpp \
+        "and it is -1 (quieter)" \
+        "s/#define VOL_CMD_DOWN  (-1)/#define VOL_CMD_DOWN  (+1)/" \
+        remote-vol-both-up
+
+    red_case dvd_remote.cpp dvd_remote_test.cpp \
+        "a huge gap is capped" \
+        "s/\tif (nu > VOL_MAX_PER_POLL) nu = VOL_MAX_PER_POLL;//" \
+        remote-no-cap
+
+    red_case dvd_remote.cpp dvd_remote_test.cpp \
+        "no v3 bit: no eject" \
+        "s/if (magic != DVD_TELEM_MAGIC || !AF_V3(w))/if (magic != DVD_TELEM_MAGIC)/" \
+        remote-ignores-version
+
+    # ⚠ single-line anchor: sed works line by line, so a pattern containing \n
+    # matches NOTHING and red_case reports "the anchor moved". The two tabs pin
+    # this to the EJECT gate rather than the volume one a line earlier.
+    red_case dvd_remote.cpp dvd_remote_test.cpp \
+        "launch busy: no eject" \
+        "s/^\t\tif (!dvd_launch_ui_busy())$/\t\tif (1)/" \
+        remote-launch-gate
 
     # The reported bug itself: nothing restores the transmitter, so the next core
     # inherits a non-PCM link and plays silently.

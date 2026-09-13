@@ -44,6 +44,24 @@ static int    prev_ready = 0;      // the drive reported a disc ready on the las
 static int    probed_not_video = 0; // this disc was probed and is not DVD-Video
 
 // ---------------------------------------------------------------------------
+// The one teardown path: unmount, drop the CSS session, reset the core to idle
+// ---------------------------------------------------------------------------
+// Factored out of the disc-removal branch so the Eject BUTTON (B19, arriving
+// via dvd_remote.cpp) runs byte-identical steps. Keeping it here rather than
+// duplicating it in the caller is deliberate: `mounted` / `mounted_dev` /
+// `reset_release_at` are this file's slot-ownership state, and issue #48 was
+// exactly what happens when something else decides it owns slot 0.
+static void teardown_to_idle(time_t now)
+{
+	user_io_file_mount("", 0);
+	dvd_css_close();
+	mounted_dev[0] = 0;
+	user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
+	reset_release_at = now + 1;     // release after ~1 s (see the tick top)
+	mounted = 0;
+}
+
+// ---------------------------------------------------------------------------
 // Scan backoff — the drive probe runs on the thread that feeds the decoder
 // ---------------------------------------------------------------------------
 // open_ready_drive() is BLOCKING I/O on the same thread as user_io_poll()'s SD
@@ -216,12 +234,7 @@ void dvd_phys_tick(void)
 		}
 
 		phys_log("DVD_PHYS: disc removed while playing it -- unmount + reset to idle");
-		user_io_file_mount("", 0);
-		dvd_css_close();
-		mounted_dev[0] = 0;
-		user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
-		reset_release_at = now + 1;      // release after ~1 s (see the tick top)
-		mounted = 0;
+		teardown_to_idle(now);
 		return;
 	}
 
@@ -284,4 +297,51 @@ void dvd_phys_tick(void)
 const char *dvd_phys_device(void)
 {
 	return mounted_dev[0] ? mounted_dev : 0;
+}
+
+// ---------------------------------------------------------------------------
+// dvd_phys_eject() -- the Eject button's action (see dvd_phys.h)
+// ---------------------------------------------------------------------------
+int dvd_phys_eject(void)
+{
+	time_t now = time(NULL);
+	int had_disc = mounted;
+
+	// Open the tray FIRST, while we still know which /dev/srN it was: the
+	// teardown clears mounted_dev. Only for a disc WE mounted -- ejecting the
+	// drive because the user was watching an image would be a surprise, and on
+	// a machine with no drive at all there is nothing to open.
+	if (mounted && mounted_dev[0])
+	{
+		int fd = open(mounted_dev, O_RDONLY | O_NONBLOCK);
+		if (fd >= 0)
+		{
+			// CDROMEJECT needs the tray unlocked; a mounted-and-playing disc
+			// may have been locked by the kernel, so clear that first. Both
+			// are advisory -- a failure just means the tray stays shut, which
+			// is the same outcome as a machine without a drive.
+			ioctl(fd, CDROM_LOCKDOOR, 0);
+			if (ioctl(fd, CDROMEJECT, 0) < 0)
+				phys_log("DVD_PHYS: eject: tray would not open on %s", mounted_dev);
+			close(fd);
+		}
+	}
+
+	if (mounted)
+	{
+		phys_log("DVD_PHYS: eject button -- unmount + reset to idle");
+		teardown_to_idle(now);
+		return 1;
+	}
+
+	// No optical disc of ours. An IMAGE may still be loaded -- the button is
+	// "eject" for whatever is in the slot, so unmount that too and drop to the
+	// idle screen. ⚠ Guarded on is_dvd() only; we deliberately do NOT check
+	// `foreign`, because a user-chosen image is exactly what we are asked to
+	// eject here. The drive's auto-mount is what must not steal the slot, not
+	// an explicit user request.
+	phys_log("DVD_PHYS: eject button with no optical disc -- unmount image + reset");
+	teardown_to_idle(now);
+	(void)had_disc;
+	return 0;
 }

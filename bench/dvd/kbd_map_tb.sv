@@ -26,7 +26,7 @@ module kbd_map_tb;
 
     reg         rst_n = 1'b0;
     reg  [10:0] ps2 = 11'd0;
-    wire [21:0] joy;
+    wire [24:0] joy;
 
     kbd_map dut (.clk(clk), .rst_n(rst_n), .ps2_key(ps2), .joy(joy));
 
@@ -34,18 +34,18 @@ module kbd_map_tb;
 
     // Observed pulse activity since the last clear: which bits fired, and the
     // WIDEST run of consecutive cycles any bit stayed high (the pulse contract).
-    reg [21:0] seen  = 22'd0;
+    reg [24:0] seen  = 25'd0;
     integer    width = 0;
     integer    run   = 0;
     always @(posedge clk) begin
         seen <= seen | joy;
-        if (joy != 22'd0) begin
+        if (joy != 25'd0) begin
             run = run + 1;
             if (run > width) width = run;
         end else run = 0;
     end
 
-    task clr; begin seen = 22'd0; width = 0; run = 0; end endtask
+    task clr; begin seen = 25'd0; width = 0; run = 0; end endtask
     task tick(input integer n); begin repeat (n) @(negedge clk); end endtask
 
     // One key event: flip the toggle, hold the word (as hps_io does -- it stays
@@ -60,7 +60,7 @@ module kbd_map_tb;
 
     task expect_bit(input [80*8-1:0] lbl, input integer b);
         begin
-            if (seen !== (22'd1 << b)) begin
+            if (seen !== (25'd1 << b)) begin
                 $display("FAIL %0s: joy=%b want only bit %0d", lbl, seen, b);
                 errors = errors + 1;
             end else if (width != 1) begin
@@ -73,7 +73,7 @@ module kbd_map_tb;
 
     task expect_none(input [80*8-1:0] lbl);
         begin
-            if (seen !== 22'd0) begin
+            if (seen !== 25'd0) begin
                 $display("FAIL %0s: joy=%b, want all-zero", lbl, seen);
                 errors = errors + 1;
             end else
@@ -136,6 +136,9 @@ module kbd_map_tb;
         tap_bit("F5 (ChMenu)",1'b0, 8'h03, 19);
         tap_bit("L (A-B)",    1'b0, 8'h4B, 20);
         tap_bit(". (Step)",   1'b0, 8'h49, 21);
+        tap_bit("E (Eject)",  1'b0, 8'h24, 22);
+        tap_bit("KP+ (Vol+)", 1'b0, 8'h79, 23);
+        tap_bit("KP- (Vol-)", 1'b0, 8'h7B, 24);
 
         // ---- T4: Fast Fwd / Rewind pulse like everything else ---------------
         // These are the two bits emu.sv routes to dpad_seek. A LEVEL here would
@@ -148,7 +151,7 @@ module kbd_map_tb;
 
         // Hold one for a long time with no further events: still ONE pulse.
         clr(); key(1'b0, 8'h0D, 1'b1, 5000);
-        if (seen !== (22'd1 << 13) || width != 1) begin
+        if (seen !== (25'd1 << 13) || width != 1) begin
             $display("FAIL T4-hold: seen=%b width=%0d (want one 1-cycle pulse on 13)",
                      seen, width);
             errors = errors + 1;
@@ -176,7 +179,7 @@ module kbd_map_tb;
         digits[18]=8'h75; digits[19]=8'h7D;                  // numpad 0..9
         for (i = 0; i < 20; i = i + 1) begin
             clr(); key(1'b0, digits[i], 1'b1, 8);
-            if (seen !== 22'd0) begin
+            if (seen !== 25'd0) begin
                 $display("FAIL T6: digit scancode %02h produced joy=%b", digits[i], seen);
                 errors = errors + 1;
             end
@@ -201,7 +204,7 @@ module kbd_map_tb;
         @(negedge clk); ps2 = {~ps2[10], 1'b1, 1'b0, 8'h5A};
         @(negedge clk); rst_n = 1'b0;
         clr(); tick(20);
-        if (joy !== 22'd0 || seen !== 22'd0) begin
+        if (joy !== 25'd0 || seen !== 25'd0) begin
             $display("FAIL T9: joy=%b seen=%b under reset", joy, seen);
             errors = errors + 1;
         end else $display("PASS T9: held in reset");

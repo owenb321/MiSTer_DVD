@@ -895,8 +895,8 @@ parameter CONF_STR = {
               //     saved value, so the version bumps and all settings reset once.
               // v2: 2026-09-02 Video Output consolidation relayout (O[10:9] re-enumerated, O[27:26] retired)
     // Gamepad transport (dvd/dvd_iso_reader seek + presentation-clock pause) +
-    // disc-menu nav (Phase 2). The J1 list names buttons B1..B18 for the MiSTer
-    // "Define buttons" menu (bits 4..21 of joystick_0; D-pad = bits 3:0). The
+    // disc-menu nav (Phase 2). The J1 list names buttons B1..B21 for the MiSTer
+    // "Define buttons" menu (bits 4..24 of joystick_0; D-pad = bits 3:0). The
     // HOLD-to-seek time scrub (accelerating 10->30->60->120 s via
     // dvd/scrub_ctrl.sv) rides its OWN buttons B10 "Fast Fwd" / B11 "Rewind"
     // while a TITLE plays, so the D-pad is ALWAYS free for directional
@@ -906,7 +906,7 @@ parameter CONF_STR = {
     // string, capped at 28 names), so the order is user-visible -- and MiSTer
     // will NOT bind Enter or Esc to any of them (issue #35). dvd/kbd_map.sv
     // gives every one of them a built-in key that bypasses that mapper.
-    "J1,Pause,Prev Chapter,Next Chapter,Select,Menu,Angle,Audio,Subtitle,Display,Fast Fwd,Rewind,Title,Return,Stop,Aspect,Chapter Menu,A-B Repeat,Frame Step;",
+    "J1,Pause,Prev Chapter,Next Chapter,Select,Menu,Angle,Audio,Subtitle,Display,Fast Fwd,Rewind,Title,Return,Stop,Aspect,Chapter Menu,A-B Repeat,Frame Step,Eject,Vol Up,Vol Down;",
     "V,",`CORE_VERSION," ",`BUILD_DATE,";"
 };
 
@@ -1047,7 +1047,10 @@ dvd_telem dvd_telem_inst (
     // into PCM mode for an LPCM/MP2 track in Passthru.
     .af_passthru    (pass_mode),
     .af_pcm_session (rt_pcm_session),
-    .af_bs_session  (rt_bs_session)
+    .af_bs_session  (rt_bs_session),
+    .rq_eject_tgl   (rq_eject_tgl),
+    .rq_volup_seq   (rq_volup_seq),
+    .rq_voldn_seq   (rq_voldn_seq)
 );
 
 
@@ -1286,6 +1289,12 @@ wire       seek_ack;         // from dvd_iso_reader (seek accepted this cycle)
 wire       stopped_w;        // Stop is asserted (hold + blank the picture)
 wire       stop_restart;     // pulse: stage-2 PLAY -> restart reader + VM at FP
 wire       saver_on_w;       // screensaver owns the screen
+// core -> Main requests (B19..B21). Declared here because the dvd_telem
+// instance reads them ~500 lines before the block that drives them, and
+// emu.sv has no `default_nettype none`.
+reg        rq_eject_tgl;     // flips once per Eject press
+reg  [3:0] rq_volup_seq;     // +1 per Vol Up press (wraps)
+reg  [3:0] rq_voldn_seq;     // +1 per Vol Down press (wraps)
 // Aspect button (B15) effective values -- declared here because the
 // subpicture display-mode wire reads aa_osd_sel ~2200 lines before the
 // aspect_ctl instance, and emu.sv has no `default_nettype none`.
@@ -1495,7 +1504,7 @@ wire sp_route_en;                                  // (assigned at the SPU block
 // release freezes the picture. They go to dvd/dpad_seek.sv instead (+/-10 s per
 // press, coalescing into ONE seek), wired at the dpad_seek instance below. The
 // gamepad's hold-to-scrub is untouched. Full reasoning: dvd/kbd_map.sv header.
-wire [21:0] kbd_joy;
+wire [24:0] kbd_joy;
 
 kbd_map kbd_map_inst (
     .clk     (clk_sys),
@@ -1504,7 +1513,7 @@ kbd_map kbd_map_inst (
     .joy     (kbd_joy)
 );
 
-wire [31:0] joy_eff = joystick_0 | {10'd0, (kbd_joy & ~22'h00_6000)};
+wire [31:0] joy_eff = joystick_0 | {7'd0, (kbd_joy & ~25'h000_6000)};
 
 wire joy_pause = joy_eff[4];                       // B1 "Pause"
 wire joy_next  = joy_eff[6];                       // B3 "Next Chapter"
@@ -1536,6 +1545,11 @@ wire joy_aspct = joy_eff[18];                      // B15 "Aspect"
 wire joy_cmenu = joy_eff[19];                      // B16 "Chapter Menu"
 wire joy_ab    = joy_eff[20];                      // B17 "A-B Repeat"
 wire joy_step  = joy_eff[21];                      // B18 "Frame Step"
+// B19..B21 ask MAIN to act -- the HPS owns the mount slot, the optical drive
+// and sys_top's vol_att. They reach it over the CMD_AF telemetry word.
+wire joy_eject = joy_eff[22];                      // B19 "Eject"
+wire joy_volup = joy_eff[23];                      // B20 "Vol Up"
+wire joy_voldn = joy_eff[24];                      // B21 "Vol Down"
 wire pause_edge = joy_pause & ~joy_prev[4];
 // Phase 8: B2/B3 = CHAPTER prev/next (program_map); B10/B11 (Fast Fwd/Rewind) =
 // HOLD-to-seek TIME SCRUB (dvd/scrub_ctrl.sv, accelerating 10->30->60->120 s the
@@ -1574,6 +1588,36 @@ wire aspct_edge = joy_aspct & ~joy_prev[18];       // Aspect press  (cycle)
 wire cmenu_edge = joy_cmenu & ~joy_prev[19];       // Chapter Menu press
 wire ab_edge    = joy_ab    & ~joy_prev[20];       // A-B Repeat press
 wire step_edge  = joy_step  & ~joy_prev[21];       // Frame Step press
+wire eject_edge = joy_eject & ~joy_prev[22];       // Eject press   -> Main
+wire volup_edge = joy_volup & ~joy_prev[23];       // Vol Up press  -> Main
+wire voldn_edge = joy_voldn & ~joy_prev[24];       // Vol Down press-> Main
+
+// ---------------------------------------------------------------------------
+// core -> Main REQUESTS (Eject, Volume) on the CMD_AF telemetry word
+// ---------------------------------------------------------------------------
+// These three buttons ask the HPS to do something the core cannot: Main owns
+// the mount slot, the optical drive, and sys_top's vol_att (one attenuator for
+// I2S, the analog DAC and S/PDIF together -- which is why volume is NOT a
+// second gain stage in fabric; see docs/dvd_nav.md).
+//
+// ⚠ Main POLLS this word, so a level would be re-read as a fresh request every
+// poll. Eject is a toggle Main edge-detects; the volume requests are wrapping
+// counters so Main applies the DIFFERENCE since its last poll -- a burst of
+// presses between polls still yields the right number of steps.
+// ⚠ reset_n, not pipe_rst_n: a request must survive the flush its own action
+// causes. Main compares against the value it last saw, and its own state is
+// re-initialised when the core reloads, so a reset here is not a lost press.
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        rq_eject_tgl <= 1'b0;
+        rq_volup_seq <= 4'd0;
+        rq_voldn_seq <= 4'd0;
+    end else begin
+        if (eject_edge && media_seen) rq_eject_tgl <= ~rq_eject_tgl;
+        if (volup_edge)               rq_volup_seq <= rq_volup_seq + 4'd1;
+        if (voldn_edge)               rq_voldn_seq <= rq_voldn_seq + 4'd1;
+    end
+end
 // D-pad edges (bits 3:0 = up/down/left/right): BUTTON NAV in a menu / in-title
 // HLI with armed buttons (Phase 3). The HOLD-to-seek scrub is on the dedicated
 // Fast Fwd/Rewind buttons, so the D-pad never fights game direction input.

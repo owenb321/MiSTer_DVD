@@ -113,7 +113,25 @@ module dvd_telem #(
     // old core and a new idle one both answer "pcm_session = 0".
     input         af_passthru,            // Audio Out = Passthru
     input         af_pcm_session,         // ...and the current content is LPCM/MP2
-    input         af_bs_session           // ...and the current content IS AC-3/DTS
+    input         af_bs_session,          // ...and the current content IS AC-3/DTS
+
+    // --- core -> Main REQUESTS, on the same CMD_AF word ------------------
+    // The DVD-remote Eject and Volume buttons (B19..B21) are things only the
+    // HPS can do: Main owns the mount slot, the optical drive, and sys_top's
+    // vol_att (which attenuates I2S, the analog DAC and S/PDIF together).
+    // ⚠ NOT levels. Main polls this word at its own rate, so a level would be
+    // re-read as a fresh request on every poll -- one press would eject over
+    // and over. Eject is a TOGGLE (edge-detected by Main) and the two volume
+    // requests are WRAPPING COUNTERS, so Main applies the DIFFERENCE since its
+    // last poll: a burst of presses between two polls still yields the right
+    // number of steps, and a missed poll is caught up rather than lost.
+    // ⚠ Bit 12 is a FORMAT VERSION for exactly the reason bit 15 is: a core
+    // built before these existed answers with the field clear, which is
+    // indistinguishable from "no request" unless Main is told the field is
+    // there at all.
+    input         rq_eject_tgl,           // flips once per Eject press
+    input  [3:0]  rq_volup_seq,           // +1 per Vol Up press (wraps)
+    input  [3:0]  rq_voldn_seq            // +1 per Vol Down press (wraps)
 );
 
     // ---- ONE round-robin two-consecutive-agree sampler (area pass 2026-09-10) --
@@ -145,9 +163,19 @@ module dvd_telem #(
     assign src[13] = av_drift;
     assign src[14] = sched_flags;
     assign src[15] = sched_dur;
-    // [15] = format v2 (this word carries bit 2), [2] bitstream session,
-    // [1] PCM session, [0] Passthru. See the port comments.
-    assign src[16] = {1'b1, 12'd0, af_bs_session, af_pcm_session, af_passthru};
+    // CMD_AF word layout:
+    //   [15]    format v2  -- this word carries bit 2 (bs_session)
+    //   [14:13] spare
+    //   [12]    format v3  -- this word carries [11:3] (the remote requests)
+    //   [11:8]  Vol Down request counter
+    //   [7:4]   Vol Up   request counter
+    //   [3]     Eject request toggle
+    //   [2]     bitstream session   [1] PCM session   [0] Passthru
+    // See the port comments for why the requests are a toggle and counters
+    // rather than levels, and why bit 12 has to exist.
+    assign src[16] = {1'b1, 2'd0, 1'b1,
+                      rq_voldn_seq, rq_volup_seq, rq_eject_tgl,
+                      af_bs_session, af_pcm_session, af_passthru};
     assign src[17] = 16'd0;                 // spare slots keep the walk a plain counter
     assign src[18] = 16'd0;
 
