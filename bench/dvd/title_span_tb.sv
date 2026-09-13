@@ -42,7 +42,7 @@
 // it says where the user is, it is not derived from anything under test.
 //
 // Arms: A fixture sanity | B forward | C backward | D end clamp | E start clamp
-//       F per-PGC re-seed
+//       F per-PGC re-seed | G gap landing (change 2 only, +TITLE_SPAN_GAP=1)
 
 `timescale 1ns/1ps
 
@@ -280,9 +280,15 @@ module title_span_tb;
     // VTS_02: 10-sector VOB at LBA 100, RBN i -> byte 100+i. Two IN-ORDER cells,
     //         max last_sector = 9 -- a SMALLER span than VTS_01's, so arm F can
     //         see the previous title's span leak in if the cell-0 seed is gone.
-    // VTS_01's VOB is 70 sectors; the 4 cells never reference 40..69.
-    localparam V1SEC   = 70;
+    // ONE physical layout for both builds -- only the CELL TABLE differs, so the
+    // gap arm cannot accidentally also move the extents. VTS_01's VOB is always
+    // 70 sectors; in the default build cells simply never reference 40..69.
+    localparam V1SEC = 70;
+`ifdef TITLE_SPAN_GAP
+    localparam V1CELLS = 8'd5;      // + a 5th cell at 60..69, leaving 40..59 unmapped
+`else
     localparam V1CELLS = 8'd4;
+`endif
 
     task build_iso;
         begin
@@ -317,6 +323,9 @@ module title_span_tb;
             put_cell(22, 32'd16, 16'd256, 1, 32'd20, 32'd29);
             put_cell(22, 32'd16, 16'd256, 2, 32'd30, 32'd39);
             put_cell(22, 32'd16, 16'd256, 3, 32'd0,  32'd9);   // LAST program, FIRST on disc
+`ifdef TITLE_SPAN_GAP
+            put_cell(22, 32'd16, 16'd256, 4, 32'd60, 32'd69);  // 40..59 belongs to no cell
+`endif
             for (i = 0; i < V1SEC; i = i + 1)
                 fill_sec(24 + i, i[7:0]);                      // RBN i -> byte i
 
@@ -444,6 +453,7 @@ module title_span_tb;
                  title_first_rbn, title_last_rbn);
         expect_rbn(8'd10, 8'd0, "A baseline - program cell 0 at RBN 10");
 
+`ifndef TITLE_SPAN_GAP
         // ---- B: forward, well inside the title -----------------------------
         play_rbn = 32'd15;
         hold(1'b1, 8);                       // 15 + 8 = 23  (cell 1)
@@ -483,6 +493,17 @@ module title_span_tb;
         hold(1'b1, 8);                       // 2 + 8 = 10 > 9 -> clamp 9 (cell 1)
         settle; wait_bytes(1024);
         expect_rbn(8'd109, 8'd1, "F re-seed - VTS_02 clamps to its OWN 9");
+`else
+        // ---- G: a target in a GAP must not land on the last program --------
+        // Cells cover 0..39 and 60..69; 40..59 belongs to no cell. Seeking to
+        // 50 exhausts the containing-cell scan. The old fallback played
+        // cell_count-1 (= cell 4, RBN 60) -- "jump to the end" by a second
+        // route. The new one lands on the cell that STARTS nearest below.
+        play_rbn = 32'd35;
+        hold(1'b1, 15);                      // 35 + 15 = 50, inside the gap
+        settle; wait_bytes(1024);
+        expect_rbn(8'd30, 8'd2, "G gap 50 -> nearest cell below (cell 2 @30)");
+`endif
 
         if (errors == 0) $display("TITLE_SPAN_TB: ALL TESTS PASSED");
         else             $display("TITLE_SPAN_TB: FAILED with %0d errors", errors);

@@ -773,6 +773,19 @@ reg        seek_is_rbn;               // 1 = latched seek is a raw-RBN scrub
 reg [31:0] seek_rbn_l;                // latched target RBN (2048-sector)
 reg        rbn_override;              // S_CELL_LOAD2: use seek_rbn_l, not cf_rd
 reg [7:0]  rbn_scan_i;                // S_RBN_SCAN containing-cell scan cursor
+// S_RBN_SCAN MISS path: the best cell seen so far that STARTS at or below the
+// target. A target can fall in an inter-cell gap on a physically scattered PGC
+// (measured: 7 of 958 library ISOs), and the old miss rule played cell_count-1 --
+// which on an out-of-order PGC is the LAST PROGRAM, i.e. the same "jump to the
+// end of the movie" the title-span fix removes, arriving by a second route.
+reg [7:0]  rbn_best_i;                // ...its cell index
+reg [31:0] rbn_best_f;                // ...its first_sector
+reg        rbn_best_v;                // ...any candidate seen yet
+// Combinational so the EXHAUSTION arm can consult the candidate discovered on
+// the very cycle the scan ends -- cf_rd is the cell at rbn_scan_i throughout.
+wire       rbn_bt_new = (cf_rd <= seek_rbn_l) && (!rbn_best_v || cf_rd > rbn_best_f);
+wire [7:0] rbn_bt_i   = rbn_bt_new ? rbn_scan_i : rbn_best_i;
+wire       rbn_bt_v   = rbn_bt_new |  rbn_best_v;
 reg [31:0] nav_cand;                  // S_NAV_SEEK: candidate RBN (raw target upward)
 reg [10:0] nav_left;                  // S_NAV_SEEK: remaining probe budget
 
@@ -1867,6 +1880,9 @@ always @(posedge clk or negedge rst_n) begin
         seek_rbn_l   <= 32'd0;
         rbn_override <= 1'b0;
         rbn_scan_i   <= 8'd0;
+        rbn_best_i   <= 8'd0;
+        rbn_best_f   <= 32'd0;
+        rbn_best_v   <= 1'b0;
         nav_cand     <= 32'd0;
         nav_left     <= 11'd0;
         cur_angle    <= 4'd1;
@@ -2544,6 +2560,9 @@ always @(posedge clk or negedge rst_n) begin
                 // contains seek_rbn_l, then stream from that RBN (S_CELL_LOAD2 uses
                 // rbn_override). cell_i is set by the scan when it lands.
                 rbn_scan_i   <= 8'd0;
+                rbn_best_i   <= 8'd0;
+                rbn_best_f   <= 32'd0;
+                rbn_best_v   <= 1'b0;
                 cell_raddr   <= 8'd0;
                 rbn_override <= 1'b1;
                 // VOBU-align: a raw scrub target lands mid-VOBU, so the decoder
@@ -3852,8 +3871,8 @@ always @(posedge clk or negedge rst_n) begin
             // [cf_rd, cl_rd] contains seek_rbn_l. cell_raddr walks 0..cell_count-1
             // (S_RBN_SCAN2 covers the 1-cycle BRAM latency). On a hit, land on that
             // cell and fall into the normal cell-load path with rbn_override set.
-            // If the scan exhausts (target past the last cell / gap), clamp to the
-            // last cell's start (rbn_override cleared) so playback still resumes.
+            // If the scan exhausts (target in an inter-cell gap, or outside every
+            // cell), land on the cell that STARTS nearest below the target.
             S_RBN_SCAN2: state <= S_RBN_SCAN;
             S_RBN_SCAN: begin
                 if (cf_rd <= seek_rbn_l && seek_rbn_l <= cl_rd) begin
@@ -3861,12 +3880,28 @@ always @(posedge clk or negedge rst_n) begin
                     cell_raddr <= rbn_scan_i;      // reload cf_rd/cl_rd for this cell
                     state      <= S_CELL_LOAD;     // rbn_override stays set
                 end else if (rbn_scan_i + 8'd1 >= cell_count) begin
-                    // not found -> clamp to the last cell, play from its start
-                    cell_i       <= cell_count - 8'd1;
-                    cell_raddr   <= cell_count - 8'd1;
+                    // MISS. ⚠ This used to play cell_count-1 ("clamp to the last
+                    // cell"), which is the WORST available guess: on a PGC whose
+                    // cells are not in physical order the last PROGRAM cell is not
+                    // the end of the title, so a target that merely fell in a gap
+                    // jumped to the END OF THE MOVIE -- the same symptom the
+                    // title_last_rbn max fix removes, by a second route. Measured:
+                    // reachable on the 7 of 958 library ISOs whose PGC cells are
+                    // physically scattered. Land on the cell that STARTS nearest
+                    // below instead; below every cell, land on program cell 0,
+                    // because a target under the first cell is a rewind past the
+                    // start and not a jump to the end. rbn_override is cleared:
+                    // the target is in a gap, so streaming from seek_rbn_l would
+                    // read sectors that are not this cell's. Gated by
+                    // title_span_tb arm G (+TITLE_SPAN_GAP).
+                    cell_i       <= rbn_bt_v ? rbn_bt_i : 8'd0;
+                    cell_raddr   <= rbn_bt_v ? rbn_bt_i : 8'd0;
                     rbn_override <= 1'b0;
                     state        <= S_CELL_LOAD;
                 end else begin
+                    rbn_best_i <= rbn_bt_i;
+                    rbn_best_f <= rbn_bt_new ? cf_rd : rbn_best_f;
+                    rbn_best_v <= rbn_bt_v;
                     rbn_scan_i <= rbn_scan_i + 8'd1;
                     cell_raddr <= rbn_scan_i + 8'd1;
                     state      <= S_RBN_SCAN2;

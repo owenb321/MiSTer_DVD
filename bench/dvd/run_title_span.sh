@@ -18,6 +18,7 @@
 #          M2 no-seed    : drop the per-PGC cell-0 re-seed    -> D and F
 #          M3 inverted   : take the MIN instead of the MAX    -> B C D E F
 #          M4 first-min  : title_first becomes min(first)     -> E only
+#          M5 gap-last   : S_RBN_SCAN miss -> last cell again -> G only (change 2)
 #
 # M4 having exactly ONE owning arm is the point: it proves the deliberate
 # title_first asymmetry is gated in its own right, not incidentally covered.
@@ -55,6 +56,11 @@ echo "== GREEN: the gate =="
 run title_span "TITLE_SPAN_TB: ALL TESTS PASSED" \
     $RTL $DEPS bench/dvd/title_span_tb.sv
 grep -E '^  ok:|^[A-Z]: ' /tmp/ts_title_span.log | sed 's/^/  /'
+
+echo "== GREEN: the gap arm (change 2) =="
+run title_span_gap "TITLE_SPAN_TB: ALL TESTS PASSED" \
+    -DTITLE_SPAN_GAP $RTL $DEPS bench/dvd/title_span_tb.sv
+grep -E '^  ok:' /tmp/ts_title_span_gap.log | sed 's/^/  /'
 
 echo "== GREEN: suites that must be UNCHANGED =="
 run iso_reader_scrub_tb   "ISO_READER_SCRUB_TB: ALL TESTS PASSED"   $RTL dvd/bcd_time_add.sv bench/dvd/iso_reader_scrub_tb.sv
@@ -112,6 +118,10 @@ if [ "${1:-}" = "--red" ]; then
     red M4-firstmin \
         "s@if (cell_wi == 8'd0) title_first_rbn <= {wacc, pb_rdata};@if (cell_wi == 8'd0 || {wacc, pb_rdata} < title_first_rbn) title_first_rbn <= {wacc, pb_rdata};@" \
         "E"
+    # M5: change 2 reverted -- a gap landing plays the last cell again.
+    red M5-gaplast \
+        "s@cell_i       <= rbn_bt_v ? rbn_bt_i : 8'd0;@cell_i       <= cell_count - 8'd1;@" \
+        "G" "-DTITLE_SPAN_GAP"
 fi
 
 [ $fail -eq 0 ] && echo "RUN_TITLE_SPAN: ALL GREEN" || echo "RUN_TITLE_SPAN: FAILURES"

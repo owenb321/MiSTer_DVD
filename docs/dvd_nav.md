@@ -1854,7 +1854,11 @@ The dominant one — the title span itself collapsing on a PGC whose cells are n
 in physical order — is **fixed** (§2f, 2026-09-13) and covered 44 of the 51
 affected library discs. What is left here is the interleave: 7 discs whose PGC
 cells are genuinely SCATTERED, plus the seamless-branch class below, where a
-cell's sector extent lies about how much of it is played.
+cell's sector extent lies about how much of it is played. §2f's change 2 also
+removed the "a miss plays the LAST cell" fallback that made a gap landing look
+exactly like this defect, so a report of "it jumped to the end" on a
+seamless-branch disc now really is about branch resolution and not about either
+of those.
 
 **Where to start:** `S_RBN_SCAN` (`dvd_iso_reader.sv`, the `S_RBN_SCAN2`/`S_RBN_SCAN`
 pair — ⚠ the old "~3714-3766" here was already stale and is deliberately not
@@ -1979,6 +1983,32 @@ column 0 and playing it shows the playhead at the left end. That is 4 sectors on
 A_MILLION_WAYS (well under a second) but 51,832 sectors on
 BIG_TROUBLE_LITTLE_CHINA. Fixing it properly is the position-space model, below.
 
+#### Change 2 — a `S_RBN_SCAN` miss must not play the LAST cell
+
+```systemverilog
+// not found -> clamp to the last cell, play from its start
+cell_i <= cell_count - 8'd1;
+```
+
+★ **"Play the last program cell" IS "jump to the end of the movie"** — the same
+user-visible symptom as change 1, arriving by a second route. After change 1 it
+is unreachable on the 44 contiguous discs (every clamped target lies inside some
+cell), but it still fires on the 7 scattered ones whenever a target falls in an
+inter-cell gap, and for any target below every cell.
+
+The miss now lands on the cell that **starts nearest below** the target
+(`rbn_best_*`, tracked during the scan and evaluated combinationally so the
+exhaustion arm can use a candidate found on the final cycle), with
+`rbn_override` cleared — the target is in a gap, so streaming from `seek_rbn_l`
+would read sectors that are not that cell's. Below every cell it lands on
+**program cell 0**: a target under the first cell is a rewind past the start, not
+a jump to the end.
+
+⚠ This does **not** fix the scattered discs; it stops them landing at the *wrong
+end*. `iso_reader_scrub_tb` TEST 4 (out-of-range RBN on an in-order 4-cell disc)
+picks the same cell under both rules and is byte-identical, which is what
+confines the delta to real-world shapes.
+
 #### Gate — `bench/dvd/run_title_span.sh [--red]`
 
 ★ **A reader-only bench CANNOT catch this, and that is the reusable lesson.**
@@ -2009,6 +2039,7 @@ pre- and post-fix and **the clamp is the only variable**.
 | D forward clamp | RBN 39 (the real end) | RBN 9, cell 3 |
 | E backward underflow | RBN 10 (cell 0's start) | RBN 9, cell 3 |
 | F per-PGC re-seed | VTS_02 clamps to its OWN 9 | (mutation-only) |
+| G gap landing (`+TITLE_SPAN_GAP`) | the cell below the gap | the last cell |
 
 ⚠ Arm D asserts the **byte only**. Its target *is* the title's final sector, so
 there is one sector of runway and the reader's prefetch has already advanced
@@ -2025,6 +2056,7 @@ says nothing about which arm is load-bearing:
 | M2 drop the cell-0 re-seed | D and F |
 | M3 take the MIN instead of the MAX | B C D E F |
 | M4 `title_first` becomes `min(first)` | **E only** |
+| M5 change 2 reverted to the last cell | **G only** |
 
 `scrub_ctrl_tb` TEST 20 is a **contract arm, not a gate**: it drives the real
 measured pair (`first = 4, last = 3`) and asserts `scrub_ctrl` pins both

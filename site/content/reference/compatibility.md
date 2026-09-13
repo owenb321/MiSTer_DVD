@@ -88,6 +88,11 @@ of these discs is fine; it is only seeking that is affected. Chapter skip is the
 way to move around one of these discs for now. Tracked as
 [issue #49](https://github.com/owenb321/MiSTer_DVD/issues/49).
 
+A handful of discs also scatter the feature across the disc in an order that does not match
+the order you watch it in — a few TV box sets and interactive titles do this. Seeking on
+those can land a little before where the bar said, though it will no longer jump to the end
+of the film. Everything else about them plays normally.
+
 !!! tip "A game disc that repeats the same question"
     Some game discs put their randomisation setup in the boot sequence, and pressing
     **Menu** to skip the intro jumps past it — so the game repeats one question. That is

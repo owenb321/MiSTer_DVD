@@ -297,6 +297,13 @@ worse maintenance burden than targeted in-place edits. So:
   `total_blocks-1`, so a bare `max()` keeps the whole IMAGE's last block and the
   forward clamp stops clamping at all (arm D). The M2 mutation was written expecting
   F alone and came back "expected [F], got [DF]".
+  **Change 2 (same branch): a `S_RBN_SCAN` miss must not play the LAST cell.** It did
+  (`cell_i <= cell_count - 1`, "clamp to the last cell") — which on an out-of-order
+  PGC **is** "jump to the end", the same symptom by a second route. Now the cell that
+  STARTS nearest below the target, or program cell 0 below every cell (a target under
+  the first cell is a rewind past the start). Reachable only on the 7 scattered discs;
+  `iso_reader_scrub_tb` TEST 4 picks the same cell under both rules and is
+  byte-identical, which is what confines the delta.
   ★★ **A READER-ONLY BENCH CANNOT CATCH THIS, and that is the reusable lesson.**
   `title_last_rbn` reaches the reader's OWN behaviour in exactly one place — the
   `nav_cand > title_last_rbn` bail, which only shortens the VOBU-align probe and then
@@ -311,9 +318,9 @@ worse maintenance burden than targeted in-place edits. So:
   `1 >> 13` both floor to a 1-sector step, so **the clamp is the only variable**.
   ⚠ Arm D asserts the BYTE only: its target IS the title's final sector, so prefetch
   has already advanced `cell_i` by the time the byte reaches the output.
-  Gate: **`bench/dvd/run_title_span.sh --red`** — 4 mutations, and the runner requires
-  **EXACTLY** the designed arms to fail (M1→BCDE, M2→DF, M3→BCDEF, M4→E only);
-  a mutation caught by everything says nothing about which arm is
+  Gate: **`bench/dvd/run_title_span.sh --red`** — 5 mutations, and the runner requires
+  **EXACTLY** the designed arms to fail (M1→BCDE, M2→DF, M3→BCDEF, M4→E only,
+  M5→G only); a mutation caught by everything says nothing about which arm is
   load-bearing. `scrub_ctrl_tb` TEST 20 is a **contract arm, not a gate**: it drives
   the real measured `first=4/last=3` pair and asserts `scrub_ctrl` is CORRECT given a
   bad span, so a later session fixes the producer instead of loosening the clamp.
