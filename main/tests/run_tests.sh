@@ -81,6 +81,21 @@ red_case() {
 if [ "$RED" -eq 1 ]; then
     echo "### RED arm"
 
+    # ---- dvd_phys: the eject button, both reported symptoms --------------
+    # "eject does not eject the disc, instead it reloads it... we see the key
+    # cracking message again and the disc starts over."
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "does NOT re-mount the disc still in the tray" \
+        "s/^\tforeign = 1;$/\tforeign = 0;/" \
+        phys-eject-remounts
+
+    # The tray asked to open while the CSS session still holds /dev/srN, which
+    # the kernel refuses -- so nothing ejects.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "tray opened AFTER the unmount" \
+        "s/^\tteardown_to_idle(now);$/\t;/" \
+        phys-eject-order
+
     # ---- dvd_remote: the Eject/Volume request protocol -------------------
     # Every one of these is a way the polled protocol degrades into "acts on a
     # level", which is what makes one press eject repeatedly.

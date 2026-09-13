@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 #include <limits.h>          // INT_MAX — CDSL_CURRENT expands to it via <linux/cdrom.h>
 #include <sys/ioctl.h>
 #include <linux/cdrom.h>
@@ -305,43 +306,63 @@ const char *dvd_phys_device(void)
 int dvd_phys_eject(void)
 {
 	time_t now = time(NULL);
-	int had_disc = mounted;
+	int  had_disc = mounted;
+	char dev[sizeof(mounted_dev)];
 
-	// Open the tray FIRST, while we still know which /dev/srN it was: the
-	// teardown clears mounted_dev. Only for a disc WE mounted -- ejecting the
-	// drive because the user was watching an image would be a surprise, and on
-	// a machine with no drive at all there is nothing to open.
-	if (mounted && mounted_dev[0])
+	// Remember which /dev/srN it was: the teardown clears mounted_dev.
+	dev[0] = 0;
+	if (mounted && mounted_dev[0]) strncpy(dev, mounted_dev, sizeof(dev) - 1);
+	dev[sizeof(dev) - 1] = 0;
+
+	// ⚠⚠ TEARDOWN FIRST, THEN THE TRAY. The first build did the opposite and
+	// the tray never opened: at that point the mounted file and the libdvdcss
+	// session still hold /dev/srN OPEN, so the kernel refuses to eject a busy
+	// device. user_io_file_mount("") + dvd_css_close() are what release it.
+	phys_log("DVD_PHYS: eject button -- unmount + reset to idle%s",
+	         had_disc ? " (optical disc)" : " (image)");
+	teardown_to_idle(now);
+
+	// ⚠⚠ AND STOP THE AUTO-MOUNT TAKING THE SAME DISC STRAIGHT BACK. The scan
+	// runs at ~1 Hz and the disc is still sitting in the drive for at least as
+	// long as the tray takes to open -- and forever if there is no tray motor,
+	// or if the eject is refused. The field report was exactly this: "eject
+	// does not eject the disc, instead it reloads it... we see the key cracking
+	// message again and the disc starts over".
+	//
+	// `foreign` is the existing mechanism for "do not auto-mount", and its
+	// clear condition is already the right one: a disc INSERTION EDGE. So if
+	// the tray opens and a disc is put back, readiness goes 0 -> 1, the edge
+	// clears this, and auto-mount resumes. If the tray never opens, readiness
+	// never drops and the disc stays un-mounted until the user does something
+	// deliberate. No new state, and no timer to tune.
+	foreign = 1;
+	probed_not_video = 0;
+	// (prev_ready is deliberately NOT forced: the last scan already saw the
+	// disc ready, so the next one cannot read an insertion edge anyway, and
+	// forcing it would only delay a genuine re-insertion.)
+
+	// Now the tray, with the device released. Advisory: a failure just means it
+	// stays shut, which is the same outcome as a machine with no drive -- but
+	// log the errno, because "the tray did not open" has several causes and
+	// only this line tells them apart.
+	if (dev[0])
 	{
-		int fd = open(mounted_dev, O_RDONLY | O_NONBLOCK);
-		if (fd >= 0)
+		int fd = open(dev, O_RDONLY | O_NONBLOCK);
+		if (fd < 0)
 		{
-			// CDROMEJECT needs the tray unlocked; a mounted-and-playing disc
-			// may have been locked by the kernel, so clear that first. Both
-			// are advisory -- a failure just means the tray stays shut, which
-			// is the same outcome as a machine without a drive.
-			ioctl(fd, CDROM_LOCKDOOR, 0);
+			phys_log("DVD_PHYS: eject: cannot open %s (errno %d)", dev, errno);
+		}
+		else
+		{
+			ioctl(fd, CDROM_LOCKDOOR, 0);            // a playing disc may be locked
 			if (ioctl(fd, CDROMEJECT, 0) < 0)
-				phys_log("DVD_PHYS: eject: tray would not open on %s", mounted_dev);
+				phys_log("DVD_PHYS: eject: tray would not open on %s (errno %d)",
+				         dev, errno);
+			else
+				phys_log("DVD_PHYS: eject: tray opened on %s", dev);
 			close(fd);
 		}
 	}
 
-	if (mounted)
-	{
-		phys_log("DVD_PHYS: eject button -- unmount + reset to idle");
-		teardown_to_idle(now);
-		return 1;
-	}
-
-	// No optical disc of ours. An IMAGE may still be loaded -- the button is
-	// "eject" for whatever is in the slot, so unmount that too and drop to the
-	// idle screen. ⚠ Guarded on is_dvd() only; we deliberately do NOT check
-	// `foreign`, because a user-chosen image is exactly what we are asked to
-	// eject here. The drive's auto-mount is what must not steal the slot, not
-	// an explicit user request.
-	phys_log("DVD_PHYS: eject button with no optical disc -- unmount image + reset");
-	teardown_to_idle(now);
-	(void)had_disc;
-	return 0;
+	return had_disc;
 }

@@ -5833,11 +5833,17 @@ always @(posedge clk_sys or negedge reset_n) begin
     else if (logo_boot_dly != 25'd0) logo_boot_dly <= logo_boot_dly - 25'd1;
 end
 
-// DVD-remote screensaver: saver_on_w sits OUTSIDE the !media_seen group on
-// purpose. A paused title still has live video and a mounted image, so a term
-// ANDed inside that group could never assert. The remaining guards still apply
-// (an unplayable image, a download in flight and the boot delay all outrank it).
-wire logo_vis = (saver_on_w ||
+// DVD-remote screensaver AND Stop: both sit OUTSIDE the !media_seen group on
+// purpose. A paused or stopped title still has live video and a mounted image,
+// so a term ANDed inside that group could never assert. The remaining guards
+// still apply (an unplayable image, a download in flight and the boot delay all
+// outrank it).
+// ★ STOP SHOWS THE IDLE LOGO, which is what a set-top player does when it stops
+// -- it spins down and puts its own screen up. The first build blanked the
+// picture to black instead and the field report was immediate: "one stop was
+// supposed to drop you to the idle logo". The position is still remembered
+// (nothing is torn down; see dvd/stop_ctl.sv), so this is display-only.
+wire logo_vis = (saver_on_w || stopped_w ||
                  (!media_seen && !video_live_s2 && !img_streaming)) &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
