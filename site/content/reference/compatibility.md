@@ -28,6 +28,7 @@ What plays, what does not, and what is untested. Current as of **v0.5.0**.
 | Other DVD-legal sizes — 704×480, 352×480 half-D1 | Accepted, **little or no testing** |
 | NTSC / PAL detection | Automatic from the stream |
 | Progressive and native 480i/576i output | Supported |
+| PAL 576i on an analog CRT | Confirmed working on real PAL sets |
 | 3:2 pulldown / film cadence | [Supported](../video/film-24p.md), automatic |
 
 **Sub-720 content is scaled to fill the analog output** in fabric — SIF gets a 2× line
@@ -101,19 +102,6 @@ headroom because the frames are taller.
 
 **Closed captions are analog-only** and need a television that decodes them — see
 [Closed captions](../video/closed-captions.md). Roughly 1 disc in 6 carries them.
-
-**PAL on an analog CRT is implemented but unconfirmed** — the 576i timings are derived by
-analogy with the hardware-proven NTSC ones and no PAL CRT was available to test them. PAL
-over HDMI is confirmed working.
-
-!!! info "Unconfirmed on PAL"
-
-    One part of this is unconfirmed on PAL as of v0.5.0: **which of the two
-    interlaced fields the television treats as the first one**. The composite sync now
-    carries the full standard vertical block on both standards, and the *shape* of it is
-    correct for 625 lines — but the choice of which field leads was measured on NTSC and
-    applied to both. If a PAL CRT shows the two fields interleaved the wrong way round,
-    that is a known gap and a [report](reporting-a-bug.md) would settle it.
 
 **Changing the audio track inside a disc menu** silences the menu's audio until you leave
 the menu.

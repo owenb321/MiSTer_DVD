@@ -109,6 +109,12 @@ you prefer is a matter of taste.
 Letterbox uses a true two-tap vertical blend rather than dropping lines, so the scaled
 image is smooth rather than aliased.
 
+Letterbox also lifts the picture's bottom edge up the screen, away from where a CRT's
+overscan would hide it. On the few discs that carry a
+[half-line at the picture edge](../reference/troubleshooting.md#a-thin-partial-line-across-the-top-or-bottom-of-the-picture)
+that can make it visible. It is on the disc, and a set-top player letterboxing the same
+disc puts it in the same place.
+
 **Auto never selects Crop** — it chooses between Letterbox and Fit. Crop is a deliberate
 manual choice.
 
@@ -187,9 +193,6 @@ the same sync as RGB/component, so they change with it.
 
 ## Known limitations
 
-- **PAL on an analog CRT is implemented but unconfirmed.** The 576i timings are derived by
-  analogy with the hardware-proven NTSC ones, and no PAL CRT was available to test them.
-  PAL over HDMI is confirmed working.
 - While `Video Output = Interlaced`, [Film 24p](film-24p.md) output is unavailable — a
   23.976 Hz raster cannot carry fields. Film on the CRT plays with its normal 3:2 field
   cadence instead, which is what an NTSC player always did.

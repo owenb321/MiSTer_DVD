@@ -255,11 +255,11 @@ corrects this itself, including while a picture is **held** — a disc menu, an 
 copyright or warning card, a paused frame — which settles within about half a second, so
 you may catch it doing so. Many televisions never show it at all; it depends on the set.
 
-!!! question "CRT owners: please report what you see"
-    Verified here on a composite set and over HDMI. **RGB SCART, YPbPr, sync-on-green,
-    15 kHz RGBHV and PAL on a CRT are not yet confirmed** — televisions differ, and a
-    set's sync separator is what decides whether this ever shows. If you see it, please
-    [report it](reporting-a-bug.md) with the analog lines from your `MiSTer.ini`. See
+!!! question "CRT owners: please report anything that looks wrong"
+    Televisions and scalers differ, and a set's sync separator is what decides whether
+    this ever shows. If it happens on yours — or anything else on the analog output looks
+    wrong — please [report it](reporting-a-bug.md) with your display and the analog lines
+    from your `MiSTer.ini`. See
     [Field alignment](../video/interlaced.md#field-alignment).
 
 !!! info "Fixed in v0.5.0 — and a second, separate cause"
@@ -298,6 +298,28 @@ appreciably longer than a frame, or if the picture does not recover on its own.
 
 Changing `Video Output` mid-title goes through the same landing sequence — see
 [Switching mid-title](../video/interlaced.md).
+
+### A thin partial line across the top or bottom of the picture
+
+A line right at the top or bottom edge that only reaches part of the way across — picture
+for part of the line, black for the rest.
+
+**This is on the disc, not the player.** It is a property of the transfer: one video
+field's first active line begins part-way across, or the last one ends part-way across.
+Play the same disc in VLC on a computer and you will see the identical line. Televisions
+normally hide it, because a CRT and most panels overscan the edges of the picture by a few
+percent — which is also why it was never worth removing when the disc was made.
+
+It shows up here for two ordinary reasons:
+
+- **Over HDMI**, if your display is set to 1:1 / "Just Scan" / "Full Pixel", there is no
+  overscan at all, so you see every line the disc carries.
+- **In `Analog Aspect` = `Letterbox`**, the picture's bottom edge moves up the screen and
+  out of a CRT's overscan region. A set-top player letterboxing the same disc puts that
+  line in the same place.
+
+Nothing needs changing in the core, and nothing is wrong with your rip. If it bothers you,
+use your display's own zoom or overscan control. Only a minority of discs carry it.
 
 ### A film disc keeps changing resolution, or judders
 

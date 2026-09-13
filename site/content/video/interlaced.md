@@ -95,16 +95,15 @@ duration and then play perfectly, because a held picture never delivers a new fr
 the correction to act on. A held picture straightens itself within about half a second,
 so you may still catch it settling.
 
-!!! question "CRT owners: please report what you see"
-    This is verified here on a **composite** set and over HDMI. It is not yet confirmed on
-    the other analog sync modes, and the original reports came from rigs we cannot
-    reproduce — a set's sync separator is exactly what decides whether the fault ever
-    showed. Untested: **YPbPr** (`ypbpr=1`), **sync on green** (`vga_sog=1`), **15 kHz
-    RGBHV**, and **PAL on any analog CRT**.
+!!! question "CRT owners: please report anything that looks wrong"
+    Verified on a composite set, over HDMI, on a RetroTINK, and on real PAL sets. Beyond
+    that, televisions and scalers differ, and a set's sync separator is exactly what
+    decides whether a field-alignment fault ever shows.
 
-    If you run one of those, [a short report](../reference/reporting-a-bug.md) is worth a
-    great deal — please paste the analog lines from your `MiSTer.ini` and name your set,
-    and say whether a chapter skip or a paused frame ever leaves the fields wrong.
+    If your set ever leaves the fields the wrong way round after a chapter skip or on a
+    paused frame — or anything else on the analog output looks wrong —
+    [a short report](../reference/reporting-a-bug.md) is worth a great deal. Please paste
+    the analog lines from your `MiSTer.ini` and name your set.
 
 !!! info "Fixed in v0.5.0 — those reports came in, and found two more faults"
 
