@@ -359,10 +359,23 @@ worse maintenance burden than targeted in-place edits. So:
   958-image library have a played PGC over 128 cells (histogram tops out in the
   96..127 bucket, 8 discs). (3) `scrub_ctrl`/`seek_bar` are NOT changed; a defensive
   span floor there would mask the producer.
-  ⚠ Cosmetic residual, predicted before the build: the displaced trailing cell now
-  sits outside `[first,last]`, so its chapter notch pins to column 0 and playing it
-  shows the playhead at the left end — 4 sectors on A_MILLION_WAYS, but 51,832 on
-  BIG_TROUBLE_LITTLE_CHINA. Detail: **`docs/dvd_nav.md` §2f**, `docs/transport_hud.md`.
+  ⚠ Cosmetic residual, predicted before the build and CONFIRMED on the board: the
+  displaced trailing cell sits outside `[first,last]`, so its chapter notch pins to
+  column 0 (chapters 1 and 21 both did on the reported disc).
+  ⚠⚠ **THE PRE-FIX COVERAGE CLASSES DO NOT PREDICT WHAT IS LEFT, and reading them as
+  if they did was an error — corrected 2026-09-13 after measuring the library AFTER
+  the rule change.** The remaining set is **5 discs, all ONE cause: `cell[0]` is
+  physically LATE**, so `title_first_rbn` lands near the end of the disc and the span
+  is a few hundred sectors (BIG_TROUBLE_LITTLE_CHINA 60 cells → span **35** of
+  2,032,309 played; WYATT_EARP_SIDE_B 1,455; PAW_PATROL_MEET_EVEREST 1,105;
+  BEAUTY_SHOP_US 2,779; CYOA-ABOMINABLE_SNOWMAN 1,367). The genuinely SCATTERED TV
+  discs (GoT, VINYL) are fine. ★ These are the MIRROR IMAGE of the fixed class and
+  the cure is known: the span's low end wants `min(first_sector)` while the backward
+  underflow LANDING wants `cell[0].first_sector`, so serving both needs a THIRD
+  signal, its own bench arms and its own HW round. ⛔ Do NOT just flip
+  `title_first_rbn` to the minimum — that trades these 5 for the ~34 whose last
+  program cell sits at RBN 0, and `title_span_tb` arm E fails the moment you try.
+  Detail: **`docs/dvd_nav.md` §2f**, `docs/transport_hud.md`.
 - ✅ **HDMI PASSTHRU LEFT THE ADV7513 IN NON-PCM MODE FOR THE NEXT CORE (2026-09-11,
   branch `fix/hdmi-audio-teardown`) — sim + host-proven RED/GREEN, mutation-checked
   both sides, and ✅ HW-CONFIRMED 2026-09-12 with the defect REPRODUCED FIRST** (build

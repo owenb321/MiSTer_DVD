@@ -1993,8 +1993,10 @@ cell_i <= cell_count - 8'd1;
 ★ **"Play the last program cell" IS "jump to the end of the movie"** — the same
 user-visible symptom as change 1, arriving by a second route. After change 1 it
 is unreachable on the 44 contiguous discs (every clamped target lies inside some
-cell), but it still fires on the 7 scattered ones whenever a target falls in an
-inter-cell gap, and for any target below every cell.
+cell), but it remains reachable wherever a PGC's cells are not contiguous, and
+for any target below every cell. ⚠ An earlier draft tied that to "the 7 scattered
+discs"; the post-fix measurement above shows that set is not what is left, so the
+justification here is the MECHANISM, not a disc count.
 
 The miss now lands on the cell that **starts nearest below** the target
 (`rbn_best_*`, tracked during the scan and evaluated combinationally so the
@@ -2117,8 +2119,10 @@ directions on the same build (+87 s / −37 s, matching the tap counts).
 #### ⛔ Non-goals — do not re-derive these
 
 1. **Position-space progress** (cumulative played sectors instead of physical
-   RBN) is the only model that is correct on the 7 scattered discs and the only
-   thing that puts the displaced cell's notch in the right place. **It is
+   RBN) is the only model that is correct on a PGC whose cells are neither
+   contiguous nor in order, and the only thing that puts the displaced cell's
+   notch in the right place. (The 5 `cell[0]`-is-late discs above do NOT need it
+   — they need the cheaper third-signal split described there.) **It is
    measured useless for the seamless-branch class** — see §2e: an interleaved
    cell's sector extent contains the other branch's ILVUs, so the per-cell
    sector length is itself inflated (`ULTIMATE_T2` VTS_01 PGCN 1: 122 cells,
