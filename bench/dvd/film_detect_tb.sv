@@ -64,7 +64,7 @@ module film_detect_tb;
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full), .resample_wr_almost_full(resample_wr_almost_full),
     .busy(busy), .frame_late(frame_late),
     .film_det_ntsc(film_det_ntsc), .film_det_pal(film_det_pal),
-    .video_live(), .pickup_hold(1'b0), .pause(1'b0),
+    .video_live(), .pickup_hold(1'b0), .pause(1'b0), .step_req(1'b0),
     .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .sched_due(1'b1), .sched_next_due(1'b1));
 
   always #5 clk = ~clk;

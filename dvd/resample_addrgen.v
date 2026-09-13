@@ -41,6 +41,7 @@ module resample_addrgen (
   video_live,                                       // DVD-FORK (av_sync STC reference)
   pickup_hold,                                      // DVD-FORK (STD mux-lead hold)
   pause,                                            // DVD-FORK (gamepad transport): freeze frame while paused
+  step_req,                                         // DVD-FORK (frame step B18): advance exactly one picture while paused
   pickup_tick,                                      // DVD-FORK (PTS scheduling): one pulse per pickup, to disp_sched
   sched_due, sched_next_due,                        // DVD-FORK (PTS scheduling): from disp_sched
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect): cadence verdicts
@@ -145,6 +146,15 @@ module resample_addrgen (
    * debt can't grow during the freeze. av_sync freezes the STC in clk_sys in parallel,
    * halting the PTS-scheduled audio dispatch. Unpause is instant — nothing is reset. */
   input              pause;
+  /* DVD-FORK (frame step, B18): a one-cycle request to advance EXACTLY ONE
+   * displayed picture while paused. It is armed here and cleared by the pickup
+   * it permits, so "one press = one frame" is structural rather than a timed
+   * release of `pause` -- releasing pause for a window would show one frame or
+   * several depending on where the raster happened to be. Forward only: the
+   * decoder is cell/GOP-granular (docs/roadmap.md records sub-cell seek as
+   * deferred), so stepping backwards would mean re-decoding from the last
+   * anchor, which is a different feature entirely. */
+  input              step_req;
 
   /* DVD-FORK (film-aware drop reclaim): the display duration (refreshes) of the frame
    * currently on display — 3 for a repeat_first_field pulldown frame, else SHOW_N.
@@ -422,13 +432,30 @@ module resample_addrgen (
    * display holds the current image indefinitely with the raster still refreshing.
    * hold_freeze gets the same treatment (hold the last clip's frame through a
    * transition, not black — the FSM previously parked in STATE_INIT here). */
-  wire              ofv_paced = output_frame_valid & frame_due & ~pause & ~hold_freeze;
+  /* DVD-FORK (frame step): armed by step_req, cleared by the pickup it allows.
+   * Nothing else clears it, so a press while the decoder has no picture ready
+   * waits for one instead of being swallowed. Declared ahead of both gate
+   * expressions below -- this file is plain Verilog and Icarus refuses a
+   * declaration after use. */
+  reg               step_arm;
+
+  /* DVD-FORK (frame step B18): step_arm opens BOTH gates, and bypasses
+   * frame_due as well. Two reasons, each of which alone breaks the feature:
+   *   - ofv_paced: while paused STATE_REPEAT loops back to STATE_NEXT_IMG
+   *     forever (the persistence re-scan), so STATE_INIT -- the only state that
+   *     consumes ofv_pickup -- is unreachable. Opening only the pickup gate
+   *     therefore advances nothing.
+   *   - frame_due: disp_sched freezes the STC under pause, so the next picture
+   *     is never scheduled to be due and a step would wait for a clock that is
+   *     not running. A step is an explicit "show the next one NOW". */
+  wire              ofv_paced = output_frame_valid & (frame_due | step_arm) &
+                                (~pause | step_arm) & ~hold_freeze;
 
   /* DVD-FORK (STD mux-lead hold): qualified pickup. The FIRST pickup (video_live
    * still 0) is deferred while pickup_hold is asserted; once video_live is set the
    * hold can never stall the display. Every pickup-conditioned block below uses
    * this wire so the hold is atomic (no half-taken pickups). */
-  wire ofv_pickup = output_frame_valid && ~hold_freeze && ~pause;
+  wire ofv_pickup = output_frame_valid && ~hold_freeze && (~pause || step_arm);
 
   /* ================= DVD-FORK (field-parity corrector, 2026-09-02) =================
    * On an interlaced display the mixer maps each emitted field image onto the next
@@ -523,6 +550,24 @@ module resample_addrgen (
    * one refresh later, schedule intact). The FSM's STATE_INIT arc keeps raw ofv_pickup —
    * it must still advance to scan the inserted field. */
   wire       pickup_go = ofv_pickup && ~par_ins;
+
+  /* DVD-FORK (frame step B18): one press = exactly one displayed picture.
+   * ⚠ The SET is deliberately outside clk_en: step_req is a one-cycle pulse
+   * crossed from clk_sys, and clk_en is low most cycles, so gating the set
+   * would swallow most presses. The CLEAR rides pickup_go, which only happens
+   * under clk_en -- so the arm survives until a picture is actually taken.
+   * If a press coincides with a pickup the set wins and the arm stays, i.e.
+   * the press still buys its own frame rather than being absorbed. */
+  always @(posedge clk)
+    if (~rst) step_arm <= 1'b0;
+    else if (step_req)                                        step_arm <= 1'b1;
+    /* ⚠ Cleared by the ACTUAL consumption, not by pickup_go. pickup_go is a
+     * combinational "a frame could be taken", true for many cycles while the
+     * FSM is mid-scan somewhere other than STATE_INIT -- clearing on it
+     * disarmed the step one cycle after the press, before any frame was taken,
+     * and nothing advanced. STATE_INIT && pickup_go is the same term that
+     * drives output_frame_rd, i.e. the cycle the frame is really consumed. */
+    else if (clk_en && (state == STATE_INIT) && pickup_go)    step_arm <= 1'b0;
 
   /* ★ THE FEEDBACK ARM, INSIDE A PERSISTENCE HOLD (2026-09-04).
    * Everything above cures a phase error by DEFERRING A PICKUP. While a frame is being

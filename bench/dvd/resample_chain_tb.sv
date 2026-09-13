@@ -225,7 +225,7 @@ module resample_chain_tb;
     .persistence(persistence), .repeat_frame(repeat_frame),
     .y(px_y), .u(px_u), .v(px_v), .osd_out(px_osd),
     .position_out(px_position), .pixel_wr_en(px_wr_en),
-    .video_live(), .pickup_hold(1'b0), .pause(1'b0),
+    .video_live(), .pickup_hold(1'b0), .pause(1'b0), .step_req(1'b0),
     .raster_par_err(1'b0), .vscale_mode(rs_vscale_mode),              // DVD-FORK (CRT anamorphic vscale: letterbox)
     .hcrop_en(rs_hcrop_en),                    // DVD-FORK (CRT anamorphic horizontal crop)
     .sched_due(1'b1),                          // THE STC IS A CLOCK: free-run (every picture due at once) -- pacing is not what this bench measures

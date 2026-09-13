@@ -46,6 +46,7 @@ module pickup_hold_tb;
   wire        frame_late;
   wire        video_live;
   reg         pickup_hold = 1;   // held from "load"
+  reg         pause_tb = 0, step_tb = 0;   // frame step (B18)
 
   integer     supplied = 0;
   integer     consumed = 0;
@@ -65,7 +66,7 @@ module pickup_hold_tb;
     .resample_wr_dta(resample_wr_dta), .resample_wr_en(resample_wr_en),
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full), .resample_wr_almost_full(resample_wr_almost_full),
     .busy(busy), .frame_late(frame_late),
-    .video_live(video_live), .pickup_hold(pickup_hold), .pause(1'b0), .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .sched_due(1'b1), .sched_next_due(1'b1));
+    .video_live(video_live), .pickup_hold(pickup_hold), .pause(pause_tb), .step_req(step_tb), .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .sched_due(1'b1), .sched_next_due(1'b1));
 
   always #5 clk = ~clk;
 
@@ -167,7 +168,39 @@ module pickup_hold_tb;
     chk(dut.output_frame_sav == 3'd2, "new clip's frame not latched after release");
     $display("  [4] reload released: pickup resumed, video_live=1, new frame latched");
 
-    if (errs == 0) begin $display("PASS: pickup_hold (STD mux-lead hold + per-load re-arm + hold-frame re-scan)"); $finish; end
+    // 5. FRAME STEP (B18): while paused, one step_req = exactly ONE pickup.
+    //    This is the property that makes "one press = one frame" structural
+    //    rather than a timed release of pause -- releasing pause for a window
+    //    would yield one frame or several depending on the raster phase.
+    pause_tb = 1;
+    // make a frame genuinely AVAILABLE -- output_frame_valid is
+    // (supplied != consumed), so bumping output_frame alone offers nothing to
+    // pick up and the arm would pass for the wrong reason.
+    supplied = 5; output_frame = 3'd3;
+    repeat (200) @(posedge clk);
+    chk(consumed == 4, "paused display picked a frame up without a step");
+    $display("  [5a] paused: no pickup");
+
+    @(negedge clk); step_tb = 1; @(negedge clk); step_tb = 0;
+    repeat (200) @(posedge clk);
+    chk(consumed == 5, "one step_req did not advance exactly one picture");
+    $display("  [5b] one step = one pickup (consumed=%0d)", consumed);
+
+    //    and it must STAY paused afterwards -- the point of a step is to land
+    //    stopped on the next frame, not to resume playback.
+    supplied = 6; output_frame = 3'd4;
+    repeat (400) @(posedge clk);
+    chk(consumed == 5, "display resumed after a step instead of holding");
+    $display("  [5c] still paused after the step");
+
+    //    a second press steps again
+    @(negedge clk); step_tb = 1; @(negedge clk); step_tb = 0;
+    repeat (200) @(posedge clk);
+    chk(consumed == 6, "a second step did not advance");
+    $display("  [5d] second step advances again");
+    pause_tb = 0;
+
+    if (errs == 0) begin $display("PASS: pickup_hold (STD mux-lead hold + per-load re-arm + hold-frame re-scan + frame step)"); $finish; end
     else           $fatal(1, "FAIL: %0d error(s)", errs);
   end
 

@@ -177,6 +177,7 @@ module mp2_chain_tb;
         .clk(clk), .rst_n(rst_n),
         .enable(1'b1),
         .pause(1'b0),
+        .step_req(1'b0),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
         .lpcm_quant(2'd0),

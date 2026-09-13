@@ -168,7 +168,7 @@ module field_phase_tb;
     .persistence(1'b1), .repeat_frame(5'd0),
     .y(px_y), .u(px_u), .v(px_v), .osd_out(px_osd),
     .position_out(px_position), .pixel_wr_en(px_wr_en),
-    .video_live(), .pickup_hold(1'b0), .pause(1'b0),
+    .video_live(), .pickup_hold(1'b0), .pause(1'b0), .step_req(1'b0),
 `ifndef NO_PARITY_FIX
     .raster_par_err(par_err_sync),
 `endif

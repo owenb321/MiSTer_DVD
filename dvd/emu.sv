@@ -1310,6 +1310,12 @@ wire [15:0] cur_pgcn_rd;     // PGCN of the loaded PGC (16-bit: 15-bit DVD field
 
 reg [31:0] joy_prev;
 reg        pause_q;
+// DVD-FORK (frame step B18): clk_sys toggle, edge-detected in clk_dec. Declared
+// here rather than at the CDC below because it is WRITTEN in the transport block
+// a couple of thousand lines earlier, and emu.sv has no `default_nettype none`.
+// Initialised so the clk_dec shift register agrees at power-up and cannot emit a
+// phantom step on the first frames.
+reg        step_tgl = 1'b0;
 reg        seek_pulse;
 reg  [7:0] seek_cell;
 // Phase 8 transport: chapter skip is resolved IN THE READER (its program_map
@@ -1680,6 +1686,13 @@ always @(posedge clk_sys or negedge reset_n) begin
         key_title_p  <= 1'b0;
         key_return_p <= 1'b0;
         key_cmenu_p  <= 1'b0;
+
+        // FRAME STEP (B18): only meaningful while the picture is held, and it
+        // must NOT clear pause -- the whole point is to land stopped on the next
+        // frame. Placed before the pause_q chain so it cannot be mistaken for
+        // one of the resume conditions below.
+        if (step_edge && (pause_q || stopped_w) && cell_ready && !menu_active)
+            step_tgl <= ~step_tgl;
 
         if (start_streaming)      pause_q <= 1'b0;   // fresh load clears pause
         // ⚠ gated on ~stopped_w: while STOPPED the Pause button means PLAY and
@@ -3763,9 +3776,20 @@ end
 // (resample_addrgen freezes the frame while paused; av_sync freezes the STC in
 // clk_sys). pause changes at human speed, so a plain 2-FF sync is sufficient.
 reg pause_s1, pause_dec;
+// DVD-FORK (frame step B18): a clk_sys press crossed into clk_dec as a ONE-CYCLE
+// pulse. ⚠ A level would be wrong twice over -- clk_dec is faster than the press,
+// so a level would permit many pickups, and the arm in resample_addrgen is what
+// makes "one press = one frame" structural. Toggle-crossed so no press is lost to
+// the clock ratio: the clk_sys side flips a bit, the clk_dec side edge-detects it.
+reg  step_t1 = 1'b0, step_t2 = 1'b0, step_t3 = 1'b0;  // clk_dec (step_tgl is declared with the
+                                      // transport regs -- it is written up there)
+wire step_dec = step_t2 ^ step_t3;    // one clk_dec cycle per press
 always @(posedge clk_dec) begin
     pause_s1  <= pause_gov;   // manual pause OR a held seek gesture (freeze the governor frame)
     pause_dec <= pause_s1;
+    step_t1   <= step_tgl;
+    step_t2   <= step_t1;
+    step_t3   <= step_t2;
 end
 
 // 2-FF the resolved Film 24p/25p mode (clk_sys origin) into the decoder clock for the
@@ -4388,6 +4412,7 @@ mpeg2video mpeg2video_inst (
     .video_live        (core_video_live),              // DVD-FORK (av_sync STC): "first frame displayed" (clk_dec; re-armed per load)
     .pickup_hold       (vid_hold_s2),                  // DVD-FORK (STD mux-lead hold): defer first display until audio caught up
     .pause             (pause_dec),                    // DVD-FORK (gamepad transport): freeze frame while paused (clk_dec-synced)
+    .step_req          (step_dec),                     // DVD-FORK (frame step B18): one picture while paused
     .freeze_wd         (still_dec),                    // DVD-FORK (disc-menu still): watchdog-suppress only (clk_dec-synced)
     .vbuf_flush        (vbuf_flush_dec),               // DVD-FORK (gamepad transport): discard VBUF on a seek (clk_dec-synced)
     .soft_flush        (mount_flush),                  // DVD-FORK (mount soft reset): watchdog-equivalent decode reset on a file mount (async, synchronizers inside)
