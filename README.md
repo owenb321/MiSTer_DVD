@@ -70,7 +70,8 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 ## Known limitations
 
 - **The bare `.rbf` plays decrypted images only.** Physical discs and CSS-encrypted images
-  need `MiSTer_DVDcss` plus a user-supplied libdvdcss.
+  need `MiSTer_DVDcss` plus a user-supplied libdvdcss — as do the Eject and Volume
+  buttons, which the core cannot service by itself.
 - **ISO9660 only** — UDF-only images report `UNSUPPORTED IMAGE`.
 - **No DTS decode** — passthrough to a receiver only.
 - **Bitstream passthrough over HDMI needs `MiSTer_DVDcss`**; over optical S/PDIF the
