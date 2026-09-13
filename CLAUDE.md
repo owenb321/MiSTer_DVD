@@ -2338,6 +2338,91 @@ worse maintenance burden than targeted in-place edits. So:
   no UDF-only-image support. (Phase-8b TMAP absolute seek: RETIRED 2026-07-10 by user
   decision. The seek UX gained ONE opt-in layer since — `O[45]` D-Pad Seek, below — which
   rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
+- 🔧 **DVD-REMOTE BUTTONS — Stop, Aspect, Chapter Menu, A-B Repeat, Frame Step, a
+  screensaver, and the Display toggle FIX (2026-09-13, branch
+  `feature/remote-buttons`) — sim-proven, mutation-checked 31/31 across five modules,
+  ⏳ HW-confirm pending.** Field report: *"display button would be nice if it toggled
+  on/off instead of just on"*, plus no Stop, no aspect on a button, no volume, no eject.
+  ★ **The Display defect was ONE LINE, and the bench had encoded it as correct
+  behaviour.** `transport_hud.sv` did toggle `persist_q`; the line below it re-armed the
+  ~2.5 s auto-show timer on EVERY press, and `vis` ORs that timer in — so the press that
+  turned persistence *off* left the line up anyway. T7/T8 both carried a
+  `repeat (2100) // drain the toggle's own timer arm` before checking it was hidden:
+  the bench worked AROUND the defect rather than catching it, which is why no arm was
+  ever red. New T7a0 asserts the off-press hides AT ONCE.
+  ★★ **SCOPE WAS CUT BY MEASUREMENT, TWICE, AND THE TWO CUTS ARE DIFFERENT FAILURES.**
+  Four disc-menu buttons were planned; one shipped. Angle menu: 216 of 956 discs declare
+  one, but only 22 have a multi-angle title and **11 have both — 205 of 216 are empty
+  template stubs** (a declared IFO table is not a capability: the `progressive_frame`
+  family again). Audio/Subtitle menus are *genuine* (317/340 and 301/343 back real
+  multi-stream content) but **DOMINATED**: B7 already serves 603 discs and B8 553, strict
+  supersets of the menus' reach, and the Root menu reaches those pages anyway. Only
+  Chapter Menu (401 discs, 42 %) is a capability we lack — nothing else jumps to a scene.
+  ⛔ **DVD-Text is measured DEAD, not deferred:** 219/956 set `txtdt_mgi` and 149 hold a
+  printable name, but the names are mastering junk (`SONY`, `TEXT_DATA`, `Xess_DATA`,
+  `ACT_O_V`). That supersedes `docs/conformance.md`'s "TXTDT 2/23 — defer until a disc
+  needs it" on a 40× larger sample: no disc needs it.
+  ★ **Stop is built out of the EXISTING pause holds** (`dvd/stop_ctl.sv`): `stopped` ORs
+  into `pause_gov`/`pause_aud`, so the governor freeze, `repeat_frame=31` watchdog
+  suppression, STC stall and audio hold come free and an indefinite stop is the
+  already-proven indefinite pause. Two-stage: press 1 keeps the position (PLAY resumes in
+  place, nothing was torn down, so there is no bookmark to save), press 2 forgets it and
+  the next PLAY re-pulses the reader/VM `start` — ⛔ **NOT a remount**, which the core
+  cannot ask for. ⚠ `dvd_vm.sv` zeroes `rsm_vts` inside `if (start)`, which is correct for
+  stage 2 and must not happen at stage 1.
+  ⛔⛔ **THE SCREENSAVER'S WHOLE DESIGN IS "DO NOT CLEAR `media_seen`".** That is the
+  obvious trigger and it is wrong: `emu.sv:146` derives `idle_wide` from it into
+  `VIDEO_ARX/ARY`, so clearing it mid-title flips the aspect and makes Main re-init the
+  scaler — a resolution popup in the middle of a film. It is a pure display-layer term on
+  `logo_vis`, placed OUTSIDE the `!media_seen` group (a paused title still has live video,
+  so a term ANDed inside could never assert). HUD and seek bar are suppressed while it is
+  up, since a burnt-in status line is what it exists to prevent.
+  ★ **`O[48:47] Screensaver,5min,Off,2min,10min` — the value ORDER is the feature.**
+  `status[]` powers up at zero, so index 0 IS the default; `Off,2min,5min,10min` would
+  ship it disabled. Bits 47/48 were never allocated ⇒ **no `"v,N"` bump, no settings
+  reset**. ⚠ Re-ordering later WOULD force one (that is why v3 exists).
+  ⚠⚠ **The Aspect button exists mostly to CONTAIN a hazard.** The core cannot write
+  `status[]` (`dvd_telem.sv:11-16`), so `dvd/aspect_ctl.sv` publishes an override the OSD
+  reclaims on any change. It cycles whichever control is LIVE because `Analog Aspect` is
+  gated on `interlaced_eff` and would be a dead button on an HDMI-only rig. Every
+  `VIDEO_ARX/ARY` change re-inits the scaler, so the verdict SETTLES 250 ms: ten rapid
+  presses = ONE change. ⚠ `sp_disp_mode` had to follow the override too, or subtitles lay
+  out for an aspect the picture is no longer in.
+  ★ **A-B repeat taught the sharpest lesson.** It seeks by construction, so it lives in
+  the stale-DSI window — but a stale **0 is BELOW B**, so "compare without the freshness
+  guard" was MISSED by the obvious arm. The damage is one level down: our own loop-back
+  seek flushes `nav_dsi`, `cur_rbn` drops to 0, an unguarded LOCKOUT clears (0 < B), and
+  the parse front coming back still past B fires again = the seek storm. Bench arm [B7]
+  replays exactly that.
+  ★ **Frame step needed TWO gates opened, not one.** `ofv_pickup` alone advances nothing:
+  while paused `STATE_REPEAT` loops back to `STATE_NEXT_IMG` forever, so `STATE_INIT` —
+  the only state that consumes a pickup — is unreachable. `ofv_paced` also had to bypass
+  `frame_due`, because `disp_sched` freezes the STC under pause and the next picture is
+  never "due". ⚠ And the arm must clear on the REAL consumption
+  (`(state == STATE_INIT) && pickup_go`, the term behind `output_frame_rd`), not on
+  `pickup_go` — which is a combinational "a frame could be taken", true for many cycles
+  mid-scan. A probe showed the arm living exactly ONE cycle, in state 9.
+  ⛔ **Eject and Volume are NOT here, deliberately.** Both need a core→Main request
+  channel that does not exist (the `CMD_AF` payload word has free bits 3-14); a named
+  button that does nothing is worse than a missing one. ★★ **And volume must NOT be a
+  fabric attenuator: MiSTer already HAS one** — `sys_top.v:293` `vol_att` → `audio_out`,
+  covering I2S, the analog DAC **and S/PDIF** together, driven by Main's `set_volume()`
+  from the OSD, `/dev/MiSTer_cmd` and **HDMI-CEC volume keys, which
+  `user_io.cpp:4283-4296` consumes before they ever reach the core**. A second attenuator
+  would desync from the OSD bar and could not touch passthrough at all.
+  ⚠⚠ **A CEC remote's Stop key currently does GoUp** (`hdmi_cec.cpp:301` maps
+  `CEC_USER_CONTROL_STOP` → `KEY_ESC`, which `kbd_map` binds to Return), and since CEC's
+  `EXIT` resolves to `KEY_MENU` (eaten by Main) that is a TV remote's only back button
+  today. Remapping it belongs with the Main branch, and must SPLIT the shared
+  `ROOT_MENU`/`EXIT` case so `ROOT_MENU` keeps `KEY_MENU` — otherwise a CEC-only user
+  loses every route to the MiSTer OSD.
+  ⚠ **Two build-gate lessons:** Quartus builds from `DVD.qsf`'s FILE LIST, so three new
+  modules were undefined entities — and `tools/lint_undriven.sh` PASSED throughout,
+  because it reads the same list and never saw them. `build_release.sh` also exited **0**
+  on that failed compile; read the log, not the status.
+  Buttons B14-B18 + keys `Q Z F5 L .` (free-checked against `kbd_map`, emu's numpad digit
+  block and the never-bind list); `kbd_joy` 17→22 bits and ⚠ the FF/REW mask widened with
+  it. Detail: `docs/dvd_nav.md` "Keyboard / CEC input", `site/content/playback/controls.md`.
 - ✅ **KEYBOARD / TV-REMOTE TRANSPORT (2026-09-03, issue #35, branch
   `feature/keyboard-controls`) — sim-proven + mutation-checked and ✅ HW-CONFIRMED
   2026-09-04** (build `DVD_kbdmap_20260904_0226.rbf`, SEED 5 first roll, clk_dec

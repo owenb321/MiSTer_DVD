@@ -169,7 +169,7 @@ Our impl: `dvd/dvd_iso_reader.sv` (golden `tools/iso_nav_check.py`). **Filesyste
 | VTS_TMAPT (time map) | time → sector seek | ⛔ | absolute/TMAP seek RETIRED (Phase 8b, user decision 2026-07-10) |
 | VTS_ATRT / VTS attributes | audio/subp stream attrs | ✅ | Phase 10 track enum (`S_ATTR_*`, PR fj#100) |
 | **PTL_MAIT** | parental management info | ❌ | not parsed (ties to SPRM13 enforcement) |
-| **TXTDT_MGI** | disc/title text names | ❌ | not parsed (no title-name display) |
+| **TXTDT_MGI** | disc/title text names | ⛔ | not parsed, and **closed rather than deferred** — measured over 956 images, the strings are authoring-tool junk (`SONY`, `TEXT_DATA`, `Xess_DATA`), not titles. See the gap list. |
 | DVD-VR / +VR tables (AMG/TIF/RTAV…) | video-recording discs | ❌ | out of scope (commercial DVD-Video only) |
 
 ---
@@ -276,7 +276,7 @@ Regenerate with `python3 tools/dvd_census.py`.
 | GPRM counter-mode | 6/23 | 3 | ✅ shipped (PR fj#119) |
 | Menu GoUp authored | 4/23 | (done) | B13 Return has an authored target (PR fj#152) |
 | Title-domain GoUp authored | 3/23 | (done) | B13 acts in-title on these |
-| TXTDT_MGI | 2/23 | 4 | still no title-name display |
+| TXTDT_MGI | 2/23 (**re-measured: 219/956 present, 149 printable, 0 useful**) | ⛔ closed | the field carries mastering artifacts, not title names |
 | Multi-angle | 1/23 | (Phase 9 ✅) | MiB (5 angles) — our test vehicle |
 | PTL_MAIT / non-trivial parental_id | 1/23 | 2 | MiB |
 | **SetTmpPML parental cmd** | **1/23** | **2** | **`FAIRYTOPIA.iso` — the library's FIRST parental-command vehicle** (was 0/7 "none in library"). *2026-08-17: two post-census Ghibli arrivals (`CASTLE_IN_THE_SKY`, `CASTLE_USD2`) also carry SetTmpPML+PTL_MAIT → 3 vehicles; Castle also brings a 2nd multi-angle disc and the corpus's first UNKBITS command (a no-op SetSTN quirk). See `docs/disc_sweep.md`.* |
@@ -337,9 +337,16 @@ Ordering now backed by the Phase-2 census above (prevalence in the local library
    re-rip first) plus the post-census `CASTLE_IN_THE_SKY`/`CASTLE_USD2` — the first chance
    to see whether our accept-always no-op mis-branches on a real disc. See `docs/disc_sweep.md`.
 4. **CHG_COLCON**, **multi-group buttons**, **LPCM 24-bit/96k**, **closed captions**,
-   **UDF-only images**, **TXTDT title names**. **Census: LPCM 24/96k 0/23 and UDF-only 0/23
-   even after the library tripled** (treat both as having no obtainable vehicle);
-   TXTDT 2/23 — lowest priority, defer until a disc needs it.
+   **UDF-only images**. **Census: LPCM 24/96k 0/23 and UDF-only 0/23
+   even after the library tripled** (treat both as having no obtainable vehicle).
+   ⛔ **TXTDT title names: CLOSED, not deferred (2026-09-13).** The old line here read
+   "TXTDT 2/23 — lowest priority, defer until a disc needs it". Re-measured over **956
+   images**: 219 set `txtdt_mgi` and 149 of those hold a printable `disc_name`, so the
+   field is commoner than 2/23 suggested — but the strings are **authoring-tool
+   artifacts, not titles**: `SONY`, `TEXT_DATA`, `Xess_DATA`, `TEXT_FRI`, `ACT_O_V`,
+   `AI`, `CIRQUE`, `amore`. There is nothing user-facing to display, so the answer is
+   never rather than later. (Reproduce: walk each VMGI's `txtdt_mgi` pointer at
+   offset 0xD4 and read `disc_name[12]` + `nr_of_language_units` from that sector.)
 
 Cross-referenced from `docs/roadmap.md` (Phase 6 "Polish / Known Issues").
 
