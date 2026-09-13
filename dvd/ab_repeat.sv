@@ -47,7 +47,13 @@ module ab_repeat (
     output reg         jump_fire,        // 1-cyc into scrub_ctrl's jump port
     output reg  [31:0] jump_base,
     output reg  [31:0] jump_off,
-    output reg         jump_dir,         // 1 = backward
+    // ⚠ scrub_ctrl's convention, not a local one: `jump_dir` 1 = FORWARD
+    // (dvd/scrub_ctrl.sv:174). A loop-back is therefore 0. This was shipped as
+    // 1 with a comment claiming "1 = backward"; the loop jumped FORWARD, the
+    // target cleared the title end, scrub_ctrl clamped it there and playback
+    // ran off into the PGC's post -- found on hardware, because the unit bench
+    // asserted the same wrong belief the RTL held.
+    output reg         jump_dir,         // 0 = backward, 1 = forward
     output reg  [1:0]  state_o,          // 0 off, 1 A set, 2 armed  (HUD)
     output reg         evt               // 1-cyc: state changed (HUD popup)
 );
@@ -119,7 +125,7 @@ module ab_repeat (
                     jump_fire <= 1'b1;
                     jump_base <= cur_rbn;
                     jump_off  <= cur_rbn - pt_a;
-                    jump_dir  <= 1'b1;          // backward
+                    jump_dir  <= 1'b0;          // BACKWARD (scrub_ctrl: 1 = forward)
                     lockout   <= 1'b1;
                 end
             end

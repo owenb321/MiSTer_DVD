@@ -80,7 +80,12 @@ module ab_repeat_tb;
         chki("B2a one jump", fires, 1);
         chki("B2b base = playhead", last_base, 2000);
         chki("B2c offset = B-A",    last_off, 1000);
-        chki("B2d backwards",       jump_dir, 1);
+        // ⚠ 0 = BACKWARD. This is scrub_ctrl's contract (dvd/scrub_ctrl.sv:174
+        // "jump_dir  // 1 = forward"), NOT a convention ab_repeat gets to pick.
+        // The first version of this arm asserted 1 because the RTL drove 1 --
+        // bench and RTL sharing one wrong belief, which is why it took hardware
+        // to find (the loop jumped forward and clamped to the title end).
+        chki("B2d backwards (0)",   jump_dir, 0);
 
         // ---- [B3] ONE jump per pass, not one per cycle -------------------
         // The playhead keeps reading near B for the frames before the seek
