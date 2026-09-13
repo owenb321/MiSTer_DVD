@@ -1450,7 +1450,7 @@ wire [15:0] vm_dbg_deadend;  // {deadend_vts, deadend_pgcn} = the PGC that dead-
 wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HUD popup)
 wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
 wire [7:0]  rdr_play_vtsn, rdr_target_vtsn;
-reg         key_menu_p, key_resume_p, key_title_p, key_return_p;
+reg         key_menu_p, key_resume_p, key_title_p, key_return_p, key_cmenu_p;
 
 wire menus_on  = ~status[1];                       // O[1] Disc Menus (index 0 = On, default)
 wire hud_dbg   = status[2];                         // O[2]: HUD shows reader PGCN/VTS (nav diagnostic)
@@ -1671,6 +1671,7 @@ always @(posedge clk_sys or negedge reset_n) begin
         key_resume_p <= 1'b0;
         key_title_p  <= 1'b0;
         key_return_p <= 1'b0;
+        key_cmenu_p  <= 1'b0;
 
         if (start_streaming)      pause_q <= 1'b0;   // fresh load clears pause
         // ⚠ gated on ~stopped_w: while STOPPED the Pause button means PLAY and
@@ -1735,6 +1736,14 @@ always @(posedge clk_sys or negedge reset_n) begin
         // without one - the VM does the check).
         if (menus_on && ret_edge)
             key_return_p <= 1'b1;
+
+        // CHAPTER MENU (B16): the disc's own scene-selection page. Gated on
+        // menus_on like every other menu key -- with Disc Menus off the core
+        // never enters the menu domain at all. 58% of discs author no chapter
+        // menu, so the VM's fallback chain (ending in a no-op) is the ordinary
+        // outcome here, not a failure.
+        if (menus_on && cmenu_edge)
+            key_cmenu_p <= 1'b1;
 
         // CHAPTER skip (TITLE only, B2/B3 - in a menu the D-pad walks buttons):
         // the reader resolves program_map -> entry cell -> cell-seek in fabric and
@@ -2127,6 +2136,7 @@ dvd_vm dvd_vm_inst (
     .key_resume    (key_resume_p),
     .key_title     (key_title_p),
     .key_return    (key_return_p),
+    .key_cmenu     (key_cmenu_p),
 
     .btn_cmd       (hl_btn_cmd),
     .btn_cmd_valid (hl_btn_cmd_valid),

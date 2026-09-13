@@ -34,6 +34,10 @@
 //   key_resume      -> LinkRSM (only if the menu was entered via the Menu key)
 //   key_title       -> VMGM Title menu (entry 2), the real-remote TITLE key;
 //                      from a title also saves RSM (Menu/Select toggle back)
+//   key_cmenu       -> VTSM Chapter/PTT menu (entry 7), the remote's scene-
+//                      selection key. Measured on 956 library discs: 401 (42%)
+//                      author one, so the no-menu path is the COMMON case and
+//                      must be a clean no-op, not a failed jump.
 //   key_return      -> GoUp: in-domain jump to the loaded PGC's authored
 //                      goup_pgcn (libdvdnav dvdnav_go_up); goup==0 = no-op
 //   pgc_error       -> fallback chain (own VTSM -> best-menu-VOB VTSM ->
@@ -107,6 +111,7 @@ module dvd_vm (
     input             key_resume,     // Select with no buttons armed
     input             key_title,      // B12: VMGM Title ("Top Menu") key
     input             key_return,     // B13: Return = GoUp (authored goup_pgcn)
+    input             key_cmenu,      // B16: Chapter/PTT menu (VTSM entry 7)
 
     // Button activation (nav_pci)
     input      [63:0] btn_cmd,
@@ -525,7 +530,7 @@ reg [6:0]  chain;              // VM-issued jumps this activation
 
 // Pending events
 reg ev_boot, ev_loaded, ev_error, ev_cellcmd, ev_pgcend, ev_btn;
-reg ev_menu, ev_resume, ev_title, ev_return;
+reg ev_menu, ev_resume, ev_title, ev_return, ev_cmenu;
 reg [7:0]  ev_cellcmd_nr;
 reg [63:0] ev_btn_cmd;
 reg nav_ready_d;
@@ -775,6 +780,7 @@ always @(posedge clk or negedge rst_n) begin
             if (key_resume)                 ev_resume <= 1'b1;
             if (key_title)                  ev_title  <= 1'b1;
             if (key_return)                 ev_return <= 1'b1;
+            if (key_cmenu)                  ev_cmenu  <= 1'b1;
         end
 
         // ---- mount: vm_reset --------------------------------------------
@@ -804,7 +810,7 @@ always @(posedge clk or negedge rst_n) begin
             ev_boot <= 1'b0; ev_loaded <= 1'b0; ev_error <= 1'b0;
             ev_cellcmd <= 1'b0; ev_pgcend <= 1'b0; ev_btn <= 1'b0;
             ev_menu <= 1'b0; ev_resume <= 1'b0; ev_title <= 1'b0;
-            ev_return <= 1'b0;
+            ev_return <= 1'b0; ev_cmenu <= 1'b0;
             state <= V_IDLE;
         end else begin
             case (state)
@@ -845,7 +851,7 @@ always @(posedge clk or negedge rst_n) begin
                 end else if (!enable) begin
                     ev_boot <= 1'b0; ev_loaded <= 1'b0; ev_error <= 1'b0;
                     ev_btn  <= 1'b0; ev_menu <= 1'b0; ev_resume <= 1'b0;
-                    ev_title <= 1'b0; ev_return <= 1'b0;
+                    ev_title <= 1'b0; ev_return <= 1'b0; ev_cmenu <= 1'b0;
                     // a reader wait must still be released (O[1] flipped off
                     // mid-flight; the reader also has its own timeout)
                     if (ev_cellcmd || ev_pgcend) begin
@@ -1163,6 +1169,42 @@ always @(posedge clk or negedge rst_n) begin
                     jump_ttn <= 7'd0; jump_pgn <= 8'd0; jump_cell <= 8'd0;
                     jump_pulse <= 1'b1;
                     fb <= FB_VMGM;
+                    wait_tmr <= 24'd0;
+                    state <= V_WAIT;
+                end else if (ev_cmenu) begin
+                    // CHAPTER MENU key: the disc's own scene-selection page,
+                    // VTSM entry 7 (PTT menu). Modelled on ev_title, but VTSM
+                    // rather than VMGM -- the chapter menu belongs to the title
+                    // set, not the disc, so it must aim at THIS title's VTSM.
+                    //
+                    // Not redundant with Next/Prev Chapter: those STEP, this
+                    // jumps straight to a scene. (The Audio/Subtitle/Angle menu
+                    // keys were measured and deliberately NOT added -- the
+                    // B7/B8 buttons already reach more discs than those menus
+                    // exist on, and 205 of 216 angle menus are empty stubs.)
+                    //
+                    // fb=FB_VTSM: 58% of discs author no chapter menu, so the
+                    // fallback chain (and ultimately a no-op) is the COMMON
+                    // path, not an error case.
+                    ev_cmenu <= 1'b0;
+                    fuse <= 13'd0; chain <= 7'd0;
+                    blk  <= BLK_BTN;     // user-key jump: never "natural" provenance
+                    nat_src <= 1'b0;
+                    if (!menu_active && vm_dom == DOM_TT) begin
+                        rsm_vts  <= cur_vts;
+                        rsm_pgcn <= cur_pgcn;
+                        rsm_cell <= cur_cell;
+                        rsm_r4 <= sprm4; rsm_r5 <= sprm5; rsm_r6 <= sprm6;
+                        rsm_r7 <= sprm7; rsm_r8 <= sprm8_eff;
+                        came_via_menukey <= 1'b1;
+                    end
+                    vm_dom <= DOM_VTSM; vm_vts <= menukey_vts;
+                    jump_domain <= DOM_VTSM;
+                    jump_vts <= menukey_vts; jump_pgcn <= 16'd0;
+                    jump_entry <= 4'd7;   // Chapter / PTT menu
+                    jump_ttn <= 7'd0; jump_pgn <= 8'd0; jump_cell <= 8'd0;
+                    jump_pulse <= 1'b1;
+                    fb <= FB_VTSM;
                     wait_tmr <= 24'd0;
                     state <= V_WAIT;
                 end else if (ev_return) begin
