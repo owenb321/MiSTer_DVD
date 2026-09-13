@@ -78,7 +78,6 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 - **Closed captions are analog-only** and need a television that decodes them. Roughly
   1 disc in 6 carries any.
 - **Interactive DVD games are incomplete.** Film and TV discs are the supported path.
-- **PAL on an analog CRT is unconfirmed** — no PAL CRT was available to test it.
 
 [Full list, with the reasoning →](https://owenb321.github.io/MiSTer_DVD/reference/compatibility/)
 
