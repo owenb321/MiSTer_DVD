@@ -593,7 +593,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-subpmapdom"
+`define CORE_VERSION "dev-scrubtiers"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1876,6 +1876,17 @@ scrub_ctrl scrub_ctrl_inst (
     .cur_rbn         (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .title_first_rbn (title_first_rbn_w),
     .title_last_rbn  (title_last_rbn_w),
+    // ---- what the span is WORTH, so the ramp is an absolute content rate ----
+    // The step used to be a fraction of the span, so a short title scrubbed at a
+    // crawl (0.58 content-seconds per second on a 3-minute clip against 29 on a
+    // 2 h feature). A DVD title's duration BUCKET biases the shift, anchored so
+    // a ~2 h title keeps the step that was signed off on hardware; a linear file
+    // has an exact rate already and uses it directly.
+    // ⚠ lin_blk10_ok_w is ANDed here the way dvd/dpad_seek.sv's .lin_mode is:
+    // gate on the rate being VALID, never let a zero through.
+    .title_secs      (title_secs_w),
+    .lin_blk10       (lin_blk10_w),
+    .lin_rate_ok     (lin_mode_w && lin_blk10_ok_w),
     .seek_rbn_pulse  (scrub_seek_pulse),   // arbitrated by mode_realign (issue #42)
     .seek_rbn        (scrub_seek_rbn),
     .hold_freeze     (hold_freeze),
@@ -5463,7 +5474,14 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // pauses the governor/audio below, which a D-pad tap deliberately does not.
     .scrub_held   (hold_freeze | dpad_pend),
     .scrub_dir    (hold_freeze ? hud_dir_w  : dpad_pend_dir),
-    .scrub_tier   (hold_freeze ? hud_tier_w : dpad_pend_n),
+    // ⚠ A D-PAD GESTURE HAS NO SPEED TIER, so it feeds 0 = two plain direction
+    // arrows. It used to feed dpad_pend_n, the TAP COUNT, into a field the HUD
+    // then printed as "xN" -- which was already a category error (a count is not
+    // a rate) and becomes a visible falsehood now that the field draws a speed as
+    // an arrow count: four taps would have rendered as the fastest scrub tier.
+    // Nothing is lost -- the popup line shows the gesture's real magnitude
+    // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
+    .scrub_tier   (hold_freeze ? hud_tier_w : 2'd0),
     .display_edge (display_edge),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),

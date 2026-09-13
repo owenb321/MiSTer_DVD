@@ -2303,8 +2303,9 @@ worse maintenance burden than targeted in-place edits. So:
   gated green: clk_dec 91.07/88.12 MHz, ALM 90%, DSP unchanged 97/112;
   `releases/DVD_hud_20260710_1955.rbf`). The release-visible playback feedback layer (the multi-row debug
   overlay stays compiled out): `dvd/transport_hud.sv` renders a bottom **status line**
-  (`► 0:12:34/1:37:05 CH 12/23`; ❚❚ pause; `►►×n` scrub with the PR-fj#101 span-relative
-  tiers) + an **event popup line** (`AUDIO 2/4 FR` / `SUB OFF` / `ANGLE 2/3` / `CH n/N`,
+  (`► 0:12:34/1:37:05 CH 12/23`; ❚❚ pause; the scrub tier as 2-5 arrows — it printed
+  `►►×n` until 2026-09-12, a tier ordinal posing as a rate, where `×1` meant ~29× real
+  time; see `docs/transport_hud.md`) + an **event popup line** (`AUDIO 2/4 FR` / `SUB OFF` / `ANGLE 2/3` / `CH n/N`,
   last-event-wins, Phase-10 `attr_*` languages) from a generated glyph ROM
   (`tools/hud_font.py` → `dvd/hud_font.mem`) + 2×32 text plane; **`dvd/seek_bar.sv`**
   gives the seek-on-release scrub its missing feedback (fill = hold start, amber cursor =
@@ -2447,7 +2448,10 @@ worse maintenance burden than targeted in-place edits. So:
   a ~2 s give-up. The contract is now recorded in `nav_dsi.sv`'s header for the next
   consumer. HUD: popup type 8 `SEEK FWD 30S` (the `pop_type` field widened 3→4 bits; the
   sign is SPELLED so the glyph ROM and `dvd/hud_font.mem` stay untouched) + the tap count in
-  the shared `►►×n` field. Golden `tools/nav_extract.py --dpad`; tests
+  the shared icon field — ⛔ NO LONGER: since 2026-09-12 a D-pad gesture renders
+  direction arrows only and `emu.sv` feeds `.scrub_tier` `2'd0`, because that field now
+  draws a SPEED as an arrow count and a tap count is not a speed (the popup carried the
+  magnitude all along). Golden `tools/nav_extract.py --dpad`; tests
   `bench/dvd/dpad_seek_tb.sv` (24 scenarios incl. the trap), `scrub_ctrl_tb` T9–T12,
   `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
   **`docs/dvd_nav.md` §2b**.
@@ -2711,10 +2715,63 @@ worse maintenance burden than targeted in-place edits. So:
   (2) **Scrub ramp relaxed** (user report: "it ramps up too fast"): the old
   `{10,8,6,5}` / 0-1.5-3-5 s ladder moved ~2 MINUTES of a 2 h title per second even in
   tier 0 — no fine-positioning tier existed and 5 s of holding crossed 77 minutes. Now
-  `{12,10,8,6}` / 0-2-4.5-8 s, and the ladder is `SH0..SH3` PARAMETERS rather than a
+  `{12,10,8,6}` / 0-2-4.5-8 s (⚠ superseded again 2026-09-12 — see the content-rate note
+  below), and the ladder is `SH0..SH3` PARAMETERS rather than a
   hardcoded ternary, pinned by `scrub_ctrl_tb` T13–T15 so a retune is deliberate.
   ⚠ A retune must also move `dvd/dpad_seek.sv`'s header, `docs/dvd_nav.md` §2a and
   `docs/transport_hud.md` — the numbers are quoted in all four.
+  ★★ **AND THE STEP IS NO LONGER A FRACTION OF THE SPAN AT ALL (2026-09-12, branch
+  `feature/scrub-time-tiers`, `dev-scrubtiers`) — sim-proven with a mutant per claim, and
+  ✅ HW-CONFIRMED for the DVD path (see the round below).** A fraction of a SHORT title is a crawl: MEASURED at tier 0, a 2 h
+  feature moved **29 content-seconds per second**, a 3-minute clip **0.58**, a 30-second
+  clip **0.19**, and the shift truncated what little was left (`2584 >> 12 = 0` — the
+  `| 1` floor was the only thing still moving the cursor). Now a linear file steps
+  `(lin_blk10 * 6) >> {6,4,2,0}` (blocks per 10 s, so the shift IS the rate ≈
+  16/63/250/1000 s/s, gated on the rate being VALID — the `dpad_seek` precedent), and a DVD
+  steps
+  `span >> (SHn + log2(title_secs) − SECS_REF)`: **span cancels out of the content rate
+  algebraically**, so a duration BUCKET (a leading-one position, no divide) fixes the rate.
+  ★ `SECS_REF = 12` anchors it so every title in **4096–8191 s (68–136 min)** keeps a
+  **bit-identical** step — the 2 h feel that passed hardware is untouched, and only titles
+  far from 2 h move. ⛔ **Do NOT turn the bucket into `span / title_secs`**: on a
+  seamless-branch disc the span holds the other branch's ILVUs (issue #49) and that
+  inflation hits the shift and the divide IDENTICALLY, so the divide fixes nothing — and
+  the AREA objection to it expired with the reclaim, so do not re-derive "we have area
+  now, so divide".
+  ★★ **BOTH SOURCES NOW RAMP AT ONE LADDER — ~15 / 60 / 240 / 960 content-s/s — and that
+  COST THE 2 h BIT-IDENTITY, deliberately** (maintainer: *"these both should have the same
+  seek steps — maybe we meet in the middle"*). The first cut kept `SHn = {12,10,8,6}` to
+  preserve the signed-off 2 h feel exactly, which left a DVD at 29/117/469/1875 s/s against
+  a `.mpg` at 5/21/83/167 — a tier meaning a 5–10× different speed by source. The DVD ladder
+  is HALVED (`{13,11,9,7}`); the anchor mechanism is untouched, only its value moved.
+  ★ **The `* 6` on the linear base is arithmetic, not taste:** unscaled, the linear lattice
+  is `166.7/2^n` and the DVD one `120000/2^m`, half a power of two apart, so nothing brings
+  them closer than **41 %**; ×6 lands them on one lattice at **7 %**. ⚠ Retune `SHn` and
+  `LSn` TOGETHER. ⚠ Residual, now the larger error: the power-of-two bucket still lets the
+  DVD rate vary **2× within a bucket** (68 min → 8.3 s/s, 2h16 → 16.7); removing it needs
+  the forbidden `span / title_secs`. Gate: `bench/dvd/run_scrub_tiers.sh --red` (T19 pins the
+  parity; 7 mutants, including an unscaled lattice and a drifted ladder).
+  ✅ **HW-CONFIRMED 2026-09-12 — THE FEEL, WHICH IS THE ONLY THING THAT COULD SETTLE IT**
+  (build `DVD_scrubtiers_20260912_2135.rbf`, flashed to the rig and held on a physical
+  disc; maintainer: *"that scrub speed feels good"*).
+  ★ **The harness could not have answered this and never will:** `dvd/kbd_map.sv`
+  deliberately routes keyboard Fast Fwd/Rewind to `dvd/dpad_seek.sv`, never to
+  `scrub_ctrl`'s hold-to-scrub — an IR "hold" is ~9 discrete taps a second, which on the
+  hold path is ~9 flush/re-locks a second, the regime HW rounds 1–2 proved fatal. So
+  `joy_eff` masks those keys out and the gesture is reachable **only from a gamepad**. A
+  tier ladder is a feel setting whose instrument is a person, and this is the second
+  retune (2026-09-03 was the first) decided the same way.
+  ✅ **AND THE REST OF THE ROUND CAME BACK GOOD THE SAME DAY** (maintainer: *"all those
+  open scrub questions look and feel good on the board"*), so the branch is confirmed
+  whole rather than on its easiest path: the **LINEAR half** held at the same tiers —
+  which is the parity claim itself, felt rather than only pinned in sim to 7 % — a
+  **SHORT title**, which is the 0.58 s/s crawl the change exists for and the case the
+  first disc could not exercise (an ordinary feature sits in the anchor bucket, the one
+  length whose behaviour moved least), and the **arrow readout** that replaced `×1..×4`.
+  ★ Worth keeping straight for anyone retuning this: those two are different mechanisms,
+  not one test twice. A linear file's rate comes from `lin_blk10` and is independent of
+  its length; a DVD's comes from the duration bucket and is nothing but its length. The
+  short-title arm is the only one that exercises `secs_lz` at all.
   ⚠ **SEAMLESS-BRANCH DISCS ARE STILL WRONG and it is NOT the readout — it is the
   SEEK.** The 2026-09-03 cell-gap fix (a cell's span is its own `first..last`, not
   the distance to the next cell's first — AFTER_EARTH VTS_13 PGC1, 1.612× short,

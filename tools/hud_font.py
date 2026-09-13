@@ -17,7 +17,11 @@ Emits:
 Glyph index map (keep in sync with transport_hud.sv's GLYPH_* localparams):
   0..9   '0'..'9'
   10 ':'   11 '/'   12 '.'   13 '-'   14 ' ' (space, active/backing)
-  15 'x' (multiplier cross)
+  15 'x' (multiplier cross) -- UNUSED since 2026-09-12, when the scrub tier
+     stopped printing "xN" (it was the tier ordinal, not a rate: see
+     docs/transport_hud.md). KEPT rather than removed because every glyph
+     after it would renumber, and the indices are compiled into
+     dvd/transport_hud.sv's G_* localparams.
   16..41 'A'..'Z'
   42 PLAY  (right triangle)   43 PAUSE (double bar)   44 REV (left triangle)
   45..62 spare (transparent)

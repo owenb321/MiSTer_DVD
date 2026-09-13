@@ -47,9 +47,32 @@ Three layers:
   13.5 MHz pacing halves the effective lead, an imperceptible ~2 px shift).
 
 **Status line** (bottom-anchored): `[icon] H:MM:SS/H:MM:SS CH n/N` — icon =
-▶ / ❚❚ / ▶▶×n / ◀◀×n (scrub tier 0..3 shows ×1..×4; tiers are span-relative
-step rates since PR fj#101, *not* seconds — 0/2/4.5/8 s of holding, step
-`span >> {12,10,8,6}`, relaxed 2026-09-03; see `docs/dvd_nav.md` "Phase 8a").
+▶ / ❚❚ / ▶▶…▶▶▶▶▶ / ◀◀…◀◀◀◀◀ — the scrub tier 0..3 is drawn as **2 to 5
+arrows**, 0/2/4.5/8 s of holding.
+★★ **IT USED TO READ `×1`..`×4` AND THAT WAS A FALSE QUANTITATIVE CLAIM
+(2026-09-12).** On a set-top box `×N` means N times real time; this field was the
+tier ORDINAL plus one, so it printed `×1` — which reads as NORMAL SPEED — for a
+tier that moves **~29 content-seconds per second of wall clock**. Measured at the
+2 h anchor the ladder is **~15 / 60 / 240 / 960** content-seconds per second (and
+was 29 / 117 / 469 / 1875 on a DVD when the readout was written), so every label
+was wrong by one to three orders of magnitude and `×1` was wrong in the one
+direction a viewer would act on.
+★ **It could not have been a true rate before that day either:** the step was a
+fraction of the title span, so the multiple differed on every disc and no
+constant could have been printed. `scrub_ctrl`'s content-rate change is what made
+a real `×N` knowable — and what showed the numbers were too large to print, since
+a real player's *fastest* scan (~×30) is roughly our *slowest* tier. An arrow
+count claims nothing numeric, which is the other convention real players use.
+⚠ **The field is five columns wide whatever the tier**, so the clock never moves
+under the viewer; the cost is one column, taken from the three no-backing columns
+at the right (the line ends at 29 instead of 28, measured as +512 backing pixels
+in `hud_frame_tb`).
+✅ **HW-CONFIRMED 2026-09-12** (build `DVD_scrubtiers_20260912_2135.rbf`) — the
+readout was checked on the board alongside the ladder it reports. ⚠ It had to be:
+a screenshot is the core's raw raster taken upstream of the MiSTer OSD, and the
+status line's own glyph plane is the only place this appears, so `hud_frame_tb`
+can prove the pixels are drawn and nothing in sim can prove they are *legible* at
+five columns on a real display. See `docs/dvd_nav.md` "Phase 8a").
 `CH` hides until the reader's `cur_pgm` query resolves (0 = unknown). Shown while: **persistent mode** (B9
 "Display" toggles it), paused, scrubbing, or ~2.5 s after a transport event.
 
@@ -82,7 +105,15 @@ above the warnings, never preempted. Two things worth knowing:
 
 **Transport icon is shared (2026-08-27):** `scrub_held`/`scrub_dir`/`scrub_tier`
 are muxed in emu — a **held** FF/REW scrub renders its accelerating tier, an open
-**D-pad** coalesce window renders the tap COUNT, both as `►►×n` in the same field.
+**D-pad** coalesce window renders **direction arrows only** (`►►`).
+⚠ It used to render the TAP COUNT in this same field, which was a category error
+even before the arrows — a count of presses is not a speed — and became a visible
+falsehood once the field drew a tier as an arrow count, since four taps would have
+read as the fastest scrub. `emu.sv` feeds `.scrub_tier` `2'd0` on that arm and the
+**popup** carries the magnitude (`SEEK FWD 12:30`), which always said more than the
+tap count did. That one connection is gated by a grep in
+`bench/dvd/run_scrub_tiers.sh` — no module-level bench can see what emu puts on a
+port (the issue #81 lesson).
 `hold_freeze` itself is untouched (it still pauses the governor/audio), which is
 why a D-pad tap does not freeze video. See `docs/dvd_nav.md` §2b.
 
