@@ -36,9 +36,10 @@ line-21 captions ✅, overlays/subtitles/menus/HUD on the analog output ✅, sub
   disproved the PAL hypothesis. **FIXED** in `fix/mode-switch-realign` (issue #42), ⏳
   HW-confirm pending. See §6.
 
-⏳ Not yet gated: PAL on an analog CRT (no PAL CRT available), RGBHV, and
-`direct_video=1` through an HDMI DAC. (The field-parity coin flip that was open here is
-✅ fixed and HW-confirmed — `docs/field_parity.md`.)
+⏳ Not yet gated: `direct_video=1` through an HDMI DAC. (The field-parity coin flip that
+was open here is ✅ fixed and HW-confirmed — `docs/field_parity.md`. ✅ **PAL on an analog
+CRT is HW-CONFIRMED as of 2026-09-12** — multiple user reports; see §3.12. The analog sync
+modes incl. RGBHV have since been exercised by the maintainer on a RetroTINK.)
 
 ## 1. The field reports that started it
 
@@ -616,11 +617,18 @@ standards-correct on both (BT.470's 5/5/5 half-lines and its widths, gated by th
 — that part is not in question. But *which* raster field is field 1 is a separate question,
 and 525- and 625-line systems are not obliged to answer it the same way. ⚠ **[G8] cannot
 catch this**: it gates that the raster and the emitted block AGREE, and on PAL they would be
-wrong together. PAL on an analog CRT has never been HW-confirmed at all (no PAL CRT; the
-raster numbers have been sim-derived since PR fj#146), so this is **untested rather than
-known-good**. ★ If a PAL CRT report says the fields are swapped, make the constant
-**per-standard** (`pal ? … : …` in all three consumers) — do not flip it globally, which
-would break the NTSC case it was measured on.
+wrong together.
+
+✅ **ANSWERED 2026-09-12: PAL on an analog CRT is HW-CONFIRMED by multiple user reports**,
+which also closes the raster numbers that had been sim-derived since PR fj#146. The shared
+constant is therefore correct on BOTH standards and does **not** need to be made
+per-standard. ⚠ The paragraph above stood for months as "untested rather than
+known-good" — that was the honest status, and it is worth noting the resolution came from
+users with the hardware, not from any amount of further reasoning here.
+
+★ Kept as the contingency if a future PAL report ever does say the fields are swapped: make
+the constant **per-standard** (`pal ? … : …` in all three consumers) — do not flip it
+globally, which would break the NTSC case it was measured on.
 
 ✅ **The HW test was a single observation and it passed (2026-09-07):** the picture is
 correct on **both** HDMI and the CRT at once, with nothing to set. Both knobs the diagnosis
@@ -647,7 +655,8 @@ combination left to get wrong.
 - [ ] RGBS SCART + YPbPr + RetroTINK 4K (the reporters): no periodic shake at the idle logo
       or in play; no sawtooth; RT4K readouts steady; `O[2]` third row stays red.
 - [ ] Progressive with the analog ini bits: stays 480p when a film title starts.
-- [ ] PAL disc over HDMI 576i unregressed (analog PAL still unconfirmed — no PAL CRT).
+- [x] PAL disc over HDMI 576i unregressed. (Analog PAL 576i on a CRT: ✅ HW-confirmed
+      2026-09-12 by multiple user reports — see §3.12.)
 - [ ] Idle logo reports `720x480i`; no resolution popup on disc load.
 - [ ] Toggling `Video Output` mid-title: the chapter-seek-style interruption, then clean.
 

@@ -255,11 +255,11 @@ corrects this itself, including while a picture is **held** — a disc menu, an 
 copyright or warning card, a paused frame — which settles within about half a second, so
 you may catch it doing so. Many televisions never show it at all; it depends on the set.
 
-!!! question "CRT owners: please report what you see"
-    Verified here on a composite set and over HDMI. **RGB SCART, YPbPr, sync-on-green,
-    15 kHz RGBHV and PAL on a CRT are not yet confirmed** — televisions differ, and a
-    set's sync separator is what decides whether this ever shows. If you see it, please
-    [report it](reporting-a-bug.md) with the analog lines from your `MiSTer.ini`. See
+!!! question "CRT owners: please report anything that looks wrong"
+    Televisions and scalers differ, and a set's sync separator is what decides whether
+    this ever shows. If it happens on yours — or anything else on the analog output looks
+    wrong — please [report it](reporting-a-bug.md) with your display and the analog lines
+    from your `MiSTer.ini`. See
     [Field alignment](../video/interlaced.md#field-alignment).
 
 !!! info "Fixed in v0.5.0 — and a second, separate cause"

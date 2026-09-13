@@ -742,10 +742,11 @@ half-line, weave workaround, 1440-wide pixel repetition) is the
   10 sweep seeds route + close (worst-corner 86.87–92.46, was best-of 82.82 with 3 no-routes),
   fits ~30 → ~12 min, release gate raised to `FMAX_MIN=86.0`, SEED 29 pinned (95.35/92.46). New
   `tools/timing_paths.sh` = one-command intra-clk_dec limiter dump. docs/history.md §10.
-- [x] **PAL 576i CRT** — delivered by the dual-raster re-interlacer (312/313 totals,
-  halfline 432, MERGED PR fj#146); mechanism HW-confirmed working overall, but the
-  exact PAL timing numbers are still sim-derived — not specifically re-verified
-  (`docs/analog_dual_raster.md`).
+- [x] **PAL 576i CRT** — ✅ **HW-CONFIRMED 2026-09-12** by multiple user reports. First
+  delivered by the dual-raster re-interlacer (PR fj#146), which is now RETIRED; PAL 576i
+  rides the single interlaced raster (`docs/single_raster_analog.md`). The confirmation
+  closes both open sub-items: the timing numbers, sim-derived since fj#146, and the FIELD
+  ORDER, which had only been measured on NTSC (§3.12).
 - [x] **16:9 on the 4:3 CRT (Fit / Letterbox / Crop)** — ✅ DONE, HW-CONFIRMED 2026-07-10,
   `docs/crt_anamorphic.md`. `O[4:3] CRT Aspect` Auto/Fit/Letterbox/Crop, CRT-mode only (HDMI
   keeps ascal ARX/ARY). Letterbox = vertical ¾ downscale + bars; Crop = horizontal pan-scan

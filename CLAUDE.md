@@ -472,9 +472,17 @@ worse maintenance burden than targeted in-place edits. So:
   mode-switch re-align bullet below and `docs/single_raster_analog.md` §6.
   (Marker corrected 2026-09-04: this still read "⏳ HW-confirm pending" after the
   bullet below had already recorded the hardware confirmation.)
-  ⏳ Not gated: PAL on an analog CRT, RGBHV, `direct_video=1` through an HDMI DAC, and
-  the parity coin flip (the maintainer's late-model CRT has never shown it — the two
-  Discord reporters' older sets do, so the corrector fix leans on `field_phase_tb`).
+  ⏳ Not gated: `direct_video=1` through an HDMI DAC, and the parity coin flip (the
+  maintainer's late-model CRT has never shown it — the two Discord reporters' older sets
+  do, so the corrector fix leans on `field_phase_tb`). The analog SYNC MODES (RGB SCART,
+  YPbPr, sync-on-green, 15 kHz RGBHV) have since been exercised by the maintainer on a
+  RetroTINK.
+  ✅ **PAL ON AN ANALOG CRT IS HW-CONFIRMED (2026-09-12, multiple user reports).** That
+  closes TWO open items at once, and the second is the less obvious one: the 576i raster
+  numbers (sim-derived since PR fj#146) AND the **field order**, which had only ever been
+  measured on NTSC and applied to 625 lines by analogy — see
+  `docs/single_raster_analog.md` §3.12, whose "untested rather than known-good" warning is
+  now answered. The per-standard `pal ? … : …` contingency recorded there was NOT needed.
 - ✅ **SMPTE 170M / BT.470 ANALOG COMPOSITE SYNC — we were emitting no equalizing pulses
   at all (2026-09-05, PR #64); sim-proven RED/GREEN and ✅
   HW-CONFIRMED 2026-09-07** (maintainer's rig: composite CRT and HDMI both correct with
@@ -1927,7 +1935,8 @@ worse maintenance burden than targeted in-place edits. So:
   working on real hardware (analog engages from ini alone, HDMI stays progressive
   simultaneously). ⚠️ The exact PAL 576i timing numbers and the field-dominance
   caveat (see `docs/analog_dual_raster.md`) were not specifically re-verified by
-  this confirmation and remain open sub-items.
+  this confirmation and remained open sub-items — ✅ **both CLOSED 2026-09-12 on the
+  SINGLE raster that replaced this one; see the single-raster bullet above.**
   The analog CRT now works **from MiSTer.ini alone, like any other core**
   (`vga_scaler=0` + `composite_sync=1`/ypbpr/sog — nothing in the OSD): the core emits
   TWO simultaneous rasters — the unchanged progressive main raster for ascal/HDMI, and
@@ -1957,7 +1966,9 @@ worse maintenance burden than targeted in-place edits. So:
     Analog Out modes unregressed ✅, and `Interlaced Out = On` on HDMI now renders
     overlays correctly ✅ (that half is the standalone fix). **Only PAL-analog is
     unverified** — no PAL CRT available; The Office plays right on HDMI, and PAL
-    fieldpass is sim-proven, but PR fj#146's sim-derived PAL 576i raster numbers STAY OPEN. Fourth `O[27:26]` mode: forces `il_eff` for the session so
+    fieldpass is sim-proven, but PR fj#146's sim-derived PAL 576i raster numbers STAY OPEN.
+    *(⛔ Historical: that raster is retired. PAL on an analog CRT is ✅ HW-CONFIRMED
+    2026-09-12 on the single raster — see the top bullet.)* Fourth `O[27:26]` mode: forces `il_eff` for the session so
     the decoder emits **authored** TOP/BOTTOM fields and `re_interlace` re-times them
     1:1 (`fieldpass`: period 900900/1080000, write-port pixrep decimation, `SKEW_FP=858`).
     **This is the structural fix for the field-pairing defect**, and WHY the obvious cheap

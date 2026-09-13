@@ -193,9 +193,6 @@ the same sync as RGB/component, so they change with it.
 
 ## Known limitations
 
-- **PAL on an analog CRT is implemented but unconfirmed.** The 576i timings are derived by
-  analogy with the hardware-proven NTSC ones, and no PAL CRT was available to test them.
-  PAL over HDMI is confirmed working.
 - While `Video Output = Interlaced`, [Film 24p](film-24p.md) output is unavailable — a
   23.976 Hz raster cannot carry fields. Film on the CRT plays with its normal 3:2 field
   cadence instead, which is what an NTSC player always did.
