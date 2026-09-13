@@ -192,7 +192,16 @@ module transport_hud_tb;
 
         // T7: timer arm + expiry (persist off first)
         @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0;
-        repeat (2100) @(posedge clk);      // drain the toggle's own timer arm
+        // T7a0 -- the Display off-press fix, and the RED arm for it. Turning
+        // persistence OFF must hide the line AT ONCE. Pre-fix, display_edge
+        // re-armed show_tmr on EVERY press, so an off-press left the status
+        // line up for the full SHOW_TICKS (~2.5 s) and the button read as
+        // "only turns on, never off" -- the reported defect. Note the drain
+        // below USED to be load-bearing here ("drain the toggle's own timer
+        // arm"): the old bench worked around the bug rather than catching it,
+        // which is why this arm had to be added rather than just fixed.
+        check_vis("T7a0 off hides", 1'b0);
+        repeat (2100) @(posedge clk);      // still hidden once the timer drains
         check_vis("T7a hidden (persist off)", 1'b0);
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         check_vis("T7b event shows", 1'b1);

@@ -174,7 +174,15 @@ module transport_hud #(
         end else begin
             if (display_edge) persist_q <= ~persist_q;
             if (load_evt)     persist_q <= 1'b0;
-            if (show_evt || display_edge) show_tmr <= SHOW_TICKS;
+            // DVD-FORK FIX: the press that turns persistence OFF must HIDE the
+            // line, not re-arm the auto-show timer. vis below is
+            // (persist_q | ... | show_tmr != 0), so arming unconditionally here
+            // left the status line up for SHOW_TICKS after an off-press -- the
+            // user saw nothing happen, pressed again (toggling back ON), and
+            // reported that Display "only turns on, never off". persist_q reads
+            // its PRE-assignment value in this block, so it means "was on".
+            if (display_edge && persist_q)  show_tmr <= 27'd0;   // OFF: hide now
+            else if (show_evt || display_edge) show_tmr <= SHOW_TICKS;
             else if (load_evt)            show_tmr <= 27'd0;
             else if (show_tmr != 27'd0)   show_tmr <= show_tmr - 27'd1;
             // popup: last event wins the single slot
