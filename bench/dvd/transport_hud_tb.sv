@@ -31,6 +31,8 @@ module transport_hud_tb;
     reg         aud_evt = 0, sub_evt = 0, angle_evt = 0, chap_evt = 0;
     reg         css_warn = 0;
     reg         stop_on = 0, stop_kept = 0;
+    reg         aspct_evt = 0, aspct_analog = 0;
+    reg [1:0]   aspct_val = 0;
     reg         img_warn = 0;      // Phase-2: unplayable image
     reg         aud_warn = 0;      // Phase-2: unsupported audio format
     reg         vts_evt  = 0;      // Phase-2: title-VTS notice pulse
@@ -60,6 +62,7 @@ module transport_hud_tb;
         .aud_evt(aud_evt), .sub_evt(sub_evt), .angle_evt(angle_evt),
         .chap_evt(chap_evt), .css_warn(css_warn),
         .stop_on(stop_on), .stop_kept(stop_kept),
+        .aspct_evt(aspct_evt), .aspct_analog(aspct_analog), .aspct_val(aspct_val),
         .img_warn(img_warn), .aud_warn(aud_warn),
         .vts_evt(vts_evt), .vts_no(vts_no),
         .seek_evt(seek_evt), .seek_fwd(seek_fwd),
@@ -435,6 +438,31 @@ module transport_hud_tb;
             errors = errors + 1;
             $display("  FAIL T22d stop popup stuck after resume");
         end else $display("  ok  T22d stop indicator clears on resume");
+
+        // ---- T23: ASPECT popup names WHICH control moved -----------------
+        // The button drives two different settings depending on the live
+        // output, so a popup that said only "AUTO" would be ambiguous and the
+        // user could not find the setting again in the OSD.
+        $display("== T23: ASPECT popup");
+        stop_on = 0; repeat (2200) @(posedge clk);
+        aspct_analog = 0; aspct_val = 2'd2;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23a hdmi 16:9", "ASPECT 16:9~~~~~~~~~~~~~~~~~~~~~");
+        aspct_val = 2'd1;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23b hdmi 4:3", "ASPECT 4:3~~~~~~~~~~~~~~~~~~~~~~");
+        aspct_analog = 1; aspct_val = 2'd2;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23c letterbox", "ANALOG LETTERBOX~~~~~~~~~~~~~~~~");
+        aspct_val = 2'd3;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23d crop", "ANALOG CROP~~~~~~~~~~~~~~~~~~~~~");
+        aspct_val = 2'd0;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23e analog auto", "ANALOG AUTO~~~~~~~~~~~~~~~~~~~~~");
+        aspct_val = 2'd1;
+        @(posedge clk); aspct_evt = 1; @(posedge clk); aspct_evt = 0;
+        check_popup("T23f analog fit", "ANALOG FIT~~~~~~~~~~~~~~~~~~~~~~");
 
         if (errors == 0) $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
         else             $display("TRANSPORT_HUD_TB: FAILED (%0d errors)", errors);

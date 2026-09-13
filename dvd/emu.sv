@@ -1286,6 +1286,14 @@ wire       seek_ack;         // from dvd_iso_reader (seek accepted this cycle)
 wire       stopped_w;        // Stop is asserted (hold + blank the picture)
 wire       stop_restart;     // pulse: stage-2 PLAY -> restart reader + VM at FP
 wire       saver_on_w;       // screensaver owns the screen
+// Aspect button (B15) effective values -- declared here because the
+// subpicture display-mode wire reads aa_osd_sel ~2200 lines before the
+// aspect_ctl instance, and emu.sv has no `default_nettype none`.
+wire [1:0] ar_osd_sel;       // effective Aspect Ratio   (button override of status[20:19])
+wire [1:0] aa_osd_sel;       // effective Analog Aspect  (button override of status[4:3])
+wire       aspct_evt_w;      // pulse: the aspect target moved (HUD)
+wire       aspct_evt_analog_w;
+wire [1:0] aspct_evt_val_w;
 wire       stop_kept_w;      // stage 1 (position kept) vs stage 2 (forgotten)
 
 // Disc-menu proto-nav read-backs / request lines (Phase 2)
@@ -2386,9 +2394,12 @@ wire subp_any_present = subp_ctl_mem[ 0][31] | subp_ctl_mem[ 1][31] |
                         subp_ctl_mem[14][31] | subp_ctl_mem[15][31];
 // 16:9 display mode: override -> letterbox; else Crop=pan&scan, Letterbox=letterbox,
 // else wide (Fit/HDMI anamorphic — the common case; O[4:3] refines it, HW-tunable).
-wire [1:0]  sp_disp_mode = force_43_subp        ? 2'd1 :
-                           (status[4:3] == 2'd3) ? 2'd2 :
-                           (status[4:3] == 2'd2) ? 2'd1 : 2'd0;
+// ⚠ reads aa_osd_sel, NOT status[4:3]: the B15 Aspect button overrides that
+// value, and if the subpicture variant kept following the raw OSD bits the
+// subtitles would be laid out for an aspect the picture is no longer in.
+wire [1:0]  sp_disp_mode = force_43_subp         ? 2'd1 :
+                           (aa_osd_sel == 2'd3) ? 2'd2 :
+                           (aa_osd_sel == 2'd2) ? 2'd1 : 2'd0;
 // ONE shared display-mode wire for the subpicture VARIANT and nav_pci's BUTTON
 // GROUP. A menu forces wide for both: this core composites in source space and
 // scales the composite, so the disc's pre-letterboxed variant would letterbox
@@ -4568,8 +4579,31 @@ end
 // so VIDEO_ARX/ARY stays stable across the title->menu transition (no scaler
 // re-init) whenever the movie and its menu share an aspect (the common case).
 wire ar_wide_auto_eff = (menus_on && menu_active) ? menu_ar_wide_w : ar_wide_auto;
-assign ar_wide_eff = (status[20:19] == 2'b01) ? 1'b0 :   // force 4:3
-                     (status[20:19] == 2'b10) ? 1'b1 :   // force 16:9
+
+// DVD-remote Aspect button (B15) -- dvd/aspect_ctl.sv. It cycles whichever
+// aspect control is LIVE (Analog Aspect while the analog raster is engaged,
+// Aspect Ratio otherwise), because Analog Aspect is gated on interlaced_eff and
+// so does nothing at all on an HDMI-only rig. The core cannot write status[]
+// (dvd_telem.sv:11-16 -- stock Main polls UIO_GET_STATUS every frame and would
+// overwrite the user's settings), so the module publishes an OVERRIDE that is
+// surrendered the moment the OSD value changes, and both reads below go through
+// it instead of through status[] directly.
+aspect_ctl aspect_ctl_inst (
+    .clk         (clk_sys),
+    .rst_n       (reset_n),
+    .aspct_edge  (aspct_edge),
+    .analog_live (interlaced_eff),   // the only mode where Analog Aspect does anything
+    .osd_ar      (status[20:19]),
+    .osd_aa      (status[4:3]),
+    .ar_sel      (ar_osd_sel),
+    .aa_sel      (aa_osd_sel),
+    .evt         (aspct_evt_w),
+    .evt_analog  (aspct_evt_analog_w),
+    .evt_val     (aspct_evt_val_w)
+);
+
+assign ar_wide_eff = (ar_osd_sel == 2'b01) ? 1'b0 :   // force 4:3
+                     (ar_osd_sel == 2'b10) ? 1'b1 :   // force 16:9
                                                 ar_wide_auto_eff; // Auto: IFO for menus, stream for titles
 
 // DVD-FORK (Analog anamorphic): resolve the Analog Aspect menu (O[4:3]) into two
@@ -4590,7 +4624,7 @@ assign ar_wide_eff = (status[20:19] == 2'b01) ? 1'b0 :   // force 4:3
 // disp_vscale_mode (the OLD addrgen nearest-neighbour vertical decimation) is RETIRED —
 // Letterbox is now the downstream 2-tap blender. It is driven to 0 always (addrgen = FIT
 // vertically); the addrgen NN path is left dormant and prunes under the constant.
-wire [1:0] analog_aspect_sel = status[4:3];   // 0 Auto, 1 Fit, 2 Letterbox, 3 Crop
+wire [1:0] analog_aspect_sel = aa_osd_sel;   // 0 Auto, 1 Fit, 2 Letterbox, 3 Crop (B15 override of status[4:3])
 // DVD-FORK (analog anamorphic overlay align): Auto follows ar_wide_auto_eff (the
 // menu-aware aspect — IFO V_ATR while a menu is up, PR #86) instead of the raw
 // stream aspect, matching what HDMI's ascal path does: an anamorphic menu now
@@ -5557,6 +5591,9 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .display_edge (display_edge),
     .stop_on      (stopped_w),
     .stop_kept    (stop_kept_w),
+    .aspct_evt    (aspct_evt_w),
+    .aspct_analog (aspct_evt_analog_w),
+    .aspct_val    (aspct_evt_val_w),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
     // Three LIVE sources, in the order they can be trusted: a linear file's
