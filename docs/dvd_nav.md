@@ -2063,6 +2063,13 @@ measured pair (`first = 4, last = 3`) and asserts `scrub_ctrl` pins both
 directions at 3 — i.e. that the consumer is *correct given a correct span*, so a
 future session fixes the producer rather than loosening the clamp.
 
+⛔ **No committed library-sweep tool** (user decision, 2026-09-13), reversing the
+`tools/acmod_scan.py` precedent for this one case: the structural guarantee above
+means a degenerate span cannot recur, so a standing sweep would only ever confirm
+what the RTL makes impossible. The measurements in this section were taken with
+throwaway scripts; reproduce them by walking each VTS's `VTS_PGCIT` PGC cell
+table and comparing `cell[nr-1].last_sector` against `max(last_sector)`.
+
 #### ⛔ Non-goals — do not re-derive these
 
 1. **Position-space progress** (cumulative played sectors instead of physical
