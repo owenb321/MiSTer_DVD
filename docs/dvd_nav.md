@@ -1484,11 +1484,17 @@ Mechanics (all in `scrub_ctrl`, sector/RBN-based against the title span
   `joy_eff` masks those keys out and the gesture is reachable **only from a gamepad**. A
   tier ladder is a feel setting whose instrument is a person, and this is the second
   retune (2026-09-03 was the first) decided the same way.
-  ⏳ **NOT covered by that round, and each needs the same hands:** the LINEAR half (a
-  `.mpg`/VCD held at the same tiers — the parity claim is pinned in sim to 7 % but has
-  never been felt), a SHORT title (the 0.58 s/s case the change exists for), and the
-  arrow readout replacing `×1..×4`. The disc under test was an ordinary feature, i.e. the
-  anchor bucket — the one length whose behaviour moved least.
+  ✅ **AND THE REST OF THE ROUND CAME BACK GOOD THE SAME DAY** (maintainer: *"all those
+  open scrub questions look and feel good on the board"*), so the branch is confirmed
+  whole rather than on its easiest path: the **LINEAR half** held at the same tiers —
+  which is the parity claim itself, felt rather than only pinned in sim to 7 % — a
+  **SHORT title**, which is the 0.58 s/s crawl the change exists for and the case the
+  first disc could not exercise (an ordinary feature sits in the anchor bucket, the one
+  length whose behaviour moved least), and the **arrow readout** that replaced `×1..×4`.
+  ★ Worth keeping straight for anyone retuning this: those two are different mechanisms,
+  not one test twice. A linear file's rate comes from `lin_blk10` and is independent of
+  its length; a DVD's comes from the duration bucket and is nothing but its length. The
+  short-title arm is the only one that exercises `secs_lz` at all.
   ⚠ **The ladders and the dwells are `scrub_ctrl` parameters (`SH0..SH3`, `LS0..LS3`,
   `T1..T3`, `SECS_REF`).** The span ladder was relaxed once already on 2026-09-03 after a
   user report that the scrub "ramps up too fast": the original `{10,8,6,5}` / 0-1.5-3-5 s

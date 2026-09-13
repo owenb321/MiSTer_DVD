@@ -66,7 +66,13 @@ count claims nothing numeric, which is the other convention real players use.
 ⚠ **The field is five columns wide whatever the tier**, so the clock never moves
 under the viewer; the cost is one column, taken from the three no-backing columns
 at the right (the line ends at 29 instead of 28, measured as +512 backing pixels
-in `hud_frame_tb`). See `docs/dvd_nav.md` "Phase 8a").
+in `hud_frame_tb`).
+✅ **HW-CONFIRMED 2026-09-12** (build `DVD_scrubtiers_20260912_2135.rbf`) — the
+readout was checked on the board alongside the ladder it reports. ⚠ It had to be:
+a screenshot is the core's raw raster taken upstream of the MiSTer OSD, and the
+status line's own glyph plane is the only place this appears, so `hud_frame_tb`
+can prove the pixels are drawn and nothing in sim can prove they are *legible* at
+five columns on a real display. See `docs/dvd_nav.md` "Phase 8a").
 `CH` hides until the reader's `cur_pgm` query resolves (0 = unknown). Shown while: **persistent mode** (B9
 "Display" toggles it), paused, scrubbing, or ~2.5 s after a transport event.
 
