@@ -99,6 +99,13 @@ governor drops a B-frame to stay in step. B-frames are never used as references,
 picture cannot be corrupted, and in practice this is not something you notice. PAL has less
 headroom because the frames are taller.
 
+**A few transfers carry a half-line at the picture edge.** On some discs the very top or
+bottom line only reaches part of the way across the screen. It is encoded that way and
+other players show it too; a television's overscan normally hides it. It can become
+visible over HDMI at 1:1, or in `Analog Aspect` = `Letterbox`, which lifts the picture's
+bottom edge out of a CRT's overscan. See
+[A thin partial line across the top or bottom of the picture](troubleshooting.md#a-thin-partial-line-across-the-top-or-bottom-of-the-picture).
+
 **Closed captions are analog-only** and need a television that decodes them — see
 [Closed captions](../video/closed-captions.md). Roughly 1 disc in 6 carries them.
 

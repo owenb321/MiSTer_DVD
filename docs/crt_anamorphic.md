@@ -482,3 +482,104 @@ space; raw coordinates would render them quarter-screen).
 - The Letterbox bar offset already tracks `vertical_size` (72 lines for PAL 576), so it comes
   for free once the PAL 576i CRT modeline exists (`docs/crt_480i.md` §9); `crt_ov_map`'s
   `v_bar`/`v_band` inputs are already PAL-parameterized in emu.
+
+## 11. The "half-line at the picture edge" report — NOT a core defect (2026-09-12)
+
+Field report: in `Analog Aspect = Letterbox`, *"the bottom line only goes halfway across the
+screen"*. Reported on several PAL discs, in **all three** aspect modes, on **HDMI as well as
+analog**, and — decisively — **in VLC**.
+
+**Verdict: the half-line is encoded on the disc.** Nothing in this fork produces it, and our
+output matches a set-top player. Documented for users in
+`site/content/reference/troubleshooting.md` ("A thin partial line across the top or bottom of
+the picture"), `site/content/reference/compatibility.md` and `site/content/video/analog-crt.md`.
+
+### What the content contains
+
+12-bucket row averages of decoded frames, THE_OFFICE_UK_DISC1_PAL (720x576):
+
+```
+row0     0   0   0   0   0   1 188 187 183 130  41  80   <- black LEFT half, picture right
+row1   204 214 209 144  68 145 148 147 143 121  15   8   <- normal
+row574 171 116  83  73  36 138 148 131 144 125 113  99   <- normal
+row575 162 106  78  69  14   0   0   0   0   0   0   0   <- picture LEFT, black right
+```
+
+A genuine half-line **at both ends of the same disc**: one field's first active line begins
+part-way across, the other field's last active line ends part-way across — the two halves of
+one line. Other measured examples: `LastBountyHunter` row 1 black across the left 427 px (with
+row 0 fully black above it), `SpacePirates` row 1 across 553 px, `COWBOY_BEBOP` row 575 black
+across the right ~499 px, `Walt Disney World Promo` row 575 black across the right ~58 % but
+dim. Clean controls: `SUPERMAN_LAST_SON_OF_KRYPTON_PAL`, `big-buck-bunny-PAL`, `MEN_IN_BLACK`.
+
+A television's overscan (a few percent per edge) normally swallows it. It became visible
+because HDMI at 1:1 has none, and because **Letterbox lifts the picture's bottom edge 72 lines
+up out of a CRT's overscan** — but a real player letterboxing 16:9 for a 4:3 set puts that line
+at ~raster line 504 of 576, equally in view, and its scaler dilutes it to a 2/3-weight blend,
+which is exactly what `disp_vscale` computes (`f = 171`) on the final line.
+
+**Prevalence: a minority of discs, deliberately NOT quantified.** A library scan suggested
+~4 % of decidable discs, but the detector went through four revisions and still disagreed with
+itself on low-contrast material. The number is not trustworthy enough to publish and the manual
+entry is qualitative.
+
+### Disproved — do not re-derive these
+
+- **Not a pipeline defect.** A displayed line can only end early via `pixel_rd_underflow`
+  (`rtl/mpeg2/mixer.v:186-193`) or a DE overrun caused by the same starvation. Everything else
+  is structurally incapable: a scan can only end on `last_mb && last_y`
+  (`dvd/resample_addrgen.v:627`), so the addrgen cannot stop mid-line; line end is code-driven
+  (`ROW_X_COL_LAST`), not counted; `disp_vscale` blends each output line in per-pixel lockstep
+  with its incoming source line. The mixer's own note that *"underflow was confirmed ZERO on
+  HW"* (`mixer.v:80-88`) is **corroborated** by this finding, not contradicted.
+- **Not stream parameters.** SUPERMAN (clean) matches three affected discs on every measured
+  one: 720x576, frame-coded pictures, `progressive_frame=0`, `rff=0`, `progressive_sequence=0`.
+  The IFO `V_ATTR` is identical across all six discs compared — the "that is what the authoring
+  tool wrote" trap (cf. `docs/film_24p_plan.md` §14).
+- **Not bitrate or decode load.** Measured mux rate from pack SCR deltas: `big-buck-bunny-PAL`
+  is the **highest** of the six at 8.4 Mbps and is clean; `COWBOY_BEBOP` shows it at 4.4. This
+  also kills the tempting "PAL film decodes 25 % more macroblocks/s than NTSC film" framing.
+- **Not PAL-specific.** `LastBountyHunter` and `SpacePirates` are NTSC 720x480.
+
+### Measurement recipe, and four traps that cost real time
+
+Demux the video PES from a title VOB, decode with
+`ffmpeg -f mpeg -i - -pix_fmt gray -f rawvideo`, and compare each edge row against a reference
+row further into the picture. The traps:
+
+1. **The anomalous row is not always the outermost one.** `LastBountyHunter` has row 0 fully
+   black and the half-line at row **1**. Using the adjacent row as the reference makes the
+   defect invisible — the reference *was* the defect.
+2. **Both orientations occur.** A top half-line is black-then-picture; a bottom one is
+   picture-then-black. A test written for one misses the other.
+3. **The reference row can itself be black at the extreme edge** (a few columns of picture
+   margin), which terminates an edge-run walk at x=0. Skip columns where the reference carries
+   no picture.
+4. **Black is not always <= 16.** THE_OFFICE's suppressed region sits near 18-24; an absolute
+   threshold produced a false negative on a disc known to be affected.
+
+And an informativeness gate is mandatory: if the reference row is itself inside a black
+letterbox bar the frame proves nothing. Without one, a concert disc with two black rows at the
+bottom was flagged from three outlier frames — a false positive the maintainer caught by simply
+opening it in VLC. Same shape as the film-evidence gate (`docs/film_24p_plan.md` §14).
+
+### Unrelated latent bug found en route (UNREACHABLE today — do not "fix" blind)
+
+`disp_vscale` treats `ROW_1_COL_0` as a scan re-arm (`dvd/disp_vscale.sv:128`), but on the
+**progressive FRAME** path the addrgen tags *both* of the first two lines as frame-tops
+(`dvd/resample_addrgen.v:1274-1276`, via the `disp_y_sat` 0 -> 1 -> 2 walk). There it would
+re-arm the Bresenham at source line 1: source line 0 discarded, **359** output lines instead of
+360, and output line 1 carrying `ROW_X_COL_0` at `v_pos == disp_v_offset+1`, which `mixer.v:169`
+explicitly excludes — one black line just under the top bar.
+
+Not reachable from the Analog Aspect menu today: `disp_vscale_en = analog_letterbox` requires
+`interlaced_eff`, which puts the addrgen on the FIELD path where exactly one frame-top code
+exists per field. It **is** exercised by `bench/dvd/resample_chain_tb.sv`'s default progressive
+`+vsmode=1` arm, where `TOL = 6` hides it (`hole = 1`, `nb_cnt = 359` vs `exp 360`). It becomes
+live the moment `disp_vscale_en` is un-gated from `interlaced_eff` — i.e. the §4 roadmap item
+"make a 4:3 HDMI output honor the same Fit/Letterbox/Crop setting". Fix at that point: ignore a
+`ROW_1_COL_0` that arrives when the scan armed on the immediately preceding line.
+
+⚠ Also worth knowing before trusting that bench on edge behaviour: its geometry check is
+`TOL = 6` on the line count, `hole` counts only **fully** black lines, and `hfill_ok` is a
+frame-wide min/max. **A single partially drawn line is invisible to it.**

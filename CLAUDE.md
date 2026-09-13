@@ -3184,6 +3184,22 @@ width fills; SVCD 480 = exact 2:3), shipped with the VCD/SVCD feature below. Des
 `resample_chain_tb +sif=1`/`+hfill=1` variants (`+sif` runs co-sim the addrgen walk
 vs the 2× closed form; `+hgrad` blend, `+crt` fields, `+siftog` runtime toggle),
 `crt_ov_map_tb` T1d/T6.
+- ⛔ **"THE BOTTOM LINE ONLY GOES HALFWAY ACROSS" IS THE DISC, NOT THE CORE (2026-09-12,
+  docs-only change).** Field report in `Analog Aspect = Letterbox`; reproduced in **VLC** and
+  measured in the decoded pixels — a half-line where one field's first active line begins
+  part-way across and/or the other's last one ends part-way across, on a minority of discs,
+  NTSC and PAL alike (THE_OFFICE carries BOTH ends). Overscan normally hides it; HDMI at 1:1
+  and Letterbox (which lifts the picture's bottom edge out of a CRT's overscan) expose it —
+  as a set-top player letterboxing the same disc also would. ★ **Three theories died on
+  measurement; they are recorded so nobody re-derives them:** NOT a pipeline defect (a partial
+  line can ONLY be `pixel_rd_underflow`, which `mixer.v:80-88` measured as zero on HW — this
+  finding corroborates it), NOT stream parameters (a CLEAN disc matches three affected ones on
+  resolution, picture structure, `progressive_frame`, `rff` and `progressive_sequence`), NOT
+  bitrate/decode load (the HIGHEST-bitrate disc of the six is clean at 8.4 Mbps while an
+  affected one runs 4.4). ⚠ Prevalence deliberately NOT quantified — the detector took four
+  revisions and still disagreed with itself on low-contrast material. Detail, the measurement
+  recipe and its four traps: **`docs/crt_anamorphic.md` §11**, which also records an
+  UNREACHABLE latent `disp_vscale` frame-top re-arm bug found en route.
 **VCD + SVCD playback (bin/cue direct) — ✅ HW-CONFIRMED 2026-08-24 (user report:
 VCD/SVCD good on analog + HDMI, seeking works; branch
 `feature/vcd-svcd-playback`) — see `docs/vcd_svcd.md` (design + remaining
