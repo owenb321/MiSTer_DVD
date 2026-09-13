@@ -21,6 +21,7 @@ Settings are saved to `/media/fat/config/DVD_v3.CFG` and persist across core rel
 | **480i Deint** | **Bob** / Weave | How the framework scaler deinterlaces when receiving 480i (HDMI, while Video Output is Interlaced). |
 | **Analog Aspect** | **Auto** / Fit / Letterbox / Crop | How anamorphic content fits a 4:3 analog TV — see [Analog Aspect](../video/analog-crt.md#analog-aspect). |
 | **Video Standard** | **Auto** / NTSC / PAL | Auto detects from the stream's vertical size (480 = NTSC, 576 = PAL). |
+| **Screensaver** | **5min** / Off / 2min / 10min | How long a paused or stopped disc sits still before the bouncing idle logo takes over. Any button or key brings the picture straight back. It protects CRTs from burn-in and changes nothing about playback — your place is kept. |
 
 !!! warning "New in v0.4.0 — your settings reset once"
     **Video Output** replaces the previous `Interlaced Out` and `Analog Out` settings
