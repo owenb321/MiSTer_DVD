@@ -17,11 +17,17 @@
 #          M1 pre-fix    : the bare last-written assignment   -> B C D E
 #          M2 no-seed    : drop the per-PGC cell-0 re-seed    -> D and F
 #          M3 inverted   : take the MIN instead of the MAX    -> B C D E F
-#          M4 first-min  : title_first becomes min(first)     -> E only
-#          M5 gap-last   : S_RBN_SCAN miss -> last cell again -> G only (change 2)
+#          M5 gap-last   : S_RBN_SCAN miss -> last cell again -> G only
+#          M6 first-cell0: title_first back to cell[0] (pre-split) -> H I J
+#          M7 no-cross-lo: drop the backward program-start stop   -> E only
+#          M8 no-cross-hi: drop the forward program-end stop      -> I only
 #
-# M4 having exactly ONE owning arm is the point: it proves the deliberate
-# title_first asymmetry is gated in its own right, not incidentally covered.
+# ⛔ There WAS an M4 ("title_first becomes min(first_sector)") and it is gone
+# because that mutation is now the SHIPPING rule: title_first IS the minimum, and
+# what protects a backward underflow is no longer the choice of that value but the
+# cross_lo program-start stop. Its job is covered twice over -- M6 reverts the
+# minimum and fails H/I/J, M7 removes the stop and fails E. A mutation that no
+# longer describes a wrong version of the code is not a gate, it is noise.
 #
 # ⚠ M2 breaks arm D as well as arm F, and that is a MEASURED property of the
 # design, not a loose mutation. The reader's LINEAR branch publishes
@@ -57,6 +63,11 @@ run title_span "TITLE_SPAN_TB: ALL TESTS PASSED" \
     $RTL $DEPS bench/dvd/title_span_tb.sv
 grep -E '^  ok:|^[A-Z]: ' /tmp/ts_title_span.log | sed 's/^/  /'
 
+echo "== GREEN: the MIRROR shape (cell[0] physically last) =="
+run title_span_late0 "TITLE_SPAN_TB: ALL TESTS PASSED" \
+    -DTITLE_SPAN_LATE0 $RTL $DEPS bench/dvd/title_span_tb.sv
+grep -E '^  ok:|program ends' /tmp/ts_title_span_late0.log | sed 's/^/  /'
+
 echo "== GREEN: the gap arm (change 2) =="
 run title_span_gap "TITLE_SPAN_TB: ALL TESTS PASSED" \
     -DTITLE_SPAN_GAP $RTL $DEPS bench/dvd/title_span_tb.sv
@@ -71,18 +82,22 @@ run scrub_ctrl_tb         "scrub_ctrl_tb: ALL TESTS PASSED"         dvd/scrub_ct
 run seek_bar_tb           "SEEK_BAR_TB: ALL TESTS PASSED"           dvd/seek_bar.sv bench/dvd/seek_bar_tb.sv
 run seek_time_tb          "seek_time_tb: ALL TESTS PASSED"          dvd/seek_time.sv dvd/secs_bcd.sv bench/dvd/seek_time_tb.sv
 
-# red <name> <sed-script> <expected-failing-arms> [extra-defines]
+# red <name> <sed-script> <expected-failing-arms> [extra-defines] [file-to-mutate]
 # Verifies three things, all of which have silently passed a weak gate before:
 #   (a) the mutation actually APPLIED (the anchor may have moved),
 #   (b) the mutated module still BUILDS (a build error proves nothing),
 #   (c) EXACTLY the expected arms failed -- no more, no fewer.
 red() {
-    local name=$1 script=$2 want=$3 defs=${4:-}
+    local name=$1 script=$2 want=$3 defs=${4:-} tgt=${5:-$RTL}
     local d; d=$(mktemp -d)
-    sed "$script" "$RTL" > "$d/dvd_iso_reader.sv"
-    if cmp -s "$d/dvd_iso_reader.sv" "$RTL"; then
+    local base; base=$(basename "$tgt")
+    local rest=""
+    sed "$script" "$tgt" > "$d/$base"
+    # everything the DUT needs except the file being mutated
+    for f in $RTL $DEPS; do [ "$f" = "$tgt" ] || rest="$rest $f"; done
+    if cmp -s "$d/$base" "$tgt"; then
         echo "  FAIL $name: the mutation did not apply (anchor moved)"; fail=1
-    elif ! iv "$d/sim" $defs "$d/dvd_iso_reader.sv" $DEPS bench/dvd/title_span_tb.sv 2>"$d/build"; then
+    elif ! iv "$d/sim" $defs "$d/$base" $rest bench/dvd/title_span_tb.sv 2>"$d/build"; then
         echo "  FAIL $name: the mutated module did not build"; sed 's/^/      /' "$d/build"; fail=1
     else
         vvp "$d/sim" > "$d/log" 2>&1
@@ -113,15 +128,22 @@ if [ "${1:-}" = "--red" ]; then
     red M3-inverted \
         "s@if (cell_wi == 8'd0 || cell_last_w > title_last_rbn)\$@if (cell_wi == 8'd0 || cell_last_w < title_last_rbn)@" \
         "BCDEF"
-    # M4: the rejected symmetry -- title_first as min(first_sector). Arm E only:
-    # a backward underflow would then clamp INTO the displaced trailing cell.
-    red M4-firstmin \
-        "s@if (cell_wi == 8'd0) title_first_rbn <= {wacc, pb_rdata};@if (cell_wi == 8'd0 || {wacc, pb_rdata} < title_first_rbn) title_first_rbn <= {wacc, pb_rdata};@" \
-        "E"
     # M5: change 2 reverted -- a gap landing plays the last cell again.
     red M5-gaplast \
         "s@cell_i       <= rbn_bt_v ? rbn_bt_i : 8'd0;@cell_i       <= cell_count - 8'd1;@" \
         "G" "-DTITLE_SPAN_GAP"
+    # M6: title_first back to cell[0].first -- the state BETWEEN the two halves of
+    # the fix. The mirror shape is exactly what that state cannot serve.
+    red M6-firstcell0 \
+        "s@if (cell_wi == 8'd0 || {wacc, pb_rdata} < title_first_rbn)@if (cell_wi == 8'd0 || 1'b0)@" \
+        "HIJ" "-DTITLE_SPAN_LATE0"
+    # M7/M8 mutate scrub_ctrl, not the reader: the crossing rules live there.
+    red M7-nocrosslo \
+        "s@wire cross_lo = ~pending_dir@wire cross_lo = 1'b0 \&\& ~pending_dir@" \
+        "E" "" dvd/scrub_ctrl.sv
+    red M8-nocrosshi \
+        "s@wire cross_hi =  pending_dir@wire cross_hi =  1'b0 \&\& pending_dir@" \
+        "I" "-DTITLE_SPAN_LATE0" dvd/scrub_ctrl.sv
 fi
 
 [ $fail -eq 0 ] && echo "RUN_TITLE_SPAN: ALL GREEN" || echo "RUN_TITLE_SPAN: FAILURES"

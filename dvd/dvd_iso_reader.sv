@@ -371,10 +371,26 @@ module dvd_iso_reader #(
     output     [7:0]  cur_cell_still,   // current cell's still_time (cell@2)
     output     [7:0]  cur_cell_cmdnr,   // current cell's cell_cmd_nr (cell@3)
 
-    // Title RBN span (VTSTT_VOBS, 2048-sector) for the seek position indicator:
-    // first cell's first_sector .. last cell's last_sector, captured at PGC load.
+    // Title RBN geometry (VTSTT_VOBS, 2048-sector), captured at PGC load.
+    // ★ FOUR numbers, not two, because a PGC's PROGRAM order is not its PHYSICAL
+    //   order and the two things a seek needs are different questions:
+    //     first/last = the physical ENVELOPE, min(first_sector)..max(last_sector).
+    //                  This is the range a position bar maps over and the only
+    //                  range a target can legally sit in.
+    //     start/end  = the FIRST program's first_sector and the LAST program's
+    //                  last_sector -- where "rewind past the beginning" and
+    //                  "wind past the end" should actually land.
+    //   On a well-ordered PGC start==first and end==last and the two collapse, so
+    //   every ordinary disc is bit-identical. They diverge on the 51 of 958
+    //   library ISOs measured in docs/dvd_nav.md 2f, in BOTH directions: a last
+    //   program parked at RBN 0 (A_MILLION_WAYS) and a FIRST program parked at the
+    //   top of the disc (BIG_TROUBLE_LITTLE_CHINA, 60 cells, cell[0] at 2,032,273
+    //   of 2,032,309 -- reported from the board as "seeking always brings you back
+    //   to the beginning of the title").
     output reg [31:0] title_first_rbn,
     output reg [31:0] title_last_rbn,
+    output reg [31:0] title_start_rbn,
+    output reg [31:0] title_end_rbn,
 
     // Menu aspect ratio from the IFO video attributes (NOT the MPEG sequence
     // header). DVD menus are commonly authored 16:9 ANAMORPHIC while their VOB
@@ -1659,6 +1675,8 @@ always @(posedge clk)
         // title span is captured only in this block (sole driver of the outputs)
         title_first_rbn <= 32'd0;
         title_last_rbn  <= 32'd0;
+        title_start_rbn <= 32'd0;
+        title_end_rbn   <= 32'd0;
         pt_c            <= 32'd0;
         run_eltm        <= 32'd0;
         run_secs        <= 16'd0;
@@ -1677,7 +1695,10 @@ always @(posedge clk)
         // below then owns the span as before.
         if (!iso_mode && !cell_mode) begin
             title_first_rbn <= 32'd0;
+            title_start_rbn <= 32'd0;
             title_last_rbn  <= (total_blocks == 32'd0) ? 32'd0
+                                                       : (total_blocks - 32'd1);
+            title_end_rbn   <= (total_blocks == 32'd0) ? 32'd0
                                                        : (total_blocks - 32'd1);
         end
         if (state==S_WALK_CAP && wphase==P_CELL) begin
@@ -1687,13 +1708,18 @@ always @(posedge clk)
         if (cell_bi == 5'd7) pt_c[7:0]   <= pb_rdata;   // rate | frames
         if (cell_bi == 5'd11) begin
             cell_first_mem[cell_wi] <= {wacc, pb_rdata};
-            // title_first = the FIRST PROGRAM cell's first_sector, deliberately
-            // NOT min(first_sector). scrub_ctrl's `tgt_raw` substitutes this
-            // value when a backward seek UNDERFLOWS, and on an out-of-order PGC the
-            // physical minimum lies INSIDE the displaced trailing cell -- so the
-            // minimum would drop the playhead into the LAST program, i.e. jump
-            // to the end from the other direction. See title_last below.
-            if (cell_wi == 8'd0) title_first_rbn <= {wacc, pb_rdata};
+            // title_first = the MINIMUM first_sector = the envelope's low edge.
+            // title_start = the FIRST PROGRAM's first_sector = where a rewind past
+            // the beginning should land. ⚠ These were ONE value until 2026-09-13
+            // and the single value is wrong for one class of disc whichever way it
+            // is chosen: as cell[0] it collapses the span on a PGC whose first
+            // program sits at the top of the disc (every seek then clamps to it =
+            // "back to the beginning"), and as the minimum it drops a backward
+            // underflow into a trailing cell parked at RBN 0 (= "jump to the end").
+            // Splitting them is what serves both. docs/dvd_nav.md 2f.
+            if (cell_wi == 8'd0 || {wacc, pb_rdata} < title_first_rbn)
+                title_first_rbn <= {wacc, pb_rdata};
+            if (cell_wi == 8'd0) title_start_rbn <= {wacc, pb_rdata};
             // start time = sum of the cells before this one (pt_c complete @7)
             cell_start_mem[cell_wi] <= (cell_wi == 8'd0) ? 32'd0 : run_eltm;
             run_eltm                <= (cell_wi == 8'd0) ? pt_c  : run_sum_w;
@@ -1746,6 +1772,11 @@ always @(posedge clk)
             //   fallback and S_CELL_SEEK already skips cf_rd > cl_rd cells.
             if (cell_wi == 8'd0 || cell_last_w > title_last_rbn)
                 title_last_rbn <= cell_last_w;
+            // title_end = the LAST PROGRAM's last_sector -- i.e. exactly what
+            // title_last used to be. Kept as its own output rather than deleted:
+            // it is the right answer to "where does winding past the end land",
+            // which is a different question from "how wide is the title".
+            title_end_rbn <= cell_last_w;
             // Store the EFFECTIVE hold (explicit still_time OR the heuristic),
             // so downstream sees a nonzero still for authored menu/ad/copyright
             // stills that carry still_time==0.

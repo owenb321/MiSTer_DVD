@@ -41,8 +41,21 @@
 // `cur_rbn` (the playhead) is TB stimulus, as it is emu stimulus from nav_dsi --
 // it says where the user is, it is not derived from anything under test.
 //
+// THE MIRROR SHAPE (+TITLE_SPAN_LATE0=1) is BIG_TROUBLE_LITTLE_CHINA's, measured:
+// cell[0] sits at the TOP of the disc (RBN 2,032,273 of 2,032,309) with the other
+// 59 cells BELOW it, so title_first_rbn lands near the END and the playhead spends
+// the whole film BELOW the span. Same degenerate span, opposite direction: the bar
+// floors to EMPTY instead of saturating, 44 of 45 chapter notches pile up at column
+// 0, and the LOW clamp fires on every seek -- reported from the board as "seeking
+// always brings you back to the beginning of the title".
+//     program cell 0 -> RBN 30..39   <- FIRST program, physically LAST
+//     program cell 1 -> RBN  0.. 9
+//     program cell 2 -> RBN 10..19
+//     program cell 3 -> RBN 20..29   <- LAST program, physically in the middle
+//
 // Arms: A fixture sanity | B forward | C backward | D end clamp | E start clamp
-//       F per-PGC re-seed | G gap landing (change 2 only, +TITLE_SPAN_GAP=1)
+//       F per-PGC re-seed | G gap landing (+TITLE_SPAN_GAP)
+//       H/I/J the mirror shape (+TITLE_SPAN_LATE0)
 
 `timescale 1ns/1ps
 
@@ -62,6 +75,7 @@ module title_span_tb;
 
     // ---- reader <-> scrub_ctrl seam ----
     wire [31:0] title_first_rbn, title_last_rbn;
+    wire [31:0] title_start_rbn, title_end_rbn;
     wire        sk_pulse;
     wire [31:0] sk_rbn;
 
@@ -119,6 +133,7 @@ module title_span_tb;
         .seek_pulse(1'b0), .seek_natural(1'b0), .seek_cell(8'd0), .seek_ack(seek_ack),
         .seek_rbn_pulse(sk_pulse), .seek_rbn(sk_rbn),
         .title_first_rbn(title_first_rbn), .title_last_rbn(title_last_rbn),
+        .title_start_rbn(title_start_rbn), .title_end_rbn(title_end_rbn),
         .keep_vbuf(),
         .cur_cell(cur_cell), .cell_ready(cell_ready),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
@@ -136,6 +151,7 @@ module title_span_tb;
         .in_title(cell_ready),
         .cur_rbn(play_rbn),
         .title_first_rbn(title_first_rbn), .title_last_rbn(title_last_rbn),
+        .title_start_rbn(title_start_rbn), .title_end_rbn(title_end_rbn),
         .title_secs(16'd0), .lin_blk10(24'd0), .lin_rate_ok(1'b0),
         .jump_fire(1'b0), .jump_dir(1'b0), .jump_base(32'd0), .jump_off(32'd0),
         .seek_rbn_pulse(sk_pulse), .seek_rbn(sk_rbn),
@@ -319,10 +335,18 @@ module title_span_tb;
             // ---- VTS_01 ----
             put_vtsi_mat(21, 32'd1);
             put_pgcit(22, 32'd16, V1CELLS, 16'd256);
+`ifdef TITLE_SPAN_LATE0
+            // BIG_TROUBLE's shape: the FIRST program is physically LAST.
+            put_cell(22, 32'd16, 16'd256, 0, 32'd30, 32'd39);  // FIRST program, LAST on disc
+            put_cell(22, 32'd16, 16'd256, 1, 32'd0,  32'd9);
+            put_cell(22, 32'd16, 16'd256, 2, 32'd10, 32'd19);
+            put_cell(22, 32'd16, 16'd256, 3, 32'd20, 32'd29);  // LAST program
+`else
             put_cell(22, 32'd16, 16'd256, 0, 32'd10, 32'd19);
             put_cell(22, 32'd16, 16'd256, 1, 32'd20, 32'd29);
             put_cell(22, 32'd16, 16'd256, 2, 32'd30, 32'd39);
             put_cell(22, 32'd16, 16'd256, 3, 32'd0,  32'd9);   // LAST program, FIRST on disc
+`endif
 `ifdef TITLE_SPAN_GAP
             put_cell(22, 32'd16, 16'd256, 4, 32'd60, 32'd69);  // 40..59 belongs to no cell
 `endif
@@ -451,9 +475,48 @@ module title_span_tb;
         $display("A: cell_mode=%b cell_count=%0d cur_cell=%0d  span=[%0d..%0d]",
                  dut.cell_mode, dut.cell_count, cur_cell,
                  title_first_rbn, title_last_rbn);
+        $display("   program ends: start=%0d end=%0d", title_start_rbn, title_end_rbn);
+`ifdef TITLE_SPAN_LATE0
+        expect_rbn(8'd30, 8'd0, "A baseline - program cell 0 at RBN 30 (mirror)");
+`else
         expect_rbn(8'd10, 8'd0, "A baseline - program cell 0 at RBN 10");
+`endif
 
-`ifndef TITLE_SPAN_GAP
+`ifdef TITLE_SPAN_GAP
+        // ---- G: a target in a GAP must not land on the last program --------
+        // Cells cover 0..39 and 60..69; 40..59 belongs to no cell. Seeking to
+        // 50 exhausts the containing-cell scan. The old fallback played
+        // cell_count-1 (= cell 4, RBN 60) -- "jump to the end" by a second
+        // route. The new one lands on the cell that STARTS nearest below.
+        play_rbn = 32'd35;
+        hold(1'b1, 15);                      // 35 + 15 = 50, inside the gap
+        settle; wait_bytes(1024);
+        expect_rbn(8'd30, 8'd2, "G gap 50 -> nearest cell below (cell 2 @30)");
+`elsif TITLE_SPAN_LATE0
+        // ---- H: an ordinary forward seek must MOVE, not snap to the start ---
+        // Pre-fix: title_first_rbn = 30 (cell[0] is at the top), the playhead is
+        // at 15 which is BELOW it, so the low clamp fires and the target becomes
+        // 30 = cell 0 = the FIRST program = "back to the beginning of the title".
+        play_rbn = 32'd15;
+        hold(1'b1, 8);                       // 15 + 8 = 23 -> cell 3 (20..29)
+        settle; wait_bytes(1024);
+        expect_rbn(8'd23, 8'd3, "H forward 15 -> 23 (not back to the start)");
+
+        // ---- I: forward PAST the last program stops at the last program -----
+        // ★ The hard clamp alone would send it to max = 39, which on this shape
+        //   is inside cell 0 -- the FIRST program. Seeking forward off the end
+        //   must not land at the beginning.
+        play_rbn = 32'd25;
+        hold(1'b1, 20);                      // 25 + 20 = 45, past the last program
+        settle; wait_bytes(1024);
+        expect_rbn(8'd29, 8'hFF, "I forward past the last program -> 29, not 39");
+
+        // ---- J: backward inside the low group stays there --------------------
+        play_rbn = 32'd5;
+        hold(1'b0, 3);                       // 5 - 3 = 2 -> cell 1 (0..9)
+        settle; wait_bytes(1024);
+        expect_rbn(8'd2, 8'd1, "J backward 5 -> 2");
+`else
         // ---- B: forward, well inside the title -----------------------------
         play_rbn = 32'd15;
         hold(1'b1, 8);                       // 15 + 8 = 23  (cell 1)
@@ -490,19 +553,23 @@ module title_span_tb;
         $display("F: remounted VTS_02  span=[%0d..%0d] cell_count=%0d",
                  title_first_rbn, title_last_rbn, dut.cell_count);
         play_rbn = 32'd2;
-        hold(1'b1, 8);                       // 2 + 8 = 10 > 9 -> clamp 9 (cell 1)
+        hold(1'b1, 8);                       // 2 + 8 = 10 > 9 -> stop at 9 (cell 1)
         settle; wait_bytes(1024);
-        expect_rbn(8'd109, 8'd1, "F re-seed - VTS_02 clamps to its OWN 9");
-`else
-        // ---- G: a target in a GAP must not land on the last program --------
-        // Cells cover 0..39 and 60..69; 40..59 belongs to no cell. Seeking to
-        // 50 exhausts the containing-cell scan. The old fallback played
-        // cell_count-1 (= cell 4, RBN 60) -- "jump to the end" by a second
-        // route. The new one lands on the cell that STARTS nearest below.
-        play_rbn = 32'd35;
-        hold(1'b1, 15);                      // 35 + 15 = 50, inside the gap
-        settle; wait_bytes(1024);
-        expect_rbn(8'd30, 8'd2, "G gap 50 -> nearest cell below (cell 2 @30)");
+        expect_rbn(8'd109, 8'd1, "F re-seed - VTS_02 stops at its OWN program end");
+        // ⚠ The LANDING above stopped gating the seed once the program-end
+        //   crossing rule landed: cross_hi bounds the target at end=9 whatever
+        //   title_last_rbn holds, so a leaked span from the previous title no
+        //   longer moves where this gesture goes. It still corrupts the BAR, and
+        //   nothing about a landing can see that -- so assert the published span
+        //   too. ★ Not a restatement of the RTL: no expression in the reader says
+        //   "the previous PGC must not leak into this one".
+        if (title_last_rbn !== 32'd9) begin
+            errors = errors + 1;
+            $display("  FAIL: F re-seed - VTS_02 published last=%0d, expected 9 (the previous title's span leaked)",
+                     title_last_rbn);
+        end else
+            $display("  ok: F re-seed - published span is VTS_02's own [%0d..%0d]",
+                     title_first_rbn, title_last_rbn);
 `endif
 
         if (errors == 0) $display("TITLE_SPAN_TB: ALL TESTS PASSED");

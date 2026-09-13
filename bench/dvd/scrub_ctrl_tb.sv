@@ -28,6 +28,10 @@ module scrub_ctrl_tb;
     logic        held_right = 0, held_left = 0, in_title = 1;
     logic [31:0] cur_rbn = 32'd100000;
     logic [31:0] title_first = 32'd0, title_last = 32'd1000000;
+    // ★ Default them EQUAL to first/last -- that is a well-ordered PGC, and it is
+    //   what makes every pre-2f scenario below a regression check on the claim
+    //   that ordinary discs are bit-identical after the split.
+    logic [31:0] title_start = 32'd0, title_end = 32'd1000000;
 
     logic        seek_rbn_pulse;
     logic [31:0] seek_rbn;
@@ -50,6 +54,7 @@ module scrub_ctrl_tb;
         .clk(clk), .rst_n(rst_n),
         .held_right(held_right), .held_left(held_left), .in_title(in_title),
         .cur_rbn(cur_rbn), .title_first_rbn(title_first), .title_last_rbn(title_last),
+        .title_start_rbn(title_start), .title_end_rbn(title_end),
         .title_secs(tsecs), .lin_blk10(lblk10), .lin_rate_ok(lrate_ok),
         .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn),
         .hold_freeze(hold_freeze),
@@ -64,6 +69,7 @@ module scrub_ctrl_tb;
         .clk(clk), .rst_n(1'b0),
         .held_right(1'b0), .held_left(1'b0), .in_title(1'b0),
         .cur_rbn(32'd0), .title_first_rbn(32'd0), .title_last_rbn(32'd0),
+        .title_start_rbn(32'd0), .title_end_rbn(32'd0),
         .title_secs(16'd0), .lin_blk10(24'd0), .lin_rate_ok(1'b0),
         .seek_rbn_pulse(), .seek_rbn(),
         .hold_freeze(),
@@ -383,6 +389,7 @@ module scrub_ctrl_tb;
         chk(ms_tick >= 439 && ms_tick <= 1758,
             "rate: a 3-minute clip scrubs within 2x of the 2 h rate at tier 0");
         title_first = 32'd0; title_last = 32'd1000000; tsecs = 16'd7200;
+        title_start = 32'd0; title_end  = 32'd1000000;
 
         // ---------- TEST 18: the LINEAR arm, in content-seconds per second ----
         // lin_blk10 is blocks per 10 s, so the shift IS the rate and the bench
@@ -464,6 +471,7 @@ module scrub_ctrl_tb;
         $display("TEST 20: a degenerate span clamps -- the producer's bug, not ours");
         lrate_ok = 1'b0; tsecs = 16'd6954;
         title_first = 32'd4; title_last = 32'd3;
+        title_start = 32'd4; title_end  = 32'd3;
         cur_rbn = 32'd1000000; tick(4);
         gesture(1'b1, 60);
         chk(got && cap_rbn == 32'd3, "degenerate span: a FORWARD gesture pins at title_last");

@@ -149,8 +149,18 @@ module scrub_ctrl #(
     input  wire        in_title,        // cell_ready && !menu_active
 
     input  wire [31:0] cur_rbn,         // live playhead RBN (nav_dsi.dsi_nv_pck_lbn)
-    input  wire [31:0] title_first_rbn, // title span (reader)
-    input  wire [31:0] title_last_rbn,
+    // ★ FOUR numbers from the reader, not two. first/last are the physical
+    // ENVELOPE (min first_sector .. max last_sector) -- the only range a target
+    // can legally sit in, and what `span` measures. start/end are the FIRST
+    // program's first_sector and the LAST program's last_sector -- where a
+    // gesture that runs off either end of the PROGRAM should land.
+    // ⚠ On a well-ordered PGC start==first and end==last, so every rule below
+    // collapses to the clamp it replaces and ordinary discs are bit-identical.
+    // They diverge only on a PGC whose program order is not its physical order.
+    input  wire [31:0] title_first_rbn, // envelope low  = min(first_sector)
+    input  wire [31:0] title_last_rbn,  // envelope high = max(last_sector)
+    input  wire [31:0] title_start_rbn, // the FIRST program's first_sector
+    input  wire [31:0] title_end_rbn,   // the LAST  program's last_sector
 
     // ---- what the span is WORTH, so the ramp can be a content rate ---------
     // title_secs: the PGC title's duration (dvd/seek_time.sv title_secs_o).
@@ -256,10 +266,27 @@ module scrub_ctrl #(
     reg         pending_dir;                   // 1 = forward
     reg  [20:0] tick_cnt;
 
-    // target = base ± pending_off, clamped into [first, last].
-    wire [31:0] tgt_raw = pending_dir
+    // target = base ± pending_off, first stopped at the PROGRAM's own ends and
+    // then clamped into the physical envelope.
+    wire [31:0] tgt_acc = pending_dir
                         ? (bar_base_rbn + pending_off)
-                        : ((bar_base_rbn > pending_off) ? (bar_base_rbn - pending_off) : title_first_rbn);
+                        : ((bar_base_rbn > pending_off) ? (bar_base_rbn - pending_off)
+                                                        : title_start_rbn);
+    // ★ A gesture that CROSSES a program end from inside stops there. Written as
+    //   a crossing and not as a clamp on purpose: the "from inside" test is what
+    //   keeps it inert on a disc whose playhead legitimately sits outside
+    //   [start, end] in RBN terms. BIG_TROUBLE_LITTLE_CHINA is that disc -- its
+    //   first program is at the TOP of the disc, so the playhead spends the whole
+    //   film BELOW start, and a plain low clamp fired on every single seek and
+    //   sent the viewer back to the beginning of the title.
+    wire cross_lo = ~pending_dir && (bar_base_rbn >= title_start_rbn)
+                                 && (tgt_acc      <  title_start_rbn);
+    wire cross_hi =  pending_dir && (bar_base_rbn <= title_end_rbn)
+                                 && (tgt_acc      >  title_end_rbn);
+    wire [31:0] tgt_raw = cross_lo ? title_start_rbn :
+                          cross_hi ? title_end_rbn   : tgt_acc;
+    // ...and the envelope is the hard floor/ceiling: nothing may address a sector
+    // outside the cells this PGC actually owns.
     wire [31:0] target  = (tgt_raw > title_last_rbn)  ? title_last_rbn  :
                           (tgt_raw < title_first_rbn) ? title_first_rbn : tgt_raw;
 

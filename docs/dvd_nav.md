@@ -1962,14 +1962,60 @@ does not touch it). Without the seed:
 The second one was found by the mutation harness, not by design — the arm was
 expected to catch F alone and caught D as well.
 
-⛔ **`title_first_rbn` stays cell 0's `first_sector` — deliberately NOT
-`min(first_sector)`, and this is the part most likely to be "tidied" later.**
-`scrub_ctrl` substitutes `title_first_rbn` when a backward seek underflows. On
-exactly the discs this section is about, the physical minimum lies **inside the
-displaced trailing cell** — so the symmetric-looking change would land a rewind
-past the start in the LAST program, i.e. jump to the end from the other
-direction. `title_span_tb` arm E is the executable form of that refusal, and
-mutation M4 turns the minimum back on and must fail arm E and nothing else.
+#### The mirror shape, and why ONE number could not serve both
+
+⚠⚠ **The first cut of this fix kept `title_first_rbn` as cell 0's `first_sector`
+and argued at length that the minimum would be wrong. The argument was sound and
+the conclusion was still incomplete** — because the disc population is symmetric
+and a single value has to be wrong for one half of it:
+
+| shape | who | one value as `cell[0].first` | one value as `min(first)` |
+|---|---|---|---|
+| **last** program parked at RBN 0 | A_MILLION_WAYS, ~34 more | correct | a rewind past the start lands in it = **jump to the END** |
+| **first** program parked at the TOP | BIG_TROUBLE_LITTLE_CHINA + 4 | span collapses, the low clamp fires on every seek = **back to the BEGINNING** | correct |
+
+The second row was found on hardware after the first cut shipped to the rig:
+*"seeking always brings you back to the beginning of the title"*, on a disc whose
+`cell[0]` sits at RBN 2,032,273 of 2,032,309 with the other 59 cells below it. ★
+The bar there did **not** go solid — it went **EMPTY**, because the playhead
+spends the film *below* `title_first_rbn` and `dv_delta` floors to 0 instead of
+saturating, with 44 of 45 notches piling up at column 0. Same degenerate span,
+opposite direction.
+
+**So the reader publishes FOUR numbers, not two:**
+
+| | | answers |
+|---|---|---|
+| `title_first_rbn` | `min(first_sector)` | how wide is the title, and what may a target address |
+| `title_last_rbn` | `max(last_sector)` | ″ |
+| `title_start_rbn` | `cell[0].first_sector` | where does "rewind past the beginning" land |
+| `title_end_rbn` | `cell[N-1].last_sector` | where does "wind past the end" land |
+
+and `scrub_ctrl` stops a gesture that **CROSSES** a program end *from inside*:
+
+```systemverilog
+wire cross_lo = ~pending_dir && (bar_base_rbn >= title_start_rbn)
+                             && (tgt_acc      <  title_start_rbn);
+wire cross_hi =  pending_dir && (bar_base_rbn <= title_end_rbn)
+                             && (tgt_acc      >  title_end_rbn);
+```
+
+★ **Written as a CROSSING and not as a clamp, and that is the whole trick.** The
+"from inside" test is what keeps it inert on a disc whose playhead legitimately
+sits outside `[start, end]` in RBN terms — which is exactly BIG_TROUBLE. A plain
+low clamp cannot tell "you rewound off the front of the film" from "you are
+simply below cell 0's address", and firing on the second is the reported bug.
+
+★★ **The property that makes this safe: on a well-ordered PGC `start == first`
+and `end == last`, so both rules reduce EXACTLY to the clamps they replace and
+ordinary discs are bit-identical.** MEASURED over the library: `start`/`end`
+differ from `first`/`last` on **51 of 955** discs — precisely the affected set —
+so **904 discs cannot be moved by this change at all**. And the envelope now
+covers 100 % of played sectors on *every* disc (worst case 1.0000), so a
+degenerate or under-covering span is impossible rather than merely unlikely.
+
+⚠ The whole of `scrub_ctrl_tb` passes **unchanged** with `start`/`end` defaulted
+equal to `first`/`last`, which is that bit-identity claim made executable.
 
 ⚠ **Accepted, bounded residual:** the max now lets any malformed cell record
 inflate the span, where before only a malformed *last* cell could.
@@ -1977,11 +2023,12 @@ inflate the span, where before only a malformed *last* cell could.
 `S_CELL_SEEK` already skips `cf_rd > cl_rd` cells, so this was not worth a second
 comparator.
 
-⚠ **Cosmetic residual, predicted before the build:** on these discs the displaced
-trailing cell now sits *outside* `[first, last]`, so its chapter notch pins to
-column 0 and playing it shows the playhead at the left end. That is 4 sectors on
-A_MILLION_WAYS (well under a second) but 51,832 sectors on
-BIG_TROUBLE_LITTLE_CHINA. Fixing it properly is the position-space model, below.
+⚠ **Cosmetic residual:** the bar still maps PHYSICAL RBN, so on a disc whose
+program order is not its physical order the playhead moves around the bar out of
+order — on A_MILLION_WAYS the final 4-sector cell draws its notch at column 0,
+and on BIG_TROUBLE the first program draws at the far right. Seeking is correct;
+only the picture of *where you are* is scrambled, and only on these 51 discs.
+Fixing that properly is the position-space model, below.
 
 #### Change 2 — a `S_RBN_SCAN` miss must not play the LAST cell
 

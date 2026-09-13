@@ -362,19 +362,43 @@ worse maintenance burden than targeted in-place edits. So:
   ⚠ Cosmetic residual, predicted before the build and CONFIRMED on the board: the
   displaced trailing cell sits outside `[first,last]`, so its chapter notch pins to
   column 0 (chapters 1 and 21 both did on the reported disc).
-  ⚠⚠ **THE PRE-FIX COVERAGE CLASSES DO NOT PREDICT WHAT IS LEFT, and reading them as
-  if they did was an error — corrected 2026-09-13 after measuring the library AFTER
-  the rule change.** The remaining set is **5 discs, all ONE cause: `cell[0]` is
-  physically LATE**, so `title_first_rbn` lands near the end of the disc and the span
-  is a few hundred sectors (BIG_TROUBLE_LITTLE_CHINA 60 cells → span **35** of
-  2,032,309 played; WYATT_EARP_SIDE_B 1,455; PAW_PATROL_MEET_EVEREST 1,105;
-  BEAUTY_SHOP_US 2,779; CYOA-ABOMINABLE_SNOWMAN 1,367). The genuinely SCATTERED TV
-  discs (GoT, VINYL) are fine. ★ These are the MIRROR IMAGE of the fixed class and
-  the cure is known: the span's low end wants `min(first_sector)` while the backward
-  underflow LANDING wants `cell[0].first_sector`, so serving both needs a THIRD
-  signal, its own bench arms and its own HW round. ⛔ Do NOT just flip
-  `title_first_rbn` to the minimum — that trades these 5 for the ~34 whose last
-  program cell sits at RBN 0, and `title_span_tb` arm E fails the moment you try.
+  ★★★ **AND THE FIRST CUT WAS INCOMPLETE IN A WAY ONLY THE BOARD COULD SHOW: THE DISC
+  POPULATION IS SYMMETRIC, SO ONE NUMBER CANNOT SERVE IT.** Shipped to the rig, the
+  maintainer reported BIG_TROUBLE_LITTLE_CHINA: *"doesn't have a solid bar, rather it
+  has incorrect chapter markers (only one shows up) and seeking always brings you back
+  to the beginning of the title."* Its `cell[0]` sits at RBN **2,032,273 of
+  2,032,309** with the other 59 cells BELOW it, so `title_first_rbn` landed near the
+  END and the playhead spent the film BELOW the span: `dv_delta` FLOORS to 0 instead
+  of saturating (bar EMPTY, not solid — ⚠ I predicted solid and was wrong), 44 of 45
+  notches pile at column 0, and the LOW clamp fires on every seek. Same degenerate
+  span, opposite direction.
+  | shape | one value as `cell[0].first` | one value as `min(first)` |
+  |---|---|---|
+  | LAST program at RBN 0 (~34 discs) | correct | rewind past the start → **jump to the END** |
+  | FIRST program at the TOP (5 discs) | every seek → **back to the BEGINNING** | correct |
+  **FIX = FOUR numbers, not two:** `title_first/last` = the physical ENVELOPE
+  (min/max — how wide the title is, and what a target may address), plus NEW
+  `title_start_rbn` = `cell[0].first_sector` and `title_end_rbn` =
+  `cell[N-1].last_sector` (where "past the beginning"/"past the end" should LAND).
+  `scrub_ctrl` then stops a gesture that **CROSSES** a program end *from inside*
+  (`cross_lo`/`cross_hi`).
+  ★ **Written as a CROSSING and not a clamp, and that is the whole trick:** the "from
+  inside" test keeps it inert on a disc whose playhead legitimately sits outside
+  `[start,end]` in RBN terms. A plain low clamp cannot tell "you rewound off the front
+  of the film" from "you are simply below cell 0's address", and firing on the second
+  IS the reported bug.
+  ★★ **Safety property, MEASURED not argued: on a well-ordered PGC `start==first` and
+  `end==last`, so both rules reduce EXACTLY to the clamps they replace.** `start`/`end`
+  differ from `first`/`last` on **51 of 955** discs — precisely the affected set — so
+  **904 discs cannot be moved by this change at all**, and the envelope now covers
+  **100 % of played sectors on every disc** (worst 1.0000). `scrub_ctrl_tb` passes
+  UNCHANGED with start/end defaulted equal, which is that claim made executable.
+  ⛔ **The old ⛔ here said "`title_first_rbn` stays cell 0's — do NOT make it the
+  minimum". That argument was sound and the conclusion was still wrong**, because it
+  only ever considered one half of the population. It is now the minimum, and what
+  protects the backward underflow is `cross_lo`, not the choice of that value. The
+  mutation that guarded the old rule (M4) was RETIRED rather than kept: it no longer
+  describes a wrong version of the code, and a mutation like that is noise, not a gate.
   Detail: **`docs/dvd_nav.md` §2f**, `docs/transport_hud.md`.
 - ✅ **HDMI PASSTHRU LEFT THE ADV7513 IN NON-PCM MODE FOR THE NEXT CORE (2026-09-11,
   branch `fix/hdmi-audio-teardown`) — sim + host-proven RED/GREEN, mutation-checked
