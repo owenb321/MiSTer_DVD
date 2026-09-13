@@ -77,8 +77,10 @@ module transport_hud #(
     // DVD-remote Stop (B14). A LEVEL, not a pulse: the disc stays stopped
     // until PLAY, so the indicator must persist like the CSS warning rather
     // than expire after SHOW_TICKS the way a user popup does.
-    input  wire        stop_on,             // stopped right now
-    input  wire        stop_kept,           // 1 = position kept (stage 1)
+    // ⚠ emu asserts this for STAGE 1 ONLY. A full stop (second press) shows the
+    // bare idle logo with no overlay at all -- "as if you had done a soft
+    // reset" -- so there is deliberately no second caption here.
+    input  wire        stop_on,             // stage-1 stop (a resume is waiting)
     // B15 Aspect: a pulse, with which control moved and where it is going.
     input  wire        aspct_evt,
     input  wire        aspct_analog,        // 1 = Analog Aspect, 0 = Aspect Ratio
@@ -301,7 +303,6 @@ module transport_hud #(
     reg [7:0]  f2_n, f2_nn;                  // n / N as {tens,ones} BCD
     reg [5:0]  f2_l1, f2_l2;                 // language glyphs (NONE = hidden)
     reg        f2_off;                       // SUB OFF variant
-    reg        f2_keep;                      // STOP: 1 = position kept
     reg        f2_aspa;                      // ASPECT: 1 = the analog control
     reg [1:0]  f2_aspv;                      // ASPECT: the value moved to
     reg [1:0]  f2_abst;                      // A-B: the state moved to
@@ -453,30 +454,15 @@ module transport_hud #(
             endcase
         end else if (fmt_col[5] && f2_type == 4'd10) begin
             // ---- popup row, STOP ------------------------------------------
-            // Stage 1 "STOP" (position kept, PLAY resumes in place); stage 2
-            // "STOP  FROM START" (forgotten, PLAY boots the disc from First
-            // Play). Spelled out of glyphs that already exist -- no new font
-            // entry, so tools/hud_font.py and the committed dvd/hud_font.mem
-            // stay untouched (the same rule the SEEK popup follows).
+            // Stage 1 only: the position is remembered and PLAY resumes in
+            // place, so the screen says so. A full stop shows no overlay at all
+            // (emu gates stop_on), which is the distinction between the two --
+            // not a second caption.
             case (fmt_col[4:0])
                 5'd0:  fmt_g = {1'b1, a2g("S")};
                 5'd1:  fmt_g = {1'b1, a2g("T")};
                 5'd2:  fmt_g = {1'b1, a2g("O")};
                 5'd3:  fmt_g = {1'b1, a2g("P")};
-                // col 4 is conditional too: a trailing SPACE is not blank, it
-                // paints the translucent backing one cell wider than the word.
-                5'd4:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, G_SPACE};
-                5'd5:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, G_SPACE};
-                5'd6:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("F")};
-                5'd7:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("R")};
-                5'd8:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("O")};
-                5'd9:  fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("M")};
-                5'd10: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, G_SPACE};
-                5'd11: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("S")};
-                5'd12: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("T")};
-                5'd13: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("A")};
-                5'd14: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("R")};
-                5'd15: fmt_g = f2_keep ? {1'b0, G_NONE} : {1'b0, a2g("T")};
                 default: fmt_g = {1'b0, G_NONE};
             endcase
         end else if (fmt_col[5] && f2_type == 4'd4) begin
@@ -652,7 +638,7 @@ module transport_hud #(
             f_cur <= 24'd0; f_tot <= 24'd0; f_n <= 8'd0; f_nn <= 8'd0;
             f_ch <= 1'b0; f_icon <= 2'd0; f_arrows <= 3'd2;
             f2_type <= 4'd0; f2_n <= 8'd0; f2_nn <= 8'd0; sk_sec <= 3'd0;
-            f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0; f2_keep <= 1'b0;
+            f2_l1 <= G_NONE; f2_l2 <= G_NONE; f2_off <= 1'b0;
             f2_aspa <= 1'b0; f2_aspv <= 2'd0; f2_abst <= 2'd0;
         end else begin
             if (fmt_col <= 7'd63) begin
@@ -672,7 +658,6 @@ module transport_hud #(
                 f_arrows <= {1'b0, scrub_tier} + 3'd2;
                 f2_type <= pop_type;
                 f2_off  <= 1'b0;
-                f2_keep <= stop_kept;
                 f2_aspa <= aspct_analog;
                 f2_aspv <= aspct_val;
                 f2_abst <= ab_state;

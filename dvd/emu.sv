@@ -5697,8 +5697,7 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
     .scrub_tier   (hold_freeze ? hud_tier_w : 2'd0),
     .display_edge (display_edge),
-    .stop_on      (stopped_w),
-    .stop_kept    (stop_kept_w),
+    .stop_on      (stopped_w & stop_kept_w),   // stage 1 only; stage 2 is bare logo
     .aspct_evt    (aspct_evt_w),
     .aspct_analog (aspct_evt_analog_w),
     .aspct_val    (aspct_evt_val_w),
@@ -5894,8 +5893,16 @@ reg        sp_force_q;
 // suppressed. A static status line burning into a phosphor is precisely what the
 // screensaver exists to prevent, and logo_on_w sits BELOW both in this chain --
 // so without these gates the logo would bounce around underneath a pinned HUD.
-wire hud_on_e = hud_on_w & ~saver_on_w;
-wire bar_on_e = bar_on_w & ~saver_on_w;
+//
+// ★ A FULL STOP (the second press) suppresses them too. The two stages have to
+// be told apart on screen, and the distinction the user asked for is not two
+// different captions: stage 1 says "STOP" because a resume is waiting, and
+// stage 2 shows the bare logo "as if you had done a soft reset" -- no messages
+// at all. So the readout is the presence or absence of any overlay, which is
+// also why transport_hud no longer has a "STOP FROM START" string.
+wire stop_full = stopped_w & ~stop_kept_w;      // stage 2: position forgotten
+wire hud_on_e  = hud_on_w & ~saver_on_w & ~stop_full;
+wire bar_on_e  = bar_on_w & ~saver_on_w & ~stop_full;
 always @(posedge clk_sys) begin
     sp_r_q     <= hud_on_e ? hud_r_w     : bar_on_e ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
     sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;

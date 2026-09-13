@@ -30,7 +30,7 @@ module transport_hud_tb;
     reg  [7:0]  cur_pgm = 0, nr_pgm = 0;
     reg         aud_evt = 0, sub_evt = 0, angle_evt = 0, chap_evt = 0;
     reg         css_warn = 0;
-    reg         stop_on = 0, stop_kept = 0;
+    reg         stop_on = 0;
     reg         aspct_evt = 0, aspct_analog = 0;
     reg [1:0]   aspct_val = 0;
     reg         ab_evt = 0;
@@ -63,7 +63,7 @@ module transport_hud_tb;
         .cur_pgm(cur_pgm), .nr_pgm(nr_pgm),
         .aud_evt(aud_evt), .sub_evt(sub_evt), .angle_evt(angle_evt),
         .chap_evt(chap_evt), .css_warn(css_warn),
-        .stop_on(stop_on), .stop_kept(stop_kept),
+        .stop_on(stop_on),
         .aspct_evt(aspct_evt), .aspct_analog(aspct_analog), .aspct_val(aspct_val),
         .ab_evt(ab_evt), .ab_state(ab_state),
         .img_warn(img_warn), .aud_warn(aud_warn),
@@ -424,10 +424,18 @@ module transport_hud_tb;
         $display("== T22: STOP indicator");
         css_warn = 0; menu_active = 0;
         repeat (2200) @(posedge clk);        // let any previous popup expire
-        stop_on = 1; stop_kept = 1;
-        check_popup("T22a stop kept", "STOP~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
-        stop_kept = 0;
-        check_popup("T22b cleared", "STOP  FROM START~~~~~~~~~~~~~~~~");
+        stop_on = 1;
+        check_popup("T22a stop", "STOP~~~~~~~~~~~~~~~~~~~~~~~~~~~~");
+        // There is deliberately no second caption: a FULL stop shows the bare
+        // idle logo with no overlay, and emu gates stop_on off to get that. So
+        // the two stages are told apart by presence, not by wording.
+        stop_on = 0;
+        repeat (2200) @(posedge clk);
+        if (dut.pop_vis !== 1'b0) begin
+            errors = errors + 1;
+            $display("  FAIL T22b full stop must show NO popup");
+        end else $display("  ok  T22b full stop shows no popup");
+        stop_on = 1;
         // It must PERSIST: a user popup expires after ~2.5 s, a stopped disc
         // does not stop being stopped.
         repeat (2200) @(posedge clk);

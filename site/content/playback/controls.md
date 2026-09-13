@@ -216,10 +216,13 @@ naming what you switched to, with the language where the disc provides one — `
 
 **B14 (Stop)** works the way a set-top player's does, in two stages.
 
-- **Press once** and playback halts on a black screen with `STOP` shown. Your place is
-  remembered — **Pause/Play picks up exactly where you left off**.
-- **Press again** and the place is forgotten; the readout changes to `STOP  FROM START`.
-  The next Pause/Play starts the disc again from the beginning.
+- **Press once** and playback halts, the bouncing logo comes up, and `STOP` is shown.
+  Your place is remembered — **Pause/Play picks up exactly where you left off**.
+- **Press again** and the place is forgotten. The screen clears to just the logo, as if
+  you had reset the core; the next Pause/Play starts the disc from the beginning.
+
+The absence of the `STOP` message is how you tell the two apart: if it is on screen, a
+resume is waiting for you.
 
 The disc stays loaded either way. To unload it and return to the idle screen, use
 **Reset** on the OSD's main page.
