@@ -1688,8 +1688,8 @@ always @(posedge clk)
         if (cell_bi == 5'd11) begin
             cell_first_mem[cell_wi] <= {wacc, pb_rdata};
             // title_first = the FIRST PROGRAM cell's first_sector, deliberately
-            // NOT min(first_sector). scrub_ctrl.sv:262 substitutes this value
-            // when a backward seek UNDERFLOWS, and on an out-of-order PGC the
+            // NOT min(first_sector). scrub_ctrl's `tgt_raw` substitutes this
+            // value when a backward seek UNDERFLOWS, and on an out-of-order PGC the
             // physical minimum lies INSIDE the displaced trailing cell -- so the
             // minimum would drop the playhead into the LAST program, i.e. jump
             // to the end from the other direction. See title_last below.
@@ -1722,12 +1722,12 @@ always @(posedge clk)
             // cell sits physically at the FRONT of the VOBS -- A_MILLION_WAYS_
             // TO_DIE_IN_THE_WEST VTS_07 PGCN 1 runs RBN 4..3,359,267 over cells
             // 0..20 and then ends on a 4-sector cell at RBN 0..3, so it
-            // published first=4 last=3. Downstream that is scrub_ctrl.sv:214
-            // span=1 -> :263 clamping EVERY target (forward AND backward, since
-            // the playhead is always above it) to title_last_rbn -> S_RBN_SCAN
-            // resolves that to the last program cell = "any seek jumps to the
-            // end of the movie"; and seek_bar.sv:144 saturating = a solid bar
-            // with no chapter notches.
+            // published first=4 last=3. Downstream that is scrub_ctrl's `span`
+            // collapsing to 1 and its `target` clamping EVERY seek (forward AND
+            // backward, since the playhead is always above it) to title_last_rbn
+            // -> S_RBN_SCAN resolves that to the last program cell = "any seek
+            // jumps to the end of the movie"; and seek_bar's `dv_delta`
+            // saturating = a solid bar with no chapter notches.
             // ★ STRUCTURAL, not merely better: max(last) >= cell[0].last >=
             //   cell[0].first = title_first_rbn, so a degenerate span is now
             //   IMPOSSIBLE BY CONSTRUCTION for any PGC with a well-formed cell 0.
