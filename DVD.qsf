@@ -127,6 +127,12 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_pci.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_dsi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/scrub_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dpad_seek.sv
+# DVD-remote buttons (2026-09-13): Stop + screensaver, the Aspect button's
+# OSD-override/settle, and A-B repeat. Extracted from emu.sv rather than written
+# inline for the usual reason -- emu.sv has no bench.
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/stop_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/aspect_ctl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/ab_repeat.sv
 # DVD-FORK (issue #35): keyboard / TV-remote transport. See docs/dvd_nav.md
 # "Keyboard / CEC input".
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/kbd_map.sv
