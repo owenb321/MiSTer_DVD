@@ -176,6 +176,20 @@ of the reader's program map (the existing `pm_*` stream) and cell
 first-sector table (a new `cellf_*` stream tap — deliberately a *write tap*,
 not a new read port on the reader's BRAMs): on each `pgc_loaded` pulse a
 converter walks `pmap[p] → cellf[pm−1] →` the shared divider `→ tick_col[p]`
+
+⚠ **The notches are rendered from a 512-bit COLUMN BITMAP, not by walking
+`tick_col[]`** (2026-09-13). `tick_col` is filled in **program** order but holds
+**physical** columns, so it is ascending only while a PGC's program order matches
+its physical order — and on 51 of 958 library discs it does not. The original
+renderer walked it with one monotonic pointer (`advance while s0_x > tk_q + 1`),
+which on `BIG_TROUBLE_LITTLE_CHINA` — first program at the TOP of the disc, so
+chapter 1 converts to column ~511 and the other 44 to low columns — can never get
+past entry 0. Reported from the board as *"incorrect chapter markers, only one
+shows up"*. A bitmap has no order to get wrong; it is one cycle to clear (a
+register, not a memory), and it deleted the pointer, its read-lag guard and the
+per-line walk. `tick_col[]` stays, because the chapter-skip preview cursor reads
+it by index. Gate: `seek_bar_tb` T11 + mutations M9/MA in
+`bench/dvd/run_title_span.sh --red`.
 once (~45 cycles per chapter). Severing the stretch = deleting the shadow
 RAMs, converter, notch branch and the stream wires.
 

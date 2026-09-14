@@ -21,6 +21,9 @@
 #          M6 first-cell0: title_first back to cell[0] (pre-split) -> H I J
 #          M7 no-cross-lo: drop the backward program-start stop   -> E only
 #          M8 no-cross-hi: drop the forward program-end stop      -> I only
+#          M9 first-tick : only tick_col[0] ever draws (the walker's
+#                          degenerate behaviour on an unsorted list) -> T11
+#          MA thin-notch : the notch loses its second column         -> T11
 #
 # ⛔ There WAS an M4 ("title_first becomes min(first_sector)") and it is gone
 # because that mutation is now the SHIPPING rule: title_first IS the minimum, and
@@ -113,6 +116,25 @@ red() {
     rm -rf "$d"
 }
 
+# red_bar <name> <sed-script> -- mutates dvd/seek_bar.sv and runs seek_bar_tb,
+# which must then FAIL. Same three checks as red().
+red_bar() {
+    local name=$1 script=$2
+    local d; d=$(mktemp -d)
+    sed "$script" dvd/seek_bar.sv > "$d/seek_bar.sv"
+    if cmp -s "$d/seek_bar.sv" dvd/seek_bar.sv; then
+        echo "  FAIL $name: the mutation did not apply (anchor moved)"; fail=1
+    elif ! iv "$d/sim" "$d/seek_bar.sv" bench/dvd/seek_bar_tb.sv 2>"$d/build"; then
+        echo "  FAIL $name: the mutated module did not build"; sed 's/^/      /' "$d/build"; fail=1
+    elif vvp "$d/sim" > "$d/log" 2>&1 && grep -q "SEEK_BAR_TB: ALL TESTS PASSED" "$d/log"; then
+        echo "  FAIL $name: seek_bar_tb PASSED without the fix (T11 proves nothing)"; fail=1
+    else
+        echo "  PASS $name ($(grep -c 'FAIL T' "$d/log") arm(s) caught it)"
+        grep 'FAIL T' "$d/log" | sed 's/^/      /'
+    fi
+    rm -rf "$d"
+}
+
 if [ "${1:-}" = "--red" ]; then
     echo "== RED arms =="
     # M1: the pre-fix rule -- the last-written cell's last_sector.
@@ -144,6 +166,13 @@ if [ "${1:-}" = "--red" ]; then
     red M8-nocrosshi \
         "s@wire cross_hi =  pending_dir@wire cross_hi =  1'b0 \&\& pending_dir@" \
         "I" "-DTITLE_SPAN_LATE0" dvd/scrub_ctrl.sv
+    # M9 reproduces what the old monotonic walker DEGENERATES to on an unsorted
+    # list: the pointer never gets past entry 0, so only chapter 1 ever draws.
+    # That is the board's "only one chapter marker shows up", in one sed.
+    red_bar M9-firsttick \
+        "s@end else if (tick_ok \&\& s0_low \&\& tk_bit) begin@end else if (tick_ok \&\& s0_low \&\& (s0_x == tick_col[0] || s0_x == tick_col[0] + 10'd1)) begin@"
+    red_bar MA-thinnotch \
+        "s@if (dv_qcap <= 10'd510) tick_bm\[dv_qcap\[8:0\] + 9'd1\] <= 1'b1;@if (dv_qcap <= 10'd510) tick_bm[dv_qcap[8:0]] <= 1'b1;@"
 fi
 
 [ $fail -eq 0 ] && echo "RUN_TITLE_SPAN: ALL GREEN" || echo "RUN_TITLE_SPAN: FAILURES"

@@ -359,6 +359,23 @@ worse maintenance burden than targeted in-place edits. So:
   958-image library have a played PGC over 128 cells (histogram tops out in the
   96..127 bucket, 8 discs). (3) `scrub_ctrl`/`seek_bar` are NOT changed; a defensive
   span floor there would mask the producer.
+  ★★★ **AND A THIRD DEFECT UNDER THE SAME ROOT CAUSE, IN THE RENDERER, WHICH THE
+  SPAN FIX DID NOT TOUCH:** `seek_bar`'s `tick_col[]` is filled in **program**
+  order but holds **physical** columns, and the renderer walked it with ONE
+  MONOTONIC POINTER (`advance while s0_x > tk_q + 1`) — the declaration even says
+  `// converted notch columns (ascending)`. On BIG_TROUBLE chapter 1 converts to
+  column ~511 and the other 44 to low columns, so the pointer can never get past
+  entry 0 and only chapter 1 ever draws. That is the board's *"only one chapter
+  marker shows up"*, and it is a DIFFERENT mechanism from the span — seeking was
+  already fixed when it was still happening. FIX = a **512-bit column bitmap**:
+  no order to get wrong, ONE cycle to clear (it is a register, not a memory —
+  most of why it is a register), and it deletes the pointer, its read-lag guard
+  and the per-line walk. `tick_col[]` stays for the chapter-skip preview cursor.
+  ★ Gate `seek_bar_tb` **T11** measures what is DRAWN, not what `tick_col` holds:
+  four chapters whose columns are deliberately NOT ascending, asserting all four
+  notches and **exactly 8 lit columns** (which pins the 2 px width too). Proven
+  RED on the pre-fix module — **"drew 2 notch columns"** — and mutation **M9**
+  reproduces the walker's degenerate behaviour in one sed.
   ⚠ Cosmetic residual, predicted before the build and CONFIRMED on the board: the
   displaced trailing cell sits outside `[first,last]`, so its chapter notch pins to
   column 0 (chapters 1 and 21 both did on the reported disc).
