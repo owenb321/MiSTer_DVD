@@ -1323,6 +1323,10 @@ same navigation on the same disc, pre-fix core first:
 ★ **The pre-fix defect is DETERMINISTIC — two independent entries measured 1.857 to three
 decimal places**, so a changed number afterwards means something. Three different
 slideshows come back clean.
+
+✅ **Independently confirmed by the maintainer on their own display before merge.** Every
+figure above is a harness measurement of a captured raster; the defect was reported by eye,
+so that arm closes the loop in the terms the report was made in.
 Unregressed in the same session: the main menu and its submenu transitions, the hub's
 highlight, the Jump-Into-Timeline cubes and the scene-index thumbnails (both `keep_vbuf`
 menu→menu hops), menu→title Play, and a chapter skip during playback.

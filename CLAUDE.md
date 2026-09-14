@@ -398,6 +398,10 @@ worse maintenance burden than targeted in-place edits. So:
   ✅ **HW-CONFIRMED, control arm first, and the PRE-FIX defect is DETERMINISTIC** — two
   independent entries measured **1.857** to three decimals, slide 2 (the in-disc control)
   0.985. After the fix, three different slideshows: **1.006 / 0.986 / 1.056**.
+  ✅ **AND CONFIRMED INDEPENDENTLY BY THE MAINTAINER ON THEIR OWN DISPLAY** (2026-09-14,
+  before merge). ★ That arm is worth naming separately: every number above is a harness
+  measurement of a captured raster, and the defect was REPORTED by eye — so a person
+  looking at a real screen is the instrument the report was made with, not a lesser one.
   Unregressed in the same session: main menu and submenu transitions, the hub highlight,
   the Jump-Into-Timeline cubes and scene-index thumbnails (both `keep_vbuf` hops),
   menu→title Play, and a chapter skip during playback.
