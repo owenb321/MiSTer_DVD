@@ -1031,7 +1031,7 @@ dvd_telem dvd_telem_inst (
     .pickups    (core_pickups),          // clk_dec: content frames displayed
     .lates      (core_frames_late),      // clk_dec
     .drops      (core_frames_dropped),   // clk_dec
-    .vid_err    (core_dcpath),           // DVD-FORK DEBUG: repurposed -- {dcprec_chg, mpeg1_rises, intra_dc_precision, mpeg1}
+    .vid_err    (16'd0),                 // retired: the display is scheduled by PTS; see word 11
     .drop_costs (core_drop_costs),       // clk_dec: {debt, drop_req, probe}
     .vbuf_fill  (core_vbuf_fill),
     .aud_frames (aud_frames_avail),
@@ -4110,8 +4110,6 @@ wire       core_h_sync, core_v_sync;
 wire [11:0] core_h_pos, core_v_pos;
 wire [8:0]  core_init_cnt;
 wire        core_sync_rst;
-wire [15:0] core_dcpath;   // DVD-FORK DEBUG (quant matrix HW round 2): {dcprec_chg[7:0], mpeg1_rises[4:0], intra_dc_precision[1:0], mpeg1}
-
 wire        core_vbw_almost_full;
 wire       core_pixel_en;
 wire [3:0]  shim_debug_state;
@@ -4438,7 +4436,6 @@ mpeg2video mpeg2video_inst (
     .testpoint_dip_en (1'b0),
     .init_cnt_out     (core_init_cnt),
     .sync_rst_out     (core_sync_rst),
-    .dbg_dcpath         (core_dcpath),   // DVD-FORK DEBUG: DC-path suspects, to telemetry word 5
     .vbw_almost_full_out (core_vbw_almost_full),
     .dbg_lines_displayed (core_dbg_lines_displayed),   // DVD-FORK DEBUG (256-line strobe)
     .dbg_first_vpos  (core_dbg_first_vpos),

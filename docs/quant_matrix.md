@@ -391,7 +391,37 @@ worth another hardware round.
 (95.53/91.07), so the regression is a FUNCTIONAL defect, not a marginal-fit
 artifact. That excludes the placement/fringe class.
 
-### 9.5 Where it stands
+### 9.5 ⛔ RESULT: the state force ITSELF is the cause — approach abandoned
+
+The state-force-only build (every clear removed, leaving just
+`state <= flush_resync ? STATE_NEXT_START_CODE : next`) **still garbages** on the
+re-entry path. So none of the five clears was responsible: **forcing the parser
+to a start-code hunt at a VBUF flush is the wrong approach**, and the branch was
+abandoned rather than patched a fourth time. `rtl/mpeg2/vld.v` is byte-identical
+to `main` again.
+
+⚠ Why it is wrong is NOT established. What is established is that it cannot be
+made right by adjusting what it clears. A future attempt needs a different
+mechanism, and should note that the parser evidently depends on state that the
+forced transition discards — the next thing to measure is what the landing
+picture's chroma is built from, since the symptom is a preserved-geometry hue
+inversion and the DC-path inputs were measured CORRECT.
+
+### 9.6 What survives, and what is still open
+
+**Still open: the original fried-still defect.** Unfixed, reproducible in ~2
+minutes (§9.1), affecting 820/957 discs by the census.
+
+**Kept, all independent of the abandoned fix:**
+  * `tools/qmatrix_scan.py` — the census, reading the defaults out of the RTL
+  * `tools/quant_fixture.py` — the fixture cutter, with its refusals
+  * `bench/dvd/quant_matrix_tb.sv` + `run_quant_matrix.sh` — now a REPRODUCTION
+    harness, gating only the controls and the scan fix
+  * `rtl/mpeg2/iquant.v` — the 13818-2 7.3.1 un-zigzag fix (480 discs exposed)
+  * the ⛔ record in `mpeg2video.v` of the three getbits reset forms
+  * this document
+
+### 9.7 Where it stood mid-bisect (superseded by §9.5)
 
 The remaining bisect splits `flush_resync` itself: all five clears removed
 (`drop_this_picture`, `drop_gov_picture`, `skip_d_picture`,

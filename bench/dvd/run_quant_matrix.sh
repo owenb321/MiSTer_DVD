@@ -17,8 +17,20 @@
 # DVD_ISO_DIR to a library of decrypted rips. Without one every arm SKIPs
 # loudly rather than passing on an empty array.
 #
-#   ./bench/dvd/run_quant_matrix.sh          # GREEN arms
-#   ./bench/dvd/run_quant_matrix.sh --red    # also the RED arms first
+# ⛔ STATUS: THE DEFECT IS OPEN. The vld fix this suite was written to gate
+# REGRESSED on hardware and was reverted (docs/quant_matrix.md §9), so the flush
+# sweep below REPRODUCES the defect rather than proving it fixed. It is reported
+# as a measurement, not gated.
+#
+# ⚠ And this suite is NOT a safety gate for any vld change: it passed 12/12 on a
+# build that produced magenta/green garbage on real hardware. The gate for that
+# is the title->menu re-entry test on the rig (docs/quant_matrix.md §9.1).
+#
+# What IS gated here, and does pass: the two controls, and the 13818-2 7.3.1
+# scan fix in iquant.v.
+#
+#   ./bench/dvd/run_quant_matrix.sh          # gated arms + the reproduction
+#   ./bench/dvd/run_quant_matrix.sh --red    # also the pre-fix arms first
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -125,14 +137,25 @@ $IV -o bench/dvd/quant_matrix_sim $RTL bench/dvd/quant_matrix_tb.sv
 echo "== [1] control -- no flush: the download must land, fix or no fix =="
 run "[1] no flush" +NOFLUSH=1
 
-echo "== [2] flush, swept across the parse (ALL positions must keep the matrix) =="
+echo "== [2] flush swept across the parse -- REPRODUCTION, not a gate."
+echo "==     The defect is OPEN: expect most positions to LOSE the matrix. =="
+fried=0; n=0
 for d in 0 60 140 260 400 620 900 1300 1800 2500 3400 4600; do
-  run "[2] FLUSHDLY=$d" +FLUSHDLY=$d
+  out=$(vvp bench/dvd/quant_matrix_sim +fixture=$FIX +FLUSHDLY=$d 2>&1 | grep -vE '^WARNING') || true
+  r=$(echo "$out" | grep -oE 'RESULT: [A-Z]+')
+  echo "   FLUSHDLY=$d  $r"
+  n=$((n+1)); echo "$r" | grep -q FRIED && fried=$((fried+1))
 done
+echo "   reproduction: $fried/$n swept flush positions lose the matrix"
+if [ "$fried" -eq 0 ]; then
+  echo "  NOTE: nothing reproduced -- either the defect was fixed elsewhere or the"
+  echo "        sweep no longer catches the vld mid-picture. Check state_at_flush."
+fi
 
-echo "== [3] freeze: motcomp_busy held across the window, so this proves the"
-echo "==     capture is NOT gated by clk_en =="
-run "[3] freeze" +FREEZE=1 +FLUSHDLY=140
+echo "== [3] freeze: motcomp_busy held across the window (reproduction arm) =="
+out=$(vvp bench/dvd/quant_matrix_sim +fixture=$FIX +FREEZE=1 +FLUSHDLY=140 2>&1 \
+      | grep -vE '^WARNING') || true
+echo "$out" | grep -E '^(SUMMARY|RESULT)' || true
 
 echo "== [4] scan probe: a VARIED matrix after an alternate_scan=1 cut A =="
 if [ -f "$PROBE.hex" ]; then
@@ -148,7 +171,9 @@ echo "== [5] v0.4.0 replay: a SECOND decode of the same cell must be clean."
 echo "==     That is what the removed cold re-decode did, and it is why the"
 echo "==     symptom only became permanent at v0.5.0 -- if this arm fails the"
 echo "==     bench does not reproduce the field's own A/B =="
-run "[5] redecode" +REDECODE=1 +FLUSHDLY=140
+out=$(vvp bench/dvd/quant_matrix_sim +fixture=$FIX +REDECODE=1 +FLUSHDLY=140 2>&1 \
+      | grep -vE '^WARNING') || true
+echo "$out" | grep -E '^(SUMMARY|RESULT)' || true
 
 echo "== [6] +FEEDTHRU: feed through the flush window (fidelity probe)."
 echo "==     ⚠ This arm is NOT a demonstrated hazard any more. It was written when"

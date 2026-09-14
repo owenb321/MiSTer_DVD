@@ -303,10 +303,6 @@ module vld(clk, clk_en, rst,
    * ~192 clk_dec-cycle LEVEL (dvd/flush_ctl.sv issues ~64 clk_sys cycles; the
    * 2-FF CDC into clk_dec is in dvd/emu.sv). Level, not pulse — see the arm. */
   input            vbuf_flush;
-  /* DVD-FORK FIX (quantiser matrix lost at a flush; docs/quant_matrix.md).
-   * Declared here rather than beside its always block: the line-21 CC snoop
-   * further up the file reads it too. Full rationale at the state register. */
-  reg              flush_resync;
 
   /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"). The exact
    * parse position (getbits_fifo.bitpos) latched at every picture header, so the
@@ -1324,52 +1320,10 @@ module vld(clk, clk_en, rst,
   assign wait_state = ((next_align != 1'b0) || (next_advance != 4'b0));
 
   /* state */
-
-  /* DVD-FORK FIX (quantiser matrix lost at a flush; docs/quant_matrix.md).
-   *
-   * The state machine below used to reset ONLY on `rst`. A vbuf_flush therefore
-   * left the vld wherever it was -- mid-slice, mid-macroblock -- and
-   * mpeg2video holds the VBUF in reset for the whole flush level, so it starved
-   * there and then RESUMED IN THAT STALE STATE when the landing stream arrived.
-   * The landing's leading bytes were consumed as if they were the old picture's
-   * coefficients, which routinely swallowed 00 00 01 B3 and the 64+64-byte
-   * quantiser matrix download behind it. iquant.v then keeps default_values=1
-   * (it clears only on a write to address 0x3F, so a partial download is
-   * discarded WHOLE) and the picture is dequantised with the MPEG defaults:
-   * on a menu still authored with a flat matrix that is every AC coefficient
-   * 4x to 20.75x too large -- a "deep fried" picture.
-   *
-   * Only STILLS showed it. A moving title re-sends a sequence header every GOP,
-   * so a lost download self-heals within half a second; a menu still is
-   * SEQ GOP PIC:I SEQ_END and holds ONE sequence header on screen indefinitely.
-   *
-   * ★ UNGATED BY clk_en, like the ra_active arm above and for the same reason:
-   * motcomp.v freezes the vld at every picture header until picbuf's display
-   * handshake -- up to a whole display frame -- while the flush level is ~192
-   * clk_dec cycles. A clk_en-gated capture would miss it routinely, not rarely.
-   * Set beats clear, so the sticky survives both the level and any freeze.
-   *
-   * ⛔ The sequence/picture `*_seen` flags are deliberately NOT cleared here.
-   * Clearing sequence_header_seen would refuse the landing's own picture start
-   * code (:809) and every slice (:842) -- a BLACK menu, strictly worse than a
-   * fried one. Clearing sequence_extension_seen is worse still: `mpeg1` latches
-   * ~sequence_extension_seen at the next picture start code (:1372), and a
-   * false MPEG-1 verdict forces intra_dc_precision to 0 (:1536), which shifts
-   * the intra DC by 3 instead of 1 = 4x on every DC coefficient. Neither needs
-   * clearing anyway -- sequence_extension_seen is re-armed at every
-   * STATE_SEQUENCE_HEADER (:1356), and with the state forced the landing's own
-   * sequence header is now PARSED rather than eaten, which is the whole point.
-   * The seen-flags were always self-healing; the FSM position was not.
-   */
-  always @(posedge clk)
-    if (~rst)        flush_resync <= 1'b0;
-    else if (vbuf_flush) flush_resync <= 1'b1;             // ★ ungated: see above
-    else if (clk_en) flush_resync <= 1'b0;
-    else             flush_resync <= flush_resync;
-
+  
   always @(posedge clk)
     if(~rst) state <= STATE_NEXT_START_CODE;
-    else if (clk_en) state <= flush_resync ? STATE_NEXT_START_CODE : next;
+    else if (clk_en) state <= next;
     else state <= state;
 
   always @(posedge clk)
