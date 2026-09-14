@@ -212,7 +212,7 @@ def build_junction(nav, a):
     # ---- cut A: the transition cell's tail, from its LAST sequence header ----
     es_a_full = b''.join(video_payload(nav.sec(ext + s))
                          for s in range(csa[0], csa[1] + 1))
-    hpos = es_a_full.rfind(b'\x00\x00\x01\xb3')
+    hpos = 0 if a.es_out else es_a_full.rfind(b'\x00\x00\x01\xb3')
     if hpos < 0:
         return die("cut A carries no sequence header")
     es_a = es_a_full[hpos:]
@@ -236,10 +236,13 @@ def build_junction(nav, a):
         q += 4
     if len(picpos) < 1:
         return die("cut A has no picture start code")
-    if len(picpos) > a.tail_pics:
+    if len(picpos) > a.tail_pics and not a.es_out:
+        # ⚠ Only for the RTL fixture. A reference decoder must be handed the cell
+        # as the hardware sees it: splicing out the middle pictures would itself
+        # be a discontinuity, and then the experiment measures the splice.
         head = es_a[:picpos[0]]                       # seq header .. first picture
         es_a = head + es_a[picpos[-a.tail_pics]:]     # .. + the last N pictures
-    pics_a = min(a.tail_pics, len(picpos))
+    pics_a = len(picpos) if a.es_out else min(a.tail_pics, len(picpos))
     _, _, _, alt_a = pic_coding_ext(es_a)
 
     a_full_len = len(es_a)
@@ -249,8 +252,9 @@ def build_junction(nav, a):
         es_a = es_a[:len(es_a) - a.trunc]
 
     # ---- cut B: the landing still's head (header + the start of its picture) --
+    b_want = (csb[1] - csb[0] + 1) if a.es_out else a.b_sectors
     es_b_full = b''.join(video_payload(nav.sec(ext + csb[0] + k))
-                         for k in range(min(a.b_sectors, csb[1] - csb[0] + 1)))
+                         for k in range(min(b_want, csb[1] - csb[0] + 1)))
     s = es_b_full.find(b'\x00\x00\x01\xb3')
     if s < 0:
         return die("cut B carries no sequence header")
@@ -315,6 +319,27 @@ def build_junction(nav, a):
     print(f"  expect {exp_src}: DC={exp_intra[0]} peak={max(exp_intra)}; "
           f"cut A's was DC={ha['intra'][0]} peak={max(ha['intra'])}")
     print(f"  {a.out}.hex  {len(es)} B, cut B at word {b_word}")
+
+    if a.es_out:
+        # ★ The RTL fixture above answers "what matrix does the hardware hold".
+        # These raw streams answer the bigger question -- "is the BITSTREAM the
+        # reader hands over actually damaging" -- and they answer it in a decoder
+        # that shares no code with ours:
+        #
+        #   tools/quant_fixture.py <iso> --junction --trunc 300 --es-out /tmp/j
+        #   ffmpeg -i /tmp/j_junction.m2v -f image2 -update 1 /tmp/last.png
+        #
+        # Measured on ULTIMATE_T2 (docs/dvd_menu_refinements.md §9): the landing
+        # alone and the WHOLE transition + landing both decode clean, while
+        # --trunc 300 reproduces the board's blocky first slide. ⚠ The damage is
+        # OFFSET-DEPENDENT -- sweep --trunc, never conclude from one value.
+        with open(a.es_out + '_landing.m2v', 'wb') as fh:
+            fh.write(bytes(es_b))
+        with open(a.es_out + '_junction.m2v', 'wb') as fh:
+            fh.write(bytes(es_a) + bytes(es_b))
+        print(f"  {a.es_out}_landing.m2v   {len(es_b)} B  (the landing alone)")
+        print(f"  {a.es_out}_junction.m2v  {len(es_a) + len(es_b)} B  "
+              f"(source minus {a.trunc} B, then the landing)")
     return 0
 
 
@@ -351,6 +376,11 @@ def main():
     ap.add_argument('--b-sectors', type=int, default=8,
                     help='sectors of the landing cell to read (its header plus '
                          'the start of its picture is all the arm needs)')
+    ap.add_argument('--es-out', default=None, metavar='STEM',
+                    help='also write the RAW elementary streams (<STEM>_landing.m2v '
+                         'and <STEM>_junction.m2v) so a reference decoder can be '
+                         'asked whether the bitstream itself is damaging. Use a '
+                         'large --b-sectors so the landing is a whole picture.')
     a = ap.parse_args()
 
     nav = IsoNav(a.iso)

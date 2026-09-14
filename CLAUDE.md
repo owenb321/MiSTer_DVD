@@ -327,11 +327,12 @@ worse maintenance burden than targeted in-place edits. So:
   inset.
   Detail: **`docs/transport_hud.md`** "The window is not the raster", `docs/vcd_svcd.md` §5.
 
-- 🔧 **THE FIRST SLIDE OF A MENU SLIDESHOW IS PIXELATED — the reader stopped delivering
+- ✅ **THE FIRST SLIDE OF A MENU SLIDESHOW IS PIXELATED — the reader stopped delivering
   the transition cell before it had handed over its tail (2026-09-14, branch
   `fix/menu-natural-drain`); sim-proven RED/GREEN, 5 mutations each caught by exactly its
-  own arms, symptom REPRODUCED AND QUANTIFIED on the rig, ⏳ HW-confirm of the fix
-  pending.** Field report on v0.5.0: on ULTIMATE_T2's **Mission Profiles**, the FIRST
+  own arms, mechanism proven OFFLINE in a reference decoder, and ✅ HW-CONFIRMED
+  2026-09-14 against its own control** (build `DVD_menudrain_20260914_2316.rbf`, clk_dec
+  93.93/93.01 vs the 86.0 gate, 90 % ALM). Field report on v0.5.0: on ULTIMATE_T2's **Mission Profiles**, the FIRST
   still of each actor's slideshow comes up pixelated and STAYS so; on v0.4.0 it was
   pixelated for a split second and then settled.
   ★ **v0.4.0's "settle" was the §5 menu-still COLD RE-DECODE, removed in v0.5.0**
@@ -386,12 +387,24 @@ worse maintenance burden than targeted in-place edits. So:
   | slide 1, first view | **1.857** | 44.1 |
   | slide 1, after a press (it HOLDS) | **1.992** | 44.0 |
   | slide 2 — the in-disc control | **0.985** | 55.1 |
-  ⚠ **NOT CLAIMED: that the delivery fix is the whole of it.** What is proven is that the
-  bytes were dropped, that they no longer are, and that the junction is now byte-clean.
-  If the rig still shows it, the next suspect is the DISPLAY path, not the parser:
-  `motcomp_picbuf` rotates at the landing's picture header and emits `prev_i_p`, which on a
-  source with no `sequence_end_code` is the transition's last picture —
-  `bench/dvd/seek_realign_tb.sv`'s slot-provenance harness is the instrument for that.
+  ★★★ **AND THE MECHANISM WAS SETTLED OFFLINE BY A DECODER THAT SHARES NO CODE WITH OURS.**
+  Concatenate the two cells' real elementary streams and hand them to **ffmpeg**: the slide
+  alone and the WHOLE transition + slide both decode at **blockiness 1.035**, while
+  **transition − 300 B + slide decodes at 1.898** — against the board's measured 1.857, the
+  same picture, the same defect. So the damage is in the BITSTREAM the reader hands over,
+  not in anything peculiar to this decoder. ⚠ It is **offset-dependent** (300 B damages the
+  landing; 8, 4000 and 16384 B do not), which is exactly why the matrix sweep came back
+  clean at its own offsets: a picture can be damaged without the matrix being what was lost.
+  ✅ **HW-CONFIRMED, control arm first, and the PRE-FIX defect is DETERMINISTIC** — two
+  independent entries measured **1.857** to three decimals, slide 2 (the in-disc control)
+  0.985. After the fix, three different slideshows: **1.006 / 0.986 / 1.056**.
+  Unregressed in the same session: main menu and submenu transitions, the hub highlight,
+  the Jump-Into-Timeline cubes and scene-index thumbnails (both `keep_vbuf` hops),
+  menu→title Play, and a chapter skip during playback.
+  ★ **The blockiness metric is the reusable part:** image energy ON the 8-pixel DCT block
+  grid ÷ energy off it, cropped to the picture body. A correct picture has no reason to
+  prefer the grid, so ~1.0 is clean and ~1.9 is not — it needs no reference frame, which is
+  what let the same number compare a board capture, an ffmpeg decode and a second disc.
   **Gate: `bench/dvd/run_menudrain.sh --red`** — the real reader + `dvd_vm` + `flush_ctl` +
   `ps_stream_fifo` + `ps_demux`, scoring the VIDEO ELEMENTARY BYTES `ps_demux` emits (what
   the decoder would receive), never a signal the fix names; `iso_reader_vm_tb` T1–T9 pass

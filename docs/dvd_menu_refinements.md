@@ -1284,13 +1284,48 @@ parser state the 192 KB menu VBUF can present on hardware. What it settles is th
 matrix should no longer be treated as the presumed cause — which is what stopped this
 branch from shipping a fix aimed at the wrong thing.
 
-⏳ **So the decoder-side mechanism is still open.** What is established: the bytes were
-being dropped, they no longer are, and the junction the decoder sees is now byte-clean. The
-hardware round decides whether that is sufficient; if it is not, the next suspect is the
-display path rather than the parser — `motcomp_picbuf` rotates on the landing's picture
-header and emits `prev_i_p`, which on a source with no `sequence_end_code` is the
-transition's last picture, and `bench/dvd/seek_realign_tb.sv`'s slot-provenance harness is
-the instrument built for exactly that question.
+✅ **AND THE MECHANISM IS SETTLED OFFLINE, BY A REFERENCE DECODER.** The junction extract
+(`junction_es.py` shape: cut the two cells' elementary streams straight out of the image
+and concatenate them, with and without a truncation) decoded by **ffmpeg**, scored with the
+same blockiness metric as the board captures:
+
+| stream | blockiness H | detail σ |
+|---|---|---|
+| the slide's ES alone | 1.035 | 53.7 |
+| whole transition + slide (**what the fix delivers**) | 1.035 | 53.7 |
+| transition − 8 B + slide | 1.035 | 53.7 |
+| **transition − 300 B + slide** | **1.898** | **42.4** |
+| transition − 4000 B + slide | 1.035 | 53.7 |
+| transition − 16384 B + slide | 1.035 | 53.7 |
+
+★ **1.898 against the board's measured 1.857 — the same picture, the same defect, in a
+decoder that shares no code with ours.** So the damage is in the BITSTREAM the reader
+hands over, not in anything peculiar to this decoder, and delivering the whole cell removes
+it. ⚠ It is **offset-dependent**: 300 B damages the landing, 8 / 4000 / 16384 B do not.
+That is why the earlier matrix sweep came back clean at its own offsets — it was sampling a
+different question at a handful of points, and a picture can be damaged without the matrix
+being the thing that was lost.
+
+✅ **HW-CONFIRMED 2026-09-14** (build `DVD_menudrain_20260914_2316.rbf`, SEED as pinned,
+clk_dec 93.93 @100C / 93.01 @-40C against the 86.0 gate, 90 % ALM), measured through the
+same navigation on the same disc, pre-fix core first:
+
+| arm | blockiness H | detail σ |
+|---|---|---|
+| PRE-FIX, slide 1 (entry 1) | 1.857 | 44.1 |
+| PRE-FIX, slide 1 (entry 1, after a press — it HOLDS) | 1.992 | 44.0 |
+| PRE-FIX, slide 1 (entry 2, independent) | **1.857** | 44.1 |
+| PRE-FIX, slide 2 — the in-disc control | 0.985 | 55.1 |
+| **FIXED, slide 1 (PGCN 15, Schwarzenegger)** | **1.006** | 54.9 |
+| **FIXED, slide 1 (PGCN 16, a different profile)** | **0.986** | 53.6 |
+| **FIXED, slide 1 (PGCN 23, a third profile)** | **1.056** | 51.3 |
+
+★ **The pre-fix defect is DETERMINISTIC — two independent entries measured 1.857 to three
+decimal places**, so a changed number afterwards means something. Three different
+slideshows come back clean.
+Unregressed in the same session: the main menu and its submenu transitions, the hub's
+highlight, the Jump-Into-Timeline cubes and the scene-index thumbnails (both `keep_vbuf`
+menu→menu hops), menu→title Play, and a chapter skip during playback.
 
 ### 9.5 Rejected
 
