@@ -2927,8 +2927,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     .file_size      (current_file_size),
     .lu_lang_pref   (player_lang),        // OSD Player Language -> menu-LU match
     .title_sel      (dbg_title_vts),      // Debug "Title VTS" picker: 0=Auto, else VTS #
-    .vbuf_empty     (vbuf_empty),         // §5 menu still cold re-decode: decoder buffer drained
-    .menu_snap      (1'b0),               // toggle removed (universal Smooth): still re-decode waits vbuf_empty
+    .vbuf_empty     (vbuf_empty),         // one term of the natural-transition drain gate
+    .menu_snap      (1'b0),               // toggle removed with the still re-decode (v0.5.0)
     // Authored cell duration: display-referenced cell clock. Same tick av_sync
     // advances the STC with (one pulse per displayed image); disp_fps resolves
     // the active raster rate incl. the Film 24p/25p modes.
@@ -4617,14 +4617,17 @@ wire  [7:0] core_vbuf_fill;   // VBUF occupancy tap (framestore_request), eyebal
 // 1 unit = 8 KB, 0xFF = full ~2 MB. Registered off the eyeball-grade CDC tap.
 //   vbuf_deep  : >= 0x40 with hysteresis - now shown on the O[2] diagnostic (blk5) only
 //                (the §5c deep-menu-flush that gated on it was removed with the toggle).
-//   vbuf_empty : the decoder has drained its compressed buffer. Drives the reader's MENU
-//                STILL COLD RE-DECODE (docs/dvd_menu_refinements.md §5): a menu still whose
-//                displayed frame was decoded MID-STREAM (entered via a keep_vbuf transition,
-//                so with stale references) shows PIXELATED unless re-decoded cleanly. The
-//                reader flushes + re-streams just the still cell so its I-frame decodes from
-//                the sequence header = a clean frame. It waits for vbuf_empty so the authored
-//                transition plays out first; the menu VBUF cap keeps the buffer shallow so
-//                vbuf_empty comes quickly = a prompt, clean still.
+//   vbuf_empty : the decoder has drained its compressed buffer to its LOW-WATER MARK
+//                (fill <= 1 unit, NOT zero - see the assignment below). One of the terms in
+//                the reader's NATURAL-TRANSITION DRAIN gate (docs/dvd_nav.md "Phase B",
+//                docs/dvd_menu_refinements.md §9): a cell-command / POST verdict that jumps
+//                or seeks waits until the stream it is cutting has actually been delivered.
+//                ⚠ It is only one term. A decoder that is merely STARVING reads "drained"
+//                while the reader's own 16 KB cache is still full - exactly a throttled menu
+//                transition - so the reader's nat_drained also requires its cache empty, no
+//                block in flight and its output pipeline quiet.
+//                ⛔ It used to drive the MENU STILL COLD RE-DECODE (§5), which was REMOVED
+//                in v0.5.0 (b900478, issue #65 - it replayed the still cell's audio).
 localparam [7:0] VBUF_FF_ON  = 8'h40;
 localparam [7:0] VBUF_FF_OFF = 8'h18;
 // MENU CAP SHRUNK 0x30->0x18 (2026-08-05, post-field-drop): the cap depth IS the
@@ -4650,7 +4653,7 @@ always @(posedge clk_sys) begin
     else if (vbuf_fill_s1 <  VBUF_FF_OFF) vbuf_deep <= 1'b0;
     if      (vbuf_fill_s1 >= MENU_CAP_ON)  menu_vbuf_over <= 1'b1;
     else if (vbuf_fill_s1 <  MENU_CAP_OFF) menu_vbuf_over <= 1'b0;
-    vbuf_empty <= (vbuf_fill_s1 <= 8'h01);   // drained: safe to cold-re-decode the still cell
+    vbuf_empty <= (vbuf_fill_s1 <= 8'h01);   // low-water mark: a natural verdict may execute
 end
 // DVD-FORK (av_sync STC reference): sticky decoder-domain "a decoded frame has been
 // picked up for display" level, 2-FF synced into clk_sys. av_sync freezes the STC at

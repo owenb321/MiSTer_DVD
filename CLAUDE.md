@@ -327,6 +327,76 @@ worse maintenance burden than targeted in-place edits. So:
   inset.
   Detail: **`docs/transport_hud.md`** "The window is not the raster", `docs/vcd_svcd.md` §5.
 
+- 🔧 **THE FIRST SLIDE OF A MENU SLIDESHOW IS PIXELATED — the reader stopped delivering
+  the transition cell before it had handed over its tail (2026-09-14, branch
+  `fix/menu-natural-drain`); sim-proven RED/GREEN, 5 mutations each caught by exactly its
+  own arms, symptom REPRODUCED AND QUANTIFIED on the rig, ⏳ HW-confirm of the fix
+  pending.** Field report on v0.5.0: on ULTIMATE_T2's **Mission Profiles**, the FIRST
+  still of each actor's slideshow comes up pixelated and STAYS so; on v0.4.0 it was
+  pixelated for a split second and then settled.
+  ★ **v0.4.0's "settle" was the §5 menu-still COLD RE-DECODE, removed in v0.5.0**
+  (`b900478`, issue #65 — it replayed the still cell's audio, and two later decoder fixes
+  were believed to have made it unnecessary). That belief is what the field falsified.
+  ★★ **THE ASYMMETRY IS THE DIAGNOSIS, and it is a property of the DISC.** Measured with
+  `nav_extract.py`: the hub (VTSM PGCN 14) reaches a slideshow through **cell 1, a
+  904-sector ~2 s MOTION transition clip** whose `cell_cmd 1 = LinkTailPGC` runs the POST
+  `if (g[6]==N) LinkPGCN 15..23`. Slide N→N+1 is `LinkNextPG` INSIDE one PGC, leaving a
+  cell that is a STILL — already parked, cache empty, elementary stream ended on a
+  `sequence_end_code`. The transition ends on neither.
+  ★★★ **AND THE LOSS WAS STRUCTURAL, NOT A RACE:** `dvd_iso_reader.sv` dispatches the cell
+  command at the cell's LAST BLOCK READ and leaves `S_STREAM` for `S_VM_WAIT`, while its
+  output pipeline only ran while `S_STREAM` — so up to 16 KB sat undelivered in the stream
+  cache until `jump_ack` reset `wr_ptr` and discarded it. No gate could have waited for
+  that; the module had stopped delivering. `docs/dvd_menu_refinements.md` §2 had recorded
+  the same cut as a residual ("dropping the transition tail's last ~16 KB … Not yet
+  fixed") from the other end.
+  **Fix:** `streaming` covers `S_VM_WAIT` too (no `sd` read is ever issued there), and the
+  Phase-B natural-transition drain gate the TITLE domain has used since PR fj#150 now
+  applies in EVERY domain — `jnat_l`/`snat_l` lose their `&& ~menu_dom`. The menu
+  exemption's stated reason was "their tail rides `keep_vbuf`"; **`keep_vbuf` preserves
+  the DECODER's buffer, not bytes the reader never handed over.**
+  ⚠ **The gate is `nat_drained`, NOT `vbuf_empty`, and this is the part most likely to be
+  "simplified" later.** `vbuf_empty` is a decoder LOW-WATER MARK (fill ≤ 1 unit), so a
+  merely STARVING decoder reads "drained" while the cache is still full — exactly a
+  throttled menu transition. `nat_drained` also wants the cache empty, no block in flight,
+  the output pipeline quiet, and 255 settled cycles so `ps_stream_fifo` and `ps_demux`
+  (which `load_flush` resets too) have drained. `DRAIN_WD` still bounds it and any USER
+  jump/seek preempts it.
+  ⛔⛔ **THE QUANTISER-MATRIX ROUTE WAS MEASURED AND REFUTED — DO NOT RE-DERIVE IT.** The
+  natural theory was `docs/quant_matrix.md`'s mechanism reached by truncation instead of by
+  a flush (the vld left mid-macroblock eats the landing's `00 00 01 B3`; with no
+  `sequence_end_code` `sequence_header_seen` is still set so the picture start code is
+  accepted anyway, and the slide decodes with the transition's near-flat matrix while the
+  slides download none). New `tools/quant_fixture.py --junction` +
+  **`bench/dvd/run_menu_junction.sh`** build that splice from the REAL cells:
+  **[J0] contiguous restores the defaults (`downloads=1`, 0/64 wrong) and [J1] ALL SEVEN
+  truncation offsets (8…3400 B) also come back 0/64.** With the bytes contiguous the parser
+  errors out on the partial slice and resyncs BEFORE the header; losing the matrix needs the
+  FLUSH. ★ The arms are committed BEFORE the fix, as standing evidence.
+  ✅ **REPRODUCED AND QUANTIFIED ON THE RIG (pre-fix core, the control), so the fix has a
+  number to beat.** Blockiness = image energy on the 8-pixel DCT block grid ÷ energy off it
+  (a correct picture has no reason to prefer the grid):
+  | capture | blockiness H | detail σ |
+  |---|---|---|
+  | slide 1, first view | **1.857** | 44.1 |
+  | slide 1, after a press (it HOLDS) | **1.992** | 44.0 |
+  | slide 2 — the in-disc control | **0.985** | 55.1 |
+  ⚠ **NOT CLAIMED: that the delivery fix is the whole of it.** What is proven is that the
+  bytes were dropped, that they no longer are, and that the junction is now byte-clean.
+  If the rig still shows it, the next suspect is the DISPLAY path, not the parser:
+  `motcomp_picbuf` rotates at the landing's picture header and emits `prev_i_p`, which on a
+  source with no `sequence_end_code` is the transition's last picture —
+  `bench/dvd/seek_realign_tb.sv`'s slot-provenance harness is the instrument for that.
+  **Gate: `bench/dvd/run_menudrain.sh --red`** — the real reader + `dvd_vm` + `flush_ctl` +
+  `ps_stream_fifo` + `ps_demux`, scoring the VIDEO ELEMENTARY BYTES `ps_demux` emits (what
+  the decoder would receive), never a signal the fix names; `iso_reader_vm_tb` T1–T9 pass
+  UNCHANGED, which is the title-domain contract.
+  ★ **Arm [A]'s shape is load-bearing twice and BOTH were found by a mutation surviving:**
+  it runs with `vbuf_empty=1` throughout (so the low-water mark cannot be what gates) and
+  its sink stalls 448 cycles in every 512 (the menu VBUF cap's shape). With a SHORT stall,
+  "the pipe is quiet" and "there is nothing left to send" are indistinguishable and
+  dropping the cache term is caught by **nothing**.
+  Detail: **`docs/dvd_menu_refinements.md` §9**, `docs/dvd_nav.md` "Phase B".
 - 🔧 **"DEEP FRIED" MENU STILLS — the disc's own quantiser matrix was being thrown away
   at every VBUF flush (2026-09-13/14, branch `fix/quant-matrix-flush`); sim-proven
   RED/GREEN and ✅ HW-CONFIRMED 2026-09-14 AGAINST ITS OWN CONTROL** (build
@@ -395,6 +465,10 @@ worse maintenance burden than targeted in-place edits. So:
   structurally it cannot (the soft reset re-streams nothing; `aud_flush` fires on the same
   `jump_flush`), a maintainer ear-check closes it.
   Detail: **`docs/quant_matrix.md`** (§11 the fix + HW round, §9–§10 the failed attempt).
+  ⚠ **Its `keep_vbuf` claim was too strong and is corrected in place (2026-09-14):** such a
+  hop leaves the VBUF alone but still pulsed `load_flush` AND dropped up to 16 KB the
+  reader had never delivered. That does NOT lose the matrix (measured, 7/7 offsets clean —
+  see the menu-slideshow bullet above), but it was a real defect with its own consequence.
 
 - ✅ **PROGRAM ORDER IS NOT PHYSICAL ORDER — the title span collapsed on 51 of 958
   library discs, making them completely unseekable (2026-09-13, branch
