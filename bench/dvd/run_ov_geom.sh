@@ -57,8 +57,15 @@ if [ "${1:-}" != "--red" ]; then
 
   echo "== the idle logo: the bounce box IS the window (screensaver + Stop show it) =="
   iverilog -g2012 -o "$SIM.logo" dvd/idle_logo.sv bench/dvd/idle_logo_tb.sv
-  run "idle_logo_tb      (720x480 + T18 narrow)" vvp "$SIM.logo"
-  run "idle_logo_tb      (352x240, VCD)"         vvp "$SIM.logo" +act_w=352 +act_h=240
+  # ⚠ Every window the SCREENSAVER and STOP can be up in, not just the idle one: T1 and
+  # T18b each fly the logo for 20,000 frame ticks and fail on any excursion, so a window
+  # whose box underflowed or collapsed is caught rather than reasoned about.
+  run "idle_logo_tb      (720x480 + T18 narrow)"  vvp "$SIM.logo"
+  run "idle_logo_tb      (352x240, VCD prog)"     vvp "$SIM.logo" +act_w=352 +act_h=240
+  run "idle_logo_tb      (352x288, VCD PAL prog)" vvp "$SIM.logo" +act_w=352 +act_h=288
+  run "idle_logo_tb      (480x480, SVCD prog)"    vvp "$SIM.logo" +act_w=480
+  run "idle_logo_tb      (720x240, VCD 240p)"     vvp "$SIM.logo" +act_h=240
+  run "idle_logo_tb      (720x288, VCD 288p)"     vvp "$SIM.logo" +act_h=288
 
   echo "== the frame renders, unchanged (no regression at full width) =="
   iverilog -g2012 -o "$SIM.if" dvd/idle_logo.sv dvd/subpic_blend.sv bench/dvd/idle_frame_tb.sv
