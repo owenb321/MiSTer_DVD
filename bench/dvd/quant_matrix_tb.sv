@@ -309,6 +309,7 @@ module quant_matrix_tb;
   integer   dl_before = 0;
   integer   seq_after = 0, nsc_after = 0, sc_after = 0, qrst_after = 0;
   integer   fr_cycles = 0;
+  integer   bskip = 0;
   integer   reflush2 = 0;
   integer   atstate = -1;      // +ATSTATE=n : fire the flush when vld.state == n
   reg       mpeg1_after = 1'b0;
@@ -380,6 +381,7 @@ module quant_matrix_tb;
     if ($value$plusargs("COLDSTART=%d", coldstart)) ;
     if ($value$plusargs("ATSTATE=%d",   atstate))   ;
     if ($value$plusargs("REFLUSH2=%d", reflush2)) ;
+    if ($value$plusargs("BSKIP=%d",    bskip))    ;
 
     $readmemh({fixture, ".hex"}, es);
     $readmemh({fixture, ".meta.hex"}, meta);
@@ -457,7 +459,14 @@ module quant_matrix_tb;
       // ⚠ the VBUF is in reset for the whole level on hardware: no landing byte
       // can arrive yet. +FEEDTHRU=1 breaks that on purpose (negative arm).
       if (!feedthru) feed_en = 1'b0;
-      rd_ptr = b_word;                    // the reader has jumped
+      // ★ +BSKIP=n starts the landing n WORDS past its own sequence header.
+      // Every arm before this one fed a landing that BEGAN with 00 00 01 B3, so
+      // the sequence context was always rebuilt and mpeg1 could never latch
+      // wrongly -- which is why this bench passed a build that fails on
+      // hardware. A real jump does not promise the parser a sequence header:
+      // it gets whatever the reader delivers first. THIS is the arm that can
+      // fail.
+      rd_ptr = b_word + bskip;            // the reader has jumped
       repeat (192) @(posedge clk);        // the real flush level
       flush_lvl  = 1'b0;
       feed_en    = 1'b1;

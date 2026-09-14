@@ -59,7 +59,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              mem_req_rd_cmd, mem_req_rd_addr, mem_req_rd_dta, mem_req_rd_en, mem_req_rd_valid,                                    // clocked with mem_clk
              mem_res_wr_dta, mem_res_wr_en, mem_res_wr_almost_full,                                                               // clocked with mem_clk
              testpoint_dip, testpoint_dip_en, testpoint,
-             init_cnt_out, sync_rst_out, vbw_almost_full_out,
+             init_cnt_out, sync_rst_out, vbw_almost_full_out, dbg_dcpath,
              dbg_lines_displayed, dbg_first_vpos, dbg_last_vpos,   // DVD-FORK DEBUG (256-line strobe)
              dbg_prof0, dbg_prof1,                                 // DVD-FORK DEBUG (stage profiler)
              cc_pair_valid, cc_pair, cc_pair_field,               // DVD-FORK (line-21 CC): EIA-608 pairs from user_data (clk domain)
@@ -143,6 +143,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   output     [11:0]v_pos;                   // vertical position; 0 = top
   output      [8:0]init_cnt_out;
   output           sync_rst_out;
+  output    [15:0] dbg_dcpath;          // DVD-FORK DEBUG: {dcprec_chg[7:0], mpeg1_rises[4:0], intra_dc_precision[1:0], mpeg1}
   output           vbw_almost_full_out;
   /* DVD-FORK DEBUG (256-line strobe probe): per-output-frame mixer telemetry (dot_clk) */
   output     [11:0]dbg_lines_displayed;
@@ -377,6 +378,32 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire       macroblock_intra;
   wire  [1:0]intra_dc_precision;
   wire       mpeg1_es;                      // DVD-FORK FIX (mpeg1): stream is MPEG-1 (vld -> rld_fifo)
+
+  /* DVD-FORK DEBUG (quant-matrix HW round 2, docs/quant_matrix.md).
+   * A picture's average colour can only be wrong if its DC is wrong, and the
+   * ONLY inputs to the intra DC scale are intra_dc_precision and mpeg1 (which
+   * overrides it to 0). rld.v:362 then does `level << 3` into a 13-BIT reg from
+   * a 12-bit signed level -- that OVERFLOWS AND WRAPS, and a wrapped chroma DC
+   * is an INVERTED HUE. Both signals were invisible to telemetry, so the board
+   * could not be asked which one was wrong. Packed into the retired word 5. */
+  reg        mpeg1_q;
+  reg  [4:0] mpeg1_rises;                  // times the MPEG-1 verdict went HIGH
+  reg  [1:0] dcprec_q;
+  reg  [7:0] dcprec_chg;                   // times intra_dc_precision CHANGED
+  always @(posedge clk)
+    if (~sync_rst)
+      begin mpeg1_q <= 1'b0; mpeg1_rises <= 5'd0;
+            dcprec_q <= 2'd0; dcprec_chg <= 8'd0; end
+    else
+      begin
+        mpeg1_q  <= mpeg1_es;
+        dcprec_q <= intra_dc_precision;
+        if (mpeg1_es && ~mpeg1_q && ~(&mpeg1_rises))
+          mpeg1_rises <= mpeg1_rises + 5'd1;
+        if ((intra_dc_precision != dcprec_q) && ~(&dcprec_chg))
+          dcprec_chg <= dcprec_chg + 8'd1;
+      end
+  assign dbg_dcpath = {dcprec_chg, mpeg1_rises, intra_dc_precision, mpeg1_es};
   wire       mpeg1_es_rd;                   // DVD-FORK FIX (mpeg1): rld_fifo -> rld (per-picture mismatch-control mode)
   wire  [7:0]quant_wr_data_wr;              // data bus for writing quantizer matrix rams
   wire  [5:0]quant_wr_addr_wr;              // address bus for writing quantizer matrix rams
