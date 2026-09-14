@@ -435,3 +435,91 @@ approach and this branch should be abandoned rather than patched again.** The
 salvageable parts are separable and independent of the vld change:
 `tools/qmatrix_scan.py`, `tools/quant_fixture.py`, the bench, the 13818-2 7.3.1
 scan fix in `iquant.v`, and this document.
+
+
+---
+
+## 10. The chroma work — what the garbage ACTUALLY is (2026-09-14)
+
+§9.5 left the regression's mechanism unexplained and pointed at the chroma path.
+That measurement has now been made, **offline, from frames already captured**,
+and it is conclusive about the artefact even though not yet about its cause.
+
+### 10.1 ★★ MEASURED: both chroma planes carry LUMA
+
+Compare a CORRECT menu frame and a GARBAGE one, both 720x480 captures of the
+same still from the same board through the same path — no rescale, no re-render,
+no alignment guesswork. Convert to BT.601 YCbCr and cross-correlate every plane
+pair at 8x8 block DC (an MPEG intra block's DC is its 8x8 mean, and DC is coded
+by a different path from the AC coefficients, so averaging separates them):
+
+```
+            good Y   good Cb   good Cr     best match
+  bad Y      0.212     0.060    -0.193     Y  (+0.21)
+  bad Cb     0.726     0.203    -0.691     Y  (+0.73)
+  bad Cr     0.701     0.203    -0.649     Y  (+0.70)
+
+  bad Cb =  0.560 * good Y  +  64.3   r=+0.726
+  bad Cr =  0.618 * good Y  +  59.3   r=+0.701
+```
+
+**Both chroma planes are a linear function of the GOOD frame's LUMA**, with
+near-identical coefficients, while bad luma correlates with nothing much.
+Reproduced on three independent frames from two different builds.
+
+Plane energies (block-DC std) say the same thing — the energy MOVED:
+
+```
+  good   Y 52.62   Cb  9.74   Cr 25.12
+  bad    Y 35.52   Cb 40.59   Cr 46.37      <- chroma now carries more than luma
+```
+
+and the AC detail energy confirms it: luma detail DOWN to 0.57x, chroma detail
+UP 2.0-2.35x.
+
+★ **This explains the screenshot exactly, which is how you know the measurement
+is of the right thing.** Cb and Cr both track luma, so where luma is high (the
+pale background) both go high — and Cb=Cr high is **magenta**; where luma is low
+(Elmo, the text) both go low — and Cb=Cr low is **green**. A magenta background
+with a green Elmo is not a hue "inversion" at all. It is the chroma planes being
+fed luma.
+
+⚠ The first analysis DID call it an inversion: a naive per-plane fit reported
+`bad Cr = -1.08 * good Cr + 302`, a textbook inversion signature. That fit is an
+artefact of assuming bad Cr came from good Cr. In this image luma and Cr are
+naturally anti-correlated (pale green background = high Y, low Cr; dark red Elmo
+= low Y, high Cr), so luma-in-Cr *masquerades* as inverted Cr. **Cross-correlate
+every pair before believing a one-to-one fit.**
+
+### 10.2 The inference, and what is NOT established
+
+Luma blocks landing in the chroma planes is a **block-count / component-assignment
+desync**. The parameter that sets blocks-per-macroblock is `chroma_format`
+(`vld.v:1727`, `:2879`, `:2915` — 6 blocks for 4:2:0, 8 for 4:2:2, 12 for 4:4:4),
+it is latched by a `loadreg` whenever `state == STATE_SEQUENCE_EXT`, and
+`mpeg1` was measured 0 so the latched value is what is used.
+
+A mechanism exists on paper: the abandoned state force makes the parser HUNT
+through post-flush garbage, and a false `00 00 01 B5` in that garbage dispatches
+into `STATE_SEQUENCE_EXT`, where `loadreg` latches whatever is in the bit window
+into `chroma_format` (and `progressive_sequence`, and the size extension bits).
+Before the state force the parser was stuck mid-picture and never hunted, so it
+never dispatched on a false extension code.
+
+⛔ **NOT CONFIRMED.** Simulation reports `chroma_format=1` (correct) at every
+swept flush position, with exactly the three legitimate extension start codes.
+That is the SECOND time this bench has been structurally unable to reproduce a
+real defect, and for the same reason both times: **its landing always begins with
+a clean sequence header, so the parser never hunts through garbage.** A fixture
+whose landing starts mid-stream is the missing arm.
+
+### 10.3 Next step, and why it may unlock the fix
+
+Instrument `chroma_format` and the extension-dispatch count on the board, with
+the state force re-applied to reproduce, and read them on a garbage frame. One
+run decides it — the same method that killed the MPEG-1 theory in §9.3.
+
+★ If it is confirmed, the fix direction follows immediately and is narrow:
+**after a flush, refuse extension start codes until a sequence header has been
+parsed**, so a hunt through garbage cannot latch sequence-level parameters. That
+would make the whole flush_resync approach viable rather than abandoned.
