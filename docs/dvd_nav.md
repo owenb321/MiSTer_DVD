@@ -1870,7 +1870,7 @@ pack. ⚠ That is the reader's seek path — the boot path for every disc — so
 wants the full 33-testbench gate and its own HW round, not a rider on a readout
 fix.
 
-### 2f. Program order is not physical order — the title span must be a MAX — ✅ FIXED + HW-CONFIRMED 2026-09-13
+### 2f. Program order is not physical order — FOUR defects, one assumption — ✅ FIXED + HW-CONFIRMED 2026-09-14
 
 Field report: on `A_MILLION_WAYS_TO_DIE_IN_THE_WEST` (physical disc *and* the
 decrypted ISO) **any seek jumped to the end of the movie**, the **chapter notches
@@ -2162,6 +2162,49 @@ gesture itself needs a physical gamepad.
 
 ★ Control: a disc from the healthy 903 (`1NIGHT_MCCOOLS`) seeks normally in both
 directions on the same build (+87 s / −37 s, matching the tap counts).
+
+#### HW round 2 — ✅ CONFIRMED 2026-09-14 on BIG_TROUBLE_LITTLE_CHINA
+
+Build `DVD_titlespan_20260914_0100.rbf` (SEED 7 first roll, clk_dec 94.25/90.11
+against the 86.0 gate, 90 % ALM). The maintainer confirmed seeking and chapter
+markers on the test discs; the measurements below are from the harness.
+
+| symptom | before | after |
+|---|---|---|
+| chapter notches | 2 marks, 44 of 45 misplaced, residual **5116 px** | **42 marks, 0 of 45 misplaced, residual 6 px** |
+| forward seek | to the beginning of the title | `0:00:42 → 0:02:19` (+87 s) |
+| backward seek | to the beginning of the title | `0:02:47 → 0:02:25` (−32 s) |
+| preview clock | `0:00:00` for the whole gesture | tracks the target |
+
+★★ **The preview clock could not be measured until the press and the captures
+were sequenced ON THE TARGET.** The preview lives for the gesture's ~400 ms
+window plus `scrub_ctrl`'s ~1.5 s linger — about 2 s — while ssh-paced
+screenshots land ~5 s apart, so the first attempt sampled *around* it three
+times and saw nothing. Injecting the key and then firing four `screenshot`
+commands from one ssh session, with `sleep`s between them on the box, put the
+samples where they were needed:
+
+```
+pre-fix, paused at 0:03:07        fixed, paused at 0:00:31
+  t1 (~0.25 s): 0:03:17             t1 (~0.25 s): 0:00:41
+  t2 (~0.85 s): 0:00:00   <-- bug   t3 (~1.45 s): 0:00:42
+  t3 (~1.45 s): 0:00:00   <-- bug   t4 (~3.45 s): 0:00:44
+  t4 (~3.45 s): 0:03:20
+```
+
+⚠ Same sample point, both builds, so it is a matched comparison rather than an
+absence of evidence. ⚠ Roughly one capture in four does not get written at a
+0.6 s spacing — the shot writer needs longer — so read a missing sample as
+missing, not as clean.
+
+⚠ **Still NOT exercised by the harness: the gamepad HOLD-to-scrub gesture.**
+`kbd_map.sv` routes keyboard Fast Fwd/Rewind to `dpad_seek`, so every
+measurement here goes through `scrub_ctrl`'s JUMP port. Same `target` clamp,
+different gesture. ⚠ And roughly one 8-tap burst in three moves ~+9 s instead of
+~+87 s; single taps measure ~+15 s each and a full burst ~+87 s ≈ 6 taps, so
+burst size tracks how many taps land inside the ~400 ms coalescing window —
+ssh timing, not position, and it never lands at the beginning. Unproven, and the
+gamepad settles it.
 
 #### ⛔ Non-goals — do not re-derive these
 

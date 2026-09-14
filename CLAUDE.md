@@ -376,6 +376,18 @@ worse maintenance burden than targeted in-place edits. So:
   notches and **exactly 8 lit columns** (which pins the 2 px width too). Proven
   RED on the pre-fix module — **"drew 2 notch columns"** — and mutation **M9**
   reproduces the walker's degenerate behaviour in one sed.
+  ✅ **ALL FOUR HW-CONFIRMED 2026-09-14** (build `DVD_titlespan_20260914_0100.rbf`,
+  SEED 7 first roll, clk_dec 94.25/90.11, 90 % ALM; maintainer confirmed seeking and
+  chapter markers on the test discs). On BIG_TROUBLE: notches **2 marks / 44 of 45
+  misplaced / 5116 px residual → 42 marks / 0 misplaced / 6 px**; forward
+  `0:00:42→0:02:19`, backward `0:02:47→0:02:25`; preview clock RED `0:00:00` at
+  t+0.85 s and t+1.45 s, GREEN at the same sample points.
+  ★★ **THE PREVIEW WAS UNMEASURABLE UNTIL THE PRESS AND THE CAPTURES WERE SEQUENCED
+  ON THE TARGET** — it lives ~2 s (400 ms window + 1.5 s linger) while ssh-paced
+  shots land ~5 s apart, so the first attempt sampled AROUND it three times and saw
+  nothing. One ssh session injecting the key then firing four `screenshot` commands
+  with target-side `sleep`s caught it. ⚠ ~1 capture in 4 is not written at 0.6 s
+  spacing; read a missing sample as missing, not as clean.
   ★★★ **AND A FOURTH, IN THE SEEK PREVIEW CLOCK — same assumption, third module.**
   Board report after the renderer fix: the preview *"stays at 0:00:00 during
   seeking, then updates to the correct timestamp when the seek completes"*.
