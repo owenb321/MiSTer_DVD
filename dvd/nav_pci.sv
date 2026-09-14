@@ -276,8 +276,13 @@ endfunction
 // Committed (display) HLI state
 // =========================================================================
 reg        armed;
-// (h_sptm, the committed HLI's s_ptm, was write-only and is gone -- area pass 2026-09-10)
 reg [5:0]  h_btn_ns, h_foac;
+// The ARMED HLI's own s_ptm -- i.e. WHICH authored window is on screen. The
+// 2026-09-10 area pass removed this as write-only; it is load-bearing again,
+// and is now READ (see `arm_is_cont`), so it must not be reclaimed a second
+// time. Telling the window on screen apart from the one being committed is the
+// whole of the whack-a-mole fix.
+reg [31:0] h_sptm;
 reg [1:0]  h_grns;             // committed btngr_ns + per-group display types
 reg [2:0]  h_g1ty, h_g2ty, h_g3ty;
 // A committed HLI authored with hli_e_ptm == 0xFFFFFFFF ("forever" - buttons persist
@@ -388,6 +393,34 @@ wire off_due = off_v && !off_dist[31] && stc_trusted &&
 // timeline restart: a new arm >0.7 s (63000 ticks) behind the parked one
 wire arm_restart = nxt_v && $signed(f_sptm - nxt_sptm) < -32'sd63000;
 
+// ★ A CONTINUATION OF THE WINDOW ALREADY ON SCREEN MUST NOT RE-PARK (2026-09-14,
+// the Scooby-Doo 2 whack-a-mole). The park policy above says a repeated commit
+// is harmless because "identical content re-parks after each promote anyway" --
+// true of a LOOPING MENU, which re-sends one HLI for ever, and false of a disc
+// that authors a SEQUENCE of windows. That game cuts each round cell into
+// consecutive HLI windows (hli_ss=1 one VOBU before each window starts, hli_ss=2
+// every VOBU in between); each window makes ONE direction a hit and the other
+// three a miss. Once a window is armed, its own continuation re-parked it with
+// nxt_pre=0 -- promotable ONLY through the ~1 s fallback timer -- and the single
+// slot then DISCARDED the next window's ss=1 for having a later s_ptm. The armed
+// set trailed the picture by up to ~1.5 s, so pressing the monster's direction
+// fired the previous window's miss: "I pressed the right button and it said I
+// missed".
+// ⚠ ss=3 is NOT suppressed: that is "same buttons, CHANGED commands", which must
+// take effect. ⚠ And a continuation while nothing is armed still parks -- a seek
+// landing mid-window has only continuations left to arm from (bench arm [E]).
+wire arm_is_cont = armed && (f_ss == 2'd2) && (f_sptm == h_sptm);
+
+// ★ A SCHEDULABLE COMMIT OUTRANKS ONE THAT CAN ONLY TIME OUT. A pending parked
+// with nxt_pre=0 has no authored presentation time left to wait for -- only
+// PROMOTE_FALLBACK -- so holding a still-schedulable commit behind it trades
+// real timing for a guess. Reachable when the clock is briefly untrusted, which
+// each round start is (a LinkCN seek re-anchors it).
+// ⚠ This cannot disturb the repeated-content case the earliest-wins rule exists
+// for: those commits SHARE an s_ptm, and stc only advances, so a later commit of
+// the same window can never regain the schedulability an earlier one lacked.
+wire sched_outranks = nxt_v && !nxt_pre && ($signed(stc[31:0] - f_sptm) < 0);
+
 // ---- button-group choice by display mode ------------------------------------
 // wanted display type: 4:3 content wants a plain-4:3 group (dsp_ty == 000);
 // 16:9 content wants the group whose dsp_ty bit matches the presentation.
@@ -438,6 +471,7 @@ always @(posedge clk or negedge rst_n) begin
         pend_age  <= 27'd0;
         armed     <= 1'b0;
         h_btn_ns  <= 6'd0;
+        h_sptm    <= 32'd0;
         h_foac    <= 6'd0;
         h_forever <= 1'b0;
         btn_sel   <= 6'd1;
@@ -534,8 +568,9 @@ always @(posedge clk or negedge rst_n) begin
                         off_v    <= 1'b1;
                         off_sptm <= f_vptm;
                     end
-                end else if (!nxt_v || arm_restart ||
-                             $signed(f_sptm - nxt_sptm) < 0) begin
+                end else if (!arm_is_cont &&
+                             (!nxt_v || arm_restart || sched_outranks ||
+                              $signed(f_sptm - nxt_sptm) < 0)) begin
                     // ARM: park if the slot is free, this one is EARLIER, or
                     // the timeline restarted (menu loop) - else discard (the
                     // parked earlier one promotes first; identical content
@@ -593,6 +628,7 @@ always @(posedge clk or negedge rst_n) begin
                 disp_bank <= nxt_bank;
                 armed     <= 1'b1;
                 h_btn_ns  <= nxt_btn_ns;
+                h_sptm    <= nxt_sptm;      // which authored window is now on screen
                 h_foac    <= nxt_foac;
                 h_forever <= nxt_forever;
                 h_grns    <= nxt_grns;
