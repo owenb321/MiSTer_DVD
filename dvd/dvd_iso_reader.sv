@@ -4338,8 +4338,10 @@ always @(posedge clk or negedge rst_n) begin
             // frame and v0.5.0 holds one.
             // ⛔ That is NOT a reason to bring the re-stream back, and removing
             // it was NOT the cause: it unmasked a defect that was always there.
-            // The cause is fixed in rtl/mpeg2/vld.v (flush_resync). Do not
-            // revert the removal on the strength of that symptom.
+            // The cause is fixed in dvd/flush_ctl.sv: a ~keep_vbuf VM jump now
+            // soft-resets the decoder like a mount does (docs/quant_matrix.md
+            // §11), so the landing's own sequence header is parsed clean. Do
+            // not revert the removal on the strength of that symptom.
             // ⚠ Its only live trigger was vbuf_empty -- menu_snap has been
             // hardwired 0 since the Snappy/Smooth toggle was removed -- and
             // vbuf_empty means the decoder had already consumed everything.

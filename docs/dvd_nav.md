@@ -2911,6 +2911,7 @@ symptoms from unrelated causes. The cheap discriminator is `dvd_vm.sv`'s `sprm8`
 `btn_sel` into SPRM8 before the POST read it.
 
 ★ Note the repaint is **no longer** evidence for this hypothesis on a fixed core: with
-`flush_resync` in place the first decode is already correct, so a re-decode changes
+the VM-jump soft reset in place (`docs/quant_matrix.md` §11) the first decode is already
+correct, so a re-decode changes
 nothing visible. If the two-press behaviour survives the quant-matrix fix, that is the
 clean report.

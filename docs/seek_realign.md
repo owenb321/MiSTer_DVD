@@ -382,11 +382,12 @@ fitter SEED is a fresh roll regardless. See the `DVD.qsf` ledger entry.
 
 ## Cross-reference: `vbuf_flush` now has a SECOND consumer in the vld (2026-09-13)
 
-`docs/quant_matrix.md` adds `flush_resync` to `rtl/mpeg2/vld.v`, driven off the same
-`vbuf_flush` input this document's `ra_active` arm uses, and ungated by `clk_en` for the
-same reason. **They are separate registers with separate lifetimes and must not be
-folded**: `ra_active` lives for *pictures* (until two anchors, or `RA_CAP`), `flush_resync`
-lives for the *flush window* only.
+`docs/quant_matrix.md` once added a `flush_resync` register beside `ra_active` in
+`rtl/mpeg2/vld.v` (a forced `STATE_NEXT_START_CODE` for the flush window). ⛔ **It is
+REVERTED** — it regressed on hardware into luma-in-chroma garbage (§9–§10 there). The
+quantiser-matrix fix is now a decoder SOFT RESET on VM jumps in `flush_ctl` (§11), which
+this document's `ra_active` arm never sees because the vld is in reset for those flushes;
+`ra_active` remains the whole story for transport seeks.
 
 Two things here that a reader of this document alone would get wrong:
 

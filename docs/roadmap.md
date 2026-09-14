@@ -2182,21 +2182,34 @@ PGC pre/post execution.
 
 ---
 
-## 🔧 Quantiser matrix lost at a VBUF flush ("deep fried" menu stills) — 2026-09-13
+## 🔧 Quantiser matrix lost at a VBUF flush ("deep fried" menu stills) — 2026-09-13/14
 
 Branch `fix/quant-matrix-flush`. Sim-proven RED/GREEN over real disc bytes,
 ⏳ **HW-confirm pending**.
 
 A menu still's sequence header downloads a custom quantiser matrix; a VBUF flush left the
-VLD mid-picture and its bit window holding a discarded stream, so the header (and the
-matrix) were eaten and the still decoded with the MPEG defaults — every AC coefficient up
-to 20.75x too large. Two RTL changes (`vld.v` `flush_resync`; `getbits_fifo` onto
-`vbuf_rst`), plus an independent 13818-2 7.3.1 fix in `iquant.v`.
+whole decode pipeline (vld state, bit window, rld fifo, iquant) frozen mid-picture and the
+landing arrived into it, so the header (and the matrix) were eaten and the still decoded
+with the MPEG defaults — every AC coefficient up to 20.75x too large. A moving title
+self-heals at its next GOP; a still never does.
+
+★★ **The first fix (force the vld state machine back to `STATE_NEXT_START_CODE` at the
+flush) REGRESSED on hardware into luma-in-chroma garbage and was reverted**: re-syncing one
+register of a coupled pipeline leaves a partial block downstream. A diagnostic round read
+`chroma_format` beside every garbage frame on the rig — correct on all three — which is what
+turned the search from "re-sync harder" into "reset everything". **The fix is the decoder
+SOFT RESET a file mount already uses**: `flush_ctl.soft_flush` now fires on a `~keep_vbuf`
+VM jump (menu entry/exit, the FP boot chain), never on a transport seek or mode switch, so
+a chapter skip keeps its held frame and a menu transition becomes a brief black cut (what
+a set-top player does; maintainer decision). Plus an independent 13818-2 7.3.1 fix in
+`iquant.v` (the download un-zigzagged with the previous picture's `alternate_scan`).
 
 Measured blast radius: **820/957 discs download a matrix in a menu VOB, 533 more than 2x
 from the default**; **480** are exposed to the 7.3.1 permutation case.
 
-Gate `bench/dvd/run_quant_matrix.sh --red`. Detail: `docs/quant_matrix.md`.
+Gates `bench/dvd/run_quant_matrix.sh --red` (`+SOFTRST=1`: RED 10/12 lost, GREEN 12/12) and
+`flush_ctl_tb` row [4]. Detail: `docs/quant_matrix.md` §11 (§9–§10: the failed attempt).
 
-⏳ Next: hardware confirmation on the reporting disc — acceptance is **no fried frame at
-all**, sampled across the first ~500 ms after the menu appears.
+⏳ Next: hardware confirmation on the reporting disc — acceptance is **no fried frame and no
+garbage at all**, sampled across the first ~500 ms after the menu appears; a chapter skip
+must still hold its frame; an issue-#65 narration still must not replay its audio.
