@@ -176,6 +176,12 @@ assign VIDEO_ARY    = (analog_letterbox | analog_crop) ? 13'd3 : (ar_wide_eff | 
 // pal_eff: resolved PAL/50Hz flag (Auto-detected or forced via O[17:16]); assigned
 // near the decoder instance once core_vertical_size / pal_det_s2 exist.
 wire pal_eff;
+// DVD-FORK (native 240p, 2026-09-14): p240_eff = "the 15 kHz raster is the PROGRESSIVE
+// 262/312-line one" — SIF-height content (<=288 lines) on a raster that would otherwise
+// line-double it into 480i/576i. Assigned near the decoder instance beside pal_eff,
+// because it comes from the same debounced dvd/pal_detect.sv verdict. See docs/mpeg1.md
+// §B.3a for why this became buildable (PR #63 took the STC off the raster).
+wire p240_eff;
 // DVD-FORK (Video Output consolidation, 2026-09-02 — replaces the O[10:9]
 // "Interlaced Out" + O[27:26] "Analog Out" pair):
 // ONE output-mode choice, O[10:9] "Video Output" = Auto / Interlaced / Progressive.
@@ -308,7 +314,32 @@ wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
 // (analog_fields | (il_want & ~filmp_eff & ~analog_eff)) died with the Interlaced Out
 // option and the derive modes — Video Output consolidation, 2026-09-02.
 wire il_eff = interlaced_eff;
-assign VGA_F1       = il_eff ? core_v_pos[0] : 1'b0;   // 0 = TOP field (see above)
+// DVD-FORK (native 240p, 2026-09-14) — ★ il_eff CARRIES THREE MEANINGS AND ONLY ONE OF
+// THEM CHANGES AT 240p. Read as "the 15 kHz analog raster is up" it stays true (240p is a
+// sub-mode of it); read as "pixel repetition is on" it stays true (240p KEEPS pixrep — that
+// is what holds the line at 1716 dots / 15.734 kHz, and dropping it would give 31 kHz,
+// which is not 240p and no 15 kHz display will take); read as "the decoder emits interlaced
+// FIELDS" it becomes false. So only that third reading moves, and it moves here:
+//
+//   fields_eff  -> VGA_F1, HDMI_BOB_DEINT, sif_v2x_eff, crt_ov_map/spu_decode .interlaced,
+//                  and the modeline walk's interlaced/halfline/VERT_RES/deinterlace.
+//   il_eff      -> CE_PIXEL, ov_h_gen, sp_qx (the pixrep inverses) and every analog-only
+//                  nicety (SIF h-fill, Analog Aspect, csync_smpte.en) — all still correct.
+//
+// Splitting it this way is what keeps the change small: the two unchanged readings are the
+// majority of the ~15 consumers, and re-pointing them would be churn with a regression risk.
+wire fields_eff = interlaced_eff & ~p240_eff;
+// DVD-FORK (native 240p): the raster's ACTIVE HEIGHT, for everything that bottom-anchors
+// to it. transport_hud / seek_bar / idle_logo each used to derive `pal_mode ? 576 : 480`
+// privately; on the 240p raster that is 2x too tall and puts the status line, the seek bar
+// and the logo's bounce box off the bottom of the screen.
+// ⚠ idle_logo is NOT an idle-only consumer any more: logo_vis is
+// `saver_on_w || stopped_w || (!media_seen && ...)`, so the SCREENSAVER and STOP both show
+// the logo over a mounted, playing title -- i.e. over a SIF disc in 240p. Two ordinary,
+// reachable states, not just the boot screen.
+wire [11:0] act_h_eff = p240_eff ? (pal_eff ? 12'd288 : 12'd240)
+                                 : (pal_eff ? 12'd576 : 12'd480);
+assign VGA_F1       = fields_eff ? core_v_pos[0] : 1'b0;   // 0 = TOP field (see above); 240p has no field
 assign VGA_SL       = 0;
 // DVD-FORK (dual-raster analog output): VGA_SCALER is never forced any more —
 // sys_top ORs this into the ini bit (vga_scaler = cfg[2] | vga_force_scaler), so
@@ -328,7 +359,7 @@ assign HDMI_BLACKOUT    = 0;
 //        shimmer on static/film content, but combing on fast inter-field motion.
 //        Best for film (3:2-pulldown) DVDs; Bob is better for true-video DVDs.
 // Progressive mode (O9 off) emits no field flag, so this is forced 0 (don't-care).
-assign HDMI_BOB_DEINT   = il_eff & ~status[11];
+assign HDMI_BOB_DEINT   = fields_eff & ~status[11];   // 240p is progressive: nothing to deinterlace
 
 // DVD-FORK (interlaced overlay alignment, 2026-08-22): the interlaced raster uses
 // PIXEL REPETITION (rtl/mpeg2/syncgen_intf.v doubles every horizontal timing value,
@@ -2608,6 +2639,13 @@ wire [4:0] sp_track_eff  = (menu_sp_ctx | vm_owns_route | force_43_subp)
 // Declared here (above CLIP-LOAD FLUSH) so it precedes its use in load_flush/aud_flush.
 reg       il_eff_q = 1'b0;
 wire      il_switch = il_eff ^ il_eff_q;
+// DVD-FORK (native 240p): the same edge, for the raster's other shape. It rides
+// mode_realign alongside il_switch (see the instantiation) rather than flush_ctl.
+// ⚠ p240_eff is DEBOUNCED upstream in dvd/pal_detect.sv -- a ~0.5 s sustained
+// disagreement is required to change an established verdict -- which is what makes an
+// edge here safe to act on at all. Do not re-derive this from a raw size compare.
+reg       p240_eff_q = 1'b0;
+wire      p240_switch = p240_eff ^ p240_eff_q;
 // ⛔ FILM-RASTER SWITCH — ATTEMPTED AND REVERTED (2026-08-28). A filmp_eff XOR edge
 // briefly drove mode_switch here (full flush trio on a live film engage/disengage, to
 // fix the menu->film constant skew). ON HW IT BROKE T2's menu->Play logo chain: the
@@ -2635,8 +2673,8 @@ wire      il_switch = il_eff ^ il_eff_q;
 // FALLBACK (menus, a raw .m2v, no trustworthy playhead, or an unacknowledged seek), where
 // it behaves exactly as it always did.
 always @(posedge clk_sys) begin
-    if (~reset_n) il_eff_q <= 1'b0;
-    else          il_eff_q <= il_eff;
+    if (~reset_n) begin il_eff_q <= 1'b0; p240_eff_q <= 1'b0; end
+    else          begin il_eff_q <= il_eff; p240_eff_q <= p240_eff; end
 end
 
 // =========================================================================
@@ -2656,7 +2694,15 @@ mode_realign mode_realign_i (
     .clk             (clk_sys),
     .rst_n           (reset_n),         // NOT pipe_rst_n: the arm must survive its
                                         // own load_flush
-    .mode_edge       (il_switch),
+    // DVD-FORK (native 240p): a p240 engage/disengage changes the raster under live
+    // content exactly as an il_eff change does, so it takes the SAME route -- a reader
+    // seek to the playhead's own VOBU, whose seek_ack drives the flush trio, making the
+    // switch byte-identical to a chapter jump. ⛔ NEVER straight into flush_ctl: an
+    // in-place flush lands mid-VOBU with no GOP boundary to re-lock on (issue #42), and
+    // a content-derived edge doing that repeatedly is the reverted film-switch loop.
+    // Edges COALESCE here (mode_edge is an edge on a level), so even a pathological
+    // flap costs one re-align, not one per toggle.
+    .mode_edge       (il_switch | p240_switch),
     // in_title deliberately does NOT exclude in_title_menu (unlike scrub_ctrl): that
     // gate exists because the D-pad is contested there, and an OSD edit contests
     // nothing. Title content is streaming, so a re-align is both valid and wanted.
@@ -4010,8 +4056,14 @@ wire stc_tick_dec = stc_t2 ^ stc_t3;
 // Mode flags are levels that change at human speed; a 2-FF sync suffices.
 reg  pal_s1_dec, pal_dec_l;
 always @(posedge clk_dec) begin pal_s1_dec <= pal_eff; pal_dec_l <= pal_s1_dec; end
-wire [15:0] half_scan_dec = filmp_dec ? (pal_dec_l ? 16'd1800 : 16'd1877)
-                                      : (pal_dec_l ? 16'd900  : 16'd750);
+// DVD-FORK (native 240p): 262 lines x 63.556 us = 1498.6 ticks, half 749; PAL 312 lines
+// x 64 us = 1797.8, half 899. One off the interlaced values they sit beside, because the
+// progressive frame scan and the interlaced FIELD scan are very nearly the same duration.
+reg  p240_s1_dec, p240_dec_l;
+always @(posedge clk_dec) begin p240_s1_dec <= p240_eff; p240_dec_l <= p240_s1_dec; end
+wire [15:0] half_scan_dec = filmp_dec  ? (pal_dec_l ? 16'd1800 : 16'd1877)
+                          : p240_dec_l ? (pal_dec_l ? 16'd899  : 16'd749)
+                                       : (pal_dec_l ? 16'd900  : 16'd750);
 reg  sched_en_s1, sched_en_dec;
 always @(posedge clk_dec) begin sched_en_s1 <= ~av_freerun; sched_en_dec <= sched_en_s1; end
 
@@ -4164,12 +4216,19 @@ wire pal_out = pal_eff;      // resolved PAL flag: 720x576p @ 50 Hz (else NTSC 7
 // il_prev branch below IS the 15 kHz raster (pixrep + half-line), for HDMI and the
 // analog pins alike (docs/single_raster_analog.md).
 wire filmp_out = filmp_eff;  // Film 24p/25p: progressive-film raster (NTSC 875x1287 @ 23.976024, PAL 864x1250 @ 25.000; pal_prev picks the rate)
+// DVD-FORK (native 240p): the 262/312-line PROGRESSIVE 15 kHz raster for SIF content.
+// It is the il_prev branch with interlaced=0 -- same 858/864-dot line, same hsync, same
+// 244..247 / 292..295 vsync window, same per-field vertical_length -- so the only values
+// that differ are VERT_RES (syncgen no longer halves it for us), the half-line, the
+// interlaced bit and deinterlace. p240_prev is checked BEFORE il_prev at every step.
+wire p240_out = p240_eff;
 
 // CDC: 2-FF sync the (slow, static) toggles from clk_sys into clk_dec. The walk is
 // re-kicked whenever ANY of the interlace / PAL / film modes change (or once at boot).
 reg        il_s1, il_s2, il_prev, il_init;
 reg        pal_s1, pal_s2, pal_prev;
 reg        filmp_s1, filmp_s2, filmp_prev;
+reg        p240_s1, p240_s2, p240_prev;
 reg  [2:0] seq_step;       // 0..5 register-write walk
 reg        seq_run;        // sequencer active (reg_wr_en held high while running)
 
@@ -4177,7 +4236,11 @@ reg        seq_run;        // sequencer active (reg_wr_en held high while runnin
 //                       [3:1]source_select(0) [0]flush_vbuf(0).
 // Interlaced mode forces deinterlace=0 (resample must emit raw fields); both
 // modes keep persistence=1, repeat=0 — the regfile defaults.
-wire [10:0] trick_w = { il_prev ? 1'b0 : 1'b1, // [10] deinterlace
+// ⚠ 240p wants deinterlace=1 (the decoder emits FRAMES, like every other progressive
+// branch) even though il_prev is set -- p240 is a sub-mode of the 15 kHz raster, so
+// il_prev alone no longer answers "are we emitting fields". fields_prev does.
+wire        fields_prev = il_prev & ~p240_prev;
+wire [10:0] trick_w = { fields_prev ? 1'b0 : 1'b1, // [10] deinterlace
                         5'b00000,             // [9:5] repeat_frame = 0
                         1'b1,                 // [4]  persistence = on
                         3'b000,               // [3:1] source_select
@@ -4265,9 +4328,19 @@ always @(*) begin
                     // syncgen_intf). Per-field total 312 (vertical_length 311): 27 MHz /
                     // (1728 pixrep-dots x 312) = 50.06 fields/s (312.5 would be exact —
                     // 312 is the closer int; PAL analog is still unverified on HW).
+                    // ⚠⚠ DVD-FORK (native 240p): the p240 arms MUST be tested BEFORE the
+                    // il arms. p240_eff = interlaced_eff & sif, so p240_prev IMPLIES
+                    // il_prev -- put them after and the 576i/480i arm swallows them and
+                    // the raster silently stays line-doubled. VERT_RES is the ACTIVE
+                    // COUNT and syncgen only halves it when `interlaced`, so a
+                    // progressive raster must be told 240/288 directly; vertical_length
+                    // is UNCHANGED from the interlaced branch (261/311 = 262/312 lines),
+                    // which is exactly what makes this 60.055 / 50.06 Hz.
                     wr_data = (pal_prev && filmp_prev) ? {4'b0, 12'd576, 4'b0, 12'd1249}  // PAL 25p: vtotal 1250 => 25.000 Hz
+                            : (pal_prev && p240_prev)   ? {4'b0, 12'd288, 4'b0, 12'd311}   // PAL 288p: 312 lines => ~50.06 Hz
                             : (pal_prev && il_prev)     ? {4'b0, 12'd576, 4'b0, 12'd311}   // PAL 576i: 312 lines/field => ~50.06 Hz
                             : pal_prev    ? {4'b0, 12'd576, 4'b0, 12'd624}   // 625 lines/frame (576p @ 50 Hz)
+                            : p240_prev   ? {4'b0, 12'd240, 4'b0, 12'd261}   // NTSC 240p: 262 lines => 60.055 Hz
                             : il_prev     ? {4'b0, 12'd480, 4'b0, 12'd261}   // 262 lines/field
                             : filmp_prev  ? {4'b0, 12'd480, 4'b0, 12'd1286}  // NTSC 24p: 1287 lines/frame @ 875 dots => 23.976024 Hz EXACT
                                           : {4'b0, 12'd480, 4'b0, 12'd524}; end // 525 lines/frame (480p, strobe-fix VERT_RES=480)
@@ -4279,9 +4352,13 @@ always @(*) begin
                     // looks (docs/closed_captions.md). ⚠ HW round 2 reverted a one-line-earlier
                     // variant (243..246 / 291..294) that came with the hsync-anchored vsync
                     // reference — see rtl/mpeg2/syncgen.v vs_ref_dot.
-                    wr_data = (pal_prev && il_prev) ? {4'b0, 12'd292, 4'b0, 12'd295}   // PAL per-field vsync
+                    // DVD-FORK (native 240p): reuses the interlaced per-field window
+                    // unchanged (244..247 / 292..295). csync_smpte's VSS_N/VSS_P are
+                    // written against exactly these lines, so the nine-line block lands
+                    // in blanking on the 262/312-line raster with no new constants.
+                    wr_data = (pal_prev && (il_prev || p240_prev)) ? {4'b0, 12'd292, 4'b0, 12'd295}   // PAL per-field vsync
                             : pal_prev ? {4'b0, 12'd581, 4'b0, 12'd586}   // PAL per-frame vsync 581..586
-                            : il_prev  ? {4'b0, 12'd244, 4'b0, 12'd247}   // NTSC per-field vsync
+                            : (il_prev || p240_prev) ? {4'b0, 12'd244, 4'b0, 12'd247}   // NTSC per-field vsync
                                        : {4'b0, 12'd488, 4'b0, 12'd494}; end // per-frame vsync
         3'd4: begin wr_addr = REG_WR_VID_MODE;
                     // The N64 half-line on the MAIN raster: 429 NTSC / 432 PAL, doubled
@@ -4299,8 +4376,19 @@ always @(*) begin
                     // (dvd/resample_addrgen.v par_ins). Every combed capture had the
                     // corrector on; every clean one had it off, halfline 0 or 429.
                     // docs/single_raster_analog.md §3.9.
-                    wr_data = il_prev  ? {4'b0, (pal_prev ? 12'd432 : 12'd429), 13'b0, 3'b011}
-                                       : {4'b0, 12'd0,   13'b0, 3'b000}; end // progressive
+                    // ⚠⚠ DVD-FORK (native 240p): PIXEL REPETITION STAYS ON (VID_MODE
+                    // 3'b010 = {clip 0, pixrep 1, interlaced 0}). That is what holds the
+                    // line at 1716 dots = 15.734 kHz, the SAME line rate a CRT is already
+                    // locked to. Dropping pixrep here would give 858 dots = 31.5 kHz,
+                    // which is not 240p at all and no 15 kHz display will take it -- the
+                    // single most tempting wrong "simplification" in this branch.
+                    // halfline 0: console 240p is the 480i raster WITHOUT the half-line,
+                    // so both frames are line-aligned and syncgen's 262/263 alternation
+                    // (armed on `interlaced`) stops, giving a constant 262 = 60.055 Hz.
+                    // p240 is checked first for the same reason as step 2: it implies il.
+                    wr_data = p240_prev ? {4'b0, 12'd0,   13'b0, 3'b010}   // 240p/288p: pixrep, progressive, no half-line
+                            : il_prev   ? {4'b0, (pal_prev ? 12'd432 : 12'd429), 13'b0, 3'b011}
+                                        : {4'b0, 12'd0,   13'b0, 3'b000}; end // progressive
         default: begin wr_addr = REG_WR_TRICK;                          // 3'd5
                     wr_data = {21'b0, trick_w}; end
     endcase
@@ -4336,6 +4424,7 @@ always @(posedge clk_dec) begin
         il_s1 <= 1'b0; il_s2 <= 1'b0; il_prev <= 1'b0;
         pal_s1 <= 1'b0; pal_s2 <= 1'b0; pal_prev <= 1'b0;
         filmp_s1 <= 1'b0; filmp_s2 <= 1'b0; filmp_prev <= 1'b0;
+        p240_s1 <= 1'b0; p240_s2 <= 1'b0; p240_prev <= 1'b0;
         il_init <= 1'b0; seq_run <= 1'b0; seq_step <= 3'd0;
     end else begin
         il_s1  <= il_out;
@@ -4344,14 +4433,18 @@ always @(posedge clk_dec) begin
         pal_s2 <= pal_s1;                        // 2-FF sync
         filmp_s1 <= filmp_out;
         filmp_s2 <= filmp_s1;                    // 2-FF sync
+        p240_s1 <= p240_out;
+        p240_s2 <= p240_s1;                      // 2-FF sync
         if (seq_run) begin
             if (seq_step == 3'd5) seq_run <= 1'b0;
             seq_step <= seq_step + 3'd1;
         end else if (dec_ready &&
-                     (!il_init || (il_s2 != il_prev) || (pal_s2 != pal_prev) || (filmp_s2 != filmp_prev))) begin
+                     (!il_init || (il_s2 != il_prev) || (pal_s2 != pal_prev) || (filmp_s2 != filmp_prev)
+                                || (p240_s2 != p240_prev))) begin
             il_prev  <= il_s2;                   // latch the values being applied
             pal_prev <= pal_s2;
             filmp_prev <= filmp_s2;
+            p240_prev <= p240_s2;
             il_init  <= 1'b1;
             seq_run  <= 1'b1;                    // kick a 6-register write walk
             seq_step <= 3'd0;
@@ -4589,18 +4682,40 @@ always @(posedge clk_dec) begin
     mnt_arm_dec <= mnt_arm_s1;
 end
 wire        pal_detect_dec;
+// DVD-FORK (native 240p): the SIF-height verdict rides the SAME debounce, deliberately.
+// ⛔ Do NOT drive the raster from the raw sif_v_dec tap below. That tap is behind only a
+// `!= 0` guard, and a content-derived raster edge with no plausibility bound and no hold is
+// exactly the self-feeding loop the reverted film-switch attempt died of (see the
+// mode_switch comment above and docs/film_24p_plan.md §13): one garbage sequence header
+// flips the raster, the flush perturbs the parse the detector feeds on, and it flips again.
+// pal_detect already owns the bound, the sustained-disagreement hold and the mount re-arm.
+wire        sif_detect_dec;
 pal_detect pal_detect_i (
     .clk       (clk_dec),               // the domain vertical_size is parsed in
     .rst_n     (reset_n),
     .mount_arm (mnt_arm_dec),
     .vsize     (core_vertical_size),
-    .pal       (pal_detect_dec)
+    .pal       (pal_detect_dec),
+    .sif       (sif_detect_dec)
 );
 reg         pal_det_s1, pal_det_s2;
+reg         sif_det_s1, sif_det_s2;
 always @(posedge clk_sys or negedge reset_n) begin
-    if (!reset_n) begin pal_det_s1 <= 1'b0; pal_det_s2 <= 1'b0; end
-    else          begin pal_det_s1 <= pal_detect_dec; pal_det_s2 <= pal_det_s1; end
+    if (!reset_n) begin pal_det_s1 <= 1'b0; pal_det_s2 <= 1'b0;
+                        sif_det_s1 <= 1'b0; sif_det_s2 <= 1'b0; end
+    else          begin pal_det_s1 <= pal_detect_dec; pal_det_s2 <= pal_det_s1;
+                        sif_det_s1 <= sif_detect_dec; sif_det_s2 <= sif_det_s1; end
 end
+// ★ The engage condition is the debounced verdict AND the 15 kHz raster. It is deliberately
+// NOT user-selectable: a CONF_STR row would re-roll the pinned fitter SEED, and there is no
+// setting to make — 240-line content on a 240-line raster is 1:1, which is strictly better
+// than line-doubling it. On an HDMI-only rig interlaced_eff is 0, the fill never ran, and
+// ascal already receives the native 352x240 DE window, so nothing there changes either.
+// ⚠ mount_arm latches the first plausible header of a file IMMEDIATELY, so for a VCD the
+// verdict lands inside the mount flush window, before video_live — i.e. in practice there
+// is no mid-title raster switch at all. The mode_realign path below covers the case where
+// one happens anyway.
+assign p240_eff = interlaced_eff & sif_det_s2;
 // pal_eff: resolved PAL flag (clk_sys). O[17:16] = 0 Auto / 1 NTSC / 2 PAL.
 // Auto follows the detected frame height; NTSC/PAL force the choice.
 assign pal_eff = (status[17:16] == 2'b10) ? 1'b1 :        // force PAL
@@ -4642,7 +4757,13 @@ end
 // window + ascal's polyphase scale (HW-proven for MPEG-1); the fill exists because the
 // analog chain (direct video off the main raster) needs a true 720-wide raster line.
 wire sif_hfill_eff = interlaced_eff & sif_h_s2;   // horizontal 352->720 stretch
-wire sif_v2x_eff   = interlaced_eff & sif_v_s2;   // vertical 2x line repeat (240->480 / 288->576)
+// ★ THE 240p CHANGE, IN ONE TERM. The horizontal fill STAYS (disp_hstretch is a true 2-tap
+// linear resampler, and a CRT needs the full line width regardless of how tall the raster
+// is); the vertical line repeat GOES, because on a 240-line raster the decoded 240 lines
+// map 1:1 and there is nothing to double. That nearest-neighbour doubling is the whole of
+// the reported chunkiness. With it off, crt_ov_map's v2x inverse is gated off by the same
+// signal and returns to pass-through, which is correct for a 1:1 raster.
+wire sif_v2x_eff   = interlaced_eff & sif_v_s2 & ~p240_eff;
 // DVD-FORK FIX (SIF analog fill): decoded height, 2-FF synced (hsz_s2 pattern) — feeds
 // crt_ov_map's v2x inverse clamp (v_src_max = vertical_size-1).
 reg  [13:0] vsz_s1, vsz_s2;
@@ -5294,7 +5415,7 @@ crt_ov_map crt_ov_map_inst (
     .rst_n        (reset_n),
     .letterbox_en (analog_letterbox & sp_map_en), // DVD-FORK FIX (subtitle sawtooth): raw in pure-subtitle context
     .crop_en      ((analog_crop & sp_map_en) | sif_hfill_eff), // DVD-FORK FIX (SIF analog fill): SIF drives the same inverse (x0=0)
-    .interlaced   (il_eff),                // interlaced raster: v_pos = absolute frame line, +2/field-line
+    .interlaced   (fields_eff),            // interlaced raster: v_pos = absolute frame line, +2/field-line (240p: progressive, +1)
     .v2x_en       (sif_v2x_eff),           // DVD-FORK FIX (SIF analog fill): invert the addrgen 2x line repeat
     .v_src_max    ((vsz_s2 == 14'd0) ? 12'hfff : (vsz_s2[11:0] - 12'd1)), // decoded height - 1 (239/287)
     .v_bar        (pal_eff ? 12'd72 : 12'd60),   // mixer disp_v_offset (vertical_size/8)
@@ -5323,7 +5444,7 @@ spu_decode spu_decode_inst (
     // the highlight subpicture leads the displayed frame by the VBUF depth, same as
     // a menu-domain menu, so the STC window would gate it out.
     .menu_mode  ((menus_on && menu_active) || sp_menu_early || force_43_subp),
-    .interlaced (il_eff),                  // interlaced raster: v_pos = absolute frame line, +2/field-line
+    .interlaced (fields_eff),              // interlaced raster: v_pos = absolute frame line, +2/field-line (240p: progressive, +1)
     .sp_byte        (ps_sp_byte),
     .sp_valid       (ps_sp_valid),
     .sp_frame_start (ps_sp_frame_start),
@@ -5686,6 +5807,7 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .h_pos        (ov_h_gen),
     .v_pos        (core_v_pos),
     .pal_mode     (pal_eff),
+    .act_h_i      (act_h_eff),
     .menu_active  (menus_on && menu_active),
     .dbg_mode     (hud_dbg),                // O[2]: show reader PGCN/VTS, always visible
     .pause_q      (pause_q),
@@ -5780,6 +5902,7 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .h_pos      (ov_h_gen),
     .v_pos      (core_v_pos),
     .pal_mode   (pal_eff),
+    .act_h_i    (act_h_eff),
     .bar_active (bar_active_w),
     .base_rbn   (bar_base_rbn_w),
     .tgt_rbn    (bar_tgt_rbn_w),
@@ -5863,6 +5986,7 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .h_pos          (ov_h_gen),
     .v_pos          (core_v_pos),
     .pal_mode       (pal_eff),
+    .act_h_i        (act_h_eff),
     .il_mode        (il_eff),
     .frame_tick     (av_refresh_tick),
     .vis            (logo_vis),
@@ -6167,7 +6291,12 @@ cc_vbi cc_vbi_inst (
     // THE STC IS A CLOCK: captions drain on display pickups, not raster fields
     .dec_credit_valid (core_cc_credit_valid),
     .dec_credit       (core_cc_credit),
-    .enable         (interlaced_eff & ~status[14]),
+    // DVD-FORK (native 240p): OFF on the progressive raster. cc_vbi is hardcoded against
+    // the interlaced v_pos packing (line 261 via v_pos[11:1], field via v_pos[0]) and
+    // line 21 is a FIELD-1 service; SIF/VCD content carries no line-21 captions anyway.
+    // It is naturally inert there (v_pos[11:1]==261 needs v_pos>=522, unreachable on a
+    // 262-line raster) -- gated explicitly so that is a decision, not an accident.
+    .enable         (fields_eff & ~status[14]),
     .test           (status[44]),
     .flush          (load_flush),
     .pal            (pal_eff),
@@ -6199,7 +6328,12 @@ csync_smpte csync_smpte_inst (
     .clk    (clk_sys),
     .rst_n  (reset_n),
     .mode   (status[46]),
+    // DVD-FORK (native 240p): `en` is the 15 kHz RASTER, which is now either shape; the
+    // 480p/film progressive rasters still take the framework module (a nine-line block is
+    // meaningless at 31 kHz). `prog` tells the generator to read v_pos as a plain line
+    // index and to stop offsetting the block by half a line.
     .en     (interlaced_eff),
+    .prog   (p240_eff),
     .pal    (pal_eff),
     .h_sync (core_h_sync),
     .v_pos  (core_v_pos),

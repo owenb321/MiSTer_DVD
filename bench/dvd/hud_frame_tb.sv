@@ -29,9 +29,17 @@ module hud_frame_tb;
     wire [7:0]  hud_r, hud_g, hud_b;
     wire [3:0]  hud_alpha;
 
+
+    // DVD-FORK (native 240p, 2026-09-14): the raster's active height is now an INPUT.
+    // Defaults to the standard so every pre-existing arm is bit-identical; +act_h=N
+    // drives the 240p/288p arm, where the module must bottom-anchor to 240/288 instead.
+    integer     act_h_arg = 0;
+    initial     void'($value$plusargs("act_h=%d", act_h_arg));
+    wire [11:0] act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0]
+                                            : (1'b0 ? 12'd576 : 12'd480);
     transport_hud #(.HUD_QX_ADJ(ADJ)) dut (
         .clk(clk), .rst_n(rst_n),
-        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0),
+        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0), .act_h_i(act_h_tb),
         .menu_active(1'b0), .pause_q(1'b0), .bar_active(1'b0),
         .scrub_held(1'b0), .scrub_dir(1'b0), .scrub_tier(2'd0),
         .display_edge(display_edge), .load_evt(1'b0), .show_evt(1'b0),

@@ -48,6 +48,12 @@ module transport_hud #(
     input  wire [11:0] h_pos,
     input  wire [11:0] v_pos,
     input  wire        pal_mode,            // 1 = 576-line active region
+    // DVD-FORK (native 240p, 2026-09-14): the raster's ACTIVE HEIGHT, supplied rather
+    // than derived. It was `pal_mode ? 576 : 480`, which is wrong on the 240p/288p
+    // raster SIF content now gets -- everything anchored to it would sit off the
+    // bottom of the screen. emu.sv owns the value; pal_mode is still used for the
+    // things that really are per-STANDARD rather than per-raster.
+    input  wire [11:0] act_h_i,
 
     // visibility state / events
     input  wire        menu_active,         // suppress the HUD in menus
@@ -171,7 +177,7 @@ module transport_hud #(
     //   popup  activeH-112 .. -81
     //   bar    activeH-78  .. -69
     //   status activeH-64  .. -33
-    wire [11:0] act_h = (pal_mode ? 12'd576 : 12'd480);
+    wire [11:0] act_h = act_h_i;
     wire [11:0] y0    = act_h - 12'd64;     // status row top
     wire [11:0] y0p   = act_h - 12'd112;    // popup row top
 

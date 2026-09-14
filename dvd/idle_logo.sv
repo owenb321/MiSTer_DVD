@@ -78,6 +78,12 @@ module idle_logo #(
     input  wire [11:0] h_pos,             // ov_h_gen (interlace-x2-inverse x)
     input  wire [11:0] v_pos,             // core_v_pos
     input  wire        pal_mode,          // pal_eff: 576-line active area
+    // DVD-FORK (native 240p, 2026-09-14): the raster's ACTIVE HEIGHT, supplied rather
+    // than derived. It was `pal_mode ? 576 : 480`, which is wrong on the 240p/288p
+    // raster SIF content now gets -- everything anchored to it would sit off the
+    // bottom of the screen. emu.sv owns the value; pal_mode is still used for the
+    // things that really are per-STANDARD rather than per-raster.
+    input  wire [11:0] act_h_i,
     input  wire        il_mode,           // il_eff: frame_tick is per-field
     input  wire        frame_tick,        // av_refresh_tick (one per v_sync)
     input  wire        vis,               // emu's logo_vis gate
@@ -236,7 +242,7 @@ localparam [3:0] SPY_DEF = 4'd9;       // ~34 px/s: traverse ~12 s
 wire [11:0] w2 = u_scale1x ? {3'd0, u_w} : {2'd0, u_w, 1'b0};
 wire [11:0] h2 = u_scale1x ? {5'd0, u_h} : {4'd0, u_h, 1'b0};
 wire [11:0] x_hi = 12'd720 - w2;
-wire [11:0] y_hi = (pal_mode ? 12'd576 : 12'd480) - h2;
+wire [11:0] y_hi = act_h_i - h2;
 
 wire [3:0] spx_eff_def = (u_spd == 8'd0) ? SPX_DEF : u_spd[3:0];
 wire [3:0] spy_eff_def = (u_spd == 8'd0) ? SPY_DEF : u_spd[7:4];
@@ -264,7 +270,10 @@ wire hit_y  = hit_y0 | hit_y1;
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         pxq <= {12'd100, 4'd0};        // safe for any logo (100+2*128<=720)
-        pyq <= {12'd80,  4'd0};        // (80+2*32<=480)
+        pyq <= {12'd80,  4'd0};        // (80+2*32<=480, and <=240: the 240p raster's
+                                       //  y_hi bottoms out at 240-128 = 112 > 80, so
+                                       //  the reset position is inside the box there too
+                                       //  and y_hi cannot underflow -- act_h_i >= 240)
         vxn <= 1'b0; vyn <= 1'b0;
         spx <= SPX_DEF; spy <= SPY_DEF;
         cidx <= 3'd0;

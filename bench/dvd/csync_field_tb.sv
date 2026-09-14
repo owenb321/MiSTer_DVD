@@ -130,7 +130,12 @@ module csync_field_tb;
   // rather than one a user can no longer select.
   csync_smpte gen_i (
     .clk(clk), .rst_n(rst),
-    .mode(arm[0]), .en(arm != 2), .pal(pal != 0),
+    // .prog is tied 0: this bench is the INTERLACED gate end to end (its field A/B
+    // model, FIELD/FRAME constants and [G5]/[G8] all presuppose two fields). The
+    // progressive 240p arm lives in bench/dvd/csync_p240_tb.sv rather than here, so
+    // that these HW-proven checks keep running on exactly the raster they were
+    // written against.
+    .mode(arm[0]), .en(arm != 2), .prog(1'b0), .pal(pal != 0),
     .h_sync(h_sync), .v_pos(v_pos),
     .cs(cs_gen), .cs_en(cs_gen_en));
 

@@ -56,6 +56,12 @@ module seek_bar #(
     input  wire [11:0] h_pos,
     input  wire [11:0] v_pos,
     input  wire        pal_mode,
+    // DVD-FORK (native 240p, 2026-09-14): the raster's ACTIVE HEIGHT, supplied rather
+    // than derived. It was `pal_mode ? 576 : 480`, which is wrong on the 240p/288p
+    // raster SIF content now gets -- everything anchored to it would sit off the
+    // bottom of the screen. emu.sv owns the value; pal_mode is still used for the
+    // things that really are per-STANDARD rather than per-raster.
+    input  wire [11:0] act_h_i,
 
     // scrub state (dvd/scrub_ctrl.sv)
     input  wire        bar_active,
@@ -97,7 +103,7 @@ module seek_bar #(
     localparam [11:0] BAR_W = 12'd512;
     localparam [11:0] BAR_H = 12'd10;
     // between the popup row (activeH-112..-81) and the status row (-64..-33)
-    wire [11:0] y0 = (pal_mode ? 12'd576 : 12'd480) - 12'd78;
+    wire [11:0] y0 = act_h_i - 12'd78;
 
     // ---- visibility ---------------------------------------------------------
     reg [26:0] pop_tmr;
