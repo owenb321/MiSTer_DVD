@@ -141,7 +141,7 @@ def main():
     ap.add_argument('--cut-a-frac', type=float, default=0.30)
     ap.add_argument('--sectors-a', type=int, default=400)
     ap.add_argument('--still-index', type=int, default=0)
-    ap.add_argument('--pics-a', type=int, default=4,
+    ap.add_argument('--pics-a', type=int, default=2,
                     help='keep only the first N pictures of cut A (default 8). '
                          'The bench arms its flush a few pictures in, so a long '
                          'cut A is pure simulation time.')

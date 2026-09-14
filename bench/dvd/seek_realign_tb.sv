@@ -417,12 +417,28 @@ module seek_realign_tb;
         $display("FAIL: only %0d post-flush anchors decoded (need >= 2) - the run never reached the point where the references are re-established", anchors_b);
         errors = errors + 1;
       end
-      /* Tagging trustworthiness. getbits keeps a 129-bit window, so up to 16
-       * bytes of cut A survive the jump and are consumed as the truncated
-       * picture's payload -- which is also why cut B's own sequence header is
-       * usually eaten and NOT re-parsed (sequence_header_seen is already set
-       * from cut A). The property that does establish trust is the count: one
-       * leaked cut-A picture header would make this 15, not 14. */
+      /* Tagging trustworthiness. This bench ties getbits_fifo's rst to `rst`,
+       * which was mpeg2video's wiring when it was written.
+       *
+       * ⚠ AMENDED 2026-09-13 (docs/quant_matrix.md). The paragraph here used to
+       * say that "cut B's own sequence header is usually eaten and NOT
+       * re-parsed" because getbits keeps a 129-bit window across the jump. That
+       * was an accurate description of A DEFECT, written down as if it were a
+       * property: eating the landing's sequence header also eats the quantiser
+       * matrix that header downloads, which is what made menu stills come up
+       * "deep fried". mpeg2video now resets getbits_fifo on vbuf_rst and vld.v
+       * forces a start-code hunt at a flush, so on the real core the landing's
+       * sequence header IS re-parsed.
+       *
+       * This bench deliberately keeps the old wiring -- it measures reference
+       * re-alignment, not header recovery, and changing its feed model would
+       * move numbers that are pinned here for a different reason. Consequently
+       * it does NOT regression-test the getbits_fifo reset change; the suite
+       * that does is bench/dvd/run_pts_assoc.sh, whose bitpos accounting is
+       * counted from exactly that flush.
+       *
+       * The property that establishes trust is the count: one leaked cut-A
+       * picture header would make this 15, not 14. */
       if (!field_b && (hdr_b != pics_b)) begin
         $display("FAIL: %0d post-flush frame headers, but the fixture says cut B has %0d pictures - a cut-A header leaked into the post-flush tag", hdr_b, pics_b);
         errors = errors + 1;

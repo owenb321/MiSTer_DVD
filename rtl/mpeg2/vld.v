@@ -303,6 +303,10 @@ module vld(clk, clk_en, rst,
    * ~192 clk_dec-cycle LEVEL (dvd/flush_ctl.sv issues ~64 clk_sys cycles; the
    * 2-FF CDC into clk_dec is in dvd/emu.sv). Level, not pulse — see the arm. */
   input            vbuf_flush;
+  /* DVD-FORK FIX (quantiser matrix lost at a flush; docs/quant_matrix.md).
+   * Declared here rather than beside its always block: the line-21 CC snoop
+   * further up the file reads it too. Full rationale at the state register. */
+  reg              flush_resync;
 
   /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"). The exact
    * parse position (getbits_fifo.bitpos) latched at every picture header, so the
@@ -1146,6 +1150,16 @@ module vld(clk, clk_en, rst,
       cc_pair_valid <= 1'b0;
       cc_pair       <= 16'd0;
       cc_pair_field <= 1'b0;
+    end else if (clk_en && flush_resync) begin
+      /* DVD-FORK FIX (quant matrix): ⚠ this snoop walks user_data bytes for as
+       * long as the FSM stays in STATE_NEXT_START_CODE -- which the flush
+       * resync now PINS it at. A flush landing mid-user_data would otherwise
+       * keep sniffing across the junction and could synthesise a caption pair
+       * out of two unrelated streams. A flush IS a discontinuity mid-user_data. */
+      cc_pair_valid <= 1'b0;
+      ud_active     <= 1'b0;
+      ud_hit        <= 2'd0;
+      ud_sig        <= 4'd0;
     end else if (clk_en) begin
       cc_pair_valid <= 1'b0;                      // default: single-cycle pulse
       if (state == STATE_START_CODE) begin
@@ -1320,10 +1334,52 @@ module vld(clk, clk_en, rst,
   assign wait_state = ((next_align != 1'b0) || (next_advance != 4'b0));
 
   /* state */
-  
+
+  /* DVD-FORK FIX (quantiser matrix lost at a flush; docs/quant_matrix.md).
+   *
+   * The state machine below used to reset ONLY on `rst`. A vbuf_flush therefore
+   * left the vld wherever it was -- mid-slice, mid-macroblock -- and
+   * mpeg2video holds the VBUF in reset for the whole flush level, so it starved
+   * there and then RESUMED IN THAT STALE STATE when the landing stream arrived.
+   * The landing's leading bytes were consumed as if they were the old picture's
+   * coefficients, which routinely swallowed 00 00 01 B3 and the 64+64-byte
+   * quantiser matrix download behind it. iquant.v then keeps default_values=1
+   * (it clears only on a write to address 0x3F, so a partial download is
+   * discarded WHOLE) and the picture is dequantised with the MPEG defaults:
+   * on a menu still authored with a flat matrix that is every AC coefficient
+   * 4x to 20.75x too large -- a "deep fried" picture.
+   *
+   * Only STILLS showed it. A moving title re-sends a sequence header every GOP,
+   * so a lost download self-heals within half a second; a menu still is
+   * SEQ GOP PIC:I SEQ_END and holds ONE sequence header on screen indefinitely.
+   *
+   * ★ UNGATED BY clk_en, like the ra_active arm above and for the same reason:
+   * motcomp.v freezes the vld at every picture header until picbuf's display
+   * handshake -- up to a whole display frame -- while the flush level is ~192
+   * clk_dec cycles. A clk_en-gated capture would miss it routinely, not rarely.
+   * Set beats clear, so the sticky survives both the level and any freeze.
+   *
+   * ⛔ The sequence/picture `*_seen` flags are deliberately NOT cleared here.
+   * Clearing sequence_header_seen would refuse the landing's own picture start
+   * code (:809) and every slice (:842) -- a BLACK menu, strictly worse than a
+   * fried one. Clearing sequence_extension_seen is worse still: `mpeg1` latches
+   * ~sequence_extension_seen at the next picture start code (:1372), and a
+   * false MPEG-1 verdict forces intra_dc_precision to 0 (:1536), which shifts
+   * the intra DC by 3 instead of 1 = 4x on every DC coefficient. Neither needs
+   * clearing anyway -- sequence_extension_seen is re-armed at every
+   * STATE_SEQUENCE_HEADER (:1356), and with the state forced the landing's own
+   * sequence header is now PARSED rather than eaten, which is the whole point.
+   * The seen-flags were always self-healing; the FSM position was not.
+   */
+  always @(posedge clk)
+    if (~rst)        flush_resync <= 1'b0;
+    else if (vbuf_flush) flush_resync <= 1'b1;             // ★ ungated: see above
+    else if (clk_en) flush_resync <= 1'b0;
+    else             flush_resync <= flush_resync;
+
   always @(posedge clk)
     if(~rst) state <= STATE_NEXT_START_CODE;
-    else if (clk_en) state <= next;
+    else if (clk_en) state <= flush_resync ? STATE_NEXT_START_CODE : next;
     else state <= state;
 
   always @(posedge clk)
@@ -1381,11 +1437,20 @@ module vld(clk, clk_en, rst,
    * its loadreg latches at STATE_PICTURE_HEADER. Self-clears at the next picture. */
   always @(posedge clk)
     if (~rst) skip_d_picture <= 1'b0;
+    /* DVD-FORK FIX (quant matrix): same routing hazard, MPEG-1 D-picture path. */
+    else if (clk_en && flush_resync) skip_d_picture <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_HEADER0)) skip_d_picture <= mpeg1 && (picture_coding_type == D_TYPE);
     else skip_d_picture <= skip_d_picture;
 
   always @(posedge clk)
     if (~rst) picture_header_seen <= 1'b0;
+    /* DVD-FORK FIX (quant matrix): the only flag whose stale value admits a
+     * slice into a STALE picture header across the junction -- it otherwise
+     * clears only at STATE_SEQUENCE_END, which a seek never produces. Safe to
+     * clear: a landing begins SEQ/GOP/PIC, so its own picture header re-sets
+     * this before its first slice, and `mpeg1` (:1372) does not read it.
+     * Gate: bench/dvd/run_seek_realign.sh must pass with its numbers unmoved. */
+    else if (clk_en && flush_resync) picture_header_seen <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_HEADER)) picture_header_seen <= 1'b1;
     else if (clk_en && (state == STATE_SEQUENCE_END)) picture_header_seen <= 1'b0;
     else picture_header_seen <= picture_header_seen;
@@ -2424,6 +2489,11 @@ module vld(clk, clk_en, rst,
    * skipped that would have displayed). */
   always @(posedge clk)
     if (~rst) drop_this_picture <= 1'b0;
+    /* DVD-FORK FIX (quant matrix): a stale drop verdict routes the LANDING's
+     * slice start codes to STATE_NEXT_START_CODE, i.e. it would skip the
+     * picture we just re-synced to. Inert for issue #45: the same vbuf_flush
+     * sets ra_active, which re-latches this at the next picture header. */
+    else if (clk_en && flush_resync) drop_this_picture <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_HEADER)) drop_this_picture <= drop_now_comb || realign_now_comb;
     else drop_this_picture <= drop_this_picture;
 
@@ -2437,6 +2507,9 @@ module vld(clk, clk_en, rst,
    * reasons); only the ack keys on this. */
   always @(posedge clk)
     if (~rst) drop_gov_picture <= 1'b0;
+    /* ...and its ledger twin, or a post-flush drop_pic_ack pays a credit into
+     * frame_drop_ctl for a picture the governor never asked to drop. */
+    else if (clk_en && flush_resync) drop_gov_picture <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_HEADER)) drop_gov_picture <= drop_now_comb;
     else drop_gov_picture <= drop_gov_picture;
 

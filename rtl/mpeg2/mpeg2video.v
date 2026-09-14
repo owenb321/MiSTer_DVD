@@ -1017,10 +1017,24 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire [31:0] pic_hdr_bitpos;
   wire        skip_ack, skip_rff, skip_field, skip_tff, skip_pf;
 
+  /* DVD-FORK FIX (quantiser matrix lost at a flush; docs/quant_matrix.md).
+   * ★ rst was sync_rst, so a VBUF flush discarded the buffered bitstream but
+   * left this module's 129-bit window holding up to 16 bytes of the stream that
+   * had just been thrown away -- while pos_clr(~vbuf_rst) below was ALREADY
+   * clearing the position counter at the same flush, so content and position
+   * disagreed. The parser then matched a phantom start code inside that residue,
+   * dispatched on it, left itself BIT-MISALIGNED, and walked straight past the
+   * landing's real 00 00 01 B3 -- losing the sequence header and, with it, the
+   * quantiser matrix that header downloads.
+   * MEASURED (bench/dvd/quant_matrix_tb.sv, sweeping the flush across the
+   * parse): vld.v's flush_resync alone recovers 9 of 10 positions; the one it
+   * cannot is the flush landing at a picture header, and this closes it. The
+   * two changes are both necessary -- one resets the parser, this one stops it
+   * being handed a dead stream to parse. */
   getbits_fifo getbits_fifo (
     .clk(clk), 
     .clk_en(1'b1), 
-    .rst(sync_rst), 
+    .rst(vbuf_rst), 
     .vid_in(vbr_rd_dta),                                     // from vbuf_read_fifo
     .vid_in_rd_en(vbr_rd_en),                                // to vbuf_read_fifo
     .vid_in_rd_valid(vbr_rd_valid),                          // from vbuf_read_fifo
