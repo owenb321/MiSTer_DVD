@@ -855,6 +855,25 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .syncrst(vbuf_rst)
     );
 
+  /* DVD-FORK FIX (quantiser matrix lost at a flush; docs/quant_matrix.md).
+   * The bit window is flushed WITH the VBUF -- but built on sync_rst, not on the
+   * raw rst that vbuf_rst uses, so getbits_fifo keeps every reset it already had
+   * (reset.v's cascade, the WATCHDOG, and the mount soft reset) and merely GAINS
+   * the flush. That is what bench/dvd/quant_matrix_tb.sv models and verified.
+   *
+   * ⚠⚠ It is a REGISTERED reset of its own, NOT `sync_rst && vbuf_rst` at the
+   * port. Writing the bare AND is correct logically and costs 7 MHz: it puts a
+   * combinational net on the reset of a large module, which cannot be routed on
+   * the low-skew resources a reset tree wants. MEASURED: the AND form fitted at
+   * clk_dec 88.69/85.46 and FAILED the 86.0 gate, where the same design with
+   * this registered form closes with margin. Combine BEFORE the sync_reset. */
+  wire       getbits_rst;
+  sync_reset sync_getbits_reset (
+    .clk(clk),
+    .asyncrst(sync_rst && ~flush_vbuf_eff),
+    .syncrst(getbits_rst)
+    );
+
   /* write elementary stream to circular buffer */
   vbuf_write vbuf_write (
     .clk(clk),
@@ -1032,22 +1051,15 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * two changes are both necessary -- one resets the parser, this one stops it
    * being handed a dead stream to parse.
    *
-   * ⚠⚠ IT MUST BE `sync_rst && vbuf_rst`, NOT `vbuf_rst` ALONE. Shipping the
-   * single term was a REGRESSION (purple/green garbage on ~1 boot in 3,
-   * persisting through chapter skips), because vbuf_rst is ONE sync_reset stage
-   * off the RAW rst input while sync_rst is reset.v's cascaded chain -- and
-   * sync_rst is also the ONLY carrier of watchdog_rst and the mount soft reset.
-   * Using vbuf_rst alone therefore (a) let this module leave reset EARLIER than
-   * the vld/rld/framestore at power-up, and (b) silently removed the bit window
-   * from the watchdog reset and the mount soft reset. AND-ing the two keeps
-   * every reset this module already had and merely ADDS the flush -- which is
-   * what bench/dvd/quant_matrix_tb.sv models (`rst && ~flush_lvl`) and what its
-   * 12/12 sweep actually verified. The bench could not catch the discrepancy
-   * because the bench had it right and the RTL did not. */
+   * ⚠⚠ Reset by `getbits_rst` (declared above), NOT by vbuf_rst. Shipping
+   * vbuf_rst alone was a REGRESSION -- it is one sync_reset stage off the RAW
+   * rst, so it let this module leave reset EARLIER than the vld/rld/framestore
+   * at power-up AND silently dropped the bit window from the watchdog reset and
+   * the mount soft reset, both of which only sync_rst carries. */
   getbits_fifo getbits_fifo (
     .clk(clk), 
     .clk_en(1'b1), 
-    .rst(sync_rst && vbuf_rst), 
+    .rst(getbits_rst), 
     .vid_in(vbr_rd_dta),                                     // from vbuf_read_fifo
     .vid_in_rd_en(vbr_rd_en),                                // to vbuf_read_fifo
     .vid_in_rd_valid(vbr_rd_valid),                          // from vbuf_read_fifo
