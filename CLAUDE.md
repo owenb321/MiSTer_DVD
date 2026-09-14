@@ -271,10 +271,15 @@ worse maintenance burden than targeted in-place edits. So:
   GEOMETRY** — fitted, not assumed, and matching the `xoff -9` the harness's HUD
   decoder reports independently. An unfitted first pass read a constant −10 on 18 of
   19 notches and looked exactly like a systematic placement error.
-  ⚠ **NOT tested: the gamepad HOLD-to-scrub gesture** — `kbd_map.sv` deliberately
-  masks `kbd_joy[14:13]` out of `joy_eff` and routes keyboard FF/REW to `dpad_seek`,
-  so the round exercised `scrub_ctrl`'s JUMP port. Same `target` clamp (the thing
-  under test), different gesture. Field report on
+  ✅ **The gamepad HOLD-to-scrub gesture is CONFIRMED (maintainer, 2026-09-14).**
+  ★ It is the one arm the harness STRUCTURALLY cannot reach — `kbd_map.sv`
+  deliberately masks `kbd_joy[14:13]` out of `joy_eff` and routes keyboard FF/REW to
+  `dpad_seek`, so every harness measurement went through `scrub_ctrl`'s JUMP port
+  instead: same `target` clamp, different gesture. ⚠ It also retires the open
+  burst-size question (≈1 harness burst in 3 moved ~+9 s not ~+87 s, attributed to
+  taps falling outside the ~400 ms coalescing window over ssh): a HELD gesture does
+  not coalesce at all, so a clean hold is exactly the control that attribution
+  wanted. Field report on
   `A_MILLION_WAYS_TO_DIE_IN_THE_WEST` (physical disc AND the decrypted ISO): *"any
   forward seeking will jump all the way to the end of the movie. The chapter markers
   are missing and the hud bar is solid gray."*

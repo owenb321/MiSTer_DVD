@@ -2197,14 +2197,16 @@ absence of evidence. ⚠ Roughly one capture in four does not get written at a
 0.6 s spacing — the shot writer needs longer — so read a missing sample as
 missing, not as clean.
 
-⚠ **Still NOT exercised by the harness: the gamepad HOLD-to-scrub gesture.**
-`kbd_map.sv` routes keyboard Fast Fwd/Rewind to `dpad_seek`, so every
-measurement here goes through `scrub_ctrl`'s JUMP port. Same `target` clamp,
-different gesture. ⚠ And roughly one 8-tap burst in three moves ~+9 s instead of
-~+87 s; single taps measure ~+15 s each and a full burst ~+87 s ≈ 6 taps, so
-burst size tracks how many taps land inside the ~400 ms coalescing window —
-ssh timing, not position, and it never lands at the beginning. Unproven, and the
-gamepad settles it.
+✅ **The gamepad HOLD-to-scrub gesture is CONFIRMED too (maintainer, 2026-09-14:
+"hold to scrub works fine").** That was the one arm the harness structurally
+cannot reach — `kbd_map.sv` routes keyboard Fast Fwd/Rewind to `dpad_seek`, so
+every measurement above goes through `scrub_ctrl`'s JUMP port instead. Same
+`target` clamp, different gesture, and it needed a person with a pad.
+⚠ It also retires the open question about burst size: roughly one 8-tap harness
+burst in three moved ~+9 s rather than ~+87 s, which was attributed to taps
+landing outside the ~400 ms coalescing window over ssh rather than to the core.
+A held gesture does not coalesce at all, so a clean hold is the control that
+attribution wanted.
 
 #### ⛔ Non-goals — do not re-derive these
 
