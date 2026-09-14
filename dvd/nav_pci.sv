@@ -147,6 +147,18 @@ module nav_pci #(
     // remembered button is selected when the menu re-arms).
     input  wire        sel_force,
     input  wire  [5:0] sel_force_btn,
+    // DVD-FORK FIX (2026-09-14): the VM's HL_BTNN (SPRM8 button number), which
+    // lives on the HARD reset and so survives the pipe reset this module sits on.
+    // The selection is re-seeded from it in the first cycle after rst_n releases.
+    // Why: a link's button field (`LinkCN 26 (button 16)`) arrives as sel_force
+    // in the SAME cycle as the seek that carries it; the seek's load_flush then
+    // resets this module and the stored button went back to 1 -- the disc's
+    // "re-park the cursor on the tile you fell from" came out as "upper-left
+    // tile, every time" (Scooby-Doo 2, Wickles Manor). libdvdnav never clears
+    // HL_BTNN_REG on a jump, and discs are authored against that: this disc
+    // writes `(button 1)` explicitly on the links where it WANTS a reset.
+    // 0 = no VM value (legacy / nav_pci_tb default): the reset default 1 stands.
+    input  wire  [5:0] hl_btnn,
 
     // NUMPAD select+activate (keyboard digit key = DVD-remote number shortcut):
     // a 1-cycle pulse forces the selection to `num_btn` (1-based) AND activates it
@@ -234,6 +246,7 @@ reg [2:0]  f_g1ty, f_g2ty, f_g3ty;   // btngrX_dsp_ty (bit0 wide, bit1 LB, bit2 
 reg        nxt_v;
 reg [1:0]  nxt_bank;
 reg [1:0]  nxt_ss;
+reg        seeded;       // btn_sel re-seeded from hl_btnn since the last reset
 reg [31:0] nxt_sptm;
 reg        nxt_pre;       // commit happened before its s_ptm (crossing-only schedule gate)
 reg [5:0]  nxt_btn_ns, nxt_fosl, nxt_foac;
@@ -428,6 +441,7 @@ always @(posedge clk or negedge rst_n) begin
         h_foac    <= 6'd0;
         h_forever <= 1'b0;
         btn_sel   <= 6'd1;
+        seeded    <= 1'b0;
         fstate    <= F_IDLE;
         fetched   <= 1'b0;
         fetch_req <= 1'b0;
@@ -467,6 +481,17 @@ always @(posedge clk or negedge rst_n) begin
         // not by simulation.
         hli_commit_p  <= 1'b0;                 // default: one-cycle pulse
         btn_cmd_valid <= 1'b0;                 // default: one-cycle pulse
+        // RE-SEED the selection from the VM's HL_BTNN in the first cycle after a
+        // reset (see the hl_btnn port). An async reset value must be a constant,
+        // so the reset branch parks btn_sel at 1 and this overrides it one cycle
+        // later -- long before any NAV pack can arrive, since ps_demux is on the
+        // same pipe reset. FIRST in the block so that every later write in this
+        // same cycle (sel_force, the arm's persistence/fosl rule) still wins.
+        // A VM value of 0 means "no opinion" and leaves the default.
+        if (!seeded) begin
+            seeded <= 1'b1;
+            if (hl_btnn != 6'd0) btn_sel <= hl_btnn;
+        end
         if (act_tmr != 24'd0) act_tmr <= act_tmr - 24'd1;
 
         // Age the pending ARM while it waits with video live (fallback timer).

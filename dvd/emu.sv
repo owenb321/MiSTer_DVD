@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-hudnarrow"
+`define CORE_VERSION "dev-linkbtn"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1503,6 +1503,10 @@ wire [6:0]  vm_pm_waddr;
 wire [7:0]  vm_pm_wdata;
 wire        vm_btn_force;
 wire [5:0]  vm_btn_force_val;
+wire [5:0]  vm_hl_btnn;                 // the VM's SPRM8 button: nav_pci re-seeds
+                                        // its selection from it after every pipe
+                                        // reset (link button fields survive the
+                                        // flush the link itself fires)
 wire [7:0]  vm_astn, vm_spstn;
 // DVD-FORK DEBUG (Atmosfear wrong-title diagnosis): taps used by the
 // DEBUG_OVERLAY rows 21..26. Declared unconditionally (the module ports are
@@ -2292,6 +2296,7 @@ dvd_vm dvd_vm_inst (
     .btns_armed    (hl_btns_armed),
     .btn_force     (vm_btn_force),
     .btn_force_val (vm_btn_force_val),
+    .hl_btnn       (vm_hl_btnn),
 
     .jump_pulse    (vm_jump_pulse),
     .jump_domain   (vm_jump_domain),
@@ -5617,6 +5622,10 @@ nav_pci nav_pci_inst (
                                          //  until a still park proves catch-up)
     .sel_force  (vm_btn_force),          // Phase 4: SetHL_BTNN / link buttons
     .sel_force_btn (vm_btn_force_val),
+    .hl_btnn    (vm_hl_btnn),            // SPRM8 button: re-seed after the pipe reset
+                                         // (a link's button field must survive the
+                                         //  flush that link fires; checked by
+                                         //  tools/check_hl_btnn_wiring.py)
     .num_sel    (num_sel_p),             // numpad menu input: digit = select+activate
     .num_btn    (num_btn_r),
     .nav_up     (nav_up_p),

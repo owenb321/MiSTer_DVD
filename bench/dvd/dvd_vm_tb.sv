@@ -89,6 +89,7 @@ module dvd_vm_tb;
 
     wire        btn_force;
     wire [5:0]  btn_force_val;
+    wire [5:0]  hl_btnn;       // SPRM8 button export (nav_pci re-seed), part 3 T6
     reg  [6:0]  cap_jttn;      // declared before the DUT: feeds res_ttn
     wire        jump_pulse;
     wire [1:0]  jump_domain;
@@ -134,6 +135,7 @@ module dvd_vm_tb;
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid),
         .btn_sel(btn_sel), .btns_armed(btns_armed),
         .btn_force(btn_force), .btn_force_val(btn_force_val),
+        .hl_btnn(hl_btnn),
         .jump_pulse(jump_pulse), .jump_domain(jump_domain),
         .jump_vts(jump_vts), .jump_pgcn(jump_pgcn), .jump_entry(jump_entry),
         .jump_ttn(jump_ttn), .jump_pgn(jump_pgn), .jump_cell(jump_cell),
@@ -1536,6 +1538,44 @@ module dvd_vm_tb;
         if (dut.lfsr === 16'd0) fail("T5: self-XOR stir locked the LFSR at 0");
         ent_val = 16'd0;
         $display("T5 stir zero-lock guard PASS (lfsr=%04h)", dut.lfsr);
+
+        // ---- T6: HL_BTNN export (Scooby-Doo 2 Wickles Manor grid, 2026-09-14) --
+        // The disc re-parks the cursor with the LINK's button field, and the
+        // link is what fires the seek whose flush resets nav_pci. The VM must
+        // therefore hold the button in SPRM8 (libdvdnav HL_BTNN_REG, never
+        // cleared by a jump) and export it on hl_btnn so nav_pci can re-seed
+        // after its reset (nav_pci_tb T19 is the consumer side of this seam).
+        // (a) the trap exit, verbatim: LinkCN 26 (button 16) -> seek to cell
+        //     index 25 AND hl_btnn == 16 once the command has run.
+        vm_restart;
+        wr_cmd(0, 64'h200700000000401a);     // LinkCN 26 (button 16)
+        nr_pre = 0; nr_post = 0; nr_cell = 1; cur_cell = 8'd4; cell_count = 8'd27;
+        clear_actions;
+        @(negedge clk); vm_cell_cmd = 1; cell_cmd_nr = 8'd1;
+        @(negedge clk); vm_cell_cmd = 0;
+        wait_idle;
+        if (!saw_seek || cap_scell != 8'd25) fail("T6a: LinkCN 26 expected a seek to cell index 25");
+        if (hl_btnn !== 6'd16) fail("T6a: hl_btnn != 16 after LinkCN 26 (button 16)");
+        // (b) shadow write-back: a selection MOVED while armed but never activated
+        //     is remembered once the HLI tears down (libdvdnav writes
+        //     HL_BTNN_REG on SELECT, highlight.c dvdnav_button_select).
+        btns_armed = 1; btn_sel = 6'd4;
+        repeat (3) @(negedge clk);
+        btns_armed = 0;
+        repeat (3) @(negedge clk);
+        if (hl_btnn !== 6'd4) fail("T6b: hl_btnn != 4 after an un-activated D-pad move");
+        // (c) but the write-back must NOT run while SPRM8 is frozen by an
+        //     activation: the activated button stays put through a btn_sel drift
+        //     (the S12b dispatch contract). LinkNoLink keeps the VM idle.
+        btns_armed = 1; btn_sel = 6'd2;
+        @(negedge clk); btn_cmd = 64'h2001000000000000; btn_cmd_valid = 1;   // LinkNoLink
+        @(negedge clk); btn_cmd_valid = 0;
+        btn_sel = 6'd1;                       // drift after activation
+        repeat (6) @(negedge clk);
+        wait_idle;
+        if (hl_btnn !== 6'd2) fail("T6c: frozen SPRM8 overwritten by a btn_sel drift");
+        btns_armed = 0;
+        $display("T6 HL_BTNN export (link button / select write-back / frozen) PASS");
     end
     endtask
 

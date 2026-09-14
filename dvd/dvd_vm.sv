@@ -120,6 +120,16 @@ module dvd_vm (
     input             btns_armed,
     output reg        btn_force,      // pulse: force nav_pci selection (SetHL_BTNN)
     output reg [5:0]  btn_force_val,
+    // DVD-FORK FIX (2026-09-14, Scooby-Doo 2 Wickles Manor grid): HL_BTNN = the
+    // button number SPRM8 holds RIGHT NOW. libdvdnav keeps HL_BTNN_REG in the VM
+    // and NOTHING clears it on a jump (vm.c only writes it at links / SetHL_BTNN /
+    // fosl / user select; vm_reset is the disc open). Our nav_pci lives on
+    // pipe_rst_n, so every load_flush zeroed its selection to button 1 -- which
+    // threw away the button a `LinkCN 26 (button 16)` / `LinkPGN 2 (button 18)`
+    // carried, because that same link is what FIRES the flush. nav_pci re-seeds
+    // its selection from this port when the flush releases. Wired in emu.sv;
+    // gated by tools/check_hl_btnn_wiring.py (emu has no bench).
+    output wire [5:0] hl_btnn,
 
     // Jump / seek / verdict outputs (to dvd_iso_reader via emu)
     output reg        jump_pulse,
@@ -248,6 +258,13 @@ assign sprm_spstn = sprm2[7:0];
 // and this changes nothing for them.)
 reg        sprm8_frozen;
 wire [15:0] sprm8_eff = (btns_armed && !sprm8_frozen) ? {btn_sel, 10'd0} : sprm8;
+// The exported HL_BTNN is the REGISTER, not the live shadow: it is read by
+// nav_pci in the cycle after a pipe reset, when btns_armed is 0 by construction
+// (nav_pci was just reset), so the two agree there anyway; and the shadow write
+// below keeps the register tracking the live selection while a menu is armed,
+// so a D-pad move that was never activated survives a jump the way libdvdnav's
+// HL_BTNN_REG does (highlight.c dvdnav_button_select writes it on SELECT).
+assign hl_btnn = sprm8[15:10];
 
 // LFSR16 for the rnd op (taps 0/2/3/5 -> new MSB; steps ONCE per rnd so
 // vectors match tools/dvd_vm_ref.py Lfsr bit-exactly). Seed 0xACE1.
@@ -720,6 +737,16 @@ always @(posedge clk or negedge rst_n) begin
         vm_adv     <= 1'b0;
         btn_force  <= 1'b0;
         link_fail  <= 1'b0;
+        // SPRM8 shadow WRITE-BACK: while an HLI is armed and no activation has
+        // frozen the dispatch value, the register follows the live selection.
+        // sprm8_eff already READS btn_sel in exactly this condition, so nothing a
+        // command sees changes; what changes is that the register still holds the
+        // selected button after the menu tears down or a jump resets nav_pci --
+        // the value hl_btnn hands back to nav_pci. Lowest priority on purpose:
+        // every explicit SPRM8 write further down this block (activation latch,
+        // SetHL_BTNN, a link's button field, RSM restore) lands later in the
+        // same cycle and wins.
+        if (btns_armed && !sprm8_frozen) sprm8 <= {btn_sel, 10'd0};
         // Last SUCCESSFULLY loaded menu PGC {dom, vts, pgcn} — the re-enter
         // target when a later menu link fails (see the ev_error arm). Latched
         // on every menu-domain pgc_loaded: vm_dom/vm_vts are the completed

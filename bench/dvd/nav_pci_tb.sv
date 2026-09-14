@@ -37,6 +37,12 @@ module nav_pci_tb;
     logic nav_up = 0, nav_dn = 0, nav_lf = 0, nav_rt = 0, nav_act = 0;
     logic num_sel = 0;
     logic [5:0] num_btn = 0;
+    // VM HL_BTNN (SPRM8 button) handed back after a pipe reset. 0 = "no VM
+    // value" = the pre-2026-09-14 behaviour, so TESTS 1-18 are bit-identical;
+    // sel_force is likewise only driven by TEST 19.
+    logic [5:0] hl_btnn = 6'd0;
+    logic sel_force = 0;
+    logic [5:0] sel_force_btn = 6'd0;
 
     wire hl_on;
     wire [9:0] hl_x1, hl_x2, hl_y1, hl_y2;
@@ -57,7 +63,8 @@ module nav_pci_tb;
         .menu_settled(menu_settled),
         .stc_fresh(1'b1),   // TB scenarios model full-flush loads (display-coherent STC)
         .stc_reanchor(stc_reanchor),
-        .sel_force(1'b0), .sel_force_btn(6'd0),
+        .sel_force(sel_force), .sel_force_btn(sel_force_btn),
+        .hl_btnn(hl_btnn),
         .num_sel(num_sel), .num_btn(num_btn),
         .nav_up(nav_up), .nav_dn(nav_dn), .nav_lf(nav_lf), .nav_rt(nav_rt),
         .nav_act(nav_act),
@@ -74,7 +81,8 @@ module nav_pci_tb;
         acts <= acts + 1; last_cmd <= btn_cmd;
     end
 
-    logic [7:0] nav [0:12287];  // 2 real MiB sectors + 2 scratch (T8/9) + T2 2-group @8192
+    logic [7:0] nav [0:14335];  // 2 real MiB sectors + 2 scratch (T8/9) + T2 2-group @8192
+                                // + the Scooby-Doo 2 Wickles Manor grid @12288 (T19)
 
     // feed one sector's PCI payload (bytes 0x2D..0x2D+978 of the NAV sector)
     task feed_pci(input int base);
@@ -134,7 +142,7 @@ module nav_pci_tb;
     localparam int OFF_SPTM = PCI + 'h062;   // hl_gi.hli_s_ptm  (BE u32 @0x62..0x65)
     localparam int OFF_FOSL = PCI + 'h074;   // hl_gi.fosl_btnn  (low 6 bits)
     initial begin
-        for (i = 0; i < 12288; i++) nav[i] = 8'hXX;
+        for (i = 0; i < 14336; i++) nav[i] = 8'hXX;
         // real fixture = 2 sectors (0..4095); 4096.. are built at runtime (TEST 8/9).
         $readmemh("bench/dvd/test_vobs/mib_menu_pci.hex", nav, 0, 4095);
         // T2 VTSM VTS_01 RBN 8449 (regen: tools/nav_extract.py ULTIMATE_T2.iso
@@ -143,6 +151,13 @@ module nav_pci_tb;
         // grp1 btn1 x343..655 y72..149  btn2 y154..239 (links: btn1 dn=2)
         // grp2 btn1 x343..655 y114..172 btn2 y181..245 (the 3/4+60 LB remap)
         $readmemh("bench/dvd/test_vobs/t2_menu_2grp.hex", nav, 8192, 10239);
+        // Scooby-Doo 2 "Monsters Unleashed Challenge", VTS_02 TITLE VOB RBN 178948
+        // = PGCN 28 cell 2, the Wickles Manor hallway grid (regen:
+        //   tools/nav_extract.py <scooby2.iso> --vts 2 --title-vob 1
+        //   --sector 178948 --count 1 --hex ... --hex-count 1):
+        // btn_ns=21 fosl=0 hli_ss=1 s_ptm=10970; the disc parks the cursor with the
+        // LINK'S button field (`LinkCN 26 (button 16)`), never with fosl.
+        $readmemh("bench/dvd/test_vobs/scooby_grid_pci.hex", nav, 12288, 14335);
         rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
 
         if (nav[0] !== 8'h00 || nav[3] !== 8'hBA) begin
@@ -444,6 +459,86 @@ module nav_pci_tb;
         repeat (200) @(posedge clk);
         chk(btns_armed === 1'b1, "T18b the fallback promotes it anyway");
         video_live = 1'b0;
+
+        // ---- TEST 19: A LINK'S BUTTON FIELD MUST SURVIVE THE FLUSH THE LINK
+        //      FIRES (Scooby-Doo 2 Wickles Manor grid, 2026-09-14). The disc
+        //      re-parks the cursor with the link itself: a trap cell's command is
+        //      `LinkCN 26 (button 16)`, the next room is entered with
+        //      `LinkCN 10 (button 17)`, the grid with `LinkPGN 2 (button 18)`. The
+        //      VM pulses sel_force with that button in the SAME cycle as the seek,
+        //      and the seek's load_flush then resets this module -- so the stored
+        //      button went back to 1 = the upper-left tile, whatever tile the
+        //      player fell from. libdvdnav's HL_BTNN_REG lives in the VM and is
+        //      never cleared by a jump; ours now hands it back on `hl_btnn` and
+        //      nav_pci re-seeds from it when the reset releases.
+        //      The fixture is the REAL grid NAV pack: 21 buttons, fosl=0.
+        if (nav[12288] === 8'h00 && nav[12288 + 3] === 8'hBA) begin
+            // T19a -- the disc's trap exit. The trap clip has no HLI (nothing
+            // armed), the VM runs the cell command: sel_force(16) + HL_BTNN=16,
+            // then the seek flushes. The grid HLI that follows must arm on 16.
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0;
+            @(negedge clk); sel_force = 1; sel_force_btn = 6'd16; hl_btnn = 6'd16;
+            @(negedge clk); sel_force = 0; sel_force_btn = 6'd0;
+            repeat (8) @(posedge clk);
+            chk(btn_sel == 6'd16, "T19a sel_force stored while not armed (pre-existing path)");
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);   // the seek's load_flush
+            feed_pci(12288);
+            stc = 33'd11000;                                   // cross s_ptm=10970 -> arm
+            repeat (160) @(posedge clk);
+            $display("T19a: armed=%b btn_ns=%0d sel=%0d (LinkCN 26 (button 16) across the flush)",
+                     btns_armed, dbg_btn_ns, btn_sel);
+            chk(btns_armed === 1'b1 && dbg_btn_ns == 6'd21, "T19a grid HLI armed with 21 buttons");
+            chk(btn_sel == 6'd16, "T19a the link's button (16) survives the flush the link fired");
+
+            // T19b -- the next room, entered from an ARMED grid: the player is on
+            // tile 2, the VM runs `LinkCN 10 (button 17)`; sel_force lands while
+            // armed (in range -> moves the live selection), then the flush.
+            pulse(3);                                          // right: 16 -> 17 (btn16.right=17)
+            chk(btn_sel == 6'd17, "T19b player moved 16 -> 17");
+            @(negedge clk); sel_force = 1; sel_force_btn = 6'd17; hl_btnn = 6'd17;
+            @(negedge clk); sel_force = 0; sel_force_btn = 6'd0;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);   // the seek's load_flush
+            stc = 33'd0;
+            feed_pci(12288);
+            stc = 33'd11000;
+            repeat (160) @(posedge clk);
+            chk(btn_sel == 6'd17, "T19b room entry lands on the link's button (17), not 1");
+
+            // T19c -- control: no VM value (hl_btnn=0) = the reset default 1.
+            hl_btnn = 6'd0;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0;
+            feed_pci(12288);
+            stc = 33'd11000;
+            repeat (160) @(posedge clk);
+            chk(btn_sel == 6'd1, "T19c hl_btnn=0 leaves the default (legacy behaviour)");
+
+            // T19d -- control: a remembered button OUT OF RANGE for the new HLI
+            // falls back to 1 at the arm (the persistence rule, unchanged).
+            hl_btnn = 6'd40;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0;
+            feed_pci(12288);
+            stc = 33'd11000;
+            repeat (160) @(posedge clk);
+            chk(btn_sel == 6'd1, "T19d HL_BTNN=40 > btn_ns=21 -> button 1 at the arm");
+
+            // T19e -- priority: a NEW HLI carrying fosl still wins over the seed
+            // (libdvdnav applies fosl AFTER the link wrote HL_BTNN_REG). Re-uses
+            // T16's fosl=5 copy of the MiB fixture (put back to hli_ss=1).
+            nav[10240 + OFF_SS] = 8'h01;
+            hl_btnn = 6'd3;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0;
+            feed_pci(10240);
+            stc = 33'd3000100;
+            repeat (160) @(posedge clk);
+            chk(btn_sel == 6'd5, "T19e fosl on a NEW HLI outranks the seeded HL_BTNN");
+            hl_btnn = 6'd0;
+        end else begin
+            $display("T19: Scooby grid fixture absent -> SKIPPED (regen with tools/nav_extract.py)");
+        end
 
         if (errors == 0) $display("NAV_PCI_TB: ALL TESTS PASSED");
         else             $display("NAV_PCI_TB: FAILED with %0d errors", errors);
