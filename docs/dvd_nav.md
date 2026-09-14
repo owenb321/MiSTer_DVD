@@ -1122,8 +1122,9 @@ activating button k now arms on k when it has ≥ k buttons and the link carries
 of its own, where it used to arm on 1. That IS what libdvdnav and a set-top player do
 and what authoring tools assume (hence the explicit `(button 1)`s above); a disc that
 relied on our reset-to-1 would have to be one that reads wrong on a real player.
-⏳ HW-confirm pending: the Scooby grid + maze re-entries (the fix), and a sweep of the
-HW-proven menu discs (MiB / T2 / Matrix) for the persistence change.
+✅ **HW-CONFIRMED 2026-09-14 by the maintainer** (build `DVD_linkbtn_20260914_1834.rbf`,
+SEED 7 first roll, clk_dec 91.04/87.54, 90 % ALM): the Scooby-Doo grid section plays
+correctly, and the T2 and Matrix menus look right under the persistence change.
 
 **Gate: `bench/dvd/run_link_button.sh --red`** — three arms, one per place the fix
 lives, and six mutations each caught by exactly its own arm:

@@ -1815,7 +1815,10 @@ worse maintenance burden than targeted in-place edits. So:
   knowing: NAV packs carry a system header, PCI data starts at sector offset **0x2D**,
   not 0x15 — an early scan silently found zero HLIs from that mistake.)
   ✅ **ROOT-CAUSED AND FIXED 2026-09-14 (branch `fix/link-button-flush`) — sim-proven
-  RED/GREEN, 6 mutations each caught by exactly its own arm; ⏳ HW-confirm pending.**
+  RED/GREEN, 6 mutations each caught by exactly its own arm, and ✅ HW-CONFIRMED
+  2026-09-14 by the maintainer** (build `DVD_linkbtn_20260914_1834.rbf`, SEED 7 first
+  roll, clk_dec 91.04/87.54, 90 % ALM): the Scooby-Doo grid section plays correctly, and
+  the T2 and Matrix menus are unregressed by the persistence change.
   The maintainer's HIL session on the Wickles Manor ENTRANCE grid (21 tiles, reader
   `PGCN 28`) nailed the shape: every trap resets the highlight to the **same absolute
   tile, the upper-left one**, from wherever the player fell — *"a hardcoded default, not
@@ -1839,8 +1842,8 @@ worse maintenance burden than targeted in-place edits. So:
   tear-down), so an un-activated D-pad move survives a jump like `dvdnav_button_select`.
   ⚠ **Semantic change for EVERY jump:** a menu entered by activating button k arms on k
   (if it has ≥ k buttons and the link carries no button) where it used to arm on 1 — the
-  oracle's behaviour and what authoring tools assume, but the HW-proven menu discs
-  (MiB / T2 / Matrix) belong in the same HW round as the grid.
+  oracle's behaviour and what authoring tools assume; T2 and Matrix menus were checked in
+  the same HW round as the grid and look right.
   ★ **The seam is gated by `tools/check_hl_btnn_wiring.py`** (reads the two `.hl_btnn`
   connections out of `dvd/emu.sv`, the `check_subp_map_wiring.py` pattern) because each
   module bench is handed the other side's value and cannot see a wrong or missing wire.
