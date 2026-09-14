@@ -450,7 +450,11 @@ engage flushes the VBUF exactly as a chapter skip does. The quantiser-matrix def
 reset exists for cannot apply here either: it bites content carrying exactly one sequence
 header (a menu still), and SIF content re-sends one every GOP.
 
-**Gates — `bench/dvd/run_p240.sh`, `--red` for the mutations.**
+**Gates — `bench/dvd/run_p240.sh` (11 GREEN arms), `--red` (14 mutations, all caught:
+M1 the ordering trap, M2 line repeat left on, M3 pixrep dropped, M4 raw-tap engage,
+M5 VGA_F1 on il_eff, M6 mode_realign loses the edge, M7 an overlay loses act_h,
+M8 horizontal fill also removed, M9 Letterbox left reachable, S1-S3 detector,
+C1 blk_half unforced x2 standards, R1 the 240p phase left interlaced).**
 
 - `crt_syncgen_tb` PHASE 6/7: **449,592 clk27 (262 lines, CONSTANT = 60.0545 Hz)** and
   **539,136 (312 lines = 50.0616 Hz)**, every vsync rise at the same position in the line,

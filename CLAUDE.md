@@ -3651,7 +3651,7 @@ reverted film-switch loop. `mount_arm` latches the first header of a file at onc
 switches inside the mount flush window and there is no mid-title change in practice.
 ⛔ **The "×2 vertical downscale" §B.3a listed as still needed was for putting 480-LINE
 content into 240p. SIF needed NOTHING** — it is already 240 lines; you stop doubling it.
-Gate `bench/dvd/run_p240.sh --red` (11 GREEN arms; 12 mutations). Detail: **`docs/mpeg1.md`
+Gate `bench/dvd/run_p240.sh --red` (11 GREEN arms; 14 mutations, all caught). Detail: **`docs/mpeg1.md`
 §B.3b**. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
 scope REVERSED 2026-08-24 by user decision: the predicate is now `< 720` (any sub-720
 width fills; SVCD 480 = exact 2:3), shipped with the VCD/SVCD feature below. Design:
