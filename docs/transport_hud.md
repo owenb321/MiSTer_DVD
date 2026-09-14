@@ -159,6 +159,16 @@ how the user sees where the release lands. Fill = playhead at hold start
 sector/RBN against `title_first_rbn..title_last_rbn` (the roadmap's design:
 monotonic, no TMAP, slight VBR nonlinearity accepted).
 
+⚠ **`title_last_rbn` is the MAXIMUM `last_sector` over the PGC's cells, not the
+last cell in program order** (`dvd/dvd_iso_reader.sv`, fixed 2026-09-13 —
+`docs/dvd_nav.md` §2f). The bar is where the old rule SHOWED first: on a PGC
+whose final program sits physically at the front of the VOBS the reader
+published `last < first`, `span` collapsed to 1, `dv_delta` saturated and the
+bar rendered as **a solid grey block with every chapter notch pushed off the
+raster**. ★ That was never a renderer bug — `seek_bar`'s arithmetic is correct
+for any sane span, and a defensive floor here would only have hidden the
+producer. 51 of 958 library discs were affected.
+
 **Stretch (severable):** the bar also pops for 2.5 s on pause / landed seek /
 chapter skip, showing the **live** playhead (`dsi_nv_pck_lbn`, no cursor)
 with a notch at each chapter start. Tick columns come from **shadow copies**
@@ -166,6 +176,36 @@ of the reader's program map (the existing `pm_*` stream) and cell
 first-sector table (a new `cellf_*` stream tap — deliberately a *write tap*,
 not a new read port on the reader's BRAMs): on each `pgc_loaded` pulse a
 converter walks `pmap[p] → cellf[pm−1] →` the shared divider `→ tick_col[p]`
+
+⚠ **The notches are rendered from a 512-bit COLUMN BITMAP, not by walking
+`tick_col[]`** (2026-09-13).
+
+⚠ **And the seek PREVIEW clock had the same assumption a third time** (2026-09-14).
+`seek_time`'s bracketing scan walked cells in INDEX order and stopped at the
+first `cf_q > tgt` — which needs `cellf_ram` to ascend with the index. On
+`BIG_TROUBLE_LITTLE_CHINA` program cell 0 sits at the top of the disc, so the
+very first compare closed the bracket with `lo_ok = 0` and the "before the first
+cell" path published **0**. Reported from the board as: the preview *"stays at
+0:00:00 during seeking, then updates to the correct timestamp when the seek
+completes"* — and that second half is the tell, because the live clock is
+`cur_cell_start + dsi_c_eltm`, i.e. cell-INDEX based, so only the preview lied.
+The scan now walks every cell and keeps the NEAREST one at or below the target,
+then reads the next PROGRAM's start time for the cell's end (`S_HI`/`S_HI2`).
+Cost is `cell_n × 3` cycles with no early exit — ~180 for a 60-cell PGC, on a
+path that runs once per changed request. Gate: `seek_time_tb` **T11** +
+mutations MB/MC. (`hi_rbn` went with it — dead since the cell-gap fix made
+`c_span` the cell's own extent.) `tick_col` is filled in **program** order but holds
+**physical** columns, so it is ascending only while a PGC's program order matches
+its physical order — and on 51 of 958 library discs it does not. The original
+renderer walked it with one monotonic pointer (`advance while s0_x > tk_q + 1`),
+which on `BIG_TROUBLE_LITTLE_CHINA` — first program at the TOP of the disc, so
+chapter 1 converts to column ~511 and the other 44 to low columns — can never get
+past entry 0. Reported from the board as *"incorrect chapter markers, only one
+shows up"*. A bitmap has no order to get wrong; it is one cycle to clear (a
+register, not a memory), and it deleted the pointer, its read-lag guard and the
+per-line walk. `tick_col[]` stays, because the chapter-skip preview cursor reads
+it by index. Gate: `seek_bar_tb` T11 + mutations M9/MA in
+`bench/dvd/run_title_span.sh --red`.
 once (~45 cycles per chapter). Severing the stretch = deleting the shadow
 RAMs, converter, notch branch and the stream wires.
 

@@ -252,6 +252,48 @@ module seek_bar_tb;
         else $display("  ok  T9e scrub cursor wins over the preview");
         bar_active = 0; chap_prev = 0;
 
+        // ---- T11: an UNSORTED tick list must still draw every notch -------
+        // ★ tick_col[] is built in PROGRAM order but holds PHYSICAL columns, so
+        //   it is ascending ONLY while a PGC's program order matches its physical
+        //   order. BIG_TROUBLE_LITTLE_CHINA's does not -- its first program sits
+        //   at the TOP of the disc, so chapter 1 converts to column ~511 and the
+        //   other 44 to low columns. The renderer used to walk the list with one
+        //   monotonic pointer (advance while s0_x > tk_q + 1), which on that
+        //   shape can never get past entry 0: measured on the board as "only one
+        //   chapter marker shows up".
+        // Measures what is DRAWN, not what tick_col holds.
+        bar_active = 0; chap_prev = 0; pgc_loaded = 0; @(posedge clk);
+        first_rbn = 32'd0; last_rbn = 32'd100000;
+        put_pm(0, 8'd1); put_pm(1, 8'd2); put_pm(2, 8'd3); put_pm(3, 8'd4);
+        put_cf(0, 32'd90000);   // chapter 1 -> col 460  <- HIGHEST, and FIRST
+        put_cf(1, 32'd10000);   // chapter 2 -> col  51
+        put_cf(2, 32'd30000);   // chapter 3 -> col 153
+        put_cf(3, 32'd60000);   // chapter 4 -> col 307
+        nr_pgm = 8'd4;
+        cur_rbn = 32'd0;                                  // empty fill: notches only
+        @(posedge clk); pgc_loaded = 1;
+        settle; settle;
+        @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
+        settle;
+        render_line(12'd408);                             // lower half = notch row
+        begin : t11
+            integer n, xx;
+            reg [1:0] seen;
+            n = 0; seen = 2'd0;
+            for (xx = 0; xx < 512; xx = xx + 1)
+                if (a_l[xx] == 4'd14) n = n + 1;
+            // four notches, 2 px each = 8 columns
+            // n == 8 pins the 2 px width as well as the four positions, so a
+            // mutation that narrows the notch is caught here and not silently.
+            if (!(a_l[51] == 4'd14 && a_l[153] == 4'd14 &&
+                  a_l[307] == 4'd14 && a_l[460] == 4'd14 && n == 8)) begin
+                errors = errors + 1;
+                $display("  FAIL T11 unsorted ticks: drew %0d notch columns; 51=%0d 153=%0d 307=%0d 460=%0d (all should be 14)",
+                         n, a_l[51], a_l[153], a_l[307], a_l[460]);
+            end else
+                $display("  ok  T11 unsorted tick list still draws all four notches (%0d columns)", n);
+        end
+
         if (errors == 0) $display("SEEK_BAR_TB: ALL TESTS PASSED");
         else             $display("SEEK_BAR_TB: FAILED (%0d errors)", errors);
         $finish;

@@ -111,7 +111,19 @@ module seek_bar #(
     // ---- shadow maps + tick columns (stretch) -------------------------------
     reg [7:0]  pmap_ram  [0:127];           // program -> entry cell (1-based)
     reg [31:0] cellf_ram [0:127];           // cell -> first_sector RBN
-    reg [9:0]  tick_col  [0:99];            // converted notch columns (ascending)
+    reg [9:0]  tick_col  [0:99];            // converted notch columns, PROGRAM order
+    // ★ ONE BIT PER BAR COLUMN. tick_col is written in PROGRAM order but holds
+    //   PHYSICAL columns, so it is ascending only while a PGC's program order
+    //   matches its physical order -- and on 51 of 958 library discs it does not.
+    //   The renderer used to walk it with a single monotonic pointer, which on
+    //   BIG_TROUBLE_LITTLE_CHINA (first program at the TOP of the disc, so
+    //   chapter 1 converts to column ~511 and the rest to low columns) could
+    //   never advance past entry 0: reported from the board as "only one chapter
+    //   marker shows up". A bitmap has no order to get wrong. 512 flops, and it
+    //   deletes the pointer, the lag guard and the per-line walk.
+    reg [511:0] tick_bm;
+    // registered read, aligned with s0_x (both take hx in the same stage)
+    reg        tk_bit;
     always @(posedge clk) if (pm_we)    pmap_ram [pm_waddr]  <= pm_wdata;
     always @(posedge clk) if (cellf_we) cellf_ram[cellf_idx] <= cellf_rbn;
 
@@ -157,7 +169,10 @@ module seek_bar #(
         end else begin
             pgc_q <= pgc_loaded;
             if (pgc_loaded && !pgc_q) begin
-                // fresh PGC: re-run the tick conversion once the maps settled
+                // fresh PGC: re-run the tick conversion once the maps settled.
+                // ★ Clearing 512 bits is ONE cycle because this is a register and
+                //   not a memory -- which is most of why it is a register.
+                tick_bm <= 512'd0;
                 tk_pend <= 1'b1;
                 tick_ok <= 1'b0;
                 tk_p    <= 7'd0;
@@ -196,6 +211,10 @@ module seek_bar #(
                         DV_CUR:  cur_px  <= dv_qcap;
                         default: begin
                             tick_col[tk_p] <= dv_qcap;
+                            // the notch is 2 px, so light both columns here and
+                            // let the renderer test a single bit.
+                            if (dv_qcap <= 10'd511) tick_bm[dv_qcap[8:0]] <= 1'b1;
+                            if (dv_qcap <= 10'd510) tick_bm[dv_qcap[8:0] + 9'd1] <= 1'b1;
                             tk_p <= tk_p + 7'd1;
                         end
                     endcase
@@ -250,13 +269,7 @@ module seek_bar #(
     wire [11:0] vy  = v_pos - y0;
     wire        iny = (v_pos >= y0) && (v_pos < y0 + BAR_H);
 
-    // per-line monotonic tick pointer (list ascending; reset off-region).
-    // tk_wait covers the 1-cycle read lag after an advance — comparing against
-    // the STALE tk_q there would double-advance and skip a tick.
-    reg  [6:0] tk_ptr;
-    reg  [9:0] tk_q;
-    reg        tk_wait;
-    always @(posedge clk) tk_q <= tick_col[tk_ptr];
+    always @(posedge clk) tk_bit <= tick_bm[hx[8:0]];
 
     // A: hit-test + local coords
     reg       s0_in, s0_edge, s0_low;
@@ -265,7 +278,6 @@ module seek_bar #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             s0_in <= 1'b0; s0_edge <= 1'b0; s0_low <= 1'b0; s0_x <= 10'd0;
-            tk_ptr <= 7'd0; tk_wait <= 1'b0;
             bar_on <= 1'b0; bar_r <= 8'd0; bar_g <= 8'd0; bar_b <= 8'd0;
             bar_alpha <= 4'd0;
         end else begin
@@ -274,12 +286,6 @@ module seek_bar #(
                        (hx[9:0] == 10'd0) || (hx[9:0] == BAR_W[9:0] - 10'd1);
             s0_low  <= (vy >= BAR_H/2);
             s0_x    <= hx[9:0];
-
-            // walk the sorted tick list once per scanned line
-            if (!s0_in)      begin tk_ptr <= 7'd0; tk_wait <= 1'b0; end
-            else if (tk_wait)      tk_wait <= 1'b0;
-            else if (tick_ok && tk_ptr < tick_n && s0_x > tk_q + 10'd1)
-                             begin tk_ptr <= tk_ptr + 7'd1; tk_wait <= 1'b1; end
 
             bar_on    <= s0_in;
             bar_alpha <= 4'd0;
@@ -291,8 +297,7 @@ module seek_bar #(
                     // seek target / chapter-skip target cursor: 5 px, opaque amber
                     bar_r <= 8'hFF; bar_g <= 8'hC8; bar_b <= 8'h20;
                     bar_alpha <= 4'd15;
-                end else if (tick_ok && tk_ptr < tick_n && s0_low &&
-                             (s0_x == tk_q || s0_x == tk_q + 10'd1)) begin
+                end else if (tick_ok && s0_low && tk_bit) begin
                     // chapter notch: 2 px, lower half
                     bar_r <= 8'hE8; bar_g <= 8'hE8; bar_b <= 8'hE8;
                     bar_alpha <= 4'd14;

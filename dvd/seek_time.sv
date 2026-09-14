@@ -199,13 +199,18 @@ module seek_time (
                      S_CH_C  = 4'd3,  S_CH_D = 4'd4,
                      S_SC_A  = 4'd5,  S_SC_B = 4'd6,  S_SC_C = 4'd7,
                      S_LO    = 4'd8,  S_HI   = 4'd9,  S_DIV  = 4'd10,
-                     S_MUL   = 4'd11, S_SUM  = 4'd12, S_PUB  = 4'd13;
+                     S_MUL   = 4'd11, S_SUM  = 4'd12, S_PUB  = 4'd13,
+                     S_HI2   = 4'd14;
 
     reg [3:0]  st;
     reg [31:0] tgt;
     reg [7:0]  scan_i;
     reg        lo_ok;
-    reg [31:0] lo_rbn, lo_end, hi_rbn;
+    reg [31:0] lo_rbn, lo_end;
+    reg [7:0]  lo_i;                          // the bracketing cell's INDEX
+    // ⚠ hi_rbn is gone: it had been dead since the cell-gap fix made c_span the
+    //   cell's OWN extent (lo_end - lo_rbn) rather than the distance to the next
+    //   cell's first_sector.
     reg [15:0] lo_secs, hi_secs;
     reg [16:0] secs;
 
@@ -248,7 +253,7 @@ module seek_time (
             prev_secs <= 17'd0; prev_ok <= 1'b0;
             pm_ra <= 7'd0; cf_ra <= 7'd0; cl_ra <= 7'd0;
             tgt <= 32'd0; scan_i <= 8'd0; lo_ok <= 1'b0;
-            lo_rbn <= 32'd0; lo_end <= 32'd0; hi_rbn <= 32'd0;
+            lo_rbn <= 32'd0; lo_end <= 32'd0; lo_i <= 8'd0;
             lo_secs <= 16'd0; hi_secs <= 16'd0;
             secs <= 17'd0;
             dv_n <= 37'd0; dv_rem <= 24'd0; dv_q <= 15'd0; dv_i <= 6'd0;
@@ -316,31 +321,50 @@ module seek_time (
                     S_SC_A: begin cf_ra <= scan_i[6:0]; cl_ra <= scan_i[6:0];
                                   st <= S_SC_B; end
                     S_SC_B: st <= S_SC_C;           // cf_q / cs_q settling
+                    // ★ Walks EVERY cell and keeps the best one at or below the
+                    //   target, instead of stopping at the first cell whose
+                    //   first_sector is above it. The early exit assumed
+                    //   cellf_ram ASCENDS with the index -- true only while a
+                    //   PGC's program order is its physical order. On
+                    //   BIG_TROUBLE_LITTLE_CHINA program cell 0 sits at the TOP
+                    //   of the disc, so the very first compare closed the bracket
+                    //   with lo_ok = 0 and published 0: the board showed the seek
+                    //   preview frozen at 0:00:00 for the whole gesture, then the
+                    //   right time on landing (the live clock is cell-INDEX
+                    //   based, so only the preview was wrong).
+                    // Cost is cell_n * 3 cycles with no early exit -- ~180 for a
+                    // 60-cell PGC, on a path that runs once per changed request.
                     S_SC_C: begin
-                        if ((scan_i >= cell_n) || (cf_q > tgt)) begin
-                            // bracket closed: the last cell at or below tgt,
-                            // and scan_i above it. The upper edge
-                            // of the LAST cell is the title's own end, which is
-                            // why the reader exports title_secs.
-                            hi_rbn  <= (scan_i >= cell_n) ? title_last_rbn : cf_q;
-                            hi_secs <= (scan_i >= cell_n) ? title_secs     : cs_q;
-                            // Before the first cell there is nothing to
-                            // interpolate between -- go straight to the digits
-                            // with 0, never through S_SUM, which would fold in
-                            // a stale product from a previous request.
-                            if (lo_ok) st <= S_LO;
-                            else begin
+                        if (scan_i >= cell_n) begin
+                            if (lo_ok) begin
+                                // the bracketing cell's END time is the NEXT
+                                // PROGRAM's start time -- an index step, never a
+                                // physical neighbour.
+                                cf_ra <= lo_i[6:0] + 7'd1;
+                                st    <= S_HI;
+                            end else begin
+                                // genuinely below every cell: nothing to
+                                // interpolate between. Never route through S_SUM,
+                                // which would fold in a stale product.
                                 secs <= 17'd0;
-                                st <= S_PUB;
+                                st   <= S_PUB;
                             end
                         end else begin
-                            lo_ok   <= 1'b1;
-                            lo_rbn  <= cf_q;
-                            lo_end  <= cl_q;          // this cell's OWN last sector
-                            lo_secs <= cs_q;
-                            scan_i  <= scan_i + 8'd1;
-                            st      <= S_SC_A;
+                            if ((cf_q <= tgt) && (!lo_ok || (cf_q > lo_rbn))) begin
+                                lo_ok   <= 1'b1;
+                                lo_i    <= scan_i;
+                                lo_rbn  <= cf_q;
+                                lo_end  <= cl_q;      // this cell's OWN last sector
+                                lo_secs <= cs_q;
+                            end
+                            scan_i <= scan_i + 8'd1;
+                            st     <= S_SC_A;
                         end
+                    end
+                    S_HI:  st <= S_HI2;               // cs_q settling
+                    S_HI2: begin
+                        hi_secs <= ((lo_i + 8'd1) >= cell_n) ? title_secs : cs_q;
+                        st      <= S_LO;
                     end
                     S_LO: begin
                         // q = (off << 8) / cell_span, a 0..255 fraction.

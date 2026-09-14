@@ -371,10 +371,26 @@ module dvd_iso_reader #(
     output     [7:0]  cur_cell_still,   // current cell's still_time (cell@2)
     output     [7:0]  cur_cell_cmdnr,   // current cell's cell_cmd_nr (cell@3)
 
-    // Title RBN span (VTSTT_VOBS, 2048-sector) for the seek position indicator:
-    // first cell's first_sector .. last cell's last_sector, captured at PGC load.
+    // Title RBN geometry (VTSTT_VOBS, 2048-sector), captured at PGC load.
+    // ★ FOUR numbers, not two, because a PGC's PROGRAM order is not its PHYSICAL
+    //   order and the two things a seek needs are different questions:
+    //     first/last = the physical ENVELOPE, min(first_sector)..max(last_sector).
+    //                  This is the range a position bar maps over and the only
+    //                  range a target can legally sit in.
+    //     start/end  = the FIRST program's first_sector and the LAST program's
+    //                  last_sector -- where "rewind past the beginning" and
+    //                  "wind past the end" should actually land.
+    //   On a well-ordered PGC start==first and end==last and the two collapse, so
+    //   every ordinary disc is bit-identical. They diverge on the 51 of 958
+    //   library ISOs measured in docs/dvd_nav.md 2f, in BOTH directions: a last
+    //   program parked at RBN 0 (A_MILLION_WAYS) and a FIRST program parked at the
+    //   top of the disc (BIG_TROUBLE_LITTLE_CHINA, 60 cells, cell[0] at 2,032,273
+    //   of 2,032,309 -- reported from the board as "seeking always brings you back
+    //   to the beginning of the title").
     output reg [31:0] title_first_rbn,
     output reg [31:0] title_last_rbn,
+    output reg [31:0] title_start_rbn,
+    output reg [31:0] title_end_rbn,
 
     // Menu aspect ratio from the IFO video attributes (NOT the MPEG sequence
     // header). DVD menus are commonly authored 16:9 ANAMORPHIC while their VOB
@@ -773,6 +789,19 @@ reg        seek_is_rbn;               // 1 = latched seek is a raw-RBN scrub
 reg [31:0] seek_rbn_l;                // latched target RBN (2048-sector)
 reg        rbn_override;              // S_CELL_LOAD2: use seek_rbn_l, not cf_rd
 reg [7:0]  rbn_scan_i;                // S_RBN_SCAN containing-cell scan cursor
+// S_RBN_SCAN MISS path: the best cell seen so far that STARTS at or below the
+// target. A target can fall in an inter-cell gap on a physically scattered PGC
+// (measured: 7 of 958 library ISOs), and the old miss rule played cell_count-1 --
+// which on an out-of-order PGC is the LAST PROGRAM, i.e. the same "jump to the
+// end of the movie" the title-span fix removes, arriving by a second route.
+reg [7:0]  rbn_best_i;                // ...its cell index
+reg [31:0] rbn_best_f;                // ...its first_sector
+reg        rbn_best_v;                // ...any candidate seen yet
+// Combinational so the EXHAUSTION arm can consult the candidate discovered on
+// the very cycle the scan ends -- cf_rd is the cell at rbn_scan_i throughout.
+wire       rbn_bt_new = (cf_rd <= seek_rbn_l) && (!rbn_best_v || cf_rd > rbn_best_f);
+wire [7:0] rbn_bt_i   = rbn_bt_new ? rbn_scan_i : rbn_best_i;
+wire       rbn_bt_v   = rbn_bt_new |  rbn_best_v;
 reg [31:0] nav_cand;                  // S_NAV_SEEK: candidate RBN (raw target upward)
 reg [10:0] nav_left;                  // S_NAV_SEEK: remaining probe budget
 
@@ -1646,6 +1675,8 @@ always @(posedge clk)
         // title span is captured only in this block (sole driver of the outputs)
         title_first_rbn <= 32'd0;
         title_last_rbn  <= 32'd0;
+        title_start_rbn <= 32'd0;
+        title_end_rbn   <= 32'd0;
         pt_c            <= 32'd0;
         run_eltm        <= 32'd0;
         run_secs        <= 16'd0;
@@ -1664,7 +1695,10 @@ always @(posedge clk)
         // below then owns the span as before.
         if (!iso_mode && !cell_mode) begin
             title_first_rbn <= 32'd0;
+            title_start_rbn <= 32'd0;
             title_last_rbn  <= (total_blocks == 32'd0) ? 32'd0
+                                                       : (total_blocks - 32'd1);
+            title_end_rbn   <= (total_blocks == 32'd0) ? 32'd0
                                                        : (total_blocks - 32'd1);
         end
         if (state==S_WALK_CAP && wphase==P_CELL) begin
@@ -1674,8 +1708,18 @@ always @(posedge clk)
         if (cell_bi == 5'd7) pt_c[7:0]   <= pb_rdata;   // rate | frames
         if (cell_bi == 5'd11) begin
             cell_first_mem[cell_wi] <= {wacc, pb_rdata};
-            // title_first = the FIRST cell's first_sector.
-            if (cell_wi == 8'd0) title_first_rbn <= {wacc, pb_rdata};
+            // title_first = the MINIMUM first_sector = the envelope's low edge.
+            // title_start = the FIRST PROGRAM's first_sector = where a rewind past
+            // the beginning should land. ⚠ These were ONE value until 2026-09-13
+            // and the single value is wrong for one class of disc whichever way it
+            // is chosen: as cell[0] it collapses the span on a PGC whose first
+            // program sits at the top of the disc (every seek then clamps to it =
+            // "back to the beginning"), and as the minimum it drops a backward
+            // underflow into a trailing cell parked at RBN 0 (= "jump to the end").
+            // Splitting them is what serves both. docs/dvd_nav.md 2f.
+            if (cell_wi == 8'd0 || {wacc, pb_rdata} < title_first_rbn)
+                title_first_rbn <= {wacc, pb_rdata};
+            if (cell_wi == 8'd0) title_start_rbn <= {wacc, pb_rdata};
             // start time = sum of the cells before this one (pt_c complete @7)
             cell_start_mem[cell_wi] <= (cell_wi == 8'd0) ? 32'd0 : run_eltm;
             run_eltm                <= (cell_wi == 8'd0) ? pt_c  : run_sum_w;
@@ -1695,9 +1739,44 @@ always @(posedge clk)
             // only after the 24-byte record), so the two strobes pair up.
             cellf_lwe  <= 1'b1;
             cellf_last <= {wacc, pb_rdata};
-            // title_last tracks the last-written cell's last_sector (cells are
-            // captured in order, so after the walk this is the title's end RBN).
-            title_last_rbn <= {wacc, pb_rdata};
+            // title_last = the MAXIMUM last_sector over THIS PGC's cells.
+            // ★ PROGRAM ORDER IS NOT PHYSICAL ORDER. This used to take the
+            // last-WRITTEN cell, on the stated assumption that "cells are
+            // captured in order". MEASURED over 958 library ISOs: 45 publish
+            // last <= first and 6 more publish a short span (51 = 5.3 %). The
+            // dominant shape is first = k, last = k-1, because the LAST PROGRAM
+            // cell sits physically at the FRONT of the VOBS -- A_MILLION_WAYS_
+            // TO_DIE_IN_THE_WEST VTS_07 PGCN 1 runs RBN 4..3,359,267 over cells
+            // 0..20 and then ends on a 4-sector cell at RBN 0..3, so it
+            // published first=4 last=3. Downstream that is scrub_ctrl's `span`
+            // collapsing to 1 and its `target` clamping EVERY seek (forward AND
+            // backward, since the playhead is always above it) to title_last_rbn
+            // -> S_RBN_SCAN resolves that to the last program cell = "any seek
+            // jumps to the end of the movie"; and seek_bar's `dv_delta`
+            // saturating = a solid bar with no chapter notches.
+            // ★ STRUCTURAL, not merely better: max(last) >= cell[0].last >=
+            //   cell[0].first = title_first_rbn, so a degenerate span is now
+            //   IMPOSSIBLE BY CONSTRUCTION for any PGC with a well-formed cell 0.
+            // ★ The cell-0 seed re-arms the max PER PGC and is load-bearing, not
+            //   defensive: cell_wi is zeroed only at S_PGC_CELLCHK, immediately
+            //   before every walk, and NOTHING else clears this register between
+            //   PGCs or across a re-mount (the start re-init does not touch it).
+            //   Without the seed a feature title's span leaks into the menu PGC
+            //   the user returns to (arm F) -- and on the FIRST walk the LINEAR
+            //   branch above has already published total_blocks-1, so a bare max()
+            //   would keep the whole IMAGE's last block and the forward clamp
+            //   would stop clamping at all (arm D). Both measured.
+            // ⚠ Accepted, bounded: the max now lets ANY malformed cell record
+            //   inflate the span, where before only a malformed LAST cell could.
+            //   nr_cells > MAXCELL already routes garbage PGCs to the linear
+            //   fallback and S_CELL_SEEK already skips cf_rd > cl_rd cells.
+            if (cell_wi == 8'd0 || cell_last_w > title_last_rbn)
+                title_last_rbn <= cell_last_w;
+            // title_end = the LAST PROGRAM's last_sector -- i.e. exactly what
+            // title_last used to be. Kept as its own output rather than deleted:
+            // it is the right answer to "where does winding past the end land",
+            // which is a different question from "how wide is the title".
+            title_end_rbn <= cell_last_w;
             // Store the EFFECTIVE hold (explicit still_time OR the heuristic),
             // so downstream sees a nonzero still for authored menu/ad/copyright
             // stills that carry still_time==0.
@@ -1832,6 +1911,9 @@ always @(posedge clk or negedge rst_n) begin
         seek_rbn_l   <= 32'd0;
         rbn_override <= 1'b0;
         rbn_scan_i   <= 8'd0;
+        rbn_best_i   <= 8'd0;
+        rbn_best_f   <= 32'd0;
+        rbn_best_v   <= 1'b0;
         nav_cand     <= 32'd0;
         nav_left     <= 11'd0;
         cur_angle    <= 4'd1;
@@ -2509,6 +2591,9 @@ always @(posedge clk or negedge rst_n) begin
                 // contains seek_rbn_l, then stream from that RBN (S_CELL_LOAD2 uses
                 // rbn_override). cell_i is set by the scan when it lands.
                 rbn_scan_i   <= 8'd0;
+                rbn_best_i   <= 8'd0;
+                rbn_best_f   <= 32'd0;
+                rbn_best_v   <= 1'b0;
                 cell_raddr   <= 8'd0;
                 rbn_override <= 1'b1;
                 // VOBU-align: a raw scrub target lands mid-VOBU, so the decoder
@@ -3817,8 +3902,8 @@ always @(posedge clk or negedge rst_n) begin
             // [cf_rd, cl_rd] contains seek_rbn_l. cell_raddr walks 0..cell_count-1
             // (S_RBN_SCAN2 covers the 1-cycle BRAM latency). On a hit, land on that
             // cell and fall into the normal cell-load path with rbn_override set.
-            // If the scan exhausts (target past the last cell / gap), clamp to the
-            // last cell's start (rbn_override cleared) so playback still resumes.
+            // If the scan exhausts (target in an inter-cell gap, or outside every
+            // cell), land on the cell that STARTS nearest below the target.
             S_RBN_SCAN2: state <= S_RBN_SCAN;
             S_RBN_SCAN: begin
                 if (cf_rd <= seek_rbn_l && seek_rbn_l <= cl_rd) begin
@@ -3826,12 +3911,28 @@ always @(posedge clk or negedge rst_n) begin
                     cell_raddr <= rbn_scan_i;      // reload cf_rd/cl_rd for this cell
                     state      <= S_CELL_LOAD;     // rbn_override stays set
                 end else if (rbn_scan_i + 8'd1 >= cell_count) begin
-                    // not found -> clamp to the last cell, play from its start
-                    cell_i       <= cell_count - 8'd1;
-                    cell_raddr   <= cell_count - 8'd1;
+                    // MISS. ⚠ This used to play cell_count-1 ("clamp to the last
+                    // cell"), which is the WORST available guess: on a PGC whose
+                    // cells are not in physical order the last PROGRAM cell is not
+                    // the end of the title, so a target that merely fell in a gap
+                    // jumped to the END OF THE MOVIE -- the same symptom the
+                    // title_last_rbn max fix removes, by a second route. Measured:
+                    // reachable on the 7 of 958 library ISOs whose PGC cells are
+                    // physically scattered. Land on the cell that STARTS nearest
+                    // below instead; below every cell, land on program cell 0,
+                    // because a target under the first cell is a rewind past the
+                    // start and not a jump to the end. rbn_override is cleared:
+                    // the target is in a gap, so streaming from seek_rbn_l would
+                    // read sectors that are not this cell's. Gated by
+                    // title_span_tb arm G (+TITLE_SPAN_GAP).
+                    cell_i       <= rbn_bt_v ? rbn_bt_i : 8'd0;
+                    cell_raddr   <= rbn_bt_v ? rbn_bt_i : 8'd0;
                     rbn_override <= 1'b0;
                     state        <= S_CELL_LOAD;
                 end else begin
+                    rbn_best_i <= rbn_bt_i;
+                    rbn_best_f <= rbn_bt_new ? cf_rd : rbn_best_f;
+                    rbn_best_v <= rbn_bt_v;
                     rbn_scan_i <= rbn_scan_i + 8'd1;
                     cell_raddr <= rbn_scan_i + 8'd1;
                     state      <= S_RBN_SCAN2;

@@ -593,7 +593,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-remotebtns"
+`define CORE_VERSION "dev-titlespan"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1980,6 +1980,7 @@ wire [31:0] jmp_off  = ab_jump_fire ? ab_jump_off  : dpad_jump_off;
 wire        bar_active_w;                          // Phase 11: seek-bar visible
 wire [31:0] bar_base_rbn_w, bar_tgt_rbn_w;         // Phase 11: bar fill + cursor
 wire [31:0] title_first_rbn_w, title_last_rbn_w;
+wire [31:0] title_start_rbn_w, title_end_rbn_w;   // PROGRAM ends (2f)
 wire [1:0]  hud_tier_w;                            // Phase 11: scrub speed tier
 wire        hud_dir_w;                             // Phase 11: scrub direction
 // LINEAR playback (raw VCD/SVCD .bin, flat .mpg/.VOB) -- i.e. everything the
@@ -2000,6 +2001,8 @@ scrub_ctrl scrub_ctrl_inst (
     .cur_rbn         (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .title_first_rbn (title_first_rbn_w),
     .title_last_rbn  (title_last_rbn_w),
+    .title_start_rbn (title_start_rbn_w),
+    .title_end_rbn   (title_end_rbn_w),
     // ---- what the span is WORTH, so the ramp is an absolute content rate ----
     // The step used to be a fraction of the span, so a short title scrubbed at a
     // crawl (0.58 content-seconds per second on a 3-minute clip against 29 on a
@@ -2961,6 +2964,10 @@ dvd_iso_reader dvd_iso_reader_inst (
     .cur_cell_cmdnr (cur_cell_cmdnr_w),
     .title_first_rbn (title_first_rbn_w),         // seek-bar: title RBN span
     .title_last_rbn  (title_last_rbn_w),
+    // The PROGRAM's own ends, so a gesture that runs off either one lands where
+    // the viewer meant rather than at the far side of the disc (docs 2f).
+    .title_start_rbn (title_start_rbn_w),
+    .title_end_rbn   (title_end_rbn_w),
     .menu_ar_wide   (menu_ar_wide_w),
     .title_ar_wide  (title_ar_wide_w),
 

@@ -28,6 +28,10 @@ module scrub_ctrl_tb;
     logic        held_right = 0, held_left = 0, in_title = 1;
     logic [31:0] cur_rbn = 32'd100000;
     logic [31:0] title_first = 32'd0, title_last = 32'd1000000;
+    // ★ Default them EQUAL to first/last -- that is a well-ordered PGC, and it is
+    //   what makes every pre-2f scenario below a regression check on the claim
+    //   that ordinary discs are bit-identical after the split.
+    logic [31:0] title_start = 32'd0, title_end = 32'd1000000;
 
     logic        seek_rbn_pulse;
     logic [31:0] seek_rbn;
@@ -50,6 +54,7 @@ module scrub_ctrl_tb;
         .clk(clk), .rst_n(rst_n),
         .held_right(held_right), .held_left(held_left), .in_title(in_title),
         .cur_rbn(cur_rbn), .title_first_rbn(title_first), .title_last_rbn(title_last),
+        .title_start_rbn(title_start), .title_end_rbn(title_end),
         .title_secs(tsecs), .lin_blk10(lblk10), .lin_rate_ok(lrate_ok),
         .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn),
         .hold_freeze(hold_freeze),
@@ -64,6 +69,7 @@ module scrub_ctrl_tb;
         .clk(clk), .rst_n(1'b0),
         .held_right(1'b0), .held_left(1'b0), .in_title(1'b0),
         .cur_rbn(32'd0), .title_first_rbn(32'd0), .title_last_rbn(32'd0),
+        .title_start_rbn(32'd0), .title_end_rbn(32'd0),
         .title_secs(16'd0), .lin_blk10(24'd0), .lin_rate_ok(1'b0),
         .seek_rbn_pulse(), .seek_rbn(),
         .hold_freeze(),
@@ -383,6 +389,7 @@ module scrub_ctrl_tb;
         chk(ms_tick >= 439 && ms_tick <= 1758,
             "rate: a 3-minute clip scrubs within 2x of the 2 h rate at tier 0");
         title_first = 32'd0; title_last = 32'd1000000; tsecs = 16'd7200;
+        title_start = 32'd0; title_end  = 32'd1000000;
 
         // ---------- TEST 18: the LINEAR arm, in content-seconds per second ----
         // lin_blk10 is blocks per 10 s, so the shift IS the rate and the bench
@@ -445,6 +452,33 @@ module scrub_ctrl_tb;
             chk((d_ms[ti] * 4 <= l_ms[ti] * 5) && (l_ms[ti] * 4 <= d_ms[ti] * 5),
                 "parity: this tier scrubs at the same speed on both sources");
         end
+
+        // ---------- TEST 20: THE READER'S CONTRACT (not a bug in this module) --
+        // ⚠ READ THIS BEFORE "FIXING" THE CLAMP. These are the REAL numbers the
+        // reader published for A_MILLION_WAYS_TO_DIE_IN_THE_WEST VTS_07 PGCN 1
+        // (22 cells, 1:55:54) before 2026-09-13: first = 4, last = 3, because
+        // dvd_iso_reader.sv took title_last_rbn from the LAST-WRITTEN cell and
+        // that disc's final PROGRAM is a 4-sector cell sitting physically at the
+        // FRONT of the VOBS. 45 of 958 library ISOs do it.
+        //
+        // Given that span this module is CORRECT to pin every target at 3: the
+        // playhead is above it in both directions, so both clamps fire. The
+        // defect was the PRODUCER, and the fix is the max() in
+        // dvd_iso_reader.sv's cell walk -- gated by bench/dvd/title_span_tb.sv,
+        // which drives the reader and this module together because neither can
+        // see the seam alone. This arm exists so a future session fixes the span
+        // rather than loosening the clamp; it cannot go RED against that fix.
+        $display("TEST 20: a degenerate span clamps -- the producer's bug, not ours");
+        lrate_ok = 1'b0; tsecs = 16'd6954;
+        title_first = 32'd4; title_last = 32'd3;
+        title_start = 32'd4; title_end  = 32'd3;
+        cur_rbn = 32'd1000000; tick(4);
+        gesture(1'b1, 60);
+        chk(got && cap_rbn == 32'd3, "degenerate span: a FORWARD gesture pins at title_last");
+        cur_rbn = 32'd1000000; tick(4);
+        gesture(1'b0, 60);
+        chk(got && cap_rbn == 32'd3, "degenerate span: a BACKWARD gesture pins there too");
+        title_first = 32'd0; title_last = 32'd1000000; tsecs = 16'd7200;
 
         if (errors == 0) $display("\nscrub_ctrl_tb: ALL TESTS PASSED");
         else begin

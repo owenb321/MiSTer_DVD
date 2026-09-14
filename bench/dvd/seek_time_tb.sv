@@ -59,10 +59,10 @@ module seek_time_tb;
     );
 
     integer errors = 0;
-    task automatic chk(input cond, input [255:0] msg);
+    task automatic chk(input cond, input [1023:0] msg);
         if (!cond) begin $display("  FAIL: %0s", msg); errors = errors + 1; end
     endtask
-    task automatic chk_t(input [23:0] want, input [255:0] msg);
+    task automatic chk_t(input [23:0] want, input [1023:0] msg);
         if (prev_time[31:8] !== want) begin
             $display("  FAIL: %0s (got %06h want %06h)", msg, prev_time[31:8], want);
             errors = errors + 1;
@@ -120,6 +120,44 @@ module seek_time_tb;
             title_secs  = ncells * dur;
             title_first = BASE;
             title_last  = BASE + ncells * STEP - 1;
+            @(negedge clk);
+        end
+    endtask
+
+    // BIG_TROUBLE_LITTLE_CHINA's shape, scaled: program cell 0 sits at the TOP
+    // of the disc and cells 1..n-1 below it, in order. Physical layout:
+    //     cell 1 .. cell n-1  ->  BASE            .. BASE + (n-1)*STEP - 1
+    //     cell 0              ->  BASE + (n-1)*STEP .. +STEP-1   <- LAST on disc
+    // Playback order and start times are unchanged; only the addresses move.
+    task automatic stream_title_late0(input integer ncells, input integer nprog,
+                                      input integer dur);
+        integer i; integer rbn;
+        begin
+            for (i = 0; i < ncells; i = i + 1) begin
+                rbn = (i == 0) ? (BASE + (ncells-1)*STEP)
+                               : (BASE + (i-1)*STEP);
+                @(negedge clk);
+                cellf_we   = 1'b1;
+                cellf_idx  = i[6:0];
+                cellf_rbn  = rbn;
+                cellf_secs = i * dur;
+                @(negedge clk);
+                cellf_we   = 1'b0;
+                cellf_lwe  = 1'b1;
+                cellf_last = rbn + STEP - 1;
+                @(negedge clk);
+                cellf_lwe  = 1'b0;
+            end
+            for (i = 0; i < nprog; i = i + 1) begin
+                @(negedge clk);
+                pm_we    = 1'b1; pm_waddr = i[6:0]; pm_wdata = (i * 2) + 1;
+                @(negedge clk);
+                pm_we    = 1'b0;
+            end
+            @(negedge clk);
+            title_secs  = ncells * dur;
+            title_first = BASE;                          // envelope low  (min)
+            title_last  = BASE + ncells * STEP - 1;      // envelope high (max)
             @(negedge clk);
         end
     endtask
@@ -264,6 +302,35 @@ module seek_time_tb;
         ask_bar(32'd172843); chk_t(24'h00_08_52, "gap: cell 0 end = 0:08:52");
         ask_bar(32'd225000); chk_t(24'h00_08_52, "gap: inside the gap holds");
         ask_bar(32'd278600); chk_t(24'h00_08_52, "gap: trailing stub = 0:08:52");
+
+        // ---- T11: the PREVIEW clock on an out-of-physical-order PGC --------
+        // ★ The bracketing scan walks cells in INDEX order and used to stop at
+        //   the first cf > tgt, which assumes cell_first[] ascends with the
+        //   index -- true only while a PGC's program order is its physical
+        //   order. On BIG_TROUBLE_LITTLE_CHINA cell[0] sits at the TOP of the
+        //   disc, so the very first compare closes the bracket with lo_ok = 0
+        //   and the "before the first cell" path publishes 0. Reported from the
+        //   board as: the seek preview "stays at 0:00:00 during seeking, then
+        //   updates to the correct timestamp when the seek completes" -- the
+        //   live clock afterwards is cell-INDEX based, so only the preview lies.
+        $display("TEST 11: preview clock, cell[0] physically LAST");
+        stream_title_late0(NC, 4, DUR);
+
+        // program cell 3 covers 2*STEP..3*STEP-1 physically, and starts at
+        // 3*DUR = 0:45:00. Its midpoint must read 0:52:30, exactly as T3 does on
+        // the in-order title -- the physical layout must not change the answer.
+        ask_bar(BASE + 2*STEP + STEP/2);
+        chk(prev_ok, "late0: midpoint resolved");
+        chk_t(24'h00_52_30, "late0: mid program cell 3 = 0:52:30");
+
+        // program cell 0 is the FIRST program and physically LAST: it starts at
+        // 0:00:00, so its midpoint is 0:07:30.
+        ask_bar(BASE + (NC-1)*STEP + STEP/2);
+        chk_t(24'h00_07_30, "late0: mid program cell 0 (the last on disc) = 0:07:30");
+
+        // and the first program's own start still reads zero
+        ask_bar(BASE + (NC-1)*STEP);
+        chk_t(24'h00_00_00, "late0: program cell 0 start = 0:00:00");
 
         if (errors == 0) $display("\nseek_time_tb: ALL TESTS PASSED");
         else begin
