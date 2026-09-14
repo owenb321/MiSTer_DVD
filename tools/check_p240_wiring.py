@@ -108,6 +108,18 @@ def main():
         want(label, pat, why)
 
     # ------------------------------------------------------- new connections
+    # Analog Aspect is suppressed at 240p: crt_ov_map's bar geometry is handed literals
+    # authored for a 480/576-line frame, so the bars would be twice their proper depth and
+    # the overlay inverse would map subtitles into the wrong rows. SIF is 4:3 by
+    # construction, so there is nothing to letterbox or crop.
+    want("analog_letterbox",
+         r"assign analog_letterbox = interlaced_eff & ~p240_eff &",
+         "Letterbox must be suppressed on the 240p raster -- crt_ov_map's v_bar/v_band are "
+         "480/576-line literals and SIF content is 4:3, so there is nothing to letterbox")
+    want("analog_crop",
+         r"assign analog_crop += interlaced_eff & ~p240_eff &",
+         "Crop must be suppressed on the 240p raster, for the same reason")
+
     want("csync_smpte.prog", r"\.prog +\( *p240_eff *\)",
          "the sync generator must be told to read v_pos as a plain line index and to stop "
          "offsetting the block by half a line")

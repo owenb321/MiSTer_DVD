@@ -4866,9 +4866,20 @@ wire [1:0] analog_aspect_sel = aa_osd_sel;   // 0 Auto, 1 Fit, 2 Letterbox, 3 Cr
 // menu-aware aspect — IFO V_ATR while a menu is up, PR #86) instead of the raw
 // stream aspect, matching what HDMI's ascal path does: an anamorphic menu now
 // letterboxes on the CRT under Auto exactly like it corrects on HDMI.
-assign analog_letterbox = interlaced_eff & ((analog_aspect_sel == 2'd2) |
+// ⚠ DVD-FORK (native 240p): SUPPRESSED on the 240p/288p raster, and this is a real gap
+// rather than tidiness. crt_ov_map's bar geometry is handed LITERALS authored for a
+// 480/576-line frame (`v_bar` = vertical_size/8 = 60/72, `v_band` = 3/4 = 360/432, see
+// the instantiation below), so on a 240-line raster the bars would be twice their proper
+// depth and the overlay inverse would map subtitles and menu highlights into the wrong
+// rows. Making that geometry raster-aware is real work for a case that does not exist:
+// SIF content is 4:3 by construction, so there is nothing to letterbox or crop. Auto was
+// already safe here (it follows ar_wide_auto_eff, and MPEG-1 pixel-aspect codes never
+// resolve 16:9 — docs/vcd_svcd.md §2d); what this gates is a MANUAL Letterbox/Crop
+// selection while a VCD plays. Same shape as filmp_eff being suppressed by
+// interlaced_eff: a raster that cannot carry a feature says so, in RTL.
+assign analog_letterbox = interlaced_eff & ~p240_eff & ((analog_aspect_sel == 2'd2) |
                                 ((analog_aspect_sel == 2'd0) & ar_wide_auto_eff)); // Letterbox or Auto-16:9
-assign analog_crop      = interlaced_eff &  (analog_aspect_sel == 2'd3);         // Crop (manual)
+assign analog_crop      = interlaced_eff & ~p240_eff & (analog_aspect_sel == 2'd3); // Crop (manual)
 wire       disp_vscale_en   = analog_letterbox;                             // downstream 2-tap letterbox
 // DVD-FORK FIX (SIF analog fill): mode 2 = the re-armed addrgen 2x line repeat (v_step
 // 128) for sub-D1 heights on the analog output; bit 0 stays tied (mode 1 letterbox-NN

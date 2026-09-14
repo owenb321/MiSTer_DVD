@@ -151,6 +151,9 @@ frame to scale rather than an already-doubled one.
 It happens on its own, with nothing to set. There is no OSD option, and a normal DVD is
 untouched — only content 288 lines or shorter takes the 240p raster.
 
+**Analog Aspect has no effect while 240p is running.** VCD and MPEG-1 SIF content is 4:3,
+so there is nothing to letterbox or crop; the setting still applies to everything else.
+
 !!! note "What you may notice"
     Switching in and out of the mode is a brief interruption, like a chapter skip, because
     the raster itself changes. In practice a disc settles on one raster as it loads and stays

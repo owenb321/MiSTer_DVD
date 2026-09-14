@@ -138,6 +138,11 @@ emu_red "M7 seek_bar loses act_h_eff" \
 emu_red "M8 horizontal fill switched off at 240p" \
   "s|wire sif_hfill_eff = interlaced_eff \& sif_h_s2;|wire sif_hfill_eff = interlaced_eff \& sif_h_s2 \& ~p240_eff;|"
 
+# M9 — Analog Aspect left reachable at 240p: crt_ov_map would draw 480-line bars on a
+# 240-line raster and map the overlay inverse into the wrong rows.
+emu_red "M9 Letterbox left reachable at 240p" \
+  "s|assign analog_letterbox = interlaced_eff \& ~p240_eff \&|assign analog_letterbox = interlaced_eff \&|"
+
 # ---- detector mutations ---------------------------------------------------
 pd_red() {   # $1 = label, $2 = sed program, $3 = plusargs
   echo "== RED [pal_detect: $1] =="

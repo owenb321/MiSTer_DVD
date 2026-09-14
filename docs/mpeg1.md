@@ -481,6 +481,18 @@ required the whole nine-line block to be line-aligned, which is true for 525 and
 625** — BT.470's 2.5-line segments start the pre-equalizing sequence mid-line. Only the broad
 segment is line-aligned in both standards.
 
+★ **ANALOG ASPECT IS SUPPRESSED ON THE 240p RASTER, and this was a real gap found by
+re-reading the branch rather than by any bench.** `crt_ov_map` is handed bar geometry as
+LITERALS authored for a 480/576-line frame (`v_bar` = `vertical_size/8` = 60/72, `v_band`
+= 3/4 = 360/432), so on a 240-line raster the bars would be twice their proper depth and
+the overlay inverse would map subtitles and menu highlights into the wrong rows.
+Making that geometry raster-aware is real work for a case that does not exist: **SIF
+content is 4:3 by construction**, so there is nothing to letterbox or crop. Auto was
+already safe (it follows `ar_wide_auto_eff`, and MPEG-1 pixel-aspect codes never resolve
+16:9 — `docs/vcd_svcd.md` §2d); what the gate covers is a MANUAL `Letterbox`/`Crop`
+selection while a VCD plays. Same shape as `filmp_eff` being suppressed by
+`interlaced_eff`: a raster that cannot carry a feature says so in RTL. RED mutation M9.
+
 **Still open on this feature:**
 
 - ⏳ **HW**: nobody has watched a long VCD on the board yet. The specific things to look for
