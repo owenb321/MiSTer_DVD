@@ -403,3 +403,14 @@ Two things here that a reader of this document alone would get wrong:
 `mpeg2video.v` also moves `getbits_fifo` onto `vbuf_rst`, so the bit window no longer
 survives a flush holding bytes of the discarded stream. That is what the byte-consumption
 argument in `docs/quant_matrix.md` §3.1 rests on.
+
+---
+
+**Amended 2026-09-14 (`docs/quant_matrix.md` §11).** `flush_ctl` now fires the decoder
+SOFT RESET (`soft_flush -> mpeg2video.soft_flush -> reset.soft_rst_n`, the mount path)
+on a `~keep_vbuf` **VM jump** — menu entry/exit and the First Play chain. That path
+therefore no longer holds the last frame; it cuts to black and restarts the pipeline
+cold, so the realign drop logic in `vld.v` never sees those flushes (it is in reset).
+**Transport seeks are untouched**: `seek_ack` still flushes without a soft reset and
+the two-anchor realign above is still what holds the frame across a chapter skip.
+`run_seek_realign.sh` is the gate that this stayed true.

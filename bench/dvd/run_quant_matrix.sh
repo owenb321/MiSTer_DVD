@@ -17,17 +17,21 @@
 # DVD_ISO_DIR to a library of decrypted rips. Without one every arm SKIPs
 # loudly rather than passing on an empty array.
 #
-# ⛔ STATUS: THE DEFECT IS OPEN. The vld fix this suite was written to gate
-# REGRESSED on hardware and was reverted (docs/quant_matrix.md §9), so the flush
-# sweep below REPRODUCES the defect rather than proving it fixed. It is reported
-# as a measurement, not gated.
+# ★ THE FIX (2026-09-14, docs/quant_matrix.md §11): a ~keep_vbuf VM JUMP (menu
+# entry/exit) now fires the decoder SOFT RESET a file mount already uses
+# (dvd/flush_ctl.sv soft_flush -> mpeg2video.soft_flush -> reset.soft_rst_n), so
+# the whole pipeline restarts cold and the landing's sequence header is the first
+# thing parsed. +SOFTRST=1 models exactly that (every module on sync_rst held in
+# reset for the flush level). Arm [2] is GATED on it: all 12 swept positions must
+# recover the matrix. The same sweep WITHOUT +SOFTRST is the RED arm and must
+# still lose it -- it is the shipped decoder, and it is what the reporter sees.
 #
-# ⚠ And this suite is NOT a safety gate for any vld change: it passed 12/12 on a
-# build that produced magenta/green garbage on real hardware. The gate for that
-# is the title->menu re-entry test on the rig (docs/quant_matrix.md §9.1).
-#
-# What IS gated here, and does pass: the two controls, and the 13818-2 7.3.1
-# scan fix in iquant.v.
+# ⛔ The earlier vld-only fix (flush_resync, a forced STATE_NEXT_START_CODE) passed
+# this sweep 12/12 too and produced magenta/green garbage on real hardware: it
+# re-synced ONE register and left a partial block in the rld fifo (§9, §10). A
+# bench of getbits+vld+rld+iquant cannot see a block-count desync that lands in
+# motcomp, so this suite is NOT the whole gate -- the title->menu re-entry test on
+# the rig is (§9.1, §11.3).
 #
 #   ./bench/dvd/run_quant_matrix.sh          # gated arms + the reproduction
 #   ./bench/dvd/run_quant_matrix.sh --red    # also the pre-fix arms first
@@ -137,25 +141,33 @@ $IV -o bench/dvd/quant_matrix_sim $RTL bench/dvd/quant_matrix_tb.sv
 echo "== [1] control -- no flush: the download must land, fix or no fix =="
 run "[1] no flush" +NOFLUSH=1
 
-echo "== [2] flush swept across the parse -- REPRODUCTION, not a gate."
-echo "==     The defect is OPEN: expect most positions to LOSE the matrix. =="
+echo "== [2] RED: flush swept across the parse on the SHIPPED decoder -- must LOSE =="
 fried=0; n=0
 for d in 0 60 140 260 400 620 900 1300 1800 2500 3400 4600; do
   out=$(vvp bench/dvd/quant_matrix_sim +fixture=$FIX +FLUSHDLY=$d 2>&1 | grep -vE '^WARNING') || true
   r=$(echo "$out" | grep -oE 'RESULT: [A-Z]+')
-  echo "   FLUSHDLY=$d  $r"
   n=$((n+1)); echo "$r" | grep -q FRIED && fried=$((fried+1))
 done
-echo "   reproduction: $fried/$n swept flush positions lose the matrix"
+echo "   RED: $fried/$n swept flush positions lose the matrix without the soft reset"
 if [ "$fried" -eq 0 ]; then
-  echo "  NOTE: nothing reproduced -- either the defect was fixed elsewhere or the"
-  echo "        sweep no longer catches the vld mid-picture. Check state_at_flush."
+  echo "  FAIL: RED reproduces nothing -- the sweep no longer catches the vld mid-picture"
+  echo "        (check state_at_flush), so the GREEN arm below would be vacuous"; rc=1
 fi
 
-echo "== [3] freeze: motcomp_busy held across the window (reproduction arm) =="
-out=$(vvp bench/dvd/quant_matrix_sim +fixture=$FIX +FREEZE=1 +FLUSHDLY=140 2>&1 \
-      | grep -vE '^WARNING') || true
-echo "$out" | grep -E '^(SUMMARY|RESULT)' || true
+echo "== [2g] GREEN: the same sweep with the soft reset (+SOFTRST=1) -- ALL must PASS =="
+ok=0
+for d in 0 60 140 260 400 620 900 1300 1800 2500 3400 4600; do
+  out=$(vvp bench/dvd/quant_matrix_sim +fixture=$FIX +FLUSHDLY=$d +SOFTRST=1 2>&1 | grep -vE '^WARNING') || true
+  r=$(echo "$out" | grep -oE 'RESULT: [A-Z]+')
+  echo "   FLUSHDLY=$d  $r"
+  echo "$r" | grep -q PASS && ok=$((ok+1))
+done
+echo "   GREEN: $ok/$n positions recover the matrix"
+[ "$ok" -eq "$n" ] || { echo "  FAIL: [2g] the soft reset did not recover every position"; rc=1; }
+
+echo "== [3] freeze: motcomp_busy held across the window, soft reset -- must PASS =="
+echo "==     (a reset is not clk_en-gated, so the freeze cannot hide it) =="
+run "[3] freeze" +FREEZE=1 +FLUSHDLY=140 +SOFTRST=1
 
 echo "== [4] scan probe: a VARIED matrix after an alternate_scan=1 cut A =="
 if [ -f "$PROBE.hex" ]; then

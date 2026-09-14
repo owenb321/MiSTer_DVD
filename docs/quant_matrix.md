@@ -1,13 +1,16 @@
 # The quantiser matrix is lost at a VBUF flush ("deep fried" menu stills)
 
-**Status: ⛔ NOT FIXED. The fix REGRESSED on hardware and is being bisected.**
-Branch `fix/quant-matrix-flush`, not merged, not pushed. §9 is the live record —
-read it before anything else here, because §6's fix is the thing that regressed.
+**Status: 🔧 FIXED by a decoder SOFT RESET on VM jumps (2026-09-14, §11) — sim-proven
+RED/GREEN, ⏳ HW-confirm pending.** Branch `fix/quant-matrix-flush`, not merged, not
+pushed. §6's vld-only fix REGRESSED on hardware and is reverted; §9–§10 are the record
+of that, and §11 is what replaced it. The two things that survive from the first
+attempt are the `iquant.v` 7.3.1 scan fix (§4) and the bench (§7, now gated on the
+soft reset).
 
-⚠ `bench/dvd/run_quant_matrix.sh` is NOT a safety gate for the vld change. It
-measures the quantiser-matrix landing and passed 12/12 on a build that produces
-magenta/green garbage on hardware. The real gate is the title->menu re-entry
-test on the rig (§9.1).
+⚠ `bench/dvd/run_quant_matrix.sh` gates the MATRIX landing (`+SOFTRST=1`, 12/12). It
+cannot see a block-count desync that lands in motcomp — the earlier vld-only fix
+passed it 12/12 and produced garbage on the board — so the title->menu re-entry test
+on the rig (§9.1, §11.3) is part of the gate, not optional.
 
 ---
 
@@ -523,3 +526,90 @@ run decides it — the same method that killed the MPEG-1 theory in §9.3.
 **after a flush, refuse extension start codes until a sequence header has been
 parsed**, so a hunt through garbage cannot latch sequence-level parameters. That
 would make the whole flush_resync approach viable rather than abandoned.
+
+## 11. The fix that replaced §6 — reset the whole pipeline, not one register (2026-09-14)
+
+### 11.1 The chroma HW round: `chroma_format` is exonerated
+
+§10.3's measurement was made. A diagnostic core (state force re-applied on purpose,
+telemetry word 5 = `{extsc_n, seqext_n, chroma_format}`) was flashed and the
+title->menu re-entry driven from the harness: 4 boots x 3 re-entries, then 3 x 6.
+
+```
+  run 1   12 re-entries   3 garbage frames (2 onsets; b2_re2 -> b2_re3 identical,
+                          i.e. it PERSISTS, as reported)
+  run 2   18 re-entries   0 garbage
+  every garbage frame:    chroma_format = 1   (4:2:0 -- correct)
+```
+
+So the register that sets blocks-per-macroblock is right at the moment the picture
+is wrong. **`chroma_format` is not the cause**; the desync is below it. `seqext_n`
+and `extsc_n` had both SATURATED (63 / 255) by the first garbage sample — they reset
+at core reset, not at the flush — so §10.3's second question (did the post-flush hunt
+dispatch phantom extension codes) went unanswered. It no longer needs answering.
+
+Two measurement lessons, both paid for on the rig:
+
+- ★ **A reference-free garbage classifier must test r(Cb,Cr), not r(Cb,Y).** §10.1
+  correlated bad chroma against the GOOD frame's luma. Within one garbage frame the
+  luma plane is itself wrong (bad Y tracks good Y only +0.21), so r(Cb,Y) measures
+  nothing — the first classifier called a textbook garbage frame PICTURE. What
+  survives without a reference: **both chroma planes carry the same signal** (r(Cb,Cr)
+  = +0.767 vs −0.40 on the correct menu) and **chroma carries luma-rate detail** —
+  3x3 high-pass energy of Cb reads 0.98 on every correct menu and 5.00 / 6.40 on the
+  two garbage variants, and 4:2:0 chroma is subsampled, so it physically cannot hold
+  that. The second variant (blue-violet, not magenta) has r(Cb,Cr) only +0.24; the
+  chroma-AC test catches both.
+- ⚠ **`seqext_n` climbing 22 -> 41 between samples was read first as "the story
+  played" and then, when the same numbers repeated on every boot, as "the presses
+  never landed". Both inferences were unsafe** — it is a per-GOP counter and a
+  looping menu re-sends headers too. The garbage frame itself settled it: a garbage
+  MENU can only exist if the re-entry happened. Measure the transition (a shot
+  during playback), do not infer it from a counter.
+
+### 11.2 The fix
+
+A VBUF flush discards the buffered BYTES and leaves the whole decode pipeline — vld
+state, getbits window, rld fifo, iquant, motcomp, picbuf — frozen mid-picture (the
+upstream "trick play" flush resets only the VBUF FIFOs). The landing arrives INTO
+that. A moving title self-heals at its next GOP header; a menu still is one sequence
+header, so whatever the stale pipeline eats at the landing is what you look at.
+
+§6 re-synced ONE register (the vld state machine) and left a partial block in the rld
+fifo — hence luma blocks in the chroma planes. The pipeline's state is coupled: reset
+all of it or none of it. And the design already has "all of it": the watchdog-
+equivalent decoder soft reset a file mount has used since 2026-08-28
+(`flush_ctl.mount_flush -> mpeg2video.soft_flush -> reset.soft_rst_n`, HW-proven).
+
+**`dvd/flush_ctl.sv` now raises a new `soft_flush` on a `~keep_vbuf` VM JUMP** —
+title->menu on the Menu key, the First Play chain into a menu, menu->title Play — as
+well as on a mount. `mount_flush` is kept separate and stays mount-only because
+`pal_detect` keys its immediate PAL re-arm on it. Transport seeks (`seek_ack`) and
+mode switches are deliberately NOT included, so the seek-realign "hold the last
+frame" decision (`flush_ctl.sv` "THE RULE ITSELF STANDS") is untouched: a chapter
+skip keeps its held frame; a menu entry/exit becomes a brief black cut — which is what
+a set-top player does on exactly those transitions. Maintainer decision, 2026-09-14.
+
+Why this is stronger than v0.4.0, not merely equal: v0.4.0's cold re-decode showed a
+fried frame and then repaired it; here the FIRST decode is correct, because the
+landing's own sequence header is the first thing a clean parser sees.
+
+### 11.3 Gates
+
+- `bench/dvd/flush_ctl_tb.sv` gains a sixth column. GREEN 11/11; against the pre-fix
+  module it fails **exactly row [4]** (`~keep_vbuf jump: soft=0, want 1`).
+- `bench/dvd/quant_matrix_tb.sv` `+SOFTRST=1` holds EVERY module on `sync_rst` in
+  reset for the flush level — the same thing `reset.soft_rst_n` does — and
+  `run_quant_matrix.sh` arm [2g] is gated on it: **12/12** positions recover the
+  matrix, with `codes=b3 b5 b5 b8 ...` (the landing header parsed first,
+  `downloads=1`, 0/64 mismatches). Arm [2], the same sweep on the shipped decoder,
+  is the RED arm and loses **10/12**. `getbits_fifo` is back on `sync_rst` in the
+  bench, as shipped.
+- `+BSKIP` / `+REFLUSH2` with the soft reset come back VACUOUS: a landing with no
+  sequence header decodes nothing after a reset (`sequence_header_seen` gates the
+  picture start code), which is the correct behaviour and cannot happen on a VM jump —
+  the reader lands every jump on a cell start (NAV pack + sequence header), the same
+  guarantee the mount path already relies on.
+- ⏳ HW gate: the §9.1 re-entry test on the reporting disc — NO fried frame and NO
+  garbage across the first ~500 ms and settled; a chapter skip still holds its frame;
+  a narration still (#65) does not replay audio; the black cut on menu entry is brief.

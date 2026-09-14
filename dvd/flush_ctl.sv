@@ -58,7 +58,8 @@ module flush_ctl (
     output wire aud_resync,       // ~64-cycle level -> audio-only re-phase
     // one-cycle: the display re-anchored on a CONTENT PTS jump -> re-phase audio
     output wire seek_flush,       // ~64-cycle level -> 2-FF into clk_dec = mpeg2video.vbuf_flush
-    output wire mount_flush,      // ~64-cycle level, MOUNT ONLY -> mpeg2video.soft_flush (decoder soft reset)
+    output wire mount_flush,      // ~64-cycle level, MOUNT ONLY -> pal_detect.mount_arm (the one event that may change the standard)
+    output wire soft_flush,       // ~64-cycle level, mount OR ~keep_vbuf VM jump -> mpeg2video.soft_flush (decoder soft reset)
     output wire pipe_rst_n,       // reset_n & ~load_flush
     output wire aud_rst_n         // reset_n & ~aud_flush & ~aud_resync
 );
@@ -241,6 +242,32 @@ end
 // leading predicted pictures until two post-flush anchors have re-established
 // the references, so the display holds the last frame for real.
 // See docs/seek_realign.md.
+//
+// ★ EXTENDED 2026-09-14 (deep-fried menu stills, docs/quant_matrix.md §11): the
+// soft reset ALSO fires on a ~keep_vbuf VM JUMP -- title->menu on the Menu key, the
+// First Play chain into a menu, menu->title Play -- as `soft_flush`. Still NEVER on a
+// transport seek or a mode switch, so the rule above stands for those: a chapter
+// skip keeps its held frame. Why: a VBUF flush discards the buffered BYTES and
+// leaves the whole decode pipeline (vld state, getbits window, rld fifo, iquant)
+// frozen mid-picture, and the landing stream arrives INTO that. A moving title
+// self-heals at its next GOP header; a menu STILL is one sequence header, so what
+// gets eaten at the landing (the 128-byte quantiser-matrix download) is what you
+// look at for as long as the still is up. Surgically re-syncing ONE register (the
+// vld state machine) recovered the matrix in sim and produced luma-in-chroma
+// garbage on the board -- a block-count desync from the partial block it left
+// downstream. The pipeline's state is coupled; reset all of it or none of it.
+// This is the watchdog-equivalent reset a mount already uses, HW-proven.
+// ⚠ `mount_flush` is kept SEPARATE because pal_detect keys its immediate PAL
+// re-arm on it and that must stay mount-only (a menu does not change the standard).
+// Cost: a menu entry/exit is a brief black cut instead of a held title frame --
+// what a set-top player does on exactly those transitions (maintainer decision).
+reg [6:0] jump_soft_cnt = 7'd0;
+always @(posedge clk) begin
+    if (~rst_n)                    jump_soft_cnt <= 7'd0;
+    else if (jump_flush)           jump_soft_cnt <= 7'd64;   // ~keep_vbuf VM jump only
+    else if (jump_soft_cnt != 0)   jump_soft_cnt <= jump_soft_cnt - 7'd1;
+end
+assign    soft_flush = mount_flush || (jump_soft_cnt != 7'd0);
 reg [6:0] mount_flush_cnt = 7'd0;
 assign    mount_flush = mount_flush_cnt != 7'd0;
 always @(posedge clk) begin

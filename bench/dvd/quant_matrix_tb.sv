@@ -93,20 +93,23 @@ module quant_matrix_tb;
   wire        rld_wr_almost_full;
 
   reg flush_lvl = 1'b0;                     // the ~192 clk_dec VBUF flush level
+  // ★ +SOFTRST=1 models flush_ctl.soft_flush -> reset.soft_rst_n: for the whole
+  // flush level EVERY module on sync_rst is held in reset -- vld, getbits window,
+  // rld fifo, rld, both matrix RAMs -- exactly what a mount (and now a ~keep_vbuf
+  // VM jump) does on hardware. Nothing is re-synced surgically; the pipeline
+  // restarts as cold as a core load and the landing's own sequence header is the
+  // first thing a clean parser sees. Compare vld.flush_resync (REVERTED): it
+  // moved ONE register and left a partial block downstream = luma-in-chroma
+  // garbage on the board. docs/quant_matrix.md §11.
+  integer softrst = 0;
+  wire dut_rst = rst && ~(softrst[0] && flush_lvl);
 
-  // ★ Mirrors mpeg2video.v's wiring: the bit window is flushed WITH the VBUF.
-  // It used to be on sync_rst, so after a flush the 129-bit window still held
-  // up to 16 bytes of the stream that had just been discarded -- while pos_clr
-  // was already clearing the position counter at the same flush, so content and
-  // position disagreed. The parser then matched a phantom start code inside
-  // that residue, dispatched on it, left itself BIT-MISALIGNED and walked past
-  // the landing's real 00 00 01 B3.
-  // MEASURED over the flush sweep: vld's flush_resync alone recovers 9 of 10
-  // positions and this closes the tenth (the flush landing at a picture
-  // header). QM_FIX=0 restores BOTH pre-fix behaviours, so the RED arm is a
-  // faithful pre-fix core and not a half-fixed one.
+  // getbits_fifo is on sync_rst, as SHIPPED. (A branch once put it on the VBUF
+  // flush so the 129-bit window could not hold 16 bytes of the discarded stream;
+  // it regressed on hardware and was reverted -- docs/quant_matrix.md §9.) With
+  // +SOFTRST=1 dut_rst covers it anyway, together with everything else.
   getbits_fifo getbits_fifo (
-    .clk(clk), .clk_en(1'b1), .rst(QM_FIX ? (rst && ~flush_lvl) : rst),
+    .clk(clk), .clk_en(1'b1), .rst(dut_rst),
     .vid_in(vid_in), .vid_in_rd_en(vid_in_rd_en), .vid_in_rd_valid(vid_in_rd_valid),
     .advance(advance), .align(align), .wait_state(wait_state),
     // ⚠ NOT tied off: the rld fifo's backpressure is part of the timing under
@@ -134,7 +137,7 @@ module quant_matrix_tb;
   wire  [2:0] picture_coding_type;
 
   vld vld (
-    .clk(clk), .clk_en(vld_en), .rst(rst),
+    .clk(clk), .clk_en(vld_en), .rst(dut_rst),
     .getbits(getbits), .signbit(signbit),
     .advance(advance), .align(align), .wait_state(wait_state),
     .quant_wr_data(quant_wr_data_wr), .quant_wr_addr(quant_wr_addr_wr),
@@ -192,7 +195,7 @@ module quant_matrix_tb;
   wire        rld_rd_en, rld_rd_valid;
 
   rld_fifo rld_fifo (
-    .clk(clk), .clk_en(1'b1), .rst(rst),
+    .clk(clk), .clk_en(1'b1), .rst(dut_rst),
     .dct_coeff_wr_run(dct_coeff_wr_run),
     .dct_coeff_wr_signed_level(dct_coeff_wr_signed_level),
     .dct_coeff_wr_end(dct_coeff_wr_end),
@@ -234,7 +237,7 @@ module quant_matrix_tb;
   wire [11:0] iquant_level;
 
   rld rld (
-    .clk(clk), .clk_en(1'b1), .rst(rst),
+    .clk(clk), .clk_en(1'b1), .rst(dut_rst),
     .idct_fifo_almost_full(1'b0),
     .dct_coeff_rd_run(dct_coeff_rd_run),
     .dct_coeff_rd_signed_level(dct_coeff_rd_signed_level),
@@ -264,14 +267,14 @@ module quant_matrix_tb;
 
   // ---- the live matrices, exactly as mpeg2video wires them ----------------
   intra_quant_matrix intra_quantiser_matrix (
-    .clk(clk), .rst(rst),
+    .clk(clk), .rst(dut_rst),
     .rd_addr(quant_rd_addr), .rd_clk_en(1'b1), .dta_out(quant_rd_intra_data),
     .wr_addr(quant_wr_addr), .dta_in(quant_wr_data), .wr_clk_en(1'b1),
     .wr_en(quant_wr_en_intra), .rst_values(quant_rst),
     .alternate_scan(quant_alternate_scan)
   );
   non_intra_quant_matrix non_intra_quantiser_matrix (
-    .clk(clk), .rst(rst),
+    .clk(clk), .rst(dut_rst),
     .rd_addr(quant_rd_addr), .rd_clk_en(1'b1), .dta_out(quant_rd_non_intra_data),
     .wr_addr(quant_wr_addr), .dta_in(quant_wr_data), .wr_clk_en(1'b1),
     .wr_en(quant_wr_en_non_intra), .rst_values(quant_rst),
@@ -283,14 +286,14 @@ module quant_matrix_tb;
   wire [7:0] sh_intra_do, sh_nonintra_do;
 
   intra_quant_matrix shadow_intra (
-    .clk(clk), .rst(rst),
+    .clk(clk), .rst(dut_rst),
     .rd_addr(sh_addr), .rd_clk_en(1'b1), .dta_out(sh_intra_do),
     .wr_addr(quant_wr_addr), .dta_in(quant_wr_data), .wr_clk_en(1'b1),
     .wr_en(quant_wr_en_intra), .rst_values(quant_rst),
     .alternate_scan(quant_alternate_scan)
   );
   non_intra_quant_matrix shadow_nonintra (
-    .clk(clk), .rst(rst),
+    .clk(clk), .rst(dut_rst),
     .rd_addr(sh_addr), .rd_clk_en(1'b1), .dta_out(sh_nonintra_do),
     .wr_addr(quant_wr_addr), .dta_in(quant_wr_data), .wr_clk_en(1'b1),
     .wr_en(quant_wr_en_non_intra), .rst_values(quant_rst),
@@ -340,7 +343,7 @@ module quant_matrix_tb;
       if (vld.state == vld.STATE_START_CODE)       sc_after  <= sc_after  + 1;
     end
     if (in_b && quant_rst) qrst_after <= qrst_after + 1;
-    if (vld.flush_resync) fr_cycles <= fr_cycles + 1;
+    if (!dut_rst && flush_lvl) fr_cycles <= fr_cycles + 1;   // soft-reset cycles inside the window
     // ★ The MPEG-1 verdict is the thing under suspicion: mpeg1 forces
     // intra_dc_precision/q_scale_type/alternate_scan/intra_vlc_format to their
     // MPEG-1 constants, which on a DVD is catastrophic AND self-sustaining.
@@ -382,6 +385,7 @@ module quant_matrix_tb;
     if ($value$plusargs("ATSTATE=%d",   atstate))   ;
     if ($value$plusargs("REFLUSH2=%d", reflush2)) ;
     if ($value$plusargs("BSKIP=%d",    bskip))    ;
+    if ($value$plusargs("SOFTRST=%d",  softrst))  ;
 
     $readmemh({fixture, ".hex"}, es);
     $readmemh({fixture, ".meta.hex"}, meta);
@@ -399,8 +403,8 @@ module quant_matrix_tb;
       $display("SKIP: no fixture at %0s.hex -- run tools/quant_fixture.py", fixture);
       $finish;
     end
-    $display("== quant_matrix_tb: QM_FIX=%0d FLUSHDLY=%0d NOFLUSH=%0d FEEDTHRU=%0d REDECODE=%0d FREEZE=%0d",
-             QM_FIX, flushdly, noflush, feedthru, redecode, freeze);
+    $display("== quant_matrix_tb: QM_FIX=%0d FLUSHDLY=%0d NOFLUSH=%0d FEEDTHRU=%0d REDECODE=%0d FREEZE=%0d SOFTRST=%0d",
+             QM_FIX, flushdly, noflush, feedthru, redecode, freeze, softrst);
     $display("   fixture %0d words, cut B at word %0d, cut A %0d pics, cut B %0d pics, load_intra=%0d",
              es_words, b_word, pics_a, pics_b, load_intra);
 
@@ -469,6 +473,10 @@ module quant_matrix_tb;
       rd_ptr = b_word + bskip;            // the reader has jumped
       repeat (192) @(posedge clk);        // the real flush level
       flush_lvl  = 1'b0;
+      // Out of a soft reset the matrix RAMs run their 64-cycle STATE_CLEAR
+      // again (see the cold-start note above); on hardware the VBUF refill alone
+      // takes far longer than that before a byte can reach the parser.
+      if (softrst[0]) repeat (200) @(posedge clk);
       feed_en    = 1'b1;
       motcomp_busy = 1'b0;
       flush_done = 1'b1;
@@ -555,7 +563,7 @@ module quant_matrix_tb;
              mpeg1_es, mpeg1_latches, vld.sequence_header_seen, vld.sequence_extension_seen);
     if (mpeg1_es)
       $display("REGRESSION: a FALSE MPEG-1 verdict -- intra_dc_precision/q_scale_type/alternate_scan/intra_vlc_format are all forced to MPEG-1 constants");
-    $write("DIAG: flush_resync_cycles=%0d state_at_first_en_after_flush=%0h codes=",
+    $write("DIAG: softrst_cycles=%0d state_at_first_en_after_flush=%0h codes=",
            fr_cycles, state_after_flush);
     for (i = 0; i < n_codes; i = i + 1) $write("%02h ", first_codes[i]);
     $display("");

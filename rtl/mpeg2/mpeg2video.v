@@ -1019,34 +1019,20 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire [31:0] pic_hdr_bitpos;
   wire        skip_ack, skip_rff, skip_field, skip_tff, skip_pf;
 
-  /* ⛔ DVD-FORK: the bit window is NOT flushed with the VBUF -- REVERTED
-   * 2026-09-14 after it regressed on hardware.
-   *
-   * The idea was sound on paper: after a flush this module's 129-bit window
-   * still holds up to 16 bytes of the stream that was just discarded, and
-   * pos_clr(~vbuf_rst) already resets its POSITION, so content and position
-   * disagree. In simulation moving it onto the flush closed the last of the 12
-   * swept flush positions (vld.v's flush_resync alone gets 9 of 10).
-   *
-   * ON HARDWARE it produced magenta/green striped garbage on the title->menu
-   * re-entry path -- a DIFFERENT and worse defect than the fried still it was
-   * meant to help with, persisting through chapter skips and cleared only by
-   * remounting. MEASURED on the reporting disc, title->menu re-entry: the
-   * pre-fix core gives 5 CORRECT / 2 FRIED / 0 garbage, and the core with this
-   * change gives mostly GARBAGE and no fries at all.
-   *
-   * ⚠ Two forms were tried and BOTH are recorded because each failed its own
-   * way: `.rst(vbuf_rst)` alone silently dropped this module from the WATCHDOG
-   * reset and the mount SOFT reset (only sync_rst carries those) and let it
-   * leave reset ahead of the vld/rld/framestore; `.rst(sync_rst && vbuf_rst)`
-   * fixed that and cost 7 MHz (clk_dec 85.46 @-40C, below the 86.0 gate),
-   * because a bare AND puts a combinational net on a large module's reset tree.
-   * A dedicated registered sync_reset solved the timing and the garbage
-   * remained -- so the defect is not the reset FORM, it is flushing this window
-   * at all. Do not re-derive either form without a hardware round.
-   *
-   * The residual is one flush position in 12: a flush landing exactly at a
-   * picture header. docs/quant_matrix.md. */
+  /* DVD-FORK (deep-fried menu stills, docs/quant_matrix.md): the bit window
+   * stays on sync_rst. After a VBUF flush it still holds up to 16 bytes of the
+   * discarded stream while pos_clr(~vbuf_rst) has already zeroed its POSITION,
+   * and the vld above it is frozen mid-picture -- so the landing stream arrives
+   * into stale state and a menu still's one-and-only quantiser-matrix download
+   * gets eaten. Two surgical repairs were tried here and in vld.v (flush this
+   * window with the VBUF; force the vld state machine to STATE_NEXT_START_CODE)
+   * and BOTH regressed on hardware into luma-in-chroma garbage: re-syncing one
+   * or two registers of a coupled pipeline leaves a partial block downstream.
+   * The fix is NOT in this module: dvd/flush_ctl.sv raises `soft_flush` on a
+   * ~keep_vbuf VM jump (menu entry/exit) as well as on a mount, and reset.v's
+   * soft_rst_n leg restarts EVERYTHING on sync_rst cold -- this window included.
+   * §9 records the two failed forms (one also cost 7 MHz: a bare AND on a large
+   * module's reset tree). Do not re-derive either without a hardware round. */
   getbits_fifo getbits_fifo (
     .clk(clk), 
     .clk_en(1'b1), 
