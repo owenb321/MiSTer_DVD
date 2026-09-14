@@ -37,7 +37,16 @@ path — rejected).
 
 **Per-logo display scale** (fmt-1 flags bit1): 1× native (crisp, up to
 256×64 on screen) or 2× classic chunky (up to 512×128). The bounce box is
-the *displayed* size. The default art is authored native at 201×58 — the
+the *displayed* size — **and, since 2026-09-14, the ACTIVE WINDOW rather
+than a fixed 720×480** (`act_w_i`/`act_h_i` from `dvd/emu.sv`). That matters
+because the logo is **not idle-only**: the screensaver and Stop both show it
+over a mounted, playing title, so on a VCD in `Video Output = Progressive`
+it was bouncing inside a 720-wide box on a 352-wide picture and wandering
+hundreds of pixels off-screen. Both bounds clamp rather than underflow, and a
+2× logo too large for the window (512×128 cannot fit 352×240) renders **native**
+instead of hanging off the edge — a display decision, re-evaluated whenever the
+window changes; the ROM's own scale flag is untouched. See
+`docs/transport_hud.md` "The window is not the raster". The default art is authored native at 201×58 — the
 same on-screen size as the old 103×29-at-2× default, at double the detail
 (the disc edge no longer stair-steps; the wordmark uses 10×14 letterforms).
 Legacy fmt-0 `boot.rom`s (the 128×32 / 16-byte-stride layout) still load

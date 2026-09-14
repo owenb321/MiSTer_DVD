@@ -53,6 +53,10 @@ python3 idle_logo.py --verify boot.rom                   # preview what will ren
 Up to **256×64 pixels** shown 1:1, or up to a 512×128 on-screen footprint at 2× scale. The
 converter picks sensibly based on the source size.
 
+A 2× logo is shown at 1:1 instead when the picture is too small to hold it — a Video CD is
+352 pixels wide, so a 512-wide logo could not bounce there. That only affects VCDs, SVCDs
+and other small-format video; on a DVD the 2× size is used as normal.
+
 The image is one-bit — a pixel is either lit or not. Colour comes from the palette cycling
 or from `--colour`, not from the source artwork.
 

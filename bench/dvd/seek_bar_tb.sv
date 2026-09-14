@@ -12,6 +12,12 @@
 //   T9: chapter-skip preview -- cursor parks on the projected chapter's start
 //       column, tracks a multi-press burst, clears when the skip settles, and
 //       yields to the scrub cursor when both are up
+//  T11: an unsorted tick list still draws every notch
+//  T12: NARROW WINDOW (2026-09-14) -- the box re-centres and halves, and the bar's
+//       0..511 column space is sampled two columns per drawn pixel, so the fill edge,
+//       the cursor and a notch all land at half the column they do at full width.
+//       Runs on every invocation (it drives act_w_i itself), so the 720 arms above and
+//       this one are one run.
 //
 // Run: iverilog -g2012 -o /tmp/bar_sim dvd/seek_bar.sv bench/dvd/seek_bar_tb.sv
 `timescale 1ns/1ps
@@ -46,9 +52,19 @@ module seek_bar_tb;
     initial     void'($value$plusargs("act_h=%d", act_h_arg));
     wire [11:0] act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0]
                                             : (1'b0 ? 12'd576 : 12'd480);
+    // DVD-FORK (narrow DE window, 2026-09-14): the raster's ACTIVE WIDTH is now an INPUT
+    // too. Defaults to 720 so every pre-existing arm is bit-identical; +act_w=N drives the
+    // narrow-window arms (VCD 352, SVCD 480), where the box must shrink and re-centre.
+    // ⚠ DRIVEN by the bench, and deliberately NOT a plusarg: T1..T11 are written against
+    // the full-width box (columns 0..511 of a 512 px bar), so starting the whole run
+    // narrow would fail them against correct RTL. T12 sets the narrow widths itself and
+    // sweeps BOTH of the real ones (a VCD's 352 and an SVCD's 480), which is the only
+    // thing that differs between them -- the drawn coordinates are identical.
+    reg  [11:0] act_w_tb;
+    initial      act_w_tb = 12'd720;
     seek_bar #(.POP_TICKS(27'd2000)) dut (
         .clk(clk), .rst_n(rst_n),
-        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0), .act_h_i(act_h_tb),
+        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0), .act_h_i(act_h_tb), .act_w_i(act_w_tb),
         .bar_active(bar_active),
         .base_rbn(base_rbn), .tgt_rbn(tgt_rbn),
         .first_rbn(first_rbn), .last_rbn(last_rbn),
@@ -80,21 +96,36 @@ module seek_bar_tb;
         end
     endtask
 
-    // render one line: capture settled output per input h (2-stage pipe);
-    // index by the hit-test coordinate hx = h + 4 - 104
+    // render one line: capture settled output per input h (2-stage pipe), indexed by the
+    // DRAWN pixel hx = h + 4 - x0. The box comes from the bench's own statement of the
+    // layout rule (centred; 512 px above the 544 knee, 256 below), never read out of the
+    // DUT -- at 720 that is the historical 104/512 and every arm below is unchanged.
+    function [11:0] box_w(input [11:0] aw); box_w = (aw >= 12'd544) ? 12'd512 : 12'd256; endfunction
+    function [11:0] box_x0(input [11:0] aw); box_x0 = (aw - box_w(aw)) >> 1; endfunction
     reg       on_l   [0:511];
     reg [3:0] a_l    [0:511];
     reg [7:0] r_l    [0:511];
-    integer x, hx;
+    integer x, hx, wsel;
+    // ⚠ ROW COORDINATES FOLLOW act_h_i. They used to be literals (402/405/408) written for
+    // a 480-line raster, so under +act_h=240 every render_line landed on a blank line and
+    // the positive arms below asserted against nothing. run_p240.sh's "seek_bar_tb (240)"
+    // arm reported ok on a bench reporting 13 errors for exactly that reason -- the bench
+    // exited 0 on failure, which is why the $fatal at the bottom of this file matters.
+    wire [11:0] bar_y0 = act_h_tb - 12'd78;      // = the DUT's y0, from the same rule
     task render_line(input [11:0] vv);
+        integer x0, bw;
         begin
             v_pos = vv;
-            for (x = 90; x < 630; x = x + 1) begin
+            x0 = box_x0(act_w_tb); bw = box_w(act_w_tb);
+            for (x = 0; x < 512; x = x + 1) begin
+                on_l[x] = 1'b0; a_l[x] = 4'd0; r_l[x] = 8'd0;
+            end
+            for (x = x0 - 14; x < x0 + bw + 14; x = x + 1) begin
                 h_pos = x[11:0];
                 @(posedge clk); @(posedge clk);   // fill the 2-stage pipe
                 #1;
-                hx = x + 4 - 104;
-                if (hx >= 0 && hx < 512) begin
+                hx = x + 4 - x0;
+                if (hx >= 0 && hx < bw) begin
                     on_l[hx] = bar_on; a_l[hx] = bar_alpha; r_l[hx] = bar_r;
                 end
             end
@@ -133,11 +164,11 @@ module seek_bar_tb;
         base_rbn = 32'd5000; tgt_rbn = 32'd5001;
         check_px("T3b span=1", 10'd0, 10'd512);
 
-        // T4: render a mid-bar line (y0=402 for NTSC, upper-half row 405)
+        // T4: render a mid-bar line (y0 = activeH-78; upper half = y0+3)
         first_rbn = 32'd1000; last_rbn = 32'd101000;
         base_rbn = 32'd51000; tgt_rbn = 32'd76000;        // fill 256, cursor 384
         settle;
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (!(on_l[384] && a_l[384] == 4'd15 && r_l[384] == 8'hFF &&
               on_l[382] && on_l[386] && a_l[382] == 4'd15))
         begin errors = errors + 1; $display("  FAIL T4a cursor not at 384"); end
@@ -151,18 +182,18 @@ module seek_bar_tb;
         if (!(on_l[0] && a_l[0] == 4'd12 && on_l[511] && a_l[511] == 4'd12))
         begin errors = errors + 1; $display("  FAIL T4d side borders"); end
         else $display("  ok  T4d side borders");
-        render_line(12'd402);
+        render_line(bar_y0);
         if (!(on_l[300] && a_l[300] == 4'd12))
         begin errors = errors + 1; $display("  FAIL T4e top border row (a=%0d)", a_l[300]); end
         else $display("  ok  T4e top border row");
-        render_line(12'd400);
+        render_line(bar_y0 - 12'd2);
         if (on_l[300] !== 1'b0)
         begin errors = errors + 1; $display("  FAIL T4f renders above the bar"); end
         else $display("  ok  T4f nothing above the bar");
 
         // T5: inactive
         bar_active = 0;
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (on_l[300] !== 1'b0 || on_l[384] !== 1'b0)
         begin errors = errors + 1; $display("  FAIL T5 renders while inactive"); end
         else $display("  ok  T5 inactive = invisible");
@@ -186,7 +217,7 @@ module seek_bar_tb;
         cur_rbn = 32'd51000;                              // live 50% -> 256
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         settle;
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (!(on_l[100] && a_l[100] == 4'd10 && on_l[300] && a_l[300] == 4'd7))
         begin errors = errors + 1; $display("  FAIL T7a popup fill/backing"); end
         else $display("  ok  T7a popup live fill at 256");
@@ -194,7 +225,7 @@ module seek_bar_tb;
         begin errors = errors + 1; $display("  FAIL T7b cursor drawn while not scrubbing"); end
         else $display("  ok  T7b no cursor in popup mode");
         repeat (2600) @(posedge clk);                     // expire (render burned some)
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (on_l[300] !== 1'b0)
         begin errors = errors + 1; $display("  FAIL T7c popup did not expire"); end
         else $display("  ok  T7c popup expired");
@@ -202,7 +233,7 @@ module seek_bar_tb;
         // T8: chapter notches in the lower half (popup mode via pause)
         pause_q = 1;
         settle;
-        render_line(12'd408);                             // vy=6, lower half
+        render_line(bar_y0 + 12'd6);                             // vy=6, lower half
         if (!(on_l[128] && a_l[128] == 4'd14 && on_l[129] && a_l[129] == 4'd14 &&
               on_l[384] && a_l[384] == 4'd14))
         begin errors = errors + 1; $display("  FAIL T8a notches at 128/384 (a128=%0d a384=%0d)", a_l[128], a_l[384]); end
@@ -210,7 +241,7 @@ module seek_bar_tb;
         if (a_l[200] !== 4'd10)
         begin errors = errors + 1; $display("  FAIL T8b fill between notches (a=%0d)", a_l[200]); end
         else $display("  ok  T8b fill between notches");
-        render_line(12'd404);                             // vy=2, upper half
+        render_line(bar_y0 + 12'd2);                             // vy=2, upper half
         if (a_l[128] !== 4'd10)
         begin errors = errors + 1; $display("  FAIL T8c notch leaked to the upper half"); end
         else $display("  ok  T8c notches lower-half only");
@@ -221,7 +252,7 @@ module seek_bar_tb;
         chap_prev = 1; chap_pgm = 8'd2;
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         settle;
-        render_line(12'd405);                             // upper half: no notches
+        render_line(bar_y0 + 12'd3);                             // upper half: no notches
         if (!(on_l[128] && a_l[128] == 4'd15 && r_l[128] == 8'hFF &&
               a_l[126] == 4'd15 && a_l[130] == 4'd15))
         begin errors = errors + 1; $display("  FAIL T9a chapter cursor at 128 (a=%0d)", a_l[128]); end
@@ -230,7 +261,7 @@ module seek_bar_tb;
         chap_pgm = 8'd3;                                  // burst continues
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         settle;
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (!(on_l[384] && a_l[384] == 4'd15) || a_l[128] == 4'd15)
         begin errors = errors + 1; $display("  FAIL T9b cursor did not follow to 384"); end
         else $display("  ok  T9b cursor follows the burst to 384");
@@ -238,7 +269,7 @@ module seek_bar_tb;
         chap_prev = 0;                                    // skip landed
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         settle;
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (a_l[384] == 4'd15)
         begin errors = errors + 1; $display("  FAIL T9c cursor persists after the skip settles"); end
         else $display("  ok  T9c cursor clears when the skip settles");
@@ -246,7 +277,7 @@ module seek_bar_tb;
         chap_prev = 1; chap_pgm = 8'd99;                  // beyond the tick list
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         settle;
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (a_l[0] == 4'd15)
         begin errors = errors + 1; $display("  FAIL T9d out-of-range chapter drew a cursor"); end
         else $display("  ok  T9d out-of-range chapter = no cursor");
@@ -254,7 +285,7 @@ module seek_bar_tb;
         chap_pgm = 8'd2;                                  // scrub owns the cursor
         bar_active = 1; base_rbn = 32'd51000; tgt_rbn = 32'd76000;
         settle;
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (!(a_l[384] == 4'd15) || a_l[128] == 4'd15)
         begin errors = errors + 1; $display("  FAIL T9e scrub cursor lost to the chapter preview"); end
         else $display("  ok  T9e scrub cursor wins over the preview");
@@ -283,7 +314,7 @@ module seek_bar_tb;
         settle; settle;
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         settle;
-        render_line(12'd408);                             // lower half = notch row
+        render_line(bar_y0 + 12'd6);                             // lower half = notch row
         begin : t11
             integer n, xx;
             reg [1:0] seen;
@@ -302,8 +333,73 @@ module seek_bar_tb;
                 $display("  ok  T11 unsorted tick list still draws all four notches (%0d columns)", n);
         end
 
-        if (errors == 0) $display("SEEK_BAR_TB: ALL TESTS PASSED");
-        else             $display("SEEK_BAR_TB: FAILED (%0d errors)", errors);
-        $finish;
+        // ---- T12: narrow window (VCD 352 / SVCD 480) ----------------------
+        // ★ Scored against the bar's COLUMN SPACE, which does not change: a fill at
+        //   column 256 of 512 must render at drawn pixel 128 of 256, a cursor at 384 at
+        //   drawn 192, and the notches from T11 (51/153/307/460) at their halves. A
+        //   module that simply narrowed the box without re-mapping the columns would draw
+        //   the left HALF of the bar and fail every one of these.
+        bar_active = 0; chap_prev = 0; pgc_loaded = 0; @(posedge clk);
+        for (wsel = 0; wsel < 2; wsel = wsel + 1) begin
+        act_w_tb = (wsel == 0) ? 12'd352 : 12'd480;       // a VCD's, then an SVCD's
+        $display("  -- T12 window %0d wide (box at %0d, %0d px)",
+                 act_w_tb, box_x0(act_w_tb), box_w(act_w_tb));
+        repeat (4) @(posedge clk);
+        first_rbn = 32'd1000; last_rbn = 32'd101000;      // span 100000, as T1/T4
+        base_rbn = 32'd51000; tgt_rbn = 32'd76000;        // fill col 256, cursor col 384
+        bar_active = 1;
+        settle;
+        render_line(bar_y0 + 12'd3);
+        if (!(on_l[192] && a_l[192] == 4'd15 && r_l[192] == 8'hFF))
+        begin errors = errors + 1; $display("  FAIL T12a cursor not at drawn 192 (a=%0d)", a_l[192]); end
+        else $display("  ok  T12a cursor at drawn pixel 192 (= column 384)");
+        if (!(on_l[100] && a_l[100] == 4'd10))
+        begin errors = errors + 1; $display("  FAIL T12b fill at drawn 100 (a=%0d)", a_l[100]); end
+        else $display("  ok  T12b fill region (drawn 100 = column 200 < 256)");
+        if (!(on_l[150] && a_l[150] == 4'd7))
+        begin errors = errors + 1; $display("  FAIL T12c backing at drawn 150 (a=%0d)", a_l[150]); end
+        else $display("  ok  T12c backing region (drawn 150 = column 300 > 256)");
+        if (!(on_l[0] && a_l[0] == 4'd12 && on_l[255] && a_l[255] == 4'd12))
+        begin errors = errors + 1; $display("  FAIL T12d side borders at 0/255 (a0=%0d a255=%0d)", a_l[0], a_l[255]); end
+        else $display("  ok  T12d side borders at the NARROW edges (0 and 255)");
+        if (on_l[256] !== 1'b0 || on_l[300] !== 1'b0)
+        begin errors = errors + 1; $display("  FAIL T12e drew past the narrow box"); end
+        else $display("  ok  T12e nothing drawn past drawn pixel 255");
+
+        // Notches. T11's list writes the PAIRS {51,52} {153,154} {307,308} {460,461}, and
+        // one drawn pixel covers columns {2k, 2k+1}: a pair starting ODD straddles two
+        // drawn pixels, one starting EVEN falls inside one. So 51->{25,26}, 153->{76,77},
+        // 307->{153,154}, 460->{230} = 7 lit columns, and every notch survives. The count
+        // is asserted EXACTLY, so a sampling rule that smeared or dropped one is caught.
+        bar_active = 0; pause_q = 1;
+        settle;
+        render_line(bar_y0 + 12'd6);                             // lower half = notch row
+        begin : t12n
+            integer n, xx;
+            n = 0;
+            for (xx = 0; xx < 256; xx = xx + 1) if (a_l[xx] == 4'd14) n = n + 1;
+            if (!(a_l[25] == 4'd14 && a_l[26] == 4'd14 &&
+                  a_l[76] == 4'd14 && a_l[77] == 4'd14 &&
+                  a_l[153] == 4'd14 && a_l[154] == 4'd14 &&
+                  a_l[230] == 4'd14 && n == 7)) begin
+                errors = errors + 1;
+                $display("  FAIL T12f narrow notches: %0d columns (want 7); 25=%0d 26=%0d 76=%0d 77=%0d 153=%0d 154=%0d 230=%0d",
+                         n, a_l[25], a_l[26], a_l[76], a_l[77], a_l[153], a_l[154], a_l[230]);
+            end else
+                $display("  ok  T12f all four notches survive the narrow pitch (%0d lit columns)", n);
+        end
+        pause_q = 0;
+        end
+        act_w_tb = 12'd720;
+
+        // ⚠ $fatal, NOT $finish: vvp exits 0 on $finish, so a runner that scores the
+        // exit code sees a FAILING bench as a passing one -- which is exactly how the
+        // bench/ac3 suites went silently red for weeks (docs/ac3_decoder_architecture.md
+        // §4.11), and it makes every RED arm in bench/dvd/run_ov_geom.sh vacuous.
+        if (errors == 0) begin
+            $display("SEEK_BAR_TB: ALL TESTS PASSED");
+            $finish;
+        end else
+            $fatal(1, "SEEK_BAR_TB: FAILED (%0d errors)", errors);
     end
 endmodule

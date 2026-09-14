@@ -42,10 +42,14 @@ module idle_frame_tb;
     initial     void'($value$plusargs("act_h=%d", act_h_arg));
     wire [11:0] act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0]
                                             : (pal_mode ? 12'd576 : 12'd480);
+    // DVD-FORK (narrow DE window, 2026-09-14): the active WIDTH is an input too. This
+    // bench forces the logo position and renders a 720-wide frame, so it stays at 720;
+    // the narrow-window arms live in idle_logo_tb (bounds) and hud_frame_tb (pixels).
+    wire [11:0] act_w_tb = 12'd720;
     idle_logo #(.LOGO_QX_LEAD(12'd12)) dut (
         .clk(clk), .rst_n(rst_n),
         .h_pos(h_pos), .v_pos(v_pos),
-        .pal_mode(pal_mode), .act_h_i(act_h_tb), .il_mode(1'b0), .frame_tick(1'b0),
+        .pal_mode(pal_mode), .act_h_i(act_h_tb), .act_w_i(act_w_tb), .il_mode(1'b0), .frame_tick(1'b0),
         .vis(1'b1), .entropy(32'h0),
         .ioctl_download(dl), .ioctl_wr(dwr), .ioctl_addr(daddr),
         .ioctl_dout(ddout), .ioctl_index(16'd0),
@@ -194,9 +198,15 @@ module idle_frame_tb;
         for (y = 0; y < H; y = y + 1) scan_line(y, 0);
         check_frame(1, 64, 16, 2, H, 24'hFFC820, "user/60");
 
-        if (errors == 0) $display("ALL TESTS PASS (idle_frame_tb)");
-        else $display("%0d ERRORS (idle_frame_tb)", errors);
-        $finish;
+        // ⚠ $fatal, NOT $finish: vvp exits 0 on $finish, so a runner that scores the
+        // exit code sees a FAILING bench as a passing one -- which is exactly how the
+        // bench/ac3 suites went silently red for weeks (docs/ac3_decoder_architecture.md
+        // §4.11), and it makes every RED arm in bench/dvd/run_ov_geom.sh vacuous.
+        if (errors == 0) begin
+            $display("ALL TESTS PASS (idle_frame_tb)");
+            $finish;
+        end else
+            $fatal(1, "%0d ERRORS (idle_frame_tb)", errors);
     end
 
 endmodule

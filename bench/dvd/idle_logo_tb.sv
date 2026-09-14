@@ -13,6 +13,8 @@
 //   T11 wrong ioctl_index -> untouched            T12 replace A -> B
 //   T13 valid then corrupt -> A survives          T14 reset does NOT clear user state
 //   T15 hidden while downloading                  T16 speed byte plumbs / 0 = defaults
+//   T18 NARROW WINDOW (2026-09-14): the bounce box is the DE window on BOTH axes, and a
+//       2x logo too large for it renders native instead of hanging off the edge
 // ============================================================================
 `timescale 1ns/1ps
 
@@ -37,12 +39,22 @@ wire [7:0] logo_r, logo_g, logo_b;
 // drives the 240p/288p arm, where the module must bottom-anchor to 240/288 instead.
 integer     act_h_arg = 0;
 initial     void'($value$plusargs("act_h=%d", act_h_arg));
-wire [11:0] act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0]
-                                        : (pal_mode ? 12'd576 : 12'd480);
+// act_h_tb_r != 0 overrides for one arm (T18); otherwise the plusarg, else the standard.
+reg  [11:0] act_h_tb_r = 12'd0;
+wire [11:0] act_h_tb = (act_h_tb_r != 0) ? act_h_tb_r
+                     : (act_h_arg  != 0) ? act_h_arg[11:0]
+                                         : (pal_mode ? 12'd576 : 12'd480);
+// DVD-FORK (narrow DE window, 2026-09-14): the raster's ACTIVE WIDTH is now an INPUT
+// too. Defaults to 720 so every pre-existing arm is bit-identical; +act_w=N drives the
+// narrow-window arms (VCD 352, SVCD 480), where the box must shrink and re-centre.
+integer     act_w_arg = 0;
+initial     void'($value$plusargs("act_w=%d", act_w_arg));
+reg  [11:0] act_w_tb;
+initial      act_w_tb = (act_w_arg != 0) ? act_w_arg[11:0] : 12'd720;
 idle_logo dut (
     .clk(clk), .rst_n(rst_n),
     .h_pos(h_pos), .v_pos(v_pos),
-    .pal_mode(pal_mode), .act_h_i(act_h_tb), .il_mode(il_mode), .frame_tick(frame_tick),
+    .pal_mode(pal_mode), .act_h_i(act_h_tb), .act_w_i(act_w_tb), .il_mode(il_mode), .frame_tick(frame_tick),
     .vis(vis), .entropy(entropy),
     .ioctl_download(dl), .ioctl_wr(dwr), .ioctl_addr(daddr),
     .ioctl_dout(ddout), .ioctl_index(didx),
@@ -133,11 +145,13 @@ initial begin
         else $display("T0 tool/RTL default-dims sync (%0dx%0d) PASS", maxx+1, maxy+1);
     end
 
-    // T1: NTSC bounds over 20k ticks
+    // T1: NTSC bounds over 20k ticks. Both bounds are the DECLARED window (act_w/act_h),
+    // which at the defaults is the historical 720x480 -- so this arm is unchanged there
+    // and becomes the narrow-window bound check under +act_w/+act_h.
     for (i = 0; i < 20000; i = i + 1) begin
         tick;
-        if (px > 12'd720 - w2) begin fail("T1 x bound"); i = 20000; end
-        if (py > 12'd480 - h2) begin fail("T1 y bound"); i = 20000; end
+        if (px > act_w_tb - w2) begin fail("T1 x bound"); i = 20000; end
+        if (py > act_h_tb - h2) begin fail("T1 y bound"); i = 20000; end
     end
     $display("T1 NTSC bounds over 20k ticks PASS");
 
@@ -145,8 +159,8 @@ initial begin
     pal_mode = 1; seen_bottom = 0;
     for (i = 0; i < 20000; i = i + 1) begin
         tick;
-        if (py > 12'd576 - h2) begin fail("T2 y bound"); i = 20000; end
-        if (py == 12'd576 - h2) seen_bottom = 1;
+        if (py > act_h_tb - h2) begin fail("T2 y bound"); i = 20000; end
+        if (py == act_h_tb - h2) seen_bottom = 1;
     end
     if (!seen_bottom) fail("T2 never reached the PAL bottom");
     $display("T2 PAL bound reach+hold PASS");
@@ -174,9 +188,12 @@ initial begin
     end else $display("T3 colour cycles on bounce (%0d) PASS", bounces);
 
     // T4: corner flash requires BOTH axes in one tick
-    // force a single-axis bounce: put x at the wall, y mid-field
+    // force a single-axis bounce: put x at the wall, y mid-field.
+    // ⚠ "mid-field" must be relative to the DECLARED WINDOW, not a literal 200: on a
+    // 240-line VCD window the box bottom is 176, so a hardcoded 200 is already past the
+    // wall and arms the SECOND axis -- the arm would then fail against correct RTL.
     dut.pxq = 16'd4;  dut.vxn = 1'b1;         // about to hit x=0
-    dut.pyq = {12'd200, 4'd0}; dut.vyn = 1'b0;
+    dut.pyq = {(act_h_tb - h2) >> 1, 4'd0}; dut.vyn = 1'b0;
     dut.corner_tmr = 6'd0;
     tick;
     if (dut.corner_tmr != 6'd0) fail("T4 single-axis armed the corner flash");
@@ -325,9 +342,53 @@ initial begin
     $display("T17 legacy fmt-0 back-compat PASS");
 
 
-    if (errors == 0) $display("ALL TESTS PASS (idle_logo_tb)");
-    else $display("%0d ERRORS (idle_logo_tb)", errors);
-    $finish;
+    // T18: narrow DE window (a VCD's 352x240 over the PROGRESSIVE output).
+    // ★ The 2x fixture left loaded by T17 is 64x16 = 128x32 displayed, which FITS 352x240
+    //   -- so first prove the plain bounds hold, then declare a window it cannot fit and
+    //   require the scale to drop. Testing only the second half would pass on a module
+    //   that forced 1x unconditionally.
+    begin : t18
+        integer over;
+        act_w_tb = 12'd352; act_h_tb_r = 12'd240;
+        repeat (4) @(negedge clk);
+        if (dut.w2 !== 12'd128 || dut.h2 !== 12'd32)
+            fail("T18a a fitting 2x logo was demoted");
+        else $display("T18a fitting 2x logo stays 2x on a 352x240 window PASS");
+        over = 0;
+        for (i = 0; i < 20000; i = i + 1) begin
+            tick;
+            if (px > act_w_tb - w2 || py > act_h_tb - h2) over = over + 1;
+        end
+        if (over != 0) begin
+            $display("  logo left the 352x240 box on %0d of 20000 ticks", over);
+            fail("T18b narrow bounds");
+        end else $display("T18b narrow-window bounds over 20k ticks PASS");
+
+        // a window narrower than the DISPLAYED 2x width must force native
+        act_w_tb = 12'd100;
+        repeat (4) @(negedge clk);
+        if (dut.w2 !== 12'd64 || dut.h2 !== 12'd16)
+            fail("T18c oversized 2x logo not forced native");
+        else $display("T18c 2x logo too wide for the window renders native PASS");
+        // and the clamped bound must not underflow when even native does not fit
+        act_w_tb = 12'd32;
+        repeat (4) @(negedge clk);
+        if (dut.x_hi !== 12'd0) fail("T18d x_hi underflowed on an over-wide logo");
+        else $display("T18d over-wide logo clamps x_hi to 0 (no underflow) PASS");
+        act_w_tb = (act_w_arg != 0) ? act_w_arg[11:0] : 12'd720;
+        act_h_tb_r = 12'd0;                      // back to the plusarg/default height
+        repeat (4) @(negedge clk);
+    end
+
+    // ⚠ $fatal, NOT $finish: vvp exits 0 on $finish, so a runner that scores the
+    // exit code sees a FAILING bench as a passing one -- which is exactly how the
+    // bench/ac3 suites went silently red for weeks (docs/ac3_decoder_architecture.md
+    // §4.11), and it makes every RED arm in bench/dvd/run_ov_geom.sh vacuous.
+    if (errors == 0) begin
+        $display("ALL TESTS PASS (idle_logo_tb)");
+        $finish;
+    end else
+        $fatal(1, "%0d ERRORS (idle_logo_tb)", errors);
 end
 
 endmodule

@@ -2216,3 +2216,60 @@ Gates `bench/dvd/run_quant_matrix.sh --red` (`+SOFTRST=1`: RED 10/12 lost, GREEN
 cannot (nothing is re-streamed; `aud_flush` already fires on the same jump), a maintainer
 ear-check closes it. The two-press activation on this disc is a separate nav item
 (`docs/dvd_nav.md`).
+
+## ✅ Overlay geometry on a narrow DE window — no HUD on a VCD, clipped HUD on an SVCD — 2026-09-14
+
+Branch `fix/hud-narrow-window`. Sim-proven RED/GREEN, 12 mutations each caught by its own
+arm, and ✅ **HW-CONFIRMED 2026-09-14 against its own control** (build
+`DVD_hudnarrow_20260914_1552.rbf`, SEED 7 first roll, clk_dec 96.30/91.48, 90 % ALM).
+Gate `bench/dvd/run_ov_geom.sh`; detail `docs/transport_hud.md` "The window is not the
+raster".
+
+Field report: with `Video Output = Progressive`, a VCD shows **no transport HUD at all**
+and an SVCD shows one that **runs off the right edge**. Interlaced is correct on both.
+
+One cause, two axes. The DE window is `min(decoded size, raster resolution)` — syncgen
+clamps to the *sequence header's* sizes — and every fill that widens a sub-720 picture back
+out (`sif_hfill_eff`, `sif_v2x_eff`, the 240p raster) is gated on `interlaced_eff`, by
+design: an HDMI-only rig keeps ascal's polyphase scale. So the progressive output really
+does present 352×240 for a VCD and 480×480 for an SVCD, while `transport_hud`, `seek_bar`
+and `idle_logo` were authored against a fixed 720×480 and `act_h_eff` carried the raster
+RESOLUTION rather than the window. A VCD's status row sat at lines 416..447 of a 240-line
+picture; an SVCD's spanned columns 104..615 of a 480-wide one.
+
+`dvd/emu.sv` now publishes the window on both axes (`act_w_eff`/`act_h_eff`), replicating
+syncgen's rule including the forward fill transforms. **Every pre-existing case reduces to
+the old constants**, so only sub-720 progressive content moves. The overlays centre in
+`act_w_i` and drop to the 1x glyph pitch below a 544 knee; the vertical stack is untouched.
+
+★ **Two pre-existing gate defects came out with it, and the second was hiding behind the
+first.** The five overlay benches called `$finish` on failure, so `vvp` exited 0 and any
+runner scoring the exit code read a failing bench as passing (the `bench/ac3` M17 trap in a
+second place). With `$fatal` in place, `run_p240.sh`'s `seek_bar_tb (240)` arm turned out
+to have been reporting ok on a bench reporting **13 errors** since the 240p branch merged —
+its render arms hardcoded NTSC-480 rows, so at `+act_h=240` every `render_line` landed on a
+blank line and the positive assertions asserted against nothing. The 240p RTL was never at
+fault; rows derive from `act_h_i` now and the arm passes at 240/288/480/576 for real.
+
+**HW round, both cores through the same script.** The seek bar is the instrument rather
+than the text: it is a filled rectangle spanning the whole box, so comparing its border row
+against the picture row above it cancels the content and measures the box directly.
+
+| arm | picture | seek-bar span | HUD |
+|---|---|---|---|
+| VCD pre-fix | 352x240 | nothing drawn | absent |
+| VCD fixed | 352x240 | 31..287 = 257 px, inside | `0:00:32/0:56:49`, maxerr 0 |
+| SVCD pre-fix | 480x480 | 88..479, clipped at the edge | right ~120 px lost |
+| SVCD fixed | 480x480 | 96..351 = 256 px, inside | `0:00:10/0:05:04`, maxerr 0 |
+| DVD pre-fix | 720x480 | 88..599 = 512 px | `[PAUSE] 0:00:08/2:02:09 CH 1/35` |
+| DVD fixed | 720x480 | 88..599, identical | identical, maxerr 0 |
+
+The logo arm needed the control most, because it is intermittent by nature: over a VCD
+(Stop drives the same `logo_vis` as the screensaver), 14 samples per core gave **pre-fix
+7 whole / 1 cut by the picture edge / 6 entirely off-screen**, and **fixed 14 whole, 0 cut,
+0 lost**, reaching x 351 of 352 and y 236 of 240 — the whole window, not a safe inset.
+
+⚠ **`tools/hud_read.py` had to be fixed to run this round at all**: it baked in the same
+`X0 = 104` / 16 px pitch the RTL did, so it decodes a DVD and reports "no HUD" on a VCD —
+it would have confirmed the defect on the FIXED core. It now derives the box from the
+frame width (a screenshot is the raw raster, so its width IS the window).

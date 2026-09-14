@@ -54,6 +54,12 @@ module transport_hud #(
     // bottom of the screen. emu.sv owns the value; pal_mode is still used for the
     // things that really are per-STANDARD rather than per-raster.
     input  wire [11:0] act_h_i,
+    // DVD-FORK (narrow DE window, 2026-09-14): the raster's ACTIVE WIDTH, in the same
+    // coordinate space as h_pos (emu's ov_h_gen, i.e. pixel repetition already undone).
+    // The box used to be authored against a literal 720; on the PROGRESSIVE output a VCD
+    // presents a 352-wide window and an SVCD a 480-wide one, so half the status line was
+    // outside the picture and simply never rendered. emu.sv owns the value (act_w_eff).
+    input  wire [11:0] act_w_i,
 
     // visibility state / events
     input  wire        menu_active,         // suppress the HUD in menus
@@ -170,8 +176,15 @@ module transport_hud #(
     localparam [5:0] G_C = G_A + 6'd2, G_H = G_A + 6'd7;
 
     // ---- layout ------------------------------------------------------------
-    localparam [11:0] X0    = 12'd104;      // (720 - 32*16)/2
-    localparam [11:0] ROW_H = 12'd32;       // 16 glyph rows at 2x
+    // 32 cells of an 8x16 glyph, rendered 2x (16x32) when the window can hold the
+    // resulting 512 px and 1x (8x16 -> 256 px) when it cannot. The 544 knee is 512 plus
+    // a 16 px margin, so the box never touches the window edge at 2x; below it a VCD
+    // (352) and an SVCD (480) both take the 1x pitch and fit with room to spare.
+    // ⚠ ONLY THE HORIZONTAL PITCH FOLLOWS THE WINDOW. The row stack stays 32 px tall and
+    // bottom-anchored to act_h_i, which is what the 240p raster arm renders today -- so a
+    // 720-wide window is bit-identical to before this change, on every axis.
+    localparam [11:0] HS2_MIN = 12'd544;    // 512 + a 16 px margin
+    localparam [11:0] ROW_H   = 12'd32;     // 16 glyph rows at 2x
     // status row bottom-anchored; the popup row sits above it with a gap that
     // clears the seek bar (activeH-78..-69, dvd/seek_bar.sv):
     //   popup  activeH-112 .. -81
@@ -180,6 +193,24 @@ module transport_hud #(
     wire [11:0] act_h = act_h_i;
     wire [11:0] y0    = act_h - 12'd64;     // status row top
     wire [11:0] y0p   = act_h - 12'd112;    // popup row top
+
+    // Horizontal box, REGISTERED. act_w_i is quasi-static (it settles at a sequence-header
+    // parse, long before anything displays), so resolving it once a clock keeps the
+    // per-pixel compares register-against-register -- the display-hotspot discipline this
+    // module is built on (docs/transport_hud.md). Reset to the 720 geometry so the very
+    // first displayed frame after a reset is the historical one.
+    reg         hs2_q;                      // 1 = 2x glyph pitch (512 px box)
+    reg  [11:0] x0_q, x1_q;        // box left/right edge, in h_pos space
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            hs2_q <= 1'b1; x0_q <= 12'd104; x1_q <= 12'd616;
+        end else begin
+            hs2_q <= (act_w_i >= HS2_MIN);
+            x0_q  <= ((act_w_i >= HS2_MIN) ? (act_w_i - 12'd512) : (act_w_i - 12'd256)) >> 1;
+            x1_q  <= (((act_w_i >= HS2_MIN) ? (act_w_i - 12'd512) : (act_w_i - 12'd256)) >> 1)
+                     + ((act_w_i >= HS2_MIN) ? 12'd512 : 12'd256);
+        end
+    end
 
     // ---- visibility --------------------------------------------------------
     reg        persist_q;
@@ -712,9 +743,9 @@ module transport_hud #(
     // =========================================================================
     // Pixel pipeline (display path): pure function of (h_pos, v_pos).
     // =========================================================================
-    wire [11:0] hx  = h_pos + HUD_QX_ADJ[11:0] - X0;
-    wire        inx = (h_pos + HUD_QX_ADJ[11:0] >= X0) &&
-                      (h_pos + HUD_QX_ADJ[11:0] <  X0 + 12'd512);
+    wire [11:0] hq  = h_pos + HUD_QX_ADJ[11:0];
+    wire [11:0] hx  = hq - x0_q;
+    wire        inx = (hq >= x0_q) && (hq < x1_q);
     wire [11:0] vy_s = v_pos - y0;          // status row
     wire        in_s = vis && (v_pos >= y0)  && (v_pos < y0  + ROW_H);
     wire [11:0] vy_p = v_pos - y0p;         // popup row
@@ -746,8 +777,12 @@ module transport_hud #(
             // A
             s0_in  <= (in_s || in_p) && inx;
             s0_row <= in_p;
-            s0_col <= hx[8:4];
-            s0_gx  <= hx[3:1];
+            // 2x: cell = hx/16, sub-column = (hx/2) mod 8. 1x: cell = hx/8, sub = hx mod 8
+            // -- i.e. the same glyph column walked at half the pitch, which makes the 1x
+            // render exactly the 2x render with each column PAIR collapsed (gated by
+            // hud_frame_tb's doubling-identity check).
+            s0_col <= hs2_q ? hx[8:4] : hx[7:3];
+            s0_gx  <= hs2_q ? hx[3:1] : hx[2:0];
             s0_gy  <= in_p ? vy_p[4:1] : vy_s[4:1];
             // B
             tp_q  <= plane[{s0_row, s0_col}];

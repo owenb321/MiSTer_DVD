@@ -36,13 +36,13 @@
 // alternates fill/cursor (~3 us per refresh, far faster than scrub_ctrl's
 // ~0.06 s tick) and serves the tick conversion after a PGC load. No DSP.
 //
-// DISPLAY (hotspot rule): registered pipeline, pure function of (h_pos,
-// v_pos) except the per-LINE monotonic tick pointer (tick_col[] is written
-// ascending, so one pointer + one comparator walks the list as the raster
-// scans left->right -- no comparator bank). The pointer resets outside the
-// bar region, so field-order scanning renders identically (interlace-safe).
-// Geometry matches the HUD text box (X0=104, 512 wide), sitting between the
-// popup row and the status line.
+// DISPLAY (hotspot rule): registered pipeline, pure function of (h_pos, v_pos)
+// -- notches come out of a 512-BIT COLUMN BITMAP (one register, one indexed
+// read), which is what replaced the old monotonic tick pointer when a PGC whose
+// program order is not its physical order drew only one notch (2026-09-13).
+// Geometry matches the HUD text box: a centred box, 512 px wide on a normal
+// window and 256 on a narrow one, sitting between the popup row and the status
+// line. Both modules take act_w_i and the same 544 knee, so they stay aligned.
 // ============================================================================
 
 module seek_bar #(
@@ -62,6 +62,10 @@ module seek_bar #(
     // bottom of the screen. emu.sv owns the value; pal_mode is still used for the
     // things that really are per-STANDARD rather than per-raster.
     input  wire [11:0] act_h_i,
+    // DVD-FORK (narrow DE window, 2026-09-14): the raster's ACTIVE WIDTH, same contract as
+    // dvd/transport_hud.sv's -- h_pos space (pixel repetition already undone), owned by
+    // emu.sv (act_w_eff). The bar shares the HUD's box, so it takes the same knee.
+    input  wire [11:0] act_w_i,
 
     // scrub state (dvd/scrub_ctrl.sv)
     input  wire        bar_active,
@@ -99,11 +103,31 @@ module seek_bar #(
 );
 
     // ---- geometry -----------------------------------------------------------
-    localparam [11:0] X0    = 12'd104;      // matches the HUD text box
-    localparam [11:0] BAR_W = 12'd512;
-    localparam [11:0] BAR_H = 12'd10;
+    // The bar is drawn 512 px wide when the window can hold it and 256 px wide when it
+    // cannot, on the SAME 544 knee and the SAME centred box as dvd/transport_hud.sv -- the
+    // two must stay aligned, which is why the constants are duplicated rather than each
+    // module inventing its own rule. Only the DRAWN width changes: the bar's internal
+    // column space stays 0..511 throughout (the divider, fill_px, cur_px and the 512-bit
+    // tick bitmap are all untouched), and the narrow render samples it 2 columns at a time.
+    localparam [11:0] HS2_MIN = 12'd544;    // 512 + a 16 px margin
+    localparam [11:0] BAR_H   = 12'd10;
     // between the popup row (activeH-112..-81) and the status row (-64..-33)
     wire [11:0] y0 = act_h_i - 12'd78;
+
+    // Registered box (quasi-static input; keeps the hotspot register-vs-register).
+    // Reset to the 720 geometry so the first frame out of reset is the historical one.
+    reg         hs2_q;                      // 1 = full 512 px bar
+    reg  [11:0] x0_q, x1_q;                 // box left/right edge, in h_pos space
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            hs2_q <= 1'b1; x0_q <= 12'd104; x1_q <= 12'd616;
+        end else begin
+            hs2_q <= (act_w_i >= HS2_MIN);
+            x0_q  <= ((act_w_i >= HS2_MIN) ? (act_w_i - 12'd512) : (act_w_i - 12'd256)) >> 1;
+            x1_q  <= (((act_w_i >= HS2_MIN) ? (act_w_i - 12'd512) : (act_w_i - 12'd256)) >> 1)
+                     + ((act_w_i >= HS2_MIN) ? 12'd512 : 12'd256);
+        end
+    end
 
     // ---- visibility ---------------------------------------------------------
     reg [26:0] pop_tmr;
@@ -269,13 +293,23 @@ module seek_bar #(
     end
 
     // ---- pixel pipeline ------------------------------------------------------
-    wire [11:0] hx  = h_pos + BAR_QX_ADJ[11:0] - X0;
-    wire        inx = (h_pos + BAR_QX_ADJ[11:0] >= X0) &&
-                      (h_pos + BAR_QX_ADJ[11:0] <  X0 + BAR_W);
+    wire [11:0] hq  = h_pos + BAR_QX_ADJ[11:0];
+    wire [11:0] hx  = hq - x0_q;            // 0 .. drawn width - 1
+    wire        inx = (hq >= x0_q) && (hq < x1_q);
     wire [11:0] vy  = v_pos - y0;
     wire        iny = (v_pos >= y0) && (v_pos < y0 + BAR_H);
+    // drawn pixel -> bar column (0..511). At the narrow pitch one drawn pixel covers a
+    // column PAIR, so a notch renders 1 px and the cursor 3 px instead of 2 and 5.
+    wire [9:0]  hcol = hs2_q ? hx[9:0] : {hx[8:0], 1'b0};
+    wire [11:0] hlast = hs2_q ? 12'd511 : 12'd255;   // rightmost DRAWN pixel
 
-    always @(posedge clk) tk_bit <= tick_bm[hx[8:0]];
+    // ⚠ The narrow read must be the ODD SIBLING of the same column (hcol | 1), not a
+    // shifted index -- a notch is written as a column PAIR {c, c+1}, so reading only the
+    // even column of each drawn pixel would drop every notch whose pair starts odd. (It
+    // also keeps a notch written at column 511, which no even sample can reach.) A notch
+    // therefore renders 1 px when its pair starts even and 2 px when it starts odd.
+    always @(posedge clk) tk_bit <= tick_bm[hcol[8:0]] |
+                                    (~hs2_q & tick_bm[hcol[8:0] | 9'd1]);
 
     // A: hit-test + local coords
     reg       s0_in, s0_edge, s0_low;
@@ -289,9 +323,9 @@ module seek_bar #(
         end else begin
             s0_in   <= vis && inx && iny;
             s0_edge <= (vy == 12'd0) || (vy == BAR_H - 12'd1) ||
-                       (hx[9:0] == 10'd0) || (hx[9:0] == BAR_W[9:0] - 10'd1);
+                       (hx == 12'd0) || (hx == hlast);
             s0_low  <= (vy >= BAR_H/2);
-            s0_x    <= hx[9:0];
+            s0_x    <= hcol;
 
             bar_on    <= s0_in;
             bar_alpha <= 4'd0;
