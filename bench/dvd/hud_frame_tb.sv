@@ -189,7 +189,12 @@ module hud_frame_tb;
     endtask
 
     integer k, j, bad, yy, wsel;
+    string dump_name;
     initial begin
+        if (act_w_tb == 12'd720 && act_h_tb == 12'd480)
+            dump_name = "bench/dvd/hud_frame.ppm";
+        else
+            dump_name = $sformatf("bench/dvd/hud_frame_%0dx%0d.ppm", act_w_tb, act_h_tb);
         rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; repeat (4) @(posedge clk);
         // persistent mode on + an audio popup (its 2.5 s outlasts the ~50 ms
         // of simulated raster time); let the formatter complete a pass
@@ -199,13 +204,18 @@ module hud_frame_tb;
 
         render_and_check("window");
 
-        // PPM dump for eyeball inspection (the run's starting window)
-        fh = $fopen("bench/dvd/hud_frame.ppm", "w");
+        // PPM dump for eyeball inspection, NAMED BY ITS WINDOW.
+        // ⚠ bench/dvd/hud_frame.ppm is tools/hud_read.py's GOLDEN frame and its selftest
+        // (run by bench/dvd/run_telem.sh) decodes it expecting the 720x480 layout. A run
+        // at another window must therefore not overwrite it -- run_ov_geom.sh drives
+        // three widths in a row, so without this the last one wins and a later
+        // run_telem.sh fails on a frame it never asked for.
+        fh = $fopen(dump_name, "w");
         $fwrite(fh, "P3\n%0d %0d\n255\n", W, H);
         for (i = 0; i < W*H; i = i + 1)
             $fwrite(fh, "%0d %0d %0d\n", fb[i][23:16], fb[i][15:8], fb[i][7:0]);
         $fclose(fh);
-        $display("  wrote bench/dvd/hud_frame.ppm");
+        $display("  wrote %0s", dump_name);
 
         // ---- [narrow] + [double] ------------------------------------------
         // Keep this render, then re-render the SAME text in each real narrow window and
