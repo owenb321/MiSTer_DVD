@@ -1030,11 +1030,24 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * parse): vld.v's flush_resync alone recovers 9 of 10 positions; the one it
    * cannot is the flush landing at a picture header, and this closes it. The
    * two changes are both necessary -- one resets the parser, this one stops it
-   * being handed a dead stream to parse. */
+   * being handed a dead stream to parse.
+   *
+   * ⚠⚠ IT MUST BE `sync_rst && vbuf_rst`, NOT `vbuf_rst` ALONE. Shipping the
+   * single term was a REGRESSION (purple/green garbage on ~1 boot in 3,
+   * persisting through chapter skips), because vbuf_rst is ONE sync_reset stage
+   * off the RAW rst input while sync_rst is reset.v's cascaded chain -- and
+   * sync_rst is also the ONLY carrier of watchdog_rst and the mount soft reset.
+   * Using vbuf_rst alone therefore (a) let this module leave reset EARLIER than
+   * the vld/rld/framestore at power-up, and (b) silently removed the bit window
+   * from the watchdog reset and the mount soft reset. AND-ing the two keeps
+   * every reset this module already had and merely ADDS the flush -- which is
+   * what bench/dvd/quant_matrix_tb.sv models (`rst && ~flush_lvl`) and what its
+   * 12/12 sweep actually verified. The bench could not catch the discrepancy
+   * because the bench had it right and the RTL did not. */
   getbits_fifo getbits_fifo (
     .clk(clk), 
     .clk_en(1'b1), 
-    .rst(vbuf_rst), 
+    .rst(sync_rst && vbuf_rst), 
     .vid_in(vbr_rd_dta),                                     // from vbuf_read_fifo
     .vid_in_rd_en(vbr_rd_en),                                // to vbuf_read_fifo
     .vid_in_rd_valid(vbr_rd_valid),                          // from vbuf_read_fifo

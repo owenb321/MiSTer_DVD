@@ -308,7 +308,11 @@ module quant_matrix_tb;
   integer   redecode_pending = 0;
   integer   dl_before = 0;
   integer   seq_after = 0, nsc_after = 0, sc_after = 0, qrst_after = 0;
-  integer   fr_cycles = 0; reg [7:0] state_after_flush = 8'hFF; reg got_first = 0;
+  integer   fr_cycles = 0;
+  integer   reflush2 = 0;
+  integer   atstate = -1;      // +ATSTATE=n : fire the flush when vld.state == n
+  reg       mpeg1_after = 1'b0;
+  integer   mpeg1_latches = 0; reg [7:0] state_after_flush = 8'hFF; reg got_first = 0;
   reg [7:0] first_codes [0:11]; integer n_codes = 0;
 
   // Bounded so an arm that never resyncs still finishes. SETTLE_MAX is ~1.5x
@@ -336,6 +340,13 @@ module quant_matrix_tb;
     end
     if (in_b && quant_rst) qrst_after <= qrst_after + 1;
     if (vld.flush_resync) fr_cycles <= fr_cycles + 1;
+    // ★ The MPEG-1 verdict is the thing under suspicion: mpeg1 forces
+    // intra_dc_precision/q_scale_type/alternate_scan/intra_vlc_format to their
+    // MPEG-1 constants, which on a DVD is catastrophic AND self-sustaining.
+    if (in_b && mpeg1_es && !mpeg1_after) begin
+      mpeg1_after   <= 1'b1;
+      mpeg1_latches <= mpeg1_latches + 1;
+    end
     if (in_b && vld_en && !got_first) begin
       state_after_flush <= vld.state; got_first <= 1'b1;
     end
@@ -367,6 +378,8 @@ module quant_matrix_tb;
     if ($value$plusargs("REDECODE=%d", redecode)) ;
     if ($value$plusargs("FREEZE=%d",   freeze))   ;
     if ($value$plusargs("COLDSTART=%d", coldstart)) ;
+    if ($value$plusargs("ATSTATE=%d",   atstate))   ;
+    if ($value$plusargs("REFLUSH2=%d", reflush2)) ;
 
     $readmemh({fixture, ".hex"}, es);
     $readmemh({fixture, ".meta.hex"}, meta);
@@ -423,9 +436,19 @@ module quant_matrix_tb;
     end else begin
       // Arm once the vld is inside cut A, then wait FLUSHDLY cycles so the
       // sweep lands the flush at different parse positions.
-      wait (pics_seen >= 1);
-      armed = 1'b1;
-      repeat (flushdly) @(posedge clk);
+      if (atstate >= 0) begin
+        // Aim the flush at a specific parse state. STATE_SEQUENCE_HEADER (6) is
+        // the dangerous one: it has just CLEARED sequence_extension_seen while
+        // sequence_header_seen stays set, so a picture start code reached before
+        // the sequence extension latches a FALSE MPEG-1 verdict.
+        wait (rd_ptr > 16);
+        @(posedge clk);
+        while (vld.state !== atstate[7:0]) @(posedge clk);
+      end else begin
+        wait (pics_seen >= 1);
+        armed = 1'b1;
+        repeat (flushdly) @(posedge clk);
+      end
 
       state_at_flush = vld.state;
       flush_at       = cyc;
@@ -441,6 +464,24 @@ module quant_matrix_tb;
       motcomp_busy = 1'b0;
       flush_done = 1'b1;
       in_b       = 1'b1;
+
+      if (reflush2) begin
+        // ★ A mount fires the flush TRIO, so a second flush can land while the
+        // parser is inside the LANDING's own sequence header -- after it has
+        // CLEARED sequence_extension_seen and before STATE_SEQUENCE_EXT sets it.
+        // sequence_header_seen stays set, so the next picture start code the
+        // resync finds latches mpeg1 <= ~sequence_extension_seen = 1: a FALSE
+        // MPEG-1 verdict, which forces intra_dc_precision to 0 (DC x4) plus
+        // q_scale_type / alternate_scan / intra_vlc_format to their MPEG-1
+        // constants. On a DVD that is catastrophic and self-sustaining.
+        while (vld.state !== 8'h06) @(posedge clk);   // STATE_SEQUENCE_HEADER
+        @(posedge clk);
+        flush_lvl = 1'b1;
+        feed_en   = 1'b0;
+        repeat (192) @(posedge clk);
+        flush_lvl = 1'b0;
+        feed_en   = 1'b1;
+      end
     end
 
     // Run until the landing's download has landed, or give up. Decoding the
@@ -501,6 +542,10 @@ module quant_matrix_tb;
              shadow_intra.default_values, state_at_flush, vlden_in_window, used_n);
     $display("DIAG: seqhdr_after=%0d startcode_after=%0d nextsc_after=%0d quant_rst_after=%0d",
              seq_after, sc_after, nsc_after, qrst_after);
+    $display("MPEG1: verdict_after_flush=%0b latches=%0d seq_hdr_seen=%0b seq_ext_seen=%0b",
+             mpeg1_es, mpeg1_latches, vld.sequence_header_seen, vld.sequence_extension_seen);
+    if (mpeg1_es)
+      $display("REGRESSION: a FALSE MPEG-1 verdict -- intra_dc_precision/q_scale_type/alternate_scan/intra_vlc_format are all forced to MPEG-1 constants");
     $write("DIAG: flush_resync_cycles=%0d state_at_first_en_after_flush=%0h codes=",
            fr_cycles, state_after_flush);
     for (i = 0; i < n_codes; i = i + 1) $write("%02h ", first_codes[i]);
