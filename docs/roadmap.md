@@ -767,7 +767,8 @@ half-line, weave workaround, 1440-wide pixel repetition) is the
     plain rounding Bresenham. Also emits exactly `hdst` px/line (the `hdst−1` off-by-one is
     retired) and nearest-picks `osd`. New `+hgrad` blend proof in `resample_chain_tb` plus
     `crt_ov_map_tb` T1a/T1b/T1c. Detail: `docs/crt_anamorphic.md` §8b.
-  - Remaining follow-ups: native 240p (reuses `disp_vscale`), PAL 576i bars, `osd`-nearest
+  - Remaining follow-ups: native 240p FOR FULL-HEIGHT CONTENT (reuses `disp_vscale`; the
+    SIF case shipped 2026-09-14 needing no downscale — `docs/mpeg1.md` §B.3b), PAL 576i bars, `osd`-nearest
     back-port to `disp_vscale`.
   - **Overlay alignment under Letterbox/Crop (2026-07-11, PR fj#108) — ✅ HW-CONFIRMED.**
     The subpicture +

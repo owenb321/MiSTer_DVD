@@ -31,10 +31,13 @@ What plays, what does not, and what is untested. Current as of **v0.5.0**.
 | PAL 576i on an analog CRT | Confirmed working on real PAL sets |
 | 3:2 pulldown / film cadence | [Supported](../video/film-24p.md), automatic |
 
-**Sub-720 content is scaled to fill the analog output** in fabric — SIF gets a 2× line
-repeat plus a 352→720 stretch; SVCD, sub-D1 DVD (704, 544) and any other sub-720 width get
-the horizontal fill. HDMI is unaffected and keeps the framework scaler's cleaner upscale.
-See [Analog and CRT output](../video/analog-crt.md#sub-720-content-on-a-crt).
+**Sub-720 content is scaled to fill the analog output** in fabric — SVCD, sub-D1 DVD
+(704, 544) and any other sub-720 width get a horizontal stretch. **SIF-height content
+(352×240 / 352×288) instead gets a native 240p/288p raster** when the analog output is
+running, so it is sent at its own height with no line doubling at all — on a CRT that is
+the usual console-style 240p, and over HDMI the framework scaler receives the original
+frame rather than a doubled one.
+See [Analog and CRT output](../video/analog-crt.md#native-240p-for-vcds-and-mpeg-1).
 
 ## Audio
 

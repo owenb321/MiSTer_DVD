@@ -131,16 +131,36 @@ manual choice.
 ## Sub-720 content on a CRT
 
 MPEG-1 SIF (352×240 / 352×288), SVCD (480 wide) and the sub-D1 DVD sizes (704, 544) are
-narrower than the 720-pixel raster. On the analog output the core fills the screen in
-fabric — SIF gets a 2× line repeat and a 352→720 horizontal stretch; the other sub-720
-widths get the horizontal fill. HDMI is unaffected and keeps the framework scaler's cleaner
-upscale.
+narrower than the 720-pixel raster, and the core fills the screen in fabric on the analog
+output — a 352→720 horizontal stretch for SIF, and the same horizontal fill for the other
+sub-720 widths. HDMI is unaffected and keeps the framework scaler's upscale.
 
-!!! note "Why there is no true 240p output"
-    A 240p raster would be the natural home for SIF content, but the core's A/V sync
-    requires the raster to run at exactly the content rate against a fixed audio clock, and
-    no exact-rate 240p modeline exists at the 27 MHz dot clock. Line-doubled 480i carries
-    the same content to a CRT — which is what actual DVD players do with sub-D1 material.
+### Native 240p for VCDs and MPEG-1
+
+SIF content is only 240 lines tall (288 on PAL), so on a normal interlaced raster it has to
+be stretched to twice its height — and that doubling is a plain line repeat, which makes the
+picture look blocky. The core avoids it: when you play SIF-height content with the 15 kHz
+analog raster running, it switches to a **native 240p raster** (288p on PAL) and sends the
+picture out at its own height, one line for one line.
+
+That is the same double-strike 240p a games console puts out, so a CRT takes it happily, and
+it is a real improvement on both outputs at once — your TV gets a genuinely progressive
+picture instead of fake interlace, and over HDMI the framework scaler is handed the original
+frame to scale rather than an already-doubled one.
+
+It happens on its own, with nothing to set. There is no OSD option, and a normal DVD is
+untouched — only content 288 lines or shorter takes the 240p raster.
+
+!!! note "What you may notice"
+    Switching in and out of the mode is a brief interruption, like a chapter skip, because
+    the raster itself changes. In practice a disc settles on one raster as it loads and stays
+    there. The status line and the seek bar sit lower on the screen and look proportionally
+    larger, because the picture is half as tall while the text stays the same size.
+
+!!! info "New in v0.6.0"
+
+    Earlier versions line-doubled SIF content into 480i instead. If you are on v0.5.0 or
+    older, that is what you have, and it is not a fault.
 
 ## Analog CSync — if your set jitters or shows sawtooth edges
 

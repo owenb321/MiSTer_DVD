@@ -470,7 +470,15 @@ space; raw coordinates would render them quarter-screen).
 ## 10. Follow-ups
 
 - ~~`disp_hstretch` 2-tap horizontal blend (Crop edge quality)~~ — **DONE, see §8b.**
-- Native 240p (a ×2 vertical downscale + centre) — reuses the `disp_vscale` blend datapath with
+- ✅ **Native 240p SHIPPED for SIF content (2026-09-14, `feature/native-240p`) — but NOT via
+  this datapath, and the distinction matters.** SIF is *already* 240 lines, so it needed no
+  downscale at all: the fix is to stop the 2× line repeat (`sif_v2x_eff & ~p240_eff`) and
+  give it a 262/312-line progressive raster. `crt_ov_map`'s v2x inverse is gated by the same
+  signal and returns to pass-through, so the §9 EXACTNESS contract is untouched — there is no
+  new inverse to keep in step. See `docs/mpeg1.md` §B.3b.
+  **What is still unbuilt is the line below: 240p for FULL-HEIGHT content**, which is the
+  case that genuinely wants a ×2 vertical downscale + centre —
+- Native 240p for 480-line content (a ×2 vertical downscale + centre) — reuses the `disp_vscale` blend datapath with
   a step of 2 instead of 4/3. ★ This is only the CONTENT half. The sync/rate half was rejected
   in 2026-08 on a premise that **expired with PR #63**, and the current position — what 240p
   actually needs, why 262 lines rather than an impossible exact-59.94 modeline, and what still

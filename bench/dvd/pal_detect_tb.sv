@@ -20,6 +20,14 @@
 //   - the pre-fix rule is instantiated verbatim alongside the DUT and selected by
 //     +hyst=0, and it MUST FAIL scenarios [4] and [5b].
 //
+// ★ SCENARIOS [9]-[12] (2026-09-14, native 240p) gate the SECOND verdict, `sif` =
+// "the content is SIF-height", which selects the 240p/288p raster. It rides the same
+// candidate and timer as `pal`, so what has to be proven is not that the timer works
+// again -- it is that ONE timer serving TWO verdicts still (a) latches both at once on
+// a mount, (b) refuses to move either on a transient, and (c) can move them
+// INDEPENDENTLY when the height genuinely changes in a way that moves only one.
+// (c) is the one a shared timer could plausibly get wrong.
+//
 // Build/run: bench/dvd/run_mode_realign.sh   (or, standalone)
 //   iverilog -g2012 -o bench/dvd/pal_detect_sim dvd/pal_detect.sv bench/dvd/pal_detect_tb.sv
 //   vvp bench/dvd/pal_detect_sim            # GREEN (the fixed rule)
@@ -36,6 +44,7 @@ module pal_detect_tb;
   reg  [13:0] vsize = 14'd0;
 
   wire        dut_pal;
+  wire        dut_sif;          // the SIF-height verdict (native 240p)
   integer     hyst = 1;                  // 1 = the fixed rule, 0 = the pre-fix rule
 
   pal_detect #(.HOLD_CYC(HOLD)) dut (
@@ -43,7 +52,8 @@ module pal_detect_tb;
     .rst_n     (rst_n),
     .mount_arm (mount_arm),
     .vsize     (vsize),
-    .pal       (dut_pal)
+    .pal       (dut_pal),
+    .sif       (dut_sif)
   );
 
   // ---- the PRE-FIX rule, verbatim from dvd/emu.sv before this change ----------------
@@ -71,6 +81,39 @@ module pal_detect_tb;
     if (verdict !== verdict_q) edges = edges + 1;
     verdict_q <= verdict;
   end
+
+  // The same measurement for the SIF verdict: every change of it kicks the SAME
+  // modeline walk, so a flip-and-flip-back is the same defect wearing a second hat.
+  reg     sif_q;
+  integer sif_edges = 0;
+  always @(posedge clk) begin
+    if (dut_sif !== sif_q) sif_edges = sif_edges + 1;
+    sif_q <= dut_sif;
+  end
+
+  // hand-written, NOT a call into the DUT: SIF height is 240 (NTSC) or 288 (PAL), and
+  // the rule is a bound rather than a whitelist, so anything <= 288 counts.
+  function want_sif(input [13:0] v);
+    want_sif = (v <= 14'd288);
+  endfunction
+
+  task chk_sif(input want, input [8*72-1:0] msg);
+    begin if (dut_sif !== want) begin
+      $display("  sif=%0b, want %0b (vsize=%0d)", dut_sif, want, vsize);
+      fail(msg);
+    end end
+  endtask
+
+  task sif_edges_clr;  begin @(posedge clk); sif_edges = 0; end  endtask
+
+  task chk_sif_edges(input integer want, input [8*72-1:0] msg);
+    begin
+      if (sif_edges !== want) begin
+        $display("  sif verdict changed %0d time(s), want %0d", sif_edges, want);
+        fail(msg);
+      end
+    end
+  endtask
 
   task fail(input [8*72-1:0] msg);
     begin
@@ -221,7 +264,101 @@ module pal_detect_tb;
       end
     end
 
-    if (errors == 0) $display("pal_detect_tb: ALL TESTS PASSED (8 scenarios)");
+    // ================================================================= [9]
+    // A VCD mount: the first plausible header latches BOTH verdicts at once. This is
+    // what keeps the 240p raster switch inside the mount flush window rather than
+    // landing mid-title -- in practice there is then no mid-title raster change at all.
+    mount;
+    hdr(14'd240, 3);
+    chk    (1'b0, "[9a] 352x240 is NTSC");
+    chk_sif(1'b1, "[9b] 352x240 is SIF -- latched on the first header, no window");
+    mount;
+    hdr(14'd288, 3);
+    chk    (1'b1, "[9c] 352x288 is PAL");
+    chk_sif(1'b1, "[9d] 352x288 is SIF");
+    mount;
+    hdr(14'd480, 3);
+    chk    (1'b0, "[9e] 480 is NTSC");
+    chk_sif(1'b0, "[9f] 480 is not SIF");
+
+    // ================================================================ [10]
+    // ⚠ THE POINT OF THE WHOLE DEBOUNCE, for the raster this time. A garbage header
+    // mid-title must not move the SIF verdict, because that would restart the raster
+    // under live content. Counting EDGES, not the end state: the rule self-heals on
+    // the next real header, so an end-state check passes even when the raster has
+    // already been kicked twice.
+    mount;
+    hdr(14'd480, GOP);               // a normal DVD, verdict established
+    chk_sif(1'b0, "[10a] 480 established as not-SIF");
+    sif_edges_clr;
+    hdr(14'd240, 4);                 // one stray header claiming SIF
+    hdr(14'd480, GOP * 3);           // the real one comes back
+    chk_sif(1'b0, "[10b] a stray SIF-height header must not flip the raster");
+    chk_sif_edges(0, "[10c] a stray header must not kick the modeline walk");
+
+    // and the same in the other direction: a stray 480 during a VCD
+    mount;
+    hdr(14'd240, GOP);
+    chk_sif(1'b1, "[10d] 240 established as SIF");
+    sif_edges_clr;
+    hdr(14'd480, 4);
+    hdr(14'd240, GOP * 3);
+    chk_sif(1'b1, "[10e] a stray full-height header must not drop the 240p raster");
+    chk_sif_edges(0, "[10f] ... and must not kick the walk");
+
+    // ================================================================ [11]
+    // A SUSTAINED change is believed, for sif exactly as for pal.
+    mount;
+    hdr(14'd480, GOP);
+    chk_sif(1'b0, "[11a] not-SIF established");
+    hdr(14'd240, HOLD + GOP);        // held past the confirmation window
+    chk_sif(1'b1, "[11b] a sustained SIF height must be believed");
+
+    // ================================================================ [12]
+    // ★ THE ONE A SHARED TIMER COULD GET WRONG: the two verdicts must be able to move
+    // INDEPENDENTLY. 480 -> 288 changes BOTH (NTSC->PAL and not-SIF->SIF); 240 -> 288
+    // changes ONLY pal; 288 -> 480 changes ONLY sif. A single candidate/timer is
+    // correct here because both bits are functions of the same register and therefore
+    // can never want to settle at different times -- this scenario is that claim made
+    // executable rather than argued.
+    mount;
+    hdr(14'd480, GOP);
+    chk    (1'b0, "[12a] 480: NTSC");
+    chk_sif(1'b0, "[12b] 480: not SIF");
+    hdr(14'd288, HOLD + GOP);
+    chk    (1'b1, "[12c] 480->288 moves pal");
+    chk_sif(1'b1, "[12d] 480->288 moves sif too -- one timer, both bits");
+
+    mount;
+    hdr(14'd240, GOP);
+    chk    (1'b0, "[12e] 240: NTSC");
+    chk_sif(1'b1, "[12f] 240: SIF");
+    sif_edges_clr;
+    hdr(14'd288, HOLD + GOP);
+    chk    (1'b1, "[12g] 240->288 moves pal");
+    chk_sif(1'b1, "[12h] 240->288 leaves sif SET");
+    chk_sif_edges(0, "[12i] ... without a spurious sif edge (both are still SIF)");
+
+    mount;
+    hdr(14'd288, GOP);
+    edges_clr;
+    hdr(14'd576, HOLD + GOP);
+    chk    (1'b1, "[12j] 288->576 leaves pal SET");
+    chk_sif(1'b0, "[12k] 288->576 clears sif");
+    chk_edges(0, "[12l] ... without a spurious pal edge (both are still PAL)");
+
+    // ================================================================ [13]
+    // The meaning table for sif, hand-written like [8]'s.
+    for (i = 0; i < 7; i = i + 1) begin
+      mount;
+      hdr(tbl[i], 3);
+      if (dut_sif !== want_sif(tbl[i])) begin
+        $display("  vsize=%0d -> sif %0b, want %0b", tbl[i], dut_sif, want_sif(tbl[i]));
+        fail("[13] sif meaning table mismatch");
+      end
+    end
+
+    if (errors == 0) $display("pal_detect_tb: ALL TESTS PASSED (13 scenarios)");
     else begin
       $display("pal_detect_tb: %0d FAILURE(S)", errors);
       $fatal(1, "pal_detect_tb FAILED");
