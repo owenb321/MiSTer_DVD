@@ -1,7 +1,13 @@
 # The quantiser matrix is lost at a VBUF flush ("deep fried" menu stills)
 
-**Status: 🔧 fixed in fabric, sim-proven RED/GREEN, ⏳ HW-confirm pending.**
-Branch `fix/quant-matrix-flush`. Gate: `bench/dvd/run_quant_matrix.sh --red`.
+**Status: ⛔ NOT FIXED. The fix REGRESSED on hardware and is being bisected.**
+Branch `fix/quant-matrix-flush`, not merged, not pushed. §9 is the live record —
+read it before anything else here, because §6's fix is the thing that regressed.
+
+⚠ `bench/dvd/run_quant_matrix.sh` is NOT a safety gate for the vld change. It
+measures the quantiser-matrix landing and passed 12/12 on a build that produces
+magenta/green garbage on hardware. The real gate is the title->menu re-entry
+test on the rig (§9.1).
 
 ---
 
@@ -299,3 +305,103 @@ Scan-bug RED (`--matrix-probe`, no flush): `mismatches=58/64 permutation=1 downl
   separable.
 - ⏳ The still-open **two-press activation** on this disc is a separate item; see
   `docs/dvd_nav.md`. It is not caused by this defect, though the same press repairs both.
+
+
+---
+
+## 9. Hardware rounds — the fix regressed, and two theories died (2026-09-14)
+
+### 9.1 ★ The original defect is REPRODUCED on hardware, and the path matters
+
+Rebooting the disc reproduces it about one time in three, which is useless as a
+gate. **Title->menu re-entry reproduces it in ~2 minutes**: press Play Story,
+wait, press Menu. That is a domain change, so `flush_ctl` gates `seek_flush` on
+`~keep_vbuf` and it is a FULL VBUF flush — the exact path §3 is about. Measured
+on the pre-fix core (`dev-titlespan`), 7 samples:
+
+    5 CORRECT / 2 FRIED / 0 garbage
+
+That is the RED arm this work never had. Use this path, not reboots.
+
+Every frame is classified three ways (`fry_classify.py` in the session
+scratchpad) against two references rendered locally from the same elementary
+stream: the still with the disc's own matrix, and with the defaults substituted.
+★ **The third verdict, GARBAGE, is not decoration.** A nearest-reference test
+can only say "better or worse"; it would have binned the regression below as
+whichever reference happened to be nearer and reported a NEW defect as a partial
+success.
+
+### 9.2 ⛔ The regression
+
+Flashing the §6 fix gave magenta/green striped garbage on the re-entry path:
+hue inverted (magenta where the menu is pale green, green where Elmo is red),
+fine horizontal banding, geometry and text intact. It persists through chapter
+skips and clears only by remounting the disc. Bisect, same path and instrument:
+
+| build | result |
+|---|---|
+| pre-fix `dev-titlespan` | 5 CORRECT / 2 FRIED / 0 garbage |
+| vld + getbits + iquant | mostly GARBAGE |
+| vld + iquant (getbits reverted) | 2 CORRECT / 6 GARBAGE |
+
+So it is **`vld.v`'s `flush_resync`**, not the `getbits_fifo` change that was
+reverted first on a wrong call. `iquant` is excluded independently: this disc's
+matrix is flat, so a permutation of it is unobservable, and the matrix is not in
+the intra DC path at all.
+
+### 9.3 ⛔ REFUTED: the false MPEG-1 verdict / wrapped DC
+
+The best theory, and it fitted every visible element. A false `mpeg1` forces
+`intra_dc_precision` to 0; `rld.v:362` then shifts the DC by 3 into a **13-bit**
+register from a 12-bit signed level, which overflows and **wraps**; a wrapped
+chroma DC is an inverted hue and a wrapped luma DC is the banding; `mpeg1` is
+latched on `sync_rst`, so it survives chapter skips and clears on a remount.
+
+**MEASURED AND FALSE.** Telemetry word 5 was repurposed to carry
+`{dcprec_chg, mpeg1_rises, intra_dc_precision, mpeg1}` — both signals had been
+invisible, so the board could not be asked. Six garbage frames, every one:
+
+    mpeg1=0   intra_dc_precision=2 (the stream's own value)   mpeg1_rises=0
+
+★★ **The durable lesson. Three constructed SIM arms had already failed to
+reproduce it** (flush aimed at `STATE_SEQUENCE_HEADER`; a second flush inside
+the landing's sequence header; a landing starting past it) **and I read that as
+the arms being wrong rather than the theory being wrong.** One instrumented
+hardware run settled it in minutes. When a theory needs increasingly specific
+scenarios to survive, measure its PREMISE instead of building another scenario.
+
+### 9.4 ⛔ REFUTED: the getbits_fifo reset domain
+
+Three forms were built and the garbage survived all three, so flushing that
+window is not the cause of the regression — but two real defects were found on
+the way and are recorded in `mpeg2video.v`:
+
+  * `.rst(vbuf_rst)` alone silently dropped the module from the WATCHDOG reset
+    and the mount SOFT reset (only `sync_rst` carries those), and let it leave
+    reset ahead of the vld/rld/framestore.
+  * `.rst(sync_rst && vbuf_rst)` fixed that and cost **7 MHz** — clk_dec 85.46
+    @-40C, below the 86.0 gate. ★ A bare AND puts a COMBINATIONAL net on a large
+    module's reset tree. Combine before a `sync_reset`; "logically equivalent"
+    reset expressions are not equivalent to the fitter.
+
+The change is reverted: it bought one swept flush position in 12 and is not
+worth another hardware round.
+
+⚠ Also established: the build the user tested closed timing with margin
+(95.53/91.07), so the regression is a FUNCTIONAL defect, not a marginal-fit
+artifact. That excludes the placement/fringe class.
+
+### 9.5 Where it stands
+
+The remaining bisect splits `flush_resync` itself: all five clears removed
+(`drop_this_picture`, `drop_gov_picture`, `skip_d_picture`,
+`picture_header_seen`, and the line-21 CC snoop), leaving only
+
+    state <= flush_resync ? STATE_NEXT_START_CODE : next;
+
+That is also the minimal form of the fix. If it is clean on the re-entry path it
+ships as-is; **if it still garbages, forcing the parser at a flush is the wrong
+approach and this branch should be abandoned rather than patched again.** The
+salvageable parts are separable and independent of the vld change:
+`tools/qmatrix_scan.py`, `tools/quant_fixture.py`, the bench, the 13818-2 7.3.1
+scan fix in `iquant.v`, and this document.
