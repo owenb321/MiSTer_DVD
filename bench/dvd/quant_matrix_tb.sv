@@ -310,8 +310,6 @@ module quant_matrix_tb;
   integer   seq_after = 0, nsc_after = 0, sc_after = 0, qrst_after = 0;
   integer   fr_cycles = 0;
   integer   bskip = 0;
-  integer   seqext_after = 0, extsc_after = 0;
-  reg [1:0] cf_seen = 2'd1;
   integer   reflush2 = 0;
   integer   atstate = -1;      // +ATSTATE=n : fire the flush when vld.state == n
   reg       mpeg1_after = 1'b0;
@@ -342,16 +340,6 @@ module quant_matrix_tb;
       if (vld.state == vld.STATE_START_CODE)       sc_after  <= sc_after  + 1;
     end
     if (in_b && quant_rst) qrst_after <= qrst_after + 1;
-    // ★ chroma_format sets the BLOCK COUNT per macroblock. If it is wrong the
-    // block counter desyncs and luma blocks land in the chroma planes -- which
-    // is the MEASURED signature of the HW garbage (both chroma planes carry
-    // luma). It is latched by a loadreg whenever state == STATE_SEQUENCE_EXT,
-    // so a hunt that dispatches on a FALSE 00 00 01 B5 corrupts it.
-    if (in_b && vld_en && (vld.state == vld.STATE_SEQUENCE_EXT))
-      seqext_after <= seqext_after + 1;
-    if (in_b && vld_en && (vld.state == vld.STATE_EXTENSION_START_CODE))
-      extsc_after <= extsc_after + 1;
-    if (in_b) cf_seen <= vld.chroma_format;
     if (vld.flush_resync) fr_cycles <= fr_cycles + 1;
     // ★ The MPEG-1 verdict is the thing under suspicion: mpeg1 forces
     // intra_dc_precision/q_scale_type/alternate_scan/intra_vlc_format to their
@@ -563,10 +551,6 @@ module quant_matrix_tb;
              shadow_intra.default_values, state_at_flush, vlden_in_window, used_n);
     $display("DIAG: seqhdr_after=%0d startcode_after=%0d nextsc_after=%0d quant_rst_after=%0d",
              seq_after, sc_after, nsc_after, qrst_after);
-    $display("CHROMA: chroma_format=%0d (1=4:2:0 correct) seqext_visits_after=%0d ext_startcodes_after=%0d",
-             cf_seen, seqext_after, extsc_after);
-    if (cf_seen !== 2'd1)
-      $display("REGRESSION: chroma_format is NOT 4:2:0 -- the block counter will desync and luma will land in the chroma planes");
     $display("MPEG1: verdict_after_flush=%0b latches=%0d seq_hdr_seen=%0b seq_ext_seen=%0b",
              mpeg1_es, mpeg1_latches, vld.sequence_header_seen, vld.sequence_extension_seen);
     if (mpeg1_es)

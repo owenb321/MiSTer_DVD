@@ -59,7 +59,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              mem_req_rd_cmd, mem_req_rd_addr, mem_req_rd_dta, mem_req_rd_en, mem_req_rd_valid,                                    // clocked with mem_clk
              mem_res_wr_dta, mem_res_wr_en, mem_res_wr_almost_full,                                                               // clocked with mem_clk
              testpoint_dip, testpoint_dip_en, testpoint,
-             init_cnt_out, sync_rst_out, vbw_almost_full_out, dbg_chroma,
+             init_cnt_out, sync_rst_out, vbw_almost_full_out,
              dbg_lines_displayed, dbg_first_vpos, dbg_last_vpos,   // DVD-FORK DEBUG (256-line strobe)
              dbg_prof0, dbg_prof1,                                 // DVD-FORK DEBUG (stage profiler)
              cc_pair_valid, cc_pair, cc_pair_field,               // DVD-FORK (line-21 CC): EIA-608 pairs from user_data (clk domain)
@@ -143,7 +143,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   output     [11:0]v_pos;                   // vertical position; 0 = top
   output      [8:0]init_cnt_out;
   output           sync_rst_out;
-  output    [15:0] dbg_chroma;   // DVD-FORK DEBUG: {extsc_n, seqext_n, chroma_format}
   output           vbw_almost_full_out;
   /* DVD-FORK DEBUG (256-line strobe probe): per-output-frame mixer telemetry (dot_clk) */
   output     [11:0]dbg_lines_displayed;
@@ -1162,7 +1161,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
      * we just left. Already clk_dec and already 2-FF synced upstream
      * (dvd/emu.sv vbuf_flush_dec) — no new CDC. See docs/seek_realign.md. */
     .vbuf_flush(flush_vbuf_eff),
-    .dbg_chroma(dbg_chroma),
     /* DVD-FORK (PTS association): where each picture header was parsed */
     .bitpos(vld_bitpos),                                     // from getbits
     .pic_hdr_pulse(pic_hdr_pulse),
