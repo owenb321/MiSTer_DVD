@@ -52,6 +52,15 @@
  * standard is PERSISTENT. Any change of the parsed height abandons the candidate, so a
  * burst of DIFFERENT garbage values never accumulates.
  *
+ * ★ A SECOND VERDICT RIDES THE SAME RULE (2026-09-14, native 240p). `sif` = "the
+ * content is SIF-height" (<= 288 lines) and it selects the 240p/288p raster, so it is
+ * load-bearing in exactly the way `pal` is: a change RESTARTS THE RASTER. It is a pure
+ * function of the same `vsize`, so it shares the candidate and the timer rather than
+ * adding a second one — the held verdict is the PAIR, and a disagreement in EITHER bit
+ * arms the timer. That is not a shortcut: because both bits are functions of one
+ * register, they can never want to settle at different times, and one timer is what
+ * makes "the pair changed together" true by construction.
+ *
  * Cost: HOLD_CYC must exceed one GOP comfortably. ~0.5 s at clk_dec (81 MHz) is ~15 GOPs.
  * A genuine mid-stream standard change is only reachable across a title/VTS jump, which
  * brings its own flush, so half a second of the old raster there is not a regression.
@@ -71,7 +80,8 @@ module pal_detect #(
                                      //  i.e. exactly when the parse is least trustworthy)
     input  wire [13:0] vsize,        // decoder vertical_size_out (0 = no header in force)
 
-    output reg         pal           // the held verdict: 1 = 50 Hz content
+    output wire        pal,          // the held verdict: 1 = 50 Hz content
+    output wire        sif           // the held verdict: 1 = SIF-height (<= 288 lines)
 );
 
 // A plausible parsed height, and what it would mean.
@@ -79,6 +89,16 @@ module pal_detect #(
 // NTSC SIF is 240, neither >480 nor 288, so it correctly stays NTSC.
 wire vs_plaus = (vsize >= 14'd64) && (vsize <= 14'd1152);
 wire vs_pal   = (vsize > 14'd480) || (vsize == 14'd288);
+// SIF height: MPEG-1 NTSC 240 and PAL 288. Deliberately <=288 rather than a
+// {240,288} whitelist, for the same reason vs_plaus is a bound -- flat .mpg files
+// exist and a sub-288 height is still SIF-class content the 240p raster fits.
+wire vs_sif   = (vsize <= 14'd288);
+
+// The held verdict is the PAIR {sif, pal}; one candidate/timer serves both.
+wire [1:0] vs_q = {vs_sif, vs_pal};
+reg  [1:0] vq;
+assign pal   = vq[0];
+assign sif   = vq[1];
 
 reg         pal_init;        // a verdict has been established for this file
 reg  [13:0] cand;            // the disagreeing height being timed
@@ -86,12 +106,12 @@ reg  [26:0] tmr;             // 0 = no candidate armed; else cycles it has held
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        pal      <= 1'b0;
+        vq       <= 2'b00;
         pal_init <= 1'b0;
         cand     <= 14'd0;
         tmr      <= 27'd0;
     end else if (mount_arm) begin
-        // Re-arm only. `pal` deliberately KEEPS the previous verdict until the new file's
+        // Re-arm only. The verdict pair deliberately KEEPS its previous value until the new file's
         // first header: the mount soft reset zeroes vsize, and blanking the verdict here
         // would read "NTSC" across that gap and fire the very walk this module exists to
         // prevent. Same reasoning as the `!= 0` hold it replaces.
@@ -99,18 +119,18 @@ always @(posedge clk or negedge rst_n) begin
         tmr      <= 27'd0;
     end else if (!pal_init) begin
         if (vs_plaus) begin
-            pal      <= vs_pal;      // first verdict of the file: latch at once
+            vq       <= vs_q;        // first verdict of the file: latch at once
             pal_init <= 1'b1;
             tmr      <= 27'd0;
         end
     end else begin
-        if (!vs_plaus || (vs_pal == pal))
+        if (!vs_plaus || (vs_q == vq))
             tmr  <= 27'd0;                                   // no header / already agrees
         else if ((tmr == 27'd0) || (vsize != cand)) begin
             cand <= vsize;                                   // arm (or re-arm on a change)
             tmr  <= 27'd1;
         end else if (tmr >= HOLD_CYC) begin
-            pal  <= vs_pal;                                  // held long enough: believe it
+            vq   <= vs_q;                                    // held long enough: believe it
             tmr  <= 27'd0;
         end else
             tmr  <= tmr + 27'd1;

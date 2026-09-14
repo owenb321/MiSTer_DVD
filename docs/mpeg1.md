@@ -308,11 +308,11 @@ NTSC + PAL SIF fill the CRT cleanly, normal DVDs unregressed.** In-core 2× fill
   fill engages (Letterbox-engage class); while analog is engaged HDMI sees the
   in-core 2× instead of ascal (Letterbox/Crop trade-off class).
 
-### B.3a Native 240p — the rejection's premise EXPIRED with PR #63 (2026-09-07)
+### B.3a Native 240p — ✅ BUILT + HW-CONFIRMED (2026-09-14, `feature/native-240p`)
 
 **Do not re-derive the old "no". It was correct when written and its reason no longer
-holds.** Nothing here is built; this exists so the next session starts from the current
-architecture instead of the 2026-08 one.
+holds.** The analysis below is kept because it is the argument that unblocked the work;
+§B.3b records what was actually built and what it cost.
 
 **What was rejected, and why.** `CLAUDE.md`'s SIF bullet says *"True 240p output was
 REJECTED: no exact-59.94 Hz 240p modeline exists at 1716 dots/line, so it would drift
@@ -346,12 +346,17 @@ audio NCO now share the crystal directly and cannot drift from each other; the r
 supplies pickup opportunities. A raster 0.19 % fast therefore costs **one held frame every
 ~9 s**, not a drift — a different and much cheaper trade.
 
-⚠ **VERIFY BEFORE BUILDING ON THIS.** The paragraph above is read from `disp_sched`'s design
-note and the `half_scan` mux, not from tracing the audio path end to end. Confirm that a
-raster whose period is not the content period really does degrade to a held frame — that is
-the whole load-bearing claim.
+✅ **VERIFIED AT RTL LEVEL BEFORE THE BUILD (2026-09-14), which the note above asked for.**
+`dvd/resample_addrgen.v:419` `frame_due = sched_due`; a picture that is not yet due leaves the
+FSM in `STATE_REPEAT`, whose persistence branch re-scans `last_image` — the held frame. And
+`late_raw` (`:738-741`) requires `sched_next_due`, i.e. *the timeline has passed the NEXT
+picture and there is none*, which is false for a not-yet-due hold. So the hold banks **no
+lateness, no drop debt, and nothing reaches the audio clock**: the degradation really is one
+held frame, and at 60.055 Hz against 29.97 fps content it is one every ~8.7 s.
+⏳ The remaining half is the ear: nobody has yet watched a long VCD on hardware and confirmed
+the hitch is not objectionable. That is the HW gate, not a sim one.
 
-**What a 240p mode would still need:**
+**What a 240p mode needed (all done except where marked):**
 
 - A modeline branch: 262 lines, `halfline = 0`. Mechanically the easiest part.
 - `dvd/csync_smpte.sv` emitting on a progressive raster with `blk_half` forced 0 — 240p's
@@ -361,13 +366,192 @@ the whole load-bearing claim.
   this needs a third case rather than simply ungating.
 - A `half_scan` entry (`dvd/emu.sv`, the film24/film25/PAL/NTSC mux). 262 × 63.556 µs = 749
   ticks against the 750 already there for a 480i field — very nearly free.
-- The content side: a ×2 vertical downscale + centre, already listed as a follow-up in
-  `docs/crt_anamorphic.md` §10 with `disp_vscale` step 2.
-- **A choice**: plain 262 (60.055 Hz, one held frame every ~9 s) versus **262/263
-  alternating**, which averages exactly 262.5 and hits 59.94 precisely, trading the held
-  frame for one line of frame-period jitter at 30 Hz. `rtl/mpeg2/syncgen.v` already
-  alternates field totals for interlace (`eff_vertical_length`), so the mechanism exists;
-  whether a CRT's vertical oscillator rides it without visible bounce is a measurement.
+- ⛔ **The content side needed NOTHING, and this bullet was the plan's one real error.**
+  A ×2 vertical downscale is what putting **480-line** content into 240p would need. For SIF
+  the content is *already* 240 lines: the fix is to stop doubling it. `sif_v2x_eff` gains
+  `& ~p240_eff`, `disp_vscale_mode` goes to 0 = FIT, and the addrgen walk is bypassed
+  entirely — 240 decoded lines onto 240 raster lines, 1:1. `crt_ov_map`'s v2x inverse is
+  gated by the same signal, so it returns to pass-through with no new inverse to derive.
+  (A 240p mode for full-height DVD content is still unbuilt and still wants that downscale.)
+- **A choice, made: plain 262** (60.055 Hz, one held frame every ~8.7 s). It is what every
+  console core emits, so it is the shape displays and scalers are most likely to accept, and
+  it needs no change to `rtl/mpeg2/syncgen.v`. ⚠ The 262/263-alternating variant that would
+  hit 59.94 exactly is **not free**: `eff_vertical_length`'s alternation is armed on
+  `interlaced`, which also halves the display size and toggles `odd_field`, so reaching it
+  from a progressive raster means threading a new control bit through an HW-proven upstream
+  file. Kept as the documented fallback if the held frame ever proves visible.
+
+
+### B.3b What was built (2026-09-14, `feature/native-240p`)
+
+**The raster is the existing 480i branch with `interlaced = 0`.** Same 858/864-dot line, same
+hsync, same 244..247 / 292..295 vsync window, same per-field `vertical_length` (261/311 =
+262/312 lines). Only four things differ, and three of them are one bit each:
+
+| register | 480i / 576i | 240p / 288p | why |
+|---|---|---|---|
+| `VERT_RES` | 480 / 576 | **240 / 288** | syncgen halves it only when `interlaced`, so a progressive raster must be told the true active count |
+| `horizontal_halfline` | 429 / 432 | **0** | console 240p is the same raster without the half-line |
+| `VID_MODE {clip,pixrep,interlaced}` | `011` | **`010`** | interlaced off; **pixrep STAYS ON** |
+| `trick_w[10]` deinterlace | 0 | **1** | the decoder emits frames, like every other progressive branch |
+
+⚠⚠ **PIXEL REPETITION STAYING ON IS LOAD-BEARING AND IS THE MOST TEMPTING WRONG
+"SIMPLIFICATION" IN THE WHOLE BRANCH.** It is what holds the line at 1716 dots =
+**15.734 kHz**, the line rate the CRT is already locked to. Drop it and the line is 858 dots
+= 31.5 kHz, which is not 240p and which no 15 kHz display will take. `tools/check_p240_wiring.py`
+asserts the `3'b010` payload for exactly this reason, and `run_p240.sh --red` mutation M3 is
+that mistake made executable.
+
+⚠⚠ **AND THE OTHER ORDERING TRAP: `p240_eff = interlaced_eff & sif`, so `p240_prev` IMPLIES
+`il_prev`.** In the walk's ternary chains a p240 arm placed *after* an il arm is dead code —
+the raster silently stays line-doubled, the feature does nothing, and **nothing fails**. It
+happened during development (the PAL 576i arm swallowed PAL 288p). Both step 2 and step 4
+test p240 first; RED mutation M1 restores the wrong order.
+
+**`il_eff` carries three meanings and only one moves.** Read as "the 15 kHz raster is up" it
+stays true (240p is a sub-mode of it); read as "pixel repetition is on" it stays true; read
+as "the decoder emits interlaced FIELDS" it becomes false. Only that third reading is
+re-pointed, at a new `fields_eff = interlaced_eff & ~p240_eff`:
+
+| role | signal | consumers |
+|---|---|---|
+| fields | **`fields_eff`** | `VGA_F1`, `HDMI_BOB_DEINT`, `sif_v2x_eff`, `crt_ov_map`/`spu_decode` `.interlaced`, the walk's interlaced/halfline/VERT_RES/deinterlace, `cc_vbi.enable` |
+| pixrep + the analog raster | `il_eff` / `interlaced_eff` (unchanged) | `CE_PIXEL`, `ov_h_gen`, `sp_qx`, `sif_hfill_eff`, Analog Aspect, `csync_smpte.en` |
+
+Splitting it this way is what kept the change small — the two unchanged readings are the
+majority of the ~15 consumers, and re-pointing them would have been churn with a regression
+risk for no behavioural gain.
+
+★ **The HORIZONTAL fill stays on at 240p.** `disp_hstretch` is a true 2-tap linear resampler
+(it stopped being nearest-neighbour in 2026-07), so it was never part of the reported
+chunkiness, and a CRT needs the full line width whatever the raster's height is. RED
+mutation M8 is the mistake of removing it along with the vertical repeat.
+
+**The engage is automatic and debounced.** `dvd/pal_detect.sv` gains a second verdict, `sif`
+(<= 288 lines), riding the SAME candidate and timer as `pal` — both are functions of one
+register, so they can never want to settle at different times, and one timer makes "the pair
+moved together" true by construction. ⛔ **Do NOT drive the raster from the raw `sif_v_dec`
+tap**: it has no plausibility bound and no hold, and a content-derived raster edge without
+them is precisely the self-feeding loop the reverted film-switch attempt died of
+(`docs/film_24p_plan.md` §13). ★ `mount_arm` latches the first plausible header of a file
+immediately, so for a VCD the verdict lands **inside the mount flush window, before
+`video_live`** — in practice there is no mid-title raster switch at all. Any later edge rides
+`dvd/mode_realign.sv` alongside `il_switch`, never straight into `flush_ctl`.
+
+★ **No CONF_STR row, deliberately.** A menu entry re-rolls the pinned fitter SEED, and there
+is no setting to make: 240 lines on a 240-line raster is strictly better than doubling them.
+An HDMI-only rig is untouched — `interlaced_eff` is 0 there, the fill never ran, and ascal
+already receives the native 352×240 DE window.
+
+★ **PR #92's decoder soft reset does not cover this path, and that is correct.**
+`flush_ctl.soft_flush` is `mount_flush || jump_soft_cnt`, and `jump_soft_cnt` is set only by
+`jump_flush = jump_ack && ~keep_vbuf`; `mode_switch` and `seek_ack` are excluded. So a 240p
+engage flushes the VBUF exactly as a chapter skip does. The quantiser-matrix defect that
+reset exists for cannot apply here either: it bites content carrying exactly one sequence
+header (a menu still), and SIF content re-sends one every GOP.
+
+**Gates — `bench/dvd/run_p240.sh` (11 GREEN arms), `--red` (14 mutations, all caught:
+M1 the ordering trap, M2 line repeat left on, M3 pixrep dropped, M4 raw-tap engage,
+M5 VGA_F1 on il_eff, M6 mode_realign loses the edge, M7 an overlay loses act_h,
+M8 horizontal fill also removed, M9 Letterbox left reachable, S1-S3 detector,
+C1 blk_half unforced x2 standards, R1 the 240p phase left interlaced).**
+
+- `crt_syncgen_tb` PHASE 6/7: **449,592 clk27 (262 lines, CONSTANT = 60.0545 Hz)** and
+  **539,136 (312 lines = 50.0616 Hz)**, every vsync rise at the same position in the line,
+  240/288 **consecutive** active lines. All seven pre-existing phases pass unchanged, which
+  is the evidence the 480i/576i/480p/film rasters are untouched.
+  ★ The interlaced tracker's parity checks could not carry over (on a progressive raster
+  `v_pos` alternates *within* the frame, so they fire on correct RTL); they are replaced by
+  the positive statement — displayed `v_pos` steps by exactly 1, not 2. Skipping them alone
+  would have left the phase asserting nothing about interlace.
+- `csync_p240_tb` (new; kept OUT of `csync_field_tb`, whose field-A/B model and [G5]/[G8]
+  presuppose two fields): equality with a one-clock-delayed `h_sync` over 1.58 M clocks
+  outside the vertical interval, the 18-pulse census at the standard's widths, every frame's
+  block at the same offset, and **[P3] vertical sync opens on a line boundary** = `blk_half`
+  0, measured on the wire. RED `+red_half=1` fails [P3] on both standards.
+- `pal_detect_tb` 13 scenarios; the new ones prove one timer can still move the two verdicts
+  **independently**, which is the thing a shared timer could plausibly get wrong.
+- `tools/check_p240_wiring.py` reads the connections out of `dvd/emu.sv`, because emu has no
+  bench and a port carrying the wrong FACT is invisible to every module test.
+
+⚠ **Four bench bugs found while writing these, all of the "passes while measuring nothing"
+family, and worth knowing because three are not specific to this feature:** integers assigned
+in an `always @(*)` read as `x` until their first change while a clocked block samples them
+from cycle one; an unfiltered pulse log fills with ordinary hsyncs long before the interesting
+event ("512 pulses captured, 0 blocks located"); a line phase anchored to `dot % LINE` is
+meaningless because `dot` starts at reset rather than on a line boundary (it produced a
+constant 4-dot offset that looked like a real defect). And one wrong *assertion*: [P3] first
+required the whole nine-line block to be line-aligned, which is true for 525 and **false for
+625** — BT.470's 2.5-line segments start the pre-equalizing sequence mid-line. Only the broad
+segment is line-aligned in both standards.
+
+★ **ANALOG ASPECT IS SUPPRESSED ON THE 240p RASTER, and this was a real gap found by
+re-reading the branch rather than by any bench.** `crt_ov_map` is handed bar geometry as
+LITERALS authored for a 480/576-line frame (`v_bar` = `vertical_size/8` = 60/72, `v_band`
+= 3/4 = 360/432), so on a 240-line raster the bars would be twice their proper depth and
+the overlay inverse would map subtitles and menu highlights into the wrong rows.
+Making that geometry raster-aware is real work for a case that does not exist: **SIF
+content is 4:3 by construction**, so there is nothing to letterbox or crop. Auto was
+already safe (it follows `ar_wide_auto_eff`, and MPEG-1 pixel-aspect codes never resolve
+16:9 — `docs/vcd_svcd.md` §2d); what the gate covers is a MANUAL `Letterbox`/`Crop`
+selection while a VCD plays. Same shape as `filmp_eff` being suppressed by
+`interlaced_eff`: a raster that cannot carry a feature says so in RTL. RED mutation M9.
+
+**✅ HW ROUND 1 (2026-09-14)** — build `DVD_p240_20260914_1405.rbf`, SEED 7 first roll,
+clk_dec 91.42 @100C / 88.47 @-40C (gate 86.0), 90 % ALM. Maintainer's rig: **the composite
+CRT plays it correctly, and a RetroTINK 4K on RGBS reports it as 240p content.**
+
+★ **The RT4K reading is the load-bearing half; the CRT is the regression check.** A CRT
+locks to a raster that is subtly wrong without complaint — that is most of why the
+field-order defect survived so long (§3.11 of `docs/single_raster_analog.md` settled the
+same ordering for the same reason). A scaler that prints "240p" has decoded the line rate
+AND the absence of the half-line, which is exactly the pair of things this branch changes,
+so it is the measurement and the CRT is the sanity check.
+
+**Still open on this feature — the confirmation above is narrower than "it works":**
+
+- ⏳ **A LONG VCD.** The ~8.7 s held frame is the one cost this design knowingly accepts and
+  nobody has yet sat through it. If it turns out to be objectionable the answer is already
+  written down: the 262/263-alternating variant above.
+- ⏳ **PAL 288p** — sim-gated on both benches, never on a set.
+- ⏳ **The HUD, seek bar and idle logo on a 240-line screen.** Sim-gated via `+act_h=240`;
+  the round above did not report on them.
+- ⏳ **The screensaver and Stop show the idle logo over a mounted title**, so `idle_logo`'s
+  bounce box is exercised on the 240p raster during playback, not only at boot. Unverified.
+★ **WHY THE CORE REPORTS 720x240 RATHER THAN 352x240** (asked on the HW round). The answer
+is NOT "the clock needs it", and the next session should not re-derive it that way. The line
+is fixed at 1716 dots @ 27 MHz because that is what produces 15.734 kHz; the reported width
+is only how `CE_PIXEL` slices that line. A native 352 wants one enable per 4 dots =
+6.75 MHz, giving **1716/4 = 429** pixel-times exactly — 352 active plus 77 of blanking,
+against the 69 the current raster would have if halved. The arithmetic is clean; 720 is not
+a constraint. Two things make it a real project rather than a constant change:
+
+1. `syncgen_intf`'s pixel repetition is a single bit-shift doubling
+   (`{x[10:0],1'b1}` / `{x[10:0],1'b0}`), so 13.5 MHz is the only sub-27 MHz pixel rate
+   reachable without new logic there AND in `emu.sv`'s `ce_pix_q`.
+2. ⚠⚠ **EVERY OVERLAY IS AUTHORED IN 720-PIXEL SPACE, and this is the actual blocker.**
+   `transport_hud` is a 32x16 glyph box = **512 px wide** at `X0 = 104`; `seek_bar` is
+   `BAR_W = 512` at the same origin; `idle_logo` bounces against `720 - w2`; and
+   `ov_h_gen` / `sp_qx` / `crt_ov_map` all invert the x2 pixrep. **A 512-px-wide status line
+   does not fit on a 352-px screen at all.** Re-authoring that is the cost.
+
+**What it would buy:** one resample stage. Today 352 -> 720 (2-tap linear) -> ascal -> the
+display; native would be 352 -> ascal. Worth essentially nothing to a CRT (its bandwidth
+smooths both, and the interpolated waveform is the smoother of the two), but it would let a
+RetroTINK lock a 1:1 sample grid and capture genuinely pixel-perfect, which it cannot
+recover from an interpolated 720.
+⛔ **The target would be 352, NOT 320** — SIF content is 352 wide, so 320 means cropping or
+downscaling real pixels.
+⚠ **Related, PRE-EXISTING, and minor: MPEG-1 SIF is half of 704, not 720**, so the
+`disp_hdst_w = 720` stretch is ~2.3 % wider than strict BT.601 geometry. It is consistent
+with how the fill already treats 704-wide sub-D1 DVD content and the error is invisible, so
+it is a choice rather than a defect — but 704 is the number you would want if this ever
+went native.
+
+- The overlays are re-anchored but not re-scaled, so text occupies twice the relative height.
+  ★ A proportional variant is cheaper than it looks — `transport_hud.sv`'s 2× vertical is the
+  bit-select `s0_gy <= vy[4:1]`, so 1× is `vy[3:0]` with `ROW_H` 16. Not done: it is a
+  judgement about how the HUD should look, not a correctness matter.
 
 ### B.4 Verification
 

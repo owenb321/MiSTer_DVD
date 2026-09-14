@@ -72,10 +72,27 @@
  * REMOVED before release — it is a measurably broken signal (0.857 line between the
  * fields instead of 0.500, and a mis-identified first field), not a fallback.
  *
- * Interlaced only: `en` is interlaced_eff, and `cs_en` follows it, so a PROGRESSIVE
+ * 15 kHz only: `en` is (interlaced_eff | p240_eff) and `cs_en` follows it, so a 480p
  * raster still takes the framework module — a nine-line vertical block is meaningless
- * there. That is gated in RTL rather than by user discipline, and it is the path
+ * at 31 kHz. That is gated in RTL rather than by user discipline, and it is the path
  * csync_field_tb's stock arm exercises now that the OSD value is gone.
+ *
+ * ★ THE 240p CASE (2026-09-14, native 240p) IS A THIRD CASE, NOT AN UNGATING, and it
+ * needs exactly two things beyond `en`. `prog` says the raster is the 262/312-line
+ * progressive one, and then:
+ *   - the line/field decode changes. syncgen packs {line, field} into v_pos ONLY when
+ *     interlaced; on a progressive raster v_pos IS v_cntr, so v_pos[11:1] would read
+ *     half the line number and v_pos[0] would toggle every line — noise, not a parity.
+ *   - the block stops being half-line offset. 240p's vertical interval is the SAME
+ *     nine-line block; what interlace adds is that one field opens it half a line late.
+ *     A progressive raster is always the line-aligned field, which is expressed here by
+ *     forcing fpar to FIELD1_VPOS rather than by special-casing blk_half — so the one
+ *     shared constant still decides, and a flipped FIELD1_VPOS cannot leave this module
+ *     disagreeing with the raster.
+ * ⚠ EVERY GEOMETRY CONSTANT STAYS. 240p keeps pixel repetition, so the line is the same
+ * 1716 doubled dots (half_w 858), and it reuses the interlaced branch's vsync window, so
+ * VSS_N 244 is still the first broad line and the block still lands in blanking
+ * (lines 241-249 of 262, active 0-239). Nothing here is re-derived for the new raster.
  */
 `include "timescale.v"
 `include "field_polarity.vh"   // FIELD1_VPOS — shared with syncgen.v and cc_vbi.sv
@@ -86,7 +103,8 @@ module csync_smpte (
     input  wire        rst_n,
 
     input  wire        mode,       // 0 SMPTE block, 1 2H serrations only
-    input  wire        en,         // interlaced_eff: the 15 kHz raster is up
+    input  wire        en,         // the 15 kHz raster is up (interlaced OR 240p)
+    input  wire        prog,       // that raster is the PROGRESSIVE 240p/288p one
     input  wire        pal,        // 625-line raster
 
     input  wire        h_sync,     // the EMITTED hsync (core_h_sync), active high
@@ -151,8 +169,12 @@ reg         hs_q;
 
 wire        hs_edge   = h_sync & ~hs_q;
 wire [11:0] pos       = hs_edge ? 12'd0 : ((hcnt != 12'hFFF) ? (hcnt + 12'd1) : hcnt);
-wire [11:0] line_now  = hs_edge ? v_pos[11:1] : cur_line;
-wire        fpar_now  = hs_edge ? v_pos[0]    : fpar;
+// ⚠ v_pos is {line, field parity} only while the raster is interlaced (syncgen.v:418-421
+// packs it that way under `interlaced`). On the progressive 240p raster v_pos is the line
+// index itself, and there is no field: take it whole and declare the raster to be the
+// line-aligned field, which makes blk_half fall out as 0 through the shared constant.
+wire [11:0] line_now  = hs_edge ? (prog ? v_pos : v_pos[11:1])   : cur_line;
+wire        fpar_now  = hs_edge ? (prog ? `FIELD1_VPOS : v_pos[0]) : fpar;
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin

@@ -38,9 +38,17 @@ module seek_bar_tb;
     wire [7:0]  bar_r, bar_g, bar_b;
     wire [3:0]  bar_alpha;
 
+
+    // DVD-FORK (native 240p, 2026-09-14): the raster's active height is now an INPUT.
+    // Defaults to the standard so every pre-existing arm is bit-identical; +act_h=N
+    // drives the 240p/288p arm, where the module must bottom-anchor to 240/288 instead.
+    integer     act_h_arg = 0;
+    initial     void'($value$plusargs("act_h=%d", act_h_arg));
+    wire [11:0] act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0]
+                                            : (1'b0 ? 12'd576 : 12'd480);
     seek_bar #(.POP_TICKS(27'd2000)) dut (
         .clk(clk), .rst_n(rst_n),
-        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0),
+        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0), .act_h_i(act_h_tb),
         .bar_active(bar_active),
         .base_rbn(base_rbn), .tgt_rbn(tgt_rbn),
         .first_rbn(first_rbn), .last_rbn(last_rbn),

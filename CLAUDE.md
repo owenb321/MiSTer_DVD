@@ -3612,24 +3612,73 @@ show in the upper-left quarter of the ANALOG output
 Now an in-core 2× fill — `disp_hstretch` 352→720 + the addrgen vscale walk re-armed as
 mode 2 (2× line repeat) + a syncgen-only effective-size mux in `mpeg2video.v` — gated
 on `analog_eff` (HDMI keeps ascal's scale; also fixes direct-video + un-clips the HUD).
-True 240p output was REJECTED: no exact-59.94 Hz 240p modeline exists at 1716
-dots/line, so it would drift against the fixed 48 kHz audio NCO — line-doubled 480i
-carries the same content.
-★★ **THAT REJECTION'S PREMISE EXPIRED WITH PR #63 (noted 2026-09-07) — do NOT re-derive
-it; read `docs/mpeg1.md` §B.3a first.** Two things are wrong with it now. (1) **240p is
-not 59.94 Hz** — 59.94 is the interlaced FIELD rate; console 240p omits the half-line and
-runs **262 lines = 60.055 Hz**, which is what every CRT takes (`CDi_MiSTer`'s
-`rtl/video_timing.sv`: `v_total = 262; v_active = 240;`, `vga_f1` pinned 0 when
-non-interlaced). Asking for an exact 59.94 progressive modeline was asking for 262.5
-lines. (2) **The drift argument depended on the STC being RASTER-derived**, which it no
-longer is: `disp_sched` free-runs off the crystal that also feeds the 48 kHz NCO, so the
-raster supplies pickup OPPORTUNITIES, not the clock. A 0.19 % rate error now costs one
-held frame every ~9 s instead of walking the audio. ⚠ Consequently `dvd/emu.sv`'s "the
-ONLY thing holding A/V together over a long title is that the core raster period equals
-the true content rate" is STALE — it describes the pre-#63 architecture.
-⚠ The §B.3a note is analysis, not a build: it is read from `disp_sched`'s design note and
-the `half_scan` mux, and the held-frame claim wants confirming against the audio path
-before anyone relies on it. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
+★★ **THE VERTICAL HALF OF THAT FILL IS NOW RETIRED FOR SIF: NATIVE 240p SHIPPED
+2026-09-14 (branch `feature/native-240p`) — sim-proven, mutation-checked, and ✅
+HW-CONFIRMED 2026-09-14** (build `DVD_p240_20260914_1405.rbf`, SEED 7 first roll, clk_dec
+91.42/88.47, 90 % ALM): **the composite CRT plays it correctly, and a RetroTINK 4K on RGBS
+REPORTS IT AS 240p.**
+★ **The RT4K reading is the load-bearing half of that and the CRT is the regression check**
+— an instrument that names the mode outranks an impression, which is the same ordering
+`docs/single_raster_analog.md` §3.11 settled for field order. A CRT will happily lock to a
+raster that is subtly wrong; a scaler that prints "240p" has actually decoded the line rate
+and the absence of the half-line, which is precisely what this branch changes.
+⏳ **NOT yet exercised, so do not read the confirmation wider than it is:** PAL 288p, a
+LONG VCD (the ~8.7 s held frame is the one cost nobody has sat through), the HUD/seek-bar/
+idle-logo geometry on a 240-line screen, and the screensaver/Stop logo over a 240p title. The horizontal 352→720 stretch stays (it is a true 2-tap linear resample and a
+CRT needs the full line width); the **2× line repeat is what made SIF look chunky**, and on
+a 240-line raster there is nothing to repeat. Field report that started it: *"that scaling
+is nearest neighbor and looks very chunky."*
+★★ **THE OLD REJECTION ("no exact-59.94 Hz 240p modeline exists at 1716 dots/line, so it
+would drift against the fixed 48 kHz NCO") WAS WRONG IN BOTH HALVES — do not re-derive it.**
+(1) **240p is not 59.94 Hz** — that is the interlaced FIELD rate; console 240p omits the
+half-line and runs **262 lines = 60.055 Hz**, which is what every CRT takes (`CDi_MiSTer`'s
+`rtl/video_timing.sv`: `v_total = 262; v_active = 240;`). Asking for an exact 59.94
+progressive modeline was asking for 262.5 lines. (2) **The drift argument depended on the
+STC being RASTER-derived**, which PR #63 ended: `disp_sched` free-runs off the crystal that
+also feeds the NCO, so the raster supplies pickup OPPORTUNITIES, not the clock.
+✅ **The held-frame claim §B.3a flagged as unverified is now VERIFIED at RTL level:**
+`frame_due = sched_due`, a not-yet-due picture parks in `STATE_REPEAT` (the held frame), and
+`late_raw` requires `sched_next_due` — false there — so the hold banks **no lateness, no
+drop debt and nothing reaches the audio clock**. One held frame per ~8.7 s, not a drift.
+⚠ Consequently `dvd/emu.sv`'s "the ONLY thing holding A/V together over a long title is that
+the core raster period equals the true content rate" is STALE — pre-#63 architecture.
+★ **The raster IS the 480i branch with `interlaced=0`** — same line, same hsync, same vsync
+window, same `vertical_length`; only `VERT_RES` (240/288), the half-line (0), the interlaced
+bit and deinterlace differ. ⚠⚠ **PIXEL REPETITION STAYS ON** (`VID_MODE` `3'b010`): it holds
+the line at 15.734 kHz, and dropping it gives 31.5 kHz, which no 15 kHz display takes.
+⚠⚠ **AND `p240_eff` IMPLIES `il_eff`, so in the walk's ternary chains a p240 arm placed
+AFTER an il arm is DEAD CODE** — the raster silently stays line-doubled and nothing fails.
+That happened during development (PAL 576i swallowed PAL 288p); `tools/check_p240_wiring.py`
+gates the order by reading `emu.sv`, because emu has no bench.
+★ **`il_eff` split three ways and only one moved:** new `fields_eff = interlaced_eff &
+~p240_eff` carries "the decoder emits FIELDS" (`VGA_F1`, `HDMI_BOB_DEINT`, `sif_v2x_eff`,
+`crt_ov_map`/`spu_decode` `.interlaced`, `cc_vbi`); "the 15 kHz raster is up" and "pixrep is
+on" stay on `il_eff` and are unchanged.
+★ **Automatic, no CONF_STR row** (a menu entry re-rolls the pinned SEED and there is no
+choice to offer). The engage rides `pal_detect`'s existing debounce as a SECOND verdict on
+the same timer — ⛔ never the raw `sif_v_dec` tap, which has no bound and no hold and is the
+reverted film-switch loop. `mount_arm` latches the first header of a file at once, so a VCD
+switches inside the mount flush window and there is no mid-title change in practice.
+⛔ **The "×2 vertical downscale" §B.3a listed as still needed was for putting 480-LINE
+content into 240p. SIF needed NOTHING** — it is already 240 lines; you stop doubling it.
+★ **WHY THE CORE REPORTS 720x240 AND NOT 352x240** (asked on the HW round; the answer is
+not "clock compatibility", so do not re-derive it that way). The line is fixed at 1716 dots
+@ 27 MHz because that is what makes 15.734 kHz; the reported WIDTH is only how `CE_PIXEL`
+slices it. A native 352 wants one enable per 4 dots = 6.75 MHz = **1716/4 = 429**
+pixel-times exactly, 352 active + 77 blanking — the arithmetic is clean and 720 is NOT
+required. What stops it is (a) `syncgen_intf`'s pixel repetition is a single bit-shift
+doubling, so 13.5 MHz is the only sub-27 MHz rate reachable without new logic, and (b)
+⚠ **EVERY OVERLAY IS AUTHORED IN 720-PIXEL SPACE** — the status line is a 512-px-wide glyph
+box at `X0=104`, `seek_bar` the same, `idle_logo` bounces against `720 - w2` — so a 512-px
+line does not fit on a 352-px screen at all. That is a re-authoring job, not a constant
+change. Gain would be ONE resample (352→720 linear, then ascal, becomes 352→ascal): worth
+nothing to a CRT, but it would let a RetroTINK lock a 1:1 sample grid. ⛔ And the target
+would be **352, not 320** — the content is 352 wide, so 320 means cropping real pixels.
+⚠ Related, PRE-EXISTING and minor: MPEG-1 SIF is half of **704**, not 720, so the
+352→720 stretch is ~2.3 % wider than strict BT.601 geometry. Consistent with how the fill
+already treats 704-wide sub-D1 DVD content, and invisible — a choice, not a defect.
+Gate `bench/dvd/run_p240.sh --red` (11 GREEN arms; 14 mutations, all caught). Detail: **`docs/mpeg1.md`
+§B.3b**. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
 scope REVERSED 2026-08-24 by user decision: the predicate is now `< 720` (any sub-720
 width fills; SVCD 480 = exact 2:3), shipped with the VCD/SVCD feature below. Design:
 `docs/mpeg1.md` §B.3; overlay inverse contract: `docs/crt_anamorphic.md` §9b. Sim:

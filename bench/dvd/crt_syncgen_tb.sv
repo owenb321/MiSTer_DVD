@@ -87,8 +87,13 @@ module crt_syncgen_tb;
   integer exp_hs_period  = 858;       // dots/line for the phase (Film 24p uses 875)
   integer settle_rises   = 0;         // ignore the first N vsync intervals
   // PHASE 2c: where in the line does each vsync rise? Consecutive rises must sit
-  // exactly exp_vs_half dots apart within the line (the half-line), 0 = skip.
+  // exactly exp_vs_half dots apart within the line (the half-line).
+  // ⚠ chk_vs_half is a SEPARATE enable because the 240p phases need to assert a shift
+  // of ZERO -- "every vsync rise is at the same position in the line" is the positive
+  // statement that there is no half-line, and an `exp_vs_half != 0` guard could only
+  // ever skip that, never check it.
   integer exp_vs_half    = 0;
+  integer chk_vs_half    = 0;
   integer vs_off = -1, prev_vs_off = -1, bad_vs_half = 0;
 
   always @(posedge clk) if (rst && clk_en) begin
@@ -109,7 +114,7 @@ module crt_syncgen_tb;
       vs_rises = vs_rises + 1;
       prev_vs_off = vs_off;
       vs_off = dot - last_hs_rise;                       // rise position within the line
-      if (exp_vs_half != 0 && prev_vs_off >= 0 && vs_rises > settle_rises) begin
+      if (chk_vs_half != 0 && prev_vs_off >= 0 && vs_rises > settle_rises) begin
         if (((vs_off - prev_vs_off + 2*exp_hs_period) % exp_hs_period) != exp_vs_half) begin
           if (bad_vs_half < 8) $display("FAIL: vsync rise at line dot %0d after one at %0d (expect a %0d-dot half-line shift)",
                                         vs_off, prev_vs_off, exp_vs_half);
@@ -156,21 +161,41 @@ module crt_syncgen_tb;
   integer cur_parity = -1, prev_field_parity = -1, parity_alt_errs = 0;
   reg     track_fields = 0;   // interlaced-phase-only checks (480p legitimately fails them)
   reg [11:0] vpos_line = 12'hFFF;
+  // DVD-FORK (native 240p): the same bookkeeping for a PROGRESSIVE raster. The
+  // lines-per-vsync-interval check carries over unchanged; the two parity checks do not
+  // (v_pos is the line index itself there, so it alternates WITHIN the frame and the
+  // interlace assertions would fire on a correct raster). They are replaced by the
+  // positive statement that makes the raster progressive: displayed v_pos values are
+  // CONSECUTIVE, step exactly 1. Skipping the parity checks alone would leave the phase
+  // asserting nothing about interlace at all.
+  integer prog_step_errs = 0;
+  integer exp_field_lines = 240;      // 240 NTSC / 288 PAL, per vsync interval
+  reg     prog_fields = 0;
   always @(posedge clk) if (rst && clk_en && track_fields) begin
     if (pixel_en && vpos_line != v_pos) begin
+      if (prog_fields) begin
+        // consecutive, step 1 -- no field interleave
+        if (vpos_line != 12'hFFF && (v_pos != (vpos_line + 12'd1))) begin
+          if (prog_step_errs < 5)
+            $display("FAIL: progressive raster displayed v_pos %0d after %0d (expect +1 -- a step of 2 is interlace)",
+                     v_pos, vpos_line);
+          prog_step_errs = prog_step_errs + 1;
+        end
+      end else begin
+        if (cur_parity < 0) cur_parity = v_pos[0];
+        else if (v_pos[0] !== cur_parity[0]) parity_errs = parity_errs + 1;
+      end
       vpos_line <= v_pos;
       lines_this_field = lines_this_field + 1;
-      if (cur_parity < 0) cur_parity = v_pos[0];
-      else if (v_pos[0] !== cur_parity[0]) parity_errs = parity_errs + 1;
     end
     // field boundary = vsync rise
     if (v_sync && !vs_d) begin
       if (fields_seen > 1) begin  // first partial field ignored
-        if (lines_this_field != 240) begin
-          if (field_line_errs < 5) $display("FAIL: field displayed %0d lines (expect 240)", lines_this_field);
+        if (lines_this_field != exp_field_lines) begin
+          if (field_line_errs < 5) $display("FAIL: field displayed %0d lines (expect %0d)", lines_this_field, exp_field_lines);
           field_line_errs = field_line_errs + 1;
         end
-        if (prev_field_parity >= 0 && cur_parity >= 0 && (cur_parity == prev_field_parity)) begin
+        if (!prog_fields && prev_field_parity >= 0 && cur_parity >= 0 && (cur_parity == prev_field_parity)) begin
           if (parity_alt_errs < 5) $display("FAIL: consecutive fields share v_pos parity %0d (no interleave)", cur_parity);
           parity_alt_errs = parity_alt_errs + 1;
         end
@@ -188,6 +213,7 @@ module crt_syncgen_tb;
     bad_hs = 0; bad_vs_spacing = 0; bad_vs_width = 0; bad_vs_pair = 0; prev_vs_period = -1;
     lines_this_field = 0; parity_errs = 0; field_line_errs = 0; fields_seen = 0;
     cur_parity = -1; prev_field_parity = -1; parity_alt_errs = 0; vpos_line = 12'hFFF;
+    prog_step_errs = 0;
   end endtask
 
   task waitclk(input integer n); integer i; begin for (i=0;i<n;i=i+1) @(posedge clk); end endtask
@@ -200,6 +226,11 @@ module crt_syncgen_tb;
   // exact INTERLACED frame periods (a field PAIR), post-pixel-repetition
   localparam integer ILACE480_DOTS = (262 + 263) * 1716;  // 27e6*1001/30000 = 900900
   localparam integer ILACE576_DOTS = (312 + 313) * 1728;  // 27e6/25         = 1080000
+  // DVD-FORK (native 240p): the progressive 15 kHz rasters. NOT exact content rates,
+  // and that is the design -- 262 and 312 are the console line counts, and since PR #63
+  // a raster that is not the content period costs a held frame, not a drift.
+  localparam integer P240_DOTS = 262 * 1716;              // 449592 -> 60.0545 Hz
+  localparam integer P288_DOTS = 312 * 1728;              // 539136 -> 50.0616 Hz
 
   initial begin
     // =======================================================================
@@ -291,6 +322,7 @@ module crt_syncgen_tb;
     exp_vs_spacing = ILACE480_DOTS / 2; // 450450 — constant, every field
     exp_vs_width   = 3 * 1716;
     exp_vs_half    = 858;
+    chk_vs_half    = 1;
     settle_rises   = 2;
     track_fields   = 1;
     waitclk(ILACE480_DOTS * 4);
@@ -303,6 +335,7 @@ module crt_syncgen_tb;
                ILACE480_DOTS / 2, vs_rises, fields_seen);
     track_fields = 0;
     exp_vs_half  = 0;
+    chk_vs_half  = 0;
     horizontal_size = 14'd720;
 
     // =======================================================================
@@ -427,7 +460,97 @@ module crt_syncgen_tb;
     end else
       $display("[Film 25p ] PASS: frame period %0d dots = 27 MHz / 25 = 25.000000 Hz EXACT", FILM25_DOTS);
 
-    if (errors == 0) $display("\n==== PASS: CRT 2:1 interlace locks (262.5-line vsync cadence), legacy modes unchanged, film rasters exact ====");
+    // =======================================================================
+    // PHASE 6 — NATIVE 240p (dvd/emu.sv p240_prev branch), the raster SIF content
+    // gets instead of being line-doubled into 480i.
+    //
+    // It is PHASE 2c's raster with interlaced=0 and VERT_RES told the true active
+    // count: same 1716-dot line, same hsync, same 244..247 vsync window, same
+    // vertical_length 261. Post-pixrep values, as syncgen_intf hands them over:
+    //     hres 720->1440 (2x)   hsync 735..797 -> 1471..1595 (2x+1)
+    //     hlen 857->1715 (1716 dots)          halfline 0 -> 0 (2x)
+    //
+    // ★ The three things that make this 240p rather than "480i with a typo":
+    //   - 262 lines x 1716 dots = 449,592 clk27 = 60.0545 Hz, and the spacing is
+    //     CONSTANT -- syncgen's 262/263 alternation is armed on `interlaced`, so
+    //     turning that off is what stops it. A 0.19 % rate error against 29.97 fps
+    //     content is a held frame every ~8.7 s, not a drift: since PR #63 the STC
+    //     free-runs off the crystal and the raster only offers pickup opportunities.
+    //   - every vsync rise sits at the SAME position within the line (chk_vs_half
+    //     with exp_vs_half 0) -- i.e. there is no half-line, which is what a display
+    //     reads as "progressive".
+    //   - displayed v_pos steps by 1, not 2 (prog_fields): the raster really is
+    //     scanning consecutive lines rather than interleaving two fields.
+    // ⚠ PIXEL REPETITION IS STILL ON (hres 1440, hlen 1715). That is deliberate and
+    // load-bearing: it holds the line at 1716 dots = 15.734 kHz, the same line rate a
+    // CRT is already locked to. Without it the line is 858 dots = 31.5 kHz, which is
+    // not 240p and no 15 kHz display will take it.
+    // =======================================================================
+    rst = 0;
+    horizontal_resolution = 12'd1440; horizontal_sync_start = 12'd1471;
+    horizontal_sync_end   = 12'd1595; horizontal_length     = 12'd1715; // 1716 dots
+    vertical_resolution   = 12'd240;  vertical_sync_start   = 12'd244;
+    vertical_sync_end     = 12'd247;  vertical_length       = 12'd261;  // 262 lines
+    horizontal_halfline   = 12'd0;    interlaced            = 1'b0;
+    horizontal_size = 14'd1440;  vertical_size = 14'd240;
+    waitclk(8); rst = 1;
+    reset_trackers;
+    exp_hs_period   = 1716;
+    exp_vs_spacing  = P240_DOTS;       // 449592 — CONSTANT, no 262/263 alternation
+    exp_vs_width    = 3 * 1716;
+    exp_vs_half     = 0;  chk_vs_half = 1;   // assert ZERO shift: no half-line
+    exp_field_lines = 240;
+    settle_rises    = 2;
+    track_fields    = 1;  prog_fields = 1;
+    waitclk(P240_DOTS * 4);
+    if (P240_DOTS != 449592) begin
+      errors = errors + 1;
+      $display("[NTSC 240p ] FAIL: expectation wrong — %0d != 449592", P240_DOTS);
+    end
+    if (bad_hs || bad_vs_spacing || bad_vs_width || bad_vs_half || prog_step_errs || field_line_errs) begin
+      errors = errors + 1;
+      $display("[NTSC 240p ] FAIL: hs=%0d vs_spacing=%0d vs_width=%0d half=%0d step=%0d lines=%0d",
+               bad_hs, bad_vs_spacing, bad_vs_width, bad_vs_half, prog_step_errs, field_line_errs);
+    end else
+      $display("[NTSC 240p ] PASS: vsync every %0d clk27 (262 lines, CONSTANT = 60.0545 Hz) x%0d, every rise at the same line position (no half-line), 240 consecutive active lines over %0d frames",
+               P240_DOTS, vs_rises, fields_seen);
+
+    // =======================================================================
+    // PHASE 7 — NATIVE 288p (PAL). The same branch one row down: VERT_RES 288,
+    // vertical_length 311 (312 lines), the PAL hsync and 292..295 vsync window.
+    // 312 x 1728 = 539,136 clk27 = 50.0616 Hz.
+    // =======================================================================
+    rst = 0;
+    horizontal_resolution = 12'd1440; horizontal_sync_start = 12'd1465;
+    horizontal_sync_end   = 12'd1591; horizontal_length     = 12'd1727; // 1728 dots
+    vertical_resolution   = 12'd288;  vertical_sync_start   = 12'd292;
+    vertical_sync_end     = 12'd295;  vertical_length       = 12'd311;  // 312 lines
+    horizontal_halfline   = 12'd0;    interlaced            = 1'b0;
+    horizontal_size = 14'd1440;  vertical_size = 14'd288;
+    waitclk(8); rst = 1;
+    reset_trackers;
+    exp_hs_period   = 1728;
+    exp_vs_spacing  = P288_DOTS;       // 539136
+    exp_vs_width    = 3 * 1728;
+    exp_vs_half     = 0;  chk_vs_half = 1;
+    exp_field_lines = 288;
+    settle_rises    = 2;
+    track_fields    = 1;  prog_fields = 1;
+    waitclk(P288_DOTS * 4);
+    if (P288_DOTS != 539136) begin
+      errors = errors + 1;
+      $display("[PAL  288p ] FAIL: expectation wrong — %0d != 539136", P288_DOTS);
+    end
+    if (bad_hs || bad_vs_spacing || bad_vs_width || bad_vs_half || prog_step_errs || field_line_errs) begin
+      errors = errors + 1;
+      $display("[PAL  288p ] FAIL: hs=%0d vs_spacing=%0d vs_width=%0d half=%0d step=%0d lines=%0d",
+               bad_hs, bad_vs_spacing, bad_vs_width, bad_vs_half, prog_step_errs, field_line_errs);
+    end else
+      $display("[PAL  288p ] PASS: vsync every %0d clk27 (312 lines, CONSTANT = 50.0616 Hz) x%0d, no half-line, 288 consecutive active lines over %0d frames",
+               P288_DOTS, vs_rises, fields_seen);
+    track_fields = 0; prog_fields = 0; chk_vs_half = 0; exp_field_lines = 240;
+
+    if (errors == 0) $display("\n==== PASS: CRT 2:1 interlace locks (262.5-line vsync cadence), native 240p/288p are progressive and constant-rate, legacy modes unchanged, film rasters exact ====");
     else begin
       $display("\n==== FAIL: %0d phase(s) failed ====", errors);
       $fatal(1, "crt_syncgen_tb failed");   // non-zero exit (vvp masks plain $finish)

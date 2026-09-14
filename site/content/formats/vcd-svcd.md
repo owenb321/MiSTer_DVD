@@ -25,6 +25,10 @@ correct 44.1 kHz pitch, and seeking, pause and A/V sync all work.
 
 SVCD's 480-wide picture fills the screen on both HDMI and the analog CRT output.
 
+A **VCD is 352×240 (352×288 on PAL)**, so with the analog output running the core gives it a
+[native 240p raster](../video/analog-crt.md#native-240p-for-vcds-and-mpeg-1) rather than
+doubling every line to reach 480i. It happens automatically and there is nothing to set.
+
 ## Limitations
 
 VCD support is deliberately basic playback, the reason being: **it came

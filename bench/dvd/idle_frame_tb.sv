@@ -34,10 +34,18 @@ module idle_frame_tb;
     wire        logo_on;
     wire [7:0]  logo_r, logo_g, logo_b;
 
+
+    // DVD-FORK (native 240p, 2026-09-14): the raster's active height is now an INPUT.
+    // Defaults to the standard so every pre-existing arm is bit-identical; +act_h=N
+    // drives the 240p/288p arm, where the module must bottom-anchor to 240/288 instead.
+    integer     act_h_arg = 0;
+    initial     void'($value$plusargs("act_h=%d", act_h_arg));
+    wire [11:0] act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0]
+                                            : (pal_mode ? 12'd576 : 12'd480);
     idle_logo #(.LOGO_QX_LEAD(12'd12)) dut (
         .clk(clk), .rst_n(rst_n),
         .h_pos(h_pos), .v_pos(v_pos),
-        .pal_mode(pal_mode), .il_mode(1'b0), .frame_tick(1'b0),
+        .pal_mode(pal_mode), .act_h_i(act_h_tb), .il_mode(1'b0), .frame_tick(1'b0),
         .vis(1'b1), .entropy(32'h0),
         .ioctl_download(dl), .ioctl_wr(dwr), .ioctl_addr(daddr),
         .ioctl_dout(ddout), .ioctl_index(16'd0),
