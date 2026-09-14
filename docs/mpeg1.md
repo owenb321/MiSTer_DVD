@@ -308,7 +308,7 @@ NTSC + PAL SIF fill the CRT cleanly, normal DVDs unregressed.** In-core 2× fill
   fill engages (Letterbox-engage class); while analog is engaged HDMI sees the
   in-core 2× instead of ascal (Letterbox/Crop trade-off class).
 
-### B.3a Native 240p — ✅ BUILT (2026-09-14, branch `feature/native-240p`)
+### B.3a Native 240p — ✅ BUILT + HW-CONFIRMED (2026-09-14, `feature/native-240p`)
 
 **Do not re-derive the old "no". It was correct when written and its reason no longer
 holds.** The analysis below is kept because it is the argument that unblocked the work;
@@ -497,14 +497,57 @@ already safe (it follows `ar_wide_auto_eff`, and MPEG-1 pixel-aspect codes never
 selection while a VCD plays. Same shape as `filmp_eff` being suppressed by
 `interlaced_eff`: a raster that cannot carry a feature says so in RTL. RED mutation M9.
 
-**Still open on this feature:**
+**✅ HW ROUND 1 (2026-09-14)** — build `DVD_p240_20260914_1405.rbf`, SEED 7 first roll,
+clk_dec 91.42 @100C / 88.47 @-40C (gate 86.0), 90 % ALM. Maintainer's rig: **the composite
+CRT plays it correctly, and a RetroTINK 4K on RGBS reports it as 240p content.**
 
-- ⏳ **HW**: nobody has watched a long VCD on the board yet. The specific things to look for
-  are the ~8.7 s held frame (is the hitch objectionable?), the CRT locking to 240p, and the
-  HUD/seek bar/idle logo sitting correctly on a 240-line screen.
+★ **The RT4K reading is the load-bearing half; the CRT is the regression check.** A CRT
+locks to a raster that is subtly wrong without complaint — that is most of why the
+field-order defect survived so long (§3.11 of `docs/single_raster_analog.md` settled the
+same ordering for the same reason). A scaler that prints "240p" has decoded the line rate
+AND the absence of the half-line, which is exactly the pair of things this branch changes,
+so it is the measurement and the CRT is the sanity check.
+
+**Still open on this feature — the confirmation above is narrower than "it works":**
+
+- ⏳ **A LONG VCD.** The ~8.7 s held frame is the one cost this design knowingly accepts and
+  nobody has yet sat through it. If it turns out to be objectionable the answer is already
+  written down: the 262/263-alternating variant above.
+- ⏳ **PAL 288p** — sim-gated on both benches, never on a set.
+- ⏳ **The HUD, seek bar and idle logo on a 240-line screen.** Sim-gated via `+act_h=240`;
+  the round above did not report on them.
 - ⏳ **The screensaver and Stop show the idle logo over a mounted title**, so `idle_logo`'s
-  bounce box is exercised on the 240p raster during playback, not only at boot. Sim-gated
-  via `+act_h=240`; unverified on hardware.
+  bounce box is exercised on the 240p raster during playback, not only at boot. Unverified.
+★ **WHY THE CORE REPORTS 720x240 RATHER THAN 352x240** (asked on the HW round). The answer
+is NOT "the clock needs it", and the next session should not re-derive it that way. The line
+is fixed at 1716 dots @ 27 MHz because that is what produces 15.734 kHz; the reported width
+is only how `CE_PIXEL` slices that line. A native 352 wants one enable per 4 dots =
+6.75 MHz, giving **1716/4 = 429** pixel-times exactly — 352 active plus 77 of blanking,
+against the 69 the current raster would have if halved. The arithmetic is clean; 720 is not
+a constraint. Two things make it a real project rather than a constant change:
+
+1. `syncgen_intf`'s pixel repetition is a single bit-shift doubling
+   (`{x[10:0],1'b1}` / `{x[10:0],1'b0}`), so 13.5 MHz is the only sub-27 MHz pixel rate
+   reachable without new logic there AND in `emu.sv`'s `ce_pix_q`.
+2. ⚠⚠ **EVERY OVERLAY IS AUTHORED IN 720-PIXEL SPACE, and this is the actual blocker.**
+   `transport_hud` is a 32x16 glyph box = **512 px wide** at `X0 = 104`; `seek_bar` is
+   `BAR_W = 512` at the same origin; `idle_logo` bounces against `720 - w2`; and
+   `ov_h_gen` / `sp_qx` / `crt_ov_map` all invert the x2 pixrep. **A 512-px-wide status line
+   does not fit on a 352-px screen at all.** Re-authoring that is the cost.
+
+**What it would buy:** one resample stage. Today 352 -> 720 (2-tap linear) -> ascal -> the
+display; native would be 352 -> ascal. Worth essentially nothing to a CRT (its bandwidth
+smooths both, and the interpolated waveform is the smoother of the two), but it would let a
+RetroTINK lock a 1:1 sample grid and capture genuinely pixel-perfect, which it cannot
+recover from an interpolated 720.
+⛔ **The target would be 352, NOT 320** — SIF content is 352 wide, so 320 means cropping or
+downscaling real pixels.
+⚠ **Related, PRE-EXISTING, and minor: MPEG-1 SIF is half of 704, not 720**, so the
+`disp_hdst_w = 720` stretch is ~2.3 % wider than strict BT.601 geometry. It is consistent
+with how the fill already treats 704-wide sub-D1 DVD content and the error is invisible, so
+it is a choice rather than a defect — but 704 is the number you would want if this ever
+went native.
+
 - The overlays are re-anchored but not re-scaled, so text occupies twice the relative height.
   ★ A proportional variant is cheaper than it looks — `transport_hud.sv`'s 2× vertical is the
   bit-select `s0_gy <= vy[4:1]`, so 1× is `vy[3:0]` with `ROW_H` 16. Not done: it is a

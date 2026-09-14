@@ -3613,8 +3613,18 @@ Now an in-core 2× fill — `disp_hstretch` 352→720 + the addrgen vscale walk 
 mode 2 (2× line repeat) + a syncgen-only effective-size mux in `mpeg2video.v` — gated
 on `analog_eff` (HDMI keeps ascal's scale; also fixes direct-video + un-clips the HUD).
 ★★ **THE VERTICAL HALF OF THAT FILL IS NOW RETIRED FOR SIF: NATIVE 240p SHIPPED
-2026-09-14 (branch `feature/native-240p`) — sim-proven, mutation-checked, ⏳ HW-confirm
-pending.** The horizontal 352→720 stretch stays (it is a true 2-tap linear resample and a
+2026-09-14 (branch `feature/native-240p`) — sim-proven, mutation-checked, and ✅
+HW-CONFIRMED 2026-09-14** (build `DVD_p240_20260914_1405.rbf`, SEED 7 first roll, clk_dec
+91.42/88.47, 90 % ALM): **the composite CRT plays it correctly, and a RetroTINK 4K on RGBS
+REPORTS IT AS 240p.**
+★ **The RT4K reading is the load-bearing half of that and the CRT is the regression check**
+— an instrument that names the mode outranks an impression, which is the same ordering
+`docs/single_raster_analog.md` §3.11 settled for field order. A CRT will happily lock to a
+raster that is subtly wrong; a scaler that prints "240p" has actually decoded the line rate
+and the absence of the half-line, which is precisely what this branch changes.
+⏳ **NOT yet exercised, so do not read the confirmation wider than it is:** PAL 288p, a
+LONG VCD (the ~8.7 s held frame is the one cost nobody has sat through), the HUD/seek-bar/
+idle-logo geometry on a 240-line screen, and the screensaver/Stop logo over a 240p title. The horizontal 352→720 stretch stays (it is a true 2-tap linear resample and a
 CRT needs the full line width); the **2× line repeat is what made SIF look chunky**, and on
 a 240-line raster there is nothing to repeat. Field report that started it: *"that scaling
 is nearest neighbor and looks very chunky."*
@@ -3651,6 +3661,22 @@ reverted film-switch loop. `mount_arm` latches the first header of a file at onc
 switches inside the mount flush window and there is no mid-title change in practice.
 ⛔ **The "×2 vertical downscale" §B.3a listed as still needed was for putting 480-LINE
 content into 240p. SIF needed NOTHING** — it is already 240 lines; you stop doubling it.
+★ **WHY THE CORE REPORTS 720x240 AND NOT 352x240** (asked on the HW round; the answer is
+not "clock compatibility", so do not re-derive it that way). The line is fixed at 1716 dots
+@ 27 MHz because that is what makes 15.734 kHz; the reported WIDTH is only how `CE_PIXEL`
+slices it. A native 352 wants one enable per 4 dots = 6.75 MHz = **1716/4 = 429**
+pixel-times exactly, 352 active + 77 blanking — the arithmetic is clean and 720 is NOT
+required. What stops it is (a) `syncgen_intf`'s pixel repetition is a single bit-shift
+doubling, so 13.5 MHz is the only sub-27 MHz rate reachable without new logic, and (b)
+⚠ **EVERY OVERLAY IS AUTHORED IN 720-PIXEL SPACE** — the status line is a 512-px-wide glyph
+box at `X0=104`, `seek_bar` the same, `idle_logo` bounces against `720 - w2` — so a 512-px
+line does not fit on a 352-px screen at all. That is a re-authoring job, not a constant
+change. Gain would be ONE resample (352→720 linear, then ascal, becomes 352→ascal): worth
+nothing to a CRT, but it would let a RetroTINK lock a 1:1 sample grid. ⛔ And the target
+would be **352, not 320** — the content is 352 wide, so 320 means cropping real pixels.
+⚠ Related, PRE-EXISTING and minor: MPEG-1 SIF is half of **704**, not 720, so the
+352→720 stretch is ~2.3 % wider than strict BT.601 geometry. Consistent with how the fill
+already treats 704-wide sub-D1 DVD content, and invisible — a choice, not a defect.
 Gate `bench/dvd/run_p240.sh --red` (11 GREEN arms; 14 mutations, all caught). Detail: **`docs/mpeg1.md`
 §B.3b**. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
 scope REVERSED 2026-08-24 by user decision: the predicate is now `< 720` (any sub-720
