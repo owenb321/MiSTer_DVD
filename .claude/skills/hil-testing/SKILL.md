@@ -86,6 +86,16 @@ a hash-derived name and repoints `[DVD] main=`.
 **★ `launch` overwrites the user's saved OSD settings** (it writes `config/DVD_v<N>.CFG`).
 It backs them up once; `restore` puts them back. Do not leave a session without restoring.
 
+**★ A target-side screenshot burst resolves ~1 s, not the sleep you asked for.** The
+`screenshot` path takes ~1 s per frame, so `sleep 0.4` between commands yields ~3 of 8
+frames. Sequence the key press and the burst on the target (one ssh session), read a
+missing frame as missing, and pair a burst with a settled shot. For a defect that is a
+FLASH the instrument is the burst; for one that HOLDS the settled shot is enough.
+
+**★ Run the OLD core through the same script as the control arm when the defect is
+intermittent.** The fried-still rate was ~1 onset in 8 re-entries; a clean fix arm alone
+would have proved nothing. The control is what shows the instrument can see the defect.
+
 **★ Ask "is the PICTURE frozen or is the MACHINE frozen?"** That one question separates an
 HPS-side stall from a core-side one before any code is read.
 

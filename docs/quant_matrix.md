@@ -1,7 +1,7 @@
 # The quantiser matrix is lost at a VBUF flush ("deep fried" menu stills)
 
-**Status: 🔧 FIXED by a decoder SOFT RESET on VM jumps (2026-09-14, §11) — sim-proven
-RED/GREEN, ⏳ HW-confirm pending.** Branch `fix/quant-matrix-flush`, not merged, not
+**Status: ✅ FIXED by a decoder SOFT RESET on VM jumps (2026-09-14, §11) — sim-proven
+RED/GREEN and ✅ HW-CONFIRMED 2026-09-14 against its own control (§11.4).** Branch `fix/quant-matrix-flush`, not merged, not
 pushed. §6's vld-only fix REGRESSED on hardware and is reverted; §9–§10 are the record
 of that, and §11 is what replaced it. The two things that survive from the first
 attempt are the `iquant.v` 7.3.1 scan fix (§4) and the bench (§7, now gated on the
@@ -610,6 +610,42 @@ landing's own sequence header is the first thing a clean parser sees.
   picture start code), which is the correct behaviour and cannot happen on a VM jump —
   the reader lands every jump on a cell start (NAV pack + sequence header), the same
   guarantee the mount path already relies on.
-- ⏳ HW gate: the §9.1 re-entry test on the reporting disc — NO fried frame and NO
-  garbage across the first ~500 ms and settled; a chapter skip still holds its frame;
-  a narration still (#65) does not replay audio; the black cut on menu entry is brief.
+- ✅ HW gate (§11.4): the §9.1 re-entry test on the reporting disc — no fried frame and
+  no garbage, first capture and settled; chapter skips still hold; the cut on menu entry
+  is below the harness's resolution.
+
+### 11.4 HW round — the fix confirmed against its own control (2026-09-14)
+
+Build `DVD_quantmatrix_20260914_1221.rbf` (commit `8ba6ba7`, SEED 7 first roll, 91 % ALM,
+clk_dec 93.02 @100C / 91.69 @-40C, gate 86.0). Same script on both cores, on the
+reporting disc: 2 boots x (a 14-shot burst across the FP chain's landing on the menu +
+4 title->menu re-entries, each with a target-side burst from ~0.7 s after the Menu key
+plus a settled shot, plus a "playing" shot that proves the transition happened) + a
+chapter-skip burst per boot. Verdicts from the reference-free classifier (§11.1);
+the fried frame was confirmed by eye.
+
+```
+                       pre-fix core (iquant-only, _0556)     fix (_1221)
+  re-entries                       8                              8
+  FRIED                4 frames = ONE onset (b2_re1), HELD         0
+                       through burst + settled; the NEXT
+                       re-entry repaired it (the report)
+  GARBAGE                          0                              0
+  first burst shot     correct menu on 7/8                  correct menu on 8/8
+  chapter skip         held frame, no black (3/3 bursts)    held frame, no black (3/3)
+  boot landing         1 black frame at ~24 s (both boots)  1 black frame at ~24 s (1 boot)
+```
+
+★ **The black cut costs nothing visible that was not already there.** The FP->menu landing
+showed a black frame on the PRE-fix core too (the reader's cell load), and on the fix core
+the menu is already correct at the first capture ~0.7 s after the Menu key — the soft
+reset's cut is shorter than the harness can resolve.
+
+⚠ Harness limits, recorded: the MiSTer `screenshot` path takes ~1 s, so a 0.4 s burst
+yields ~3 of 8 frames (~1.2 s apart) — "no fried frame at all" is established at that
+resolution, plus the settled shot. The fried rate on the pre-fix core is low (1 onset in 8
+here, 1 in 9 and 2 in 7 on earlier rounds), so the control arm exists to prove the
+instrument, not to measure a rate. Issue #65 (a narration still must not replay its
+audio) is not automated here: structurally the soft reset re-streams nothing and
+`aud_flush` already fires on the same `jump_flush`, so a replay has no mechanism —
+a maintainer ear-check closes it.

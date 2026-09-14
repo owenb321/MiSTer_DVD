@@ -2182,10 +2182,11 @@ PGC pre/post execution.
 
 ---
 
-## 🔧 Quantiser matrix lost at a VBUF flush ("deep fried" menu stills) — 2026-09-13/14
+## ✅ Quantiser matrix lost at a VBUF flush ("deep fried" menu stills) — 2026-09-13/14
 
-Branch `fix/quant-matrix-flush`. Sim-proven RED/GREEN over real disc bytes,
-⏳ **HW-confirm pending**.
+Branch `fix/quant-matrix-flush`. Sim-proven RED/GREEN over real disc bytes and
+✅ **HW-CONFIRMED 2026-09-14 against its own control** (pre-fix core: 1 fried onset in 8
+re-entries, held; fix: 0/8, chapter skips still hold; `docs/quant_matrix.md` §11.4).
 
 A menu still's sequence header downloads a custom quantiser matrix; a VBUF flush left the
 whole decode pipeline (vld state, bit window, rld fifo, iquant) frozen mid-picture and the
@@ -2210,6 +2211,7 @@ from the default**; **480** are exposed to the 7.3.1 permutation case.
 Gates `bench/dvd/run_quant_matrix.sh --red` (`+SOFTRST=1`: RED 10/12 lost, GREEN 12/12) and
 `flush_ctl_tb` row [4]. Detail: `docs/quant_matrix.md` §11 (§9–§10: the failed attempt).
 
-⏳ Next: hardware confirmation on the reporting disc — acceptance is **no fried frame and no
-garbage at all**, sampled across the first ~500 ms after the menu appears; a chapter skip
-must still hold its frame; an issue-#65 narration still must not replay its audio.
+⏳ Left open: an issue-#65 narration still must not replay its audio — structurally it
+cannot (nothing is re-streamed; `aud_flush` already fires on the same jump), a maintainer
+ear-check closes it. The two-press activation on this disc is a separate nav item
+(`docs/dvd_nav.md`).

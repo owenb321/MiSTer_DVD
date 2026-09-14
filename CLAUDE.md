@@ -254,7 +254,13 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **"DEEP FRIED" MENU STILLS — the disc's own quantiser matrix was being thrown away
   at every VBUF flush (2026-09-13/14, branch `fix/quant-matrix-flush`); sim-proven
-  RED/GREEN, ⏳ HW-confirm pending.** Field report on `WAKE_UP_WITH_ELMO.iso`: parking on
+  RED/GREEN and ✅ HW-CONFIRMED 2026-09-14 AGAINST ITS OWN CONTROL** (build
+  `DVD_quantmatrix_20260914_1221.rbf`, SEED 7 first roll, 91 % ALM, clk_dec 93.02/91.69):
+  the same 8-re-entry script gave the PRE-fix core **1 fried onset, held** — the report,
+  reproduced — and the fix core **0 fried / 0 garbage**, correct menu at the first capture
+  ~0.7 s after the Menu key, chapter skips still holding, and the FP->menu landing's one
+  black frame present on BOTH cores (so the cut costs nothing that was not already there).
+  Field report on `WAKE_UP_WITH_ELMO.iso`: parking on
   the main menu gives a still with exploded texture, clipped highlights, oversaturated
   colour and complementary-colour halos on the text; one Select press repaints it
   correctly *without* activating, a second activates. ★ *"On 0.4.0 the fried image
@@ -307,9 +313,13 @@ worse maintenance burden than targeted in-place edits. So:
   the hardware ends up holding against the bytes on the disc, never a signal the fix
   names) and `flush_ctl_tb` row [4] (RED on the pre-fix module). ⚠ The matrix bench
   passed 12/12 on the build that garbaged the board, so **the title->menu re-entry test
-  on the rig is part of the gate**: no fried frame and no garbage across the first
-  ~500 ms, chapter skips still hold, a narration still (#65) does not replay audio.
-  Detail: **`docs/quant_matrix.md`** (§11 the fix, §9–§10 the failed attempt).
+  on the rig is part of the gate** — run with the PRE-fix core as the control arm, because
+  the fried rate is low (1 onset in 8–9 re-entries) and a clean fix arm alone proves
+  nothing. ⚠ The MiSTer `screenshot` path takes ~1 s, so a target-side burst resolves
+  ~1.2 s, not 0.4. ⏳ Not automated: an issue-#65 narration still must not replay audio —
+  structurally it cannot (the soft reset re-streams nothing; `aud_flush` fires on the same
+  `jump_flush`), a maintainer ear-check closes it.
+  Detail: **`docs/quant_matrix.md`** (§11 the fix + HW round, §9–§10 the failed attempt).
 
 - ✅ **PROGRAM ORDER IS NOT PHYSICAL ORDER — the title span collapsed on 51 of 958
   library discs, making them completely unseekable (2026-09-13, branch
