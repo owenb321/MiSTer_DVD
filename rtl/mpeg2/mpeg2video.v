@@ -855,24 +855,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .syncrst(vbuf_rst)
     );
 
-  /* DVD-FORK FIX (quantiser matrix lost at a flush; docs/quant_matrix.md).
-   * The bit window is flushed WITH the VBUF -- but built on sync_rst, not on the
-   * raw rst that vbuf_rst uses, so getbits_fifo keeps every reset it already had
-   * (reset.v's cascade, the WATCHDOG, and the mount soft reset) and merely GAINS
-   * the flush. That is what bench/dvd/quant_matrix_tb.sv models and verified.
-   *
-   * ⚠⚠ It is a REGISTERED reset of its own, NOT `sync_rst && vbuf_rst` at the
-   * port. Writing the bare AND is correct logically and costs 7 MHz: it puts a
-   * combinational net on the reset of a large module, which cannot be routed on
-   * the low-skew resources a reset tree wants. MEASURED: the AND form fitted at
-   * clk_dec 88.69/85.46 and FAILED the 86.0 gate, where the same design with
-   * this registered form closes with margin. Combine BEFORE the sync_reset. */
-  wire       getbits_rst;
-  sync_reset sync_getbits_reset (
-    .clk(clk),
-    .asyncrst(sync_rst && ~flush_vbuf_eff),
-    .syncrst(getbits_rst)
-    );
 
   /* write elementary stream to circular buffer */
   vbuf_write vbuf_write (
@@ -1036,30 +1018,38 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire [31:0] pic_hdr_bitpos;
   wire        skip_ack, skip_rff, skip_field, skip_tff, skip_pf;
 
-  /* DVD-FORK FIX (quantiser matrix lost at a flush; docs/quant_matrix.md).
-   * ★ rst was sync_rst, so a VBUF flush discarded the buffered bitstream but
-   * left this module's 129-bit window holding up to 16 bytes of the stream that
-   * had just been thrown away -- while pos_clr(~vbuf_rst) below was ALREADY
-   * clearing the position counter at the same flush, so content and position
-   * disagreed. The parser then matched a phantom start code inside that residue,
-   * dispatched on it, left itself BIT-MISALIGNED, and walked straight past the
-   * landing's real 00 00 01 B3 -- losing the sequence header and, with it, the
-   * quantiser matrix that header downloads.
-   * MEASURED (bench/dvd/quant_matrix_tb.sv, sweeping the flush across the
-   * parse): vld.v's flush_resync alone recovers 9 of 10 positions; the one it
-   * cannot is the flush landing at a picture header, and this closes it. The
-   * two changes are both necessary -- one resets the parser, this one stops it
-   * being handed a dead stream to parse.
+  /* ⛔ DVD-FORK: the bit window is NOT flushed with the VBUF -- REVERTED
+   * 2026-09-14 after it regressed on hardware.
    *
-   * ⚠⚠ Reset by `getbits_rst` (declared above), NOT by vbuf_rst. Shipping
-   * vbuf_rst alone was a REGRESSION -- it is one sync_reset stage off the RAW
-   * rst, so it let this module leave reset EARLIER than the vld/rld/framestore
-   * at power-up AND silently dropped the bit window from the watchdog reset and
-   * the mount soft reset, both of which only sync_rst carries. */
+   * The idea was sound on paper: after a flush this module's 129-bit window
+   * still holds up to 16 bytes of the stream that was just discarded, and
+   * pos_clr(~vbuf_rst) already resets its POSITION, so content and position
+   * disagree. In simulation moving it onto the flush closed the last of the 12
+   * swept flush positions (vld.v's flush_resync alone gets 9 of 10).
+   *
+   * ON HARDWARE it produced magenta/green striped garbage on the title->menu
+   * re-entry path -- a DIFFERENT and worse defect than the fried still it was
+   * meant to help with, persisting through chapter skips and cleared only by
+   * remounting. MEASURED on the reporting disc, title->menu re-entry: the
+   * pre-fix core gives 5 CORRECT / 2 FRIED / 0 garbage, and the core with this
+   * change gives mostly GARBAGE and no fries at all.
+   *
+   * ⚠ Two forms were tried and BOTH are recorded because each failed its own
+   * way: `.rst(vbuf_rst)` alone silently dropped this module from the WATCHDOG
+   * reset and the mount SOFT reset (only sync_rst carries those) and let it
+   * leave reset ahead of the vld/rld/framestore; `.rst(sync_rst && vbuf_rst)`
+   * fixed that and cost 7 MHz (clk_dec 85.46 @-40C, below the 86.0 gate),
+   * because a bare AND puts a combinational net on a large module's reset tree.
+   * A dedicated registered sync_reset solved the timing and the garbage
+   * remained -- so the defect is not the reset FORM, it is flushing this window
+   * at all. Do not re-derive either form without a hardware round.
+   *
+   * The residual is one flush position in 12: a flush landing exactly at a
+   * picture header. docs/quant_matrix.md. */
   getbits_fifo getbits_fifo (
     .clk(clk), 
     .clk_en(1'b1), 
-    .rst(getbits_rst), 
+    .rst(sync_rst), 
     .vid_in(vbr_rd_dta),                                     // from vbuf_read_fifo
     .vid_in_rd_en(vbr_rd_en),                                // to vbuf_read_fifo
     .vid_in_rd_valid(vbr_rd_valid),                          // from vbuf_read_fifo
