@@ -391,20 +391,71 @@ the idx0 transparency key can't drop them. Above everything else the
 `dbg_blk*` diagnostics and the `DEBUG_OVERLAY` build keep their place at the
 final `vga_*_q` mux.
 
-Geometry (both NTSC 480 and PAL 576, bottom-anchored, inside CRT overscan):
+Geometry — bottom-anchored to the ACTIVE WINDOW, and centred in it:
 
 ```
 popup row   activeH-112 .. -81    (AUDIO 2/4 FR ...)
 seek bar    activeH-78  .. -69
 status row  activeH-64  .. -33    (> 0:12:34/1:37:05 CH 12/23)
-            x = 104 .. 615 (512 wide, matches all three)
+            x = centred, 512 wide (activeW >= 544) or 256 wide (below it)
 ```
+
+### The window is not the raster (2026-09-14)
+
+**`activeW`/`activeH` are the DE window, `act_w_i`/`act_h_i`, and `dvd/emu.sv` owns both
+(`act_w_eff`/`act_h_eff`).** They are not the raster's resolution, and the difference is
+what made this a bug rather than a detail: `rtl/mpeg2/syncgen.v` blanks on
+`h_cntr >= horizontal_resolution || h_cntr >= h_size`, where `h_size`/`v_size` come from
+the **sequence header**, so the window is `min(decoded size, resolution)`. The fills that
+widen a sub-720 picture back out (`sif_hfill_eff`, `sif_v2x_eff`, the 240p raster) are all
+gated on `interlaced_eff`, deliberately — an HDMI-only rig keeps ascal's polyphase scale.
+
+So on `Video Output = Progressive` a **VCD presents a 352×240 window and an SVCD a
+480×480 one**, and until this fix the overlays were authored against a fixed 720×480:
+
+| content | window | old box | what the user saw |
+|---|---|---|---|
+| DVD 720×480 | 720×480 | x 104..615, rows 416/368 | correct |
+| SVCD 480×480 | 480×480 | x 104..615 | **HUD runs off the right edge** |
+| VCD 352×240 | 352×240 | rows 416..447 of 240 lines | **no HUD at all** |
+
+Interlaced was always fine because the fills restore a 720-wide line there.
+
+**Only the horizontal pitch follows the window.** The row stack stays 32 px tall and
+bottom-anchored, exactly as the 240p raster renders it — a VCD's glyph is therefore 8×32
+source pixels, tall and narrow before ascal stretches the window to 4:3. Below the
+**544 knee** (512 plus a 16 px margin) the text renders at 1x, which is the same glyph ROM
+walked at half the pitch: the 1x render is the 2x render with each column **pair
+collapsed**, and `hud_frame_tb`'s `[double]` arm measures exactly that.
+
+`dvd/seek_bar.sv` takes the same `act_w_i` and the same knee — the two must line up, which
+is why the constants are duplicated rather than each module inventing a rule. Its internal
+column space stays 0..511 (the divider, `fill_px`, `cur_px` and the 512-bit tick bitmap are
+untouched); a narrow render samples two columns per drawn pixel. ⚠ The notch read must take
+the **odd sibling** (`hcol | 1`) as well: a notch is written as a column PAIR `{c, c+1}`, so
+an even-only sample drops every notch whose pair starts odd. A notch is 1 px when its pair
+starts even and 2 px when it starts odd.
+
+`dvd/idle_logo.sv` takes it too, and is **not** an idle-only consumer: the screensaver and
+Stop both show the logo over a mounted, playing title. Its bounce box is the window on both
+axes, both bounds clamp rather than underflow, and a 2x logo too large for the window
+renders native instead of hanging off the edge.
+
+⚠ **The defect was a wrong VALUE on a correct port, which is why no module bench could see
+it** — each one is handed the window as a plusarg and was correct for the frame it was told
+about. `tools/check_ov_geom_wiring.py` gates the connection by reading `dvd/emu.sv`, the
+`check_p240_wiring.py` pattern.
 
 ## Known limitations / follow-ups
 
 - **HDMI-480i (O9):** pixel-repetition renders the HUD half-width — the same
   un-fixed subtitle caveat; folds into the shared `q_x`-halving follow-up.
   (CRT-480i and all progressive modes are correct.)
+- ~~**No HUD on a VCD / clipped HUD on an SVCD in `Video Output = Progressive`**~~ —
+  **FIXED 2026-09-14** (the window section above). Residual by design: on a sub-544
+  window the status line renders at 1x pitch, so its glyphs are 8×32 source pixels
+  rather than 16×32 — narrower relative to the picture than on a DVD, and taller than
+  it is wide before ascal's scale.
 - **Time readout leads the picture** by the VBUF depth (~1 s): `dsi_c_eltm`
   is parse-front-timed (Phase-7 characteristic, inherited).
 - **Multi-angle titles over-count** the whole-title total per-cell prefix sum
@@ -422,6 +473,20 @@ Sim (all green, Icarus):
 - `bench/dvd/transport_hud_tb.sv` — 12 scenarios: text-plane ASCII decode vs
   expected strings (play/pause/▶▶×3/◀◀×1/no-chapter/popup variants incl.
   `SUB OFF`), menu suppression, show/popup timer arm+expiry, load clears.
+- `bench/dvd/run_ov_geom.sh` — narrow-window geometry (2026-09-14): 12 GREEN arms
+  over 720×480 / 480×480 / 352×240 / 352×288 plus `tools/check_ov_geom_wiring.py`,
+  and `--red` with 12 mutations, each caught by its own arm. ★ The load-bearing one
+  is `hud_frame_tb`'s `[double]`: counting lit pixels inside a box cannot tell a
+  correct narrow render from a plausible wrong one (a box that kept the 2x pitch
+  shows the first 16 cells; one drawn at half scale without re-mapping shows the left
+  half of the line — both sit entirely inside the window and pass every count check).
+  Comparing two renders of the SAME text can, and it catches both.
+  ⚠ Fixed with it: the five overlay benches called `$finish` on failure, so `vvp`
+  exited 0 and a runner scoring the exit code read a failing bench as a passing one —
+  the `bench/ac3` M17 trap in a second place. They now `$fatal`. That immediately
+  exposed `run_p240.sh`'s `seek_bar_tb (240)` arm reporting ok on a bench reporting
+  13 errors: its render arms hardcoded NTSC-480 rows, so under `+act_h=240` every
+  `render_line` landed on a blank line. Rows derive from `act_h_i` now.
 - `bench/dvd/hud_frame_tb.sv` — full 720×480 frame through the real
   `subpic_blend` → PPM dump (eyeball-verified) + **field-order per-pixel
   identity** (interlace proof) + nothing-outside-the-rows. (Capture at

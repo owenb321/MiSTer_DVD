@@ -264,6 +264,15 @@ gaps at v1 (now closed, see below): analog dual-raster `re_interlace` hardcodes
 720×480 (sub-D1 → quarter picture + garbage right/below), HUD/overlay geometry is
 720-authored (clipped at 352), direct-video top-left quarter.
 
+⚠⚠ **"now closed" WAS ONLY TRUE OF THE ANALOG PATH, and the HUD half of it stayed broken
+for a year.** The closure below is the SIF analog fill, which is gated on `interlaced_eff`
+— so on the PROGRESSIVE output the window really is 352×240 (VCD) or 480×480 (SVCD) and
+the 720-authored overlay geometry was still wrong there: no HUD at all on a VCD, a HUD
+running off the right edge on an SVCD. Fixed 2026-09-14; see `docs/transport_hud.md`
+"The window is not the raster" and `docs/vcd_svcd.md` §5. **The lesson is the wording**: a
+gap closed on one output path is not closed, and saying so here is what stopped anyone
+looking.
+
 **✅ SIF ANALOG FILL — the mapped-out v2, ✅ HW-CONFIRMED 2026-08-24 (PR #2):
 NTSC + PAL SIF fill the CRT cleanly, normal DVDs unregressed.** In-core 2× fill, gated on
 `analog_eff` (HDMI-only rigs keep ascal's polyphase scale — HW-proven for MPEG-1):

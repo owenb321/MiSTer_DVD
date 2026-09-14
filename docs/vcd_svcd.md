@@ -254,6 +254,15 @@ goldens against `ffmpeg -c copy` at generation time. Plus: `crt_ov_map_tb`,
   same module. The residual caveat is accuracy, not availability: a 10 s jump on a
   bursty VBR file can land ±20 % out, and on a max-rate SVCD the fixed CD geometry can
   still fall short because the mux is VBR.
+- ~~**No HUD at all on a VCD, and a HUD clipped at the right edge on an SVCD, with
+  `Video Output = Progressive`**~~ — **FIXED 2026-09-14**. The progressive (HDMI) path
+  deliberately leaves the DE window at the decoded size and lets ascal scale it, so a VCD
+  presents a 352×240 window and an SVCD a 480×480 one, while the HUD, the seek bar and the
+  idle logo were all authored against a fixed 720×480. Interlaced was unaffected (the SIF
+  fills restore a 720-wide line there). Consequence to know: below a 544-wide window the
+  status line renders at the **1x glyph pitch**, so its text is half as wide relative to
+  the picture as on a DVD. Detail: `docs/transport_hud.md` "The window is not the raster",
+  gate `bench/dvd/run_ov_geom.sh`.
 - **Bare `.m2v` is still linear-only** — and structurally so, not by policy: no packs
   means `ps_demux.saw_pack` never asserts, so `lin_seek_ok` is 0 and neither the D-pad
   nor Fast Fwd/Rewind engage. See `docs/dvd_nav.md` §2b for what enabling it would take.

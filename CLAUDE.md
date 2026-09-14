@@ -252,6 +252,63 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **THE HUD WAS AUTHORED FOR A FRAME THAT DOES NOT EXIST ON THE PROGRESSIVE OUTPUT —
+  no HUD at all on a VCD, a HUD running off the right edge on an SVCD (2026-09-14, branch
+  `fix/hud-narrow-window`); sim-proven RED/GREEN, 12 mutations each caught by its own arm,
+  ⏳ HW-confirm pending.** Field report: with `Video Output = Progressive`, *"VCD is missing
+  the HUD entirely; SVCD has the HUD but it extends past the right edge"*. Interlaced is
+  correct on both.
+  ★★ **ONE CAUSE, TWO AXES, AND THE HALF THAT WAS "CLOSED" A YEAR AGO WAS ONLY CLOSED ON
+  ONE OUTPUT PATH.** The DE window is `min(decoded size, raster resolution)` —
+  `rtl/mpeg2/syncgen.v` blanks on `h_cntr >= horizontal_resolution || h_cntr >= h_size`,
+  and `h_size`/`v_size` are the SEQUENCE HEADER's sizes — while every fill that widens a
+  sub-720 picture back out (`sif_hfill_eff`, `sif_v2x_eff`, the 240p raster) is gated on
+  `interlaced_eff`, deliberately, because an HDMI-only rig keeps ascal's polyphase scale.
+  So the progressive path really does present **352×240 for a VCD and 480×480 for an
+  SVCD**, and `transport_hud`/`seek_bar`/`idle_logo` were authored against a fixed 720×480
+  with `act_h_eff` carrying the raster RESOLUTION, not the window: the status row sat at
+  lines 416..447 of a 240-line picture (nothing renders) and columns 104..615 of a 480-wide
+  one (clipped, then ascal stretches what survived).
+  ⛔ **`docs/mpeg1.md` §B.3 listed "HUD/overlay geometry is 720-authored (clipped at 352)"
+  and marked it "now closed" — the closure was the SIF ANALOG fill.** A gap closed on one
+  output path is not closed, and that sentence is what stopped anyone looking. Corrected in
+  place.
+  **Fix:** `dvd/emu.sv` publishes the window on both axes (`act_w_eff`/`act_h_eff`),
+  replicating syncgen's rule including the forward fill transforms; every pre-existing case
+  reduces to the old constants, so **only sub-720 progressive content moves**. The overlays
+  take `act_w_i` and centre in it.
+  ★ **Only the HORIZONTAL pitch follows the window** (maintainer decision: follow what the
+  240p change did): the row stack stays 32 px tall and bottom-anchored, and below a **544
+  knee** the text renders at the 1x glyph pitch = the same ROM walked at half the pitch.
+  The seek bar's internal column space stays 0..511 and a narrow render samples two columns
+  per drawn pixel. ⚠ Its notch read must take the **odd sibling** (`hcol | 1`): a notch is
+  written as a column PAIR, so an even-only sample drops every notch whose pair starts odd
+  (3 of 4 in the bench).
+  ⚠ `idle_logo` is NOT an idle-only consumer — the screensaver and Stop show it over a
+  mounted, playing title, so on a VCD it was bouncing in a 720-wide box on a 352-wide
+  picture. A 2x logo too large for the window now renders native.
+  ★★ **THE DEFECT WAS A WRONG VALUE ON A CORRECT PORT, WHICH NO MODULE BENCH CAN SEE** —
+  each is handed the window as a plusarg and was correct for the frame it was told about.
+  `tools/check_ov_geom_wiring.py` reads the connection out of `dvd/emu.sv`
+  (the `check_p240_wiring.py` pattern). And the load-bearing sim arm is `hud_frame_tb`'s
+  **`[double]`**: counting lit pixels inside a box cannot tell a correct narrow render from
+  a plausible wrong one (a box keeping the 2x pitch draws the first 16 cells; one drawn at
+  half scale without re-mapping draws the left half of the line — both sit entirely inside
+  the window and pass every count check), so it renders the SAME text at both pitches and
+  requires the narrow one to be the wide one with each column pair collapsed.
+  ★★★ **TWO PRE-EXISTING GATE DEFECTS CAME OUT WITH IT, THE SECOND HIDING BEHIND THE
+  FIRST.** The five overlay benches called `$finish` on failure, so `vvp` exited 0 and a
+  runner scoring the exit code read a FAILING bench as a passing one — the `bench/ac3` M17
+  trap in a second place. With `$fatal` in place, **`run_p240.sh`'s `seek_bar_tb (240)` arm
+  had been reporting `ok` on a bench reporting 13 errors since the 240p branch merged**:
+  its render arms hardcoded NTSC-480 row coordinates, so at `+act_h=240` every
+  `render_line` landed on a blank line and every positive assertion asserted against
+  nothing. The 240p RTL was never at fault; rows derive from `act_h_i` now and the arm
+  passes at 240/288/480/576 for real.
+  Gate: **`bench/dvd/run_ov_geom.sh --red`**. ⏳ HW: a VCD and an SVCD in Progressive over
+  HDMI, a DVD unregressed, and the screensaver logo inside a VCD's picture.
+  Detail: **`docs/transport_hud.md`** "The window is not the raster", `docs/vcd_svcd.md` §5.
+
 - 🔧 **"DEEP FRIED" MENU STILLS — the disc's own quantiser matrix was being thrown away
   at every VBUF flush (2026-09-13/14, branch `fix/quant-matrix-flush`); sim-proven
   RED/GREEN and ✅ HW-CONFIRMED 2026-09-14 AGAINST ITS OWN CONTROL** (build

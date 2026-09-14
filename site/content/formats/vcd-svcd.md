@@ -29,6 +29,10 @@ A **VCD is 352×240 (352×288 on PAL)**, so with the analog output running the c
 [native 240p raster](../video/analog-crt.md#native-240p-for-vcds-and-mpeg-1) rather than
 doubling every line to reach 480i. It happens automatically and there is nothing to set.
 
+The [status line and seek bar](../playback/controls.md) follow the picture: because a VCD or
+SVCD picture is narrower than a DVD's, they are drawn to fit it, with the text at its native
+size rather than the double-height size a DVD gets. Everything they show is the same.
+
 ## Limitations
 
 VCD support is deliberately basic playback, the reason being: **it came

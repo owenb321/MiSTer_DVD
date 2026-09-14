@@ -2216,3 +2216,39 @@ Gates `bench/dvd/run_quant_matrix.sh --red` (`+SOFTRST=1`: RED 10/12 lost, GREEN
 cannot (nothing is re-streamed; `aud_flush` already fires on the same jump), a maintainer
 ear-check closes it. The two-press activation on this disc is a separate nav item
 (`docs/dvd_nav.md`).
+
+## 🔧 Overlay geometry on a narrow DE window — no HUD on a VCD, clipped HUD on an SVCD — 2026-09-14
+
+Branch `fix/hud-narrow-window`. Sim-proven RED/GREEN, 12 mutations each caught by its own
+arm, ⏳ **HW-confirm pending**. Gate `bench/dvd/run_ov_geom.sh`; detail
+`docs/transport_hud.md` "The window is not the raster".
+
+Field report: with `Video Output = Progressive`, a VCD shows **no transport HUD at all**
+and an SVCD shows one that **runs off the right edge**. Interlaced is correct on both.
+
+One cause, two axes. The DE window is `min(decoded size, raster resolution)` — syncgen
+clamps to the *sequence header's* sizes — and every fill that widens a sub-720 picture back
+out (`sif_hfill_eff`, `sif_v2x_eff`, the 240p raster) is gated on `interlaced_eff`, by
+design: an HDMI-only rig keeps ascal's polyphase scale. So the progressive output really
+does present 352×240 for a VCD and 480×480 for an SVCD, while `transport_hud`, `seek_bar`
+and `idle_logo` were authored against a fixed 720×480 and `act_h_eff` carried the raster
+RESOLUTION rather than the window. A VCD's status row sat at lines 416..447 of a 240-line
+picture; an SVCD's spanned columns 104..615 of a 480-wide one.
+
+`dvd/emu.sv` now publishes the window on both axes (`act_w_eff`/`act_h_eff`), replicating
+syncgen's rule including the forward fill transforms. **Every pre-existing case reduces to
+the old constants**, so only sub-720 progressive content moves. The overlays centre in
+`act_w_i` and drop to the 1x glyph pitch below a 544 knee; the vertical stack is untouched.
+
+★ **Two pre-existing gate defects came out with it, and the second was hiding behind the
+first.** The five overlay benches called `$finish` on failure, so `vvp` exited 0 and any
+runner scoring the exit code read a failing bench as passing (the `bench/ac3` M17 trap in a
+second place). With `$fatal` in place, `run_p240.sh`'s `seek_bar_tb (240)` arm turned out
+to have been reporting ok on a bench reporting **13 errors** since the 240p branch merged —
+its render arms hardcoded NTSC-480 rows, so at `+act_h=240` every `render_line` landed on a
+blank line and the positive assertions asserted against nothing. The 240p RTL was never at
+fault; rows derive from `act_h_i` now and the arm passes at 240/288/480/576 for real.
+
+⏳ HW gate: a VCD `.bin` and an SVCD `.bin` in `Video Output = Progressive` over HDMI —
+status line and seek bar fully inside the picture on both, a DVD unregressed, and the
+screensaver's logo staying inside a VCD's picture.
