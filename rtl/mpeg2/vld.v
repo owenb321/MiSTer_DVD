@@ -56,7 +56,7 @@ module vld(clk, clk_en, rst,
   pic_informative, informative_commit,                                                      // DVD-FORK (film evidence gate): this picture carried real evidence
   cc_pair_valid, cc_pair, cc_pair_field,                                                    // DVD-FORK (line-21 CC): EIA-608 byte pairs sniffed out of user_data
   mpeg1,                                                                                    // DVD-FORK FIX (mpeg1): stream is MPEG-1 (no sequence extension) — to rld via the rld fifo
-  vbuf_flush,                                                                               // DVD-FORK FIX (seek realign, issue #45): a VBUF flush happened — the references are now stale
+  vbuf_flush, dbg_chroma,                                                                               // DVD-FORK FIX (seek realign, issue #45): a VBUF flush happened — the references are now stale
   bitpos, pic_hdr_pulse, pic_hdr_bitpos, pic_hdr_upd, pic_hdr_second,                      // DVD-FORK (PTS association): where in the stream each picture header was parsed
   skip_ack, skip_rff, skip_field, skip_tff, skip_pf                                         // DVD-FORK (PTS scheduling): a picture was dropped for ANY reason (governor or realign)
   );
@@ -303,6 +303,27 @@ module vld(clk, clk_en, rst,
    * ~192 clk_dec-cycle LEVEL (dvd/flush_ctl.sv issues ~64 clk_sys cycles; the
    * 2-FF CDC into clk_dec is in dvd/emu.sv). Level, not pulse — see the arm. */
   input            vbuf_flush;
+  output    [15:0] dbg_chroma;   // DVD-FORK DEBUG: {extsc_n[7:0], seqext_n[5:0], chroma_format[1:0]}
+  reg              flush_resync;   // SCRATCH (HW round 3): reproduce the regression
+  /* DVD-FORK DEBUG (chroma, docs/quant_matrix.md §10). MEASURED on the board:
+   * the garbage frames have LUMA in both chroma planes, which is a block-count
+   * desync -- and chroma_format is what sets blocks-per-macroblock. It is
+   * latched by a loadreg whenever state == STATE_SEQUENCE_EXT, so a hunt that
+   * dispatches on a FALSE 00 00 01 B5 would corrupt it. Neither chroma_format
+   * nor the dispatch count is visible to telemetry, so the board cannot be
+   * asked. Exported here; sim cannot reproduce this (its landing always starts
+   * with a clean sequence header). */
+  reg  [5:0] dbg_seqext_n;
+  reg  [7:0] dbg_extsc_n;
+  always @(posedge clk)
+    if (~rst) begin dbg_seqext_n <= 6'd0; dbg_extsc_n <= 8'd0; end
+    else if (clk_en) begin
+      if ((state == STATE_SEQUENCE_EXT) && ~(&dbg_seqext_n))
+        dbg_seqext_n <= dbg_seqext_n + 6'd1;
+      if ((state == STATE_EXTENSION_START_CODE) && ~(&dbg_extsc_n))
+        dbg_extsc_n <= dbg_extsc_n + 8'd1;
+    end
+  assign dbg_chroma = {dbg_extsc_n, dbg_seqext_n, chroma_format};
 
   /* DVD-FORK (PTS association, docs/av_sync.md "THE STC IS A CLOCK"). The exact
    * parse position (getbits_fifo.bitpos) latched at every picture header, so the
@@ -1322,8 +1343,14 @@ module vld(clk, clk_en, rst,
   /* state */
   
   always @(posedge clk)
+    if (~rst)            flush_resync <= 1'b0;
+    else if (vbuf_flush) flush_resync <= 1'b1;
+    else if (clk_en)     flush_resync <= 1'b0;
+    else                 flush_resync <= flush_resync;
+
+  always @(posedge clk)
     if(~rst) state <= STATE_NEXT_START_CODE;
-    else if (clk_en) state <= next;
+    else if (clk_en) state <= flush_resync ? STATE_NEXT_START_CODE : next;
     else state <= state;
 
   always @(posedge clk)
