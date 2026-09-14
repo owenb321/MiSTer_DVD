@@ -133,6 +133,191 @@ def menu_still_cuts(es):
     return cuts
 
 
+def iquant_default_intra():
+    """The 64 default intra values in RASTER order, READ OUT OF rtl/mpeg2/iquant.v.
+
+    Restating the table here would be a second copy to go stale -- the
+    tools/acmod_scan.py rule: a table that cannot disagree with the RTL beats a
+    correct one.  iquant.v's `default_intra_quant` function is indexed by the
+    RAM address, which IS raster order, so the values are taken verbatim.
+    """
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                       '..', 'rtl', 'mpeg2', 'iquant.v')
+    tab, seen = [0] * 64, 0
+    inside = False
+    with open(src) as fh:
+        for line in fh:
+            if 'function' in line and 'default_intra_quant' in line:
+                inside = True
+                continue
+            if inside:
+                if 'endfunction' in line:
+                    break
+                m = line.split("6'd")
+                if len(m) == 2 and '=' in m[1]:
+                    idx = int(m[1].split(':')[0])
+                    val = int(m[1].split('=')[-1].strip().rstrip(';').split("'d")[-1])
+                    tab[idx] = val
+                    seen += 1
+    if seen != 64:
+        raise RuntimeError("iquant.v default_intra_quant: parsed %d/64 entries "
+                           "-- the function's shape changed, fix this reader "
+                           "rather than hardcoding the table" % seen)
+    return tab
+
+
+def pgcit_pgc(nav, vts, pgcn):
+    """-> (abs_byte, parsed pgc) for VTSM PGCN `pgcn` of `vts`."""
+    from dvd_vm_ref import DOM_VTSM
+    srp = nav.pgcit(DOM_VTSM, vts)
+    if not srp or pgcn < 1 or pgcn > len(srp):
+        return None, None
+    abs_byte = srp[pgcn - 1][1]
+    return abs_byte, nav.pgc(abs_byte)
+
+
+def cell_sectors(nav, abs_byte, pgc, cell):
+    """-> (first_sector, last_sector) RBN of one cell (cell_playback_t @8/@20)."""
+    import struct as _s
+    if cell >= pgc['nr_cells']:
+        return None
+    e = nav.rd(abs_byte + pgc['cell_off'] + cell * 24, 24)
+    return (_s.unpack('>I', e[8:12])[0], _s.unpack('>I', e[20:24])[0])
+
+
+def build_junction(nav, a):
+    """--junction: a MENU->MENU (keep_vbuf) junction cut from two real cells.
+
+    The T2 Mission-Profiles shape: cut A = the tail of a MOTION transition cell
+    whose sequence header downloads a custom quantiser matrix and which carries
+    NO sequence_end_code; cut B = the still the transition links to, whose own
+    header downloads nothing (so a correct decoder ends on the MPEG defaults).
+
+    The variable is --trunc: how many bytes of cut A never reach the decoder.
+    That models exactly what the reader drops when a natural menu verdict
+    executes with up to 16 KB still sitting in its stream cache.  --trunc 0 is
+    the fixed behaviour (the whole cell delivered), and it is the gate.
+    """
+    vts = a.junction_vts
+    a_abs, a_pgc = pgcit_pgc(nav, vts, a.pgc_a)
+    b_abs, b_pgc = pgcit_pgc(nav, vts, a.pgc_b)
+    if a_pgc is None or b_pgc is None:
+        return die(f"VTSM vts={vts} has no PGCN {a.pgc_a}/{a.pgc_b}")
+    csa = cell_sectors(nav, a_abs, a_pgc, a.cell_a)
+    csb = cell_sectors(nav, b_abs, b_pgc, a.cell_b)
+    if csa is None or csb is None:
+        return die("cell index out of range for that PGC")
+    ext = nav.menu_vob[vts][0]
+
+    # ---- cut A: the transition cell's tail, from its LAST sequence header ----
+    es_a_full = b''.join(video_payload(nav.sec(ext + s))
+                         for s in range(csa[0], csa[1] + 1))
+    hpos = es_a_full.rfind(b'\x00\x00\x01\xb3')
+    if hpos < 0:
+        return die("cut A carries no sequence header")
+    es_a = es_a_full[hpos:]
+    ha = seq_header_fields(es_a, 0)
+    if ha is None or ha['intra'] is None:
+        return die("cut A's last sequence header downloads NO intra matrix -- "
+                   "nothing for the junction to lose, the arm would be vacuous")
+    if b'\x00\x00\x01\xb7' in es_a:
+        return die("cut A contains a sequence_end_code -- it would resync the "
+                   "parser for free and the junction would prove nothing")
+
+    # Keep the header (with its download) + the LAST --tail-pics pictures: the
+    # truncation happens at the END, and decoding 220 kB of intervening pictures
+    # costs minutes of simulation without touching the measurement.
+    picpos, q = [], 0
+    while True:
+        q = es_a.find(b'\x00\x00\x01\x00', q)
+        if q < 0:
+            break
+        picpos.append(q)
+        q += 4
+    if len(picpos) < 1:
+        return die("cut A has no picture start code")
+    if len(picpos) > a.tail_pics:
+        head = es_a[:picpos[0]]                       # seq header .. first picture
+        es_a = head + es_a[picpos[-a.tail_pics]:]     # .. + the last N pictures
+    pics_a = min(a.tail_pics, len(picpos))
+    _, _, _, alt_a = pic_coding_ext(es_a)
+
+    a_full_len = len(es_a)
+    if a.trunc:
+        if a.trunc >= len(es_a):
+            return die(f"--trunc {a.trunc} >= cut A's {len(es_a)} bytes")
+        es_a = es_a[:len(es_a) - a.trunc]
+
+    # ---- cut B: the landing still's head (header + the start of its picture) --
+    es_b_full = b''.join(video_payload(nav.sec(ext + csb[0] + k))
+                         for k in range(min(a.b_sectors, csb[1] - csb[0] + 1)))
+    s = es_b_full.find(b'\x00\x00\x01\xb3')
+    if s < 0:
+        return die("cut B carries no sequence header")
+    es_b = es_b_full[s:]
+    hb = seq_header_fields(es_b, 0)
+    if hb is None:
+        return die("cut B's sequence header is truncated; raise --b-sectors")
+    pics_b, idc_b, qst_b, _ = pic_coding_ext(es_b)
+
+    # ---- ground truth: what a CORRECT decoder ends up holding ----------------
+    # The landing downloads a matrix -> that one.  It downloads none (the T2
+    # slides) -> the MPEG defaults, because its sequence header pulses
+    # quant_rst and iquant.v goes back to default_values=1.  Either way this is
+    # a property of the disc, never of the fix.
+    if hb['intra'] is not None:
+        exp_intra = hb['intra']
+        exp_src = "cut B's own download"
+    else:
+        exp_intra = iquant_default_intra()
+        exp_src = "the MPEG defaults (cut B downloads none)"
+    exp_nonintra = hb['nonintra'] if hb['nonintra'] is not None else [16] * 64
+
+    if exp_intra == ha['intra']:
+        return die("cut A and cut B resolve to the SAME matrix -- the arm could "
+                   "not tell a clean junction from a fried one")
+
+    # ---- assemble (cut A then cut B, contiguous: a keep_vbuf hop) ------------
+    pad = -len(es_a) % 8
+    es_a_p = es_a + b'\x00' * pad
+    b_word = len(es_a_p) // 8
+    es = bytes(es_a_p) + bytes(es_b)
+    es += b'\x00\x00\x01\xb7' + b'\x00' * 64
+    es += b'\x00' * (-len(es) % 8)
+
+    with open(a.out + '.hex', 'w') as fh:
+        for i in range(0, len(es), 8):
+            fh.write(es[i:i + 8].hex() + '\n')
+    meta = [b_word, pics_a, 1 if hb['intra'] is not None else 0,
+            1 if hb['nonintra'] is not None else 0,
+            alt_a, idc_b, qst_b, pics_b]
+    with open(a.out + '.meta.hex', 'w') as fh:
+        for w in meta:
+            fh.write(f"{w & 0xFFFFFFFF:08x}\n")
+    with open(a.out + '.qmat.hex', 'w') as fh:
+        for v in exp_intra:
+            fh.write(f"{v:02x}\n")
+    with open(a.out + '.qmatn.hex', 'w') as fh:
+        for v in exp_nonintra:
+            fh.write(f"{v:02x}\n")
+    # cut A's matrix, so a FRIED arm can be classified as "kept the source's
+    # matrix" rather than merely "wrong".
+    with open(a.out + '.qmata.hex', 'w') as fh:
+        for v in ha['intra']:
+            fh.write(f"{v:02x}\n")
+
+    print(f"{os.path.basename(a.iso)}  VTSM{vts:02d} "
+          f"PGC{a.pgc_a} cell{a.cell_a} -> PGC{a.pgc_b} cell{a.cell_b}")
+    print(f"  cut A  RBN {csa[0]}..{csa[1]}  {a_full_len} B kept "
+          f"({pics_a} pics, alternate_scan={alt_a}), --trunc {a.trunc} "
+          f"-> {len(es_a)} B delivered")
+    print(f"  cut B  RBN {csb[0]}..{csb[1]}  {len(es_b)} B ({pics_b} pics)")
+    print(f"  expect {exp_src}: DC={exp_intra[0]} peak={max(exp_intra)}; "
+          f"cut A's was DC={ha['intra'][0]} peak={max(ha['intra'])}")
+    print(f"  {a.out}.hex  {len(es)} B, cut B at word {b_word}")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -150,9 +335,27 @@ def main():
                     help='patch the download to 64 DISTINCT values so a '
                          'permutation is detectable (announces itself)')
     ap.add_argument('--out', required=True)
+    # ---- --junction: a menu->menu (keep_vbuf) splice from two real cells -----
+    ap.add_argument('--junction', action='store_true',
+                    help='build a MENU->MENU junction fixture (see build_junction)')
+    ap.add_argument('--junction-vts', type=int, default=1)
+    ap.add_argument('--pgc-a', type=int, default=14, help='source (transition) PGCN')
+    ap.add_argument('--cell-a', type=int, default=1, help='source cell index')
+    ap.add_argument('--pgc-b', type=int, default=20, help='landing (still) PGCN')
+    ap.add_argument('--cell-b', type=int, default=0, help='landing cell index')
+    ap.add_argument('--trunc', type=int, default=0,
+                    help='bytes of cut A that never reach the decoder (the '
+                         'reader cache the old code dropped). 0 = the fix.')
+    ap.add_argument('--tail-pics', type=int, default=2,
+                    help='pictures of cut A to keep before the truncation point')
+    ap.add_argument('--b-sectors', type=int, default=8,
+                    help='sectors of the landing cell to read (its header plus '
+                         'the start of its picture is all the arm needs)')
     a = ap.parse_args()
 
     nav = IsoNav(a.iso)
+    if a.junction:
+        return build_junction(nav, a)
     vts = a.vts if a.vts is not None else nav.best_menu_vts
     if vts not in nav.menu_vob:
         return die(f"VTS {vts} has no menu VOB; --vts names one of "
