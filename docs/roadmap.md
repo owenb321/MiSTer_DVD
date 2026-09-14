@@ -2178,3 +2178,25 @@ PGC pre/post execution.
    that auto-advances on a timeout. Lower priority; revisit if a disc needs it.
 4. **Scale** — 8.4 GB dual-layer ISO; the reader's 32-bit LBA handles it, and it fits on SD
    (NAS/CIFS large-file open is a separate known framework issue, above).
+
+
+---
+
+## 🔧 Quantiser matrix lost at a VBUF flush ("deep fried" menu stills) — 2026-09-13
+
+Branch `fix/quant-matrix-flush`. Sim-proven RED/GREEN over real disc bytes,
+⏳ **HW-confirm pending**.
+
+A menu still's sequence header downloads a custom quantiser matrix; a VBUF flush left the
+VLD mid-picture and its bit window holding a discarded stream, so the header (and the
+matrix) were eaten and the still decoded with the MPEG defaults — every AC coefficient up
+to 20.75x too large. Two RTL changes (`vld.v` `flush_resync`; `getbits_fifo` onto
+`vbuf_rst`), plus an independent 13818-2 7.3.1 fix in `iquant.v`.
+
+Measured blast radius: **820/957 discs download a matrix in a menu VOB, 533 more than 2x
+from the default**; **480** are exposed to the 7.3.1 permutation case.
+
+Gate `bench/dvd/run_quant_matrix.sh --red`. Detail: `docs/quant_matrix.md`.
+
+⏳ Next: hardware confirmation on the reporting disc — acceptance is **no fried frame at
+all**, sampled across the first ~500 ms after the menu appears.

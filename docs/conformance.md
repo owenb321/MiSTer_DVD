@@ -359,3 +359,21 @@ next conformance evidence comes from running what we already own —
 see **`docs/disc_sweep.md`** for the per-disc test cards and the breadth-first sweep protocol.
 Only two rows still have genuinely no vehicle after tripling the library (LPCM 24-bit/96 kHz,
 UDF-only images); `docs/test_disc_shopping_list.md` remains the map for those.
+
+---
+
+## ISO 13818-2 7.3.1 — the quantiser matrix download is ALWAYS scan 0 (2026-09-13)
+
+`rtl/mpeg2/iquant.v` un-zigzagged the `load_intra_quantiser_matrix` /
+`load_non_intra_quantiser_matrix` payload with the **live** `alternate_scan` register,
+which at sequence-header time still holds the *previous* picture's value. 7.3.1 says the
+download is transmitted in zigzag (scan 0) order unconditionally; the read side already
+agreed (`rld.v` un-zigzags the read address with the current picture's scan, so the RAM is
+indexed in raster order). Fixed to `scan_reverse(1'b0, …)` in both module copies.
+
+★ The module's own header comment had stated the correct rule all along, directly above the
+line contradicting it.
+
+Exposure measured by `tools/qmatrix_scan.py`: **480 of 957 library images** pair a *varied*
+download with an `alternate_scan=1` title. It is invisible on a flat matrix, which is why
+it survived. Detail: `docs/quant_matrix.md` §4.

@@ -92,3 +92,24 @@ Findings below are ranked; F1–F3 are robustness/cosmetic corners, F4–F6 hygi
 - **F6 — Noted, deliberate:** `mem_shim_burst.sv`'s fill timeout serves zeroes without
   validating the cache line — belt-and-suspenders for a path BIST showed never times out.
 
+
+---
+
+## Addendum (2026-09-13): two defects this audit did not find
+
+Both are in `rtl/mpeg2/iquant.v` / its plumbing, and both reached users. Recorded here
+because the audit reported this area clean.
+
+1. **`default_values` is an all-or-nothing latch.** It clears only on a write to address
+   `6'h3f`, so losing *any* part of a 64-entry quantiser matrix download silently discards
+   the **whole** custom matrix and reverts to the MPEG defaults. That converts a small
+   stream hiccup into a whole-picture defect, with no error anywhere. What made it reach
+   users was a companion bug (`docs/quant_matrix.md`) that lost the download entirely.
+2. **The un-zigzag used the live `alternate_scan`.** See `docs/conformance.md` — ISO
+   13818-2 7.3.1 says the download is always scan 0.
+
+★ Why an audit would miss them: neither is wrong *on its face*. The latch is a reasonable
+reading of "a matrix is replaced wholesale", and the un-zigzag looks symmetric with the
+read side until you notice the read uses the **picture's** scan and the write ran at the
+**sequence header**, one picture earlier. Both needed a stimulus — a real disc that
+downloads a matrix across a flush — rather than a reading.

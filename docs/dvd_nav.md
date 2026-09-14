@@ -2875,3 +2875,42 @@ PGC-end hold). T1–T7 unchanged and green.
 **HW gate:** Weakest Link — answer reveal and the banked-money screen each stay up ~2 s;
 questions still hold ~18 s and stay answerable; MiB/Matrix/T2 menus, Thayer's timed
 choices and a normal movie unchanged.
+
+---
+
+## ⏳ OPEN: two presses to activate a menu button (WAKE_UP_WITH_ELMO, 2026-09-13)
+
+Reported alongside the "deep fried" menu still (`docs/quant_matrix.md`, a decoder
+defect and a separate thing): on this disc's main menu the FIRST Select press does
+not activate "Play Story" — it only repaints the picture — and a second press works.
+
+**Not yet root-caused. What is measured about the disc:**
+
+- The menu is **VTS_01 VTSM PGCN 7**, one cell, `still_time = 0xFF`, `cell_cmd = 0`,
+  a **single VOBU**, so exactly ONE NAV pack and ONE HLI are ever sent. `hli_ss = 1`
+  (new button set), `fosl = 0`, `foac = 0`, `auto_action_mode = 0` on all four
+  buttons. There is no second PCI to re-arm from, and no forced select.
+- **Every button's PCI command is byte-identical: `LinkTailPGC`, button field 0.**
+  No button carries its own action. All dispatch happens in the PGC's POST, which
+  reads **SPRM8** (`HL_BTNN`), divides by `0x400` and compares against 1..4.
+- The initial selection comes from a `SetHL_BTNN` **pre**-command
+  (`HL_BTNN = 0x400` = button 1) that runs *before* the menu VOBU — and therefore
+  before its HLI — has been read. `nav_pci.sv` takes that on the `sel_force && !armed`
+  path, which only stores `btn_sel` for the next arm.
+
+**Leading hypothesis, to be tested before any code is written.** If SPRM8 is not
+holding `0x400` when the POST runs, the POST matches none of its four compares, falls
+off the end, and the PGC ends with `next_pgcn = 0`. Re-entering PGCN 7 then re-runs
+the pre (re-asserting `HL_BTNN`) **and replays cell 0**, which is a second decode of
+the still. That single mechanism would produce both reported symptoms at once — the
+dead first press and the repaint — which is why they arrived in one report.
+
+⚠ Do not assume it; the quant-matrix work has already shown this disc can produce two
+symptoms from unrelated causes. The cheap discriminator is `dvd_vm.sv`'s `sprm8` /
+`sprm8_frozen` at the first activate, and whether `nav_pci` promoted the stored
+`btn_sel` into SPRM8 before the POST read it.
+
+★ Note the repaint is **no longer** evidence for this hypothesis on a fixed core: with
+`flush_resync` in place the first decode is already correct, so a re-decode changes
+nothing visible. If the two-press behaviour survives the quant-matrix fix, that is the
+clean report.

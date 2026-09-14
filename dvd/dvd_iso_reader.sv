@@ -4325,6 +4325,21 @@ always @(posedge clk or negedge rst_n) begin
             // replayed the audio, which is what issue #65 reported. The reader
             // now simply parks and holds, which is what the authored still asks
             // for. HW-confirmed 2026-09-08: the line reads once.
+            //
+            // ⚠ AMENDED (docs/quant_matrix.md): "doing no work the decoder had
+            // not already done" was wrong in ONE respect, and it took a field
+            // report to find it. The re-stream was also REPAIRING A LOST
+            // QUANTISER MATRIX. A menu still's sequence header downloads one,
+            // and a VBUF flush used to leave the vld mid-picture so it ate that
+            // header on resume -- after which the still decoded with the MPEG
+            // defaults, i.e. every AC coefficient up to 20.75x too large ("deep
+            // fried"). Re-streaming the cell parsed the header cleanly and
+            // repainted it, which is why v0.4.0 showed a split-second fried
+            // frame and v0.5.0 holds one.
+            // ⛔ That is NOT a reason to bring the re-stream back, and removing
+            // it was NOT the cause: it unmasked a defect that was always there.
+            // The cause is fixed in rtl/mpeg2/vld.v (flush_resync). Do not
+            // revert the removal on the strength of that symptom.
             // ⚠ Its only live trigger was vbuf_empty -- menu_snap has been
             // hardwired 0 since the Snappy/Smooth toggle was removed -- and
             // vbuf_empty means the decoder had already consumed everything.

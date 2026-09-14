@@ -377,3 +377,29 @@ Ten registers (`ra_active`, `ra_anchors[1:0]`, `ra_hdrs[5:0]`, `drop_gov_picture
 few LUTs, all inside the once-per-picture `STATE_PICTURE_HEADER` decision cone, which has
 enormous slack. It should not move the limiter — but the netlist changes, so the pinned
 fitter SEED is a fresh roll regardless. See the `DVD.qsf` ledger entry.
+
+---
+
+## Cross-reference: `vbuf_flush` now has a SECOND consumer in the vld (2026-09-13)
+
+`docs/quant_matrix.md` adds `flush_resync` to `rtl/mpeg2/vld.v`, driven off the same
+`vbuf_flush` input this document's `ra_active` arm uses, and ungated by `clk_en` for the
+same reason. **They are separate registers with separate lifetimes and must not be
+folded**: `ra_active` lives for *pictures* (until two anchors, or `RA_CAP`), `flush_resync`
+lives for the *flush window* only.
+
+Two things here that a reader of this document alone would get wrong:
+
+- **The re-align arm is about stale REFERENCES; the new one is about a stale PARSER.** A
+  flush discarded the buffered bitstream and nothing else — including nothing about where
+  the VLD's state machine stood. It resumed mid-picture and consumed the landing's leading
+  bytes in that stale state.
+- ⚠ **`seek_realign_tb.sv` carries a comment saying cut B's own sequence header "is usually
+  eaten and NOT re-parsed".** That was an accurate description of the defect, not of
+  desired behaviour. After the quant-matrix fix the landing's sequence header **is**
+  re-parsed; the comment has been updated. The suite's own numbers are unchanged, which is
+  the evidence the re-align accounting did not move.
+
+`mpeg2video.v` also moves `getbits_fifo` onto `vbuf_rst`, so the bit window no longer
+survives a flush holding bytes of the discarded stream. That is what the byte-consumption
+argument in `docs/quant_matrix.md` §3.1 rests on.

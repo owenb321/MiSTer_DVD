@@ -1065,3 +1065,32 @@ widening, and an SPRM8/GPRM readout — so one flash tests B1, A2 and B2 togethe
 2. Triage per Pass 2 above; write the root-cause list here before opening any branch.
 3. Update `docs/conformance.md` for any gap the sweep closes or newly exposes, and flip this
    file's status line at the top.
+
+---
+
+## Quantiser-matrix census (2026-09-13) — `tools/qmatrix_scan.py`
+
+Which discs DOWNLOAD a quantiser matrix in a menu VOB, and how far is it from the MPEG
+default the decoder falls back to when the download is lost (`docs/quant_matrix.md`)?
+
+★ The tool reads the default matrices **out of `rtl/mpeg2/iquant.v`** rather than restating
+64 numbers — the `tools/acmod_scan.py` lesson.
+
+| | |
+|---|---|
+| images scanned | 957 |
+| download a matrix in a menu VOB | **820 (86 %)** |
+| worst `default/custom` ratio > 2× | **533 (56 %)** |
+| worst ratio > 10× | 292 |
+| median worst ratio | 3.77 |
+| maximum ratio | **83.00** |
+| varied download **and** an `alternate_scan=1` title (the 7.3.1 permutation case) | **480** |
+
+Custom matrices in menus are the norm in DVD authoring, not a quirk of the reporting disc.
+
+⚠ Scope, as the tool states: it samples menu VOB **heads** (`--sectors`, default 64), so a
+sequence header deeper in the VOB is not counted, and title-domain downloads are out of
+scope unless `--titles`. That is the right window for this defect — a menu still holds one
+sequence header on screen indefinitely, while a title re-sends one every GOP.
+
+Reproduce: `DVD_ISO_DIR=/mnt/dvd python3 tools/qmatrix_scan.py --json census.json`
