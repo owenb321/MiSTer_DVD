@@ -1277,6 +1277,13 @@ also come back 0/64.** With the bytes contiguous the parser errors out on the pa
 and resyncs BEFORE the header arrives; only a FLUSH — which discards the tail and freezes
 the parser mid-picture — loses the matrix. The arms are kept as standing evidence.
 
+⚠ **The scope of that refutation, stated exactly.** It shows a truncated-but-CONTIGUOUS
+junction does not lose the matrix, over the real cells, at seven truncation points, with
+cut A trimmed to its last sequence header plus two pictures. It is not a proof about every
+parser state the 192 KB menu VBUF can present on hardware. What it settles is that the
+matrix should no longer be treated as the presumed cause — which is what stopped this
+branch from shipping a fix aimed at the wrong thing.
+
 ⏳ **So the decoder-side mechanism is still open.** What is established: the bytes were
 being dropped, they no longer are, and the junction the decoder sees is now byte-clean. The
 hardware round decides whether that is sufficient; if it is not, the next suspect is the

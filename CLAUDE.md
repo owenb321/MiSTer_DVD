@@ -373,6 +373,11 @@ worse maintenance burden than targeted in-place edits. So:
   truncation offsets (8…3400 B) also come back 0/64.** With the bytes contiguous the parser
   errors out on the partial slice and resyncs BEFORE the header; losing the matrix needs the
   FLUSH. ★ The arms are committed BEFORE the fix, as standing evidence.
+  ⚠ **State the scope exactly, so nobody either re-derives it OR over-trusts it:** what is
+  measured is that a truncated-but-CONTIGUOUS junction does not lose the matrix, over the
+  real cells at seven truncation points, with cut A trimmed to its last sequence header plus
+  two pictures. It is not a proof about every parser state the 192 KB menu VBUF can be in on
+  hardware. It IS enough to stop treating the matrix as the presumed cause.
   ✅ **REPRODUCED AND QUANTIFIED ON THE RIG (pre-fix core, the control), so the fix has a
   number to beat.** Blockiness = image energy on the 8-pixel DCT block grid ÷ energy off it
   (a correct picture has no reason to prefer the grid):
