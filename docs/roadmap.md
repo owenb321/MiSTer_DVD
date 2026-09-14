@@ -2217,11 +2217,13 @@ cannot (nothing is re-streamed; `aud_flush` already fires on the same jump), a m
 ear-check closes it. The two-press activation on this disc is a separate nav item
 (`docs/dvd_nav.md`).
 
-## 🔧 Overlay geometry on a narrow DE window — no HUD on a VCD, clipped HUD on an SVCD — 2026-09-14
+## ✅ Overlay geometry on a narrow DE window — no HUD on a VCD, clipped HUD on an SVCD — 2026-09-14
 
 Branch `fix/hud-narrow-window`. Sim-proven RED/GREEN, 12 mutations each caught by its own
-arm, ⏳ **HW-confirm pending**. Gate `bench/dvd/run_ov_geom.sh`; detail
-`docs/transport_hud.md` "The window is not the raster".
+arm, and ✅ **HW-CONFIRMED 2026-09-14 against its own control** (build
+`DVD_hudnarrow_20260914_1552.rbf`, SEED 7 first roll, clk_dec 96.30/91.48, 90 % ALM).
+Gate `bench/dvd/run_ov_geom.sh`; detail `docs/transport_hud.md` "The window is not the
+raster".
 
 Field report: with `Video Output = Progressive`, a VCD shows **no transport HUD at all**
 and an SVCD shows one that **runs off the right edge**. Interlaced is correct on both.
@@ -2249,6 +2251,25 @@ its render arms hardcoded NTSC-480 rows, so at `+act_h=240` every `render_line` 
 blank line and the positive assertions asserted against nothing. The 240p RTL was never at
 fault; rows derive from `act_h_i` now and the arm passes at 240/288/480/576 for real.
 
-⏳ HW gate: a VCD `.bin` and an SVCD `.bin` in `Video Output = Progressive` over HDMI —
-status line and seek bar fully inside the picture on both, a DVD unregressed, and the
-screensaver's logo staying inside a VCD's picture.
+**HW round, both cores through the same script.** The seek bar is the instrument rather
+than the text: it is a filled rectangle spanning the whole box, so comparing its border row
+against the picture row above it cancels the content and measures the box directly.
+
+| arm | picture | seek-bar span | HUD |
+|---|---|---|---|
+| VCD pre-fix | 352x240 | nothing drawn | absent |
+| VCD fixed | 352x240 | 31..287 = 257 px, inside | `0:00:32/0:56:49`, maxerr 0 |
+| SVCD pre-fix | 480x480 | 88..479, clipped at the edge | right ~120 px lost |
+| SVCD fixed | 480x480 | 96..351 = 256 px, inside | `0:00:10/0:05:04`, maxerr 0 |
+| DVD pre-fix | 720x480 | 88..599 = 512 px | `[PAUSE] 0:00:08/2:02:09 CH 1/35` |
+| DVD fixed | 720x480 | 88..599, identical | identical, maxerr 0 |
+
+The logo arm needed the control most, because it is intermittent by nature: over a VCD
+(Stop drives the same `logo_vis` as the screensaver), 14 samples per core gave **pre-fix
+7 whole / 1 cut by the picture edge / 6 entirely off-screen**, and **fixed 14 whole, 0 cut,
+0 lost**, reaching x 351 of 352 and y 236 of 240 — the whole window, not a safe inset.
+
+⚠ **`tools/hud_read.py` had to be fixed to run this round at all**: it baked in the same
+`X0 = 104` / 16 px pitch the RTL did, so it decodes a DVD and reports "no HUD" on a VCD —
+it would have confirmed the defect on the FIXED core. It now derives the box from the
+frame width (a screenshot is the raw raster, so its width IS the window).

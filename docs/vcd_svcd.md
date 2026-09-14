@@ -255,7 +255,7 @@ goldens against `ffmpeg -c copy` at generation time. Plus: `crt_ov_map_tb`,
   bursty VBR file can land ±20 % out, and on a max-rate SVCD the fixed CD geometry can
   still fall short because the mux is VBR.
 - ~~**No HUD at all on a VCD, and a HUD clipped at the right edge on an SVCD, with
-  `Video Output = Progressive`**~~ — **FIXED 2026-09-14**. The progressive (HDMI) path
+  `Video Output = Progressive`**~~ — **FIXED and ✅ HW-CONFIRMED 2026-09-14**. The progressive (HDMI) path
   deliberately leaves the DE window at the decoded size and lets ascal scale it, so a VCD
   presents a 352×240 window and an SVCD a 480×480 one, while the HUD, the seek bar and the
   idle logo were all authored against a fixed 720×480. Interlaced was unaffected (the SIF

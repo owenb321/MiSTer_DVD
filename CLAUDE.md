@@ -252,10 +252,10 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **THE HUD WAS AUTHORED FOR A FRAME THAT DOES NOT EXIST ON THE PROGRESSIVE OUTPUT —
+- ✅ **THE HUD WAS AUTHORED FOR A FRAME THAT DOES NOT EXIST ON THE PROGRESSIVE OUTPUT —
   no HUD at all on a VCD, a HUD running off the right edge on an SVCD (2026-09-14, branch
   `fix/hud-narrow-window`); sim-proven RED/GREEN, 12 mutations each caught by its own arm,
-  ⏳ HW-confirm pending.** Field report: with `Video Output = Progressive`, *"VCD is missing
+  and ✅ HW-CONFIRMED 2026-09-14 with the defect REPRODUCED FIRST on the pre-fix core.** Field report: with `Video Output = Progressive`, *"VCD is missing
   the HUD entirely; SVCD has the HUD but it extends past the right edge"*. Interlaced is
   correct on both.
   ★★ **ONE CAUSE, TWO AXES, AND THE HALF THAT WAS "CLOSED" A YEAR AGO WAS ONLY CLOSED ON
@@ -305,8 +305,26 @@ worse maintenance burden than targeted in-place edits. So:
   `render_line` landed on a blank line and every positive assertion asserted against
   nothing. The 240p RTL was never at fault; rows derive from `act_h_i` now and the arm
   passes at 240/288/480/576 for real.
-  Gate: **`bench/dvd/run_ov_geom.sh --red`**. ⏳ HW: a VCD and an SVCD in Progressive over
-  HDMI, a DVD unregressed, and the screensaver logo inside a VCD's picture.
+  Gate: **`bench/dvd/run_ov_geom.sh --red`**.
+  ✅ **HW-CONFIRMED 2026-09-14 AGAINST ITS OWN CONTROL** (build
+  `DVD_hudnarrow_20260914_1552.rbf`, SEED 7 first roll, clk_dec 96.30/91.48, 90 % ALM).
+  ★ **The seek bar is the instrument, not the text:** it is a filled rectangle spanning
+  the whole box, so comparing its border row against the picture row above it cancels the
+  content and MEASURES the box. Each arm run on the same media, in `Progressive`, on both
+  cores:
+  | arm | picture | seek-bar span | HUD text |
+  |---|---|---|---|
+  | VCD, pre-fix | 352x240 | **nothing drawn** | absent |
+  | VCD, fixed | 352x240 | 31..287 = **257 px, inside** | `0:00:32/0:56:49`, maxerr 0 |
+  | SVCD, pre-fix | 480x480 | 88..479 = **CLIPPED at the edge** (512 px box) | right ~120 px lost |
+  | SVCD, fixed | 480x480 | 96..351 = **256 px, inside** | `0:00:10/0:05:04`, maxerr 0 |
+  | DVD, pre-fix | 720x480 | 88..599 = 512 px | `[PAUSE] 0:00:08/2:02:09 CH 1/35` |
+  | DVD, fixed | 720x480 | **88..599 = 512 px, identical** | **identical, maxerr 0** |
+  ★★ **And the logo arm is the one a bench cannot settle, measured 14 samples per core over
+  a VCD (Stop drives the same `logo_vis` as the screensaver): pre-fix 7 whole / 1 cut by
+  the picture edge / 6 ENTIRELY OFF-SCREEN; fixed 14 whole, 0 cut, 0 lost** — and the logo
+  reached x 351 of 352 and y 236 of 240, so it uses the whole window rather than a safe
+  inset.
   Detail: **`docs/transport_hud.md`** "The window is not the raster", `docs/vcd_svcd.md` §5.
 
 - 🔧 **"DEEP FRIED" MENU STILLS — the disc's own quantiser matrix was being thrown away

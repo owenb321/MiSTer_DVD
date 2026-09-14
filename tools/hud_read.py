@@ -74,13 +74,29 @@ REAL_BAND_XOFF = -14       # measured on hardware, build DVD_holdparity_20260904
 # reader label every block with its left-hand neighbour's name.
 REAL_BLOCKS = os.path.join(ROOT, 'bench', 'dvd', 'hud_real_blocks.png')
 
-# ---- layout, from dvd/transport_hud.sv:137-145 -----------------------------
-X0     = 104          # (720 - 32*16)/2
+# ---- layout, from dvd/transport_hud.sv -------------------------------------
+# ⚠ The box is a function of the ACTIVE WIDTH, not a constant (2026-09-14). A screenshot
+# is the core's raw raster, so its width IS the DE window: a VCD gives 352, an SVCD 480,
+# a DVD 720. Below the module's 544 knee the glyph pitch halves and the box re-centres,
+# so a reader with 104/16 baked in decodes a DVD and reports "no HUD" on a VCD -- which
+# is the very defect this reader would be asked to confirm.
 NCELL  = 32
-CELLW  = 16           # 8 px glyph at 2x
-ROW_H  = 32           # 16 glyph rows at 2x
+ROW_H  = 32           # 16 glyph rows at 2x (vertical is unchanged on every window)
+HS2_MIN = 544         # the module's knee: 512 px of text plus a 16 px margin
 STATUS_DY = -64       # status row top    = active_h - 64
 POPUP_DY  = -112      # popup  row top    = active_h - 112
+
+
+def box_for(width):
+    """-> (x0, cell pitch, horizontal sub-pixel step) for a frame this wide."""
+    sub = 2 if width >= HS2_MIN else 1      # glyph pixel doubling
+    cellw = CELL_W * sub                    # 16 at 2x, 8 at 1x
+    return (width - NCELL * cellw) // 2, cellw, sub
+
+
+# the 720 values, kept as names for the fixtures and the selftest
+X0     = 104          # = box_for(720)[0]
+CELLW  = 16           # = box_for(720)[1]
 
 # Glyph pixel classes (transport_hud.sv:612-627). Only class 2 (fill) has an
 # unambiguous colour; 1 (outline) and 0 (backing) are black at different alpha
@@ -217,13 +233,14 @@ def _is_fill(rgb, tol):
 
 def _sample_row(frame, y_top, xoff, yoff, tol):
     """-> ([per-cell fill mask], [per-cell accent flag])."""
+    x0, cellw, sub = box_for(frame.w)
     cells, accents = [], []
     for c in range(NCELL):
         rows, acc_n, fill_n = [], 0, 0
         for gy in range(CELL_H):
             bits = 0
             for gx in range(CELL_W):
-                x = X0 + xoff + c * CELLW + gx * 2
+                x = x0 + xoff + c * cellw + gx * sub
                 y = y_top + yoff + gy * 2
                 is_f, is_acc = _is_fill(frame.px(x, y), tol)
                 if is_f:
@@ -456,7 +473,13 @@ def read_blocks(frame, tol=8):
 # ---------------------------------------------------------------------------
 # selftest
 # ---------------------------------------------------------------------------
-EXPECT_STATUS = '[PLAY]    0:12:34/1:37:05 CH 12/23   '
+# ⚠ STALE ONCE ALREADY, AND NOTHING NOTICED FOR TWO DAYS. Commit 3797a0d (2026-09-12)
+# replaced the scrub tier's "xN" multiplier with an arrow COUNT, which widened the status
+# line's icon field from 3 cells to 5 and pushed the time one cell right. This expectation
+# was not moved with it, so bench/dvd/run_telem.sh -- which runs this selftest -- went red
+# and stayed red. The golden frame is regenerated (it is gitignored), so the only way this
+# string stays honest is to update it IN THE SAME CHANGE as any status-line layout edit.
+EXPECT_STATUS = '[PLAY]     0:12:34/1:37:05 CH 12/23  '
 EXPECT_POPUP = 'AUDIO  2/ 4 FR                  '
 
 

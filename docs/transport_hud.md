@@ -446,13 +446,41 @@ it** — each one is handed the window as a plusarg and was correct for the fram
 about. `tools/check_ov_geom_wiring.py` gates the connection by reading `dvd/emu.sv`, the
 `check_p240_wiring.py` pattern.
 
+**HW round, 2026-09-14** (build `DVD_hudnarrow_20260914_1552.rbf`, SEED 7 first roll,
+clk_dec 96.30/91.48, 90 % ALM). Both cores through one script, on the same media.
+★ **The seek bar is the instrument, not the text.** It is a filled rectangle spanning the
+whole box, so comparing its border row against the picture row three lines above cancels
+the picture content and measures the box — where the status text on a linear file has
+spaces at its right end and so cannot show clipping at all.
+
+| arm | picture | seek-bar span | HUD text |
+|---|---|---|---|
+| VCD pre-fix | 352×240 | nothing drawn | absent |
+| VCD fixed | 352×240 | 31..287 = **257 px, inside** | `0:00:32/0:56:49`, maxerr 0 |
+| SVCD pre-fix | 480×480 | 88..479, **clipped at the edge** | right ~120 px lost |
+| SVCD fixed | 480×480 | 96..351 = **256 px, inside** | `0:00:10/0:05:04`, maxerr 0 |
+| DVD pre-fix | 720×480 | 88..599 = 512 px | `[PAUSE] 0:00:08/2:02:09 CH 1/35` |
+| DVD fixed | 720×480 | **88..599, identical** | **identical, maxerr 0** |
+
+The logo arm is the one only a control could settle, since it is intermittent by nature:
+over a VCD (Stop drives the same `logo_vis` as the screensaver), 14 samples per core gave
+**pre-fix 7 whole / 1 cut / 6 entirely off-screen** and **fixed 14 whole, 0 cut, 0 lost**,
+reaching x 351 of 352 and y 236 of 240 — the whole window, not a safe inset.
+
+⚠⚠ **`tools/hud_read.py` BAKED IN THE SAME ASSUMPTION AS THE RTL and would have confirmed
+the bug on the FIXED core.** It hardcoded `X0 = 104` with a 16 px pitch, so it decodes a
+DVD and reports "no HUD" on a VCD whichever core is running. It now derives the box from
+the frame width with `box_for()` — a screenshot is the core's raw raster, so its width IS
+the window. **An instrument that shares the assumption under test cannot test it**; this
+is the `docs/stc_freerun.md` §3.7 lesson in the harness rather than in the telemetry.
+
 ## Known limitations / follow-ups
 
 - **HDMI-480i (O9):** pixel-repetition renders the HUD half-width — the same
   un-fixed subtitle caveat; folds into the shared `q_x`-halving follow-up.
   (CRT-480i and all progressive modes are correct.)
 - ~~**No HUD on a VCD / clipped HUD on an SVCD in `Video Output = Progressive`**~~ —
-  **FIXED 2026-09-14** (the window section above). Residual by design: on a sub-544
+  **FIXED and ✅ HW-CONFIRMED 2026-09-14** (the window section above). Residual by design: on a sub-544
   window the status line renders at 1x pitch, so its glyphs are 8×32 source pixels
   rather than 16×32 — narrower relative to the picture than on a DVD, and taller than
   it is wide before ascal's scale.
