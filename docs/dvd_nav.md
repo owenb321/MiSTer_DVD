@@ -1148,9 +1148,105 @@ was right for everything a flush should forget (pending HLIs, timers, banks); th
 selection is a VM register that merely has a shadow here, and a shadow must be
 re-derived from its source after a reset, not from a constant.
 
-⚠ **Still open, same disc:** the Old Tyme Mining Town **Whac-A-Mole** minigame is a
-separate report and is NOT root-caused. It is not the deleted forced-ACTIVATE — `foac`
-reads 0 across every HLI on this disc.
+### A sequence of HLI windows is not a looping menu (2026-09-14)
+
+**The report (same disc, the Old Tyme Mining Town whack-a-mole, reader `PGCN 26`):** a
+monster appears, the player presses that direction, the core says MISS, plays the "all
+the monsters mock you" clip and restarts the round. Filed 2026-08-30 as "not
+root-caused"; it is not the deleted forced-ACTIVATE (`foac` reads 0 across this disc).
+
+**What the disc authors.** Cells 14–17 of `PGCN 26` are the four rounds (5 / 23 / 27 /
+27 s of video). Each is cut into consecutive HLI **time windows**: the window's own
+`hli_ss=1` NAV pack arrives one VOBU (~66 ms) before it starts, and every VOBU in
+between re-sends the same HLI as `hli_ss=2`. Cell 15's first four packs:
+
+| RBN | VOBU start | `hli_ss` | window `s_ptm..e_ptm` |
+|---|---|---|---|
+| 141675 | 8484 | **1** | 8484..98574 — nothing on screen (1.0 s) |
+| 141832 | 47523 | 2 | 8484..98574 |
+| 142009 | 92568 | **1** | 98574..455931 — monster LEFT (4.0 s) |
+| 142189 | 137613 | 2 | 98574..455931 |
+
+Every window carries the same five buttons — 1 left / 2 top / 3 right / 4 bottom, all
+`auto_action=1` (landing the highlight FIRES the command), and 5 the neutral centre with
+`fosl=5`. In a *nothing* window all four directions carry the same `LinkCN <miss cell>`;
+in a *monster* window the monster's direction carries the hit (`g[12]=0`, keep playing,
+or `LinkCN 7/8`). **The same button is a hit or a miss depending on which window is
+armed**, and the miss cell's own cell command restarts the round.
+
+**Root cause.** `nav_pci` has ONE pending slot and an earliest-`s_ptm`-wins park policy
+(the 2026-08-05 Matrix "dark with blips" fix), whose comment says a repeated commit is
+harmless because "identical content re-parks after each promote anyway". That is true of
+a **looping menu**, which re-sends one HLI for ever, and false of a disc that authors a
+**sequence**. Two rules were wrong for it:
+
+1. a continuation of the window already on screen re-parked it, with `nxt_pre=0` — no
+   authored time left to wait for, so only the ~1 s `PROMOTE_FALLBACK` could move it;
+2. a commit that could still be **scheduled** was held behind a pending one that could
+   only **time out**, because the pending's `s_ptm` was earlier.
+
+Together the armed set trailed the picture by up to ~1.5 s, jittering with the VBUF
+depth. A player reacting a few hundred ms after the monster appeared was still armed on
+the previous window, whose command for that direction is the miss. A *slow* press hit —
+which is why it reads as "it says I missed when I didn't".
+
+**The fix (`dvd/nav_pci.sv`)** is two wires and one re-added register:
+
+```systemverilog
+wire arm_is_cont    = armed && (f_ss == 2'd2) && (f_sptm == h_sptm);
+wire sched_outranks = nxt_v && !nxt_pre && ($signed(stc[31:0] - f_sptm) < 0);
+```
+
+`h_sptm` (the armed window's own `s_ptm`) was removed by the 2026-09-10 area pass as
+write-only; it is read again now, and telling the window ON SCREEN apart from the one
+being committed is the whole of the fix. ⚠ `hli_ss=3` is **not** suppressed — that is
+"same buttons, CHANGED commands" and must take effect — and a continuation while nothing
+is armed still parks, because a seek landing mid-window has only continuations to arm
+from.
+
+★★ **MEASUREMENT REVERSED THE STORY, AND THE PLAN HAD IT BACKWARDS.** The continuation
+re-park is the obvious culprit and reads like the whole bug; the mutation table says
+otherwise. `sched_outranks` alone fixes the reported case (mutation M4, which disables
+it, is the only one that reddens the headline arm); `arm_is_cont` alone does **not** — it
+leaves the next window's `ss=1` discarded behind a still-pending earlier window. What
+`arm_is_cont` owns is a late re-commit reaching the display at all (arm [F]) and the
+removal of a redundant promote-and-refetch roughly every second. Both changes are kept,
+each with an arm that owns it, but the headline belongs to `sched_outranks`.
+
+⚠ **`sched_outranks` keeps its `!nxt_pre` guard, and that guard is the Matrix rule.**
+Without it the policy degenerates into newest-schedulable-wins, which is exactly what
+"every VOBU overwrites the pending with a later start before it comes due" meant.
+Measured: it is a no-op for repeated identical content (those commits share an `s_ptm`,
+and `stc` only advances, so a later commit of the same window can never regain
+schedulability an earlier one lacked), so it can only matter for a genuine sequence.
+
+⏳ **Known residual, measured not argued (arm [G]): a round's FIRST window is
+fallback-timed.** The round is entered by a `LinkCN` seek, so that window is committed
+while the clock still measures the previous cell — `stc` is past its `s_ptm` before it
+arrives, the compare carries no information, and it reaches the screen on the ~1 s timer.
+Every later window is display-scheduled (+0 ms). On this disc the opening window of each
+round is a *nothing* window, so no input is lost. Tightening it means touching
+`hli_coherent`, which is what cost Harry Potter and Scene It their highlights
+(`docs/stc_freerun.md` §11, `nav_pci_tb` T18/T18b) — so it is bounded by the bench, not
+chased. Arm [I] is the control that makes the number readable: the same round entered
+with a low entry clock answers a press from the start.
+
+**Gate: `bench/dvd/run_hli_window.sh --red`.** `bench/dvd/hli_window_tb.sv` runs the real
+`nav_pci` over the real NAV packs (`bench/dvd/test_vobs/scooby_mole_pci.hex`, 14 sectors =
+4 windows) and **measures what the player experiences: press a direction at a display
+time, record which command fired.** It reads no signal the fix names, and the expected
+command comes from the fixture's own button records, so it cannot become a golden model
+that agrees with its RTL. It models the two clocks that matter — a display clock, and a
+parse front running a sweepable VBUF lead ahead of it, with the round entered on the
+previous cell's timeline and re-anchoring once. Arms [A]–[J]; five mutations, each
+required to fail EXACTLY its own arms (M1→F, M2→E2, M3→F, M4→A B, M5→J).
+
+⚠⚠ **A bench bug worth knowing, found by making the bench faster:** the scene clock had
+two drivers — a task's blocking reset and the tick process's nonblocking increment. At 3
+clk per tick the reset survived because the increment ran on one edge in three; at 1 clk
+per tick it was overwritten every edge, scenes never restarted their clock, and every
+press landed in the wrong window. It presented as "the fix regressed". The tick process
+owns the counter outright now, and the scene asserts it actually reset.
 
 ⚠ **HIL session 2026-09-14 (recorded here because its characterisation was what
 localised the bug):** driving the challenge live (HQ → mission hub → Wickles Manor
