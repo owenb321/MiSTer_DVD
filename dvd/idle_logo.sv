@@ -84,6 +84,12 @@ module idle_logo #(
     // bottom of the screen. emu.sv owns the value; pal_mode is still used for the
     // things that really are per-STANDARD rather than per-raster.
     input  wire [11:0] act_h_i,
+    // DVD-FORK (narrow DE window, 2026-09-14): the raster's ACTIVE WIDTH, same contract
+    // as act_h_i (h_pos space, owned by emu.sv as act_w_eff). The bounce box was a literal
+    // 720 wide, so on the PROGRESSIVE output a VCD (352) or SVCD (480) let the logo wander
+    // hundreds of pixels off the right of the picture -- and the logo is NOT idle-only:
+    // the screensaver and Stop both show it over a mounted title.
+    input  wire [11:0] act_w_i,
     input  wire        il_mode,           // il_eff: frame_tick is per-field
     input  wire        frame_tick,        // av_refresh_tick (one per v_sync)
     input  wire        vis,               // emu's logo_vis gate
@@ -238,11 +244,21 @@ wire il_mode_unused = il_mode;
 localparam [3:0] SPX_DEF = 4'd14;      // ~52 px/s @ 59.94: traverse ~9 s
 localparam [3:0] SPY_DEF = 4'd9;       // ~34 px/s: traverse ~12 s
 
-// on-screen (bounce-box) size: native or 2x per the logo's scale flag
-wire [11:0] w2 = u_scale1x ? {3'd0, u_w} : {2'd0, u_w, 1'b0};
-wire [11:0] h2 = u_scale1x ? {5'd0, u_h} : {4'd0, u_h, 1'b0};
-wire [11:0] x_hi = 12'd720 - w2;
-wire [11:0] y_hi = act_h_i - h2;
+// on-screen (bounce-box) size: native or 2x per the logo's scale flag.
+// ⚠ A 2x logo that cannot FIT the window renders native instead (scale1x_eff): the
+// maximum is 256x64 in the ROM = 512x128 at 2x, which does not fit a 352- or 480-wide
+// VCD/SVCD window, and a box wider than the screen has nowhere to bounce. u_scale1x
+// itself is ROM geometry and is deliberately NOT touched -- this is a display decision,
+// re-evaluated whenever the window changes.
+wire        scale1x_eff = u_scale1x | ({2'd0, u_w, 1'b0} > act_w_i)
+                                    | ({4'd0, u_h, 1'b0} > act_h_i);
+wire [11:0] w2 = scale1x_eff ? {3'd0, u_w} : {2'd0, u_w, 1'b0};
+wire [11:0] h2 = scale1x_eff ? {5'd0, u_h} : {4'd0, u_h, 1'b0};
+// The box is the ACTIVE WINDOW, and both bounds clamp: a logo larger than the window on
+// either axis pins that axis at 0 rather than underflowing to ~4095 (which would put the
+// bounce wall off-screen and the logo with it).
+wire [11:0] x_hi = (act_w_i > w2) ? act_w_i - w2 : 12'd0;
+wire [11:0] y_hi = (act_h_i > h2) ? act_h_i - h2 : 12'd0;
 
 wire [3:0] spx_eff_def = (u_spd == 8'd0) ? SPX_DEF : u_spd[3:0];
 wire [3:0] spy_eff_def = (u_spd == 8'd0) ? SPY_DEF : u_spd[7:4];
@@ -269,11 +285,13 @@ wire hit_y  = hit_y0 | hit_y1;
 
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-        pxq <= {12'd100, 4'd0};        // safe for any logo (100+2*128<=720)
-        pyq <= {12'd80,  4'd0};        // (80+2*32<=480, and <=240: the 240p raster's
-                                       //  y_hi bottoms out at 240-128 = 112 > 80, so
-                                       //  the reset position is inside the box there too
-                                       //  and y_hi cannot underflow -- act_h_i >= 240)
+        pxq <= {12'd100, 4'd0};        // safe for any logo on a full-width window
+        pyq <= {12'd80,  4'd0};        // (100+256<=720, 80+128<=480 and <=240)
+                                       // ⚠ On a NARROW window (a 352-wide VCD) the reset
+                                       // x can sit outside the box -- the first frame tick
+                                       // clamps it (hit_x1 pins pxq to x_hi), so it costs
+                                       // at most one frame of a few clipped pixels and
+                                       // needs no reset-time knowledge of the window.
         vxn <= 1'b0; vyn <= 1'b0;
         spx <= SPX_DEF; spy <= SPY_DEF;
         cidx <= 3'd0;
@@ -361,8 +379,8 @@ always @(posedge clk or negedge rst_n) begin
     end else begin
         // A
         s0_in <= vis && inx && iny;
-        s0_lx <= u_scale1x ? hx[7:0] : hx[8:1];   // native vs 2x render
-        s0_ly <= u_scale1x ? vy[5:0] : vy[6:1];
+        s0_lx <= scale1x_eff ? hx[7:0] : hx[8:1];   // native vs 2x render
+        s0_ly <= scale1x_eff ? vy[5:0] : vy[6:1];
         // B (ROM read is outside the reset tree -- see below)
         s1_in  <= s0_in;
         s1_sel <= s0_lx[3:0];

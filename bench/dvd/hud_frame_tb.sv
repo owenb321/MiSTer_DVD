@@ -10,6 +10,16 @@
 // Checks: field-pass identity; text pixels present (white + outline + backing
 // counts within sane bounds); nothing rendered outside the status-row box.
 //
+// DVD-FORK (narrow DE window, 2026-09-14): the frame buffer stays 720x480 while the
+// DECLARED window (act_w_i/act_h_i) shrinks, so "nothing outside the box" becomes a real
+// measurement of what a 352- or 480-wide picture would receive rather than an assumption
+// that something downstream clips. Two further arms:
+//   [narrow]  the box re-centres inside the declared window and the rows stay inside it
+//   [double]  the 1x render IS the 2x render with each column PAIR collapsed -- which is
+//             what makes "narrow just changes the pitch" a measurement and not a claim.
+//             It compares two renders of the SAME text, so it cannot be satisfied by a
+//             module that merely draws something narrow.
+//
 // Run: iverilog -g2012 -o /tmp/hudf_sim dvd/transport_hud.sv dvd/subpic_blend.sv \
 //        bench/dvd/hud_frame_tb.sv && vvp /tmp/hudf_sim   (from the repo root)
 `timescale 1ns/1ps
@@ -35,11 +45,20 @@ module hud_frame_tb;
     // drives the 240p/288p arm, where the module must bottom-anchor to 240/288 instead.
     integer     act_h_arg = 0;
     initial     void'($value$plusargs("act_h=%d", act_h_arg));
-    wire [11:0] act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0]
-                                            : (1'b0 ? 12'd576 : 12'd480);
+    // DVD-FORK (narrow DE window, 2026-09-14): the declared window is DRIVEN, not tied, so
+    // one run can render the same text at two widths and compare them ([double]).
+    // +act_w=N / +act_h=N pick the window the run STARTS at (defaults 720x480 = every
+    // pre-existing arm, bit-identical).
+    integer     act_w_arg = 0;
+    initial     void'($value$plusargs("act_w=%d", act_w_arg));
+    reg  [11:0] act_w_tb, act_h_tb;
+    initial begin
+        act_w_tb = (act_w_arg != 0) ? act_w_arg[11:0] : 12'd720;
+        act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0] : 12'd480;
+    end
     transport_hud #(.HUD_QX_ADJ(ADJ)) dut (
         .clk(clk), .rst_n(rst_n),
-        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0), .act_h_i(act_h_tb),
+        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0), .act_h_i(act_h_tb), .act_w_i(act_w_tb),
         .menu_active(1'b0), .pause_q(1'b0), .bar_active(1'b0),
         .scrub_held(1'b0), .scrub_dir(1'b0), .scrub_tier(2'd0),
         .display_edge(display_edge), .load_evt(1'b0), .show_evt(1'b0),
@@ -94,39 +113,45 @@ module hud_frame_tb;
     integer n_white, n_black, n_back, n_out;
     integer fh;
 
-    initial begin
-        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; repeat (4) @(posedge clk);
-        // persistent mode on + an audio popup (its 2.5 s outlasts the ~13 ms
-        // of simulated raster time); let the formatter complete a pass
-        display_edge = 1; aud_evt = 1; @(posedge clk);
-        display_edge = 0; aud_evt = 0;
-        repeat (100) @(posedge clk);
+    // the module's own layout rule, restated here as the BENCH's expectation. It is the
+    // one thing a bench of this kind must not read out of the DUT, so it is written from
+    // the design (a centred box, 512 px above the 544 knee and 256 below it) and every
+    // arm below is scored against it.
+    function [11:0] box_w(input [11:0] aw); box_w = (aw >= 12'd544) ? 12'd512 : 12'd256; endfunction
+    function [11:0] box_x0(input [11:0] aw); box_x0 = (aw - box_w(aw)) >> 1; endfunction
 
-        // pass 0: progressive scan
+    // fb index == hq == h_pos + HUD_QX_ADJ, so the box occupies fb columns [x0, x0+w).
+    reg [23:0] fbr [0:W*H-1];              // kept reference render (for [double])
+    integer    ref_x0, ref_w;
+
+    // render the current window into fb (progressive) + fb2 (field order) and check
+    // field identity, the box bounds against the DECLARED window, and content counts.
+    task render_and_check(input [8*10-1:0] tag);
+        integer bx0, bw, by0, by0p, e0;
+    begin
+        bx0 = box_x0(act_w_tb); bw = box_w(act_w_tb);
+        by0 = act_h_tb - 64;  by0p = act_h_tb - 112;
+        e0 = errors;
+
         for (y = 0; y < H; y = y + 1) scan_line(y, 0);
-
-        // pass 1: field order (even lines then odd lines)
         for (y = 0; y < H; y = y + 2) scan_line(y, 1);
         for (y = 1; y < H; y = y + 2) scan_line(y, 1);
 
-        // identity check
         for (i = 0; i < W*H; i = i + 1)
             if (fb[i] !== fb2[i]) begin
-                if (errors < 5)
-                    $display("  FAIL field mismatch at (%0d,%0d): %06x vs %06x",
-                             i % W, i / W, fb[i], fb2[i]);
+                if (errors - e0 < 5)
+                    $display("  FAIL [%0s] field mismatch at (%0d,%0d): %06x vs %06x",
+                             tag, i % W, i / W, fb[i], fb2[i]);
                 errors = errors + 1;
             end
-        if (errors == 0) $display("  ok  field-order pass identical (interlace-safe)");
+        if (errors == e0) $display("  ok  [%0s] field-order pass identical (interlace-safe)", tag);
 
-        // content sanity: count pixel classes inside/outside the two rows
-        // (status y 416..447, popup y 368..399; both x 104..615)
         n_white = 0; n_black = 0; n_back = 0; n_out = 0;
         for (y = 0; y < H; y = y + 1)
             for (x = 0; x < W; x = x + 1) begin
                 i = y*W + x;
-                if (!((y >= 416 && y < 448) || (y >= 368 && y < 400)) ||
-                    x < 104 || x >= 616) begin
+                if (!((y >= by0 && y < by0 + 32) || (y >= by0p && y < by0p + 32)) ||
+                    x < bx0 || x >= bx0 + bw) begin
                     if (fb[i] !== 24'h606060) n_out = n_out + 1;
                 end else begin
                     if (fb[i] == 24'hFFFFFF)      n_white = n_white + 1;
@@ -134,25 +159,47 @@ module hud_frame_tb;
                     else if (fb[i] != 24'h606060) n_back  = n_back  + 1;
                 end
             end
+        // ★ The box is inside the DECLARED window, so this also proves nothing is drawn
+        //   where a narrow picture has no pixels -- the reported VCD/SVCD defect exactly.
         if (n_out != 0) begin
             errors = errors + 1;
-            $display("  FAIL %0d pixels rendered OUTSIDE the status box", n_out);
-        end else $display("  ok  nothing outside the status box");
-        // 29 active cells * 16x32 = 14848 px; text fill is a modest fraction
+            $display("  FAIL [%0s] %0d pixels rendered OUTSIDE the box (x %0d..%0d, window %0dx%0d)",
+                     tag, n_out, bx0, bx0 + bw - 1, act_w_tb, act_h_tb);
+        end else $display("  ok  [%0s] nothing outside the box (x %0d..%0d in a %0dx%0d window)",
+                          tag, bx0, bx0 + bw - 1, act_w_tb, act_h_tb);
+        if (bx0 + bw > act_w_tb || by0 + 32 > act_h_tb) begin
+            errors = errors + 1;
+            $display("  FAIL [%0s] the box itself does not fit the window", tag);
+        end
+        // 29 active cells; the counts roughly halve at the 1x pitch, so the bounds are
+        // loose on purpose -- the exact-pixel claim is [double], not this.
         if (n_white < 500 || n_white > 8000) begin
             errors = errors + 1;
-            $display("  FAIL white fill count %0d out of range", n_white);
-        end else $display("  ok  fill=%0d outline=%0d backing=%0d", n_white, n_black, n_back);
+            $display("  FAIL [%0s] white fill count %0d out of range", tag, n_white);
+        end else $display("  ok  [%0s] fill=%0d outline=%0d backing=%0d", tag, n_white, n_black, n_back);
         if (n_black < 500) begin
             errors = errors + 1;
-            $display("  FAIL outline count %0d too low", n_black);
+            $display("  FAIL [%0s] outline count %0d too low", tag, n_black);
         end
         if (n_back < 2000) begin
             errors = errors + 1;
-            $display("  FAIL backing count %0d too low", n_back);
+            $display("  FAIL [%0s] backing count %0d too low", tag, n_back);
         end
+    end
+    endtask
 
-        // PPM dump for eyeball inspection
+    integer k, j, bad, yy, wsel;
+    initial begin
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; repeat (4) @(posedge clk);
+        // persistent mode on + an audio popup (its 2.5 s outlasts the ~50 ms
+        // of simulated raster time); let the formatter complete a pass
+        display_edge = 1; aud_evt = 1; @(posedge clk);
+        display_edge = 0; aud_evt = 0;
+        repeat (100) @(posedge clk);
+
+        render_and_check("window");
+
+        // PPM dump for eyeball inspection (the run's starting window)
         fh = $fopen("bench/dvd/hud_frame.ppm", "w");
         $fwrite(fh, "P3\n%0d %0d\n255\n", W, H);
         for (i = 0; i < W*H; i = i + 1)
@@ -160,8 +207,55 @@ module hud_frame_tb;
         $fclose(fh);
         $display("  wrote bench/dvd/hud_frame.ppm");
 
-        if (errors == 0) $display("HUD_FRAME_TB: ALL TESTS PASSED");
-        else             $display("HUD_FRAME_TB: FAILED (%0d errors)", errors);
-        $finish;
+        // ---- [narrow] + [double] ------------------------------------------
+        // Keep this render, then re-render the SAME text in each real narrow window and
+        // require the narrow one to be the wide one with every column PAIR collapsed.
+        // ★ This is the arm that separates "draws something narrow" from "draws the same
+        //   line at half the pitch": a box that kept the 2x pitch shows only the first 16
+        //   cells, and a box drawn at half scale but not re-mapped shows the left half of
+        //   the text. Both sit entirely inside the window and pass every count check.
+        // Skipped when the run already started narrow -- the wide reference does not exist.
+        if (act_w_tb >= 12'd544) begin
+            for (i = 0; i < W*H; i = i + 1) fbr[i] = fb[i];
+            ref_x0 = box_x0(act_w_tb);
+
+            for (wsel = 0; wsel < 2; wsel = wsel + 1) begin
+                act_w_tb = (wsel == 0) ? 12'd352 : 12'd480;   // VCD, then SVCD
+                repeat (4) @(posedge clk);
+                render_and_check(wsel == 0 ? "vcd 352" : "svcd 480");
+
+                bad = 0;
+                for (j = 0; j < 2; j = j + 1)
+                    for (yy = 0; yy < 32; yy = yy + 1)
+                        for (k = 0; k < 256; k = k + 1) begin
+                            y = (j == 0 ? (act_h_tb - 64) : (act_h_tb - 112)) + yy;
+                            if (fb [y*W + box_x0(act_w_tb) + k] !== fbr[y*W + ref_x0 + 2*k] ||
+                                fb [y*W + box_x0(act_w_tb) + k] !== fbr[y*W + ref_x0 + 2*k + 1]) begin
+                                if (bad == 0)
+                                    $display("  first doubling mismatch (window %0d) row %0d y=%0d k=%0d: 1x %06x vs 2x %06x/%06x",
+                                             act_w_tb, j, y, k, fb[y*W + box_x0(act_w_tb) + k],
+                                             fbr[y*W + ref_x0 + 2*k], fbr[y*W + ref_x0 + 2*k + 1]);
+                                bad = bad + 1;
+                            end
+                        end
+                if (bad != 0) begin
+                    errors = errors + 1;
+                    $display("  FAIL [double %0d] %0d of 16384 columns differ between the 1x render and the collapsed 2x render",
+                             act_w_tb, bad);
+                end else
+                    $display("  ok  [double %0d] the 1x render is the 2x render with each column pair collapsed",
+                             act_w_tb);
+            end
+        end
+
+        // ⚠ $fatal, NOT $finish: vvp exits 0 on $finish, so a runner that scores the
+        // exit code sees a FAILING bench as a passing one -- which is exactly how the
+        // bench/ac3 suites went silently red for weeks (docs/ac3_decoder_architecture.md
+        // §4.11), and it makes every RED arm in bench/dvd/run_ov_geom.sh vacuous.
+        if (errors == 0) begin
+            $display("HUD_FRAME_TB: ALL TESTS PASSED");
+            $finish;
+        end else
+            $fatal(1, "HUD_FRAME_TB: FAILED (%0d errors)", errors);
     end
 endmodule

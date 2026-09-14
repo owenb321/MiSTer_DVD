@@ -61,9 +61,15 @@ module transport_hud_tb;
     initial     void'($value$plusargs("act_h=%d", act_h_arg));
     wire [11:0] act_h_tb = (act_h_arg != 0) ? act_h_arg[11:0]
                                             : (pal_mode ? 12'd576 : 12'd480);
+    // DVD-FORK (narrow DE window, 2026-09-14): the raster's ACTIVE WIDTH is now an INPUT
+    // too. Defaults to 720 so every pre-existing arm is bit-identical; +act_w=N drives the
+    // narrow-window arms (VCD 352, SVCD 480), where the box must shrink and re-centre.
+    integer     act_w_arg = 0;
+    initial     void'($value$plusargs("act_w=%d", act_w_arg));
+    wire [11:0] act_w_tb = (act_w_arg != 0) ? act_w_arg[11:0] : 12'd720;
     transport_hud #(.SHOW_TICKS(27'd2000)) dut (
         .clk(clk), .rst_n(rst_n),
-        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(pal_mode), .act_h_i(act_h_tb),
+        .h_pos(h_pos), .v_pos(v_pos), .pal_mode(pal_mode), .act_h_i(act_h_tb), .act_w_i(act_w_tb),
         .menu_active(menu_active), .dbg_mode(1'b0), .pause_q(pause_q), .bar_active(bar_active),
         .scrub_held(scrub_held), .scrub_dir(scrub_dir), .scrub_tier(scrub_tier),
         .display_edge(display_edge), .load_evt(load_evt), .show_evt(show_evt),
@@ -497,8 +503,14 @@ module transport_hud_tb;
         @(posedge clk); ab_evt = 1; @(posedge clk); ab_evt = 0;
         check_popup("T24c cleared", "A-B  OFF~~~~~~~~~~~~~~~~~~~~~~~~");
 
-        if (errors == 0) $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
-        else             $display("TRANSPORT_HUD_TB: FAILED (%0d errors)", errors);
-        $finish;
+        // ⚠ $fatal, NOT $finish: vvp exits 0 on $finish, so a runner that scores the
+        // exit code sees a FAILING bench as a passing one -- which is exactly how the
+        // bench/ac3 suites went silently red for weeks (docs/ac3_decoder_architecture.md
+        // §4.11), and it makes every RED arm in bench/dvd/run_ov_geom.sh vacuous.
+        if (errors == 0) begin
+            $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
+            $finish;
+        end else
+            $fatal(1, "TRANSPORT_HUD_TB: FAILED (%0d errors)", errors);
     end
 endmodule

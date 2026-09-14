@@ -135,7 +135,10 @@ def main():
                      "idle_logo shows over LIVE content via the screensaver and Stop)"
                      % n_act)
 
-    want("act_h_eff", r"wire \[11:0\] act_h_eff = p240_eff \? \(pal_eff \? 12'd288 : 12'd240\)",
+    # ⚠ act_h_eff became the DE WINDOW rather than the raster resolution when the narrow-
+    # window fix landed (2026-09-14, tools/check_ov_geom_wiring.py owns the full rule).
+    # What this file still owns is the 240p half: the RESOLUTION term it is built on.
+    want("act_vres", r"wire \[11:0\] act_vres += p240_eff \? \(pal_eff \? 12'd288 : 12'd240\)",
          "the active height must be 240/288 on the progressive raster")
 
     want("half_scan", r"p240_dec_l \? \(pal_dec_l \? 16'd899 : 16'd749\)",

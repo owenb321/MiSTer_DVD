@@ -337,8 +337,18 @@ wire fields_eff = interlaced_eff & ~p240_eff;
 // `saver_on_w || stopped_w || (!media_seen && ...)`, so the SCREENSAVER and STOP both show
 // the logo over a mounted, playing title -- i.e. over a SIF disc in 240p. Two ordinary,
 // reachable states, not just the boot screen.
-wire [11:0] act_h_eff = p240_eff ? (pal_eff ? 12'd288 : 12'd240)
-                                 : (pal_eff ? 12'd576 : 12'd480);
+// ★★ AND THE SAME ASYMMETRY ON THE OTHER AXIS (2026-09-14): the DE window is not a
+// property of the RASTER, it is min(decoded size, raster resolution) -- rtl/mpeg2/syncgen.v
+// blanks on `h_cntr >= horizontal_resolution || h_cntr >= h_size`, and h_size/v_size are the
+// SEQUENCE HEADER's sizes. The fills that widen a sub-720 picture back out (sif_hfill_eff,
+// sif_v2x_eff, and this raster) are all gated on interlaced_eff, so on the PROGRESSIVE
+// (HDMI) path a VCD really does present a 352x240 window and an SVCD a 480x480 one --
+// ascal then scales that window full-screen. The overlays were authored against a fixed
+// 720x480 frame, so the HUD fell off the bottom of a VCD entirely and off the right of an
+// SVCD. Both values are therefore the WINDOW, not the raster; see the assigns beside the
+// SIF detect below, where the terms they need are in scope.
+wire [11:0] act_h_eff;
+wire [11:0] act_w_eff;
 assign VGA_F1       = fields_eff ? core_v_pos[0] : 1'b0;   // 0 = TOP field (see above); 240p has no field
 assign VGA_SL       = 0;
 // DVD-FORK (dual-raster analog output): VGA_SCALER is never forced any more —
@@ -624,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-p240"
+`define CORE_VERSION "dev-hudnarrow"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -4771,6 +4781,28 @@ always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin vsz_s1 <= 14'd480; vsz_s2 <= 14'd480; end
     else          begin vsz_s1 <= core_vertical_size; vsz_s2 <= vsz_s1; end
 end
+// DVD-FORK FIX (overlay geometry on a narrow DE window, 2026-09-14): the ACTIVE WINDOW
+// the overlays must anchor to, declared far above (near fields_eff) and assigned here
+// because every term it needs is in scope only now. This REPLICATES syncgen's own rule --
+// `(size != 0) ? size : resolution`, then blanked at whichever of the two comes first --
+// so it is min(decoded size, raster resolution), with a size of 0 (idle, or straight after
+// a flush) meaning the full raster.
+//  - act_vres is the modeline's ACTIVE COUNT, matching the VERT_RES the walk writes.
+//  - vsz_eff / the hfill term are the SAME forward transforms mpeg2video applies
+//    (eff_vertical_size / eff_horizontal_size, rtl/mpeg2/mpeg2video.v) -- when a fill is on,
+//    the window is the filled size, not the decoded one.
+//  - act_w_eff is in OVERLAY coordinates, which is ov_h_gen's space: pixel repetition is on
+//    for both 15 kHz rasters and ov_h_gen halves it, so a filled (or >=720) picture is 720
+//    there whether or not pixrep doubled the dots. Every pre-existing case reduces to the
+//    old constants -- DVD 480/576, 240p 240/288, idle = the full raster -- so only sub-720
+//    PROGRESSIVE content moves, which is exactly the reported set.
+wire [11:0] act_vres  = p240_eff ? (pal_eff ? 12'd288 : 12'd240)
+                                 : (pal_eff ? 12'd576 : 12'd480);
+wire [13:0] vsz_eff   = sif_v2x_eff ? {vsz_s2[12:0], 1'b0} : vsz_s2;
+assign      act_h_eff = (vsz_eff == 14'd0 || vsz_eff >= {2'b0, act_vres}) ? act_vres
+                                                                         : vsz_eff[11:0];
+assign      act_w_eff = (sif_hfill_eff || hsz_s2 == 14'd0 || hsz_s2 >= 14'd720) ? 12'd720
+                                                                                : hsz_s2[11:0];
 // DVD-FORK FIX (SIF analog fill): the overlay-inverse geometry now describes whichever
 // horizontal remap is active. Crop off => hcrop_mb = 0 (window origin 0, full width);
 // the stretch target (ov_hdst_w) is 720 whenever the SIF fill is on. crt_ov_map's
@@ -5819,6 +5851,7 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .v_pos        (core_v_pos),
     .pal_mode     (pal_eff),
     .act_h_i      (act_h_eff),
+    .act_w_i      (act_w_eff),
     .menu_active  (menus_on && menu_active),
     .dbg_mode     (hud_dbg),                // O[2]: show reader PGCN/VTS, always visible
     .pause_q      (pause_q),
@@ -5914,6 +5947,7 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .v_pos      (core_v_pos),
     .pal_mode   (pal_eff),
     .act_h_i    (act_h_eff),
+    .act_w_i    (act_w_eff),
     .bar_active (bar_active_w),
     .base_rbn   (bar_base_rbn_w),
     .tgt_rbn    (bar_tgt_rbn_w),
@@ -5998,6 +6032,7 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .v_pos          (core_v_pos),
     .pal_mode       (pal_eff),
     .act_h_i        (act_h_eff),
+    .act_w_i        (act_w_eff),
     .il_mode        (il_eff),
     .frame_tick     (av_refresh_tick),
     .vis            (logo_vis),
