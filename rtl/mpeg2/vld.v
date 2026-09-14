@@ -1150,16 +1150,6 @@ module vld(clk, clk_en, rst,
       cc_pair_valid <= 1'b0;
       cc_pair       <= 16'd0;
       cc_pair_field <= 1'b0;
-    end else if (clk_en && flush_resync) begin
-      /* DVD-FORK FIX (quant matrix): ⚠ this snoop walks user_data bytes for as
-       * long as the FSM stays in STATE_NEXT_START_CODE -- which the flush
-       * resync now PINS it at. A flush landing mid-user_data would otherwise
-       * keep sniffing across the junction and could synthesise a caption pair
-       * out of two unrelated streams. A flush IS a discontinuity mid-user_data. */
-      cc_pair_valid <= 1'b0;
-      ud_active     <= 1'b0;
-      ud_hit        <= 2'd0;
-      ud_sig        <= 4'd0;
     end else if (clk_en) begin
       cc_pair_valid <= 1'b0;                      // default: single-cycle pulse
       if (state == STATE_START_CODE) begin
@@ -1437,20 +1427,11 @@ module vld(clk, clk_en, rst,
    * its loadreg latches at STATE_PICTURE_HEADER. Self-clears at the next picture. */
   always @(posedge clk)
     if (~rst) skip_d_picture <= 1'b0;
-    /* DVD-FORK FIX (quant matrix): same routing hazard, MPEG-1 D-picture path. */
-    else if (clk_en && flush_resync) skip_d_picture <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_HEADER0)) skip_d_picture <= mpeg1 && (picture_coding_type == D_TYPE);
     else skip_d_picture <= skip_d_picture;
 
   always @(posedge clk)
     if (~rst) picture_header_seen <= 1'b0;
-    /* DVD-FORK FIX (quant matrix): the only flag whose stale value admits a
-     * slice into a STALE picture header across the junction -- it otherwise
-     * clears only at STATE_SEQUENCE_END, which a seek never produces. Safe to
-     * clear: a landing begins SEQ/GOP/PIC, so its own picture header re-sets
-     * this before its first slice, and `mpeg1` (:1372) does not read it.
-     * Gate: bench/dvd/run_seek_realign.sh must pass with its numbers unmoved. */
-    else if (clk_en && flush_resync) picture_header_seen <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_HEADER)) picture_header_seen <= 1'b1;
     else if (clk_en && (state == STATE_SEQUENCE_END)) picture_header_seen <= 1'b0;
     else picture_header_seen <= picture_header_seen;
@@ -2489,11 +2470,6 @@ module vld(clk, clk_en, rst,
    * skipped that would have displayed). */
   always @(posedge clk)
     if (~rst) drop_this_picture <= 1'b0;
-    /* DVD-FORK FIX (quant matrix): a stale drop verdict routes the LANDING's
-     * slice start codes to STATE_NEXT_START_CODE, i.e. it would skip the
-     * picture we just re-synced to. Inert for issue #45: the same vbuf_flush
-     * sets ra_active, which re-latches this at the next picture header. */
-    else if (clk_en && flush_resync) drop_this_picture <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_HEADER)) drop_this_picture <= drop_now_comb || realign_now_comb;
     else drop_this_picture <= drop_this_picture;
 
@@ -2507,9 +2483,6 @@ module vld(clk, clk_en, rst,
    * reasons); only the ack keys on this. */
   always @(posedge clk)
     if (~rst) drop_gov_picture <= 1'b0;
-    /* ...and its ledger twin, or a post-flush drop_pic_ack pays a credit into
-     * frame_drop_ctl for a picture the governor never asked to drop. */
-    else if (clk_en && flush_resync) drop_gov_picture <= 1'b0;
     else if (clk_en && (state == STATE_PICTURE_HEADER)) drop_gov_picture <= drop_now_comb;
     else drop_gov_picture <= drop_gov_picture;
 
