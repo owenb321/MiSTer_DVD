@@ -377,3 +377,41 @@ Ten registers (`ra_active`, `ra_anchors[1:0]`, `ra_hdrs[5:0]`, `drop_gov_picture
 few LUTs, all inside the once-per-picture `STATE_PICTURE_HEADER` decision cone, which has
 enormous slack. It should not move the limiter — but the netlist changes, so the pinned
 fitter SEED is a fresh roll regardless. See the `DVD.qsf` ledger entry.
+
+---
+
+## Cross-reference: `vbuf_flush` now has a SECOND consumer in the vld (2026-09-13)
+
+`docs/quant_matrix.md` once added a `flush_resync` register beside `ra_active` in
+`rtl/mpeg2/vld.v` (a forced `STATE_NEXT_START_CODE` for the flush window). ⛔ **It is
+REVERTED** — it regressed on hardware into luma-in-chroma garbage (§9–§10 there). The
+quantiser-matrix fix is now a decoder SOFT RESET on VM jumps in `flush_ctl` (§11), which
+this document's `ra_active` arm never sees because the vld is in reset for those flushes;
+`ra_active` remains the whole story for transport seeks.
+
+Two things here that a reader of this document alone would get wrong:
+
+- **The re-align arm is about stale REFERENCES; the new one is about a stale PARSER.** A
+  flush discarded the buffered bitstream and nothing else — including nothing about where
+  the VLD's state machine stood. It resumed mid-picture and consumed the landing's leading
+  bytes in that stale state.
+- ⚠ **`seek_realign_tb.sv` carries a comment saying cut B's own sequence header "is usually
+  eaten and NOT re-parsed".** That was an accurate description of the defect, not of
+  desired behaviour. After the quant-matrix fix the landing's sequence header **is**
+  re-parsed; the comment has been updated. The suite's own numbers are unchanged, which is
+  the evidence the re-align accounting did not move.
+
+`mpeg2video.v` also moves `getbits_fifo` onto `vbuf_rst`, so the bit window no longer
+survives a flush holding bytes of the discarded stream. That is what the byte-consumption
+argument in `docs/quant_matrix.md` §3.1 rests on.
+
+---
+
+**Amended 2026-09-14 (`docs/quant_matrix.md` §11).** `flush_ctl` now fires the decoder
+SOFT RESET (`soft_flush -> mpeg2video.soft_flush -> reset.soft_rst_n`, the mount path)
+on a `~keep_vbuf` **VM jump** — menu entry/exit and the First Play chain. That path
+therefore no longer holds the last frame; it cuts to black and restarts the pipeline
+cold, so the realign drop logic in `vld.v` never sees those flushes (it is in reset).
+**Transport seeks are untouched**: `seek_ack` still flushes without a soft reset and
+the two-anchor realign above is still what holds the frame across a chapter skip.
+`run_seek_realign.sh` is the gate that this stayed true.

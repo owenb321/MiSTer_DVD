@@ -82,7 +82,7 @@ module intra_quant_matrix(clk, rst, rd_addr, rd_clk_en, dta_out, wr_addr, dta_in
       case (state)
         STATE_INIT:  iquant_wr_addr <= 6'b0;
 	STATE_CLEAR: iquant_wr_addr <= iquant_wr_addr + 6'b1;
-	STATE_RUN:   iquant_wr_addr <= scan_reverse(alternate_scan, wr_addr);
+	STATE_RUN:   iquant_wr_addr <= scan_reverse(1'b0, wr_addr);   // DVD-FORK FIX: always scan 0, see below
 	default      iquant_wr_addr <= 6'b0;
       endcase
 
@@ -122,6 +122,30 @@ module intra_quant_matrix(clk, rst, rd_addr, rd_clk_en, dta_out, wr_addr, dta_in
     par. 6.3.11: when sequence_header_code is decoded all matrices shall be reset to their default values.
     par. 7.3.1: inverse scan for quantization matrix download: 
     the quantisation matrix is sent in zigzag (scan 0) order, so here we un-zigzag it using scan0_reverse.
+
+    DVD-FORK FIX (docs/quant_matrix.md): the code used to pass the LIVE
+    `alternate_scan` to scan_reverse() -- contradicting the sentence directly
+    above, which was right all along. At download time that register still holds
+    the PREVIOUS picture's value (the sequence header is parsed before this
+    sequence's picture coding extension), so a menu whose download follows an
+    alternate_scan=1 title had its matrix stored PERMUTED. The read side is not
+    symmetric and never was: rld.v un-zigzags the read address with the CURRENT
+    picture's quant_alternate_scan, so the RAM is indexed in raster (u,v) order
+    and the write must therefore always use scan 0.
+
+    Measured exposure (tools/qmatrix_scan.py over 957 images): 480 discs pair a
+    VARIED download with an alternate_scan=1 title. It is invisible on a FLAT
+    matrix -- zigzag index 0 maps to raster 0 under both scans and every other
+    entry is interchangeable -- which is why the disc that exposed the companion
+    flush defect could not show this one, and why bench/dvd/run_quant_matrix.sh
+    patches a 64-distinct-value matrix in (tools/quant_fixture.py --matrix-probe)
+    to test it at all.
+
+    ⚠ The `alternate_scan` PORT is deliberately left in place though nothing now
+    reads it: bench/dvd/quant_matrix_tb.sv instantiates this module, and a bench
+    cannot be compiled against both a module that has the port and one that does
+    not. The guard against the bug returning is the bench arm, not the absence of
+    the port. Do not re-introduce a read of it here.
   */
 
   dpram_sc
@@ -225,7 +249,7 @@ module intra_quant_matrix(clk, rst, rd_addr, rd_clk_en, dta_out, wr_addr, dta_in
     else if (wr_clk_en && wr_en) $display("%m\tset to uploaded table");
 
   always @(posedge clk)
-    if (wr_clk_en && wr_en) #0 $display("%m\twrite %h to %h (was %h)", dta_in, scan_reverse(alternate_scan, wr_addr), wr_addr);
+    if (wr_clk_en && wr_en) #0 $display("%m\twrite %h to %h (was %h)", dta_in, scan_reverse(1'b0, wr_addr), wr_addr);
 
 `endif 
 
@@ -291,7 +315,7 @@ module non_intra_quant_matrix(clk, rst, rd_addr, rd_clk_en, dta_out, wr_addr, dt
       case (state)
         STATE_INIT:  non_iquant_wr_addr <= 6'b0;
 	STATE_CLEAR: non_iquant_wr_addr <= non_iquant_wr_addr + 6'b1;
-	STATE_RUN:   non_iquant_wr_addr <= scan_reverse(alternate_scan, wr_addr);
+	STATE_RUN:   non_iquant_wr_addr <= scan_reverse(1'b0, wr_addr); // DVD-FORK FIX: always scan 0, see below
 	default      non_iquant_wr_addr <= 6'b0;
       endcase
 
@@ -351,7 +375,7 @@ module non_intra_quant_matrix(clk, rst, rd_addr, rd_clk_en, dta_out, wr_addr, dt
     else if (wr_clk_en && wr_en && (wr_addr == 6'h3f)) $display("%m\tset to uploaded table");
 
   always @(posedge clk)
-    if (wr_clk_en && wr_en) #0 $display("%m\twrite %h to %h (was %h)", dta_in, scan_reverse(alternate_scan, wr_addr), wr_addr);
+    if (wr_clk_en && wr_en) #0 $display("%m\twrite %h to %h (was %h)", dta_in, scan_reverse(1'b0, wr_addr), wr_addr);
 
 `endif 
 

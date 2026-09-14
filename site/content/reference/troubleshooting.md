@@ -290,8 +290,10 @@ from your `MiSTer.ini`.
 ### The picture blocks up briefly right after a chapter skip or seek
 
 The picture freezes on the last frame, then cuts to the new position with about **one**
-misaligned frame in between. That is expected on every disc and every way of jumping:
-chapter skip, Fast Fwd / Rewind, D-Pad Seek, and entering or leaving a menu.
+misaligned frame in between. That is expected on every disc and every transport jump:
+chapter skip, Fast Fwd / Rewind and D-Pad Seek. Entering or leaving a disc menu is
+different: the picture cuts to black for a moment and the menu (or the title) starts
+clean, the way a set-top player does.
 
 Report it if you see the old scene *moving* through the new one, if the blocking lasts
 appreciably longer than a frame, or if the picture does not recover on its own.

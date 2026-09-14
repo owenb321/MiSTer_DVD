@@ -19,8 +19,11 @@
 //   disc_rephase (content PTS jump)         -     -     -     -        x
 //   disc_rephase & cell_seamless            -     -     -     -        -
 //
-// mount_flush = the decoder soft-reset request (mpeg2video.soft_flush): fires on a
-// MOUNT ONLY, never on seeks/jumps/mode switches (those need display continuity).
+// mount_flush = MOUNT ONLY (pal_detect's immediate PAL re-arm: a mount is the one event
+// that may change the standard). soft_flush = the decoder soft-reset request
+// (mpeg2video.soft_flush): a mount OR a ~keep_vbuf VM jump (menu entry/exit --
+// docs/quant_matrix.md §11), never a transport seek or a mode switch (a chapter
+// skip keeps its held frame). Row [4] is the one that goes RED on the pre-fix module.
 //
 // Plus: reset clears everything; every flush level is exactly 64 cycles;
 // pipe_rst_n = rst_n & ~load_flush; aud_rst_n = rst_n & ~aud_flush & ~aud_resync.
@@ -37,7 +40,7 @@ module flush_ctl_tb;
   reg  start_streaming = 0, seek_ack = 0, jump_ack = 0;
   reg  mode_switch = 0, aud_switch = 0, keep_vbuf = 0, disc_rephase = 0;
   reg  cell_seamless = 0;
-  wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
+  wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush, soft_flush;
   wire pipe_rst_n, aud_rst_n;
 
   flush_ctl dut (
@@ -56,6 +59,7 @@ module flush_ctl_tb;
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
     .mount_flush     (mount_flush),
+    .soft_flush      (soft_flush),
     .pipe_rst_n      (pipe_rst_n),
     .aud_rst_n       (aud_rst_n)
   );
@@ -63,7 +67,7 @@ module flush_ctl_tb;
   always #10 clk = ~clk;             // 50 MHz-ish; frequency is irrelevant
 
   integer errors = 0;
-  integer n_load, n_aud, n_seek, n_resync, n_mount;
+  integer n_load, n_aud, n_seek, n_resync, n_mount, n_soft;
 
   task fail(input [8*64-1:0] msg);
     begin
@@ -75,8 +79,8 @@ module flush_ctl_tb;
   // Expect all four outputs idle.
   task expect_idle(input [8*64-1:0] ctx);
     begin
-      if (load_flush || aud_flush || seek_flush || aud_resync || mount_flush) begin
-        $display("  state: load=%b aud=%b seek=%b resync=%b mount=%b", load_flush, aud_flush, seek_flush, aud_resync, mount_flush);
+      if (load_flush || aud_flush || seek_flush || aud_resync || mount_flush || soft_flush) begin
+        $display("  state: load=%b aud=%b seek=%b resync=%b mount=%b soft=%b", load_flush, aud_flush, seek_flush, aud_resync, mount_flush, soft_flush);
         fail(ctx);
       end
       if (!pipe_rst_n || !aud_rst_n) fail("rst_n outputs not idle-high");
@@ -87,7 +91,7 @@ module flush_ctl_tb;
   // flush output stays high (counted until all four are low again).
   task pulse_and_measure;
     begin
-      n_load = 0; n_aud = 0; n_seek = 0; n_resync = 0; n_mount = 0;
+      n_load = 0; n_aud = 0; n_seek = 0; n_resync = 0; n_mount = 0; n_soft = 0;
       @(posedge clk);   // event registered here
       // event inputs are cleared by the caller right after this task starts;
       // count the level durations
@@ -101,10 +105,11 @@ module flush_ctl_tb;
           if (seek_flush)  n_seek   = n_seek   + 1;
           if (aud_resync)  n_resync = n_resync + 1;
           if (mount_flush) n_mount  = n_mount  + 1;
+          if (soft_flush)  n_soft   = n_soft   + 1;
           // reset-derivation invariants hold on every cycle
           if (pipe_rst_n !== (rst_n & ~load_flush))               fail("pipe_rst_n derivation");
           if (aud_rst_n  !== (rst_n & ~aud_flush & ~aud_resync))  fail("aud_rst_n derivation");
-          if (!load_flush && !aud_flush && !seek_flush && !aud_resync && !mount_flush) disable count;
+          if (!load_flush && !aud_flush && !seek_flush && !aud_resync && !mount_flush && !soft_flush) disable count;
           guard = guard + 1;
           if (guard > 300) begin fail("flush level never released"); disable count; end
         end
@@ -116,16 +121,17 @@ module flush_ctl_tb;
   // active output held exactly 64 cycles.
   task check_row(input integer e_load, input integer e_aud,
                  input integer e_seek, input integer e_resync,
-                 input integer e_mount,
+                 input integer e_mount, input integer e_soft,
                  input [8*64-1:0] ctx);
     begin
       if ((e_load   ? n_load   != 64 : n_load   != 0) ||
           (e_aud    ? n_aud    != 64 : n_aud    != 0) ||
           (e_seek   ? n_seek   != 64 : n_seek   != 0) ||
           (e_resync ? n_resync != 64 : n_resync != 0) ||
-          (e_mount  ? n_mount  != 64 : n_mount  != 0)) begin
-        $display("  got load=%0d aud=%0d seek=%0d resync=%0d mount=%0d, want %0d/%0d/%0d/%0d/%0d x64",
-                 n_load, n_aud, n_seek, n_resync, n_mount, e_load, e_aud, e_seek, e_resync, e_mount);
+          (e_mount  ? n_mount  != 64 : n_mount  != 0) ||
+          (e_soft   ? n_soft   != 64 : n_soft   != 0)) begin
+        $display("  got load=%0d aud=%0d seek=%0d resync=%0d mount=%0d soft=%0d, want %0d/%0d/%0d/%0d/%0d/%0d x64",
+                 n_load, n_aud, n_seek, n_resync, n_mount, n_soft, e_load, e_aud, e_seek, e_resync, e_mount, e_soft);
         fail(ctx);
       end
     end
@@ -142,63 +148,63 @@ module flush_ctl_tb;
     //     stayed 0 here and the old file's VBUF survived into the new file)
     start_streaming = 1;
     fork pulse_and_measure; begin @(posedge clk); start_streaming <= 0; end join
-    check_row(1, 1, 1, 0, 1, "[1] mount must fire load+aud+seek+mountrst");
+    check_row(1, 1, 1, 0, 1, 1, "[1] mount must fire load+aud+seek+mountrst");
 
     // [2] mount with keep_vbuf=1 held (stale level from a previous menu hop)
     //     -> STILL all three (the mount terms are ungated by keep_vbuf)
     keep_vbuf = 1;
     start_streaming = 1;
     fork pulse_and_measure; begin @(posedge clk); start_streaming <= 0; end join
-    check_row(1, 1, 1, 0, 1, "[2] mount under keep_vbuf must fire all four");
+    check_row(1, 1, 1, 0, 1, 1, "[2] mount under keep_vbuf must fire all four");
     keep_vbuf = 0;
 
     // [3] title seek (keep_vbuf=0) -> all three
     seek_ack = 1;
     fork pulse_and_measure; begin @(posedge clk); seek_ack <= 0; end join
-    check_row(1, 1, 1, 0, 0, "[3] title seek: trio, NO mount reset");
+    check_row(1, 1, 1, 0, 0, 0, "[3] title seek: trio, NO mount reset");
 
     // [4] VM jump (keep_vbuf=0, e.g. menu->title Play) -> all three
     jump_ack = 1;
     fork pulse_and_measure; begin @(posedge clk); jump_ack <= 0; end join
-    check_row(1, 1, 1, 0, 0, "[4] ~keep_vbuf jump: trio, NO mount reset");
+    check_row(1, 1, 1, 0, 0, 1, "[4] ~keep_vbuf jump: trio + SOFT reset, no mount arm");
 
     // [5] menu->menu jump (keep_vbuf=1) -> load_flush ONLY (video tail plays
     //     out, audio rides through: docs/dvd_menu_refinements.md sec.2/5d)
     keep_vbuf = 1;
     jump_ack = 1;
     fork pulse_and_measure; begin @(posedge clk); jump_ack <= 0; end join
-    check_row(1, 0, 0, 0, 0, "[5] keep_vbuf jump must fire load only");
+    check_row(1, 0, 0, 0, 0, 0, "[5] keep_vbuf jump must fire load only");
 
     // [6] menu-internal seek (keep_vbuf=1) -> load_flush only
     seek_ack = 1;
     fork pulse_and_measure; begin @(posedge clk); seek_ack <= 0; end join
-    check_row(1, 0, 0, 0, 0, "[6] keep_vbuf seek must fire load only");
+    check_row(1, 0, 0, 0, 0, 0, "[6] keep_vbuf seek must fire load only");
     keep_vbuf = 0;
 
     // [7] raster-regime switch (mode_switch, today il_switch) -> all
     //     three (the il_switch full re-sync rule)
     mode_switch = 1;
     fork pulse_and_measure; begin @(posedge clk); mode_switch <= 0; end join
-    check_row(1, 1, 1, 0, 0, "[7] mode_switch: trio, NO mount reset");
+    check_row(1, 1, 1, 0, 0, 0, "[7] mode_switch: trio, NO mount reset");
 
     // [8] a second mode_switch pulse (e.g. the opposite-direction edge) fires
     //     the same trio again — the counters re-arm cleanly back-to-back
     mode_switch = 1;
     fork pulse_and_measure; begin @(posedge clk); mode_switch <= 0; end join
-    check_row(1, 1, 1, 0, 0, "[8] repeat mode_switch: trio, NO mount reset");
+    check_row(1, 1, 1, 0, 0, 0, "[8] repeat mode_switch: trio, NO mount reset");
 
     // [9] mode_switch under keep_vbuf=1 (detector flip while a stale menu level
     //     lingers) -> still all three (mode_switch terms ungated by keep_vbuf)
     keep_vbuf = 1;
     mode_switch = 1;
     fork pulse_and_measure; begin @(posedge clk); mode_switch <= 0; end join
-    check_row(1, 1, 1, 0, 0, "[9] mode_switch under keep_vbuf: trio only");
+    check_row(1, 1, 1, 0, 0, 0, "[9] mode_switch under keep_vbuf: trio only");
     keep_vbuf = 0;
 
     // [10] audio track switch -> aud_resync ONLY (minimal scope: ring + decoder)
     aud_switch = 1;
     fork pulse_and_measure; begin @(posedge clk); aud_switch <= 0; end join
-    check_row(0, 0, 0, 1, 0, "[10] aud_switch must fire aud_resync only");
+    check_row(0, 0, 0, 1, 0, 0, "[10] aud_switch must fire aud_resync only");
 
     // [10b] a CONTENT PTS JUMP re-phases audio ONLY. It is the analogue of VLC's
     //       ES_OUT_RESET_PCR at a DVDNAV_CELL_CHANGE / HOP_CHANNEL, which flushes
@@ -209,7 +215,7 @@ module flush_ctl_tb;
     expect_idle("[10b] not idle before disc_rephase");
     disc_rephase = 1;
     fork pulse_and_measure; begin @(posedge clk); disc_rephase <= 0; end join
-    check_row(0, 0, 0, 1, 0, "[10b] disc_rephase must fire aud_resync only");
+    check_row(0, 0, 0, 1, 0, 0, "[10b] disc_rephase must fire aud_resync only");
 
     // [10c] ...but NOT on a cell the author marked seamless_play. A seamless-branch
     // junction restarts the timestamps while the soundtrack plays straight through
@@ -221,7 +227,7 @@ module flush_ctl_tb;
     cell_seamless = 1;
     disc_rephase = 1;
     fork pulse_and_measure; begin @(posedge clk); disc_rephase <= 0; end join
-    check_row(0, 0, 0, 0, 0, "[10c] disc_rephase on a seamless cell must fire NOTHING");
+    check_row(0, 0, 0, 0, 0, 0, "[10c] disc_rephase on a seamless cell must fire NOTHING");
 
     // [10d] CONTROL: the gate is a level, so it must not disable the re-phase for
     // good -- the very next non-seamless cell re-phases as before. Without this a
@@ -230,7 +236,7 @@ module flush_ctl_tb;
     expect_idle("[10d] not idle before the control disc_rephase");
     disc_rephase = 1;
     fork pulse_and_measure; begin @(posedge clk); disc_rephase <= 0; end join
-    check_row(0, 0, 0, 1, 0, "[10d] disc_rephase off a seamless cell still fires aud_resync");
+    check_row(0, 0, 0, 1, 0, 0, "[10d] disc_rephase off a seamless cell still fires aud_resync");
 
     // [10e] CONTROL: cell_seamless must gate ONLY the discontinuity re-phase. An
     // audio TRACK SWITCH on the same cell is a real content change and must still
@@ -239,7 +245,7 @@ module flush_ctl_tb;
     expect_idle("[10e] not idle before aud_switch on a seamless cell");
     aud_switch = 1;
     fork pulse_and_measure; begin @(posedge clk); aud_switch <= 0; end join
-    check_row(0, 0, 0, 1, 0, "[10e] aud_switch still fires aud_resync on a seamless cell");
+    check_row(0, 0, 0, 1, 0, 0, "[10e] aud_switch still fires aud_resync on a seamless cell");
     cell_seamless = 0;
 
     // [11] core reset mid-flush clears every counter
@@ -251,7 +257,7 @@ module flush_ctl_tb;
     rst_n = 0;
     @(posedge clk); @(posedge clk);
     #1;
-    if (load_flush || aud_flush || seek_flush || aud_resync || mount_flush) fail("[11] reset must clear all counters");
+    if (load_flush || aud_flush || seek_flush || aud_resync || mount_flush || soft_flush) fail("[11] reset must clear all counters");
     if (pipe_rst_n || aud_rst_n) fail("[11] rst_n low must drive both rst outputs low");
     rst_n = 1;
     repeat (2) @(posedge clk);

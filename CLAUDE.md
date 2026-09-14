@@ -252,6 +252,75 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **"DEEP FRIED" MENU STILLS — the disc's own quantiser matrix was being thrown away
+  at every VBUF flush (2026-09-13/14, branch `fix/quant-matrix-flush`); sim-proven
+  RED/GREEN and ✅ HW-CONFIRMED 2026-09-14 AGAINST ITS OWN CONTROL** (build
+  `DVD_quantmatrix_20260914_1221.rbf`, SEED 7 first roll, 91 % ALM, clk_dec 93.02/91.69):
+  the same 8-re-entry script gave the PRE-fix core **1 fried onset, held** — the report,
+  reproduced — and the fix core **0 fried / 0 garbage**, correct menu at the first capture
+  ~0.7 s after the Menu key, chapter skips still holding, and the FP->menu landing's one
+  black frame present on BOTH cores (so the cut costs nothing that was not already there).
+  Field report on `WAKE_UP_WITH_ELMO.iso`: parking on
+  the main menu gives a still with exploded texture, clipped highlights, oversaturated
+  colour and complementary-colour halos on the text; one Select press repaints it
+  correctly *without* activating, a second activates. ★ *"On 0.4.0 the fried image
+  flashes for a split second then resolves; on 0.5.0 it holds."*
+  ★★ **THE ARTEFACT WAS IDENTIFIED OFFLINE, FROM THE DISC, BEFORE THE DECODER WAS OPENED.**
+  The menu stills `load_intra_quantiser_matrix` a near-flat matrix (DC 8, all AC 4) where
+  the MPEG default ramps to 83, so decoding with the default scales every AC coefficient
+  **4x to 20.75x**. Bit-patching the matrices to the defaults in the real elementary
+  stream reproduces the reporter's screenshot detail for detail. ★ **Why only stills:** a
+  moving title re-sends a sequence header every GOP; a menu still is
+  `SEQ GOP PIC:I SEQ_END`, **one sequence header ever**. ★ **Why a press repairs it:**
+  menu entry from a title is a full VBUF flush, a menu->menu hop is `keep_vbuf`.
+  ⛔ v0.4.0's repair was the menu-still cold re-decode removed by `b900478` (issue #65) —
+  the UNMASKER, not the cause; do not revert it.
+  ★★★ **THE FIX IS THE DECODER SOFT RESET THE DESIGN ALREADY HAD, NOT A SURGICAL
+  RE-SYNC — and the wrong answer cost three hardware rounds.** A VBUF flush discards the
+  buffered bytes and leaves the whole pipeline (vld state, getbits window, rld fifo,
+  iquant, motcomp) frozen mid-picture; the landing arrives INTO that and its one
+  sequence header gets eaten. The first fix forced the vld state machine to
+  `STATE_NEXT_START_CODE` at the flush: it recovered the matrix in sim (12/12) and
+  produced **magenta/green crosshatched garbage** on the board (measured: both chroma
+  planes carrying LUMA — a block-count desync from the partial block it left in the rld
+  fifo). Two forms of flushing the getbits window failed the same way (one also cost
+  7 MHz: a bare AND on a large module's reset tree). **The pipeline's state is coupled;
+  reset all of it or none of it.** `dvd/flush_ctl.sv` now raises `soft_flush` on a
+  `~keep_vbuf` VM JUMP (menu entry/exit, the FP boot chain) as well as on a mount —
+  `reset.soft_rst_n`, the watchdog-equivalent reset a file mount has used HW-proven
+  since August. Transport seeks and mode switches are NOT included: a chapter skip keeps
+  its held frame; a menu entry/exit is a brief black cut, which is what a set-top player
+  does (maintainer decision). `mount_flush` stays mount-only for `pal_detect`.
+  ★ **The diagnostic round that settled it read `chroma_format` beside every garbage
+  frame on the rig: 1 (correct) on all three** — the parameter that sets blocks-per-
+  macroblock was exonerated in one run, which is what turned "re-sync harder" into
+  "reset everything". ⚠ Two harness lessons: a reference-free garbage classifier must
+  test **r(Cb,Cr) and chroma high-frequency energy** (0.98 correct vs 5.0/6.4 garbage —
+  4:2:0 chroma cannot carry that), not r(Cb,Y), which is meaningless when the frame's
+  own luma is wrong; and `seqext_n` climbing was read first as "the story played" and
+  then as "the presses never landed" — a per-GOP counter proves neither, the garbage
+  menu frame itself proved the re-entry happened.
+  ★ **A SECOND, INDEPENDENT BUG fixed with it:** `iquant.v` un-zigzagged the download with
+  the **live** `alternate_scan` (the PREVIOUS picture's), against 13818-2 **7.3.1** (the
+  download is always scan 0) and the module's own header comment. Invisible on a flat
+  matrix; `tools/quant_fixture.py --matrix-probe` reads **58/64 wrong, permutation=1**.
+  **Blast radius MEASURED** (`tools/qmatrix_scan.py`, which reads the default matrices OUT
+  OF `iquant.v`): of 957 images, **820 (86 %)** download a matrix in a menu VOB, **533**
+  differ by >2x, worst 83x; **480** pair a varied download with an `alternate_scan=1`
+  title.
+  **Gates: `bench/dvd/run_quant_matrix.sh --red`** (`+SOFTRST=1` models the soft reset;
+  RED sweep loses 10/12 on the shipped decoder, GREEN recovers 12/12; scores the matrix
+  the hardware ends up holding against the bytes on the disc, never a signal the fix
+  names) and `flush_ctl_tb` row [4] (RED on the pre-fix module). ⚠ The matrix bench
+  passed 12/12 on the build that garbaged the board, so **the title->menu re-entry test
+  on the rig is part of the gate** — run with the PRE-fix core as the control arm, because
+  the fried rate is low (1 onset in 8–9 re-entries) and a clean fix arm alone proves
+  nothing. ⚠ The MiSTer `screenshot` path takes ~1 s, so a target-side burst resolves
+  ~1.2 s, not 0.4. ⏳ Not automated: an issue-#65 narration still must not replay audio —
+  structurally it cannot (the soft reset re-streams nothing; `aud_flush` fires on the same
+  `jump_flush`), a maintainer ear-check closes it.
+  Detail: **`docs/quant_matrix.md`** (§11 the fix + HW round, §9–§10 the failed attempt).
+
 - ✅ **PROGRAM ORDER IS NOT PHYSICAL ORDER — the title span collapsed on 51 of 958
   library discs, making them completely unseekable (2026-09-13, branch
   `fix/title-span-max`); sim-proven RED/GREEN, 5/5 mutations each caught by its own

@@ -377,6 +377,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire       macroblock_intra;
   wire  [1:0]intra_dc_precision;
   wire       mpeg1_es;                      // DVD-FORK FIX (mpeg1): stream is MPEG-1 (vld -> rld_fifo)
+
   wire       mpeg1_es_rd;                   // DVD-FORK FIX (mpeg1): rld_fifo -> rld (per-picture mismatch-control mode)
   wire  [7:0]quant_wr_data_wr;              // data bus for writing quantizer matrix rams
   wire  [5:0]quant_wr_addr_wr;              // address bus for writing quantizer matrix rams
@@ -855,6 +856,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .syncrst(vbuf_rst)
     );
 
+
   /* write elementary stream to circular buffer */
   vbuf_write vbuf_write (
     .clk(clk),
@@ -1017,6 +1019,20 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire [31:0] pic_hdr_bitpos;
   wire        skip_ack, skip_rff, skip_field, skip_tff, skip_pf;
 
+  /* DVD-FORK (deep-fried menu stills, docs/quant_matrix.md): the bit window
+   * stays on sync_rst. After a VBUF flush it still holds up to 16 bytes of the
+   * discarded stream while pos_clr(~vbuf_rst) has already zeroed its POSITION,
+   * and the vld above it is frozen mid-picture -- so the landing stream arrives
+   * into stale state and a menu still's one-and-only quantiser-matrix download
+   * gets eaten. Two surgical repairs were tried here and in vld.v (flush this
+   * window with the VBUF; force the vld state machine to STATE_NEXT_START_CODE)
+   * and BOTH regressed on hardware into luma-in-chroma garbage: re-syncing one
+   * or two registers of a coupled pipeline leaves a partial block downstream.
+   * The fix is NOT in this module: dvd/flush_ctl.sv raises `soft_flush` on a
+   * ~keep_vbuf VM jump (menu entry/exit) as well as on a mount, and reset.v's
+   * soft_rst_n leg restarts EVERYTHING on sync_rst cold -- this window included.
+   * §9 records the two failed forms (one also cost 7 MHz: a bare AND on a large
+   * module's reset tree). Do not re-derive either without a hardware round. */
   getbits_fifo getbits_fifo (
     .clk(clk), 
     .clk_en(1'b1), 

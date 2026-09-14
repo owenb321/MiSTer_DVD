@@ -593,7 +593,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-titlespan"
+`define CORE_VERSION "dev-quantmatrix"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -2649,7 +2649,7 @@ wire       sw_blank;                    // hold the picture black across a mode 
 // ~realign_pend so the modeline walk and the flush land together on the VOBU boundary.
 // Keeping it out of the netlist now is the point -- one behavioural delta per HW round.
 wire       realign_pend;                // an arm is open (see above)
-wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush;
+wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush, soft_flush;
 reg  aud_disc_rephase;   // content PTS jump -> audio-only re-phase (driven below, beside the anchor CDC)
 wire pipe_rst_n, aud_rst_n;
 mode_realign mode_realign_i (
@@ -2711,6 +2711,7 @@ flush_ctl flush_ctl_i (
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
     .mount_flush     (mount_flush),
+    .soft_flush      (soft_flush),        // mount OR ~keep_vbuf VM jump -> decoder soft reset (docs/quant_matrix.md §11)
     .pipe_rst_n      (pipe_rst_n),
     .aud_rst_n       (aud_rst_n)
 );
@@ -4466,7 +4467,7 @@ mpeg2video mpeg2video_inst (
     .step_req          (step_dec),                     // DVD-FORK (frame step B18): one picture while paused
     .freeze_wd         (still_dec),                    // DVD-FORK (disc-menu still): watchdog-suppress only (clk_dec-synced)
     .vbuf_flush        (vbuf_flush_dec),               // DVD-FORK (gamepad transport): discard VBUF on a seek (clk_dec-synced)
-    .soft_flush        (mount_flush),                  // DVD-FORK (mount soft reset): watchdog-equivalent decode reset on a file mount (async, synchronizers inside)
+    .soft_flush        (soft_flush),                   // DVD-FORK: watchdog-equivalent decode reset on a file mount AND on a ~keep_vbuf VM jump (menu entry/exit) -- docs/quant_matrix.md §11 (async, synchronizers inside)
     .disp_vscale_mode  (disp_vscale_mode),             // DVD-FORK (CRT anamorphic vscale): 0 Fit / 2 SIF 2x line repeat
     .disp_vscale_en    (disp_vscale_en),               // DVD-FORK (CRT anamorphic letterbox AA): downstream 2-tap blend enable
     .disp_hcrop_en     (disp_hcrop_en),                // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)

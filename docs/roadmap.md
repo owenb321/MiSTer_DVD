@@ -2178,3 +2178,40 @@ PGC pre/post execution.
    that auto-advances on a timeout. Lower priority; revisit if a disc needs it.
 4. **Scale** — 8.4 GB dual-layer ISO; the reader's 32-bit LBA handles it, and it fits on SD
    (NAS/CIFS large-file open is a separate known framework issue, above).
+
+
+---
+
+## ✅ Quantiser matrix lost at a VBUF flush ("deep fried" menu stills) — 2026-09-13/14
+
+Branch `fix/quant-matrix-flush`. Sim-proven RED/GREEN over real disc bytes and
+✅ **HW-CONFIRMED 2026-09-14 against its own control** (pre-fix core: 1 fried onset in 8
+re-entries, held; fix: 0/8, chapter skips still hold; `docs/quant_matrix.md` §11.4).
+
+A menu still's sequence header downloads a custom quantiser matrix; a VBUF flush left the
+whole decode pipeline (vld state, bit window, rld fifo, iquant) frozen mid-picture and the
+landing arrived into it, so the header (and the matrix) were eaten and the still decoded
+with the MPEG defaults — every AC coefficient up to 20.75x too large. A moving title
+self-heals at its next GOP; a still never does.
+
+★★ **The first fix (force the vld state machine back to `STATE_NEXT_START_CODE` at the
+flush) REGRESSED on hardware into luma-in-chroma garbage and was reverted**: re-syncing one
+register of a coupled pipeline leaves a partial block downstream. A diagnostic round read
+`chroma_format` beside every garbage frame on the rig — correct on all three — which is what
+turned the search from "re-sync harder" into "reset everything". **The fix is the decoder
+SOFT RESET a file mount already uses**: `flush_ctl.soft_flush` now fires on a `~keep_vbuf`
+VM jump (menu entry/exit, the FP boot chain), never on a transport seek or mode switch, so
+a chapter skip keeps its held frame and a menu transition becomes a brief black cut (what
+a set-top player does; maintainer decision). Plus an independent 13818-2 7.3.1 fix in
+`iquant.v` (the download un-zigzagged with the previous picture's `alternate_scan`).
+
+Measured blast radius: **820/957 discs download a matrix in a menu VOB, 533 more than 2x
+from the default**; **480** are exposed to the 7.3.1 permutation case.
+
+Gates `bench/dvd/run_quant_matrix.sh --red` (`+SOFTRST=1`: RED 10/12 lost, GREEN 12/12) and
+`flush_ctl_tb` row [4]. Detail: `docs/quant_matrix.md` §11 (§9–§10: the failed attempt).
+
+⏳ Left open: an issue-#65 narration still must not replay its audio — structurally it
+cannot (nothing is re-streamed; `aud_flush` already fires on the same jump), a maintainer
+ear-check closes it. The two-press activation on this disc is a separate nav item
+(`docs/dvd_nav.md`).
