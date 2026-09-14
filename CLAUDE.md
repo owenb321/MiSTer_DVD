@@ -1807,14 +1807,50 @@ worse maintenance burden than targeted in-place edits. So:
   excluded so it can't fight the player's D-pad. Tests `nav_pci_tb` T16 (RED pre-fix) /
   T17 (control). Detail: `docs/dvd_vm.md` "POST-only PGC dispatch", `docs/dvd_nav.md`
   "Forced select".
-  ⚠ **fix (2) is PARTIAL — HW shows fresh maze entry now correct, but RE-ENTRY after a
-  trap and the NEXT room still land on button 1 (auto-action = the player moves before
-  any input).** Leading theory: those entries deliver the HLI as `hli_ss==2`
-  (author marking "same button set"), which the fix deliberately excludes so `fosl`
-  can't fight the D-pad mid-room; the rule likely needs to key on **the cell/PGC having
-  changed**, not on `hli_ss` alone. NOT yet coded — verify against the byte sequence
-  first (⚠ NAV packs carry a system header: PCI data starts at sector offset **0x2D**,
-  not 0x15 — an early scan of mine silently found zero HLIs from that mistake).
+  ⚠ **fix (2) was PARTIAL — HW showed fresh maze entry correct, but RE-ENTRY after a
+  trap and the NEXT room still landed on button 1 (auto-action = the player moves before
+  any input).** ⛔ The "leading theory" recorded here (the re-entries arrive as
+  `hli_ss==2`; gate `fosl` on a cell/PGC change) was WRONG: the re-entry HLIs carry
+  **`fosl = 0`**, so no `fosl` rule could have parked them. (⚠ Still true and still worth
+  knowing: NAV packs carry a system header, PCI data starts at sector offset **0x2D**,
+  not 0x15 — an early scan silently found zero HLIs from that mistake.)
+  ✅ **ROOT-CAUSED AND FIXED 2026-09-14 (branch `fix/link-button-flush`) — sim-proven
+  RED/GREEN, 6 mutations each caught by exactly its own arm; ⏳ HW-confirm pending.**
+  The maintainer's HIL session on the Wickles Manor ENTRANCE grid (21 tiles, reader
+  `PGCN 28`) nailed the shape: every trap resets the highlight to the **same absolute
+  tile, the upper-left one**, from wherever the player fell — *"a hardcoded default, not
+  a wrong-direction offset"*. It was: `nav_pci`'s constant `btn_sel <= 6'd1` at reset.
+  ★★ **THE DISC PARKS THE CURSOR WITH THE LINK'S OWN BUTTON FIELD, NOT `fosl`:** the trap
+  exits are `LinkCN 26 (button 16)` / `(button 3)`, the next room `LinkCN 10 (button
+  17)`, the grid entry `LinkPGN 2 (button 18)`, the 5-button maze's re-entries `LinkPGN
+  15 (button 1..6)` chosen by `g[15]` — and where it wants a RESET it writes `(button 1)`
+  explicitly, ~40 times, which is a disc authored against a player whose HL_BTNN
+  PERSISTS. `dvd_vm.sv` handled the field correctly (`sprm8 <= sub_btn`, `btn_force` →
+  `nav_pci.sel_force`, stored for the next arm); but **the link carrying the button is
+  the link that fires the seek, whose `load_flush` resets `nav_pci` (`pipe_rst_n`)** ~a
+  hundred cycles later, and the stored 16 went back to 1. libdvdnav's `HL_BTNN_REG` is
+  cleared by `vm_reset` = the disc open and by nothing else.
+  **Fix = one wire in the direction the register already lived:** `dvd_vm.hl_btnn`
+  (= `sprm8[15:10]`, on the hard reset) → `nav_pci.hl_btnn`, from which `nav_pci`
+  re-seeds `btn_sel` in the first cycle after its reset releases (first in the clocked
+  block, so `sel_force` / the arm's persistence rule / `fosl` still win = libdvdnav's
+  priority). The VM's `sprm8` also now TRACKS the live selection while armed and not
+  frozen (it already read that way via `sprm8_eff`; the register just forgot it at
+  tear-down), so an un-activated D-pad move survives a jump like `dvdnav_button_select`.
+  ⚠ **Semantic change for EVERY jump:** a menu entered by activating button k arms on k
+  (if it has ≥ k buttons and the link carries no button) where it used to arm on 1 — the
+  oracle's behaviour and what authoring tools assume, but the HW-proven menu discs
+  (MiB / T2 / Matrix) belong in the same HW round as the grid.
+  ★ **The seam is gated by `tools/check_hl_btnn_wiring.py`** (reads the two `.hl_btnn`
+  connections out of `dvd/emu.sv`, the `check_subp_map_wiring.py` pattern) because each
+  module bench is handed the other side's value and cannot see a wrong or missing wire.
+  Gate: **`bench/dvd/run_link_button.sh --red`** — `nav_pci_tb` T19 over the REAL grid
+  NAV pack (`scooby_grid_pci.hex`: `sel_force(16)` → reset → arms on 16; RED pre-fix
+  = 1), `dvd_vm_tb` T6 (`LinkCN 26 (button 16)` exports 16; select write-back; frozen
+  guard), the wiring check; mutations M1–M4 + W1–W2. ★ Reusable: a one-cycle request
+  into a module that the SAME action later resets will not be there when needed — a
+  shadow of a VM register must be re-derived from its source after a reset, never from
+  a constant. Detail: `docs/dvd_nav.md` "Link button fields across a flush".
   ⚠ **Still OPEN:** Scooby's **Whac-A-Mole** (not root-caused; NOT `foac` — reads 0
   disc-wide).
   ★ **RESIDENTS' MISSING AUDIO — ROOT-CAUSED, and it is NOT a nav bug: `dvd/ac3/`

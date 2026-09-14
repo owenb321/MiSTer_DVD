@@ -1055,12 +1055,10 @@ trap, and the next room after clearing the first, both still land on the upper-l
 the grid** — i.e. the highlight is still defaulting to button 1 (= left), which
 auto-activates and moves the player before any input.
 
-**Leading theory (NOT yet coded — verify before changing anything):** those entries
-deliver the maze HLI as `hli_ss == 2`, the author marking it "same button set", which
-this fix deliberately excludes so `fosl` cannot fight the D-pad mid-room. If so the gate
-must key on **the cell/PGC having changed** (a genuine re-entry) rather than on `hli_ss`
-alone — that re-parks the highlight on a real entry while still leaving a mid-room
-continuation alone. Both halves have to keep working; see the T17 control.
+⛔ **The "leading theory" that stood here (the re-entries arrive as `hli_ss == 2` and the
+`fosl` gate should key on a cell/PGC change) was WRONG, and it was wrong in a way the
+disc shows in one line: the re-entry HLIs carry `fosl = 0`.** No `fosl` rule of any
+shape could have parked them. Root-caused 2026-09-14 — next section.
 
 ⚠ **Gotcha when scanning this yourself:** a DVD NAV pack carries a **system header**
 before the `000001BF` PCI packet, so PCI data starts at sector offset **0x2D**, not
@@ -1068,11 +1066,100 @@ before the `000001BF` PCI packet, so PCI data starts at sector offset **0x2D**, 
 has no buttons" rather than like a bug — it cost a scan here. `nav_pci_tb`'s
 `localparam PCI = 'h2D` is the authority.
 
-⏳ Remaining HW gate: trap re-entry and room 2 must also start at the bottom.
+### Link button fields across a flush: `LinkCN 26 (button 16)` must land on 16 (2026-09-14)
+
+**The report (same disc, HIL session 2026-09-14 + maintainer):** in the Wickles Manor
+entrance grid (reader `PGCN 28`, a 21-tile directional-cursor trap/clue grid), every trap
+resets the highlight to the **same absolute tile — the upper-left one — whatever tile the
+player fell from**; solving it and entering the next room (and the room after) lands the
+highlight upper-left instead of bottom-middle. The 5-button maze's trap re-entry and
+room 2 (the PARTIAL above) are the same defect.
+
+**Measured from the disc, before the decoder was opened.** VTS_02 PGCN 28's own commands
+say how the cursor is meant to be parked, and it is not `fosl`:
+
+| where | command | meaning |
+|---|---|---|
+| PRE (grid entry) | `LinkPGN 2 (button 18)` | enter the grid on tile 18 = bottom-middle |
+| cell 5 / 6 cell-cmd (trap exits) | `LinkCN 26 (button 16)` / `LinkCN 26 (button 3)` | back to the grid, re-parked on the tile you fell from |
+| cell 9 cell-cmd (room solved) | `LinkCN 10 (button 17)` | next room, bottom-middle |
+| POST | `LinkCN 26 (button 18)` | the grid again, bottom-middle |
+| the grid HLI itself (RBN 178948) | `btn_ns=21 fosl=0 hli_ss=1` | 21 tiles, **no forced select** |
+
+The 5-button maze's re-entries are the same mechanism one PGC over: `PGCN 4` PRE
+`if (g[15] == 0x14..0x19) LinkPGN 15 (button 1..6)`, `PGCN 7` PRE `LinkPGN 5 (button
+1..6)`. And where this disc wants a RESET it says so: `LinkPGN 1 (button 1)`,
+`LinkPGN 22 (button 1)` — 40-odd links carry an explicit `(button 1)`. A disc authored
+that way is authored against a player whose HL_BTNN **persists**.
+
+**The mechanism.** `dvd_vm.sv` handled the field correctly: every link op writes
+`sprm8 <= {sub_btn, 10'd0}` and pulses `btn_force` → `nav_pci.sel_force`, and nav_pci
+stored it ("with no HLI armed the value is stored so the next arm's persistence rule
+keeps it"). But the link that carries the button is **the same link that fires the
+seek** (`LinkCN` → `seek_pulse`, `LinkPGN` → `V_PMRD` → seek), the seek's `seek_ack`
+raises `load_flush`, and `nav_pci` sits on `pipe_rst_n` — so ~a hundred cycles after
+storing 16 it was reset to its constant `btn_sel <= 6'd1`. Upper-left tile, every time,
+from every trap. The VM's own `sprm8` (on `reset_n`) still held 16 the whole way.
+
+**libdvdnav, the oracle:** `HL_BTNN_REG` is written at links (`vm.c:772-958`),
+`SetHL_BTNN`, `fosl` (`dvdnav.c:814`, at the SPU-stream-change event = once per jump) and
+user select (`highlight.c:416/448`); the ONLY reset is `vm_reset` = the disc open. Nothing
+in `play_PGC`/`set_PGCN`/a jump clears it.
+
+**The fix = one wire, in the direction the register already lived.** `dvd_vm` exports
+`hl_btnn = sprm8[15:10]`; `nav_pci` takes it as an input and, in the FIRST cycle after
+its reset releases, re-seeds `btn_sel` from it (`seeded` flag; 0 = "no opinion", the
+default 1 stands). It is placed first in the clocked block so every later same-cycle
+write — `sel_force`, the arm's persistence rule, `fosl` — still wins, which keeps the
+priority libdvdnav has (fosl is applied AFTER the link wrote the register). And the VM's
+`sprm8` now **tracks the live selection while an HLI is armed and not frozen** (it
+already READ that way through `sprm8_eff`; the register just did not remember it after
+the menu tore down), so a D-pad move that was never activated survives a jump the way
+`dvdnav_button_select` writes `HL_BTNN_REG`.
+
+⚠ **This is a semantic change for every jump, not only this disc's:** a menu entered by
+activating button k now arms on k when it has ≥ k buttons and the link carries no button
+of its own, where it used to arm on 1. That IS what libdvdnav and a set-top player do
+and what authoring tools assume (hence the explicit `(button 1)`s above); a disc that
+relied on our reset-to-1 would have to be one that reads wrong on a real player.
+⏳ HW-confirm pending: the Scooby grid + maze re-entries (the fix), and a sweep of the
+HW-proven menu discs (MiB / T2 / Matrix) for the persistence change.
+
+**Gate: `bench/dvd/run_link_button.sh --red`** — three arms, one per place the fix
+lives, and six mutations each caught by exactly its own arm:
+- `nav_pci_tb` **T19** (the consumer): the REAL grid NAV pack
+  (`bench/dvd/test_vobs/scooby_grid_pci.hex`, 21 buttons, fosl=0); `sel_force(16)` →
+  reset → the grid arms on **16** (T19a, RED pre-fix: 1), the room entry from an ARMED
+  grid lands on 17 (T19b), controls for `hl_btnn=0` (default 1) and an out-of-range
+  value (1 at the arm), and `fosl` on a NEW HLI outranking the seed (T19e).
+- `dvd_vm_tb` **T6** (the producer): the trap exit verbatim (`LinkCN 26 (button 16)` →
+  seek to cell index 25 AND `hl_btnn == 16`), select write-back after tear-down, and the
+  frozen guard (an activated button is not overwritten by `btn_sel` drift — the S12b
+  contract).
+- **`tools/check_hl_btnn_wiring.py`** (the seam): reads `dvd/emu.sv` and requires both
+  `.hl_btnn` ports on ONE declared 6-bit net — the `check_subp_map_wiring.py` pattern,
+  because a wrong value on a correct port is invisible to both module benches and emu
+  has none. RED on the pre-fix file, on `.hl_btnn (6'd0)` and on a dropped connection.
+
+★ **Reusable lesson:** a one-cycle request into a module that the SAME action later
+resets is a value that will not be there when it is needed. `nav_pci` on `pipe_rst_n`
+was right for everything a flush should forget (pending HLIs, timers, banks); the
+selection is a VM register that merely has a shadow here, and a shadow must be
+re-derived from its source after a reset, not from a constant.
 
 ⚠ **Still open, same disc:** the Old Tyme Mining Town **Whac-A-Mole** minigame is a
 separate report and is NOT root-caused. It is not the deleted forced-ACTIVATE — `foac`
 reads 0 across every HLI on this disc.
+
+⚠ **HIL session 2026-09-14 (recorded here because its characterisation was what
+localised the bug):** driving the challenge live (HQ → mission hub → Wickles Manor
+entrance grid, reader `PGCN 28`), every trap — three distinct ones, triggered both by
+`select` on a tile and by a bare directional landing — reset the highlight to the **exact
+same absolute tile**, the upper-left one, however far from it the player had walked. "A
+hardcoded default, not a wrong-direction offset" is exactly right: it was `nav_pci`'s
+constant reset value. The reading that it "does not change the leading theory" was
+wrong — see the section above: the grid has `fosl = 0`, and the two puzzles are one
+defect through one mechanism (the link's button field).
 
 ## DVD-VM interpreter (Phase 4, `feature/dvd-vm`)
 
