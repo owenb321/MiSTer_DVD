@@ -178,7 +178,23 @@ not a new read port on the reader's BRAMs): on each `pgc_loaded` pulse a
 converter walks `pmap[p] → cellf[pm−1] →` the shared divider `→ tick_col[p]`
 
 ⚠ **The notches are rendered from a 512-bit COLUMN BITMAP, not by walking
-`tick_col[]`** (2026-09-13). `tick_col` is filled in **program** order but holds
+`tick_col[]`** (2026-09-13).
+
+⚠ **And the seek PREVIEW clock had the same assumption a third time** (2026-09-14).
+`seek_time`'s bracketing scan walked cells in INDEX order and stopped at the
+first `cf_q > tgt` — which needs `cellf_ram` to ascend with the index. On
+`BIG_TROUBLE_LITTLE_CHINA` program cell 0 sits at the top of the disc, so the
+very first compare closed the bracket with `lo_ok = 0` and the "before the first
+cell" path published **0**. Reported from the board as: the preview *"stays at
+0:00:00 during seeking, then updates to the correct timestamp when the seek
+completes"* — and that second half is the tell, because the live clock is
+`cur_cell_start + dsi_c_eltm`, i.e. cell-INDEX based, so only the preview lied.
+The scan now walks every cell and keeps the NEAREST one at or below the target,
+then reads the next PROGRAM's start time for the cell's end (`S_HI`/`S_HI2`).
+Cost is `cell_n × 3` cycles with no early exit — ~180 for a 60-cell PGC, on a
+path that runs once per changed request. Gate: `seek_time_tb` **T11** +
+mutations MB/MC. (`hi_rbn` went with it — dead since the cell-gap fix made
+`c_span` the cell's own extent.) `tick_col` is filled in **program** order but holds
 **physical** columns, so it is ascending only while a PGC's program order matches
 its physical order — and on 51 of 958 library discs it does not. The original
 renderer walked it with one monotonic pointer (`advance while s0_x > tk_q + 1`),

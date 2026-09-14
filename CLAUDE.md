@@ -376,6 +376,22 @@ worse maintenance burden than targeted in-place edits. So:
   notches and **exactly 8 lit columns** (which pins the 2 px width too). Proven
   RED on the pre-fix module — **"drew 2 notch columns"** — and mutation **M9**
   reproduces the walker's degenerate behaviour in one sed.
+  ★★★ **AND A FOURTH, IN THE SEEK PREVIEW CLOCK — same assumption, third module.**
+  Board report after the renderer fix: the preview *"stays at 0:00:00 during
+  seeking, then updates to the correct timestamp when the seek completes"*.
+  ★ **The second half of that sentence IS the diagnosis:** the live clock is
+  `cur_cell_start + dsi_c_eltm` = cell-INDEX based, so it was always right; only
+  the PREVIEW was wrong, which localises it to `seek_time` alone. Its bracketing
+  scan walked cells in INDEX order and stopped at the first `cf_q > tgt` — needing
+  `cellf_ram` to ascend with the index. With cell 0 at the top of the disc the
+  FIRST compare closes the bracket with `lo_ok = 0` and the "before the first cell"
+  path publishes 0. Now it walks every cell, keeps the NEAREST at-or-below, then
+  reads the next PROGRAM's start for the cell's end (`S_HI`/`S_HI2`); ~180 cycles
+  for a 60-cell PGC on an event-rate path. Gate `seek_time_tb` **T11** (RED
+  reproduces `got 000000`), mutations **MB** (restore the early exit) and **MC**
+  (take any cell at/below rather than the nearest — caught by the arm that targets
+  the physically-LAST cell, the only shape where the two differ). Dead `hi_rbn`
+  removed en route.
   ⚠ Cosmetic residual, predicted before the build and CONFIRMED on the board: the
   displaced trailing cell sits outside `[first,last]`, so its chapter notch pins to
   column 0 (chapters 1 and 21 both did on the reported disc).

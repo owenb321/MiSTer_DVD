@@ -24,6 +24,8 @@
 #          M9 first-tick : only tick_col[0] ever draws (the walker's
 #                          degenerate behaviour on an unsorted list) -> T11
 #          MA thin-notch : the notch loses its second column         -> T11
+#          MB early-exit : seek_time stops at the first cf > tgt     -> T11
+#          MC first-match: seek_time takes any cf <= tgt, not the best -> T11
 #
 # ⛔ There WAS an M4 ("title_first becomes min(first_sector)") and it is gone
 # because that mutation is now the SHIPPING rule: title_first IS the minimum, and
@@ -135,6 +137,24 @@ red_bar() {
     rm -rf "$d"
 }
 
+# red_time <name> <sed-script> -- mutates dvd/seek_time.sv and runs seek_time_tb.
+red_time() {
+    local name=$1 script=$2
+    local d; d=$(mktemp -d)
+    sed "$script" dvd/seek_time.sv > "$d/seek_time.sv"
+    if cmp -s "$d/seek_time.sv" dvd/seek_time.sv; then
+        echo "  FAIL $name: the mutation did not apply (anchor moved)"; fail=1
+    elif ! iv "$d/sim" "$d/seek_time.sv" dvd/secs_bcd.sv bench/dvd/seek_time_tb.sv 2>"$d/build"; then
+        echo "  FAIL $name: the mutated module did not build"; sed 's/^/      /' "$d/build"; fail=1
+    elif vvp "$d/sim" > "$d/log" 2>&1 && grep -q "seek_time_tb: ALL TESTS PASSED" "$d/log"; then
+        echo "  FAIL $name: seek_time_tb PASSED without the fix"; fail=1
+    else
+        echo "  PASS $name ($(grep -c 'FAIL:' "$d/log") arm(s) caught it)"
+        grep 'FAIL:' "$d/log" | head -3 | sed 's/^/      /'
+    fi
+    rm -rf "$d"
+}
+
 if [ "${1:-}" = "--red" ]; then
     echo "== RED arms =="
     # M1: the pre-fix rule -- the last-written cell's last_sector.
@@ -173,6 +193,13 @@ if [ "${1:-}" = "--red" ]; then
         "s@end else if (tick_ok \&\& s0_low \&\& tk_bit) begin@end else if (tick_ok \&\& s0_low \&\& (s0_x == tick_col[0] || s0_x == tick_col[0] + 10'd1)) begin@"
     red_bar MA-thinnotch \
         "s@if (dv_qcap <= 10'd510) tick_bm\[dv_qcap\[8:0\] + 9'd1\] <= 1'b1;@if (dv_qcap <= 10'd510) tick_bm[dv_qcap[8:0]] <= 1'b1;@"
+    # MB restores the ascending-order early exit that froze the preview at 0.
+    red_time MB-earlyexit \
+        "s@if (scan_i >= cell_n) begin@if ((scan_i >= cell_n) || (cf_q > tgt)) begin@"
+    # MC keeps the full walk but takes ANY cell at or below the target rather
+    # than the NEAREST one -- wrong whenever a later-index cell sits lower.
+    red_time MC-firstmatch \
+        "s@if ((cf_q <= tgt) \&\& (!lo_ok || (cf_q > lo_rbn))) begin@if (cf_q <= tgt) begin@"
 fi
 
 [ $fail -eq 0 ] && echo "RUN_TITLE_SPAN: ALL GREEN" || echo "RUN_TITLE_SPAN: FAILURES"
