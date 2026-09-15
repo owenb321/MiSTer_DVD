@@ -1773,6 +1773,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .clk(dot_clk), 
     .clk_en(dot_ce),
     .rst(dot_rst), 
+    .hard_rst(dot_hard_rst),                                 // DVD-FORK FIX: sync/DE line survives a watchdog/soft reset
     .pixel_repetition(dot_pixel_repetition),                 // from register file
     .y_in(y_pqueue),                                         // from pixel queue
     .u_in(u_pqueue),                                         // from pixel queue
@@ -1807,6 +1808,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .clk(dot_clk),
     .clk_en(dot_ce),
     .rst(dot_rst),
+    .hard_rst(dot_hard_rst),                                 // DVD-FORK FIX: sync/DE line survives a watchdog/soft reset
     .y_in(y_mixer),                                          // from mixer
     .u_in(u_mixer),                                          // from mixer
     .v_in(v_mixer),                                          // from mixer
@@ -1832,6 +1834,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .clk(dot_clk), 
     .clk_en(dot_ce), 
     .rst(dot_rst), 
+    .hard_rst(dot_hard_rst),                                 // DVD-FORK FIX: sync/DE line survives a watchdog/soft reset
     .matrix_coefficients(dot_matrix_coefficients),           // from vld
     .y(y_osd),                                               // from osd
     .u(u_osd),                                               // from osd

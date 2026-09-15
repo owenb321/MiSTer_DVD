@@ -246,7 +246,9 @@ module field_phase_tb;
   );
 
   mixer mixer (
-    .clk(dot_clk), .clk_en(1'b1), .rst(rst),
+    // hard_rst tied to rst: this bench has one reset and never models a decoder
+    // soft reset, so the sync line behaves exactly as it did before that port existed.
+    .clk(dot_clk), .clk_en(1'b1), .rst(rst), .hard_rst(rst),
     .pixel_repetition(1'b0),
     .y_in(mx_y), .u_in(mx_u), .v_in(mx_v), .osd_in(mx_osd), .position_in(mx_position),
     .pixel_rd_en(mx_rd_en), .pixel_rd_valid(mx_rd_valid), .pixel_rd_underflow(mx_rd_underflow),

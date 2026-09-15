@@ -659,3 +659,148 @@ instrument, not to measure a rate. Issue #65 (a narration still must not replay 
 audio) is not automated here: structurally the soft reset re-streams nothing and
 `aud_flush` already fires on the same `jump_flush`, so a replay has no mechanism —
 a maintainer ear-check closes it.
+
+---
+
+## 12. The §11 fix shipped WIDER than its own description, and it drew a resolution popup (2026-09-15)
+
+Branch `fix/soft-reset-scope`. Field report on Scooby-Doo 2's *Monsters Unleashed
+Challenge*: the screen flashes black for a frame **and the MiSTer resolution popup
+appears** on some transitions between game screens — moving the van on the overworld
+map, consistently, at every direction press.
+
+Two separate defects. One is §11's scope; the other is older than §11 and is what
+actually draws the popup.
+
+### 12a. `~keep_vbuf` is not "a menu transition"
+
+§11's comment enumerates what it was written for — *"title→menu on the Menu key, the
+First Play chain into a menu, menu→title Play"* — and the predicate it shipped was
+
+```systemverilog
+wire jump_flush = jump_ack && ~keep_vbuf;      // arms jump_soft_cnt
+```
+
+`keep_vbuf` is `menu_dom && (target is a menu)` at every one of its assignment sites in
+`dvd_iso_reader.sv`. It is a fact about the **domain**, so `~keep_vbuf` is true for every
+title-domain jump as well. On an ordinary movie the intended set and the selected set
+nearly coincide and nothing shows. On a **DVD-game disc, whose menus are authored as
+TITLE-domain PGCs**, every screen transition is a title→title `LinkPGCN` — so ordinary
+gameplay navigation took a full decoder reset.
+
+This is the same shape as issue #81 (*a menu CONTEXT is not a menu DOMAIN*). The durable
+rule: **derive a predicate from what it SELECTS, not from the cases it was written for**,
+and when a comment enumerates cases, check that the expression below it selects those and
+only those.
+
+**Fix.** The reader publishes `jump_cross` beside `keep_vbuf`, from the same two values:
+
+```systemverilog
+keep_vbuf  <= menu_dom &&  jdom_is_menu;   // "both sides are menus"  -> hold the VBUF
+jump_cross <= menu_dom ^   jdom_is_menu;   // "the sides differ"      -> soft-reset
+```
+
+⛔ **They are not complements.** A title→title jump is neither: it flushes the VBUF and
+must **not** soft-reset. That gap is the whole reason the port exists — do not
+"simplify" `jump_cross` to `~keep_vbuf`, and do not gate on `jump_flush` alone again.
+
+Gate: `flush_ctl_tb` row **[4b]** (title→title jump: trio, NO soft reset), proven RED
+against the old predicate (`soft=64`, want 0) and the **only** row that fails, so the arm
+is specific rather than merely sensitive. Row [4] keeps its pre-#92 RED.
+
+### 12b. A decoder soft reset was dropping SYNC AT THE PINS
+
+This one predates §11 — it has been true of the **mount** soft reset since 2026-08-28 and
+of every **watchdog** expiry — and it is what turns a soft reset into a resolution popup.
+
+`soft_rst_n` folds into `comm_rst` (`reset.v:76`), which drives `clk_rst`, `mem_rst` **and
+`dot_rst`**. The display chain is
+
+```
+syncgen -> mixer -> mpeg2_osd -> yuv2rgb -> pixel_en / h_sync / v_sync
+                                          -> emu.sv -> VGA_DE / VGA_HS / VGA_VS
+```
+
+and `mixer`, `mpeg2_osd` and `yuv2rgb` all sat on `dot_rst`, each zeroing its
+sync/DE registers on reset. So a soft reset drove DE, HSYNC and VSYNC **low at the pins**
+for the ~2.4 µs flush level.
+
+⚠ That is precisely what `sw_blank`'s comment in `emu.sv` forbids — *"RGB ONLY —
+vga_hs_q/vga_vs_q/vga_de_q below are UNTOUCHED. Dropping sync across a raster change is
+the re_interlace S_HUNT defect"* — and the 2026-09-03 single-raster fix had already moved
+**`syncgen_intf`** onto `dot_hard_rst` for exactly this class of reason. **It moved the
+raster generator but not the pipeline that carries its sync to the pins.** When a fix
+protects one stage of a chain from a reset domain, check the rest of the chain.
+
+**Why a popup and not a flicker.** `hps_io`'s `video_calc` counts active dots off DE
+(gated by `CE_PIXEL`), rewrites `vid_hcnt` every sampled frame, and **re-arms `resto` on
+ANY change**, incrementing `vid_nres` 15 frames later *whether or not the value came
+back*. So a transient disturbance is enough; Main runs `video_mode_adjust()` and names the
+resolution that is already on screen. (A frame with *zero* DE is skipped by its
+`if(hcnt && vcnt)` guard — it is the partial mid-line gap that reports, not a blackout.)
+
+**Fix.** The sync/DE delay line in the three modules takes a new `hard_rst` port, driven
+from `dot_hard_rst`. ⚠ Scope is deliberate: the **data** path and `mixer`'s `pixel_rd_en`
+handshake stay on `dot_rst`, because `pixel_queue` is reset with them and leaving the
+handshake alone would desync the two. With DE live and `state` back at `STATE_INIT` (not a
+`displaying` state) `y/u/v_out` take 16/128/128 = black, so the picture goes black for a
+few dots while sync keeps running. A black line is invisible; a dropped sync is not.
+⚠ `osd.v`'s stages 3–5 run through `alpha_blend_y`'s `dta` pipeline, so that instance
+takes `hard_rst` too — resetting the stages either side of a submodule that still zeroed
+them would have left the gap open.
+
+### 12c. Measured, on the rig and in sim
+
+Instrument on hardware: Main's own `show_video_info()` log line (`video.cpp:3113`), reached
+by setting `debug=2` under `[MiSTer]` (stdout → `/tmp/debug.txt`, `cfg.cpp:447`).
+★ A screenshot **cannot** see the popup — captures are the core's raw raster, taken
+upstream of the MiSTer OSD — so this log is the only instrument that can count it.
+
+| action | kind | pre-#92 core | shipped #92 |
+|---|---|---|---|
+| idle playback, 6 s | — | 0 | 0 |
+| Play Movie | menu→title crossing | **0** | **1** |
+| Menu key | title→menu crossing | **0** | **1** |
+| game start | in-PGC cell link (**seek** path) | — | **0** |
+| **overworld: Right** | **title→title `LinkPGCN`** | **0** | **1** |
+
+Both arms made the same jump (`CH 1/2` → `CH 4/2`, same target), so the core is the only
+variable. Every report reads `720 x 480i` with `AR = 4:3` — the resolution and aspect
+already on screen — so nothing about the mode changed. ★ The "some transitions" detail in
+the report is confirmed by the game-start row: it changed cell without changing PGCN, took
+the seek path, and reported nothing. Only `jump_ack` arms the soft reset.
+
+In sim (`run_sync_integrity.sh --red`): one soft-reset pulse costs **48 active dots** at
+the pins and disturbs the emitted sync for **136 cycles** — a 48-dot shortfall on one
+line is exactly what makes `video_calc`'s `hcnt` differ and arms Main's report.
+
+### 12d. The gate
+
+**`bench/dvd/run_sync_integrity.sh --red`.** Two identical display chains are driven from
+ONE syncgen, so they see the same raster cycle for cycle; chain B takes the `dot_rst`
+pulse, chain A does not, and every cycle B's `{pixel_en, h_sync, v_sync}` must equal A's.
+It measures the **pins**, never a signal the fix names — a bench asserting "`hard_rst` is
+connected" would agree with the RTL by construction.
+
+⚠⚠ **Its first run passed vacuously, with every counter reading 0.** `syncgen`'s counters
+are reset *only* by `syncgen_rst`, which in the core is pulsed low by the modeline walk's
+register writes (`regfile.v:499`); leaving it high left them at X forever. The bench now
+refuses to pass without a live raster (≥100k active dots, ≥100 hsync edges, ≥2 vsync
+edges) — a bench that measures the ABSENCE of a difference must prove something was
+happening. Same family as `bench-that-cannot-fail`.
+
+### 12e. Accepted risk
+
+Narrowing 12a means a title-domain jump landing on a **still** no longer gets the pipeline
+reset. Measured on the reported disc: `VTS_02_1.VOB` downloads a quantiser matrix on 20 of
+36 sampled sequence headers, and the title PGCs carry real held stills (PGCN 2 cells 1–5,
+PGCN 3 cell 3 are all `still=255`). Mitigating: severity here is a worst
+`default/custom` of **2.38×** (`tools/qmatrix_scan.py`) against the reported disc's
+20.75×; v0.5.0 shipped with no jump soft reset at all and several HW rounds on this disc
+never reported fried in-title images; and a moving cell self-heals at its next GOP header,
+so only a still is exposed.
+
+**Contingency if a HW round shows frying:** extend the predicate with "the landing cell is
+a still" — the reader knows `still_time` at `S_CELL_LOAD`, before the landing's first
+bytes are streamed. ⛔ Do **not** reach for the issue-#65 menu-still cold re-decode; it
+replays audio and was removed for that reason.

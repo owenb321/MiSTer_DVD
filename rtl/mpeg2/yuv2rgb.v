@@ -25,13 +25,17 @@
 `undef DEBUG
 //`define DEBUG 1
 
-module yuv2rgb (clk, clk_en, rst,
+module yuv2rgb (clk, clk_en, rst, hard_rst,
                 matrix_coefficients, y, u, v, h_sync_in, v_sync_in, pixel_en_in,
                 r, g, b, y_out, u_out, v_out, h_sync_out, v_sync_out, c_sync_out, pixel_en_out
                 );
   input  clk;
   input  clk_en;
   input  rst;
+  /* DVD-FORK FIX (2026-09-15): reset for the SYNC/DE delay line only -- see the long
+   * note in mixer.v. `rst` is dot_rst, which a watchdog expiry and the decoder soft
+   * reset both assert, and these registers carry VGA_HS/VGA_VS/VGA_DE to the pins. */
+  input  hard_rst;
 
   input [7:0] matrix_coefficients; /* extracted from mpeg2 bitstream. Determines yuv -> rgb conversion factors. ISO/IEC 13818-2, par. 6.3.6 */
 
@@ -264,7 +268,7 @@ module yuv2rgb (clk, clk_en, rst,
  /* delay pixel_en, h_sync and v_sync so they are balanced with r, g, b */
 
   always @(posedge clk)
-    if (~rst)
+    if (~hard_rst)
       begin
         pixel_en_0 <= 1'b0;
         pixel_en_1 <= 1'b0;
@@ -287,7 +291,7 @@ module yuv2rgb (clk, clk_en, rst,
      end
 
   always @(posedge clk)
-    if (~rst)
+    if (~hard_rst)
       begin
         h_sync_0 <= 1'b0;
         h_sync_1 <= 1'b0;
@@ -310,7 +314,7 @@ module yuv2rgb (clk, clk_en, rst,
      end
 
   always @(posedge clk)
-    if (~rst)
+    if (~hard_rst)
       begin
         v_sync_0 <= 1'b0;
         v_sync_1 <= 1'b0;
@@ -336,7 +340,7 @@ module yuv2rgb (clk, clk_en, rst,
    */
 
   always @(posedge clk)
-    if (~rst) c_sync_out <= 1'b0;
+    if (~hard_rst) c_sync_out <= 1'b0;
     else if (clk_en) c_sync_out <= ~(h_sync_2 ^ v_sync_2);
     else c_sync_out <= c_sync_out;
 

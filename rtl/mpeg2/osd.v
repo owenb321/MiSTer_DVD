@@ -66,7 +66,7 @@
  */
 
 module mpeg2_osd (
-  clk, clk_en, rst,
+  clk, clk_en, rst, hard_rst,
   y_in, u_in, v_in, h_sync_in, v_sync_in, pixel_en_in, osd_in,
   y_out, u_out, v_out, h_sync_out, v_sync_out, pixel_en_out,
   osd_clt_rd_addr, osd_clt_rd_en, osd_clt_rd_dta, 
@@ -75,6 +75,10 @@ module mpeg2_osd (
   input  clk;
   input  clk_en;
   input  rst;
+  /* DVD-FORK FIX (2026-09-15): reset for the SYNC/DE passthrough only -- see the long
+   * note in mixer.v. These registers carry VGA_HS/VGA_VS/VGA_DE to the pins, and `rst`
+   * is dot_rst, which a watchdog expiry and the decoder soft reset both assert. */
+  input  hard_rst;
 
   input [7:0]y_in;
   input [7:0]u_in;
@@ -131,7 +135,7 @@ module mpeg2_osd (
     else {y_0, u_0, v_0} <= {y_0, u_0, v_0};
   
   always @(posedge clk)
-    if (~rst) {pixel_en_0, h_sync_0, v_sync_0} <= 3'b0;
+    if (~hard_rst) {pixel_en_0, h_sync_0, v_sync_0} <= 3'b0;
     else if (clk_en) {pixel_en_0, h_sync_0, v_sync_0} <= {pixel_en_in, h_sync_in, v_sync_in};
     else {pixel_en_0, h_sync_0, v_sync_0} <= {pixel_en_0, h_sync_0, v_sync_0};
   
@@ -152,7 +156,7 @@ module mpeg2_osd (
     else {y_1, u_1, v_1} <= {y_1, u_1, v_1};
   
   always @(posedge clk)
-    if (~rst) {pixel_en_1, h_sync_1, v_sync_1} <= 3'b0;
+    if (~hard_rst) {pixel_en_1, h_sync_1, v_sync_1} <= 3'b0;
     else if (clk_en) {pixel_en_1, h_sync_1, v_sync_1} <= {pixel_en_0, h_sync_0, v_sync_0};
     else {pixel_en_1, h_sync_1, v_sync_1} <= {pixel_en_1, h_sync_1, v_sync_1};
   
@@ -199,7 +203,7 @@ module mpeg2_osd (
     else {y_blend_2, u_blend_2, v_blend_2} <= {y_blend_2, u_blend_2, v_blend_2};
   
   always @(posedge clk)
-    if (~rst) {pixel_en_2, h_sync_2, v_sync_2} <= 3'b0;
+    if (~hard_rst) {pixel_en_2, h_sync_2, v_sync_2} <= 3'b0;
     else if (clk_en) {pixel_en_2, h_sync_2, v_sync_2} <= {pixel_en_1, h_sync_1, v_sync_1};
     else {pixel_en_2, h_sync_2, v_sync_2} <= {pixel_en_2, h_sync_2, v_sync_2};
   
@@ -221,12 +225,18 @@ module mpeg2_osd (
   wire      h_sync_5;
   wire      v_sync_5;
 
+  /* ⚠ DVD-FORK: this instance's `dta` pipeline carries {pixel_en, h_sync, v_sync}
+   * through stages 3-5, so it is part of the sync path and takes hard_rst with the
+   * rest of it. Its arithmetic (z_out) rides along; that is a pure pipeline with no
+   * state machine, and the OSD is tied off in this design (mpeg2video.v
+   * dot_osd_enable = 1'b0) so z_out reaches nothing. Resetting the sync stages either
+   * side of a submodule that still zeroes them would have left the gap open. */
   alpha_blend 
     #(.dta_width(55))
     alpha_blend_y (
     .clk(clk), 
     .clk_en(clk_en), 
-    .rst(rst),
+    .rst(hard_rst),
     .x_in(y_blend_2), 
     .y_in(y_2), 
     .dta_in({osd_y_2, osd_u_2, osd_v_2, osd_mode_2, y_2, u_2, v_2, pixel_en_2, h_sync_2, v_sync_2}),
@@ -286,7 +296,7 @@ module mpeg2_osd (
     else {y_out, u_out, v_out} <= {y_out, u_out, v_out};
 
   always @(posedge clk)
-    if (~rst) {pixel_en_out, h_sync_out, v_sync_out} <= 3'b0;
+    if (~hard_rst) {pixel_en_out, h_sync_out, v_sync_out} <= 3'b0;
     else if (clk_en) {pixel_en_out, h_sync_out, v_sync_out} <= {pixel_en_5, h_sync_5, v_sync_5};
     else {pixel_en_out, h_sync_out, v_sync_out} <= {pixel_en_out, h_sync_out, v_sync_out};
   

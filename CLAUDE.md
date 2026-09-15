@@ -452,12 +452,27 @@ worse maintenance burden than targeted in-place edits. So:
   planes carrying LUMA — a block-count desync from the partial block it left in the rld
   fifo). Two forms of flushing the getbits window failed the same way (one also cost
   7 MHz: a bare AND on a large module's reset tree). **The pipeline's state is coupled;
-  reset all of it or none of it.** `dvd/flush_ctl.sv` now raises `soft_flush` on a
-  `~keep_vbuf` VM JUMP (menu entry/exit, the FP boot chain) as well as on a mount —
+  reset all of it or none of it.** `dvd/flush_ctl.sv` now raises `soft_flush` on a VM
+  JUMP THAT CROSSES THE MENU/TITLE BOUNDARY (menu entry/exit, the FP boot chain) as well
+  as on a mount —
   `reset.soft_rst_n`, the watchdog-equivalent reset a file mount has used HW-proven
   since August. Transport seeks and mode switches are NOT included: a chapter skip keeps
   its held frame; a menu entry/exit is a brief black cut, which is what a set-top player
   does (maintainer decision). `mount_flush` stays mount-only for `pal_detect`.
+  ⚠⚠ **THE PREDICATE SHIPPED WIDER THAN THAT SENTENCE AND THE SENTENCE IS WHY NOBODY
+  NOTICED — corrected 2026-09-15 (branch `fix/soft-reset-scope`).** It gated on
+  `jump_ack && ~keep_vbuf`, and `keep_vbuf` is `menu_dom && (target is a menu)` — a fact
+  about the DOMAIN — so `~keep_vbuf` is true for EVERY title-domain jump too. On a movie
+  the two sets nearly coincide; on a DVD-GAME disc, whose menus are authored as
+  TITLE-domain PGCs, every screen transition is a title→title `LinkPGCN`, so ordinary
+  gameplay navigation took a full decoder reset. Field report on Scooby-Doo 2: a black
+  frame and a MiSTer **resolution popup** on the overworld map at every van move. The
+  gate is now the reader's new `jump_cross` (pre-jump `menu_dom` XOR target-is-menu),
+  its sibling — ⛔ the two are NOT complements, and a title→title jump is neither:
+  it flushes and must not soft-reset. Same class as issue #81 (*a menu CONTEXT is not a
+  menu DOMAIN*) and the same lesson: **derive a predicate from what it SELECTS, not from
+  the cases it was written for.** Gate: `flush_ctl_tb` row **[4b]**, RED on the first cut
+  (`soft=64`, want 0) and the ONLY row that fails.
   ★ **The diagnostic round that settled it read `chroma_format` beside every garbage
   frame on the rig: 1 (correct) on all three** — the parameter that sets blocks-per-
   macroblock was exonerated in one run, which is what turned "re-sync harder" into
@@ -486,6 +501,32 @@ worse maintenance burden than targeted in-place edits. So:
   ~1.2 s, not 0.4. ⏳ Not automated: an issue-#65 narration still must not replay audio —
   structurally it cannot (the soft reset re-streams nothing; `aud_flush` fires on the same
   `jump_flush`), a maintainer ear-check closes it.
+  ★★★ **AND A SECOND, INDEPENDENT DEFECT CAME OUT WITH IT — THE ONE THAT ACTUALLY DREW
+  THE POPUP, AND IT IS OLDER THAN #92.** A decoder soft reset asserts `dot_rst`
+  (`reset.v` `comm_rst`), and `mixer` → `mpeg2_osd` → `yuv2rgb` all sat on it while each
+  zeroes its `h_sync`/`v_sync`/`pixel_en` registers — and those three ARE the core's
+  `VGA_HS`/`VGA_VS`/`VGA_DE`. So a soft reset **dropped sync at the pins** for the ~2.4 µs
+  flush level. ⚠ That is exactly what `sw_blank`'s comment forbids (*"RGB ONLY … dropping
+  sync across a raster change is the `re_interlace` S_HUNT defect"*), and the 2026-09-03
+  single-raster fix had moved **`syncgen_intf`** to `dot_hard_rst` for this very class of
+  reason — **it moved the raster GENERATOR but not the pipeline that carries its sync to
+  the pins.** Fix: the sync/DE delay line in those three modules takes a new `hard_rst`
+  port (`dot_hard_rst`); the DATA path and `mixer`'s `pixel_rd_en` handshake stay on
+  `dot_rst` (`pixel_queue` is reset with them), so the picture goes black for a few dots
+  while sync keeps running — a black line is invisible, a dropped sync is not.
+  ★ **Why a popup rather than a flicker:** `hps_io`'s `video_calc` counts active dots off
+  DE and **re-arms its report on ANY change, reporting 15 frames later whether or not the
+  value came back** — so a transient is enough, and Main then names the resolution already
+  on screen. MEASURED in sim: one pulse costs **48 active dots** and disturbs the emitted
+  sync for 136 cycles. Gate: **`bench/dvd/run_sync_integrity.sh --red`** — two identical
+  display chains off ONE syncgen, one taking the reset pulse, requiring bit-identical
+  `{pixel_en,h_sync,v_sync}`; it measures the PINS, never a signal the fix names.
+  ⚠ Its first run passed **vacuously** (every counter 0): `syncgen`'s counters are reset
+  only by `syncgen_rst`, which the core pulses from a modeline write, so leaving it high
+  left them at X. It now refuses to pass without a live raster.
+  ⚠ This defect also affects the MOUNT soft reset and a WATCHDOG expiry — both have had
+  it since August and neither was noticed (a mount changes resolution legitimately; a
+  watchdog expiry is abnormal).
   Detail: **`docs/quant_matrix.md`** (§11 the fix + HW round, §9–§10 the failed attempt).
   ⚠ **Its `keep_vbuf` claim was too strong and is corrected in place (2026-09-14):** such a
   hop leaves the VBUF alone but still pulsed `load_flush` AND dropped up to 16 KB the

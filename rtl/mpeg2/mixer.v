@@ -35,7 +35,7 @@
 //`define DEBUG 1
 
 module mixer(
-  clk, clk_en, rst, 
+  clk, clk_en, rst, hard_rst,
   pixel_repetition,
   y_in, u_in, v_in, osd_in, position_in, pixel_rd_en, pixel_rd_valid, pixel_rd_underflow,
   h_pos, v_pos, h_sync_in, v_sync_in, pixel_en_in,
@@ -48,6 +48,26 @@ module mixer(
   input              clk;                      // clock
   input              clk_en;                   // clock enable
   input              rst;                      // synchronous active low reset
+  /* DVD-FORK FIX (2026-09-15): reset for the SYNC/DE DELAY LINE only.
+   * `rst` here is dot_rst, which reset.v asserts for a WATCHDOG expiry and for the
+   * decoder SOFT reset (comm_rst) -- and the sync/DE passthrough below is registered,
+   * so those events drove h_sync_out/v_sync_out/pixel_en_out LOW for the duration.
+   * Those three are the core's VGA_HS/VGA_VS/VGA_DE (emu.sv), so a soft reset was
+   * DROPPING SYNC AT THE PINS for ~2.4 us. hps_io's video_calc counts active pixels
+   * off DE, and re-arms its report on ANY change, so every soft reset made Main
+   * report a "new" resolution and pop its notice -- naming the resolution already on
+   * screen. MEASURED on the rig: 1 spurious report per menu entry/exit and per
+   * title->title jump, 0 on a core without the jump soft reset.
+   * The 2026-09-03 single-raster fix moved syncgen_intf to dot_hard_rst for exactly
+   * this class of reason; it moved the raster GENERATOR but not the pipeline that
+   * carries its sync to the pins. This closes that gap.
+   * ⚠ Scope is deliberate: the DATA path and the pixel_rd_en handshake against
+   * pixel_queue STAY on `rst` -- pixel_queue is reset with them, and leaving the
+   * handshake alone would desync the two. With DE live and `state` back at
+   * STATE_INIT (not a `displaying` state) y_out/u_out/v_out take 16/128/128 = black,
+   * so the picture goes black for a few dots while the sync keeps running. That is
+   * the intended trade: a black line is invisible, a dropped sync is not. */
+  input              hard_rst;                 // async-derived, survives watchdog/soft reset
 
   input              pixel_repetition;         // if asserted, repeat each pixel once
 
@@ -262,15 +282,15 @@ module mixer(
 
   /* delay sync gen output */
   always @(posedge clk)
-    if (~rst) h_sync_0 <= 1'b0;
+    if (~hard_rst) h_sync_0 <= 1'b0;
     else if (clk_en) h_sync_0 <= h_sync_in;
 
   always @(posedge clk)
-    if (~rst) v_sync_0 <= 1'b0;
+    if (~hard_rst) v_sync_0 <= 1'b0;
     else if (clk_en) v_sync_0 <= v_sync_in;
 
   always @(posedge clk)
-    if (~rst) pixel_en_0 <= 1'b0;
+    if (~hard_rst) pixel_en_0 <= 1'b0;
     else if (clk_en) pixel_en_0 <= pixel_en_in;
 
   /* default values of y_out, u_out and v_out are 16, 128, 128, which maps onto black */
@@ -307,39 +327,39 @@ module mixer(
   */
 
   always @(posedge clk)
-    if (~rst) pixel_en_1 <= 1'b0;
+    if (~hard_rst) pixel_en_1 <= 1'b0;
     else if (clk_en) pixel_en_1 <= pixel_en_0;
 
   always @(posedge clk)
-    if (~rst) h_sync_1 <= 1'b0;
+    if (~hard_rst) h_sync_1 <= 1'b0;
     else if (clk_en) h_sync_1 <= h_sync_0;
 
   always @(posedge clk)
-    if (~rst) v_sync_1 <= 1'b0;
+    if (~hard_rst) v_sync_1 <= 1'b0;
     else if (clk_en) v_sync_1 <= v_sync_0;
 
   always @(posedge clk)
-    if (~rst) pixel_en_2 <= 1'b0;
+    if (~hard_rst) pixel_en_2 <= 1'b0;
     else if (clk_en) pixel_en_2 <= pixel_en_1;
 
   always @(posedge clk)
-    if (~rst) h_sync_2 <= 1'b0;
+    if (~hard_rst) h_sync_2 <= 1'b0;
     else if (clk_en) h_sync_2 <= h_sync_1;
 
   always @(posedge clk)
-    if (~rst) v_sync_2 <= 1'b0;
+    if (~hard_rst) v_sync_2 <= 1'b0;
     else if (clk_en) v_sync_2 <= v_sync_1;
 
   always @(posedge clk)
-    if (~rst) pixel_en_out <= 1'b0;
+    if (~hard_rst) pixel_en_out <= 1'b0;
     else if (clk_en) pixel_en_out <= pixel_en_2;
 
   always @(posedge clk)
-    if (~rst) h_sync_out <= 1'b0;
+    if (~hard_rst) h_sync_out <= 1'b0;
     else if (clk_en) h_sync_out <= h_sync_2;
 
   always @(posedge clk)
-    if (~rst) v_sync_out <= 1'b0;
+    if (~hard_rst) v_sync_out <= 1'b0;
     else if (clk_en) v_sync_out <= v_sync_2;
 
   /* DVD-FORK DEBUG (256-line strobe probe) ------------------------------------
