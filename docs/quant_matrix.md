@@ -789,7 +789,53 @@ refuses to pass without a live raster (≥100k active dots, ≥100 hsync edges, 
 edges) — a bench that measures the ABSENCE of a difference must prove something was
 happening. Same family as `bench-that-cannot-fail`.
 
-### 12e. Accepted risk
+### 12e. HW-CONFIRMED (2026-09-15)
+
+Build `DVD_softscope_20260915_1924.rbf`, SEED 7 first roll, clk_dec 94.39/90.27 against
+the 86.0 gate, 91 % ALM. Same instrument and same script as §12c, run against the same
+two arms, so the three columns are directly comparable:
+
+| action | kind | pre-#92 | shipped #92 | **fixed** |
+|---|---|---|---|---|
+| idle playback, 6 s | — | 0 | 0 | **0** |
+| Play Movie | menu→title crossing | 0 | 1 | **0** |
+| Menu key | title→menu crossing | 0 | 1 | **0** |
+| **overworld: Right** | **title→title `LinkPGCN`** | 0 | 1 | **0** |
+
+★ **The two crossings are the sharp result, not the van move.** They STILL soft-reset
+(that is 12a's design — only the title→title case was removed) and they report **zero**,
+which is 12b working on its own: the reset happens and is invisible at the pins. The van
+move is 12a.
+
+**The soft reset demonstrably still fires**, incidentally measured: the capture taken
+right after the Play Movie crossing came back **σ = 0.0, uniformly black** — the accepted
+black cut, still there.
+
+**Blockiness (§12f's risk), measured with the metric from #96** — image energy on the
+8-pixel DCT grid ÷ energy off it, ~1.0 clean and ~1.9 fried:
+
+| capture | value | σ |
+|---|---|---|
+| Scooby title-domain still, room A (in-title navigation) | **1.093** | 67.8 |
+| Scooby title-domain still, room B (after a title→title jump) | **1.105** | 52.8 |
+| Scooby overworld, fixed vs control | 1.012 vs **1.012** | 35 |
+| Scooby game title still, fixed vs control | 1.069 vs **1.069** | 47 |
+| T2 timeline menu / main menu after a title→menu re-entry | **1.044** | 37 |
+
+Nothing approaches the fried band, the fix/control pairs are identical to three decimals,
+and the two rooms are the risk case itself — detailed title-domain stills reached by
+in-title navigation, which no longer soft-reset.
+
+**Unregressed on T2** (the menu disc, and the one whose logo chain has broken flush changes
+before): the timeline menu renders with its highlight, a menu→menu hop, menu→title Play
+(the Dolby/THX logo chain runs), and a title→menu re-entry that lands on the full main
+menu **un-fried at 1.044** — that last one is the crossing #92 exists to protect, so it is
+the load-bearing unregression. All four report zero. Scooby's own menus, submenus, game
+entry and in-game room navigation all unregressed.
+
+⏳ Not exercised: a PAL disc, and the Elmo disc that reported #92 (not on the rig).
+
+### 12f. Accepted risk
 
 Narrowing 12a means a title-domain jump landing on a **still** no longer gets the pipeline
 reset. Measured on the reported disc: `VTS_02_1.VOB` downloads a quantiser matrix on 20 of
