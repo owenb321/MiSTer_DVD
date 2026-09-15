@@ -833,7 +833,33 @@ menu **un-fried at 1.044** — that last one is the crossing #92 exists to prote
 the load-bearing unregression. All four report zero. Scooby's own menus, submenus, game
 entry and in-game room navigation all unregressed.
 
-⏳ Not exercised: a PAL disc, and the Elmo disc that reported #92 (not on the rig).
+✅ **MAINTAINER-CONFIRMED on their own rig (2026-09-15), including the two arms this
+harness could not reach:** Scooby-Doo 2 good; **T2 Mission Profiles** good (the #96
+slideshow path); and **the Elmo disc launched 20 times with no fried image** — against an
+original onset rate of roughly 1 in 8 re-entries, which is the arm that matters most,
+since a clean single pass would have proved nothing.
+
+⚠ **One PAL disc IS still fried, and it is PRE-EXISTING — `INCREDIBLE_HULK.iso`, the
+special features menu.** A/B'd by the maintainer against the `quantmatrix` build that
+fixed Elmo: **fried there too**, so neither this branch nor #92 caused or cures it.
+Measured offline, and the reason it is out of #92's reach is structural:
+
+* `tools/qmatrix_scan.py`: 7/7 menu-VOB sequence headers download a matrix, worst
+  `default/custom` **29.00** (Elmo's was 20.75) — so a lost matrix here is dramatic.
+* The menu is **VTS_06 VTSM PGCN 15**, a single `still=255` cell, and the only thing that
+  reaches it is **PGCN 14's POST `LinkPGCN 15`** — PGCN 14 being a 70 s motion clip in the
+  same menu domain.
+* So the landing is a **menu→menu hop**: `keep_vbuf = 1`, and a `keep_vbuf` hop
+  soft-resets on **no** build. §11's fix is gated on `~keep_vbuf` and 12a narrows that
+  further, so this junction was never in scope either before or after.
+
+⛔ It is therefore a THIRD case, not a regression of either: #92 covers `~keep_vbuf`
+jumps, #96 covers the same junction from the delivery side (`nat_drained`) and fixed T2's
+slideshow, and this one is still losing something. Chase it on its own, and start by
+deciding between the two live hypotheses — the drain not engaging on this particular path,
+or the `alternate_scan` permutation (§4), which `qmatrix_scan` flags on all 7 of this
+disc's downloads. `tools/quant_fixture.py --junction` over the real PGCN 14 → 15 bytes
+plus an ffmpeg decode is the measurement that separates them, exactly as it did for #96.
 
 ### 12f. Accepted risk
 

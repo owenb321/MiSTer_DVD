@@ -485,7 +485,20 @@ worse maintenance burden than targeted in-place edits. So:
   blockiness **1.093 / 1.105** (fried is ~1.9), fix/control pairs identical to three
   decimals, and **T2's main menu after a title→menu re-entry is un-fried at 1.044** —
   that crossing is what #92 exists to protect, so it is the load-bearing unregression.
-  ⏳ Not exercised: PAL, and the Elmo disc that reported #92 (not on the rig).
+  ✅ **MAINTAINER-CONFIRMED 2026-09-15 on their own rig, including the arms the harness
+  could not reach:** Scooby-Doo 2 good, **T2 Mission Profiles** good (the #96 path), and
+  the **Elmo disc launched 20 times with no fried image** — against an original onset rate
+  of ~1 in 8, which is the arm that matters, since one clean pass proves nothing.
+  ⚠ **A PAL disc IS still fried and it is PRE-EXISTING — `INCREDIBLE_HULK.iso`'s special
+  features menu, A/B'd by the maintainer against the `quantmatrix` build that fixed Elmo
+  and fried THERE too.** ★ It is out of #92's reach STRUCTURALLY, not by accident: the
+  menu is VTS_06 VTSM **PGCN 15**, a single `still=255` cell reached only by **PGCN 14's
+  POST `LinkPGCN 15`** (a 70 s motion clip in the same menu domain), so the landing is a
+  **menu→menu hop with `keep_vbuf = 1` — and a `keep_vbuf` hop soft-resets on NO build.**
+  Its matrix is the worst in the library measured so far (`qmatrix_scan`: 7/7 downloads,
+  worst `default/custom` **29.00** vs Elmo's 20.75). ⛔ A THIRD case, not a regression of
+  #92 or #96 — chase separately; `docs/quant_matrix.md` §12e names the two live
+  hypotheses and the measurement that separates them.
   ★ **The diagnostic round that settled it read `chroma_format` beside every garbage
   frame on the rig: 1 (correct) on all three** — the parameter that sets blocks-per-
   macroblock was exonerated in one run, which is what turned "re-sync harder" into
