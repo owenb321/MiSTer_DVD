@@ -222,6 +222,18 @@ module dvd_iso_reader #(
     // nav_pci / av_sync re-anchor). Title seeks and menu->title jumps keep the
     // flush (A/V-sync critical). See docs/dvd_menu_refinements.md sec.2.
     output reg        keep_vbuf,
+    // level, valid with jump_ack: this VM jump CROSSED the menu/title boundary
+    // (title->menu on the Menu key, menu->title on Play, the First Play chain into a
+    // menu). It is `keep_vbuf`'s sibling and is computed from the same two values --
+    // pre-jump `menu_dom` and target `jdom_l` -- but it answers a DIFFERENT question:
+    //   keep_vbuf  = "both sides are menus"      -> hold the decoder's VBUF
+    //   jump_cross = "the sides differ"          -> soft-reset the decode pipeline
+    // ⚠ THE TWO ARE NOT COMPLEMENTS. A title->title jump is neither: it flushes the
+    // VBUF (keep_vbuf 0) but must NOT soft-reset. That gap is the whole point of this
+    // port -- `~keep_vbuf` was standing in for "crosses into a menu" and on a
+    // DVD-game disc, whose menus are title-domain PGCs, it selected every screen
+    // transition in the game. See dvd/flush_ctl.sv `soft_flush`.
+    output reg        jump_cross,
     output reg        pgc_loaded,    // pulse: PGC parse done (streaming / FP cmds done)
     output reg        pgc_error,     // pulse: a MENU jump failed (emu runs a fallback)
     output            menu_active,   // level: a menu-domain PGC is loaded
@@ -2011,6 +2023,7 @@ always @(posedge clk or negedge rst_n) begin
         jump_ctx     <= 1'b0;
         jump_ack     <= 1'b0;
         keep_vbuf    <= 1'b0;
+        jump_cross   <= 1'b0;
         pgc_loaded   <= 1'b0;
         pgc_error    <= 1'b0;
         cmd_we       <= 1'b0;
@@ -2488,6 +2501,12 @@ always @(posedge clk or negedge rst_n) begin
             // PRE-jump value (RHS reads the old reg); the new domain is jdom_l.
             // menu->title (Play) and title->menu (Menu key) keep the flush.
             keep_vbuf    <= menu_dom &&
+                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM));
+            // ...and whether this jump CROSSES the menu/title boundary at all. Same two
+            // values, XOR instead of AND (see the port declaration). Only a crossing
+            // soft-resets the decoder; a title->title LinkPGCN (a DVD game's screen
+            // transitions) flushes but keeps the pipeline.
+            jump_cross   <= menu_dom ^
                             ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM));
             jump_ctx     <= 1'b1;
             wr_ptr       <= 0;

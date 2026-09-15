@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-molewindow2"
+`define CORE_VERSION "dev-softscope"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1348,6 +1348,7 @@ wire       stop_kept_w;      // stage 1 (position kept) vs stage 2 (forgotten)
 
 // Disc-menu proto-nav read-backs / request lines (Phase 2)
 wire       jump_ack;         // from dvd_iso_reader (jump executing this cycle)
+wire       jump_cross;       // level (valid at jump_ack): the jump crosses menu<->title
 wire       keep_vbuf;        // level (valid at seek_ack/jump_ack): menu->menu
                              // transition -> hold the decoder VBUF (no vbuf_flush)
 wire       pgc_loaded;       // pulse: jump target parsed + streaming
@@ -2765,6 +2766,7 @@ flush_ctl flush_ctl_i (
     .mode_switch     (mode_switch),
     .aud_switch      (aud_switch),
     .keep_vbuf       (keep_vbuf),
+    .jump_cross      (jump_cross),        // menu<->title crossing: gates soft_flush
     .load_flush      (load_flush),
     .disc_rephase    (aud_disc_rephase),   // content PTS jump -> audio-only re-phase (VLC's RESET_PCR analogue)
     .cell_seamless   (cell_seamless),      // ...unless the author says this cell continues the last one
@@ -2772,7 +2774,7 @@ flush_ctl flush_ctl_i (
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
     .mount_flush     (mount_flush),
-    .soft_flush      (soft_flush),        // mount OR ~keep_vbuf VM jump -> decoder soft reset (docs/quant_matrix.md §11)
+    .soft_flush      (soft_flush),        // mount OR menu<->title CROSSING jump -> decoder soft reset (docs/quant_matrix.md §11)
     .pipe_rst_n      (pipe_rst_n),
     .aud_rst_n       (aud_rst_n)
 );
@@ -2965,6 +2967,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .jump_natural   (vm_from_wait_w),     // Phase B: VM CELL/POST-verdict jump
     .jump_ack       (jump_ack),
     .keep_vbuf      (keep_vbuf),
+    .jump_cross     (jump_cross),      // menu<->title crossing -> flush_ctl.soft_flush
     .pgc_loaded     (pgc_loaded),
     .pgc_error      (pgc_error),
     .menu_active    (menu_active),

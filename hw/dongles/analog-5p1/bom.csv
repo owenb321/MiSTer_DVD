@@ -1,0 +1,16 @@
+qty,refs,value,description,footprint,mfr_pn,supplier_pn,fit,notes
+2,"C1,C3",10uF,MLCC 10uF 16V X5R 0805,C_0805_2012Metric,generic,,fit,Any reputable X5R/X7R.
+12,"C2,C4,C5,C11,C12,C13,C21,C22,C23,C31,C32,C33",100nF,MLCC 100nF 50V X7R 0603,C_0603_1608Metric,generic,,fit,
+6,"C14,C15,C24,C25,C34,C35",2.2uF,MLCC 2.2uF 16V X7R 0805,C_0805_2012Metric,generic,,fit,"Charge-pump caps - X7R preferred, do NOT use Y5V."
+3,"C16,C26,C36",1uF,MLCC 1uF 16V X7R 0805,C_0805_2012Metric,generic,,fit,
+6,"C17,C18,C27,C28,C37,C38",1nF,MLCC 1nF 50V C0G/NP0 0603,C_0603_1608Metric,generic,,fit,C0G preferred - these sit in the audio output path.
+1,FB1,600R@100MHz,"Ferrite bead 600R @100MHz, 0603",L_0603_1608Metric,BLM18PG601SN1D,,fit,Murata. Any 0603 bead >=600R at 100MHz.
+1,J1,USB3_A_PLUG,"USB 3.0 Standard-A PLUG, board mount",USB3_A_Plug_Horizontal,see note,,fit,SOURCING RISK - see README. Alternative: USB3 Standard-B RECEPTACLE + a stock A-to-B cable (pin numbers are straight through).
+3,"J2,J3,J4",3.5mm TRS,"3.5 mm stereo jack, TRS",Jack_3.5mm_CUI_SJ1-3535NG_Horizontal,SJ1-3535NG,,fit,"CUI. THT part - confirm your assembler does through-hole, or substitute an SMD jack."
+5,"R1,R2,R3,R4,R5",33R,Resistor 33R 1% 0603,R_0603_1608Metric,generic,,fit,0R is an acceptable substitute.
+1,R6,4k7,Resistor 4.7k 1% 0603,R_0603_1608Metric,generic,,fit,MUTE INTERLOCK - must be <=4.7k to beat the FPGA's ~25k pull-up.
+1,R7,10k,Resistor 10k 1% 0603,R_0603_1608Metric,generic,,fit,
+1,R8,10k DNP,Resistor 10k 1% 0603,R_0603_1608Metric,generic,,DNP,DO NOT FIT. Escape hatch only - see schematic note at R8.
+6,"R11,R12,R21,R22,R31,R32",100R,Resistor 100R 1% 0603,R_0603_1608Metric,generic,,fit,
+3,"U1,U2,U3",PCM5102A,"Stereo DAC, 32-bit/384k, TSSOP-20",TSSOP-20_4.4x6.5mm_P0.65mm,PCM5102APWR,,fit,TI. The whole design assumes this part's BCK-PLL mode.
+1,U4,AP2112K-3.3,"LDO 600mA 3.3V, SOT-25",SOT-23-5,AP2112K-3.3TRG1,,fit,Diodes Inc. Any 3.3V/>=200mA low-noise LDO in SOT-25 works.
