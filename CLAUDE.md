@@ -1856,7 +1856,21 @@ worse maintenance burden than targeted in-place edits. So:
   a constant. Detail: `docs/dvd_nav.md` "Link button fields across a flush".
   ✅ **SCOOBY'S WHAC-A-MOLE — ROOT-CAUSED AND FIXED 2026-09-14 (branch
   `fix/hli-window-lag`); sim-proven RED/GREEN over the REAL NAV packs, 5 mutations each
-  failing EXACTLY its own arms; ⏳ HW-confirm pending.** Report: a monster appears, the
+  failing EXACTLY its own arms, and ✅ HW-CONFIRMED over two rounds 2026-09-14/15 (builds
+  `DVD_molewindow_20260914_2217.rbf` then `DVD_molewindow2_20260915_0202.rbf`, SEED 7 first
+  roll, clk_dec 94.20/89.84, 91 % ALM): **the maintainer can beat the minigame**, hits
+  register with the disc's own yellow highlight and misses with its red one, and the T2 /
+  Matrix menus are unregressed by the promotion-timer change.
+  ⏳ **Two symptoms REMAIN on the same disc and are NOT this defect** — they are A/V sync at
+  a cell transition, tracked separately: Shaggy's win commentary is cut off, and one round's
+  speech does not lip-sync. MEASURED structure that points the next session at it: every
+  cell in this game RESTARTS its PTS near zero (rounds at 0.094 s, commentary at 0.122 s),
+  so every transition is a clock discontinuity plus an audio re-phase; and the commentary
+  clips are **single-picture still cells carrying 8.3-22.2 s of audio past their only video
+  picture**, so `disp_sched` gets exactly ONE anchor and free-runs the rest. Start on HW
+  with the drift counters (`av_drift_ms`/`play_err_ms`/`disp_lag_ms`) — a drifting
+  single-anchor clock and audio dropped at the seek are different faults with one symptom,
+  and telemetry separates them in a single reading.** Report: a monster appears, the
   player presses that direction, the core says MISS, plays the "all the monsters mock
   you" clip and restarts the round.
   ★★ **THE DISC AUTHORS A SEQUENCE OF HLI TIME WINDOWS, AND `nav_pci`'s PARK POLICY WAS

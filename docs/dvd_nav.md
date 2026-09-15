@@ -1290,6 +1290,32 @@ because this touches the promotion timer every disc menu depends on. Arms [A]–
 mutations, each required to fail EXACTLY its own arms (M1→F, M2→E2, M3→F, M4→A B F, M5→J,
 M6→A, M7→D, M8→F, M9→the menu suite).
 
+✅ **HW-CONFIRMED over two rounds, 2026-09-14/15** (builds `DVD_molewindow_20260914_2217`
+then `DVD_molewindow2_20260915_0202`, SEED 7 first roll, clk_dec 94.20/89.84, 91 % ALM).
+Round 1 made the game progress and hits generally register but left the "sometimes it says
+I missed" residual that the lead sweep above reproduced; round 2 closed it and **the
+maintainer can beat the minigame**, with the disc's own yellow highlight on a hit and red on
+a miss, and the T2 / Matrix menus unregressed by the promotion-timer change.
+
+⏳ **Two symptoms remain on this disc and are NOT this defect** — they are A/V sync at a cell
+transition and want their own investigation: Shaggy's win commentary is cut off, and one
+round's speech does not lip-sync. Two measurements point the way. Every cell in this game
+**restarts its PTS near zero** (rounds at 0.094 s, the commentary clips at 0.122 s), so
+every transition is a clock discontinuity plus an audio re-phase. And the commentary clips
+are **single-picture still cells**:
+
+| cell | video pictures carrying a PTS | audio |
+|---|---|---|
+| 7 (win clip) | 1 | 100 packets, 8.3 s |
+| 8 (win clip) | 1 | 104 packets, 8.7 s |
+| 19 (commentary) | 1 | 265 packets, 22.2 s |
+
+`disp_sched` anchors the clock on video PICKUPS, so such a cell gives it exactly ONE anchor
+and then free-runs for the whole clip while the audio plays against it. ★ Start on hardware
+with the drift counters rather than offline: a drifting single-anchor clock and audio
+dropped at the seek produce the same symptom, and `av_drift_ms` / `play_err_ms` /
+`disp_lag_ms` separate them in one reading.
+
 ⚠⚠ **A bench bug worth knowing, found by making the bench faster:** the scene clock had
 two drivers — a task's blocking reset and the tick process's nonblocking increment. At 3
 clk per tick the reset survived because the increment ran on one edge in three; at 1 clk
