@@ -14,6 +14,7 @@
 //   start_streaming with keep_vbuf=1        x     x     x     x        -   (ungated!)
 //   seek_ack / jump_ack, keep_vbuf=0        x     x     x     -        -
 //   seek_ack / jump_ack, keep_vbuf=1        x     -     -     -        -   (menu hop)
+//     (soft_flush additionally needs jump_cross -- see [4] vs [4b] below)
 //   mode_switch (interlace/film raster)     x     x     x     -        -
 //   aud_switch (audio track)                -     -     -     -        x
 //   disc_rephase (content PTS jump)         -     -     -     -        x
@@ -21,9 +22,11 @@
 //
 // mount_flush = MOUNT ONLY (pal_detect's immediate PAL re-arm: a mount is the one event
 // that may change the standard). soft_flush = the decoder soft-reset request
-// (mpeg2video.soft_flush): a mount OR a ~keep_vbuf VM jump (menu entry/exit --
-// docs/quant_matrix.md §11), never a transport seek or a mode switch (a chapter
-// skip keeps its held frame). Row [4] is the one that goes RED on the pre-fix module.
+// (mpeg2video.soft_flush): a mount OR a VM jump that CROSSES the menu/title boundary
+// (menu entry/exit -- docs/quant_matrix.md §11), never a transport seek or a mode
+// switch (a chapter skip keeps its held frame), and never a title->title jump.
+// Row [4] goes RED on the pre-#92 module; row [4b] goes RED on the first cut of #92,
+// which gated on ~keep_vbuf alone -- a fact about the DOMAIN, not about the crossing.
 //
 // Plus: reset clears everything; every flush level is exactly 64 cycles;
 // pipe_rst_n = rst_n & ~load_flush; aud_rst_n = rst_n & ~aud_flush & ~aud_resync.
@@ -40,6 +43,7 @@ module flush_ctl_tb;
   reg  start_streaming = 0, seek_ack = 0, jump_ack = 0;
   reg  mode_switch = 0, aud_switch = 0, keep_vbuf = 0, disc_rephase = 0;
   reg  cell_seamless = 0;
+  reg  jump_cross = 0;
   wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush, soft_flush;
   wire pipe_rst_n, aud_rst_n;
 
@@ -54,6 +58,7 @@ module flush_ctl_tb;
     .disc_rephase    (disc_rephase),
     .cell_seamless   (cell_seamless),
     .keep_vbuf       (keep_vbuf),
+    .jump_cross      (jump_cross),
     .load_flush      (load_flush),
     .aud_flush       (aud_flush),
     .aud_resync      (aud_resync),
@@ -163,10 +168,26 @@ module flush_ctl_tb;
     fork pulse_and_measure; begin @(posedge clk); seek_ack <= 0; end join
     check_row(1, 1, 1, 0, 0, 0, "[3] title seek: trio, NO mount reset");
 
-    // [4] VM jump (keep_vbuf=0, e.g. menu->title Play) -> all three
+    // [4] VM jump that CROSSES menu<->title (keep_vbuf=0, jump_cross=1:
+    //     the Menu key, menu->title Play, the FP chain into a menu) -> trio + SOFT
+    jump_cross = 1;
     jump_ack = 1;
     fork pulse_and_measure; begin @(posedge clk); jump_ack <= 0; end join
-    check_row(1, 1, 1, 0, 0, 1, "[4] ~keep_vbuf jump: trio + SOFT reset, no mount arm");
+    check_row(1, 1, 1, 0, 0, 1, "[4] crossing jump: trio + SOFT reset, no mount arm");
+    jump_cross = 0;
+
+    // [4b] ★ TITLE->TITLE jump (keep_vbuf=0, jump_cross=0): the flush trio, but NO
+    //      soft reset. This is a DVD game's ordinary screen-to-screen navigation
+    //      (Scooby-Doo 2's overworld map: every van move is a title-domain LinkPGCN).
+    //      RED on the pre-2026-09-15 module, which armed the soft reset on ~keep_vbuf
+    //      alone and so reset the decoder on every one of them -- MEASURED on the rig
+    //      as a spurious resolution report per transition (0 on the pre-#92 core, 1 on
+    //      the shipped one, same disc, same landing PGCN).
+    //      ⚠ This row is the whole point of jump_cross: keep_vbuf=0 does NOT imply a
+    //      crossing, so [4] and [4b] differ ONLY in jump_cross.
+    jump_ack = 1;
+    fork pulse_and_measure; begin @(posedge clk); jump_ack <= 0; end join
+    check_row(1, 1, 1, 0, 0, 0, "[4b] title->title jump: trio, NO soft reset");
 
     // [5] menu->menu jump (keep_vbuf=1) -> load_flush ONLY (video tail plays
     //     out, audio rides through: docs/dvd_menu_refinements.md sec.2/5d)
@@ -263,7 +284,7 @@ module flush_ctl_tb;
     repeat (2) @(posedge clk);
     expect_idle("[11] outputs not idle after reset");
 
-    if (errors == 0) $display("flush_ctl_tb: ALL TESTS PASSED (11 scenarios)");
+    if (errors == 0) $display("flush_ctl_tb: ALL TESTS PASSED (12 scenarios)");
     else             $fatal(1, "flush_ctl_tb: %0d FAILURE(S)", errors);
     $finish;
   end

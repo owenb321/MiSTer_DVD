@@ -129,6 +129,7 @@ module iso_reader_menudrain_tb;
     wire [7:0]  sprm_astn_w, sprm_spstn_w;
     wire [7:0]  vm_dbg;
     wire        keep_vbuf_w;
+    wire        jump_cross_w;   // reader: this jump crosses menu<->title
     wire        vm_from_wait_w;
     wire        nat_wait_w;
 
@@ -142,6 +143,7 @@ module iso_reader_menudrain_tb;
         .title_sel(4'd0), .lu_lang_pref(16'h656E),
         .vbuf_empty(vbuf_empty), .menu_snap(1'b0),
         .keep_vbuf(keep_vbuf_w),
+        .jump_cross(jump_cross_w),
         .jump_ttn(vm_jump_ttn), .jump_pgn(vm_jump_pgn), .jump_ptt(vm_jump_ptt),
         .vm_mode(1'b1), .vm_adv(vm_adv_w), .vm_replay(vm_replay_w),
         .vm_cell_cmd(vm_cell_cmd_w), .vm_pgc_end(vm_pgc_end_w),
@@ -217,7 +219,7 @@ module iso_reader_menudrain_tb;
     flush_ctl flush (
         .clk(clk), .rst_n(rst_n),
         .start_streaming(start), .seek_ack(seek_ack), .jump_ack(jump_ack),
-        .keep_vbuf(keep_vbuf_w), .mode_switch(1'b0),
+        .keep_vbuf(keep_vbuf_w), .jump_cross(jump_cross_w), .mode_switch(1'b0),
         .aud_switch(1'b0), .disc_rephase(1'b0), .cell_seamless(1'b0),
         .load_flush(load_flush_w), .pipe_rst_n(pipe_rst_n_w),
         .aud_flush(), .aud_resync(), .seek_flush(), .soft_flush(), .mount_flush()

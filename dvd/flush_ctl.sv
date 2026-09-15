@@ -47,6 +47,9 @@ module flush_ctl (
     input  wire aud_switch,       // 1-cycle pulse: audio track switch
     input  wire disc_rephase,     // display re-anchored on a content PTS jump (dvd/disp_sched.sv)
     input  wire keep_vbuf,        // level (reader): menu->menu transition keeps the VBUF
+    // level (reader), valid with jump_ack: this jump CROSSES the menu/title boundary.
+    // NOT the complement of keep_vbuf -- a title->title jump is neither (see soft_flush).
+    input  wire jump_cross,
     // level (reader): the cell being streamed is authored seamless_play, so its
     // content continues the previous cell even when the timestamps restart. See the
     // disc_rephase block below -- this is what stops a seamless-branch junction being
@@ -244,10 +247,10 @@ end
 // See docs/seek_realign.md.
 //
 // ★ EXTENDED 2026-09-14 (deep-fried menu stills, docs/quant_matrix.md §11): the
-// soft reset ALSO fires on a ~keep_vbuf VM JUMP -- title->menu on the Menu key, the
-// First Play chain into a menu, menu->title Play -- as `soft_flush`. Still NEVER on a
-// transport seek or a mode switch, so the rule above stands for those: a chapter
-// skip keeps its held frame. Why: a VBUF flush discards the buffered BYTES and
+// soft reset ALSO fires on a VM JUMP THAT CROSSES THE MENU/TITLE BOUNDARY --
+// title->menu on the Menu key, the First Play chain into a menu, menu->title Play --
+// as `soft_flush`. Still NEVER on a transport seek or a mode switch, so the rule
+// above stands for those: a chapter skip keeps its held frame. Why: a VBUF flush discards the buffered BYTES and
 // leaves the whole decode pipeline (vld state, getbits window, rld fifo, iquant)
 // frozen mid-picture, and the landing stream arrives INTO that. A moving title
 // self-heals at its next GOP header; a menu STILL is one sequence header, so what
@@ -261,10 +264,28 @@ end
 // re-arm on it and that must stay mount-only (a menu does not change the standard).
 // Cost: a menu entry/exit is a brief black cut instead of a held title frame --
 // what a set-top player does on exactly those transitions (maintainer decision).
+//
+// ⚠⚠ THE GATE IS `jump_cross`, NOT `~keep_vbuf`, AND THAT DISTINCTION IS THE WHOLE
+// POINT -- 2026-09-15, after the first cut shipped with `jump_flush` alone. The
+// sentence above enumerates MENU transitions, and `~keep_vbuf` was taken to mean
+// them; it does not. `keep_vbuf` is `menu_dom && (target is a menu)`, a fact about
+// the DOMAIN, so `~keep_vbuf` is true for EVERY title-domain jump as well. On an
+// ordinary movie those sets nearly coincide and nothing showed. On a DVD-game disc,
+// whose menus are authored as TITLE-domain PGCs, every screen transition is a
+// title->title LinkPGCN -- so ordinary gameplay navigation took a full decoder
+// reset. MEASURED on the rig (Scooby-Doo 2, overworld map, one van move): the
+// pre-#92 core reports 0 spurious resolution changes and the shipped one reports 1,
+// same disc, same landing PGCN. A title->title jump is neither "keep the VBUF" nor
+// "crossing": it flushes and must not soft-reset. Same class as issue #81 -- a menu
+// CONTEXT is not a menu DOMAIN -- and the same lesson: derive the predicate from
+// what it SELECTS, not from the cases it was written for.
+// ⛔ Do NOT "simplify" this back to `jump_flush` alone, and do NOT make jump_cross
+// `~keep_vbuf` in the reader; they answer different questions and are not complements.
 reg [6:0] jump_soft_cnt = 7'd0;
 always @(posedge clk) begin
     if (~rst_n)                    jump_soft_cnt <= 7'd0;
-    else if (jump_flush)           jump_soft_cnt <= 7'd64;   // ~keep_vbuf VM jump only
+    else if (jump_flush && jump_cross)
+                                   jump_soft_cnt <= 7'd64;   // menu<->title CROSSING only
     else if (jump_soft_cnt != 0)   jump_soft_cnt <= jump_soft_cnt - 7'd1;
 end
 assign    soft_flush = mount_flush || (jump_soft_cnt != 7'd0);
