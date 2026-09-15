@@ -460,7 +460,8 @@ worse maintenance burden than targeted in-place edits. So:
   its held frame; a menu entry/exit is a brief black cut, which is what a set-top player
   does (maintainer decision). `mount_flush` stays mount-only for `pal_detect`.
   ⚠⚠ **THE PREDICATE SHIPPED WIDER THAN THAT SENTENCE AND THE SENTENCE IS WHY NOBODY
-  NOTICED — corrected 2026-09-15 (branch `fix/soft-reset-scope`).** It gated on
+  NOTICED — ✅ FIXED and HW-CONFIRMED 2026-09-15 (branch `fix/soft-reset-scope`, build
+  `DVD_softscope_20260915_1924.rbf`, SEED 7 first roll, clk_dec 94.39/90.27, 91 % ALM).** It gated on
   `jump_ack && ~keep_vbuf`, and `keep_vbuf` is `menu_dom && (target is a menu)` — a fact
   about the DOMAIN — so `~keep_vbuf` is true for EVERY title-domain jump too. On a movie
   the two sets nearly coincide; on a DVD-GAME disc, whose menus are authored as
@@ -473,6 +474,18 @@ worse maintenance burden than targeted in-place edits. So:
   menu DOMAIN*) and the same lesson: **derive a predicate from what it SELECTS, not from
   the cases it was written for.** Gate: `flush_ctl_tb` row **[4b]**, RED on the first cut
   (`soft=64`, want 0) and the ONLY row that fails.
+  ✅ **MEASURED ON THE RIG, THREE ARMS, SAME DISC AND SAME LANDING PGCN** (spurious
+  resolution reports counted from Main's own `show_video_info()` log, `debug=2`): idle
+  0/0/0; Play Movie **0 / 1 / 0**; Menu key **0 / 1 / 0**; overworld van move
+  **0 / 1 / 0** (pre-#92 / shipped / fixed). ★ The two CROSSINGS are the sharp result —
+  they still soft-reset and now report nothing, which is the sync fix working on its own;
+  the van move is the scope fix. The soft reset demonstrably still fires (the capture
+  right after the Play crossing is **σ=0.0, uniformly black** — the accepted black cut).
+  ✅ **The accepted risk came back CLEAN:** the disc's title-domain stills measure
+  blockiness **1.093 / 1.105** (fried is ~1.9), fix/control pairs identical to three
+  decimals, and **T2's main menu after a title→menu re-entry is un-fried at 1.044** —
+  that crossing is what #92 exists to protect, so it is the load-bearing unregression.
+  ⏳ Not exercised: PAL, and the Elmo disc that reported #92 (not on the rig).
   ★ **The diagnostic round that settled it read `chroma_format` beside every garbage
   frame on the rig: 1 (correct) on all three** — the parameter that sets blocks-per-
   macroblock was exonerated in one run, which is what turned "re-sync harder" into
@@ -526,7 +539,9 @@ worse maintenance burden than targeted in-place edits. So:
   left them at X. It now refuses to pass without a live raster.
   ⚠ This defect also affects the MOUNT soft reset and a WATCHDOG expiry — both have had
   it since August and neither was noticed (a mount changes resolution legitimately; a
-  watchdog expiry is abnormal).
+  watchdog expiry is abnormal). ✅ HW-CONFIRMED 2026-09-15 in the same round: a menu
+  entry/exit, which STILL soft-resets, now reports nothing where the shipped core
+  reported once.
   Detail: **`docs/quant_matrix.md`** (§11 the fix + HW round, §9–§10 the failed attempt).
   ⚠ **Its `keep_vbuf` claim was too strong and is corrected in place (2026-09-14):** such a
   hop leaves the VBUF alone but still pulsed `load_flush` AND dropped up to 16 KB the
