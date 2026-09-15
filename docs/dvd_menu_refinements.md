@@ -49,7 +49,7 @@ at branch-creation time; some in-section status lines still say "HW gate pending
 | 1 | nav_pci highlight render (SPU_CAP 8→32 KB) | PR fj#83, #84 | ✅ HW-confirmed |
 | 2 | menu→menu `keep_vbuf` transition (stale-frame / offset highlight) | PR fj#84 | ✅ HW round-2 accepted |
 | 3 | GPRM/timeline consistency (T2 "wrong timeline") | PR fj#84 (via §2) | ✅ resolved by §2 |
-| 5 | menu-still cold re-decode (clean frame); FAST trigger `menu_snap`‖`vbuf_empty` | PR fj#85 + `feature/menu-still-flush-primer` | 🔧 HW gate pending |
+| 5 | menu-still cold re-decode (clean frame) | PR fj#85 | ⛔ **REMOVED in v0.5.0** (`b900478`, issue #65 — it replayed the cell's audio). Its removal is what exposed §9. |
 | 5b | trailing-byte flush primer (avoid re-decode) — **TRIED, HW-REVERTED (pixelated stills)** | `feature/menu-still-flush-primer` | ⛔ reverted — primer can't guarantee a clean frame |
 | 5c | LEAVING A VIDEO MENU lags — deep-buffer flush + `P1O[18]` Menu Nav toggle | `feature/menu-still-flush-primer` | ⚠️ SUPERSEDED by §5d (toggle removed) |
 | 5d | UNIVERSAL menu playback: keep_vbuf + VBUF cap + audio-continuity + reframer rides transitions; **toggle removed** | `feature/menu-still-flush-primer` | ✅ HW-confirmed (both discs); pop fix 🔧 pending |
@@ -299,10 +299,11 @@ un-flushed VBUF depth):
   freeze"). The jump keeps the VBUF but still pulses `load_flush` (ps_demux reset) and
   clears the reader's 16 KB stream cache (`wr_ptr=0`), dropping the transition tail's last
   ~16 KB + a partial PES → a 1–2 frame junction glitch. Menus decode fast (shallow VBUF),
-  so the decoder can't bridge the re-parse gap. Not yet fixed — a fully-continuous
-  transition (preserve the reader cache + don't reset ps_demux, only nav_pci) is the
-  candidate, but it touches the audio path and av_sync re-anchor; deferred pending a
-  focused HW round.
+  so the decoder can't bridge the re-parse gap. ✅ **The 16 KB half of this is FIXED —
+  see §9** (2026-09-14): the tail was dropped because the reader stopped delivering at the
+  cell's last block read, and a natural menu verdict now waits until it really has been
+  handed over. What remains here is the `ps_demux` reset itself, which still cuts a USER
+  jump mid-picture.
 - **Content appears late** (e.g. the scene-range menu's baked-in numbers / a profile's
   first slide). The decoder plays the accumulated VBUF (previous-menu tail + transition +
   the still cell's animation) at display rate before reaching the settled still frame, so
@@ -311,6 +312,9 @@ un-flushed VBUF depth):
   the first slide until clicking on the frozen transition"). The `video_live` highlight
   fallback (§1) makes the highlight appear ~with the settled content; the underlying
   content-lag needs the VBUF-lag work (bound the accumulated lead) — deferred.
+  ⚠ "a profile's first slide" appears in both this bullet and §9 and they are DIFFERENT
+  defects: this one is about WHEN the slide arrives, §9 about how it decodes when it
+  does.
 
 **HW gate (next round, T2 + Matrix, HDMI progressive, O[1] On):** entering a submenu /
 selecting a timeline should play the transition and land on the correct menu with the
@@ -1177,6 +1181,168 @@ hold + auto-advance + indefinite park, `SEC_DIV=1000`), full reader/vm suite gre
 → root menu holds; MiB/Matrix/T2/BBB menus + play unaffected. Oracle for any menu-VM
 question: the libdvdnav TRACE build in `dvd_repos/` (see memory
 `paw-patrol-vm-matches-libdvdnav`).
+
+---
+
+## 9. The first slide of a menu slideshow is pixelated — the transition tail was dropped (2026-09-14)
+
+Field report on v0.5.0: on ULTIMATE_T2's **Mission Profiles**, the FIRST still of each
+actor's slideshow comes up pixelated and STAYS pixelated. On v0.4.0 it was pixelated for a
+split second and then settled. Every later slide is clean.
+
+### 9.1 What the disc actually does
+
+Measured with `tools/nav_extract.py` / `tools/dvd_vm_ref.py` on the real image (VTSM LU[0]
+of VTS 1; the board reaches it from the main menu's 4th item):
+
+| PGC | shape |
+|---|---|
+| **14** = the hub | cell 0 still (10 buttons); **cell 1 = a 904-sector ~2 s MOTION transition clip**, `cell_cmd 1 = LinkTailPGC`; cell 2 another clip |
+| POST of 14 | `if (g[6]==N) LinkPGCN 15..23` — N was set by the hub button |
+| **15..23** = the slideshows | one PGC each, every slide a `still=255` cell; slide N→N+1 is `LinkNextPG` INSIDE the PGC |
+
+So the hub press runs `g[6]=N; LinkPGN 2`, plays the transition, and the transition's
+**cell command** takes the player to slide 1. That dispatch is `ev_cellcmd`, so `dvd_vm`
+sets `nat_src=1` and the resulting `LinkPGCN` arrives at the reader as a **NATURAL** jump
+(`vm_from_wait=1`) — verified end to end against the real disc bytes.
+
+★ **The asymmetry is the whole diagnosis.** Slide N→N+1 leaves a cell that is a STILL: the
+reader has long since parked in `S_STILL` with its cache empty, and the still's elementary
+stream ends on a `sequence_end_code`. The transition clip ends on neither — its cache is
+full and its last picture is not terminated.
+
+### 9.2 The defect
+
+`dvd_iso_reader.sv` dispatches the cell command at the cell's **last block READ** and
+leaves `S_STREAM` for `S_VM_WAIT`. The output pipeline only ran while `S_STREAM`
+(`wire streaming = (state == S_STREAM)`), so everything still in the 16 KB stream cache
+sat there until `jump_go` fired and `jump_ack` reset `wr_ptr` and discarded it.
+
+★ **That makes the loss STRUCTURAL rather than a race** — no amount of waiting could have
+helped, because the module had stopped delivering. It is the same cut this file already
+recorded as a residual in §2 ("dropping the transition tail's last ~16 KB + a partial PES
+→ a 1–2 frame junction glitch … Not yet fixed"), seen from the other end.
+
+The menu domain was exempt from the Phase-B drain gate that the title domain has used
+since PR fj#150, on the stated reasoning that a menu's tail "rides `keep_vbuf`".
+**`keep_vbuf` preserves the DECODER's buffer; it says nothing about bytes the reader has
+not handed over.**
+
+### 9.3 The fix
+
+`dvd/dvd_iso_reader.sv`, one behavioural change:
+
+- `streaming` covers `S_VM_WAIT` as well, so the cache can drain while the verdict is
+  pending (no `sd` read is ever issued from that state, so only the read side moves);
+- `jnat_l` / `snat_l` drop `&& ~menu_dom` — a natural verdict is gated in every domain;
+- the gate is **`nat_drained`**, not `vbuf_empty`.
+
+⚠ **`vbuf_empty` alone is the wrong condition and this is the part most likely to be
+"simplified" later.** It is a decoder LOW-WATER MARK (`emu.sv`: fill ≤ 1 unit), so a
+decoder that is merely *starving* reads "drained" while the reader's cache is still full —
+precisely the state a throttled menu transition is in. `nat_drained` additionally requires
+the cache empty, no block in flight and the output pipeline quiet, **held for 255 cycles**
+so that `ps_stream_fifo` (16 B) and `ps_demux` — which `load_flush` also resets — have
+drained too. `DRAIN_WD` still bounds the wait and any USER jump or seek preempts it.
+
+### 9.4 What was measured, and what was NOT
+
+✅ **The byte loss is real and is fixed.** `bench/dvd/run_menudrain.sh` runs the real
+reader + `dvd_vm` + `flush_ctl` + `ps_stream_fifo` + `ps_demux` and counts the VIDEO
+ELEMENTARY BYTES `ps_demux` emits — what the decoder would actually receive. Pre-fix the
+transition cell is cut short; fixed, all 24300 bytes arrive before the jump and the first
+byte after it belongs to the landing. Five mutations, each caught by exactly its own arms.
+
+✅ **The symptom is reproduced and quantified on hardware.** Blockiness = image energy on
+the 8-pixel DCT block grid ÷ energy off it (`tools/` scratch metric; a correctly decoded
+picture has no reason to prefer the grid):
+
+| capture, pre-fix core | blockiness H | detail σ |
+|---|---|---|
+| slide 1, first view | 1.857 | 44.1 |
+| slide 1, after a press (it HOLDS) | 1.992 | 44.0 |
+| **slide 2 — the in-disc control** | **0.985** | 55.1 |
+
+⛔ **The quantiser-matrix route was measured and REFUTED — do not re-derive it.** The
+obvious theory was `docs/quant_matrix.md`'s mechanism reached by truncation instead of by a
+flush: the vld left mid-macroblock eats the landing's `00 00 01 B3`, and because the
+transition carries no `sequence_end_code` `sequence_header_seen` is still set, so the
+landing's picture start code is accepted with the SOURCE's matrix still loaded (the
+transition downloads one 0.29–1.0× the default; the slides download none).
+
+`bench/dvd/run_menu_junction.sh` builds exactly that splice out of the real cells and
+measures the matrix the hardware ends up holding. **[J0]** the contiguous junction restores
+the defaults (`downloads=1`, 0/64 wrong) and **[J1] all seven truncation offsets (8…3400 B)
+also come back 0/64.** With the bytes contiguous the parser errors out on the partial slice
+and resyncs BEFORE the header arrives; only a FLUSH — which discards the tail and freezes
+the parser mid-picture — loses the matrix. The arms are kept as standing evidence.
+
+⚠ **The scope of that refutation, stated exactly.** It shows a truncated-but-CONTIGUOUS
+junction does not lose the matrix, over the real cells, at seven truncation points, with
+cut A trimmed to its last sequence header plus two pictures. It is not a proof about every
+parser state the 192 KB menu VBUF can present on hardware. What it settles is that the
+matrix should no longer be treated as the presumed cause — which is what stopped this
+branch from shipping a fix aimed at the wrong thing.
+
+✅ **AND THE MECHANISM IS SETTLED OFFLINE, BY A REFERENCE DECODER.** The junction extract
+(`junction_es.py` shape: cut the two cells' elementary streams straight out of the image
+and concatenate them, with and without a truncation) decoded by **ffmpeg**, scored with the
+same blockiness metric as the board captures:
+
+| stream | blockiness H | detail σ |
+|---|---|---|
+| the slide's ES alone | 1.035 | 53.7 |
+| whole transition + slide (**what the fix delivers**) | 1.035 | 53.7 |
+| transition − 8 B + slide | 1.035 | 53.7 |
+| **transition − 300 B + slide** | **1.898** | **42.4** |
+| transition − 4000 B + slide | 1.035 | 53.7 |
+| transition − 16384 B + slide | 1.035 | 53.7 |
+
+★ **1.898 against the board's measured 1.857 — the same picture, the same defect, in a
+decoder that shares no code with ours.** So the damage is in the BITSTREAM the reader
+hands over, not in anything peculiar to this decoder, and delivering the whole cell removes
+it. ⚠ It is **offset-dependent**: 300 B damages the landing, 8 / 4000 / 16384 B do not.
+That is why the earlier matrix sweep came back clean at its own offsets — it was sampling a
+different question at a handful of points, and a picture can be damaged without the matrix
+being the thing that was lost.
+
+✅ **HW-CONFIRMED 2026-09-14** (build `DVD_menudrain_20260914_2316.rbf`, SEED as pinned,
+clk_dec 93.93 @100C / 93.01 @-40C against the 86.0 gate, 90 % ALM), measured through the
+same navigation on the same disc, pre-fix core first:
+
+| arm | blockiness H | detail σ |
+|---|---|---|
+| PRE-FIX, slide 1 (entry 1) | 1.857 | 44.1 |
+| PRE-FIX, slide 1 (entry 1, after a press — it HOLDS) | 1.992 | 44.0 |
+| PRE-FIX, slide 1 (entry 2, independent) | **1.857** | 44.1 |
+| PRE-FIX, slide 2 — the in-disc control | 0.985 | 55.1 |
+| **FIXED, slide 1 (PGCN 15, Schwarzenegger)** | **1.006** | 54.9 |
+| **FIXED, slide 1 (PGCN 16, a different profile)** | **0.986** | 53.6 |
+| **FIXED, slide 1 (PGCN 23, a third profile)** | **1.056** | 51.3 |
+
+★ **The pre-fix defect is DETERMINISTIC — two independent entries measured 1.857 to three
+decimal places**, so a changed number afterwards means something. Three different
+slideshows come back clean.
+
+✅ **Independently confirmed by the maintainer on their own display before merge.** Every
+figure above is a harness measurement of a captured raster; the defect was reported by eye,
+so that arm closes the loop in the terms the report was made in.
+Unregressed in the same session: the main menu and its submenu transitions, the hub's
+highlight, the Jump-Into-Timeline cubes and the scene-index thumbnails (both `keep_vbuf`
+menu→menu hops), menu→title Play, and a chapter skip during playback.
+
+### 9.5 Rejected
+
+- **Extending PR #92's `soft_flush` to `keep_vbuf` jumps.** A black cut on every menu→menu
+  hop, which is precisely the Phase-5 behaviour §2 exists to prevent, and it treats a
+  dropped tail by resetting the decoder.
+- **Restoring the §5 cold re-decode.** Issue #65's audio replay and a 193-sector re-stream;
+  it also only ever masked whatever the real cause is.
+- **Any vld-side resync / clearing `sequence_header_seen`.** `docs/quant_matrix.md` §9–§10:
+  reset all of the pipeline or none of it.
+- **A `ps_demux` picture-boundary cut.** The right tool for a USER jump taken from a
+  streaming motion menu, which is still cut mid-picture after this change (invisible today
+  because source and landing share their dimensions). A follow-up, not this.
 
 ---
 

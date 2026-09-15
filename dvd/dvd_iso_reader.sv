@@ -1097,20 +1097,63 @@ wire       drain_wd_hit = (drain_tmr >= DRAIN_WD);
 wire       tail_wait = vmw_pgc_pend && ~menu_dom && ~vbuf_empty && ~drain_wd_hit;
 
 // PHASE B (tail-drain for CELL-COMMAND verdicts, docs/dvd_nav.md). A natural
-// title-domain cell command (Thayer's Quest FMV branch cells: LinkTailPGC /
-// LinkPGCN at a choice cell) delivers its verdict as a JUMP or SEEK, which
-// executed immediately with keep_vbuf=0 and flushed the decoder's ~1 s tail -
+// cell command (Thayer's Quest FMV branch cells: LinkTailPGC / LinkPGCN at a
+// choice cell) delivers its verdict as a JUMP or SEEK, which executed
+// immediately and cut the stream the decoder had not finished receiving -
 // the same cut PR #149 fixed for PGC ends. The DISPATCH must stay ungated
 // (a mid-title GPRM cell command's vm_adv verdict would hitch playback);
 // instead the resulting jump/seek EXECUTION is gated: jnat_l/snat_l latch the
-// VM's provenance (vm_from_wait, qualified ~menu_dom at the latch) with the
-// request, and jump_go/seek_jump additionally wait for vbuf_empty - bounded
-// by the same DRAIN_WD watchdog, whose enable extends to this window. A
-// non-natural (user/boot/menu) jump or seek is never gated.
-reg        jnat_l;                 // latched: pending jump is natural (title)
-reg        snat_l;                 // latched: pending seek is natural (title)
-wire       nat_jump_wait = jump_pending && jnat_l && ~vbuf_empty && ~drain_wd_hit;
-wire       nat_seek_wait = seek_pending && snat_l && ~vbuf_empty && ~drain_wd_hit;
+// VM's provenance (vm_from_wait) with the request, and jump_go/seek_jump
+// additionally wait until the stream really has been delivered - bounded by
+// the same DRAIN_WD watchdog, whose enable extends to this window. A
+// non-natural (user/boot) jump or seek is never gated.
+//
+// ★ THE MENU DOMAIN IS NO LONGER EXEMPT (2026-09-14, the T2 Mission-Profiles
+// first-slide defect - docs/dvd_menu_refinements.md). The latch used to read
+// `vm_from_wait && ~menu_dom`, on the reasoning that a menu's tail "rides
+// keep_vbuf" so nothing is lost. keep_vbuf preserves the decoder's BUFFER; it
+// does nothing for the bytes still sitting in the reader's own 16 KB cache,
+// and this FSM leaves S_STREAM for S_VM_WAIT at the last block READ - so on a
+// menu->menu verdict the jump reset wr_ptr and up to 16 KB of the source cell
+// was dropped, ending the kept VBUF on a picture cut MID-SLICE with the
+// landing's sequence header right behind it. The vld eats that header (the
+// cell carries no sequence_end_code, so sequence_header_seen is still set and
+// the landing's picture start code is accepted anyway) and the landing decodes
+// with the SOURCE's quantiser matrix: T2's first mission-profile slide,
+// permanently pixelated. Gate: bench/dvd/run_menu_junction.sh.
+//
+// ⚠ vbuf_empty ALONE is not the right condition, and that is why nat_drained
+// exists. It is a decoder LOW-WATER MARK (emu.sv: fill <= 1 unit), so a
+// decoder that is merely starving reads "drained" while the cache is still
+// full - exactly the state a throttled menu transition is in. The gate must
+// also see the reader's own path empty.
+reg        jnat_l;                 // latched: pending jump is natural
+reg        snat_l;                 // latched: pending seek is natural
+// Declared here rather than beside the logic that drives them: the drain gate
+// below has to see both, and a module-level reference must follow its
+// declaration.
+reg        read_valid_pipe;   // driven by the output pipeline
+reg        blk_inflight;      // driven by the sd read FSM
+// Nothing left anywhere between the disc and the decoder: the cache is empty,
+// no sd block is in flight, no byte is on the output pipeline, and the decoder
+// has consumed down to its low-water mark.
+wire       nat_quiet = vbuf_empty && ~cache_has_data && ~blk_inflight &&
+                       ~stream_valid && ~read_valid_pipe;
+// ...and has been for long enough that the two stages BEYOND this module have
+// drained too: ps_stream_fifo (16 bytes) and ps_demux, which is byte-serial and
+// stalls only on its own ready inputs. With the VBUF at its low-water mark that
+// path retires at least a byte per cycle, so ~60 cycles is the worst case; 255
+// is over 4x that and still under 10 us. The counter free-runs, so a verdict
+// that arrives on an already-quiet pipeline (a timed still, the common menu
+// case) releases with no added delay at all.
+reg  [7:0] nat_settle;
+always @(posedge clk) begin
+    if (!rst_n || !nat_quiet) nat_settle <= 8'd0;
+    else if (~&nat_settle)    nat_settle <= nat_settle + 8'd1;
+end
+wire       nat_drained   = nat_quiet && (&nat_settle);
+wire       nat_jump_wait = jump_pending && jnat_l && ~nat_drained && ~drain_wd_hit;
+wire       nat_seek_wait = seek_pending && snat_l && ~nat_drained && ~drain_wd_hit;
 assign     nat_wait_o    = nat_jump_wait || nat_seek_wait;
 
 // Counts the whole pending window (cache drain + VBUF drain) and holds its
@@ -1256,23 +1299,24 @@ reg        fetch_cross; // a cross-refill is in progress (S_SECREAD resumes S_FE
 reg [5:0]  fi_save;     // fi latched at the straddle point (restored after the refill)
 
 reg [31:0] sec_lba;     // 2048-LBA to read in S_SECREAD
-reg        blk_inflight;
 // Transport/VM seek executes at a block boundary. Phase-B additions: a
-// NATURAL seek (snat_l) also waits for vbuf_empty (bounded by DRAIN_WD); and
-// ~jump_pending makes the "jump outranks seek" rule explicit - the pending-
-// jump window used to be ~us wide, but a gated natural jump now pends for
-// seconds, during which a latched seek must not slip past it.
+// NATURAL seek (snat_l) also waits for the stream to be delivered (nat_drained,
+// bounded by DRAIN_WD); and ~jump_pending makes the "jump outranks seek" rule
+// explicit - the pending-jump window used to be ~us wide, but a gated natural
+// jump now pends for seconds, during which a latched seek must not slip past it.
 wire       seek_jump = seek_pending && ~blk_inflight && ~jump_pending &&
-                       (~snat_l || vbuf_empty || drain_wd_hit);
+                       (~snat_l || nat_drained || drain_wd_hit);
 // A VM jump executes at a block boundary too, but only from a SETTLED state
 // (streaming / finished / holding a still) - never mid-parse, where it would
 // corrupt an in-progress IFO walk. It outranks a pending seek (jump_go clears
 // seek_pending); a seek cannot be latched during a jump parse (cell_mode=0).
-// Phase B: a NATURAL jump (jnat_l) waits for vbuf_empty (bounded by DRAIN_WD)
-// so its keep_vbuf=0 flush lands on a drained decoder - the clip's tail plays
-// out first. User jumps (jnat_l=0) execute immediately, clearing the gate.
+// Phase B: a NATURAL jump (jnat_l) waits until the stream it is cutting has
+// actually been delivered (nat_drained, bounded by DRAIN_WD) - the clip's tail
+// plays out first, and on a menu->menu hop the landing's sequence header meets
+// a parser sitting at a start-code boundary instead of mid-macroblock. User
+// jumps (jnat_l=0) execute immediately, clearing the gate.
 wire       jump_go = jump_pending && ~blk_inflight &&
-                     (~jnat_l || vbuf_empty || drain_wd_hit) &&
+                     (~jnat_l || nat_drained || drain_wd_hit) &&
                      (state == S_STREAM || state == S_DONE ||
                       state == S_STILL  || state == S_VM_WAIT);
 reg        sd_ack_d;
@@ -2113,10 +2157,11 @@ always @(posedge clk or negedge rst_n) begin
             seek_pending <= 1'b1;
             seek_is_rbn  <= 1'b0;
             seek_cell_l  <= seek_cell;
-            // Phase B: a natural (CELL/POST-verdict) TITLE seek waits for
-            // vbuf_empty before executing. menu_dom sources bypass (menu
-            // cell links ride keep_vbuf); gamepad seeks arrive natural=0.
-            snat_l       <= seek_natural && ~menu_dom;
+            // Phase B: a natural (CELL/POST-verdict) seek waits for its stream
+            // to be delivered before executing. The menu domain is NOT exempt
+            // (see the jnat_l/nat_drained note): keep_vbuf holds the decoder's
+            // buffer, not the reader's cache. Gamepad seeks arrive natural=0.
+            snat_l       <= seek_natural;
         end else if (seek_rbn_pulse && cell_mode) begin
             // Sub-cell scrub: the containing-cell scan (S_RBN_SCAN) validates the
             // target lands in a real cell; an out-of-range RBN clamps there.
@@ -2357,9 +2402,10 @@ always @(posedge clk or negedge rst_n) begin
         // (jump_go below). A newer jump overwrites an unexecuted older one.
         if (jump_pulse && iso_mode && !iso_error && nav_ready) begin
             jump_pending <= 1'b1;
-            // Phase B: a natural (CELL/POST-verdict) jump latched from the
-            // TITLE domain gates jump_go on vbuf_empty (see jnat_l decl).
-            jnat_l   <= jump_natural && ~menu_dom;
+            // Phase B: a natural (CELL/POST-verdict) jump gates jump_go on
+            // nat_drained, in EVERY domain (see the jnat_l decl for why the
+            // menu exemption was wrong). User/boot jumps arrive natural=0.
+            jnat_l   <= jump_natural;
             jdom_l   <= jump_domain;
             jvts_l   <= jump_vts;
             jpgcn_l  <= jump_pgcn;
@@ -4628,8 +4674,13 @@ end
 // Output pipeline: one byte/cycle from the cache when the FIFO can take it
 // (identical 2-stage scheme to mpg_streamer)
 // =========================================================================
-wire streaming = (state == S_STREAM);
-reg  read_valid_pipe;
+// ★ S_VM_WAIT streams too (2026-09-14). This FSM leaves S_STREAM at the last
+// block READ, so anything still in the cache at that moment used to sit there
+// until the verdict's jump reset wr_ptr and threw it away - the drop was
+// structural, not a race, and no drain gate could have waited for it. No sd
+// read is ever issued from S_VM_WAIT (both issue sites are S_STREAM-side), so
+// the write side is idle and only the read side advances.
+wire streaming = (state == S_STREAM) || (state == S_VM_WAIT);
 
 // FLAT-SEEK PACK HUNT: a seek on a plain flat PS file (.mpg / directly-selected
 // .VOB) lands at an arbitrary byte offset, and ps_demux resets per-jump — if

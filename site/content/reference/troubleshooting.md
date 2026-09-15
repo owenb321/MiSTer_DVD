@@ -422,10 +422,27 @@ screens on DVD games are the usual case — the audio played through, then playe
 time before the screen settled.
 
 The core used to re-read that part of the disc once, to make sure the still picture came up
-sharp rather than half-drawn. That re-read stopped being necessary a while ago, when two
-unrelated fixes landed in the decoder, but it was still happening — and it replayed the
-sound along with the picture. It no longer runs at all, so menu stills settle a little
-faster too.
+sharp rather than half-drawn, and that re-read replayed the sound along with the picture.
+It no longer runs, so those screens settle once — and a little faster.
+
+Removing it did expose a separate problem on one kind of screen, fixed separately: see
+[The first picture of a menu slideshow is blocky](#the-first-picture-of-a-menu-slideshow-is-blocky)
+below.
+
+### The first picture of a menu slideshow is blocky
+
+Some discs present a set of stills you step through with the arrow keys — cast and crew
+biographies are the usual case. The first picture could come up coarse and blocky, with
+visible square edges, while every picture after it was sharp. It stayed blocky until you
+moved on.
+
+This happened when the screen was reached through a short animated transition. The core
+was cutting that animation off a fraction of a second early, and the picture that followed
+had to be decoded from an incomplete starting point. It now lets the animation finish
+before moving on, so the first picture is decoded from a clean start like all the others.
+
+If you still see it, the disc's name and the screen you reached it from are the useful
+details to report.
 
 ### A menu option does the wrong thing, or `LINK FAIL`
 

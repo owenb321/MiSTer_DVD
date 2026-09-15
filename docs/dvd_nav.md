@@ -557,9 +557,22 @@ and its jump's flush hits an empty buffer (A/V re-anchor semantics preserved). D
   - `emu.sv` threads it: reader `jump_natural = vm_from_wait` (all jumps are VM-issued);
     for the shared seek port `seek_natural = vm_seek_pulse & vm_from_wait` so a
     coincident gamepad seek is never tagged natural.
-  - `dvd_iso_reader.sv` latches **`jnat_l`/`snat_l`** with the request (qualified
-    `~menu_dom` — menu tails ride `keep_vbuf`), and `jump_go`/`seek_jump` gain
-    `(~nat || vbuf_empty || drain_wd_hit)`. The **`DRAIN_WD` watchdog is shared**: its
+  - `dvd_iso_reader.sv` latches **`jnat_l`/`snat_l`** with the request, and
+    `jump_go`/`seek_jump` gain `(~nat || nat_drained || drain_wd_hit)`.
+    ★ **The menu domain was exempt until 2026-09-14** ("menu tails ride
+    `keep_vbuf`") and that was wrong: `keep_vbuf` preserves the DECODER's buffer,
+    not the bytes still in the reader's own 16 KB cache — which this FSM stops
+    delivering the moment it leaves `S_STREAM` for `S_VM_WAIT` at the cell's last
+    block read. On ULTIMATE_T2's Mission Profiles that dropped the transition
+    clip's tail and the first slide of every slideshow decoded wrong. `streaming`
+    now covers `S_VM_WAIT` and the gate applies in every domain. See
+    `docs/dvd_menu_refinements.md` §9; gate `bench/dvd/run_menudrain.sh`.
+    ⚠ **The gate is `nat_drained`, not `vbuf_empty`.** `vbuf_empty` is a decoder
+    LOW-WATER MARK, so a merely-starving decoder reads "drained" while the cache
+    is still full — exactly a throttled menu transition. `nat_drained` also wants
+    the cache empty, no block in flight, the output pipeline quiet, and 255
+    settled cycles so `ps_stream_fifo` and `ps_demux` (which `load_flush` resets
+    too) have drained. The **`DRAIN_WD` watchdog is shared**: its
     enable extends to the pending-natural-jump/seek window (a natural jump chained
     after a watchdog-released dispatch re-arms the bound — worst case 2×`DRAIN_WD`
     on a wedged decoder, still strictly bounded). Two interaction fixes: (a)
@@ -587,7 +600,9 @@ bound releases — now the chained 2× case: dispatch bound + the POST jump's ow
 T9 (Phase B: button jump immediate under `!vbuf_empty`; natural cell-cmd `LinkPGCN`
 verdict gated, `nat_wait_o` high, `vmw_tmr` + VM `wait_tmr` frozen, no spurious
 advance, release on `vbuf_empty`); `dvd_vm_tb` S15 (`vm_from_wait` provenance truth
-table). TBs not testing the wait tie `.vbuf_empty(1'b1)` (= "always drained",
+table); **`iso_reader_menudrain_tb` (the MENU domain, 2026-09-14)** — the real reader +
+VM + `flush_ctl` + `ps_stream_fifo` + `ps_demux`, scoring the video elementary bytes the
+decoder would receive. TBs not testing the wait tie `.vbuf_empty(1'b1)` (= "always drained",
 bit-exact pre-drain timing) and `.jump_natural/.seek_natural(1'b0)` /
 `.wait_hold(1'b0)`.
 
@@ -613,13 +628,22 @@ lates (`bitstream_ok` gate); audio drains to natural silence; av_sync re-anchors
 exit jump's `load_flush`. Freezing the governor at `still_active` would hold a frame ~1 s
 too early — the transport-seek VBUF lesson in reverse.
 
-A menu still's displayed frame is decoded MID-STREAM (entered via a keep_vbuf transition,
-so with stale references) and would show PIXELATED if merely held. So on a still the reader
-**cold re-decodes** the still cell (flush + re-stream from its sequence header = a clean
-I-frame). Trigger: `menu_snap` (P1O[18] Snappy → immediately, the deep-flush already emptied
-the buffer) or `vbuf_empty` (Smooth → after the authored transition drains). Full rationale:
-`docs/dvd_menu_refinements.md` §5/§5c. (A trailing-byte "flush primer" that avoided the
-re-decode was tried and HW-reverted — it flushed a *corrupt* mid-stream frame; see §5b.)
+⛔ **STALE AS WRITTEN UNTIL 2026-09-14 — the reader does NOT cold re-decode a still any
+more.** This paragraph used to say that a menu still entered through a `keep_vbuf`
+transition "would show PIXELATED if merely held", so the reader flushed and re-streamed the
+still cell from its own sequence header. That re-decode was **removed in v0.5.0**
+(`b900478`, issue #65: it replayed the cell's audio, and two later decoder fixes were
+believed to have made it unnecessary). `vbuf_empty` and `menu_snap` survive as ports;
+`menu_snap` has been tied low since the Snappy/Smooth toggle went, and `vbuf_empty` now
+feeds the natural-transition drain gate instead.
+
+⚠ **The claim the sentence was making turned out to be TRUE, and removing the re-decode is
+what exposed it**: on ULTIMATE_T2's Mission Profiles the first slide of each slideshow came
+up pixelated and stayed so. The cause is that the reader stopped delivering the transition
+cell's tail (see the Phase-B note above and `docs/dvd_menu_refinements.md` §9), not
+anything about holding a still. History of the earlier attempts — including a trailing-byte
+"flush primer" that was HW-reverted for flushing a *corrupt* mid-stream frame — is in
+`docs/dvd_menu_refinements.md` §5/§5b/§5c/§5g.
 
 ### Title-domain finite stills — FMV-game timed choices (`feature/title-domain-timed-still`)
 
