@@ -1190,28 +1190,75 @@ depth. A player reacting a few hundred ms after the monster appeared was still a
 the previous window, whose command for that direction is the miss. A *slow* press hit —
 which is why it reads as "it says I missed when I didn't".
 
-**The fix (`dvd/nav_pci.sv`)** is two wires and one re-added register:
+**The fix (`dvd/nav_pci.sv`) is four rules.** The first round shipped two of them and
+the maintainer reported the game now progressing but still "definitely hitting a monster
+and it counts as a miss sometimes" — which a sweep then reproduced exactly.
 
 ```systemverilog
 wire arm_is_cont    = armed && (f_ss == 2'd2) && (f_sptm == h_sptm);
 wire sched_outranks = nxt_v && !nxt_pre && ($signed(stc[31:0] - f_sptm) < 0);
+wire nxt_future     = stc_trusted && nxt_pre && nxt_dist[31] &&
+                      (nxt_ahead < FUTURE_HORIZON);
+// ...plus a SECOND pending stage (nx2_*), so more than one authored window can
+// be in flight between the parse front and the display.
 ```
 
-`h_sptm` (the armed window's own `s_ptm`) was removed by the 2026-09-10 area pass as
-write-only; it is read again now, and telling the window ON SCREEN apart from the one
-being committed is the whole of the fix. ⚠ `hli_ss=3` is **not** suppressed — that is
-"same buttons, CHANGED commands" and must take effect — and a continuation while nothing
-is armed still parks, because a seek landing mid-window has only continuations to arm
-from.
+1. **`arm_is_cont`** — a continuation of the window already on screen must not re-park.
+   `h_sptm` (the armed window's own `s_ptm`) was removed by the 2026-09-10 area pass as
+   write-only and is read again for this; telling the window ON SCREEN apart from the one
+   being committed is what the rule needs. ⚠ `hli_ss=3` is **not** suppressed (that is
+   "same buttons, CHANGED commands"), and a continuation while nothing is armed still
+   parks, because a seek landing mid-window has only continuations to arm from.
+2. **`sched_outranks`** — a commit that can still be scheduled outranks a pending one
+   that can only time out.
+3. **A SECOND PENDING STAGE** — with a ~1.4 s parse lead several authored windows are in
+   flight at once; one slot discarded the later ones, and by the time the head promoted
+   the front had moved past them so nothing of that window was ever offered again.
+   ⚠ Bank budget: 4 banks = display + head + stage 2 + fill, exactly. A third stage would
+   need the HLI store to grow. ⚠ And a window can legitimately reach the queue first and
+   the head afterwards, so taking one into the head **drops its duplicate** — left in
+   place the duplicate shifted back into the head when the real one promoted and blocked
+   every later commit for that window.
+4. **`nxt_future`** — and this is the one that mattered most, *and it is not from this
+   branch at all*.
 
-★★ **MEASUREMENT REVERSED THE STORY, AND THE PLAN HAD IT BACKWARDS.** The continuation
-re-park is the obvious culprit and reads like the whole bug; the mutation table says
-otherwise. `sched_outranks` alone fixes the reported case (mutation M4, which disables
-it, is the only one that reddens the headline arm); `arm_is_cont` alone does **not** — it
-leaves the next window's `ss=1` discarded behind a still-pending earlier window. What
-`arm_is_cont` owns is a late re-commit reaching the display at all (arm [F]) and the
-removal of a redundant promote-and-refetch roughly every second. Both changes are kept,
-each with an arm that owns it, but the headline belongs to `sched_outranks`.
+★★★ **THE BIGGEST REMAINING DEFECT WAS PRE-EXISTING AND POINTED THE OTHER WAY: THE
+FALLBACK TIMER WAS PROMOTING WINDOWS ~1 s EARLY.** `PROMOTE_FALLBACK` exists for a
+pending whose STC compare will never come due (the keep_vbuf skew). It was also firing on
+pendings that were simply **early**: whenever the parse front leads the display by more
+than the ~1 s timer — and a title at this disc's ~10 Mbps mux buffers about that — every
+window was committed more than a second before its start, aged out, and promoted ahead of
+the picture. So the *next* window's buttons answered a press aimed at the monster on
+screen. The guard is a measurement rather than a timer: with a **trusted** clock (the same
+test the scheduled path uses) and a commit made before its window, a compare that says
+"not yet" is informative and must be waited out; an untrusted clock still falls back, so
+the menu rescue is untouched.
+⚠ **Bounded by `FUTURE_HORIZON` (4 s), and `nav_pci_tb` T7 is why.** "Wait for a window
+that has not started" must not become "wait for ever": T7 parks a pending 28.7 s ahead and
+requires the timer to rescue it. A real parse lead is bounded by the VBUF (2 MB at a DVD's
+~1 MB/s of video ≈ 2 s), so inside the horizon is plausibly early and beyond it is not
+this mechanism. The unbounded first cut passed every arm of the new bench and was caught
+by the menu suite — which is why that suite is part of this gate.
+
+**MEASURED over the real cell-17 NAV packs** (16 windows, the shortest 0.50 s and 0.73 s),
+counting monster windows that answer a +300 ms press with their hit:
+
+| VBUF lead | shipped v0.5.x | + rules 1–2 | + rules 3–4 |
+|---|---|---|---|
+| 300 ms | 9/9 | 9/9 | 9/9 |
+| 600–1100 ms | 8/9 | 8/9 | **9/9** |
+| 1300–1600 ms | 7/9 | 8/9 | **9/9** |
+| 1800 ms | 5/9 | 6/9 | **9/9** |
+
+★★ **MEASUREMENT REVERSED THE STORY TWICE, AND THE PLAN HAD IT BACKWARDS BOTH TIMES.**
+The continuation re-park is the obvious culprit and reads like the whole bug; ablation says
+`sched_outranks` is what fixes the *reported* case, `arm_is_cont` owns a late re-commit
+reaching the display at all (arm [F]), and the *largest* effect at realistic buffer depths
+belongs to a timer defect that predates this disc entirely. Every rule was kept only
+because disabling it costs measured hits, and one that did not — a "refresh the queued
+entry's schedulability" wire added while chasing [F] — was **deleted** once the duplicate
+fix made it dead: no mutation could catch its removal and the sweep was unchanged at every
+lead.
 
 ⚠ **`sched_outranks` keeps its `!nxt_pre` guard, and that guard is the Matrix rule.**
 Without it the policy degenerates into newest-schedulable-wins, which is exactly what
@@ -1238,8 +1285,10 @@ time, record which command fired.** It reads no signal the fix names, and the ex
 command comes from the fixture's own button records, so it cannot become a golden model
 that agrees with its RTL. It models the two clocks that matter — a display clock, and a
 parse front running a sweepable VBUF lead ahead of it, with the round entered on the
-previous cell's timeline and re-anchoring once. Arms [A]–[J]; five mutations, each
-required to fail EXACTLY its own arms (M1→F, M2→E2, M3→F, M4→A B, M5→J).
+previous cell's timeline and re-anchoring once. `nav_pci_tb` runs in the same gate,
+because this touches the promotion timer every disc menu depends on. Arms [A]–[J]; nine
+mutations, each required to fail EXACTLY its own arms (M1→F, M2→E2, M3→F, M4→A B F, M5→J,
+M6→A, M7→D, M8→F, M9→the menu suite).
 
 ⚠⚠ **A bench bug worth knowing, found by making the bench faster:** the scene clock had
 two drivers — a task's blocking reset and the tick process's nonblocking increment. At 3
