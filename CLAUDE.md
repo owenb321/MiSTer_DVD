@@ -1950,8 +1950,102 @@ worse maintenance burden than targeted in-place edits. So:
   into a module that the SAME action later resets will not be there when needed — a
   shadow of a VM register must be re-derived from its source after a reset, never from
   a constant. Detail: `docs/dvd_nav.md` "Link button fields across a flush".
-  ⚠ **Still OPEN:** Scooby's **Whac-A-Mole** (not root-caused; NOT `foac` — reads 0
-  disc-wide).
+  ✅ **SCOOBY'S WHAC-A-MOLE — ROOT-CAUSED AND FIXED 2026-09-14 (branch
+  `fix/hli-window-lag`); sim-proven RED/GREEN over the REAL NAV packs, 5 mutations each
+  failing EXACTLY its own arms, and ✅ HW-CONFIRMED over two rounds 2026-09-14/15 (builds
+  `DVD_molewindow_20260914_2217.rbf` then `DVD_molewindow2_20260915_0202.rbf`, SEED 7 first
+  roll, clk_dec 94.20/89.84, 91 % ALM): **the maintainer can beat the minigame**, hits
+  register with the disc's own yellow highlight and misses with its red one, and the T2 /
+  Matrix menus are unregressed by the promotion-timer change.
+  ⏳ **Two symptoms REMAIN on the same disc and are NOT this defect** — they are A/V sync at
+  a cell transition, tracked separately: Shaggy's win commentary is cut off, and one round's
+  speech does not lip-sync. MEASURED structure that points the next session at it: every
+  cell in this game RESTARTS its PTS near zero (rounds at 0.094 s, commentary at 0.122 s),
+  so every transition is a clock discontinuity plus an audio re-phase; and the commentary
+  clips are **single-picture still cells carrying 8.3-22.2 s of audio past their only video
+  picture**, so `disp_sched` gets exactly ONE anchor and free-runs the rest. Start on HW
+  with the drift counters (`av_drift_ms`/`play_err_ms`/`disp_lag_ms`) — a drifting
+  single-anchor clock and audio dropped at the seek are different faults with one symptom,
+  and telemetry separates them in a single reading.** Report: a monster appears, the
+  player presses that direction, the core says MISS, plays the "all the monsters mock
+  you" clip and restarts the round.
+  ★★ **THE DISC AUTHORS A SEQUENCE OF HLI TIME WINDOWS, AND `nav_pci`'s PARK POLICY WAS
+  WRITTEN FOR A LOOPING MENU.** Each round cell is cut into consecutive windows (`hli_ss=1`
+  one VOBU before each starts, `hli_ss=2` every VOBU in between); all five buttons are the
+  same (4 directions with `auto_action=1`, a neutral centre with `fosl=5`), and only the
+  monster's direction carries the hit — **the same button is a hit or a miss depending on
+  which window is armed**. The single pending slot's earliest-`s_ptm`-wins rule says a
+  repeated commit is harmless because "identical content re-parks after each promote
+  anyway" (true of a menu that re-sends ONE HLI for ever, false of a sequence): a
+  continuation re-parked the armed window with `nxt_pre=0` — promotable only by the ~1 s
+  fallback — and a commit that could still be SCHEDULED was held behind a pending one that
+  could only TIME OUT. The armed set trailed the picture by up to ~1.5 s, so a quick
+  correct press fired the PREVIOUS window's miss. A slow press hit, which is why it reads
+  as "it says I missed when I didn't".
+  **Fix = FOUR rules in `dvd/nav_pci.sv`.** The first HW round shipped two and the
+  maintainer reported the game progressing but still *"I will definitely hit a monster
+  but it will count as a miss sometimes"*; a lead sweep reproduced that exactly, and the
+  other two rules came out of it. (1) `arm_is_cont` — a continuation of the window
+  ALREADY ON SCREEN does not re-park (needs `h_sptm`, which the 2026-09-10 area pass had
+  removed as write-only; ⚠ `ss=3` is NOT suppressed, it is "changed commands", and a
+  continuation with nothing armed still parks because a seek landing mid-window has only
+  continuations). (2) `sched_outranks` — a schedulable commit outranks one that can only
+  time out. (3) **A SECOND PENDING STAGE** — with a ~1.4 s parse lead several authored
+  windows are in flight at once and one slot discarded the later ones for ever (⚠ 4 banks
+  = display + head + stage 2 + fill, exactly; ⚠ and taking a window into the head must
+  DROP its duplicate from the queue, or the duplicate shifts back in when the real one
+  promotes and blocks every later commit for that window). (4) `nxt_future` — below.
+  ★★★ **THE BIGGEST REMAINING DEFECT WAS PRE-EXISTING AND POINTED THE OTHER WAY: THE
+  ~1 s `PROMOTE_FALLBACK` WAS PROMOTING WINDOWS ~1 s EARLY.** That timer exists for a
+  pending whose STC compare will NEVER come due (keep_vbuf skew); it also fired on
+  pendings that were simply EARLY, so whenever the parse front leads by more than the
+  timer — and a title at this disc's ~10 Mbps mux buffers about that — every window armed
+  ahead of the picture and the NEXT window's buttons answered a press aimed at the
+  monster on screen. `nxt_future` = with a TRUSTED clock and a commit made before its
+  window, "not yet" is informative and must be waited out; an untrusted clock still falls
+  back, so the menu rescue is untouched. ⚠ **BOUNDED by `FUTURE_HORIZON` (4 s) and
+  `nav_pci_tb` T7 is why** — T7 parks a pending 28.7 s ahead and needs the timer; the
+  unbounded first cut passed every arm of the NEW bench and was caught only by the menu
+  suite, which is why that suite is now part of this gate.
+  **MEASURED over the real cell-17 packs (16 windows, shortest 0.50/0.73 s), monster
+  windows answering a +300 ms press with their hit:**
+  | VBUF lead | shipped v0.5.x | + rules 1-2 | + rules 3-4 |
+  |---|---|---|---|
+  | 300 ms | 9/9 | 9/9 | 9/9 |
+  | 600-1100 ms | 8/9 | 8/9 | **9/9** |
+  | 1300-1600 ms | 7/9 | 8/9 | **9/9** |
+  | 1800 ms | 5/9 | 6/9 | **9/9** |
+  ★★ **MEASUREMENT REVERSED THE STORY TWICE.** The continuation re-park reads like the
+  whole bug; ablation says `sched_outranks` fixes the *reported* case, `arm_is_cont` owns
+  a late re-commit reaching the display (arm [F]), and the LARGEST effect at realistic
+  buffer depths belongs to a timer defect that predates this disc entirely. Every rule was
+  kept only because disabling it costs measured hits — and one that did not (a "refresh the
+  queued entry" wire added while chasing [F]) was **DELETED** once the duplicate fix made
+  it dead: no mutation could catch its removal and the sweep was unchanged at every lead.
+  ⚠ `sched_outranks` KEEPS its `!nxt_pre` guard — that guard IS the Matrix rule, and
+  without it the policy becomes newest-schedulable-wins, the exact regime the 2026-08-05
+  fix removed. Measured to be a no-op for repeated identical content (same `s_ptm`, and
+  `stc` only advances).
+  ⏳ **Known residual, MEASURED (arm [G]): a round's FIRST window is fallback-timed** (~1 s)
+  because the round is entered by a `LinkCN` seek and that window commits while the clock
+  still measures the previous cell; every later window is display-scheduled at **+0 ms**.
+  Harmless here (each round opens on a *nothing* window). ⛔ Tightening it means touching
+  `hli_coherent`, which is what cost Harry Potter and Scene It their highlights — bounded
+  by the bench, not chased.
+  **Gate: `bench/dvd/run_hli_window.sh --red`** — `hli_window_tb` runs the real `nav_pci`
+  over the real NAV packs (`scooby_mole_pci.hex`, 4 windows) and **measures what the
+  player experiences: press a direction at a display time, record WHICH COMMAND FIRED**,
+  with the expected command read out of the fixture's own button records. It models the
+  two clocks (a display clock, and a parse front running a sweepable VBUF lead ahead of
+  it, entering the round on the previous cell's timeline). `nav_pci_tb` runs in the same
+  gate. Pre-fix: 8 arms red, the monster's own direction firing the miss at every lead.
+  9 mutations, each failing EXACTLY its own arms (M1→F, M2→E2, M3→F, M4→A B F, M5→J,
+  M6→A, M7→D, M8→F, M9→the menu suite).
+  ⚠⚠ **A bench bug found by making the bench FASTER, worth the habit:** the scene clock
+  had two drivers — a task's blocking reset and the tick process's nonblocking increment.
+  At 3 clk/tick the reset survived (the increment ran on 1 edge in 3); at 1 clk/tick it
+  was overwritten every edge, scenes never restarted, and it presented as "the fix
+  regressed". Detail: `docs/dvd_nav.md` "A sequence of HLI windows is not a looping menu".
   ★ **RESIDENTS' MISSING AUDIO — ROOT-CAUSED, and it is NOT a nav bug: `dvd/ac3/`
   SUPPORTS ONLY acmod 2 (2/0) AND acmod 7 (3/2).** `bsi_parse.sv:167` sets sticky
   `err_unsupported` for anything else → `ac3_err` → ac3_front self-heal reset every
