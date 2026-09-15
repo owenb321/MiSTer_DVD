@@ -1275,7 +1275,9 @@ chapter, and accurate-seek features need that data **parsed** instead of discard
   `tools/dvd_vm_ref.py` (faithful libdvdnav port) validated on MiB/BBB/Matrix. The per-disc
   **menu refinements** (highlight render, keep_vbuf transitions, menu-still cold re-decode,
   aspect, 2nd-loop highlight, timed stills) shipped as **PR fj#83–fj#90** and are tracked in
-  `docs/dvd_menu_refinements.md` (see its Status roll-up) — all HW-confirmed except §6 aspect
+  `docs/dvd_menu_refinements.md` (see its Status roll-up). ⚠ The **cold re-decode was
+  REMOVED in v0.5.0** (`b900478`, issue #65) and its removal exposed the pixelated first
+  slide of a menu slideshow — fixed in the reader's delivery path, `docs/dvd_menu_refinements.md` §9 — all HW-confirmed except §6 aspect
   (PR fj#86) and §6b timed stills (PR fj#90), which await a hardware confirmation pass.
   Remaining genuinely-new nav work: Phase 6 (exact chapters/PTT), Phase 7+ (NV_PCK/DSI, seek,
   angles). See `docs/dvd_vm.md`.

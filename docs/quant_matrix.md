@@ -1,8 +1,8 @@
 # The quantiser matrix is lost at a VBUF flush ("deep fried" menu stills)
 
 **Status: ✅ FIXED by a decoder SOFT RESET on VM jumps (2026-09-14, §11) — sim-proven
-RED/GREEN and ✅ HW-CONFIRMED 2026-09-14 against its own control (§11.4).** Branch `fix/quant-matrix-flush`, not merged, not
-pushed. §6's vld-only fix REGRESSED on hardware and is reverted; §9–§10 are the record
+RED/GREEN and ✅ HW-CONFIRMED 2026-09-14 against its own control (§11.4).** Branch
+`fix/quant-matrix-flush`, **merged as PR #92 (`ddb910c`)**. §6's vld-only fix REGRESSED on hardware and is reverted; §9–§10 are the record
 of that, and §11 is what replaced it. The two things that survive from the first
 attempt are the `iquant.v` 7.3.1 scan fix (§4) and the bench (§7, now gated on the
 soft reset).
@@ -54,6 +54,16 @@ decoder was opened. Three plausible mechanisms died in the time it took to rende
 - **Why a press repairs it.** Entering the menu from a title is a full VBUF flush;
   re-entering the menu from inside the menu domain is a `keep_vbuf` hop (`flush_ctl` gates
   `seek_flush` on `~keep_vbuf`), so no VBUF flush and the parser is undisturbed.
+  ⚠ **"undisturbed" is too strong, corrected 2026-09-14.** A `keep_vbuf` hop preserves the
+  VBUF but still pulses `load_flush`, and until that date the reader also DROPPED up to
+  16 KB of the source cell that it had never delivered — so the decoder could be handed a
+  stream cut mid-slice with the landing right behind it. **That does NOT lose the matrix**:
+  `bench/dvd/run_menu_junction.sh` measures exactly this splice on the real T2 cells and
+  all seven truncation offsets come back 0/64 wrong, because with the bytes CONTIGUOUS the
+  parser errors out and resyncs before the landing's header. Losing the matrix needs the
+  FLUSH — the tail discarded and the parser frozen mid-picture. The dropped tail was a real
+  defect with a different (still open) visible consequence; see
+  `docs/dvd_menu_refinements.md` §9.
 - **Why "sometimes".** MEASURED, not argued: sweeping the flush across the parse,
   **8 of 10 positions lose the matrix and 2 survive**. It is a function of where the
   parser stood when the flush landed, not of chance.
