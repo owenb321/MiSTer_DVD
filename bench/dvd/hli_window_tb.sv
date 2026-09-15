@@ -207,6 +207,15 @@ module hli_window_tb;
         cmd_cnt  <= cmd_cnt + 1;
     end
 
+    // commit tracer: prints the queue state at each HLI commit (+dbg only)
+    always @(posedge clk)
+        if ($test$plusargs("dbg") && pci_valid && dut.cur == 10'h315)
+            $display("      [commit] t=%0d stc=%0d ss=%0d sptm=%0d armed=%b h_sptm=%0d | head v=%b sptm=%0d pre=%b | q v=%b sptm=%0d pre=%b | cont=%b so=%b q=%b",
+                     t, stc, dut.f_ss, dut.f_sptm, btns_armed, dut.h_sptm,
+                     dut.nxt_v, dut.nxt_sptm, dut.nxt_pre,
+                     dut.nx2_v, dut.nx2_sptm, dut.nx2_pre,
+                     dut.arm_is_cont, dut.sched_outranks, dut.nx2_v);
+
     task feed_pci(input int sec);
         int p, n;
         begin
@@ -316,8 +325,10 @@ module hli_window_tb;
                     // is what found the scene-clock race above: a press that
                     // reports the wrong `t` is a bench bug, not a fix bug.
                     if ($test$plusargs("dbg"))
-                        $display("    [dbg] t=%0d stc=%0d press dir %0d: armed=%b sel=%0d btn_ns=%0d hl_on=%b",
-                                 t, stc, res_dir[iw], btns_armed, btn_sel, dbg_btn_ns, hl_on);
+                        $display("    [dbg] t=%0d stc=%0d press dir %0d: armed=%b h_sptm=%0d sel=%0d | head v=%b sptm=%0d pre=%b | q v=%b sptm=%0d pre=%b",
+                                 t, stc, res_dir[iw], btns_armed, dut.h_sptm, btn_sel,
+                                 dut.nxt_v, dut.nxt_sptm, dut.nxt_pre,
+                                 dut.nx2_v, dut.nx2_sptm, dut.nx2_pre);
                     press(res_dir[iw]);
                     wait_t(tw + 300);                 // ~3 ms: the fetch is ~10 ticks
                     res_seen[iw] = (cmd_cnt != pre);
@@ -466,20 +477,29 @@ module hli_window_tb;
         //     from becoming "promote as soon as it is parsed", which would
         //     break the game the other way (hitting a monster not yet drawn).
         // ---------------------------------------------------------------
-        for (w = 1; w < n_win; w = w + 1) begin
-            if (w_hit[w] == 0) continue;
-            // ⚠ skip a window whose predecessor is the CELL'S FIRST: that one is
-            // committed while the clock is still on the previous cell's timeline
-            // (the round is entered by a LinkCN seek), so it arms on the fallback
-            // timer and there is legitimately nothing on screen to serve the
-            // press. That residual is MEASURED by [G] rather than hidden here.
-            if (w == 1) continue;
-            run_scene(1000, -300*TPMS, 0, 0, 300000, w, -1);
-            exp = w_cmd[w-1][w_hit[w]];               // same button, PREVIOUS window
-            $display("[D] window %0d, its direction pressed -300ms -> %016x (expect the window before it: %016x)",
-                     w, res_cmd[w], exp);
-            chk(res_seen[w] && res_cmd[w] === exp,
-                $sformatf("[D] window %0d: a press before it must serve the window still on screen", w));
+        // ⚠ SWEPT OVER THE LEAD, and the long one is the load-bearing half. A
+        // parse front further ahead than the ~1 s fallback timer used to age a
+        // perfectly schedulable pending out and promote it EARLY, so the NEXT
+        // window's buttons answered a press aimed at what was on screen. At a
+        // 1000 ms lead that never happens and this arm is only a sanity check.
+        for (sweep = 0; sweep < 2; sweep = sweep + 1) begin
+            lead_ms_arg = (sweep == 0) ? 1000 : 1600;
+            for (w = 1; w < n_win; w = w + 1) begin
+                if (w_hit[w] == 0) continue;
+                // ⚠ skip a window whose predecessor is the CELL'S FIRST: that one
+                // is committed while the clock is still on the previous cell's
+                // timeline (the round is entered by a LinkCN seek), so it arms on
+                // the fallback timer and there is legitimately nothing on screen
+                // to serve the press. [G] measures that residual instead.
+                if (w == 1) continue;
+                run_scene(lead_ms_arg, -300*TPMS, 0, 0, 300000, w, -1);
+                exp = w_cmd[w-1][w_hit[w]];           // same button, PREVIOUS window
+                $display("[D lead=%0dms] window %0d, its direction pressed -300ms -> %016x (expect the window before it: %016x)",
+                         lead_ms_arg, w, res_cmd[w], exp);
+                chk(res_seen[w] && res_cmd[w] === exp,
+                    $sformatf("[D lead=%0dms] window %0d: a press before it must serve the window still on screen",
+                              lead_ms_arg, w));
+            end
         end
 
         // ---------------------------------------------------------------

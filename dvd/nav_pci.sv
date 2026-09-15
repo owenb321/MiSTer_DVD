@@ -77,7 +77,12 @@ module nav_pci #(
     // page transitions are sub-second — 2.5 s felt sluggish there (HW). A looping
     // menu with a >1 s fly-in would highlight mid-animation; none observed (T2's
     // long fly-ins PARK and ride settle).
-    parameter [26:0] PROMOTE_FALLBACK = 27'd27_000_000
+    parameter [26:0] PROMOTE_FALLBACK = 27'd27_000_000,
+    // How far ahead of the clock an authored window may sit and still be treated
+    // as "simply early" rather than "never coming due" -- 4 s of 90 kHz STC,
+    // comfortably above any real VBUF parse lead (~2 s) and far below the stuck
+    // compares the fallback exists to rescue. See nxt_future below.
+    parameter [31:0] FUTURE_HORIZON  = 32'd360_000
 ) (
     input  wire        clk,           // clk_sys
     input  wire        rst_n,         // pipe_rst_n: a load/seek/jump clears nav state
@@ -253,6 +258,30 @@ reg [5:0]  nxt_btn_ns, nxt_fosl, nxt_foac;
 reg        nxt_forever;         // pending arm authored hli_e_ptm == 0xFFFFFFFF (never auto-disarm)
 reg [1:0]  nxt_grns;
 reg [2:0]  nxt_g1ty, nxt_g2ty, nxt_g3ty;
+// ★ SECOND PENDING STAGE (2026-09-14). One slot is not enough when the disc
+// authors a SEQUENCE of windows: the parse front runs a VBUF depth (~1.4 s on
+// this disc) ahead of the display, so SEVERAL authored windows are in flight at
+// once. With one slot the later ones were discarded for having a later s_ptm,
+// and by the time the head promoted the front had already moved past them --
+// nothing of that window was ever offered again, so it arrived on the ~1 s
+// fallback instead of on schedule. MEASURED over the real cell-17 NAV packs
+// (16 windows, the shortest 0.5/0.73 s): monster windows served on time were
+// 9/9 at a 300 ms lead but 8/9 at 600-1100 ms, 7/9 at 1300-1600 ms and 5/9 at
+// 1800 ms -- exactly the reported "I definitely hit it and it says I missed".
+// ⚠ Slot 1 holds only a commit strictly LATER than the head, so when it is
+// empty every rule below reduces EXACTLY to the one-slot behaviour -- which is
+// what lets the existing nav_pci_tb pass unchanged.
+// ⚠ Bank budget: 4 banks = display + head + slot 1 + fill, exactly. A third
+// pending stage would need the HLI store to grow.
+reg        nx2_v;
+reg [1:0]  nx2_bank;
+reg [1:0]  nx2_ss;
+reg [31:0] nx2_sptm;
+reg        nx2_pre;
+reg [5:0]  nx2_btn_ns, nx2_fosl, nx2_foac;
+reg        nx2_forever;
+reg [1:0]  nx2_grns;
+reg [2:0]  nx2_g1ty, nx2_g2ty, nx2_g3ty;
 reg        off_v;              // pending disarm
 reg [31:0] off_sptm;
 reg [26:0] pend_age;           // cycles the current ARM pending has waited (video live)
@@ -261,13 +290,17 @@ always @(posedge clk)
     if (pci_valid && cur >= 10'h060 && cur <= 10'h315)
         hbuf[{fill_bank, cur - 10'h060}] <= pci_byte;
 
-// next fill bank: rotate, skipping the display and pending banks
-function [1:0] next_bank(input [1:0] b, input [1:0] d, input [1:0] n);
+// next fill bank: rotate, skipping the display and BOTH pending banks. With
+// 4 banks and 3 exclusions exactly one remains, which is the budget noted at
+// nx2_v above.
+function [1:0] next_bank(input [1:0] b, input [1:0] d, input [1:0] n,
+                         input [1:0] n2, input n2_used);
     reg [1:0] c;
+    integer   k;
     begin
         c = b + 2'd1;
-        if (c == d || c == n) c = c + 2'd1;
-        if (c == d || c == n) c = c + 2'd1;
+        for (k = 0; k < 3; k = k + 1)
+            if (c == d || c == n || (n2_used && c == n2)) c = c + 2'd1;
         next_bank = c;
     end
 endfunction
@@ -373,7 +406,30 @@ wire nxt_sched = nxt_v && nxt_pre && !nxt_dist[31] && stc_trusted;
 // video live but the STC never became due (keep_vbuf STC/parse-front skew).
 // Only for a real ARM (buttons present) so an ss=0-style empty pending doesn't
 // spuriously "promote". Disarm (off_due) still wins below.
-wire nxt_fallback = nxt_v && (nxt_btn_ns != 6'd0) && video_live &&
+// ★ A PENDING THAT IS STILL WAITING FOR ITS OWN FUTURE WINDOW IS NOT STUCK
+// (2026-09-14). The fallback exists for a pending whose STC compare will NEVER
+// come due -- the keep_vbuf skew, where the clock sits on another timeline. It
+// was firing on pendings that were simply EARLY: whenever the parse front leads
+// the display by more than PROMOTE_FALLBACK (~1 s, and a title at this disc's
+// ~10 Mbps mux buffers about that), every window was committed more than a
+// second before its start, aged out, and promoted EARLY -- the highlight ran
+// ahead of the picture by up to a second. On the whack-a-mole that means the
+// NEXT window's buttons answer a press aimed at the monster on screen.
+// The guard is a measurement, not a timer: with a TRUSTED clock (the same test
+// the scheduled path uses) and a commit made before its window, a compare that
+// says "not yet" is informative and must be waited out. An untrusted clock
+// still falls back, so the menu rescue this timer exists for is untouched.
+// ⚠ BOUNDED BY A HORIZON, and nav_pci_tb T7 is why. "Wait for a window that has
+// not started yet" must not become "wait for ever": an HLI whose s_ptm sits far
+// beyond the clock is not an early commit, it is a compare that will never come
+// due -- which is the case the fallback was built for (T7 parks one 28.7 s
+// ahead). A genuine parse-front lead is bounded by the VBUF: 2 MB at a DVD's
+// ~1 MB/s of video is ~2 s, so anything inside FUTURE_HORIZON is plausibly just
+// early and anything beyond it is not this mechanism.
+wire [31:0] nxt_ahead = nxt_sptm - stc[31:0];   // valid only while nxt_dist[31]
+wire nxt_future   = stc_trusted && nxt_pre && nxt_dist[31] &&
+                    (nxt_ahead < FUTURE_HORIZON);
+wire nxt_fallback = nxt_v && (nxt_btn_ns != 6'd0) && video_live && !nxt_future &&
                     (menu_settled || (pend_age >= PROMOTE_FALLBACK));
 wire nxt_due = nxt_sched || nxt_fallback;
 // A forever-armed HLI (h_forever) is immune to a scheduled disarm - a stale ss=0 from a
@@ -421,6 +477,7 @@ wire arm_is_cont = armed && (f_ss == 2'd2) && (f_sptm == h_sptm);
 // the same window can never regain the schedulability an earlier one lacked.
 wire sched_outranks = nxt_v && !nxt_pre && ($signed(stc[31:0] - f_sptm) < 0);
 
+
 // ---- button-group choice by display mode ------------------------------------
 // wanted display type: 4:3 content wants a plain-4:3 group (dsp_ty == 000);
 // 16:9 content wants the group whose dsp_ty bit matches the presentation.
@@ -466,6 +523,17 @@ always @(posedge clk or negedge rst_n) begin
         nxt_fosl  <= 6'd0;
         nxt_foac  <= 6'd0;
         nxt_forever<= 1'b0;
+        nx2_v     <= 1'b0;
+        nx2_bank  <= 2'd1;
+        nx2_ss    <= 2'd0;
+        nx2_sptm  <= 32'd0;
+        nx2_pre   <= 1'b0;
+        nx2_btn_ns<= 6'd0;
+        nx2_fosl  <= 6'd0;
+        nx2_foac  <= 6'd0;
+        nx2_forever<= 1'b0;
+        nx2_grns  <= 2'd0;
+        nx2_g1ty  <= 3'd0; nx2_g2ty <= 3'd0; nx2_g3ty <= 3'd0;
         off_v     <= 1'b0;
         off_sptm  <= 32'd0;
         pend_age  <= 27'd0;
@@ -530,7 +598,10 @@ always @(posedge clk or negedge rst_n) begin
 
         // Age the pending ARM while it waits with video live (fallback timer).
         // Frozen if no pending, if the STC path is already due, or video dead.
-        if (nxt_v && nxt_btn_ns != 6'd0 && video_live && !nxt_sched) begin
+        // ⚠ frozen while the pending is legitimately early (nxt_future), so the
+        // timer cannot bank age against a window that has not happened yet and
+        // then fire the instant the clock loses trust.
+        if (nxt_v && nxt_btn_ns != 6'd0 && video_live && !nxt_sched && !nxt_future) begin
             if (pend_age != 27'h7FFFFFF) pend_age <= pend_age + 27'd1;
         end else
             pend_age <= 27'd0;
@@ -600,8 +671,41 @@ always @(posedge clk or negedge rst_n) begin
                     nxt_g1ty  <= f_g1ty;
                     nxt_g2ty  <= f_g2ty;
                     nxt_g3ty  <= f_g3ty;
-                    fill_bank <= next_bank(fill_bank, disp_bank, fill_bank);
+                    fill_bank <= next_bank(fill_bank, disp_bank, fill_bank, nx2_bank, nx2_v);
                     if (arm_restart) off_v <= 1'b0;   // stale old-pass disarm
+                    // ⚠ TAKING A WINDOW INTO THE HEAD DROPS ITS DUPLICATE FROM
+                    // THE QUEUE. A window can legitimately reach the queue first
+                    // (it was later than the then-head) and the head afterwards
+                    // (sched_outranks, once the earlier head went stale). Left
+                    // in place, the duplicate SHIFTED BACK INTO THE HEAD when
+                    // the real one promoted, and blocked every later commit for
+                    // that window -- measured as an hli_ss=3 re-commit never
+                    // reaching the display (arm [F]).
+                    if (nx2_v && f_sptm == nx2_sptm) nx2_v <= 1'b0;
+                end else if (!arm_is_cont && nxt_v &&
+                             $signed(f_sptm - nxt_sptm) > 0 &&
+                             (!nx2_v || $signed(f_sptm - nx2_sptm) < 0)) begin
+                    // QUEUE BEHIND THE HEAD. A commit for a window strictly
+                    // LATER than the head used to be discarded here, and with a
+                    // VBUF lead longer than the head's window the front had
+                    // already passed it by the time the head promoted -- nothing
+                    // of that window was ever offered again. Keep the EARLIEST
+                    // such commit; anything later than slot 1 is still dropped
+                    // (it will be re-sent while slot 1 drains).
+                    nx2_v      <= 1'b1;
+                    nx2_pre    <= $signed(stc[31:0] - f_sptm) < 0;
+                    nx2_bank   <= fill_bank;
+                    nx2_ss     <= f_ss;
+                    nx2_sptm   <= f_sptm;
+                    nx2_btn_ns <= f_btn_ns;
+                    nx2_fosl   <= f_fosl;
+                    nx2_foac   <= (f_ss == 2'd1) ? f_foac : 6'd0;
+                    nx2_forever<= f_forever;
+                    nx2_grns   <= f_grns;
+                    nx2_g1ty   <= f_g1ty;
+                    nx2_g2ty   <= f_g2ty;
+                    nx2_g3ty   <= f_g3ty;
+                    fill_bank  <= next_bank(fill_bank, disp_bank, nxt_bank, fill_bank, 1'b1);
                 end
             end
             default: ;
@@ -619,7 +723,27 @@ always @(posedge clk or negedge rst_n) begin
             fetched <= 1'b0;
             h_forever <= 1'b0;
         end else if (nxt_due) begin
-            nxt_v <= 1'b0;
+            // SHIFT slot 1 down into the head. When slot 1 is empty this is
+            // exactly the old `nxt_v <= 0`, which is why one-slot behaviour --
+            // and every existing nav_pci_tb scenario -- is unchanged.
+            // ⚠ pend_age belongs to the HEAD, so it restarts with the new one;
+            // leaving it would let a just-shifted pending fallback-promote at
+            // once on the previous head's accrued age.
+            nxt_v      <= nx2_v;
+            nxt_bank   <= nx2_bank;
+            nxt_ss     <= nx2_ss;
+            nxt_sptm   <= nx2_sptm;
+            nxt_pre    <= nx2_pre;
+            nxt_btn_ns <= nx2_btn_ns;
+            nxt_fosl   <= nx2_fosl;
+            nxt_foac   <= nx2_foac;
+            nxt_forever<= nx2_forever;
+            nxt_grns   <= nx2_grns;
+            nxt_g1ty   <= nx2_g1ty;
+            nxt_g2ty   <= nx2_g2ty;
+            nxt_g3ty   <= nx2_g3ty;
+            nx2_v      <= 1'b0;
+            pend_age   <= 27'd0;
             if (nxt_btn_ns == 6'd0) begin
                 armed   <= 1'b0;
                 fetched <= 1'b0;
