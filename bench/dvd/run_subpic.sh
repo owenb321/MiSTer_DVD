@@ -15,38 +15,38 @@ cd "$(dirname "$0")/../.."
 echo "=== subp_stream_map wiring: emu.sv passes the DOMAIN, not the menu context (#81) ==="
 python3 tools/check_subp_map_wiring.py
 
+# The subpicture layer is ALSO gated by the burn-in policy: Stop and the screensaver
+# blank the picture, and everything derived from the picture goes with it (a subtitle,
+# a menu button highlight). That composition lives in emu.sv, which has no bench, so
+# anyone touching this layer should trip the same check the screensaver suite runs.
+echo "=== subpicture burn-in gate: pic_blank hides the layer (Stop / screensaver) ==="
+python3 tools/check_saver_overlay_wiring.py
+
 echo "=== subp_stream_map: logical->physical subpicture map vs the golden model ==="
 python3 tools/gen_subp_map_vec.py >/dev/null
 iverilog -g2012 -o bench/dvd/subp_stream_map_sim dvd/subp_stream_map.sv bench/dvd/subp_stream_map_tb.sv 2>/dev/null
-vvp bench/dvd/subp_stream_map_sim | grep -E "PASSED|FAILURE"
-
+vvp bench/dvd/subp_stream_map_sim | grep -q "PASSED" && echo "  PASSED"
 echo "=== ps_demux subpicture routing ==="
 iverilog -g2012 -o bench/dvd/ps_demux_subpic_sim dvd/ps_demux.sv bench/dvd/ps_demux_subpic_tb.sv 2>/dev/null
-vvp bench/dvd/ps_demux_subpic_sim | grep RESULT
-
+vvp bench/dvd/ps_demux_subpic_sim | grep -q "RESULT: PASS" && echo "  RESULT: PASS"
 echo "=== subpic_blend alpha compositor ==="
 iverilog -g2012 -o bench/dvd/subpic_blend_sim dvd/subpic_blend.sv bench/dvd/subpic_blend_tb.sv 2>/dev/null
-vvp bench/dvd/subpic_blend_sim | grep RESULT
-
+vvp bench/dvd/subpic_blend_sim | grep -q "RESULT: PASS" && echo "  RESULT: PASS"
 echo "=== spu_decode (real Matrix SPU vs golden model) ==="
 iverilog -g2012 -o bench/dvd/spu_decode_sim dvd/spu_decode.sv bench/dvd/spu_decode_tb.sv 2>/dev/null
-vvp bench/dvd/spu_decode_sim | grep RESULT
-
+vvp bench/dvd/spu_decode_sim | grep -q "RESULT: PASS" && echo "  RESULT: PASS"
 echo "=== spu_decode 480i interlaced render (both fields reassemble golden) ==="
 iverilog -g2012 -o bench/dvd/spu_decode_480i_sim dvd/spu_decode.sv bench/dvd/spu_decode_480i_tb.sv 2>/dev/null
-vvp bench/dvd/spu_decode_480i_sim | grep RESULT
-
+vvp bench/dvd/spu_decode_480i_sim | grep -q "RESULT: PASS" && echo "  RESULT: PASS"
 echo "=== full chain: real VOB -> ps_demux -> spu_decode ==="
 iverilog -g2012 -o bench/dvd/subpic_chain_sim dvd/ps_demux.sv dvd/spu_decode.sv bench/dvd/subpic_chain_tb.sv 2>/dev/null
-vvp bench/dvd/subpic_chain_sim | grep RESULT
-
+vvp bench/dvd/subpic_chain_sim | grep -q "RESULT: PASS" && echo "  RESULT: PASS"
 echo "=== crt_ov_map: CRT Letterbox/Crop overlay inverse map (co-sim vs the real scalers) ==="
 iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/crt_ov_map_sim \
   dvd/crt_ov_map.sv dvd/disp_hstretch.sv dvd/disp_vscale.sv dvd/spu_decode.sv \
   rtl/mpeg2/wrappers.v rtl/mpeg2/fwft.v rtl/mpeg2/xfifo_sc.v rtl/mpeg2/xilinx_fifo_dc.v \
   bench/dvd/crt_ov_map_tb.sv 2>/dev/null
-vvp bench/dvd/crt_ov_map_sim | grep -E "PASS|FAIL"
-
+vvp bench/dvd/crt_ov_map_sim | grep -q "PASS" && echo "  PASS"
 echo "=== display-order commit (PR #63 regression: the white-rabbit blink + subtitle tails) ==="
 # Kept as its own script because it carries RED arms; run it with --red when touching
 # spu_decode's commit path. See docs/subpicture.md "The COMMIT contract".

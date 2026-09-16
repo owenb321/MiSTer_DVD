@@ -228,7 +228,9 @@ naming what you switched to, with the language where the disc provides one — `
 **B14 (Stop)** works the way a set-top player's does, in two stages.
 
 - **Press once** and playback halts, the bouncing logo comes up, and `STOP` is shown.
-  Your place is remembered — **Pause/Play picks up exactly where you left off**.
+  The picture is blanked, and any subtitle or disc menu highlight goes with it — only the
+  logo and `STOP` are left. Your place is remembered — **Pause/Play picks up exactly
+  where you left off**.
 - **Press again** and the place is forgotten. The screen clears to just the logo, as if
   you had reset the core; the next Pause/Play starts the disc from the beginning.
 
@@ -237,6 +239,16 @@ resume is waiting for you.
 
 The disc stays loaded either way. To unload it and return to the idle screen, use
 **Reset** on the OSD's main page.
+
+!!! note "Nothing is left standing still"
+    A stopped or screensaving player deliberately shows nothing but the moving
+    logo — no picture, no subtitle, no menu highlight. A still image left on a
+    CRT burns in, which is what both features exist to prevent. Everything comes
+    back the instant you press anything: nothing is torn down and nothing is
+    reloaded, so a paused menu returns exactly as you left it.
+
+    An ordinary **pause** is different — it keeps the picture and its subtitle on
+    screen. Only Stop and the screensaver blank anything.
 
 ### Aspect
 
