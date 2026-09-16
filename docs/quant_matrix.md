@@ -2170,6 +2170,76 @@ ffmpeg's decode of the same menu's own bytes (>= 1.5x = fried).
 **If arm 1 fails:** the fallback is `fix/menu-hop-still-matrix` (option A, HW-confirmed,
 unpushed) -- not a re-derivation. Record the measurement here first.
 
+### 13r. Harry Potter Interactive's Player Mode screen: the SAME eat on the FLUSH junction (2026-09-16, assessment only)
+
+Field report on the `dev-hopstuff` HW round (and reproduced on v0.5.0): jumping to
+the **Player Mode** screen (Single Player / Multi-Player) of `Harry Potter Interactive
+DVD Game (HOGWARTS CHALLENGE)` lands on a **blocky, pixelated** still, and it stays
+so. Not fried (no exploded texture, no clipped highlights): SOFT and blocky, the 8-px
+DCT grid visible everywhere. The maintainer notes #96's T2 fix does not reach it.
+
+★★ **It is the same eaten sequence header, on the junction class 13q deliberately
+did not cover, in the OPPOSITE direction.** Measured off the disc:
+
+- The Player Mode screen is a TITLE-domain still (this disc has NO menu VOBs at
+  all; every "menu" is a title PGC -- `docs/dvd_menu_refinements.md` 5, the picbuf
+  slot-alias work). Reaching it by skipping the transition is a title->title jump:
+  `keep_vbuf = 0` (not `menu_dom`), so a **VBUF flush**, and NOT a domain crossing,
+  so **no soft reset** (#98). That is the 11 shape -- the pipeline frozen
+  mid-picture, the landing arriving INTO it -- with nothing protecting it.
+- **The stills download NO intra matrix** (`hp_still_i.hex`, and every one-picture
+  still sampled in VTS_05/08/14/17/19): they rely on the MPEG defaults, which their
+  own sequence header RESTORES (`quant_rst`). **Every title VOB downloads the same
+  custom intra matrix, `[8, 8, 9, 11, 13, 13, 14, 17 …]` peaking at 41** against the
+  default's 83 -- default/custom up to **2.11x**. So an eaten landing header leaves
+  the title's matrix in force and every AC coefficient of the still comes out up to
+  2x too SMALL: high frequencies halved = soft, blocky. Fried is the same defect
+  with the ratio the other way round (Elmo 20.75x too LARGE). #96's T2 slides are
+  this exact shape (they download none, the transition's matrix is near-flat), which
+  is why the maintainer's comparison is apt -- but #96 fixed the NATURAL-transition
+  junction by draining, and a skip is a USER jump.
+
+**Reproduced in the real vld, `main`'s RTL** (`quant_matrix_tb` flush mode, cut A =
+VTS_04 title bytes ending mid-picture, cut B = the real `hp_still_i.hex`; new
+`quant_fixture.py --still-hex` + flush-mode `--gap`):
+
+| flush position (12 swept) | gap 0 | gap 128 |
+|---|---|---|
+| landing keeps the DEFAULTS (correct) | 5 | **12** |
+| landing holds the TITLE's matrix (the defect) | **7** | 0 |
+
+**Reproduced in an independent decoder.** The VTS_08 stills (the activity-select
+screens) decoded by ffmpeg with their own header, and behind the title's sequence
+header (= the bytes a decoder that ate the landing's header would dequantise with):
+
+| still | own header: blockiness / detail σ | behind the title's header |
+|---|---|---|
+| VTS_08 #1 | 1.144 / 13.0 | **3.680 / 8.2** |
+| VTS_08 #2..#6 | 1.326 / 8.7 | **3.172 / 5.5** |
+| VTS_08 #7..#8 | 1.647 / 8.6 | **3.297 / 5.4** |
+
+The "behind the title's header" decode is visually the maintainer's screenshot:
+the 8-px grid across the whole picture, text edges softened
+(`.sim/hopgap/hp/stills/v8_s1_{own,eaten}.png`, not committed). Blockiness here is
+the 13c-bis metric (energy on the DCT grid / off it): a correct picture has no reason
+to prefer the grid.
+
+⚠ Two things this does NOT establish: which exact cell the board lands on (the
+route was not traced -- the mechanism is disc-wide, every title shares the matrix
+and every still downloads none, so it does not matter), and the on-board flush
+position (the 7/12 is the vld's exposure, not the rig's rate; the maintainer sees
+it every time, consistent with a deterministic landing position for a given press).
+
+**The candidate fix is the follow-up 13q already named: arm `es_stuff` on EVERY
+jump/seek ack, not only the `keep_vbuf` one** -- in `emu.sv`, `.arm(aud_drop_pulse)`
+→ `.arm(jump_ack | seek_ack)`. The zeros then precede the first landing byte after
+any flush too. Cost: 128 bytes and ~256 clk_dec per chapter skip. The flush-path
+sweep above is its offline gate (7/12 → 0/12). ⚠ Not built here -- it widens the
+stuffer onto the chapter-seek / menu-entry paths that are HW-proven (#45 realign,
+#98 soft reset), and 13q's rule was one behavioural delta per HW round. The HW arm
+for it: Player Mode via skip on HP correct on the first view; a chapter skip on a
+feature and a menu entry/exit unregressed.
+
 ### 13f. WHAT A REAL PLAYER DOES -- asked of the oracle, not reasoned about
 
 libdvdnav is the independent oracle for this project (docs/dvd_vm.md, the POST-only PGC
