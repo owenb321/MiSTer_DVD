@@ -1738,6 +1738,25 @@ wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
 // =========================================================================
 // libdvdnav still heuristic, evaluated as cell byte 23 (last_sector) lands.
 // cf_c/lv_c/pb_c were captured earlier in the same 24 B record.
+// ★ A MULTI-ANGLE BLOCK OCCUPIES ONE SLOT ON THE TIMELINE, NOT N.
+// cm_cat_c is this cell's category byte, captured at record byte 0 and so
+// already valid at byte 11 where the prefix sum is written. A SIBLING angle cell
+// (block_type==1 with block_mode 2 IN or 3 LAST) is an ALTERNATIVE rendering of
+// the same span of film as the block's first cell -- the viewer sees one of
+// them, never both -- so it must inherit that cell's start time and add NOTHING
+// to the running total.
+// MEASURED on "Grave of the Fireflies" (VTS_01 PGC1, 13 back-to-back 2-angle
+// pairs = the whole film): summing every cell ran the elapsed readout to
+// 2:58:45 on a 1:30:03 title, and because a block's two cells OVERLAP in RBN
+// (chapter 1 is cell 0 at 0..339620 and cell 1 at 457..340206), seek_time's
+// nearest-at-or-below rule picked the SIBLING for any target past sector 457 and
+// published its start -- 8:00, chapter 1's own length. That is the field report
+// "+8 minutes when seeking during the beginning chapter", to the second.
+// Giving the siblings the same start makes that pick HARMLESS instead of wrong,
+// which is why seek_time itself needs no change.
+// (`dvd_iso_reader.sv` has carried "multi-angle blocks over-count -- documented
+// limitation" since Phase 11; this is that limitation removed.)
+wire       cw_sibling = (cm_cat_c[5:4] == 2'd1) && (cm_cat_c[7:6] >= 2'd2);
 wire [31:0] cell_last_w = {wacc, pb_rdata};                 // last_sector @20
 wire [31:0] cell_sz_w   = cell_last_w - cf_c;               // content size (sectors)
 wire        heur_hit_w  = (cell_last_w == lv_c) && (cell_sz_w < 32'd1024) &&
@@ -1840,9 +1859,14 @@ always @(posedge clk)
                 title_first_rbn <= {wacc, pb_rdata};
             if (cell_wi == 8'd0) title_start_rbn <= {wacc, pb_rdata};
             // start time = sum of the cells before this one (pt_c complete @7)
+            // A sibling angle cell shares the block's slot: same start, and the
+            // running sum does not advance (its duration is the block-first
+            // cell's, already counted).
             cell_start_mem[cell_wi] <= (cell_wi == 8'd0) ? 32'd0 : run_eltm;
-            run_eltm                <= (cell_wi == 8'd0) ? pt_c  : run_sum_w;
+            run_eltm                <= (cell_wi == 8'd0) ? pt_c
+                                     : (cw_sibling ? run_eltm : run_sum_w);
             run_secs                <= (cell_wi == 8'd0) ? pb_dur_w
+                                     : cw_sibling ? run_secs
                                      : ((run_secs_n > 17'd35999) ? 16'd35999
                                                                  : run_secs_n[15:0]);
             // stretch: stream the first_sector to seek_bar's shadow map, and the
@@ -3982,11 +4006,38 @@ always @(posedge clk or negedge rst_n) begin
                                     : (cl_rd + 32'd1);
                         state    <= S_STREAM;
                     end
-                end else if (cc_blk_first && !angle_resolved && !rbn_override) begin
+                end else if (cc_blk_first && !angle_resolved) begin
                     // MULTI-ANGLE (Phase 9): the first cell of an angle block.
-                    // Count the block's angle cells (block_type==1 run), then load
-                    // the cur_angle cell instead of this one. block_first = this
-                    // cell; the scan cursor prefetches the next cell's category.
+                    // Count this block's angle cells, then load the cur_angle cell
+                    // instead of this one. block_first = this cell; the scan cursor
+                    // prefetches the next cell's category.
+                    //
+                    // ★ THE `!rbn_override` TERM WAS REMOVED HERE (2026-09-15).
+                    // It excluded a raw-RBN scrub landing from the scan entirely,
+                    // so a SEEK INTO an angle block left angle_count at 0 and
+                    // therefore angle_active at 0 -- and seamless_active needs
+                    // `!cc_is_angle`, so that was 0 too. With neither arm set there
+                    // is no ILVU follow, and the reader streamed the interleaved
+                    // range LINEARLY: the two angles alternating once per ILVU.
+                    // Field report on "Grave of the Fireflies": seeking "starts
+                    // alternating the 2 available angles at 1hz" -- its first ILVU
+                    // is ~457 sectors, about one second.
+                    // The seek path's own comment above already SAYS "a transport
+                    // seek re-scans any angle/interleaved block it lands in", which
+                    // is exactly what this term prevented.
+                    // ⚠ The mid-block ILVU hop is excluded by `!angle_resolved`,
+                    // not by this term: the hop fires only while angle_active,
+                    // which requires angle_resolved, and the hop does not clear it
+                    // (the clears are reset, transport seek, S_PGC_DONE and the
+                    // end-of-block skip). iso_reader_angle_tb TEST A/B drive that
+                    // hop and are byte-identical across this change.
+                    // ⚠ Residual, small and deliberate: the two cells of a block
+                    // OVERLAP but do not coincide, so a target landing in the
+                    // sibling's TAIL -- past the block-first cell's last_sector --
+                    // matches only the sibling, which is not cc_blk_first, so the
+                    // scan still does not run. On Grave chapter 1 that window is
+                    // 586 of ~340,000 sectors (0.17 %). Walking back to block_first
+                    // would fix it and is not done: see docs/dvd_nav.md.
                     block_first <= cell_i;
                     angle_count <= 4'd1;                 // this cell is angle 1
                     ang_scan_i  <= cell_i + 8'd1;

@@ -18,6 +18,13 @@
 // nav bodies are filled 0x00 (no 0xA1/0xA2/0xCC), so counting marker bytes in
 // the captured stream tells exactly which angle's sectors were streamed.
 //
+// TEST D (2026-09-15) covers a raw-RBN SCRUB that lands INSIDE an angle block.
+// The angle-block entry used to be gated `... && !rbn_override`, so a seek never
+// ran the angle scan: angle_count stayed 0, angle_active with it, and
+// seamless_active needs !cc_is_angle -- neither arm set, no ILVU follow, and the
+// interleaved range streamed LINEARLY. Field report on "Grave of the Fireflies":
+// seeking "starts alternating the 2 available angles at 1hz".
+//
 // TEST C (2026-09-15) covers ADJACENT BLOCKS: a second 2-angle block follows the
 // first with NO normal cell between them, which is how "Grave of the Fireflies"
 // VTS_01 PGC1 authors the entire film (13 back-to-back pairs, one per chapter;
@@ -48,6 +55,9 @@ module iso_reader_angle_tb;
     reg  [63:0] file_size = 0;
 
     reg         angle_pulse = 0;
+    reg         seek_rbn_pulse = 0;      // TEST D: raw-RBN scrub into a block
+    reg  [31:0] seek_rbn = 32'd0;
+    wire [15:0] title_secs;                // TEST E: the title's own running time
     wire [3:0]  cur_angle;
     wire [3:0]  angle_count;
 
@@ -92,11 +102,12 @@ module iso_reader_angle_tb;
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
         .seek_pulse(1'b0), .seek_natural(1'b0), .seek_cell(8'd0), .seek_ack(),
-        .seek_rbn_pulse(1'b0), .seek_rbn(32'd0),
+        .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn),
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1), .chap_at_start(1'b0),
         .angle_pulse(angle_pulse), .cur_angle(cur_angle), .angle_count(angle_count),
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .keep_vbuf(),
+        .title_secs_o(title_secs),
         .cur_cell(), .cell_ready(),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
@@ -178,12 +189,20 @@ module iso_reader_angle_tb;
             img[pgc+2]=8'd1; img[pgc+3]=nr_cells;
             img[pgc+232]=cell_pb_off[15:8]; img[pgc+233]=cell_pb_off[7:0]; end
     endtask
+    // secs = the cell's playback_time as BCD seconds (< 60 here), written to
+    // bytes 4..7 as dvd_time_t {hh, mm, ss, rate|frames}. Rate 3 = 30 fps in the
+    // top two bits of byte 7, which is what bcd_time_add and pb_dur_w expect.
     task put_cell(input integer sec, input [31:0] pgc_sb, input [15:0] cell_pb_off,
                   input integer idx, input [7:0] cat,
-                  input [31:0] first_sector, input [31:0] last_sector);
+                  input [31:0] first_sector, input [31:0] last_sector,
+                  input integer secs);
         integer c; begin
             c = sec*2048 + pgc_sb + cell_pb_off + idx*24;
             img[c+0]  = cat;                                          // category@0
+            img[c+4]  = 8'h00;                                        // hh (BCD)
+            img[c+5]  = 8'h00;                                        // mm (BCD)
+            img[c+6]  = {4'(secs/10), 4'(secs%10)};                   // ss (BCD)
+            img[c+7]  = 8'hC0;                                        // rate 3, 0 frames
             img[c+8]  = first_sector[31:24]; img[c+9]  = first_sector[23:16];
             img[c+10] = first_sector[15:8];  img[c+11] = first_sector[7:0];
             img[c+20] = last_sector[31:24];  img[c+21] = last_sector[23:16];
@@ -248,16 +267,19 @@ module iso_reader_angle_tb;
             put_tt_srpt(20, 16'd1, 8'd1);
             put_vtsi_mat(21, 32'd1);
             put_pgcit(22, 32'd16, 8'd5, 16'd256);
-            // BLOCK 1: cells 0 angle1 (bm=1 FIRST), 1 angle2 (bm=3 LAST)
-            put_cell(22, 32'd16, 16'd256, 0, 8'h50, 32'd0,  32'd7);
-            put_cell(22, 32'd16, 16'd256, 1, 8'hD0, 32'd2,  32'd5);
+            // BLOCK 1: cells 0 angle1 (bm=1 FIRST), 1 angle2 (bm=3 LAST).
+            // The two angles are the SAME span of film, so they carry the SAME
+            // playback_time -- which is exactly how Grave of the Fireflies is
+            // authored, and why summing both doubles the title's length.
+            put_cell(22, 32'd16, 16'd256, 0, 8'h50, 32'd0,  32'd7,  10);
+            put_cell(22, 32'd16, 16'd256, 1, 8'hD0, 32'd2,  32'd5,  10);
             // BLOCK 2: immediately adjacent, no normal cell between (the Grave
             // of the Fireflies shape). The old scan counted straight through
             // these and reported 4 angles for two 2-angle blocks.
-            put_cell(22, 32'd16, 16'd256, 2, 8'h50, 32'd8,  32'd15);
-            put_cell(22, 32'd16, 16'd256, 3, 8'hD0, 32'd10, 32'd13);
+            put_cell(22, 32'd16, 16'd256, 2, 8'h50, 32'd8,  32'd15, 20);
+            put_cell(22, 32'd16, 16'd256, 3, 8'hD0, 32'd10, 32'd13, 20);
             // common continuation
-            put_cell(22, 32'd16, 16'd256, 4, 8'h00, 32'd16, 32'd17);
+            put_cell(22, 32'd16, 16'd256, 4, 8'h00, 32'd16, 32'd17, 5);
 
             // interleaved VOB: nav+body per ILVU, per-angle marker bodies
             // next_vobu (last arg) = this VOBU's OWN angle's next ILVU, or
@@ -362,6 +384,67 @@ module iso_reader_angle_tb;
         end
         if (n_cc !== 2*2048) begin
             errors=errors+1; $display("  FAIL: common cell != 2 sectors (%0d)", n_cc);
+        end
+
+        // ============ TEST D: raw-RBN scrub INTO an angle block ================
+        // Land at RBN 6 -- mid-cell inside block 1's angle-1 cell (0..7), on the
+        // NAV sector of its second ILVU. NAV-aligned on purpose: the reader's own
+        // VOBU-align snap (S_NAV_SEEK, the fj#106 scrub fix) moves a raw scrub
+        // target forward to the next NAV pack before it streams, so a nav-aligned
+        // landing is what a real disc actually produces. A target landing PAST a
+        // nav pack has no DSI to snoop and cannot arm the follow for the ILVU it
+        // lands in -- that is a property of ILVU navigation, not of this fix.
+        //
+        // Expect: the scan runs (angle_count=2), block 1 streams only 0xA1, the
+        // end-of-block skip reaches block 2 (0xB1) and then the common cell.
+        // Pre-fix the scan was skipped on an rbn_override landing, so
+        // angle_active was 0, no follow armed, and cell advance fell through to
+        // the SIBLING cell -- 0xA2 bytes, the 1 Hz alternation.
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+        cap_n = 0; n_a1 = 0; n_a2 = 0; n_b1 = 0; n_b2 = 0; n_cc = 0; max_ac = 0;
+        @(posedge clk); start = 1; @(posedge clk); start = 0;
+        // let the mount settle and streaming begin, then scrub
+        repeat (40000) @(posedge clk);
+        cap_n = 0; n_a1 = 0; n_a2 = 0; n_b1 = 0; n_b2 = 0; n_cc = 0; max_ac = 0;
+        @(negedge clk); seek_rbn <= 32'd6; seek_rbn_pulse <= 1'b1;
+        @(negedge clk); seek_rbn_pulse <= 1'b0;
+        run_until_done(40000);
+        $display("TEST D (scrub into a block): angle_count=%0d  A1=%0d A2=%0d B1=%0d B2=%0d CC=%0d",
+                 max_ac, n_a1, n_a2, n_b1, n_b2, n_cc);
+        // NOTE: max_ac is deliberately NOT asserted here. It is a PEAK, and the
+        // block was already scanned during the settling play before the scrub, so
+        // it reads 2 on the pre-fix reader too -- an assertion that cannot fail
+        // for this defect. The delivered bytes are the property; they read
+        // A2=4096 pre-fix and 0 post-fix.
+        if (n_a2 !== 0) begin
+            errors=errors+1;
+            $display("  FAIL: angle-2 bytes after the scrub (%0d) -- no ILVU follow, the angles are ALTERNATING", n_a2);
+        end
+        if (n_a1 === 0) begin
+            errors=errors+1; $display("  FAIL: no angle-1 body delivered after the scrub");
+        end
+        if (n_b2 !== 0) begin
+            errors=errors+1; $display("  FAIL: block-2 sibling bytes delivered (%0d)", n_b2);
+        end
+        if (n_b1 !== 2*2048) begin
+            errors=errors+1;
+            $display("  FAIL: block 2 angle-1 body != 2 sectors (%0d) -- the end-of-block skip went wrong", n_b1);
+        end
+
+        // ============ TEST E: a block occupies ONE slot on the timeline =========
+        // Durations: block 1 = 10 s (both its cells), block 2 = 20 s (both), the
+        // common cell 5 s. A viewer sees ONE angle of each block, so the title
+        // runs 10 + 20 + 5 = 35 s. Summing every cell gives 65 -- and that is
+        // what shipped: MEASURED on Grave of the Fireflies, whose elapsed
+        // readout reaches 2:58:45 on a 1:30:03 title, and whose overlapping
+        // sibling cells made seek_time publish the SIBLING's start (+8:00 during
+        // chapter 1, its own length) for any target past the sibling's first
+        // sector.
+        $display("TEST E (timeline): title_secs=%0d (want 35; summing siblings gives 65)",
+                 title_secs);
+        if (title_secs !== 16'd35) begin
+            errors=errors+1;
+            $display("  FAIL: a multi-angle block counted more than once on the timeline");
         end
 
         if (errors == 0) $display("ISO_READER_ANGLE_TB: ALL TESTS PASSED");

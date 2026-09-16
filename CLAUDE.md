@@ -252,6 +252,57 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **SEEKING INSIDE AN ANGLE BLOCK — A BLOCK OCCUPIED N TIMELINE SLOTS INSTEAD OF ONE,
+  AND A SCRUB NEVER ARMED THE ANGLE MACHINERY (2026-09-15, branch
+  `fix/angle-noagli-follow`); sim-proven RED/GREEN, ⏳ HW-confirm pending. BOTH
+  PRE-EXISTING** — found by the maintainer while confirming the three fixes below, which are
+  what let `Grave of the Fireflies` play far enough to reach them. Report: *"seeking at any
+  point shows an incorrect preview time (+8 minutes when seeking during the beginning
+  chapter) and starts alternating the 2 available angles at 1hz."*
+  ★★ **ONE ROOT: A SIBLING ANGLE CELL IS INDISTINGUISHABLE FROM SEQUENTIAL CONTENT** to
+  anything that maps an RBN to a cell or accumulates time.
+  **(a) The timeline.** The cell walk's prefix sum added EVERY cell's `playback_time`,
+  siblings included — but a 2-angle block is one span of film offered two ways. MEASURED on
+  Grave (13 back-to-back 2-angle pairs = the whole film): the 13 angle-1 cells plus the
+  closing cell sum to **5396 s = 1:29:56**, matching the PGC's declared `01:30:03` to frame
+  rounding, while all 26 give **10725 s = 2:58:45**. ★★ And that is what produced the
+  reported **+8:00**: a block's two cells OVERLAP (chapter 1 is cell 0 at RBN 0..339620 and
+  cell 1 at 457..340206) and `seek_time` keeps the **nearest at-or-below**, so any target
+  past sector 457 resolved to the SIBLING and published its start — 8:00, chapter 1's own
+  length, to the second. **Fix = the prefix sum only:** a sibling (`bt==1 && bm>=2`)
+  inherits the block-first cell's start and adds nothing. ★ That makes `seek_time`'s pick
+  **harmless rather than wrong** (both cells now report the same start), so the preview, the
+  live clock and the title total are corrected together and **`seek_time` needs no change**.
+  This removes the *"multi-angle blocks over-count — documented limitation"* that
+  `dvd_iso_reader.sv` has carried since Phase 11.
+  **(b) The 1 Hz alternation.** The angle-block entry was gated
+  `cc_blk_first && !angle_resolved && `**`!rbn_override`**, and a raw-RBN scrub sets
+  `rbn_override` — so a SEEK INTO a block never ran the angle scan: `angle_count` stayed 0,
+  `angle_active` with it, and `seamless_active` needs `!cc_is_angle` so that was 0 too.
+  Neither arm set ⇒ no ILVU follow ⇒ the interleaved range streamed LINEARLY. Grave's first
+  ILVU is ~457 sectors ≈ 1 s. ★ **The seek path's own comment already said the opposite** —
+  *"a transport seek re-scans any angle/interleaved block it lands in"*, right where the seek
+  clears `angle_resolved`. ⚠ **The mid-block ILVU hop is excluded by `!angle_resolved`, not
+  by that term** (the hop fires only while `angle_active`, which requires `angle_resolved`,
+  and does not clear it), which is why the term was removable — checked against the benches,
+  not reasoned away, since it dates to the original Phase 9 import with no recorded
+  rationale.
+  ⚠ **Residual, measured and deliberate:** a target landing in the sibling's TAIL (past the
+  block-first cell's `last_sector`) matches only the sibling, which is not `cc_blk_first`, so
+  the scan still does not run — **586 of ~340,000 sectors (0.17 %)** on Grave chapter 1.
+  Walking back to `block_first` would fix it; not done.
+  **Gates: `iso_reader_angle_tb` TEST D** (scrub to a NAV-aligned RBN inside a block, only
+  the selected angle's bytes afterwards — RED `A2=4096`, the entire sibling cell) **and TEST
+  E** (durations 10/20/5 ⇒ `title_secs_o == 35`; summing siblings gives **65**, the
+  1:30→2:58 error in miniature). ⚠ TEST D deliberately does NOT assert `angle_count`: it is
+  a PEAK and the block was already scanned during the settling play, so it reads 2 pre-fix
+  too — an assertion that cannot fail for this defect. ⚠ TEST D's landing is NAV-aligned on
+  purpose: the reader's `S_NAV_SEEK` snap (fj#106) moves a raw target to the next NAV pack,
+  so that is what a real disc produces; a landing PAST a nav pack has no DSI to snoop and
+  cannot arm the follow for the ILVU it lands in — a property of ILVU navigation, not of
+  this fix.
+  Detail: **`docs/dvd_nav.md`** "Seeking inside an angle block".
+
 - 🔧 **ADJACENT ANGLE BLOCKS — THE ANGLE COUNT WALKED OUT OF THE BLOCK IT WAS MEASURING,
   REPORTING 9 ANGLES ON A 2-ANGLE DISC AND SKIPPING ~22 MINUTES OF THE FILM (2026-09-15,
   branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, ⏳ HW-confirm

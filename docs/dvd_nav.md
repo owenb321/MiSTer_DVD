@@ -2836,6 +2836,93 @@ variable rather than the angle machinery generally.
 `main`'s own unmodified `iso_reader_angle_tb` (single block, 3 cells) is **byte-identical** to
 `main`'s own reader. Neither fix moves the single-block path at all.
 
+### Seeking inside an angle block (2026-09-15, Grave of the Fireflies, HW-found)
+
+> **Status: 🔧 sim-proven RED/GREEN, ⏳ HW-confirm pending.** Found by the maintainer while
+> confirming the two fixes above: *"seeking at any point shows an incorrect preview time
+> (+8 minutes when seeking during the beginning chapter) and starts alternating the 2
+> available angles at 1hz."* **Both are PRE-EXISTING** — the fixes above are what let the
+> disc play far enough to reach them.
+
+Two symptoms, two mechanisms, one shared root: **a sibling angle cell is indistinguishable
+from sequential content to anything that maps an RBN to a cell or accumulates time.**
+
+#### (a) The preview time — a block occupied N slots on the timeline instead of one
+
+The cell walk's prefix sum (`run_eltm` / `run_secs` → `cell_start_mem`, `cellf_secs`,
+`title_secs_o`) added **every** cell's `playback_time`, siblings included. A 2-angle block
+is one span of film offered two ways; the viewer sees one of them.
+
+MEASURED on Grave of the Fireflies (VTS_01 PGC1, 13 back-to-back 2-angle pairs = the whole
+film): the 13 angle-1 cells plus the closing cell sum to **5396 s = 1:29:56**, which matches
+the PGC's declared `01:30:03` to frame rounding. Counting all 26 gives **10725 s = 2:58:45**
+— the elapsed readout ran to nearly double the film.
+
+★★ **And that is what produced the reported +8:00, through `seek_time`.** A block's two
+cells OVERLAP but do not coincide — chapter 1 is cell 0 at RBN 0…339620 and cell 1 at
+457…340206 — and `seek_time` resolves a target by keeping the **nearest at-or-below**
+(`dvd/seek_time.sv:353`). For any target past sector 457 the nearest is the **sibling**,
+whose prefix start was 8:00: chapter 1's own length, to the second.
+
+**FIX = the prefix sum, in one place.** A sibling (`block_type==1` with `block_mode >= 2`)
+inherits the block-first cell's start and adds nothing to the running total. ★ That makes
+`seek_time`'s pick **harmless rather than wrong** — both cells of a block now report the
+same start — so the preview, the live clock and the title total are corrected together and
+`seek_time` needs no change at all. `dvd_iso_reader.sv` has carried *"multi-angle blocks
+over-count — documented limitation"* since Phase 11; this removes it.
+
+★ **A fourth consumer is corrected as a side effect, and it is worth knowing about because
+it is not obvious from the symptom.** `scrub_ctrl` sizes the hold-to-scrub step from the
+title's duration — `step = span >> (SHn + log2(title_secs) - SECS_REF)`, so the content
+rate is `title_secs / 2^shift`. Reporting Grave as 2:58 instead of 1:29 put `log2` one
+bucket high, which put the shift one high, which **halved the scrub rate** on that disc.
+The bucket now comes from the true running time. ⚠ Only the 12 discs whose blocks are
+adjacent enough to move `title_secs` across a power-of-two boundary can shift bucket at
+all; the rest keep their exact step.
+
+#### (b) The 1 Hz alternation — a seek never armed the angle machinery
+
+The angle-block entry was gated `cc_blk_first && !angle_resolved && **!rbn_override**`, and a
+raw-RBN scrub sets `rbn_override`. So **a seek into an angle block never ran the angle
+scan**: `angle_count` stayed 0, `angle_active` with it, and `seamless_active` requires
+`!cc_is_angle` so that was 0 too. With neither arm set there is no ILVU follow and the
+interleaved range streamed **linearly** — the two angles alternating once per ILVU. Grave's
+first ILVU is ~457 sectors, about a second: the reported 1 Hz.
+
+★ **The seek path's own comment already said the opposite** — *"a transport seek re-scans
+any angle/interleaved block it lands in"* (`dvd_iso_reader.sv`, where the seek clears
+`angle_resolved`). The term prevented exactly what the code said it did.
+
+⚠ **The mid-block ILVU hop is excluded by `!angle_resolved`, not by that term.** The hop
+fires only while `angle_active`, which requires `angle_resolved`, and the hop does not clear
+it — the clears are reset, transport seek, `S_PGC_DONE`, and the end-of-block skip. So the
+term was removable; `iso_reader_angle_tb` TEST A/B drive the hop and are unchanged.
+⚠ The `!rbn_override` term dates to the original Phase 9 import with no recorded rationale,
+which is why it was checked against the benches rather than reasoned away.
+
+⚠ **Residual, small and deliberate.** The two cells of a block overlap but do not coincide,
+so a target landing in the sibling's TAIL — past the block-first cell's `last_sector` —
+matches only the sibling, which is not `cc_blk_first`, so the scan still does not run. On
+Grave chapter 1 that window is **586 of ~340,000 sectors (0.17 %)**. Fixing it means walking
+back to `block_first` from a sibling landing; not done, because the reader's VOBU-align snap
+already puts most landings on the block-first cell's chain and the added scan state would be
+hard to gate honestly.
+
+**Gates: `iso_reader_angle_tb` TEST D and TEST E.**
+- **TEST D** scrubs to a NAV-aligned RBN inside a block and requires only the selected
+  angle's marker bytes afterwards. RED on the pre-fix reader: **`A2=4096`**, the entire
+  sibling cell delivered. ⚠ The landing is NAV-aligned on purpose — the reader's own
+  `S_NAV_SEEK` snap (the fj#106 scrub fix) moves a raw target forward to the next NAV pack,
+  so that is what a real disc produces; a landing PAST a nav pack has no DSI to snoop and
+  cannot arm the follow for the ILVU it lands in, which is a property of ILVU navigation
+  rather than of this fix.
+  ⚠ TEST D deliberately does **not** assert `angle_count`: it is a peak, and the block was
+  already scanned during the settling play before the scrub, so it reads 2 on the pre-fix
+  reader too — an assertion that cannot fail for this defect.
+- **TEST E** gives the fixture real durations (block 1 = 10 s, block 2 = 20 s, common 5 s)
+  and requires `title_secs_o == 35`. Summing siblings gives **65**, which is the Grave
+  1:30 → 2:58 error in miniature.
+
 ### The disc picks the angle — SPRM3 was written and never read (2026-09-15)
 
 ★★ **`dvd_vm` has latched SPRM3 from `SetSTN` since Phase 4 and exported only SPRM1 and
