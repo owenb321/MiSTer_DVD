@@ -2908,6 +2908,88 @@ back to `block_first` from a sibling landing; not done, because the reader's VOB
 already puts most landings on the block-first cell's chain and the added scan state would be
 hard to gate honestly.
 
+#### (c) The snap landed on whichever angle the target fell in — a coin flip
+
+Arming the follow is not enough: the raw-RBN scrub is snapped FORWARD to the next NAV pack,
+and the angles' ILVUs are laid down **round-robin**, so the landing belongs to whichever
+angle's ILVU the target happened to fall in. MEASURED on Grave, per angle across all 13
+blocks: **48–52 %**. The field report — *"seeking always lands on angle 2, so there's a quick
+glance of the storyboard angle before it settles on the film"* — is a coin flip seen a few
+times, and the "settles" is the `sml_agli` follow converging after one ILVU (~1 s; Grave's
+ILVUs are ~460–620 sectors).
+
+⚠⚠ **And on a disc with NO `sml_agli` it never converges at all.** `next_vobu` follows the
+chain of the angle you are standing in, so on `CASTLE_IN_THE_SKY` / `DIEANOTHERDAY_D1_PS` a
+seek into a block would play the **rest of that block in the wrong angle** — strictly worse
+than the reported symptom, and not yet observed only because those discs' blocks are a title
+card, an opening sequence and the end credits.
+
+**FIX = make the snap angle-aware, using `dsi_gi.vobu_vob_idn`** (DSI 0x18 → sector `0x41F`).
+MEASURED premise on all three discs: every angle cell of a block has a **distinct VOB_ID**,
+and every VOBU inside that angle's ILVUs carries it — Grave's round-robin reads vob 1 at
+RBN 0…456, vob 2 at 457…1074, vob 1 at 1075…
+⚠ The VOB_IDs are **not** consecutive from 1 (Castle uses 1/2, 4/5, 8/9), so
+`first + angle - 1` would be wrong; the cell's own value has to be read.
+
+Three passes, all inside the seek path:
+
+1. **PLAIN** — the existing unfiltered snap lands on the next NAV pack.
+2. **LEARN** — once `S_ANGLE_PICK` has chosen the angle cell, `cf_rd` is that cell's
+   `first_sector`, which is by construction the first VOBU of that angle's own chain. Probe
+   it and read its `vob_idn`. **One** extra sector read per scrub into an angle block, against
+   a seek that already costs a flush and a decoder re-lock.
+3. **FILT** — re-snap forward from the original landing, accepting a NAV pack only if it
+   carries that VOB_ID. If the landing was already correct this accepts immediately.
+
+★ **Reading `vob_idn` costs no extra reads.** The probe leaves the whole sector resident in
+`parse_buf` (`pb_sec`), and `rbuf` is only a 45-byte window copy of it — so the `0x41F`
+window is a second `S_FETCH`, not a second disk read. That is also why the signature test
+(bytes 0…41) and `vob_idn` cannot share one window, and the state machine re-fetches.
+
+⚠ **The angle passes must NOT fall back into `S_RBN_SCAN` when the probe budget runs out** —
+that re-resolves the cell and would undo the angle choice. They fall back to streaming the
+unfiltered landing, i.e. exactly the behaviour that shipped before this existed.
+
+⚠⚠ **THE DIVERT IS GATED ON `ang_snap_pend`, NOT ON `rbn_override`, AND THAT DISTINCTION IS
+LOAD-BEARING.** `rbn_override` is set by TWO things: a raw-RBN scrub landing **and the
+mid-block ILVU hop**. The hop keeps `angle_resolved` set, so the first version of this divert
+fired on the first hop of a block reached by ORDINARY PLAYBACK and put a LEARN probe read
+into the one path whose contract is that it is time-continuous — no flush, no `seek_ack`, no
+A/V re-anchor, HW-proven since PR fj#98.
+★ **No bench caught it, and none could have as written:** the outcome was still *correct*,
+just with an extra read and added mid-stream latency, so TEST A/B stayed green. It would have
+reached hardware as a stutter at an angle-block ILVU boundary and been attributed to
+something else. `ang_snap_pend` means exactly "the most recent SCRUB has not yet had its
+landing angle verified": set when a scrub is armed, cleared as soon as any landing resolves
+(including a non-angle one, so it cannot sit armed and fire on a later hop), and never set by
+the hop. ★ The tell that the fix works is `iso_reader_angle_tb` TEST D's `A1` returning to
+2048 — it read 2489 while the probe was firing on the hop.
+
+⛔ **Why not parse the cell position table (C_POSI) for VOB_IDs instead?** It was the first
+plan and was dropped on inspection: all eight `wphase` codes (`P_HDR`…`P_ACTL`) are in use,
+so it needs the shared PGC walk phase widened to `[3:0]` across 15 sites in a parser every
+disc and every domain goes through — and it would **not** remove the second pass anyway,
+because the snap runs before the cell is resolved. The probe keeps the risk inside the seek
+path at the cost of one read.
+
+**Gate: `iso_reader_angle_tb` TEST G** — seek to a NAV pack belonging to angle 2 while angle
+1 is selected, and require no `0xA2` bytes at all. The fixture's NAV packs carry `vob_idn`
+(block 1 = VOB 1/2, block 2 = VOB **3/4**, deliberately not 1/2 again and not consecutive
+with block 1's, so a rule derived from the angle index fails).
+
+⚠⚠ **THE FIXTURE'S "NAV PACKS" WERE NEVER NAV PACKS, AND THAT IS WHY TEST G FAILED FIRST.**
+`put_nav` wrote the DSI (PES header at `0x400`, `vobu_ea`, category, `sml_agli`, `next_vobu`)
+but none of the three signatures the reader's own probe tests — pack start `00 00 01 BA` @0,
+PS system header `00 00 01 BB` @14, PCI PES `00 00 01 BF` @38. So `nav_sig_hit` was false for
+every sector, the VOBU-align probe exhausted `NAV_CAP` on every scrub and fell back to the
+raw target. **The snap had never been exercised by this bench at all**, and TEST D was green
+because its raw target happened to be a NAV sector — the right answer for the wrong reason.
+The signatures are written now.
+★ Same family as the other fixture gaps this branch turned up (`iso_reader_angle_tb` carrying
+no `next_vobu`; `angle_noagli_tb`'s harmless last hop): **a mutation or an arm that fails is a
+claim about the FIXTURE first and the RTL second.** Here the arm failed on the *fixed* reader,
+which is the tell — the stimulus never reached the code under test.
+
 **Gates: `iso_reader_angle_tb` TEST D and TEST E.**
 - **TEST D** scrubs to a NAV-aligned RBN inside a block and requires only the selected
   angle's marker bytes afterwards. RED on the pre-fix reader: **`A2=4096`**, the entire

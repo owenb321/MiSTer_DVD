@@ -287,6 +287,55 @@ worse maintenance burden than targeted in-place edits. So:
   and does not clear it), which is why the term was removable — checked against the benches,
   not reasoned away, since it dates to the original Phase 9 import with no recorded
   rationale.
+  **(c) THE SNAP LANDED ON WHICHEVER ANGLE THE TARGET FELL IN — A COIN FLIP.** Arming the
+  follow is not enough: the scrub is snapped FORWARD to the next NAV pack and the angles'
+  ILVUs round-robin, so the landing belongs to whichever angle's ILVU the target fell in.
+  MEASURED on Grave, per angle across all 13 blocks: **48–52 %**. Field report *"seeking
+  always lands on angle 2, so there's a quick glance of the storyboard angle before it
+  settles on the film"* — the coin flip seen a few times, and "settles" is the `sml_agli`
+  follow converging after one ILVU (~1 s). ⚠⚠ **On a disc with NO `sml_agli` it never
+  converges** — Castle / Die Another Day would play the REST OF THE BLOCK in the wrong
+  angle; unobserved only because their blocks are a title card, an opening and credits.
+  **Fix = an angle-aware snap keyed on `dsi_gi.vobu_vob_idn`** (DSI 0x18 → sector `0x41F`),
+  in three passes: PLAIN (land as before) → LEARN (probe the chosen cell's own
+  `first_sector`, which IS the first VOBU of that angle's chain, to read its VOB_ID) → FILT
+  (re-snap from the landing, accepting only that VOB_ID).
+  ★ **MEASURED premise on all three discs:** every angle cell of a block has a DISTINCT
+  VOB_ID and every VOBU inside that angle's ILVUs carries it (Grave: vob 1 at RBN 0..456,
+  vob 2 at 457..1074, vob 1 at 1075..). ⚠ VOB_IDs are NOT consecutive from 1 — Castle uses
+  1/2, 4/5, 8/9 — so `first + angle - 1` would be wrong; the cell's own value is read.
+  ★ **Testing the VOB_ID costs no extra reads:** the probe leaves the sector resident in
+  `parse_buf` (`pb_sec`) and `rbuf` is only a 45-byte window copy, so the `0x41F` window is a
+  second `S_FETCH`. Only LEARN costs a real read — one per scrub into an angle block.
+  ⚠ **The angle passes must NOT fall back into `S_RBN_SCAN`** when the budget runs out: that
+  re-resolves the cell and undoes the angle choice. They fall back to the unfiltered landing.
+  ⚠⚠ **THE DIVERT IS GATED ON `ang_snap_pend`, NOT `rbn_override`.** `rbn_override` is set by
+  a scrub landing AND by the mid-block ILVU hop, and the hop keeps `angle_resolved` set — so
+  the first version fired on the first hop of a block reached by ORDINARY PLAYBACK, putting a
+  probe read into the one path whose contract is time-continuity (no flush, no `seek_ack`, no
+  A/V re-anchor; HW-proven since fj#98). ★ **No bench caught it and none could have:** the
+  outcome stayed CORRECT, just with an extra read and mid-stream latency, so TEST A/B stayed
+  green — it would have reached HW as a stutter at an ILVU boundary and been blamed on
+  something else. The flag means "the most recent SCRUB has not had its landing angle
+  verified": set when a scrub is armed, cleared as soon as ANY landing resolves, never set by
+  the hop. The tell is TEST D's `A1` returning to 2048 (it read 2489 while the probe fired on
+  the hop).
+  ⛔ **C_POSI parsing was the first plan and was DROPPED on inspection** — all eight `wphase`
+  codes are in use, so it needs the shared PGC walk phase widened to `[3:0]` across 15 sites
+  in a parser every disc and domain goes through, **and it would not have removed the second
+  pass anyway** (the snap runs before the cell is resolved). The probe keeps the risk inside
+  the seek path for one read.
+  **Gate: `iso_reader_angle_tb` TEST G** (seek onto angle 2's NAV pack with angle 1 selected;
+  RED `A2=2048`, GREEN `A2=0`). Fixture VOB_IDs are 1/2 for block 1 and **3/4** for block 2 —
+  deliberately not 1/2 again and not consecutive, so an angle-index rule fails.
+  ⚠⚠ **THE FIXTURE'S "NAV PACKS" WERE NEVER NAV PACKS, AND TEST G FAILING ON THE *FIXED*
+  READER IS WHAT EXPOSED IT.** `put_nav` wrote the DSI but none of the three signatures
+  `nav_sig_hit` tests (pack start @0, system header @14, PCI PES @38), so the VOBU-align
+  probe exhausted `NAV_CAP` on every scrub and fell back to the raw target — **the snap had
+  never been exercised by this bench**, and TEST D was green only because its raw target
+  happened to be a NAV sector. Third fixture gap on this branch (see also the missing
+  `next_vobu` and the harmless last hop): **a failing arm is a claim about the FIXTURE first
+  and the RTL second**, and an arm that fails on the fixed reader is the tell.
   ⚠ **Residual, measured and deliberate:** a target landing in the sibling's TAIL (past the
   block-first cell's `last_sector`) matches only the sibling, which is not `cc_blk_first`, so
   the scan still does not run — **586 of ~340,000 sectors (0.17 %)** on Grave chapter 1.

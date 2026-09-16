@@ -230,12 +230,26 @@ module iso_reader_angle_tb;
     // is exactly why sml_agli must be PREFERRED: only it can retarget a
     // mid-block angle switch. (Added 2026-09-15; before this the fixture left
     // the field zero, and a mutation that preferred next_vobu was uncatchable.)
+    // vob_id = dsi_gi.vobu_vob_idn, which is what says WHICH ANGLE a VOBU belongs
+    // to. Measured on the real discs: every angle cell of a block has a distinct
+    // VOB_ID and every VOBU inside that angle's ILVUs carries it.
     task put_nav(input integer rbn, input [15:0] category, input [31:0] vobu_ea,
-                 input [31:0] agli0, input [31:0] agli1, input [31:0] next_vobu);
+                 input [31:0] agli0, input [31:0] agli1, input [31:0] next_vobu,
+                 input [15:0] vob_id);
         integer b; begin
             b = (24 + rbn) * 2048;
             fill_sec(24 + rbn, 8'h00);
             // DSI PES header + substream id
+            // THE NAV-PACK SIGNATURE the reader's VOBU-align probe tests
+            // (dvd_iso_reader nav_sig_hit): pack start @0, PS system header @14,
+            // PCI PES @38 (0x26). Without these the probe never recognises the
+            // sector, exhausts NAV_CAP and falls back to the raw target -- so the
+            // snap was never exercised by this bench at all, and TEST D passed
+            // for the wrong reason. Offsets verified vs libdvdnav
+            // dvdnav_decode_packet.
+            img[b+0]  = 8'h00; img[b+1]  = 8'h00; img[b+2]  = 8'h01; img[b+3]  = 8'hBA;
+            img[b+14] = 8'h00; img[b+15] = 8'h00; img[b+16] = 8'h01; img[b+17] = 8'hBB;
+            img[b+38] = 8'h00; img[b+39] = 8'h00; img[b+40] = 8'h01; img[b+41] = 8'hBF;
             img[b+16'h400]=8'h00; img[b+16'h401]=8'h00; img[b+16'h402]=8'h01; img[b+16'h403]=8'hBF;
             img[b+16'h406]=8'h01;
             // vobu_ea @ DSI 0x08 -> 0x40F
@@ -251,6 +265,8 @@ module iso_reader_angle_tb;
             // vobu_sri.next_vobu @ DSI 0x13A -> 0x541
             img[b+16'h541]=next_vobu[31:24]; img[b+16'h542]=next_vobu[23:16];
             img[b+16'h543]=next_vobu[15:8];  img[b+16'h544]=next_vobu[7:0];
+            // dsi_gi.vobu_vob_idn @ DSI 0x18 -> 0x41F
+            img[b+16'h41F]=vob_id[15:8];     img[b+16'h420]=vob_id[7:0];
         end
     endtask
 
@@ -297,22 +313,28 @@ module iso_reader_angle_tb;
             // interleaved VOB: nav+body per ILVU, per-angle marker bodies
             // next_vobu (last arg) = this VOBU's OWN angle's next ILVU, or
             // END_OF_CELL where the angle has none left.
-            put_nav(0, ILVU_LAST, 32'd1, 32'd6, 32'd2, 32'h80000006);  // a1.i1 -> a1.i2
+            // last arg = vob_idn: block 1 is VOB 1 (angle 1) / VOB 2 (angle 2).
+            // The ILVUs round-robin, exactly as the real discs lay them down:
+            //   RBN 0-1 a1.i1 | 2-3 a2.i1 | 4-5 a2.i2 | 6-7 a1.i2
+            put_nav(0, ILVU_LAST, 32'd1, 32'd6, 32'd2, 32'h80000006, 16'd1);
             fill_sec(24+1, 8'hA1);
-            put_nav(2, ILVU_LAST, 32'd1, 32'd4, 32'd2, 32'h80000002);  // a2.i1 -> a2.i2
+            put_nav(2, ILVU_LAST, 32'd1, 32'd4, 32'd2, 32'h80000002, 16'd2);
             fill_sec(24+3, 8'hA2);
-            put_nav(4, ILVU_LAST, 32'd1, 32'd2, 32'd4, 32'h3fffffff);  // a2.i2 END_OF_CELL
+            put_nav(4, ILVU_LAST, 32'd1, 32'd2, 32'd4, 32'h3fffffff, 16'd2);
             fill_sec(24+5, 8'hA2);
-            put_nav(6, ILVU_LAST, 32'd1, 32'd2, 32'd2, 32'h3fffffff);  // a1.i2 END_OF_CELL
+            put_nav(6, ILVU_LAST, 32'd1, 32'd2, 32'd2, 32'h3fffffff, 16'd1);
             fill_sec(24+7, 8'hA1);
-            // ---- BLOCK 2, same layout shifted by 8 (markers 0xB1 / 0xB2) ----
-            put_nav(8,  ILVU_LAST, 32'd1, 32'd6, 32'd2, 32'h80000006);
+            // ---- BLOCK 2, same layout shifted by 8, VOB 3 / VOB 4 ----
+            // ⚠ NOT 1/2 again, and not consecutive with block 1's -- CASTLE_IN_THE_SKY
+            // uses 1/2, 4/5, 8/9, so the cell's own VOB_ID must be read rather
+            // than derived from the angle index.
+            put_nav(8,  ILVU_LAST, 32'd1, 32'd6, 32'd2, 32'h80000006, 16'd3);
             fill_sec(24+9,  8'hB1);
-            put_nav(10, ILVU_LAST, 32'd1, 32'd4, 32'd2, 32'h80000002);
+            put_nav(10, ILVU_LAST, 32'd1, 32'd4, 32'd2, 32'h80000002, 16'd4);
             fill_sec(24+11, 8'hB2);
-            put_nav(12, ILVU_LAST, 32'd1, 32'd2, 32'd4, 32'h3fffffff);
+            put_nav(12, ILVU_LAST, 32'd1, 32'd2, 32'd4, 32'h3fffffff, 16'd4);
             fill_sec(24+13, 8'hB2);
-            put_nav(14, ILVU_LAST, 32'd1, 32'd2, 32'd2, 32'h3fffffff);
+            put_nav(14, ILVU_LAST, 32'd1, 32'd2, 32'd2, 32'h3fffffff, 16'd3);
             fill_sec(24+15, 8'hB1);
             fill_sec(24+16, 8'hCC);
             fill_sec(24+17, 8'hCC);
@@ -442,6 +464,33 @@ module iso_reader_angle_tb;
         if (n_b1 !== 2*2048) begin
             errors=errors+1;
             $display("  FAIL: block 2 angle-1 body != 2 sectors (%0d) -- the end-of-block skip went wrong", n_b1);
+        end
+
+        // ====== TEST G: the scrub lands on the WRONG angle's ILVU ==============
+        // Seek to RBN 2 -- a NAV pack, but ANGLE 2's -- while angle 1 is selected.
+        // The reader must learn angle 1's VOB_ID from its own cell (cf_rd = RBN 0)
+        // and re-snap forward to RBN 6, the next VOBU carrying that VOB_ID. It
+        // must deliver NO 0xA2.
+        // Pre-fix it streamed from RBN 2: the sibling's ILVU (0xA2) played until
+        // the ILVU end, then the sml_agli follow converged. That is the reported
+        // "quick glance of the storyboard angle before it settles on the film" --
+        // and on a disc with no sml_agli it never converges at all.
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+        cap_n = 0; n_a1 = 0; n_a2 = 0; n_b1 = 0; n_b2 = 0; n_cc = 0; max_ac = 0;
+        @(posedge clk); start = 1; @(posedge clk); start = 0;
+        repeat (40000) @(posedge clk);
+        cap_n = 0; n_a1 = 0; n_a2 = 0; n_b1 = 0; n_b2 = 0; n_cc = 0; max_ac = 0;
+        @(negedge clk); seek_rbn <= 32'd2; seek_rbn_pulse <= 1'b1;
+        @(negedge clk); seek_rbn_pulse <= 1'b0;
+        run_until_done(40000);
+        $display("TEST G (scrub onto the wrong angle): A1=%0d A2=%0d B1=%0d B2=%0d CC=%0d",
+                 n_a1, n_a2, n_b1, n_b2, n_cc);
+        if (n_a2 !== 0) begin
+            errors=errors+1;
+            $display("  FAIL: %0d sibling-angle bytes -- the scrub stayed on the wrong angle", n_a2);
+        end
+        if (n_a1 === 0) begin
+            errors=errors+1; $display("  FAIL: no angle-1 body after the re-snap");
         end
 
         // ============ TEST E: a block occupies ONE slot on the timeline =========
