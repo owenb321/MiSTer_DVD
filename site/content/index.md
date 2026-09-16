@@ -71,7 +71,8 @@ pause.
 
 **Analog / CRT** — a native 15 kHz 480i/576i raster on the analog pins, built from the
 disc's [authored fields](video/analog-crt.md), with broadcast-standard composite sync — the
-presentation a set-top player feeds a TV. It engages from `MiSTer.ini` alone, like any
+presentation a set-top player feeds a TV. VCD and MPEG-1 SIF content gets a genuine
+[240p/288p](video/analog-crt.md#native-240p-for-vcds-and-mpeg-1) raster of its own. It engages from `MiSTer.ini` alone, like any
 other core.
 
 **Closed captions** — NTSC discs carry EIA-608 captions hidden in the MPEG-2 video stream,

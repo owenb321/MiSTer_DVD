@@ -245,80 +245,97 @@ def build_junction(nav, a):
     pics_a = len(picpos) if a.es_out else min(a.tail_pics, len(picpos))
     _, _, _, alt_a = pic_coding_ext(es_a)
 
-    a_full_len = len(es_a)
-    if a.trunc:
-        if a.trunc >= len(es_a):
-            return die(f"--trunc {a.trunc} >= cut A's {len(es_a)} bytes")
-        es_a = es_a[:len(es_a) - a.trunc]
-
-    # ---- cut B: the landing still's head (header + the start of its picture) --
-    b_want = (csb[1] - csb[0] + 1) if a.es_out else a.b_sectors
-    es_b_full = b''.join(video_payload(nav.sec(ext + csb[0] + k))
-                         for k in range(min(b_want, csb[1] - csb[0] + 1)))
-    s = es_b_full.find(b'\x00\x00\x01\xb3')
-    if s < 0:
-        return die("cut B carries no sequence header")
-    es_b = es_b_full[s:]
-    hb = seq_header_fields(es_b, 0)
-    if hb is None:
-        return die("cut B's sequence header is truncated; raise --b-sectors")
-    pics_b, idc_b, qst_b, _ = pic_coding_ext(es_b)
-
-    # ---- ground truth: what a CORRECT decoder ends up holding ----------------
-    # The landing downloads a matrix -> that one.  It downloads none (the T2
-    # slides) -> the MPEG defaults, because its sequence header pulses
-    # quant_rst and iquant.v goes back to default_values=1.  Either way this is
-    # a property of the disc, never of the fix.
-    if hb['intra'] is not None:
-        exp_intra = hb['intra']
-        exp_src = "cut B's own download"
+    # --trunc-range START:END:STEP emits one fixture set per offset from a
+    # single ISO walk (<out>_t<N>.*); a bare --trunc emits exactly <out>.*.
+    if a.trunc_range:
+        r0, r1, rs = (int(x) for x in a.trunc_range.split(':'))
+        truncs = list(range(r0, r1 + 1, rs))
     else:
-        exp_intra = iquant_default_intra()
-        exp_src = "the MPEG defaults (cut B downloads none)"
-    exp_nonintra = hb['nonintra'] if hb['nonintra'] is not None else [16] * 64
+        truncs = [a.trunc]
+    es_a_kept = es_a
+    for t in truncs:
+        es_a = es_a_kept
+        out_stem = a.out if not a.trunc_range else f"{a.out}_t{t}"
+        a_full_len = len(es_a)
+        if t:
+            if t >= len(es_a):
+                return die(f"--trunc {t} >= cut A's {len(es_a)} bytes")
+            es_a = es_a[:len(es_a) - t]
 
-    if exp_intra == ha['intra']:
-        return die("cut A and cut B resolve to the SAME matrix -- the arm could "
-                   "not tell a clean junction from a fried one")
+        # ---- cut B: the landing still's head (header + the start of its picture) --
+        b_want = (csb[1] - csb[0] + 1) if a.es_out else a.b_sectors
+        es_b_full = b''.join(video_payload(nav.sec(ext + csb[0] + k))
+                             for k in range(min(b_want, csb[1] - csb[0] + 1)))
+        s = es_b_full.find(b'\x00\x00\x01\xb3')
+        if s < 0:
+            return die("cut B carries no sequence header")
+        es_b = es_b_full[s:]
+        hb = seq_header_fields(es_b, 0)
+        if hb is None:
+            return die("cut B's sequence header is truncated; raise --b-sectors")
+        pics_b, idc_b, qst_b, _ = pic_coding_ext(es_b)
 
-    # ---- assemble (cut A then cut B, contiguous: a keep_vbuf hop) ------------
-    pad = -len(es_a) % 8
-    es_a_p = es_a + b'\x00' * pad
-    b_word = len(es_a_p) // 8
-    es = bytes(es_a_p) + bytes(es_b)
-    es += b'\x00\x00\x01\xb7' + b'\x00' * 64
-    es += b'\x00' * (-len(es) % 8)
+        # ---- ground truth: what a CORRECT decoder ends up holding ----------------
+        # The landing downloads a matrix -> that one.  It downloads none (the T2
+        # slides) -> the MPEG defaults, because its sequence header pulses
+        # quant_rst and iquant.v goes back to default_values=1.  Either way this is
+        # a property of the disc, never of the fix.
+        if hb['intra'] is not None:
+            exp_intra = hb['intra']
+            exp_src = "cut B's own download"
+        else:
+            exp_intra = iquant_default_intra()
+            exp_src = "the MPEG defaults (cut B downloads none)"
+        exp_nonintra = hb['nonintra'] if hb['nonintra'] is not None else [16] * 64
 
-    with open(a.out + '.hex', 'w') as fh:
-        for i in range(0, len(es), 8):
-            fh.write(es[i:i + 8].hex() + '\n')
-    meta = [b_word, pics_a, 1 if hb['intra'] is not None else 0,
-            1 if hb['nonintra'] is not None else 0,
-            alt_a, idc_b, qst_b, pics_b]
-    with open(a.out + '.meta.hex', 'w') as fh:
-        for w in meta:
-            fh.write(f"{w & 0xFFFFFFFF:08x}\n")
-    with open(a.out + '.qmat.hex', 'w') as fh:
-        for v in exp_intra:
-            fh.write(f"{v:02x}\n")
-    with open(a.out + '.qmatn.hex', 'w') as fh:
-        for v in exp_nonintra:
-            fh.write(f"{v:02x}\n")
-    # cut A's matrix, so a FRIED arm can be classified as "kept the source's
-    # matrix" rather than merely "wrong".
-    with open(a.out + '.qmata.hex', 'w') as fh:
-        for v in ha['intra']:
-            fh.write(f"{v:02x}\n")
+        if exp_intra == ha['intra']:
+            return die("cut A and cut B resolve to the SAME matrix -- the arm could "
+                       "not tell a clean junction from a fried one")
 
-    print(f"{os.path.basename(a.iso)}  VTSM{vts:02d} "
-          f"PGC{a.pgc_a} cell{a.cell_a} -> PGC{a.pgc_b} cell{a.cell_b}")
-    print(f"  cut A  RBN {csa[0]}..{csa[1]}  {a_full_len} B kept "
-          f"({pics_a} pics, alternate_scan={alt_a}), --trunc {a.trunc} "
-          f"-> {len(es_a)} B delivered")
-    print(f"  cut B  RBN {csb[0]}..{csb[1]}  {len(es_b)} B ({pics_b} pics)")
-    print(f"  expect {exp_src}: DC={exp_intra[0]} peak={max(exp_intra)}; "
-          f"cut A's was DC={ha['intra'][0]} peak={max(ha['intra'])}")
-    print(f"  {a.out}.hex  {len(es)} B, cut B at word {b_word}")
+        # ---- assemble (cut A then cut B, contiguous: a keep_vbuf hop) ------------
+        # --gap N: N zero bytes between the cut and the landing. MPEG-2 zero_byte
+        # stuffing before a start code (13818-2 6.2.1) -- the shape the junction
+        # would have if the core inserted stuffing at a keep_vbuf hop
+        # (docs/quant_matrix.md 13q). Inserted BEFORE the alignment pad so the
+        # landing still starts on the word the meta file names.
+        es_a = es_a + b'\x00' * a.gap
+        pad = -len(es_a) % 8
+        es_a_p = es_a + b'\x00' * pad
+        b_word = len(es_a_p) // 8
+        es = bytes(es_a_p) + bytes(es_b)
+        es += b'\x00\x00\x01\xb7' + b'\x00' * 64
+        es += b'\x00' * (-len(es) % 8)
+
+        with open(out_stem + '.hex', 'w') as fh:
+            for i in range(0, len(es), 8):
+                fh.write(es[i:i + 8].hex() + '\n')
+        meta = [b_word, pics_a, 1 if hb['intra'] is not None else 0,
+                1 if hb['nonintra'] is not None else 0,
+                alt_a, idc_b, qst_b, pics_b]
+        with open(out_stem + '.meta.hex', 'w') as fh:
+            for w in meta:
+                fh.write(f"{w & 0xFFFFFFFF:08x}\n")
+        with open(out_stem + '.qmat.hex', 'w') as fh:
+            for v in exp_intra:
+                fh.write(f"{v:02x}\n")
+        with open(out_stem + '.qmatn.hex', 'w') as fh:
+            for v in exp_nonintra:
+                fh.write(f"{v:02x}\n")
+        # cut A's matrix, so a FRIED arm can be classified as "kept the source's
+        # matrix" rather than merely "wrong".
+        with open(out_stem + '.qmata.hex', 'w') as fh:
+            for v in ha['intra']:
+                fh.write(f"{v:02x}\n")
+
+        print(f"{os.path.basename(a.iso)}  VTSM{vts:02d} "
+              f"PGC{a.pgc_a} cell{a.cell_a} -> PGC{a.pgc_b} cell{a.cell_b}")
+        print(f"  cut A  RBN {csa[0]}..{csa[1]}  {a_full_len} B kept "
+              f"({pics_a} pics, alternate_scan={alt_a}), --trunc {t} "
+              f"-> {len(es_a)} B delivered")
+        print(f"  cut B  RBN {csb[0]}..{csb[1]}  {len(es_b)} B ({pics_b} pics)")
+        print(f"  expect {exp_src}: DC={exp_intra[0]} peak={max(exp_intra)}; "
+              f"cut A's was DC={ha['intra'][0]} peak={max(ha['intra'])}")
+        print(f"  {out_stem}.hex  {len(es)} B, cut B at word {b_word}")
 
     if a.es_out:
         # ★ The RTL fixture above answers "what matrix does the hardware hold".
@@ -336,7 +353,7 @@ def build_junction(nav, a):
         with open(a.es_out + '_landing.m2v', 'wb') as fh:
             fh.write(bytes(es_b))
         with open(a.es_out + '_junction.m2v', 'wb') as fh:
-            fh.write(bytes(es_a) + bytes(es_b))
+            fh.write(bytes(es_a) + bytes(es_b))      # es_a already carries --gap
         print(f"  {a.es_out}_landing.m2v   {len(es_b)} B  (the landing alone)")
         print(f"  {a.es_out}_junction.m2v  {len(es_a) + len(es_b)} B  "
               f"(source minus {a.trunc} B, then the landing)")
@@ -356,6 +373,10 @@ def main():
                          'The bench arms its flush a few pictures in, so a long '
                          'cut A is pure simulation time.')
     ap.add_argument('--menu-sectors', type=int, default=700)
+    ap.add_argument('--still-hex', default=None, metavar='FILE',
+                    help='take cut B from an existing 64-bit-word ES fixture '
+                         '(a still that lives in a TITLE VOB, e.g. '
+                         'bench/dvd/test_vobs/hp_still_i.hex)')
     ap.add_argument('--matrix-probe', action='store_true',
                     help='patch the download to 64 DISTINCT values so a '
                          'permutation is detectable (announces itself)')
@@ -371,6 +392,12 @@ def main():
     ap.add_argument('--trunc', type=int, default=0,
                     help='bytes of cut A that never reach the decoder (the '
                          'reader cache the old code dropped). 0 = the fix.')
+    ap.add_argument('--trunc-range', default=None, metavar='START:END:STEP',
+                    help='sweep --trunc over a range, writing <out>_t<N>.* per '
+                         'offset from ONE ISO walk (for the junction sweep)')
+    ap.add_argument('--gap', type=int, default=0,
+                    help='zero bytes inserted between the cut and the landing '
+                         '(MPEG-2 zero_byte stuffing; the es_stuff fix shape)')
     ap.add_argument('--tail-pics', type=int, default=2,
                     help='pictures of cut A to keep before the truncation point')
     ap.add_argument('--b-sectors', type=int, default=8,
@@ -387,28 +414,46 @@ def main():
     if a.junction:
         return build_junction(nav, a)
     vts = a.vts if a.vts is not None else nav.best_menu_vts
-    if vts not in nav.menu_vob:
+    if vts not in nav.menu_vob and not a.still_hex:
         return die(f"VTS {vts} has no menu VOB; --vts names one of "
                    f"{sorted(nav.menu_vob)}")
 
     # ---- cut B: a whole menu still ------------------------------------------
-    ext, dl = nav.menu_vob[vts]
-    nsec = min(a.menu_sectors, max(1, dl // SEC))
-    menu_es = b''.join(video_payload(nav.sec(ext + k)) for k in range(nsec))
-    stills = menu_still_cuts(menu_es)
-    if not stills:
-        return die("menu VOB carries no sequence header; --vts / --menu-sectors")
-    if a.still_index >= len(stills):
-        return die(f"--still-index {a.still_index} but only {len(stills)} stills")
-    es_b = bytearray(stills[a.still_index])
+    if a.still_hex:
+        # A still that lives in a TITLE VOB (Harry Potter Interactive's Player
+        # Mode screen) -- take it from an existing 64-bit-word ES fixture, the
+        # seek_fixture.py --cut-b-hex idiom. bench/dvd/test_vobs/hp_still_i.hex
+        # is exactly that.
+        es_b = bytearray(bytes.fromhex(''.join(
+            ln.strip() for ln in open(a.still_hex)
+            if ln.strip() and not ln.startswith('//'))))
+        s = es_b.find(b'\x00\x00\x01\xb3')
+        if s < 0:
+            return die("--still-hex carries no sequence header")
+        es_b = es_b[s:]
+    else:
+        ext, dl = nav.menu_vob[vts]
+        nsec = min(a.menu_sectors, max(1, dl // SEC))
+        menu_es = b''.join(video_payload(nav.sec(ext + k)) for k in range(nsec))
+        stills = menu_still_cuts(menu_es)
+        if not stills:
+            return die("menu VOB carries no sequence header; --vts / --menu-sectors")
+        if a.still_index >= len(stills):
+            return die(f"--still-index {a.still_index} but only {len(stills)} stills")
+        es_b = bytearray(stills[a.still_index])
 
     h = seq_header_fields(es_b, 0)
     if h is None:
         return die("cut B's sequence header is truncated; --menu-sectors")
-    if h['intra'] is None:
+    if h['intra'] is None and not a.still_hex:
         return die("cut B downloads NO intra quantiser matrix -- the gate would "
                    "be vacuous (nothing to lose). Move --still-index / --vts, or "
                    "pick another disc with tools/qmatrix_scan.py --first-hit")
+    # A still that downloads NOTHING relies on the MPEG defaults, which its own
+    # sequence header restores (quant_rst). The thing to lose is then the
+    # RESTORE: an eaten header leaves cut A's custom matrix in force. Expect the
+    # defaults, as the junction mode does for T2's slides.
+    exp_intra = h['intra'] if h['intra'] is not None else iquant_default_intra()
 
     if a.matrix_probe:
         # 64 distinct values in ZIGZAG order; a permutation is then visible.
@@ -426,7 +471,7 @@ def main():
         h = seq_header_fields(es_b, 0)
         print("quant_fixture: ⚠ --matrix-probe PATCHED the intra download to 64 "
               "distinct values (real disc bytes, one field substituted)")
-    if len(set(h['intra'])) <= 2:
+    if h['intra'] is not None and len(set(h['intra'])) <= 2:
         print("quant_fixture: note -- the download is near-flat "
               f"({len(set(h['intra']))} distinct values), so this fixture cannot "
               "detect a PERMUTATION. Use --matrix-probe for the scan arm.")
@@ -474,7 +519,9 @@ def main():
     # ---- assemble ------------------------------------------------------------
     es_a += b'\x00' * (-len(es_a) % 8)
     b_word = len(es_a) // 8
-    es = bytes(es_a) + bytes(es_b)
+    # --gap N: the landing arrives BEHIND N zero bytes (the es_stuff shape on a
+    # flush junction). They are part of cut B, so the flush point is unchanged.
+    es = bytes(es_a) + b'\x00' * a.gap + bytes(es_b)
     es += b'\x00\x00\x01\xb7' + b'\x00' * 64         # let the last picture commit
     es += b'\x00' * (-len(es) % 8)
 
@@ -482,13 +529,13 @@ def main():
         for i in range(0, len(es), 8):
             fh.write(es[i:i + 8].hex() + '\n')
 
-    meta = [b_word, pics_a, 1, 1 if h['nonintra'] else 0,
-            alt_a, idc_b, qst_b, pics_b]
+    meta = [b_word, pics_a, 1 if h['intra'] is not None else 0,
+            1 if h['nonintra'] else 0, alt_a, idc_b, qst_b, pics_b]
     with open(a.out + '.meta.hex', 'w') as fh:
         for w in meta:
             fh.write(f"{w & 0xFFFFFFFF:08x}\n")
     with open(a.out + '.qmat.hex', 'w') as fh:
-        for v in h['intra']:
+        for v in exp_intra:
             fh.write(f"{v:02x}\n")
     if h['nonintra']:
         with open(a.out + '.qmatn.hex', 'w') as fh:
@@ -500,8 +547,9 @@ def main():
           f"cut B {len(es_b)} B / {pics_b} pics)")
     print(f"  {a.out}.meta.hex  b_word={b_word} intra_dc_precision={idc_b} "
           f"q_scale_type={qst_b} cutA_alternate_scan={alt_a}")
-    print(f"  {a.out}.qmat.hex  64 raster values, {len(set(h['intra']))} distinct, "
-          f"DC={h['intra'][0]} peak={max(h['intra'])}")
+    print(f"  {a.out}.qmat.hex  64 raster values, {len(set(exp_intra))} distinct, "
+          f"DC={exp_intra[0]} peak={max(exp_intra)}"
+          + ("" if h['intra'] is not None else "  (cut B downloads none: the MPEG defaults)"))
     return 0
 
 

@@ -36,10 +36,10 @@ itself to MiSTer as a keyboard counts, which is how a **remote** drives the play
 | ++space++ | Pause / Play | | ++esc++ / ++"B"++ | Return (go up) |
 | ++page-up++ / ++"P"++ | Prev Chapter | | ++"Q"++ | Stop |
 | ++page-down++ / ++"N"++ | Next Chapter | | ++"Z"++ | Aspect (cycle) |
-| ++"M"++ / ++"X"++ | Menu | | ++f5++ | Chapter Menu |
-| ++"T"++ | Title menu | | ++"L"++ | A-B Repeat |
-| ++"A"++ | Audio (cycle) | | ++"."++ | Frame Step |
-| ++"S"++ | Subtitle (cycle) | | ++"E"++ | Eject |
+| ++"M"++ / ++"X"++ / ++f1++ | Menu | | ++f5++ | Chapter Menu |
+| ++"T"++ / ++f2++ | Title menu | | ++"L"++ | A-B Repeat |
+| ++"A"++ / ++f3++ | Audio (cycle) | | ++"."++ | Frame Step |
+| ++"S"++ / ++f4++ | Subtitle (cycle) | | ++"E"++ | Eject |
 | ++"G"++ | Angle (cycle) | | Keypad ++"+"++ | Vol Up |
 | ++"D"++ | Display (toggle status line) | | Keypad ++"-"++ | Vol Down |
 | | | | ++0++ – ++9++ | Select menu button by number |

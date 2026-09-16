@@ -62,6 +62,7 @@ build_one trace_boot
 build_one trace_menukey
 build_one trace_menuearly
 build_one trace_nav
+build_one trace_wait
 
 echo "built -> $OUT/"
 
