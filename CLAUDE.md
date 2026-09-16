@@ -252,6 +252,53 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **ADJACENT ANGLE BLOCKS — THE ANGLE COUNT WALKED OUT OF THE BLOCK IT WAS MEASURING,
+  REPORTING 9 ANGLES ON A 2-ANGLE DISC AND SKIPPING ~22 MINUTES OF THE FILM (2026-09-15,
+  branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, ⏳ HW-confirm
+  pending.** Field report on `Grave of the Fireflies.iso`: *"playing that back on the core
+  showed 9 angles to choose from but no auto-switching that I saw. Is that normal
+  behavior?"* No — `TT_SRPT` declares **2**, and the disc's NAV packs carry exactly two
+  `sml_agli` entries. **The 9 was the core's own cap.**
+  ★★ **`S_ANGLE_SCAN` COUNTED `block_type` AND NEVER RE-CHECKED `block_mode`.** A block is
+  `block_mode` 1 (FIRST), 2 (IN)…, 3 (LAST), and the NEXT block starts at 1 — but the scan
+  counted the run of consecutive `block_type==1` cells and stopped only at a non-angle cell
+  or its `< 9` limit. Fine on every disc Phase 9 was proven on, where a normal cell follows
+  each block. **Grave of the Fireflies VTS_01 PGC1 is 13 BACK-TO-BACK 2-angle pairs** (one
+  per chapter, `bm=1,3, 1,3, …`) with only the final cell of the PGC normal, so the scan ran
+  the whole way to its cap.
+  ★★★ **AND THE WRONG COUNT IS NOT THE WORST OF IT — `block_last` FOLLOWS IT.**
+  `block_last = block_first + angle_count - 1` = cell 8, so the end-of-block skip lands on
+  0-based cell 9 = **1-based cell 10 = chapter 5's ANGLE-2 cell**: after chapter 1 (8:00)
+  playback jumps over chapters 2/3/4 — **≈22 minutes** — and resumes in the other angle.
+  ⚠ Then it compounds: that landing cell is `bm=3`, so `cc_blk_first` is false and
+  `angle_resolved` was just cleared ⇒ **neither `angle_active` nor `seamless_active`**
+  (`seamless_active` needs `!cc_is_angle`), so the ILVU follow stops and it streams an
+  interleaved range LINEARLY — the alternating-angles symptom again, by a third route.
+  **Fix = libdvdnav's own rule** (`play_Cell_post`: `while (block_mode >= 2) cellN++`):
+  continue only while the next cell is IN or LAST of the SAME block. ⚠ The 9 cap STAYS (it
+  is the `sml_agli` table size and the spec's angle limit, so it bounds a malformed block);
+  it is simply no longer what ends a well-formed one.
+  ⛔ **A "have I consumed the LAST cell" latch was written and then DELETED** — on any
+  well-formed layout `block_mode >= 2` already stops at the boundary, so no fixture could
+  distinguish it, and libdvdnav has no such latch. A claim no mutation can catch is not a
+  gated claim; do not re-add it.
+  ★★ **SWEPT OVER 808 ANGLE BLOCKS: the old rule disagrees on 12 of the 23 multi-angle
+  discs** — `TimeTraveler` (**463** adjacent blocks), `Beauty_and_the_Beast` (**54**),
+  `HOW_GREAT_IS_OUR_GOD` (14), `Grave of the Fireflies` (12), `BOOK_OF_LIFE` (6), and 7
+  more with 1–3 each. ★ **Cross-checked against the DISC, not just itself:** the block count
+  equals `TT_SRPT nr_of_angles` on **21 of 23**; the 2 exceptions are one disc whose blocks
+  genuinely hold 3 and 4 angles under a title declaring 5 — `nr_of_angles` is a TITLE-level
+  maximum, so per-block counting is the MORE precise of the two. That is also why the reader
+  counts cells rather than reading `nr_of_angles`: `block_last` needs the per-block value.
+  **Gate: `iso_reader_angle_tb` TEST C** (a second 2-angle block immediately after the
+  first, the Grave shape) — RED on the pre-fix reader with `angle_count=4` and **`B1=0`, the
+  second block skipped entirely**. Mutation **M5** restores the old rule and must fail TEST C
+  while leaving `angle_noagli_tb` green. ★ Control, in its strongest form: with BOTH reader
+  fixes applied, **`main`'s own unmodified single-block bench is byte-identical to `main`'s
+  own reader**. ⚠ This disc DOES author `sml_agli`, so the no-`sml_agli` fix below does not
+  touch it — a genuinely separate defect found by a user question.
+  Detail: **`docs/dvd_nav.md`** "Adjacent angle blocks".
+
 - 🔧 **A MULTI-ANGLE DISC NEED NOT AUTHOR `sml_agli`, AND PHASE 9 REQUIRED IT — Studio
   Ghibli discs alternated between the localized and Japanese versions every 1–4 s
   (2026-09-15, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked,

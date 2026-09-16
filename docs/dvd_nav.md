@@ -2756,6 +2756,86 @@ the two that fail — `iso_reader_atmos_tb` and `iso_reader_tpsw_boot_tb` — we
 against the pre-change reader and are **byte-identical**, so they are the pre-existing
 failures CLAUDE.md already records, not a regression from this branch.
 
+### Adjacent angle blocks: the count ran across the boundary (2026-09-15, Grave of the Fireflies)
+
+> **Status: 🔧 sim-proven RED/GREEN, ⏳ HW-confirm pending.** Field report:
+> *"playing that back on the core showed 9 angles to choose from but no auto-switching
+> that I saw. Is that normal behavior?"*
+
+**No — the disc declares TWO.** `TT_SRPT` title 1 says `nr_of_angles = 2`, and its NAV
+packs carry exactly two `sml_agli` entries. The **9 was the core's cap**, not the disc.
+
+★★ **THE SCAN COUNTED `block_type` AND NEVER RE-CHECKED `block_mode`, SO IT WALKED OUT OF
+THE BLOCK IT WAS MEASURING.** A block is authored `block_mode` **1** (FIRST), then **2**
+(IN BLOCK)…, then **3** (LAST), and the next block starts at 1 again. `S_ANGLE_SCAN`
+counted the run of consecutive `block_type==1` cells and stopped only at a non-angle cell
+or its `angle_count < 9` limit — fine while every angle block is followed by a normal cell,
+which is every disc Phase 9 was built and proven on.
+
+**Grave of the Fireflies VTS_01 PGC1 is 13 back-to-back 2-angle pairs** — one per chapter,
+`bm=1,3, 1,3, …` — with only the final cell of the PGC normal:
+
+```
+cell  1 cat=0x57 bm=1 bt=1  first=0        last=339620    VOB=1 CELL=1   chapter 1, angle 1
+cell  2 cat=0xd7 bm=3 bt=1  first=457      last=340206    VOB=2 CELL=1   chapter 1, angle 2
+cell  3 cat=0x5d bm=1 bt=1  first=340207   last=643132    VOB=1 CELL=2   chapter 2, angle 1
+cell  4 cat=0xdd bm=3 bt=1  first=340879   last=643778    VOB=2 CELL=2   chapter 2, angle 2
+…                                                                        (13 pairs)
+cell 27 cat=0x03 bm=0 bt=0  first=3779283  last=3802205   VOB=5 CELL=1   the only normal cell
+```
+
+So the scan counted 1,2,3,… and stopped at **9**, its cap.
+
+★★★ **AND THE WRONG COUNT IS NOT THE WORST OF IT — `block_last` FOLLOWS IT.**
+`block_last = block_first + angle_count - 1` = cell 8 (0-based), so the end-of-block skip
+lands on `block_last + 1` = 0-based cell 9 = **1-based cell 10 = chapter 5's ANGLE-2 cell**.
+After chapter 1 (8:00) playback jumps forward over chapters 2, 3 and 4 —
+**6:56 + 6:59 + 8:22 ≈ 22 minutes of the film** — and resumes in the other angle.
+⚠ It then compounds: that landing cell has `bm=3`, so `cc_blk_first` is false and
+`angle_resolved` was just cleared, which makes it **neither `angle_active` nor
+`seamless_active`** (`seamless_active` requires `!cc_is_angle`). With no ILVU follow it
+streams that interleaved range linearly — the alternating-angles symptom again, reached by
+a completely different route from the no-`sml_agli` case above.
+
+**FIX = libdvdnav's own rule**: continue only while the next cell is IN or LAST of the SAME
+block (`block_mode >= 2`), which is exactly `play_Cell_post`'s
+`while (block_mode >= 2) cellN++`. The next block's `block_mode == 1` ends the walk.
+⚠ The 9 cap STAYS — it is the `sml_agli` table size and the DVD spec's angle limit, so it
+bounds a malformed block. It is simply no longer what ends a well-formed one.
+⛔ **A "have I consumed the LAST cell" latch was written and then DELETED.** On any
+well-formed layout `block_mode >= 2` already stops at the boundary, so no fixture could
+distinguish it — and libdvdnav has no such latch either. A claim no mutation can catch is
+not a gated claim.
+
+**Blast radius — swept over 808 angle blocks in the library.** The old rule disagrees with
+this one on **12 of the 23 multi-angle discs**:
+
+| disc | adjacent blocks | old count | correct | declared |
+|---|---|---|---|---|
+| `TimeTraveler` | **463** | 4/6/8/9 | 2 | 2 |
+| `Beauty_and_the_Beast` | **54** | 4/6/8 | 2 | 2 |
+| `HOW_GREAT_IS_OUR_GOD` | 14 | 4/6/8/9 | 2 | 2 |
+| `Grave of the Fireflies` | 12 | 4/6/8/9 | 2 | 2 |
+| `BOOK_OF_LIFE` | 6 | 6/9 | 3 | 3 |
+| `A_BEAUTIFUL_MIND`, `Signs`, `BRIDGET_JONES`, `MUSIC_OF_THE_HEART`, `WITHOUTAPADDLE43`, `blast`, `THE_KID` | 1–3 each | 4 or 6 | 2 or 3 | 2 or 3 |
+
+★ **The rule is cross-checked against what the DISC declares, not just against itself:**
+the block count equals `TT_SRPT nr_of_angles` on **21 of 23** discs. The two exceptions are
+one disc (`AGENT_CODY_BANKS`) whose blocks genuinely hold **3** and **4** angles under a
+title declaring **5** — `nr_of_angles` is a TITLE-level maximum, so per-block counting is
+the *more* precise of the two, not a contradiction. That is also why the reader counts
+cells rather than reading `nr_of_angles`: the per-block value is the one `block_last` needs.
+
+**Gate: `iso_reader_angle_tb` TEST C** — a second 2-angle block placed immediately after the
+first with no normal cell between (the Grave shape), scoring the delivered marker bytes.
+RED on the pre-fix reader: `angle_count=4` and **`B1=0`, i.e. the second block was skipped
+entirely** — the 22-minute jump, reproduced. Mutation **M5** restores the old rule and must
+fail TEST C while leaving `angle_noagli_tb` green, which is what shows the COUNT rule is the
+variable rather than the angle machinery generally.
+★ Control, and the strongest form of it: with **both** of this branch's reader fixes applied,
+`main`'s own unmodified `iso_reader_angle_tb` (single block, 3 cells) is **byte-identical** to
+`main`'s own reader. Neither fix moves the single-block path at all.
+
 ### The disc picks the angle — SPRM3 was written and never read (2026-09-15)
 
 ★★ **`dvd_vm` has latched SPRM3 from `SetSTN` since Phase 4 and exported only SPRM1 and
@@ -2781,6 +2861,19 @@ played angle 1 regardless.
 command on the disc finds **zero** references to SPRM0 (menu language), 16/17 (audio
 language), 18/19 (subtitle language) or 20 (region). Coupling the OSD language option to the
 angle would invent behaviour no disc asks for.
+
+★ **A SECOND disc does the same, so this is not one disc's quirk.** `Grave of the
+Fireflies` VTS_01 PGC1's PRE block reads:
+
+```
+pre#3: if (g[8] == g[0]) SetSTN AGLN = 0x1
+pre#4: if (g[8] != g[0]) SetSTN AGLN = 0x2
+```
+
+— the feature picks angle 1 or 2 from a GPRM its setup menu wrote (VTS_01M PGC3's POST sets
+the same pair), again with no language SPRM anywhere in it. Both discs found so far that use
+angles for a localized title choose the angle **themselves**, which is what makes the SPRM3
+export load-bearing rather than a tidy-up.
 
 ★★★ **AND THE READER PICKED THE CELL BEFORE THE DISC COULD SPEAK — DETERMINISTICALLY.**
 `pgc_loaded` pulses at `S_PGC_DONE`; the reader reaches the `S_ANGLE_SCAN` resolve about

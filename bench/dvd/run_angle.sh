@@ -128,6 +128,21 @@ if [ "${1:-}" = "--red" ]; then
     red_clean M4-unbounded-fallback \
         's|wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);|wire        snoop_nv_ok  = snoop_nvvalid;|' \
         bench/dvd/iso_reader_angle_tb.sv
+
+    # M5 - count the run of block_type==1 cells WITHOUT re-checking block_mode
+    # (the shipped rule). On ADJACENT blocks the scan runs straight across the
+    # boundary: angle_count is wrong AND block_last follows it, so the
+    # end-of-block skip jumps over the next block entirely. This is the
+    # "Grave of the Fireflies" defect -- 13 back-to-back 2-angle pairs reported
+    # as 9 angles, with ~22 minutes of the film skipped after chapter 1.
+    red M5-scan-ignores-blockmode \
+        's|if (cc_blk_cont &&|if (cc_is_angle \&\&|' \
+        "iso_reader_angle TEST A+B+C" bench/dvd/iso_reader_angle_tb.sv
+    # ...and it must NOT disturb the single-block case, which is what shows the
+    # count rule is the variable rather than the angle machinery generally.
+    red_clean M5-scan-ignores-blockmode \
+        's|if (cc_blk_cont &&|if (cc_is_angle \&\&|' \
+        bench/dvd/angle_noagli_tb.sv
 fi
 
 [ $fail -eq 0 ] && echo "ALL GREEN" || echo "FAILURES"

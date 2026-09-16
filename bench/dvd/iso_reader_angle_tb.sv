@@ -18,6 +18,16 @@
 // nav bodies are filled 0x00 (no 0xA1/0xA2/0xCC), so counting marker bytes in
 // the captured stream tells exactly which angle's sectors were streamed.
 //
+// TEST C (2026-09-15) covers ADJACENT BLOCKS: a second 2-angle block follows the
+// first with NO normal cell between them, which is how "Grave of the Fireflies"
+// VTS_01 PGC1 authors the entire film (13 back-to-back pairs, one per chapter;
+// Beauty and the Beast has 54, TimeTraveler 463). The angle-count scan used to
+// count the run of block_type==1 cells without re-checking block_mode, so it ran
+// straight across the block boundary -- reporting NINE angles (its cap) for a
+// 2-angle disc, and deriving block_last from that count so the end-of-block skip
+// landed ~22 minutes further into the film, on a cell that is neither
+// angle_active nor seamless_active.
+//
 // TEST A: play angle 1 -> only 0xA1 + 0xCC bytes stream, NO 0xA2 (the reader's
 //         real snoop -> ILVU-jump path, driven by synthetic DSI bytes).
 // TEST B: switch to angle 2 at block entry -> the ILVU chain follows angle 2
@@ -58,6 +68,7 @@ module iso_reader_angle_tb;
     // ---- capture + per-marker counters ----
     integer cap_n = 0;
     integer n_a1 = 0, n_a2 = 0, n_cc = 0;
+    integer n_b1 = 0, n_b2 = 0;          // TEST C: the SECOND adjacent block
     reg [3:0] max_ac = 0;                        // peak angle_count seen (cleared at block end)
     always @(posedge clk) begin
         if (angle_count > max_ac) max_ac <= angle_count;
@@ -66,6 +77,8 @@ module iso_reader_angle_tb;
             case (stream_data)
                 8'hA1: n_a1 = n_a1 + 1;
                 8'hA2: n_a2 = n_a2 + 1;
+                8'hB1: n_b1 = n_b1 + 1;
+                8'hB2: n_b2 = n_b2 + 1;
                 8'hCC: n_cc = n_cc + 1;
             endcase
         end
@@ -229,16 +242,22 @@ module iso_reader_angle_tb;
             put_rec(cur,17,2048,8'h02,128'h01,1,cur);
             put_rec(cur,19,4096,       8'h00,"VIDEO_TS.IFO;1",14,cur);
             put_rec(cur,21,6144,       8'h00,"VTS_01_0.IFO;1",14,cur);
-            put_rec(cur,24,10*2048,    8'h00,"VTS_01_1.VOB;1",14,cur);
+            put_rec(cur,24,18*2048,    8'h00,"VTS_01_1.VOB;1",14,cur);
 
             put_vmgi(19, 32'd1);
             put_tt_srpt(20, 16'd1, 8'd1);
             put_vtsi_mat(21, 32'd1);
-            put_pgcit(22, 32'd16, 8'd3, 16'd256);
-            // cells: 0 angle1 (block first), 1 angle2 (block last), 2 common
-            put_cell(22, 32'd16, 16'd256, 0, 8'h50, 32'd0, 32'd7);   // angle 1
-            put_cell(22, 32'd16, 16'd256, 1, 8'hD0, 32'd2, 32'd5);   // angle 2
-            put_cell(22, 32'd16, 16'd256, 2, 8'h00, 32'd8, 32'd9);   // common
+            put_pgcit(22, 32'd16, 8'd5, 16'd256);
+            // BLOCK 1: cells 0 angle1 (bm=1 FIRST), 1 angle2 (bm=3 LAST)
+            put_cell(22, 32'd16, 16'd256, 0, 8'h50, 32'd0,  32'd7);
+            put_cell(22, 32'd16, 16'd256, 1, 8'hD0, 32'd2,  32'd5);
+            // BLOCK 2: immediately adjacent, no normal cell between (the Grave
+            // of the Fireflies shape). The old scan counted straight through
+            // these and reported 4 angles for two 2-angle blocks.
+            put_cell(22, 32'd16, 16'd256, 2, 8'h50, 32'd8,  32'd15);
+            put_cell(22, 32'd16, 16'd256, 3, 8'hD0, 32'd10, 32'd13);
+            // common continuation
+            put_cell(22, 32'd16, 16'd256, 4, 8'h00, 32'd16, 32'd17);
 
             // interleaved VOB: nav+body per ILVU, per-angle marker bodies
             // next_vobu (last arg) = this VOBU's OWN angle's next ILVU, or
@@ -251,8 +270,17 @@ module iso_reader_angle_tb;
             fill_sec(24+5, 8'hA2);
             put_nav(6, ILVU_LAST, 32'd1, 32'd2, 32'd2, 32'h3fffffff);  // a1.i2 END_OF_CELL
             fill_sec(24+7, 8'hA1);
-            fill_sec(24+8, 8'hCC);
-            fill_sec(24+9, 8'hCC);
+            // ---- BLOCK 2, same layout shifted by 8 (markers 0xB1 / 0xB2) ----
+            put_nav(8,  ILVU_LAST, 32'd1, 32'd6, 32'd2, 32'h80000006);
+            fill_sec(24+9,  8'hB1);
+            put_nav(10, ILVU_LAST, 32'd1, 32'd4, 32'd2, 32'h80000002);
+            fill_sec(24+11, 8'hB2);
+            put_nav(12, ILVU_LAST, 32'd1, 32'd2, 32'd4, 32'h3fffffff);
+            fill_sec(24+13, 8'hB2);
+            put_nav(14, ILVU_LAST, 32'd1, 32'd2, 32'd2, 32'h3fffffff);
+            fill_sec(24+15, 8'hB1);
+            fill_sec(24+16, 8'hCC);
+            fill_sec(24+17, 8'hCC);
         end
     endtask
 
@@ -305,6 +333,36 @@ module iso_reader_angle_tb;
         if (n_a1 !== 1*2048)    begin errors=errors+1; $display("  FAIL: expected 1 pre-switch A1 ILVU (%0d)", n_a1); end
         if (n_cc !== 2*2048)    begin errors=errors+1; $display("  FAIL: common cell != 2 sectors (%0d)", n_cc); end
         if (errors == 0) $display("  ok: switch followed angle 2's ILVU chain");
+
+        // ============ TEST C: two ADJACENT blocks (Grave of the Fireflies) ======
+        // The scan must stop at each block's own bm==3 cell. Pre-fix it counted
+        // the whole run of block_type==1 cells: angle_count=4 here (and 9 on the
+        // real disc, its cap), and block_last followed, so the end-of-block skip
+        // jumped over block 2's angle-1 cell entirely.
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+        cap_n = 0; n_a1 = 0; n_a2 = 0; n_b1 = 0; n_b2 = 0; n_cc = 0; max_ac = 0;
+        @(posedge clk); start = 1; @(posedge clk); start = 0;
+        run_until_done(40000);
+        $display("TEST C (adjacent blocks): peak angle_count=%0d  A1=%0d A2=%0d B1=%0d B2=%0d CC=%0d",
+                 max_ac, n_a1, n_a2, n_b1, n_b2, n_cc);
+        if (max_ac !== 4'd2) begin
+            errors=errors+1;
+            $display("  FAIL: angle_count=%0d -- the scan ran across the block boundary (want 2)", max_ac);
+        end
+        if (n_a2 !== 0 || n_b2 !== 0) begin
+            errors=errors+1;
+            $display("  FAIL: sibling-angle bytes delivered (A2=%0d B2=%0d)", n_a2, n_b2);
+        end
+        if (n_a1 !== 2*2048) begin
+            errors=errors+1; $display("  FAIL: block 1 angle-1 body != 2 sectors (%0d)", n_a1);
+        end
+        if (n_b1 !== 2*2048) begin
+            errors=errors+1;
+            $display("  FAIL: block 2 angle-1 body != 2 sectors (%0d) -- block 2 was skipped", n_b1);
+        end
+        if (n_cc !== 2*2048) begin
+            errors=errors+1; $display("  FAIL: common cell != 2 sectors (%0d)", n_cc);
+        end
 
         if (errors == 0) $display("ISO_READER_ANGLE_TB: ALL TESTS PASSED");
         else             $display("ISO_READER_ANGLE_TB: %0d FAILURE(S)", errors);

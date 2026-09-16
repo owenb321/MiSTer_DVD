@@ -760,6 +760,14 @@ reg [7:0]  cc_rd;                          // registered category byte for cell_
 // See docs/dvd_nav.md "Seamless-branch interleaved blocks".
 wire       cc_is_angle = (cc_rd[5:4] == 2'd1);        // block_type == angle block
 wire       cc_blk_first= cc_is_angle && (cc_rd[7:6] == 2'd1);
+// block_mode of the cell under cell_raddr: 0 none, 1 FIRST of block, 2 IN
+// block, 3 LAST of block. The angle-count scan must stop at the block's own
+// end, which is what [7:6] says -- see S_ANGLE_SCAN.
+wire [1:0] cc_blk_mode = cc_rd[7:6];
+// The scan continues only while the next cell is IN or LAST of the SAME block.
+// The next block starts at block_mode 1, which ends the walk -- exactly
+// libdvdnav's `while (block_mode >= 2) cellN++` in play_Cell_post.
+wire       cc_blk_cont = cc_is_angle && (cc_blk_mode >= 2'd2);  // 2 = in, 3 = last
 wire       cc_interleaved = cc_rd[2];                 // interleaved (seamless-branch) cell
 // ★ SEAMLESS PLAY (libdvdread cell_playback_t byte 0: [7:6] block_mode, [5:4]
 // block_type, [3] seamless_play, [2] interleaved, [1] stc_discontinuity,
@@ -4009,17 +4017,44 @@ always @(posedge clk or negedge rst_n) begin
             end
 
             // MULTI-ANGLE angle-count scan (Phase 9): walk cell_cat_mem forward
-            // from block_first counting consecutive block_type==1 cells, then
-            // load the cur_angle cell. Reuses cc_rd (cell_raddr) with a 1-cycle
-            // BRAM-latency wait state, mirroring S_RBN_SCAN.
+            // from block_first, counting THIS BLOCK's angle cells. Reuses cc_rd
+            // (cell_raddr) with a 1-cycle BRAM-latency wait state, mirroring
+            // S_RBN_SCAN.
+            //
+            // ★★ THE STOP CONDITION IS block_mode, NOT merely block_type.
+            // A block is authored as block_mode 1 (FIRST), then 2 (IN BLOCK)...,
+            // then 3 (LAST) -- libdvdnav's play_Cell_post skips the siblings with
+            // exactly `while (block_mode >= 2) cellN++`. This scan used to count
+            // the run of block_type==1 cells and re-check nothing else, so it
+            // walked straight across the end of one block into the next whenever
+            // two blocks are ADJACENT.
+            // MEASURED on "Grave of the Fireflies" VTS_01 PGC1: the whole film is
+            // 13 back-to-back 2-angle pairs (bm=1,3, 1,3, ... one per chapter)
+            // with only the final cell normal, so the old rule counted to its
+            // `< 9` cap and reported NINE angles for a disc whose TT_SRPT
+            // declares two. Worse, block_last followed that count, so the
+            // end-of-block skip jumped from chapter 1 to chapter 5's angle-2
+            // cell -- about 22 minutes of the film -- and landed on a bm==3 cell,
+            // which is neither angle_active nor seamless_active, so the ILVU
+            // follow stopped too.
+            // Library sweep over 808 angle blocks: the old rule disagrees with
+            // this one on 12 of the 23 multi-angle discs (Beauty and the Beast
+            // has 54 adjacent blocks, TimeTraveler 463). This rule equals the
+            // disc's declared nr_of_angles on 21 of 23; the two exceptions are
+            // one disc whose blocks genuinely hold 3 and 4 angles under a title
+            // declaring 5 -- nr_of_angles is a TITLE-level maximum, so counting
+            // per block is the more precise of the two, not a contradiction.
+            // ⚠ The 9 cap stays: it is the sml_agli table size (9 entries) and
+            // the DVD spec's angle limit, so it bounds a malformed block. It is
+            // no longer what ENDS a well-formed one.
             S_ANGLE_SCAN2: state <= S_ANGLE_SCAN;
             S_ANGLE_SCAN: begin
-                if (cc_is_angle && ({8'd0, ang_scan_i} < {8'd0, cell_count})
+                if (cc_blk_cont && ({8'd0, ang_scan_i} < {8'd0, cell_count})
                         && angle_count < 4'd9) begin
-                    angle_count <= angle_count + 4'd1;
-                    ang_scan_i  <= ang_scan_i + 8'd1;
-                    cell_raddr  <= ang_scan_i + 8'd1;
-                    state       <= S_ANGLE_SCAN2;
+                    angle_count  <= angle_count + 4'd1;
+                    ang_scan_i   <= ang_scan_i + 8'd1;
+                    cell_raddr   <= ang_scan_i + 8'd1;
+                    state        <= S_ANGLE_SCAN2;
                 end else begin
                     // angle_count known. block_last = block_first + count - 1.
                     block_last     <= block_first + {4'd0, angle_count} - 8'd1;
