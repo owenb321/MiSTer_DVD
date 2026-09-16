@@ -502,8 +502,9 @@ worse maintenance burden than targeted in-place edits. So:
   ✅ **THAT THIRD CASE IS FIXED BY MPEG-2 ZERO_BYTE STUFFING AT THE JUNCTION (2026-09-16,
   branch `fix/menu-hop-zero-stuff`, `dvd/es_stuff.sv`) — sim-proven RED/GREEN on the REAL
   cells and mutation-checked 7/7; built `DVD_hopstuff_20260916_1859.rbf`, SEED 7 first
-  roll, clk_dec 92.46/91.71, 91 % ALM, `es_stuff` = 19 ALMs; ⏳ HW-confirm pending, plan
-  in `docs/quant_matrix.md` §13q.4.** The `keep_vbuf` hop hands the
+  roll, clk_dec 92.46/91.71, 91 % ALM, `es_stuff` = 19 ALMs; ✅ HW-CONFIRMED 2026-09-16 by
+  the maintainer: Nacho ×20, Hulk ×10, Elmo ×10 with no fried image, Hulk correct on the
+  FIRST view, T2 Mission Profiles clean.** The `keep_vbuf` hop hands the
   decoder the outgoing cell cut at an arbitrary byte, then the landing's `00 00 01 B3`;
   the vld, left mid-VLC, sometimes swallows that header as coefficient data and the
   landing still (ONE sequence header ever) dequantises with the previous menu's matrix.

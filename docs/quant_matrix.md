@@ -2105,7 +2105,17 @@ FIRST roll, clk_dec **92.46 / 91.71 MHz** against the 86.0 gate, 91 % ALM / 90 %
 `netlist_canary` PASS. Compare option A's netlist: SEED 7 marginal at 85.1, re-swept
 to SEED 9.
 
-⏳ HW: the same protocol option A used -- control arm first (`main` on Nacho over
+✅ **HW-CONFIRMED 2026-09-16 (maintainer, own rig, `DVD_hopstuff_20260916_1859.rbf`):
+Nacho 20 landings, Hulk 10, Elmo 10 -- no fried image on any -- and T2's Mission
+Profiles show no pixelation.** Hulk is correct on the FIRST view: option A's
+flash-then-settle residual is gone, as the mechanism predicts (there is no fried
+picture to repair). ⚠ Same round, a NEW observation on Harry Potter Interactive's
+Player Mode screen (title-domain still, reached by a title->title jump = a VBUF
+FLUSH, not a keep_vbuf hop): blocky/pixelated, PRE-EXISTING on v0.5.0, out of this
+fix's scope by construction (the stuffer is armed on aud_drop_pulse only). See
+13r.
+
+⏳ HW (as planned; the arms above are the ones run): the same protocol option A used -- control arm first (`main` on Nacho over
 20 RE-landings, baseline ~1 in 5), then the fix on Nacho / Elmo / Hulk × 20,
 expecting 0 fried **and Hulk correct on the FIRST view** (option A's flash residual
 has no mechanism here); T2 / MiB / Matrix motion menus, Scooby-Doo 2, menu→title
