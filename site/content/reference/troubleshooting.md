@@ -444,6 +444,24 @@ before moving on, so the first picture is decoded from a clean start like all th
 If you still see it, the disc's name and the screen you reached it from are the useful
 details to report.
 
+### A menu picture comes up blocky, harsh or over-coloured and stays that way
+
+A menu or selection screen that is one held picture could come up wrong and stay wrong for
+as long as you sat on it. It went one of two ways depending on the disc: coarse and blocky,
+with the squares of the compression showing through, or harsh — speckled texture, blown-out
+highlights, coloured fringing around the lettering. Pressing a direction sometimes redrew it
+correctly, and on a disc whose menu has a soundtrack it could fix itself a minute later,
+when that soundtrack looped round.
+
+A held picture carries its decoding settings once, at the very start. If the core was still
+working through the previous screen when those settings arrived, it could read straight past
+them and decode the picture using the settings from wherever it had just been — too coarse
+on one disc, too contrasty on another. The core now separates the two, so a new screen's
+settings are always read.
+
+If you still see it, the disc's name and the screen you reached it from are the useful
+details to report.
+
 ### A menu option does the wrong thing, or `LINK FAIL`
 
 `LINK FAIL nn` means a menu jump failed and the core recovered by re-entering the last

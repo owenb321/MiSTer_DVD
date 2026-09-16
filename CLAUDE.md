@@ -499,6 +499,63 @@ worse maintenance burden than targeted in-place edits. So:
   worst `default/custom` **29.00** vs Elmo's 20.75). ⛔ A THIRD case, not a regression of
   #92 or #96 — chase separately; `docs/quant_matrix.md` §12e names the two live
   hypotheses and the measurement that separates them.
+  ✅ **THAT THIRD CASE IS FIXED BY MPEG-2 ZERO_BYTE STUFFING AT THE JUNCTION (2026-09-16,
+  branch `fix/menu-hop-zero-stuff`, `dvd/es_stuff.sv`) — sim-proven RED/GREEN on the REAL
+  cells and mutation-checked 7/7; built `DVD_hopstuff_20260916_1859.rbf`, SEED 7 first
+  roll, clk_dec 92.46/91.71, 91 % ALM, `es_stuff` = 19 ALMs; ✅ HW-CONFIRMED 2026-09-16 by
+  the maintainer: Nacho ×20, Hulk ×10, Elmo ×10 with no fried image, Hulk correct on the
+  FIRST view, T2 Mission Profiles clean.** The `keep_vbuf` hop hands the
+  decoder the outgoing cell cut at an arbitrary byte, then the landing's `00 00 01 B3`;
+  the vld, left mid-VLC, sometimes swallows that header as coefficient data and the
+  landing still (ONE sequence header ever) dequantises with the previous menu's matrix.
+  ISO 13818-2 §6.2.1 makes any number of zero bytes before a start code legal and the vld
+  already walks them — so a shim between `ps_demux` and `vidfeed_cdc` puts **128 zeros**
+  in front of the first byte after the hop's pipe reset. From ANY parser state an all-zero
+  string hits `STATE_ERROR`/`STATE_DCT_ERROR` within a few bits (every VLC table returns
+  length 0 on it) — the SAME natural path that already resyncs 4 landings in 5 — and the
+  hunt then finds the header intact from any byte alignment. **No fried picture, no drop,
+  no re-stream, no duplicate audio, no black frame.** ★ `N ≥ 68` is a MEASURED bound, not
+  taste: a cut INSIDE a 64-entry quantiser-matrix download (`STATE_LD_*_QUANT0`, a
+  counter-driven loop) eats up to 64 zeros as entries first — `run_menu_junction.sh` [J4]:
+  16 zeros fry (62/64), 128 pass. ⛔ Zeros, never `0xFF`: a run of 1s decodes as valid
+  B.14 coefficients forever. ⚠ The spend waits for `pipe_rst_n` to have been LOW since
+  the ack: a byte of the OUTGOING cell can still be presented in the cycle between them,
+  and zeros in front of THAT could fabricate `00 00 01 00` = a picture start code.
+  ★★ **THIS REPLACES "OPTION A" (branch `fix/menu-hop-still-matrix`, HW-confirmed over
+  four rounds, NOT merged, kept unpushed as the fallback).** Reviewed cold, option A had
+  two holes and a footprint: (1) if the parser swallows the landing's PICTURE header too,
+  it resyncs on a slice code (accepted, `sequence_header_seen` is still set from the old
+  cell), `hdr_eaten` never fires, no repair, `await_hdr` sticks; (2) `hop_mark` is a
+  one-cycle pulse on the LAST arm of an if/else chain and is DROPPED on a coincidence
+  with the `PICTURE_HEADER` branch; (3) six modules, ten ports, forty bench tie-offs, a
+  retry budget, a reader watchdog, an audio hold — to repair a picture that need never
+  decode wrong. ★ **The durable lesson: when a defect is "the parser was left in a bad
+  state at a seam", ask whether the STREAM can be made legal at the seam before
+  building detection-and-repair around the decoder.** The 24-byte `S_VID_FLUSH` filler in
+  `ps_demux` had been the precedent all along.
+  MEASURED (`quant_matrix_tb +NOFLUSH`, real vld over NACHO_LIBRE_WS VTSM07 PGC10 cell0 →
+  PGC13 cell0): cut at 5000 B **63/64 wrong** (the eat, reproduced); +128 zeros **0/64**.
+  Gates: **`bench/dvd/run_es_stuff.sh --red`**, `tools/check_es_stuff_wiring.py` (the seam,
+  read out of `emu.sv`; RED on `main`), `run_menu_junction.sh` [J1n]/[J3]/[J4]. ⚠ The
+  T2-only [J1] sweep (8/8 PASS, "FAIL by design") no longer gates. Detail:
+  **`docs/quant_matrix.md` §13q**.
+  ★★ **AND THE SAME ROUND FOUND THE FLUSH JUNCTION FRYING TOO (§13r, build `dev-hopstuff2`
+  = `DVD_hopstuff2_20260916_2120.rbf`, SEED 7 first roll, clk_dec 93.71/89.77;
+  ✅ HW-CONFIRMED 2026-09-16 by the maintainer: Player Mode sharp on the first view, chapter
+  skips and menu entry/exit unregressed):** Harry Potter Interactive's Player Mode screen, a TITLE-domain
+  still reached by a title→title jump = a VBUF flush with NO soft reset (#98 covers
+  crossings only), came up BLOCKY, pre-existing on v0.5.0. Same eat, opposite direction:
+  the still downloads NO matrix and relies on the defaults; every title VOB downloads one
+  peaking at 41 vs the default 83, so an eaten header halves the still's high frequencies.
+  MEASURED on `main`'s RTL with the real `hp_still_i.hex`: **7 of 12 swept flush positions
+  keep the title's matrix; 0 of 12 with 128 zeros** — and ffmpeg decoding the VTS_08 stills
+  behind the title's header reproduces the screenshot (blockiness 1.14 → 3.68). Fix = arm
+  `es_stuff` on EVERY jump/seek ack (`es_stuff_arm = jump_ack | seek_ack`), not only the
+  `keep_vbuf` one; `check_es_stuff_wiring.py` is RED on an arm scoped back to `keep_vbuf`;
+  `run_menu_junction.sh` [J5] is the flush-sweep gate. ★ Lesson: the first cut scoped the
+  stuffer to the case it was written for (the hop) when what it SELECTS is "a junction
+  where the parser is left mid-stream" — the #92/#81 predicate class, caught by a
+  hardware round rather than by asking *what else does this fire on* first.
   ★ **The diagnostic round that settled it read `chroma_format` beside every garbage
   frame on the rig: 1 (correct) on all three** — the parameter that sets blocks-per-
   macroblock was exonerated in one run, which is what turned "re-sync harder" into
