@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-saveroverlay"
+`define CORE_VERSION "dev-hopstuff"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1110,6 +1110,10 @@ wire       demux_in_ready;
 wire [7:0] ps_vid_byte;       // ps_demux -> mpeg2video
 wire       ps_vid_mark;       // DVD-FORK (PTS association): first payload byte of a PTS-bearing video PES
 wire       ps_vid_valid;
+wire       ps_vid_ready;      // <- es_stuff (the demux is held while a zero run is emitted)
+wire [8:0] vidfeed_wr_data;   // es_stuff -> vidfeed_cdc: {PTS mark, byte}
+wire       vidfeed_wr_valid;
+wire       es_stuffing;       // level: a junction zero run is on the wire (docs/quant_matrix.md 13q)
 
 wire       ps_demux_in_ready;   // ps_demux's own ready (input handshake)
 
@@ -3131,7 +3135,7 @@ ps_demux ps_demux_inst (
     .vid_byte     (ps_vid_byte),
     .vid_valid    (ps_vid_valid),
     .vid_mark     (ps_vid_mark),        // DVD-FORK (PTS association)
-    .vid_ready    (vidfeed_wr_ready),
+    .vid_ready    (ps_vid_ready),       // via es_stuff (menu-hop zero stuffing), not the CDC directly
 
     // Audio path -> audio_ring (clk_sys). aud_ready stays high (audio_ring
     // accepts always and drops-on-full) so audio can never stall the shared
@@ -4152,11 +4156,38 @@ always @(posedge clk_sys)
     if (!reset_n)                av_disp_lag <= 34'sd0;
     else if (disp_lag_sys_valid) av_disp_lag <= disp_lag_sys;
 
+// DVD-FORK (menu-hop zero stuffing, docs/quant_matrix.md 13q): at a keep_vbuf
+// menu->menu hop the OUTGOING cell is cut at an arbitrary byte and the landing's
+// 00 00 01 B3 follows it directly; the vld, left mid-VLC by the cut, can swallow
+// that header and dequantise the landing still with the previous menu's matrix
+// (the "deep fried" still). es_stuff puts 128 bytes of MPEG-2 zero_byte stuffing
+// in front of the FIRST byte ps_demux emits after the hop's pipe reset, so the
+// parser is guaranteed to hit its natural error/start-code hunt before the
+// header arrives. Armed by the same ack aud_drop_pulse keys on -- the one
+// junction with no VBUF flush. The zeros ride the ordinary byte path, so the
+// PTS-association coordinate (vbuf_pos) stays exact and the mark stays on the
+// landing's real byte. Gate: bench/dvd/run_es_stuff.sh, run_menu_junction.sh
+// [J3]/[J4]; wiring: tools/check_es_stuff_wiring.py (emu has no bench).
+es_stuff #(.N(128)) es_stuff_inst (
+    .clk        (clk_sys),
+    .rst_n      (reset_n),            // NOT pipe_rst_n: it must survive the reset it keys on
+    .arm        (aud_drop_pulse),     // the keep_vbuf hop's ack
+    .pipe_rst_n (pipe_rst_n),
+    .in_byte    (ps_vid_byte),
+    .in_mark    (ps_vid_mark),
+    .in_valid   (ps_vid_valid),
+    .in_ready   (ps_vid_ready),
+    .out_data   (vidfeed_wr_data),
+    .out_valid  (vidfeed_wr_valid),
+    .out_ready  (vidfeed_wr_ready),
+    .stuffing   (es_stuffing)
+);
+
 vidfeed_cdc vidfeed_cdc_inst (
     .rst_n    (reset_n),
     .wr_clk   (clk_sys),
-    .wr_data  ({ps_vid_mark, ps_vid_byte}),   // DVD-FORK (PTS association): 9 bits, the mark rides with its byte
-    .wr_valid (ps_vid_valid),
+    .wr_data  (vidfeed_wr_data),      // DVD-FORK (PTS association): 9 bits, the mark rides with its byte -- via es_stuff
+    .wr_valid (vidfeed_wr_valid),
     .wr_ready (vidfeed_wr_ready),
     .rd_clk   (clk_dec),
     .rd_data  ({dec_stream_mark, dec_stream_data}),

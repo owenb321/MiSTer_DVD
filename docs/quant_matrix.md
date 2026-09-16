@@ -876,3 +876,1119 @@ so only a still is exposed.
 a still" — the reader knows `still_time` at `S_CELL_LOAD`, before the landing's first
 bytes are streamed. ⛔ Do **not** reach for the issue-#65 menu-still cold re-decode; it
 replays audio and was removed for that reason.
+
+---
+
+## 13. The gap between #92 and #96: a BUTTON-activated menu→menu hop (2026-09-15)
+
+`INCREDIBLE_HULK.iso` (PAL) reported a fried special-features menu on the shipped core
+AND on the `quantmatrix` build that fixed Elmo. ⚠ That made it look "pre-existing", but
+measured against v0.4.0 it is a REGRESSION -- see §13c-quater. Root-caused here. Branch `fix/menu-hop-still-matrix`.
+
+### 13a. Reproduced deterministically, with a clean control on the SAME still
+
+Measured on the rig with the blockiness metric (energy on the 8-px DCT grid ÷ energy off
+it; ~1.0 clean). The menu is **VTS_01 VTSM PGCN 14** — the core's own `CH 14/ 1` readout,
+NOT the VTS_06 PGCN 15 that the IFO link graph suggested. ⚠ **Ask the core what it is
+playing before analysing a disc** — the same mistake as the AFTER_EARTH VTS mix-up.
+
+| route to PGCN 14 | blockiness | n |
+|---|---|---|
+| after a title→menu **crossing** (soft reset fires) | **1.071** | 2 |
+| by menu→menu **hops** only | **1.560** | 8 |
+
+Identical content, identical PGC; only the route differs. The fried arm is the same value
+to three decimals on all 8 entries — **deterministic**, unlike Elmo's ~1-in-8 onset.
+
+### 13b. The mechanism, and why two obvious theories were refuted first
+
+⛔ **Not the delivery-side cut at a natural PGC end.** `quant_fixture.py --junction`
+REFUSES to build this disc's PGCN 14 → 15 junction: *"cut A contains a sequence_end_code
+-- it would resync the parser for free and the junction would prove nothing."*
+⛔ **Not the `alternate_scan` permutation (§4).** The still's own download, run through
+`quant_matrix_tb` with `--matrix-probe` (64 distinct values), comes back
+`mismatches=0/64 permutation=0 distinct_used=63`.
+
+What it is: **the hop is a BUTTON press, so it is neither drained nor reset.**
+
+* `dvd_vm.sv:899` — a button event sets `nat_src <= 1'b0` (*"event jump: never 'natural'
+  provenance"*); `nat_src` is 1 only for `ev_cellcmd`/`ev_pgcend` (`:1079`, `:1092`).
+* So `vm_from_wait = wait_verdict && nat_src` is 0 ⇒ `jump_natural` 0 ⇒ `jnat_l` 0 ⇒
+  **`jump_go` is NOT gated on `nat_drained`** — #96's drain does not apply. The jump
+  executes at once and `wr_ptr <= 0` discards the undelivered cache tail.
+* And it is menu→menu, so `keep_vbuf = 1` ⇒ **no VBUF flush and no `soft_flush`** — #92
+  and #98 do not apply either.
+* The landing's one sequence header is therefore eaten mid-stream while
+  `sequence_header_seen` is still set, so the still decodes with the PREVIOUS menu's
+  matrix. On a disc whose menus differ by 29× that is the reported artefact; on T2 (2.38×)
+  it is invisible, which is why T2's 20 hop-only stills look fine.
+
+★ **It sits exactly in the gap between the two fixes:** #92/#98 cover `~keep_vbuf` jumps,
+#96 covers `keep_vbuf` hops with NATURAL provenance (T2's slideshow, `LinkNextPG` and cell
+commands). A **user-activated** `keep_vbuf` hop is covered by neither.
+
+### 13c. Blast radius, swept (970 images)
+
+New `tools/still_menu_scan.py` classifies every menu-domain PGC as a still and every
+inbound route as `crossing` / `menu_hop` / `self` / none; paired with `qmatrix_scan.py`:
+
+| | discs | still menus |
+|---|---|---|
+| at least one still menu | 921 / 970 | 11,906 |
+| reachable by a crossing (reset fires) | — | 3,026 |
+| **ONLY by a menu→menu hop** | **735 / 970** | **6,379** |
+
+| menu matrix ratio | discs | with a hop-only still |
+|---|---|---|
+| none / flat | 408 | 248 |
+| 2–5× (mild) | 244 | 208 |
+| 5–10× (visible) | 4 | 3 |
+| **≥10× (dramatic)** | **313** | **275** |
+
+**Intersection: 275 discs (28 %)** carry a hop-only still whose matrix is dramatic enough
+for a loss to be obvious.
+
+★★ **BOTH axes were necessary, and axis 1 alone would have misled.** T2 has 20 hop-only
+stills and is confirmed good on hardware — but its worst ratio is 2.38× and The Matrix
+downloads no matrix at all, so neither disc *could* show this defect. Reading "T2 works"
+as "the menu-hop path is safe" is exactly the wrong conclusion, and only the second axis
+prevents it. Same lesson as the Angle-menu scope cut: a declared capability is not a
+used one.
+
+⚠ 970 of 1064 images were swept; the rest have quote characters in their filenames and
+were dropped by `xargs`. Not a sampling decision, just a shell artefact — re-run with
+`-0` if the exact denominator matters.
+
+### 13c-bis. The severity metric that actually predicts it (2026-09-15)
+
+⛔ **"Worst default/custom ratio" (what `qmatrix_scan` reports) is the WRONG severity
+number for this defect, and using it would have mis-sized the population.** What a
+fried still is dequantised with is not the MPEG default, it is **the matrix the previous
+menu left in the registers**. So the severity is the worst ratio between the matrices a
+disc's own menus download -- new `tools/menu_matrix_spread.py`. A disc whose menus all
+share ONE matrix cannot show this however varied that matrix is.
+
+Validated against all three discs whose hardware behaviour is known:
+
+| disc | spread | distinct menu matrices | HW |
+|---|---|---|---|
+| INCREDIBLE_HULK | **29.00x** | 2 | **fried** |
+| ULTIMATE_T2 | 2.38x | **1** | clean |
+| THE_MATRIX | 1.00x | **0** | clean |
+
+★ **T2 is the case that makes the metric necessary:** it has 20 hop-only stills and is
+HW-confirmed good, because it downloads exactly ONE menu matrix -- every hop inherits the
+same matrix it would have loaded. Its 2.38x is purely against the DEFAULTS, which is only
+reachable straight after a reset.
+
+Swept over 970 images and intersected with `still_menu_scan`:
+
+| menu-matrix spread | discs | with a hop-only still | with >=2 menu matrices |
+|---|---|---|---|
+| <1.5x (cannot show) | 372 | 219 | **0** |
+| 1.5-3x (subtle) | 47 | 45 | 5 |
+| 3-10x (visible) | 229 | 188 | 79 |
+| >=10x (dramatic) | 322 | 283 | 210 |
+
+**AT RISK = a hop-only still AND >=2 distinct menu matrices AND spread >=3x:
+267 discs, 27.5 % of the library.** Worst spreads reach **127x** (NACHO_LIBRE_WS: 9
+distinct menu matrices, 12 hop-only stills).
+
+⚠ Lower bound: like `qmatrix_scan` it samples the head of each menu VOB, so a matrix
+appearing deeper is not counted.
+
+### 13c-ter. A two-route A/B is NOT a sound oracle -- recorded so it is not retried
+
+The obvious HW test ("reach the still by a hop, then by a crossing, compare") was built
+and **abandoned**. On Hulk's PGCN 14/VTS_1 it gives hop 1.560 / crossing 1.071, but on
+PGCN 14/VTS_6 the sign INVERTS (hop 1.071 / crossing 1.560). Both arms end
+`root -> submenu`; what differs is what ROOT itself inherited, so the sign depends on the
+disc's menu layout rather than on the route. The direction of the effect is not a
+property of hop-vs-crossing, and a sweep built on it would have produced confident
+nonsense.
+⚠ The prober that produced this also reported "not reproduced" on a disc reproduced by
+hand 8/8 -- a format bug (`sigma= 57.2` is PADDED, so splitting on '=' yielded an empty
+string and every measurement became None). It was caught ONLY because it was validated
+against a known positive first. Validate an instrument on a case whose answer you
+already know, before trusting it on cases you do not.
+
+### 13c-quater. ⛔ THE NACHO LIBRE "SECOND DISC" WAS RETRACTED (2026-09-15)
+
+**It was never a defect. Do not re-derive it.** NACHO_LIBRE_WS renders correctly on the
+current core; the maintainer confirmed it on the actual display. The claim that it was
+fried, and the whole "regression from `b900478`" story built on top of it, are WITHDRAWN.
+
+What the mistaken claim rested on, and why each part was worthless:
+
+* **Blockiness.** 0.785 on the board against 1.058 for the ffmpeg ground truth. That is
+  the metric saying the board was CLEANER, and it was read as a defect anyway. This disc's
+  menu art is a posterised screen-print whose strong OFF-grid edges swell the denominator,
+  so the number is meaningless here -- which was already written down in this file before
+  it was used to support the claim.
+* **High-frequency energy.** First computed over the FULL FRAME, which included the `O[2]`
+  debug blocks and the HUD -- i.e. it measured the harness's own overlay. Recomputed over
+  the picture body the board still reads high (72.5 vs 24.8 for v0.4.0), and that number
+  is STILL UNEXPLAINED -- plausibly capture timing (a menu mid-build) or an interlaced
+  weave in the capture. **An unexplained number is not evidence of a defect.**
+* **A visual read**, made after the maintainer had raised the possibility -- so it was
+  primed, not independent.
+
+★★ **The lesson, and it is the expensive one here: the maintainer's eye on the real
+display outranks a harness metric that has not been validated ON THAT CONTENT.** The
+maintainer flagged the risk in advance ("that menu has a lot of posterization styling that
+may read as 'fried' -- check with me on the screenshot before deciding"), and the right
+response was to treat every number from that disc as suspect until a same-content control
+existed. Instead the numbers were used to overturn the warning.
+
+⚠ Everything §13c-bis says about the severity metric and the 267-disc population still
+stands as OFFLINE analysis -- it predicts which discs COULD show a matrix substitution --
+but it now has **zero** confirmed discs in the authored-still class. Do not describe it as
+a sized defect population until one is confirmed.
+
+### 13c-quinquies-bis. ★ IT IS ONE DEFECT AFTER ALL -- v0.4.0 UN-FRIES THE HULK MENU
+
+⚠ Maintainer correction (2026-09-15): *"if I stay on the hulk menu for a bit in 0.4.0 it
+gets un-fried."* That is the **cold re-decode working**, and it is the same sentence the
+field used about Elmo -- *"on 0.4.0 the fried image flashes for a split second then
+resolves; on 0.5.0 it holds."*
+
+So Hulk is NOT a separate mechanism. It is fried AT THE LANDING on both versions; v0.4.0
+repairs it a moment later and the current core cannot. That collapses the three discs into
+one defect with one story:
+
+| disc | landing | on v0.4.0 | now |
+|---|---|---|---|
+| ELMO | `~keep_vbuf` CROSSING | fries, then resolves | **fixed by #92** |
+| NACHO_LIBRE | `keep_vbuf` menu hop | fries, then resolves | fries ~1 in 5, HOLDS |
+| INCREDIBLE_HULK | `keep_vbuf` menu hop | **fries, then resolves** | fries, HOLDS |
+
+⛔ **Two of my own claims are withdrawn by this.** (1) "Hulk is a second, unexplained
+mechanism" -- it is not; the §13b landing story covers it. (2) "The v0.4.0 mask could not
+reach Hulk because its cell is `still_time = 0` and the re-decode only ran on a parked
+still" -- wrong, and too literal: the reader also parks **heuristic** stills (timed /
+last-cell, PR fj#90), so a `still_time = 0` cell that holds its last frame parks and the
+re-decode reaches it. Do not re-derive the split from the `still_time` field alone.
+
+★ **What the "deterministic 8/8" on Hulk actually measured** is therefore not a different
+defect: once fried on a core with no mask, it HOLDS -- so every sample in a session reads
+fried. That also explains why both captures in the mistaken Nacho session read 2.53x
+including the "crossing" one. **Within one parked menu the state is sticky; the rate lives
+across LANDINGS, not across captures.** Any rate measurement must re-land, not re-shoot.
+
+### 13c-quinquies. What is actually confirmed
+
+**INCREDIBLE_HULK.iso, VTS_06 VTSM PGCN 14** fries on the current core and on v0.4.0 --
+but v0.4.0 UN-FRIES it a moment later (§13c-quinquies-bis), so "pre-existing" means the
+LANDING has always been wrong, not that the user ever had to look at it.
+
+⚠ Residual puzzle, worth keeping but no longer a separate defect: that cell is
+`still_time = 0` and all 14 sequence headers in the first 1500 sectors of its VTS_06 menu
+VOB carry a matrix download, so a MOVING menu should self-heal within a GOP. It parks as a
+heuristic still, so what is on screen is one held frame decoded at the landing -- which is
+consistent -- but the §13a route asymmetry (1.560 by hop vs 1.071 via a crossing) was
+measured in ONE session and, per §13c-quinquies-bis, a session's state is sticky. **Re-do
+that comparison across separate LANDINGS before treating the route asymmetry as real.**
+
+⚠ `tools/still_menu_scan.py` counts `still_time == 255` only, so it misses heuristic-still
+menus like this one and UNDER-counts the population.
+
+### 13c-sexies. Nacho Libre REINSTATED -- but as an INTERMITTENT case (2026-09-15)
+
+⚠ The retraction above was right on the evidence I had and wrong about the disc. The
+maintainer re-tested by launching the menu repeatedly: **4 clean, the 5th FRIED** -- so
+NACHO_LIBRE_WS *is* affected, at roughly **1 in 5 launches**. That is the same character
+as Elmo's original ~1 in 8, and it is why single captures were worthless: at those odds
+one shot each side of a version comparison is a coin toss, which is exactly how the
+"regression from b900478" story got built. **That story stays retracted** -- it rested on
+one sample per version.
+
+Characters, which are NOT the same and may not share a mechanism:
+
+| disc | rate | landing |
+|---|---|---|
+| ELMO | was ~1 in 8; **fixed by #92 and still fixed** | menu entry = a `~keep_vbuf` CROSSING |
+| NACHO_LIBRE | **~1 in 5** | menu hop, `still_time=255` |
+| INCREDIBLE_HULK | **deterministic, 8/8** | menu hop, `still_time=0` (not a still) |
+
+★ Intermittent vs deterministic is a real clue: an intermittent loss is
+FLUSH-POSITION dependent (where in the parse the cut lands -- the §7 sweep's shape),
+while a deterministic one is structural.
+
+**Instrument: `tools/fry_detect.py`** compares a board capture against **ffmpeg's decode
+of that menu's own bytes** -- a same-content reference, so it works where blockiness does
+not. Validated on Nacho: v0.4.0 capture 0.87x, a fried softscope capture 2.53x.
+⚠ Both of the softscope captures from the mistaken session read 2.53x, INCLUDING the one
+taken by the "crossing" route -- i.e. that whole session was a single fried instance and
+the route comparison in §13a measured nothing on this disc. Route conclusions need a rate,
+not a pair.
+
+### 13c-septies. BASELINE RATE, measured -- the number a fix must beat
+
+`NACHO_LIBRE_WS`, VTS_07 VTSM PGCN 13, current core (`dev-softscope`), **10 separate
+LANDINGS** (relaunch + navigate each time -- not 10 captures of one landing, which the
+sticky-state note above makes worthless), scored by `tools/fry_detect.py` against the
+ffmpeg ground truth:
+
+    2 / 10 FRIED   (2.51x, 2.51x)
+    8 / 10 clean   (0.87x x6, 0.75x x2)
+
+★ The distribution is **bimodal with nothing in between** -- a 2.9x gap between the clean
+and fried clusters -- and the fried captures are unambiguous by eye (blown highlights,
+flattened colour, blocky texture). So the instrument is trustworthy and so is the rate:
+**20 %, matching the maintainer's independent "4 clean, the 5th fried".**
+
+⚠ **Gate arithmetic for any fix.** At a 20 % baseline, a clean run of N landings happens
+by luck with probability 0.8^N: N=10 is 11 % (not evidence), **N=20 is 1.2 %**. So a fix
+arm needs **at least 20 landings** and the PRE-fix core must be run through the same
+script as the control -- the fried rate is low enough that a clean fix arm alone proves
+nothing (the same trap recorded for the #92 HW round).
+
+### 13c-octies. ⚠ `run_menu_junction.sh` EXITS FAIL BY DESIGN -- do not "fix" it
+
+It reports `[J1]: 0/7 truncation offsets lose the landing's matrix` and then
+`FAIL: [J1] reproduced nothing -- the mechanism is refuted`. **That refutation IS the
+recorded result of PR #96** (see the CLAUDE.md menu-slideshow bullet: the arms were
+"committed BEFORE the fix, as standing evidence"). The suite is a standing record that a
+contiguous-but-truncated junction does NOT lose the matrix; losing it needs the flush.
+
+It is provably unaffected by anything in the reader -- it compiles only
+`vld/getbits/rld/iquant/wrappers` and contains no reference to `dvd_iso_reader` -- so a
+reader change cannot move it. But because it exits non-zero, a future session running
+the full bench set will read it as a regression it caused. Treat a FAIL here as expected
+until someone converts it into an explicit "must not reproduce" arm.
+
+### 13d. The fix (implemented 2026-09-15, branch `fix/menu-hop-still-matrix`)
+
+⚠⚠ **THE CONSTRAINT IS A BALANCING ACT, and it is the maintainer's observation, not a
+theoretical worry:** *"there's a bit of a balancing act with these fry fixes, where moving
+too far to fix one may cause other issues (e.g. black screens on menu navigation in
+Scooby Doo)."* That is the whole history of this defect in one sentence --
+
+* #92 widened the decoder soft reset to every `~keep_vbuf` jump and fixed Elmo, and its
+  cost was a black cut on every title-domain screen transition (PR #98).
+* #98 narrowed it to menu/title CROSSINGS, which removed the black cut and kept Elmo
+  fixed -- confirmed by the maintainer over 20 launches.
+* Widening it again to cover `keep_vbuf` hops would put a black cut on **every menu button
+  press**, which is worse than the defect it fixes.
+
+So the fix must make the LANDING parse correctly without adding a visible discontinuity.
+The drain-gate direction (extend Phase B to user-activated menu hops so the landing meets
+a parser at a start-code boundary) satisfies that in principle -- it delays rather than
+blanks -- but it spends that delay on a USER action, where #96's natural transitions had
+slack. Measure the added latency on the rig before calling it a fix.
+⛔ NOT the cold re-decode (the mask, replays audio, #65). ⛔ NOT a wider `soft_flush`.
+
+**What was built.** `dvd/dvd_iso_reader.sv` gains a SECOND drain gate, `hop_drained`,
+selected per jump by a new `khop_l` latch (`menu_dom && target-is-a-menu` -- the same
+predicate `keep_vbuf` uses at `jump_go`, latched at the request because the gate must know
+before executing):
+
+```
+hop_quiet   = ~cache_has_data && ~blk_inflight && ~stream_valid && ~read_valid_pipe
+hop_drained = hop_quiet && (&hop_settle)          // same 255-cycle settle as nat_settle
+jump_go    &= (~khop_l || jnat_l || hop_drained || drain_wd_hit)
+```
+
+⚠⚠ **It deliberately omits `vbuf_empty`, and that is the whole reason it is a second gate
+rather than a reuse of `nat_drained`.** On a `keep_vbuf` hop the decoder's buffer is KEPT
+-- that is what makes the transition seamless -- so `nat_drained` would block until the
+decoder had played out the whole menu loop: SECONDS, on a button press. What the landing
+actually needs is only that the READER's own path is empty, so the demux is not cut
+mid-PES.
+
+★ **The latency worry above was MEASURED, not argued away.** `iso_reader_menudrain_tb`
+arm [D]'s user jump goes **378 -> 81600 cycles = 0.014 ms -> 3.0 ms** at 27 MHz.
+Imperceptible, and it is a DELAY rather than a blank, so it cannot reintroduce the black
+cut. `DRAIN_WD` still bounds it.
+
+**Gate: `iso_reader_menudrain_tb` arm [H]** -- at a `keep_vbuf` USER hop the reader's path
+must be empty, i.e. there was nothing left to discard. Proven RED against the pre-fix
+reader **with the new arm in place** (`reader path NOT empty at the hop`); note that
+stashing both the RTL and the bench makes the RED arm vacuous, which happened on the first
+attempt. Arm **[D]** is the other half of the contract and must keep passing: it runs to
+completion with `vbuf_empty = 0`, which is what proves the decoder is still not waited on.
+[A][B][C][G], `iso_reader_vm_tb` T1-T9, `flush_ctl_tb`, `run_dpad_seek`,
+`run_link_button`, `run_hli_window`, `run_mgl`, `run_scrub_tiers`, `run_title_span` and
+`run_seamless_audio` all unchanged and green.
+
+⚠ **Arm [H] first failed against the CORRECT fix.** It sampled at `jump_ack`, but
+`wr_ptr <= 0` lands with `jump_go` while `rd_ptr <= 0` only lands on the following cycle,
+so `cache_has_data = (0 != rd_ptr)` reads spuriously 1 there. It samples the cycle before
+the jump executes. **A measurement taken one cycle late fails a good fix** -- check the
+instrument before concluding the RTL is wrong.
+
+### 13e. ⛔ THAT FIX WAS REVERTED -- IT DEADLOCKS EVERY MENU (2026-09-15)
+
+Build `DVD_hopdrain_20260915_2329.rbf` went to the rig and the maintainer reported:
+*"the title menu button doesn't do anything, and select does nothing in the menus, so I
+can't get anywhere past the root menu"* -- on BOTH discs. Reverted the same day.
+
+**Two compounding errors, and the second is the fatal one.**
+
+1. `drain_tmr`'s enable is `vmw_pgc_pend || (jump_pending && jnat_l) ||
+   (seek_pending && snat_l)`. `khop_l` was never added to it, so `drain_wd_hit` can
+   never fire for a hop: the new wait had NO watchdog bound at all.
+2. ⛔⛔ **`hop_quiet` IS UNREACHABLE ON A LOOPING MENU.** It wants the reader's cache
+   empty and no block in flight -- but a looping menu streams CONTINUOUSLY, refilling
+   the cache as fast as it drains. The condition is essentially never true, so
+   `jump_go` never fires and the button is dead. Forever.
+
+★★ **WHY THE BENCH PASSED IT, and this is the reusable part: the fixture's cells END.**
+`iso_reader_menudrain_tb` plays a finite transition cell, so its cache does empty and arm
+[H] was satisfiable. A real menu LOOPS. That is `bench-that-cannot-fail` in a new
+costume -- not a stimulus that is too constant, but a fixture whose content TERMINATES
+where the real thing does not. **Any gate that waits for a reader-side quiescent state
+must be tested against a cell that never ends**, and `iso_reader_menudrain_tb` has no such
+arm. Add one before attempting this class of fix again.
+
+⚠ Arm [D] did not catch it either, although it is the "user jumps must not be gated" arm:
+it measured 81600 cycles against a 200000-cycle threshold and passed. The threshold was
+generous enough to hide a wait that is unbounded in reality.
+
+**So the fix direction in §13d is DEAD as stated.** A reader-side drain cannot work for a
+looping menu. What the landing needs is that the VLD is not left mid-picture -- and the
+reader cannot deliver that by waiting, because there is no quiet point to wait for. The
+next attempt should look at the DECODER side (a vld re-sync that is not a full soft reset,
+i.e. not the §9/§10 route that produced luma-in-chroma garbage) or at making the cut land
+on a pack boundary rather than wherever `wr_ptr <= 0` happens to fall.
+
+⚠ The `fry_detect.py` instrument, the 20 %/20-landing gate arithmetic (§13c-septies) and
+the population sweep all stand -- only the fix does not.
+
+### 13g. ⛔ A READER-SIDE DRAIN CANNOT WORK -- PROVEN IN SIM (2026-09-15)
+
+The §13e fix was rebuilt with the ordering libdvdnav uses (stop the source FIRST, then
+drain, bounded by the watchdog): a `hop_hold` that gates the `S_STREAM` read issue,
+`khop_l` added to `drain_tmr`'s enable, `hop_drained` excluding `vbuf_empty`. It passes
+arm [I]. **It still does not work, and now the bench says so without a hardware round.**
+
+New arm **[J]** stalls the sink COMPLETELY (`hard_stall`) -- what the decoder does on a
+parked or looping menu once the menu VBUF cap is reached -- and then presses a user menu
+hop. Result with the drain fix in place:
+
+    [J] released by the DRAIN WATCHDOG after 600006 cycles   (= DRAIN_WD exactly)
+
+On hardware `DRAIN_WD` is **60 s**, so that is a minute-long dead button: precisely the
+field report. ★ **With the sink stopped, the reader's cache cannot drain AT ALL** -- not
+because the reader refills it (the §13e diagnosis, which was only half right) but because
+nothing is taking bytes out. No amount of reader-side sequencing changes that.
+
+⚠ Note what [I] alone would have told you: the fix "works" there, in 180096 cycles. [I]
+uses the `slow` sink, which still accepts 64 cycles in 512, so the cache drains on its
+own. **A gate that waits is only testable against a sink that STOPS.** That is the third
+form of `bench-that-cannot-fail` this defect has produced -- after constant stimulus and
+after a fixture whose cells terminate, now a fixture whose consumer never stops.
+
+**Bench contract now, and the two arms are different in kind:**
+
+* **[I]** -- the OPEN DEFECT. On the shipping reader it prints
+  `the hop executed with the reader's path NOT drained -- bytes discarded` and a
+  `KNOWN OPEN` notice, so the suite stays a usable regression gate. Run
+  `+expect_fixed=1` to make it a hard failure: **the fix is done when that is green.**
+* **[J]** -- the REGRESSION GUARD, a hard failure ALWAYS. It is not describing the
+  defect; it is protecting against the fix that killed every menu button. Any future
+  attempt must keep it green.
+
+**Where that leaves the fix.** Waiting is dead (13g). The partial decoder re-syncs are
+HW-refuted (§9/§10). What is left:
+
+1. **Full soft reset on a `keep_vbuf` hop, with the black hidden** -- reuse the
+   HW-proven reset and stop the display going black through it (picbuf clears, so
+   `output_frame_valid` drops and the mixer emits black; that is what would have to be
+   held). Known-good mechanism, new display-side work.
+2. **Do not create the gap in the first place** -- rather than draining before the jump,
+   let the landing's bytes follow the undelivered ones CONTIGUOUSLY (no `wr_ptr <= 0`).
+   #96's [J1] measured contiguous truncation as safe, and §13 measured the gap as fatal
+   at 5000 B on Nacho's real cells. This neither waits nor resets.
+
+⛔ NOT the cold re-decode (the mask, replays audio, #65). ⛔ NOT a wider `soft_flush`
+without (1)'s display work.
+
+### 13h. THE FIX: don't create the gap (2026-09-15, `fix/menu-hop-still-matrix`)
+
+Waiting is dead (§13g) and the partial decoder re-syncs are HW-refuted (§9/§10). What is
+left is not to wait or reset, but to **not create the discontinuity in the first place**.
+
+`dvd/dvd_iso_reader.sv`: on a USER menu->menu hop the jump no longer clears the stream
+cache, so the landing's bytes follow the undelivered ones **contiguously**.
+
+```
+hop_keep_w = menu_dom && ~jnat_l && (jdom_l is a menu domain)
+jump_go:   if (!hop_keep_w) wr_ptr <= 0;   contig_l <= hop_keep_w;
+pipeline:  else if (start || seek_jump || (jump_ack && !contig_l) || seek_ack)
+```
+
+Why it is the right shape:
+
+* **Nothing waits**, so it cannot hang -- arm [J] (sink fully stalled) executes in
+  **6 cycles**, against DRAIN_WD (60 s) for the drain attempt.
+* **Nothing resets**, so there is no black cut -- the objection that killed widening
+  `soft_flush`.
+* It is what #96's `[J1]` already measured as SAFE: a contiguous-but-truncated junction
+  keeps its matrix at all seven offsets; *"losing the matrix needs the FLUSH."*
+* Cost: up to one cache (16 KB) of the source menu still plays after the press -- which
+  is what `keep_vbuf` exists to allow, and it is SMALL: a full cache is **16.4 ms** at the
+  8 Mbps DVD mux ceiling, **26 ms** at a typical 5 Mbps menu rate, **65 ms** at 2 Mbps,
+  and the bench's measured 10125 B is **~16 ms**. About one frame, so it should not read
+  as button lag. ⚠ If a user ever DOES report lag on a menu press, this is the term to
+  suspect and the number to check it against.
+
+⚠ **USER hops only (`~jnat_l`), and this was found by a failing arm, not by design.** A
+NATURAL menu verdict is already drained by #96, so its cache is empty and there is
+nothing to carry -- and arm **[A]** asserts the first byte after such a jump is the
+LANDING's. The first cut omitted `~jnat_l`, delivered the source's tail there instead,
+and [A] failed with `first byte = d1 (want e5)` and `LD=0`.
+
+**Gates.** Arm **[I]** re-expressed: the contract is **"nothing was discarded"**, not
+"the path drained" -- draining is unreachable with a stalled sink. It measures the BYTES:
+the source cell's cached data must keep arriving after the jump.
+
+    shipping reader   [I] source bytes after the hop: 0 (none) -- DISCARDED   FAIL
+    contiguous fix    [I] kept the cache: 10125 more source bytes delivered   ok
+
+with `[J]` green in both (6 cycles). `run_menudrain`, `run_mode_realign`,
+`run_dpad_seek`, `run_link_button`, `run_hli_window`, `run_mgl`, `run_scrub_tiers`,
+`run_title_span`, `run_seamless_audio` all green.
+
+⏳ **HW gate not yet run.** §13c-septies applies: 20 % baseline, so **20 landings** are
+needed (0.8^20 = 1.2 %), scored with `tools/fry_detect.py`. And watch the two failure
+modes the previous attempts produced: a **dead menu button** (arm [J]'s shape) and a
+**black flash** on menu navigation.
+
+### 13i. ⛔ THE CONTIGUOUS FIX DID NOT WORK EITHER -- and what that refutes
+
+Build `DVD_contighop_20260916_0214.rbf` on the rig (maintainer): **Nacho fried on the 2nd
+try, Hulk fried on the 1st.** Reverted.
+
+★ **The regression guard DID hold:** *"menu and select work again with no black screen."*
+Arm [J] did its job -- this attempt did not repeat §13e.
+
+**What it refutes, and this is the value of the round: the byte-level gap at the READER
+is not the mechanism.** The fix demonstrably achieved contiguity there -- arm [I]
+measured 10125 source bytes still delivered after the jump where the shipping reader
+delivers 0 -- and the stills fried anyway.
+
+★ **The likely reason, and it is checkable:** `ps_stream_fifo` and `ps_demux` sit on
+`pipe_rst_n`, which drops on EVERY jump, `keep_vbuf` included (`dvd/emu.sv:3093,3109`).
+So preserving the reader's cache does not preserve the STREAM: the 16-byte FIFO and the
+demux's partial-PES state are wiped downstream of the cache, re-creating the
+discontinuity in the bytes that actually reach the VBUF. The fix was applied one stage
+too early.
+
+⚠⚠ **THE REAL LESSON IS ABOUT THE GATES, NOT THE RTL. Every arm built for this defect so
+far measures a PROXY, and each proxy was satisfiable without fixing anything:**
+
+| arm | measures | satisfied by a non-fix? |
+|---|---|---|
+| [H] (reverted) | the reader's path is empty at the hop | yes -- §13e shipped and deadlocked |
+| [I] | source bytes not discarded at the reader | **yes -- §13i shipped and still fried** |
+| [J] | the hop does not hang | it is a guard, not a fix gate |
+
+None of them can see **the matrix the decoder ends up holding**, which is the actual
+defect. `quant_matrix_tb` CAN -- it scores the matrix against the disc -- but it is fed a
+hand-built byte stream, not the one the reader and demux really produce.
+
+**So the prerequisite for any further attempt is a gate that spans the whole chain:
+reader -> ps_stream_fifo -> ps_demux -> the decoder's matrix**, scoring
+`mismatches/64` and `downloads`, over a REAL menu-hop junction from one of the two
+confirmed discs. Until that exists, a green bench means nothing here -- three builds have
+now proved that empirically.
+
+⛔ Do not attempt another fix before that gate exists.
+
+### 13j. OPTION A step 1: the eaten-header DETECTOR works (2026-09-16)
+
+Maintainer constraint: **no unauthored black frames.** That rules out crossing
+semantics (§13d), anything that waits (§13g) and any partial decoder re-sync (§9/§10).
+Option A instead DETECTS the failing landing and repairs only that one, holding the
+previous frame meanwhile -- no black, and only the ~1-in-5 bad landings pay anything.
+
+Step 1 was to validate the detection ALONE, before any plumbing or build.
+
+`rtl/mpeg2/vld.v` gains two ports and one register:
+
+```
+input  hop_mark;    // the PARSE reached the junction
+output hdr_eaten;   // a picture header arrived with no sequence header since the mark
+```
+
+A still is `SEQ GOP PIC:I SEQ_END`, so its sequence header always precedes its one
+picture: a picture header reached while still awaiting one means the header was eaten.
+(Clear wins over set in the same cycle -- a header AT the junction is the landing's.)
+
+**MEASURED over the seven Nacho offsets (`NOFLUSH`, i.e. a real keep_vbuf hop):**
+
+| trunc | mismatches | downloads | **eaten** |
+|---|---|---|---|
+| 0, 8, 100, 300, 1000, 2600 | 0/64 | 2 | **0** |
+| **5000** | **63/64** | **1** | **1** |
+
+It tracks the defect exactly: fires on the one failing offset, silent on all six clean
+ones. No false positive, no false negative. ★ This is the first gate in this whole
+investigation that measures **the matrix the decoder ends up holding** rather than a
+reader-side proxy -- the three shipped fixes all passed proxies and failed on hardware.
+
+⚠⚠ **BUT THE MARK'S POSITION ACCURACY IS UNTESTED, AND THIS FIXTURE CANNOT TEST IT.**
+§13's plan asserted that `hop_mark` must ride the byte stream (the `vid_mark` /
+`pts_assoc` pattern) because a mark raised at JUMP TIME would clear on one of the old
+cell's own GOP headers still in the VBUF. A mutation was written to prove that --
+`+MARK_AT_FEED=1` raises the mark when the FEED reaches the junction instead of the
+PARSE, which is what a jump-time mark is -- and **it does not fail**:
+
+    MUTATION feed-time mark, trunc 100    eaten=0   (same as parse-time)
+    MUTATION feed-time mark, trunc 5000   eaten=1   (same as parse-time)
+
+The reason is the fixture, not the RTL: `quant_fixture --junction` trims cut A to its
+last sequence header plus two pictures (`hdrs_after_mark=1` in every arm), so feed and
+parse reach the junction within the same header. On hardware the kept VBUF holds ~1 s of
+the old menu -- many GOPs, each with its own sequence header -- which is exactly the gap
+the mutation was meant to open.
+
+**So: detection is proven; the MARK is not.** The `pts_assoc`-style plumbing is still
+required by the argument above, but **this bench will not catch it if it is wrong**, and
+a wrong mark fails in the worst way -- `hdr_eaten` on a CLEAN landing triggers a
+re-stream that was not needed. Before step 2 ships, either extend the fixture to carry
+several old GOPs after the mark point (so `hdrs_after_mark > 1` and the mutation bites),
+or gate the mark in `pts_chain_tb`, which already models the VBUF depth.
+
+⏳ Not built: the consumer (drop the picture, re-stream the still cell, suppress its
+audio per issue #65). No RTL outside `vld.v` changed; no build made.
+
+### 13k. THE MARK CANNOT BE VALIDATED IN SIM TODAY -- measured, twice (2026-09-16)
+
+§13j left one thing unproven: that `hop_mark` must fire when the PARSE reaches the
+junction, not when the jump happens. The argument is that the kept VBUF holds ~1 s of the
+OLD menu -- many GOPs, each with its own sequence header -- so a jump-time mark clears on
+one of those and misses the landing. Two benches were tried as the gate. **Neither can
+produce the gap, and the reason is the same in both: nothing throttles the decoder, so
+the VBUF never accumulates.**
+
+| bench | feed-to-parse separation | why |
+|---|---|---|
+| `quant_matrix_tb` | **16 bytes** (measured, `feed_lead_bytes`) | the feed is backpressured by `getbits_fifo`; extending cut A cannot change it |
+| `pts_chain_tb` | **0 bytes** (measured) | it carries the REAL VBUF path, but the vld consumes as fast as it is fed |
+
+★ So the `+MARK_AT_FEED=1` mutation passing in §13j was **not** evidence that position
+accuracy is unnecessary -- it is evidence that the fixture is blind to the question.
+⚠ **Extending the fixture, which was the obvious next move, is provably futile**: the
+coupling is BACKPRESSURE, not content.
+
+`pts_chain_tb` *could* be made to show it -- its `getbits_fifo.motcomp_busy` is tied
+`1'b0`, and driving it stalls the vld so the VBUF fills. That was attempted and is NOT
+committed: gating the stall on "wait until the VBUF lead reaches 32 KB" did not converge
+within ~35 minutes of simulation and risks an unbounded stall, which would poison a suite
+other work depends on. A bounded form (stall for a fixed number of cycles, then measure
+whatever lead was achieved, and FAIL if it is under some threshold rather than waiting
+for one) is the shape to try.
+
+### 13k-bis. ✅ RESOLVED -- the bounded stall works, and the mark IS load-bearing
+
+The bounded form landed. `pts_chain_tb`'s `getbits_fifo.motcomp_busy` is now driven for a
+FIXED window (`MC_STALL_START`/`MC_STALL_LEN`), so the vld is held off while the feed
+keeps filling the real VBUF path. MEASURED:
+
+    [M] VBUF lead: 226902 B at the arm, 342669 B peak
+    PASS: pts_chain_tb — pre-flush 8 pictures + 2 marks exact; post-flush 19 pictures
+          + 2 marks agree (origin +0 B); 9 stale responses crossed the flush, none
+          delivered; 3 tags all golden
+    == ALL GREEN ==   (and the RED arm still failed as it must, 3 FAIL lines)
+
+★★ **So a feed-time (jump-time) `hop_mark` is wrong by ~227 KB of stream** -- many GOPs,
+each carrying its own sequence header. The §13j argument was right and is now a
+measurement rather than an argument: **the mark must be position-accurate.**
+
+★ It also confirms §13k's diagnosis of the earlier blindness: the same bench measured a
+**0 B** separation before, and the only change is that the decoder is now throttled. The
+fixture was never too small -- its consumer was never stopped.
+
+⚠ The arm refuses to pass on a lead under 1 KB (`VACUOUS`), so if a future change removes
+the throttle it says so instead of silently going blind again. And the stall is bounded by
+construction: a fixed cycle window, never "stall until the lead reaches N" -- that form
+did not converge in ~35 min and risked poisoning a suite other work depends on.
+
+**Status of option A: step 1 (detection) proven, step 1b (the mark) now has a working
+gate, and the remaining work is the consumer.** A wrong mark fails in the dangerous
+direction -- `hdr_eaten` on a CLEAN landing triggers an unnecessary re-stream -- so this
+is not a step to skip.
+
+⛔ **And the general rule this defect keeps teaching, now four times over:** every
+instrument built for it has been blind in a way that only showed up when something
+downstream failed. Constant stimulus, a fixture whose cells terminate, a consumer that
+never stops, and now a consumer that is never throttled. **Before trusting any bench
+here, ask what the REAL system does continuously that the fixture never does.**
+
+### 13l. OPTION A step 2: the consumer (2026-09-16, `fix/menu-hop-still-matrix`)
+
+Detection was step 1 (§13j) and the position-accurate mark was step 1b (§13k-bis). This is
+what the core now DOES with the verdict, and it is the first part that changes behaviour on
+the board.
+
+**The constraint that shapes all of it:** *"I want no black frames that aren't authored."*
+Every earlier attempt at this defect either flushed (a black frame) or did nothing. This
+route does neither: the fried picture is **dropped**, so the display HOLDS the outgoing
+menu, and the cell is handed over again with **no flush at all**.
+
+#### The chain, end to end
+
+| where | what |
+|---|---|
+| `dvd/emu.sv` | `hop_arm` marks the FIRST video byte `ps_demux` emits after a `keep_vbuf` hop. Both `ps_stream_fifo` and `ps_demux` are on `pipe_rst_n`, which `load_flush` pulses there, so everything they held is discarded and that byte IS the landing's first. |
+| `dvd/vidfeed_cdc.sv` | carries 10 bits instead of 9 (`parameter W`, default 9 so `vidfeed_cdc_tb` keeps the original contract). |
+| `rtl/mpeg2/mpeg2video.v` | stamps the marked byte's VBUF position with the same `dvd/vbuf_pos.sv` the PTS chain uses, and pulses `hop_mark` when getbits' `bitpos` reaches it. |
+| `rtl/mpeg2/vld.v` | `hdr_eaten` (§13j) plus `eaten_now_comb` -- the same condition taken combinationally, so the existing header-time suppression legs drop that picture. |
+| `dvd/emu.sv` | `hdr_eaten` crosses back on the `wd_tgl` toggle pattern; `hop_tries` allows a BOUNDED number of repairs per hop (§13n). |
+| `dvd/dvd_iso_reader.sv` | `restream_pulse` -> `restream_go`: `vm_replay`'s restart, reached from `S_STREAM`/`S_STILL`/`S_VM_WAIT`. `restreaming` is the level emu suppresses audio with. |
+| `dvd/audio_ring.sv` | `drop_hold`, a LEVEL. |
+
+#### Three design points worth not re-deriving
+
+★ **The compare is a MODULAR DIFFERENCE, not a `>=`.** Both positions are 24-bit bytes (the
+width `pts_assoc` already uses) and a menu session streams far more than 16 MB, so a raw
+`>=` fires the instant the counter wraps past the mark -- a false junction every 16 MB on a
+looping menu. `pts_assoc`'s `d = a - b; !d[PW-1]` idiom is the right one and was already
+in the file.
+
+⛔ **The re-stream pulses NO ack.** `jump_ack`/`seek_ack` put emu on the flush contract:
+`load_flush` at minimum -- which resets `ps_demux` and `nav_pci`, taking the highlight with
+it -- and a VBUF flush whenever `keep_vbuf` is not set, which is a black frame at exactly
+the moment the picture is meant to be repaired. `iso_reader_menudrain_tb` arm [K] asserts
+the absence of both, and mutation M2 (pulse `seek_ack` on the restart) is caught by that
+line alone.
+
+★ **`drop_hold` is a LEVEL because `drop_pulse` is a four-frame BUDGET.** A re-delivery is
+however long the cell is, and a still's narration playing twice is issue #65 -- the reason
+the previous attempt at this repair (the v0.4.0 cold re-decode) was removed. `restreaming`
+releases when the READER settles, but the last bytes are still walking
+`ps_stream_fifo -> ps_demux`, so emu extends it ~0.19 s. Arm [K] MEASURES that remainder:
+**4036 of 4050 re-delivered bytes arrive under the level, 14 after it.** If that number ever
+grows past the tail window, the tail is too short -- it is a measurement, not a guess.
+
+#### Two bounds, because this route's failure modes are a wedge and silence
+
+- `hop_tries` (emu): a BOUNDED repair budget per hop, cleared at the next hop. ⚠ It was ONE,
+  and §13n records why one is wrong: if the re-streamed copy is also eaten, a single shot
+  leaves the menu fried until the user navigates away. The BOUND is what stops a runaway,
+  not the count.
+- `RESTREAM_WD` (reader, ~1.5 s): `restreaming` expires on its own. The failure this level
+  can cause is SILENCE, so it must not be able to outlive its cell.
+
+#### What is gated, and -- more importantly -- what is NOT
+
+Gated:
+
+- **`iso_reader_menudrain_tb` [K]** -- the real reader + `ps_stream_fifo` + `ps_demux`,
+  scoring the landing still's tag at `ps_demux`'s VIDEO output (what the decoder receives),
+  plus the absence of both acks. 4 mutations: M1 (never latch the request), M2 (pulse
+  `seek_ack`), M3 (never raise the level) are each caught by their own assertion. **M4
+  (clear the stream cache on the restart) is NOT caught**, and the reader's comment says so
+  rather than claiming the choice is load-bearing: by the time a landing still reports
+  eaten, the reader has parked and the cache is empty anyway.
+- **`audio_ring_drop_tb` T3/T4** -- 12 frames, three times `drop_pulse`'s budget, commit
+  nothing under the hold; committing resumes when it drops. ★ The `has_space` term
+  `drop_hold` was first written into was **DELETED**: no mutation could catch it, and
+  measured on its own it is strictly WEAKER than the `cur_dropping` leg (11 of 12 dropped
+  rather than 12 -- it lets the frame that was already open when the level rose commit,
+  which is precisely the truncated splice frame).
+
+#### ★★ Arm [8]: the drop IS gated, and the fixture reproduces the mechanism
+
+`seek_realign_tb` already instantiates the real `vld` + `getbits` + `motcomp_picbuf` over a
+real **menu still** as the landing (`hp_still_i.hex`), and it turns out that fixture
+**loses the landing's sequence header for real**. Measured, printed by the arm every run:
+
+    SEQ entries total=1 post-flush=0 | PIC entries total=5 post-flush=1
+    sequence_header_seen at flush=1 | post-flush slices=0
+
+The still's ONE sequence header is never parsed; its picture header is accepted anyway
+because `sequence_header_seen` survived the flush. **That is §13's mechanism, in full.**
+⚠ Read the scope exactly: this is the pre-#92 **FLUSHING** path — the bench drives
+`vbuf_flush` into the vld and does not model the soft reset #92 added — so it shows the
+behaviour that fix prevents. What it establishes is that the SHAPE is reachable and the
+consumer can be tested against it; the `keep_vbuf` hop, which has no soft reset on any
+build, is the live case.
+
+So arm [8] raises `hop_mark` at the flush (where the parse front really does reach the
+junction), nothing clears it, and the landing reports eaten. It asserts:
+
+| | |
+|---|---|
+| `eaten_n == 1` | the arm actually staged it |
+| `upds_b == 0` | picbuf never rotated for that picture — no fried frame displayed |
+| `post-flush slices == 0` | ...and it was not DECODED either |
+| `emits > 0`, run completes | the display is **holding**, not blanked, and not wedged |
+
+★★ **The load-bearing assertion is the run completing, and it needs no new machinery:**
+`motcomp` freezes the vld at EVERY picture header until picbuf processes the update, and
+this arm suppresses that update for a still's only picture — so "does picbuf release the
+freeze anyway" is the real question, and a wedge shows up as the bench's existing run
+watchdog. **Dropping an I has never been done before this change** (the re-align rule
+deliberately keeps them — arm [7] is that refusal made executable).
+
+★ **The slice assertion exists because a mutation survived without it.** Removing
+`eaten_now_comb` from `drop_this_picture` while leaving it in `update_picture_buffers`
+passed every other check — but it leaves the slices decoding into `current_frame`, a slot
+nobody rotated and the display may be scanning out. That is exactly the `motcomp_picbuf`
+slot-alias defect, and it also un-suppresses `flags_commit` (the round-11 stale-flags bug).
+Mutations E1/E2/E3 are each caught by their own assertion.
+
+⚠⚠ **And the ports were FLOATING.** `seek_realign_tb` instantiated the real `vld` with
+`hop_mark`/`hdr_eaten` unconnected — an undriven input on the DUT, the exact shape that
+makes a green bench meaningless ([[new-rtl-port-floats-z-in-benches]]). It passed only
+because Icarus treats `if (1'bz)` as false. Connected now.
+
+⚠ **NOT gated, and this is the honest statement of where the route stands: nothing in sim
+exercises `hdr_eaten` firing on a `keep_vbuf` hop, which is the live case.** `quant_matrix_tb` can raise the mark
+only in its `noflush` arm -- the arm that models a `keep_vbuf` hop -- and there the parser
+resyncs cleanly before the landing's sequence header, so `eaten=0`. That is the same
+finding `run_menu_junction.sh` recorded: **a contiguous junction does not lose the matrix in
+sim.** The flush arms cannot raise the mark at all, because the flush breaks the position
+coordinate the mark lives in (§13k).
+
+So the mechanism is reproduced and the CONSUMER is gated, but the claim that it is what
+happens on a **`keep_vbuf` hop** -- the case Hulk and Nacho actually hit -- is still a
+hypothesis only the board can test.
+
+★★ **Which is why `O[2]` block 14 exists, and it is the most important part of this
+change.** Second row, x 88..104 — ⚠ SUPERSEDED by the three-way split in §13n, which
+reports the detector, the reader's action and a second eat separately.
+
+| on the rig | means |
+|---|---|
+| still fried, block 14 **GREEN** | the mechanism is right and the repair is not enough -- tune it |
+| still fried, block 14 **RED** | **the eaten header is NOT the mechanism.** Stop tuning this route |
+| still clean, block 14 GREEN | it fired and it worked |
+| still clean, block 14 RED | it never fired; this hop was not the defect (the rate is ~1 in 5 on Nacho -- take several) |
+
+A probe that can say *nothing real happened* is worth more here than another arm that
+passes, and this defect has now produced four instruments that were blind
+(§13k-bis). ⚠ `O[2]` also needs `menus_on` for that row to draw.
+
+### 13m. ✅ HW ROUND 1: THE MECHANISM IS CONFIRMED -- AND THE REPAIR WAS SCOPED WRONG (2026-09-16)
+
+Build `DVD_hoprestream_20260916_1438.rbf` (SEED 9, clk_dec 91.07/92.52), maintainer's rig.
+
+**✅ THE FRIED STILLS ARE GONE. 20+ launches across Hulk, Elmo and Nacho, not one fried
+image.** Against a measured baseline of ~1 in 5 on Nacho and a reproducible fry on Hulk,
+that settles §13's open question: **the eaten sequence header IS the mechanism**, the
+position-accurate mark finds it, and dropping the picture + re-streaming the cell repairs
+it with no black frame. The hypothesis §13l said only the board could test has been tested.
+
+**⛔ AND EVERY MOTION MENU GOT WORSE.** Reported, all four on the same build:
+
+- menus sluggish, not snappy after a button press
+- highlights appearing EARLY, ahead of the content
+- transitions "decoding into each other" -- macroblocking as one scene becomes the next
+- **MiB: a menu transition starts playing, artifacts, then RESTARTS the animation**
+
+★★ **The last one is the diagnosis, and it is not a bug in the repair -- it is the repair
+firing where nothing was broken.** MiB's root menu is a LOOPING MOTION menu, so every loop
+is a `keep_vbuf` transition: mark → the junction eats that landing's header the same way →
+`hdr_eaten` → **re-stream**, which re-delivers the cell from its first byte. "Starts,
+artifacts, restarts" is that, exactly.
+
+★★★ **AND §11 HAD ALREADY WRITTEN DOWN WHY ONLY STILLS CAN BE DAMAGED:**
+
+> a moving title re-sends a sequence header every GOP; a menu still is
+> `SEQ GOP PIC:I SEQ_END`, **one sequence header ever**.
+
+A motion landing that loses its header heals itself at the next GOP, a fraction of a second
+later and invisibly. Repairing it costs a visible restart and buys nothing. **The sentence
+explaining the whole defect was in the file, and the repair was still applied to every
+landing.** ⚠ Same class as #92's own scope error (`~keep_vbuf` is a DOMAIN fact, not a
+transition-kind fact) and issue #81 (*a menu CONTEXT is not a menu DOMAIN*): **a predicate
+reasoned about from the case it was written for rather than derived from what it selects.**
+Third time. The habit that catches it is to ask *what else does this fire on*, in writing,
+before the build.
+
+★ **Scooby-Doo 2's minigame was unaffected, and that is a free confirmation of the
+producer's gating:** `aud_drop_pulse` requires `keep_vbuf`, which is `menu_dom`-gated, so
+the mark never arms in the title domain at all. The interactive disc never entered this
+code path.
+
+#### The fix: gate the MARK, not the re-stream
+
+New reader output **`cell_is_still`** -- an authored `still_time`, or the playback-time
+heuristic that covers stills authored with `still_time == 0` (the same two the `S_STREAM`
+park branch already uses). It is valid from `S_CELL_LOAD2`, i.e. **before that cell's first
+byte is ever delivered**, which is precisely when the mark would go out. `emu` gates
+`ps_hop_mark` on it.
+
+★ **Gating the MARK rather than the re-stream is what makes this complete:** with no mark
+there is no detection, no DROP and no re-stream. That matters because the drop was a second
+contributor to the macroblocking on its own -- dropping the I at the head of a motion GOP
+leaves the following P/B pictures predicting from the outgoing scene, which is the issue #45
+shape. Gating only `restream_go` would have left that half in place.
+
+⚠ **The arm is still SPENT on the first byte either way** (`hop_spend` ignores
+`cell_is_still`); only the mark is withheld. Otherwise a withheld arm would drift onto a
+later cell in the same PGC that happened to be a still, and mark a junction that is not one.
+
+#### Gates
+
+- **`iso_reader_menudrain_tb` arm [L]** -- the reader's verdict over a real cell walk:
+  `cell_is_still` reads **0** deep inside the 12-sector MOTION transition cell and **1**
+  parked on the landing still. ⚠ Sampled MID-CELL: the reader runs ~2 sectors ahead of what
+  `ps_demux` has emitted (the phasing trap this bench already records), so a sample at a
+  cell edge reads the NEXT cell's meta and proves nothing.
+- **`tools/check_hop_mark_wiring.py`** -- because the gate itself lives in `emu.sv`, which
+  has **no bench**. Reads the connection out of the file (the `check_subp_map_wiring.py`
+  pattern); RED on the ungated `assign`, on the reader port tied off, and on `1'b1`.
+  Runs from `run_menudrain.sh` in milliseconds.
+
+⚠ Arm [K] (the re-stream itself) and `seek_realign_tb` arm [8] (the drop) are unchanged and
+still pass -- this narrows WHEN the machinery arms, not what it does once armed.
+
+### 13n. HW ROUND 2: motion menus repaired, Hulk residual 1-in-5 (2026-09-16)
+
+Build `DVD_hoprestream_20260916_1513.rbf` (the still-scoped repair), maintainer's rig:
+
+- ✅ **highlights, snappiness and MiB all good** — the §13m scope fix landed; the four
+  motion-menu regressions are gone.
+- ✅ **Elmo and Nacho: 20 launches each, never fried.**
+- ⛔ **Hulk: one fried image on the 5th try.**
+
+#### What the disc says, so this is not re-derived from theory
+
+Measured with `iso_nav_check.py` on the real image — VTS_06 VTSM:
+
+    PGCN 14: cell 0  still=0   cell_cmd=1 (LinkCN 1)  pbtime=70s   <- looping MOTION clip
+             post[10]: LinkPGCN 15
+    PGCN 15: cell 0  still=255 cell_cmd=0  RBN 26878..26991        <- the landing, 114 sectors
+
+So **the landing IS an explicit `still=255`** and `cell_is_still` marks it: §13m's scoping is
+not what is failing here. And PGCN 14 loops its clip, so the transition is reached by a
+BUTTON — a USER hop, `jnat_l = 0`, no tail drain. That is the junction `iso_reader_menudrain_tb`
+arm **[I]** records as KNOWN OPEN and arm **[J]** proved no reader-side drain can close (with
+the sink stalled the cache cannot drain at all). Up to 16 KB the reader never delivered is
+discarded at `wr_ptr <= 0`, so this junction carries a byte-level CUT on top of everything else.
+
+#### ⛔ Three candidates remain and NONE can be separated from here
+
+1. the detector never fired on that run — the header was not eaten and the fry has another cause;
+2. it fired but the reader refused to re-stream (its state gate);
+3. it fired, the cell was re-streamed, and **the re-streamed copy was eaten too** — which the
+   ONE-shot budget could not repair, leaving the menu fried until the user navigates away,
+   i.e. exactly the reported symptom.
+
+★ **Guessing further is the `theory-vs-premise` trap.** The probe exists for this; it just
+could not tell these apart, because one bit conflated "requested" with "happened".
+
+#### Two things the disc settles, so the next session does not re-derive them
+
+**(1) `cell_is_still` misses NOTHING on this disc.** Every cell of VTS_06's VTSM, from the
+same walk:
+
+| PGCN | still | marked? |
+|---|---|---|
+| 4 (Chapter menu) cells 0-4 | `255` explicit | ✅ |
+| 10, 11, 12 | 0, playtimes 30/39/3 s | — (motion) |
+| 13 | 0 but **HELD 41 s (HEURISTIC)** | ✅ via the heuristic bit |
+| 14, 16 | 0, 70 s, `LinkCN 1` loops | — (motion, correctly excluded) |
+| 15, 17 | `255` explicit | ✅ |
+
+So **"the gate missed the landing" is eliminated** — seven explicit stills and one heuristic,
+all marked; the only unmarked cells are genuine motion clips. ★ This is also why including
+the heuristic bit in `cell_is_still` was not optional: PGCN 13 is a still with
+`still_time == 0` and nothing else would have caught it.
+
+**(2) PGCN 14's clip ENDS with a `sequence_end_code`** — `tools/quant_fixture.py --junction`
+refuses to build a fixture from it for exactly that reason (*"cut A contains a
+sequence_end_code -- it would resync the parser for free and the junction would prove
+nothing"*). ⚠ That is a fact about the clip's END, and the real transition is a BUTTON press
+landing anywhere in a 70 s loop, i.e. almost always mid-picture. It does mean an offline
+junction fixture for this disc cannot be built with the tool as it stands: the cut would have
+to be taken MID-clip, which `--tail-pics`/`--trunc` cannot express (both work from the end).
+That is why this round goes to the rig rather than to a bench.
+
+#### The round's two changes
+
+**(1) `O[2]` row 2 splits three ways** (cleared at every `keep_vbuf` hop):
+
+| block | x | GREEN means |
+|---|---|---|
+| 14 | 88..103 | the DETECTOR fired (`hdr_eaten` ≥ 1) |
+| 15 | 108..123 | the READER re-streamed (`restreaming` asserted) |
+| 16 | 128..143 | it was eaten AGAIN after a repair (`hdr_eaten` ≥ 2) |
+
+and a still that is still fried reads directly:
+
+| reading | conclusion |
+|---|---|
+| 14 RED | the eaten header is **not** the mechanism there — stop tuning this route |
+| 14 GREEN, 15 RED | detected, but the reader's state gate refused — fix `restream_go` |
+| 14 + 15 GREEN, 16 RED | the re-stream is not sufficient — the repair itself is wrong |
+| 16 GREEN | it was double-eaten, and the retry below is the fix |
+
+**(2) `hop_tries`: the one-shot budget becomes a bounded 4.** ⚠ This is a real behavioural
+delta, taken deliberately rather than waiting a round, because **one is wrong independently
+of which candidate is true**: a single shot means any damaged repair leaves the menu fried
+for as long as the user stays on it, and that is the symptom. **The BOUND is what prevents a
+runaway, not the count** — and each attempt is separately bounded by the reader's
+`RESTREAM_WD`. Block 16 keeps the reading unambiguous either way: if Hulk comes back clean
+with 16 GREEN, the double-eat was the cause and is now measured rather than assumed.
+
+### 13o. ★★★ `still_time` IS NOT A PROPERTY OF THE STREAM -- HW ROUND 3 (2026-09-16)
+
+The §13m build's probe answered in one reading. On a fried Hulk still, `O[2]` row 2 read
+**`R R G G R R R`**:
+
+| block | signal | reading |
+|---|---|---|
+| 5 | `vbuf_deep` | R |
+| 6 | **`still_active`** | **R -- the reader is NOT parked on a still** |
+| 7 | `hl_on_w` | G |
+| 8 | recolour fired | G |
+| 14 | **detector fired** | **R -- no eaten header was detected** |
+| 15 | reader re-streamed | R |
+| 16 | eaten again | R |
+
+★ And the comparison that settles it was already in hand: **round 1, which repaired EVERY
+landing, left Hulk clean over 20+ runs.** Scoping to `cell_is_still` brought the fry back. So
+the fried landing is one the gate excludes.
+
+#### The measurement
+
+`tools/menu_seq_census.py` counts start codes per menu cell straight out of the image:
+
+    cell                        ES bytes  SEQ b3  GOP b8  PIC 00  END b7
+    PGCN10 loop 30s              5510099      22      22     231       0
+    PGCN11 39s                   5537891      26      26     220       0
+    PGCN12 3s                    1975764      11      11      96       0
+    PGCN13 heur-still 41s         224757       1       1       1       1
+    PGCN14 loop 70s               224701       1       1       1       1   <-- !!
+    PGCN15 STILL 255              224615       1       1       1       1
+    PGCN16 loop 70s               224587       1       1       1       1   <-- !!
+    PGCN17 STILL 255              224542       1       1       1       1
+
+**PGCN 14 and 16 declare `still_time = 0` with a 70 s playback time and are
+`SEQ GOP PIC:I SEQ_END` -- one picture plus 70 s of audio, looped by a cell command.** The
+disc implements a 70-second still by looping a single-picture cell instead of setting
+`still_time`. They fry exactly like a declared still, and no metadata says so.
+
+★★★ **So §11's rule was right about the STREAM and I bound it to the wrong predicate.**
+`still_time` is a number the AUTHORING TOOL wrote -- the `progressive_frame` failure class,
+which this project has now hit with `closed_gop`, the IFO channel count, the declared angle
+menus, and here. ⚠ **Ask whether a field is a MEASUREMENT or a CLAIM before gating on it.**
+
+★★ **Field observation that confirms it independently:** *"the fried image goes away when the
+menu audio loops."* The cell's own `LinkCN 1` loop re-delivers those bytes from the top into
+a parser that is now clean -- **the disc performs the same repair, 70 seconds late.** That
+also pins the fried cell to 14/16 rather than 15/17.
+
+#### The fix: ask the STREAM, not the IFO
+
+The verdict moves into the vld, where it is a measurement:
+
+| | |
+|---|---|
+| `hdr_eaten` | a picture was decoded with an eaten header — the DETECTOR, unchanged |
+| **`hdr_orphan`** | ...then a `sequence_end_code` with NO header in between = this cell carries one header for its whole length and **nothing will ever heal it**. The REPAIR trigger. |
+| **`hdr_healed`** | ...then a sequence header = the next GOP fixed it for free. Do nothing. |
+
+★ **A genuinely moving menu therefore stops triggering BY CONSTRUCTION rather than by a
+gate** — which is what the round-2 regressions actually needed, and it needs no metadata and
+no timer to tune.
+
+⚠ `cell_is_still` is KEPT, but now gates only the **DROP** (`mpeg2video.drop_eaten_en`):
+dropping an anchor is the one genuinely new behaviour here, so it stays restricted to cells
+the disc itself calls stills. Elsewhere the fried picture is shown until the repair lands —
+the v0.4.0 "flashes then resolves" behaviour, which is better than leaving an anchor-less GOP
+to macroblock.
+
+#### Gates
+
+- **`seek_realign_tb` [8]** — the one-header landing: `eaten=1 orphan=1 healed=0`, dropped,
+  not decoded, run completes.
+- **`seek_realign_tb` [8m]** — ★ **the round-2 regression made executable.** The same eaten
+  header on a MOVING landing (a multi-GOP cut B): `eaten=1 healed=1 orphan=0`, so the repair
+  is never requested. ⚠ The mark has to be placed AFTER that fixture's own sequence header —
+  measured, `SEQ post-flush = 2`, so a mark at the flush is simply cleared and the arm would
+  stage nothing.
+- 3 mutations, each caught by the arm that names the real failure: orphan at the eaten header
+  instead of at the sequence end (→ [8m] reports the regression verbatim), a heal that does
+  not clear the pending verdict (→ [8m]), and never setting it (→ [8]).
+- **`tools/check_hop_mark_wiring.py`** now guards BOTH seams — `cell_is_still` →
+  `drop_eaten_en`, and `hop_restream` keying on the orphan verdict rather than the raw
+  detector. RED on all three re-regressions.
+
+### 13p. ✅ HW ROUND 4 -- the stream-measured verdict works (2026-09-16)
+
+Build `DVD_hoprestream_20260916_1738.rbf` (SEED 9, clk_dec 92.03/92.82), maintainer's rig:
+
+- ✅ **Hulk settles on the correct image.** PGCN 14/16 are now detected by their STREAM shape
+  rather than their metadata, so the repair lands in a fraction of a second instead of the
+  ~70 s the disc's own cell loop took.
+- ✅ **The other menus remain un-fried**, and **motion feels good** -- the round-2 regressions
+  stay fixed, which is the `hdr_healed` cancel working by construction rather than by a gate.
+
+⏳ **NOT merged: broader maintainer testing in progress.** Branch `fix/menu-hop-still-matrix`,
+unpushed.
+
+#### ⚠ Accepted residual, reported and deliberate: Hulk FLASHES fried before it settles
+
+*"the fried flash does happen on hulk but it does settle on the correct image."* That is the
+v0.4.0 behaviour and it is by design here: the **DROP** still keys on `cell_is_still`, which
+reads 0 for PGCN 14/16 precisely because those cells lie about `still_time` (§13o). So the
+fried picture is displayed until the re-stream lands, rather than held.
+
+★ **The remedy is known and small -- gate the drop on the ORPHAN verdict too** -- and it was
+deliberately NOT taken in this round. The orphan verdict is only available at the cell's
+`sequence_end_code`, i.e. AFTER the picture has been decoded and displayed, so using it to
+drop means dropping on evidence that arrives too late for that picture; it would only help
+the NEXT visit. Dropping an anchor on a cell the disc does not declare a still is also the
+riskiest half of this whole change (it has never been done -- `seek_realign_tb` arm [7] exists
+to forbid the re-align rule from doing it). ⚠ If the flash is ever judged worth removing, the
+honest options are: remember the orphan verdict per cell and drop on the SECOND visit, or
+widen `cell_is_still` with a measured stream property -- not simply tying `drop_eaten_en` high.
+
+### 13f. WHAT A REAL PLAYER DOES -- asked of the oracle, not reasoned about
+
+libdvdnav is the independent oracle for this project (docs/dvd_vm.md, the POST-only PGC
+bug). Asked directly, it has **two** protections at this junction and we have neither on a
+`keep_vbuf` hop.
+
+**(1) The NAVIGATOR raises a sync point, at exactly our case.** `libdvdnav/src/dvdnav.c:869`:
+
+```c
+/* we are about to leave a cell, so a lot of state changes could occur;
+ * under certain conditions, the application should get in sync with us before this,
+ * otherwise it might show stills or menus too shortly */
+if ((this->position_current.still || this->pci.hli.hl_gi.hli_ss) && !this->sync_wait_skip)
+    this->sync_wait = 1;                       /* -> DVDNAV_WAIT */
+```
+
+`still || hli_ss` is "a still, or a cell carrying menu buttons" -- the exact population
+§13c-bis sizes. MEASURED with a new tracer, `tools/dvd_trace/trace_wait.c` (a fork of
+trace_nav that REPORTS the wait instead of swallowing it):
+
+| disc | DVDNAV_WAITs | where |
+|---|---|---|
+| INCREDIBLE_HULK | 7 | VTSM/VMGM menu PGCs incl. `vts=6 pgc=10` (x2), `pgc=15` |
+| NACHO_LIBRE_WS | 3 | incl. `vts=7 pgc=10` (x2) -- VTS_07 is the menu set that fries |
+
+★★ **AND THE SOURCE STOPS.** libdvdnav hands out no further blocks until the app calls
+`dvdnav_wait_skip()`. VLC drains its decoder there **with a timeout**
+(`modules/access/dvdnav.c` DVDNAV_WAIT: `EsOutDrainOnce` -> `ES_OUT_IS_EMPTY` ->
+`WaitEmptyTimeout`).
+
+⛔⛔ **THAT IS EXACTLY WHAT §13e's FIX GOT WRONG.** It waited for a quiet point *while the
+reader kept streaming the loop*, so the quiet point never came. The reference design
+**stops the source first, then drains, and bounds it with a timeout.** Same idea; the
+ordering is the entire difference between a fix and a dead menu button.
+
+**(2) The DECODER discards everything until a fresh intra frame.**
+`vlc/modules/packetizer/mpegvideo.c`: `PacketizeReset` sets `b_waiting_iframe` and flags
+`BLOCK_FLAG_DISCONTINUITY`; `PacketizeValidate` then returns `VLC_EGENERIC` for every
+access unit that is not an I ("waiting on intra frame"). So a software player never
+decodes a picture assembled across a discontinuity. Ours does -- the vld keeps
+`sequence_header_seen` set, accepts the landing's picture start code, and dequantises with
+the stale matrix.
+
+★ **We already own mechanism (2):** `rtl/mpeg2/vld.v`'s seek-realign (issue #45) drops
+leading non-I pictures after a discontinuity. It is gated on `vbuf_flush`, which by
+definition does not fire on a `keep_vbuf` hop -- so it is present, HW-proven, and simply
+not armed here.
+
+⚠ VLC/MPlayer/xine/Kodi all navigate through libdvdnav and inherit (1); only VLC's
+handler was read here, so do not assume the others' specifics without checking.
+⛔ Do NOT reach for the issue-#65 menu-still cold re-decode; it replays audio.
