@@ -2,7 +2,9 @@
 
 **Status:** ✅ the layer policy below is the shipped behaviour (2026-09-15, branch
 `fix/screensaver-overlay-gate`); sim-proven RED/GREEN, 13 mutations each caught by exactly
-its own assertion. ⏳ HW-confirm pending.
+its own assertion, and ✅ **HW-CONFIRMED 2026-09-15 with the defect REPRODUCED FIRST on
+the pre-fix core** (build `DVD_saveroverlay_20260916_0158.rbf`, SEED 7 first roll,
+clk_dec 95.01/91.44 vs the 86.0 gate, 91 % ALM).
 
 | | |
 |---|---|
@@ -156,7 +158,57 @@ which assertion is load-bearing.
   other end — five arms scored with `| grep RESULT`, which matches `RESULT: FAIL` exactly as
   happily as `RESULT: PASS` while `set -e` never trips.
 
-### HW gate
+### ✅ The HW round (2026-09-15) — control arm first, and the arithmetic is exact
+
+Measured on MEN_IN_BLACK's main menu with **PLAY MOVIE** highlighted, both cores through
+the **identical script**. `lit` = non-black pixels in one frame; `static` = pixels lit in
+BOTH frames at the same position, i.e. what is parked on the blanked screen.
+
+| arm | control `lit` | control `static` | fix `lit` | fix `static` |
+|---|---|---|---|---|
+| **Screensaver** (the report) | 5875 | **1189** | 4686 | **0** |
+| Stop stage 1 | 5710 | **1024** | 4686 | **0** |
+| Stop stage 2 | 5710 | **1024** | 4686 | **0** |
+
+★★ **The fixed core's `lit` equals the control's `lit` MINUS EXACTLY ITS `static`, to the
+pixel, on all three arms** (5875−1189 = 5710−1024 = 4686). So the fix removed the highlight
+and **nothing else** — the logo is untouched. That is a far stronger statement than "the
+count went to zero", which a fix that blanked too much would also satisfy.
+
+The control's static bbox was **x 273..453, y 280..303** — the PLAY MOVIE button rect.
+
+✅ **The round trip, which rules out the trivial wrong fix (delete the highlight):** paused
+menu → highlight present; screensaver up → gone; one `up` press → **back, and on the next
+button up**, so the menu is live and responding, not merely repainted.
+
+✅ **The diagnostics stayed honest**, which is the claim only hardware can settle:
+`hl_btns_armed`, `subpic_shown`, `hl_on` and `hl_recolour_fired` all read **GREEN under the
+screensaver on BOTH cores**. Had they gone red on the fix core, the gate would have landed
+on the base wires instead of the register stage and blinded `dbg_blk3`/`dbg_blk8`.
+
+⚠ **Dismiss with `up`, NEVER `select`** — `select` ACTIVATES the highlighted button, which
+on this menu is PLAY MOVIE, so it starts the film instead of returning to the menu.
+
+⚠⚠ **THE FIRST CONTROL ARM DID NOT REPRODUCE, AND THAT WAS THE HARNESS.** It returned to
+the menu on a fixed 20 s settle and PAUSED ON THE TRANSITION CLIP, where nothing is armed —
+so there was no highlight to leak and the screensaver arm measured **0 static px on a core
+that definitely has the bug**, while its own Stop arm, taken seconds earlier from the
+genuinely armed menu, measured 1189. Same core, same run: one arm reproducing, the other
+silently measuring nothing. **A step that never reached the state was not measured**, and it
+reads exactly like a pass. The arm now waits for the board's own `hl_btns_armed` and then
+pauses IMMEDIATELY, because pausing freezes the state — MiB's root is a LOOPING motion menu
+and cycles back through its transition and disarms on its own.
+
+★ Toggling `Debug Overlay` via `mister.py osd` does **not** dismiss the screensaver
+(measured), so the armed check and the diagnostics check can both be taken without
+disturbing what is being measured. But the `O[2]` blocks draw ABOVE `sub_r`, so the overlay
+must be **off** for the pixel count or the blocks become the static pixels being counted.
+
+⏳ Not exercised on hardware, covered structurally and by bench: a subtitle during a
+*stopped* title (same `sp_q_inside` term, and `run_subpic.sh` covers the module), and an
+ordinary pause keeping its subtitle (`pause_q` is not in `pic_blank`).
+
+### The recipe
 
 Control arm first — flash the **pre-fix** core and capture the defect, so the fix has a
 number to beat. Set `Screensaver = 2min`, load a disc, open a menu with a button

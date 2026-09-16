@@ -3108,7 +3108,9 @@ worse maintenance burden than targeted in-place edits. So:
   up, since a burnt-in status line is what it exists to prevent.
   ★★ **...AND IT BLANKED THE PICTURE BUT NOT THE LAYER DRAWN ON TOP OF IT — ✅ FIXED
   2026-09-15 (branch `fix/screensaver-overlay-gate`), sim-proven RED/GREEN, 13 mutations
-  each caught by EXACTLY its own assertion; ⏳ HW-confirm pending.** Field report: *pause
+  each caught by EXACTLY its own assertion, and ✅ HW-CONFIRMED 2026-09-15 WITH THE DEFECT
+  REPRODUCED FIRST ON THE PRE-FIX CORE** (build `DVD_saveroverlay_20260916_0158.rbf`,
+  SEED 7 first roll, clk_dec 95.01/91.44, 91 % ALM). Field report: *pause
   on a disc menu where an option is highlighted and the highlight persists into the
   screensaver.* `pic_blank` took `core_r/g/b` to black and `hud_on_e`/`bar_on_e`
   suppressed the chrome, but `sp_q_inside`/`hl_use` carried no gate — so the SUBPICTURE
@@ -3146,6 +3148,31 @@ worse maintenance burden than targeted in-place edits. So:
   exits 0 — the `bench/ac3` / `run_p240.sh` trap), and **`stop_ctl_tb` had NO RUNNER AT ALL**
   so its copy had never been sprung; `run_subpic.sh` had the same hole from the other end
   (`| grep RESULT` matches `RESULT: FAIL` while `set -e` never trips). All fixed.
+  ✅ **MEASURED ON THE RIG, BOTH CORES THROUGH THE IDENTICAL SCRIPT** (MiB's main menu
+  with PLAY MOVIE highlighted; `lit` = non-black pixels in a frame, `static` = lit in BOTH
+  of two frames at the same position = what is PARKED on the blanked screen, the logo
+  having moved):
+  | arm | control lit | control static | fix lit | fix static |
+  |---|---|---|---|---|
+  | **Screensaver** (the report) | 5875 | **1189** | 4686 | **0** |
+  | Stop stage 1 | 5710 | **1024** | 4686 | **0** |
+  | Stop stage 2 | 5710 | **1024** | 4686 | **0** |
+  ★★★ **THE FIX CORE'S `lit` IS THE CONTROL'S `lit` MINUS EXACTLY ITS `static`, TO THE
+  PIXEL, ON ALL THREE** (5875−1189 = 5710−1024 = 4686) — so it removed the highlight and
+  NOTHING ELSE. "The count went to zero" would also be satisfied by a fix that blanked too
+  much; this is the statement that excludes it. Control bbox x 273..453 y 280..303 = the
+  PLAY MOVIE rect. ✅ Round trip: highlight present → gone → **back on the next button up**
+  after one `up` press, so the menu is LIVE, not repainted. ✅ And the four `O[2]`
+  diagnostics read GREEN under the saver on BOTH cores — the diagnostics-stay-honest claim,
+  which only hardware could settle.
+  ⚠⚠ **THE FIRST CONTROL ARM DID NOT REPRODUCE AND THAT WAS MY HARNESS, NOT THE CORE.** It
+  returned to the menu on a fixed 20 s settle and PAUSED ON THE TRANSITION CLIP, where
+  nothing is armed — so the screensaver arm measured **0 static px on a core that has the
+  bug**, while its own Stop arm seconds earlier measured 1189. **A step that never reached
+  the state was not measured, and it reads exactly like a pass.** Wait for the board's own
+  `hl_btns_armed`, then PAUSE IMMEDIATELY to freeze the state: MiB's root is a LOOPING
+  motion menu that cycles back through its transition and disarms on its own. ⚠ Dismiss
+  with `up`, never `select` — select ACTIVATES the button (here: Play Movie).
   ⚠ **`logo_vis` and `pic_blank` are SIBLINGS over the same facts with nothing tying them
   together** — add a condition to one and the logo can be up with the picture live. Recorded
   in `docs/screensaver.md`; a future change to either must move both.
