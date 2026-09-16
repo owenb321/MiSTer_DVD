@@ -437,7 +437,8 @@ an even-only sample drops every notch whose pair starts odd. A notch is 1 px whe
 starts even and 2 px when it starts odd.
 
 `dvd/idle_logo.sv` takes it too, and is **not** an idle-only consumer: the screensaver and
-Stop both show the logo over a mounted, playing title. Its bounce box is the window on both
+Stop both show the logo over a mounted, playing title (which layers those two blank —
+the HUD and the seek bar among them — is `docs/screensaver.md`). Its bounce box is the window on both
 axes, both bounds clamp rather than underflow, and a 2x logo too large for the window
 renders native instead of hanging off the edge.
 

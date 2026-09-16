@@ -20,7 +20,8 @@ corner hit. Users can replace the artwork by dropping a `boot.rom` file in
 | RTL | `dvd/idle_logo.sv` (~210 ALM / 1 M10K / 0 DSP) |
 | Default art + converter | `tools/idle_logo.py` → `dvd/idle_logo.mem`, `tools/idle_logo_preview.png` |
 | emu glue | `dvd/emu.sv`: `idle_logo_inst`, `logo_vis`, widened overlay priority mux |
-| Tests | `bench/dvd/idle_logo_tb.sv` (16 scenarios), `bench/dvd/idle_frame_tb.sv` (pixel-exact frames), fixture `bench/dvd/idle_logo_user.hex` |
+| Shown over a mounted title | by the **screensaver** and **Stop** — which layers go dark with the picture is `docs/screensaver.md` |
+| Tests | `bench/dvd/idle_logo_tb.sv` (18 scenarios), `bench/dvd/idle_frame_tb.sv` (pixel-exact frames), fixture `bench/dvd/idle_logo_user.hex` |
 
 ## Design decisions
 
@@ -68,10 +69,19 @@ stuck bank-select bit shows the default.
 ### 1 bpp, not 2 bpp
 
 The HUD font needs outline/backing classes because it draws over arbitrary
-video. The idle logo draws over guaranteed black (`!media_seen` ⇒ nothing
-decoded), so the second bit would only halve the mask to no benefit. If a
-future pause-screensaver ever draws it over live video, synthesise a halo
-from a second ROM read at `x-1` — do not go to 2 bpp.
+video. The idle logo draws over guaranteed black, so the second bit would only
+halve the mask to no benefit.
+
+⚠ **That premise no longer rests on `!media_seen`, and it is worth knowing why it
+still holds.** The "future pause-screensaver" this paragraph anticipated now exists
+(`O[48:47] Screensaver`, and Stop), and it shows the logo over a *mounted, playing*
+title — so the black is supplied by `pic_blank` blanking the decoded frame, not by
+nothing having been decoded. As of 2026-09-15 `pic_blank` also blanks the
+**subpicture layer** (a subtitle, a disc-menu button highlight), which until then
+composited on top and left the logo bouncing through live overlay content. So the
+ground really is black on every path the logo is shown on, and 1 bpp stays correct.
+If some future caller draws it over live video, synthesise a halo from a second ROM
+read at `x-1` — do not go to 2 bpp. Layer table: `docs/screensaver.md`.
 
 ### ⚠ Traps (also in the RTL header — keep them in sync)
 
