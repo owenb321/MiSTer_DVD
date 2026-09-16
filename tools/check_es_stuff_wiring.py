@@ -10,8 +10,11 @@ issue #81 / tools/check_subp_map_wiring.py shape. This reads the connections
 out of emu.sv instead of restating them, so it cannot go stale.
 
 What is checked:
-  * es_stuff is instantiated with .arm(aud_drop_pulse) -- the keep_vbuf hop's
-    ack, the ONE junction with no VBUF flush -- and .pipe_rst_n(pipe_rst_n);
+  * es_stuff is instantiated with .arm(es_stuff_arm), and es_stuff_arm is
+    assigned from jump_ack and seek_ack with NO keep_vbuf term -- every junction,
+    the keep_vbuf hop AND the flushing jump (docs/quant_matrix.md 13r: Harry
+    Potter's title-domain stills fry on the flush path) -- and
+    .pipe_rst_n(pipe_rst_n);
   * ps_demux's .vid_ready is the shim's .in_ready net, not vidfeed_wr_ready;
   * the shim's .in_byte/.in_mark/.in_valid are ps_demux's .vid_byte/.vid_mark/
     .vid_valid nets;
@@ -103,8 +106,19 @@ def main():
         return v
 
     arm = net(sh, 'arm', 'es_stuff')
-    if arm != 'aud_drop_pulse':
-        bad.append(f"es_stuff.arm is '{arm}', must be aud_drop_pulse (the keep_vbuf hop's ack)")
+    if arm != 'es_stuff_arm':
+        bad.append(f"es_stuff.arm is '{arm}', must be es_stuff_arm")
+    m = re.search(r'(?m)^\s*wire\s+es_stuff_arm\s*=\s*([^;]+);', src)
+    if not m:
+        bad.append("no `wire es_stuff_arm = ...;` assignment found")
+    else:
+        rhs = m.group(1)
+        for need in ('jump_ack', 'seek_ack'):
+            if not re.search(r'\b' + need + r'\b', rhs):
+                bad.append(f"es_stuff_arm does not include {need}: '{rhs.strip()}'")
+        if re.search(r'\bkeep_vbuf\b', rhs) or re.search(r'\baud_drop_pulse\b', rhs):
+            bad.append(f"es_stuff_arm is scoped to keep_vbuf hops: '{rhs.strip()}' -- "
+                       "the flush junction (13r) is left uncovered")
     prn = net(sh, 'pipe_rst_n', 'es_stuff')
     if prn != 'pipe_rst_n':
         bad.append(f"es_stuff.pipe_rst_n is '{prn}', must be pipe_rst_n")
@@ -131,7 +145,7 @@ def main():
         for b in bad:
             print("  RED:", b)
         return 1
-    print("  es_stuff wiring: OK (ps_demux -> es_stuff -> vidfeed_cdc, armed by aud_drop_pulse)")
+    print("  es_stuff wiring: OK (ps_demux -> es_stuff -> vidfeed_cdc, armed on every jump/seek ack)")
     return 0
 
 

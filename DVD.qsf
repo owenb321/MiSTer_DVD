@@ -1185,4 +1185,9 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # 86.0, PASS both corners), 38,006 / 41,910 ALMs (91 %), 500/553 M10K (90 %), 94/112
 # DSP (84 %); es_stuff itself is 19 ALMs / 10 registers. lint_undriven + netlist_canary
 # PASS. Build releases/DVD_hopstuff_20260916_1859.rbf.
+#
+# dev-hopstuff2 (same day): es_stuff armed on EVERY jump/seek ack instead of the
+# keep_vbuf hop only (docs/quant_matrix.md 13r, the Harry Potter flush junction).
+# One OR gate of RTL and the CONF_STR slug -> a re-roll by construction. Result
+# recorded below once measured.
 set_global_assignment -name SEED 7

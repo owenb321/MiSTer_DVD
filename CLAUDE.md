@@ -538,9 +538,22 @@ worse maintenance burden than targeted in-place edits. So:
   Gates: **`bench/dvd/run_es_stuff.sh --red`**, `tools/check_es_stuff_wiring.py` (the seam,
   read out of `emu.sv`; RED on `main`), `run_menu_junction.sh` [J1n]/[J3]/[J4]. ⚠ The
   T2-only [J1] sweep (8/8 PASS, "FAIL by design") no longer gates. Detail:
-  **`docs/quant_matrix.md` §13q**. ⏳ Follow-up, not done: stuffing on EVERY `load_flush`
-  would also be legal (§11 records that a flush leaves the parser frozen mid-picture); one
-  behavioural delta per HW round.
+  **`docs/quant_matrix.md` §13q**.
+  ★★ **AND THE SAME ROUND FOUND THE FLUSH JUNCTION FRYING TOO (§13r, build `dev-hopstuff2`,
+  ⏳ HW-confirm pending):** Harry Potter Interactive's Player Mode screen, a TITLE-domain
+  still reached by a title→title jump = a VBUF flush with NO soft reset (#98 covers
+  crossings only), came up BLOCKY, pre-existing on v0.5.0. Same eat, opposite direction:
+  the still downloads NO matrix and relies on the defaults; every title VOB downloads one
+  peaking at 41 vs the default 83, so an eaten header halves the still's high frequencies.
+  MEASURED on `main`'s RTL with the real `hp_still_i.hex`: **7 of 12 swept flush positions
+  keep the title's matrix; 0 of 12 with 128 zeros** — and ffmpeg decoding the VTS_08 stills
+  behind the title's header reproduces the screenshot (blockiness 1.14 → 3.68). Fix = arm
+  `es_stuff` on EVERY jump/seek ack (`es_stuff_arm = jump_ack | seek_ack`), not only the
+  `keep_vbuf` one; `check_es_stuff_wiring.py` is RED on an arm scoped back to `keep_vbuf`;
+  `run_menu_junction.sh` [J5] is the flush-sweep gate. ★ Lesson: the first cut scoped the
+  stuffer to the case it was written for (the hop) when what it SELECTS is "a junction
+  where the parser is left mid-stream" — the #92/#81 predicate class, caught by a
+  hardware round rather than by asking *what else does this fire on* first.
   ★ **The diagnostic round that settled it read `chroma_format` beside every garbage
   frame on the rig: 1 (correct) on all three** — the parameter that sets blocks-per-
   macroblock was exonerated in one run, which is what turned "re-sync harder" into

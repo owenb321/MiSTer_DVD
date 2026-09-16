@@ -34,6 +34,13 @@
 #   [J3]  NACHO --trunc 5000 --gap 128: zero_byte stuffing   -> must PASS (the fix)
 #   [J4]  NACHO cut INSIDE cut A's matrix download:
 #           --gap 16 must FRY, --gap 128 must PASS           -> the >=68-byte sizing
+#   [J5]  HARRY POTTER INTERACTIVE, the FLUSH junction (docs/quant_matrix.md 13r):
+#           a title cut ending mid-picture, a VBUF flush swept across it, then
+#           the real hp_still_i.hex (a title-domain still that downloads NO
+#           matrix and relies on the defaults). gap 0 must FRY at some swept
+#           position (the still keeps the TITLE's matrix -> blocky); gap 128
+#           must PASS at every one. This is why es_stuff arms on EVERY jump/seek
+#           ack and not only the keep_vbuf hop.
 #
 # [J0]/[J2] prove the measurement.  The T2 [J1] sweep never reproduced the eat
 # (all seven offsets resync for free -- docs/dvd_menu_refinements.md 9); it is
@@ -148,6 +155,41 @@ else
   python3 tools/quant_fixture.py "$NISO" $NJ --trunc 27520 --gap 128 --out "${FIX}_nmm128" >/dev/null
   run "[J4a]" "${FIX}_nmm16"  FRIED +NOFLUSH=1
   run "[J4b]" "${FIX}_nmm128" PASS  +NOFLUSH=1
+fi
+
+# ---- [J5] the FLUSH junction: Harry Potter Interactive's title-domain stills ---
+HISO="${MJ_HP_ISO:-}"
+if [ -z "$HISO" ]; then
+  HISO=$(find "$ISO_DIR" -iname 'Harry Potter Interactive*.iso' -print -quit 2>/dev/null || true)
+fi
+if [ -z "$HISO" ] || [ ! -f "$HISO" ] || [ ! -f bench/dvd/test_vobs/hp_still_i.hex ]; then
+  echo "== menu_junction [J5]: SKIPPED -- Harry Potter Interactive*.iso (or hp_still_i.hex) not found"
+  echo "   (set MJ_HP_ISO=/path/to/the.iso); the flush-junction gate did NOT run"
+  rc=1
+else
+  echo "== [J5] $(basename "$HISO"): a VBUF flush swept across a title cut, then the real still =="
+  for g in 0 128; do
+    python3 tools/quant_fixture.py "$HISO" --still-hex bench/dvd/test_vobs/hp_still_i.hex \
+      --gap $g --out "${FIX}_hp_g$g" >/dev/null || { echo "  FAIL: [J5] fixture refused"; rc=1; }
+  done
+  fried=0; n=0
+  for d in 60 140 620 1300; do
+    out=$(vvp bench/dvd/menu_junction_sim +fixture="${FIX}_hp_g0" +FLUSHDLY=$d 2>&1 | grep -vE '^WARNING') || true
+    res=$(echo "$out" | grep -oE 'RESULT: [A-Z]+' | head -1 || true)
+    echo "   gap 0    FLUSHDLY=$d  ${res:-RESULT: (none)}  $(echo "$out" | grep -oE 'mismatches=[0-9]+/64' | head -1)"
+    n=$((n+1)); echo "$res" | grep -q FRIED && fried=$((fried+1))
+  done
+  echo "   [J5] gap 0: $fried/$n flush positions leave the still on the TITLE's matrix"
+  [ "$fried" -ge 1 ] || { echo "  FAIL: [J5] the flush junction reproduced nothing -- the GREEN arm would be vacuous"; rc=1; }
+  ok=0
+  for d in 60 140 620 1300; do
+    out=$(vvp bench/dvd/menu_junction_sim +fixture="${FIX}_hp_g128" +FLUSHDLY=$d 2>&1 | grep -vE '^WARNING') || true
+    res=$(echo "$out" | grep -oE 'RESULT: [A-Z]+' | head -1 || true)
+    echo "   gap 128  FLUSHDLY=$d  ${res:-RESULT: (none)}  $(echo "$out" | grep -oE 'mismatches=[0-9]+/64' | head -1)"
+    echo "$res" | grep -q PASS && ok=$((ok+1))
+  done
+  echo "   [J5] gap 128: $ok/$n flush positions keep the defaults"
+  [ "$ok" -eq "$n" ] || { echo "  FAIL: [J5] the zero run did not cover every flush position"; rc=1; }
 fi
 
 [ "$rc" -eq 0 ] && echo "== menu_junction: OK ==" || echo "== menu_junction: FAIL =="

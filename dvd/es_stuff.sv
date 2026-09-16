@@ -47,9 +47,14 @@
 // in this very pipeline: ps_demux's S_VID_FLUSH emits 24 zero bytes after every
 // still's B7, HW-proven since the Phase-5 menu work.
 //
-// WHEN.  `arm` is the keep_vbuf hop's ack (emu: aud_drop_pulse).  The run is
-// issued in front of the FIRST byte ps_demux presents after that hop's pipe
-// reset -- which is the landing's first byte by construction.  The spend waits
+// WHEN.  `arm` is EVERY jump/seek ack (emu: es_stuff_arm = jump_ack | seek_ack)
+// -- the keep_vbuf menu hop, whose junction has no VBUF flush at all, AND the
+// flushing jump/seek, whose flush leaves the parser frozen mid-picture
+// (docs/quant_matrix.md 11) with the landing arriving INTO that state.  Both eat
+// the landing's header; MEASURED on Harry Potter Interactive's title-domain
+// stills (13r): 7 of 12 swept flush positions lose it, 0 of 12 with the run.
+// The run is issued in front of the FIRST byte ps_demux presents after that
+// junction's pipe reset -- the landing's first byte by construction.  The spend waits
 // for pipe_rst_n to have actually been LOW since the arm (rst_seen): in the
 // cycle between the ack and load_flush taking pipe_rst_n low, ps_demux can
 // still present a byte of the OUTGOING cell, and stuffing in front of THAT

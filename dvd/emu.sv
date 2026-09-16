@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-hopstuff"
+`define CORE_VERSION "dev-hopstuff2"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -2786,6 +2786,15 @@ flush_ctl flush_ctl_i (
 // to DROP the splice frames (truncated old + ps_demux/reframer re-sync garbage) that would
 // otherwise decode as a pop/blip (MiB/Matrix root-menu transitions). §5d.
 wire aud_drop_pulse = (jump_ack | seek_ack) & keep_vbuf;
+// DVD-FORK (menu-hop zero stuffing, docs/quant_matrix.md 13q/13r): EVERY jump
+// or seek ack is a junction where the outgoing stream is cut at an arbitrary
+// byte and the landing's 00 00 01 B3 follows -- a keep_vbuf hop (no VBUF
+// flush) and a flushing jump/seek alike (11: the flush leaves the parser frozen
+// mid-picture). Both can eat the landing's sequence header; both get the zero
+// run. ⚠ NOT gated on keep_vbuf: Harry Potter Interactive's Player Mode screen
+// (13r) is a title->title jump = a flush with no soft reset, and it fried
+// (blocky) at 7 of 12 swept flush positions until the run covered it too.
+wire es_stuff_arm  = jump_ack | seek_ack;
 // The AC-3/DTS REFRAMERS reset on `reset_n` ONLY (not per-jump pipe_rst_n). They are
 // self-healing passthroughs - on any switch they re-lock on the next 0x0B77 / 0x7FFE8001
 // sync word (frmsizcod lock), so a per-jump reset was never needed. It was actively HARMFUL
@@ -4163,15 +4172,15 @@ always @(posedge clk_sys)
 // (the "deep fried" still). es_stuff puts 128 bytes of MPEG-2 zero_byte stuffing
 // in front of the FIRST byte ps_demux emits after the hop's pipe reset, so the
 // parser is guaranteed to hit its natural error/start-code hunt before the
-// header arrives. Armed by the same ack aud_drop_pulse keys on -- the one
-// junction with no VBUF flush. The zeros ride the ordinary byte path, so the
+// header arrives. Armed on EVERY jump/seek ack (es_stuff_arm): the keep_vbuf hop
+// AND the flushing jump (13r). The zeros ride the ordinary byte path, so the
 // PTS-association coordinate (vbuf_pos) stays exact and the mark stays on the
 // landing's real byte. Gate: bench/dvd/run_es_stuff.sh, run_menu_junction.sh
 // [J3]/[J4]; wiring: tools/check_es_stuff_wiring.py (emu has no bench).
 es_stuff #(.N(128)) es_stuff_inst (
     .clk        (clk_sys),
     .rst_n      (reset_n),            // NOT pipe_rst_n: it must survive the reset it keys on
-    .arm        (aud_drop_pulse),     // the keep_vbuf hop's ack
+    .arm        (es_stuff_arm),       // every jump/seek ack (13r: flushes too)
     .pipe_rst_n (pipe_rst_n),
     .in_byte    (ps_vid_byte),
     .in_mark    (ps_vid_mark),

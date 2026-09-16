@@ -2044,12 +2044,13 @@ and the mark stays on the landing's real byte (`ps_demux` holds it, with
 `mark_pending`, while `in_ready` is low). Reset domain `reset_n`, never
 `pipe_rst_n`.
 
-⚠ **Scope, deliberately narrow:** the `keep_vbuf` hop only. Stuffing on every
-`load_flush` (chapter seeks, menu crossings) would be equally legal and probably
-beneficial -- 11 records that a flush leaves the parser frozen mid-picture and the
-first landing GOP's header can be eaten there too -- but those paths are covered
-by the soft reset / the #45 realign and are HW-proven; one behavioural delta per
-HW round. Recorded as a follow-up, not done.
+⚠ **Scope, first cut: the `keep_vbuf` hop only** (`.arm(aud_drop_pulse)`), one
+behavioural delta per HW round. **Widened the same day to EVERY jump/seek ack**
+(`es_stuff_arm = jump_ack | seek_ack`, build `dev-hopstuff2`) after the HW round
+found Harry Potter Interactive's title-domain stills blocky on the FLUSH junction
+-- 13r, with the flush-position sweep (7/12 → 0/12) as its gate. 11 had already
+recorded that a flush leaves the parser frozen mid-picture; the crossing paths get
+a soft reset (#98), the title->title jump got nothing.
 
 #### 13q.3 Measured, before any RTL was written
 
@@ -2230,15 +2231,19 @@ and every still downloads none, so it does not matter), and the on-board flush
 position (the 7/12 is the vld's exposure, not the rig's rate; the maintainer sees
 it every time, consistent with a deterministic landing position for a given press).
 
-**The candidate fix is the follow-up 13q already named: arm `es_stuff` on EVERY
-jump/seek ack, not only the `keep_vbuf` one** -- in `emu.sv`, `.arm(aud_drop_pulse)`
-→ `.arm(jump_ack | seek_ack)`. The zeros then precede the first landing byte after
-any flush too. Cost: 128 bytes and ~256 clk_dec per chapter skip. The flush-path
-sweep above is its offline gate (7/12 → 0/12). ⚠ Not built here -- it widens the
-stuffer onto the chapter-seek / menu-entry paths that are HW-proven (#45 realign,
-#98 soft reset), and 13q's rule was one behavioural delta per HW round. The HW arm
-for it: Player Mode via skip on HP correct on the first view; a chapter skip on a
-feature and a menu entry/exit unregressed.
+**The fix (built, maintainer decision, `dev-hopstuff2`): arm `es_stuff` on EVERY
+jump/seek ack, not only the `keep_vbuf` one** -- `emu.sv` `wire es_stuff_arm =
+jump_ack | seek_ack;`. The zeros precede the first landing byte after any flush too.
+Cost: 128 bytes and ~256 clk_dec per chapter skip. Gates: `run_menu_junction.sh`
+**[J5]** (the flush sweep above, RED at gap 0 / GREEN at gap 128 over four swept
+positions, on the real `hp_still_i.hex`), and `tools/check_es_stuff_wiring.py`,
+which is now RED on an arm scoped back to `keep_vbuf`/`aud_drop_pulse` or missing
+either ack. ⚠ This widens the stuffer onto the chapter-seek and menu-entry paths
+(#45 realign, #98 soft reset): the zeros are legal stuffing there too and the
+parser hunts through them into the landing's header exactly as on a hop; after a
+soft reset it is already hunting. ⏳ HW: Player Mode via skip on HP correct on the
+first view; a chapter skip on a feature and a menu entry/exit unregressed; the
+13q.4 arms unregressed.
 
 ### 13f. WHAT A REAL PLAYER DOES -- asked of the oracle, not reasoned about
 
