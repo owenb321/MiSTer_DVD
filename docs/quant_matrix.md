@@ -2241,7 +2241,9 @@ which is now RED on an arm scoped back to `keep_vbuf`/`aud_drop_pulse` or missin
 either ack. ⚠ This widens the stuffer onto the chapter-seek and menu-entry paths
 (#45 realign, #98 soft reset): the zeros are legal stuffing there too and the
 parser hunts through them into the landing's header exactly as on a hop; after a
-soft reset it is already hunting. ⏳ HW: Player Mode via skip on HP correct on the
+soft reset it is already hunting. **Build:** `releases/DVD_hopstuff2_20260916_2120.rbf`
+(`dev-hopstuff2 260916`), SEED 7 first roll, clk_dec 93.71 / 89.77 MHz, 91 % ALM;
+`lint_undriven` and `netlist_canary` PASS. ⏳ HW: Player Mode via skip on HP correct on the
 first view; a chapter skip on a feature and a menu entry/exit unregressed; the
 13q.4 arms unregressed.
 

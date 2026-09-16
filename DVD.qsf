@@ -1188,6 +1188,8 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #
 # dev-hopstuff2 (same day): es_stuff armed on EVERY jump/seek ack instead of the
 # keep_vbuf hop only (docs/quant_matrix.md 13r, the Harry Potter flush junction).
-# One OR gate of RTL and the CONF_STR slug -> a re-roll by construction. Result
-# recorded below once measured.
+# One OR gate of RTL and the CONF_STR slug -> a re-roll by construction.
+# MEASURED: SEED 7 held FIRST roll again -- clk_dec 93.71 MHz @100C / 89.77 MHz
+# @-40C (gate 86.0, PASS both corners), 38,049 / 41,910 ALMs (91 %). Build
+# releases/DVD_hopstuff2_20260916_2120.rbf.
 set_global_assignment -name SEED 7
