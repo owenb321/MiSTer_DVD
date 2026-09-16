@@ -169,6 +169,30 @@ module dvd_vm (
     // Stream selection (SetSTN)
     output     [7:0]  sprm_astn,      // SPRM1 (audio stream; >=8 = none selected)
     output     [7:0]  sprm_spstn,     // SPRM2 (subpicture; bit6 = display enable)
+    // SPRM3 = AGLN, the camera angle. Exported for the SAME reason as SPRM1/2:
+    // a disc picks its angle with SetSTN and the player must obey. MEASURED on
+    // CASTLE_IN_THE_SKY: FP -> VMGM PGC2 post sets g[14]=2, and VTS_02 PGC1's
+    // PRE runs "SetSTN ASTN=g[12] SPSTN=g[13] AGLN=g[14]" -- i.e. the disc asks
+    // for ANGLE 2 (the English title cards; angle 1 is the Japanese ones), and
+    // its own Audio menu re-issues SetSTN with the matching angle per language.
+    // Before this port existed sprm3 was written and then DEAD: the reader's
+    // cur_angle was fed only by the B6 button, so the disc's choice was ignored
+    // and angle 1 always played.
+    output     [7:0]  sprm_agln,      // SPRM3 (camera angle, 1-based)
+    // Pulse: this PGC's PRE block has been resolved - it ran to the end, it
+    // linked away, or there was none. The reader needs it because it picks the
+    // angle CELL and we pick the angle NUMBER, and libdvdnav's order is
+    // play_PGC -> PRE -> play_Cell's "cellN += AGL_REG - 1". Without it the
+    // reader always resolves first (it arrives ~8 cycles after pgc_loaded; the
+    // serial ALU needs far longer for even one command), so a SetSTN AGLN is
+    // deterministically too late for the block it configures.
+    output reg        pre_done,
+    // A user B6 press must write BACK, or the disc's own menus read a stale
+    // angle: CASTLE's VTSM PGCs 19/20/21/24 all execute "g[14] = AGLN" and
+    // re-apply it on the next title entry. libdvdnav keeps AGL_REG the single
+    // source of truth for exactly this reason.
+    input             agl_set,        // pulse: user changed the angle
+    input      [3:0]  agl_set_val,    // 1-based angle to store in SPRM3
 
     output     [7:0]  dbg_state,
     // DVD-FORK DEBUG (Atmosfear wrong-title diagnosis): expose the scenario-
@@ -240,6 +264,7 @@ reg [15:0] sprm9, sprm10, sprm13;
 
 assign sprm_astn  = sprm1[7:0];
 assign sprm_spstn = sprm2[7:0];
+assign sprm_agln  = sprm3[7:0];
 
 // SPRM8 shadows the live nav_pci selection while buttons are armed (the
 // D-pad moves selection outside the VM; compares like "if SPRM8==0x400"
@@ -565,6 +590,8 @@ reg [7:0] vm_vts;
 // authoritative (0 for VMGM, the menu VTS for VTSM), so keep it there.
 wire [7:0] link_jump_vts = (vm_dom == DOM_TT) ? cur_vts : vm_vts;
 reg       skip_pre;            // next pgc_loaded: don't run PRE (RSM resume)
+// A pgc_loaded is awaiting the resolution of its PRE block (see pre_done).
+reg       pre_armed;
 reg       tt_resolve;          // JumpTT issued: latch SPRM5 <= res_ttn on load
 // TRUE while we reached the current menu via the Menu key FROM a playing title
 // (title -> CallSS VTSM Root). Only then does a second Menu press LinkRSM back to
@@ -700,6 +727,8 @@ always @(posedge clk or negedge rst_n) begin
         nav_ready_d <= 1'b0;
         vm_dom <= DOM_TT; vm_vts <= 8'd0;
         skip_pre <= 1'b0;
+        pre_armed <= 1'b0;
+        pre_done  <= 1'b0;
         tt_resolve <= 1'b0;
         came_via_menukey <= 1'b0;
         menu_seen <= 1'b0;
@@ -747,6 +776,14 @@ always @(posedge clk or negedge rst_n) begin
         // SetHL_BTNN, a link's button field, RSM restore) lands later in the
         // same cycle and wins.
         if (btns_armed && !sprm8_frozen) sprm8 <= {btn_sel, 10'd0};
+        // SPRM3 (AGLN) WRITE-BACK: the user's B6 Angle press. Same shape as the
+        // SPRM8 shadow above and same reason -- the register must hold what is
+        // actually playing, because the disc reads it back ("g[14] = AGLN" in
+        // CASTLE_IN_THE_SKY's VTSM PGCs 19/20/21/24) and re-applies it on the
+        // next title entry. Placed at the same LOW priority: a SetSTN further
+        // down this block lands later in the cycle and wins, so a disc command
+        // in the same cycle is never overridden by the button.
+        if (agl_set) sprm3 <= {12'd0, agl_set_val};
         // Last SUCCESSFULLY loaded menu PGC {dom, vts, pgcn} — the re-enter
         // target when a later menu link fails (see the ev_error arm). Latched
         // on every menu-domain pgc_loaded: vm_dom/vm_vts are the completed
@@ -777,6 +814,27 @@ always @(posedge clk or negedge rst_n) begin
         // and matches the golden model's `_load_pgcn` hook exactly.
         if (pgc_loaded && (vm_dom == DOM_VMGM || vm_dom == DOM_VTSM))
             menu_seen <= 1'b1;
+
+        // ---- PRE-block resolution (pre_done) ----------------------------
+        // Arms on every PGC load and clears once the load EVENT has been
+        // consumed (ev_loaded low) AND the VM is either back at V_IDLE or has
+        // linked away. That covers all four exits without hooking each one:
+        //   nr_pre == 0        -> dispatch falls through, idle
+        //   skip_pre (RSM)     -> same
+        //   PRE runs out       -> V_NEXT's BLK_PRE arm, then idle
+        //   PRE takes a link   -> jump_pulse
+        // ⚠ The !ev_loaded term is load-bearing: pgc_loaded only LATCHES the
+        // event, and the VM can sit in V_IDLE for a cycle or two before it is
+        // consumed. Without it the pulse fires BEFORE the PRE block runs -
+        // which is the exact defect this signal exists to fix, reintroduced
+        // one level down.
+        pre_done <= 1'b0;
+        if (pgc_loaded)
+            pre_armed <= 1'b1;
+        else if (pre_armed && !ev_loaded && (state == V_IDLE || jump_pulse)) begin
+            pre_armed <= 1'b0;
+            pre_done  <= 1'b1;
+        end
 
         // ---- event latching (any state; the FSM consumes by priority) ---
         if (enable) begin

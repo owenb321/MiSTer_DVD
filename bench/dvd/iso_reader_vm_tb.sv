@@ -136,6 +136,9 @@ module iso_reader_vm_tb;
     reg         btn_cmd_valid = 0;
 
     dvd_iso_reader #(.DRAIN_WD(31'd20000)) dut (
+        // new reader inputs tied off: a floating input is X, and X on
+        // agl_vm_en would poison the angle resolve (see the port comments).
+        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .lu_lang_pref(16'h656E), .vbuf_empty(vbuf_empty), .menu_snap(1'b0),
         .keep_vbuf(keep_vbuf_w),
         .jump_ttn(vm_jump_ttn), .jump_pgn(vm_jump_pgn), .jump_ptt(vm_jump_ptt),
@@ -174,6 +177,8 @@ module iso_reader_vm_tb;
     );
 
     dvd_vm vm (
+        // new VM ports tied off (a floating input is X).
+        .agl_set(1'b0), .agl_set_val(4'd1),
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .start(start), .cfg_lang(16'h656E),
         .rnd_seed(16'hACE1), .sec_tick(1'b0),
         .entropy_stir(1'b0), .entropy_val(16'd0),

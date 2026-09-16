@@ -82,6 +82,7 @@ module iso_reader_angle_tb;
         .seek_rbn_pulse(1'b0), .seek_rbn(32'd0),
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1), .chap_at_start(1'b0),
         .angle_pulse(angle_pulse), .cur_angle(cur_angle), .angle_count(angle_count),
+        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .keep_vbuf(),
         .cur_cell(), .cell_ready(),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
@@ -177,8 +178,15 @@ module iso_reader_angle_tb;
     endtask
 
     // Write the DSI fields of a NAV sector (relative to sector start; DSI@0x407).
+    // next_vobu is the SAME-ANGLE successor, which is what a real disc writes:
+    // MEASURED on MiB VTS_14 RBN 37 (angle 1's BLOCK|LAST), next_vobu = +934 =
+    // RBN 971 = sml_agli[angle 1]. It therefore AGREES with sml_agli for the
+    // angle you are already playing and DISAGREES for every other one -- which
+    // is exactly why sml_agli must be PREFERRED: only it can retarget a
+    // mid-block angle switch. (Added 2026-09-15; before this the fixture left
+    // the field zero, and a mutation that preferred next_vobu was uncatchable.)
     task put_nav(input integer rbn, input [15:0] category, input [31:0] vobu_ea,
-                 input [31:0] agli0, input [31:0] agli1);
+                 input [31:0] agli0, input [31:0] agli1, input [31:0] next_vobu);
         integer b; begin
             b = (24 + rbn) * 2048;
             fill_sec(24 + rbn, 8'h00);
@@ -195,6 +203,9 @@ module iso_reader_angle_tb;
             img[b+16'h4BD]=agli0[15:8];  img[b+16'h4BE]=agli0[7:0];
             img[b+16'h4C1]=agli1[31:24]; img[b+16'h4C2]=agli1[23:16];
             img[b+16'h4C3]=agli1[15:8];  img[b+16'h4C4]=agli1[7:0];
+            // vobu_sri.next_vobu @ DSI 0x13A -> 0x541
+            img[b+16'h541]=next_vobu[31:24]; img[b+16'h542]=next_vobu[23:16];
+            img[b+16'h543]=next_vobu[15:8];  img[b+16'h544]=next_vobu[7:0];
         end
     endtask
 
@@ -230,13 +241,15 @@ module iso_reader_angle_tb;
             put_cell(22, 32'd16, 16'd256, 2, 8'h00, 32'd8, 32'd9);   // common
 
             // interleaved VOB: nav+body per ILVU, per-angle marker bodies
-            put_nav(0, ILVU_LAST, 32'd1, 32'd6, 32'd2);   // a1.i1: a1->6  a2->2
+            // next_vobu (last arg) = this VOBU's OWN angle's next ILVU, or
+            // END_OF_CELL where the angle has none left.
+            put_nav(0, ILVU_LAST, 32'd1, 32'd6, 32'd2, 32'h80000006);  // a1.i1 -> a1.i2
             fill_sec(24+1, 8'hA1);
-            put_nav(2, ILVU_LAST, 32'd1, 32'd4, 32'd2);   // a2.i1: a1->6  a2->4
+            put_nav(2, ILVU_LAST, 32'd1, 32'd4, 32'd2, 32'h80000002);  // a2.i1 -> a2.i2
             fill_sec(24+3, 8'hA2);
-            put_nav(4, ILVU_LAST, 32'd1, 32'd2, 32'd4);   // a2.i2: a1->6  a2->8(reject>5)
+            put_nav(4, ILVU_LAST, 32'd1, 32'd2, 32'd4, 32'h3fffffff);  // a2.i2 END_OF_CELL
             fill_sec(24+5, 8'hA2);
-            put_nav(6, ILVU_LAST, 32'd1, 32'd2, 32'd2);   // a1.i2: a1->8(reject>7)
+            put_nav(6, ILVU_LAST, 32'd1, 32'd2, 32'd2, 32'h3fffffff);  // a1.i2 END_OF_CELL
             fill_sec(24+7, 8'hA1);
             fill_sec(24+8, 8'hCC);
             fill_sec(24+9, 8'hCC);

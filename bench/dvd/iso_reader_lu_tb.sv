@@ -95,6 +95,9 @@ module iso_reader_lu_tb;
     always @(posedge clk) if (pgc_error) n_pgc_error = n_pgc_error + 1;
 
     dvd_iso_reader dut (
+        // new reader inputs tied off: a floating input is X, and X on
+        // agl_vm_en would poison the angle resolve (see the port comments).
+        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0),
         .lu_lang_pref(lang_pref),
         .vbuf_empty(1'b0), .menu_snap(1'b0),

@@ -167,10 +167,21 @@ def _dsi_fields(sec):
     return True, cat, ea, nxt
 
 
-def dump_ilvu(f, vts):
+def dump_ilvu(f, vts, angles=False):
     """Follow each interleaved cell's next_vobu chain in PGCN 1, printing the
     played ILVU sequence and the skipped sibling ranges - the exact sector walk
-    the RTL performs. Mirrors iso_nav_check.py's PGC cell parse (all BIG-ENDIAN)."""
+    the RTL performs. Mirrors iso_nav_check.py's PGC cell parse (all BIG-ENDIAN).
+
+    With angles=True (--ilvu-angles) it reports the MULTI-ANGLE cells instead
+    (`block_type == 1`), one chain per angle, which is the golden model for the
+    discs that author NO `sml_agli`: CASTLE_IN_THE_SKY VTS_02 and
+    DIEANOTHERDAY_D1_PS VTS_05 leave every `sml_agli` entry zero, so
+    `vobu_sri.next_vobu` is the only follow pointer -- exactly as it is for a
+    seamless-branch cell, which is why the same walker serves both.  The reader
+    must reproduce this played/skipped sector chain.
+    (Before 2026-09-15 this function `continue`d on `block_type == 1`, so it
+    could not describe an angle block at all.)
+    """
     ifo_lba = find_vts_ifo(f, vts)
     f.seek(ifo_lba * 2048); mat = f.read(2048)
     vts_pgcit = be32(mat, 204)
@@ -183,7 +194,11 @@ def dump_ilvu(f, vts):
     nr_cells = h[3]; cell_pb_off = be16(h, 232)
     vob_lba, _ = find_title_vob(f, vts, 1)   # VTSTT_VOBS base (parts are contiguous)
     print("VTS_%02d PGCN 1: nr_cells=%d  (title VOB base lba=%d)" % (vts, nr_cells, vob_lba))
-    print("interleaved cells (category byte0 bit2) + their next_vobu ILVU chains:")
+    if angles:
+        print("MULTI-ANGLE cells (block_type==1) + their next_vobu ILVU chains:")
+        print("  (angle N = the Nth cell of the block_mode 1..3 run)")
+    else:
+        print("interleaved cells (category byte0 bit2) + their next_vobu ILVU chains:")
 
     def dsi_at(rbn):
         f.seek((vob_lba + rbn) * 2048)
@@ -195,8 +210,12 @@ def dump_ilvu(f, vts):
         b0 = e[0]
         interleaved = (b0 >> 2) & 1
         block_type  = (b0 >> 4) & 3
-        if not interleaved or block_type == 1:      # skip normal + multi-angle cells
+        if not interleaved:                         # skip non-interleaved cells
             continue
+        if block_type == 1 and not angles:
+            continue    # multi-angle: only with --ilvu-angles (see below)
+        if block_type != 1 and angles:
+            continue    # --ilvu-angles reports ONLY the angle blocks
         n_inter += 1
         b0 = e[0]
         print("  cell %2d: category byte0=0x%02x [block_mode=%d block_type=%d "
@@ -204,6 +223,16 @@ def dump_ilvu(f, vts):
               % (c, b0, b0 >> 6, (b0 >> 4) & 3, (b0 >> 3) & 1, (b0 >> 2) & 1,
                  (b0 >> 1) & 1, b0 & 1))
         first = be32(e, 8); ile = be32(e, 12); last = be32(e, 20)
+        if angles:
+            # Is there a per-angle jump table at all?  This is the distinction
+            # between the discs Phase 9 always handled and the 4 it did not.
+            f.seek((vob_lba + first) * 2048)
+            _sec = f.read(2048)
+            _agli = [be32(_sec, 0x407 + 0xB4 + i * 6) for i in range(9)]
+            print("      sml_agli at first VOBU: %s"
+                  % ("populated %s" % [hex(a) for a in _agli if a]
+                     if any(_agli) else
+                     "ALL ZERO -> next_vobu is the only follow pointer"))
         rbn = first; played = 0; jumps = 0; skipped = 0; hops = 0; nav_ok = True
         chain = []
         gaps = 0
@@ -237,7 +266,10 @@ def dump_ilvu(f, vts):
               % (first, ile, last, len(chain), jumps, played, skipped, gaps, nav_ok,
                  "OK" if ok else "*** CHAIN DID NOT REACH END_OF_CELL ***"))
     if n_inter == 0:
-        print("  (no interleaved cells in PGCN 1 - this title is not seamless-branch)")
+        if angles:
+            print("  (no block_type==1 angle cells in PGCN 1 - not a multi-angle title)")
+        else:
+            print("  (no interleaved cells in PGCN 1 - this title is not seamless-branch)")
 
 
 # ---- Phase 10: VTSI_MAT audio / subpicture stream attributes (BIG-ENDIAN) ----
@@ -761,6 +793,10 @@ def main():
     ap.add_argument('--angles', action='store_true',
                     help='only report NAV packs that carry an ILVU/angle block '
                          '(sml_pbi.category ILVU flags or a populated sml_agli)')
+    ap.add_argument('--ilvu-angles', action='store_true',
+                    help='like --ilvu but for MULTI-ANGLE cells (block_type==1): '
+                         'one next_vobu chain per angle, plus whether the disc '
+                         'authors sml_agli at all (needs --vts)')
     ap.add_argument('--ilvu', action='store_true',
                     help='seamless-branch golden predictor: follow each PGCN-1 '
                          'interleaved cell (category byte0 bit2) via next_vobu and '
@@ -786,6 +822,8 @@ def main():
     f = open(a.iso, 'rb')
     if a.ilvu:
         dump_ilvu(f, a.vts)
+    if a.ilvu_angles:
+        dump_ilvu(f, a.vts, angles=True)
         return
     if a.subp_map is not None:
         dump_subp_map(f, a.vts, a.subp_map)

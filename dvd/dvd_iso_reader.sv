@@ -164,6 +164,21 @@ module dvd_iso_reader #(
     input             angle_pulse,   // pulse: cycle to the next camera angle
     output reg [3:0]  cur_angle,     // 1-based selected angle (1 when none)
     output reg [3:0]  angle_count,   // angles in the current block (0 = not in one)
+    // The DISC's own angle choice (dvd_vm SPRM3/AGLN via emu's ownership
+    // arbitration). A LEVEL, not a pulse, and consumed only where the angle
+    // cell is actually chosen (S_ANGLE_SCAN) -- which is what makes it immune
+    // to two orderings that a pulse would lose to:
+    //   (1) S_PGC_DONE resets cur_angle to 1 on every fresh PGC;
+    //   (2) the disc sets the angle in the PGC's PRE commands, and the VM only
+    //       STARTS those on pgc_loaded while this reader reaches the resolve
+    //       ~8 cycles later -- so a SetSTN AGLN is ALWAYS late for the block it
+    //       configures. pre_seen below closes that; the level makes it safe.
+    input      [3:0]  agl_vm,        // 1-based angle the disc asked for
+    input             agl_vm_en,     // 1 = the VM owns the angle (else the user does)
+    // The VM has finished the PGC's PRE command block (or had none). libdvdnav's
+    // order is play_PGC -> PRE -> play_Cell's "cellN += AGL_REG - 1"; ours ran
+    // the cell pick first. See S_ANGLE_SCAN.
+    input             vm_pre_done,
 
     // ---------------------------------------------------------------------
     // VM JUMP interface (Phase-2 disc menus). A jump re-targets playback to
@@ -767,6 +782,15 @@ reg        angle_active;                    // 1 = streaming an angle-block cell
 reg        angle_resolved;                  // 1 = angle cell chosen (skip re-scan)
 reg [7:0]  ang_scan_i;                      // angle-count scan cursor
 reg        angle_pulse_d;                   // rising-edge detect for angle_pulse
+reg        pre_seen;                        // VM's PRE block for this PGC has run
+reg [23:0] ang_pre_wd;                      // bound on the S_ANGLE_PRE wait
+localparam [23:0] ANG_PRE_WD = 24'd6750000; // ~0.25 s @ 27 MHz
+// The effective angle for the block just scanned: the DISC's choice while the
+// VM owns it (emu drops agl_vm_en the moment the user presses B6), else the
+// user's. Clamped to this block's own cell count either way - a disc naming an
+// angle the block does not have must not walk off the end of the run.
+wire [3:0] ang_req = agl_vm_en ? agl_vm : cur_angle;
+wire [3:0] ang_eff = (ang_req == 4'd0 || ang_req > angle_count) ? 4'd1 : ang_req;
 reg        seamless_active;                 // 1 = streaming an interleaved (non-angle) cell
 reg        cell_seamless_r;                 // 1 = this cell is authored seamless_play
 
@@ -786,6 +810,12 @@ wire       ilvu_active = angle_active || seamless_active;   // snoop/jump gate
 reg        ilvu_armed;
 reg [31:0] ilvu_end_rbn;                     // last sector of the ILVU_LAST VOBU
 reg [31:0] ilvu_target;                      // next-ILVU RBN for the current angle
+// Which source supplied ilvu_target. sml_agli is a PER-ANGLE table, so it is the
+// only source that licenses the fire path to re-point cell_i at a DIFFERENT
+// angle's cell (the mid-block angle switch). next_vobu follows THIS angle's own
+// chain and knows nothing about the siblings, so a fallback arm must stay on the
+// cell it came from, exactly as the seamless-branch path does.
+reg        ilvu_from_agli;
 reg [7:0]  cell_count;                // number of cells parsed
 reg [7:0]  cell_i;                    // streaming cell cursor
 reg        cell_mode;                 // 1 = stream by cell list, 0 = linear extents
@@ -1289,6 +1319,8 @@ localparam S_PTTLD_HDR    = 6'd54;   // nr_of_srpts@0 + last_byte@4 -> read ttu 
 localparam S_PTTLD_OFF    = 6'd55;   // ttu_offset[ttn-1]/[ttn] -> nr_ptt, launch P_PTT
 localparam S_PTTLD_DONE   = 6'd56;   // re-fetch the resume field (@200 / @204) -> ptt_resume
 localparam S_CHK_RAW      = 6'd58;   // raw MODE2/2352 (VCD/SVCD .bin) signature probe
+localparam S_ANGLE_PRE    = 6'd59;   // hold the angle pick until the VM's PRE has run
+localparam S_ANGLE_PICK   = 6'd60;   // load the effective angle's cell
 
 reg [5:0]  state;
 reg [5:0]  fetch_ret;   // state to enter after S_FETCH
@@ -1667,6 +1699,29 @@ wire [31:0] snoop_iend  = snoop_rbn + snoop_ea;         // last sector of this V
 wire [29:0] snoop_nvoff  = snoop_nextv[29:0];
 wire        snoop_nvvalid= (snoop_nvoff != 30'h3fffffff) && (snoop_nvoff != 30'd0);
 wire [31:0] snoop_nvtgt  = snoop_rbn + {2'b0, snoop_nvoff};
+// ANGLE FALLBACK (Castle in the Sky / Die Another Day D1 class): a multi-angle
+// disc need not author sml_agli at all. MEASURED: CASTLE_IN_THE_SKY VTS_02 PGC1
+// and DIEANOTHERDAY_D1_PS VTS_05 PGC1 carry sml_agli ALL ZERO on every VOBU of
+// every angle block, while vobu_sri.next_vobu is populated and correct (Castle
+// RBN 491 BLOCK|LAST -> +755 -> RBN 1246 = angle 1's next ILVU, stepping over
+// angle 2's ILVU at 692..1245). libdvdnav never has this problem because
+// next_vobu is its BASE next-VOBU and sml_agli is only an OVERRIDE
+// (dvdnav.c:434-468); this reader made the override mandatory, so no jump ever
+// armed and it streamed the interleaved range linearly = the reported
+// "rapidly switches between the two angles" (and, because each angle's ILVU
+// carries the SAME timespan of audio, a ~2 s BACKWARD PTS jump at every
+// junction = the reported pop).
+// Library sweep: 23 discs have block_type==1 angle blocks; 4 of them author no
+// sml_agli. MiB VTS_14 (the fj#98 HW vehicle) does author it, which is why the
+// proven path never saw this.
+// The PREFERENCE order is libdvdnav's: sml_agli when present, else next_vobu.
+// ⛔ Do NOT key this on the cell's seamless_angle bit (byte0 bit 0) even though
+// it predicts sml_agli presence on all 23 swept discs - that is a DECLARATION
+// in the IFO, and this fork has been burned repeatedly trusting declarations
+// over measurement (progressive_frame, IFO channel counts, the 205-of-216
+// empty angle-menu stubs). Key on the snooped VALUE.
+wire        snoop_ag_ok  = snoop_valid   && (snoop_tgt   <= cl_rd);
+wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
 
 // =========================================================================
 // cell list write (from the P_CELL walker: first_sector completes at entry
@@ -1982,9 +2037,12 @@ always @(posedge clk or negedge rst_n) begin
         block_last   <= 8'd0;
         ang_scan_i   <= 8'd0;
         angle_pulse_d<= 1'b0;
+        pre_seen     <= 1'b0;
+        ang_pre_wd   <= 24'd0;
         ilvu_armed   <= 1'b0;
         ilvu_end_rbn <= 32'd0;
         ilvu_target  <= 32'd0;
+        ilvu_from_agli <= 1'b0;
         chap_st      <= CH_IDLE;
         chap_p       <= 7'd0;
         chap_best    <= 7'd0;
@@ -2128,21 +2186,33 @@ always @(posedge clk or negedge rst_n) begin
         if (angle_pulse && !angle_pulse_d && angle_count >= 4'd2)
             cur_angle <= (cur_angle >= angle_count) ? 4'd1 : (cur_angle + 4'd1);
 
+        // The VM has finished this PGC's PRE commands (or had none). Latched,
+        // not sampled: it is a one-cycle pulse and S_ANGLE_PRE may be entered
+        // either side of it. Cleared at S_PGC_DONE with the rest of the angle
+        // state, so each PGC waits for its OWN PRE.
+        if (vm_pre_done) pre_seen <= 1'b1;
+
         // Arm the ILVU jump when the snoop finishes a NAV sector that is the
         // LAST VOBU of an ILVU and whose next-ILVU target lands inside this cell.
-        // Fired in S_STREAM when play_blk passes ilvu_end_rbn. ANGLE uses the
-        // signed sml_agli target; SEAMLESS-BRANCH uses the forward next_vobu
-        // target. (angle_active and seamless_active are mutually exclusive.)
-        if (snoop_done && angle_active && snoop_is_last && snoop_valid
-                && snoop_tgt <= cl_rd) begin
-            ilvu_armed   <= 1'b1;
-            ilvu_end_rbn <= snoop_iend;
-            ilvu_target  <= snoop_tgt;
+        // Fired in S_STREAM when play_blk passes ilvu_end_rbn.
+        //  - ANGLE: the signed sml_agli target when the disc authors one, else
+        //    the forward next_vobu (see the snoop_ag_ok/snoop_nv_ok note above -
+        //    libdvdnav's order, and the fix for the no-sml_agli angle discs).
+        //  - SEAMLESS-BRANCH: the forward next_vobu only (sml_agli is a
+        //    multi-angle-only field and is empty on those discs by definition).
+        // (angle_active and seamless_active are mutually exclusive.)
+        if (snoop_done && angle_active && snoop_is_last
+                && (snoop_ag_ok || snoop_nv_ok)) begin
+            ilvu_armed     <= 1'b1;
+            ilvu_end_rbn   <= snoop_iend;
+            ilvu_target    <= snoop_ag_ok ? snoop_tgt : snoop_nvtgt;
+            ilvu_from_agli <= snoop_ag_ok;
         end else if (snoop_done && seamless_active && snoop_is_last
-                && snoop_nvvalid && snoop_nvtgt <= cl_rd) begin
-            ilvu_armed   <= 1'b1;
-            ilvu_end_rbn <= snoop_iend;
-            ilvu_target  <= snoop_nvtgt;
+                && snoop_nv_ok) begin
+            ilvu_armed     <= 1'b1;
+            ilvu_end_rbn   <= snoop_iend;
+            ilvu_target    <= snoop_nvtgt;
+            ilvu_from_agli <= 1'b0;
         end
 
         // ---- Raw MODE2/2352 position walk (parallel; one step per delivered
@@ -3876,6 +3946,7 @@ always @(posedge clk or negedge rst_n) begin
                 cell_seamless_r <= 1'b0;
                 ilvu_armed     <= 1'b0;
                 cur_angle      <= 4'd1;
+                pre_seen       <= 1'b0;   // this PGC's PRE has not run yet
                 state      <= S_CELL_LOAD;
             end
 
@@ -3951,16 +4022,53 @@ always @(posedge clk or negedge rst_n) begin
                     state       <= S_ANGLE_SCAN2;
                 end else begin
                     // angle_count known. block_last = block_first + count - 1.
-                    // Pick the cur_angle cell (clamped to the block size).
                     block_last     <= block_first + {4'd0, angle_count} - 8'd1;
-                    angle_resolved <= 1'b1;
-                    if (cur_angle == 4'd0 || cur_angle > angle_count) cur_angle <= 4'd1;
-                    cell_i     <= block_first + {4'd0, ((cur_angle == 4'd0 ||
-                                  cur_angle > angle_count) ? 4'd1 : cur_angle)} - 8'd1;
-                    cell_raddr <= block_first + {4'd0, ((cur_angle == 4'd0 ||
-                                  cur_angle > angle_count) ? 4'd1 : cur_angle)} - 8'd1;
-                    state      <= S_CELL_LOAD;         // load the chosen angle cell
+                    // ORDERING: the disc picks its angle in the PGC's PRE
+                    // commands, and libdvdnav's order is play_PGC -> PRE ->
+                    // play_Cell's "cellN += AGL_REG - 1". Ours is inverted and
+                    // DETERMINISTICALLY so: pgc_loaded pulses at S_PGC_DONE and
+                    // we arrive here ~8 cycles later, while the VM only STARTS
+                    // BLK_PRE on that same pulse (serial ALU, 8-byte BRAM fetch
+                    // per command). So a SetSTN AGLN is ALWAYS late unless we
+                    // wait. Only the FIRST angle block after a PGC load can
+                    // wait -- mid-title blocks find pre_seen already set.
+                    if (vm_mode && !pre_seen) begin
+                        ang_pre_wd <= 24'd0;
+                        state      <= S_ANGLE_PRE;
+                    end else
+                        state      <= S_ANGLE_PICK;
                 end
+            end
+
+            // Wait for the VM's PRE block, bounded. ⚠ THE WATCHDOG IS
+            // LOAD-BEARING, not belt-and-braces: a PRE command that itself
+            // jumps leaves the VM in V_WAIT awaiting a pgc_loaded that a
+            // stalled reader would never produce. Nothing is streaming yet, so
+            // the wait costs a first-block latency, not a pipeline stall.
+            S_ANGLE_PRE: begin
+                ang_pre_wd <= ang_pre_wd + 24'd1;
+                if (pre_seen || ang_pre_wd >= ANG_PRE_WD)
+                    state <= S_ANGLE_PICK;
+            end
+
+            // Pick the effective angle's cell. The VM's level wins while it
+            // owns the angle (emu releases ownership on a B6 press); either
+            // way the value is clamped to the block's own cell count, so a
+            // disc naming an angle the block lacks cannot walk off the run.
+            S_ANGLE_PICK: begin
+                angle_resolved <= 1'b1;
+                // Write cur_angle ONLY when it would actually change: the VM
+                // owns the angle (its level must be latched), or the clamp
+                // fires. With agl_vm_en low this is bit-identical to the
+                // pre-existing rule ("if out of range, snap to 1"), which is
+                // what keeps every non-VM path byte-identical -- and it stops
+                // this state swallowing a B6 press that lands in the same
+                // cycle (a later assignment in this always block would win).
+                if (agl_vm_en || cur_angle == 4'd0 || cur_angle > angle_count)
+                    cur_angle <= ang_eff;
+                cell_i     <= block_first + {4'd0, ang_eff} - 8'd1;
+                cell_raddr <= block_first + {4'd0, ang_eff} - 8'd1;
+                state      <= S_CELL_LOAD;         // load the chosen angle cell
             end
 
             // Sub-cell scrub: scan the cell table for the cell whose RBN range
@@ -4109,20 +4217,34 @@ always @(posedge clk or negedge rst_n) begin
                                 // NOT resetting wr_ptr and NOT pulsing seek_ack, so
                                 // the cache byte stream stays a single seamless PS
                                 // (no VBUF flush, no A/V re-anchor).
-                                //  - ANGLE (Phase 9): re-point cell_i at the current
-                                //    angle's cell (block_first+cur_angle-1) so
-                                //    play_end tracks a mid-block angle switch.
-                                //  - SEAMLESS-BRANCH: STAY on the same cell (the
-                                //    interleaved cell owns the whole [first..last]
-                                //    range); just reload it via rbn_override.
+                                //  - ANGLE (Phase 9) from sml_agli: re-point cell_i
+                                //    at the current angle's cell
+                                //    (block_first+cur_angle-1) so play_end tracks a
+                                //    mid-block angle switch. Legitimate ONLY from
+                                //    sml_agli, which is a PER-ANGLE table.
+                                //  - ANGLE from the next_vobu FALLBACK, and
+                                //    SEAMLESS-BRANCH: STAY on the same cell.
+                                //    next_vobu follows the chain of the angle whose
+                                //    VOBU we just read and says nothing about the
+                                //    siblings, so re-pointing at another angle's
+                                //    cell would bound this angle's target by the
+                                //    WRONG cell. Consequence, accepted and
+                                //    documented (manual + docs/dvd_nav.md): on a
+                                //    disc that authors no sml_agli, a mid-block B6
+                                //    press takes effect at the NEXT angle block.
+                                //    libdvdnav has no better option on such a disc
+                                //    either. ⛔ Do NOT "fix" this with a flushing
+                                //    seek to the sibling cell's first_sector - that
+                                //    restarts the segment (Castle's 3-minute end
+                                //    credits would jump back to the start).
                                 ilvu_armed   <= 1'b0;
                                 seek_rbn_l   <= ilvu_target;
                                 rbn_override <= 1'b1;
-                                if (angle_active) begin
+                                if (angle_active && ilvu_from_agli) begin
                                     cell_i     <= block_first + {4'd0, cur_angle} - 8'd1;
                                     cell_raddr <= block_first + {4'd0, cur_angle} - 8'd1;
                                 end else begin
-                                    cell_raddr <= cell_i;   // seamless: same cell
+                                    cell_raddr <= cell_i;   // fallback / seamless: same cell
                                 end
                                 state        <= S_CELL_LOAD;
                             end else if (play_blk + 32'd1 == play_end) begin
