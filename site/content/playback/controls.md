@@ -202,6 +202,17 @@ Pressing it again hides the line straight away.
 naming what you switched to, with the language where the disc provides one — `AUDIO 2/4 FR`,
 `SUB OFF`, `ANGLE 2/3`. Angle only does anything on a multi-angle disc.
 
+!!! note "Some discs choose the angle for you"
+    A few discs use the camera-angle mechanism to hold two versions of the same scene —
+    most often a title card or end credits in two languages. Those discs set the angle
+    themselves, usually from whatever you pick in their own audio or setup menu, and the
+    core now follows that choice. Press **Angle** if you want the other version anyway.
+
+    On a disc of this kind the Angle button takes effect at the **start of the next such
+    scene** rather than instantly, because the disc does not provide the information a
+    player needs to switch mid-scene. A true multi-angle disc — a concert shot from
+    several cameras, say — switches immediately as before.
+
 !!! note "Track numbers are the disc's, not a count"
     A disc's audio and subtitle tracks are numbered by the disc itself, and the numbering
     is often sparse — a disc may have tracks 1, 3 and 8 with nothing between. The core

@@ -2604,16 +2604,30 @@ golden cross-check — it does **not** drive the fetch.
    run of `bt=1` cells) and loads `block_first + min(cur_angle,angle_count) - 1` instead.
 2. **ILVU follow** while streaming an angle-block cell: snoop each cached NAV sector; on a
    `BLOCK|LAST` VOBU whose jump `target ≤ cell.last_sector`, arm `ilvu_jump` to fire when
-   `play_blk` reaches the end of that VOBU (`ilvu_end_rbn`). The jump reuses the extent
-   remap (`S_CELL_SEEK` with `seek_target = target·4`) but keeps `cell_i`/`play_end` and
-   pulses **`keep_vbuf` (no flush) + no `seek_ack`** → the timeline is continuous
-   (`av_sync` untouched). If `target > last_sector` (or no `sml_agli` entry) there is no
-   jump — `play_end` bounds the final ILVU and the cell ends normally.
+   `play_blk` reaches the end of that VOBU (`ilvu_end_rbn`). The jump routes through the
+   `rbn_override` cell-load (streams from the raw target RBN) but does **not** reset
+   `wr_ptr` and does **not** pulse `seek_ack` → the timeline is continuous (`av_sync`
+   untouched). If `target > last_sector` there is no jump — `play_end` bounds the final
+   ILVU and the cell ends normally.
+   The target comes from `sml_agli[cur_angle-1]` when the disc authors one and from
+   `vobu_sri.next_vobu` when it does not — see "No `sml_agli`" below.
+   *(Corrected 2026-09-15: this step used to describe an `S_CELL_SEEK` remap with
+   `seek_target = target·4` and a `keep_vbuf` pulse. The shipped code has used
+   `rbn_override`/`seek_rbn_l` since the sd-2048 rework; the old wording was stale.)*
 3. **Block skip**: an angle-block cell's end advances to `block_first + angle_count`
    (the common cell 6), skipping the sibling angle cells.
 4. **Angle switch**: `angle_pulse` (emu B6) increments `cur_angle` (wrap 1..`angle_count`);
-   it takes effect at the **next ILVU boundary** (the jump reads `cur_angle` live), so the
-   switch is seamless. Outside an angle block the pulse just updates the number for the UI.
+   with an `sml_agli` table it takes effect at the **next ILVU boundary** (the jump reads
+   `cur_angle` live), so the switch is seamless. The pulse is a **no-op outside an angle
+   block** — it is guarded on `angle_count >= 2`.
+   *(Corrected 2026-09-15: this used to say the pulse "just updates the number for the UI"
+   outside a block. It does not; the RTL guards it.)*
+4b. **The disc's own choice**: a PGC's PRE commands may set the angle with
+   `SetSTN ... AGLN`, which the VM latches in SPRM3. `dvd_vm.sprm_agln` → emu's
+   `vm_owns_angle` arbitration (identical in shape to the audio/subpicture one) →
+   the reader's `agl_vm`/`agl_vm_en`, consumed at `S_ANGLE_PICK`. A B6 press releases
+   the VM's claim **and writes SPRM3 back** (`agl_set`), because discs read `AGLN`
+   into a GPRM and re-apply it. See "The disc picks the angle" below.
 5. **Exposed**: `cur_angle` / `angle_count` (0 when not in an angle block) → emu status/UI.
 
 Non-interleaved cells and all earlier phases are byte-for-byte unchanged (the snoop +
@@ -2623,6 +2637,186 @@ angle-cell logic is gated on `block_type==1`). Golden tool: `tools/nav_extract.p
 selected angle streams, in order, and a clean mid-block switch) + the real MiB fixture for
 byte-exact target math, plus `nav_dsi_tb` category assertions; all reader/demux/nav suites
 stay green.
+
+### No `sml_agli`: the follow pointer is `vobu_sri.next_vobu` (2026-09-15, Studio Ghibli)
+
+> **Status: 🔧 sim-proven RED/GREEN, ⏳ HW-confirm pending.** Field report on
+> `CASTLE_IN_THE_SKY.iso`: *"there are multiplexed versions of the title to show the
+> localized or Japanese version. Currently the core switches rapidly between the two angles
+> rather than sticking to one."* A second user, on unnamed Ghibli discs: *"starts playing
+> the English version then makes a pop noise and then switches to Japanese for a second then
+> back to English... There are 2 different versions of the logo and text when the movie
+> starts."*
+
+★★ **A MULTI-ANGLE DISC NEED NOT AUTHOR `sml_agli` AT ALL, AND PHASE 9 REQUIRED IT.**
+The arm was `snoop_done && angle_active && snoop_is_last && snoop_valid`, where
+`snoop_valid` means `sml_agli[cur_angle-1] != 0`. MEASURED with
+`tools/nav_extract.py --angles --title-vob 1`: on **CASTLE_IN_THE_SKY VTS_02 PGC1** and
+**DIEANOTHERDAY_D1_PS VTS_05 PGC1**, *every* VOBU of *every* angle block reports
+`sml_agli: (none)` while `vobu_sri.next_vobu` is populated and correct — Castle RBN 491
+`BLOCK|LAST` → `next_vobu = +755` → RBN 1246, which is angle 1's next ILVU, stepping over
+angle 2's ILVU at 692..1245. So no jump ever armed and the reader streamed the cell's
+`[first..last]` **linearly** — and that range physically contains both angles.
+
+★★ **libdvdnav never has this problem because the preference order is the other way round.**
+`dvdnav.c:434` sets `vobu_next = vobu_sri.next_vobu` as the BASE for every VOBU, and the
+`sml_agli` block at `:452-468` only *overrides* it at an ILVU boundary. We made the override
+mandatory. **The fix restores the reference order**: `sml_agli` when present, `next_vobu`
+otherwise. The `next_vobu` decode is not new — it is the HW-proven seamless-branch path
+(PR fj#112), which is why this costs no new snoop bytes.
+
+⛔ **NOT `sml_pbi.next_ilvu_sa`** (DSI 0x26). It yields the identical target on both measured
+discs, but it is a new snoop field and a new decode where `next_vobu` is already captured at
+sector `0x541`, already validated, and is literally what the reference player uses.
+
+⛔ **NOT the cell's `seamless_angle` bit** (category byte 0, bit 0), even though it predicts
+`sml_agli` presence perfectly across all 23 swept discs. That is a DECLARATION in the IFO,
+and this fork has been burned repeatedly trusting declarations over measurement
+(`progressive_frame`, IFO channel counts, the 205-of-216 empty angle-menu stubs). Key on the
+snooped VALUE. `seamless_angle` is used only as the library-sweep discriminator below.
+
+**It is an AUDIO defect too, which is the second reporter's "pop".** Each angle's ILVU
+carries the SAME timespan of audio — MEASURED on Castle, angle 1 ILVU 1 = PTS 0.243..2.387 s
+and angle 2 ILVU 1 = 0.243..2.259 s, with **all three substreams (0x80 en 5.1 / 0x81 ja 2.0 /
+0x82 fr 2.0) present in both**. Linear streaming therefore delivers every timespan twice and
+the PTS jumps **backward ~2 s at every junction**, past `disp_sched`'s 0.5 s re-anchor
+threshold; the partial AC-3 frame straddling the junction is dropped by `ac3_reframer` as a
+silent gap. The cells carry `stc_discontinuity = 1` because each ILVU is its own STC epoch.
+⚠ Scope stated honestly: on *Castle* both angles carry the identical substream set, so a
+fixed track filter stays in one language and the reported "switches to Japanese" is most
+likely the Japanese title card plus the repeat; on another disc the angles could carry
+different audio sets and the language would flip outright. The fix cures both — the sibling
+ILVUs stop reaching the demux at all.
+
+**Blast radius — swept, not guessed.** Every `.iso` in the library, scanning all title PGCs
+of every VTS a multi-angle title points at: **23 discs have `block_type==1` angle blocks**,
+split cleanly by `seamless_angle`:
+
+| `seamless_angle` | `sml_agli` | discs | examples |
+|---|---|---|---|
+| 0 | absent, so **was broken** | **4** | `CASTLE_IN_THE_SKY` (3 blocks), `DIEANOTHERDAY_D1_PS` VTS05 (**19** blocks across a 2:12 feature), `MISSMARS` VTS05 (3 angles), `WITHOUTAPADDLE43` VTS03 (9 blocks) |
+| 1 | present, already correct | 19 | `MEN_IN_BLACK` (the fj#98 HW vehicle), `Beauty_and_the_Beast`, `BOOK_OF_LIFE`, `GOLDMEMBER`, `DIE_ANOTHER_DAY_DISC2` |
+
+⚠ **Known limitation, deliberate (maintainer decision):** on a disc with no `sml_agli` a
+mid-block **B6 press takes effect at the next angle block**, not at the next ILVU. There is
+no per-angle table to retarget with — `next_vobu` follows the chain of the angle whose VOBU
+was just read and says nothing about the siblings, so re-pointing `cell_i` at another angle's
+cell would bound this angle's target by the wrong cell. `ilvu_from_agli` records which source
+armed the jump and gates the re-point accordingly. ⛔ Do **not** "fix" this with a flushing
+seek to the sibling cell's `first_sector`: that restarts the segment, and on Castle the third
+angle block is the 3-minute end credits.
+
+**Gate: `bench/dvd/run_angle.sh --red`.** `angle_noagli_tb` runs the real reader over a
+synthetic 2-angle block using Castle's own cell-category bytes (`0x56`/`0xD6`), with
+`sml_agli` zeroed and the chain only in `next_vobu`, and scores **the delivered byte stream**
+(which angle's marker bytes came out) plus **the PTS carried in it** — never a signal the fix
+names. Pre-fix it measures `A2=4068` (the sibling angle's bytes) and PTS
+`100 100 200 200 300` (the duplicated timespans); post-fix `A2=0` and `100 200 300 400 500`.
+`iso_reader_angle_tb` (the `sml_agli` MiB shape) and `iso_reader_ilvu_tb` (seamless branch)
+are **byte-identical** to the pre-change reader, which is what confines the delta to those 4
+discs.
+
+★ **Golden model: `tools/nav_extract.py --vts N --ilvu-angles`.** `--ilvu` used to
+`continue` on `block_type == 1`, so it could not describe an angle block at all; the new flag
+walks each angle's `next_vobu` chain and reports whether the disc authors `sml_agli`. It is
+the same walker the seamless-branch predictor uses, which is itself the point — the two cases
+follow the same pointer. Measured:
+
+```
+CASTLE_IN_THE_SKY  --vts 2  --ilvu-angles
+  cell  0 [bm=1 bt=1 il=1 sa=0]  sml_agli ALL ZERO
+          first=0      ilvu_end=691     last=8236    ILVUs=5  jumps=4  played=4591  skipped=3646   nav_ok OK
+  cell  1 [bm=3 bt=1 il=1 sa=0]  sml_agli ALL ZERO
+          first=692    ilvu_end=1245    last=8852    ILVUs=5  jumps=4  played=4262  skipped=3899   nav_ok OK
+  cell 32 [bm=1 bt=1 il=1 sa=0]  (end credits)  ILVUs=86 jumps=85 played=69967 skipped=69469  nav_ok OK
+
+MEN_IN_BLACK       --vts 14 --ilvu-angles      (the CONTROL)
+  cell  0 [bm=1 bt=1 il=1 sa=1]  sml_agli populated 0x3cb 0x51c 0x666 0x7b0 0x8fa
+          first=0      ilvu_end=197     last=155664  ILVUs=90 jumps=89 played=30540 skipped=125125 nav_ok OK
+```
+
+Every chain on both discs reaches `END_OF_CELL`, and the played/skipped split is ~1/2 on
+Castle (2 angles) and ~1/5 on MiB (5 angles) — so `next_vobu` is a complete, same-angle chain
+on a disc that *has* `sml_agli` as well as on one that does not. That is the independent
+evidence that the fallback is sound rather than merely convenient.
+
+⚠ **Two fixtures were too weak to catch their own mutations, and the RTL was not at fault
+either time** — worth knowing because both look like passing gates:
+`iso_reader_angle_tb` wrote **no `next_vobu` at all**, so a mutation that PREFERRED
+`next_vobu` over `sml_agli` was a no-op there (M2 passed). It now writes the same-angle
+successor, which is what a real disc carries — MEASURED on MiB RBN 37, `next_vobu = +934 =
+RBN 971 = sml_agli[angle 1]`, i.e. the two AGREE for the angle you are playing and DISAGREE
+for every other one, which is exactly why `sml_agli` must win. And `angle_noagli_tb`'s final
+hop originally pointed somewhere harmless, so dropping the `target <= cl_rd` bound changed
+nothing (M4 passed); it now points past the cell into the sibling's range.
+
+★ **Bench sweep, all 38 reader/VM benches** (the new ports are tied off in every one — a
+floating input is X, and X on `agl_vm_en` would poison the angle resolve): **36 pass**, and
+the two that fail — `iso_reader_atmos_tb` and `iso_reader_tpsw_boot_tb` — were re-diffed
+against the pre-change reader and are **byte-identical**, so they are the pre-existing
+failures CLAUDE.md already records, not a regression from this branch.
+
+### The disc picks the angle — SPRM3 was written and never read (2026-09-15)
+
+★★ **`dvd_vm` has latched SPRM3 from `SetSTN` since Phase 4 and exported only SPRM1 and
+SPRM2, so the angle was dead.** The reader's `cur_angle` was fed by the B6 button alone.
+MEASURED on Castle, the disc's own boot chain:
+
+```
+FP PGC          -> JumpSS VMGM pgc 2
+VMGM PGC2 post  -> g[8]=1  g[12]=0  g[13]=0  g[14]=2   *** angle 2 is the disc's default
+VTS02 PGC1 pre  -> if (g[8] != 1) Goto 5
+                   SetSTN ASTN=g[12] SPSTN=g[13] AGLN=g[14]
+VTS02M Audio menu buttons:  SetSTN ASTN=0 AGLN=2  (English 5.1)
+                            SetSTN ASTN=1 AGLN=1  (Japanese 2.0)
+                            SetSTN ASTN=2 AGLN=2  (French 2.0)
+VTSM PGCs 19/20/21/24 pre:  g[14] = AGLN          *** it reads the angle BACK
+```
+
+So angle 1 = Japanese title cards, angle 2 = English/localized, the disc's default is **2**,
+and **the angle is welded to the audio language through the disc's own Audio menu**. The core
+played angle 1 regardless.
+
+⛔ **It is NOT driven by `Player Language`, and must not be.** A full decode of every PGC
+command on the disc finds **zero** references to SPRM0 (menu language), 16/17 (audio
+language), 18/19 (subtitle language) or 20 (region). Coupling the OSD language option to the
+angle would invent behaviour no disc asks for.
+
+★★★ **AND THE READER PICKED THE CELL BEFORE THE DISC COULD SPEAK — DETERMINISTICALLY.**
+`pgc_loaded` pulses at `S_PGC_DONE`; the reader reaches the `S_ANGLE_SCAN` resolve about
+**8 cycles** later (2 × `S_CELL_LOAD`, 2 × 2 for a two-cell scan). The VM only *starts*
+`BLK_PRE` on that same pulse and needs many cycles per command (serial ALU + an 8-byte BRAM
+fetch). This is not a race that is usually lost — it is always lost. libdvdnav's order is
+unambiguous: `play_PGC` runs PRE, *then* `play_Cell` does `cellN += AGL_REG - 1`.
+Fix: `dvd_vm.pre_done` (PRE ran, linked away, or there was none) → the reader latches
+`pre_seen` and holds in the new `S_ANGLE_PRE` before `S_ANGLE_PICK`.
+⚠ **The `ANG_PRE_WD` watchdog (~0.25 s) is load-bearing, not belt-and-braces:** a PRE command
+that itself jumps leaves the VM in `V_WAIT` awaiting a `pgc_loaded` that a stalled reader
+would never produce. Only the FIRST angle block after a PGC load can ever wait; mid-title
+blocks find `pre_seen` already set.
+⚠ **`pre_done`'s `!ev_loaded` term is equally load-bearing:** `pgc_loaded` only *latches* the
+event and the VM can sit in `V_IDLE` for a cycle or two before consuming it, so without that
+term the pulse fires **before** the PRE block runs — the same defect, one level down.
+
+★ **The write-back matters because the disc reads AGLN back.** A B6 press pulses
+`dvd_vm.agl_set` with the reader's settled `cur_angle` (taken from the reader's OUTPUT, never
+predicted in emu — predicting it would need a second copy of the wrap rule). Without it,
+Castle's `g[14] = AGLN` menus would store a stale angle and re-apply it at the next title
+entry, silently undoing the user's choice.
+
+★ **Seam gate: `tools/check_angle_wiring.py`** reads the `.sprm_agln` / `.agl_vm` /
+`.agl_vm_en` / `.pre_done` / `.vm_pre_done` / `.agl_set` connections out of `dvd/emu.sv`.
+emu has no bench and each module bench is handed the other side's value, so a wrong or
+missing connection is invisible to both — the issue #81 lesson. RED on the pre-fix file and
+on three re-regressions (`.agl_vm_en(1'b0)`, `.vm_pre_done(1'b1)`, `.agl_vm` fed from
+something other than the VM's export). `dvd_vm_tb` **T7** drives the disc's real instruction
+bytes (`71 00 00 0e 00 02 00 00` then `41 00 00 8c 8d 8e 00 00`) and asserts the export, the
+single `pre_done` pulse per load, the write-back, and that a `g[5] = AGLN` command reads the
+user's choice back.
+
+⚠ With `Disc Menus = Off` there is no VM, so `agl_vm_en` is low and angle 1 plays — which is
+also what the disc itself asks for on that path, since its own `if (g[8] != 1) Goto 5` skips
+the `SetSTN` when the boot chain did not run.
 
 ## In-title MULTI-button menus — DVD-game discs (Scene It) — ⏳ HW-confirm pending (`feature/scene-it-menu-nav`)
 

@@ -55,7 +55,8 @@ to the HDMI transmitter, which is also why 5.1 must leave as a compressed bitstr
 Working: First Play, root and title menus, PCI/HLI button highlights, D-pad navigation
 following the authored link graph, subpictures, chapters via the PTT tables, multi-angle,
 seamless-branch interleaved cells, still frames, and audio/subtitle/angle/language
-selection.
+selection. Discs that pick the camera angle themselves — typically to show a title card
+or credits in your chosen language — are followed rather than overridden.
 
 Not implemented: **parental-control enforcement** and **UOP enforcement** (the flags a disc
 uses to forbid skipping something). In practice this means the core lets you skip things a
