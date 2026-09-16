@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-softscope"
+`define CORE_VERSION "dev-saveroverlay"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -6096,15 +6096,53 @@ reg        sp_force_q;
 wire stop_full = stopped_w & ~stop_kept_w;      // stage 2: position forgotten
 wire hud_on_e  = hud_on_w & ~saver_on_w & ~stop_full;
 wire bar_on_e  = bar_on_w & ~saver_on_w & ~stop_full;
+// THE PICTURE IS BLACK while Stop or the screensaver owns the screen. Consumed
+// TWICE: as the subpic_blend INPUT further down (see the comment there for why the
+// blend input and not the vga_*_q mux), and as the gate on the two terms below.
+// Declared HERE because the register stage reads it well before the instance.
+wire pic_blank = stopped_w | saver_on_w;
+// ★★ ...AND EVERYTHING DERIVED FROM THE PICTURE GOES WITH IT. A gate on the picture
+// is not a gate on what is drawn OVER the picture, and that is exactly how this
+// shipped: the subpicture layer -- a subtitle, or a disc-menu button highlight, which
+// is a RECOLOUR of subpicture pixels -- is picture CONTENT, not player chrome, and
+// ungated it composited over the blanked black frame and simply stayed there.
+// ⚠ A MENU HIGHLIGHT NEVER EXPIRES ON ITS OWN. spu_decode's `visible` is
+// `enable && c_valid && (menu_mode || window)` (spu_decode.sv:287) -- menu_mode
+// BYPASSES the STC show/hide window -- so q_inside holds for as long as the menu is
+// up. Pause on a menu, let the saver arm, and the highlight burns in for the whole
+// screensaver, which is the one thing the screensaver exists to prevent. On Stop it
+// is worse: a stop is indefinite, and with Screensaver=Off it never ends.
+// ⚠ The gate is pic_blank, NOT saver_on_w -- the two are not the same coverage and
+// Stop leaks identically. hud_on_e/bar_on_e use ~stop_full (stage 2 only) because
+// stage 1 deliberately KEEPS the "STOP" caption: the presence of a caption IS the
+// stage readout. The subpicture has no stage-readout job, so that reasoning does not
+// transfer to it. An ordinary pause is untouched -- pause_q is not in pic_blank, so a
+// paused title keeps its picture and its subtitle.
+// ⚠⚠ GATED AT THE REGISTER STAGE ONLY, and the base sp_q_inside / hl_use wires are
+// left alone ON PURPOSE: the release-visible O[2] diagnostics read them directly
+// (sp_seen -> dbg_blk3, hl_use_q -> hlvis_seen -> dbg_blk8, below). Those answer
+// "did the subpicture/recolour FIRE?", not "was it DISPLAYED?" -- gating them would
+// make a screensaving board read RED and send the next debugger after a phantom.
+// That is the same mistake blk8 was already fixed for once (2026-08-17, see below).
+// ⚠ sp_sel_col (the pgc_palette ADDRESS) stays ungated too: with sp_on_e low the
+// palette colour cannot reach the pins, so a gate there changes no pixel while adding
+// a term to a BRAM address path in the display hotspot -- and creating a second,
+// subtly different definition of "the highlight is active" for the next reader to
+// pick the wrong one of. Likewise sp_r/g/b_q: unobservable with ov_on low.
+// ⛔ logo_on_w is NOT gated. It IS the screensaver.
+// Gates: tools/check_saver_overlay_wiring.py, bench/dvd/run_screensaver.sh --red.
+// Detail: docs/screensaver.md (the layer table).
+wire sp_on_e   = sp_q_inside & ~pic_blank;
+wire hl_use_e  = hl_use      & ~pic_blank;
 always @(posedge clk_sys) begin
     sp_r_q     <= hud_on_e ? hud_r_w     : bar_on_e ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
     sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
     sp_b_q     <= hud_on_e ? hud_b_w     : bar_on_e ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
     sp_alpha_q <= hud_on_e ? hud_alpha_w : bar_on_e ? bar_alpha_w : logo_on_w ? 4'd15
-                           : (hl_use ? hl_a : sp_alpha);   // HLI alpha for recoloured classes
+                           : (hl_use_e ? hl_a : sp_alpha); // HLI alpha for recoloured classes
     sp_idx_q   <= sp_q_idx;
-    sp_on_q    <= hud_on_e | bar_on_e | logo_on_w | sp_q_inside;
-    sp_force_q <= hud_on_e | bar_on_e | logo_on_w | hl_use; // + logo: bypass the idx0 key
+    sp_on_q    <= hud_on_e | bar_on_e | logo_on_w | sp_on_e;
+    sp_force_q <= hud_on_e | bar_on_e | logo_on_w | hl_use_e; // + logo: bypass the idx0 key
 end
 
 // Alpha-composite the subtitle over the decoded video, COMBINATIONALLY, right before
@@ -6119,8 +6157,10 @@ wire [7:0] sub_r, sub_g, sub_b;
 // output. Blanking here (the blend INPUT) rather than at the vga_*_q mux -- where
 // sw_blank lives -- is deliberate: sw_blank sits before sub_r and so takes out the
 // HUD and idle logo too, but Stop must still show "STOP" and the screensaver IS
-// the idle logo. So the picture goes black underneath and the overlay survives.
-wire pic_blank = stopped_w | saver_on_w;
+// the idle logo. So the picture goes black underneath and the CHROME survives.
+// ⚠ The SUBPICTURE does not: it is picture content, and pic_blank gates it at the
+// register stage above (sp_on_e / hl_use_e) so a menu highlight cannot burn in.
+// pic_blank is declared up there because the register stage reads it first.
 subpic_blend subpic_blend_inst (
     .in_r(pic_blank ? 8'd0 : core_r),
     .in_g(pic_blank ? 8'd0 : core_g),
