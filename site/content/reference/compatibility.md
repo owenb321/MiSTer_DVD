@@ -1,6 +1,6 @@
 # Compatibility
 
-What plays, what does not, and what is untested. Current as of **v0.5.0**.
+What plays, what does not, and what is untested. Current as of **v0.6.0**.
 
 ## Formats
 
@@ -28,6 +28,7 @@ What plays, what does not, and what is untested. Current as of **v0.5.0**.
 | Other DVD-legal sizes — 704×480, 352×480 half-D1 | Accepted, **little or no testing** |
 | NTSC / PAL detection | Automatic from the stream |
 | Progressive and native 480i/576i output | Supported |
+| Native 240p / 288p for VCD and MPEG-1 SIF | Supported, automatic on the analog raster |
 | PAL 576i on an analog CRT | Confirmed working on real PAL sets |
 | 3:2 pulldown / film cadence | [Supported](../video/film-24p.md), automatic |
 

@@ -1,7 +1,9 @@
 # Idle logo
 
 When the core is loaded with nothing mounted, a **bouncing logo screensaver** plays behind
-the file picker. This is the built-in default:
+the file picker. The same logo takes over a paused or stopped picture once the
+[Screensaver](../playback/settings.md) timeout expires, so a still frame cannot burn in.
+This is the built-in default:
 
 <figure markdown="span">
   ![The default idle logo: an optical-disc glyph beside a "MiSTer DVD" wordmark](../assets/img/default-logo.png){ width="512" }

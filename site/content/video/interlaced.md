@@ -11,7 +11,7 @@
 | Mode | Behaviour |
 |---|---|
 | **Auto** *(default)* | Follows `MiSTer.ini`: an analog TV configured there means **Interlaced**, otherwise **Progressive**. |
-| **Interlaced** | The decoder emits the disc's **authored fields** as a native 15 kHz 480i/576i raster. The analog pins carry it directly for a CRT; HDMI shows it as 480i through the framework scaler. MiSTer reports `720x480i @ 59.94 Hz`. |
+| **Interlaced** | The decoder emits the disc's **authored fields** as a native 15 kHz 480i/576i raster. The analog pins carry it directly for a CRT; HDMI shows it as 480i through the framework scaler. MiSTer reports `720x480i @ 59.94 Hz`. SIF-height content — a VCD, or MPEG-1 — is the exception: it gets a progressive [240p/288p](analog-crt.md#native-240p-for-vcds-and-mpeg-1) raster instead, since it has no fields to emit. |
 | **Progressive** | The progressive picture, as before. HDMI at full quality, [Film 24p](film-24p.md) available, and the analog pins carry the progressive raster for displays that take 480p/576p. |
 
 An explicit choice always overrides `MiSTer.ini` and persists across reloads.

@@ -9,7 +9,7 @@ problem be reproduced without the disc.
 
 ## Always include
 
-- The **core version** from the OSD — the `v0.3.0 260901` line. It is the only thing that
+- The **core version** from the OSD — the `v0.6.0 260916` line. It is the only thing that
   identifies a build. On a test build handed out before a release it names the feature
   instead, like `dev-seekrealign 260903`; quote whichever you see, exactly.
 - The **disc title and region**.
