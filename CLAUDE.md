@@ -252,6 +252,247 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **SEEKING INSIDE AN ANGLE BLOCK — A BLOCK OCCUPIED N TIMELINE SLOTS INSTEAD OF ONE, A
+  SCRUB NEVER ARMED THE ANGLE MACHINERY, AND THE SNAP LANDED ON WHICHEVER ANGLE THE TARGET
+  FELL IN (2026-09-15/16, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN and
+  ✅ HW-CONFIRMED 2026-09-16** (build `DVD_anglefollow_20260916_0353.rbf`, SEED 7 first roll,
+  clk_dec 94.41/90.40 vs the 86.0 gate) — maintainer on `Grave of the Fireflies`: *"no angle
+  switching after a seek ... and the timestamps are correct"*. **ALL THREE PRE-EXISTING** — found by the maintainer while confirming the three fixes below, which are
+  what let `Grave of the Fireflies` play far enough to reach them. Report: *"seeking at any
+  point shows an incorrect preview time (+8 minutes when seeking during the beginning
+  chapter) and starts alternating the 2 available angles at 1hz."*
+  ★★ **ONE ROOT: A SIBLING ANGLE CELL IS INDISTINGUISHABLE FROM SEQUENTIAL CONTENT** to
+  anything that maps an RBN to a cell or accumulates time.
+  **(a) The timeline.** The cell walk's prefix sum added EVERY cell's `playback_time`,
+  siblings included — but a 2-angle block is one span of film offered two ways. MEASURED on
+  Grave (13 back-to-back 2-angle pairs = the whole film): the 13 angle-1 cells plus the
+  closing cell sum to **5396 s = 1:29:56**, matching the PGC's declared `01:30:03` to frame
+  rounding, while all 26 give **10725 s = 2:58:45**. ★★ And that is what produced the
+  reported **+8:00**: a block's two cells OVERLAP (chapter 1 is cell 0 at RBN 0..339620 and
+  cell 1 at 457..340206) and `seek_time` keeps the **nearest at-or-below**, so any target
+  past sector 457 resolved to the SIBLING and published its start — 8:00, chapter 1's own
+  length, to the second. **Fix = the prefix sum only:** a sibling (`bt==1 && bm>=2`)
+  inherits the block-first cell's start and adds nothing. ★ That makes `seek_time`'s pick
+  **harmless rather than wrong** (both cells now report the same start), so the preview, the
+  live clock and the title total are corrected together and **`seek_time` needs no change**.
+  This removes the *"multi-angle blocks over-count — documented limitation"* that
+  `dvd_iso_reader.sv` has carried since Phase 11.
+  **(b) The 1 Hz alternation.** The angle-block entry was gated
+  `cc_blk_first && !angle_resolved && `**`!rbn_override`**, and a raw-RBN scrub sets
+  `rbn_override` — so a SEEK INTO a block never ran the angle scan: `angle_count` stayed 0,
+  `angle_active` with it, and `seamless_active` needs `!cc_is_angle` so that was 0 too.
+  Neither arm set ⇒ no ILVU follow ⇒ the interleaved range streamed LINEARLY. Grave's first
+  ILVU is ~457 sectors ≈ 1 s. ★ **The seek path's own comment already said the opposite** —
+  *"a transport seek re-scans any angle/interleaved block it lands in"*, right where the seek
+  clears `angle_resolved`. ⚠ **The mid-block ILVU hop is excluded by `!angle_resolved`, not
+  by that term** (the hop fires only while `angle_active`, which requires `angle_resolved`,
+  and does not clear it), which is why the term was removable — checked against the benches,
+  not reasoned away, since it dates to the original Phase 9 import with no recorded
+  rationale.
+  **(c) THE SNAP LANDED ON WHICHEVER ANGLE THE TARGET FELL IN — A COIN FLIP.** Arming the
+  follow is not enough: the scrub is snapped FORWARD to the next NAV pack and the angles'
+  ILVUs round-robin, so the landing belongs to whichever angle's ILVU the target fell in.
+  MEASURED on Grave, per angle across all 13 blocks: **48–52 %**. Field report *"seeking
+  always lands on angle 2, so there's a quick glance of the storyboard angle before it
+  settles on the film"* — the coin flip seen a few times, and "settles" is the `sml_agli`
+  follow converging after one ILVU (~1 s). ⚠⚠ **On a disc with NO `sml_agli` it never
+  converges** — Castle / Die Another Day would play the REST OF THE BLOCK in the wrong
+  angle; unobserved only because their blocks are a title card, an opening and credits.
+  **Fix = an angle-aware snap keyed on `dsi_gi.vobu_vob_idn`** (DSI 0x18 → sector `0x41F`),
+  in three passes: PLAIN (land as before) → LEARN (probe the chosen cell's own
+  `first_sector`, which IS the first VOBU of that angle's chain, to read its VOB_ID) → FILT
+  (re-snap from the landing, accepting only that VOB_ID).
+  ★ **MEASURED premise on all three discs:** every angle cell of a block has a DISTINCT
+  VOB_ID and every VOBU inside that angle's ILVUs carries it (Grave: vob 1 at RBN 0..456,
+  vob 2 at 457..1074, vob 1 at 1075..). ⚠ VOB_IDs are NOT consecutive from 1 — Castle uses
+  1/2, 4/5, 8/9 — so `first + angle - 1` would be wrong; the cell's own value is read.
+  ★ **Testing the VOB_ID costs no extra reads:** the probe leaves the sector resident in
+  `parse_buf` (`pb_sec`) and `rbuf` is only a 45-byte window copy, so the `0x41F` window is a
+  second `S_FETCH`. Only LEARN costs a real read — one per scrub into an angle block.
+  ⚠ **The angle passes must NOT fall back into `S_RBN_SCAN`** when the budget runs out: that
+  re-resolves the cell and undoes the angle choice. They fall back to the unfiltered landing.
+  ⚠⚠ **THE DIVERT IS GATED ON `ang_snap_pend`, NOT `rbn_override`.** `rbn_override` is set by
+  a scrub landing AND by the mid-block ILVU hop, and the hop keeps `angle_resolved` set — so
+  the first version fired on the first hop of a block reached by ORDINARY PLAYBACK, putting a
+  probe read into the one path whose contract is time-continuity (no flush, no `seek_ack`, no
+  A/V re-anchor; HW-proven since fj#98). ★ **No bench caught it and none could have:** the
+  outcome stayed CORRECT, just with an extra read and mid-stream latency, so TEST A/B stayed
+  green — it would have reached HW as a stutter at an ILVU boundary and been blamed on
+  something else. The flag means "the most recent SCRUB has not had its landing angle
+  verified": set when a scrub is armed, cleared as soon as ANY landing resolves, never set by
+  the hop. The tell is TEST D's `A1` returning to 2048 (it read 2489 while the probe fired on
+  the hop).
+  ⛔ **C_POSI parsing was the first plan and was DROPPED on inspection** — all eight `wphase`
+  codes are in use, so it needs the shared PGC walk phase widened to `[3:0]` across 15 sites
+  in a parser every disc and domain goes through, **and it would not have removed the second
+  pass anyway** (the snap runs before the cell is resolved). The probe keeps the risk inside
+  the seek path for one read.
+  **Gate: `iso_reader_angle_tb` TEST G** (seek onto angle 2's NAV pack with angle 1 selected;
+  RED `A2=2048`, GREEN `A2=0`). Fixture VOB_IDs are 1/2 for block 1 and **3/4** for block 2 —
+  deliberately not 1/2 again and not consecutive, so an angle-index rule fails.
+  ⚠⚠ **THE FIXTURE'S "NAV PACKS" WERE NEVER NAV PACKS, AND TEST G FAILING ON THE *FIXED*
+  READER IS WHAT EXPOSED IT.** `put_nav` wrote the DSI but none of the three signatures
+  `nav_sig_hit` tests (pack start @0, system header @14, PCI PES @38), so the VOBU-align
+  probe exhausted `NAV_CAP` on every scrub and fell back to the raw target — **the snap had
+  never been exercised by this bench**, and TEST D was green only because its raw target
+  happened to be a NAV sector. Third fixture gap on this branch (see also the missing
+  `next_vobu` and the harmless last hop): **a failing arm is a claim about the FIXTURE first
+  and the RTL second**, and an arm that fails on the fixed reader is the tell.
+  ⚠ **Residual, measured and deliberate:** a target landing in the sibling's TAIL (past the
+  block-first cell's `last_sector`) matches only the sibling, which is not `cc_blk_first`, so
+  the scan still does not run — **586 of ~340,000 sectors (0.17 %)** on Grave chapter 1.
+  Walking back to `block_first` would fix it; not done.
+  **Gates: `iso_reader_angle_tb` TEST D** (scrub to a NAV-aligned RBN inside a block, only
+  the selected angle's bytes afterwards — RED `A2=4096`, the entire sibling cell) **and TEST
+  E** (durations 10/20/5 ⇒ `title_secs_o == 35`; summing siblings gives **65**, the
+  1:30→2:58 error in miniature). ⚠ TEST D deliberately does NOT assert `angle_count`: it is
+  a PEAK and the block was already scanned during the settling play, so it reads 2 pre-fix
+  too — an assertion that cannot fail for this defect. ⚠ TEST D's landing is NAV-aligned on
+  purpose: the reader's `S_NAV_SEEK` snap (fj#106) moves a raw target to the next NAV pack,
+  so that is what a real disc produces; a landing PAST a nav pack has no DSI to snoop and
+  cannot arm the follow for the ILVU it lands in — a property of ILVU navigation, not of
+  this fix.
+  Detail: **`docs/dvd_nav.md`** "Seeking inside an angle block".
+
+- ✅ **ADJACENT ANGLE BLOCKS — THE ANGLE COUNT WALKED OUT OF THE BLOCK IT WAS MEASURING,
+  REPORTING 9 ANGLES ON A 2-ANGLE DISC AND SKIPPING ~22 MINUTES OF THE FILM (2026-09-15,
+  branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, and
+  ✅ HW-CONFIRMED 2026-09-15** — maintainer: *"Grave of the Fireflies does report 2 angles
+  now, and playing past 8 minutes does roll into chapter 2"*, i.e. both halves of the defect
+  (the count AND the block skip) measured on the board.** Field report on `Grave of the Fireflies.iso`: *"playing that back on the core
+  showed 9 angles to choose from but no auto-switching that I saw. Is that normal
+  behavior?"* No — `TT_SRPT` declares **2**, and the disc's NAV packs carry exactly two
+  `sml_agli` entries. **The 9 was the core's own cap.**
+  ★★ **`S_ANGLE_SCAN` COUNTED `block_type` AND NEVER RE-CHECKED `block_mode`.** A block is
+  `block_mode` 1 (FIRST), 2 (IN)…, 3 (LAST), and the NEXT block starts at 1 — but the scan
+  counted the run of consecutive `block_type==1` cells and stopped only at a non-angle cell
+  or its `< 9` limit. Fine on every disc Phase 9 was proven on, where a normal cell follows
+  each block. **Grave of the Fireflies VTS_01 PGC1 is 13 BACK-TO-BACK 2-angle pairs** (one
+  per chapter, `bm=1,3, 1,3, …`) with only the final cell of the PGC normal, so the scan ran
+  the whole way to its cap.
+  ★★★ **AND THE WRONG COUNT IS NOT THE WORST OF IT — `block_last` FOLLOWS IT.**
+  `block_last = block_first + angle_count - 1` = cell 8, so the end-of-block skip lands on
+  0-based cell 9 = **1-based cell 10 = chapter 5's ANGLE-2 cell**: after chapter 1 (8:00)
+  playback jumps over chapters 2/3/4 — **≈22 minutes** — and resumes in the other angle.
+  ⚠ Then it compounds: that landing cell is `bm=3`, so `cc_blk_first` is false and
+  `angle_resolved` was just cleared ⇒ **neither `angle_active` nor `seamless_active`**
+  (`seamless_active` needs `!cc_is_angle`), so the ILVU follow stops and it streams an
+  interleaved range LINEARLY — the alternating-angles symptom again, by a third route.
+  **Fix = libdvdnav's own rule** (`play_Cell_post`: `while (block_mode >= 2) cellN++`):
+  continue only while the next cell is IN or LAST of the SAME block. ⚠ The 9 cap STAYS (it
+  is the `sml_agli` table size and the spec's angle limit, so it bounds a malformed block);
+  it is simply no longer what ends a well-formed one.
+  ⛔ **A "have I consumed the LAST cell" latch was written and then DELETED** — on any
+  well-formed layout `block_mode >= 2` already stops at the boundary, so no fixture could
+  distinguish it, and libdvdnav has no such latch. A claim no mutation can catch is not a
+  gated claim; do not re-add it.
+  ★★ **SWEPT OVER 808 ANGLE BLOCKS: the old rule disagrees on 12 of the 23 multi-angle
+  discs** — `TimeTraveler` (**463** adjacent blocks), `Beauty_and_the_Beast` (**54**),
+  `HOW_GREAT_IS_OUR_GOD` (14), `Grave of the Fireflies` (12), `BOOK_OF_LIFE` (6), and 7
+  more with 1–3 each. ★ **Cross-checked against the DISC, not just itself:** the block count
+  equals `TT_SRPT nr_of_angles` on **21 of 23**; the 2 exceptions are one disc whose blocks
+  genuinely hold 3 and 4 angles under a title declaring 5 — `nr_of_angles` is a TITLE-level
+  maximum, so per-block counting is the MORE precise of the two. That is also why the reader
+  counts cells rather than reading `nr_of_angles`: `block_last` needs the per-block value.
+  **Gate: `iso_reader_angle_tb` TEST C** (a second 2-angle block immediately after the
+  first, the Grave shape) — RED on the pre-fix reader with `angle_count=4` and **`B1=0`, the
+  second block skipped entirely**. Mutation **M5** restores the old rule and must fail TEST C
+  while leaving `angle_noagli_tb` green. ★ Control, in its strongest form: with BOTH reader
+  fixes applied, **`main`'s own unmodified single-block bench is byte-identical to `main`'s
+  own reader**. ⚠ This disc DOES author `sml_agli`, so the no-`sml_agli` fix below does not
+  touch it — a genuinely separate defect found by a user question.
+  Detail: **`docs/dvd_nav.md`** "Adjacent angle blocks".
+
+- ✅ **A MULTI-ANGLE DISC NEED NOT AUTHOR `sml_agli`, AND PHASE 9 REQUIRED IT — Studio
+  Ghibli discs alternated between the localized and Japanese versions every 1–4 s
+  (2026-09-15, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, and
+  ✅ HW-CONFIRMED 2026-09-15.** Field report on `CASTLE_IN_THE_SKY.iso`: *"there are multiplexed
+  versions of the title to show the localized or Japanese version. Currently the core
+  switches rapidly between the two angles rather than sticking to one."* A second user, on
+  unnamed Ghibli discs: *"starts playing the English version then makes a pop noise and then
+  switches to Japanese for a second then back to English."*
+  ★★ **THE ARM REQUIRED `snoop_valid` (= `sml_agli[cur_angle-1] != 0`), AND THESE DISCS
+  AUTHOR NO `sml_agli` AT ALL.** MEASURED (`nav_extract.py --angles --title-vob 1`): on
+  CASTLE VTS_02 PGC1 and DIEANOTHERDAY_D1_PS VTS_05 PGC1, **every VOBU of every angle block
+  reports `sml_agli: (none)`** while `vobu_sri.next_vobu` is populated and correct (Castle
+  RBN 491 `BLOCK|LAST` → `+755` → RBN 1246 = angle 1's next ILVU, stepping over angle 2's at
+  692..1245). So no jump ever armed and the reader streamed the cell's `[first..last]`
+  LINEARLY — a range that physically contains both angles.
+  ★★ **libdvdnav never hits this because the preference order is the other way round:**
+  `dvdnav.c:434` makes `vobu_sri.next_vobu` the BASE for every VOBU and the `sml_agli` block
+  at `:452-468` only OVERRIDES it. We made the override mandatory. Fix = restore the
+  reference order (`sml_agli` when present, `next_vobu` otherwise), reusing the `next_vobu`
+  decode the HW-proven seamless-branch path already snoops (PR fj#112) — no new snoop bytes.
+  ★★ **IT IS AN AUDIO DEFECT TOO, AND THAT IS THE SECOND REPORT'S "POP".** Each angle's ILVU
+  carries the SAME timespan of audio: Castle angle 1 ILVU 1 = PTS 0.243–2.387 s, angle 2
+  ILVU 1 = **0.243–2.259 s**, with all three substreams (0x80 en / 0x81 ja / 0x82 fr) in
+  both. Linear streaming delivers every timespan twice, so the PTS jumps **backward ~2 s at
+  every junction** — past `disp_sched`'s 0.5 s re-anchor threshold, with the straddling AC-3
+  frame dropped by `ac3_reframer` as a silent gap. ⚠ On Castle both angles carry the same
+  substream set, so the reported language flip is most likely the Japanese title card plus
+  the repeat; another disc could carry different sets and flip outright. Same fix either way.
+  ★★★ **AND A SECOND, INDEPENDENT DEFECT: `sprm3` (AGLN) WAS WRITTEN BY THE VM AND READ BY
+  NOBODY.** `dvd_vm` has latched SPRM3 from `SetSTN` since Phase 4 and exported only SPRM1/2.
+  Castle's boot chain sets `g[14]=2` and its feature PGC's PRE runs
+  `SetSTN ASTN=g[12] SPSTN=g[13] AGLN=g[14]` — **the disc asks for angle 2** (English title
+  cards; angle 1 is Japanese) and its Audio menu re-issues SetSTN with the angle matching
+  each language. The core played angle 1 regardless. Fixed: `dvd_vm.sprm_agln` → emu's
+  `vm_owns_angle` latch (same last-writer-wins shape as `vm_owns_aud`/`vm_owns_sp`) → the
+  reader's `agl_vm`/`agl_vm_en`; a B6 press releases the claim AND writes SPRM3 back
+  (`agl_set`), because Castle's VTSM PGCs 19/20/21/24 all run `g[14] = AGLN`.
+  ⛔ **NOT driven by `Player Language`, measured:** a full decode of every PGC command on the
+  disc finds ZERO references to SPRM0/16/17/18/19/20. The angle follows the disc's own audio
+  menu, not the player's language register — do not couple the OSD option to it.
+  ✅ **HW-CONFIRMED 2026-09-15, and the maintainer's reading of it is right:** *"Castle in the
+  Sky now correctly selects the angle depending on which language is selected
+  (english/japanese), at least I think that's how it works"*. It is — the disc's Audio menu
+  sets BOTH in one instruction: `SetSTN ASTN=0 AGLN=2` (English 5.1), `ASTN=1 AGLN=1`
+  (Japanese 2.0), `ASTN=2 AGLN=2` (French 2.0), so picking a language there picks the title-card
+  angle with it. ⚠ **It is the DISC's Audio menu that does this, not the core's B7 Audio
+  button** — B7 retargets the substream directly and never runs `SetSTN`, so the angle does
+  not follow it. That is also how a real player behaves, and it is why `vm_owns_angle`
+  releases on a B6 press rather than fighting the user.
+  ★★★ **AND A THIRD: THE READER PICKED THE CELL BEFORE THE DISC COULD SPEAK, ALWAYS.**
+  `pgc_loaded` pulses at `S_PGC_DONE` and the reader reaches the `S_ANGLE_SCAN` resolve ~8
+  cycles later, while the VM only STARTS `BLK_PRE` on that same pulse (serial ALU + an 8-byte
+  BRAM fetch per command). Not a race sometimes lost — always lost. libdvdnav's order is
+  `play_PGC` → PRE → `play_Cell`'s `cellN += AGL_REG - 1`. Fix: new `dvd_vm.pre_done` →
+  reader `pre_seen` → a bounded hold in the new `S_ANGLE_PRE`.
+  ⚠ **`ANG_PRE_WD` (~0.25 s) is LOAD-BEARING:** a PRE command that itself jumps leaves the VM
+  in `V_WAIT` awaiting a `pgc_loaded` a stalled reader would never produce.
+  ⚠ **`pre_done`'s `!ev_loaded` term is equally load-bearing:** `pgc_loaded` only LATCHES the
+  event, so without it the pulse fires BEFORE the PRE block runs — the same defect one level
+  down.
+  ⛔ **NOT keyed on the cell's `seamless_angle` bit** (byte 0 bit 0) even though it predicts
+  `sml_agli` presence perfectly on all 23 swept discs — that is a DECLARATION in the IFO, the
+  `progressive_frame` class. Key on the snooped VALUE; `seamless_angle` is only the sweep's
+  discriminator. ⛔ **NOT `sml_pbi.next_ilvu_sa`** (same target on both discs, but a new snoop
+  field where `next_vobu` is already captured and validated).
+  ★★ **BLAST RADIUS SWEPT, NOT GUESSED: 23 discs have `block_type==1` angle blocks; 4 author
+  no `sml_agli`** — `CASTLE_IN_THE_SKY` (3 blocks), `DIEANOTHERDAY_D1_PS` VTS05 (**19**
+  blocks across a 2:12 feature), `MISSMARS` VTS05, `WITHOUTAPADDLE43` VTS03. The other 19
+  (MiB, Beauty and the Beast, BOOK_OF_LIFE, GOLDMEMBER, DIE_ANOTHER_DAY_DISC2) author it and
+  were always correct — which is why the fj#98 HW vehicle never showed this.
+  ⚠ **Accepted limitation (maintainer decision):** on a no-`sml_agli` disc a mid-block B6
+  press takes effect at the NEXT angle block. `next_vobu` follows the chain of the angle
+  whose VOBU was read and knows nothing about the siblings, so `ilvu_from_agli` gates the
+  cell re-point. ⛔ Do NOT "fix" it with a flushing seek to the sibling cell's `first_sector`
+  — that restarts the segment, and Castle's third block is the 3-minute end credits.
+  **Gates: `bench/dvd/run_angle.sh --red`** (`angle_noagli_tb` scores the DELIVERED BYTE
+  STREAM and the PTS in it — pre-fix `A2=4068` and PTS `100 100 200 200 300`, post-fix `A2=0`
+  and `100 200 300 400 500`; `iso_reader_angle_tb` and `iso_reader_ilvu_tb` are
+  **byte-identical** to the pre-change reader, which confines the delta to those 4 discs),
+  **`tools/check_angle_wiring.py`** (the emu seam, RED on the pre-fix file and 3
+  re-regressions — emu has no bench, the issue #81 lesson), and `dvd_vm_tb` **T7** (the
+  disc's real instruction bytes).
+  ⚠ **HW instrument: `reanchors` is ALREADY in the telemetry** — it should climb ~once per
+  1–4 s through an angle block on a broken core and stop on a fixed one. Screenshot sampling
+  is the WRONG instrument here (the alternation period is 1–4 s against ~5 s ssh-paced
+  captures = below Nyquist), sound for REPRODUCING but biased toward a false pass when
+  CONFIRMING. Castle block A is RBN 0…8852 = the first 12 s of the title.
+  Detail: **`docs/dvd_nav.md`** "No `sml_agli`" + "The disc picks the angle",
+  `docs/track_selection.md`.
+
 - ✅ **THE HUD WAS AUTHORED FOR A FRAME THAT DOES NOT EXIST ON THE PROGRESSIVE OUTPUT —
   no HUD at all on a VCD, a HUD running off the right edge on an SVCD (2026-09-14, branch
   `fix/hud-narrow-window`); sim-proven RED/GREEN, 12 mutations each caught by its own arm,

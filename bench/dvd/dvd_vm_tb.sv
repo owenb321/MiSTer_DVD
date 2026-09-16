@@ -90,6 +90,14 @@ module dvd_vm_tb;
     wire        btn_force;
     wire [5:0]  btn_force_val;
     wire [5:0]  hl_btnn;       // SPRM8 button export (nav_pci re-seed), part 3 T6
+    // Camera angle (SPRM3/AGLN) export + the user's write-back, part 3 T7.
+    wire [7:0]  sprm_agln;
+    wire        pre_done;
+    reg         agl_set = 0;
+    reg  [3:0]  agl_set_val = 4'd1;
+    integer     pre_done_n = 0;
+    integer     t7_err0 = 0;
+    always @(posedge clk) if (pre_done) pre_done_n = pre_done_n + 1;
     reg  [6:0]  cap_jttn;      // declared before the DUT: feeds res_ttn
     wire        jump_pulse;
     wire [1:0]  jump_domain;
@@ -115,6 +123,9 @@ module dvd_vm_tb;
     reg [15:0] ent_val   = 16'd0;
 
     dvd_vm dut (
+        // new VM ports tied off (a floating input is X).
+        .agl_set(agl_set), .agl_set_val(agl_set_val),
+        .sprm_agln(sprm_agln), .pre_done(pre_done),
         .clk(clk), .rst_n(rst_n), .enable(enable), .start(start), .cfg_lang(16'h656E),
         .rnd_seed(rnd_seed), .sec_tick(sec_tick),
         .entropy_stir(ent_stir), .entropy_val(ent_val),
@@ -1576,6 +1587,60 @@ module dvd_vm_tb;
         if (hl_btnn !== 6'd2) fail("T6c: frozen SPRM8 overwritten by a btn_sel drift");
         btns_armed = 0;
         $display("T6 HL_BTNN export (link button / select write-back / frozen) PASS");
+
+        // ---- T7: SPRM3 / AGLN export + write-back + pre_done ---------------
+        t7_err0 = errors;
+        // CASTLE_IN_THE_SKY picks its own camera angle: the boot chain sets
+        // g[14]=2 and the feature PGC's PRE runs the REAL instruction below,
+        // "SetSTN ASTN = g[12] SPSTN = g[13] AGLN = g[14]".  Angle 1 is the
+        // Japanese title cards, angle 2 the English ones.  Before sprm_agln
+        // existed the VM latched SPRM3 and nobody read it, so angle 1 always
+        // played.
+        // (a) the disc's own instruction, verbatim from the disc.
+        vm_restart;
+        wr_cmd(0, 64'h7100000e00020000);     // g[14] = 2
+        wr_cmd(1, 64'h4100008c8d8e0000);     // SetSTN ASTN=g[12] SPSTN=g[13] AGLN=g[14]
+        nr_pre = 2; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
+        clear_actions; pre_done_n = 0; pulse_loaded; wait_idle;
+        if (sprm_agln !== 8'd2)
+            fail("T7a: SetSTN AGLN=g[14] did not export angle 2 on sprm_agln");
+        // (b) pre_done must pulse ONCE per PGC load, and only AFTER the PRE
+        //     block has run - the whole point is the ordering.  If it fired
+        //     before the SetSTN, the reader would pick the cell with the old
+        //     angle, which is the defect this signal exists to remove.
+        if (pre_done_n !== 1) begin
+            $display("   pre_done pulsed %0d times", pre_done_n);
+            fail("T7b: pre_done must pulse exactly once per PGC load");
+        end
+        // (c) a PGC with NO pre commands must still resolve, or the reader
+        //     would sit in S_ANGLE_PRE until its watchdog on every such PGC.
+        pre_done_n = 0;
+        vm_restart; pre_done_n = 0;
+        nr_pre = 0; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
+        clear_actions; pulse_loaded; wait_idle;
+        if (pre_done_n < 1) fail("T7c: pre_done never pulsed for a PGC with nr_pre==0");
+        // (d) the user's B6 press writes SPRM3 BACK.  CASTLE's VTSM PGCs
+        //     19/20/21/24 all execute "g[14] = AGLN" and the feature PGC
+        //     re-applies g[14] on entry, so a stale SPRM3 silently undoes the
+        //     user's choice at the next title start.
+        @(negedge clk); agl_set_val = 4'd2; agl_set = 1;
+        @(negedge clk); agl_set = 0;
+        repeat (3) @(negedge clk);
+        if (sprm_agln !== 8'd2) fail("T7d: a B6 press did not write SPRM3 back");
+        // (e) and the disc can read it: "g[5] = AGLN" must see the user's 2.
+        vm_restart;
+        @(negedge clk); agl_set_val = 4'd2; agl_set = 1;
+        @(negedge clk); agl_set = 0;
+        repeat (3) @(negedge clk);
+        wr_cmd(0, 64'h6100000500830000);     // g[5] = AGLN (SPRM3)
+        nr_pre = 1; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
+        clear_actions; pulse_loaded; wait_idle;
+        if (dut.gprm[5] !== 16'd2) begin
+            $display("   g[5] = %0d", dut.gprm[5]);
+            fail("T7e: the disc read AGLN back as something other than the user's 2");
+        end
+        if (errors == t7_err0)
+            $display("T7 SPRM3/AGLN export + write-back + pre_done PASS");
     end
     endtask
 

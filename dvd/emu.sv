@@ -1513,6 +1513,8 @@ wire [5:0]  vm_hl_btnn;                 // the VM's SPRM8 button: nav_pci re-see
                                         // reset (link button fields survive the
                                         // flush the link itself fires)
 wire [7:0]  vm_astn, vm_spstn;
+wire [7:0]  vm_agln;                 // SPRM3 (camera angle) from the DVD-VM
+wire        vm_pre_done;             // VM finished this PGC's PRE block
 // DVD-FORK DEBUG (Atmosfear wrong-title diagnosis): taps used by the
 // DEBUG_OVERLAY rows 21..26. Declared unconditionally (the module ports are
 // always connected); the latch logic + overlay feed are under `DEBUG_OVERLAY.
@@ -1901,6 +1903,35 @@ always @(posedge clk_sys or negedge reset_n) begin
         // flush). A no-op outside a multi-angle block (angle_count < 2).
         if (cell_ready && !menu_active && !in_title_menu && angle_edge)
             angle_pulse <= 1'b1;
+    end
+end
+
+// -------------------------------------------------------------------------
+// SPRM3 (AGLN) WRITE-BACK. A B6 press changes what plays; the VM register must
+// follow, because the disc READS IT BACK -- CASTLE_IN_THE_SKY's VTSM PGCs
+// 19/20/21/24 all execute "g[14] = AGLN" and its feature PGC re-applies g[14]
+// on every entry, so a stale SPRM3 would quietly undo the user's choice at the
+// next title start. libdvdnav keeps AGL_REG the single source of truth for
+// exactly this reason.
+// The reader owns cur_angle (it alone knows angle_count and the wrap), so the
+// write-back is taken from the reader's OUTPUT one cycle after the pulse,
+// never from a value predicted here -- predicting it would need a second copy
+// of the wrap rule, which is the "bench that agrees with a copy of the thing"
+// failure in register form.
+reg        angle_pulse_q;
+reg        angle_wb;
+reg  [3:0] angle_wb_val;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        angle_pulse_q <= 1'b0; angle_wb <= 1'b0; angle_wb_val <= 4'd1;
+    end else begin
+        angle_pulse_q <= angle_pulse;
+        angle_wb      <= 1'b0;
+        // one cycle after the reader consumed the pulse, cur_angle has settled
+        if (angle_pulse_q && !angle_pulse) begin
+            angle_wb     <= 1'b1;
+            angle_wb_val <= cur_angle;
+        end
     end
 end
 
@@ -2321,6 +2352,10 @@ dvd_vm dvd_vm_inst (
 
     .sprm_astn     (vm_astn),
     .sprm_spstn    (vm_spstn),
+    .sprm_agln     (vm_agln),             // SPRM3: the disc's camera angle
+    .pre_done      (vm_pre_done),         // PRE resolved -> the angle is settled
+    .agl_set       (angle_wb),            // B6 press: write the user's angle back
+    .agl_set_val   (angle_wb_val),
     .dbg_state     (vm_dbg_state),
     .dbg_g3        (vm_dbg_g3),
     .dbg_g14_9     (vm_dbg_g14_9),
@@ -2379,17 +2414,32 @@ end
 // working). `vm_owns_*` latches on a SetSTN change and clears the moment the
 // matching gamepad button is pressed. Cleared on a fresh mount. SPRM1 default
 // 15 (none) never claims audio.
-reg  vm_owns_aud, vm_owns_sp;
-reg  [7:0] vm_astn_p, vm_spstn_p;
+// ANGLE (SPRM3/AGLN) joins the same arbitration, for the same reason and with
+// the same shape. MEASURED on CASTLE_IN_THE_SKY: the boot chain sets g[14]=2
+// and the feature PGC's PRE runs "SetSTN ... AGLN = g[14]", so the disc asks
+// for angle 2 (English title cards); its own Audio menu re-issues SetSTN with
+// the angle that matches each language. Before this, sprm3 was written by the
+// VM and read by nobody, and the reader always played angle 1.
+// ⚠ The claim guard is "a real angle" (>= 1). SPRM3 resets to 1, so a disc that
+// never issues SetSTN AGLN would otherwise claim ownership of the default and
+// make the B6 button look dead until the first press releases it.
+reg  vm_owns_aud, vm_owns_sp, vm_owns_angle;
+reg  [7:0] vm_astn_p, vm_spstn_p, vm_agln_p;
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin
-        vm_owns_aud <= 1'b0; vm_owns_sp <= 1'b0;
-        vm_astn_p <= 8'd15;  vm_spstn_p <= 8'd0;
+        vm_owns_aud <= 1'b0; vm_owns_sp <= 1'b0; vm_owns_angle <= 1'b0;
+        vm_astn_p <= 8'd15;  vm_spstn_p <= 8'd0; vm_agln_p <= 8'd1;
     end else begin
         vm_astn_p  <= vm_astn;   vm_spstn_p <= vm_spstn;
+        vm_agln_p  <= vm_agln;
         if (start_streaming) begin
-            vm_owns_aud <= 1'b0; vm_owns_sp <= 1'b0;
+            vm_owns_aud <= 1'b0; vm_owns_sp <= 1'b0; vm_owns_angle <= 1'b0;
         end else begin
+            // angle: a SetSTN naming a real angle claims; the Angle button releases
+            if (menus_on && vm_agln != vm_agln_p && vm_agln >= 8'd1)
+                vm_owns_angle <= 1'b1;
+            if (angle_edge)
+                vm_owns_angle <= 1'b0;
             // audio: a SetSTN that names a real track claims; the Audio button releases
             if (menus_on && vm_astn != vm_astn_p && vm_astn < 8'd8)
                 vm_owns_aud <= 1'b1;
@@ -2963,6 +3013,9 @@ dvd_iso_reader dvd_iso_reader_inst (
     .angle_pulse    (angle_pulse),        // Phase 9: B6 = cycle camera angle
     .cur_angle      (cur_angle),
     .angle_count    (angle_count),
+    .agl_vm         (vm_agln[3:0]),       // the disc's SetSTN AGLN choice
+    .agl_vm_en      (vm_owns_angle),
+    .vm_pre_done    (vm_pre_done),        // PRE has run -> the angle is settled
     .seek_ack       (seek_ack),
     .cur_cell       (cur_cell),
     .cell_ready     (cell_ready),

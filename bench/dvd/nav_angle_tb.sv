@@ -14,6 +14,17 @@
 // The reader (dvd_iso_reader) snoops these same DSI offsets (0x407-relative) off
 // the sd stream; nav_dsi is the golden-tested parser they share. Skipped with a
 // warning if the (gitignored) fixture is absent.
+//
+// ARM 2 (2026-09-15) is the OTHER half of the multi-angle population, from a
+// REAL disc as well: CASTLE_IN_THE_SKY VTS_02 RBN 491, also a BLOCK|LAST VOBU,
+// where every sml_agli entry is ZERO and the only follow pointer is
+// vobu_sri.next_vobu = 0x800002f3 (+755) -> RBN 1246 = angle 1's next ILVU,
+// stepping over angle 2's ILVU at 692..1245.  That is the premise the reader's
+// next_vobu fallback rests on, asserted against the disc's own bytes rather
+// than against a synthetic fixture shaped like them.
+//   python3 tools/nav_extract.py CASTLE_IN_THE_SKY.iso --vts 2 --title-vob 1 \
+//     --angles --count 700 --hex bench/dvd/test_vobs/castle_angle_dsi.hex \
+//     --hex-count 5            (sector index 4 = RBN 491)
 
 `timescale 1ns/1ps
 `default_nettype none
@@ -47,8 +58,11 @@ module nav_angle_tb;
 
     localparam DSI_OFF = 12'h407;
     localparam DSI_LEN = 512;
-    logic [7:0] sec [0:6143];               // fixture holds 3 NAV sectors
+    logic [7:0] sec [0:6143];               // MiB fixture holds 3 NAV sectors
     localparam integer RBN37 = 2*2048;      // sector index 2 = RBN 37
+    logic [7:0] csec [0:10239];             // Castle fixture holds 5 NAV sectors
+    localparam integer C_RBN491 = 4*2048;   // sector index 4 = RBN 491
+    integer cerrors = 0;
     integer errors = 0;
     integer i;
 
@@ -76,7 +90,21 @@ module nav_angle_tb;
         end
     endtask
 
-    task check32(input [31:0] got, input [31:0] want, input [127:0] nm);
+    task automatic feed_castle;
+        begin
+            @(posedge clk); dsi_frame_start <= 1'b1; dsi_valid <= 1'b1;
+            dsi_byte <= csec[C_RBN491 + DSI_OFF];
+            @(posedge clk); dsi_frame_start <= 1'b0;
+            for (i = 1; i < DSI_LEN; i = i + 1) begin
+                dsi_byte <= csec[C_RBN491 + DSI_OFF + i];
+                @(posedge clk);
+            end
+            dsi_valid <= 1'b0;
+            @(posedge clk);
+        end
+    endtask
+
+    task check32(input [31:0] got, input [31:0] want, input [255:0] nm);
         begin
             if (got !== want) begin
                 errors = errors + 1;
@@ -110,6 +138,35 @@ module nav_angle_tb;
         check32(angle_target(nv_pck_lbn, tbl_rdata), 32'd971,  "angle1 target RBN");
         tbl_raddr = 6'd39; repeat (2) @(posedge clk);
         check32(angle_target(nv_pck_lbn, tbl_rdata), 32'd1308, "angle2 target RBN");
+
+        // ================= ARM 2: CASTLE_IN_THE_SKY RBN 491 =================
+        // The no-sml_agli half of the population, from the real disc.
+        for (i = 0; i < 10240; i = i + 1) csec[i] = 8'hxx;
+        $readmemh("bench/dvd/test_vobs/castle_angle_dsi.hex", csec);
+        if (csec[C_RBN491] === 8'hxx) begin
+            $display("nav_angle_tb: arm 2 SKIP (fixture castle_angle_dsi.hex absent)");
+        end else begin
+            rst_n = 0; repeat (3) @(posedge clk); rst_n = 1; @(posedge clk);
+            feed_castle;
+            repeat (2) @(posedge clk);
+            $display("nav_angle_tb: CASTLE_IN_THE_SKY VTS_02 RBN 491 (BLOCK|LAST)");
+            check32({16'd0, category}, 32'h00005000, "category");
+            if (ilvu_last !== 1'b1) begin errors=errors+1; $display("  FAIL ilvu_last!=1"); end
+            check32(nv_pck_lbn, 32'd491, "nv_pck_lbn");
+            // THE PREMISE: no per-angle jump table at all.  If a future disc or
+            // a re-extract makes these non-zero, the reader would take the
+            // sml_agli path here and this arm stops describing the fallback.
+            tbl_raddr = 6'd38; repeat (2) @(posedge clk);
+            check32(tbl_rdata, 32'd0, "sml_agli[angle1] (expect ABSENT)");
+            tbl_raddr = 6'd39; repeat (2) @(posedge clk);
+            check32(tbl_rdata, 32'd0, "sml_agli[angle2] (expect ABSENT)");
+            // ...so next_vobu is the only follow pointer, and it is angle 1's.
+            // bit31 is the SRI VALID flag, not a sign: +755 -> RBN 1246, which
+            // steps over angle 2's ILVU at 692..1245.
+            check32(next_vobu, 32'h800002f3, "vobu_sri.next_vobu");
+            check32(nv_pck_lbn + {2'b0, next_vobu[29:0]}, 32'd1246,
+                    "next_vobu target RBN");
+        end
 
         if (errors == 0) $display("nav_angle_tb: PASS");
         else             $display("nav_angle_tb: %0d FAILURE(S)", errors);

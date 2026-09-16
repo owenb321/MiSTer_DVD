@@ -44,6 +44,8 @@ module dvd_vm_atmos_tb;
     wire [7:0]  cur_vts_o, cur_pgcn_o, cur_cell_o, next_pgcn_o, prev_pgcn_o, goup_pgcn_o;
 
     dvd_vm dut (
+        // new VM ports tied off (a floating input is X).
+        .agl_set(1'b0), .agl_set_val(4'd1),
         .clk(clk), .rst_n(rst_n), .enable(enable), .start(start),
         .rnd_seed(rnd_seed), .sec_tick(sec_tick),
         .entropy_stir(ent_stir), .entropy_val(ent_val),

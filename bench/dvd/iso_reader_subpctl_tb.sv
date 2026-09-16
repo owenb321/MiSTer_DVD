@@ -95,6 +95,7 @@ module iso_reader_subpctl_tb;
         .seek_rbn_pulse(1'b0), .seek_rbn(32'd0),
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1), .chap_at_start(1'b0),
         .angle_pulse(1'b0), .cur_angle(), .angle_count(),
+        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .keep_vbuf(), .cur_cell(), .cell_ready(),
         .pgc_ctl_we(pgc_ctl_we), .pgc_ctl_waddr(pgc_ctl_waddr), .pgc_ctl_wdata(pgc_ctl_wdata),
         .pgc_ctl_valid(pgc_ctl_valid), .pgc_dom_tt(pgc_dom_tt),

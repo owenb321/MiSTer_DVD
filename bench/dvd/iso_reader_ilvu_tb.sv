@@ -102,6 +102,7 @@ module iso_reader_ilvu_tb;
         .seek_rbn_pulse(1'b0), .seek_rbn(32'd0),
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1), .chap_at_start(1'b0),
         .angle_pulse(1'b0), .cur_angle(cur_angle), .angle_count(angle_count),
+        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .keep_vbuf(),
         .cur_cell(), .cell_ready(), .cell_seamless(cell_seamless),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),

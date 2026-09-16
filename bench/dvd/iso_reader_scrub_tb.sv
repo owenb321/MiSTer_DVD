@@ -71,6 +71,9 @@ module iso_reader_scrub_tb;
     always @(posedge clk) if (seek_ack) ack_seen <= 1'b1;
 
     dvd_iso_reader dut (
+        // new reader inputs tied off: a floating input is X, and X on
+        // agl_vm_en would poison the angle resolve (see the port comments).
+        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
         .jump_ttn(7'd0), .jump_pgn(8'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),

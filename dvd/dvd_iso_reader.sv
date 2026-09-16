@@ -164,6 +164,21 @@ module dvd_iso_reader #(
     input             angle_pulse,   // pulse: cycle to the next camera angle
     output reg [3:0]  cur_angle,     // 1-based selected angle (1 when none)
     output reg [3:0]  angle_count,   // angles in the current block (0 = not in one)
+    // The DISC's own angle choice (dvd_vm SPRM3/AGLN via emu's ownership
+    // arbitration). A LEVEL, not a pulse, and consumed only where the angle
+    // cell is actually chosen (S_ANGLE_SCAN) -- which is what makes it immune
+    // to two orderings that a pulse would lose to:
+    //   (1) S_PGC_DONE resets cur_angle to 1 on every fresh PGC;
+    //   (2) the disc sets the angle in the PGC's PRE commands, and the VM only
+    //       STARTS those on pgc_loaded while this reader reaches the resolve
+    //       ~8 cycles later -- so a SetSTN AGLN is ALWAYS late for the block it
+    //       configures. pre_seen below closes that; the level makes it safe.
+    input      [3:0]  agl_vm,        // 1-based angle the disc asked for
+    input             agl_vm_en,     // 1 = the VM owns the angle (else the user does)
+    // The VM has finished the PGC's PRE command block (or had none). libdvdnav's
+    // order is play_PGC -> PRE -> play_Cell's "cellN += AGL_REG - 1"; ours ran
+    // the cell pick first. See S_ANGLE_SCAN.
+    input             vm_pre_done,
 
     // ---------------------------------------------------------------------
     // VM JUMP interface (Phase-2 disc menus). A jump re-targets playback to
@@ -745,6 +760,14 @@ reg [7:0]  cc_rd;                          // registered category byte for cell_
 // See docs/dvd_nav.md "Seamless-branch interleaved blocks".
 wire       cc_is_angle = (cc_rd[5:4] == 2'd1);        // block_type == angle block
 wire       cc_blk_first= cc_is_angle && (cc_rd[7:6] == 2'd1);
+// block_mode of the cell under cell_raddr: 0 none, 1 FIRST of block, 2 IN
+// block, 3 LAST of block. The angle-count scan must stop at the block's own
+// end, which is what [7:6] says -- see S_ANGLE_SCAN.
+wire [1:0] cc_blk_mode = cc_rd[7:6];
+// The scan continues only while the next cell is IN or LAST of the SAME block.
+// The next block starts at block_mode 1, which ends the walk -- exactly
+// libdvdnav's `while (block_mode >= 2) cellN++` in play_Cell_post.
+wire       cc_blk_cont = cc_is_angle && (cc_blk_mode >= 2'd2);  // 2 = in, 3 = last
 wire       cc_interleaved = cc_rd[2];                 // interleaved (seamless-branch) cell
 // ★ SEAMLESS PLAY (libdvdread cell_playback_t byte 0: [7:6] block_mode, [5:4]
 // block_type, [3] seamless_play, [2] interleaved, [1] stc_discontinuity,
@@ -767,6 +790,15 @@ reg        angle_active;                    // 1 = streaming an angle-block cell
 reg        angle_resolved;                  // 1 = angle cell chosen (skip re-scan)
 reg [7:0]  ang_scan_i;                      // angle-count scan cursor
 reg        angle_pulse_d;                   // rising-edge detect for angle_pulse
+reg        pre_seen;                        // VM's PRE block for this PGC has run
+reg [23:0] ang_pre_wd;                      // bound on the S_ANGLE_PRE wait
+localparam [23:0] ANG_PRE_WD = 24'd6750000; // ~0.25 s @ 27 MHz
+// The effective angle for the block just scanned: the DISC's choice while the
+// VM owns it (emu drops agl_vm_en the moment the user presses B6), else the
+// user's. Clamped to this block's own cell count either way - a disc naming an
+// angle the block does not have must not walk off the end of the run.
+wire [3:0] ang_req = agl_vm_en ? agl_vm : cur_angle;
+wire [3:0] ang_eff = (ang_req == 4'd0 || ang_req > angle_count) ? 4'd1 : ang_req;
 reg        seamless_active;                 // 1 = streaming an interleaved (non-angle) cell
 reg        cell_seamless_r;                 // 1 = this cell is authored seamless_play
 
@@ -786,6 +818,12 @@ wire       ilvu_active = angle_active || seamless_active;   // snoop/jump gate
 reg        ilvu_armed;
 reg [31:0] ilvu_end_rbn;                     // last sector of the ILVU_LAST VOBU
 reg [31:0] ilvu_target;                      // next-ILVU RBN for the current angle
+// Which source supplied ilvu_target. sml_agli is a PER-ANGLE table, so it is the
+// only source that licenses the fire path to re-point cell_i at a DIFFERENT
+// angle's cell (the mid-block angle switch). next_vobu follows THIS angle's own
+// chain and knows nothing about the siblings, so a fallback arm must stay on the
+// cell it came from, exactly as the seamless-branch path does.
+reg        ilvu_from_agli;
 reg [7:0]  cell_count;                // number of cells parsed
 reg [7:0]  cell_i;                    // streaming cell cursor
 reg        cell_mode;                 // 1 = stream by cell list, 0 = linear extents
@@ -816,6 +854,42 @@ wire [7:0] rbn_bt_i   = rbn_bt_new ? rbn_scan_i : rbn_best_i;
 wire       rbn_bt_v   = rbn_bt_new |  rbn_best_v;
 reg [31:0] nav_cand;                  // S_NAV_SEEK: candidate RBN (raw target upward)
 reg [10:0] nav_left;                  // S_NAV_SEEK: remaining probe budget
+// ---- ANGLE-AWARE VOBU SNAP -------------------------------------------------
+// A raw-RBN scrub is snapped FORWARD to the next NAV pack, and inside an angle
+// block the angles' ILVUs are laid down ROUND-ROBIN -- so the snap lands in
+// whichever angle's ILVU the target happened to fall in. MEASURED on "Grave of
+// the Fireflies" VTS_01 PGC1: the split is 48-52 % per angle across all 13
+// blocks, i.e. a coin flip, and the field report is exactly that -- "seeking
+// always lands on angle 2, so there's a quick glance of the storyboard angle
+// before it settles on the film".
+// Where the disc authors sml_agli the follow converges after one ILVU (~1 s on
+// Grave, its ILVUs being ~460-620 sectors). Where it does NOT (CASTLE_IN_THE_SKY,
+// DIEANOTHERDAY_D1_PS) next_vobu keeps us on the chain we landed in and it NEVER
+// converges -- the wrong angle for the rest of the block.
+// Fix: once the angle cell is chosen, learn that cell's VOB_ID and re-snap
+// requiring the NAV pack to carry it.
+//   dsi_gi.vobu_vob_idn is DSI 0x18 -> sector 0x407+0x18 = 0x41F.
+// MEASURED premise, on all three discs: every angle cell of a block has a
+// DISTINCT VOB_ID and every VOBU inside that angle's ILVUs carries it (Grave's
+// round-robin reads vob 1 at RBN 0..456, vob 2 at 457..1074, vob 1 at 1075..).
+// ⚠ The VOB_IDs are NOT always consecutive from 1 -- Castle uses 1/2, 4/5, 8/9 --
+// so "first + angle - 1" would be wrong; the cell's own value is read.
+// ★ Learning it costs ONE extra sector read, and testing it costs NONE: the
+// probe leaves the whole sector resident in parse_buf (pb_sec), so the 0x41F
+// window is a second S_FETCH, not a second read.
+localparam [1:0] NAVM_PLAIN = 2'd0,   // snap as before (non-angle seeks)
+                 NAVM_LEARN = 2'd1,   // probing the chosen cell's own first VOBU
+                 NAVM_FILT  = 2'd2;   // re-snapping, accept only ang_want_vob
+reg [1:0]  nav_mode;
+reg [15:0] ang_want_vob;              // the chosen angle cell's VOB_ID
+// "the most recent SCRUB has not yet had its landing angle verified".
+// ⚠ NOT `rbn_override`: that is also set by the mid-block ILVU hop, which keeps
+// angle_resolved set, so keying on it made the hop take a LEARN probe read --
+// into the one path whose contract is that it is time-continuous (no flush, no
+// seek_ack, no A/V re-anchor). Set when a scrub is armed, cleared as soon as a
+// landing resolves, and never set by the hop.
+reg        ang_snap_pend;
+reg [31:0] ang_land;                  // the unfiltered landing, where the re-snap starts
 
 // Chapter (PTT) skip: a small mini-FSM (chap_st) parallel to the main state
 // machine. It walks the PGC program_map BRAM (pmap_mem: program -> entry cell#,
@@ -1289,6 +1363,10 @@ localparam S_PTTLD_HDR    = 6'd54;   // nr_of_srpts@0 + last_byte@4 -> read ttu 
 localparam S_PTTLD_OFF    = 6'd55;   // ttu_offset[ttn-1]/[ttn] -> nr_ptt, launch P_PTT
 localparam S_PTTLD_DONE   = 6'd56;   // re-fetch the resume field (@200 / @204) -> ptt_resume
 localparam S_CHK_RAW      = 6'd58;   // raw MODE2/2352 (VCD/SVCD .bin) signature probe
+localparam S_ANGLE_PRE    = 6'd59;   // hold the angle pick until the VM's PRE has run
+localparam S_ANGLE_PICK   = 6'd60;   // load the effective angle's cell
+localparam S_ANGLE_VOB    = 6'd61;   // learn the chosen angle cell's VOB_ID
+localparam S_NAV_VOB      = 6'd62;   // NAV pack found: check its vobu_vob_idn
 
 reg [5:0]  state;
 reg [5:0]  fetch_ret;   // state to enter after S_FETCH
@@ -1667,6 +1745,29 @@ wire [31:0] snoop_iend  = snoop_rbn + snoop_ea;         // last sector of this V
 wire [29:0] snoop_nvoff  = snoop_nextv[29:0];
 wire        snoop_nvvalid= (snoop_nvoff != 30'h3fffffff) && (snoop_nvoff != 30'd0);
 wire [31:0] snoop_nvtgt  = snoop_rbn + {2'b0, snoop_nvoff};
+// ANGLE FALLBACK (Castle in the Sky / Die Another Day D1 class): a multi-angle
+// disc need not author sml_agli at all. MEASURED: CASTLE_IN_THE_SKY VTS_02 PGC1
+// and DIEANOTHERDAY_D1_PS VTS_05 PGC1 carry sml_agli ALL ZERO on every VOBU of
+// every angle block, while vobu_sri.next_vobu is populated and correct (Castle
+// RBN 491 BLOCK|LAST -> +755 -> RBN 1246 = angle 1's next ILVU, stepping over
+// angle 2's ILVU at 692..1245). libdvdnav never has this problem because
+// next_vobu is its BASE next-VOBU and sml_agli is only an OVERRIDE
+// (dvdnav.c:434-468); this reader made the override mandatory, so no jump ever
+// armed and it streamed the interleaved range linearly = the reported
+// "rapidly switches between the two angles" (and, because each angle's ILVU
+// carries the SAME timespan of audio, a ~2 s BACKWARD PTS jump at every
+// junction = the reported pop).
+// Library sweep: 23 discs have block_type==1 angle blocks; 4 of them author no
+// sml_agli. MiB VTS_14 (the fj#98 HW vehicle) does author it, which is why the
+// proven path never saw this.
+// The PREFERENCE order is libdvdnav's: sml_agli when present, else next_vobu.
+// ⛔ Do NOT key this on the cell's seamless_angle bit (byte0 bit 0) even though
+// it predicts sml_agli presence on all 23 swept discs - that is a DECLARATION
+// in the IFO, and this fork has been burned repeatedly trusting declarations
+// over measurement (progressive_frame, IFO channel counts, the 205-of-216
+// empty angle-menu stubs). Key on the snooped VALUE.
+wire        snoop_ag_ok  = snoop_valid   && (snoop_tgt   <= cl_rd);
+wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
 
 // =========================================================================
 // cell list write (from the P_CELL walker: first_sector completes at entry
@@ -1675,6 +1776,26 @@ wire [31:0] snoop_nvtgt  = snoop_rbn + {2'b0, snoop_nvoff};
 // =========================================================================
 // libdvdnav still heuristic, evaluated as cell byte 23 (last_sector) lands.
 // cf_c/lv_c/pb_c were captured earlier in the same 24 B record.
+// ★ A MULTI-ANGLE BLOCK OCCUPIES ONE SLOT ON THE TIMELINE, NOT N.
+// cm_cat_c is this cell's category byte, captured at record byte 0 and so
+// already valid at byte 11 where the prefix sum is written. A SIBLING angle cell
+// (block_type==1 with block_mode 2 IN or 3 LAST) is an ALTERNATIVE rendering of
+// the same span of film as the block's first cell -- the viewer sees one of
+// them, never both -- so it must inherit that cell's start time and add NOTHING
+// to the running total.
+// MEASURED on "Grave of the Fireflies" (VTS_01 PGC1, 13 back-to-back 2-angle
+// pairs = the whole film): summing every cell ran the elapsed readout to
+// 2:58:45 on a 1:30:03 title, and because a block's two cells OVERLAP in RBN
+// (chapter 1 is cell 0 at 0..339620 and cell 1 at 457..340206), seek_time's
+// nearest-at-or-below rule picked the SIBLING for any target past sector 457 and
+// published its start -- 8:00, chapter 1's own length. That is the field report
+// "+8 minutes when seeking during the beginning chapter", to the second.
+// Giving the siblings the same start makes that pick HARMLESS instead of wrong,
+// which is why seek_time itself needs no change.
+// (`dvd_iso_reader.sv` has carried "multi-angle blocks over-count -- documented
+// limitation" since Phase 11; this is that limitation removed.)
+wire       cw_sibling  = (cm_cat_c[5:4] == 2'd1) && (cm_cat_c[7:6] >= 2'd2);
+wire       cw_blk_first= (cm_cat_c[5:4] == 2'd1) && (cm_cat_c[7:6] == 2'd1);
 wire [31:0] cell_last_w = {wacc, pb_rdata};                 // last_sector @20
 wire [31:0] cell_sz_w   = cell_last_w - cf_c;               // content size (sectors)
 wire        heur_hit_w  = (cell_last_w == lv_c) && (cell_sz_w < 32'd1024) &&
@@ -1693,6 +1814,19 @@ wire        heur_flag_w = (cm_still_c == 8'd0) && heur_hit_w;
 // stores 0 and seeds run_eltm, so no extra reset state in the walk.
 reg  [31:0] pt_c;                     // this cell's playback_time (BCD)
 reg  [31:0] run_eltm;                 // running duration sum (BCD)
+// The START of the angle block currently being walked, latched at its
+// block-FIRST cell. A sibling must publish THIS, not the running total: the
+// total has already advanced past the block-first cell's own duration by the
+// time the sibling's record is written, so publishing it hands the sibling the
+// start of the NEXT block.
+// ⚠ That was the first cut of this fix, and it produced a preview clock frozen
+// at exactly one chapter's length: seek_time picks the sibling (nearest
+// at-or-below), read its start as the next block's, and then interpolated
+// between two identical values -- "shows 0:08:00 ... and does not increase
+// while the seek increases". The TOTAL was right the whole time, which is why a
+// bench that only checked title_secs_o passed. See iso_reader_angle_tb TEST F.
+reg  [31:0] blk_eltm;                 // block-first cell's start (BCD)
+reg  [15:0] blk_secs;                 // block-first cell's start (binary seconds)
 wire [31:0] run_sum_w;
 bcd_time_add run_eltm_add (.a(run_eltm), .b(pt_c), .sum(run_sum_w));
 // Binary twin of run_eltm, in seconds, saturating at the same 9:59:59 the BCD
@@ -1736,6 +1870,8 @@ always @(posedge clk)
         pt_c            <= 32'd0;
         run_eltm        <= 32'd0;
         run_secs        <= 16'd0;
+        blk_eltm        <= 32'd0;
+        blk_secs        <= 16'd0;
         cellf_secs      <= 16'd0;
         cellf_lwe       <= 1'b0;
         cellf_last      <= 32'd0;
@@ -1777,9 +1913,23 @@ always @(posedge clk)
                 title_first_rbn <= {wacc, pb_rdata};
             if (cell_wi == 8'd0) title_start_rbn <= {wacc, pb_rdata};
             // start time = sum of the cells before this one (pt_c complete @7)
-            cell_start_mem[cell_wi] <= (cell_wi == 8'd0) ? 32'd0 : run_eltm;
-            run_eltm                <= (cell_wi == 8'd0) ? pt_c  : run_sum_w;
+            // A sibling angle cell shares the block's slot: it publishes the
+            // BLOCK-FIRST cell's start (blk_*, not the running total, which has
+            // already moved past it) and the running sum does not advance,
+            // because its duration is the block-first cell's and was counted
+            // once already.
+            cell_start_mem[cell_wi] <= (cell_wi == 8'd0) ? 32'd0
+                                     : cw_sibling ? blk_eltm : run_eltm;
+            // latched from the same expression the block-first cell publishes,
+            // so a stale run_* from the previous PGC can never leak in at cell 0
+            if (cw_blk_first) begin
+                blk_eltm <= (cell_wi == 8'd0) ? 32'd0   : run_eltm;
+                blk_secs <= (cell_wi == 8'd0) ? 16'd0   : run_secs;
+            end
+            run_eltm                <= (cell_wi == 8'd0) ? pt_c
+                                     : (cw_sibling ? run_eltm : run_sum_w);
             run_secs                <= (cell_wi == 8'd0) ? pb_dur_w
+                                     : cw_sibling ? run_secs
                                      : ((run_secs_n > 17'd35999) ? 16'd35999
                                                                  : run_secs_n[15:0]);
             // stretch: stream the first_sector to seek_bar's shadow map, and the
@@ -1787,7 +1937,8 @@ always @(posedge clk)
             cellf_we   <= 1'b1;
             cellf_idx  <= cell_wi[6:0];
             cellf_rbn  <= {wacc, pb_rdata};
-            cellf_secs <= (cell_wi == 8'd0) ? 16'd0 : run_secs;
+            cellf_secs <= (cell_wi == 8'd0) ? 16'd0
+                        : cw_sibling ? blk_secs : run_secs;
         end
         if (cell_bi == 5'd23) begin
             cell_last_mem[cell_wi] <= {wacc, pb_rdata};
@@ -1971,6 +2122,10 @@ always @(posedge clk or negedge rst_n) begin
         rbn_best_f   <= 32'd0;
         rbn_best_v   <= 1'b0;
         nav_cand     <= 32'd0;
+        nav_mode     <= NAVM_PLAIN;
+        ang_want_vob <= 16'd0;
+        ang_snap_pend<= 1'b0;
+        ang_land     <= 32'd0;
         nav_left     <= 11'd0;
         cur_angle    <= 4'd1;
         angle_count  <= 4'd0;
@@ -1982,9 +2137,12 @@ always @(posedge clk or negedge rst_n) begin
         block_last   <= 8'd0;
         ang_scan_i   <= 8'd0;
         angle_pulse_d<= 1'b0;
+        pre_seen     <= 1'b0;
+        ang_pre_wd   <= 24'd0;
         ilvu_armed   <= 1'b0;
         ilvu_end_rbn <= 32'd0;
         ilvu_target  <= 32'd0;
+        ilvu_from_agli <= 1'b0;
         chap_st      <= CH_IDLE;
         chap_p       <= 7'd0;
         chap_best    <= 7'd0;
@@ -2128,21 +2286,33 @@ always @(posedge clk or negedge rst_n) begin
         if (angle_pulse && !angle_pulse_d && angle_count >= 4'd2)
             cur_angle <= (cur_angle >= angle_count) ? 4'd1 : (cur_angle + 4'd1);
 
+        // The VM has finished this PGC's PRE commands (or had none). Latched,
+        // not sampled: it is a one-cycle pulse and S_ANGLE_PRE may be entered
+        // either side of it. Cleared at S_PGC_DONE with the rest of the angle
+        // state, so each PGC waits for its OWN PRE.
+        if (vm_pre_done) pre_seen <= 1'b1;
+
         // Arm the ILVU jump when the snoop finishes a NAV sector that is the
         // LAST VOBU of an ILVU and whose next-ILVU target lands inside this cell.
-        // Fired in S_STREAM when play_blk passes ilvu_end_rbn. ANGLE uses the
-        // signed sml_agli target; SEAMLESS-BRANCH uses the forward next_vobu
-        // target. (angle_active and seamless_active are mutually exclusive.)
-        if (snoop_done && angle_active && snoop_is_last && snoop_valid
-                && snoop_tgt <= cl_rd) begin
-            ilvu_armed   <= 1'b1;
-            ilvu_end_rbn <= snoop_iend;
-            ilvu_target  <= snoop_tgt;
+        // Fired in S_STREAM when play_blk passes ilvu_end_rbn.
+        //  - ANGLE: the signed sml_agli target when the disc authors one, else
+        //    the forward next_vobu (see the snoop_ag_ok/snoop_nv_ok note above -
+        //    libdvdnav's order, and the fix for the no-sml_agli angle discs).
+        //  - SEAMLESS-BRANCH: the forward next_vobu only (sml_agli is a
+        //    multi-angle-only field and is empty on those discs by definition).
+        // (angle_active and seamless_active are mutually exclusive.)
+        if (snoop_done && angle_active && snoop_is_last
+                && (snoop_ag_ok || snoop_nv_ok)) begin
+            ilvu_armed     <= 1'b1;
+            ilvu_end_rbn   <= snoop_iend;
+            ilvu_target    <= snoop_ag_ok ? snoop_tgt : snoop_nvtgt;
+            ilvu_from_agli <= snoop_ag_ok;
         end else if (snoop_done && seamless_active && snoop_is_last
-                && snoop_nvvalid && snoop_nvtgt <= cl_rd) begin
-            ilvu_armed   <= 1'b1;
-            ilvu_end_rbn <= snoop_iend;
-            ilvu_target  <= snoop_nvtgt;
+                && snoop_nv_ok) begin
+            ilvu_armed     <= 1'b1;
+            ilvu_end_rbn   <= snoop_iend;
+            ilvu_target    <= snoop_nvtgt;
+            ilvu_from_agli <= 1'b0;
         end
 
         // ---- Raw MODE2/2352 position walk (parallel; one step per delivered
@@ -2675,6 +2845,8 @@ always @(posedge clk or negedge rst_n) begin
                 end else begin
                     nav_cand <= seek_rbn_l;    // walk up from the raw target
                     nav_left <= NAV_CAP[10:0];
+                    nav_mode <= NAVM_PLAIN;
+                    ang_snap_pend <= 1'b1;     // this landing needs its angle verified
                     strm_idx <= eff_base;       // extent-walk cursor (S_CELL_LOAD2 re-inits)
                     seek_cum <= 32'd0;
                     state    <= S_NAV_SEEK2;    // 1-cycle ext_*_q refresh, then probe
@@ -3876,6 +4048,7 @@ always @(posedge clk or negedge rst_n) begin
                 cell_seamless_r <= 1'b0;
                 ilvu_armed     <= 1'b0;
                 cur_angle      <= 4'd1;
+                pre_seen       <= 1'b0;   // this PGC's PRE has not run yet
                 state      <= S_CELL_LOAD;
             end
 
@@ -3903,16 +4076,59 @@ always @(posedge clk or negedge rst_n) begin
                                     : (cl_rd + 32'd1);
                         state    <= S_STREAM;
                     end
-                end else if (cc_blk_first && !angle_resolved && !rbn_override) begin
+                end else if (cc_blk_first && !angle_resolved) begin
                     // MULTI-ANGLE (Phase 9): the first cell of an angle block.
-                    // Count the block's angle cells (block_type==1 run), then load
-                    // the cur_angle cell instead of this one. block_first = this
-                    // cell; the scan cursor prefetches the next cell's category.
+                    // Count this block's angle cells, then load the cur_angle cell
+                    // instead of this one. block_first = this cell; the scan cursor
+                    // prefetches the next cell's category.
+                    //
+                    // ★ THE `!rbn_override` TERM WAS REMOVED HERE (2026-09-15).
+                    // It excluded a raw-RBN scrub landing from the scan entirely,
+                    // so a SEEK INTO an angle block left angle_count at 0 and
+                    // therefore angle_active at 0 -- and seamless_active needs
+                    // `!cc_is_angle`, so that was 0 too. With neither arm set there
+                    // is no ILVU follow, and the reader streamed the interleaved
+                    // range LINEARLY: the two angles alternating once per ILVU.
+                    // Field report on "Grave of the Fireflies": seeking "starts
+                    // alternating the 2 available angles at 1hz" -- its first ILVU
+                    // is ~457 sectors, about one second.
+                    // The seek path's own comment above already SAYS "a transport
+                    // seek re-scans any angle/interleaved block it lands in", which
+                    // is exactly what this term prevented.
+                    // ⚠ The mid-block ILVU hop is excluded by `!angle_resolved`,
+                    // not by this term: the hop fires only while angle_active,
+                    // which requires angle_resolved, and the hop does not clear it
+                    // (the clears are reset, transport seek, S_PGC_DONE and the
+                    // end-of-block skip). iso_reader_angle_tb TEST A/B drive that
+                    // hop and are byte-identical across this change.
+                    // ⚠ Residual, small and deliberate: the two cells of a block
+                    // OVERLAP but do not coincide, so a target landing in the
+                    // sibling's TAIL -- past the block-first cell's last_sector --
+                    // matches only the sibling, which is not cc_blk_first, so the
+                    // scan still does not run. On Grave chapter 1 that window is
+                    // 586 of ~340,000 sectors (0.17 %). Walking back to block_first
+                    // would fix it and is not done: see docs/dvd_nav.md.
                     block_first <= cell_i;
                     angle_count <= 4'd1;                 // this cell is angle 1
                     ang_scan_i  <= cell_i + 8'd1;
                     cell_raddr  <= cell_i + 8'd1;        // prefetch cat[cell_i+1]
                     state       <= S_ANGLE_SCAN2;
+                end else if (rbn_override && cc_is_angle && angle_resolved
+                             && ang_snap_pend) begin
+                    // ANGLE-AWARE SNAP, pass 1: we have just chosen this block's
+                    // angle cell after a raw-RBN scrub, so cf_rd is that cell's
+                    // first_sector -- which is, by construction, the first VOBU of
+                    // this angle's own chain. Probe it to learn the angle's VOB_ID.
+                    // One extra sector read per scrub into an angle block; the
+                    // seek already costs a flush and a decoder re-lock.
+                    ang_snap_pend <= 1'b0;     // one-shot: this landing is being handled
+                    ang_land <= seek_rbn_l;    // where the unfiltered snap put us
+                    nav_cand <= cf_rd;         // this angle's first VOBU
+                    nav_left <= 11'd2;         // it IS a NAV pack; no walking needed
+                    nav_mode <= NAVM_LEARN;
+                    strm_idx <= eff_base;
+                    seek_cum <= 32'd0;
+                    state    <= S_NAV_SEEK2;
                 end else begin
                     // Title: map through the extent table. Start the seek scan
                     // from the group base, reusing strm_idx as the cursor.
@@ -3925,6 +4141,7 @@ always @(posedge clk or negedge rst_n) begin
                     // two are mutually exclusive (cc_is_angle vs !cc_is_angle).
                     angle_active    <= cc_is_angle && angle_resolved;
                     seamless_active <= cc_interleaved && !cc_is_angle;
+                    ang_snap_pend   <= 1'b0;   // this landing is resolved either way
                     cell_seamless_r <= cc_seamless_play;
                     ilvu_armed  <= 1'b0;
                     strm_idx    <= eff_base;
@@ -3938,29 +4155,93 @@ always @(posedge clk or negedge rst_n) begin
             end
 
             // MULTI-ANGLE angle-count scan (Phase 9): walk cell_cat_mem forward
-            // from block_first counting consecutive block_type==1 cells, then
-            // load the cur_angle cell. Reuses cc_rd (cell_raddr) with a 1-cycle
-            // BRAM-latency wait state, mirroring S_RBN_SCAN.
+            // from block_first, counting THIS BLOCK's angle cells. Reuses cc_rd
+            // (cell_raddr) with a 1-cycle BRAM-latency wait state, mirroring
+            // S_RBN_SCAN.
+            //
+            // ★★ THE STOP CONDITION IS block_mode, NOT merely block_type.
+            // A block is authored as block_mode 1 (FIRST), then 2 (IN BLOCK)...,
+            // then 3 (LAST) -- libdvdnav's play_Cell_post skips the siblings with
+            // exactly `while (block_mode >= 2) cellN++`. This scan used to count
+            // the run of block_type==1 cells and re-check nothing else, so it
+            // walked straight across the end of one block into the next whenever
+            // two blocks are ADJACENT.
+            // MEASURED on "Grave of the Fireflies" VTS_01 PGC1: the whole film is
+            // 13 back-to-back 2-angle pairs (bm=1,3, 1,3, ... one per chapter)
+            // with only the final cell normal, so the old rule counted to its
+            // `< 9` cap and reported NINE angles for a disc whose TT_SRPT
+            // declares two. Worse, block_last followed that count, so the
+            // end-of-block skip jumped from chapter 1 to chapter 5's angle-2
+            // cell -- about 22 minutes of the film -- and landed on a bm==3 cell,
+            // which is neither angle_active nor seamless_active, so the ILVU
+            // follow stopped too.
+            // Library sweep over 808 angle blocks: the old rule disagrees with
+            // this one on 12 of the 23 multi-angle discs (Beauty and the Beast
+            // has 54 adjacent blocks, TimeTraveler 463). This rule equals the
+            // disc's declared nr_of_angles on 21 of 23; the two exceptions are
+            // one disc whose blocks genuinely hold 3 and 4 angles under a title
+            // declaring 5 -- nr_of_angles is a TITLE-level maximum, so counting
+            // per block is the more precise of the two, not a contradiction.
+            // ⚠ The 9 cap stays: it is the sml_agli table size (9 entries) and
+            // the DVD spec's angle limit, so it bounds a malformed block. It is
+            // no longer what ENDS a well-formed one.
             S_ANGLE_SCAN2: state <= S_ANGLE_SCAN;
             S_ANGLE_SCAN: begin
-                if (cc_is_angle && ({8'd0, ang_scan_i} < {8'd0, cell_count})
+                if (cc_blk_cont && ({8'd0, ang_scan_i} < {8'd0, cell_count})
                         && angle_count < 4'd9) begin
-                    angle_count <= angle_count + 4'd1;
-                    ang_scan_i  <= ang_scan_i + 8'd1;
-                    cell_raddr  <= ang_scan_i + 8'd1;
-                    state       <= S_ANGLE_SCAN2;
+                    angle_count  <= angle_count + 4'd1;
+                    ang_scan_i   <= ang_scan_i + 8'd1;
+                    cell_raddr   <= ang_scan_i + 8'd1;
+                    state        <= S_ANGLE_SCAN2;
                 end else begin
                     // angle_count known. block_last = block_first + count - 1.
-                    // Pick the cur_angle cell (clamped to the block size).
                     block_last     <= block_first + {4'd0, angle_count} - 8'd1;
-                    angle_resolved <= 1'b1;
-                    if (cur_angle == 4'd0 || cur_angle > angle_count) cur_angle <= 4'd1;
-                    cell_i     <= block_first + {4'd0, ((cur_angle == 4'd0 ||
-                                  cur_angle > angle_count) ? 4'd1 : cur_angle)} - 8'd1;
-                    cell_raddr <= block_first + {4'd0, ((cur_angle == 4'd0 ||
-                                  cur_angle > angle_count) ? 4'd1 : cur_angle)} - 8'd1;
-                    state      <= S_CELL_LOAD;         // load the chosen angle cell
+                    // ORDERING: the disc picks its angle in the PGC's PRE
+                    // commands, and libdvdnav's order is play_PGC -> PRE ->
+                    // play_Cell's "cellN += AGL_REG - 1". Ours is inverted and
+                    // DETERMINISTICALLY so: pgc_loaded pulses at S_PGC_DONE and
+                    // we arrive here ~8 cycles later, while the VM only STARTS
+                    // BLK_PRE on that same pulse (serial ALU, 8-byte BRAM fetch
+                    // per command). So a SetSTN AGLN is ALWAYS late unless we
+                    // wait. Only the FIRST angle block after a PGC load can
+                    // wait -- mid-title blocks find pre_seen already set.
+                    if (vm_mode && !pre_seen) begin
+                        ang_pre_wd <= 24'd0;
+                        state      <= S_ANGLE_PRE;
+                    end else
+                        state      <= S_ANGLE_PICK;
                 end
+            end
+
+            // Wait for the VM's PRE block, bounded. ⚠ THE WATCHDOG IS
+            // LOAD-BEARING, not belt-and-braces: a PRE command that itself
+            // jumps leaves the VM in V_WAIT awaiting a pgc_loaded that a
+            // stalled reader would never produce. Nothing is streaming yet, so
+            // the wait costs a first-block latency, not a pipeline stall.
+            S_ANGLE_PRE: begin
+                ang_pre_wd <= ang_pre_wd + 24'd1;
+                if (pre_seen || ang_pre_wd >= ANG_PRE_WD)
+                    state <= S_ANGLE_PICK;
+            end
+
+            // Pick the effective angle's cell. The VM's level wins while it
+            // owns the angle (emu releases ownership on a B6 press); either
+            // way the value is clamped to the block's own cell count, so a
+            // disc naming an angle the block lacks cannot walk off the run.
+            S_ANGLE_PICK: begin
+                angle_resolved <= 1'b1;
+                // Write cur_angle ONLY when it would actually change: the VM
+                // owns the angle (its level must be latched), or the clamp
+                // fires. With agl_vm_en low this is bit-identical to the
+                // pre-existing rule ("if out of range, snap to 1"), which is
+                // what keeps every non-VM path byte-identical -- and it stops
+                // this state swallowing a B6 press that lands in the same
+                // cycle (a later assignment in this always block would win).
+                if (agl_vm_en || cur_angle == 4'd0 || cur_angle > angle_count)
+                    cur_angle <= ang_eff;
+                cell_i     <= block_first + {4'd0, ang_eff} - 8'd1;
+                cell_raddr <= block_first + {4'd0, ang_eff} - 8'd1;
+                state      <= S_CELL_LOAD;         // load the chosen angle cell
             end
 
             // Sub-cell scrub: scan the cell table for the cell whose RBN range
@@ -4016,7 +4297,17 @@ always @(posedge clk or negedge rst_n) begin
                 if (strm_idx >= eff_base + eff_cnt ||
                     nav_cand > title_last_rbn   ||
                     nav_left == 11'd0) begin
-                    state <= S_RBN_SCAN2;                 // fallback: raw seek_rbn_l
+                    // ⚠ The angle passes must NOT fall back into S_RBN_SCAN: that
+                    // re-resolves the cell and would undo the angle choice. Give
+                    // up on the refinement and stream the landing we already have,
+                    // which is what shipped before this existed.
+                    if (nav_mode != NAVM_PLAIN) begin
+                        seek_rbn_l    <= ang_land;
+                        nav_mode      <= NAVM_PLAIN;
+                        ang_snap_pend <= 1'b0;            // do not re-enter the probe
+                        state         <= S_CELL_LOAD;
+                    end else
+                        state <= S_RBN_SCAN2;             // fallback: raw seek_rbn_l
                 end else if (seek_cum + ext_blocks_q > nav_cand) begin
                     // candidate lies in extent strm_idx -> probe its sector
                     sec_lba    <= ext_start_q + nav_cand - seek_cum;
@@ -4031,12 +4322,53 @@ always @(posedge clk or negedge rst_n) begin
             end
             S_NAV_CHK: begin
                 if (nav_sig_hit) begin
-                    seek_rbn_l <= nav_cand;               // SNAP to the aligned VOBU RBN
-                    state      <= S_RBN_SCAN2;            // -> containing-cell scan
+                    if (nav_mode == NAVM_PLAIN) begin
+                        seek_rbn_l <= nav_cand;           // SNAP to the aligned VOBU RBN
+                        state      <= S_RBN_SCAN2;        // -> containing-cell scan
+                    end else begin
+                        // LEARN / FILT both want this VOBU's dsi_gi.vobu_vob_idn.
+                        // The sector is ALREADY resident in parse_buf (pb_sec was
+                        // latched by the probe read), so this is a second 45-byte
+                        // window copy, NOT a second disk read.
+                        fetch_base <= 11'h41F;            // DSI 0x18 -> sector 0x41F
+                        fi         <= 6'd0;
+                        fetch_xw   <= 1'b0;
+                        fetch_ret  <= S_NAV_VOB;
+                        state      <= S_FETCH;
+                    end
                 end else begin
                     nav_cand <= nav_cand + 32'd1;
                     nav_left <= nav_left - 11'd1;
                     state    <= S_NAV_SEEK;               // same extent: ext_*_q still valid
+                end
+            end
+
+            // vobu_vob_idn of the NAV pack at nav_cand is now in rbuf[0..1].
+            S_NAV_VOB: begin
+                fetch_base <= 11'd0;                      // restore the signature window
+                if (nav_mode == NAVM_LEARN) begin
+                    // This is the chosen angle cell's own first VOBU, so its
+                    // vob_idn IS the angle's. Now re-snap from where the
+                    // unfiltered snap landed, accepting only this VOB_ID.
+                    ang_want_vob <= {rbuf[0], rbuf[1]};
+                    nav_cand     <= ang_land;
+                    nav_left     <= NAV_CAP[10:0];
+                    nav_mode     <= NAVM_FILT;
+                    strm_idx     <= eff_base;
+                    seek_cum     <= 32'd0;
+                    state        <= S_NAV_SEEK2;
+                end else if ({rbuf[0], rbuf[1]} == ang_want_vob) begin
+                    // on the selected angle's chain -- stream from here. cell_i is
+                    // already the chosen angle cell (S_ANGLE_PICK), and
+                    // rbn_override is still set, so S_CELL_LOAD2 streams from
+                    // seek_rbn_l bounded by that cell.
+                    seek_rbn_l <= nav_cand;
+                    nav_mode   <= NAVM_PLAIN;
+                    state      <= S_CELL_LOAD;
+                end else begin
+                    nav_cand <= nav_cand + 32'd1;
+                    nav_left <= nav_left - 11'd1;
+                    state    <= S_NAV_SEEK;
                 end
             end
 
@@ -4109,20 +4441,34 @@ always @(posedge clk or negedge rst_n) begin
                                 // NOT resetting wr_ptr and NOT pulsing seek_ack, so
                                 // the cache byte stream stays a single seamless PS
                                 // (no VBUF flush, no A/V re-anchor).
-                                //  - ANGLE (Phase 9): re-point cell_i at the current
-                                //    angle's cell (block_first+cur_angle-1) so
-                                //    play_end tracks a mid-block angle switch.
-                                //  - SEAMLESS-BRANCH: STAY on the same cell (the
-                                //    interleaved cell owns the whole [first..last]
-                                //    range); just reload it via rbn_override.
+                                //  - ANGLE (Phase 9) from sml_agli: re-point cell_i
+                                //    at the current angle's cell
+                                //    (block_first+cur_angle-1) so play_end tracks a
+                                //    mid-block angle switch. Legitimate ONLY from
+                                //    sml_agli, which is a PER-ANGLE table.
+                                //  - ANGLE from the next_vobu FALLBACK, and
+                                //    SEAMLESS-BRANCH: STAY on the same cell.
+                                //    next_vobu follows the chain of the angle whose
+                                //    VOBU we just read and says nothing about the
+                                //    siblings, so re-pointing at another angle's
+                                //    cell would bound this angle's target by the
+                                //    WRONG cell. Consequence, accepted and
+                                //    documented (manual + docs/dvd_nav.md): on a
+                                //    disc that authors no sml_agli, a mid-block B6
+                                //    press takes effect at the NEXT angle block.
+                                //    libdvdnav has no better option on such a disc
+                                //    either. ⛔ Do NOT "fix" this with a flushing
+                                //    seek to the sibling cell's first_sector - that
+                                //    restarts the segment (Castle's 3-minute end
+                                //    credits would jump back to the start).
                                 ilvu_armed   <= 1'b0;
                                 seek_rbn_l   <= ilvu_target;
                                 rbn_override <= 1'b1;
-                                if (angle_active) begin
+                                if (angle_active && ilvu_from_agli) begin
                                     cell_i     <= block_first + {4'd0, cur_angle} - 8'd1;
                                     cell_raddr <= block_first + {4'd0, cur_angle} - 8'd1;
                                 end else begin
-                                    cell_raddr <= cell_i;   // seamless: same cell
+                                    cell_raddr <= cell_i;   // fallback / seamless: same cell
                                 end
                                 state        <= S_CELL_LOAD;
                             end else if (play_blk + 32'd1 == play_end) begin

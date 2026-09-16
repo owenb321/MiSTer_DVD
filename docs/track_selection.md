@@ -579,6 +579,61 @@ the first seen substream, rotate on repeat fire, stop after all seen bits
 tried; clear on `start_streaming`/Audio-button. Reset the window on
 `aud_switch` and inside the jump window.
 
+## The camera angle is a stream selection too (SPRM3 / AGLN, 2026-09-15)
+
+It belongs in this file for one reason: **the angle is picked exactly like the audio and
+subpicture tracks, by the same two competing owners, and it was the one of the three that
+had no wire.**
+
+`dvd_vm` has latched **SPRM3 (`AGLN`)** from `SetSTN` since Phase 4 — the instruction that
+sets SPRM1 and SPRM2 sets SPRM3 in the same 8 bytes — and exported only `sprm_astn` and
+`sprm_spstn`. So the angle was written by the VM and read by nobody; the reader's
+`cur_angle` came from the B6 button alone.
+
+MEASURED on `CASTLE_IN_THE_SKY` (VTS_02 PGC1, the feature), the disc's own commands:
+
+```
+VMGM PGC2 post : g[12]=0  g[13]=0  g[14]=2
+VTS02 PGC1 pre : SetSTN ASTN = g[12]  SPSTN = g[13]  AGLN = g[14]
+VTS02M Audio menu buttons:
+    SetSTN ASTN=0 AGLN=2   (English 5.1)
+    SetSTN ASTN=1 AGLN=1   (Japanese 2.0)
+    SetSTN ASTN=2 AGLN=2   (French 2.0)
+```
+
+One `SetSTN` carries the audio track **and** the angle, and the disc's Audio menu sets them
+together — angle 1 is the Japanese title cards, angle 2 the English ones. Two thirds of that
+instruction were honoured and one third was dropped on the floor.
+
+**Mechanism, identical in shape to the audio side:** `dvd_vm.sprm_agln` → `emu.sv`'s
+`vm_owns_angle` latch (claims on a `SetSTN` change while `menus_on`, released by the B6
+`angle_edge`, cleared on `start_streaming` — the same last-writer-wins rule as
+`vm_owns_aud`/`vm_owns_sp`) → the reader's `agl_vm` / `agl_vm_en`, clamped to the block's own
+`angle_count`.
+
+Two differences from audio and subpicture, both forced by what the angle *is*:
+
+- **It selects a CELL, not a live mux.** Audio is a substream filter that can change at any
+  byte; the angle picks which cell of the block to stream. So the value must be settled
+  *before* the block is resolved, and the reader waits for `dvd_vm.pre_done` in
+  `S_ANGLE_PRE`. A late audio selection self-corrects on the next PES; a late angle plays
+  the wrong cell for the whole block. See `docs/dvd_nav.md` "The disc picks the angle".
+- **It needs a WRITE-BACK.** Nothing reads SPRM1/SPRM2 back on the discs measured so far,
+  but Castle's VTSM PGCs 19/20/21/24 all execute `g[14] = AGLN` and the feature PGC
+  re-applies `g[14]` on entry. Without `dvd_vm.agl_set` a B6 press would be silently undone
+  at the next title start. libdvdnav keeps `AGL_REG` the single source of truth for exactly
+  this reason.
+
+⛔ **Not driven by `Player Language`.** A full decode of every PGC command on that disc finds
+**zero** references to SPRM0/16/17/18/19/20 — the angle follows the disc's own audio-menu
+choice, not the player's language register. Coupling the OSD option to it would invent
+behaviour no disc asks for.
+
+★ **Seam gate `tools/check_angle_wiring.py`**, for the reason this file already gives about
+a chain bench: emu's glue has no bench, and each module bench is handed the other side's
+value, so a missing or wrong port connection is invisible to both. It reads the connections
+out of `dvd/emu.sv` rather than restating them.
+
 ## Follow-ups
 
 - **Phase 11: on-screen track indicator** ("AUD 2/4 · fr") using the `attr_*` readout
