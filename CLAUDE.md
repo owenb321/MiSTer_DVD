@@ -539,8 +539,10 @@ worse maintenance burden than targeted in-place edits. So:
   read out of `emu.sv`; RED on `main`), `run_menu_junction.sh` [J1n]/[J3]/[J4]. ⚠ The
   T2-only [J1] sweep (8/8 PASS, "FAIL by design") no longer gates. Detail:
   **`docs/quant_matrix.md` §13q**.
-  ★★ **AND THE SAME ROUND FOUND THE FLUSH JUNCTION FRYING TOO (§13r, build `dev-hopstuff2`,
-  ⏳ HW-confirm pending):** Harry Potter Interactive's Player Mode screen, a TITLE-domain
+  ★★ **AND THE SAME ROUND FOUND THE FLUSH JUNCTION FRYING TOO (§13r, build `dev-hopstuff2`
+  = `DVD_hopstuff2_20260916_2120.rbf`, SEED 7 first roll, clk_dec 93.71/89.77;
+  ✅ HW-CONFIRMED 2026-09-16 by the maintainer: Player Mode sharp on the first view, chapter
+  skips and menu entry/exit unregressed):** Harry Potter Interactive's Player Mode screen, a TITLE-domain
   still reached by a title→title jump = a VBUF flush with NO soft reset (#98 covers
   crossings only), came up BLOCKY, pre-existing on v0.5.0. Same eat, opposite direction:
   the still downloads NO matrix and relies on the defaults; every title VOB downloads one

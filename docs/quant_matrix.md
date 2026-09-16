@@ -2243,7 +2243,9 @@ either ack. ⚠ This widens the stuffer onto the chapter-seek and menu-entry pat
 parser hunts through them into the landing's header exactly as on a hop; after a
 soft reset it is already hunting. **Build:** `releases/DVD_hopstuff2_20260916_2120.rbf`
 (`dev-hopstuff2 260916`), SEED 7 first roll, clk_dec 93.71 / 89.77 MHz, 91 % ALM;
-`lint_undriven` and `netlist_canary` PASS. ⏳ HW: Player Mode via skip on HP correct on the
+`lint_undriven` and `netlist_canary` PASS. ✅ **HW-CONFIRMED 2026-09-16 (maintainer, own
+rig):** Player Mode via skip on HP correct on the first view, chapter skips and menu
+entry/exit unregressed, the 13q.4 arms unregressed. The planned arms were: Player Mode via skip on HP correct on the
 first view; a chapter skip on a feature and a menu entry/exit unregressed; the
 13q.4 arms unregressed.
 
