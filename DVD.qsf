@@ -1192,4 +1192,12 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # MEASURED: SEED 7 held FIRST roll again -- clk_dec 93.71 MHz @100C / 89.77 MHz
 # @-40C (gate 86.0, PASS both corners), 38,049 / 41,910 ALMs (91 %). Build
 # releases/DVD_hopstuff2_20260916_2120.rbf.
+#
+# v0.6.0 RELEASE netlist (2026-09-16): CORE_VERSION dev-hopstuff2 -> v0.6.0 is a
+# CONF_STR change, so the seed re-rolled by construction -- for the third build in
+# a row SEED 7 held FIRST roll. clk_dec 90.34 MHz @100C / 90.24 MHz @-40C (gate
+# 86.0, PASS both corners), 38,033 / 41,910 ALMs (91 %), 500/553 M10K (90 %),
+# 94/112 DSP (84 %). Note the corners have converged (0.1 MHz apart, against
+# 93.71/89.77 on the build before it) -- same seed, same fit quality, and both
+# still ~4 MHz clear. Build releases/DVD_20260916.rbf.
 set_global_assignment -name SEED 7
