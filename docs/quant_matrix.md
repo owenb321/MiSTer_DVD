@@ -2099,6 +2099,12 @@ bypass, a tied-off arm, and `main`'s own `emu.sv`), and
 design") is now recorded rather than gated and whose gate is the Nacho trio
 `[J1n]` RED / `[J3]` GREEN / `[J4]` sizing. `tools/lint_undriven.sh` PASS.
 
+**Build:** `releases/DVD_hopstuff_20260916_1859.rbf` (`dev-hopstuff 260916`), SEED 7
+FIRST roll, clk_dec **92.46 / 91.71 MHz** against the 86.0 gate, 91 % ALM / 90 % RAM /
+84 % DSP; `es_stuff` costs 19 ALMs and 10 registers. `lint_undriven` and
+`netlist_canary` PASS. Compare option A's netlist: SEED 7 marginal at 85.1, re-swept
+to SEED 9.
+
 ⏳ HW: the same protocol option A used -- control arm first (`main` on Nacho over
 20 RE-landings, baseline ~1 in 5), then the fix on Nacho / Elmo / Hulk × 20,
 expecting 0 fried **and Hulk correct on the FIRST view** (option A's flash residual

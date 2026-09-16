@@ -1181,5 +1181,8 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # the CONF_STR slug changed, so the seed re-rolled by construction. This REPLACES
 # the option-A netlist of fix/menu-hop-still-matrix (which needed SEED 9 after
 # SEED 7 came in marginal at 85.1 MHz) -- none of that branch's RTL is here.
-# Result recorded below once measured.
+# MEASURED: SEED 7 held FIRST roll -- clk_dec 92.46 MHz @100C / 91.71 MHz @-40C (gate
+# 86.0, PASS both corners), 38,006 / 41,910 ALMs (91 %), 500/553 M10K (90 %), 94/112
+# DSP (84 %); es_stuff itself is 19 ALMs / 10 registers. lint_undriven + netlist_canary
+# PASS. Build releases/DVD_hopstuff_20260916_1859.rbf.
 set_global_assignment -name SEED 7
