@@ -1756,7 +1756,8 @@ wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
 // which is why seek_time itself needs no change.
 // (`dvd_iso_reader.sv` has carried "multi-angle blocks over-count -- documented
 // limitation" since Phase 11; this is that limitation removed.)
-wire       cw_sibling = (cm_cat_c[5:4] == 2'd1) && (cm_cat_c[7:6] >= 2'd2);
+wire       cw_sibling  = (cm_cat_c[5:4] == 2'd1) && (cm_cat_c[7:6] >= 2'd2);
+wire       cw_blk_first= (cm_cat_c[5:4] == 2'd1) && (cm_cat_c[7:6] == 2'd1);
 wire [31:0] cell_last_w = {wacc, pb_rdata};                 // last_sector @20
 wire [31:0] cell_sz_w   = cell_last_w - cf_c;               // content size (sectors)
 wire        heur_hit_w  = (cell_last_w == lv_c) && (cell_sz_w < 32'd1024) &&
@@ -1775,6 +1776,19 @@ wire        heur_flag_w = (cm_still_c == 8'd0) && heur_hit_w;
 // stores 0 and seeds run_eltm, so no extra reset state in the walk.
 reg  [31:0] pt_c;                     // this cell's playback_time (BCD)
 reg  [31:0] run_eltm;                 // running duration sum (BCD)
+// The START of the angle block currently being walked, latched at its
+// block-FIRST cell. A sibling must publish THIS, not the running total: the
+// total has already advanced past the block-first cell's own duration by the
+// time the sibling's record is written, so publishing it hands the sibling the
+// start of the NEXT block.
+// ⚠ That was the first cut of this fix, and it produced a preview clock frozen
+// at exactly one chapter's length: seek_time picks the sibling (nearest
+// at-or-below), read its start as the next block's, and then interpolated
+// between two identical values -- "shows 0:08:00 ... and does not increase
+// while the seek increases". The TOTAL was right the whole time, which is why a
+// bench that only checked title_secs_o passed. See iso_reader_angle_tb TEST F.
+reg  [31:0] blk_eltm;                 // block-first cell's start (BCD)
+reg  [15:0] blk_secs;                 // block-first cell's start (binary seconds)
 wire [31:0] run_sum_w;
 bcd_time_add run_eltm_add (.a(run_eltm), .b(pt_c), .sum(run_sum_w));
 // Binary twin of run_eltm, in seconds, saturating at the same 9:59:59 the BCD
@@ -1818,6 +1832,8 @@ always @(posedge clk)
         pt_c            <= 32'd0;
         run_eltm        <= 32'd0;
         run_secs        <= 16'd0;
+        blk_eltm        <= 32'd0;
+        blk_secs        <= 16'd0;
         cellf_secs      <= 16'd0;
         cellf_lwe       <= 1'b0;
         cellf_last      <= 32'd0;
@@ -1859,10 +1875,19 @@ always @(posedge clk)
                 title_first_rbn <= {wacc, pb_rdata};
             if (cell_wi == 8'd0) title_start_rbn <= {wacc, pb_rdata};
             // start time = sum of the cells before this one (pt_c complete @7)
-            // A sibling angle cell shares the block's slot: same start, and the
-            // running sum does not advance (its duration is the block-first
-            // cell's, already counted).
-            cell_start_mem[cell_wi] <= (cell_wi == 8'd0) ? 32'd0 : run_eltm;
+            // A sibling angle cell shares the block's slot: it publishes the
+            // BLOCK-FIRST cell's start (blk_*, not the running total, which has
+            // already moved past it) and the running sum does not advance,
+            // because its duration is the block-first cell's and was counted
+            // once already.
+            cell_start_mem[cell_wi] <= (cell_wi == 8'd0) ? 32'd0
+                                     : cw_sibling ? blk_eltm : run_eltm;
+            // latched from the same expression the block-first cell publishes,
+            // so a stale run_* from the previous PGC can never leak in at cell 0
+            if (cw_blk_first) begin
+                blk_eltm <= (cell_wi == 8'd0) ? 32'd0   : run_eltm;
+                blk_secs <= (cell_wi == 8'd0) ? 16'd0   : run_secs;
+            end
             run_eltm                <= (cell_wi == 8'd0) ? pt_c
                                      : (cw_sibling ? run_eltm : run_sum_w);
             run_secs                <= (cell_wi == 8'd0) ? pb_dur_w
@@ -1874,7 +1899,8 @@ always @(posedge clk)
             cellf_we   <= 1'b1;
             cellf_idx  <= cell_wi[6:0];
             cellf_rbn  <= {wacc, pb_rdata};
-            cellf_secs <= (cell_wi == 8'd0) ? 16'd0 : run_secs;
+            cellf_secs <= (cell_wi == 8'd0) ? 16'd0
+                        : cw_sibling ? blk_secs : run_secs;
         end
         if (cell_bi == 5'd23) begin
             cell_last_mem[cell_wi] <= {wacc, pb_rdata};

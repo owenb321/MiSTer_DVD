@@ -58,6 +58,18 @@ module iso_reader_angle_tb;
     reg         seek_rbn_pulse = 0;      // TEST D: raw-RBN scrub into a block
     reg  [31:0] seek_rbn = 32'd0;
     wire [15:0] title_secs;                // TEST E: the title's own running time
+    // TEST F: the per-cell START times, captured off the cellf_* stretch port
+    // that feeds dvd/seek_time.sv. The TOTAL being right does not make the
+    // constituents right -- that is exactly how the first cut of the timeline
+    // fix shipped a preview clock frozen at one chapter's length.
+    wire        cellf_we;
+    wire [6:0]  cellf_idx;
+    wire [15:0] cellf_secs;
+    integer     cstart [0:15];
+    integer     ci;
+    initial for (ci = 0; ci < 16; ci = ci + 1) cstart[ci] = -1;
+    always @(posedge clk)
+        if (cellf_we && cellf_idx < 7'd16) cstart[cellf_idx] = cellf_secs;
     wire [3:0]  cur_angle;
     wire [3:0]  angle_count;
 
@@ -108,6 +120,7 @@ module iso_reader_angle_tb;
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .keep_vbuf(),
         .title_secs_o(title_secs),
+        .cellf_we(cellf_we), .cellf_idx(cellf_idx), .cellf_secs(cellf_secs),
         .cur_cell(), .cell_ready(),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
@@ -446,6 +459,26 @@ module iso_reader_angle_tb;
             errors=errors+1;
             $display("  FAIL: a multi-angle block counted more than once on the timeline");
         end
+
+        // ============ TEST F: each cell's START, not just the total ============
+        // Durations 10/10 (block 1), 20/20 (block 2), 5 (common). A block is one
+        // slot, so the starts are 0, 0, 10, 10, 30 -- the SIBLING inherits the
+        // block-first cell's start.
+        // ⚠ This arm exists because TEST E did not catch a real defect: summing
+        // correctly (35) while handing every sibling the start of the NEXT block
+        // (0, 10, 10, 30, 30). seek_time picks the sibling by its
+        // nearest-at-or-below rule, so the preview read 8:00 on Grave of the
+        // Fireflies and never moved, because it interpolated between two
+        // identical values. A total can be right while every constituent is
+        // wrong.
+        $display("TEST F (cell starts): %0d %0d %0d %0d %0d  (want 0 0 10 10 30)",
+                 cstart[0], cstart[1], cstart[2], cstart[3], cstart[4]);
+        if (cstart[0] !== 0 || cstart[1] !== 0)
+            begin errors=errors+1; $display("  FAIL: block 1's sibling does not share its start"); end
+        if (cstart[2] !== 10 || cstart[3] !== 10)
+            begin errors=errors+1; $display("  FAIL: block 2's start/sibling wrong"); end
+        if (cstart[4] !== 30)
+            begin errors=errors+1; $display("  FAIL: the common cell starts at the wrong time"); end
 
         if (errors == 0) $display("ISO_READER_ANGLE_TB: ALL TESTS PASSED");
         else             $display("ISO_READER_ANGLE_TB: %0d FAILURE(S)", errors);
