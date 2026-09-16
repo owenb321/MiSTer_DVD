@@ -27,13 +27,23 @@
 # flush (+NOFLUSH=1 -- a keep_vbuf hop) and score the matrix the hardware ends
 # up holding against what the disc authored.
 #
-#   [J0]  --trunc 0     the fix: the whole cell delivered  -> must PASS
-#   [J1]  --trunc N>0   the defect: the cache dropped       -> must FRY
+#   [J0]  --trunc 0     the whole cell delivered (T2)        -> must PASS
+#   [J1]  --trunc N>0   the T2 truncation sweep              -> recorded, not gated
 #   [J2]  the landing alone (+COLDSTART=1)                  -> must PASS
+#   [J1n] NACHO --trunc 5000, no gap: the REAL eat           -> must FRY  (RED arm)
+#   [J3]  NACHO --trunc 5000 --gap 128: zero_byte stuffing   -> must PASS (the fix)
+#   [J4]  NACHO cut INSIDE cut A's matrix download:
+#           --gap 16 must FRY, --gap 128 must PASS           -> the >=68-byte sizing
 #
-# [J0] is the gate.  [J1] is the reproduction and is EXPECTED to fry -- it is
-# what the hardware did before the reader change, and it stays red by nature.
-# [J2] proves the measurement can report success at all.
+# [J0]/[J2] prove the measurement.  The T2 [J1] sweep never reproduced the eat
+# (all seven offsets resync for free -- docs/dvd_menu_refinements.md 9); it is
+# kept as the record of that finding and does NOT gate.  The gate is the Nacho
+# trio: [J1n] is the defect reproduced on real cells (63/64 entries wrong, the
+# landing's sequence header swallowed), [J3] is dvd/es_stuff.sv's shape -- 128
+# zero bytes between the cut and the landing, MPEG-2 zero_byte stuffing -- and
+# [J4] pins WHY it is 128 and not 16 (docs/quant_matrix.md 13q): a cut inside a
+# 64-entry quantiser-matrix download eats up to 64 zeros as entries before the
+# parser reaches its start-code hunt.
 #
 # ⚠ [J0] is only meaningful while it is NON-VACUOUS: the source's download must
 # actually have happened (downloads=1) or the RAM would hold the defaults for
@@ -84,7 +94,7 @@ run () {
   esac
   # anti-vacuity: the source's matrix must really have been downloaded, else a
   # PASS means only that nothing ever wrote the RAM.
-  if [ "$expect" = "PASS" ] && [ "$label" != "[J2]" ]; then
+  if [ "$expect" = "PASS" ] && [ "$label" != "[J2]" ] && [ "$label" != "[J4b]" ]; then
     echo "$dl" | grep -qE 'downloads=[1-9]' || {
       echo "  FAIL: $label is VACUOUS -- cut A never downloaded its matrix"; rc=1; }
   fi
@@ -112,11 +122,32 @@ for t in 8 64 300 1000 1800 2600 3400; do
   n=$((n+1))
   echo "$res" | grep -q FRIED && fried=$((fried+1))
 done
-echo "   [J1]: $fried/$n truncation offsets lose the landing's matrix"
-if [ "$fried" -eq 0 ]; then
-  echo "  FAIL: [J1] reproduced nothing -- the mechanism is refuted, or the"
-  echo "        truncation never caught the vld mid-picture"
+echo "   [J1]: $fried/$n T2 truncation offsets lose the landing's matrix (recorded; 0/7 is the"
+echo "         standing finding -- the T2 cells resync for free at these offsets)"
+
+# ---- the Nacho arms: the eat reproduced, and the zero-stuffing fix ------------
+NISO="${MJ_NACHO_ISO:-}"
+if [ -z "$NISO" ]; then
+  NISO=$(find "$ISO_DIR" -iname 'NACHO_LIBRE_WS*.iso' -print -quit 2>/dev/null || true)
+fi
+if [ -z "$NISO" ] || [ ! -f "$NISO" ]; then
+  echo "== menu_junction (Nacho arms): SKIPPED -- NACHO_LIBRE_WS*.iso not found under $ISO_DIR"
+  echo "   (set MJ_NACHO_ISO=/path/to/NACHO_LIBRE_WS.iso); the RED/GREEN gate did NOT run"
   rc=1
+else
+  NJ="--junction --junction-vts 7 --pgc-a 10 --cell-a 0 --pgc-b 13 --cell-b 0"
+  echo "== menu_junction: $(basename "$NISO") VTSM07 PGC10 cell0 (looping motion menu) -> PGC13 cell0 (still) =="
+  python3 tools/quant_fixture.py "$NISO" $NJ --trunc 5000 --out "${FIX}_n5000" | sed 's/^/   /'
+  echo "== [J1n] the real eat: cut at 5000, no stuffing -- must FRY (RED) =="
+  run "[J1n]" "${FIX}_n5000" FRIED +NOFLUSH=1
+  python3 tools/quant_fixture.py "$NISO" $NJ --trunc 5000 --gap 128 --out "${FIX}_n5000g128" >/dev/null
+  echo "== [J3] the same cut with 128 zero bytes in front of the landing -- must PASS =="
+  run "[J3]" "${FIX}_n5000g128" PASS +NOFLUSH=1
+  echo "== [J4] a cut INSIDE cut A's matrix download: 16 zeros fry, 128 do not =="
+  python3 tools/quant_fixture.py "$NISO" $NJ --trunc 27520 --gap 16  --out "${FIX}_nmm16"  >/dev/null
+  python3 tools/quant_fixture.py "$NISO" $NJ --trunc 27520 --gap 128 --out "${FIX}_nmm128" >/dev/null
+  run "[J4a]" "${FIX}_nmm16"  FRIED +NOFLUSH=1
+  run "[J4b]" "${FIX}_nmm128" PASS  +NOFLUSH=1
 fi
 
 [ "$rc" -eq 0 ] && echo "== menu_junction: OK ==" || echo "== menu_junction: FAIL =="
