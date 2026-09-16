@@ -1339,7 +1339,12 @@ menu→menu hops), menu→title Play, and a chapter skip during playback.
 - **Restoring the §5 cold re-decode.** Issue #65's audio replay and a 193-sector re-stream;
   it also only ever masked whatever the real cause is.
 - **Any vld-side resync / clearing `sequence_header_seen`.** `docs/quant_matrix.md` §9–§10:
-  reset all of the pipeline or none of it.
+  reset all of the pipeline or none of it. ★ Amended 2026-09-16: that rule is about
+  FORCING the parser's state. Entering the parser's own NATURAL error path by making the
+  stream legal at the seam is a different thing, and it is what fixed the user-hop
+  junction — `dvd/es_stuff.sv` puts 128 zero bytes (MPEG-2 `zero_byte` stuffing) in front
+  of the landing so the vld errors out on the truncated slice BEFORE the landing's
+  sequence header arrives. `docs/quant_matrix.md` §13q.
 - **A `ps_demux` picture-boundary cut.** The right tool for a USER jump taken from a
   streaming motion menu, which is still cut mid-picture after this change (invisible today
   because source and landing share their dimensions). A follow-up, not this.

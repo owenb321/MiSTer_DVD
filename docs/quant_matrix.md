@@ -1941,6 +1941,219 @@ to forbid the re-align rule from doing it). ⚠ If the flash is ever judged wort
 honest options are: remember the orphan verdict per cell and drop on the SECOND visit, or
 widen `cell_is_still` with a measured stream property -- not simply tying `drop_eaten_en` high.
 
+### 13q. ★★★ OPTION A RETIRED -- the header cannot be eaten if the junction carries zero_byte stuffing (2026-09-16, branch `fix/menu-hop-zero-stuff`)
+
+A second session reviewed `fix/menu-hop-still-matrix` cold (no context from the
+sessions that built it) and replaced it. The old branch is kept, unmerged and
+unpushed, as the fallback. This section is the reasoning; the verdict on option A
+is in 13q.1, the replacement in 13q.2, the measurements in 13q.3.
+
+#### 13q.1 What was wrong with option A
+
+Option A worked on the discs it was tested on. It was retired for four reasons,
+two of them defects and two of them cost:
+
+1. **The detector cannot see the worst eat.** If the parser swallows the landing's
+   sequence header AND its picture header, it resyncs on a *slice* start code,
+   which `vld.v:907-909` accepts because `sequence_header_seen` /
+   `sequence_extension_seen` / `picture_header_seen` are all still set from the
+   old cell (they clear only at `STATE_SEQUENCE_END`). `STATE_PICTURE_HEADER` is
+   never visited for the landing, so `hdr_eaten` never pulses, `eaten_pend` stays 0,
+   and at the still's `SEQ_END` the `hdr_orphan` branch (guarded on `eaten_pend`)
+   does not fire: **no repair, the fried still stays, and `await_hdr` is left
+   stuck**. The landing's slices are also painted into the OLD open picture under
+   the old picture header. Nothing in sim or on HW bounded how often a real cut
+   lands there.
+2. **The mark is a one-cycle pulse on the last arm of an if/else chain**
+   (`vld.v:1442-1444`). Coinciding with `clk_en && state==STATE_PICTURE_HEADER &&
+   await_hdr` (or the `SEQ_END` branch) it is dropped, not deferred, and that hop
+   is unprotected.
+3. **Its accepted residual was the original symptom.** Hulk-class cells
+   (`still_time=0`, one picture + 70 s of audio) still showed the fried picture
+   until the re-stream landed, because the DROP was gated on `cell_is_still` -- an
+   authoring-tool claim the branch itself had just proved unreliable (13o).
+4. **Footprint.** Six modules (`vld`, `mpeg2video`, `vidfeed_cdc` 9→10 bits,
+   `dvd_iso_reader`, `audio_ring`, `emu`), ten new ports, forty bench tie-off
+   edits, a wiring checker, a retry budget, a reader watchdog, three `O[2]`
+   probes, an audio hold with a 0.19 s tail -- and the record's own admission that
+   *"nothing in sim exercises `hdr_eaten` firing on a `keep_vbuf` hop"*. A re-read
+   of the cell's sectors with the audio muted was the answer to "the bit pointer
+   was mid-VLC".
+
+The whole apparatus repairs a picture that need never be decoded wrong.
+
+#### 13q.2 The fix: MPEG-2 zero_byte stuffing at the junction
+
+ISO 13818-2 6.2.1 requires a decoder to skip any number of `zero_byte`s before a
+start code, and this vld does (`STATE_NEXT_START_CODE` walks one byte per visit;
+`24'h000000 != 24'h000001`, `vld.v:867`). So **`dvd/es_stuff.sv` puts 128 bytes
+of `0x00` between the last byte of the outgoing cell and the first byte of the
+landing.** From ANY state the cut left the parser in, an all-zero string cannot be
+parsed as valid data for long -- read out of `vld.v` and `vlc_tables.v`, not
+argued:
+
+| parser state at the cut | what the zeros do | where it lands |
+|---|---|---|
+| mid-VLC (MBA, mb_type, motion_code, CBP) | every table returns `length 0` on zeros (`vlc_tables.v` defaults) | `STATE_ERROR` (`vld.v:1029/1051/1079/1089/1100`) → `1166` → hunt |
+| mid DCT coefficient (B.14/B.15) | `[15:11]==0` on 16 zero bits | `STATE_DCT_ERROR` (`1134/1142/1148`) → `STATE_NON_CODED_BLOCK` pads the macroblock to its full block count → `1117` → hunt |
+| mid fixed-length field (DC diff, escape 12 b, motion residual, quant scale) | taken as the value (≤ 18 bits) | the next state is a VLC state → as above |
+| macroblock boundary | the spec's 23-zero `nextbits()` test (`vld.v:1117`) | hunt |
+| mid header (fields, extensions, user_data) | every "another field follows" flag reads 0 | hunt within ~10 bytes |
+| **inside a 64-entry quantiser-matrix download** (`STATE_LD_*_QUANT0`, `vld.v:942`) | **the loop is counter-driven and eats up to 64 zero bytes as entries** | hunt after ≤ 64 bytes |
+
+That last row is why the run is **128 bytes and not 16**: `N >= 68` is the bound,
+128 leaves margin and costs nothing (128 bytes of VBUF, ~256 clk_dec of hunting).
+The hunt then finds `00 00 01 B3` intact -- a zero run followed by `00 00 01` is a
+legal prefix from **any byte alignment**, which also disposes of the bit-alignment
+half of the problem -- the header is parsed, the matrix downloaded, and the still
+decodes correctly the **first** time. No fried picture, no drop, no re-stream, no
+duplicate audio, and no black frame: nothing is flushed or reset.
+
+★★ **Why this is not the 9 state force in a new hat.** 9's `flush_resync` forced
+`state <= STATE_NEXT_START_CODE` from *anywhere*, including from inside a block,
+so the block in flight never got its end marker; `rld.v` closes a block only on
+that marker (`rld.v:167/181/261`), the next block merged into it, and every
+following block shifted by one -- the measured luma-in-both-chroma-planes of 10.1.
+The **natural** error paths cannot do that: `STATE_ERROR` fires only from states
+that precede `STATE_BLOCK`, i.e. before `motion_vector_valid` announces the
+macroblock to motcomp and before any coefficient enters the rld fifo, and
+`STATE_DCT_ERROR` completes the announced macroblock with synthetic empty blocks.
+Those are the paths that already resync 4 landings in 5 cleanly today; the stuffer
+merely makes them unconditional.
+
+★ **Why zeros and not `0xFF`.** The reverted `vidfeed_flush_primer` used `0xFF`
+because it is inert to the start-code hunt. It is also inert to the *error*: a run
+of 1s decodes as valid B.14 coefficients indefinitely (`11` = run 0, level 1). Only
+zeros provoke the exit. Precedent in this very pipeline: `ps_demux`'s
+`S_VID_FLUSH` emits 24 zero bytes after every still's `B7`, HW-proven since Phase 5.
+
+**Where it lives.** A standalone shim between `ps_demux`'s `vid_*` output and
+`vidfeed_cdc`'s write port in `dvd/emu.sv` -- **no port on any existing module
+changes**, so no 40-bench tie-off sweep and no golden-bench churn. Armed by
+`aud_drop_pulse` = `(jump_ack | seek_ack) & keep_vbuf`, the ONE junction with no
+VBUF flush. The run goes in front of the first byte `ps_demux` presents after
+that hop's pipe reset, which is the landing's first byte by construction.
+⚠ **The spend waits for `pipe_rst_n` to have been LOW since the arm** (`rst_seen`):
+in the cycle between the ack and `load_flush` taking `pipe_rst_n` low, `ps_demux`
+can still present a byte of the OUTGOING cell, and a run in front of *that* puts
+`<zeros> XX 00 00 01 B3` on the wire -- if `XX == 0x01` the hunt reads
+`00 00 01 00`, a picture start code, and eats the real header from the other side.
+`es_stuff_tb` T3 and mutation M1 are that case. The zeros ride the ordinary byte
+path (CDC → packer → `vbuf_pos`), so the PTS-association coordinate stays exact
+and the mark stays on the landing's real byte (`ps_demux` holds it, with
+`mark_pending`, while `in_ready` is low). Reset domain `reset_n`, never
+`pipe_rst_n`.
+
+⚠ **Scope, deliberately narrow:** the `keep_vbuf` hop only. Stuffing on every
+`load_flush` (chapter seeks, menu crossings) would be equally legal and probably
+beneficial -- 11 records that a flush leaves the parser frozen mid-picture and the
+first landing GOP's header can be eaten there too -- but those paths are covered
+by the soft reset / the #45 realign and are HW-proven; one behavioural delta per
+HW round. Recorded as a follow-up, not done.
+
+#### 13q.3 Measured, before any RTL was written
+
+`tools/quant_fixture.py` gained `--gap N` (N zero bytes between cut A and cut B)
+and `--trunc-range` (one ISO walk per sweep). Everything below is
+`quant_matrix_tb +NOFLUSH=1` -- the real `vld`/`getbits`/`rld`/`iquant` over real
+cells, scoring **the matrix the decoder ends up holding** against the disc -- on
+NACHO_LIBRE_WS VTSM07 **PGC10 cell0 → PGC13 cell0** (the looping motion menu →
+the 10-button still; cut A's matrix peaks at 127, cut B's at 15, so a wrong matrix
+is unmistakable).
+
+| arm | trunc | gap | mismatches | downloads | verdict |
+|---|---|---|---|---|---|
+| control | 0 | 0 | 0/64 | 2 | PASS |
+| **the eat (13j's offset)** | 5000 | 0 | **63/64** | **1** | **FRIED** |
+| **the fix** | 5000 | **128** | **0/64** | **2** | **PASS** |
+| cut INSIDE cut A's matrix download | 27520 | 16 | 62/64 | 1 | FRIED |
+| same, sized by the table above | 27520 | **128** | **0/64** | 2 | **PASS** |
+
+The mid-download pair is the sizing argument made executable: 16 zeros are eaten as
+matrix entries and the landing's header goes with them; 128 are not.
+
+★★ **The sweep, run on `main`'s RTL (not the option-A build): 251 offsets, `--trunc
+4000..6000 step 8`, the same two cells.**
+
+| gap | offsets | PASS | FRIED |
+|---|---|---|---|
+| 0 | 251 | 110 | **141 (56 %)** -- first at 4000, last at 5992, spread across the whole range |
+| **128** | 251 | **251** | **0** |
+
+Two things that number settles. First, the parser is vulnerable at far more cut
+offsets than the board's ~1-in-5 suggested: the field rate is a property of where
+a button press happens to land in a looping cell, not of how rarely the eat can
+happen. Second, the option-A record's belief that "at most cut offsets this parser
+errors out on the partial slice and resyncs BEFORE the landing's sequence header"
+(vld.v's own comment, and 13j's six-of-seven) was an artefact of the seven offsets
+chosen -- and its detector was never exercised in sim on the real cells at all
+(13l), so nothing could have corrected it. The stuffed run is the first
+measurement over a dense set of offsets, and it is 0 for 251.
+
+Gates: **`bench/dvd/run_es_stuff.sh --red`** (six scoreboard arms -- passthrough,
+arm/reset/land, the ack-cycle window, backpressure inside the run, two hops, arm
+without a reset -- and seven mutations, each caught by its own arm),
+**`tools/check_es_stuff_wiring.py`** (the seam read out of `emu.sv`; RED on a
+bypass, a tied-off arm, and `main`'s own `emu.sv`), and
+**`bench/dvd/run_menu_junction.sh`**, whose T2-only `[J1]` (8/8 PASS, "FAIL by
+design") is now recorded rather than gated and whose gate is the Nacho trio
+`[J1n]` RED / `[J3]` GREEN / `[J4]` sizing. `tools/lint_undriven.sh` PASS.
+
+⏳ HW: the same protocol option A used -- control arm first (`main` on Nacho over
+20 RE-landings, baseline ~1 in 5), then the fix on Nacho / Elmo / Hulk × 20,
+expecting 0 fried **and Hulk correct on the FIRST view** (option A's flash residual
+has no mechanism here); T2 / MiB / Matrix motion menus, Scooby-Doo 2, menu→title
+Play, a chapter skip, and a still's narration not doubled, unregressed.
+
+#### 13q.4 HW test plan (maintainer-run, control arm first)
+
+Flash only the `.rbf` (`releases/DVD_hopstuff_<date>_<time>.rbf`, OSD line
+`DVD dev-hopstuff 260916`); the Main is unchanged by this branch. Every arm below
+counts RE-LANDINGS, not captures: once a still is fried it holds, so re-shooting a
+parked menu measures nothing (13c-quinquies-bis). 20 landings is the minimum that
+means anything against a 1-in-5 rate (0.8^20 = 1.2 %).
+
+**Arm 0 -- control, on the CURRENT `main`/release core, same session, same discs.**
+Nacho: 20 landings on the VTS_07 still (the one that fried ~1 in 5); expect ~4
+fried. Hulk: 5 landings on the VTS_06 special-features still (PGCN 15, reached by a
+button from the 70 s looping clip); expect it fried, holding until the clip's audio
+loops (~70 s) and then clean. If the control does NOT reproduce, stop -- the rig or
+the route has changed and the fix arm would measure nothing.
+
+**Arm 1 -- the fix, same routes.**
+
+| disc / route | presses | pass |
+|---|---|---|
+| NACHO_LIBRE_WS, VTS_07 menu -> the still that fried | 20 landings | **0 fried** |
+| INCREDIBLE_HULK, VTS_06 special features (button from the 70 s clip) | 10 landings | **correct on the FIRST view, no flash** -- a flash-then-settle means the eat still happened and the cell loop repaired it, i.e. the stuffer did not reach that junction |
+| WAKE_UP_WITH_ELMO main menu (the #92 crossing path) | 10 launches | 0 fried (unregression; this route is the soft reset's, not the stuffer's) |
+| ULTIMATE_T2 Mission Profiles, first slide of each actor (the #96 natural-drain path) | every actor once | first slide clean (unregression) |
+
+**Arm 2 -- the motion menus that option A round 1 broke.** The stuffer fires on
+EVERY `keep_vbuf` hop, including a looping motion menu's own loop, so this is the
+arm that can show a cost: MEN_IN_BLACK root menu (loops), THE_MATRIX menus, T2
+main menu. Watch for: an animation restarting, highlights ahead of the picture,
+sluggish response after a press, macroblocking at a transition. Expect none -- a
+zero run before a start code is what the stream would contain if the authoring
+tool had padded it.
+
+**Arm 3 -- untouched paths, one each.** Scooby-Doo 2 minigame (title-domain, no
+`keep_vbuf`, must be identical); menu -> title Play; a chapter skip during a
+title; a menu still with narration (the audio must play once -- there is no
+re-stream here, so this cannot regress, but it is the issue-#65 arm and costs one
+press); Stop and resume.
+
+**What to report per arm:** landings / fried, and for any fried image whether it
+HOLDS or resolves, and on which disc and menu. `Debug Overlay` is not needed --
+this fix has no probe and no state; a fried still under it means the zeros are
+not being inserted at that junction, and the next step is `tools/check_es_stuff_wiring.py`
+on the built `emu.sv` and a `keep_vbuf` trace of the route, not tuning `N`.
+If a capture is in doubt, `tools/fry_detect.py` scores a screenshot against
+ffmpeg's decode of the same menu's own bytes (>= 1.5x = fried).
+
+**If arm 1 fails:** the fallback is `fix/menu-hop-still-matrix` (option A, HW-confirmed,
+unpushed) -- not a re-derivation. Record the measurement here first.
+
 ### 13f. WHAT A REAL PLAYER DOES -- asked of the oracle, not reasoned about
 
 libdvdnav is the independent oracle for this project (docs/dvd_vm.md, the POST-only PGC

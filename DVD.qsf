@@ -1175,4 +1175,11 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # NOTE three new modules had to be ADDED TO THIS FILE's list before they existed to
 # Quartus at all (three 12006 undefined-entity errors); tools/lint_undriven.sh reads
 # the same list and so passed for hours without ever seeing them.
+#
+# MENU-HOP ZERO STUFFING netlist (2026-09-16, branch fix/menu-hop-zero-stuff):
+# dvd/es_stuff.sv (a ~20-flop shim between ps_demux and vidfeed_cdc, emu.sv) and
+# the CONF_STR slug changed, so the seed re-rolled by construction. This REPLACES
+# the option-A netlist of fix/menu-hop-still-matrix (which needed SEED 9 after
+# SEED 7 came in marginal at 85.1 MHz) -- none of that branch's RTL is here.
+# Result recorded below once measured.
 set_global_assignment -name SEED 7
