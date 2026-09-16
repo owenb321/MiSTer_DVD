@@ -75,22 +75,44 @@ module subpic_blend_tb;
         chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b1, 2'd0, 4'hF, 1'b1);   // idx0 forced -> ov colour
         chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b1, 2'd0, 4'h8, 1'b1);   // idx0 forced partial
         chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b1, 2'd0, 4'h0, 1'b1);   // idx0 forced but alpha0 -> passthrough
+        // ⚠⚠ ov_on=0 WITH ov_force=1. This corner was MISSING until 2026-09-15 and it
+        // is the one the burn-in gate rests on: emu hides a subtitle / menu highlight
+        // behind Stop and the screensaver by clearing ov_on ALONE (dvd/emu.sv's
+        // sp_on_e), so "ov_on low is passthrough whatever else is asserted" has to be
+        // a property of this module, not an assumption about it. ov_force's NAME
+        // actively invites the wrong reading -- "force it on" -- and the mutation
+        // `blend = (ov_on || ov_force) && ...` survived this bench without this line.
+        chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b0, 2'd0, 4'hF, 1'b1);   // off beats force
+        chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b0, 2'd2, 4'hF, 1'b1);   // off beats force, idx!=0
         // opaque -> out = overlay colour exactly (per channel)
         in_r=8'h33;in_g=8'h44;in_b=8'h55; ov_r=8'hAA;ov_g=8'hBB;ov_b=8'hCC;
         ov_on=1;ov_idx=1;ov_alpha=4'hF;ov_force=0; #1;
         if (out_r!==8'hAA || out_g!==8'hBB || out_b!==8'hCC) begin
             $display("  FAIL opaque colour got %02h,%02h,%02h",out_r,out_g,out_b); errors++; end
-        // sweep partial alphas / indices / video levels / colours / force vs reference
-        for (int frc=0;frc<2;frc++)
-          for (int a=0;a<16;a++)
-            for (int idx=0;idx<4;idx++)
-              for (int v=0;v<256;v+=17)
-                chk(v[7:0], (v+40)&8'hFF, (v+120)&8'hFF,
-                    (255-v)&8'hFF, (v*2)&8'hFF, (v+90)&8'hFF,
-                    1'b1, idx[1:0], a[3:0], frc[0]);
+        // sweep on/off x partial alphas / indices / video levels / colours / force
+        // vs reference. ⚠ The `on` loop is NOT decoration: the sweep used to pass a
+        // hardcoded 1'b1, so 4096 points all agreed about a blend that was never
+        // asked to stay OFF. ref_out() is written from the module's contract header
+        // (`if (!on ...) ref_out = vin`), not copied from the RTL, so the off half
+        // is a real check and not a restatement.
+        for (int on=0;on<2;on++)
+          for (int frc=0;frc<2;frc++)
+            for (int a=0;a<16;a++)
+              for (int idx=0;idx<4;idx++)
+                for (int v=0;v<256;v+=17)
+                  chk(v[7:0], (v+40)&8'hFF, (v+120)&8'hFF,
+                      (255-v)&8'hFF, (v*2)&8'hFF, (v+90)&8'hFF,
+                      on[0], idx[1:0], a[3:0], frc[0]);
 
-        if (errors == 0) $display("RESULT: PASS (blend matches reference)");
-        else             $display("RESULT: FAIL (%0d errors)", errors);
-        $finish;
+        // ⚠ $fatal, NOT $finish, on the failure path -- vvp exits 0 on $finish, so a
+        // runner scoring the exit code reads a FAILING bench as a passing one. See
+        // idle_logo_tb.sv and CLAUDE.md (the bench/ac3 and run_p240.sh cases).
+        if (errors == 0) begin
+            $display("RESULT: PASS (blend matches reference)");
+            $finish;
+        end else begin
+            $display("RESULT: FAIL (%0d errors)", errors);
+            $fatal(1, "RESULT: FAIL (%0d errors)", errors);
+        end
     end
 endmodule
