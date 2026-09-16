@@ -2640,7 +2640,8 @@ stay green.
 
 ### No `sml_agli`: the follow pointer is `vobu_sri.next_vobu` (2026-09-15, Studio Ghibli)
 
-> **Status: 🔧 sim-proven RED/GREEN, ⏳ HW-confirm pending.** Field report on
+> **Status: ✅ HW-CONFIRMED 2026-09-15** (build `DVD_anglefollow_20260916_0353.rbf`, SEED 7
+> first roll, clk_dec 94.41/90.40 vs the 86.0 gate). Field report on
 > `CASTLE_IN_THE_SKY.iso`: *"there are multiplexed versions of the title to show the
 > localized or Japanese version. Currently the core switches rapidly between the two angles
 > rather than sticking to one."* A second user, on unnamed Ghibli discs: *"starts playing
@@ -2758,7 +2759,9 @@ failures CLAUDE.md already records, not a regression from this branch.
 
 ### Adjacent angle blocks: the count ran across the boundary (2026-09-15, Grave of the Fireflies)
 
-> **Status: 🔧 sim-proven RED/GREEN, ⏳ HW-confirm pending.** Field report:
+> **Status: ✅ HW-CONFIRMED 2026-09-15** — maintainer: *"Grave of the Fireflies does report 2
+> angles now, and playing past 8 minutes does roll into chapter 2"*, i.e. the count AND the
+> block skip both measured on the board. Field report:
 > *"playing that back on the core showed 9 angles to choose from but no auto-switching
 > that I saw. Is that normal behavior?"*
 
@@ -2838,8 +2841,9 @@ variable rather than the angle machinery generally.
 
 ### Seeking inside an angle block (2026-09-15, Grave of the Fireflies, HW-found)
 
-> **Status: 🔧 sim-proven RED/GREEN, ⏳ HW-confirm pending.** Found by the maintainer while
-> confirming the two fixes above: *"seeking at any point shows an incorrect preview time
+> **Status: ✅ HW-CONFIRMED 2026-09-16** (build `DVD_anglefollow_20260916_0353.rbf`) —
+> maintainer: *"no angle switching after a seek on grave of the fireflies and the timestamps
+> are correct"*. Found by the maintainer while confirming the two fixes above: *"seeking at any point shows an incorrect preview time
 > (+8 minutes when seeking during the beginning chapter) and starts alternating the 2
 > available angles at 1hz."* **Both are PRE-EXISTING** — the fixes above are what let the
 > disc play far enough to reach them.

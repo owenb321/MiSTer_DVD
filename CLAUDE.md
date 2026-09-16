@@ -252,10 +252,12 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **SEEKING INSIDE AN ANGLE BLOCK — A BLOCK OCCUPIED N TIMELINE SLOTS INSTEAD OF ONE,
-  AND A SCRUB NEVER ARMED THE ANGLE MACHINERY (2026-09-15, branch
-  `fix/angle-noagli-follow`); sim-proven RED/GREEN, ⏳ HW-confirm pending. BOTH
-  PRE-EXISTING** — found by the maintainer while confirming the three fixes below, which are
+- ✅ **SEEKING INSIDE AN ANGLE BLOCK — A BLOCK OCCUPIED N TIMELINE SLOTS INSTEAD OF ONE, A
+  SCRUB NEVER ARMED THE ANGLE MACHINERY, AND THE SNAP LANDED ON WHICHEVER ANGLE THE TARGET
+  FELL IN (2026-09-15/16, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN and
+  ✅ HW-CONFIRMED 2026-09-16** (build `DVD_anglefollow_20260916_0353.rbf`, SEED 7 first roll,
+  clk_dec 94.41/90.40 vs the 86.0 gate) — maintainer on `Grave of the Fireflies`: *"no angle
+  switching after a seek ... and the timestamps are correct"*. **ALL THREE PRE-EXISTING** — found by the maintainer while confirming the three fixes below, which are
   what let `Grave of the Fireflies` play far enough to reach them. Report: *"seeking at any
   point shows an incorrect preview time (+8 minutes when seeking during the beginning
   chapter) and starts alternating the 2 available angles at 1hz."*
@@ -352,10 +354,12 @@ worse maintenance burden than targeted in-place edits. So:
   this fix.
   Detail: **`docs/dvd_nav.md`** "Seeking inside an angle block".
 
-- 🔧 **ADJACENT ANGLE BLOCKS — THE ANGLE COUNT WALKED OUT OF THE BLOCK IT WAS MEASURING,
+- ✅ **ADJACENT ANGLE BLOCKS — THE ANGLE COUNT WALKED OUT OF THE BLOCK IT WAS MEASURING,
   REPORTING 9 ANGLES ON A 2-ANGLE DISC AND SKIPPING ~22 MINUTES OF THE FILM (2026-09-15,
-  branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, ⏳ HW-confirm
-  pending.** Field report on `Grave of the Fireflies.iso`: *"playing that back on the core
+  branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, and
+  ✅ HW-CONFIRMED 2026-09-15** — maintainer: *"Grave of the Fireflies does report 2 angles
+  now, and playing past 8 minutes does roll into chapter 2"*, i.e. both halves of the defect
+  (the count AND the block skip) measured on the board.** Field report on `Grave of the Fireflies.iso`: *"playing that back on the core
   showed 9 angles to choose from but no auto-switching that I saw. Is that normal
   behavior?"* No — `TT_SRPT` declares **2**, and the disc's NAV packs carry exactly two
   `sml_agli` entries. **The 9 was the core's own cap.**
@@ -399,10 +403,10 @@ worse maintenance burden than targeted in-place edits. So:
   touch it — a genuinely separate defect found by a user question.
   Detail: **`docs/dvd_nav.md`** "Adjacent angle blocks".
 
-- 🔧 **A MULTI-ANGLE DISC NEED NOT AUTHOR `sml_agli`, AND PHASE 9 REQUIRED IT — Studio
+- ✅ **A MULTI-ANGLE DISC NEED NOT AUTHOR `sml_agli`, AND PHASE 9 REQUIRED IT — Studio
   Ghibli discs alternated between the localized and Japanese versions every 1–4 s
-  (2026-09-15, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked,
-  ⏳ HW-confirm pending.** Field report on `CASTLE_IN_THE_SKY.iso`: *"there are multiplexed
+  (2026-09-15, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, and
+  ✅ HW-CONFIRMED 2026-09-15.** Field report on `CASTLE_IN_THE_SKY.iso`: *"there are multiplexed
   versions of the title to show the localized or Japanese version. Currently the core
   switches rapidly between the two angles rather than sticking to one."* A second user, on
   unnamed Ghibli discs: *"starts playing the English version then makes a pop noise and then
@@ -439,6 +443,15 @@ worse maintenance burden than targeted in-place edits. So:
   ⛔ **NOT driven by `Player Language`, measured:** a full decode of every PGC command on the
   disc finds ZERO references to SPRM0/16/17/18/19/20. The angle follows the disc's own audio
   menu, not the player's language register — do not couple the OSD option to it.
+  ✅ **HW-CONFIRMED 2026-09-15, and the maintainer's reading of it is right:** *"Castle in the
+  Sky now correctly selects the angle depending on which language is selected
+  (english/japanese), at least I think that's how it works"*. It is — the disc's Audio menu
+  sets BOTH in one instruction: `SetSTN ASTN=0 AGLN=2` (English 5.1), `ASTN=1 AGLN=1`
+  (Japanese 2.0), `ASTN=2 AGLN=2` (French 2.0), so picking a language there picks the title-card
+  angle with it. ⚠ **It is the DISC's Audio menu that does this, not the core's B7 Audio
+  button** — B7 retargets the substream directly and never runs `SetSTN`, so the angle does
+  not follow it. That is also how a real player behaves, and it is why `vm_owns_angle`
+  releases on a B6 press rather than fighting the user.
   ★★★ **AND A THIRD: THE READER PICKED THE CELL BEFORE THE DISC COULD SPEAK, ALWAYS.**
   `pgc_loaded` pulses at `S_PGC_DONE` and the reader reaches the `S_ANGLE_SCAN` resolve ~8
   cycles later, while the VM only STARTS `BLK_PRE` on that same pulse (serial ALU + an 8-byte
