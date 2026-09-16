@@ -3106,6 +3106,86 @@ worse maintenance burden than targeted in-place edits. So:
   `logo_vis`, placed OUTSIDE the `!media_seen` group (a paused title still has live video,
   so a term ANDed inside could never assert). HUD and seek bar are suppressed while it is
   up, since a burnt-in status line is what it exists to prevent.
+  ★★ **...AND IT BLANKED THE PICTURE BUT NOT THE LAYER DRAWN ON TOP OF IT — ✅ FIXED
+  2026-09-15 (branch `fix/screensaver-overlay-gate`), sim-proven RED/GREEN, 13 mutations
+  each caught by EXACTLY its own assertion, and ✅ HW-CONFIRMED 2026-09-15 WITH THE DEFECT
+  REPRODUCED FIRST ON THE PRE-FIX CORE** (build `DVD_saveroverlay_20260916_0158.rbf`,
+  SEED 7 first roll, clk_dec 95.01/91.44, 91 % ALM). Field report: *pause
+  on a disc menu where an option is highlighted and the highlight persists into the
+  screensaver.* `pic_blank` took `core_r/g/b` to black and `hud_on_e`/`bar_on_e`
+  suppressed the chrome, but `sp_q_inside`/`hl_use` carried no gate — so the SUBPICTURE
+  layer (a subtitle, or a menu button highlight, which is a RECOLOUR of subpicture pixels)
+  composited over the blanked black frame and stayed.
+  ★★★ **THE DURABLE LINE: a gate on the picture is not a gate on what is drawn OVER the
+  picture.** Layers derived from the picture move with it; player chrome does not. That
+  split is now a TABLE in `docs/screensaver.md`, so the next overlay added to that mux
+  inherits it instead of re-deriving it.
+  ⚠ **A menu highlight NEVER EXPIRES ON ITS OWN** — `spu_decode.sv`'s `visible` is
+  `enable && c_valid && (menu_mode || window)` and `menu_mode` BYPASSES the STC show/hide
+  window, so `q_inside` holds for as long as the menu is up. This is the one context where
+  "it will time out" is false, which is why it read as a highlight parked on black rather
+  than a flicker.
+  ⚠ **The gate is `pic_blank`, NOT `saver_on_w`** — Stop leaks identically and a stop is
+  INDEFINITE, so with `Screensaver=Off` it never ends. `hud_on_e`/`bar_on_e` use
+  `~stop_full` (stage 2 only) because stage 1 deliberately KEEPS the `STOP` caption: the
+  presence of a caption IS the stage readout, and the subpicture has no such job. ⚠ And
+  `pause_q` is not in `pic_blank`, so an ordinary pause still keeps picture and subtitle.
+  ⛔ **Gated at the REGISTER STAGE only — the base `sp_q_inside`/`hl_use` wires stay raw**,
+  because the release-visible `O[2]` diagnostics read them (`sp_seen`→blk3,
+  `hl_use_q`→`hlvis_seen`→blk8) and must keep answering *did it FIRE?*, not *was it
+  SHOWN?*. **blk8 was already fixed once for this exact class of mistake** (2026-08-17: it
+  watched the composited `sp_force_q`, so a HUD popup alone turned it green). `sp_sel_col`
+  (the `pgc_palette` ADDRESS) and `sp_r/g/b_q` stay ungated too — unobservable with `ov_on`
+  low, and gating them adds a hotspot term plus a second definition of "the highlight is
+  active". ⛔ `logo_on_w` is never gated: it IS the screensaver.
+  ★★ **TWO PRE-EXISTING BENCH DEFECTS CAME OUT WITH IT, AND THE FIRST UNGATED THE FIX'S
+  OWN PREMISE.** `subpic_blend_tb` never tested `ov_on=0` with `ov_force=1` — line 71 was
+  the only `ov_on=0` vector and the 4096-point sweep hardcoded `1'b1` — so "clearing
+  `ov_on` alone removes the pixel" was assumed, not measured, and `ov_force`'s NAME invites
+  the wrong reading. MEASURED: mutate to `blend = (ov_on || ov_force) && …` and the
+  PRE-change bench reports **`RESULT: PASS` and exits 0**; with the on/off sweep, 962 errors
+  and exit 1. Second: `stop_ctl_tb` and `subpic_blend_tb` both `$finish`ed on failure (vvp
+  exits 0 — the `bench/ac3` / `run_p240.sh` trap), and **`stop_ctl_tb` had NO RUNNER AT ALL**
+  so its copy had never been sprung; `run_subpic.sh` had the same hole from the other end
+  (`| grep RESULT` matches `RESULT: FAIL` while `set -e` never trips). All fixed.
+  ✅ **MEASURED ON THE RIG, BOTH CORES THROUGH THE IDENTICAL SCRIPT** (MiB's main menu
+  with PLAY MOVIE highlighted; `lit` = non-black pixels in a frame, `static` = lit in BOTH
+  of two frames at the same position = what is PARKED on the blanked screen, the logo
+  having moved):
+  | arm | control lit | control static | fix lit | fix static |
+  |---|---|---|---|---|
+  | **Screensaver** (the report) | 5875 | **1189** | 4686 | **0** |
+  | Stop stage 1 | 5710 | **1024** | 4686 | **0** |
+  | Stop stage 2 | 5710 | **1024** | 4686 | **0** |
+  ★★★ **THE FIX CORE'S `lit` IS THE CONTROL'S `lit` MINUS EXACTLY ITS `static`, TO THE
+  PIXEL, ON ALL THREE** (5875−1189 = 5710−1024 = 4686) — so it removed the highlight and
+  NOTHING ELSE. "The count went to zero" would also be satisfied by a fix that blanked too
+  much; this is the statement that excludes it. Control bbox x 273..453 y 280..303 = the
+  PLAY MOVIE rect. ✅ Round trip: highlight present → gone → **back on the next button up**
+  after one `up` press, so the menu is LIVE, not repainted. ✅ And the four `O[2]`
+  diagnostics read GREEN under the saver on BOTH cores — the diagnostics-stay-honest claim,
+  which only hardware could settle.
+  ⚠⚠ **THE FIRST CONTROL ARM DID NOT REPRODUCE AND THAT WAS MY HARNESS, NOT THE CORE.** It
+  returned to the menu on a fixed 20 s settle and PAUSED ON THE TRANSITION CLIP, where
+  nothing is armed — so the screensaver arm measured **0 static px on a core that has the
+  bug**, while its own Stop arm seconds earlier measured 1189. **A step that never reached
+  the state was not measured, and it reads exactly like a pass.** Wait for the board's own
+  `hl_btns_armed`, then PAUSE IMMEDIATELY to freeze the state: MiB's root is a LOOPING
+  motion menu that cycles back through its transition and disarms on its own. ⚠ Dismiss
+  with `up`, never `select` — select ACTIVATES the button (here: Play Movie).
+  ⚠ **`logo_vis` and `pic_blank` are SIBLINGS over the same facts with nothing tying them
+  together** — add a condition to one and the logo can be up with the picture live. Recorded
+  in `docs/screensaver.md`; a future change to either must move both.
+  **Gates: `bench/dvd/run_screensaver.sh --red`** (3 arms — the seam, the producer, the
+  consumer — and 13 mutations; MEASURED per arm: every emu mutation fails in exactly ONE
+  named assertion group, and R3/R4/R5 all mutate `sp_on_e` so each is matched on the message
+  that distinguishes it) and **`tools/check_saver_overlay_wiring.py`**, which pins the WHOLE
+  burn-in policy (the pre-existing gates too) and pins BY REJECTION the wires that must stay
+  ungated. ⚠ Three parsing traps in its docstring, and the first is the sharpest in the
+  tree: **`emu.sv`'s `dbg_blk8` comment contains the literal pre-fix expression
+  `hud_on_w | bar_on_w | hl_use`, so a grep-based checker PASSES ON A FULLY REVERTED FILE**
+  — `strip_comments()` is mandatory. Also: `hl_use_e` contains `hl_use` as a SUBSTRING, so
+  every test is over a token set, never `in`. Detail: **`docs/screensaver.md`**.
   ★ **`O[48:47] Screensaver,5min,Off,2min,10min` — the value ORDER is the feature.**
   `status[]` powers up at zero, so index 0 IS the default; `Off,2min,5min,10min` would
   ship it disabled. Bits 47/48 were never allocated ⇒ **no `"v,N"` bump, no settings

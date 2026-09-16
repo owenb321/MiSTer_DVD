@@ -41,7 +41,19 @@
 // mid-title flips the aspect and makes Main re-init the scaler (a resolution
 // popup in the middle of a film; emu.sv says so at the media_seen latch). This
 // module therefore changes NO playback state: `saver_on` is a pure display-layer
-// verdict that emu ORs into logo_vis.
+// verdict -- but emu consumes it in TWO roles, and this header used to name only
+// the first:
+//   1. it ORs into logo_vis            -- show the bouncing logo
+//   2. it feeds pic_blank, which MASKS everything derived from the picture --
+//      the decoded frame, subtitles, and the disc-menu button highlight
+// Role 2 was missing until 2026-09-15 and the highlight burned in: a menu
+// subpicture never expires on its own (spu_decode's menu_mode bypasses the STC
+// show/hide window), so it sat on the blanked screen for the whole screensaver,
+// and on Stop -- which has no timer at all -- indefinitely.
+// ⚠ The layer is MASKED, not torn down. Nothing here or in spu_decode/nav_pci is
+// reset, so `any_input` brings it back one clk_sys later, bit-identically. That
+// is what preserves the HW-measured "dismissing it restored the bit-identical
+// paused frame" property. The full layer table is docs/screensaver.md.
 //
 // ⚠ Value order on the OSD row is load-bearing: status[] powers up at zero, so
 // index 0 IS the default. "5min" sits at index 0 deliberately -- a natural

@@ -167,9 +167,20 @@ module stop_ctl_tb;
         wait_s(121);
         chk("S11a no media -> no saver", saver_on, 1'b0);
 
-        if (errors == 0) $display("STOP_CTL_TB: ALL TESTS PASSED");
-        else             $display("STOP_CTL_TB: FAILED (%0d errors)", errors);
-        $finish;
+        // ⚠ $fatal, NOT $finish, on the failure path: vvp exits 0 on $finish, so a
+        // runner that scores the exit code sees a FAILING bench as a passing one.
+        // That is how the bench/ac3 suites went silently red for weeks and how
+        // run_p240.sh's seek_bar_tb(240) arm reported `ok` on 13 errors
+        // (CLAUDE.md, and the same note in idle_logo_tb.sv). This bench had no
+        // runner at all until bench/dvd/run_screensaver.sh, so the trap had never
+        // been sprung -- it was simply waiting.
+        if (errors == 0) begin
+            $display("STOP_CTL_TB: ALL TESTS PASSED");
+            $finish;
+        end else begin
+            $display("STOP_CTL_TB: FAILED (%0d errors)", errors);
+            $fatal(1, "STOP_CTL_TB: FAILED (%0d errors)", errors);
+        end
     end
 endmodule
 
