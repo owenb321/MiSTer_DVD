@@ -75,7 +75,12 @@ module seek_bar #(
     input  wire [31:0] last_rbn,
 
     // progress-popup state (stretch)
-    input  wire        pause_q,             // bar stays up while paused
+    // Visibility-only here (this module has no pause icon), so it is named for what it
+    // MEANS rather than for the register it usually comes from: a pause the user started
+    // with B1 keeps the bar up, a pause the FRAME STEP button started does not
+    // (2026-09-17, by user decision). Feeding a masked value into a port called
+    // `pause_q` would be a wrong fact on a correctly-named port -- the issue #81 class.
+    input  wire        pause_vis,           // 1 = this pause holds the bar up
     input  wire        show_evt,            // landed seek / chapter / pause edge
     input  wire        menu_active,         // suppress in menus
     input  wire [31:0] cur_rbn,             // live playhead (nav_dsi)
@@ -136,7 +141,7 @@ module seek_bar #(
         else if (show_evt) pop_tmr <= POP_TICKS;
         else if (pop_tmr != 27'd0) pop_tmr <= pop_tmr - 27'd1;
     end
-    wire vis = (bar_active | pause_q | (pop_tmr != 27'd0)) && !menu_active;
+    wire vis = (bar_active | pause_vis | (pop_tmr != 27'd0)) && !menu_active;
 
     // ---- shadow maps + tick columns (stretch) -------------------------------
     reg [7:0]  pmap_ram  [0:127];           // program -> entry cell (1-based)

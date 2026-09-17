@@ -40,6 +40,11 @@ module disp_sched_tb;
   reg  [32:0] pic_pts = 0;
   reg   [3:0] frc = 4;
   reg         pickup = 0;
+  reg         step_now = 0;              // [11b] pulse: a frame-step press
+  integer     steps = 0;                 // [11b] steps actually taken
+  integer     j = 0;                     // [11b] bounded wait
+  reg         step_win = 0;              // [11b] inside the step session
+  integer     step_lag_max = 0;          // [11b] worst |true PTS - stc| across the session
   reg         skip_ack = 0, skip_field = 0, skip_ps = 0, skip_pf = 1, skip_tff = 1, skip_rff = 0;
   reg  [15:0] half_scan = 750;
   wire        pic_due, next_due, anchored, disp_anchored, anchor_req, anchor_disc, disp_lag_valid, catchup_late;
@@ -143,6 +148,16 @@ module disp_sched_tb;
       set_out(di); di = di + 1;
     end
     if (busy > 0) busy = busy - 1;
+    // A FRAME STEP takes the picture regardless of pic_due, exactly as
+    // resample_addrgen's step_arm opens ofv_paced/ofv_pickup and bypasses
+    // frame_due (dvd/resample_addrgen.v:451,458). Modelled here so [11b] can
+    // advance the display while the clock is paused, which is what the hardware
+    // does and what nothing in this bench could previously express.
+    else if (pic_valid && step_now) begin
+      pickup   <= 1'b1;
+      step_now <= 1'b0;
+      steps    = steps + 1;
+    end
     else if (pic_valid && pic_due) begin
       pickup <= 1'b1;
       if (ilace) begin
@@ -165,6 +180,16 @@ module disp_sched_tb;
   reg signed [33:0] true_lag;
   always @(posedge clk) if (pickup) begin
     true_lag = $signed({1'b0, s_true[cur]}) - $signed({1'b0, stc});
+    // [11b] the step-session measurement. Sampled with the PRE-update clock, so a
+    // clock that follows each step reads exactly the PREVIOUS picture's duration
+    // (<= 4504 for a 3-field film picture) and STAYS there; a clock that does not
+    // follow grows by a picture per press without bound. The gate is that bound,
+    // not the paced-playback tolerance report() uses -- a stepped clock advances in
+    // picture-sized jumps by design, so the paced yardstick is the wrong one.
+    if (step_win) begin
+      lag_i = true_lag; if (lag_i < 0) lag_i = -lag_i;
+      if (lag_i > step_lag_max) step_lag_max = lag_i;
+    end
     pickups = pickups + 1;
     if (settle > 0) settle = settle - 1;
     else if (dut.anchor_now) ;             // the anchoring pickup defines the timeline; its lag is the jump itself
@@ -469,6 +494,50 @@ module disp_sched_tb;
       run_until_done(200);
     join
     report("[11] pause", 1, 1, 752);
+
+    // [11b] FRAME STEP CARRIES THE CLOCK. A step advances the DISPLAY while the
+    //       clock is paused, so unless the clock follows it falls one picture behind
+    //       PER PRESS -- and NOTHING upstairs catches that: disc_w compares the tagged
+    //       picture against the EXTRAPOLATED next_pts, and a step session is perfectly
+    //       continuous content, so no re-anchor leg trips. MEASURED on the rig before
+    //       the fix: disp_lag 5057 ms held for ~15 s after ~300 steps, av_drift
+    //       swinging -5478..+3174 ms, and `reanchors` NEVER moving.
+    //  The measurement is the scenario's TRUE PTS against the DUT's clock at each
+    //  stepped pickup -- never a signal the fix names. It is BOUNDED, not ~0: the
+    //  sample is taken with the pre-update clock, so following the step reads the
+    //  previous picture's duration (<= 4504 here) and stays there, while not
+    //  following grows without bound. 30 presses is what separates them.
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(220, 100000, 12, 20000);
+    steps = 0; step_lag_max = 0;
+    fork
+      begin
+        wait_pickups(40); pause = 1; step_win = 1;
+        // ⚠ Drive until 30 steps have actually BEEN TAKEN, not until 30 presses have
+        // been issued. A press arriving while the raster is still busy with the last
+        // picture's fields (3:2 alternates 2 and 3) is simply not consumed, so a
+        // fixed press count silently shortens the session -- measured, 20 of 30.
+        // The overall bound is what fails the arm if stepping stops altogether.
+        j = 0;
+        while (steps < 30 && j < 400000) begin
+          if (!step_now) step_now <= 1'b1;
+          @(posedge clk); j = j + 1;
+        end
+        repeat (2000 * TICK_DIV) @(posedge clk);
+        step_win = 0; pause = 0;
+      end
+      run_until_done(200);
+    join
+    if (steps < 30) begin
+      $display("FAIL [11b] only %0d of 30 steps were taken -- the scenario never stepped, so it measured nothing", steps);
+      errors = errors + 1;
+    end
+    // one picture (4504) + a scan of slack. Without the fix this is 30 x ~3750.
+    if (step_lag_max > 6000) begin
+      $display("FAIL [11b] clock fell %0d ticks behind the stepped display (bound 6000, one picture is 4504) -- the clock is not following the step", step_lag_max);
+      errors = errors + 1;
+    end else
+      $display("  [11b] frame step carries the clock: %0d steps, worst |true PTS - stc| = %0d (bound 6000)", steps, step_lag_max);
 
     // [12] provisional anchor equals the first tagged pickup -> delta 0
     reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);

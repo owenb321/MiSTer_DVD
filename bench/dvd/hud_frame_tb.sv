@@ -59,7 +59,7 @@ module hud_frame_tb;
     transport_hud #(.HUD_QX_ADJ(ADJ)) dut (
         .clk(clk), .rst_n(rst_n),
         .h_pos(h_pos), .v_pos(v_pos), .pal_mode(1'b0), .act_h_i(act_h_tb), .act_w_i(act_w_tb),
-        .menu_active(1'b0), .pause_q(1'b0), .bar_active(1'b0),
+        .menu_active(1'b0), .pause_q(1'b0), .pause_seed(1'b1), .pause_show_o(), .bar_active(1'b0),
         .scrub_held(1'b0), .scrub_dir(1'b0), .scrub_tier(2'd0),
         .display_edge(display_edge), .load_evt(1'b0), .show_evt(1'b0),
         .cur_time({8'h00, 8'h12, 8'h34, 8'h00}),

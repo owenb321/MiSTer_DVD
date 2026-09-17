@@ -466,6 +466,36 @@ module disp_sched #(
                 end else begin
                     next_q3      <= {want_pts, 3'd0} + {18'd0, pic_dur_q3} + defer_q3;
                     defer_q3     <= 36'd0;
+                    // ---- FRAME STEP CARRIES THE CLOCK WITH IT ------------------
+                    // A PICKUP WHILE PAUSED IS A FRAME STEP, by construction: the
+                    // clock line above is frozen by `pause`, and resample_addrgen's
+                    // ofv_pickup is gated on `~pause || step_arm`, so nothing else
+                    // can take a picture while paused. No new port is needed to know
+                    // it happened.
+                    //
+                    // The STC is the PRESENTATION clock and a step PRESENTS a
+                    // picture, so the clock must move to it. Without this the
+                    // display walks forward while the clock stands still, and
+                    // NOTHING upstairs notices: disc_w compares the tagged picture
+                    // against the EXTRAPOLATED next_pts, and stepping is perfectly
+                    // continuous content, so no re-anchor leg trips. The
+                    // discontinuity is in the CLOCK, which is not a case disc_w was
+                    // built to see.
+                    //
+                    // MEASURED before this (~300 steps, then resume): disp_lag sat
+                    // at 5057 ms for ~15 s -- exactly the stepped span -- with
+                    // av_drift swinging -5478..+3174 ms and `reanchors` NEVER moving,
+                    // then snapping to normal. That is the field report "a big run of
+                    // frame steps and then resuming causes a/v to go out of sync with
+                    // audio playing early".
+                    //
+                    // ⚠ want_pts is the picture's OWN PTS when tagged and the
+                    // extrapolated next_pts otherwise (DVDs tag ~1 picture in 11), so
+                    // this tracks the step exactly in both cases, and falls back to
+                    // `stc` (a no-op) when there is nothing to go on.
+                    // ⚠ Inert outside a pause -- `pause` is false during playback, so
+                    // the normal tick path is untouched.
+                    if (pause) stc <= want_pts;
                 end
                 next_valid <= 1'b1;
             end

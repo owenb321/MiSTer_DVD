@@ -57,6 +57,10 @@ The status line along the bottom — `► 0:12:34/1:37:05 CH 12/23` — is toggl
 and also auto-shows for a couple of seconds on any of the above. `❚❚` replaces `►` when
 paused.
 
+In a pause, **B9 decides on its own**: a pause you start with **B1** brings the line and the
+seek bar up, a pause you start with **Frame Step** leaves the picture clean, and B9 toggles
+either of them as often as you like. See [Frame step](controls.md#frame-step).
+
 **While a seek is pending the time shows where you are going, not where you are.** Hold
 Fast Fwd or Rewind, step chapters, or tap out a D-pad seek and the elapsed time tracks the
 seek bar's cursor, so the two always agree; it returns to the live position once the seek

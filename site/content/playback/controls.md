@@ -14,7 +14,7 @@ standard numbering — whatever you mapped B1 to in the MiSTer menu is what "B1"
 | B6 | Angle (cycle) | | B15 | Aspect (cycle) |
 | B7 | Audio (cycle) | | B16 | Chapter Menu |
 | B8 | Subtitle (cycle) | | B17 | A-B Repeat |
-| B9 | Display (toggle status line) | | B18 | Frame Step |
+| B9 | Display (toggle status line) | | B18 | Frame Step (pause, then step) |
 | | | | B19 | Eject |
 | | | | B20 | Vol Up |
 | | | | B21 | Vol Down |
@@ -187,7 +187,9 @@ once, Menu behaves exactly as the disc specifies.
 
 ## During playback
 
-**B1 (Pause)** freezes on the current frame. Audio stops cleanly and resumes in sync.
+**B1 (Pause)** freezes on the current frame and brings up the status line and progress bar.
+Audio stops cleanly and resumes in sync. [Frame step](#frame-step) also pauses, if you would
+rather stop on an exact frame — and it leaves the screen clear.
 
 **B2 / B3** step chapters. **B10 / B11** (`Fast Fwd` / `Rewind`) tapped step forward and back; **held**, they
 scrub — a seek bar appears showing where you are and where you will land, and the seek
@@ -299,8 +301,30 @@ itself, before the core ever sees them.
 
 ### Frame step
 
-**B18 (Frame Step)** advances a single frame while paused or stopped, and stays paused. It
-is forward-only: the decoder works in groups of frames, so there is no way to step
+**B18 (Frame Step)** is the pause-and-nudge button. Press it while a disc is playing and
+playback **pauses**; press it again and each press advances a single frame, staying paused.
+It steps the same way from a pause you started with **B1**, and while the disc is stopped.
+
+The first press only pauses — it does not also advance — so the frame you stop on is the one
+that was on screen.
+
+**Nothing is drawn over the picture while you step.** How a pause *starts* decides what you
+see, and **B9 (Display)** takes it from there:
+
+| you paused with | on screen | then B9 |
+|---|---|---|
+| **B1 (Pause)** | status line and progress bar | hides them — press again to bring them back |
+| **B18 (Frame Step)** | nothing, just the picture | shows them — press again to hide |
+
+So you can step through a scene with a clean frame, or call the timecode up when you want
+it, in either kind of pause and as often as you like. Whatever you had the status line set
+to during playback is remembered and comes back when you resume.
+
+You can step as far into the film as you like, and pressing **Play** afterwards picks up in
+sync however long you spent stepping. Audio is muted while you step, and the sound for the
+frames you stepped past is discarded.
+
+It is forward-only: the decoder works in groups of frames, so there is no way to step
 backwards without re-decoding, which is a different feature.
 
 ## Support bundle chord

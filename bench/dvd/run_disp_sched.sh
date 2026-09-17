@@ -26,6 +26,8 @@
 #       clock pinned at 0. ⚠ NOT [13]: that arm fires a provisional pulse, so `anchored`
 #       is already 1 and an untagged pickup never reaches the mutated line -- the check
 #       there cannot fail. M9 is what proved it. [13c] is the rig's own case (prov_seen=0).
+#   M13 the clock does not follow a frame step -> [11b] it falls one picture behind PER
+#       PRESS (20 steps 75075 ticks, 30 steps 112613, vs 4507 = one picture when fixed)
 #   M10 first tag anchors only on disc_w    -> [13b] a SMALL provisional error never
 #       yields a display anchor at all
 #   M11 anchor_disc keyed on the FULL disc_w -> [14c] a starved display re-phases audio
@@ -95,6 +97,14 @@ mut M4 "((d_pic_next < -frame_s) || (d_pic_next > fwd_max_s) || (d_stc_pic > lat
 mut M6 "34'sd243000" "34'sd31500" "FAIL \[8b\]"
 mut M8 "if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end" "if (1'b0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end" "FAIL \[8d\]"
 mut M5 "((pic_pf  && pic_rff)  ? dur3 : dur2);" "dur2;" "FAIL \[6\]"
+# M9 -- THE CLOCK MUST FOLLOW A FRAME STEP (2026-09-16). A step advances the DISPLAY
+# while the clock is paused; without this line the clock falls one picture behind PER
+# PRESS and nothing upstairs catches it (disc_w compares the tagged picture against the
+# EXTRAPOLATED next_pts, and a step session is perfectly continuous content). MEASURED
+# on the rig before the fix: disp_lag 5057 ms held ~15 s after ~300 steps, av_drift
+# swinging -5478..+3174 ms, reanchors NEVER moving. In sim the error scales with the
+# step count -- 20 steps 75075 ticks, 30 steps 112613 -- against 4507 (one picture) fixed.
+mut M13 "if (pause) stc <= want_pts;" "if (1'b0) stc <= want_pts;" "FAIL \[11b\]"
 # M9 is the measured HW defect of 2026-09-07: the clock reports itself "on the display
 # timeline" while it still holds the parse-front value, so audio latches its playback
 # phase ~1.6 s ahead of the picture and nothing ever re-times it.

@@ -326,6 +326,195 @@ playing for seconds). Four coordinated holds:
   playing and desync grew with pause length — fixed here.)
 Unpause is instant — nothing is reset, only ungated.
 
+**Frame step as a pause route (2026-09-16, branch `fix/frame-step-pause`).** `B18` /
+keyboard `.` used to be a **dead button during playback**: its guard required
+`(pause_q || stopped_w)`, so a press was swallowed unless the picture was already held and
+the user knew to press `B1` first. It is now pause-and-nudge, like a set-top player and
+VLC — the first press pauses, each press after that steps.
+
+The whole change is one shared predicate plus one arm of the `pause_q` chain in
+`dvd/emu.sv`, and three things about it are load-bearing:
+
+- **`wire step_ok = cell_ready && !menu_active && !hold_freeze;` is read by BOTH halves of
+  the gesture.** If the pausing press and the stepping press could disagree about where
+  frame step is legal, the button would pause a title it can never step — a dead-end pause
+  only `B1` undoes. `cell_ready` is the shipped scope (a flat `.mpg`/VCD is still inert;
+  widening it via `lin_seek_ok_w` must widen **both** halves at once, or a flat file pauses
+  and never steps). ⛔ `!in_title_menu` is deliberately absent: `B1` already pauses inside
+  an in-title game menu, so adding it would make frame step stricter than the pause button
+  for no measured reason, and would narrow an arm HW-confirmed on 2026-09-13.
+- **`!hold_freeze` is the term that makes emu agree with the datapath.**
+  `dvd/resample_addrgen.v:451,458` gate `ofv_paced` **and** `ofv_pickup` on `~hold_freeze`
+  *unconditionally* — `step_arm` does not bypass it — so a step press during a held FF/REW
+  scrub can advance nothing. Without the term it would instead set `pause_q`, and a scrub's
+  release is a `seek_ack`, **not** a `jump_ack`, so nothing in the chain clears it: the disc
+  lands on the scrub target PAUSED, and only `B1` gets you out.
+- **The arm is the LAST `else if`, and position is semantics.** The chain is a priority mux
+  over one register, and this arm can only ever *set* pause. At the bottom it cannot mask a
+  RESUME; hoisted anywhere above a clear-only arm it turns a coincident resume press into a
+  stuck pause — and coincident edges are real (an IR remote sends ~9 taps a second, and
+  gamepad, keyboard and CEC are all live at once). ⚠ **`step_ok`'s `~hold_freeze` does NOT
+  cover the FF/REW arm**: on the `ff_edge` cycle `hold_freeze` has not risen yet, so the
+  priority is the only thing that covers it. `start_streaming` and `jump_ack` still win.
+  ⚠ **`!stopped_w` is load-bearing too:** while STOPPED the step arm owns the press, and a
+  `pause_q` left set under a stop survives the PLAY that clears the stop (`pause_edge &&
+  !stopped_w` cannot fire on that cycle) — the disc would resume paused. Same trap that
+  gate's own comment documents.
+
+★ **The first press pauses ONLY, and that is a measurement, not a taste.** While the title
+is live an ordinary pickup happens every frame, and `pause_dec` is 2 CDC flops deep where
+`step_dec` needs 3 — so an arm raised on the pausing press is consumed by a pickup that was
+going to happen anyway, and one press would advance one frame *or two* depending only on
+raster phase. `pickup_hold_tb` arm **5e** is that claim made executable (press with nothing
+available, then offer exactly one frame: the press must cost exactly one pickup, not two,
+and must leave `step_arm` clear).
+
+⛔ **B9 OWNS THE HUD IN A PAUSE; THE PAUSE ONLY SEEDS IT (2026-09-17, by user decision —
+this is the SECOND revision of this behaviour).** The first note here said `hud_user_evt`
+needed no change because both overlays take `pause_q` as a visibility **level**, so a pause
+holds the line up. Correct about the mechanism, wrong about what is wanted. The second cut
+masked that level for a frame-step pause — better, but still a HOLD, so B9 could not hide
+the line during a **B1** pause. The spec is a true toggle in both:
+
+| paused with | initially | B9 |
+|---|---|---|
+| **B1** | status line + seek bar up | hides, and toggles thereafter |
+| **frame step** | nothing drawn | shows, and toggles thereafter |
+
+**Shape.** `transport_hud` owns a pause-scoped latch `pause_show`: seeded at the pause EDGE
+from the new `pause_seed` input (emu drives `!step_paused`), toggled by `display_edge` for
+as long as the pause lasts, cleared when the pause ends. While `pause_q` is high, `vis` is
+**that latch ALONE**.
+⚠⚠ **"Alone" is load-bearing and is the whole reported defect.** A B1 pause ALSO arms
+`show_tmr` (emu's `hud_user_evt` includes `pause_edge`), so if the latch were merely another
+OR term the first B9 press would hide nothing. Same for `persist_q` when the user had the
+line pinned during playback.
+★ **`seek_bar` takes the SAME latch** (`transport_hud.pause_show_o` → `seek_bar.pause_vis`)
+rather than deriving its own: it has no `display_edge`, so any local expression would stop
+following B9 and the two overlays would disagree about one pause.
+⚠ **`persist_q` and `show_tmr` are PLAYBACK-scoped now** — both `display_edge` arms carry
+`&& !pause_q`. Without that, pausing, hiding, and resuming would silently flip the playback
+status line, and a paused press would pop the line back up on resume (bench arm T6p-i).
+⚠⚠ **AND THE FIRST CUT OF THE `step_paused` LATCH SHIPPED BROKEN — hardware caught it, sim
+could not.** It read `if (~pause_q) 0; else if (step_pause_go) 1;`, and `pause_q` is
+assigned NON-BLOCKING, so on the cycle `step_pause_go` fires `pause_q` still reads 0: the
+clear won every time and the set was UNREACHABLE. The comment beside it even stated that
+fact and drew the wrong conclusion from it. `transport_hud_tb` drives the port directly and
+emu has no bench, so nothing in sim could see it — and the checker pinned the WRONG SHAPE as
+correct, because the pattern came from the same mistaken reasoning as the RTL.
+★ **The durable lesson:** a wiring checker pins a shape; it cannot tell you the shape is
+wrong. Where a latch's ORDER carries the meaning, that is an argument for extracting it into
+a module with a bench — the `flush_ctl.sv` / `stop_ctl.sv` precedent.
+
+Gates: `transport_hud_tb` **T6p** (13 arms: both modes seeded correctly, B9 toggling
+repeatedly in each, the icon still reading PAUSE, the pinned-playback case, and playback
+persistence surviving pause-time presses) and emu mutations **P1–P4 / Q1–Q3**, where **Q3**
+restores the OR form and must fail T6p-g and T6p-l, and **P4** restores the inverted latch
+order that shipped.
+
+⚠ Two accepted, measured residuals: a step press inside the D-pad seek coalesce window
+(~0.4 s) sets `pause_q` and the jump's `jump_ack` then clears it, so the press appears to do
+nothing (correct by priority; do **not** add a `!dpad_pend` term), and the chapter debounce
+assigns `pause_q <= 1'b0` later in the same `always`, so last-write-wins beats the arm on
+the exact cycle a chapter window closes (also correct — a skip resumes).
+
+★★ **AND STEPPING COULD ONLY REACH AS FAR AS THE VBUF — ~17 FRAMES (2026-09-16, same
+branch, PRE-EXISTING on v0.6.0).** Field report: *"only about 20 frames can be advanced
+before it stops updating on subsequent button presses"*, with the guess that it stops at
+the next I-frame. It does not — it stops when the VBUF reaches zero.
+★ **MEASURED on the rig, telemetry per press** (HOT_TUB_TIME_MACHINE, `pickups` is the
+instrument: one successful step is exactly one pickup):
+
+| arm | steps taken | `vbuf_fill` |
+|---|---|---|
+| `Audio=On` (as reported) | **17**, then `pickups` FROZEN for 18 more presses | 84 → **0** |
+| `Audio=Off` (control) | **35 presses → 35 steps** | flat **221–224** |
+
+★★ **That A/B is the proof, and it refutes the I-frame theory twice:** the VBUF reaches
+zero, and with the audio path out of the way the SAME GOP structure steps indefinitely.
+The count moves with buffer depth, not with GOP length.
+**The chain, all pre-existing:** pause holds the audio decoder (`aud_ce_play &= ~pause`) so
+there is no `aud_frame_pop` → the 32 KB ring fills in ~0.6 s → `aud_bp_wd` is **deliberately
+FROZEN** while `pause_aud` so it stays armed → `ps_aud_ready = ~(almost_full && armed)` is 0
+for the whole pause → `ps_demux` carries **ONE byte stream**, so it stalls on the first
+audio PES and no more VIDEO reaches the VBUF (`fifo_almost_full` then parks the reader too)
+→ and **`pause` never reaches the vld** (0 references in `vld.v`), so each press lets the
+decoder consume one more picture OUT OF the VBUF. A fixed larder.
+⚠⚠ **THE FREEZE'S OWN COMMENT SAYS WHY IT LOOKED SAFE:** *"Holding it armed keeps the demux
+backpressured (everything is frozen anyway), so no audio is lost."* That was TRUE when it
+was written. **Frame step is the first thing that advances the DISPLAY while paused**, and
+it consumes the one buffer the freeze stops refilling — the same stale-premise class as
+`docs/mpeg1.md` §B.3's "now closed".
+**Fix:** a step SESSION (`step_session`) releases the audio backpressure for the rest of
+the pause. The ring reverts to drop-on-full — its documented fallback, and `ac3_reframer`
+keeps every drop whole-frame-aligned, so it is clean silence rather than a pop — and video
+keeps flowing, so stepping is unbounded.
+⚠ Keyed on a **`step_tgl` TRANSITION, not `step_edge`**: `step_tgl` only moves for a press
+the transport block actually ACCEPTED, so a press in a menu or during a held scrub cannot
+start a session. Cleared by `~pause_aud`, which covers every resume in one term and
+deliberately keeps the session alive across a STOP (stepping while stopped consumes the
+VBUF the same way).
+★★★ **AND REMOVING THE BUFFER LIMIT EXPOSED A SECOND DEFECT — THE CLOCK DID NOT FOLLOW
+THE STEP (2026-09-16, fixed in `dvd/disp_sched.sv`; ✅ HW-CONFIRMED against its own
+control).** Field report: *"doing a big run of frame steps and then resuming causes a/v to
+go out of sync with audio playing early."*
+★ **It is the first fix that made this reachable at scale, not its cause:** before it you
+could take only ~17 steps, so the clock could fall at most ~0.6 s behind. Unbounded
+stepping let the error grow without bound.
+**Mechanism.** `disp_sched`'s clock line is `if (tick && anchored && video_live && !pause)
+stc <= stc + 1`, so the clock is frozen while paused — but a step advances the DISPLAY. The
+clock therefore falls **one picture behind per press**, and `av_drift` is *dispatched audio
+PTS − STC*, so a clock left behind reads as **audio early**: the reported symptom exactly.
+⚠⚠ **NOTHING UPSTAIRS CATCHES IT, and that is the interesting part:** `disc_w` compares the
+tagged picture against the **EXTRAPOLATED `next_pts`**, and a step session is perfectly
+continuous content, so no re-anchor leg trips. The discontinuity is in the **CLOCK**, which
+is not a case `disc_w` was built to see. MEASURED: `reanchors` stayed at 1 through ~300
+steps and two resumes with `disp_lag` at 5 s.
+**Fix = `if (pause) stc <= want_pts;`** in the pickup path. The STC is the PRESENTATION
+clock and a step PRESENTS a picture, so the clock moves to it. ★ **A pickup while paused IS
+a frame step by construction** — the tick above is frozen by `pause` and
+`resample_addrgen`'s `ofv_pickup` is gated on `~pause || step_arm`, so nothing else can take
+a picture while paused; no new port is needed to know it happened. Inert during playback.
+⚠ `want_pts` is the picture's own PTS when tagged and the extrapolated `next_pts` otherwise
+(DVDs tag ~1 picture in 11), falling back to `stc` (a no-op) when there is nothing to go on.
+**Gate: `disp_sched_tb` [11b]** + `run_disp_sched.sh` mutation **M13**. The bench gains a
+frame-step stimulus (a pickup that ignores `pic_due`, exactly as `step_arm` bypasses
+`frame_due`) and scores the scenario's TRUE PTS against the DUT's clock at each stepped
+pickup — never a signal the fix names.
+★ **The bound is ONE PICTURE, not zero, and that distinction is the gate:** the sample is
+taken with the pre-update clock, so a clock that follows reads the previous picture's
+duration and STAYS there, while one that does not grows without bound —
+**20 steps 75,075 ticks / 30 steps 112,613 against 4,507 (one picture) fixed.** The error
+scaling with the press count is the one-picture-per-press signature.
+⚠⚠ **Two bench lessons, both mine:** the first cut of [11b] reused `report()`'s PACED
+tolerance (752) and FAILED with the fix in — a stepped clock advances in picture-sized jumps
+by design, so the paced yardstick is the wrong one, and a correct fix was nearly read as
+broken. And it issued a fixed 30 presses of which only 20 landed (a press arriving while the
+raster is still busy with the last picture's fields is not consumed); it now drives until 30
+steps have actually BEEN TAKEN, and the non-vacuity guard that caught that stays in.
+⚠ **Timing cost, measured:** the 33-bit mux on the `stc` path took clk_dec from 92.19/88.52
+to **89.71/87.54** against the 86.0 gate — passing on SEED 7 first roll, but the thinnest of
+the three builds in this branch. Worth a seed sweep if a later change lands near the gate.
+✅ **HW-CONFIRMED against its own control, same disc and same script** (205 steps, then
+resume): `disp_lag` **−23 ms immediately and constant** where the control held **5057 ms for
+~15 s**, and `av_drift` in the normal band from the FIRST sample (57 ms at t+3 s) where the
+control swung **−5478…+3174 ms**. No transient at all; 0 drops, 1 late at the resume instant.
+
+✅ **FIX HW-CONFIRMED against its own control**, same disc and same script (build
+`DVD_framestep2_20260917_0210.rbf`, SEED 7, clk_dec 92.19/88.52): **35 presses → 35 steps
+with `Audio=On`**, `vbuf_fill` 89 → 218 on the FIRST step and 216–224 throughout, then
+**70 more steps with vbuf still 221**.
+
+**Gates: `bench/dvd/run_frame_step.sh --red`** (19 mutations, each caught by the assertion
+that owns it) and **`tools/check_frame_step_wiring.py`**, which reads the arm, its terms and
+**its priority** out of `dvd/emu.sv` — emu has no bench, and a reordering changes no term, no
+port and no expression, so it is invisible to every other gate including a fit. The checker
+also runs from `run_stc_freerun.sh` §6, beside `pickup_hold_tb`.
+⚠ Found while proving those mutations: `pickup_hold_tb` tied `.sched_due(1'b1)`, so
+`frame_due` was always true and deleting `| step_arm` from `ofv_paced` was caught by
+**nothing**. The bench now models `disp_sched` freezing the STC under pause
+(`sched_due = ~pause`), which is exactly why that term exists.
+
 **Hold-frame transitions (2026-07-30, ✅ HW-CONFIRMED, PR fj#148):** the STD mux-lead hold
 (`av_vid_hold` → `pickup_hold`, armed on every title-domain load/seek/jump until the
 audio catches the new STC anchor) now reuses the first three pause holds — pickup
@@ -959,7 +1148,8 @@ deliberately: CEC's real back button is unreachable, so without it a CEC user ha
 a menu level, and GoUp is a harmless no-op where the disc authors no parent.
 
 **DVD-remote additions (2026-09-13, B14..B18).** `Q 15` → Stop; `Z 1A` → Aspect;
-`F5 03` → Chapter Menu; `L 4B` → A-B Repeat (VLC's "loop"); `. 49` → Frame Step. All five
+`F5 03` → Chapter Menu; `L 4B` → A-B Repeat (VLC's "loop"); `. 49` → Frame Step (first
+press pauses — see "Frame step as a pause route" above). All five
 were checked free against the three claimants that own this space — `kbd_map`'s existing
 table, emu's numpad digit block, and the never-bind list below. `kbd_map.joy` and emu's
 `kbd_joy` widened 17 → 22 bits for them, and ⚠ **the FF/REW mask widened with them**

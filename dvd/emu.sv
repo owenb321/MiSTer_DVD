@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "v0.6.0"
+`define CORE_VERSION "dev-framestep6"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1334,6 +1334,13 @@ wire       seek_ack;         // from dvd_iso_reader (seek accepted this cycle)
 wire       stopped_w;        // Stop is asserted (hold + blank the picture)
 wire       stop_restart;     // pulse: stage-2 PLAY -> restart reader + VM at FP
 wire       saver_on_w;       // screensaver owns the screen
+// Held FF/REW time-scrub freeze (dvd/scrub_ctrl.sv, instanced further down).
+// Declared HERE for the same reason as stopped_w above: the transport block's
+// frame-step guard reads it ~250 lines before the instance.
+wire       hold_freeze;      // a held seek gesture owns the freeze, not pause_q
+// transport_hud's pause-scoped HUD visibility (seeded at the pause edge, toggled by
+// B9). Declared here because seek_bar is instanced BEFORE transport_hud drives it.
+wire       hud_pause_show_w;
 // core -> Main requests (B19..B21). Declared here because the dvd_telem
 // instance reads them ~500 lines before the block that drives them, and
 // emu.sv has no `default_nettype none`.
@@ -1622,6 +1629,10 @@ wire sel_edge   = joy_sel   & ~joy_prev[7];
 // that same port and must not pop the HUD (issue #42).
 // dpad_pend_evt pops the HUD on the FIRST D-pad press rather than ~0.4 s later
 // when the coalesced jump actually fires, so the seconds readout tracks the taps.
+// ⚠ step_edge is deliberately NOT here, and now for TWO reasons. It always re-armed
+// the ~2.5 s timer on every press of a stepping burst; and since 2026-09-17 a
+// frame-step pause must not raise the line AT ALL (see `step_paused`). B9 is the only
+// way to bring it up there, which is what the user asked for.
 wire hud_user_evt = pause_edge
                   | ((chnext_edge | chprev_edge) && cell_ready && !menu_active)
                   | scrub_seek_pulse
@@ -1744,6 +1755,35 @@ wire        in_title_menu = in_title_hli && (hl_btn_ns > 6'd1);
 // white rabbit doesn't either (its SetSTN opens the gate in the PGC pre-command).
 wire        sp_menu_early = menus_on && !menu_active && hl_menu_seen;
 
+// ---- FRAME STEP (B18) domain ---------------------------------------------
+// ONE predicate, read by BOTH halves of the gesture. The press that PAUSES and
+// the press that STEPS must agree about where frame step is legal: if they could
+// disagree, the button would pause a title it can never step -- a dead-end pause
+// the user has to undo with B1.
+//   cell_ready   : a DVD title cell is streaming. This is the step arm's shipped
+//                  scope; widening frame step to a flat .mpg/VCD (lin_seek_ok_w)
+//                  is a separate change and must widen BOTH halves at once, or a
+//                  flat file pauses and never steps.
+//   !menu_active : a menu-domain PGC is not a thing to step.
+//   !hold_freeze : ⚠ a HELD FF/REW scrub already owns the freeze, and
+//                  resample_addrgen.v:451,458 gate ofv_paced AND ofv_pickup on
+//                  ~hold_freeze UNCONDITIONALLY (step_arm does NOT bypass it), so
+//                  a step press during a scrub can advance nothing. Without this
+//                  term it would instead SET pause_q, and a scrub's release is a
+//                  seek_ack, not a jump_ack -- nothing in the chain below clears
+//                  it. The disc would land on the scrub target PAUSED: a stuck
+//                  pause the user never asked for.
+// ⚠ !in_title_menu is deliberately NOT here. B1 already pauses inside an
+// in-title game menu (pause_edge carries no such guard), so excluding it would
+// make frame step stricter than the pause button for no measured reason, and
+// would narrow a step arm that was HW-confirmed on 2026-09-13.
+wire step_ok = cell_ready && !menu_active && !hold_freeze;
+
+// THIS PRESS STARTS A FRAME-STEP PAUSE. Factored out because TWO things must agree on
+// it: the pause_q arm below and the `step_paused` latch that tells the overlays this
+// pause was not asked for by B1. An inline copy in each would be free to drift.
+wire step_pause_go = step_edge && !pause_q && !stopped_w && step_ok;
+
 // ---- gamepad decode (Phase 4: keys go to the DVD-VM; only the title
 // transport and the Phase-3 button-nav pulses stay here) -------------------
 always @(posedge clk_sys or negedge reset_n) begin
@@ -1787,7 +1827,16 @@ always @(posedge clk_sys or negedge reset_n) begin
         // must NOT clear pause -- the whole point is to land stopped on the next
         // frame. Placed before the pause_q chain so it cannot be mistaken for
         // one of the resume conditions below.
-        if (step_edge && (pause_q || stopped_w) && cell_ready && !menu_active)
+        // ⚠ The FIRST press on a PLAYING title never gets here: it PAUSES (the
+        // last arm of the chain below). pause_q still reads 0 on that cycle --
+        // that arm's assignment is non-blocking -- so this guard is correctly
+        // false and one press can never both pause and arm a step. That split is
+        // the design, not a limitation: while the title is live an ordinary
+        // pickup happens every frame, and pause_dec is 2 CDC flops deep where
+        // step_dec needs 3, so an arm raised on the pausing press would be eaten
+        // by a pickup that was going to happen anyway -- one press would advance
+        // one frame or two depending only on raster phase.
+        if (step_edge && (pause_q || stopped_w) && step_ok)
             step_tgl <= ~step_tgl;
 
         if (start_streaming)      pause_q <= 1'b0;   // fresh load clears pause
@@ -1808,6 +1857,25 @@ always @(posedge clk_sys or negedge reset_n) begin
         else if (dpad_seek_en && (cell_ready || lin_seek_ok_w) && !menu_active &&
                  !in_title_menu && !menu_nav &&
                  (up_edge || dn_edge || lf_edge || rt_edge)) pause_q <= 1'b0;
+        // FRAME STEP AS A PAUSE ROUTE. A step press while the picture is LIVE
+        // pauses; the next press steps (the arm above). That is what a set-top
+        // player and VLC do, and before this the button was simply DEAD during
+        // playback -- the guard above swallowed it unless you already knew to
+        // press B1 first.
+        // ⚠ LAST in the chain, deliberately. This arm can only ever SET pause, so
+        // at the bottom it cannot mask a RESUME. Coincident edges are real (an IR
+        // remote sends ~9 taps a second; gamepad, keyboard and CEC are all live at
+        // once) and the two failure costs are not symmetric: a swallowed step
+        // press costs one more press, a swallowed resume is a stuck pause. Note
+        // that step_ok's ~hold_freeze does NOT cover the FF/REW arm above -- on
+        // the ff_edge cycle hold_freeze has not risen yet -- so the PRIORITY is
+        // what covers it. start_streaming and jump_ack still win too.
+        // ⚠ !stopped_w is load-bearing, not tidiness: while STOPPED the step arm
+        // above owns the press, and a pause_q left set under a stop survives the
+        // PLAY that clears the stop (`pause_edge && !stopped_w` cannot fire on
+        // that cycle) -- the disc would resume PAUSED. Same trap the pause
+        // toggle's own ~stopped_w gate documents.
+        else if (step_pause_go) pause_q <= 1'b1;
         // any VM jump / menu key resumes playback (a paused governor would
         // freeze the menu the VM is jumping to)
         if (jump_ack)             pause_q <= 1'b0;
@@ -2039,7 +2107,8 @@ wire [31:0] dsi_tbl_rdata;
 // pauses while held. Title RBN span comes from the reader. The bar_* outputs
 // (playhead + target position) are computed for the Phase-11 on-screen position
 // bar and left UNWIRED for now (the seek action itself needs no overlay).
-wire        hold_freeze;
+// hold_freeze is declared with stopped_w far above -- the transport block's
+// frame-step guard reads it ~250 lines before this instance.
 wire        dpad_pend, dpad_pend_dir, dpad_pend_evt, dpad_pend_fail;
 wire [1:0]  dpad_pend_n;
 wire [6:0]  dpad_pend_min;
@@ -3699,7 +3768,87 @@ always @(posedge clk_sys) begin
     // backpressured (everything is frozen anyway), so no audio is lost.
     else if (aud_bp_armed && ~pause_aud) aud_bp_wd <= aud_bp_wd - 25'd1;
 end
-assign ps_aud_ready = ~(aud_ring_almost_full && aud_bp_armed);
+
+// ---- FRAME-STEP SESSION: the display advances while paused ----------------
+// ⚠⚠ The freeze above rests on "everything is frozen anyway", which was TRUE when
+// it was written and has been FALSE since frame step shipped (2026-09-13). Frame
+// step is the first thing that advances the DISPLAY while paused, and `pause`
+// never reaches the vld -- so each press lets the decoder consume one more picture
+// OUT OF THE VBUF, while the frozen watchdog holds `ps_aud_ready` low and the
+// shared demux byte stream cannot refill it. The VBUF becomes a fixed larder.
+//
+// MEASURED on the rig (2026-09-16, HOT_TUB_TIME_MACHINE, telemetry per press):
+//   Audio=On   17 steps, vbuf_fill 84 -> 0, then `pickups` FROZEN for 18 more
+//              presses -- the field report's "about 20 frames".
+//   Audio=Off  35 presses -> 35 steps, vbuf_fill flat at 221..224 throughout.
+// That A/B is the proof: with the audio path out of the way the same GOP structure
+// steps indefinitely. ⛔ It is NOT "it stops at the next I-frame" -- the VBUF
+// reaches zero, and the count moves with buffer depth, not with GOP length.
+//
+// A step session therefore releases the audio backpressure for the rest of the
+// pause: the ring reverts to drop-on-full (its documented fallback, and
+// ac3_reframer keeps every drop whole-frame-aligned, so it is clean silence and
+// not a pop), and video keeps flowing so stepping is unbounded.
+// ★ Audio for the stepped-past frames is DISCARDED, which is what a real player
+// does -- it mutes through a frame step.
+// ⚠ RESUME USED TO COST A TRANSIENT AND NO LONGER DOES -- see dvd/disp_sched.sv's
+// "FRAME STEP CARRIES THE CLOCK". Releasing the backpressure here is what made
+// stepping unbounded, and unbounded stepping then exposed a SECOND defect: the
+// presentation clock was frozen by `pause` while the display advanced, so it fell
+// one picture behind PER PRESS. MEASURED before that fix (~300 steps, resume):
+// disp_lag 5057 ms held ~15 s, av_drift swinging -5478..+3174 ms; after it,
+// disp_lag -23 ms immediately and av_drift 57 ms at t+3 s, on the same disc and
+// script. Both fixes are needed: this one for the buffer, that one for the clock.
+// ⚠ Keyed on a `step_tgl` TRANSITION, not on step_edge: step_tgl only toggles for
+// a press the transport block actually ACCEPTED as a step, so a press in a menu or
+// during a held scrub cannot start a session.
+// ⚠ Cleared by ~pause_aud, which covers every resume (unpause, scrub release, stop
+// release, a chapter skip or jump clearing pause_q) in one term. It deliberately
+// SURVIVES a stop, because stepping while stopped consumes the VBUF the same way.
+// ---- WHO STARTED THIS PAUSE ----------------------------------------------
+// The overlays hold themselves up for the whole of a pause the user asked for with
+// B1. A pause the FRAME STEP button started is not that: stepping through a scene
+// should not sit behind a status line and a progress bar (2026-09-17, by user
+// decision -- this reverses the earlier "the pause_q level already handles it for
+// free" reading, which was true of the mechanism and wrong about what is wanted).
+// ⚠ This is a VISIBILITY fact only. The disc is paused either way, so
+// transport_hud keeps reading the real pause_q for its ❚❚ icon; only the "keep the
+// line up" term follows this latch.
+// ⚠ Cleared by ~pause_q, NOT ~pause_aud: a Stop (stopped_w) or a held scrub
+// (hold_freeze) is not a frame-step pause and must keep the overlays' own rules.
+// ★ B9 (Display) is unaffected and that is the point -- transport_hud toggles
+// persist_q on display_edge with no pause condition at all, so Display brings the
+// line up in a frame-step pause exactly as it does in a B1 pause or in playback.
+reg step_paused   = 1'b0;
+reg step_tgl_q    = 1'b0;
+reg step_session  = 1'b0;
+always @(posedge clk_sys) begin
+    if (~reset_n) begin
+        step_tgl_q   <= 1'b0;
+        step_session <= 1'b0;
+        step_paused  <= 1'b0;
+    end else begin
+        step_tgl_q <= step_tgl;
+        if (~pause_aud)                      step_session <= 1'b0;
+        else if (step_tgl ^ step_tgl_q)       step_session <= 1'b1;
+
+        // ⚠⚠ THE SET MUST WIN, AND THIS ORDER IS THE WHOLE OF IT. `pause_q` is assigned
+        // NON-BLOCKING in the transport block, so on the very cycle step_pause_go fires
+        // pause_q still reads 0 -- put the `~pause_q` clear first and it wins every
+        // time, the set arm is UNREACHABLE, and step_paused never leaves 0. That
+        // shipped: sim stayed green (transport_hud_tb drives pause_vis directly, and
+        // emu has no bench) and the HARDWARE showed the status line during a
+        // frame-step pause on the first try.
+        // After the set, pause_q is high for the rest of the pause, so the clear arm
+        // only fires when the pause actually ends -- which is what it is for.
+        // ⚠ A B1 press that STARTS a pause does not set this: step_pause_go requires
+        // step_edge, so a B1 pause comes up with the overlays visible, as before.
+        if (step_pause_go)                   step_paused  <= 1'b1;
+        else if (~pause_q)                   step_paused  <= 1'b0;
+    end
+end
+
+assign ps_aud_ready = ~(aud_ring_almost_full && aud_bp_armed && ~step_session);
 
 // =========================================================================
 // In-fabric audio decode: audio_ring read side -> dvd_audio_decode -> AUDIO_L/R.
@@ -5962,7 +6111,11 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .act_w_i      (act_w_eff),
     .menu_active  (menus_on && menu_active),
     .dbg_mode     (hud_dbg),                // O[2]: show reader PGCN/VTS, always visible
-    .pause_q      (pause_q),
+    .pause_q      (pause_q),                  // the STATE: drives the ❚❚ icon
+    // How the pause STARTED -- a seed, not a hold. B1 brings the line up, frame step
+    // leaves the picture clean, and B9 toggles from there in either mode.
+    .pause_seed   (!step_paused),
+    .pause_show_o (hud_pause_show_w),         // shared with seek_bar: ONE latch
     .bar_active   (bar_active_w),
     // The status-line transport icon is shared: a HELD FF/REW scrub renders
     // its accelerating tier, and an open D-pad coalesce window renders the tap
@@ -6063,7 +6216,9 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .last_rbn   (title_last_rbn_w),
     // progress popup (stretch): pops on pause/landed seek/chapter with the
     // LIVE playhead + chapter notches, suppressed in menus like the HUD
-    .pause_q    (pause_q),
+    // the SAME pause-scoped latch transport_hud toggles, so the bar and the status
+    // line cannot disagree about one pause (seek_bar has no display_edge of its own)
+    .pause_vis  (hud_pause_show_w),
     .show_evt   (hud_user_evt),
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
