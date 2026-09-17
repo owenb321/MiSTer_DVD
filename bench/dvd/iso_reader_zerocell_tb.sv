@@ -155,7 +155,7 @@ module iso_reader_zerocell_tb;
         .cur_vts(cur_vts), .cur_pgcn(cur_pgcn_rd), .cur_cell(cur_cell),
         .cell_count(cell_count_w),
         .next_pgcn(rd_next), .prev_pgcn(rd_prev), .goup_pgcn(rd_goup),
-        .key_menu(1'b0), .key_resume(1'b0), .key_title(1'b0), .key_return(1'b0),
+        .key_menu(1'b0), .key_title(1'b0), .key_return(1'b0),
         .btn_cmd(64'd0), .btn_cmd_valid(1'b0), .btn_sel(6'd1), .btns_armed(1'b0),
         .btn_force(), .btn_force_val(),
         .jump_pulse(vm_jump_pulse), .jump_domain(vm_jump_domain),

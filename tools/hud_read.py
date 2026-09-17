@@ -382,7 +382,8 @@ def parse_status(status):
 
 
 # ---------------------------------------------------------------------------
-# O[2] release-build diagnostic blocks (dvd/emu.sv:5156-5219)
+# O[2] release-build diagnostic blocks (dvd/emu.sv:6452-6590; re-derive rather than
+# trust this -- emu.sv shifts with almost every branch. Anchor: `wire dbg_hl_en`.)
 # ---------------------------------------------------------------------------
 # name, x0, x1, y0, y1, gate
 BLOCKS = [

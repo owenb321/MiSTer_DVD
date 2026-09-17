@@ -88,8 +88,15 @@ latches the trailing one as a **scheduled disarm** (`off_v`, timed by `vobu_s_pt
 presentation timeline). When we settle on cell 3's still our STC keeps advancing (we don't freeze it on
 a still), and ~10 s in it crosses that **stale** off time → `off_due` fires → `armed` clears. There's
 no pipe flush, so the picture is untouched and only the highlight box vanishes; `hl_btns_armed` drops
-to 0, so `emu`'s Select routing falls to `key_resume` (`menu_active && !hl_btns_armed`) → the VM
-re-enters the menu.
+to 0, so `emu`'s Select routing fell to `key_resume` (`menu_active && !hl_btns_armed`) → the VM
+re-entered the menu.
+
+⚠ **Read that last clause as history (2026-09-17).** The `key_resume` route is DELETED — Select
+with no buttons armed is now a strict no-op — so today the same spurious disarm would leave the
+button *unresponsive* rather than jumping somewhere. `h_forever` is still what stops it happening;
+what changed is only how badly it ended. That re-interpretation turned out to be its own defect,
+because a menu TRANSITION is the same no-buttons-armed state: see `docs/dvd_nav.md` "Select during
+a menu transition".
 
 **Fix (`dvd/nav_pci.sv`).** Capture the committed HLI's `e_ptm` as **`h_forever`** (`== 0xFFFFFFFF`)
 and gate the disarm: `off_due &= !(armed && h_forever)`. A highlight the disc authored as *forever*

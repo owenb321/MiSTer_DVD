@@ -31,7 +31,7 @@
 //   vm_cell_cmd     -> run that one cell command (reader waits)
 //   btn_cmd_valid   -> run the button's command (from nav_pci)
 //   key_menu        -> title: synthesized CallSS VTSM Root; menu: LinkRSM
-//   key_resume      -> LinkRSM (only if the menu was entered via the Menu key)
+//   (Select with no buttons armed is a STRICT NO-OP - see the ev_menu handler)
 //   key_title       -> VMGM Title menu (entry 2), the real-remote TITLE key;
 //                      from a title also saves RSM (Menu/Select toggle back)
 //   key_cmenu       -> VTSM Chapter/PTT menu (entry 7), the remote's scene-
@@ -108,7 +108,6 @@ module dvd_vm (
 
     // User keys (edge pulses from emu)
     input             key_menu,
-    input             key_resume,     // Select with no buttons armed
     input             key_title,      // B12: VMGM Title ("Top Menu") key
     input             key_return,     // B13: Return = GoUp (authored goup_pgcn)
     input             key_cmenu,      // B16: Chapter/PTT menu (VTSM entry 7)
@@ -572,7 +571,7 @@ reg [6:0]  chain;              // VM-issued jumps this activation
 
 // Pending events
 reg ev_boot, ev_loaded, ev_error, ev_cellcmd, ev_pgcend, ev_btn;
-reg ev_menu, ev_resume, ev_title, ev_return, ev_cmenu;
+reg ev_menu, ev_title, ev_return, ev_cmenu;
 reg [7:0]  ev_cellcmd_nr;
 reg [63:0] ev_btn_cmd;
 reg nav_ready_d;
@@ -660,6 +659,29 @@ reg  menu_seen;    // a menu-domain PGC has been loaded since the last mount
 wire boot_menu = ~menu_seen & (best_menu_vts != 8'd0) & (best_menu_vts != cur_vts);
 wire [7:0] menukey_vts = boot_menu ? best_menu_vts : cur_vts;
 
+// ⛔ `menu_seen` DOES NOT ALSO GATE THE RSM LATCHES (ev_menu / ev_title / ev_cmenu),
+// and that was tried and REVERTED on 2026-09-17 - do not re-derive it.
+//
+// The idea: a Menu press used to skip the boot logos latches rsm_* = that FP title
+// and sets came_via_menukey, so for the rest of the session "resume" means "replay
+// the copyright screen" (came_via_menukey is cleared only by a DOM_TT load). That
+// looks like the hole the Cluedo fix left open - its comment says the boot FP
+// trampoline "is not a resumable resume point", and came_via_menukey closes only the
+// DISC-driven route, not a GENUINE Menu press inside the FP.
+//
+// ⛔ WHY IT IS WRONG: ~menu_seen does not mean "we are in the boot chain". It also
+// means "this disc has not shown a menu YET" - which is the state a user is in while
+// watching a feature on a disc that boots straight into it (BBB's FP is JumpTT 4).
+// Gating there stops latching a resume point under the movie, so Menu-out /
+// Menu-back-in silently stops toggling on exactly those discs. dvd_vm_tb [S17a] and
+// [S24b] fail on it immediately, which is how this was caught; the fix is to believe
+// them, not to add menu_seen=1 to their setup.
+//
+// It was also unnecessary: the reported defect ("Select during a menu transition
+// kicks me back to the boot chain") is fixed at the trigger - emu no longer
+// re-interprets Select as Resume - so no accidental press can reach RSM at all. A
+// Menu press reaching the point it was pressed from is a toggle behaving as one.
+
 // Serial ALU (mul: MSB-first shift-add; div/mod/rnd: restoring divide)
 reg [3:0]  alu_op;
 reg [3:0]  alu_reg;
@@ -721,7 +743,7 @@ always @(posedge clk or negedge rst_n) begin
         fuse <= 13'd0; chain <= 7'd0;
         ev_boot <= 1'b0; ev_loaded <= 1'b0; ev_error <= 1'b0;
         ev_cellcmd <= 1'b0; ev_pgcend <= 1'b0; ev_btn <= 1'b0;
-        ev_menu <= 1'b0; ev_resume <= 1'b0;
+        ev_menu <= 1'b0;
         ev_cellcmd_nr <= 8'd0;
         ev_btn_cmd <= 64'd0;
         nav_ready_d <= 1'b0;
@@ -862,7 +884,6 @@ always @(posedge clk or negedge rst_n) begin
             // a new PGC load re-opens the live-selection shadow for its PRE
             if (pgc_loaded) sprm8_frozen <= 1'b0;
             if (key_menu)                   ev_menu   <= 1'b1;
-            if (key_resume)                 ev_resume <= 1'b1;
             if (key_title)                  ev_title  <= 1'b1;
             if (key_return)                 ev_return <= 1'b1;
             if (key_cmenu)                  ev_cmenu  <= 1'b1;
@@ -894,7 +915,7 @@ always @(posedge clk or negedge rst_n) begin
             nat_src <= 1'b0;
             ev_boot <= 1'b0; ev_loaded <= 1'b0; ev_error <= 1'b0;
             ev_cellcmd <= 1'b0; ev_pgcend <= 1'b0; ev_btn <= 1'b0;
-            ev_menu <= 1'b0; ev_resume <= 1'b0; ev_title <= 1'b0;
+            ev_menu <= 1'b0; ev_title <= 1'b0;
             ev_return <= 1'b0; ev_cmenu <= 1'b0;
             state <= V_IDLE;
         end else begin
@@ -935,7 +956,7 @@ always @(posedge clk or negedge rst_n) begin
                     // counter-mode walk in progress: hold dispatch (see above)
                 end else if (!enable) begin
                     ev_boot <= 1'b0; ev_loaded <= 1'b0; ev_error <= 1'b0;
-                    ev_btn  <= 1'b0; ev_menu <= 1'b0; ev_resume <= 1'b0;
+                    ev_btn  <= 1'b0; ev_menu <= 1'b0;
                     ev_title <= 1'b0; ev_return <= 1'b0; ev_cmenu <= 1'b0;
                     // a reader wait must still be released (O[1] flipped off
                     // mid-flight; the reader also has its own timeout)
@@ -1231,7 +1252,7 @@ always @(posedge clk or negedge rst_n) begin
                     // Menu/Select toggle back to the movie, exactly like the
                     // Menu key. From a menu, jump without touching RSM or the
                     // toggle flag: a disc-driven menu's RSM is the boot
-                    // trampoline (see the ev_resume gate above) and must not
+                    // trampoline (see the ev_menu gate above) and must not
                     // be re-blessed as a user destination. fb=FB_VMGM: if the
                     // disc authors no VMGM Title entry the chain falls to
                     // resume/auto-title.
@@ -1316,38 +1337,6 @@ always @(posedge clk or negedge rst_n) begin
                         jump_entry <= 4'd0; jump_ttn <= 7'd0;
                         jump_pgn <= 8'd0; jump_cell <= 8'd0;
                         jump_pulse <= 1'b1;
-                        fb <= FB_NONE;
-                        wait_tmr <= 24'd0;
-                        state <= V_WAIT;
-                    end
-                end else if (ev_resume) begin
-                    ev_resume <= 1'b0;
-                    fuse <= 13'd0; chain <= 7'd0;
-                    blk  <= BLK_BTN;     // user-key jump: never "natural" provenance
-                    nat_src <= 1'b0;
-                    // Resume (Select with no buttons armed) is gated on
-                    // came_via_menukey, same as the Menu-key toggle above: RSM
-                    // is only a valid USER destination if the user put us in
-                    // this menu (Menu from a playing title). A disc-driven
-                    // CallSS (e.g. the boot FP trampoline) also fills RSM, but
-                    // that resume point is the trampoline title itself - a
-                    // dispatch stub that is not resumable. Cluedo: FP JumpTT 1
-                    // -> VTS1 PGC1 PRE CallSS VMGM (copyright/logos/intro), so
-                    // Select during the intro used to RSM into VTS1 PGC1 cell 1
-                    // = the "Please Wait, Processing" card, whose PGC has no
-                    // POST and no next -> permanent park. A real player treats
-                    // Enter with no armed buttons as a no-op; now we do too.
-                    if (came_via_menukey && rsm_vts != 8'd0 &&
-                        (menu_active || vm_dom != DOM_TT)) begin
-                        sprm4 <= rsm_r4; sprm5 <= rsm_r5; sprm6 <= rsm_r6;
-                        sprm7 <= rsm_r7; sprm8 <= rsm_r8;
-                        vm_dom <= DOM_TT; vm_vts <= rsm_vts;
-                        jump_domain <= DOM_TT;
-                        jump_vts <= rsm_vts; jump_pgcn <= rsm_pgcn;
-                        jump_entry <= 4'd0; jump_ttn <= 7'd0;
-                        jump_pgn <= 8'd0; jump_cell <= rsm_cell;
-                        jump_pulse <= 1'b1;
-                        skip_pre <= 1'b1;
                         fb <= FB_NONE;
                         wait_tmr <= 24'd0;
                         state <= V_WAIT;
@@ -2110,10 +2099,20 @@ always @(posedge clk or negedge rst_n) begin
                             state <= V_IDLE;
                         end
                     end
+                // ★ BOTH of these exits must drop a button press latched DURING the
+                // wait, exactly as the ev_loaded exit above does. ev_btn_cmd is a
+                // command out of the OUTGOING PGC's button record; executing it
+                // against whatever PGCIT is loaded by the time we reach V_IDLE is a
+                // link into another PGC's numbering -> pgc_error -> the fallback
+                // chain. The ev_loaded door has cleared it since Phase 4; these two
+                // were simply never completed (2026-09-17), and the ev_error door is
+                // the more reachable of them, since pgc_error is an ordinary outcome.
                 end else if (ev_error) begin
+                    ev_btn <= 1'b0;
                     state <= V_IDLE;             // V_IDLE runs the chain
                 end else if (wait_tmr == 24'hFFFFFF) begin
                     // the reader never answered (jump not latched): give up
+                    ev_btn <= 1'b0;
                     skip_pre <= 1'b0;
                     state <= V_IDLE;
                 end

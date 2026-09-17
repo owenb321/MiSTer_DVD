@@ -94,6 +94,11 @@ module idle_logo #(
     input  wire        frame_tick,        // av_refresh_tick (one per v_sync)
     input  wire        vis,               // emu's logo_vis gate
     input  wire [31:0] entropy,           // emu's entropy_ctr (free-running)
+    // Fine-tune the bounce trajectory and step the palette. One-cycle pulse, driven
+    // from the Angle button while nothing is mounted (emu: angle_edge &&
+    // !media_seen), where all three of that edge's real consumers are inert.
+    // Latched into nudge_pend because this module only does work on a frame tick.
+    input  wire        nudge,
 
     // user bitmap delivery (boot.rom -> ioctl, index 0)
     input  wire        ioctl_download,
@@ -283,6 +288,86 @@ wire hit_y1 = ~vyn && (pyq + {12'd0, spy} >= {y_hi, 4'd0});
 wire hit_x  = hit_x0 | hit_x1;
 wire hit_y  = hit_y0 | hit_y1;
 
+// ---------------------------------------------------------------------------
+// Trajectory fine-tune on request (`nudge`), so the corner can be AIMED AT.
+//
+// A corner flashes the logo white for 45 ticks (`corner_tmr` below) and is
+// otherwise a once-an-hour coincidence. A press steps the trajectory by the
+// SMALLEST amount it can, which is what makes lining one up a game.
+//
+// ⛔ A press must NOT re-roll the speeds from entropy, and that is measured, not
+// taste. A re-roll re-draws both arrival times, so it destroys whatever approach
+// you had set up: over 200,000 ticks, free-running scored 1 corner, blind
+// nudging 2, and 3,222 presses timed while heading INTO a corner scored ZERO.
+// Pressing was worse than not playing. A press is a notch, never a scramble.
+//
+// ⛔ And it does NOT aim FOR you. An earlier cut armed after four presses and
+// converted the next near-miss bounce into a hit; it worked in sim and was
+// dropped (2026-09-17) -- the payoff is only worth something if it is earned.
+//
+// The step is an ODOMETER: spx walks 8..15 and carries into spy (5..12), so one
+// button reaches all 64 trajectories and every press is the finest change
+// available. ⚠ Both ranges start well clear of 0 -- hit_x0 is
+// `vxn && (pxq <= spx)`, so a zero step pins that axis against the wall for ever.
+//
+// ⚠ `spd_manual` is load-bearing: the BOUNCE re-roll (below) would otherwise
+// re-randomise the axis you are not tuning at every wall, which is the same
+// scramble by another route. The first press hands the speeds to the player and
+// they stay put until pressed again. Cleared only by reset.
+reg nudge_pend;   // a press waiting for the next frame tick
+reg spd_manual;   // the player owns the speeds now: no bounce re-roll
+
+// Distance to the wall each axis is currently heading for.
+wire [11:0] dx_to = vxn ? px : ((x_hi > px) ? x_hi - px : 12'd0);
+wire [11:0] dy_to = vyn ? py : ((y_hi > py) ? y_hi - py : 12'd0);
+
+// A CORNER. Strictly both axes bouncing on the same tick -- UNLESS someone is
+// playing, in which case the second axis only has to be within CORNER_TOL of its
+// wall. Without a tolerance a corner needs both axes inside a ~1 px window on the
+// same tick, which no amount of aiming can reliably hit.
+//
+// ★ `spd_manual` gates the tolerance, so an idle screen NOBODY HAS TOUCHED keeps
+// the original condition exactly and stays bit-identical to the pre-2026-09-17
+// module. The forgiving corner is something you opt into by playing, which also
+// keeps the joke intact for everyone else: a DVD logo still never hits the corner
+// on its own.
+//
+// MEASURED over 200,000 ticks (~55 min) free-running, and by sweeping all 64
+// trajectories the odometer reaches and asking which ever produce a corner within
+// 6000 ticks (~100 s). The tolerance trades one against the other:
+//     TOL    corners/hr idling    aimable
+//      1          2                3/64
+//      2          4                5/64
+//      3          4                7/64      <- chosen
+//      4          5                8/64
+//      6          7               11/64
+//      8          8               15/64
+//     12         12               21/64
+// 3 puts a winning setting about 9 presses away while keeping an untouched idle
+// screen at its natural rate. ⚠ Retune this constant, not the expression -- the
+// table above is why it is the value it is.
+localparam [11:0] CORNER_TOL = 12'd3;
+wire corner_now = (hit_x && hit_y)
+               || (spd_manual && ((hit_x && (dy_to <= CORNER_TOL))
+                               || (hit_y && (dx_to <= CORNER_TOL))));
+
+// spx walks its range and carries into spy. Written as an explicit range test
+// rather than a counter wrap because spx/spy can arrive from the bounce re-roll
+// (12..15 / 8..11), from SPX_DEF/SPY_DEF, or from a boot.rom-pinned u_spd, none
+// of which are guaranteed to sit inside the odometer's range.
+wire       spx_wrap = (spx >= 4'd15) || (spx < 4'd8);
+wire [3:0] spx_next = spx_wrap ? 4'd8 : spx + 4'd1;
+wire [3:0] spy_next = ((spy >= 4'd12) || (spy < 4'd5)) ? 4'd5 : spy + 4'd1;
+
+// A nudge is a one-cycle pulse and this module only acts on frame ticks, so the
+// press is held until the next one. ⚠ The set arm outranks the clear, so a press
+// landing exactly on a tick is honoured on the following tick, not dropped.
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n)      nudge_pend <= 1'b0;
+    else if (nudge)  nudge_pend <= 1'b1;
+    else if (tick)   nudge_pend <= 1'b0;
+end
+
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         pxq <= {12'd100, 4'd0};        // safe for any logo on a full-width window
@@ -296,6 +381,7 @@ always @(posedge clk or negedge rst_n) begin
         spx <= SPX_DEF; spy <= SPY_DEF;
         cidx <= 3'd0;
         corner_tmr <= 6'd0;
+        spd_manual <= 1'b0;
         cur_r <= 8'hFF; cur_g <= 8'h3B; cur_b <= 8'h30;
     end else if (tick) begin
         // X axis
@@ -307,16 +393,30 @@ always @(posedge clk or negedge rst_n) begin
         else if (hit_y1) begin pyq <= {y_hi, 4'd0};  vyn <= 1'b1; end
         else             pyq <= vyn ? pyq - {12'd0, spy} : pyq + {12'd0, spy};
 
-        // bounce bookkeeping: speed re-roll (skip when the user pinned the
-        // speed), palette advance (+3 mod 8 = coprime, no adjacent repeat)
-        if (hit_x && !spd_user) spx <= 4'd12 + {2'd0, entropy[1:0]};
-        if (hit_y && !spd_user) spy <= 4'd8  + {2'd0, entropy[3:2]};
+        // bounce bookkeeping: speed re-roll (skip when the user pinned the speed,
+        // or once a press has handed the speeds to the player), palette advance
+        // (+3 mod 8 = coprime, no adjacent repeat)
+        if (hit_x && !spd_user && !spd_manual) spx <= 4'd12 + {2'd0, entropy[1:0]};
+        if (hit_y && !spd_user && !spd_manual) spy <= 4'd8  + {2'd0, entropy[3:2]};
         if (hit_x || hit_y) cidx <= cidx + 3'd3;
-        if (hit_x && hit_y) corner_tmr <= 6'd45;     // ~0.75 s white flash
+
+        // A requested fine-tune. Placed AFTER the bounce bookkeeping on purpose so
+        // it wins on a tick that is both: a press is a deliberate setting and must
+        // not be overwritten by the bounce's own re-roll, and it overrides spd_user
+        // for the same reason (a pinned speed suppresses the BOUNCE re-roll; an
+        // explicit press is not a bounce).
+        if (nudge_pend) begin
+            spd_manual <= 1'b1;
+            spx        <= spx_next;
+            if (spx_wrap) spy <= spy_next;          // odometer carry
+            cidx       <= cidx + 3'd3;              // visible acknowledgement
+        end
+
+        if (corner_now) corner_tmr <= 6'd45;         // ~0.75 s white flash
         else if (corner_tmr != 6'd0) corner_tmr <= corner_tmr - 6'd1;
 
         // colour resolve (event rate, never per pixel)
-        if (corner_tmr != 6'd0 || (hit_x && hit_y))
+        if (corner_tmr != 6'd0 || corner_now)
             {cur_r, cur_g, cur_b} <= 24'hFFFFFF;
         else if (u_fixcol && logo_valid)
             {cur_r, cur_g, cur_b} <= {u_r, u_g, u_b};

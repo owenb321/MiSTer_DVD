@@ -292,7 +292,7 @@ Events, serviced one at a time from V_IDLE (all latched):
 | `vm_cell_cmd` | run that one cell command |
 | `btn_cmd_valid` | run the button's command (directly from the 64-bit register) |
 | `key_menu` | title: synthesized `CallSS VTSM Root` (sets `came_via_menukey`); menu: `LinkRSM` **only if `came_via_menukey`** (the movie menu↔title toggle), else re-invoke `CallSS VTSM Root`. The **first** menu invocation of a mount retargets to `best_menu_vts` — see "Boot-chain menu shortcut" below |
-| `key_resume` | `LinkRSM` (Select with no buttons armed) — **only if `came_via_menukey`**, same gate as `key_menu` (see the Cluedo note below) |
+| ~~`key_resume`~~ | **RETIRED 2026-09-17.** Select with no buttons armed is a strict no-op and the port is gone; `key_menu` owns the resume toggle. See "Select during a menu transition" below |
 | `key_title` | B12 "Title" (the real-remote **Top Menu** key) — **✅ HW-CONFIRMED 2026-07-31 (PR fj#152)**: jump to the **VMGM Title menu** (entry 2) from anywhere. From a playing title also saves RSM + sets `came_via_menukey` (Menu/Select toggle back, like `key_menu`); from a menu it jumps **without touching RSM or the toggle** — a disc-driven menu's RSM is the boot trampoline and must not be re-blessed. `fb=FB_VMGM` (no VMGM Title entry → resume/auto-title). Tests: `dvd_vm_tb` [S17], `iso_reader_cluedo_menu_tb` [B] |
 | `key_return` | B13 "Return" (**GoUp**, libdvdnav `dvdnav_go_up`) — **✅ HW-CONFIRMED 2026-07-31 (PR fj#152)**: in-domain jump to the loaded PGC's authored `goup_pgcn` — the menu hierarchy's "one level up" pointer; mirrors the `LinkGoUpPGC` command exec (`fb=FB_NONE`). `goup_pgcn==0` (no authored parent — most discs, 16/22 in the library census) = strict no-op. HW: Atmosfear submenus return properly; Akira's goup targets its Root DISPATCHER whose fall-through is `RSM`, so Return there resumes the title (mid-film) or replays the boot warning (post-boot) — **authored**, identical under libdvdnav. Test: `dvd_vm_tb` [S18] |
 
@@ -430,6 +430,33 @@ Menu-then-Select resume toggle for user-entered menus is unchanged. (Side effect
 boot trampoline's saved position — is gone; that skip was never authored and parked any disc
 whose trampoline title is a non-resumable stub, e.g. TP Star Wars class discs too.)
 Test: `dvd_vm_tb` [S16] (gated no-op + user-toggle-still-resumes).
+
+### Select during a menu transition — the gate above was not narrow enough (2026-09-17)
+
+**⛔ SUPERSEDED: `key_resume`/`ev_resume` are DELETED.** Read the section above as history.
+
+`came_via_menukey` closes the DISC-driven route (a `CallSS` filling RSM) and nothing else.
+It is a **session-sticky** flag — set by any Menu/Title/ChapterMenu press from a title,
+cleared only by a `DOM_TT` load — so once the user has pressed Menu even once, every later
+Select-with-nothing-armed was live again, nine menus deep. And *"with nothing armed"* is
+not a rare state: it is **the whole of every menu transition**, because a cell seek or VM
+jump resets `nav_pci` through `pipe_rst_n` and a transition cell's NAV packs carry
+`hli_ss = 0`.
+
+Worse, `ev_resume` was the only user event `ev_loaded` did **not** clear (compare `ev_btn`
+at both `V_WAIT`/`V_IDLE` exits), so an impatient press survived the transition and fired
+into the menu that had just arrived. Reported as *"hit Select during a transition and it
+kicks me back to the boot chain"* — and it did, because the Menu press used to skip the
+boot logos is what put the FP title in `rsm_*`.
+
+**Deleting it is lossless, and that is checkable rather than a judgement call:**
+`ev_resume`'s condition and all 14 body assignments were character-for-character identical
+to `ev_menu` case (a). The only divergence was the *failing* branch — `ev_menu` re-invokes
+Root, `ev_resume` did nothing — so removal takes a destination away and adds none.
+
+Full analysis, the UOP measurement that rules out an authored fix, the maintainer's control
+arm, and the `menu_seen` gate that was tried and reverted: **`docs/dvd_nav.md`** "Select
+during a menu transition". Gate: `bench/dvd/run_select_noop.sh --red`.
 
 **Cluedo Menu-key follow-up (2026-07-31): the copyright replay on Menu is AUTHORED — do not
 "fix" it.** After the S16 fix, HW showed Menu during the intro (or at the game menu)

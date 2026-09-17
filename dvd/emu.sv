@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-framestep6"
+`define CORE_VERSION "dev-selectnoop"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1532,7 +1532,7 @@ wire [15:0] vm_dbg_deadend;  // {deadend_vts, deadend_pgcn} = the PGC that dead-
 wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HUD popup)
 wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
 wire [7:0]  rdr_play_vtsn, rdr_target_vtsn;
-reg         key_menu_p, key_resume_p, key_title_p, key_return_p, key_cmenu_p;
+reg         key_menu_p, key_title_p, key_return_p, key_cmenu_p;
 
 wire menus_on  = ~status[1];                       // O[1] Disc Menus (index 0 = On, default)
 wire hud_dbg   = status[2];                         // O[2]: HUD shows reader PGCN/VTS (nav diagnostic)
@@ -1804,7 +1804,6 @@ always @(posedge clk_sys or negedge reset_n) begin
         nav_rt_p     <= 1'b0;
         nav_act_p    <= 1'b0;
         key_menu_p   <= 1'b0;
-        key_resume_p <= 1'b0;
         key_title_p  <= 1'b0;
         key_return_p <= 1'b0;
     end else begin
@@ -1818,7 +1817,6 @@ always @(posedge clk_sys or negedge reset_n) begin
         nav_rt_p     <= 1'b0;
         nav_act_p    <= 1'b0;
         key_menu_p   <= 1'b0;
-        key_resume_p <= 1'b0;
         key_title_p  <= 1'b0;
         key_return_p <= 1'b0;
         key_cmenu_p  <= 1'b0;
@@ -1905,15 +1903,30 @@ always @(posedge clk_sys or negedge reset_n) begin
             nav_act_p <= 1'b1;
 
         // Menu key -> the VM (CallSS VTSM Root from a title / LinkRSM from a
-        // menu). Select with NO buttons armed = resume (Phase-2 behaviour) -
-        // but the VM only honours it if the menu was entered via the Menu key
-        // (came_via_menukey); in a DISC-driven menu chain (e.g. Cluedo's boot
-        // copyright/logos/intro, which arm no buttons) Select is a no-op, like
-        // a real player's Enter. See the ev_resume gate in dvd_vm.sv.
+        // menu).
+        //
+        // ★ SELECT WITH NO BUTTONS ARMED IS A STRICT NO-OP, and the absence of a
+        // `key_resume_p` driver here is the whole fix - do not re-add one. Until
+        // 2026-09-17 this block ALSO read
+        //     if (menus_on && menu_active && sel_edge && !hl_btns_armed)
+        //         key_resume_p <= 1'b1;
+        // i.e. it RE-INTERPRETED the press as Resume. A menu TRANSITION is exactly
+        // that window (every cell seek / VM jump pulses load_flush -> pipe_rst_n ->
+        // nav_pci disarms, and a transition cell's NAV packs carry hli_ss=0 so
+        // nothing re-arms for the length of the clip), and dvd_vm's ev_resume was
+        // the one user event NOT invalidated by a PGC load - so the press outlived
+        // the transition and LinkRSM'd out of the menu that had just arrived.
+        // Reported as "hit Select during a transition and it kicks me back to the
+        // boot chain" (T2 Mission Profiles, Scooby-Doo 2 menus), and it did: the
+        // Menu key used to skip the boot logos latches rsm_* at the FP title.
+        //
+        // Deleting it lost NOTHING: ev_resume's condition and all 14 of its body
+        // assignments were character-for-character identical to ev_menu case (a),
+        // so B5 (Menu) already does everything B4 could do here - and a real
+        // player's Enter with nothing highlighted is a no-op, which is what the
+        // manual has always documented. Gated by tools/check_select_noop.py.
         if (menus_on && menu_edge)
             key_menu_p <= 1'b1;
-        if (menus_on && menu_active && sel_edge && !hl_btns_armed)
-            key_resume_p <= 1'b1;
         // B12 Title = the real-remote "Top Menu" key -> VMGM Title menu.
         if (menus_on && title_edge)
             key_title_p <= 1'b1;
@@ -2390,7 +2403,6 @@ dvd_vm dvd_vm_inst (
     .goup_pgcn     (rd_goup_pgcn),
 
     .key_menu      (key_menu_p),
-    .key_resume    (key_resume_p),
     .key_title     (key_title_p),
     .key_return    (key_return_p),
     .key_cmenu     (key_cmenu_p),
@@ -6300,6 +6312,7 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .frame_tick     (av_refresh_tick),
     .vis            (logo_vis),
     .entropy        (entropy_ctr),
+    .nudge          (angle_edge && !media_seen),
     .ioctl_download (ioctl_download),
     .ioctl_wr       (ioctl_wr),
     .ioctl_addr     (ioctl_addr),

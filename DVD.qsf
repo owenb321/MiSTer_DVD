@@ -1202,4 +1202,20 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # commit ffe1340. lint_undriven + netlist_canary PASS.
 #   ⚠ The superseded first measurement was 90.34/90.24 at 38,033 ALMs; the angle
 #   work costs ~186 ALMs and the cold corner gave up 1.1 MHz, still ~3 MHz clear.
+#
+# 2026-09-17 (fix/select-during-transition, dev-selectnoop -- Select with no
+# buttons armed is a strict no-op: key_resume/ev_resume deleted end to end, the
+# ev_btn clear completed on both V_WAIT exits, and an idle_logo trajectory
+# fine-tune). SEED 7 held FIRST roll, fifth consecutive build: clk_dec 92.34 MHz
+# @100C / 89.67 MHz @-40C (gate 86.0, PASS both corners), 38,195 / 41,910 ALMs
+# (91 %), 51,737 registers, 500/553 M10K, 94/112 DSP. Build
+# releases/DVD_selectnoop_20260917_1531.rbf, commit 0248ebf. lint_undriven +
+# netlist_canary PASS; idle_logo's ROM still infers altsyncram (checked in
+# DVD.map.rpt -- the consolidated-writes trap).
+#   ⚠ TWO fits were spent on this branch and only the SECOND describes what
+#   ships. The first (95.17/89.56 at 38,185 ALMs, commit da5357b) was measured
+#   before the idle_logo rework replaced a random re-roll with an odometer step,
+#   so its entry was withdrawn rather than left standing -- a ledger row that
+#   names a netlist nobody can rebuild is worse than no row. The rework costs
+#   +10 ALMs and 2.8 MHz at the hot corner, still ~6 MHz clear of the gate.
 set_global_assignment -name SEED 7

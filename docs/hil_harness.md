@@ -136,9 +136,9 @@ warm one.
 
 ## Set `Debug Overlay=On` for anything that inspects state
 
-`status[2]` drives `hud_dbg` (`emu.sv:1283`, `:4926`), which forces the status
+`status[2]` drives `hud_dbg` (`emu.sv:1538`, `:6125`), which forces the status
 line always-visible **and** repurposes the `CH n/N` field as
-`{reader PGCN, VTS}` (`emu.sv:4953-4954`). So every screenshot carries decodable
+`{reader PGCN, VTS}` (`emu.sv:6169-6170`). So every screenshot carries decodable
 playback state from frame one, with no keypress, **in a release build**. It also
 enables the O[2] diagnostic blocks. This is why `tools/osd_read.py` is not the
 primary reader: the numeric `DEBUG_OVERLAY` lattice it decodes is compiled out
