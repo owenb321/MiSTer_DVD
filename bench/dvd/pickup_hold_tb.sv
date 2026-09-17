@@ -50,6 +50,13 @@ module pickup_hold_tb;
 
   integer     supplied = 0;
   integer     consumed = 0;
+  integer     live_before = 0;   // [5e] pickup count before a live step press
+  // ⚠ NOT tied 1'b1. disp_sched FREEZES the STC under pause, so while paused the
+  // next picture is never scheduled due -- which is exactly why resample_addrgen's
+  // step_arm has to bypass frame_due as well as pause. With sched_due hardwired
+  // high, frame_due was always true, `(frame_due | step_arm)` was redundant, and
+  // deleting `| step_arm` from ofv_paced was caught by NOTHING in this bench.
+  wire        sched_due_tb = ~pause_tb;
   wire        output_frame_valid_w = (supplied != consumed);
 
   resample_addrgen dut (
@@ -66,7 +73,7 @@ module pickup_hold_tb;
     .resample_wr_dta(resample_wr_dta), .resample_wr_en(resample_wr_en),
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full), .resample_wr_almost_full(resample_wr_almost_full),
     .busy(busy), .frame_late(frame_late),
-    .video_live(video_live), .pickup_hold(pickup_hold), .pause(pause_tb), .step_req(step_tb), .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .sched_due(1'b1), .sched_next_due(1'b1));
+    .video_live(video_live), .pickup_hold(pickup_hold), .pause(pause_tb), .step_req(step_tb), .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .sched_due(sched_due_tb), .sched_next_due(1'b1));
 
   always #5 clk = ~clk;
 
@@ -199,6 +206,34 @@ module pickup_hold_tb;
     chk(consumed == 6, "a second step did not advance");
     $display("  [5d] second step advances again");
     pause_tb = 0;
+
+    // 5e. A step press while the display is LIVE must buy NOTHING. This is the
+    //     executable form of emu.sv's "the pausing press must not also arm a
+    //     step": while live an ordinary pickup happens every frame, and emu's
+    //     pause reaches the decoder through 2 CDC flops where the step toggle
+    //     needs 3 -- so an arm raised on the pausing press is consumed by a
+    //     pickup that was going to happen anyway, and one press would advance
+    //     one frame or TWO depending only on raster phase. Hence emu splits the
+    //     gesture across two presses (frame step pauses first, then steps).
+    //     Deterministic by construction: press with NOTHING available, then
+    //     offer exactly one frame. A live display takes it regardless of the
+    //     press, so the press must cost exactly one pickup, not two, and must
+    //     leave no arm behind to fire a phantom frame at the next pause.
+    repeat (400) @(posedge clk);            // let the pending supply drain
+    supplied = consumed;                    // nothing available
+    repeat (100) @(posedge clk);
+    live_before = consumed;
+    @(negedge clk); step_tb = 1; @(negedge clk); step_tb = 0;
+    repeat (100) @(posedge clk);
+    chk(consumed == live_before, "a step press picked a frame up with none supplied");
+    supplied = consumed + 1;                // offer exactly ONE
+    repeat (400) @(posedge clk);
+    chk(consumed == live_before + 1,
+        "a step press while LIVE cost more than the one pickup that was due anyway");
+    chk(dut.step_arm == 1'b0,
+        "step_arm survived a live pickup: phantom frame at the next pause");
+    $display("  [5e] live: a step press costs nothing and leaves no arm (consumed=%0d)",
+             consumed);
 
     if (errs == 0) begin $display("PASS: pickup_hold (STD mux-lead hold + per-load re-arm + hold-frame re-scan + frame step)"); $finish; end
     else           $fatal(1, "FAIL: %0d error(s)", errs);

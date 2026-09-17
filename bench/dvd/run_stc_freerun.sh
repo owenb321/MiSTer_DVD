@@ -49,6 +49,11 @@ echo "== 5. contracts =="
 iv /tmp/flush_ctl_sim dvd/flush_ctl.sv bench/dvd/flush_ctl_tb.sv && run flush_ctl "PASS" vvp /tmp/flush_ctl_sim
 bash bench/dvd/run_telem.sh || fail=1
 echo "== 6. display =="
+# The frame-step seam in emu.sv (which has no bench). Milliseconds, and it belongs
+# here because pickup_hold_tb below is the only bench that drives step_req -- so both
+# halves of frame step end up under one existing command. Full gate incl. mutations:
+# bench/dvd/run_frame_step.sh --red
+run check_frame_step_wiring "PASS" python3 tools/check_frame_step_wiring.py
 for tb in pickup_hold_tb film_detect_tb; do
   iv /tmp/${tb}_sim dvd/resample_addrgen.v rtl/mpeg2/mem_addr.v bench/dvd/$tb.sv && run $tb "PASS" vvp /tmp/${tb}_sim
 done
