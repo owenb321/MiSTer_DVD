@@ -252,6 +252,56 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **EVERY CHAPTER SKIP ON A PHYSICAL DISC CRACKED A CSS TITLE KEY — THE KEY WAS ASKED
+  FOR AT THE READ POSITION, AND libdvdcss CACHES BY EXACT BLOCK (2026-09-17, branch
+  `fix/css-key-vob-start`); host-proven RED/GREEN, 4 mutations each caught by its own
+  arm, ⏳ HW-confirm pending.** Field report: Prev/Next Chapter freezes the whole machine
+  for a few minutes, then plays the chapter. ★ **REPRODUCED BY THE MAINTAINER on their
+  own copy** (no drive region: slow mount, ~10 s per seek) **with the decisive evidence —
+  new key files appearing in the dvdcss cache as the seeks happened.**
+  ★★ **`dvd_css_read()` fired `DVDCSS_SEEK_KEY` on ANY discontinuity, at the ARBITRARY
+  target LBA**, under a comment claiming that was "a fast cached lookup now".
+  ★★ **MEASURED IN THE SHIPPED `libdvdcss.so.2` (1.6.0), not recalled:** `_dvdcss_title`
+  is inlined into `dvdcss_seek` and the lookup is a list walk then `cmp (%rdx),%ebx;
+  je <hit>` — an **equality** on the start LBA, not a range test (struct offsets match
+  `dvd_title_t`); the on-disk cache agrees, one file per block named **`"%.10x"`** of the
+  block number, which is what the maintainer watched grow. `crack_title_keys()` only
+  primes `g_vobs[i].start`, so every chapter start MISSED and re-acquired = the full
+  statistical crack, **on the thread that serves the core's SD blocks** — hence the
+  MACHINE freezing, not just the picture. ⚠ Linear playback never tripped it
+  (`lba == css_pos`), which is why it survived every HW round until a user seeked.
+  ★★ **libdvdread is the oracle and we were the deviation:** `initAllCSSKeys()` primes one
+  key per VOB FILE at its start (identical to ours) and `DVDReadBlocks()` re-keys ONLY on
+  a file change, at `dvd_file->lb_start`, **never at the read offset**. One key per VOB is
+  the whole stack's model, so keying at the start weakens nothing — it is already what
+  linear playback relied on. **Fix = `if (vi != cur_vob)` → SEEK_KEY at
+  `g_vobs[vi].start`, then a plain NOFLAGS seek to the target.**
+  ⛔ **PRE-CRACKING MORE BLOCKS IS THE WRONG LEVER** (asked directly): the cache is
+  exact-block, so it means enumerating every block anyone might seek to — chapter starts
+  come from the IFO, but scrub-release, D-pad seek, A-B repeat, menu→resume and the
+  `S_NAV_SEEK` landing are arbitrary. It would fix B2/B3, LOOK fixed, and leave the scrub
+  bar as broken.
+  ⛔ **NOR DOES DERIVING TITLE KEYS FROM THE DISC KEY, and it sounds like it should.**
+  That IS libdvdcss's default (`ReadDiscKey` → per-title `ReadTitleKey` → decrypt), but
+  the *encrypted* title key lives in the sector's CPR_MAI header, which `READ(10)` does
+  not return — the only route is the `ReadTitleKey` ioctl, **exactly what a region-less
+  RPC-II drive refuses** (`ioctl ReadTitleKey failed (region mismatch?)` → `cracking title
+  keys instead`). Setting the drive region buys the fast path; this fix reduces how OFTEN
+  the slow path is paid, from every seek to once per VOB per disc ever.
+  ★ **Second, PRE-EXISTING defect out with it:** a failed key seek set a LOCAL `decrypt=0`
+  while still advancing `cur_vob`, so the NEXT sequential read skipped the block and
+  decrypted with a key never obtained — garbage for the rest of the VOB instead of the
+  intended raw fallback. Latched in `key_ok` now.
+  **Gate: `main/tests/run_tests.sh --red`** (`dvd_css_test.cpp`, 8 arms + 4 mutations;
+  host `g++`, no MiSTer/Docker). ★ The fake `p_seek` models libdvdcss's cache as it
+  behaves — a SEEK_KEY at an unseen block COSTS an acquisition and is then cached — so it
+  scores keys cracked, never a signal the fix names. ⚠ It cannot compile against the true
+  pre-fix file (it resets `key_ok`), so the RED arm restores the BEHAVIOUR by mutation
+  rather than out of git — weaker than the usual R0 arm, called out in the test header.
+  ⏳ HW gate: on a region-less drive, chapter-skip and watch
+  `/media/fat/dvdcss/cache/<disc>/` stop gaining files. Detail:
+  **`docs/physical_disc.md`** "A title key is asked for at a VOB START".
+
 - ✅ **SELECT DURING A MENU TRANSITION KICKED THE PLAYER BACK TO THE BOOT CHAIN — ONE
   BUTTON CARRIED TWO MEANINGS, AND THE WRONG ONE OUTLIVED THE TRANSITION (2026-09-17,
   PR #103); sim-proven RED/GREEN, 6 regressions each caught by exactly its own
