@@ -156,6 +156,21 @@ def _sml_audio_gap(sec):
     return out
 
 
+# The fields the reader's BRANCH-AWARE VOBU SNAP reads out of a probed NAV pack
+# (dvd/dvd_iso_reader.sv S_NAV_CHK -> S_NAV_VOB, one 45-byte window based at DSI
+# 0x08).  A scrub into an interleaved block is snapped forward to the next NAV
+# pack, which belongs to whichever branch owns that ILVU, so the landing has to be
+# tested against the cell's own branch and, when wrong, hopped over a whole ILVU.
+#   vobu_vob_idn  DSI 0x18 -> 0x41F   which VOB (= which branch) this VOBU is in
+#   vobu_c_idn    DSI 0x1B -> 0x422   the CELL id -- printed because it does NOT
+#                                     discriminate: measured identical on both
+#                                     branches of AVP and Matrix
+#   sml_pbi.ilvu_ea DSI 0x22 -> 0x429 end of THIS ILVU, relative to this NAV pack
+def _branch_fields(sec):
+    """Return (vob_idn, c_idn, ilvu_ea) from a 2048-B sector's DSI."""
+    return be16(sec, 0x41F), sec[0x422], be32(sec, 0x429)
+
+
 def _dsi_fields(sec):
     """Return (is_nav, category, vobu_ea, next_vobu) from a 2048-B sector's DSI."""
     isnav = sec[0x400:0x404] == b'\x00\x00\x01\xbf' and sec[0x406] == 0x01
@@ -265,6 +280,36 @@ def dump_ilvu(f, vts, angles=False):
               "played=%d skipped(sibling)=%d audio_gap_entries=%d nav_ok=%s %s"
               % (first, ile, last, len(chain), jumps, played, skipped, gaps, nav_ok,
                  "OK" if ok else "*** CHAIN DID NOT REACH END_OF_CELL ***"))
+        # ---- the BRANCH view: what a raw-RBN seek into this cell has to solve ----
+        # Walk the cell PHYSICALLY, VOBU by VOBU, recording each VOBU's VOB_ID.  A
+        # scrub is snapped forward to the next NAV pack, so the landing belongs to
+        # whichever branch owns that ILVU; `wrong%` is how often that is not this
+        # cell's branch, and `max_sibling_run` is how far forward the reader must
+        # then walk to find this branch again -- the number that decides whether a
+        # one-sector-at-a-time walk can do it inside NAV_CAP at all.
+        f.seek((vob_lba + first) * 2048)
+        mine = _branch_fields(f.read(2048))[0]
+        sib, run, runv, maxrun, maxrunv, mysec, guard = {}, 0, 0, 0, 0, 0, 0
+        r = first
+        while r <= last and guard < 40000:
+            f.seek((vob_lba + r) * 2048)
+            sec = f.read(2048)
+            good, _c, ea, _n = _dsi_fields(sec)
+            if not good:
+                break
+            vob, cidn, iea = _branch_fields(sec)
+            if vob != mine:
+                sib[vob] = sib.get(vob, 0) + ea + 1
+                run += ea + 1; runv += 1
+                maxrun = max(maxrun, run); maxrunv = max(maxrunv, runv)
+            else:
+                mysec += ea + 1; run = 0; runv = 0
+            r += ea + 1; guard += 1
+        span = last - first + 1
+        print("      branch vob_idn=%d c_idn=%d | siblings=%s | wrong-landing=%.0f%% "
+              "| max_sibling_run=%d sectors / %d VOBUs"
+              % (mine, cidn, ("+".join(str(k) for k in sorted(sib)) or "none"),
+                 100.0 * (span - mysec) / span if span else 0.0, maxrun, maxrunv))
     if n_inter == 0:
         if angles:
             print("  (no block_type==1 angle cells in PGCN 1 - not a multi-angle title)")
