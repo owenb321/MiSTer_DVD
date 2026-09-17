@@ -14,7 +14,7 @@ standard numbering — whatever you mapped B1 to in the MiSTer menu is what "B1"
 | B6 | Angle (cycle) | | B15 | Aspect (cycle) |
 | B7 | Audio (cycle) | | B16 | Chapter Menu |
 | B8 | Subtitle (cycle) | | B17 | A-B Repeat |
-| B9 | Display (toggle status line) | | B18 | Frame Step |
+| B9 | Display (toggle status line) | | B18 | Frame Step (pause, then step) |
 | | | | B19 | Eject |
 | | | | B20 | Vol Up |
 | | | | B21 | Vol Down |
@@ -188,6 +188,7 @@ once, Menu behaves exactly as the disc specifies.
 ## During playback
 
 **B1 (Pause)** freezes on the current frame. Audio stops cleanly and resumes in sync.
+[Frame step](#frame-step) also pauses, if you would rather stop on an exact frame.
 
 **B2 / B3** step chapters. **B10 / B11** (`Fast Fwd` / `Rewind`) tapped step forward and back; **held**, they
 scrub — a seek bar appears showing where you are and where you will land, and the seek
@@ -299,8 +300,14 @@ itself, before the core ever sees them.
 
 ### Frame step
 
-**B18 (Frame Step)** advances a single frame while paused or stopped, and stays paused. It
-is forward-only: the decoder works in groups of frames, so there is no way to step
+**B18 (Frame Step)** is the pause-and-nudge button. Press it while a disc is playing and
+playback **pauses**; press it again and each press advances a single frame, staying paused.
+It steps the same way from a pause you started with **B1**, and while the disc is stopped.
+
+The first press only pauses — it does not also advance — so the frame you stop on is the one
+that was on screen.
+
+It is forward-only: the decoder works in groups of frames, so there is no way to step
 backwards without re-decoding, which is a different feature.
 
 ## Support bundle chord

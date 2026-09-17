@@ -3291,7 +3291,9 @@ worse maintenance burden than targeted in-place edits. So:
   1:43:41→0:00:14) with the picture **max=0, perfectly black**; Chapter Menu followed
   `0x87`→PGCN 4→`LinkPGCN 8` onto the real 4-cell scene menu with buttons armed;
   Frame Step 0 px over 3 s paused, then 1962/2431/1618 px per press, still PAUSE,
-  26,422 px on resume; Aspect cycles all four popups and, PAUSED so content is static,
+  26,422 px on resume (⚠ the FIRST press on a PLAYING title now PAUSES instead of being
+  swallowed -- see the frame-step bullet below; that measurement was of a press made while
+  already paused, so it still stands); Aspect cycles all four popups and, PAUSED so content is static,
   alternates active height 298↔357 px per press exactly as the RTL predicts for 16:9
   anamorphic; screensaver not armed at 100 s, armed by 145 s, logo MOVING 9,280 px/3 s
   over a blanked picture; **A-B repeat kept the playhead inside 0:01:46–0:02:04 for
@@ -3509,6 +3511,52 @@ worse maintenance burden than targeted in-place edits. So:
   (`(state == STATE_INIT) && pickup_go`, the term behind `output_frame_rd`), not on
   `pickup_go` — which is a combinational "a frame could be taken", true for many cycles
   mid-scan. A probe showed the arm living exactly ONE cycle, in state 9.
+  ✅ **AND THE BUTTON WAS DEAD DURING PLAYBACK UNTIL 2026-09-16 (branch
+  `fix/frame-step-pause`); sim-proven RED/GREEN, 16 mutations each caught by the assertion
+  that owns it, ⏳ HW-confirm pending.** The guard shipped as
+  `(pause_q || stopped_w) && cell_ready && !menu_active`, so a press on a playing title was
+  SILENTLY SWALLOWED — you had to know to press B1 first. It is pause-and-nudge now, like a
+  set-top player and VLC: a new LAST arm of emu's `pause_q` chain sets pause on a step press
+  while live, and the next press steps as before.
+  ★★ **THE FIRST PRESS PAUSES *ONLY*, AND THAT IS MEASURED, NOT TASTE.** While the title is
+  live an ordinary pickup happens every frame, and `pause_dec` is 2 CDC flops deep where
+  `step_dec` needs 3 — so an arm raised on the pausing press is consumed by a pickup that was
+  going to happen anyway, and one press would advance one frame **or two** depending only on
+  raster phase. Hence two presses, two jobs.
+  ★ **ONE shared predicate** (`step_ok = cell_ready && !menu_active && !hold_freeze`) for
+  both halves: if the pausing press and the stepping press could disagree about where frame
+  step is legal, the button would pause a title it can never step — a dead-end pause only B1
+  undoes. ⛔ `!in_title_menu` deliberately absent (B1 already pauses there).
+  ⚠ **`!hold_freeze` is what makes emu agree with the datapath:** `resample_addrgen.v:451,458`
+  gate `ofv_paced` AND `ofv_pickup` on `~hold_freeze` **unconditionally** — `step_arm` does
+  NOT bypass it — so a step press during a held scrub advances nothing; without the term it
+  would set `pause_q`, and a scrub release is a `seek_ack`, **not** a `jump_ack`, so nothing
+  clears it and the disc lands on the scrub target PAUSED.
+  ⚠⚠ **THE ARM IS THE LAST `else if` AND POSITION IS SEMANTICS.** The chain is a priority mux
+  over one register and this arm only ever SETS pause, so at the bottom it cannot mask a
+  RESUME; hoisted above any clear-only arm a coincident resume press becomes a stuck pause.
+  **`step_ok`'s `~hold_freeze` does NOT cover the FF/REW arm** — on the `ff_edge` cycle
+  `hold_freeze` has not risen yet — so the PRIORITY is the only thing that covers it.
+  `!stopped_w` is the same class: a `pause_q` set under a stop survives the PLAY that clears
+  the stop (`pause_edge && !stopped_w` cannot fire on that cycle) and the disc resumes paused.
+  ★ **`hud_user_evt` untouched, verified not assumed:** `transport_hud.sv:288` and
+  `seek_bar.sv:139` already take `pause_q` as a visibility LEVEL (*"manual pause (keeps the
+  line up)"*), so the pausing press raises the status line with ❚❚ for the whole pause while
+  later step presses re-arm nothing. Raw `step_edge` would re-arm the ~2.5 s timer on every
+  press of a burst; the checker pins it out **by rejection**.
+  ★★ **A reordering changes no term, no port and no expression, so NO bench and no Quartus
+  fit can see it** — hence `tools/check_frame_step_wiring.py` reads the arm, its terms AND
+  its ordering against all four resume arms out of `dvd/emu.sv` (RED on the pre-fix file,
+  where the headline message names the shipped behaviour).
+  ⚠⚠ **TWO PRE-EXISTING BENCH GAPS CAME OUT WITH IT.** `pickup_hold_tb` tied
+  `.sched_due(1'b1)`, so `frame_due` was always true, `(frame_due | step_arm)` was redundant,
+  and **deleting `| step_arm` was caught by NOTHING** — the bench now models `disp_sched`
+  freezing the STC under pause (`sched_due = ~pause`), which is exactly why that term exists.
+  And `stop_ctl_tb` **had no runner at all**; it is an arm of `run_frame_step.sh` now.
+  New arm **5e**: a step press while LIVE must cost exactly one pickup (not two) and leave
+  `step_arm` clear — the executable form of the CDC argument above.
+  Gates: **`bench/dvd/run_frame_step.sh --red`**, `tools/check_frame_step_wiring.py` (also
+  run from `run_stc_freerun.sh` §6). Detail: `docs/dvd_nav.md` "Frame step as a pause route".
   ⛔ **Eject and Volume are NOT here, deliberately.** Both need a core→Main request
   channel that does not exist (the `CMD_AF` payload word has free bits 3-14); a named
   button that does nothing is worse than a missing one. ★★ **And volume must NOT be a

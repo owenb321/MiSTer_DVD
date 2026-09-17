@@ -326,6 +326,73 @@ playing for seconds). Four coordinated holds:
   playing and desync grew with pause length — fixed here.)
 Unpause is instant — nothing is reset, only ungated.
 
+**Frame step as a pause route (2026-09-16, branch `fix/frame-step-pause`).** `B18` /
+keyboard `.` used to be a **dead button during playback**: its guard required
+`(pause_q || stopped_w)`, so a press was swallowed unless the picture was already held and
+the user knew to press `B1` first. It is now pause-and-nudge, like a set-top player and
+VLC — the first press pauses, each press after that steps.
+
+The whole change is one shared predicate plus one arm of the `pause_q` chain in
+`dvd/emu.sv`, and three things about it are load-bearing:
+
+- **`wire step_ok = cell_ready && !menu_active && !hold_freeze;` is read by BOTH halves of
+  the gesture.** If the pausing press and the stepping press could disagree about where
+  frame step is legal, the button would pause a title it can never step — a dead-end pause
+  only `B1` undoes. `cell_ready` is the shipped scope (a flat `.mpg`/VCD is still inert;
+  widening it via `lin_seek_ok_w` must widen **both** halves at once, or a flat file pauses
+  and never steps). ⛔ `!in_title_menu` is deliberately absent: `B1` already pauses inside
+  an in-title game menu, so adding it would make frame step stricter than the pause button
+  for no measured reason, and would narrow an arm HW-confirmed on 2026-09-13.
+- **`!hold_freeze` is the term that makes emu agree with the datapath.**
+  `dvd/resample_addrgen.v:451,458` gate `ofv_paced` **and** `ofv_pickup` on `~hold_freeze`
+  *unconditionally* — `step_arm` does not bypass it — so a step press during a held FF/REW
+  scrub can advance nothing. Without the term it would instead set `pause_q`, and a scrub's
+  release is a `seek_ack`, **not** a `jump_ack`, so nothing in the chain clears it: the disc
+  lands on the scrub target PAUSED, and only `B1` gets you out.
+- **The arm is the LAST `else if`, and position is semantics.** The chain is a priority mux
+  over one register, and this arm can only ever *set* pause. At the bottom it cannot mask a
+  RESUME; hoisted anywhere above a clear-only arm it turns a coincident resume press into a
+  stuck pause — and coincident edges are real (an IR remote sends ~9 taps a second, and
+  gamepad, keyboard and CEC are all live at once). ⚠ **`step_ok`'s `~hold_freeze` does NOT
+  cover the FF/REW arm**: on the `ff_edge` cycle `hold_freeze` has not risen yet, so the
+  priority is the only thing that covers it. `start_streaming` and `jump_ack` still win.
+  ⚠ **`!stopped_w` is load-bearing too:** while STOPPED the step arm owns the press, and a
+  `pause_q` left set under a stop survives the PLAY that clears the stop (`pause_edge &&
+  !stopped_w` cannot fire on that cycle) — the disc would resume paused. Same trap that
+  gate's own comment documents.
+
+★ **The first press pauses ONLY, and that is a measurement, not a taste.** While the title
+is live an ordinary pickup happens every frame, and `pause_dec` is 2 CDC flops deep where
+`step_dec` needs 3 — so an arm raised on the pausing press is consumed by a pickup that was
+going to happen anyway, and one press would advance one frame *or two* depending only on
+raster phase. `pickup_hold_tb` arm **5e** is that claim made executable (press with nothing
+available, then offer exactly one frame: the press must cost exactly one pickup, not two,
+and must leave `step_arm` clear).
+
+**`hud_user_evt` is deliberately untouched.** `transport_hud.sv:288` and `seek_bar.sv:139`
+already take `pause_q` as a visibility **level** (its port comment: *"manual pause (keeps
+the line up)"*), so the pausing press raises the status line with ❚❚ and the timecode and
+holds it for the whole pause, while later step presses re-arm nothing. Adding raw
+`step_edge` would re-arm the ~2.5 s show timer on *every* press of a stepping burst. If
+parity is ever wanted, add a named `step_pause_evt` (the pausing press only), never the raw
+edge — the checker pins this **by rejection**.
+
+⚠ Two accepted, measured residuals: a step press inside the D-pad seek coalesce window
+(~0.4 s) sets `pause_q` and the jump's `jump_ack` then clears it, so the press appears to do
+nothing (correct by priority; do **not** add a `!dpad_pend` term), and the chapter debounce
+assigns `pause_q <= 1'b0` later in the same `always`, so last-write-wins beats the arm on
+the exact cycle a chapter window closes (also correct — a skip resumes).
+
+**Gates: `bench/dvd/run_frame_step.sh --red`** (16 mutations, each caught by the assertion
+that owns it) and **`tools/check_frame_step_wiring.py`**, which reads the arm, its terms and
+**its priority** out of `dvd/emu.sv` — emu has no bench, and a reordering changes no term, no
+port and no expression, so it is invisible to every other gate including a fit. The checker
+also runs from `run_stc_freerun.sh` §6, beside `pickup_hold_tb`.
+⚠ Found while proving those mutations: `pickup_hold_tb` tied `.sched_due(1'b1)`, so
+`frame_due` was always true and deleting `| step_arm` from `ofv_paced` was caught by
+**nothing**. The bench now models `disp_sched` freezing the STC under pause
+(`sched_due = ~pause`), which is exactly why that term exists.
+
 **Hold-frame transitions (2026-07-30, ✅ HW-CONFIRMED, PR fj#148):** the STD mux-lead hold
 (`av_vid_hold` → `pickup_hold`, armed on every title-domain load/seek/jump until the
 audio catches the new STC anchor) now reuses the first three pause holds — pickup
@@ -959,7 +1026,8 @@ deliberately: CEC's real back button is unreachable, so without it a CEC user ha
 a menu level, and GoUp is a harmless no-op where the disc authors no parent.
 
 **DVD-remote additions (2026-09-13, B14..B18).** `Q 15` → Stop; `Z 1A` → Aspect;
-`F5 03` → Chapter Menu; `L 4B` → A-B Repeat (VLC's "loop"); `. 49` → Frame Step. All five
+`F5 03` → Chapter Menu; `L 4B` → A-B Repeat (VLC's "loop"); `. 49` → Frame Step (first
+press pauses — see "Frame step as a pause route" above). All five
 were checked free against the three claimants that own this space — `kbd_map`'s existing
 table, emu's numpad digit block, and the never-bind list below. `kbd_map.joy` and emu's
 `kbd_joy` widened 17 → 22 bits for them, and ⚠ **the FF/REW mask widened with them**
