@@ -252,10 +252,14 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **SELECT DURING A MENU TRANSITION KICKED THE PLAYER BACK TO THE BOOT CHAIN — ONE
+- ✅ **SELECT DURING A MENU TRANSITION KICKED THE PLAYER BACK TO THE BOOT CHAIN — ONE
   BUTTON CARRIED TWO MEANINGS, AND THE WRONG ONE OUTLIVED THE TRANSITION (2026-09-17,
-  branch `fix/select-during-transition`); sim-proven RED/GREEN, 6 regressions each caught
-  by exactly its own assertion, ⏳ HW-confirm pending.** Field report: *"sometimes when
+  PR #103); sim-proven RED/GREEN, 6 regressions each caught by exactly its own
+  assertion, and ✅ HW-CONFIRMED 2026-09-17** (maintainer, build
+  `DVD_selectnoop_20260917_1531.rbf`, SEED 7 first roll, clk_dec 92.34/89.67, 91 % ALM).
+  ⚠ The confirmation is recorded as the maintainer gave it — *"this is hw confirmed"* —
+  without a per-arm breakdown; the arms the test plan asked for are in PR #103 if a later
+  session needs to know which were actually run. Field report: *"sometimes when
   navigating menus, if I hit select during a transition, it will kick me back to the boot
   chain"* — `ULTIMATE_T2`'s Mission Profiles slides and the `Scooby-Doo 2` menu
   transitions, landing on the disc's **first copyright screen**.

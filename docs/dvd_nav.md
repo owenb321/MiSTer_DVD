@@ -3278,7 +3278,7 @@ user's choice back.
 also what the disc itself asks for on that path, since its own `if (g[8] != 1) Goto 5` skips
 the `SetSTN` when the boot chain did not run.
 
-## Select during a menu transition (2026-09-17, `fix/select-during-transition`) — ⏳ HW-confirm pending
+## Select during a menu transition (2026-09-17, PR #103) — ✅ HW-CONFIRMED 2026-09-17
 
 Field report: *"sometimes when navigating menus, if I hit Select during a transition, it
 will kick me back to the boot chain"* — `ULTIMATE_T2`'s Mission Profiles slides and the
