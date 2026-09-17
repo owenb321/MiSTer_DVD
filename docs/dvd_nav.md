@@ -2501,7 +2501,20 @@ bench writes them. ⚠ And no marker byte may be `0x00`, `0x01`, `0xBA`, `0xBB` 
 back as five leaked sibling bytes.
 
 Regression, all byte-identical: `iso_reader_ilvu_tb`, `iso_reader_angle_tb` (TEST
-A–G), `angle_noagli_tb`, `iso_reader_scrub_tb`, `iso_reader_seek_tb`.
+A–G), `angle_noagli_tb`, `iso_reader_scrub_tb`, `iso_reader_seek_tb`, plus
+`run_angle.sh`, `run_title_span.sh`, `run_seamless_audio.sh`, `run_scrub_tiers.sh`
+and `run_mode_realign.sh` all `--red`, and `run_dpad_seek.sh`.
+
+★ **And the confinement is measured rather than argued: every one of the 33
+`iso_reader_*` benches was run against the pre-change reader and against this one,
+and the two sweeps are IDENTICAL except `iso_reader_branch_tb`** — RED on the base
+(`18432 sibling-branch bytes after the scrub`), GREEN here. Seven benches fail in
+that harness on **both** readers and are therefore pre-existing to it
+(`atmos`, `attr`, `menudrain`, `mount`, `real`, `tpsw_boot`, `tpsw` — most want
+fixtures or extra sources their own runners supply; `atmos` and `tpsw_boot` are
+already recorded as pre-existing in CLAUDE.md). A sweep of that shape is worth
+re-running after any reader change: it is the cheapest statement that a delta
+went only where it was meant to.
 ⚠ `iso_reader_angle_tb`'s fixture gained `ilvu_ea` (and `vobu_c_idn`) in the same
 change: without it the angle path silently degrades to the sector walk and the
 shared hop is never exercised on that side — the landing is identical either way,
