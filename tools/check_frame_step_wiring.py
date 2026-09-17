@@ -83,6 +83,12 @@ def assign_of(src, name):
     return m.group(1).strip() if m else None
 
 
+def assign_stmt(src, name):
+    """RHS of a standalone `assign <name> = <expr>;` (the net is declared elsewhere)."""
+    m = re.search(r'\bassign\s+%s\s*=\s*([^;]+);' % re.escape(name), src)
+    return m.group(1).strip() if m else None
+
+
 def connections(src, module):
     """{port: expr} for one module instantiation's named connections."""
     m = re.search(r'\b%s\s+(\w+)\s*\(' % re.escape(module), src)
@@ -375,6 +381,47 @@ def main():
     else:
         exact_terms('mpeg2video .step_req', mv['step_req'], {'step_dec'},
                     'The decoder must receive the one-cycle pulse, not the raw toggle.')
+
+    # =====================================================================
+    # A14. stepping must be able to REFILL the VBUF it consumes
+    # =====================================================================
+    # MEASURED on the rig 2026-09-16: with the audio backpressure frozen ARMED under
+    # pause, stepping got 17 frames and then died with vbuf_fill at 0; with the audio
+    # path out of the way, 35 presses gave 35 steps and vbuf_fill never moved. `pause`
+    # never reaches the vld, so each step consumes a picture out of the VBUF, and the
+    # frozen watchdog stops the shared demux stream from refilling it.
+    aud_rdy = assign_of(src, 'ps_aud_ready') or assign_stmt(src, 'ps_aud_ready')
+    if aud_rdy is None:
+        bad('ps_aud_ready', '`ps_aud_ready` is not assigned in %s -- it is the demux audio '
+                            'backpressure that starves the VBUF a step consumes.' % rel)
+    exact_terms('ps_aud_ready', aud_rdy,
+                {'aud_ring_almost_full', 'aud_bp_armed', 'step_session'},
+                'Without step_session the audio backpressure stays engaged for the whole '
+                'pause (the drain watchdog is deliberately FROZEN there), the shared demux '
+                'byte stream never refills the VBUF, and frame step dies after however many '
+                'pictures happened to be buffered -- MEASURED at 17 on the rig. This is the '
+                'reported "only about 20 frames" defect.')
+    want_inverted('ps_aud_ready', aud_rdy, 'step_session',
+                  'A step session must RELEASE the backpressure. Un-inverted it would '
+                  'engage backpressure only while stepping, which is the defect made '
+                  'permanent.')
+
+    # The set term must be a step_tgl TRANSITION, not step_edge: only step_tgl records a
+    # press the transport block actually accepted, so a press in a menu or during a held
+    # scrub cannot start a session.
+    sess_blk = re.search(r'step_tgl_q <= step_tgl;.{0,400}?end', src)
+    if sess_blk is None:
+        bad('step_session', 'cannot find the step_session block in %s -- it must latch on a '
+                            '`step_tgl` transition and clear on ~pause_aud.' % rel)
+    else:
+        blk = sess_blk.group(0)
+        want_terms('step_session', blk, {'step_tgl', 'step_tgl_q', 'pause_aud'},
+                   'The session latches on a step_tgl TRANSITION (only an ACCEPTED press '
+                   'toggles it -- step_edge would also fire in a menu or during a scrub) '
+                   'and clears on ~pause_aud, which covers every resume in one term.')
+        reject_terms('step_session', blk, {'step_edge'},
+                     'step_edge is the raw press and fires where frame step is illegal; '
+                     'step_tgl only moves for a press the transport block accepted.')
 
     # =====================================================================
     # A13. hud_user_evt stays OUT of this -- pinned BY REJECTION

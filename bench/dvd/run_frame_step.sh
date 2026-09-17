@@ -39,6 +39,9 @@
 #   M10 emu: pause_gov loses pause_q        -> A11
 #   M11 emu: hud_user_evt gains step_edge   -> A13
 #   M12 emu: .step_req(step_tgl) (a LEVEL)  -> A12
+#   N1  emu: step_session dropped           -> A14  (THE 20-FRAME LIMIT)
+#   N2  emu: step_session not inverted      -> A14
+#   N3  emu: session latched from step_edge -> A14
 #   R13 rtl: step_arm cleared only if paused-> pickup_hold_tb 5e
 #   R14 rtl: ofv_paced loses | step_arm     -> pickup_hold_tb 5b
 #   R16 rtl: step_arm cleared on bare pickup_go -> pickup_hold_tb 5b/5c/5d
@@ -182,6 +185,19 @@ mut M11 "$E" "$TMP/M11.sv" "s/^wire hud_user_evt = pause_edge/wire hud_user_evt 
 
 mut M12 "$E" "$TMP/M12.sv" "s/\.step_req          (step_dec),/.step_req          (step_tgl),/" \
     && red_emu "M12 .step_req given a LEVEL" "$TMP/M12.sv" "mpeg2video .step_req"
+
+# N1..N3 -- the VBUF refill seam. MEASURED on the rig 2026-09-16: with the audio
+# backpressure frozen ARMED under pause, stepping got 17 frames and then died with
+# vbuf_fill at 0; with the audio path out of the way, 35 presses gave 35 steps and
+# vbuf_fill never moved. N1 is the shipped v0.6.0 behaviour.
+mut N1 "$E" "$TMP/N1.sv" "s/&& aud_bp_armed && ~step_session);/\&\& aud_bp_armed);/" \
+    && red_emu "N1 step_session dropped (the reported 20-frame limit)" "$TMP/N1.sv" "MEASURED at 17 on the rig"
+
+mut N2 "$E" "$TMP/N2.sv" "s/&& aud_bp_armed && ~step_session);/\&\& aud_bp_armed \&\& step_session);/" \
+    && red_emu "N2 step_session not inverted" "$TMP/N2.sv" "is not INVERTED"
+
+mut N3 "$E" "$TMP/N3.sv" "s/else if (step_tgl ^ step_tgl_q)       step_session <= 1'b1;/else if (step_edge) step_session <= 1'b1;/" \
+    && red_emu "N3 session latched from the raw press" "$TMP/N3.sv" "must NOT contain step_edge"
 
 echo "== RED (resample_addrgen.v: the datapath) =="
 A=dvd/resample_addrgen.v

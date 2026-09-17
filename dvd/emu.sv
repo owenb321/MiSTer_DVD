@@ -3756,7 +3756,62 @@ always @(posedge clk_sys) begin
     // backpressured (everything is frozen anyway), so no audio is lost.
     else if (aud_bp_armed && ~pause_aud) aud_bp_wd <= aud_bp_wd - 25'd1;
 end
-assign ps_aud_ready = ~(aud_ring_almost_full && aud_bp_armed);
+
+// ---- FRAME-STEP SESSION: the display advances while paused ----------------
+// ⚠⚠ The freeze above rests on "everything is frozen anyway", which was TRUE when
+// it was written and has been FALSE since frame step shipped (2026-09-13). Frame
+// step is the first thing that advances the DISPLAY while paused, and `pause`
+// never reaches the vld -- so each press lets the decoder consume one more picture
+// OUT OF THE VBUF, while the frozen watchdog holds `ps_aud_ready` low and the
+// shared demux byte stream cannot refill it. The VBUF becomes a fixed larder.
+//
+// MEASURED on the rig (2026-09-16, HOT_TUB_TIME_MACHINE, telemetry per press):
+//   Audio=On   17 steps, vbuf_fill 84 -> 0, then `pickups` FROZEN for 18 more
+//              presses -- the field report's "about 20 frames".
+//   Audio=Off  35 presses -> 35 steps, vbuf_fill flat at 221..224 throughout.
+// That A/B is the proof: with the audio path out of the way the same GOP structure
+// steps indefinitely. ⛔ It is NOT "it stops at the next I-frame" -- the VBUF
+// reaches zero, and the count moves with buffer depth, not with GOP length.
+//
+// A step session therefore releases the audio backpressure for the rest of the
+// pause: the ring reverts to drop-on-full (its documented fallback, and
+// ac3_reframer keeps every drop whole-frame-aligned, so it is clean silence and
+// not a pop), and video keeps flowing so stepping is unbounded.
+// ★ Audio for the stepped-past frames is DISCARDED, which is what a real player
+// does -- it mutes through a frame step.
+// ⚠ RESUME COSTS A BRIEF TRANSIENT, MEASURED -- and NOT by the mechanism first
+// written here. The guess was "disp_sched re-anchors past its 0.5 s threshold";
+// on the rig `reanchors` NEVER MOVED (held at 1 through 105 steps and two
+// resumes), so the clock does not re-anchor at all. What actually converges is
+// the audio side's own stale-skip/drain gate. MEASURED after 70 steps
+// (~2.3 s of video stepped while both clocks were frozen), resuming with B1:
+//   t+4 s  av_drift 934 ms   <- the transient, ~= the stepped span
+//   t+8 s  av_drift  94 ms   <- back to the normal +100 ms operating point
+//   t+12/16/20 s   99 / 93 / 108 ms, disp_lag -18 ms, 0 lates, 0 drops
+// After a 35-step session the transient peaked at only 120 ms, so it scales with
+// how far you stepped and always converged within a few seconds. Accepted: a
+// frame-step session is a deliberate trick-play gesture, and a real player
+// re-syncs on resume too.
+// ⚠ Keyed on a `step_tgl` TRANSITION, not on step_edge: step_tgl only toggles for
+// a press the transport block actually ACCEPTED as a step, so a press in a menu or
+// during a held scrub cannot start a session.
+// ⚠ Cleared by ~pause_aud, which covers every resume (unpause, scrub release, stop
+// release, a chapter skip or jump clearing pause_q) in one term. It deliberately
+// SURVIVES a stop, because stepping while stopped consumes the VBUF the same way.
+reg step_tgl_q    = 1'b0;
+reg step_session  = 1'b0;
+always @(posedge clk_sys) begin
+    if (~reset_n) begin
+        step_tgl_q   <= 1'b0;
+        step_session <= 1'b0;
+    end else begin
+        step_tgl_q <= step_tgl;
+        if (~pause_aud)                      step_session <= 1'b0;
+        else if (step_tgl ^ step_tgl_q)       step_session <= 1'b1;
+    end
+end
+
+assign ps_aud_ready = ~(aud_ring_almost_full && aud_bp_armed && ~step_session);
 
 // =========================================================================
 // In-fabric audio decode: audio_ring read side -> dvd_audio_decode -> AUDIO_L/R.
