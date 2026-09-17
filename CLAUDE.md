@@ -252,10 +252,11 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **SEEKING INTO A SEAMLESS-BRANCH BLOCK LANDED IN THE OTHER CUT AND STAYED THERE
+- ✅ **SEEKING INTO A SEAMLESS-BRANCH BLOCK LANDED IN THE OTHER CUT AND STAYED THERE
   (2026-09-17, issue #49, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN over the
-  real discs' measured shapes, 6 mutations each failing EXACTLY its own arms, ⏳ HW-confirm
-  pending.** Field report on `ALIEN_VS_PREDATOR_SE_DISC1`: *"just seeking back and forth I
+  real discs' measured shapes, 6 mutations each failing EXACTLY its own arms, and
+  ✅ HW-CONFIRMED 2026-09-17 WITH THE DEFECT REPRODUCED FIRST** (build
+  `DVD_branchseek_20260917_1632.rbf`, SEED 7 first roll, clk_dec 94.77/92.52, 91 % ALM). Field report on `ALIEN_VS_PREDATOR_SE_DISC1`: *"just seeking back and forth I
   can get it in a state where the live timeline reports a couple seconds in when it's really
   much further, and most of the seek targets and live timeline resolutions do not line up at
   all."*
@@ -323,6 +324,40 @@ worse maintenance burden than targeted in-place edits. So:
   ⚠ `iso_reader_angle_tb`'s fixture gained `ilvu_ea` in the same change — without it the
   angle side silently degrades to the sector walk and the shared hop is never exercised;
   the landing is identical either way, so nothing fails and the coverage is simply absent.
+  ✅ **HW-CONFIRMED ON CONTENT, NOT ON THE CLOCK — and the clock is why.** `ULTIMATE_T2`
+  VTS_01, chapter 11 (0:16:34), then the keyboard Fast Fwd key: `dpad_seek` SUMS the
+  `{120,60,30,10}` s rungs of one VOBU's fwda table, so **7 presses = 60+10 is a two-term
+  sum = a mid-stream landing** inside cell 16, while **6 presses = 60 s is a single rung =
+  an authored VOBU of this branch**, the in-script control. Natural playback through the
+  block is correct on every core (fj#112), so it is a per-core REFERENCE: capture a burst
+  of it, then repeat the chapter jump, seek, and compare the landing frames (64×48 grey,
+  HUD band cropped).
+  | target | core | landing vs natural playback | refs matched | clock, landing → +10 s |
+  |---|---|---|---|---|
+  | **+70 s** | v0.6.0 control | **0.655 / 0.757 / 0.799 / 0.794** | 19,16,1,1 scattered | **0:17:59 → 0:17:22, BACK 37 s** |
+  | **+70 s** | fixed | **0.961 / 0.988 / 0.966 / 0.909** | 4,5,6,7 consecutive | 0:17:32 → 0:17:42 |
+  | +50 s | v0.6.0 control | 0.882 / 0.936 / 0.940 / 0.971 | 13,12,13,14 | 0:17:41 → 0:17:51 |
+  | +50 s | fixed | 1.000 / 0.998 / 0.996 / 0.999 | 2,3,4,5 consecutive | 0:17:29 → 0:17:39 |
+  ★ **The burst's own self-similarity is the scale: median ~0.57, p90 ~0.73.** The control's
+  +70 s landing scores AT that floor — its frames are no more like the content playback
+  delivers there than two unrelated frames of the burst are like each other — while the fix
+  matches CONSECUTIVE reference frames, i.e. it landed where playback would be and tracked
+  it. ★★ And the control's clock ran **backward 37 s** during the capture as the sibling's
+  NAV packs took over the readout: the field report's sentence, live.
+  ⚠⚠ **THE CLOCK ALONE COULD NOT SETTLE THIS AND MY FIRST READING OF IT WAS WRONG.** I
+  scored the landings against "start + seconds requested", which the block itself breaks:
+  **cell 16 is 2448 sectors/s against a normal cell's ~600**, so an fwda offset computed
+  outside the block covers ~a quarter of the content time it asks for inside it — which
+  makes the fixed core's clustered landings correct and their clustering a property of the
+  disc. The inflated sectors/s this issue is about, met from the other side.
+  ⚠ **+50 s lands correctly on BOTH cores** (the 15 % case), so a single target proves
+  nothing: the first frame comparison used +50 s and settled nothing. Pick the target the
+  cheap sweep already flagged.
+  ⚠ Unregressed same session: chapter bursts, `SEEK FWD` landings, and **MiB VTS 14's
+  five-angle block** — the path sharing the widened predicate and the new walk (`ANGLE 2/5`,
+  plays through a scrub into the block, still cycles to `ANGLE 3/5` after).
+  ⚠ `ALIEN_VS_PREDATOR_SE_DISC1` is not on the rig and did not fit (2.6 GB free vs 7.26 GB);
+  T2 is the stronger vehicle anyway — 85 % sibling share against AVP's 73 %.
   Golden model: **`tools/nav_extract.py --vts N --ilvu`** now prints, per interleaved cell,
   the branch `vob_idn`, the sibling ids, the wrong-landing percentage and the longest
   sibling run. Detail: **`docs/dvd_nav.md` §2e**.

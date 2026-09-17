@@ -2295,7 +2295,9 @@ scrub-to-target keeps B10/B11 — and it needs its own HW round.
 ### 2e. Seeking inside a seamless-branch block — 🔧 FIXED (2026-09-17, issue #49)
 
 > **Status: sim-proven RED/GREEN over the real discs' measured shapes, six
-> mutations each failing EXACTLY its own arms, ⏳ HW-confirm pending.**
+> mutations each failing EXACTLY its own arms, and ✅ HW-CONFIRMED 2026-09-17
+> AGAINST ITS OWN CONTROL** (build `DVD_branchseek_20260917_1632.rbf`, SEED 7 first
+> roll, clk_dec 94.77/92.52 vs the 86.0 gate, 91 % ALM) — see the HW round below.
 > Field report on `ALIEN_VS_PREDATOR_SE_DISC1` (2026-09-04): *"just seeking back
 > and forth I can get it in a state where the live timeline reports a couple
 > seconds in when it's really much further, and most of the seek targets and live
@@ -2445,6 +2447,71 @@ cell 38 is a **250 s** cell, so clamping to its boundary replaces an 8.8 s error
 with up to 250 s. Do not implement it. (It would also need a cell-category port
 `seek_time` does not have.) The time-based position model (§2f non-goal 1) remains
 the only thing that would improve this, and remains its own change.
+
+#### HW round — ✅ CONFIRMED 2026-09-17, with the defect reproduced first
+
+`ULTIMATE_T2` VTS_01 PGCN 1, `Disc Menus = Off`, `Debug Overlay = On` (so the HUD
+stays up and `CH n/N` confirms the reader is on PGCN 1 / VTS 1). Chapter 11 starts
+at **0:16:34**, 39 s before interleaved cell 16 — the 85 %-sibling one.
+
+The gesture is the keyboard **Fast Fwd** key, which drives `dpad_seek` at +10 s per
+press, coalescing inside ~400 ms. `dpad_seek` decomposes the total greedily over
+this VOBU's `{120,60,30,10}` s rungs and **sums** the offsets, so **7 presses =
+60+10 = a two-term sum**, which is not an authored VOBU address and therefore lands
+mid-stream inside the block — exactly where the snap has to choose a branch.
+(6 presses = 60 s is a *single* rung, i.e. an authored VOBU of this branch: it
+lands correctly on either core, and is the in-script control.)
+
+★★ **THE CLOCK ALONE COULD NOT SETTLE IT, AND THE FIRST READING OF IT WAS WRONG.**
+The HUD clock is `cur_cell_start + c_eltm`, so telling a wrong landing from a right
+one means reasoning about which chain's elapsed time is being reported — and the
+first pass scored it against "landing time = start + seconds requested", which the
+block itself breaks: **cell 16 is 112,617 sectors for 46 s = 2448 sectors/s against
+a normal cell's ~600**, so an `fwda` offset computed outside the block covers about
+a quarter of the content time it asks for once inside it. Under the corrected model
+the fixed core's three landings (0:17:30/0:17:31/0:17:33 for +50/+60/+70 s) are
+right and their *clustering* is a property of the disc, not a symptom. That is the
+inflated sectors/s this whole section is about, met from the other side.
+
+**So the content was measured instead, and it needs no model.** Natural playback
+through the block is correct on every core (PR fj#112), so it is a reference the
+seek landing can be compared against **on the same core**: play chapter 11 → the
+block and capture a burst, then repeat the chapter jump, perform the seek, and
+capture the landing. Frames are compared as 64×48 grayscale correlations with the
+HUD band cropped off.
+
+| target | core | landing frames vs natural playback | which reference frames | HUD clock, landing → +10 s |
+|---|---|---|---|---|
+| **+70 s** | v0.6.0 (control) | **0.655 / 0.757 / 0.799 / 0.794** | 19, 16, 1, 1 — scattered | **0:17:59 → 0:17:22, BACKWARD 37 s** |
+| **+70 s** | fixed | **0.961 / 0.988 / 0.966 / 0.909** | 4, 5, 6, 7 — consecutive | 0:17:32 → 0:17:42 |
+| +50 s | v0.6.0 (control) | 0.882 / 0.936 / 0.940 / 0.971 | 13, 12, 13, 14 | 0:17:41 → 0:17:51 |
+| +50 s | fixed | 1.000 / 0.998 / 0.996 / 0.999 | 2, 3, 4, 5 — consecutive | 0:17:29 → 0:17:39 |
+
+★ **The scale to read those against is the burst's own self-similarity: median
+~0.57, p90 ~0.73 on every run.** The control's +70 s landing scores **at that
+floor** — its frames are no more like the content natural playback delivers there
+than two unrelated frames of the burst are like each other. The fixed core's match
+**consecutive** reference frames in order, i.e. it landed where playback would be
+and then tracked it frame for frame.
+
+★★ **And the control's clock went BACKWARD 37 s during the capture** — 0:17:59 at
+the landing, 0:17:22 ten seconds later, as the sibling's NAV packs took over the
+readout. That is the field report's sentence happening live.
+
+⚠ **+50 s lands correctly on BOTH cores**, which is the 15 % case and is why a
+single target proves nothing: the first frame comparison was run on +50 s, came
+back 0.88–0.97 for the control, and settled nothing. The target that discriminates
+is the one the clock sweep had already flagged as anomalous.
+
+**Unregressed in the same session, on the fixed core:** chapter bursts (20 back,
+10 forward, six times), `SEEK FWD 0:10` landings, and **MEN_IN_BLACK VTS 14's
+five-angle block** — which is the path that shares the widened predicate and the
+new ILVU-granular walk: it reports `ANGLE 2/5`, keeps playing through a scrub into
+the block, and still cycles (`ANGLE 3/5`) afterwards.
+
+⚠ `ALIEN_VS_PREDATOR_SE_DISC1` — the reported disc — is **not** on the rig and did
+not fit (2.6 GB free against a 7.26 GB image). T2 is the stronger vehicle anyway:
+85 % sibling share against AVP's 73 %.
 
 #### Gate — `bench/dvd/run_branch_seek.sh [--red]`
 
