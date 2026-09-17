@@ -307,6 +307,11 @@ It steps the same way from a pause you started with **B1**, and while the disc i
 The first press only pauses — it does not also advance — so the frame you stop on is the one
 that was on screen.
 
+You can step as far into the film as you like. Audio is muted throughout, and the sound for
+the frames you stepped past is discarded — so after a long step session, pressing **Play**
+can leave picture and sound a little out of step for a few seconds before they settle. That
+is the same thing a set-top player does when you come out of frame-by-frame.
+
 It is forward-only: the decoder works in groups of frames, so there is no way to step
 backwards without re-decoding, which is a different feature.
 

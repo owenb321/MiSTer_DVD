@@ -383,7 +383,57 @@ nothing (correct by priority; do **not** add a `!dpad_pend` term), and the chapt
 assigns `pause_q <= 1'b0` later in the same `always`, so last-write-wins beats the arm on
 the exact cycle a chapter window closes (also correct — a skip resumes).
 
-**Gates: `bench/dvd/run_frame_step.sh --red`** (16 mutations, each caught by the assertion
+★★ **AND STEPPING COULD ONLY REACH AS FAR AS THE VBUF — ~17 FRAMES (2026-09-16, same
+branch, PRE-EXISTING on v0.6.0).** Field report: *"only about 20 frames can be advanced
+before it stops updating on subsequent button presses"*, with the guess that it stops at
+the next I-frame. It does not — it stops when the VBUF reaches zero.
+★ **MEASURED on the rig, telemetry per press** (HOT_TUB_TIME_MACHINE, `pickups` is the
+instrument: one successful step is exactly one pickup):
+
+| arm | steps taken | `vbuf_fill` |
+|---|---|---|
+| `Audio=On` (as reported) | **17**, then `pickups` FROZEN for 18 more presses | 84 → **0** |
+| `Audio=Off` (control) | **35 presses → 35 steps** | flat **221–224** |
+
+★★ **That A/B is the proof, and it refutes the I-frame theory twice:** the VBUF reaches
+zero, and with the audio path out of the way the SAME GOP structure steps indefinitely.
+The count moves with buffer depth, not with GOP length.
+**The chain, all pre-existing:** pause holds the audio decoder (`aud_ce_play &= ~pause`) so
+there is no `aud_frame_pop` → the 32 KB ring fills in ~0.6 s → `aud_bp_wd` is **deliberately
+FROZEN** while `pause_aud` so it stays armed → `ps_aud_ready = ~(almost_full && armed)` is 0
+for the whole pause → `ps_demux` carries **ONE byte stream**, so it stalls on the first
+audio PES and no more VIDEO reaches the VBUF (`fifo_almost_full` then parks the reader too)
+→ and **`pause` never reaches the vld** (0 references in `vld.v`), so each press lets the
+decoder consume one more picture OUT OF the VBUF. A fixed larder.
+⚠⚠ **THE FREEZE'S OWN COMMENT SAYS WHY IT LOOKED SAFE:** *"Holding it armed keeps the demux
+backpressured (everything is frozen anyway), so no audio is lost."* That was TRUE when it
+was written. **Frame step is the first thing that advances the DISPLAY while paused**, and
+it consumes the one buffer the freeze stops refilling — the same stale-premise class as
+`docs/mpeg1.md` §B.3's "now closed".
+**Fix:** a step SESSION (`step_session`) releases the audio backpressure for the rest of
+the pause. The ring reverts to drop-on-full — its documented fallback, and `ac3_reframer`
+keeps every drop whole-frame-aligned, so it is clean silence rather than a pop — and video
+keeps flowing, so stepping is unbounded.
+⚠ Keyed on a **`step_tgl` TRANSITION, not `step_edge`**: `step_tgl` only moves for a press
+the transport block actually ACCEPTED, so a press in a menu or during a held scrub cannot
+start a session. Cleared by `~pause_aud`, which covers every resume in one term and
+deliberately keeps the session alive across a STOP (stepping while stopped consumes the
+VBUF the same way).
+⚠⚠ **RESUME COSTS A BRIEF TRANSIENT, AND NOT BY THE MECHANISM FIRST WRITTEN DOWN.** The
+prediction was "`disp_sched` re-anchors past its 0.5 s threshold"; on the rig **`reanchors`
+NEVER MOVED** (held at 1 through 105 steps and two resumes), so the clock does not re-anchor
+at all and the audio side's own stale-skip is what converges. MEASURED after 70 steps
+(~2.3 s of video stepped while both clocks were frozen), resuming with B1: `av_drift`
+**934 ms at t+4 s → 94 ms at t+8 s**, then 99 / 93 / 108, `disp_lag` −18 ms, 0 lates,
+0 drops. A 35-step session peaked at only **120 ms**, so the transient scales with how far
+you stepped and converged within seconds either way. Accepted — a step session is a
+deliberate trick-play gesture and a real player re-syncs on resume too.
+✅ **FIX HW-CONFIRMED against its own control**, same disc and same script (build
+`DVD_framestep2_20260917_0210.rbf`, SEED 7, clk_dec 92.19/88.52): **35 presses → 35 steps
+with `Audio=On`**, `vbuf_fill` 89 → 218 on the FIRST step and 216–224 throughout, then
+**70 more steps with vbuf still 221**.
+
+**Gates: `bench/dvd/run_frame_step.sh --red`** (19 mutations, each caught by the assertion
 that owns it) and **`tools/check_frame_step_wiring.py`**, which reads the arm, its terms and
 **its priority** out of `dvd/emu.sv` — emu has no bench, and a reordering changes no term, no
 port and no expression, so it is invisible to every other gate including a fit. The checker

@@ -3555,8 +3555,47 @@ worse maintenance burden than targeted in-place edits. So:
   And `stop_ctl_tb` **had no runner at all**; it is an arm of `run_frame_step.sh` now.
   New arm **5e**: a step press while LIVE must cost exactly one pickup (not two) and leave
   `step_arm` clear — the executable form of the CDC argument above.
-  Gates: **`bench/dvd/run_frame_step.sh --red`**, `tools/check_frame_step_wiring.py` (also
-  run from `run_stc_freerun.sh` §6). Detail: `docs/dvd_nav.md` "Frame step as a pause route".
+  ★★★ **AND A SECOND, PRE-EXISTING DEFECT ON v0.6.0 FOUND BY THE SAME REPORT: STEPPING
+  COULD ONLY REACH AS FAR AS THE VBUF — ~17 FRAMES, ✅ FIXED AND HW-CONFIRMED 2026-09-16**
+  (build `DVD_framestep2_20260917_0210.rbf`, SEED 7, clk_dec 92.19/88.52). Field report:
+  *"only about 20 frames can be advanced before it stops updating"*, guessed to be "maybe it
+  stops when it hits a new i-frame". ⛔ **It is NOT the I-frame — it stops when the VBUF
+  reaches ZERO**, and the measurement refutes the GOP theory twice over.
+  ★ **MEASURED on the rig, telemetry per press** (`pickups` is the instrument: one
+  successful step is exactly one pickup):
+  | arm | steps | `vbuf_fill` |
+  |---|---|---|
+  | `Audio=On` (as reported) | **17**, then FROZEN for 18 more presses | 84 → **0** |
+  | `Audio=Off` (control) | **35 presses → 35 steps** | flat **221–224** |
+  With the audio path out of the way the SAME GOP structure steps indefinitely, so GOP
+  length is not what bounds it; the count moves with BUFFER DEPTH.
+  **The chain, all pre-existing:** pause holds the audio decoder (no `aud_frame_pop`) → the
+  32 KB ring fills in ~0.6 s → **`aud_bp_wd` is deliberately FROZEN while paused** so it
+  stays armed → `ps_aud_ready` is 0 for the whole pause → `ps_demux` carries **ONE byte
+  stream**, so it stalls on the first audio PES and no more VIDEO reaches the VBUF → and
+  **`pause` never reaches the vld** (0 references in `vld.v`), so each press eats one more
+  picture OUT OF the VBUF. A fixed larder.
+  ⚠⚠ **THE FREEZE'S OWN COMMENT IS THE STALE PREMISE:** *"Holding it armed keeps the demux
+  backpressured (everything is frozen anyway), so no audio is lost."* True when written —
+  **frame step is the first thing that advances the DISPLAY while paused.** Same class as
+  `docs/mpeg1.md` §B.3's "now closed".
+  **Fix:** `step_session` releases the audio backpressure for the rest of the pause; the
+  ring reverts to drop-on-full (`ac3_reframer` keeps drops whole-frame-aligned = clean
+  silence, not a pop) and video keeps flowing. ⚠ Keyed on a **`step_tgl` TRANSITION, not
+  `step_edge`** — only an ACCEPTED press toggles it, so a press in a menu or during a held
+  scrub cannot start a session; cleared by `~pause_aud`, which covers every resume in one
+  term and keeps the session alive across a STOP.
+  ⚠⚠ **RESUME COSTS A TRANSIENT, AND MY STATED MECHANISM WAS WRONG — the measurement is
+  what corrected it.** I predicted `disp_sched` would re-anchor past its 0.5 s threshold; on
+  the rig **`reanchors` NEVER MOVED** (1 through 105 steps and two resumes), so the audio
+  side's stale-skip is what converges. MEASURED after 70 steps: `av_drift` **934 ms at
+  t+4 s → 94 ms at t+8 s**, then 99/93/108, `disp_lag` −18 ms, 0 lates, 0 drops; a 35-step
+  session peaked at **120 ms**. Scales with how far you stepped, converges in seconds.
+  ✅ **Fix arm against its own control, same disc and script: 35 presses → 35 steps with
+  `Audio=On`**, `vbuf_fill` 89 → 218 on the FIRST step and 216–224 throughout, then 70 more
+  steps with vbuf still 221.
+  Gates: **`bench/dvd/run_frame_step.sh --red`** (19 mutations), `tools/check_frame_step_wiring.py`
+  (also run from `run_stc_freerun.sh` §6). Detail: `docs/dvd_nav.md` "Frame step as a pause route".
   ⛔ **Eject and Volume are NOT here, deliberately.** Both need a core→Main request
   channel that does not exist (the `CMD_AF` payload word has free bits 3-14); a named
   button that does nothing is worse than a missing one. ★★ **And volume must NOT be a
