@@ -3585,12 +3585,40 @@ worse maintenance burden than targeted in-place edits. So:
   `step_edge`** — only an ACCEPTED press toggles it, so a press in a menu or during a held
   scrub cannot start a session; cleared by `~pause_aud`, which covers every resume in one
   term and keeps the session alive across a STOP.
-  ⚠⚠ **RESUME COSTS A TRANSIENT, AND MY STATED MECHANISM WAS WRONG — the measurement is
-  what corrected it.** I predicted `disp_sched` would re-anchor past its 0.5 s threshold; on
-  the rig **`reanchors` NEVER MOVED** (1 through 105 steps and two resumes), so the audio
-  side's stale-skip is what converges. MEASURED after 70 steps: `av_drift` **934 ms at
-  t+4 s → 94 ms at t+8 s**, then 99/93/108, `disp_lag` −18 ms, 0 lates, 0 drops; a 35-step
-  session peaked at **120 ms**. Scales with how far you stepped, converges in seconds.
+  ★★★ **AND UNBOUNDED STEPPING EXPOSED A THIRD DEFECT — THE CLOCK DID NOT FOLLOW THE STEP
+  (2026-09-16, `dvd/disp_sched.sv`); ✅ HW-CONFIRMED against its own control.** Field report:
+  *"doing a big run of frame steps and then resuming causes a/v to go out of sync with audio
+  playing early."* ★ The buffer fix above is what made it REACHABLE, not its cause: at ~17
+  steps the clock could fall only ~0.6 s behind.
+  `disp_sched`'s clock is `if (tick && anchored && video_live && !pause) stc <= stc + 1`, so
+  it is frozen while paused — but a step advances the DISPLAY, so the clock falls **one
+  picture behind per press**. `av_drift` is *dispatched audio PTS − STC*, so a clock left
+  behind reads as **audio EARLY**: the reported symptom.
+  ⚠⚠ **NOTHING UPSTAIRS CATCHES IT:** `disc_w` compares the tagged picture against the
+  **EXTRAPOLATED `next_pts`**, and a step session is perfectly continuous content, so no
+  re-anchor leg trips — the discontinuity is in the CLOCK, which `disc_w` was not built to
+  see. MEASURED: `reanchors` stayed at **1** through ~300 steps with `disp_lag` at **5 s**.
+  **Fix = `if (pause) stc <= want_pts;`** — the STC is the PRESENTATION clock and a step
+  PRESENTS a picture. ★ A pickup while paused IS a frame step by construction (the tick is
+  frozen by `pause`; `ofv_pickup` is gated on `~pause || step_arm`), so no new port.
+  **Gate: `disp_sched_tb` [11b] + `run_disp_sched.sh` M13**, scoring the scenario's TRUE PTS
+  against the clock at each stepped pickup. ★ The bound is **one picture, not zero** — the
+  sample uses the pre-update clock, so following reads the previous picture's duration and
+  STAYS, while not following grows: **20 steps 75,075 ticks / 30 steps 112,613 vs 4,507
+  fixed**, and the scaling with press count IS the signature.
+  ⚠⚠ **TWO BENCH LESSONS, BOTH MINE:** [11b]'s first cut reused `report()`'s PACED tolerance
+  (752) and FAILED with the fix in — a stepped clock advances in picture-sized jumps by
+  design, so I nearly read a correct fix as broken; and it issued 30 presses of which only 20
+  landed (a press during the raster's field-busy window is not consumed), so it now drives
+  until 30 steps have BEEN TAKEN.
+  ✅ **HW-CONFIRMED, control vs fix, same disc and script (205 steps then resume):**
+  `disp_lag` **−23 ms immediately and constant** where the control held **5057 ms for ~15 s**;
+  `av_drift` **57 ms at t+3 s** where the control swung **−5478…+3174 ms**. No transient.
+  ⚠ Timing cost: clk_dec 92.19/88.52 → **89.71/87.54** (gate 86.0) — passing on SEED 7 first
+  roll but the thinnest build of the branch; sweep the seed if a later change lands near it.
+  ⛔ **MY EARLIER "accepted residual, converges in seconds" WAS WRONG AND IS RETRACTED.** It
+  was measured at 70 steps (934 ms → 94 ms by t+8 s) and stated as general; at ~300 steps it
+  is 5 s of lag for ~15 s. A transient measured at one scale is not a bound.
   ✅ **Fix arm against its own control, same disc and script: 35 presses → 35 steps with
   `Audio=On`**, `vbuf_fill` 89 → 218 on the FIRST step and 216–224 throughout, then 70 more
   steps with vbuf still 221.

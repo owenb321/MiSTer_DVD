@@ -3779,19 +3779,14 @@ end
 // not a pop), and video keeps flowing so stepping is unbounded.
 // ★ Audio for the stepped-past frames is DISCARDED, which is what a real player
 // does -- it mutes through a frame step.
-// ⚠ RESUME COSTS A BRIEF TRANSIENT, MEASURED -- and NOT by the mechanism first
-// written here. The guess was "disp_sched re-anchors past its 0.5 s threshold";
-// on the rig `reanchors` NEVER MOVED (held at 1 through 105 steps and two
-// resumes), so the clock does not re-anchor at all. What actually converges is
-// the audio side's own stale-skip/drain gate. MEASURED after 70 steps
-// (~2.3 s of video stepped while both clocks were frozen), resuming with B1:
-//   t+4 s  av_drift 934 ms   <- the transient, ~= the stepped span
-//   t+8 s  av_drift  94 ms   <- back to the normal +100 ms operating point
-//   t+12/16/20 s   99 / 93 / 108 ms, disp_lag -18 ms, 0 lates, 0 drops
-// After a 35-step session the transient peaked at only 120 ms, so it scales with
-// how far you stepped and always converged within a few seconds. Accepted: a
-// frame-step session is a deliberate trick-play gesture, and a real player
-// re-syncs on resume too.
+// ⚠ RESUME USED TO COST A TRANSIENT AND NO LONGER DOES -- see dvd/disp_sched.sv's
+// "FRAME STEP CARRIES THE CLOCK". Releasing the backpressure here is what made
+// stepping unbounded, and unbounded stepping then exposed a SECOND defect: the
+// presentation clock was frozen by `pause` while the display advanced, so it fell
+// one picture behind PER PRESS. MEASURED before that fix (~300 steps, resume):
+// disp_lag 5057 ms held ~15 s, av_drift swinging -5478..+3174 ms; after it,
+// disp_lag -23 ms immediately and av_drift 57 ms at t+3 s, on the same disc and
+// script. Both fixes are needed: this one for the buffer, that one for the clock.
 // ⚠ Keyed on a `step_tgl` TRANSITION, not on step_edge: step_tgl only toggles for
 // a press the transport block actually ACCEPTED as a step, so a press in a menu or
 // during a held scrub cannot start a session.
