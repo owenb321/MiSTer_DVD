@@ -141,14 +141,23 @@ rm -f "$OUT"
 # Zip the staging tree's CONTENTS with python3 (portable; no `zip` needed) while
 # preserving the executable bit on the installer script.
 python3 - "$STAGE" "$OUT" <<'PY'
-import os, sys, zipfile
+import os, sys, time, zipfile
 stage, out = sys.argv[1], sys.argv[2]
+# ZipInfo() with no date_time defaults to the ZIP format's own epoch, so every
+# file in every release up to v0.5.0 extracted stamped 1980-01-01 00:00. Stamp
+# them with one timestamp taken now instead, so an extracted tree carries the
+# date the release was packaged and a user can tell which copy is newer.
+#   NOTE this makes the zip non-reproducible: the same inputs packaged twice now
+#   differ by their timestamps and so by hash. Nothing depends on that -- the
+#   .rbf inside changes every release anyway, and theypsilon's downloader db is
+#   regenerated per release against the actual hash.
+now = time.localtime()[:6]
 with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
     for root, _, files in os.walk(stage):
         for f in sorted(files):
             full = os.path.join(root, f)
             arc  = os.path.relpath(full, stage)
-            zi = zipfile.ZipInfo(arc)
+            zi = zipfile.ZipInfo(arc, date_time=now)
             zi.external_attr = (os.stat(full).st_mode & 0xFFFF) << 16
             zi.compress_type = zipfile.ZIP_DEFLATED
             with open(full, "rb") as fh:

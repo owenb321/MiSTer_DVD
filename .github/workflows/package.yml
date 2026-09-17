@@ -243,32 +243,37 @@ jobs:
           set -euo pipefail
           zip=$(ls -t releases/MiSTer_DVD_*.zip | head -1)
           # --clobber makes re-runs idempotent. The .rbf and its manifest are
-          # already on the release (the maintainer uploaded them); these are the
-          # two this workflow owns.
+          # already on the release (the maintainer uploaded them); these three
+          # are the ones this workflow owns.
           #
-          # ONLY the zip and dvd_report.py. The rule: an asset ships standalone
-          # when something OUTSIDE the zip names it, because then a user is being
-          # told to go and get that exact file.
+          # The rule: an asset ships standalone when a user can need that exact
+          # file on its own, without re-doing a whole install.
           #   * the .rbf  -- MiSTer's core browser and update scripts parse
           #     DVD_YYYYMMDD.rbf out of the filename (uploaded by publish_draft).
+          #   * MiSTer_DVDcss -- the core and the Main are flashed SEPARATELY and
+          #     move at different rates, so someone who already has an install
+          #     may need only this one. It is also what the published-check below
+          #     has always required; the two used to disagree, and the binary was
+          #     being attached by hand after the fact (2026-09-16, by decision).
           #   * dvd_report.py -- MiSTer_DVDcss shells out to it, and when it is
           #     absent the Main puts "Support bundle needs dvd_report.py in
           #     /media/fat/Scripts/" on screen. That message is an instruction to
           #     fetch this one file; the releases page has to be able to serve it.
-          # MiSTer_DVDcss and the two Scripts are NOT uploaded loose: they are
-          # only meaningful as part of an install, they are all inside the zip,
-          # and shipping them a la carte lets someone assemble a combination
-          # nobody tested. theypsilon's MultiDatabases/mister-dvd downloader db
-          # (what mister-companion installs through) consumes the ZIP by URL and
-          # selectively extracts members from it -- it references no loose asset.
+          # The two Scripts stay zip-only: nothing outside the zip names them.
+          # ⚠ The ZIP remains the supported install, and it is what theypsilon's
+          # MultiDatabases/mister-dvd downloader db (what mister-companion
+          # installs through) consumes -- by URL, hash and size, selectively
+          # extracting members. No loose asset is referenced downstream; they are
+          # there for people updating an existing install by hand.
           gh release upload "$TAG" --clobber \
             "$zip" \
+            main/.build/MiSTer_DVDcss \
             tools/dvd_report.py
           {
             echo ""
             echo "### Packaged"
             echo ""
-            echo "Attached \`$(basename "$zip")\` + \`dvd_report.py\` to **$TAG**."
+            echo "Attached \`$(basename "$zip")\` + \`MiSTer_DVDcss\` + \`dvd_report.py\` to **$TAG**."
             echo ""
             echo "Next: download, flash, smoke-test, then publish with"
             echo '```'
@@ -294,6 +299,7 @@ jobs:
           echo "$names" | grep -q '^MiSTer_DVD_.*\.zip$'  || missing="$missing install-zip"
           echo "$names" | grep -q '^DVD_[0-9]\{8\}\.rbf$' || missing="$missing core-rbf"
           echo "$names" | grep -q '^MiSTer_DVDcss$'       || missing="$missing MiSTer_DVDcss"
+          echo "$names" | grep -q '^dvd_report.py$'       || missing="$missing dvd_report.py"
           if [ -n "$missing" ]; then
             echo "::error::Release $TAG is missing:$missing. It was published without being packaged — run: gh workflow run package.yml -f tag=$TAG (assets can still be added to a published release)."
             exit 1

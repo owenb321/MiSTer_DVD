@@ -148,25 +148,34 @@ publishing releases". The invariant still holds mechanically: `build_release.sh`
 a bare semver on a dev build, so the first build on the next branch fails fast with a
 message naming the fix, rather than shipping a build that advertises a released version.
 
-## Release assets (attach all three)
+## Release assets (attach all four)
 
 | Asset | For |
 |---|---|
 | `MiSTer_DVD_v<semver>.zip` | Complete install — extracts to SD root, drops the installer into the Scripts menu |
 | `DVD_YYYYMMDD.rbf` | Core only — ISO-only users (physical disc is opt-in); most people want just this |
+| `MiSTer_DVDcss` | The custom Main on its own — for updating an existing install (also in the zip, at its root) |
 | `dvd_report.py` | Repro-bundle collector (also inside the zip's `Scripts/`) |
 
-**The rule for what ships loose: an asset is attached separately only when something
-OUTSIDE the zip names it**, because then a user is being told to go and fetch that exact
-file. Two qualify — the `.rbf` (MiSTer's core browser and update scripts parse
-`DVD_YYYYMMDD.rbf` out of the filename) and `dvd_report.py` (the Main shells out to it and
-puts *"Support bundle needs dvd_report.py in /media/fat/Scripts/"* on screen when it is
-absent; a third-party updater may install the core and Main without any `Scripts/`).
+**The rule for what ships loose: an asset is attached separately when a user can need that
+exact file on its own, without redoing a whole install.** Three qualify — the `.rbf`
+(MiSTer's core browser and update scripts parse `DVD_YYYYMMDD.rbf` out of the filename),
+`MiSTer_DVDcss` (the core and the Main are flashed separately and move at different rates,
+so an existing install often needs only one of them), and `dvd_report.py` (the Main shells
+out to it and puts *"Support bundle needs dvd_report.py in /media/fat/Scripts/"* on screen
+when it is absent; a third-party updater may install the core and Main without any
+`Scripts/`).
 
-`MiSTer_DVDcss`, `install_dvdcss.sh` and `set_dvd_region.sh` are inside the zip and are
-NOT attached loose. They are only meaningful as part of an install, and shipping them a la
-carte lets someone assemble a combination nobody tested — which is how the Main once
-shipped without the script it shells out to. ⚠ Do not "helpfully" re-add them.
+`install_dvdcss.sh` and `set_dvd_region.sh` stay zip-only: nothing outside the zip names
+them, and they are only meaningful as part of an install.
+
+⚠ **`MiSTer_DVDcss` used to be zip-only and the workflow's own `published-check` required
+it anyway** — so every release failed that check, or had the binary attached by hand
+afterwards. Corrected 2026-09-16 by decision: the upload step and the check now name the
+same set. If you change what ships, change BOTH, in `.github/workflows/package.yml`.
+The old argument for withholding it — that shipping parts a la carte lets someone assemble
+a combination nobody tested — is still worth respecting: **the zip is the supported
+install**, and the loose binary is for updating one.
 
 ★ **Nothing downstream consumes a loose asset.** theypsilon's `MultiDatabases/mister-dvd`
 downloader database — which `Anime0t4ku/mister-companion` installs through — pins the ZIP
