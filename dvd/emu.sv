@@ -6312,6 +6312,7 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .frame_tick     (av_refresh_tick),
     .vis            (logo_vis),
     .entropy        (entropy_ctr),
+    .nudge          (angle_edge && !media_seen),
     .ioctl_download (ioctl_download),
     .ioctl_wr       (ioctl_wr),
     .ioctl_addr     (ioctl_addr),

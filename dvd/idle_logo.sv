@@ -94,6 +94,11 @@ module idle_logo #(
     input  wire        frame_tick,        // av_refresh_tick (one per v_sync)
     input  wire        vis,               // emu's logo_vis gate
     input  wire [31:0] entropy,           // emu's entropy_ctr (free-running)
+    // Re-roll the bounce trajectory. One-cycle pulse, driven from the Angle button
+    // while nothing is mounted (emu: angle_edge && !media_seen), where all three of
+    // that edge's real consumers are inert. Latched into nudge_pend because this
+    // module only does work on a frame tick.
+    input  wire        nudge,
 
     // user bitmap delivery (boot.rom -> ioctl, index 0)
     input  wire        ioctl_download,
@@ -283,6 +288,56 @@ wire hit_y1 = ~vyn && (pyq + {12'd0, spy} >= {y_hi, 4'd0});
 wire hit_x  = hit_x0 | hit_x1;
 wire hit_y  = hit_y0 | hit_y1;
 
+// ---------------------------------------------------------------------------
+// Bounce re-roll on request (`nudge`), and the corner it can be aimed at.
+//
+// A true corner hit already flashed the logo white for 45 ticks (`corner_tmr`
+// below), but hit_x && hit_y needs both axes to reach a wall on the SAME tick
+// while the speeds re-roll from entropy after every bounce, so in practice it
+// never happens. Four nudges arm a rig that converts the next NEAR-MISS bounce
+// into one.
+//
+// ⚠ The near-miss gate is the whole difference between this and a teleport.
+// Snapping an axis from anywhere costs up to a full window of visible jump;
+// snapping only from within NEAR of the wall, on the tick the other axis is
+// bouncing off it, reads as the logo lunging into the corner. arm_tmr drops the
+// requirement after ~8.5 s so the payoff arrives rather than merely being likely.
+//
+// ⚠ One-shot (`egg_done`): a rig that can be re-triggered makes corners common,
+// which is the opposite of the point.
+localparam [11:0] NEAR = 12'd64;
+
+reg  [1:0] egg_n;        // nudges seen, saturating
+reg        corner_arm;   // armed, waiting for a bounce to convert
+reg        egg_done;     // fired once; never re-arms
+reg  [8:0] arm_tmr;      // patience before the near-miss requirement is dropped
+reg        nudge_pend;   // a press waiting for the next frame tick
+
+wire [11:0] x_lo_d = px;
+wire [11:0] x_hi_d = (x_hi > px) ? x_hi - px : 12'd0;
+wire        x_lo_n = (x_lo_d <= x_hi_d);          // nearer the left wall
+wire        x_near = (x_lo_n ? x_lo_d : x_hi_d) <= NEAR;
+wire [11:0] y_lo_d = py;
+wire [11:0] y_hi_d = (y_hi > py) ? y_hi - py : 12'd0;
+wire        y_lo_n = (y_lo_d <= y_hi_d);          // nearer the top wall
+wire        y_near = (y_lo_n ? y_lo_d : y_hi_d) <= NEAR;
+
+// `vis`: the motion FSM free-runs whether or not the logo is on screen, so
+// without this the payoff could be spent where nobody can see it.
+wire egg_live  = corner_arm && vis;
+wire assist_y  = egg_live && hit_x && !hit_y && (y_near || arm_tmr == 9'd0);
+wire assist_x  = egg_live && hit_y && !hit_x && (x_near || arm_tmr == 9'd0);
+wire corner_now = (hit_x && hit_y) || assist_y || assist_x;
+
+// A nudge is a one-cycle pulse and this module only acts on frame ticks, so the
+// press is held until the next one. ⚠ The set arm outranks the clear, so a press
+// landing exactly on a tick is honoured on the following tick, not dropped.
+always @(posedge clk or negedge rst_n) begin
+    if (!rst_n)                   nudge_pend <= 1'b0;
+    else if (nudge && !egg_done)  nudge_pend <= 1'b1;
+    else if (tick)                nudge_pend <= 1'b0;
+end
+
 always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         pxq <= {12'd100, 4'd0};        // safe for any logo on a full-width window
@@ -296,15 +351,26 @@ always @(posedge clk or negedge rst_n) begin
         spx <= SPX_DEF; spy <= SPY_DEF;
         cidx <= 3'd0;
         corner_tmr <= 6'd0;
+        egg_n <= 2'd0; corner_arm <= 1'b0; egg_done <= 1'b0; arm_tmr <= 9'd0;
         cur_r <= 8'hFF; cur_g <= 8'h3B; cur_b <= 8'h30;
     end else if (tick) begin
         // X axis
         if (hit_x0)      begin pxq <= 16'd0;         vxn <= 1'b0; end
         else if (hit_x1) begin pxq <= {x_hi, 4'd0};  vxn <= 1'b1; end
+        else if (assist_x) begin
+            // convert a near-miss into a wall: same shape as the two arms above
+            // (snap to the wall, point away from it), toward whichever is nearer.
+            if (x_lo_n) begin pxq <= 16'd0;        vxn <= 1'b0; end
+            else        begin pxq <= {x_hi, 4'd0}; vxn <= 1'b1; end
+        end
         else             pxq <= vxn ? pxq - {12'd0, spx} : pxq + {12'd0, spx};
         // Y axis
         if (hit_y0)      begin pyq <= 16'd0;         vyn <= 1'b0; end
         else if (hit_y1) begin pyq <= {y_hi, 4'd0};  vyn <= 1'b1; end
+        else if (assist_y) begin
+            if (y_lo_n) begin pyq <= 16'd0;        vyn <= 1'b0; end
+            else        begin pyq <= {y_hi, 4'd0}; vyn <= 1'b1; end
+        end
         else             pyq <= vyn ? pyq - {12'd0, spy} : pyq + {12'd0, spy};
 
         // bounce bookkeeping: speed re-roll (skip when the user pinned the
@@ -312,11 +378,35 @@ always @(posedge clk or negedge rst_n) begin
         if (hit_x && !spd_user) spx <= 4'd12 + {2'd0, entropy[1:0]};
         if (hit_y && !spd_user) spy <= 4'd8  + {2'd0, entropy[3:2]};
         if (hit_x || hit_y) cidx <= cidx + 3'd3;
-        if (hit_x && hit_y) corner_tmr <= 6'd45;     // ~0.75 s white flash
+
+        if (corner_arm && arm_tmr != 9'd0) arm_tmr <= arm_tmr - 9'd1;
+
+        // A requested re-roll. Placed AFTER the bounce bookkeeping on purpose: it
+        // must override spd_user, because a pinned speed suppresses the re-roll a
+        // BOUNCE does, and an explicit press is not a bounce. ⚠ Neither range may
+        // reach 0 -- hit_x0 is `vxn && (pxq <= spx)`, so a zero step pins that axis
+        // against the wall for ever. They start at 8 and 5.
+        if (nudge_pend && !egg_done) begin
+            if (egg_n == 2'd3) begin
+                corner_arm <= 1'b1;
+                arm_tmr    <= 9'd511;
+            end else begin
+                egg_n <= egg_n + 2'd1;
+                spx   <= 4'd8 + {1'b0, entropy[2:0]};   // 8..15, wider than a bounce
+                spy   <= 4'd5 + {1'b0, entropy[5:3]};   // 5..12
+                cidx  <= cidx + 3'd3;                   // visible acknowledgement
+            end
+        end
+
+        if (corner_now) begin
+            corner_tmr <= 6'd45;                 // ~0.75 s white flash
+            corner_arm <= 1'b0;
+            egg_done   <= 1'b1;
+        end
         else if (corner_tmr != 6'd0) corner_tmr <= corner_tmr - 6'd1;
 
         // colour resolve (event rate, never per pixel)
-        if (corner_tmr != 6'd0 || (hit_x && hit_y))
+        if (corner_tmr != 6'd0 || corner_now)
             {cur_r, cur_g, cur_b} <= 24'hFFFFFF;
         else if (u_fixcol && logo_valid)
             {cur_r, cur_g, cur_b} <= {u_r, u_g, u_b};

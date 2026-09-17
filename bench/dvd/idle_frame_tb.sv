@@ -50,7 +50,7 @@ module idle_frame_tb;
         .clk(clk), .rst_n(rst_n),
         .h_pos(h_pos), .v_pos(v_pos),
         .pal_mode(pal_mode), .act_h_i(act_h_tb), .act_w_i(act_w_tb), .il_mode(1'b0), .frame_tick(1'b0),
-        .vis(1'b1), .entropy(32'h0),
+        .vis(1'b1), .entropy(32'h0), .nudge(1'b0),
         .ioctl_download(dl), .ioctl_wr(dwr), .ioctl_addr(daddr),
         .ioctl_dout(ddout), .ioctl_index(16'd0),
         .logo_on(logo_on), .logo_r(logo_r), .logo_g(logo_g), .logo_b(logo_b)

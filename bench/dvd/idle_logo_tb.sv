@@ -55,7 +55,7 @@ idle_logo dut (
     .clk(clk), .rst_n(rst_n),
     .h_pos(h_pos), .v_pos(v_pos),
     .pal_mode(pal_mode), .act_h_i(act_h_tb), .act_w_i(act_w_tb), .il_mode(il_mode), .frame_tick(frame_tick),
-    .vis(vis), .entropy(entropy),
+    .vis(vis), .entropy(entropy), .nudge(1'b0),
     .ioctl_download(dl), .ioctl_wr(dwr), .ioctl_addr(daddr),
     .ioctl_dout(ddout), .ioctl_index(didx),
     .logo_on(logo_on), .logo_r(logo_r), .logo_g(logo_g), .logo_b(logo_b)
