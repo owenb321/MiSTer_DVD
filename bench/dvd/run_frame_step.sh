@@ -47,6 +47,9 @@
 #   N1  emu: step_session dropped           -> A14  (THE 20-FRAME LIMIT)
 #   N2  emu: step_session not inverted      -> A14
 #   N3  emu: session latched from step_edge -> A14
+#   P1  emu: pause_vis fed the raw pause_q  -> A15  (THE OLD HUD BEHAVIOUR)
+#   P2  emu: step_paused cleared on pause_aud -> A15
+#   P3  emu: the PAUSE ICON fed the mask    -> A15
 #   R13 rtl: step_arm cleared only if paused-> pickup_hold_tb 5e
 #   R14 rtl: ofv_paced loses | step_arm     -> pickup_hold_tb 5b
 #   R16 rtl: step_arm cleared on bare pickup_go -> pickup_hold_tb 5b/5c/5d
@@ -122,6 +125,21 @@ grep -q "\[5e\] live: a step press costs nothing and leaves no arm" "$TMP/ph_gre
     && pass "5e measured: a live step press buys nothing" \
     || failed "5e did not run"
 
+# The OVERLAY half: a frame-step pause must not hold the status line up, and B9 must
+# still toggle it there. transport_hud_tb T6p.
+if iv "$TMP/th_sim" dvd/transport_hud.sv bench/dvd/transport_hud_tb.sv > "$TMP/th.log" 2>&1 \
+   && vvp "$TMP/th_sim" > "$TMP/th.out" 2>&1 && grep -q "ALL TESTS PASSED" "$TMP/th.out"; then
+    pass "transport_hud_tb (T6p = a frame-step pause does not hold the line up)"
+else
+    failed "transport_hud_tb"; grep -E "FAIL" "$TMP/th.out" | head -3
+fi
+grep -q "T6p-b step no: vis=0" "$TMP/th.out" \
+    && pass "T6p-b measured: step-paused hides the line" \
+    || failed "T6p-b did not run"
+grep -q "T6p-d B9 shows: vis=1" "$TMP/th.out" \
+    && pass "T6p-d measured: B9 still toggles it there" \
+    || failed "T6p-d did not run"
+
 # The CLOCK half: a step advances the display, so the presentation clock must follow
 # it or lip-sync breaks on resume by one picture PER PRESS. disp_sched_tb [11b].
 if iv "$TMP/ds_sim" dvd/disp_sched.sv bench/dvd/disp_sched_tb.sv > "$TMP/ds.log" 2>&1 \
@@ -149,7 +167,7 @@ E=dvd/emu.sv
 
 # M1 -- the arm deleted. This IS the behaviour the change replaces: B18 dead
 # during playback. The gate must not be able to drift back to it silently.
-mut M1 "$E" "$TMP/M1.sv" "/else if (step_edge && !pause_q && !stopped_w && step_ok) pause_q <= 1'b1;/d" \
+mut M1 "$E" "$TMP/M1.sv" "/else if (step_pause_go) pause_q <= 1'b1;/d" \
     && red_emu "M1 new arm deleted (the shipped behaviour)" "$TMP/M1.sv" "this IS the shipped behaviour"
 
 # M2 -- hoisted above the B1 toggle. Same terms, same ports; only the priority
@@ -158,7 +176,7 @@ python3 - "$E" "$TMP/M2.sv" <<'PY'
 import sys
 src, dst = sys.argv[1], sys.argv[2]
 s = open(src).read()
-arm = "        else if (step_edge && !pause_q && !stopped_w && step_ok) pause_q <= 1'b1;\n"
+arm = "        else if (step_pause_go) pause_q <= 1'b1;\n"
 tog = "        else if (pause_edge && !stopped_w) pause_q <= ~pause_q;\n"
 assert s.count(arm) == 1 and s.count(tog) == 1, "M2 anchors stale"
 s = s.replace(arm, "")
@@ -166,15 +184,17 @@ s = s.replace(arm, "")
 s = s.replace(tog, arm + tog)
 open(dst, 'w').write(s)
 PY
-if cmp -s "$E" "$TMP/M2.sv"; then failed "M2: the mutation did not apply"; else
+if [ ! -s "$TMP/M2.sv" ]; then
+    failed "M2: the mutation script did not write a file -- anchor stale, proves NOTHING"
+elif cmp -s "$E" "$TMP/M2.sv"; then failed "M2: the mutation did not apply"; else
     red_emu "M2 arm hoisted above the B1 toggle" "$TMP/M2.sv" "comes BEFORE this arm"
 fi
 
-mut M3 "$E" "$TMP/M3.sv" "s/else if (step_edge && !pause_q && !stopped_w && step_ok) pause_q <= 1'b1;/if (step_edge \&\& !pause_q \&\& !stopped_w \&\& step_ok) pause_q <= 1'b1;/" \
+mut M3 "$E" "$TMP/M3.sv" "s/else if (step_pause_go) pause_q <= 1'b1;/if (step_pause_go) pause_q <= 1'b1;/" \
     && red_emu "M3 else-if -> bare if" "$TMP/M3.sv" "expected \`else if\`"
 
-mut M4 "$E" "$TMP/M4.sv" "s/else if (step_edge && !pause_q && !stopped_w && step_ok)/else if (step_edge \&\& !pause_q \&\& step_ok)/" \
-    && red_emu "M4 !stopped_w dropped" "$TMP/M4.sv" "missing stopped_w"
+mut M4 "$E" "$TMP/M4.sv" "s/^wire step_pause_go = step_edge && !pause_q && !stopped_w && step_ok;/wire step_pause_go = step_edge \&\& !pause_q \&\& step_ok;/" \
+    && red_emu "M4 !stopped_w dropped" "$TMP/M4.sv" "step_pause_go"
 
 mut M5 "$E" "$TMP/M5.sv" "s/^wire step_ok = cell_ready && !menu_active && !hold_freeze;/wire step_ok = cell_ready \&\& !menu_active;/" \
     && red_emu "M5 !hold_freeze dropped from step_ok" "$TMP/M5.sv" "expected exactly"
@@ -185,7 +205,7 @@ mut M6 "$E" "$TMP/M6.sv" "s/^wire step_ok = cell_ready && !menu_active && !hold_
 mut M7 "$E" "$TMP/M7.sv" "s/if (step_edge && (pause_q || stopped_w) && step_ok)/if (step_edge \&\& step_ok)/" \
     && red_emu "M7 (pause_q||stopped_w) dropped from the step arm" "$TMP/M7.sv" "frame-step step arm"
 
-mut M8 "$E" "$TMP/M8.sv" "s/&& step_ok) pause_q <= 1'b1;/\&\& step_ok) pause_q <= ~pause_q;/" \
+mut M8 "$E" "$TMP/M8.sv" "s/else if (step_pause_go) pause_q <= 1'b1;/else if (step_pause_go) pause_q <= ~pause_q;/" \
     && red_emu "M8 pause_q <= ~pause_q" "$TMP/M8.sv" "expected exactly 1"
 
 mut M9 "$E" "$TMP/M9.sv" "s/if (step_edge && (pause_q || stopped_w) && step_ok)/if (step_edge \&\& (pause_q || stopped_w) \&\& cell_ready \&\& !menu_active)/" \
@@ -212,6 +232,19 @@ mut N2 "$E" "$TMP/N2.sv" "s/&& aud_bp_armed && ~step_session);/\&\& aud_bp_armed
 
 mut N3 "$E" "$TMP/N3.sv" "s/else if (step_tgl ^ step_tgl_q)       step_session <= 1'b1;/else if (step_edge) step_session <= 1'b1;/" \
     && red_emu "N3 session latched from the raw press" "$TMP/N3.sv" "must NOT contain step_edge"
+
+# P1..P3 -- the OVERLAY seam (2026-09-17, by user decision). A pause the user asked
+# for with B1 holds the status line and seek bar up; a pause the FRAME STEP button
+# started does not. The disc is paused either way, so the ICON keeps reading the real
+# pause_q -- only the hold follows step_paused.
+mut P1 "$E" "$TMP/P1.sv" "s/    .pause_vis    (pause_q && !step_paused),  \/\/ a frame-step pause does not hold the line up/    .pause_vis    (pause_q),/" \
+    && red_emu "P1 pause_vis fed the raw pause_q (the old behaviour)" "$TMP/P1.sv" "transport_hud .pause_vis"
+
+mut P2 "$E" "$TMP/P2.sv" "s/        if (~pause_q)                        step_paused  <= 1'b0;/        if (~pause_aud) step_paused <= 1'b0;/" \
+    && red_emu "P2 step_paused cleared on ~pause_aud" "$TMP/P2.sv" "the step_paused latch is not"
+
+mut P3 "$E" "$TMP/P3.sv" "s/^    .pause_q      (pause_q), .*$/    .pause_q      (pause_q \&\& !step_paused),/" \
+    && red_emu "P3 the icon fed the masked value" "$TMP/P3.sv" "transport_hud .pause_q"
 
 echo "== RED (resample_addrgen.v: the datapath) =="
 A=dvd/resample_addrgen.v

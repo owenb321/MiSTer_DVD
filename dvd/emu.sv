@@ -1626,6 +1626,10 @@ wire sel_edge   = joy_sel   & ~joy_prev[7];
 // that same port and must not pop the HUD (issue #42).
 // dpad_pend_evt pops the HUD on the FIRST D-pad press rather than ~0.4 s later
 // when the coalesced jump actually fires, so the seconds readout tracks the taps.
+// ⚠ step_edge is deliberately NOT here, and now for TWO reasons. It always re-armed
+// the ~2.5 s timer on every press of a stepping burst; and since 2026-09-17 a
+// frame-step pause must not raise the line AT ALL (see `step_paused`). B9 is the only
+// way to bring it up there, which is what the user asked for.
 wire hud_user_evt = pause_edge
                   | ((chnext_edge | chprev_edge) && cell_ready && !menu_active)
                   | scrub_seek_pulse
@@ -1772,6 +1776,11 @@ wire        sp_menu_early = menus_on && !menu_active && hl_menu_seen;
 // would narrow a step arm that was HW-confirmed on 2026-09-13.
 wire step_ok = cell_ready && !menu_active && !hold_freeze;
 
+// THIS PRESS STARTS A FRAME-STEP PAUSE. Factored out because TWO things must agree on
+// it: the pause_q arm below and the `step_paused` latch that tells the overlays this
+// pause was not asked for by B1. An inline copy in each would be free to drift.
+wire step_pause_go = step_edge && !pause_q && !stopped_w && step_ok;
+
 // ---- gamepad decode (Phase 4: keys go to the DVD-VM; only the title
 // transport and the Phase-3 button-nav pulses stay here) -------------------
 always @(posedge clk_sys or negedge reset_n) begin
@@ -1863,7 +1872,7 @@ always @(posedge clk_sys or negedge reset_n) begin
         // PLAY that clears the stop (`pause_edge && !stopped_w` cannot fire on
         // that cycle) -- the disc would resume PAUSED. Same trap the pause
         // toggle's own ~stopped_w gate documents.
-        else if (step_edge && !pause_q && !stopped_w && step_ok) pause_q <= 1'b1;
+        else if (step_pause_go) pause_q <= 1'b1;
         // any VM jump / menu key resumes playback (a paused governor would
         // freeze the menu the VM is jumping to)
         if (jump_ack)             pause_q <= 1'b0;
@@ -3793,16 +3802,38 @@ end
 // ⚠ Cleared by ~pause_aud, which covers every resume (unpause, scrub release, stop
 // release, a chapter skip or jump clearing pause_q) in one term. It deliberately
 // SURVIVES a stop, because stepping while stopped consumes the VBUF the same way.
+// ---- WHO STARTED THIS PAUSE ----------------------------------------------
+// The overlays hold themselves up for the whole of a pause the user asked for with
+// B1. A pause the FRAME STEP button started is not that: stepping through a scene
+// should not sit behind a status line and a progress bar (2026-09-17, by user
+// decision -- this reverses the earlier "the pause_q level already handles it for
+// free" reading, which was true of the mechanism and wrong about what is wanted).
+// ⚠ This is a VISIBILITY fact only. The disc is paused either way, so
+// transport_hud keeps reading the real pause_q for its ❚❚ icon; only the "keep the
+// line up" term follows this latch.
+// ⚠ Cleared by ~pause_q, NOT ~pause_aud: a Stop (stopped_w) or a held scrub
+// (hold_freeze) is not a frame-step pause and must keep the overlays' own rules.
+// ★ B9 (Display) is unaffected and that is the point -- transport_hud toggles
+// persist_q on display_edge with no pause condition at all, so Display brings the
+// line up in a frame-step pause exactly as it does in a B1 pause or in playback.
+reg step_paused   = 1'b0;
 reg step_tgl_q    = 1'b0;
 reg step_session  = 1'b0;
 always @(posedge clk_sys) begin
     if (~reset_n) begin
         step_tgl_q   <= 1'b0;
         step_session <= 1'b0;
+        step_paused  <= 1'b0;
     end else begin
         step_tgl_q <= step_tgl;
         if (~pause_aud)                      step_session <= 1'b0;
         else if (step_tgl ^ step_tgl_q)       step_session <= 1'b1;
+
+        // A pause that is over cannot be a step pause; a B1 press that STARTS one is
+        // not either (pause_q is low on that cycle, so the ~pause_q arm holds it 0
+        // and the B1 pause comes up with the overlays visible, as before).
+        if (~pause_q)                        step_paused  <= 1'b0;
+        else if (step_pause_go)              step_paused  <= 1'b1;
     end
 end
 
@@ -6069,7 +6100,8 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .act_w_i      (act_w_eff),
     .menu_active  (menus_on && menu_active),
     .dbg_mode     (hud_dbg),                // O[2]: show reader PGCN/VTS, always visible
-    .pause_q      (pause_q),
+    .pause_q      (pause_q),                  // the STATE: drives the ❚❚ icon
+    .pause_vis    (pause_q && !step_paused),  // a frame-step pause does not hold the line up
     .bar_active   (bar_active_w),
     // The status-line transport icon is shared: a HELD FF/REW scrub renders
     // its accelerating tier, and an open D-pad coalesce window renders the tap
@@ -6170,7 +6202,7 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .last_rbn   (title_last_rbn_w),
     // progress popup (stretch): pops on pause/landed seek/chapter with the
     // LIVE playhead + chapter notches, suppressed in menus like the HUD
-    .pause_q    (pause_q),
+    .pause_vis  (pause_q && !step_paused),  // see transport_hud: visibility only
     .show_evt   (hud_user_evt),
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),

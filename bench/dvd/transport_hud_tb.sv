@@ -26,6 +26,7 @@ module transport_hud_tb;
     reg         scrub_held = 0, scrub_dir = 0;
     reg  [1:0]  scrub_tier = 0;
     reg         display_edge = 0, load_evt = 0, show_evt = 0;
+    reg         pause_vis = 0;   // "this pause holds the line up" (B1 yes, frame step no)
     reg  [31:0] cur_time = 0, total_time = 0;
     reg  [7:0]  cur_pgm = 0, nr_pgm = 0;
     reg         aud_evt = 0, sub_evt = 0, angle_evt = 0, chap_evt = 0;
@@ -70,7 +71,10 @@ module transport_hud_tb;
     transport_hud #(.SHOW_TICKS(27'd2000)) dut (
         .clk(clk), .rst_n(rst_n),
         .h_pos(h_pos), .v_pos(v_pos), .pal_mode(pal_mode), .act_h_i(act_h_tb), .act_w_i(act_w_tb),
-        .menu_active(menu_active), .dbg_mode(1'b0), .pause_q(pause_q), .bar_active(bar_active),
+        .menu_active(menu_active), .dbg_mode(1'b0), .pause_q(pause_q),
+        // the existing arms are all B1 pauses, which DO hold the line up -- so the
+        // visibility term tracks pause_q here and every pre-existing expectation stands.
+        .pause_vis(pause_vis), .bar_active(bar_active),
         .scrub_held(scrub_held), .scrub_dir(scrub_dir), .scrub_tier(scrub_tier),
         .display_edge(display_edge), .load_evt(load_evt), .show_evt(show_evt),
         .cur_time(cur_time), .total_time(total_time),
@@ -146,6 +150,17 @@ module transport_hud_tb;
                 $display("  FAIL %0s:\n    got  '%s'\n    want '%s'", label, line, want);
             end else
                 $display("  ok  %0s: '%s'", label, line);
+        end
+    endtask
+
+    // Leave persistent mode OFF whatever it was, without assuming: T1 turns it on and
+    // a scenario that assumed a state would silently test the wrong thing.
+    task persist_q_clear;
+        begin
+            if (dut.persist_q) begin
+                @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0;
+            end
+            @(posedge clk);
         end
     endtask
 
@@ -507,6 +522,29 @@ module transport_hud_tb;
         // exit code sees a FAILING bench as a passing one -- which is exactly how the
         // bench/ac3 suites went silently red for weeks (docs/ac3_decoder_architecture.md
         // §4.11), and it makes every RED arm in bench/dvd/run_ov_geom.sh vacuous.
+        // T6p: A FRAME-STEP PAUSE DOES NOT HOLD THE LINE UP, AND B9 STILL TOGGLES IT.
+        //      pause_q is the STATE (the disc is paused either way, so the icon must
+        //      keep reading it); pause_vis is "this pause holds the line up", which a
+        //      B1 pause sets and a frame-step pause does not (2026-09-17, user
+        //      decision). The Display button must work in BOTH, so it is exercised
+        //      here against pause_vis=0 -- the case that did not exist before.
+        persist_q_clear();
+        pause_q = 1; pause_vis = 1;                    // a B1 pause
+        check_vis("T6p-a B1 holds", 1'b1);
+        pause_vis = 0;                                 // the same pause, step-initiated
+        check_vis("T6p-b step no", 1'b0);
+        // the icon must still say PAUSE -- the disc is paused, only the hold changed
+        // ⚠ the line is only decodable while it is VISIBLE, so check the icon during
+        // the B9-on step below; here just prove the hold is gone.
+        @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0;
+        check_vis("T6p-d B9 shows", 1'b1);
+        // and the ICON still says PAUSE -- the disc IS paused, only the hold changed.
+        // Glyph copied from T2, not guessed.
+        check_line("T6p-d2 icon", "\"     0:12:34/1:37:05 CH 12/23~~");
+        @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0;
+        check_vis("T6p-e B9 hides", 1'b0);
+        pause_q = 0; pause_vis = 0;
+
         if (errors == 0) begin
             $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
             $finish;

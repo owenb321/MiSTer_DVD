@@ -187,8 +187,9 @@ once, Menu behaves exactly as the disc specifies.
 
 ## During playback
 
-**B1 (Pause)** freezes on the current frame. Audio stops cleanly and resumes in sync.
-[Frame step](#frame-step) also pauses, if you would rather stop on an exact frame.
+**B1 (Pause)** freezes on the current frame and brings up the status line and progress bar.
+Audio stops cleanly and resumes in sync. [Frame step](#frame-step) also pauses, if you would
+rather stop on an exact frame — and it leaves the screen clear.
 
 **B2 / B3** step chapters. **B10 / B11** (`Fast Fwd` / `Rewind`) tapped step forward and back; **held**, they
 scrub — a seek bar appears showing where you are and where you will land, and the seek
@@ -306,6 +307,12 @@ It steps the same way from a pause you started with **B1**, and while the disc i
 
 The first press only pauses — it does not also advance — so the frame you stop on is the one
 that was on screen.
+
+**Nothing is drawn over the picture while you step.** A pause you start with **B1** brings up
+the status line and progress bar and keeps them there; a pause you start with **Frame Step**
+does not, so you get a clean look at the frame. Press **B9 (Display)** if you want the
+timecode while stepping — it toggles the status line in either kind of pause, and again to
+hide it.
 
 You can step as far into the film as you like, and pressing **Play** afterwards picks up in
 sync however long you spent stepping. Audio is muted while you step, and the sound for the

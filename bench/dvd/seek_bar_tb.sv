@@ -68,7 +68,7 @@ module seek_bar_tb;
         .bar_active(bar_active),
         .base_rbn(base_rbn), .tgt_rbn(tgt_rbn),
         .first_rbn(first_rbn), .last_rbn(last_rbn),
-        .pause_q(pause_q), .show_evt(show_evt), .menu_active(menu_active),
+        .pause_vis(pause_q), .show_evt(show_evt), .menu_active(menu_active),
         .cur_rbn(cur_rbn),
         .pgc_loaded(pgc_loaded), .nr_pgm(nr_pgm),
         .pm_we(pm_we), .pm_waddr(pm_waddr), .pm_wdata(pm_wdata),

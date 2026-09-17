@@ -369,13 +369,30 @@ raster phase. `pickup_hold_tb` arm **5e** is that claim made executable (press w
 available, then offer exactly one frame: the press must cost exactly one pickup, not two,
 and must leave `step_arm` clear).
 
-**`hud_user_evt` is deliberately untouched.** `transport_hud.sv:288` and `seek_bar.sv:139`
-already take `pause_q` as a visibility **level** (its port comment: *"manual pause (keeps
-the line up)"*), so the pausing press raises the status line with ❚❚ and the timecode and
-holds it for the whole pause, while later step presses re-arm nothing. Adding raw
-`step_edge` would re-arm the ~2.5 s show timer on *every* press of a stepping burst. If
-parity is ever wanted, add a named `step_pause_evt` (the pausing press only), never the raw
-edge — the checker pins this **by rejection**.
+⛔ **THE OVERLAYS DO NOT HOLD UP FOR A FRAME-STEP PAUSE (2026-09-17, by user decision —
+this REVERSES the first reading).** The original note here said `hud_user_evt` needed no
+change because `transport_hud.sv` and `seek_bar.sv` already take `pause_q` as a visibility
+**level**, so the pausing press raises the status line and bar and holds them for the whole
+pause. That was a correct description of the MECHANISM and the wrong behaviour to want:
+stepping through a scene should not sit behind a status line and a progress bar.
+**Now:** a pause the user asked for with **B1** holds them up; a pause the **frame step**
+button started does not. `emu.sv` latches `step_paused` (set by the shared `step_pause_go`,
+cleared by `~pause_q`) and feeds `pause_q && !step_paused` to both overlays.
+★ **The ICON still reads the real `pause_q`** — the disc IS paused, so `transport_hud` keeps
+a `pause_q` port for the ❚❚ and takes the hold on a SEPARATE `pause_vis`. `seek_bar` has no
+icon, so its port is simply RENAMED to `pause_vis`: feeding a masked value into a port
+called `pause_q` would be a wrong fact on a correctly-named port, the issue #81 class.
+★ **B9 (Display) needed no change at all and that is why the shape works:**
+`transport_hud` toggles `persist_q` on `display_edge` with no pause condition, so Display
+brings the line up during a frame-step pause exactly as it does in a B1 pause or in
+playback — and hides it again on the next press.
+⚠ `step_paused` clears on `~pause_q`, **not** `~pause_aud`: a Stop or a held scrub is not a
+frame-step pause and must keep the overlays' own rules. It also means a B1 press that STARTS
+a pause leaves it 0 (pause_q is low on that cycle), so a B1 pause comes up visible.
+⚠ `step_edge` stays out of `hud_user_evt` for BOTH reasons now: it would re-arm the ~2.5 s
+timer on every press of a burst, and the pause must not raise the line at all.
+Gates: `transport_hud_tb` **T6p** (a-e: B1 holds, step does not, the icon still says PAUSE,
+B9 shows it, B9 hides it) and emu mutations **P1–P3**.
 
 ⚠ Two accepted, measured residuals: a step press inside the D-pad seek coalesce window
 (~0.4 s) sets `pause_q` and the jump's `jump_ack` then clears it, so the press appears to do

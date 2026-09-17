@@ -3539,11 +3539,20 @@ worse maintenance burden than targeted in-place edits. So:
   `hold_freeze` has not risen yet — so the PRIORITY is the only thing that covers it.
   `!stopped_w` is the same class: a `pause_q` set under a stop survives the PLAY that clears
   the stop (`pause_edge && !stopped_w` cannot fire on that cycle) and the disc resumes paused.
-  ★ **`hud_user_evt` untouched, verified not assumed:** `transport_hud.sv:288` and
-  `seek_bar.sv:139` already take `pause_q` as a visibility LEVEL (*"manual pause (keeps the
-  line up)"*), so the pausing press raises the status line with ❚❚ for the whole pause while
-  later step presses re-arm nothing. Raw `step_edge` would re-arm the ~2.5 s timer on every
-  press of a burst; the checker pins it out **by rejection**.
+  ⛔ **THE OVERLAYS DO NOT HOLD UP FOR A FRAME-STEP PAUSE (2026-09-17, user decision —
+  REVERSES the first reading).** The original note said `hud_user_evt` needed no change
+  because both overlays already take `pause_q` as a visibility LEVEL, so the pausing press
+  raises the status line for the whole pause. Correct about the MECHANISM, wrong about what
+  is wanted: stepping should not sit behind a status line and a progress bar. Now a **B1**
+  pause holds them up and a **frame-step** pause does not — `step_paused` (set by the shared
+  `step_pause_go`, cleared by `~pause_q`) masks `pause_q && !step_paused` into both.
+  ★ **The ICON still reads the real `pause_q`** (the disc IS paused), so `transport_hud`
+  gains a SEPARATE `pause_vis` for the hold; `seek_bar` has no icon so its port is RENAMED
+  to `pause_vis` — a masked value on a port called `pause_q` is the issue #81 class.
+  ★ **B9 needed no change:** `persist_q` toggles on `display_edge` with no pause condition,
+  so Display works in a frame-step pause exactly as in a B1 pause.
+  ⚠ Cleared on `~pause_q`, NOT `~pause_aud` — a Stop or held scrub is not a frame-step pause.
+  Gates: `transport_hud_tb` **T6p** + emu mutations **P1–P3**.
   ★★ **A reordering changes no term, no port and no expression, so NO bench and no Quartus
   fit can see it** — hence `tools/check_frame_step_wiring.py` reads the arm, its terms AND
   its ordering against all four resume arms out of `dvd/emu.sv` (RED on the pre-fix file,

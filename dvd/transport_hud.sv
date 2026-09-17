@@ -68,7 +68,13 @@ module transport_hud #(
                                             // show the CH field - emu repurposes cur_pgm/
                                             // nr_pgm as {reader PGCN, VTS} so the boot/
                                             // how-to-play PGC path is readable on-screen.
-    input  wire        pause_q,             // manual pause (keeps the line up)
+    input  wire        pause_q,             // manual pause -- THE STATE, drives the icon
+    // Visibility contribution of the pause. SEPARATE from pause_q on purpose: a pause
+    // the user started with B1 keeps the line up, but a pause the FRAME STEP button
+    // started does not (2026-09-17, by user decision -- a step session should not sit
+    // behind a status line). The disc is paused either way, so the ICON must keep
+    // reading pause_q; only the "hold the line up" term follows this.
+    input  wire        pause_vis,           // 1 = this pause holds the line up
     input  wire        bar_active,          // scrub gesture held + linger
     input  wire        scrub_held,          // D-pad held (FF/REW icon while 1)
     input  wire        scrub_dir,           // 1 = forward
@@ -285,7 +291,7 @@ module transport_hud #(
         end
     end
     wire vis = dbg_mode ? 1'b1                       // diagnostic: always on, incl. menus
-             : (persist_q | pause_q | bar_active | (show_tmr != 27'd0)) && !menu_active;
+             : (persist_q | pause_vis | bar_active | (show_tmr != 27'd0)) && !menu_active;
     // CSS warning shows in menus too (scrambled discs green-screen there first)
     wire pop_vis = (pop_tmr != 27'd0) &&
                    (!menu_active || pop_type == 4'd4 ||
