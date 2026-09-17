@@ -267,6 +267,21 @@ module iso_reader_angle_tb;
             img[b+16'h543]=next_vobu[15:8];  img[b+16'h544]=next_vobu[7:0];
             // dsi_gi.vobu_vob_idn @ DSI 0x18 -> 0x41F
             img[b+16'h41F]=vob_id[15:8];     img[b+16'h420]=vob_id[7:0];
+            // dsi_gi.vobu_c_idn @ DSI 0x1B -> 0x422.  The SAME on every angle, which
+            // is what a real disc does -- measured identical on both branches of
+            // ALIEN_VS_PREDATOR_SE and The Matrix -- so a filter keyed on the cell
+            // id cannot tell the angles apart and TEST G must fail for it.
+            img[b+16'h422]=8'd1;
+            // sml_pbi.ilvu_ea @ DSI 0x22 -> 0x429: the END of this ILVU, relative to
+            // this NAV pack.  Every ILVU here is one nav + one body sector, so it is
+            // 1.  ⚠ WITHOUT IT the reader's filtered re-snap falls back to stepping
+            // one sector at a time and the ILVU hop this fixture is meant to exercise
+            // is never taken -- the landing is the same either way, so nothing fails
+            // and the coverage is silently absent.  MEASURED longest sibling run on a
+            // real disc: 772 sectors on MiB's 5-angle block, 8298 on
+            // ALIEN_VS_PREDATOR_SE, i.e. past NAV_CAP.
+            img[b+16'h429]=8'd0; img[b+16'h42A]=8'd0;
+            img[b+16'h42B]=8'd0; img[b+16'h42C]=8'd1;
         end
     endtask
 
