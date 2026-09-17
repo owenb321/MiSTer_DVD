@@ -2513,6 +2513,15 @@ the block, and still cycles (`ANGLE 3/5`) afterwards.
 not fit (2.6 GB free against a 7.26 GB image). T2 is the stronger vehicle anyway:
 85 % sibling share against AVP's 73 %.
 
+⚠ **The round was run on `DVD_branchseek_20260917_1632.rbf`, and the branch was then
+rebased onto PR #103 and rebuilt as `DVD_branchseek_20260917_2226.rbf`** (SEED 7 first
+roll, clk_dec 95.58/93.16, 38,220 ALMs). The confirmation stands rather than being
+re-run: PR #103 is VM and `idle_logo` work and **does not touch `dvd_iso_reader.sv`
+at all**, so the seek path measured above is byte-identical in both builds, and both
+this gate and PR #103's own `run_select_noop.sh` pass on the rebased tree. If that
+ever stops being true of a rebase, the round is owed again — the claim here is about
+a reader, not about a date.
+
 #### Gate — `bench/dvd/run_branch_seek.sh [--red]`
 
 `bench/dvd/iso_reader_branch_tb.sv` runs the real reader over fixtures shaped like

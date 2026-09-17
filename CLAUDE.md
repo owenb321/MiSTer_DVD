@@ -358,6 +358,10 @@ worse maintenance burden than targeted in-place edits. So:
   plays through a scrub into the block, still cycles to `ANGLE 3/5` after).
   ⚠ `ALIEN_VS_PREDATOR_SE_DISC1` is not on the rig and did not fit (2.6 GB free vs 7.26 GB);
   T2 is the stronger vehicle anyway — 85 % sibling share against AVP's 73 %.
+  ⚠ The round ran on `DVD_branchseek_20260917_1632.rbf`; the branch was then rebased onto
+  PR #103 and rebuilt (`DVD_branchseek_20260917_2226.rbf`, SEED 7 first roll, clk_dec
+  95.58/93.16, +25 ALMs over #103). The confirmation stands because #103 does not touch
+  `dvd_iso_reader.sv` at all, so the seek path is byte-identical across the two builds.
   Golden model: **`tools/nav_extract.py --vts N --ilvu`** now prints, per interleaved cell,
   the branch `vob_idn`, the sibling ids, the wrong-landing percentage and the longest
   sibling run. Detail: **`docs/dvd_nav.md` §2e**.
