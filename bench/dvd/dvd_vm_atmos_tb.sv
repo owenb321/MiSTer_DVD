@@ -97,7 +97,7 @@ module dvd_vm_atmos_tb;
     task pulse_loaded; begin @(negedge clk); pgc_loaded = 1; @(negedge clk); pgc_loaded = 0; end endtask
 
     wire vm_pending = dut.ev_boot | dut.ev_loaded | dut.ev_error | dut.ev_cellcmd |
-                      dut.ev_pgcend | dut.ev_btn | dut.ev_menu | dut.ev_resume;
+                      dut.ev_pgcend | dut.ev_btn | dut.ev_menu;
     task wait_settled; integer t; begin
         repeat (4) @(negedge clk); t = 0;
         while (((dbg_state[3:0] != 4'd0 && dbg_state[3:0] != 4'd10) ||
