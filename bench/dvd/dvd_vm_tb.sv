@@ -34,10 +34,10 @@
 //         jump/seek and on a POST jump; 0 on button/PRE jumps and - the
 //         stale-blk fix - on a Menu-key jump issued AFTER a prior CELL
 //         dispatch left blk=BLK_CELL (the V_IDLE event arms force BLK_BTN).
-//   [S16] key_resume gated on came_via_menukey: Select with no buttons in a
-//         DISC-driven menu (RSM filled by the disc's own CallSS) is a no-op
-//         (Cluedo intro -> "Please Wait" park); the user Menu->Select toggle
-//         still resumes.
+//   [S16] RSM gated on came_via_menukey: the Menu key in a DISC-driven menu
+//         (RSM filled by the disc's own CallSS) re-invokes Root instead of
+//         resuming the stub (Cluedo intro -> "Please Wait" park); the user
+//         Menu-from-a-title toggle still resumes.
 //   [S17] key_title (B12 "Top Menu"): VMGM Title (entry 2) jump; from a title
 //         saves RSM + sets came_via_menukey (Select resumes back); from a
 //         disc-driven menu jumps WITHOUT touching RSM/toggle (the boot-stub
@@ -80,7 +80,7 @@ module dvd_vm_tb;
     reg [7:0]  cell_count = 8'd3;
     reg [15:0] next_pgcn = 0, prev_pgcn = 0, goup_pgcn = 0;
 
-    reg        key_menu = 0, key_resume = 0, key_title = 0, key_return = 0;
+    reg        key_menu = 0, key_title = 0, key_return = 0;
     reg        key_cmenu = 0;
     reg [63:0] btn_cmd = 0;
     reg        btn_cmd_valid = 0;
@@ -142,7 +142,7 @@ module dvd_vm_tb;
         .cur_vts(cur_vts), .cur_pgcn(cur_pgcn), .cur_cell(cur_cell),
         .cell_count(cell_count),
         .next_pgcn(next_pgcn), .prev_pgcn(prev_pgcn), .goup_pgcn(goup_pgcn),
-        .key_menu(key_menu), .key_resume(key_resume), .key_title(key_title), .key_return(key_return), .key_cmenu(key_cmenu),
+        .key_menu(key_menu), .key_title(key_title), .key_return(key_return), .key_cmenu(key_cmenu),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid),
         .btn_sel(btn_sel), .btns_armed(btns_armed),
         .btn_force(btn_force), .btn_force_val(btn_force_val),
@@ -250,7 +250,7 @@ module dvd_vm_tb;
     // any event latched but not yet consumed = the VM is still busy
     wire vm_pending = dut.ev_boot | dut.ev_loaded | dut.ev_error |
                       dut.ev_cellcmd | dut.ev_pgcend | dut.ev_btn |
-                      dut.ev_menu | dut.ev_resume;
+                      dut.ev_menu;
 
     // wait for the VM to return to V_IDLE with nothing pending
     task wait_idle;
@@ -592,17 +592,18 @@ module dvd_vm_tb;
         $display("S6 post fall-through PASS");
 
         // ---------------- [S7] fallback chain -------------------------------
-        // S5 left vm_dom = VMGM. Use the dedicated Resume key (key_resume) to get
-        // back to the title domain first (also re-checks resume from VMGM). NB
-        // BOTH the Menu key and the Resume key are gated on came_via_menukey
-        // (the toggle is covered by S2/S3; TP-Star-Wars "no toggle -> re-invoke
-        // Root" is S13; the Cluedo "Select in a disc-driven menu = no-op" case
-        // is S16) -- force the toggle flag here so the resume goes through.
+        // S5 left vm_dom = VMGM. Use the Menu key to get back to the title domain
+        // first (also re-checks resume from VMGM). NB the Menu key's resume arm is
+        // gated on came_via_menukey (the toggle is covered by S2/S3; TP-Star-Wars
+        // "no toggle -> re-invoke Root" is S13) -- force the toggle flag here so the
+        // resume goes through. (This step used the retired key_resume until
+        // 2026-09-17; it is a bench CONVENIENCE, not a claim, and ev_menu case (a)
+        // performs the identical LinkRSM.)
         dut.came_via_menukey = 1'b1;
         menu_active = 0;
         clear_actions;
-        @(negedge clk); key_resume = 1;
-        @(negedge clk); key_resume = 0;
+        @(negedge clk); key_menu = 1;
+        @(negedge clk); key_menu = 0;
         wait_settled;
         if (!saw_jump || cap_jdom != 2'd3)
             fail("S7-pre: expected resume-to-title from the VMGM domain");
@@ -1010,16 +1011,27 @@ module dvd_vm_tb;
         pulse_loaded; wait_idle;
         $display("S15 Phase-B vm_from_wait provenance (stale-blk + TR-skip fixes) PASS");
 
-        // ---------------- [S16] Cluedo: Select in a DISC-driven menu = no-op --
+        // ---------------- [S16] Cluedo: a DISC-driven menu must not RSM --------
         // Cluedo's boot: FP JumpTT 1 -> VTS1 PGC1 PRE dispatches on g5 then
         // CallSS VMGM pgc2 (saves RSM = VTS1 PGC1 cell 1) -> copyright/logos/
-        // intro (VMGM PGC2-5, ZERO HLI buttons) -> game menu. Select during the
-        // intro hit emu's "no buttons armed = resume", RSM'd into VTS1 PGC1's
-        // lone 3 s cell (the "Please Wait, Processing" card; skip_pre correctly
-        // skips the dispatch PRE), and its PGC has no POST and no next -> park
-        // forever. Fix: ev_resume is gated on came_via_menukey like ev_menu.
-        // (a) disc-driven menu (came_via_menukey=0, RSM filled by the disc's
-        //     own CallSS): key_resume must do NOTHING.
+        // intro (VMGM PGC2-5, ZERO HLI buttons) -> game menu. Resuming that RSM
+        // lands in VTS1 PGC1's lone 3 s cell (the "Please Wait, Processing" card;
+        // skip_pre correctly skips the dispatch PRE), whose PGC has no POST and no
+        // next -> park forever. The guard is came_via_menukey: RSM is only a valid
+        // USER destination if the USER put us in this menu.
+        //
+        // ⚠ HISTORY, because this arm nearly went vacuous (2026-09-17). It used to
+        // drive `key_resume` -- emu's "Select with no buttons armed = resume". That
+        // whole path is DELETED: a menu transition is a no-buttons-armed window, so
+        // an impatient Select during one was re-interpreted as Resume and (because
+        // ev_resume, unlike ev_btn, survived a PGC load) LinkRSM'd out of the menu
+        // that had just arrived. With the stimulus gone, a mechanical port-removal
+        // edit would have left S16 asserting nothing while still printing PASS.
+        // It is re-pointed at the surviving key instead: ev_menu case (a) is the
+        // same LinkRSM, under the same guard, so the Cluedo claim stays executable.
+        //
+        // (a) disc-driven menu (came_via_menukey=0, RSM filled by the disc's own
+        //     CallSS): the Menu key must NOT resume the stub. It re-invokes Root.
         nav_ready = 0; vm_restart; wait_idle;
         dut.came_via_menukey = 1'b0;
         dut.rsm_vts = 8'd1; dut.rsm_pgcn = 8'd1; dut.rsm_cell = 8'd1;
@@ -1027,18 +1039,27 @@ module dvd_vm_tb;
         dut.vm_vts = 8'd0;
         menu_active = 1;
         clear_actions;
-        @(negedge clk); key_resume = 1;
-        @(negedge clk); key_resume = 0;
+        @(negedge clk); key_menu = 1;
+        @(negedge clk); key_menu = 0;
         wait_settled;
-        if (saw_jump || saw_seek || saw_replay)
-            fail("S16a: Select in a disc-driven menu must be a no-op (Cluedo park)");
-        if (dut.state !== 4'd0)            // V_IDLE: event consumed, no dangling wait
-            fail("S16a: VM not back in V_IDLE after the gated resume");
+        if (saw_seek || saw_replay)
+            fail("S16a: Menu in a disc-driven menu must not seek/replay");
+        if (saw_jump && cap_jdom == 2'd3)
+            fail("S16a: Menu in a disc-driven menu must NOT RSM (Cluedo park)");
+        if (!saw_jump || cap_jdom != 2'd2 || cap_jentry != 4'd3)
+            fail("S16a: Menu in a disc-driven menu must re-invoke VTSM Root");
+        nr_pre = 0; cell_count = 8'd2;
+        pulse_loaded; wait_idle;
         // (b) the USER toggle still resumes: same RSM but came_via_menukey=1.
+        nav_ready = 0; vm_restart; wait_idle;
         dut.came_via_menukey = 1'b1;
+        dut.rsm_vts = 8'd1; dut.rsm_pgcn = 8'd1; dut.rsm_cell = 8'd1;
+        dut.vm_dom = 2'd1;                 // DOM_VMGM
+        dut.vm_vts = 8'd0;
+        menu_active = 1;
         clear_actions;
-        @(negedge clk); key_resume = 1;
-        @(negedge clk); key_resume = 0;
+        @(negedge clk); key_menu = 1;
+        @(negedge clk); key_menu = 0;
         wait_settled;
         if (!saw_jump || cap_jdom != 2'd3 || cap_jvts != 8'd1 ||
             cap_jpgcn != 8'd1 || cap_jcell != 8'd1)
@@ -1046,7 +1067,7 @@ module dvd_vm_tb;
         nr_pre = 0; cell_count = 8'd2; menu_active = 0;
         cur_vts = 8'd1; cur_pgcn = 8'd1; cur_cell = 8'd1;
         pulse_loaded; wait_idle;
-        $display("S16 Select resume gated on came_via_menukey (Cluedo intro park) PASS");
+        $display("S16 disc-driven menu must not RSM (Cluedo intro park) PASS");
 
         // ---------------- [S17] TITLE key (B12 "Top Menu") ------------------
         // (a) From a playing title: jump VMGM Title (entry 2), save RSM and
@@ -1067,15 +1088,15 @@ module dvd_vm_tb;
         nr_pre = 0; cell_count = 8'd2; menu_active = 1;
         cur_vts = 8'd0; cur_pgcn = 8'd1; cur_cell = 8'd0;
         pulse_loaded; wait_idle;
-        // (b) Select with no buttons in that menu -> resumes the title (the
-        //     toggle rides the Title key exactly like the Menu key).
+        // (b) Menu in that menu -> resumes the title (the toggle rides the Title
+        //     key exactly like the Menu key). Drove key_resume until 2026-09-17.
         clear_actions;
-        @(negedge clk); key_resume = 1;
-        @(negedge clk); key_resume = 0;
+        @(negedge clk); key_menu = 1;
+        @(negedge clk); key_menu = 0;
         wait_settled;
         if (!saw_jump || cap_jdom != 2'd3 || cap_jvts != 8'd3 ||
             cap_jpgcn != 8'd2 || cap_jcell != 8'd4)
-            fail("S17b: Select after Title key must resume the saved title");
+            fail("S17b: Menu after Title key must resume the saved title");
         nr_pre = 0; cell_count = 8'd6; menu_active = 0;
         cur_vts = 8'd3; cur_pgcn = 8'd2; cur_cell = 8'd4;
         pulse_loaded; wait_idle;
@@ -1468,6 +1489,78 @@ module dvd_vm_tb;
     endtask
 
     // ========================================================================
+    // [S25] a button press latched during V_WAIT must die with that wait
+    // ========================================================================
+    // ev_btn_cmd is a command out of the OUTGOING PGC's button record. The
+    // ev_loaded exit from V_WAIT has cleared it since Phase 4; the OTHER TWO exits
+    // (ev_error, and the ~0.62 s give-up timer) did not, so a press that landed
+    // while a jump was in flight executed against whatever PGCIT was loaded by the
+    // time the VM reached V_IDLE - a link into another PGC's numbering.
+    //
+    // ★ The command is LinkTopC (-> vm_replay), NOT a LinkPGCN, and that is what
+    //   makes arm (b) possible at all: the ev_error exit legitimately runs the
+    //   fallback chain, which JUMPS. It never replays. So `saw_replay` scores the
+    //   stale press for both doors while staying blind to the recovery around it.
+    task run_s25;
+    begin
+        // ---- (a) the give-up timer door -----------------------------------
+        nav_ready = 0; vm_restart; wait_idle;
+        menu_active = 0;
+        cur_vts = 8'd3; cur_pgcn = 8'd2; cur_cell = 8'd4; cell_count = 8'd6;
+        clear_actions;
+        @(negedge clk); key_menu = 1;
+        @(negedge clk); key_menu = 0;
+        wait_settled;
+        if (dbg_state[3:0] !== 4'd10)
+            fail("S25a: setup - expected V_WAIT after the menu-key jump");
+        // the user presses a button while that jump is still in flight
+        clear_actions;
+        btn_cmd = 64'h2001000000000001;        // Link sub-instruction: LinkTopC
+        @(negedge clk); btn_cmd_valid = 1;
+        @(negedge clk); btn_cmd_valid = 0;
+        repeat (4) @(negedge clk);
+        if (dut.ev_btn !== 1'b1)
+            fail("S25a: setup - the press did not latch during V_WAIT");
+        // the reader never answers: the give-up timer expires
+        @(negedge clk); dut.wait_tmr = 24'hFFFFFF;
+        wait_settled;
+        if (saw_replay)
+            fail("S25a: a press latched during V_WAIT executed after the give-up");
+        // ---- (b) the ev_error door ----------------------------------------
+        nav_ready = 0; vm_restart; wait_idle;
+        menu_active = 0;
+        cur_vts = 8'd3; cur_pgcn = 8'd2; cur_cell = 8'd4; cell_count = 8'd6;
+        clear_actions;
+        @(negedge clk); key_menu = 1;
+        @(negedge clk); key_menu = 0;
+        wait_settled;
+        if (dbg_state[3:0] !== 4'd10)
+            fail("S25b: setup - expected V_WAIT after the menu-key jump");
+        clear_actions;
+        btn_cmd = 64'h2001000000000001;        // LinkTopC
+        @(negedge clk); btn_cmd_valid = 1;
+        @(negedge clk); btn_cmd_valid = 0;
+        repeat (4) @(negedge clk);
+        if (dut.ev_btn !== 1'b1)
+            fail("S25b: setup - the press did not latch during V_WAIT");
+        // The reader rejects the jump. ⚠ fb = FB_GAVEUP is what makes this arm
+        // REACH the door rather than merely knock on it: the V_WAIT ev_error exit
+        // does not consume ev_error, so V_IDLE dispatches the fallback chain FIRST
+        // (it outranks ev_btn), and every other arm of that chain issues a jump ->
+        // V_WAIT -> ev_loaded, whose exit clears ev_btn in fixed and mutated builds
+        // alike. FB_GAVEUP is the chain's one NO-JUMP arm, so the stale press is
+        // left as the only thing that can still act. Without this the arm passes
+        // against the un-cleared door (measured).
+        @(negedge clk); dut.fb = 3'd6;         // FB_GAVEUP
+        pulse_error;
+        wait_settled;
+        if (saw_replay)
+            fail("S25b: a press latched during V_WAIT executed after pgc_error");
+        $display("S25 stale button press dies with the V_WAIT it landed in PASS");
+    end
+    endtask
+
+    // ========================================================================
     // PART 3: DVD-game entropy (counter-mode GPRM tick, rnd seed, entropy stir)
     // Encodings are real, decode_vmcmd-validated commands (from SCENEIT_JR).
     // ========================================================================
@@ -1653,6 +1746,7 @@ module dvd_vm_tb;
         part1;
         $display("PART 1: %0d fixture cases run", n_cases);
         part2;
+        run_s25;
         part3;
 
         if (errors == 0) $display("ALL TESTS PASS (dvd_vm_tb)");

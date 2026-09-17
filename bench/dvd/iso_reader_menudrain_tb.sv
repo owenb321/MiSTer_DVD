@@ -201,7 +201,7 @@ module iso_reader_menudrain_tb;
         .cur_vts(cur_vts), .cur_pgcn(cur_pgcn_rd), .cur_cell(cur_cell),
         .cell_count(cell_count_w),
         .next_pgcn(rd_next), .prev_pgcn(rd_prev), .goup_pgcn(rd_goup),
-        .key_menu(key_menu), .key_resume(1'b0), .key_title(1'b0), .key_return(1'b0),
+        .key_menu(key_menu), .key_title(1'b0), .key_return(1'b0),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid), .btn_sel(6'd1),
         .btns_armed(1'b0), .btn_force(), .btn_force_val(),
         .jump_pulse(vm_jump_pulse), .jump_domain(vm_jump_domain),

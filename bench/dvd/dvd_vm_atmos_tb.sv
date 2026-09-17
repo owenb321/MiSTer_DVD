@@ -28,7 +28,7 @@ module dvd_vm_atmos_tb;
     reg        vm_pgc_end = 0, menu_active = 0;
     reg [7:0]  cur_vts = 8'd1, cur_pgcn = 8'd2, cur_cell = 8'd0, cell_count = 8'd1;
     reg [7:0]  next_pgcn = 0, prev_pgcn = 0, goup_pgcn = 0;
-    reg        key_menu = 0, key_resume = 0;
+    reg        key_menu = 0;
     reg [63:0] btn_cmd = 0; reg btn_cmd_valid = 0;
     reg [5:0]  btn_sel = 6'd1; reg btns_armed = 0;
     reg [15:0] rnd_seed = 16'hACE1; reg sec_tick = 0, ent_stir = 0; reg [15:0] ent_val = 0;
@@ -60,7 +60,7 @@ module dvd_vm_atmos_tb;
         .cur_vts(cur_vts), .cur_pgcn(cur_pgcn), .cur_cell(cur_cell),
         .cell_count(cell_count),
         .next_pgcn(next_pgcn), .prev_pgcn(prev_pgcn), .goup_pgcn(goup_pgcn),
-        .key_menu(key_menu), .key_resume(key_resume), .key_title(1'b0), .key_return(1'b0), .key_cmenu(1'b0),
+        .key_menu(key_menu), .key_title(1'b0), .key_return(1'b0), .key_cmenu(1'b0),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid),
         .btn_sel(btn_sel), .btns_armed(btns_armed),
         .btn_force(btn_force), .btn_force_val(btn_force_val),
