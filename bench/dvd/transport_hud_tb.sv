@@ -26,7 +26,7 @@ module transport_hud_tb;
     reg         scrub_held = 0, scrub_dir = 0;
     reg  [1:0]  scrub_tier = 0;
     reg         display_edge = 0, load_evt = 0, show_evt = 0;
-    reg         pause_vis = 0;   // "this pause holds the line up" (B1 yes, frame step no)
+    reg         pause_seed = 1;  // how a pause STARTS: 1 = B1 (line up), 0 = frame step
     reg  [31:0] cur_time = 0, total_time = 0;
     reg  [7:0]  cur_pgm = 0, nr_pgm = 0;
     reg         aud_evt = 0, sub_evt = 0, angle_evt = 0, chap_evt = 0;
@@ -74,7 +74,7 @@ module transport_hud_tb;
         .menu_active(menu_active), .dbg_mode(1'b0), .pause_q(pause_q),
         // the existing arms are all B1 pauses, which DO hold the line up -- so the
         // visibility term tracks pause_q here and every pre-existing expectation stands.
-        .pause_vis(pause_vis), .bar_active(bar_active),
+        .pause_seed(pause_seed), .pause_show_o(), .bar_active(bar_active),
         .scrub_held(scrub_held), .scrub_dir(scrub_dir), .scrub_tier(scrub_tier),
         .display_edge(display_edge), .load_evt(load_evt), .show_evt(show_evt),
         .cur_time(cur_time), .total_time(total_time),
@@ -164,6 +164,10 @@ module transport_hud_tb;
         end
     endtask
 
+    task press_display;
+        begin @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0; end
+    endtask
+
     task check_vis(input [127:0] label, input want);
         begin
             @(posedge clk);
@@ -189,8 +193,9 @@ module transport_hud_tb;
         check_vis("T1b persist on", 1'b1);
         check_line("T1c play line", ">     0:12:34/1:37:05 CH 12/23~~");
 
-        // T2: pause icon
-        pause_q = 1;
+        // T2: pause icon. pause_seed=1 (a B1 pause), so the line comes up and the
+        // line is decodable -- while paused, `vis` is the pause latch alone.
+        pause_seed = 1; pause_q = 1;
         check_line("T2 pause icon", "\"     0:12:34/1:37:05 CH 12/23~~");
         pause_q = 0;
 
@@ -522,28 +527,62 @@ module transport_hud_tb;
         // exit code sees a FAILING bench as a passing one -- which is exactly how the
         // bench/ac3 suites went silently red for weeks (docs/ac3_decoder_architecture.md
         // §4.11), and it makes every RED arm in bench/dvd/run_ov_geom.sh vacuous.
-        // T6p: A FRAME-STEP PAUSE DOES NOT HOLD THE LINE UP, AND B9 STILL TOGGLES IT.
-        //      pause_q is the STATE (the disc is paused either way, so the icon must
-        //      keep reading it); pause_vis is "this pause holds the line up", which a
-        //      B1 pause sets and a frame-step pause does not (2026-09-17, user
-        //      decision). The Display button must work in BOTH, so it is exercised
-        //      here against pause_vis=0 -- the case that did not exist before.
+        // T6p: B9 IS A TRUE TOGGLE IN BOTH KINDS OF PAUSE (2026-09-17, user spec).
+        //      frame step -> pause : no line initially, B9 toggles it on, off, on...
+        //      B1         -> pause : line up initially, B9 toggles it off, on, off...
+        //      While paused, `vis` is the pause latch ALONE -- not persist_q and not
+        //      show_tmr. That is load-bearing: a B1 pause also arms show_tmr (pause_edge
+        //      is in emu's hud_user_evt), so with an OR the first B9 press could hide
+        //      nothing, which is the reported defect.
         persist_q_clear();
-        pause_q = 1; pause_vis = 1;                    // a B1 pause
-        check_vis("T6p-a B1 holds", 1'b1);
-        pause_vis = 0;                                 // the same pause, step-initiated
-        check_vis("T6p-b step no", 1'b0);
-        // the icon must still say PAUSE -- the disc is paused, only the hold changed
-        // ⚠ the line is only decodable while it is VISIBLE, so check the icon during
-        // the B9-on step below; here just prove the hold is gone.
-        @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0;
-        check_vis("T6p-d B9 shows", 1'b1);
-        // and the ICON still says PAUSE -- the disc IS paused, only the hold changed.
-        // Glyph copied from T2, not guessed.
-        check_line("T6p-d2 icon", "\"     0:12:34/1:37:05 CH 12/23~~");
-        @(posedge clk); display_edge = 1; @(posedge clk); display_edge = 0;
-        check_vis("T6p-e B9 hides", 1'b0);
-        pause_q = 0; pause_vis = 0;
+        pause_q = 0; @(posedge clk);
+
+        // --- frame-step pause: starts CLEAN ---
+        pause_seed = 0; pause_q = 1;
+        check_vis("T6p-a step hide", 1'b0);
+        press_display();
+        check_vis("T6p-b B9 on", 1'b1);
+        check_line("T6p-c icon PAUSE", "\"     0:12:34/1:37:05 CH 12/23~~");
+        press_display();
+        check_vis("T6p-d B9 off", 1'b0);
+        press_display();
+        check_vis("T6p-e B9 on 2", 1'b1);
+        pause_q = 0; @(posedge clk);
+
+        // --- B1 pause: starts VISIBLE, and B9 must be able to HIDE it ---
+        // ⚠ show_evt IS PULSED HERE because emu does it: pause_edge is a term of
+        // hud_user_evt, so a real B1 pause arms the ~2.5 s auto-show timer at the same
+        // instant. Without this the arm is unfaithful AND toothless -- an OR-form `vis`
+        // (pause_show | persist_q | show_tmr) is then indistinguishable from the
+        // correct one, and the mutation that restores the reported defect passes.
+        pause_seed = 1; pause_q = 1;
+        @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
+        check_vis("T6p-f B1 shown", 1'b1);
+        press_display();
+        check_vis("T6p-g B9 hides", 1'b0);
+        press_display();
+        check_vis("T6p-h B9 shows", 1'b1);
+        pause_q = 0; @(posedge clk);
+
+        // --- and with the PLAYBACK line pinned on, a pause can still be hidden ---
+        // The other half of the same point: while paused the latch is the only term, so
+        // persist_q cannot force the line up either.
+        pause_q = 0; @(posedge clk);
+        press_display();                       // persist ON for playback
+        check_vis("T6p-j pinned", 1'b1);
+        pause_seed = 1; pause_q = 1;
+        check_vis("T6p-k pin show", 1'b1);
+        press_display();
+        check_vis("T6p-l pin hide", 1'b0);
+        pause_q = 0; @(posedge clk);
+        check_vis("T6p-m play kept", 1'b1);    // playback persistence survived
+        press_display();                       // put it back for the final check
+        @(posedge clk);
+
+        // --- the PLAYBACK status line is not disturbed by pause-time presses ---
+        // 6 presses were made above; persist_q must still be OFF, or pausing and
+        // hiding would silently flip what playback shows.
+        check_vis("T6p-i play clean", 1'b0);
 
         if (errors == 0) begin
             $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");

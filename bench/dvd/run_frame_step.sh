@@ -47,9 +47,13 @@
 #   N1  emu: step_session dropped           -> A14  (THE 20-FRAME LIMIT)
 #   N2  emu: step_session not inverted      -> A14
 #   N3  emu: session latched from step_edge -> A14
-#   P1  emu: pause_vis fed the raw pause_q  -> A15  (THE OLD HUD BEHAVIOUR)
+#   Q1  emu: pause_seed not inverted        -> A15
+#   Q2  emu: seek_bar not given the shared latch -> A15
+#   Q3  hud: paused vis ORs persist/show_tmr -> T6p-g/T6p-l (THE REPORTED DEFECT)
 #   P2  emu: step_paused cleared on pause_aud -> A15
 #   P3  emu: the PAUSE ICON fed the mask    -> A15
+#   P4  emu: step_paused latch order inverted -> A15 (THIS SHIPPED; hardware caught it,
+#       sim could not -- pause_q is non-blocking, so a leading clear makes the set dead)
 #   R13 rtl: step_arm cleared only if paused-> pickup_hold_tb 5e
 #   R14 rtl: ofv_paced loses | step_arm     -> pickup_hold_tb 5b
 #   R16 rtl: step_arm cleared on bare pickup_go -> pickup_hold_tb 5b/5c/5d
@@ -133,12 +137,15 @@ if iv "$TMP/th_sim" dvd/transport_hud.sv bench/dvd/transport_hud_tb.sv > "$TMP/t
 else
     failed "transport_hud_tb"; grep -E "FAIL" "$TMP/th.out" | head -3
 fi
-grep -q "T6p-b step no: vis=0" "$TMP/th.out" \
-    && pass "T6p-b measured: step-paused hides the line" \
-    || failed "T6p-b did not run"
-grep -q "T6p-d B9 shows: vis=1" "$TMP/th.out" \
-    && pass "T6p-d measured: B9 still toggles it there" \
-    || failed "T6p-d did not run"
+# the two arms that ARE the spec: a frame-step pause starts clean, and a B1 pause can
+# be HIDDEN with B9 (the 2026-09-17 report). Named explicitly so a relabelled or
+# skipped arm fails loudly instead of leaving the suite green on nothing.
+grep -q "T6p-a step hide: vis=0" "$TMP/th.out" \
+    && pass "T6p-a measured: a frame-step pause starts clean" \
+    || failed "T6p-a did not run"
+grep -q "T6p-g B9 hides: vis=0" "$TMP/th.out" \
+    && pass "T6p-g measured: B9 hides a B1 pause (the report)" \
+    || failed "T6p-g did not run"
 
 # The CLOCK half: a step advances the display, so the presentation clock must follow
 # it or lip-sync breaks on resume by one picture PER PRESS. disp_sched_tb [11b].
@@ -237,14 +244,54 @@ mut N3 "$E" "$TMP/N3.sv" "s/else if (step_tgl ^ step_tgl_q)       step_session <
 # for with B1 holds the status line and seek bar up; a pause the FRAME STEP button
 # started does not. The disc is paused either way, so the ICON keeps reading the real
 # pause_q -- only the hold follows step_paused.
-mut P1 "$E" "$TMP/P1.sv" "s/    .pause_vis    (pause_q && !step_paused),  \/\/ a frame-step pause does not hold the line up/    .pause_vis    (pause_q),/" \
-    && red_emu "P1 pause_vis fed the raw pause_q (the old behaviour)" "$TMP/P1.sv" "transport_hud .pause_vis"
+mut Q1 "$E" "$TMP/Q1.sv" "s/    .pause_seed   (!step_paused),/    .pause_seed   (step_paused),/" \
+    && red_emu "Q1 pause_seed not inverted" "$TMP/Q1.sv" "transport_hud .pause_seed"
 
-mut P2 "$E" "$TMP/P2.sv" "s/        if (~pause_q)                        step_paused  <= 1'b0;/        if (~pause_aud) step_paused <= 1'b0;/" \
+mut Q2 "$E" "$TMP/Q2.sv" "s/    .pause_vis  (hud_pause_show_w),/    .pause_vis  (pause_q \&\& !step_paused),/" \
+    && red_emu "Q2 seek_bar given its own expression, not the shared latch" "$TMP/Q2.sv" "seek_bar .pause_vis"
+
+mut P2 "$E" "$TMP/P2.sv" "s/        else if (~pause_q)                   step_paused  <= 1'b0;/        else if (~pause_aud) step_paused <= 1'b0;/" \
     && red_emu "P2 step_paused cleared on ~pause_aud" "$TMP/P2.sv" "the step_paused latch is not"
+
+# P4 -- THE ORDER, and this one SHIPPED. pause_q is assigned non-blocking, so on the
+# cycle step_pause_go fires it still reads 0: put the clear first and it wins every
+# time, the set is UNREACHABLE, step_paused never leaves 0, and the status line sits
+# there through the whole step session. Sim stayed green (transport_hud_tb drives
+# pause_vis directly; emu has no bench) and the HARDWARE showed it on the first try.
+python3 - "$E" "$TMP/P4.sv" <<'PYP4'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+s = open(src).read()
+good = """        if (step_pause_go)                   step_paused  <= 1'b1;
+        else if (~pause_q)                   step_paused  <= 1'b0;"""
+bad  = """        if (~pause_q)                        step_paused  <= 1'b0;
+        else if (step_pause_go)              step_paused  <= 1'b1;"""
+assert s.count(good) == 1, "P4 anchor stale"
+open(dst, 'w').write(s.replace(good, bad))
+PYP4
+if [ ! -s "$TMP/P4.sv" ]; then
+    failed "P4: the mutation script did not write a file -- anchor stale, proves NOTHING"
+elif cmp -s "$E" "$TMP/P4.sv"; then failed "P4: the mutation did not apply"; else
+    red_emu "P4 latch order inverted (the shipped bug)" "$TMP/P4.sv" "THE SET MUST COME FIRST"
+fi
 
 mut P3 "$E" "$TMP/P3.sv" "s/^    .pause_q      (pause_q), .*$/    .pause_q      (pause_q \&\& !step_paused),/" \
     && red_emu "P3 the icon fed the masked value" "$TMP/P3.sv" "transport_hud .pause_q"
+
+# Q3 -- while paused, `vis` ORs persist_q/show_tmr back in. THIS IS THE REPORTED
+# DEFECT: a B1 pause arms show_tmr (pause_edge is in hud_user_evt), so with the OR the
+# first B9 press hides nothing. Caught by T6p-g and T6p-l, the two arms that ARE the
+# report. ⚠ It was caught by NOTHING until T6p pulsed show_evt at the B1 pause the way
+# emu does -- an arm that clears the other terms cannot tell the two forms apart.
+mut Q3 dvd/transport_hud.sv "$TMP/Q3.sv" \
+    "s/             : (pause_q ? pause_show                 \/\/ paused: B9 owns it outright/             : (pause_show | persist_q | bar_active | (show_tmr != 27'd0)) \/\/MUT/" \
+    "s/                        : (persist_q | bar_active | (show_tmr != 27'd0)))//" \
+    && { if iv "$TMP/q3sim" "$TMP/Q3.sv" bench/dvd/transport_hud_tb.sv > /dev/null 2>&1 \
+            && vvp "$TMP/q3sim" 2>&1 | grep -q "FAIL T6p-g"; then
+             pass "Q3 paused vis ORs persist/show_tmr -> caught by T6p-g (the report)"
+         else
+             failed "Q3 not caught by T6p-g -- the arm cannot see the reported defect"
+         fi; }
 
 echo "== RED (resample_addrgen.v: the datapath) =="
 A=dvd/resample_addrgen.v

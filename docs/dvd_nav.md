@@ -369,30 +369,48 @@ raster phase. `pickup_hold_tb` arm **5e** is that claim made executable (press w
 available, then offer exactly one frame: the press must cost exactly one pickup, not two,
 and must leave `step_arm` clear).
 
-⛔ **THE OVERLAYS DO NOT HOLD UP FOR A FRAME-STEP PAUSE (2026-09-17, by user decision —
-this REVERSES the first reading).** The original note here said `hud_user_evt` needed no
-change because `transport_hud.sv` and `seek_bar.sv` already take `pause_q` as a visibility
-**level**, so the pausing press raises the status line and bar and holds them for the whole
-pause. That was a correct description of the MECHANISM and the wrong behaviour to want:
-stepping through a scene should not sit behind a status line and a progress bar.
-**Now:** a pause the user asked for with **B1** holds them up; a pause the **frame step**
-button started does not. `emu.sv` latches `step_paused` (set by the shared `step_pause_go`,
-cleared by `~pause_q`) and feeds `pause_q && !step_paused` to both overlays.
-★ **The ICON still reads the real `pause_q`** — the disc IS paused, so `transport_hud` keeps
-a `pause_q` port for the ❚❚ and takes the hold on a SEPARATE `pause_vis`. `seek_bar` has no
-icon, so its port is simply RENAMED to `pause_vis`: feeding a masked value into a port
-called `pause_q` would be a wrong fact on a correctly-named port, the issue #81 class.
-★ **B9 (Display) needed no change at all and that is why the shape works:**
-`transport_hud` toggles `persist_q` on `display_edge` with no pause condition, so Display
-brings the line up during a frame-step pause exactly as it does in a B1 pause or in
-playback — and hides it again on the next press.
-⚠ `step_paused` clears on `~pause_q`, **not** `~pause_aud`: a Stop or a held scrub is not a
-frame-step pause and must keep the overlays' own rules. It also means a B1 press that STARTS
-a pause leaves it 0 (pause_q is low on that cycle), so a B1 pause comes up visible.
-⚠ `step_edge` stays out of `hud_user_evt` for BOTH reasons now: it would re-arm the ~2.5 s
-timer on every press of a burst, and the pause must not raise the line at all.
-Gates: `transport_hud_tb` **T6p** (a-e: B1 holds, step does not, the icon still says PAUSE,
-B9 shows it, B9 hides it) and emu mutations **P1–P3**.
+⛔ **B9 OWNS THE HUD IN A PAUSE; THE PAUSE ONLY SEEDS IT (2026-09-17, by user decision —
+this is the SECOND revision of this behaviour).** The first note here said `hud_user_evt`
+needed no change because both overlays take `pause_q` as a visibility **level**, so a pause
+holds the line up. Correct about the mechanism, wrong about what is wanted. The second cut
+masked that level for a frame-step pause — better, but still a HOLD, so B9 could not hide
+the line during a **B1** pause. The spec is a true toggle in both:
+
+| paused with | initially | B9 |
+|---|---|---|
+| **B1** | status line + seek bar up | hides, and toggles thereafter |
+| **frame step** | nothing drawn | shows, and toggles thereafter |
+
+**Shape.** `transport_hud` owns a pause-scoped latch `pause_show`: seeded at the pause EDGE
+from the new `pause_seed` input (emu drives `!step_paused`), toggled by `display_edge` for
+as long as the pause lasts, cleared when the pause ends. While `pause_q` is high, `vis` is
+**that latch ALONE**.
+⚠⚠ **"Alone" is load-bearing and is the whole reported defect.** A B1 pause ALSO arms
+`show_tmr` (emu's `hud_user_evt` includes `pause_edge`), so if the latch were merely another
+OR term the first B9 press would hide nothing. Same for `persist_q` when the user had the
+line pinned during playback.
+★ **`seek_bar` takes the SAME latch** (`transport_hud.pause_show_o` → `seek_bar.pause_vis`)
+rather than deriving its own: it has no `display_edge`, so any local expression would stop
+following B9 and the two overlays would disagree about one pause.
+⚠ **`persist_q` and `show_tmr` are PLAYBACK-scoped now** — both `display_edge` arms carry
+`&& !pause_q`. Without that, pausing, hiding, and resuming would silently flip the playback
+status line, and a paused press would pop the line back up on resume (bench arm T6p-i).
+⚠⚠ **AND THE FIRST CUT OF THE `step_paused` LATCH SHIPPED BROKEN — hardware caught it, sim
+could not.** It read `if (~pause_q) 0; else if (step_pause_go) 1;`, and `pause_q` is
+assigned NON-BLOCKING, so on the cycle `step_pause_go` fires `pause_q` still reads 0: the
+clear won every time and the set was UNREACHABLE. The comment beside it even stated that
+fact and drew the wrong conclusion from it. `transport_hud_tb` drives the port directly and
+emu has no bench, so nothing in sim could see it — and the checker pinned the WRONG SHAPE as
+correct, because the pattern came from the same mistaken reasoning as the RTL.
+★ **The durable lesson:** a wiring checker pins a shape; it cannot tell you the shape is
+wrong. Where a latch's ORDER carries the meaning, that is an argument for extracting it into
+a module with a bench — the `flush_ctl.sv` / `stop_ctl.sv` precedent.
+
+Gates: `transport_hud_tb` **T6p** (13 arms: both modes seeded correctly, B9 toggling
+repeatedly in each, the icon still reading PAUSE, the pinned-playback case, and playback
+persistence surviving pause-time presses) and emu mutations **P1–P4 / Q1–Q3**, where **Q3**
+restores the OR form and must fail T6p-g and T6p-l, and **P4** restores the inverted latch
+order that shipped.
 
 ⚠ Two accepted, measured residuals: a step press inside the D-pad seek coalesce window
 (~0.4 s) sets `pause_q` and the jump's `jump_ack` then clears it, so the press appears to do

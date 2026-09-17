@@ -438,22 +438,28 @@ def main():
                 'See the pause arm: step_edge is the press, !pause_q and !stopped_w keep '
                 'the two frame-step arms exclusive, step_ok is the shared predicate.')
 
-    sp_blk = re.search(r"if \(~pause_q\)\s*step_paused\s*<=\s*1'b0;\s*"
-                       r"else if \(step_pause_go\)\s*step_paused\s*<=\s*1'b1;", src)
+    # ⚠ ORDER, and it is not cosmetic: pause_q is assigned NON-BLOCKING, so on the cycle
+    # step_pause_go fires it still reads 0. With the clear arm first it wins every time,
+    # the set is UNREACHABLE, and step_paused never leaves 0 -- which SHIPPED and was
+    # caught by hardware, not by sim (transport_hud_tb drives pause_vis directly and emu
+    # has no bench). The set must come first.
+    sp_blk = re.search(r"if \(step_pause_go\)\s*step_paused\s*<=\s*1'b1;\s*"
+                       r"else if \(~pause_q\)\s*step_paused\s*<=\s*1'b0;", src)
     if sp_blk is None:
-        bad('step_paused', "the step_paused latch is not `if (~pause_q) 0; else if "
-                           "(step_pause_go) 1;` in %s. Clearing on ~pause_q is what makes a "
-                           "B1 pause come up visible (pause_q is low on the cycle B1 sets "
-                           "it, so the clear arm holds it 0); clearing on ~pause_aud instead "
-                           "would let a Stop or a held scrub count as a frame-step pause."
-                           % rel)
+        bad('step_paused', "the step_paused latch is not `if (step_pause_go) 1; else if "
+                           "(~pause_q) 0;` in %s. THE SET MUST COME FIRST: pause_q is "
+                           "non-blocking, so on the cycle step_pause_go fires it still "
+                           "reads 0 and a leading ~pause_q clear makes the set UNREACHABLE "
+                           "-- that shipped and only hardware caught it. And the clear must "
+                           "be ~pause_q, not ~pause_aud, or a Stop or a held scrub would "
+                           "count as a frame-step pause." % rel)
 
     hud = connections(src, 'transport_hud')
     if hud is None:
         bad('transport_hud instance', 'not found in %s.' % rel)
     else:
         for port, want in (('pause_q', {'pause_q'}),
-                           ('pause_vis', {'pause_q', 'step_paused'})):
+                           ('pause_seed', {'step_paused'})):
             if port not in hud:
                 bad('transport_hud .%s' % port,
                     'port not connected in %s. .pause_q is the STATE (the icon) and '
@@ -461,12 +467,17 @@ def main():
                     'both must be driven.' % rel)
             else:
                 exact_terms('transport_hud .%s' % port, hud[port], want,
-                            'The icon must read the real pause state, and the hold must be '
-                            'masked by step_paused. Swapping them makes a frame-step pause '
+                            'The icon must read the real pause state; pause_seed says only '
+                            'HOW the pause started (B1 = line up, frame step = clean), and '
+                            'B9 toggles from there. Swapping them makes a frame-step pause '
                             'either invisible-but-showing-PLAY or visible again.')
-        want_inverted('transport_hud .pause_vis', hud.get('pause_vis'), 'step_paused',
-                      'Un-inverted, the line would be held up ONLY during a frame-step '
-                      'pause -- the feature exactly backwards.')
+        want_inverted('transport_hud .pause_seed', hud.get('pause_seed'), 'step_paused',
+                      'Un-inverted, a B1 pause would start hidden and a frame-step pause '
+                      'would start visible -- the feature exactly backwards.')
+        if 'pause_show_o' not in hud:
+            bad('transport_hud .pause_show_o',
+                'not connected in %s. seek_bar has no display_edge of its own, so the two '
+                'overlays must share THIS latch or they disagree about one pause.' % rel)
 
     bar = connections(src, 'seek_bar')
     if bar is None:
@@ -476,11 +487,11 @@ def main():
                                    'on a pause (or, if still named pause_q, would carry a '
                                    'wrong fact on a correctly-named port).' % rel)
     else:
-        exact_terms('seek_bar .pause_vis', bar['pause_vis'], {'pause_q', 'step_paused'},
-                    'The seek bar has no icon, so it takes the hold only -- same mask as '
-                    'the status line, or the two overlays disagree about one pause.')
-        want_inverted('seek_bar .pause_vis', bar['pause_vis'], 'step_paused',
-                      'See transport_hud .pause_vis.')
+        exact_terms('seek_bar .pause_vis', bar['pause_vis'], {'hud_pause_show_w'},
+                    'The bar must take transport_hud\'s pause-scoped latch VERBATIM, not a '
+                    'second expression: it has no display_edge, so any locally-derived '
+                    'value would stop following B9 and the two overlays would disagree '
+                    'about one pause.')
 
     # =====================================================================
     # A13. hud_user_evt stays OUT of this -- pinned BY REJECTION

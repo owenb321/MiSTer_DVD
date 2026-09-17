@@ -74,7 +74,13 @@ module transport_hud #(
     // started does not (2026-09-17, by user decision -- a step session should not sit
     // behind a status line). The disc is paused either way, so the ICON must keep
     // reading pause_q; only the "hold the line up" term follows this.
-    input  wire        pause_vis,           // 1 = this pause holds the line up
+    // How this pause STARTS: 1 = the user asked for it with B1 (line up), 0 = the frame
+    // step button started it (clean picture). It is only a SEED -- B9 toggles from
+    // there, in either kind of pause, as often as the user likes.
+    input  wire        pause_seed,
+    // the pause-scoped visibility, for seek_bar (which has no display_edge of its own,
+    // so the two overlays must share ONE latch or they disagree about one pause)
+    output wire        pause_show_o,
     input  wire        bar_active,          // scrub gesture held + linger
     input  wire        scrub_held,          // D-pad held (FF/REW icon while 1)
     input  wire        scrub_dir,           // 1 = forward
@@ -219,6 +225,29 @@ module transport_hud #(
     end
 
     // ---- visibility --------------------------------------------------------
+    // PAUSE-SCOPED HUD VISIBILITY (2026-09-17). While paused, `vis` is THIS latch and
+    // nothing else -- not persist_q, not show_tmr. Seeded at the pause edge from
+    // pause_seed, then toggled by B9 for as long as the pause lasts.
+    // ⚠ It has to be the SOLE term while paused, not another OR input: a B1 pause both
+    // sets pause_seed AND arms show_tmr (pause_edge is in emu's hud_user_evt), so with
+    // an OR the first B9 press could not hide anything -- which is exactly the report.
+    // ⚠ And persist_q must NOT be toggled by a press made while paused (see below), or
+    // pausing, hiding, and resuming would silently flip the PLAYBACK status line.
+    reg        pause_show;
+    reg        pause_q_d;
+    assign     pause_show_o = pause_show;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            pause_show <= 1'b0;
+            pause_q_d  <= 1'b0;
+        end else begin
+            pause_q_d <= pause_q;
+            if (!pause_q)             pause_show <= 1'b0;         // not paused
+            else if (!pause_q_d)      pause_show <= pause_seed;   // the pause EDGE
+            else if (display_edge)    pause_show <= ~pause_show;  // B9, either mode
+        end
+    end
+
     reg        persist_q;
     reg [26:0] show_tmr;
     reg [26:0] pop_tmr;
@@ -233,7 +262,10 @@ module transport_hud #(
             pop_tmr   <= 27'd0;
             pop_type  <= 4'd0;
         end else begin
-            if (display_edge) persist_q <= ~persist_q;
+            // ⚠ NOT while paused: a paused press drives pause_show (above). Without
+            // this guard, pause -> B9(hide) -> resume would leave the PLAYBACK status
+            // line toggled as a side effect of having hidden it during the pause.
+            if (display_edge && !pause_q) persist_q <= ~persist_q;
             if (load_evt)     persist_q <= 1'b0;
             // DVD-FORK FIX: the press that turns persistence OFF must HIDE the
             // line, not re-arm the auto-show timer. vis below is
@@ -242,8 +274,12 @@ module transport_hud #(
             // user saw nothing happen, pressed again (toggling back ON), and
             // reported that Display "only turns on, never off". persist_q reads
             // its PRE-assignment value in this block, so it means "was on".
-            if (display_edge && persist_q)  show_tmr <= 27'd0;   // OFF: hide now
-            else if (show_evt || display_edge) show_tmr <= SHOW_TICKS;
+            // ⚠ BOTH display_edge arms are PLAYBACK-scoped (!pause_q), for the same
+            // reason persist_q is: while paused B9 drives pause_show, and a paused
+            // press that armed this timer would pop the line back up on RESUME --
+            // measured by transport_hud_tb T6p-i.
+            if (display_edge && persist_q && !pause_q)  show_tmr <= 27'd0;   // OFF: hide now
+            else if (show_evt || (display_edge && !pause_q)) show_tmr <= SHOW_TICKS;
             else if (load_evt)            show_tmr <= 27'd0;
             else if (show_tmr != 27'd0)   show_tmr <= show_tmr - 27'd1;
             // popup: last event wins the single slot
@@ -291,7 +327,9 @@ module transport_hud #(
         end
     end
     wire vis = dbg_mode ? 1'b1                       // diagnostic: always on, incl. menus
-             : (persist_q | pause_vis | bar_active | (show_tmr != 27'd0)) && !menu_active;
+             : (pause_q ? pause_show                 // paused: B9 owns it outright
+                        : (persist_q | bar_active | (show_tmr != 27'd0)))
+               && !menu_active;
     // CSS warning shows in menus too (scrambled discs green-screen there first)
     wire pop_vis = (pop_tmr != 27'd0) &&
                    (!menu_active || pop_type == 4'd4 ||

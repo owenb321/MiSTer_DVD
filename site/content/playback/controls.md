@@ -308,11 +308,17 @@ It steps the same way from a pause you started with **B1**, and while the disc i
 The first press only pauses — it does not also advance — so the frame you stop on is the one
 that was on screen.
 
-**Nothing is drawn over the picture while you step.** A pause you start with **B1** brings up
-the status line and progress bar and keeps them there; a pause you start with **Frame Step**
-does not, so you get a clean look at the frame. Press **B9 (Display)** if you want the
-timecode while stepping — it toggles the status line in either kind of pause, and again to
-hide it.
+**Nothing is drawn over the picture while you step.** How a pause *starts* decides what you
+see, and **B9 (Display)** takes it from there:
+
+| you paused with | on screen | then B9 |
+|---|---|---|
+| **B1 (Pause)** | status line and progress bar | hides them — press again to bring them back |
+| **B18 (Frame Step)** | nothing, just the picture | shows them — press again to hide |
+
+So you can step through a scene with a clean frame, or call the timecode up when you want
+it, in either kind of pause and as often as you like. Whatever you had the status line set
+to during playback is remembered and comes back when you resume.
 
 You can step as far into the film as you like, and pressing **Play** afterwards picks up in
 sync however long you spent stepping. Audio is muted while you step, and the sound for the

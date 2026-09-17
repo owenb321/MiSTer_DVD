@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-framestep4"
+`define CORE_VERSION "dev-framestep6"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1338,6 +1338,9 @@ wire       saver_on_w;       // screensaver owns the screen
 // Declared HERE for the same reason as stopped_w above: the transport block's
 // frame-step guard reads it ~250 lines before the instance.
 wire       hold_freeze;      // a held seek gesture owns the freeze, not pause_q
+// transport_hud's pause-scoped HUD visibility (seeded at the pause edge, toggled by
+// B9). Declared here because seek_bar is instanced BEFORE transport_hud drives it.
+wire       hud_pause_show_w;
 // core -> Main requests (B19..B21). Declared here because the dvd_telem
 // instance reads them ~500 lines before the block that drives them, and
 // emu.sv has no `default_nettype none`.
@@ -3829,11 +3832,19 @@ always @(posedge clk_sys) begin
         if (~pause_aud)                      step_session <= 1'b0;
         else if (step_tgl ^ step_tgl_q)       step_session <= 1'b1;
 
-        // A pause that is over cannot be a step pause; a B1 press that STARTS one is
-        // not either (pause_q is low on that cycle, so the ~pause_q arm holds it 0
-        // and the B1 pause comes up with the overlays visible, as before).
-        if (~pause_q)                        step_paused  <= 1'b0;
-        else if (step_pause_go)              step_paused  <= 1'b1;
+        // ⚠⚠ THE SET MUST WIN, AND THIS ORDER IS THE WHOLE OF IT. `pause_q` is assigned
+        // NON-BLOCKING in the transport block, so on the very cycle step_pause_go fires
+        // pause_q still reads 0 -- put the `~pause_q` clear first and it wins every
+        // time, the set arm is UNREACHABLE, and step_paused never leaves 0. That
+        // shipped: sim stayed green (transport_hud_tb drives pause_vis directly, and
+        // emu has no bench) and the HARDWARE showed the status line during a
+        // frame-step pause on the first try.
+        // After the set, pause_q is high for the rest of the pause, so the clear arm
+        // only fires when the pause actually ends -- which is what it is for.
+        // ⚠ A B1 press that STARTS a pause does not set this: step_pause_go requires
+        // step_edge, so a B1 pause comes up with the overlays visible, as before.
+        if (step_pause_go)                   step_paused  <= 1'b1;
+        else if (~pause_q)                   step_paused  <= 1'b0;
     end
 end
 
@@ -6101,7 +6112,10 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .menu_active  (menus_on && menu_active),
     .dbg_mode     (hud_dbg),                // O[2]: show reader PGCN/VTS, always visible
     .pause_q      (pause_q),                  // the STATE: drives the ❚❚ icon
-    .pause_vis    (pause_q && !step_paused),  // a frame-step pause does not hold the line up
+    // How the pause STARTED -- a seed, not a hold. B1 brings the line up, frame step
+    // leaves the picture clean, and B9 toggles from there in either mode.
+    .pause_seed   (!step_paused),
+    .pause_show_o (hud_pause_show_w),         // shared with seek_bar: ONE latch
     .bar_active   (bar_active_w),
     // The status-line transport icon is shared: a HELD FF/REW scrub renders
     // its accelerating tier, and an open D-pad coalesce window renders the tap
@@ -6202,7 +6216,9 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .last_rbn   (title_last_rbn_w),
     // progress popup (stretch): pops on pause/landed seek/chapter with the
     // LIVE playhead + chapter notches, suppressed in menus like the HUD
-    .pause_vis  (pause_q && !step_paused),  // see transport_hud: visibility only
+    // the SAME pause-scoped latch transport_hud toggles, so the bar and the status
+    // line cannot disagree about one pause (seek_bar has no display_edge of its own)
+    .pause_vis  (hud_pause_show_w),
     .show_evt   (hud_user_evt),
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
