@@ -21,6 +21,11 @@
 #                               (5e) a press while LIVE buys nothing and leaves no
 #                               arm behind -- the executable form of "the pausing
 #                               press must not also arm a step".
+#   disp_sched_tb    [11b]      the CLOCK: a step advances the display, so the
+#                               presentation clock must move with it -- without that it
+#                               falls one picture behind PER PRESS and nothing catches
+#                               it, because disc_w tests the tagged picture against the
+#                               EXTRAPOLATED next_pts and a step session is continuous.
 #   stop_ctl_tb                 the unregression: Stop's two stages and the
 #                               pause/stop screensaver are untouched. stop_ctl owns
 #                               stopped_w, which the new arm reads.
@@ -116,6 +121,15 @@ grep -q "\[5b\] one step = one pickup (consumed=5)" "$TMP/ph_green.out" \
 grep -q "\[5e\] live: a step press costs nothing and leaves no arm" "$TMP/ph_green.out" \
     && pass "5e measured: a live step press buys nothing" \
     || failed "5e did not run"
+
+# The CLOCK half: a step advances the display, so the presentation clock must follow
+# it or lip-sync breaks on resume by one picture PER PRESS. disp_sched_tb [11b].
+if iv "$TMP/ds_sim" dvd/disp_sched.sv bench/dvd/disp_sched_tb.sv > "$TMP/ds.log" 2>&1 \
+   && vvp "$TMP/ds_sim" > "$TMP/ds.out" 2>&1 && grep -q "^PASS: disp_sched_tb" "$TMP/ds.out"; then
+    pass "disp_sched_tb ([11b] = the clock follows a frame step): $(grep -o '\[11b\].*' "$TMP/ds.out" | head -1)"
+else
+    failed "disp_sched_tb"; grep -E "^FAIL" "$TMP/ds.out" | head -3
+fi
 
 if iv "$TMP/stop_sim" dvd/stop_ctl.sv bench/dvd/stop_ctl_tb.sv > "$TMP/stop.log" 2>&1 \
    && vvp "$TMP/stop_sim" > "$TMP/stop.out" 2>&1 \
