@@ -252,6 +252,83 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **SELECT DURING A MENU TRANSITION KICKED THE PLAYER BACK TO THE BOOT CHAIN — ONE
+  BUTTON CARRIED TWO MEANINGS, AND THE WRONG ONE OUTLIVED THE TRANSITION (2026-09-17,
+  branch `fix/select-during-transition`); sim-proven RED/GREEN, 6 regressions each caught
+  by exactly its own assertion, ⏳ HW-confirm pending.** Field report: *"sometimes when
+  navigating menus, if I hit select during a transition, it will kick me back to the boot
+  chain"* — `ULTIMATE_T2`'s Mission Profiles slides and the `Scooby-Doo 2` menu
+  transitions, landing on the disc's **first copyright screen**.
+  ★★ **THE MAINTAINER'S CONTROL ARM IS WHAT CHOSE THE MECHANISM, and it cost one
+  sentence:** on Scooby it reproduces **only if the Menu button was used to skip the boot
+  logos**. That press is what latches `rsm_*` at the FP title and sets `came_via_menukey`;
+  without it the resume path was already a no-op, so the symptom could not occur. Two
+  rival candidates — the destination menu's HLI arming ahead of its picture, and a stale
+  `ev_btn` surviving `V_WAIT` — are independent of the Menu press and die on that arm.
+  ★★ **THE DISC WAS NOT ASKING US TO BLOCK THE PRESS, MEASURED AT BOTH GRANULARITIES.**
+  The spec mechanism is UOPs: `pgc_uop` at PGC-header offset **0x08**,
+  `Button_Select_or_Activate` = **bit 17** (`0x00020000`), ORed by libdvdnav
+  (`dvdnav.c:1438`) with the per-VOBU `vobu_uop_ctl` at PCI-data offset 0x08 — the only
+  field with transition granularity, since the spec has no per-cell UOP. **Bit 17 is clear
+  in every menu PGC and every menu VOBU on both discs** (T2 `0x01F847E0`/`0x01F84720`,
+  Scooby `0x01F8F7E0`/`0x01FDF7E0`); the only PGCs setting it are zero-cell dispatchers,
+  which present no video. ⚠ On T2 the hub and its transition **share one PGC** (VTSM PGCN
+  14: cell 1 the still hub, cell 2 a 904-sector transition), so a per-PGC prohibition
+  could not have expressed it either. The discs' only "nothing to press now" signal is
+  **HLI absence** (`hli_ss=0, btn_ns=0` on every transition VOBU) — which we already
+  honour: `nav_pci` disarms. **So no UOP work would fix this and none was done.**
+  ★★★ **THE DEFECT: `emu.sv` RE-INTERPRETED THE PRESS, AND `dvd_vm` NEVER INVALIDATED THE
+  RE-INTERPRETATION.** Select-with-nothing-armed became `key_resume`, and a transition is
+  exactly that window (every cell seek / VM jump pulses `seek_ack`/`jump_ack` →
+  `load_flush`, ungated by `keep_vbuf` → `pipe_rst_n` → `nav_pci` resets and `armed`
+  clears; the transition cells then arm nothing for the length of the clip — T2 ~2 s,
+  Scooby 6–19 s). `ev_resume` was **the one user event `ev_loaded` did not clear**, where
+  `ev_btn` is cleared at both exits precisely because a button command belongs to the PGC
+  whose button record it came from. So the press outlived the transition, the load and the
+  PRE block, and `LinkRSM`'d out of the menu that had just arrived.
+  **Fix = `key_resume`/`ev_resume` deleted end to end.** ★ **Lossless, and checkably so
+  rather than as a judgement call:** `ev_resume`'s condition and all 14 body assignments
+  were **character-for-character identical** to `ev_menu` case (a) — same
+  `came_via_menukey && rsm_vts != 0` gate, same destination, same SPRM4–8 restore, same
+  `skip_pre`. The only divergence was the FAILING branch, where `ev_menu` re-invokes Root
+  and `ev_resume` did nothing, so deleting it **removes a destination and adds none**. B5
+  already did everything B4 could there, and the manual only ever documented *"Select
+  activates the highlighted button"*.
+  Completed alongside: the `ev_error` and give-up exits from `V_WAIT` now drop a press
+  latched during the wait. **Two doors, not one**, and `ev_error` is the more reachable,
+  since `pgc_error` is an ordinary fallback outcome.
+  ⛔ **`menu_seen` WAS ALSO TRIED AS A GATE ON THE RSM LATCHES AND REVERTED — DO NOT
+  RE-DERIVE IT.** The idea was that a Menu press inside the boot chain should not latch a
+  resume point (the Cluedo comment says the FP trampoline *"is not a resumable resume
+  point"*). But `~menu_seen` does not mean "in the boot chain"; it also means "this disc
+  has not shown a menu yet" — the state of a user watching a feature on a disc that boots
+  straight into it (**BBB's FP is `JumpTT 4`**). Gating there silently stops
+  Menu-out/Menu-back-in toggling on exactly those discs. ★ **`dvd_vm_tb` [S17a] and [S24b]
+  fail on it immediately, and the fix was to believe them rather than add `menu_seen=1` to
+  their setup** — the bench-that-cannot-fail anti-pattern, in the direction nobody
+  expects. It was also unnecessary: the defect is fixed at the trigger.
+  **Gate: `bench/dvd/run_select_noop.sh --red`.** `emu.sv` has no bench and the fix there
+  is a DELETION, so **`tools/check_select_noop.py`** asserts the invariant instead —
+  *every statement reading `sel_edge` also writes `nav_act_p`, no `key_resume*` net is
+  driven, the `dvd_vm` instance has no `.key_resume`*. ★ Its last two checks are
+  **anti-vacuity controls**: without them a file that deleted Select outright (**R2**) or
+  unwired the Menu key that now solely owns resume (**R3**) passes cleanly — *"nothing
+  drives it"* is not the property wanted. ★ **R0 is not a hand-made mutation** — it runs
+  the real pre-fix `emu.sv` out of git. ★ **R4 proves `strip_comments()` is load-bearing
+  rather than asserting it**: the replacement comment quotes the deleted code verbatim, on
+  purpose, so a grep-based checker reports the defect present on a **correct** file
+  (measured: 2 hits).
+  ⚠ **`dvd_vm_tb` [S16] would have gone VACUOUS and was re-pointed, not left alone** — it
+  existed only to assert `key_resume` was gated, so a mechanical port-removal edit leaves
+  it asserting nothing while still printing PASS. New **[S25]** covers both `V_WAIT` doors;
+  ⚠ its arm (b) sets `fb = FB_GAVEUP` deliberately — the fallback chain's one NO-JUMP arm —
+  because every other arm jumps and that jump's `ev_loaded` clears `ev_btn` in fixed and
+  mutated builds alike (measured: the arm passed against the un-cleared door until it did).
+  ⚠ **Runner lesson:** the first cut sniffed for `/error/i` and reported `iso_reader_menu_tb`
+  as FAILING, because its TEST6/TEST7 print `pgc_error=1` as the **expected** outcome. It
+  requires the PASS marker positively now, which also catches a bench that dies early.
+  Detail: **`docs/dvd_nav.md`** "Select during a menu transition", `docs/dvd_vm.md`.
+
 - ✅ **SEEKING INSIDE AN ANGLE BLOCK — A BLOCK OCCUPIED N TIMELINE SLOTS INSTEAD OF ONE, A
   SCRUB NEVER ARMED THE ANGLE MACHINERY, AND THE SNAP LANDED ON WHICHEVER ANGLE THE TARGET
   FELL IN (2026-09-15/16, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN and

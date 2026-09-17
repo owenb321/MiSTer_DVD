@@ -174,6 +174,16 @@ the disc provides one.
 **B5 (Menu)** and **B12 (Title)** are the two menu keys a set-top remote has. Menu goes to
 the disc's root menu; Title goes to the title menu. Many discs make them the same thing.
 
+If no button is highlighted, **Select does nothing**. To get back to the film, press
+**Menu** — if you opened the menu with Menu in the first place, it takes you back to
+exactly where you left off.
+
+!!! note "Presses during a menu's own animations"
+    Many discs animate between menu screens, and there is nothing to press while that is
+    playing — the disc has taken its buttons away for the duration. Presses during those
+    few seconds are ignored, the same as on a set-top player. Wait for the next screen to
+    settle and the highlight to appear.
+
 ### Menu during the disc's opening chain
 
 Pressing **Menu** over a copyright or warning screen — before the disc has shown you any
