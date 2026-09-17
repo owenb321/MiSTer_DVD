@@ -1748,6 +1748,30 @@ wire        in_title_menu = in_title_hli && (hl_btn_ns > 6'd1);
 // white rabbit doesn't either (its SetSTN opens the gate in the PGC pre-command).
 wire        sp_menu_early = menus_on && !menu_active && hl_menu_seen;
 
+// ---- FRAME STEP (B18) domain ---------------------------------------------
+// ONE predicate, read by BOTH halves of the gesture. The press that PAUSES and
+// the press that STEPS must agree about where frame step is legal: if they could
+// disagree, the button would pause a title it can never step -- a dead-end pause
+// the user has to undo with B1.
+//   cell_ready   : a DVD title cell is streaming. This is the step arm's shipped
+//                  scope; widening frame step to a flat .mpg/VCD (lin_seek_ok_w)
+//                  is a separate change and must widen BOTH halves at once, or a
+//                  flat file pauses and never steps.
+//   !menu_active : a menu-domain PGC is not a thing to step.
+//   !hold_freeze : ⚠ a HELD FF/REW scrub already owns the freeze, and
+//                  resample_addrgen.v:451,458 gate ofv_paced AND ofv_pickup on
+//                  ~hold_freeze UNCONDITIONALLY (step_arm does NOT bypass it), so
+//                  a step press during a scrub can advance nothing. Without this
+//                  term it would instead SET pause_q, and a scrub's release is a
+//                  seek_ack, not a jump_ack -- nothing in the chain below clears
+//                  it. The disc would land on the scrub target PAUSED: a stuck
+//                  pause the user never asked for.
+// ⚠ !in_title_menu is deliberately NOT here. B1 already pauses inside an
+// in-title game menu (pause_edge carries no such guard), so excluding it would
+// make frame step stricter than the pause button for no measured reason, and
+// would narrow a step arm that was HW-confirmed on 2026-09-13.
+wire step_ok = cell_ready && !menu_active && !hold_freeze;
+
 // ---- gamepad decode (Phase 4: keys go to the DVD-VM; only the title
 // transport and the Phase-3 button-nav pulses stay here) -------------------
 always @(posedge clk_sys or negedge reset_n) begin
@@ -1791,7 +1815,16 @@ always @(posedge clk_sys or negedge reset_n) begin
         // must NOT clear pause -- the whole point is to land stopped on the next
         // frame. Placed before the pause_q chain so it cannot be mistaken for
         // one of the resume conditions below.
-        if (step_edge && (pause_q || stopped_w) && cell_ready && !menu_active)
+        // ⚠ The FIRST press on a PLAYING title never gets here: it PAUSES (the
+        // last arm of the chain below). pause_q still reads 0 on that cycle --
+        // that arm's assignment is non-blocking -- so this guard is correctly
+        // false and one press can never both pause and arm a step. That split is
+        // the design, not a limitation: while the title is live an ordinary
+        // pickup happens every frame, and pause_dec is 2 CDC flops deep where
+        // step_dec needs 3, so an arm raised on the pausing press would be eaten
+        // by a pickup that was going to happen anyway -- one press would advance
+        // one frame or two depending only on raster phase.
+        if (step_edge && (pause_q || stopped_w) && step_ok)
             step_tgl <= ~step_tgl;
 
         if (start_streaming)      pause_q <= 1'b0;   // fresh load clears pause
@@ -1812,6 +1845,25 @@ always @(posedge clk_sys or negedge reset_n) begin
         else if (dpad_seek_en && (cell_ready || lin_seek_ok_w) && !menu_active &&
                  !in_title_menu && !menu_nav &&
                  (up_edge || dn_edge || lf_edge || rt_edge)) pause_q <= 1'b0;
+        // FRAME STEP AS A PAUSE ROUTE. A step press while the picture is LIVE
+        // pauses; the next press steps (the arm above). That is what a set-top
+        // player and VLC do, and before this the button was simply DEAD during
+        // playback -- the guard above swallowed it unless you already knew to
+        // press B1 first.
+        // ⚠ LAST in the chain, deliberately. This arm can only ever SET pause, so
+        // at the bottom it cannot mask a RESUME. Coincident edges are real (an IR
+        // remote sends ~9 taps a second; gamepad, keyboard and CEC are all live at
+        // once) and the two failure costs are not symmetric: a swallowed step
+        // press costs one more press, a swallowed resume is a stuck pause. Note
+        // that step_ok's ~hold_freeze does NOT cover the FF/REW arm above -- on
+        // the ff_edge cycle hold_freeze has not risen yet -- so the PRIORITY is
+        // what covers it. start_streaming and jump_ack still win too.
+        // ⚠ !stopped_w is load-bearing, not tidiness: while STOPPED the step arm
+        // above owns the press, and a pause_q left set under a stop survives the
+        // PLAY that clears the stop (`pause_edge && !stopped_w` cannot fire on
+        // that cycle) -- the disc would resume PAUSED. Same trap the pause
+        // toggle's own ~stopped_w gate documents.
+        else if (step_edge && !pause_q && !stopped_w && step_ok) pause_q <= 1'b1;
         // any VM jump / menu key resumes playback (a paused governor would
         // freeze the menu the VM is jumping to)
         if (jump_ack)             pause_q <= 1'b0;
