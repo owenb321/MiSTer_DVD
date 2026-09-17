@@ -1334,6 +1334,10 @@ wire       seek_ack;         // from dvd_iso_reader (seek accepted this cycle)
 wire       stopped_w;        // Stop is asserted (hold + blank the picture)
 wire       stop_restart;     // pulse: stage-2 PLAY -> restart reader + VM at FP
 wire       saver_on_w;       // screensaver owns the screen
+// Held FF/REW time-scrub freeze (dvd/scrub_ctrl.sv, instanced further down).
+// Declared HERE for the same reason as stopped_w above: the transport block's
+// frame-step guard reads it ~250 lines before the instance.
+wire       hold_freeze;      // a held seek gesture owns the freeze, not pause_q
 // core -> Main requests (B19..B21). Declared here because the dvd_telem
 // instance reads them ~500 lines before the block that drives them, and
 // emu.sv has no `default_nettype none`.
@@ -2039,7 +2043,8 @@ wire [31:0] dsi_tbl_rdata;
 // pauses while held. Title RBN span comes from the reader. The bar_* outputs
 // (playhead + target position) are computed for the Phase-11 on-screen position
 // bar and left UNWIRED for now (the seek action itself needs no overlay).
-wire        hold_freeze;
+// hold_freeze is declared with stopped_w far above -- the transport block's
+// frame-step guard reads it ~250 lines before this instance.
 wire        dpad_pend, dpad_pend_dir, dpad_pend_evt, dpad_pend_fail;
 wire [1:0]  dpad_pend_n;
 wire [6:0]  dpad_pend_min;
