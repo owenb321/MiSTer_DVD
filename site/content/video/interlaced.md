@@ -95,6 +95,18 @@ duration and then play perfectly, because a held picture never delivers a new fr
 the correction to act on. A held picture straightens itself within about half a second,
 so you may still catch it settling.
 
+### Motion on FMV and laserdisc-style discs
+
+A separate problem affected a small group of discs: the interactive FMV titles that began
+life on laserdisc — *Thayer's Quest*, *Dragon's Lair II*, *Mad Dog McCree 2*,
+*Time Traveler* and a few older films. These encode each field as its own picture, and
+the core used to play the two fields of every frame **in the wrong order**. The picture
+was sharp and correctly aligned, but motion stuttered — each frame stepped very slightly
+backwards before moving on — which reads as "not properly interlaced" on a CRT.
+
+The core now takes the order from the disc. Ordinary film and television discs are
+unaffected: they encode whole frames, where this question does not arise.
+
 !!! question "CRT owners: please report anything that looks wrong"
     Verified on a composite set, over HDMI, on a RetroTINK, and on real PAL sets. Beyond
     that, televisions and scalers differ, and a set's sync separator is exactly what

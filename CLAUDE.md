@@ -252,6 +252,111 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **FIELD-CODED MPEG-2 PLAYED ITS TWO FIELDS IN THE WRONG ORDER — `top_field_first` IS
+  EMPTY ON A FIELD PICTURE AND THE SPEC IS WHY (2026-09-18, branch
+  `fix/field-order-field-coded`); sim-proven RED/GREEN on the REAL shipped modules over
+  REAL disc bytes, 5 RTL mutations + 5 wiring re-regressions each caught by its own arm,
+  ⏳ HW-confirm pending.** Field report: *"the Thayer's Quest disc looks
+  like it's not interlaced properly, even when playing back on a CRT."*
+  ★★ **THE DISC IS FIELD-CODED AND THE SYNTAX ELEMENT IT WOULD ANSWER WITH IS FORBIDDEN
+  FROM SAYING ANYTHING.** ISO 13818-2 **6.3.10 requires `top_field_first == 0` whenever
+  `picture_structure` is a FIELD picture** (1=top / 2=bottom rather than 3=frame); the
+  display order is given by **which parity is CODED FIRST**. `dvd/resample_addrgen.v`
+  built its image schedule from `top_field_first` alone (`:1035-1036`, `:1049-1050`, and
+  `nxt_first_top` at `:493`), so every field-coded picture was emitted **BOTTOM-then-TOP
+  unconditionally**. Decode was never wrong — `hdr_upd_slot` (`vld.v:2376`) already fires
+  `update_picture_buffers` once per field PAIR, so picbuf gets one correctly woven frame.
+  Only the ORDER OF PRESENTATION was lost.
+  ★★ **MEASURED THREE INDEPENDENT WAYS, AND THE THIRD IS THE ARTEFACT ITSELF.**
+  (1) Bitstream: **93.9–100 % of pairs per VTS coded TOP-first** while `tff` reads 0 on
+  100 % of them. (2) **ffmpeg**, an independent decoder, reports `top_field_first=1` on
+  **400/400** frames. (3) **The pixels**: split each decoded frame into its two fields,
+  build both candidate display sequences and sum the field-to-field difference — TOP-first
+  scores a zig-zag figure of **0.043 against BOT-first's 0.625** and 1.3–1.5× lower total
+  variation, across four separate scenes of VTS_01 plus VTS_02 and VTS_05. ★ **Control:
+  Thayer's VTS_09 is frame-coded with `tff=1`, and there both orderings measure identical
+  to four decimals** — the metric discriminates EXACTLY on field-coding, which is what
+  makes it evidence rather than a number.
+  ★★ **WHY IT SURVIVED EVERY PRIOR FIELD-ORDER ROUND, AND NEITHER OF THEM WAS WRONG.**
+  `docs/single_raster_analog.md` §3.12's `FIELD1_VPOS` fix is about which RASTER SLOT a
+  field lands in; this is about WHICH FIELD IS THE EARLIER INSTANT — a different axis. And
+  that same file already records why the library is blind to it: *"film barely cares — 3:2
+  material is progressive frames SPLIT into fields, so both fields of a frame are the same
+  instant and swapping them costs the line assignment but NO TEMPORAL ERROR."* On
+  true-interlaced field-coded content they are distinct instants 1/59.94 s apart, so the
+  display sequence becomes `t1,t0,t3,t2,…`. ⛔ `docs/field_parity.md` never contemplated
+  field-coded SOURCE at all — its whole model assumes the addrgen SPLITS a decoded frame.
+  **Fix = 2 files, and deliberately NO new port below the vld.** `rtl/mpeg2/vld.v` derives
+  **`first_field_top`** (on a frame picture it IS `top_field_first`; on a field picture it
+  is the parity coded first), latched at `STATE_PICTURE_CODING_EXT0` gated on
+  `pic_hdr_upd`, mirroring the `drop_rff_lat` idiom beside it; `rtl/mpeg2/mpeg2video.v`
+  then feeds **motcomp's existing `top_field_first` input** from it. picbuf stores it as
+  `output_top_field_first`, which `resample_addrgen` ALREADY reads — so the ~9 benches
+  instantiating `resample_addrgen` need no tie-off ([[new-rtl-port-floats-z-in-benches]]).
+  ⚠ **The `pic_hdr_upd` gate is load-bearing:** `flags_commit` pulses at EVERY picture's
+  coding extension, the pair's SECOND field included, and that field's `picture_structure`
+  is the opposite parity — ungated it clobbers the value with its own inverse on every
+  pair. Mutation **M2** is that arm.
+  ⛔ **DELIBERATELY NOT `(* preserve *)`**, unlike `drop_ps_lat`/`drop_rff_lat` beside it:
+  the stated reason for those (`vld.v:119`) is that they are PRIVATE COPIES the fitter must
+  not merge back into a shared export. This register duplicates nothing. Applying an
+  attribute without its reason is how an idiom rots into noise.
+  ⚠ `~drop_this_picture` is **defence in depth, not load-bearing** — a dropped picture's
+  value is always overwritten by the next slot owner before anything is emitted, so **no
+  arm can catch its removal and no mutation was invented for it.**
+  ★ **Blast radius is STRUCTURAL, not statistical:** the change can only alter pictures
+  where `picture_structure != FRAME`, and on frame pictures the value is identical to
+  `tff` by construction. `top_field_at_bottom` (`vld.v:2247`) is frame-gated;
+  `disp_sched`'s `pic_tff`/`skip_tff` are only reached under **progressive_sequence**,
+  which the spec forbids alongside field pictures (**measured 0 in every sequence
+  extension of Thayer VTS 01/02/05/09**, not merely argued). Sampled **296 discs (1-in-4 of
+  1181): 291 have <5 % field-coded content** and cannot move. Affected set = the
+  laserdisc-FMV genre: Thayer's Quest, Mad Dog 2, Dragon's Lair II, Time Traveler,
+  Angel And The Badman.
+  ⚠⚠ **THAT COUNT IS A LOWER BOUND AND THE REASON IS A TRAP WORTH KEEPING: the sweep
+  sampled each disc's LARGEST VTS, and Thayer's largest (VTS_09) is the one FRAME-coded
+  VTS on the disc — so it reported THAYER ITSELF as 0.0 % field-coded.** That is the
+  "Thayer trap" (`tools/video_cadence_census.py`'s own header) one level up: the wrong
+  **VTS**, not the wrong part of a VTS. Hence `--field-order --all-vts`, which finds 9 of
+  its 11 VTSes majority field-coded.
+  ⚠ On the hand-drawn titles (Dragon's Lair II, Time Traveler) the PIXEL metric cannot
+  discriminate — their content carries little per-field motion, so both orderings measure
+  the same. The bitstream evidence is uniform and the fix is correct for all; the VISIBLE
+  benefit concentrates on genuine 60-field FMV.
+  ⚠ The tff-ordered branches are also reached on a **progressive display with
+  `deinterlace=0`** (bob), so this corrects HDMI-bob output too, not only the CRT.
+  ⚠ **Telemetry semantics moved:** `dvd_telem.sv` word 14 "tff" now reads the display-order
+  verdict on field-coded content, not the raw syntax element.
+  ⚠ Expected transient: the emitted order flips B,T → T,B, so `par_fb` spends ONE inserted
+  field (`PAR_CONFIRM` ≈ 0.5 s) re-settling the raster phase once after a mode change or
+  seek — by design, and what `field_phase_tb` invariant C guards.
+  **Gate: `bench/dvd/run_field_order.sh --red`** — scores **motcomp_picbuf's OUTPUT PIN**
+  `output_top_field_first` at each presented frame (what `resample_addrgen` orders the
+  fields from) against a truth derived independently in Python from the SPEC (coded parity
+  + 6.1.1.11's display reorder), never a signal the fix names. ★ **The RED arm is the SEAM,
+  not a hand-made mutation:** `-Pfield_order_tb.SEAM=0` feeds picbuf the raw element =
+  exactly the pre-fix `mpeg2video.v`, on the real shipped modules. Measured RED **12/12
+  displayed pictures shown BOTTOM-first on a TOP-first disc**; GREEN 12/12 correct.
+  ★ **The IMMOVABILITY arm is the safety claim made executable:** the frame-coded fixture
+  measures byte-identical under BOTH seams.
+  ★ **`tools/check_field_order_wiring.py` polices the one port connection no module bench
+  can see** (the issue #81 lesson), and is RED on **the real pre-fix file out of git (R0)**
+  plus 4 re-regressions — including **R4, which proves `strip_comments()` is load-bearing:
+  a reverted file whose comment quotes the fix is still caught.**
+  ⚠ **A PRE-EXISTING BENCH DEFECT CAME OUT WITH IT:** `bench/dvd/vld_drop_rff_tb.sv` wired
+  picbuf from vld's RAW `top_field_first`, so it encoded the PRE-FIX seam — its `out_tff`
+  logging was meaningless on field-coded content and anything copied from that skeleton
+  (the natural one for this bench) would have inherited the bug. Fixed in the same change.
+  ⛔ **Out of scope:** on the progressive/HDMI path this content is WOVEN into a frame,
+  which combs because the two fields are different instants. That needs a real
+  deinterlacer, not a field-order change.
+  **HW gate is the maintainer's EYE on a CRT** — a woven screenshot cannot show field
+  order, so the HIL capture path structurally cannot gate this; per
+  `docs/single_raster_analog.md` it must be judged on video-sourced 29.97i content with
+  motion, in Weave or CRT Simulation, **never Bob**. Thayer's Quest is that vehicle and is
+  the reported disc; check a film disc unregressed in the same round.
+  Detail: **`docs/field_parity.md`** (2026-09-18 section), `docs/motcomp_throughput.md`.
+
 - ✅ **A PGC OVER 128 CELLS ALIASED THE SEEK SHADOW TABLES AND THE SCRUB PREVIEW READ
   0:00:00 (2026-09-17, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN from the
   disc's measured shape, mutation-gated, and ✅ HW-CONFIRMED 2026-09-18** (maintainer, build

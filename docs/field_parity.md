@@ -387,6 +387,118 @@ refreshes have elapsed. Moved earlier it would wait the budget out instead of me
   mount whose first content is a several-second still — the case that made this look
   disc-specific — is the one that needed it.
 
+## ★ A SECOND, INDEPENDENT AXIS: WHICH SOURCE FIELD IS THE *FIRST INSTANT*
+
+*(2026-09-18, field report on Thayer's Quest: "looks like it's not interlaced properly,
+even when playing back on a CRT". Fix: `rtl/mpeg2/vld.v` `first_field_top` +
+the seam in `rtl/mpeg2/mpeg2video.v`. Gate: `bench/dvd/run_field_order.sh --red`.)*
+
+⚠⚠ **EVERYTHING ABOVE IS ABOUT RASTER PARITY — which raster slot a field lands in.
+It says nothing about TEMPORAL ORDER, and this document previously had no field-coded
+case at all.** The whole model above assumes `resample_addrgen` *splits a decoded
+frame* into TOP/BOTTOM images. That is true of frame-coded content. It is not the only
+thing a disc can contain.
+
+**A field-coded picture is not a split frame.** `picture_structure` 1 (TOP) or 2
+(BOTTOM), rather than 3 (FRAME), means the encoder coded each field as its own
+picture. `vld.v`'s `hdr_upd_slot` already fires `update_picture_buffers` once per
+field *pair*, so `motcomp_picbuf` still receives one correctly woven frame — decode was
+never wrong. What was lost is **which of the two fields is the earlier instant**.
+
+### The syntax element is empty here, and the spec says so
+
+ISO 13818-2 **6.3.10 requires `top_field_first == 0` whenever `picture_structure` is a
+field picture.** It carries no information there: the display order is given by **which
+parity is CODED FIRST** in the pair. `dvd/resample_addrgen.v`'s image build (`:1035-1036`
+and `:1049-1050`, and `nxt_first_top` at `:493`) read `top_field_first` and nothing else,
+so every field-coded picture was emitted **`BOTTOM` then `TOP`, unconditionally**.
+
+★ **This is why the 2026-09-06 field-order work (`FIELD1_VPOS`, §3.12 of
+`docs/single_raster_analog.md`) did not catch it, and was not wrong.** That work fixed
+the *raster* assignment and was validated on frame-coded content. `docs/single_raster_
+analog.md` already records the reason the rest of the library is insensitive:
+
+> *"Film-sourced content barely cares — 3:2 material is progressive frames split into
+> fields, so both fields of a frame are the same instant and swapping them costs the
+> line assignment but **no temporal error**."*
+
+On **true-interlaced field-coded** content the two fields are distinct instants
+1/59.94 s apart, so swapping them is a real temporal inversion: the display sequence
+becomes `t1, t0, t3, t2, …`.
+
+### Measured three independent ways
+
+| evidence | result |
+|---|---|
+| Bitstream, GOP-anchored pairing (`tools/video_cadence_census.py --field-order`) | **93.9–100 %** of pairs coded **TOP-first** per VTS; `tff = 0` on **100 %** of field pictures |
+| ffmpeg — an independent decoder | `top_field_first = 1` on **400 / 400** frames |
+| The pixels — field-sequence total variation | TOP-first zig-zag **0.043** vs BOT-first **0.625**; TOP-first 1.3–1.5× lower total variation |
+
+Robust across four separate scenes of VTS_01 plus VTS_02 and VTS_05 (alternation
+0.002–0.112 TOP-first against 0.352–0.646 BOT-first). **Control:** Thayer's VTS_09 is
+frame-coded with `tff = 1`; both orderings measure identical to four decimals and the
+core was already correct there — the metric discriminates *exactly* on field-coding.
+
+### The fix is two files, and it does not add a port below the vld
+
+`rtl/mpeg2/vld.v` derives **`first_field_top`** — on a frame picture it is
+`top_field_first` exactly; on a field picture it is the parity coded first — latched at
+`STATE_PICTURE_CODING_EXT0` and gated on `pic_hdr_upd`. `rtl/mpeg2/mpeg2video.v` then
+feeds **motcomp's existing `top_field_first` input** from it. `motcomp_picbuf` stores it
+as `output_top_field_first`, which is what `resample_addrgen` already reads — so
+nothing below the vld gains a port, and the ~9 benches instantiating
+`resample_addrgen` are untouched.
+
+⚠ **The `pic_hdr_upd` gate is load-bearing.** `flags_commit` pulses at *every* picture's
+coding extension, the pair's second field included — and that field's `picture_structure`
+is the opposite parity, so an ungated latch clobbers the value with its own inverse on
+every pair. Mutation **M2** is that arm.
+
+### Why nothing else moves — provable, not statistical
+
+- `top_field_at_bottom` (`vld.v:2247`, the only decode-math consumer) is explicitly
+  `picture_structure == FRAME_PICTURE` gated.
+- `disp_sched`'s `pic_tff` / `skip_tff` are only reached under `pic_ps` / `skip_ps` =
+  **progressive_sequence**, which the spec forbids alongside field pictures. Measured on
+  the disc, not merely argued: `progressive_sequence == 0` in every sequence extension
+  of Thayer VTS 01/02/05/09.
+- `repeat_first_field` and `progressive_frame` are 0 on field pictures by spec, so the
+  `else` arm at `resample_addrgen.v:1047` is the only reachable branch.
+
+⇒ **The only behaviour that can change is the field order of field-coded pictures.**
+Sampled 296 discs (1-in-4 of the library): **291 have < 5 % field-coded content** and
+cannot move at all. The affected set is the laserdisc-FMV genre — Thayer's Quest,
+Mad Dog 2, Dragon's Lair II, Time Traveler, Angel And The Badman.
+
+⚠⚠ **That count is a LOWER BOUND, and the reason is a trap worth remembering.** The
+sweep sampled each disc's *largest* VTS, and Thayer's largest (VTS_09) is the one
+frame-coded VTS on the disc — so it reported **Thayer itself as 0.0 % field-coded**.
+That is the "Thayer trap" (`tools/video_cadence_census.py`'s own header) one level up:
+the wrong **VTS**, not the wrong part of a VTS. Use `--field-order --all-vts`.
+
+⚠ On the hand-drawn titles (Dragon's Lair II, Time Traveler) the *pixel* metric cannot
+discriminate — their content carries little per-field motion, so both orderings measure
+the same. The bitstream evidence is uniform across all of them and the fix is correct
+for all; the **visible** benefit concentrates on genuine 60-field FMV.
+
+### Interaction with the corrector above
+
+The emitted order flips from `B,T` to `T,B`. Both alternate, so `alt_break` stays quiet
+in steady state, but the initial content/raster phase flips — so `par_fb` spends **one
+inserted field** (`PAR_CONFIRM` ≈ 0.5 s) healing it once after a mode change or seek.
+That is by design and is exactly what `field_phase_tb`'s invariant C guards.
+
+⚠ The tff-ordered branches are also reached on a **progressive display with
+`deinterlace = 0`** (bob), so this corrects HDMI-bob output too, not only the CRT.
+
+⚠ **Telemetry semantics moved with it:** `disp_sched.sv`'s `dbg_flags` → `dvd_telem.sv`
+word 14 "tff" now reads the *display-order* verdict on field-coded content, not the raw
+syntax element. Do not read that bit as the bitstream value in a future HW round.
+
+⛔ **Out of scope, deliberately:** on the progressive/HDMI path this content is woven
+into a frame, which combs because the two fields are different instants. Fixing that
+needs a real deinterlacer — a much larger feature, not a field-order change.
+
 ## Files
 
 - `rtl/mpeg2/mixer.v` — `frame_top_par_err` output (verdict register only; matcher
@@ -396,7 +508,13 @@ refreshes have elapsed. Moved earlier it would wait the budget out instead of me
 - `dvd/resample_addrgen.v` — the corrector (`alt_break` / `par_fb` / `par_armed` /
   `pickup_go` / the insertion branch), and the hold arm (`par_hold_ins` / the pair swap
   in the `STATE_REPEAT` image build)
-- `bench/dvd/field_phase_tb.sv`, `bench/dvd/run_field_phase.sh` — **the gate**
+- `bench/dvd/field_phase_tb.sv`, `bench/dvd/run_field_phase.sh` — **the gate** (raster parity)
+- `rtl/mpeg2/vld.v` `first_field_top` + the seam in `rtl/mpeg2/mpeg2video.v` — **temporal**
+  field order on field-coded content (the 2026-09-18 section above)
+- `bench/dvd/field_order_tb.sv`, `bench/dvd/run_field_order.sh` — **that gate**;
+  `tools/field_order_fixture.py` cuts the fixtures, `tools/check_field_order_wiring.py`
+  polices the one port connection no module bench can see
+- `tools/video_cadence_census.py --field-order --all-vts` — the golden model
 - `bench/dvd/field_parity_tb.sv`, `bench/dvd/run_field_parity.sh` — the alignment view
   (kept, but it agrees with the RTL by construction: see the caveat above)
 - Every TB that instantiates `resample`/`resample_addrgen` directly ties
