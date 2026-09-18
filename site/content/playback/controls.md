@@ -40,8 +40,8 @@ itself to MiSTer as a keyboard counts, which is how a **remote** drives the play
 | ++"T"++ / ++f2++ | Title menu | | ++"L"++ | A-B Repeat |
 | ++"A"++ / ++f3++ | Audio (cycle) | | ++"."++ | Frame Step |
 | ++"S"++ / ++f4++ | Subtitle (cycle) | | ++"E"++ | Eject |
-| ++"G"++ | Angle (cycle) | | Keypad ++"+"++ | Vol Up |
-| ++"D"++ | Display (toggle status line) | | Keypad ++"-"++ | Vol Down |
+| ++"G"++ | Angle (cycle) | | ++equal++ / ++num-plus++ | Vol Up |
+| ++"D"++ | Display (toggle status line) | | ++minus++ / ++num-minus++ | Vol Down |
 | | | | ++0++ – ++9++ | Select menu button by number |
 
 !!! warning "Fast Fwd and Rewind work differently here"
@@ -305,6 +305,10 @@ volume row sets. That is deliberate: it is a single control that covers HDMI, th
 output *and* S/PDIF together, and it is the only one that can affect a bitstream being
 passed through to a receiver. A press burst is applied in full, so tapping four times
 moves four steps.
+
+On a keyboard these are ++equal++ and ++minus++, or ++num-plus++ and ++num-minus++ on the
+keypad if you have one — either pair does the same thing, and no ++shift++ is needed for
+++equal++.
 
 Your TV remote's own volume keys already work too, and always did — MiSTer handles those
 itself, before the core ever sees them.

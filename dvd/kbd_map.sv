@@ -166,8 +166,36 @@ module kbd_map (
             // (user_io.cpp:4283-4296) and they never reach ps2_key. Note
             // 0x79/0x7B are NOT in the keypad-DIGIT block (70 69 72 7A 6B 73
             // 74 6C 75 7D), which is reserved for menu button numbers.
+            //
+            // ★ THE MAIN-ROW -/= ARE ALIASED ONTO THE SAME TWO BITS, because a
+            // tenkeyless keyboard, a laptop and most HID remotes have no keypad
+            // at all -- which left volume unreachable for them. This is not an
+            // invention: MAIN'S OWN OSD ALREADY ALIASES THEM THE SAME WAY
+            // (menu.cpp:1478-1483 folds KEY_EQUAL into KEY_KPPLUS and KEY_MINUS
+            // into KEY_KPMINUS for its plus/minus actions), so the pair behaves
+            // identically to the keypad pair everywhere, OSD included.
+            // Checked free against all three claimants on this space: 4E/55 are
+            // NON-EXTENDED (Main's set-2 table, input.cpp:381-382), they are not
+            // among the twenty digit scancodes emu.sv owns (top row is
+            // 16 1E 26 25 2E 36 3D 3E 46 45 -- 4E/55 are the two keys just RIGHT
+            // of 0, adjacent on the keycap but distinct codes), and Main does not
+            // eat them (user_io.cpp:4267-4297 intercepts only MUTE/VOLUMEUP/
+            // VOLUMEDOWN/BE/BF/F2-in-OSD).
+            // ⚠ There is NO SHIFT TRACKING anywhere in this module, so 0x55 binds
+            // BARE '=' rather than Shift+'='. That is deliberate and matches both
+            // Main's OSD and '.' already being bound to Frame Step -- read it as
+            // the design, not as a missing modifier check. It is also why the
+            // manual says "-" / "=" and not "+".
+            // ⚠ Two opt-in Main paths remap these and neither is a hazard:
+            // keyrah_trans (input.cpp:1981-1982, gated on cfg.keyrah_mode by
+            // VID/PID at :3791) turns them INTO 7B/79, which are bound here
+            // anyway; and the JOY_L/JOY_R synthesis at input.cpp:2516-2520 is
+            // gated on user_io_osd_is_visible() || bnum == BTN_OSD (:2420), so it
+            // cannot fire during playback.
             8'h79: hit[23] = 1'b1;   // KP +        -> B20 Vol Up
+            8'h55: hit[23] = 1'b1;   // =           -> B20 Vol Up   (main row)
             8'h7B: hit[24] = 1'b1;   // KP -        -> B21 Vol Down
+            8'h4E: hit[24] = 1'b1;   // -           -> B21 Vol Down (main row)
             default: ;
             endcase
         end
