@@ -256,7 +256,10 @@ worse maintenance burden than targeted in-place edits. So:
   EMPTY ON A FIELD PICTURE AND THE SPEC IS WHY (2026-09-18, branch
   `fix/field-order-field-coded`); sim-proven RED/GREEN on the REAL shipped modules over
   REAL disc bytes, 4 RTL mutations + 5 wiring re-regressions each caught by its own arm,
-  ⏳ HW-confirm pending.** Field report: *"the Thayer's Quest disc looks
+  ⏳ HW-confirm pending.** Build `DVD_fieldorder_20260918_1439.rbf`, **SEED 9** (SEED 7
+  missed at 80.03/83.4 and ended its eight-build run; 9 passed first fit at clk_dec
+  95.02/90.23 vs the 86.0 gate), 91 % ALM. ⚠ A `_MARGINAL_` pack of the SEED 7 fit sits
+  beside it in `releases/` — do not flash it. Field report: *"the Thayer's Quest disc looks
   like it's not interlaced properly, even when playing back on a CRT."*
   ★★ **THE DISC IS FIELD-CODED AND THE SYNTAX ELEMENT IT WOULD ANSWER WITH IS FORBIDDEN
   FROM SAYING ANYTHING.** ISO 13818-2 **6.3.10 requires `top_field_first == 0` whenever
