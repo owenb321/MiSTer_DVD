@@ -149,6 +149,10 @@ module dvd_audio_decode #(
     output logic [3:0]  dbg_rearm_cnt,   // underrun re-arms (saturating)
     output logic [3:0]  dbg_fbrel_cnt,   // fallback (timer) releases (saturating)
     output logic [7:0]  dbg_skip_cnt,    // stale-skip discarded frames (saturating)
+    // ...of which the MID-PLAY CATCH-UP decided (head_catchup, not the load-
+    // window stale-skip). Split out 2026-09-18 so telemetry can tell the two
+    // apart: they discard for opposite reasons (docs/dvd_nav.md).
+    output logic [3:0]  dbg_catch_cnt,
     // Playback-position error vs STC: (stc - play_anchor) - samples*1.875,
     // in 90 kHz ticks >> 4 (same 178 us/unit scale as the drift row). Positive
     // = playback LATE. Starts ~av_ofs at each release; the SLOPE is the read
@@ -398,6 +402,7 @@ module dvd_audio_decode #(
             skip_run           <= 1'b0;
             anchor_tmr         <= '0;
             dbg_skip_cnt       <= '0;
+            dbg_catch_cnt      <= '0;
         end else begin
             dispatch_pts_valid <= 1'b0;       // 1-cycle pulse
             // pre-anchor fallback timer: counts while a frame waits un-anchored
@@ -417,6 +422,8 @@ module dvd_audio_decode #(
                         cur_pts       <= frame_pts;        // latch with the descriptor
                         cur_pts_valid <= frame_pts_valid;
                         discard_cur   <= head_discard;     // stale-skip / catch-up decision at pop
+                        if (head_catchup && !head_stale && !(&dbg_catch_cnt))
+                            dbg_catch_cnt <= dbg_catch_cnt + 1'b1;
                         if (head_discard)          skip_run <= 1'b1;
                         else if (frame_pts_valid)  skip_run <= 1'b0;  // fresh PTS ends the region
                         state         <= S_POP;

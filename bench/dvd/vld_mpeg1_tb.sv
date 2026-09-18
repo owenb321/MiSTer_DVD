@@ -164,6 +164,7 @@ module vld_mpeg1_tb;
   wire       out_ps, out_pf, out_tff, out_rff;
 
   motcomp_picbuf picbuf (
+    .vbuf_flush(1'b0),   // DVD-FORK FIX (2026-09-18): picbuf un-tags on a VBUF flush
     .clk(clk), .clk_en(1'b1), .rst(rst),
     .source_select(3'd0),
     .picture_coding_type(picture_coding_type),

@@ -1423,6 +1423,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .vld_pic_pts_valid(vld_pic_pts_valid),
     .vld_pic_pts_2nd(vld_pic_pts_2nd),
     .pts_commit(pts_commit),
+    .vbuf_flush(flush_vbuf_eff),                             // DVD-FORK FIX (2026-09-18): pre-flush pictures lose their PTS tag
     .output_pts(output_pts),                                 // DVD-FORK (PTS association): to resample
     .output_pts_valid(output_pts_valid),
     .output_pts_2nd(output_pts_2nd),

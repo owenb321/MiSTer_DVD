@@ -83,7 +83,7 @@ module iso_reader_chapter_tb;
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
-        .title_sel(4'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), .menu_snap(1'b0),
         .seek_pulse(1'b0), .seek_natural(1'b0), .seek_cell(8'd0),
         .seek_rbn_pulse(1'b0), .seek_rbn(32'd0),
         .chap_pulse(chap_pulse), .chap_dir(chap_dir), .chap_mag(chap_mag), .chap_at_start(chap_at_start),

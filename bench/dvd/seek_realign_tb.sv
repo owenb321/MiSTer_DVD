@@ -179,6 +179,7 @@ module seek_realign_tb;
   reg        output_frame_rd;
 
   motcomp_picbuf picbuf (
+    .vbuf_flush(flush_lvl),   // DVD-FORK FIX (2026-09-18): picbuf un-tags on a VBUF flush
     .clk(clk), .clk_en(1'b1), .rst(rst),
     .source_select(3'd0),
     .picture_coding_type(picture_coding_type),

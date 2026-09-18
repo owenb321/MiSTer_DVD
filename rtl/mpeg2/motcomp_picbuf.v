@@ -41,7 +41,8 @@ module motcomp_picbuf(
   update_picture_buffers, picbuf_busy,
   flags_commit,                            // DVD-FORK (round 11): per-picture display flags valid (coding ext parsed)
   vld_pic_pts, vld_pic_pts_valid, vld_pic_pts_2nd, pts_commit,   // DVD-FORK (PTS association): this picture's PTS tag, from pts_assoc
-  output_pts, output_pts_valid, output_pts_2nd                    // DVD-FORK (PTS association): the tag of the picture at the output
+  output_pts, output_pts_valid, output_pts_2nd,                   // DVD-FORK (PTS association): the tag of the picture at the output
+  vbuf_flush                                // DVD-FORK FIX (2026-09-18): a VBUF flush un-tags every slot
   );
 
   input              clk;                          // clock
@@ -75,6 +76,23 @@ module motcomp_picbuf(
   input              vld_pic_pts_valid;
   input              vld_pic_pts_2nd;
   input              pts_commit;
+  /* DVD-FORK FIX (2026-09-18, Scooby-Doo 2 "good job" heard as "job";
+   * docs/dvd_nav.md "A picture from before the flush must not set the clock").
+   * A VBUF flush (every seek / title jump) invalidates the PTS tag of every
+   * picture picbuf ALREADY holds. The in-flight picture and the held I/P anchor
+   * still reach the screen once after the flush (docs/seek_realign.md §5.1),
+   * and with their pre-flush tags they ANCHORED THE CLOCK on the old timeline:
+   * the new cell's first picture then read as a backward jump, disp_sched
+   * raised anchor_disc, and the audio re-phase threw away the new cell's
+   * already-buffered opening -- up to ~1.4 s, the whole of "good".
+   * Untagged, the stale picture is shown against the provisional clock and
+   * changes nothing; the first post-flush tag anchors it.
+   * ⚠ Ordering is the same argument as the tag latch itself: pts_assoc clears
+   * its tag on the same flush, and a pre-flush picture's STATE_UPDATE that is
+   * still queued can only latch that cleared output (the vld is frozen at the
+   * next header until the rotation), so nothing stale can be re-latched after
+   * this clear. A level, highest priority after reset, not clk_en-gated. */
+  input              vbuf_flush;
   output reg   [32:0]output_pts;
   output reg         output_pts_valid;
   output reg         output_pts_2nd;
@@ -296,6 +314,8 @@ module motcomp_picbuf(
         current_frame_pts_valid <= 1'b0;
         current_frame_pts_2nd   <= 1'b0;
       end
+    else if (vbuf_flush)
+      current_frame_pts_valid <= 1'b0;
     else if (clk_en && (state == STATE_UPDATE) && ~vld_last_frame)
       begin
         current_frame_pts       <= vld_pic_pts;
@@ -316,6 +336,8 @@ module motcomp_picbuf(
         prev_i_p_frame_pts_valid <= 1'b0;
         prev_i_p_frame_pts_2nd   <= 1'b0;
       end
+    else if (vbuf_flush)
+      prev_i_p_frame_pts_valid <= 1'b0;
     else if (clk_en && update_picture_buffers && (current_frame_coding_type != B_TYPE) && ~vld_last_frame)
       begin
         prev_i_p_frame_pts       <= current_frame_pts;
@@ -330,6 +352,8 @@ module motcomp_picbuf(
         output_pts_valid <= 1'b0;
         output_pts_2nd   <= 1'b0;
       end
+    else if (vbuf_flush)
+      output_pts_valid <= 1'b0;
     else if (clk_en && (state == STATE_LAST_FRAME))
       begin
         output_pts       <= prev_i_p_frame_pts;

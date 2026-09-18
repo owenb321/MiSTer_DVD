@@ -75,7 +75,7 @@ module iso_reader_callss_return_tb;
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
-        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .vbuf_empty(1'b1), .menu_snap(1'b0),   // always-drained: tail-drain wait bypassed (bit-exact pre-drain timing)
+        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b1), .menu_snap(1'b0),   // always-drained: tail-drain wait bypassed (bit-exact pre-drain timing)
         .jump_ttn(vm_jump_ttn), .jump_pgn(vm_jump_pgn), .jump_ptt(vm_jump_ptt),
         .vm_mode(1'b1), .vm_adv(vm_adv_w), .vm_replay(vm_replay_w),
         .vm_cell_cmd(vm_cell_cmd_w), .vm_pgc_end(vm_pgc_end_w),

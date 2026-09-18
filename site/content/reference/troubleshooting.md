@@ -175,6 +175,24 @@ decoder, and switching the throttle off. The disc was then read as fast as it co
 sound buffer overflowed, and whatever did not fit was lost. The racing counter was the same
 thing showing on screen.
 
+### The first word of a clip is missing after a button press or chapter skip
+
+!!! info "Fixed in v0.7.0"
+
+    Most noticeable on DVD game discs, where every clip starts with speech. For example,
+    Scooby-Doo 2's "good job" was heard as "job".
+
+After you pressed a button that jumped to a new clip, or skipped back a chapter, the first
+second or so of the new clip's sound could be missing. The picture was fine.
+
+A frame left over from before the jump was still being shown, and it still carried the old
+clip's timestamp. The core read the new clip's first frame as a jump backwards in time and
+threw away sound it had already loaded for the new clip. Leftover frames now lose their
+timestamp at a jump.
+
+The same fix also stops the last second of a voice clip being cut when the disc moves on by
+itself.
+
 ### Menu audio went silent
 
 You changed the audio track while the menu was open. It comes back when you leave the menu.

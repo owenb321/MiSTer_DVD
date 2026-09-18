@@ -100,6 +100,11 @@ module dvd_iso_reader #(
     //                Snappy accepts). Either condition arms the once-per-entry re-decode.
     input             vbuf_empty,
     input             menu_snap,
+    // Level: the audio the stream has delivered has been PRESENTED (emu
+    // dvd/aud_drain.sv). A term of the NATURAL jump/seek gate only - the tail
+    // of a cell is its audio as much as its pictures, and the jump's aud_flush
+    // discards what is left. Tie 1'b1 where there is no audio chain.
+    input             aud_drained,
 
     // AUTHORED CELL DURATION - display-referenced cell clock (docs/dvd_nav.md
     // "authored cell duration"). A DVD cell's presentation lasts its authored
@@ -1273,8 +1278,17 @@ always @(posedge clk) begin
     else if (~&nat_settle)    nat_settle <= nat_settle + 8'd1;
 end
 wire       nat_drained   = nat_quiet && (&nat_settle);
-wire       nat_jump_wait = jump_pending && jnat_l && ~nat_drained && ~drain_wd_hit;
-wire       nat_seek_wait = seek_pending && snat_l && ~nat_drained && ~drain_wd_hit;
+// ★ AND THE AUDIO (2026-09-18, Scooby-Doo 2 - dvd/aud_drain.sv). nat_drained
+// is a statement about the VIDEO path. A cell carrying one picture and seconds
+// of audio drains its VBUF at once while the audio ring still holds ~1.3 s
+// that the jump's aud_flush then discards: the "commentary cut off". A natural
+// transition is taken when the cell has been PRESENTED, pictures and sound.
+// ⚠ Only the natural gate: tail_wait (drain-then-still) and the menu settle
+// stay video-only, or a still menu with commentary under it would hold its
+// highlight back for the length of the voice-over.
+wire       nat_done      = nat_drained && aud_drained;
+wire       nat_jump_wait = jump_pending && jnat_l && ~nat_done && ~drain_wd_hit;
+wire       nat_seek_wait = seek_pending && snat_l && ~nat_done && ~drain_wd_hit;
 assign     nat_wait_o    = nat_jump_wait || nat_seek_wait;
 
 // Counts the whole pending window (cache drain + VBUF drain) and holds its
@@ -1431,7 +1445,7 @@ reg [31:0] sec_lba;     // 2048-LBA to read in S_SECREAD
 // explicit - the pending-jump window used to be ~us wide, but a gated natural
 // jump now pends for seconds, during which a latched seek must not slip past it.
 wire       seek_jump = seek_pending && ~blk_inflight && ~jump_pending &&
-                       (~snat_l || nat_drained || drain_wd_hit);
+                       (~snat_l || nat_done || drain_wd_hit);
 // A VM jump executes at a block boundary too, but only from a SETTLED state
 // (streaming / finished / holding a still) - never mid-parse, where it would
 // corrupt an in-progress IFO walk. It outranks a pending seek (jump_go clears
@@ -1442,7 +1456,7 @@ wire       seek_jump = seek_pending && ~blk_inflight && ~jump_pending &&
 // a parser sitting at a start-code boundary instead of mid-macroblock. User
 // jumps (jnat_l=0) execute immediately, clearing the gate.
 wire       jump_go = jump_pending && ~blk_inflight &&
-                     (~jnat_l || nat_drained || drain_wd_hit) &&
+                     (~jnat_l || nat_done || drain_wd_hit) &&
                      (state == S_STREAM || state == S_DONE ||
                       state == S_STILL  || state == S_VM_WAIT);
 reg        sd_ack_d;

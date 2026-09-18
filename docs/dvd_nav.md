@@ -1564,6 +1564,165 @@ with the drift counters rather than offline: a drifting single-anchor clock and 
 dropped at the seek produce the same symptom, and `av_drift_ms` / `play_err_ms` /
 `disp_lag_ms` separate them in one reading.
 
+### A natural transition waits for the AUDIO too (2026-09-18, branch `fix/cell-still-av`)
+
+✅ **Sim-proven RED/GREEN, 6 arms each caught by exactly its own arms; HW round passed
+2026-09-18** (build `DVD_cellstillav_20260918_1928.rbf`, with the head-loss fix below): every
+win clip complete, chapter skips both ways clean, T2/MiB menus unregressed. This is the
+"commentary is cut off" half above. The lip-sync half (one round's
+speech) is a separate question and is still open.
+
+★ **The offline structure settled the mechanism before the rig was touched.** Dumping
+VTS_02 PGCN 26 cell by cell, with the PTS spans each cell actually carries:
+
+| cells | video PTS | audio | how the cell ends |
+|---|---|---|---|
+| 2–9, 19, 22 | 1 | 5.6–23.7 s | `still=255` + live buttons from 0.12 s (a press ends it — authored) |
+| 1, 10–13, 21 | 1 | 4.0–29.9 s | a **cell command**: `LinkCN`, `LinkTailPGC` |
+| 14–18, 20 | 11–56 | = video | a cell command (the rounds) |
+
+Every cell is `stc_discontinuity` and none is `seamless_play`.
+
+**The defect.** A natural jump or seek waits in the reader for `nat_drained`: the reader's
+cache, the demux pipe and the VBUF are all empty. **That is a statement about the VIDEO
+only.** `flush_ctl` then fires `aud_flush` on every title-domain ack. On a motion cell that
+costs a few tens of ms, because the demux is paced by the display, so the audio queued
+behind the last picture is nearly spent. On a one-picture cell it is not:
+- the picture drains the VBUF at once;
+- the ring backpressures the demux;
+- the reader finishes delivering while a **whole 32 KB ring is still to be heard, ~1.3 s of
+  192 kbps AC-3**.
+
+Cells 10–13 are 4–5 s voice clips, so about a third of each line was lost. Cell 10's
+`LinkTailPGC` is the path into the commentary screen, cell 19.
+
+★ **Presses cutting the commentary on the button screens is AUTHORED, not a defect.** Those
+cells arm their buttons at `s_ptm = 0.122 s`, the first frame, and a real player cuts the
+voice-over on a press as well. User jumps stay immediate.
+
+**Fix.** The reader gains an `aud_drained` input, ANDed into the natural gate only:
+`nat_done = nat_drained && aud_drained`, used by `jump_go`, `seek_jump` and the
+`nat_*_wait` levels, so `drain_tmr` / `DRAIN_WD` still bound it. The level comes from new
+**`dvd/aud_drain.sv`**:
+- the ring has no COMMITTED frame;
+- the decoder is not holding a due frame back (`play_pts_valid && ~draining`);
+- both have held for **~128 ms** (4 AC-3 frames: the frame the dispatcher already popped,
+  one more the codec may hold, and the 512-pair PCM FIFO).
+
+⚠ **The escape is load-bearing.** `consumer_alive` = emu's ring-drain watchdog
+(`aud_bp_armed`). With audio Off, no stream, or a wedged decoder, nothing will ever drain
+the ring, so the level reads drained at once. `DRAIN_WD` alone would have been a 60 s
+stall.
+
+⚠ **Only the natural gate.** `tail_wait` (drain-then-still) and the menu settle stay
+video-only. Otherwise a still menu with a voice-over under it (cells 2–9, 19 here) would
+hold its highlight back for the length of the commentary.
+
+⚠ **The settle was sized by the bench, not by taste.** At 3 frame-times (the first cut) the
+chain bench lost exactly one frame, the one popped but still playing when the flush landed.
+
+⚠ **The clip's LAST frame is still lost, before and after.** `audio_ring` commits a frame's
+length at the NEXT frame start, so the trailing ~32 ms never commits.
+
+⚠ **Menus are in scope,** because the natural gate applies in every domain since the
+2026-09-14 menudrain change. On a keep_vbuf menu hop the audio is not flushed, so the wait
+only costs a held last picture while the tail plays. That is correct presentation, but it
+is new behaviour on looping motion menus. Check T2 and MiB on hardware.
+
+**Gate: `bench/dvd/run_auddrain.sh --red`.**
+- **Chain bench.** `iso_reader_auddrain_tb` runs the real reader → `ps_stream_fifo` →
+  `ps_demux` → `audio_ring` with `dvd_vm`, `flush_ctl` and `aud_drain`, and a consumer that
+  plays one frame per `PLAY_CYC`. It scores **the clip's audio bytes FINISHED PLAYING when
+  the flush lands**, never a signal the fix names.
+  - RED (the shipped wiring, R0): **52,546 / 78,819 bytes, 13 frames lost**.
+  - GREEN: 78,819 / 78,819.
+- **Unit bench.** `aud_drain_tb` pins the terms the chain ties off (`dec_holding`).
+- **Mutations.** M1–M5 each fail exactly their designed arms.
+- **Harness lessons.** Two harness defects came out first, and both read as mutation
+  results:
+  - The arm parser matched the letters of "FAIL" as arm A.
+  - A 256-bit `fail()` string truncated the LEADING `[U3]` tag, so M5 read as "caught by
+    nothing".
+
+✅ **HW round passed 2026-09-18** (see below: the clips were confirmed complete on the
+build that also carries the head-loss fix, and T2/MiB menus are unregressed).
+
+⚠⚠ **THE REPORTED SYMPTOM WAS NOT THIS DEFECT, and the first hardware round said so.** The
+maintainer flashed the build above: *"it still cuts off a bit of audio at the beginning.
+Shaggy is supposed to say 'good job' but we just hear 'job'"*. v0.6.1 does the same, and so
+does every round. The loss is at a clip's HEAD, not its tail. The tail fix stays because
+its bench measures a real loss (13 frames), but it is not what the user heard.
+
+### A picture from before the flush must not set the clock (2026-09-18, same branch)
+
+✅ **Root-caused from rig telemetry, sim-proven RED/GREEN on the real picbuf, and
+HW-CONFIRMED 2026-09-18** (build `DVD_cellstillav_20260918_1928.rbf`, SEED 9, clk_dec
+88.22/90.04). Maintainer: *"'good' is now audible, as are the rest of the winning audio
+clips"*. Chapter skips in both directions are clean and the T2/MiB menus unregressed.
+
+★ **The instrument came first.** Telemetry word 5 (`vid_err`, retired by PR #63) now
+carries the audio decoder's discard counters, `{skip[7:0], catch-up[3:0], re-arms[3:0]}`.
+A 29-minute session through the whole game settled the question:
+- **skip = catch-up = 0 at every clip.** Neither stale-skip nor the mid-play catch-up
+  ate "good". Those were the two decoder paths that could drop about a word.
+- **The hit itself** is a user button, `LinkCN 8`. Cell 8's audio opens with **1.05 s of
+  silence** (decoded offline with ffmpeg), so "good" sits about 1.1–1.5 s into the clip.
+  That is just past the **~1.1 s the audio ring holds**.
+- **The transition shows every step of the mechanism:**
+  - `reanchors=2` and `disp_lag = −2024 ms`;
+  - the audio is then HELD for 1.25 s with the ring full (34 frames);
+  - the drift counts down from +1407 ms.
+
+**The mechanism.** A seek flushes the VBUF, but the display still shows ONE pre-flush
+picture: the held I/P anchor, which the new cell's first I emits (IPB reorder;
+`docs/seek_realign.md` §5.1). **It still carried its pre-flush PTS tag.**
+1. It anchored `disp_sched`'s clock on the round's timeline (~2.15 s) and set
+   `disp_anchored`.
+2. The clip's first picture (PTS 0.122) then read as a **2 s backward jump**, which
+   raised `anchor_disc`.
+3. That fired `aud_resync`, which reset an audio ring **already holding the clip's first
+   ~1.1–1.4 s**.
+4. Delivery resumed at ~1.4 s of PTS, and the gate held it until the clock caught up.
+
+Everything up to "good" was gone, and nothing counted it as a discard, because the reset
+zeroes the counters too.
+
+⚠ **This is not Scooby-specific.** It affects every user seek into content whose PTS is
+BELOW the old picture's, i.e. every backward chapter skip and every jump into a
+PTS-restarting cell. Scooby makes it audible because every clip starts on speech.
+
+**Fix, in two halves; neither alone is enough (measured by reasoning through both
+orders, then gated):**
+1. **`motcomp_picbuf` gets `vbuf_flush`** (`flush_vbuf_eff`, threaded through `motcomp`
+   and `motcomp_addrgen`). It clears the tag-valid of the current, held-anchor and output
+   slots, so the stale picture reaches the display UNTAGGED and cannot anchor anything.
+   ★ **Race-free by the tag latch's own ordering argument.** `pts_assoc` clears its tag
+   on the same flush. A pre-flush picture's `STATE_UPDATE` that is still queued can only
+   latch that cleared output, because the vld is frozen at the next header until the
+   rotation. So nothing stale can be re-latched after the clear.
+2. **`disp_sched`: `disc_jump_w` also requires `disp_anchored`.** Untagged, the stale
+   pickup still primes `next_valid`. After an rff stale frame (1.5 frames), the new
+   cell's first tagged picture, sitting exactly on the provisional anchor, still reads as
+   a backward jump. A discontinuity is a jump between two DISPLAYED timelines, and until a
+   tag has put the clock on one since the flush, the flush has already reset the audio.
+   That is what the rule's own comment ("the FIRST anchor after a flush is excluded")
+   meant; `next_valid` never said it. The CLOCK's re-anchor is unchanged, and discs
+   without a flush (menu keep_vbuf hops, sequential cells) cannot reach the window.
+
+**Gates.**
+- **`bench/dvd/picbuf_tag_flush_tb.sv`** runs the real picbuf with a pts_assoc model and
+  scores the tag the display actually picks up.
+  - RED (`WIRE_FLUSH=0`, the pre-fix picbuf): the stale P arrives with tag 2000 VALID.
+  - GREEN: untagged, and the new I keeps its tag. A no-flush control keeps every tag.
+- **`disp_sched_tb` [14e]:** a stale untagged rff pickup, then the new timeline at the
+  provisional anchor, must give `anchor_disc = 0` and still `disp_anchored`. Mutation
+  **M14** drops the `disp_anchored` term and must fail [14e]. M12's anchor text moved
+  with the edit.
+- **Five picbuf benches** tie the new port (`seek_realign_tb` gets the real flush
+  level).
+
+✅ **HW gate passed** as above.
+
 ⚠⚠ **A bench bug worth knowing, found by making the bench faster:** the scene clock had
 two drivers — a task's blocking reset and the tick process's nonblocking increment. At 3
 clk per tick the reset survived because the increment ran on one edge in three; at 1 clk

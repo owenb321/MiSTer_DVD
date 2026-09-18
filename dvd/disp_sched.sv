@@ -141,7 +141,9 @@ module disp_sched #(
     // viewer for our own slowness, and it is the same "lateness is not a
     // discontinuity" rule that 3.7(2) had to learn on hardware.
     // ⚠ The FIRST anchor after a flush is excluded too (disc_jump_w requires
-    // next_valid): the flush that caused it has already reset the audio chain.
+    // next_valid AND disp_anchored): the flush that caused it has already reset
+    // the audio chain. `disp_anchored` is what makes "first" mean the first
+    // TAGGED anchor -- see the disc_jump_w note (2026-09-18).
     output reg         anchor_disc,
     output reg  signed [33:0] anchor_delta,   // new - old
     output reg         disp_lag_valid,        // one clk at a pickup
@@ -308,7 +310,20 @@ module disp_sched #(
     // (DVDNAV_CELL_CHANGE / DVDNAV_HOP_CHANNEL), which is authored and cannot be
     // faked by a still. If backward-only proves to under-cover, that -- not a wider
     // PTS bound -- is the direction: emu has seek_ack/jump_ack/keep_vbuf already.
-    wire disc_jump_w = has_tag && anchored && next_valid && (d_pic_next < -frame_s);
+    // ⚠⚠ `disp_anchored` (2026-09-18, Scooby-Doo 2 "good job" heard as "job"):
+    // the "first anchor after a flush is excluded" rule above meant the first
+    // anchor ON THE DISPLAY TIMELINE, and `next_valid` did not say that. After a
+    // flush the display still shows ONE pre-flush picture (docs/seek_realign.md
+    // §5.1); picbuf now strips its tag, but an untagged pickup still primes
+    // next_valid, and against a stale rff picture's 1.5-frame extrapolation the
+    // new cell's first TAGGED picture reads as a backward jump. A discontinuity
+    // is a jump between two DISPLAYED timelines; until a tag has put the clock on
+    // one since the flush, the flush has already reset the audio and there is
+    // nothing old to re-phase away. MEASURED on the rig: every user seek into a
+    // PTS-restarting cell re-phased, discarding the ring's ~1.1-1.4 s of the new
+    // cell's opening. The CLOCK's re-anchor (disc_w, anchor_now_w) is unchanged.
+    wire disc_jump_w = has_tag && anchored && next_valid && disp_anchored &&
+                       (d_pic_next < -frame_s);
     // which leg fired, so the next round can MEASURE this instead of arguing it
     wire disc_fwd_w  = has_tag && anchored && next_valid && (d_pic_next > fwd_max_s);
     // ---- RE-ANCHOR AT A KNOWN RASTER CHANGE ------------------------------------

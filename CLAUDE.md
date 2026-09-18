@@ -252,6 +252,57 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **A NATURAL TRANSITION DISCARDED THE AUDIO ITS CELL STILL HAD TO PLAY — "Shaggy's
+  commentary is cut off" (2026-09-18, branch `fix/cell-still-av`); sim-proven RED/GREEN,
+  6 arms each caught by exactly its own arms, and ✅ HW-CONFIRMED 2026-09-18** together
+  with the head-loss fix below (build `DVD_cellstillav_20260918_1928.rbf`, SEED 9,
+  clk_dec 88.22/90.04 — passing, the thinnest margin of the branch): every win clip
+  complete, chapter skips both ways clean, T2/MiB menus unregressed.
+  ★ **Settled offline from the disc before the rig was touched.** Scooby-Doo 2 VTS_02
+  PGCN 26 authors its voice clips as cells with **ONE video PTS and 4–30 s of audio**
+  (cells 1, 10–13, 21 end in a cell command; 2–9, 19, 22 are `still=255` button screens
+  whose buttons are live from 0.12 s, so a PRESS cutting those is authored).
+  ★★ **The natural gate (`nat_drained`) only ever described the VIDEO path**, and
+  `flush_ctl` fires `aud_flush` on every title-domain ack. On a motion cell the leftover
+  is tens of ms. On a one-picture cell the VBUF drains at once, the ring backpressures
+  the demux, and the reader finishes with a **whole 32 KB ring (~1.3 s of AC-3) unplayed**,
+  about a third of a 4 s line.
+  **Fix:** new `dvd/aud_drain.sv` (ring has no committed frame, decoder not holding a due
+  frame, ~128 ms settle) → reader `aud_drained`, ANDed into the NATURAL gate only
+  (`nat_done`). ⚠ `consumer_alive` = `aud_bp_armed` is the load-bearing escape: audio
+  Off / no stream / wedged decoder read drained at once, never a 60 s `DRAIN_WD` stall.
+  ⚠ `tail_wait` and the menu settle stay video-only, or a still menu with a voice-over
+  would withhold its highlight for the whole commentary. ⚠ Applies in menus too, so the
+  HW round must check the T2 and MiB looping menus.
+  **Gate: `bench/dvd/run_auddrain.sh --red`** — real reader → demux → `audio_ring` chain,
+  scoring the clip audio a consumer FINISHED PLAYING before the flush: RED **13 frames
+  lost (52,546/78,819 B)**, GREEN all 39 committed frames. The reader's 37 other benches
+  tie `.aud_drained(1'b1)`. Detail: **`docs/dvd_nav.md`** "A natural transition waits for
+  the AUDIO too".
+  ⚠⚠ **THAT WAS NOT THE REPORTED SYMPTOM — the first HW round said *"'good job' but we
+  just hear 'job'"*, on v0.6.1 too, once per round: a HEAD loss.** Root cause (sim-proven,
+  ✅ **HW-CONFIRMED 2026-09-18** — maintainer: *"'good' is now audible, as are the rest of
+  the winning audio clips"*), found with a new instrument: **telemetry word 5 now
+  carries the audio decoder's discard counters** (`{skip, catch-up, re-arms}`; `vid_err`
+  was dead since #63). They read **0** at every clip, which ruled out the decoder. The
+  transition showed `reanchors=2`, `disp_lag −2024 ms`, and audio held 1.25 s.
+  ★★ **A seek still DISPLAYS one pre-flush picture (the held I/P anchor,
+  `seek_realign.md` §5.1), and it kept its pre-flush PTS TAG.** It anchored the clock on
+  the old timeline, so the new cell's first picture read as a backward jump, and
+  `anchor_disc` → `aud_resync` wiped a ring already holding the clip's first ~1.1–1.4 s.
+  "good" sits 1.1–1.5 s in, after 1.05 s of authored silence. This hits every backward
+  chapter skip too.
+  **Fix, two halves (neither suffices alone):**
+  - `motcomp_picbuf.vbuf_flush` un-tags the current, held and output slots. This is
+    race-free: `pts_assoc` clears on the same flush, and the header freeze orders any
+    queued update.
+  - `disp_sched`'s `disc_jump_w` requires `disp_anchored`, since an untagged rff stale
+    pickup still makes the first real tag look 1.5 frames "behind".
+
+  **Gates:** `bench/dvd/picbuf_tag_flush_tb.sv` (RED: the stale P arrives with tag 2000
+  valid) and `disp_sched_tb` [14e] + mutation M14. Detail: `docs/dvd_nav.md` "A picture
+  from before the flush must not set the clock".
+
 - ✅ **FIELD-CODED MPEG-2 PLAYED ITS TWO FIELDS IN THE WRONG ORDER — `top_field_first` IS
   EMPTY ON A FIELD PICTURE AND THE SPEC IS WHY (2026-09-18, branch
   `fix/field-order-field-coded`); sim-proven RED/GREEN on the REAL shipped modules over
@@ -2742,8 +2793,9 @@ worse maintenance burden than targeted in-place edits. So:
   register with the disc's own yellow highlight and misses with its red one, and the T2 /
   Matrix menus are unregressed by the promotion-timer change.
   ⏳ **Two symptoms REMAIN on the same disc and are NOT this defect** — they are A/V sync at
-  a cell transition, tracked separately: Shaggy's win commentary is cut off, and one round's
-  speech does not lip-sync. MEASURED structure that points the next session at it: every
+  a cell transition, tracked separately: Shaggy's win commentary is cut off (🔧 **fixed in
+  sim 2026-09-18 — see the natural-transition audio-drain bullet at the top of this
+  list**), and one round's speech does not lip-sync (still open). MEASURED structure that points the next session at it: every
   cell in this game RESTARTS its PTS near zero (rounds at 0.094 s, commentary at 0.122 s),
   so every transition is a clock discontinuity plus an audio re-phase; and the commentary
   clips are **single-picture still cells carrying 8.3-22.2 s of audio past their only video

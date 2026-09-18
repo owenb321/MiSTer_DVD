@@ -100,7 +100,7 @@ module iso_reader_lu_tb;
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0),
         .lu_lang_pref(lang_pref),
-        .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .aud_drained(1'b1), .vbuf_empty(1'b0), .menu_snap(1'b0),
         .jump_ttn(7'd0), .jump_pgn(8'd0), .jump_ptt(10'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),

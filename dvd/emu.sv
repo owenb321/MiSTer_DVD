@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-fieldorder"
+`define CORE_VERSION "dev-cellstillav"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -983,6 +983,16 @@ wire  [0:0] img_mounted;
 wire        img_readonly;
 wire [63:0] img_size;
 
+// Telemetry word 5 (was vid_err, retired by PR #63): the audio decoder's
+// DISCARD counters, {skip[7:0], catch-up[3:0], underrun re-arms[3:0]}, all
+// reset with the audio chain (every seek/jump). skip counts every discarded
+// frame; catch-up is the subset the MID-PLAY catch-up decided, so
+// skip - catch-up = the load-window stale-skip. Added 2026-09-18 to measure
+// the Scooby-Doo 2 "good job" -> "job" clip-head loss (docs/dvd_nav.md).
+// Declared here, ahead of the telem instance: the source wires are declared
+// ~3000 lines down and emu.sv has no `default_nettype none`.
+wire [15:0] telem_aud_disc;
+
 // BLKSZ=4: 2048-byte sd blocks (= one DVD/ISO sector per request). One HPS
 // round-trip per sector instead of four 512-byte ones — the per-request
 // latency was the delivery ceiling that starved audio on discs muxed near
@@ -1072,7 +1082,7 @@ dvd_telem dvd_telem_inst (
     .pickups    (core_pickups),          // clk_dec: content frames displayed
     .lates      (core_frames_late),      // clk_dec
     .drops      (core_frames_dropped),   // clk_dec
-    .vid_err    (16'd0),                 // retired: the display is scheduled by PTS; see word 11
+    .vid_err    (telem_aud_disc),        // word 5: audio discard counters (was vid_err, retired)
     .drop_costs (core_drop_costs),       // clk_dec: {debt, drop_req, probe}
     .vbuf_fill  (core_vbuf_fill),
     .aud_frames (aud_frames_avail),
@@ -1180,6 +1190,10 @@ wire        ps_sp_pts_valid;
 // audio_ring status (surfaced on the debug overlay, rows 12/13)
 wire [15:0] aud_frames_avail;
 wire [15:0] aud_bytes_avail;
+// dvd/aud_drain.sv -> dvd_iso_reader.aud_drained. Declared here, ahead of the
+// reader instance: emu.sv has no `default_nettype none`, so a forward
+// reference would silently become a 1-bit implicit net.
+wire        aud_drained_w;
 wire [15:0] aud_overflow_cnt;
 
 // A/V sync (dvd/av_sync.sv), all clk_sys
@@ -3074,6 +3088,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .lu_lang_pref   (player_lang),        // OSD Player Language -> menu-LU match
     .title_sel      (dbg_title_vts),      // Debug "Title VTS" picker: 0=Auto, else VTS #
     .vbuf_empty     (vbuf_empty),         // one term of the natural-transition drain gate
+    .aud_drained    (aud_drained_w),      // ...and the audio half of it (dvd/aud_drain.sv)
     .menu_snap      (1'b0),               // toggle removed with the still re-decode (v0.5.0)
     // Authored cell duration: display-referenced cell clock. Same tick av_sync
     // advances the STC with (one pulse per displayed image); disp_fps resolves
@@ -3939,6 +3954,7 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .dbg_rearm_cnt      (dbg_aud_rearm_cnt),
     .dbg_fbrel_cnt      (dbg_aud_fbrel_cnt),
     .dbg_skip_cnt       (dbg_aud_skip_cnt),
+    .dbg_catch_cnt      (dbg_aud_catch_cnt),
     .dbg_play_err       (dbg_aud_play_err),
     .dbg_cur_codec      (dbg_cur_codec_w),
     .dbg_mp2_avalid     (dbg_mp2_avalid_w),
@@ -3948,6 +3964,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
 wire [32:0] dbg_aud_play_pts;
 wire [3:0]  dbg_aud_rearm_cnt, dbg_aud_fbrel_cnt;
 wire [7:0]  dbg_aud_skip_cnt;
+wire [3:0]  dbg_aud_catch_cnt;
+assign telem_aud_disc = {dbg_aud_skip_cnt, dbg_aud_catch_cnt, dbg_aud_rearm_cnt};
 wire [15:0] dbg_aud_play_err;
 
 // =========================================================================
@@ -4156,6 +4174,23 @@ end
 // rows 14/15 is retired — those rows are back to the AC-3 self-heal reset
 // counters (see the overlay instantiation below).
 wire dbg_aud_draining, dbg_aud_play_pts_valid, dbg_aud_armed_data, dbg_aud_skip_run;
+
+// NATURAL-TRANSITION AUDIO DRAIN (2026-09-18, Scooby-Doo 2 "commentary cut off").
+// A cell command / POST jump used to wait for the VIDEO path only, then fire
+// aud_flush over a ring still holding up to ~1.3 s of the cell's audio. This is
+// the audio half of the reader's gate: nothing committed left in the ring, the
+// decoder not holding a due frame back, settled for ~128 ms. consumer_alive is
+// the ring-drain watchdog, so with audio Off / no stream / a wedged decoder it
+// reads drained at once and navigation never waits on a consumer that isn't
+// consuming. Design + measurement: dvd/aud_drain.sv, docs/dvd_nav.md.
+aud_drain aud_drain_inst (
+    .clk            (clk_sys),
+    .rst_n          (reset_n),
+    .frames_avail   (aud_frames_avail),
+    .consumer_alive (aud_bp_armed),
+    .dec_holding    (aud_dec_en && dbg_aud_play_pts_valid && ~dbg_aud_draining),
+    .drained        (aud_drained_w)
+);
 
 // =========================================================================
 // The presentation clock in clk_sys (dvd/av_sync.sv): a MIRROR of the

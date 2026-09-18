@@ -125,6 +125,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/subpic_blend.sv
 # DVD-FORK (Phase-1 disc menus): PGC palette (IFO @164) YCbCr->RGB LUT.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/pgc_palette.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_pci.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/aud_drain.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_dsi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/scrub_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dpad_seek.sv

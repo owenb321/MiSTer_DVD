@@ -51,7 +51,7 @@ module iso_reader_atmos_tb;
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
-        .title_sel(4'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), .menu_snap(1'b0),
         .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_domain(jump_domain),
         .jump_vts(jump_vts), .jump_pgcn(jump_pgcn), .jump_entry(jump_entry),
         .jump_cell(jump_cell), .jump_ttn(jump_ttn), .jump_pgn(jump_pgn),
