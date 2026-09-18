@@ -3955,9 +3955,10 @@ worse maintenance burden than targeted in-place edits. So:
   together, driven by Main's `set_volume()` from the OSD, `/dev/MiSTer_cmd` and **HDMI-CEC
   volume keys, which `user_io.cpp:4283-4296` consumes before they ever reach the core**. A
   second attenuator would desync from the OSD bar and could not touch passthrough at all.
-  ✅ **AND VOLUME IS ON THE MAIN-ROW `-`/`=` TOO (2026-09-17, branch
-  `feature/volume-key-alias`); sim-proven, 4/4 mutations each caught by exactly its own
-  arms, ⏳ HW-confirm pending.** It was keypad-only (`79`/`7B`), and a keypad is precisely
+  ✅ **AND VOLUME IS ON THE MAIN-ROW `-`/`=` TOO (2026-09-17, PR #106);
+  sim-proven, 4/4 mutations each caught by exactly its own arms, and
+  ✅ HW-CONFIRMED 2026-09-17** (build `DVD_volkeys_20260918_0055.rbf`, SEED 7 first roll,
+  clk_dec 95.80/91.33, 91 % ALM). It was keypad-only (`79`/`7B`), and a keypad is precisely
   what a tenkeyless keyboard, a laptop and most HID remotes do not have — so volume was
   unreachable for those users. ★ **Not an invention: Main's own OSD already aliases the
   same pair** (`menu.cpp:1478-1483` folds `KEY_EQUAL` into `KEY_KPPLUS` and `KEY_MINUS`

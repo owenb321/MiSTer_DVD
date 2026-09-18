@@ -1173,7 +1173,8 @@ volume (`sys_top.v` `vol_att` → `audio_out`) that attenuates I2S, the analog D
 S/PDIF together, so the right shape is to ask Main to call `set_volume()` rather than to
 build a second attenuator in fabric.
 
-**The main-row `-`/`=` aliases (2026-09-17).** `55`/`4E` were added beside the keypad pair
+**The main-row `-`/`=` aliases (2026-09-17, PR #106; ✅ HW-CONFIRMED 2026-09-17).**
+`55`/`4E` were added beside the keypad pair
 because a keypad is exactly what a tenkeyless keyboard, a laptop and most HID remotes do
 not have, so volume was unreachable for those users.
 ★ **Main's own OSD already aliases the same pair** — `menu.cpp:1478-1483` folds `KEY_EQUAL`
