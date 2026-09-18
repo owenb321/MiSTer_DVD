@@ -67,6 +67,7 @@ static dvdcss_t css = NULL;
 static uint64_t css_size = 0;   // bytes
 static int css_pos = -1;        // last block position, to avoid redundant seeks
 static int cur_vob = -1;        // VOB index whose title key is currently selected
+static int key_ok = 0;          // ...and that key was actually obtained (see dvd_css_read)
 static int raw_fd = -1;         // raw drive fd when libdvdcss is absent (no decrypt)
 static int region_set = 1;      // 0 if the drive has no CSS region set (keys will crack)
 static time_t warn_until = 0;   // deadline for re-asserting the "install libdvdcss" popup
@@ -309,10 +310,12 @@ static int iso_find(uint32_t dir_lba, uint32_t dir_len, const char *name, int wa
 }
 
 // Every *.VOB file's extent [start, start+nsec), discovered at mount. Used to
-// (a) pre-crack each title key at its VOB start, and (b) decide per read whether
-// to decrypt: VOB sectors get SEEK_KEY(lba)+DECRYPT (the SEEK_KEY is a fast cached
-// lookup after the pre-crack); filesystem/IFO sectors are read raw (NOFLAGS) so
-// dvdcss can't corrupt them with a wrong current title key.
+// (a) pre-crack each title key at its VOB start, (b) decide per read whether to
+// decrypt — VOB sectors are read with DECRYPT, filesystem/IFO sectors raw (NOFLAGS)
+// so dvdcss can't corrupt them with a wrong current title key — and (c) supply the
+// block a SEEK_KEY is issued at, which is ALWAYS the VOB's start and never the read
+// position: libdvdcss's title cache is an exact-block match, so a SEEK_KEY anywhere
+// else re-acquires the key. See dvd_css_read().
 #define MAX_VOBS 64
 static struct { uint32_t start, nsec; } g_vobs[MAX_VOBS];
 static int g_nvobs = 0;
@@ -638,6 +641,7 @@ int dvd_css_open_image(const char *path)
 	region_set = 1;    // no drive; keys are cracked from data regardless of region
 	css_pos = -1;
 	cur_vob = -1;
+	key_ok  = 0;
 
 	if (!enumerate_vobs())
 	{
@@ -723,21 +727,55 @@ int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
 		uint32_t vob_end = g_vobs[vi].start + g_vobs[vi].nsec;
 		if (lba + count > vob_end) count = vob_end - lba;
 
-		// Select this VOB's (pre-cracked) title key. SEEK_KEY is a fast cached
-		// lookup now; only needed on a title change or a discontinuity.
-		if (vi != cur_vob || (int)lba != css_pos)
+		// Select this VOB's title key — ALWAYS at the VOB's own START sector, which
+		// is the block crack_title_keys() primed, and ONLY when the VOB changes.
+		//
+		// ⚠ SEEK_KEY at the read position is NOT a cached lookup. libdvdcss matches
+		// its title cache on the EXACT start LBA -- measured in the shipped
+		// libdvdcss.so.2 (1.6.0), where _dvdcss_title is inlined into dvdcss_seek:
+		// it walks the list, then `cmp (%rdx),%ebx; je <hit>`, and the hit branch
+		// just copies the 5-byte key and skips the acquisition. The on-disk cache
+		// agrees -- a file named "%.10x" of the block. So a SEEK_KEY at an arbitrary
+		// mid-VOB block MISSES and RE-ACQUIRES the key: on a drive with no region
+		// set that is a full statistical crack, seconds to minutes, on the thread
+		// that feeds the core. That is what froze the machine at every chapter skip
+		// (field report 2026-09-17, reproduced: the dvdcss cache gained a key file
+		// per seek). Linear playback never tripped it, because lba == css_pos.
+		//
+		// libdvdread does exactly what this does now -- one key per VOB file, taken
+		// at the file start and never at the read offset (dvd_reader.c
+		// DVDReadBlocks(), keyed off dvd_file->css_title; initAllCSSKeys() primes
+		// the same blocks crack_title_keys() does). One key per VOB is the whole
+		// stack's model, so keying at the start weakens nothing: it is already what
+		// uninterrupted linear playback relies on.
+		if (vi != cur_vob)
 		{
-			if (p_seek(css, (int)lba, DVDCSS_SEEK_KEY) < 0)
-			{
-				if (p_seek(css, (int)lba, DVDCSS_NOFLAGS) < 0)
-				{
-					static int sf = 0;
-					if (sf < 10) { sf++; css_log("seek %u failed: %s", lba, p_error ? p_error(css) : "?"); }
-					css_pos = -1; cur_vob = -1; return -1;
-				}
-				decrypt = 0;   // no key -> read raw rather than corrupt
-			}
+			key_ok  = (p_seek(css, (int)g_vobs[vi].start, DVDCSS_SEEK_KEY) >= 0);
 			cur_vob = vi;
+			// A failed key seek leaves the position unknown; force the seek below.
+			css_pos = key_ok ? (int)g_vobs[vi].start : -1;
+			if (!key_ok)
+			{
+				static int kf = 0;
+				if (kf < 10) { kf++; css_log("no title key for VOB @%u: %s", g_vobs[vi].start, p_error ? p_error(css) : "?"); }
+			}
+		}
+		// ⚠ The verdict must be LATCHED across calls, not recomputed per read. It
+		// used to be a local set on the failing read only, while cur_vob was still
+		// advanced -- so the NEXT sequential read skipped this block entirely and
+		// decrypted with a key that had never been obtained, turning a raw-read
+		// fallback into garbage for the rest of the VOB.
+		if (!key_ok) decrypt = 0;   // no key -> read raw rather than corrupt
+
+		// Position within the VOB. Never SEEK_KEY here.
+		if ((int)lba != css_pos)
+		{
+			if (p_seek(css, (int)lba, DVDCSS_NOFLAGS) < 0)
+			{
+				static int sf = 0;
+				if (sf < 10) { sf++; css_log("seek %u failed: %s", lba, p_error ? p_error(css) : "?"); }
+				css_pos = -1; cur_vob = -1; key_ok = 0; return -1;
+			}
 		}
 	}
 	else
@@ -753,6 +791,7 @@ int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
 			}
 		}
 		cur_vob = -1;
+		key_ok  = 0;
 	}
 
 	int n = p_read(css, buf, (int)count, decrypt ? DVDCSS_READ_DECRYPT : DVDCSS_NOFLAGS);
@@ -776,6 +815,7 @@ void dvd_css_close(void)
 	raw_fd = -1;
 	css_pos = -1;
 	cur_vob = -1;
+	key_ok  = 0;
 	g_nvobs = 0;
 	css_size = 0;
 	warn_until = 0;

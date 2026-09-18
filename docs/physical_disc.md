@@ -1,7 +1,12 @@
 # Physical DVD playback (custom Main + CSS)
 
-Status: **🔧 in progress** (branch `feature/physical-disc-css`, started 2026-08-29).
-Not yet built or HW-tested. Rebase onto `main` after the Film-24p branch merges.
+Status: **✅ SHIPPED in v0.2.0** (PR #20, 2026-08-30) — physical disc and encrypted ISO
+both HW-confirmed on the DE10-Nano. Later fixes are recorded in their own sections below;
+the most recent is the VOB-start title-key seek (PR #104, HW-confirmed 2026-09-17).
+
+*(This header read "🔧 in progress ... not yet built or HW-tested", naming the long-merged
+`feature/physical-disc-css` branch, until 2026-09-17 — a stale marker on shipped work, the
+exact class CLAUDE.md says to fix on sight.)*
 
 This adds **physical DVD-Video playback** (and a planned encrypted-ISO path) to our
 in-fabric DVD core, without changing the decode architecture. The core keeps decoding
@@ -180,6 +185,129 @@ cache is never handed to anyone. The one hard rule: **a populated key cache must
 committed to the repo, bundled in a release, or uploaded** — *distributing* CSS keys is
 the genuinely fraught act (cf. the AACS "09 F9" case). The cache lives on the SD card,
 nowhere near the repo, so this holds by construction; keep it that way.
+
+## A title key is asked for at a VOB START, never at the read position
+
+**Field report 2026-09-17:** on a physical *Land Before Time* DVD, Prev/Next Chapter
+froze the whole machine for a few minutes and then played the chapter. **Reproduced by
+the maintainer on their own copy**, on a drive with no region set — the mount is slow
+(the pre-crack), each chapter seek ~10 s, **and new key files appear in the dvdcss cache
+as the seeks happen**. That last observation is the decisive one: it was cracking a title
+key at every skip.
+
+**Cause.** `dvd_css_read()` fired `DVDCSS_SEEK_KEY` on *any* discontinuity, at the
+**arbitrary target LBA**:
+
+```c
+if (vi != cur_vob || (int)lba != css_pos) p_seek(css, (int)lba, DVDCSS_SEEK_KEY);
+```
+
+and its comment claimed that was "a fast cached lookup now". It is not.
+
+★★ **libdvdcss matches its title cache on the EXACT start LBA — MEASURED, not recalled.**
+In the shipped `libdvdcss.so.2` (1.6.0) `_dvdcss_title` is inlined into `dvdcss_seek`; the
+lookup is a list walk followed by an **equality** test, not a range test:
+
+```asm
+8298:  mov  0x48(%r13),%rax   ; rax = dvdcss->p_titles
+82b0:  cmp  (%rax),%ebx       ; p_next->i_startlba  vs  i_block
+82b4:  mov  %rax,%rdx
+82b7:  mov  0x10(%rax),%rax   ; p_title = p_title->p_next
+82c0:  cmp  (%rdx),%ebx       ; p_title->i_startlba vs i_block
+82c2:  je   8822              ; EQUAL -> hit: copy the 5-byte key, skip acquisition
+82c8:  ...                    ; otherwise the file cache ("%.10x" of the block), then acquire
+```
+
+The struct offsets match `dvd_title_t` (`i_startlba` at 0, `p_next` at 0x10), and the
+on-disk cache agrees — one file per block, **named `"%.10x"` of the block number**, which
+is why the maintainer could watch it grow one entry per seek.
+
+`crack_title_keys()` only ever primes `g_vobs[i].start`, so **every chapter start missed
+and re-acquired**. With no drive region that is the full statistical crack, on the thread
+that also serves the core's SD blocks — hence the machine freezing, not just the picture.
+⚠ Linear playback never tripped it (`lba == css_pos` every sector), which is exactly why
+it only ever showed on a seek and why it survived every hardware round until now.
+
+**libdvdread is the oracle, and we were the deviation** (`dvd_repos/libdvdread`):
+`initAllCSSKeys()` primes one key per VOB **file**, at the file's start — structurally
+identical to `crack_title_keys()` — and `DVDReadBlocks()` re-keys **only when the file
+changes**, always at `dvd_file->lb_start`, **never at the read offset**:
+
+```c
+  /* Hack, and it will still fail for multiple opens in a threaded app ! */
+  if( dvd->css_title != dvd_file->css_title ) {
+      dvd->css_title = dvd_file->css_title;
+    if( dvd->isImageFile ) dvdinput_title( dvd->dev, (int)dvd_file->lb_start );
+  }
+```
+
+★ So one key per VOB file is the whole stack's model, not something this fix introduces —
+and it is already what uninterrupted linear playback here relied on. libdvdread is in fact
+*coarser*: its loop only primes `VTS_NN_0.VOB` and `VTS_NN_1.VOB` before breaking, so it
+uses one key for all five parts of a 4.7 GB VTS where we key each part.
+
+**Fix.** `if (vi != cur_vob)` → `SEEK_KEY` at `g_vobs[vi].start`, then a plain `NOFLAGS`
+seek to the target. Any seek anywhere in a VOB is now free.
+
+⛔ **Pre-cracking more blocks is the WRONG lever and was considered and rejected.** The
+cache is keyed by exact block, so it would mean enumerating every block anyone might seek
+to — chapter starts are knowable from the IFO, but scrub-release, D-pad seek, A-B repeat
+loop-back, menu → resume jumps and the `S_NAV_SEEK` probe landing all go to arbitrary
+blocks. It would fix B2/B3, *look* fixed, and leave the scrub bar exactly as broken. It
+would also multiply mount time by the number of blocks primed.
+
+⛔ **Deriving title keys from the disc key does not help either, and this is worth
+recording because it sounds like it should.** That *is* libdvdcss's default method
+(`DVDCSS_METHOD_KEY`: authenticate → `ReadDiscKey` → per title `ReadTitleKey` →
+decrypt with the disc key), and when it works every key is instant. But the input it
+needs — the *encrypted* title key — lives in the physical sector's CPR_MAI header, which
+a normal `READ(10)` does not return; the only way to get it is the `ReadTitleKey` ioctl,
+**which is precisely what an RPC-II drive with no region set refuses** (libdvdcss:
+`ioctl ReadTitleKey failed (region mismatch?)` → `failed to decrypt the disc key, faulty
+drive/kernel? cracking title keys instead`). So on the affected drives the disc key is
+not the missing piece, and on unaffected drives there is nothing to fix. Setting the
+drive region is what buys the fast path — see the tool below; this fix reduces **how
+often** the slow path is taken, from every seek to once per VOB per disc, ever.
+
+★ **Second, pre-existing defect found en route.** On a failed key seek the old code set a
+*local* `decrypt = 0` for that read while still advancing `cur_vob`, so the **next**
+sequential read re-entered with `decrypt = 1`, skipped the seek block entirely
+(`lba == css_pos`), and decrypted with a key that had never been obtained — garbage for
+the rest of the VOB instead of the intended raw-read fallback. The verdict is latched in
+`key_ok` now.
+
+**Gate: `main/tests/run_tests.sh --red`**, arms `[1]`–`[8]` of `dvd_css_test.cpp` plus
+four mutations, each caught by its own assertion — `css-rekey-every-seek` (restores the
+shipped behaviour: 17 keys acquired over 17 chapter skips), `css-key-at-read-lba`,
+`css-key-verdict-not-latched`, and `css-never-keys`, the control that stops the fix
+over-reaching into "never ask for a key at all". ★ The fake `p_seek` models libdvdcss's
+cache the way it actually behaves — a `SEEK_KEY` at a block never asked for before *costs
+an acquisition and is then cached* — so the test measures what the user experiences (keys
+cracked), never a signal the fix names. ⚠ The test cannot be compiled against the true
+pre-fix file (it resets `key_ok`, which did not exist), so the RED arm restores the
+behaviour by mutation rather than checking the old file out of git; that is weaker than
+the usual R0 arm and is called out in the test header.
+
+✅ **HW-CONFIRMED 2026-09-17 on the reported disc** (maintainer, region-less drive):
+*"no additional keys cached and the seeks are quick now"* — both halves of the claim, and
+the first of them is a COUNT rather than an impression, which is what makes it evidence.
+
+★ **The instrument is the cache directory, not a stopwatch.** After the mount's pre-crack
+the count must not change again, however far you skip: `crack_title_keys()` primes all 23
+of this disc's VOBs, and a key is now only ever requested at one of those blocks. Stronger
+still, the filenames ARE the block number in hex, so every entry can be checked against
+the VOB start list — an entry outside it is a key we should not have asked for.
+
+⚠⚠ **The cache is PERSISTENT AND PER-DISC, so it must be cleared before each arm.** Every
+chapter already visited is already cached, so a *pre-fix* build measures as fixed and the
+test passes on both — the "step that never reached the state" failure, in a form that
+looks like success. Remove only that disc's subdirectory (`rm -rf
+/media/fat/dvdcss/cache/<disc>`), and expect the next mount to be slow on BOTH builds:
+that is the 23-VOB pre-crack, not the bug.
+
+⚠ **Not chapter 1.** Its cell starts at RBN 0, which IS `VTS_01_1.VOB`'s own start LBA
+(614926), so it is primed at mount and even the broken build never cracks there. Chapters
+2 and up are the test.
 
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 

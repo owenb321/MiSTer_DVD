@@ -163,6 +163,39 @@ if [ "$RED" -eq 1 ]; then
         "acked (old core still engages)" \
         "s/core_fmt_v2      = (fmt >> 15) \& 1;/core_fmt_v2      = 1;/" assumes-fmt-version
 
+    # ---- dvd_css: where a title key is asked for -------------------------------
+    # The shipped-until-now behaviour, restored exactly: re-key on ANY
+    # discontinuity, at the read LBA. libdvdcss caches title keys by EXACT block,
+    # so every chapter start misses and re-acquires -- a full crack on a drive with
+    # no region, which is the reported multi-minute freeze.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "title keys acquired over 17 chapter skips" \
+        "s/^\t\tif (vi != cur_vob)$/\t\tif (vi != cur_vob || (int)lba != css_pos)/; s/(int)g_vobs\[vi\]\.start, DVDCSS_SEEK_KEY/(int)lba, DVDCSS_SEEK_KEY/" \
+        css-rekey-every-seek
+
+    # Key at the read position but only on a VOB change. Subtler, and it survives
+    # the chapter-skip arm untouched -- the cost moves to every VOB crossing, where
+    # the landing block is no more cached than a chapter start was.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "title keys acquired crossing VOBs" \
+        "s/(int)g_vobs\[vi\]\.start, DVDCSS_SEEK_KEY/(int)lba, DVDCSS_SEEK_KEY/" \
+        css-key-at-read-lba
+
+    # Stop latching the verdict. The failing read still falls back to a raw read,
+    # but cur_vob advanced anyway, so the NEXT sequential read skips the block and
+    # decrypts with a key that was never obtained -- garbage, not raw data.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "decrypted reads after the key seek failed" \
+        "/if (!key_ok) decrypt = 0;/d" \
+        css-key-verdict-not-latched
+
+    # CONTROL, and the one that matters most: every bug above is trivially "fixed"
+    # by never asking for a key at all, which silently stops decrypting.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "SEEK_KEY calls over three VOB crossings" \
+        "s/key_ok  = (p_seek(css, (int)g_vobs\[vi\]\.start, DVDCSS_SEEK_KEY) >= 0);/key_ok  = 1;/" \
+        css-never-keys
+
     # ---- the support bundle's argv (issue #81) ---------------------------------
     # The shipped-until-#81 behaviour: no NAV-pack capture at all, so a highlight
     # bug's bundle carried no button data and nothing said so.
