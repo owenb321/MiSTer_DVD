@@ -255,7 +255,7 @@ worse maintenance burden than targeted in-place edits. So:
 - 🔧 **FIELD-CODED MPEG-2 PLAYED ITS TWO FIELDS IN THE WRONG ORDER — `top_field_first` IS
   EMPTY ON A FIELD PICTURE AND THE SPEC IS WHY (2026-09-18, branch
   `fix/field-order-field-coded`); sim-proven RED/GREEN on the REAL shipped modules over
-  REAL disc bytes, 5 RTL mutations + 5 wiring re-regressions each caught by its own arm,
+  REAL disc bytes, 4 RTL mutations + 5 wiring re-regressions each caught by its own arm,
   ⏳ HW-confirm pending.** Field report: *"the Thayer's Quest disc looks
   like it's not interlaced properly, even when playing back on a CRT."*
   ★★ **THE DISC IS FIELD-CODED AND THE SYNTAX ELEMENT IT WOULD ANSWER WITH IS FORBIDDEN
