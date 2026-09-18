@@ -1161,14 +1161,43 @@ table, emu's numpad digit block, and the never-bind list below. `kbd_map.joy` an
 mask left at the old width would silently hand the design's only LEVEL consumers to a
 tap-repeating IR remote.
 
-⚠ **Eject and Volume are deliberately NOT in this table.** They need a core→Main request
-channel that does not exist yet (the `CMD_AF` payload word in `dvd/dvd_telem.sv` has free
-bits for it), and a named button that does nothing is worse than a missing one. They append
-as B19..B21 when that lands. Volume additionally cannot use `KEY_MUTE`/`KEY_VOLUMEUP`/
-`KEY_VOLUMEDOWN` at all — Main consumes those in `user_io.cpp:4283-4296` before they reach
-`ps2_key` — and MiSTer already has a framework volume (`sys_top.v` `vol_att` → `audio_out`)
-that attenuates I2S, the analog DAC **and** S/PDIF together, so the right shape is to ask
-Main to call `set_volume()` rather than to build a second attenuator in fabric.
+**Eject and Volume (B19..B21).** `E 24` → Eject; `KP+ 79` / `= 55` → Vol Up;
+`KP- 7B` / `- 4E` → Vol Down. These needed a core→Main request channel, which is why they
+landed after the rest: emu's `rq_volup_seq`/`rq_voldn_seq`/`rq_eject_tgl` counters
+(`dvd/emu.sv:1676-1683`) ride the `CMD_AF` telemetry word to
+`main/support/dvd/dvd_remote.cpp:91-109`, which takes the mod-16 difference since its last
+poll and calls `set_volume()`.
+⚠ Volume cannot use `KEY_MUTE`/`KEY_VOLUMEUP`/`KEY_VOLUMEDOWN` at all — Main consumes those
+in `user_io.cpp:4283-4296` before they reach `ps2_key` — and MiSTer already has a framework
+volume (`sys_top.v` `vol_att` → `audio_out`) that attenuates I2S, the analog DAC **and**
+S/PDIF together, so the right shape is to ask Main to call `set_volume()` rather than to
+build a second attenuator in fabric.
+
+**The main-row `-`/`=` aliases (2026-09-17).** `55`/`4E` were added beside the keypad pair
+because a keypad is exactly what a tenkeyless keyboard, a laptop and most HID remotes do
+not have, so volume was unreachable for those users.
+★ **Main's own OSD already aliases the same pair** — `menu.cpp:1478-1483` folds `KEY_EQUAL`
+into `KEY_KPPLUS` and `KEY_MINUS` into `KEY_KPMINUS` for its plus/minus actions — so this
+is the framework's existing convention rather than an invention, and the two pairs behave
+identically everywhere including inside the OSD.
+Checked against all three claimants rather than assumed: `4E`/`55` are **non-extended**
+(Main's set-2 table, `input.cpp:381-382`), absent from every file under `dvd/`, and not
+among the twenty digit scancodes emu owns — ⚠ they sit immediately right of `0` on the
+keycap row but carry distinct codes, so physical adjacency is not a collision.
+⚠ Two opt-in Main paths remap them and neither is a hazard: `keyrah_trans`
+(`input.cpp:1981-1982`, gated on `cfg.keyrah_mode` by VID/PID at `:3791`) turns them INTO
+`7B`/`79`, which are bound anyway; and the `JOY_L`/`JOY_R` synthesis at
+`input.cpp:2516-2520` is gated on `user_io_osd_is_visible() || bnum == BTN_OSD` (`:2420`),
+so it cannot fire during playback.
+⚠ `kbd_map` has **no shift-state tracking**, so `55` binds BARE `=`, not `Shift`+`=`.
+Deliberate — it is what Main's OSD does and what `. 49` → Frame Step already assumes — and
+it is why the manual says `-` / `=` rather than `+`.
+★ **Gate: `kbd_map_tb` T5b, not the two `tap_bit` arms.** The `tap_bit` arms catch a
+*missing* alias; only T5b (the aliases must decode **unextended only**) catches an alias
+put in the `E0` branch by mistake, which fails in the direction "the wrong thing happened"
+rather than "nothing happened". Mutation-checked 4/4, each caught by exactly its own arms:
+drop `55` → the `=` arm alone; drop `4E` → the `-` arm alone; both moved to the `E0` branch
+→ both `tap_bit`s **and** both T5b arms; bits swapped → both `tap_bit`s.
 
 ⚠ **Never bind**, all verified against Main: `F12` (`07`) and `KEY_MENU` (OSD toggle),
 `KEY_PAUSE` (`E1`, no break code at all), `KEY_SYSRQ`, NumLock/ScrollLock (Main's

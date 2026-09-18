@@ -3943,14 +3943,41 @@ worse maintenance burden than targeted in-place edits. So:
   steps with vbuf still 221.
   Gates: **`bench/dvd/run_frame_step.sh --red`** (19 mutations), `tools/check_frame_step_wiring.py`
   (also run from `run_stc_freerun.sh` §6). Detail: `docs/dvd_nav.md` "Frame step as a pause route".
-  ⛔ **Eject and Volume are NOT here, deliberately.** Both need a core→Main request
-  channel that does not exist (the `CMD_AF` payload word has free bits 3-14); a named
-  button that does nothing is worse than a missing one. ★★ **And volume must NOT be a
-  fabric attenuator: MiSTer already HAS one** — `sys_top.v:293` `vol_att` → `audio_out`,
-  covering I2S, the analog DAC **and S/PDIF** together, driven by Main's `set_volume()`
-  from the OSD, `/dev/MiSTer_cmd` and **HDMI-CEC volume keys, which
-  `user_io.cpp:4283-4296` consumes before they ever reach the core**. A second attenuator
-  would desync from the OSD bar and could not touch passthrough at all.
+  ⚠ **Eject and Volume DID land as B19..B21 in this same change** — the ⛔ that stood here
+  saying they were "deliberately NOT here, they need a core→Main request channel that does
+  not exist" was written before the channel was built and contradicted this very bullet's
+  own opening line six paragraphs up. Corrected 2026-09-17. The channel is emu's
+  `rq_volup_seq`/`rq_voldn_seq`/`rq_eject_tgl` counters on the `CMD_AF` telemetry word →
+  `main/support/dvd/dvd_remote.cpp:91-109`, which takes the mod-16 difference per poll and
+  calls `set_volume()`. ★★ **The reason that was the right shape is still live and is the
+  durable half: volume must NOT be a fabric attenuator, because MiSTer already HAS one** —
+  `sys_top.v:293` `vol_att` → `audio_out`, covering I2S, the analog DAC **and S/PDIF**
+  together, driven by Main's `set_volume()` from the OSD, `/dev/MiSTer_cmd` and **HDMI-CEC
+  volume keys, which `user_io.cpp:4283-4296` consumes before they ever reach the core**. A
+  second attenuator would desync from the OSD bar and could not touch passthrough at all.
+  ✅ **AND VOLUME IS ON THE MAIN-ROW `-`/`=` TOO (2026-09-17, branch
+  `feature/volume-key-alias`); sim-proven, 4/4 mutations each caught by exactly its own
+  arms, ⏳ HW-confirm pending.** It was keypad-only (`79`/`7B`), and a keypad is precisely
+  what a tenkeyless keyboard, a laptop and most HID remotes do not have — so volume was
+  unreachable for those users. ★ **Not an invention: Main's own OSD already aliases the
+  same pair** (`menu.cpp:1478-1483` folds `KEY_EQUAL` into `KEY_KPPLUS` and `KEY_MINUS`
+  into `KEY_KPMINUS`), so the two pairs behave identically everywhere, OSD included.
+  `4E`/`55` checked against all three claimants rather than assumed: **non-extended**
+  (`input.cpp:381-382`), absent from every file under `dvd/`, and ⚠ **not** among emu's
+  twenty digit scancodes despite sitting immediately right of `0` on the keycap row —
+  physical adjacency is not a code collision. ⚠ No shift tracking in `kbd_map`, so `55` is
+  BARE `=`; deliberate, and why the manual says `-` / `=` not `+`.
+  ★ **Gate: `kbd_map_tb` T5b, NOT the two `tap_bit` arms** — the `tap_bit`s catch a MISSING
+  alias, while only T5b (decode **unextended only**) catches one put in the `E0` branch,
+  i.e. the direction where the wrong thing happens rather than nothing.
+  ★★ **A PRE-EXISTING MANUAL RENDERING BUG CAME OUT WITH IT:** `Keypad ++"+"++` shipped as
+  **two EMPTY `<kbd>` boxes** — `pymdownx.keys` treats `+` as its key SEPARATOR and splits
+  on it even inside the quoted form, and quoting protects every other punctuation key
+  (`"."` and `"-"` are fine), so the one character that breaks was the one that row needed.
+  Now the extension's own keymap names (`equal`/`minus`/`num-plus`/`num-minus`). ⚠ **Found
+  only by reading the BUILT HTML** — the markdown source looks correct in both the broken
+  and the fixed version, so no source-level check could have caught it. Swept: it was the
+  only occurrence, and the built site now has no empty `<kbd>` anywhere.
   ⚠⚠ **A CEC remote's Stop key currently does GoUp** (`hdmi_cec.cpp:301` maps
   `CEC_USER_CONTROL_STOP` → `KEY_ESC`, which `kbd_map` binds to Return), and since CEC's
   `EXIT` resolves to `KEY_MENU` (eaten by Main) that is a TV remote's only back button
@@ -3961,9 +3988,10 @@ worse maintenance burden than targeted in-place edits. So:
   modules were undefined entities — and `tools/lint_undriven.sh` PASSED throughout,
   because it reads the same list and never saw them. `build_release.sh` also exited **0**
   on that failed compile; read the log, not the status.
-  Buttons B14-B18 + keys `Q Z F5 L .` (free-checked against `kbd_map`, emu's numpad digit
-  block and the never-bind list); `kbd_joy` 17→22 bits and ⚠ the FF/REW mask widened with
-  it. Detail: `docs/dvd_nav.md` "Keyboard / CEC input", `site/content/playback/controls.md`.
+  Buttons B14-B21 + keys `Q Z F5 L .` and `E` (eject), `KP+`/`=` and `KP-`/`-` (volume) —
+  all free-checked against `kbd_map`, emu's numpad digit block and the never-bind list;
+  `kbd_joy` 17→22 bits for B14..B18 and →**25** for B19..B21 (`dvd/emu.sv:1566`,
+  `kbd_map.sv:102`), and ⚠ the FF/REW mask widened with it. Detail: `docs/dvd_nav.md` "Keyboard / CEC input", `site/content/playback/controls.md`.
 - ✅ **KEYBOARD / TV-REMOTE TRANSPORT (2026-09-03, issue #35, branch
   `feature/keyboard-controls`) — sim-proven + mutation-checked and ✅ HW-CONFIRMED
   2026-09-04** (build `DVD_kbdmap_20260904_0226.rbf`, SEED 5 first roll, clk_dec
