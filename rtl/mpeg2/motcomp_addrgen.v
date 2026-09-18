@@ -47,6 +47,7 @@ module motcomp_addrgen(
   flags_commit,                                            // DVD-FORK (round 11): per-picture display flags valid (direct from vld)
   pic_informative, informative_commit, output_informative, // DVD-FORK (film evidence gate): per-picture evidence verdict
   vld_pic_pts, vld_pic_pts_valid, vld_pic_pts_2nd, pts_commit, output_pts, output_pts_valid, output_pts_2nd,   // DVD-FORK (PTS association)
+  vbuf_flush,                               // DVD-FORK FIX (2026-09-18): un-tag picbuf on a VBUF flush
   source_select,
   fwd_wr_addr_en, fwd_wr_addr, fwd_wr_addr_almost_full,
   bwd_wr_addr_en, bwd_wr_addr, bwd_wr_addr_almost_full,
@@ -112,6 +113,7 @@ module motcomp_addrgen(
   input              vld_pic_pts_valid;
   input              vld_pic_pts_2nd;
   input              pts_commit;
+  input              vbuf_flush;          // DVD-FORK FIX (2026-09-18): straight through to picbuf
   output       [32:0]output_pts;
   output             output_pts_valid;
   output             output_pts_2nd;
@@ -393,6 +395,7 @@ module motcomp_addrgen(
     .vld_pic_pts_valid(vld_pic_pts_valid),
     .vld_pic_pts_2nd(vld_pic_pts_2nd),
     .pts_commit(pts_commit),
+    .vbuf_flush(vbuf_flush),                                 // DVD-FORK FIX (2026-09-18)
     .output_pts(output_pts),
     .output_pts_valid(output_pts_valid),
     .output_pts_2nd(output_pts_2nd),

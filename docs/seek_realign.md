@@ -250,6 +250,14 @@ prediction.
 
 ### 5.1 Why the display side was left alone (and what v2 would have to be)
 
+> ⚠⚠ **2026-09-18: that one stale frame was NOT harmless to the AUDIO.** It carried its
+> pre-flush PTS tag, anchored the display clock on the old timeline, and made the new
+> content's first picture look like a backward jump. The resulting audio re-phase threw
+> away up to ~1.4 s of the new content's buffered opening (Scooby-Doo 2 "good job" heard
+> as "job"; every backward chapter skip too). Fixed by un-tagging picbuf's slots on the
+> flush and gating the re-phase on `disp_anchored`; the frame itself is still shown once,
+> as below. See `docs/dvd_nav.md` "A picture from before the flush must not set the clock".
+
 Issue #45's own "fix direction 1" was to clear `prev_i_p_frame_valid` on a flush. Two
 findings against doing it in this round:
 

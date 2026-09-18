@@ -43,6 +43,7 @@ module motcomp(
   flags_commit,                                                  // DVD-FORK (round 11): vld's per-picture display flags valid (coding ext parsed)
   pic_informative, informative_commit, output_informative,       // DVD-FORK (film evidence gate): per-picture evidence verdict
   vld_pic_pts, vld_pic_pts_valid, vld_pic_pts_2nd, pts_commit, output_pts, output_pts_valid, output_pts_2nd,   // DVD-FORK (PTS association)
+  vbuf_flush,                               // DVD-FORK FIX (2026-09-18): un-tag picbuf on a VBUF flush
   idct_rd_dta_empty, idct_rd_dta_en, idct_rd_dta, idct_rd_dta_valid, frame_idct_wr_overflow, dct_block_wr_overflow, mvec_wr_almost_full, mvec_wr_overflow, dst_wr_overflow,
   source_select,
   fwd_wr_addr_clk_en, fwd_wr_addr_full, fwd_wr_addr_almost_full, fwd_wr_addr_en, fwd_wr_addr_ack, fwd_wr_addr, fwd_rd_dta_clk_en, fwd_rd_dta_empty, fwd_rd_dta_en, fwd_rd_dta_valid, fwd_rd_dta,
@@ -98,6 +99,7 @@ module motcomp(
   input              vld_pic_pts_valid;
   input              vld_pic_pts_2nd;
   input              pts_commit;
+  input              vbuf_flush;          // DVD-FORK FIX (2026-09-18): to picbuf, via addrgen
   output       [32:0]output_pts;        // DVD-FORK (PTS association): the tag of the picture at picbuf's output
   output             output_pts_valid;
   output             output_pts_2nd;
@@ -424,6 +426,7 @@ module motcomp(
     .vld_pic_pts_valid(vld_pic_pts_valid),
     .vld_pic_pts_2nd(vld_pic_pts_2nd),
     .pts_commit(pts_commit),
+    .vbuf_flush(vbuf_flush),                                 // DVD-FORK FIX (2026-09-18)
     .output_pts(output_pts),
     .output_pts_valid(output_pts_valid),
     .output_pts_2nd(output_pts_2nd),

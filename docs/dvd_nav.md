@@ -1646,6 +1646,82 @@ is new behaviour on looping motion menus. Check T2 and MiB on hardware.
 and the commentary screen (cell 19) against the v0.6.1 control. Then check that T2 and MiB
 menus are unregressed and that the Matrix menu → Play transition is unchanged.
 
+⚠⚠ **THE REPORTED SYMPTOM WAS NOT THIS DEFECT, and the first hardware round said so.** The
+maintainer flashed the build above: *"it still cuts off a bit of audio at the beginning.
+Shaggy is supposed to say 'good job' but we just hear 'job'"*. v0.6.1 does the same, and so
+does every round. The loss is at a clip's HEAD, not its tail. The tail fix stays because
+its bench measures a real loss (13 frames), but it is not what the user heard.
+
+### A picture from before the flush must not set the clock (2026-09-18, same branch)
+
+🔧 **Root-caused from rig telemetry, sim-proven RED/GREEN on the real picbuf; ⏳
+HW-confirm pending.**
+
+★ **The instrument came first.** Telemetry word 5 (`vid_err`, retired by PR #63) now
+carries the audio decoder's discard counters, `{skip[7:0], catch-up[3:0], re-arms[3:0]}`.
+A 29-minute session through the whole game settled the question:
+- **skip = catch-up = 0 at every clip.** Neither stale-skip nor the mid-play catch-up
+  ate "good". Those were the two decoder paths that could drop about a word.
+- **The hit itself** is a user button, `LinkCN 8`. Cell 8's audio opens with **1.05 s of
+  silence** (decoded offline with ffmpeg), so "good" sits about 1.1–1.5 s into the clip.
+  That is just past the **~1.1 s the audio ring holds**.
+- **The transition shows every step of the mechanism:**
+  - `reanchors=2` and `disp_lag = −2024 ms`;
+  - the audio is then HELD for 1.25 s with the ring full (34 frames);
+  - the drift counts down from +1407 ms.
+
+**The mechanism.** A seek flushes the VBUF, but the display still shows ONE pre-flush
+picture: the held I/P anchor, which the new cell's first I emits (IPB reorder;
+`docs/seek_realign.md` §5.1). **It still carried its pre-flush PTS tag.**
+1. It anchored `disp_sched`'s clock on the round's timeline (~2.15 s) and set
+   `disp_anchored`.
+2. The clip's first picture (PTS 0.122) then read as a **2 s backward jump**, which
+   raised `anchor_disc`.
+3. That fired `aud_resync`, which reset an audio ring **already holding the clip's first
+   ~1.1–1.4 s**.
+4. Delivery resumed at ~1.4 s of PTS, and the gate held it until the clock caught up.
+
+Everything up to "good" was gone, and nothing counted it as a discard, because the reset
+zeroes the counters too.
+
+⚠ **This is not Scooby-specific.** It affects every user seek into content whose PTS is
+BELOW the old picture's, i.e. every backward chapter skip and every jump into a
+PTS-restarting cell. Scooby makes it audible because every clip starts on speech.
+
+**Fix, in two halves; neither alone is enough (measured by reasoning through both
+orders, then gated):**
+1. **`motcomp_picbuf` gets `vbuf_flush`** (`flush_vbuf_eff`, threaded through `motcomp`
+   and `motcomp_addrgen`). It clears the tag-valid of the current, held-anchor and output
+   slots, so the stale picture reaches the display UNTAGGED and cannot anchor anything.
+   ★ **Race-free by the tag latch's own ordering argument.** `pts_assoc` clears its tag
+   on the same flush. A pre-flush picture's `STATE_UPDATE` that is still queued can only
+   latch that cleared output, because the vld is frozen at the next header until the
+   rotation. So nothing stale can be re-latched after the clear.
+2. **`disp_sched`: `disc_jump_w` also requires `disp_anchored`.** Untagged, the stale
+   pickup still primes `next_valid`. After an rff stale frame (1.5 frames), the new
+   cell's first tagged picture, sitting exactly on the provisional anchor, still reads as
+   a backward jump. A discontinuity is a jump between two DISPLAYED timelines, and until a
+   tag has put the clock on one since the flush, the flush has already reset the audio.
+   That is what the rule's own comment ("the FIRST anchor after a flush is excluded")
+   meant; `next_valid` never said it. The CLOCK's re-anchor is unchanged, and discs
+   without a flush (menu keep_vbuf hops, sequential cells) cannot reach the window.
+
+**Gates.**
+- **`bench/dvd/picbuf_tag_flush_tb.sv`** runs the real picbuf with a pts_assoc model and
+  scores the tag the display actually picks up.
+  - RED (`WIRE_FLUSH=0`, the pre-fix picbuf): the stale P arrives with tag 2000 VALID.
+  - GREEN: untagged, and the new I keeps its tag. A no-flush control keeps every tag.
+- **`disp_sched_tb` [14e]:** a stale untagged rff pickup, then the new timeline at the
+  provisional anchor, must give `anchor_disc = 0` and still `disp_anchored`. Mutation
+  **M14** drops the `disp_anchored` term and must fail [14e]. M12's anchor text moved
+  with the edit.
+- **Five picbuf benches** tie the new port (`seek_realign_tb` gets the real flush
+  level).
+
+⏳ **HW gate:** every whac-a-mole round's "good job" (and any "good" clip) complete, with
+telemetry showing `reanchors` 1, not 2, after a hit. Then confirm chapter skips, both
+directions, on a movie, and T2/MiB menus unregressed.
+
 ⚠⚠ **A bench bug worth knowing, found by making the bench faster:** the scene clock had
 two drivers — a task's blocking reset and the tick process's nonblocking increment. At 3
 clk per tick the reset survived because the increment ran on one edge in three; at 1 clk

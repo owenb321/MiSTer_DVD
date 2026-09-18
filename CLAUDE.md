@@ -276,6 +276,28 @@ worse maintenance burden than targeted in-place edits. So:
   lost (52,546/78,819 B)**, GREEN all 39 committed frames. The reader's 37 other benches
   tie `.aud_drained(1'b1)`. Detail: **`docs/dvd_nav.md`** "A natural transition waits for
   the AUDIO too".
+  ⚠⚠ **THAT WAS NOT THE REPORTED SYMPTOM — the first HW round said *"'good job' but we
+  just hear 'job'"*, on v0.6.1 too, once per round: a HEAD loss.** Root cause (🔧
+  sim-proven, ⏳ HW-confirm pending), found with a new instrument: **telemetry word 5 now
+  carries the audio decoder's discard counters** (`{skip, catch-up, re-arms}`; `vid_err`
+  was dead since #63). They read **0** at every clip, which ruled out the decoder. The
+  transition showed `reanchors=2`, `disp_lag −2024 ms`, and audio held 1.25 s.
+  ★★ **A seek still DISPLAYS one pre-flush picture (the held I/P anchor,
+  `seek_realign.md` §5.1), and it kept its pre-flush PTS TAG.** It anchored the clock on
+  the old timeline, so the new cell's first picture read as a backward jump, and
+  `anchor_disc` → `aud_resync` wiped a ring already holding the clip's first ~1.1–1.4 s.
+  "good" sits 1.1–1.5 s in, after 1.05 s of authored silence. This hits every backward
+  chapter skip too.
+  **Fix, two halves (neither suffices alone):**
+  - `motcomp_picbuf.vbuf_flush` un-tags the current, held and output slots. This is
+    race-free: `pts_assoc` clears on the same flush, and the header freeze orders any
+    queued update.
+  - `disp_sched`'s `disc_jump_w` requires `disp_anchored`, since an untagged rff stale
+    pickup still makes the first real tag look 1.5 frames "behind".
+
+  **Gates:** `bench/dvd/picbuf_tag_flush_tb.sv` (RED: the stale P arrives with tag 2000
+  valid) and `disp_sched_tb` [14e] + mutation M14. Detail: `docs/dvd_nav.md` "A picture
+  from before the flush must not set the clock".
 
 - ✅ **FIELD-CODED MPEG-2 PLAYED ITS TWO FIELDS IN THE WRONG ORDER — `top_field_first` IS
   EMPTY ON A FIELD PICTURE AND THE SPEC IS WHY (2026-09-18, branch

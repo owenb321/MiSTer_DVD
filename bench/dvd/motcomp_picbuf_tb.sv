@@ -72,6 +72,7 @@ module motcomp_picbuf_tb;
   wire       output_frame_valid, picbuf_busy;
 
   motcomp_picbuf dut (
+    .vbuf_flush(1'b0),   // DVD-FORK FIX (2026-09-18): picbuf un-tags on a VBUF flush
     .clk(clk), .clk_en(1'b1), .rst(rst),
     .source_select(3'd0),
     .progressive_sequence(1'b1), .progressive_frame(1'b1),

@@ -715,7 +715,39 @@ module disp_sched_tb;
     end
     $display("  [14] anchor_disc: clean=0, backward jump=1, starvation=0, forward gap=0 (clock still re-anchors)");
 
-    if (errors == 0) $display("PASS: disp_sched_tb — 19 scenarios");
+    // [14e] ★ A PRE-FLUSH PICTURE MUST NOT MAKE THE NEW TIMELINE LOOK LIKE A JUMP
+    //       (2026-09-18, Scooby-Doo 2 "good job" heard as "job"). After a seek the
+    //       display still shows ONE pre-flush picture (docs/seek_realign.md §5.1).
+    //       picbuf now strips its tag, so it reaches us UNTAGGED -- but an untagged
+    //       pickup still primes next_valid, and if it was an rff frame (1.5 frames)
+    //       the new cell's first tagged picture, sitting exactly on the provisional
+    //       anchor, reads 1.5 frames BEHIND the extrapolation: a backward jump. That
+    //       pulsed anchor_disc, flush_ctl re-phased the audio, and the ring's first
+    //       ~1.1-1.4 s of the new cell -- already buffered, already correct -- was
+    //       thrown away. The flush had reset the audio already; there is no OLD
+    //       timeline displayed yet to re-phase away from. The CLOCK must still take
+    //       the tagged anchor (it does; only the audio qualifier is gated).
+    reset_world(750, 1501, 1502, 0, 0, 2, 1, 4);
+    film_32(40, 100000, 1, 20000);                    // every picture tagged...
+    s_tag[0] = 0; s_rff[0] = 1;                       // ...but the first is the stale, untagged rff one
+    for (i = 1; i < 40; i = i + 1) begin              // the new cell starts AT the provisional anchor
+      s_pts[i]  = s_pts[i]  - (s_pts[1] - 100000);
+      s_true[i] = s_true[i] - (s_pts[1] - 100000);
+    end
+    s_pts[1] = 100000; s_true[1] = 100000;
+    prov_pts <= 100000; prov_valid <= 1; @(posedge clk); prov_valid <= 0;
+    run_until_done(200);
+    if (disc_pulses != 0) begin
+      $display("FAIL [14e] the first tagged picture after a flush pulsed anchor_disc %0d time(s) -- the new cell's buffered audio would be discarded", disc_pulses);
+      errors = errors + 1;
+    end
+    if (!disp_anchored) begin
+      $display("FAIL [14e] the first tagged picture after a flush did not anchor the display timeline");
+      errors = errors + 1;
+    end
+    $display("  [14e] stale untagged rff pickup then the new timeline: anchor_disc=%0d (want 0), disp_anchored=%0d", disc_pulses, disp_anchored);
+
+    if (errors == 0) $display("PASS: disp_sched_tb — 20 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end
     $finish;
   end
