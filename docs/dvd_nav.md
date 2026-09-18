@@ -2513,14 +2513,17 @@ the block, and still cycles (`ANGLE 3/5`) afterwards.
 not fit (2.6 GB free against a 7.26 GB image). T2 is the stronger vehicle anyway:
 85 % sibling share against AVP's 73 %.
 
-⚠ **The round was run on `DVD_branchseek_20260917_1632.rbf`, and the branch was then
-rebased onto PR #103 and rebuilt as `DVD_branchseek_20260917_2226.rbf`** (SEED 7 first
-roll, clk_dec 95.58/93.16, 38,220 ALMs). The confirmation stands rather than being
-re-run: PR #103 is VM and `idle_logo` work and **does not touch `dvd_iso_reader.sv`
-at all**, so the seek path measured above is byte-identical in both builds, and both
-this gate and PR #103's own `run_select_noop.sh` pass on the rebased tree. If that
-ever stops being true of a rebase, the round is owed again — the claim here is about
-a reader, not about a date.
+⚠ **The round was run on `DVD_branchseek_20260917_1632.rbf`; the shipping build is
+`DVD_branchseek_20260918_0010.rbf`** (SEED 7 first roll, clk_dec 90.17/91.48, 38,244
+ALMs). Three things happened in between — a rebase onto PR #103 (VM + `idle_logo`),
+the §2g cell-index widening, and a rebase onto PR #104 (Main-side CSS only, which
+touches no netlist input at all). The confirmation stands rather than being re-run:
+**none of them changes the branch-resolution path this round measured** — PR #103 and
+#104 do not touch `dvd_iso_reader.sv`, and §2g widens shadow tables in `seek_time`
+and `seek_bar`, which the landing does not go through. Both this gate and PR #103's
+own `run_select_noop.sh` pass on the rebased tree. If a later rebase ever does touch
+the reader's seek path, the round is owed again — the claim here is about a reader,
+not about a date.
 
 #### Gate — `bench/dvd/run_branch_seek.sh [--red]`
 
