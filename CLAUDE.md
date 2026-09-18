@@ -252,11 +252,16 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **FIELD-CODED MPEG-2 PLAYED ITS TWO FIELDS IN THE WRONG ORDER — `top_field_first` IS
+- ✅ **FIELD-CODED MPEG-2 PLAYED ITS TWO FIELDS IN THE WRONG ORDER — `top_field_first` IS
   EMPTY ON A FIELD PICTURE AND THE SPEC IS WHY (2026-09-18, branch
   `fix/field-order-field-coded`); sim-proven RED/GREEN on the REAL shipped modules over
   REAL disc bytes, 4 RTL mutations + 5 wiring re-regressions each caught by its own arm,
-  ⏳ HW-confirm pending.** Build `DVD_fieldorder_20260918_1439.rbf`, **SEED 9** (SEED 7
+  and ✅ HW-CONFIRMED 2026-09-18 on the maintainer's CRT** — *"Thayer looks much better on
+  the CRT now, smooth motion and no visible combing"*, with The Matrix (film) and a concert
+  DVD (video-sourced, frame-coded) both unregressed. ★ Those two controls are the right
+  pair: film is insensitive to field order, and a frame-coded concert exercises the
+  interlaced path with a MEANINGFUL `top_field_first` — the immovability arm's claim,
+  seen on a screen. Build `DVD_fieldorder_20260918_1439.rbf`, **SEED 9** (SEED 7
   missed at 80.03/83.4 and ended its eight-build run; 9 passed first fit at clk_dec
   95.02/90.23 vs the 86.0 gate), 91 % ALM. ⚠ A `_MARGINAL_` pack of the SEED 7 fit sits
   beside it in `releases/` — do not flash it. Field report: *"the Thayer's Quest disc looks

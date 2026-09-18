@@ -391,7 +391,10 @@ refreshes have elapsed. Moved earlier it would wait the budget out instead of me
 
 *(2026-09-18, field report on Thayer's Quest: "looks like it's not interlaced properly,
 even when playing back on a CRT". Fix: `rtl/mpeg2/vld.v` `first_field_top` +
-the seam in `rtl/mpeg2/mpeg2video.v`. Gate: `bench/dvd/run_field_order.sh --red`.)*
+the seam in `rtl/mpeg2/mpeg2video.v`. Gate: `bench/dvd/run_field_order.sh --red`.
+✅ **HW-CONFIRMED 2026-09-18** on the maintainer's CRT, build
+`DVD_fieldorder_20260918_1439.rbf` (SEED 9): Thayer's Quest shows smooth motion and no
+visible combing; The Matrix and a concert DVD unregressed.)*
 
 ⚠⚠ **EVERYTHING ABOVE IS ABOUT RASTER PARITY — which raster slot a field lands in.
 It says nothing about TEMPORAL ORDER, and this document previously had no field-coded
