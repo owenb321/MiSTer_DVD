@@ -1,7 +1,12 @@
 # Physical DVD playback (custom Main + CSS)
 
-Status: **🔧 in progress** (branch `feature/physical-disc-css`, started 2026-08-29).
-Not yet built or HW-tested. Rebase onto `main` after the Film-24p branch merges.
+Status: **✅ SHIPPED in v0.2.0** (PR #20, 2026-08-30) — physical disc and encrypted ISO
+both HW-confirmed on the DE10-Nano. Later fixes are recorded in their own sections below;
+the most recent is the VOB-start title-key seek (PR #104, HW-confirmed 2026-09-17).
+
+*(This header read "🔧 in progress ... not yet built or HW-tested", naming the long-merged
+`feature/physical-disc-css` branch, until 2026-09-17 — a stale marker on shipped work, the
+exact class CLAUDE.md says to fix on sight.)*
 
 This adds **physical DVD-Video playback** (and a planned encrypted-ISO path) to our
 in-fabric DVD core, without changing the decode architecture. The core keeps decoding
@@ -283,9 +288,26 @@ pre-fix file (it resets `key_ok`, which did not exist), so the RED arm restores 
 behaviour by mutation rather than checking the old file out of git; that is weaker than
 the usual R0 arm and is called out in the test header.
 
-⏳ **Not HW-confirmed.** The board test is one A/B on a region-less drive with an
-encrypted disc: chapter-skip a few times and watch `/media/fat/dvdcss/cache/<disc>/` — it
-must stop gaining files, and the skip must be as quick as a seek on a decrypted ISO.
+✅ **HW-CONFIRMED 2026-09-17 on the reported disc** (maintainer, region-less drive):
+*"no additional keys cached and the seeks are quick now"* — both halves of the claim, and
+the first of them is a COUNT rather than an impression, which is what makes it evidence.
+
+★ **The instrument is the cache directory, not a stopwatch.** After the mount's pre-crack
+the count must not change again, however far you skip: `crack_title_keys()` primes all 23
+of this disc's VOBs, and a key is now only ever requested at one of those blocks. Stronger
+still, the filenames ARE the block number in hex, so every entry can be checked against
+the VOB start list — an entry outside it is a key we should not have asked for.
+
+⚠⚠ **The cache is PERSISTENT AND PER-DISC, so it must be cleared before each arm.** Every
+chapter already visited is already cached, so a *pre-fix* build measures as fixed and the
+test passes on both — the "step that never reached the state" failure, in a form that
+looks like success. Remove only that disc's subdirectory (`rm -rf
+/media/fat/dvdcss/cache/<disc>`), and expect the next mount to be slow on BOTH builds:
+that is the 23-VOB pre-crack, not the bug.
+
+⚠ **Not chapter 1.** Its cell starts at RBN 0, which IS `VTS_01_1.VOB`'s own start LBA
+(614926), so it is primed at mount and even the broken build never cracks there. Chapters
+2 and up are the test.
 
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 

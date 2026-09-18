@@ -252,10 +252,12 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **EVERY CHAPTER SKIP ON A PHYSICAL DISC CRACKED A CSS TITLE KEY — THE KEY WAS ASKED
-  FOR AT THE READ POSITION, AND libdvdcss CACHES BY EXACT BLOCK (2026-09-17, branch
-  `fix/css-key-vob-start`); host-proven RED/GREEN, 4 mutations each caught by its own
-  arm, ⏳ HW-confirm pending.** Field report: Prev/Next Chapter freezes the whole machine
+- ✅ **EVERY CHAPTER SKIP ON A PHYSICAL DISC CRACKED A CSS TITLE KEY — THE KEY WAS ASKED
+  FOR AT THE READ POSITION, AND libdvdcss CACHES BY EXACT BLOCK (2026-09-17, PR #104);
+  host-proven RED/GREEN, 4 mutations each caught by its own arm, and ✅ HW-CONFIRMED
+  2026-09-17 on the reported disc — maintainer: *"no additional keys cached and the seeks
+  are quick now"*, i.e. BOTH halves measured (the cache stops growing, and the wait is
+  gone).** Field report: Prev/Next Chapter freezes the whole machine
   for a few minutes, then plays the chapter. ★ **REPRODUCED BY THE MAINTAINER on their
   own copy** (no drive region: slow mount, ~10 s per seek) **with the decisive evidence —
   new key files appearing in the dvdcss cache as the seeks happened.**
@@ -298,9 +300,13 @@ worse maintenance burden than targeted in-place edits. So:
   scores keys cracked, never a signal the fix names. ⚠ It cannot compile against the true
   pre-fix file (it resets `key_ok`), so the RED arm restores the BEHAVIOUR by mutation
   rather than out of git — weaker than the usual R0 arm, called out in the test header.
-  ⏳ HW gate: on a region-less drive, chapter-skip and watch
-  `/media/fat/dvdcss/cache/<disc>/` stop gaining files. Detail:
-  **`docs/physical_disc.md`** "A title key is asked for at a VOB START".
+  ★ **HW gate, and it is the cache directory rather than a stopwatch:** on a region-less
+  drive the cache must stop gaining files entirely once the mount's pre-crack is done —
+  a count, not an impression. ⚠ **The cache is PERSISTENT AND PER-DISC, so it must be
+  CLEARED before each arm** or chapters already visited are already cached and a
+  *pre-fix* build measures as fixed. ⚠ And not chapter 1: its cell starts at RBN 0 =
+  `VTS_01_1.VOB`'s own LBA, already primed, so even the broken build never cracks there.
+  Detail: **`docs/physical_disc.md`** "A title key is asked for at a VOB START".
 
 - ✅ **SELECT DURING A MENU TRANSITION KICKED THE PLAYER BACK TO THE BOOT CHAIN — ONE
   BUTTON CARRIED TWO MEANINGS, AND THE WRONG ONE OUTLIVED THE TRANSITION (2026-09-17,

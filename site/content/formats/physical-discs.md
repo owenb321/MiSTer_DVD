@@ -64,6 +64,9 @@ The first time an encrypted disc's keys are needed they may take a few seconds t
 Recovered keys are cached under `/media/fat/dvdcss/cache`, so the same disc is instant next
 time.
 
+All of that happens **while the disc loads**. Once it is playing, skipping chapters and
+seeking cost nothing extra, however far you jump.
+
 For a **physical disc**, how long that first recovery takes depends on whether the drive has
 a region set — see below. For an **image**, keys are always cracked from the data, so the
 region makes no difference; images also crack noticeably faster than physical discs, because
