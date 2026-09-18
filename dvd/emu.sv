@@ -983,6 +983,16 @@ wire  [0:0] img_mounted;
 wire        img_readonly;
 wire [63:0] img_size;
 
+// Telemetry word 5 (was vid_err, retired by PR #63): the audio decoder's
+// DISCARD counters, {skip[7:0], catch-up[3:0], underrun re-arms[3:0]}, all
+// reset with the audio chain (every seek/jump). skip counts every discarded
+// frame; catch-up is the subset the MID-PLAY catch-up decided, so
+// skip - catch-up = the load-window stale-skip. Added 2026-09-18 to measure
+// the Scooby-Doo 2 "good job" -> "job" clip-head loss (docs/dvd_nav.md).
+// Declared here, ahead of the telem instance: the source wires are declared
+// ~3000 lines down and emu.sv has no `default_nettype none`.
+wire [15:0] telem_aud_disc;
+
 // BLKSZ=4: 2048-byte sd blocks (= one DVD/ISO sector per request). One HPS
 // round-trip per sector instead of four 512-byte ones — the per-request
 // latency was the delivery ceiling that starved audio on discs muxed near
@@ -1072,7 +1082,7 @@ dvd_telem dvd_telem_inst (
     .pickups    (core_pickups),          // clk_dec: content frames displayed
     .lates      (core_frames_late),      // clk_dec
     .drops      (core_frames_dropped),   // clk_dec
-    .vid_err    (16'd0),                 // retired: the display is scheduled by PTS; see word 11
+    .vid_err    (telem_aud_disc),        // word 5: audio discard counters (was vid_err, retired)
     .drop_costs (core_drop_costs),       // clk_dec: {debt, drop_req, probe}
     .vbuf_fill  (core_vbuf_fill),
     .aud_frames (aud_frames_avail),
@@ -3944,6 +3954,7 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .dbg_rearm_cnt      (dbg_aud_rearm_cnt),
     .dbg_fbrel_cnt      (dbg_aud_fbrel_cnt),
     .dbg_skip_cnt       (dbg_aud_skip_cnt),
+    .dbg_catch_cnt      (dbg_aud_catch_cnt),
     .dbg_play_err       (dbg_aud_play_err),
     .dbg_cur_codec      (dbg_cur_codec_w),
     .dbg_mp2_avalid     (dbg_mp2_avalid_w),
@@ -3953,6 +3964,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
 wire [32:0] dbg_aud_play_pts;
 wire [3:0]  dbg_aud_rearm_cnt, dbg_aud_fbrel_cnt;
 wire [7:0]  dbg_aud_skip_cnt;
+wire [3:0]  dbg_aud_catch_cnt;
+assign telem_aud_disc = {dbg_aud_skip_cnt, dbg_aud_catch_cnt, dbg_aud_rearm_cnt};
 wire [15:0] dbg_aud_play_err;
 
 // =========================================================================

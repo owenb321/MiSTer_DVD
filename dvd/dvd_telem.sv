@@ -25,7 +25,8 @@
 //     word 2  pickups        -- content frames picked up for display
 //     word 3  lates          -- governor deadline misses
 //     word 4  drops          -- pictures dropped
-//     word 5  vid_err        -- SIGNED, 1 unit = 1 refresh
+//     word 5  aud_disc       -- {skip[7:0], catch-up[3:0], re-arms[3:0]} (was vid_err,
+//                               retired by PR #63; the port keeps its name)
 //     word 6  {debt, drop_costs}
 //     word 7  {vbuf_fill, flags}
 //     word 8  aud_frames     -- audio frames queued
