@@ -2292,7 +2292,7 @@ flat and VCD sources have no DSI and would need GOP-header scanning instead.
 It also carries a UX decision — whether hold-FF *becomes* trick play or the proven
 scrub-to-target keeps B10/B11 — and it needs its own HW round.
 
-### 2e. Seeking inside a seamless-branch block — 🔧 FIXED (2026-09-17, issue #49)
+### 2e. Seeking inside a seamless-branch block — ✅ FIXED + HW-CONFIRMED (2026-09-17, issue #49)
 
 > **Status: sim-proven RED/GREEN over the real discs' measured shapes, six
 > mutations each failing EXACTLY its own arms, and ✅ HW-CONFIRMED 2026-09-17
@@ -2977,10 +2977,12 @@ the D-pad always walks buttons in a menu / in-title HLI (scrub/chapter are title
 HW-confirmed after the cell-granularity → `c_eltm`-gated fix (2026-07-10). The shipped build
 carries the separate, known output-path chroma fringe (placement-class; not Phase-8 logic).
 
-### 2g. A PGC over 128 cells aliased the shadow tables — the preview read 0:00:00 — 🔧 FIXED (2026-09-17)
+### 2g. A PGC over 128 cells aliased the shadow tables — the preview read 0:00:00 — ✅ FIXED + HW-CONFIRMED (2026-09-17/18)
 
 > **Status: sim-proven RED/GREEN from the disc's measured shape, mutation-gated,
-> ⏳ HW-confirm pending.** Field report while confirming §2e on the rig:
+> and ✅ HW-CONFIRMED 2026-09-18** (maintainer, build
+> `DVD_branchseek_20260918_0010.rbf`: *"seeks look good on the T2 special edition
+> now too"*). Field report while confirming §2e on the rig:
 > *"seeking seems to work okay in T2, however in the special edition version, the
 > preview timestamp during hold-to-scrub shows 0:00:00 instead of the projected
 > seek time. The preview timestamp is correctly updated when viewing the

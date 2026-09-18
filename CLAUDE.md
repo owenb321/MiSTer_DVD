@@ -252,9 +252,11 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **A PGC OVER 128 CELLS ALIASED THE SEEK SHADOW TABLES AND THE SCRUB PREVIEW READ
+- ✅ **A PGC OVER 128 CELLS ALIASED THE SEEK SHADOW TABLES AND THE SCRUB PREVIEW READ
   0:00:00 (2026-09-17, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN from the
-  disc's measured shape, mutation-gated, ⏳ HW-confirm pending.** Field report while
+  disc's measured shape, mutation-gated, and ✅ HW-CONFIRMED 2026-09-18** (maintainer, build
+  `DVD_branchseek_20260918_0010.rbf`: *"seeks look good on the T2 special edition now
+  too"* — the reported disc, on the reported PGC).** Field report while
   confirming the seamless-branch seek on the rig: *"seeking seems to work okay in T2,
   however in the special edition version, the preview timestamp during hold-to-scrub shows
   0:00:00 instead of the projected seek time. The preview timestamp is correctly updated

@@ -85,14 +85,6 @@ a core's output is left out of this core to free logic for the player itself. Ev
 disc, file and audio CD the core plays is decoded in the FPGA, so nothing the player does
 depends on it.
 
-**Seeking on a seamless-branch disc is unreliable.** Some special editions store two cuts
-of the film — theatrical and extended — woven together in the same part of the disc, and
-the player chooses between them as it goes. Seeking into a woven stretch can drop you into
-the wrong cut, and the elapsed time will not match where you actually are. Normal playback
-of these discs is fine; it is only seeking that is affected. Chapter skip is the reliable
-way to move around one of these discs for now. Tracked as
-[issue #49](https://github.com/owenb321/MiSTer_DVD/issues/49).
-
 **Some discs are not laid out in the order you watch them.** A small number of discs —
 ordinary films among them, not just box sets — store one part of the feature at the far end
 of the disc from where it plays. Playback, chapter skip, seeking and the time readout are
