@@ -139,6 +139,11 @@ module kbd_map_tb;
         tap_bit("E (Eject)",  1'b0, 8'h24, 22);
         tap_bit("KP+ (Vol+)", 1'b0, 8'h79, 23);
         tap_bit("KP- (Vol-)", 1'b0, 8'h7B, 24);
+        // Main-row -/= alias onto the SAME two bits. A keypad is what a
+        // tenkeyless board, a laptop and most HID remotes do not have, so
+        // without these volume is unreachable for them.
+        tap_bit("= (Vol+)",   1'b0, 8'h55, 23);
+        tap_bit("- (Vol-)",   1'b0, 8'h4E, 24);
 
         // ---- T4: Fast Fwd / Rewind pulse like everything else ---------------
         // These are the two bits emu.sv routes to dpad_seek. A LEVEL here would
@@ -158,7 +163,7 @@ module kbd_map_tb;
         end else $display("PASS T4-hold: 5000-cycle hold = exactly one pulse");
         clr(); key(1'b0, 8'h0D, 1'b0, 12); expect_none("T4-hold release");
 
-        // ---- T5: extended discrimination (the numpad collision) -------------
+        // ---- T5: extended discrimination (ps2_key[8] is part of the key) ----
         // Non-extended 75/72/6B/74/7D/7A are numpad 8/2/4/6/9/3 and belong to
         // emu.sv's digit path. They must produce NOTHING here.
         $display("== T5: non-extended arrow/page codes are numpad digits");
@@ -168,6 +173,13 @@ module kbd_map_tb;
         tap_none("numpad6 (74)", 1'b0, 8'h74);
         tap_none("numpad9 (7D)", 1'b0, 8'h7D);
         tap_none("numpad3 (7A)", 1'b0, 8'h7A);
+        // ...and the same test in the other direction for the volume aliases:
+        // 55/4E are main-row keys, so they are decoded ONLY unextended. This is
+        // what pins them into the correct half of the case -- an alias added to
+        // the E0 branch by mistake passes every arm above.
+        $display("== T5b: volume aliases are non-extended only");
+        tap_none("E0 55 (not '=')", 1'b1, 8'h55);
+        tap_none("E0 4E (not '-')", 1'b1, 8'h4E);
 
         // ---- T6: no digit, either bank, produces anything --------------------
         $display("== T6: all 20 digit scancodes are inert");
