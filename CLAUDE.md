@@ -252,6 +252,164 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **A PGC OVER 128 CELLS ALIASED THE SEEK SHADOW TABLES AND THE SCRUB PREVIEW READ
+  0:00:00 (2026-09-17, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN from the
+  disc's measured shape, mutation-gated, and ✅ HW-CONFIRMED 2026-09-18** (maintainer, build
+  `DVD_branchseek_20260918_0010.rbf`: *"seeks look good on the T2 special edition now
+  too"* — the reported disc, on the reported PGC).** Field report while
+  confirming the seamless-branch seek on the rig: *"seeking seems to work okay in T2,
+  however in the special edition version, the preview timestamp during hold-to-scrub shows
+  0:00:00 instead of the projected seek time. The preview timestamp is correctly updated
+  when viewing the theatrical version."*
+  ★ **The disc answers it immediately: `ULTIMATE_T2` VTS_01 PGCN 1 (theatrical) has 122
+  cells; PGCN 2 and 3 (the special editions) have 132.** `seek_time` and `seek_bar` both
+  shadowed the reader's per-cell stream into **128-entry** tables on a **7-bit**
+  `cellf_idx`, so cell 128 overwrote cell 0.
+  ★★ **AND A TRUNCATED INDEX DOES NOT JUST ALIAS A TABLE — IT SHRINKS THE COUNT THAT
+  INDEXES IT, which is why the symptom is a hard zero rather than a wrong time.** `cell_n`
+  follows the LAST index written (`131 & 0x7F = 3`), so it collapsed to **4**; the scan
+  walked four wrapped entries holding high RBNs from the END of the title; every target fell
+  below all of them; `lo_ok` stayed 0; and the "genuinely below every cell" path publishes
+  **zero**.
+  ⛔⛔ **`docs/dvd_nav.md` §2f non-goal 2 called this alias "measured unreachable", AND THE
+  MEASUREMENT SAMPLED THE WRONG POPULATION** — it counted the PGC the core plays BY DEFAULT,
+  so a director's cut reached through the disc's own menu was never in it. Re-measured over
+  EVERY title PGC of EVERY VTS: **34,194 PGCs, 47 over 128 cells across 12 discs, worst
+  200** (BREAKING_DAWN, New_in_Town, SEMI_PRO, Why_Did_I_Get_Married, PINEAPPLE_EXP;
+  Julie_and_Julia 199, SYBIL_LUDINGTON 186, Finding_Nemo 170, Dinosaur 153, INSOMNIA 137,
+  TimeTraveler 132) — **and several are PGCN 1**, not only menu-reached PGCs. The non-goal
+  is retracted in place.
+  **Fix = an 8-bit index and 256 entries end to end** — the reader's `cellf_idx` port, its
+  own `cell_start_mem[cell_i]` readout (which aliased the LIVE clock the same way past cell
+  127), emu's wire, and both consumers' tables. ★ **256 sizes the FORMAT, not the sample:** a
+  PGC may carry 255 cells, which is the reader's own `MAXCELL`. Sizing to a measured maximum
+  is precisely the mistake that produced this bug.
+  **Gate: `seek_time_tb` TEST 12** (a 132-cell PGC, the measured special-edition shape) —
+  RED with **`got 000000`**, the reported symptom exactly; mutation **MD-cellidx7** in
+  `run_title_span.sh --red` narrows the port back and must fail TEST 12 and nothing else.
+  ⚠⚠ **Widening a port silently breaks every bench that drives it narrow.** `seek_bar_tb`
+  fed the now-8-bit `cellf_idx` from a 7-bit reg and FOUR unrelated-looking arms failed
+  (T6/T9a/T11/T12f — every notch column shifted one slot), which reads exactly like a
+  `seek_bar` regression when the stale thing was the bench's declaration. Same family as
+  [[new-rtl-port-floats-z-in-benches]]: after widening a port, grep the benches for the
+  signal before believing any failure they report.
+  Detail: **`docs/dvd_nav.md` §2g**.
+
+- ✅ **SEEKING INTO A SEAMLESS-BRANCH BLOCK LANDED IN THE OTHER CUT AND STAYED THERE
+  (2026-09-17, issue #49, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN over the
+  real discs' measured shapes, 6 mutations each failing EXACTLY its own arms, and
+  ✅ HW-CONFIRMED 2026-09-17 WITH THE DEFECT REPRODUCED FIRST** (build
+  `DVD_branchseek_20260917_1632.rbf`, SEED 7 first roll, clk_dec 94.77/92.52, 91 % ALM). Field report on `ALIEN_VS_PREDATOR_SE_DISC1`: *"just seeking back and forth I
+  can get it in a state where the live timeline reports a couple seconds in when it's really
+  much further, and most of the seek targets and live timeline resolutions do not line up at
+  all."*
+  ★★ **THE ANGLE ROUND (#101) BUILT THE FIX THIS ISSUE PREDICTED AND SCOPED IT TO
+  `block_type == 1`.** A seamless branch is the OTHER interleaved encoding (the
+  `interleaved` bit with `block_type == 0` — Matrix's white rabbit, T2's extended scenes,
+  AVP's theatrical/extended). The VOBU-align snap moves a raw target FORWARD to the next NAV
+  pack, which belongs to whichever branch owns that ILVU, and `next_vobu` then follows the
+  chain it landed in — so unlike the angle case there is not even a `sml_agli` to converge
+  on, and the rest of the block plays the other cut. MEASURED sibling share of a cell's span
+  = P(wrong cut): **Matrix 47–48 %, AVP up to 73 %, T2 up to 85 %**; AVP cell 38 then runs
+  **111,301 played sectors** in the wrong branch.
+  ⛔⛔ **TWO OF THE ISSUE'S OWN CLAIMS WERE REFUTED BY MEASUREMENT — do not re-derive
+  either.** (1) *"a wrong readout means `S_RBN_SCAN` landed on the wrong cell"*: it does
+  not. The branch cell's extent CONTAINS the sibling's sectors, so the containment test hits
+  the right cell and `cur_cell_start` is right; the live clock is wrong because `nav_dsi`
+  snoops whatever NAV pack is STREAMING, and T2's sibling VOBU at RBN 351056 reads
+  `c_eltm = 00:00:02.15` — the reported "couple of seconds in", literally. (2) The
+  `885–1679 sectors/s` figure does NOT imply a preview error: it is a RATE, the preview uses
+  a scale-free FRACTION of the span, and the measured worst within-cell error is **0.9 s
+  (Matrix) / 3.3 s (T2) / 8.8 s (AVP)**. ⛔ The issue's cheap mitigation — "refuse to
+  interpolate, report the cell boundary" — is **measured 25× WORSE** (AVP cell 38 is a 250 s
+  cell). `seek_time`, `seek_bar` and `scrub_ctrl` are untouched.
+  **Fix = one predicate plus one walk.** `snap_want = cc_angle_ok || cc_seam_ok` arms the
+  PLAIN → LEARN → FILT snap for any interleaved cell, and is deliberately the SAME set that
+  arms an ILVU follow (`angle_active`/`seamless_active` are now assigned from those wires) —
+  the snap must filter exactly the cells the follow will chase.
+  ★★ **AND THE WALK GRANULARITY IS A CORRECTNESS MATTER, NOT A SPEED ONE.** The shipped FILT
+  walk steps ONE SECTOR at a time; MEASURED longest sibling run is **877 sectors (Matrix),
+  4543 (T2), 8298 (AVP)**, so on two of the three discs it cannot reach this branch's next
+  VOBU inside `NAV_CAP = 1024` at all — it gives up and streams the other cut.
+  `sml_pbi.ilvu_ea` (DSI 0x22 → sector `0x429`) names the END of the ILVU the probed VOBU
+  sits in and is authored on EVERY VOBU of AVP, Matrix, T2 and MiB, so `ilvu_ea + 1` is the
+  next ILVU's first VOBU: **1–3 hops**, and MiB's 5-angle block drops from ~772 probe reads
+  to 4. Every VOBU of an ILVU carries one VOB_ID, so hopping a whole ILVU cannot skip a VOBU
+  we wanted; a VOBU outside a block or a zero `ilvu_ea` degrades to the `+1` step that
+  shipped. ⛔ **NOT `ilvu_sa` and NOT `next_vobu`** — read from a sibling's VOBU both point
+  along the SIBLING's chain, i.e. further into the wrong branch; the ⛔ in `docs/dvd_nav.md`
+  is about `next_ilvu_sa` as a FOLLOW pointer, a different question.
+  ★ **It costs no extra read to test:** the probe window moved `0x41F` → **`0x40F`**, so one
+  45-byte `rbuf` copy carries `vobu_ea`, `vobu_vob_idn`, `sml_pbi.category` and `ilvu_ea`
+  together. A seamless scrub pays 1 LEARN read + 1–3 hops.
+  ⚠ MEASURED premise on four discs: every branch of a block is its own VOB — AVP 2/3,
+  Matrix 4/5, **T2 4 with sibling 3 (LOWER)**, **T2 cell 33 = 16 with siblings 15 AND 17**.
+  So no index or ordering rule works, and **`vobu_c_idn` does not discriminate** (measured
+  identical on both branches of AVP and Matrix).
+  ⚠ A filtered pass now also bails at `nav_cand > cl_rd`: its job is to find this branch's
+  next VOBU WITHIN THIS CELL, and accepting a sector beyond it would stream from another
+  cell while `cell_i`/`play_end` still describe this one. Accepted residual: a target in a
+  block's FINAL sibling ILVU has no same-branch ILVU left, so it streams the unfiltered
+  landing — the pre-fix behaviour, for that one ILVU.
+  **Gate: `bench/dvd/run_branch_seek.sh --red`** — the real reader over fixtures shaped like
+  the measured discs, scoring the DELIVERED MARKER BYTES (which branch reached the decoder),
+  never a signal the fix names. ★ Arm 5 takes **no seek at all**: its read ceiling (35
+  measured, ceiling **36**, deliberately not a round 40) is the only thing that can see a
+  probe fired on the mid-block ILVU hop, whose outcome stays CORRECT and which would reach
+  hardware as a stutter blamed on something else. ⚠ M5 is therefore *"let the hop request a
+  verification"*, not *"delete the `snap_pend` term"* — the latter loops and fails every arm,
+  and a mutation caught by everything says nothing about which arm is load-bearing.
+  ⚠⚠ **`iso_reader_ilvu_tb`'s `put_nav_seam` writes NO NAV-pack signature bytes** — the same
+  fixture gap that made `iso_reader_angle_tb` TEST G fail on the FIXED reader. It is correct
+  for what that bench tests (the S_STREAM snoop), but no seek arm can be added to it as it
+  stands. ⚠ And no marker byte may be `0x00`/`0x01`/`0xBA`/`0xBB`/`0xBF`: `0xBB` was tried
+  and the system-header signature in every NAV sector read back as leaked sibling bytes.
+  ⚠ `iso_reader_angle_tb`'s fixture gained `ilvu_ea` in the same change — without it the
+  angle side silently degrades to the sector walk and the shared hop is never exercised;
+  the landing is identical either way, so nothing fails and the coverage is simply absent.
+  ✅ **HW-CONFIRMED ON CONTENT, NOT ON THE CLOCK — and the clock is why.** `ULTIMATE_T2`
+  VTS_01, chapter 11 (0:16:34), then the keyboard Fast Fwd key: `dpad_seek` SUMS the
+  `{120,60,30,10}` s rungs of one VOBU's fwda table, so **7 presses = 60+10 is a two-term
+  sum = a mid-stream landing** inside cell 16, while **6 presses = 60 s is a single rung =
+  an authored VOBU of this branch**, the in-script control. Natural playback through the
+  block is correct on every core (fj#112), so it is a per-core REFERENCE: capture a burst
+  of it, then repeat the chapter jump, seek, and compare the landing frames (64×48 grey,
+  HUD band cropped).
+  | target | core | landing vs natural playback | refs matched | clock, landing → +10 s |
+  |---|---|---|---|---|
+  | **+70 s** | v0.6.0 control | **0.655 / 0.757 / 0.799 / 0.794** | 19,16,1,1 scattered | **0:17:59 → 0:17:22, BACK 37 s** |
+  | **+70 s** | fixed | **0.961 / 0.988 / 0.966 / 0.909** | 4,5,6,7 consecutive | 0:17:32 → 0:17:42 |
+  | +50 s | v0.6.0 control | 0.882 / 0.936 / 0.940 / 0.971 | 13,12,13,14 | 0:17:41 → 0:17:51 |
+  | +50 s | fixed | 1.000 / 0.998 / 0.996 / 0.999 | 2,3,4,5 consecutive | 0:17:29 → 0:17:39 |
+  ★ **The burst's own self-similarity is the scale: median ~0.57, p90 ~0.73.** The control's
+  +70 s landing scores AT that floor — its frames are no more like the content playback
+  delivers there than two unrelated frames of the burst are like each other — while the fix
+  matches CONSECUTIVE reference frames, i.e. it landed where playback would be and tracked
+  it. ★★ And the control's clock ran **backward 37 s** during the capture as the sibling's
+  NAV packs took over the readout: the field report's sentence, live.
+  ⚠⚠ **THE CLOCK ALONE COULD NOT SETTLE THIS AND MY FIRST READING OF IT WAS WRONG.** I
+  scored the landings against "start + seconds requested", which the block itself breaks:
+  **cell 16 is 2448 sectors/s against a normal cell's ~600**, so an fwda offset computed
+  outside the block covers ~a quarter of the content time it asks for inside it — which
+  makes the fixed core's clustered landings correct and their clustering a property of the
+  disc. The inflated sectors/s this issue is about, met from the other side.
+  ⚠ **+50 s lands correctly on BOTH cores** (the 15 % case), so a single target proves
+  nothing: the first frame comparison used +50 s and settled nothing. Pick the target the
+  cheap sweep already flagged.
+  ⚠ Unregressed same session: chapter bursts, `SEEK FWD` landings, and **MiB VTS 14's
+  five-angle block** — the path sharing the widened predicate and the new walk (`ANGLE 2/5`,
+  plays through a scrub into the block, still cycles to `ANGLE 3/5` after).
+  ⚠ `ALIEN_VS_PREDATOR_SE_DISC1` is not on the rig and did not fit (2.6 GB free vs 7.26 GB);
+  T2 is the stronger vehicle anyway — 85 % sibling share against AVP's 73 %.
+  ⚠ The round ran on `DVD_branchseek_20260917_1632.rbf`; the SHIPPING build is
+  `DVD_branchseek_20260918_0010.rbf` (SEED 7 first roll, clk_dec 90.17/91.48, 38,244 ALMs).
+  Between them: a rebase onto PR #103, the >128-cell fix below, and a rebase onto PR #104
+  (Main-side CSS, no netlist input at all). The confirmation stands because none of them
+  touches the branch-resolution path — #103/#104 leave `dvd_iso_reader.sv` alone and the
+  cell-index fix widens `seek_time`/`seek_bar` tables the landing never goes through.
+  Golden model: **`tools/nav_extract.py --vts N --ilvu`** now prints, per interleaved cell,
+  the branch `vob_idn`, the sibling ids, the wrong-landing percentage and the longest
+  sibling run. Detail: **`docs/dvd_nav.md` §2e**.
 - ✅ **EVERY CHAPTER SKIP ON A PHYSICAL DISC CRACKED A CSS TITLE KEY — THE KEY WAS ASKED
   FOR AT THE READ POSITION, AND libdvdcss CACHES BY EXACT BLOCK (2026-09-17, PR #104);
   host-proven RED/GREEN, 4 mutations each caught by its own arm, and ✅ HW-CONFIRMED
@@ -448,7 +606,8 @@ worse maintenance burden than targeted in-place edits. So:
   second `S_FETCH`. Only LEARN costs a real read — one per scrub into an angle block.
   ⚠ **The angle passes must NOT fall back into `S_RBN_SCAN`** when the budget runs out: that
   re-resolves the cell and undoes the angle choice. They fall back to the unfiltered landing.
-  ⚠⚠ **THE DIVERT IS GATED ON `ang_snap_pend`, NOT `rbn_override`.** `rbn_override` is set by
+  ⚠⚠ **THE DIVERT IS GATED ON `snap_pend` (named `ang_snap_pend` until issue #49
+  widened it), NOT `rbn_override`.** `rbn_override` is set by
   a scrub landing AND by the mid-block ILVU hop, and the hop keeps `angle_resolved` set — so
   the first version fired on the first hop of a block reached by ORDINARY PLAYBACK, putting a
   probe read into the one path whose contract is time-continuity (no flush, no `seek_ack`, no
@@ -4175,8 +4334,8 @@ worse maintenance burden than targeted in-place edits. So:
   (the largest-VTS heuristic names VTS_05, which has no gaps; the title that actually
   loads is VTS_13, which the core's own `O[2]` debug readout names in one glance —
   `CH 1/13` = PGCN 1, VTS 13). Ask the core what it is playing before analysing a disc.
-  ⚠ **Seamless-branch discs are STILL wrong and it is a SEEK bug, not a readout one —
-  issue #49**, see the note further down.
+  ✅ **Seamless-branch discs were a SEEK bug, not a readout one — issue #49, FIXED
+  2026-09-17**, see the note further down.
   (1) **`dvd/seek_time.sv`**: the HUD clock showed the live playhead only, so it sat
   FROZEN through every seek while the seek bar's cursor travelled. Two causes, one
   symptom — a held FF/REW asserts `hold_freeze` → the governor stops → DSI packets stop
@@ -4250,17 +4409,20 @@ worse maintenance burden than targeted in-place edits. So:
   not one test twice. A linear file's rate comes from `lin_blk10` and is independent of
   its length; a DVD's comes from the duration bucket and is nothing but its length. The
   short-title arm is the only one that exercises `secs_lz` at all.
-  ⚠ **SEAMLESS-BRANCH DISCS ARE STILL WRONG and it is NOT the readout — it is the
-  SEEK.** The 2026-09-03 cell-gap fix (a cell's span is its own `first..last`, not
-  the distance to the next cell's first — AFTER_EARTH VTS_13 PGC1, 1.612× short,
-  ✅ HW-confirmed good afterwards) does NOT cover ALIEN_VS_PREDATOR_SE: **23 of its
-  66 cells are interleaved** (seamless branching), so a cell's sector range holds
-  the other branch's ILVUs and the cells compute at 885–1679 sectors/s against a
-  ~600 ceiling. Worse, a raw-RBN seek into that space can resolve to the WRONG
-  BRANCH — the live clock reading "a couple of seconds in" when playback is much
-  further means `cell_i` is wrong, i.e. playback resumed in the wrong cut. ⚠ ILVU
-  *playback* is HW-confirmed (PR fj#112); ILVU *seeking* never was. Detail and the
-  starting point: `docs/dvd_nav.md` §2e.
+  ✅ **SEAMLESS-BRANCH DISCS WERE WRONG AND IT WAS THE SEEK, NOT THE READOUT —
+  FIXED 2026-09-17 (issue #49); see the top-of-file bullet.** The 2026-09-03
+  cell-gap fix (a cell's span is its own `first..last` — AFTER_EARTH VTS_13 PGC1,
+  1.612× short, ✅ HW-confirmed good afterwards) does NOT cover
+  ALIEN_VS_PREDATOR_SE: **23 of its 66 cells are interleaved**. ⚠ ILVU *playback*
+  was HW-confirmed in PR fj#112; ILVU *seeking* never was.
+  ⛔ **Two claims that stood here were REFUTED by measurement and must not be
+  re-derived:** the live clock reading "a couple of seconds in" does **not** mean
+  `cell_i` is wrong (the branch cell's extent contains the sibling's sectors, so
+  the cell index is right — it is the SIBLING's `dsi c_eltm` being snooped off the
+  stream, measured at `00:00:02.15` on T2's sibling VOBU); and the 885–1679
+  sectors/s figure does **not** imply a preview error, because it is a RATE while
+  the preview uses a scale-free FRACTION of the span (measured worst within-cell
+  error 0.9 s Matrix / 3.3 s T2 / 8.8 s AVP). Detail: `docs/dvd_nav.md` §2e.
   ⚠ **Trick play (continuous 2×/4×) is a SEPARATE feature and is NOT this**: it must be
   flush-FREE (a jump per VOBU is the regime HW rounds 1–2 of the scrub proved fatal), so
   it needs an I-frame-only VOBU splice in the reader. `dsi_1stref_ea` is already parsed

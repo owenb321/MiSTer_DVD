@@ -374,7 +374,7 @@ module dvd_iso_reader #(
     // and program maps from these to place its chapter ticks, with no extra
     // read port on the reader's own BRAMs.
     output reg        cellf_we,
-    output reg [6:0]  cellf_idx,
+    output reg [7:0]  cellf_idx,
     output reg [31:0] cellf_rbn,
     // ...and the same cell's START TIME in BINARY SECONDS. cell_start_mem holds
     // it as BCD, but every consumer of a position->time map wants to do
@@ -802,6 +802,21 @@ wire [3:0] ang_eff = (ang_req == 4'd0 || ang_req > angle_count) ? 4'd1 : ang_req
 reg        seamless_active;                 // 1 = streaming an interleaved (non-angle) cell
 reg        cell_seamless_r;                 // 1 = this cell is authored seamless_play
 
+// The two INTERLEAVED encodings, named once and used by everything that has to
+// treat them alike. An angle block is block_type==1 and carries the interleaved
+// bit too; a seamless branch is the interleaved bit with block_type==0.
+//   cc_angle_ok  this cell is the angle the user/disc picked (the pick has run)
+//   cc_seam_ok   this cell is a seamless-branch cell
+//   snap_want    an interleaved cell whose branch a scrub landing must be
+//                filtered against -- the SAME set that arms an ILVU follow
+//                (ilvu_active = angle_active | seamless_active), which is the
+//                point: the snap must filter exactly the cells the follow is
+//                armed for, or a landing can be verified against a branch the
+//                follow will then not chase (or vice versa).
+wire       cc_angle_ok = cc_is_angle && angle_resolved;
+wire       cc_seam_ok  = cc_interleaved && !cc_is_angle;
+wire       snap_want   = cc_angle_ok || cc_seam_ok;
+
 // NV_PCK snoop: capture DSI fields off the sd_buff write stream of a nav
 // sector's DSI region (sector bytes 0x400..0x5FF, DSI data @0x407). Angle + seamless.
 reg [31:0] snoop_sig;                        // 0x400..0x403 (want 00 00 01 BF = DSI PES)
@@ -854,42 +869,62 @@ wire [7:0] rbn_bt_i   = rbn_bt_new ? rbn_scan_i : rbn_best_i;
 wire       rbn_bt_v   = rbn_bt_new |  rbn_best_v;
 reg [31:0] nav_cand;                  // S_NAV_SEEK: candidate RBN (raw target upward)
 reg [10:0] nav_left;                  // S_NAV_SEEK: remaining probe budget
-// ---- ANGLE-AWARE VOBU SNAP -------------------------------------------------
-// A raw-RBN scrub is snapped FORWARD to the next NAV pack, and inside an angle
-// block the angles' ILVUs are laid down ROUND-ROBIN -- so the snap lands in
-// whichever angle's ILVU the target happened to fall in. MEASURED on "Grave of
-// the Fireflies" VTS_01 PGC1: the split is 48-52 % per angle across all 13
-// blocks, i.e. a coin flip, and the field report is exactly that -- "seeking
-// always lands on angle 2, so there's a quick glance of the storyboard angle
-// before it settles on the film".
-// Where the disc authors sml_agli the follow converges after one ILVU (~1 s on
-// Grave, its ILVUs being ~460-620 sectors). Where it does NOT (CASTLE_IN_THE_SKY,
-// DIEANOTHERDAY_D1_PS) next_vobu keeps us on the chain we landed in and it NEVER
-// converges -- the wrong angle for the rest of the block.
-// Fix: once the angle cell is chosen, learn that cell's VOB_ID and re-snap
-// requiring the NAV pack to carry it.
+// ---- BRANCH-AWARE VOBU SNAP ------------------------------------------------
+// A raw-RBN scrub is snapped FORWARD to the next NAV pack, and inside an
+// INTERLEAVED block the branches' ILVUs are laid down ROUND-ROBIN -- so the snap
+// lands in whichever branch's ILVU the target happened to fall in. Two classes of
+// block are interleaved and BOTH are affected:
+//
+//   MULTI-ANGLE (block_type==1). MEASURED on "Grave of the Fireflies" VTS_01
+//   PGC1: the split is 48-52 % per angle across all 13 blocks, i.e. a coin flip,
+//   and the field report is exactly that -- "seeking always lands on angle 2, so
+//   there's a quick glance of the storyboard angle before it settles on the film".
+//   Where the disc authors sml_agli the follow converges after one ILVU (~1 s on
+//   Grave, its ILVUs being ~460-620 sectors); where it does NOT
+//   (CASTLE_IN_THE_SKY, DIEANOTHERDAY_D1_PS) it NEVER converges.
+//
+//   SEAMLESS BRANCH (interleaved, block_type==0 -- Matrix "Follow the White
+//   Rabbit", T2 Ultimate extended scenes, ALIEN_VS_PREDATOR_SE). There is no
+//   sml_agli here BY DEFINITION, so it never converges either: next_vobu follows
+//   the chain of the VOBU you are standing in and the rest of the block plays the
+//   other cut. MEASURED sibling share of a cell's span -- i.e. how often a scrub
+//   lands wrong -- AVP VTS_03 cell 23 73 %, T2 VTS_01 cell 16 85 %, Matrix
+//   VTS_02 cell 36 ~50 %. Reported as issue #49: "seeking back and forth I can
+//   get it in a state where the live timeline reports a couple seconds in when
+//   it's really much further". That readout is the SIBLING's dsi c_eltm against
+//   the right cur_cell_start -- T2's sibling VOBU at RBN 351056 reads 00:00:02.15
+//   -- so the cell index was never wrong; the landing was.
+//
+// Fix: once the cell is chosen, learn THAT cell's VOB_ID and re-snap requiring
+// the NAV pack to carry it.
 //   dsi_gi.vobu_vob_idn is DSI 0x18 -> sector 0x407+0x18 = 0x41F.
-// MEASURED premise, on all three discs: every angle cell of a block has a
-// DISTINCT VOB_ID and every VOBU inside that angle's ILVUs carries it (Grave's
-// round-robin reads vob 1 at RBN 0..456, vob 2 at 457..1074, vob 1 at 1075..).
-// ⚠ The VOB_IDs are NOT always consecutive from 1 -- Castle uses 1/2, 4/5, 8/9 --
-// so "first + angle - 1" would be wrong; the cell's own value is read.
+// MEASURED premise, on every disc checked: each branch of a block is its own VOB
+// and every VOBU inside that branch's ILVUs carries its id --
+//   Grave  angles   vob 1 at RBN 0..456, vob 2 at 457..1074, vob 1 at 1075..
+//   AVP    VTS_03   played vob 2,  sibling vob 3
+//   Matrix VTS_02   played vob 4,  sibling vob 5
+//   T2     VTS_01   played vob 4,  sibling vob 3   <- LOWER than the played one
+//   T2     VTS_01   played vob 16, siblings 15 AND 17 (three branches)
+// ⚠ The VOB_IDs are NOT consecutive from 1 (Castle uses 1/2, 4/5, 8/9) and are
+// not ordered, so "first + angle - 1" or any index step is wrong; the cell's own
+// value is read. ⚠ And dsi_gi.vobu_c_idn does NOT discriminate -- measured
+// identical on both branches of AVP and Matrix.
 // ★ Learning it costs ONE extra sector read, and testing it costs NONE: the
-// probe leaves the whole sector resident in parse_buf (pb_sec), so the 0x41F
+// probe leaves the whole sector resident in parse_buf (pb_sec), so the 0x40F
 // window is a second S_FETCH, not a second read.
-localparam [1:0] NAVM_PLAIN = 2'd0,   // snap as before (non-angle seeks)
+localparam [1:0] NAVM_PLAIN = 2'd0,   // snap as before (non-interleaved seeks)
                  NAVM_LEARN = 2'd1,   // probing the chosen cell's own first VOBU
-                 NAVM_FILT  = 2'd2;   // re-snapping, accept only ang_want_vob
+                 NAVM_FILT  = 2'd2;   // re-snapping, accept only snap_want_vob
 reg [1:0]  nav_mode;
-reg [15:0] ang_want_vob;              // the chosen angle cell's VOB_ID
-// "the most recent SCRUB has not yet had its landing angle verified".
+reg [15:0] snap_want_vob;             // the chosen branch cell's VOB_ID
+// "the most recent SCRUB has not yet had its landing branch verified".
 // ⚠ NOT `rbn_override`: that is also set by the mid-block ILVU hop, which keeps
 // angle_resolved set, so keying on it made the hop take a LEARN probe read --
 // into the one path whose contract is that it is time-continuous (no flush, no
 // seek_ack, no A/V re-anchor). Set when a scrub is armed, cleared as soon as a
 // landing resolves, and never set by the hop.
-reg        ang_snap_pend;
-reg [31:0] ang_land;                  // the unfiltered landing, where the re-snap starts
+reg        snap_pend;
+reg [31:0] snap_land;                 // the unfiltered landing, where the re-snap starts
 
 // Chapter (PTT) skip: a small mini-FSM (chap_st) parallel to the main state
 // machine. It walks the PGC program_map BRAM (pmap_mem: program -> entry cell#,
@@ -1365,7 +1400,8 @@ localparam S_PTTLD_DONE   = 6'd56;   // re-fetch the resume field (@200 / @204) 
 localparam S_CHK_RAW      = 6'd58;   // raw MODE2/2352 (VCD/SVCD .bin) signature probe
 localparam S_ANGLE_PRE    = 6'd59;   // hold the angle pick until the VM's PRE has run
 localparam S_ANGLE_PICK   = 6'd60;   // load the effective angle's cell
-localparam S_ANGLE_VOB    = 6'd61;   // learn the chosen angle cell's VOB_ID
+// (6'd61 was S_ANGLE_VOB, declared with the angle snap and never entered: the
+//  VOB_ID learn lives in the S_CELL_LOAD2 arm plus S_NAV_SEEK*/S_NAV_VOB.)
 localparam S_NAV_VOB      = 6'd62;   // NAV pack found: check its vobu_vob_idn
 
 reg [5:0]  state;
@@ -1523,7 +1559,7 @@ end
 // prefetch / seek scans, so piggybacking there would skew the readout).
 reg [31:0] cs_rd;
 always @(posedge clk) begin
-    cs_rd          <= cell_start_mem[cell_i[6:0]];
+    cs_rd          <= cell_start_mem[cell_i];
     cur_cell_start <= cs_rd;
 end
 
@@ -1605,6 +1641,19 @@ wire nav_sig_hit =
       rbuf[0]==8'h00  && rbuf[1]==8'h00  && rbuf[2]==8'h01  && rbuf[3]==8'hBA &&
       rbuf[14]==8'h00 && rbuf[15]==8'h00 && rbuf[16]==8'h01 && rbuf[17]==8'hBB &&
       rbuf[38]==8'h00 && rbuf[39]==8'h00 && rbuf[40]==8'h01 && rbuf[41]==8'hBF;
+
+// The probe's SECOND window, based at DSI 0x08 (sector 0x40F) -- see S_NAV_CHK.
+// One 45-byte rbuf copy carries every field the filtered passes need, so testing
+// the branch and hopping out of a sibling ILVU cost no extra sector read.
+wire [15:0] nav_vob    = {rbuf[16], rbuf[17]};   // dsi_gi.vobu_vob_idn  (DSI 0x18)
+wire [15:0] nav_pbcat  = {rbuf[24], rbuf[25]};   // sml_pbi.category     (DSI 0x20)
+wire [31:0] nav_ilvuea = {rbuf[26], rbuf[27], rbuf[28], rbuf[29]};  // ilvu_ea (0x22)
+// How far a REJECTED candidate advances: the whole ILVU it sits in, or one sector
+// when this VOBU is not inside a block (category ILVU flags clear) or the disc
+// leaves ilvu_ea zero. Bounded by nav_left either way.
+wire        nav_in_blk = (nav_pbcat[15:14] != 2'b00);
+wire [31:0] nav_step   = (nav_in_blk && nav_ilvuea != 32'd0)
+                         ? (nav_ilvuea + 32'd1) : 32'd1;
 
 // IFO big-endian field taps (rbuf shadow fetched at the relevant offset)
 wire [31:0] tt_srpt_ptr = {rbuf[0], rbuf[1], rbuf[2], rbuf[3]};   // VMGI@196
@@ -1876,7 +1925,7 @@ always @(posedge clk)
         cellf_lwe       <= 1'b0;
         cellf_last      <= 32'd0;
         cellf_we        <= 1'b0;
-        cellf_idx       <= 7'd0;
+        cellf_idx       <= 8'd0;
         cellf_rbn       <= 32'd0;
     end else begin
         cellf_we  <= 1'b0;                // 1-cycle stream pulses
@@ -1935,7 +1984,7 @@ always @(posedge clk)
             // stretch: stream the first_sector to seek_bar's shadow map, and the
             // start time to dvd/seek_time.sv's
             cellf_we   <= 1'b1;
-            cellf_idx  <= cell_wi[6:0];
+            cellf_idx  <= cell_wi;
             cellf_rbn  <= {wacc, pb_rdata};
             cellf_secs <= (cell_wi == 8'd0) ? 16'd0
                         : cw_sibling ? blk_secs : run_secs;
@@ -2123,9 +2172,9 @@ always @(posedge clk or negedge rst_n) begin
         rbn_best_v   <= 1'b0;
         nav_cand     <= 32'd0;
         nav_mode     <= NAVM_PLAIN;
-        ang_want_vob <= 16'd0;
-        ang_snap_pend<= 1'b0;
-        ang_land     <= 32'd0;
+        snap_want_vob<= 16'd0;
+        snap_pend    <= 1'b0;
+        snap_land    <= 32'd0;
         nav_left     <= 11'd0;
         cur_angle    <= 4'd1;
         angle_count  <= 4'd0;
@@ -2846,7 +2895,7 @@ always @(posedge clk or negedge rst_n) begin
                     nav_cand <= seek_rbn_l;    // walk up from the raw target
                     nav_left <= NAV_CAP[10:0];
                     nav_mode <= NAVM_PLAIN;
-                    ang_snap_pend <= 1'b1;     // this landing needs its angle verified
+                    snap_pend <= 1'b1;         // this landing needs its branch verified
                     strm_idx <= eff_base;       // extent-walk cursor (S_CELL_LOAD2 re-inits)
                     seek_cum <= 32'd0;
                     state    <= S_NAV_SEEK2;    // 1-cycle ext_*_q refresh, then probe
@@ -4113,22 +4162,28 @@ always @(posedge clk or negedge rst_n) begin
                     ang_scan_i  <= cell_i + 8'd1;
                     cell_raddr  <= cell_i + 8'd1;        // prefetch cat[cell_i+1]
                     state       <= S_ANGLE_SCAN2;
-                end else if (rbn_override && cc_is_angle && angle_resolved
-                             && ang_snap_pend) begin
-                    // ANGLE-AWARE SNAP, pass 1: we have just chosen this block's
-                    // angle cell after a raw-RBN scrub, so cf_rd is that cell's
-                    // first_sector -- which is, by construction, the first VOBU of
-                    // this angle's own chain. Probe it to learn the angle's VOB_ID.
-                    // One extra sector read per scrub into an angle block; the
-                    // seek already costs a flush and a decoder re-lock.
-                    ang_snap_pend <= 1'b0;     // one-shot: this landing is being handled
-                    ang_land <= seek_rbn_l;    // where the unfiltered snap put us
-                    nav_cand <= cf_rd;         // this angle's first VOBU
-                    nav_left <= 11'd2;         // it IS a NAV pack; no walking needed
-                    nav_mode <= NAVM_LEARN;
-                    strm_idx <= eff_base;
-                    seek_cum <= 32'd0;
-                    state    <= S_NAV_SEEK2;
+                end else if (rbn_override && snap_pend && snap_want) begin
+                    // BRANCH-AWARE SNAP, pass 1: we have just resolved the cell a
+                    // raw-RBN scrub landed in, and it is an interleaved cell -- so
+                    // cf_rd is that cell's first_sector, which is by construction
+                    // the first VOBU of THIS branch's own chain. Probe it to learn
+                    // the branch's VOB_ID. One extra sector read per scrub into an
+                    // interleaved block, against a seek that already costs a flush
+                    // and a decoder re-lock.
+                    // ★ ONE ARM FOR BOTH CLASSES. `snap_want` is an angle cell
+                    // whose angle has been picked, OR a seamless-branch cell -- the
+                    // two interleaved encodings, and exactly the set for which
+                    // `ilvu_active` arms an ILVU follow below. Deriving both from
+                    // the same wires is what stops the snap filtering a different
+                    // set of cells from the one the follow is armed for.
+                    snap_pend <= 1'b0;          // one-shot: this landing is handled
+                    snap_land <= seek_rbn_l;    // where the unfiltered snap put us
+                    nav_cand  <= cf_rd;         // this branch's first VOBU
+                    nav_left  <= 11'd2;         // it IS a NAV pack; no walking needed
+                    nav_mode  <= NAVM_LEARN;
+                    strm_idx  <= eff_base;
+                    seek_cum  <= 32'd0;
+                    state     <= S_NAV_SEEK2;
                 end else begin
                     // Title: map through the extent table. Start the seek scan
                     // from the group base, reusing strm_idx as the cursor.
@@ -4139,9 +4194,9 @@ always @(posedge clk or negedge rst_n) begin
                     // jump. angle = a chosen angle-block cell; seamless = an
                     // interleaved (non-angle) cell (Matrix white-rabbit / T2). The
                     // two are mutually exclusive (cc_is_angle vs !cc_is_angle).
-                    angle_active    <= cc_is_angle && angle_resolved;
-                    seamless_active <= cc_interleaved && !cc_is_angle;
-                    ang_snap_pend   <= 1'b0;   // this landing is resolved either way
+                    angle_active    <= cc_angle_ok;
+                    seamless_active <= cc_seam_ok;
+                    snap_pend   <= 1'b0;   // this landing is resolved either way
                     cell_seamless_r <= cc_seamless_play;
                     ilvu_armed  <= 1'b0;
                     strm_idx    <= eff_base;
@@ -4296,15 +4351,26 @@ always @(posedge clk or negedge rst_n) begin
             S_NAV_SEEK: begin
                 if (strm_idx >= eff_base + eff_cnt ||
                     nav_cand > title_last_rbn   ||
+                    (nav_mode != NAVM_PLAIN && nav_cand > cl_rd) ||
                     nav_left == 11'd0) begin
-                    // ⚠ The angle passes must NOT fall back into S_RBN_SCAN: that
-                    // re-resolves the cell and would undo the angle choice. Give
+                    // ⚠ A FILTERED pass must also stop at the END OF THE CELL it is
+                    // filtering inside. Its whole job is to find this branch's next
+                    // VOBU within this cell; a sector beyond cl_rd belongs to
+                    // another cell, and accepting one would stream from there while
+                    // cell_i and play_end still describe THIS cell. Reachable on a
+                    // target inside a block's FINAL sibling ILVU, where this branch
+                    // has no further ILVU to find -- the accepted, documented
+                    // residual is to stream the unfiltered landing. `cell_raddr` is
+                    // untouched between the cell resolve and here, so cl_rd is that
+                    // cell's own last_sector throughout the probe.
+                    // ⚠ The filtered passes must NOT fall back into S_RBN_SCAN: that
+                    // re-resolves the cell and would undo the branch choice. Give
                     // up on the refinement and stream the landing we already have,
                     // which is what shipped before this existed.
                     if (nav_mode != NAVM_PLAIN) begin
-                        seek_rbn_l    <= ang_land;
+                        seek_rbn_l    <= snap_land;
                         nav_mode      <= NAVM_PLAIN;
-                        ang_snap_pend <= 1'b0;            // do not re-enter the probe
+                        snap_pend <= 1'b0;            // do not re-enter the probe
                         state         <= S_CELL_LOAD;
                     end else
                         state <= S_RBN_SCAN2;             // fallback: raw seek_rbn_l
@@ -4326,11 +4392,18 @@ always @(posedge clk or negedge rst_n) begin
                         seek_rbn_l <= nav_cand;           // SNAP to the aligned VOBU RBN
                         state      <= S_RBN_SCAN2;        // -> containing-cell scan
                     end else begin
-                        // LEARN / FILT both want this VOBU's dsi_gi.vobu_vob_idn.
+                        // LEARN / FILT both want this VOBU's dsi_gi.vobu_vob_idn,
+                        // and FILT also wants sml_pbi.{category,ilvu_ea} to step by
+                        // a whole ILVU on a reject. All three lie within 45 bytes of
+                        // DSI 0x08, so ONE window carries them:
+                        //   rbuf[ 0.. 3] dsi_gi.vobu_ea        DSI 0x08 -> 0x40F
+                        //   rbuf[16..17] dsi_gi.vobu_vob_idn   DSI 0x18 -> 0x41F
+                        //   rbuf[24..25] sml_pbi.category      DSI 0x20 -> 0x427
+                        //   rbuf[26..29] sml_pbi.ilvu_ea       DSI 0x22 -> 0x429
                         // The sector is ALREADY resident in parse_buf (pb_sec was
                         // latched by the probe read), so this is a second 45-byte
                         // window copy, NOT a second disk read.
-                        fetch_base <= 11'h41F;            // DSI 0x18 -> sector 0x41F
+                        fetch_base <= 11'h40F;            // DSI 0x08 -> sector 0x40F
                         fi         <= 6'd0;
                         fetch_xw   <= 1'b0;
                         fetch_ret  <= S_NAV_VOB;
@@ -4343,32 +4416,58 @@ always @(posedge clk or negedge rst_n) begin
                 end
             end
 
-            // vobu_vob_idn of the NAV pack at nav_cand is now in rbuf[0..1].
+            // The probed NAV pack's DSI window is now in rbuf, based at DSI 0x08.
             S_NAV_VOB: begin
                 fetch_base <= 11'd0;                      // restore the signature window
                 if (nav_mode == NAVM_LEARN) begin
-                    // This is the chosen angle cell's own first VOBU, so its
-                    // vob_idn IS the angle's. Now re-snap from where the
+                    // This is the chosen branch cell's own first VOBU, so its
+                    // vob_idn IS that branch's. Now re-snap from where the
                     // unfiltered snap landed, accepting only this VOB_ID.
-                    ang_want_vob <= {rbuf[0], rbuf[1]};
-                    nav_cand     <= ang_land;
-                    nav_left     <= NAV_CAP[10:0];
-                    nav_mode     <= NAVM_FILT;
-                    strm_idx     <= eff_base;
-                    seek_cum     <= 32'd0;
-                    state        <= S_NAV_SEEK2;
-                end else if ({rbuf[0], rbuf[1]} == ang_want_vob) begin
-                    // on the selected angle's chain -- stream from here. cell_i is
-                    // already the chosen angle cell (S_ANGLE_PICK), and
-                    // rbn_override is still set, so S_CELL_LOAD2 streams from
-                    // seek_rbn_l bounded by that cell.
+                    snap_want_vob <= nav_vob;
+                    nav_cand      <= snap_land;
+                    nav_left      <= NAV_CAP[10:0];
+                    nav_mode      <= NAVM_FILT;
+                    strm_idx      <= eff_base;
+                    seek_cum      <= 32'd0;
+                    state         <= S_NAV_SEEK2;
+                end else if (nav_vob == snap_want_vob) begin
+                    // on the selected branch's chain -- stream from here. cell_i is
+                    // already the right cell (S_ANGLE_PICK for an angle block, the
+                    // containing-cell scan for a seamless branch), and rbn_override
+                    // is still set, so S_CELL_LOAD2 streams from seek_rbn_l bounded
+                    // by that cell.
                     seek_rbn_l <= nav_cand;
                     nav_mode   <= NAVM_PLAIN;
                     state      <= S_CELL_LOAD;
                 end else begin
-                    nav_cand <= nav_cand + 32'd1;
+                    // WRONG BRANCH. Step to the next ILVU, not the next sector.
+                    // ★★ THE GRANULARITY IS A CORRECTNESS MATTER, NOT A SPEED ONE.
+                    // MEASURED longest run of sibling sectors a walk must cross:
+                    // Matrix 877, T2 4543, AVP 8298 -- so a one-sector-at-a-time
+                    // walk cannot reach this branch's next VOBU inside NAV_CAP on
+                    // two of the three discs, gives up, and streams the other cut.
+                    // sml_pbi.ilvu_ea names the END of the ILVU this VOBU is in
+                    // (relative to it), and it is authored on EVERY VOBU of the
+                    // ILVU -- measured on AVP, Matrix, T2 and MiB -- so
+                    // ilvu_ea + 1 is the next ILVU's first VOBU, which is a NAV
+                    // pack by construction. 1-3 hops instead of thousands of reads;
+                    // on MiB's 5-angle block it is 4 reads where the sector walk
+                    // took ~772. Every VOBU of an ILVU carries the same VOB_ID, so
+                    // hopping the whole ILVU can never skip a VOBU we wanted.
+                    // ⚠ The `+1 sector` arm is the degrade for a VOBU that is not
+                    // in a block, or a disc/fixture that leaves ilvu_ea zero: it is
+                    // exactly the behaviour that shipped before this existed, and
+                    // it is what keeps a fixture without the field meaningful.
+                    // ⛔ NOT sml_pbi.ilvu_sa and NOT vobu_sri.next_vobu. Both point
+                    // along the chain of the VOBU being read -- which here is the
+                    // SIBLING's -- so they lead further into the wrong branch. The
+                    // ⛔ in docs/dvd_nav.md is about next_ilvu_sa as a FOLLOW
+                    // pointer, where next_vobu already answers the question; this
+                    // asks a different one ("where does the ILVU I am standing in
+                    // end") that neither of those answers.
+                    nav_cand <= nav_cand + nav_step;
                     nav_left <= nav_left - 11'd1;
-                    state    <= S_NAV_SEEK;
+                    state    <= S_NAV_SEEK;   // re-checks the extent for the new cand
                 end
             end
 

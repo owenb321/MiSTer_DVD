@@ -92,7 +92,7 @@ module seek_bar #(
     input  wire [6:0]  pm_waddr,
     input  wire [7:0]  pm_wdata,
     input  wire        cellf_we,            // cell first_sector stream tap
-    input  wire [6:0]  cellf_idx,
+    input  wire [7:0]  cellf_idx,
     input  wire [31:0] cellf_rbn,
 
     // chapter-skip preview (emu's projected B2/B3 target, 1-based)
@@ -145,7 +145,10 @@ module seek_bar #(
 
     // ---- shadow maps + tick columns (stretch) -------------------------------
     reg [7:0]  pmap_ram  [0:127];           // program -> entry cell (1-based)
-    reg [31:0] cellf_ram [0:127];           // cell -> first_sector RBN
+    reg [31:0] cellf_ram [0:255];           // cell -> first_sector RBN
+    // 256, not 128: a PGC may carry up to 255 cells (the spec's cap and the
+    // reader's MAXCELL), and 47 title PGCs in the library exceed 128 -- worst
+    // 200. At 128 the index aliased and cell 128 overwrote cell 0's notch.
     reg [9:0]  tick_col  [0:99];            // converted notch columns, PROGRAM order
     // ★ ONE BIT PER BAR COLUMN. tick_col is written in PROGRAM order but holds
     //   PHYSICAL columns, so it is ascending only while a PGC's program order

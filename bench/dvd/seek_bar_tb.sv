@@ -37,7 +37,13 @@ module seek_bar_tb;
     reg         chap_prev = 0;
     reg  [7:0]  chap_pgm = 0;
     reg         pm_we = 0, cellf_we = 0;
-    reg  [6:0]  pm_waddr = 0, cellf_idx = 0;
+    reg  [6:0]  pm_waddr = 0;
+    // 8 bits since 2026-09-17: a PGC may carry up to 255 cells and the port
+    // widened with it. A 7-bit driver into the 8-bit port does NOT simply
+    // zero-extend here -- it shifted every notch column by one slot and read
+    // as a seek_bar regression (T6/T9a/T11/T12f) when the only stale thing was
+    // this declaration.
+    reg  [7:0]  cellf_idx = 0;
     reg  [7:0]  pm_wdata = 0;
     reg  [31:0] cellf_rbn = 0;
     wire        bar_on;

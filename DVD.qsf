@@ -1218,4 +1218,29 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   so its entry was withdrawn rather than left standing -- a ledger row that
 #   names a netlist nobody can rebuild is worse than no row. The rework costs
 #   +10 ALMs and 2.8 MHz at the hot corner, still ~6 MHz clear of the gate.
+#
+# SEAMLESS-BRANCH SEEK (2026-09-17/18, issue #49 + the >128-cell alias, branch
+# fix/seamless-branch-seek): SEED 7 held FIRST roll, SEVENTH consecutive build --
+# clk_dec 90.17 MHz @100C / 91.48 MHz @-40C (gate 86.0, PASS both corners),
+# 38,244 / 41,910 ALMs (91 %), 51,724 registers, 500 / 553 M10K (90 %), 94 / 112
+# DSP. Build releases/DVD_branchseek_20260918_0010.rbf, commit 4028d1b.
+# lint_undriven PASS.
+#   Cost against the PR #103 netlist above: +49 ALMs and NO extra M10K -- widening
+#   seek_time's three shadow tables and seek_bar's from 128 to 256 entries changed
+#   nothing there because a 256x32 table (8 Kbit) still fits the one M10K a 128x32
+#   table (4 Kbit) was already half-filling. All four still infer as altsyncram
+#   (checked in DVD.map.rpt -- the consolidated-writes trap).
+#   ⚠ The hot corner gave up 5.4 MHz against the previous fit on this branch
+#   (95.58 -> 90.17) and is now the closer of the two corners, still 4.2 MHz clear.
+#   Recorded rather than smoothed over: if a later branch lands near the gate, this
+#   is the row that says where the margin went.
+#   > TWO earlier rows on this branch are withdrawn, each because a rebase or a
+#   > later fix replaced the netlist they named -- the reason the PR #103 entry
+#   > above gives: a ledger row naming a netlist nobody can rebuild is worse than
+#   > no row. Their numbers, for the record: DVD_branchseek_20260917_1632.rbf at
+#   > 94.77/92.52 and 38,286 ALMs (pre-rebase, commit 432417b), and
+#   > DVD_branchseek_20260917_2226.rbf at 95.58/93.16 and 38,220 ALMs (rebased onto
+#   > PR #103, before the >128-cell fix). The HARDWARE round in docs/dvd_nav.md 2e
+#   > was run on the first of those; it stands, because neither the rebase nor the
+#   > cell-index widening changes the branch-resolution path it measured.
 set_global_assignment -name SEED 7

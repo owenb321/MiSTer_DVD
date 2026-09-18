@@ -489,12 +489,14 @@ to say what it picked.
 
 ### The elapsed time is wrong after seeking
 
-On most discs the time readout follows the disc's own timing tables and is accurate. On a
-**seamless-branch disc** — a special edition that stores two cuts of the film woven together
-in the same sectors — a seek can land in the wrong cut, and the clock then reports a
-position that does not match what you are watching. Use chapter skip (B2/B3) instead of the
-scrub or D-pad seek on those discs. Tracked as
-[issue #49](https://github.com/owenb321/MiSTer_DVD/issues/49).
+On most discs the time readout follows the disc's own timing tables and is accurate.
+
+A **seamless-branch disc** — a special edition that stores two cuts of the film woven
+together in the same sectors — used to be the exception: a seek could land in the wrong cut,
+and the clock would then report a position that did not match what you were watching. That
+is fixed, on both cuts, and the scrub preview now tracks the target on long special editions
+too. If you still see the clock disagree with the picture on one of these discs, it is worth
+reporting.
 
 On a `.mpg`, `.VOB` or VCD/SVCD the clock is an **estimate** derived from how fast the file
 plays, not a timecode read from the disc, so on a very variable-bitrate file it can drift by

@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-csskey"
+`define CORE_VERSION "dev-branchseek"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1504,7 +1504,7 @@ end
 wire [7:0]  hud_cur_ch = chap_disp_act ? chap_disp_hold : cur_pgm_w;
 wire [31:0] cur_cell_start_w;         // Phase 11 HUD: BCD start time of the playing cell
 wire        cellf_we_w;               // Phase 11 bar: cell first_sector stream tap
-wire [6:0]  cellf_idx_w;
+wire [7:0]  cellf_idx_w;
 wire [31:0] cellf_rbn_w;
 wire [15:0] cellf_secs_w;             // ...and the same cell's start, in seconds
 wire        cellf_lwe_w;              // ...and its LAST sector, on a later strobe
