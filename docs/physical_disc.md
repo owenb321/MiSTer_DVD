@@ -53,9 +53,11 @@ while the core is open plays it (`dvd_phys` polls for media change).
 |---|---|
 | `support/dvd/dvd_css.cpp/.h` | libdvdcss `dlopen` wrapper: find drive, RPC-region detect (SG_IO REPORT KEY), CSS detect (READ DVD STRUCTURE), per-VOB title keys, `dvd_css_read()` decrypted sectors, deferred "install libdvdcss" popup. Drive path lifted from the proven `feature/dvd-video-css` branch; `dvd_css_open_image()` (encrypted-ISO file source, reusing the same read/VOB-walk machinery) added here. |
 | `support/dvd/dvd_detect.cpp/.h` | `READ(10)` ISO9660 PVD + root-dir walk for `VIDEO_TS` — recognises a DVD-Video without mounting. |
-| `support/dvd/dvd_phys.cpp/.h` | **New, standalone.** Replaces the fork's launcher trigger: polls `/dev/srN`, mounts a DVD-Video via `user_io_file_mount(DVD_PHYS_SENTINEL)` on insert; on eject, unmounts **and** pulses `user_io_status_set("[0]", 1)` (the core's OSD-reset → unload + VM reset → idle logo) so a removed disc doesn't freeze the last frame. |
+| `support/dvd/dvd_vcd_detect.cpp/.h` | Same `READ(10)` PVD + root-dir walk, looking for `MPEGAV/`/`MPEG2/` instead of `VIDEO_TS` — recognises a Video CD / Super Video CD. |
+| `support/dvd/dvd_vcd.cpp/.h` | Physical VCD/SVCD source: own TOC read (`CDROMREADTOC*`) to find the data track, `SCSI READ CD (0xBE)` for raw 2352-byte sectors, `dvd_vcd_read()` — no decryption, no libdvdcss dependency. See "Video CD / Super Video CD" below. |
+| `support/dvd/dvd_phys.cpp/.h` | **New, standalone.** Replaces the fork's launcher trigger: polls `/dev/srN`, mounts a DVD-Video via `user_io_file_mount(DVD_PHYS_SENTINEL)` (or a VCD/SVCD via `DVD_PHYS_VCD_SENTINEL`) on insert; on eject, unmounts **and** pulses `user_io_status_set("[0]", 1)` (the core's OSD-reset → unload + VM reset → idle logo) so a removed disc doesn't freeze the last frame. |
 | `Scripts/install_dvdcss.sh` | User-run installer for a prebuilt armhf libdvdcss → `/media/fat/dvdcss/libdvdcss.so.2`. |
-| `integration/` | `INTEGRATION.md` (the six `user_io.cpp` edits + `-ldl`) and `apply_integration.py` (anchored, idempotent patcher). |
+| `integration/` | `INTEGRATION.md` (the `user_io.cpp` edits + `-ldl`) and `apply_integration.py` (anchored, idempotent patcher). |
 | `build_main.sh` | Fetch pinned stock Main, apply overlay, patch, build `MiSTer_DVDcss`. |
 
 ## Region / CSS edge cases handled (from the fork's dvd_css)
@@ -92,6 +94,74 @@ choose which DVD core Auto Disc Discovery launches (like his audio-CD selection)
 core and dvd-core coexist. Our upstream contribution is limited to the detection-only
 `READ(10)` probe (with his fixes: run before the CD TOC path; add ISO9660 bounds checks).
 Our PR #10 (CSS in his Main) is superseded by this custom-Main approach.
+
+## Video CD / Super Video CD
+
+Status: **sim/host-proven, ⏳ HW-confirm pending** (branch `feature/vcd-svcd-physical`).
+Extends physical-disc playback to VCD/SVCD, on the exact same optical drive
+`dvd_phys.cpp` already scans for DVD-Video.
+
+**This needed zero RTL changes.** The rip-image VCD/SVCD feature
+(`docs/vcd_svcd.md`) already made `dvd_iso_reader.sv` auto-detect a raw
+MODE2/2352 CD image purely by content — the 12-byte CD sync pattern at file
+byte 0 — with no dependence on how those bytes got there. A physical VCD/SVCD
+source just has to hand the FPGA that same raw byte stream, sync pattern
+intact, starting at the disc's data track. Everything new is HPS-side:
+
+- **`dvd_vcd_detect.cpp`** — the same `READ(10)` PVD + root-directory walk as
+  `dvd_video_probe()`, checked SECOND (after DVD-Video is ruled out), looking
+  for `MPEGAV/` (VCD 2.0) or `MPEG2/` (SVCD) instead of `VIDEO_TS` — the
+  directories that actually hold playable MPEG streams, as opposed to `VCD/`/
+  `SVCD/` (metadata only) or `SEGMENT/` (still menus, not played).
+- **`dvd_vcd.cpp`** — finds the disc's first DATA track via `CDROMREADTOCHDR`/
+  `CDROMREADTOCENTRY` (a hybrid disc's later CD-DA audio tracks, or a
+  multi-movie VCD's later data tracks, are not played — the same one-track
+  limitation a rip-image mount already has, since that requires picking one
+  `.bin` file), then reads raw sectors with SCSI **READ CD (`0xBE`)**.
+
+**No decryption, no region, no libdvdcss dependency at all** — VCD/SVCD carry
+no protection of any kind, so this module never touches `dvd_css.*`. It keeps
+its own persistent drive handle (`dvd_vcd_open()`/`dvd_vcd_close()`, mirroring
+`dvd_css_open()`/`dvd_css_close()`'s shape exactly, including the "closed on
+remount" rule at `sd_type[index] == SD_TYPE_VCD`) and mounts through its own
+sentinel, `DVD_PHYS_VCD_SENTINEL`, dispatched from `dvd_phys.cpp`'s existing
+probe/mount state machine — the same `mounted`/`foreign`/`probed_unrecognized`
+flags, the same insertion-edge and MGL-busy gating, the same eject teardown
+(now closing whichever of `dvd_css`/`dvd_vcd` is actually open).
+
+★ **`READ CD`'s flag byte is the one thing that had to differ from the
+CD-DA precedent** (the shelved `feature/cdda-physical` branch's
+`dvd_cdda.cpp`, whose `scsi_read_cd()` this module's is adapted from). CD-DA
+requests `cdb[9]=0x10` ("user data only"), which for a CD-DA sector IS the
+whole 2352 bytes — there is no header structure to a Red Book audio frame. A
+VCD/SVCD data track is Mode 2, where "user data" is a SUBSET of the raw
+sector: `dvd_iso_reader.sv`'s detector reads the sync pattern (bytes 0-11)
+and the mode/submode bytes (offsets 15/18), all of which sit in the sync/
+header/subheader region, not user data. So this module requests
+`cdb[9]=0xF8` (Sync + full header, meaning header AND subheader + user data +
+EDC/ECC) — the complete 2352-byte raw sector, byte-for-byte what a `.bin` rip
+already contains — and `cdb[1]=0x00` ("expected sector type: any"), since a
+VCD/SVCD data track mixes Mode 2 Form 1 (filesystem) and Form 2 (MPEG
+payload) sectors, unlike CD-DA's single uniform type.
+
+⚠ **The exact `READ CD` byte values are the one thing sim/host tests cannot
+verify** — `dvd_vcd_test.cpp`'s synthetic-disc byte-assembly checks exercise
+the surrounding arithmetic (burst sizing, the track-boundary clamp, the
+EOF zero-fill) against a fake `read_frames()` that never issues the real
+SCSI command; whether a real drive answers `0xBE`/`0x00`/`0xF8` the way the
+MMC spec says is necessarily an HW-only gate. Watch this line first if a
+real disc plays back scrambled/misdetected.
+
+Host tests: `main/tests/dvd_vcd_test.cpp` (ISO9660 probe, TOC track
+selection, and `dvd_vcd_read()`'s byte assembly against a synthetic disc
+where every byte is a pure function of disc LBA/offset — the same
+byte-traceable-disc instrument `dvd_cdda_test.cpp` used) plus new dispatch
+arms in `dvd_phys_test.cpp`. 6 RED mutations, each caught by its own arm.
+Full cross-compile proven: `USE_DOCKER=1 main/build_main.sh` links cleanly
+(catching, among other things, a missing `<limits.h>` for `CDSL_CURRENT`'s
+`INT_MAX` — the same gotcha `dvd_phys.cpp` already carries a comment about,
+invisible to a host `g++` smoke test since glibc pulls it in transitively
+there). Integration: `main/integration/INTEGRATION.md` "Steps 43-47".
 
 ## Encrypted ISOs (no drive needed)
 
@@ -146,7 +216,7 @@ matches most of the optical-console library, including several systems MiSTer ru
 | PC Engine CD / TurboGrafx-CD | no (custom, CD-DA + data) | — | no |
 | 3DO | no (Opera FS) | — | no |
 | CD-i | yes (XA) | no | no |
-| Video CD / SVCD | yes | no (`VCD/`, `MPEGAV/`) | no |
+| Video CD / SVCD | yes | no (`VCD/`, `MPEGAV/`) | **yes — via `dvd_vcd_probe()`, a second module; see below** |
 | GameCube, Wii, Xbox | no (proprietary; XDVDFS starts at sector 32) | — | no |
 | audio CD | READ(10) fails outright | — | no |
 | DVD-Video, incl. DVD games and home-burned `VIDEO_TS` | yes | yes | **yes** |
