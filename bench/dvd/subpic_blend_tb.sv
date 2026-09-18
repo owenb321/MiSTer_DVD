@@ -6,7 +6,7 @@
 // SET_COLOR index looked up in pgc_palette. This TB drives an explicit overlay
 // colour and checks the per-channel alpha blend against a software reference:
 //   * ov_on=0        -> passthrough
-//   * ov_idx=0       -> transparent (passthrough)  [idx0 is the subpicture key]
+//   * ov_idx=0       -> drawn like any class (the idx0 key was removed 2026-09-18)
 //   * ov_alpha=0     -> transparent (passthrough)
 //   * ov_alpha=15    -> fully opaque (out = ov colour exactly)
 //   * partial alpha  -> per-channel linear interp
@@ -43,7 +43,7 @@ module subpic_blend_tb;
     function automatic [7:0] ref_out(input [7:0] vin, input [7:0] c,
                                      input on, input [1:0] idx, input [3:0] a, input frc);
         begin
-            if (!on || a == 4'd0 || (!frc && idx == 2'd0)) ref_out = vin;
+            if (!on || a == 4'd0) ref_out = vin;
             else ref_out = ref_mix(vin, c, a);
         end
     endfunction
@@ -69,7 +69,7 @@ module subpic_blend_tb;
         $display("=== subpic_blend test ===");
         // passthrough cases (overlay colour present but suppressed), ov_force=0
         chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b0, 2'd1, 4'hF, 1'b0);   // ov_on=0
-        chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b1, 2'd0, 4'hF, 1'b0);   // idx0 transparent
+        chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b1, 2'd0, 4'hF, 1'b0);   // idx0 DRAWN (no key)
         chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b1, 2'd1, 4'h0, 1'b0);   // alpha0 transparent
         // HIGHLIGHT FILL: idx0 with ov_force lights up (background-class button fill)
         chk(8'h40,8'h80,8'hC0, 8'hFF,8'h10,8'h20, 1'b1, 2'd0, 4'hF, 1'b1);   // idx0 forced -> ov colour

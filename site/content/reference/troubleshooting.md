@@ -392,6 +392,26 @@ Subtitles are separate from captions and are drawn by the core, so they work on 
 **B8** to cycle them; `SUB OFF` means they are disabled. Some discs author menu subpictures
 with zero contrast, which is intentional on their part.
 
+### Parts of subtitle letters are missing, or a menu button highlight looks wrong
+
+!!! info "Fixed in v0.7.0"
+
+    Most visible on Scooby-Doo 2's museum, where the "flashlight" showed dark circles
+    and a dark square instead of lighting up the exhibit.
+
+A disc tells the player a colour and a transparency for each of the four shades a
+subtitle or menu graphic is drawn in. The core ignored two of those instructions:
+
+- It always treated the first shade as see-through. Some discs draw part of their
+  subtitle lettering in that shade, so those pixels went missing. Others darken the
+  whole screen with it, as the museum does.
+- When a menu button was selected, a shade the button's highlight marked as fully
+  see-through kept the colour it had before being selected. The museum uses exactly that
+  to cut a lit circle out of its darkened screen.
+
+Both now follow the disc. One side effect: a disc that deliberately tints the whole
+screen while its subtitles are up now shows that tint, as a set-top player does.
+
 ## Controls
 
 ### My keyboard does nothing

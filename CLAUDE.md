@@ -252,6 +252,35 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **SUBPICTURE COMPOSITION DIDN'T FOLLOW THE SPEC IN TWO WAYS: a class-0 "transparent
+  key", and a contrast-0 highlight class keeping its subpicture pixel (2026-09-18, branch
+  `fix/spu-flashlight`); sim-proven, 3 mutations each caught by exactly its own arm,
+  ⏳ HW-confirm pending.** Field report on Scooby-Doo 2's museum: the "flashlight" showed
+  dark circles plus a dark square instead of a lit exhibit.
+  ★ **Decoded from the disc first.** The SPU dims the WHOLE screen: class 0 and the circles
+  (class 2) are both palette 7 = black at contrast 12. The selected coli `0x0507000c`
+  keeps class 0 black and gives class 2 **contrast 0**, which cuts the exhibit out of the
+  darkness. The core inverted it:
+  - `subpic_blend` keyed class 0 out, a Phase-1 relic from before `SET_CONTR`, so the
+    darkness never drew;
+  - `hl_use = hl_hit_q && (hl_a != 0)` kept the circle's SPU black inside the rect.
+
+  **Fix:** new `dvd/hl_compose.sv` (combinational, extracted from emu for a bench).
+  - A **live** coli replaces all four classes, and contrast 0 is transparent: the spec,
+    and VLC's `ButtonUpdate`.
+  - An **all-zero** coli stays a hotspot. That is T2's `0x44440000`, a deliberate,
+    documented deviation.
+  - `subpic_blend` composites on contrast alone; `ov_force` is now inert.
+
+  ★★ **Blast radius MEASURED over 1215 discs / 16124 SPUs.**
+  - **The key:** 11 title discs. On the ones inspected it was DELETING real subtitle
+    glyph pixels (*Last Ounce of Courage* and *Die Another Day* draw text in class 0).
+  - **The highlight rule:** at most 22 discs. On the one inspected (Big Trouble), it
+    removes a normal-state + highlighted-state double-draw.
+
+  **Gate: `bench/dvd/run_flashlight.sh --red`.** Detail: **`docs/subpicture.md`**
+  "Highlight colours replace every class".
+
 - ✅ **A NATURAL TRANSITION DISCARDED THE AUDIO ITS CELL STILL HAD TO PLAY — "Shaggy's
   commentary is cut off" (2026-09-18, branch `fix/cell-still-av`); sim-proven RED/GREEN,
   6 arms each caught by exactly its own arms, and ✅ HW-CONFIRMED 2026-09-18** together

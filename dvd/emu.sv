@@ -5823,14 +5823,15 @@ wire [4:0]  pgc_ctl_waddr;
 wire [31:0] pgc_ctl_wdata;
 wire        pgc_ctl_valid;
 wire        pgc_dom_tt;
-wire [3:0] sp_sel_col_spu = (sp_q_idx == 2'd0) ? sp_col0 :
-                            (sp_q_idx == 2'd1) ? sp_col1 :
-                            (sp_q_idx == 2'd2) ? sp_col2 : sp_col3;
-// Phase 3: inside the highlighted button rect the HLI's palette index wins - but only
-// for classes the highlight actually recolours (hl_use, defined below). A class whose
-// coli contrast is 0 keeps its authored subpicture pixel. (hl_ci/hl_a/hl_use defined
-// below, all sp_q_idx-aligned.)
-wire [3:0] sp_sel_col = hl_use ? hl_ci : sp_sel_col_spu;
+// Phase 3: inside the highlighted button rect the HLI's palette index + contrast win.
+// Resolved by dvd/hl_compose.sv (instanced below, next to hl_hit_q); its outputs are
+// declared here, ahead of their first use -- emu.sv has no `default_nettype none`.
+// ★ 2026-09-18: a LIVE coli replaces EVERY class, contrast 0 = transparent (the spec;
+// Scooby-Doo 2's museum flashlight). An all-zero coli is a hotspot (T2). See the module.
+wire [3:0] sp_spu_col, sp_spu_alpha;   // hl_compose: the subpicture's own index + contrast
+wire [3:0] hl_ci, hl_a;                 // hl_compose: the highlight's, for this class
+wire       hl_use;                      // hl_compose: the highlight owns this pixel
+wire [3:0] sp_sel_col = hl_use ? hl_ci : sp_spu_col;
 wire [7:0] pal_r, pal_g, pal_b;
 pgc_palette pgc_palette_inst (
     .clk     (clk_sys),
@@ -5850,10 +5851,6 @@ pgc_palette pgc_palette_inst (
     .rgb_b   (pal_b)
 );
 
-// per-index alpha (SET_CONTR); aligned with sp_q_idx (both 1 cyc after core_h/v_pos)
-wire [3:0] sp_alpha = (sp_q_idx == 2'd0) ? sp_a0 :
-                      (sp_q_idx == 2'd1) ? sp_a1 :
-                      (sp_q_idx == 2'd2) ? sp_a2 : sp_a3;
 
 // =========================================================================
 // DVD menu BUTTON HIGHLIGHT (Phase 3, dvd/nav_pci.sv). The HLI supplies a
@@ -6002,21 +5999,25 @@ always @(posedge clk_sys)
                 (ov_qx >= {2'b00, hl_x1}) && (ov_qx <= {2'b00, hl_x2}) &&
                 (ov_qy >= {2'b00, hl_y1}) && (ov_qy <= {2'b00, hl_y2});
 
-// HLI colour/alpha nibble for this pixel's class (sp_q_idx-aligned)
-wire [3:0] hl_ci = (sp_q_idx == 2'd0) ? hl_coli[19:16] :
-                   (sp_q_idx == 2'd1) ? hl_coli[23:20] :
-                   (sp_q_idx == 2'd2) ? hl_coli[27:24] : hl_coli[31:28];
-wire [3:0] hl_a  = (sp_q_idx == 2'd0) ? hl_coli[3:0]   :
-                   (sp_q_idx == 2'd1) ? hl_coli[7:4]   :
-                   (sp_q_idx == 2'd2) ? hl_coli[11:8]  : hl_coli[15:12];
-
-// "Recolour this pixel with the highlight" = inside the button rect (hl_hit_q) AND the
-// coli contrast nibble for this class is nonzero. A contrast-0 class = "no recolor": the
-// subpicture's own pixel shows through instead of being deleted (matches discs whose
-// selected-button graphic lives in the subpicture with an all-zero-contrast HLI coli,
-// e.g. T2). When a class IS recoloured it drives subpic_blend.ov_force so a background-
-// class (idx 0) highlight can still blend (the idx0 key otherwise drops it).
-wire hl_use = hl_hit_q && (hl_a != 4'd0);
+// Which colour + contrast each subpicture pixel is drawn with (sp_q_idx-aligned,
+// combinational). A LIVE coli replaces every class inside the rect -- contrast 0 makes
+// the class transparent there, which is how the Scooby-Doo 2 museum cuts the lit
+// exhibit out of its full-screen dimming. An ALL-ZERO coli is a pure hotspot and keeps
+// the subpicture pixel (T2's root menu, HW-confirmed PR fj#83). When the highlight owns
+// a pixel it drives subpic_blend.ov_force so a background-class (idx 0) highlight can
+// blend. Gate: bench/dvd/run_flashlight.sh.
+hl_compose hl_compose_inst (
+    .idx      (sp_q_idx),
+    .col0(sp_col0), .col1(sp_col1), .col2(sp_col2), .col3(sp_col3),
+    .a0(sp_a0),     .a1(sp_a1),     .a2(sp_a2),     .a3(sp_a3),
+    .hl_hit   (hl_hit_q),
+    .coli     (hl_coli),
+    .spu_col  (sp_spu_col),
+    .spu_alpha(sp_spu_alpha),
+    .hl_col   (hl_ci),
+    .hl_alpha (hl_a),
+    .recolour (hl_use)
+);
 
 // =========================================================================
 // Phase 11 — TRANSPORT HUD (dvd/transport_hud.sv): release-visible playback
@@ -6435,7 +6436,7 @@ always @(posedge clk_sys) begin
     sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
     sp_b_q     <= hud_on_e ? hud_b_w     : bar_on_e ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
     sp_alpha_q <= hud_on_e ? hud_alpha_w : bar_on_e ? bar_alpha_w : logo_on_w ? 4'd15
-                           : (hl_use_e ? hl_a : sp_alpha); // HLI alpha for recoloured classes
+                           : (hl_use_e ? hl_a : sp_spu_alpha); // HLI contrast for a recoloured pixel
     sp_idx_q   <= sp_q_idx;
     sp_on_q    <= hud_on_e | bar_on_e | logo_on_w | sp_on_e;
     sp_force_q <= hud_on_e | bar_on_e | logo_on_w | hl_use_e; // + logo: bypass the idx0 key

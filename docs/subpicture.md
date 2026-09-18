@@ -248,6 +248,75 @@ re-sends carry *increasing* PTS — so "just reuse the menu skip" is not a fix.
 Gate: `bench/dvd/run_spu_window.sh` (+ `--red`); design history in `docs/stc_freerun.md`
 §12.1.
 
+## Highlight colours replace every class (2026-09-18)
+
+🔧 **Branch `fix/spu-flashlight`: sim-proven, mutation-checked; ⏳ HW-confirm pending.**
+Field report on Scooby-Doo 2's museum: *"you are supposed to 'shine a flashlight' on
+different exhibits, which should brighten the exhibit with a highlight, instead, all
+highlight locations are visible as dark circles and the current highlight selection shows
+up as a dark square."*
+
+★ **Settled from the disc's bytes before any RTL was read.** VTS_02 PGCN 11 (title VOB RBN
+72606…98618; buttons located by scanning every NAV pack for the screenshot's rectangle):
+- **SPU:** a full-screen DAREA with `SET_COLOR [c0..c3] = [7,0,7,0]` and
+  `SET_CONTR = [12,0,12,0]`. Palette 7 is black (Y 0x10), so **class 0 (the whole screen)
+  and class 2 (the exhibit circles) are both black at contrast 12**: the museum is dark.
+- **Selected coli:** `0x0507000c`. Class 0 stays black at 12, and **class 2 gets contrast
+  0**. The selected exhibit is cut out of the darkness, which is the flashlight.
+
+**Two shortcuts inverted it:**
+1. **`subpic_blend` keyed class 0 out as "transparent by convention".** That was a Phase-1
+   relic from before `SET_CONTR` and the PGC palette were parsed. The spec has no such
+   rule, and it is why the darkness never drew.
+2. **`emu.sv` kept a contrast-0 class's SUBPICTURE pixel inside the rect**
+   (`hl_use = hl_hit_q && (hl_a != 0)`). It was written for T2 (below), and it is why the
+   lit circle drew black.
+
+**The rule now** (new **`dvd/hl_compose.sv`**, extracted from `emu.sv` so it has a bench;
+combinational, so the hotspot timing is unchanged):
+- **A LIVE coli** (any contrast nibble nonzero) replaces the colour AND contrast of all four
+  classes inside the rect. **Contrast 0 is transparent there.** This is the spec, and it is
+  what VLC's dvdnav `ButtonUpdate` does.
+- **An ALL-ZERO coli is a hotspot and keeps the subpicture pixel.** This is a deliberate
+  deviation for T2's root menu (`0x44440000`, HW-confirmed look, PR fj#83,
+  `docs/dvd_menu_refinements.md` §1). It is keyed on the whole coli, so no disc that
+  recolours is affected.
+- **`subpic_blend` composites on contrast alone.** `ov_force` is now inert and was kept only
+  to avoid churn in the screensaver gate.
+
+★★ **Blast radius MEASURED, not argued** (1215 discs, 16124 SPUs, menu VOBs plus the head
+of the main title):
+- **The idx-0 key.** 0 menu discs and 11 title discs give class 0 a nonzero contrast. In
+  the ones inspected the key was hiding **real subtitle pixels**: *Last Ounce of Courage*
+  and *Die Another Day* use class 0 as a visible glyph colour (contrast 15, background on
+  class 3). *Silent Steel 2* authors a full-screen class 0 at contrast 3, and now shows
+  that faint tint, as a real player does.
+- **The highlight rule.** An upper bound of 22 discs have a live coli with a contrast-0
+  class that the SPU draws. On the one inspected (*Big Trouble in Little China*) the SPU
+  carries the normal-state text in that class and the highlighted-state text in the
+  recoloured ones. The old rule drew both on top of each other; the spec rule shows only
+  the highlighted state.
+
+**Gate: `bench/dvd/run_flashlight.sh --red`.** `flashlight_tb` runs the real `hl_compose`
+→ palette → `subpic_blend` chain over the disc's measured values and scores the pixel that
+is drawn: lit, dimmed, or unchanged against video. Arms:
+- **S1–S4:** the museum;
+- **T1:** the T2 hotspot;
+- **R1:** a recolour;
+- **U1:** a subtitle without a box.
+
+Mutations M1 (the old rule), M2 (no hotspot exception) and M3 (the key restored) each fail
+exactly their own arm. `subpic_blend_tb`'s reference model was updated to the no-key rule,
+and the screensaver, subpicture and HUD-geometry suites are green.
+
+⏳ **HW gate:**
+- the museum flashlight on Scooby-Doo 2;
+- T2's root menu unregressed;
+- MiB/Matrix menu highlights unregressed;
+- a subtitle on an ordinary disc unchanged;
+- ideally *Last Ounce of Courage* / *Die Another Day* subtitles, which should now be
+  complete.
+
 ## v1 scope & decisions to make (write them down as you go)
 
 - **Palette (the main deferral):** the real 4 colours + alpha come from the **IFO PGC

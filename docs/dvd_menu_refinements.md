@@ -219,6 +219,13 @@ Symptoms seen across Matrix submenus and T2:
        alone**, so a **background-class (idx 0) highlight fill** can show — the `ov_idx!=0`
        transparent key is right for subtitles but wrong for a menu fill. Spec: the coli
        applies to all four classes incl. background.
+  - ⚠ **NARROWED 2026-09-18 (`docs/subpicture.md` "Highlight colours replace every
+    class").** Rule 1 was wider than T2 needed and broke the spec for every other disc:
+    it kept a contrast-0 class's subpicture pixel even when the coli RECOLOURS other
+    classes. Scooby-Doo 2's museum relies on exactly that zero to cut its lit exhibit out
+    of a darkened screen. The T2 case survives as its own rule: an **all-zero** coli is a
+    hotspot. The `ov_force` idx-0 bypass (rule 2) is moot, because the idx-0 key itself
+    is gone.
   - **HW result (2026-07-08):** T2 menu highlights now show a **solid colour fill** (was
     outline-only). Still worth a glance on the next round: confirm no regression on
     Matrix/MiB highlights or on subtitles (the fix is byte-identical for nonzero-coli
