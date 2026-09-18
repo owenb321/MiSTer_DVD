@@ -28,9 +28,27 @@
 # spread across the WHOLE title and reports the per-window spread, not just an
 # aggregate -- a disc that is 50/50 is telling you something a mean would hide.
 #
+# ★ --field-order: WHICH FIELD DOES THE DISC WANT SHOWN FIRST?
+# This is NOT top_field_first. ISO 13818-2 6.3.10 forces that syntax element to 0
+# on a FIELD picture, so it carries no information there -- the display order is
+# given by which parity is CODED FIRST in each pair. Reading tff anyway is the
+# defect fixed on 2026-09-18 (see docs/field_parity.md); this mode is the golden
+# model for bench/dvd/run_field_order.sh and re-measures the affected set.
+#
+# It replicates vld.v's OWN pairing FSM rather than guessing: second_field is
+# preset at a sequence/GOP header (vld.v:2344-2348) and toggles at each picture
+# header, and hdr_upd_slot (vld.v:2377) fires the picbuf update where it reads 1
+# -- so the pair's FIRST field is the slot owner and its parity is the answer.
+#
+# ⚠ --all-vts EXISTS BECAUSE best_vts SAMPLING HID THIS ENTIRELY. Thayer's Quest
+# is field-coded on 9 of its 11 VTSes, but its LARGEST VTS (09) is the one
+# frame-coded VTS, so the default sampling reports the disc as 0.0% field-coded.
+# That is the Thayer trap one level up: the wrong VTS, not the wrong part of one.
+#
 # Usage:
 #   tools/video_cadence_census.py <iso> [<iso> ...]
 #   tools/video_cadence_census.py --vts 3 --windows 16 <iso>
+#   tools/video_cadence_census.py --field-order --all-vts <iso>
 #   tools/video_cadence_census.py $DVD_ISO_DIR/*.iso
 # =============================================================================
 import sys, os, argparse, collections
@@ -95,6 +113,127 @@ def scan_pictures(buf, acc):
             acc['rff_toggle'] += 1
         acc['last_rff'] = rff
         i += 4
+
+
+def scan_field_order(buf, st):
+    """Replicate vld.v's second_field FSM to find each pair's FIRST field.
+
+    Walks start codes in order: 0xB3 sequence / 0xB8 GOP preset second_field,
+    0x00 picture consumes the following picture coding extension. Records the
+    (picture_structure, tff) of every slot-owning picture -- the value the fixed
+    RTL latches into first_field_top.
+    """
+    i, n = 0, len(buf)
+    while i + 4 <= n:
+        j = buf.find(b'\x00\x00\x01', i)
+        if j < 0 or j + 4 > n:
+            break
+        code = buf[j + 3]
+        if code in (0xB3, 0xB8):                 # sequence / GOP header
+            st['second_field'] = 1
+        elif code == 0x00:                       # picture_start_code
+            k = buf.find(b'\x00\x00\x01\xb5', j)
+            if k < 0 or k + 9 > n:
+                i = j + 3
+                continue
+            e = buf[k + 4:k + 9]
+            if (e[0] >> 4) != 0x8:               # not a picture coding extension
+                i = j + 3
+                continue
+            ps = e[2] & 0x03                     # 1=top 2=bottom 3=frame
+            tff = (e[3] >> 7) & 1
+            st['pics'] += 1
+            if ps in (1, 2):
+                st['field_pic'] += 1
+            if ps == 3:
+                owner = True
+                st['second_field'] = 0
+            else:
+                owner = (st['second_field'] == 1)
+                st['second_field'] ^= 1
+            if owner:
+                st['owners'].append((ps, tff))
+        i = j + 3
+
+
+def new_field_st():
+    return {'second_field': 1, 'owners': [], 'pics': 0, 'field_pic': 0}
+
+
+def field_order_iso(path, vts_sel=None, windows=8, win_sectors=800,
+                    all_vts=False):
+    """-> list of (vts, pics, field_pic, owners[list of (ps,tff)])"""
+    nav = IsoNav(path)
+    if all_vts:
+        vtss = sorted(nav.groups)
+    else:
+        v = vts_sel if vts_sel is not None else nav.best_vts
+        vtss = [v] if (v is not None and v in nav.groups) else []
+
+    out = []
+    for vts in vtss:
+        runs = [(ext, dl // SEC) for ext, dl in nav.groups[vts]]
+        total = sum(n for _, n in runs)
+        if total < 200:
+            continue
+
+        def sector_at(idx):
+            for ext, n in runs:
+                if idx < n:
+                    return ext + idx
+                idx -= n
+            return None
+
+        # Same 3% trim as the cadence census: VOB lead-ins are often frame-coded
+        # even on a field-coded disc.
+        lo, hi = int(total * 0.03), int(total * 0.97)
+        span = max(1, hi - lo)
+        pics = field_pic = 0
+        owners = []
+        for w in range(windows):
+            start = lo + (span * w) // windows
+            chunks = []
+            for k in range(win_sectors):
+                sec = sector_at(start + k)
+                if sec is None:
+                    break
+                d = video_payload(nav.sec(sec))
+                if d:
+                    chunks.append(d)
+            st = new_field_st()
+            scan_field_order(b''.join(chunks), st)
+            pics += st['pics']
+            field_pic += st['field_pic']
+            # drop each window's first owner: we may have entered mid-GOP, so its
+            # pairing phase is not yet established by a sequence/GOP header.
+            owners += st['owners'][1:]
+        if pics:
+            out.append((vts, pics, field_pic, owners))
+    return out
+
+
+def report_field_order(path, rows):
+    name = os.path.basename(path)
+    print(name)
+    if not rows:
+        print("    no pictures sampled")
+        return
+    for vts, pics, field_pic, owners in rows:
+        nown = len(owners) or 1
+        top = sum(1 for ps, _ in owners if ps == 1)
+        bot = sum(1 for ps, _ in owners if ps == 2)
+        frm = sum(1 for ps, _ in owners if ps == 3)
+        # what the PRE-FIX core showed: tff alone, which the spec pins to 0 on a
+        # field picture -> BOTTOM first, always.
+        wrong = sum(1 for ps, tff in owners
+                    if ps in (1, 2) and (ps == 1) != bool(tff))
+        flag = "  <-- FIELD-CODED" if field_pic > pics * 0.5 else ""
+        print(f"    VTS{vts:02d}  pics={pics:6d}  field_pics={100*field_pic/pics:5.1f}%  "
+              f"pairs={nown:5d}  TOP-first={100*top/nown:5.1f}%  "
+              f"BOT-first={100*bot/nown:5.1f}%  frame={100*frm/nown:5.1f}%{flag}")
+        if wrong:
+            print(f"{'':10s}  ^ {wrong} of {nown} ({100*wrong/nown:.1f}%) would display "
+                  f"in the WRONG order if ordered by top_field_first alone")
 
 
 def new_acc():
@@ -174,7 +313,24 @@ def main():
     ap.add_argument('--win-sectors', type=int, default=1200)
     ap.add_argument('--per-window', action='store_true',
                     help="print the per-window spread (the anti-'heads' check)")
+    ap.add_argument('--field-order', action='store_true',
+                    help="report the AUTHORED first-displayed field per VTS "
+                         "(the golden model for run_field_order.sh)")
+    ap.add_argument('--all-vts', action='store_true',
+                    help="walk every VTS, not just the largest -- best_vts "
+                         "sampling reports Thayer's Quest as 0%% field-coded")
     a = ap.parse_args()
+
+    if a.field_order:
+        for path in a.isos:
+            try:
+                rows = field_order_iso(path, a.vts, a.windows,
+                                       a.win_sectors, a.all_vts)
+            except Exception as ex:                              # noqa: BLE001
+                print(f"{os.path.basename(path)}  ERROR: {ex}")
+                continue
+            report_field_order(path, rows)
+        return
 
     rows = []
     for path in a.isos:

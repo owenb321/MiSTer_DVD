@@ -83,6 +83,7 @@ module vld_drop_rff_tb;
   wire update_picture_buffers, flags_commit;
   wire [2:0] picture_coding_type;
   wire repeat_first_field, top_field_first, progressive_frame, progressive_sequence;
+  wire first_field_top;   // DVD-FORK FIX (field-coded field order): vld's display-order verdict
   wire vld_err;
 
   vld vld (
@@ -113,6 +114,7 @@ module vld_drop_rff_tb;
     .dmv_0_0(), .dmv_0_1(), .dmv_1_0(), .dmv_1_1(),
     .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame),
     .top_field_first(top_field_first), .repeat_first_field(repeat_first_field),
+    .first_field_top(first_field_top),
     .vld_err(vld_err),
     .drop_pic_req(drop_pic_req),
     .drop_pic_ack(drop_pic_ack),
@@ -158,7 +160,12 @@ module vld_drop_rff_tb;
     .picture_coding_type(picture_coding_type),
     .progressive_sequence(progressive_sequence),
     .progressive_frame(progressive_frame),
-    .top_field_first(top_field_first),
+    /* DVD-FORK FIX (field-coded field order, 2026-09-18): mirror mpeg2video.v's
+     * seam — picbuf is fed the DISPLAY ORDER, not the raw syntax element. Wiring
+     * the raw one here would make this bench encode the PRE-FIX design, so
+     * out_tff would be meaningless on field-coded content and anything copied
+     * from this skeleton would inherit the bug. */
+    .top_field_first(first_field_top),
     .repeat_first_field(repeat_first_field),
     .last_frame(1'b0),
     .update_picture_buffers(update_picture_buffers),

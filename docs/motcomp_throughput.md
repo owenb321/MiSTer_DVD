@@ -183,8 +183,15 @@ Three small pieces, all in the single `clk_dec` domain (the VLD and the frame-ra
      the picture header and is re-armed at the next header.
    The governor simply repeats the previous frame in the dropped B's display slot.
 
-   Only **frame-picture** B's are dropped (`picture_structure == FRAME_PICTURE`), so interlaced
-   field-picture B's are left alone — matching the current PAL-progressive-only support.
+   ⛔ **STALE AS WRITTEN — CORRECTED 2026-09-18.** This said *"Only frame-picture B's are
+   dropped (`picture_structure == FRAME_PICTURE`), so interlaced field-picture B's are left
+   alone"*. That punt was **removed on 2026-08-05** by the field-pair drop
+   (`rtl/mpeg2/vld.v:411-447`): a field-coded B is decided at the pair's FIRST field and
+   `drop_pair_arm` forces the sibling, so a pair drops atomically and `drop_pic_field` acks
+   cost 1 per field. Keeping the old sentence here is what made Thayer's Quest — a
+   mostly-field-coded disc — look like an unreachable case for rounds. **Read `vld.v` as the
+   current truth.** Field-coded content is a first-class case now; see also
+   `docs/field_parity.md`'s 2026-09-18 section on its *display* field order.
 
 **Safety invariant:** the decoder *only ever* drops B-frames, and the reference rotation +
 I/P reorder logic change only on non-B `update_picture_buffers` events, which are never

@@ -1280,4 +1280,19 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   ★ That re-roll is exactly why the version bump and the docs sweep ride in ONE commit:
 #   splitting them would buy a second netlist and a second seed decision for nothing.
 
-set_global_assignment -name SEED 7
+# fix/field-order-field-coded (2026-09-18, the field-coded field-order fix): SEED 7
+# MISSED the gate on first roll -- clk_dec 80.03 MHz @100C / 83.4 MHz @-40C (gate 86.0,
+# FAIL both corners), ending the eight-build SEED 7 run. Swept: SEED 9 PASSED on its
+# FIRST fit -- clk_dec 95.02 MHz @100C / 90.23 MHz @-40C (PASS both corners,
+# non-marginal), 38,346 / 41,910 ALMs (91 %), 51,729 registers, 500 / 553 M10K (90 %),
+# 93 / 112 DSP. Build releases/DVD_fieldorder_20260918_1439.rbf, commit 70415f0.
+# lint_undriven PASS, netlist_canary PASS.
+#   * The RTL delta is tiny -- one new 1-bit register in vld.v and one port connection
+#     moved in mpeg2video.v -- plus CORE_VERSION v0.6.1 -> dev-fieldorder, which lives
+#     in CONF_STR. A 10 MHz swing on that is placement variance on a new netlist, not a
+#     cost of the change: SEED 9 lands the hot corner 5 MHz ABOVE the v0.6.1 row.
+#   ! The SEED 7 fit was packed anyway as releases/DVD_fieldorder_MARGINAL_20260918_1425.rbf
+#     (build_release.sh's testing mode). Do not flash it -- below the gate is the
+#     chroma-fringe lottery, which would confound a field-order eye test.
+
+set_global_assignment -name SEED 9

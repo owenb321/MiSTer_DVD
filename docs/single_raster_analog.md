@@ -513,6 +513,19 @@ video-sourced 29.97i content** — `tools/video_cadence_census.py` says which a 
 with fast horizontal motion, in **Weave or CRT Simulation, never Bob** (Bob hides it; the
 RT4K reporter demonstrated exactly that himself).
 
+★★ **AND THAT INSENSITIVITY HID A SECOND, INDEPENDENT FIELD-ORDER DEFECT UNTIL
+2026-09-18 — on a DIFFERENT axis from `FIELD1_VPOS`.** Everything in §3.11/§3.12 is about
+which RASTER slot a field lands in, and it was validated on frame-coded content. A
+**FIELD-coded** picture (`picture_structure` 1 or 2 rather than 3) is not a split frame:
+ISO 13818-2 6.3.10 forces its `top_field_first` to 0, so the syntax element is empty and
+the display order is *which parity was coded first*. `dvd/resample_addrgen.v` ordered its
+two field images from `top_field_first` alone and so emitted BOTTOM-then-TOP on every
+field-coded picture — a genuine TEMPORAL inversion, invisible on the film that the
+paragraph above explains is insensitive. Measured on Thayer's Quest (field-coded on 9 of
+its 11 VTSes): 93.9–100 % of pairs coded TOP-first per VTS. Fixed in `rtl/mpeg2/vld.v`
+(`first_field_top`) plus the seam in `rtl/mpeg2/mpeg2video.v`; `FIELD1_VPOS` is untouched
+and remains correct. **Full record: `docs/field_parity.md`, 2026-09-18 section.**
+
 ★ **Who decides the default.** Not the maintainer's set, for this one knob: for the sync
 arms he owns the reference display that must not regress, but for field order an instrument
 that *reports* the answer outranks any number of impressions, so the **RT4K reading is the
