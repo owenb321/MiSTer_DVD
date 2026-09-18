@@ -252,6 +252,31 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **A NATURAL TRANSITION DISCARDED THE AUDIO ITS CELL STILL HAD TO PLAY — "Shaggy's
+  commentary is cut off" (2026-09-18, branch `fix/cell-still-av`); sim-proven RED/GREEN,
+  6 arms each caught by exactly its own arms, ⏳ HW-confirm pending.**
+  ★ **Settled offline from the disc before the rig was touched.** Scooby-Doo 2 VTS_02
+  PGCN 26 authors its voice clips as cells with **ONE video PTS and 4–30 s of audio**
+  (cells 1, 10–13, 21 end in a cell command; 2–9, 19, 22 are `still=255` button screens
+  whose buttons are live from 0.12 s, so a PRESS cutting those is authored).
+  ★★ **The natural gate (`nat_drained`) only ever described the VIDEO path**, and
+  `flush_ctl` fires `aud_flush` on every title-domain ack. On a motion cell the leftover
+  is tens of ms. On a one-picture cell the VBUF drains at once, the ring backpressures
+  the demux, and the reader finishes with a **whole 32 KB ring (~1.3 s of AC-3) unplayed**,
+  about a third of a 4 s line.
+  **Fix:** new `dvd/aud_drain.sv` (ring has no committed frame, decoder not holding a due
+  frame, ~128 ms settle) → reader `aud_drained`, ANDed into the NATURAL gate only
+  (`nat_done`). ⚠ `consumer_alive` = `aud_bp_armed` is the load-bearing escape: audio
+  Off / no stream / wedged decoder read drained at once, never a 60 s `DRAIN_WD` stall.
+  ⚠ `tail_wait` and the menu settle stay video-only, or a still menu with a voice-over
+  would withhold its highlight for the whole commentary. ⚠ Applies in menus too, so the
+  HW round must check the T2 and MiB looping menus.
+  **Gate: `bench/dvd/run_auddrain.sh --red`** — real reader → demux → `audio_ring` chain,
+  scoring the clip audio a consumer FINISHED PLAYING before the flush: RED **13 frames
+  lost (52,546/78,819 B)**, GREEN all 39 committed frames. The reader's 37 other benches
+  tie `.aud_drained(1'b1)`. Detail: **`docs/dvd_nav.md`** "A natural transition waits for
+  the AUDIO too".
+
 - ✅ **FIELD-CODED MPEG-2 PLAYED ITS TWO FIELDS IN THE WRONG ORDER — `top_field_first` IS
   EMPTY ON A FIELD PICTURE AND THE SPEC IS WHY (2026-09-18, branch
   `fix/field-order-field-coded`); sim-proven RED/GREEN on the REAL shipped modules over
@@ -2742,8 +2767,9 @@ worse maintenance burden than targeted in-place edits. So:
   register with the disc's own yellow highlight and misses with its red one, and the T2 /
   Matrix menus are unregressed by the promotion-timer change.
   ⏳ **Two symptoms REMAIN on the same disc and are NOT this defect** — they are A/V sync at
-  a cell transition, tracked separately: Shaggy's win commentary is cut off, and one round's
-  speech does not lip-sync. MEASURED structure that points the next session at it: every
+  a cell transition, tracked separately: Shaggy's win commentary is cut off (🔧 **fixed in
+  sim 2026-09-18 — see the natural-transition audio-drain bullet at the top of this
+  list**), and one round's speech does not lip-sync (still open). MEASURED structure that points the next session at it: every
   cell in this game RESTARTS its PTS near zero (rounds at 0.094 s, commentary at 0.122 s),
   so every transition is a clock discontinuity plus an audio re-phase; and the commentary
   clips are **single-picture still cells carrying 8.3-22.2 s of audio past their only video

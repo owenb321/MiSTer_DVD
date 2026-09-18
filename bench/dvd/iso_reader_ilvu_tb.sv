@@ -93,7 +93,7 @@ module iso_reader_ilvu_tb;
 
     dvd_iso_reader dut (
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
-        .title_sel(4'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), .menu_snap(1'b0),
         .jump_ttn(7'd0), .jump_pgn(8'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),

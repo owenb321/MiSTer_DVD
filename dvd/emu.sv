@@ -1180,6 +1180,10 @@ wire        ps_sp_pts_valid;
 // audio_ring status (surfaced on the debug overlay, rows 12/13)
 wire [15:0] aud_frames_avail;
 wire [15:0] aud_bytes_avail;
+// dvd/aud_drain.sv -> dvd_iso_reader.aud_drained. Declared here, ahead of the
+// reader instance: emu.sv has no `default_nettype none`, so a forward
+// reference would silently become a 1-bit implicit net.
+wire        aud_drained_w;
 wire [15:0] aud_overflow_cnt;
 
 // A/V sync (dvd/av_sync.sv), all clk_sys
@@ -3074,6 +3078,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .lu_lang_pref   (player_lang),        // OSD Player Language -> menu-LU match
     .title_sel      (dbg_title_vts),      // Debug "Title VTS" picker: 0=Auto, else VTS #
     .vbuf_empty     (vbuf_empty),         // one term of the natural-transition drain gate
+    .aud_drained    (aud_drained_w),      // ...and the audio half of it (dvd/aud_drain.sv)
     .menu_snap      (1'b0),               // toggle removed with the still re-decode (v0.5.0)
     // Authored cell duration: display-referenced cell clock. Same tick av_sync
     // advances the STC with (one pulse per displayed image); disp_fps resolves
@@ -4156,6 +4161,23 @@ end
 // rows 14/15 is retired — those rows are back to the AC-3 self-heal reset
 // counters (see the overlay instantiation below).
 wire dbg_aud_draining, dbg_aud_play_pts_valid, dbg_aud_armed_data, dbg_aud_skip_run;
+
+// NATURAL-TRANSITION AUDIO DRAIN (2026-09-18, Scooby-Doo 2 "commentary cut off").
+// A cell command / POST jump used to wait for the VIDEO path only, then fire
+// aud_flush over a ring still holding up to ~1.3 s of the cell's audio. This is
+// the audio half of the reader's gate: nothing committed left in the ring, the
+// decoder not holding a due frame back, settled for ~128 ms. consumer_alive is
+// the ring-drain watchdog, so with audio Off / no stream / a wedged decoder it
+// reads drained at once and navigation never waits on a consumer that isn't
+// consuming. Design + measurement: dvd/aud_drain.sv, docs/dvd_nav.md.
+aud_drain aud_drain_inst (
+    .clk            (clk_sys),
+    .rst_n          (reset_n),
+    .frames_avail   (aud_frames_avail),
+    .consumer_alive (aud_bp_armed),
+    .dec_holding    (aud_dec_en && dbg_aud_play_pts_valid && ~dbg_aud_draining),
+    .drained        (aud_drained_w)
+);
 
 // =========================================================================
 // The presentation clock in clk_sys (dvd/av_sync.sv): a MIRROR of the

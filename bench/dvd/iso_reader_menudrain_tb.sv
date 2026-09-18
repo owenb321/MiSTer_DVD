@@ -144,7 +144,7 @@ module iso_reader_menudrain_tb;
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
         .title_sel(4'd0), .lu_lang_pref(16'h656E),
-        .vbuf_empty(vbuf_empty), .menu_snap(1'b0),
+        .aud_drained(1'b1), .vbuf_empty(vbuf_empty), .menu_snap(1'b0),
         .keep_vbuf(keep_vbuf_w),
         .jump_cross(jump_cross_w),
         .jump_ttn(vm_jump_ttn), .jump_pgn(vm_jump_pgn), .jump_ptt(vm_jump_ptt),

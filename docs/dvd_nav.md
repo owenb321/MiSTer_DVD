@@ -1564,6 +1564,88 @@ with the drift counters rather than offline: a drifting single-anchor clock and 
 dropped at the seek produce the same symptom, and `av_drift_ms` / `play_err_ms` /
 `disp_lag_ms` separate them in one reading.
 
+### A natural transition waits for the AUDIO too (2026-09-18, branch `fix/cell-still-av`)
+
+🔧 **Sim-proven RED/GREEN, 6 arms each caught by exactly its own arms; ⏳ HW-confirm
+pending.** This is the "commentary is cut off" half above. The lip-sync half (one round's
+speech) is a separate question and is still open.
+
+★ **The offline structure settled the mechanism before the rig was touched.** Dumping
+VTS_02 PGCN 26 cell by cell, with the PTS spans each cell actually carries:
+
+| cells | video PTS | audio | how the cell ends |
+|---|---|---|---|
+| 2–9, 19, 22 | 1 | 5.6–23.7 s | `still=255` + live buttons from 0.12 s (a press ends it — authored) |
+| 1, 10–13, 21 | 1 | 4.0–29.9 s | a **cell command**: `LinkCN`, `LinkTailPGC` |
+| 14–18, 20 | 11–56 | = video | a cell command (the rounds) |
+
+Every cell is `stc_discontinuity` and none is `seamless_play`.
+
+**The defect.** A natural jump or seek waits in the reader for `nat_drained`: the reader's
+cache, the demux pipe and the VBUF are all empty. **That is a statement about the VIDEO
+only.** `flush_ctl` then fires `aud_flush` on every title-domain ack. On a motion cell that
+costs a few tens of ms, because the demux is paced by the display, so the audio queued
+behind the last picture is nearly spent. On a one-picture cell it is not:
+- the picture drains the VBUF at once;
+- the ring backpressures the demux;
+- the reader finishes delivering while a **whole 32 KB ring is still to be heard, ~1.3 s of
+  192 kbps AC-3**.
+
+Cells 10–13 are 4–5 s voice clips, so about a third of each line was lost. Cell 10's
+`LinkTailPGC` is the path into the commentary screen, cell 19.
+
+★ **Presses cutting the commentary on the button screens is AUTHORED, not a defect.** Those
+cells arm their buttons at `s_ptm = 0.122 s`, the first frame, and a real player cuts the
+voice-over on a press as well. User jumps stay immediate.
+
+**Fix.** The reader gains an `aud_drained` input, ANDed into the natural gate only:
+`nat_done = nat_drained && aud_drained`, used by `jump_go`, `seek_jump` and the
+`nat_*_wait` levels, so `drain_tmr` / `DRAIN_WD` still bound it. The level comes from new
+**`dvd/aud_drain.sv`**:
+- the ring has no COMMITTED frame;
+- the decoder is not holding a due frame back (`play_pts_valid && ~draining`);
+- both have held for **~128 ms** (4 AC-3 frames: the frame the dispatcher already popped,
+  one more the codec may hold, and the 512-pair PCM FIFO).
+
+⚠ **The escape is load-bearing.** `consumer_alive` = emu's ring-drain watchdog
+(`aud_bp_armed`). With audio Off, no stream, or a wedged decoder, nothing will ever drain
+the ring, so the level reads drained at once. `DRAIN_WD` alone would have been a 60 s
+stall.
+
+⚠ **Only the natural gate.** `tail_wait` (drain-then-still) and the menu settle stay
+video-only. Otherwise a still menu with a voice-over under it (cells 2–9, 19 here) would
+hold its highlight back for the length of the commentary.
+
+⚠ **The settle was sized by the bench, not by taste.** At 3 frame-times (the first cut) the
+chain bench lost exactly one frame, the one popped but still playing when the flush landed.
+
+⚠ **The clip's LAST frame is still lost, before and after.** `audio_ring` commits a frame's
+length at the NEXT frame start, so the trailing ~32 ms never commits.
+
+⚠ **Menus are in scope,** because the natural gate applies in every domain since the
+2026-09-14 menudrain change. On a keep_vbuf menu hop the audio is not flushed, so the wait
+only costs a held last picture while the tail plays. That is correct presentation, but it
+is new behaviour on looping motion menus. Check T2 and MiB on hardware.
+
+**Gate: `bench/dvd/run_auddrain.sh --red`.**
+- **Chain bench.** `iso_reader_auddrain_tb` runs the real reader → `ps_stream_fifo` →
+  `ps_demux` → `audio_ring` with `dvd_vm`, `flush_ctl` and `aud_drain`, and a consumer that
+  plays one frame per `PLAY_CYC`. It scores **the clip's audio bytes FINISHED PLAYING when
+  the flush lands**, never a signal the fix names.
+  - RED (the shipped wiring, R0): **52,546 / 78,819 bytes, 13 frames lost**.
+  - GREEN: 78,819 / 78,819.
+- **Unit bench.** `aud_drain_tb` pins the terms the chain ties off (`dec_holding`).
+- **Mutations.** M1–M5 each fail exactly their designed arms.
+- **Harness lessons.** Two harness defects came out first, and both read as mutation
+  results:
+  - The arm parser matched the letters of "FAIL" as arm A.
+  - A 256-bit `fail()` string truncated the LEADING `[U3]` tag, so M5 read as "caught by
+    nothing".
+
+⏳ **HW gate.** On the rig, reach the whac-a-mole win and listen to the win clip (cell 10)
+and the commentary screen (cell 19) against the v0.6.1 control. Then check that T2 and MiB
+menus are unregressed and that the Matrix menu → Play transition is unchanged.
+
 ⚠⚠ **A bench bug worth knowing, found by making the bench faster:** the scene clock had
 two drivers — a task's blocking reset and the tick process's nonblocking increment. At 3
 clk per tick the reset survived because the increment ran on one edge in three; at 1 clk
