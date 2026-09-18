@@ -481,6 +481,39 @@ discriminate — their content carries little per-field motion, so both ordering
 the same. The bitstream evidence is uniform across all of them and the fix is correct
 for all; the **visible** benefit concentrates on genuine 60-field FMV.
 
+### The chain is covered end to end, by two benches with different jobs — measured
+
+`run_field_order.sh` stops at **motcomp_picbuf's output pin**: it proves the right FACT
+reaches the display path. It deliberately does not reach the last link — the ordering
+expression in `dvd/resample_addrgen.v:1049-1050` that turns that fact into TOP/BOTTOM
+images.
+
+★ **That link is already covered, and this was MEASURED rather than assumed.** Swapping
+`image_0`/`image_1` in that branch and running `bench/dvd/run_field_phase.sh` fails
+immediately and by name:
+
+```
+  field 211 MISALIGNED:   even (top) source line 0 displayed in the BOTTOM raster field
+  field 212 MISALIGNED: odd (bottom) source line 1 displayed in the    TOP raster field
+  [9-post-hold] FAIL ...   [6-stutter] FAIL ...
+```
+
+★★ **And the swap's failure PATTERN reproduces the whole story inside the test suite:
+`[5-film-3:2]` PASSES under it** — *"16 fields, every one carries the OTHER field's lines
+on the matching raster parity"* — while `[4-seek-break-2]`, `[9-post-hold]` and
+`[6-stutter]` all fail. A 3:2 film arm is insensitive to field order for exactly the
+reason the real library is, so the bench agrees with the field: **the one arm that cannot
+see this defect is the one made of film.**
+
+So no new arm was added there. The division of labour is worth keeping straight for
+whoever touches this next:
+
+| bench | question it answers |
+|---|---|
+| `run_field_order.sh` | does the *right field-order fact* reach `motcomp_picbuf`? |
+| `run_field_phase.sh` | is that fact *honoured all the way to emitted pixels*? |
+| `check_field_order_wiring.py` | is the one port connection between them still right? |
+
 ### Interaction with the corrector above
 
 The emitted order flips from `B,T` to `T,B`. Both alternate, so `alt_break` stays quiet

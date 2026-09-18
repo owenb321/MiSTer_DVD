@@ -197,6 +197,13 @@ module field_order_tb;
    * displayed picture must show BOTTOM first, exactly as before this change. */
   integer expect_mode = -1;
 
+  /* +MINEMIT=N -- how many displayed pictures this arm EXPECTS to reach the
+   * output. The default (half the truth file) is a vacuity guard: a run that
+   * scored almost nothing is a broken fixture, not a verdict. The DROP arm is
+   * the case where fewer emissions is the POINT -- drop_pic_req drops whole
+   * field pairs -- so it states its own floor instead of tripping the guard. */
+  integer min_emit = -1;
+
   // governor stub: one clean 1-cycle output_frame_rd per presented frame.
   reg gov_ack;
   always @(posedge clk)
@@ -234,9 +241,11 @@ module field_order_tb;
                SEAM, emits, (expect_mode >= 0) ? emits : ((emits < n_truth) ? emits : n_truth),
                mism, top_seen, bot_seen, errs);
       // A run that scored almost nothing is a broken fixture, not a pass.
-      if ((emits < ((expect_mode >= 0) ? 8 : n_truth / 2)) || (emits < 8)) begin
-        $display("RESULT: FAIL (only %0d of %0d displayed pictures reached the output -- fixture or harness problem, not a verdict)",
-                 emits, n_truth);
+      if (emits < ((min_emit >= 0) ? min_emit
+                                   : ((expect_mode >= 0) ? 8 : n_truth / 2))) begin
+        $display("RESULT: FAIL (only %0d displayed pictures reached the output, wanted at least %0d -- fixture or harness problem, not a verdict)",
+                 emits, (min_emit >= 0) ? min_emit
+                                        : ((expect_mode >= 0) ? 8 : n_truth / 2));
         $fatal(1);
       end
       if (mism == 0) begin $display("RESULT: PASS"); $finish; end
@@ -274,6 +283,7 @@ module field_order_tb;
       trf = "bench/dvd/test_vobs/field_order_thayer.truth";
     void'($value$plusargs("MAXPIC=%d", maxpic));
     void'($value$plusargs("EXPECT=%d", expect_mode));
+    void'($value$plusargs("MINEMIT=%d", min_emit));
     begin : req_arg
       integer r;
       if ($value$plusargs("REQ=%d", r)) drop_pic_req = r[0];

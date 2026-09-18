@@ -131,17 +131,39 @@ else
 fi
 
 echo "== [4] DROP arm: field pairs drop ATOMICALLY, so the order must survive it =="
-run "$TMP/green_sim" +ES=$FLD.hex +TRUTH=$FLD.truth +REQ=1 | grep -E 'SUMMARY|RESULT' || rc=1
+# ⚠ SCORED WITH +EXPECT, NOT AGAINST THE TRUTH FILE, and the reason is alignment.
+# drop_pic_req drops whole field pairs, so the emitted sequence is a SUBSET of the
+# displayed one and stops lining up with truth[] index for index -- a truth-indexed
+# comparison reports mismatches that are purely the missing entries. The field
+# fixture is 100% TOP-first (field_order_fixture.py refuses one that is not), so
+# "every picture that survives must still show TOP first" is the same property,
+# stated in a way drops cannot misalign. +MINEMIT states the floor explicitly
+# instead of tripping the vacuity guard, for which fewer emissions IS the point.
+run "$TMP/green_sim" +ES=$FLD.hex +EXPECT=1 +REQ=1 +MINEMIT=4 | grep -E 'SUMMARY|RESULT' || rc=1
 
 # ---- the SEAM itself: no module bench can see a wrong port connection --------
 echo "== [5] the seam in rtl/mpeg2/mpeg2video.v =="
 python3 tools/check_field_order_wiring.py || rc=1
 
 # ---- MUTATIONS: each must FAIL, and only its own arm -------------------------
-# ⚠ No mutation for the ~drop_this_picture term in vld.v's latch: it is defence
-# in depth, not load-bearing (a dropped picture's value is always overwritten by
-# the next slot owner before anything is emitted), so no arm can catch its
-# removal. Saying so beats inventing an arm that cannot fail.
+# ⚠ TWO TERMS IN vld.v's LATCH HAVE NO MUTATION HERE, DELIBERATELY. A mutation
+# caught by nothing says nothing about which arm is load-bearing, so naming them
+# beats inventing arms that cannot fail:
+#
+#   ~drop_this_picture -- defence in depth. A dropped picture's value is always
+#     overwritten by the next slot owner before anything is emitted (picbuf
+#     captures prev_i_p_frame_* on the update pulse, and its B emission waits for
+#     the NEXT picture's update), so removing it changes no output.
+#
+#   the mpeg1 arm -- MEASURED uncatchable, and the asymmetry is worth knowing.
+#     STATE_PICTURE_CODING_EXT0 never occurs in MPEG-1 (vld.v:398), so in a pure
+#     MPEG-1 stream first_field_top simply holds its RESET value -- and 0 is
+#     already the right MPEG-1 answer, so deleting the arm changes nothing. That
+#     is NOT true of the neighbouring drop_ps_lat, whose reset value (0) is the
+#     WRONG structure and whose arm therefore IS load-bearing. The arm here guards
+#     only an MPEG-2 -> MPEG-1 transition with no intervening reset. An M5 that
+#     removed it was written, run, and found NOT CAUGHT -- exactly as this
+#     predicts -- and retired rather than kept as noise.
 echo "== MUTATIONS (each must FAIL its own arm) =="
 # The five are independent, so run them concurrently: serially this section is
 # ~5x the runtime of every other arm put together.
@@ -191,12 +213,9 @@ mut M3 "(getbits[21:20] == TOP_FIELD); // field picture" \
 #       Caught by the IMMOVABILITY fixture, which proves that arm has teeth.
 mut M4 "(getbits[21:20] == FRAME_PICTURE) ? getbits[19]" \
        "(getbits[21:20] != FRAME_PICTURE) ? getbits[19]" "$FRM" '^RESULT: FAIL'
-# M5 -- drop the mpeg1 arm.
-mut M5 "else if (clk_en && mpeg1 && (state == STATE_PICTURE_HEADER)) first_field_top <= 1'b0;" \
-       "else if (1'b0) first_field_top <= 1'b0;" "mpeg1" '^RESULT: FAIL'
 
 wait
-for f in M1 M2 M3 M4 M5; do
+for f in M1 M2 M3 M4; do
   if [ -f "$RESDIR/$f" ]; then cat "$RESDIR/$f"; grep -q MUTFAIL "$RESDIR/$f" && rc=1
   else echo "  $f: NO RESULT"; rc=1; fi
 done
