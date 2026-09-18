@@ -63,7 +63,7 @@ module iso_reader_angle_tb;
     // constituents right -- that is exactly how the first cut of the timeline
     // fix shipped a preview clock frozen at one chapter's length.
     wire        cellf_we;
-    wire [6:0]  cellf_idx;
+    wire [7:0]  cellf_idx;
     wire [15:0] cellf_secs;
     integer     cstart [0:15];
     integer     ci;

@@ -2950,10 +2950,18 @@ attribution wanted.
    (`C_PBTM` prefix sum, already in `cell_start_mem`/`cellf_secs`, plus DSI
    `c_eltm`, already used by `transport_hud`) is the model that would cover both
    classes. Its own change, its own HW round.
-2. **`cellf_idx = cell_wi[6:0]`** is a latent 7-bit alias into `seek_bar`'s
-   `cellf_ram[0:127]`. **Measured unreachable:** zero discs in the 958-image
-   library have a played PGC over 128 cells (the histogram tops out in the
-   96…127 bucket with 8 discs).
+2. ⛔ **RETRACTED 2026-09-17 — this non-goal was WRONG, and the measurement behind
+   it sampled the wrong population. See §2g.** It read: *"`cellf_idx =
+   cell_wi[6:0]` is a latent 7-bit alias into `seek_bar`'s `cellf_ram[0:127]`.
+   **Measured unreachable:** zero discs in the 958-image library have a played PGC
+   over 128 cells (the histogram tops out in the 96…127 bucket with 8 discs)."*
+   That census walked the PGC the core plays **by default**; a director's cut
+   reached through the disc's own menu was never in it. Re-measured over EVERY
+   title PGC of EVERY VTS — 34,194 PGCs — **47 exceed 128 cells across 12 discs,
+   worst 200, and several are PGCN 1.** It reached the field as `ULTIMATE_T2`'s
+   special edition (132 cells) showing a 0:00:00 scrub preview. The index is 8 bits
+   and the tables 256 entries now, sized to the format's 255-cell cap rather than
+   to a sample.
 3. **`scrub_ctrl` and `seek_bar` are NOT changed.** Both are correct given a
    correct span; a defensive span floor there would mask the producer.
 
@@ -2965,6 +2973,70 @@ the D-pad always walks buttons in a menu / in-title HLI (scrub/chapter are title
 `!menu_active`). Prev-chapter
 HW-confirmed after the cell-granularity → `c_eltm`-gated fix (2026-07-10). The shipped build
 carries the separate, known output-path chroma fringe (placement-class; not Phase-8 logic).
+
+### 2g. A PGC over 128 cells aliased the shadow tables — the preview read 0:00:00 — 🔧 FIXED (2026-09-17)
+
+> **Status: sim-proven RED/GREEN from the disc's measured shape, mutation-gated,
+> ⏳ HW-confirm pending.** Field report while confirming §2e on the rig:
+> *"seeking seems to work okay in T2, however in the special edition version, the
+> preview timestamp during hold-to-scrub shows 0:00:00 instead of the projected
+> seek time. The preview timestamp is correctly updated when viewing the
+> theatrical version."*
+
+**Measured immediately, and the disc answers it on its own:**
+
+| `ULTIMATE_T2` VTS_01 | cells | |
+|---|---|---|
+| PGCN 1 — theatrical | **122** | fits, preview correct |
+| PGCN 2 — special edition | **132** | aliases |
+| PGCN 3 — special edition | **132** | aliases |
+
+`dvd/seek_time.sv` and `dvd/seek_bar.sv` both shadow the reader's per-cell stream
+into **128-entry** tables addressed by a **7-bit** `cellf_idx`, so cell 128
+overwrote cell 0.
+
+★ **And it is worse than an aliased table, which is why the symptom is a hard
+zero rather than a merely wrong time.** `cell_n` is derived from the LAST index
+written — `131 & 0x7F = 3` — so the count collapsed to **4**. The scan then walked
+four wrapped entries, all holding high RBNs from the end of the title; every
+target fell below all of them; `lo_ok` stayed 0; and the "genuinely below every
+cell" path publishes **zero**. A truncated index does not just alias a table, it
+shrinks the count that indexes it.
+
+⛔ **§2f non-goal 2 called this alias "measured unreachable", and the measurement
+sampled the wrong population.** It said *"zero discs in the 958-image library have
+a played PGC over 128 cells (the histogram tops out in the 96…127 bucket with 8
+discs)"* — a census of the PGC the core plays **by default**. A director's cut
+reached through the disc's own menu was never in it.
+
+**Re-measured over EVERY title PGC of EVERY VTS in the library — 34,194 PGCs:**
+
+| | |
+|---|---|
+| PGCs over 128 cells | **47**, across **12 discs** |
+| worst | **200** (`BREAKING_DAWN_PART_1`, `New_in_Town`, `SEMI_PRO`, `Why_Did_I_Get_Married`, `PINEAPPLE_EXP`) |
+| others | `Julie_and_Julia` 199, `SYBIL_LUDINGTON` 186, `Finding_Nemo` 170, `Dinosaur` 153, `INSOMNIA` 137, `TimeTraveler` 132, `ULTIMATE_T2` 132 |
+| **and several are PGCN 1**, not only menu-reached PGCs | `Dinosaur` VTS 1, `INSOMNIA` VTS 3, `SYBIL_LUDINGTON` VTS 8, `TimeTraveler` VTS 10/11 |
+
+**Fix: 8-bit index, 256 entries, end to end** — `dvd_iso_reader`'s `cellf_idx`
+port (and its own `cell_start_mem[cell_i]` readout, which aliased the LIVE clock
+the same way past cell 127), `emu`'s wire, and both consumers' tables.
+★ **256 sizes the FORMAT, not the sample**: a PGC may carry 255 cells, which is
+also the reader's own `MAXCELL`. Sizing to the measured maximum is the mistake
+that produced this bug.
+
+**Gate: `seek_time_tb` TEST 12** — a 132-cell PGC, the measured special-edition
+shape. RED on the pre-fix module with **`got 000000`**, the reported symptom
+exactly. Mutation **MD-cellidx7** in `run_title_span.sh --red` narrows the port
+back and must fail TEST 12 **and nothing else**.
+
+⚠⚠ **Widening a port silently breaks every bench that drives it narrow, and it
+does NOT present as a width warning you can ignore.** `seek_bar_tb` drove the
+now-8-bit `cellf_idx` from a 7-bit reg and *four* unrelated-looking arms failed
+(T6/T9a/T11/T12f, every notch column shifted one slot), which reads exactly like a
+`seek_bar` regression. The stale side was the declaration. Same family as the
+"a new port floats Z in benches that predate it" trap: after widening a port,
+grep the benches for the signal before believing any failure they report.
 
 ## Multi-angle / Phase 9 (`feature/dvd-multiangle`)
 

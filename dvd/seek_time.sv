@@ -59,7 +59,19 @@
 //    reading 0:00:22 landed at 0:00:34; 0:02:42 landed at 0:04:33). The span is
 //    now the cell's OWN first..last, and a target in a gap clamps to that cell's
 //    end time. Gate: seek_time_tb T10, driving that disc's real table.
-//  - The shadows hold 128 entries and index cell[6:0], so cells >= 128 alias.
+//  - The shadows hold 256 entries and index the cell number in full. They held
+//    128 and indexed cell[6:0] until 2026-09-17, which ALIASED any PGC over 128
+//    cells: cell 128 overwrote cell 0, and because cell_n is derived from the
+//    last index written it collapsed too (131 & 0x7F = 3), so the scan walked
+//    four wrapped entries holding high RBNs, every target fell below all of them,
+//    and the "before the first cell" path published ZERO. Reported from the board
+//    as the hold-to-scrub preview reading 0:00:00 for the whole gesture on
+//    ULTIMATE_T2's SPECIAL EDITION (VTS_01 PGCN 2/3 = 132 cells) while the
+//    theatrical version (PGCN 1 = 122) was correct.
+//    MEASURED over every title PGC of every VTS in the library: 34,194 PGCs, 47
+//    over 128 cells across 12 discs, worst 200. The DVD spec caps a PGC at 255
+//    cells and the reader's own MAXCELL is 255, so 256 entries covers the FORMAT
+//    rather than the sample -- which is the mistake the old sizing made.
 //    That is exactly what the reader's own cur_cell_start does today; it is not
 //    a new limit.
 // ============================================================================
@@ -72,10 +84,10 @@ module seek_time (
 
     // ---- shadow taps (the streams emu already routes to seek_bar) ----------
     input  wire        pm_we,
-    input  wire [6:0]  pm_waddr,
+    input  wire [7:0]  pm_waddr,
     input  wire [7:0]  pm_wdata,          // program -> entry cell, 1-based
     input  wire        cellf_we,
-    input  wire [6:0]  cellf_idx,
+    input  wire [7:0]  cellf_idx,
     input  wire [31:0] cellf_rbn,
     input  wire [15:0] cellf_secs,
     // The cell's LAST sector, on its own later strobe (it is only known at cell
@@ -112,13 +124,13 @@ module seek_time (
     // write to index 0 is the reset point for the entry count -- no separate
     // "maps are being rebuilt" handshake is needed.
     // =====================================================================
-    reg [7:0]  pmap_ram  [0:127];
-    reg [31:0] cellf_ram [0:127];
-    reg [31:0] clast_ram [0:127];
-    reg [15:0] cstart_ram[0:127];
+    reg [7:0]  pmap_ram  [0:255];
+    reg [31:0] cellf_ram [0:255];
+    reg [31:0] clast_ram [0:255];
+    reg [15:0] cstart_ram[0:255];
     reg [7:0]  cell_n, pm_n;
 
-    reg [6:0]  pm_ra, cf_ra, cl_ra;
+    reg [7:0]  pm_ra, cf_ra, cl_ra;
     reg [7:0]  pm_q;
     reg [31:0] cf_q, cl_q;
     reg [15:0] cs_q;
@@ -139,10 +151,11 @@ module seek_time (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin cell_n <= 8'd0; pm_n <= 8'd0; end
         else begin
-            if (cellf_we) cell_n <= (cellf_idx == 7'd0) ? 8'd1
-                                                        : {1'b0, cellf_idx} + 8'd1;
-            if (pm_we)    pm_n   <= (pm_waddr  == 7'd0) ? 8'd1
-                                                        : {1'b0, pm_waddr}  + 8'd1;
+            // ⚠ cell_n/pm_n follow the LAST index written, so a truncated index
+            // does not merely alias the table -- it shrinks the count as well,
+            // which is what turned the >128-cell alias into a hard 0:00:00.
+            if (cellf_we) cell_n <= cellf_idx + 8'd1;
+            if (pm_we)    pm_n   <= pm_waddr  + 8'd1;
         end
     end
 
@@ -251,7 +264,7 @@ module seek_time (
         if (!rst_n) begin
             st <= S_IDLE; sel_l <= SEL_NONE; key_l <= 32'd0;
             prev_secs <= 17'd0; prev_ok <= 1'b0;
-            pm_ra <= 7'd0; cf_ra <= 7'd0; cl_ra <= 7'd0;
+            pm_ra <= 8'd0; cf_ra <= 8'd0; cl_ra <= 8'd0;
             tgt <= 32'd0; scan_i <= 8'd0; lo_ok <= 1'b0;
             lo_rbn <= 32'd0; lo_end <= 32'd0; lo_i <= 8'd0;
             lo_secs <= 16'd0; hi_secs <= 16'd0;
@@ -283,7 +296,7 @@ module seek_time (
                         st <= S_PUB;
                     end
                     SEL_CHAP: begin
-                        pm_ra <= (chap_pgm != 8'd0) ? (chap_pgm[6:0] - 7'd1) : 7'd0;
+                        pm_ra <= (chap_pgm != 8'd0) ? (chap_pgm - 8'd1) : 8'd0;
                         st    <= S_CH_A;
                     end
                     default: begin
@@ -307,7 +320,7 @@ module seek_time (
                             secs <= 17'd0; st <= S_IDLE;
                             prev_ok <= 1'b0;
                         end else begin
-                            cf_ra <= pm_q[6:0] - 7'd1;
+                            cf_ra <= pm_q - 8'd1;
                             st    <= S_CH_C;
                         end
                     end
@@ -318,7 +331,7 @@ module seek_time (
                     end
 
                     // ---- RBN: find the bracketing cell --------------------
-                    S_SC_A: begin cf_ra <= scan_i[6:0]; cl_ra <= scan_i[6:0];
+                    S_SC_A: begin cf_ra <= scan_i; cl_ra <= scan_i;
                                   st <= S_SC_B; end
                     S_SC_B: st <= S_SC_C;           // cf_q / cs_q settling
                     // ★ Walks EVERY cell and keeps the best one at or below the
@@ -340,7 +353,7 @@ module seek_time (
                                 // the bracketing cell's END time is the NEXT
                                 // PROGRAM's start time -- an index step, never a
                                 // physical neighbour.
-                                cf_ra <= lo_i[6:0] + 7'd1;
+                                cf_ra <= lo_i + 8'd1;
                                 st    <= S_HI;
                             end else begin
                                 // genuinely below every cell: nothing to

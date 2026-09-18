@@ -374,7 +374,7 @@ module dvd_iso_reader #(
     // and program maps from these to place its chapter ticks, with no extra
     // read port on the reader's own BRAMs.
     output reg        cellf_we,
-    output reg [6:0]  cellf_idx,
+    output reg [7:0]  cellf_idx,
     output reg [31:0] cellf_rbn,
     // ...and the same cell's START TIME in BINARY SECONDS. cell_start_mem holds
     // it as BCD, but every consumer of a position->time map wants to do
@@ -1559,7 +1559,7 @@ end
 // prefetch / seek scans, so piggybacking there would skew the readout).
 reg [31:0] cs_rd;
 always @(posedge clk) begin
-    cs_rd          <= cell_start_mem[cell_i[6:0]];
+    cs_rd          <= cell_start_mem[cell_i];
     cur_cell_start <= cs_rd;
 end
 
@@ -1925,7 +1925,7 @@ always @(posedge clk)
         cellf_lwe       <= 1'b0;
         cellf_last      <= 32'd0;
         cellf_we        <= 1'b0;
-        cellf_idx       <= 7'd0;
+        cellf_idx       <= 8'd0;
         cellf_rbn       <= 32'd0;
     end else begin
         cellf_we  <= 1'b0;                // 1-cycle stream pulses
@@ -1984,7 +1984,7 @@ always @(posedge clk)
             // stretch: stream the first_sector to seek_bar's shadow map, and the
             // start time to dvd/seek_time.sv's
             cellf_we   <= 1'b1;
-            cellf_idx  <= cell_wi[6:0];
+            cellf_idx  <= cell_wi;
             cellf_rbn  <= {wacc, pb_rdata};
             cellf_secs <= (cell_wi == 8'd0) ? 16'd0
                         : cw_sibling ? blk_secs : run_secs;

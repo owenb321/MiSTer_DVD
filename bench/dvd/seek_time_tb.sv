@@ -19,8 +19,8 @@ module seek_time_tb;
     always #18.5 clk = ~clk;
 
     reg         rst_n = 1'b0;
-    reg         pm_we = 0;    reg [6:0] pm_waddr = 0;  reg [7:0]  pm_wdata = 0;
-    reg         cellf_we = 0; reg [6:0] cellf_idx = 0; reg [31:0] cellf_rbn = 0;
+    reg         pm_we = 0;    reg [7:0] pm_waddr = 0;  reg [7:0]  pm_wdata = 0;
+    reg         cellf_we = 0; reg [7:0] cellf_idx = 0; reg [31:0] cellf_rbn = 0;
     reg  [15:0] cellf_secs = 0;
     reg         cellf_lwe = 0; reg [31:0] cellf_last = 0;
     reg  [15:0] title_secs = 0;
@@ -97,7 +97,7 @@ module seek_time_tb;
             for (i = 0; i < ncells; i = i + 1) begin
                 @(negedge clk);
                 cellf_we   = 1'b1;
-                cellf_idx  = i[6:0];
+                cellf_idx  = i[7:0];
                 cellf_rbn  = BASE + i * STEP;
                 cellf_secs = i * dur;
                 @(negedge clk);
@@ -111,7 +111,7 @@ module seek_time_tb;
             for (i = 0; i < nprog; i = i + 1) begin
                 @(negedge clk);
                 pm_we    = 1'b1;
-                pm_waddr = i[6:0];
+                pm_waddr = i[7:0];
                 pm_wdata = (i * 2) + 1;          // 1-based entry cell: 1,3,5,7
                 @(negedge clk);
                 pm_we    = 1'b0;
@@ -150,7 +150,7 @@ module seek_time_tb;
             end
             for (i = 0; i < nprog; i = i + 1) begin
                 @(negedge clk);
-                pm_we    = 1'b1; pm_waddr = i[6:0]; pm_wdata = (i * 2) + 1;
+                pm_we    = 1'b1; pm_waddr = i[7:0]; pm_wdata = (i * 2) + 1;
                 @(negedge clk);
                 pm_we    = 1'b0;
             end
@@ -331,6 +331,46 @@ module seek_time_tb;
         // and the first program's own start still reads zero
         ask_bar(BASE + (NC-1)*STEP);
         chk_t(24'h00_00_00, "late0: program cell 0 start = 0:00:00");
+
+
+        // ------------------------------------------------------------------
+        // TEST 12: a PGC with MORE THAN 128 CELLS.
+        //
+        // Field report on ULTIMATE_T2, 2026-09-17: with the SPECIAL EDITION
+        // playing, the hold-to-scrub preview reads 0:00:00 for the whole gesture;
+        // on the theatrical version it tracks the target. MEASURED on the disc --
+        // VTS_01 PGCN 1 (theatrical) has 122 cells and PGCN 2 / PGCN 3 (the two
+        // special editions) have 132.
+        //
+        // The shadow tables here are cellf_ram[0:127] addressed by a 7-bit
+        // cellf_idx, so cell 128 overwrites cell 0. Worse, cell_n is derived from
+        // the LAST index written -- 131 & 0x7F = 3 -- so it collapses to 4, the
+        // scan walks only those four wrapped entries, they all hold high RBNs
+        // from the end of the title, every target is below all of them, lo_ok
+        // stays 0 and the "before the first cell" path publishes ZERO. That is
+        // why the symptom is a hard 0:00:00 rather than a merely wrong time.
+        //
+        // ⛔ docs/dvd_nav.md 2f non-goal 2 called this alias "measured
+        // unreachable: zero discs in the 958-image library have a played PGC over
+        // 128 cells". That census sampled the PGC the core plays BY DEFAULT; a
+        // director's cut reached through the disc's own menu was never in it.
+        // Re-measured over EVERY title PGC of every VTS in the library: 34,194
+        // PGCs, 47 of them over 128 cells across 12 discs, worst 200
+        // (BREAKING_DAWN, New_in_Town, SEMI_PRO, Why_Did_I_Get_Married...), and
+        // several are PGCN 1. 200 < 256, and the DVD spec caps a PGC at 255
+        // cells, so an 8-bit index covers the format, not just the library.
+        $display("TEST 12: a 132-cell PGC (ULTIMATE_T2's special edition)");
+        stream_title(132, 4, 60);          // 132 x 60 s = 2:12:00
+
+        // cell 3 covers 3*STEP..4*STEP-1 and starts at 3*60 = 0:03:00, so its
+        // midpoint is 0:03:30. With the 7-bit alias this reads 0:00:00.
+        ask_bar(BASE + 3*STEP + STEP/2);
+        chk(prev_ok, "132 cells: midpoint resolved");
+        chk_t(24'h00_03_30, "132 cells: mid cell 3 = 0:03:30");
+
+        // and a target deep in the title, past where the wrap would have landed
+        ask_bar(BASE + 130*STEP + STEP/2);
+        chk_t(24'h02_10_30, "132 cells: mid cell 130 = 2:10:30");
 
         if (errors == 0) $display("\nseek_time_tb: ALL TESTS PASSED");
         else begin

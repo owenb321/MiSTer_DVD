@@ -252,6 +252,47 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **A PGC OVER 128 CELLS ALIASED THE SEEK SHADOW TABLES AND THE SCRUB PREVIEW READ
+  0:00:00 (2026-09-17, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN from the
+  disc's measured shape, mutation-gated, ⏳ HW-confirm pending.** Field report while
+  confirming the seamless-branch seek on the rig: *"seeking seems to work okay in T2,
+  however in the special edition version, the preview timestamp during hold-to-scrub shows
+  0:00:00 instead of the projected seek time. The preview timestamp is correctly updated
+  when viewing the theatrical version."*
+  ★ **The disc answers it immediately: `ULTIMATE_T2` VTS_01 PGCN 1 (theatrical) has 122
+  cells; PGCN 2 and 3 (the special editions) have 132.** `seek_time` and `seek_bar` both
+  shadowed the reader's per-cell stream into **128-entry** tables on a **7-bit**
+  `cellf_idx`, so cell 128 overwrote cell 0.
+  ★★ **AND A TRUNCATED INDEX DOES NOT JUST ALIAS A TABLE — IT SHRINKS THE COUNT THAT
+  INDEXES IT, which is why the symptom is a hard zero rather than a wrong time.** `cell_n`
+  follows the LAST index written (`131 & 0x7F = 3`), so it collapsed to **4**; the scan
+  walked four wrapped entries holding high RBNs from the END of the title; every target fell
+  below all of them; `lo_ok` stayed 0; and the "genuinely below every cell" path publishes
+  **zero**.
+  ⛔⛔ **`docs/dvd_nav.md` §2f non-goal 2 called this alias "measured unreachable", AND THE
+  MEASUREMENT SAMPLED THE WRONG POPULATION** — it counted the PGC the core plays BY DEFAULT,
+  so a director's cut reached through the disc's own menu was never in it. Re-measured over
+  EVERY title PGC of EVERY VTS: **34,194 PGCs, 47 over 128 cells across 12 discs, worst
+  200** (BREAKING_DAWN, New_in_Town, SEMI_PRO, Why_Did_I_Get_Married, PINEAPPLE_EXP;
+  Julie_and_Julia 199, SYBIL_LUDINGTON 186, Finding_Nemo 170, Dinosaur 153, INSOMNIA 137,
+  TimeTraveler 132) — **and several are PGCN 1**, not only menu-reached PGCs. The non-goal
+  is retracted in place.
+  **Fix = an 8-bit index and 256 entries end to end** — the reader's `cellf_idx` port, its
+  own `cell_start_mem[cell_i]` readout (which aliased the LIVE clock the same way past cell
+  127), emu's wire, and both consumers' tables. ★ **256 sizes the FORMAT, not the sample:** a
+  PGC may carry 255 cells, which is the reader's own `MAXCELL`. Sizing to a measured maximum
+  is precisely the mistake that produced this bug.
+  **Gate: `seek_time_tb` TEST 12** (a 132-cell PGC, the measured special-edition shape) —
+  RED with **`got 000000`**, the reported symptom exactly; mutation **MD-cellidx7** in
+  `run_title_span.sh --red` narrows the port back and must fail TEST 12 and nothing else.
+  ⚠⚠ **Widening a port silently breaks every bench that drives it narrow.** `seek_bar_tb`
+  fed the now-8-bit `cellf_idx` from a 7-bit reg and FOUR unrelated-looking arms failed
+  (T6/T9a/T11/T12f — every notch column shifted one slot), which reads exactly like a
+  `seek_bar` regression when the stale thing was the bench's declaration. Same family as
+  [[new-rtl-port-floats-z-in-benches]]: after widening a port, grep the benches for the
+  signal before believing any failure they report.
+  Detail: **`docs/dvd_nav.md` §2g**.
+
 - ✅ **SEEKING INTO A SEAMLESS-BRANCH BLOCK LANDED IN THE OTHER CUT AND STAYED THERE
   (2026-09-17, issue #49, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN over the
   real discs' measured shapes, 6 mutations each failing EXACTLY its own arms, and

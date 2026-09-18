@@ -198,6 +198,16 @@ if [ "${1:-}" = "--red" ]; then
         "s@if (scan_i >= cell_n) begin@if ((scan_i >= cell_n) || (cf_q > tgt)) begin@"
     # MC keeps the full walk but takes ANY cell at or below the target rather
     # than the NEAREST one -- wrong whenever a later-index cell sits lower.
+    # The 7-bit cell index the shadows used until 2026-09-17. A PGC over 128
+    # cells then aliased -- and because cell_n follows the LAST index written it
+    # collapsed with it -- so the scan walked a handful of wrapped high-RBN
+    # entries, every target fell below all of them, and the preview published
+    # ZERO. Reported from the board as ULTIMATE_T2's SPECIAL EDITION (132 cells)
+    # showing 0:00:00 for the whole scrub gesture while the theatrical version
+    # (122 cells) tracked correctly. Must fail TEST 12 and nothing else.
+    red_time MD-cellidx7 \
+        's|input  wire \[7:0\]  cellf_idx,|input  wire [6:0]  cellf_idx,|'
+
     red_time MC-firstmatch \
         "s@if ((cf_q <= tgt) \&\& (!lo_ok || (cf_q > lo_rbn))) begin@if (cf_q <= tgt) begin@"
 fi
