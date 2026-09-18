@@ -1566,8 +1566,10 @@ dropped at the seek produce the same symptom, and `av_drift_ms` / `play_err_ms` 
 
 ### A natural transition waits for the AUDIO too (2026-09-18, branch `fix/cell-still-av`)
 
-🔧 **Sim-proven RED/GREEN, 6 arms each caught by exactly its own arms; ⏳ HW-confirm
-pending.** This is the "commentary is cut off" half above. The lip-sync half (one round's
+✅ **Sim-proven RED/GREEN, 6 arms each caught by exactly its own arms; HW round passed
+2026-09-18** (build `DVD_cellstillav_20260918_1928.rbf`, with the head-loss fix below): every
+win clip complete, chapter skips both ways clean, T2/MiB menus unregressed. This is the
+"commentary is cut off" half above. The lip-sync half (one round's
 speech) is a separate question and is still open.
 
 ★ **The offline structure settled the mechanism before the rig was touched.** Dumping
@@ -1642,9 +1644,8 @@ is new behaviour on looping motion menus. Check T2 and MiB on hardware.
   - A 256-bit `fail()` string truncated the LEADING `[U3]` tag, so M5 read as "caught by
     nothing".
 
-⏳ **HW gate.** On the rig, reach the whac-a-mole win and listen to the win clip (cell 10)
-and the commentary screen (cell 19) against the v0.6.1 control. Then check that T2 and MiB
-menus are unregressed and that the Matrix menu → Play transition is unchanged.
+✅ **HW round passed 2026-09-18** (see below: the clips were confirmed complete on the
+build that also carries the head-loss fix, and T2/MiB menus are unregressed).
 
 ⚠⚠ **THE REPORTED SYMPTOM WAS NOT THIS DEFECT, and the first hardware round said so.** The
 maintainer flashed the build above: *"it still cuts off a bit of audio at the beginning.
@@ -1654,8 +1655,10 @@ its bench measures a real loss (13 frames), but it is not what the user heard.
 
 ### A picture from before the flush must not set the clock (2026-09-18, same branch)
 
-🔧 **Root-caused from rig telemetry, sim-proven RED/GREEN on the real picbuf; ⏳
-HW-confirm pending.**
+✅ **Root-caused from rig telemetry, sim-proven RED/GREEN on the real picbuf, and
+HW-CONFIRMED 2026-09-18** (build `DVD_cellstillav_20260918_1928.rbf`, SEED 9, clk_dec
+88.22/90.04). Maintainer: *"'good' is now audible, as are the rest of the winning audio
+clips"*. Chapter skips in both directions are clean and the T2/MiB menus unregressed.
 
 ★ **The instrument came first.** Telemetry word 5 (`vid_err`, retired by PR #63) now
 carries the audio decoder's discard counters, `{skip[7:0], catch-up[3:0], re-arms[3:0]}`.
@@ -1718,9 +1721,7 @@ orders, then gated):**
 - **Five picbuf benches** tie the new port (`seek_realign_tb` gets the real flush
   level).
 
-⏳ **HW gate:** every whac-a-mole round's "good job" (and any "good" clip) complete, with
-telemetry showing `reanchors` 1, not 2, after a hit. Then confirm chapter skips, both
-directions, on a movie, and T2/MiB menus unregressed.
+✅ **HW gate passed** as above.
 
 ⚠⚠ **A bench bug worth knowing, found by making the bench faster:** the scene clock had
 two drivers — a task's blocking reset and the tick process's nonblocking increment. At 3

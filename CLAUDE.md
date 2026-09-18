@@ -252,9 +252,12 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **A NATURAL TRANSITION DISCARDED THE AUDIO ITS CELL STILL HAD TO PLAY — "Shaggy's
+- ✅ **A NATURAL TRANSITION DISCARDED THE AUDIO ITS CELL STILL HAD TO PLAY — "Shaggy's
   commentary is cut off" (2026-09-18, branch `fix/cell-still-av`); sim-proven RED/GREEN,
-  6 arms each caught by exactly its own arms, ⏳ HW-confirm pending.**
+  6 arms each caught by exactly its own arms, and ✅ HW-CONFIRMED 2026-09-18** together
+  with the head-loss fix below (build `DVD_cellstillav_20260918_1928.rbf`, SEED 9,
+  clk_dec 88.22/90.04 — passing, the thinnest margin of the branch): every win clip
+  complete, chapter skips both ways clean, T2/MiB menus unregressed.
   ★ **Settled offline from the disc before the rig was touched.** Scooby-Doo 2 VTS_02
   PGCN 26 authors its voice clips as cells with **ONE video PTS and 4–30 s of audio**
   (cells 1, 10–13, 21 end in a cell command; 2–9, 19, 22 are `still=255` button screens
@@ -277,8 +280,9 @@ worse maintenance burden than targeted in-place edits. So:
   tie `.aud_drained(1'b1)`. Detail: **`docs/dvd_nav.md`** "A natural transition waits for
   the AUDIO too".
   ⚠⚠ **THAT WAS NOT THE REPORTED SYMPTOM — the first HW round said *"'good job' but we
-  just hear 'job'"*, on v0.6.1 too, once per round: a HEAD loss.** Root cause (🔧
-  sim-proven, ⏳ HW-confirm pending), found with a new instrument: **telemetry word 5 now
+  just hear 'job'"*, on v0.6.1 too, once per round: a HEAD loss.** Root cause (sim-proven,
+  ✅ **HW-CONFIRMED 2026-09-18** — maintainer: *"'good' is now audible, as are the rest of
+  the winning audio clips"*), found with a new instrument: **telemetry word 5 now
   carries the audio decoder's discard counters** (`{skip, catch-up, re-arms}`; `vid_err`
   was dead since #63). They read **0** at every clip, which ruled out the decoder. The
   transition showed `reanchors=2`, `disp_lag −2024 ms`, and audio held 1.25 s.
