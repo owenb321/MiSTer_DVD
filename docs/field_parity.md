@@ -488,8 +488,15 @@ in steady state, but the initial content/raster phase flips — so `par_fb` spen
 inserted field** (`PAR_CONFIRM` ≈ 0.5 s) healing it once after a mode change or seek.
 That is by design and is exactly what `field_phase_tb`'s invariant C guards.
 
-⚠ The tff-ordered branches are also reached on a **progressive display with
-`deinterlace = 0`** (bob), so this corrects HDMI-bob output too, not only the CRT.
+⚠ **Scope across outputs, checked in the RTL rather than assumed.** `dvd/emu.sv:4515`
+drives `deinterlace = ~fields_prev` while the regfile's `interlaced` bit IS `fields_prev`,
+so on this core the two are exact complements and the combination `~deinterlace &&
+~interlaced` never occurs. That makes the branch selection clean: a **Progressive** raster
+always takes `resample_addrgen.v:1018`'s single woven `FRAME`, where no field-order
+question arises; the tff-ordered branches (`:1033`, `:1047`) are reached **exactly when the
+interlaced raster is up**. So the fix applies whenever `Video Output = Interlaced` (or Auto
+resolving to it) — which is **both the analog CRT and HDMI**, since that mode also feeds
+HDMI 480i through ascal. It is not CRT-only, and it changes nothing in Progressive.
 
 ⚠ **Telemetry semantics moved with it:** `disp_sched.sv`'s `dbg_flags` → `dvd_telem.sv`
 word 14 "tff" now reads the *display-order* verdict on field-coded content, not the raw

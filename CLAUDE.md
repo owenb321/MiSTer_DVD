@@ -323,8 +323,16 @@ worse maintenance burden than targeted in-place edits. So:
   discriminate — their content carries little per-field motion, so both orderings measure
   the same. The bitstream evidence is uniform and the fix is correct for all; the VISIBLE
   benefit concentrates on genuine 60-field FMV.
-  ⚠ The tff-ordered branches are also reached on a **progressive display with
-  `deinterlace=0`** (bob), so this corrects HDMI-bob output too, not only the CRT.
+  ⚠ **Scope across outputs, CHECKED IN THE RTL rather than taken from a review claim:**
+  `emu.sv:4515` drives `deinterlace = ~fields_prev` while the regfile's `interlaced` bit IS
+  `fields_prev`, so the two are exact complements and `~deinterlace && ~interlaced` never
+  occurs here. A **Progressive** raster therefore always takes `resample_addrgen.v:1018`'s
+  single woven FRAME (no field-order question), and the tff-ordered branches are reached
+  EXACTLY when the interlaced raster is up — i.e. the fix applies in `Video Output =
+  Interlaced` on **both the CRT and HDMI** (that mode feeds HDMI 480i via ascal), and
+  changes nothing in Progressive. ⛔ An earlier draft of this bullet said the branches are
+  "also reached on a progressive display with deinterlace=0 (bob)"; that combination does
+  not exist on this core.
   ⚠ **Telemetry semantics moved:** `dvd_telem.sv` word 14 "tff" now reads the display-order
   verdict on field-coded content, not the raw syntax element.
   ⚠ Expected transient: the emitted order flips B,T → T,B, so `par_fb` spends ONE inserted
