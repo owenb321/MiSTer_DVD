@@ -626,8 +626,14 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* vld - motcomp_picbuf interface */
   wire       progressive_sequence;
   wire       progressive_frame;
-  wire       top_field_first;
+  /* DVD-FORK FIX (field-coded field order): the RAW top_field_first syntax
+   * element has no consumer here any more. The display path takes vld's
+   * first_field_top instead (see the seam at motcomp, below), and the drop
+   * ledger gets the dropped picture's own raw tff on the separate skip_tff
+   * port. vld's top_field_first output is left deliberately unconnected
+   * rather than carried as a dangling wire. */
   wire       repeat_first_field;
+  wire       first_field_top;        // DVD-FORK FIX (field-coded field order): vld's display-order verdict
 
   /*
    * Interface with frame store is through fifo's.
@@ -1132,8 +1138,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .dmv_1_1(dmv_1_1),                                       // to motcomp
     .progressive_sequence(progressive_sequence),             // to resample
     .progressive_frame(progressive_frame),                   // to resample
-    .top_field_first(top_field_first),                       // to resample
+    .top_field_first(),                                      // DVD-FORK FIX: raw syntax element — deliberately unconsumed, see above
     .repeat_first_field(repeat_first_field),                 // to resample
+    .first_field_top(first_field_top),                       // DVD-FORK FIX (field-coded field order): to motcomp_picbuf, below
     .vld_err(vld_err),
     .drop_pic_req(drop_pic_req),                             // DVD-FORK (frame-drop O[19]): from frame_drop_ctl
     .drop_pic_ack(drop_pic_ack),                             // DVD-FORK (frame-drop O[19]): to frame_drop_ctl
@@ -1421,7 +1428,16 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .output_pts_2nd(output_pts_2nd),
     .progressive_sequence(progressive_sequence),             // from vld
     .progressive_frame(progressive_frame),                   // from vld
-    .top_field_first(top_field_first),                       // from vld
+    /* DVD-FORK FIX (field-coded field order, 2026-09-18 — THE SEAM): motcomp
+     * forwards this straight to motcomp_picbuf, which stores it as
+     * output_top_field_first — and that is what dvd/resample_addrgen.v reads to
+     * order the two field images (and what nxt_first_top predicts with). So this
+     * port must carry WHICH FIELD DISPLAYS FIRST, not the raw syntax element:
+     * on a field-coded picture the spec forces top_field_first to 0 and the real
+     * order is the parity coded first. vld.v derives that as first_field_top and
+     * the two are identical on every frame-coded picture, so nothing but
+     * field-coded content can move. See vld.v's first_field_top comment. */
+    .top_field_first(first_field_top),                       // from vld — DISPLAY ORDER, not the syntax element
     .repeat_first_field(repeat_first_field),                 // from vld
     .last_frame(last_frame),                                 // from vld
     .chroma_format(chroma_format),                           // from vld

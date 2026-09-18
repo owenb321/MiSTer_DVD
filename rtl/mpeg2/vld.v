@@ -49,6 +49,7 @@ module vld(clk, clk_en, rst,
   frame_rate_code, frame_rate_extension_n, frame_rate_extension_d,                          // interface with regfile
   aspect_ratio_information,
   progressive_sequence, progressive_frame, repeat_first_field, top_field_first,             // interface with resample
+  first_field_top,                                                                          // DVD-FORK FIX (field-coded field order): which field DISPLAYS first
   vld_err,                                                                                  // asserted when vld code parse error
   drop_pic_req, drop_pic_ack, drop_pic_rff, drop_pic_field,                                 // DVD-FORK (frame-drop governor O[19] + field-pair drop)
   dbg_drop_probe,                                                                           // DVD-FORK DEBUG (2026-08-05): in-vld drop-path probe (Thayer drops=0)
@@ -2466,6 +2467,66 @@ module vld(clk, clk_en, rst,
     else if (clk_en && (state == STATE_PICTURE_CODING_EXT0)) drop_rff_lat <= getbits[13];
     else if (clk_en && mpeg1 && (state == STATE_PICTURE_HEADER)) drop_rff_lat <= 1'b0; // DVD-FORK FIX (mpeg1): no coding ext — rff is 0 for every MPEG-1 picture
     else drop_rff_lat <= drop_rff_lat;
+
+  /* DVD-FORK FIX (field-coded field order, 2026-09-18 — Thayer's Quest "not
+   * interlaced properly on a CRT"): WHICH FIELD IS DISPLAYED FIRST.
+   *
+   * ★ top_field_first IS NOT THE DISPLAY ORDER ON A FIELD-CODED PICTURE, AND THE
+   * SPEC IS WHY. ISO 13818-2 6.3.10 requires top_field_first == 0 whenever
+   * picture_structure is a FIELD picture — the syntax element carries no
+   * information there, because the display order is already given by WHICH FIELD
+   * IS CODED FIRST. dvd/resample_addrgen.v built its image schedule from
+   * top_field_first alone, so every field-coded picture emitted BOTTOM-then-TOP
+   * unconditionally. On film that costs nothing (both fields of a 3:2 frame are
+   * the same instant — docs/single_raster_analog.md), which is why the library
+   * never showed it; on TRUE-interlaced field-coded content the two fields are
+   * distinct instants 1/59.94 s apart, so the display sequence becomes
+   * t1,t0,t3,t2,... = the reported motion defect.
+   *
+   * MEASURED on Thayer's Quest (9 of its 11 VTSes are field-coded): 97.5 % of
+   * field pairs are coded TOP first while tff reads 0 on 100 % of them; ffmpeg
+   * independently reports top_field_first=1; and a pixel-level field-sequence
+   * total-variation measurement scores the TOP-first ordering 1.3-1.5x smoother
+   * with a zig-zag figure of 0.04 against 0.6. See docs/field_parity.md.
+   *
+   * ⚠ THE pic_hdr_upd GATE IS LOAD-BEARING. flags_commit pulses at EVERY
+   * picture's coding extension, the pair's SECOND field included — and that
+   * field's picture_structure is the OPPOSITE parity, so an ungated latch would
+   * clobber this with its own inverse on every pair. pic_hdr_upd marks the field
+   * that owns the picbuf slot (hdr_upd_slot: a frame picture, or a pair's first
+   * field), which is exactly the one whose parity IS the display order.
+   * ~drop_this_picture matches flags_commit's own gating, so the value committed
+   * always belongs to a picture that owns a slot.
+   *
+   * Reads getbits at EXT0 like drop_ps_lat/drop_rff_lat rather than the loadreg
+   * outputs, so it samples the same bits in the same cycle: extension offset k is
+   * getbits[23-k], giving picture_structure = getbits[21:20] (offset 2, width 2)
+   * and top_field_first = getbits[19] (offset 4). Codes are in vld_codes.v.
+   *
+   * On a FRAME picture this is top_field_first exactly — that identity is what
+   * makes every frame-coded disc in the library structurally immovable by this
+   * change, and it is asserted directly by the bench.
+   *
+   * ⛔ DELIBERATELY NOT (* preserve *), unlike drop_ps_lat/drop_rff_lat beside it.
+   * The stated reason for those (line 119) is that they are PRIVATE COPIES of a
+   * shared register and the fitter must not merge them back into the export copy.
+   * This register duplicates nothing — it has one dedicated fan-out — so that
+   * hazard does not apply, and applying the attribute without its reason is how
+   * an idiom rots into noise. Do not add it without a measurement that wants it.
+   *
+   * ⚠ ~drop_this_picture is DEFENCE IN DEPTH, not load-bearing: a dropped
+   * picture's value is always overwritten by the next slot owner's own EXT0
+   * before anything is emitted (picbuf captures prev_i_p_frame_* on the update
+   * pulse, and its B emission waits for the NEXT picture's update). No bench arm
+   * can catch this term's removal — do not invent a mutation for it. */
+  output reg       first_field_top;
+  always @(posedge clk)
+    if (~rst) first_field_top <= 1'b0;
+    else if (clk_en && (state == STATE_PICTURE_CODING_EXT0) && pic_hdr_upd && ~drop_this_picture)
+      first_field_top <= (getbits[21:20] == FRAME_PICTURE) ? getbits[19]                 // frame picture: the syntax element means what it says
+                                                           : (getbits[21:20] == TOP_FIELD); // field picture: the parity coded first
+    else if (clk_en && mpeg1 && (state == STATE_PICTURE_HEADER)) first_field_top <= 1'b0; // DVD-FORK FIX (mpeg1): no coding ext, and tff is 0 for every MPEG-1 picture
+    else first_field_top <= first_field_top;
 
   /* DVD-FORK FIX (round 11, 2026-07-04 — THE STALE DISPLAY FLAGS, the real
    * lip-sync engine): update_picture_buffers fires right after
