@@ -425,6 +425,17 @@ If you want more control or can't build libdvdread for MiSTer's ARM:
 - [x] Link libdvdcss into HPS program
 - [x] Replace `open()`/`read()` with `dvdcss_open()`/`dvdcss_read(DVDCSS_READ_DECRYPT)`
 - [x] Test with both unencrypted ISOs and CSS-encrypted rips
+- [x] ✅ Register every VOB. The 64-entry table dropped OZ's VTS_20 sneak peeks, which
+      then played scrambled (issue #112, HW-CONFIRMED 2026-09-19).
+      `docs/physical_disc.md` "Every VOB must be in the table".
+- [ ] **NEXT: copy-protection hang on physical discs.** Deliberately unreadable sectors
+      (OZ, `VTS_08_1.VOB` RBN ~2000+) cost about 30 s each and block the Main. The Disc
+      Menus Off road is certain: a malformed title PGC goes to the `S_FINAL2` linear
+      fallback and streams from RBN 0. The Disc Menus On road is not yet known. Step 1:
+      a diagnostic Main that logs the core's seek LBAs, then a rig run. Step 2: stop the
+      linear fallback from streaming a VTS that has a PGC table, and raise `pgc_error`
+      instead. Step 3 (maybe): fail unreadable sectors fast in the Main. Detail:
+      `docs/physical_disc.md`.
 
 **Checkpoint:** Drop an ISO of any commercial DVD onto the SD card. Core automatically
 finds the main feature, navigates to it, and plays from start.

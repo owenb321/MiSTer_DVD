@@ -297,6 +297,30 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **A VOB MISSING FROM THE MAIN'S TABLE PLAYED SCRAMBLED, AND THE TABLE HELD 64 —
+  issue #112 (2026-09-19, branch `fix/css-vob-table`); host-proven RED/GREEN, 4
+  mutations each caught by their own arm, and ✅ HW-CONFIRMED 2026-09-19 by the
+  maintainer.** On the physical *OZ: The Great and Powerful* DVD, the sneak peeks after
+  the language menu now play clean, with no `CSS ENCRYPTED`.
+  ★ The disc files one 7-part feature extent under 11 title sets, so it lists **91**
+  `.VOB` entries. `collect_vobs()` stopped at 64 without a word. VTS_20 fell off the
+  end, `vob_index()` returned −1, and its sectors were read **raw**, so the banner was a
+  true positive. Fix in `main/support/dvd/dvd_css.cpp`: collapse identical
+  `{start, nsec}` aliases (91 → 21), `MAX_VOBS 1024` (a spec-maximum disc has 991),
+  and log any drop. This is the case the "design to the spec maximum" rule above was
+  written for.
+  ⛔ **The zero-key theory is REFUTED, not merely unproven.** The feature key is
+  non-zero and identical from all 7 part starts, and libdvdcss output keyed at the VOB
+  start is byte-identical to the MakeMKV ISO. Keying at the VOB start is correct.
+  ⚠ **OPEN, and the next piece of work: the disc's unreadable protection zone** (from
+  about RBN 2000 of `VTS_08_1.VOB`) costs about 30 s per sector and blocks the Main.
+  The Disc Menus Off road is certain (malformed VTS_08 PGCN 1 → `S_FINAL2` linear
+  fallback from RBN 0); the Disc Menus On road is unknown. Gate:
+  `main/tests/run_tests.sh --red` arms [9]–[11]. Detail: **`docs/physical_disc.md`**
+  "Every VOB must be in the table".
+  ★ Found en route: **the MiSTer has no `pkill`**, so the HIL harness had been leaking a
+  key daemon on every deploy (18 found alive). `tools/mister.py` `kill_exact()`.
+
 - ✅ **PAUSING TRUE-INTERLACED VIDEO FLICKERED BETWEEN ITS TWO FIELDS — IT NOW HOLDS
   ONE FIELD (2026-09-18, branch `fix/pause-field-still`); sim-proven RED/GREEN, 8
   mutations each failing in its own phase; built `DVD_fieldstill_20260919_0209.rbf`,

@@ -309,6 +309,63 @@ that is the 23-VOB pre-crack, not the bug.
 (614926), so it is primed at mount and even the broken build never cracks there. Chapters
 2 and up are the test.
 
+## Every VOB must be in the table (issue #112)
+
+✅ **FIXED and HW-CONFIRMED 2026-09-19** (branch `fix/css-vob-table`). **Field report:**
+the physical *OZ: The Great and Powerful* DVD (Blu-ray combo pack) showed green garbage
+and `CSS ENCRYPTED` right after the language menu. The MakeMKV ISO of the same disc
+played cleanly.
+
+**Cause.** `g_vobs[]` held **64** entries, and `collect_vobs()` dropped the rest silently.
+A VOB missing from the table makes `vob_index()` return −1, so `dvd_css_read()` treats its
+sectors as filesystem data and reads them **raw**. The core then really does receive
+scrambled sectors, which makes the banner a true positive. The disc lists **91** `.VOB`
+entries because it files **one 7-part feature extent under 11 title sets** (VTS_08..18
+all point at the same LBAs, which is also why `dvdbackup` "copies more than the disc
+holds" on it). The sneak peeks in VTS_20, played right after the language menu, sorted
+past entry 64. `/tmp/dvdcss.log` read `64 VOBs, 64 title keys`.
+
+**Fix.**
+- Collapse identical `{start, nsec}` entries: an alias is the same sectors under the same
+  key, so it adds nothing. 91 entries become 21 on this disc.
+- Size the table for a spec-maximum disc: 99 title sets × (menu + 9 parts) + VMG = 991
+  VOBs, so `MAX_VOBS 1024` (8 KB).
+- Log any drop, never truncate silently.
+
+Gate: `main/tests/run_tests.sh --red`, arms [9]–[11]. Arm [9] is the disc's real 91-entry
+layout. The shipped table (`css-vob-table-shipped`) fails it on VTS_20 and nowhere
+earlier.
+
+⛔ **Ruled out by measurement; do not re-derive.** The first theory was that the title
+key was taken inside the protection zone at the feature VOB's start, giving a zero key
+(libdvdcss's cracker gives up on unencrypted or non-pack blocks and reports an
+"unencrypted title"). But the cached feature key is non-zero (`c1:62:e1:44:3e`), and it
+came out identical from all 7 part starts. And sectors decrypted through libdvdcss with a
+key taken **at the VOB start** are **byte-identical** to the MakeMKV ISO, at cell 0 and
+mid-film. Keying at the VOB start is correct here.
+
+★ **The measurement recipe (reusable).**
+1. Compare `/tmp/dvdcss.log`'s VOB count with the disc's `.VOB` entry count.
+2. Read the per-disc key files under `/media/fat/dvdcss/cache/<disc>/` (file name = the
+   key block in hex; content `00:00:00:00:00` = a zero key).
+3. Decrypt a few hundred sectors on the MiSTer with python `ctypes` against the installed
+   `libdvdcss.so.2`, pointing `DVDCSS_CACHE` at that cache, and `cmp` them against a
+   known-good rip.
+
+⚠ **Open, separate: the protection zone hangs the Main.** On this disc, sectors from
+about RBN 2000 of `VTS_08_1.VOB` are deliberately unreadable: each read returns
+`03/11/00` after roughly 30 s of drive retries, with the Main blocked in state D. MakeMKV
+fills them with `0xEF`, so an ISO never hangs. No real PGC cell starts before RBN 4112.
+VTS_08's PGCN 1 is malformed: 72 cells, `cell_playback_offset = 0`, and 12 pre / 9 post
+commands.
+- **Disc Menus off:** Auto picks VTS_08 PGCN 1, and `S_PGC_CELLCHK` sends a cell-less
+  title PGC to the `S_FINAL2` linear whole-VTS fallback, which streams from RBN 0 into the
+  zone.
+- **Disc Menus on:** the stub's own PRE bounces to a menu (`CallSS VMGM pgc 2`), yet it
+  was still seen once (2026-09-19) by a road not yet identified.
+
+Next step: a Main that logs the core's seek LBAs, then a rig run. See `docs/roadmap.md`.
+
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 
 A drive with **no region set** refuses the CSS title-key ioctl, so libdvdcss cracks every
