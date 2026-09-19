@@ -432,3 +432,5 @@ progress bar, the support-bundle messages) use the centred full OSD instead and 
 not affected. This Main only runs for the DVD core (`main=`), so no other core
 changes. The two constants are the only knobs if the margin needs tuning on a
 particular set.
+
+✅ **HW-CONFIRMED 2026-09-18** by the maintainer: the volume popup is fully visible on a CRT.
