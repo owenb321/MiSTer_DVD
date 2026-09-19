@@ -79,6 +79,16 @@ gave +31 ms/min, 50 fps +40 ms/min on the same playback). `lipsync_measure` supp
 drift figures from captures for this reason. For anything rate-shaped use `mister.py
 telem`, whose ratios are counters in one clock domain.
 
+**★ The MiSTer has no `pkill`** (and no `killall`). `pkill -f … 2>/dev/null` fails
+silently, which is how 18 key daemons piled up across sessions before 2026-09-19. Use
+`mister.py`'s `kill_exact()` (an exact `/proc/<pid>/cmdline` match).
+
+**★ A physical disc can hang the Main for hours.** Copy-protected discs carry
+deliberately unreadable sectors; each read costs the drive's ~30 s timeout, with the Main
+blocked in state D (no screenshots, no telemetry). Seen on OZ (#112) at `VTS_08_1.VOB`
+RBN ~2000. Recovery: eject the tray (pending reads then fail fast), then `restore`. Check
+`dmesg | grep sr1` before blaming the core.
+
 **★ Never overwrite the running `MiSTer_DVDcss`.** It reboots the box (`execl` on a
 deleted exe → `app_restart` → `reboot(1)`). `deploy --main` handles this; it installs under
 a hash-derived name and repoints `[DVD] main=`.
