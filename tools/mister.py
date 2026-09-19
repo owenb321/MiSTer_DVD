@@ -138,8 +138,25 @@ done
 true
 """
 
+def kill_exact(cmdline):
+    """Shell snippet: kill every process whose argv is EXACTLY `cmdline`.
+
+    ⚠ The MiSTer has NO pkill. Every `pkill -f ... 2>/dev/null` here used to fail
+    silently, so each `deploy --agent` left another key daemon running and
+    `restore` never stopped one -- 18 were found alive on 2026-09-19. This walks
+    /proc instead. An EXACT argv match (not a substring) is deliberate: a
+    substring can match the shell running this very script. ssh() feeds scripts
+    over stdin (`bash -s`), so today that shell's argv is harmless, but exact
+    matching doesn't depend on it staying that way.
+    """
+    return ("for pid in $(ls /proc | grep -E '^[0-9]+$'); do\n"
+            "  c=$( { tr '\\000' ' ' < /proc/$pid/cmdline; } 2>/dev/null )\n"
+            f"  [ \"$c\" = \"{cmdline} \" ] && kill $pid 2>/dev/null\n"
+            "done\n")
+
+
 RESTORE_SCRIPT = _INI_REWRITE.replace('@TARGET@', 'MiSTer_DVDcss') + """
-pkill -f @AGENT@ 2>/dev/null
+@KILL_AGENT@
 rm -f /media/fat/dvd_hil
 rm -f @FIFO@ @AGENT@ @COREDIR@/@RBF@ @COREDIR@/@MGL@
 for f in /media/fat/MiSTer_DVDcss_hil_*; do
@@ -430,7 +447,8 @@ def deploy_main(path):
 
 def cmd_restore(args):
     """Put the rig back to stock: main=MiSTer_DVDcss, harness files removed."""
-    script = RESTORE_SCRIPT.replace('@AGENT@', AGENT_DST) \
+    script = RESTORE_SCRIPT.replace('@KILL_AGENT@', kill_exact(f'python3 {AGENT_DST}')) \
+                           .replace('@AGENT@', AGENT_DST) \
                            .replace('@FIFO@', AGENT_FIFO) \
                            .replace('@COREDIR@', CORE_DIR) \
                            .replace('@RBF@', HIL_RBF).replace('@MGL@', HIL_MGL) \
@@ -453,8 +471,7 @@ def cmd_deploy(args):
     if args.agent or not args.rbf_only:
         scp(AGENT_SRC, AGENT_DST)
         # restart it: one device for its lifetime, so a stale one must go first
-        _, out = ssh(f'''
-pkill -f {AGENT_DST} 2>/dev/null
+        _, out = ssh(kill_exact(f'python3 {AGENT_DST}') + f'''
 rm -f {AGENT_FIFO}
 setsid python3 {AGENT_DST} </dev/null >>/tmp/mister_keyd.log 2>&1 &
 sleep 2
@@ -505,8 +522,7 @@ def telem_poll_start(path, seconds, hz):
     """
     n  = max(1, int(seconds * hz))
     iv = round(1.0 / hz, 3)
-    ssh(f"""
-pkill -f dvd_telem_poll 2>/dev/null
+    ssh(kill_exact(f'sh {TELEM_POLL_SH}') + f"""
 rm -f {path}
 cat > {TELEM_POLL_SH} <<'POLLEOF'
 i=0

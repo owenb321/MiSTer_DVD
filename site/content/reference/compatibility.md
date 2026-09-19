@@ -111,6 +111,14 @@ headroom because the frames are taller.
 **Changing the audio track inside a disc menu** silences the menu's audio until you leave
 the menu.
 
+**Some copy-protected physical discs can stall for a long time.** A few discs, such as the
+DVD in the *OZ: The Great and Powerful* Blu-ray combo pack, contain deliberately
+unreadable sectors. A real player never reads them. If the player is sent into them, the
+drive spends about 30 seconds retrying each one and the MiSTer stops responding. The
+failure is certain with **Disc Menus** off, and has also been seen once with it on.
+**Ejecting the disc** recovers straight away. Leave **Disc Menus** on for these discs.
+A decrypted image of the same disc is not affected.
+
 ## Reporting a disc that does not work
 
 [Open an issue](https://github.com/owenb321/MiSTer_DVD/issues) with the core version from

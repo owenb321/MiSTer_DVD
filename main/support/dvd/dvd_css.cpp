@@ -316,9 +316,41 @@ static int iso_find(uint32_t dir_lba, uint32_t dir_len, const char *name, int wa
 // block a SEEK_KEY is issued at, which is ALWAYS the VOB's start and never the read
 // position: libdvdcss's title cache is an exact-block match, so a SEEK_KEY anywhere
 // else re-acquires the key. See dvd_css_read().
-#define MAX_VOBS 64
+//
+// ★ A VOB MISSING FROM THIS TABLE IS SERVED SCRAMBLED, WITH NO OTHER SIGNAL.
+// vob_index() returns -1 for it, so dvd_css_read() takes it for a filesystem sector
+// and reads it raw -- the core gets CSS-scrambled data and shows green garbage plus
+// CSS ENCRYPTED, while this module logs nothing. That is issue #112: the table was 64
+// entries and "OZ: The Great and Powerful" lists 91 VOBs, because it files ONE 7-part
+// feature extent under 11 title sets (VTS_08..18 all point at the same LBAs). The
+// sneak peeks in VTS_20 sorted past entry 64 and played scrambled.
+//   So: (1) aliases are collapsed -- an identical {start, nsec} is the same sectors
+// under the same key, so it adds nothing (91 -> 21 on that disc); (2) the table holds
+// every VOB a conformant disc can have (99 title sets x (menu + 9 parts) + VMG = 991);
+// (3) if it ever fills anyway, the drop is logged, never silent.
+#define MAX_VOBS 1024
 static struct { uint32_t start, nsec; } g_vobs[MAX_VOBS];
 static int g_nvobs = 0;
+static int g_vob_entries = 0;     // .VOB directory entries seen, aliases included
+static int g_vobs_dropped = 0;    // distinct extents that did not fit (must stay 0)
+
+static void add_vob(uint32_t start, uint32_t nsec, const char *nm, int nlen)
+{
+	g_vob_entries++;
+	for (int i = 0; i < g_nvobs; i++)
+		if (g_vobs[i].start == start && g_vobs[i].nsec == nsec) return;   // alias
+	if (g_nvobs >= MAX_VOBS)
+	{
+		if (!g_vobs_dropped)
+			css_log("vobs: table full (%d) -- %.*s and any later VOB will play SCRAMBLED",
+			        MAX_VOBS, nlen, nm);
+		g_vobs_dropped++;
+		return;
+	}
+	g_vobs[g_nvobs].start = start;
+	g_vobs[g_nvobs].nsec  = nsec;
+	g_nvobs++;
+}
 
 // Collect every *.VOB file's extent (start LBA + length in sectors).
 static void collect_vobs(uint32_t dir_lba, uint32_t dir_len)
@@ -336,12 +368,8 @@ static void collect_vobs(uint32_t dir_lba, uint32_t dir_len)
 			uint8_t flags = sec[off + 25];
 			uint8_t nlen = sec[off + 32];
 			const char *nm = (const char *)(sec + off + 33);
-			if (!(flags & 0x02) && name_has_vob(nm, nlen) && g_nvobs < MAX_VOBS)
-			{
-				g_vobs[g_nvobs].start = rd_le32(sec + off + 2);
-				g_vobs[g_nvobs].nsec = (rd_le32(sec + off + 10) + 2047) / 2048;
-				g_nvobs++;
-			}
+			if (!(flags & 0x02) && name_has_vob(nm, nlen))
+				add_vob(rd_le32(sec + off + 2), (rd_le32(sec + off + 10) + 2047) / 2048, nm, nlen);
 			off += rlen;
 		}
 	}
@@ -361,6 +389,8 @@ static int vob_index(uint32_t lba)
 static int enumerate_vobs(void)
 {
 	g_nvobs = 0;
+	g_vob_entries = 0;
+	g_vobs_dropped = 0;
 	uint8_t sec[2048];
 	if (css_raw_read(16, sec, 1) < 1) { css_log("vobs: PVD read failed"); return 0; }
 	if (memcmp(sec + 1, "CD001", 5) != 0) { css_log("vobs: not ISO9660"); return 0; }
@@ -374,6 +404,9 @@ static int enumerate_vobs(void)
 		return 0;
 	}
 	collect_vobs(vts_lba, vts_len);
+	if (g_vob_entries != g_nvobs)
+		css_log("vobs: %d .VOB entries -> %d distinct extents (%d aliased, %d dropped)",
+		        g_vob_entries, g_nvobs, g_vob_entries - g_nvobs - g_vobs_dropped, g_vobs_dropped);
 	return g_nvobs > 0;
 }
 

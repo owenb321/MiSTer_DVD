@@ -196,6 +196,37 @@ if [ "$RED" -eq 1 ]; then
         "s/key_ok  = (p_seek(css, (int)g_vobs\[vi\]\.start, DVDCSS_SEEK_KEY) >= 0);/key_ok  = 1;/" \
         css-never-keys
 
+    # ---- dvd_css: the VOB table (issue #112) -----------------------------------
+    # Expect strings start with "FAIL " so a passing "ok" line of the same check
+    # cannot satisfy them.
+    #
+    # The shipped behaviour, restored: 64 entries, no alias collapsing. OZ's 91
+    # entries overflow, VTS_20 is never registered, and its sectors are read raw --
+    # the green garbage + CSS ENCRYPTED the maintainer reproduced on the rig.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL VTS_20 sneak peeks resolve to a VOB" \
+        "s/^#define MAX_VOBS 1024$/#define MAX_VOBS 64/; s/return;   \/\/ alias/;   \/\/ alias/" \
+        css-vob-table-shipped
+
+    # Aliases no longer collapsed. OZ still fits a 1024 table, so it plays -- but
+    # every alias is keyed again at mount (91 SEEK_KEYs, not 21).
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL SEEK_KEY calls priming the disc" \
+        "s/return;   \/\/ alias/;   \/\/ alias/" \
+        css-no-alias-collapse
+
+    # Collapsing kept, old cap: OZ fits (21), a spec-maximum disc does not.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "got 64, want 991" \
+        "s/^#define MAX_VOBS 1024$/#define MAX_VOBS 64/" \
+        css-cap-64
+
+    # The drop goes uncounted -- the silence that let #112 ship.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL distinct extents counted as dropped" \
+        "s/^\t\tg_vobs_dropped++;$//" \
+        css-drop-silent
+
     # ---- the support bundle's argv (issue #81) ---------------------------------
     # The shipped-until-#81 behaviour: no NAV-pack capture at all, so a highlight
     # bug's bundle carried no button data and nothing said so.

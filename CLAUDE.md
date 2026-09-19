@@ -148,6 +148,51 @@ and misdirected a "what's next?" session. To prevent recurrence:
 
 ---
 
+## ★ Design to the DVD spec maximum (mandatory, instituted 2026-09-19)
+
+Every table, counter, index width and loop bound that holds a DVD-Video structure must be
+sized for **the maximum the format allows**, not for what a measured sample of discs
+happened to contain. Size to the spec unless there is a **hard limitation**, such as
+M10K/ALM budget, timing, or a register the hardware cannot widen. When that happens,
+**discuss the pros and cons with the user before deciding**, and record the decision, the
+limit chosen and what breaks past it beside the code and in `docs/`. A smaller bound
+must never be picked silently.
+
+**Why.** This mistake has shipped twice, and both times the smaller number looked safe
+when it was written:
+- **issue #112 (2026-09-19):** `dvd_css.cpp` held 64 VOBs. "OZ: The Great and Powerful"
+  lists 91, because it files one feature extent under 11 title sets. The VOBs past entry
+  64 were silently read without decryption, so the disc showed green garbage and
+  `CSS ENCRYPTED`.
+- **the >128-cell seek alias (2026-09-17):** 7-bit cell indices in the seek tables, which
+  a "measured unreachable" note justified. The measurement had sampled the wrong
+  population, and 47 PGCs across 12 discs exceeded it.
+
+A library sweep says what is *common*. It cannot say what is *possible*: authoring tools
+and copy-protection schemes deliberately produce structures no sample predicts.
+
+**And never truncate silently.** If a bound is ever hit, whether a hard-limited one or
+input that violates the spec, make it visible: a log line in the Main, or a counter/flag
+in the RTL that a bench or telemetry can see. Whatever falls past the bound must not
+quietly turn into wrong output.
+
+Reference maxima (DVD-Video; confirm the field width in the IFO parse before relying on
+one):
+
+| Structure | Max |
+|---|---|
+| Video title sets (VTS) | 99 |
+| Titles (`TT_SRPT`) | 99 |
+| Title VOB parts per VTS | 9 (plus one menu VOB) → 991 `.VOB` files per disc |
+| Cells per PGC | 255 (`nr_of_cells` is one byte) |
+| Programs (chapters) per PGC | 99 |
+| Angles | 9 |
+| Audio / subpicture streams | 8 / 32 |
+| Buttons per HLI | 36 |
+| GPRM / SPRM | 16 / 24 |
+
+---
+
 ## Repository Structure
 
 ```
@@ -251,6 +296,30 @@ worse maintenance burden than targeted in-place edits. So:
 ---
 
 ## Hardware status (THIS fork, verified 2026-06-21)
+
+- ✅ **A VOB MISSING FROM THE MAIN'S TABLE PLAYED SCRAMBLED, AND THE TABLE HELD 64 —
+  issue #112 (2026-09-19, branch `fix/css-vob-table`); host-proven RED/GREEN, 4
+  mutations each caught by their own arm, and ✅ HW-CONFIRMED 2026-09-19 by the
+  maintainer.** On the physical *OZ: The Great and Powerful* DVD, the sneak peeks after
+  the language menu now play clean, with no `CSS ENCRYPTED`.
+  ★ The disc files one 7-part feature extent under 11 title sets, so it lists **91**
+  `.VOB` entries. `collect_vobs()` stopped at 64 without a word. VTS_20 fell off the
+  end, `vob_index()` returned −1, and its sectors were read **raw**, so the banner was a
+  true positive. Fix in `main/support/dvd/dvd_css.cpp`: collapse identical
+  `{start, nsec}` aliases (91 → 21), `MAX_VOBS 1024` (a spec-maximum disc has 991),
+  and log any drop. This is the case the "design to the spec maximum" rule above was
+  written for.
+  ⛔ **The zero-key theory is REFUTED, not merely unproven.** The feature key is
+  non-zero and identical from all 7 part starts, and libdvdcss output keyed at the VOB
+  start is byte-identical to the MakeMKV ISO. Keying at the VOB start is correct.
+  ⚠ **OPEN, and the next piece of work: the disc's unreadable protection zone** (from
+  about RBN 2000 of `VTS_08_1.VOB`) costs about 30 s per sector and blocks the Main.
+  The Disc Menus Off road is certain (malformed VTS_08 PGCN 1 → `S_FINAL2` linear
+  fallback from RBN 0); the Disc Menus On road is unknown. Gate:
+  `main/tests/run_tests.sh --red` arms [9]–[11]. Detail: **`docs/physical_disc.md`**
+  "Every VOB must be in the table".
+  ★ Found en route: **the MiSTer has no `pkill`**, so the HIL harness had been leaking a
+  key daemon on every deploy (18 found alive). `tools/mister.py` `kill_exact()`.
 
 - ✅ **PAUSING TRUE-INTERLACED VIDEO FLICKERED BETWEEN ITS TWO FIELDS — IT NOW HOLDS
   ONE FIELD (2026-09-18, branch `fix/pause-field-still`); sim-proven RED/GREEN, 8
