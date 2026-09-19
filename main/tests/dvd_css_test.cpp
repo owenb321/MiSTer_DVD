@@ -45,6 +45,11 @@
 // every bug above is trivially "fixed" by never asking for a key at all, which
 // would silently stop decrypting instead.
 //
+// [9]-[11] are issue #112: the VOB TABLE. A VOB missing from it is read raw and
+// plays scrambled with nothing logged. [9] is "OZ: The Great and Powerful"'s real
+// 91-entry layout (one feature extent filed under 11 title sets); the shipped
+// 64-entry, no-dedupe table left its VTS_20 sneak peeks unregistered.
+//
 // Host-side: build with main/tests/run_tests.sh. The module is #included so the
 // dlopen'd libdvdcss entry points can be replaced with recording stubs.
 
@@ -76,8 +81,26 @@ static int primed[MAXCALLS], nprimed;
 static int key_acquisitions;
 static int fail_key_at = -1;      // a block whose SEEK_KEY refuses (no key obtainable)
 
+// A tiny ISO9660 image for the enumerate_vobs() arms: sector LBAs -> 2048 bytes.
+// Everything else reads as "success, contents unspecified", as before.
+#define FIX_MAX 64
+static uint32_t fix_lba[FIX_MAX];
+static uint8_t  fix_sec[FIX_MAX][2048];
+static int      nfix;
+static int      cur_block;
+
+static uint8_t *fix_sector(uint32_t lba)
+{
+    for (int i = 0; i < nfix; i++) if (fix_lba[i] == lba) return fix_sec[i];
+    if (nfix >= FIX_MAX) return 0;
+    fix_lba[nfix] = lba;
+    memset(fix_sec[nfix], 0, 2048);
+    return fix_sec[nfix++];
+}
+
 static int fake_seek(dvdcss_t, int block, int flags)
 {
+    cur_block = block;
     if (nseeks < MAXCALLS) { seeks[nseeks].block = block; seeks[nseeks].flags = flags; }
     nseeks++;
 
@@ -95,11 +118,55 @@ static int fake_seek(dvdcss_t, int block, int flags)
     return block;
 }
 
-static int fake_read(dvdcss_t, void *, int count, int flags)
+static int fake_read(dvdcss_t, void *buf, int count, int flags)
 {
     if (flags & DVDCSS_READ_DECRYPT) reads_decrypt++; else reads_raw++;
     last_count = count;
+    for (int i = 0; i < nfix && count == 1; i++)
+        if ((int)fix_lba[i] == cur_block) memcpy(buf, fix_sec[i], 2048);
     return count;
+}
+
+// ---- ISO9660 fixture writer --------------------------------------------------
+static void put_le32(uint8_t *p, uint32_t v) { p[0] = v; p[1] = v >> 8; p[2] = v >> 16; p[3] = v >> 24; }
+
+// Appends one directory record to a directory that starts at `dir_lba`, moving to
+// the next sector when it would not fit (records never cross a sector, and a zero
+// length byte ends the sector -- exactly what collect_vobs() walks).
+static uint32_t dir_sec, dir_off;
+static void dir_begin(uint32_t lba) { dir_sec = lba; dir_off = 0; fix_sector(lba); }
+static void dir_add(const char *name, uint32_t extent, uint32_t size, int is_dir)
+{
+    int nlen = (int)strlen(name);
+    int rlen = 33 + nlen + ((nlen & 1) ? 0 : 1);
+    if (dir_off + rlen > 2048) { dir_sec++; dir_off = 0; }
+    uint8_t *r = fix_sector(dir_sec) + dir_off;
+    r[0] = (uint8_t)rlen;
+    put_le32(r + 2, extent);
+    put_le32(r + 10, size);
+    r[25] = is_dir ? 0x02 : 0x00;
+    r[32] = (uint8_t)nlen;
+    memcpy(r + 33, name, nlen);
+    dir_off += rlen;
+}
+static uint32_t dir_bytes(uint32_t first) { return (dir_sec - first + 1) * 2048; }
+
+#define ROOT_LBA 20u
+#define VTS_LBA  21u
+static void iso_begin(void)
+{
+    nfix = 0;
+    uint8_t *pvd = fix_sector(16);
+    pvd[0] = 1; memcpy(pvd + 1, "CD001", 5);
+    put_le32(pvd + 156 + 2, ROOT_LBA);
+    put_le32(pvd + 156 + 10, 2048);
+    dir_begin(VTS_LBA);
+}
+static void iso_end(void)
+{
+    uint32_t vts_len = dir_bytes(VTS_LBA);
+    dir_begin(ROOT_LBA);
+    dir_add("VIDEO_TS", VTS_LBA, vts_len, 1);
 }
 
 static char *fake_error(dvdcss_t) { static char e[] = "stub"; return e; }
@@ -244,6 +311,91 @@ int main(void)
     setup();
     dvd_css_read(buf, VOB0 + VOBN - 3u, 16);
     check("sectors requested of libdvdcss", last_count, 3);
+
+    // [9] ISSUE #112, on the disc's real layout. "OZ: The Great and Powerful" lists
+    //     91 VOBs: VTS_08..18 each file the SAME 7-part feature extent. The table used
+    //     to stop at 64 entries, so everything sorting after VTS_15_5 was never
+    //     registered -- including VTS_20, the sneak peeks that play right after the
+    //     language menu. vob_index() said "not a VOB", the sectors were read raw, and
+    //     the core showed green garbage with CSS ENCRYPTED. LBAs/sizes are the disc's.
+    printf("[9] OZ: 91 VOB entries, 21 distinct extents\n");
+    setup();
+    iso_begin();
+    {
+        static const struct { const char *n; uint32_t lba, size; } lone[] = {
+            {"VIDEO_TS.VOB;1", 523, 1941504},       {"VTS_01_1.VOB;1", 1497, 32768},
+            {"VTS_02_1.VOB;1", 1527, 133120},       {"VTS_03_1.VOB;1", 1606, 411648},
+            {"VTS_04_0.VOB;1", 1824, 2267136},      {"VTS_04_1.VOB;1", 2931, 6967296},
+            {"VTS_05_1.VOB;1", 6350, 10256384},     {"VTS_06_1.VOB;1", 11376, 619196416},
+            {"VTS_07_0.VOB;1", 313760, 236089344},  {"VTS_07_1.VOB;1", 429038, 10240},
+        };
+        static const uint32_t part_lba[7] = {429605, 953892, 1478179, 2002466,
+                                              2526753, 3051040, 3575327};
+        dir_add("VIDEO_TS.IFO;1", 504, 38912, 0);           // non-VOB: must be skipped
+        for (unsigned i = 0; i < sizeof lone / sizeof lone[0]; i++)
+            dir_add(lone[i].n, lone[i].lba, lone[i].size, 0);
+        for (int vts = 8; vts <= 18; vts++)
+            for (int p = 1; p <= 7; p++)
+            {
+                char nm[24];
+                snprintf(nm, sizeof nm, "VTS_%02d_%d.VOB;1", vts, p);
+                dir_add(nm, part_lba[p - 1], p == 7 ? 407252992u : 1073739776u, 0);
+            }
+        dir_add("VTS_19_0.VOB;1", 3774720, 272384, 0);
+        dir_add("VTS_19_1.VOB;1", 3774853, 1341440, 0);
+        dir_add("VTS_20_1.VOB;1", 3775523, 346552320, 0);   // the sneak peeks
+        dir_add("VTS_21_1.VOB;1", 3944751, 32768, 0);
+    }
+    iso_end();
+    check("enumerate_vobs() found VOBs", enumerate_vobs(), 1);
+    check(".VOB directory entries seen", g_vob_entries, 91);
+    check("distinct extents registered", g_nvobs, 21);
+    check("distinct extents dropped", g_vobs_dropped, 0);
+    check("VTS_20 sneak peeks resolve to a VOB", vob_index(3775523u + 5000u) >= 0, 1);
+    check("VTS_21 (last on the disc) resolves", vob_index(3944751u) >= 0, 1);
+    check("feature part 7 resolves", vob_index(3575327u + 100u) >= 0, 1);
+    check("IFO sector is still not a VOB", vob_index(504u), -1);
+    nseeks = 0;
+    crack_title_keys("test");
+    check("SEEK_KEY calls priming the disc", key_seek_count(), 21);
+
+    // [10] The largest disc the spec allows: 99 title sets x (menu + 9 parts), plus
+    //      the VMG's VIDEO_TS.VOB = 991 distinct VOBs. Every one must register.
+    printf("[10] a spec-maximum disc: 991 distinct VOBs\n");
+    setup();
+    iso_begin();
+    {
+        uint32_t lba = 1000;
+        dir_add("VIDEO_TS.VOB;1", lba, 2048, 0); lba += 10;
+        for (int vts = 1; vts <= 99; vts++)
+            for (int p = 0; p <= 9; p++)
+            {
+                char nm[24];
+                snprintf(nm, sizeof nm, "VTS_%02d_%d.VOB;1", vts, p);
+                dir_add(nm, lba, 2048, 0); lba += 10;
+            }
+    }
+    iso_end();
+    enumerate_vobs();
+    check("distinct extents registered", g_nvobs, 991);
+    check("distinct extents dropped", g_vobs_dropped, 0);
+
+    // [11] Past anything a conformant disc can hold, the table fills -- and that
+    //      must be COUNTED (and logged), never silent, because a dropped VOB plays
+    //      scrambled with no other signal.
+    printf("[11] more distinct VOBs than the table holds\n");
+    setup();
+    iso_begin();
+    for (int i = 0; i < MAX_VOBS + 6; i++)
+    {
+        char nm[24];
+        snprintf(nm, sizeof nm, "X%04d.VOB;1", i);
+        dir_add(nm, 1000u + 10u * i, 2048, 0);
+    }
+    iso_end();
+    enumerate_vobs();
+    check("distinct extents registered (full)", g_nvobs, MAX_VOBS);
+    check("distinct extents counted as dropped", g_vobs_dropped, 6);
 
     printf("\ndvd_css_test: %s (%d error%s)\n", errs ? "FAIL" : "PASS", errs, errs == 1 ? "" : "s");
     return errs ? 1 : 0;
