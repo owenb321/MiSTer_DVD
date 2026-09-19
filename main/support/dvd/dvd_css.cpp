@@ -550,6 +550,8 @@ static void build_vob_list(void)
 	crack_title_keys((!region_set && scrambled) ? "No drive region: cracking" : "Preparing disc");
 }
 
+static void seek_log_arm(void);   // HIL seek trace, see dvd_css_read()
+
 int dvd_css_open(void)
 {
 	if (css || raw_fd >= 0) return 1;
@@ -587,6 +589,7 @@ int dvd_css_open(void)
 			css_log("dvdcss_open(%s) failed", dev);
 			return 0;
 		}
+		seek_log_arm();
 	}
 	else
 	{
@@ -670,6 +673,7 @@ int dvd_css_open_image(const char *path)
 	if (!h) { css_log("dvdcss_open(image) FAILED: %s", full); return 0; }
 
 	css = h;
+	seek_log_arm();
 	css_size = (uint64_t)st.st_size;
 	region_set = 1;    // no drive; keys are cracked from data regardless of region
 	css_pos = -1;
@@ -746,10 +750,48 @@ uint64_t dvd_css_size(void)
 	return (css || raw_fd >= 0) ? css_size : 0;
 }
 
+// ---------------------------------------------------------------------------
+// Seek trace (HIL only). Every NON-sequential read the core makes, logged BEFORE
+// the read is issued, so a read that hangs is the last line and the gap to the
+// next timestamp is how long it took. The core's navigation is invisible from the
+// Main otherwise, and when a physical disc's deliberately unreadable sectors block
+// this thread (state D, ~30 s per sector), telemetry and screenshots freeze with
+// it -- this file is the only record of how the core got there. Armed by the same
+// flag file as dvd_ctl, checked once per mount, so a normal install never writes it.
+#define SEEK_LOG_PATH "/tmp/dvd_seek.log"
+#define SEEK_LOG_MAX  5000
+static int seek_log_on = 0, seek_log_n = 0;
+
+static void seek_log_arm(void)
+{
+	struct stat st;
+	seek_log_on = (stat("/media/fat/dvd_hil", &st) == 0);
+	seek_log_n = 0;
+	if (seek_log_on) { FILE *f = fopen(SEEK_LOG_PATH, "w"); if (f) fclose(f); }
+}
+
+static void seek_log(uint32_t lba, uint32_t count, int vi)
+{
+	if (!seek_log_on || seek_log_n >= SEEK_LOG_MAX) return;
+	FILE *f = fopen(SEEK_LOG_PATH, "a");
+	if (!f) return;
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	if (vi >= 0)
+		fprintf(f, "%.3f read %u+%u vob@%u rbn %u\n", ts.tv_sec + ts.tv_nsec / 1e9,
+		        lba, count, g_vobs[vi].start, lba - g_vobs[vi].start);
+	else
+		fprintf(f, "%.3f read %u+%u (not a VOB)\n", ts.tv_sec + ts.tv_nsec / 1e9, lba, count);
+	fclose(f);
+	if (++seek_log_n == SEEK_LOG_MAX) css_log("seek trace: %d lines, stopped", SEEK_LOG_MAX);
+}
+
 int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
 {
 	if (raw_fd >= 0) return raw_read10(raw_fd, lba, buf, (int)count);   // no-libdvdcss fallback
 	if (!css) return -1;
+
+	if ((int)lba != css_pos) seek_log(lba, count, vob_index(lba));
 
 	int vi = vob_index(lba);
 	int decrypt = (vi >= 0);

@@ -1093,6 +1093,12 @@ reg [3:0]  want_entry;                // menu entry type to scan for
 reg [6:0]  want_ttn;                  // title number to scan for (TT domain)
 reg        scan_mode;                 // 1 = S_SRP_EVAL is entry-scanning
 reg        scan_title;                // 1 = the scan matches TITLE numbers
+// Auto (Disc Menus off) longest-PGC scan - see S_PGCIT_HDR. Walks the title
+// PGCIT reading each PGC's playback_time (PGC@4..7), then re-takes the longest.
+localparam DUR_SCAN_MAX = 16'd128;    // PGCs scanned; a feature is never past this
+reg        dur_scan;                  // 1 = S_PGC_HDR is duration-scanning
+reg [15:0] dur_best_secs;             // best playback_time seen, in seconds
+reg [15:0] dur_best_pgcn;             // ...and which PGCN had it
 reg [15:0] srp_i;                     // SRP cursor (PGCITs can exceed 255 entries)
 reg        sel_ret;                   // S_SELECT return: 0=title (S_PGC_BEGIN), 1=VTSM menu
 reg [31:0] jmp_ifo_lba;               // VTSI LBA of a VTSM jump target
@@ -2265,6 +2271,7 @@ always @(posedge clk or negedge rst_n) begin
         want_entry   <= 4'd0;
         want_ttn     <= 7'd0;
         scan_mode    <= 1'b0;
+        dur_scan     <= 1'b0;
         scan_title   <= 1'b0;
         sel_ret      <= 1'b0;
         nav_ready    <= 1'b0;
@@ -2708,6 +2715,7 @@ always @(posedge clk or negedge rst_n) begin
             want_entry      <= 4'd0;
             want_ttn        <= 7'd0;
             scan_mode       <= 1'b0;
+            dur_scan        <= 1'b0;
             scan_title      <= 1'b0;
             sel_ret         <= 1'b0;
             nav_ready       <= 1'b0;
@@ -2748,6 +2756,7 @@ always @(posedge clk or negedge rst_n) begin
             use_jcell    <= 1'b0;
             follow_cnt   <= 2'd0;
             scan_mode    <= 1'b0;
+            dur_scan     <= 1'b0;
             scan_title   <= 1'b0;
             want_ttn     <= (jdom_l == DOM_TT) ? jttn_l : 7'd0;
             dom          <= jdom_l;
@@ -3631,6 +3640,33 @@ always @(posedge clk or negedge rst_n) begin
                     if (want_pgcn <= nr_pgci_srp) begin
                         srp_i     <= want_pgcn - 16'd1;
                         scan_mode <= 1'b0;
+                        // ★ AUTO (Disc Menus OFF) PLAYS THE LONGEST PGC, NOT PGCN 1.
+                        // "Play the first PGC" is what the DVD spec says title 1 is,
+                        // and on 60 of 1231 library discs title 1 IS a stub: an FBI
+                        // warning or logo of 0-44 s (War Horse 0 s, X-Men Apocalypse
+                        // 1 s, Sleepy Hollow 1 s), whose POST commands link on to the
+                        // feature. With Disc Menus on the VM follows that link. With
+                        // it OFF there is no VM, so the player sat on the stub -- the
+                        // field report "it picks a short special feature instead of
+                        // the movie". VTS_PTT_SRPT does not help: MEASURED, title 1
+                        // resolves to that same stub PGC on all 60.
+                        // So scan this PGCIT's PGC headers and take the longest
+                        // playback_time. Auto means "play the main feature"; it is
+                        // this core's own heuristic, not a spec path.
+                        // Costs one extra header read per PGC at mount, bounded by
+                        // DUR_SCAN_MAX. Menu domains and every vm_mode path are
+                        // untouched (they name the PGC they want).
+                        // ⚠ The VTS pick is NOT duration-based and deliberately so:
+                        // MEASURED, largest-by-bytes disagrees with longest-title on
+                        // 2 of 1231 discs, and scanning every VTS would cost an IFO
+                        // read per title set on a drive where reads are ~30 ms.
+                        if (!vm_mode && dom == DOM_TT && !menu_dom &&
+                            want_pgcn == 16'd1 && nr_pgci_srp > 16'd1) begin
+                            dur_scan      <= 1'b1;
+                            dur_best_secs <= 16'd0;
+                            dur_best_pgcn <= 16'd1;
+                            srp_i         <= 16'd0;
+                        end
                         state     <= S_SRP_FETCH;
                     end else if (jump_ctx && dom != DOM_TT) begin
                         pgc_error <= 1'b1;     // requested PGCN out of range
@@ -3710,7 +3746,34 @@ always @(posedge clk or negedge rst_n) begin
             // PGCITs) parse fine - the Phase-1 "skip palette on straddle"
             // limitation is gone. The palette loads INDEPENDENTLY of the
             // cell-count sanity check (the MiB white-subtitles lesson).
-            S_PGC_HDR: begin
+            S_PGC_HDR: if (dur_scan) begin : dur_scan_step
+                // Auto's longest-PGC scan. rbuf holds this PGC's header: nr_of_cells
+                // @3 and playback_time @4..6 (BCD hh/mm/ss). A PGC with no cells is
+                // not playable, so it cannot win.
+                reg [19:0] secs;
+                reg [15:0] cand;
+                secs = ({12'd0, rbuf[4][7:4]} * 20'd36000) + ({12'd0, rbuf[4][3:0]} * 20'd3600) +
+                       ({12'd0, rbuf[5][7:4]} * 20'd600)   + ({12'd0, rbuf[5][3:0]} * 20'd60)   +
+                       ({12'd0, rbuf[6][7:4]} * 20'd10)    +  {12'd0, rbuf[6][3:0]};
+                cand = (secs > 20'd35999) ? 16'd35999 : secs[15:0];   // C_PBTM spec max
+                if (nr_of_cells_b != 8'd0 && cand > dur_best_secs) begin
+                    dur_best_secs <= cand;
+                    dur_best_pgcn <= srp_i + 16'd1;
+                end
+                if (srp_i + 16'd1 < nr_srp_l && srp_i + 16'd1 < DUR_SCAN_MAX) begin
+                    srp_i <= srp_i + 16'd1;
+                    state <= S_SRP_FETCH;          // next PGC's header
+                end else begin
+                    // Done: re-take the winner. dur_best_pgcn defaults to 1, so a
+                    // PGCIT of cell-less PGCs still lands where it used to.
+                    dur_scan  <= 1'b0;
+                    want_pgcn <= (nr_of_cells_b != 8'd0 && cand > dur_best_secs)
+                                 ? (srp_i + 16'd1) : dur_best_pgcn;
+                    srp_i     <= ((nr_of_cells_b != 8'd0 && cand > dur_best_secs)
+                                 ? (srp_i + 16'd1) : dur_best_pgcn) - 16'd1;
+                    state     <= S_SRP_FETCH;
+                end
+            end else begin
                 // STRADDLE AUDIT: the give-up guard is GONE. The pre-walk header
                 // bytes -- nr_of_programs (rbuf[2]), nr_of_cells (rbuf[3]) and the
                 // cosmetic playback_time (rbuf[4..7]) -- are read from the rbuf
@@ -4073,6 +4136,28 @@ always @(posedge clk or negedge rst_n) begin
                             pgc_error <= 1'b1;
                             state     <= S_DONE;
                         end
+                    end else if (!vm_mode && srp_i + 16'd1 < nr_srp_l) begin
+                        // DVD-FORK FIX (2026-09-19): Auto mode (Disc Menus Off) must
+                        // NOT stream a whole VTS linearly while another PGC exists.
+                        // The linear fallback reads every sector of the VTS,
+                        // including ones no cell references -- and copy-protected
+                        // discs put DELIBERATELY UNREADABLE sectors exactly there.
+                        // "OZ: The Great and Powerful" (issue #112 follow-up): Auto
+                        // picks VTS_08 PGCN 1, a decoy with 72 cells and
+                        // cell_playback_offset = 0; linear streaming from RBN 0 hit
+                        // bad sectors at RBN ~1995, each costing the drive's ~30 s
+                        // timeout with the Main blocked -- an hours-long hang on a
+                        // physical disc (an ISO reads MakeMKV's 0xEF fill instead).
+                        // PGCN 2 is the real, valid feature. So try the next PGC,
+                        // and fall back to linear only when none is usable.
+                        // MEASURED blast radius: of 1,231 library images, OZ is the
+                        // ONLY one whose Auto PGC takes this path. vm_mode is left
+                        // alone: there the VM named this PGC, and a stub's commands
+                        // are handled by the arm above.
+                        srp_i      <= srp_i + 16'd1;
+                        want_pgcn  <= srp_i + 16'd2;
+                        scan_mode  <= 1'b0;
+                        state      <= S_SRP_FETCH;
                     end else
                         state <= S_FINAL2;             // title linear fallback (palette kept)
                 end else begin

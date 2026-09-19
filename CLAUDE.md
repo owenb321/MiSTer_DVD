@@ -297,6 +297,58 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **AUTO MODE (DISC MENUS OFF) STREAMED A WHOLE VTS LINEARLY AND HUNG ON A
+  COPY-PROTECTED DISC — and it played a 1-SECOND LOGO on 60 library discs
+  (2026-09-19, branch `fix/protection-zone-hang`); sim-proven RED/GREEN, each arm
+  gating its own change, and ✅ HW-CONFIRMED 2026-09-19 IN THE CONFIG THAT HUNG**
+  (build `DVD_protzone_20260919_2229.rbf`, SEED 9 first roll, clk_dec 90.89/90.83 vs
+  the 86.0 gate, 92 % ALM). Same physical OZ disc, same saved config (Disc Menus Off,
+  `DVD_v3.CFG` byte 0 = 0x02): the seek log reads `429074` (the IFO), `429076` (the PGC
+  table), then **`433717 = vob@429605 rbn 4112`** — straight to the feature's first
+  cell, **0 reads at RBN 0, 0 drive I/O errors**, the Main in state R, and the feature
+  on screen. ★ The duration scan cost **ONE extra sector read**: every PGC header of a
+  one-sector PGCIT comes out of the already-resident `parse_buf`.
+  ★★ **And the PGC pick was measured at the HUD, not inferred:** with
+  `Debug Overlay=On` the status line's `CH n/N` is `{reader PGCN, VTS}`, and
+  `PAW_PATROL_MEET_EVEREST` (9 PGCs; PGCN 1 = one 23-min episode) read
+  **`0:00:09/1:36:40 CH 9/3`** = PGCN 9 of VTS_03, the 96-minute Play All chain, whose
+  5800 s matches the IFO exactly. Control: MEN IN BLACK in the same Auto mode plays its
+  feature unchanged. Field-traced on the rig with a new
+  diagnostic (`/tmp/dvd_seek.log`, armed by the HIL flag file): mount → `VTS_08_0.IFO`
+  → a sequential stream of `VTS_08_1.VOB` **from RBN 0**, reaching RBN 2000 at +35 s,
+  where OZ's deliberately unreadable protection sectors cost ~30 s each with the Main
+  blocked in state D — an hours-long hang. Screenshots and telemetry freeze with the
+  Main, which is why the seek log exists at all.
+  ★★ **TWO defects on the same path, and the second was the maintainer's own report**
+  (*"it picks a short special feature instead of the longer main movie"*):
+  - **An unusable PGC fell straight to the linear whole-VTS fallback.** VTS_08's PGCN 1
+    declares 72 cells with `cell_playback_offset = 0`; `S_FINAL2` then streams every
+    sector of the VTS, INCLUDING ones no cell references — which is exactly where this
+    class of disc puts unreadable sectors. Now the reader tries the next PGC
+    (`srp_i + 1`, bounded by `nr_srp_l`) and falls back to linear only when none is
+    usable. MEASURED: OZ is the ONLY one of **1231** images whose Auto PGC takes it.
+  - **Auto played PGCN 1, and on 60 of 1231 discs title 1 is a STUB** — an FBI warning
+    or logo of 0–44 s (War Horse 0 s, X-Men Apocalypse 1 s, Sleepy Hollow 1 s) whose
+    POST links on to the feature. Disc Menus ON follows that link; OFF has no VM, so it
+    sat there. ⛔ `VTS_PTT_SRPT` does NOT help — MEASURED, title 1 resolves to the same
+    stub on all 60. Auto now scans the PGCIT and takes the longest `playback_time`
+    (`dur_scan`, `DUR_SCAN_MAX = 128`, one header read per PGC at mount).
+  ⚠ Deliberate consequence (maintainer decision): 28 TV discs move from "episode 1" to
+  their **Play All** chain. ⛔ The VTS pick stays largest-by-BYTES: MEASURED, it
+  disagrees with longest-title on **2 of 1231** discs, and a duration pick costs an IFO
+  read per title set at mount.
+  ⚠⚠ **Both hangs seen on the rig were Disc Menus OFF, and the config is why the first
+  one looked like a menus-ON road:** an OSD toggle applies live but the SAVED config
+  still read Off, so every fresh core load came up Off. Check `DVD_v3.CFG` byte 0 bit 1
+  (`menus_on = ~status[1]`) before theorising about which path ran.
+  ⚠ Bench trap worth keeping: with `nr_srp = 2` the SRP table runs to PGCIT byte 23, so
+  a fixture PGC at offset 16 OVERLAPS SRP[1] — writing its `playback_time` corrupted
+  `SRP[1].pgc_start_byte` and the scan fetched a garbage offset. The fixture's PGCs sit
+  at 64.
+  Gates: `iso_reader_pgc_tb` TEST 4 (decoy PGCN 1 → PGCN 2) and TEST 5 (5 s PGCN 1 vs
+  1 h PGCN 2), both scoring STREAMED BYTES; TEST 3 is the control that a sole unusable
+  PGC still falls back to linear. Detail: **`docs/dvd_nav.md`**, `docs/physical_disc.md`.
+
 - ✅ **A VOB MISSING FROM THE MAIN'S TABLE PLAYED SCRAMBLED, AND THE TABLE HELD 64 —
   issue #112 (2026-09-19, branch `fix/css-vob-table`); host-proven RED/GREEN, 4
   mutations each caught by their own arm, and ✅ HW-CONFIRMED 2026-09-19 by the
