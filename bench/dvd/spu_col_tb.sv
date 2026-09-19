@@ -17,6 +17,7 @@ module spu_col_tb;
     wire [3:0] alpha0,alpha1,alpha2,alpha3, col0,col1,col2,col3;
 
     spu_decode #(.BMP_N(BMP_N), .STRIDE(STRIDE), .SPU_CAP(SPU_CAP)) dut (
+        .new_cell(1'b0),   // 2026-09-18: menu re-send guard opener (no NAV here)
         .clk(clk), .rst_n(rst_n), .enable(enable), .interlaced(1'b0),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),
         .sp_pts(sp_pts), .sp_pts_valid(sp_pts_valid),

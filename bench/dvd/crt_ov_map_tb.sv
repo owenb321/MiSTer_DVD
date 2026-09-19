@@ -190,6 +190,7 @@ module crt_ov_map_tb;
     wire [1:0]  sp_q_idx;
 
     spu_decode #(.BMP_N(414720), .STRIDE(SP_STRIDE)) spu (
+        .new_cell(1'b0),   // 2026-09-18: menu re-send guard opener (no NAV here)
         .clk(clk), .rst_n(rst_n), .enable(1'b0), .menu_mode(1'b0),
         .interlaced(sp_interlaced),
         .sp_byte(8'd0), .sp_valid(1'b0), .sp_frame_start(1'b0),

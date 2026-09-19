@@ -282,7 +282,28 @@ worse maintenance burden than targeted in-place edits. So:
   2-tap weight). ⚠ Its 128-px-wide field is deliberate: a field that fits the 1024-deep
   pixel queue never backs up, and M5 then passes. Detail: **`docs/field_parity.md`** "Pause shows one field".
 
-- 🔧 **SUBPICTURE COMPOSITION DIDN'T FOLLOW THE SPEC IN TWO WAYS: a class-0 "transparent
+- 🔧 **SPU MENU RE-SEND GUARD SKIPPED A NEW CELL'S UNIT WHEN ITS PTS RESTARTED — Harry
+  Potter Interactive's Player Mode had no highlight (2026-09-18, branch `fix/spu-newcell`);
+  sim-proven on the disc's real units, 2 mutations each caught by exactly its own arm,
+  ⏳ HW-confirm pending.** Measured on the board with current `main`:
+  - every highlight diagnostic GREEN (the old "fetch never completes" reading is stale);
+  - 0 pixels change between Single- and Multi-selected.
+
+  ★ **The disc:** five cells, one VOB each, **every subpicture unit at PTS 0.333**. Cell 1's
+  unit is empty, and cells 2–3 carry the 460 px button graphic the coli recolours.
+  `spu_decode`'s menu guard skips a unit whose PTS is `<=` the committed one (it exists for
+  looping-menu re-sends and Matrix's dummy→overlay order), so cells 2–3 were dropped as
+  "re-sends".
+
+  **Fix:** `emu.sv` pulses `new_cell` when a committed DSI's `{vob_idn, c_idn}` changes.
+  This is **delivery order**, because the NAV pack leads its VOBU. `spu_decode` opens the
+  guard until the next unit commits. A replayed cell keeps its ids, so looping menus are
+  untouched.
+
+  **Gate: `bench/dvd/run_spu_newcell.sh --red`.** Detail: `docs/subpicture.md` "The re-send
+  guard is per cell".
+
+- ✅ **SUBPICTURE COMPOSITION DIDN'T FOLLOW THE SPEC IN TWO WAYS: a class-0 "transparent
   key", and a contrast-0 highlight class keeping its subpicture pixel (2026-09-18, branch
   `fix/spu-flashlight`); sim-proven, 3 mutations each caught by exactly its own arm, and
   ✅ HW-CONFIRMED 2026-09-18** (build `DVD_flashlight_20260918_2317.rbf`, SEED 9, clk_dec

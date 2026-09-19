@@ -93,6 +93,16 @@ module spu_decode #(
     // from the field. The fix is not another menu_mode exemption: see the HOLD and the
     // CONTIGUITY CLAMP below, which fix the mechanism for subtitles too.
     input  wire        menu_mode,
+    // ★ NEW CELL (2026-09-18, Harry Potter Interactive's Player Mode). One pulse when
+    // the DELIVERED stream enters a different cell (emu: nav_dsi's {vob_idn, c_idn}
+    // changed). It opens the menu re-send guard below for the next unit. That guard
+    // orders units by PTS, and PTS order means nothing across a cell whose timestamps
+    // RESTART: every Player Mode cell starts at PTS 0.333, so the cell that carries the
+    // buttons' graphic was skipped as a "re-send" of the previous cell's EMPTY unit,
+    // and the highlight had nothing to recolour. A replayed cell (a looping menu) keeps
+    // its ids, so the Matrix dummy/overlay ordering the guard exists for is untouched.
+    // Tie 1'b0 where there is no NAV stream.
+    input  wire        new_cell,
     input  wire [32:0] sp_pts,
     input  wire        sp_pts_valid,
 
@@ -219,6 +229,7 @@ module spu_decode #(
     // them in: 39,113/41,910 ALMs = 93%, SEED 5 held, clk_dec 95.57/92.68 vs the
     // 86.0 gate.)
     reg  [24:0] hold_tmr;
+    reg         guard_open;   // a new cell began: accept its first unit whatever its PTS
 
     // the unit's effective show time (COMMIT's own default when no STA_DSP delay)
     wire [32:0] w_show_eff = w_has_show ? w_show : pts_latched;
@@ -334,6 +345,7 @@ module spu_decode #(
             state    <= S_IDLE;
             c_valid  <= 1'b0;
             c_pts    <= 33'd0;
+            guard_open <= 1'b0;
             spu_we   <= 1'b0;
             bmp_we   <= 1'b0;
             wr_ptr   <= '0;
@@ -372,7 +384,7 @@ module spu_decode #(
                     // SKIP only a re-send of the current-or-older unit (sp_pts <= c_pts);
                     // ACCEPT a genuinely newer one (sp_pts > c_pts) immediately. c_valid==0
                     // (fresh after a flush) always accepts. Subtitles (menu_mode=0) untouched.
-                    if (menu_mode && c_valid && sp_pts_valid &&
+                    if (menu_mode && c_valid && sp_pts_valid && !guard_open &&
                         $signed(sp_pts[31:0] - c_pts[31:0]) <= 0) begin
                         state <= S_SKIP;     // re-send of the committed-or-older SPU: discard
                     end else begin
@@ -389,7 +401,7 @@ module spu_decode #(
             //      packet boundary (sp_frame_start) ----
             S_SKIP: begin
                 if (sp_valid && sp_frame_start) begin
-                    if (menu_mode && c_valid && sp_pts_valid &&
+                    if (menu_mode && c_valid && sp_pts_valid && !guard_open &&
                         $signed(sp_pts[31:0] - c_pts[31:0]) <= 0)
                         state <= S_SKIP;     // still a re-send of the committed-or-older SPU
                     else begin
@@ -682,11 +694,14 @@ module spu_decode #(
                 c_hide  <= w_has_hide ? w_hide : 33'h1_FFFF_FFFF;  // stay if no STP_DSP
                 c_valid <= 1'b1;
                 c_pts   <= pts_latched;    // remember this unit's PTS (menu re-send guard)
+                guard_open <= 1'b0;        // the new cell's unit is on screen: guard again
                 state   <= S_IDLE;
             end
 
             default: state <= S_IDLE;
             endcase
+            // after the case: a cell change in the same cycle as a COMMIT still opens it
+            if (new_cell) guard_open <= 1'b1;
         end
     end
 

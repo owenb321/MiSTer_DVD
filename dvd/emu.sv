@@ -5772,8 +5772,12 @@ crt_ov_map crt_ov_map_inst (
     .q_y_out      (ov_qy)
 );
 
+// A new cell entered the DELIVERED stream (derived below, after nav_dsi). Declared
+// here, ahead of its first use -- emu.sv has no `default_nettype none`.
+wire sp_new_cell;
 spu_decode spu_decode_inst (
     .clk        (clk_sys),
+    .new_cell   (sp_new_cell),            // opens the menu re-send guard across a PTS restart
     .rst_n      (pipe_rst_n),
     .enable     (sp_en),
     // "menu_mode" = windowless display: show the committed SPU whenever valid, ignoring
@@ -5947,6 +5951,7 @@ nav_pci nav_pci_inst (
 // =========================================================================
 wire [31:0] dsi_c_eltm;         // BCD dvd_time: {hh, mm, ss, ff|rate}
 wire [7:0]  dsi_c_idn;
+wire [15:0] dsi_vob_idn;
 // "near chapter start" for prev-chapter: cell-elapsed <= 4 s (hh=mm=00, ss BCD<=04).
 // {hh,mm,ss} = dsi_c_eltm[31:8]; BCD 0..4 s = 24'h000000..24'h000004.
 assign chap_at_start = (dsi_c_eltm[31:8] <= 24'h000004);
@@ -5962,7 +5967,7 @@ nav_dsi nav_dsi_inst (
     .dsi_nv_pck_lbn (dsi_nv_pck_lbn),
     .dsi_vobu_ea    (dsi_vobu_ea),
     .dsi_1stref_ea  (),
-    .dsi_vob_idn    (),
+    .dsi_vob_idn    (dsi_vob_idn),
     .dsi_c_idn      (dsi_c_idn),
     .dsi_c_eltm     (dsi_c_eltm),
     .dsi_next_vobu  (dsi_next_vobu),
@@ -5974,6 +5979,27 @@ nav_dsi nav_dsi_inst (
     .tbl_raddr  (dsi_tbl_raddr),
     .tbl_rdata  (dsi_tbl_rdata)
 );
+
+// ★ NEW CELL for spu_decode's menu re-send guard (2026-09-18, Harry Potter
+// Interactive's Player Mode highlight). The guard orders units by PTS; a disc whose
+// cells each RESTART their PTS (every Player Mode cell starts at 0.333 s) had the
+// graphic-carrying cell's unit skipped as a "re-send" of the previous cell's empty
+// one. The NAV pack leads its VOBU, so its DSI commits before that VOBU's subpicture
+// bytes reach spu_decode -- the pulse is in DELIVERY order, which a reader-side cell
+// pulse (up to 16 KB of cache ahead) would not be. A replayed cell keeps its ids, so a
+// looping menu (Matrix's dummy/overlay pair) is untouched. docs/subpicture.md.
+reg [23:0] dsi_cell_id_q;
+reg        sp_new_cell_r;
+always @(posedge clk_sys) begin
+    sp_new_cell_r <= 1'b0;
+    if (!pipe_rst_n)
+        dsi_cell_id_q <= 24'd0;
+    else if (dsi_commit) begin
+        if ({dsi_vob_idn, dsi_c_idn} != dsi_cell_id_q) sp_new_cell_r <= 1'b1;
+        dsi_cell_id_q <= {dsi_vob_idn, dsi_c_idn};
+    end
+end
+assign sp_new_cell = sp_new_cell_r;
 
 // Overlay time rows (both BCD, osd_read-decodable as 4 nibbles = MM:SS):
 //   row 18 = current  = DSI cell-elapsed time  c_eltm[mm,ss]

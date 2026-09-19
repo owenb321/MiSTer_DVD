@@ -315,6 +315,62 @@ and the screensaver, subpicture and HUD-geometry suites are green.
 
 ✅ **HW gate passed** (see the status line at the top of this section).
 
+## The re-send guard is per cell (2026-09-18)
+
+🔧 **Branch `fix/spu-newcell`: sim-proven on the disc's real subpicture units, mutation-checked;
+⏳ HW-confirm pending.**
+
+**Symptom:** Harry Potter Interactive's **Player Mode** screen (Single / Multi-Player) showed no
+highlight. This was PRE-EXISTING: it failed the same way on pre-STC `main`
+(`docs/stc_freerun.md` §10).
+
+★ **Measured on the board first** (current `main`, O[2] blocks): armed, video live, subpicture
+shown, SPU bytes arriving, **fetched** and recolour firing were all GREEN. This retires the old
+"`blk7` red, fetch never completes" reading, which was taken on a much older `nav_pci`. D-pad
+navigation moves the rect. Yet between Single-selected and Multi-selected screenshots **zero
+pixels change** in either graphic's region.
+
+★ **The disc** (VTS_05 PGCN 14, five cells, **one VOB each**, `vob_idn` 12/13/14…):
+- **Every cell's subpicture unit has PTS 0.333 s**, because each cell restarts its PTS.
+- **Cell 1's unit is empty.** Cells 2 and 3 carry a 460-pixel graphic (x 272–464, y 315–374)
+  at contrast 0, split between the two button rects (231 / 229 px). **That graphic IS the
+  highlight:** coli `2220f840` recolours classes 1–3.
+
+**The defect:** `spu_decode`'s **menu re-send guard** skips a unit whose PTS is `<=` the
+committed one's. It exists for real reasons:
+- a looping menu re-sends its unit every VOBU;
+- Matrix's root cell sends a transparent dummy (PTS A) before the real overlay (PTS B > A).
+
+But PTS order only means anything **within one timeline**, so cells 2 and 3's units were
+skipped as "re-sends" of cell 1's empty one. **Reproduced with the disc's own units** through
+the real `spu_decode`: `menu_mode=1` gives 0 non-background pixels; `menu_mode=0` gives 460.
+
+**Fix:** a `new_cell` pulse into `spu_decode` opens the guard until the next unit COMMITS.
+`emu.sv` raises it when a committed DSI's `{vob_idn, c_idn}` differs from the previous one.
+- ★ **Delivery order, not read order.** The NAV pack leads its VOBU, so its DSI commits
+  before that VOBU's subpicture bytes arrive. A reader-side cell pulse would run up to the
+  16 KB cache ahead, and a stale re-send delivered after it could re-arm the guard against
+  the new cell's unit.
+- ★ **A replayed cell keeps its ids,** so a looping menu (the Matrix dummy/overlay pair the
+  guard exists for) is untouched.
+- ⚠ The guard re-closes at the COMMIT, not at acceptance, so an accepted-then-dropped
+  (over-cap) unit does not close it early.
+
+**Gates: `bench/dvd/run_spu_newcell.sh --red`.** `spu_newcell_tb` scores the non-background
+pixels on screen:
+- **[N1]:** a same-PTS unit across a cell change is shown.
+- **[N2]:** the control; without a cell change it is still a re-send.
+- **[N3]:** after the commit an older re-send is skipped again.
+
+M1 (ignore `new_cell`) fails N1 only, and M2 (never re-close) fails N3 only.
+`run_spu_window.sh` and `run_subpic.sh` are unchanged-green. The real-unit probe with the
+fix gives 460 px (231 in the Single Player rect) in cells 2 and 3.
+
+⏳ **HW gate:**
+- Player Mode shows its highlight on both buttons;
+- Scene It's Play-game screen, possibly the same mechanism and unverified;
+- Matrix / MiB / T2 menus unregressed.
+
 ## v1 scope & decisions to make (write them down as you go)
 
 - **Palette (the main deferral):** the real 4 colours + alpha come from the **IFO PGC

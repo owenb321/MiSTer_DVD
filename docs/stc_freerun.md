@@ -749,6 +749,11 @@ screenshot rather than read by eye (blocks are 16 px squares at x 8/28/48/68):
 
 ⏳ Both are real open bugs and neither belongs to this branch. Recorded here only because
 this is where they were measured; they want their own issue.
+➡ **2026-09-18: Harry Potter's is root-caused and fixed** (`docs/subpicture.md` "The re-send
+guard is per cell"). On current `main` `blk7` reads GREEN. The cause was `spu_decode`
+skipping every cell's subpicture unit as a PTS "re-send", because each cell restarts its PTS.
+Scene It's "all green, no recolour" was re-examined after #109 changed the coli rule, and is
+on the same HW round.
 ⚠ **The technique is the point, and it is the one CLAUDE.md already recommends: A/B TWO OF
 OUR OWN BUILDS.** Four symptoms arrived in one report, all in the menu domain, all
 plausible consequences of the same change — and two of them had nothing to do with it. A

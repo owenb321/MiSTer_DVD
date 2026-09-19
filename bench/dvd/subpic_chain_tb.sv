@@ -44,6 +44,7 @@ module subpic_chain_tb;
     wire [3:0] a0,a1,a2,a3;
     logic [32:0] stc;
     spu_decode spu (
+        .new_cell(1'b0),   // 2026-09-18: menu re-send guard opener (no NAV here)
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .interlaced(1'b0),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),
         .sp_pts(sp_pts), .sp_pts_valid(sp_pts_valid),
