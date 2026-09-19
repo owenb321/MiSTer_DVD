@@ -302,8 +302,9 @@ worse maintenance burden than targeted in-place edits. So:
 
   ★ **The first board round showed BOTH wands lit during the intro→menu transition.** That
   is a second mechanism: the new unit commits at the parse front while the intro's HLI (one
-  FULL-SCREEN button) is still armed. New `dvd/hl_mask.sv` masks the highlight from that
-  commit until the next HLI arms. ⚠ It never masks if the new cell's HLI armed first,
+  FULL-SCREEN button) is still armed. New `dvd/hl_mask.sv` masks the highlight from the
+  unit's ACCEPTANCE until the next HLI arms. ⚠ Not from its COMMIT: round 2 showed a blip,
+  because the one bitmap is rewritten under the old unit's params throughout the decode. ⚠ It never masks if the new cell's HLI armed first,
   otherwise it could hide the right highlight for good.
   **Gate: `bench/dvd/run_spu_newcell.sh --red`.** Detail: `docs/subpicture.md` "The re-send
   guard is per cell".

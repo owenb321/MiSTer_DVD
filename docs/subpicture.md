@@ -375,13 +375,19 @@ multi-player option disappears."*
   graphic sat under the PREVIOUS cell's HLI. That HLI is the intro's single **full-screen**
   "skip" button (x 50–694, y 2–477) with the same `2220f840` colours, so it recoloured
   both wands.
-- **Fix: new `dvd/hl_mask.sv`.** When `spu_decode` pulses `newcell_commit` (a unit
-  accepted across a cell change is on the layer) and no HLI has armed since that cell
+- **Fix: new `dvd/hl_mask.sv`.** When `spu_decode` pulses `newcell_load` (a unit is
+  ACCEPTED across a cell change, before its first pixel is written) and no HLI has armed since that cell
   began, the highlight is masked until `nav_pci`'s new `hli_arm` pulse (the next HLI
   promoted, which is the new cell's). It gates `hl_hit_q`.
 - ⚠ **The race it must not lose:** if the new cell's HLI arms BEFORE its unit commits,
   masking at the commit would hide the correct highlight, possibly for good on a still
   menu whose later HLIs are continuations. `armed_since` is what prevents that.
+- ⚠⚠ **HW round 2: a BLIP of both wands, then gone, then Single.** The pulse first
+  fired at COMMIT. But there is ONE bitmap, and the new unit's RLE decodes straight into
+  it under the OLD unit's committed params, so the graphic was on the layer, under the
+  intro's full-screen highlight, for the whole decode. The pulse now fires at
+  ACCEPTANCE, the cycle the unit enters `S_FILL`, before any bitmap write.
+  `spu_newcell_tb` [N4] asserts exactly that ordering.
 - **Gate:** `hl_mask_tb` [K1]–[K4] in the same runner. M3 (ignore `armed_since`) fails K2;
   M4 (never mask) fails K1.
 

@@ -11,12 +11,12 @@
 // both wands, so both lit up until the new cell's two-button HLI arrived. A player
 // that presents the subpicture at its PTS never shows that.
 //
-// WHAT.  mask = "a new cell's unit has committed and no HLI has armed since that
+// WHAT.  mask = "a new cell's unit has been accepted and no HLI has armed since that
 // cell began". While it is set the highlight is not drawn; the next HLI to arm is
 // the new cell's, and clears it.
 //
 // ⚠ THE RACE IT MUST NOT LOSE: if the new cell's HLI arms BEFORE its unit commits
-// (a small parse lead, e.g. straight after a flush), masking at the commit would
+// (a small parse lead, e.g. straight after a flush), masking at the load would
 // hide the CORRECT highlight until some later HLI armed -- possibly never, on a
 // still menu whose later HLIs are continuations. So the mask only sets when no HLI
 // has armed since the cell change (`armed_since`).
@@ -25,7 +25,7 @@ module hl_mask (
     input  wire clk,
     input  wire rst_n,           // pipe reset: a flush forgets everything
     input  wire new_cell,        // the delivered stream entered a different cell
-    input  wire newcell_commit,  // spu_decode committed that cell's first unit
+    input  wire newcell_load,    // spu_decode ACCEPTED that cell's first unit (before any pixel)
     input  wire hli_arm,         // nav_pci promoted an HLI with buttons
     output reg  mask
 );
@@ -36,7 +36,7 @@ module hl_mask (
             armed_since <= 1'b0;
         end else begin
             if (new_cell) armed_since <= 1'b0;
-            if (newcell_commit && !armed_since && !hli_arm) mask <= 1'b1;
+            if (newcell_load && !armed_since && !hli_arm) mask <= 1'b1;
             if (hli_arm) begin
                 armed_since <= 1'b1;
                 mask        <= 1'b0;

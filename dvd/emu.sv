@@ -5775,11 +5775,11 @@ crt_ov_map crt_ov_map_inst (
 // A new cell entered the DELIVERED stream (derived below, after nav_dsi). Declared
 // here, ahead of its first use -- emu.sv has no `default_nettype none`.
 wire sp_new_cell;
-wire sp_newcell_commit;                   // spu_decode: that new cell's first unit is up
+wire sp_newcell_load;                     // spu_decode: that new cell's first unit is loading
 spu_decode spu_decode_inst (
     .clk        (clk_sys),
     .new_cell   (sp_new_cell),            // opens the menu re-send guard across a PTS restart
-    .newcell_commit (sp_newcell_commit),
+    .newcell_load (sp_newcell_load),
     .rst_n      (pipe_rst_n),
     .enable     (sp_en),
     // "menu_mode" = windowless display: show the committed SPU whenever valid, ignoring
@@ -6021,7 +6021,7 @@ wire [15:0] dbg_angle     = {4'd0, angle_count, 4'd0, cur_angle};
 // subtitle already tolerates). core_v_pos is the absolute frame line in
 // CRT-480i too, so the same compare serves both modes.
 // ★ The previous cell's highlight must not recolour the NEW cell's subpicture: that
-// unit commits at the parse front, a VBUF depth before the display reaches its cell,
+// unit loads at the parse front, a VBUF depth before the display reaches its cell,
 // while the old HLI is still armed. Harry Potter Player Mode's intro HLI is one
 // full-screen button, so it lit BOTH wands until the new HLI arrived.
 // dvd/hl_mask.sv; gate bench/dvd/run_spu_newcell.sh.
@@ -6030,7 +6030,7 @@ hl_mask hl_mask_inst (
     .clk            (clk_sys),
     .rst_n          (pipe_rst_n),
     .new_cell       (sp_new_cell),
-    .newcell_commit (sp_newcell_commit),
+    .newcell_load (sp_newcell_load),
     .hli_arm        (hli_arm_w),
     .mask           (hl_mask_w)
 );

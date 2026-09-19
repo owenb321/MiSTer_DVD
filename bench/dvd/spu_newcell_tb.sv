@@ -25,6 +25,9 @@
 //        within one cell is a re-send and stays skipped (the looping-menu rule).
 //   [N3] after the new cell's unit commits, an OLDER-PTS unit with no pulse is
 //        still skipped (the Matrix dummy/overlay order, within the new cell).
+//   [N4] newcell_load pulses BEFORE the new unit's first bitmap write. HW round 2:
+//        pulsed at COMMIT, the previous cell's highlight lit the graphic for the
+//        whole decode ("a blip where both highlight options are visible").
 // =============================================================================
 `timescale 1ns/1ps
 module spu_newcell_tb;
@@ -33,6 +36,15 @@ module spu_newcell_tb;
 
     logic [7:0]  sp_byte = 8'd0;
     logic        sp_valid=0, sp_frame_start=0, sp_pts_valid=0, new_cell=0;
+    wire         nl;
+    // [N4] ordering: the cycle newcell_load pulses vs the first bitmap write after it
+    // was armed. bmp_we is the write that changes the SCREEN (one bitmap buffer).
+    int  cyc = 0, t_nl = -1, t_bw = -1; bit watch4 = 0;
+    always @(posedge clk) begin
+        cyc <= cyc + 1;
+        if (watch4 && nl && t_nl < 0) t_nl <= cyc;
+        if (watch4 && dut.bmp_we && t_bw < 0) t_bw <= cyc;
+    end
     logic [32:0] sp_pts = 0, stc = 33'd100000;
     logic [11:0] q_x=0, q_y=0;
     wire  [1:0]  q_idx;  wire q_inside, sp_active;
@@ -40,7 +52,7 @@ module spu_newcell_tb;
 
     spu_decode #(.HOLD_CYCLES(63000)) dut (
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .interlaced(1'b0),
-        .menu_mode(1'b1), .new_cell(new_cell),
+        .menu_mode(1'b1), .new_cell(new_cell), .newcell_load(nl),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),
         .sp_pts(sp_pts), .sp_pts_valid(sp_pts_valid),
         .stc(stc), .q_x(q_x), .q_y(q_y), .q_idx(q_idx), .q_inside(q_inside),
@@ -131,6 +143,21 @@ module spu_newcell_tb;
         scan();
         if (nz == 0) fail("[N3] an older-PTS re-send replaced the new cell's overlay (guard left open)");
         else $display("   [N3] older re-send after the commit: skipped, overlay kept  ok");
+
+        // ---- [N4] the load pulse precedes the first pixel of the new unit ----
+        reset_dut;
+        feed(2'd0, P);
+        pulse_new_cell;
+        watch4 = 1; t_nl = -1; t_bw = -1;
+        feed(2'd3, P);
+        watch4 = 0;
+        // Judged only when the new unit actually wrote pixels: a unit that was never
+        // accepted is [N1]'s failure, and scoring it here too would double-report it.
+        if (t_bw >= 0 && t_nl < 0) fail("[N4] the new unit wrote pixels and newcell_load never pulsed");
+        else if (t_bw >= 0 && t_nl > t_bw) begin
+            $display("   [N4] load pulse at %0d, first bitmap write at %0d", t_nl, t_bw);
+            fail("[N4] the new unit wrote pixels before newcell_load (the highlight blip)");
+        end else $display("   [N4] load pulse %0d cycles before the first bitmap write  ok", t_bw - t_nl);
 
         if (errors == 0) $display("RESULT: PASS");
         else begin $display("RESULT: FAIL (%0d)", errors); $fatal(1, "spu_newcell_tb failed"); end

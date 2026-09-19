@@ -11,21 +11,21 @@
 `timescale 1ns/1ps
 `default_nettype none
 module hl_mask_tb;
-    reg clk = 0, rst_n = 0, new_cell = 0, newcell_commit = 0, hli_arm = 0;
+    reg clk = 0, rst_n = 0, new_cell = 0, newcell_load = 0, hli_arm = 0;
     wire mask;
     always #5 clk = ~clk;
     hl_mask dut (.clk(clk), .rst_n(rst_n), .new_cell(new_cell),
-                 .newcell_commit(newcell_commit), .hli_arm(hli_arm), .mask(mask));
+                 .newcell_load(newcell_load), .hli_arm(hli_arm), .mask(mask));
     integer errors = 0;
     task fail(input [639:0] m); begin $display("FAIL: %0s", m); errors = errors + 1; end endtask
     task p_nc;  begin @(negedge clk); new_cell = 1;       @(negedge clk); new_cell = 0;       repeat (3) @(negedge clk); end endtask
-    task p_cm;  begin @(negedge clk); newcell_commit = 1; @(negedge clk); newcell_commit = 0; repeat (3) @(negedge clk); end endtask
+    task p_cm;  begin @(negedge clk); newcell_load = 1; @(negedge clk); newcell_load = 0; repeat (3) @(negedge clk); end endtask
     task p_arm; begin @(negedge clk); hli_arm = 1;        @(negedge clk); hli_arm = 0;        repeat (3) @(negedge clk); end endtask
     task rst;   begin rst_n = 0; repeat (3) @(negedge clk); rst_n = 1; repeat (2) @(negedge clk); end endtask
     initial begin
         rst;
         p_arm;                      // the intro's HLI is armed
-        p_nc; p_cm;                 // cell 2's unit commits at the parse front
+        p_nc; p_cm;                 // cell 2's unit loads at the parse front
         if (!mask) fail("[K1] the intro's highlight was left to recolour cell 2's graphic");
         p_arm;                      // cell 2's HLI promotes
         if (mask) fail("[K1] cell 2's own highlight stayed masked");
@@ -42,7 +42,7 @@ module hl_mask_tb;
         else $display("   [K3] a flush clears the mask  ok");
 
         rst;
-        p_arm; p_cm;                // newcell_commit only pulses across a cell change,
+        p_arm; p_cm;                // newcell_load only pulses across a cell change,
         p_arm;                      // but a lone pulse after an arm with no new_cell
         if (mask) fail("[K4] mask left set after an HLI armed");
         else $display("   [K4] an HLI arm always clears it  ok");

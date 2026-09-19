@@ -103,11 +103,14 @@ module spu_decode #(
     // its ids, so the Matrix dummy/overlay ordering the guard exists for is untouched.
     // Tie 1'b0 where there is no NAV stream.
     input  wire        new_cell,
-    // One pulse when a unit accepted ACROSS a cell change (the guard was open) is
-    // committed -- the new cell's graphic is now on the subpicture layer. emu's
-    // dvd/hl_mask.sv hides the PREVIOUS cell's highlight from it until the new
-    // cell's HLI arms.
-    output reg         newcell_commit,
+    // One pulse when a unit is ACCEPTED across a cell change (the guard was open) --
+    // before its first pixel is written. ⚠ NOT at COMMIT: there is ONE bitmap, and the
+    // new unit's RLE decodes straight into it under the OLD unit's committed params,
+    // so its graphic is on the layer for the whole decode. A mask raised at COMMIT
+    // let the previous cell's highlight light it for that window (HW round 2: "a blip
+    // where both highlight options are visible"). emu's dvd/hl_mask.sv hides the
+    // previous cell's highlight from here until the new cell's HLI arms.
+    output reg         newcell_load,
     input  wire [32:0] sp_pts,
     input  wire        sp_pts_valid,
 
@@ -351,7 +354,7 @@ module spu_decode #(
             c_valid  <= 1'b0;
             c_pts    <= 33'd0;
             guard_open <= 1'b0;
-            newcell_commit <= 1'b0;
+            newcell_load <= 1'b0;
             spu_we   <= 1'b0;
             bmp_we   <= 1'b0;
             wr_ptr   <= '0;
@@ -365,7 +368,7 @@ module spu_decode #(
         end else begin
             spu_we <= 1'b0;
             bmp_we <= 1'b0;
-            newcell_commit <= 1'b0;
+            newcell_load <= 1'b0;
 
             case (state)
             // ---- wait for the first byte of a new SPU ----
@@ -400,6 +403,7 @@ module spu_decode #(
                         if (sp_pts_valid) pts_latched <= sp_pts;
                         wr_ptr    <= 16'd1;
                         state     <= S_FILL;
+                        newcell_load <= guard_open;   // BEFORE the first bitmap write
                     end
                 end
             end
@@ -417,6 +421,7 @@ module spu_decode #(
                         if (sp_pts_valid) pts_latched <= sp_pts;
                         wr_ptr    <= 16'd1;
                         state     <= S_FILL;
+                        newcell_load <= guard_open;   // BEFORE the first bitmap write
                     end
                 end
             end
@@ -430,6 +435,7 @@ module spu_decode #(
                     pts_latched <= sp_pts;
                     wr_ptr    <= 16'd1;
                     state     <= S_FILL;
+                    newcell_load <= guard_open;
                 end
             end
 
@@ -702,7 +708,6 @@ module spu_decode #(
                 c_valid <= 1'b1;
                 c_pts   <= pts_latched;    // remember this unit's PTS (menu re-send guard)
                 guard_open <= 1'b0;        // the new cell's unit is on screen: guard again
-                newcell_commit <= guard_open;
                 state   <= S_IDLE;
             end
 
