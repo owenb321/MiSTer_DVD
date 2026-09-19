@@ -4073,6 +4073,28 @@ always @(posedge clk or negedge rst_n) begin
                             pgc_error <= 1'b1;
                             state     <= S_DONE;
                         end
+                    end else if (!vm_mode && srp_i + 16'd1 < nr_srp_l) begin
+                        // DVD-FORK FIX (2026-09-19): Auto mode (Disc Menus Off) must
+                        // NOT stream a whole VTS linearly while another PGC exists.
+                        // The linear fallback reads every sector of the VTS,
+                        // including ones no cell references -- and copy-protected
+                        // discs put DELIBERATELY UNREADABLE sectors exactly there.
+                        // "OZ: The Great and Powerful" (issue #112 follow-up): Auto
+                        // picks VTS_08 PGCN 1, a decoy with 72 cells and
+                        // cell_playback_offset = 0; linear streaming from RBN 0 hit
+                        // bad sectors at RBN ~1995, each costing the drive's ~30 s
+                        // timeout with the Main blocked -- an hours-long hang on a
+                        // physical disc (an ISO reads MakeMKV's 0xEF fill instead).
+                        // PGCN 2 is the real, valid feature. So try the next PGC,
+                        // and fall back to linear only when none is usable.
+                        // MEASURED blast radius: of 1,231 library images, OZ is the
+                        // ONLY one whose Auto PGC takes this path. vm_mode is left
+                        // alone: there the VM named this PGC, and a stub's commands
+                        // are handled by the arm above.
+                        srp_i      <= srp_i + 16'd1;
+                        want_pgcn  <= srp_i + 16'd2;
+                        scan_mode  <= 1'b0;
+                        state      <= S_SRP_FETCH;
                     end else
                         state <= S_FINAL2;             // title linear fallback (palette kept)
                 end else begin
