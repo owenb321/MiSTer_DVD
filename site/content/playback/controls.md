@@ -313,6 +313,10 @@ keypad if you have one — either pair does the same thing, and no ++shift++ is 
 Your TV remote's own volume keys already work too, and always did — MiSTer handles those
 itself, before the core ever sees them.
 
+The volume bar is MiSTer's own small popup. With the custom Main installed, it (and
+MiSTer's other small popups, such as the resolution notice) sits about 10 % in from the
+top-left corner, so a CRT's overscan does not clip it.
+
 ### Frame step
 
 **B18 (Frame Step)** is the pause-and-nudge button. Press it while a disc is playing and

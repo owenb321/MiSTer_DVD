@@ -393,3 +393,42 @@ the invariant where the bug is rather than working around it elsewhere, and the
 
 ⚠ `mgl->timer` is only ever 0 while unarmed: `delay="0"` still yields
 `GetTimer(0)`, a live millisecond count, so a zero delay keeps working.
+
+## Step 42 — the small info popup inside the CRT safe area
+
+`menu.cpp`, one line in `Info()`:
+
+```c
+-  InfoEnable(20, (cfg.direct_video && get_vga_fb()) ? 30 : 10, width, height);
++  const int dvd_info_x = 72, dvd_info_y = 24;
++  InfoEnable(dvd_info_x, (cfg.direct_video && get_vga_fb()) ? 30 : dvd_info_y, width, height);
+```
+
+`Info()` draws the small top-left box: the **volume bar and Mute** (`set_volume()`,
+which our Volume buttons call), the **resolution popup**, "Screenshot saved",
+keyboard-mode and controller-info messages, and cfg errors. Stock puts it at
+x=20 / y=10, which is inside a CRT's overscan, so it is clipped or sits against the
+bezel. It now starts about 10 % in from the top and left (title-safe).
+
+**What the two numbers are in**, from `sys/osd.v`, since `Info()` only hands them to
+the OSD block (`InfoEnable` → `infox`/`infoy`):
+
+- **x is in OSD pixels.** An OSD pixel is ⌊DE width / 512⌋ clocks. This core's DE
+  line is 720 dots in 480p and 1440 clocks with pixel repetition in
+  Interlaced/240p, so either way **one OSD pixel is one of the 720 DVD pixels**:
+  72 = 10 %.
+- **y is in lines from the top of DE.** A 15 kHz field (240/288 lines) is under
+  320 lines, so `osd.v` uses y directly as field lines: 24/240 = 10 %
+  (8.3 % on PAL). In 480p it doubles y, so the fraction is the same.
+- Over HDMI the `hdmi_osd` instance applies the same x/y to the scaled output
+  (~x/640 of a 1920 line, ~4·y of 1080 lines), so HDMI moves by about the same
+  fraction.
+
+Stock's direct-video y of 30 is kept; it is already past 24.
+
+**Scope:** every `Info()` popup moves, on purpose. They share one position and all
+of them are clipped the same way. `InfoMessage()` / `ProgressMessage()` (the CSS
+progress bar, the support-bundle messages) use the centred full OSD instead and are
+not affected. This Main only runs for the DVD core (`main=`), so no other core
+changes. The two constants are the only knobs if the margin needs tuning on a
+particular set.
