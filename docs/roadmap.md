@@ -428,13 +428,17 @@ If you want more control or can't build libdvdread for MiSTer's ARM:
 - [x] ✅ Register every VOB. The 64-entry table dropped OZ's VTS_20 sneak peeks, which
       then played scrambled (issue #112, HW-CONFIRMED 2026-09-19).
       `docs/physical_disc.md` "Every VOB must be in the table".
-- [ ] **NEXT: copy-protection hang on physical discs.** Deliberately unreadable sectors
-      (OZ, `VTS_08_1.VOB` RBN ~2000+) cost about 30 s each and block the Main. The Disc
-      Menus Off road is certain: a malformed title PGC goes to the `S_FINAL2` linear
-      fallback and streams from RBN 0. The Disc Menus On road is not yet known. Step 1:
-      a diagnostic Main that logs the core's seek LBAs, then a rig run. Step 2: stop the
-      linear fallback from streaming a VTS that has a PGC table, and raise `pgc_error`
-      instead. Step 3 (maybe): fail unreadable sectors fast in the Main. Detail:
+- [x] ✅ **Copy-protection hang on physical discs — FIXED, HW-CONFIRMED 2026-09-19.**
+      Deliberately unreadable sectors (OZ, `VTS_08_1.VOB` from RBN ~1995) cost the
+      drive's ~30 s timeout each and block the Main in state D, for hours. Traced on
+      the rig with a new seek log (`/tmp/dvd_seek.log`, HIL-armed): with Disc Menus
+      OFF, Auto picked VTS_08's malformed PGCN 1 (72 cells, `cell_playback_offset=0`),
+      which sent the reader to the `S_FINAL2` linear whole-VTS stream from RBN 0 and
+      straight into those sectors. Both hangs seen were that road; the Disc Menus ON
+      run that looked like a second road was the same config (an OSD toggle applies
+      live, the SAVED config still said Off). Fixed in the reader: an unusable PGC
+      tries the next one, and Auto plays the LONGEST PGC rather than PGCN 1 — which is
+      a 0-44 s stub on 60 of 1231 library discs. Detail: `docs/dvd_nav.md`,
       `docs/physical_disc.md`.
 
 **Checkpoint:** Drop an ISO of any commercial DVD onto the SD card. Core automatically

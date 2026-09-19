@@ -352,7 +352,7 @@ mid-film. Keying at the VOB start is correct here.
    `libdvdcss.so.2`, pointing `DVDCSS_CACHE` at that cache, and `cmp` them against a
    known-good rip.
 
-⚠ **Open, separate: the protection zone hangs the Main.** On this disc, sectors from
+✅ **FIXED 2026-09-19, HW-CONFIRMED: the protection zone is never read.** On this disc, sectors from
 about RBN 2000 of `VTS_08_1.VOB` are deliberately unreadable: each read returns
 `03/11/00` after roughly 30 s of drive retries, with the Main blocked in state D. MakeMKV
 fills them with `0xEF`, so an ISO never hangs. No real PGC cell starts before RBN 4112.
@@ -364,7 +364,15 @@ commands.
 - **Disc Menus on:** the stub's own PRE bounces to a menu (`CallSS VMGM pgc 2`), yet it
   was still seen once (2026-09-19) by a road not yet identified.
 
-Next step: a Main that logs the core's seek LBAs, then a rig run. See `docs/roadmap.md`.
+**Fix (reader, not the Main):** Auto no longer falls to the linear whole-VTS stream
+while another PGC exists, and it now plays the LONGEST PGC rather than PGCN 1. See
+`docs/dvd_nav.md`. HW: the seek log goes straight from the IFO to RBN 4112, with zero
+drive I/O errors.
+
+★ **The diagnostic that traced it is kept:** `/tmp/dvd_seek.log`, every non-sequential
+read logged BEFORE it is issued, armed by the HIL flag file (`/media/fat/dvd_hil`). When
+the Main blocks in state D, screenshots and telemetry freeze with it, so this is the only
+record of how the core got there.
 
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 

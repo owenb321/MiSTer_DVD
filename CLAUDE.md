@@ -297,10 +297,23 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **AUTO MODE (DISC MENUS OFF) STREAMED A WHOLE VTS LINEARLY AND HUNG ON A
+- ✅ **AUTO MODE (DISC MENUS OFF) STREAMED A WHOLE VTS LINEARLY AND HUNG ON A
   COPY-PROTECTED DISC — and it played a 1-SECOND LOGO on 60 library discs
   (2026-09-19, branch `fix/protection-zone-hang`); sim-proven RED/GREEN, each arm
-  gating its own change, ⏳ HW-confirm pending.** Field-traced on the rig with a new
+  gating its own change, and ✅ HW-CONFIRMED 2026-09-19 IN THE CONFIG THAT HUNG**
+  (build `DVD_protzone_20260919_2229.rbf`, SEED 9 first roll, clk_dec 90.89/90.83 vs
+  the 86.0 gate, 92 % ALM). Same physical OZ disc, same saved config (Disc Menus Off,
+  `DVD_v3.CFG` byte 0 = 0x02): the seek log reads `429074` (the IFO), `429076` (the PGC
+  table), then **`433717 = vob@429605 rbn 4112`** — straight to the feature's first
+  cell, **0 reads at RBN 0, 0 drive I/O errors**, the Main in state R, and the feature
+  on screen. ★ The duration scan cost **ONE extra sector read**: every PGC header of a
+  one-sector PGCIT comes out of the already-resident `parse_buf`.
+  ★★ **And the PGC pick was measured at the HUD, not inferred:** with
+  `Debug Overlay=On` the status line's `CH n/N` is `{reader PGCN, VTS}`, and
+  `PAW_PATROL_MEET_EVEREST` (9 PGCs; PGCN 1 = one 23-min episode) read
+  **`0:00:09/1:36:40 CH 9/3`** = PGCN 9 of VTS_03, the 96-minute Play All chain, whose
+  5800 s matches the IFO exactly. Control: MEN IN BLACK in the same Auto mode plays its
+  feature unchanged. Field-traced on the rig with a new
   diagnostic (`/tmp/dvd_seek.log`, armed by the HIL flag file): mount → `VTS_08_0.IFO`
   → a sequential stream of `VTS_08_1.VOB` **from RBN 0**, reaching RBN 2000 at +35 s,
   where OZ's deliberately unreadable protection sectors cost ~30 s each with the Main
