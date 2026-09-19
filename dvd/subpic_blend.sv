@@ -19,8 +19,9 @@
 // the DVD spec has no such rule: class 0 is drawn with its contrast like any other.
 // MEASURED over 1215 discs / 16124 SPUs: 11 discs give class 0 a nonzero contrast, and in
 // the ones inspected it was DOING something -- Last Ounce of Courage and Die Another Day
-// use class 0 as a VISIBLE glyph colour (contrast 15, background on class 3), so the key
-// was deleting part of their subtitle text; Scooby-Doo 2's museum dims the whole screen
+// put visible pixels in class 0 (contrast 15, background on class 3; on HW Die Another
+// Day looked right on v0.6.1 too, so that cost is unconfirmed); Scooby-Doo 2's museum
+// dims the whole screen
 // with class 0 at contrast 12 (the "flashlight" darkness). Silent Steel 2 authors a
 // full-screen class 0 at contrast 3 and now shows that tint, as a real player does.
 

@@ -250,7 +250,10 @@ Gate: `bench/dvd/run_spu_window.sh` (+ `--red`); design history in `docs/stc_fre
 
 ## Highlight colours replace every class (2026-09-18)
 
-🔧 **Branch `fix/spu-flashlight`: sim-proven, mutation-checked; ⏳ HW-confirm pending.**
+✅ **Branch `fix/spu-flashlight`: sim-proven, mutation-checked, HW-CONFIRMED 2026-09-18**
+(build `DVD_flashlight_20260918_2317.rbf`). The museum is dark with the selected exhibit lit;
+T2/MiB/Matrix menus are unregressed; and *Die Another Day*'s pop-up-fact subtitle track looks
+right, as it also did on v0.6.1.
 Field report on Scooby-Doo 2's museum: *"you are supposed to 'shine a flashlight' on
 different exhibits, which should brighten the exhibit with a highlight, instead, all
 highlight locations are visible as dark circles and the current highlight selection shows
@@ -287,9 +290,10 @@ combinational, so the hotspot timing is unchanged):
 ★★ **Blast radius MEASURED, not argued** (1215 discs, 16124 SPUs, menu VOBs plus the head
 of the main title):
 - **The idx-0 key.** 0 menu discs and 11 title discs give class 0 a nonzero contrast. In
-  the ones inspected the key was hiding **real subtitle pixels**: *Last Ounce of Courage*
-  and *Die Another Day* use class 0 as a visible glyph colour (contrast 15, background on
-  class 3). *Silent Steel 2* authors a full-screen class 0 at contrast 3, and now shows
+  the ones inspected class 0 carries **visible pixels**: *Last Ounce of Courage* and *Die
+  Another Day* give it contrast 15, with the background on class 3. ⚠ On hardware *Die
+  Another Day*'s pop-up-fact track looked right on v0.6.1 too, so the key's visible cost
+  there is unconfirmed. *Silent Steel 2* authors a full-screen class 0 at contrast 3, and now shows
   that faint tint, as a real player does.
 - **The highlight rule.** An upper bound of 22 discs have a live coli with a contrast-0
   class that the SPU draws. On the one inspected (*Big Trouble in Little China*) the SPU
@@ -309,13 +313,7 @@ Mutations M1 (the old rule), M2 (no hotspot exception) and M3 (the key restored)
 exactly their own arm. `subpic_blend_tb`'s reference model was updated to the no-key rule,
 and the screensaver, subpicture and HUD-geometry suites are green.
 
-⏳ **HW gate:**
-- the museum flashlight on Scooby-Doo 2;
-- T2's root menu unregressed;
-- MiB/Matrix menu highlights unregressed;
-- a subtitle on an ordinary disc unchanged;
-- ideally *Last Ounce of Courage* / *Die Another Day* subtitles, which should now be
-  complete.
+✅ **HW gate passed** (see the status line at the top of this section).
 
 ## v1 scope & decisions to make (write them down as you go)
 

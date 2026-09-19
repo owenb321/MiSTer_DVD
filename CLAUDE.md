@@ -254,8 +254,10 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **SUBPICTURE COMPOSITION DIDN'T FOLLOW THE SPEC IN TWO WAYS: a class-0 "transparent
   key", and a contrast-0 highlight class keeping its subpicture pixel (2026-09-18, branch
-  `fix/spu-flashlight`); sim-proven, 3 mutations each caught by exactly its own arm,
-  ⏳ HW-confirm pending.** Field report on Scooby-Doo 2's museum: the "flashlight" showed
+  `fix/spu-flashlight`); sim-proven, 3 mutations each caught by exactly its own arm, and
+  ✅ HW-CONFIRMED 2026-09-18** (build `DVD_flashlight_20260918_2317.rbf`, SEED 9, clk_dec
+  92.45/93.47): the museum is dark with the selected exhibit lit; T2/MiB/Matrix menus
+  unregressed; *Die Another Day*'s pop-up-fact subtitle track looks right. Field report on Scooby-Doo 2's museum: the "flashlight" showed
   dark circles plus a dark square instead of a lit exhibit.
   ★ **Decoded from the disc first.** The SPU dims the WHOLE screen: class 0 and the circles
   (class 2) are both palette 7 = black at contrast 12. The selected coli `0x0507000c`
@@ -273,8 +275,10 @@ worse maintenance burden than targeted in-place edits. So:
   - `subpic_blend` composites on contrast alone; `ov_force` is now inert.
 
   ★★ **Blast radius MEASURED over 1215 discs / 16124 SPUs.**
-  - **The key:** 11 title discs. On the ones inspected it was DELETING real subtitle
-    glyph pixels (*Last Ounce of Courage* and *Die Another Day* draw text in class 0).
+  - **The key:** 11 title discs author a class-0 contrast. Two of them (*Last Ounce of
+    Courage*, *Die Another Day*) put visible pixels in class 0. ⚠ On HW *Die Another Day*
+    looked right on v0.6.1 too, so the key's visible cost there is UNCONFIRMED. Treat
+    "the key deleted glyphs" as a data claim, not an observed defect.
   - **The highlight rule:** at most 22 discs. On the one inspected (Big Trouble), it
     removes a normal-state + highlighted-state double-draw.
 

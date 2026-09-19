@@ -392,7 +392,7 @@ Subtitles are separate from captions and are drawn by the core, so they work on 
 **B8** to cycle them; `SUB OFF` means they are disabled. Some discs author menu subpictures
 with zero contrast, which is intentional on their part.
 
-### Parts of subtitle letters are missing, or a menu button highlight looks wrong
+### A menu button highlight or a subtitle graphic is drawn wrongly
 
 !!! info "Fixed in v0.7.0"
 
@@ -402,9 +402,9 @@ with zero contrast, which is intentional on their part.
 A disc tells the player a colour and a transparency for each of the four shades a
 subtitle or menu graphic is drawn in. The core ignored two of those instructions:
 
-- It always treated the first shade as see-through. Some discs draw part of their
-  subtitle lettering in that shade, so those pixels went missing. Others darken the
-  whole screen with it, as the museum does.
+- It always treated the first shade as see-through. A few discs draw visible parts of
+  their subtitle or menu graphics in that shade, and some darken the whole screen with
+  it, as the museum does.
 - When a menu button was selected, a shade the button's highlight marked as fully
   see-through kept the colour it had before being selected. The museum uses exactly that
   to cut a lit circle out of its darkened screen.
