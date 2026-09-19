@@ -40,7 +40,9 @@ disc's First Play chain runs — copyright screens, studio idents — and then i
 appears. Navigate with the D-pad and press **B4** to select. See
 [Controls](../playback/controls.md).
 
-With **Disc Menus** off, navigation is skipped entirely and the main feature auto-plays.
+With **Disc Menus** off, navigation is skipped entirely and the main feature auto-plays:
+the player picks the disc's largest title set, and within it the longest programme. On a
+TV disc that is usually the "play all" chain rather than the first episode.
 The core shows `TITLE VTS nn` to say which title it picked. This is the escape hatch for a
 disc whose menus misbehave.
 

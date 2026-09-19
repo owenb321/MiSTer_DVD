@@ -111,13 +111,14 @@ headroom because the frames are taller.
 **Changing the audio track inside a disc menu** silences the menu's audio until you leave
 the menu.
 
-**Some copy-protected physical discs can stall for a long time.** A few discs, such as the
-DVD in the *OZ: The Great and Powerful* Blu-ray combo pack, contain deliberately
-unreadable sectors. A real player never reads them. If the player is sent into them, the
-drive spends about 30 seconds retrying each one and the MiSTer stops responding. The
-failure is certain with **Disc Menus** off, and has also been seen once with it on.
-**Ejecting the disc** recovers straight away. Leave **Disc Menus** on for these discs.
-A decrypted image of the same disc is not affected.
+!!! info "Fixed after v0.6.1"
+    **Some copy-protected physical discs could stall for a long time.** A few discs, such
+    as the DVD in the *OZ: The Great and Powerful* Blu-ray combo pack, contain
+    deliberately unreadable sectors that a real player never reads. With **Disc Menus**
+    off the player could be sent into them, and the drive then spends about 30 seconds
+    retrying each one while the MiSTer stops responding. **Ejecting the disc** recovers
+    straight away. The player no longer reads those sectors. A decrypted image of the
+    same disc was never affected.
 
 ## Reporting a disc that does not work
 

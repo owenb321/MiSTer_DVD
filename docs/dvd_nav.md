@@ -80,6 +80,32 @@ adds the file.
   it chose short logo/license clips on multi-feature discs; the parse states remain but are
   unreachable for Auto. The real fix for ambiguous discs is a **graphical DVD menu** —
   future work; a flat number can't express TV-series episode order.)*
+- **Auto plays the LONGEST PGC of that VTS, not PGCN 1 (2026-09-19, issue #112
+  follow-up).** Which PGC to play is a SECOND choice after the VTS, and it used to be
+  "PGCN 1". The spec calls that title 1, and on **60 of 1231 library discs title 1 is a
+  STUB** — an FBI warning or logo of 0–44 s (War Horse 0 s, X-Men Apocalypse 1 s, Sleepy
+  Hollow 1 s, Degrassi 44 s) whose POST commands link on to the feature. With Disc Menus
+  ON the VM follows that link; with it OFF there is no VM, so the player sat on the stub.
+  ⛔ `VTS_PTT_SRPT` does not help, and this was MEASURED before the rule was written:
+  title 1 resolves to the same stub PGC on all 60. So `S_PGCIT_HDR` starts a duration
+  scan (`dur_scan`): walk the PGCIT's SRPs, read each PGC's `playback_time` (PGC@4..7,
+  BCD) out of the header the parse already fetches, and re-take the longest. Bounded by
+  `DUR_SCAN_MAX = 128` PGCs, one header read each, at mount only.
+  ⚠ Auto is this core's own "play the main feature" heuristic, not a spec path. Menu
+  domains and every `vm_mode` path are untouched: they name the PGC they want.
+  ⚠ It also moves 28 TV discs from "episode 1" to their **Play All** chain, which is the
+  longest PGC. That was a deliberate choice (maintainer, 2026-09-19), not an oversight.
+  ⛔ The VTS pick stays **largest-by-bytes**: MEASURED, it disagrees with longest-title on
+  **2 of 1231** discs, and a duration-based pick costs an IFO read per title set at mount.
+  Gate: `iso_reader_pgc_tb` TEST 5. Sweep: `auto_pgc_sweep.py` shape in the issue thread.
+- **An unusable PGC tries the NEXT one before the linear fallback (same change).** A title
+  PGC with no cells, or with `cell_playback_offset == 0`, used to send Auto to `S_FINAL2`,
+  which streams the WHOLE VTS from RBN 0 — including sectors no cell references, which is
+  exactly where copy-protected discs put deliberately UNREADABLE ones. On OZ that is an
+  hours-long hang on a physical disc (~30 s per bad sector, the Main blocked). Now the
+  reader advances `srp_i` and re-enters `S_SRP_FETCH`, bounded by `nr_srp_l`; the linear
+  fallback stands only when no PGC is usable (`iso_reader_pgc_tb` TEST 3 is that control).
+  MEASURED: OZ is the only one of 1231 images whose Auto PGC took that path.
 - **PGC cell-timeline playback (Phase 7):** the selected title's PGC cells are then streamed
   in **program order** (see "PGC / cell timeline" below), not the VTS's VOBs linearly.
   Chapters/seek/angles/manual-title-select build on this and are still deferred.
