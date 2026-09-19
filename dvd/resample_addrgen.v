@@ -47,7 +47,8 @@ module resample_addrgen (
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect): cadence verdicts
   raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
-  hcrop_en                                         // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
+  hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
+  still_en, scan_start, scan_half                  // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
   );
 
   input              clk;                      // clock
@@ -230,6 +231,36 @@ module resample_addrgen (
    * sides cropped, no bars. Independent of vscale_mode (Crop uses Fit vertically). */
   input              hcrop_en;
 
+  /* DVD-FORK (PAUSE FIELD STILL, 2026-09-18 — docs/field_parity.md "Pause shows one
+   * field"). While paused on the field path, the persistence loop below re-scans the
+   * held picture's own two fields forever (T,B,T,B…). For a TRUE-INTERLACED picture
+   * (progressive_frame=0) those are two instants 1/59.94 s apart, so the pause flickered
+   * between them at 30 Hz — on a CRT and under HDMI Bob alike. A set-top player shows a
+   * FIELD STILL instead, and so does this: both raster slots show ONE source field (the
+   * one on screen when the pause began), its own slot natively and the opposite slot as a
+   * half-line INTERPOLATION of it, which dvd/disp_vscale.sv computes (HALF mode).
+   *
+   *   still_en   1 = the feature may engage (mpeg2video ties it 1). Benches tie it 0 =
+   *              bit-identical to the pre-feature module. Letterbox needs nothing different
+   *              HERE: the interpolated slot's read is the same, and disp_vscale applies
+   *              the half-line phase inside its 3/4 blend (mode M_LBH).
+   *   scan_start one pulse (under clk_en) per image scan that emits a frame-top code —
+   *              exactly one per ROW_0_COL_0 / ROW_1_COL_0 that reaches the resample FIFO.
+   *   scan_half  the scan being started is the INTERPOLATED slot: it reads the PINNED
+   *              field and emits H+1 lines (one duplicated), which disp_vscale turns into H
+   *              averaged lines. disp_vscale queues these bits and pops one per frame-top
+   *              pixel it receives, so the flag stays aligned with its scan however deep
+   *              the resample pipeline between the two modules is.
+   *
+   * ⚠ The frame-top TAG is untouched: disp_y_sat still follows image_0, so the mixer's
+   * frame-top placement, raster_par_err, par_fb and par_hold_ins see exactly the stream
+   * they saw before. Only the SOURCE LINES read for the off-parity slot change.
+   * ⚠ Film/progressive pictures (progressive_frame=1) keep the woven still — both fields
+   * are the same instant, so it is static already and full vertical resolution. */
+  input              still_en;
+  output             scan_start;
+  output             scan_half;
+
 `include "vld_codes.v"
 `include "mem_codes.v"
 `include "resample_codes.v"
@@ -393,7 +424,14 @@ module resample_addrgen (
 
   wire              last_y_native = ((disp_y[11:4] == mb_height_minus_one) && (disp_y[3:0] == ((image == TOP) ? 4'd14 : 4'd15)))
                                  || ((vertical_size != 14'd0) && (disp_y >= (vertical_size[11:0] - 12'd1)));
-  wire              last_y = vscale_en ? (oline >= (v_outlines - 12'd1)) : last_y_native;
+  /* DVD-FORK (pause field still): the interpolated slot emits H+1 lines (H = field lines),
+   * one of them a duplicate, so disp_vscale's HALF blend (which emits on every line but the
+   * first) produces exactly H. See the half_scan walk at disp_y below. */
+  wire       [11:0] fld_H        = vertical_size[12:1];
+  reg               half_scan;   // this scan is the interpolated slot (latched at STATE_NEXT_IMG)
+  reg               half_rf;     // pinned BOTTOM in a top slot: repeat the FIRST line, else the last
+  wire              last_y = half_scan ? (oline >= fld_H)
+                           : vscale_en ? (oline >= (v_outlines - 12'd1)) : last_y_native;
 
   parameter [3:0] 
     STATE_INIT        = 4'h0,      
@@ -655,6 +693,58 @@ module resample_addrgen (
     else if (clk_en) par_late_r <= par_slip;
     else par_late_r <= par_late_r;
 
+  /* ================= DVD-FORK (PAUSE FIELD STILL) — see the port comment =================
+   * cur_ilace: the DISPLAYED picture is true-interlaced. Latched at the real pickup,
+   * because the progressive_frame input describes the picture WAITING at picbuf's output,
+   * not the one being held. progressive_sequence pictures are progressive by definition. */
+  reg        cur_ilace;
+  always @(posedge clk)
+    if (~rst) cur_ilace <= 1'b0;
+    else if (clk_en && (state == STATE_INIT) && pickup_go) cur_ilace <= ~progressive_frame && ~progressive_sequence;
+
+  /* still_want: evaluated per scan at STATE_NEXT_IMG. ~step_arm: a pending frame step is
+   * about to show new content, and the stepped picture's first scan then locks again at
+   * the next image (the pin carries across a step, so a run of steps shows one field of
+   * each picture, steady). ~sif2x: the SIF walk owns the vertical path (MPEG-1 is
+   * progressive anyway). */
+  wire       img0_field = (image_0 == TOP) || (image_0 == BOTTOM);
+  wire       still_want = still_en && pause && ~step_arm && interlaced && ~deinterlace &&
+                          cur_ilace && img0_field && ~sif2x;
+  /* pin_bot: the field held on screen — the one scanned LAST when the lock engages, so
+   * the pause shows what was on screen rather than jumping back half a frame. Held for
+   * as long as the lock is wanted; re-pinned on the next engage.
+   * ⚠ At STATE_NEXT_IMG the scan that just finished is in `image`, NOT last_image:
+   * last_image is only updated in this same cycle, so it still names the scan BEFORE.
+   * `image` is NO_OUTPUT only when the scan came through STATE_REPEAT, and there
+   * last_image has already caught up. (The first cut pinned last_image and held the
+   * other field — pause_still_tb caught it as a correct still of the wrong parity.) */
+  reg        pin_valid, pin_bot;
+  wire [1:0] just_shown  = ((image == TOP) || (image == BOTTOM)) ? image : last_image;
+  wire       pin_bot_now = pin_valid ? pin_bot
+                         : ((just_shown == TOP) || (just_shown == BOTTOM)) ? (just_shown == BOTTOM)
+                         : (image_0 == BOTTOM);
+  wire       scan_begin  = (state == STATE_NEXT_IMG) && (next == STATE_WR_OSD_MSB);
+  /* The scan being started is the OFF-parity slot of a locked still. */
+  wire       half_now    = still_want && ((image_0 == BOTTOM) != pin_bot_now);
+  always @(posedge clk)
+    if (~rst) begin pin_valid <= 1'b0; pin_bot <= 1'b0; end
+    else if (clk_en && scan_begin) begin
+      pin_valid <= still_want;
+      pin_bot   <= pin_bot_now;
+    end
+
+  /* Per-scan latches for the walk (read-parity pin, repeat-first vs repeat-last). */
+  /* half_scan / half_rf are declared with the walk (above) -- plain Verilog, no use before declaration. */
+  always @(posedge clk)
+    if (~rst) begin half_scan <= 1'b0; half_rf <= 1'b0; end
+    else if (clk_en && (state == STATE_NEXT_IMG)) begin
+      half_scan <= half_now;
+      half_rf   <= pin_bot_now;
+    end
+
+  assign scan_start = clk_en && scan_begin;
+  assign scan_half  = half_now;
+
   /* next state logic */
   always @*
     case (state)
@@ -913,7 +1003,17 @@ module resample_addrgen (
    * original 1:1 (frame +1) / field (+2) stepping — bit-identical in FIT. */
   always @(posedge clk)
     if (~rst) disp_y <= 12'd0;
-    else if (clk_en && (state == STATE_NEXT_IMG)) disp_y <= vscale_en ? v_base_comb : ((image_0 == BOTTOM) ? 12'd1 : 12'd0);
+    /* DVD-FORK (pause field still): the interpolated slot reads the PINNED field's lines
+     * (parity = pin, not image_0) and duplicates one end so H+1 lines go out:
+     *   pinned TOP, bottom slot:  T0 T1 … T(H-1) T(H-1)   (hold at the last line)
+     *   pinned BOT, top slot:     B0 B0 B1 … B(H-1)       (hold after the first line)
+     * disp_vscale averages each line with the one before, so raster line 2k+1 gets
+     * (T_k+T_k+1)/2 and raster line 2k gets (B_k-1+B_k)/2 — each at its true half-line
+     * position. oline is the index of the line just finished. */
+    else if (clk_en && (state == STATE_NEXT_IMG)) disp_y <= half_now ? (pin_bot_now ? 12'd1 : 12'd0)
+                                                           : vscale_en ? v_base_comb : ((image_0 == BOTTOM) ? 12'd1 : 12'd0);
+    else if (clk_en && (state == STATE_NEXT_MB) && last_mb && half_scan)
+      disp_y <= (half_rf ? (oline == 12'd0) : (oline >= (fld_H - 12'd1))) ? disp_y : disp_y + 12'd2;
     else if (clk_en && (state == STATE_NEXT_MB) && last_mb) disp_y <= vscale_en ? disp_y_scaled_next : ((image == FRAME) ? disp_y + 12'd1 : disp_y + 12'd2);
     else disp_y <= disp_y;
 

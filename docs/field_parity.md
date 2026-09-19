@@ -542,6 +542,122 @@ syntax element. Do not read that bit as the bitstream value in a future HW round
 into a frame, which combs because the two fields are different instants. Fixing that
 needs a real deinterlacer — a much larger feature, not a field-order change.
 
+## Pause shows one field (2026-09-18, branch `fix/pause-field-still`)
+
+**Report:** pausing on interlaced content flickers — the paused picture flips between its
+two fields instead of holding still. Seen on the CRT and on HDMI 480i under Bob.
+
+### Why it happened
+
+While paused, `resample_addrgen`'s persistence loop (STATE_REPEAT → STATE_NEXT_IMG) keeps
+re-scanning the **held picture's own two fields**, T,B,T,B… — the hold gap section above
+relies on exactly that alternation to keep raster parity locked. For a film or progressive
+picture it is a correct woven still: both fields are the same instant. For a
+**true-interlaced** picture (`progressive_frame = 0`) they are two instants 1/59.94 s
+apart, so the pause shows two different images alternating at 30 Hz. Under HDMI Weave that
+is a static comb; on a CRT and under Bob it is the reported flicker.
+
+### The fix — a field still
+
+What a set-top player does: while paused on a true-interlaced picture, both raster slots
+show **one** source field. The slot of that field's own parity shows it natively; the
+opposite slot shows it **interpolated to the half-line position** that slot sits at, so the
+two slots describe the same picture and Bob sees no bounce.
+
+- `dvd/resample_addrgen.v` — `cur_ilace` latches the displayed picture's
+  `progressive_frame` at the real pickup (the input describes the picture *waiting*, not
+  the one held). `still_want` = paused, no step pending, field path, interlaced picture,
+  `still_en`. `pin_bot` pins the field **on screen** when the pause lands (`last_image`),
+  and holds it across frame steps (a run of steps shows one field of each picture).
+  For the off-parity slot (`half_scan`) the walk reads the **pinned** field and emits
+  **H+1** lines with one end duplicated:
+  - pinned TOP in the bottom slot: `T0 … T(H-1) T(H-1)`;
+  - pinned BOTTOM in the top slot: `B0 B0 B1 … B(H-1)`.
+- `dvd/disp_vscale.sv` — **HALF** mode averages each of those lines with the one before
+  and skips the first, giving H lines: raster line 2k+1 gets (T_k+T_k+1)/2, raster line 2k
+  gets (B_k-1+B_k)/2, and the image edges clamp.
+- **The frame-top tag is untouched.** `disp_y_sat` still follows `image_0`, so the mixer's
+  placement, `raster_par_err`, `par_fb` and the hold arm (`par_hold_ins`) see exactly the
+  stream they always did — only the source lines behind the off-parity slot change.
+
+★ **How the mode reaches `disp_vscale`.** A scan's mode is not visible in the pixel stream,
+and the resample pipeline between the two modules holds a variable number of lines. So the
+addrgen pushes one bit per frame-top scan (`scan_start`/`scan_half`) into a 4-deep queue in
+`disp_vscale`, which pops one per **frame-top pixel** it receives. Scans are strictly
+ordered and a scan needs all its lines through the pipeline before the next starts, so no
+more than two frame-tops are ever in flight.
+
+★ **Letterbox is covered, and it had to be.** `analog_letterbox` is on for any Interlaced
+session showing 16:9 content under the default `Analog Aspect = Auto`, and it applies to the
+whole raster (HDMI 480i too) — so leaving it out would have left most widescreen discs
+flickering. The addrgen side is identical; `disp_vscale` runs mode **M_LBH**: the same 4/3
+Letterbox step with its phase advanced **half a source line**. Under Letterbox each field is
+resampled on its own (output field line j ← source field line 4j/3), so the off-parity slot
+must sit at 4j/3 ± ½ of the pinned field; with the duplicated end both signs become +½ on the
+input line index. That needs the Bresenham remainder in **sixths** instead of thirds; plain
+Letterbox only ever lands on 0, 2/6, 4/6, whose weights (0/85/171) are the ones it always
+used, so it is bit-identical (the resample_chain letterbox arms are the check).
+
+★ **Routing without reordering.** `disp_vscale` used to be a static mux: Letterbox on means
+everything goes through its line buffer, off means a wire. The still switches per scan, so
+the route is now chosen at each frame-top pixel — through the buffered path if Letterbox is
+on, the scan is HALF, **or the buffered path has not yet drained**; the pass-through only
+resumes once the buffered path is idle. A scan that arrives behind a draining one runs in a
+third mode, **PLAIN** (buffered, unblended, every line emitted), so output order is kept.
+Each queued pixel carries its scan's mode, so a scan keeps its mode while it drains. With
+Letterbox off and no pause the buffered path never fills and the module is the same wire
+as before.
+
+### Deliberate limits
+
+- **Film/progressive pictures keep the woven still** (full vertical resolution, already
+  static). A disc that marks true-interlaced content `progressive_frame = 1` still
+  flickers; the flag is the encoder's claim (the `progressive_frame` caveat in the film
+  detector), and taking the still for every pause would halve the resolution of every film
+  pause to cover a mis-authored minority.
+- **SIF** (MPEG-1, the `sif2x` walk) is excluded; MPEG-1 has no interlaced pictures.
+- **Progressive output** is untouched: it weaves the frame and never alternates.
+
+### Gate — `bench/dvd/run_pause_still.sh --red`
+
+`bench/dvd/pause_still_tb.sv` (`+lb=1` for Letterbox) runs the real chain (addrgen, dta, bilinear, disp_vscale,
+disp_hstretch, pixel_queue, mixer, syncgen) over a **line-stamped framestore**: top line
+2k returns code 8k, bottom line 2k+1 returns 8k+1, and every line the pixel queue receives
+is checked for EQUALITY against the value its source position and 2-tap weight give. It
+scores each scan the pixel queue receives against the exact sequence (line count and
+pixels per line included, so an H+1 emission cannot pass) before the pause, while paused,
+across a frame step, and after resume, for both pin parities. `+pfr=1` is the control (the
+weave must survive), `+still_en=0` is the RED arm (the pre-fix behaviour), and eight
+mutations each must fail. The expected value of every output line is computed from its
+source POSITION (in sixths of an input line) and the 2-tap weight, so one model covers Fit,
+Letterbox and both interpolated slots.
+
+⚠ The stamp is taken at the addrgen's **issue** strobe (`disp_valid_in` /
+`disp_delta_y`), not from `disp_y` at the address FIFO: the first cut sampled there and
+the codes drifted by several lines per scan, because the `mem_addr` pipeline sits between
+the two.
+
+⚠ **Two geometry traps, both found by a mutation surviving.** Lines 4 codes apart could
+not tell weight 43 from 85 (both round to +1), so a wrong sixths table passed (M8): lines
+are 8 codes apart now. And a 64×16 field is exactly the pixel queue's 1024 pixels, so the
+buffered path never backed up behind the raster and the reorder hazard could not occur —
+M5 (routing without the drain-busy term) passed. The bench field is 128 wide (2048 px)
+for that reason; do not shrink it to make the run faster.
+
+**Build:** `DVD_fieldstill_20260919_0209.rbf` — SEED 9 first roll, clk_dec 92.05 @100C /
+91.95 @-40C (gate 86.0), 38,514 ALMs (92 %), 500/553 RAM blocks.
+
+✅ **HW-CONFIRMED 2026-09-19** (maintainer, on this build): true-interlaced content holds
+steady and film keeps its full-resolution still; Letterbox (Auto on a 16:9 disc); HDMI 480i
+under Bob and Weave; frame step, then resume in sync; pauses landing on both field
+parities; the hold-to-scrub freeze; Progressive output unregressed; PAL 576i.
+
+**The HW gate as written before the round:** the maintainer's eye on the CRT and under HDMI Bob, pausing
+video-sourced content (Thayer's Quest, or any title `tools/video_cadence_census.py` calls
+video). A screenshot cannot show a 30 Hz alternation. Control arm first on the current
+build, then the fix build; check a film pause still has full resolution, frame step, and
+resume.
+
 ## Files
 
 - `rtl/mpeg2/mixer.v` — `frame_top_par_err` output (verdict register only; matcher
@@ -560,5 +676,7 @@ needs a real deinterlacer — a much larger feature, not a field-order change.
 - `tools/video_cadence_census.py --field-order --all-vts` — the golden model
 - `bench/dvd/field_parity_tb.sv`, `bench/dvd/run_field_parity.sh` — the alignment view
   (kept, but it agrees with the RTL by construction: see the caveat above)
+- `dvd/resample_addrgen.v` `still_*`/`half_*` + `dvd/disp_vscale.sv` HALF/PLAIN modes —
+  the pause field still; `bench/dvd/pause_still_tb.sv`, `bench/dvd/run_pause_still.sh`
 - Every TB that instantiates `resample`/`resample_addrgen` directly ties
   `.raster_par_err(1'b0)` (an unconnected input would read X into the interlaced arms)
