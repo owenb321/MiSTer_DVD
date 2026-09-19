@@ -752,8 +752,9 @@ this is where they were measured; they want their own issue.
 ➡ **2026-09-18: Harry Potter's is root-caused and fixed** (`docs/subpicture.md` "The re-send
 guard is per cell"). On current `main` `blk7` reads GREEN. The cause was `spu_decode`
 skipping every cell's subpicture unit as a PTS "re-send", because each cell restarts its PTS.
-Scene It's "all green, no recolour" was re-examined after #109 changed the coli rule, and is
-on the same HW round.
+Scene It's "all green, no recolour" was re-examined after #109 changed the coli rule. It
+**works on the `fix/spu-newcell` build (HW-confirmed 2026-09-19)**. Whether #109's coli rule
+or the per-cell guard fixed it was not separated.
 ⚠ **The technique is the point, and it is the one CLAUDE.md already recommends: A/B TWO OF
 OUR OWN BUILDS.** Four symptoms arrived in one report, all in the menu domain, all
 plausible consequences of the same change — and two of them had nothing to do with it. A

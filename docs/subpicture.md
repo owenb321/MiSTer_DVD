@@ -317,8 +317,10 @@ and the screensaver, subpicture and HUD-geometry suites are green.
 
 ## The re-send guard is per cell (2026-09-18)
 
-🔧 **Branch `fix/spu-newcell`: sim-proven on the disc's real subpicture units, mutation-checked;
-⏳ HW-confirm pending.**
+✅ **Branch `fix/spu-newcell`: sim-proven on the disc's real subpicture units, mutation-checked,
+HW-CONFIRMED 2026-09-19** (build `DVD_spunewcell_20260919_0510.rbf`, after the two transition
+rounds below). Player Mode's wand follows the selection with no blip, Scene It's Play-game
+highlight works, and Matrix/MiB/T2 menus are unregressed.
 
 **Symptom:** Harry Potter Interactive's **Player Mode** screen (Single / Multi-Player) showed no
 highlight. This was PRE-EXISTING: it failed the same way on pre-STC `main`
@@ -391,11 +393,7 @@ multi-player option disappears."*
 - **Gate:** `hl_mask_tb` [K1]–[K4] in the same runner. M3 (ignore `armed_since`) fails K2;
   M4 (never mask) fails K1.
 
-⏳ **HW gate:**
-- Player Mode shows its highlight on both buttons, with none during the intro → menu
-  transition;
-- Scene It's Play-game screen, possibly the same mechanism and unverified;
-- Matrix / MiB / T2 menus unregressed.
+✅ **HW gate passed** (status line at the top of this section).
 
 ## v1 scope & decisions to make (write them down as you go)
 

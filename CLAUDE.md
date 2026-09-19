@@ -282,10 +282,13 @@ worse maintenance burden than targeted in-place edits. So:
   2-tap weight). ⚠ Its 128-px-wide field is deliberate: a field that fits the 1024-deep
   pixel queue never backs up, and M5 then passes. Detail: **`docs/field_parity.md`** "Pause shows one field".
 
-- 🔧 **SPU MENU RE-SEND GUARD SKIPPED A NEW CELL'S UNIT WHEN ITS PTS RESTARTED — Harry
-  Potter Interactive's Player Mode had no highlight (2026-09-18, branch `fix/spu-newcell`);
-  sim-proven on the disc's real units, 2 mutations each caught by exactly its own arm,
-  ⏳ HW-confirm pending.** Measured on the board with current `main`:
+- ✅ **SPU MENU RE-SEND GUARD SKIPPED A NEW CELL'S UNIT WHEN ITS PTS RESTARTED — Harry
+  Potter Interactive's Player Mode had no highlight (2026-09-18/19, branch `fix/spu-newcell`);
+  sim-proven on the disc's real units, 5 mutations each caught by exactly its own arm, and
+  ✅ HW-CONFIRMED 2026-09-19** (build `DVD_spunewcell_20260919_0510.rbf`, SEED 9, clk_dec
+  94.73/91.72, after three board rounds). Player Mode's wand follows the selection with no
+  transition blip. **Scene It's Play-game highlight also works**, the other half of
+  `docs/stc_freerun.md` §10. Matrix/MiB/T2 menus are unregressed. Measured on the board with current `main`:
   - every highlight diagnostic GREEN (the old "fetch never completes" reading is stale);
   - 0 pixels change between Single- and Multi-selected.
 
