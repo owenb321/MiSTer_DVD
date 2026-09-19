@@ -315,6 +315,86 @@ and the screensaver, subpicture and HUD-geometry suites are green.
 
 ✅ **HW gate passed** (see the status line at the top of this section).
 
+## The re-send guard is per cell (2026-09-18)
+
+✅ **Branch `fix/spu-newcell`: sim-proven on the disc's real subpicture units, mutation-checked,
+HW-CONFIRMED 2026-09-19** (build `DVD_spunewcell_20260919_0510.rbf`, after the two transition
+rounds below). Player Mode's wand follows the selection with no blip, Scene It's Play-game
+highlight works, and Matrix/MiB/T2 menus are unregressed.
+
+**Symptom:** Harry Potter Interactive's **Player Mode** screen (Single / Multi-Player) showed no
+highlight. This was PRE-EXISTING: it failed the same way on pre-STC `main`
+(`docs/stc_freerun.md` §10).
+
+★ **Measured on the board first** (current `main`, O[2] blocks): armed, video live, subpicture
+shown, SPU bytes arriving, **fetched** and recolour firing were all GREEN. This retires the old
+"`blk7` red, fetch never completes" reading, which was taken on a much older `nav_pci`. D-pad
+navigation moves the rect. Yet between Single-selected and Multi-selected screenshots **zero
+pixels change** in either graphic's region.
+
+★ **The disc** (VTS_05 PGCN 14, five cells, **one VOB each**, `vob_idn` 12/13/14…):
+- **Every cell's subpicture unit has PTS 0.333 s**, because each cell restarts its PTS.
+- **Cell 1's unit is empty.** Cells 2 and 3 carry a 460-pixel graphic (x 272–464, y 315–374)
+  at contrast 0, split between the two button rects (231 / 229 px). **That graphic IS the
+  highlight:** coli `2220f840` recolours classes 1–3.
+
+**The defect:** `spu_decode`'s **menu re-send guard** skips a unit whose PTS is `<=` the
+committed one's. It exists for real reasons:
+- a looping menu re-sends its unit every VOBU;
+- Matrix's root cell sends a transparent dummy (PTS A) before the real overlay (PTS B > A).
+
+But PTS order only means anything **within one timeline**, so cells 2 and 3's units were
+skipped as "re-sends" of cell 1's empty one. **Reproduced with the disc's own units** through
+the real `spu_decode`: `menu_mode=1` gives 0 non-background pixels; `menu_mode=0` gives 460.
+
+**Fix:** a `new_cell` pulse into `spu_decode` opens the guard until the next unit COMMITS.
+`emu.sv` raises it when a committed DSI's `{vob_idn, c_idn}` differs from the previous one.
+- ★ **Delivery order, not read order.** The NAV pack leads its VOBU, so its DSI commits
+  before that VOBU's subpicture bytes arrive. A reader-side cell pulse would run up to the
+  16 KB cache ahead, and a stale re-send delivered after it could re-arm the guard against
+  the new cell's unit.
+- ★ **A replayed cell keeps its ids,** so a looping menu (the Matrix dummy/overlay pair the
+  guard exists for) is untouched.
+- ⚠ The guard re-closes at the COMMIT, not at acceptance, so an accepted-then-dropped
+  (over-cap) unit does not close it early.
+
+**Gates: `bench/dvd/run_spu_newcell.sh --red`.** `spu_newcell_tb` scores the non-background
+pixels on screen:
+- **[N1]:** a same-PTS unit across a cell change is shown.
+- **[N2]:** the control; without a cell change it is still a re-send.
+- **[N3]:** after the commit an older re-send is skipped again.
+
+M1 (ignore `new_cell`) fails N1 only, and M2 (never re-close) fails N3 only.
+`run_spu_window.sh` and `run_subpic.sh` are unchanged-green. The real-unit probe with the
+fix gives 460 px (231 in the Single Player rect) in cells 2 and 3.
+
+★★ **The first board round found a transition artefact, and it is a second mechanism.**
+The maintainer reported: *"both options show highlights during the transition before the
+multi-player option disappears."*
+- **Why:** a menu subpicture is shown the moment it commits (`menu_mode` is windowless),
+  and it commits at the PARSE front, about a VBUF depth before the display reaches its
+  cell. The HLI is promoted on the DISPLAY's schedule. So for that window the new cell's
+  graphic sat under the PREVIOUS cell's HLI. That HLI is the intro's single **full-screen**
+  "skip" button (x 50–694, y 2–477) with the same `2220f840` colours, so it recoloured
+  both wands.
+- **Fix: new `dvd/hl_mask.sv`.** When `spu_decode` pulses `newcell_load` (a unit is
+  ACCEPTED across a cell change, before its first pixel is written) and no HLI has armed since that cell
+  began, the highlight is masked until `nav_pci`'s new `hli_arm` pulse (the next HLI
+  promoted, which is the new cell's). It gates `hl_hit_q`.
+- ⚠ **The race it must not lose:** if the new cell's HLI arms BEFORE its unit commits,
+  masking at the commit would hide the correct highlight, possibly for good on a still
+  menu whose later HLIs are continuations. `armed_since` is what prevents that.
+- ⚠⚠ **HW round 2: a BLIP of both wands, then gone, then Single.** The pulse first
+  fired at COMMIT. But there is ONE bitmap, and the new unit's RLE decodes straight into
+  it under the OLD unit's committed params, so the graphic was on the layer, under the
+  intro's full-screen highlight, for the whole decode. The pulse now fires at
+  ACCEPTANCE, the cycle the unit enters `S_FILL`, before any bitmap write.
+  `spu_newcell_tb` [N4] asserts exactly that ordering.
+- **Gate:** `hl_mask_tb` [K1]–[K4] in the same runner. M3 (ignore `armed_since`) fails K2;
+  M4 (never mask) fails K1.
+
+✅ **HW gate passed** (status line at the top of this section).
+
 ## v1 scope & decisions to make (write them down as you go)
 
 - **Palette (the main deferral):** the real 4 colours + alpha come from the **IFO PGC

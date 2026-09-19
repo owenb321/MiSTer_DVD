@@ -39,6 +39,7 @@ module spu_decode_tb;
 
     logic        menu_mode = 1'b0;
     spu_decode dut (
+        .new_cell(1'b0),   // 2026-09-18: menu re-send guard opener (no NAV here)
         .clk(clk), .rst_n(rst_n), .enable(enable), .interlaced(1'b0),
         .menu_mode(menu_mode),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),

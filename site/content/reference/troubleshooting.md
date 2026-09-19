@@ -412,6 +412,22 @@ subtitle or menu graphic is drawn in. The core ignored two of those instructions
 Both now follow the disc. One side effect: a disc that deliberately tints the whole
 screen while its subtitles are up now shows that tint, as a set-top player does.
 
+### A game disc's menu has no visible highlight, but the buttons work
+
+!!! info "Fixed in v0.7.0"
+
+    Seen on Harry Potter Interactive's Player Mode screen (Single Player /
+    Multi-Player).
+
+The selection moved and Select picked the right option, but nothing on screen showed which
+button was selected.
+
+The highlight graphic is part of the menu's overlay, which the disc sends again in every
+section of the menu. This disc restarts its timestamps in each section. The core took the
+new section's overlay for a repeat of the previous one, an empty overlay, and threw it
+away, so the highlight had nothing to draw. It now always accepts the first overlay of a
+new section.
+
 ## Controls
 
 ### My keyboard does nothing

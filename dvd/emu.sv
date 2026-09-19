@@ -634,7 +634,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-fieldstill"
+`define CORE_VERSION "dev-spunewcell"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -5772,8 +5772,14 @@ crt_ov_map crt_ov_map_inst (
     .q_y_out      (ov_qy)
 );
 
+// A new cell entered the DELIVERED stream (derived below, after nav_dsi). Declared
+// here, ahead of its first use -- emu.sv has no `default_nettype none`.
+wire sp_new_cell;
+wire sp_newcell_load;                     // spu_decode: that new cell's first unit is loading
 spu_decode spu_decode_inst (
     .clk        (clk_sys),
+    .new_cell   (sp_new_cell),            // opens the menu re-send guard across a PTS restart
+    .newcell_load (sp_newcell_load),
     .rst_n      (pipe_rst_n),
     .enable     (sp_en),
     // "menu_mode" = windowless display: show the committed SPU whenever valid, ignoring
@@ -5866,7 +5872,9 @@ wire        hl_on_w;
 wire [9:0]  hl_x1, hl_x2, hl_y1, hl_y2;
 wire [31:0] hl_coli;
 
+wire hli_arm_w;                           // nav_pci: an HLI with buttons was promoted
 nav_pci nav_pci_inst (
+    .hli_arm    (hli_arm_w),
     .clk        (clk_sys),
     .rst_n      (pipe_rst_n),            // a load/seek/jump clears nav state
     .pci_byte   (ps_pci_byte),
@@ -5947,6 +5955,7 @@ nav_pci nav_pci_inst (
 // =========================================================================
 wire [31:0] dsi_c_eltm;         // BCD dvd_time: {hh, mm, ss, ff|rate}
 wire [7:0]  dsi_c_idn;
+wire [15:0] dsi_vob_idn;
 // "near chapter start" for prev-chapter: cell-elapsed <= 4 s (hh=mm=00, ss BCD<=04).
 // {hh,mm,ss} = dsi_c_eltm[31:8]; BCD 0..4 s = 24'h000000..24'h000004.
 assign chap_at_start = (dsi_c_eltm[31:8] <= 24'h000004);
@@ -5962,7 +5971,7 @@ nav_dsi nav_dsi_inst (
     .dsi_nv_pck_lbn (dsi_nv_pck_lbn),
     .dsi_vobu_ea    (dsi_vobu_ea),
     .dsi_1stref_ea  (),
-    .dsi_vob_idn    (),
+    .dsi_vob_idn    (dsi_vob_idn),
     .dsi_c_idn      (dsi_c_idn),
     .dsi_c_eltm     (dsi_c_eltm),
     .dsi_next_vobu  (dsi_next_vobu),
@@ -5974,6 +5983,27 @@ nav_dsi nav_dsi_inst (
     .tbl_raddr  (dsi_tbl_raddr),
     .tbl_rdata  (dsi_tbl_rdata)
 );
+
+// ★ NEW CELL for spu_decode's menu re-send guard (2026-09-18, Harry Potter
+// Interactive's Player Mode highlight). The guard orders units by PTS; a disc whose
+// cells each RESTART their PTS (every Player Mode cell starts at 0.333 s) had the
+// graphic-carrying cell's unit skipped as a "re-send" of the previous cell's empty
+// one. The NAV pack leads its VOBU, so its DSI commits before that VOBU's subpicture
+// bytes reach spu_decode -- the pulse is in DELIVERY order, which a reader-side cell
+// pulse (up to 16 KB of cache ahead) would not be. A replayed cell keeps its ids, so a
+// looping menu (Matrix's dummy/overlay pair) is untouched. docs/subpicture.md.
+reg [23:0] dsi_cell_id_q;
+reg        sp_new_cell_r;
+always @(posedge clk_sys) begin
+    sp_new_cell_r <= 1'b0;
+    if (!pipe_rst_n)
+        dsi_cell_id_q <= 24'd0;
+    else if (dsi_commit) begin
+        if ({dsi_vob_idn, dsi_c_idn} != dsi_cell_id_q) sp_new_cell_r <= 1'b1;
+        dsi_cell_id_q <= {dsi_vob_idn, dsi_c_idn};
+    end
+end
+assign sp_new_cell = sp_new_cell_r;
 
 // Overlay time rows (both BCD, osd_read-decodable as 4 nibbles = MM:SS):
 //   row 18 = current  = DSI cell-elapsed time  c_eltm[mm,ss]
@@ -5990,12 +6020,26 @@ wire [15:0] dbg_angle     = {4'd0, angle_count, 4'd0, cur_angle};
 // (both then lag core_h/v_pos by one clk_sys = the same 1-px shift the
 // subtitle already tolerates). core_v_pos is the absolute frame line in
 // CRT-480i too, so the same compare serves both modes.
+// ★ The previous cell's highlight must not recolour the NEW cell's subpicture: that
+// unit loads at the parse front, a VBUF depth before the display reaches its cell,
+// while the old HLI is still armed. Harry Potter Player Mode's intro HLI is one
+// full-screen button, so it lit BOTH wands until the new HLI arrived.
+// dvd/hl_mask.sv; gate bench/dvd/run_spu_newcell.sh.
+wire hl_mask_w;
+hl_mask hl_mask_inst (
+    .clk            (clk_sys),
+    .rst_n          (pipe_rst_n),
+    .new_cell       (sp_new_cell),
+    .newcell_load (sp_newcell_load),
+    .hli_arm        (hli_arm_w),
+    .mask           (hl_mask_w)
+);
 reg hl_hit_q;
 always @(posedge clk_sys)
     // video_live gate: after a jump the highlight must not float over the
     // black/stale frame while the new menu video is still decoding (it
     // re-arms on every load_flush and sets on the first displayed frame).
-    hl_hit_q <= hl_on_w && video_live_s2 &&
+    hl_hit_q <= hl_on_w && video_live_s2 && ~hl_mask_w &&
                 (ov_qx >= {2'b00, hl_x1}) && (ov_qx <= {2'b00, hl_x2}) &&
                 (ov_qy >= {2'b00, hl_y1}) && (ov_qy <= {2'b00, hl_y2});
 
