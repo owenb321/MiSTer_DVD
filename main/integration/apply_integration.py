@@ -526,8 +526,26 @@ m = replace_once(m,
     "\t\t\t\tmgl->state = (mgl->item[mgl->current].action == MGL_ACTION_LOAD) ? 1 : 4;\n",
     32, "mgl->timer && CheckTimer")
 
+# 42. The small Info() popup (volume bar, Mute, resolution, "Screenshot
+#     saved", ...) inside the CRT title-safe area. Stock places it at x=20 /
+#     y=10, which a CRT's overscan clips. Units, from sys/osd.v: x is OSD
+#     pixels (= 1 of the 720 DVD pixels on this core's raster), y is lines
+#     from the top of DE (field lines in a 15 kHz mode, doubled by osd.v in
+#     480p). InfoMessage() is a different path (the centred OSD) and is not
+#     affected. See INTEGRATION.md step 42.
+m = replace_once(m,
+    "\t\tInfoEnable(20, (cfg.direct_video && get_vga_fb()) ? 30 : 10, width, height);\n",
+
+    "\t\t// dvd:info-safe-area — keep the popup inside a CRT's title-safe\n"
+    "\t\t// area (~10 % in). x = OSD px (1 per DVD pixel of 720), y = field\n"
+    "\t\t// lines (24 of 240 = 10 %). Stock is 20 / 10, which overscan clips.\n"
+    "\t\t// See MiSTer_DVD/main/integration/INTEGRATION.md step 42.\n"
+    "\t\tconst int dvd_info_x = 72, dvd_info_y = 24;\n"
+    "\t\tInfoEnable(dvd_info_x, (cfg.direct_video && get_vga_fb()) ? 30 : dvd_info_y, width, height);\n",
+    42, "dvd:info-safe-area")
+
 write(m_path, m)
-print("[integration] menu.cpp patched (MGL delay)")
+print("[integration] menu.cpp patched (MGL delay, info safe area)")
 
 # ---------------------------------------------------------------- fpga_io.cpp
 # Teardown of the ADV7513's non-PCM mode. This process is the ONLY one that can
