@@ -209,7 +209,11 @@ module nav_pci #(
     // menu-domain menu whose gate follows menu_active, or the white rabbit whose
     // SetSTN opens the gate in the PGC pre-command). The PCI byte path into nav_pci
     // is not itself subpicture-gated, so this is available regardless.
-    output wire        hli_seen
+    output wire        hli_seen,
+    // One pulse when an HLI with buttons is PROMOTED onto the screen (the display
+    // reached it). emu's dvd/hl_mask.sv uses it to know the highlight now belongs
+    // to the cell whose subpicture is up (2026-09-18, Harry Potter Player Mode).
+    output reg         hli_arm
 );
 
 // =========================================================================
@@ -554,6 +558,7 @@ always @(posedge clk or negedge rst_n) begin
         hl_coli   <= 32'd0;
         btn_cmd   <= 64'd0;
         btn_cmd_valid <= 1'b0;
+        hli_arm   <= 1'b0;
         act_tmr   <= 24'd0;
         h_raddr   <= 12'd0;
         f_i       <= 5'd0;
@@ -583,6 +588,7 @@ always @(posedge clk or negedge rst_n) begin
         // not by simulation.
         hli_commit_p  <= 1'b0;                 // default: one-cycle pulse
         btn_cmd_valid <= 1'b0;                 // default: one-cycle pulse
+        hli_arm       <= 1'b0;                 // default: one-cycle pulse
         // RE-SEED the selection from the VM's HL_BTNN in the first cycle after a
         // reset (see the hl_btnn port). An async reset value must be a constant,
         // so the reset branch parks btn_sel at 1 and this overrides it one cycle
@@ -751,6 +757,7 @@ always @(posedge clk or negedge rst_n) begin
             end else begin
                 disp_bank <= nxt_bank;
                 armed     <= 1'b1;
+                hli_arm   <= 1'b1;
                 h_btn_ns  <= nxt_btn_ns;
                 h_sptm    <= nxt_sptm;      // which authored window is now on screen
                 h_foac    <= nxt_foac;

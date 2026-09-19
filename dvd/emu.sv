@@ -5775,9 +5775,11 @@ crt_ov_map crt_ov_map_inst (
 // A new cell entered the DELIVERED stream (derived below, after nav_dsi). Declared
 // here, ahead of its first use -- emu.sv has no `default_nettype none`.
 wire sp_new_cell;
+wire sp_newcell_commit;                   // spu_decode: that new cell's first unit is up
 spu_decode spu_decode_inst (
     .clk        (clk_sys),
     .new_cell   (sp_new_cell),            // opens the menu re-send guard across a PTS restart
+    .newcell_commit (sp_newcell_commit),
     .rst_n      (pipe_rst_n),
     .enable     (sp_en),
     // "menu_mode" = windowless display: show the committed SPU whenever valid, ignoring
@@ -5870,7 +5872,9 @@ wire        hl_on_w;
 wire [9:0]  hl_x1, hl_x2, hl_y1, hl_y2;
 wire [31:0] hl_coli;
 
+wire hli_arm_w;                           // nav_pci: an HLI with buttons was promoted
 nav_pci nav_pci_inst (
+    .hli_arm    (hli_arm_w),
     .clk        (clk_sys),
     .rst_n      (pipe_rst_n),            // a load/seek/jump clears nav state
     .pci_byte   (ps_pci_byte),
@@ -6016,12 +6020,26 @@ wire [15:0] dbg_angle     = {4'd0, angle_count, 4'd0, cur_angle};
 // (both then lag core_h/v_pos by one clk_sys = the same 1-px shift the
 // subtitle already tolerates). core_v_pos is the absolute frame line in
 // CRT-480i too, so the same compare serves both modes.
+// ★ The previous cell's highlight must not recolour the NEW cell's subpicture: that
+// unit commits at the parse front, a VBUF depth before the display reaches its cell,
+// while the old HLI is still armed. Harry Potter Player Mode's intro HLI is one
+// full-screen button, so it lit BOTH wands until the new HLI arrived.
+// dvd/hl_mask.sv; gate bench/dvd/run_spu_newcell.sh.
+wire hl_mask_w;
+hl_mask hl_mask_inst (
+    .clk            (clk_sys),
+    .rst_n          (pipe_rst_n),
+    .new_cell       (sp_new_cell),
+    .newcell_commit (sp_newcell_commit),
+    .hli_arm        (hli_arm_w),
+    .mask           (hl_mask_w)
+);
 reg hl_hit_q;
 always @(posedge clk_sys)
     // video_live gate: after a jump the highlight must not float over the
     // black/stale frame while the new menu video is still decoding (it
     // re-arms on every load_flush and sets on the first displayed frame).
-    hl_hit_q <= hl_on_w && video_live_s2 &&
+    hl_hit_q <= hl_on_w && video_live_s2 && ~hl_mask_w &&
                 (ov_qx >= {2'b00, hl_x1}) && (ov_qx <= {2'b00, hl_x2}) &&
                 (ov_qy >= {2'b00, hl_y1}) && (ov_qy <= {2'b00, hl_y2});
 

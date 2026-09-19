@@ -103,6 +103,11 @@ module spu_decode #(
     // its ids, so the Matrix dummy/overlay ordering the guard exists for is untouched.
     // Tie 1'b0 where there is no NAV stream.
     input  wire        new_cell,
+    // One pulse when a unit accepted ACROSS a cell change (the guard was open) is
+    // committed -- the new cell's graphic is now on the subpicture layer. emu's
+    // dvd/hl_mask.sv hides the PREVIOUS cell's highlight from it until the new
+    // cell's HLI arms.
+    output reg         newcell_commit,
     input  wire [32:0] sp_pts,
     input  wire        sp_pts_valid,
 
@@ -346,6 +351,7 @@ module spu_decode #(
             c_valid  <= 1'b0;
             c_pts    <= 33'd0;
             guard_open <= 1'b0;
+            newcell_commit <= 1'b0;
             spu_we   <= 1'b0;
             bmp_we   <= 1'b0;
             wr_ptr   <= '0;
@@ -359,6 +365,7 @@ module spu_decode #(
         end else begin
             spu_we <= 1'b0;
             bmp_we <= 1'b0;
+            newcell_commit <= 1'b0;
 
             case (state)
             // ---- wait for the first byte of a new SPU ----
@@ -695,6 +702,7 @@ module spu_decode #(
                 c_valid <= 1'b1;
                 c_pts   <= pts_latched;    // remember this unit's PTS (menu re-send guard)
                 guard_open <= 1'b0;        // the new cell's unit is on screen: guard again
+                newcell_commit <= guard_open;
                 state   <= S_IDLE;
             end
 

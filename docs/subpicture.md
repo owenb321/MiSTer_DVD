@@ -366,8 +366,28 @@ M1 (ignore `new_cell`) fails N1 only, and M2 (never re-close) fails N3 only.
 `run_spu_window.sh` and `run_subpic.sh` are unchanged-green. The real-unit probe with the
 fix gives 460 px (231 in the Single Player rect) in cells 2 and 3.
 
+★★ **The first board round found a transition artefact, and it is a second mechanism.**
+The maintainer reported: *"both options show highlights during the transition before the
+multi-player option disappears."*
+- **Why:** a menu subpicture is shown the moment it commits (`menu_mode` is windowless),
+  and it commits at the PARSE front, about a VBUF depth before the display reaches its
+  cell. The HLI is promoted on the DISPLAY's schedule. So for that window the new cell's
+  graphic sat under the PREVIOUS cell's HLI. That HLI is the intro's single **full-screen**
+  "skip" button (x 50–694, y 2–477) with the same `2220f840` colours, so it recoloured
+  both wands.
+- **Fix: new `dvd/hl_mask.sv`.** When `spu_decode` pulses `newcell_commit` (a unit
+  accepted across a cell change is on the layer) and no HLI has armed since that cell
+  began, the highlight is masked until `nav_pci`'s new `hli_arm` pulse (the next HLI
+  promoted, which is the new cell's). It gates `hl_hit_q`.
+- ⚠ **The race it must not lose:** if the new cell's HLI arms BEFORE its unit commits,
+  masking at the commit would hide the correct highlight, possibly for good on a still
+  menu whose later HLIs are continuations. `armed_since` is what prevents that.
+- **Gate:** `hl_mask_tb` [K1]–[K4] in the same runner. M3 (ignore `armed_since`) fails K2;
+  M4 (never mask) fails K1.
+
 ⏳ **HW gate:**
-- Player Mode shows its highlight on both buttons;
+- Player Mode shows its highlight on both buttons, with none during the intro → menu
+  transition;
 - Scene It's Play-game screen, possibly the same mechanism and unverified;
 - Matrix / MiB / T2 menus unregressed.
 
