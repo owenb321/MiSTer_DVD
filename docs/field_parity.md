@@ -647,7 +647,12 @@ for that reason; do not shrink it to make the run faster.
 **Build:** `DVD_fieldstill_20260919_0209.rbf` — SEED 9 first roll, clk_dec 92.05 @100C /
 91.95 @-40C (gate 86.0), 38,514 ALMs (92 %), 500/553 RAM blocks.
 
-⏳ **HW gate:** the maintainer's eye on the CRT and under HDMI Bob, pausing
+✅ **HW-CONFIRMED 2026-09-19** (maintainer, on this build): true-interlaced content holds
+steady and film keeps its full-resolution still; Letterbox (Auto on a 16:9 disc); HDMI 480i
+under Bob and Weave; frame step, then resume in sync; pauses landing on both field
+parities; the hold-to-scrub freeze; Progressive output unregressed; PAL 576i.
+
+**The HW gate as written before the round:** the maintainer's eye on the CRT and under HDMI Bob, pausing
 video-sourced content (Thayer's Quest, or any title `tools/video_cadence_census.py` calls
 video). A screenshot cannot show a 30 Hz alternation. Control arm first on the current
 build, then the fix build; check a film pause still has full resolution, frame step, and
