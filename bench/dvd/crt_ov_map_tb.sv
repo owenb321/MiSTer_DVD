@@ -163,7 +163,7 @@ module crt_ov_map_tb;
 
     disp_vscale vscale (
         .clk(clk), .clk_en(1'b1), .rst(rst_n),
-        .vscale_en(1'b1),
+        .vscale_en(1'b1), .scan_start(1'b0), .scan_half(1'b0),
         .in_y(vs_in_y), .in_u(8'd0), .in_v(8'd0), .in_osd(8'd0),
         .in_pos(vs_in_pos), .in_wr(vs_in_wr), .in_almost_full(vs_in_af),
         .out_y(vs_out_y), .out_u(), .out_v(), .out_osd(),

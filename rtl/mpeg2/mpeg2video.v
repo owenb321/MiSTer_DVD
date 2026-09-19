@@ -515,6 +515,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire        [2:0]position_resample;       // position, as in resample_codes.v
   wire             pixel_wr_en;
   wire             pixel_wr_almost_full;    // disp_vscale -> resample
+  wire             still_scan_start;        // DVD-FORK (pause field still): resample_addrgen -> disp_vscale sideband
+  wire             still_scan_half;
   /* DVD-FORK (CRT anamorphic Letterbox AA): resample -> disp_vscale -> disp_hstretch ->
    * pixel_queue. disp_vscale (vertical 2-tap letterbox) and disp_hstretch (horizontal Crop
    * stretch) are mutually exclusive; whichever is inactive is a pure combinational
@@ -1643,7 +1645,13 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .film_det_pal(film_det_pal),
     .raster_par_err(raster_par_err),                         // DVD-FORK (field-parity corrector): mixer verdict, synced
     .vscale_mode(disp_vscale_mode),                          // DVD-FORK (CRT anamorphic vscale)
-    .hcrop_en(disp_hcrop_en)                                // DVD-FORK (CRT anamorphic horizontal crop)
+    .hcrop_en(disp_hcrop_en),                               // DVD-FORK (CRT anamorphic horizontal crop)
+    /* DVD-FORK (pause field still): always enabled in the core (benches tie it 0 to get
+     * the pre-feature addrgen). The per-scan sideband rides to disp_vscale below, which
+     * blends the interpolated slot with or without Letterbox. */
+    .still_en(1'b1),
+    .scan_start(still_scan_start),
+    .scan_half(still_scan_half)
     );
 
   /* DVD-FORK (CRT anamorphic Letterbox AA): vertical 2-tap downscale stage (480->360 /
@@ -1652,6 +1660,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   disp_vscale disp_vscale (
     .clk(clk), .clk_en(1'b1), .rst(sync_rst),
     .vscale_en(disp_vscale_en),
+    .scan_start(still_scan_start), .scan_half(still_scan_half),   // DVD-FORK (pause field still)
     /* from resample */
     .in_y(y_resample), .in_u(u_resample), .in_v(v_resample), .in_osd(osd_resample),
     .in_pos(position_resample), .in_wr(pixel_wr_en), .in_almost_full(pixel_wr_almost_full),

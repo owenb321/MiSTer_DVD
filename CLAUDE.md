@@ -252,6 +252,32 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **PAUSING TRUE-INTERLACED VIDEO FLICKERED BETWEEN ITS TWO FIELDS — IT NOW HOLDS
+  ONE FIELD (2026-09-18, branch `fix/pause-field-still`); sim-proven RED/GREEN, 8
+  mutations each failing in its own phase, ⏳ HW-confirm pending.** Report: pausing on
+  interlaced content flickers (CRT and HDMI 480i Bob). The persistence loop re-scans the
+  held picture's own T,B pair forever; for `progressive_frame = 0` those are two instants
+  1/59.94 s apart = a 30 Hz alternation.
+  **Fix = a set-top "field still":** `dvd/resample_addrgen.v` pins the field on screen
+  (`pin_bot`) and, for the OPPOSITE raster slot, reads the pinned field with one end
+  duplicated (H+1 lines); `dvd/disp_vscale.sv`'s new HALF mode averages adjacent lines
+  so that slot carries the field at its true half-line position (steady under Bob). The
+  frame-top TAG is untouched, so the mixer and the field-parity corrector see the same
+  stream. Film/progressive pauses keep the woven frame.
+  ★ The per-scan mode reaches `disp_vscale` through a 4-deep sideband queue popped at
+  each frame-top pixel, and `disp_vscale`'s route is now chosen per scan (a scan behind a
+  draining one runs PLAIN), which is what mutation M5 proves load-bearing.
+  ⚠ **At `STATE_NEXT_IMG` the scan that just finished is in `image`, not `last_image`**
+  (updated that same cycle); pinning `last_image` held the wrong field (M6).
+  ★ **Letterbox is covered** (mode M_LBH: the 4/3 step with its phase +½ source line; the
+  Bresenham remainder is now in sixths, bit-identical for plain Letterbox). It had to be:
+  `analog_letterbox` is on for EVERY Interlaced session showing 16:9 under the default
+  Auto, HDMI 480i included.
+  **Gate: `bench/dvd/run_pause_still.sh --red`** (real chain over a line-stamped
+  framestore, every output line checked for equality against its source position and
+  2-tap weight). ⚠ Its 128-px-wide field is deliberate: a field that fits the 1024-deep
+  pixel queue never backs up, and M5 then passes. Detail: **`docs/field_parity.md`** "Pause shows one field".
+
 - 🔧 **SUBPICTURE COMPOSITION DIDN'T FOLLOW THE SPEC IN TWO WAYS: a class-0 "transparent
   key", and a contrast-0 highlight class keeping its subpicture pixel (2026-09-18, branch
   `fix/spu-flashlight`); sim-proven, 3 mutations each caught by exactly its own arm, and

@@ -201,6 +201,10 @@ once, Menu behaves exactly as the disc specifies.
 Audio stops cleanly and resumes in sync. [Frame step](#frame-step) also pauses, if you would
 rather stop on an exact frame — and it leaves the screen clear.
 
+With [Video Output = Interlaced](../video/interlaced.md), pausing on video-sourced material
+holds **one field** of the picture rather than alternating between its two, so the still
+does not flicker. See [Pausing interlaced video](../video/interlaced.md#pausing-interlaced-video).
+
 **B2 / B3** step chapters. **B10 / B11** (`Fast Fwd` / `Rewind`) tapped step forward and back; **held**, they
 scrub — a seek bar appears showing where you are and where you will land, and the seek
 happens when you release. The target accelerates the longer you hold, so a brief hold nudges

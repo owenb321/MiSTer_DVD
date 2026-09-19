@@ -229,7 +229,8 @@ module resample_chain_tb;
     .raster_par_err(1'b0), .vscale_mode(rs_vscale_mode),              // DVD-FORK (CRT anamorphic vscale: letterbox)
     .hcrop_en(rs_hcrop_en),                    // DVD-FORK (CRT anamorphic horizontal crop)
     .sched_due(1'b1),                          // THE STC IS A CLOCK: free-run (every picture due at once) -- pacing is not what this bench measures
-    .sched_next_due(1'b1)
+    .sched_next_due(1'b1),
+    .still_en(1'b0), .scan_start(), .scan_half()   // pause field still: not exercised here (bench/dvd/pause_still_tb.sv)
   );
 
   // ---- disp_vscale: vertical 2-tap letterbox downscale (480->360 / field 240->180). Pure
@@ -240,7 +241,7 @@ module resample_chain_tb;
   wire       hs_in_almost_full;   // disp_hstretch.in_almost_full -> disp_vscale.out_almost_full
   disp_vscale disp_vscale (
     .clk(clk), .clk_en(1'b1), .rst(rst),
-    .vscale_en(rs_vscale_en),
+    .vscale_en(rs_vscale_en), .scan_start(1'b0), .scan_half(1'b0),
     .in_y(px_y), .in_u(px_u), .in_v(px_v), .in_osd(px_osd),
     .in_pos(px_position), .in_wr(px_wr_en), .in_almost_full(px_wr_almost_full),
     .out_y(vs_y), .out_u(vs_u), .out_v(vs_v), .out_osd(vs_osd),

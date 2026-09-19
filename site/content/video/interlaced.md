@@ -80,6 +80,17 @@ everything.
     longer than a second or so, if a mid-title switch still freezes, or if sound comes
     back out of sync, [please report it](../reference/reporting-a-bug.md).
 
+## Pausing interlaced video
+
+The two fields of a video-sourced picture are two different moments, 1/60 s apart. Showing
+both alternately while paused would flicker between them, so when you pause (or frame-step)
+such a picture the player holds **one** field, filling the other field's lines by
+interpolation — the "field still" a set-top player shows. The still is steady on a CRT and
+with either `480i Deint` setting, at the cost of half the vertical detail while paused.
+
+Film and progressive pictures are unaffected: their two fields are the same moment, so the
+pause keeps the full-resolution frame. It works the same with every `Analog Aspect` setting.
+
 ## Field alignment
 
 On some televisions the picture could come back from a chapter skip, fast-forward or
