@@ -10,8 +10,20 @@
 // Overlay colour (see docs/subpicture.md): the caller supplies the already-resolved
 // 24-bit RGB for this pixel (ov_r/g/b) — for DVD subtitles/menus that is the SET_COLOR
 // palette index looked up in the PGC palette (dvd/pgc_palette.sv). Per-index alpha comes
-// from the SPU's SET_CONTR (0 = transparent, 15 = opaque). idx 0 stays the transparent
-// key. This keeps the block a tiny combinational compositor with no palette knowledge.
+// from the SPU's SET_CONTR (0 = transparent, 15 = opaque) -- and that is the ONLY thing
+// that decides transparency. This keeps the block a tiny combinational compositor with
+// no palette knowledge.
+//
+// ⛔ THERE IS NO idx-0 TRANSPARENT KEY ANY MORE (2026-09-18). It was a Phase-1 relic from
+// before SET_CONTR and the PGC palette were parsed ("idx0 transparent / idx1 white"), and
+// the DVD spec has no such rule: class 0 is drawn with its contrast like any other.
+// MEASURED over 1215 discs / 16124 SPUs: 11 discs give class 0 a nonzero contrast, and in
+// the ones inspected it was DOING something -- Last Ounce of Courage and Die Another Day
+// put visible pixels in class 0 (contrast 15, background on class 3; on HW Die Another
+// Day looked right on v0.6.1 too, so that cost is unconfirmed); Scooby-Doo 2's museum
+// dims the whole screen
+// with class 0 at contrast 12 (the "flashlight" darkness). Silent Steel 2 authors a
+// full-screen class 0 at contrast 3 and now shows that tint, as a real player does.
 
 `default_nettype none
 
@@ -23,24 +35,23 @@ module subpic_blend (
 
     // Overlay pixel, already aligned to in_* by the caller
     input  wire       ov_on,       // this pixel lies inside a visible overlay region
-    input  wire [1:0] ov_idx,      // 2-bpp colour index (0..3); idx0 = transparent key
+    input  wire [1:0] ov_idx,      // 2-bpp colour index (0..3); informational only
     input  wire [7:0] ov_r,        // overlay colour (already looked up from the palette)
     input  wire [7:0] ov_g,
     input  wire [7:0] ov_b,
     input  wire [3:0] ov_alpha,    // 0 = transparent .. 15 = opaque (SET_CONTR)
-    // Highlight override: when high, blend on alpha alone and DO NOT force idx 0
-    // transparent. A DVD button-highlight coli recolours all four subpicture classes
-    // including the BACKGROUND class (idx 0); with the idx0-key that fill can never
-    // show. The idx0 key stays correct for subtitles (ov_force low). See docs/subpicture.md.
+    // ⚠ INERT since the idx-0 key was removed (2026-09-18): it only ever bypassed that
+    // key. Kept so emu's register stage and tools/check_saver_overlay_wiring.py (which
+    // pins sp_force_q's gating) need no churn; it MUST NOT be read as "force it on" --
+    // ov_on low is passthrough whatever it says (subpic_blend_tb pins that corner).
     input  wire       ov_force,
 
     output wire [7:0] out_r,
     output wire [7:0] out_g,
     output wire [7:0] out_b
 );
-    // idx0 is transparent by convention (subtitles); alpha 0 is transparent; ov_off is
-    // passthrough. ov_force (menu highlight) blends on alpha alone, keeping the idx0 fill.
-    wire blend = ov_on && (ov_alpha != 4'd0) && (ov_force || (ov_idx != 2'd0));
+    // alpha 0 is transparent; ov_off is passthrough. Nothing else.
+    wire blend = ov_on && (ov_alpha != 4'd0);
 
     // Blend weight: alpha/16, but map 15 -> 16 so full contrast is fully opaque
     // (out = ov exactly). weight in [0..16].
