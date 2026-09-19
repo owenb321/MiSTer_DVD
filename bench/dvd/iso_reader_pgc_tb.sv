@@ -258,6 +258,7 @@ module iso_reader_pgc_tb;
     reg [7:0]  tb_ncells = 8'd2;   // nr_of_cells put into the PGC (TEST 3 overrides)
     reg [15:0] tb_cpo    = 16'd256; // cell_playback_offset (TEST 3 sets 0 = fallback)
     reg        tb_decoy  = 1'b0;    // TEST 4: decoy PGCN 1 + valid PGCN 2
+    reg        tb_dur    = 1'b0;    // TEST 5: 5 s PGCN 1 + 1 h PGCN 2
 
     task build_iso(input [31:0] vts_pgcit_ptr);
         begin
@@ -290,12 +291,16 @@ module iso_reader_pgc_tb;
             // VTSI_MAT (@21) + VTS_PGCIT/PGC/cells (@22)
             put_vtsi_mat(21, vts_pgcit_ptr);
             if (vts_pgcit_ptr != 0 && tb_decoy) begin
+                // ⚠ PGC 1 sits at offset 64, NOT 16: with nr_srp=2 the SRP table
+                // runs to byte 23, so a PGC at 16 OVERLAPS SRP[1] -- writing its
+                // playback_time corrupts SRP[1].pgc_start_byte (measured: the scan
+                // then fetched pgc_off 1368 and read zeros).
                 // TEST 4 -- OZ's shape. PGCN 1 is a decoy: 72 cells declared but
                 // cell_playback_offset = 0 (no cell table). PGCN 2 is the real
                 // title: one cell at RBN 2. (OZ's decoy also carries PRE/POST
                 // commands; with Disc Menus off the reader ignores them, so this
                 // fixture leaves them out.)
-                put_pgcit(22, 32'd16, 8'd72, 16'd0);           // SRP[0] -> PGC @16
+                put_pgcit(22, 32'd64, 8'd72, 16'd0);           // SRP[0] -> PGC @64
                 img[22*2048+0] = 8'h00; img[22*2048+1] = 8'h02; // nr_of_pgci_srp = 2
                 img[22*2048+20] = 8'h00; img[22*2048+21] = 8'h00; // SRP[1] -> PGC @600
                 img[22*2048+22] = 8'h02; img[22*2048+23] = 8'h58;
@@ -304,6 +309,25 @@ module iso_reader_pgc_tb;
                 img[22*2048+600+232] = 8'h01;                   // cell table @+256
                 img[22*2048+600+233] = 8'h00;
                 put_cell(22, 32'd600, 16'd256, 0, 32'd2, 32'd2); // -> RBN 2 (0xB2)
+            end else if (vts_pgcit_ptr != 0 && tb_dur) begin
+                // TEST 5 -- the stub-title shape (War Horse, X-Men Apocalypse...).
+                // Both PGCs are VALID; PGCN 1 is a 5-second logo at RBN 0 and
+                // PGCN 2 is the 1-hour feature at RBN 2. playback_time is BCD
+                // hh mm ss at PGC@4..6.
+                put_pgcit(22, 32'd64, 8'd1, 16'd256);          // SRP[0] -> PGC @64
+                img[22*2048+0] = 8'h00; img[22*2048+1] = 8'h02; // nr_of_pgci_srp = 2
+                img[22*2048+20] = 8'h00; img[22*2048+21] = 8'h00; // SRP[1] -> PGC @600
+                img[22*2048+22] = 8'h02; img[22*2048+23] = 8'h58;
+                img[22*2048+64+4] = 8'h00;                      // PGC1 00:00:05
+                img[22*2048+64+5] = 8'h00;
+                img[22*2048+64+6] = 8'h05;
+                put_cell(22, 32'd64, 16'd256, 0, 32'd0, 32'd0);  // PGC1 -> RBN 0 (0xB0)
+                img[22*2048+600+2] = 8'h01;                     // PGC2: 1 program
+                img[22*2048+600+3] = 8'h01;                     //       1 cell
+                img[22*2048+600+4] = 8'h01;                     // PGC2 01:00:00
+                img[22*2048+600+232] = 8'h01;                   // cell table @+256
+                img[22*2048+600+233] = 8'h00;
+                put_cell(22, 32'd600, 16'd256, 0, 32'd2, 32'd2); // PGC2 -> RBN 2 (0xB2)
             end else if (vts_pgcit_ptr != 0) begin
                 // pgc_start_byte=16, nr_cells=tb_ncells, cell_playback_offset=256
                 put_pgcit(22, 32'd16, tb_ncells, tb_cpo);
@@ -469,6 +493,39 @@ module iso_reader_pgc_tb;
         if (cap_n !== 2048)          begin errors=errors+1; $display("  ERR wrong byte count (want PGCN 2's one cell)"); end
         for (i = 0; i < 2048 && i < cap_n; i = i + 1)
             expect_byte(i, cap[i], 8'hB2);
+
+        // =============================================================
+        // TEST 5 - Auto (Disc Menus off) must play the LONGEST PGC, not PGCN 1.
+        //          MEASURED: on 60 of 1231 library discs title 1 is a stub -- an
+        //          FBI warning or logo of 0-44 s whose POST links on to the
+        //          feature. With Disc Menus on the VM follows that link; with it
+        //          off there is no VM, so the player sat on the stub ("it picks a
+        //          short special feature instead of the movie"). VTS_PTT_SRPT does
+        //          not help: title 1 resolves to the same stub on all 60.
+        //          Here PGCN 1 is a VALID 5 s cell at RBN 0 and PGCN 2 is the 1 h
+        //          feature at RBN 2 -- so this is the duration rule on its own,
+        //          not TEST 4's unusable-PGC path.
+        // =============================================================
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+        m = 0;
+        tb_dur = 1'b1;
+        build_iso(32'd1);
+        tb_dur = 1'b0;
+        cap_n = 0;
+        file_size = 28*2048;
+        @(posedge clk);
+        start = 1; @(posedge clk); start = 0;
+
+        t = 0;
+        while (cap_n < 6144 && t < 4000000) begin @(posedge clk); t = t + 1; end
+        repeat (400) @(posedge clk);
+
+        $display("TEST5: cell_mode=%b cell_count=%0d cap_n=%0d first=%02x (expect 1 1 2048 b2)  [5s PGCN 1 vs 1h PGCN 2]",
+                 dut.cell_mode, dut.cell_count, cap_n, cap[0]);
+        if (dut.cell_mode !== 1'b1) begin errors=errors+1; $display("  ERR expected cell mode"); end
+        if (cap_n !== 2048)         begin errors=errors+1; $display("  ERR wrong byte count (want the 1 h PGC's cell)"); end
+        for (i = 0; i < 2048 && i < cap_n; i = i + 1)
+            expect_byte(i, cap[i], 8'hB2);          // the feature, not the 5 s logo
 
         // =============================================================
         if (errors == 0) $display("ISO_READER_PGC_TB: ALL TESTS PASSED");
