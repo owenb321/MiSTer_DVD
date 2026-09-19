@@ -254,7 +254,8 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **PAUSING TRUE-INTERLACED VIDEO FLICKERED BETWEEN ITS TWO FIELDS — IT NOW HOLDS
   ONE FIELD (2026-09-18, branch `fix/pause-field-still`); sim-proven RED/GREEN, 8
-  mutations each failing in its own phase, ⏳ HW-confirm pending.** Report: pausing on
+  mutations each failing in its own phase; built `DVD_fieldstill_20260919_0209.rbf`,
+  SEED 9 first roll, clk_dec 92.05/91.95, 92 % ALM; ⏳ HW-confirm pending.** Report: pausing on
   interlaced content flickers (CRT and HDMI 480i Bob). The persistence loop re-scans the
   held picture's own T,B pair forever; for `progressive_frame = 0` those are two instants
   1/59.94 s apart = a 30 Hz alternation.
