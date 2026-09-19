@@ -148,6 +148,51 @@ and misdirected a "what's next?" session. To prevent recurrence:
 
 ---
 
+## ★ Design to the DVD spec maximum (mandatory, instituted 2026-09-19)
+
+Every table, counter, index width and loop bound that holds a DVD-Video structure must be
+sized for **the maximum the format allows**, not for what a measured sample of discs
+happened to contain. Size to the spec unless there is a **hard limitation**, such as
+M10K/ALM budget, timing, or a register the hardware cannot widen. When that happens,
+**discuss the pros and cons with the user before deciding**, and record the decision, the
+limit chosen and what breaks past it beside the code and in `docs/`. A smaller bound
+must never be picked silently.
+
+**Why.** This mistake has shipped twice, and both times the smaller number looked safe
+when it was written:
+- **issue #112 (2026-09-19):** `dvd_css.cpp` held 64 VOBs. "OZ: The Great and Powerful"
+  lists 91, because it files one feature extent under 11 title sets. The VOBs past entry
+  64 were silently read without decryption, so the disc showed green garbage and
+  `CSS ENCRYPTED`.
+- **the >128-cell seek alias (2026-09-17):** 7-bit cell indices in the seek tables, which
+  a "measured unreachable" note justified. The measurement had sampled the wrong
+  population, and 47 PGCs across 12 discs exceeded it.
+
+A library sweep says what is *common*. It cannot say what is *possible*: authoring tools
+and copy-protection schemes deliberately produce structures no sample predicts.
+
+**And never truncate silently.** If a bound is ever hit, whether a hard-limited one or
+input that violates the spec, make it visible: a log line in the Main, or a counter/flag
+in the RTL that a bench or telemetry can see. Whatever falls past the bound must not
+quietly turn into wrong output.
+
+Reference maxima (DVD-Video; confirm the field width in the IFO parse before relying on
+one):
+
+| Structure | Max |
+|---|---|
+| Video title sets (VTS) | 99 |
+| Titles (`TT_SRPT`) | 99 |
+| Title VOB parts per VTS | 9 (plus one menu VOB) → 991 `.VOB` files per disc |
+| Cells per PGC | 255 (`nr_of_cells` is one byte) |
+| Programs (chapters) per PGC | 99 |
+| Angles | 9 |
+| Audio / subpicture streams | 8 / 32 |
+| Buttons per HLI | 36 |
+| GPRM / SPRM | 16 / 24 |
+
+---
+
 ## Repository Structure
 
 ```
