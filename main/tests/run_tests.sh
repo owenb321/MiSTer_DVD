@@ -280,6 +280,62 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_report.cpp dvd_report_test.cpp \
         "--nav-window = \"512\" (want \"2048\")" \
         "s/return NAV_WINDOW_IMAGE;/return NAV_WINDOW_OPTICAL;/" everything-optical
+
+    # ---- physical VCD/SVCD: probe, track selection, byte assembly ------------
+    # Loosen the marker match to "any directory" -- a plain DVD-Video disc
+    # (whose root holds VIDEO_TS, a directory too) would then read as VCD/SVCD.
+    red_case dvd_vcd_detect.cpp dvd_vcd_test.cpp \
+        "DVD-Video root has neither marker" \
+        "s/name_is(sec + off + 33, nlen, \"MPEG2\")/1/" \
+        vcd-marker-too-loose
+
+    # Stop checking the CDROM_DATA_TRACK bit -- an audio (CD-DA) track would
+    # be picked over the real data track whenever it happens to come first.
+    red_case dvd_vcd.cpp dvd_vcd_test.cpp \
+        "finds a non-first data track" \
+        "s/if (e.cdte_ctrl & CDROM_DATA_TRACK)/if (1)/" \
+        vcd-any-track-is-data
+
+    # Stop the span at the very NEXT track regardless of its type -- the
+    # bug a real burned test disc found: a VCD/SVCD conventionally splits
+    # its ISO9660 filesystem into a short first data track and puts the
+    # actual MPEG payload in the data track(s) that follow, so stopping at
+    # "the next track" unconditionally mounts only the filesystem stub as
+    # "the movie" and nothing ever decodes.
+    red_case dvd_vcd.cpp dvd_vcd_test.cpp \
+        "not track 2's start" \
+        "s/if (!(e.cdte_ctrl & CDROM_DATA_TRACK)) { have_end = 1; break; }/{ have_end = 1; break; }/" \
+        vcd-span-stops-at-next-track
+
+    # The inverse defect: never stop the span at all, running straight
+    # through a trailing CD-DA track into the leadout on a hybrid disc.
+    red_case dvd_vcd.cpp dvd_vcd_test.cpp \
+        "stops at the CD-DA track" \
+        "s/if (!(e.cdte_ctrl & CDROM_DATA_TRACK)) { have_end = 1; break; }//" \
+        vcd-span-ignores-cdda-track
+
+    # Drop the burst cap: a large sd_* request would ask READ CD for more
+    # frames than g_scratch (sized to VCD_BURST_MAX) can hold.
+    red_case dvd_vcd.cpp dvd_vcd_test.cpp \
+        "bursts never exceed the cap" \
+        "s/if (frames > VCD_BURST_MAX) frames = VCD_BURST_MAX;//" \
+        vcd-burst-uncapped
+
+    # Clamp the past-EOF tail but stop zero-filling it -- the core would read
+    # whatever was already in the HPS transfer buffer as if it were disc data.
+    red_case dvd_vcd.cpp dvd_vcd_test.cpp \
+        "the byte just past EOF is zero-filled" \
+        "s/memset(out, 0, (size_t)(b1 - b0)); //" \
+        vcd-eof-not-zeroed
+
+    # dvd_phys.cpp's dispatch: mount every recognized disc via the DVD-Video
+    # sentinel. A VCD/SVCD would then take the CSS-decrypt path (which
+    # dvd_css_open() would fail on a disc with no VIDEO_TS) instead of the
+    # raw VCD/SVCD source.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "want the VCD sentinel" \
+        "s/is_dvd_video ? DVD_PHYS_SENTINEL : DVD_PHYS_VCD_SENTINEL/DVD_PHYS_SENTINEL/" \
+        phys-vcd-wrong-sentinel
     echo
 fi
 

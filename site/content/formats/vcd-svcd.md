@@ -3,6 +3,12 @@
 VCD and SVCD rips play directly from the bin/cue rip — no conversion step. No CSS is ever
 involved, so nothing beyond the bare `.rbf` is needed.
 
+A **physical VCD or SVCD disc** plays the same way straight from a USB optical drive — see
+[Physical discs](physical-discs.md#video-cd-super-video-cd-from-the-drive). Everything on
+this page (what to select does not apply there; everything else — playback, seeking, the
+limitations below) is identical either way, since the disc and a `.bin` rip present the
+core with the same bytes.
+
 ## Which file to select
 
 Select the rip's **data-track `.bin`** from `Load Video` — usually the one labelled
@@ -45,7 +51,8 @@ was added. Nothing beyond that was built:
   navigation is not implemented.
 - **No segment stills.**
 - **One `.bin` per movie track** — a multi-track rip needs the movie track selected
-  directly.
+  directly. A physical disc plays its first data track only, the same limitation made
+  once by the disc instead of by you.
 - **No CD-DA audio tracks** — audio-only tracks on a mixed disc do not play.
 - **No 2336-byte-sector images.** The common 2352-byte raw format is what is supported.
 - **A 23.976-coded film VCD would play fast.** This is rare; almost all VCDs are 29.97 or

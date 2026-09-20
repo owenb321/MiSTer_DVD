@@ -10,6 +10,8 @@ Base pinned in `build_main.sh`: `MAIN_MISTER_REF` (a MiSTer-devel/Main_MiSTer co
 
 - `support/dvd/dvd_css.cpp` / `dvd_css.h`   — CSS-decrypted sector reads (dlopen libdvdcss)
 - `support/dvd/dvd_detect.cpp` / `dvd_detect.h` — READ(10) DVD-Video probe
+- `support/dvd/dvd_vcd.cpp` / `dvd_vcd.h`   — raw (no-decrypt) VCD/SVCD sector reads
+- `support/dvd/dvd_vcd_detect.cpp` / `dvd_vcd_detect.h` — ISO9660 VCD/SVCD probe
 - `support/dvd/dvd_phys.cpp` / `dvd_phys.h` — standalone auto-mount trigger
 - `support/dvd/dvd_remote.cpp` / `dvd_remote.h` — DVD-remote Eject + Volume buttons
 - `Scripts/install_dvdcss.sh`               — user-run libdvdcss installer
@@ -434,3 +436,63 @@ changes. The two constants are the only knobs if the margin needs tuning on a
 particular set.
 
 ✅ **HW-CONFIRMED 2026-09-18** by the maintainer: the volume popup is fully visible on a CRT.
+
+## Steps 43-47 — physical Video CD / Super Video CD
+
+`main/support/dvd/dvd_vcd.{h,cpp}` + `dvd_vcd_detect.{h,cpp}`. Adds a SECOND
+physical-disc source alongside DVD-Video, on the SAME drive `dvd_phys.cpp`
+already scans. No CSS, no region, no decrypt handshake of any kind — VCD and
+SVCD carry no protection at all — and no RTL change: `dvd_iso_reader.sv`
+already auto-detects a raw MODE2/2352 image purely from the CD sync pattern at
+byte 0 (the same content-sniff a ripped `.bin` file already uses), so this
+module only has to hand the FPGA the disc's raw 2352-byte sectors.
+
+| # | File | Edit |
+|---|---|---|
+| 43 | `user_io.cpp` | include `support/dvd/dvd_vcd.h` |
+| 44 | `user_io.cpp` | `#define SD_TYPE_VCD 5` |
+| 44b | `user_io.cpp` | `dvd_vcd_close()` on remount, beside step 5's `dvd_css_close()` |
+| 45 | `user_io.cpp` | mount dispatch: a third `else if` arm, `DVD_PHYS_VCD_SENTINEL` |
+| 46 | `user_io.cpp` | read source A (`dvdvcd:readA`), same anchor as step 8's DVD-CSS arm |
+| 47 | `user_io.cpp` | read source B (`dvdvcd:readB`), same anchor as step 9's |
+
+Every step is deliberately the SAME shape as its DVD-Video counterpart (1→43,
+2→44, 5→44b, 6→45, 8→46, 9→47), one arm further along the same if/else-if
+chains — `dvd_phys.cpp` tries `dvd_video_probe()` first and `dvd_vcd_probe()`
+second, mounting via whichever sentinel matched.
+
+★ **Step 45's `insert_before` does NOT consume the anchor line, unlike step
+6's raw string replace.** Step 6 rewrites the *entire* `if (x2trd_ext_supp
+(name))` line as part of its own replacement text (so it has to re-emit that
+line at the end of its inserted block); step 45 runs afterward and only
+*prepends* before that same line, which stays untouched. Ending step 45's
+inserted block with the anchor line too — an easy copy-paste mistake from
+step 6's shape — duplicates it. Caught by running `apply_integration.py`
+against the real cross-compile (`USE_DOCKER=1 main/build_main.sh`); a syntax
+error here fails loudly rather than silently, but it is one to know about
+before writing a SIXTH `insert_before` arm onto this same chain.
+
+★ **`dvd_vcd_open()` takes no arguments and does its own drive scan**, unlike
+`dvd_vcd_probe()` (which takes the fd `dvd_phys.cpp`'s own probe already has
+open). This mirrors `dvd_css_open()` exactly and for the same reason:
+`dvd_phys.cpp` closes its probe fd before calling `user_io_file_mount()`, so
+by the time this dispatch runs there is no fd to hand over — the module must
+find and open the drive itself (`find_vcd_device()`, the same `/dev/sr0..7` +
+`CDROM_DRIVE_STATUS` walk `dvd_css.cpp`'s `find_dvd_device()` uses, minus the
+CSS-only not-ready fallback and size query).
+
+⚠ **`<limits.h>` is required in `dvd_vcd.cpp`** for the same reason
+`dvd_phys.cpp` already includes it: `CDSL_CURRENT` (used by
+`CDROM_DRIVE_STATUS`) expands to `INT_MAX` via `<linux/cdrom.h>`, which does
+not itself declare it. Missing it compiles fine on a host `g++` smoke test
+(glibc pulls it in transitively) and fails only under the ARM cross-compiler
+— caught here by actually running `USE_DOCKER=1 main/build_main.sh`, not by
+the host-side `main/tests/` suite, which cannot see this class of error at
+all (it never targets the ARM toolchain).
+
+Host tests: `main/tests/dvd_vcd_test.cpp` (13 arms — the ISO9660 probe, TOC
+track selection, and read()'s byte assembly against a synthetic disc where
+every byte is a pure function of disc LBA/offset) plus new arms in
+`dvd_phys_test.cpp` covering the dispatch itself. 6 RED mutations, each
+caught by its own arm (`run_tests.sh --red`). Detail:
+`MiSTer_DVD/docs/physical_disc.md`, `MiSTer_DVD/docs/vcd_svcd.md`.

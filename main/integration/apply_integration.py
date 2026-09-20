@@ -652,4 +652,85 @@ cec = replace_once(cec,
 write(cec_path, cec)
 print("[integration] hdmi_cec.cpp patched (DVD-remote CEC mapping)")
 
+# =============================================================================
+# Physical Video CD / Super Video CD (steps 43-47). See INTEGRATION.md and
+# MiSTer_DVD/main/support/dvd/dvd_vcd.h. Mirrors the DVD-Video steps (1, 2, 6,
+# 8, 9) exactly, one arm further in the same if/else-if chains -- there is no
+# CSS/decrypt handshake to add (VCD/SVCD carry no protection at all), so
+# dvd_vcd_open() is called with no arguments, unlike dvd_css_open()'s
+# region/library setup.
+# =============================================================================
+
+u = read(uio_path)
+
+# 43. include
+u = insert_after(u, '#include "support/dvd/dvd_css.h"',
+    '#include "support/dvd/dvd_vcd.h"\n',
+    43, 'support/dvd/dvd_vcd.h')
+
+# 44. slot type
+u = insert_after(u, '#define  SD_TYPE_DVDCSS 4   // physical DVD-Video, CSS-decrypted via libdvdcss',
+    '#define  SD_TYPE_VCD 5      // physical Video CD / Super Video CD, raw (no decrypt)\n',
+    44, 'SD_TYPE_VCD')
+
+# 44b. close the VCD/SVCD handle on remount -- the same reason step 5 closes
+# DVD-CSS's: this slot may be about to become a different source entirely, and
+# an un-closed dvd_vcd_open() would leak its fd.
+u = insert_after(u, 'if (sd_type[index] == SD_TYPE_DVDCSS) dvd_css_close();',
+    '\tif (sd_type[index] == SD_TYPE_VCD) dvd_vcd_close();\n',
+    '44b', 'if (sd_type[index] == SD_TYPE_VCD) dvd_vcd_close();')
+
+# 45. mount dispatch -- a third arm alongside the DVD-CSS sentinel and the
+# encrypted-ISO-image branches step 6 added, tried before the ordinary
+# x2trd_ext_supp(name) file path.
+u = insert_before(u, 'else if (x2trd_ext_supp(name))',
+    'else if (!strcmp(name, DVD_PHYS_VCD_SENTINEL) && is_dvd())\n'
+    '{\n'
+    '\t// Physical Video CD / Super Video CD: no CSS, no region -- see dvd_vcd.h.\n'
+    '\t// dvd_vcd_open() finds and opens the drive itself, same shape as\n'
+    '\t// dvd_css_open() just above, minus the decrypt handshake.\n'
+    '\tif (dvd_vcd_open() == 0)\n'
+    '\t{\n'
+    '\t\tsd_type[index] = SD_TYPE_VCD;\n'
+    '\t\tsd_image[index].size = dvd_vcd_size();\n'
+    '\t\twritable = 0;\n'
+    '\t\tret = 1;\n'
+    '\t}\n'
+    '}\n',
+    45, 'DVD_PHYS_VCD_SENTINEL')
+
+# 46. read source A (the "done = 1" site, same anchor as step 8's DVD-CSS arm --
+# insert_before leaves that anchor text in place, so a later step reusing it is
+# safe and simply lands its own arm one position closer to the anchor).
+u = insert_before(u, 'else if (sd_image[disk].size)',
+    'else if (sd_type[disk] == SD_TYPE_VCD)   // dvdvcd:readA\n'
+    '{\n'
+    '\tdiskled_on();\n'
+    '\tif (dvd_vcd_read(buffer[disk], lba, buf_n) > 0)\n'
+    '\t{\n'
+    '\t\tdone = 1;\n'
+    '\t\tbuffer_lba[disk] = lba;\n'
+    '\t}\n'
+    '}\n',
+    46, '// dvdvcd:readA')
+
+# 47. read source B (the FileSeek fallback site, same anchor as step 9's).
+u = insert_before(u, 'else if (FileSeek(&sd_image[disk], lba * blksz, SEEK_SET)',
+    'else if (sd_type[disk] == SD_TYPE_VCD)   // dvdvcd:readB\n'
+    '{\n'
+    '\tif (dvd_vcd_read(buffer[disk], lba, buf_n) > 0)\n'
+    '\t{\n'
+    '\t\tbuffer_lba[disk] = lba;\n'
+    '\t}\n'
+    '\telse\n'
+    '\t{\n'
+    '\t\tmemset(buffer[disk], 0, sizeof(buffer[disk]));\n'
+    '\t\tbuffer_lba[disk] = -1;\n'
+    '\t}\n'
+    '}\n',
+    47, '// dvdvcd:readB')
+
+write(uio_path, u)
+print("[integration] user_io.cpp patched (physical VCD/SVCD)")
+
 print("[integration] done")

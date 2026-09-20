@@ -39,6 +39,19 @@ With that in place: open the core with a disc in the drive and it plays; insert 
 the core is open and it plays; eject to stop. Remove the `[DVD]` section, or the binary, and
 the core reverts to image-only playback with the stock Main — nothing else changes.
 
+This also plays a physical **[Video CD or Super Video CD](vcd-svcd.md)** from the same
+drive — see the next section, since it needs none of the CSS/libdvdcss steps below.
+
+## Video CD / Super Video CD from the drive
+
+VCD and SVCD carry no copy protection of any kind, so playing one from the drive needs
+nothing past step 2 above — no libdvdcss, no region. Insert the disc and it plays, exactly
+like a DVD-Video disc.
+
+The same one-track limitation as a [ripped VCD/SVCD image](vcd-svcd.md) applies: a
+multi-movie disc, or a disc with CD-DA audio tracks after the video, plays only the first
+data track.
+
 ## 3. libdvdcss
 
 Most commercial discs — and raw image rips of them — are CSS-encrypted. Decrypting them

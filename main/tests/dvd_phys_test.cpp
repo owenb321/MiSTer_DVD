@@ -11,9 +11,14 @@
 //     playing -- freezing it -- and reset the core.
 //
 // Those are five interacting flags (mounted / foreign / prev_ready /
-// probed_not_video / the launch gate) over a handful of discrete events, which is
-// precisely the shape that regresses without anyone noticing. This runs on the
+// probed_unrecognized / the launch gate) over a handful of discrete events, which
+// is precisely the shape that regresses without anyone noticing. This runs on the
 // host: build with main/tests/run_tests.sh.
+//
+// [11]-[12] cover the VCD/SVCD dispatch added alongside dvd_vcd.cpp/
+// dvd_vcd_detect.cpp: a disc that fails dvd_video_probe() gets a SECOND chance
+// via dvd_vcd_probe() before being rejected, and each source gets its own
+// sentinel and its own teardown call.
 //
 // MEASURED against the pre-fix module (no foreign/ui_busy/probe gating, `mounted`
 // sticky) -- both field symptoms reproduce:
@@ -47,8 +52,10 @@
 // ---------------------------------------------------------------- fake world
 static int  fake_disc_ready   = 0;   // the drive reports a disc ready
 static int  fake_disc_is_dvd  = 1;   // ...and it is DVD-Video
+static int  fake_disc_is_vcd  = 0;   // ...or (if not DVD-Video) a VCD/SVCD
 static int  fake_launch_busy  = 0;   // an MGL launch is pending
-static int  probe_calls       = 0;   // how often we READ the disc
+static int  probe_calls       = 0;   // how often we READ the disc (either probe)
+static int  vcd_close_calls   = 0;   // how often dvd_vcd_close() ran
 static int  mount_calls       = 0;
 static int  reset_asserts     = 0;
 static char last_mount[256]   = {0};
@@ -81,7 +88,9 @@ static int open_ready_drive(char *out, int out_sz)
 // why there is no second copy of Main's API here to drift out of date.
 char is_dvd() { return 1; }
 int  dvd_video_probe(int) { probe_calls++; return fake_disc_is_dvd; }
+int  dvd_vcd_probe(int) { probe_calls++; return fake_disc_is_vcd; }
 void dvd_css_close(void) {}
+void dvd_vcd_close(void) { vcd_close_calls++; }
 int  dvd_launch_ui_busy(void) { return fake_launch_busy; }
 
 int user_io_file_mount(const char *name, unsigned char index = 0, char = 0, int = 0)
@@ -142,7 +151,7 @@ static void run_for(int seconds)
 
 static void reset_counters(void)
 {
-    probe_calls = mount_calls = reset_asserts = 0; last_mount[0] = 0;
+    probe_calls = mount_calls = reset_asserts = vcd_close_calls = 0; last_mount[0] = 0;
 }
 
 int main(void)
@@ -196,12 +205,15 @@ int main(void)
     check("[6] mounts",                      mount_calls, 1);
 
     printf("=== [7] an audio CD is probed once per insertion, not once a second ===\n");
-    // eject the DVD, then present a non-DVD-Video disc
+    // eject the DVD, then present a disc that is neither DVD-Video nor VCD/SVCD.
+    // "Once" now means once PER DETECTOR: dvd_video_probe() rejects it, so
+    // dvd_vcd_probe() also runs (the dispatch tries both before giving up) --
+    // still bounded to the insertion, never re-run while the disc just sits there.
     fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
     reset_counters();
-    fake_disc_is_dvd = 0; fake_disc_ready = 1;
+    fake_disc_is_dvd = 0; fake_disc_is_vcd = 0; fake_disc_ready = 1;
     run_for(30);
-    check("[7] disc reads over half a minute", probe_calls, 1);
+    check("[7] disc reads over half a minute (both detectors, once each)", probe_calls, 2);
     check("[7] mounts",                        mount_calls, 0);
 
     printf("=== [8] a slow drive probe must back off ===\n");
@@ -269,6 +281,30 @@ int main(void)
     reset_counters();
     fake_disc_ready = 1; run_for(NOTICE_WINDOW_S);
     check("[10] a fresh insertion still mounts",     mount_calls, 1);
+
+    // ---------------------------------------------------------------- [11]
+    // A VCD/SVCD (not DVD-Video) mounts via its OWN sentinel, tried only
+    // after dvd_video_probe() rejects the disc.
+    printf("=== [11] a VCD/SVCD (not DVD-Video) mounts via its own sentinel ===\n");
+    fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+    reset_counters();
+    fake_disc_is_dvd = 0; fake_disc_is_vcd = 1; fake_disc_ready = 1;
+    run_for(NOTICE_WINDOW_S);
+    check("[11] disc reads (both detectors, once each)", probe_calls, 2);
+    check("[11] mounts",                                 mount_calls, 1);
+    if (strcmp(last_mount, DVD_PHYS_VCD_SENTINEL)) {
+        printf("  FAIL [11] mounted %s, want the VCD sentinel\n", last_mount); errs++;
+    } else printf("  ok   [11] mounted the VCD sentinel\n");
+
+    // ---------------------------------------------------------------- [12]
+    // Ejecting a mounted VCD/SVCD must release ITS OWN source, not just
+    // dvd_css_close() -- the teardown path is shared with DVD-Video and it
+    // is easy to forget the second module's cleanup call.
+    printf("=== [12] ejecting a mounted VCD/SVCD releases its own source too ===\n");
+    reset_counters();
+    int had_vcd = dvd_phys_eject();
+    check("[12] reports it ejected an optical disc", had_vcd, 1);
+    check("[12] dvd_vcd_close was called",           vcd_close_calls, 1);
 
     printf("\n=== dvd_phys tests: %d error(s) ===\n", errs);
     if (errs) { printf("FAILED\n"); return 1; }

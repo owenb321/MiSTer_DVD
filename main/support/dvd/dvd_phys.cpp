@@ -3,7 +3,9 @@
 // Self-contained: opens /dev/srN read-only-nonblocking for status/probe only,
 // and drives the mount through the public user_io_file_mount() entry point. The
 // actual sector decryption lives in dvd_css.*; DVD-Video recognition in
-// dvd_detect.*. This file adds only "when to mount / unmount".
+// dvd_detect.*; VCD/SVCD recognition and its (decryption-free) reads in
+// dvd_vcd_detect.*/dvd_vcd.*. This file adds only "when to mount / unmount /
+// which of the two sources".
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -19,7 +21,9 @@
 
 #include "dvd_phys.h"
 #include "dvd_detect.h"
+#include "dvd_vcd_detect.h"
 #include "dvd_css.h"
+#include "dvd_vcd.h"
 #include "dvd_launch.h"
 #include "../../user_io.h"   // user_io_file_mount(), is_dvd()
 
@@ -42,7 +46,8 @@ static time_t reset_release_at = 0; // >0 while an eject reset pulse is being he
 // still wins. A disc merely SITTING in the drive never does.
 static int    foreign = 0;
 static int    prev_ready = 0;      // the drive reported a disc ready on the last scan
-static int    probed_not_video = 0; // this disc was probed and is not DVD-Video
+static int    probed_unrecognized = 0; // this disc was probed and is none of the
+                                        // recognized types (DVD-Video / VCD / SVCD)
 
 // ---------------------------------------------------------------------------
 // The one teardown path: unmount, drop the CSS session, reset the core to idle
@@ -56,6 +61,7 @@ static void teardown_to_idle(time_t now)
 {
 	user_io_file_mount("", 0);
 	dvd_css_close();
+	dvd_vcd_close();
 	mounted_dev[0] = 0;
 	user_io_status_set("[0]", 1);   // OSD-reset: unload + VM reset -> idle logo
 	reset_release_at = now + 1;     // release after ~1 s (see the tick top)
@@ -151,7 +157,8 @@ void dvd_phys_note_mount(const char *path, unsigned char index)
 		return;
 	}
 
-	if (!strcmp(path, DVD_PHYS_SENTINEL)) { foreign = 0; return; }   // that is us
+	if (!strcmp(path, DVD_PHYS_SENTINEL))     { foreign = 0; return; }   // that is us
+	if (!strcmp(path, DVD_PHYS_VCD_SENTINEL)) { foreign = 0; return; }   // that is us too
 
 	// A real file went into the slot. Whatever we thought we owned, we do not own
 	// it any more -- user_io_file_mount() has already called dvd_css_close() on
@@ -243,8 +250,8 @@ void dvd_phys_tick(void)
 	// disc in is a deliberate act, and the auto-mount is the only way to play one.
 	// A disc that was ALREADY sitting in the drive does not get to take the slot
 	// back from an image the user asked for. Drive READINESS is the edge, not the
-	// DVD-Video verdict, so this costs one ioctl and reads nothing off the disc.
-	if (!prev_ready) { foreign = 0; probed_not_video = 0; }
+	// verdict, so this costs one ioctl and reads nothing off the disc.
+	if (!prev_ready) { foreign = 0; probed_unrecognized = 0; }
 	prev_ready = 1;
 
 	// ⚠ Every reason not to mount is checked BEFORE dvd_video_probe(), which is
@@ -259,36 +266,41 @@ void dvd_phys_tick(void)
 	//              Deferring costs nothing: if no file arrives, the launch settles
 	//              and the next scan mounts the disc a second later.
 	//   foreign  - an image the user chose is in the slot
-	//   probed_not_video - an audio CD or data disc; the verdict cannot change
+	//   probed_unrecognized - an audio CD or data disc; the verdict cannot change
 	//              without an eject, so probe it once per insertion, not once a
 	//              second for as long as it sits there
-	if (mounted || dvd_launch_ui_busy() || foreign || probed_not_video)
+	if (mounted || dvd_launch_ui_busy() || foreign || probed_unrecognized)
 	{
 		close(fd);
 		return;
 	}
 
-	// Only mount DVD-Video discs — leave audio CDs / data discs alone (they are
-	// not ours to play).
+	// DVD-Video first, VCD/SVCD second -- both probes are cheap READ(10)s of the
+	// ISO9660 root, and a disc is at most one of the two. Leave audio CDs / data
+	// discs alone (they are not ours to play).
 	int is_dvd_video = dvd_video_probe(fd);
+	int is_vcd = !is_dvd_video && dvd_vcd_probe(fd);
 	close(fd);
-	if (!is_dvd_video)
+	if (!is_dvd_video && !is_vcd)
 	{
 		// Say so once per insertion. Without this, "I put a disc in and nothing
 		// happened" has no record at all, and the two explanations -- we rejected
 		// it, or we never saw it -- look identical from the outside.
-		probed_not_video = 1;
-		phys_log("DVD_PHYS: disc on %s is not DVD-Video (no ISO9660 VIDEO_TS) "
+		probed_unrecognized = 1;
+		phys_log("DVD_PHYS: disc on %s is not DVD-Video or VCD/SVCD "
 		         "-- not mounting", dev);
 		return;
 	}
 
-	phys_log("DVD_PHYS: DVD-Video on %s -- mounting", dev);
-	// The sentinel routes user_io_file_mount() to the CSS-decrypted drive path
-	// (see the SD_TYPE_DVDCSS handling in user_io.cpp). dvd_css_open() inside it
-	// re-scans for the drive and runs the CSS handshake; a failure there (no
-	// libdvdcss on an encrypted disc) surfaces the on-screen install prompt.
-	if (user_io_file_mount(DVD_PHYS_SENTINEL, 0))
+	const char *sentinel = is_dvd_video ? DVD_PHYS_SENTINEL : DVD_PHYS_VCD_SENTINEL;
+	phys_log("DVD_PHYS: %s on %s -- mounting",
+	         is_dvd_video ? "DVD-Video" : "VCD/SVCD", dev);
+	// The sentinel routes user_io_file_mount() to the matching drive-backed
+	// source (SD_TYPE_DVDCSS / SD_TYPE_VCD in user_io.cpp). dvd_css_open()/
+	// dvd_vcd_open() inside it re-scan for the drive; a CSS failure (no
+	// libdvdcss on an encrypted disc) surfaces the on-screen install prompt --
+	// VCD/SVCD has no such handshake to fail.
+	if (user_io_file_mount(sentinel, 0))
 	{
 		mounted = 1;
 		snprintf(mounted_dev, sizeof(mounted_dev), "%s", dev);
@@ -336,7 +348,7 @@ int dvd_phys_eject(void)
 	// never drops and the disc stays un-mounted until the user does something
 	// deliberate. No new state, and no timer to tune.
 	foreign = 1;
-	probed_not_video = 0;
+	probed_unrecognized = 0;
 	// (prev_ready is deliberately NOT forced: the last scan already saw the
 	// disc ready, so the next one cannot read an insertion edge anyway, and
 	// forcing it would only delay a genuine re-insertion.)

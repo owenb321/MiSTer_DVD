@@ -10,7 +10,13 @@ sweep); sub-items not specifically re-verified stay open in §6 below.
 
 Companion docs: `docs/mpeg1.md` (the MPEG-1 video + MP2 decoders this feature rides on),
 `docs/experiments.md` §"VCD / SVCD playback" (the original delta list, now largely
-delivered), `docs/hps_handoff_cd_precedent.md` (why bin/cue had to be done in fabric).
+delivered), `docs/hps_handoff_cd_precedent.md` (why bin/cue had to be done in fabric),
+`docs/physical_disc.md` "Video CD / Super Video CD" (a real disc in the drive, not
+just a `.bin` rip — **sim/host-proven, ⏳ HW-confirm pending**). Everything on this
+page (the two RTL deltas, the transport, and every limitation in §5) applies
+identically to a physical disc: the whole reason that feature needed no RTL change is
+that `dvd_iso_reader.sv`'s raw-sector detector never knew or cared where the bytes
+came from — a `.bin` file and a live drive present the same byte stream.
 
 ## 1. Disc/image format (ground truth from a real PAL VCD)
 
@@ -241,7 +247,9 @@ goldens against `ffmpeg -c copy` at generation time. Plus: `crt_ov_map_tb`,
   as they live in the ISO track region of single-bin images; a stray Form-2 segment
   before the movie would play briefly).
 - **Multi-track discs**: pick each track's `.bin` separately (multi-movie VCDs).
-  CD-DA audio tracks are not playable.
+  CD-DA audio tracks are not playable. On a physical disc (`docs/physical_disc.md`)
+  the equivalent limitation is the same choice made once, by the disc's own first
+  DATA track, instead of by the user picking a file.
 - **2336-byte sector images** (Mode-2-without-sync rips) are not detected.
 - **23.976-coded NTSC film VCDs play ~25 % fast**: MPEG-1 has no repeat_first_field,
   so the film detector cannot see them and the governor shows every frame for 2

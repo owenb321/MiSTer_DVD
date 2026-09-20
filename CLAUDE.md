@@ -297,6 +297,105 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **PHYSICAL VCD/SVCD DISC PLAYBACK — needs zero RTL changes (2026-09-17, branch
+  `feature/vcd-svcd-physical`); host-proven, mutation-checked, and ✅ HW-CONFIRMED
+  2026-09-20 on a real burned test disc (both bugs the first HW round found are now
+  fixed and re-verified).** Extends the existing
+  physical-DVD story (`docs/physical_disc.md`) and the existing rip-image VCD/SVCD
+  story (`docs/vcd_svcd.md`) to each other: a VCD/SVCD disc in the same optical
+  drive `dvd_phys.cpp` already scans for DVD-Video.
+  ★★ **THE REASON THIS NEEDED NO FPGA CHANGE AT ALL: `dvd_iso_reader.sv`'s raw
+  MODE2/2352 detector was ALREADY content-based, not path-based.** It sniffs the
+  12-byte CD sync pattern at file/image byte 0 (`raw2352`, the same signature a
+  `.bin` rip triggers) with no idea whether the bytes came from a file or a live
+  drive — so a physical source only has to hand the FPGA the same raw byte stream,
+  sync pattern intact, and the existing shipped RTL treats it identically. No
+  CONF_STR change either, so no re-rolled fitter seed and no new `.rbf` needed at
+  all for this feature to work — it rides the currently-released bitstream.
+  Two new HPS-side modules, mirroring the existing `dvd_detect.cpp`/`dvd_css.cpp`
+  split: **`dvd_vcd_detect.cpp`** (the same `READ(10)` PVD + root-directory walk as
+  `dvd_video_probe()`, checked second, looking for `MPEGAV/`/`MPEG2/` instead of
+  `VIDEO_TS`) and **`dvd_vcd.cpp`** (finds the disc's first DATA track via
+  `CDROMREADTOC*`, reads raw sectors via SCSI `READ CD (0xBE)`, no decryption, no
+  libdvdcss dependency — VCD/SVCD carry no protection at all). `dvd_phys.cpp`'s
+  existing probe/mount state machine gained a second sentinel
+  (`DVD_PHYS_VCD_SENTINEL`) and tries `dvd_vcd_probe()` after `dvd_video_probe()`
+  rejects a disc; every other rule (foreign-slot, MGL-busy gating, eject teardown)
+  is shared, unchanged.
+  ★ **`READ CD`'s flag byte had to differ from the shelved `feature/cdda-physical`
+  branch's `dvd_cdda.cpp` precedent it's adapted from, and the reason is a real
+  distinction, not a style choice.** CD-DA requests "user data only"
+  (`cdb[9]=0x10`), which for a CD-DA sector IS the whole 2352 bytes (no header
+  structure to a Red Book audio frame). A VCD/SVCD data track is Mode 2, where
+  the FPGA's detector reads the sync pattern and mode/submode bytes that sit in
+  the sync/header/subheader region — OUTSIDE "user data" for that sector type. So
+  this module requests the full raw sector (`cdb[9]=0xF8`: Sync + full header +
+  user data + EDC/ECC) and "any sector type" (`cdb[1]=0x00`, since a VCD/SVCD
+  track mixes Mode 2 Form 1 filesystem sectors with Form 2 MPEG payload sectors,
+  unlike CD-DA's one uniform type throughout).
+  ⚠ **The exact `READ CD` byte values are the one thing host tests cannot verify**
+  — `dvd_vcd_test.cpp`'s synthetic-disc checks exercise the surrounding
+  arithmetic (burst sizing, the track-boundary clamp, the EOF zero-fill) against
+  a fake `read_frames()` that never issues the real SCSI command. Whether a real
+  drive answers the MMC spec's byte layout the way assumed is necessarily an
+  HW-only gate — the first thing to check if a real disc plays back scrambled.
+  ★ **A real cross-compile bug came out of building this for real, not just
+  compiling on the host**: `dvd_vcd.cpp` needed `<limits.h>` for `CDSL_CURRENT`'s
+  `INT_MAX` expansion via `<linux/cdrom.h>` — invisible to a host `g++` smoke test
+  (glibc pulls it in transitively there) and only caught by actually running
+  `USE_DOCKER=1 main/build_main.sh`'s ARM cross-compile, which now links clean.
+  ★ Also found integrating: `apply_integration.py`'s `insert_before()` does NOT
+  consume its anchor line (unlike the mount dispatch's original `insert_after`
+  full-block replace at step 6) — a first draft that copied step 6's shape ended
+  its inserted block with a repeated `else if (x2trd_ext_supp(name))`, duplicating
+  the line. Caught the same way, by the real compile.
+  Gates: `main/tests/dvd_vcd_test.cpp` (13 arms: the ISO9660 probe, TOC track
+  selection over a fake multi-track disc, `dvd_vcd_read()`'s byte assembly against
+  a synthetic disc where every byte is a pure function of disc LBA/offset — the
+  `dvd_cdda_test.cpp` instrument) + new dispatch arms in `dvd_phys_test.cpp`,
+  `main/tests/run_tests.sh --red` (6 new mutations, each caught by its own arm).
+  v1 scope, matching the existing rip-image feature's own limitation: the disc's
+  data-track SPAN (see the HW-round fix immediately below) — a hybrid disc's
+  CD-DA tracks, or a genuine multi-movie VCD's SEPARATE, non-consecutive data
+  tracks, are not played — the same one-`.bin`-per-track choice a rip mount
+  already requires, made once by the disc instead of by the user.
+  ★★ **FIRST HW ROUND (2026-09-19/20): BLACK SCREEN + DEAD SEEK ON A REAL BURNED
+  TEST DISC — root-caused by MEASURING THE DISC'S OWN TOC, not by guessing at the
+  spec.** A standalone `ctypes`/`SG_IO` Python probe run directly against
+  `/dev/srN`, bypassing Main and the FPGA entirely, showed the burned disc splits
+  its ISO9660 filesystem into a SHORT first data track (1275 sectors) and puts
+  the actual MPEG payload in a SECOND data track running to the leadout (256719)
+  — exactly the "short filesystem track, then payload track(s), one continuous
+  LBA space" authoring convention this file's header comment already described,
+  which `dvd_vcd_open()`'s end-of-track logic never actually implemented: it
+  stopped at the FIRST data track's own boundary, so only 1275 sectors of
+  directory structure — no MPEG payload at all — ever reached the FPGA's
+  `raw2352` detector. Hence no video and nothing for a seek to land in.
+  **Fix:** `dvd_vcd_open()`'s track-length walk now follows every CONSECUTIVE
+  `CDROM_DATA_TRACK` forward from the first, stopping only at a non-data track
+  (CD-DA) or the leadout — matching the doc's stated scope exactly rather than
+  the narrower thing the code had shipped. ✅ **HW re-confirmed on the same disc
+  after the fix:** mount size went from the old 2,998,800 B (1275×2352) to
+  **603,803,088 B (256719×2352)**; a screenshot diff over ~7 s showed full-frame
+  motion (mean abs diff 35.4, not a frozen/black raster); Fast-Fwd moved the HUD
+  elapsed clock from `0:00:00` to `0:03:32` across two 10 s taps against a
+  `0:57:04` total. Two RED mutations (`vcd-span-stops-at-next-track`,
+  `vcd-span-ignores-cdda-track`) replace the one whose target line no longer
+  exists after the rewrite.
+  ⚠ **HIL lesson from the same round, worth keeping for the next custom-Main
+  deploy:** `deploy --main` deliberately does not restart the running Main (see
+  its own docstring) — the running process only picks up a new `main=` on the
+  NEXT genuine core load. Forcing that reload needs a real, EXISTING `.rbf` at
+  the MGL's `<rbf>` path; a bare-file MGL pointed at a path that was never staged
+  (e.g. `tools/mister.py deploy`'s `HIL_RBF` slot without also passing `--rbf`)
+  fails silently, and if the target core is already loaded, `/tmp/CORENAME`
+  reading correctly is NOT evidence a reload happened — check the RUNNING
+  process's `/proc/<pid>/exe`/argv (`ps w | grep MiSTer_DVDcss`) against the
+  hash-derived deployed name to be sure. Since this branch touches zero RTL, no
+  new build was needed — copying the already-loaded `.rbf` under the HIL name
+  was enough to force a genuine reload.
+  Detail: `docs/physical_disc.md` "Video CD / Super
+  Video CD", `docs/vcd_svcd.md`, `main/integration/INTEGRATION.md` "Steps 43-47".
 - ✅ **AUTO MODE (DISC MENUS OFF) STREAMED A WHOLE VTS LINEARLY AND HUNG ON A
   COPY-PROTECTED DISC — and it played a 1-SECOND LOGO on 60 library discs
   (2026-09-19, branch `fix/protection-zone-hang`); sim-proven RED/GREEN, each arm
