@@ -297,9 +297,10 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **PHYSICAL VCD/SVCD DISC PLAYBACK — needs zero RTL changes (2026-09-17, branch
-  `feature/vcd-svcd-physical`); host-proven with 6 mutations each caught by its own
-  arm, full ARM cross-compile clean, ⏳ HW-confirm pending.** Extends the existing
+- ✅ **PHYSICAL VCD/SVCD DISC PLAYBACK — needs zero RTL changes (2026-09-17, branch
+  `feature/vcd-svcd-physical`); host-proven, mutation-checked, and ✅ HW-CONFIRMED
+  2026-09-20 on a real burned test disc (both bugs the first HW round found are now
+  fixed and re-verified).** Extends the existing
   physical-DVD story (`docs/physical_disc.md`) and the existing rip-image VCD/SVCD
   story (`docs/vcd_svcd.md`) to each other: a VCD/SVCD disc in the same optical
   drive `dvd_phys.cpp` already scans for DVD-Video.
@@ -354,12 +355,46 @@ worse maintenance burden than targeted in-place edits. So:
   `dvd_cdda_test.cpp` instrument) + new dispatch arms in `dvd_phys_test.cpp`,
   `main/tests/run_tests.sh --red` (6 new mutations, each caught by its own arm).
   v1 scope, matching the existing rip-image feature's own limitation: the disc's
-  first DATA track only (a hybrid disc's CD-DA tracks, or a multi-movie VCD's
-  later data tracks, are not played — the same one-`.bin`-per-track choice a rip
-  mount already requires, made once by the disc instead of by the user).
-  **Next concrete step: a burned VCD/SVCD test disc on the maintainer's rig** —
-  auto-mount on insertion, playback, eject, and a DVD-Video disc afterward
-  (dispatch-order regression). Detail: `docs/physical_disc.md` "Video CD / Super
+  data-track SPAN (see the HW-round fix immediately below) — a hybrid disc's
+  CD-DA tracks, or a genuine multi-movie VCD's SEPARATE, non-consecutive data
+  tracks, are not played — the same one-`.bin`-per-track choice a rip mount
+  already requires, made once by the disc instead of by the user.
+  ★★ **FIRST HW ROUND (2026-09-19/20): BLACK SCREEN + DEAD SEEK ON A REAL BURNED
+  TEST DISC — root-caused by MEASURING THE DISC'S OWN TOC, not by guessing at the
+  spec.** A standalone `ctypes`/`SG_IO` Python probe run directly against
+  `/dev/srN`, bypassing Main and the FPGA entirely, showed the burned disc splits
+  its ISO9660 filesystem into a SHORT first data track (1275 sectors) and puts
+  the actual MPEG payload in a SECOND data track running to the leadout (256719)
+  — exactly the "short filesystem track, then payload track(s), one continuous
+  LBA space" authoring convention this file's header comment already described,
+  which `dvd_vcd_open()`'s end-of-track logic never actually implemented: it
+  stopped at the FIRST data track's own boundary, so only 1275 sectors of
+  directory structure — no MPEG payload at all — ever reached the FPGA's
+  `raw2352` detector. Hence no video and nothing for a seek to land in.
+  **Fix:** `dvd_vcd_open()`'s track-length walk now follows every CONSECUTIVE
+  `CDROM_DATA_TRACK` forward from the first, stopping only at a non-data track
+  (CD-DA) or the leadout — matching the doc's stated scope exactly rather than
+  the narrower thing the code had shipped. ✅ **HW re-confirmed on the same disc
+  after the fix:** mount size went from the old 2,998,800 B (1275×2352) to
+  **603,803,088 B (256719×2352)**; a screenshot diff over ~7 s showed full-frame
+  motion (mean abs diff 35.4, not a frozen/black raster); Fast-Fwd moved the HUD
+  elapsed clock from `0:00:00` to `0:03:32` across two 10 s taps against a
+  `0:57:04` total. Two RED mutations (`vcd-span-stops-at-next-track`,
+  `vcd-span-ignores-cdda-track`) replace the one whose target line no longer
+  exists after the rewrite.
+  ⚠ **HIL lesson from the same round, worth keeping for the next custom-Main
+  deploy:** `deploy --main` deliberately does not restart the running Main (see
+  its own docstring) — the running process only picks up a new `main=` on the
+  NEXT genuine core load. Forcing that reload needs a real, EXISTING `.rbf` at
+  the MGL's `<rbf>` path; a bare-file MGL pointed at a path that was never staged
+  (e.g. `tools/mister.py deploy`'s `HIL_RBF` slot without also passing `--rbf`)
+  fails silently, and if the target core is already loaded, `/tmp/CORENAME`
+  reading correctly is NOT evidence a reload happened — check the RUNNING
+  process's `/proc/<pid>/exe`/argv (`ps w | grep MiSTer_DVDcss`) against the
+  hash-derived deployed name to be sure. Since this branch touches zero RTL, no
+  new build was needed — copying the already-loaded `.rbf` under the HIL name
+  was enough to force a genuine reload.
+  Detail: `docs/physical_disc.md` "Video CD / Super
   Video CD", `docs/vcd_svcd.md`, `main/integration/INTEGRATION.md` "Steps 43-47".
 - ✅ **AUTO MODE (DISC MENUS OFF) STREAMED A WHOLE VTS LINEARLY AND HUNG ON A
   COPY-PROTECTED DISC — and it played a 1-SECOND LOGO on 60 library discs
