@@ -15,11 +15,18 @@
 //        |  raw disc sector 0 | 1 | ... | len-1                |
 //
 // v1 scope, matching the existing rip-image VCD/SVCD feature's own
-// documented limitation (docs/vcd_svcd.md §5): the disc's FIRST DATA TRACK
-// only. A CD-DA audio track on a hybrid disc, or a multi-movie VCD's later
-// data tracks, are not played here -- a rip-image mount already requires
-// picking one .bin file per track, and this is the same choice made once by
-// the disc's own track 1 instead of by the user.
+// documented limitation (docs/vcd_svcd.md §5): the disc's own data-track
+// SPAN, from the first data track through the last CONSECUTIVE data track
+// that follows it, ending at a trailing CD-DA track (hybrid disc) or the
+// leadout -- i.e. everything a whole-disc .bin rip would capture as one
+// flat file. That span is deliberately NOT "the first data track alone":
+// standard VCD/SVCD authoring commonly splits the ISO9660 filesystem into a
+// short first data track and puts the actual MPEG payload in the track(s)
+// that follow it, all one continuous LBA space (measured on a real burned
+// test disc -- see dvd_vcd.cpp). A genuine multi-movie disc, where each
+// movie is its OWN separately-navigable span rather than one continuous
+// filesystem, is out of v1 scope the same way a rip-image mount already
+// requires picking one .bin file per movie.
 
 #ifndef MISTER_DVD_VCD_H
 #define MISTER_DVD_VCD_H

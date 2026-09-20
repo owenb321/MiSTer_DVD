@@ -199,9 +199,9 @@ int dvd_vcd_open(void)
 		return -1;
 	}
 
-	// The FIRST DATA track: a VCD/SVCD's ISO9660 filesystem and MPEGAV/MPEG2
-	// movie streams live there. See dvd_vcd.h for what a later track (CD-DA,
-	// or a second data track on a multi-movie disc) means here: not played.
+	// The FIRST DATA track is where the image STARTS -- not necessarily
+	// where the ISO9660 filesystem AND the movie both live; see the span
+	// walk below for why a following data track is included, not skipped.
 	int found = 0;
 	for (int t = hdr.cdth_trk0; t <= hdr.cdth_trk1; t++)
 	{
@@ -229,24 +229,44 @@ int dvd_vcd_open(void)
 		return -1;
 	}
 
-	// End of the track: the next track's start, or the leadout if this is the
-	// last track.
-	memset(&e, 0, sizeof(e));
-	if (g_trk.num < hdr.cdth_trk1)
+	// End of the image: NOT simply "the next track's start". Standard VCD/
+	// SVCD authoring commonly splits the disc's ISO9660 filesystem into a
+	// SHORT first data track and puts the actual MPEG payload in the data
+	// track(s) that follow -- one continuous LBA space that a whole-disc
+	// .bin rip captures as ONE flat file, with track boundaries surviving
+	// only as .cue metadata this project's raw-sector reader never reads.
+	// (Measured on a real burned test disc: track 1 = 1275 sectors of
+	// filesystem, track 2 = the video, running to the leadout -- mounting
+	// track 1 alone served ~17 seconds of directory structure as "the
+	// movie" and nothing ever decoded.) So walk forward past every
+	// CONSECUTIVE data track and end at the first NON-data track (a
+	// trailing CD-DA track on a hybrid disc) or the leadout.
+	int end_track = g_trk.num + 1;
+	int have_end  = 0;
+	for (; end_track <= hdr.cdth_trk1; end_track++)
 	{
-		e.cdte_track = g_trk.num + 1;
+		memset(&e, 0, sizeof(e));
+		e.cdte_track  = end_track;
 		e.cdte_format = CDROM_LBA;
+		if (ioctl(fd, CDROMREADTOCENTRY, &e) < 0)
+		{
+			printf("DVD_VCD: CDROMREADTOCENTRY(%d) failed\n", end_track);
+			close(fd);
+			return -1;
+		}
+		if (!(e.cdte_ctrl & CDROM_DATA_TRACK)) { have_end = 1; break; }   // a CD-DA track ends the image
 	}
-	else
+	if (!have_end)
 	{
-		e.cdte_track = CDROM_LEADOUT;
+		memset(&e, 0, sizeof(e));
+		e.cdte_track  = CDROM_LEADOUT;
 		e.cdte_format = CDROM_LBA;
-	}
-	if (ioctl(fd, CDROMREADTOCENTRY, &e) < 0)
-	{
-		printf("DVD_VCD: CDROMREADTOCENTRY(end) failed\n");
-		close(fd);
-		return -1;
+		if (ioctl(fd, CDROMREADTOCENTRY, &e) < 0)
+		{
+			printf("DVD_VCD: CDROMREADTOCENTRY(end) failed\n");
+			close(fd);
+			return -1;
+		}
 	}
 	g_trk.len = e.cdte_addr.lba - g_trk.lba;
 	if (g_trk.len <= 0)

@@ -231,6 +231,39 @@ int main(void)
 	check("[8b] stops at the NEXT track",   g_trk.len, 20000);
 	dvd_vcd_close();
 
+	// [8c] TWO CONSECUTIVE data tracks -- the shape a real burned VCD/SVCD
+	// test disc actually measured: a short filesystem track followed by the
+	// track holding the MPEG payload, one continuous LBA space. The span
+	// must run PAST track 1 into track 2 and on to the leadout, not stop at
+	// track 2's start the way arm [8]'s hybrid (CD-DA) case correctly does.
+	memset(&fake_hdr, 0, sizeof(fake_hdr));
+	fake_hdr.cdth_trk0 = 1; fake_hdr.cdth_trk1 = 2;
+	fake_ntoc = 0;
+	fake_toc[fake_ntoc++] = { 1, 0,    CDROM_DATA_TRACK };   // filesystem, 1275 sectors
+	fake_toc[fake_ntoc++] = { 2, 1275, CDROM_DATA_TRACK };   // the video payload
+	fake_leadout = 256719;
+	check("[8c] two-data-track open succeeds",      dvd_vcd_open(), 0);
+	check("[8d] still picks track 1's start",       g_trk.lba, 0);
+	check("[8e] span runs PAST track 2 to the leadout, not track 2's start",
+	      g_trk.len, 256719);
+	dvd_vcd_close();
+
+	// [8f] three consecutive data tracks, then a trailing CD-DA track: the
+	// walk must keep going through EVERY data track and stop at the first
+	// non-data one, not just the immediate next track.
+	memset(&fake_hdr, 0, sizeof(fake_hdr));
+	fake_hdr.cdth_trk0 = 1; fake_hdr.cdth_trk1 = 4;
+	fake_ntoc = 0;
+	fake_toc[fake_ntoc++] = { 1, 0,     CDROM_DATA_TRACK };
+	fake_toc[fake_ntoc++] = { 2, 1000,  CDROM_DATA_TRACK };
+	fake_toc[fake_ntoc++] = { 3, 30000, CDROM_DATA_TRACK };
+	fake_toc[fake_ntoc++] = { 4, 55000, 0 };                 // CD-DA
+	fake_leadout = 70000;
+	check("[8g] three-data-track open succeeds", dvd_vcd_open(), 0);
+	check("[8h] span stops at the CD-DA track, past two data-track joins",
+	      g_trk.len, 55000);
+	dvd_vcd_close();
+
 	// [9] the data track is NOT track 1 -- the first DATA track, wherever it
 	// sits, is what gets played; its length still stops at the FOLLOWING
 	// track regardless of that track's own type.

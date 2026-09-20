@@ -296,13 +296,23 @@ if [ "$RED" -eq 1 ]; then
         "s/if (e.cdte_ctrl & CDROM_DATA_TRACK)/if (1)/" \
         vcd-any-track-is-data
 
-    # Always size the track to the LEADOUT instead of the next physical track
-    # -- on a hybrid disc the virtual image would run straight into the CD-DA
-    # audio that follows the data track.
+    # Stop the span at the very NEXT track regardless of its type -- the
+    # bug a real burned test disc found: a VCD/SVCD conventionally splits
+    # its ISO9660 filesystem into a short first data track and puts the
+    # actual MPEG payload in the data track(s) that follow, so stopping at
+    # "the next track" unconditionally mounts only the filesystem stub as
+    # "the movie" and nothing ever decodes.
     red_case dvd_vcd.cpp dvd_vcd_test.cpp \
-        "stops at the NEXT track" \
-        "s/if (g_trk.num < hdr.cdth_trk1)/if (0)/" \
-        vcd-track-len-ignores-next
+        "not track 2's start" \
+        "s/if (!(e.cdte_ctrl & CDROM_DATA_TRACK)) { have_end = 1; break; }/{ have_end = 1; break; }/" \
+        vcd-span-stops-at-next-track
+
+    # The inverse defect: never stop the span at all, running straight
+    # through a trailing CD-DA track into the leadout on a hybrid disc.
+    red_case dvd_vcd.cpp dvd_vcd_test.cpp \
+        "stops at the CD-DA track" \
+        "s/if (!(e.cdte_ctrl & CDROM_DATA_TRACK)) { have_end = 1; break; }//" \
+        vcd-span-ignores-cdda-track
 
     # Drop the burst cap: a large sd_* request would ask READ CD for more
     # frames than g_scratch (sized to VCD_BURST_MAX) can hold.
