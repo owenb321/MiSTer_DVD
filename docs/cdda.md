@@ -4,11 +4,14 @@ Engineering note for `feature/wav-audio` (branch 1 of the music-CD work). The
 user-facing text lives in `site/content/getting-started/loading.md` and
 `site/content/audio/formats.md` — this file is the *why*.
 
-**Status: ✅ HW-CONFIRMED 2026-09-10** (build
-`DVD_wavaudio_20260910_1900.rbf`, SEED 7, clk_dec 87.61/88.42 at 98% ALM).** Branch 2
-(`feature/cdda-physical`, the physical audio-CD source in `MiSTer_DVDcss`) is
-NOT started; this branch deliberately ships the whole core-side path first so
-that branch adds only a Main-side sector source on top of a HW-proven fabric.
+**Status: ✅ BOTH BRANCHES HW-CONFIRMED.** Branch 1 (`feature/wav-audio`, the
+core-side raw-PCM path) 2026-09-10. Branch 2 (`feature/cdda-physical`, the
+physical audio-CD source in `MiSTer_DVDcss`) 2026-09-10 for the first build and
+**2026-09-22 on the post-v0.6.1 REBASE**, which ran the full gate list including
+the one that had never been run — see "HW gate (branch 3)" below.
+⚠ The sentence that stood here said branch 2 was "NOT started". It was written
+when that was true and never flipped; it is exactly the stale marker CLAUDE.md
+calls a documentation bug.
 
 ## Why this exists, and why WAV came first
 
@@ -604,3 +607,82 @@ The track-table wires moved up beside the chapter burst in `emu.sv`, which read
 Gate: `cdda_toc_tb` [7] — next ×3, prev ×2 past and at a track start, overshoot at both
 ends, and the exported `past_start` verdict — each arm starting where a single press
 would land somewhere else, so an implementation ignoring `skip_mag` fails.
+
+
+## HW gate (branch 3) — the REBASED build, 2026-09-22: every gate, including 7
+
+Build `DVD_cddaphys7_20260922_0453.rbf` (SEED 9 first roll, clk_dec 91.17 @100C /
+90.60 @-40C, 94 % ALM), the branch rebased onto post-v0.6.1 `main`, a real
+**12-track** music CD, `Debug Overlay = Off`, custom Main cross-compiled from the
+rebased tree.
+
+⚠ **The rig had FOUR optical drives and the disc was in `/dev/sr3`.**
+`/proc/sys/dev/cdrom/info` lists `sr0..sr3` as *names*, but only `sr3` had a device
+node. Both `find_audio_cd()` and `open_ready_drive()` scan `sr0..sr7`, so it was
+found — but a probe that had stopped at `sr0` would have reported "no disc" on a rig
+with a disc in it.
+
+| # | Gate | Result |
+|---|---|---|
+| 1 | CD auto-mounts while the core runs | ✅ `audio CD on /dev/sr3 -- mounting`, `size=467554124` = **exactly** `44 + 198790x2352` (44:10) |
+| 2 | Plays, HUD reads the track | ✅ `[PLAY] 0:00:35/0:04:35 TR  1/12`, maxerr 0 |
+| 3 | Clock is TRACK time, not disc time | ✅ the total tracks the track: 4:35 -> 3:08 -> 4:42 -> 2:32 -> 3:05 across skips |
+| 4 | Next track | ✅ `TR 2/12`, clock reset, total = track 2's own 3:08 |
+| 5 | Prev, >3 s into a track | ✅ 0:00:24 -> restarts at 0:00:01, still `TR 2/12` |
+| 6 | Prev, <3 s into a track | ✅ TR 3 -> next -> TR 4 -> prev @1.2 s -> back to `TR 3/12` |
+| 7 | **Next on the LAST track** | ✅ **RUN AT LAST** — see below |
+| 8 | Track skips STACK | ✅ a 9-press burst from TR 3 landed on `TR 12/12` exactly |
+| 9 | FF past a track end carries into the next | ✅ TR 3 @1:49 -> burst -> `TR 4/12` @0:00:04, total 2:32 |
+| 10 | REW at a track start clamps | ✅ 0:00:03 -> REW -> 0:00:03 on the SAME track (it seeked: an un-seeked clock would have advanced) |
+| 11 | Angle -> visualizer, HUD hidden | ✅ lit 8,766 px -> **342,720** (the whole active area), 169 colours, `hud_visible` True -> False |
+| 12 | Angle WRAPS to the logo | ✅ back to 9,706 px / 2 colours — not a dead fourth mode |
+| 13 | Display toggles the HUD over a visualizer | ✅ `hud_visible=True` with the visualizer up |
+| 14 | Pause holds, and resumes | ✅ `[PAUSE] 0:00:10/0:03:05 TR 5/12`, audio silent, resumes advancing |
+| 15 | Audio is actually audible | ✅ mean **−21.3 dBFS**, peak −5.1 |
+| 16 | Eject returns to the idle logo | ✅ visualizer (342,720 px) -> **4,686 px** = the bare logo |
+| 17 | Eject opens the tray | ⛔ **NOT OURS — stock Main holds the drive**, see below |
+
+★ **Gate 15's control is the setting, not a sibling track.** A music CD has one
+stream, so the `audio_check.py` "the disc's other tracks are the control" trick has
+nothing to compare against. `Audio=Off` and `Pause` were used instead, and they agree:
+−57.0 and −57.7 dBFS mean against −21.3 playing. **Two independent ways of producing
+silence landing on the same floor is what identifies that floor as the CAPTURE CHAIN
+rather than the core** — without the second one, `Audio=Off` reading −57 instead of
+digital silence looks like a mute that does not mute.
+
+### Gate 7, finally run: it ends the disc, and that is the design
+
+Next on track 12 of 12 seeks to `total_blk` (the disc end) — `cdda_toc`'s resolver
+does this deliberately, "past the last track = the disc's end". Playback then ends.
+
+⚠ **What it LOOKS like is a hang, and it is not.** The HUD falls back to
+`[PLAY] 0:00:00/0:04:35 TR  1/12` and the clock sits frozen there — the playhead is
+back at block 0, so the track walk resolves track 1, while the icon still says PLAY.
+**Measured: the clock read 0:00:00 at four samples over 20 s.** But the machine is
+live — any transport press resumes normally (`next` -> `TR 2/12`, clock advancing).
+So the residual is a READOUT that claims to be playing when the disc has finished,
+not a wedge. A set-top player would stop and say so.
+
+### Gate 17: the tray — a real leak of ours, and a blocker that is not
+
+**We leaked the drive fd, and that is FIXED** (`dvd_cdda_close()` dropped `g_fd`
+without closing it; `dvd_cdda_open()` takes ownership, so every mount leaked one
+descriptor on `/dev/srN`). Found here, fixed, gated by `dvd_cdda_test` arm [9] and the
+`cdda-fd-leak` RED mutation, and **verified on the board**: after the fix the mount's
+descriptor is released on eject where before the count stayed at 2.
+
+⛔ **The tray still does not open, and it is NOT this feature.** After the fix the
+remaining holder is a descriptor with **plain `O_RDONLY`** — no `O_NONBLOCK`, no
+`O_CLOEXEC` — while **all three of our openers** (`find_audio_cd`, `find_dvd_device`,
+`open_ready_drive`) use `O_RDONLY|O_NONBLOCK|O_CLOEXEC`. The flags alone exclude us.
+★ **And the decisive measurement: with our Main not running at all — harness restored,
+MENU core loaded — STOCK MiSTer Main holds `/dev/sr3` open and `CDROMEJECT` still
+returns EBUSY.** So the eject button's unmount-and-return-to-idle half works; the tray
+half is blocked by something outside this branch, on this rig, and wants its own
+investigation. It is probably also why the 2026-09-13 confirm saw a tray open on
+`/dev/sr0` and this round did not on `sr3`.
+
+⚠ Two smaller things seen in the same log and worth fixing on the way past:
+`DVD_REMOTE: eject button -- optical disc unmounted + tray opened` is printed
+**unconditionally**, so it claimed success in the very log line above the failure; and
+one Eject press produced **two** events (the optical path, then the image path).
