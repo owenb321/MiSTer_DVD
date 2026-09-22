@@ -684,6 +684,28 @@ investigation. It is probably also why the 2026-09-13 confirm saw a tray open on
 
 ## The visualizers are GONE, and that is what fixed the Display toggle (2026-09-22)
 
+**✅ HW-CONFIRMED 2026-09-22** on build `DVD_cddaphys8_20260922_1455.rbf` (SEED 9 first
+roll, clk_dec 89.54 @100C / 89.77 @-40C vs the 86.0 gate, 93 % ALM), same 12-track CD:
+
+| gate | result |
+|---|---|
+| CD plays, status line shown by default | ✅ `[PLAY] 0:00:20/0:04:35 TR 1/12` — the `persist_set` seed |
+| **Display while PAUSED** (the fix) | ✅ press hides, holds hidden, press restores — it did NOTHING on cddaphys7 |
+| Display during playback | ✅ hides; a track skip still POPS it (`TR 2/12`) and it lapses back; press restores |
+| Angle on a CD | ✅ inert — 3 presses (which on cddaphys7 would land on copper) leave the sparse logo, HUD up |
+| No visualizer reachable | ✅ screen stays 6-9 k lit px / 5 colours; never the 342,720 px full-screen copper |
+| DVD default | ✅ HUD HIDDEN — the CD seed does not leak into the DVD path |
+| DVD playback toggle | ✅ both directions, and the field reads `CH 1/1`, not `TR` |
+| DVD pause toggle | ✅ both directions (main's frame-step rule intact) |
+| DVD pause does not disturb PLAYBACK persistence | ✅ hidden before, shown+toggled during, **hidden again on resume** — `transport_hud_tb` T6p-i, on hardware |
+| Frame-step pause | ✅ starts HIDDEN (`pause_seed = !step_paused`), and B9 still raises it |
+| Eject | ✅ bare idle logo (4,686 lit px, 2 colours), HUD gone; **our drive fd released** — one fd left on `/dev/sr3` and its flags are plain `O_RDONLY` = stock Main's, not ours |
+
+⚠ `clk_dec` fell 91.17 → 89.54 on LESS logic and the same seed. That is placement
+variance at this density, not a regression -- this ledger already records a 4 MHz swing
+of the same kind -- and 3.5 MHz of margin remains. ALMs needed 39,239 → 39,041 (-198),
+registers -214, RAM unchanged at 501 (cdda_toc keeps its M10K).
+
 **User decision: drop the visualizers; the bouncing logo is a CD's only visual.**
 `dvd/cdda_viz.sv` and `dvd/cdda_screen.sv` are deleted, with their benches and their
 `DVD.qsf` entries. Angle now does nothing at all on a CD.
