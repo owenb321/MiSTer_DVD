@@ -64,6 +64,11 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 - **[Closed captions](https://owenb321.github.io/MiSTer_DVD/video/closed-captions/)** re-modulated onto line 21 of the
   analog output for your television to decode, exactly as a real player does.
 - **[Video CD / SVCD](https://owenb321.github.io/MiSTer_DVD/formats/vcd-svcd/)** — bin/cue rips play directly.
+- **[Audio CDs](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/#audio-cds)** — put a music CD in
+  the drive and it plays, with track skip and a per-track clock, the way a DVD player always
+  did (needs `MiSTer_DVDcss`). A
+  [`.wav` file](https://owenb321.github.io/MiSTer_DVD/getting-started/loading/#playing-a-wav) plays the same way
+  from the bare core.
 - **Gamepad, keyboard or infrared remote** — every transport action has a
   [built-in key](https://owenb321.github.io/MiSTer_DVD/playback/controls/), so a USB IR receiver
   turns any remote you already own into a DVD remote with nothing to configure.
