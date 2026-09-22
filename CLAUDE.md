@@ -148,6 +148,29 @@ and misdirected a "what's next?" session. To prevent recurrence:
 
 ---
 
+## ★ Before adding a feature: read `docs/hw_budget_and_lessons.md`
+
+A post-mortem of the abandoned Stage B deinterlacer (2026-09-21), kept because almost
+none of what it taught is about deinterlacing. Three things in it change how the next
+feature should be designed:
+
+- ★ **A whole idle 64-bit DDR3 port (`ram2`) is available**, proven idle in this fork
+  (ALSA compiled out, no `MISTER_FB`). ⛔ NOT ascal's `vbuf`, which is the busiest port.
+- ★★ **The scarce memory resource is ARBITRATION OCCUPANCY, not bandwidth.** Measured
+  three ways, most sharply: the same traffic cost 2.7 dropped frames/s sharing `ram1`
+  with the decoder and **exactly zero** on its own port. So when a new master hurts the
+  decoder, give it a port before shrinking its data.
+- ★★★ **How a feature with 42 green arms and a favourable offline model still shipped as
+  a visible regression** — the bit-exact cosim never exercised it, and a bench scored
+  `!=` on X so a third of its pixels passed vacuously. The rules earned are in §4 and
+  apply to every bench in this tree.
+
+Also: current fabric headroom (~7 % ALM / 7 % M10K / 10 % DSP), what a DDR3 line pump
+costs (~190 ALM + 6 M10K), and the retime trick that took a build from two failed seed
+sweeps to a first-fit pass.
+
+---
+
 ## ★ Design to the DVD spec maximum (mandatory, instituted 2026-09-19)
 
 Every table, counter, index width and loop bound that holds a DVD-Video structure must be
@@ -203,7 +226,10 @@ MiSTer_DVD/
 │   ├── architecture.md        ← full system design & data flow
 │   ├── audio.md               ← AC-3, DTS, LPCM audio strategy
 │   ├── roadmap.md             ← phased implementation plan
-│   └── references.md          ← key repos, specs, libraries
+│   ├── references.md          ← key repos, specs, libraries
+│   └── hw_budget_and_lessons.md  ← ★ READ BEFORE ANY DDR3 OR NEW-FEATURE WORK:
+│                                   the FREE ram2 port, fabric headroom, and the
+│                                   verification rules a failed feature earned
 ├── mkdocs.yml                 ← docs_dir=site/content, site_dir=.site-build
 ├── site/                      ← USER MANUAL (source, not build output)
 │   ├── content/               ← the manual's markdown — published to GitHub Pages
