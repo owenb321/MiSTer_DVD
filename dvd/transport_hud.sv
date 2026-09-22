@@ -81,6 +81,9 @@ module transport_hud #(
     // the pause-scoped visibility, for seek_bar (which has no display_edge of its own,
     // so the two overlays must share ONE latch or they disagree about one pause)
     output wire        pause_show_o,
+    // ...and the PLAYBACK-scoped one, for the same reason: on a source whose only
+    // picture is the status line and the bar, the two must not disagree.
+    output wire        persist_o,
     input  wire        bar_active,          // scrub gesture held + linger
     input  wire        scrub_held,          // D-pad held (FF/REW icon while 1)
     input  wire        scrub_dir,           // 1 = forward
@@ -114,9 +117,12 @@ module transport_hud #(
     input  wire [1:0]  ab_state,
     input  wire        load_evt,            // fresh media load: clear + hide
     input  wire        show_evt,            // transport event: re-arm show_tmr
-    input  wire        force_show,          // level: status line always on (WAV/
-                                            // CD-DA playback — the HUD is the
-                                            // only picture besides the logo)
+    // PULSE: "this source has no picture of its own" (WAV / CD-DA), so the status
+    // line starts SHOWN rather than hidden. It SEEDS persist_q instead of being a
+    // level ORed into vis, and that distinction is the whole point: a level cannot
+    // be switched off, so Display had nothing to toggle. Fired on the rise of the
+    // raw-PCM mode, i.e. after load_evt has cleared persist_q.
+    input  wire        persist_set,
     input  wire        trk_mode,            // level: audio CD -- the n/N field is a
                                             // TRACK, labelled "TR" (a CD has no
                                             // chapters). dbg_mode keeps "CH".
@@ -255,6 +261,7 @@ module transport_hud #(
     end
 
     reg        persist_q;
+    assign     persist_o = persist_q;
     reg [26:0] show_tmr;
     reg [26:0] pop_tmr;
     // 0 aud, 1 sub, 2 angle, 3 chapter, 4 CSS, 5 image, 6 audio-fmt, 7 VTS,
@@ -273,6 +280,11 @@ module transport_hud #(
             // line toggled as a side effect of having hidden it during the pause.
             if (display_edge && !pause_q) persist_q <= ~persist_q;
             if (load_evt)     persist_q <= 1'b0;
+            // ...and a picture-less source turns it straight back on. AFTER the
+            // load_evt clear on purpose: the two never coincide (the raw-PCM mode
+            // is not known until the reader has parsed the header, which is after
+            // the mount), but if they ever did, "show it" is the safe winner.
+            if (persist_set)  persist_q <= 1'b1;
             // DVD-FORK FIX: the press that turns persistence OFF must HIDE the
             // line, not re-arm the auto-show timer. vis below is
             // (persist_q | ... | show_tmr != 0), so arming unconditionally here
@@ -334,7 +346,7 @@ module transport_hud #(
     end
     wire vis = dbg_mode ? 1'b1                       // diagnostic: always on, incl. menus
              : (pause_q ? pause_show                 // paused: B9 owns it outright
-                        : (force_show | persist_q | bar_active | (show_tmr != 27'd0)))
+                        : (persist_q | bar_active | (show_tmr != 27'd0)))
                && !menu_active;
     // CSS warning shows in menus too (scrambled discs green-screen there first)
     wire pop_vis = (pop_tmr != 27'd0) &&

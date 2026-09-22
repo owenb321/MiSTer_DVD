@@ -682,7 +682,37 @@ half is blocked by something outside this branch, on this rig, and wants its own
 investigation. It is probably also why the 2026-09-13 confirm saw a tray open on
 `/dev/sr0` and this round did not on `sr3`.
 
-### Open: Display does not hide the HUD while a CD is PAUSED
+## The visualizers are GONE, and that is what fixed the Display toggle (2026-09-22)
+
+**User decision: drop the visualizers; the bouncing logo is a CD's only visual.**
+`dvd/cdda_viz.sv` and `dvd/cdda_screen.sv` are deleted, with their benches and their
+`DVD.qsf` entries. Angle now does nothing at all on a CD.
+
+★ **The interesting part is that this DELETED the paused-Display bug rather than
+working around it.** That bug existed because `cdda_screen` owned the "is the HUD up"
+state, so `emu.sv` masked `display_edge` out of `transport_hud` to avoid two copies of
+one fact — and main's frame-step work had meanwhile made `pause_show`, a latch toggled
+by that very masked edge, the sole owner of visibility during a pause. With no
+visualizer there is no screen state to own, so the mask goes, `transport_hud` owns its
+own persistence again exactly as on a DVD, and the pause case works because it is now
+the *same* code path the DVD uses. **The fix was removing the reason for the
+divergence, not adding a case to it.**
+
+⚠ **`force_show` became `persist_set`, and the level-vs-pulse distinction IS the fix.**
+A picture-less source still wants the status line up to begin with, but as a LEVEL ORed
+into `vis` that could never be switched off — Display had nothing to toggle. It is now
+a one-shot that SEEDS `persist_q` on the rise of the raw-PCM mode, fired after
+`load_evt` has cleared it. `transport_hud` also exports `persist_o`, so `seek_bar`
+follows the status line rather than keeping a second opinion — the same reasoning that
+already had them share `pause_show_o`.
+
+⚠ What was given up, measured rather than guessed: `cdda_viz` was **295 synthesis
+ALUTs / 156 registers** and `cdda_screen` 3, so this returns ~298 ALUTs. `cdda_toc`
+keeps its 280 ALUTs and the 1 M10K — the table is unaffected. The earlier
+scope/XOR/copper history below is kept because it records what each visualizer cost and
+why two of the three were dropped before this one.
+
+### Was open: Display did not hide the HUD while a CD was PAUSED
 
 **Measured 2026-09-22.** During playback Display behaves exactly as designed — it
 hides the status line, it stays hidden, a track skip still pops it briefly and it

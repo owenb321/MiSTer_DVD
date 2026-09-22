@@ -78,7 +78,7 @@ module transport_hud_tb;
         .pause_seed(pause_seed), .pause_show_o(), .bar_active(bar_active),
         .scrub_held(scrub_held), .scrub_dir(scrub_dir), .scrub_tier(scrub_tier),
         .display_edge(display_edge), .load_evt(load_evt), .show_evt(show_evt),
-        .force_show(1'b0), .trk_mode(trk_mode),
+        .persist_set(1'b0), .persist_o(), .trk_mode(trk_mode),
         .cur_time(cur_time), .total_time(total_time),
         .cur_pgm(cur_pgm), .nr_pgm(nr_pgm),
         .aud_evt(aud_evt), .sub_evt(sub_evt), .angle_evt(angle_evt),

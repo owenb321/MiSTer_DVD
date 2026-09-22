@@ -94,15 +94,12 @@ the process is seek-heavy and random reads from a file beat optical seek latency
 Put a music CD in the drive and the core plays it, the way a DVD player always
 did. There is nothing to configure — it is detected and starts on its own.
 
-The screen shows an audio visualizer, because there is no picture on the disc:
+There is no picture on the disc, so the screen shows the bouncing logo:
 
-- **Visualizer.** A CD starts on the bouncing *logo*. Press **Angle** (B6, or
-  ++"G"++ on a keyboard) to switch to the *copper bars*, which move with the
-  music, and press it again to go back. An OSD Reset returns to the logo.
-- **The status line and progress bar stay out of the way** while a visualizer
-  is showing, and appear over the logo. Press **Display** (B9) to show or hide
-  them in any mode; they also pop up for a couple of seconds whenever you
-  pause, skip or seek.
+- **The status line and progress bar are shown to begin with.** Press
+  **Display** (B9) to hide them and again to bring them back, while playing or
+  while paused. They also pop up for a couple of seconds whenever you pause,
+  skip or seek, even if you have hidden them.
 - **Track number and track time.** `TR 3/12` with the elapsed time counting
   *within* the current track, like a CD player's front panel.
 - **The progress bar shows the current track**, not the whole disc.

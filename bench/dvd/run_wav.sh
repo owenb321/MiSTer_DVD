@@ -16,11 +16,9 @@
 #                       and the RED-first `le` proof
 #   3. regressions    — the paths this feature touched must be unchanged:
 #                       lpcm_unpack (DVD LPCM BE), dvd_audio_decode (AC-3+LPCM),
-#                       transport_hud + hud_frame (force_show port), and the
+#                       transport_hud + hud_frame (persist_set/persist_o), and the
 #                       whole VCD/MP2 suite (reader raw mode + MP2 chain)
-#   4. audio CD    — cdda_toc (track table + skip resolver) and cdda_viz
-#                       (the copper visualizer) and cdda_screen
-#                       (visualizer cycle + HUD show/hide)
+#   4. audio CD       — cdda_toc (the track table + the skip resolver)
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -63,7 +61,7 @@ iverilog -g2012 -o bench/dvd/seek_bar_sim \
     dvd/seek_bar.sv bench/dvd/seek_bar_tb.sv
 vvp bench/dvd/seek_bar_sim | tail -2 || rc=1
 
-echo "== 3c. regression: transport HUD (force_show port) =="
+echo "== 3c. regression: transport HUD (persist_set / persist_o) =="
 iverilog -g2012 -o bench/dvd/transport_hud_sim \
     dvd/transport_hud.sv bench/dvd/transport_hud_tb.sv 2>/dev/null
 vvp bench/dvd/transport_hud_sim | tail -2 || rc=1
@@ -71,21 +69,13 @@ iverilog -g2012 -o bench/dvd/hud_frame_sim \
     dvd/transport_hud.sv dvd/subpic_blend.sv bench/dvd/hud_frame_tb.sv
 vvp bench/dvd/hud_frame_sim | tail -2 || rc=1
 
-# 4a/4b print a PASS/FAIL banner rather than relying on vvp's exit status.
+# 4a prints a PASS/FAIL banner rather than relying on vvp's exit status.
 passed() { grep -q "ALL TESTS PASSED" <<<"$1"; }
 
 echo "== 4a. audio-CD track table (cdda_toc) =="
 python3 tools/cdda_toc_ref.py bench/dvd/test_cdda >/dev/null
 iverilog -g2012 -o bench/dvd/cdda_toc_sim dvd/cdda_toc.sv bench/dvd/cdda_toc_tb.sv
 out=$(vvp bench/dvd/cdda_toc_sim || true); tail -2 <<<"$out"; passed "$out" || rc=1
-
-echo "== 4b. audio visualizer (cdda_viz: copper bars) =="
-iverilog -g2012 -o bench/dvd/cdda_viz_sim dvd/cdda_viz.sv bench/dvd/cdda_viz_tb.sv
-out=$(vvp bench/dvd/cdda_viz_sim || true); grep -E "FAIL|ok  " <<<"$out" | tail -20; tail -1 <<<"$out"; passed "$out" || rc=1
-
-echo "== 4c. CD screen state (cdda_screen: visualizer cycle + HUD show/hide) =="
-iverilog -g2012 -o bench/dvd/cdda_screen_sim dvd/cdda_screen.sv bench/dvd/cdda_screen_tb.sv
-out=$(vvp bench/dvd/cdda_screen_sim || true); tail -1 <<<"$out"; passed "$out" || rc=1
 
 echo "== 3d. regression: VCD/SVCD suite (reader raw mode + MP2 chain) =="
 ./bench/dvd/run_vcd.sh | tail -3 || rc=1

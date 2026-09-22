@@ -274,21 +274,11 @@ def main():
                       'A full Stop shows the bare logo -- the presence or absence of an '
                       'overlay IS the stage readout.')
 
-    # The logo reaches the chrome stage through bg_on_w, the logo-OR-visualizer mux
-    # an audio CD introduced (dvd/cdda_viz.sv, dvd/cdda_screen.sv). Pinning only the
-    # name would be weaker than what this gate replaced: any net called bg_on_w would
-    # satisfy it, and the property actually being asserted -- that the idle logo
-    # reaches the screen UNGATED -- would quietly stop being checked. So the mux's own
-    # definition is pinned EXACTLY, which both requires the logo term and rejects any
-    # gating term someone might add to it later.
-    want_terms('sp_on_q chrome', sp_on_q, {'hud_on_e', 'bar_on_e', 'bg_on_w'},
+    # The logo composites into the chrome stage DIRECTLY again: the audio
+    # visualizers, and the logo-or-visualizer bg_on_w mux they needed, were dropped
+    # 2026-09-22 (user decision -- the bouncing logo is a CD's only visual now).
+    want_terms('sp_on_q chrome', sp_on_q, {'hud_on_e', 'bar_on_e', 'logo_on_w'},
                'the chrome layers still compose into the same register stage')
-    bg_on_w = get('wire', 'bg_on_w', 'bg_on_w (logo|visualizer mux)')
-    exact_terms('bg_on_w (logo|visualizer)', bg_on_w, {'logo_on_w', 'viz_on_w'},
-                'bg_on_w is what carries the idle logo into the chrome stage. It must '
-                'stay exactly "the logo OR the visualizer": the logo IS the screensaver, '
-                'so gating it here would leave the blanked screen showing nothing at all '
-                '-- the same wrong generalisation sp_on_e is checked against below.')
     for label, rhs in (('sp_on_q', sp_on_q), ('sp_force_q', sp_force_q),
                        ('sp_alpha_q', sp_alpha_q),
                        ('sp_r_q', get('reg', 'sp_r_q', 'sp_r_q')),

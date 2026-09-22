@@ -28,11 +28,10 @@ carries none.
 
 ## Playing a `.wav`
 
-A `.wav` plays as **audio only**: the bouncing logo fills the screen — press **Angle**
-to switch to the copper-bar visualizer and back again. The status line and a
-progress bar show where you are in the file, like a CD player's front panel;
-they sit over the logo, and **Display** brings them up over a visualizer. Pause, the seek bar and the D-pad time jumps all work as they do for video; there
-are no chapters.
+A `.wav` plays as **audio only**: the bouncing logo fills the screen. The status line
+and a progress bar show where you are in the file, like a CD player's front panel;
+they start out shown, and **Display** hides or shows them. Pause, the seek bar and
+the D-pad time jumps all work as they do for video; there are no chapters.
 
 The core plays **16-bit stereo PCM at 44.1 or 48 kHz** — the CD and DVD sample rates.
 Anything else (mono, 24-bit, floating point, 96 kHz) is refused with `UNSUPPORTED IMAGE`

@@ -28,7 +28,7 @@ If a track plays silent and shows `AUDIO UNSUPPORTED`, cycle to another with **B
 
 ## WAV files
 
-A `.wav` file selected from `Load Video` plays as audio with a visualizer on screen —
+A `.wav` file selected from `Load Video` plays as audio with the bouncing logo on screen —
 see [Loading a movie](../getting-started/loading.md#playing-a-wav). It is the same PCM
 path the core uses for disc LPCM, so the same limits apply: **16-bit stereo only, at
 44.1 or 48 kHz**. Other shapes are refused with `UNSUPPORTED IMAGE` instead of being

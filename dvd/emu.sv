@@ -1378,6 +1378,7 @@ wire       hold_freeze;      // a held seek gesture owns the freeze, not pause_q
 // transport_hud's pause-scoped HUD visibility (seeded at the pause edge, toggled by
 // B9). Declared here because seek_bar is instanced BEFORE transport_hud drives it.
 wire       hud_pause_show_w;
+wire       hud_persist_w;     // ...and its PLAYBACK-scoped sibling (seek_bar follows it)
 // core -> Main requests (B19..B21). Declared here because the dvd_telem
 // instance reads them ~500 lines before the block that drives them, and
 // emu.sv has no `default_nettype none`.
@@ -2292,24 +2293,20 @@ wire        cdda_trk_span = cdda_tracks_on && !cdda_jump_fire && (cdda_skip_win 
 wire [31:0] cdda_trk_last = (cdda_cur_end_w > title_last_rbn_w) ? title_last_rbn_w
                                                                 : cdda_cur_end_w;
 
-// What an audio CD / WAV puts on screen: the visualizer (Angle cycles copper ->
-// xor -> scope -> logo) and whether the status line + progress bar are held up
-// (hidden over a visualizer, shown over the logo, Display toggles). The rules
-// live in dvd/cdda_screen.sv so bench/dvd/cdda_screen_tb.sv can reach them.
-wire [1:0] viz_mode;
-wire       viz_logo;
-wire       cd_hud_show;
-cdda_screen cdda_screen_inst (
-    .clk          (clk_sys),
-    .rst_n        (reset_n),
-    .cdda_mode    (cdda_mode_w),
-    .angle_edge   (angle_edge),
-    .display_edge (display_edge),
-    .mount        (start_streaming),
-    .viz_mode     (viz_mode),
-    .viz_logo     (viz_logo),
-    .hud_show     (cd_hud_show)
-);
+// What an audio CD / WAV puts on screen is now just the bouncing logo (the
+// audio visualizers were DROPPED 2026-09-22, by user decision), so there is no
+// screen STATE left to own -- and with it goes the reason Display was routed
+// away from transport_hud. It owns its own persistence again, exactly as on a
+// DVD, which is what makes Display work during a PAUSE on a CD: that pause is
+// governed by transport_hud's pause_show latch, and a masked display_edge could
+// never toggle it (docs/cdda.md "Display does not hide the HUD while a CD is
+// PAUSED"). All that is left is a one-shot: a picture-less source starts with
+// the status line SHOWN, so the rise of the raw-PCM mode seeds persist_q.
+reg  cdda_mode_q;
+always @(posedge clk_sys or negedge reset_n)
+    if (!reset_n) cdda_mode_q <= 1'b0;
+    else          cdda_mode_q <= cdda_mode_w;
+wire cdda_rise = cdda_mode_w & ~cdda_mode_q;
 // Seek-preview position on a CD is TRACK-relative like the clock it feeds
 // (lin_blk/total_blk below). Floored at the track start: a previous-track skip's
 // target lies before it, and an unsigned subtract would preview ~2^32 blocks.
@@ -6414,10 +6411,7 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // Nothing is lost -- the popup line shows the gesture's real magnitude
     // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
     .scrub_tier   (hold_freeze ? hud_tier_w : 2'd0),
-    // On a CD, Display belongs to cdda_screen (it drives force_show below);
-    // letting the HUD's own persist toggle run too would be a second copy of
-    // the same state, free to disagree.
-    .display_edge (display_edge & ~cdda_mode_w),
+    .display_edge (display_edge),
     .stop_on      (stopped_w & stop_kept_w),   // stage 1 only; stage 2 is bare logo
     .aspct_evt    (aspct_evt_w),
     .aspct_analog (aspct_evt_analog_w),
@@ -6426,9 +6420,11 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .ab_state     (ab_state_w),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
-    // WAV/CD-DA: held up over the logo, hidden over a visualizer, Display
-    // toggles (dvd/cdda_screen.sv). Pause/skip/seek still pop it as usual.
-    .force_show   (cdda_mode_w && cd_hud_show),
+    // WAV/CD-DA has no picture, so the status line starts SHOWN. A one-shot
+    // SEED, not a level: a level cannot be switched off, which is exactly why
+    // Display had nothing to toggle during a pause.
+    .persist_set  (cdda_rise),
+    .persist_o    (hud_persist_w),
     .trk_mode     (cdda_tracks_on),         // "TR n/N" instead of "CH n/N"
     // Three LIVE sources, in the order they can be trusted: a linear file's
     // clock is derived from its measured rate (lin_time_ok_w implies
@@ -6520,7 +6516,7 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     // track table spans the CURRENT TRACK instead (user decision 2026-09-10,
     // reversing the earlier whole-disc bar) -- matching its track-relative
     // clock, and matching the per-track FF/REW clamp above.
-    .force_show (cdda_mode_w && cd_hud_show),   // shown/hidden with the status line
+    .force_show (cdda_mode_w && hud_persist_w), // shown/hidden WITH the status line
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),
@@ -6583,28 +6579,21 @@ end
 // ★ STOP SHOWS THE IDLE LOGO, which is what a set-top player does when it stops
 // -- it spins down and puts its own screen up.
 // ★ CD-DA/WAV playback has no video either, so its screen is the bouncing idle
-// logo BY DEFAULT, and Angle opts into the audio-reactive VISUALIZER
-// (dvd/cdda_viz.sv). Angle does nothing else on a CD (the angle switch acts only
-// while cell_ready). An OSD Reset returns to the logo.
-// (viz_mode / viz_logo come from dvd/cdda_screen.sv, up beside the track table.)
+// logo, unconditionally. (Audio visualizers were built and then DROPPED
+// 2026-09-22, by user decision -- the logo is the only visual now, and Angle
+// does nothing at all on a CD.)
 // ⚠ THE CD ARM IS GATED ON media_seen, and that is a FIX, not a tidy-up
 // (2026-09-12, user report "ejecting the disc does not soft reset the core"):
 // cdda_mode was cleared only by `start`, which issue #48 gates on a non-zero
 // img_size, and an EJECT arrives as a ZERO-SIZE mount -- so the bit survived the
-// removal, this expression kept taking its CD branch, and the screen stayed on
-// whatever visualizer mode was selected while Main's eject reset looked inert.
+// removal, this expression kept taking its CD branch, and the screen stayed up
+// while Main's eject reset looked inert.
 // The reader now clears the bit on rst_n as well; this gate is the SECOND lock,
 // so a stale mode can never strand the display on its own.
-// ⚠ The screensaver and Stop OUTRANK the visualizer: both mean "put our own
-// screen up", so they force the logo and viz_vis yields to them.
 wire cd_screen = cdda_mode_w && media_seen;
 wire logo_hold = saver_on_w || stopped_w;
-wire logo_vis = (logo_hold ||
-                 (cd_screen ? viz_logo
-                            : (!media_seen && !video_live_s2 && !img_streaming))) &&
-                !img_unplayable && !ioctl_download &&
-                (logo_boot_dly == 25'd0);
-wire viz_vis  = cd_screen && !viz_logo && !logo_hold &&
+wire logo_vis = (logo_hold || cd_screen ||
+                 (!media_seen && !video_live_s2 && !img_streaming)) &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
 
@@ -6635,30 +6624,6 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .logo_b         (logo_b_w)
 );
 
-// Audio visualizers share the logo's overlay slot: the two are mutually
-// exclusive by viz_mode, and cdda_viz has the same 3-stage latency and lead.
-wire       viz_on_w;
-wire [7:0] viz_r_w, viz_g_w, viz_b_w;
-cdda_viz #(.VIZ_QX_LEAD(12'd12)) cdda_viz_inst (
-    .clk        (clk_sys),
-    .rst_n      (reset_n),
-    .h_pos      (ov_h_gen),
-    .v_pos      (core_v_pos),
-    .pal_mode   (pal_eff),
-    .frame_tick (av_refresh_tick),
-    .vis        (viz_vis),
-    .mode       (viz_mode),
-    .audio_l    (dec_audio_l),       // pre-mute: pictures follow the music
-    .audio_r    (dec_audio_r),       // even with Audio = Off
-    .viz_on     (viz_on_w),
-    .viz_r      (viz_r_w),
-    .viz_g      (viz_g_w),
-    .viz_b      (viz_b_w)
-);
-wire       bg_on_w = logo_on_w | viz_on_w;
-wire [7:0] bg_r_w  = viz_on_w ? viz_r_w : logo_r_w;
-wire [7:0] bg_g_w  = viz_on_w ? viz_g_w : logo_g_w;
-wire [7:0] bg_b_w  = viz_on_w ? viz_b_w : logo_b_w;
 
 // Pipeline the palette RGB + alpha + on/idx one clk_sys stage before the combinational
 // blend, so the blend stays a flat mux (no colour-space math) in the output hotspot.
@@ -6732,14 +6697,14 @@ wire pic_blank = stopped_w | saver_on_w;
 wire sp_on_e   = sp_q_inside & ~pic_blank;
 wire hl_use_e  = hl_use      & ~pic_blank;
 always @(posedge clk_sys) begin
-    sp_r_q     <= hud_on_e ? hud_r_w     : bar_on_e ? bar_r_w     : bg_on_w ? bg_r_w : pal_r;
-    sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : bg_on_w ? bg_g_w : pal_g;
-    sp_b_q     <= hud_on_e ? hud_b_w     : bar_on_e ? bar_b_w     : bg_on_w ? bg_b_w : pal_b;
-    sp_alpha_q <= hud_on_e ? hud_alpha_w : bar_on_e ? bar_alpha_w : bg_on_w ? 4'd15
+    sp_r_q     <= hud_on_e ? hud_r_w     : bar_on_e ? bar_r_w     : logo_on_w ? logo_r_w : pal_r;
+    sp_g_q     <= hud_on_e ? hud_g_w     : bar_on_e ? bar_g_w     : logo_on_w ? logo_g_w : pal_g;
+    sp_b_q     <= hud_on_e ? hud_b_w     : bar_on_e ? bar_b_w     : logo_on_w ? logo_b_w : pal_b;
+    sp_alpha_q <= hud_on_e ? hud_alpha_w : bar_on_e ? bar_alpha_w : logo_on_w ? 4'd15
                            : (hl_use_e ? hl_a : sp_spu_alpha); // HLI contrast for a recoloured pixel
     sp_idx_q   <= sp_q_idx;
-    sp_on_q    <= hud_on_e | bar_on_e | bg_on_w | sp_on_e;
-    sp_force_q <= hud_on_e | bar_on_e | bg_on_w | hl_use_e; // + logo: bypass the idx0 key
+    sp_on_q    <= hud_on_e | bar_on_e | logo_on_w | sp_on_e;
+    sp_force_q <= hud_on_e | bar_on_e | logo_on_w | hl_use_e; // + logo: bypass the idx0 key
 end
 
 // Alpha-composite the subtitle over the decoded video, COMBINATIONALLY, right before
