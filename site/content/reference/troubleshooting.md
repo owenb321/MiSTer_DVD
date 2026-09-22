@@ -46,6 +46,11 @@ transcode. See [Compatibility](compatibility.md).
 Note this message is only raised after about 20 seconds of actual streaming, so it is not
 what you will see from slow media.
 
+For a **`.wav`** it means something more specific, and appears immediately: the file is not
+16-bit stereo PCM at 44.1 or 48 kHz. Mono, 24-bit, floating-point and 96 kHz files are
+refused rather than played as noise, and compressed audio (MP3, FLAC, AAC) is not supported
+at all. Convert with, for example, `ffmpeg -i in.flac -ac 2 -ar 44100 -c:a pcm_s16le out.wav`.
+
 ### `CSS ENCRYPTED`
 
 The core is seeing scrambled sectors, so nothing available is decrypting this disc or

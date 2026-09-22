@@ -30,8 +30,8 @@ module lpcm_unpack_tb;
     logic        aud_valid;
 
     lpcm_unpack #(.FIFO_AW(6)) dut (
-        .clk(clk), .rst(rst), .quant(quant),
-        .wr_en(wr_en), .wr_data(wr_data), .full(full),
+        .clk(clk), .rst(rst), .quant(quant), .le(1'b0),
+        .wr_en(wr_en), .wr_data(wr_data), .full(full), .afull(),
         .aud_ce(aud_ce), .audio_l(audio_l), .audio_r(audio_r), .aud_valid(aud_valid)
     );
 

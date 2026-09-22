@@ -89,6 +89,48 @@ the process is seek-heavy and random reads from a file beat optical seek latency
     Cracking CSS may be regulated where you live; check the laws that apply to you. This
     project neither distributes libdvdcss nor contains any CSS circumvention code.
 
+## Audio CDs
+
+Put a music CD in the drive and the core plays it, the way a DVD player always
+did. There is nothing to configure — it is detected and starts on its own.
+
+There is no picture on the disc, so the screen shows the bouncing logo:
+
+- **The status line and progress bar are shown to begin with.** Press
+  **Display** (B9) to hide them and again to bring them back, while playing or
+  while paused. They also pop up for a couple of seconds whenever you pause,
+  skip or seek, even if you have hidden them.
+- **Track number and track time.** `TR 3/12` with the elapsed time counting
+  *within* the current track, like a CD player's front panel.
+- **The progress bar shows the current track**, not the whole disc.
+- **Next / Previous Chapter skip tracks.** Press either several times in quick
+  succession to skip that many tracks in one go — the status line counts
+  through them as you press, just like chapters on a DVD. Previous restarts the
+  current track unless you press it within the first few seconds, so a
+  double-press goes to the track before — again, what a CD player does.
+- **Fast Fwd / Rewind stay inside the track.** Rewinding stops at the start of
+  the track; fast-forwarding all the way to its end carries on into the next
+  track. The D-pad time jumps follow the same track edges.
+- Pause works exactly as it does for video.
+
+`Audio Out` can be left on either setting: CD audio is PCM, so it plays as PCM
+on both outputs even in `Passthru`.
+
+**Enhanced and mixed-mode CDs** — discs with a data track alongside the music —
+play their audio tracks. The data track is skipped.
+
+!!! note "Launching from the menu on the Physical Disc fork"
+    The core plays a CD you insert **while it is already running** on any setup.
+    If you use the Physical Disc fork of the Main and want inserting a CD *at the
+    menu* to launch this core, set `AUDIOCD=DVD` in the `[physical_disc]` section
+    of `MiSTer.ini`. Without it that fork sends audio CDs to its default, which
+    is the PSX core.
+
+!!! warning "Drive noise"
+    The core caps the drive at 4× on an audio CD. A CD only needs 172 KB/s, and
+    an uncapped modern drive spins up loudly enough to be distracting in a quiet
+    room.
+
 ## Set the drive region
 
 *Physical discs only — this makes them start faster.*

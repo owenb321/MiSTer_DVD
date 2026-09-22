@@ -274,6 +274,9 @@ def main():
                       'A full Stop shows the bare logo -- the presence or absence of an '
                       'overlay IS the stage readout.')
 
+    # The logo composites into the chrome stage DIRECTLY again: the audio
+    # visualizers, and the logo-or-visualizer bg_on_w mux they needed, were dropped
+    # 2026-09-22 (user decision -- the bouncing logo is a CD's only visual now).
     want_terms('sp_on_q chrome', sp_on_q, {'hud_on_e', 'bar_on_e', 'logo_on_w'},
                'the chrome layers still compose into the same register stage')
     for label, rhs in (('sp_on_q', sp_on_q), ('sp_force_q', sp_force_q),

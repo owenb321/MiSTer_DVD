@@ -43,4 +43,9 @@ void dvd_css_close(void);
 // it). No-op unless such a warning is pending.
 void dvd_css_tick(void);
 
+// 1 when the open source is a physical AUDIO CD rather than a DVD. dvd_report
+// consults this: its bundle tool walks 2048-byte ISO sectors off /dev/srN, which
+// on a music disc yields a broken bundle instead of an honest refusal.
+int dvd_css_is_cdda(void);
+
 #endif

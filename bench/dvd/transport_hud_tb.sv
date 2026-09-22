@@ -50,6 +50,7 @@ module transport_hud_tb;
     reg  [3:0]  ang_no = 0, ang_cnt = 0;
     reg  [15:0] aud_lang = 0, sub_lang = 0;
     reg         sub_enabled = 0;
+    reg         trk_mode = 0;      // audio CD: TR instead of CH
     wire        hud_on;
     wire [7:0]  hud_r, hud_g, hud_b;
     wire [3:0]  hud_alpha;
@@ -77,6 +78,7 @@ module transport_hud_tb;
         .pause_seed(pause_seed), .pause_show_o(), .bar_active(bar_active),
         .scrub_held(scrub_held), .scrub_dir(scrub_dir), .scrub_tier(scrub_tier),
         .display_edge(display_edge), .load_evt(load_evt), .show_evt(show_evt),
+        .persist_set(1'b0), .persist_o(), .trk_mode(trk_mode),
         .cur_time(cur_time), .total_time(total_time),
         .cur_pgm(cur_pgm), .nr_pgm(nr_pgm),
         .aud_evt(aud_evt), .sub_evt(sub_evt), .angle_evt(angle_evt),
@@ -584,10 +586,22 @@ module transport_hud_tb;
         // hiding would silently flip what playback shows.
         check_vis("T6p-i play clean", 1'b0);
 
+        // ---- T25: an audio CD labels the field "TR" (track), not "CH" ------
+        // Both the status line and the skip popup, and it must come BACK to
+        // "CH" -- a label stuck on TR would pass a/b but fail c/d.
+        trk_mode = 1; cur_pgm = 8'd3; nr_pgm = 8'd12; @(posedge clk);
+        check_line("T25a track label", ">     0:12:34/1:37:05 TR  3/12~~");
+        chap_evt = 1; @(posedge clk); chap_evt = 0;
+        check_popup("T25b track popup", "TR     3/12~~~~~~~~~~~~~~~~~~~~~");
+        trk_mode = 0; @(posedge clk);
+        check_line("T25c CH restored", ">     0:12:34/1:37:05 CH  3/12~~");
+        check_popup("T25d CH popup", "CH     3/12~~~~~~~~~~~~~~~~~~~~~");
+
         if (errors == 0) begin
             $display("TRANSPORT_HUD_TB: ALL TESTS PASSED");
             $finish;
         end else
             $fatal(1, "TRANSPORT_HUD_TB: FAILED (%0d errors)", errors);
+
     end
 endmodule

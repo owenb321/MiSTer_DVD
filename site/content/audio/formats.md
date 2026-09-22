@@ -9,6 +9,7 @@ same as the video path.
 | **MPEG-1 Layer II (MP2)** | yes | no | Rare on DVD, universal on Video CD. 48/44.1/32 kHz |
 | **LPCM** | yes | no | 48 kHz stereo. 20/24-bit tracks play, truncated to 16-bit |
 | **DTS** | **no** | yes | Passthrough to a receiver only — the one format with no fallback |
+| **WAV (PCM file)** | yes | no | 16-bit stereo, 44.1/48 kHz — a plain audio file, not a disc |
 
 By default the core decodes to stereo and sends it over HDMI, which works on any display.
 For multichannel you want [bitstream passthrough](passthrough.md) to an AV receiver.
@@ -24,6 +25,21 @@ stereo (2.0), and the multichannel modes up to 5.1.
     and plays silent. In a survey of 491 discs this appeared on 4 frames of 1 disc.
 
 If a track plays silent and shows `AUDIO UNSUPPORTED`, cycle to another with **B7**.
+
+## WAV files
+
+A `.wav` file selected from `Load Video` plays as audio with the bouncing logo on screen —
+see [Loading a movie](../getting-started/loading.md#playing-a-wav). It is the same PCM
+path the core uses for disc LPCM, so the same limits apply: **16-bit stereo only, at
+44.1 or 48 kHz**. Other shapes are refused with `UNSUPPORTED IMAGE` instead of being
+played as noise, and compressed formats (MP3, FLAC, AAC) have no decoder in the core.
+
+44.1 kHz content is converted to the framework's fixed 48 kHz output by sample repetition
+— the pitch and duration are exact, but it is not a resampler. This is the same treatment
+Video CD audio has always had.
+
+In `Passthru` a `.wav` plays as ordinary PCM on both outputs, because that is what it is.
+There is no bitstream to pass through, so the setting makes no difference to it.
 
 ## MP2
 

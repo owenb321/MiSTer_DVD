@@ -397,7 +397,28 @@ wire [11:0] ov_h_gen = il_eff ? {1'b0, core_h_pos[11:1]} : core_h_pos;
 // PCM is muted (the receiver plays the S/PDIF stream). O7 flips the S/PDIF
 // payload byte order live (the classic "passthrough plays static" gotcha).
 wire signed [15:0] dec_audio_l, dec_audio_r;
-wire        pass_mode  = status[6];   // O6: 1 = IEC 61937 passthrough
+// CD-DA/WAV mode taps (dvd_iso_reader, feature/wav-audio). Declared up here
+// because pass_mode just below is forced off for the whole session.
+//
+// ⚠ THIS IS NOT THE OLD "Passthru means bitstream only" RULE. Since PR #79 a
+// PCM track in Passthru is DECODED and sent as PCM, and CD-DA/WAV is exactly
+// that -- a PCM source -- so the user-visible outcome here is the same one that
+// change delivers for an LPCM or MP2 track. Forcing the bit off is simply how a
+// source that never enters audio_ring reaches it:
+//
+//   * aud_route decides PCM-vs-bitstream per RING FRAME, and this path bypasses
+//     ps_demux and the ring entirely, so no frame ever arrives to classify.
+//     rt_pcm_session would sit at its reset value 0 for the whole session, and
+//     pcm_mute = (pass_mode & ~rt_pcm_session) would MUTE a .wav outright.
+//   * af_passthru follows this wire, so Main is told PCM and puts the ADV7513
+//     in PCM mode -- which is what the sink needs for CD audio.
+//   * SPDIF_PASS_EN and HDMI_BS_EN fall out too, so the optical and HDMI legs
+//     carry ordinary PCM instead of an IEC 61937 carrier with nothing in it.
+wire        cdda_mode_w;
+wire [1:0]  cdda_fs_w;
+wire        wav_bad_w;
+wire        cdda_afull_w;
+wire        pass_mode  = status[6] & ~cdda_mode_w;   // O6: 1 = IEC 61937 passthrough
 wire        pass_bswap = status[7];   // O7: 1 = swap payload byte order
 assign AUDIO_S      = 1;
 assign AUDIO_MIX    = 2'd0;
@@ -634,7 +655,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-vcdsvcdphys"
+`define CORE_VERSION "dev-cddaphys8"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -645,9 +666,11 @@ parameter CONF_STR = {
     // dvd_iso_reader navigates VIDEO_TS in fabric (largest VTS = main feature).
     // BIN/IMG/DAT select a raw MODE2/2352 CD image (VCD/SVCD bin/cue data
     // track — pick the LARGE track bin; .cue sheets are text the fabric cannot
-    // parse). Detection is content-based (sector-sync probe at byte 0), the
-    // extension list is only the OSD picker filter. Other files stream as before.
-    "S0,MPGM2VVOBISOBINIMGDAT,Load Video;",
+    // parse). WAV plays PCM audio files (16-bit stereo 44.1/48 kHz) through
+    // the CD-DA path. Detection is content-based (sector-sync/RIFF probe at
+    // byte 0), the extension list is only the OSD picker filter. Other files
+    // stream as before.
+    "S0,MPGM2VVOBISOBINIMGDATWAV,Load Video;",
     // Aspect Ratio: Auto (default) reads the display AR from the MPEG-2 sequence header
     // (aspect_ratio_information, par. 6.3.3: 2=4:3, 3=16:9); 4:3/16:9 force it. Drives the
     // MiSTer scaler output aspect (VIDEO_ARX/ARY) — the 720x480/576 raster is unchanged,
@@ -1355,6 +1378,7 @@ wire       hold_freeze;      // a held seek gesture owns the freeze, not pause_q
 // transport_hud's pause-scoped HUD visibility (seeded at the pause edge, toggled by
 // B9). Declared here because seek_bar is instanced BEFORE transport_hud drives it.
 wire       hud_pause_show_w;
+wire       hud_persist_w;     // ...and its PLAYBACK-scoped sibling (seek_bar follows it)
 // core -> Main requests (B19..B21). Declared here because the dvd_telem
 // instance reads them ~500 lines before the block that drives them, and
 // emu.sv has no `default_nettype none`.
@@ -1414,6 +1438,13 @@ wire [5:0] chap_net_abs = chap_net[5] ? (6'd0 - chap_net) : chap_net;
 wire       chap_at_start;            // 1 = <~5 s into the current chapter (from DSI
                                      // c_eltm) -> prev steps back; else prev restarts
                                      // the current chapter. Assigned near nav_dsi below.
+// Audio-CD track table (driven by dvd/cdda_toc.sv further down). Declared HERE
+// because the chapter burst and its HUD projection read it, and they sit above
+// the instance -- a CD's track skip IS this burst.
+wire        cdda_toc_valid_w;
+wire [7:0]  cdda_ntracks_w, cdda_curtrk_w;
+wire        cdda_past_start_w;       // >~3 s into the track (cdda_toc's own rule)
+wire        cdda_tracks_on = cdda_mode_w && cdda_toc_valid_w;
 // The reader has ONE raw-RBN seek port and two producers now: the user's hold-to-seek
 // scrub and dvd/mode_realign.sv's re-align on a raster-mode change. mode_realign owns the
 // arbitration (the scrub always wins) -- see its header. scrub_seek_* are the scrub's own
@@ -1482,14 +1513,20 @@ wire [7:0]  hud_nr_ch = (nr_ptt_w != 11'd0)
 // past_start ~ !chap_at_start (>~5 s into the chapter -> first prev restarts it,
 // matching the reader; the reader's extra cell_i>best_cell test can't be seen from
 // emu, but the c_eltm gate dominates on real discs -> the preview tracks the seek).
-wire        chap_past_start = ~chap_at_start;
+// On an audio CD the burst counts TRACKS: the current track, the track total and
+// cdda_toc's own restart verdict replace the DVD chapter terms, so the HUD counts
+// through tracks as you press (user report 2026-09-11) and the projection cannot
+// disagree with where cdda_toc resolves the burst. DVD: unchanged.
+wire [7:0]  burst_cur       = cdda_tracks_on ? cdda_curtrk_w     : cur_pgm_w;
+wire [7:0]  burst_nr        = cdda_tracks_on ? cdda_ntracks_w    : hud_nr_ch;
+wire        chap_past_start = cdda_tracks_on ? cdda_past_start_w : ~chap_at_start;
 wire [5:0]  chap_prev_dec   = (chap_past_start && chap_net_abs != 6'd0)
                               ? (chap_net_abs - 6'd1) : chap_net_abs;
 wire signed [9:0] chap_proj_raw = (chap_net > 6'sd0)
-        ?  ($signed({2'b0, cur_pgm_w}) + $signed({4'b0, chap_net_abs}))
-        :  ($signed({2'b0, cur_pgm_w}) - $signed({4'b0, chap_prev_dec}));
+        ?  ($signed({2'b0, burst_cur}) + $signed({4'b0, chap_net_abs}))
+        :  ($signed({2'b0, burst_cur}) - $signed({4'b0, chap_prev_dec}));
 wire [7:0]  chap_proj_clamp = (chap_proj_raw < 10'sd1)                       ? 8'd1
-                            : (chap_proj_raw > $signed({2'b0, hud_nr_ch})) ? hud_nr_ch
+                            : (chap_proj_raw > $signed({2'b0, burst_nr}))  ? burst_nr
                             : chap_proj_raw[7:0];
 // Registered display value: track the projection LIVE while a burst debounces, then
 // HOLD the final target through the seek settle (until cur_pgm_w catches up, or a
@@ -1505,17 +1542,17 @@ always @(posedge clk_sys or negedge reset_n) begin
         chap_disp_tmr  <= 25'd0;
     end else if (start_streaming) begin
         chap_disp_act  <= 1'b0;                       // fresh load clears the hold
-    end else if (chap_timer != 24'd0 && chap_net != 6'sd0 && cur_pgm_w != 8'd0) begin
+    end else if (chap_timer != 24'd0 && chap_net != 6'sd0 && burst_cur != 8'd0) begin
         chap_disp_hold <= chap_proj_clamp;            // live preview during debounce
         chap_disp_act  <= 1'b1;
         chap_disp_tmr  <= 25'd27_000_000;             // ~1 s @ 27 MHz settle timeout
     end else if (chap_disp_act) begin
         // burst fired (or cancelled): hold the target until the reader lands on it
-        if (cur_pgm_w == chap_disp_hold || chap_disp_tmr == 25'd0) chap_disp_act <= 1'b0;
+        if (burst_cur == chap_disp_hold || chap_disp_tmr == 25'd0) chap_disp_act <= 1'b0;
         else chap_disp_tmr <= chap_disp_tmr - 25'd1;
     end
 end
-wire [7:0]  hud_cur_ch = chap_disp_act ? chap_disp_hold : cur_pgm_w;
+wire [7:0]  hud_cur_ch = chap_disp_act ? chap_disp_hold : burst_cur;
 wire [31:0] cur_cell_start_w;         // Phase 11 HUD: BCD start time of the playing cell
 wire        cellf_we_w;               // Phase 11 bar: cell first_sector stream tap
 wire [7:0]  cellf_idx_w;
@@ -1648,7 +1685,7 @@ wire sel_edge   = joy_sel   & ~joy_prev[7];
 // frame-step pause must not raise the line AT ALL (see `step_paused`). B9 is the only
 // way to bring it up there, which is what the user asked for.
 wire hud_user_evt = pause_edge
-                  | ((chnext_edge | chprev_edge) && cell_ready && !menu_active)
+                  | ((chnext_edge | chprev_edge) && (cell_ready || cdda_tracks_on) && !menu_active)
                   | scrub_seek_pulse
                   | dpad_pend_evt;
 wire menu_edge  = joy_menu  & ~joy_prev[8];
@@ -1968,7 +2005,7 @@ always @(posedge clk_sys or negedge reset_n) begin
         if (start_streaming) begin
             chap_net   <= 6'sd0;
             chap_timer <= 24'd0;
-        end else if (cell_ready && !menu_active && !in_title_menu &&
+        end else if ((cell_ready || cdda_tracks_on) && !menu_active && !in_title_menu &&
                      (chnext_edge || chprev_edge)) begin
             // register the press (next wins if both edges land the same cycle) and
             // (re)start the debounce window.
@@ -2150,10 +2187,26 @@ wire        ab_jump_fire, ab_jump_dir;
 wire [31:0] ab_jump_base, ab_jump_off;
 wire [1:0]  ab_state_w;
 wire        ab_evt_w;
-wire        jmp_fire = ab_jump_fire | dpad_jump_fire;
-wire        jmp_dir  = ab_jump_fire ? ab_jump_dir  : dpad_jump_dir;
-wire [31:0] jmp_base = ab_jump_fire ? ab_jump_base : dpad_jump_base;
-wire [31:0] jmp_off  = ab_jump_fire ? ab_jump_off  : dpad_jump_off;
+// Audio-CD track skip is the THIRD producer on this port (declared here so the
+// mux can see it; DRIVEN by cdda_toc's resolver, instantiated further down --
+// the resolver lives in that module because emu has no bench and "where does a
+// track skip land" is exactly what a testbench answers best). It takes priority,
+// but only defensively: on a CD the other two cannot fire at all -- ab_repeat is
+// gated on cell_ready, which a CD never asserts, and dpad_seek needs either a
+// DSI or a measured linear rate.
+// ⚠ jump_dir is 1 = FORWARD (dvd/scrub_ctrl.sv:174, applied as base +/- off).
+// With off = 0 the direction cannot move the landing, so 1 is a safe constant --
+// but it is written as the consumer's convention, not guessed, because getting
+// that bit backwards is exactly what shipped broken in A-B repeat.
+wire        cdda_jump_fire;
+wire [31:0] cdda_jump_base;
+wire        jmp_fire = cdda_jump_fire | ab_jump_fire | dpad_jump_fire;
+wire        jmp_dir  = cdda_jump_fire ? 1'b1           :
+                       ab_jump_fire   ? ab_jump_dir    : dpad_jump_dir;
+wire [31:0] jmp_base = cdda_jump_fire ? cdda_jump_base :
+                       ab_jump_fire   ? ab_jump_base   : dpad_jump_base;
+wire [31:0] jmp_off  = cdda_jump_fire ? 32'd0          :
+                       ab_jump_fire   ? ab_jump_off    : dpad_jump_off;
 wire        bar_active_w;                          // Phase 11: seek-bar visible
 wire [31:0] bar_base_rbn_w, bar_tgt_rbn_w;         // Phase 11: bar fill + cursor
 wire [31:0] title_first_rbn_w, title_last_rbn_w;
@@ -2169,6 +2222,97 @@ wire        lin_blk10_ok_w;
 wire [16:0] lin_cur_secs_w, lin_total_secs_w, lin_prev_secs_w;
 wire        lin_time_ok_w, lin_prev_ok_w;
 wire [31:0] lin_cur_bcd_w, lin_tot_bcd_w, lin_prev_bcd_w, seek_prev_time_w;
+// =========================================================================
+// AUDIO-CD TRACKS — dvd/cdda_toc.sv
+// =========================================================================
+// A physical CD arrives as one giant WAV, which is what makes it play at all
+// (the reader needs no CD mode) and is also why the core cannot see where one
+// track ends. The Main sends the boundaries over the ioctl-download channel and
+// this turns lin_blk back into "track 7 of 12".
+wire [31:0] cdda_cur_start_w, cdda_cur_end_w, cdda_prev_start_w, cdda_next_start_w;
+wire        cdda_notch_we_w;
+wire [6:0]  cdda_notch_idx_w;
+wire [31:0] cdda_notch_blk_w;
+// cdda_jump_fire / cdda_jump_base are declared UP with the jump mux (the mux
+// reads them before this point), so they are not re-declared here.
+
+cdda_toc cdda_toc_inst (
+    .clk            (clk_sys),
+    .rst_n          (reset_n),
+    .ioctl_download (ioctl_download),
+    .ioctl_wr       (ioctl_wr),
+    .ioctl_addr     (ioctl_addr),
+    .ioctl_dout     (ioctl_dout),
+    .ioctl_index    (ioctl_index),
+    .mount          (start_streaming),   // a table belongs to ONE disc
+    .lin_blk        (lin_blk_w),
+    .toc_valid      (cdda_toc_valid_w),
+    .n_tracks       (cdda_ntracks_w),
+    .cur_track      (cdda_curtrk_w),
+    .cur_start      (cdda_cur_start_w),
+    .cur_end        (cdda_cur_end_w),
+    .prev_start     (cdda_prev_start_w),
+    .next_start     (cdda_next_start_w),
+    .skip_req       (chap_pulse & cdda_mode_w),
+    .skip_fwd       (chap_dir),
+    .skip_mag       (chap_mag),          // presses in the burst: skips STACK
+    .past_start     (cdda_past_start_w),
+    .skip_fire      (cdda_jump_fire),
+    .skip_tgt       (cdda_jump_base)
+);
+
+// Tracks behave as chapters: the SAME debounced burst the chapter FSM already
+// produces (chap_pulse/chap_dir) resolves to a track start inside cdda_toc, and
+// the jump rides scrub_ctrl's existing pre-resolved port -- so the clamp, the
+// seek bar and the preview clock all come for free.
+//
+// ★ base = the target and off = 0. scrub_ctrl computes `base +/- off` and clamps
+// it into the title span, so handing it the absolute target reuses every one of
+// those behaviours without a second code path.
+// (cdda_tracks_on is declared with the track-table wires by the chapter burst.)
+
+// ★ AUDIO CD: FF/REW (and a D-pad time jump) are clamped to the CURRENT TRACK
+// (user decision 2026-09-10) -- and that one substitution gives both rules the
+// user asked for with no new logic in scrub_ctrl:
+//   - REW stops at the track's start: the clamp's lower bound IS cur_start.
+//   - FF that reaches the end lands on the NEXT track: the upper bound is
+//     cur_end, which is the first block of the following track. On the last
+//     track it is clipped to the disc's own end, so playback simply finishes.
+// ⚠ A TRACK SKIP must NOT see the narrowed span -- "previous track" targets a
+// block BEFORE cur_start and the clamp would pin it to this track's start. The
+// skip rides the same jump port, and scrub_ctrl resolves its target in the
+// cycle AFTER jump_fire (jump_go), so the disc span is held for a short window
+// from the fire. cdda_trk_last is shared with the seek bar below.
+reg  [1:0]  cdda_skip_win;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)                    cdda_skip_win <= 2'd0;
+    else if (cdda_jump_fire)         cdda_skip_win <= 2'd3;
+    else if (cdda_skip_win != 2'd0)  cdda_skip_win <= cdda_skip_win - 2'd1;
+end
+wire        cdda_trk_span = cdda_tracks_on && !cdda_jump_fire && (cdda_skip_win == 2'd0);
+wire [31:0] cdda_trk_last = (cdda_cur_end_w > title_last_rbn_w) ? title_last_rbn_w
+                                                                : cdda_cur_end_w;
+
+// What an audio CD / WAV puts on screen is now just the bouncing logo (the
+// audio visualizers were DROPPED 2026-09-22, by user decision), so there is no
+// screen STATE left to own -- and with it goes the reason Display was routed
+// away from transport_hud. It owns its own persistence again, exactly as on a
+// DVD, which is what makes Display work during a PAUSE on a CD: that pause is
+// governed by transport_hud's pause_show latch, and a masked display_edge could
+// never toggle it (docs/cdda.md "Display does not hide the HUD while a CD is
+// PAUSED"). All that is left is a one-shot: a picture-less source starts with
+// the status line SHOWN, so the rise of the raw-PCM mode seeds persist_q.
+reg  cdda_mode_q;
+always @(posedge clk_sys or negedge reset_n)
+    if (!reset_n) cdda_mode_q <= 1'b0;
+    else          cdda_mode_q <= cdda_mode_w;
+wire cdda_rise = cdda_mode_w & ~cdda_mode_q;
+// Seek-preview position on a CD is TRACK-relative like the clock it feeds
+// (lin_blk/total_blk below). Floored at the track start: a previous-track skip's
+// target lies before it, and an unsigned subtract would preview ~2^32 blocks.
+wire [31:0] cdda_prev_rel = (bar_tgt_rbn_w <= cdda_cur_start_w) ? 32'd0
+                                                                : (bar_tgt_rbn_w - cdda_cur_start_w);
+
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),
     .rst_n           (reset_n),
@@ -2176,8 +2320,12 @@ scrub_ctrl scrub_ctrl_inst (
     .held_left       (joy_rew),                  // B11 Rewind   = seek backward
     .in_title        ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu),  // title OR linear (VCD/SVCD/.mpg) playback
     .cur_rbn         (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
-    .title_first_rbn (title_first_rbn_w),
-    .title_last_rbn  (title_last_rbn_w),
+    // On an audio CD the bar and the clamp span the CURRENT TRACK, not the
+    // disc: that one substitution also implements both edge rules -- REW stops
+    // at the track start because that is the clamp's lower bound, and FF run to
+    // the end lands on cur_end, which IS the next track's first block.
+    .title_first_rbn (cdda_trk_span ? cdda_cur_start_w : title_first_rbn_w),
+    .title_last_rbn  (cdda_trk_span ? cdda_trk_last    : title_last_rbn_w),
     .title_start_rbn (title_start_rbn_w),
     .title_end_rbn   (title_end_rbn_w),
     // ---- what the span is WORTH, so the ramp is an absolute content rate ----
@@ -2258,10 +2406,11 @@ dpad_seek dpad_seek_inst (
                      !in_title_menu && !menu_nav),
     .dvd_mode       (cell_ready),               // DSI tables available
     // Every linear source, not just raw CD: the step arrives on lin_blk10 --
-    // exact geometry for a VCD/SVCD image, a measured rate for a flat .mpg or
-    // .VOB (issue #39). Gated on the rate being VALID rather than letting a
-    // zero step through, so a tap in the ~0.5 s before the estimate arms does
-    // nothing instead of firing a jump resolved against nothing.
+    // exact geometry for a VCD/SVCD image or a WAV/CD-DA source, a measured
+    // rate for a flat .mpg or .VOB (issue #39). Gated on the rate being VALID
+    // rather than letting a zero step through, so a tap in the ~0.5 s before
+    // the estimate arms does nothing instead of firing a jump resolved against
+    // nothing.
     .lin_mode       (lin_mode_w && lin_blk10_ok_w),
     .up_edge        (dpad_seek_en & up_edge),
     .dn_edge        (dpad_seek_en & dn_edge),
@@ -3037,7 +3186,11 @@ always @(posedge clk_sys) begin
     else if (vbuf_fill_s1 >= VBUF_HARD_ON)     vbuf_hard_over <= 1'b1;
     else if (vbuf_fill_s1 <  VBUF_HARD_OFF)    vbuf_hard_over <= 1'b0;
 end
-wire reader_busy = fifo_almost_full | menu_vbuf_throttle | vbuf_hard_over;
+// CD-DA/WAV mode: the ONLY consumer is the PCM pair FIFO, so its almost-full
+// tap is the whole backpressure story — the video-side terms would reference
+// a pipeline this mode never feeds.
+wire reader_busy = cdda_mode_w ? cdda_afull_w
+                 : (fifo_almost_full | menu_vbuf_throttle | vbuf_hard_over);
 
 // SEEK VBUF FLUSH — now generated inside flush_ctl (see the trigger-matrix
 // instantiation above): a title transport seek / menu->title jump (~keep_vbuf),
@@ -3221,6 +3374,9 @@ dvd_iso_reader dvd_iso_reader_inst (
     // Linear transport (VCD/SVCD raw .bin + flat .mpg/.VOB): see the
     // lin_transport_ok gating below.
     .raw_mode_o           (raw_mode_w),
+    .cdda_mode_o          (cdda_mode_w),      // WAV/CD-DA PCM image (bypasses ps_demux)
+    .cdda_fs_o            (cdda_fs_w),
+    .wav_bad_o            (wav_bad_w),
     .flat_seek_en         (ps_saw_pack),
     .lin_seek_ok_o        (lin_seek_ok_w),
     .lin_blk_o            (lin_blk_w),
@@ -3254,8 +3410,11 @@ ps_stream_fifo ps_stream_fifo_inst (
     .clk          (clk_sys),
     .rst_n        (pipe_rst_n),
 
+    // CD-DA/WAV mode routes the reader's bytes STRAIGHT to the PCM path (the
+    // dvd_audio_decode cdda_wr_* port below) — nothing enters the demux, so
+    // the whole PS/codec chain is bypassed by simply never seeing a byte.
     .wr_data      (stream_data),
-    .wr_en        (stream_valid),
+    .wr_en        (stream_valid & ~cdda_mode_w),
     .almost_full  (fifo_almost_full),
 
     .out_byte     (demux_in_byte),
@@ -3474,8 +3633,15 @@ always @(posedge clk_sys or negedge reset_n) begin
             // on" is still the outcome there.
             img_wd_cnt <= 30'd0; img_unplayable <= 1'b0; media_seen <= 1'b0;
             slot_empty <= 1'b0;
-        end else if (!media_seen || video_live_s2 || iso_mode_w) begin
-            img_wd_cnt <= 30'd0;                      // idle, playing, or a real ISO
+        end else if (wav_bad_w) begin
+            // RIFF/WAVE image of an unsupported shape (mono/24-bit/float/96k/
+            // late data chunk): the reader's probe verdict is definitive, so
+            // show UNSUPPORTED IMAGE immediately -- never garbage noise, and
+            // without spending the 20 s patience window a silent source can
+            // never advance anyway (img_streaming gates it).
+            img_unplayable <= 1'b1;
+        end else if (!media_seen || video_live_s2 || iso_mode_w || cdda_mode_w) begin
+            img_wd_cnt <= 30'd0;   // idle, playing, a real ISO, or audio-only
             if (video_live_s2) img_unplayable <= 1'b0;   // a picture disproves the verdict
         end else if (!img_streaming) begin
             // Delivery stalled: hold the window rather than spend it. This is the
@@ -3906,6 +4072,18 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .frame_pts       (aud_frame_pts_w),
     .frame_pts_valid (aud_frame_pts_valid_w),
     .frame_pop   (dec_frame_pop),
+    // CD-DA/WAV: raw LE PCM bytes straight from the reader (see the
+    // ps_stream_fifo wr_en gate -- the two sinks are exclusive on cdda_mode).
+    // The seek/mount aud_flush level doubles as the unpacker flush; the full
+    // aud_rst_n reset covers it too, and the reader can't deliver a post-seek
+    // byte inside the ~64-cycle flush window (a fresh sd block fetch takes
+    // far longer), so no byte is ever dropped mid-pair.
+    .cdda_mode   (cdda_mode_w),
+    .cdda_fs     (cdda_fs_w),
+    .cdda_wr_en  (stream_valid & cdda_mode_w),
+    .cdda_wr_data(stream_data),
+    .cdda_flush  (aud_flush),
+    .cdda_full   (cdda_afull_w),
     // 48 kHz NCO trim: hardwired 0 since the 2026-07-02 trim retirement — NOT a
     // function of O[13]. See dec_nco_trim above for why the slew is gone.
     .nco_trim           (dec_nco_trim),
@@ -3924,7 +4102,9 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     // starves the drain = the "audio dropout during T2 transitions". Free-running the
     // menu audio decouples it (harmless in Snappy, where the video is already current).
     // docs/dvd_menu_refinements.md §5c.
-    .sched_en           (~av_freerun),          // THE STC IS A CLOCK: menus follow the same rule (docs/stc_freerun.md)
+    // ...and free-run in CD-DA/WAV mode: raw PCM has no PTS to schedule
+    // against (the drain gate would only ever release via the fallback timer).
+    .sched_en           (~av_freerun & ~cdda_mode_w),   // THE STC IS A CLOCK: menus follow the same rule (docs/stc_freerun.md)
     .stc_anchored       (av_stc_anchored),
     .disp_anchored      (av_disp_anchored),  // THE STC IS A CLOCK: playback releases only once the clock is on the DISPLAY timeline
     // Arrival front for the mid-play catch-up (Shea-Stadium ratchet fix): the
@@ -6118,7 +6298,7 @@ seek_time seek_time_inst (
     .dpad_dir        (dpad_pend_dir),
     .dpad_min        (dpad_pend_min),
     .dpad_sec        (dpad_pend_sec),
-    .chap_prev       (chap_disp_act),
+    .chap_prev       (chap_disp_act & ~cdda_tracks_on),   // DVD maps only
     .chap_pgm        (hud_cur_ch),
     .bar_active      (bar_active_w),
     .bar_tgt_rbn     (bar_tgt_rbn_w),
@@ -6162,17 +6342,25 @@ lin_rate lin_rate_inst (
     .clk           (clk_sys),
     .rst_n         (reset_n),
     .en            (lin_mode_w),
+    .cdda_mode     (cdda_mode_w),         // WAV/CD-DA: exact rate, no PTS to measure
+    .cdda_fs       (cdda_fs_w),
     .raw_mode      (raw_mode_w),
     .mount         (start_streaming),
     .flush         (load_flush),
     .sec_tick      (sec_tick),
     .vid_pts       (ps_vid_pts),
     .vid_pts_valid (ps_vid_pts_valid),
-    .lin_blk       (lin_blk_w),
-    .total_blk     (title_last_rbn_w + 32'd1),
+    // ★ On an audio CD the CLOCK is TRACK-relative -- a CD player counts within
+    // the track -- and so is the seek bar (per-track since 2026-09-10).
+    // This costs two subtracts and two muxes and no new arithmetic: lin_rate's
+    // MEASUREMENT path is bypassed in cdda mode (the fixed-rate arm), so
+    // shifting its position inputs cannot corrupt the rate estimate.
+    .lin_blk       (cdda_tracks_on ? (lin_blk_w - cdda_cur_start_w) : lin_blk_w),
+    .total_blk     (cdda_tracks_on ? (cdda_cur_end_w - cdda_cur_start_w)
+                                   : (title_last_rbn_w + 32'd1)),
     // Seek preview: the bar's own cursor target, so the clock and the cursor
     // can never disagree about where a gesture is heading.
-    .prev_rbn      (bar_tgt_rbn_w),
+    .prev_rbn      (cdda_tracks_on ? cdda_prev_rel : bar_tgt_rbn_w),
     .prev_req      (bar_active_w),
     .blk10         (lin_blk10_w),
     .blk10_ok      (lin_blk10_ok_w),
@@ -6232,6 +6420,12 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .ab_state     (ab_state_w),
     .load_evt     (start_streaming),
     .show_evt     (hud_user_evt),
+    // WAV/CD-DA has no picture, so the status line starts SHOWN. A one-shot
+    // SEED, not a level: a level cannot be switched off, which is exactly why
+    // Display had nothing to toggle during a pause.
+    .persist_set  (cdda_rise),
+    .persist_o    (hud_persist_w),
+    .trk_mode     (cdda_tracks_on),         // "TR n/N" instead of "CH n/N"
     // Three LIVE sources, in the order they can be trusted: a linear file's
     // clock is derived from its measured rate (lin_time_ok_w implies
     // !cell_ready, so the DVD arms are untouched); a DVD title's is the reader's
@@ -6246,15 +6440,19 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // readable on-screen -- e.g. how-to-play looping on Title 33 shows "CH 01/07"
     // (VTS7 PGCN1) vs reaching the VMGM segment menu "CH 03/xx" (PGCN3); a boot
     // question-detour shows a question VTS (01/05/06). Normal (O[2] off) = the real CH.
-    .cur_pgm      (hud_dbg ? cur_pgcn_rd : hud_cur_ch),  // projected target while a multi-press debounces
-    .nr_pgm       (hud_dbg ? cur_vts     : hud_nr_ch),   // Phase 6: exact PTT total
+    // On an audio CD these carry the TRACK, which the HUD labels "TR n/N"
+    // (trk_mode) -- a CD has no chapters.
+    .cur_pgm      (hud_dbg      ? cur_pgcn_rd
+                   : hud_cur_ch),                     // track on a CD
+    .nr_pgm       (hud_dbg      ? cur_vts
+                   : burst_nr),
     // popups: B7/B8 cycle popups mirror the gamepad state (aud_cur/sub_idx —
     // the same selectors that drive the reader's attr_* language readout);
     // angle only inside a real multi-angle block; chapter matches the skip guard.
     .aud_evt      (audio_edge),
     .sub_evt      (sub_edge),
     .angle_evt    (angle_edge && (angle_count != 4'd0)),
-    .chap_evt     ((chnext_edge | chprev_edge) && cell_ready && !menu_active),
+    .chap_evt     ((chnext_edge | chprev_edge) && (cell_ready || cdda_tracks_on) && !menu_active),
     .css_warn     (css_scrambled),   // persistent "CSS ENCRYPTED" popup
     .img_warn     (img_unplayable),  // persistent "UNSUPPORTED IMAGE" popup
     .aud_warn     (aud_unsupported), // persistent "AUDIO UNSUPPORTED" popup
@@ -6304,24 +6502,34 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .bar_active (bar_active_w),
     .base_rbn   (bar_base_rbn_w),
     .tgt_rbn    (bar_tgt_rbn_w),
-    .first_rbn  (title_first_rbn_w),
-    .last_rbn   (title_last_rbn_w),
+    .first_rbn  (cdda_tracks_on ? cdda_cur_start_w : title_first_rbn_w),
+    .last_rbn   (cdda_tracks_on ? cdda_trk_last    : title_last_rbn_w),
     // progress popup (stretch): pops on pause/landed seek/chapter with the
     // LIVE playhead + chapter notches, suppressed in menus like the HUD
     // the SAME pause-scoped latch transport_hud toggles, so the bar and the status
     // line cannot disagree about one pause (seek_bar has no display_edge of its own)
     .pause_vis  (hud_pause_show_w),
     .show_evt   (hud_user_evt),
+    // WAV/CD-DA: no picture, so the bar is the playback screen and stays up
+    // for the session. A WAV uses the whole file (the reader publishes it as
+    // the title span, and cur_rbn is already lin_blk). An audio CD with a
+    // track table spans the CURRENT TRACK instead (user decision 2026-09-10,
+    // reversing the earlier whole-disc bar) -- matching its track-relative
+    // clock, and matching the per-track FF/REW clamp above.
+    .force_show (cdda_mode_w && hud_persist_w), // shown/hidden WITH the status line
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),
-    .nr_pgm     (hud_nr_ch),          // Phase 6: exact PTT total for chapter notches
+    .nr_pgm     (hud_nr_ch),                                    // notch count
     .pm_we      (vm_pm_we),
     .pm_waddr   (vm_pm_waddr),
     .pm_wdata   (vm_pm_wdata),
     .cellf_we   (cellf_we_w),
     .cellf_idx  (cellf_idx_w),
     .cellf_rbn  (cellf_rbn_w),
+    // Audio CD: no notches (a one-track bar has nowhere to put them) and no
+    // chapter-skip cursor. See ticks_off in seek_bar.sv for why this is a gate.
+    .ticks_off  (cdda_mode_w),
     // chapter-skip preview: the same projected target the HUD's "CH n/N" field
     // counts through during a multi-press burst, so the bar's amber cursor
     // shows WHERE that chapter starts (tick_col[n-1]) while the number moves --
@@ -6369,14 +6577,26 @@ end
 // still apply (an unplayable image, a download in flight and the boot delay all
 // outrank it).
 // ★ STOP SHOWS THE IDLE LOGO, which is what a set-top player does when it stops
-// -- it spins down and puts its own screen up. The first build blanked the
-// picture to black instead and the field report was immediate: "one stop was
-// supposed to drop you to the idle logo". The position is still remembered
-// (nothing is torn down; see dvd/stop_ctl.sv), so this is display-only.
-wire logo_vis = (saver_on_w || stopped_w ||
+// -- it spins down and puts its own screen up.
+// ★ CD-DA/WAV playback has no video either, so its screen is the bouncing idle
+// logo, unconditionally. (Audio visualizers were built and then DROPPED
+// 2026-09-22, by user decision -- the logo is the only visual now, and Angle
+// does nothing at all on a CD.)
+// ⚠ THE CD ARM IS GATED ON media_seen, and that is a FIX, not a tidy-up
+// (2026-09-12, user report "ejecting the disc does not soft reset the core"):
+// cdda_mode was cleared only by `start`, which issue #48 gates on a non-zero
+// img_size, and an EJECT arrives as a ZERO-SIZE mount -- so the bit survived the
+// removal, this expression kept taking its CD branch, and the screen stayed up
+// while Main's eject reset looked inert.
+// The reader now clears the bit on rst_n as well; this gate is the SECOND lock,
+// so a stale mode can never strand the display on its own.
+wire cd_screen = cdda_mode_w && media_seen;
+wire logo_hold = saver_on_w || stopped_w;
+wire logo_vis = (logo_hold || cd_screen ||
                  (!media_seen && !video_live_s2 && !img_streaming)) &&
                 !img_unplayable && !ioctl_download &&
                 (logo_boot_dly == 25'd0);
+
 
 wire       logo_on_w;
 wire [7:0] logo_r_w, logo_g_w, logo_b_w;
@@ -6403,6 +6623,7 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .logo_g         (logo_g_w),
     .logo_b         (logo_b_w)
 );
+
 
 // Pipeline the palette RGB + alpha + on/idx one clk_sys stage before the combinational
 // blend, so the blend stays a flat mux (no colour-space math) in the output hotspot.

@@ -150,6 +150,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/transport_hud.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/seek_bar.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/idle_logo.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/bcd_time_add.sv
+# Audio-CD track table (feature/cdda-physical)
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/cdda_toc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dvd_vm.sv
 # DVD-FORK (frame-drop governor O[19]): catch-up credit controller. See
 # dvd/frame_drop_ctl.sv / docs/motcomp_throughput.md.
@@ -1121,6 +1123,31 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   bit_allocation -1,453, mantissa_dequant -484, bit_readers -366, dvd_iso_reader
 #   -251, dvd_vm -150, imdct -80, pgc_palette -55/-359 regs, pts_assoc -732 regs,
 #   dvd_telem -264 regs, alsa gone. Record: docs/logic_reclaim.md.
+# 2026-09-10 (feature/wav-audio, dev-wavaudio -- WAV/CD-DA raw-PCM playback,
+# REBASED onto the v0.5.0 tree: the reader's S_WAV_HDR chunk walk + keep filter,
+# lpcm_unpack's le/afull, the dvd_audio_decode cdda_* port, lin_rate's
+# fixed-rate arm, seek_bar/transport_hud force_show, and a CONF_STR
+# extension-list change): SEED 7 held FIRST roll -- clk_dec 87.61 @100C /
+# 88.42 @-40C (gate 86.0, PASS both corners) at 98% ALM (40,978),
+# RAM 498/553 (90%), DSP 94/112 (84%).
+# Build DVD_wavaudio_20260910_1900.rbf (4420 KB).
+# ⚠⚠ 98% ALM is +2,176 over the v0.5.0 release fit (93%, 38,802) and is the
+# CONGESTION REGIME this file and CLAUDE.md both warn about -- the design sat
+# here before the mem_shim reclaim and the two branches either side of that
+# each needed fit-rescue work. The margin (1.6 MHz) is the thinnest on this
+# ledger bar PR #75's 87.40. It PASSES, and the release entry above asked the
+# next branch near the gate to sweep; the user's call (2026-09-10) was to test
+# this fit on hardware first and sweep only if it shows fit-lottery symptoms.
+# ⚠ MEASURED NEGATIVE, so nobody re-tries it as an area fix: rewriting the
+# per-byte CD-DA position from `{blk,11'd0} + {21'd0,off}` to the concatenation
+# it actually is changed NOTHING -- a byte-identical re-fit, same 40,978 ALMs
+# and the same 87.61/88.42. Quartus already constant-propagates the zero low
+# bits. The extra area is the feature plus congestion-driven duplication, not a
+# stray adder on a hot path.
+# ⚠ The +2,176 was NOT separated into "my logic" vs "fitter duplication" -- that
+# needs a baseline fit of main, which was not run. Do not quote it as a logic
+# cost.
+
 # 2026-09-12 (fix/hdmi-audio-teardown, dev-hdmiteardown -- aud_route.bs_session +
 # the CMD_AF format word; the HDMI non-PCM flag was inherited by the next core):
 # SEED 7 held FIRST roll -- clk_dec 92.77 @100C / 88.9 @-40C (gate 86.0, PASS both
@@ -1297,5 +1324,177 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   ! The SEED 7 fit was packed anyway as releases/DVD_fieldorder_MARGINAL_20260918_1425.rbf
 #     (build_release.sh's testing mode). Do not flash it -- below the gate is the
 #     chroma-fringe lottery, which would confound a field-order eye test.
+
+# 2026-09-10b (feature/cdda-physical, dev-cddaphys -- physical audio-CD
+# playback: dvd/cdda_toc.sv plus the emu wiring for track skip, TRACK n/N,
+# seek-bar notches and track-relative time): SEED 7 held FIRST roll -- clk_dec
+# 92.30 @100C / 90.48 @-40C (gate 86.0) at 98% ALM (41,233), RAM 499/553,
+# DSP 94. Build DVD_cddaphys_20260910_2100.rbf.
+# ★★ THE FIRST ROLL OF THIS NETLIST DID NOT FIT AT ALL, and the reason is the
+# one this file and CLAUDE.md both already warned about. cdda_toc's 100x32
+# track table was read COMBINATIONALLY at five sites, so Quartus could not use
+# an M10K and built it from flops + address muxes: MEASURED 3733 ALUTs / 3463
+# registers / 0 block memory bits, and the fitter wanted 4558 LABs against the
+# device's 4191. Rewritten around ONE registered read port (a walk that keeps
+# entries k, k-1, k-2 as the address advances, serving bounds, both neighbours
+# AND the notch replay from that single port): 3733 -> 214 ALUTs, +1 M10K.
+# ⚠ Note the timing came out BETTER than the WAV branch's 87.61 at the same 98%
+# ALM. Do not read that as the rewrite buying headroom -- this ledger records
+# ~0.7 MHz of roll-to-roll variance on unrelated netlists and a 4.3 MHz swing
+# from a version-string edit alone. It is a fresh netlist, not an improvement.
+
+
+# 2026-09-10c (same branch, after moving the track-skip resolver OUT of emu.sv
+# and INTO cdda_toc.sv so a bench could reach it): SEED 7 FELL OFF THE GATE --
+# clk_dec 74.16 @100C / 77.20 @-40C, an 18 MHz drop for a change that moved 41
+# ALUTs and took the DESIGN DOWN 42 ALMs (41,233 -> 41,191, still 98%).
+# Swept: SEED 5 -> 78.92/82.77 (also FAIL), SEED 9 -> 90.72 @100C / 88.04 @-40C
+# PASS, pinned. Build DVD_cddaphys_20260910_2242.rbf.
+# ★★ THIS IS THE ENTRY TO POINT AT WHEN SOMEONE ASKS WHETHER A TIMING DROP
+# MEANS THEY BROKE SOMETHING. Two seeds failed and one passed on ONE netlist
+# whose logic is within 42 ALMs of a netlist that closed at 92.30 -- so at 98%
+# ALM the seed is worth more than 18 MHz, which is larger than any logic delta
+# on this ledger. A marginal fit here is a FIT result, not a design verdict:
+# sweep before reading it as a regression, and do not "optimise" logic to chase
+# a number the next roll of the dice would have given you.
+# ⚠ The corners INVERTED on the two failing seeds (hot faster than cold on
+# SEED 5, 78.92 vs 82.77) -- normal for a congested fit where the critical path
+# moves between rolls, and not a sign of anything else. fmax_check gates BOTH
+# corners for exactly this reason.
+
+
+# 2026-09-10d (same branch, dev-cddaphys2 -- audio visualizers (dvd/cdda_viz.sv),
+# per-track progress bar + FF/REW track clamp, TR n/N, and the track notches
+# deleted): SEED 9 held FIRST roll -- clk_dec 89.28 @100C / 90.41 @-40C (gate
+# 86.0) at 99% ALM (41,474), RAM 500/553, DSP 94 (unchanged -- the visualizers
+# use no multiplier, by design). Build DVD_cddaphys2_20260911_0208.rbf.
+# ★ The whole follow-up cost +201 ALMs and +1 M10K net of the deleted notch
+# replay, which is what "no framebuffer, per-line serial copper, rows-not-samples
+# scope" bought. ⚠ 436 ALMs now remain -- the ALM reclaim is not optional before
+# the next feature lands on top of this branch.
+
+
+# 2026-09-11 (same branch, dev-cddaphys3 -- dvd/cdda_screen.sv: HUD hidden over a
+# visualizer + Display toggle; track-relative FF/REW seek preview): SEED 9 held
+# FIRST roll again -- clk_dec 89.37 @100C / 89.77 @-40C (gate 86.0) at 99% ALM
+# (41,425), RAM 500/553, DSP 94. Build DVD_cddaphys3_20260911_0308.rbf.
+# ⚠ 49 ALMs FEWER than dev-cddaphys2 for a change that only ADDED logic: that is
+# packing variance at 99%, not a saving -- do not quote it as one.
+# ★ Per-visualizer cost, measured by synthesizing cdda_viz alone with `mode` tied
+# to each constant (Quartus prunes the other modes): copper ~120, scope ~105
+# (+1 M10K), xor ~60, shared ~25 fitted-ALM equivalents (map estimates scaled by
+# the 313/418 fitted/estimated ratio for the whole module). If area is needed
+# back, copper frees the most logic and scope also frees a memory block.
+
+
+# 2026-09-11b (same branch, dev-cddaphys4 -- CD track skips stack: cdda_toc takes
+# the burst size, emu's HUD projection counts tracks): SEED 9 held FIRST roll a
+# FOURTH time on this branch -- clk_dec 89.78 @100C / 89.6 @-40C (gate 86.0) at
+# 99% ALM (41,399), RAM 500/553, DSP 94. Build DVD_cddaphys4_20260911_0352.rbf.
+
+
+# 2026-09-12 (same branch, dev-cddaphys5 -- the whole stack REBASED onto main after
+# the three logic-reclaim branches merged (#82/#83/#84), and the scope visualizer
+# REMOVED): SEED 9 held FIRST roll a FIFTH time on this branch -- clk_dec 96.51
+# @100C / 91.70 @-40C (gate 86.0, PASS both corners; the WIDEST margin this ledger
+# records) at 89% ALM (37,295 needed), registers 51,278, RAM 502/553 (91%),
+# DSP 93/112. Build DVD_cddaphys5_20260912_0003.rbf (4384 KB), commit 1ed49db.
+# ★★ THIS IS THE FIRST HONEST MEASUREMENT OF WHAT THE CD FEATURE COSTS, because it
+# is the first fit of it on a netlist that was not already congested. Against main's
+# reclaim fit (entry 2026-09-11d, SEED 7): synthesis ALUTs 57,465 -> 58,511 (+1,046),
+# ALMs needed 36,636 -> 37,295 (+659, 87% -> 89%), RAM 501 -> 502 (+1 M10K).
+# Per entity (synthesis ALUTs, which are SEED-INDEPENDENT): cdda_viz 414, cdda_toc
+# 281 (+1 M10K), cdda_screen 5; the ~346 residual is the reader's WAV chunk walk
+# plus the emu glue. lin_rate (621) and lpcm_unpack (101) are NOT CD-only -- both
+# come from main and serve every linear source and the DVD LPCM path respectively.
+# ⚠⚠ THE RECLAIM AUDIT'S "cutting the CD player would have recovered ~300 ALMs" WAS
+# HALF THE TRUE FIGURE, and the reason is dateable: that audit predates the
+# visualizers, and cdda_viz alone is 414 ALUTs. Quote +659 ALMs, never ~300.
+# ★ ext_mem is still inferred as altsyncram (2 instances) after the rebase routed the
+# WAV path's three inline ext_mem[0] writes through main's shared S_FLAT_INIT -- the
+# write-site consolidation trap recorded above is discharged for this netlist.
+# ⚠ Placed-ALM and fmax comparisons against main are SEED-CONFOUNDED (this is SEED 9,
+# main's entry is SEED 7). Synthesis ALUTs and M10Ks are the clean A/B.
+
+
+# 2026-09-12b (same branch, dev-cddaphys6 -- XOR visualizer DROPPED and copper
+# SLIMMED to a triangle oscillator with three bars; the logo made the default; plus
+# the eject fix that clears cdda_mode/raw_mode/wav_bad on rst_n): SEED 9 held FIRST
+# roll a SIXTH time on this branch -- clk_dec 92.41 @100C / 88.22 @-40C (gate 86.0,
+# PASS both corners) at 89% ALM (37,222 needed), registers 51,047, RAM 502/553,
+# DSP 93/112. Build DVD_cddaphys6_20260912_0217.rbf, commit 7899008.
+# ★ WHAT THE SLIM BOUGHT, vs dev-cddaphys5 on the SAME seed:
+#   cdda_viz   414 -> 293 ALUTs (-121), 225 -> 156 registers (-69)
+#   design  58,511 -> 58,402 ALUTs (-109), ALMs needed 37,295 -> 37,222 (-73)
+# That is the whole of it: the 64-entry quarter-wave sine LUT collapsing to
+# {sq_i,1'b0} (a wire), and the loss of the per-PIXEL XOR path -- which took the
+# a_xv/a_yv/b_m coordinate pipeline and the sx/sy/tc scroll registers with it, since
+# copper's colour is a per-LINE register. RAM is unchanged at 502: nothing
+# memory-side moved.
+# ★ CD FEATURE TOTAL vs main's reclaim fit (entry 2026-09-11d, SEED 7): +937 ALUTs
+# (was +1,046), ALMs needed +586 (was +659), +1 M10K. Per entity: cdda_viz 293,
+# cdda_toc 280, cdda_screen 3, ~361 residual for the reader's WAV walk and emu glue.
+# ⚠ clk_dec FELL 96.51 -> 92.41 on LESS logic and the SAME seed. That is placement
+# variance at 89% ALM, NOT a regression -- the margin is still 6.4 MHz over the gate,
+# and this ledger's own history (SEED 7 swinging 18 MHz on one netlist) is exactly
+# why a fit result is read as a fit result. Nothing here is marginal.
+
+# 2026-09-22 (feature/cdda-physical REBASED onto post-v0.6.1 main, dev-cddaphys7):
+# SEED 9 held FIRST roll a SEVENTH time on this branch -- clk_dec 91.17 @100C /
+# 90.60 @-40C (gate 86.0, PASS both corners, 4.6 MHz of margin at the COLD corner,
+# which is the one that usually binds) at 94% ALM (39,239 needed), registers 52,276,
+# RAM 501/553 (91%), DSP 95/112. Build DVD_cddaphys7_20260922_0453.rbf, commit
+# 59db186, not marginal.
+# ★ MEASURED AGAINST A SAME-SEED BASELINE FIT OF MAIN (cc70e41, SEED 9, run
+# 2026-09-22 for exactly this question). ⚠ Do NOT instead read a cost out of the
+# 37,222 -> 39,239 step against the dev-cddaphys6 entry above: main grew by 282
+# commits in between, so that delta is mostly main's.
+#
+#   metric                    main       +CD        delta
+#   ALMs needed               38,567     39,239     +672    (92% -> 94%)
+#   ALMs used in placement    40,585     41,073     +488    (97% -> 98%)
+#   LABs touched              4,183      4,190      +7      (of 4,191)
+#   Combinational ALUTs       61,281     62,485     +1,204
+#   Registers                 51,540     52,276     +736
+#   RAM blocks                500        501        +1 M10K (cdda_toc's table)
+#   DSP                       95         95         0
+#
+# Per entity (synthesis ALUTs): cdda_viz 295, cdda_toc 280 (owns the M10K),
+# cdda_screen 3 = 578; the ~626 balance is the reader's WAV walk, lpcm_unpack's
+# le/afull, lin_rate's fixed-rate arm, and emu glue -- including the jump mux
+# gaining a THIRD producer, which is new logic the pre-rebase branch did not have.
+# ⚠ Comparable but not pristine: CORE_VERSION differs between the two netlists
+# ("dev-vcdsvcdphys" vs "dev-cddaphys7") and lives in CONF_STR, so a few ALUTs of
+# string ROM are in the delta. That is the same basis every earlier entry used.
+#
+# ★★ THE NUMBER THAT MATTERS FOR WHAT LANDS NEXT IS NOT THE HEADLINE. Both fits
+# touch 100% of LABs; main leaves 8 untouched and this leaves ONE (4,190/4,191).
+# "94% ALM needed" reads like 6% spare and there is not 6% spare -- the fitter's
+# dense-packing estimate is what that percentage is, which is why the v0.5.0 entry
+# recorded a "93%" fit that PLACED 40,821 ALMs in 4,188 of 4,191 LABs. Budget the
+# next feature against placed ALMs and LABs, not against the headline.
+# 282 commits of main landed while this branch was shelved -- physical VCD/SVCD, the
+# screensaver/Stop overlay gate, frame step, native 240p, the scrub-ARROW HUD readout
+# (the "xN" tier field is gone), the field-order fix and the ALM reclaim.
+# ⚠ HEADROOM HAS MOVED and the numbers in the entry above no longer describe the
+# floor this has to fit in: main now sits at ~39,033 ALM of 41,910 and 512/553 M10K
+# (docs/hw_budget_and_lessons.md), against the 37,222 / 502 this branch last fit at.
+# The CD stack's measured cost (+937 ALUTs, +586 ALMs needed, +1 M10K) comes out of
+# ~2,900 ALM and 41 M10K of spare -- so read a marginal fit as expected, not as a
+# surprise, and note that added logic here tends to cost clk_dec through routing
+# pressure rather than failing to fit outright.
+# ★ Substantive rebase decisions (textual conflicts aside):
+#   - S_WAV_HDR moved 6'd59 -> 6'd63. The angle work (PR #101) had taken 59/60/62;
+#     63 was the only code still free in the 6-bit state space.
+#   - The audio-CD probe is now THIRD (DVD-Video, then VCD/SVCD, then CD-DA). An
+#     ENHANCED CD satisfies both the VCD and CD-DA probes and VCD-first is correct;
+#     it also counts as a disc read like the other two, being the most expensive.
+#   - The overlay chrome composites bg_on_w (logo|visualizer) where main composited
+#     logo_on_w. tools/check_saver_overlay_wiring.py pins bg_on_w's own definition
+#     with exact_terms, so "the idle logo reaches the screen UNGATED" is still the
+#     property being asserted rather than just the net's name.
+#   - transport_hud keeps main's pause/B9 rule and force_show joins the PLAYBACK arm,
+#     so Display still toggles the line during a CD pause.
+#   - seek_bar keeps main's 512-bit tick BITMAP, gated by the CD's ticks_off.
 
 set_global_assignment -name SEED 9

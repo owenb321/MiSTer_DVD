@@ -492,6 +492,91 @@ av_sync). Fixed by slaving the burst release to the video STC (`head_delta ≥ 0
 
 ---
 
+## Music CD playback (WAV now, physical CD-DA next)
+
+Standalone DVD players played audio CDs; ours ignores them (`dvd_phys.cpp` skips
+any non-DVD-Video disc). The work splits into a core half and a Main half, and
+the split is deliberate:
+
+- **✅ Branch 1 `feature/wav-audio` — the CORE half, HW-CONFIRMED 2026-09-10**
+  (build `DVD_wavaudio_20260910_1900.rbf`; all seven gates green over the HIL
+  harness, incl. the Passthru one with a validated silence control — see
+  `docs/cdda.md`).** `.wav` playback (16-bit stereo, 44.1/48 kHz) through a new raw-PCM
+  mode in `dvd_iso_reader` + `lpcm_unpack`, with the idle logo, a forced-on HUD
+  status line and the seek bar held up as a progress bar. Ships as a real feature
+  AND is the whole fabric path CD-DA needs. Suite `bench/dvd/run_wav.sh`, golden
+  `tools/wav_ref.py`. Design: **`docs/cdda.md`**.
+  ★ **Rebased onto post-v0.5.0 `main` 2026-09-10, and the rebase DELETED code:**
+  `main` had grown `dvd/lin_rate.sv` (one time model for every linear source), so
+  the branch's own `dvd/cdda_time.sv` was retired and CD-DA became a second
+  fixed-rate arm of that module's exact bypass — which also made the 48 kHz D-pad
+  step exact and brought the seek-preview clock along for free. ⚠ **And the
+  Passthru interaction inverted with PR #79**: `pcm_mute` now keys on
+  `rt_pcm_session`, which `aud_route` latches from RING frames — and CD-DA never
+  enters the ring, so a `.wav` in Passthru would be SILENT without the
+  `pass_mode` force-off. That is the newest HW gate.
+- **✅ Branch 2 `feature/cdda-physical` — the MAIN half, BUILT; a physical
+  audio CD plays on the board (2026-09-10).** TOC + SG_IO `READ CD` (0xBE) in a
+  new `main/support/dvd/dvd_cdda.cpp`, repacked 2352→2048 behind a **synthetic
+  44-byte WAV header** so the disc presents to the core as one giant WAV and
+  needs no new mode, no `cfg[15]`, no `hps_io` fork. Served through the existing
+  `SD_TYPE_DVDCSS` hooks = **zero new `apply_integration.py` steps**, via a
+  two-source front in `dvd_css.cpp` that reuses `DVD_PHYS_SENTINEL` (a second
+  sentinel would read as a foreign mount and silently disable physical playback).
+  A track table rides the generic ioctl-download channel (PSX `disk_t`
+  precedent) into `dvd/cdda_toc.sv` for tracks-as-chapters + seek-bar notches;
+  the clock shows TRACK time and the bar the whole disc.
+  ★ **The SG_IO smoke test passed first** (`main/tools/cdda_smoke.c`) — whether
+  the drive honours 0xBE audio reads was the one real unknown, and it gated the
+  branch.
+  ⚠ **`cdda_toc` had to be rewritten to ONE sync read port**: async-read at 5
+  sites cost 3733 ALUTs and the fitter needed 4558 LABs against 4191 — the
+  documented `parse_buf` LUT-RAM lesson, walked into anyway. One sync port: 214.
+  ⏳ **Still ungated on HW: track skip on a real disc** (the drive dropped its
+  disc mid-test with sense 0x02/0x04/0x01, reproduced under the MENU core, so
+  not our code).
+  🔧 **Follow-up build `dev-cddaphys2` (2026-09-10), sim-green, ⏳ HW-untested:**
+  audio **visualizers** (`dvd/cdda_viz.sv`: copper / XOR / scope / logo, cycled
+  with Angle; the scope is dropped again in `dev-cddaphys5` below), a **per-track**
+  progress bar (reversing the whole-disc bar), FF/REW stopping at the track edges
+  with FF-to-end landing on the next track, no track notches, and the HUD reading
+  **`TR n/N`**. Detail: `docs/cdda.md`.
+  🔧 **`dev-cddaphys3`:** the HUD is hidden over a visualizer (Display toggles,
+  `dvd/cdda_screen.sv`) and the FF/REW seek preview is track-relative (it was
+  showing disc time). Sim-green, ⏳ HW-untested.
+  🔧 **`dev-cddaphys4`:** track skips STACK like DVD chapter skips — a burst of
+  N presses moves N tracks, and the HUD counts through them. Sim-green,
+  ⏳ HW-untested.
+  🔧 **`dev-cddaphys5`:** the whole stack **REBASED onto `main`** after the three
+  logic-reclaim branches merged (PRs #82/#83/#84), and the **scope visualizer is
+  REMOVED** (user decision, to be conservative with logic). The cycle is now copper →
+  XOR → logo — **three stops**, `viz_mode` wrapping at 2, so Angle never lands on a
+  dead mode. Measured cost of the arm that went: **~105 ALMs and one M10K**, the
+  memory being the expensive half with RAM at 90 %.
+  ★ **Now FITTED on the reclaimed netlist** (`DVD_cddaphys5_20260912_0003.rbf`,
+  SEED 9 first roll): clk_dec **96.51 / 91.70** against the 86.0 gate — the widest
+  margin this design has recorded — at **89 % ALM (37,295)**, RAM 502/553, DSP 93.
+  ★★ **So the whole CD feature measures +1,046 ALUTs / +659 ALMs / +1 M10K** against
+  main's reclaim fit; per entity `cdda_viz` 414, `cdda_toc` 281 (+the M10K),
+  `cdda_screen` 5, the ~346 residual being the reader's WAV walk and emu glue.
+  ⚠ That is **double** the reclaim audit's "~300 ALMs", which predates the
+  visualizers — quote the measured figure. Sim-green, ⏳ HW-untested.
+  🔧 **`dev-cddaphys6`:** the **XOR pattern dropped** and copper **slimmed** — a
+  triangle oscillator instead of the quarter-wave sine (the 64-entry LUT collapses to
+  a wire) and **three bars instead of five** — with the **bouncing logo now the
+  DEFAULT** and Angle opting into the visualizer. Two stops, `viz_mode` wrapping at 1.
+  ★ Also fixes a real defect found on the rig: **ejecting a disc did not return the
+  core to idle.** Main was exonerated by its own log (eject detected, slot unmounted,
+  `status[0]` pulsed); `cdda_mode` was cleared only by `start`, which never fires on a
+  zero-size eject mount, and was missing from the reader's reset branch that already
+  held `iso_mode`. Fixed at both ends (reader reset + a `media_seen` gate on the
+  screen arm); gate `wav_probe_tb` TEST 8, RED-proven. Sim-green, ⏳ HW-untested.
+
+⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
+CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.
+Cheap to revisit if ever wanted — stock Main's `cd.h`/`mister_chd.*`/`load_cue()`
+would feed the SAME byte stream this core already plays, with no RTL change.
+
 ## Phase 6 — Polish and Known Issues (Weeks 15+)
 
 > **★ General-catalog conformance:** the durable "what DVD-Video feature is implemented /

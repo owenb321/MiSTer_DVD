@@ -53,6 +53,7 @@
 static int  fake_disc_ready   = 0;   // the drive reports a disc ready
 static int  fake_disc_is_dvd  = 1;   // ...and it is DVD-Video
 static int  fake_disc_is_vcd  = 0;   // ...or (if not DVD-Video) a VCD/SVCD
+static int  fake_disc_is_cdda = 0;   // ...or an audio CD (all mutually exclusive)
 static int  fake_launch_busy  = 0;   // an MGL launch is pending
 static int  probe_calls       = 0;   // how often we READ the disc (either probe)
 static int  vcd_close_calls   = 0;   // how often dvd_vcd_close() ran
@@ -89,6 +90,11 @@ static int open_ready_drive(char *out, int out_sz)
 char is_dvd() { return 1; }
 int  dvd_video_probe(int) { probe_calls++; return fake_disc_is_dvd; }
 int  dvd_vcd_probe(int) { probe_calls++; return fake_disc_is_vcd; }
+int  cd_audio_probe(int) { probe_calls++; return fake_disc_is_cdda; }
+// Counted so [7] can assert the table is pushed for a CD and NOT for a DVD --
+// the core throws away any table that arrives before its mount.
+static int toc_uploads = 0;
+void dvd_cdda_toc_upload(void)  { toc_uploads++; }
 void dvd_css_close(void) {}
 void dvd_vcd_close(void) { vcd_close_calls++; }
 int  dvd_launch_ui_busy(void) { return fake_launch_busy; }
@@ -152,6 +158,7 @@ static void run_for(int seconds)
 static void reset_counters(void)
 {
     probe_calls = mount_calls = reset_asserts = vcd_close_calls = 0; last_mount[0] = 0;
+    toc_uploads = 0;
 }
 
 int main(void)
@@ -203,18 +210,33 @@ int main(void)
     run_for(NOTICE_WINDOW_S);
     check("[6] disc reads over ten seconds", probe_calls, 1);
     check("[6] mounts",                      mount_calls, 1);
+    // A DVD mounts through the same call, so the upload runs for it too. It must
+    // NO-OP rather than send a stale table -- dvd_cdda_toc_upload's own
+    // !g_open guard is what makes that safe, and this pins that it is called
+    // exactly once either way.
+    check("[6] upload attempted once",       toc_uploads, 1);
 
-    printf("=== [7] an audio CD is probed once per insertion, not once a second ===\n");
-    // eject the DVD, then present a disc that is neither DVD-Video nor VCD/SVCD.
-    // "Once" now means once PER DETECTOR: dvd_video_probe() rejects it, so
-    // dvd_vcd_probe() also runs (the dispatch tries both before giving up) --
-    // still bounded to the insertion, never re-run while the disc just sits there.
+    printf("=== [7] an AUDIO CD now mounts (it did not before) ===\n");
+    // eject the DVD, then present an audio CD. All three detectors run: the DVD
+    // and VCD walks reject it, cd_audio_probe() claims it.
     fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
     reset_counters();
-    fake_disc_is_dvd = 0; fake_disc_is_vcd = 0; fake_disc_ready = 1;
+    fake_disc_is_dvd = 0; fake_disc_is_vcd = 0; fake_disc_is_cdda = 1;
+    fake_disc_ready = 1;
     run_for(30);
-    check("[7] disc reads over half a minute (both detectors, once each)", probe_calls, 2);
-    check("[7] mounts",                        mount_calls, 0);
+    check("[7] disc reads over half a minute (three detectors, once each)", probe_calls, 3);
+    check("[7] mounts the audio CD",   mount_calls, 1);
+    check("[7] via the SAME sentinel", !strcmp(last_mount, DVD_PHYS_SENTINEL), 1);
+    check("[7] pushes the track table", toc_uploads, 1);
+
+    printf("=== [7b] a DATA disc is still refused, and probed once per insertion ===\n");
+    fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+    reset_counters();
+    fake_disc_is_dvd = 0; fake_disc_is_vcd = 0; fake_disc_is_cdda = 0;
+    fake_disc_ready = 1;
+    run_for(30);
+    check("[7b] disc reads over half a minute (three detectors, once each)", probe_calls, 3);
+    check("[7b] does not mount", mount_calls, 0);
 
     printf("=== [8] a slow drive probe must back off ===\n");
     // The field case: a .mpg is playing, the tray is OPEN, and every probe costs

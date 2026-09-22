@@ -3,6 +3,12 @@
 // ============================================================================
 // Two duties on one renderer:
 //
+// 3. PROGRESS BAR (force_show): held up for a whole session by an audio-only
+//    source (WAV / CD-DA), where there is no picture and this bar plus the
+//    status line ARE the playback screen. Costs nothing extra -- the position
+//    model below already resolves a linear file, because the reader publishes
+//    the whole file as the title span and lin_blk as the playhead.
+//
 // 1. SCRUB FEEDBACK (core): the visual for the Phase-8a SEEK-ON-RELEASE scrub
 //    (PR #101) -- while D-pad Left/Right is held the video is just paused, so
 //    the only indication of where the release lands is this bar. scrub_ctrl
@@ -74,6 +80,12 @@ module seek_bar #(
     input  wire [31:0] first_rbn,           // title span (reader)
     input  wire [31:0] last_rbn,
 
+    // Level: keep the bar up for the whole session. Set for WAV/CD-DA, where
+    // there is no picture and the bar IS the playback screen -- the same role
+    // transport_hud's force_show plays for the status line. Still yields to
+    // menu_active below, so it cannot fight the HLI layer.
+    input  wire        force_show,
+
     // progress-popup state (stretch)
     // Visibility-only here (this module has no pause icon), so it is named for what it
     // MEANS rather than for the register it usually comes from: a pause the user started
@@ -98,6 +110,13 @@ module seek_bar #(
     // chapter-skip preview (emu's projected B2/B3 target, 1-based)
     input  wire        chap_prev,           // a chapter skip is pending/settling
     input  wire [7:0]  chap_pgm,            // projected target chapter
+
+    // Level: never draw chapter notches or the chapter-skip cursor. Set on an
+    // audio CD, whose bar spans ONE track. ⚠ It is a gate rather than relying
+    // on nr_pgm = 0 because tick_ok is only rebuilt on a pgc_loaded RISE, which
+    // a CD never produces -- so a DVD played earlier in the session would
+    // otherwise leave ITS notches on the CD's bar.
+    input  wire        ticks_off,
 
     // pixel out, REGISTERED (feeds emu's pre-blend register stage)
     output reg         bar_on,
@@ -141,7 +160,7 @@ module seek_bar #(
         else if (show_evt) pop_tmr <= POP_TICKS;
         else if (pop_tmr != 27'd0) pop_tmr <= pop_tmr - 27'd1;
     end
-    wire vis = (bar_active | pause_vis | (pop_tmr != 27'd0)) && !menu_active;
+    wire vis = (force_show | bar_active | pause_vis | (pop_tmr != 27'd0)) && !menu_active;
 
     // ---- shadow maps + tick columns (stretch) -------------------------------
     reg [7:0]  pmap_ram  [0:127];           // program -> entry cell (1-based)
@@ -283,7 +302,8 @@ module seek_bar #(
         ch_tk_q  <= tick_col[ch_raddr];
         chap_px  <= ch_tk_q;
     end
-    wire chap_cur = chap_prev && tick_ok && (chap_pgm != 8'd0) &&
+    wire tick_show = tick_ok & ~ticks_off;
+    wire chap_cur = chap_prev && tick_show && (chap_pgm != 8'd0) &&
                     (chap_pgm <= {1'b0, tick_n});
 
     // Selected cursor (registered, event-rate) so the display path keeps its
@@ -345,7 +365,8 @@ module seek_bar #(
                     // seek target / chapter-skip target cursor: 5 px, opaque amber
                     bar_r <= 8'hFF; bar_g <= 8'hC8; bar_b <= 8'h20;
                     bar_alpha <= 4'd15;
-                end else if (tick_ok && s0_low && tk_bit) begin
+                end else if (tick_show && s0_low && tk_bit) begin
+
                     // chapter notch: 2 px, lower half
                     bar_r <= 8'hE8; bar_g <= 8'hE8; bar_b <= 8'hE8;
                     bar_alpha <= 4'd14;

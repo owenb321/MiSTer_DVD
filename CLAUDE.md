@@ -1993,6 +1993,265 @@ worse maintenance burden than targeted in-place edits. So:
   pre-change baseline, plus each unit suite. Detail: `docs/ac3_decoder_architecture.md`
   §4.12, `DVD.qsf` ledger. Plan for the remaining branches (nav/VM/glue, reader,
   block-RAM packing) is in the audit record there.
+- ✅ **WAV / CD-DA RAW-PCM PLAYBACK (2026-09-10, branch `feature/wav-audio`) —
+  ✅ HW-CONFIRMED 2026-09-10** (build `DVD_wavaudio_20260910_1900.rbf`, SEED 7,
+  clk_dec 87.61/88.42 at 98% ALM; all seven gates green over the HIL harness).
+  ★ **The two gates worth knowing about:** the 48 kHz rate constant was measured
+  by READING THE TOTAL DURATION of a file of known length — 180.0 s reads
+  `0:02:59`, where the parked branch's reused 44.1 kHz constant would read
+  `0:03:16`; and the Passthru gate measured **−15.3 dBFS flat**, indistinguishable
+  from Decode PCM, **with `Audio=Off` proven to read −999.0 dBFS on the same path**
+  so the control arm could actually fail. ⚠ The whole-capture RMS was MISLEADING
+  there (−36.9 dBFS with the peak unchanged, because the setting landed partway
+  through the capture) — a 0.25 s envelope answers cleanly where an average over a
+  transition does not. `.wav` files (16-bit stereo PCM,
+  44.1/48 kHz) play through a new raw-PCM mode that bypasses `ps_demux` and every
+  codec: `dvd_iso_reader` chunk-walks the RIFF header (`S_WAV_HDR`) and streams the
+  data payload straight into `lpcm_unpack` via a new `cdda_*` port on
+  `dvd_audio_decode`. Screen = the bouncing idle logo, a forced-on HUD status line
+  and the seek bar as a progress bar. ★ **This is deliberately the CORE HALF OF
+  MUSIC-CD SUPPORT shipped first as its own feature**: branch 2
+  (`feature/cdda-physical`, the bullet below) has the Main serve a physical audio CD as
+  ONE GIANT WAV — a synthetic 44-byte header in front of the repacked 2352→2048
+  audio sectors — so the disc reuses this exact probe and needs no new core mode,
+  no `cfg[15]` (the last free config bit stays free), and no `hps_io` mount-word
+  fork. ⚠ **Rode LPCM rather than adding a fifth `aud_type`** — the field is 2-bit
+  with all four codes taken, and raw PCM wants none of the dispatch/PES/PTS
+  machinery; `lpcm_unpack` gained `le` (CD/WAV are little-endian, DVD LPCM is
+  big-endian) + `afull`, and `cdda_mode=0` is bit-identical.
+  ⚠ **Three traps, all now covered by TBs:** the flat-PS **pack hunt** must not arm
+  (`00 00 01 BA` never arrives in PCM, so a seek would eat the rest of the file);
+  `S_INIT` had to stop skipping the byte-0 probe under 17 blocks (a tiny `.wav` is
+  legal where a tiny ISO is not); and a seek must resume on an **L/R-PAIR-ALIGNED**
+  byte (`bpos ≡ wav_doff mod 4`) or the channels swap for the rest of playback —
+  the `listchunk` fixture has `data_off=90` (≡2 mod 4) precisely so the naive
+  block-boundary answer fails there. ⚠ **The payload END needed two guards, both
+  RED-proven:** a STREAMING writer's `cksize = 0xFFFFFFFF` wrapped a 32-bit end
+  computation to ~40 (**file played nothing**), and a TRUNCATED file's over-claiming
+  chunk ran past EOF into the block padding (**852 bytes of 0xEE emitted as audio**);
+  `wav_dend` is 35-bit, EOF-clamped, then pair-truncated. Unsupported shapes
+  (mono/24-bit/float/96 k) raise `UNSUPPORTED IMAGE` **immediately** — the header
+  states the format, and the 20 s patience window can never advance for a source
+  that delivers no picture anyway.
+  ★★ **THE REBASE ONTO POST-v0.5.0 `main` DELETED CODE RATHER THAN MERGING IT, and
+  that is the durable part.** The branch had been parked since 2026-09-02 and `main`
+  had meanwhile grown **`dvd/lin_rate.sv`** — one time model shared by every linear
+  source, with an EXACT combinational bypass for raw CD and a measured-PTS path for
+  flat files. CD-DA is the same shape as the raw-CD arm (a fixed geometry), so the
+  branch's own `dvd/cdda_time.sv` was **retired** and CD-DA became a second
+  fixed-rate arm of that bypass. Three things fell out for free: the HUD clock, the
+  **seek-preview** clock, and a **48 kHz D-pad step that is now exact** (the branch
+  had reused the 44.1 kHz constant 861 for both, ~8.6% short at 48 kHz, and had
+  shipped that as a documented limitation). ⚠ **The bypass is not an optimisation —
+  it is required:** a PCM source carries NO PTS, so `lin_rate`'s measurement path can
+  never arm on it, and a measured-rate gate would leave the D-pad inert and the clock
+  at 0:00:00 on every `.wav` and every audio CD.
+  ⚠⚠ **AND THE PASSTHRU INTERACTION IS THE OPPOSITE OF THE OLD ONE (PR #79).**
+  Passthru is no longer bitstream-only: `aud_route` classifies each RING frame and
+  sends LPCM/MP2 to the decoder as PCM. CD-DA/WAV never enters the ring at all, so
+  `rt_pcm_session` would sit at its reset value 0 all session and
+  `pcm_mute = (pass_mode & ~rt_pcm_session)` would **mute a `.wav` outright in
+  Passthru**. `pass_mode` is therefore forced off in `cdda_mode` — which also makes
+  `af_passthru` tell Main to put the ADV7513 in PCM mode, and drops `SPDIF_PASS_EN`
+  and `HDMI_BS_EN` so both legs carry ordinary PCM. Same user-visible outcome PR #79
+  gives an LPCM track; **HW gate: play a `.wav` with `Audio Out = Passthru`.**
+  ⛔ **bin/cue + CHD images REJECTED** (user decision): ISO9660 cannot hold CD-DA so
+  it means parsing `.cue` sheets, and nobody archives music that way.
+  Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`; design **`docs/cdda.md`**.
+
+- 🔧 **PHYSICAL AUDIO CDs (2026-09-10, branch `feature/cdda-physical`) — a music CD
+  inserted while the core is running PLAYS on the board, and ✅ TRACK SKIP IS
+  HW-PROVEN** (build `DVD_cddaphys_20260910_2242.rbf`, SEED 9, clk_dec 90.72/88.04):
+  auto-mount at exactly `44 + 190430x2352` bytes, `CH 1/ 4`, next-track, and BOTH
+  arms of the prev resolver — restart-current above ~3 s, previous-track below it.
+  ⏳ **One gate still open: next on the LAST track** — the drive dropped its disc
+  again and escalated to `usb 1-1.1: reset high-speed USB device number 9`, which is
+  the host re-enumerating the device, not a refused command; the same fault
+  reproduced earlier with the MENU core loaded, so NOT our code. Suspect power.
+  ⛔ Reading past the lead-out was CHECKED and is not the cause: `dvd_cdda_read()`
+  refuses `b0 >= size`, clamps `b1 > size`, and clamps every burst to the track edge.
+  ⚠⚠ **THAT GATE CANNOT BE DRIVEN OVER SSH AND THE REASON GENERALISES: the harness's
+  own latency is part of the instrument.** Each `mister.py key` is a fresh ssh round
+  trip (~1-2 s), so two presses land 2-4 s apart — OUTSIDE the 3 s `RESTART_BLK`
+  window being tested, so both restart and the previous-track arm can never fire.
+  Measured: ssh-paced presses stayed on track 2 twice; the identical pair driven ON
+  the target (`echo "keys 104" > /tmp/mister_hil; sleep 1.2; ...`) reached track 1
+  first try. An ssh-paced test of a 3 s rule is a bench that cannot fail, and it
+  reads as "the feature is broken".
+  ★ **And the drive fault presented as MISSING SCREENSHOTS, which reads like a core
+  hang:** `shot` failed while `state` still answered — Main alive but blocked in the
+  `sr` retry loop, so `user_io_poll()` never serviced `/dev/MiSTer_cmd`. The
+  documented blocking-I/O coupling, arriving through a new symptom. ⚠ "Is the picture
+  frozen or is the machine frozen" does NOT separate these; ask whether Main's own
+  command FIFO is being serviced.
+  ★★ **THE WHOLE FEATURE NEEDED NO NEW CORE MODE AND NO NEW INTEGRATION STEP.** The
+  Main serves the disc as **ONE GIANT WAV** — a synthetic 44-byte canonical RIFF
+  header in front of the audio sectors repacked 2352→2048 — so the core reuses the
+  `riff_wave` probe branch 1 already shipped. `cfg[15]` stays free, `hps_io` is
+  unforked, and `apply_integration.py` is **untouched**: `dvd_css.cpp` grew a
+  two-source front (`SRC_NONE / SRC_CSS / SRC_CDDA`) behind the six functions
+  `user_io.cpp` already calls.
+  ⛔ **REUSE `DVD_PHYS_SENTINEL` — do NOT invent a second sentinel string.**
+  `dvd_phys_note_mount()` special-cases exactly one string; any *other* mount path is
+  read as a **foreign** mount and clears `mounted`, which would silently disable
+  physical playback altogether. `dvd_css_open()` decides DVD-vs-CD internally.
+  ⚠ **Keep `find_dvd_device()` off the CD-DA path** — it sets `css_size` from
+  `BLKGETSIZE64` as a SIDE EFFECT of scanning, which is the raw device size, not our
+  synthetic `44 + n×2352`, and the core's WAV EOF clamp is load-bearing on the
+  reported size being exact. `find_audio_cd()` returns an open fd and touches nothing.
+  ★ **A failed read is already silence, for free:** `user_io` zero-fills the window
+  when the hook returns ≤0, so a scratched sector plays as a dropout rather than
+  stalling — correct CD behaviour, no code. ★ And the drive speed is **capped**
+  (`CDROM_SELECT_SPEED`, 4×): CD-DA needs 172 KB/s and an uncapped drive spins to 48×
+  and screams through a music disc.
+  ⚠ **`dvd_report` regression, guarded:** `find_source()` couples `dvd_css_active()`
+  with `dvd_phys_device()` and then reads 2048-byte ISO sectors off `/dev/srN` — on a
+  CD-DA mount both answer truthfully and the support-bundle chord would produce a
+  BROKEN bundle instead of its "nothing to bundle" diagnostic. New `dvd_css_is_cdda()`
+  gates it.
+  **Detection** is `cd_audio_probe(int fd)` in `dvd_detect.cpp` — TOC-only, no disc
+  read, and deliberately BROADER than stock's "the TOC contains no data track": ours
+  is "**has ≥1 audio track**", so an enhanced/mixed-mode disc plays its audio tracks,
+  which is what real players did. The cheap probe sits in the once-per-insertion latch;
+  the full TOC read happens in the MOUNT path, which already expects to block.
+  **Tracks** ride the generic ioctl-download channel into new `dvd/cdda_toc.sv`
+  (tracks-as-chapters via the existing `seek_rbn`; the HUD reads **`TR n/N`**, not
+  `CH`, via `transport_hud.trk_mode`). Track-relative time was FREE, because
+  `lin_rate`'s measurement path is bypassed in cdda mode, so muxing its
+  `lin_blk`/`total_blk` inputs to `(lin_blk − track_start)` cannot corrupt a rate
+  estimate: two subtracts and two muxes, no new arithmetic.
+  🔧 **FOLLOW-UP BUILD `dev-cddaphys2` (2026-09-10) — sim-green + mutation-checked,
+  ⏳ HW-untested.** Five user requests; detail `docs/cdda.md` "Follow-up".
+  ★ **The progress bar is PER-TRACK and FF/REW stop at the track edges** (REVERSING
+  the first build's whole-disc bar). ONE substitution gives both edge rules:
+  `scrub_ctrl`'s clamp takes `[cur_start, cur_end]`, so REW stops at the track start
+  and FF saturates at `cur_end` — which IS the next track's first block, so "FF to the
+  end skips to the next track" needed no logic. REW at a track start deliberately does
+  NOT step back (user decision). ⚠ A TRACK SKIP must not see that span
+  (previous-track targets a block before `cur_start`): `cdda_skip_win` holds the disc
+  span for the cycles `scrub_ctrl` resolves a jump in.
+  ⚠ **The disc-bar notches NEVER rendered on hardware:** `seek_bar` rebuilds its tick
+  list only on a `pgc_loaded` RISE, which a CD never produces — and the stale list a
+  DVD leaves behind would have drawn the DVD's notches on the CD bar. Notches are gone
+  (`cdda_toc`'s replay deleted) and new `seek_bar.ticks_off` gates notches AND the
+  chapter cursor.
+  ★ **AUDIO VISUALIZER — `dvd/cdda_viz.sv`, reached with Angle** (dead on a CD, since
+  the angle switch needs `cell_ready`): the bouncing **logo is the DEFAULT** and Angle
+  opts INTO **copper bars**; also on `.wav`. **The budget IS the design:** no
+  framebuffer; copper is solved per LINE serially (one comparator, four clocks, held
+  for the line) and its three bar positions per FRAME, shift-adds only, no DSP. Shares
+  `idle_logo`'s overlay slot (same 3-stage latency and lead). ⛔ Lissajous not built:
+  it needs a bitplane.
+  ★ **The oscillator is a TRIANGLE, not a sine (2026-09-12, user decision — the bars
+  bounce linearly instead of easing at the ends), and that DELETED the 64-entry
+  quarter-wave LUT outright:** the mirror already existed for the sine, so the
+  magnitude collapsed to `{sq_i, 1'b0}`, which is a wire rather than logic. Three
+  bars, not five. Both changes were asked for as area savings and both are; the LUT
+  was the larger of the two.
+  ⛔ **THE SCOPE WAS BUILT AND THEN DROPPED (2026-09-11, user decision — be
+  conservative with logic).** It was a two-trace oscilloscope, L above R, triggered on
+  L's rising zero crossing, storing precomputed screen ROWS (360 × 20 bits) rather than
+  samples so the display path only compared. It worked. **What it cost was MEASURED,
+  not estimated:** synthesising `cdda_viz` alone with `mode` tied to each constant (so
+  Quartus prunes the other arms) gives copper ~120, scope ~105, xor ~60 ALMs — and the
+  scope additionally owned **one whole M10K**. With RAM at 90 % and the design in the
+  congestion regime, that memory block was the expensive half.
+  ⛔ **AND THE XOR PATTERN WENT TOO (2026-09-12, same reason): ~60 ALMs on its own,
+  but it was the ONLY per-PIXEL consumer**, so dropping it also retired the
+  `a_xv`/`a_yv`/`b_m` coordinate pipeline and the `sx`/`sy`/`tc` scroll registers —
+  copper's colour is a per-LINE register, so nothing rides the pipeline now and its
+  two stages exist purely to match `idle_logo`'s 3-cycle latency.
+  ⚠ **The cycle is now TWO stops, and the LOGO is mode 0 = the default** (`viz_mode`
+  wraps at 1). `viz_mode` is still 2 bits because emu passes it straight through, so
+  it MUST be wrapped explicitly: letting the counter roll on its width leaves dead
+  modes in the cycle and Angle lands on a blank screen, which reads as the player
+  having hung. `cdda_screen_tb` `[3b]` is RED-proven against exactly that mutation.
+  ★★ **AND THE FIRST HONEST COST FOR THE WHOLE CD FEATURE, measured on the reclaimed
+  netlist (`dev-cddaphys5`, SEED 9 first roll, clk_dec 96.51/91.70 at 89 % ALM):
+  +1,046 synthesis ALUTs / +659 ALMs / +1 M10K** over main's reclaim fit — `cdda_viz`
+  414, `cdda_toc` 281, `cdda_screen` 5, ~346 for the reader's WAV walk and glue
+  (`lin_rate` and `lpcm_unpack` are NOT CD-only and are excluded). ⚠ **The reclaim
+  audit's "cutting the CD player would have recovered ~300 ALMs" was HALF the true
+  figure and should not be quoted** — it predates the visualizers, and `cdda_viz` alone is
+  414. Every earlier CD fit sat at 98–99 % ALM, where packing variance swamped the
+  signal; this is the first uncongested one.
+  ★ **Gate `bench/dvd/cdda_viz_tb.sv` checks RENDERED PIXELS** — full coverage, one
+  colour per line, bar cores that MOVE between frames, and **exactly three bars**.
+  ⚠ **That bar count is runs of the 3-line WHITE CORE, MAXIMISED over six frames, and
+  both halves were learned by getting it wrong:** 31-line bar BODIES overlap, so two
+  adjacent bars merge and a body-run count reads 2; and with a TRIANGLE two bars can
+  land on the same row outright at particular phases. A single-frame exact count is
+  therefore flaky by construction — the max over several phases is stable and still
+  fails if the bar count changes.
+  ⛔ **EJECTING A DISC DID NOT RETURN THE CORE TO IDLE (2026-09-12, user report), and
+  MAIN WAS NOT AT FAULT** — its own log shows the eject detected, the slot unmounted
+  and `status[0]` pulsed, which is exactly what that instrumentation exists to settle.
+  `dvd_iso_reader` cleared `cdda_mode` ONLY in its `start` branch, and issue #48 gates
+  `start_streaming` on a non-zero `img_size`; **an eject arrives as a ZERO-SIZE
+  mount**, so `start` never fired — and the bit was not in the reset branch either
+  (`iso_mode` was; `cdda_mode`/`raw_mode` were the odd ones out). `emu.sv`'s
+  `logo_vis` then kept taking its CD arm, which ignores `media_seen`, so the screen
+  stayed on the visualizer and the reset looked inert. Fixed at BOTH ends: the reader
+  resets `cdda_mode`/`raw_mode`/`wav_bad`, and the screen arm is gated on `media_seen`
+  (`cd_screen`) so a stale mode can never strand the display on its own. Gate:
+  `wav_probe_tb` **TEST 8**, RED-proven (pre-fix reader reports `cdda=1` surviving the
+  reset) and carrying a precondition so it cannot pass vacuously.
+  ⚠ **Making the logo the default would have MASKED this** — `viz_logo` is 1 after a
+  reset, so the screen looks right while `cdda_mode` stays high and every other
+  consumer of it (HUD `force_show`, `ticks_off`, the transport's CD arms, `pass_mode`
+  suppression) remains wrongly in CD mode. Fix the bit, not the symptom. ⚠ **The retired scope arm left a lesson worth more
+  than the feature:** its "continuity" check first counted lit COLUMNS, which a dotted
+  plot also lights, so it passed a plot that drew dots instead of a line; counting
+  PIXELS (~4,700 continuous vs ~720 dotted) is what made it able to fail. Suite:
+  `run_wav.sh` (also runs `cdda_toc_tb`).
+  🔧 **`dev-cddaphys3`:** the FF/REW seek preview showed DISC time — `lin_rate`'s
+  `lin_blk`/`total_blk` were re-based to the track but its `prev_rbn` sibling was not
+  (D-pad previews were fine: `seek_time` reads the already track-relative clock). And
+  the HUD (status line + bar) is hidden over a visualizer, shown over the logo, Display
+  toggles — new `dvd/cdda_screen.sv` + bench; the HUD's own Display toggle is gated off
+  on a CD so there is ONE copy of that state. ⏳ HW-untested.
+  🔧 **`dev-cddaphys4`: track skips STACK** (user report — N quick presses moved ONE
+  track). emu's debounce already counted presses into `chap_mag`; `cdda_toc` simply
+  never took it. It now resolves "N tracks" to an INDEX and captures that entry as the
+  single-port table walk passes it (≤ two sweeps), with the restart-counts-as-one rule;
+  the HUD projection counts tracks and reads `cdda_toc.past_start`, so preview and
+  resolver share ONE rule. DVD bit-identical. `cdda_toc_tb` [7]. ⏳ HW-untested.
+  ★★ **`cdda_toc` DID NOT FIT ON ITS FIRST WRITE, AND IT IS THE `parse_buf` LESSON
+  VERBATIM.** Async-read of the track-start array at **5 sites** → 3733 ALUTs / 3463
+  regs / **0 block memory bits**, and the fitter wanted 4558 LABs against 4191 — the
+  LUT-RAM explosion this file has documented since 2026-07-05, walked into anyway.
+  Rewritten around **ONE synchronous read port** with a 3-deep pipeline
+  (`rd`/`rd_p`/`rd_pp`, address history `ra_q`): **214 ALUTs**. ⚠ The off-by-one that
+  fell out of it: `first_pass` must clear on **`ra_q`**, not `ra`, or the last track's
+  notch is dropped — caught by the bench.
+  ★ **The bench found a real never-garbage defect:** entry RAM was written as bytes
+  ARRIVED, so a malformed upload corrupted track starts while `toc_valid` stayed set
+  from the previous good table. The table is invalidated at DOWNLOAD START (the
+  `idle_logo` rule).
+  ⚠⚠ **FOUR separate `bench-that-cannot-fail` instances in ONE bench**, all found and
+  fixed by mutation: (a) malformed uploads carrying identical payload, so "unchanged"
+  was indistinguishable from "changed to the same value"; (b) a "truncated" blob whose
+  length was exactly valid for its own declared track count; (c) scenarios that ran
+  AFTER an earlier one had invalidated the table; (d) a one-cycle `skip_fire` pulse
+  sampled 4 cycles late. Gate: `bench/dvd/cdda_toc_tb.sv`, golden
+  `tools/cdda_toc_ref.py`, host-side `main/tests/dvd_cdda_test.cpp` (the 2048/2352
+  phase cycle repeats every **128 sectors / 147 blocks** — gcd 16 — and the mapping is
+  pure arithmetic, so it needed no `#define` seam).
+  ★ **Step 0 was an SG_IO smoke test on the board** (`main/tools/cdda_smoke.c`) and it
+  earned its place: whether the drive honours **`READ CD` (0xBE)** audio reads was the
+  only real unknown. `cdb[1]=0x04` (expected sector type CD-DA), `cdb[9]=0x10` (user
+  data only ⇒ exactly 2352 B/sector of raw PCM, little-endian, **no byte swap** — that
+  is a CHD thing); `CDROMREADRAW` (MSF, `lba+150`) is the fallback.
+  ⚠ **`CH 0/ 0` on the HUD looked like a bug and was not** — `Debug Overlay=On`
+  repurposes that field as `{PGCN, VTS}`. Check the saved config before "fixing" a
+  readout.
+  ★ **The fork CAN hand a CD to us**: `menu_audio_mgl()` in
+  Main_MiSTer_Physical_Disc maps `[physical_disc] AUDIOCD=` onto a core MGL and needs
+  only a one-line `DVD → "DVD.mgl"` arm; the DVD handoff already releases the drive
+  before `xml_load`, so our `dvd_phys_tick()` claims it. Not a blocker for a disc
+  inserted while we are already running.
+  Design **`docs/cdda.md`**; manual `site/content/formats/physical-discs.md`.
+
 - 🔧 **SINGLE-RASTER ANALOG OUTPUT — the second raster (`re_interlace`/VGA2) is
   RETIRED; the interlaced MAIN raster carries the N64 half-line and drives the CRT
   directly (2026-09-03, branch `feature/single-raster-analog`). ✅ HW-CONFIRMED on the

@@ -66,6 +66,17 @@ void InfoMessage(const char *, int = 2000, const char * = 0) {}
 char *getFullPath(const char *) { static char p[8] = ""; return p; }
 int dvd_launch_ui_busy(void) { return 0; }
 
+// The CD-DA source shares this module's front door (see the two-source note in
+// dvd_css.cpp), so dvd_css.cpp references it even on the pure-CSS path. Stubbed
+// out here so this test stays about CSS: cd_audio_probe() says "no audio CD", so
+// find_audio_cd() never finds one and dvd_cdda_open() is never reached at all.
+// ⚠ dvd_cdda_open() returns 0 on SUCCESS (see dvd_cdda.h), so the stub returns 1.
+int cd_audio_probe(int) { return 0; }
+int dvd_cdda_open(int, const char *) { return 1; }
+uint64_t dvd_cdda_size(void) { return 0; }
+int dvd_cdda_read(void *, uint32_t, uint32_t) { return -1; }
+void dvd_cdda_close(void) {}
+
 #include "dvd_css.cpp"
 
 // --------------------------------------------------------------- fake libdvdcss

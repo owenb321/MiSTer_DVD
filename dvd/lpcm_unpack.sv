@@ -42,10 +42,18 @@ module lpcm_unpack #(
     // boundaries so a mid-group change can't desync the assembler.
     input  logic [1:0]  quant,
 
-    // byte input (raw BE PCM, sub-header already stripped)
+    // Byte order: 0 = big-endian (DVD LPCM, the original behaviour, bit-for-bit
+    // unchanged), 1 = little-endian (WAV / CD-DA raw PCM: L.lo L.hi R.lo R.hi).
+    // Static per source; only meaningful with quant=0 (16-bit).
+    input  logic        le,
+
+    // byte input (raw PCM, sub-header already stripped)
     input  logic        wr_en,
     input  logic [7:0]  wr_data,
     output logic        full,            // pair FIFO can't accept another pair
+    output logic        afull,           // level within 64 pairs of full — the
+                                         // CD-DA reader backpressure tap (stalls
+                                         // sd block requests ahead of hard-full)
 
     // audio-domain pop (single clock here: aud_ce is a clk-domain enable)
     input  logic        aud_ce,          // ~48 kHz sample tick (1-cycle enable)
@@ -81,7 +89,8 @@ module lpcm_unpack #(
     wire        fifo_full = (level == DEPTH[FIFO_AW:0]);
 
     // We must be able to take a full pair; `full` warns the producer one slot out.
-    assign full = fifo_full;
+    assign full  = fifo_full;
+    assign afull = (level >= (DEPTH[FIFO_AW:0] - 64));
 
     // assemble bytes -> pair_wr
     always_ff @(posedge clk) begin
@@ -96,14 +105,18 @@ module lpcm_unpack #(
                 if (gbyte == 4'd0) glen <= glen_next;
                 // Data bytes 0-7: assemble two {L,R} pairs (phase gbyte[1:0]).
                 // Bytes >=8 are trailing low bits — consumed and discarded.
+                // le=1 swaps the within-sample byte order: phases 0/1 deliver
+                // L.lo then L.hi (held cross-wise so samp_l = {lhi,llo} stays
+                // right for both orders), phase 2 holds R's FIRST byte in rhi
+                // (its hi byte in BE, its LO byte in LE), phase 3 completes R.
                 if (gbyte < 4'd8) begin
                     case (gbyte[1:0])
-                        2'd0: lhi <= wr_data;
-                        2'd1: llo <= wr_data;
+                        2'd0: if (le) llo <= wr_data; else lhi <= wr_data;
+                        2'd1: if (le) lhi <= wr_data; else llo <= wr_data;
                         2'd2: rhi <= wr_data;
                         2'd3: begin
                             samp_l  <= {lhi, llo};
-                            samp_r  <= {rhi, wr_data};
+                            samp_r  <= le ? {wr_data, rhi} : {rhi, wr_data};
                             pair_wr <= 1'b1;   // push assembled pair next cycle
                         end
                     endcase

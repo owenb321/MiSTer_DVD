@@ -353,13 +353,14 @@ def decode(frame, tol=8):
 def parse_status(status):
     """Pull the structured fields out of the decoded status line.
 
-    Layout (transport_hud.sv:8-16): '[icon] H:MM:SS/H:MM:SS CH n/N'.
+    Layout (transport_hud.sv:8-16): '[icon] H:MM:SS/H:MM:SS CH n/N', with the
+    label reading 'TR' instead of 'CH' on an audio CD (the n/N is a track).
     Times are BCD on the core side, so digits map straight to glyph indices --
     the decode is a lookup, not an OCR guess.
     """
     text = status['text']
     fields = {'icon': None, 'elapsed': None, 'total': None,
-              'chapter': None, 'chapters': None}
+              'chapter': None, 'chapters': None, 'label': None}
     for g in status['glyphs'][:2]:
         if g in ICON_NAME:
             fields['icon'] = ICON_NAME[g]
@@ -369,15 +370,18 @@ def parse_status(status):
         fields['elapsed'] = times[0]
     if len(times) >= 2:
         fields['total'] = times[1]
-    m = re.search(r'CH\s*(\d+)\s*/\s*(\d+)', text)
+    m = re.search(r'(CH|TR)\s*(\d+)\s*/\s*(\d+)', text)
     if m:
+        # 'TR' = an audio CD's track; 'chapter' keeps its name so callers that
+        # predate CDs keep working, and 'label' says which one it was.
+        fields['label'] = m.group(1)
         # With O[2] on, hud_dbg repurposes this field as {reader PGCN, VTS}
         # (dvd/emu.sv:4953-4954) -- same glyphs, different meaning, so the
         # caller decides. We report both readings rather than guessing.
-        fields['chapter'] = int(m.group(1))
-        fields['chapters'] = int(m.group(2))
-        fields['dbg_pgcn'] = int(m.group(1))
-        fields['dbg_vts'] = int(m.group(2))
+        fields['chapter'] = int(m.group(2))
+        fields['chapters'] = int(m.group(3))
+        fields['dbg_pgcn'] = int(m.group(2))
+        fields['dbg_vts'] = int(m.group(3))
     return fields
 
 

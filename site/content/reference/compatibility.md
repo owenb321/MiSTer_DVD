@@ -12,6 +12,8 @@ What plays, what does not, and what is untested. Current as of **v0.6.1**.
 | **UDF-only image** | **Not supported** — reports `UNSUPPORTED IMAGE` |
 | **Video CD / SVCD** | [Basic playback](../formats/vcd-svcd.md) — no menus/PBC |
 | **`.VOB` / `.mpg` / `.m2v`** | Linear playback, no navigation |
+| **`.wav` audio file** | 16-bit stereo PCM at 44.1/48 kHz only — audio, no picture |
+| **Audio CD (physical)** | Plays with track skip and a progress bar, needs [`MiSTer_DVDcss`](../formats/physical-discs.md#audio-cds) |
 
 !!! note "ISO9660 only"
     Practically every DVD-Video image is ISO9660 (usually with a UDF structure alongside
@@ -45,6 +47,10 @@ See [Analog and CRT output](../video/analog-crt.md#native-240p-for-vcds-and-mpeg
 Covered in full on [Audio formats](../audio/formats.md). In short: AC-3 (all channel modes)
 and MP2 and LPCM decode in the core; **DTS is passthrough-only**; AC-3 1+1 dual mono is
 deliberately refused; the MPEG-2 multichannel MP2 extension is unverified.
+
+**WAV files** play through the same PCM path (16-bit stereo, 44.1/48 kHz); unsupported
+shapes are refused rather than played as noise, and they play as PCM on both outputs
+whichever way `Audio Out` is set.
 
 Two limits worth knowing: **LPCM is 48 kHz stereo**, and 20/24-bit tracks play but are
 truncated to 16 bits, so there is real fidelity loss on high-bit-depth music discs. 96 kHz

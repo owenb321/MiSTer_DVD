@@ -96,6 +96,17 @@ if [ "$RED" -eq 1 ]; then
         "s/^\tteardown_to_idle(now);$/\t;/" \
         phys-eject-order
 
+    # ---- dvd_cdda: the drive fd's lifecycle ------------------------------
+    # The fd handed to dvd_cdda_open() is OURS from then on. Dropping it without
+    # closing leaks one descriptor on /dev/srN per mount, and the kernel then
+    # refuses CDROMEJECT with EBUSY: on the rig this read as "eject unmounts the
+    # disc and returns to the idle logo, but the tray never opens". Nothing
+    # exercised the fd lifecycle before 2026-09-22, which is why it shipped.
+    red_case dvd_cdda.cpp dvd_cdda_test.cpp \
+        "the fd was closed exactly once" \
+        "s/^\tif (g_fd >= 0) close(g_fd);$/\t;/" \
+        cdda-fd-leak
+
     # ---- dvd_remote: the Eject/Volume request protocol -------------------
     # Every one of these is a way the polled protocol degrades into "acts on a
     # level", which is what makes one press eject repeatedly.
@@ -332,9 +343,14 @@ if [ "$RED" -eq 1 ]; then
     # sentinel. A VCD/SVCD would then take the CSS-decrypt path (which
     # dvd_css_open() would fail on a disc with no VIDEO_TS) instead of the
     # raw VCD/SVCD source.
+    # ⚠ The anchor is the THREE-WAY pick (`is_vcd ? VCD : DVD`), not the old
+    # two-way `is_dvd_video ? DVD : VCD`: an audio CD shares the DVD-Video
+    # sentinel, so the expression had to be rewritten around is_vcd when the
+    # CD-DA probe landed. The harness caught the stale anchor as "mutation
+    # matched nothing", which is exactly what that guard is for.
     red_case dvd_phys.cpp dvd_phys_test.cpp \
         "want the VCD sentinel" \
-        "s/is_dvd_video ? DVD_PHYS_SENTINEL : DVD_PHYS_VCD_SENTINEL/DVD_PHYS_SENTINEL/" \
+        "s/is_vcd ? DVD_PHYS_VCD_SENTINEL : DVD_PHYS_SENTINEL/DVD_PHYS_SENTINEL/" \
         phys-vcd-wrong-sentinel
     echo
 fi

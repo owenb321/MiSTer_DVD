@@ -22,6 +22,8 @@
 #include <linux/fs.h>
 
 #include "dvd_css.h"
+#include "dvd_cdda.h"
+#include "dvd_detect.h"
 #include "dvd_launch.h"
 #include "../../menu.h"      // ProgressMessage() — on-screen feedback during key crack
 #include "../../file_io.h"   // getFullPath() — resolve MiSTer's storage-relative mount path
@@ -120,6 +122,31 @@ static int load_library(void)
 // would collide with libdvdcss (it needs its own handle for the CSS ioctls).
 // The disc may report CDS_DRIVE_NOT_READY while it spins up, so a not-ready drive
 // with media is accepted as a fallback and left for dvdcss_open to spin up.
+// Scan for a drive holding a disc with audio tracks, and hand back an OPEN fd so
+// the caller can read the TOC without re-opening (and racing a tray change).
+//
+// ⚠ Deliberately does not touch css_size, unlike find_dvd_device() above: the
+// CD-DA image size is synthetic (44 + n*2352), not the raw device size.
+static int find_audio_cd(char *out, int outsz)
+{
+	for (int i = 0; i < 8; i++)
+	{
+		char path[32];
+		snprintf(path, sizeof(path), "/dev/sr%d", i);
+		int fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+		if (fd < 0) continue;
+
+		if (ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT) == CDS_DISC_OK &&
+		    cd_audio_probe(fd))
+		{
+			snprintf(out, outsz, "%s", path);
+			return fd;      // caller owns it
+		}
+		close(fd);
+	}
+	return -1;
+}
+
 static int find_dvd_device(char *out, int outsz)
 {
 	char fallback[32] = "";
@@ -552,9 +579,50 @@ static void build_vob_list(void)
 
 static void seek_log_arm(void);   // HIL seek trace, see dvd_css_read()
 
+// ---------------------------------------------------------------------------
+// TWO SOURCES, ONE FRONT DOOR.
+//
+// user_io.cpp knows exactly one physical-disc API -- open / open_image / read /
+// size / close / active / tick -- and reaches it through ONE mount sentinel.
+// Routing an audio CD through the same six functions is what keeps
+// integration/apply_integration.py untouched by this feature.
+//
+// ⚠ THE ORIGINAL REASON FOR THIS IS NO LONGER TRUE, and it is written down so
+// that nobody acts on it. This note used to say a second sentinel was
+// impossible, because dvd_phys_note_mount() special-cased exactly ONE and
+// treated any other mount as a foreign image taking slot 0 -- which would have
+// cleared `mounted` the instant we mounted. Main's physical VCD/SVCD work has
+// since taught note_mount TWO sentinels (DVD_PHYS_SENTINEL and
+// DVD_PHYS_VCD_SENTINEL), so a third is now perfectly possible.
+//
+// What still holds is the INTEGRATION cost: every added step in
+// apply_integration.py -- whose anchors include a doubly-occurring FileSeek line
+// and a regex step -- is another way for a stock-Main version bump to break the
+// build. Re-homing CD-DA onto its own sentinel is therefore a tidy-up that would
+// match the VCD/VR shape, not a fix for anything.
+// ---------------------------------------------------------------------------
+static int src_cdda = 0;      // 1 while the open source is an audio CD
+
 int dvd_css_open(void)
 {
-	if (css || raw_fd >= 0) return 1;
+	if (css || raw_fd >= 0 || src_cdda) return 1;
+
+	// An audio CD first: it is decided from the TOC alone, and a music disc has
+	// no ISO9660 volume for the CSS path to find anyway.
+	//
+	// ⚠ find_dvd_device() must NOT run for this source. It sets css_size from
+	// BLKGETSIZE64 as a side effect of scanning, and that is the RAW DEVICE size
+	// -- whereas the core clamps the WAV data chunk to the size we report, so it
+	// has to be exactly 44 + n*2352.
+	{
+		char cd[32];
+		int  fd = find_audio_cd(cd, sizeof(cd));
+		if (fd >= 0)
+		{
+			if (!dvd_cdda_open(fd, cd)) { src_cdda = 1; return 1; }
+			close(fd);
+		}
+	}
 
 	char dev[32];
 	if (!find_dvd_device(dev, sizeof(dev)))
@@ -714,7 +782,15 @@ int dvd_css_open_image(const char *path)
 
 int dvd_css_active(void)
 {
-	return css != NULL || raw_fd >= 0;
+	return css != NULL || raw_fd >= 0 || src_cdda;
+}
+
+// Is the open source an audio CD rather than a DVD? dvd_report needs this: it
+// hands /dev/srN to a tool that walks 2048-byte ISO sectors, which on a music
+// disc would produce a broken bundle instead of the honest "nothing to bundle".
+int dvd_css_is_cdda(void)
+{
+	return src_cdda;
 }
 
 // Called every user_io_poll. Re-asserts the "encrypted disc, install libdvdcss"
@@ -747,6 +823,7 @@ void dvd_css_tick(void)
 
 uint64_t dvd_css_size(void)
 {
+	if (src_cdda) return dvd_cdda_size();
 	return (css || raw_fd >= 0) ? css_size : 0;
 }
 
@@ -788,6 +865,7 @@ static void seek_log(uint32_t lba, uint32_t count, int vi)
 
 int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
 {
+	if (src_cdda) return dvd_cdda_read(buf, lba, count);
 	if (raw_fd >= 0) return raw_read10(raw_fd, lba, buf, (int)count);   // no-libdvdcss fallback
 	if (!css) return -1;
 
@@ -884,6 +962,7 @@ int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
 
 void dvd_css_close(void)
 {
+	if (src_cdda) { dvd_cdda_close(); src_cdda = 0; }
 	if (css && p_close) p_close(css);
 	if (raw_fd >= 0) close(raw_fd);
 	css = NULL;
