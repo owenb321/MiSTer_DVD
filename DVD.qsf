@@ -1441,10 +1441,20 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # and this ledger's own history (SEED 7 swinging 18 MHz on one netlist) is exactly
 # why a fit result is read as a fit result. Nothing here is marginal.
 
-# 2026-09-21 (feature/cdda-physical REBASED onto post-v0.6.1 main, dev-cddaphys7):
-# NOT YET FIT. The SEED below is main's, inherited -- this netlist has never been
-# placed, and CORE_VERSION lives inside CONF_STR, so it matches neither the
-# dev-cddaphys6 fit above nor main's. Roll it; if it misses, tools/seed_sweep.sh.
+# 2026-09-22 (feature/cdda-physical REBASED onto post-v0.6.1 main, dev-cddaphys7):
+# SEED 9 held FIRST roll a SEVENTH time on this branch -- clk_dec 91.17 @100C /
+# 90.60 @-40C (gate 86.0, PASS both corners, 4.6 MHz of margin at the COLD corner,
+# which is the one that usually binds) at 94% ALM (39,239 needed), registers 52,276,
+# RAM 501/553 (91%), DSP 95/112. Build DVD_cddaphys7_20260922_0453.rbf, commit
+# 59db186, not marginal.
+# ⚠ DO NOT read a CD-stack cost out of the 37,222 -> 39,239 step against the
+# dev-cddaphys6 entry above: main grew by 282 commits in between, so that delta is
+# mostly main's, not this feature's. The measured feature cost (+937 ALUTs / +586
+# ALMs needed / +1 M10K) comes from the 2026-09-12b entry, which compared against a
+# SAME-SEED fit of main. No such baseline fit was run for this rebase, so there is
+# no honest like-for-like number here -- and quoting one anyway is exactly the
+# mistake the "measure reclaim in synthesis ALUTs, never the headline" rule exists
+# to stop.
 # 282 commits of main landed while this branch was shelved -- physical VCD/SVCD, the
 # screensaver/Stop overlay gate, frame step, native 240p, the scrub-ARROW HUD readout
 # (the "xN" tier field is gone), the field-order fix and the ALM reclaim.
