@@ -55,6 +55,18 @@ static int read_frames(int lba, int count, uint8_t *dst)
 	return 0;
 }
 
+// ⚠ <unistd.h> FIRST, before the macro: dvd_cdda.cpp includes it, and with the
+// macro already in force its own `extern "C" int close(int)` would be rewritten to
+// declare test_close with C linkage, clashing with the C++ one below. Pulling the
+// header in here means the module's include is a no-op behind its guard.
+#include <unistd.h>
+
+// close() is counted so the fd LIFECYCLE can be asserted. The module calls it
+// in exactly one place (dvd_cdda_close), so this macro cannot catch anything else.
+static int g_closed_n = 0, g_closed_fd = -1;
+static int test_close(int fd) { g_closed_n++; g_closed_fd = fd; return 0; }
+#define close(fd) test_close(fd)
+
 #include "dvd_cdda.cpp"
 
 // A disc shaped like a real one: tracks are NOT adjacent on disc (a 150-sector
@@ -262,6 +274,27 @@ int main(void)
 		}
 		check("[8g] every start is its track's block, increasing", bad, 0);
 		g_open = 0;
+	}
+
+	// ---- [9] close() RELEASES the drive fd, it does not just forget it -----
+	// dvd_cdda_open() takes ownership of the fd handed to it, so dvd_cdda_close()
+	// owes a close(). Forgetting leaks a descriptor on /dev/srN per mount and the
+	// kernel then refuses CDROMEJECT with EBUSY -- which reaches a user as "eject
+	// unmounts the disc but the tray never opens". Found on hardware 2026-09-22;
+	// nothing here exercised the fd lifecycle before, which is why it survived.
+	printf("=== [9] close() releases the drive fd ===\n");
+	{
+		g_closed_n = 0; g_closed_fd = -1;
+		g_fd = 77; g_open = 1;
+		dvd_cdda_close();
+		check("[9a] the fd was closed exactly once", g_closed_n, 1);
+		check("[9b] ...and it was the drive fd", g_closed_fd, 77);
+		check("[9c] no longer open", dvd_cdda_active(), 0);
+		// A second close must not close anything again: g_fd is -1 now, and a
+		// double close would hand a reused descriptor number to the kernel.
+		g_closed_n = 0;
+		dvd_cdda_close();
+		check("[9d] an idle close touches no fd", g_closed_n, 0);
 	}
 
 	printf(fail ? "dvd_cdda_test: FAILED\n" : "dvd_cdda_test: PASSED\n");

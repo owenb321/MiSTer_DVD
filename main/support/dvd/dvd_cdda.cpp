@@ -274,6 +274,18 @@ void dvd_cdda_close(void)
 {
 	if (g_scratch) { free(g_scratch); g_scratch = 0; }
 	memset(&g_toc, 0, sizeof(g_toc));
+	// ⚠ THE FD IS OURS TO CLOSE. dvd_cdda_open() takes ownership on success --
+	// its caller closes only on failure -- and g_fd is assigned in the same breath
+	// as g_open on the ONE success path, so it is -1 unless we own it. A guarded
+	// close therefore cannot double-close.
+	// This used to just drop it, which leaked one descriptor on /dev/srN per mount
+	// and made the kernel refuse CDROMEJECT with EBUSY. MEASURED on the rig
+	// 2026-09-22: the eject button unmounted the disc and returned the core to the
+	// idle logo, but the tray never opened ("tray would not open on /dev/sr3
+	// (errno 16)"), and two stale fds were visible in the running Main's /proc fd
+	// table. A manual eject from a separate process failed for the same reason,
+	// which is what localised it to a held descriptor rather than to the drive.
+	if (g_fd >= 0) close(g_fd);
 	g_fd = -1;
 	g_open = 0;
 	g_dev[0] = 0;

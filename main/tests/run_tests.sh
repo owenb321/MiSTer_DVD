@@ -96,6 +96,17 @@ if [ "$RED" -eq 1 ]; then
         "s/^\tteardown_to_idle(now);$/\t;/" \
         phys-eject-order
 
+    # ---- dvd_cdda: the drive fd's lifecycle ------------------------------
+    # The fd handed to dvd_cdda_open() is OURS from then on. Dropping it without
+    # closing leaks one descriptor on /dev/srN per mount, and the kernel then
+    # refuses CDROMEJECT with EBUSY: on the rig this read as "eject unmounts the
+    # disc and returns to the idle logo, but the tray never opens". Nothing
+    # exercised the fd lifecycle before 2026-09-22, which is why it shipped.
+    red_case dvd_cdda.cpp dvd_cdda_test.cpp \
+        "the fd was closed exactly once" \
+        "s/^\tif (g_fd >= 0) close(g_fd);$/\t;/" \
+        cdda-fd-leak
+
     # ---- dvd_remote: the Eject/Volume request protocol -------------------
     # Every one of these is a way the polled protocol degrades into "acts on a
     # level", which is what makes one press eject repeatedly.
