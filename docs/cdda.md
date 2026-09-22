@@ -682,6 +682,41 @@ half is blocked by something outside this branch, on this rig, and wants its own
 investigation. It is probably also why the 2026-09-13 confirm saw a tray open on
 `/dev/sr0` and this round did not on `sr3`.
 
+### Open: Display does not hide the HUD while a CD is PAUSED
+
+**Measured 2026-09-22.** During playback Display behaves exactly as designed — it
+hides the status line, it stays hidden, a track skip still pops it briefly and it
+lapses back, and a second press restores it. **While PAUSED, both presses leave it
+visible.**
+
+The mechanism is an interaction between two individually-correct decisions:
+
+* `emu.sv:6420` masks Display out of the HUD on a CD
+  (`.display_edge (display_edge & ~cdda_mode_w)`) because `cdda_screen` owns that
+  state and two copies would be free to disagree;
+* main's frame-step work made `pause_show` — a latch toggled by that very
+  `display_edge` — the SOLE owner of visibility during a pause
+  (`pause_q ? pause_show : (force_show | persist_q | ...)`).
+
+Masked, `pause_show` can never toggle on a CD, so it sits at its seeded value.
+
+⚠ **This is NOT a regression from the rebase, checked rather than assumed.** The
+pre-rebase branch had `vis = (force_show | persist_q | pause_q | ...)`, where
+`pause_q` is an OR term forcing the HUD on unconditionally during a pause — Display
+did nothing there either. The behaviour is unchanged; what changed is that the DVD
+path now DOES toggle during a pause, so the CD is newly inconsistent with it. It also
+contradicts the recorded decision "Display toggles it in any mode", which predates the
+frame-step change and was never reconciled with it.
+
+⛔ **DEFERRED TO THE CHAPTER-TABLE WORK (user decision 2026-09-22), not fixed here.**
+The fix is an ownership decision, not a one-liner: the CD wants ONE source of truth
+for "is the HUD up", read in every state including a pause. The obvious gate is
+`trk_mode`, but "this is an audio CD" is the wrong fact — the real one is "Display is
+routed to another owner" — and keying on the first is the issue-#81 predicate trap. It
+belongs with the generic chapter table because that work already re-cuts this seam:
+`trk_mode` stops meaning "CD" and starts coming from the table's `kind` byte, so the
+HUD's ownership inputs get decided there anyway.
+
 ⚠ Two smaller things seen in the same log and worth fixing on the way past:
 `DVD_REMOTE: eject button -- optical disc unmounted + tray opened` is printed
 **unconditionally**, so it claimed success in the very log line above the failure; and
