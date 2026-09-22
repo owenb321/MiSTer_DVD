@@ -45,6 +45,12 @@ module dvd_audio_decode #(
     input  logic        rst_n,
     input  logic        enable,          // O5 "Audio" toggle (default On)
     input  logic        pause,           // gamepad transport: freeze audio (hold, silence)
+    // dvd/flush_ctl.sv's aud_resync mirrored (aud_resync_o): rst_n (=aud_rst_n) is
+    // asserted for this GENTLE cause (an audio-track switch, or a display re-anchor
+    // that is not on a seamless cell -- content keeps playing, only the audio phase
+    // resets) as opposed to a HARD cause (aud_flush: seek/mount/jump, a real
+    // discontinuity). Selects instant-cut vs. de-click ramp in the output mux below.
+    input  logic        aud_soft_switch,
 
     // audio_ring read side (FWFT committed byte stream + descriptor FIFO)
     input  logic [7:0]  ring_byte,
@@ -738,26 +744,133 @@ module dvd_audio_decode #(
     );
 
     // ---------------------------------------------------------------------
-    // Output mux: pick the active codec and latch each new sample. The source's
-    // aud_valid pulse (one per aud_ce, asserted the cycle AFTER aud_ce because
-    // pcm_out/lpcm_unpack register it) is the correct "new sample" strobe — do
-    // NOT additionally gate on aud_ce, or the strobe and aud_ce never align and
-    // nothing is ever captured. Between pulses the last sample is held (silence
-    // → DC hold), which the framework samples at its own 48 kHz.
+    // Target mux: pick the active codec and latch each new sample into
+    // tgt_l/tgt_r. The source's aud_valid pulse (one per aud_ce, asserted the
+    // cycle AFTER aud_ce because pcm_out/lpcm_unpack register it) is the
+    // correct "new sample" strobe — do NOT additionally gate on aud_ce, or
+    // the strobe and aud_ce never align and nothing is ever captured.
+    // Between pulses the last sample is held (silence -> DC hold).
+    //
+    // This is exactly the module's original mux (unchanged conditions, same
+    // "reset to 0 / latch on aud_valid" semantics). tgt_nl/tgt_nr is its NEXT
+    // value, computed combinationally, and the output register below follows
+    // THAT, not tgt_l: outside a de-click audio_l <= tgt_nl is the original
+    // register cycle for cycle. ⚠ Following the registered tgt_l instead adds
+    // one clk_sys of latency, which mp2_chain_tb / vcd_chain_tb (they capture
+    // one cycle after aud_valid) report as thousands of sample mismatches.
+    // cdda_mode pins it to the LPCM unpacker regardless of what the (idle)
+    // dispatch FSM last latched.
     // ---------------------------------------------------------------------
-    // cdda_mode pins the mux to the LPCM unpacker regardless of what the
-    // (idle) dispatch FSM last latched.
     wire [1:0] eff_codec = cdda_mode ? T_LPCM : cur_codec;
-    always_ff @(posedge clk) begin
+    reg signed [15:0] tgt_l, tgt_r;
+    logic signed [15:0] tgt_nl, tgt_nr;
+    always_comb begin
+        tgt_nl = tgt_l;
+        tgt_nr = tgt_r;
         if (rst || !enable) begin
+            tgt_nl = '0;
+            tgt_nr = '0;
+        end else if (eff_codec == T_LPCM) begin
+            if (lpcm_aud_valid) begin tgt_nl = lpcm_l; tgt_nr = lpcm_r; end
+        end else if (eff_codec == T_MP2) begin
+            if (mp2_aud_valid)  begin tgt_nl = mp2_l;  tgt_nr = mp2_r;  end
+        end else begin
+            if (ac3_aud_valid)  begin tgt_nl = ac3_l;  tgt_nr = ac3_r;  end
+        end
+    end
+    always_ff @(posedge clk) begin
+        tgt_l <= tgt_nl;
+        tgt_r <= tgt_nr;
+    end
+
+    // ---------------------------------------------------------------------
+    // De-click: a GENTLE reset (aud_soft_switch) must not step the module's
+    // actual audio_l/audio_r pins to 0 in one clk_sys cycle — by the time any
+    // logic outside this module could react to rst_n falling, tgt_l/tgt_r
+    // above has already snapped to 0, so the ramp has to live here, chasing
+    // that target rather than following it directly. A HARD reset
+    // (rst && !aud_soft_switch: a seek/mount/jump/other flush, a real
+    // content discontinuity) keeps today's instant cut.
+    //
+    // Two edges, two arms:
+    //  * RAMP-OUT: aud_soft_switch starts a DECLICK_WIN window, so the old
+    //    track's held sample walks down to the (already 0) target.
+    //  * RAMP-IN: soft_arm stays set from the gentle reset until the FIRST
+    //    new sample lands in tgt_l/tgt_r, and THAT sample restarts the
+    //    window, so 0 -> the new track's level walks up too.
+    // ⚠ A window counted from the reset alone does NOT cover the ramp-in:
+    // after aud_resync the ring is empty, the next frame of the new
+    // substream must come through the demux, and the drain gate then holds
+    // it until the STC reaches its PTS -- tens to hundreds of ms against a
+    // 2.4 ms window. (dvd_audio_decode_tb D5 is that case; D3 runs with the
+    // scheduler off and could not see it.) Waiting while armed costs
+    // nothing: the target is 0 until a sample arrives, so the output is
+    // already at rest. A hard reset disarms.
+    // Outside the window audio_l/r follows tgt_l/tgt_r on the SAME cycle as
+    // before the mux was split: ordinary playback is NEVER slew-limited (a
+    // legitimate full-scale transient can swing the whole 16-bit range
+    // between two consecutive samples).
+    //
+    // DECLICK_STEP=1 LSB/clk_sys cycle covers the full 16-bit range (65535)
+    // in DECLICK_WIN cycles = ~2.43 ms @ 27 MHz — a standard, imperceptible-
+    // as-a-fade de-click time, chosen (like the IEC 61937 pacing counters
+    // elsewhere in this codebase) so one register width IS the divider,
+    // with no extra arithmetic needed to size the window to the step.
+    // ---------------------------------------------------------------------
+    localparam logic [16:0]      DECLICK_WIN  = 17'd65535;
+    localparam logic signed [15:0] DECLICK_STEP = 16'sd1;
+
+    // the target mux's own "a new sample was latched" condition, verbatim
+    wire tgt_upd = !rst && enable &&
+                   ((eff_codec == T_LPCM) ? lpcm_aud_valid :
+                    (eff_codec == T_MP2)  ? mp2_aud_valid  : ac3_aud_valid);
+
+    reg [16:0] declick_win = 17'd0;
+    reg        soft_arm    = 1'b0;
+    always_ff @(posedge clk) begin
+        if (rst && !aud_soft_switch) begin          // hard cause: no ramp either way
+            soft_arm    <= 1'b0;
+            declick_win <= 17'd0;
+        end else if (aud_soft_switch) begin
+            soft_arm    <= 1'b1;
+            declick_win <= DECLICK_WIN;
+        end else if (soft_arm && tgt_upd) begin     // first sample after the switch
+            soft_arm    <= 1'b0;
+            declick_win <= DECLICK_WIN;
+        end else if (declick_win != 17'd0) begin
+            declick_win <= declick_win - 17'd1;
+        end
+    end
+    // aud_soft_switch itself is in the OR: the output follows the NEXT target,
+    // which is already 0 on the switch's first cycle, while soft_arm and
+    // declick_win (registered) only rise a cycle later -- without it that
+    // first cycle is exactly the one-cycle step this exists to remove.
+    wire declicking = aud_soft_switch || soft_arm || (declick_win != 17'd0);
+
+    always_ff @(posedge clk) begin
+        if (!enable) begin
             audio_l <= '0;
             audio_r <= '0;
-        end else if (eff_codec == T_LPCM) begin
-            if (lpcm_aud_valid) begin audio_l <= lpcm_l; audio_r <= lpcm_r; end
-        end else if (eff_codec == T_MP2) begin
-            if (mp2_aud_valid)  begin audio_l <= mp2_l;  audio_r <= mp2_r;  end
+        end else if (rst && !aud_soft_switch) begin
+            audio_l <= '0;                       // hard cause: instant, as before
+            audio_r <= '0;
+        end else if (declicking) begin
+            // DECLICK_STEP is exactly 1 LSB, so a single hop can never overshoot
+            // tgt_l/tgt_r in either direction -- deliberately no saturating
+            // "remaining distance > step" guard, which would need tgt-audio
+            // computed a bit wider than 16 signed bits to avoid overflowing on
+            // the largest possible gap (up to 65535, e.g. tgt=+32767 just after
+            // audio snapped toward -32768). If DECLICK_STEP is ever widened,
+            // add that guard back.
+            audio_l <= (audio_l < tgt_nl) ? audio_l + DECLICK_STEP
+                     : (audio_l > tgt_nl) ? audio_l - DECLICK_STEP
+                     : audio_l;
+            audio_r <= (audio_r < tgt_nr) ? audio_r + DECLICK_STEP
+                     : (audio_r > tgt_nr) ? audio_r - DECLICK_STEP
+                     : audio_r;
         end else begin
-            if (ac3_aud_valid)  begin audio_l <= ac3_l;  audio_r <= ac3_r;  end
+            audio_l <= tgt_nl;                   // ordinary playback: the original register
+            audio_r <= tgt_nr;
         end
     end
 

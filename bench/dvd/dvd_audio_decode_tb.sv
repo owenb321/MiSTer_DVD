@@ -22,6 +22,12 @@
 module dvd_audio_decode_tb;
     logic clk = 0; always #5 clk = ~clk;
     logic rst_n;
+    // De-click seam (harsh-noise-on-track-switch fix): 0 throughout Phases
+    // A-C, so their behaviour and captures are byte-for-byte unchanged --
+    // the module's hard-reset branch (audio_l/r <= 0 on the SAME cycle) is
+    // exactly what fires whenever this stays low. Driven explicitly in the
+    // new de-click phases below.
+    logic aud_soft_switch = 1'b0;
 
     // ring read-side model
     logic [7:0]  ring_byte;
@@ -57,6 +63,7 @@ module dvd_audio_decode_tb;
     // ARM_TIMEOUT_W shrunk 26 -> 13 (8192 clk) so the fallback release is testable.
     dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000), .ARM_TIMEOUT_W(13)) dut (
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .pause(1'b0),
+        .aud_soft_switch(aud_soft_switch),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
         .lpcm_quant(2'd0),           // 16-bit LPCM in this TB
@@ -82,7 +89,7 @@ module dvd_audio_decode_tb;
     integer      committed = 0;       // bytes available on the stream
     integer      rd        = 0;       // stream read pointer
 
-    localparam int NDESC = 16;
+    localparam int NDESC = 24;
     logic [15:0] desc_len  [0:NDESC-1];
     logic [1:0]  desc_type [0:NDESC-1];
     logic [32:0] desc_pts  [0:NDESC-1];
@@ -500,6 +507,175 @@ module dvd_audio_decode_tb;
             else if (dbg_skip_cnt != skip0[7:0] + 8'd2)
                  begin $display("FAIL C9: expected 2 catch-up discards (skip %0d->%0d)", skip0, dbg_skip_cnt); errs=errs+1; end
             else $display("  [C9] mid-play catch-up: 2 stale frames skipped once current audio arrived");
+        end
+
+        // ---------------- Phase D: DE-CLICK on a GENTLE reset ----------------
+        // The output mux used to step audio_l/audio_r to 0 in ONE clk_sys cycle
+        // on any reset (rst || !enable) -- the harsh-noise-on-track-switch
+        // defect. A GENTLE reset (aud_soft_switch, mirroring dvd/flush_ctl.sv's
+        // aud_resync -- a track switch or a non-seamless display re-anchor;
+        // content keeps playing) must now ramp; a HARD one (aud_soft_switch low:
+        // aud_flush/seek/mount/jump, a real discontinuity) must still snap
+        // instantly -- Phase E below is that regression guard.
+        begin
+            integer pre_l, pre_r, post_l, post_r, moved_l, moved_r, tw;
+            sched_en = 1'b0;                                  // free-run: keep the scheduler out of it
+            repeat (3000) @(posedge clk);
+
+            // establish a known, large-magnitude value (stresses both directions:
+            // a big positive L, a big negative R) via an ordinary dispatched frame.
+            mem[committed+0] = 8'h75; mem[committed+1] = 8'h30;   // L = 0x7530 = +30000
+            mem[committed+2] = 8'h8A; mem[committed+3] = 8'hD0;   // R = 0x8AD0 = -30000
+            desc_len[15]  = 4;
+            desc_type[15] = 2'd2;                             // LPCM
+            desc_ptsv[15] = 1'b0;
+            committed = committed + 4;
+            ndesc = 16;
+            tw = 0;
+            while ((audio_l !== 16'sd30000 || audio_r !== -16'sd30000) && tw < 200000)
+                begin @(posedge clk); tw = tw + 1; end
+            if (audio_l !== 16'sd30000 || audio_r !== -16'sd30000)
+                begin $display("FAIL D0: setup frame did not settle (got %0d/%0d)",
+                                $signed(audio_l), $signed(audio_r)); errs=errs+1; end
+            pre_l = $signed(audio_l); pre_r = $signed(audio_r);
+
+            // fire a GENTLE reset. A real aud_rst_n pulse always pairs rst_n low
+            // WITH aud_soft_switch high -- aud_soft_switch IS aud_resync, one of
+            // the two terms ORed into aud_rst_n (flush_ctl.sv).
+            // ⚠ Driven on the NEGEDGE: rst is ~rst_n through a continuous
+            // assign while aud_soft_switch is a direct port, so changing both
+            // on a posedge lets the DUT see soft=0 with rst still 1 -- a
+            // "hard" reset that cannot happen in hardware, where both come
+            // combinationally from one flush_ctl register.
+            @(negedge clk); rst_n = 1'b0; aud_soft_switch = 1'b1;
+            repeat (5) @(negedge clk);
+            rst_n = 1'b1; aud_soft_switch = 1'b0;
+
+            // shortly after release, the output must have moved only a BOUNDED
+            // amount toward silence -- not already snapped to 0. This is the
+            // core claim: a ramp actually happened, not just "eventually 0".
+            repeat (40) @(posedge clk);
+            post_l = $signed(audio_l); post_r = $signed(audio_r);
+            moved_l = pre_l - post_l; moved_r = post_r - pre_r;   // both small & non-negative
+            if (post_l == 0 || post_r == 0)
+                begin $display("FAIL D1: snapped to 0 instead of ramping (got %0d/%0d)", post_l, post_r); errs=errs+1; end
+            else if (moved_l < 0 || moved_l > 64 || moved_r < 0 || moved_r > 64)
+                begin $display("FAIL D1: moved %0d/%0d LSBs in ~45 cycles -- not a bounded ramp", moved_l, moved_r); errs=errs+1; end
+            else $display("  [D1] gentle reset ramps (moved %0d/%0d LSBs, not snapped)", moved_l, moved_r);
+
+            // it must still eventually REACH silence (the target reset to 0 too).
+            tw = 0;
+            while ((audio_l !== 16'sd0 || audio_r !== 16'sd0) && tw < 100000)
+                begin @(posedge clk); tw = tw + 1; end
+            if (audio_l !== 16'sd0 || audio_r !== 16'sd0)
+                 begin $display("FAIL D2: never reached silence (got %0d/%0d)", $signed(audio_l), $signed(audio_r)); errs=errs+1; end
+            else $display("  [D2] gentle reset reached silence after the ramp (%0d cycles)", tw);
+
+            // RAMP-UP: new content arriving (still well inside the de-click
+            // window, DECLICK_WIN=65535 clk_sys cycles) must also fade IN.
+            mem[committed+0] = 8'h60; mem[committed+1] = 8'h00;   // L = 0x6000 = +24576
+            mem[committed+2] = 8'h9F; mem[committed+3] = 8'hFF;   // R = 0x9FFF = -24577
+            desc_len[16]  = 4;
+            desc_type[16] = 2'd2;
+            desc_ptsv[16] = 1'b0;
+            committed = committed + 4;
+            ndesc = 17;
+            tw = 0;
+            while (audio_l == 16'sd0 && audio_r == 16'sd0 && tw < 20000)
+                begin @(posedge clk); tw = tw + 1; end          // wait for it to start moving
+            if (audio_l == 16'sd0 && audio_r == 16'sd0)
+                begin $display("FAIL D3: new content never arrived"); errs=errs+1; end
+            else if (audio_l == 16'sd24576 || audio_r == -16'sd24577)
+                begin $display("FAIL D3: snapped straight to the new target"); errs=errs+1; end
+            else $display("  [D3] new content fades IN (audio_l=%0d audio_r=%0d, target 24576/-24577)",
+                           $signed(audio_l), $signed(audio_r));
+            tw = 0;
+            while ((audio_l !== 16'sd24576 || audio_r !== -16'sd24577) && tw < 100000)
+                begin @(posedge clk); tw = tw + 1; end
+            if (audio_l !== 16'sd24576 || audio_r !== -16'sd24577)
+                begin $display("FAIL D4: never reached the new target"); errs=errs+1; end
+            else $display("  [D4] ramp-in reached the new track's level");
+        end
+
+        // ---------------- Phase E: a HARD reset still snaps (regression guard) ----------------
+        // aud_soft_switch LOW (an aud_flush/seek/mount/jump shape) must keep
+        // today's instant cut -- proves the de-click ramp did not leak onto a
+        // discontinuity, where an instant cut is correct and a laggy one would
+        // feel wrong.
+        begin
+            @(negedge clk); rst_n = 1'b0; aud_soft_switch = 1'b0;
+            // #1 after the edge: audio_l/r update via a non-blocking assignment
+            // in the DUT's always_ff, applied in the NBA region strictly AFTER
+            // this same active-region timestep -- reading right on the edge
+            // would deterministically see the PRE-reset value, one cycle stale.
+            @(posedge clk); #1;
+            if (audio_l !== 16'sd0 || audio_r !== 16'sd0)
+                begin $display("FAIL E1: hard reset did not snap on the same cycle (got %0d/%0d)",
+                                $signed(audio_l), $signed(audio_r)); errs=errs+1; end
+            else $display("  [E1] hard reset (aud_soft_switch=0) still snaps instantly");
+            rst_n = 1'b1;
+            repeat (200) @(posedge clk);
+        end
+
+        // ---------------- Phase D5: LATE new content still fades IN ----------------
+        // The realistic shape, and the one D3 cannot see: with the scheduler on,
+        // the new track's first sample arrives tens to hundreds of ms after the
+        // switch (ring refill + the drain gate's PTS hold), long after a window
+        // counted from the reset has closed. The ramp-in must key on the first
+        // NEW SAMPLE, not on the reset. 80000 cycles > DECLICK_WIN (65535).
+        begin
+            integer tw;
+            @(negedge clk); rst_n = 1'b0; aud_soft_switch = 1'b1;
+            repeat (5) @(negedge clk);
+            rst_n = 1'b1; aud_soft_switch = 1'b0;
+            repeat (80000) @(posedge clk);
+            if (audio_l !== 16'sd0 || audio_r !== 16'sd0)
+                begin $display("FAIL D5: not silent while waiting (got %0d/%0d)", $signed(audio_l), $signed(audio_r)); errs=errs+1; end
+            mem[committed+0] = 8'h4E; mem[committed+1] = 8'h20;   // L = +20000
+            mem[committed+2] = 8'hB1; mem[committed+3] = 8'hE0;   // R = -20000
+            desc_len[17] = 4; desc_type[17] = 2'd2; desc_ptsv[17] = 1'b0;
+            committed = committed + 4;
+            ndesc = 18;
+            tw = 0;
+            while (audio_l == 16'sd0 && audio_r == 16'sd0 && tw < 20000)
+                begin @(posedge clk); tw = tw + 1; end
+            if (audio_l == 16'sd0 && audio_r == 16'sd0)
+                begin $display("FAIL D5: late content never arrived"); errs=errs+1; end
+            else if ($signed(audio_l) > 64 || $signed(audio_r) < -64)
+                begin $display("FAIL D5: late content snapped in (first sample %0d/%0d, target 20000/-20000)",
+                                $signed(audio_l), $signed(audio_r)); errs=errs+1; end
+            else $display("  [D5] content arriving after the reset window still fades IN (%0d/%0d)",
+                           $signed(audio_l), $signed(audio_r));
+            tw = 0;
+            while ((audio_l !== 16'sd20000 || audio_r !== -16'sd20000) && tw < 100000)
+                begin @(posedge clk); tw = tw + 1; end
+            if (audio_l !== 16'sd20000 || audio_r !== -16'sd20000)
+                begin $display("FAIL D5: never reached the late track's level"); errs=errs+1; end
+        end
+
+        // ---------------- Phase E2: a HARD reset DISARMS a pending ramp-in ----------------
+        // A seek landing while a track switch is still waiting for its first
+        // sample is a real discontinuity: what follows must snap in, as before.
+        begin
+            integer tw;
+            @(negedge clk); rst_n = 1'b0; aud_soft_switch = 1'b1;   // gentle: arms the ramp-in
+            repeat (5) @(negedge clk);
+            aud_soft_switch = 1'b0;                          // ...then hard, rst_n held low
+            repeat (5) @(negedge clk);
+            rst_n = 1'b1;
+            repeat (80000) @(posedge clk);
+            mem[committed+0] = 8'h30; mem[committed+1] = 8'h00;   // L = +12288
+            mem[committed+2] = 8'hD0; mem[committed+3] = 8'h00;   // R = -12288
+            desc_len[18] = 4; desc_type[18] = 2'd2; desc_ptsv[18] = 1'b0;
+            committed = committed + 4;
+            ndesc = 19;
+            tw = 0;
+            while (audio_l == 16'sd0 && audio_r == 16'sd0 && tw < 20000)
+                begin @(posedge clk); tw = tw + 1; end
+            if (audio_l !== 16'sd12288 || audio_r !== -16'sd12288)
+                begin $display("FAIL E2: hard reset left the ramp-in armed (first sample %0d/%0d, want 12288/-12288)",
+                                $signed(audio_l), $signed(audio_r)); errs=errs+1; end
+            else $display("  [E2] hard reset disarms a pending ramp-in (content snaps in, as before)");
         end
 
         if (errs == 0) $display("PASS: dvd_audio_decode (LPCM %0d pairs, AC-3 synced=%0b err=%0b, drain gate ok)", cap, ac3_synced, ac3_err);

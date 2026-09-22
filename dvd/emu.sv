@@ -655,7 +655,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cddaphys8"
+`define CORE_VERSION "dev-declick"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -4062,6 +4062,12 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .rst_n       (aud_rst_n),            // audio-only: also resets on an audio-track switch
     .enable      (aud_dec_en),
     .pause       (pause_aud),    // freeze/silence audio while paused OR a seek gesture is held
+    // This aud_rst_n pulse is the GENTLE, audio-only class (flush_ctl's
+    // aud_resync: a track switch, or a non-seamless display re-anchor) and NOT
+    // a hard one (aud_flush: seek/mount/jump) -- selects a de-click ramp instead
+    // of an instant step in the output mux. ~aud_flush because the two levels
+    // can overlap (a seek inside a switch's 64 cycles) and the hard cause wins.
+    .aud_soft_switch (aud_resync & ~aud_flush),
     .ring_byte   (aud_ring_byte),
     .ring_valid  (aud_ring_valid),
     .ring_ready  (dec_ring_ready),

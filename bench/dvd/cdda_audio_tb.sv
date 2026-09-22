@@ -85,7 +85,7 @@ module cdda_audio_tb;
     wire signed [15:0] audio_l, audio_r;
 
     dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dec (
-        .clk(clk), .rst_n(rst_n), .enable(1'b1), .pause(pause),
+        .clk(clk), .rst_n(rst_n), .enable(1'b1), .pause(pause), .aud_soft_switch(1'b0),
         .ring_byte(8'd0), .ring_valid(1'b0), .ring_ready(),
         .frame_valid(1'b0), .frame_len(16'd0), .frame_type(2'd0),
         .lpcm_quant(2'd0),

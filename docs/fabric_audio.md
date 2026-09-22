@@ -73,6 +73,67 @@ DTS/unknown) selects which feeds `audio_l/r`. On each `aud_ce` the registered
 output updates from the active source when its `aud_valid` is high, else holds.
 A DVD track is one audio type at a time, so only one sink is fed in practice.
 
+### De-click on an audio-only reset (2026-09-22, branch `fix/audio-declick-switch`)
+🔧 Sim-proven, 5 mutations each caught by exactly its own arm. ⏳ HW-confirm pending.
+
+**Report:** a harsh "static blip" every time B7 changed the audio track, in **Decode**
+mode. **Cause:** B7 → `aud_switch` → `flush_ctl.aud_resync` (64 cycles) → `aud_rst_n`
+→ `dvd_audio_decode`'s own `rst`, and the output mux did
+`if (rst || !enable) audio_l <= 0` — so whatever the old track was holding stepped to 0
+in **one clk_sys cycle**, then `0` stepped straight to the new track's first sample.
+Two full-scale discontinuities with no ramp is a broadband click. No mute, ramp or
+crossfade existed anywhere in that reset chain, and AC-3→AC-3 and AC-3→LPCM switches
+were treated identically.
+
+**Fix:** the old mux logic now computes a target's NEXT value combinationally
+(`tgt_nl/tgt_nr`). The output register chases that value by **1 LSB per clk_sys cycle**
+while de-clicking and takes it directly otherwise, so outside a de-click it is the
+original register, cycle for cycle. ⚠ **A first cut followed the REGISTERED target and
+added one clk_sys of latency.** It is inaudible, but `mp2_chain_tb`/`vcd_chain_tb`
+capture one cycle after `aud_valid` and reported ~13k/27k mismatches. So
+`aud_soft_switch` must also sit combinationally in `declicking`: the next target is 0 on
+the switch's first cycle, while `soft_arm`/`declick_win` rise a cycle later (mutation M5). 1 LSB/cycle covers the full 16-bit range in `DECLICK_WIN` =
+65535 cycles ≈ **2.43 ms**, so the register width is the divider.
+- **Only a GENTLE reset ramps.** New input `aud_soft_switch` = emu's
+  `aud_resync & ~aud_flush`. That is a track switch, or a display re-anchor on a
+  non-seamless cell (menu loops, ~4–6/min, benefit too). A HARD reset (`aud_flush`:
+  seek, mount, jump) still cuts on the same cycle: an instant cut is correct there and
+  a ramped seek would feel laggy. `~aud_flush` is there because a seek can land inside
+  a switch's 64 cycles, and the hard cause must win.
+- **Ramp-out** = a window from the switch. **Ramp-in** = `soft_arm` stays set from the
+  switch until the FIRST new sample lands in the target, and that sample restarts the
+  window. ⚠ **A window counted from the reset alone does NOT cover the ramp-in, and
+  that was the first design:** after `aud_resync` the ring is empty, the new
+  substream's next frame must come through the demux, and the drain gate holds it
+  until the STC reaches its PTS, which takes tens to hundreds of ms against 2.4 ms. The bench's
+  D3 arm runs with the scheduler off and passed on that broken design. D5 (content
+  arriving after the window) is the arm that sees it. Waiting while armed costs
+  nothing, because the target is 0 until a sample arrives.
+- **Ordinary playback is never slew-limited.** A legitimate full-scale transient can
+  swing the whole range between two samples, and limiting it would distort
+  high-level/high-frequency content.
+- ⚠ The step is exactly 1 LSB, so a hop cannot overshoot and the 16-bit compare needs no
+  widened difference. If `DECLICK_STEP` is ever widened, add a saturating guard: the gap can
+  reach 65535, which overflows 16-bit signed.
+- **Out of scope:** a CD track skip's `cdda_flush` resets only `lpcm_unpack`, never
+  this module's `rst`, so it neither gains the ramp nor can regress. The PASSTHROUGH
+  path has its own, separate gap: the optical S/PDIF leg (`SPDIF_PASS_EN`) has no
+  post-reset mute, though HDMI has one (`bs_hold`). See `docs/iec61937.md` "finding 3". To be fixed on its
+  own branch.
+
+**Gate:** `bench/dvd/run_stc_freerun.sh` §4 — `dvd_audio_decode_tb` phases D1–D5, E1–E2
+plus mutations M1 (every reset snaps → D1), M2 (no reset snaps → E1), M3 (window keyed
+on the reset only → D5), M4 (a hard reset leaves the ramp-in armed → E2), M5 (the
+switch's first cycle snaps → D1). The other three benches that instantiate the module
+(`mp2_chain_tb`, `vcd_chain_tb`, `cdda_audio_tb`) tie `aud_soft_switch` to 0.
+⚠ **Two bench traps met here.** (1) `rst` is `~rst_n` through a continuous assign
+while `aud_soft_switch` is a direct port. Change both on a posedge and the DUT can see
+`soft=0` with `rst=1`, a hard reset that hardware cannot produce. D1 had passed by
+scheduling luck, so drive them from the negedge. (2) Read `audio_l` with `#1` after
+the edge, or you see the pre-NBA value. **HW gate:** Decode mode, cycle B7 on a
+multi-track disc mid-dialogue and listen for a clean switch, then confirm a chapter
+skip still cuts instantly.
+
 ### Substream / track select (`ps_demux.aud_track`, menu `O68,Audio Track`)
 A DVD program can interleave SEVERAL audio substreams of the same type — e.g. the
 Matrix VOB carries AC-3 `0x80` (5.1) + `0x81` & `0x82` (stereo). ps_demux must forward

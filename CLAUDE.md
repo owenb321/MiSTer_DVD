@@ -323,6 +323,29 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **SWITCHING AUDIO TRACKS CLICKED IN DECODE MODE — the output stepped to 0 and back
+  in one clk_sys cycle each way (2026-09-22, branch `fix/audio-declick-switch`);
+  sim-proven, 5 mutations each caught by exactly its own arm, ⏳ HW-confirm pending.**
+  Field report: a harsh static blip on every B7 press, confirmed Decode (PCM) mode. B7 →
+  `aud_resync` → `aud_rst_n`, and `dvd_audio_decode`'s mux did `if (rst) audio_l <= 0`.
+  **Fix:** a slew-limited output (1 LSB/cycle ≈ 2.4 ms full range) that chases the old mux's
+  target only while de-clicking. The trigger is `aud_soft_switch = aud_resync & ~aud_flush`,
+  so a seek/mount/jump still cuts instantly. Outside a de-click the output is the original
+  register cycle for cycle. ⚠ Following a REGISTERED target instead added one clk_sys of
+  latency, which `mp2_chain_tb`/`vcd_chain_tb` read as thousands of mismatches.
+  ⚠⚠ **The ramp-IN must key on the first NEW SAMPLE, not on the reset.** The first design
+  counted a 2.4 ms window from the reset, and the new track's first sample arrives tens to
+  hundreds of ms later (ring refill plus the drain gate's PTS hold), so that edge still
+  snapped. The bench's D3 arm runs with the scheduler off and passed that broken design;
+  only D5 (late content) sees it. ⚠ Bench trap: `rst` is `~rst_n` through a continuous
+  assign, so stimulus changing both it and `aud_soft_switch` on a posedge fabricates a
+  "hard" reset. Drive them from the negedge. Gate `bench/dvd/run_stc_freerun.sh` §4.
+  ⏳ **Separate, unfixed, and NOT this report:** in Passthru, the optical S/PDIF leg
+  (`SPDIF_PASS_EN = pass_mode`) has no post-reset mute, while HDMI has `bs_hold`, so a
+  track switch sends a torn IEC 61937 burst to a receiver over optical. That is
+  `docs/iec61937.md` finding 3, and it wants its own branch. Detail: **`docs/fabric_audio.md`
+  "De-click on an audio-only reset"**.
+
 - ✅ **PHYSICAL VCD/SVCD DISC PLAYBACK — needs zero RTL changes (2026-09-17, branch
   `feature/vcd-svcd-physical`); host-proven, mutation-checked, and ✅ HW-CONFIRMED
   2026-09-20 on a real burned test disc (both bugs the first HW round found are now
