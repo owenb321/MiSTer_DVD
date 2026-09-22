@@ -1441,4 +1441,32 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # and this ledger's own history (SEED 7 swinging 18 MHz on one netlist) is exactly
 # why a fit result is read as a fit result. Nothing here is marginal.
 
+# 2026-09-21 (feature/cdda-physical REBASED onto post-v0.6.1 main, dev-cddaphys7):
+# NOT YET FIT. The SEED below is main's, inherited -- this netlist has never been
+# placed, and CORE_VERSION lives inside CONF_STR, so it matches neither the
+# dev-cddaphys6 fit above nor main's. Roll it; if it misses, tools/seed_sweep.sh.
+# 282 commits of main landed while this branch was shelved -- physical VCD/SVCD, the
+# screensaver/Stop overlay gate, frame step, native 240p, the scrub-ARROW HUD readout
+# (the "xN" tier field is gone), the field-order fix and the ALM reclaim.
+# ⚠ HEADROOM HAS MOVED and the numbers in the entry above no longer describe the
+# floor this has to fit in: main now sits at ~39,033 ALM of 41,910 and 512/553 M10K
+# (docs/hw_budget_and_lessons.md), against the 37,222 / 502 this branch last fit at.
+# The CD stack's measured cost (+937 ALUTs, +586 ALMs needed, +1 M10K) comes out of
+# ~2,900 ALM and 41 M10K of spare -- so read a marginal fit as expected, not as a
+# surprise, and note that added logic here tends to cost clk_dec through routing
+# pressure rather than failing to fit outright.
+# ★ Substantive rebase decisions (textual conflicts aside):
+#   - S_WAV_HDR moved 6'd59 -> 6'd63. The angle work (PR #101) had taken 59/60/62;
+#     63 was the only code still free in the 6-bit state space.
+#   - The audio-CD probe is now THIRD (DVD-Video, then VCD/SVCD, then CD-DA). An
+#     ENHANCED CD satisfies both the VCD and CD-DA probes and VCD-first is correct;
+#     it also counts as a disc read like the other two, being the most expensive.
+#   - The overlay chrome composites bg_on_w (logo|visualizer) where main composited
+#     logo_on_w. tools/check_saver_overlay_wiring.py pins bg_on_w's own definition
+#     with exact_terms, so "the idle logo reaches the screen UNGATED" is still the
+#     property being asserted rather than just the net's name.
+#   - transport_hud keeps main's pause/B9 rule and force_show joins the PLAYBACK arm,
+#     so Display still toggles the line during a CD pause.
+#   - seek_bar keeps main's 512-bit tick BITMAP, gated by the CD's ticks_off.
+
 set_global_assignment -name SEED 9

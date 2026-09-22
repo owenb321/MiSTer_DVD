@@ -261,7 +261,7 @@ module seek_bar_tb;
         // provably still drawn and this cannot pass by the bar being hidden.
         ticks_off = 1;
         settle;
-        render_line(12'd408);
+        render_line(bar_y0 + 12'd6);                             // lower half = notch row
         if (!(dut.tick_ok === 1'b1 && a_l[128] == 4'd10 && a_l[129] == 4'd10 &&
               on_l[384] && a_l[384] != 4'd14))
         begin errors = errors + 1; $display("  FAIL T8d ticks_off left a notch (a128=%0d a384=%0d ok=%b)", a_l[128], a_l[384], dut.tick_ok); end
@@ -284,7 +284,7 @@ module seek_bar_tb;
         ticks_off = 1;
         @(posedge clk); show_evt = 1; @(posedge clk); show_evt = 0;
         settle;
-        render_line(12'd405);
+        render_line(bar_y0 + 12'd3);
         if (!on_l[200] || a_l[128] == 4'd15)
         begin errors = errors + 1; $display("  FAIL T9f ticks_off kept the chapter cursor (on200=%b a128=%0d)", on_l[200], a_l[128]); end
         else $display("  ok  T9f ticks_off drops the chapter cursor");
