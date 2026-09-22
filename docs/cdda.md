@@ -663,111 +663,41 @@ live — any transport press resumes normally (`next` -> `TR 2/12`, clock advanc
 So the residual is a READOUT that claims to be playing when the disc has finished,
 not a wedge. A set-top player would stop and say so.
 
-### Gate 17: the tray — a real leak of ours, and a blocker that is not
+### Gate 17: the tray — a real leak of ours, and a red herring I chased
 
-**We leaked the drive fd, and that is FIXED** (`dvd_cdda_close()` dropped `g_fd`
-without closing it; `dvd_cdda_open()` takes ownership, so every mount leaked one
-descriptor on `/dev/srN`). Found here, fixed, gated by `dvd_cdda_test` arm [9] and the
-`cdda-fd-leak` RED mutation, and **verified on the board**: after the fix the mount's
-descriptor is released on eject where before the count stayed at 2.
+**We leaked the drive fd, and that is FIXED** (`dvd_cdda_close()` dropped `g_fd` without
+closing it; `dvd_cdda_open()` takes ownership, so every mount leaked one descriptor on
+`/dev/srN`). Gated by `dvd_cdda_test` arm [9] and the `cdda-fd-leak` RED mutation.
 
-⛔ **The tray still does not open, and it is NOT this feature.** After the fix the
-remaining holder is a descriptor with **plain `O_RDONLY`** — no `O_NONBLOCK`, no
-`O_CLOEXEC` — while **all three of our openers** (`find_audio_cd`, `find_dvd_device`,
-`open_ready_drive`) use `O_RDONLY|O_NONBLOCK|O_CLOEXEC`. The flags alone exclude us.
-★ **And the decisive measurement: with our Main not running at all — harness restored,
-MENU core loaded — STOCK MiSTer Main holds `/dev/sr3` open and `CDROMEJECT` still
-returns EBUSY.** So the eject button's unmount-and-return-to-idle half works; the tray
-half is blocked by something outside this branch, on this rig, and wants its own
-investigation. It is probably also why the 2026-09-13 confirm saw a tray open on
-`/dev/sr0` and this round did not on `sr3`.
+✅ **AND EJECT WORKS. The tray opens** — confirmed 2026-09-22 on a freshly rebooted rig:
+`DVD_PHYS: eject: tray opened on /dev/sr0`, the drive reporting `TRAY_OPEN`, no holders
+left on the device, the core on its idle logo, and no re-mount loop (`disc removed, but
+the drive does not own slot 0 (foreign=1)`).
 
-## The visualizers are GONE, and that is what fixed the Display toggle (2026-09-22)
+⚠⚠ **AND THE EBUSY I SPENT A LONG TIME ON WAS AN ARTEFACT OF A RIG THAT HAD BEEN UP FOR
+DAYS — the maintainer suggested the reboot, and it was the right call.** What I had
+measured, and what the reboot changed:
 
-**✅ HW-CONFIRMED 2026-09-22** on build `DVD_cddaphys8_20260922_1455.rbf` (SEED 9 first
-roll, clk_dec 89.54 @100C / 89.77 @-40C vs the 86.0 gate, 93 % ALM), same 12-track CD:
+| | days of uptime | fresh boot |
+|---|---|---|
+| the drive's node | `/dev/sr3` (sr0/1/2 re-enumerated away) | `/dev/sr0` |
+| handles on it, idle | **6** held by Main — 1 live + **5 stale `(deleted)`** | **0** |
+| handles while a CD is mounted | 2 (ours + a plain `O_RDONLY` one) | **1** (ours) |
+| `CDROMEJECT` | `EBUSY` | **tray opens** |
 
-| gate | result |
-|---|---|
-| CD plays, status line shown by default | ✅ `[PLAY] 0:00:20/0:04:35 TR 1/12` — the `persist_set` seed |
-| **Display while PAUSED** (the fix) | ✅ press hides, holds hidden, press restores — it did NOTHING on cddaphys7 |
-| Display during playback | ✅ hides; a track skip still POPS it (`TR 2/12`) and it lapses back; press restores |
-| Angle on a CD | ✅ inert — 3 presses (which on cddaphys7 would land on copper) leave the sparse logo, HUD up |
-| No visualizer reachable | ✅ screen stays 6-9 k lit px / 5 colours; never the 342,720 px full-screen copper |
-| DVD default | ✅ HUD HIDDEN — the CD seed does not leak into the DVD path |
-| DVD playback toggle | ✅ both directions, and the field reads `CH 1/1`, not `TR` |
-| DVD pause toggle | ✅ both directions (main's frame-step rule intact) |
-| DVD pause does not disturb PLAYBACK persistence | ✅ hidden before, shown+toggled during, **hidden again on resume** — `transport_hud_tb` T6p-i, on hardware |
-| Frame-step pause | ✅ starts HIDDEN (`pause_seed = !step_paused`), and B9 still raises it |
-| Eject | ✅ bare idle logo (4,686 lit px, 2 colours), HUD gone; **our drive fd released** — one fd left on `/dev/sr3` and its flags are plain `O_RDONLY` = stock Main's, not ours |
+`cdrom_ioctl_eject()` refuses with `-EBUSY` unless `use_count == 1` — the ejecting fd must
+be the ONLY open handle. Repeated USB re-enumeration over days had left Main holding
+descriptors for drives that no longer existed, so the count could never reach 1.
 
-⚠ `clk_dec` fell 91.17 → 89.54 on LESS logic and the same seed. That is placement
-variance at this density, not a regression -- this ledger already records a 4 MHz swing
-of the same kind -- and 3.5 MHz of margin remains. ALMs needed 39,239 → 39,041 (-198),
-registers -214, RAM unchanged at 501 (cdda_toc keeps its M10K).
-
-**User decision: drop the visualizers; the bouncing logo is a CD's only visual.**
-`dvd/cdda_viz.sv` and `dvd/cdda_screen.sv` are deleted, with their benches and their
-`DVD.qsf` entries. Angle now does nothing at all on a CD.
-
-★ **The interesting part is that this DELETED the paused-Display bug rather than
-working around it.** That bug existed because `cdda_screen` owned the "is the HUD up"
-state, so `emu.sv` masked `display_edge` out of `transport_hud` to avoid two copies of
-one fact — and main's frame-step work had meanwhile made `pause_show`, a latch toggled
-by that very masked edge, the sole owner of visibility during a pause. With no
-visualizer there is no screen state to own, so the mask goes, `transport_hud` owns its
-own persistence again exactly as on a DVD, and the pause case works because it is now
-the *same* code path the DVD uses. **The fix was removing the reason for the
-divergence, not adding a case to it.**
-
-⚠ **`force_show` became `persist_set`, and the level-vs-pulse distinction IS the fix.**
-A picture-less source still wants the status line up to begin with, but as a LEVEL ORed
-into `vis` that could never be switched off — Display had nothing to toggle. It is now
-a one-shot that SEEDS `persist_q` on the rise of the raw-PCM mode, fired after
-`load_evt` has cleared it. `transport_hud` also exports `persist_o`, so `seek_bar`
-follows the status line rather than keeping a second opinion — the same reasoning that
-already had them share `pause_show_o`.
-
-⚠ What was given up, measured rather than guessed: `cdda_viz` was **295 synthesis
-ALUTs / 156 registers** and `cdda_screen` 3, so this returns ~298 ALUTs. `cdda_toc`
-keeps its 280 ALUTs and the 1 M10K — the table is unaffected. The earlier
-scope/XOR/copper history below is kept because it records what each visualizer cost and
-why two of the three were dropped before this one.
-
-### Was open: Display did not hide the HUD while a CD was PAUSED
-
-**Measured 2026-09-22.** During playback Display behaves exactly as designed — it
-hides the status line, it stays hidden, a track skip still pops it briefly and it
-lapses back, and a second press restores it. **While PAUSED, both presses leave it
-visible.**
-
-The mechanism is an interaction between two individually-correct decisions:
-
-* `emu.sv:6420` masks Display out of the HUD on a CD
-  (`.display_edge (display_edge & ~cdda_mode_w)`) because `cdda_screen` owns that
-  state and two copies would be free to disagree;
-* main's frame-step work made `pause_show` — a latch toggled by that very
-  `display_edge` — the SOLE owner of visibility during a pause
-  (`pause_q ? pause_show : (force_show | persist_q | ...)`).
-
-Masked, `pause_show` can never toggle on a CD, so it sits at its seeded value.
-
-⚠ **This is NOT a regression from the rebase, checked rather than assumed.** The
-pre-rebase branch had `vis = (force_show | persist_q | pause_q | ...)`, where
-`pause_q` is an OR term forcing the HUD on unconditionally during a pause — Display
-did nothing there either. The behaviour is unchanged; what changed is that the DVD
-path now DOES toggle during a pause, so the CD is newly inconsistent with it. It also
-contradicts the recorded decision "Display toggles it in any mode", which predates the
-frame-step change and was never reconciled with it.
-
-⛔ **DEFERRED TO THE CHAPTER-TABLE WORK (user decision 2026-09-22), not fixed here.**
-The fix is an ownership decision, not a one-liner: the CD wants ONE source of truth
-for "is the HUD up", read in every state including a pause. The obvious gate is
-`trk_mode`, but "this is an audio CD" is the wrong fact — the real one is "Display is
-routed to another owner" — and keying on the first is the issue-#81 predicate trap. It
-belongs with the generic chapter table because that work already re-cuts this seam:
-`trk_mode` stops meaning "CD" and starts coming from the table's `kind` byte, so the
-HUD's ownership inputs get decided there anyway.
+★ **The lesson is the harness rule one level up: "would this change if you changed
+something unrelated to the core?" — and a machine's UPTIME is one of those things.** I
+had ruled our code out correctly (every one of our optical opens carries
+`O_NONBLOCK`/`O_CLOEXEC`; the blocking handle had neither; it persisted with nothing
+mounted) and then drew the wrong conclusion from it — "stock Main holds the drive, so
+this can never work" — when the right one was "this machine is in an accumulated state".
+The maintainer's own report that **DVD eject works today** was the contradiction that
+should have stopped me, and I recorded it as an unexplained discrepancy instead of
+treating it as evidence against my own conclusion.
 
 ⚠ Two smaller things seen in the same log and worth fixing on the way past:
 `DVD_REMOTE: eject button -- optical disc unmounted + tray opened` is printed
