@@ -39,7 +39,7 @@ string      vob_path;
 integer     fd, n, i, cap_mb;
 logic [7:0] buf8 [0:4095];
 initial begin
-    if (!$value$plusargs("VOB=%s", vob_path)) vob_path = ".sim/aud_switch/mib21.vob"   // built by run_aud_switch.sh;
+    if (!$value$plusargs("VOB=%s", vob_path)) vob_path = ".sim/aud_switch/mib21.vob";   // built by run_aud_switch.sh
     if (!$value$plusargs("MB=%d", cap_mb)) cap_mb = 8;
     fd = $fopen(vob_path, "rb");
     if (fd == 0) begin $display("FATAL: cannot open %0s", vob_path); $fatal(1); end
