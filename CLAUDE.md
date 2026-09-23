@@ -325,7 +325,8 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **SWITCHING AUDIO TRACKS POPPED IN DECODE MODE — two defects, and the one first
   fixed was NOT the one heard (2026-09-22/23, branch `fix/audio-declick-switch`);
-  sim-proven over a real disc slice, ⏳ HW-confirm pending.**
+  sim-proven over a real disc slice; built `DVD_declick2_20260923_0125.rbf` (SEED 9 first
+  roll, clk_dec 91.57/90.83, 94 % ALM); ⏳ HW-confirm pending.**
   ★★ **THE AUDIBLE POP WAS BAD FRAMES REACHING THE DECODER.** Round 1 shipped only the
   output de-click (below, build `DVD_declick_20260922_2337.rbf`). The maintainer still
   heard an intermittent pop, shaped pop → silence → a blip of correct audio → silence →
