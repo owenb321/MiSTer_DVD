@@ -461,7 +461,7 @@ assign AUDIO_R = (probe_act_p != 0) ? probe_tone : (pcm_mute ? 16'sd0 : dec_audi
 assign AUDIO_L      = pcm_mute ? 16'sd0 : dec_audio_l;
 assign AUDIO_R      = pcm_mute ? 16'sd0 : dec_audio_r;
 `endif
-assign SPDIF_PASS_EN = pass_mode;
+// SPDIF_PASS_EN is assigned beside HDMI_BS_EN below: both legs share bs_hold.
 
 // -----------------------------------------------------------------------------
 // DVD-FORK: HDMI IEC 61937 bitstream (docs/hdmi_bitstream.md)
@@ -493,14 +493,28 @@ wire pcm_mute = (pass_mode & ~rt_pcm_session) | css_scrambled | hdmi_bs_ack;
 // Post-reset hold-off. rst_audio_n pulses on every audio-track switch and
 // aud_flush, and it re-phases the subframe pacing (MEASURED: the first interval
 // after a reset is 509 clk_audio, not 512 - see bench/dvd/iec61937_wrap_tb.sv
-// TEST 9). Mute the HDMI leg for ~100 ms across that so a receiver sees clean
-// silence and one switch, never a torn subframe.
+// TEST 9). Mute BOTH bitstream legs for ~100 ms across that so a receiver sees
+// clean silence and one switch, never a torn subframe.
+//
+// The optical S/PDIF leg shared the defect and not the fix until 2026-09-23: its
+// enable was pass_mode alone, so a track switch put the cold-reset wrapper's
+// re-phased bursts straight onto the fibre (docs/iec61937.md finding 3). With the
+// enable low the pin falls back to the framework's PCM encoder (sys_top.v
+// spdif_out), which carries AUDIO_L/R -- held at zero by pcm_mute, since
+// aud_route's pcm_session resets on the same aud_rst_n. So optical sees PCM
+// silence, then one PCM->bitstream switch: the fj#110 shape receivers lock to.
+// ⛔ Do NOT add hdmi_bs_ack to the S/PDIF term. That ack reports the ADV7513's
+// I2C-set non-PCM register, which optical has no equivalent of -- S/PDIF carries
+// its non-PCM flag in-band, per block -- so coupling them would silence optical
+// whenever HDMI has not acked (every stock-Main rig, every non-AC-3 sink).
+// Gate: tools/check_spdif_bs_hold_wiring.py.
 reg [12:0] bs_hold;
 always @(posedge CLK_AUDIO or negedge rst_audio_n)
     if (!rst_audio_n)                 bs_hold <= 13'd4800;   // ~100 ms at 48 kHz
     else if (bs_stb_w && |bs_hold)    bs_hold <= bs_hold - 13'd1;
 
 assign HDMI_BS_EN = pass_mode & hdmi_bs_ack & ~|bs_hold;
+assign SPDIF_PASS_EN = pass_mode & ~|bs_hold;
 
 assign SD_SCK       = 0;
 assign SD_MOSI      = 0;
