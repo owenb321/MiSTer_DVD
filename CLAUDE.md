@@ -325,7 +325,9 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **SWITCHING AUDIO TRACKS CLICKED IN DECODE MODE — the output stepped to 0 and back
   in one clk_sys cycle each way (2026-09-22, branch `fix/audio-declick-switch`);
-  sim-proven, 5 mutations each caught by exactly its own arm, ⏳ HW-confirm pending.**
+  sim-proven, 5 mutations each caught by exactly its own arm; built
+  `DVD_declick_20260922_2337.rbf` (SEED 9 first roll, clk_dec 90.94/92.77, 93 % ALM);
+  ⏳ HW-confirm pending.**
   Field report: a harsh static blip on every B7 press, confirmed Decode (PCM) mode. B7 →
   `aud_resync` → `aud_rst_n`, and `dvd_audio_decode`'s mux did `if (rst) audio_l <= 0`.
   **Fix:** a slew-limited output (1 LSB/cycle ≈ 2.4 ms full range) that chases the old mux's
