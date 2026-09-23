@@ -56,7 +56,7 @@ module vcd_chain_tb;
     ps_demux demux (
         .clk(clk), .rst_n(rst_n),
         .in_byte(in_byte), .in_valid(in_valid), .in_ready(in_ready),
-        .aud_track(3'd0),
+        .aud_track(3'd0), .aud_realign(1'b0),
         .sp_track(3'd0), .sp_enable(1'b0),
         .vid_byte(), .vid_valid(), .vid_ready(1'b1),
         .aud_byte(ps_aud_byte), .aud_valid(ps_aud_valid), .aud_type(ps_aud_type),
@@ -144,7 +144,7 @@ module vcd_chain_tb;
     dvd_audio_decode dut (
         .clk(clk), .rst_n(rst_n),
         .enable(1'b1),
-        .pause(1'b0),
+        .pause(1'b0), .aud_soft_switch(1'b0),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),
         .lpcm_quant(2'd0),

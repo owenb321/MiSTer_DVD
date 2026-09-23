@@ -54,7 +54,7 @@ module aud_extract_tb;
     wire [7:0] ab; wire av; wire [1:0] at; wire afs;
     ps_demux dut (
         .clk(clk), .rst_n(rst_n),
-        .in_byte(inb), .in_valid(inv), .in_ready(inr), .aud_track(track[2:0]),
+        .in_byte(inb), .in_valid(inv), .in_ready(inr), .aud_track(track[2:0]), .aud_realign(1'b0),
         .vid_byte(), .vid_valid(), .vid_ready(1'b1),
         .aud_byte(ab), .aud_valid(av), .aud_type(at),
         .aud_frame_start(afs), .aud_ready(1'b1),

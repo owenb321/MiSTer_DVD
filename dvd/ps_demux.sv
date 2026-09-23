@@ -64,6 +64,19 @@ module ps_demux (
     // forwarded; the rest are discarded. Without this, all substreams interleave
     // into the one in-fabric decoder and the audio is garbage. Default 0 = 0x80.
     input  wire  [2:0]  aud_track,
+    // Pulse: the audio track just changed and the audio chain is being reset
+    // (emu: flush_ctl's aud_resync on an aud_switch). From here the demux
+    // (a) drops the rest of the OLD track's in-flight PES -- it would land in the
+    // ring AFTER the reset -- and (b) forwards the new AC-3/DTS track starting at
+    // a REAL frame: the first PES carrying an access unit is skipped to its
+    // first_access_unit_pointer. Without this the new track began mid-frame and
+    // ac3_reframer (still locked to the OLD track's frame length) handed the
+    // decoder merged or false-sync frames: a pop, silence, a blip, silence.
+    // Measured by bench/dvd/aud_switch_chain_tb.sv: 8 bad frames in 38 switches.
+    // ⚠ TIE IT OFF where unused: a floating (z) port reads as x in the sub-header
+    // exit's `rlgn_pend || aud_realign` and sends every PES down the realign
+    // branch. Every bench instantiating ps_demux ties it to 1'b0.
+    input  wire         aud_realign,
 
     // Subpicture (DVD subtitle) substream select. Subpicture rides in the same
     // private_stream_1 (0xBD) as audio but with substream_id 0x20-0x3F (up to 32
@@ -214,6 +227,7 @@ typedef enum logic [4:0] {
     S_SYS_LEN_LO,     // system/nav/padding PES length low byte
     S_VIDEO_DATA,     // forward bytes to video output
     S_AUDIO_DATA,     // forward bytes to audio output
+    S_AUD_SKIP,       // after an audio realign: skip to the PES's first access unit
     S_SP_DATA,        // forward bytes to subpicture output (no sub-header)
     S_PS2_SUB,        // private_stream_2 substream id (0x00 PCI / 0x01 DSI)
     S_PCI_DATA,       // forward PCI payload bytes to nav_pci (accept-always)
@@ -262,6 +276,9 @@ logic [1:0]  aud_type_r;       // 0=AC3, 1=DTS, 2=LPCM, 3=MP2 (MPEG-1 Layer II; 
                                // ever reaches the ring with payload for MP2)
 logic [1:0]  lpcm_quant_r;     // LPCM word-length (sub-header byte +5 bits[7:6])
 logic        first_aud_byte;   // marks first forwarded byte of an audio frame
+logic        rlgn_pend;        // aud_realign seen; next forwarded audio must start on a real frame
+logic  [2:0] aud_ssid_r;       // low 3 bits of the current PES's audio substream id
+logic  [7:0] fap_hi_r;         // AC-3/DTS sub-header first_access_unit_pointer, high byte
 logic        first_sp_byte;    // marks first forwarded byte of a subpicture PES
 logic        first_pci_byte;   // marks first forwarded byte of a PCI packet
 logic        first_dsi_byte;   // marks first forwarded byte of a DSI packet
@@ -319,6 +336,9 @@ always_comb begin
 end
 
 wire consume = in_valid && in_ready;
+// the audio sub-header's last byte is being consumed and a payload follows
+wire sub_exit = consume && (state == S_AUD_SUBHDR) && (pes_length != 16'd1) &&
+                (bytes_remaining <= 16'd1);
 
 // ---- audio-substream observation tap (no FSM interaction) -------------------
 // 0xBD path: the substream id byte is consumed in S_SUBSTREAM_ID (skip the
@@ -434,6 +454,9 @@ always_ff @(posedge clk or negedge rst_n) begin
         aud_type_r     <= 2'd0;
         lpcm_quant_r   <= 2'd0;    // default 16-bit
         first_aud_byte <= 1'b0;
+        rlgn_pend      <= 1'b0;
+        aud_ssid_r     <= 3'd0;
+        fap_hi_r       <= 8'd0;
         first_sp_byte  <= 1'b0;
         first_pci_byte <= 1'b0;
         first_dsi_byte <= 1'b0;
@@ -723,6 +746,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                     bytes_remaining <= pes_length - 16'd1;
                     state           <= S_DISCARD;
                 end else begin
+                    aud_ssid_r <= in_byte[2:0];
                     casez (in_byte)
                         8'b1000_0???: begin aud_type_r <= 2'd0; bytes_remaining <= 16'd3; state <= S_AUD_SUBHDR; end // AC-3
                         8'b1000_1???: begin aud_type_r <= 2'd1; bytes_remaining <= 16'd3; state <= S_AUD_SUBHDR; end // DTS
@@ -742,10 +766,57 @@ always_ff @(posedge clk or negedge rst_n) begin
                 // also pass through bytes_remaining==2 but carry no such field.)
                 if (aud_type_r == 2'd2 && bytes_remaining == 16'd2)
                     lpcm_quant_r <= in_byte[7:6];
+                // AC-3/DTS sub-header = num_frames, first_access_unit_pointer (2B).
+                // The pointer counts from the byte AFTER it (1 = the first payload
+                // byte); 0 = no frame starts in this PES. (tools/acmod_scan.py uses
+                // the same convention, validated on real discs.)
+                if (aud_type_r[1] == 1'b0 && bytes_remaining == 16'd2)
+                    fap_hi_r <= in_byte;
                 if (pes_length == 16'd1) state <= S_HUNT;       // no audio payload
                 else if (bytes_remaining <= 16'd1) begin
+                    // rlgn_pend || aud_realign: a realign landing on this very cycle
+                    // must still stop an old-track PES (the realign block below
+                    // leaves rlgn_pend to this branch when sub_exit is true).
+                    if (!(rlgn_pend || aud_realign)) begin
+                        first_aud_byte <= 1'b1;
+                        state <= S_AUDIO_DATA;
+                    end else if (aud_ssid_r != aud_track) begin
+                        // an OLD-track PES whose substream matched before the
+                        // switch: its payload must not reach the reset ring
+                        rlgn_pend       <= 1'b1;
+                        bytes_remaining <= pes_length - 16'd1;
+                        state           <= S_DISCARD;
+                    end else if (aud_type_r[1] != 1'b0) begin
+                        // LPCM: payload starts on a sample boundary -- forward as is
+                        rlgn_pend      <= 1'b0;
+                        first_aud_byte <= 1'b1;
+                        state          <= S_AUDIO_DATA;
+                    end else if ({fap_hi_r, in_byte} == 16'd0 ||
+                                 {fap_hi_r, in_byte} > pes_length - 16'd1) begin
+                        // no access unit starts here (or a nonsensical pointer):
+                        // drop this PES's payload and wait for the next one
+                        rlgn_pend       <= 1'b1;
+                        bytes_remaining <= pes_length - 16'd1;
+                        state           <= S_DISCARD;
+                    end else if ({fap_hi_r, in_byte} == 16'd1) begin
+                        rlgn_pend      <= 1'b0;             // frame starts right here
+                        first_aud_byte <= 1'b1;
+                        state          <= S_AUDIO_DATA;
+                    end else begin
+                        rlgn_pend       <= 1'b0;             // skip the partial frame
+                        bytes_remaining <= {fap_hi_r, in_byte} - 16'd1;
+                        state           <= S_AUD_SKIP;
+                    end
+                end else bytes_remaining <= bytes_remaining - 16'd1;
+            end
+
+            // ---- After a realign: skip to the first access unit, then forward ----
+            // (the pointer check above guarantees at least one byte remains after)
+            S_AUD_SKIP: begin
+                pes_length <= pes_length - 16'd1;
+                if (bytes_remaining <= 16'd1) begin
                     first_aud_byte <= 1'b1;
-                    state <= S_AUDIO_DATA;
+                    state          <= S_AUDIO_DATA;
                 end else bytes_remaining <= bytes_remaining - 16'd1;
             end
 
@@ -850,6 +921,25 @@ always_ff @(posedge clk or negedge rst_n) begin
 
             default: state <= S_HUNT;
             endcase
+        end
+
+        // Audio realign (see the port). Placed AFTER the FSM step so it wins this
+        // cycle's assignments. An old-track payload in flight is dropped: the rest
+        // of it would otherwise be the first thing committed to the reset ring.
+        if (aud_realign) begin
+            if (!sub_exit) rlgn_pend <= 1'b1;   // on sub_exit the FSM branch owns it
+            if (state == S_AUDIO_DATA) begin
+                if (consume && pes_length == 16'd1) begin
+                    state <= S_HUNT;                          // that was its last byte
+                end else begin
+                    bytes_remaining <= consume ? pes_length - 16'd1 : pes_length;
+                    state           <= S_DISCARD;
+                end
+            end else if (state == S_AUD_SKIP) begin
+                // mid-skip of a PES for the previous realign's track: drop it all
+                bytes_remaining <= consume ? pes_length - 16'd1 : pes_length;
+                state           <= S_DISCARD;
+            end
         end
     end
 end

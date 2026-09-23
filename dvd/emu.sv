@@ -655,7 +655,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cddaphys8"
+`define CORE_VERSION "dev-declick2"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -2781,6 +2781,17 @@ always @(posedge clk_sys or negedge reset_n) begin
     else          aud_track_eff_q <= aud_track_eff;
 end
 wire aud_switch = (aud_track_eff != aud_track_eff_q) && !aud_jw;
+// A track switch restarts the audio stream mid-frame. ps_demux's aud_realign (on
+// aud_switch) drops the old track's in-flight PES and starts the new one at its
+// first_access_unit_pointer; the reframers must forget the OLD track's frame lock
+// at the same moment, or ac3_reframer keeps cutting at the old frame length (a 5.1
+// frame is 2-3x a 2.0 one) and merges the new track's frames. Registered, because
+// it drives async resets and aud_switch is combinational.
+reg aud_realign_q;
+always @(posedge clk_sys or negedge reset_n)
+    if (!reset_n) aud_realign_q <= 1'b0;
+    else          aud_realign_q <= aud_switch;
+wire rf_rst_n = reset_n & ~aud_realign_q;
 // MENU subpicture is ALWAYS on subpicture stream 0 (substream 0x20 — the button/
 // highlight graphic; verified on T2: every menu carries 0x20 + 0x21). ps_demux
 // filters to ONE substream, so a SetSTN on the way into a submenu (SPRM2) or a
@@ -3436,6 +3447,7 @@ ps_demux ps_demux_inst (
 
     // O[8:6]: which audio substream/track to forward (default 0 = substream 0x80).
     .aud_track    (aud_track_eff),   // Phase 4: SetSTN (SPRM1) wins when set
+    .aud_realign  (aud_switch),      // new track starts on a real frame (see aud_realign_q)
 
     // Subpicture (subtitle) substream select: O[15] enable, O[26:24] track (0x20+trk).
     // Routes the selected 0x20-0x3F substream out to spu_decode (dvd/subpicture.md).
@@ -3737,7 +3749,7 @@ wire ps_aud_xfer = ps_aud_valid && ps_aud_ready;
 
 ac3_reframer ac3_reframer_inst (
     .clk                (clk_sys),
-    .rst_n              (reset_n),        // reset only on core reset - self-heals on the next 0x0B77 (no per-jump reset = no re-sync pop)
+    .rst_n              (rf_rst_n),       // core reset + an audio-track switch (aud_realign_q): a seek/jump never resets it (no re-sync pop)
     .in_byte            (ps_aud_byte),
     .in_valid           (ps_aud_xfer),
     .in_type            (ps_aud_type),
@@ -3757,7 +3769,7 @@ ac3_reframer ac3_reframer_inst (
 // through untouched). See docs/iec61937.md.
 dts_reframer dts_reframer_inst (
     .clk                (clk_sys),
-    .rst_n              (reset_n),        // reset only on core reset - self-heals on the next 0x7FFE8001
+    .rst_n              (rf_rst_n),       // core reset + an audio-track switch (see ac3_reframer)
     .in_byte            (ar_aud_byte),
     .in_valid           (ar_aud_valid),
     .in_type            (ar_aud_type),
@@ -3778,7 +3790,7 @@ dts_reframer dts_reframer_inst (
 // AC-3/DTS/LPCM pass through untouched. See docs/mpeg1.md A.3.
 mp2_reframer mp2_reframer_inst (
     .clk                (clk_sys),
-    .rst_n              (reset_n),        // reset only on core reset - self-heals on the next 0xFFFx
+    .rst_n              (rf_rst_n),       // core reset + an audio-track switch (see ac3_reframer)
     .in_byte            (dr_aud_byte),
     .in_valid           (dr_aud_valid),
     .in_type            (dr_aud_type),
@@ -4062,6 +4074,12 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .rst_n       (aud_rst_n),            // audio-only: also resets on an audio-track switch
     .enable      (aud_dec_en),
     .pause       (pause_aud),    // freeze/silence audio while paused OR a seek gesture is held
+    // This aud_rst_n pulse is the GENTLE, audio-only class (flush_ctl's
+    // aud_resync: a track switch, or a non-seamless display re-anchor) and NOT
+    // a hard one (aud_flush: seek/mount/jump) -- selects a de-click ramp instead
+    // of an instant step in the output mux. ~aud_flush because the two levels
+    // can overlap (a seek inside a switch's 64 cycles) and the hard cause wins.
+    .aud_soft_switch (aud_resync & ~aud_flush),
     .ring_byte   (aud_ring_byte),
     .ring_valid  (aud_ring_valid),
     .ring_ready  (dec_ring_ready),

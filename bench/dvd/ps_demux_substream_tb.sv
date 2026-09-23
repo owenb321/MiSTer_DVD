@@ -31,7 +31,7 @@ module ps_demux_substream_tb;
     ps_demux dut (
         .clk(clk), .rst_n(rst_n),
         .in_byte(in_byte), .in_valid(in_valid), .in_ready(in_ready),
-        .aud_track(aud_track),
+        .aud_track(aud_track), .aud_realign(1'b0),
         .vid_byte(vid_byte), .vid_valid(vid_valid), .vid_ready(vid_ready),
         .aud_byte(aud_byte), .aud_valid(aud_valid), .aud_type(aud_type),
         .aud_frame_start(aud_frame_start), .aud_ready(aud_ready),

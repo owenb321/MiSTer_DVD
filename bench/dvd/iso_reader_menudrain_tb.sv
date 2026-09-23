@@ -244,7 +244,7 @@ module iso_reader_menudrain_tb;
     ps_demux demux (
         .clk(clk), .rst_n(pipe_rst_n_w),
         .in_byte(fifo_byte), .in_valid(fifo_valid), .in_ready(demux_in_ready),
-        .aud_track(3'd0),
+        .aud_track(3'd0), .aud_realign(1'b0),
         .vid_byte(vid_byte), .vid_valid(vid_valid), .vid_ready(vid_ready),
         .aud_byte(), .aud_valid(), .aud_type(), .aud_frame_start(),
         .aud_ready(1'b1),

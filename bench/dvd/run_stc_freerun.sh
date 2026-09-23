@@ -5,8 +5,10 @@
 #                         across a flush, with its RED arm (needs DVD_ISO_DIR / the VOB)
 #   2. run_disp_sched.sh  the display scheduler, 12 scenarios + 5 mutations
 #   3. av_sync_tb         the clk_sys mirror of the clock
-#   4. dvd_audio_decode_tb  the audio side (drain gate, catch-up) + a RED arm proving
-#                         the release waits for the DISPLAY anchor, not the parse front
+#   4. dvd_audio_decode_tb  the audio side (drain gate, catch-up) + RED arms proving
+#                         the release waits for the DISPLAY anchor, not the parse front,
+#                         and (harsh-noise-on-track-switch fix) that a GENTLE reset
+#                         (aud_soft_switch) ramps while a HARD one still snaps instantly
 #   5. flush_ctl_tb, dvd_telem_tb  unchanged contracts that must still hold
 #   6. the display suites that instantiate the re-paced governor
 set -u
@@ -43,6 +45,77 @@ if iv "$red_aud/sim" dvd/ac3/*.sv dvd/lpcm_unpack.sv dvd/mp2/mp2_decode.sv "$red
   echo "  PASS dvd_audio_decode RED (provisional-anchor release is caught)"
 else
   echo "  FAIL dvd_audio_decode RED -- the bench cannot see a release against the parse front"; fail=1
+fi
+rm -rf "$red_aud"
+# RED: drop the aud_soft_switch exemption on the hard-cut branch -- EVERY reset
+# (gentle track switches included) would snap instantly again, re-introducing the
+# harsh-noise defect. Phase D1 must catch it.
+red_aud=$(mktemp -d)
+sed 's/end else if (rst && !aud_soft_switch) begin/end else if (rst) begin/' \
+    dvd/dvd_audio_decode.sv > "$red_aud/dvd_audio_decode.sv"
+if iv "$red_aud/sim" dvd/ac3/*.sv dvd/lpcm_unpack.sv dvd/mp2/mp2_decode.sv "$red_aud/dvd_audio_decode.sv" \
+      bench/dvd/dvd_audio_decode_tb.sv 2>/dev/null \
+   && vvp "$red_aud/sim" 2>/dev/null | grep -q "FAIL D1: snapped to 0 instead of ramping"; then
+  echo "  PASS dvd_audio_decode RED (a gentle switch snapping instantly is caught)"
+else
+  echo "  FAIL dvd_audio_decode RED -- the bench cannot see a gentle switch snap"; fail=1
+fi
+rm -rf "$red_aud"
+# RED: the hard-cut branch never fires (aud_soft_switch's exemption inverted so the
+# condition is always false) -- a real discontinuity (seek/mount/jump) would ramp
+# instead of cutting, which is the "laggy seek" regression Phase E1 exists to catch.
+red_aud=$(mktemp -d)
+sed "s/end else if (rst \&\& !aud_soft_switch) begin/end else if (1'b0) begin/" \
+    dvd/dvd_audio_decode.sv > "$red_aud/dvd_audio_decode.sv"
+if iv "$red_aud/sim" dvd/ac3/*.sv dvd/lpcm_unpack.sv dvd/mp2/mp2_decode.sv "$red_aud/dvd_audio_decode.sv" \
+      bench/dvd/dvd_audio_decode_tb.sv 2>/dev/null \
+   && vvp "$red_aud/sim" 2>/dev/null | grep -q "FAIL E1: hard reset did not snap"; then
+  echo "  PASS dvd_audio_decode RED (a hard reset ramping instead of cutting is caught)"
+else
+  echo "  FAIL dvd_audio_decode RED -- the bench cannot see a hard reset fail to cut"; fail=1
+fi
+rm -rf "$red_aud"
+# RED: key the window on the RESET only (the first design). With the scheduler on,
+# the new track's first sample lands long after a 2.4 ms window has closed, so the
+# 0 -> new-level edge snaps. Phase D5 (late content) must catch it; D3 cannot.
+red_aud=$(mktemp -d)
+sed -e "s/end else if (soft_arm \&\& tgt_upd) begin/end else if (1'b0) begin/" \
+    -e "s/wire declicking = aud_soft_switch || soft_arm || /wire declicking = aud_soft_switch || /" \
+    dvd/dvd_audio_decode.sv > "$red_aud/dvd_audio_decode.sv"
+if iv "$red_aud/sim" dvd/ac3/*.sv dvd/lpcm_unpack.sv dvd/mp2/mp2_decode.sv "$red_aud/dvd_audio_decode.sv" \
+      bench/dvd/dvd_audio_decode_tb.sv 2>/dev/null \
+   && vvp "$red_aud/sim" 2>/dev/null | grep -q "FAIL D5: late content snapped in"; then
+  echo "  PASS dvd_audio_decode RED (a ramp-in keyed on the reset alone is caught)"
+else
+  echo "  FAIL dvd_audio_decode RED -- the bench cannot see late content snap in"; fail=1
+fi
+rm -rf "$red_aud"
+# RED: a hard reset no longer disarms a pending ramp-in -- a seek landing inside a
+# track switch's wait would fade in content that should cut in. Phase E2.
+red_aud=$(mktemp -d)
+sed "s|if (rst \&\& !aud_soft_switch) begin          // hard cause: no ramp either way|if (1'b0) begin|" \
+    dvd/dvd_audio_decode.sv > "$red_aud/dvd_audio_decode.sv"
+if iv "$red_aud/sim" dvd/ac3/*.sv dvd/lpcm_unpack.sv dvd/mp2/mp2_decode.sv "$red_aud/dvd_audio_decode.sv" \
+      bench/dvd/dvd_audio_decode_tb.sv 2>/dev/null \
+   && vvp "$red_aud/sim" 2>/dev/null | grep -q "FAIL E2: hard reset left the ramp-in armed"; then
+  echo "  PASS dvd_audio_decode RED (a hard reset that leaves the ramp-in armed is caught)"
+else
+  echo "  FAIL dvd_audio_decode RED -- the bench cannot see a hard reset fail to disarm"; fail=1
+fi
+rm -rf "$red_aud"
+# RED: drop aud_soft_switch from `declicking`. The output follows the NEXT target,
+# already 0 on the switch's first cycle, while soft_arm/declick_win rise a cycle
+# later -- so that first cycle snaps to 0: the very step being removed. Phase D1.
+red_aud=$(mktemp -d)
+sed "s/wire declicking = aud_soft_switch || soft_arm || /wire declicking = soft_arm || /" \
+    dvd/dvd_audio_decode.sv > "$red_aud/dvd_audio_decode.sv"
+if ! cmp -s dvd/dvd_audio_decode.sv "$red_aud/dvd_audio_decode.sv" \
+   && iv "$red_aud/sim" dvd/ac3/*.sv dvd/lpcm_unpack.sv dvd/mp2/mp2_decode.sv "$red_aud/dvd_audio_decode.sv" \
+      bench/dvd/dvd_audio_decode_tb.sv 2>/dev/null \
+   && vvp "$red_aud/sim" 2>/dev/null | grep -q "FAIL D1: snapped to 0 instead of ramping"; then
+  echo "  PASS dvd_audio_decode RED (a first-cycle snap on the switch is caught)"
+else
+  echo "  FAIL dvd_audio_decode RED -- the bench cannot see the switch's first-cycle snap"; fail=1
 fi
 rm -rf "$red_aud"
 echo "== 5. contracts =="

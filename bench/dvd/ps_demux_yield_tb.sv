@@ -53,7 +53,7 @@ module ps_demux_yield_tb;
     ps_demux dut (
         .clk(clk), .rst_n(rst_n),
         .in_byte(in_byte), .in_valid(in_valid), .in_ready(in_ready),
-        .aud_track(3'd0),                        // substream 0x80 (the 384k 5.1)
+        .aud_track(3'd0), .aud_realign(1'b0),                        // substream 0x80 (the 384k 5.1)
         .vid_byte(vid_byte), .vid_valid(vid_valid), .vid_ready(1'b1),
         .aud_byte(aud_byte), .aud_valid(aud_valid), .aud_type(aud_type),
         .aud_frame_start(aud_frame_start), .aud_ready(1'b1),

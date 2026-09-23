@@ -73,6 +73,142 @@ DTS/unknown) selects which feeds `audio_l/r`. On each `aud_ce` the registered
 output updates from the active source when its `aud_valid` is high, else holds.
 A DVD track is one audio type at a time, so only one sink is fed in practice.
 
+### De-click on an audio-only reset (2026-09-22, branch `fix/audio-declick-switch`)
+🔧 Sim-proven, 5 mutations each caught by exactly its own arm. ⏳ HW-confirm pending.
+
+**Report:** a harsh "static blip" every time B7 changed the audio track, in **Decode**
+mode. **Cause:** B7 → `aud_switch` → `flush_ctl.aud_resync` (64 cycles) → `aud_rst_n`
+→ `dvd_audio_decode`'s own `rst`, and the output mux did
+`if (rst || !enable) audio_l <= 0` — so whatever the old track was holding stepped to 0
+in **one clk_sys cycle**, then `0` stepped straight to the new track's first sample.
+Two full-scale discontinuities with no ramp is a broadband click. No mute, ramp or
+crossfade existed anywhere in that reset chain, and AC-3→AC-3 and AC-3→LPCM switches
+were treated identically.
+
+**Fix:** the old mux logic now computes a target's NEXT value combinationally
+(`tgt_nl/tgt_nr`). The output register chases that value by **1 LSB per clk_sys cycle**
+while de-clicking and takes it directly otherwise, so outside a de-click it is the
+original register, cycle for cycle. ⚠ **A first cut followed the REGISTERED target and
+added one clk_sys of latency.** It is inaudible, but `mp2_chain_tb`/`vcd_chain_tb`
+capture one cycle after `aud_valid` and reported ~13k/27k mismatches. So
+`aud_soft_switch` must also sit combinationally in `declicking`: the next target is 0 on
+the switch's first cycle, while `soft_arm`/`declick_win` rise a cycle later (mutation M5). 1 LSB/cycle covers the full 16-bit range in `DECLICK_WIN` =
+65535 cycles ≈ **2.43 ms**, so the register width is the divider.
+- **Only a GENTLE reset ramps.** New input `aud_soft_switch` = emu's
+  `aud_resync & ~aud_flush`. That is a track switch, or a display re-anchor on a
+  non-seamless cell (menu loops, ~4–6/min, benefit too). A HARD reset (`aud_flush`:
+  seek, mount, jump) still cuts on the same cycle: an instant cut is correct there and
+  a ramped seek would feel laggy. `~aud_flush` is there because a seek can land inside
+  a switch's 64 cycles, and the hard cause must win.
+- **Ramp-out** = a window from the switch. **Ramp-in** = `soft_arm` stays set from the
+  switch until the FIRST new sample lands in the target, and that sample restarts the
+  window. ⚠ **A window counted from the reset alone does NOT cover the ramp-in, and
+  that was the first design:** after `aud_resync` the ring is empty, the new
+  substream's next frame must come through the demux, and the drain gate holds it
+  until the STC reaches its PTS, which takes tens to hundreds of ms against 2.4 ms. The bench's
+  D3 arm runs with the scheduler off and passed on that broken design. D5 (content
+  arriving after the window) is the arm that sees it. Waiting while armed costs
+  nothing, because the target is 0 until a sample arrives.
+- **Ordinary playback is never slew-limited.** A legitimate full-scale transient can
+  swing the whole range between two samples, and limiting it would distort
+  high-level/high-frequency content.
+- ⚠ The step is exactly 1 LSB, so a hop cannot overshoot and the 16-bit compare needs no
+  widened difference. If `DECLICK_STEP` is ever widened, add a saturating guard: the gap can
+  reach 65535, which overflows 16-bit signed.
+- **Out of scope:** a CD track skip's `cdda_flush` resets only `lpcm_unpack`, never
+  this module's `rst`, so it neither gains the ramp nor can regress. The PASSTHROUGH
+  path has its own, separate gap: the optical S/PDIF leg (`SPDIF_PASS_EN`) has no
+  post-reset mute, though HDMI has one (`bs_hold`). See `docs/iec61937.md` "finding 3". To be fixed on its
+  own branch.
+
+**Gate:** `bench/dvd/run_stc_freerun.sh` §4 — `dvd_audio_decode_tb` phases D1–D5, E1–E2
+plus mutations M1 (every reset snaps → D1), M2 (no reset snaps → E1), M3 (window keyed
+on the reset only → D5), M4 (a hard reset leaves the ramp-in armed → E2), M5 (the
+switch's first cycle snaps → D1). The other three benches that instantiate the module
+(`mp2_chain_tb`, `vcd_chain_tb`, `cdda_audio_tb`) tie `aud_soft_switch` to 0.
+⚠ **Two bench traps met here.** (1) `rst` is `~rst_n` through a continuous assign
+while `aud_soft_switch` is a direct port. Change both on a posedge and the DUT can see
+`soft=0` with `rst=1`, a hard reset that hardware cannot produce. D1 had passed by
+scheduling luck, so drive them from the negedge. (2) Read `audio_l` with `#1` after
+the edge, or you see the pre-NBA value. **HW gate:** Decode mode, cycle B7 on a
+multi-track disc mid-dialogue and listen for a clean switch, then confirm a chapter
+skip still cuts instantly.
+
+### Audio-track switch realign — the pop was bad FRAMES, not the output step (2026-09-23)
+🔧 Sim-proven over a real disc slice, RED arm + 4 mutations each caught by its own arm.
+✅ HW-CONFIRMED 2026-09-23 (build `DVD_declick2_20260923_0125.rbf`), by ear and by capture.
+
+**HW measurement.** Setup: MiB feature, Decode, 40 Audio presses 4 s apart, driven from a
+loop on the target. Scored on the capture card by two readings: audio blips < 300 ms
+between two digital silences, and full-scale samples (|x| ≥ 32000). A garbage AC-3 frame
+decodes at 0 dBFS, so the second reading is the pop itself.
+
+| build | full-scale samples | blips | silent gaps |
+|---|---|---|---|
+| `main` (`dev-cddaphys8`) | 443 | in 2 clusters | 43 |
+| `dev-declick` (output de-click only) | 729 | 8 | 46 |
+| `dev-declick2` (this fix) | **0** | **0** | 41, one per switch |
+
+20 chapter skips on the fix: 0 / 0. ⚠ The step size at a silence boundary could not judge
+the output de-click. The 25 s settle lands in MiB's quiet opening, where the programme is
+±1–5 LSB. It needs a switch during loud content; the de-click is neither shown to help
+nor to harm. ⏳ **Open, pre-existing (identical on `main`):** MiB's looping main menu has
+a 36–49 ms full-scale burst between two silences at every loop point. Either it is
+authored, or it is the same mid-frame class on the loop-jump path, which this change does
+not touch. Decode the menu VOB's audio offline before touching RTL.
+
+**The de-click above was necessary and NOT sufficient.** On the first HW round the
+maintainer still heard an intermittent pop, with a shape a one-cycle step cannot make:
+pop, silence, a blip of correct audio, silence, then the correct audio. They heard it only
+landing on a 2.0 track from 5.1. That shape is the DECODER being fed bad frames: garbage
+(pop), `ac3_front`'s self-heal reset (silence), one good frame (blip), another bad
+boundary, then relock.
+
+**Measured, not argued:** `bench/dvd/aud_switch_chain_tb.sv` runs the real
+`ps_demux → ac3/dts/mp2_reframer → audio_ring` over 8 MB of MEN_IN_BLACK VTS_21 (0x81 =
+3/2, 0x80/0x82/0x83 = 2/0). It scores every frame the consumer receives for sync, for
+header length vs. ring length, and for which track (acmod) it belongs to. The pre-fix
+wiring gave **8 bad frames in 38 switches**, which is "intermittent", plus 1 old-track
+frame. Three mechanisms:
+1. **`ac3_reframer` kept its frame-length lock across the switch.** Its reset was
+   `reset_n` only ("self-heals on the next 0x0B77"). But the lock is exactly what stops it
+   healing: a 5.1 frame is 2–3× a 2.0 frame, so after 5.1→2.0 it rejected the new track's
+   real syncs until the OLD length had elapsed, and handed over MERGED frames (measured:
+   2528 bytes under a 768-byte header). That is why only 2.0 landings popped.
+2. **The new track starts mid-frame.** Its first PES payload is the tail of a frame that
+   began in an earlier PES. An unlocked reframer takes the first `0B77` it sees, and a
+   STRAY `0B77` ahead of the real frame then becomes a false-sync frame. Measured: **5 of
+   817** AC-3 PES in the slice carry one (~0.6 % of switches on this disc; the random sweep
+   never landed on one, which is why directed arms exist).
+3. **The old track's in-flight PES leaked past the ring reset.** `ps_demux` decides the
+   substream at each PES header, so after the 64-cycle `aud_resync` it finished the old
+   PES (up to ~2 KB) into the freshly reset ring.
+
+**Fix:**
+- `ps_demux.aud_realign` (emu: `aud_switch`) drops the rest of an old-track payload in
+  flight. It also re-checks an old PES that is still in its sub-header, so the switch can't
+  slip through on the cycle it exits. It then starts the new AC-3/DTS track at the first
+  PES carrying an access unit, skipping to its `first_access_unit_pointer` (counted from
+  the byte after the pointer, the convention `tools/acmod_scan.py` validated on real discs).
+  The fields were already in the sub-header ps_demux skipped. LPCM starts on a sample
+  boundary and is forwarded as is.
+- The three reframers reset on `aud_realign_q` (a registered `aud_switch`, since it drives
+  async resets) as well as the core reset, so the first boundary after a switch is the
+  real sync the demux lined up.
+- ⚠ **Seeks/jumps are deliberately untouched.** `rlgn_pend` is set only by `aud_realign`,
+  never at reset, and the reframers still do not reset on a seek. A seek landing mid-frame
+  has the same false-sync exposure (mechanism 2). It is a separate change with its own
+  blast radius (a `keep_vbuf` menu hop resets the demux but not the ring).
+
+**Gate:** `bench/dvd/run_aud_switch.sh --red` (needs `isoinfo` and MEN_IN_BLACK.iso under
+`DVD_ISO_DIR`; otherwise SKIPPED, loudly): a 38-switch sweep, three directed switches that
+land on the stray-sync PES (sectors 153/74/2139), and two that land inside an old-track
+sub-header. RED = the pre-fix wiring. N1 (no pointer skip) fails only the stray arms; N2
+(no in-flight cut) and N3 (reframer locks kept) fail the sweep; N4 (no substream re-check)
+fails only the sub-header arms. ⚠ Every bench instantiating `ps_demux` ties `aud_realign`
+to 0. A floating `z` reads as `x` in `rlgn_pend || aud_realign` and would send every PES
+down the realign branch.
+
 ### Substream / track select (`ps_demux.aud_track`, menu `O68,Audio Track`)
 A DVD program can interleave SEVERAL audio substreams of the same type — e.g. the
 Matrix VOB carries AC-3 `0x80` (5.1) + `0x81` & `0x82` (stereo). ps_demux must forward

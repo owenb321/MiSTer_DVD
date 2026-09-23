@@ -35,7 +35,7 @@ ps_demux dut (
     .in_byte        (in_byte),
     .in_valid       (in_valid),
     .in_ready       (in_ready),
-    .aud_track      (3'd1),          // select LPCM track 1 (substream 0xA1)
+    .aud_track      (3'd1), .aud_realign(1'b0),          // select LPCM track 1 (substream 0xA1)
     .sp_track       (3'd0),
     .sp_enable      (1'b0),
     .vid_byte       (vid_byte),

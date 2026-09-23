@@ -323,6 +323,65 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **SWITCHING AUDIO TRACKS POPPED IN DECODE MODE — two defects, and the one first
+  fixed was NOT the one heard (2026-09-22/23, branch `fix/audio-declick-switch`);
+  sim-proven over a real disc slice; built `DVD_declick2_20260923_0125.rbf` (SEED 9 first
+  roll, clk_dec 91.57/90.83, 94 % ALM); ✅ HW-CONFIRMED 2026-09-23 by ear (maintainer) AND
+  by measurement against two control builds.**
+  ★ **HIL instrument, reusable:** 40 Audio presses from a loop ON THE TARGET, captured,
+  then count (a) audio blips < 300 ms between two digital silences and (b) FULL-SCALE
+  samples. A garbage AC-3 frame decodes at 0 dBFS, which film audio essentially never
+  reaches, so (b) is the pop itself. MiB feature: pre-fix `main` **443** full-scale / 2
+  clusters, `dev-declick` **729** / 8 blips, fix **0 / 0** with one gap per switch.
+  20 chapter skips on the fix: **0 / 0**.
+  ⏳ **Open, pre-existing, NOT this fix:** MiB's looping main menu shows a 36–49 ms
+  full-scale burst between two silences at every loop point (~30 s), **identically on
+  `main`**. That is either authored or the same mid-frame class on the loop-jump path
+  this change deliberately leaves alone. Check the disc's own audio offline first.
+  ★★ **THE AUDIBLE POP WAS BAD FRAMES REACHING THE DECODER.** Round 1 shipped only the
+  output de-click (below, build `DVD_declick_20260922_2337.rbf`). The maintainer still
+  heard an intermittent pop, shaped pop → silence → a blip of correct audio → silence →
+  correct audio, and only when landing on 2.0 from 5.1. No output step makes that shape:
+  it is garbage frames, the decoder's self-heal reset, and a relock.
+  New `bench/dvd/aud_switch_chain_tb.sv` (real `ps_demux → reframers → audio_ring` over
+  MEN_IN_BLACK VTS_21) measured **8 bad frames in 38 switches** pre-fix, from three
+  mechanisms:
+  - `ac3_reframer` kept the OLD track's frame-length lock (reset only on the core reset),
+    so after 5.1→2.0 it MERGED the new track's frames (2528 B under a 768 B header);
+  - the new track starts mid-frame, and a stray `0B77` ahead of the real frame (5 of 817
+    PES) became a false sync;
+  - the old track's in-flight PES leaked into the freshly reset ring.
+
+  **Fix:** `ps_demux.aud_realign` (= `aud_switch`) cuts the old payload, re-checks an old
+  PES still in its sub-header, and starts the new AC-3/DTS track at its
+  `first_access_unit_pointer`. The reframers also reset on a registered `aud_switch`.
+  Result: 0 bad. ⚠ **Seeks deliberately untouched.** They carry the same mid-frame
+  exposure and want their own change.
+  **Gate `bench/dvd/run_aud_switch.sh --red`:** the pre-fix wiring fails, and each of 4
+  mutations fails its own arm. The pointer skip is only visible through DIRECTED arms
+  landing on the stray-sync PES; a random sweep never hits one. ⚠ Every `ps_demux` bench
+  ties `aud_realign` to 0, because `z` reads as `x` in the realign condition.
+  Detail: **`docs/fabric_audio.md` "Audio-track switch realign"**.
+  **The output de-click (round 1, still shipped):** field report: a harsh static blip on every B7 press, confirmed Decode (PCM) mode. B7 →
+  `aud_resync` → `aud_rst_n`, and `dvd_audio_decode`'s mux did `if (rst) audio_l <= 0`.
+  **Fix:** a slew-limited output (1 LSB/cycle ≈ 2.4 ms full range) that chases the old mux's
+  target only while de-clicking. The trigger is `aud_soft_switch = aud_resync & ~aud_flush`,
+  so a seek/mount/jump still cuts instantly. Outside a de-click the output is the original
+  register cycle for cycle. ⚠ Following a REGISTERED target instead added one clk_sys of
+  latency, which `mp2_chain_tb`/`vcd_chain_tb` read as thousands of mismatches.
+  ⚠⚠ **The ramp-IN must key on the first NEW SAMPLE, not on the reset.** The first design
+  counted a 2.4 ms window from the reset, and the new track's first sample arrives tens to
+  hundreds of ms later (ring refill plus the drain gate's PTS hold), so that edge still
+  snapped. The bench's D3 arm runs with the scheduler off and passed that broken design;
+  only D5 (late content) sees it. ⚠ Bench trap: `rst` is `~rst_n` through a continuous
+  assign, so stimulus changing both it and `aud_soft_switch` on a posedge fabricates a
+  "hard" reset. Drive them from the negedge. Gate `bench/dvd/run_stc_freerun.sh` §4.
+  ⏳ **Separate, unfixed, and NOT this report:** in Passthru, the optical S/PDIF leg
+  (`SPDIF_PASS_EN = pass_mode`) has no post-reset mute, while HDMI has `bs_hold`, so a
+  track switch sends a torn IEC 61937 burst to a receiver over optical. That is
+  `docs/iec61937.md` finding 3, and it wants its own branch. Detail: **`docs/fabric_audio.md`
+  "De-click on an audio-only reset"**.
+
 - ✅ **PHYSICAL VCD/SVCD DISC PLAYBACK — needs zero RTL changes (2026-09-17, branch
   `feature/vcd-svcd-physical`); host-proven, mutation-checked, and ✅ HW-CONFIRMED
   2026-09-20 on a real burned test disc (both bugs the first HW round found are now

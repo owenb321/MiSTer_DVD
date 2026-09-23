@@ -37,7 +37,7 @@ ps_demux dut (
     .in_byte        (in_byte),
     .in_valid       (in_valid),
     .in_ready       (in_ready),
-    .aud_track      (3'd0),
+    .aud_track      (3'd0), .aud_realign(1'b0),
     .vid_byte       (vid_byte),
     .vid_valid      (vid_valid),
     .vid_ready      (vid_ready),

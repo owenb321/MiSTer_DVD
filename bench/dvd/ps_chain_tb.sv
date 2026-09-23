@@ -105,7 +105,7 @@ ps_stream_fifo r_fifo (
 
 ps_demux r_dut (
     .clk(clk), .rst_n(rst_n),
-    .in_byte(r_inb), .in_valid(r_inv), .in_ready(r_inr), .aud_track(3'd0),
+    .in_byte(r_inb), .in_valid(r_inv), .in_ready(r_inr), .aud_track(3'd0), .aud_realign(1'b0),
     .vid_byte(r_vb), .vid_valid(r_vv), .vid_ready(1'b1),       // never stalled
     .aud_byte(r_ab), .aud_valid(r_av), .aud_type(r_at),
     .aud_frame_start(r_afs), .aud_ready(1'b1),
@@ -160,7 +160,7 @@ ps_stream_fifo d_fifo (
 
 ps_demux d_dut (
     .clk(clk), .rst_n(rst_n),
-    .in_byte(d_inb), .in_valid(d_inv), .in_ready(d_inr), .aud_track(3'd0),
+    .in_byte(d_inb), .in_valid(d_inv), .in_ready(d_inr), .aud_track(3'd0), .aud_realign(1'b0),
     .vid_byte(d_vb), .vid_valid(d_vv), .vid_ready(~core_busy),
     .aud_byte(), .aud_valid(), .aud_type(), .aud_frame_start(), .aud_ready(1'b1),
     .vid_pts(), .vid_pts_valid(), .aud_pts(), .aud_pts_valid());
