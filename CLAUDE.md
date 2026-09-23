@@ -323,12 +323,34 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **SWITCHING AUDIO TRACKS CLICKED IN DECODE MODE — the output stepped to 0 and back
-  in one clk_sys cycle each way (2026-09-22, branch `fix/audio-declick-switch`);
-  sim-proven, 5 mutations each caught by exactly its own arm; built
-  `DVD_declick_20260922_2337.rbf` (SEED 9 first roll, clk_dec 90.94/92.77, 93 % ALM);
-  ⏳ HW-confirm pending.**
-  Field report: a harsh static blip on every B7 press, confirmed Decode (PCM) mode. B7 →
+- 🔧 **SWITCHING AUDIO TRACKS POPPED IN DECODE MODE — two defects, and the one first
+  fixed was NOT the one heard (2026-09-22/23, branch `fix/audio-declick-switch`);
+  sim-proven over a real disc slice, ⏳ HW-confirm pending.**
+  ★★ **THE AUDIBLE POP WAS BAD FRAMES REACHING THE DECODER.** Round 1 shipped only the
+  output de-click (below, build `DVD_declick_20260922_2337.rbf`). The maintainer still
+  heard an intermittent pop, shaped pop → silence → a blip of correct audio → silence →
+  correct audio, and only when landing on 2.0 from 5.1. No output step makes that shape:
+  it is garbage frames, the decoder's self-heal reset, and a relock.
+  New `bench/dvd/aud_switch_chain_tb.sv` (real `ps_demux → reframers → audio_ring` over
+  MEN_IN_BLACK VTS_21) measured **8 bad frames in 38 switches** pre-fix, from three
+  mechanisms:
+  - `ac3_reframer` kept the OLD track's frame-length lock (reset only on the core reset),
+    so after 5.1→2.0 it MERGED the new track's frames (2528 B under a 768 B header);
+  - the new track starts mid-frame, and a stray `0B77` ahead of the real frame (5 of 817
+    PES) became a false sync;
+  - the old track's in-flight PES leaked into the freshly reset ring.
+
+  **Fix:** `ps_demux.aud_realign` (= `aud_switch`) cuts the old payload, re-checks an old
+  PES still in its sub-header, and starts the new AC-3/DTS track at its
+  `first_access_unit_pointer`. The reframers also reset on a registered `aud_switch`.
+  Result: 0 bad. ⚠ **Seeks deliberately untouched.** They carry the same mid-frame
+  exposure and want their own change.
+  **Gate `bench/dvd/run_aud_switch.sh --red`:** the pre-fix wiring fails, and each of 4
+  mutations fails its own arm. The pointer skip is only visible through DIRECTED arms
+  landing on the stray-sync PES; a random sweep never hits one. ⚠ Every `ps_demux` bench
+  ties `aud_realign` to 0, because `z` reads as `x` in the realign condition.
+  Detail: **`docs/fabric_audio.md` "Audio-track switch realign"**.
+  **The output de-click (round 1, still shipped):** field report: a harsh static blip on every B7 press, confirmed Decode (PCM) mode. B7 →
   `aud_resync` → `aud_rst_n`, and `dvd_audio_decode`'s mux did `if (rst) audio_l <= 0`.
   **Fix:** a slew-limited output (1 LSB/cycle ≈ 2.4 ms full range) that chases the old mux's
   target only while de-clicking. The trigger is `aud_soft_switch = aud_resync & ~aud_flush`,

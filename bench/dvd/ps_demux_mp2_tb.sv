@@ -43,7 +43,7 @@ module ps_demux_mp2_tb;
     ps_demux dut (
         .clk(clk), .rst_n(rst_n),
         .in_byte(in_byte), .in_valid(in_valid), .in_ready(in_ready),
-        .aud_track(aud_track),
+        .aud_track(aud_track), .aud_realign(1'b0),
         .sp_track(3'd0), .sp_enable(1'b0),
         .vid_byte(vid_byte), .vid_valid(vid_valid), .vid_ready(1'b1),
         .aud_byte(aud_byte), .aud_valid(aud_valid), .aud_type(aud_type),

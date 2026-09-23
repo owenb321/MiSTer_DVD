@@ -134,6 +134,62 @@ the edge, or you see the pre-NBA value. **HW gate:** Decode mode, cycle B7 on a
 multi-track disc mid-dialogue and listen for a clean switch, then confirm a chapter
 skip still cuts instantly.
 
+### Audio-track switch realign — the pop was bad FRAMES, not the output step (2026-09-23)
+🔧 Sim-proven over a real disc slice, RED arm + 4 mutations each caught by its own arm.
+⏳ HW-confirm pending.
+
+**The de-click above was necessary and NOT sufficient.** On the first HW round the
+maintainer still heard an intermittent pop, with a shape a one-cycle step cannot make:
+pop, silence, a blip of correct audio, silence, then the correct audio. They heard it only
+landing on a 2.0 track from 5.1. That shape is the DECODER being fed bad frames: garbage
+(pop), `ac3_front`'s self-heal reset (silence), one good frame (blip), another bad
+boundary, then relock.
+
+**Measured, not argued:** `bench/dvd/aud_switch_chain_tb.sv` runs the real
+`ps_demux → ac3/dts/mp2_reframer → audio_ring` over 8 MB of MEN_IN_BLACK VTS_21 (0x81 =
+3/2, 0x80/0x82/0x83 = 2/0). It scores every frame the consumer receives for sync, for
+header length vs. ring length, and for which track (acmod) it belongs to. The pre-fix
+wiring gave **8 bad frames in 38 switches**, which is "intermittent", plus 1 old-track
+frame. Three mechanisms:
+1. **`ac3_reframer` kept its frame-length lock across the switch.** Its reset was
+   `reset_n` only ("self-heals on the next 0x0B77"). But the lock is exactly what stops it
+   healing: a 5.1 frame is 2–3× a 2.0 frame, so after 5.1→2.0 it rejected the new track's
+   real syncs until the OLD length had elapsed, and handed over MERGED frames (measured:
+   2528 bytes under a 768-byte header). That is why only 2.0 landings popped.
+2. **The new track starts mid-frame.** Its first PES payload is the tail of a frame that
+   began in an earlier PES. An unlocked reframer takes the first `0B77` it sees, and a
+   STRAY `0B77` ahead of the real frame then becomes a false-sync frame. Measured: **5 of
+   817** AC-3 PES in the slice carry one (~0.6 % of switches on this disc; the random sweep
+   never landed on one, which is why directed arms exist).
+3. **The old track's in-flight PES leaked past the ring reset.** `ps_demux` decides the
+   substream at each PES header, so after the 64-cycle `aud_resync` it finished the old
+   PES (up to ~2 KB) into the freshly reset ring.
+
+**Fix:**
+- `ps_demux.aud_realign` (emu: `aud_switch`) drops the rest of an old-track payload in
+  flight. It also re-checks an old PES that is still in its sub-header, so the switch can't
+  slip through on the cycle it exits. It then starts the new AC-3/DTS track at the first
+  PES carrying an access unit, skipping to its `first_access_unit_pointer` (counted from
+  the byte after the pointer, the convention `tools/acmod_scan.py` validated on real discs).
+  The fields were already in the sub-header ps_demux skipped. LPCM starts on a sample
+  boundary and is forwarded as is.
+- The three reframers reset on `aud_realign_q` (a registered `aud_switch`, since it drives
+  async resets) as well as the core reset, so the first boundary after a switch is the
+  real sync the demux lined up.
+- ⚠ **Seeks/jumps are deliberately untouched.** `rlgn_pend` is set only by `aud_realign`,
+  never at reset, and the reframers still do not reset on a seek. A seek landing mid-frame
+  has the same false-sync exposure (mechanism 2). It is a separate change with its own
+  blast radius (a `keep_vbuf` menu hop resets the demux but not the ring).
+
+**Gate:** `bench/dvd/run_aud_switch.sh --red` (needs `isoinfo` and MEN_IN_BLACK.iso under
+`DVD_ISO_DIR`; otherwise SKIPPED, loudly): a 38-switch sweep, three directed switches that
+land on the stray-sync PES (sectors 153/74/2139), and two that land inside an old-track
+sub-header. RED = the pre-fix wiring. N1 (no pointer skip) fails only the stray arms; N2
+(no in-flight cut) and N3 (reframer locks kept) fail the sweep; N4 (no substream re-check)
+fails only the sub-header arms. ⚠ Every bench instantiating `ps_demux` ties `aud_realign`
+to 0. A floating `z` reads as `x` in `rlgn_pend || aud_realign` and would send every PES
+down the realign branch.
+
 ### Substream / track select (`ps_demux.aud_track`, menu `O68,Audio Track`)
 A DVD program can interleave SEVERAL audio substreams of the same type — e.g. the
 Matrix VOB carries AC-3 `0x80` (5.1) + `0x81` & `0x82` (stereo). ps_demux must forward

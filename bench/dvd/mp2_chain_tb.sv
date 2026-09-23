@@ -68,7 +68,7 @@ module mp2_chain_tb;
     ps_demux demux (
         .clk(clk), .rst_n(rst_n),
         .in_byte(in_byte), .in_valid(in_valid), .in_ready(in_ready),
-        .aud_track(3'd0),
+        .aud_track(3'd0), .aud_realign(1'b0),
         .sp_track(3'd0), .sp_enable(1'b0),
         .vid_byte(), .vid_valid(), .vid_ready(1'b1),
         .aud_byte(ps_aud_byte), .aud_valid(ps_aud_valid), .aud_type(ps_aud_type),

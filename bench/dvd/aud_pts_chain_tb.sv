@@ -63,7 +63,7 @@ ps_demux ps_demux_inst (
     .vid_byte(vid_byte), .vid_valid(vid_valid), .vid_ready(1'b1),
     .aud_byte(aud_byte), .aud_valid(aud_valid), .aud_ready(1'b1),
     .aud_type(aud_type), .aud_frame_start(aud_frame_start),
-    .aud_track(3'd0),
+    .aud_track(3'd0), .aud_realign(1'b0),
     .vid_pts(vid_pts), .vid_pts_valid(vid_pts_valid),
     .aud_pts(aud_pts), .aud_pts_valid(aud_pts_valid),
     .aud_frame_pts(aud_frame_pts), .aud_frame_pts_valid(aud_frame_pts_valid)
