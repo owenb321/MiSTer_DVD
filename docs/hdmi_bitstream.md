@@ -139,7 +139,9 @@ counter restarts from its own reset state, so the two re-align three cycles in.
 `rst_audio_n` pulses on **every audio-track switch and `aud_flush`**, so this is
 recurring, not a power-on curiosity. Hence the ~100 ms hold-off in `dvd/emu.sv`:
 across a re-phase the HDMI leg mutes, so a receiver sees clean silence and one
-switch rather than a torn subframe.
+switch rather than a torn subframe. Since 2026-09-23 the same `bs_hold` also gates
+the optical S/PDIF leg (`SPDIF_PASS_EN`), which had carried the torn burst — see
+`docs/iec61937.md` finding 3.
 
 The framework's own `areset` is the mirror image — it is pulsed by **every OSD
 volume keypress** (`audio.cpp` `setFilter()` → `sys_top.v:359-369`), restarting

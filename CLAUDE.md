@@ -376,11 +376,31 @@ worse maintenance burden than targeted in-place edits. So:
   only D5 (late content) sees it. ⚠ Bench trap: `rst` is `~rst_n` through a continuous
   assign, so stimulus changing both it and `aud_soft_switch` on a posedge fabricates a
   "hard" reset. Drive them from the negedge. Gate `bench/dvd/run_stc_freerun.sh` §4.
-  ⏳ **Separate, unfixed, and NOT this report:** in Passthru, the optical S/PDIF leg
-  (`SPDIF_PASS_EN = pass_mode`) has no post-reset mute, while HDMI has `bs_hold`, so a
-  track switch sends a torn IEC 61937 burst to a receiver over optical. That is
-  `docs/iec61937.md` finding 3, and it wants its own branch. Detail: **`docs/fabric_audio.md`
+  🔧 The optical S/PDIF passthrough gap this report did NOT cover is now fixed separately,
+  see the bullet below. Detail: **`docs/fabric_audio.md`
   "De-click on an audio-only reset"**.
+
+- 🔧 **PASSTHRU OVER OPTICAL SENT A TORN IEC 61937 BURST AT EVERY TRACK SWITCH — THE
+  HDMI LEG'S POST-RESET HOLD NEVER REACHED S/PDIF (2026-09-23, branch
+  `fix/spdif-track-switch-mute`); sim/wiring-proven, 4 RED arms each caught by its own
+  message, ⏳ HW-confirm pending (the maintainer's passthru round).** Every audio-track
+  switch and `aud_flush` cold-resets `iec61937_wrap` mid-burst and re-phases its pacing
+  (509 clk instead of 512, `iec61937_wrap_tb` TEST 9 — `docs/iec61937.md` finding 3).
+  `bs_hold` has muted HDMI for ~100 ms across that since the HDMI bitstream work;
+  `SPDIF_PASS_EN` was `pass_mode` alone, so optical carried the tear.
+  **Fix: `SPDIF_PASS_EN = pass_mode & ~|bs_hold`.** ★ No new mechanism: while low,
+  `sys_top.v`'s `spdif_out` falls back to the framework's PCM encoder carrying
+  `AUDIO_L/R`, which `pcm_mute` holds at zero because `aud_route.pcm_session` resets on
+  the same `aud_rst_n` — so optical sees PCM silence then one PCM→bitstream switch, the
+  fj#110 shape receivers lock to. ⛔ **NOT coupled to `hdmi_bs_ack`**, although symmetry
+  with `HDMI_BS_EN` invites it: that ack reports the ADV7513's I2C non-PCM register, which
+  optical has no equivalent of (its flag is in-band, per block), so coupling them would
+  silence optical passthrough on every stock-Main rig and every sink without AC-3.
+  ⚠ Also applies at every seek and mount (same reset), exactly as HDMI always has.
+  **Gate: `tools/check_spdif_bs_hold_wiring.py`** (emu has no bench), run from
+  `bench/dvd/run_hdmi_bitstream.sh`; `--red` fails it on the pre-fix file out of git, an
+  ack coupling, a dropped HDMI hold, and a duplicate driver. Detail: `docs/iec61937.md`
+  finding 3.
 
 - ✅ **PHYSICAL VCD/SVCD DISC PLAYBACK — needs zero RTL changes (2026-09-17, branch
   `feature/vcd-svcd-physical`); host-proven, mutation-checked, and ✅ HW-CONFIRMED
