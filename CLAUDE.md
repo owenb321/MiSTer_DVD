@@ -326,7 +326,18 @@ worse maintenance burden than targeted in-place edits. So:
 - 🔧 **SWITCHING AUDIO TRACKS POPPED IN DECODE MODE — two defects, and the one first
   fixed was NOT the one heard (2026-09-22/23, branch `fix/audio-declick-switch`);
   sim-proven over a real disc slice; built `DVD_declick2_20260923_0125.rbf` (SEED 9 first
-  roll, clk_dec 91.57/90.83, 94 % ALM); ⏳ HW-confirm pending.**
+  roll, clk_dec 91.57/90.83, 94 % ALM); ✅ HW-CONFIRMED 2026-09-23 by ear (maintainer) AND
+  by measurement against two control builds.**
+  ★ **HIL instrument, reusable:** 40 Audio presses from a loop ON THE TARGET, captured,
+  then count (a) audio blips < 300 ms between two digital silences and (b) FULL-SCALE
+  samples. A garbage AC-3 frame decodes at 0 dBFS, which film audio essentially never
+  reaches, so (b) is the pop itself. MiB feature: pre-fix `main` **443** full-scale / 2
+  clusters, `dev-declick` **729** / 8 blips, fix **0 / 0** with one gap per switch.
+  20 chapter skips on the fix: **0 / 0**.
+  ⏳ **Open, pre-existing, NOT this fix:** MiB's looping main menu shows a 36–49 ms
+  full-scale burst between two silences at every loop point (~30 s), **identically on
+  `main`**. That is either authored or the same mid-frame class on the loop-jump path
+  this change deliberately leaves alone. Check the disc's own audio offline first.
   ★★ **THE AUDIBLE POP WAS BAD FRAMES REACHING THE DECODER.** Round 1 shipped only the
   output de-click (below, build `DVD_declick_20260922_2337.rbf`). The maintainer still
   heard an intermittent pop, shaped pop → silence → a blip of correct audio → silence →

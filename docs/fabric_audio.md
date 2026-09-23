@@ -136,7 +136,26 @@ skip still cuts instantly.
 
 ### Audio-track switch realign — the pop was bad FRAMES, not the output step (2026-09-23)
 🔧 Sim-proven over a real disc slice, RED arm + 4 mutations each caught by its own arm.
-⏳ HW-confirm pending.
+✅ HW-CONFIRMED 2026-09-23 (build `DVD_declick2_20260923_0125.rbf`), by ear and by capture.
+
+**HW measurement.** Setup: MiB feature, Decode, 40 Audio presses 4 s apart, driven from a
+loop on the target. Scored on the capture card by two readings: audio blips < 300 ms
+between two digital silences, and full-scale samples (|x| ≥ 32000). A garbage AC-3 frame
+decodes at 0 dBFS, so the second reading is the pop itself.
+
+| build | full-scale samples | blips | silent gaps |
+|---|---|---|---|
+| `main` (`dev-cddaphys8`) | 443 | in 2 clusters | 43 |
+| `dev-declick` (output de-click only) | 729 | 8 | 46 |
+| `dev-declick2` (this fix) | **0** | **0** | 41, one per switch |
+
+20 chapter skips on the fix: 0 / 0. ⚠ The step size at a silence boundary could not judge
+the output de-click. The 25 s settle lands in MiB's quiet opening, where the programme is
+±1–5 LSB. It needs a switch during loud content; the de-click is neither shown to help
+nor to harm. ⏳ **Open, pre-existing (identical on `main`):** MiB's looping main menu has
+a 36–49 ms full-scale burst between two silences at every loop point. Either it is
+authored, or it is the same mid-frame class on the loop-jump path, which this change does
+not touch. Decode the menu VOB's audio offline before touching RTL.
 
 **The de-click above was necessary and NOT sufficient.** On the first HW round the
 maintainer still heard an intermittent pop, with a shape a one-cycle step cannot make:
