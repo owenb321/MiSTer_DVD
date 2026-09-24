@@ -1,6 +1,6 @@
 # Compatibility
 
-What plays, what does not, and what is untested. Current as of **v0.6.1**.
+What plays, what does not, and what is untested. Current as of **v0.7.0**.
 
 ## Formats
 
@@ -10,7 +10,7 @@ What plays, what does not, and what is untested. Current as of **v0.6.1**.
 | **DVD-Video, physical disc** | Full support, with [`MiSTer_DVDcss`](../formats/physical-discs.md) |
 | **DVD-Video, CSS-encrypted** | Full support, with `MiSTer_DVDcss` + libdvdcss |
 | **UDF-only image** | **Not supported** — reports `UNSUPPORTED IMAGE` |
-| **Video CD / SVCD** | [Basic playback](../formats/vcd-svcd.md) — no menus/PBC |
+| **Video CD / SVCD** | [Basic playback](../formats/vcd-svcd.md) — no menus/PBC; image or [physical disc](../formats/physical-discs.md#video-cd-super-video-cd-from-the-drive) |
 | **`.VOB` / `.mpg` / `.m2v`** | Linear playback, no navigation |
 | **`.wav` audio file** | 16-bit stereo PCM at 44.1/48 kHz only — audio, no picture |
 | **Audio CD (physical)** | Plays with track skip and a progress bar, needs [`MiSTer_DVDcss`](../formats/physical-discs.md#audio-cds) |

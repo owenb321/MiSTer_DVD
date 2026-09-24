@@ -63,7 +63,8 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   like any other core.
 - **[Closed captions](https://owenb321.github.io/MiSTer_DVD/video/closed-captions/)** re-modulated onto line 21 of the
   analog output for your television to decode, exactly as a real player does.
-- **[Video CD / SVCD](https://owenb321.github.io/MiSTer_DVD/formats/vcd-svcd/)** — bin/cue rips play directly.
+- **[Video CD / SVCD](https://owenb321.github.io/MiSTer_DVD/formats/vcd-svcd/)** — bin/cue rips play directly, and so
+  does the disc itself in a drive (needs `MiSTer_DVDcss`).
 - **[Audio CDs](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/#audio-cds)** — put a music CD in
   the drive and it plays, with track skip and a per-track clock, the way a DVD player always
   did (needs `MiSTer_DVDcss`). A
