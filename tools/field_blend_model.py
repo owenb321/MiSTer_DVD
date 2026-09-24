@@ -120,7 +120,9 @@ def synth_frame(W=128, H=32):
     yuvo = np.zeros((H, W, 4), dtype=np.uint8)
     yuvo[:, :, :3] = rs.randint(0, 256, size=(H, W, 3))
     yuvo[:, W - 8:, :3] = rs.randint(224, 256, size=(H, 8, 3))   # a saturating band
-    yuvo[:, :, 3] = (np.arange(W)[None, :] * 7 + 3) & 0xFF        # OSD pattern
+    # OSD varies by LINE as well as column: a pattern constant down a column would
+    # blend to itself, and a mutation that blends OSD would go unseen.
+    yuvo[:, :, 3] = (np.arange(W)[None, :] * 7 + np.arange(H)[:, None] * 53 + 3) & 0xFF
     return yuvo
 
 
