@@ -765,4 +765,120 @@ u = insert_before(u, 'else if (op & 1)\n\t\t\t{\n\t\t\t\tuint32_t buf_n',
 write(uio_path, u)
 print("[integration] user_io.cpp patched (read-ahead)")
 
+# ------------------------------------------------------------------- IR remap
+# Steps 50-53: normalise an IR receiver's / media keyboard's keycodes
+# (support/dvd/dvd_ir.{h,cpp}) so a remote works without the user mapping a
+# single button. See INTEGRATION.md "Steps 50-53".
+inp_path = os.path.join(ROOT, "input.cpp")
+ip = read(inp_path)
+
+# 50. include
+ip = insert_after(ip, '#include "file_io.h"',
+    '#include "support/dvd/dvd_ir.h"\n',
+    50, 'support/dvd/dvd_ir.h')
+
+# 51. The rewrite itself.
+#
+# ★★ PLACEMENT IS THE DESIGN, and it is the part most likely to be "tidied"
+# later into the `kbdmap` block ~20 lines up. It must sit HERE, after the three
+# map-loading blocks and before `if (!input[dev].num)`:
+#
+#   (a) input[dev].map[] / mmap[] -- where "Define buttons" stores the RAW
+#       ev->code, >= 256 included -- are filled by the blocks immediately
+#       above. At the kbdmap site they are still EMPTY on a device's FIRST
+#       event, so the "did the user bind this themselves?" test below would
+#       read an empty array and steal the binding exactly once.
+#   (b) It is downstream of input[dev].kbdmap, so an explicit
+#       config/kbd_<vid>_<pid>.map still wins outright.
+#   (c) It is upstream of the OSD chord (mmap[SYS_BTN_OSD_KTGL+1/+2]), the
+#       mapping session, and the `ev->code >= 256` joystick split -- the three
+#       consumers that must see the REWRITTEN code. Ceiling (1) in dvd_ir.h IS
+#       that split, so a hook below it would fix nothing at all.
+#
+# ⚠ insert_before() is unusable here: the next statement, `if (!input[dev].num)`,
+# has FOUR matches in this file. Hence replace_once on the block above it, which
+# is re-emitted verbatim.
+#
+# ⚠ `!mapping` keeps "Define buttons" capturing RAW codes, so a user can still
+# bind a remote key deliberately; the user_bound test then makes that binding
+# win at runtime.
+#
+# ⚠⚠ THE OSD PREDICATE IS user_io_osd_is_visible(), NOT menu_present(), AND THAT
+# WAS FOUND ON HARDWARE. menu_present() is `menustate != MENU_NONE1/NONE2`, which
+# is ALSO true while a transient InfoMessage is up (MENU_INFO) -- and this core
+# raises those from its own poll ticks. Every row whose OSD column is 0 means
+# "pass through untouched", so with menu_present() those rows went SILENTLY
+# INERT whenever a message happened to be on screen. Measured with the remap
+# trace: `ir: 358 -> 0 (B9 Display, OSD open)` with no OSD open at all.
+ip = replace_once(ip,
+    '\tif (!input[dev].has_advanced_map)\n'
+    '\t{\n'
+    '\t\tinput_advanced_load(dev);\n'
+    '\t\tinput[dev].has_advanced_map = true;\n'
+    '\t}\n',
+
+    '\tif (!input[dev].has_advanced_map)\n'
+    '\t{\n'
+    '\t\tinput_advanced_load(dev);\n'
+    '\t\tinput[dev].has_advanced_map = true;\n'
+    '\t}\n'
+    '\n'
+    '\tif (ev->type == EV_KEY && !mapping && dvd_ir_active())   // dvd:ir\n'
+    '\t{\n'
+    '\t\t// A key the user bound themselves outranks the table -- always. The\n'
+    '\t\t// raw code is what "Define buttons" stored, so compare against that\n'
+    '\t\t// and leave the event alone if it is found.\n'
+    '\t\tbool ir_user_bound = false;\n'
+    '\t\tfor (int n = 0; n < NUMBUTTONS && !ir_user_bound; n++)\n'
+    '\t\t{\n'
+    '\t\t\tif (input[dev].map[n] == ev->code) ir_user_bound = true;\n'
+    '\t\t\tif (input[dev].mmap[n] == ev->code) ir_user_bound = true;\n'
+    '\t\t}\n'
+    '\t\tif (!ir_user_bound)\n'
+    '\t\t{\n'
+    '\t\t\tuint16_t ir_to = dvd_ir_target(ev->code, user_io_osd_is_visible());\n'
+    '\t\t\tif (ir_to) ev->code = ir_to;\n'
+    '\t\t}\n'
+    '\t}\n',
+    51, '// dvd:ir')
+
+write(inp_path, ip)
+print("[integration] input.cpp patched (IR remap)")
+
+# 52/53. ini key.
+#
+# ⚠ RE-read cfg.h and cfg.cpp: step 21 already wrote both, and these anchors are
+# lines step 21 INSERTED. Working from a stale copy would drop step 21's rows.
+#
+# ⚠ The sense is 0 = off, 1 = on for the DVD core, 2 = on for every core, and
+# the default of 1 is applied by step 54 below.
+ch2 = read(cfgh_path)
+ch2 = insert_after(ch2, '\tuint8_t dvd_hdmi_bitstream;   // dvd:hdmibs 0=auto 1=off 2=force',
+    '\tuint8_t dvd_ir_remap;         // dvd:ir 0=off 1=on (DVD core) 2=on everywhere\n',
+    52, 'dvd_ir_remap')
+write(cfgh_path, ch2)
+
+cc2 = read(cfgc_path)
+cc2 = insert_after(cc2, '{ "DVD_HDMI_BITSTREAM", (void*)(&(cfg.dvd_hdmi_bitstream)), UINT8, 0, 2 },',
+    '\t{ "DVD_IR_REMAP", (void*)(&(cfg.dvd_ir_remap)), UINT8, 0, 2 },\n',
+    53, 'DVD_IR_REMAP')
+write(cfgc_path, cc2)
+
+# 54. THE DEFAULT. DVD_IR_REMAP is 1 (on for the DVD core) unless the ini says
+# otherwise, so a remote works out of the box -- which is the whole point of the
+# feature. cfg_parse() memsets cfg to zero and THEN applies a defaults block
+# (cfg.csync = 1, cfg.bootscreen = 1, cfg.dvi_mode = 2 ...), so a non-zero
+# default is the ordinary mechanism here rather than a special case.
+#
+# ⚠ An earlier cut avoided this step by defining 0 as the ON value, on the belief
+# that "cfg is memset to zero with no separate defaults pass". THAT BELIEF WAS
+# WRONG -- it is contradicted by the very block this step inserts into -- and it
+# also read backwards to anyone editing the ini, where 1 should enable a thing.
+cc3 = read(cfgc_path)
+cc3 = insert_after(cc3, '\tcfg.hdmi_cec_power_on = 1;',
+    '\tcfg.dvd_ir_remap = 1;   // dvd:ir 0=off 1=on (DVD core) 2=on everywhere\n',
+    54, 'cfg.dvd_ir_remap = 1')
+write(cfgc_path, cc3)
+print("[integration] cfg.h/cfg.cpp patched (DVD_IR_REMAP, default on)")
+
 print("[integration] done")

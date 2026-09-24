@@ -2221,6 +2221,40 @@ board-dependent with a USB-IR receiver as the recommended remote — and the **I
 (no receiver available; sim-covered by `dpad_seek_tb` T19a). Design:
 **`docs/dvd_nav.md` "Keyboard / CEC input"**.
 
+## 🔧 IR / media-remote keycode normalisation — ⏳ HW-confirm pending (2026-09-24)
+
+Branch `feature/ir-remote-keys`. A remote's media keys (Play, Stop, Chapter, Subtitle,
+Audio, the number pad) now work **with nothing mapped**, on any receiver that reaches
+`/dev/input/event*` as a keyboard.
+
+★ It is a Main-side change only — `main/support/dvd/dvd_ir.{h,cpp}` rewrites `ev->code`
+into keys `kbd_map.sv` already binds — so **no functional RTL change and no re-fit**; it
+rides the released `.rbf`.
+
+⚠ The problem was three stacked ceilings in stock Main, not just the ≥256 one the field
+report named, and **`KEY_PAUSE` is inert for a third reason entirely** (`ev2ps2[119]` is the
+`0xE1` multi-byte sequence). Without this: arrows, Enter and volume, nothing else — measured
+on a 2.4 GHz RF receiver as well as an MCE one.
+
+⛔ **eHome/`mceusb` receivers stay out of reach from here**: MiSTer's kernel ships no IR
+support on any line, so they produce no input device. Documented as *not supported out of
+the box* — never "cannot work" — with the DIY module route beside it, since a user's own
+modules plus this remap compose into a working remote. A separate upstream
+`MiSTer_defconfig` request (`CONFIG_RC_CORE=m` et al. against `master`/`MiSTer-v6.18`) is
+the real fix and does **not** gate this.
+
+**HW round owed:** `evtest` the rig's Flirc first to record its real keycodes, then the
+transport sweep, disc-menu digits, the OSD round trip, the Define-buttons regression arm,
+`DVD_IR_REMAP=0`, and a plain keyboard unregressed.
+★ **The ARM cross-compile FOUND ONE**, which is the whole argument for that gate:
+`KEY_FULL_SCREEN` shipped unguarded and is absent from the ARM toolchain's UAPI header
+(446 `KEY_*` names against the host's 527), so it would not have compiled while every
+host gate stayed green. Guarded; the build now links clean.
+⚠ The lesson is the audit, not the key: the sweep that had cleared the guards read the
+HOST header. Audit portability against the toolchain that will build the code.
+
+Design: **`docs/ir_remote.md`**.
+
 ## ✅ DONE: numeric button entry via keyboard (easter eggs / direct chapter select) — ✅ HW-CONFIRMED (PR fj#134)
 
 **Shipped + HW-CONFIRMED (2026-07-27, PR fj#134). Confirmed on HW by unlocking the T2
