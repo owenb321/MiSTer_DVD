@@ -765,4 +765,97 @@ u = insert_before(u, 'else if (op & 1)\n\t\t\t{\n\t\t\t\tuint32_t buf_n',
 write(uio_path, u)
 print("[integration] user_io.cpp patched (read-ahead)")
 
+# ------------------------------------------------------------------- IR remap
+# Steps 50-53: normalise an IR receiver's / media keyboard's keycodes
+# (support/dvd/dvd_ir.{h,cpp}) so a remote works without the user mapping a
+# single button. See INTEGRATION.md "Steps 50-53".
+inp_path = os.path.join(ROOT, "input.cpp")
+ip = read(inp_path)
+
+# 50. include
+ip = insert_after(ip, '#include "file_io.h"',
+    '#include "support/dvd/dvd_ir.h"\n',
+    50, 'support/dvd/dvd_ir.h')
+
+# 51. The rewrite itself.
+#
+# ★★ PLACEMENT IS THE DESIGN, and it is the part most likely to be "tidied"
+# later into the `kbdmap` block ~20 lines up. It must sit HERE, after the three
+# map-loading blocks and before `if (!input[dev].num)`:
+#
+#   (a) input[dev].map[] / mmap[] -- where "Define buttons" stores the RAW
+#       ev->code, >= 256 included -- are filled by the blocks immediately
+#       above. At the kbdmap site they are still EMPTY on a device's FIRST
+#       event, so the "did the user bind this themselves?" test below would
+#       read an empty array and steal the binding exactly once.
+#   (b) It is downstream of input[dev].kbdmap, so an explicit
+#       config/kbd_<vid>_<pid>.map still wins outright.
+#   (c) It is upstream of the OSD chord (mmap[SYS_BTN_OSD_KTGL+1/+2]), the
+#       mapping session, and the `ev->code >= 256` joystick split -- the three
+#       consumers that must see the REWRITTEN code. Ceiling (1) in dvd_ir.h IS
+#       that split, so a hook below it would fix nothing at all.
+#
+# ⚠ insert_before() is unusable here: the next statement, `if (!input[dev].num)`,
+# has FOUR matches in this file. Hence replace_once on the block above it, which
+# is re-emitted verbatim.
+#
+# ⚠ `!mapping` keeps "Define buttons" capturing RAW codes, so a user can still
+# bind a remote key deliberately; the user_bound test then makes that binding
+# win at runtime.
+ip = replace_once(ip,
+    '\tif (!input[dev].has_advanced_map)\n'
+    '\t{\n'
+    '\t\tinput_advanced_load(dev);\n'
+    '\t\tinput[dev].has_advanced_map = true;\n'
+    '\t}\n',
+
+    '\tif (!input[dev].has_advanced_map)\n'
+    '\t{\n'
+    '\t\tinput_advanced_load(dev);\n'
+    '\t\tinput[dev].has_advanced_map = true;\n'
+    '\t}\n'
+    '\n'
+    '\tif (ev->type == EV_KEY && !mapping && dvd_ir_active())   // dvd:ir\n'
+    '\t{\n'
+    '\t\t// A key the user bound themselves outranks the table -- always. The\n'
+    '\t\t// raw code is what "Define buttons" stored, so compare against that\n'
+    '\t\t// and leave the event alone if it is found.\n'
+    '\t\tbool ir_user_bound = false;\n'
+    '\t\tfor (int n = 0; n < NUMBUTTONS && !ir_user_bound; n++)\n'
+    '\t\t{\n'
+    '\t\t\tif (input[dev].map[n] == ev->code) ir_user_bound = true;\n'
+    '\t\t\tif (input[dev].mmap[n] == ev->code) ir_user_bound = true;\n'
+    '\t\t}\n'
+    '\t\tif (!ir_user_bound)\n'
+    '\t\t{\n'
+    '\t\t\tuint16_t ir_to = dvd_ir_target(ev->code, menu_present());\n'
+    '\t\t\tif (ir_to) ev->code = ir_to;\n'
+    '\t\t}\n'
+    '\t}\n',
+    51, '// dvd:ir')
+
+write(inp_path, ip)
+print("[integration] input.cpp patched (IR remap)")
+
+# 52/53. ini key.
+#
+# ⚠ RE-read cfg.h and cfg.cpp: step 21 already wrote both, and these anchors are
+# lines step 21 INSERTED. Working from a stale copy would drop step 21's rows.
+#
+# ⚠ 0 MUST BE THE DEFAULT-ON VALUE. cfg is memset to zero with no separate
+# defaults pass, so the sense is 0 = on for the DVD core, 1 = off, 2 = on for
+# every core -- mirroring DVD_HDMI_BITSTREAM's 0=auto 1=off 2=force.
+ch2 = read(cfgh_path)
+ch2 = insert_after(ch2, '\tuint8_t dvd_hdmi_bitstream;   // dvd:hdmibs 0=auto 1=off 2=force',
+    '\tuint8_t dvd_ir_remap;         // dvd:ir 0=on (DVD core) 1=off 2=on everywhere\n',
+    52, 'dvd_ir_remap')
+write(cfgh_path, ch2)
+
+cc2 = read(cfgc_path)
+cc2 = insert_after(cc2, '{ "DVD_HDMI_BITSTREAM", (void*)(&(cfg.dvd_hdmi_bitstream)), UINT8, 0, 2 },',
+    '\t{ "DVD_IR_REMAP", (void*)(&(cfg.dvd_ir_remap)), UINT8, 0, 2 },\n',
+    53, 'DVD_IR_REMAP')
+write(cfgc_path, cc2)
+print("[integration] cfg.h/cfg.cpp patched (DVD_IR_REMAP)")
+
 print("[integration] done")

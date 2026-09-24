@@ -71,6 +71,14 @@ cp "$HERE"/Scripts/install_dvdcss.sh "$STOCK/Scripts/"
 # 3. Patch user_io.cpp / user_io.h / Makefile.
 python3 "$HERE/integration/apply_integration.py" "$STOCK"
 
+# 3b. The IR remap table asserts things about three files it does not contain --
+# stock's ev2ps2[], dvd/kbd_map.sv and dvd/emu.sv -- and a restatement goes stale
+# SILENTLY: the remote simply stops doing what the manual says. Check it here,
+# where the stock tree is guaranteed to exist, hence --require-stock (elsewhere
+# the checker legitimately skips that arm, and a silent half-run reads exactly
+# like a full one). Run BEFORE the compile so a stale row costs a second.
+python3 "$HERE/../tools/check_ir_remap.py" --require-stock --stock "$STOCK"
+
 # 4. Build.
 echo "-- building (this is an ARM cross-compile; ensure your toolchain is on PATH)"
 make -C "$STOCK" ${CROSS_COMPILE:+CROSS_COMPILE="$CROSS_COMPILE"} -j"$(nproc)"

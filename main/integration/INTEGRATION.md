@@ -538,3 +538,105 @@ every byte is a pure function of disc LBA/offset) plus new arms in
 `dvd_phys_test.cpp` covering the dispatch itself. 6 RED mutations, each
 caught by its own arm (`run_tests.sh --red`). Detail:
 `MiSTer_DVD/docs/physical_disc.md`, `MiSTer_DVD/docs/vcd_svcd.md`.
+
+---
+
+## Steps 50-53 — IR / media-remote keycode normalisation (`support/dvd/dvd_ir.{h,cpp}`)
+
+| Step | File | What |
+|---|---|---|
+| 50 | `input.cpp` | `#include "support/dvd/dvd_ir.h"` after `#include "file_io.h"` (1 match) |
+| 51 | `input.cpp` | the rewrite itself (`// dvd:ir`), by `replace_once` on the `has_advanced_map` block |
+| 52 | `cfg.h` | `uint8_t dvd_ir_remap;` after step 21's `dvd_hdmi_bitstream` |
+| 53 | `cfg.cpp` | the `DVD_IR_REMAP` ini row after step 21's `DVD_HDMI_BITSTREAM` |
+
+**The problem.** A remote reaches Main as an ordinary keyboard, and stock Main
+then drops nearly everything it sends. Three stacked ceilings, measured against
+the pinned stock tree rather than assumed:
+
+| Ceiling | Where | Effect |
+|---|---|---|
+| `ev->code >= 256` routed to the **joystick** handler | `input.cpp:3602` | 39 of a Media Center receiver's 63 keycodes never reach the keyboard path — Title, Subtitle, Audio, DVD, Info, Next/Prev, the numeric pad |
+| `get_ps2_code()` returns `NONE` for `key > 255` | `input.cpp:1409-1412` | a second barrier behind the first |
+| `ev2ps2[]` is 256 entries **and most media keys are `NONE` in it** | `input.cpp:367` | PLAY, STOP, REWIND, FASTFORWARD, PLAYPAUSE, EJECTCD, EXIT, MEDIA all dropped |
+
+Without step 51: **arrows, Enter and volume work; nothing else does.**
+`KEY_PAUSE` is the sharpest case — `ev2ps2[119]` is `0xE1`, the multi-byte PS/2
+Pause sequence `dvd/kbd_map.sv` deliberately never binds, so the most obvious
+button on the handset is inert.
+
+### ★★ Step 51's PLACEMENT is the design, not a convenience
+
+It must sit **after** the three map-loading blocks and **before**
+`if (!input[dev].num)`. Three independent reasons, each of which alone would
+pin it there:
+
+1. **`input[dev].map[]` / `mmap[]` are filled by the blocks immediately above.**
+   That is where "Define buttons" stores the RAW `ev->code`, `>= 256` included.
+   At the `kbdmap` site ~20 lines up they are still **empty on a device's first
+   event**, so the "did the user bind this themselves?" test would read an empty
+   array and steal the binding exactly once.
+2. **Downstream of `input[dev].kbdmap`**, so an explicit
+   `config/kbd_<vid>_<pid>.map` still wins outright.
+3. **Upstream of the OSD chord** (`mmap[SYS_BTN_OSD_KTGL+1/+2]`), the mapping
+   session, and the `ev->code >= 256` joystick split — the three consumers that
+   must see the **rewritten** code. Ceiling (1) above *is* that split, so a hook
+   placed below it would fix nothing at all.
+
+⚠ **`insert_before` is unusable here.** The next statement,
+`if (!input[dev].num)`, has **four** matches in `input.cpp` — hence
+`replace_once` on the five-line `has_advanced_map` block above it, which the
+step re-emits verbatim.
+
+★ **`tools/tests/test_ir_integration.py` gates the ordering, not just the
+anchors** — it lifts these steps verbatim out of `apply_integration.py`, runs
+them against copies of the real stock files, and asserts all three placement
+properties. Its two RED arms cut the applied hook out and paste it back in the
+wrong places (before the map loads; below the `>= 256` split), because an
+ordering assertion that cannot fail is worse than none — it reads as
+protection. **A hook below the split applies cleanly, compiles, passes every
+host test in `main/tests/`, and fixes nothing at all.**
+
+⚠ **`!mapping` is load-bearing.** It keeps "Define buttons" capturing RAW
+codes, so a user can still deliberately bind a remote key; the `ir_user_bound`
+test then makes that binding win at runtime. Without it a remote key could never
+be re-bound by hand.
+
+### The ini key
+
+`DVD_IR_REMAP`, **default on**. ⚠ `cfg` is `memset` to zero with no separate
+defaults pass, so **0 must be the default-on value**: `0` = on for the DVD core,
+`1` = off, `2` = on for every core — mirroring `DVD_HDMI_BITSTREAM`'s
+`0=auto 1=off 2=force`. No OSD option: `CONF_STR` is inside the netlist and a
+menu row would re-roll the pinned fitter seed for a setting nobody changes.
+
+⚠ **Steps 52/53 re-`read()` `cfg.h` and `cfg.cpp`** — step 21 already wrote
+both, and these anchors are lines step 21 *inserted*. Working from a stale copy
+would drop step 21's rows.
+
+### Scope, stated honestly
+
+This cannot help a receiver the **kernel** never turns into an input device.
+MiSTer's kernel ships no IR support on any line (`# CONFIG_RC_CORE is not set`
+on `MiSTer-v5.15`, `MiSTer-v6.18` and `master` alike), so an eHome/`mceusb`
+dongle produces no `/dev/input` node and there is nothing here to remap — a
+kernel matter, not a core one, and `dvd_ir_probe_summary()` says so in
+`/tmp/dvd_report.log`. The supported path is a receiver that presents as a USB
+HID keyboard (Flirc and equivalents, 2.4 GHz RF media remotes, dock receivers,
+USB media keyboards); the manual documents the DIY kernel-module route beside
+it. **The two halves compose**: a user's own modules plus this normalisation is
+a working Media Center remote, and neither alone is.
+
+⛔ **Volume and mute are deliberately NOT remapped.** Main already drives the
+framework's ONE attenuator (`sys_top.v` `vol_att`, covering I2S, the analog DAC
+and S/PDIF together) at `user_io.cpp:4266-4280`. A second route would desync
+from the OSD bar and could not touch passthrough at all. `KEY_MENU`,
+`KEY_DELETE` and the power keys are reserved for the same class of reason; all
+of them are listed in `ir_deny[]` **with the reason beside each**, because an
+omission is not a decision.
+
+Host tests: `main/tests/dvd_ir_test.cpp` (76 assertions), 17 RED mutations in
+`run_tests.sh --red` each caught by its own named arm, plus
+`tools/check_ir_remap.py` — the derived-table gate, run from `build_main.sh`
+with `--require-stock` — and `tools/tests/test_check_ir_remap.py`, nine RED arms
+proving that checker can fail. Detail: `MiSTer_DVD/docs/ir_remote.md`.
