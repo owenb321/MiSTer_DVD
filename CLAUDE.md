@@ -325,7 +325,8 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **AN IR / MEDIA REMOTE'S KEYS NEVER REACHED THE CORE — THREE STACKED CEILINGS IN
   STOCK MAIN, NOT THE ONE EVERYONE POINTS AT (2026-09-24, branch `feature/ir-remote-keys`);
-  host-proven, 17 + 9 + 2 mutations each caught by its own arm, ⏳ HW-confirm pending.**
+  host-proven, ARM cross-compile clean, 17 + 9 + 2 mutations each caught by its own
+  arm, ⏳ HW-confirm pending.**
   Request: a Windows Media Center remote (Rosewill RHRC-11002, eHome dongle `147a:e03e`)
   working **by default, no remapping**, across the different MCE flavours. The report named
   the ≥256 keycode ceiling.
@@ -401,17 +402,31 @@ worse maintenance burden than targeted in-place edits. So:
   the `why` describes the PLAY target, and the OSD column never goes through `kbd_map.sv`
   at all (with the OSD open, `user_io_kbd` hands the raw keycode to `menu_key_set()`). The
   claim is enforced on `to_play` only.
-  ⚠⚠ **The six `#ifndef` cross-compile guards ARE NEVER EXERCISED WHERE THEY COMPILE** —
-  on any host new enough to define the code, `#ifndef` makes the fallback dead, so a wrong
-  constant compiles cleanly, passes all 76 assertions and silently maps the wrong key on the
-  only build that uses it. They are compared against `linux/input-event-codes.h` instead,
-  RED-proven by a one-digit mutation. (The guards exist for the `dvd_vcd.cpp` `<limits.h>`
-  class: invisible to a host `g++`, caught only by the real ARM build.)
-  ⚠⚠ **THE ARM CROSS-COMPILE HAS NOT RUN** — no Docker daemon and no native toolchain in the
-  session that wrote this. `USE_DOCKER=1 main/build_main.sh` is the ONLY gate for the
-  missing-header class, and ⚠ **read its LOG, not its exit status**: with the Docker daemon
-  down it exits **0** having built nothing (memory `docker-daemon-not-running`, re-confirmed
-  here).
+  ★★★ **THE ARM CROSS-COMPILE CAUGHT A REAL DEFECT AND IT IS THE WHOLE CASE FOR THE
+  GATE: `KEY_FULL_SCREEN` WAS UNGUARDED AND IS ABSENT FROM THE ARM TOOLCHAIN'S OWN UAPI
+  HEADER — IT WOULD NOT HAVE COMPILED**, while every host gate stayed green. MEASURED:
+  `gcc-arm-10.2` defines **446** `KEY_*` names against this host's **527**. Caught by
+  `check_ir_remap.py` running from `build_main.sh` INSIDE the container, before the
+  compiler reached it. ✅ Guarded (0x174, the same code as `KEY_ZOOM`, which IS present
+  there), and `USE_DOCKER=1 main/build_main.sh` now links clean — a stripped ARM EABI5
+  `MiSTer_DVDcss`.
+  ⚠⚠ **AND THE DURABLE LESSON IS MY OWN MISTAKE: an earlier audit swept all 126 `KEY_*`
+  names and concluded "none unguarded — all six guards are pure future-proofing". IT READ
+  THE HOST HEADER.** Portability must be audited against the toolchain that will BUILD the
+  code, never the one you are typing on — which is precisely what a host test cannot do.
+  ★ It also turned the guards from a precaution into a measured fact: against the real ARM
+  header **`KEY_FULL_SCREEN` and `KEY_ASPECT_RATIO` are both ABSENT** (load-bearing), and
+  the other five are present on both (genuine future-proofing). Seven guards now.
+  ⚠ **Finding the header is part of the gate:** the container carries no host kernel
+  headers, so the checker's first run there died outright. It now asks
+  `${CROSS_COMPILE}gcc -print-sysroot` and PREFERS the sysroot copy — both the one that
+  exists there and the one the guards must agree with. ⛔ Never a hardcoded `/opt` path.
+  ⚠⚠ **The fallbacks are still never exercised where they usually compile** — `#ifndef`
+  makes them dead on a modern host, so a wrong constant would pass all 76 assertions and
+  silently map the wrong key on the only build that uses them; they are compared against
+  `linux/input-event-codes.h`, RED-proven by a one-digit mutation.
+  ⚠ **Read the build's LOG, not its exit status** — with the Docker daemon down it exits
+  **0** having built nothing (memory `docker-daemon-not-running`, re-confirmed here).
   ⚠ Held keys do not repeat (`user_io.cpp:4114` drops autorepeat for the 8-bit core path),
   consistent with `kbd_map.sv`'s pulse-only design — expected, do not "fix" it.
   ★ Found beside it and FIXED, PRE-EXISTING: `tools/mister.py`'s `PS2_TO_LINUX` lacked the

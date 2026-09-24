@@ -232,18 +232,55 @@ honest; a wrongly bound one is a support ticket.
 
 ### Cross-compile guards
 
-Six `#ifndef` fallbacks (`KEY_ROOT_MENU` 0x26a, `KEY_MEDIA_TOP_MENU` 0x26b,
-`KEY_FASTREVERSE` 0x275, `KEY_ASPECT_RATIO` 0x177, `KEY_CONTEXT_MENU` 0x1b6,
-`KEY_MEDIA_REPEAT` 0x1b7) cover toolchain headers older than these codes —
-motivated by `dvd_vcd.cpp`'s missing `<limits.h>`, which was invisible to a host
-`g++` (glibc pulls it in transitively) and caught only by the real ARM build.
+**Seven** `#ifndef` fallbacks — `KEY_ROOT_MENU` 0x26a, `KEY_MEDIA_TOP_MENU`
+0x26b, `KEY_FASTREVERSE` 0x275, `KEY_FULL_SCREEN` 0x174, `KEY_ASPECT_RATIO`
+0x177, `KEY_CONTEXT_MENU` 0x1b6, `KEY_MEDIA_REPEAT` 0x1b7 — covering toolchain
+headers older than these codes. Motivated by `dvd_vcd.cpp`'s missing
+`<limits.h>`, which was invisible to a host `g++` (glibc pulls it in
+transitively) and caught only by the real ARM build.
 
-⚠⚠ **These are never exercised where they compile.** On any host new enough to
-define the code, `#ifndef` makes the fallback dead — so a wrong constant would
-compile cleanly, pass all 76 host assertions, and silently map the wrong key on
-the only build that uses it. `tools/tests/test_check_ir_remap.py` therefore
-compares each one against `linux/input-event-codes.h`, RED-proven by a one-digit
-mutation.
+★★ **AND THAT IS NOT HYPOTHETICAL HERE — THE CROSS-COMPILE CAUGHT A REAL ONE.**
+The ARM toolchain's own UAPI header (`gcc-arm-10.2`) defines **446** `KEY_*`
+names against this host's **527**, and `KEY_FULL_SCREEN` is one of the 81
+missing. It shipped **unguarded** and **would not have compiled**, while every
+host gate stayed green.
+
+⚠⚠ **THE DURABLE LESSON, because I made the mistake first:** an earlier audit
+swept all 126 `KEY_*` names the module uses and concluded *"none undefined and
+unguarded — all six guards are pure future-proofing"*. **That audit read the
+HOST header.** Portability must be checked against the toolchain that will build
+the code, never the one you are typing on — which is exactly the thing a host
+test cannot do and the reason this gate runs inside the container.
+
+★ **It also turned the guard mechanism from a precaution into a measured one.**
+Against the real ARM header:
+
+| guard | ARM toolchain | host |
+|---|---|---|
+| `KEY_FULL_SCREEN` | **absent** | present |
+| `KEY_ASPECT_RATIO` | **absent** | present |
+| the other five | present | present |
+
+So two of the seven are load-bearing on the build that ships, and five are
+genuine future-proofing. ⚠ `KEY_ZOOM` *is* present on ARM at the same code
+(0x174), so the guard is what keeps the two spellings interchangeable rather
+than forcing the table to pick the older name.
+
+⚠⚠ **The fallbacks are never exercised where they usually compile.** On any host
+new enough to define the code, `#ifndef` makes the fallback dead — so a wrong
+constant would compile cleanly, pass all 76 host assertions, and silently map
+the wrong key on the only build that uses it.
+`tools/tests/test_check_ir_remap.py` therefore compares each one against
+`linux/input-event-codes.h`, RED-proven by a one-digit mutation.
+
+⚠ **Finding the header is itself part of the gate.** The checker's first run in
+the container died with *"no header on this machine"* — the ARM image carries no
+host kernel headers. It now asks the cross-compiler
+(`${CROSS_COMPILE}gcc -print-sysroot`) and prefers the **sysroot** copy, which is
+both the one that exists there and the one the guards must actually agree with.
+⛔ Never a hardcoded `/opt/...` path: the image tag is overridable
+(`MAIN_DOCKER_IMAGE`) and a native toolchain lives somewhere else again.
+`KEY_HEADER=` overrides; `CHECK_IR_VERBOSE=1` prints which copy was used.
 
 ## 5. Gates
 
@@ -282,6 +319,10 @@ never targets the ARM toolchain. `USE_DOCKER=1 main/build_main.sh` is the only
 gate for that, and **its log must be read rather than its exit status**
 (`build_main.sh` has exited 0 on a failed compile before, and exits 0 when the
 Docker daemon is simply down).
+
+★★ **It earned that on this very branch** — see the guards section above: it
+rejected `KEY_FULL_SCREEN`, which no host gate could have. Status: the overlay
+cross-compiles and links clean (stripped ARM EABI5 `MiSTer_DVDcss`).
 
 ## 6. Upstream (separate; does not gate the release)
 

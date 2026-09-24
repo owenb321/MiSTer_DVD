@@ -15,6 +15,7 @@ the checker with --require-stock, where the tree is guaranteed. The in-repo arms
 always run, so a bare checkout still gets a real gate.
 """
 
+import importlib.util
 import os
 import re
 import shutil
@@ -124,10 +125,15 @@ print("\n=== the #ifndef fallbacks must match the kernel ===")
 # to define the code, #ifndef makes the fallback dead. So a WRONG constant would
 # compile cleanly here, pass every host test, and silently map the wrong key on
 # the only build that uses it. Compare them against the header instead.
+# ⚠ Share the checker's own search rather than repeating it -- a second copy
+# would drift, and the cross-toolchain sysroot case (the one that broke the
+# container build) lives only in the checker.
+_spec = importlib.util.spec_from_file_location("check_ir_remap", CHECKER)
+_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
 _hdr = None
-for _c in ("/usr/include/linux/input-event-codes.h",
-           "/usr/include/linux/input.h"):
-    if os.path.exists(_c):
+for _c in _mod.keycode_header_candidates():
+    if _c and os.path.exists(_c):
         _hdr = open(_c, encoding="utf-8").read()
         break
 if not _hdr:

@@ -37,6 +37,7 @@ cannot reach.
 import argparse
 import os
 import re
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,16 +76,52 @@ def strip_comments(text):
 
 
 # ----------------------------------------------------------------- keycodes
+def keycode_header_candidates():
+    """Where to find <linux/input-event-codes.h>, best source first.
+
+    ★ THE CROSS-COMPILER'S OWN SYSROOT COMES FIRST, and that is the point rather
+    than a fallback: this checker runs from main/build_main.sh, whose compile is
+    an ARM cross-build inside a pinned container that has NO host kernel headers
+    at all -- the first run there died with "no header on this machine". The
+    sysroot copy is also the one the guards in dvd_ir.cpp must actually agree
+    with, so reading it makes the fallback-constant check mean something on the
+    build that uses those fallbacks.
+
+    ⚠ Discovered via `gcc -print-sysroot`, never a hardcoded /opt path: the image
+    tag is overridable (MAIN_DOCKER_IMAGE) and a native toolchain lives
+    elsewhere again.
+    """
+    cands = [os.environ.get("KEY_HEADER")]
+
+    cc = os.environ.get("CROSS_COMPILE", "arm-none-linux-gnueabihf-") + "gcc"
+    try:
+        r = subprocess.run([cc, "-print-sysroot"], capture_output=True, text=True)
+        root = r.stdout.strip()
+        if r.returncode == 0 and root:
+            cands.append(os.path.join(root, "usr/include/linux/input-event-codes.h"))
+            cands.append(os.path.join(root, "usr/include/linux/input.h"))
+    except OSError:
+        pass
+
+    cands += ["/usr/include/linux/input-event-codes.h",
+              "/usr/include/linux/input.h"]
+    return cands
+
+
 def load_keycodes(ir_src):
     """KEY_* name -> number, resolved transitively so aliases collapse."""
-    hdr = None
-    for p in ("/usr/include/linux/input-event-codes.h",
-              "/usr/include/linux/input.h"):
-        if os.path.exists(p):
+    hdr = hdr_path = None
+    for p in keycode_header_candidates():
+        if p and os.path.exists(p):
+            hdr_path = p
             hdr = open(p, encoding="utf-8", errors="replace").read()
             break
     if hdr is None:
-        die("no <linux/input-event-codes.h> on this machine to resolve KEY_* names")
+        die("no <linux/input-event-codes.h> found. Tried:\n  " +
+            "\n  ".join(c for c in keycode_header_candidates() if c) +
+            "\nSet KEY_HEADER=/path/to/input-event-codes.h to point it at one.")
+    if os.environ.get("CHECK_IR_VERBOSE"):
+        print("check_ir_remap: keycodes from %s" % hdr_path)
 
     raw = {}
     for name, val in re.findall(r"^#define\s+(KEY_\w+)\s+(\S+)", hdr, flags=re.M):

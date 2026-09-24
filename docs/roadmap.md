@@ -2246,8 +2246,12 @@ the real fix and does **not** gate this.
 **HW round owed:** `evtest` the rig's Flirc first to record its real keycodes, then the
 transport sweep, disc-menu digits, the OSD round trip, the Define-buttons regression arm,
 `DVD_IR_REMAP=1`, and a plain keyboard unregressed.
-⚠ **Also owed: the ARM cross-compile** (`USE_DOCKER=1 main/build_main.sh`) — it could not
-run in the session that wrote this, and it is the only gate for the missing-header class.
+★ **The ARM cross-compile FOUND ONE**, which is the whole argument for that gate:
+`KEY_FULL_SCREEN` shipped unguarded and is absent from the ARM toolchain's UAPI header
+(446 `KEY_*` names against the host's 527), so it would not have compiled while every
+host gate stayed green. Guarded; the build now links clean.
+⚠ The lesson is the audit, not the key: the sweep that had cleared the guards read the
+HOST header. Audit portability against the toolchain that will build the code.
 
 Design: **`docs/ir_remote.md`**.
 

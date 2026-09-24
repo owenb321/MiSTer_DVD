@@ -26,6 +26,15 @@
 #ifndef KEY_FASTREVERSE
 #define KEY_FASTREVERSE    0x275
 #endif
+// ⚠ ABSENT from the ARM toolchain's own UAPI header (gcc-arm-10.2 ships 446
+// KEY_* names against this host's 527), and the cross-compile is the ONLY
+// thing that can see that -- caught by tools/check_ir_remap.py running from
+// build_main.sh INSIDE the container, before the compiler got to it.
+// KEY_ZOOM is the same code (0x174) and IS present there, so this guard is
+// what keeps the two spellings interchangeable on both toolchains.
+#ifndef KEY_FULL_SCREEN
+#define KEY_FULL_SCREEN    0x174
+#endif
 #ifndef KEY_ASPECT_RATIO
 #define KEY_ASPECT_RATIO   0x177
 #endif
