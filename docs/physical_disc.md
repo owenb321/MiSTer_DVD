@@ -482,7 +482,9 @@ unchanged:
 to `/tmp/dvdcss.log` with its LBA, VOB-relative RBN and chunk count. It is rate-limited to
 200 lines. This is the instrument for the "hitch at the layer change" reports: it shows
 whether the stall is the drive, where on the disc it happened, and whether it lines up with
-the layer-0 end or with a VOB boundary.
+the layer-0 end or with a VOB boundary. The layer break itself is logged once per mount, from
+READ DVD STRUCTURE format 0: `layers: 2, opposite track path, layer 0 ends at LBA … (layer 1
+from …)`.
 
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 

@@ -281,6 +281,51 @@ static int disc_is_encrypted(const char *dev)
 	return css;   // caller logs the outcome (the encrypted-without-libdvdcss case)
 }
 
+// Where is the layer break? READ DVD STRUCTURE (0xAD) format 0x00 (physical format,
+// layer 0), logged once per mount. A dual-layer drive refocuses at the layer change,
+// which users report as a playback hitch; this puts the break's LBA beside the
+// slow-read trace in the same log so the two can be compared directly.
+//   byte 6 bits 6-5: layers - 1;  bit 4: track path (0 parallel, 1 opposite)
+//   bytes 13-15: end PSN of the data area;  bytes 17-19: end PSN of layer 0
+// Data starts at PSN 0x30000 = LBA 0. Opposite-track (the usual DVD-9) breaks after
+// the layer-0 end PSN; parallel-track after the layer-0 data area's end.
+static void log_disc_layers(const char *dev)
+{
+	int fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0) return;
+
+	uint8_t cdb[12] = { 0xAD, 0, 0, 0, 0, 0, 0, 0x00, 0, 24, 0, 0 };   // physical format, layer 0
+	uint8_t buf[24] = { 0 }, sense[32];
+	struct sg_io_hdr io;
+	memset(&io, 0, sizeof(io));
+	io.interface_id = 'S';
+	io.dxfer_direction = SG_DXFER_FROM_DEV;
+	io.cmd_len = sizeof(cdb);
+	io.cmdp = cdb;
+	io.dxfer_len = sizeof(buf);
+	io.dxferp = buf;
+	io.sbp = sense;
+	io.mx_sb_len = sizeof(sense);
+	io.timeout = 5000;
+
+	int ok = (ioctl(fd, SG_IO, &io) == 0 && io.status == 0 && io.host_status == 0);
+	close(fd);
+	if (!ok) { css_log("layers: READ DVD STRUCTURE refused"); return; }
+
+	int layers = ((buf[6] >> 5) & 3) + 1;
+	int otp    = (buf[6] >> 4) & 1;
+	uint32_t end_psn = ((uint32_t)buf[13] << 16) | ((uint32_t)buf[14] << 8) | buf[15];
+	uint32_t l0_psn  = ((uint32_t)buf[17] << 16) | ((uint32_t)buf[18] << 8) | buf[19];
+	if (layers == 1)
+		css_log("layers: 1 (no layer break)");
+	else
+	{
+		uint32_t l0_end = (otp ? l0_psn : end_psn) - 0x30000u;
+		css_log("layers: %d, %s track path, layer 0 ends at LBA %u (layer 1 from %u)",
+		        layers, otp ? "opposite" : "parallel", l0_end, l0_end + 1);
+	}
+}
+
 // Read `count` raw (undecrypted) 2048-byte sectors at `lba` — for the unscrambled
 // ISO9660 metadata used to enumerate VOB files. Returns sectors read or -1.
 static int css_raw_read(uint32_t lba, void *buf, int count)
@@ -631,6 +676,7 @@ int dvd_css_open(void)
 		return 0;
 	}
 
+	log_disc_layers(dev);
 	region_set = drive_region_set(dev);
 	if (!region_set)
 		css_log("drive is RPC-II with NO region set — title keys must be cracked (slow); see README");
