@@ -83,6 +83,14 @@ plus the media keys in the table below.
 
     If you would rather not, a **Flirc** will learn the same handset and needs none of it.
 
+    This has been done and works: a Rosewill MCE dongle (`147a:e03e`, Formosa chipset)
+    built against MiSTer's own 5.15 kernel source enumerates as an rc-core receiver on
+    the RC-6 protocol, and **every media key it sends is one this player already acts
+    on**. The catch is the maintenance, not the difficulty: a MiSTer *Linux* update
+    wipes the modules (keep them on `/media/fat` and reload them from
+    `linux/user-startup.sh`), and a *kernel* update means rebuilding them, because a
+    module is tied to the exact kernel it was built for.
+
 ### What the media keys do
 
 | Remote key | Does |

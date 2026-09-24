@@ -138,6 +138,97 @@ working MCE remote; neither alone is.
 Honest cost of the DIY route: built per kernel line, and it breaks on a kernel
 bump. Which is why §6 files an upstream request instead of shipping binaries.
 
+### ✅ The DIY route is PROVEN, not theoretical (2026-09-24)
+
+Built and loaded on the maintainer's rig against a real Rosewill MCE dongle:
+
+```
+rc rc0: Media Center Ed. eHome Infrared Remote Transceiver (147a:e03e)
+mceusb: Registered Formosa21 eHome Infrared Transceiver, mce emulator v2
+mceusb: 0 tx ports (0x0 cabled) and 1 rx sensors (0x1 active)
+/sys/class/rc/rc0  protocols: rc-5 nec [rc-6] rc-5-sz [lirc]
+```
+
+★ **Everything that could have blocked it was measured first, and all four came
+out favourable** — which is why this took one build rather than a campaign:
+
+| check | result |
+|---|---|
+| `CONFIG_MODVERSIONS` | unset → symbols resolve by NAME, no CRCs |
+| `CONFIG_MODULE_SIG` | unset → nothing to sign |
+| the kernel's own compiler (`/proc/version`) | `arm-none-linux-gnueabihf-gcc 10.2.1 20201103` — **byte-identical** to the pinned Docker toolchain |
+| vermagic | built `5.15.1-MiSTer SMP mod_unload ARMv7 p2v8`, which is what the rig demands |
+
+Recipe, and the three things that are not obvious:
+
+1. Source is the **`MiSTer-v5.15` branch** of `Linux-Kernel_MiSTer`; config is the
+   rig's own `/proc/config.gz`, not a defconfig.
+2. ⚠ **`-MiSTer` is not in the config.** `CONFIG_LOCALVERSION` is empty and there
+   is no `localversion*` file, so it came from `make LOCALVERSION=` on their
+   command line — a make variable, never saved. Supply it, and **check
+   `make kernelrelease` against `uname -r` before building**: a wrong vermagic is
+   rejected by `insmod`, and building one silently is the easiest hour to waste
+   here.
+3. ⚠ **`RC_CORE` does NOT need `MEDIA_SUPPORT`** — `drivers/media/Kconfig` says so
+   in as many words, `RC_CORE` only `depends on INPUT`, and
+   `drivers/media/Makefile` has an unconditional `obj-y += rc/`. Enabling
+   MEDIA_SUPPORT drags in the whole media subsystem for nothing.
+4. ⚠ The build needs **GMP headers** on the build host: this config has
+   `CONFIG_GCC_PLUGIN_ARM_SSP_PER_TASK`, and that plugin affects code generation,
+   so it must be built rather than disabled.
+5. ⚠ The build dies at the very END on a missing `lz4c` while compressing
+   `zImage`. **Ignore it** — that step is after the modules and no kernel image is
+   wanted.
+
+⚠⚠ **Durability, and the two failure modes are different.** `/` is a
+LOOP-MOUNTED image, so `/lib/modules` survives a reboot but a **MiSTer Linux
+update replaces the whole image** and the modules vanish silently — hence the
+masters live on `/media/fat/linux/ir_modules/` and are re-installed from
+`user-startup.sh` at every boot. A **kernel** update is not survivable at all,
+and the installer checks `uname -r` and refuses with a clear message rather than
+letting `insmod` fail obscurely.
+
+### ★★ Coverage against the real handset: 63 declared, 0 unexplained
+
+`tools/ir_coverage.py` reads the receiver's declared keycodes straight out of
+`/proc/bus/input/devices` (`B: KEY=`) — **so it needs no button presses and
+covers every button, not the ones someone remembered to press** — and classifies
+each one:
+
+| | |
+|---|---|
+| **40** covered by the remap | transport, OK/Exit, DVD/Title/Subtitle/Audio, Zoom, Guide, RecordedTV, LiveTV, Pictures, the four colour keys, Ch±, **and all ten numerics** |
+| **5** already native | Enter and the four arrows |
+| **9** denied on purpose | volume, mute, Delete, Sleep, Record, brightness, Power — `ir_deny[]` |
+| **9** considered and unbound | Print, Mode, Radio, Player, Video, Presentation, Messenger, `*`, `#` |
+| **0** unexplained | — |
+
+★ The last row is the point: the tool **classifies rather than lists**, so an
+oversight would read `*** UNEXPLAINED ***`. It corroborates the opening
+measurement of §1 exactly — 63 keycodes.
+
+### Repurposing a button the table leaves alone
+
+Three routes, in descending order of how well they work:
+
+1. ★ **Change the kernel keymap** — the right place. An IR button carries a
+   SCANCODE, the kernel maps it to a keycode, and the player maps that to an
+   action; changing the middle step makes the button emit something the player
+   already understands, so nothing in the core, the Main or any config changes.
+   `tools/ir_keymap.py` (pushed to the rig) does it with `EVIOCSKEYCODE_V2`, the
+   ioctl `ir-keytable -w` uses — no v4l-utils needed, just MiSTer's stock python3.
+   **Demonstrated**: `0x800f0450` (Radio) → `KEY_SUBTITLE`, verified by re-reading
+   the map, then reverted. ⚠ Lasts until reboot unless called from
+   `user-startup.sh` after the modules load.
+2. **MiSTer's "Define buttons"** — `input.cpp:3371` sets
+   `mapping_type = (ev->code >= 256 …) ? 1 : 0`, so a media keycode is bindable
+   as a *joystick* button, and `dvd_ir.cpp`'s hook deliberately skips the remap
+   for any code the user has bound. ⏳ Reasoned from the code, **not tested** —
+   the harness cannot see the OSD.
+3. ⛔ **`config/kbd_<vid>_<pid>.map` does NOT work for these.**
+   `input.cpp:2975` gates that lookup on `ev->code < 256`, and every interesting
+   spare button is above it.
+
 ## 4. The design
 
 `main/support/dvd/dvd_ir.{h,cpp}` rewrites `ev->code` before Main's own
