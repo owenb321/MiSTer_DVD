@@ -25,6 +25,7 @@
 #include "dvd_cdda.h"
 #include "dvd_detect.h"
 #include "dvd_launch.h"
+#include "dvd_readahead.h"
 #include "../../menu.h"      // ProgressMessage() — on-screen feedback during key crack
 #include "../../file_io.h"   // getFullPath() — resolve MiSTer's storage-relative mount path
 
@@ -279,6 +280,85 @@ static int disc_is_encrypted(const char *dev)
 	int css = (ioctl(fd, SG_IO, &io) == 0 && io.status == 0) ? (buf[4] != 0) : 0;
 	close(fd);
 	return css;   // caller logs the outcome (the encrypted-without-libdvdcss case)
+}
+
+// Where is the layer break? READ DVD STRUCTURE (0xAD) format 0x00 (physical format,
+// layer 0), logged once per mount. A dual-layer drive refocuses at the layer change,
+// which users report as a playback hitch; this puts the break's LBA beside the
+// slow-read trace in the same log so the two can be compared directly.
+//   byte 6 bits 6-5: layers - 1;  bit 4: track path (0 parallel, 1 opposite)
+//   bytes 13-15: end PSN of the data area;  bytes 17-19: end PSN of layer 0
+// Data starts at PSN 0x30000 = LBA 0. Opposite-track (the usual DVD-9) breaks after
+// the layer-0 end PSN; parallel-track after the layer-0 data area's end.
+static void log_disc_layers(const char *dev)
+{
+	int fd = open(dev, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+	if (fd < 0) return;
+
+	uint8_t cdb[12] = { 0xAD, 0, 0, 0, 0, 0, 0, 0x00, 0, 24, 0, 0 };   // physical format, layer 0
+	uint8_t buf[24] = { 0 }, sense[32];
+	struct sg_io_hdr io;
+	memset(&io, 0, sizeof(io));
+	io.interface_id = 'S';
+	io.dxfer_direction = SG_DXFER_FROM_DEV;
+	io.cmd_len = sizeof(cdb);
+	io.cmdp = cdb;
+	io.dxfer_len = sizeof(buf);
+	io.dxferp = buf;
+	io.sbp = sense;
+	io.mx_sb_len = sizeof(sense);
+	io.timeout = 5000;
+
+	int ok = (ioctl(fd, SG_IO, &io) == 0 && io.status == 0 && io.host_status == 0);
+	close(fd);
+	if (!ok) { css_log("layers: READ DVD STRUCTURE refused"); return; }
+
+	int layers = ((buf[6] >> 5) & 3) + 1;
+	int otp    = (buf[6] >> 4) & 1;
+	uint32_t end_psn = ((uint32_t)buf[13] << 16) | ((uint32_t)buf[14] << 8) | buf[15];
+	uint32_t l0_psn  = ((uint32_t)buf[17] << 16) | ((uint32_t)buf[18] << 8) | buf[19];
+	if (layers == 1)
+		css_log("layers: 1 (no layer break)");
+	else
+	{
+		uint32_t l0_end = (otp ? l0_psn : end_psn) - 0x30000u;
+		css_log("layers: %d, %s track path, layer 0 ends at LBA %u (layer 1 from %u)",
+		        layers, otp ? "opposite" : "parallel", l0_end, l0_end + 1);
+	}
+}
+
+// libdvdcss opens the drive (or image) itself, with plain O_RDONLY: no O_CLOEXEC.
+// Every core switch re-execs the Main without closing this session, so each DVD
+// session used to leave one handle to the drive open in the next Main, forever.
+// The kernel ejects only when the ejecting fd is the LAST open handle
+// (cdrom_ioctl_eject, use_count == 1), so after a core switch or two the Eject
+// button's tray half failed with EBUSY. MEASURED on the rig (2026-09-24): after
+// four DVD sessions the running Main held four O_RDONLY|O_LARGEFILE handles to
+// /dev/sr1 that no code of ours had opened. So: after dvdcss_open(), mark every
+// descriptor that points at the same file close-on-exec. Returns how many.
+static int mark_cloexec_to(const char *path)
+{
+	char want[PATH_MAX];
+	if (!realpath(path, want)) return 0;
+	int n = 0;
+	DIR *d = opendir("/proc/self/fd");
+	if (!d) return 0;
+	struct dirent *e;
+	while ((e = readdir(d)))
+	{
+		int fd = atoi(e->d_name);
+		if (e->d_name[0] < '0' || e->d_name[0] > '9' || fd == dirfd(d)) continue;
+		char lnk[64], tgt[PATH_MAX];
+		snprintf(lnk, sizeof(lnk), "/proc/self/fd/%d", fd);
+		ssize_t k = readlink(lnk, tgt, sizeof(tgt) - 1);
+		if (k <= 0) continue;
+		tgt[k] = 0;
+		if (strcmp(tgt, want)) continue;
+		int fl = fcntl(fd, F_GETFD);
+		if (fl >= 0 && !(fl & FD_CLOEXEC) && fcntl(fd, F_SETFD, fl | FD_CLOEXEC) == 0) n++;
+	}
+	closedir(d);
+	return n;
 }
 
 // Read `count` raw (undecrypted) 2048-byte sectors at `lba` — for the unscrambled
@@ -578,6 +658,7 @@ static void build_vob_list(void)
 }
 
 static void seek_log_arm(void);   // HIL seek trace, see dvd_css_read()
+static void css_ra_start(void);   // RAM read-ahead, see dvd_readahead.h
 
 // ---------------------------------------------------------------------------
 // TWO SOURCES, ONE FRONT DOOR.
@@ -619,7 +700,7 @@ int dvd_css_open(void)
 		int  fd = find_audio_cd(cd, sizeof(cd));
 		if (fd >= 0)
 		{
-			if (!dvd_cdda_open(fd, cd)) { src_cdda = 1; return 1; }
+			if (!dvd_cdda_open(fd, cd)) { src_cdda = 1; css_ra_start(); return 1; }
 			close(fd);
 		}
 	}
@@ -631,6 +712,7 @@ int dvd_css_open(void)
 		return 0;
 	}
 
+	log_disc_layers(dev);
 	region_set = drive_region_set(dev);
 	if (!region_set)
 		css_log("drive is RPC-II with NO region set — title keys must be cracked (slow); see README");
@@ -657,6 +739,7 @@ int dvd_css_open(void)
 			css_log("dvdcss_open(%s) failed", dev);
 			return 0;
 		}
+		mark_cloexec_to(dev);
 		seek_log_arm();
 	}
 	else
@@ -705,6 +788,7 @@ int dvd_css_open(void)
 
 	// Discover the VOB layout and pre-crack every title key at its VOB start.
 	if (css) build_vob_list();
+	css_ra_start();
 	return 1;
 }
 
@@ -739,6 +823,7 @@ int dvd_css_open_image(const char *path)
 
 	dvdcss_t h = p_open(full);
 	if (!h) { css_log("dvdcss_open(image) FAILED: %s", full); return 0; }
+	mark_cloexec_to(full);
 
 	css = h;
 	seek_log_arm();
@@ -777,6 +862,7 @@ int dvd_css_open_image(const char *path)
 	crack_title_keys("Decrypting ISO");
 	css_log("encrypted ISO %s (%llu MB) — decrypting via libdvdcss",
 	        path, (unsigned long long)(css_size >> 20));
+	css_ra_start();
 	return 1;
 }
 
@@ -863,11 +949,11 @@ static void seek_log(uint32_t lba, uint32_t count, int vi)
 	if (++seek_log_n == SEEK_LOG_MAX) css_log("seek trace: %d lines, stopped", SEEK_LOG_MAX);
 }
 
-int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
+// One libdvdcss read that stays inside ONE key domain (a single VOB, or the
+// non-VOB sectors between them). It may return fewer than `count` -- it clamps at
+// a VOB end -- and dvd_css_read() below is what turns that into a full window.
+static int css_read_chunk(void *buf, uint32_t lba, uint32_t count)
 {
-	if (src_cdda) return dvd_cdda_read(buf, lba, count);
-	if (raw_fd >= 0) return raw_read10(raw_fd, lba, buf, (int)count);   // no-libdvdcss fallback
-	if (!css) return -1;
 
 	if ((int)lba != css_pos) seek_log(lba, count, vob_index(lba));
 
@@ -960,8 +1046,102 @@ int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
 	return n;
 }
 
+// Slow-read trace, ALWAYS on (unlike the HIL-only seek trace above): a read over
+// SLOW_READ_MS is exactly what a user reports as a playback hitch -- a layer
+// change, a drive re-spin, a scratch being retried -- and this thread is the one
+// that feeds the core, so the stall reaches the picture. Rate-limited so a bad
+// disc cannot fill /tmp.
+#define SLOW_READ_MS  100
+#define SLOW_READ_MAX 200
+static int slow_read_n = 0;
+
+static long ms_since(const struct timespec *t0)
+{
+	struct timespec t1;
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	return (t1.tv_sec - t0->tv_sec) * 1000L + (t1.tv_nsec - t0->tv_nsec) / 1000000L;
+}
+
+// Serve EXACTLY `count` sectors, or fail outright.
+//
+// ⚠ Main's readA/readB (integration steps 8/9) set buffer_lba = lba on ANY
+// positive return, and the hit test then serves all buf_n sectors of the window.
+// So a short return does not mean "the rest is unread" to Main -- it means the
+// tail of buffer[disk] still holds the PREVIOUS window's sectors, which are then
+// handed to the core as if they were these. css_read_chunk() returns short at
+// every VOB end (one read must not span two title keys), and a DVD's VOB parts
+// are 524287 sectors -- odd -- so an 8-sector window almost never lines up with
+// one: every linear crossing of a 1 GB VTS_xx_N.VOB boundary used to feed the
+// decoder up to 7 stale sectors. So: keep reading, one key domain at a time, and
+// zero-fill only what genuinely cannot be read (the dvd_vcd / dvd_cdda contract).
+// Only a failure on the FIRST sector is reported as a failure, so Main retries
+// the window instead of caching a hole at its head.
+//
+// This is the read-ahead worker's SOURCE (dvd_readahead.h's contract is exactly
+// the one above). While the worker runs, it is the only caller: every libdvdcss /
+// drive handle in this file is then touched by that one thread.
+static int css_src_read(void *buf, uint32_t lba, uint32_t count)
+{
+	if (src_cdda) return dvd_cdda_read(buf, lba, count);
+	if (raw_fd >= 0) return raw_read10(raw_fd, lba, buf, (int)count);   // no-libdvdcss fallback
+	if (!css) return -1;
+
+	struct timespec t0;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+
+	uint8_t *p = (uint8_t *)buf;
+	uint32_t done = 0;
+	int chunks = 0;
+	while (done < count)
+	{
+		int n = css_read_chunk(p + (size_t)done * 2048, lba + done, count - done);
+		chunks++;
+		if (n <= 0)
+		{
+			if (done == 0) return -1;
+			memset(p + (size_t)done * 2048, 0, (size_t)(count - done) * 2048);
+			static int zf = 0;
+			if (zf < 10) { zf++; css_log("read %u+%u: sectors %u.. unreadable, zero-filled", lba, count, lba + done); }
+			done = count;
+			break;
+		}
+		done += (uint32_t)n;
+	}
+
+	long ms = ms_since(&t0);
+	if (ms >= SLOW_READ_MS && slow_read_n < SLOW_READ_MAX)
+	{
+		slow_read_n++;
+		int vi = vob_index(lba);
+		if (vi >= 0)
+			css_log("slow read %u+%u: %ld ms (vob@%u rbn %u, %d chunk%s)", lba, count, ms,
+			        g_vobs[vi].start, lba - g_vobs[vi].start, chunks, chunks == 1 ? "" : "s");
+		else
+			css_log("slow read %u+%u: %ld ms (not a VOB)", lba, count, ms);
+	}
+	return (int)done;
+}
+
+// Main's read hook (integration steps 8/9). With the read-ahead running this is a
+// non-blocking copy out of its ring -- step 48 has already checked the window is
+// there, so readA never misses; readB (Main's own one-window prefetch) may, and a
+// miss there just leaves Main's window invalid for readA to fill later. Without it
+// (the worker failed to start) the source is read synchronously, as before.
+int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
+{
+	if (dvd_ra_active()) return dvd_ra_read(buf, lba, count);
+	return css_src_read(buf, lba, count);
+}
+
+static void css_ra_start(void)
+{
+	uint64_t sz = dvd_css_size();
+	if (sz) dvd_ra_start(css_src_read, (uint32_t)((sz + 2047) / 2048));
+}
+
 void dvd_css_close(void)
 {
+	dvd_ra_stop();   // FIRST: the worker owns the handles closed below
 	if (src_cdda) { dvd_cdda_close(); src_cdda = 0; }
 	if (css && p_close) p_close(css);
 	if (raw_fd >= 0) close(raw_fd);

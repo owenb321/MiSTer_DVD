@@ -324,6 +324,23 @@ appreciably longer than a frame, or if the picture does not recover on its own.
 Changing `Video Output` mid-title goes through the same landing sequence — see
 [Switching mid-title](../video/interlaced.md).
 
+### Playback pauses or skips for a moment on a physical disc
+
+The player reads a disc up to about 25 seconds ahead into memory. A drive's brief
+stalls therefore don't reach the picture: the change between the layers of a
+dual-layer disc, the drive spinning back up, or a scratched sector being retried.
+The same applies to VCD/SVCD and audio CDs in the drive, and to an encrypted `.iso`.
+
+If a hitch still happens, look in `/tmp/dvdcss.log` over SSH, and include it in a bug report:
+
+- `slow read` lines mean the drive itself stalled at that point on the disc.
+- `readahead: ring ran dry` lines mean the stall outlasted what was buffered, and
+  say how long playback waited.
+- A hitch with **neither** kind of line is not a problem reading the disc.
+
+A decrypted `.iso` played from a network share is not buffered this way yet, so a
+network hiccup can still interrupt it.
+
 ### A thin partial line across the top or bottom of the picture
 
 A line right at the top or bottom edge that only reaches part of the way across — picture

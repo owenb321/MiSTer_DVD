@@ -98,6 +98,8 @@ void dvd_cdda_toc_upload(void)  { toc_uploads++; }
 void dvd_css_close(void) {}
 void dvd_vcd_close(void) { vcd_close_calls++; }
 int  dvd_launch_ui_busy(void) { return fake_launch_busy; }
+static int fake_ra_busy = 0;       // the read-ahead worker is mid-read
+int  dvd_ra_source_busy(void) { return fake_ra_busy; }
 
 int user_io_file_mount(const char *name, unsigned char index = 0, char = 0, int = 0)
 {
@@ -327,6 +329,39 @@ int main(void)
     int had_vcd = dvd_phys_eject();
     check("[12] reports it ejected an optical disc", had_vcd, 1);
     check("[12] dvd_vcd_close was called",           vcd_close_calls, 1);
+
+    // ---------------------------------------------------------------- [13]
+    // The read-ahead's worker is reading the disc we mounted. A drive serialises
+    // commands, so a readiness probe issued now would queue behind that read and
+    // block the poll thread -- the thread serving the core out of the ring -- for
+    // as long as the read takes (a layer refocus, a scratch retry). Don't probe.
+    printf("=== [13] no drive probe while the read-ahead is mid-read ===\n");
+    fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+    fake_disc_is_dvd = 1; fake_disc_is_vcd = 0; fake_disc_ready = 1;
+    run_for(NOTICE_WINDOW_S);                  // mount it: the drive owns slot 0
+    reset_counters();
+    scan_calls = 0;
+    fake_ra_busy = 1;
+    run_for(NOTICE_WINDOW_S);
+    check("[13] drive probes while a read is in flight", scan_calls, 0);
+    // CONTROL: once the drive goes quiet, an eject is still noticed.
+    fake_ra_busy = 0; fake_disc_ready = 0;
+    run_for(NOTICE_WINDOW_S);
+    check("[13] ...and the eject is still noticed after", reset_asserts > 0, 1);
+
+    // [14] A skipped probe keeps its slot. The worker is busy at this tick and idle
+    // at the NEXT one inside the same second (a gap between failed reads): the
+    // probe must run then, not a whole scan period later. Spending the slot on the
+    // skip is what let the drive's own eject button go unnoticed for ~8 s.
+    printf("=== [14] a skipped probe retries on the next poll pass ===\n");
+    fake_disc_ready = 1;
+    run_for(NOTICE_WINDOW_S);                  // mounted again
+    run_for(3);                                // settle into the 1 s scan cadence
+    scan_calls = 0;
+    fake_now += 1;
+    fake_ra_busy = 1; dvd_phys_tick();         // busy: skipped
+    fake_ra_busy = 0; dvd_phys_tick();         // same second, now idle
+    check("[14] probes in the second the worker went idle", scan_calls, 1);
 
     printf("\n=== dvd_phys tests: %d error(s) ===\n", errs);
     if (errs) { printf("FAILED\n"); return 1; }

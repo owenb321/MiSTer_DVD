@@ -323,6 +323,52 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **PHYSICAL-DISC PLAYBACK HITCHES: A STALE-SECTOR BUG AT EVERY 1 GB VOB BOUNDARY, AND
+  NO READ-AHEAD (2026-09-24, branch `feature/disc-readahead`); host-proven RED/GREEN
+  (`main/tests/run_tests.sh --red`, 49 mutations), and ✅ REPRODUCED AND FIXED ON THE RIG
+  2026-09-24 (physical *Matrix Reloaded* Disc 1, control arm first).** Users reported a
+  hitch on physical discs and suspected the layer change.
+  ★★ **On that disc the VOB boundary IS the layer boundary:** layer 0 ends at LBA
+  1,930,143, and `VTS_01_5.VOB` plus the bridge cell 20 start at 1,930,144. So bug (1)
+  below fed the decoder two stale sectors (the bridge cell's NAV pack and first data pack)
+  AT the layer change. The control's seek trace shows `read 1930146+8 … rbn 2`; the fix
+  shows no discontinuity. The drive itself did not stall there (no ≥100 ms read in either
+  arm), so for this report the stale sectors are the defect, not delivery.
+  (1) **`dvd_css_read` returned SHORT at every VOB end** (one libdvdcss read must not span
+  two title keys), while Main's readA/readB cache the whole 8-sector window on any
+  positive return. The tail then served the PREVIOUS window's sectors. VOB parts are
+  524,287 sectors, an odd number, so nearly every linear crossing of a `VTS_xx_N.VOB`
+  boundary fed the decoder up to 7 stale sectors, easily mistaken for the layer change.
+  Fixed: the read continues into the next VOB (keyed at its start as before) and
+  zero-fills only what is unreadable.
+  (2) **New `dvd_readahead.cpp`:** a worker thread owns the source and keeps a 32 MB RAM
+  ring (~25 s) ahead of the core. Main's poll thread only copies out of it, and
+  integration step 49 leaves a not-yet-buffered request un-acked for the next poll pass
+  instead of blocking. That thread therefore never waits on the drive, so the OSD,
+  input and telemetry stay live too. A seek retargets the ring and costs about what it
+  did before.
+  (3) Instruments in `/tmp/dvdcss.log`: `slow read`, `readahead: ring ran dry`, and the
+  disc's layer break logged at mount.
+  ⚠ The core's own cushion is short and AUDIO runs out first (the 32 KB ring caps the lead
+  at ~0.58 s at 448 kbps AC-3). An underrun still clicks and can leave audio 50–300 ms
+  late until the next seek; that is phase 3 (RTL), not yet done. Decrypted `.iso` files
+  over a network share are not buffered yet.
+  ★ **Jostle test, the real-world case (maintainer, 2026-09-24):** knocking the drive
+  off track mid-film paused playback on the previous Main. On the read-ahead the drive
+  was heard re-seeking and the film did not stop. The log shows 1612 ms + 663 ms drive
+  stalls absorbed, with no `ring ran dry`.
+  Audio CD and VCD from the drive (both now read through the worker) are ✅ unregressed on
+  the rig against the control Main: play, skip, seek, audio level, and eject.
+  (4) **Eject EBUSY, pre-existing:** libdvdcss opens the drive without `O_CLOEXEC`, so each
+  core switch leaked one handle into the next Main (measured: 4 on the rig), and the
+  kernel refuses to eject unless one handle is open. `mark_cloexec_to()` after
+  `dvdcss_open()` fixes it and heals already-leaked handles at the next core switch. The
+  tray opened on the rig. This is probably also `ad257e3`'s "days of uptime" EBUSY.
+  ⛔ Issue #122 (`CSS ENCRYPTED` after a chapter skip) is NOT this. The suspect there is
+  `dvd_css.cpp` latching `key_ok = 0` for a whole VOB after one failed `SEEK_KEY`.
+  Detail: **`docs/physical_disc.md`** "Every read window comes back full" and "Read-ahead";
+  `main/integration/INTEGRATION.md` "Steps 48-49"; plan and HW gates in the branch's PR.
+
 - 🔧 **SWITCHING AUDIO TRACKS POPPED IN DECODE MODE — two defects, and the one first
   fixed was NOT the one heard (2026-09-22/23, branch `fix/audio-declick-switch`);
   sim-proven over a real disc slice; built `DVD_declick2_20260923_0125.rbf` (SEED 9 first

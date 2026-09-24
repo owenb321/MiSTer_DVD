@@ -444,6 +444,237 @@ read logged BEFORE it is issued, armed by the HIL flag file (`/media/fat/dvd_hil
 the Main blocks in state D, screenshots and telemetry freeze with it, so this is the only
 record of how the core got there.
 
+## Every read window comes back full (2026-09-24, branch `feature/disc-readahead`)
+
+**Status: host-proven RED/GREEN (`main/tests/run_tests.sh --red`, arms [8], [12] and [13],
+plus three mutations each caught by its own arm), and ✅ REPRODUCED AND FIXED ON THE RIG
+2026-09-24 with a physical *The Matrix Reloaded* Disc 1.**
+
+★★ **On that disc the stale sectors land EXACTLY ON THE LAYER BREAK.** Measured on the
+pressing (READ DVD STRUCTURE, and the disc's own ISO9660 directory):
+- layer 0 ends at LBA 1,930,143;
+- `VTS_01_5.VOB` starts at LBA 1,930,144;
+- so does the 706-sector bridge cell 20 of the feature (RBN 1,926,105).
+
+The authoring put the VOB boundary on the layer boundary, so the stale-sector defect fires
+at the moment users see the layer change. That is very likely the reported "layer
+transition hitch". Same script on both Mains (chapter 20, 22 fast-forward taps to land ~22 s
+before the break, play through it):
+- **Control (`main`):** the seek trace shows `read 1930146+8 vob@1930144 rbn 2`, a
+  non-sequential read AT the break. The window before it was clamped at LBA 1,930,143,
+  so Main served LBAs 1,930,144 and 1,930,145 from the previous window. Those are the
+  bridge cell's NAV pack and first data pack, about 4 KB of already-played stream
+  handed to the decoder at the layer change.
+- **Fix:** no discontinuity at the break. The read runs straight into `VTS_01_5.VOB`.
+- ⚠ The core's telemetry reads identically in both arms (0 audio re-arms, 0 picture
+  stalls, VBUF minimum 32 × 8 KB). It cannot see four stale kilobytes, so the seek trace
+  is the instrument here. The visible or audible effect of those bytes was not captured.
+- ⚠ A rip of the same disc starts its title data 3,695 sectors earlier than the pressing
+  (LBA 344 against 4039). RBNs agree, but LBAs taken from the rip do not, so read the
+  disc's own directory before aiming a test at an LBA.
+
+**The defect.** Main's `readA`/`readB` (integration steps 8/9) call
+`dvd_css_read(buffer[disk], lba, buf_n)`, and on ANY positive return they set
+`buffer_lba = lba`. The hit test then serves all `buf_n` (8) sectors of that window. But
+`dvd_css_read` clamped every read at a VOB end, because one libdvdcss read must not span two
+title keys, and returned **short**. Slots `[n..7]` of the window still held the *previous*
+window's sectors, and the core received them as if they were the requested ones.
+
+**Why it hit ordinary playback, not just seeks.** A title set's VOB parts are contiguous, and
+each full part is 1,073,739,776 bytes = **524,287 sectors**, an odd number. An 8-sector window
+therefore almost never lines up with a part boundary. Every linear crossing of a 1 GB
+`VTS_xx_N.VOB` boundary (every 15–25 minutes of film) fed the decoder up to 7 stale sectors,
+about 14 KB of already-played stream. That produces a visible and audible glitch, which is
+easily mistaken for a dual-layer transition.
+
+**Scope.** Physical discs and encrypted `.iso` images, which are served by `dvd_css_read`.
+Decrypted `.iso` files use stock Main's file path, which never returns short, and are
+unaffected. VCD and CD-DA already honoured the full-window contract.
+
+**The fix.** `dvd_css_read()` is now a loop over `css_read_chunk()`, which is the old body,
+unchanged:
+- Each chunk stays inside one key domain.
+- A read that crosses a VOB end continues into the next VOB, keyed at *that* VOB's start by
+  the existing `vi != cur_vob` path. The "key at the VOB start, never at the read position"
+  rule above is untouched; arm [12] asserts it for the straddling window.
+- A sector that cannot be read is zero-filled. That leaves a hole, never a stale sector.
+- A failure on the *first* sector still returns −1, so Main retries the window instead of
+  caching a hole at its head.
+
+**Slow-read trace (always on).** Any `dvd_css_read` call that takes more than 100 ms is logged
+to `/tmp/dvdcss.log` with its LBA, VOB-relative RBN and chunk count. It is rate-limited to
+200 lines. This is the instrument for the "hitch at the layer change" reports: it shows
+whether the stall is the drive, where on the disc it happened, and whether it lines up with
+the layer-0 end or with a VOB boundary. The layer break itself is logged once per mount, from
+READ DVD STRUCTURE format 0: `layers: 2, opposite track path, layer 0 ends at LBA … (layer 1
+from …)`.
+
+## Read-ahead: a RAM ring between the drive and the core (2026-09-24, branch `feature/disc-readahead`)
+
+**Status: host-proven (`main/tests/dvd_readahead_test.cpp`, 8 arms; 7 RED mutations,
+each caught by its own arm), and ✅ RUN ON THE RIG 2026-09-24 (physical *Matrix Reloaded*,
+same script as the control arm): the feature plays, chapter skips and fast-forward land
+as before, the break is crossed with no discontinuity, and the layer log reads
+`layers: 2, opposite track path, layer 0 ends at LBA 1930143`.**
+
+★★ **THE JOSTLE TEST — THE REAL-WORLD CASE, run by the maintainer 2026-09-24 on a second
+dual-layer film** (7906 MB, 19 VOBs, layer 0 ending at LBA 2,041,391). The same mid-film
+scene was played on both Mains while the drive was physically jostled to knock it off
+track. **The previous Main showed a noticeable pause before playback resumed. With the
+read-ahead, the drive could be heard re-seeking and the film did not stop.** The new
+Main's own log recorded what it absorbed:
+
+```
+slow read 496651+32: 1612 ms (vob@183343 rbn 313308, 1 chunk)
+slow read 508003+8:   663 ms (vob@183343 rbn 324660, 1 chunk)
+```
+
+There was no `ring ran dry` line, so the core never waited. A 1.6 s drive stall is well
+past the ~0.6 s of audio the core holds, so without the ring it reached the screen and the
+speakers, as the maintainer saw.
+
+**Audio CD unregressed** (same rig and day, a 12-track music CD, control Main first,
+identical script). Both Mains: `TR 1/12` playing at mount, a track skip to `TR 2/12`,
+and three fast-forward taps landing at 0:00:42–0:00:43. Level measured off the capture
+card (PipeWire audio only) was **−21.1/−21.1 dBFS on the control, −21.3/−20.9 on the
+read-ahead**. Eject then opened the tray (`CDROM_DRIVE_STATUS = 2`, TRAY_OPEN).
+**VCD unregressed** (same rig and day, a 57-minute VCD, control Main first, identical
+script, Display pressed so the status line stays up). Both Mains: native 240p, about 30
+pictures/s (+90/+98 per 3 s sample, the spread being ssh sampling jitter), 0 audio
+re-arms, level −42/−36 dBFS against −44/−35. Next-chapter is a no-op on a linear VCD in
+both. Three fast-forward taps moved 0:00:44→0:01:25 on the control and 0:00:45→0:01:26
+on the read-ahead. Eject opened the tray (`CDROM_DRIVE_STATUS = 2`).
+
+**What the rig's drive actually does at the layer change: nothing measurable.** There was
+no slow read (≥100 ms) anywhere near LBA 1,930,144, in either arm, and the control arm's
+telemetry stayed clean without the ring. So on this drive the ring is insurance, not the
+fix. The slow reads it did absorb were 100–313 ms each, at the mount and right after
+seeks (drive spin-up). Other drives, scratched discs and network shares remain its job.
+
+**Why.** Users report a hitch on physical discs and attribute it to the dual-layer
+change. Whatever the cause, the shape made any source stall reach the core:
+- Main served each 16 KB window synchronously on its only thread.
+- The core's own cushion is short. The 32 KB audio ring backpressures the shared
+  demux, so it caps the audio lead at ~0.58 s at 448 kbps AC-3, ~1.1 s at 192 kbps
+  and ~0.2 s for LPCM. The VBUF holds ~1–1.6 s of video.
+- Audio therefore runs out first. On an underrun `dvd_audio_decode` holds its last
+  sample (a click at the stop and at the resume), and afterwards audio can sit
+  50–300 ms late until the next seek, because catch-up only enters at 300 ms late.
+- The same thread also runs the OSD, input and telemetry, so those froze with it.
+
+**Shape** (`main/support/dvd/dvd_readahead.{h,cpp}`):
+- One worker thread owns the source: libdvdcss or the raw drive fd for DVD-Video,
+  the image for an encrypted `.iso`, the CD-DA or VCD drive fd.
+- It keeps a ring of 16,384 sectors (32 MB, ~25 s at the 10.08 Mbps DVD maximum)
+  filled ahead of the core, in 32-sector bursts.
+- The poll thread only copies out of the ring. A request the ring cannot serve yet
+  is deferred, not waited for: integration step 49 leaves it un-acked, and it is
+  served on a later poll pass.
+- Source I/O is done outside the lock, so the poll thread only ever contends for a
+  memcpy.
+
+**Seeks** (chapter skip, scrub, menu → title, the IFO reads of a PGC jump). A request
+that is not in the ring, and not within 256 sectors ahead of the fill, retargets
+the worker:
+- The ring is emptied at the new LBA and `gen` is bumped.
+- The burst already in flight for the old position has to finish first, since a
+  drive command cannot be cancelled. Its data is then dropped by the `gen` check.
+- The first burst at the new LBA is 8 sectors, the same as stock Main's window, so a
+  seek costs about what it did before. The ring refills behind it.
+- ⚠ If that in-flight burst is stuck on a bad sector, the seek waits for it. The
+  retry loop re-checks `gen` between attempts, so only the one read already in
+  progress is waited out.
+
+**Errors.**
+- A failed burst is retried one sector at a time, because a raw `READ(10)` fails the
+  whole command for one bad sector.
+- A sector that keeps failing becomes a zero-filled hole. Playback continues from the
+  ring meanwhile, so an `sr` retry costs buffer rather than a frozen machine.
+
+**Eject, and the drive probe.**
+- Teardown order is unchanged and still correct. The Eject button and a removed disc
+  both unmount, then `dvd_css_close()`/`dvd_vcd_close()`, which stop and JOIN the
+  worker before closing its handles. Only then does `CDROMEJECT` run, so the kernel
+  never sees a busy device. The join waits out at most the one read in flight,
+  because the retry loop re-checks for a stop between attempts.
+- ⚠ **`dvd_phys_tick()`'s once-a-second readiness probe used to run between reads, on
+  the same thread. Now it can collide with the worker.** A drive serialises commands,
+  so a probe issued mid-read queues behind a layer refocus or a scratch retry. It
+  then blocks the poll thread, which is the one serving the core FROM the ring, and
+  the stall the ring absorbed would come straight back. So the probe skips while the
+  worker is inside a read of the disc we mounted (`dvd_ra_source_busy()`,
+  `dvd_phys_test` [13] plus mutation `phys-probes-busy-drive`).
+- ⚠ **The first cut noticed the drive's OWN eject button ~8 s late** (maintainer
+  report: pressing the drive's button "rode through the buffer" before the idle
+  logo; the keyboard Eject was fine). With the tray open every read fails in ~90 ms
+  (measured on the rig), and the worker retried each sector 4 times back to back.
+  That kept the drive ~80 % busy, and a skipped probe also spent its whole 1–2 s scan
+  slot. The log showed 19 sectors zero-filled before the probe got in, while the
+  ring played on.
+- **Fix, two halves:**
+  - The worker leaves a 100 ms idle gap before every retry of a failed read
+    (`dvd_readahead_test` [9]: idle within 300 ms of the tray opening; mutation
+    `ra-retry-without-gap`).
+  - A probe skipped for a busy drive no longer spends its scan slot: it retries on
+    the next poll pass (`dvd_phys_test` [14]; mutation `phys-skip-spends-slot`).
+  - A genuine scratch pays one 100 ms gap per retry, and the ring covers it.
+  - ✅ **MEASURED ON THE RIG (2026-09-24, *Avatar*, control first).** The drive's
+    button was reproduced from a separate process with SCSI START STOP UNIT (after
+    PREVENT ALLOW MEDIUM REMOVAL = allow). That bypasses the kernel's single-opener
+    check, as the physical button does. Each run played 25 s to fill the ring, then
+    timed until the Main logged `disc removed while playing it`. The tray itself took
+    3.6 s to open in both arms. From the tray being open:
+
+    | arm | eject noticed | sectors zero-filled meanwhile |
+    |---|---|---|
+    | previous build | 5.2 s | 12 |
+    | this fix | **1.3 s** | 2 |
+
+    ⚠ This drive cannot CLOSE its tray by command (START STOP UNIT LoEj+Start is
+    refused 05/24/00; `CDROMCLOSETRAY` gives EIO), so each arm needs a hand at the
+    tray.
+
+**libdvdcss's handle outlived the Main, and that is what blocked Eject (fixed
+2026-09-24; pre-existing, not caused by the read-ahead).**
+- libdvdcss opens the drive or image itself with plain `O_RDONLY`, with no
+  `O_CLOEXEC`. A core switch re-execs the Main without closing the session, so every
+  DVD session left one inheritable handle to the drive in every later Main.
+- `cdrom_ioctl_eject()` refuses unless the ejecting fd is the last open handle, so the
+  Eject button's tray half failed with EBUSY.
+- MEASURED on the rig: after four DVD sessions, the running Main held four
+  `O_RDONLY|O_LARGEFILE` handles (fdinfo flags `0400000`) to `/dev/sr1` that no code
+  of ours opened. Every open of ours carries `O_CLOEXEC` or `O_NONBLOCK`.
+- This is very probably also the "days of uptime" EBUSY that commit `ad257e3`
+  attributed to USB re-enumeration: the stale `/dev/sr0 (deleted)` handles found then
+  carry the same flags.
+- **Fix:** `mark_cloexec_to()` marks every descriptor pointing at the opened
+  device/image close-on-exec, right after `dvdcss_open()`. Because it matches by path,
+  it also marks handles ALREADY leaked into the running Main's lineage, so the machine
+  heals at the next core switch with no reboot.
+- MEASURED: session 1 on the new Main had 5 `/dev/sr1` handles, all now `02400000`.
+  After one core switch there was exactly 1 (ours). Eject logged
+  `eject: tray opened on /dev/sr1`, and the drive reports `CDROM_DRIVE_STATUS = TRAY_OPEN`.
+- Gate: `dvd_css_test` [14] plus mutation `css-lib-fd-inherited`.
+- ⚠ Two eject log lines per press were seen (`optical disc unmounted`, then `image
+  unmounted`) on both Mains. The second is harmless on an empty slot; not investigated.
+
+**Instruments** (`/tmp/dvdcss.log`):
+- `slow read …`: the source took over 100 ms. This is now measured in the worker, so
+  it marks drive stalls whether or not they reached the core.
+- `readahead: ring ran dry: the core waited N ms at LBA …`: a stall that DID reach
+  the core. No such line during a reported hitch means the hitch is not data
+  delivery. It is logged only after `RA_STEADY` (64) windows have streamed since
+  the last (re)target. The first rig run logged it twice during the mount's
+  scattered IFO reads, which are cold-start waits, not stalls (`dvd_readahead_test`
+  [8], mutation `ra-logs-warmup`).
+
+**Not covered yet.**
+- Decrypted `.iso` files use stock Main's file path, not these hooks (phase 2b).
+- Nothing yet softens an underrun that does reach the core: the de-click and a
+  faster audio re-sync after an underrun (phase 3, RTL).
+- DDR3 contention from a full-speed refill after a seek is unmeasured. Check the
+  `lates`/`drops` telemetry on the rig.
+
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 
 A drive with **no region set** refuses the CSS title-key ioctl, so libdvdcss cracks every

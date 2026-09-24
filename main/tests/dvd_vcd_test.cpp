@@ -131,6 +131,7 @@ static int read_frames(int lba, int count, uint8_t *dst)
 }
 #define DVD_VCD_TEST 1
 #include "dvd_vcd.cpp"
+#include "dvd_readahead.cpp"
 
 // ---------------------------------------------------------------- ISO9660 helpers
 
@@ -305,6 +306,10 @@ int main(void)
 	// ============================================================ dvd_vcd_read
 	printf("=== dvd_vcd_read: byte assembly against a synthetic disc ===\n");
 	{
+		// This section scores the SOURCE's byte assembly, synchronously. A successful
+		// dvd_vcd_open() above started the read-ahead worker, which would make
+		// dvd_vcd_read a non-blocking ring copy; the ring has its own test.
+		dvd_ra_stop();
 		g_trk.num = 1; g_trk.lba = 200; g_trk.len = 20000;   // not at LBA 0 --
 		                                                       // proves the offset
 		                                                       // is genuinely used

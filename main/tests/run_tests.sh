@@ -42,7 +42,7 @@ fail=0
 for t in *_test.cpp; do
     n="${t%.cpp}"
     echo "### $n"
-    "$CXX" -std=c++11 -Wall -Wno-unused-function -O0 -g \
+    "$CXX" -std=c++11 -Wall -Wno-unused-function -O0 -g -pthread \
         -I "$TREE/support/dvd" -o "$OUT/$n" "$t"
     "$OUT/$n" || fail=1
     echo
@@ -61,7 +61,7 @@ red_case() {
     if cmp -s "$TREE/support/dvd/$mod" "$dir/support/dvd/$mod"; then
         echo "  !! RED $name: mutation matched nothing (the anchor moved)"; fail=1; return
     fi
-    if ! "$CXX" -std=c++11 -Wall -Wno-unused-function -O0 -g \
+    if ! "$CXX" -std=c++11 -Wall -Wno-unused-function -O0 -g -pthread \
             -I "$dir/support/dvd" -o "$dir/bin" "$test" 2>"$dir/build.log"; then
         echo "  !! RED $name: mutant did not compile"; sed -n '1,4p' "$dir/build.log"
         fail=1; return
@@ -237,6 +237,104 @@ if [ "$RED" -eq 1 ]; then
         "FAIL distinct extents counted as dropped" \
         "s/^\t\tg_vobs_dropped++;$//" \
         css-drop-silent
+
+    # ---- dvd_css: every window comes back full --------------------------------
+    # The shipped behaviour: stop at the VOB clamp and return short. Main then caches
+    # the whole window, so its tail serves the PREVIOUS window's sectors -- up to 7
+    # stale sectors at every linear crossing of a 1 GB VOB part boundary.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL stale sectors left in the window" \
+        "s/^\t\tdone += (uint32_t)n;$/\t\tdone += (uint32_t)n; break;/" \
+        css-short-window
+
+    # An unreadable tail left as-is is the same stale-sector hole by another route.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL unreadable tail is zero-filled" \
+        "/memset(p + (size_t)done \* 2048, 0/d" \
+        css-tail-not-zeroed
+
+    # A failed FIRST sector reported as success: Main would cache a window of zeros
+    # and never retry it.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL window whose first sector is unreadable fails" \
+        "/if (done == 0) return -1;/d" \
+        css-head-failure-hidden
+
+    # libdvdcss's plain O_RDONLY handle left inheritable: every core switch carries
+    # one more into the next Main, and Eject then fails with EBUSY.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL the library's fd is close-on-exec" \
+        "s/fcntl(fd, F_SETFD, fl | FD_CLOEXEC) == 0) n++;/1) n++;/" \
+        css-lib-fd-inherited
+
+    # ---- dvd_readahead: the RAM ring between the disc and the core ---------------
+    # The drive probe issued while the worker is mid-read: it queues behind that
+    # read in the drive and blocks the poll thread, i.e. the ring's own consumer.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "FAIL \[13\] drive probes while a read is in flight" \
+        "/if (mounted \&\& dvd_ra_source_busy()) return;/d" \
+        phys-probes-busy-drive
+
+    # The skip spends the scan slot: a failing drive's short idle gaps are never
+    # caught, and a drive-button eject goes unnoticed while the ring plays on.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "FAIL \[14\] probes in the second the worker went idle" \
+        "s/^\tif (now - last_scan < period) return;$/\tif (now - last_scan < period) return;\n\tlast_scan = now;/" \
+        phys-skip-spends-slot
+
+    # A burst in flight when the core seeks completes for the OLD position; kept, it
+    # is stored and counted under the new one -- the landing is someone else's data.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL landing sectors that are not what they claim" \
+        "s/if (stop_req || g != gen) continue;   \/\/ retargeted/if (stop_req) continue;   \/\/ retargeted/" \
+        ra-keeps-stale-burst
+
+    # A window whose head is in the ring but whose tail is not, served as whole:
+    # the stale-sector defect dvd_css_read was just fixed for, one layer up.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL a window reaching past the fill" \
+        "s/if (lba >= base \&\& end <= base + fill) return 1;/if (lba >= base \&\& lba < base + fill) return 1;/" \
+        ra-serves-partial
+
+    # The consumer never frees room: the worker parks once the ring is full and
+    # playback stops dead one ring-length in.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL windows never served" \
+        "/^\tadvance(end);$/d" \
+        ra-no-advance
+
+    # An unreadable sector left holding whatever the burst buffer held before.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL the unreadable sector is zeros" \
+        "/memset(tmp, 0, 2048);/d" \
+        ra-hole-not-zeroed
+
+    # A failed burst retried a sector at a time but stored at the burst's LENGTH:
+    # the good sectors around a bad one come back as leftovers.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL its neighbours are intact" \
+        "/^\t\t\tn = 1;$/d" \
+        ra-retry-keeps-burst-len
+
+    # Every wait reported, warm-up included: the mount's own reads fill the log
+    # with "ring ran dry" lines that are not stalls.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL cold-start waits logged as a dry ring" \
+        "s/if (!wait_seek \&\& served >= RA_STEADY \&\& ms/if (!wait_seek \&\& ms/" \
+        ra-logs-warmup
+
+    # Failed reads retried back to back: an open tray keeps the drive busy and the
+    # probe that notices the eject never gets in.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL drive idle within 300 ms of the tray opening" \
+        "/usleep(RA_FAIL_PAUSE_MS \* 1000);/d" \
+        ra-retry-without-gap
+
+    # Main's own window ignored: every buffer hit would wait on the ring.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL Main's own window is a hit" \
+        "/return 1;                          \/\/ Main's own window has it/d" \
+        ra-ignores-main-window
 
     # ---- the support bundle's argv (issue #81) ---------------------------------
     # The shipped-until-#81 behaviour: no NAV-pack capture at all, so a highlight
