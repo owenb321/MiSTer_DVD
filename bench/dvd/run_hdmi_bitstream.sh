@@ -30,6 +30,10 @@ run() {
 run iec61937_wrap dvd/spdif_pass.sv dvd/hdmi_bs_i2s.sv sys/i2s.v dvd/iec61937_wrap.sv \
     bench/dvd/iec61937_wrap_tb.sv
 
+# The post-reset hold on BOTH legs (emu.sv has no bench -- read the seam out of it).
+echo "=== spdif/hdmi bs_hold wiring"
+python3 tools/check_spdif_bs_hold_wiring.py || fail=1
+
 
 # ---------------------------------------------------------------------------
 # RED arm. The bench INSTANTIATES iec61937_wrap, so it cannot mutate the module
@@ -75,6 +79,33 @@ if [ "$RED" -eq 1 ]; then
     # up, so real samples would be clocked into a sink expecting a data burst.
     red_case hdmi-carries-pcm "FAIL: PCM samples reach the HDMI serializer" \
         "s/wire \[31:0\] hdmi_pair = pcm_mode ? 32'd0 : cur_pair\[31:0\];/wire [31:0] hdmi_pair = cur_pair[31:0];/"
+
+    # The wiring checker must be able to fail, in each direction it guards.
+    wire_red() {
+        local name="$1" expect="$2" src="$3"
+        local dir; dir=$(mktemp -d)
+        eval "$src" > "$dir/emu.sv"
+        if python3 tools/check_spdif_bs_hold_wiring.py "$dir/emu.sv" > "$dir/log" 2>&1; then
+            echo "  !! RED $name: wiring check PASSED a broken emu.sv"; fail=1
+        elif ! grep -q -e "$expect" "$dir/log"; then
+            echo "  !! RED $name: caught, but not by '$expect'"; sed -n '1,3p' "$dir/log"; fail=1
+        else
+            echo "  RED $name -> caught by '$expect'"
+        fi
+        rm -rf "$dir"
+    }
+    # The pre-fix file, out of git: the optical leg had no hold at all.
+    wire_red pre-fix-emu "not gated on bs_hold" \
+        'git show 4b4b0b5:dvd/emu.sv'
+    # The wrong-direction fix: symmetry with HDMI_BS_EN reads right and is not.
+    wire_red spdif-coupled-to-ack "coupled to hdmi_bs_ack" \
+        "sed 's/^assign SPDIF_PASS_EN = pass_mode & ~|bs_hold;/assign SPDIF_PASS_EN = pass_mode \\& hdmi_bs_ack \\& ~|bs_hold;/' dvd/emu.sv"
+    # The HDMI leg's own hold must not be the thing traded away.
+    wire_red hdmi-hold-dropped "HDMI_BS_EN lost" \
+        "sed 's/^assign HDMI_BS_EN = pass_mode & hdmi_bs_ack & ~|bs_hold;/assign HDMI_BS_EN = pass_mode \\& hdmi_bs_ack;/' dvd/emu.sv"
+    # A second driver (fix added, original line left behind) is a named failure.
+    wire_red duplicate-driver "expected exactly one" \
+        "sed 's/^assign SPDIF_PASS_EN = pass_mode & ~|bs_hold;/&\\nassign SPDIF_PASS_EN = pass_mode;/' dvd/emu.sv"
 fi
 
 if [ "$fail" -ne 0 ]; then echo; echo "SUITE FAILED"; exit 1; fi
