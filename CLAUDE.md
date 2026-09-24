@@ -441,6 +441,13 @@ worse maintenance burden than targeted in-place edits. So:
   main-row `=`/`-` that PR #106 aliased onto B20/B21, so the HIL harness could not inject
   the very keys that PR added and `test_key_table.py` had been RED on exactly those two
   since it merged.
+  ★ **REBINDING IS "DEFINE BUTTONS", ✅ HW-CONFIRMED 2026-09-24 by the maintainer** —
+  a media key binds there like any other (`input.cpp:3371` gives codes ≥256
+  `mapping_type = 1`), and it wins because the hook SKIPS the remap for any code the user
+  has bound. That is what the manual tells users; the kernel-keymap route
+  (`tools/ir_keymap.py`, `EVIOCSKEYCODE_V2`) stays an engineering note, since it needs SSH
+  and does not survive a reboot on its own. ⛔ `config/kbd_<vid>_<pid>.map` CANNOT do it —
+  `input.cpp:2975` gates that lookup on `ev->code < 256`.
   ⏳ **HW round (the only things sim cannot settle): `evtest` the Flirc FIRST** to record
   which keycodes each button really emits (the table is keyed on keycodes, and only the
   device can say), then a transport sweep, digits into a disc menu, **the OSD round trip**

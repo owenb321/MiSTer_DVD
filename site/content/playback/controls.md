@@ -133,10 +133,14 @@ mapped to Menu precisely because that remote's own Menu button belongs to the Mi
     The media-key mappings come from the custom Main. On stock Main a remote's media keys
     mostly do nothing at all: only the arrows, Enter and volume get through.
 
-!!! note "If a key does the wrong thing"
-    Map it yourself in MiSTer's **Define buttons** — anything you bind there wins over the
-    table above. To switch the whole thing off, add this under `[MiSTer]` in
-    `MiSTer.ini`:
+!!! note "If a key does the wrong thing, or you want to use a spare button"
+    Map it in MiSTer's **Define buttons** — anything you bind there wins over the table
+    above, including remote keys. That is the way to put a player action on a button the
+    table leaves alone: a Media Center handset has a pile of them (Record, Radio, Video,
+    Player, Mode, Presentation, Messenger, `*`, `#`, Print) that mean nothing on a DVD
+    player, and any of them can be bound to any button in the first table.
+
+    To switch the whole thing off, add this under `[MiSTer]` in `MiSTer.ini`:
 
     ```ini
     DVD_IR_REMAP=0
@@ -243,6 +247,10 @@ Your remote's **transport keys** work as you would expect:
 Use MiSTer's own **Define buttons**, which maps any key onto any of the buttons in the first
 table. A key you map there takes over completely, so it replaces whatever the built-in list
 above gave it.
+
+This works for **remote keys too**, including the media keys — so if you would rather have
+Record start A-B repeat, or put Chapter Menu on the Radio button, bind it there. Nothing
+needs editing on the SD card and nothing needs an SSH session.
 
 !!! note "++enter++ and ++esc++ cannot be rebound"
     MiSTer reserves both as its own confirm and cancel keys and will not assign them to a

@@ -209,22 +209,35 @@ measurement of §1 exactly — 63 keycodes.
 
 ### Repurposing a button the table leaves alone
 
-Three routes, in descending order of how well they work:
+1. ★★ **MiSTer's "Define buttons" — ✅ HW-CONFIRMED 2026-09-24 by the
+   maintainer, and THE ONE TO TELL USERS ABOUT.** It is in the OSD, needs no SSH,
+   no scripts and no files on the SD card, and it is the mechanism MiSTer users
+   already know.
+   ★ **It works because `dvd_ir.cpp`'s hook deliberately skips the remap for any
+   code the user has bound** (`ir_user_bound`, tested against `map[]`/`mmap[]`
+   with the RAW code) — so a user binding always outranks the table rather than
+   fighting it. The other half is stock: `input.cpp:3371` sets
+   `mapping_type = (ev->code >= 256 …) ? 1 : 0`, so a media keycode binds as a
+   joystick button.
+   ⚠ This was written up as *"reasoned from the code, not tested — the harness
+   cannot see the OSD"*. The maintainer then tested it on the board and it works.
+   **A path the harness structurally cannot reach is not an untestable path; it
+   is one that needs a person**, and asking was cheaper than anything else here.
 
-1. ★ **Change the kernel keymap** — the right place. An IR button carries a
-   SCANCODE, the kernel maps it to a keycode, and the player maps that to an
-   action; changing the middle step makes the button emit something the player
-   already understands, so nothing in the core, the Main or any config changes.
-   `tools/ir_keymap.py` (pushed to the rig) does it with `EVIOCSKEYCODE_V2`, the
-   ioctl `ir-keytable -w` uses — no v4l-utils needed, just MiSTer's stock python3.
+2. **Change the kernel keymap** — the advanced option, and still the more
+   *precise* one: an IR button carries a SCANCODE, the kernel maps it to a
+   keycode, the player maps that to an action, so changing the middle step makes
+   the button emit something the player already understands, and it applies
+   everywhere rather than in one core's button map.
+   `tools/ir_keymap.py` does it with `EVIOCSKEYCODE_V2`, the ioctl
+   `ir-keytable -w` uses — no v4l-utils, just MiSTer's stock python3.
    **Demonstrated**: `0x800f0450` (Radio) → `KEY_SUBTITLE`, verified by re-reading
-   the map, then reverted. ⚠ Lasts until reboot unless called from
-   `user-startup.sh` after the modules load.
-2. **MiSTer's "Define buttons"** — `input.cpp:3371` sets
-   `mapping_type = (ev->code >= 256 …) ? 1 : 0`, so a media keycode is bindable
-   as a *joystick* button, and `dvd_ir.cpp`'s hook deliberately skips the remap
-   for any code the user has bound. ⏳ Reasoned from the code, **not tested** —
-   the harness cannot see the OSD.
+   the map, then reverted.
+   ⛔ **Do NOT put this in the manual as the way to rebind.** It needs an SSH
+   session, it lasts only until reboot unless wired into `user-startup.sh`, and
+   route 1 does the same job from the OSD. It belongs here, as the tool for
+   someone who wants the change to apply outside this core too.
+
 3. ⛔ **`config/kbd_<vid>_<pid>.map` does NOT work for these.**
    `input.cpp:2975` gates that lookup on `ev->code < 256`, and every interesting
    spare button is above it.
