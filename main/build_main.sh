@@ -25,6 +25,41 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
+# Provenance, captured BEFORE the Docker re-exec and stashed in a file.
+#
+# ⚠⚠ IT HAS TO HAPPEN HERE, ON THE HOST. docker_reexec mounts only the repo root
+# at its own path, and in a WORKTREE `.git` is a FILE pointing at
+# <main-checkout>/.git/worktrees/<name> -- which is outside that mount. So the VCS
+# cannot resolve the tree from inside the container at all, and a naive "record
+# the commit at the end of the build" would silently record nothing on exactly
+# the builds this project makes most often.
+#
+# ⚠ RECORDING THE COMMIT ALONE WOULD BE WORSE THAN USELESS. A Main is routinely
+# built from a DIRTY tree and deployed minutes before the commit that captures it
+# -- that is how the IR round went, and answering "what was this built from?"
+# afterwards took mtime archaeology. A bare HEAD would have NAMED A COMMIT WHOSE
+# CONTENT IS NOT WHAT SHIPPED. The dirty flag and the file list are the part that
+# makes this answerable.
+mkdir -p "${BUILD_DIR:-$HERE/.build}"
+if [ -z "${IN_MAIN_DOCKER:-}" ]; then
+    _bi="${BUILD_DIR:-$HERE/.build}/.buildinfo.env"
+    if _sha="$(git -C "$HERE" rev-parse HEAD 2>/dev/null)"; then
+        _dirty="$(git -C "$HERE" status --porcelain 2>/dev/null | wc -l | tr -d " ")"
+        # Only the paths that can change the BINARY; a dirty doc file is not a
+        # caveat worth attaching to a build.
+        _dsrc="$(git -C "$HERE" status --porcelain -- support integration build_main.sh 2>/dev/null | awk "{print \$2}" | tr "\n" " ")"
+        {
+            echo "BI_COMMIT=$_sha"
+            echo "BI_SHORT=$(git -C "$HERE" rev-parse --short HEAD)"
+            echo "BI_BRANCH=$(git -C "$HERE" rev-parse --abbrev-ref HEAD)"
+            echo "BI_DIRTY=$_dirty"
+            echo "BI_DIRTY_SRC=$_dsrc"
+        } > "$_bi"
+    else
+        rm -f "$_bi"      # no VCS answer: say nothing rather than something stale
+    fi
+fi
+
 # Optionally re-exec inside the pinned ARM-toolchain Docker image (USE_DOCKER=1).
 # No-op otherwise; never returns when it re-execs. Must run before any build work.
 source "$HERE/docker_reexec.sh"
@@ -86,7 +121,48 @@ make -C "$STOCK" ${CROSS_COMPILE:+CROSS_COMPILE="$CROSS_COMPILE"} -j"$(nproc)"
 # 5. Collect the binary. Stock Main_MiSTer emits it under BUILDDIR (bin/MiSTer).
 if [ -f "$STOCK/bin/MiSTer" ]; then
     cp "$STOCK/bin/MiSTer" "$BUILD_DIR/$OUT_NAME"
+
+    # 5b. Provenance sidecar, so "what was this built from?" is answerable from the
+    # artifact instead of by comparing mtimes against commit timestamps.
+    #
+    # ★ binary_sha256[:8] is deliberately included: tools/mister.py deploys the Main
+    # as MiSTer_DVDcss_hil_<that>, so this ties a file on the SD card back to a
+    # commit. The two hashes are easy to confuse -- the deploy name is NOT a VCS
+    # hash -- and carrying both here says so in one place.
+    # ⚠ READ this file, never `source` it. It carries a LIST OF PATHS, and
+    # sourcing `BI_DIRTY_SRC=a b` makes the shell execute `b` -- which is exactly
+    # how the first cut of this failed, with "Permission denied" on a .cpp file
+    # after an otherwise successful build. A generated file is data, not script.
+    _bi="$BUILD_DIR/.buildinfo.env"
+    _bival() { [ -f "$_bi" ] && sed -n "s/^$1=//p" "$_bi" | head -1; }
+    BI_COMMIT="$(_bival BI_COMMIT)"
+    BI_SHORT="$(_bival BI_SHORT)"
+    BI_BRANCH="$(_bival BI_BRANCH)"
+    BI_DIRTY="$(_bival BI_DIRTY)"
+    BI_DIRTY_SRC="$(_bival BI_DIRTY_SRC)"
+    _bsha="$(sha256sum "$BUILD_DIR/$OUT_NAME" | cut -c1-64)"
+    cat > "$BUILD_DIR/$OUT_NAME.json" <<JSONEOF
+{
+  "artifact":      "$OUT_NAME",
+  "built_utc":     "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "commit":        "${BI_COMMIT:-unknown}",
+  "commit_short":  "${BI_SHORT:-unknown}",
+  "branch":        "${BI_BRANCH:-unknown}",
+  "tree_dirty":    ${BI_DIRTY:-null},
+  "dirty_sources": "${BI_DIRTY_SRC:-}",
+  "stock_ref":     "$MAIN_MISTER_REF",
+  "binary_sha256": "$_bsha",
+  "deploy_name":   "${OUT_NAME}_hil_$(echo "$_bsha" | cut -c1-8)"
+}
+JSONEOF
     echo "== done: $BUILD_DIR/$OUT_NAME"
+    if [ -n "${BI_DIRTY_SRC:-}" ]; then
+        echo "   !! built from a DIRTY tree: $BI_DIRTY_SRC"
+        echo "      ${BI_SHORT:-?} does NOT describe this binary's sources."
+    else
+        echo "   from ${BI_SHORT:-unknown} (${BI_BRANCH:-?}), build sources clean"
+    fi
+    echo "   provenance: $BUILD_DIR/$OUT_NAME.json"
     echo "   copy to /media/fat/$OUT_NAME and add [DVD] main=$OUT_NAME to MiSTer.ini"
 else
     echo "!! build did not produce $STOCK/bin/MiSTer — check the make output above" >&2
