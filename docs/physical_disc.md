@@ -618,6 +618,21 @@ the worker:
   - A probe skipped for a busy drive no longer spends its scan slot: it retries on
     the next poll pass (`dvd_phys_test` [14]; mutation `phys-skip-spends-slot`).
   - A genuine scratch pays one 100 ms gap per retry, and the ring covers it.
+  - ✅ **MEASURED ON THE RIG (2026-09-24, *Avatar*, control first).** The drive's
+    button was reproduced from a separate process with SCSI START STOP UNIT (after
+    PREVENT ALLOW MEDIUM REMOVAL = allow). That bypasses the kernel's single-opener
+    check, as the physical button does. Each run played 25 s to fill the ring, then
+    timed until the Main logged `disc removed while playing it`. The tray itself took
+    3.6 s to open in both arms. From the tray being open:
+
+    | arm | eject noticed | sectors zero-filled meanwhile |
+    |---|---|---|
+    | previous build | 5.2 s | 12 |
+    | this fix | **1.3 s** | 2 |
+
+    ⚠ This drive cannot CLOSE its tray by command (START STOP UNIT LoEj+Start is
+    refused 05/24/00; `CDROMCLOSETRAY` gives EIO), so each arm needs a hand at the
+    tray.
 
 **libdvdcss's handle outlived the Main, and that is what blocked Eject (fixed
 2026-09-24; pre-existing, not caused by the read-ahead).**
