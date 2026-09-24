@@ -376,14 +376,17 @@ worse maintenance burden than targeted in-place edits. So:
   only D5 (late content) sees it. ⚠ Bench trap: `rst` is `~rst_n` through a continuous
   assign, so stimulus changing both it and `aud_soft_switch` on a posedge fabricates a
   "hard" reset. Drive them from the negedge. Gate `bench/dvd/run_stc_freerun.sh` §4.
-  🔧 The optical S/PDIF passthrough gap this report did NOT cover is now fixed separately,
+  ✅ The optical S/PDIF passthrough gap this report did NOT cover is now fixed separately,
   see the bullet below. Detail: **`docs/fabric_audio.md`
   "De-click on an audio-only reset"**.
 
-- 🔧 **PASSTHRU OVER OPTICAL SENT A TORN IEC 61937 BURST AT EVERY TRACK SWITCH — THE
+- ✅ **PASSTHRU OVER OPTICAL SENT A TORN IEC 61937 BURST AT EVERY TRACK SWITCH — THE
   HDMI LEG'S POST-RESET HOLD NEVER REACHED S/PDIF (2026-09-23, branch
   `fix/spdif-track-switch-mute`); sim/wiring-proven, 4 RED arms each caught by its own
-  message, ⏳ HW-confirm pending (the maintainer's passthru round).** Every audio-track
+  message, and ✅ HW-CONFIRMED 2026-09-23 by the maintainer's passthru round** (build
+  `DVD_spdifmute_20260923_1851.rbf`, SEED 9 first roll, clk_dec 90.86/89.13, 93 % ALM):
+  optical track switches, optical chapter skips/seeks, HDMI passthru unchanged, and
+  optical with a non-acking HDMI side all good. Every audio-track
   switch and `aud_flush` cold-resets `iec61937_wrap` mid-burst and re-phases its pacing
   (509 clk instead of 512, `iec61937_wrap_tb` TEST 9 — `docs/iec61937.md` finding 3).
   `bs_hold` has muted HDMI for ~100 ms across that since the HDMI bitstream work;
