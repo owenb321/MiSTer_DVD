@@ -326,7 +326,9 @@ worse maintenance burden than targeted in-place edits. So:
 - 🔧 **PROGRESSIVE DEINT = BLEND — a NON-ADAPTIVE field blend on the Progressive
   raster (2026-09-24, branch `feature/field-blend`); sim-proven + mutation-checked, built
   `DVD_fieldblend_20260924_1713.rbf` (SEED 9 first roll, clk_dec 91.64/89.16, 254 ALM,
-  6 M10K, 0 DSP), ⏳ HW round pending.** `O[49] Progressive Deint = Off / Blend`, **default Off**. On the
+  6 M10K, 0 DSP), ✅ HW-MEASURED on the rig 2026-09-24 (Thayer comb 1.751 → 0.588 on
+  one paused picture, 0 px change between Blend re-scans, film 0 px Off vs Blend, PAL and
+  NTSC video engage, Interlaced disengages, pacing unchanged), ⏳ maintainer's eye pending.** `O[49] Progressive Deint = Off / Blend`, **default Off**. On the
   Progressive raster, `dvd/field_blend.sv` filters every line of a true-interlaced picture
   (`cur_ilace`) as `(a + 2b + d + 2) >> 2`, mirroring the edges.
   ★ **This reopens `hw_budget_and_lessons.md` §0 narrowly and on purpose.** Shelved Stage A

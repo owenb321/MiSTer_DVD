@@ -2,8 +2,8 @@
 
 **Status:** 🔧 branch `feature/field-blend` (2026-09-24). Sim-proven, mutation-checked,
 and built: `DVD_fieldblend_20260924_1713.rbf`, SEED 9 first roll, clk_dec 91.64 / 89.16
-MHz against the 86.0 gate, `field_blend` = 254 ALM, 6 M10K, 0 DSP. ⏳ HW round and
-maintainer's eye pending.
+MHz against the 86.0 gate, `field_blend` = 254 ALM, 6 M10K, 0 DSP. ✅ HW-measured on the
+rig 2026-09-24 (§5); ⏳ maintainer's eye pending.
 **Option:** `O[49] Progressive Deint = Off / Blend`, **default Off**.
 **Files:** `dvd/field_blend.sv`, `dvd/resample_addrgen.v` (sideband and H+1 walk),
 `rtl/mpeg2/resample.v` and `rtl/mpeg2/mpeg2video.v` (threading and instance), `dvd/emu.sv`
@@ -229,13 +229,25 @@ that instantiate the addrgen or `resample` gained a `.blend_en(1'b0)` tie-off.
     packing estimate swinging, not 1,862 ALMs of growth (ledger entry in `DVD.qsf`).
   - The Main (telemetry `flags.blend`) cross-compiles under `USE_DOCKER=1
     main/build_main.sh`.
-- ⏳ **HW round**, control arm first:
-  - `flags.blend` = 1 on Thayer VTS_01 / ROGER_WATERS / a PAL video disc, and 0 on film,
-    on `Video Output = Interlaced` and on 240p;
-  - film paused On vs Off → 0 px diff;
-  - Thayer paused, two shots → 0 px;
-  - chapter skips across a film↔video transition;
-  - the maintainer's eye on static text and on the motion ghost.
+- ✅ **HW round measured on the rig (2026-09-24, harness, `DVD_fieldblend_20260924_1713.rbf`
+  + the matching Main).** Each claim below was checked against a control that could fail:
+  | check | result |
+  |---|---|
+  | Thayer VTS_01, one paused picture: Off vs Blend | comb ratio **1.751 → 0.588**, 83 % of pixels changed |
+  | Same picture, Blend, two shots 3 s apart (no shimmer) | **0 px differ** |
+  | MEN_IN_BLACK (film, `pf=1`), paused: Off vs Blend | `flags.blend=0`, **0 px differ** |
+  | ROGER_WATERS (NTSC video): engagement | `flags.blend=1` |
+  | ROGER_WATERS pacing, interleaved 25 s windows | lates 9.78 vs 9.76/s on the same scene (Blend vs Off); `vid_err` 0 |
+  | INTERSTELLA 5555 (PAL 576) | `flags.blend=1`, geometry 720x576 intact |
+  | Blend selected, `Video Output = Interlaced` | `flags.blend=0`; back on in Progressive |
+  | Thayer: paused frame steps | each step a new picture (96–98 % change), all blended (comb 0.54) |
+  | Thayer: seek fwd/back, then playing | picture advancing, blended (comb 0.56), `blend=1` |
+  ★ The 0-px film diff is not vacuous: the same procedure on Thayer changes 83 % of pixels.
+  ⚠ Not exercised: 240p (only MPEG-1 SIF uses it, and MPEG-1 is `progressive_sequence`,
+  so `cur_ilace` is 0 there anyway; the gate is pinned by the wiring checker), and a
+  film↔video transition inside one title (bench C6 covers the ordering).
+- ⏳ **The maintainer's eye** on static text and on the motion ghost, which no metric here
+  scores (the comb ratio is blind to the ghost, §0 of the model's header).
 - **Known limits:**
   - hard-telecine film (`pf=0`) is blended, which the census could not size;
   - a menu still flagged interlaced is softened;
