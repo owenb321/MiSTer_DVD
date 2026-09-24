@@ -323,6 +323,35 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **PROGRESSIVE DEINT = BLEND — a NON-ADAPTIVE field blend on the Progressive
+  raster (2026-09-24, branch `feature/field-blend`); sim-proven + mutation-checked, built
+  `DVD_fieldblend_20260924_1713.rbf` (SEED 9 first roll, clk_dec 91.64/89.16, 254 ALM,
+  6 M10K, 0 DSP), ⏳ HW round pending.** `O[49] Progressive Deint = Off / Blend`, **default Off**. On the
+  Progressive raster, `dvd/field_blend.sv` filters every line of a true-interlaced picture
+  (`cur_ilace`) as `(a + 2b + d + 2) >> 2`, mirroring the edges.
+  ★ **This reopens `hw_budget_and_lessons.md` §0 narrowly and on purpose.** Shelved Stage A
+  shimmered because its kernel was bob with a per-refresh ALTERNATING anchor and a
+  threshold detector: a falsely flagged edge went sharp/soft at 30 Hz. This has no
+  detector, no anchor and no per-scan state, so a held picture is byte-identical on every
+  re-scan. Bench arm C5 measures that against the previous scan, and mutation MC7 (a
+  one-LSB per-scan flip) proves the arm can fail. The trade is sharpness, not shimmer.
+  ★★ **Default Off was MEASURED, not chosen by taste.** The offline study
+  (`tools/field_blend_model.py`) found NTSC soft-telecine film safe: all of it is `pf=1`,
+  899 discs. But `pf=0` selects ~30 % of the library, and **about half of that never
+  combs**: PAL Cowboy Bebop, The Office UK and Superman, and 11 of 24 sampled NTSC
+  "VIDEO" discs sit at a weave comb ratio ~0.6. On those the blend only softens (43–90 %
+  vertical detail kept on still pixels). ⛔ A per-picture "does it comb" gate was declined:
+  any threshold reintroduces a picture-to-picture flip.
+  ⚠ **The census JSON's `pic_progressive_pct` is unreliable** (halved on many film discs);
+  use `cadence_verdict` or a live `video_cadence_census.py --per-window`.
+  ⚠ Gate is `~interlaced_eff`, NOT Stage A's `~fields_eff`: 240p emits FRAMES.
+  ⚠ The addrgen's extra (H+1th) line is **line H-2** (disp_y steps back), which makes the
+  bottom a mirror. Stage A repeated H-1, a replicate, and mutation MC2 catches it.
+  Gates: `bench/dvd/run_field_blend.sh --red` (module bit-exact vs the model on a real
+  Thayer frame; real-chain arms C1–C8; 13 mutations + 6 wiring REDs incl. the real
+  pre-feature files) and `tools/check_field_blend_wiring.py`.
+  Detail: **`docs/field_blend.md`**.
+
 - 🔧 **PHYSICAL-DISC PLAYBACK HITCHES: A STALE-SECTOR BUG AT EVERY 1 GB VOB BOUNDARY, AND
   NO READ-AHEAD (2026-09-24, branch `feature/disc-readahead`); host-proven RED/GREEN
   (`main/tests/run_tests.sh --red`, 49 mutations), and ✅ REPRODUCED AND FIXED ON THE RIG

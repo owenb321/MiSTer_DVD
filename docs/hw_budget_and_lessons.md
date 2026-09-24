@@ -35,6 +35,12 @@ the path most users are on.
 `docs/stage_b_temporal_plan.md`) live on those branches and are **not** on `main`. This
 document is deliberately self-contained so that it survives their deletion.
 
+★ **Reopened narrowly on 2026-09-24: `docs/field_blend.md`.** That work is a
+NON-adaptive `[1,2,1]` blend. It keeps Stage A's plumbing and deletes its detector and
+alternating anchor, which were the mechanism of the shimmer. It ships **Off by default**,
+because `progressive_frame = 0` also selects discs that never comb. The decision above
+still stands for adaptive and temporal deinterlacing.
+
 ### Stage B specifically — why it was rejected
 
 **It was built end to end and REJECTED on picture quality.**
