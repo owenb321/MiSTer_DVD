@@ -937,7 +937,7 @@ The cost is vertical softness.
 It is sim-proven and mutation-checked (`bench/dvd/run_field_blend.sh --red`,
 `tools/check_field_blend_wiring.py`).
 
-**Next step:** the build, then a HW round (control arm first). Design, the library census
+**Next step:** the maintainer's eye on static text and the motion ghost; the build and a measured HW round (2026-09-24) are done. Design, the library census
 that chose default Off, and the known limits are in **`docs/field_blend.md`**.
 
 ### HD Modeline Switching
