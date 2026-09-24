@@ -450,6 +450,119 @@ if [ "$RED" -eq 1 ]; then
         "want the VCD sentinel" \
         "s/is_vcd ? DVD_PHYS_VCD_SENTINEL : DVD_PHYS_SENTINEL/DVD_PHYS_SENTINEL/" \
         phys-vcd-wrong-sentinel
+
+    # ---- IR / media-key remap ------------------------------------------------
+    # Every failure here is SILENT: a wrong target still produces a keypress that
+    # still does something, so the only thing that catches it is an assertion
+    # naming the button the key must reach.
+
+    # The marquee fix, removed. ev2ps2[KEY_PAUSE] is 0xE1 -- the multi-byte PS/2
+    # Pause sequence kbd_map.sv never binds -- so without this row the most
+    # obvious button on the remote is inert.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_PAUSE -> KEY_SPACE (B1)" \
+        "/^[[:space:]]*{ KEY_PAUSE,/d" ir-pause-dropped
+
+    # Cover only the two spellings a Media Center handset sends and drop the HID
+    # consumer-page ones -- which is what a Flirc and every RF media remote use.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_PLAYCD -> B1" \
+        "/^[[:space:]]*{ KEY_PLAYCD,/d" ir-playcd-dropped
+
+    # Stop goes up a menu level instead of stopping. This is the shape the CEC
+    # mapping actually shipped with (hdmi_cec.cpp sent STOP to KEY_ESC), so it is
+    # a mistake with precedent rather than an invented one.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_STOP -> KEY_Q (B14)" \
+        "s/{ KEY_STOP, *KEY_Q,/{ KEY_STOP, KEY_ESC,/" ir-stop-is-return
+
+    # Fast-forward rewinds.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_FASTFORWARD -> KEY_TAB (B10)" \
+        "s/{ KEY_FASTFORWARD, *KEY_TAB,/{ KEY_FASTFORWARD, KEY_BACKSPACE,/" ir-ff-is-rew
+
+    # Use the OSD meaning in both contexts: Back then CANCELS during playback
+    # instead of going up a disc level.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_EXIT -> KEY_B (B13)" \
+        "s/{ KEY_EXIT, *KEY_B,/{ KEY_EXIT, KEY_ESC,/" ir-exit-always-esc
+
+    # Ignore the OSD column entirely. ★ Only ONE arm can see this: every other
+    # two-column row has the same key in both (OK, Start, the digits), so the
+    # Back-in-OSD assertion is the whole gate for the feature.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_EXIT -> KEY_ESC in OSD" \
+        "s/return osd_open ? ir_tbl\[i\].to_osd : ir_tbl\[i\].to_play;/return ir_tbl[i].to_play;/" \
+        ir-no-osd-column
+
+    # Shift the numeric pad by one. KEY_0 is 11 and KEY_1..9 are 2..10, so the
+    # digits are NOT contiguous -- exactly the shape a careless edit survives,
+    # and it silently picks the wrong disc-menu button for the rest of time.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_NUMERIC_0 -> digit 0" \
+        "s/{ KEY_NUMERIC_0, *KEY_0, *KEY_0,/{ KEY_NUMERIC_0, KEY_1, KEY_1,/" ir-digits-off-by-one
+
+    # Claim the volume keys. Main already drives the framework's ONE attenuator
+    # (sys_top vol_att: I2S, the analog DAC and S/PDIF together), so a second
+    # route desyncs from the OSD bar and cannot touch passthrough at all.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_VOLUMEUP untouched" \
+        "s/{ KEY_PLAY, *KEY_SPACE, *0, *\"B1 Pause\" },/&\n\t{ KEY_VOLUMEUP, KEY_EQUAL, 0, \"B20 Vol Up\" },/" \
+        ir-steals-volume
+
+    # Claim the OSD toggle -- on many remotes the only route into the MiSTer menu.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_MENU untouched" \
+        "s/{ KEY_DVD, *KEY_M, *0, *\"B5 Menu\" },/&\n\t{ KEY_MENU, KEY_M, 0, \"B5 Menu\" },/" \
+        ir-steals-osd
+
+    # Claim Delete, which input.cpp folds into the ctrl-alt-del reset combo.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_DELETE untouched" \
+        "s/{ KEY_INFO, *KEY_D, *0, *\"B9 Display\" },/&\n\t{ KEY_DELETE, KEY_D, 0, \"B9 Display\" },/" \
+        ir-steals-delete
+
+    # Point a row at a key that is itself a source. Nothing chains at runtime (the
+    # lookup is one pass), but the table now depends on row ORDER for its meaning,
+    # which is the property the sweep exists to forbid.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "rows whose target is also a source" \
+        "s/{ KEY_MEDIA_TOP_MENU, *KEY_T,/{ KEY_MEDIA_TOP_MENU, KEY_TITLE,/" ir-chains
+
+    # A second row for a key that already has one. First match wins, so the new
+    # row is dead code that LOOKS live -- no behaviour arm can see it.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "duplicate source rows" \
+        "s/{ KEY_STOPCD, *KEY_Q, *0, *\"B14 Stop\" },/&\n\t{ KEY_STOP, KEY_ESC, 0, \"B13 Return\" },/" \
+        ir-duplicate-source
+
+    # Blank a why string. Behaviour is unchanged, so only the emptiness sweep can
+    # catch it -- and tools/check_ir_remap.py goes vacuous for that row without it.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "rows with no why string" \
+        "s/{ KEY_ANGLE, *KEY_G, *0, *\"B6 Angle\" },/{ KEY_ANGLE, KEY_G, 0, \"\" },/" ir-blank-why
+
+    # Ignore the ini kill switch, so a user who hit a conflict cannot turn it off.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "DVD_IR_REMAP=1 -> inactive" \
+        "s/if (cfg.dvd_ir_remap == 1) return 0;/if (0) return 0;/" ir-ignores-ini
+
+    # Remap on every core rather than only this one.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "non-DVD core, mode 0 -> inactive" \
+        "s/return is_dvd() ? 1 : 0;/return 1;/" ir-ignores-core
+
+    # Drop one of decision D3's four homeless functions. Chapter Menu is then
+    # unreachable from the remote, on a handset that has no colour keys to fall
+    # back to.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_EPG -> KEY_F5 (B16 Chapter Menu)" \
+        "/^[[:space:]]*{ KEY_EPG,/d" ir-guide-lost
+
+    # Shuffle the colour keys off the CEC convention the manual already documents.
+    red_case dvd_ir.cpp dvd_ir_test.cpp \
+        "KEY_RED -> KEY_F2 (B12 Title)" \
+        "s/{ KEY_RED, *KEY_F2,/{ KEY_RED, KEY_F1,/" ir-colour-wrong
     echo
 fi
 
