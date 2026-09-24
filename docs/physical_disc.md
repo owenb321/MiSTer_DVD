@@ -522,7 +522,12 @@ identical script). Both Mains: `TR 1/12` playing at mount, a track skip to `TR 2
 and three fast-forward taps landing at 0:00:42–0:00:43. Level measured off the capture
 card (PipeWire audio only) was **−21.1/−21.1 dBFS on the control, −21.3/−20.9 on the
 read-ahead**. Eject then opened the tray (`CDROM_DRIVE_STATUS = 2`, TRAY_OPEN).
-⏳ VCD/SVCD from the drive has not been run.
+**VCD unregressed** (same rig and day, a 57-minute VCD, control Main first, identical
+script, Display pressed so the status line stays up). Both Mains: native 240p, about 30
+pictures/s (+90/+98 per 3 s sample, the spread being ssh sampling jitter), 0 audio
+re-arms, level −42/−36 dBFS against −44/−35. Next-chapter is a no-op on a linear VCD in
+both. Three fast-forward taps moved 0:00:44→0:01:25 on the control and 0:00:45→0:01:26
+on the read-ahead. Eject opened the tray (`CDROM_DRIVE_STATUS = 2`).
 
 **What the rig's drive actually does at the layer change: nothing measurable.** There was
 no slow read (≥100 ms) anywhere near LBA 1,930,144, in either arm, and the control arm's

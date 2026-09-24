@@ -353,6 +353,8 @@ worse maintenance burden than targeted in-place edits. So:
   at ~0.58 s at 448 kbps AC-3). An underrun still clicks and can leave audio 50–300 ms
   late until the next seek; that is phase 3 (RTL), not yet done. Decrypted `.iso` files
   over a network share are not buffered yet.
+  Audio CD and VCD from the drive (both now read through the worker) are ✅ unregressed on
+  the rig against the control Main: play, skip, seek, audio level, and eject.
   (4) **Eject EBUSY, pre-existing:** libdvdcss opens the drive without `O_CLOEXEC`, so each
   core switch leaked one handle into the next Main (measured: 4 on the rig), and the
   kernel refuses to eject unless one handle is open. `mark_cloexec_to()` after
