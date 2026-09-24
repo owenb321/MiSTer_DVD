@@ -244,6 +244,13 @@ PS2_TO_LINUX = {
     (0x4B, False): 38, (0x49, False): 52,
     # B19..B21: E=18, keypad +=78, keypad -=74 (also from ev2ps2[]).
     (0x24, False): 18, (0x79, False): 78, (0x7B, False): 74,
+    # ⚠ PRE-EXISTING GAP, red since PR #106 merged: that PR aliased the
+    # MAIN-ROW '=' / '-' onto B20/B21 in kbd_map.sv for keyboards with no
+    # keypad, and this table was not widened with it -- so the harness
+    # could not inject the very keys the PR added, and test_key_table has
+    # been failing on exactly these two ever since. ev2ps2[13]=0x55,
+    # ev2ps2[12]=0x4e (read out of stock input.cpp, not recalled).
+    (0x55, False): 13, (0x4E, False): 12,
     (0x5A, True): 96, (0x6B, True): 105, (0x72, True): 108, (0x74, True): 106,
     (0x75, True): 103, (0x7A, True): 109, (0x7D, True): 104,
 }
