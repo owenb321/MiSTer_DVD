@@ -33,6 +33,7 @@ static volatile int      stall_ms  = 0;
 static volatile uint32_t bad_lba   = 0xFFFFFFFFu;
 static volatile int      per_call_ms = 0;           // every call costs this much
 static volatile int      calls;
+static volatile int      fail_all  = 0;             // every read fails: an open tray
 
 static void put_stamp(uint8_t *q, uint32_t lba) { memcpy(q, &lba, 4); q[4] = 0x5A; }
 static uint32_t stamp_of(const uint8_t *q) { uint32_t v; memcpy(&v, q, 4); return v; }
@@ -47,6 +48,7 @@ static int fake_src(void *buf, uint32_t lba, uint32_t count)
 		stall_ms = 0;                 // once
 		usleep(ms * 1000);
 	}
+	if (fail_all) return -1;
 	if (lba <= bad_lba && bad_lba < lba + count) return -1;
 	for (uint32_t i = 0; i < count; i++)
 	{
@@ -58,6 +60,7 @@ static int fake_src(void *buf, uint32_t lba, uint32_t count)
 static void reset_src(void)
 {
 	stall_at = 0xFFFFFFFFu; stall_ms = 0; bad_lba = 0xFFFFFFFFu; per_call_ms = 0; calls = 0;
+	fail_all = 0;
 }
 
 // ------------------------------------------------------------------ harness
@@ -254,6 +257,32 @@ int main(void)
 	serve(win, 0, 8, 2000);
 	serve(win, 8, 8, 2000);
 	check("cold-start waits logged as a dry ring", log_n, 0);
+	dvd_ra_stop();
+
+	// [9] The tray opened: every read fails. The worker must leave the drive IDLE
+	//     between attempts, promptly, because dvd_phys_tick() only probes an idle
+	//     drive and the probe is what notices the eject. Measured on the rig before
+	//     this: failing reads back to back kept it ~80 % busy and the eject took
+	//     ~8 s to notice while the ring played on.
+	printf("[9] a failing drive is left idle between attempts\n");
+	reset_src();
+	per_call_ms = 50;
+	dvd_ra_start(fake_src, 100000);
+	usleep(80000);                              // the ring is streaming
+	fail_all = 1;                               // tray opens
+	{
+		long t0 = now_ms(), first_idle = -1;
+		int saw_busy = 0;
+		while (now_ms() - t0 < 600)
+		{
+			int b = dvd_ra_source_busy();
+			if (b) saw_busy = 1;
+			else if (saw_busy && first_idle < 0 && calls > 0) first_idle = now_ms() - t0;
+			usleep(2000);
+		}
+		check("the worker was reading when the tray opened", saw_busy, 1);
+		check("drive idle within 300 ms of the tray opening", first_idle >= 0 && first_idle < 300, 1);
+	}
 	dvd_ra_stop();
 
 	check("idle: every request may be serviced (stock behaviour)", dvd_readahead_ready(123, 1, (uint64_t)-1, 8), 1);

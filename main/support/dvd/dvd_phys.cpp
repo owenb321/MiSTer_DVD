@@ -192,7 +192,6 @@ void dvd_phys_tick(void)
 	int period = foreign ? 5 : scan_period;
 	if (period < scan_period) period = scan_period;
 	if (now - last_scan < period) return;
-	last_scan = now;
 
 	// ⚠ While the read-ahead's worker is inside a read of the disc WE mounted, do
 	// not probe the drive. It serialises commands, so the probe would queue behind
@@ -202,7 +201,12 @@ void dvd_phys_tick(void)
 	// loses nothing: a read in flight means the disc is there, and an opened tray
 	// makes reads fail at once (the worker pauses between failures), so a later
 	// scan finds the drive idle and notices the eject.
+	// ⚠ And a skipped probe must NOT spend its scan slot (last_scan is set only
+	// below): it retries on the very next poll pass, so it lands in the first gap
+	// the worker leaves between failed reads. Spending the slot made the drive's
+	// own eject button take ~8 s to notice while the ring played on.
 	if (mounted && dvd_ra_source_busy()) return;
+	last_scan = now;
 
 	unsigned t0 = now_ms();
 	char dev[16] = {0};

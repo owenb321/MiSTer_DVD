@@ -275,6 +275,13 @@ if [ "$RED" -eq 1 ]; then
         "/if (mounted \&\& dvd_ra_source_busy()) return;/d" \
         phys-probes-busy-drive
 
+    # The skip spends the scan slot: a failing drive's short idle gaps are never
+    # caught, and a drive-button eject goes unnoticed while the ring plays on.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "FAIL \[14\] probes in the second the worker went idle" \
+        "s/^\tif (now - last_scan < period) return;$/\tif (now - last_scan < period) return;\n\tlast_scan = now;/" \
+        phys-skip-spends-slot
+
     # A burst in flight when the core seeks completes for the OLD position; kept, it
     # is stored and counted under the new one -- the landing is someone else's data.
     red_case dvd_readahead.cpp dvd_readahead_test.cpp \
@@ -315,6 +322,13 @@ if [ "$RED" -eq 1 ]; then
         "FAIL cold-start waits logged as a dry ring" \
         "s/if (!wait_seek \&\& served >= RA_STEADY \&\& ms/if (!wait_seek \&\& ms/" \
         ra-logs-warmup
+
+    # Failed reads retried back to back: an open tray keeps the drive busy and the
+    # probe that notices the eject never gets in.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL drive idle within 300 ms of the tray opening" \
+        "/usleep(RA_FAIL_PAUSE_MS \* 1000);/d" \
+        ra-retry-without-gap
 
     # Main's own window ignored: every buffer hit would wait on the ring.
     red_case dvd_readahead.cpp dvd_readahead_test.cpp \

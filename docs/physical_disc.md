@@ -604,10 +604,20 @@ the worker:
   the stall the ring absorbed would come straight back. So the probe skips while the
   worker is inside a read of the disc we mounted (`dvd_ra_source_busy()`,
   `dvd_phys_test` [13] plus mutation `phys-probes-busy-drive`).
-- Eject is still noticed. An opened tray makes every read fail at once, and after
-  `RA_FAIL_RUN` (8) holes in a row the worker pauses 100 ms between reads. The
-  drive is therefore idle most of the time, and the next scan catches the removal.
-  [13]'s control arm asserts that.
+- ⚠ **The first cut noticed the drive's OWN eject button ~8 s late** (maintainer
+  report: pressing the drive's button "rode through the buffer" before the idle
+  logo; the keyboard Eject was fine). With the tray open every read fails in ~90 ms
+  (measured on the rig), and the worker retried each sector 4 times back to back.
+  That kept the drive ~80 % busy, and a skipped probe also spent its whole 1–2 s scan
+  slot. The log showed 19 sectors zero-filled before the probe got in, while the
+  ring played on.
+- **Fix, two halves:**
+  - The worker leaves a 100 ms idle gap before every retry of a failed read
+    (`dvd_readahead_test` [9]: idle within 300 ms of the tray opening; mutation
+    `ra-retry-without-gap`).
+  - A probe skipped for a busy drive no longer spends its scan slot: it retries on
+    the next poll pass (`dvd_phys_test` [14]; mutation `phys-skip-spends-slot`).
+  - A genuine scratch pays one 100 ms gap per retry, and the ring covers it.
 
 **libdvdcss's handle outlived the Main, and that is what blocked Eject (fixed
 2026-09-24; pre-existing, not caused by the read-ahead).**

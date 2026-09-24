@@ -349,6 +349,20 @@ int main(void)
     run_for(NOTICE_WINDOW_S);
     check("[13] ...and the eject is still noticed after", reset_asserts > 0, 1);
 
+    // [14] A skipped probe keeps its slot. The worker is busy at this tick and idle
+    // at the NEXT one inside the same second (a gap between failed reads): the
+    // probe must run then, not a whole scan period later. Spending the slot on the
+    // skip is what let the drive's own eject button go unnoticed for ~8 s.
+    printf("=== [14] a skipped probe retries on the next poll pass ===\n");
+    fake_disc_ready = 1;
+    run_for(NOTICE_WINDOW_S);                  // mounted again
+    run_for(3);                                // settle into the 1 s scan cadence
+    scan_calls = 0;
+    fake_now += 1;
+    fake_ra_busy = 1; dvd_phys_tick();         // busy: skipped
+    fake_ra_busy = 0; dvd_phys_tick();         // same second, now idle
+    check("[14] probes in the second the worker went idle", scan_calls, 1);
+
     printf("\n=== dvd_phys tests: %d error(s) ===\n", errs);
     if (errs) { printf("FAILED\n"); return 1; }
     printf("PASS\n");
