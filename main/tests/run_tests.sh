@@ -492,7 +492,7 @@ if [ "$RED" -eq 1 ]; then
     # Back-in-OSD assertion is the whole gate for the feature.
     red_case dvd_ir.cpp dvd_ir_test.cpp \
         "KEY_EXIT -> KEY_ESC in OSD" \
-        "s/return osd_open ? ir_tbl\[i\].to_osd : ir_tbl\[i\].to_play;/return ir_tbl[i].to_play;/" \
+        "s/uint16_t to = osd_open ? ir_tbl\[i\].to_osd : ir_tbl\[i\].to_play;/uint16_t to = ir_tbl[i].to_play;/" \
         ir-no-osd-column
 
     # Shift the numeric pad by one. KEY_0 is 11 and KEY_1..9 are 2..10, so the
@@ -544,12 +544,12 @@ if [ "$RED" -eq 1 ]; then
 
     # Ignore the ini kill switch, so a user who hit a conflict cannot turn it off.
     red_case dvd_ir.cpp dvd_ir_test.cpp \
-        "DVD_IR_REMAP=1 -> inactive" \
-        "s/if (cfg.dvd_ir_remap == 1) return 0;/if (0) return 0;/" ir-ignores-ini
+        "DVD_IR_REMAP=0 -> inactive" \
+        "s/if (cfg.dvd_ir_remap == 0) return 0;/if (0) return 0;/" ir-ignores-ini
 
     # Remap on every core rather than only this one.
     red_case dvd_ir.cpp dvd_ir_test.cpp \
-        "non-DVD core, mode 0 -> inactive" \
+        "non-DVD core, mode 1 -> inactive" \
         "s/return is_dvd() ? 1 : 0;/return 1;/" ir-ignores-core
 
     # Drop one of decision D3's four homeless functions. Chapter Menu is then

@@ -230,20 +230,46 @@ int dvd_ir_active(void)
 {
 	if (!g_probed) { g_probed = 1; ir_probe(); }
 
-	// 0 = on for the DVD core (the default -- cfg is memset to zero and there
-	// is no separate defaults pass, so 0 MUST be the on value),
-	// 1 = off, 2 = on for every core this Main runs.
-	if (cfg.dvd_ir_remap == 1) return 0;
+	// 0 = off, 1 = on for the DVD core (THE DEFAULT), 2 = on for every core
+	// this Main runs.
+	//
+	// ★ 1 MEANS ON, which reads the way a reader expects, and the default is
+	// set in cfg_parse() (integration step 54) rather than relying on the
+	// memset-to-zero. ⚠ An earlier cut had 0 = on for exactly that reason and
+	// it was WRONG: cfg_parse() has a defaults block (cfg.csync = 1,
+	// cfg.bootscreen = 1, cfg.dvi_mode = 2 ...), so a non-zero default is
+	// ordinary here. Do not "restore" the inverted sense.
+	if (cfg.dvd_ir_remap == 0) return 0;
 	if (cfg.dvd_ir_remap == 2) return 1;
 	return is_dvd() ? 1 : 0;
 }
+
+// A CAPPED TRACE of what the remap actually saw, for "my remote does nothing"
+// reports. Capped because this is on the poll thread that also serves the core's
+// SD blocks -- a per-press fopen for a whole session would be the dvd_phys
+// blocking-I/O lesson all over again. 40 presses is enough to identify a handset
+// and short enough to cost nothing.
+#define IR_TRACE_MAX 40
+static int g_traced = 0;
 
 uint16_t dvd_ir_target(uint16_t code, int osd_open)
 {
 	for (int i = 0; i < IR_TBL_N; i++)
 	{
 		if (ir_tbl[i].from != code) continue;
-		return osd_open ? ir_tbl[i].to_osd : ir_tbl[i].to_play;
+		uint16_t to = osd_open ? ir_tbl[i].to_osd : ir_tbl[i].to_play;
+		if (g_traced < IR_TRACE_MAX)
+		{
+			g_traced++;
+			irlog("ir:   %u -> %u (%s%s)", (unsigned)code, (unsigned)to,
+			      ir_tbl[i].why, osd_open ? ", OSD open" : "");
+		}
+		return to;
+	}
+	if (g_traced < IR_TRACE_MAX)
+	{
+		g_traced++;
+		irlog("ir:   %u -- no row%s", (unsigned)code, osd_open ? " (OSD open)" : "");
 	}
 	return 0;
 }

@@ -131,10 +131,10 @@ mapped to Menu precisely because that remote's own Menu button belongs to the Mi
     `MiSTer.ini`:
 
     ```ini
-    DVD_IR_REMAP=1
+    DVD_IR_REMAP=0
     ```
 
-    `0` (the default) applies the mappings on this core; `2` applies them on every core.
+    `1` (the default) applies the mappings on this core; `2` applies them on every core.
     There is no menu option for it, because a setting that changes the core's menu would
     also change the core's build.
 

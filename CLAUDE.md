@@ -345,8 +345,16 @@ worse maintenance burden than targeted in-place edits. So:
   **Fix = `main/support/dvd/dvd_ir.{h,cpp}`**, a Main-side rewrite of `ev->code` into the
   ordinary keys `ev2ps2[]` carries and `kbd_map.sv`/`emu.sv` already bind. 58 rows, each
   carrying a `why` string naming the button it claims. `DVD_IR_REMAP` in `MiSTer.ini`,
-  **default on** (⚠ `cfg` is memset to zero with no defaults pass, so **0 must be the
-  default-ON value**: 0 = on for this core, 1 = off, 2 = on everywhere).
+  **default on**: `0` = off, `1` = on for this core (the default), `2` = on everywhere.
+  ⚠⚠ **An earlier cut had this INVERTED, and the reason is a claim I wrote in this very
+  file and never checked: "cfg is memset to zero with no separate defaults pass, so 0
+  must be the default-ON value". THAT IS FALSE** — `cfg_parse()` has a defaults block
+  (`cfg.csync = 1`, `cfg.bootscreen = 1`, `cfg.dvi_mode = 2`, `cfg.hdmi_cec_power_on = 1`
+  …) and integration step 54 sets `cfg.dvd_ir_remap = 1` right in it. ★ Caught in review
+  by the maintainer, not by a test — every test agreed with the implementation's own
+  convention, which is the `jump_dir` shape again. ⚠ The same false claim is repeated in
+  this file's `DVD_HDMI_BITSTREAM` note; that option's `0=auto` is a fine choice on its
+  own terms, but not for the stated reason.
   ★ **KEYED ON LINUX KEYCODES — the vendor-neutral layer — which is what makes the
   "different flavours" claim TRUE:** RC6-MCE, NEC clones, Flirc profiles, 2.4 GHz RF media
   remotes, CEC and USB media keyboards all converge there, so a new protocol needs no code.
@@ -436,7 +444,7 @@ worse maintenance burden than targeted in-place edits. So:
   ⏳ **HW round (the only things sim cannot settle): `evtest` the Flirc FIRST** to record
   which keycodes each button really emits (the table is keyed on keycodes, and only the
   device can say), then a transport sweep, digits into a disc menu, **the OSD round trip**
-  (the one path with no bench at all), the Define-buttons regression arm, `DVD_IR_REMAP=1`,
+  (the one path with no bench at all), the Define-buttons regression arm, `DVD_IR_REMAP=0`,
   and a plain USB keyboard unregressed. Not confirmable on this rig: eHome/`mceusb` and
   HDMI-CEC (that board reports `CEC: no clock detected`).
   Detail: **`docs/ir_remote.md`**, `main/integration/INTEGRATION.md` "Steps 50-53",

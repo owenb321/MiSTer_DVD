@@ -184,19 +184,23 @@ int main(void)
 	}
 
 	printf("[17] the gate is off when the ini says off\n");
-	cfg.dvd_ir_remap = 1;
-	ck("DVD_IR_REMAP=1 -> inactive", dvd_ir_active(), 0);
+	// ⚠ 1 = ON, 0 = OFF. The opposite sense shipped briefly on the belief that
+	// cfg had no defaults pass and 0 therefore had to mean on; cfg_parse() DOES
+	// have one (integration step 54 sets cfg.dvd_ir_remap = 1 there), and "1
+	// disables a thing" reads backwards to anyone editing MiSTer.ini.
 	cfg.dvd_ir_remap = 0;
-	ck("DVD_IR_REMAP=0 -> active on the DVD core", dvd_ir_active(), 1);
+	ck("DVD_IR_REMAP=0 -> inactive", dvd_ir_active(), 0);
+	cfg.dvd_ir_remap = 1;
+	ck("DVD_IR_REMAP=1 -> active on the DVD core", dvd_ir_active(), 1);
 
 	printf("[18] another core is not remapped unless asked\n");
 	fake_is_dvd_v = 0;
-	cfg.dvd_ir_remap = 0;
-	ck("non-DVD core, mode 0 -> inactive", dvd_ir_active(), 0);
+	cfg.dvd_ir_remap = 1;
+	ck("non-DVD core, mode 1 -> inactive", dvd_ir_active(), 0);
 	cfg.dvd_ir_remap = 2;
 	ck("non-DVD core, mode 2 -> active",   dvd_ir_active(), 1);
 	fake_is_dvd_v = 1;
-	cfg.dvd_ir_remap = 0;
+	cfg.dvd_ir_remap = 1;
 
 	printf("[19] the A/V feature keys reach their buttons\n");
 	play("KEY_TITLE -> KEY_T (B12)",       KEY_TITLE,       KEY_T);

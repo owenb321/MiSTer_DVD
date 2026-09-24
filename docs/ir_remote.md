@@ -3,8 +3,18 @@
 Engineering note. Not the manual — the user-facing page is
 `site/content/playback/controls.md`.
 
-**Status: 🔧 sim/host-proven, ⏳ HW-confirm pending.** The hardware round needs a
-Flirc on the rig; see §7.
+**Status: ✅ HW-CONFIRMED 2026-09-24** on the maintainer's rig (MEN IN BLACK,
+`Disc Menus=Off`). The round found **two real defects**, both recorded below:
+the ini polarity read backwards, and the OSD predicate was true for a transient
+`InfoMessage` so half the table went silently inert. See §7.
+
+⚠ **The Flirc turned out to be the WRONG primary instrument, and the maintainer
+said so before any time was spent on it.** A Flirc maps remote buttons to keys in
+its own firmware, so its keycodes are whatever that user's profile happens to
+emit — and **39 of the 58 source codes are ≥256**, which a keyboard profile
+essentially cannot produce. The instrument that settles the feature is the
+harness's own uinput keyboard, which Main cannot distinguish from a real
+receiver.
 
 ---
 
@@ -166,10 +176,19 @@ a hook below that line applies cleanly, compiles, and fixes nothing.
 
 ### The ini key
 
-`DVD_IR_REMAP`, **default on**. ⚠ `cfg` is `memset` to zero with no separate
-defaults pass, so **0 must be the default-on value**: `0` = on for the DVD core,
-`1` = off, `2` = on for every core — mirroring `DVD_HDMI_BITSTREAM`'s
-`0=auto 1=off 2=force`.
+`DVD_IR_REMAP`, **default on**: `0` = off, `1` = on for the DVD core (the
+default), `2` = on for every core.
+
+⚠⚠ **An earlier cut had this inverted — `0` = on — on the belief that "`cfg` is
+`memset` to zero with no separate defaults pass, so 0 must be the on value".
+**That belief is false**, and `cfg_parse()` disproves it in the very block the
+default now goes in: `cfg.csync = 1`, `cfg.bootscreen = 1`, `cfg.dvi_mode = 2`,
+`cfg.hdmi_cec_power_on = 1` … A non-zero default is the ordinary mechanism here.
+Integration step 54 sets `cfg.dvd_ir_remap = 1` there.
+
+★ It also read backwards to anyone editing the ini — `1` should switch a thing
+**on**, not off. Caught in review by the maintainer, not by any test, because
+every test agreed with the implementation's own convention.
 
 ⛔ **No OSD option.** `CONF_STR` is inside the netlist, so a menu row would
 re-roll the pinned fitter seed for a setting nobody changes.
@@ -289,7 +308,14 @@ both the one that exists there and the one the guards must actually agree with.
 | `main/tests/dvd_ir_test.cpp` | 76 assertions, host `g++`, no MiSTer or Docker. 17 RED mutations in `run_tests.sh --red`, **each caught by its own named arm**. |
 | `tools/check_ir_remap.py` | The derived-table gate. Run from `build_main.sh` with `--require-stock`. |
 | `tools/tests/test_check_ir_remap.py` | 9 RED arms proving the checker can fail, and for the right reason; plus the fallback-constant comparison. |
-| `tools/tests/test_ir_integration.py` | Rehearses steps 50-53 verbatim against copies of the real stock files and asserts the **placement**, with 2 RED arms that move the hook to the wrong places. |
+| `tools/tests/test_ir_integration.py` | Rehearses steps 50-54 verbatim against copies of the real stock files and asserts the **placement** and the **OSD predicate**, with 2 RED arms that move the hook to the wrong places. |
+
+⚠ **A mutation whose anchor moves is a vacuous mutation**, and adding the remap
+trace did exactly that to `ir-no-osd-column` — its `sed` targeted a line the
+trace had rewritten. `run_tests.sh` catches this itself
+(`!! RED …: mutation matched nothing (the anchor moved)`) rather than reporting
+the mutation as caught, which is the only reason it did not quietly become a
+no-op. Re-check the anchors after editing any function a mutation targets.
 
 ★ **Why `check_ir_remap.py` exists at all.** The table asserts things about
 three files it does not contain, and a restatement goes stale **silently** — the
@@ -339,7 +365,128 @@ boot for users without a receiver, and it lets **any** core take an IR remote.
 ⛔ **No binary kernel modules shipped from here** (decision D4) — they would have
 to be rebuilt per kernel line and would break on a bump.
 
-## 7. Hardware round — the only things sim cannot settle
+## 7. Hardware round — ✅ 2026-09-24
+
+Rig: MEN IN BLACK, `Disc Menus=Off`, the overlay Main built from this branch.
+
+### The instrument, and why it is not the Flirc
+
+⚠⚠ **A Flirc maps remote buttons to keys IN ITS OWN FIRMWARE**, so what it emits
+is whatever that user's profile says — two people with the same handset can send
+completely different codes. More decisively, **39 of the 58 source codes are
+≥256** (`KEY_TITLE` 369, `KEY_NUMERIC_0..9` 512–521, `KEY_ROOT_MENU` 618 …), and
+those are precisely *ceiling 1*, the class stock Main drops. A keyboard profile
+essentially cannot produce them, so a Flirc could only ever exercise the easy
+fifth of the table.
+
+★ **The instrument is the harness's own uinput keyboard.** Main cannot
+distinguish it from a real receiver — both arrive as evdev `EV_KEY` through the
+same `input.cpp` path, which is the property the whole feature rests on — so
+injecting the exact codes an MCE receiver emits tests the real thing
+deterministically, including all 39.
+
+⚠ It needed `tools/mister_keyd.py` widened: it declared only codes 1..248, so 39
+of the 58 were **silently undeliverable** (the kernel drops undeclared keys with
+no error at either end). Now `1..248` plus `0x160..0x2ff`. ⛔ **The gap 249..351
+is deliberate** — that block is `BTN_*`, and declaring `BTN_MOUSE`/`BTN_JOYSTICK`
+would make Main classify the device as a mouse or gamepad and route every press
+down the joystick path, breaking every other arm of the harness.
+
+⛔ **`evtest`-style probing of the receiver does NOT work here and a tool for it
+was written and then deleted.** Main grabs the input devices, so a second reader
+sees nothing: the probe reported *"0 distinct keycodes seen"* against a device
+that was demonstrably working. A tool that silently reports nothing is the
+bench-that-cannot-fail trap in tool form. The in-Main trace below supersedes it
+and works despite the grab.
+
+### Results
+
+Each row injected as a raw keycode; the readout is the HUD popup, which appears
+only if the button fired.
+
+| injected | code | ≥256 | → | observed |
+|---|---|---|---|---|
+| `KEY_AUDIO` | 392 | **yes** | `A` (B7) | `AUDIO 2/4` → `3/4 FR` |
+| `KEY_SUBTITLE` | 370 | **yes** | `S` (B8) | `SUB 1/4 EN` |
+| `KEY_MEDIA_REPEAT` | 439 | **yes** | `L` (B17) | `A-B A SET` → `ON` → `OFF` |
+| `KEY_CHANNELUP` | 402 | **yes** | `N` (B3) | `CH 2/27` |
+| `KEY_INFO` | 358 | **yes** | `D` (B9) | HUD toggled, 3 alternating presses |
+| `KEY_FASTFORWARD` | 208 | no | `TAB` (B10) | `SEEK FWD 0:10` |
+| `KEY_PLAY` | 207 | no | `SPACE` (B1) | PAUSE → PLAY |
+| `KEY_NEXTSONG` / `KEY_PREVIOUSSONG` | 163 / 165 | no | `N` / `P` | `CH 2/27` |
+
+Controls that were capable of failing, which is what makes the table mean
+anything:
+
+- raw `KEY_A` (30) pops `AUDIO` — the instrument sees the effect at all;
+- raw `KEY_G` (34) is **also** silent, so the Angle arm is the single-angle disc
+  rather than the remap. Not counted as a pass or a failure — **untestable on
+  this disc**, which is the honest verdict;
+- `DVD_IR_REMAP=0` makes code 392 **dead** while raw `KEY_A` still works: the
+  off-switch works, the remap is what was doing the work, and a plain keyboard is
+  unaffected by the setting.
+
+And the probe line, measured on the board rather than argued:
+`ir: 58 entries, 10 reserved, DVD_IR_REMAP=1, kernel rc-core ABSENT` — the kernel
+finding of §3 confirmed on the rig itself, plus the four keyboard-class devices
+it can see.
+
+### ★★ Defect 1 — the ini polarity read backwards (maintainer, in review)
+
+`DVD_IR_REMAP=1` meant **off**. Nobody sets a flag to 1 to disable a thing.
+
+⚠⚠ **It was that way because of a claim I wrote in `CLAUDE.md` and never
+checked**: *"cfg is memset to zero with no separate defaults pass, so 0 must be
+the default-ON value"*. **False.** `cfg_parse()` has a defaults block right there
+— `cfg.csync = 1`, `cfg.bootscreen = 1`, `cfg.dvi_mode = 2`,
+`cfg.hdmi_cec_power_on = 1` … Integration step 54 now sets
+`cfg.dvd_ir_remap = 1` in it, and the sense is the obvious one: `0` off, `1` on
+(default), `2` every core.
+
+★ **No test could have caught this**, because every test agreed with the
+implementation's own convention — the `jump_dir` shape again. It took a human
+reading the option name.
+
+### ★★★ Defect 2 — the OSD predicate was true when no OSD was open
+
+`KEY_INFO` was intermittently inert, and *only* right after a core load. The
+capped remap trace (added for exactly this, and kept) said it in one line:
+
+```
+ir:   392 -> 30 (B7 Audio)
+ir:   358 -> 0 (B9 Display, OSD open)
+```
+
+**`menu_present()` is `menustate != MENU_NONE1/NONE2`, which is also true while a
+transient `InfoMessage` is up** (`MENU_INFO`) — and this core raises those from
+its own poll ticks, which is the same coupling `docs/mgl_launch.md` is about.
+Every row whose OSD column is `0` means *pass through untouched*, so those rows
+went **silently inert** whenever a message happened to be on screen.
+
+**Fix: `user_io_osd_is_visible()`**, which is a dedicated flag and is what Main
+itself uses to decide OSD-versus-core for a button (`user_io.cpp:3109,3124`).
+Before and after, on the exact failing condition (first press after a load):
+
+```
+before:  ir:   358 -> 0  (B9 Display, OSD open)     HUD did not toggle
+after:   ir:   358 -> 32 (B9 Display)               HUD toggled
+```
+
+⚠ Pinned by `tools/tests/test_ir_integration.py` **by name and by rejection** —
+it asserts `user_io_osd_is_visible()` is present *and* that
+`dvd_ir_target(ev->code, menu_present())` is absent, so a regression fails.
+
+### Still not covered
+
+- **The OSD column itself** (`to_osd`, e.g. Back → `ESC`). Screenshots are taken
+  upstream of the OSD compositor, so the harness structurally cannot see the OSD.
+- **The Define-buttons override.** Needs the mapping UI driven by hand.
+- **The numeric pad** (512–521) against a real disc menu.
+- **A physical HID receiver end to end.** Everything above proves the code path;
+  it does not prove a particular dongle's profile emits codes the table covers,
+  which is a property of the dongle, not of this core.
+
+## 7a. Original hardware checklist
 
 On the rig with the Flirc (`flirc.tv flirc Keyboard`, `20A0:0001`), via the
 `hil-testing` skill. ⚠ **Announce first — the rig is shared.**
@@ -353,7 +500,7 @@ On the rig with the Flirc (`flirc.tv flirc Keyboard`, `20A0:0001`), via the
    closes. The one path with no bench at all.
 5. **The regression arm**: bind a key via Define buttons, confirm it still wins
    and can still be captured.
-6. `DVD_IR_REMAP=1` kills every rewrite.
+6. `DVD_IR_REMAP=0` kills every rewrite.
 7. A plain USB keyboard unregressed.
 
 Not confirmable on this rig, and to be said so in the docs: eHome/`mceusb` (no
@@ -368,7 +515,7 @@ defect — do not "fix" it.
 
 | # | Decision |
 |---|---|
-| D1 | `MiSTer.ini` key `DVD_IR_REMAP`, default on. No OSD option (it would re-roll the seed). |
+| D1 | `MiSTer.ini` key `DVD_IR_REMAP` — `0` off, `1` on (default), `2` every core. No OSD option (it would re-roll the seed). |
 | D2 | Green Start (`KEY_MEDIA`) opens the **MiSTer OSD**. |
 | D3 | Spare core functions go on media-source buttons a US MCE handset has: Chapter Menu ← Guide, A-B Repeat ← RecordedTV, Angle ← LiveTV, Frame Step ← Pictures. Colour keys are aliases only. |
 | D4 | Ship the remap now; open a MiSTer_Linux defconfig request separately. **No binary kernel modules.** |

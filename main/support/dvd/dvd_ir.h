@@ -41,8 +41,9 @@
 #include <stdint.h>
 
 // Is the remap live? Cheap -- this is called for every EV_KEY event.
-// Gated by cfg.dvd_ir_remap (0 = on for the DVD core, 1 = off, 2 = on for
-// every core) and, in mode 0, by is_dvd(). Runs the one-shot probe.
+// Gated by cfg.dvd_ir_remap (0 = off, 1 = on for the DVD core -- the
+// default -- 2 = on for every core) and, in mode 1, by is_dvd(). Runs the
+// one-shot probe.
 //
 // ★ No caching here on purpose, and it is not an oversight to "fix" later:
 // stock is_dvd() already memoises (user_io.cpp:428 -- one strcasecmp ever,

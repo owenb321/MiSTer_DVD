@@ -71,7 +71,23 @@ DEV_NAME = b'MiSTer HIL keyboard'      # must NOT be "MiSTer virtual input"
 # Declaring a key is not emitting it, so a generous range costs nothing and
 # cannot go stale. 1..248 covers the whole ordinary keyboard page; only EV_KEY
 # is set, so Main still classifies this as a plain keyboard.
-KEYCODES = list(range(1, 249))
+#
+# ★★ AND THE CONSUMER/MEDIA PAGE ABOVE 351, ADDED 2026-09-24 FOR THE IR REMAP.
+# A media remote's keys live there -- KEY_OK 352, KEY_TITLE 369, KEY_SUBTITLE
+# 370, KEY_NUMERIC_0..9 512..521, KEY_ROOT_MENU 618 -- and 39 of the 58 source
+# codes main/support/dvd/dvd_ir.cpp remaps are in this range. Those 39 ARE the
+# case the feature exists for (input.cpp:3602 routes `ev->code >= 256` to the
+# JOYSTICK handler), so without them the harness could only ever test the easy
+# fifth of the table.
+#
+# ⛔⛔ THE GAP 249..351 IS DELIBERATE AND MUST NOT BE CLOSED. That block is
+# BTN_*, not KEY_* -- BTN_MOUSE is 0x110 (272) and BTN_JOYSTICK is 0x120 (288).
+# A uinput device that declares those is a MOUSE or a GAMEPAD as far as Main's
+# device classification is concerned, and it would route this daemon's presses
+# down the joystick path instead of the keyboard one, breaking every existing
+# arm of the harness. KEY_OK (0x160 = 352) is the first KEY_ code above the BTN_
+# block, which is why the second range starts exactly there.
+KEYCODES = list(range(1, 249)) + list(range(0x160, 0x300))
 
 
 def log(msg):

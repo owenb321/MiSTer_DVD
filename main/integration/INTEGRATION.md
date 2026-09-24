@@ -549,6 +549,7 @@ caught by its own arm (`run_tests.sh --red`). Detail:
 | 51 | `input.cpp` | the rewrite itself (`// dvd:ir`), by `replace_once` on the `has_advanced_map` block |
 | 52 | `cfg.h` | `uint8_t dvd_ir_remap;` after step 21's `dvd_hdmi_bitstream` |
 | 53 | `cfg.cpp` | the `DVD_IR_REMAP` ini row after step 21's `DVD_HDMI_BITSTREAM` |
+| 54 | `cfg.cpp` | `cfg.dvd_ir_remap = 1` in `cfg_parse()`'s defaults block |
 
 **The problem.** A remote reaches Main as an ordinary keyboard, and stock Main
 then drops nearly everything it sends. Three stacked ceilings, measured against
@@ -604,13 +605,18 @@ be re-bound by hand.
 
 ### The ini key
 
-`DVD_IR_REMAP`, **default on**. ⚠ `cfg` is `memset` to zero with no separate
-defaults pass, so **0 must be the default-on value**: `0` = on for the DVD core,
-`1` = off, `2` = on for every core — mirroring `DVD_HDMI_BITSTREAM`'s
-`0=auto 1=off 2=force`. No OSD option: `CONF_STR` is inside the netlist and a
-menu row would re-roll the pinned fitter seed for a setting nobody changes.
+`DVD_IR_REMAP`, **default on**: `0` = off, `1` = on for the DVD core (the
+default), `2` = on for every core. No OSD option: `CONF_STR` is inside the
+netlist and a menu row would re-roll the pinned fitter seed for a setting nobody
+changes.
 
-⚠ **Steps 52/53 re-`read()` `cfg.h` and `cfg.cpp`** — step 21 already wrote
+⚠⚠ **The default is set by step 54, in `cfg_parse()`'s defaults block.** An
+earlier cut instead defined `0` as ON, on the belief that cfg had no defaults
+pass — **false**, and disproved by the very block step 54 inserts into
+(`cfg.csync = 1`, `cfg.bootscreen = 1`, `cfg.dvi_mode = 2` …). It also read
+backwards in the ini, where `1` should enable a thing.
+
+⚠ **Steps 52/53/54 re-`read()` `cfg.h` and `cfg.cpp`** — step 21 already wrote
 both, and these anchors are lines step 21 *inserted*. Working from a stale copy
 would drop step 21's rows.
 

@@ -117,7 +117,8 @@ try:
 
     for want, why in (('#include "support/dvd/dvd_ir.h"', "step 50 include"),
                       ("// dvd:ir", "step 51 marker"),
-                      ("dvd_ir_target(ev->code, menu_present())", "step 51 call")):
+                      ("dvd_ir_target(ev->code, user_io_osd_is_visible())",
+                       "step 51 call")):
         chk(why, i.count(want) == 1, "x%d" % i.count(want))
 
     # The block replace_once() consumed must be back, once.
@@ -129,6 +130,16 @@ try:
     chk("hook before !input[dev].num", b_ok)
     # The one that matters most: ceiling (1) IS this split.
     chk("hook UPSTREAM of >= 256", c_ok, "a hook below it fixes nothing")
+
+    # ⚠⚠ THE OSD PREDICATE, PINNED BY NAME AND BY REJECTION. menu_present() is
+    # `menustate != MENU_NONE1/NONE2`, which is ALSO true while a transient
+    # InfoMessage is up -- and this core raises those from its own poll ticks.
+    # Rows whose OSD column is 0 mean "pass through untouched", so with
+    # menu_present() they went SILENTLY INERT whenever a message was on screen.
+    # Found on hardware, not by any bench, via the remap trace.
+    chk("OSD predicate is osd_is_visible", "user_io_osd_is_visible()" in i)
+    chk("and NOT menu_present()", "dvd_ir_target(ev->code, menu_present())" not in i,
+        "true for a transient InfoMessage")
 
     # The user's own binding must still outrank the table.
     chk("user binding still wins", "ir_user_bound" in i)

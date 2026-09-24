@@ -2245,7 +2245,7 @@ the real fix and does **not** gate this.
 
 **HW round owed:** `evtest` the rig's Flirc first to record its real keycodes, then the
 transport sweep, disc-menu digits, the OSD round trip, the Define-buttons regression arm,
-`DVD_IR_REMAP=1`, and a plain keyboard unregressed.
+`DVD_IR_REMAP=0`, and a plain keyboard unregressed.
 ★ **The ARM cross-compile FOUND ONE**, which is the whole argument for that gate:
 `KEY_FULL_SCREEN` shipped unguarded and is absent from the ARM toolchain's UAPI header
 (446 `KEY_*` names against the host's 527), so it would not have compiled while every
