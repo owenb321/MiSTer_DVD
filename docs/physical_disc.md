@@ -517,6 +517,13 @@ same script as the control arm): the feature plays, chapter skips and fast-forwa
 as before, the break is crossed with no discontinuity, and the layer log reads
 `layers: 2, opposite track path, layer 0 ends at LBA 1930143`.**
 
+**Audio CD unregressed** (same rig and day, a 12-track music CD, control Main first,
+identical script). Both Mains: `TR 1/12` playing at mount, a track skip to `TR 2/12`,
+and three fast-forward taps landing at 0:00:42–0:00:43. Level measured off the capture
+card (PipeWire audio only) was **−21.1/−21.1 dBFS on the control, −21.3/−20.9 on the
+read-ahead**. Eject then opened the tray (`CDROM_DRIVE_STATUS = 2`, TRAY_OPEN).
+⏳ VCD/SVCD from the drive has not been run.
+
 **What the rig's drive actually does at the layer change: nothing measurable.** There was
 no slow read (≥100 ms) anywhere near LBA 1,930,144, in either arm, and the control arm's
 telemetry stayed clean without the ring. So on this drive the ring is insurance, not the
