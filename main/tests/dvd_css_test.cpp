@@ -109,6 +109,12 @@ static uint8_t *fix_sector(uint32_t lba)
     return fix_sec[nfix++];
 }
 
+static void put_stamp(uint8_t *q, uint32_t lba, int dec)
+{
+    q[0] = lba; q[1] = lba >> 8; q[2] = lba >> 16; q[3] = lba >> 24; q[4] = (uint8_t)dec;
+}
+static uint32_t get_lba(const uint8_t *q) { return q[0] | q[1] << 8 | q[2] << 16 | (uint32_t)q[3] << 24; }
+
 static int fake_seek(dvdcss_t, int block, int flags)
 {
     cur_block = block;
@@ -129,12 +135,33 @@ static int fake_seek(dvdcss_t, int block, int flags)
     return block;
 }
 
+// Every sector the fake hands back is STAMPED with its own LBA (bytes 0-3) and
+// whether it came through the decrypt path (byte 4), so a test can check that each
+// slot of a window holds the sector it claims to -- which is exactly what a stale
+// slot does not. Reads at or past `fail_read_from` fail: the first sector of the
+// call errors (-1), otherwise the call comes back short, as a block device does.
+static int fail_read_from = -1;
+static int nreadcalls, readcall_count[MAXCALLS];
+
 static int fake_read(dvdcss_t, void *buf, int count, int flags)
 {
+    if (nreadcalls < MAXCALLS) readcall_count[nreadcalls] = count;
+    nreadcalls++;
     if (flags & DVDCSS_READ_DECRYPT) reads_decrypt++; else reads_raw++;
     last_count = count;
+    if (fail_read_from >= 0 && cur_block + count > fail_read_from)
+    {
+        if (cur_block >= fail_read_from) return -1;
+        count = fail_read_from - cur_block;
+    }
     for (int i = 0; i < nfix && count == 1; i++)
-        if ((int)fix_lba[i] == cur_block) memcpy(buf, fix_sec[i], 2048);
+        if ((int)fix_lba[i] == cur_block) { memcpy(buf, fix_sec[i], 2048); cur_block += count; return count; }
+    for (int i = 0; i < count; i++)
+    {
+        uint8_t *q = (uint8_t *)buf + (size_t)i * 2048;
+        put_stamp(q, (uint32_t)(cur_block + i), (flags & DVDCSS_READ_DECRYPT) ? 1 : 0);
+    }
+    cur_block += count;
     return count;
 }
 
@@ -190,8 +217,9 @@ static void check(const char *what, long got, long want)
     else             { printf("  ok   %-46s %ld\n", what, got); }
 }
 
-// Three VOBs, deliberately NOT starting at 0 and NOT adjacent to each other, so a
-// stray 0 or an off-by-one VOB index cannot pass by coincidence.
+// Three VOBs, deliberately NOT starting at 0, so a stray 0 cannot pass by
+// coincidence. They ARE contiguous (VOB0 + VOBN == VOB1), like the parts of a real
+// title set, which is what [8] and [12] rely on.
 #define VOB0 1000u
 #define VOB1 501000u
 #define VOB2 1001000u
@@ -210,6 +238,7 @@ static void setup(void)
     cur_vob = -1; css_pos = -1; key_ok = 0; raw_fd = -1;
     nseeks = 0; reads_decrypt = reads_raw = 0; last_count = 0;
     key_acquisitions = 0; fail_key_at = -1;
+    fail_read_from = -1; nreadcalls = 0;
 
     // What crack_title_keys() leaves behind at mount: one key per VOB, at its start.
     nprimed = 0;
@@ -320,8 +349,10 @@ int main(void)
     //     keys. Unchanged by the fix, and the reason keying per VOB is sound.
     printf("[8] a read spanning the VOB end\n");
     setup();
-    dvd_css_read(buf, VOB0 + VOBN - 3u, 16);
-    check("sectors requested of libdvdcss", last_count, 3);
+    static uint8_t big[16 * 2048];
+    check("sectors returned for a 16-sector window", dvd_css_read(big, VOB0 + VOBN - 3u, 16), 16);
+    check("first libdvdcss read stops at the VOB end", readcall_count[0], 3);
+    check("the rest comes from the next VOB, decrypted", reads_decrypt, 2);
 
     // [9] ISSUE #112, on the disc's real layout. "OZ: The Great and Powerful" lists
     //     91 VOBs: VTS_08..18 each file the SAME 7-part feature extent. The table used
@@ -407,6 +438,53 @@ int main(void)
     enumerate_vobs();
     check("distinct extents registered (full)", g_nvobs, MAX_VOBS);
     check("distinct extents counted as dropped", g_vobs_dropped, 6);
+
+    // [12] THE STALE-SECTOR BUG. Main's readA/readB cache a window as all buf_n
+    //      sectors whenever the read returns > 0, so a SHORT return leaves the
+    //      window's tail holding the previous window's sectors, served as these.
+    //      Every read clamps at a VOB end, and a DVD's VOB parts are contiguous and
+    //      524287 sectors long (odd), so an 8-sector window almost always straddles
+    //      the VTS_xx_1 -> _2 boundary: up to 7 stale sectors per 1 GB of film.
+    printf("[12] an 8-sector window straddling two contiguous VOB parts\n");
+    setup();
+    {
+        static uint8_t win[8 * 2048];
+        memset(win, 0xEE, sizeof win);                 // "the previous window"
+        uint32_t at = VOB0 + VOBN - 3u;
+        check("sectors returned", dvd_css_read(win, at, 8), 8);
+        int stale = 0, wrong = 0, clear = 0;
+        for (int i = 0; i < 8; i++)
+        {
+            const uint8_t *q = win + i * 2048;
+            if (q[0] == 0xEE && q[1] == 0xEE) stale++;
+            else if (get_lba(q) != at + (uint32_t)i) wrong++;
+            else if (q[4] != 1) clear++;
+        }
+        check("stale sectors left in the window", stale, 0);
+        check("sectors carrying another LBA", wrong, 0);
+        check("VOB sectors NOT decrypted", clear, 0);
+        check("key seeks (part 1, then part 2 at its START)", key_seek_count(), 2);
+        check("SEEK_KEY calls at a non-VOB-start block", key_seeks_off_vob_start(), 0);
+        check("title keys acquired", key_acquisitions, 0);
+    }
+
+    // [13] What cannot be read. A failure partway through the window zero-fills the
+    //      rest (a hole, never a stale sector); a failure on the FIRST sector is a
+    //      failure, so Main retries the window rather than caching a hole at its head.
+    printf("[13] unreadable sectors\n");
+    setup();
+    {
+        static uint8_t win[8 * 2048];
+        memset(win, 0xEE, sizeof win);
+        fail_read_from = (int)(VOB0 + 100u + 5u);
+        check("window with an unreadable tail: sectors returned", dvd_css_read(win, VOB0 + 100u, 8), 8);
+        check("readable head is intact", get_lba(win + 4 * 2048), VOB0 + 104u);
+        int zero = 1;
+        for (int i = 5 * 2048; i < 8 * 2048; i++) if (win[i]) zero = 0;
+        check("unreadable tail is zero-filled", zero, 1);
+        check("window whose first sector is unreadable fails",
+              dvd_css_read(win, VOB0 + 105u, 8), -1);
+    }
 
     printf("\ndvd_css_test: %s (%d error%s)\n", errs ? "FAIL" : "PASS", errs, errs == 1 ? "" : "s");
     return errs ? 1 : 0;

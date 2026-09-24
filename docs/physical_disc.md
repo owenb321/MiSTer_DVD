@@ -444,6 +444,46 @@ read logged BEFORE it is issued, armed by the HIL flag file (`/media/fat/dvd_hil
 the Main blocks in state D, screenshots and telemetry freeze with it, so this is the only
 record of how the core got there.
 
+## Every read window comes back full (2026-09-24, branch `feature/disc-readahead`)
+
+**Status: host-proven RED/GREEN (`main/tests/run_tests.sh --red`, arms [8], [12] and [13],
+plus three mutations each caught by its own arm). ARM cross-compile is clean.
+⏳ HW-confirm pending.**
+
+**The defect.** Main's `readA`/`readB` (integration steps 8/9) call
+`dvd_css_read(buffer[disk], lba, buf_n)`, and on ANY positive return they set
+`buffer_lba = lba`. The hit test then serves all `buf_n` (8) sectors of that window. But
+`dvd_css_read` clamped every read at a VOB end, because one libdvdcss read must not span two
+title keys, and returned **short**. Slots `[n..7]` of the window still held the *previous*
+window's sectors, and the core received them as if they were the requested ones.
+
+**Why it hit ordinary playback, not just seeks.** A title set's VOB parts are contiguous, and
+each full part is 1,073,739,776 bytes = **524,287 sectors**, an odd number. An 8-sector window
+therefore almost never lines up with a part boundary. Every linear crossing of a 1 GB
+`VTS_xx_N.VOB` boundary (every 15–25 minutes of film) fed the decoder up to 7 stale sectors,
+about 14 KB of already-played stream. That produces a visible and audible glitch, which is
+easily mistaken for a dual-layer transition.
+
+**Scope.** Physical discs and encrypted `.iso` images, which are served by `dvd_css_read`.
+Decrypted `.iso` files use stock Main's file path, which never returns short, and are
+unaffected. VCD and CD-DA already honoured the full-window contract.
+
+**The fix.** `dvd_css_read()` is now a loop over `css_read_chunk()`, which is the old body,
+unchanged:
+- Each chunk stays inside one key domain.
+- A read that crosses a VOB end continues into the next VOB, keyed at *that* VOB's start by
+  the existing `vi != cur_vob` path. The "key at the VOB start, never at the read position"
+  rule above is untouched; arm [12] asserts it for the straddling window.
+- A sector that cannot be read is zero-filled. That leaves a hole, never a stale sector.
+- A failure on the *first* sector still returns −1, so Main retries the window instead of
+  caching a hole at its head.
+
+**Slow-read trace (always on).** Any `dvd_css_read` call that takes more than 100 ms is logged
+to `/tmp/dvdcss.log` with its LBA, VOB-relative RBN and chunk count. It is rate-limited to
+200 lines. This is the instrument for the "hitch at the layer change" reports: it shows
+whether the stall is the drive, where on the disc it happened, and whether it lines up with
+the layer-0 end or with a VOB boundary.
+
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 
 A drive with **no region set** refuses the CSS title-key ioctl, so libdvdcss cracks every

@@ -238,6 +238,28 @@ if [ "$RED" -eq 1 ]; then
         "s/^\t\tg_vobs_dropped++;$//" \
         css-drop-silent
 
+    # ---- dvd_css: every window comes back full --------------------------------
+    # The shipped behaviour: stop at the VOB clamp and return short. Main then caches
+    # the whole window, so its tail serves the PREVIOUS window's sectors -- up to 7
+    # stale sectors at every linear crossing of a 1 GB VOB part boundary.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL stale sectors left in the window" \
+        "s/^\t\tdone += (uint32_t)n;$/\t\tdone += (uint32_t)n; break;/" \
+        css-short-window
+
+    # An unreadable tail left as-is is the same stale-sector hole by another route.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL unreadable tail is zero-filled" \
+        "/memset(p + (size_t)done \* 2048, 0/d" \
+        css-tail-not-zeroed
+
+    # A failed FIRST sector reported as success: Main would cache a window of zeros
+    # and never retry it.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL window whose first sector is unreadable fails" \
+        "/if (done == 0) return -1;/d" \
+        css-head-failure-hidden
+
     # ---- the support bundle's argv (issue #81) ---------------------------------
     # The shipped-until-#81 behaviour: no NAV-pack capture at all, so a highlight
     # bug's bundle carried no button data and nothing said so.

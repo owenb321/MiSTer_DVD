@@ -863,11 +863,11 @@ static void seek_log(uint32_t lba, uint32_t count, int vi)
 	if (++seek_log_n == SEEK_LOG_MAX) css_log("seek trace: %d lines, stopped", SEEK_LOG_MAX);
 }
 
-int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
+// One libdvdcss read that stays inside ONE key domain (a single VOB, or the
+// non-VOB sectors between them). It may return fewer than `count` -- it clamps at
+// a VOB end -- and dvd_css_read() below is what turns that into a full window.
+static int css_read_chunk(void *buf, uint32_t lba, uint32_t count)
 {
-	if (src_cdda) return dvd_cdda_read(buf, lba, count);
-	if (raw_fd >= 0) return raw_read10(raw_fd, lba, buf, (int)count);   // no-libdvdcss fallback
-	if (!css) return -1;
 
 	if ((int)lba != css_pos) seek_log(lba, count, vob_index(lba));
 
@@ -958,6 +958,78 @@ int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
 
 	css_pos = (int)(lba + n);
 	return n;
+}
+
+// Slow-read trace, ALWAYS on (unlike the HIL-only seek trace above): a read over
+// SLOW_READ_MS is exactly what a user reports as a playback hitch -- a layer
+// change, a drive re-spin, a scratch being retried -- and this thread is the one
+// that feeds the core, so the stall reaches the picture. Rate-limited so a bad
+// disc cannot fill /tmp.
+#define SLOW_READ_MS  100
+#define SLOW_READ_MAX 200
+static int slow_read_n = 0;
+
+static long ms_since(const struct timespec *t0)
+{
+	struct timespec t1;
+	clock_gettime(CLOCK_MONOTONIC, &t1);
+	return (t1.tv_sec - t0->tv_sec) * 1000L + (t1.tv_nsec - t0->tv_nsec) / 1000000L;
+}
+
+// Serve EXACTLY `count` sectors, or fail outright.
+//
+// ⚠ Main's readA/readB (integration steps 8/9) set buffer_lba = lba on ANY
+// positive return, and the hit test then serves all buf_n sectors of the window.
+// So a short return does not mean "the rest is unread" to Main -- it means the
+// tail of buffer[disk] still holds the PREVIOUS window's sectors, which are then
+// handed to the core as if they were these. css_read_chunk() returns short at
+// every VOB end (one read must not span two title keys), and a DVD's VOB parts
+// are 524287 sectors -- odd -- so an 8-sector window almost never lines up with
+// one: every linear crossing of a 1 GB VTS_xx_N.VOB boundary used to feed the
+// decoder up to 7 stale sectors. So: keep reading, one key domain at a time, and
+// zero-fill only what genuinely cannot be read (the dvd_vcd / dvd_cdda contract).
+// Only a failure on the FIRST sector is reported as a failure, so Main retries
+// the window instead of caching a hole at its head.
+int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
+{
+	if (src_cdda) return dvd_cdda_read(buf, lba, count);
+	if (raw_fd >= 0) return raw_read10(raw_fd, lba, buf, (int)count);   // no-libdvdcss fallback
+	if (!css) return -1;
+
+	struct timespec t0;
+	clock_gettime(CLOCK_MONOTONIC, &t0);
+
+	uint8_t *p = (uint8_t *)buf;
+	uint32_t done = 0;
+	int chunks = 0;
+	while (done < count)
+	{
+		int n = css_read_chunk(p + (size_t)done * 2048, lba + done, count - done);
+		chunks++;
+		if (n <= 0)
+		{
+			if (done == 0) return -1;
+			memset(p + (size_t)done * 2048, 0, (size_t)(count - done) * 2048);
+			static int zf = 0;
+			if (zf < 10) { zf++; css_log("read %u+%u: sectors %u.. unreadable, zero-filled", lba, count, lba + done); }
+			done = count;
+			break;
+		}
+		done += (uint32_t)n;
+	}
+
+	long ms = ms_since(&t0);
+	if (ms >= SLOW_READ_MS && slow_read_n < SLOW_READ_MAX)
+	{
+		slow_read_n++;
+		int vi = vob_index(lba);
+		if (vi >= 0)
+			css_log("slow read %u+%u: %ld ms (vob@%u rbn %u, %d chunk%s)", lba, count, ms,
+			        g_vobs[vi].start, lba - g_vobs[vi].start, chunks, chunks == 1 ? "" : "s");
+		else
+			css_log("slow read %u+%u: %ld ms (not a VOB)", lba, count, ms);
+	}
+	return (int)done;
 }
 
 void dvd_css_close(void)
