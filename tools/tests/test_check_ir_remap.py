@@ -118,6 +118,33 @@ else:
     # loudly -- a silent half-run reads exactly like a full one.
     print("  SKIP %-26s the ev2ps2 arms below cannot run here" % "no stock tree")
 
+print("\n=== the #ifndef fallbacks must match the kernel ===")
+# ⚠ THESE ARE NEVER EXERCISED WHERE THEY COMPILE. The guards exist for older ARM
+# toolchain headers (the dvd_vcd.cpp <limits.h> lesson); on any host new enough
+# to define the code, #ifndef makes the fallback dead. So a WRONG constant would
+# compile cleanly here, pass every host test, and silently map the wrong key on
+# the only build that uses it. Compare them against the header instead.
+_hdr = None
+for _c in ("/usr/include/linux/input-event-codes.h",
+           "/usr/include/linux/input.h"):
+    if os.path.exists(_c):
+        _hdr = open(_c, encoding="utf-8").read()
+        break
+if not _hdr:
+    print("  SKIP no input-event-codes.h to compare against")
+else:
+    _real = dict(re.findall(r"#define\s+(KEY_[A-Z0-9_]+)\s+(0x[0-9a-fA-F]+|\d+)", _hdr))
+    _src = open(IR_CPP, encoding="utf-8").read()
+    _pairs = re.findall(
+        r"#ifndef\s+(KEY_[A-Z0-9_]+)\s*\n#define\s+\1\s+(0x[0-9a-fA-F]+|\d+)", _src)
+    green("fallbacks were found", len(_pairs) > 0, "%d guard(s)" % len(_pairs))
+    for _name, _val in _pairs:
+        if _name not in _real:
+            print("  SKIP %-26s this header does not define it either" % _name)
+            continue
+        green(_name, int(_val, 0) == int(_real[_name], 0),
+              "%s" % hex(int(_val, 0)))
+
 print("\n=== RED: in-repo arms (always run) ===")
 
 # A second row for a key that already has one. First match wins, so the new row
