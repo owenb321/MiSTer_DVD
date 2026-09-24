@@ -1497,4 +1497,12 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #     so Display still toggles the line during a CD pause.
 #   - seek_bar keeps main's 512-bit tick BITMAP, gated by the CD's ticks_off.
 
+# RELEASE v0.7.0 (2026-09-24, the shipping netlist): SEED 9 held FIRST roll --
+# clk_dec 92.47 MHz @100C / 91.24 MHz @-40C (gate 86.0, PASS both corners,
+# non-marginal), 39,133 / 41,910 ALMs (93 %), 52,121 registers, 501 / 553 M10K
+# (91 %), 95 / 112 DSP. Build releases/DVD_20260924.rbf, commit 9822529.
+#   Same RTL as the PR #121 row (dev-spdifmute, 90.86/89.13); only CORE_VERSION
+#   moved (dev-spdifmute -> v0.7.0, inside CONF_STR), so this is a fresh netlist
+#   that happened to land ~1.6/2.1 MHz better on both corners.
+
 set_global_assignment -name SEED 9
