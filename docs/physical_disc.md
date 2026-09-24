@@ -531,6 +531,24 @@ the worker:
 - A sector that keeps failing becomes a zero-filled hole. Playback continues from the
   ring meanwhile, so an `sr` retry costs buffer rather than a frozen machine.
 
+**Eject, and the drive probe.**
+- Teardown order is unchanged and still correct. The Eject button and a removed disc
+  both unmount, then `dvd_css_close()`/`dvd_vcd_close()`, which stop and JOIN the
+  worker before closing its handles. Only then does `CDROMEJECT` run, so the kernel
+  never sees a busy device. The join waits out at most the one read in flight,
+  because the retry loop re-checks for a stop between attempts.
+- ⚠ **`dvd_phys_tick()`'s once-a-second readiness probe used to run between reads, on
+  the same thread. Now it can collide with the worker.** A drive serialises commands,
+  so a probe issued mid-read queues behind a layer refocus or a scratch retry. It
+  then blocks the poll thread, which is the one serving the core FROM the ring, and
+  the stall the ring absorbed would come straight back. So the probe skips while the
+  worker is inside a read of the disc we mounted (`dvd_ra_source_busy()`,
+  `dvd_phys_test` [13] plus mutation `phys-probes-busy-drive`).
+- Eject is still noticed. An opened tray makes every read fail at once, and after
+  `RA_FAIL_RUN` (8) holes in a row the worker pauses 100 ms between reads. The
+  drive is therefore idle most of the time, and the next scan catches the removal.
+  [13]'s control arm asserts that.
+
 **Instruments** (`/tmp/dvdcss.log`):
 - `slow read …`: the source took over 100 ms. This is now measured in the worker, so
   it marks drive stalls whether or not they reached the core.

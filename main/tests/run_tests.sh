@@ -261,6 +261,13 @@ if [ "$RED" -eq 1 ]; then
         css-head-failure-hidden
 
     # ---- dvd_readahead: the RAM ring between the disc and the core ---------------
+    # The drive probe issued while the worker is mid-read: it queues behind that
+    # read in the drive and blocks the poll thread, i.e. the ring's own consumer.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "FAIL \[13\] drive probes while a read is in flight" \
+        "/if (mounted \&\& dvd_ra_source_busy()) return;/d" \
+        phys-probes-busy-drive
+
     # A burst in flight when the core seeks completes for the OLD position; kept, it
     # is stored and counted under the new one -- the landing is someone else's data.
     red_case dvd_readahead.cpp dvd_readahead_test.cpp \

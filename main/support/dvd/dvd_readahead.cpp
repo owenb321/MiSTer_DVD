@@ -20,6 +20,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "dvd_readahead.h"
 
@@ -33,6 +34,8 @@
 #define RA_SLACK      256u   // a request this far past the fill is "on its way"
 #define RA_RETRIES      3    // single-sector attempts before a sector is zero-filled
 #define RA_WAIT_LOG_MS 100   // log a core wait on an EMPTY ring longer than this
+#define RA_FAIL_RUN      8   // this many holes in a row: the disc is likely gone
+#define RA_FAIL_PAUSE_MS 100 // ...so pause between reads (an open tray fails fast)
 #define RA_LOG_MAX    200
 #define RA_LOG_PATH "/tmp/dvdcss.log"
 
@@ -46,6 +49,8 @@ static uint32_t        total;
 static uint8_t        *ring;         // RA_CAP * 2048
 static uint8_t        *tmp;          // RA_BURST * 2048, worker only
 static uint32_t        base, fill, gen;
+static int             src_busy;     // atomic: inside a source read
+static int             fail_run;     // worker only: consecutive holes
 
 // A wait at the head of the ring (not a seek) is the thing this module exists to
 // prevent, so its duration is logged: no such lines during a hitch report means the
@@ -161,18 +166,26 @@ static void *worker(void *)
 		// command for one bad sector, so a failed burst says nothing about which),
 		// and only a sector that keeps failing is zero-filled -- a hole, never a
 		// stall: playback carries on from the ring while this is going on.
+		__atomic_store_n(&src_busy, 1, __ATOMIC_SEQ_CST);
 		int r = src(tmp, head, n);
 		if (r < 0)
 		{
 			n = 1;
 			for (int t = 0; t < RA_RETRIES && r < 0 && !stopping_or_moved(g); t++)
 				r = src(tmp, head, 1);
-			if (r < 0)
-			{
-				memset(tmp, 0, 2048);
-				ra_log("LBA %u unreadable after %d tries, zero-filled", head, RA_RETRIES);
-			}
 		}
+		__atomic_store_n(&src_busy, 0, __ATOMIC_SEQ_CST);
+		if (r < 0)
+		{
+			memset(tmp, 0, 2048);
+			ra_log("LBA %u unreadable after %d tries, zero-filled", head, RA_RETRIES);
+			// A run of holes is most likely a tray opened mid-play: every read then
+			// fails at once, and churning through the ring with them keeps the
+			// drive busy -- which is exactly what dvd_phys_tick() waits for to go
+			// quiet before it probes, and the probe is what notices the eject.
+			if (++fail_run >= RA_FAIL_RUN) usleep(RA_FAIL_PAUSE_MS * 1000);
+		}
+		else fail_run = 0;
 
 		pthread_mutex_lock(&mx);
 		if (stop_req || g != gen) continue;   // retargeted meanwhile: drop it
@@ -204,6 +217,8 @@ int dvd_ra_start(dvd_ra_source s, uint32_t n)
 	stop_req = 0;
 	waiting = 0;
 	log_n = 0;
+	fail_run = 0;
+	src_busy = 0;
 	if (pthread_create(&th, 0, worker, 0) != 0)
 	{
 		free(ring); free(tmp); ring = tmp = 0;
@@ -230,6 +245,11 @@ void dvd_ra_stop(void)
 }
 
 int dvd_ra_active(void) { return running; }
+
+int dvd_ra_source_busy(void)
+{
+	return running && __atomic_load_n(&src_busy, __ATOMIC_SEQ_CST);
+}
 
 int dvd_ra_ready(uint32_t lba, uint32_t count)
 {

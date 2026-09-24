@@ -32,6 +32,11 @@ int  dvd_ra_start(dvd_ra_source src, uint32_t total);
 // Stop and join the worker. May wait for one source read already in flight.
 void dvd_ra_stop(void);
 int  dvd_ra_active(void);
+// 1 while the worker is inside a source read. dvd_phys_tick() asks before it
+// probes the drive: the drive serialises commands, so a probe issued during a slow
+// read would queue behind it and block the poll thread -- the thread that serves
+// the core out of this ring.
+int  dvd_ra_source_busy(void);
 
 // Non-blocking. 1 when [lba, lba+count) (clipped to the source) is in the ring;
 // otherwise 0, retargeting the worker first if `lba` is not on its way.

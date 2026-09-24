@@ -26,6 +26,7 @@
 #include "dvd_css.h"
 #include "dvd_vcd.h"
 #include "dvd_launch.h"
+#include "dvd_readahead.h"
 #include "../../user_io.h"   // user_io_file_mount(), is_dvd()
 
 // Poll cadence: a full SCSI probe every tick would hammer the drive, so gate the
@@ -192,6 +193,16 @@ void dvd_phys_tick(void)
 	if (period < scan_period) period = scan_period;
 	if (now - last_scan < period) return;
 	last_scan = now;
+
+	// ⚠ While the read-ahead's worker is inside a read of the disc WE mounted, do
+	// not probe the drive. It serialises commands, so the probe would queue behind
+	// that read -- a dual-layer refocus, a scratch retry -- and block this thread,
+	// which is the one that serves the core out of the read-ahead ring: the stall
+	// the ring exists to absorb would come straight back through here. Skipping
+	// loses nothing: a read in flight means the disc is there, and an opened tray
+	// makes reads fail at once (the worker pauses between failures), so a later
+	// scan finds the drive idle and notices the eject.
+	if (mounted && dvd_ra_source_busy()) return;
 
 	unsigned t0 = now_ms();
 	char dev[16] = {0};
