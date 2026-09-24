@@ -48,7 +48,8 @@ module resample_addrgen (
   raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
   hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
-  still_en, scan_start, scan_half                  // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
+  still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
+  blend_en, scan_blend                             // DVD-FORK (field blend): enable + per-scan sideband to field_blend
   );
 
   input              clk;                      // clock
@@ -261,6 +262,23 @@ module resample_addrgen (
   output             scan_start;
   output             scan_half;
 
+  /* DVD-FORK (FIELD BLEND -- docs/field_blend.md). On the progressive raster a
+   * true-interlaced picture is woven, and its two fields are two instants, so motion
+   * combs. dvd/field_blend.sv filters every line of such a picture with a fixed
+   * [1,2,1] vertical kernel; this module's part mirrors the pause still:
+   *   blend_en    the feature is on (emu: the Progressive Deint OSD row, progressive raster)
+   *   scan_blend  the scan being started (with scan_start) is a BLEND scan: it emits
+   *               H+1 lines, the extra one being line H-2 again -- the bottom line's
+   *               mirrored lookahead (field_blend needs one line ahead and the stream
+   *               has no end-of-scan marker); field_blend emits H.
+   * Engages only on the `deinterlace && ~interlaced` weave arm, only for a picture
+   * cur_ilace says is true-interlaced (film keeps its weave, bit-identical), never under
+   * the SIF walk or Letterbox. No anchor, no per-scan state: every scan of a picture is
+   * marked the same, so a held picture renders identically on each re-scan.
+   * The frame-top TAG (disp_y_sat) is untouched: only the line count changes, by one. */
+  input              blend_en;
+  output             scan_blend;
+
 `include "vld_codes.v"
 `include "mem_codes.v"
 `include "resample_codes.v"
@@ -430,7 +448,12 @@ module resample_addrgen (
   wire       [11:0] fld_H        = vertical_size[12:1];
   reg               half_scan;   // this scan is the interpolated slot (latched at STATE_NEXT_IMG)
   reg               half_rf;     // pinned BOTTOM in a top slot: repeat the FIRST line, else the last
+  /* DVD-FORK (field blend): a BLEND scan emits H+1 frame lines, the last one line H-2
+   * (the mirrored bottom edge), so field_blend (one line of lookahead) produces H. */
+  wire       [11:0] frm_H        = vertical_size[11:0];
+  reg               blend_scan;  // this scan is a blend scan (latched at STATE_NEXT_IMG)
   wire              last_y = half_scan ? (oline >= fld_H)
+                           : blend_scan ? (oline >= frm_H)
                            : vscale_en ? (oline >= (v_outlines - 12'd1)) : last_y_native;
 
   parameter [3:0] 
@@ -745,6 +768,18 @@ module resample_addrgen (
   assign scan_start = clk_en && scan_begin;
   assign scan_half  = half_now;
 
+  /* ================= DVD-FORK (FIELD BLEND) -- see the port comment =================
+   * blend_want: the weave arm (progressive raster), a true-interlaced DISPLAYED picture
+   * (cur_ilace, latched at the real pickup), and neither Letterbox nor the SIF walk owning
+   * the vertical path. Evaluated per scan at STATE_NEXT_IMG. */
+  wire       blend_want = blend_en && deinterlace && ~interlaced && cur_ilace &&
+                          ~vscale_en && ~sif2x;
+  wire       blend_now  = blend_want && (image_0 == FRAME);
+  always @(posedge clk)
+    if (~rst) blend_scan <= 1'b0;
+    else if (clk_en && (state == STATE_NEXT_IMG)) blend_scan <= blend_now;
+  assign scan_blend = blend_now;
+
   /* next state logic */
   always @*
     case (state)
@@ -1014,6 +1049,11 @@ module resample_addrgen (
                                                            : vscale_en ? v_base_comb : ((image_0 == BOTTOM) ? 12'd1 : 12'd0);
     else if (clk_en && (state == STATE_NEXT_MB) && last_mb && half_scan)
       disp_y <= (half_rf ? (oline == 12'd0) : (oline >= (fld_H - 12'd1))) ? disp_y : disp_y + 12'd2;
+    /* DVD-FORK (field blend): after the last frame line a BLEND scan steps BACK one line,
+     * so its extra (H+1th) line is line H-2 -- field_blend's `d` for the bottom line, which
+     * makes the bottom edge a mirror (d := a) like the top. */
+    else if (clk_en && (state == STATE_NEXT_MB) && last_mb && blend_scan)
+      disp_y <= (oline == (frm_H - 12'd1)) ? disp_y - 12'd1 : disp_y + 12'd1;
     else if (clk_en && (state == STATE_NEXT_MB) && last_mb) disp_y <= vscale_en ? disp_y_scaled_next : ((image == FRAME) ? disp_y + 12'd1 : disp_y + 12'd2);
     else disp_y <= disp_y;
 

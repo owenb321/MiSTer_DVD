@@ -102,7 +102,7 @@ module pause_still_tb;
     .video_live(), .pickup_hold(1'b0), .pause(pause), .step_req(step_req),
     .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0),
     .sched_due(1'b1), .sched_next_due(1'b1),
-    .still_en(still_en), .scan_start(scan_start), .scan_half(scan_half)
+    .still_en(still_en), .blend_en(1'b0), .scan_start(scan_start), .scan_half(scan_half)
   );
 
   wire [7:0] vs_y, vs_u, vs_v, vs_osd;

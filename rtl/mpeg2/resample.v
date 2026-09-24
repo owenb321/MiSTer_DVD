@@ -51,7 +51,8 @@ module resample(
   raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
   hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop)
-  still_en, scan_start, scan_half                  // DVD-FORK (pause field still): see dvd/resample_addrgen.v
+  still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): see dvd/resample_addrgen.v
+  blend_en, scan_blend                             // DVD-FORK (field blend): see dvd/resample_addrgen.v
   );
 
   input              clk;                      // clock
@@ -118,6 +119,8 @@ module resample(
   input              still_en;                    // DVD-FORK (pause field still): 1 = may engage
   output             scan_start;                  // DVD-FORK (pause field still): one pulse per frame-top scan
   output             scan_half;                   // DVD-FORK (pause field still): that scan is the interpolated slot
+  input              blend_en;                    // DVD-FORK (field blend): the feature is on
+  output             scan_blend;                  // DVD-FORK (field blend): that scan is a blend scan (H+1 lines)
 
   /* resample fifo */
   wire          [2:0]resample_wr_dta;
@@ -187,7 +190,9 @@ module resample(
     .hcrop_en(hcrop_en),                          // DVD-FORK (CRT anamorphic horizontal crop)
     .still_en(still_en),                          // DVD-FORK (pause field still)
     .scan_start(scan_start),
-    .scan_half(scan_half)
+    .scan_half(scan_half),
+    .blend_en(blend_en),                          // DVD-FORK (field blend)
+    .scan_blend(scan_blend)
     );
 
   wire        fifo_read;

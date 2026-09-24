@@ -776,6 +776,22 @@ parameter CONF_STR = {
     // status[10:9]. See docs/analog_dual_raster.md, docs/field_parity.md.
     "O[10:9],Video Output,Auto,Interlaced,Progressive;",
     "OB,480i Deint,Bob,Weave;",
+    // Progressive Deint (docs/field_blend.md): on the PROGRESSIVE raster a
+    // true-interlaced picture (progressive_frame = 0: video-sourced 29.97i/25i,
+    // field-coded laserdisc FMV) is woven, and combs on motion. Blend =
+    // dvd/field_blend.sv filters EVERY line of such a picture (a + 2b + d) / 4 --
+    // no detector and no alternating anchor, so it cannot shimmer (the shelved Stage A
+    // deinterlacer's failure); the cost is vertical softness, and motion shows a soft
+    // ghost instead of comb. Inert on film/progressive pictures, on Video Output =
+    // Interlaced (real fields, ascal deinterlaces), 240p, SIF and Letterbox. Only the
+    // decoded picture is filtered -- subpictures, highlights, the HUD are composited
+    // downstream.
+    //   ⚠ Index 0 = the default = OFF (user decision 2026-09-24): progressive_frame = 0
+    // also selects progressive content carrying interlaced flags (measured: 3 of 5 PAL
+    // pf=0 discs and ~half a sample of NTSC ones never comb), which a blend only
+    // softens. Named for its raster, like "480i Deint" above. Bit 49 was never
+    // allocated, so no "v,N" bump.
+    "O[49],Progressive Deint,Off,Blend;",
     // Analog Aspect: how anamorphic content is fitted to the 4:3 analog TV (ONLY
     // active while the analog 480i raster is engaged). Auto = Fit for 4:3 streams,
     // Letterbox for 16:9 (from the sequence header aspect code). Fit = raster
@@ -1029,6 +1045,9 @@ wire [63:0] img_size;
 // Declared here, ahead of the telem instance: the source wires are declared
 // ~3000 lines down and emu.sv has no `default_nettype none`.
 wire [15:0] telem_aud_disc;
+// Field blend instrument (clk_dec level from mpeg2video, word 7 flags[5]) --
+// declared ahead of the telem instance for the same reason.
+wire        core_blend_act;
 
 // BLKSZ=4: 2048-byte sd blocks (= one DVD/ISO sector per request). One HPS
 // round-trip per sector instead of four 512-byte ones — the per-request
@@ -1123,7 +1142,7 @@ dvd_telem dvd_telem_inst (
     .drop_costs (core_drop_costs),       // clk_dec: {debt, drop_req, probe}
     .vbuf_fill  (core_vbuf_fill),
     .aud_frames (aud_frames_avail),
-    .flags      ({3'b0, menu_active, still_active, video_live_s2, pause_q, media_seen}),
+    .flags      ({2'b0, core_blend_act, menu_active, still_active, video_live_s2, pause_q, media_seen}),   // [5] field blend active (clk_dec level)
     .aud_play   (aud_play_cnt),          // clk_sys: play ticks/16 reaching the DAC
     .aud_gate   (aud_gate_cnt),          // clk_sys: drain-gate closures
     .disp_lag   (av_disp_lag[19:4]),     // clk_sys: displayed PTS - STC (word 11)
@@ -4378,6 +4397,19 @@ always @(posedge clk_dec) begin
     filmp_dec    <= filmp_s1_dec;
 end
 
+// DVD-FORK (field blend, docs/field_blend.md): O[49] Progressive Deint, index 1 =
+// Blend. Gated on ~interlaced_eff -- NOT fields_eff: 240p (p240_eff) is a sub-mode of
+// the interlaced 15 kHz raster whose decoder emits FRAMES, and this feature is for the
+// progressive 480p/576p raster only. A human toggle plus a boot-static verdict, so a
+// plain 2-FF into clk_dec suffices (the filmp_dec shape above); the addrgen only acts
+// on it at a scan start.
+wire blend_en = status[49] & ~interlaced_eff;
+reg  blend_s1_dec, blend_en_dec;
+always @(posedge clk_dec) begin
+    blend_s1_dec <= blend_en;
+    blend_en_dec <= blend_s1_dec;
+end
+
 // Drain-gate live-state debug taps from dvd_audio_decode. dbg_aud_play_pts /
 // dbg_aud_play_pts_valid feed the STD mux-lead hold above (aud_caught); the
 // draining/armed/skip taps stay wired for future diagnosis. The lip-sync drift
@@ -5086,7 +5118,9 @@ mpeg2video mpeg2video_inst (
     .disp_hfill_en     (disp_hfill_en),                // DVD-FORK FIX (SIF analog fill): 352->720 stretch + 720 DE window
     .film24            (filmp_dec),                    // DVD-FORK (Film 24p/25p Out): 1 frame/refresh in the governor; ascal does the pulldown
     .film_det_ntsc     (core_film_det_ntsc),           // DVD-FORK (Film 24p auto-detect): 3:2 telecine verdict (clk_dec)
-    .film_det_pal      (core_film_det_pal)             // DVD-FORK (Film 24p auto-detect): sustained-progressive verdict (clk_dec)
+    .film_det_pal      (core_film_det_pal),            // DVD-FORK (Film 24p auto-detect): sustained-progressive verdict (clk_dec)
+    .blend_en          (blend_en_dec),                 // DVD-FORK (field blend): O[49] Progressive Deint = Blend
+    .blend_act         (core_blend_act)                // DVD-FORK (field blend): instrument -> telemetry word 7 flags[5]
 );
 // DVD-FORK (Film 24p auto-detect): 2-FF sync the governor's clk_dec cadence verdicts
 // into clk_sys, where film_want / filmp_eff resolve the Off/On/Auto mode (the reverse

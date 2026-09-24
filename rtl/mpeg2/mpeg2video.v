@@ -84,7 +84,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              disp_hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
              disp_hfill_en,                                        // DVD-FORK FIX (SIF analog fill): stretch sub-D1 lines to the 720 raster
              film24,                                               // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
-             film_det_ntsc, film_det_pal                           // DVD-FORK (Film 24p auto-detect): cadence verdicts (up to emu)
+             film_det_ntsc, film_det_pal,                          // DVD-FORK (Film 24p auto-detect): cadence verdicts (up to emu)
+             blend_en, blend_act                                   // DVD-FORK (field blend): enable in, instrument out
 	     );
 
   input            clk;                     // clock. Typically a multiple of 27 Mhz as MPEG2 timestamps have a 27 Mhz resolution.
@@ -277,6 +278,14 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * rate, so the governor advances one decoded frame per refresh (no in-core 3:2; ascal
    * does the pulldown to 59.94 Hz HDMI). From emu (2-FF into this clock). */
   input            film24;
+
+  /* DVD-FORK (field blend, docs/field_blend.md): 1 => on the progressive raster every
+   * line of a true-interlaced picture is filtered [1,2,1] by dvd/field_blend.sv instead
+   * of being shown woven. From emu (2-FF into this clock; the OSD row, gated off unless
+   * the raster is progressive). blend_act is the telemetry level: the scan under way
+   * is a blend scan. */
+  input            blend_en;
+  output           blend_act;
 
   /* DVD-FORK (Film 24p Out — auto detect, issue #124 Phase 2): sticky cadence
    * verdicts from the governor's film detector (clk_dec). film_det_ntsc = a
@@ -517,6 +526,15 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire             pixel_wr_almost_full;    // disp_vscale -> resample
   wire             still_scan_start;        // DVD-FORK (pause field still): resample_addrgen -> disp_vscale sideband
   wire             still_scan_half;
+  wire             blend_scan_w;            // DVD-FORK (field blend): resample_addrgen -> field_blend sideband
+  /* DVD-FORK (field blend): resample -> field_blend -> disp_vscale. field_blend is a pure
+   * combinational pass-through unless the addrgen marks a scan (blend_en and a
+   * true-interlaced picture on the progressive raster), so everything else is the
+   * bit-identical resample -> disp_vscale wire. */
+  wire        [7:0]y_fb, u_fb, v_fb, osd_fb;
+  wire        [2:0]position_fb;
+  wire             pixel_wr_en_fb;
+  wire             pixel_wr_almost_full_fb;  // disp_vscale -> field_blend
   /* DVD-FORK (CRT anamorphic Letterbox AA): resample -> disp_vscale -> disp_hstretch ->
    * pixel_queue. disp_vscale (vertical 2-tap letterbox) and disp_hstretch (horizontal Crop
    * stretch) are mutually exclusive; whichever is inactive is a pure combinational
@@ -1651,7 +1669,25 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
      * blends the interpolated slot with or without Letterbox. */
     .still_en(1'b1),
     .scan_start(still_scan_start),
-    .scan_half(still_scan_half)
+    .scan_half(still_scan_half),
+    .blend_en(blend_en),                                     // DVD-FORK (field blend)
+    .scan_blend(blend_scan_w)
+    );
+
+  /* DVD-FORK (field blend, docs/field_blend.md): a fixed [1,2,1] vertical blend for a
+   * true-interlaced picture woven onto the progressive raster. Between the resample and
+   * disp_vscale; a pure combinational pass-through unless the addrgen marks the scan
+   * (then it takes H+1 lines and emits H). See dvd/field_blend.sv. */
+  field_blend field_blend (
+    .clk(clk), .clk_en(1'b1), .rst(sync_rst),
+    .scan_start(still_scan_start), .scan_blend(blend_scan_w),
+    /* from resample */
+    .in_y(y_resample), .in_u(u_resample), .in_v(v_resample), .in_osd(osd_resample),
+    .in_pos(position_resample), .in_wr(pixel_wr_en), .in_almost_full(pixel_wr_almost_full),
+    /* to disp_vscale */
+    .out_y(y_fb), .out_u(u_fb), .out_v(v_fb), .out_osd(osd_fb),
+    .out_pos(position_fb), .out_wr(pixel_wr_en_fb), .out_almost_full(pixel_wr_almost_full_fb),
+    .blend_act(blend_act)
     );
 
   /* DVD-FORK (CRT anamorphic Letterbox AA): vertical 2-tap downscale stage (480->360 /
@@ -1661,9 +1697,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .clk(clk), .clk_en(1'b1), .rst(sync_rst),
     .vscale_en(disp_vscale_en),
     .scan_start(still_scan_start), .scan_half(still_scan_half),   // DVD-FORK (pause field still)
-    /* from resample */
-    .in_y(y_resample), .in_u(u_resample), .in_v(v_resample), .in_osd(osd_resample),
-    .in_pos(position_resample), .in_wr(pixel_wr_en), .in_almost_full(pixel_wr_almost_full),
+    /* from field_blend (= resample unless a scan is blended) */
+    .in_y(y_fb), .in_u(u_fb), .in_v(v_fb), .in_osd(osd_fb),
+    .in_pos(position_fb), .in_wr(pixel_wr_en_fb), .in_almost_full(pixel_wr_almost_full_fb),
     /* to disp_hstretch */
     .out_y(y_vs), .out_u(u_vs), .out_v(v_vs), .out_osd(osd_vs),
     .out_pos(position_vs), .out_wr(pixel_wr_en_vs), .out_almost_full(pixel_wr_almost_full_vs)
