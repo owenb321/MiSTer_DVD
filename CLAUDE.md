@@ -353,6 +353,10 @@ worse maintenance burden than targeted in-place edits. So:
   at ~0.58 s at 448 kbps AC-3). An underrun still clicks and can leave audio 50–300 ms
   late until the next seek; that is phase 3 (RTL), not yet done. Decrypted `.iso` files
   over a network share are not buffered yet.
+  ★ **Jostle test, the real-world case (maintainer, 2026-09-24):** knocking the drive
+  off track mid-film paused playback on the previous Main. On the read-ahead the drive
+  was heard re-seeking and the film did not stop. The log shows 1612 ms + 663 ms drive
+  stalls absorbed, with no `ring ran dry`.
   Audio CD and VCD from the drive (both now read through the worker) are ✅ unregressed on
   the rig against the control Main: play, skip, seek, audio level, and eject.
   (4) **Eject EBUSY, pre-existing:** libdvdcss opens the drive without `O_CLOEXEC`, so each

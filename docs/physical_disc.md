@@ -517,6 +517,22 @@ same script as the control arm): the feature plays, chapter skips and fast-forwa
 as before, the break is crossed with no discontinuity, and the layer log reads
 `layers: 2, opposite track path, layer 0 ends at LBA 1930143`.**
 
+★★ **THE JOSTLE TEST — THE REAL-WORLD CASE, run by the maintainer 2026-09-24 on a second
+dual-layer film** (7906 MB, 19 VOBs, layer 0 ending at LBA 2,041,391). The same mid-film
+scene was played on both Mains while the drive was physically jostled to knock it off
+track. **The previous Main showed a noticeable pause before playback resumed. With the
+read-ahead, the drive could be heard re-seeking and the film did not stop.** The new
+Main's own log recorded what it absorbed:
+
+```
+slow read 496651+32: 1612 ms (vob@183343 rbn 313308, 1 chunk)
+slow read 508003+8:   663 ms (vob@183343 rbn 324660, 1 chunk)
+```
+
+There was no `ring ran dry` line, so the core never waited. A 1.6 s drive stall is well
+past the ~0.6 s of audio the core holds, so without the ring it reached the screen and the
+speakers, as the maintainer saw.
+
 **Audio CD unregressed** (same rig and day, a 12-track music CD, control Main first,
 identical script). Both Mains: `TR 1/12` playing at mount, a track skip to `TR 2/12`,
 and three fast-forward taps landing at 0:00:42–0:00:43. Level measured off the capture
