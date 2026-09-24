@@ -325,8 +325,15 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **PHYSICAL-DISC PLAYBACK HITCHES: A STALE-SECTOR BUG AT EVERY 1 GB VOB BOUNDARY, AND
   NO READ-AHEAD (2026-09-24, branch `feature/disc-readahead`); host-proven RED/GREEN
-  (`main/tests/run_tests.sh --red`, 46 mutations), ARM cross-compile clean, ⏳ HW-confirm
-  pending.** Users reported a hitch on physical discs and suspected the layer change.
+  (`main/tests/run_tests.sh --red`, 49 mutations), and ✅ REPRODUCED AND FIXED ON THE RIG
+  2026-09-24 (physical *Matrix Reloaded* Disc 1, control arm first).** Users reported a
+  hitch on physical discs and suspected the layer change.
+  ★★ **On that disc the VOB boundary IS the layer boundary:** layer 0 ends at LBA
+  1,930,143, and `VTS_01_5.VOB` plus the bridge cell 20 start at 1,930,144. So bug (1)
+  below fed the decoder two stale sectors (the bridge cell's NAV pack and first data pack)
+  AT the layer change. The control's seek trace shows `read 1930146+8 … rbn 2`; the fix
+  shows no discontinuity. The drive itself did not stall there (no ≥100 ms read in either
+  arm), so for this report the stale sectors are the defect, not delivery.
   (1) **`dvd_css_read` returned SHORT at every VOB end** (one libdvdcss read must not span
   two title keys), while Main's readA/readB cache the whole 8-sector window on any
   positive return. The tail then served the PREVIOUS window's sectors. VOB parts are
@@ -346,6 +353,11 @@ worse maintenance burden than targeted in-place edits. So:
   at ~0.58 s at 448 kbps AC-3). An underrun still clicks and can leave audio 50–300 ms
   late until the next seek; that is phase 3 (RTL), not yet done. Decrypted `.iso` files
   over a network share are not buffered yet.
+  (4) **Eject EBUSY, pre-existing:** libdvdcss opens the drive without `O_CLOEXEC`, so each
+  core switch leaked one handle into the next Main (measured: 4 on the rig), and the
+  kernel refuses to eject unless one handle is open. `mark_cloexec_to()` after
+  `dvdcss_open()` fixes it and heals already-leaked handles at the next core switch. The
+  tray opened on the rig. This is probably also `ad257e3`'s "days of uptime" EBUSY.
   ⛔ Issue #122 (`CSS ENCRYPTED` after a chapter skip) is NOT this. The suspect there is
   `dvd_css.cpp` latching `key_ok = 0` for a whole VOB after one failed `SEEK_KEY`.
   Detail: **`docs/physical_disc.md`** "Every read window comes back full" and "Read-ahead";

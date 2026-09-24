@@ -34,6 +34,9 @@
 #define RA_SLACK      256u   // a request this far past the fill is "on its way"
 #define RA_RETRIES      3    // single-sector attempts before a sector is zero-filled
 #define RA_WAIT_LOG_MS 100   // log a core wait on an EMPTY ring longer than this
+#define RA_STEADY      64    // ...but only once this many windows have streamed:
+                             // before that the ring is still filling from a seek or
+                             // the mount's scattered reads, and a wait is not a stall
 #define RA_FAIL_RUN      8   // this many holes in a row: the disc is likely gone
 #define RA_FAIL_PAUSE_MS 100 // ...so pause between reads (an open tray fails fast)
 #define RA_LOG_MAX    200
@@ -59,6 +62,7 @@ static int             waiting, wait_seek;
 static uint32_t        wait_lba;
 static struct timespec wait_t0;
 static int             log_n;
+static uint32_t        served;       // windows served since the last (re)target
 
 static void ra_log(const char *fmt, ...)
 {
@@ -113,6 +117,7 @@ static void retarget(uint32_t lba)
 	gen++;
 	base = lba;
 	fill = 0;
+	served = 0;
 	pthread_cond_broadcast(&cv);
 }
 
@@ -135,7 +140,7 @@ static void wait_done(void)
 	if (!waiting) return;
 	waiting = 0;
 	long ms = ra_ms_since(&wait_t0);
-	if (!wait_seek && ms >= RA_WAIT_LOG_MS)
+	if (!wait_seek && served >= RA_STEADY && ms >= RA_WAIT_LOG_MS)
 		ra_log("ring ran dry: the core waited %ld ms at LBA %u", ms, wait_lba);
 }
 
@@ -217,6 +222,7 @@ int dvd_ra_start(dvd_ra_source s, uint32_t n)
 	stop_req = 0;
 	waiting = 0;
 	log_n = 0;
+	served = 0;
 	fail_run = 0;
 	src_busy = 0;
 	if (pthread_create(&th, 0, worker, 0) != 0)
@@ -276,6 +282,7 @@ int dvd_ra_read(void *buf, uint32_t lba, uint32_t count)
 	wait_done();
 	copy_out(p, lba, end - lba);
 	advance(end);
+	served++;
 	pthread_mutex_unlock(&mx);
 
 	if (end - lba < count) memset(p + (size_t)(end - lba) * 2048, 0, (size_t)(count - (end - lba)) * 2048);

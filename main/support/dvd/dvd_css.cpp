@@ -327,6 +327,40 @@ static void log_disc_layers(const char *dev)
 	}
 }
 
+// libdvdcss opens the drive (or image) itself, with plain O_RDONLY: no O_CLOEXEC.
+// Every core switch re-execs the Main without closing this session, so each DVD
+// session used to leave one handle to the drive open in the next Main, forever.
+// The kernel ejects only when the ejecting fd is the LAST open handle
+// (cdrom_ioctl_eject, use_count == 1), so after a core switch or two the Eject
+// button's tray half failed with EBUSY. MEASURED on the rig (2026-09-24): after
+// four DVD sessions the running Main held four O_RDONLY|O_LARGEFILE handles to
+// /dev/sr1 that no code of ours had opened. So: after dvdcss_open(), mark every
+// descriptor that points at the same file close-on-exec. Returns how many.
+static int mark_cloexec_to(const char *path)
+{
+	char want[PATH_MAX];
+	if (!realpath(path, want)) return 0;
+	int n = 0;
+	DIR *d = opendir("/proc/self/fd");
+	if (!d) return 0;
+	struct dirent *e;
+	while ((e = readdir(d)))
+	{
+		int fd = atoi(e->d_name);
+		if (e->d_name[0] < '0' || e->d_name[0] > '9' || fd == dirfd(d)) continue;
+		char lnk[64], tgt[PATH_MAX];
+		snprintf(lnk, sizeof(lnk), "/proc/self/fd/%d", fd);
+		ssize_t k = readlink(lnk, tgt, sizeof(tgt) - 1);
+		if (k <= 0) continue;
+		tgt[k] = 0;
+		if (strcmp(tgt, want)) continue;
+		int fl = fcntl(fd, F_GETFD);
+		if (fl >= 0 && !(fl & FD_CLOEXEC) && fcntl(fd, F_SETFD, fl | FD_CLOEXEC) == 0) n++;
+	}
+	closedir(d);
+	return n;
+}
+
 // Read `count` raw (undecrypted) 2048-byte sectors at `lba` — for the unscrambled
 // ISO9660 metadata used to enumerate VOB files. Returns sectors read or -1.
 static int css_raw_read(uint32_t lba, void *buf, int count)
@@ -705,6 +739,7 @@ int dvd_css_open(void)
 			css_log("dvdcss_open(%s) failed", dev);
 			return 0;
 		}
+		mark_cloexec_to(dev);
 		seek_log_arm();
 	}
 	else
@@ -788,6 +823,7 @@ int dvd_css_open_image(const char *path)
 
 	dvdcss_t h = p_open(full);
 	if (!h) { css_log("dvdcss_open(image) FAILED: %s", full); return 0; }
+	mark_cloexec_to(full);
 
 	css = h;
 	seek_log_arm();

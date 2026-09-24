@@ -487,6 +487,22 @@ int main(void)
               dvd_css_read(win, VOB0 + 105u, 8), -1);
     }
 
+    // [14] libdvdcss's own handle to the drive must not outlive the Main. It opens
+    //      with plain O_RDONLY; a core switch re-execs the Main, the handle carried
+    //      over, and after a few sessions the kernel refused Eject with EBUSY
+    //      (measured: four such handles in the running Main). Stand-in for the
+    //      library's open: a plain open() of a file, then the marking.
+    printf("[14] the library's handle is made close-on-exec\n");
+    {
+        char path[] = "/tmp/dvd_css_test_XXXXXX";
+        int tfd = mkstemp(path);
+        int lib = open(path, O_RDONLY);                 // what libdvdcss does
+        check("the library's fd starts inheritable", (fcntl(lib, F_GETFD) & FD_CLOEXEC) != 0, 0);
+        check("handles marked", mark_cloexec_to(path), 2);   // mkstemp's too
+        check("the library's fd is close-on-exec", (fcntl(lib, F_GETFD) & FD_CLOEXEC) != 0, 1);
+        close(lib); close(tfd); unlink(path);
+    }
+
     printf("\ndvd_css_test: %s (%d error%s)\n", errs ? "FAIL" : "PASS", errs, errs == 1 ? "" : "s");
     return errs ? 1 : 0;
 }

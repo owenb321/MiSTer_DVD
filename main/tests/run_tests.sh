@@ -260,6 +260,13 @@ if [ "$RED" -eq 1 ]; then
         "/if (done == 0) return -1;/d" \
         css-head-failure-hidden
 
+    # libdvdcss's plain O_RDONLY handle left inheritable: every core switch carries
+    # one more into the next Main, and Eject then fails with EBUSY.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL the library's fd is close-on-exec" \
+        "s/fcntl(fd, F_SETFD, fl | FD_CLOEXEC) == 0) n++;/1) n++;/" \
+        css-lib-fd-inherited
+
     # ---- dvd_readahead: the RAM ring between the disc and the core ---------------
     # The drive probe issued while the worker is mid-read: it queues behind that
     # read in the drive and blocks the poll thread, i.e. the ring's own consumer.
@@ -301,6 +308,13 @@ if [ "$RED" -eq 1 ]; then
         "FAIL its neighbours are intact" \
         "/^\t\t\tn = 1;$/d" \
         ra-retry-keeps-burst-len
+
+    # Every wait reported, warm-up included: the mount's own reads fill the log
+    # with "ring ran dry" lines that are not stalls.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL cold-start waits logged as a dry ring" \
+        "s/if (!wait_seek \&\& served >= RA_STEADY \&\& ms/if (!wait_seek \&\& ms/" \
+        ra-logs-warmup
 
     # Main's own window ignored: every buffer hit would wait on the ring.
     red_case dvd_readahead.cpp dvd_readahead_test.cpp \

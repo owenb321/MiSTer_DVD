@@ -133,11 +133,11 @@ int main(void)
 	printf("[2] a stall longer than the lead is felt (control for [1])\n");
 	reset_src();
 	per_call_ms = 1;
-	stall_at = 300; stall_ms = 600;
+	stall_at = 1000; stall_ms = 600;           // past RA_STEADY windows of streaming
 	dvd_ra_start(fake_src, 100000);
 	{
 		int late = 0;
-		for (uint32_t lba = 0; lba < 600; lba += 8)
+		for (uint32_t lba = 0; lba < 1300; lba += 8)
 		{
 			int d = serve(win, lba, 8, 3000);
 			if (lba > 0 && d > 0) late++;
@@ -244,6 +244,18 @@ int main(void)
 		dvd_ra_stop();
 		check("stop waits out the one read in flight, no more", now_ms() - t0 < 700, 1);
 	}
+	// [8] A wait while the ring is still filling from a (re)start is not a stall:
+	//     the mount's scattered IFO reads and every seek look like this. Logged as
+	//     "ring ran dry", it put false alarms in the one log a hitch report reads.
+	printf("[8] a cold-start wait is not reported as the ring running dry\n");
+	reset_src();
+	per_call_ms = 150;
+	dvd_ra_start(fake_src, 100000);
+	serve(win, 0, 8, 2000);
+	serve(win, 8, 8, 2000);
+	check("cold-start waits logged as a dry ring", log_n, 0);
+	dvd_ra_stop();
+
 	check("idle: every request may be serviced (stock behaviour)", dvd_readahead_ready(123, 1, (uint64_t)-1, 8), 1);
 
 	printf("\ndvd_readahead_test: %s (%d error%s)\n", errs ? "FAIL" : "PASS", errs, errs == 1 ? "" : "s");

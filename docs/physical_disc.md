@@ -447,8 +447,31 @@ record of how the core got there.
 ## Every read window comes back full (2026-09-24, branch `feature/disc-readahead`)
 
 **Status: host-proven RED/GREEN (`main/tests/run_tests.sh --red`, arms [8], [12] and [13],
-plus three mutations each caught by its own arm). ARM cross-compile is clean.
-⏳ HW-confirm pending.**
+plus three mutations each caught by its own arm), and ✅ REPRODUCED AND FIXED ON THE RIG
+2026-09-24 with a physical *The Matrix Reloaded* Disc 1.**
+
+★★ **On that disc the stale sectors land EXACTLY ON THE LAYER BREAK.** Measured on the
+pressing (READ DVD STRUCTURE, and the disc's own ISO9660 directory):
+- layer 0 ends at LBA 1,930,143;
+- `VTS_01_5.VOB` starts at LBA 1,930,144;
+- so does the 706-sector bridge cell 20 of the feature (RBN 1,926,105).
+
+The authoring put the VOB boundary on the layer boundary, so the stale-sector defect fires
+at the moment users see the layer change. That is very likely the reported "layer
+transition hitch". Same script on both Mains (chapter 20, 22 fast-forward taps to land ~22 s
+before the break, play through it):
+- **Control (`main`):** the seek trace shows `read 1930146+8 vob@1930144 rbn 2`, a
+  non-sequential read AT the break. The window before it was clamped at LBA 1,930,143,
+  so Main served LBAs 1,930,144 and 1,930,145 from the previous window. Those are the
+  bridge cell's NAV pack and first data pack, about 4 KB of already-played stream
+  handed to the decoder at the layer change.
+- **Fix:** no discontinuity at the break. The read runs straight into `VTS_01_5.VOB`.
+- ⚠ The core's telemetry reads identically in both arms (0 audio re-arms, 0 picture
+  stalls, VBUF minimum 32 × 8 KB). It cannot see four stale kilobytes, so the seek trace
+  is the instrument here. The visible or audible effect of those bytes was not captured.
+- ⚠ A rip of the same disc starts its title data 3,695 sectors earlier than the pressing
+  (LBA 344 against 4039). RBNs agree, but LBAs taken from the rip do not, so read the
+  disc's own directory before aiming a test at an LBA.
 
 **The defect.** Main's `readA`/`readB` (integration steps 8/9) call
 `dvd_css_read(buffer[disk], lba, buf_n)`, and on ANY positive return they set
@@ -488,8 +511,17 @@ from …)`.
 
 ## Read-ahead: a RAM ring between the drive and the core (2026-09-24, branch `feature/disc-readahead`)
 
-**Status: host-proven (`main/tests/dvd_readahead_test.cpp`, 7 arms; 6 RED mutations,
-each caught by its own arm). ARM cross-compile is clean. ⏳ HW-confirm pending.**
+**Status: host-proven (`main/tests/dvd_readahead_test.cpp`, 8 arms; 7 RED mutations,
+each caught by its own arm), and ✅ RUN ON THE RIG 2026-09-24 (physical *Matrix Reloaded*,
+same script as the control arm): the feature plays, chapter skips and fast-forward land
+as before, the break is crossed with no discontinuity, and the layer log reads
+`layers: 2, opposite track path, layer 0 ends at LBA 1930143`.**
+
+**What the rig's drive actually does at the layer change: nothing measurable.** There was
+no slow read (≥100 ms) anywhere near LBA 1,930,144, in either arm, and the control arm's
+telemetry stayed clean without the ring. So on this drive the ring is insurance, not the
+fix. The slow reads it did absorb were 100–313 ms each, at the mount and right after
+seeks (drive spin-up). Other drives, scratched discs and network shares remain its job.
 
 **Why.** Users report a hitch on physical discs and attribute it to the dual-layer
 change. Whatever the cause, the shape made any source stall reach the core:
@@ -549,12 +581,39 @@ the worker:
   drive is therefore idle most of the time, and the next scan catches the removal.
   [13]'s control arm asserts that.
 
+**libdvdcss's handle outlived the Main, and that is what blocked Eject (fixed
+2026-09-24; pre-existing, not caused by the read-ahead).**
+- libdvdcss opens the drive or image itself with plain `O_RDONLY`, with no
+  `O_CLOEXEC`. A core switch re-execs the Main without closing the session, so every
+  DVD session left one inheritable handle to the drive in every later Main.
+- `cdrom_ioctl_eject()` refuses unless the ejecting fd is the last open handle, so the
+  Eject button's tray half failed with EBUSY.
+- MEASURED on the rig: after four DVD sessions, the running Main held four
+  `O_RDONLY|O_LARGEFILE` handles (fdinfo flags `0400000`) to `/dev/sr1` that no code
+  of ours opened. Every open of ours carries `O_CLOEXEC` or `O_NONBLOCK`.
+- This is very probably also the "days of uptime" EBUSY that commit `ad257e3`
+  attributed to USB re-enumeration: the stale `/dev/sr0 (deleted)` handles found then
+  carry the same flags.
+- **Fix:** `mark_cloexec_to()` marks every descriptor pointing at the opened
+  device/image close-on-exec, right after `dvdcss_open()`. Because it matches by path,
+  it also marks handles ALREADY leaked into the running Main's lineage, so the machine
+  heals at the next core switch with no reboot.
+- MEASURED: session 1 on the new Main had 5 `/dev/sr1` handles, all now `02400000`.
+  After one core switch there was exactly 1 (ours). Eject logged
+  `eject: tray opened on /dev/sr1`, and the drive reports `CDROM_DRIVE_STATUS = TRAY_OPEN`.
+- Gate: `dvd_css_test` [14] plus mutation `css-lib-fd-inherited`.
+- ⚠ Two eject log lines per press were seen (`optical disc unmounted`, then `image
+  unmounted`) on both Mains. The second is harmless on an empty slot; not investigated.
+
 **Instruments** (`/tmp/dvdcss.log`):
 - `slow read …`: the source took over 100 ms. This is now measured in the worker, so
   it marks drive stalls whether or not they reached the core.
 - `readahead: ring ran dry: the core waited N ms at LBA …`: a stall that DID reach
   the core. No such line during a reported hitch means the hitch is not data
-  delivery.
+  delivery. It is logged only after `RA_STEADY` (64) windows have streamed since
+  the last (re)target. The first rig run logged it twice during the mount's
+  scattered IFO reads, which are cold-start waits, not stalls (`dvd_readahead_test`
+  [8], mutation `ra-logs-warmup`).
 
 **Not covered yet.**
 - Decrypted `.iso` files use stock Main's file path, not these hooks (phase 2b).
