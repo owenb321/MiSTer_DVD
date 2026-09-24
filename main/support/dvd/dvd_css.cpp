@@ -25,6 +25,7 @@
 #include "dvd_cdda.h"
 #include "dvd_detect.h"
 #include "dvd_launch.h"
+#include "dvd_readahead.h"
 #include "../../menu.h"      // ProgressMessage() — on-screen feedback during key crack
 #include "../../file_io.h"   // getFullPath() — resolve MiSTer's storage-relative mount path
 
@@ -623,6 +624,7 @@ static void build_vob_list(void)
 }
 
 static void seek_log_arm(void);   // HIL seek trace, see dvd_css_read()
+static void css_ra_start(void);   // RAM read-ahead, see dvd_readahead.h
 
 // ---------------------------------------------------------------------------
 // TWO SOURCES, ONE FRONT DOOR.
@@ -664,7 +666,7 @@ int dvd_css_open(void)
 		int  fd = find_audio_cd(cd, sizeof(cd));
 		if (fd >= 0)
 		{
-			if (!dvd_cdda_open(fd, cd)) { src_cdda = 1; return 1; }
+			if (!dvd_cdda_open(fd, cd)) { src_cdda = 1; css_ra_start(); return 1; }
 			close(fd);
 		}
 	}
@@ -751,6 +753,7 @@ int dvd_css_open(void)
 
 	// Discover the VOB layout and pre-crack every title key at its VOB start.
 	if (css) build_vob_list();
+	css_ra_start();
 	return 1;
 }
 
@@ -823,6 +826,7 @@ int dvd_css_open_image(const char *path)
 	crack_title_keys("Decrypting ISO");
 	css_log("encrypted ISO %s (%llu MB) — decrypting via libdvdcss",
 	        path, (unsigned long long)(css_size >> 20));
+	css_ra_start();
 	return 1;
 }
 
@@ -1036,7 +1040,11 @@ static long ms_since(const struct timespec *t0)
 // zero-fill only what genuinely cannot be read (the dvd_vcd / dvd_cdda contract).
 // Only a failure on the FIRST sector is reported as a failure, so Main retries
 // the window instead of caching a hole at its head.
-int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
+//
+// This is the read-ahead worker's SOURCE (dvd_readahead.h's contract is exactly
+// the one above). While the worker runs, it is the only caller: every libdvdcss /
+// drive handle in this file is then touched by that one thread.
+static int css_src_read(void *buf, uint32_t lba, uint32_t count)
 {
 	if (src_cdda) return dvd_cdda_read(buf, lba, count);
 	if (raw_fd >= 0) return raw_read10(raw_fd, lba, buf, (int)count);   // no-libdvdcss fallback
@@ -1078,8 +1086,26 @@ int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
 	return (int)done;
 }
 
+// Main's read hook (integration steps 8/9). With the read-ahead running this is a
+// non-blocking copy out of its ring -- step 48 has already checked the window is
+// there, so readA never misses; readB (Main's own one-window prefetch) may, and a
+// miss there just leaves Main's window invalid for readA to fill later. Without it
+// (the worker failed to start) the source is read synchronously, as before.
+int dvd_css_read(void *buf, uint32_t lba, uint32_t count)
+{
+	if (dvd_ra_active()) return dvd_ra_read(buf, lba, count);
+	return css_src_read(buf, lba, count);
+}
+
+static void css_ra_start(void)
+{
+	uint64_t sz = dvd_css_size();
+	if (sz) dvd_ra_start(css_src_read, (uint32_t)((sz + 2047) / 2048));
+}
+
 void dvd_css_close(void)
 {
+	dvd_ra_stop();   // FIRST: the worker owns the handles closed below
 	if (src_cdda) { dvd_cdda_close(); src_cdda = 0; }
 	if (css && p_close) p_close(css);
 	if (raw_fd >= 0) close(raw_fd);

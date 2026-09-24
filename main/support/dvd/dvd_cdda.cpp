@@ -6,13 +6,13 @@
 // pthreads into an overlay that has stayed dependency-free. Only the SCSI cdb
 // shape is borrowed from there, and that is spelled out below.
 //
-// ⛔ NO PREFETCH RING, NO BACKGROUND THREAD. Stock runs a 10 MB two-lane ring
-// with a worker thread because it serves random access. Ours is strictly
-// sequential and user_io already gives us an 8-block read-ahead plus a
-// speculative next-window prefetch that fires after the current block ships --
-// one 16 KB forward read roughly every 93 ms, which is the drive's best case. A
-// worker thread would also invert the poll-starvation rule into lock contention
-// against the very thread it was meant to protect.
+// No ring or thread in THIS file: reads are plain and synchronous. The read-ahead
+// lives one level up, in dvd_readahead.cpp, which runs dvd_css_read() -- and so
+// this module, for an audio CD -- on a worker thread with a RAM ring ahead of the
+// core. (This comment used to reject a worker outright, on the grounds that it
+// would turn poll starvation into lock contention. That holds only if drive I/O is
+// done under the lock; dvd_readahead.cpp never does, so the poll thread only ever
+// contends for a memcpy.)
 
 #include <stdio.h>
 #include <stdlib.h>

@@ -242,6 +242,48 @@ whose CEC engine never initialises (`CEC: no clock detected`).
 Host tests: `main/tests/dvd_remote_test.cpp`, 12 arms, **7 RED mutations each
 caught by its own arm** (`run_tests.sh --red`).
 
+## Steps 48-49 — RAM read-ahead (`support/dvd/dvd_readahead.{h,cpp}`)
+
+Main services every core sector request on its one thread (`user_io_poll`), so a
+source read that stalls used to stall the core's data AND the OSD, input and
+telemetry: a dual-layer drive refocusing, a re-spin, a scratch the `sr` driver
+retries (~30 s per sector), a network hiccup under an encrypted `.iso`.
+`dvd_readahead.cpp` runs the source (`dvd_css_read`'s source for DVD-Video,
+encrypted images and audio CDs; `dvd_vcd_read`'s for VCD/SVCD) on a worker thread
+that keeps a 32 MB RAM ring ahead of the core. The read hooks of steps 8/9 and
+46/47 are unchanged: `dvd_css_read`/`dvd_vcd_read` become non-blocking copies out
+of the ring while it runs.
+
+| # | File | Edit |
+|---|---|---|
+| 48 | `user_io.cpp` | include `support/dvd/dvd_readahead.h` |
+| 49 | `user_io.cpp` | `// dvdra:defer` — a new arm IMMEDIATELY before the stock `else if (op & 1)` read arm |
+
+```cpp
+else if ((op & 1) && (sd_type[disk] == SD_TYPE_DVDCSS || sd_type[disk] == SD_TYPE_VCD) &&   // dvdra:defer
+         !dvd_readahead_ready(lba, blks, buffer_lba[disk], sizeof(buffer[0]) / blksz))
+{
+	break;   // not buffered yet: leave the request pending, serve it next poll pass
+}
+```
+
+★ **`break` leaves the request UN-ACKED, and that is the whole mechanism.** It runs
+after `DisableIO()` (the status transaction is closed) and before anything is sent.
+The core holds `sd_rd` until it is acked, and hps_io keeps presenting the request,
+so the next poll pass picks it up again. The poll thread therefore never blocks on
+the drive. A request the ring cannot serve yet costs one poll pass, not a stall.
+
+★ **`dvd_readahead_ready()` checks Main's own window first.** A request that
+`buffer[disk]` already holds is a hit and needs no source read, so only a window
+miss consults the ring. The ring then has to hold the WHOLE window that readA is
+about to copy, never just its first sector: readA caches all `buf_n` sectors, and a
+partly present window would put stale sectors in its tail (the defect
+`dvd_css_read` was fixed for; `run_tests.sh` mutation `ra-serves-partial`).
+
+⚠ The anchor is the read arm's first three lines, `else if (op & 1)` then `{` then
+`uint32_t buf_n`. The A2/IIGS arms above it also contain `else if (op & 1)` on a
+single line, and a looser anchor would land on them.
+
 ## MiSTer.ini (end user)
 
 ```

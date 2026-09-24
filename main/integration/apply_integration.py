@@ -733,4 +733,36 @@ u = insert_before(u, 'else if (FileSeek(&sd_image[disk], lba * blksz, SEEK_SET)'
 write(uio_path, u)
 print("[integration] user_io.cpp patched (physical VCD/SVCD)")
 
+# ---------------------------------------------------------------- read-ahead
+# Steps 48-49: the RAM read-ahead (support/dvd/dvd_readahead.{h,cpp}). A worker
+# thread owns the drive and keeps a ring ahead of the core; these two steps let the
+# poll thread DEFER a request the ring cannot serve yet instead of blocking on the
+# drive. See INTEGRATION.md "Steps 48-49".
+u = read(uio_path)
+
+# 48. include
+u = insert_after(u, '#include "support/dvd/dvd_css.h"',
+    '#include "support/dvd/dvd_readahead.h"\n',
+    48, 'support/dvd/dvd_readahead.h')
+
+# 49. defer a not-yet-buffered read. Placed as its own arm IMMEDIATELY before the
+# stock read arm, so it runs after DisableIO() (the status transaction is closed)
+# and before anything is sent: `break` leaves the request un-acked, and hps_io keeps
+# presenting it (the core holds sd_rd until acked), so the next poll pass picks it
+# up again. Anchored on the read arm's own first line so it cannot land on the
+# A2/IIGS one-line `else if (op & 1)` arms above it.
+u = insert_before(u, 'else if (op & 1)\n\t\t\t{\n\t\t\t\tuint32_t buf_n',
+    'else if ((op & 1) && (sd_type[disk] == SD_TYPE_DVDCSS || sd_type[disk] == SD_TYPE_VCD) &&   // dvdra:defer\n'
+    '         !dvd_readahead_ready(lba, blks, buffer_lba[disk], sizeof(buffer[0]) / blksz))\n'
+    '{\n'
+    '\t// Not in the read-ahead ring yet. Leave the request pending -- the core holds\n'
+    '\t// sd_rd until it is acked -- and service it on a later poll pass, rather than\n'
+    '\t// block this thread (and the OSD, input and telemetry with it) on the drive.\n'
+    '\tbreak;\n'
+    '}\n',
+    49, '// dvdra:defer')
+
+write(uio_path, u)
+print("[integration] user_io.cpp patched (read-ahead)")
+
 print("[integration] done")

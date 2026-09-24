@@ -42,7 +42,7 @@ fail=0
 for t in *_test.cpp; do
     n="${t%.cpp}"
     echo "### $n"
-    "$CXX" -std=c++11 -Wall -Wno-unused-function -O0 -g \
+    "$CXX" -std=c++11 -Wall -Wno-unused-function -O0 -g -pthread \
         -I "$TREE/support/dvd" -o "$OUT/$n" "$t"
     "$OUT/$n" || fail=1
     echo
@@ -61,7 +61,7 @@ red_case() {
     if cmp -s "$TREE/support/dvd/$mod" "$dir/support/dvd/$mod"; then
         echo "  !! RED $name: mutation matched nothing (the anchor moved)"; fail=1; return
     fi
-    if ! "$CXX" -std=c++11 -Wall -Wno-unused-function -O0 -g \
+    if ! "$CXX" -std=c++11 -Wall -Wno-unused-function -O0 -g -pthread \
             -I "$dir/support/dvd" -o "$dir/bin" "$test" 2>"$dir/build.log"; then
         echo "  !! RED $name: mutant did not compile"; sed -n '1,4p' "$dir/build.log"
         fail=1; return
@@ -259,6 +259,47 @@ if [ "$RED" -eq 1 ]; then
         "FAIL window whose first sector is unreadable fails" \
         "/if (done == 0) return -1;/d" \
         css-head-failure-hidden
+
+    # ---- dvd_readahead: the RAM ring between the disc and the core ---------------
+    # A burst in flight when the core seeks completes for the OLD position; kept, it
+    # is stored and counted under the new one -- the landing is someone else's data.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL landing sectors that are not what they claim" \
+        "s/if (stop_req || g != gen) continue;   \/\/ retargeted/if (stop_req) continue;   \/\/ retargeted/" \
+        ra-keeps-stale-burst
+
+    # A window whose head is in the ring but whose tail is not, served as whole:
+    # the stale-sector defect dvd_css_read was just fixed for, one layer up.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL a window reaching past the fill" \
+        "s/if (lba >= base \&\& end <= base + fill) return 1;/if (lba >= base \&\& lba < base + fill) return 1;/" \
+        ra-serves-partial
+
+    # The consumer never frees room: the worker parks once the ring is full and
+    # playback stops dead one ring-length in.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL windows never served" \
+        "/^\tadvance(end);$/d" \
+        ra-no-advance
+
+    # An unreadable sector left holding whatever the burst buffer held before.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL the unreadable sector is zeros" \
+        "/memset(tmp, 0, 2048);/d" \
+        ra-hole-not-zeroed
+
+    # A failed burst retried a sector at a time but stored at the burst's LENGTH:
+    # the good sectors around a bad one come back as leftovers.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL its neighbours are intact" \
+        "/^\t\t\tn = 1;$/d" \
+        ra-retry-keeps-burst-len
+
+    # Main's own window ignored: every buffer hit would wait on the ring.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL Main's own window is a hit" \
+        "/return 1;                          \/\/ Main's own window has it/d" \
+        ra-ignores-main-window
 
     # ---- the support bundle's argv (issue #81) ---------------------------------
     # The shipped-until-#81 behaviour: no NAV-pack capture at all, so a highlight

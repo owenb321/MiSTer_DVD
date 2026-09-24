@@ -24,6 +24,9 @@
 #include <linux/cdrom.h>
 
 #include "dvd_vcd.h"
+#include "dvd_readahead.h"
+
+static int vcd_src_read(void *buf, uint32_t lba, uint32_t cnt);
 
 // Bursts are capped at what one 16 KB transfer could possibly touch:
 // 16384/2352 rounds up to 7, +1 headroom. In practice dvd/emu.sv requests one
@@ -291,6 +294,7 @@ int dvd_vcd_open(void)
 
 	printf("DVD_VCD: track %d, %d sectors, %llu-byte virtual image\n",
 	       g_trk.num, g_trk.len, (unsigned long long)dvd_vcd_image_size(&g_trk));
+	dvd_ra_start(vcd_src_read, (uint32_t)((dvd_vcd_image_size(&g_trk) + 2047) / 2048));
 	return 0;
 }
 
@@ -299,6 +303,7 @@ uint64_t dvd_vcd_size(void) { return g_open ? dvd_vcd_image_size(&g_trk) : 0; }
 
 void dvd_vcd_close(void)
 {
+	dvd_ra_stop();   // FIRST: the worker owns g_fd and g_scratch, freed below
 	if (g_scratch) { free(g_scratch); g_scratch = 0; }
 	if (g_fd >= 0) close(g_fd);
 	memset(&g_trk, 0, sizeof(g_trk));
@@ -310,7 +315,9 @@ void dvd_vcd_close(void)
 
 // ---------------------------------------------------------------- the read hook
 
-int dvd_vcd_read(void *buf, uint32_t lba, uint32_t cnt)
+// The read-ahead worker's source (dvd_readahead.h). While the worker runs it is
+// the only caller, so g_fd / g_scratch are touched by that one thread.
+static int vcd_src_read(void *buf, uint32_t lba, uint32_t cnt)
 {
 	if (!g_open || !buf || !cnt) return -1;
 
@@ -348,4 +355,12 @@ int dvd_vcd_read(void *buf, uint32_t lba, uint32_t cnt)
 	}
 
 	return (int)cnt;
+}
+
+// Main's read hook (integration steps 46/47): a copy out of the read-ahead ring
+// while it runs (step 48 checked the window is there), else the drive, as before.
+int dvd_vcd_read(void *buf, uint32_t lba, uint32_t cnt)
+{
+	if (dvd_ra_active()) return dvd_ra_read(buf, lba, cnt);
+	return vcd_src_read(buf, lba, cnt);
 }

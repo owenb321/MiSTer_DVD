@@ -486,6 +486,65 @@ the layer-0 end or with a VOB boundary. The layer break itself is logged once pe
 READ DVD STRUCTURE format 0: `layers: 2, opposite track path, layer 0 ends at LBA … (layer 1
 from …)`.
 
+## Read-ahead: a RAM ring between the drive and the core (2026-09-24, branch `feature/disc-readahead`)
+
+**Status: host-proven (`main/tests/dvd_readahead_test.cpp`, 7 arms; 6 RED mutations,
+each caught by its own arm). ARM cross-compile is clean. ⏳ HW-confirm pending.**
+
+**Why.** Users report a hitch on physical discs and attribute it to the dual-layer
+change. Whatever the cause, the shape made any source stall reach the core:
+- Main served each 16 KB window synchronously on its only thread.
+- The core's own cushion is short. The 32 KB audio ring backpressures the shared
+  demux, so it caps the audio lead at ~0.58 s at 448 kbps AC-3, ~1.1 s at 192 kbps
+  and ~0.2 s for LPCM. The VBUF holds ~1–1.6 s of video.
+- Audio therefore runs out first. On an underrun `dvd_audio_decode` holds its last
+  sample (a click at the stop and at the resume), and afterwards audio can sit
+  50–300 ms late until the next seek, because catch-up only enters at 300 ms late.
+- The same thread also runs the OSD, input and telemetry, so those froze with it.
+
+**Shape** (`main/support/dvd/dvd_readahead.{h,cpp}`):
+- One worker thread owns the source: libdvdcss or the raw drive fd for DVD-Video,
+  the image for an encrypted `.iso`, the CD-DA or VCD drive fd.
+- It keeps a ring of 16,384 sectors (32 MB, ~25 s at the 10.08 Mbps DVD maximum)
+  filled ahead of the core, in 32-sector bursts.
+- The poll thread only copies out of the ring. A request the ring cannot serve yet
+  is deferred, not waited for: integration step 49 leaves it un-acked, and it is
+  served on a later poll pass.
+- Source I/O is done outside the lock, so the poll thread only ever contends for a
+  memcpy.
+
+**Seeks** (chapter skip, scrub, menu → title, the IFO reads of a PGC jump). A request
+that is not in the ring, and not within 256 sectors ahead of the fill, retargets
+the worker:
+- The ring is emptied at the new LBA and `gen` is bumped.
+- The burst already in flight for the old position has to finish first, since a
+  drive command cannot be cancelled. Its data is then dropped by the `gen` check.
+- The first burst at the new LBA is 8 sectors, the same as stock Main's window, so a
+  seek costs about what it did before. The ring refills behind it.
+- ⚠ If that in-flight burst is stuck on a bad sector, the seek waits for it. The
+  retry loop re-checks `gen` between attempts, so only the one read already in
+  progress is waited out.
+
+**Errors.**
+- A failed burst is retried one sector at a time, because a raw `READ(10)` fails the
+  whole command for one bad sector.
+- A sector that keeps failing becomes a zero-filled hole. Playback continues from the
+  ring meanwhile, so an `sr` retry costs buffer rather than a frozen machine.
+
+**Instruments** (`/tmp/dvdcss.log`):
+- `slow read …`: the source took over 100 ms. This is now measured in the worker, so
+  it marks drive stalls whether or not they reached the core.
+- `readahead: ring ran dry: the core waited N ms at LBA …`: a stall that DID reach
+  the core. No such line during a reported hitch means the hitch is not data
+  delivery.
+
+**Not covered yet.**
+- Decrypted `.iso` files use stock Main's file path, not these hooks (phase 2b).
+- Nothing yet softens an underrun that does reach the core: the de-click and a
+  faster audio re-sync after an underrun (phase 3, RTL).
+- DDR3 contention from a full-speed refill after a seek is unmeasured. Check the
+  `lates`/`drops` telemetry on the rig.
+
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 
 A drive with **no region set** refuses the CSS title-key ioctl, so libdvdcss cracks every

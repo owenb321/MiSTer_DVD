@@ -323,6 +323,34 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **PHYSICAL-DISC PLAYBACK HITCHES: A STALE-SECTOR BUG AT EVERY 1 GB VOB BOUNDARY, AND
+  NO READ-AHEAD (2026-09-24, branch `feature/disc-readahead`); host-proven RED/GREEN
+  (`main/tests/run_tests.sh --red`, 46 mutations), ARM cross-compile clean, ⏳ HW-confirm
+  pending.** Users reported a hitch on physical discs and suspected the layer change.
+  (1) **`dvd_css_read` returned SHORT at every VOB end** (one libdvdcss read must not span
+  two title keys), while Main's readA/readB cache the whole 8-sector window on any
+  positive return. The tail then served the PREVIOUS window's sectors. VOB parts are
+  524,287 sectors, an odd number, so nearly every linear crossing of a `VTS_xx_N.VOB`
+  boundary fed the decoder up to 7 stale sectors, easily mistaken for the layer change.
+  Fixed: the read continues into the next VOB (keyed at its start as before) and
+  zero-fills only what is unreadable.
+  (2) **New `dvd_readahead.cpp`:** a worker thread owns the source and keeps a 32 MB RAM
+  ring (~25 s) ahead of the core. Main's poll thread only copies out of it, and
+  integration step 49 leaves a not-yet-buffered request un-acked for the next poll pass
+  instead of blocking. That thread therefore never waits on the drive, so the OSD,
+  input and telemetry stay live too. A seek retargets the ring and costs about what it
+  did before.
+  (3) Instruments in `/tmp/dvdcss.log`: `slow read`, `readahead: ring ran dry`, and the
+  disc's layer break logged at mount.
+  ⚠ The core's own cushion is short and AUDIO runs out first (the 32 KB ring caps the lead
+  at ~0.58 s at 448 kbps AC-3). An underrun still clicks and can leave audio 50–300 ms
+  late until the next seek; that is phase 3 (RTL), not yet done. Decrypted `.iso` files
+  over a network share are not buffered yet.
+  ⛔ Issue #122 (`CSS ENCRYPTED` after a chapter skip) is NOT this. The suspect there is
+  `dvd_css.cpp` latching `key_ok = 0` for a whole VOB after one failed `SEEK_KEY`.
+  Detail: **`docs/physical_disc.md`** "Every read window comes back full" and "Read-ahead";
+  `main/integration/INTEGRATION.md` "Steps 48-49"; plan and HW gates in the branch's PR.
+
 - 🔧 **SWITCHING AUDIO TRACKS POPPED IN DECODE MODE — two defects, and the one first
   fixed was NOT the one heard (2026-09-22/23, branch `fix/audio-declick-switch`);
   sim-proven over a real disc slice; built `DVD_declick2_20260923_0125.rbf` (SEED 9 first

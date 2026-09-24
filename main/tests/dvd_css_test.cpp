@@ -78,6 +78,7 @@ int dvd_cdda_read(void *, uint32_t, uint32_t) { return -1; }
 void dvd_cdda_close(void) {}
 
 #include "dvd_css.cpp"
+#include "dvd_readahead.cpp"
 
 // --------------------------------------------------------------- fake libdvdcss
 #define MAXCALLS 512
