@@ -1050,6 +1050,27 @@ Two independent decoders share the `ps2_key` scancode space, and keeping them di
 a standing constraint: the **digit** path below (menu button by number, shipped 2026-07-27)
 and the **transport** map in `dvd/kbd_map.sv` (issue #35, 2026-09-03).
 
+### IR remotes and media keyboards — see **`docs/ir_remote.md`**
+
+A third input class arrives through the SAME `ps2_key` path and needs no RTL of its own:
+`main/support/dvd/dvd_ir.cpp` rewrites a remote's media keycodes into the ordinary keys
+`kbd_map.sv` already binds, on the Main side, before Main's own dispatch.
+
+⚠ **It exists because the keys never reach `kbd_map.sv` at all**, for three stacked reasons
+in stock Main — `ev->code >= 256` goes to the joystick handler (`input.cpp:3602`),
+`get_ps2_code()` returns `NONE` above 255 (`input.cpp:1409`), and most media keys are `NONE`
+in `ev2ps2[]` regardless (`input.cpp:367`). Without it a remote gets arrows, Enter and
+volume and nothing else.
+
+★ **`KEY_PAUSE` is the case worth remembering here**, because it is the one a `kbd_map.sv`
+change could never fix: `ev2ps2[119]` is `0xE1`, the multi-byte PS/2 Pause sequence, and
+this module is deliberately free of shift/prefix tracking (see its own header comment about
+`0x55`). The remap turns it into `KEY_SPACE` instead.
+
+⚠ **Anything added to `kbd_map.sv`'s decode table should be checked against
+`ir_tbl[]`'s targets**, since `tools/check_ir_remap.py` asserts every target is decoded
+here — it will go red rather than silently mis-mapping, which is the point.
+
 ### Transport: `dvd/kbd_map.sv` — ✅ HW-CONFIRMED 2026-09-04
 
 Confirmed on the board (build `DVD_kbdmap_20260904_0226.rbf`): the issue #35 case itself

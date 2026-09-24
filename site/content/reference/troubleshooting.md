@@ -461,6 +461,40 @@ not derived from your gamepad mapping. Two things reasonably often explain it:
   mapped it to instead. That is how you rebind, but it can surprise you if you forgot.
 - **The MiSTer OSD is open.** No key reaches the player while it is up.
 
+### My IR remote does nothing at all
+
+First find out whether MiSTer can see the **receiver** — that is almost always where this
+stops. Over SSH:
+
+```
+cat /proc/bus/input/devices
+```
+
+If there is no entry for your receiver, or its entry has no `Handlers=... kbd`, then Linux
+never turned it into a keyboard and nothing the player does can reach it.
+
+The usual reason is that it is a **Media Center (eHome) receiver**. Those need a kernel
+driver MiSTer's Linux does not include, on any current kernel — so the dongle enumerates as
+a USB device and then produces nothing. It is a MiSTer Linux matter rather than a limit of
+this player, and `update_all` does not change it. Your options are to
+[build the driver yourself](../playback/controls.md#using-a-remote) or to use a receiver
+that presents itself as a plain USB keyboard, such as a **Flirc**, which will learn the
+same handset.
+
+If the receiver *does* appear with a `kbd` handler but the buttons do the wrong thing:
+
+- **Check the [media-key table](../playback/controls.md#what-the-media-keys-do).** Not every
+  button on a remote has a matching player function, and a few are deliberately left alone
+  — volume and mute belong to MiSTer, not to the core.
+- **A key you mapped in *Define buttons* wins over the built-in mapping.** That is how you
+  rebind, but it can surprise you if you forgot.
+- **You are on stock Main.** The media keys come from `MiSTer_DVDcss`; without it only the
+  arrows, Enter and volume get through. Check `main=MiSTer_DVDcss` is under your `[DVD]`
+  section in `MiSTer.ini`.
+
+The player also writes what it found to `/tmp/dvd_report.log`, including whether the kernel
+has any IR support at all — that line is worth quoting in a bug report.
+
 ### My TV remote does nothing over HDMI-CEC
 
 CEC has to be switched on (`hdmi_cec=1` under `[MiSTer]` in `MiSTer.ini`), and **it does not
@@ -474,9 +508,10 @@ grep -i cec /tmp/debug.txt
 If that says `CEC: no clock detected` followed by `CEC: init failed.`, your board's CEC
 hardware is not usable and **no `MiSTer.ini` setting will change it** — including
 `hdmi_cec_clock`, which only chooses between clock rates once CEC is already working. Set
-`hdmi_cec=0` and use an infrared receiver that presents itself as a USB keyboard instead
-(a Flirc or a generic MCE dongle); that path does not involve CEC at all and gives you the
-same control.
+`hdmi_cec=0` and use an infrared receiver that presents itself as a USB keyboard instead —
+a **Flirc** is the safe choice. That path does not involve CEC at all and gives you the same
+control. Note that a **Media Center (eHome) USB dongle is not one of these**: see
+[my IR remote does nothing](#my-ir-remote-does-nothing-at-all).
 
 The full table of log lines and what each one means is on the
 [controls page](../playback/controls.md#using-your-tvs-remote-over-hdmi-cec).

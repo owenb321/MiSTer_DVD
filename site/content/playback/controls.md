@@ -54,16 +54,94 @@ itself to MiSTer as a keyboard counts, which is how a **remote** drives the play
 
 ## Using a remote
 
-The reliable way is an **infrared receiver that presents itself as a USB keyboard** — a
-Flirc, a generic MCE-style USB IR dongle, or the receiver built into a console dock. It
-learns whatever remote you already own, emits ordinary keystrokes, and needs no setting up
-on the MiSTer side at all: the keys in the table above simply work.
+A remote's media keys — Play, Stop, Chapter, Subtitle, Audio, the number pad — work on
+this player **without mapping anything**, as long as the *receiver* shows up as a USB
+keyboard. That covers most of what people already own:
 
-That is also what a console dock does. A dock remote usually sends only a handful of keys —
-on a SuperStation One SuperDock, the arrows plus **OK** (++enter++), **Exit** (++esc++),
-**Cancel** (++"X"++) and one function key — which is enough to walk a disc's menus and start
-a title. **Cancel** is mapped to Menu precisely because that remote's own Menu button
-belongs to the MiSTer OSD.
+- a **Flirc USB**, which learns whatever remote you have and is the easiest thing to
+  recommend;
+- a **2.4 GHz RF media remote** (the small "air mouse" style dongles);
+- the receiver built into a **console dock**;
+- any **USB keyboard with media keys**.
+
+Nothing to install, nothing to configure. Plug it in and the keys in the table above work,
+plus the media keys in the table below.
+
+!!! warning "Media Center (eHome) IR receivers are not supported out of the box"
+    A Windows Media Center receiver — the eHome/`mceusb` family, which is most of the
+    dongles sold with an MCE remote — needs a **kernel driver that MiSTer's Linux does not
+    include**. Without it the receiver never appears as an input device at all, so nothing
+    the player does can reach it. This is a MiSTer Linux matter, not a limitation of this
+    core, and no `update_all` changes it today.
+
+    It is not impossible, just not out of the box: the driver source *is* in MiSTer's own
+    kernel tree, and its kernel accepts unsigned modules, so you can build `rc-core`,
+    `ir-rc6-decoder`, `rc-rc6-mce` and `mceusb` against your kernel's commit, `insmod`
+    them, and persist that in `/media/fat/linux/user-startup.sh`. Expect to redo it after
+    a kernel update. If you do, the mappings below work immediately — the two halves fit
+    together.
+
+    If you would rather not, a **Flirc** will learn the same handset and needs none of it.
+
+### What the media keys do
+
+| Remote key | Does |
+|---|---|
+| Play, Pause, Play/Pause | Pause and resume |
+| Stop | Stop (two-stage — see [Stopping a disc](#stopping-a-disc)) |
+| Fast Fwd, Rewind | Seek ±10 s per press |
+| Next, Previous | Chapter forward and back |
+| Channel Up, Channel Down | Chapter forward and back while playing; page up/down in the MiSTer OSD |
+| OK, Select | Select |
+| Exit, Back | Return (up one menu level); cancels in the MiSTer OSD |
+| DVD Menu | Disc menu |
+| Title | Title menu |
+| Guide, Contents | Chapter menu |
+| Info, Display | Toggle the status line |
+| Subtitle | Next subtitle track |
+| Audio, Language | Next audio track |
+| Angle, Live TV | Next camera angle |
+| Zoom, Aspect | Cycle the aspect setting |
+| Repeat, Recorded TV | A-B repeat |
+| Slow, Pictures | Frame step |
+| Eject | Eject |
+| Number keys 0–9 | Pick a numbered disc-menu button |
+| Start, Home, Menu | Opens the **MiSTer OSD** |
+| Volume, Mute | MiSTer's own volume — handled before the core sees it |
+
+Some of those pairings look odd until you notice what a Media Center handset actually has
+on it. There is no "Angle" or "A-B Repeat" button on one, but there *are* Live TV, Recorded
+TV, Guide and Pictures buttons, and none of them mean anything on a DVD player — so they
+carry the four player functions that have no natural remote key of their own. On a handset
+with teletext colour keys, **blue** = Menu, **red** = Title, **green** = Audio,
+**yellow** = Subtitle, matching the CEC convention below.
+
+A console dock's remote usually sends only a handful of keys — on a SuperStation One
+SuperDock, the arrows plus **OK** (++enter++), **Exit** (++esc++), **Cancel** (++"X"++) and
+one function key — which is enough to walk a disc's menus and start a title. **Cancel** is
+mapped to Menu precisely because that remote's own Menu button belongs to the MiSTer OSD.
+
+!!! note "Needs `MiSTer_DVDcss`"
+    The media-key mappings come from the custom Main. On stock Main a remote's media keys
+    mostly do nothing at all: only the arrows, Enter and volume get through.
+
+!!! note "If a key does the wrong thing"
+    Map it yourself in MiSTer's **Define buttons** — anything you bind there wins over the
+    table above. To switch the whole thing off, add this under `[MiSTer]` in
+    `MiSTer.ini`:
+
+    ```ini
+    DVD_IR_REMAP=1
+    ```
+
+    `0` (the default) applies the mappings on this core; `2` applies them on every core.
+    There is no menu option for it, because a setting that changes the core's menu would
+    also change the core's build.
+
+!!! note "Held keys do not repeat"
+    Holding a remote key down does not auto-repeat — each press is one action. That is how
+    MiSTer delivers keys to this class of core, and it is also why Fast Fwd and Rewind add
+    up over taps rather than needing a hold.
 
 ### Using your TV's remote over HDMI-CEC
 
