@@ -316,6 +316,11 @@ and it is already what uninterrupted linear playback here relied on. libdvdread 
 *coarser*: its loop only primes `VTS_NN_0.VOB` and `VTS_NN_1.VOB` before breaking, so it
 uses one key for all five parts of a 4.7 GB VTS where we key each part.
 
+⛔ **CORRECTED 2026-09-24 (issue #122): that "coarser" difference was NOT harmless, and
+"one key per VOB file" is not libdvdread's model.** libdvdread opens `VTS_nn_1..9` as ONE
+file keyed at part 1's start, so its model is one key per title-set *domain*. Keying each
+part at its own start is what put `CSS ENCRYPTED` on physical *Hitch*; see the next section.
+
 **Fix.** `if (vi != cur_vob)` → `SEEK_KEY` at `g_vobs[vi].start`, then a plain `NOFLAGS`
 seek to the target. Any seek anywhere in a VOB is now free.
 
@@ -378,6 +383,141 @@ that is the 23-VOB pre-crack, not the bug.
 ⚠ **Not chapter 1.** Its cell starts at RBN 0, which IS `VTS_01_1.VOB`'s own start LBA
 (614926), so it is primed at mount and even the broken build never cracks there. Chapters
 2 and up are the test.
+
+## A title set has ONE key, taken at part 1, and a bad key shows in the data (issue #122)
+
+**Field report:** on physical *Hitch* and *Kung Fu Panda*, Next/Prev Chapter raised
+`CSS ENCRYPTED` and muted the audio, while playback from the start was fine. It reproduces
+on v0.6.1. Branch `fix/css-titleset-key`. ✅ **Reproduced and fixed on the rig 2026-09-24,
+control arm first, on both discs** (the table is at the end of this section).
+
+**Where it happens.** Only on the **crack path**, i.e. a drive with **no region set** (the
+rig's drive: `drive is RPC-II with NO region set` in `/tmp/dvdcss.log`) or an encrypted
+image. With a region set, the drive hands every key over, and both discs are clean.
+Measured on a region-1 drive: all six Hitch VTS_01 VOBs return the one key
+`c0:75:9c:a2:09`.
+
+### The crack's 2000-block rule (Hitch)
+
+libdvdcss `css.c` `CrackTitleKey()` scans forward from the key block, one sector at a time.
+It stops at the first non-pack sector, at a read error, or **after 2000 blocks with no
+scrambled sector**. In that last case it returns 0 ("no scrambled sectors found") and
+`dvdcss_title()` **caches an all-zero key** as an "unencrypted title". `dvdcss_seek`
+returns success, so `key_ok` reads 1. A zero key makes `dvdcss_read(DECRYPT)` a no-op, so
+the scrambled sectors reach the core with their scrambling bits set.
+
+MEASURED on Hitch (read raw from each VOB start, replaying the crack's exit rules):
+
+| VOB | start | first 2000–2624 sectors | crack result |
+|---|---|---|---|
+| `VTS_01_1` | 239944 | 1010 scrambled, first at +1 | `c0:75:9c:a2:09` |
+| `VTS_01_2` | 764231 | **0 scrambled in 2000** | **zero key** |
+| `VTS_01_3` | 1288518 | **0 in 2000** | **zero key** |
+| `VTS_01_4` | 1812805 | **0 in 2000** | **zero key** |
+| `VTS_01_5` | 2337092 | **0 in 2000** | **zero key** |
+
+Parts 2–5 are scrambled further in (a 32-point raw probe finds scrambled sectors across
+all of them). `DVDCSS_METHOD=title` on the host writes a cache that matches the rig's
+`/media/fat/dvdcss/cache/HITCH-2005042417492100-3c1dd3a3a9/` **byte for byte**. So
+everything past the first ~1 GB of the feature was served scrambled. A chapter skip gets
+there in a few presses; linear playback past ~25 min would too.
+
+**Fix: key parts 2..9 at `VTS_nn_1`'s start.** This is libdvdread's model.
+`initAllCSSKeys()` keys only `VTS_nn_0` and `VTS_nn_1`, and
+`DVDOpenFile(DVD_READ_TITLE_VOBS)` reads parts 1..9 as one file keyed at
+`dvd_file->lb_start`. Every other libdvdnav player has always done this. The pieces:
+- `g_vobs[].key` holds the block a SEEK_KEY is issued at.
+- `resolve_vob_keys()` fills it from the ISO9660 names.
+- `crack_title_keys()` primes each distinct key block once. On Hitch that is 3 blocks
+  instead of 7, which also removes four 2000-sector crack scans from the mount.
+- `css_read_chunk()` re-keys only when the key block changes.
+
+The rig's poisoned entries at the part-2..5 starts are simply never consulted again, so no
+cache clean-up is needed. ⚠ An oddly named part (a name that is not `VTS_nn_k`, or a part
+with no `VTS_nn_1` sibling) keeps its own start as before. It is counted in
+`g_orphan_parts` and logged.
+
+### A VOB too short to crack (Kung Fu Panda)
+
+Panda's feature parts (VTS_10_1..5) all crack to the same correct key, so the Hitch
+mechanism does not apply to it. The one failure is **`VTS_14_1.VOB`**: LBA 3187367, 169
+sectors, 57 of them scrambled. **No crack succeeds from any block in it**. Tried at +0,
++1, +33, +83 and +133: "successful attempts 0/11". The crack returns -1, nothing is cached,
+`key_ok = 0`, and the VOB is read raw. Because `css_detect` is sticky per mount, **one play
+of that 169-sector clip latches `CSS ENCRYPTED` and the mute for the rest of the disc**,
+even though the feature itself decrypts fine. The rig's Panda cache matches a host
+`DVDCSS_METHOD=title` run exactly, and has no entry for 3187367.
+
+Its true key, from a region-set drive, is `d6:eb:3b:13:a8`. That is **`VTS_14_0`'s key**,
+and `VTS_14_0` cracks at once. Every other title set on both discs also has identical
+`_0` / `_1` keys.
+
+### The heal: noticed in the data, and proven before use
+
+★ **A zero or missing key has an exact signature.** libdvdcss clears the scrambling bits
+of every sector it decrypts, so a VOB sector that comes back with
+`(s[0x14] & 0x30)` set was not decrypted. The test is the one `CrackTitleKey()` uses
+itself: a pack start, `s[0x11]` not `BB/BE/BF`. It covers both the DECRYPT path (zero key)
+and the raw fallback (no key). `css_read_chunk()` scans every VOB chunk it returns.
+
+On the first such sector, `heal_key()` runs **once per key domain per session** and tries:
+1. the title set's **other** key block (`VTS_nn_0` ↔ `VTS_nn_1`), which was primed at
+   mount, so the lookup is cached and free;
+2. a **fresh** key at the scrambled sector itself, whose crack starts inside scrambled data.
+
+⛔ **A candidate is never trusted, only proven.** A wrong non-zero key also clears the
+bits, and would turn a muted `CSS ENCRYPTED` into unmuted noise, which is strictly worse.
+The proof is to decrypt a 64-sector window and count MPEG start codes (`00 00 01`) in the
+decrypted part (0x80 onwards) of the sectors that were scrambled. MEASURED on Panda:
+
+| window | scrambled sectors | right key | wrong key |
+|---|---|---|---|
+| `VTS_14_1` (mostly AC-3) | 57 | 18 | **0** |
+| `VTS_10_3` mid-feature | 80 | 120 | **0** |
+| `VTS_02_1` | 47 | 131 | **0** |
+
+Random bytes give ~1e-4 per sector, so `HEAL_MIN_SC = 2` cannot be reached by chance. On
+success, every extent of the domain is repointed at the proven block, so re-entry is a
+cached lookup. On failure, the domain's own verdict is restored, and a key block that gave
+no key is **not** asked again, because each SEEK_KEY there would re-run the failed crack on
+the thread that feeds the core. The outcome is logged either way (`key: VOB @…`).
+
+⚠ **Residual.** Heal state is per session: a poisoned domain is re-healed after each mount.
+A sibling heal is free. A fresh-sector heal costs one crack per mount, on the read-ahead
+worker, and the core rides it out on the ring. Not cured: a VOB that no candidate proves,
+which stays a muted `CSS ENCRYPTED` as before.
+
+**The real cure is a region.** With one set, none of this path runs (`set_dvd_region.sh`,
+below).
+
+**HW round (2026-09-24, rig drive with no region set).** Each disc ran on the installed
+Main first, then on the fixed one:
+
+| disc / arm | installed Main | fixed Main |
+|---|---|---|
+| Hitch: Next Chapter until the reads land at LBA 802723 (`vob@764231`) | `CSS ENCRYPTED`, blocky picture | clean. Parts 3 and 4 also clean; audio −40.9 dBFS RMS |
+| Hitch: linear play from 738005 until the drive read position reached 807557 | — | clean, no key activity |
+| Hitch: part-1 key zeroed in the rig cache | — | `key: … from block 239944 is zero; the title set's other key from block 158392 decrypts it`, clean |
+| Panda: `Title VTS = 14` (the MPAA rating card) | `CSS ENCRYPTED`, `no title key for VOB @3187367` | `key: … missing; the title set's other key from block 3187180 decrypts it`, clean |
+
+The fixed Main primes 61 key blocks for Hitch's 66 VOBs, and 41 for Panda's 45. No new
+cache entries were written on either disc. ⚠ Separately, Hitch has **unreadable sectors
+near LBA 248138** (sense 03/11/00, ~30 s each), which black out the first minute of
+playback from the start. That is a read problem, unrelated to keys.
+
+★ **Instrument:** linear reads are not in the seek log. The Main's read position is the
+drive fd's offset in `/proc/<pid>/fdinfo`, because libdvdcss reads with lseek+read.
+
+**Gates.** `main/tests/dvd_css_test.cpp` [15]–[19] model the measured libdvdcss behaviour:
+the 2000-block zero key, the uncrackable VOB, and noise under a wrong key. They score
+what reaches the core. `run_tests.sh --red` adds 7 mutations, each caught by its own arm:
+- per-part keying;
+- priming every extent;
+- no heal;
+- no sibling candidate;
+- a heal retried on every read;
+- a scan on the DECRYPT path only;
+- a candidate taken unverified.
 
 ## Every VOB must be in the table (issue #112)
 

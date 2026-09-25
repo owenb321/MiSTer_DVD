@@ -181,7 +181,7 @@ if [ "$RED" -eq 1 ]; then
     # no region, which is the reported multi-minute freeze.
     red_case dvd_css.cpp dvd_css_test.cpp \
         "title keys acquired over 17 chapter skips" \
-        "s/^\t\tif (vi != cur_vob)$/\t\tif (vi != cur_vob || (int)lba != css_pos)/; s/(int)g_vobs\[vi\]\.start, DVDCSS_SEEK_KEY/(int)lba, DVDCSS_SEEK_KEY/" \
+        "s/^\t\tif ((int)g_vobs\[vi\]\.key != cur_key)$/\t\tif ((int)g_vobs[vi].key != cur_key || (int)lba != css_pos)/; s/key_ok  = (p_seek(css, (int)g_vobs\[vi\]\.key, DVDCSS_SEEK_KEY)/key_ok  = (p_seek(css, (int)lba, DVDCSS_SEEK_KEY)/" \
         css-rekey-every-seek
 
     # Key at the read position but only on a VOB change. Subtler, and it survives
@@ -189,7 +189,7 @@ if [ "$RED" -eq 1 ]; then
     # the landing block is no more cached than a chapter start was.
     red_case dvd_css.cpp dvd_css_test.cpp \
         "title keys acquired crossing VOBs" \
-        "s/(int)g_vobs\[vi\]\.start, DVDCSS_SEEK_KEY/(int)lba, DVDCSS_SEEK_KEY/" \
+        "s/key_ok  = (p_seek(css, (int)g_vobs\[vi\]\.key, DVDCSS_SEEK_KEY)/key_ok  = (p_seek(css, (int)lba, DVDCSS_SEEK_KEY)/" \
         css-key-at-read-lba
 
     # Stop latching the verdict. The failing read still falls back to a raw read,
@@ -204,7 +204,7 @@ if [ "$RED" -eq 1 ]; then
     # by never asking for a key at all, which silently stops decrypting.
     red_case dvd_css.cpp dvd_css_test.cpp \
         "SEEK_KEY calls over three VOB crossings" \
-        "s/key_ok  = (p_seek(css, (int)g_vobs\[vi\]\.start, DVDCSS_SEEK_KEY) >= 0);/key_ok  = 1;/" \
+        "s/key_ok  = (p_seek(css, (int)g_vobs\[vi\]\.key, DVDCSS_SEEK_KEY) >= 0);/key_ok  = 1;/" \
         css-never-keys
 
     # ---- dvd_css: the VOB table (issue #112) -----------------------------------
@@ -220,9 +220,10 @@ if [ "$RED" -eq 1 ]; then
         css-vob-table-shipped
 
     # Aliases no longer collapsed. OZ still fits a 1024 table, so it plays -- but
-    # every alias is keyed again at mount (91 SEEK_KEYs, not 21).
+    # all 91 entries take table slots. (The mount does not re-key each alias any
+    # more: aliases share a key block, and crack_title_keys primes each block once.)
     red_case dvd_css.cpp dvd_css_test.cpp \
-        "FAIL SEEK_KEY calls priming the disc" \
+        "got 91, want 21" \
         "s/return;   \/\/ alias/;   \/\/ alias/" \
         css-no-alias-collapse
 
@@ -237,6 +238,54 @@ if [ "$RED" -eq 1 ]; then
         "FAIL distinct extents counted as dropped" \
         "s/^\t\tg_vobs_dropped++;$//" \
         css-drop-silent
+
+    # ---- dvd_css: a title set has ONE key; a zero key is seen in the data -------
+    # Issue #122. The shipped behaviour: each VOB part keyed at its OWN start. On
+    # "Hitch" with no drive region the crack there sees 2000 clean sectors and caches
+    # a ZERO key. (The heal would paper over it, so the arm scores the SEEK_KEYs.)
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL \[15\] SEEK_KEY calls at a VTS_01_2..5 start" \
+        "s/g_vobs\[i\]\.key = g_vobs\[p1\]\.start;/g_vobs[i].key = g_vobs[i].start;/" \
+        css-key-per-part
+
+    # Prime every extent rather than every distinct key block: more cracks at mount.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL \[15\] SEEK_KEY calls priming Hitch" \
+        "/if (!first_with_key(i)) continue;/d" \
+        css-prime-every-extent
+
+    # No heal: a zero key cached at part 1 itself plays scrambled for good.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL \[16\] sectors reaching the core scrambled" \
+        "s/if (!g_vobs\[vi\]\.heal_tried \&\& heal_key(/if (0 \&\& heal_key(/" \
+        css-no-heal
+
+    # No sibling candidate: Panda's uncrackable 169-sector VOB stays scrambled.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL \[18\] sectors reaching the core scrambled" \
+        "/if (sib >= 0) cand\[nc++\] = (uint32_t)sib;/d" \
+        css-no-sibling-key
+
+    # The heal is not remembered: a disc no key can decrypt re-cracks on EVERY
+    # read, on the thread that feeds the core.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL \[17\] heal attempts over 20 reads" \
+        "/for (int i = 0; i < g_nvobs; i++) if (g_vobs\[i\].key == old) g_vobs\[i\].heal_tried = 1;/d" \
+        css-heal-every-read
+
+    # Look for still-scrambled sectors only on the DECRYPT path: a failed crack
+    # (key_ok = 0, Panda) reads raw and is never noticed.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL \[18\] sectors reaching the core scrambled" \
+        "s/int j = first_scrambled((const uint8_t \*)buf, n);/int j = decrypt ? first_scrambled((const uint8_t *)buf, n) : -1;/" \
+        css-scan-decrypt-only
+
+    # Take a candidate key on trust: a menu VOB whose key differs decrypts to
+    # noise with the scrambling bits CLEARED -- unmuted garbage.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "FAIL \[18b\] sectors decrypted with a wrong key" \
+        "s/return scr > 0 \&\& sc >= HEAL_MIN_SC;/return 1;/" \
+        css-heal-unverified
 
     # ---- dvd_css: every window comes back full --------------------------------
     # The shipped behaviour: stop at the VOB clamp and return short. Main then caches

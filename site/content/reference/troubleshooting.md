@@ -60,6 +60,14 @@ playing so you can still identify the disc.
 **Fix:** install `MiSTer_DVDcss` and libdvdcss, or use a decrypted rip. See
 [What you need](../getting-started/what-you-need.md).
 
+**On a physical disc with libdvdcss already installed**, it means a title key could not be
+recovered for part of the disc. That can only happen when the drive has **no region set**,
+because the keys then have to be cracked from the disc data. The warning appears as soon as
+playback reaches the affected part, often after a chapter skip. The core already works
+around the cases seen so far. If you still see it, [set the drive
+region](../formats/physical-discs.md#set-the-drive-region): the drive then supplies the keys
+itself. Once the warning appears it stays until the disc is reloaded.
+
 !!! warning "If the picture is perfect and only the sound is gone"
 
     Then the message is wrong. A scrambled disc looks obviously broken — blocky green

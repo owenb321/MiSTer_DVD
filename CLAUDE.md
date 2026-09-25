@@ -355,6 +355,43 @@ worse maintenance burden than targeted in-place edits. So:
   pre-feature files) and `tools/check_field_blend_wiring.py`.
   Detail: **`docs/field_blend.md`**.
 
+- 🔧 **`CSS ENCRYPTED` AFTER A CHAPTER SKIP ON A PHYSICAL DISC: TWO KEY MECHANISMS, BOTH
+  ON THE CRACK PATH (a drive with no region set) — issue #122 (2026-09-24, branch
+  `fix/css-titleset-key`); host-proven RED/GREEN (`main/tests/run_tests.sh --red`,
+  7 new mutations each caught by its own arm), and ✅ REPRODUCED AND FIXED ON THE RIG
+  2026-09-24, control arm first, on both physical discs.**
+  | disc / arm | installed Main (control) | fixed Main |
+  |---|---|---|
+  | Hitch, chapter skip to LBA 802723 (part 2) | **`CSS ENCRYPTED`**, blocky picture | clean; parts 3–4 clean; audio −40.9 dBFS |
+  | Hitch, linear play 738005 → 807557 | — | clean, no key activity |
+  | Hitch, part-1 key zeroed in the cache | — | heal from `VTS_01_0`'s key, clean |
+  | Panda, VTS_14 (the MPAA rating card) | **`CSS ENCRYPTED`**, `no title key for VOB @3187367` | heal from `VTS_14_0`'s key, clean |
+  0 new cache entries on either disc. ⚠ Hitch has UNREADABLE sectors near LBA 248138
+  (sense 03/11/00, ~30 s each), which black out the first minute. That is a read
+  problem, unrelated to this. Both measured
+  from the real discs on the host, not inferred. In both, the rig's
+  `/media/fat/dvdcss/cache` matches a host `DVDCSS_METHOD=title` run **byte for byte**.
+  ★★ **Hitch: a title set has ONE key, taken at part 1.** `dvd_css.cpp` keyed every VOB
+  PART at its own start. libdvdcss `CrackTitleKey()` gives up after **2000 consecutive clean
+  blocks** and **caches an ALL-ZERO key**. `dvdcss_seek` still returns success, and a zero
+  key makes DECRYPT a no-op. The first 2000 sectors of Hitch's `VTS_01_2..5` hold **0**
+  scrambled sectors, so everything past the first 1 GB was served scrambled. Fix: parts
+  2..9 key at `VTS_nn_1`'s start. This is libdvdread's real model; see the ⛔ in the #104
+  bullet below.
+  ★★ **Kung Fu Panda: a VOB too short to crack.** Its feature is fine. `VTS_14_1` is 169
+  sectors and **no crack succeeds from any block in it**, so `key_ok = 0` and it reads raw.
+  `css_detect` is sticky per mount, so one play of that clip latches the warning and the
+  mute for the whole disc. Its true key is `VTS_14_0`'s.
+  ★ **The heal.** A VOB sector handed back with its scrambling bits still set has an exact
+  signature: libdvdcss clears them on everything it decrypts. Once per key domain per
+  session, the core tries the title set's other key block, then a key taken AT the
+  scrambled sector.
+  ⛔ **A candidate is used only when the decrypted payload proves it** (MPEG start codes:
+  right key 18–131, wrong key 0 every time, measured). A wrong non-zero key clears the bits
+  too, and would give unmuted noise instead of a muted warning.
+  ⚠ **Main-only change.** No `.rbf` is needed; build with `USE_DOCKER=1
+  main/build_main.sh`. Detail: **`docs/physical_disc.md`** "A title set has ONE key".
+
 - 🔧 **PHYSICAL-DISC PLAYBACK HITCHES: A STALE-SECTOR BUG AT EVERY 1 GB VOB BOUNDARY, AND
   NO READ-AHEAD (2026-09-24, branch `feature/disc-readahead`); host-proven RED/GREEN
   (`main/tests/run_tests.sh --red`, 49 mutations), and ✅ REPRODUCED AND FIXED ON THE RIG
@@ -396,8 +433,8 @@ worse maintenance burden than targeted in-place edits. So:
   kernel refuses to eject unless one handle is open. `mark_cloexec_to()` after
   `dvdcss_open()` fixes it and heals already-leaked handles at the next core switch. The
   tray opened on the rig. This is probably also `ad257e3`'s "days of uptime" EBUSY.
-  ⛔ Issue #122 (`CSS ENCRYPTED` after a chapter skip) is NOT this. The suspect there is
-  `dvd_css.cpp` latching `key_ok = 0` for a whole VOB after one failed `SEEK_KEY`.
+  ⛔ Issue #122 (`CSS ENCRYPTED` after a chapter skip) is NOT this. It is title-key
+  selection on the crack path, fixed separately (see the #122 bullet above).
   Detail: **`docs/physical_disc.md`** "Every read window comes back full" and "Read-ahead";
   `main/integration/INTEGRATION.md` "Steps 48-49"; plan and HW gates in the branch's PR.
 
@@ -1101,11 +1138,11 @@ worse maintenance burden than targeted in-place edits. So:
   statistical crack, **on the thread that serves the core's SD blocks** — hence the
   MACHINE freezing, not just the picture. ⚠ Linear playback never tripped it
   (`lba == css_pos`), which is why it survived every HW round until a user seeked.
-  ★★ **libdvdread is the oracle and we were the deviation:** `initAllCSSKeys()` primes one
-  key per VOB FILE at its start (identical to ours) and `DVDReadBlocks()` re-keys ONLY on
-  a file change, at `dvd_file->lb_start`, **never at the read offset**. One key per VOB is
-  the whole stack's model, so keying at the start weakens nothing — it is already what
-  linear playback relied on. **Fix = `if (vi != cur_vob)` → SEEK_KEY at
+  ★★ **libdvdread is the oracle and we were the deviation:** `DVDReadBlocks()` re-keys ONLY
+  on a file change, at `dvd_file->lb_start`, **never at the read offset**.
+  ⛔ This bullet used to add "`initAllCSSKeys()` primes one key per VOB FILE (identical to
+  ours)". **That was a misreading, and it is issue #122.** libdvdread keys `VTS_nn_0` and
+  `VTS_nn_1` only, and reads parts 1..9 as ONE file keyed at part 1's start. **Fix = `if (vi != cur_vob)` → SEEK_KEY at
   `g_vobs[vi].start`, then a plain NOFLAGS seek to the target.**
   ⛔ **PRE-CRACKING MORE BLOCKS IS THE WRONG LEVER** (asked directly): the cache is
   exact-block, so it means enumerating every block anyone might seek to — chapter starts
