@@ -1492,10 +1492,12 @@ menus + chapter B2/B3 unaffected. (The two live-still-scan rounds before this fa
 ~~Follow-up (Phase-8b): absolute arbitrary-time scrub-bar via the VTS TMAP time-map table.~~
 ~~**Phase-8b RETIRED (2026-07-10, user decision)**~~ — **REOPENED 2026-09-25 (user decision,
 issue #127) and built** (`docs/dvd_nav.md` §2h): held scrubs and D-pad gestures seek to an
-exact TIME through the disc's time map, so the preview is where they land. 🔧 Sim-proven,
-⏳ HW-confirm pending. **Next:** flash `dev-tmapseek`, D-pad arm on the rig with
-`tools/pause_match.py` against the v0.7.0 control numbers; the held scrub needs a gamepad by
-hand (the harness cannot hold one).
+exact TIME through the disc's time map, so the preview is where they land. 🔧 Sim-proven;
+the **D-pad arm is ✅ HW-measured 2026-09-25** (every landing 0.3–0.7 s after the previewed
+second against the control's −1.7…+1.4 s, `flags.tmap = 1`; §2h has the table).
+**Next:** the held scrub, which needs a gamepad by hand (the harness cannot hold one). An
+optional follow-up is the constant +1 s tick at the preview's end, from the live clock's
+~0.7 s parse-front lead (§2h).
 
 ---
 

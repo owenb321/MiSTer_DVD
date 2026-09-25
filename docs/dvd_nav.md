@@ -2093,7 +2093,7 @@ seek needs the VTS **TMAP** time-map (libdvdnav does time seek via TMAP, not fwd
 decision fit a project that did not yet need it; what changed is a polish problem: the seek
 preview and the landing disagreed by seconds, and only a time→sector map can make them agree.
 
-### 2h. Time map seek — Phase 8b, reopened (2026-09-25, issue #127) — 🔧 sim-proven, ⏳ HW
+### 2h. Time map seek — Phase 8b, reopened (2026-09-25, issue #127) — 🔧 sim-proven; D-pad ✅ HW-measured, held scrub ⏳ HW
 
 **Why.** Field report (v0.7.0): the seeks land, but the readout does not follow them. A held
 FF starts ~5 s off the clock and jumps ~5 s when it ends; a D-pad Left reads `30 → 29 → 34`.
@@ -2155,6 +2155,41 @@ estimate). The interpolated sector is VOBU-snapped FORWARD, so a landing can be 
 delivered landing sector; 8 reader mutations), `scrub_ctrl_tb` T21–T27 (5 mutations),
 `tools/check_tmap_seek_wiring.py` (the emu seam; 9 REDs incl. `main`'s file). HIL instrument:
 `tools/pause_match.py` (the preview vs the landed picture).
+
+**HW round 1 (2026-09-25, D-pad arm, build `DVD_tmapseek_20260925_1358.rbf`, clk_dec
+87.92/89.9, 98 % ALM).** The same `pause_match` script as the v0.7.0 control, on Big Buck
+Bunny's film (VTS 02) and Men in Black title 1. Each gesture was paused 1.0 s after the press,
+with the preview still up (shot 0), and read again after the preview ended (shot 1), both on
+the same frozen picture. `err` = the HUD reading (whole seconds, floor) − the picture's true
+time, from ffmpeg's own decode.
+
+| disc / gesture | v0.7.0 preview err | v0.7.0 clock step at preview end | fixed preview err | fixed step |
+|---|---|---|---|---|
+| MiB Right | −1.67 | 2:47 → 2:49 (**+2**) | −0.60 | +1 |
+| MiB Left | −0.19 | 0 | −0.52 | +1 |
+| MiB Right | **+1.35** (landed *before* the preview) | 3:42 → 3:41 (**−1**) | −0.58 | +1 |
+| MiB Left | −1.74 | 3:54 → 3:56 (**+2**) | −0.70 | +1 |
+| BBB Right | — | — | −0.37 | +1 |
+| BBB Left | +0.08 | 0 | −0.31 | +1 |
+| BBB Right | −0.35 | +1 | −0.48 | +1 |
+
+- **The preview is now where the seek lands.** Every landing is 0.3–0.7 s after the previewed
+  second, always in that direction: the VOBU snap forward from the interpolated sector. The
+  control's spread was −1.74…+1.35 s, in both directions.
+- **The jump is the requested 10 s.** Measured against wall-clock stamps (the paused time
+  subtracted), both checked gestures moved the content by the request to within 0.3 s.
+- **`flags.tmap = 1`, `flags.tmap_fb = 0`** on both discs, so the map was used and trusted.
+- **The residual is a constant +1 s tick when the preview ends, and it is not the seek.** The
+  live clock leads the picture by ~0.7 s (the steady-state shots read err +0.0…+0.8, the
+  parse-front `c_eltm` readout). A landing 0.5 s after the target plus a 0.7 s lead crosses
+  the next whole second every time. The reporter's `30 → 29 → 34` becomes `30 → 31`.
+  Removing it means either targeting the map ~0.5 s early, to cancel the snap, or showing the
+  picture's time rather than the parse front's; neither was done.
+- One BBB Left capture came back empty (the screenshot was not written); read it as missing,
+  not clean.
+
+**Still open:** the held scrub. The harness cannot hold a gamepad (`kbd_map` routes keyboard
+FF/REW to the D-pad path), so that arm needs the maintainer.
 
 ### 2a. Hold-to-seek — SEEK-ON-RELEASE with acceleration (`dvd/scrub_ctrl.sv`)
 

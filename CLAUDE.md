@@ -325,7 +325,13 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **TIME-MAP SEEK — Phase 8b REOPENED: the seek preview and the landing now agree
   (2026-09-25, issue #127, branch `fix/tmap-seek`); sim-proven, 13 mutations + 9 wiring
-  re-regressions each caught by its own check, ⏳ HW-confirm pending.** Report (v0.7.0): seeks
+  re-regressions each caught by its own check; the D-PAD arm is ✅ HW-MEASURED 2026-09-25
+  against the v0.7.0 control (build `DVD_tmapseek_20260925_1358.rbf`, clk_dec 87.92/89.9,
+  98 % ALM), and the held scrub is ⏳ pending (it needs a gamepad).** On BBB and MiB, every D-pad
+  landing was 0.3–0.7 s after the previewed second, against the control's −1.7…+1.4 s in
+  both directions, with `flags.tmap = 1`. The residual is a constant +1 s tick when the
+  preview ends: the live clock's ~0.7 s parse-front lead plus the forward VOBU snap
+  (`30 → 31` where the report read `30 → 29 → 34`). Report (v0.7.0): seeks
   land, but a held FF starts ~5 s off the clock and jumps ~5 s on release; a D-pad Left reads
   `30 → 29 → 34`. The held scrub accumulated SECTORS (title-average bitrate) and the preview
   interpolated them back into a time: two guesses, both seconds wrong in a VBR cell.
