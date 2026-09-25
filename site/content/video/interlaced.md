@@ -25,6 +25,7 @@ An explicit choice always overrides `MiSTer.ini` and persists across reloads.
 | A 15 kHz RGBHV rig the ini bits cannot identify | **Interlaced**, explicitly |
 | A display that wants 480p/576p on the analog pins | **Progressive**, explicitly |
 | HDMI, but a disc of true-interlaced video (TV, concerts) and you want native fields | **Interlaced**, explicitly |
+| HDMI, a true-interlaced disc, and you'd rather see a soft picture than combing | **Progressive** with [`Progressive Deint`](#progressive-deint-blending-away-the-comb) = Blend |
 
 For a CRT there is nothing to set in the OSD — it engages from `MiSTer.ini` exactly like
 any other core:
@@ -90,6 +91,26 @@ with either `480i Deint` setting, at the cost of half the vertical detail while 
 
 Film and progressive pictures are unaffected: their two fields are the same moment, so the
 pause keeps the full-resolution frame. It works the same with every `Analog Aspect` setting.
+
+## Progressive Deint: blending away the comb
+
+In **Progressive** mode, a picture from a video-sourced disc (television, concerts,
+laserdisc-style FMV) shows both of its fields at once. They are two different moments, so
+anything that moves shows **combing**: fine horizontal teeth along moving edges.
+
+`Progressive Deint = Blend` mixes every line of such a picture with the lines above and
+below it. The comb becomes a soft ghost of the two moments. There is no detector and
+nothing that changes from one refresh to the next, so edges and text stay perfectly steady.
+
+The trade is **sharpness**. Those pictures lose some vertical detail everywhere, including
+parts of the picture that were not moving. Many discs marked as interlaced never actually
+comb, and on those Blend only softens, which is why it is **Off by default**. Turn it on for
+a disc whose combing bothers you, and off again for the next one.
+
+Film and progressive content are never touched: the player only blends pictures the disc
+marks as interlaced. It has no effect in **Interlaced** mode, where the fields are shown as
+fields and `480i Deint` applies instead. Subtitles, menu highlights and the HUD are drawn
+after the blend, so they stay sharp.
 
 ## Field alignment
 

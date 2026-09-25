@@ -28,7 +28,7 @@
 //     word 5  aud_disc       -- {skip[7:0], catch-up[3:0], re-arms[3:0]} (was vid_err,
 //                               retired by PR #63; the port keeps its name)
 //     word 6  {debt, drop_costs}
-//     word 7  {vbuf_fill, flags}
+//     word 7  {vbuf_fill, flags}   -- flags[5] = the field blend is on the scan under way
 //     word 8  aud_frames     -- audio frames queued
 //     word 9  aud_play       -- audio play ticks / 16 (what reaches the DAC)
 //     word 10 aud_gate       -- drain-gate closures

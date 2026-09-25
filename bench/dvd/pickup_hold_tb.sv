@@ -73,7 +73,7 @@ module pickup_hold_tb;
     .resample_wr_dta(resample_wr_dta), .resample_wr_en(resample_wr_en),
     .disp_wr_addr_almost_full(disp_wr_addr_almost_full), .resample_wr_almost_full(resample_wr_almost_full),
     .busy(busy), .frame_late(frame_late),
-    .video_live(video_live), .pickup_hold(pickup_hold), .pause(pause_tb), .step_req(step_tb), .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .still_en(1'b0), .sched_due(sched_due_tb), .sched_next_due(1'b1));
+    .video_live(video_live), .pickup_hold(pickup_hold), .pause(pause_tb), .step_req(step_tb), .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0), .still_en(1'b0), .blend_en(1'b0), .sched_due(sched_due_tb), .sched_next_due(1'b1));
 
   always #5 clk = ~clk;
 

@@ -101,8 +101,10 @@ static void telem_read()
 		// playback position vs its anchor; av_drift = dispatched audio PTS - STC.
 		"\"disp_lag_ms\":%.2f,\"play_err_ms\":%.2f,\"av_drift_ms\":%.2f,"
 		"\"sched_frc\":%u,\"sched_ps\":%u,\"sched_pf\":%u,\"sched_tff\":%u,\"sched_rff\":%u,\"reanchors\":%u,\"anch_fwd\":%u,\"anch_bwd\":%u,\"first_tagged\":%u,\"first_seen\":%u,\"prov_seen\":%u,"
+		// flags.blend (docs/field_blend.md) = the display scan under way is being
+		// field-blended (word 7 flags[5]; 0 on a core without the feature).
 		"\"flags\":{\"media\":%u,\"pause\":%u,\"video_live\":%u,"
-		"\"still\":%u,\"menu\":%u}}\n",
+		"\"still\":%u,\"menu\":%u,\"blend\":%u}}\n",
 		t, w[1], w[2], w[3], w[4],
 		(int)(int16_t)w[5],                       // vid_err is SIGNED
 		(int)((w[6] >> 11) & 0x1F) - (((w[6] >> 15) & 1) ? 32 : 0),
@@ -117,7 +119,7 @@ static void telem_read()
 		(unsigned)((w[15] >> 3) & 1), (unsigned)((w[15] >> 2) & 1), (unsigned)((w[15] >> 1) & 1),
 		(unsigned)(w[7] & 1), (unsigned)((w[7] >> 1) & 1),
 		(unsigned)((w[7] >> 2) & 1), (unsigned)((w[7] >> 3) & 1),
-		(unsigned)((w[7] >> 4) & 1));
+		(unsigned)((w[7] >> 4) & 1), (unsigned)((w[7] >> 5) & 1));
 	fclose(f);
 	rename(tmp, DVD_TELEM_FILE);
 }
