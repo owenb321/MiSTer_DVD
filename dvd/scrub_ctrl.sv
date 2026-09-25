@@ -139,6 +139,13 @@ module scrub_ctrl #(
     // (4096..8191 s = 68..136 min) takes SHn unbiased.
     parameter SECS_REF = 5'd12,
     parameter TICK   = 1_620_000,    // ~0.06 s accumulate tick
+    // ★ TIME per tick, in 1/16 s, per tier (issue #127): the scrub accumulates
+    // SECONDS alongside its sector offset. 14/58/230/922 sixteenths per 0.06 s tick
+    // = ~14.6 / 60.4 / 240 / 960 content-seconds per second, the ladder the sector
+    // step only approximates. The time is what the HUD previews and what a DVD
+    // title seeks to (through the disc's time map, dvd_iso_reader S_TMAP); the
+    // sector offset stays for the bar's cursor and as the fallback.
+    parameter [11:0] TR0 = 12'd14, TR1 = 12'd58, TR2 = 12'd230, TR3 = 12'd922,
     parameter LINGER = 40_000_000    // ~1.5 s show the bar after release
 ) (
     input  wire        clk,             // clk_sys (27 MHz)
@@ -149,6 +156,10 @@ module scrub_ctrl #(
     input  wire        in_title,        // cell_ready && !menu_active
 
     input  wire [31:0] cur_rbn,         // live playhead RBN (nav_dsi.dsi_nv_pck_lbn)
+    // ---- TIME (issue #127) --------------------------------------------------
+    input  wire [16:0] live_secs,       // the clock on screen, seconds
+    input  wire        live_ok,
+    input  wire        tm_title,        // a DVD title: release seeks by TIME
     // ★ FOUR numbers from the reader, not two. first/last are the physical
     // ENVELOPE (min first_sector .. max last_sector) -- the only range a target
     // can legally sit in, and what `span` measures. start/end are the FIRST
@@ -188,6 +199,12 @@ module scrub_ctrl #(
     // ONE raw-RBN seek, issued on release.
     output reg         seek_rbn_pulse,
     output reg  [31:0] seek_rbn,
+    // ...qualified as a TIME seek to tgt_secs (with seek_rbn as its fallback)
+    // when a held scrub is released in a DVD title. A pulse, with seek_rbn_pulse.
+    output reg         seek_tm_req,
+    // The held scrub's time target (the preview), valid through the linger.
+    output wire [16:0] tgt_secs,
+    output wire        tgt_secs_ok,
 
     // Freeze the video (plain pause) while a direction is held.
     output wire        hold_freeze,
@@ -290,6 +307,22 @@ module scrub_ctrl #(
     wire [31:0] target  = (tgt_raw > title_last_rbn)  ? title_last_rbn  :
                           (tgt_raw < title_first_rbn) ? title_first_rbn : tgt_raw;
 
+    // ---- TIME accumulation (issue #127) ------------------------------------
+    reg  [16:0] base_t;                         // the clock when the hold began
+    reg  [21:0] pend_t;                         // accumulated time, 1/16 s
+    reg         t_ok;                           // a time target exists (held scrub)
+    reg  [16:0] released_t;                     // latched at release (for the linger)
+    wire [11:0] trate = (tier == 2'd3) ? TR3 : (tier == 2'd2) ? TR2 :
+                        (tier == 2'd1) ? TR1 : TR0;
+    wire [17:0] pend_s  = {1'b0, pend_t[21:4]};             // whole seconds
+    wire [17:0] t_fwd   = {1'b0, base_t} + pend_s;
+    wire [17:0] t_cap   = (title_secs == 16'd0) ? 18'h1FFFF : {2'd0, title_secs};
+    wire [16:0] t_tgt   = pending_dir
+                        ? ((t_fwd > t_cap) ? t_cap[16:0] : t_fwd[16:0])
+                        : (({1'b0, base_t} > pend_s) ? (base_t - pend_s[16:0]) : 17'd0);
+    assign tgt_secs    = want ? t_tgt : released_t;
+    assign tgt_secs_ok = t_ok && bar_active;
+
     reg  [31:0] released_tgt;                   // latched at release (for the linger)
     reg  [25:0] linger_cnt;
     reg         jump_go;                        // 1-cyc staging (see below)
@@ -303,10 +336,13 @@ module scrub_ctrl #(
             tick_cnt <= 21'd0; bar_base_rbn <= 32'd0; released_tgt <= 32'd0;
             linger_cnt <= 26'd0; seek_rbn_pulse <= 1'b0; seek_rbn <= 32'd0;
             hud_tier <= 2'd0; jump_go <= 1'b0;
+            seek_tm_req <= 1'b0; base_t <= 17'd0; pend_t <= 22'd0; t_ok <= 1'b0;
+            released_t <= 17'd0;
         end else begin
             want_q <= want;
             hud_tier <= tier;
             seek_rbn_pulse <= 1'b0;             // default: one-cycle pulse
+            seek_tm_req    <= 1'b0;
             if (linger_cnt != 26'd0) linger_cnt <= linger_cnt - 26'd1;
 
             if (!want) hold_cnt <= 28'd0;
@@ -319,14 +355,21 @@ module scrub_ctrl #(
                 pending_dir  <= want_dir;
                 tick_cnt     <= TICK[20:0];
                 linger_cnt   <= 26'd0;
+                base_t       <= live_secs;       // the preview opens ON the clock
+                pend_t       <= 22'd0;
+                t_ok         <= live_ok;
             end else if (want) begin
                 if (want_dir != pending_dir) begin
                     // direction flip -> restart the accumulation the other way.
                     pending_dir <= want_dir; pending_off <= 32'd0; tick_cnt <= TICK[20:0];
+                    pend_t <= 22'd0;
                 end else if (tick_cnt == 21'd0) begin
                     tick_cnt <= TICK[20:0];
                     if (pending_off + step >= span) pending_off <= span;   // cap at span
                     else                            pending_off <= pending_off + step;
+                    // time: capped well past any title; t_tgt clamps to its end
+                    if (pend_t[21:20] == 2'b11) pend_t <= pend_t;
+                    else                        pend_t <= pend_t + {10'd0, trate};
                 end else begin
                     tick_cnt <= tick_cnt - 21'd1;
                 end
@@ -334,9 +377,11 @@ module scrub_ctrl #(
 
             if (want_fall) begin
                 released_tgt <= target;
+                released_t   <= t_tgt;
                 linger_cnt   <= LINGER[25:0];
                 if (pending_off != 32'd0) begin
                     seek_rbn <= target; seek_rbn_pulse <= 1'b1;   // ONE seek on release
+                    seek_tm_req <= tm_title && t_ok;              // ...by TIME in a DVD title
                 end
                 pending_off <= 32'd0;
             end
@@ -348,6 +393,7 @@ module scrub_ctrl #(
             // combinational off the pending_off/pending_dir/bar_base_rbn
             // REGISTERS, so it cannot be consumed in the cycle that writes them.
             if (jump_fire && in_title && !want && !want_q) begin
+                t_ok         <= 1'b0;            // a jump carries its own time (emu)
                 bar_base_rbn <= jump_base;
                 pending_dir  <= jump_dir;
                 pending_off  <= jump_off;

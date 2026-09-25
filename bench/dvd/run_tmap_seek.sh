@@ -38,6 +38,13 @@ echo "-- the reader seek benches it must not disturb"
 run_tb iso_reader_scrub_tb "ALL TESTS PASSED"
 run_tb iso_reader_seek_tb  "ALL TESTS PASSED"
 run_tb iso_reader_chapter_tb "PASS"
+echo "-- scrub_ctrl: the held scrub counts seconds (T21-T27)"
+if $IV -o "$SCR/sc" dvd/scrub_ctrl.sv bench/dvd/scrub_ctrl_tb.sv > /dev/null 2>&1 \
+   && vvp "$SCR/sc" > "$SCR/sc.log" 2>&1 && grep -q "ALL TESTS PASSED" "$SCR/sc.log"; then
+  echo "  ok   scrub_ctrl_tb"
+else
+  echo "  FAIL scrub_ctrl_tb"; grep FAIL "$SCR/sc.log" | head -5; rc=1
+fi
 
 # emu.sv has no bench: the seam that hands the reader its time is read out of the file.
 echo "-- emu wiring"
@@ -75,5 +82,26 @@ mutant "M5 the cache survives a remount"    '/tm_v +<= 1.b0; +\/\/ a (new disc|n
 mutant "M6 no interpolation"                's/tm_q   <= \{tm_q\[30:0\], tm_qd_ge\};/tm_q   <= 32'"'"'d0;/' "B1"
 mutant "M7 the time request is ignored"     's/seek_tm      <= seek_tm_req;/seek_tm      <= 1'"'"'b0;/' "A1"
 mutant "M8 t=0 lands on entry 0"            's/\(tm_k == 16.d0\) \? title_start_rbn :/(1'"'"'b0) ? title_start_rbn :/' "A2"
+
+echo "### RED: scrub_ctrl's time accumulator (each must fail its own arm)"
+smutant() {  # label, sed expression, grep for the arm that must fail
+  local label=$1 sedx=$2 want=$3
+  local mut="$SCR/scrub_ctrl.sv"
+  sed -E "$sedx" dvd/scrub_ctrl.sv > "$mut"
+  if cmp -s "$mut" dvd/scrub_ctrl.sv; then echo "  BROKEN $label: the sed matched nothing"; rc=1; return; fi
+  if ! $IV -o "$SCR/sm" "$mut" bench/dvd/scrub_ctrl_tb.sv > "$SCR/smb.log" 2>&1; then
+    echo "  BROKEN $label: mutant does not compile"; rc=1; return; fi
+  vvp "$SCR/sm" > "$SCR/sm.log" 2>&1
+  if grep -q "FAIL: $want" "$SCR/sm.log"; then
+    echo "  ok     $label -> $(grep "FAIL: $want" "$SCR/sm.log" | head -1 | sed 's/^ *//')"
+  else
+    echo "  MISSED $label: no 'FAIL: $want'"; grep FAIL "$SCR/sm.log" | head -3; rc=1
+  fi
+}
+smutant "S1 the tier-0 time rate is wrong"   "s/TR0 = 12'd14/TR0 = 12'd16/" "T21"
+smutant "S2 time seek without a live clock"  's/seek_tm_req <= tm_title \&\& t_ok;/seek_tm_req <= tm_title;/' "T27"
+smutant "S3 no clamp at the title's end"     's/\(t_fwd > t_cap\) \? t_cap\[16:0\] :/1'"'"'b0 ? t_cap[16:0] :/' "T24"
+smutant "S4 a flip keeps the old time"       '/^                    pend_t <= 22.d0;$/d' "T26"
+smutant "S5 a jump inherits the scrub time"  '/t_ok         <= 1.b0;            \/\/ a jump/d' "T25"
 
 exit $rc

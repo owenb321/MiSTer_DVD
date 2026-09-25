@@ -47,6 +47,11 @@ module scrub_ctrl_tb;
     logic [15:0] tsecs    = 16'd7200;
     logic [23:0] lblk10   = 24'd0;
     logic        lrate_ok = 1'b0;
+    // TIME (issue #127): the clock on screen and whether a release seeks by time
+    logic [16:0] live_secs = 17'd1000;
+    logic        live_ok = 1'b1, tm_title = 1'b1;
+    logic        seek_tm_req, tgt_secs_ok;
+    logic [16:0] tgt_secs;
 
     always #5 clk = ~clk;
 
@@ -57,6 +62,8 @@ module scrub_ctrl_tb;
         .title_start_rbn(title_start), .title_end_rbn(title_end),
         .title_secs(tsecs), .lin_blk10(lblk10), .lin_rate_ok(lrate_ok),
         .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn),
+        .live_secs(live_secs), .live_ok(live_ok), .tm_title(tm_title),
+        .seek_tm_req(seek_tm_req), .tgt_secs(tgt_secs), .tgt_secs_ok(tgt_secs_ok),
         .hold_freeze(hold_freeze),
         .bar_active(bar_active), .bar_base_rbn(bar_base_rbn), .bar_tgt_rbn(bar_tgt_rbn),
         .jump_fire(jump_fire), .jump_dir(jump_dir),
@@ -72,6 +79,8 @@ module scrub_ctrl_tb;
         .title_start_rbn(32'd0), .title_end_rbn(32'd0),
         .title_secs(16'd0), .lin_blk10(24'd0), .lin_rate_ok(1'b0),
         .seek_rbn_pulse(), .seek_rbn(),
+        .live_secs(17'd0), .live_ok(1'b0), .tm_title(1'b0),
+        .seek_tm_req(), .tgt_secs(), .tgt_secs_ok(),
         .hold_freeze(),
         .bar_active(), .bar_base_rbn(), .bar_tgt_rbn(),
         .jump_fire(1'b0), .jump_dir(1'b0),
@@ -105,6 +114,26 @@ module scrub_ctrl_tb;
     // capture the release seek
     logic        got; logic [31:0] cap_rbn;
     always @(posedge clk) if (seek_rbn_pulse) begin got <= 1'b1; cap_rbn <= seek_rbn; end
+    // TIME (issue #127): the qualifier as sampled WITH the seek pulse, a stray
+    // qualifier WITHOUT one, and the time target at the moment of release.
+    logic        cap_tm, stray_tm;
+    logic [16:0] cap_t;
+    integer      steps;                  // sector-offset steps during the hold
+    always @(posedge clk) begin
+        if (seek_rbn_pulse) begin cap_tm <= seek_tm_req; cap_t <= tgt_secs; end
+        if (seek_tm_req && !seek_rbn_pulse) stray_tm <= 1'b1;
+        // the ACCUMULATE event itself (scrub_ctrl: want, no flip, tick_cnt == 0).
+        // ⚠ Not "bar_tgt_rbn changed": the base re-latches at the hold start, which
+        // reads as one extra step (it did, and failed T21/T26 against a correct DUT).
+        if (dut.want && !dut.want_rise && (dut.want_dir == dut.pending_dir)
+            && dut.tick_cnt == 21'd0) steps = steps + 1;
+    end
+    task automatic tgesture(input dir, input integer cyc);
+        begin
+            steps = 0; cap_tm = 1'b0; cap_t = 17'd0;
+            gesture(dir, cyc);
+        end
+    endtask
 
     task automatic tick(input integer n);
         integer k; begin for (k = 0; k < n; k = k + 1) @(posedge clk); end
@@ -479,6 +508,65 @@ module scrub_ctrl_tb;
         gesture(1'b0, 60);
         chk(got && cap_rbn == 32'd3, "degenerate span: a BACKWARD gesture pins there too");
         title_first = 32'd0; title_last = 32'd1000000; tsecs = 16'd7200;
+
+        // ---------- TESTS 21-27: the scrub counts SECONDS (issue #127) -------
+        // The time target is scored against the number of sector steps counted
+        // during the hold -- both advance on the SAME tick, and every hold here
+        // stays inside tier 0 (T1_C), so each step is exactly TR0 = 14/16 s.
+        $display("TEST 21: a held scrub previews base + steps * 14/16 s, and seeks by time");
+        stray_tm = 1'b0;
+        lrate_ok = 1'b0; tsecs = 16'd7200; live_secs = 17'd1000; tm_title = 1'b1; live_ok = 1'b1;
+        cur_rbn = 32'd100000; tick(4);
+        tgesture(1'b1, 80);
+        chk(steps >= 5, "T21 the hold accumulated (>= 5 ticks)");
+        chk(got && cap_tm, "T21 the release seek is qualified as a TIME seek");
+        chk(cap_t == 17'd1000 + (steps * 14) / 16, "T21 time target == base + steps*14/16 s");
+        chk(tgt_secs_ok && tgt_secs == cap_t, "T21 the target is held through the linger");
+        tick(LING_C + 4);
+        chk(!tgt_secs_ok, "T21 ...and released after it");
+
+        $display("TEST 22: a linear file previews the time but seeks by sector");
+        tm_title = 1'b0; tick(4);
+        tgesture(1'b1, 80);
+        chk(got && !cap_tm, "T22 no time qualifier outside a DVD title");
+        chk(tgt_secs_ok && cap_t == 17'd1000 + (steps * 14) / 16, "T22 the time preview still counts");
+        tick(LING_C + 4); tm_title = 1'b1;
+
+        $display("TEST 23: backward clamps at 0");
+        live_secs = 17'd2; tick(4);
+        tgesture(1'b0, 80);
+        chk(got && cap_t == 17'd0, "T23 backward past the start previews 0:00:00");
+        tick(LING_C + 4);
+
+        $display("TEST 24: forward clamps at the title's end");
+        live_secs = 17'd7198; tick(4);
+        tgesture(1'b1, 80);
+        chk(got && cap_t == 17'd7200, "T24 forward past the end previews the title total");
+        tick(LING_C + 4);
+
+        $display("TEST 25: a D-pad jump carries no scrub time");
+        live_secs = 17'd1000; tick(4);
+        cap_tm = 1'b0;
+        jump(1'b1, 32'd100000, 32'd5000);
+        chk(got && !cap_tm, "T25 the jump's seek is not a scrub time seek");
+        chk(!tgt_secs_ok, "T25 no scrub time target during a jump's linger");
+        tick(LING_C + 4);
+
+        $display("TEST 26: a direction flip restarts the time from the base");
+        live_secs = 17'd1000; steps = 0; tick(4);
+        held_right = 1'b1; tick(60);
+        held_right = 1'b0; held_left = 1'b1;       // flip without releasing
+        steps = 0; tick(40);
+        held_left = 1'b0; tick(6);
+        chk(got && cap_t == 17'd1000 - (steps * 14) / 16, "T26 after the flip: base - backward steps only");
+        tick(LING_C + 4);
+
+        $display("TEST 27: no clock, no time seek");
+        live_ok = 1'b0; tick(4);
+        tgesture(1'b1, 80);
+        chk(got && !cap_tm, "T27 without a live clock the release stays a sector seek");
+        live_ok = 1'b1; tick(LING_C + 4);
+        chk(!stray_tm, "T21-27 the time qualifier never pulses without a seek");
 
         if (errors == 0) $display("\nscrub_ctrl_tb: ALL TESTS PASSED");
         else begin

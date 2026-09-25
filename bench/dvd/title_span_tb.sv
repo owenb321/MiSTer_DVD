@@ -157,6 +157,8 @@ module title_span_tb;
         .title_start_rbn(title_start_rbn), .title_end_rbn(title_end_rbn),
         .title_secs(16'd0), .lin_blk10(24'd0), .lin_rate_ok(1'b0),
         .jump_fire(1'b0), .jump_dir(1'b0), .jump_base(32'd0), .jump_off(32'd0),
+        .live_secs(17'd0), .live_ok(1'b0), .tm_title(1'b0),   // sector seeks only here
+        .seek_tm_req(), .tgt_secs(), .tgt_secs_ok(),
         .seek_rbn_pulse(sk_pulse), .seek_rbn(sk_rbn),
         .hold_freeze(), .bar_active(), .bar_base_rbn(), .bar_tgt_rbn(),
         .hud_tier(), .hud_dir()
