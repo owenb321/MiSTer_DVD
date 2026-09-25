@@ -1,9 +1,9 @@
 # Field blend: a non-adaptive deinterlacer for the Progressive output
 
-**Status:** 🔧 branch `feature/field-blend` (2026-09-24). Sim-proven, mutation-checked,
+**Status:** ✅ HW-CONFIRMED 2026-09-24, branch `feature/field-blend`. Sim-proven, mutation-checked,
 and built: `DVD_fieldblend_20260924_1713.rbf`, SEED 9 first roll, clk_dec 91.64 / 89.16
 MHz against the 86.0 gate, `field_blend` = 254 ALM, 6 M10K, 0 DSP. ✅ HW-measured on the
-rig 2026-09-24 (§5); ⏳ maintainer's eye pending.
+rig 2026-09-24 (§5) and ✅ confirmed by the maintainer's eye the same day.
 **Option:** `O[49] Progressive Deint = Off / Blend`, **default Off**.
 **Files:** `dvd/field_blend.sv`, `dvd/resample_addrgen.v` (sideband and H+1 walk),
 `rtl/mpeg2/resample.v` and `rtl/mpeg2/mpeg2video.v` (threading and instance), `dvd/emu.sv`
@@ -220,7 +220,7 @@ It is RED on the real pre-feature files out of git (W0) and on 5 single-seam reg
 `run_field_phase`, plus `tools/lint_undriven.sh` and `tools/docs_check.py`. Eight benches
 that instantiate the addrgen or `resample` gained a `.blend_en(1'b0)` tie-off.
 
-## 5. Open, and the next step
+## 5. Status and verification record
 
 - ✅ **Build (2026-09-24):** `releases/DVD_fieldblend_20260924_1713.rbf`, SEED 9 first
   roll, clk_dec 91.64 @100C / 89.16 @−40C, non-marginal. `field_blend` = 254 ALM,
@@ -246,8 +246,11 @@ that instantiate the addrgen or `resample` gained a `.blend_en(1'b0)` tie-off.
   ⚠ Not exercised: 240p (only MPEG-1 SIF uses it, and MPEG-1 is `progressive_sequence`,
   so `cur_ilace` is 0 there anyway; the gate is pinned by the wiring checker), and a
   film↔video transition inside one title (bench C6 covers the ordering).
-- ⏳ **The maintainer's eye** on static text and on the motion ghost, which no metric here
-  scores (the comb ratio is blind to the ghost, §0 of the model's header).
+- ✅ **The maintainer's eye (2026-09-24):** Thayer's Quest looks good with Blend, and a
+  title that changes from film to video mid-stream switches the blend correctly — the
+  in-title film↔video case the harness round did not reach (bench C6 covered the ordering).
+  That closes the one judgement no metric here can make (the comb ratio is blind to the
+  ghost).
 - **Known limits:**
   - hard-telecine film (`pf=0`) is blended, which the census could not size;
   - a menu still flagged interlaced is softened;

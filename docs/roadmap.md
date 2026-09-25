@@ -927,7 +927,7 @@ aspect via `VIDEO_ARX`/`VIDEO_ARY` in `dvd/emu.sv`. The raster stays 720×480 (o
   read — the option did nothing and output was always 4:3. Sim/lint clean; **✅ HW-confirmed
   2026-07-10** (the CRT view modes verified on the board).
 
-### 🔧 Progressive Deint = Blend — non-adaptive field blend (2026-09-24, branch `feature/field-blend`)
+### ✅ Progressive Deint = Blend — non-adaptive field blend (2026-09-24, branch `feature/field-blend`)
 
 `O[49] Progressive Deint = Off / Blend`, **default Off**. On the Progressive raster each
 line of a true-interlaced picture (`cur_ilace`) is filtered `(a + 2b + d + 2) >> 2`.
@@ -937,7 +937,7 @@ The cost is vertical softness.
 It is sim-proven and mutation-checked (`bench/dvd/run_field_blend.sh --red`,
 `tools/check_field_blend_wiring.py`).
 
-**Next step:** the maintainer's eye on static text and the motion ghost; the build and a measured HW round (2026-09-24) are done. Design, the library census
+**✅ HW-CONFIRMED 2026-09-24** (harness round + the maintainer's eye, incl. a film→video change inside one title). Next step: merge. Design, the library census
 that chose default Off, and the known limits are in **`docs/field_blend.md`**.
 
 ### HD Modeline Switching
