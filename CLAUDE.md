@@ -358,7 +358,17 @@ worse maintenance burden than targeted in-place edits. So:
 - 🔧 **`CSS ENCRYPTED` AFTER A CHAPTER SKIP ON A PHYSICAL DISC: TWO KEY MECHANISMS, BOTH
   ON THE CRACK PATH (a drive with no region set) — issue #122 (2026-09-24, branch
   `fix/css-titleset-key`); host-proven RED/GREEN (`main/tests/run_tests.sh --red`,
-  7 new mutations each caught by its own arm), ⏳ HW-confirm pending.** Both measured
+  7 new mutations each caught by its own arm), and ✅ REPRODUCED AND FIXED ON THE RIG
+  2026-09-24, control arm first, on both physical discs.**
+  | disc / arm | installed Main (control) | fixed Main |
+  |---|---|---|
+  | Hitch, chapter skip to LBA 802723 (part 2) | **`CSS ENCRYPTED`**, blocky picture | clean; parts 3–4 clean; audio −40.9 dBFS |
+  | Hitch, linear play 738005 → 807557 | — | clean, no key activity |
+  | Hitch, part-1 key zeroed in the cache | — | heal from `VTS_01_0`'s key, clean |
+  | Panda, VTS_14 (the MPAA rating card) | **`CSS ENCRYPTED`**, `no title key for VOB @3187367` | heal from `VTS_14_0`'s key, clean |
+  0 new cache entries on either disc. ⚠ Hitch has UNREADABLE sectors near LBA 248138
+  (sense 03/11/00, ~30 s each), which black out the first minute. That is a read
+  problem, unrelated to this. Both measured
   from the real discs on the host, not inferred. In both, the rig's
   `/media/fat/dvdcss/cache` matches a host `DVDCSS_METHOD=title` run **byte for byte**.
   ★★ **Hitch: a title set has ONE key, taken at part 1.** `dvd_css.cpp` keyed every VOB

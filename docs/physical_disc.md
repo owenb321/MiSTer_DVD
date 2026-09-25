@@ -388,7 +388,8 @@ that is the 23-VOB pre-crack, not the bug.
 
 **Field report:** on physical *Hitch* and *Kung Fu Panda*, Next/Prev Chapter raised
 `CSS ENCRYPTED` and muted the audio, while playback from the start was fine. It reproduces
-on v0.6.1. Branch `fix/css-titleset-key`.
+on v0.6.1. Branch `fix/css-titleset-key`. ✅ **Reproduced and fixed on the rig 2026-09-24,
+control arm first, on both discs** (the table is at the end of this section).
 
 **Where it happens.** Only on the **crack path**, i.e. a drive with **no region set** (the
 rig's drive: `drive is RPC-II with NO region set` in `/tmp/dvdcss.log`) or an encrypted
@@ -488,6 +489,24 @@ which stays a muted `CSS ENCRYPTED` as before.
 
 **The real cure is a region.** With one set, none of this path runs (`set_dvd_region.sh`,
 below).
+
+**HW round (2026-09-24, rig drive with no region set).** Each disc ran on the installed
+Main first, then on the fixed one:
+
+| disc / arm | installed Main | fixed Main |
+|---|---|---|
+| Hitch: Next Chapter until the reads land at LBA 802723 (`vob@764231`) | `CSS ENCRYPTED`, blocky picture | clean. Parts 3 and 4 also clean; audio −40.9 dBFS RMS |
+| Hitch: linear play from 738005 until the drive read position reached 807557 | — | clean, no key activity |
+| Hitch: part-1 key zeroed in the rig cache | — | `key: … from block 239944 is zero; the title set's other key from block 158392 decrypts it`, clean |
+| Panda: `Title VTS = 14` (the MPAA rating card) | `CSS ENCRYPTED`, `no title key for VOB @3187367` | `key: … missing; the title set's other key from block 3187180 decrypts it`, clean |
+
+The fixed Main primes 61 key blocks for Hitch's 66 VOBs, and 41 for Panda's 45. No new
+cache entries were written on either disc. ⚠ Separately, Hitch has **unreadable sectors
+near LBA 248138** (sense 03/11/00, ~30 s each), which black out the first minute of
+playback from the start. That is a read problem, unrelated to keys.
+
+★ **Instrument:** linear reads are not in the seek log. The Main's read position is the
+drive fd's offset in `/proc/<pid>/fdinfo`, because libdvdcss reads with lseek+read.
 
 **Gates.** `main/tests/dvd_css_test.cpp` [15]–[19] model the measured libdvdcss behaviour:
 the 2000-block zero key, the uncrackable VOB, and noise under a wrong key. They score
