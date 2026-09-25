@@ -2093,7 +2093,7 @@ seek needs the VTS **TMAP** time-map (libdvdnav does time seek via TMAP, not fwd
 decision fit a project that did not yet need it; what changed is a polish problem: the seek
 preview and the landing disagreed by seconds, and only a time→sector map can make them agree.
 
-### 2h. Time map seek — Phase 8b, reopened (2026-09-25, issue #127) — ✅ HW-CONFIRMED (D-pad measured, held scrub by the maintainer)
+### 2h. Time map seek — Phase 8b, reopened (2026-09-25, issue #127, PR #128) — ✅ MERGED, ✅ HW-CONFIRMED (D-pad measured, held scrub by the maintainer)
 
 **Why.** Field report (v0.7.0): the seeks land, but the readout does not follow them. A held
 FF starts ~5 s off the clock and jumps ~5 s when it ends; a D-pad Left reads `30 → 29 → 34`.

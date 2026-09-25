@@ -324,7 +324,7 @@ worse maintenance burden than targeted in-place edits. So:
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - ✅ **TIME-MAP SEEK — Phase 8b REOPENED: the seek preview and the landing now agree
-  (2026-09-25, issue #127, branch `fix/tmap-seek`); sim-proven, 13 mutations + 9 wiring
+  (2026-09-25, issue #127, ✅ MERGED PR #128); sim-proven, 13 mutations + 9 wiring
   re-regressions each caught by its own check; the D-PAD arm is ✅ HW-MEASURED 2026-09-25
   against the v0.7.0 control (build `DVD_tmapseek_20260925_1358.rbf`, clk_dec 87.92/89.9,
   98 % ALM), and the held scrub ✅ HW-CONFIRMED by the maintainer the same day with a
