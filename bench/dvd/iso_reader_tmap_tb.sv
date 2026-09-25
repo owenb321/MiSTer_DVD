@@ -1,26 +1,30 @@
-// iso_reader_scrub_tb.sv - sub-cell time SCRUB (raw-RBN seek) test for
-// dvd/dvd_iso_reader.sv (Phase 8).
-//
-// The gamepad time scrub (emu.sv) jumps to an absolute VTSTT_VOBS RBN
-// (current-VOBU LBN +/- a DSI fwda/bwda offset). This tb drives the reader's
-// seek_rbn_pulse/seek_rbn port directly and proves:
-//   - the containing-cell scan sets cur_cell to the cell whose RBN range holds
-//     the target,
-//   - streaming actually starts AT the target RBN (not the cell's first_sector),
-//   - an out-of-range RBN clamps to the last cell (playback still resumes).
-//
-// Disc: ONE title set (VTS_01), a 4-cell PGC in physical order, each cell 10
-// sectors. To verify SUB-CELL precision every sector is filled with a byte =
-// its own RBN (0..39), so the first captured byte identifies the exact target
-// sector, and cur_cell identifies the containing cell:
-//   cell0 -> RBN  0..9   cell1 -> RBN 10..19
-//   cell2 -> RBN 20..29  cell3 -> RBN 30..39
-//
-// Layout mirrors iso_reader_seek_tb (same IFO/PGC skeleton).
-
+// ============================================================================
+// bench/dvd/iso_reader_tmap_tb.sv -- TIME seek through the VTS time map
+// (Phase 8b reopened, issue #127; dvd/dvd_iso_reader.sv S_TMAP)
+// ============================================================================
+// The iso_reader_scrub_tb disc (4 cells x 10 sectors, every sector filled with a
+// byte == its own RBN, so the delivered stream names the landing sector exactly)
+// plus a VTS_TMAPT in the IFO. NAV_CAP=1: the fixture has no NAV packs, so the
+// snap probe gives up after one read and the landing IS the resolved sector.
+// Scored against the landing sector read out of the delivered bytes, never a
+// signal the lookup names.
+//   A  tmu=1 map, deliberately NOT linear in RBN:
+//      A1 t=3  -> entry 2 = RBN 20 (the fallback 7 must NOT be used)
+//      A2 t=0  -> the title's first sector (libdvdnav's "entry -1")
+//      A3 t=99 -> past the map: the last entry, RBN 38
+//      A4 a repeat seek re-uses the cached header: ONE IFO read, not five
+//      (entry 2 carries the discontinuity bit, which must be masked)
+//   B  tmu=2 map after a REMOUNT (the cache must not survive it):
+//      B1 t=5 -> between entries 1 (14) and 2 (30): 14 + 16*1/2 = RBN 22
+//      B2 t=3 -> between the title start... entries 0 (10) and 1 (14): RBN 12
+//   C  no TMAPT            -> the caller's fallback RBN, tmap_fell
+//   D  entry past the title -> fallback (a map that is not this title's)
+//   E  an empty map         -> fallback
+//   F  a plain sector scrub (seek_tm_req = 0) is unchanged
+// ============================================================================
 `timescale 1ns/1ps
 
-module iso_reader_scrub_tb;
+module iso_reader_tmap_tb;
 
     localparam CELLSEC   = 10;              // sectors per cell (> 16 KB cache)
     localparam VOBSEC    = 4*CELLSEC;       // 40 title sectors
@@ -36,6 +40,9 @@ module iso_reader_scrub_tb;
     reg  [7:0]  seek_cell = 0;
     reg         seek_rbn_pulse = 0;
     reg  [31:0] seek_rbn = 0;
+    reg         seek_tm_req = 0;
+    reg  [16:0] seek_tm_secs = 0;
+    wire        tmap_used, tmap_fell;
     wire        seek_ack;
     wire [7:0]  cur_cell;
     wire        cell_ready;
@@ -70,7 +77,7 @@ module iso_reader_scrub_tb;
     reg ack_seen = 0;
     always @(posedge clk) if (seek_ack) ack_seen <= 1'b1;
 
-    dvd_iso_reader dut (
+    dvd_iso_reader #(.NAV_CAP(1)) dut (
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
@@ -80,7 +87,8 @@ module iso_reader_scrub_tb;
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
         .seek_pulse(seek_pulse), .seek_natural(1'b0), .seek_cell(seek_cell), .seek_ack(seek_ack),
-        .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn), .seek_tm_req(1'b0), .seek_tm_secs(17'd0),
+        .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn), .seek_tm_req(seek_tm_req), .seek_tm_secs(seek_tm_secs),
+        .tmap_used(tmap_used), .tmap_fell(tmap_fell),
         .keep_vbuf(keep_vbuf),
         .cur_cell(cur_cell), .cell_ready(cell_ready),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
@@ -96,6 +104,8 @@ module iso_reader_scrub_tb;
 
     // ---- mock HPS: serve one 2048-byte block (sector) per sd_rd ----
     integer m = 0;
+    integer ifo_reads = 0;                   // reads of VTS_01_0.IFO (sectors 21..23)
+    always @(posedge clk) if (sd_rd && m == 0 && sd_lba >= 21 && sd_lba <= 23) ifo_reads = ifo_reads + 1;
     integer bc = 0;
     reg [31:0] rlba = 0;
     integer lat = 0;
@@ -224,6 +234,27 @@ module iso_reader_scrub_tb;
         end
     endtask
 
+    // VTS_TMAPT at IFO-relative sector 2 (absolute 23): one map, at TMAPT+12.
+    reg [31:0] tment [0:15];
+    task put_tmap(input [31:0] tmapt_ptr, input [7:0] tmu, input [15:0] nent);
+        integer b, j;
+        begin
+            b = 21*2048;
+            img[b+212] = tmapt_ptr[31:24]; img[b+213] = tmapt_ptr[23:16];
+            img[b+214] = tmapt_ptr[15:8];  img[b+215] = tmapt_ptr[7:0];
+            b = 23*2048;
+            for (j = 0; j < 2048; j = j + 1) img[b+j] = 8'h00;
+            img[b+0] = 8'h00; img[b+1] = 8'h01;            // nr_of_tmaps = 1
+            img[b+8] = 8'h00; img[b+9] = 8'h00; img[b+10] = 8'h00; img[b+11] = 8'd12;
+            img[b+12] = tmu; img[b+13] = 8'h00;
+            img[b+14] = nent[15:8]; img[b+15] = nent[7:0];
+            for (j = 0; j < nent; j = j + 1) begin
+                img[b+16+4*j]   = tment[j][31:24]; img[b+16+4*j+1] = tment[j][23:16];
+                img[b+16+4*j+2] = tment[j][15:8];  img[b+16+4*j+3] = tment[j][7:0];
+            end
+        end
+    endtask
+
     // 4-cell disc, cells in physical order (cell k -> RBN 10k..10k+9). Each
     // sector is filled with a byte == its own RBN so the captured stream
     // reveals the exact target sector.
@@ -266,16 +297,34 @@ module iso_reader_scrub_tb;
     // ---- helpers ----
     integer errors = 0;
     integer k;
+    integer reads_at;
 
-    task do_scrub(input [31:0] tgt_rbn);
+    task mount;
+        begin
+            file_size = IMG_BYTES;
+            cap_n = 0;                       // or a stale count ends the wait at once
+            @(posedge clk); start = 1; @(posedge clk); start = 0;
+            wait_bytes(1024);
+            if (dut.cell_mode !== 1'b1) begin
+                errors = errors + 1; $display("  FAIL: remount never reached cell mode");
+            end
+            cap_n = 0;
+        end
+    endtask
+
+    task do_seek(input tm, input [16:0] secs, input [31:0] fb_rbn);
         integer tt;
         begin
-            ack_seen = 1'b0;
-            @(posedge clk); seek_rbn_pulse <= 1'b1; seek_rbn <= tgt_rbn;
-            @(posedge clk); seek_rbn_pulse <= 1'b0;
+            ack_seen = 1'b0; reads_at = ifo_reads;
+            @(posedge clk); seek_rbn_pulse <= 1'b1; seek_rbn <= fb_rbn;
+                            seek_tm_req <= tm; seek_tm_secs <= secs;
+            @(posedge clk); seek_rbn_pulse <= 1'b0; seek_tm_req <= 1'b0;
             tt = 0;
             while (!ack_seen && tt < 200000) begin @(posedge clk); tt = tt + 1; end
-            repeat (300) @(posedge clk);    // containing-cell scan + load + stream
+            // let the lookup + snap + cell load finish, then capture fresh bytes
+            tt = 0;
+            while (dut.state != 6'd10 && tt < 2000000) begin @(posedge clk); tt = tt + 1; end
+            repeat (50) @(posedge clk);
             cap_n = 0;
         end
     endtask
@@ -284,27 +333,27 @@ module iso_reader_scrub_tb;
         integer tt;
         begin
             tt = 0;
-            while (cap_n < n && tt < 2000000) begin @(posedge clk); tt = tt + 1; end
+            while (cap_n < n && tt < 4000000) begin @(posedge clk); tt = tt + 1; end
         end
     endtask
 
-    // expect the first 1024 captured bytes to all equal `want` (the target sector)
-    task expect_rbn(input [7:0] want, input [7:0] want_cell, input [255:0] label);
+    task expect_rbn(input [7:0] want, input used, input [8*64-1:0] label);
         integer mm;
         begin
+            wait_bytes(1024);
             mm = 0;
             for (k = 0; k < 1024 && k < cap_n; k = k + 1)
                 if (cap[k] !== want) mm = mm + 1;
-            if (mm != 0) begin
+            if (mm != 0 || cap_n < 1024) begin
                 errors = errors + 1;
-                $display("  FAIL: %0s - %0d/1024 bytes != %0d (first cap %0d)",
-                         label, mm, want, cap[0]);
-            end else if (cur_cell !== want_cell) begin
+                $display("  FAIL: %0s - landed on RBN %0d, want %0d (%0d/1024 wrong)",
+                         label, cap[0], want, mm);
+            end else if (tmap_used !== used || tmap_fell !== !used) begin
                 errors = errors + 1;
-                $display("  FAIL: %0s - cur_cell=%0d expected %0d (bytes ok)",
-                         label, cur_cell, want_cell);
+                $display("  FAIL: %0s - RBN %0d ok but tmap_used=%b tmap_fell=%b (want used=%b)",
+                         label, want, tmap_used, tmap_fell, used);
             end else
-                $display("  ok: %0s - starts at RBN %0d, cur_cell=%0d", label, want, cur_cell);
+                $display("  ok: %0s - RBN %0d, %0s", label, want, used ? "through the map" : "fallback");
         end
     endtask
 
@@ -314,49 +363,58 @@ module iso_reader_scrub_tb;
         rst_n = 1;
         @(posedge clk);
 
+        // ---- A: tmu = 1, a map deliberately NOT linear in RBN ----------------
         build_iso;
-        file_size = IMG_BYTES;
-        @(posedge clk);
-        start = 1; @(posedge clk); start = 0;
+        tment[0] = 32'd3;  tment[1] = 32'd5;  tment[2] = 32'h8000_0014; // disc bit + RBN 20
+        tment[3] = 32'd22; tment[4] = 32'd30; tment[5] = 32'd34; tment[6] = 32'd38;
+        put_tmap(32'd2, 8'd1, 16'd7);
+        mount;
+        do_seek(1'b1, 17'd3, 32'd7);   expect_rbn(8'd20, 1'b1, "A1 t=3 -> entry 2 (masked disc bit)");
+        if (ifo_reads - reads_at < 4) begin
+            errors = errors + 1; $display("  FAIL: A1 made %0d IFO reads; a cold lookup needs >= 4", ifo_reads - reads_at);
+        end
+        do_seek(1'b1, 17'd0, 32'd7);   expect_rbn(8'd0,  1'b1, "A2 t=0 -> the title's first sector");
+        if (ifo_reads - reads_at != 1) begin
+            errors = errors + 1; $display("  FAIL: A4 cached lookup made %0d IFO reads, want 1", ifo_reads - reads_at);
+        end else $display("  ok: A4 the cached header costs one IFO read");
+        do_seek(1'b1, 17'd99, 32'd7);  expect_rbn(8'd38, 1'b1, "A3 t=99 -> past the map: the last entry");
 
-        wait_bytes(1024);
-        if (dut.cell_mode !== 1'b1) begin errors=errors+1; $display("  FAIL: cell_mode not set"); end
-        expect_rbn(8'd0, 8'd0, "baseline cell0 RBN0");
-        $display("TEST0: cell_mode=%b cell_count=%0d cur_cell=%0d",
-                 dut.cell_mode, dut.cell_count, cur_cell);
+        // ---- B: tmu = 2 after a remount: interpolation, and no stale cache ---
+        build_iso;
+        tment[0] = 32'd10; tment[1] = 32'd14; tment[2] = 32'd30; tment[3] = 32'd36;
+        put_tmap(32'd2, 8'd2, 16'd4);
+        mount;
+        do_seek(1'b1, 17'd5, 32'd7);   expect_rbn(8'd22, 1'b1, "B1 t=5 -> 14 + (30-14)*1/2");
+        do_seek(1'b1, 17'd3, 32'd7);   expect_rbn(8'd12, 1'b1, "B2 t=3 -> 10 + (14-10)*1/2");
 
-        // ---- TEST 1: forward scrub to RBN 25 (mid cell2) ----
-        do_scrub(32'd25);
-        if (!ack_seen) begin errors=errors+1; $display("  FAIL: no seek_ack on fwd scrub"); end
-        wait_bytes(1024);
-        expect_rbn(8'd25, 8'd2, "TEST1 fwd scrub -> RBN 25 / cell2");
+        // ---- C: no time map ---------------------------------------------------
+        build_iso; put_tmap(32'd0, 8'd1, 16'd0); mount;
+        do_seek(1'b1, 17'd3, 32'd17);  expect_rbn(8'd17, 1'b0, "C no TMAPT -> the fallback");
 
-        // ---- TEST 2: backward scrub to RBN 12 (mid cell1) ----
-        do_scrub(32'd12);
-        if (!ack_seen) begin errors=errors+1; $display("  FAIL: no seek_ack on bwd scrub"); end
-        wait_bytes(1024);
-        expect_rbn(8'd12, 8'd1, "TEST2 bwd scrub -> RBN 12 / cell1");
+        // ---- D: an entry past this title's sectors ----------------------------
+        build_iso;
+        tment[0] = 32'd3; tment[1] = 32'd500; tment[2] = 32'd501;
+        put_tmap(32'd2, 8'd1, 16'd3); mount;
+        do_seek(1'b1, 17'd1, 32'd17);  expect_rbn(8'd17, 1'b0, "D implausible entry -> the fallback");
 
-        // ---- TEST 3: scrub back into cell0 (RBN 5) ----
-        do_scrub(32'd5);
-        wait_bytes(1024);
-        expect_rbn(8'd5, 8'd0, "TEST3 scrub -> RBN 5 / cell0");
+        // ---- E: an empty map --------------------------------------------------
+        build_iso; put_tmap(32'd2, 8'd0, 16'd0); mount;
+        do_seek(1'b1, 17'd3, 32'd17);  expect_rbn(8'd17, 1'b0, "E empty map -> the fallback");
 
-        // ---- TEST 4: out-of-range RBN 100 -> clamp to last cell (cell3, RBN30) ----
-        do_scrub(32'd100);
-        if (!ack_seen) begin errors=errors+1; $display("  FAIL: no seek_ack on clamp scrub"); end
-        wait_bytes(1024);
-        expect_rbn(8'd30, 8'd3, "TEST4 out-of-range -> clamp cell3 RBN30");
+        // ---- F: a plain sector scrub is unchanged ----------------------------
+        do_seek(1'b0, 17'd3, 32'd25);  wait_bytes(1024);
+        if (cap[0] !== 8'd25) begin errors = errors + 1; $display("  FAIL: F plain scrub landed on %0d, want 25", cap[0]); end
+        else $display("  ok: F plain sector scrub -> RBN 25");
 
-        if (errors == 0) $display("ISO_READER_SCRUB_TB: ALL TESTS PASSED");
-        else             $display("ISO_READER_SCRUB_TB: FAILED with %0d errors", errors);
+        if (errors == 0) $display("ISO_READER_TMAP_TB: ALL TESTS PASSED");
+        else begin $display("ISO_READER_TMAP_TB: FAILED with %0d errors", errors); $fatal(1); end
         $finish;
     end
 
     initial begin
         #400000000;
-        $display("ISO_READER_SCRUB_TB: TIMEOUT");
-        $finish;
+        $display("ISO_READER_TMAP_TB: TIMEOUT");
+        $fatal(1);
     end
 
 endmodule

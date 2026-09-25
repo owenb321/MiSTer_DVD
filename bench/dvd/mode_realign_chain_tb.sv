@@ -113,7 +113,7 @@ module mode_realign_chain_tb;
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
         .seek_pulse(seek_pulse), .seek_natural(1'b0), .seek_cell(seek_cell), .seek_ack(seek_ack),
-        .seek_rbn_pulse(rd_seek_pulse), .seek_rbn(rd_seek_rbn),
+        .seek_rbn_pulse(rd_seek_pulse), .seek_rbn(rd_seek_rbn), .seek_tm_req(1'b0), .seek_tm_secs(17'd0),
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1),
         .cell_seamless(cell_seamless),
         .keep_vbuf(keep_vbuf),
