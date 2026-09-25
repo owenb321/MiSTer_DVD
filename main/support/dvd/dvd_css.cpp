@@ -69,7 +69,7 @@ static fn_scram_t p_scram = NULL;   // dvdcss_is_scrambled (optional; absent on 
 static dvdcss_t css = NULL;
 static uint64_t css_size = 0;   // bytes
 static int css_pos = -1;        // last block position, to avoid redundant seeks
-static int cur_vob = -1;        // VOB index whose title key is currently selected
+static int cur_key = -1;        // key block (g_vobs[].key) whose title key is selected
 static int key_ok = 0;          // ...and that key was actually obtained (see dvd_css_read)
 static int raw_fd = -1;         // raw drive fd when libdvdcss is absent (no decrypt)
 static int region_set = 1;      // 0 if the drive has no CSS region set (keys will crack)
@@ -417,12 +417,25 @@ static int iso_find(uint32_t dir_lba, uint32_t dir_len, const char *name, int wa
 }
 
 // Every *.VOB file's extent [start, start+nsec), discovered at mount. Used to
-// (a) pre-crack each title key at its VOB start, (b) decide per read whether to
+// (a) pre-crack each title key at its key block, (b) decide per read whether to
 // decrypt — VOB sectors are read with DECRYPT, filesystem/IFO sectors raw (NOFLAGS)
 // so dvdcss can't corrupt them with a wrong current title key — and (c) supply the
-// block a SEEK_KEY is issued at, which is ALWAYS the VOB's start and never the read
-// position: libdvdcss's title cache is an exact-block match, so a SEEK_KEY anywhere
-// else re-acquires the key. See dvd_css_read().
+// block a SEEK_KEY is issued at (`key`), which is never the read position:
+// libdvdcss's title cache is an exact-block match, so a SEEK_KEY anywhere else
+// re-acquires the key. See css_read_chunk().
+//
+// ★ A TITLE SET HAS ONE KEY, TAKEN AT PART 1 (issue #122). `key` is the extent's own
+// start EXCEPT for a title VOB part VTS_nn_2..9, whose key block is VTS_nn_1's start.
+// That is libdvdread's model exactly: initAllCSSKeys() keys only VTS_nn_0 and
+// VTS_nn_1, and DVDOpenFile(DVD_READ_TITLE_VOBS) reads parts 1..9 as ONE file keyed
+// at part 1's start (dvd_file->lb_start). Keying each part at its own start -- what
+// this table used to do -- is harmless while the drive hands keys over, and wrong on
+// the crack path: libdvdcss's CrackTitleKey() gives up after 2000 consecutive
+// unscrambled blocks and CACHES AN ALL-ZERO KEY ("no scrambled sectors found"), and
+// a zero key makes DVDCSS_READ_DECRYPT a no-op. MEASURED on physical "Hitch": the
+// first 2000 sectors of VTS_01_2..5 hold not one scrambled sector, so on a drive
+// with no region set everything past the first 1 GB of the feature reached the core
+// scrambled -- CSS ENCRYPTED at the first chapter skip that got there.
 //
 // ★ A VOB MISSING FROM THIS TABLE IS SERVED SCRAMBLED, WITH NO OTHER SIGNAL.
 // vob_index() returns -1 for it, so dvd_css_read() takes it for a filesystem sector
@@ -436,10 +449,32 @@ static int iso_find(uint32_t dir_lba, uint32_t dir_len, const char *name, int wa
 // every VOB a conformant disc can have (99 title sets x (menu + 9 parts) + VMG = 991);
 // (3) if it ever fills anyway, the drop is logged, never silent.
 #define MAX_VOBS 1024
-static struct { uint32_t start, nsec; } g_vobs[MAX_VOBS];
+static struct {
+	uint32_t start, nsec;
+	uint32_t key;        // block a SEEK_KEY is issued at (see the ★ above)
+	int8_t   tt, part;   // from "VTS_nn_k.VOB": title set nn, part k; -1 if not that shape
+	uint8_t  heal_tried; // a zero/missing key was already worked around once (css_heal_key)
+} g_vobs[MAX_VOBS];
 static int g_nvobs = 0;
 static int g_vob_entries = 0;     // .VOB directory entries seen, aliases included
 static int g_vobs_dropped = 0;    // distinct extents that did not fit (must stay 0)
+static int g_orphan_parts = 0;    // VTS_nn_k (k >= 2) with no VTS_nn_1 to key from
+static int g_heals = 0, g_heal_ok = 0;   // key-domain heals attempted / proven (heal_key)
+static int g_residual = 0;               // VOB sectors handed on still scrambled
+
+// "VTS_nn_k.VOB" -> title set nn, part k. Anything else (VIDEO_TS.VOB, a name a
+// mastering tool mangled) reads -1/-1 and is keyed at its own start, as before.
+static void vob_name_parse(const char *nm, int nlen, int8_t *tt, int8_t *part)
+{
+	*tt = -1; *part = -1;
+	if (nlen >= 12 && (nm[0] | 32) == 'v' && (nm[1] | 32) == 't' && (nm[2] | 32) == 's' &&
+	    nm[3] == '_' && nm[4] >= '0' && nm[4] <= '9' && nm[5] >= '0' && nm[5] <= '9' &&
+	    nm[6] == '_' && nm[7] >= '0' && nm[7] <= '9' && nm[8] == '.')
+	{
+		*tt   = (int8_t)((nm[4] - '0') * 10 + (nm[5] - '0'));
+		*part = (int8_t)(nm[7] - '0');
+	}
+}
 
 static void add_vob(uint32_t start, uint32_t nsec, const char *nm, int nlen)
 {
@@ -456,7 +491,42 @@ static void add_vob(uint32_t start, uint32_t nsec, const char *nm, int nlen)
 	}
 	g_vobs[g_nvobs].start = start;
 	g_vobs[g_nvobs].nsec  = nsec;
+	g_vobs[g_nvobs].key   = start;
+	g_vobs[g_nvobs].heal_tried = 0;
+	vob_name_parse(nm, nlen, &g_vobs[g_nvobs].tt, &g_vobs[g_nvobs].part);
 	g_nvobs++;
+}
+
+// Point every title VOB part 2..9 at its title set's part-1 start (the ★ above).
+// A part with no part 1 to key from keeps its own start -- the old behaviour -- and
+// is logged, because on the crack path that is exactly the block that can yield a
+// zero key.
+static void resolve_vob_keys(void)
+{
+	g_orphan_parts = 0;
+	for (int i = 0; i < g_nvobs; i++)
+	{
+		if (g_vobs[i].tt < 0 || g_vobs[i].part < 2) continue;
+		int p1 = -1;
+		for (int j = 0; j < g_nvobs; j++)
+			if (g_vobs[j].tt == g_vobs[i].tt && g_vobs[j].part == 1) { p1 = j; break; }
+		if (p1 >= 0)
+			g_vobs[i].key = g_vobs[p1].start;
+		else
+		{
+			if (!g_orphan_parts)
+				css_log("vobs: VTS_%02d_%d has no VTS_%02d_1 -- keyed at its own start",
+				        g_vobs[i].tt, g_vobs[i].part, g_vobs[i].tt);
+			g_orphan_parts++;
+		}
+	}
+}
+
+// Is `i` the first extent carrying its key block? (crack_title_keys primes each once.)
+static int first_with_key(int i)
+{
+	for (int j = 0; j < i; j++) if (g_vobs[j].key == g_vobs[i].key) return 0;
+	return 1;
 }
 
 // Collect every *.VOB file's extent (start LBA + length in sectors).
@@ -498,6 +568,7 @@ static int enumerate_vobs(void)
 	g_nvobs = 0;
 	g_vob_entries = 0;
 	g_vobs_dropped = 0;
+	g_heals = g_heal_ok = g_residual = 0;
 	uint8_t sec[2048];
 	if (css_raw_read(16, sec, 1) < 1) { css_log("vobs: PVD read failed"); return 0; }
 	if (memcmp(sec + 1, "CD001", 5) != 0) { css_log("vobs: not ISO9660"); return 0; }
@@ -511,6 +582,7 @@ static int enumerate_vobs(void)
 		return 0;
 	}
 	collect_vobs(vts_lba, vts_len);
+	resolve_vob_keys();
 	if (g_vob_entries != g_nvobs)
 		css_log("vobs: %d .VOB entries -> %d distinct extents (%d aliased, %d dropped)",
 		        g_vob_entries, g_nvobs, g_vob_entries - g_nvobs - g_vobs_dropped, g_vobs_dropped);
@@ -586,25 +658,28 @@ static void setup_cache(void)
 	        cache_entries(), cache_entries() == 1 ? "y" : "ies");
 }
 
-// Pre-crack each VOB's title key at its start sector (fast cached lookups thereafter).
-// With a drive region set this is instant (ioctl); with none — or an image file with no
-// drive at all — it is a slow crack, so show a bar (it blocks the main loop) with the
-// caller's `text`. The message never changes what libdvdcss does.
+// Pre-crack each title key at its key block, ONCE per distinct block (a title set's
+// parts share part 1's). With a drive region set this is instant (ioctl); with none —
+// or an image file with no drive at all — it is a slow crack, so show a bar (it blocks
+// the main loop) with the caller's `text`. The message never changes what libdvdcss does.
 static void crack_title_keys(const char *text)
 {
 	const char *title = "DVD";   // sidebar ~9 chars; main line capped at 27 (ProgressMessage)
 	ProgressMessage();   // reset so the first update renders
-	int keyed = 0;
+	int keyed = 0, blocks = 0;
 	for (int i = 0; i < g_nvobs; i++)
 	{
 		ProgressMessage(title, text, i, g_nvobs);
-		if (p_seek(css, (int)g_vobs[i].start, DVDCSS_SEEK_KEY) >= 0) keyed++;
+		if (!first_with_key(i)) continue;
+		blocks++;
+		if (p_seek(css, (int)g_vobs[i].key, DVDCSS_SEEK_KEY) >= 0) keyed++;
 	}
 	ProgressMessage();   // clear
-	css_log("%d VOBs, %d title keys (region %s), cache now %d entr%s",
-	        g_nvobs, keyed, region_set ? "set" : "NOT set",
+	css_log("%d VOBs, %d key blocks, %d title keys (region %s), cache now %d entr%s",
+	        g_nvobs, blocks, keyed, region_set ? "set" : "NOT set",
 	        cache_entries(), cache_entries() == 1 ? "y" : "ies");
 	css_pos = -1;
+	cur_key = -1;
 }
 
 // Are the actual VOB SECTORS CSS-scrambled? This is what decides whether to decrypt —
@@ -830,7 +905,7 @@ int dvd_css_open_image(const char *path)
 	css_size = (uint64_t)st.st_size;
 	region_set = 1;    // no drive; keys are cracked from data regardless of region
 	css_pos = -1;
-	cur_vob = -1;
+	cur_key = -1;
 	key_ok  = 0;
 
 	if (!enumerate_vobs())
@@ -949,6 +1024,141 @@ static void seek_log(uint32_t lba, uint32_t count, int vi)
 	if (++seek_log_n == SEEK_LOG_MAX) css_log("seek trace: %d lines, stopped", SEEK_LOG_MAX);
 }
 
+// ---------------------------------------------------------------------------
+// A ZERO OR MISSING TITLE KEY, SEEN IN THE DATA (issue #122).
+//
+// libdvdcss clears the scrambling bits of every sector it decrypts, so a VOB sector
+// that comes back from us WITH them set was not decrypted -- the key is zero
+// (a crack that saw no scrambled sectors: "unencrypted title", cached for good) or
+// missing (a crack that failed outright, key_ok = 0). The test is exact and the
+// same one libdvdcss's CrackTitleKey() uses to call a sector scrambled. Left alone,
+// each such sector reaches the core scrambled: CSS ENCRYPTED, sticky for the whole
+// mount, and both audio paths muted.
+//
+// So, once per key domain per session, work around it -- and accept a key only when
+// the data proves it right, because a WRONG non-zero key clears the bits too and
+// would turn a muted CSS ENCRYPTED into unmuted garbage:
+//   1. the title set's OTHER key block (VTS_nn_0 <-> VTS_nn_1), already primed at
+//      mount, so it costs nothing. MEASURED on physical "Kung Fu Panda": VTS_14_1 is
+//      169 sectors and cannot be cracked from ANY block inside it (0/11 attacks at
+//      every start tried), while its true key -- read from a region-set drive -- is
+//      VTS_14_0's, which cracks at once. Every other title set on that disc and on
+//      "Hitch" also has identical menu/title keys.
+//   2. a fresh key taken AT the scrambled sector: the crack then starts inside
+//      scrambled data, which a crack from the key block may never have reached.
+// The proof: decrypt a window and count MPEG start codes (00 00 01) in the part of
+// each scrambled sector libdvdcss decrypts (0x80..). MEASURED on Panda: the right
+// key gives 18 / 120 / 131 over 57 / 80 / 47 scrambled sectors, a wrong key 0 every
+// time. Random bytes give ~1e-4 per sector, so HEAL_MIN_SC = 2 cannot be reached by
+// chance over a window.
+#define HEAL_WIN     64
+#define HEAL_MIN_SC  2
+static uint8_t heal_raw[HEAL_WIN * 2048], heal_dec[HEAL_WIN * 2048];
+
+static int is_scrambled_sector(const uint8_t *s)
+{
+	return s[0] == 0 && s[1] == 0 && s[2] == 1 && s[3] == 0xBA
+	    && (s[0x14] & 0x30)
+	    && s[0x11] != 0xBB && s[0x11] != 0xBE && s[0x11] != 0xBF;
+}
+
+static int first_scrambled(const uint8_t *buf, int n)
+{
+	for (int i = 0; i < n; i++) if (is_scrambled_sector(buf + (size_t)i * 2048)) return i;
+	return -1;
+}
+
+static int start_codes(const uint8_t *s)
+{
+	int n = 0;
+	for (int i = 0x80; i + 2 < 2048; i++) if (!s[i] && !s[i + 1] && s[i + 2] == 1) n++;
+	return n;
+}
+
+// The title set's other key block: VTS_nn_0's for a title VOB, VTS_nn_1's for the
+// menu VOB. -1 if there is none (VIDEO_TS.VOB, an unparsable name, a lone VOB).
+static int sibling_key(int vi)
+{
+	if (g_vobs[vi].tt < 0 || g_vobs[vi].part < 0) return -1;
+	int menu = (g_vobs[vi].part == 0);
+	for (int j = 0; j < g_nvobs; j++)
+		if (g_vobs[j].tt == g_vobs[vi].tt && g_vobs[j].part >= 0 &&
+		    (g_vobs[j].part == 0) != menu && g_vobs[j].key != g_vobs[vi].key)
+			return (int)g_vobs[j].key;
+	return -1;
+}
+
+// Does the key at block `kb` decrypt heal_raw's `w` sectors (read raw at `at`)?
+static int try_key(uint32_t kb, uint32_t at, int w)
+{
+	if (p_seek(css, (int)kb, DVDCSS_SEEK_KEY) < 0) return 0;
+	if (p_seek(css, (int)at, DVDCSS_NOFLAGS) < 0) return 0;
+	if (p_read(css, heal_dec, w, DVDCSS_READ_DECRYPT) < w) return 0;
+	int scr = 0, sc = 0;
+	for (int i = 0; i < w; i++)
+	{
+		if (!is_scrambled_sector(heal_raw + (size_t)i * 2048)) continue;
+		scr++;
+		const uint8_t *d = heal_dec + (size_t)i * 2048;
+		if (is_scrambled_sector(d)) return 0;   // a zero key again: nothing decrypted
+		sc += start_codes(d);
+	}
+	return scr > 0 && sc >= HEAL_MIN_SC;
+}
+
+// VOB `vi`'s key domain handed on a scrambled sector at `at`. Returns 1 with a
+// proven key selected (cur_key/key_ok set, and every extent of the domain repointed
+// at it, so re-entry is a cached lookup), 0 if nothing could be proven. Either way
+// the domain is not tried again this session: no retry storm on a bad disc.
+static int heal_key(int vi, uint32_t at)
+{
+	uint32_t old = g_vobs[vi].key;
+	int had_key = key_ok;   // 1: the key block gave a (zero) key; 0: it gave none
+	for (int i = 0; i < g_nvobs; i++) if (g_vobs[i].key == old) g_vobs[i].heal_tried = 1;
+	g_heals++;
+
+	uint32_t end = g_vobs[vi].start + g_vobs[vi].nsec;
+	int w = (int)(end - at);
+	if (w > HEAL_WIN) w = HEAL_WIN;
+
+	uint32_t cand[2];
+	int nc = 0;
+	int sib = sibling_key(vi);
+	if (sib >= 0) cand[nc++] = (uint32_t)sib;
+	cand[nc++] = at;
+
+	if (p_seek(css, (int)at, DVDCSS_NOFLAGS) >= 0 &&
+	    p_read(css, heal_raw, w, DVDCSS_NOFLAGS) == w)
+	{
+		for (int c = 0; c < nc; c++)
+		{
+			if (!try_key(cand[c], at, w)) continue;
+			for (int i = 0; i < g_nvobs; i++) if (g_vobs[i].key == old) g_vobs[i].key = cand[c];
+			cur_key = (int)cand[c];
+			key_ok  = 1;
+			css_pos = -1;
+			g_heal_ok++;
+			css_log("key: VOB @%u -- title key from block %u %s; %s key from block %u decrypts it",
+			        g_vobs[vi].start, old, had_key ? "is zero" : "missing",
+			        (sib >= 0 && cand[c] == (uint32_t)sib) ? "the title set's other" : "a fresh",
+			        cand[c]);
+			return 1;
+		}
+	}
+	css_log("key: VOB @%u -- sector %u still scrambled and no key could be proven "
+	        "(tried block %u%s); it will reach the core scrambled", g_vobs[vi].start, at,
+	        old, sib >= 0 ? " and the title set's other key" : "");
+	// Put the domain back exactly as it was: try_key() may have left libdvdcss on a
+	// candidate that did NOT prove out, and decrypting with that would be garbage.
+	// A key block that gave a (zero) key is re-selected -- a cached lookup; one that
+	// gave none stays raw WITHOUT asking again, since every SEEK_KEY there would
+	// re-run the crack that already failed.
+	cur_key = (int)old;
+	key_ok  = had_key && p_seek(css, (int)old, DVDCSS_SEEK_KEY) >= 0;
+	css_pos = -1;
+	return 0;
+}
+
 // One libdvdcss read that stays inside ONE key domain (a single VOB, or the
 // non-VOB sectors between them). It may return fewer than `count` -- it clamps at
 // a VOB end -- and dvd_css_read() below is what turns that into a full window.
@@ -962,12 +1172,14 @@ static int css_read_chunk(void *buf, uint32_t lba, uint32_t count)
 
 	if (decrypt)
 	{
-		// Don't let one read span two titles (different keys): clamp to this VOB.
+		// Don't let one read span two VOB extents: clamp to this one. (Parts of one
+		// title set share a key, so the next chunk simply carries on -- no SEEK_KEY.)
 		uint32_t vob_end = g_vobs[vi].start + g_vobs[vi].nsec;
 		if (lba + count > vob_end) count = vob_end - lba;
 
-		// Select this VOB's title key — ALWAYS at the VOB's own START sector, which
-		// is the block crack_title_keys() primed, and ONLY when the VOB changes.
+		// Select this key domain's title key -- ALWAYS at its key block (see the ★
+		// at g_vobs: a title VOB part's is VTS_nn_1's start), which is the block
+		// crack_title_keys() primed, and ONLY when the domain changes.
 		//
 		// ⚠ SEEK_KEY at the read position is NOT a cached lookup. libdvdcss matches
 		// its title cache on the EXACT start LBA -- measured in the shipped
@@ -981,28 +1193,27 @@ static int css_read_chunk(void *buf, uint32_t lba, uint32_t count)
 		// (field report 2026-09-17, reproduced: the dvdcss cache gained a key file
 		// per seek). Linear playback never tripped it, because lba == css_pos.
 		//
-		// libdvdread does exactly what this does now -- one key per VOB file, taken
-		// at the file start and never at the read offset (dvd_reader.c
-		// DVDReadBlocks(), keyed off dvd_file->css_title; initAllCSSKeys() primes
-		// the same blocks crack_title_keys() does). One key per VOB is the whole
-		// stack's model, so keying at the start weakens nothing: it is already what
-		// uninterrupted linear playback relies on.
-		if (vi != cur_vob)
+		// libdvdread is the model: initAllCSSKeys() takes one key per title set
+		// DOMAIN (VTS_nn_0, and VTS_nn_1 for all of parts 1..9), and DVDReadBlocks()
+		// re-keys only when the FILE changes, at dvd_file->lb_start -- never at the
+		// read offset. (This comment used to say "one key per VOB file". That was a
+		// misreading, and it is issue #122.)
+		if ((int)g_vobs[vi].key != cur_key)
 		{
-			key_ok  = (p_seek(css, (int)g_vobs[vi].start, DVDCSS_SEEK_KEY) >= 0);
-			cur_vob = vi;
-			// A failed key seek leaves the position unknown; force the seek below.
-			css_pos = key_ok ? (int)g_vobs[vi].start : -1;
+			key_ok  = (p_seek(css, (int)g_vobs[vi].key, DVDCSS_SEEK_KEY) >= 0);
+			cur_key = (int)g_vobs[vi].key;
+			// SEEK_KEY positions at the key block; a failed one leaves it unknown.
+			css_pos = key_ok ? (int)g_vobs[vi].key : -1;
 			if (!key_ok)
 			{
 				static int kf = 0;
-				if (kf < 10) { kf++; css_log("no title key for VOB @%u: %s", g_vobs[vi].start, p_error ? p_error(css) : "?"); }
+				if (kf < 10) { kf++; css_log("no title key for VOB @%u (block %u): %s", g_vobs[vi].start, g_vobs[vi].key, p_error ? p_error(css) : "?"); }
 			}
 		}
 		// ⚠ The verdict must be LATCHED across calls, not recomputed per read. It
-		// used to be a local set on the failing read only, while cur_vob was still
-		// advanced -- so the NEXT sequential read skipped this block entirely and
-		// decrypted with a key that had never been obtained, turning a raw-read
+		// used to be a local set on the failing read only, while the selection was
+		// still advanced -- so the NEXT sequential read skipped this block entirely
+		// and decrypted with a key that had never been obtained, turning a raw-read
 		// fallback into garbage for the rest of the VOB.
 		if (!key_ok) decrypt = 0;   // no key -> read raw rather than corrupt
 
@@ -1013,7 +1224,7 @@ static int css_read_chunk(void *buf, uint32_t lba, uint32_t count)
 			{
 				static int sf = 0;
 				if (sf < 10) { sf++; css_log("seek %u failed: %s", lba, p_error ? p_error(css) : "?"); }
-				css_pos = -1; cur_vob = -1; key_ok = 0; return -1;
+				css_pos = -1; cur_key = -1; key_ok = 0; return -1;
 			}
 		}
 	}
@@ -1029,7 +1240,7 @@ static int css_read_chunk(void *buf, uint32_t lba, uint32_t count)
 				css_pos = -1; return -1;
 			}
 		}
-		cur_vob = -1;
+		cur_key = -1;
 		key_ok  = 0;
 	}
 
@@ -1041,8 +1252,31 @@ static int css_read_chunk(void *buf, uint32_t lba, uint32_t count)
 		css_pos = -1;
 		return -1;
 	}
-
 	css_pos = (int)(lba + n);
+
+	// A VOB sector handed back still scrambled -- by the DECRYPT path (zero key) or
+	// the raw fallback (no key) alike. See heal_key().
+	if (vi >= 0)
+	{
+		int j = first_scrambled((const uint8_t *)buf, n);
+		if (j >= 0)
+		{
+			if (!g_vobs[vi].heal_tried && heal_key(vi, lba + (uint32_t)j))
+			{
+				// Re-read what was still scrambled, with the proven key.
+				if (p_seek(css, (int)(lba + j), DVDCSS_NOFLAGS) >= 0 &&
+				    p_read(css, (uint8_t *)buf + (size_t)j * 2048, n - j, DVDCSS_READ_DECRYPT) == n - j)
+				{
+					css_pos = (int)(lba + n);
+					return n;
+				}
+				css_pos = -1;
+				return j > 0 ? j : -1;
+			}
+			for (int i = j; i < n; i++)
+				if (is_scrambled_sector((const uint8_t *)buf + (size_t)i * 2048)) g_residual++;
+		}
+	}
 	return n;
 }
 
@@ -1148,7 +1382,7 @@ void dvd_css_close(void)
 	css = NULL;
 	raw_fd = -1;
 	css_pos = -1;
-	cur_vob = -1;
+	cur_key = -1;
 	key_ok  = 0;
 	g_nvobs = 0;
 	css_size = 0;

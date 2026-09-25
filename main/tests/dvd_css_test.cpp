@@ -50,6 +50,14 @@
 // 91-entry layout (one feature extent filed under 11 title sets); the shipped
 // 64-entry, no-dedupe table left its VTS_20 sneak peeks unregistered.
 //
+// [15]-[19] are issue #122: CSS ENCRYPTED after a chapter skip on physical "Hitch"
+// and "Kung Fu Panda", on a drive with no region set. The fake grows a CSS MODEL
+// (see model_sector) built from what libdvdcss 1.6.0 was measured to do on those
+// discs: a crack that sees 2000 clean sectors caches an ALL-ZERO key, a too-short
+// VOB cannot be cracked at all, and a zero key leaves sectors scrambled. The arms
+// score what reaches the core -- scrambled sectors, and sectors decrypted to noise
+// by a wrong key -- never a signal the fix names.
+//
 // Host-side: build with main/tests/run_tests.sh. The module is #included so the
 // dlopen'd libdvdcss entry points can be replaced with recording stubs.
 
@@ -110,11 +118,68 @@ static uint8_t *fix_sector(uint32_t lba)
     return fix_sec[nfix++];
 }
 
+// The stamp sits at STAMP, clear of the pack header the CSS model writes at 0x00
+// and of the 0x80.. region libdvdcss decrypts (so it can never read as a start code).
+#define STAMP 0x40
 static void put_stamp(uint8_t *q, uint32_t lba, int dec)
 {
+    q += STAMP;
     q[0] = lba; q[1] = lba >> 8; q[2] = lba >> 16; q[3] = lba >> 24; q[4] = (uint8_t)dec;
 }
-static uint32_t get_lba(const uint8_t *q) { return q[0] | q[1] << 8 | q[2] << 16 | (uint32_t)q[3] << 24; }
+static uint32_t get_lba(const uint8_t *q) { q += STAMP; return q[0] | q[1] << 8 | q[2] << 16 | (uint32_t)q[3] << 24; }
+
+// ---- the CSS model (issue #122) ---------------------------------------------
+// With model_on, every VOB sector is a real-shaped pack, and CSS behaves the way
+// libdvdcss 1.6.0 was measured to behave on the two reported discs:
+//  - a title key is a small integer; `scr[]` lists the scrambled sector ranges and
+//    the key each was scrambled under;
+//  - SEEK_KEY at an unseen block CRACKS (css.c CrackTitleKey): it scans forward
+//    from the block and, if 2000 consecutive sectors hold no scrambled one, gives
+//    up with an ALL-ZERO key that it caches ("no scrambled sectors found") -- the
+//    Hitch failure; a range marked `uncrackable` makes the crack fail outright
+//    (-1, nothing cached) -- the Kung Fu Panda VTS_14_1 failure;
+//  - a DECRYPT read with key 0 leaves a scrambled sector exactly as it was (bits
+//    set); with the right key it clears the bits and the payload carries MPEG
+//    start codes; with a WRONG key it clears the bits and the payload is noise.
+// So a test can score what reaches the core: good_sectors() below.
+static int model_on;
+static struct { uint32_t lo, hi; int key, uncrackable; } scr[16];
+static int nscr;
+static int cur_libkey;                 // libdvdcss's current title key (0 = none/zero)
+static int primed_key[MAXCALLS];       // key held for primed[i] (the title list + cache)
+
+static int scr_at(uint32_t lba)
+{
+    for (int i = 0; i < nscr; i++) if (lba >= scr[i].lo && lba < scr[i].hi) return i;
+    return -1;
+}
+static void add_scr(uint32_t lo, uint32_t hi, int key, int uncrackable)
+{
+    scr[nscr].lo = lo; scr[nscr].hi = hi; scr[nscr].key = key; scr[nscr].uncrackable = uncrackable;
+    nscr++;
+}
+// CrackTitleKey() from block b: -1 fail, 0 zero key, else the key.
+static int model_crack(uint32_t b)
+{
+    for (uint32_t s = b; s < b + 2000; s++)
+    {
+        int r = scr_at(s);
+        if (r >= 0) return scr[r].uncrackable ? -1 : scr[r].key;
+    }
+    return 0;
+}
+static void model_sector(uint8_t *q, uint32_t lba, int decrypt)
+{
+    memset(q, 0, 2048);
+    q[2] = 1; q[3] = 0xBA; q[0x0D] = 0xF8;                 // pack, no stuffing
+    q[0x10] = 1; q[0x11] = 0xE0; q[0x14] = 0x80;           // video PES, '10' flags
+    int r = scr_at(lba);
+    int clear = (r < 0) || (decrypt && cur_libkey != 0);
+    int right = (r < 0) || (decrypt && cur_libkey == scr[r].key);
+    if (!clear) q[0x14] |= 0x30;                           // still scrambled
+    if (right) { q[0x100 + 2] = 1; q[0x100 + 3] = 0xB3; q[0x300 + 2] = 1; q[0x300 + 3] = 0x01; }
+    else       memset(q + 0x80, 0xA5, 2048 - 0x80);        // noise: no start codes
+}
 
 static int fake_seek(dvdcss_t, int block, int flags)
 {
@@ -125,13 +190,14 @@ static int fake_seek(dvdcss_t, int block, int flags)
     if (flags & DVDCSS_SEEK_KEY)
     {
         if (block == fail_key_at) return -1;
-        int hit = 0;
-        for (int i = 0; i < nprimed; i++) if (primed[i] == block) hit = 1;
-        if (!hit)
-        {
-            key_acquisitions++;                               // seconds to minutes
-            if (nprimed < MAXCALLS) primed[nprimed++] = block; // ...then cached
-        }
+        int hit = -1;
+        for (int i = 0; i < nprimed; i++) if (primed[i] == block) hit = i;
+        if (hit >= 0) { cur_libkey = primed_key[hit]; return block; }
+        key_acquisitions++;                                   // seconds to minutes
+        int k = model_on ? model_crack((uint32_t)block) : 1;
+        if (k < 0) return -1;                                 // a failed crack caches nothing
+        if (nprimed < MAXCALLS) { primed[nprimed] = block; primed_key[nprimed] = k; nprimed++; }
+        cur_libkey = k;
     }
     return block;
 }
@@ -160,6 +226,8 @@ static int fake_read(dvdcss_t, void *buf, int count, int flags)
     for (int i = 0; i < count; i++)
     {
         uint8_t *q = (uint8_t *)buf + (size_t)i * 2048;
+        if (model_on) model_sector(q, (uint32_t)(cur_block + i), (flags & DVDCSS_READ_DECRYPT) != 0);
+        else          memset(q, 0, 2048);
         put_stamp(q, (uint32_t)(cur_block + i), (flags & DVDCSS_READ_DECRYPT) ? 1 : 0);
     }
     cur_block += count;
@@ -235,15 +303,23 @@ static void setup(void)
     g_vobs[0].start = VOB0; g_vobs[0].nsec = VOBN;
     g_vobs[1].start = VOB1; g_vobs[1].nsec = VOBN;
     g_vobs[2].start = VOB2; g_vobs[2].nsec = VOBN;
+    for (int i = 0; i < g_nvobs; i++)
+    {
+        g_vobs[i].key = g_vobs[i].start;     // unnamed extents: keyed at their own start
+        g_vobs[i].tt = g_vobs[i].part = -1;
+        g_vobs[i].heal_tried = 0;
+    }
+    model_on = 0; nscr = 0; cur_libkey = 0;
+    g_heals = g_heal_ok = g_residual = 0;
 
-    cur_vob = -1; css_pos = -1; key_ok = 0; raw_fd = -1;
+    cur_key = -1; css_pos = -1; key_ok = 0; raw_fd = -1;
     nseeks = 0; reads_decrypt = reads_raw = 0; last_count = 0;
     key_acquisitions = 0; fail_key_at = -1;
     fail_read_from = -1; nreadcalls = 0;
 
     // What crack_title_keys() leaves behind at mount: one key per VOB, at its start.
     nprimed = 0;
-    for (int i = 0; i < g_nvobs; i++) primed[nprimed++] = (int)g_vobs[i].start;
+    for (int i = 0; i < g_nvobs; i++) { primed_key[nprimed] = 1; primed[nprimed++] = (int)g_vobs[i].start; }
 }
 
 static int is_vob_start(int block)
@@ -272,6 +348,78 @@ static void skip_to(uint32_t lba)
     uint8_t buf[2048];
     dvd_css_read(buf, lba, 1);
 }
+
+
+// ---- issue #122 helpers ------------------------------------------------------
+// A mounted disc under the CSS model: nothing primed yet, so enumerate_vobs() +
+// crack_title_keys() are the real mount path, cracks and all.
+static void model_setup(void)
+{
+    setup();
+    model_on = 1; nscr = 0; cur_libkey = 0;
+    nprimed = 0;
+    iso_begin();
+}
+static void model_mount(void)
+{
+    iso_end();
+    enumerate_vobs();
+    crack_title_keys("test");
+    nseeks = 0; key_acquisitions = 0; reads_decrypt = reads_raw = 0;
+}
+static void vob(const char *name, uint32_t lba, uint32_t nsec) { dir_add(name, lba, nsec * 2048u, 0); }
+
+// What reached the core. `bad` = still scrambled, `noise` = decrypted with a WRONG
+// key (bits clear, no start codes) -- the one outcome worse than CSS ENCRYPTED,
+// because nothing mutes it.
+static int bad_n, noise_n;
+static void score(const uint8_t *b, int n)
+{
+    for (int i = 0; i < n; i++)
+    {
+        const uint8_t *q = b + (size_t)i * 2048;
+        int sc = (q[0x14] & 0x30) != 0;
+        int ok = q[0x102] == 1 && q[0x103] == 0xB3;
+        if (sc) bad_n++;
+        else if (!ok) noise_n++;
+    }
+}
+static void play(uint32_t lba, int n)
+{
+    static uint8_t w[8 * 2048];
+    if (n > 8) n = 8;
+    int r = dvd_css_read(w, lba, (uint32_t)n);
+    if (r > 0) score(w, r);
+}
+static int key_seeks_at(uint32_t b)
+{
+    int n = 0;
+    for (int i = 0; i < nseeks && i < MAXCALLS; i++)
+        if ((seeks[i].flags & DVDCSS_SEEK_KEY) && seeks[i].block == (int)b) n++;
+    return n;
+}
+
+// Physical "Hitch", its real VTS_01 layout. The first 2000 sectors of parts 2..5
+// hold NO scrambled sector (measured); part 1 and the menu VOB are scrambled from
+// their second sector. One title key throughout (the drive's own answer).
+#define H_MENU  158392u
+#define H_P1    239944u
+#define H_PN    524287u
+static const uint32_t h_part[5] = {239944u, 764231u, 1288518u, 1812805u, 2337092u};
+static void hitch_layout(int with_menu, int part1_uncrackable)
+{
+    vob("VIDEO_TS.VOB;1", 158249u, 57u);                    // never scrambled
+    if (with_menu) { vob("VTS_01_0.VOB;1", H_MENU, 81552u); add_scr(H_MENU + 1, H_MENU + 81552u, 7, 0); }
+    for (int p = 0; p < 5; p++)
+    {
+        char nm[24];
+        snprintf(nm, sizeof nm, "VTS_01_%d.VOB;1", p + 1);
+        uint32_t n = p == 4 ? 118005u : H_PN;
+        vob(nm, h_part[p], n);
+        add_scr(h_part[p] + (p ? 2000u : 1u), h_part[p] + n, 7, p == 0 ? part1_uncrackable : 0);
+    }
+}
+static void poison(uint32_t b) { primed[nprimed] = (int)b; primed_key[nprimed] = 0; nprimed++; }
 
 int main(void)
 {
@@ -400,7 +548,9 @@ int main(void)
     check("IFO sector is still not a VOB", vob_index(504u), -1);
     nseeks = 0;
     crack_title_keys("test");
-    check("SEEK_KEY calls priming the disc", key_seek_count(), 21);
+    // One key block per title set domain (issue #122): the feature's parts 2..7 are
+    // keyed at part 1, so 21 extents need 15 key blocks.
+    check("SEEK_KEY calls priming the disc", key_seek_count(), 15);
 
     // [10] The largest disc the spec allows: 99 title sets x (menu + 9 parts), plus
     //      the VMG's VIDEO_TS.VOB = 991 distinct VOBs. Every one must register.
@@ -459,7 +609,7 @@ int main(void)
             const uint8_t *q = win + i * 2048;
             if (q[0] == 0xEE && q[1] == 0xEE) stale++;
             else if (get_lba(q) != at + (uint32_t)i) wrong++;
-            else if (q[4] != 1) clear++;
+            else if (q[STAMP + 4] != 1) clear++;
         }
         check("stale sectors left in the window", stale, 0);
         check("sectors carrying another LBA", wrong, 0);
@@ -502,6 +652,118 @@ int main(void)
         check("the library's fd is close-on-exec", (fcntl(lib, F_GETFD) & FD_CLOEXEC) != 0, 1);
         close(lib); close(tfd); unlink(path);
     }
+
+
+    // [15] ISSUE #122, "Hitch" on a drive with no region set. The feature's parts
+    //      2..5 used to be keyed at their OWN starts, where the crack sees 2000 clean
+    //      sectors and caches a ZERO key: everything past the first 1 GB reached the
+    //      core scrambled. Keyed at part 1, as libdvdread does, nothing needs a heal.
+    printf("[15] Hitch: a title set's parts share part 1's key\n");
+    model_setup();
+    hitch_layout(1, 0);
+    nseeks = 0;
+    iso_end(); enumerate_vobs(); crack_title_keys("test");
+    check("[15] SEEK_KEY calls priming Hitch", key_seek_count(), 3);   // VMG, menu, part 1
+    nseeks = 0; key_acquisitions = 0; bad_n = noise_n = 0;
+    play(h_part[2] + 300000u, 8);                        // Next Chapter into part 3
+    play(h_part[4] + 50000u, 8);                         // ...and part 5
+    play(h_part[1] - 3u, 8);                             // linear across part 1 -> 2
+    play(h_part[1] + 5u, 8);
+    check("[15] sectors reaching the core scrambled", bad_n, 0);
+    check("[15] sectors decrypted with a wrong key", noise_n, 0);
+    int at_parts = 0;
+    for (int p = 1; p < 5; p++) at_parts += key_seeks_at(h_part[p]);
+    check("[15] SEEK_KEY calls at a VTS_01_2..5 start", at_parts, 0);
+    check("[15] heals needed", g_heals, 0);
+    check("[15] title keys cracked by the seeks", key_acquisitions, 0);
+
+    // [16] The same failure one level up: part 1 ITSELF holds a zero key (a crack
+    //      that saw 2000 clean sectors there, cached for good). The data says so --
+    //      a decrypted sector still carries its scrambling bits -- and the title
+    //      set's other key block (the menu VOB's) is tried and PROVEN on the data.
+    printf("[16] a poisoned part-1 key is healed from the menu VOB's key\n");
+    model_setup();
+    hitch_layout(1, 0);
+    poison(H_P1);
+    model_mount();
+    bad_n = noise_n = 0;
+    play(h_part[2] + 300000u, 8);
+    play(h_part[2] + 300008u, 8);
+    play(h_part[0] + 1000u, 8);
+    check("[16] sectors reaching the core scrambled", bad_n, 0);
+    check("[16] sectors decrypted with a wrong key", noise_n, 0);
+    check("[16] heals attempted", g_heals, 1);
+    check("[16] heals proven", g_heal_ok, 1);
+
+    // [16b] ...and with no menu VOB to borrow from, a key taken AT the scrambled
+    //       sector: the crack then starts inside scrambled data.
+    printf("[16b] a poisoned part-1 key with no sibling: a fresh key at the sector\n");
+    model_setup();
+    hitch_layout(0, 0);
+    poison(H_P1);
+    model_mount();
+    bad_n = noise_n = 0;
+    play(h_part[2] + 300000u, 8);
+    play(h_part[3] + 1000u, 8);
+    check("[16b] sectors reaching the core scrambled", bad_n, 0);
+    check("[16b] sectors decrypted with a wrong key", noise_n, 0);
+    check("[16b] heals proven", g_heal_ok, 1);
+
+    // [17] Nothing can be proven: no sibling, and the scrambled data resists every
+    //      crack. ONE attempt per key domain per session, then reads carry on --
+    //      never a crack per read on the thread that feeds the core.
+    printf("[17] a heal that cannot succeed is tried once\n");
+    model_setup();
+    hitch_layout(0, 1);
+    for (int i = 0; i < nscr; i++) scr[i].uncrackable = 1;
+    poison(H_P1);
+    model_mount();
+    for (int i = 0; i < 20; i++) play(h_part[2] + 1000u + 5000u * (uint32_t)i, 8);
+    check("[17] heal attempts over 20 reads", g_heals, 1);
+    check("[17] cracks attempted over 20 reads", key_acquisitions, 1);
+    check("[17] sectors counted as reaching the core scrambled", g_residual > 0, 1);
+
+    // [18] "Kung Fu Panda" VTS_14: the title VOB is 169 sectors and cannot be
+    //      cracked from any block (measured, 0/11 attacks at every start). Its true
+    //      key is the menu VOB's, which cracks at once. The failed crack leaves
+    //      key_ok = 0 -- a RAW read -- so the data check must cover that path too.
+    printf("[18] Panda: an uncrackable title VOB takes its menu VOB's proven key\n");
+    model_setup();
+    vob("VTS_14_0.VOB;1", 3187180u, 187u);
+    vob("VTS_14_1.VOB;1", 3187367u, 169u);
+    add_scr(3187181u, 3187180u + 187u, 9, 0);
+    add_scr(3187368u, 3187367u + 169u, 9, 1);
+    model_mount();
+    bad_n = noise_n = 0;
+    for (uint32_t o = 0; o < 168u; o += 8) play(3187367u + o, 8);
+    check("[18] sectors reaching the core scrambled", bad_n, 0);
+    check("[18] sectors decrypted with a wrong key", noise_n, 0);
+    check("[18] heals proven", g_heal_ok, 1);
+
+    // [18b] ...but a sibling key is only a GUESS until the data proves it. A menu VOB
+    //       whose key differs must be refused: garbage with the scrambling bits
+    //       cleared would play unmuted, which is worse than CSS ENCRYPTED.
+    printf("[18b] a sibling key the data does not prove is refused\n");
+    model_setup();
+    vob("VTS_14_0.VOB;1", 3187180u, 187u);
+    vob("VTS_14_1.VOB;1", 3187367u, 169u);
+    add_scr(3187181u, 3187180u + 187u, 5, 0);            // a DIFFERENT key
+    add_scr(3187368u, 3187367u + 169u, 9, 1);
+    model_mount();
+    bad_n = noise_n = 0;
+    for (uint32_t o = 0; o < 168u; o += 8) play(3187367u + o, 8);
+    check("[18b] sectors decrypted with a wrong key", noise_n, 0);
+    check("[18b] heals proven", g_heal_ok, 0);
+
+    // [19] A part with no part 1 to key from keeps its own start (the old
+    //      behaviour) and is counted, never silent.
+    printf("[19] VTS_03_2 with no VTS_03_1\n");
+    model_setup();
+    vob("VTS_03_0.VOB;1", 5000u, 100u);
+    vob("VTS_03_2.VOB;1", 6000u, 100u);
+    iso_end(); enumerate_vobs();
+    check("[19] orphan parts counted", g_orphan_parts, 1);
+    check("[19] the orphan keys at its own start", (long)g_vobs[vob_index(6000u)].key, 6000);
 
     printf("\ndvd_css_test: %s (%d error%s)\n", errs ? "FAIL" : "PASS", errs, errs == 1 ? "" : "s");
     return errs ? 1 : 0;
