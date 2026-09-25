@@ -136,6 +136,14 @@ module dvd_iso_reader #(
     // + flush contract as seek_cell. See docs/dvd_nav.md "Seeking / Phase 8".
     input             seek_rbn_pulse, // pulse: jump to seek_rbn
     input      [31:0] seek_rbn,       // target RBN (2048-sector, VTSTT_VOBS-relative)
+    // TIME seek through the disc's VTS time map (Phase 8b, reopened 2026-09-25,
+    // issue #127). Qualifies a seek_rbn_pulse in the same cycle: seek to
+    // seek_tm_secs (PGC-relative seconds) via VTS_TMAPT, with seek_rbn kept as the
+    // FALLBACK whenever the map is missing or implausible. Title domain only.
+    input             seek_tm_req,
+    input      [16:0] seek_tm_secs,
+    output reg        tmap_used,      // the last time seek landed through the map
+    output reg        tmap_fell,      // ...or fell back to seek_rbn
     // Chapter (PTT) skip (Phase 8): jump to the previous/next chapter boundary.
     // Resolved in-fabric from the PGC program_map (chapter -> entry cell) against
     // the current cell, then executed via the seek_cell primitive. Title only.
@@ -872,6 +880,34 @@ reg        seek_pending;
 reg [7:0]  seek_cell_l;
 reg        seek_is_rbn;               // 1 = latched seek is a raw-RBN scrub
 reg [31:0] seek_rbn_l;                // latched target RBN (2048-sector)
+// ---- TIME seek via the VTS time map (Phase 8b reopened, issue #127) ----------
+// VTS_TMAPT (VTSI_MAT@0xD4): nr_of_tmaps u16, zero u16, last_byte u32,
+// tmap_offset u32[nr] (from the TMAPT start). VTS_TMAP[pgcn-1]: tmu u8 (s),
+// zero u8, nr_of_entries u16, map_ent u32[] -- entry j = the VOBS sector of the
+// VOBU at time (j+1)*tmu, bit 31 = discontinuity (masked, as libdvdnav does).
+// Resolved in S_TMAP (a phase machine in ONE state code: the 6-bit state space
+// had exactly two codes free) after the seek's flush, then handed to the same
+// VOBU snap every scrub landing takes. Library sweep (tools/tmap_check.py, 1,432
+// images): 91.8 % of maps within 1.04 s of the time each entry claims.
+reg        seek_tm;                   // latched seek is a TIME seek; seek_rbn_l = fallback
+reg [16:0] seek_tm_s;                 // its target, PGC-relative seconds
+reg [3:0]  tm_ph;                     // S_TMAP phase
+reg        tm_v;                      // header cached for the loaded PGC
+reg [31:0] tm_sec;                    // TMAPT, then the TMAP header's sector
+reg [10:0] tm_off;                    // the TMAP header's byte offset in tm_sec
+reg [7:0]  tm_tmu;                    // seconds per entry
+reg [15:0] tm_nent;
+reg [16:0] tm_t;                      // division: remainder (seconds past lo)
+reg [15:0] tm_k;                      // ...and quotient (lo entry = time k*tmu)
+reg        tm_last;                   // past the map: hi = lo
+reg [31:0] tm_lo, tm_hi;              // bracketing VOBS sectors
+reg [39:0] tm_acc;                    // (hi-lo)*r, then shifted out by the divide
+reg [8:0]  tm_rem;                    // divide remainder
+reg [31:0] tm_q;                      // interpolated sector offset past lo
+reg [5:0]  tm_i;                      // mul / div bit counter
+localparam [3:0] TM_MAT = 4'd0, TM_MAT2 = 4'd1, TM_TAB = 4'd2, TM_TAB2 = 4'd3,
+                 TM_HDR = 4'd4, TM_DIV = 4'd5, TM_ENT = 4'd6, TM_ENT2 = 4'd7,
+                 TM_MUL = 4'd8, TM_QDIV = 4'd9, TM_GO = 4'd10, TM_FAIL = 4'd11;
 reg        rbn_override;              // S_CELL_LOAD2: use seek_rbn_l, not cf_rd
 reg [7:0]  rbn_scan_i;                // S_RBN_SCAN containing-cell scan cursor
 // S_RBN_SCAN MISS path: the best cell seen so far that STARTS at or below the
@@ -1435,6 +1471,7 @@ localparam S_PTTLD_DONE   = 6'd56;   // re-fetch the resume field (@200 / @204) 
 localparam S_CHK_RAW      = 6'd58;   // raw MODE2/2352 (VCD/SVCD .bin) signature probe
 localparam S_ANGLE_PRE    = 6'd59;   // hold the angle pick until the VM's PRE has run
 localparam S_ANGLE_PICK   = 6'd60;   // load the effective angle's cell
+localparam S_TMAP         = 6'd61;   // Phase 8b: time -> sector through VTS_TMAPT (issue #127)
 // (6'd61 was S_ANGLE_VOB, declared with the angle snap and never entered: the
 //  VOB_ID learn lives in the S_CELL_LOAD2 arm plus S_NAV_SEEK*/S_NAV_VOB.)
 localparam S_NAV_VOB      = 6'd62;   // NAV pack found: check its vobu_vob_idn
@@ -1798,6 +1835,19 @@ wire [20:0] eff_ptt_off     = vts_pgcit_ptr[20:0] +
 // PTT-load taps: VTS_PTT_SRPT last_byte@4 / ttu_offset[ttn]@(shadow+4) = rbuf[4..7]
 // (BE u32). tt_srpt_ptr (rbuf[0..3]) doubles as ttu_offset[ttn-1].
 wire [31:0] rbuf_be32_4     = {rbuf[4], rbuf[5], rbuf[6], rbuf[7]};
+// Phase 8b (issue #127) S_TMAP address math. tmap_offset[pgcn-1] sits at
+// TMAPT+8+4*(pgcn-1); entry j at the map header +4+4j (j = k-1, clamped to the
+// last entry; k = 0 reads entry 0 as its hi bracket).
+wire [17:0] tm_tab_off  = 18'd8 + {cur_pgcn[15:0] - 16'd1, 2'b00};
+wire [15:0] tm_ent_j    = (tm_k == 16'd0)        ? 16'd0
+                        : (tm_k > tm_nent)        ? (tm_nent - 16'd1)
+                        :                            (tm_k - 16'd1);
+wire [18:0] tm_ent_byte = {8'd0, tm_off} + 19'd4 + {1'b0, tm_ent_j, 2'b00};
+// restoring divide step (TM_QDIV): shift the next dividend bit in, try tmu
+wire [9:0]  tm_qd_try   = {tm_rem, tm_acc[39]};
+wire        tm_qd_ge    = (tm_qd_try >= {2'd0, tm_tmu});
+wire [8:0]  tm_qd_sub   = tm_qd_try[8:0] - {1'b0, tm_tmu};
+wire [8:0]  tm_qd_rem   = tm_qd_try[8:0];
 
 wire pfx_vts = rbuf[33]=="V" && rbuf[34]=="T" && rbuf[35]=="S" && rbuf[36]=="_";
 wire sfx_vob = rbuf[41]=="." && rbuf[42]=="V" && rbuf[43]=="O" && rbuf[44]=="B";
@@ -2286,6 +2336,25 @@ always @(posedge clk or negedge rst_n) begin
         seek_pending <= 1'b0;
         seek_cell_l  <= 8'd0;
         seek_is_rbn  <= 1'b0;
+        seek_tm      <= 1'b0;
+        seek_tm_s    <= 17'd0;
+        tm_ph        <= TM_MAT;
+        tm_v         <= 1'b0;
+        tm_sec       <= 32'd0;
+        tm_off       <= 11'd0;
+        tm_tmu       <= 8'd0;
+        tm_nent      <= 16'd0;
+        tm_t         <= 17'd0;
+        tm_k         <= 16'd0;
+        tm_last      <= 1'b0;
+        tm_lo        <= 32'd0;
+        tm_hi        <= 32'd0;
+        tm_acc       <= 40'd0;
+        tm_rem       <= 9'd0;
+        tm_q         <= 32'd0;
+        tm_i         <= 6'd0;
+        tmap_used    <= 1'b0;
+        tmap_fell    <= 1'b0;
         jnat_l       <= 1'b0;
         snat_l       <= 1'b0;
         seek_rbn_l   <= 32'd0;
@@ -2529,6 +2598,8 @@ always @(posedge clk or negedge rst_n) begin
             seek_pending <= 1'b1;
             seek_is_rbn  <= 1'b1;
             seek_rbn_l   <= seek_rbn;
+            seek_tm      <= seek_tm_req;   // a TIME seek: seek_rbn is its fallback
+            seek_tm_s    <= seek_tm_secs;
             snat_l       <= 1'b0;          // gamepad scrub: never gated
         end else if (seek_rbn_pulse && lin_seek_ok_o) begin
             // Linear transport scrub (raw VCD/SVCD .bin, flat .mpg/.VOB):
@@ -2779,6 +2850,7 @@ always @(posedge clk or negedge rst_n) begin
 
         if (start) begin
             state      <= S_INIT;
+            tm_v       <= 1'b0;            // a new disc: no cached time map
             sd_rd      <= 1'b0;
             blk_inflight <= 1'b0;
             wr_ptr     <= 0;
@@ -2982,6 +3054,7 @@ always @(posedge clk or negedge rst_n) begin
             cell_seamless_r <= 1'b0;
             ilvu_armed     <= 1'b0;
             seek_pending <= 1'b0;
+            seek_tm      <= 1'b0;          // consumed below (reads the old value)
             seek_ack     <= 1'b1;          // tell emu.sv to pulse load_flush
             // A seek issued while a menu PGC is loaded is a menu-internal
             // program/cell link (LinkPGN transition cell) -> hold the VBUF.
@@ -3039,6 +3112,14 @@ always @(posedge clk or negedge rst_n) begin
                     state <= S_STREAM;         // empty cell list (shouldn't happen)
                 end else if (menu_dom) begin
                     state <= S_RBN_SCAN2;      // menu scrub: no VOBU align, direct scan
+                end else if (seek_tm) begin
+                    // TIME seek: resolve the sector through the disc's time map
+                    // first (S_TMAP), then take the same snap below. A header
+                    // already cached for this PGC skips straight to the divide.
+                    tm_ph <= tm_v ? TM_DIV : TM_MAT;
+                    tm_t  <= seek_tm_s;
+                    tm_k  <= 16'd0;
+                    state <= S_TMAP;
                 end else begin
                     nav_cand <= seek_rbn_l;    // walk up from the raw target
                     nav_left <= NAV_CAP[10:0];
@@ -4364,6 +4445,7 @@ always @(posedge clk or negedge rst_n) begin
                 strm_done  <= 1'b0;
                 wr_ptr     <= 0;
                 pgc_loaded <= 1'b1;
+                tm_v       <= 1'b0;        // a new PGC has its own time map
                 // fresh PGC: re-scan any angle block from scratch, and reset the
                 // selected angle to 1 (Phase 9). Angle is a per-title context -
                 // like a set-top box, each new feature/title starts at angle 1;
@@ -4626,6 +4708,155 @@ always @(posedge clk or negedge rst_n) begin
             // one sector forward (bounded by nav_left) until a NAV pack is found,
             // the title extents/end are exceeded, or the budget runs out -> fall
             // back to the raw target (pre-fix behaviour).
+            // ------------------------------------------------------------
+            // Phase 8b (reopened 2026-09-25, issue #127): TIME -> SECTOR through
+            // the disc's VTS time map, then the ordinary scrub landing (VOBU
+            // snap, branch/angle filters) from S_NAV_SEEK2. Entered from the
+            // seek_jump branch AFTER the flush + seek_ack, exactly like the NAV
+            // probe, so the stream cache is already empty and a newer seek or a
+            // jump can pre-empt it between reads (blk_inflight is 0 there).
+            // Every implausible value lands on TM_FAIL, which keeps seek_rbn_l --
+            // the caller's own sector estimate -- and says so on tmap_fell.
+            // Reads use S_SECREAD/S_FETCH (fetch_ret = S_TMAP): the rbuf taps
+            // vts_pgcit_ptr (rbuf[0..3]) and rbuf_be32_4 (rbuf[4..7]) are reused.
+            S_TMAP: begin
+                case (tm_ph)
+                TM_MAT: begin                          // VTSI_MAT@0xD4 = vts_tmapt
+                    sec_lba    <= eff_ifo_lba;
+                    fetch_base <= 11'd212;
+                    fetch_ret  <= S_TMAP;
+                    fi         <= 6'd0;
+                    fi_cap_v   <= 1'b0;
+                    tm_ph      <= TM_MAT2;
+                    state      <= S_SECREAD;
+                end
+                TM_MAT2: begin
+                    if (vts_pgcit_ptr == 32'd0 || cur_pgcn == 16'd0)
+                        tm_ph <= TM_FAIL;              // the disc authors no map
+                    else begin
+                        tm_sec     <= eff_ifo_lba + vts_pgcit_ptr;
+                        sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
+                        fetch_base <= 11'd0;
+                        fetch_ret  <= S_TMAP;
+                        fi         <= 6'd0;
+                        fi_cap_v   <= 1'b0;
+                        tm_ph      <= TM_TAB;
+                        state      <= S_SECREAD;
+                    end
+                end
+                TM_TAB: begin                          // nr_of_tmaps; tmap_offset[pgcn-1]
+                    if (cur_pgcn > nr_pgci_srp)
+                        tm_ph <= TM_FAIL;              // no map for this PGC
+                    else begin
+                        sec_lba    <= tm_sec + {23'd0, tm_tab_off[17:11]};
+                        fetch_base <= tm_tab_off[10:0];
+                        fetch_ret  <= S_TMAP;
+                        fi         <= 6'd0;
+                        fi_cap_v   <= 1'b0;
+                        tm_ph      <= TM_TAB2;
+                        state      <= S_SECREAD;
+                    end
+                end
+                TM_TAB2: begin                         // the map's header
+                    tm_sec     <= tm_sec + {11'd0, vts_pgcit_ptr[31:11]};
+                    tm_off     <= vts_pgcit_ptr[10:0];
+                    sec_lba    <= tm_sec + {11'd0, vts_pgcit_ptr[31:11]};
+                    fetch_base <= vts_pgcit_ptr[10:0];
+                    fetch_ret  <= S_TMAP;
+                    fi         <= 6'd0;
+                    fi_cap_v   <= 1'b0;
+                    tm_ph      <= TM_HDR;
+                    state      <= S_SECREAD;
+                end
+                TM_HDR: begin                          // tmu u8 @0, nr_of_entries u16 @2
+                    if (rbuf[0] == 8'd0 || {rbuf[2], rbuf[3]} == 16'd0)
+                        tm_ph <= TM_FAIL;              // an empty map (3 % of the library)
+                    else begin
+                        tm_tmu  <= rbuf[0];
+                        tm_nent <= {rbuf[2], rbuf[3]};
+                        tm_v    <= 1'b1;
+                        tm_ph   <= TM_DIV;
+                    end
+                end
+                TM_DIV: begin                          // k = t / tmu, r = t % tmu
+                    if (tm_t >= {9'd0, tm_tmu}) begin
+                        tm_t <= tm_t - {9'd0, tm_tmu};
+                        if (tm_k != 16'hFFFF) tm_k <= tm_k + 16'd1;
+                    end else
+                        tm_ph <= TM_ENT;
+                end
+                TM_ENT: begin
+                    // lo = time k*tmu = entry k-1 (k = 0: the title's first
+                    // program, libdvdnav's "fake entry -1"); hi = entry k.
+                    // Past the map, both are the last entry.
+                    tm_last    <= (tm_k >= tm_nent);
+                    sec_lba    <= tm_sec + {24'd0, tm_ent_byte[18:11]};
+                    fetch_base <= tm_ent_byte[10:0];
+                    fetch_ret  <= S_TMAP;
+                    fi         <= 6'd0;
+                    fi_cap_v   <= 1'b0;
+                    tm_ph      <= TM_ENT2;
+                    state      <= S_SECREAD;
+                end
+                TM_ENT2: begin
+                    tm_lo <= (tm_k == 16'd0) ? title_start_rbn : {1'b0, vts_pgcit_ptr[30:0]};
+                    tm_hi <= (tm_k == 16'd0) ? {1'b0, vts_pgcit_ptr[30:0]}
+                           : tm_last ? {1'b0, vts_pgcit_ptr[30:0]}
+                                     : {1'b0, rbuf_be32_4[30:0]};
+                    tm_acc <= 40'd0;
+                    tm_i   <= 6'd8;
+                    tm_ph  <= TM_MUL;
+                end
+                TM_MUL: begin
+                    // Plausibility first (one cycle after the bracket settled): a
+                    // map that runs backward or outside this title's own sectors is
+                    // not a map for it -- fall back rather than seek into garbage.
+                    if (tm_i == 6'd8 && (tm_hi < tm_lo || tm_hi > title_last_rbn ||
+                                          tm_lo < title_first_rbn))
+                        tm_ph <= TM_FAIL;
+                    else if (tm_last) begin
+                        tm_q  <= 32'd0;                // past the map: the last entry
+                        tm_ph <= TM_GO;
+                    end else if (tm_i != 6'd0) begin
+                        // (hi - lo) * r, MSB-first over r's 8 bits (r < tmu <= 255)
+                        tm_acc <= {tm_acc[38:0], 1'b0}
+                                + (tm_t[tm_i - 6'd1] ? {8'd0, tm_hi - tm_lo} : 40'd0);
+                        tm_i   <= tm_i - 6'd1;
+                    end else begin
+                        tm_rem <= 9'd0;
+                        tm_q   <= 32'd0;
+                        tm_i   <= 6'd40;
+                        tm_ph  <= TM_QDIV;
+                    end
+                end
+                TM_QDIV: begin                         // q = acc / tmu, restoring
+                    if (tm_i != 6'd0) begin
+                        tm_acc <= {tm_acc[38:0], 1'b0};
+                        tm_rem <= tm_qd_ge ? tm_qd_sub : tm_qd_rem;
+                        tm_q   <= {tm_q[30:0], tm_qd_ge};
+                        tm_i   <= tm_i - 6'd1;
+                    end else
+                        tm_ph <= TM_GO;
+                end
+                TM_GO, TM_FAIL: begin
+                    // The resolved sector (or, on TM_FAIL, the caller's estimate)
+                    // takes the ordinary scrub landing from here.
+                    tmap_used <= (tm_ph == TM_GO);
+                    tmap_fell <= (tm_ph == TM_FAIL);
+                    if (tm_ph == TM_GO) seek_rbn_l <= tm_lo + tm_q;
+                    nav_cand  <= (tm_ph == TM_GO) ? (tm_lo + tm_q) : seek_rbn_l;
+                    nav_left  <= NAV_CAP[10:0];
+                    nav_mode  <= NAVM_PLAIN;
+                    snap_pend <= 1'b1;
+                    strm_idx  <= eff_base;
+                    seek_cum  <= 32'd0;
+                    tm_ph     <= TM_MAT;
+                    state     <= S_NAV_SEEK2;
+                end
+                default: tm_ph <= TM_FAIL;
+                endcase
+            end
+
             S_NAV_SEEK2: state <= S_NAV_SEEK;   // ext_*_q refresh for strm_idx
             S_NAV_SEEK: begin
                 if (strm_idx >= eff_base + eff_cnt ||

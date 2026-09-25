@@ -134,7 +134,7 @@ module title_span_tb;
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
         .seek_pulse(1'b0), .seek_natural(1'b0), .seek_cell(8'd0), .seek_ack(seek_ack),
-        .seek_rbn_pulse(sk_pulse), .seek_rbn(sk_rbn),
+        .seek_rbn_pulse(sk_pulse), .seek_rbn(sk_rbn), .seek_tm_req(1'b0), .seek_tm_secs(17'd0),
         .title_first_rbn(title_first_rbn), .title_last_rbn(title_last_rbn),
         .title_start_rbn(title_start_rbn), .title_end_rbn(title_end_rbn),
         .keep_vbuf(),
@@ -157,6 +157,8 @@ module title_span_tb;
         .title_start_rbn(title_start_rbn), .title_end_rbn(title_end_rbn),
         .title_secs(16'd0), .lin_blk10(24'd0), .lin_rate_ok(1'b0),
         .jump_fire(1'b0), .jump_dir(1'b0), .jump_base(32'd0), .jump_off(32'd0),
+        .live_secs(17'd0), .live_ok(1'b0), .tm_title(1'b0),   // sector seeks only here
+        .seek_tm_req(), .tgt_secs(), .tgt_secs_ok(),
         .seek_rbn_pulse(sk_pulse), .seek_rbn(sk_rbn),
         .hold_freeze(), .bar_active(), .bar_base_rbn(), .bar_tgt_rbn(),
         .hud_tier(), .hud_dir()

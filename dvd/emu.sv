@@ -669,7 +669,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-titlesetkey"
+`define CORE_VERSION "dev-tmapseek"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1142,7 +1142,9 @@ dvd_telem dvd_telem_inst (
     .drop_costs (core_drop_costs),       // clk_dec: {debt, drop_req, probe}
     .vbuf_fill  (core_vbuf_fill),
     .aud_frames (aud_frames_avail),
-    .flags      ({2'b0, core_blend_act, menu_active, still_active, video_live_s2, pause_q, media_seen}),   // [5] field blend active (clk_dec level)
+    // [7] the last TIME seek fell back to its sector estimate, [6] it landed through
+    // the disc's time map (issue #127), [5] field blend active (clk_dec level)
+    .flags      ({tmap_fell_w, tmap_used_w, core_blend_act, menu_active, still_active, video_live_s2, pause_q, media_seen}),
     .aud_play   (aud_play_cnt),          // clk_sys: play ticks/16 reaching the DAC
     .aud_gate   (aud_gate_cnt),          // clk_sys: drain-gate closures
     .disp_lag   (av_disp_lag[19:4]),     // clk_sys: displayed PTS - STC (word 11)
@@ -2212,6 +2214,24 @@ wire [6:0]  dpad_pend_min;
 wire [2:0]  dpad_pend_sec;
 wire        dpad_jump_fire, dpad_jump_dir;
 wire [31:0] dpad_jump_base, dpad_jump_off;
+// TIME seek (Phase 8b reopened, issue #127): a fired D-pad gesture carries its
+// exact target time -- seek_time's live +/- request -- to the reader, which
+// resolves it through the disc's VTS time map (dvd_iso_reader S_TMAP) and keeps
+// dpad_seek's DSI-table sector as the fallback. Declared here, ahead of the reader
+// instance: emu.sv has no `default_nettype none` (a forward reference would become
+// a 1-bit implicit net). Driven beside the HUD preview mux below.
+reg         dpad_tm_v;              // the next scrub_ctrl seek is this gesture's
+reg  [16:0] dpad_tm_s;              // ...target, PGC-relative seconds
+reg  [1:0]  dpad_tm_age;            // the window that pairs it with ITS seek pulse
+reg         dpad_hold;              // show the fired gesture's own answer (linger)
+reg         dpad_bar_seen;
+wire        tmap_used_w, tmap_fell_w;   // the reader: the last time seek used / skipped the map
+// ...and a HELD scrub's time (dvd/scrub_ctrl.sv): the preview, and on release in
+// a DVD title the time the reader seeks to (seek_rbn stays its fallback).
+wire        scrub_tm_req;           // pulses WITH scrub_seek_pulse
+wire [16:0] scrub_tgt_secs;
+wire        scrub_tgt_ok;           // a held scrub's time target exists (hold + linger)
+wire [16:0] seek_live_secs_w;       // seek_time's live clock, seconds (the scrub's base)
 // A-B repeat shares scrub_ctrl's ONE jump port with the D-pad fixed-time seek.
 // They are both user gestures on different buttons and cannot sensibly overlap,
 // so a flat priority mux is enough; A-B wins because its jump is AUTOMATIC (the
@@ -2372,6 +2392,15 @@ scrub_ctrl scrub_ctrl_inst (
     .title_secs      (title_secs_w),
     .lin_blk10       (lin_blk10_w),
     .lin_rate_ok     (lin_mode_w && lin_blk10_ok_w),
+    // TIME (issue #127): the scrub counts seconds from the clock on screen. A
+    // linear file previews them but keeps its sector seek; a DVD title seeks to
+    // them through the disc's time map (the sector is the fallback).
+    .live_secs       (lin_time_ok_w ? lin_cur_secs_w : seek_live_secs_w),
+    .live_ok         (lin_time_ok_w || cell_ready),
+    .tm_title        (cell_ready),
+    .seek_tm_req     (scrub_tm_req),
+    .tgt_secs        (scrub_tgt_secs),
+    .tgt_secs_ok     (scrub_tgt_ok),
     .seek_rbn_pulse  (scrub_seek_pulse),   // arbitrated by mode_realign (issue #42)
     .seek_rbn        (scrub_seek_rbn),
     .hold_freeze     (hold_freeze),
@@ -3299,6 +3328,13 @@ dvd_iso_reader dvd_iso_reader_inst (
     .seek_natural   (seek_natural_mux),   // Phase B: VM CELL/POST-verdict seek
     .seek_rbn_pulse (seek_rbn_pulse),     // gamepad time scrub (DSI fwda/bwda)
     .seek_rbn       (seek_rbn),
+    // ...qualified as a TIME seek when it is a fired D-pad gesture's (issue #127).
+    // scrub_seek_pulse, NOT seek_rbn_pulse: mode_realign's own re-align seeks share
+    // that output and are sector seeks.
+    .seek_tm_req    (scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)),
+    .seek_tm_secs   (dpad_tm_v ? dpad_tm_s : scrub_tgt_secs),
+    .tmap_used      (tmap_used_w),
+    .tmap_fell      (tmap_fell_w),
     .chap_pulse     (chap_pulse),         // gamepad chapter skip (B2/B3)
     .chap_dir       (chap_dir),
     .chap_mag       (chap_mag),           // debounced burst magnitude (# chapters)
@@ -6366,7 +6402,15 @@ seek_time seek_time_inst (
     .dpad_sec        (dpad_pend_sec),
     .chap_prev       (chap_disp_act & ~cdda_tracks_on),   // DVD maps only
     .chap_pgm        (hud_cur_ch),
-    .bar_active      (bar_active_w),
+    // ⚠ gated by dpad_hold: once a D-pad gesture fires, scrub_ctrl's bar lingers
+    // on the RESOLVED sector, and re-interpolating it would replace the time the
+    // reader is seeking to (live +/- request) with an estimate of it. With the bar
+    // gated out, the request falls to SEL_NONE and prev_secs keeps the answer.
+    // ⚠ TIED OFF (issue #127): the bar arm interpolated a sector into a time, and
+    // nothing previews that way any more -- a held scrub previews the time it
+    // counts (scrub_ctrl), a fired D-pad gesture its own exact answer. Tying it
+    // off lets synthesis drop the interpolation (its shadows, divide and multiply).
+    .bar_active      (1'b0),
     .bar_tgt_rbn     (bar_tgt_rbn_w),
     // Mode-correct live position and title length, so the D-pad arm answers on
     // a flat .mpg too -- it is the ONLY preview available during the coalesce
@@ -6375,7 +6419,8 @@ seek_time seek_time_inst (
     .live_time       (lin_time_ok_w ? lin_cur_bcd_w  : whole_eltm_w),
     .title_secs      (lin_time_ok_w ? lin_total_secs_w[15:0] : title_secs_w),
     .prev_secs       (seek_prev_secs_w),
-    .prev_ok         (seek_prev_ok_w)
+    .prev_ok         (seek_prev_ok_w),
+    .live_secs_o     (seek_live_secs_w)
 );
 
 // ONE seconds->BCD converter for every clock in the transport layer. lin_rate
@@ -6389,7 +6434,9 @@ secs_bcd secs_bcd_inst (
     .rst_n (reset_n),
     .secs0 (lin_cur_secs_w),
     .secs1 (lin_total_secs_w),
-    .secs2 (lin_prev_secs_w),
+    // slot 2: a held scrub's TIME target while it has one, else lin_rate's
+    // preview (which still answers an audio CD's track skip)
+    .secs2 (scrub_tgt_ok ? scrub_tgt_secs : lin_prev_secs_w),
     .secs3 (seek_prev_secs_w),
     .bcd0  (lin_cur_bcd_w),
     .bcd1  (lin_tot_bcd_w),
@@ -6442,9 +6489,40 @@ wire [31:0] hud_time_live = lin_time_ok_w ? lin_cur_bcd_w
 // A D-pad gesture is answered by seek_time in EITHER mode (its delta arm needs
 // no map, and nothing else can answer before the gesture resolves to a target);
 // everything else comes from whichever module owns the position->time map.
-wire        hud_prev_ok   = dpad_pend ? seek_prev_ok_w
+// ★ Issue #127: a fired D-pad gesture seeks to a TIME (the reader resolves it
+// through the disc's time map), so its preview must stay that time -- through the
+// bar's linger -- rather than become an interpolation of the sector scrub_ctrl
+// resolved. dpad_tm_* pairs the time with the ONE seek pulse the gesture causes
+// (scrub_ctrl issues it two clocks after jump_fire); the window closes after that,
+// so a jump scrub_ctrl refuses cannot lend its time to a later, unrelated seek.
+// Only a DVD title in the title domain: a linear file keeps its sector seek.
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        dpad_tm_v <= 1'b0; dpad_tm_s <= 17'd0; dpad_tm_age <= 2'd0;
+        dpad_hold <= 1'b0; dpad_bar_seen <= 1'b0;
+    end else begin
+        if (dpad_jump_fire && !cdda_jump_fire && !ab_jump_fire) begin
+            dpad_tm_v     <= cell_ready && !menu_active && seek_prev_ok_w;
+            dpad_tm_s     <= seek_prev_secs_w;
+            dpad_tm_age   <= 2'd3;
+            dpad_hold     <= seek_prev_ok_w;
+            dpad_bar_seen <= 1'b0;
+        end else begin
+            if (dpad_tm_age != 2'd0) dpad_tm_age <= dpad_tm_age - 2'd1;
+            if (dpad_tm_age == 2'd1 || scrub_seek_pulse) dpad_tm_v <= 1'b0;
+            if (dpad_hold) begin
+                if (bar_active_w)       dpad_bar_seen <= 1'b1;
+                else if (dpad_bar_seen) dpad_hold     <= 1'b0;   // the linger is over
+                if (hold_freeze || chap_disp_act || dpad_pend) dpad_hold <= 1'b0;
+            end
+        end
+    end
+end
+wire        hud_prev_ok   = (dpad_hold || scrub_tgt_ok) ? 1'b1
+                          : dpad_pend ? seek_prev_ok_w
                           : lin_mode_w ? lin_prev_ok_w  : seek_prev_ok_w;
-wire [31:0] hud_prev_time = dpad_pend ? seek_prev_time_w
+wire [31:0] hud_prev_time = (dpad_hold || dpad_pend) ? seek_prev_time_w
+                          : scrub_tgt_ok ? lin_prev_bcd_w   // slot 2 = the scrub's time
                           : lin_mode_w ? lin_prev_bcd_w : seek_prev_time_w;
 
 transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (

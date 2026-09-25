@@ -260,6 +260,12 @@ integer reference (8 directed + 500 random vectors). Two instances:
 
 ## Preview clock — `dvd/seek_time.sv` (2026-09-03)
 
+> ⚠ **Superseded in part 2026-09-25 (issue #127, `docs/dvd_nav.md` §2h).** A held scrub
+> now previews the TIME it counts (`dvd/scrub_ctrl.sv`) and a fired D-pad gesture its own
+> exact answer, and both seek to that time through the disc's time map. The "held scrub /
+> resolved jump" row below (per-cell interpolation of an RBN) has no consumer any more:
+> `seek_time`'s bar input is tied off in `emu.sv`. The D-pad and chapter rows stand.
+
 **The defect.** The clock showed the live playhead and nothing else, so it sat
 frozen at the position you left while the seek bar's amber cursor travelled.
 Two causes, one symptom:

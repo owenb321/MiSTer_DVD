@@ -117,7 +117,10 @@ module seek_time (
     // so a private converter here bought nothing -- measured, 166 ALUTs and 56
     // registers.
     output reg  [16:0] prev_secs,
-    output reg         prev_ok
+    output reg         prev_ok,
+    // The live clock in seconds, decoded here anyway for the D-pad arm. A held
+    // scrub's time accumulation starts from it (dvd/scrub_ctrl.sv, issue #127).
+    output wire [16:0] live_secs_o
 );
     // =====================================================================
     // Shadows. Each stream rewrites from index 0 on every PGC walk, so a
@@ -186,6 +189,7 @@ module seek_time (
                         + (lv_m << 5)  + (lv_m << 4)  + (lv_m << 3) + (lv_m << 2)
                         + lv_s;
     // dpad_sec is TENS of seconds, and dpad_min minutes: delta = m*60 + s*10.
+    assign live_secs_o = lv_secs;
     wire [16:0] dp_m = {10'd0, dpad_min};
     wire [16:0] dp_s = {14'd0, dpad_sec};
     wire [16:0] dp_delta = (dp_m << 5) + (dp_m << 4) + (dp_m << 3) + (dp_m << 2)

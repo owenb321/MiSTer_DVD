@@ -573,14 +573,18 @@ to say what it picked.
 
 ### The elapsed time is wrong after seeking
 
-On most discs the time readout follows the disc's own timing tables and is accurate.
+On a DVD, Fast Fwd, Rewind and the D-pad all seek to an exact **time**, looked up in the
+disc's own time map, so the time the seek bar showed is the time you land on, give or take
+about half a second.
+
+A small number of discs author a time map that disagrees with their own clock by a few
+seconds, and a few (mostly games and some anime) have none at all. On those a seek can land
+a few seconds from the time the seek bar showed. That is the disc's data, not a fault.
 
 A **seamless-branch disc** — a special edition that stores two cuts of the film woven
-together in the same sectors — used to be the exception: a seek could land in the wrong cut,
-and the clock would then report a position that did not match what you were watching. That
-is fixed, on both cuts, and the scrub preview now tracks the target on long special editions
-too. If you still see the clock disagree with the picture on one of these discs, it is worth
-reporting.
+together in the same sectors — used to be a separate exception: a seek could land in the
+wrong cut. That is fixed, on both cuts. If you still see the clock disagree with the picture
+on one of these discs, it is worth reporting.
 
 On a `.mpg`, `.VOB` or VCD/SVCD the clock is an **estimate** derived from how fast the file
 plays, not a timecode read from the disc, so on a very variable-bitrate file it can drift by

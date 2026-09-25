@@ -29,6 +29,8 @@
 //                               retired by PR #63; the port keeps its name)
 //     word 6  {debt, drop_costs}
 //     word 7  {vbuf_fill, flags}   -- flags[5] = the field blend is on the scan under way
+//                                     flags[6]/[7] = the last TIME seek used the disc's time
+//                                     map / fell back to its sector estimate (issue #127)
 //     word 8  aud_frames     -- audio frames queued
 //     word 9  aud_play       -- audio play ticks / 16 (what reaches the DAC)
 //     word 10 aud_gate       -- drain-gate closures

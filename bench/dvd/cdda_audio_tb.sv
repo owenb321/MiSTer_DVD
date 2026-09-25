@@ -67,7 +67,7 @@ module cdda_audio_tb;
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
-        .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn_r), .seek_ack(seek_ack_w),
+        .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn_r), .seek_tm_req(1'b0), .seek_tm_secs(17'd0), .seek_ack(seek_ack_w),
         .flat_seek_en(1'b0), .lin_seek_ok_o(), .lin_blk_o(lin_blk_w),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
