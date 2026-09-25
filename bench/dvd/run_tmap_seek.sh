@@ -39,7 +39,14 @@ run_tb iso_reader_scrub_tb "ALL TESTS PASSED"
 run_tb iso_reader_seek_tb  "ALL TESTS PASSED"
 run_tb iso_reader_chapter_tb "PASS"
 
+# emu.sv has no bench: the seam that hands the reader its time is read out of the file.
+echo "-- emu wiring"
+python3 tools/check_tmap_seek_wiring.py || rc=1
+
 [ "${1:-}" = "--red" ] || exit $rc
+
+echo "### RED: the wiring gate must fail main's emu.sv and each re-regression"
+python3 tools/check_tmap_seek_wiring.py --red || rc=1
 
 echo "### RED (each mutant must fail its own check)"
 mutant() {   # label, sed expression, grep for the check that must fail
