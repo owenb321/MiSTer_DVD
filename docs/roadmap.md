@@ -428,6 +428,11 @@ If you want more control or can't build libdvdread for MiSTer's ARM:
 - [x] ✅ Register every VOB. The 64-entry table dropped OZ's VTS_20 sneak peeks, which
       then played scrambled (issue #112, HW-CONFIRMED 2026-09-19).
       `docs/physical_disc.md` "Every VOB must be in the table".
+- [ ] 🔧 **`CSS ENCRYPTED` after a chapter skip on a physical disc (issue #122).** Fixed on
+      branch `fix/css-titleset-key`, host-proven; ⏳ HW-confirm pending (Hitch, Kung Fu
+      Panda). Title VOB parts now key at `VTS_nn_1`'s start, and a zero or missing key is
+      healed from the data. **Next step:** rig control arm, then the fix arm, on both
+      discs. `docs/physical_disc.md` "A title set has ONE key".
 - [x] ✅ **Copy-protection hang on physical discs — FIXED, HW-CONFIRMED 2026-09-19.**
       Deliberately unreadable sectors (OZ, `VTS_08_1.VOB` from RBN ~1995) cost the
       drive's ~30 s timeout each and block the Main in state D, for hours. Traced on
