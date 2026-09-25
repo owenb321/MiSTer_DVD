@@ -2093,7 +2093,7 @@ seek needs the VTS **TMAP** time-map (libdvdnav does time seek via TMAP, not fwd
 decision fit a project that did not yet need it; what changed is a polish problem: the seek
 preview and the landing disagreed by seconds, and only a time→sector map can make them agree.
 
-### 2h. Time map seek — Phase 8b, reopened (2026-09-25, issue #127) — 🔧 sim-proven; D-pad ✅ HW-measured, held scrub ⏳ HW
+### 2h. Time map seek — Phase 8b, reopened (2026-09-25, issue #127) — ✅ HW-CONFIRMED (D-pad measured, held scrub by the maintainer)
 
 **Why.** Field report (v0.7.0): the seeks land, but the readout does not follow them. A held
 FF starts ~5 s off the clock and jumps ~5 s when it ends; a D-pad Left reads `30 → 29 → 34`.
@@ -2188,8 +2188,9 @@ time, from ffmpeg's own decode.
 - One BBB Left capture came back empty (the screenshot was not written); read it as missing,
   not clean.
 
-**Still open:** the held scrub. The harness cannot hold a gamepad (`kbd_map` routes keyboard
-FF/REW to the D-pad path), so that arm needs the maintainer.
+**Held scrub: ✅ HW-CONFIRMED 2026-09-25 by the maintainer with a gamepad** ("looks good").
+The harness cannot reach that gesture (`kbd_map` routes keyboard FF/REW to the D-pad path),
+so a person holding the button is the instrument.
 
 ### 2a. Hold-to-seek — SEEK-ON-RELEASE with acceleration (`dvd/scrub_ctrl.sv`)
 

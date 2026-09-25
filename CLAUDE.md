@@ -323,11 +323,12 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **TIME-MAP SEEK — Phase 8b REOPENED: the seek preview and the landing now agree
+- ✅ **TIME-MAP SEEK — Phase 8b REOPENED: the seek preview and the landing now agree
   (2026-09-25, issue #127, branch `fix/tmap-seek`); sim-proven, 13 mutations + 9 wiring
   re-regressions each caught by its own check; the D-PAD arm is ✅ HW-MEASURED 2026-09-25
   against the v0.7.0 control (build `DVD_tmapseek_20260925_1358.rbf`, clk_dec 87.92/89.9,
-  98 % ALM), and the held scrub is ⏳ pending (it needs a gamepad).** On BBB and MiB, every D-pad
+  98 % ALM), and the held scrub ✅ HW-CONFIRMED by the maintainer the same day with a
+  gamepad ("looks good").** On BBB and MiB, every D-pad
   landing was 0.3–0.7 s after the previewed second, against the control's −1.7…+1.4 s in
   both directions, with `flags.tmap = 1`. The residual is a constant +1 s tick when the
   preview ends: the live clock's ~0.7 s parse-front lead plus the forward VOBU snap
