@@ -2088,8 +2088,73 @@ from that exact RBN via the existing extent map. Out-of-range clamps to the last
 
 This is a **relative** scan ("skip ±10 s"), not an absolute scrub-bar — arbitrary-timestamp
 seek needs the VTS **TMAP** time-map (libdvdnav does time seek via TMAP, not fwda/bwda).
-**Phase-8b (TMAP absolute seek) is RETIRED (2026-07-10, user decision): the shipped
-seek-on-release scrub + chapter skip is the accepted final seek UX — don't re-propose it.**
+~~**Phase-8b (TMAP absolute seek) is RETIRED (2026-07-10, user decision)**~~ —
+**REOPENED 2026-09-25 (user decision, issue #127) and built: §2h "Time map seek".** The 2026-07
+decision fit a project that did not yet need it; what changed is a polish problem: the seek
+preview and the landing disagreed by seconds, and only a time→sector map can make them agree.
+
+### 2h. Time map seek — Phase 8b, reopened (2026-09-25, issue #127) — 🔧 sim-proven, ⏳ HW
+
+**Why.** Field report (v0.7.0): the seeks land, but the readout does not follow them. A held
+FF starts ~5 s off the clock and jumps ~5 s when it ends; a D-pad Left reads `30 → 29 → 34`.
+The held scrub accumulated a SECTOR offset (sized from the title's average bitrate) and the
+preview turned that sector back into a time by per-cell interpolation: two different guesses
+at a variable-bitrate disc, both seconds wrong inside a busy cell. A DVD is addressed by sector;
+the only exact time→sector map on the disc is the VTS time map.
+
+**The map (libdvdread `ifo_types.h`, libdvdnav `searching.c`).** VTSI_MAT@0xD4 → VTS_TMAPT:
+`nr_of_tmaps u16, zero u16, last_byte u32, tmap_offset u32[nr]` (from the TMAPT start).
+VTS_TMAP[pgcn−1]: `tmu u8` (seconds per entry), `zero u8`, `nr_of_entries u16`,
+`map_ent u32[]` — entry *j* is the title-VOBS sector of the VOBU at time (*j*+1)·tmu, bit 31 a
+discontinuity flag (masked, as libdvdnav does). libdvdnav's `dvdnav_jump_to_sector_by_time`
+interpolates between the two entries around the target over the VOBU address map and falls
+back to cell interpolation when the map is bad; its older `dvdnav_time_search` is cell
+interpolation only — which is what our preview used to do.
+
+**How good real maps are — MEASURED before any RTL** (`tools/tmap_check.py`: reads the map of
+the title the core plays and checks sampled entries against the NAV pack each points at —
+that VOBU's authored cell-start + `c_eltm` against the time the entry claims). 1,432 images:
+
+| verdict | discs | |
+|---|---|---|
+| GOOD | 1,315 (91.8 %) | every sampled entry within **1.04 s**; tmu 1–7 s (mostly 3–4) |
+| OFFSET | 23 | a constant +1.7…+6.5 s (libdvdnav has a hack for a lead-in cell the map skips) |
+| DRIFT | 27 | mostly one TV box set, up to −3 s |
+| BAD_POINTERS | 20 | some sampled entries miss a NAV pack (the rest within 0.7 s) |
+| no map / empty map | 44 (3 %) | mostly games and anime → the fallback |
+| unreadable | 3 | |
+
+**Design.** Every gesture now carries a TIME:
+- **Held scrub** (`scrub_ctrl`): counts seconds from the clock on screen at the hold start, at
+  exact tier rates (14/58/230/922 sixteenths per 0.06 s tick ≈ 14.6/60/240/960 s/s). That time
+  is the preview. The sector offset still runs for the bar's cursor and as the fallback.
+- **D-pad** (`emu.sv`): the fired gesture's time is `seek_time`'s exact `live ± request`,
+  paired with the ONE seek pulse `scrub_ctrl` issues for it (a 3-clock window), and held on the
+  HUD through the bar's linger. `dpad_seek`'s DSI-table sector is the fallback.
+- **Reader** (`dvd_iso_reader.sv` `S_TMAP`): after the seek's flush — like the NAV probe —
+  read VTSI_MAT@0xD4, the TMAPT entry for `cur_pgcn`, and the map header (cached until the next
+  PGC load or mount: a repeat costs ONE IFO read), divide t by tmu, read the two entries around
+  t, interpolate, and hand the sector to the ordinary scrub landing (VOBU snap, branch/angle
+  filters). t < tmu brackets from the title's first program (libdvdnav's "entry −1"); past the
+  map, the last entry. **Any missing, empty or implausible map** (a bracket that runs backward
+  or leaves the title's own sectors) keeps the caller's sector and raises `tmap_fell`.
+  ⚠ One state code, not a dozen: the 6-bit state space had exactly two codes free (15 and 61),
+  so the lookup is `S_TMAP` with its own phase counter, calling S_SECREAD/S_FETCH.
+- **Linear files** preview the counted time and keep their sector seek (no map exists).
+- `seek_time`'s sector-interpolation arm has no consumer left; its bar input is tied off.
+
+**Visibility.** Telemetry word 7 `flags[6]`/`[7]` = the last time seek used the map / fell back
+(`flags.tmap` / `flags.tmap_fb`).
+
+**Residuals, stated.** OFFSET/DRIFT discs (~3.5 %) land 2–6 s from the preview, as their maps
+disagree with their own authored clock; no-map discs (3 %) behave as before (the sector
+estimate). The interpolated sector is VOBU-snapped FORWARD, so a landing can be up to one VOBU
+(~0.5 s) after the target. The seek bar's cursor is still sector-based (cosmetic).
+
+**Gates:** `bench/dvd/run_tmap_seek.sh --red` — `iso_reader_tmap_tb` (10 checks scored on the
+delivered landing sector; 8 reader mutations), `scrub_ctrl_tb` T21–T27 (5 mutations),
+`tools/check_tmap_seek_wiring.py` (the emu seam; 9 REDs incl. `main`'s file). HIL instrument:
+`tools/pause_match.py` (the preview vs the landed picture).
 
 ### 2a. Hold-to-seek — SEEK-ON-RELEASE with acceleration (`dvd/scrub_ctrl.sv`)
 
@@ -2375,7 +2440,9 @@ which keeps `tools/hud_font.py` and the committed `dvd/hud_font.mem` untouched).
   10 s hop than on the eyeballed scrub. No VBUF-corrected playhead exists today.
 - `bwda`'s 60 s rung is END_OF_CELL for the first 60 s of **every** cell, so a backward 60 s
   there cascades down to ~10 s or the cell start.
-- This does **not** reopen Phase-8b/TMAP absolute seek, which stays RETIRED (see §2).
+- ~~This does **not** reopen Phase-8b/TMAP absolute seek, which stays RETIRED (see §2).~~
+  Phase 8b was reopened 2026-09-25 (§2h): a DVD D-pad gesture now seeks to its exact TIME
+  through the disc's time map, with this module's table sector as the fallback.
 
 **Golden + tests:** `tools/nav_extract.py <iso> --title-vob N --dpad` prints the four gestures
 per NAV pack with the rung or fallback each used — `dpad_resolve()` is a faithful mirror of the
@@ -4263,7 +4330,7 @@ white"), and the transport-HUD-overlaps-subtitle bug (MiB visual commentary).
   - **Chapters/seek (Phase 8): ✅ HW-CONFIRMED (PR fj#96) — see "Seeking / Phase 8"
     above.** Chapter skip (B2/B3) resolves the PGC `program_map`@230 in a reader BRAM;
     time scrub (D-pad L/R) consumes the DSI fwda/bwda seek tables (±10 s = fwda[3]/bwda[15])
-    → a raw-RBN seek. (Phase-8b absolute-timestamp scrub-bar: RETIRED 2026-07-10, user decision.)
+    → a raw-RBN seek. (Phase-8b time-map seek: retired 2026-07-10, REOPENED and built 2026-09-25 — §2h.)
   - **Angles (Phase 9):** DSI `sml_agli` per-angle offsets are now parsed into `dsi_tbl`;
     the cell category word @0 (block_mode/block_type) selects the angle block. v1 still plays
     cells in table order (angle 1 / no interleaving assumed) — Phase 9 follows the ILVU chain.

@@ -323,6 +323,31 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **TIME-MAP SEEK — Phase 8b REOPENED: the seek preview and the landing now agree
+  (2026-09-25, issue #127, branch `fix/tmap-seek`); sim-proven, 13 mutations + 9 wiring
+  re-regressions each caught by its own check, ⏳ HW-confirm pending.** Report (v0.7.0): seeks
+  land, but a held FF starts ~5 s off the clock and jumps ~5 s on release; a D-pad Left reads
+  `30 → 29 → 34`. The held scrub accumulated SECTORS (title-average bitrate) and the preview
+  interpolated them back into a time: two guesses, both seconds wrong in a VBR cell.
+  ★★ **Phase 8b (TMAP seek) had been RETIRED 2026-07-10 "don't re-propose"; the user reopened
+  it** because it is the only exact time→sector map on a disc (memory
+  [[revisit-past-decisions]]). ★ **Measured first:** `tools/tmap_check.py` over 1,432 images —
+  91.8 % of maps within 1.04 s of their own authored clock, 3.5 % offset/drifting by 2–6 s,
+  3 % with no map (→ fallback).
+  **Fix:** every gesture carries a TIME. `scrub_ctrl` counts seconds from the clock at the hold
+  start (exact tier rates); a fired D-pad sends `seek_time`'s exact `live ± request`. The reader's
+  new `S_TMAP` (ONE state code with a phase counter — the 6-bit state space had two free) reads
+  VTSI_MAT@0xD4 → TMAPT → the PGC's map header (cached per PGC), interpolates between the two
+  entries around t, and hands the sector to the ordinary snap/branch/angle landing. A missing
+  or implausible map keeps the caller's sector (`tmap_fell`, telemetry `flags.tmap_fb`).
+  `seek_time`'s sector-interpolation arm is tied off (no consumer; pays the area back).
+  ⚠ The D-pad's time rides `scrub_seek_pulse`, NOT the arbitrated `seek_rbn_pulse`
+  (mode_realign's sector seeks share it). ⚠ Linear files preview the time, keep sector seeks.
+  ⚠ The harness cannot hold a gamepad scrub; the D-pad arm is testable from it.
+  Gates: **`bench/dvd/run_tmap_seek.sh --red`**, `tools/check_tmap_seek_wiring.py`. Detail:
+  **`docs/dvd_nav.md` §2h**. The preview-anchor attempt that preceded this is on the local
+  branch `fix/display-clock`, the display-clock queue on `wip/disp-clock-queue` (both unpushed).
+
 - ✅ **PROGRESSIVE DEINT = BLEND — a NON-ADAPTIVE field blend on the Progressive
   raster (2026-09-24, branch `feature/field-blend`); sim-proven + mutation-checked, built
   `DVD_fieldblend_20260924_1713.rbf` (SEED 9 first roll, clk_dec 91.64/89.16, 254 ALM,
@@ -4537,9 +4562,8 @@ worse maintenance burden than targeted in-place edits. So:
 - ✅ Multi-angle (Phase 9): HW-CONFIRMED 2026-07-10 (PR fj#98, MiB title 13 five-angle B6
   cycle). Timed/heuristic stills: HW-CONFIRMED 2026-07-10 (PR fj#90).
 - ❌ DVD-specific remaining: chapters/PTT exactness (Phase 6: VTS_PTT_SRPT), menu audio,
-  no UDF-only-image support. (Phase-8b TMAP absolute seek: RETIRED 2026-07-10 by user
-  decision. The seek UX gained ONE opt-in layer since — `O[45]` D-Pad Seek, below — which
-  rides the same `seek_rbn` primitive and does **not** reopen TMAP.)
+  no UDF-only-image support. (Phase-8b TMAP time seek: retired 2026-07-10, **REOPENED and
+  built 2026-09-25**, issue #127 — see the status bullet near the top and `docs/dvd_nav.md` §2h.)
 - ✅ **DVD-REMOTE BUTTONS — Stop, Aspect, Chapter Menu, A-B Repeat, Frame Step, a
   screensaver, and the Display toggle FIX (2026-09-13, branch
   `feature/remote-buttons`) — sim-proven, mutation-checked 31/31 across five modules,

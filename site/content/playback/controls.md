@@ -207,7 +207,9 @@ does not flicker. See [Pausing interlaced video](../video/interlaced.md#pausing-
 
 **B2 / B3** step chapters. **B10 / B11** (`Fast Fwd` / `Rewind`) tapped step forward and back; **held**, they
 scrub — a seek bar appears showing where you are and where you will land, and the seek
-happens when you release. The target accelerates the longer you hold, so a brief hold nudges
+happens when you release. The time shown counts from the time on screen, and on a DVD the
+seek goes to that exact time through the disc's own time map, so you land where it said. The
+target accelerates the longer you hold, so a brief hold nudges
 you along and a long one crosses the whole disc.
 
 **B9 (Display)** toggles the status line — the elapsed/total time and chapter readout along
@@ -382,9 +384,10 @@ That coalescing is the whole design: one seek per gesture, however long. Seeking
 tap would mean a flush and re-lock per press, which is a regime that does not survive
 rapid input.
 
-On a DVD the targets come from the **disc's own seek tables**, so they land on real frame
-boundaries rather than approximate byte offsets. On a VCD/SVCD, exact CD geometry is used
-instead. On a flat `.mpg` or `.VOB` there is neither, so the player measures how fast the
+On a DVD the jump goes to an exact time, looked up in the **disc's own time map**, so it
+lands where the on-screen time said it would. A few discs carry no time map (mostly games
+and some anime); on those the player uses the disc's per-segment seek tables instead, as
+earlier versions always did. On a VCD/SVCD, exact CD geometry is used instead. On a flat `.mpg` or `.VOB` there is neither, so the player measures how fast the
 file is playing and jumps by that — accurate on a steady-bitrate file, and on a very
 variable one a ten-second jump may land a second or two out. It needs about half a second
 of playback to take that measurement, so a jump attempted the instant a file starts does

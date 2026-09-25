@@ -44,8 +44,10 @@
 // the honest limit. A big total just decomposes into more 120 s rungs (a few
 // cycles each), so the resolve stays cheap.
 // There is no better composition available: the interval set is fixed by the
-// spec, and true absolute time seek needs the VTS TMAP -- RETIRED by user
-// decision (docs/dvd_nav.md), do NOT re-propose it.
+// spec. True absolute time seek needs the VTS TMAP -- retired 2026-07-10, then
+// REOPENED and built 2026-09-25 (issue #127, docs/dvd_nav.md §2h): on a DVD the
+// fired gesture now seeks to its exact TIME through the map, and the sector this
+// module resolves is only the FALLBACK (no map, or an implausible one).
 //
 // ★ THE STALE-TABLE TRAP (this is why dsi_fresh exists). nav_dsi's rst_n is
 // pipe_rst_n, which resets on every load/seek/jump: it clears dsi_nv_pck_lbn to
