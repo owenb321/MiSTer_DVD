@@ -324,8 +324,23 @@ worse maintenance burden than targeted in-place edits. So:
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **`.cue` SHEETS — AUDIO CD AND VCD/SVCD RIPS, PARSED BY THE MAIN, ZERO FABRIC LOGIC
-  (2026-09-25, branch `feature/cue-sheets`); host-proven, 12 mutations each caught by
-  its own `FAIL` line, ⏳ HW pending.** Reverses the earlier bin/cue rejection. The core
+  (2026-09-25, branch `feature/cue-sheets`); host-proven (12 mutations each caught by
+  its own `FAIL` line), and ✅ HW-MEASURED on the rig 2026-09-25, control arm first**
+  (build `DVD_cue_20260926_0019.rbf`, SEED 9 first roll, clk_dec 87.81/87.45, 98 % ALM).
+  | arm | result |
+  |---|---|
+  | control: the pre-cue Main | the sheet mounts as a 225-byte text file → black, nothing plays |
+  | audio, one `.bin` + INDEX 00 pregaps | `TR 1/3`, 0:00:32 (30 s + the next pregap); skips land on 440/660/880 Hz by capture |
+  | audio, EAC per-track `.wav`, gaps appended | identical: `TR 1/3`, 0:00:32, 440 → 660 Hz across the file edge |
+  | VCD, split `.bin` | picture, −14.8 dBFS, seek, total 0:34:34 = 155,529 sectors ÷ 75 |
+  | VCD, `MODE2/2336` | the same, so the rebuilt sync prefix passes the core's detector |
+  | refused sheet (missing FILE), MGL launch | reason logged, no notice, MGL finishes, idle logo |
+
+  ⏳ Physical audio CD / VCD unregression not re-run (the drive held a DVD); the refactor
+  only adds a NULL-defaulted source pointer, and `dvd_cdda_test`/`dvd_vcd_test` pass
+  unchanged. ⚠ Two quick Previous presses at the very END of the last track landed on
+  track 1, not the track before; from mid-track they land correctly. That is the core's
+  stacking path, shared with a physical CD. Not cue-specific; unexplained. Reverses the earlier bin/cue rejection. The core
   never sees an extension, so `main/support/dvd/dvd_cue.{h,cpp}` builds a stream it
   already plays:
   - an **audio CD** is the physical disc's virtual WAV plus the `CDTC` track table,

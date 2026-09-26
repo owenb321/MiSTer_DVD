@@ -93,6 +93,19 @@ the Archie/ST/Amiga cores, and Main restarts at every core load — which is why
 was harmless). `CUE` makes it 27. Step 50 widens the buffer to 256, matching the
 buffer it is copied from.
 
+✅ **HW-measured 2026-09-25** (build `DVD_cue_20260926_0019.rbf`). The control arm, the
+pre-cue Main, mounts the sheet as a 225-byte text file and plays nothing. The new Main:
+- a one-`.bin` tone disc and the same disc as EAC per-track `.wav` both read
+  `TR 1/3` 0:00:32;
+- track skips land on the right tone (440/660/880 Hz, measured off the capture card);
+- the dinosaur VCD plays and seeks as split `.bin` and as a `MODE2/2336` conversion
+  (total 0:34:34 = 155,529 sectors);
+- a refused sheet ends on the idle logo without freezing its MGL launch.
+
+On the host, both real VCD sheets in the local rips serve their files byte for byte, and
+`QG0012` comes to 256,719 sectors, the same span the physical burned disc of that rip
+measured on the rig.
+
 Gates: `main/tests/dvd_cue_test.cpp` (parser + layout from text; real temporary
 files mounted and read back through the REAL `dvd_cdda.cpp`, byte for byte; two file
 layouts of one disc must produce one stream) and 12 mutations in

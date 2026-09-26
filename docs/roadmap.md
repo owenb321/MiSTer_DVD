@@ -577,8 +577,9 @@ the split is deliberate:
   screen arm); gate `wav_probe_tb` TEST 8, RED-proven. Sim-green, ⏳ HW-untested.
 
 🔧 **`.cue` sheets — ADDED 2026-09-25 (branch `feature/cue-sheets`), reversing the
-earlier rejection; host-proven (`main/tests/dvd_cue_test.cpp`, 12 mutations), ⏳ HW
-pending.** Audio CD and VCD/SVCD bin/cue (and per-track `.wav`) rips, parsed by the
+earlier rejection; host-proven (`main/tests/dvd_cue_test.cpp`, 12 mutations) and
+✅ HW-MEASURED on the rig 2026-09-25 (audio bin/cue + per-track wav, VCD split-bin and
+MODE2/2336, refused sheet); ⏳ physical CD/VCD unregression not re-run.** Audio CD and VCD/SVCD bin/cue (and per-track `.wav`) rips, parsed by the
 Main and served as the same streams a physical disc produces — zero RTL beyond `CUE`
 in `CONF_STR`. Design: `docs/cdda.md` "`.cue` sheets". ⛔ CHD still not supported
 (would need libchdr in the overlay).
