@@ -37,7 +37,7 @@ signalling — no `cfg[15]` (the last free config bit stays free), no fork of th
 `hps_io` mount word. 44 is divisible by 4, so 2048-byte blocks stay L/R-pair
 aligned.
 
-✅ **`.cue` sheets were ADDED 2026-09-25 (branch `feature/cue-sheets`), reversing an
+✅ **`.cue` sheets were ADDED 2026-09-25 (✅ MERGED PR #129), reversing an
 earlier rejection** — see "`.cue` sheets" below. The rejection (user decision) read:
 *"ISO9660 cannot hold CD-DA, so it would mean parsing `.cue` sheets — and nobody
 archives music that way."* The prediction beside it held exactly: the Main serves

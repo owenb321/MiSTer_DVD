@@ -576,7 +576,7 @@ the split is deliberate:
   held `iso_mode`. Fixed at both ends (reader reset + a `media_seen` gate on the
   screen arm); gate `wav_probe_tb` TEST 8, RED-proven. Sim-green, ⏳ HW-untested.
 
-🔧 **`.cue` sheets — ADDED 2026-09-25 (branch `feature/cue-sheets`), reversing the
+✅ **`.cue` sheets — ADDED 2026-09-25 (✅ MERGED PR #129), reversing the
 earlier rejection; host-proven (`main/tests/dvd_cue_test.cpp`, 12 mutations) and
 ✅ HW-MEASURED on the rig 2026-09-25 (audio bin/cue + per-track wav, VCD split-bin and
 MODE2/2336, refused sheet; physical audio CD and physical VCD both unregressed, eject

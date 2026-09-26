@@ -323,8 +323,8 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **`.cue` SHEETS — AUDIO CD AND VCD/SVCD RIPS, PARSED BY THE MAIN, ZERO FABRIC LOGIC
-  (2026-09-25, branch `feature/cue-sheets`); host-proven (12 mutations each caught by
+- ✅ **`.cue` SHEETS — AUDIO CD AND VCD/SVCD RIPS, PARSED BY THE MAIN, ZERO FABRIC LOGIC
+  (2026-09-25, ✅ MERGED PR #129); host-proven (12 mutations each caught by
   its own `FAIL` line), ✅ HW-MEASURED on the rig 2026-09-25, control arm first, and
   ✅ HW-CONFIRMED by the maintainer the same day loading a `.cue` from the OSD file
   picker** (the one path the harness cannot drive: it launches by MGL)
