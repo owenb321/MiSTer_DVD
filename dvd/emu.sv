@@ -535,8 +535,6 @@ assign UART_RTS     = 1;
 assign UART_DTR     = 1;
 assign UART_TXD     = 1;   // UART debug removed; drive TX to idle (high)
 
-// Debug: Stream loading status on USER_OUT pins
-// assign USER_OUT     = {3'b0, streamer_active, streamer_sd_rd, streamer_sd_ack, streamer_has_data};
 
 // =========================================================================
 // Clocks and Reset
@@ -1642,7 +1640,7 @@ wire [7:0]  vm_agln;                 // SPRM3 (camera angle) from the DVD-VM
 wire        vm_pre_done;             // VM finished this PGC's PRE block
 wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HUD popup)
 wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
-wire [7:0]  rdr_play_vtsn, rdr_target_vtsn;
+wire [7:0]  rdr_play_vtsn;
 reg         key_menu_p, key_title_p, key_return_p, key_cmenu_p;
 
 wire menus_on  = ~status[1];                       // O[1] Disc Menus (index 0 = On, default)
@@ -1806,7 +1804,6 @@ wire rt_edge    = joy_eff[0] & ~joy_prev[0];
 
 // nav_pci interface (Phase 3)
 wire        hl_btns_armed;
-wire [15:0] rd_dbg_pgcerr;    // reader pgc_error reason latch (overlay row 26)
 // STC display-coherence latch for nav_pci's scheduled promotion path: 1 when the
 // most recent load/seek/jump FLUSHED the decoder (keep_vbuf=0 — STC anchor and
 // display reset together). A keep_vbuf menu->menu hop clears it (the re-anchored
@@ -2718,7 +2715,6 @@ wire       seek_natural_mux = vm_seek_pulse & vm_from_wait_w;
 // on a stream the disc lacks (-> silence / garbage).
 wire [3:0] audio_ntracks_w, subp_ntracks_w;
 wire [2:0] attr_a_fmt_w;
-wire [3:0] attr_a_ch_w;
 wire [15:0] attr_a_lang_w, attr_s_lang_w;
 reg  [2:0] aud_cur;
 reg        sub_on;
@@ -3317,8 +3313,7 @@ always @(posedge clk_dec) begin
     still_dec <= still_s1;
 end
 
-wire streamer_active, streamer_sd_rd, streamer_sd_ack, streamer_has_data;
-wire [15:0] streamer_file_size, streamer_total_sectors, streamer_next_lba;
+wire streamer_active;
 
 // DVD-FORK: dvd_iso_reader replaces mpg_streamer. Same output contract and sd_*
 // bus; adds in-fabric DVD-Video ISO9660 navigation (finds VIDEO_TS, plays the
@@ -3327,8 +3322,6 @@ wire [15:0] streamer_file_size, streamer_total_sectors, streamer_next_lba;
 // No HPS daemon: the sd_* block interface is random-access, so the reader drives
 // sd_lba to any sector of the mounted image itself. See docs/dvd_nav.md.
 wire        iso_mode_w;
-wire        iso_error_w;
-wire [15:0] streamer_dbg_state;
 
 dvd_iso_reader dvd_iso_reader_inst (
     .clk            (clk_sys),
@@ -3340,7 +3333,6 @@ dvd_iso_reader dvd_iso_reader_inst (
     .title_sel      (dbg_title_vts),      // Debug "Title VTS" picker: 0=Auto, else VTS #
     .vbuf_empty     (vbuf_empty),         // one term of the natural-transition drain gate
     .aud_drained    (aud_drained_w),      // ...and the audio half of it (dvd/aud_drain.sv)
-    .menu_snap      (1'b0),               // toggle removed with the still re-decode (v0.5.0)
     // Authored cell duration: display-referenced cell clock. Same tick av_sync
     // advances the STC with (one pulse per displayed image); disp_fps resolves
     // the active raster rate incl. the Film 24p/25p modes.
@@ -3413,7 +3405,6 @@ dvd_iso_reader dvd_iso_reader_inst (
     .subp_ntracks   (subp_ntracks_w),
     .attr_a_sel     (aud_cur),            // read out the selected audio track
     .attr_a_fmt     (attr_a_fmt_w),
-    .attr_a_ch      (attr_a_ch_w),
     .attr_a_lang    (attr_a_lang_w),
     .attr_s_sel     (sub_idx),            // read out the selected subtitle track
     .attr_s_lang    (attr_s_lang_w),
@@ -3430,9 +3421,6 @@ dvd_iso_reader dvd_iso_reader_inst (
     .cmd_nr_pgm     (vm_nr_pgm),
     .cur_pgm        (cur_pgm_w),          // Phase 11 HUD: current chapter (1-based)
     .nr_ptt_o       (nr_ptt_w),           // Phase 6: exact chapter total (nr_of_ptts)
-    .cell_end_pulse (),
-    .pgc_end_pulse  (),
-    .pgc_still_time (),
     .pgc_playback_time (pgc_playback_time_w),
     .next_pgcn      (rd_next_pgcn),
     .prev_pgcn      (rd_prev_pgcn),
@@ -3445,7 +3433,6 @@ dvd_iso_reader dvd_iso_reader_inst (
     .cellf_lwe      (cellf_lwe_w),
     .cellf_last     (cellf_last_w),
     .title_secs_o   (title_secs_w),
-    .cur_cell_still (),
     .cur_cell_cmdnr (cur_cell_cmdnr_w),
     .title_first_rbn (title_first_rbn_w),         // seek-bar: title RBN span
     .title_last_rbn  (title_last_rbn_w),
@@ -3487,18 +3474,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     .lin_blk_o            (lin_blk_w),
 
     .debug_active         (streamer_active),
-    .debug_sd_rd          (streamer_sd_rd),
-    .debug_sd_ack         (streamer_sd_ack),
-    .debug_cache_has_data (streamer_has_data),
-    .debug_file_size      (streamer_file_size),
-    .debug_total_sectors  (streamer_total_sectors),
-    .debug_next_lba       (streamer_next_lba),
-    .debug_state          (streamer_dbg_state),
     .debug_iso_mode       (iso_mode_w),
-    .debug_iso_error      (iso_error_w),
-    .debug_play_vtsn      (rdr_play_vtsn),
-    .debug_target_vtsn    (rdr_target_vtsn),
-    .dbg_pgcerr           (rd_dbg_pgcerr)
+    .debug_play_vtsn      (rdr_play_vtsn)
 );
 
 // =========================================================================

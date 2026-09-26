@@ -94,17 +94,10 @@ module dvd_iso_reader #(
                                      // VTS # N (7-bit: 26/302 library discs have >15
                                      // VTS - Atmosfear 75; spec max VTS_99)
 
-    // MENU STILL COLD RE-DECODE (docs/dvd_menu_refinements.md §5). A menu still cell's
-    // displayed frame is decoded MID-STREAM (entered via a keep_vbuf transition, so with
-    // stale references) and shows PIXELATED. Fix: re-stream just the still cell as a clean
-    // COLD decode (from its own sequence header) so the I-frame reconstructs correctly.
-    //   vbuf_empty : the decoder has drained its compressed buffer (transition fully played
-    //                out) - the Smooth-mode trigger, so the authored transition is NOT cut.
-    //   menu_snap  : P1O[18] Snappy - re-decode IMMEDIATELY (the emu deep-flush already
-    //                emptied the buffer, so it's fast; a buffered transition is cut, which
-    //                Snappy accepts). Either condition arms the once-per-entry re-decode.
+    // Level: the decoder has drained its compressed buffer. Gates a NATURAL
+    // title-domain jump/seek (tail drain), and the menu settle. (It once also armed
+    // the menu-still cold re-decode, removed in v0.5.0 with its menu_snap input.)
     input             vbuf_empty,
-    input             menu_snap,
     // Level: the audio the stream has delivered has been PRESENTED (emu
     // dvd/aud_drain.sv). A term of the NATURAL jump/seek gate only - the tail
     // of a cell is its audio as much as its pictures, and the jump's aud_flush
@@ -335,7 +328,6 @@ module dvd_iso_reader #(
     output reg [3:0]  subp_ntracks,  // nr_of_vts_subp_streams  @597 (1..8)
     input      [2:0]  attr_a_sel,    // audio track to read out (0..7)
     output     [2:0]  attr_a_fmt,    // audio_format (0=AC3,2=MPEG1,4=LPCM,6=DTS)
-    output     [3:0]  attr_a_ch,     // channel count (1..8)
     output     [15:0] attr_a_lang,   // ISO-639 language, 2 ASCII bytes (0=none)
     input      [2:0]  attr_s_sel,    // subpicture track to read out (0..7)
     output     [15:0] attr_s_lang,   // subpicture ISO-639 language (0=none)
@@ -368,11 +360,7 @@ module dvd_iso_reader #(
     // nr_ptt == cmd_nr_pgm (== nr_of_programs).
     output     [10:0] nr_ptt_o,
 
-    // PGC / cell playback events + metadata (Phase-4 VM inputs; still handling
-    // uses them internally already)
-    output reg        cell_end_pulse,
-    output reg        pgc_end_pulse,
-    output reg [7:0]  pgc_still_time,   // PGC still_time @163
+    // PGC metadata (Phase-4 VM inputs)
     // PGC total playback time (PGC@4, dvd_time_t: {hh,mm,ss,ff|rate}, all BCD).
     // Phase-7 nav foundation: the TITLE's total running time for the UI/overlay
     // "current / total" readout (the DSI supplies current time). Captured at the
@@ -414,7 +402,6 @@ module dvd_iso_reader #(
     output reg        cellf_lwe,
     output reg [31:0] cellf_last,
     output     [15:0] title_secs_o,
-    output     [7:0]  cur_cell_still,   // current cell's still_time (cell@2)
     output     [7:0]  cur_cell_cmdnr,   // current cell's cell_cmd_nr (cell@3)
 
     // Title RBN geometry (VTSTT_VOBS, 2048-sector), captured at PGC load.
@@ -541,37 +528,15 @@ module dvd_iso_reader #(
     output            lin_seek_ok_o,
     output     [31:0] lin_blk_o,
 
-    // Debug / overlay taps
+    // Status taps (names kept from the retired debug-overlay era). All three
+    // are live: debug_active drives LED_DISK, debug_iso_mode gates emu's
+    // unplayable-image and unsupported-audio notices, debug_play_vtsn feeds the
+    // HUD's VTS popup.
     output            debug_active,
-    output            debug_sd_rd,
-    output            debug_sd_ack,
-    output            debug_cache_has_data,
-    output     [15:0] debug_file_size,      // low 16 bits of file_size
-    output     [15:0] debug_total_sectors,  // low 16 bits of total 2048-sectors
-    output     [15:0] debug_next_lba,       // low 16 bits of current sd_lba
-    output     [15:0] debug_state,          // {iso_mode, iso_error, best_cnt, state}
     output            debug_iso_mode,       // 1 = ISO path taken
-    output            debug_iso_error,      // 1 = ISO9660 seen but no playable title
-    // DVD-FORK DEBUG (Atmosfear wrong-title diagnosis): the VTS the reader
-    // RESOLVED a title jump to (target_vtsn) vs. what it will STREAM (play_vtsn
-    // = sel_valid ? target_vtsn : best_vtsn). A JumpTT 66 that ends on 52 shows
-    // play_vtsn=52 here.
-    output     [7:0]  debug_play_vtsn,
-    output     [7:0]  debug_target_vtsn,
-
-    // Last pgc_error's cause, latched at the error site (overlay row 26 —
-    // replaced the retired nav_pci dbg_promo probe, 2026-08-27). Format
-    // {reason[15:13], nr_srp_sat[12:8], want_pgcn[7:0]}:
-    //   1 = PGCIT empty (nr_pgci_srp == 0)
-    //   2 = requested PGCN out of the PGCIT/LU's range  <- the failed-menu-link
-    //       signature (e.g. a page-2 LinkPGCN valid in one language unit but
-    //       not the one the Player Language picked)
-    //   3 = malformed pgc_start_byte     4 = JumpTT TT_SRPT resolve failed
-    //   5 = no VMGM/VTSM PGCI_UT         6 = malformed PGCI_UT header
-    //   7 = VTS / menu VOB not found
-    // nr_srp_sat = the PGCIT's SRP count saturated to 31; want_pgcn = the
-    // requested PGCN's low byte. Cleared on rst_n only (a diagnostic latch).
-    output reg [15:0] dbg_pgcerr
+    // The VTS the reader will STREAM (play_vtsn = sel_valid ? target_vtsn :
+    // best_vtsn).
+    output     [7:0]  debug_play_vtsn
 );
 
 // =========================================================================
@@ -619,11 +584,9 @@ reg [7:0] rbuf [0:FETCH_N-1];
 // parse_buf read, so no LUT-RAM fit blow-up.
 // =========================================================================
 reg [2:0]  a_fmt_mem  [0:7];    // audio_format
-reg [3:0]  a_ch_mem   [0:7];    // channel count (decoded value, 1..8)
 reg [15:0] a_lang_mem [0:7];    // ISO-639 language
 reg [15:0] s_lang_mem [0:7];    // subpicture language
 assign attr_a_fmt  = a_fmt_mem [attr_a_sel];
-assign attr_a_ch   = a_ch_mem  [attr_a_sel];
 assign attr_a_lang = a_lang_mem[attr_a_sel];
 assign attr_s_lang = s_lang_mem[attr_s_sel];
 
@@ -1260,6 +1223,7 @@ reg [31:0] pb_sec;                    // sector currently resident in parse_buf
 reg [23:0] wacc;                      // rolling byte accumulator (u16/u32 assembly)
 reg [15:0] nr_pre16, nr_post16, nr_cellc16;  // raw command counts
 reg [15:0] prog_map_off16;            // PGC program_map_offset @230 (0 = none)
+reg [7:0]  pgc_still_time;            // PGC still_time @163 (arms the PGC-end still)
 // The header walk continues into the program map (P_PMAP) when the PGC has one
 // and it can matter; FP PGCs carry commands only.
 wire       pmap_go_w = (prog_map_off16 != 16'd0) && (cmd_nr_pgm != 8'd0) && (dom != DOM_FP);
@@ -2426,7 +2390,6 @@ always @(posedge clk or negedge rst_n) begin
         pgc_ctl_wdata <= 32'd0;
         pgc_ctl_valid <= 1'b0;
         pgc_dom_tt    <= 1'b0;
-        dbg_pgcerr    <= 16'd0;
         wacc         <= 24'd0;
         jump_pending <= 1'b0;
         jump_ctx     <= 1'b0;
@@ -2437,8 +2400,6 @@ always @(posedge clk or negedge rst_n) begin
         pgc_error    <= 1'b0;
         cmd_we       <= 1'b0;
         ext_w_en     <= 1'b0;
-        cell_end_pulse <= 1'b0;
-        pgc_end_pulse  <= 1'b0;
         still_timed  <= 1'b0;
         still_secs   <= 16'd0;
         still_next   <= STILL_NEXT;
@@ -2524,8 +2485,6 @@ always @(posedge clk or negedge rst_n) begin
         jump_ack <= 1'b0;
         pgc_loaded <= 1'b0;
         pgc_error  <= 1'b0;
-        cell_end_pulse <= 1'b0;
-        pgc_end_pulse  <= 1'b0;
         vm_cell_cmd    <= 1'b0;
         vm_pgc_end     <= 1'b0;
 
@@ -3557,7 +3516,6 @@ always @(posedge clk or negedge rst_n) begin
                 if (sel_i >= grp_count) begin
                     if (sel_ret) begin
                         pgc_error <= 1'b1;             // VTS not found -> menu jump fails
-                        dbg_pgcerr <= {3'd7, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]), want_pgcn[7:0]};
                         state     <= S_DONE;
                     end else
                         state <= S_PGC_BEGIN;          // not found -> largest-VTS
@@ -3577,7 +3535,6 @@ always @(posedge clk or negedge rst_n) begin
                             state      <= S_SECREAD;
                         end else begin
                             pgc_error <= 1'b1;         // no VTSI / no menu VOB
-                            dbg_pgcerr <= {3'd7, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]), want_pgcn[7:0]};
                             state     <= S_DONE;
                         end
                     end else begin
@@ -3666,7 +3623,8 @@ always @(posedge clk or negedge rst_n) begin
                     if (!attr_phase) begin
                         case (attr_j)
                           3'd0: a_fmt_mem [attr_idx] <= pb_rdata[7:5];       // audio_format
-                          3'd1: a_ch_mem  [attr_idx] <= {1'b0, pb_rdata[2:0]} + 4'd1;
+                          // byte 1 = channel count: nothing reads it (the HUD shows the
+                          // codec and language only), so it is not stored.
                           3'd2: a_lang_mem[attr_idx][15:8] <= pb_rdata;      // lang hi
                           3'd3: a_lang_mem[attr_idx][7:0]  <= pb_rdata;      // lang lo
                           default: ;                                        // bytes 4..7 unused
@@ -3867,7 +3825,6 @@ always @(posedge clk or negedge rst_n) begin
                 if (nr_pgci_srp == 16'd0) begin
                     if (jump_ctx && dom != DOM_TT) begin
                         pgc_error <= 1'b1;
-                        dbg_pgcerr <= {3'd1, 5'd0, want_pgcn[7:0]};
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;             // no PGCs -> linear title
@@ -3905,7 +3862,6 @@ always @(posedge clk or negedge rst_n) begin
                         state     <= S_SRP_FETCH;
                     end else if (jump_ctx && dom != DOM_TT) begin
                         pgc_error <= 1'b1;     // requested PGCN out of range
-                        dbg_pgcerr <= {3'd2, ((nr_pgci_srp > 16'd31) ? 5'd31 : nr_pgci_srp[4:0]), want_pgcn[7:0]};
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;
@@ -3951,7 +3907,6 @@ always @(posedge clk or negedge rst_n) begin
                     // pgc_start_byte beyond 2 MB = malformed PGCIT
                     if (jump_ctx && dom != DOM_TT) begin
                         pgc_error <= 1'b1;
-                        dbg_pgcerr <= {3'd3, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]), want_pgcn[7:0]};
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;
@@ -4355,8 +4310,6 @@ always @(posedge clk or negedge rst_n) begin
                             state      <= (link_tgt_w <= nr_srp_l) ? S_SRP_FETCH : S_DONE;
                             if (link_tgt_w > nr_srp_l) begin
                                 pgc_error <= 1'b1;
-                                dbg_pgcerr <= {3'd2, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]),
-                                               link_tgt_w[7:0]};
                             end
                         end else begin
                             pgc_error <= 1'b1;
@@ -5043,7 +4996,6 @@ always @(posedge clk or negedge rst_n) begin
                                 // (vm_mode) — title cells honour a finite still too
                                 // (FMV-game timed choices). v1 holds ANY nonzero
                                 // still until a jump/timeout (timed stills = Phase 5).
-                                cell_end_pulse <= 1'b1;
                                 if ((menu_dom || vm_mode) && cm_rd[15:8] != 8'd0 &&
                                     cm_rd[15:8] != 8'd255) begin
                                     // TIMED STILL (Phase 5): an authored ad /
@@ -5154,7 +5106,6 @@ always @(posedge clk or negedge rst_n) begin
                                     angle_count    <= 4'd0;
                                     ilvu_armed     <= 1'b0;
                                     if (block_last + 8'd1 >= cell_count) begin
-                                        pgc_end_pulse <= 1'b1;
                                         strm_done     <= 1'b1;
                                         if (vm_mode) vmw_pgc_pend <= 1'b1;
                                     end else begin
@@ -5164,7 +5115,6 @@ always @(posedge clk or negedge rst_n) begin
                                     end
                                 end else if (cell_i + 8'd1 >= cell_count) begin
                                     // PGC FINISHED.
-                                    pgc_end_pulse <= 1'b1;
                                     strm_done     <= 1'b1;
                                     if (vm_mode && dur_hold_w) begin
                                         // AUTHORED CELL DURATION at PGC end:
@@ -5317,8 +5267,8 @@ always @(posedge clk or negedge rst_n) begin
             // soft-resets the decoder like a mount does (docs/quant_matrix.md
             // §11), so the landing's own sequence header is parsed clean. Do
             // not revert the removal on the strength of that symptom.
-            // ⚠ Its only live trigger was vbuf_empty -- menu_snap has been
-            // hardwired 0 since the Snappy/Smooth toggle was removed -- and
+            // ⚠ Its only live trigger was vbuf_empty (the menu_snap input was
+            // hardwired 0 once the Snappy/Smooth toggle went, and is deleted) -- and
             // vbuf_empty means the decoder had already consumed everything.
             S_STILL: begin
                 if (still_timed && sec_tick) begin
@@ -5400,7 +5350,6 @@ always @(posedge clk or negedge rst_n) begin
                             state <= menu_dom ? S_STILL : S_DONE;
                     end else if (vmw_last) begin
                         // the waited cell was the last: now it's a PGC end
-                        pgc_end_pulse <= 1'b1;
                         strm_done     <= 1'b1;
                         vmw_pgc_pend  <= 1'b1;
                         state         <= S_STREAM;   // drain, then vm_pgc_end
@@ -5422,7 +5371,6 @@ always @(posedge clk or negedge rst_n) begin
                 if (tt_srpt_ptr == 32'd0 || tt_srpt_ptr > 32'd65535 ||
                     jttn_l == 7'd0) begin
                     pgc_error <= 1'b1;
-                    dbg_pgcerr <= {3'd4, 5'd0, 1'b0, jttn_l};
                     state     <= S_DONE;
                 end else begin
                     sec_lba    <= vmgi_lba + tt_srpt_ptr;
@@ -5438,7 +5386,6 @@ always @(posedge clk or negedge rst_n) begin
                 // rbuf@0 = TT_SRP[ttn-1]: title_set_nr @+6, vts_ttn @+7
                 if (rbuf[6] == 8'd0 || rbuf[6] > 8'd99 || rbuf[7] == 8'd0) begin
                     pgc_error <= 1'b1;
-                    dbg_pgcerr <= {3'd4, 5'd1, 1'b0, jttn_l};
                     state     <= S_DONE;
                 end else begin
                     want_ttn    <= rbuf[7][6:0];
@@ -5460,7 +5407,6 @@ always @(posedge clk or negedge rst_n) begin
             S_JMP_VMGI: begin
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     pgc_error <= 1'b1;
-                    dbg_pgcerr <= {3'd5, 5'd0, want_pgcn[7:0]};
                     state     <= S_DONE;
                 end else if (dom == DOM_FP) begin
                     // FP PGC: byte offset rel. to the VMGI start
@@ -5488,7 +5434,6 @@ always @(posedge clk or negedge rst_n) begin
             S_JMP_VTSM: begin
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     pgc_error <= 1'b1;     // no VTSM menu -> emu falls back to VMGM
-                    dbg_pgcerr <= {3'd5, 5'd1, want_pgcn[7:0]};
                     state     <= S_DONE;
                 end else begin
                     // Latch the UT target (uses the current @208 rbuf), then grab
@@ -5528,7 +5473,6 @@ always @(posedge clk or negedge rst_n) begin
                 if (ut_nr_lus == 16'd0 || ut_nr_lus > 16'd99 ||
                     ut_lu0_start < 32'd8 || ut_lu0_start > 32'd2097151) begin
                     pgc_error <= 1'b1;
-                    dbg_pgcerr <= {3'd6, 5'd0, want_pgcn[7:0]};
                     state     <= S_DONE;
                 end else if (ut_nr_lus == 16'd1) begin
                     pit_sec    <= jmp_ut_lba + (ut_lu0_start[20:0] >> 11);
@@ -5691,7 +5635,6 @@ assign still_active         = (state == S_STILL);
 assign cur_vts              = play_vtsn;
 assign cur_pgcn_o           = cur_pgcn;
 assign best_menu_vts        = best_mnu_vts;
-assign cur_cell_still       = cm_rd[15:8];
 assign cur_cell_cmdnr       = cm_rd[7:0];
 
 // Phase-4 DVD-VM read-backs
@@ -5706,18 +5649,7 @@ assign cell_count_o         = cell_count;
 assign res_ttn              = cur_ttn;
 
 assign debug_active         = streaming;
-assign debug_sd_rd          = sd_rd;
-assign debug_sd_ack         = sd_ack;
-assign debug_cache_has_data = cache_has_data;
-assign debug_file_size      = file_size[15:0];
-assign debug_total_sectors  = total_blocks[15:0];
-assign debug_next_lba       = sd_lba[15:0];
-// state widened 5->6 bits (Phase-0 ALM reclaim); the 2 pad bits now carry the
-// Phase-2 menu-domain/still flags.
-assign debug_state          = {iso_mode, iso_error, sel_valid, best_cnt[4:0],
-                               menu_dom, (state == S_STILL), state};
 assign debug_iso_mode       = iso_mode;
-assign debug_iso_error      = iso_error;
 assign raw_mode_o           = raw_mode;
 assign cdda_mode_o          = cdda_mode;
 assign cdda_fs_o            = cdda_fs;
@@ -5730,6 +5662,5 @@ assign lin_seek_ok_o        = !cell_mode && !iso_mode &&
                               (raw_mode || cdda_mode || flat_seek_en);
 assign lin_blk_o            = strm_blk;
 assign debug_play_vtsn      = play_vtsn;
-assign debug_target_vtsn    = target_vtsn;
 
 endmodule

@@ -62,7 +62,7 @@ module cdda_audio_tb;
 
     // ---------------- DUT 1: reader ----------------
     dvd_iso_reader rdr (
-        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0), .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0), .vbuf_empty(1'b0), 
         .jump_ttn(7'd0), .jump_pgn(8'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
@@ -74,9 +74,8 @@ module cdda_audio_tb;
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(cdda_full_w),
         .raw_mode_o(),
         .cdda_mode_o(cdda_mode_w), .cdda_fs_o(cdda_fs_w), .wav_bad_o(wav_bad_w),
-        .debug_active(), .debug_sd_rd(), .debug_sd_ack(), .debug_cache_has_data(),
-        .debug_file_size(), .debug_total_sectors(), .debug_next_lba(),
-        .debug_state(), .debug_iso_mode(), .debug_iso_error()
+        .debug_active(),   
+         .debug_iso_mode() 
     );
 
     // ---------------- DUT 2: audio decode (cdda port) ----------------

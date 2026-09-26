@@ -83,7 +83,7 @@ module iso_reader_chapter_tb;
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
-        .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), 
         .seek_pulse(1'b0), .seek_natural(1'b0), .seek_cell(8'd0),
         .seek_rbn_pulse(1'b0), .seek_rbn(32'd0), .seek_tm_req(1'b0), .seek_tm_secs(17'd0),
         .chap_pulse(chap_pulse), .chap_dir(chap_dir), .chap_mag(chap_mag), .chap_at_start(chap_at_start),
@@ -97,9 +97,8 @@ module iso_reader_chapter_tb;
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
         .pal_we(), .pal_waddr(), .pal_wdata(),
-        .debug_active(), .debug_sd_rd(), .debug_sd_ack(), .debug_cache_has_data(),
-        .debug_file_size(), .debug_total_sectors(), .debug_next_lba(),
-        .debug_state(), .debug_iso_mode(), .debug_iso_error()
+        .debug_active(),   
+         .debug_iso_mode() 
     );
 
     always #5 clk = ~clk;

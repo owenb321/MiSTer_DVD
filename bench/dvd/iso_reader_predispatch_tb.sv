@@ -77,7 +77,7 @@ module iso_reader_predispatch_tb;
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
-        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b1), .menu_snap(1'b0),   // always-drained: tail-drain wait bypassed (bit-exact pre-drain timing)
+        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b1),    // always-drained: tail-drain wait bypassed (bit-exact pre-drain timing)
         .jump_ttn(vm_jump_ttn), .jump_pgn(vm_jump_pgn), .jump_ptt(vm_jump_ptt),
         .vm_mode(1'b1), .vm_adv(vm_adv_w), .vm_replay(vm_replay_w),
         .vm_cell_cmd(vm_cell_cmd_w), .vm_pgc_end(vm_pgc_end_w),
@@ -97,17 +97,15 @@ module iso_reader_predispatch_tb;
         .menu_btns_armed(1'b0),
         .cmd_we(cmd_we_w), .cmd_waddr(cmd_waddr_w), .cmd_wdata(cmd_wdata_w),
         .cmd_nr_pre(nr_pre_w), .cmd_nr_post(nr_post_w), .cmd_nr_cell(nr_cell_w),
-        .cell_end_pulse(), .pgc_end_pulse(),
-        .pgc_still_time(), .next_pgcn(rd_next), .prev_pgcn(rd_prev),
+         .next_pgcn(rd_next), .prev_pgcn(rd_prev),
         .goup_pgcn(rd_goup),
-        .cur_cell_still(), .cur_cell_cmdnr(cur_cell_cmdnr_w),
+         .cur_cell_cmdnr(cur_cell_cmdnr_w),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
         .pal_we(), .pal_waddr(), .pal_wdata(),
-        .debug_active(), .debug_sd_rd(), .debug_sd_ack(), .debug_cache_has_data(),
-        .debug_file_size(), .debug_total_sectors(), .debug_next_lba(),
-        .debug_state(), .debug_iso_mode(), .debug_iso_error()
+        .debug_active(),   
+         .debug_iso_mode() 
     );
 
     dvd_vm vm (
