@@ -1344,7 +1344,6 @@ reg [7:0]  cm_cat_c;                  // captured cell category byte@0 (Phase 9)
 // only by a cell whose playback_time exceeds its content duration. Capture the
 // extra fields to reconstruct the effective hold at parse time.
 reg [31:0] lv_c;                      // cell last_vobu_start_sector @16 (RBN)
-reg [7:0]  pbh_c, pbm_c;              // playback_time @4/@5 hour/minute (BCD-decoded)
 reg [15:0] pb_c;                      // playback_time in seconds, clamped to the
                                       // C_PBTM spec max 9:59:59 = 35,999 (Phase 6)
 reg [7:0]  cmd_b0, cmd_b1, cmd_b6;    // command bytes 0/1/6 (LinkPGCN detect)
@@ -2009,6 +2008,21 @@ wire        heur_flag_w = (cm_still_c == 8'd0) && heur_hit_w;
 // bcd_time_add, so truncation can't accumulate). Self-initializing: cell 0
 // stores 0 and seeds run_eltm, so no extra reset state in the walk.
 reg  [31:0] pt_c;                     // this cell's playback_time (BCD)
+// ONE BCD hh:mm:ss -> seconds converter, clamped at the C_PBTM spec maximum
+// 9:59:59 = 35,999 s (reachable only by garbage BCD digits). It serves the two
+// places a playback_time becomes seconds, which never run at once: Auto's
+// longest-PGC scan (dur_scan, S_PGC_HDR, the PGC header's @4..6 in rbuf) and each
+// cell record of the P_CELL walk (@4/@5 already latched in pt_c, @6 in pb_rdata
+// on the cell_bi == 6 cycle). Until feature/reader-slim each had its own
+// multiplier tree; the old P_CELL form, (hh_hi*10 + hh_lo)*3600 + ..., is exactly
+// this sum, because its 8-bit intermediates (<= 165) never overflowed.
+wire [7:0]  bcd_hh      = dur_scan ? rbuf[4] : pt_c[31:24];
+wire [7:0]  bcd_mm      = dur_scan ? rbuf[5] : pt_c[23:16];
+wire [7:0]  bcd_ss      = dur_scan ? rbuf[6] : pb_rdata;
+wire [19:0] bcd_secs_w  = ({16'd0, bcd_hh[7:4]} * 20'd36000) + ({16'd0, bcd_hh[3:0]} * 20'd3600) +
+                          ({16'd0, bcd_mm[7:4]} * 20'd600)   + ({16'd0, bcd_mm[3:0]} * 20'd60)   +
+                          ({16'd0, bcd_ss[7:4]} * 20'd10)    +  {16'd0, bcd_ss[3:0]};
+wire [15:0] bcd_secs_cl = (bcd_secs_w > 20'd35999) ? 16'd35999 : bcd_secs_w[15:0];
 reg  [31:0] run_eltm;                 // running duration sum (BCD)
 // The START of the angle block currently being walked, latched at its
 // block-FIRST cell. A sibling must publish THIS, not the running total: the
@@ -3939,13 +3953,9 @@ always @(posedge clk or negedge rst_n) begin
                 // Auto's longest-PGC scan. rbuf holds this PGC's header: nr_of_cells
                 // @3 and playback_time @4..6 (BCD hh/mm/ss). A PGC with no cells is
                 // not playable, so it cannot win.
-                reg [19:0] secs;
                 reg [15:0] cand;
                 reg        win;           // this PGC beats the best so far
-                secs = ({12'd0, rbuf[4][7:4]} * 20'd36000) + ({12'd0, rbuf[4][3:0]} * 20'd3600) +
-                       ({12'd0, rbuf[5][7:4]} * 20'd600)   + ({12'd0, rbuf[5][3:0]} * 20'd60)   +
-                       ({12'd0, rbuf[6][7:4]} * 20'd10)    +  {12'd0, rbuf[6][3:0]};
-                cand = (secs > 20'd35999) ? 16'd35999 : secs[15:0];   // C_PBTM spec max
+                cand = bcd_secs_cl;       // the shared converter, fed rbuf[4..6] here
                 win  = (nr_of_cells_b != 8'd0) && (cand > dur_best_secs);
                 if (win) begin
                     dur_best_secs <= cand;
@@ -4225,24 +4235,9 @@ always @(posedge clk or negedge rst_n) begin
                     if (cell_bi == 5'd0) cm_cat_c   <= pb_rdata;   // category@0 (Phase 9)
                     if (cell_bi == 5'd2) cm_still_c <= pb_rdata;
                     if (cell_bi == 5'd3) cm_cmd_c   <= pb_rdata;
-                    // playback_time @4/5/6 (BCD hour/min/sec) -> seconds (heuristic)
-                    if (cell_bi == 5'd4)
-                        pbh_c <= {4'd0, pb_rdata[7:4]} * 8'd10 + {4'd0, pb_rdata[3:0]};
-                    if (cell_bi == 5'd5)
-                        pbm_c <= {4'd0, pb_rdata[7:4]} * 8'd10 + {4'd0, pb_rdata[3:0]};
-                    if (cell_bi == 5'd6) begin : pbsum
-                        // hh*3600 + mm*60 + ss, full 16-bit (spec-hardening
-                        // Phase 6: the old any-hours/255 clamp under-held
-                        // still-shaped cells > 4 min 15 s). Clamp only at the
-                        // C_PBTM spec max 9:59:59 = 35,999 s - reachable only
-                        // by garbage BCD digits (legal max hh = 9).
-                        reg [19:0] pbs;
-                        pbs = {12'd0, pbh_c} * 20'd3600 +
-                              {12'd0, pbm_c} * 20'd60 +
-                              {16'd0, pb_rdata[7:4]} * 20'd10 +
-                              {16'd0, pb_rdata[3:0]};
-                        pb_c <= (pbs > 20'd35999) ? 16'd35999 : pbs[15:0];
-                    end
+                    // playback_time @4/5/6 -> seconds (heuristic): the shared
+                    // converter reads @4/@5 from pt_c and @6 from pb_rdata now.
+                    if (cell_bi == 5'd6) pb_c <= bcd_secs_cl;
                     if (cell_bi == 5'd19) lv_c <= {wacc, pb_rdata};   // last_vobu_start @16
                     // (first/last BRAM writes live in the dedicated block above)
                     if (cell_bi == 5'd23) begin
