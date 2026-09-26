@@ -1,0 +1,5838 @@
+# Feature status log
+
+**What this is:** the full per-feature engineering record that used to live in `CLAUDE.md`
+("Hardware status", "Known Gaps", and the per-module status and decision sections). It was
+moved here **verbatim** on 2026-09-25, because `CLAUDE.md` is loaded into every Claude Code
+session and had grown to 512 KB (~125K tokens). `CLAUDE.md` now carries a one-row-per-feature
+index (its "Feature status index") that points here.
+
+**How to use it:** entries are newest first within the first section. Each one records the
+field report, root cause, measurements, refuted theories, gates, and hardware-round evidence.
+Read a feature's entry before changing it. Most entries also name a `docs/<topic>.md` with the
+full design.
+
+**How to add to it:** when a feature lands, put its write-up at the top of the
+"Hardware status" section below, flip its marker when HW confirms it, and add or update
+**one row** in `CLAUDE.md`'s index. Don't paste the write-up into `CLAUDE.md`.
+
+⚠ Heading levels below are as they were in `CLAUDE.md`. Some markers inside the older entries
+predate later confirmations; the `CLAUDE.md` index carries the reconciled status as of the move.
+
+---
+
+## Hardware status (THIS fork, verified 2026-06-21)
+
+- ✅ **`.cue` SHEETS — AUDIO CD AND VCD/SVCD RIPS, PARSED BY THE MAIN, ZERO FABRIC LOGIC
+  (2026-09-25, ✅ MERGED PR #129); host-proven (12 mutations each caught by
+  its own `FAIL` line), ✅ HW-MEASURED on the rig 2026-09-25, control arm first, and
+  ✅ HW-CONFIRMED by the maintainer the same day loading a `.cue` from the OSD file
+  picker** (the one path the harness cannot drive: it launches by MGL)
+  (build `DVD_cue_20260926_0019.rbf`, SEED 9 first roll, clk_dec 87.81/87.45, 98 % ALM).
+  | arm | result |
+  |---|---|
+  | control: the pre-cue Main | the sheet mounts as a 225-byte text file → black, nothing plays |
+  | audio, one `.bin` + INDEX 00 pregaps | `TR 1/3`, 0:00:32 (30 s + the next pregap); skips land on 440/660/880 Hz by capture |
+  | audio, EAC per-track `.wav`, gaps appended | identical: `TR 1/3`, 0:00:32, 440 → 660 Hz across the file edge |
+  | VCD, split `.bin` | picture, −14.8 dBFS, seek, total 0:34:34 = 155,529 sectors ÷ 75 |
+  | VCD, `MODE2/2336` | the same, so the rebuilt sync prefix passes the core's detector |
+  | refused sheet (missing FILE), MGL launch | reason logged, no notice, MGL finishes, idle logo |
+
+  ✅ **Physical audio CD unregressed on the same build:**
+  - an 18-track disc auto-mounts, plays (−14…−17 dBFS), skips and stacks skips;
+  - Eject opens the tray and returns to idle, with no `/dev/sr1` handle left open.
+    The close path is where the refactor touched it.
+
+  ✅ **Physical VCD unregressed too:**
+  - the burned QG0012 disc mounts at 603,803,088 B (256,719 sectors, the same span its
+    `.cue` produces), plays, seeks, total 0:57:04;
+  - Eject opens the tray, returns to idle, and leaves no `/dev/sr1` handle.
+
+  ⚠ Pre-existing, not from this branch:
+  one Eject press logs a SECOND eject request after the core reset the first one
+  causes (harmless: it unmounts an already-empty slot). Likely the core's eject
+  toggle clearing on reset, read by `dvd_remote.cpp` as a new press. ⚠ Two quick Previous presses at the very END of the last track landed on
+  track 1, not the track before; from mid-track they land correctly. That is the core's
+  stacking path, shared with a physical CD. Not cue-specific; unexplained. Reverses the earlier bin/cue rejection. The core
+  never sees an extension, so `main/support/dvd/dvd_cue.{h,cpp}` builds a stream it
+  already plays:
+  - an **audio CD** is the physical disc's virtual WAV plus the `CDTC` track table,
+    through `dvd_cdda_open_source()` and `dvd_css`'s CD-DA front door;
+  - a **VCD/SVCD** is the physical VCD's raw Mode 2 span, through `dvd_vcd_open_source()`.
+    It also excludes a hybrid disc's CD-DA tail and re-inserts the prefix a
+    `MODE2/2336` rip dropped.
+
+  Both are the SAME code the physical paths run, so the only new logic is the parser
+  and layout. The only RTL touch is `CUE` in `CONF_STR` (0 ALMs). Tracks start at
+  INDEX 01 and a pregap plays at the end of the track before, as the physical TOC
+  does. EAC's gaps-appended layout, per-track `.wav`, MOTOROLA, and Windows
+  paths/case are handled. Limits are 99 tracks and 99 files, refused past either,
+  never truncated.
+  ★ **The track table must go out on the poll AFTER the mount** (the core wipes it on
+  mount): `dvd_cdda_toc_service()` from `dvd_css_tick()`.
+  ★★ **A stock-Main overflow came with it:** the picker `strcpy`s the S0 list into
+  `fs_pFileExt[13]`, and ours was already 24 characters (27 with CUE), overrunning
+  into `menu_visible`, `osd_unlocked` and `config_scale[0]`. Integration step 50
+  widens it to 256.
+  Gates: `main/tests/run_tests.sh --red` (`dvd_cue_test.cpp`). Detail:
+  **`docs/cdda.md` "`.cue` sheets"**, `main/integration/INTEGRATION.md` "Steps 50-51".
+
+- ✅ **TIME-MAP SEEK — Phase 8b REOPENED: the seek preview and the landing now agree
+  (2026-09-25, issue #127, ✅ MERGED PR #128); sim-proven, 13 mutations + 9 wiring
+  re-regressions each caught by its own check; the D-PAD arm is ✅ HW-MEASURED 2026-09-25
+  against the v0.7.0 control (build `DVD_tmapseek_20260925_1358.rbf`, clk_dec 87.92/89.9,
+  98 % ALM), and the held scrub ✅ HW-CONFIRMED by the maintainer the same day with a
+  gamepad ("looks good").** On BBB and MiB, every D-pad
+  landing was 0.3–0.7 s after the previewed second, against the control's −1.7…+1.4 s in
+  both directions, with `flags.tmap = 1`. The residual is a constant +1 s tick when the
+  preview ends: the live clock's ~0.7 s parse-front lead plus the forward VOBU snap
+  (`30 → 31` where the report read `30 → 29 → 34`). Report (v0.7.0): seeks
+  land, but a held FF starts ~5 s off the clock and jumps ~5 s on release; a D-pad Left reads
+  `30 → 29 → 34`. The held scrub accumulated SECTORS (title-average bitrate) and the preview
+  interpolated them back into a time: two guesses, both seconds wrong in a VBR cell.
+  ★★ **Phase 8b (TMAP seek) had been RETIRED 2026-07-10 "don't re-propose"; the user reopened
+  it** because it is the only exact time→sector map on a disc (memory
+  [[revisit-past-decisions]]). ★ **Measured first:** `tools/tmap_check.py` over 1,432 images —
+  91.8 % of maps within 1.04 s of their own authored clock, 3.5 % offset/drifting by 2–6 s,
+  3 % with no map (→ fallback).
+  **Fix:** every gesture carries a TIME. `scrub_ctrl` counts seconds from the clock at the hold
+  start (exact tier rates); a fired D-pad sends `seek_time`'s exact `live ± request`. The reader's
+  new `S_TMAP` (ONE state code with a phase counter — the 6-bit state space had two free) reads
+  VTSI_MAT@0xD4 → TMAPT → the PGC's map header (cached per PGC), interpolates between the two
+  entries around t, and hands the sector to the ordinary snap/branch/angle landing. A missing
+  or implausible map keeps the caller's sector (`tmap_fell`, telemetry `flags.tmap_fb`).
+  `seek_time`'s sector-interpolation arm is tied off (no consumer; pays the area back).
+  ⚠ The D-pad's time rides `scrub_seek_pulse`, NOT the arbitrated `seek_rbn_pulse`
+  (mode_realign's sector seeks share it). ⚠ Linear files preview the time, keep sector seeks.
+  ⚠ The harness cannot hold a gamepad scrub; the D-pad arm is testable from it.
+  Gates: **`bench/dvd/run_tmap_seek.sh --red`**, `tools/check_tmap_seek_wiring.py`. Detail:
+  **`docs/dvd_nav.md` §2h**. The preview-anchor attempt that preceded this is on the local
+  branch `fix/display-clock`, the display-clock queue on `wip/disp-clock-queue` (both unpushed).
+
+- ✅ **ONE `Deinterlace` OPTION (Weave / Bob / Blend) + BOB ON THE PROGRESSIVE RASTER
+  (2026-09-25, branch `feature/deint-merge`); sim-proven + mutation-checked, built
+  `DVD_deintmerge_20260926_0049.rbf` (SEED 9 first roll, clk_dec 88.92/89.88, 98 % ALM,
+  Bob = +7 ALM; rebased onto PR #129 and rebuilt as `DVD_deintmerge_20260926_0154.rbf`,
+  SEED 9 first roll, 90.95/89.09), ✅ HW-MEASURED 2026-09-26: on Thayer's most-combed blocks, comb 1.05 Weave → 0.31 Bob
+  → 0.18 Blend; held re-scans 0 px; Bob's kept field bit-exact against Weave; film 0 px;
+  pacing unchanged; gated off on Interlaced and Film 24p; ✅ HW-CONFIRMED by the
+  maintainer's eye the same day (OSD row swap, HDMI Bob on Interlaced, Bob motion).** `OB 480i Deint` and `O[49] Progressive Deint` are RETIRED (bits 11/49
+  reserved and read by nothing) into `O[51:50] Deinterlace`: 0 = Weave (default), 1 = Bob,
+  2 = Blend. ⛔ "Off" was dropped because it equals Weave on both rasters (user decision).
+  ★ **Two CONF_STR rows share the field, swapped by the MENU MASK**: `H0O[51:50]…Weave,Bob,Blend`
+  and `h0O[51:50]…Weave,Bob`, with `hps_io.status_menumask = {15'd0, interlaced_eff}` (the
+  first use of the mask in this core). Main renders an out-of-range value as index 0, so a
+  saved Blend reads and behaves as Weave on the Interlaced raster (`HDMI_BOB_DEINT =
+  fields_eff & (deint_mode == 1)`). ⚠ Accepted cost: HDMI on Interlaced now defaults to
+  Weave (was Bob). ★ **Progressive Bob is `field_blend`'s second kernel**: keep one field,
+  rebuild the other's lines as `(a + d + 1) >> 1`, on the same `cur_ilace` gate as Blend,
+  plus `~filmp_eff`. The pickup scan keeps the FIRST field and every re-scan the SECOND,
+  so a hold is steady; alternating per re-scan would be Stage A's 30 Hz flip (MB4 → C5).
+  ⚠ **`tools/docs_check.py` silently skipped mask-prefixed rows** (it matched `P`/`O` only);
+  `MASK_PREFIX` now handles them, and `parse_bits()` merges rows that share a field.
+  Telemetry `flags.bob` = word 14 bit 8 (word 7 is full). Gates:
+  `bench/dvd/run_field_blend.sh --red`, `tools/check_field_blend_wiring.py`. Detail:
+  **`docs/field_blend.md` §6–§7**.
+
+- ✅ **PROGRESSIVE DEINT = BLEND — a NON-ADAPTIVE field blend on the Progressive
+  raster (2026-09-24, branch `feature/field-blend`); sim-proven + mutation-checked, built
+  `DVD_fieldblend_20260924_1713.rbf` (SEED 9 first roll, clk_dec 91.64/89.16, 254 ALM,
+  6 M10K, 0 DSP), ✅ HW-MEASURED on the rig 2026-09-24 (Thayer comb 1.751 → 0.588 on
+  one paused picture, 0 px change between Blend re-scans, film 0 px Off vs Blend, PAL and
+  NTSC video engage, Interlaced disengages, pacing unchanged), ✅ HW-CONFIRMED by the maintainer the same day: Thayer's Quest looks good with
+  Blend, and a film→video change inside one title switches the blend correctly.** `O[49] Progressive Deint = Off / Blend`, **default Off** (⚠ since 2026-09-25 it is
+  `Deinterlace = Blend` on the merged `O[51:50]` option, see the bullet above). On the
+  Progressive raster, `dvd/field_blend.sv` filters every line of a true-interlaced picture
+  (`cur_ilace`) as `(a + 2b + d + 2) >> 2`, mirroring the edges.
+  ★ **This reopens `hw_budget_and_lessons.md` §0 narrowly and on purpose.** Shelved Stage A
+  shimmered because its kernel was bob with a per-refresh ALTERNATING anchor and a
+  threshold detector: a falsely flagged edge went sharp/soft at 30 Hz. This has no
+  detector, no anchor and no per-scan state, so a held picture is byte-identical on every
+  re-scan. Bench arm C5 measures that against the previous scan, and mutation MC7 (a
+  one-LSB per-scan flip) proves the arm can fail. The trade is sharpness, not shimmer.
+  ★★ **Default Off was MEASURED, not chosen by taste.** The offline study
+  (`tools/field_blend_model.py`) found NTSC soft-telecine film safe: all of it is `pf=1`,
+  899 discs. But `pf=0` selects ~30 % of the library, and **about half of that never
+  combs**: PAL Cowboy Bebop, The Office UK and Superman, and 11 of 24 sampled NTSC
+  "VIDEO" discs sit at a weave comb ratio ~0.6. On those the blend only softens (43–90 %
+  vertical detail kept on still pixels). ⛔ A per-picture "does it comb" gate was declined:
+  any threshold reintroduces a picture-to-picture flip.
+  ⚠ **The census JSON's `pic_progressive_pct` is unreliable** (halved on many film discs);
+  use `cadence_verdict` or a live `video_cadence_census.py --per-window`.
+  ⚠ Gate is `~interlaced_eff`, NOT Stage A's `~fields_eff`: 240p emits FRAMES.
+  ⚠ The addrgen's extra (H+1th) line is **line H-2** (disp_y steps back), which makes the
+  bottom a mirror. Stage A repeated H-1, a replicate, and mutation MC2 catches it.
+  Gates: `bench/dvd/run_field_blend.sh --red` (module bit-exact vs the model on a real
+  Thayer frame; real-chain arms C1–C8; 13 mutations + 6 wiring REDs incl. the real
+  pre-feature files) and `tools/check_field_blend_wiring.py`.
+  Detail: **`docs/field_blend.md`**.
+
+- 🔧 **`CSS ENCRYPTED` AFTER A CHAPTER SKIP ON A PHYSICAL DISC: TWO KEY MECHANISMS, BOTH
+  ON THE CRACK PATH (a drive with no region set) — issue #122 (2026-09-24, branch
+  `fix/css-titleset-key`); host-proven RED/GREEN (`main/tests/run_tests.sh --red`,
+  7 new mutations each caught by its own arm), and ✅ REPRODUCED AND FIXED ON THE RIG
+  2026-09-24, control arm first, on both physical discs.**
+  | disc / arm | installed Main (control) | fixed Main |
+  |---|---|---|
+  | Hitch, chapter skip to LBA 802723 (part 2) | **`CSS ENCRYPTED`**, blocky picture | clean; parts 3–4 clean; audio −40.9 dBFS |
+  | Hitch, linear play 738005 → 807557 | — | clean, no key activity |
+  | Hitch, part-1 key zeroed in the cache | — | heal from `VTS_01_0`'s key, clean |
+  | Panda, VTS_14 (the MPAA rating card) | **`CSS ENCRYPTED`**, `no title key for VOB @3187367` | heal from `VTS_14_0`'s key, clean |
+  0 new cache entries on either disc. ⚠ Hitch has UNREADABLE sectors near LBA 248138
+  (sense 03/11/00, ~30 s each), which black out the first minute. That is a read
+  problem, unrelated to this. Both measured
+  from the real discs on the host, not inferred. In both, the rig's
+  `/media/fat/dvdcss/cache` matches a host `DVDCSS_METHOD=title` run **byte for byte**.
+  ★★ **Hitch: a title set has ONE key, taken at part 1.** `dvd_css.cpp` keyed every VOB
+  PART at its own start. libdvdcss `CrackTitleKey()` gives up after **2000 consecutive clean
+  blocks** and **caches an ALL-ZERO key**. `dvdcss_seek` still returns success, and a zero
+  key makes DECRYPT a no-op. The first 2000 sectors of Hitch's `VTS_01_2..5` hold **0**
+  scrambled sectors, so everything past the first 1 GB was served scrambled. Fix: parts
+  2..9 key at `VTS_nn_1`'s start. This is libdvdread's real model; see the ⛔ in the #104
+  bullet below.
+  ★★ **Kung Fu Panda: a VOB too short to crack.** Its feature is fine. `VTS_14_1` is 169
+  sectors and **no crack succeeds from any block in it**, so `key_ok = 0` and it reads raw.
+  `css_detect` is sticky per mount, so one play of that clip latches the warning and the
+  mute for the whole disc. Its true key is `VTS_14_0`'s.
+  ★ **The heal.** A VOB sector handed back with its scrambling bits still set has an exact
+  signature: libdvdcss clears them on everything it decrypts. Once per key domain per
+  session, the core tries the title set's other key block, then a key taken AT the
+  scrambled sector.
+  ⛔ **A candidate is used only when the decrypted payload proves it** (MPEG start codes:
+  right key 18–131, wrong key 0 every time, measured). A wrong non-zero key clears the bits
+  too, and would give unmuted noise instead of a muted warning.
+  ⚠ **Main-only change.** No `.rbf` is needed; build with `USE_DOCKER=1
+  main/build_main.sh`. Detail: **`docs/physical_disc.md`** "A title set has ONE key".
+
+- 🔧 **PHYSICAL-DISC PLAYBACK HITCHES: A STALE-SECTOR BUG AT EVERY 1 GB VOB BOUNDARY, AND
+  NO READ-AHEAD (2026-09-24, branch `feature/disc-readahead`); host-proven RED/GREEN
+  (`main/tests/run_tests.sh --red`, 49 mutations), and ✅ REPRODUCED AND FIXED ON THE RIG
+  2026-09-24 (physical *Matrix Reloaded* Disc 1, control arm first).** Users reported a
+  hitch on physical discs and suspected the layer change.
+  ★★ **On that disc the VOB boundary IS the layer boundary:** layer 0 ends at LBA
+  1,930,143, and `VTS_01_5.VOB` plus the bridge cell 20 start at 1,930,144. So bug (1)
+  below fed the decoder two stale sectors (the bridge cell's NAV pack and first data pack)
+  AT the layer change. The control's seek trace shows `read 1930146+8 … rbn 2`; the fix
+  shows no discontinuity. The drive itself did not stall there (no ≥100 ms read in either
+  arm), so for this report the stale sectors are the defect, not delivery.
+  (1) **`dvd_css_read` returned SHORT at every VOB end** (one libdvdcss read must not span
+  two title keys), while Main's readA/readB cache the whole 8-sector window on any
+  positive return. The tail then served the PREVIOUS window's sectors. VOB parts are
+  524,287 sectors, an odd number, so nearly every linear crossing of a `VTS_xx_N.VOB`
+  boundary fed the decoder up to 7 stale sectors, easily mistaken for the layer change.
+  Fixed: the read continues into the next VOB (keyed at its start as before) and
+  zero-fills only what is unreadable.
+  (2) **New `dvd_readahead.cpp`:** a worker thread owns the source and keeps a 32 MB RAM
+  ring (~25 s) ahead of the core. Main's poll thread only copies out of it, and
+  integration step 49 leaves a not-yet-buffered request un-acked for the next poll pass
+  instead of blocking. That thread therefore never waits on the drive, so the OSD,
+  input and telemetry stay live too. A seek retargets the ring and costs about what it
+  did before.
+  (3) Instruments in `/tmp/dvdcss.log`: `slow read`, `readahead: ring ran dry`, and the
+  disc's layer break logged at mount.
+  ⚠ The core's own cushion is short and AUDIO runs out first (the 32 KB ring caps the lead
+  at ~0.58 s at 448 kbps AC-3). An underrun still clicks and can leave audio 50–300 ms
+  late until the next seek; that is phase 3 (RTL), not yet done. Decrypted `.iso` files
+  over a network share are not buffered yet.
+  ★ **Jostle test, the real-world case (maintainer, 2026-09-24):** knocking the drive
+  off track mid-film paused playback on the previous Main. On the read-ahead the drive
+  was heard re-seeking and the film did not stop. The log shows 1612 ms + 663 ms drive
+  stalls absorbed, with no `ring ran dry`.
+  Audio CD and VCD from the drive (both now read through the worker) are ✅ unregressed on
+  the rig against the control Main: play, skip, seek, audio level, and eject.
+  (4) **Eject EBUSY, pre-existing:** libdvdcss opens the drive without `O_CLOEXEC`, so each
+  core switch leaked one handle into the next Main (measured: 4 on the rig), and the
+  kernel refuses to eject unless one handle is open. `mark_cloexec_to()` after
+  `dvdcss_open()` fixes it and heals already-leaked handles at the next core switch. The
+  tray opened on the rig. This is probably also `ad257e3`'s "days of uptime" EBUSY.
+  ⛔ Issue #122 (`CSS ENCRYPTED` after a chapter skip) is NOT this. It is title-key
+  selection on the crack path, fixed separately (see the #122 bullet above).
+  Detail: **`docs/physical_disc.md`** "Every read window comes back full" and "Read-ahead";
+  `main/integration/INTEGRATION.md` "Steps 48-49"; plan and HW gates in the branch's PR.
+
+- 🔧 **SWITCHING AUDIO TRACKS POPPED IN DECODE MODE — two defects, and the one first
+  fixed was NOT the one heard (2026-09-22/23, branch `fix/audio-declick-switch`);
+  sim-proven over a real disc slice; built `DVD_declick2_20260923_0125.rbf` (SEED 9 first
+  roll, clk_dec 91.57/90.83, 94 % ALM); ✅ HW-CONFIRMED 2026-09-23 by ear (maintainer) AND
+  by measurement against two control builds.**
+  ★ **HIL instrument, reusable:** 40 Audio presses from a loop ON THE TARGET, captured,
+  then count (a) audio blips < 300 ms between two digital silences and (b) FULL-SCALE
+  samples. A garbage AC-3 frame decodes at 0 dBFS, which film audio essentially never
+  reaches, so (b) is the pop itself. MiB feature: pre-fix `main` **443** full-scale / 2
+  clusters, `dev-declick` **729** / 8 blips, fix **0 / 0** with one gap per switch.
+  20 chapter skips on the fix: **0 / 0**.
+  ⏳ **Open, pre-existing, NOT this fix:** MiB's looping main menu shows a 36–49 ms
+  full-scale burst between two silences at every loop point (~30 s), **identically on
+  `main`**. That is either authored or the same mid-frame class on the loop-jump path
+  this change deliberately leaves alone. Check the disc's own audio offline first.
+  ★★ **THE AUDIBLE POP WAS BAD FRAMES REACHING THE DECODER.** Round 1 shipped only the
+  output de-click (below, build `DVD_declick_20260922_2337.rbf`). The maintainer still
+  heard an intermittent pop, shaped pop → silence → a blip of correct audio → silence →
+  correct audio, and only when landing on 2.0 from 5.1. No output step makes that shape:
+  it is garbage frames, the decoder's self-heal reset, and a relock.
+  New `bench/dvd/aud_switch_chain_tb.sv` (real `ps_demux → reframers → audio_ring` over
+  MEN_IN_BLACK VTS_21) measured **8 bad frames in 38 switches** pre-fix, from three
+  mechanisms:
+  - `ac3_reframer` kept the OLD track's frame-length lock (reset only on the core reset),
+    so after 5.1→2.0 it MERGED the new track's frames (2528 B under a 768 B header);
+  - the new track starts mid-frame, and a stray `0B77` ahead of the real frame (5 of 817
+    PES) became a false sync;
+  - the old track's in-flight PES leaked into the freshly reset ring.
+
+  **Fix:** `ps_demux.aud_realign` (= `aud_switch`) cuts the old payload, re-checks an old
+  PES still in its sub-header, and starts the new AC-3/DTS track at its
+  `first_access_unit_pointer`. The reframers also reset on a registered `aud_switch`.
+  Result: 0 bad. ⚠ **Seeks deliberately untouched.** They carry the same mid-frame
+  exposure and want their own change.
+  **Gate `bench/dvd/run_aud_switch.sh --red`:** the pre-fix wiring fails, and each of 4
+  mutations fails its own arm. The pointer skip is only visible through DIRECTED arms
+  landing on the stray-sync PES; a random sweep never hits one. ⚠ Every `ps_demux` bench
+  ties `aud_realign` to 0, because `z` reads as `x` in the realign condition.
+  Detail: **`docs/fabric_audio.md` "Audio-track switch realign"**.
+  **The output de-click (round 1, still shipped):** field report: a harsh static blip on every B7 press, confirmed Decode (PCM) mode. B7 →
+  `aud_resync` → `aud_rst_n`, and `dvd_audio_decode`'s mux did `if (rst) audio_l <= 0`.
+  **Fix:** a slew-limited output (1 LSB/cycle ≈ 2.4 ms full range) that chases the old mux's
+  target only while de-clicking. The trigger is `aud_soft_switch = aud_resync & ~aud_flush`,
+  so a seek/mount/jump still cuts instantly. Outside a de-click the output is the original
+  register cycle for cycle. ⚠ Following a REGISTERED target instead added one clk_sys of
+  latency, which `mp2_chain_tb`/`vcd_chain_tb` read as thousands of mismatches.
+  ⚠⚠ **The ramp-IN must key on the first NEW SAMPLE, not on the reset.** The first design
+  counted a 2.4 ms window from the reset, and the new track's first sample arrives tens to
+  hundreds of ms later (ring refill plus the drain gate's PTS hold), so that edge still
+  snapped. The bench's D3 arm runs with the scheduler off and passed that broken design;
+  only D5 (late content) sees it. ⚠ Bench trap: `rst` is `~rst_n` through a continuous
+  assign, so stimulus changing both it and `aud_soft_switch` on a posedge fabricates a
+  "hard" reset. Drive them from the negedge. Gate `bench/dvd/run_stc_freerun.sh` §4.
+  ✅ The optical S/PDIF passthrough gap this report did NOT cover is now fixed separately,
+  see the bullet below. Detail: **`docs/fabric_audio.md`
+  "De-click on an audio-only reset"**.
+
+- ✅ **PASSTHRU OVER OPTICAL SENT A TORN IEC 61937 BURST AT EVERY TRACK SWITCH — THE
+  HDMI LEG'S POST-RESET HOLD NEVER REACHED S/PDIF (2026-09-23, branch
+  `fix/spdif-track-switch-mute`); sim/wiring-proven, 4 RED arms each caught by its own
+  message, and ✅ HW-CONFIRMED 2026-09-23 by the maintainer's passthru round** (build
+  `DVD_spdifmute_20260923_1851.rbf`, SEED 9 first roll, clk_dec 90.86/89.13, 93 % ALM):
+  optical track switches, optical chapter skips/seeks, HDMI passthru unchanged, and
+  optical with a non-acking HDMI side all good. Every audio-track
+  switch and `aud_flush` cold-resets `iec61937_wrap` mid-burst and re-phases its pacing
+  (509 clk instead of 512, `iec61937_wrap_tb` TEST 9 — `docs/iec61937.md` finding 3).
+  `bs_hold` has muted HDMI for ~100 ms across that since the HDMI bitstream work;
+  `SPDIF_PASS_EN` was `pass_mode` alone, so optical carried the tear.
+  **Fix: `SPDIF_PASS_EN = pass_mode & ~|bs_hold`.** ★ No new mechanism: while low,
+  `sys_top.v`'s `spdif_out` falls back to the framework's PCM encoder carrying
+  `AUDIO_L/R`, which `pcm_mute` holds at zero because `aud_route.pcm_session` resets on
+  the same `aud_rst_n` — so optical sees PCM silence then one PCM→bitstream switch, the
+  fj#110 shape receivers lock to. ⛔ **NOT coupled to `hdmi_bs_ack`**, although symmetry
+  with `HDMI_BS_EN` invites it: that ack reports the ADV7513's I2C non-PCM register, which
+  optical has no equivalent of (its flag is in-band, per block), so coupling them would
+  silence optical passthrough on every stock-Main rig and every sink without AC-3.
+  ⚠ Also applies at every seek and mount (same reset), exactly as HDMI always has.
+  **Gate: `tools/check_spdif_bs_hold_wiring.py`** (emu has no bench), run from
+  `bench/dvd/run_hdmi_bitstream.sh`; `--red` fails it on the pre-fix file out of git, an
+  ack coupling, a dropped HDMI hold, and a duplicate driver. Detail: `docs/iec61937.md`
+  finding 3.
+
+- ✅ **PHYSICAL VCD/SVCD DISC PLAYBACK — needs zero RTL changes (2026-09-17, branch
+  `feature/vcd-svcd-physical`); host-proven, mutation-checked, and ✅ HW-CONFIRMED
+  2026-09-20 on a real burned test disc (both bugs the first HW round found are now
+  fixed and re-verified).** Extends the existing
+  physical-DVD story (`docs/physical_disc.md`) and the existing rip-image VCD/SVCD
+  story (`docs/vcd_svcd.md`) to each other: a VCD/SVCD disc in the same optical
+  drive `dvd_phys.cpp` already scans for DVD-Video.
+  ★★ **THE REASON THIS NEEDED NO FPGA CHANGE AT ALL: `dvd_iso_reader.sv`'s raw
+  MODE2/2352 detector was ALREADY content-based, not path-based.** It sniffs the
+  12-byte CD sync pattern at file/image byte 0 (`raw2352`, the same signature a
+  `.bin` rip triggers) with no idea whether the bytes came from a file or a live
+  drive — so a physical source only has to hand the FPGA the same raw byte stream,
+  sync pattern intact, and the existing shipped RTL treats it identically. No
+  CONF_STR change either, so no re-rolled fitter seed and no new `.rbf` needed at
+  all for this feature to work — it rides the currently-released bitstream.
+  Two new HPS-side modules, mirroring the existing `dvd_detect.cpp`/`dvd_css.cpp`
+  split: **`dvd_vcd_detect.cpp`** (the same `READ(10)` PVD + root-directory walk as
+  `dvd_video_probe()`, checked second, looking for `MPEGAV/`/`MPEG2/` instead of
+  `VIDEO_TS`) and **`dvd_vcd.cpp`** (finds the disc's first DATA track via
+  `CDROMREADTOC*`, reads raw sectors via SCSI `READ CD (0xBE)`, no decryption, no
+  libdvdcss dependency — VCD/SVCD carry no protection at all). `dvd_phys.cpp`'s
+  existing probe/mount state machine gained a second sentinel
+  (`DVD_PHYS_VCD_SENTINEL`) and tries `dvd_vcd_probe()` after `dvd_video_probe()`
+  rejects a disc; every other rule (foreign-slot, MGL-busy gating, eject teardown)
+  is shared, unchanged.
+  ★ **`READ CD`'s flag byte had to differ from the shelved `feature/cdda-physical`
+  branch's `dvd_cdda.cpp` precedent it's adapted from, and the reason is a real
+  distinction, not a style choice.** CD-DA requests "user data only"
+  (`cdb[9]=0x10`), which for a CD-DA sector IS the whole 2352 bytes (no header
+  structure to a Red Book audio frame). A VCD/SVCD data track is Mode 2, where
+  the FPGA's detector reads the sync pattern and mode/submode bytes that sit in
+  the sync/header/subheader region — OUTSIDE "user data" for that sector type. So
+  this module requests the full raw sector (`cdb[9]=0xF8`: Sync + full header +
+  user data + EDC/ECC) and "any sector type" (`cdb[1]=0x00`, since a VCD/SVCD
+  track mixes Mode 2 Form 1 filesystem sectors with Form 2 MPEG payload sectors,
+  unlike CD-DA's one uniform type throughout).
+  ⚠ **The exact `READ CD` byte values are the one thing host tests cannot verify**
+  — `dvd_vcd_test.cpp`'s synthetic-disc checks exercise the surrounding
+  arithmetic (burst sizing, the track-boundary clamp, the EOF zero-fill) against
+  a fake `read_frames()` that never issues the real SCSI command. Whether a real
+  drive answers the MMC spec's byte layout the way assumed is necessarily an
+  HW-only gate — the first thing to check if a real disc plays back scrambled.
+  ★ **A real cross-compile bug came out of building this for real, not just
+  compiling on the host**: `dvd_vcd.cpp` needed `<limits.h>` for `CDSL_CURRENT`'s
+  `INT_MAX` expansion via `<linux/cdrom.h>` — invisible to a host `g++` smoke test
+  (glibc pulls it in transitively there) and only caught by actually running
+  `USE_DOCKER=1 main/build_main.sh`'s ARM cross-compile, which now links clean.
+  ★ Also found integrating: `apply_integration.py`'s `insert_before()` does NOT
+  consume its anchor line (unlike the mount dispatch's original `insert_after`
+  full-block replace at step 6) — a first draft that copied step 6's shape ended
+  its inserted block with a repeated `else if (x2trd_ext_supp(name))`, duplicating
+  the line. Caught the same way, by the real compile.
+  Gates: `main/tests/dvd_vcd_test.cpp` (13 arms: the ISO9660 probe, TOC track
+  selection over a fake multi-track disc, `dvd_vcd_read()`'s byte assembly against
+  a synthetic disc where every byte is a pure function of disc LBA/offset — the
+  `dvd_cdda_test.cpp` instrument) + new dispatch arms in `dvd_phys_test.cpp`,
+  `main/tests/run_tests.sh --red` (6 new mutations, each caught by its own arm).
+  v1 scope, matching the existing rip-image feature's own limitation: the disc's
+  data-track SPAN (see the HW-round fix immediately below) — a hybrid disc's
+  CD-DA tracks, or a genuine multi-movie VCD's SEPARATE, non-consecutive data
+  tracks, are not played — the same one-`.bin`-per-track choice a rip mount
+  already requires, made once by the disc instead of by the user.
+  ★★ **FIRST HW ROUND (2026-09-19/20): BLACK SCREEN + DEAD SEEK ON A REAL BURNED
+  TEST DISC — root-caused by MEASURING THE DISC'S OWN TOC, not by guessing at the
+  spec.** A standalone `ctypes`/`SG_IO` Python probe run directly against
+  `/dev/srN`, bypassing Main and the FPGA entirely, showed the burned disc splits
+  its ISO9660 filesystem into a SHORT first data track (1275 sectors) and puts
+  the actual MPEG payload in a SECOND data track running to the leadout (256719)
+  — exactly the "short filesystem track, then payload track(s), one continuous
+  LBA space" authoring convention this file's header comment already described,
+  which `dvd_vcd_open()`'s end-of-track logic never actually implemented: it
+  stopped at the FIRST data track's own boundary, so only 1275 sectors of
+  directory structure — no MPEG payload at all — ever reached the FPGA's
+  `raw2352` detector. Hence no video and nothing for a seek to land in.
+  **Fix:** `dvd_vcd_open()`'s track-length walk now follows every CONSECUTIVE
+  `CDROM_DATA_TRACK` forward from the first, stopping only at a non-data track
+  (CD-DA) or the leadout — matching the doc's stated scope exactly rather than
+  the narrower thing the code had shipped. ✅ **HW re-confirmed on the same disc
+  after the fix:** mount size went from the old 2,998,800 B (1275×2352) to
+  **603,803,088 B (256719×2352)**; a screenshot diff over ~7 s showed full-frame
+  motion (mean abs diff 35.4, not a frozen/black raster); Fast-Fwd moved the HUD
+  elapsed clock from `0:00:00` to `0:03:32` across two 10 s taps against a
+  `0:57:04` total. Two RED mutations (`vcd-span-stops-at-next-track`,
+  `vcd-span-ignores-cdda-track`) replace the one whose target line no longer
+  exists after the rewrite.
+  ⚠ **HIL lesson from the same round, worth keeping for the next custom-Main
+  deploy:** `deploy --main` deliberately does not restart the running Main (see
+  its own docstring) — the running process only picks up a new `main=` on the
+  NEXT genuine core load. Forcing that reload needs a real, EXISTING `.rbf` at
+  the MGL's `<rbf>` path; a bare-file MGL pointed at a path that was never staged
+  (e.g. `tools/mister.py deploy`'s `HIL_RBF` slot without also passing `--rbf`)
+  fails silently, and if the target core is already loaded, `/tmp/CORENAME`
+  reading correctly is NOT evidence a reload happened — check the RUNNING
+  process's `/proc/<pid>/exe`/argv (`ps w | grep MiSTer_DVDcss`) against the
+  hash-derived deployed name to be sure. Since this branch touches zero RTL, no
+  new build was needed — copying the already-loaded `.rbf` under the HIL name
+  was enough to force a genuine reload.
+  Detail: `docs/physical_disc.md` "Video CD / Super
+  Video CD", `docs/vcd_svcd.md`, `main/integration/INTEGRATION.md` "Steps 43-47".
+- ✅ **AUTO MODE (DISC MENUS OFF) STREAMED A WHOLE VTS LINEARLY AND HUNG ON A
+  COPY-PROTECTED DISC — and it played a 1-SECOND LOGO on 60 library discs
+  (2026-09-19, branch `fix/protection-zone-hang`); sim-proven RED/GREEN, each arm
+  gating its own change, and ✅ HW-CONFIRMED 2026-09-19 IN THE CONFIG THAT HUNG**
+  (build `DVD_protzone_20260919_2229.rbf`, SEED 9 first roll, clk_dec 90.89/90.83 vs
+  the 86.0 gate, 92 % ALM). Same physical OZ disc, same saved config (Disc Menus Off,
+  `DVD_v3.CFG` byte 0 = 0x02): the seek log reads `429074` (the IFO), `429076` (the PGC
+  table), then **`433717 = vob@429605 rbn 4112`** — straight to the feature's first
+  cell, **0 reads at RBN 0, 0 drive I/O errors**, the Main in state R, and the feature
+  on screen. ★ The duration scan cost **ONE extra sector read**: every PGC header of a
+  one-sector PGCIT comes out of the already-resident `parse_buf`.
+  ★★ **And the PGC pick was measured at the HUD, not inferred:** with
+  `Debug Overlay=On` the status line's `CH n/N` is `{reader PGCN, VTS}`, and
+  `PAW_PATROL_MEET_EVEREST` (9 PGCs; PGCN 1 = one 23-min episode) read
+  **`0:00:09/1:36:40 CH 9/3`** = PGCN 9 of VTS_03, the 96-minute Play All chain, whose
+  5800 s matches the IFO exactly. Control: MEN IN BLACK in the same Auto mode plays its
+  feature unchanged. Field-traced on the rig with a new
+  diagnostic (`/tmp/dvd_seek.log`, armed by the HIL flag file): mount → `VTS_08_0.IFO`
+  → a sequential stream of `VTS_08_1.VOB` **from RBN 0**, reaching RBN 2000 at +35 s,
+  where OZ's deliberately unreadable protection sectors cost ~30 s each with the Main
+  blocked in state D — an hours-long hang. Screenshots and telemetry freeze with the
+  Main, which is why the seek log exists at all.
+  ★★ **TWO defects on the same path, and the second was the maintainer's own report**
+  (*"it picks a short special feature instead of the longer main movie"*):
+  - **An unusable PGC fell straight to the linear whole-VTS fallback.** VTS_08's PGCN 1
+    declares 72 cells with `cell_playback_offset = 0`; `S_FINAL2` then streams every
+    sector of the VTS, INCLUDING ones no cell references — which is exactly where this
+    class of disc puts unreadable sectors. Now the reader tries the next PGC
+    (`srp_i + 1`, bounded by `nr_srp_l`) and falls back to linear only when none is
+    usable. MEASURED: OZ is the ONLY one of **1231** images whose Auto PGC takes it.
+  - **Auto played PGCN 1, and on 60 of 1231 discs title 1 is a STUB** — an FBI warning
+    or logo of 0–44 s (War Horse 0 s, X-Men Apocalypse 1 s, Sleepy Hollow 1 s) whose
+    POST links on to the feature. Disc Menus ON follows that link; OFF has no VM, so it
+    sat there. ⛔ `VTS_PTT_SRPT` does NOT help — MEASURED, title 1 resolves to the same
+    stub on all 60. Auto now scans the PGCIT and takes the longest `playback_time`
+    (`dur_scan`, `DUR_SCAN_MAX = 128`, one header read per PGC at mount).
+  ⚠ Deliberate consequence (maintainer decision): 28 TV discs move from "episode 1" to
+  their **Play All** chain. ⛔ The VTS pick stays largest-by-BYTES: MEASURED, it
+  disagrees with longest-title on **2 of 1231** discs, and a duration pick costs an IFO
+  read per title set at mount.
+  ⚠⚠ **Both hangs seen on the rig were Disc Menus OFF, and the config is why the first
+  one looked like a menus-ON road:** an OSD toggle applies live but the SAVED config
+  still read Off, so every fresh core load came up Off. Check `DVD_v3.CFG` byte 0 bit 1
+  (`menus_on = ~status[1]`) before theorising about which path ran.
+  ⚠ Bench trap worth keeping: with `nr_srp = 2` the SRP table runs to PGCIT byte 23, so
+  a fixture PGC at offset 16 OVERLAPS SRP[1] — writing its `playback_time` corrupted
+  `SRP[1].pgc_start_byte` and the scan fetched a garbage offset. The fixture's PGCs sit
+  at 64.
+  Gates: `iso_reader_pgc_tb` TEST 4 (decoy PGCN 1 → PGCN 2) and TEST 5 (5 s PGCN 1 vs
+  1 h PGCN 2), both scoring STREAMED BYTES; TEST 3 is the control that a sole unusable
+  PGC still falls back to linear. Detail: **`docs/dvd_nav.md`**, `docs/physical_disc.md`.
+
+- ✅ **A VOB MISSING FROM THE MAIN'S TABLE PLAYED SCRAMBLED, AND THE TABLE HELD 64 —
+  issue #112 (2026-09-19, branch `fix/css-vob-table`); host-proven RED/GREEN, 4
+  mutations each caught by their own arm, and ✅ HW-CONFIRMED 2026-09-19 by the
+  maintainer.** On the physical *OZ: The Great and Powerful* DVD, the sneak peeks after
+  the language menu now play clean, with no `CSS ENCRYPTED`.
+  ★ The disc files one 7-part feature extent under 11 title sets, so it lists **91**
+  `.VOB` entries. `collect_vobs()` stopped at 64 without a word. VTS_20 fell off the
+  end, `vob_index()` returned −1, and its sectors were read **raw**, so the banner was a
+  true positive. Fix in `main/support/dvd/dvd_css.cpp`: collapse identical
+  `{start, nsec}` aliases (91 → 21), `MAX_VOBS 1024` (a spec-maximum disc has 991),
+  and log any drop. This is the case the "design to the spec maximum" rule above was
+  written for.
+  ⛔ **The zero-key theory is REFUTED, not merely unproven.** The feature key is
+  non-zero and identical from all 7 part starts, and libdvdcss output keyed at the VOB
+  start is byte-identical to the MakeMKV ISO. Keying at the VOB start is correct.
+  ⚠ **OPEN, and the next piece of work: the disc's unreadable protection zone** (from
+  about RBN 2000 of `VTS_08_1.VOB`) costs about 30 s per sector and blocks the Main.
+  The Disc Menus Off road is certain (malformed VTS_08 PGCN 1 → `S_FINAL2` linear
+  fallback from RBN 0); the Disc Menus On road is unknown. Gate:
+  `main/tests/run_tests.sh --red` arms [9]–[11]. Detail: **`docs/physical_disc.md`**
+  "Every VOB must be in the table".
+  ★ Found en route: **the MiSTer has no `pkill`**, so the HIL harness had been leaking a
+  key daemon on every deploy (18 found alive). `tools/mister.py` `kill_exact()`.
+
+- ✅ **PAUSING TRUE-INTERLACED VIDEO FLICKERED BETWEEN ITS TWO FIELDS — IT NOW HOLDS
+  ONE FIELD (2026-09-18, branch `fix/pause-field-still`); sim-proven RED/GREEN, 8
+  mutations each failing in its own phase; built `DVD_fieldstill_20260919_0209.rbf`,
+  SEED 9 first roll, clk_dec 92.05/91.95, 92 % ALM; ✅ HW-CONFIRMED 2026-09-19** by the
+  maintainer: interlaced + film control, Letterbox (Auto on 16:9), HDMI 480i Bob AND
+  Weave, frame step + resume sync, both pin parities, hold-to-scrub, Progressive
+  unregressed, PAL 576i. Report: pausing on
+  interlaced content flickers (CRT and HDMI 480i Bob). The persistence loop re-scans the
+  held picture's own T,B pair forever; for `progressive_frame = 0` those are two instants
+  1/59.94 s apart = a 30 Hz alternation.
+  **Fix = a set-top "field still":** `dvd/resample_addrgen.v` pins the field on screen
+  (`pin_bot`) and, for the OPPOSITE raster slot, reads the pinned field with one end
+  duplicated (H+1 lines); `dvd/disp_vscale.sv`'s new HALF mode averages adjacent lines
+  so that slot carries the field at its true half-line position (steady under Bob). The
+  frame-top TAG is untouched, so the mixer and the field-parity corrector see the same
+  stream. Film/progressive pauses keep the woven frame.
+  ★ The per-scan mode reaches `disp_vscale` through a 4-deep sideband queue popped at
+  each frame-top pixel, and `disp_vscale`'s route is now chosen per scan (a scan behind a
+  draining one runs PLAIN), which is what mutation M5 proves load-bearing.
+  ⚠ **At `STATE_NEXT_IMG` the scan that just finished is in `image`, not `last_image`**
+  (updated that same cycle); pinning `last_image` held the wrong field (M6).
+  ★ **Letterbox is covered** (mode M_LBH: the 4/3 step with its phase +½ source line; the
+  Bresenham remainder is now in sixths, bit-identical for plain Letterbox). It had to be:
+  `analog_letterbox` is on for EVERY Interlaced session showing 16:9 under the default
+  Auto, HDMI 480i included.
+  **Gate: `bench/dvd/run_pause_still.sh --red`** (real chain over a line-stamped
+  framestore, every output line checked for equality against its source position and
+  2-tap weight). ⚠ Its 128-px-wide field is deliberate: a field that fits the 1024-deep
+  pixel queue never backs up, and M5 then passes. Detail: **`docs/field_parity.md`** "Pause shows one field".
+
+- ✅ **SPU MENU RE-SEND GUARD SKIPPED A NEW CELL'S UNIT WHEN ITS PTS RESTARTED — Harry
+  Potter Interactive's Player Mode had no highlight (2026-09-18/19, branch `fix/spu-newcell`);
+  sim-proven on the disc's real units, 5 mutations each caught by exactly its own arm, and
+  ✅ HW-CONFIRMED 2026-09-19** (build `DVD_spunewcell_20260919_0510.rbf`, SEED 9, clk_dec
+  94.73/91.72, after three board rounds). Player Mode's wand follows the selection with no
+  transition blip. **Scene It's Play-game highlight also works**, the other half of
+  `docs/stc_freerun.md` §10. Matrix/MiB/T2 menus are unregressed. Measured on the board with current `main`:
+  - every highlight diagnostic GREEN (the old "fetch never completes" reading is stale);
+  - 0 pixels change between Single- and Multi-selected.
+
+  ★ **The disc:** five cells, one VOB each, **every subpicture unit at PTS 0.333**. Cell 1's
+  unit is empty, and cells 2–3 carry the 460 px button graphic the coli recolours.
+  `spu_decode`'s menu guard skips a unit whose PTS is `<=` the committed one (it exists for
+  looping-menu re-sends and Matrix's dummy→overlay order), so cells 2–3 were dropped as
+  "re-sends".
+
+  **Fix:** `emu.sv` pulses `new_cell` when a committed DSI's `{vob_idn, c_idn}` changes.
+  This is **delivery order**, because the NAV pack leads its VOBU. `spu_decode` opens the
+  guard until the next unit commits. A replayed cell keeps its ids, so looping menus are
+  untouched.
+
+  ★ **The first board round showed BOTH wands lit during the intro→menu transition.** That
+  is a second mechanism: the new unit commits at the parse front while the intro's HLI (one
+  FULL-SCREEN button) is still armed. New `dvd/hl_mask.sv` masks the highlight from the
+  unit's ACCEPTANCE until the next HLI arms. ⚠ Not from its COMMIT: round 2 showed a blip,
+  because the one bitmap is rewritten under the old unit's params throughout the decode. ⚠ It never masks if the new cell's HLI armed first,
+  otherwise it could hide the right highlight for good.
+  **Gate: `bench/dvd/run_spu_newcell.sh --red`.** Detail: `docs/subpicture.md` "The re-send
+  guard is per cell".
+
+- ✅ **SUBPICTURE COMPOSITION DIDN'T FOLLOW THE SPEC IN TWO WAYS: a class-0 "transparent
+  key", and a contrast-0 highlight class keeping its subpicture pixel (2026-09-18, branch
+  `fix/spu-flashlight`); sim-proven, 3 mutations each caught by exactly its own arm, and
+  ✅ HW-CONFIRMED 2026-09-18** (build `DVD_flashlight_20260918_2317.rbf`, SEED 9, clk_dec
+  92.45/93.47): the museum is dark with the selected exhibit lit; T2/MiB/Matrix menus
+  unregressed; *Die Another Day*'s pop-up-fact subtitle track looks right. Field report on Scooby-Doo 2's museum: the "flashlight" showed
+  dark circles plus a dark square instead of a lit exhibit.
+  ★ **Decoded from the disc first.** The SPU dims the WHOLE screen: class 0 and the circles
+  (class 2) are both palette 7 = black at contrast 12. The selected coli `0x0507000c`
+  keeps class 0 black and gives class 2 **contrast 0**, which cuts the exhibit out of the
+  darkness. The core inverted it:
+  - `subpic_blend` keyed class 0 out, a Phase-1 relic from before `SET_CONTR`, so the
+    darkness never drew;
+  - `hl_use = hl_hit_q && (hl_a != 0)` kept the circle's SPU black inside the rect.
+
+  **Fix:** new `dvd/hl_compose.sv` (combinational, extracted from emu for a bench).
+  - A **live** coli replaces all four classes, and contrast 0 is transparent: the spec,
+    and VLC's `ButtonUpdate`.
+  - An **all-zero** coli stays a hotspot. That is T2's `0x44440000`, a deliberate,
+    documented deviation.
+  - `subpic_blend` composites on contrast alone; `ov_force` is now inert.
+
+  ★★ **Blast radius MEASURED over 1215 discs / 16124 SPUs.**
+  - **The key:** 11 title discs author a class-0 contrast. Two of them (*Last Ounce of
+    Courage*, *Die Another Day*) put visible pixels in class 0. ⚠ On HW *Die Another Day*
+    looked right on v0.6.1 too, so the key's visible cost there is UNCONFIRMED. Treat
+    "the key deleted glyphs" as a data claim, not an observed defect.
+  - **The highlight rule:** at most 22 discs. On the one inspected (Big Trouble), it
+    removes a normal-state + highlighted-state double-draw.
+
+  **Gate: `bench/dvd/run_flashlight.sh --red`.** Detail: **`docs/subpicture.md`**
+  "Highlight colours replace every class".
+
+- ✅ **A NATURAL TRANSITION DISCARDED THE AUDIO ITS CELL STILL HAD TO PLAY — "Shaggy's
+  commentary is cut off" (2026-09-18, branch `fix/cell-still-av`); sim-proven RED/GREEN,
+  6 arms each caught by exactly its own arms, and ✅ HW-CONFIRMED 2026-09-18** together
+  with the head-loss fix below (build `DVD_cellstillav_20260918_1928.rbf`, SEED 9,
+  clk_dec 88.22/90.04 — passing, the thinnest margin of the branch): every win clip
+  complete, chapter skips both ways clean, T2/MiB menus unregressed.
+  ★ **Settled offline from the disc before the rig was touched.** Scooby-Doo 2 VTS_02
+  PGCN 26 authors its voice clips as cells with **ONE video PTS and 4–30 s of audio**
+  (cells 1, 10–13, 21 end in a cell command; 2–9, 19, 22 are `still=255` button screens
+  whose buttons are live from 0.12 s, so a PRESS cutting those is authored).
+  ★★ **The natural gate (`nat_drained`) only ever described the VIDEO path**, and
+  `flush_ctl` fires `aud_flush` on every title-domain ack. On a motion cell the leftover
+  is tens of ms. On a one-picture cell the VBUF drains at once, the ring backpressures
+  the demux, and the reader finishes with a **whole 32 KB ring (~1.3 s of AC-3) unplayed**,
+  about a third of a 4 s line.
+  **Fix:** new `dvd/aud_drain.sv` (ring has no committed frame, decoder not holding a due
+  frame, ~128 ms settle) → reader `aud_drained`, ANDed into the NATURAL gate only
+  (`nat_done`). ⚠ `consumer_alive` = `aud_bp_armed` is the load-bearing escape: audio
+  Off / no stream / wedged decoder read drained at once, never a 60 s `DRAIN_WD` stall.
+  ⚠ `tail_wait` and the menu settle stay video-only, or a still menu with a voice-over
+  would withhold its highlight for the whole commentary. ⚠ Applies in menus too, so the
+  HW round must check the T2 and MiB looping menus.
+  **Gate: `bench/dvd/run_auddrain.sh --red`** — real reader → demux → `audio_ring` chain,
+  scoring the clip audio a consumer FINISHED PLAYING before the flush: RED **13 frames
+  lost (52,546/78,819 B)**, GREEN all 39 committed frames. The reader's 37 other benches
+  tie `.aud_drained(1'b1)`. Detail: **`docs/dvd_nav.md`** "A natural transition waits for
+  the AUDIO too".
+  ⚠⚠ **THAT WAS NOT THE REPORTED SYMPTOM — the first HW round said *"'good job' but we
+  just hear 'job'"*, on v0.6.1 too, once per round: a HEAD loss.** Root cause (sim-proven,
+  ✅ **HW-CONFIRMED 2026-09-18** — maintainer: *"'good' is now audible, as are the rest of
+  the winning audio clips"*), found with a new instrument: **telemetry word 5 now
+  carries the audio decoder's discard counters** (`{skip, catch-up, re-arms}`; `vid_err`
+  was dead since #63). They read **0** at every clip, which ruled out the decoder. The
+  transition showed `reanchors=2`, `disp_lag −2024 ms`, and audio held 1.25 s.
+  ★★ **A seek still DISPLAYS one pre-flush picture (the held I/P anchor,
+  `seek_realign.md` §5.1), and it kept its pre-flush PTS TAG.** It anchored the clock on
+  the old timeline, so the new cell's first picture read as a backward jump, and
+  `anchor_disc` → `aud_resync` wiped a ring already holding the clip's first ~1.1–1.4 s.
+  "good" sits 1.1–1.5 s in, after 1.05 s of authored silence. This hits every backward
+  chapter skip too.
+  **Fix, two halves (neither suffices alone):**
+  - `motcomp_picbuf.vbuf_flush` un-tags the current, held and output slots. This is
+    race-free: `pts_assoc` clears on the same flush, and the header freeze orders any
+    queued update.
+  - `disp_sched`'s `disc_jump_w` requires `disp_anchored`, since an untagged rff stale
+    pickup still makes the first real tag look 1.5 frames "behind".
+
+  **Gates:** `bench/dvd/picbuf_tag_flush_tb.sv` (RED: the stale P arrives with tag 2000
+  valid) and `disp_sched_tb` [14e] + mutation M14. Detail: `docs/dvd_nav.md` "A picture
+  from before the flush must not set the clock".
+
+- ✅ **FIELD-CODED MPEG-2 PLAYED ITS TWO FIELDS IN THE WRONG ORDER — `top_field_first` IS
+  EMPTY ON A FIELD PICTURE AND THE SPEC IS WHY (2026-09-18, branch
+  `fix/field-order-field-coded`); sim-proven RED/GREEN on the REAL shipped modules over
+  REAL disc bytes, 4 RTL mutations + 5 wiring re-regressions each caught by its own arm,
+  and ✅ HW-CONFIRMED 2026-09-18 on the maintainer's CRT** — *"Thayer looks much better on
+  the CRT now, smooth motion and no visible combing"*, with The Matrix (film) and a concert
+  DVD (video-sourced, frame-coded) both unregressed. ★ Those two controls are the right
+  pair: film is insensitive to field order, and a frame-coded concert exercises the
+  interlaced path with a MEANINGFUL `top_field_first` — the immovability arm's claim,
+  seen on a screen. Build `DVD_fieldorder_20260918_1439.rbf`, **SEED 9** (SEED 7
+  missed at 80.03/83.4 and ended its eight-build run; 9 passed first fit at clk_dec
+  95.02/90.23 vs the 86.0 gate), 91 % ALM. ⚠ A `_MARGINAL_` pack of the SEED 7 fit sits
+  beside it in `releases/` — do not flash it. Field report: *"the Thayer's Quest disc looks
+  like it's not interlaced properly, even when playing back on a CRT."*
+  ★★ **THE DISC IS FIELD-CODED AND THE SYNTAX ELEMENT IT WOULD ANSWER WITH IS FORBIDDEN
+  FROM SAYING ANYTHING.** ISO 13818-2 **6.3.10 requires `top_field_first == 0` whenever
+  `picture_structure` is a FIELD picture** (1=top / 2=bottom rather than 3=frame); the
+  display order is given by **which parity is CODED FIRST**. `dvd/resample_addrgen.v`
+  built its image schedule from `top_field_first` alone (`:1035-1036`, `:1049-1050`, and
+  `nxt_first_top` at `:493`), so every field-coded picture was emitted **BOTTOM-then-TOP
+  unconditionally**. Decode was never wrong — `hdr_upd_slot` (`vld.v:2376`) already fires
+  `update_picture_buffers` once per field PAIR, so picbuf gets one correctly woven frame.
+  Only the ORDER OF PRESENTATION was lost.
+  ★★ **MEASURED THREE INDEPENDENT WAYS, AND THE THIRD IS THE ARTEFACT ITSELF.**
+  (1) Bitstream: **93.9–100 % of pairs per VTS coded TOP-first** while `tff` reads 0 on
+  100 % of them. (2) **ffmpeg**, an independent decoder, reports `top_field_first=1` on
+  **400/400** frames. (3) **The pixels**: split each decoded frame into its two fields,
+  build both candidate display sequences and sum the field-to-field difference — TOP-first
+  scores a zig-zag figure of **0.043 against BOT-first's 0.625** and 1.3–1.5× lower total
+  variation, across four separate scenes of VTS_01 plus VTS_02 and VTS_05. ★ **Control:
+  Thayer's VTS_09 is frame-coded with `tff=1`, and there both orderings measure identical
+  to four decimals** — the metric discriminates EXACTLY on field-coding, which is what
+  makes it evidence rather than a number.
+  ★★ **WHY IT SURVIVED EVERY PRIOR FIELD-ORDER ROUND, AND NEITHER OF THEM WAS WRONG.**
+  `docs/single_raster_analog.md` §3.12's `FIELD1_VPOS` fix is about which RASTER SLOT a
+  field lands in; this is about WHICH FIELD IS THE EARLIER INSTANT — a different axis. And
+  that same file already records why the library is blind to it: *"film barely cares — 3:2
+  material is progressive frames SPLIT into fields, so both fields of a frame are the same
+  instant and swapping them costs the line assignment but NO TEMPORAL ERROR."* On
+  true-interlaced field-coded content they are distinct instants 1/59.94 s apart, so the
+  display sequence becomes `t1,t0,t3,t2,…`. ⛔ `docs/field_parity.md` never contemplated
+  field-coded SOURCE at all — its whole model assumes the addrgen SPLITS a decoded frame.
+  **Fix = 2 files, and deliberately NO new port below the vld.** `rtl/mpeg2/vld.v` derives
+  **`first_field_top`** (on a frame picture it IS `top_field_first`; on a field picture it
+  is the parity coded first), latched at `STATE_PICTURE_CODING_EXT0` gated on
+  `pic_hdr_upd`, mirroring the `drop_rff_lat` idiom beside it; `rtl/mpeg2/mpeg2video.v`
+  then feeds **motcomp's existing `top_field_first` input** from it. picbuf stores it as
+  `output_top_field_first`, which `resample_addrgen` ALREADY reads — so the ~9 benches
+  instantiating `resample_addrgen` need no tie-off ([[new-rtl-port-floats-z-in-benches]]).
+  ⚠ **The `pic_hdr_upd` gate is load-bearing:** `flags_commit` pulses at EVERY picture's
+  coding extension, the pair's SECOND field included, and that field's `picture_structure`
+  is the opposite parity — ungated it clobbers the value with its own inverse on every
+  pair. Mutation **M2** is that arm.
+  ⛔ **DELIBERATELY NOT `(* preserve *)`**, unlike `drop_ps_lat`/`drop_rff_lat` beside it:
+  the stated reason for those (`vld.v:119`) is that they are PRIVATE COPIES the fitter must
+  not merge back into a shared export. This register duplicates nothing. Applying an
+  attribute without its reason is how an idiom rots into noise.
+  ⚠ `~drop_this_picture` is **defence in depth, not load-bearing** — a dropped picture's
+  value is always overwritten by the next slot owner before anything is emitted, so **no
+  arm can catch its removal and no mutation was invented for it.**
+  ★ **Blast radius is STRUCTURAL, not statistical:** the change can only alter pictures
+  where `picture_structure != FRAME`, and on frame pictures the value is identical to
+  `tff` by construction. `top_field_at_bottom` (`vld.v:2247`) is frame-gated;
+  `disp_sched`'s `pic_tff`/`skip_tff` are only reached under **progressive_sequence**,
+  which the spec forbids alongside field pictures (**measured 0 in every sequence
+  extension of Thayer VTS 01/02/05/09**, not merely argued). Sampled **296 discs (1-in-4 of
+  1181): 291 have <5 % field-coded content** and cannot move. Affected set = the
+  laserdisc-FMV genre: Thayer's Quest, Mad Dog 2, Dragon's Lair II, Time Traveler,
+  Angel And The Badman.
+  ⚠⚠ **THAT COUNT IS A LOWER BOUND AND THE REASON IS A TRAP WORTH KEEPING: the sweep
+  sampled each disc's LARGEST VTS, and Thayer's largest (VTS_09) is the one FRAME-coded
+  VTS on the disc — so it reported THAYER ITSELF as 0.0 % field-coded.** That is the
+  "Thayer trap" (`tools/video_cadence_census.py`'s own header) one level up: the wrong
+  **VTS**, not the wrong part of a VTS. Hence `--field-order --all-vts`, which finds 9 of
+  its 11 VTSes majority field-coded.
+  ⚠ On the hand-drawn titles (Dragon's Lair II, Time Traveler) the PIXEL metric cannot
+  discriminate — their content carries little per-field motion, so both orderings measure
+  the same. The bitstream evidence is uniform and the fix is correct for all; the VISIBLE
+  benefit concentrates on genuine 60-field FMV.
+  ⚠ **Scope across outputs, CHECKED IN THE RTL rather than taken from a review claim:**
+  `emu.sv:4515` drives `deinterlace = ~fields_prev` while the regfile's `interlaced` bit IS
+  `fields_prev`, so the two are exact complements and `~deinterlace && ~interlaced` never
+  occurs here. A **Progressive** raster therefore always takes `resample_addrgen.v:1018`'s
+  single woven FRAME (no field-order question), and the tff-ordered branches are reached
+  EXACTLY when the interlaced raster is up — i.e. the fix applies in `Video Output =
+  Interlaced` on **both the CRT and HDMI** (that mode feeds HDMI 480i via ascal), and
+  changes nothing in Progressive. ⛔ An earlier draft of this bullet said the branches are
+  "also reached on a progressive display with deinterlace=0 (bob)"; that combination does
+  not exist on this core.
+  ⚠ **Telemetry semantics moved:** `dvd_telem.sv` word 14 "tff" now reads the display-order
+  verdict on field-coded content, not the raw syntax element.
+  ⚠ Expected transient: the emitted order flips B,T → T,B, so `par_fb` spends ONE inserted
+  field (`PAR_CONFIRM` ≈ 0.5 s) re-settling the raster phase once after a mode change or
+  seek — by design, and what `field_phase_tb` invariant C guards.
+  **Gate: `bench/dvd/run_field_order.sh --red`** — scores **motcomp_picbuf's OUTPUT PIN**
+  `output_top_field_first` at each presented frame (what `resample_addrgen` orders the
+  fields from) against a truth derived independently in Python from the SPEC (coded parity
+  + 6.1.1.11's display reorder), never a signal the fix names. ★ **The RED arm is the SEAM,
+  not a hand-made mutation:** `-Pfield_order_tb.SEAM=0` feeds picbuf the raw element =
+  exactly the pre-fix `mpeg2video.v`, on the real shipped modules. Measured RED **12/12
+  displayed pictures shown BOTTOM-first on a TOP-first disc**; GREEN 12/12 correct.
+  ★ **The IMMOVABILITY arm is the safety claim made executable:** the frame-coded fixture
+  measures byte-identical under BOTH seams.
+  ★ **`tools/check_field_order_wiring.py` polices the one port connection no module bench
+  can see** (the issue #81 lesson), and is RED on **the real pre-fix file out of git (R0)**
+  plus 4 re-regressions — including **R4, which proves `strip_comments()` is load-bearing:
+  a reverted file whose comment quotes the fix is still caught.**
+  ⚠ **A PRE-EXISTING BENCH DEFECT CAME OUT WITH IT:** `bench/dvd/vld_drop_rff_tb.sv` wired
+  picbuf from vld's RAW `top_field_first`, so it encoded the PRE-FIX seam — its `out_tff`
+  logging was meaningless on field-coded content and anything copied from that skeleton
+  (the natural one for this bench) would have inherited the bug. Fixed in the same change.
+  ⛔ **Out of scope:** on the progressive/HDMI path this content is WOVEN into a frame,
+  which combs because the two fields are different instants. That needs a real
+  deinterlacer, not a field-order change.
+  **HW gate is the maintainer's EYE on a CRT** — a woven screenshot cannot show field
+  order, so the HIL capture path structurally cannot gate this; per
+  `docs/single_raster_analog.md` it must be judged on video-sourced 29.97i content with
+  motion, in Weave or CRT Simulation, **never Bob**. Thayer's Quest is that vehicle and is
+  the reported disc; check a film disc unregressed in the same round.
+  Detail: **`docs/field_parity.md`** (2026-09-18 section), `docs/motcomp_throughput.md`.
+
+- ✅ **A PGC OVER 128 CELLS ALIASED THE SEEK SHADOW TABLES AND THE SCRUB PREVIEW READ
+  0:00:00 (2026-09-17, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN from the
+  disc's measured shape, mutation-gated, and ✅ HW-CONFIRMED 2026-09-18** (maintainer, build
+  `DVD_branchseek_20260918_0010.rbf`: *"seeks look good on the T2 special edition now
+  too"* — the reported disc, on the reported PGC).** Field report while
+  confirming the seamless-branch seek on the rig: *"seeking seems to work okay in T2,
+  however in the special edition version, the preview timestamp during hold-to-scrub shows
+  0:00:00 instead of the projected seek time. The preview timestamp is correctly updated
+  when viewing the theatrical version."*
+  ★ **The disc answers it immediately: `ULTIMATE_T2` VTS_01 PGCN 1 (theatrical) has 122
+  cells; PGCN 2 and 3 (the special editions) have 132.** `seek_time` and `seek_bar` both
+  shadowed the reader's per-cell stream into **128-entry** tables on a **7-bit**
+  `cellf_idx`, so cell 128 overwrote cell 0.
+  ★★ **AND A TRUNCATED INDEX DOES NOT JUST ALIAS A TABLE — IT SHRINKS THE COUNT THAT
+  INDEXES IT, which is why the symptom is a hard zero rather than a wrong time.** `cell_n`
+  follows the LAST index written (`131 & 0x7F = 3`), so it collapsed to **4**; the scan
+  walked four wrapped entries holding high RBNs from the END of the title; every target fell
+  below all of them; `lo_ok` stayed 0; and the "genuinely below every cell" path publishes
+  **zero**.
+  ⛔⛔ **`docs/dvd_nav.md` §2f non-goal 2 called this alias "measured unreachable", AND THE
+  MEASUREMENT SAMPLED THE WRONG POPULATION** — it counted the PGC the core plays BY DEFAULT,
+  so a director's cut reached through the disc's own menu was never in it. Re-measured over
+  EVERY title PGC of EVERY VTS: **34,194 PGCs, 47 over 128 cells across 12 discs, worst
+  200** (BREAKING_DAWN, New_in_Town, SEMI_PRO, Why_Did_I_Get_Married, PINEAPPLE_EXP;
+  Julie_and_Julia 199, SYBIL_LUDINGTON 186, Finding_Nemo 170, Dinosaur 153, INSOMNIA 137,
+  TimeTraveler 132) — **and several are PGCN 1**, not only menu-reached PGCs. The non-goal
+  is retracted in place.
+  **Fix = an 8-bit index and 256 entries end to end** — the reader's `cellf_idx` port, its
+  own `cell_start_mem[cell_i]` readout (which aliased the LIVE clock the same way past cell
+  127), emu's wire, and both consumers' tables. ★ **256 sizes the FORMAT, not the sample:** a
+  PGC may carry 255 cells, which is the reader's own `MAXCELL`. Sizing to a measured maximum
+  is precisely the mistake that produced this bug.
+  **Gate: `seek_time_tb` TEST 12** (a 132-cell PGC, the measured special-edition shape) —
+  RED with **`got 000000`**, the reported symptom exactly; mutation **MD-cellidx7** in
+  `run_title_span.sh --red` narrows the port back and must fail TEST 12 and nothing else.
+  ⚠⚠ **Widening a port silently breaks every bench that drives it narrow.** `seek_bar_tb`
+  fed the now-8-bit `cellf_idx` from a 7-bit reg and FOUR unrelated-looking arms failed
+  (T6/T9a/T11/T12f — every notch column shifted one slot), which reads exactly like a
+  `seek_bar` regression when the stale thing was the bench's declaration. Same family as
+  [[new-rtl-port-floats-z-in-benches]]: after widening a port, grep the benches for the
+  signal before believing any failure they report.
+  Detail: **`docs/dvd_nav.md` §2g**.
+
+- ✅ **SEEKING INTO A SEAMLESS-BRANCH BLOCK LANDED IN THE OTHER CUT AND STAYED THERE
+  (2026-09-17, issue #49, branch `fix/seamless-branch-seek`); sim-proven RED/GREEN over the
+  real discs' measured shapes, 6 mutations each failing EXACTLY its own arms, and
+  ✅ HW-CONFIRMED 2026-09-17 WITH THE DEFECT REPRODUCED FIRST** (build
+  `DVD_branchseek_20260917_1632.rbf`, SEED 7 first roll, clk_dec 94.77/92.52, 91 % ALM). Field report on `ALIEN_VS_PREDATOR_SE_DISC1`: *"just seeking back and forth I
+  can get it in a state where the live timeline reports a couple seconds in when it's really
+  much further, and most of the seek targets and live timeline resolutions do not line up at
+  all."*
+  ★★ **THE ANGLE ROUND (#101) BUILT THE FIX THIS ISSUE PREDICTED AND SCOPED IT TO
+  `block_type == 1`.** A seamless branch is the OTHER interleaved encoding (the
+  `interleaved` bit with `block_type == 0` — Matrix's white rabbit, T2's extended scenes,
+  AVP's theatrical/extended). The VOBU-align snap moves a raw target FORWARD to the next NAV
+  pack, which belongs to whichever branch owns that ILVU, and `next_vobu` then follows the
+  chain it landed in — so unlike the angle case there is not even a `sml_agli` to converge
+  on, and the rest of the block plays the other cut. MEASURED sibling share of a cell's span
+  = P(wrong cut): **Matrix 47–48 %, AVP up to 73 %, T2 up to 85 %**; AVP cell 38 then runs
+  **111,301 played sectors** in the wrong branch.
+  ⛔⛔ **TWO OF THE ISSUE'S OWN CLAIMS WERE REFUTED BY MEASUREMENT — do not re-derive
+  either.** (1) *"a wrong readout means `S_RBN_SCAN` landed on the wrong cell"*: it does
+  not. The branch cell's extent CONTAINS the sibling's sectors, so the containment test hits
+  the right cell and `cur_cell_start` is right; the live clock is wrong because `nav_dsi`
+  snoops whatever NAV pack is STREAMING, and T2's sibling VOBU at RBN 351056 reads
+  `c_eltm = 00:00:02.15` — the reported "couple of seconds in", literally. (2) The
+  `885–1679 sectors/s` figure does NOT imply a preview error: it is a RATE, the preview uses
+  a scale-free FRACTION of the span, and the measured worst within-cell error is **0.9 s
+  (Matrix) / 3.3 s (T2) / 8.8 s (AVP)**. ⛔ The issue's cheap mitigation — "refuse to
+  interpolate, report the cell boundary" — is **measured 25× WORSE** (AVP cell 38 is a 250 s
+  cell). `seek_time`, `seek_bar` and `scrub_ctrl` are untouched.
+  **Fix = one predicate plus one walk.** `snap_want = cc_angle_ok || cc_seam_ok` arms the
+  PLAIN → LEARN → FILT snap for any interleaved cell, and is deliberately the SAME set that
+  arms an ILVU follow (`angle_active`/`seamless_active` are now assigned from those wires) —
+  the snap must filter exactly the cells the follow will chase.
+  ★★ **AND THE WALK GRANULARITY IS A CORRECTNESS MATTER, NOT A SPEED ONE.** The shipped FILT
+  walk steps ONE SECTOR at a time; MEASURED longest sibling run is **877 sectors (Matrix),
+  4543 (T2), 8298 (AVP)**, so on two of the three discs it cannot reach this branch's next
+  VOBU inside `NAV_CAP = 1024` at all — it gives up and streams the other cut.
+  `sml_pbi.ilvu_ea` (DSI 0x22 → sector `0x429`) names the END of the ILVU the probed VOBU
+  sits in and is authored on EVERY VOBU of AVP, Matrix, T2 and MiB, so `ilvu_ea + 1` is the
+  next ILVU's first VOBU: **1–3 hops**, and MiB's 5-angle block drops from ~772 probe reads
+  to 4. Every VOBU of an ILVU carries one VOB_ID, so hopping a whole ILVU cannot skip a VOBU
+  we wanted; a VOBU outside a block or a zero `ilvu_ea` degrades to the `+1` step that
+  shipped. ⛔ **NOT `ilvu_sa` and NOT `next_vobu`** — read from a sibling's VOBU both point
+  along the SIBLING's chain, i.e. further into the wrong branch; the ⛔ in `docs/dvd_nav.md`
+  is about `next_ilvu_sa` as a FOLLOW pointer, a different question.
+  ★ **It costs no extra read to test:** the probe window moved `0x41F` → **`0x40F`**, so one
+  45-byte `rbuf` copy carries `vobu_ea`, `vobu_vob_idn`, `sml_pbi.category` and `ilvu_ea`
+  together. A seamless scrub pays 1 LEARN read + 1–3 hops.
+  ⚠ MEASURED premise on four discs: every branch of a block is its own VOB — AVP 2/3,
+  Matrix 4/5, **T2 4 with sibling 3 (LOWER)**, **T2 cell 33 = 16 with siblings 15 AND 17**.
+  So no index or ordering rule works, and **`vobu_c_idn` does not discriminate** (measured
+  identical on both branches of AVP and Matrix).
+  ⚠ A filtered pass now also bails at `nav_cand > cl_rd`: its job is to find this branch's
+  next VOBU WITHIN THIS CELL, and accepting a sector beyond it would stream from another
+  cell while `cell_i`/`play_end` still describe this one. Accepted residual: a target in a
+  block's FINAL sibling ILVU has no same-branch ILVU left, so it streams the unfiltered
+  landing — the pre-fix behaviour, for that one ILVU.
+  **Gate: `bench/dvd/run_branch_seek.sh --red`** — the real reader over fixtures shaped like
+  the measured discs, scoring the DELIVERED MARKER BYTES (which branch reached the decoder),
+  never a signal the fix names. ★ Arm 5 takes **no seek at all**: its read ceiling (35
+  measured, ceiling **36**, deliberately not a round 40) is the only thing that can see a
+  probe fired on the mid-block ILVU hop, whose outcome stays CORRECT and which would reach
+  hardware as a stutter blamed on something else. ⚠ M5 is therefore *"let the hop request a
+  verification"*, not *"delete the `snap_pend` term"* — the latter loops and fails every arm,
+  and a mutation caught by everything says nothing about which arm is load-bearing.
+  ⚠⚠ **`iso_reader_ilvu_tb`'s `put_nav_seam` writes NO NAV-pack signature bytes** — the same
+  fixture gap that made `iso_reader_angle_tb` TEST G fail on the FIXED reader. It is correct
+  for what that bench tests (the S_STREAM snoop), but no seek arm can be added to it as it
+  stands. ⚠ And no marker byte may be `0x00`/`0x01`/`0xBA`/`0xBB`/`0xBF`: `0xBB` was tried
+  and the system-header signature in every NAV sector read back as leaked sibling bytes.
+  ⚠ `iso_reader_angle_tb`'s fixture gained `ilvu_ea` in the same change — without it the
+  angle side silently degrades to the sector walk and the shared hop is never exercised;
+  the landing is identical either way, so nothing fails and the coverage is simply absent.
+  ✅ **HW-CONFIRMED ON CONTENT, NOT ON THE CLOCK — and the clock is why.** `ULTIMATE_T2`
+  VTS_01, chapter 11 (0:16:34), then the keyboard Fast Fwd key: `dpad_seek` SUMS the
+  `{120,60,30,10}` s rungs of one VOBU's fwda table, so **7 presses = 60+10 is a two-term
+  sum = a mid-stream landing** inside cell 16, while **6 presses = 60 s is a single rung =
+  an authored VOBU of this branch**, the in-script control. Natural playback through the
+  block is correct on every core (fj#112), so it is a per-core REFERENCE: capture a burst
+  of it, then repeat the chapter jump, seek, and compare the landing frames (64×48 grey,
+  HUD band cropped).
+  | target | core | landing vs natural playback | refs matched | clock, landing → +10 s |
+  |---|---|---|---|---|
+  | **+70 s** | v0.6.0 control | **0.655 / 0.757 / 0.799 / 0.794** | 19,16,1,1 scattered | **0:17:59 → 0:17:22, BACK 37 s** |
+  | **+70 s** | fixed | **0.961 / 0.988 / 0.966 / 0.909** | 4,5,6,7 consecutive | 0:17:32 → 0:17:42 |
+  | +50 s | v0.6.0 control | 0.882 / 0.936 / 0.940 / 0.971 | 13,12,13,14 | 0:17:41 → 0:17:51 |
+  | +50 s | fixed | 1.000 / 0.998 / 0.996 / 0.999 | 2,3,4,5 consecutive | 0:17:29 → 0:17:39 |
+  ★ **The burst's own self-similarity is the scale: median ~0.57, p90 ~0.73.** The control's
+  +70 s landing scores AT that floor — its frames are no more like the content playback
+  delivers there than two unrelated frames of the burst are like each other — while the fix
+  matches CONSECUTIVE reference frames, i.e. it landed where playback would be and tracked
+  it. ★★ And the control's clock ran **backward 37 s** during the capture as the sibling's
+  NAV packs took over the readout: the field report's sentence, live.
+  ⚠⚠ **THE CLOCK ALONE COULD NOT SETTLE THIS AND MY FIRST READING OF IT WAS WRONG.** I
+  scored the landings against "start + seconds requested", which the block itself breaks:
+  **cell 16 is 2448 sectors/s against a normal cell's ~600**, so an fwda offset computed
+  outside the block covers ~a quarter of the content time it asks for inside it — which
+  makes the fixed core's clustered landings correct and their clustering a property of the
+  disc. The inflated sectors/s this issue is about, met from the other side.
+  ⚠ **+50 s lands correctly on BOTH cores** (the 15 % case), so a single target proves
+  nothing: the first frame comparison used +50 s and settled nothing. Pick the target the
+  cheap sweep already flagged.
+  ⚠ Unregressed same session: chapter bursts, `SEEK FWD` landings, and **MiB VTS 14's
+  five-angle block** — the path sharing the widened predicate and the new walk (`ANGLE 2/5`,
+  plays through a scrub into the block, still cycles to `ANGLE 3/5` after).
+  ⚠ `ALIEN_VS_PREDATOR_SE_DISC1` is not on the rig and did not fit (2.6 GB free vs 7.26 GB);
+  T2 is the stronger vehicle anyway — 85 % sibling share against AVP's 73 %.
+  ⚠ The round ran on `DVD_branchseek_20260917_1632.rbf`; the SHIPPING build is
+  `DVD_branchseek_20260918_0010.rbf` (SEED 7 first roll, clk_dec 90.17/91.48, 38,244 ALMs).
+  Between them: a rebase onto PR #103, the >128-cell fix below, and a rebase onto PR #104
+  (Main-side CSS, no netlist input at all). The confirmation stands because none of them
+  touches the branch-resolution path — #103/#104 leave `dvd_iso_reader.sv` alone and the
+  cell-index fix widens `seek_time`/`seek_bar` tables the landing never goes through.
+  Golden model: **`tools/nav_extract.py --vts N --ilvu`** now prints, per interleaved cell,
+  the branch `vob_idn`, the sibling ids, the wrong-landing percentage and the longest
+  sibling run. Detail: **`docs/dvd_nav.md` §2e**.
+- ✅ **EVERY CHAPTER SKIP ON A PHYSICAL DISC CRACKED A CSS TITLE KEY — THE KEY WAS ASKED
+  FOR AT THE READ POSITION, AND libdvdcss CACHES BY EXACT BLOCK (2026-09-17, PR #104);
+  host-proven RED/GREEN, 4 mutations each caught by its own arm, and ✅ HW-CONFIRMED
+  2026-09-17 on the reported disc — maintainer: *"no additional keys cached and the seeks
+  are quick now"*, i.e. BOTH halves measured (the cache stops growing, and the wait is
+  gone).** Field report: Prev/Next Chapter freezes the whole machine
+  for a few minutes, then plays the chapter. ★ **REPRODUCED BY THE MAINTAINER on their
+  own copy** (no drive region: slow mount, ~10 s per seek) **with the decisive evidence —
+  new key files appearing in the dvdcss cache as the seeks happened.**
+  ★★ **`dvd_css_read()` fired `DVDCSS_SEEK_KEY` on ANY discontinuity, at the ARBITRARY
+  target LBA**, under a comment claiming that was "a fast cached lookup now".
+  ★★ **MEASURED IN THE SHIPPED `libdvdcss.so.2` (1.6.0), not recalled:** `_dvdcss_title`
+  is inlined into `dvdcss_seek` and the lookup is a list walk then `cmp (%rdx),%ebx;
+  je <hit>` — an **equality** on the start LBA, not a range test (struct offsets match
+  `dvd_title_t`); the on-disk cache agrees, one file per block named **`"%.10x"`** of the
+  block number, which is what the maintainer watched grow. `crack_title_keys()` only
+  primes `g_vobs[i].start`, so every chapter start MISSED and re-acquired = the full
+  statistical crack, **on the thread that serves the core's SD blocks** — hence the
+  MACHINE freezing, not just the picture. ⚠ Linear playback never tripped it
+  (`lba == css_pos`), which is why it survived every HW round until a user seeked.
+  ★★ **libdvdread is the oracle and we were the deviation:** `DVDReadBlocks()` re-keys ONLY
+  on a file change, at `dvd_file->lb_start`, **never at the read offset**.
+  ⛔ This bullet used to add "`initAllCSSKeys()` primes one key per VOB FILE (identical to
+  ours)". **That was a misreading, and it is issue #122.** libdvdread keys `VTS_nn_0` and
+  `VTS_nn_1` only, and reads parts 1..9 as ONE file keyed at part 1's start. **Fix = `if (vi != cur_vob)` → SEEK_KEY at
+  `g_vobs[vi].start`, then a plain NOFLAGS seek to the target.**
+  ⛔ **PRE-CRACKING MORE BLOCKS IS THE WRONG LEVER** (asked directly): the cache is
+  exact-block, so it means enumerating every block anyone might seek to — chapter starts
+  come from the IFO, but scrub-release, D-pad seek, A-B repeat, menu→resume and the
+  `S_NAV_SEEK` landing are arbitrary. It would fix B2/B3, LOOK fixed, and leave the scrub
+  bar as broken.
+  ⛔ **NOR DOES DERIVING TITLE KEYS FROM THE DISC KEY, and it sounds like it should.**
+  That IS libdvdcss's default (`ReadDiscKey` → per-title `ReadTitleKey` → decrypt), but
+  the *encrypted* title key lives in the sector's CPR_MAI header, which `READ(10)` does
+  not return — the only route is the `ReadTitleKey` ioctl, **exactly what a region-less
+  RPC-II drive refuses** (`ioctl ReadTitleKey failed (region mismatch?)` → `cracking title
+  keys instead`). Setting the drive region buys the fast path; this fix reduces how OFTEN
+  the slow path is paid, from every seek to once per VOB per disc ever.
+  ★ **Second, PRE-EXISTING defect out with it:** a failed key seek set a LOCAL `decrypt=0`
+  while still advancing `cur_vob`, so the NEXT sequential read skipped the block and
+  decrypted with a key never obtained — garbage for the rest of the VOB instead of the
+  intended raw fallback. Latched in `key_ok` now.
+  **Gate: `main/tests/run_tests.sh --red`** (`dvd_css_test.cpp`, 8 arms + 4 mutations;
+  host `g++`, no MiSTer/Docker). ★ The fake `p_seek` models libdvdcss's cache as it
+  behaves — a SEEK_KEY at an unseen block COSTS an acquisition and is then cached — so it
+  scores keys cracked, never a signal the fix names. ⚠ It cannot compile against the true
+  pre-fix file (it resets `key_ok`), so the RED arm restores the BEHAVIOUR by mutation
+  rather than out of git — weaker than the usual R0 arm, called out in the test header.
+  ★ **HW gate, and it is the cache directory rather than a stopwatch:** on a region-less
+  drive the cache must stop gaining files entirely once the mount's pre-crack is done —
+  a count, not an impression. ⚠ **The cache is PERSISTENT AND PER-DISC, so it must be
+  CLEARED before each arm** or chapters already visited are already cached and a
+  *pre-fix* build measures as fixed. ⚠ And not chapter 1: its cell starts at RBN 0 =
+  `VTS_01_1.VOB`'s own LBA, already primed, so even the broken build never cracks there.
+  Detail: **`docs/physical_disc.md`** "A title key is asked for at a VOB START".
+
+- ✅ **SELECT DURING A MENU TRANSITION KICKED THE PLAYER BACK TO THE BOOT CHAIN — ONE
+  BUTTON CARRIED TWO MEANINGS, AND THE WRONG ONE OUTLIVED THE TRANSITION (2026-09-17,
+  PR #103); sim-proven RED/GREEN, 6 regressions each caught by exactly its own
+  assertion, and ✅ HW-CONFIRMED 2026-09-17** (maintainer, build
+  `DVD_selectnoop_20260917_1531.rbf`, SEED 7 first roll, clk_dec 92.34/89.67, 91 % ALM).
+  ⚠ The confirmation is recorded as the maintainer gave it — *"this is hw confirmed"* —
+  without a per-arm breakdown; the arms the test plan asked for are in PR #103 if a later
+  session needs to know which were actually run. Field report: *"sometimes when
+  navigating menus, if I hit select during a transition, it will kick me back to the boot
+  chain"* — `ULTIMATE_T2`'s Mission Profiles slides and the `Scooby-Doo 2` menu
+  transitions, landing on the disc's **first copyright screen**.
+  ★★ **THE MAINTAINER'S CONTROL ARM IS WHAT CHOSE THE MECHANISM, and it cost one
+  sentence:** on Scooby it reproduces **only if the Menu button was used to skip the boot
+  logos**. That press is what latches `rsm_*` at the FP title and sets `came_via_menukey`;
+  without it the resume path was already a no-op, so the symptom could not occur. Two
+  rival candidates — the destination menu's HLI arming ahead of its picture, and a stale
+  `ev_btn` surviving `V_WAIT` — are independent of the Menu press and die on that arm.
+  ★★ **THE DISC WAS NOT ASKING US TO BLOCK THE PRESS, MEASURED AT BOTH GRANULARITIES.**
+  The spec mechanism is UOPs: `pgc_uop` at PGC-header offset **0x08**,
+  `Button_Select_or_Activate` = **bit 17** (`0x00020000`), ORed by libdvdnav
+  (`dvdnav.c:1438`) with the per-VOBU `vobu_uop_ctl` at PCI-data offset 0x08 — the only
+  field with transition granularity, since the spec has no per-cell UOP. **Bit 17 is clear
+  in every menu PGC and every menu VOBU on both discs** (T2 `0x01F847E0`/`0x01F84720`,
+  Scooby `0x01F8F7E0`/`0x01FDF7E0`); the only PGCs setting it are zero-cell dispatchers,
+  which present no video. ⚠ On T2 the hub and its transition **share one PGC** (VTSM PGCN
+  14: cell 1 the still hub, cell 2 a 904-sector transition), so a per-PGC prohibition
+  could not have expressed it either. The discs' only "nothing to press now" signal is
+  **HLI absence** (`hli_ss=0, btn_ns=0` on every transition VOBU) — which we already
+  honour: `nav_pci` disarms. **So no UOP work would fix this and none was done.**
+  ★★★ **THE DEFECT: `emu.sv` RE-INTERPRETED THE PRESS, AND `dvd_vm` NEVER INVALIDATED THE
+  RE-INTERPRETATION.** Select-with-nothing-armed became `key_resume`, and a transition is
+  exactly that window (every cell seek / VM jump pulses `seek_ack`/`jump_ack` →
+  `load_flush`, ungated by `keep_vbuf` → `pipe_rst_n` → `nav_pci` resets and `armed`
+  clears; the transition cells then arm nothing for the length of the clip — T2 ~2 s,
+  Scooby 6–19 s). `ev_resume` was **the one user event `ev_loaded` did not clear**, where
+  `ev_btn` is cleared at both exits precisely because a button command belongs to the PGC
+  whose button record it came from. So the press outlived the transition, the load and the
+  PRE block, and `LinkRSM`'d out of the menu that had just arrived.
+  **Fix = `key_resume`/`ev_resume` deleted end to end.** ★ **Lossless, and checkably so
+  rather than as a judgement call:** `ev_resume`'s condition and all 14 body assignments
+  were **character-for-character identical** to `ev_menu` case (a) — same
+  `came_via_menukey && rsm_vts != 0` gate, same destination, same SPRM4–8 restore, same
+  `skip_pre`. The only divergence was the FAILING branch, where `ev_menu` re-invokes Root
+  and `ev_resume` did nothing, so deleting it **removes a destination and adds none**. B5
+  already did everything B4 could there, and the manual only ever documented *"Select
+  activates the highlighted button"*.
+  Completed alongside: the `ev_error` and give-up exits from `V_WAIT` now drop a press
+  latched during the wait. **Two doors, not one**, and `ev_error` is the more reachable,
+  since `pgc_error` is an ordinary fallback outcome.
+  ⛔ **`menu_seen` WAS ALSO TRIED AS A GATE ON THE RSM LATCHES AND REVERTED — DO NOT
+  RE-DERIVE IT.** The idea was that a Menu press inside the boot chain should not latch a
+  resume point (the Cluedo comment says the FP trampoline *"is not a resumable resume
+  point"*). But `~menu_seen` does not mean "in the boot chain"; it also means "this disc
+  has not shown a menu yet" — the state of a user watching a feature on a disc that boots
+  straight into it (**BBB's FP is `JumpTT 4`**). Gating there silently stops
+  Menu-out/Menu-back-in toggling on exactly those discs. ★ **`dvd_vm_tb` [S17a] and [S24b]
+  fail on it immediately, and the fix was to believe them rather than add `menu_seen=1` to
+  their setup** — the bench-that-cannot-fail anti-pattern, in the direction nobody
+  expects. It was also unnecessary: the defect is fixed at the trigger.
+  **Gate: `bench/dvd/run_select_noop.sh --red`.** `emu.sv` has no bench and the fix there
+  is a DELETION, so **`tools/check_select_noop.py`** asserts the invariant instead —
+  *every statement reading `sel_edge` also writes `nav_act_p`, no `key_resume*` net is
+  driven, the `dvd_vm` instance has no `.key_resume`*. ★ Its last two checks are
+  **anti-vacuity controls**: without them a file that deleted Select outright (**R2**) or
+  unwired the Menu key that now solely owns resume (**R3**) passes cleanly — *"nothing
+  drives it"* is not the property wanted. ★ **R0 is not a hand-made mutation** — it runs
+  the real pre-fix `emu.sv` out of git. ★ **R4 proves `strip_comments()` is load-bearing
+  rather than asserting it**: the replacement comment quotes the deleted code verbatim, on
+  purpose, so a grep-based checker reports the defect present on a **correct** file
+  (measured: 2 hits).
+  ⚠ **`dvd_vm_tb` [S16] would have gone VACUOUS and was re-pointed, not left alone** — it
+  existed only to assert `key_resume` was gated, so a mechanical port-removal edit leaves
+  it asserting nothing while still printing PASS. New **[S25]** covers both `V_WAIT` doors;
+  ⚠ its arm (b) sets `fb = FB_GAVEUP` deliberately — the fallback chain's one NO-JUMP arm —
+  because every other arm jumps and that jump's `ev_loaded` clears `ev_btn` in fixed and
+  mutated builds alike (measured: the arm passed against the un-cleared door until it did).
+  ⚠ **Runner lesson:** the first cut sniffed for `/error/i` and reported `iso_reader_menu_tb`
+  as FAILING, because its TEST6/TEST7 print `pgc_error=1` as the **expected** outcome. It
+  requires the PASS marker positively now, which also catches a bench that dies early.
+  Detail: **`docs/dvd_nav.md`** "Select during a menu transition", `docs/dvd_vm.md`.
+
+- ✅ **SEEKING INSIDE AN ANGLE BLOCK — A BLOCK OCCUPIED N TIMELINE SLOTS INSTEAD OF ONE, A
+  SCRUB NEVER ARMED THE ANGLE MACHINERY, AND THE SNAP LANDED ON WHICHEVER ANGLE THE TARGET
+  FELL IN (2026-09-15/16, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN and
+  ✅ HW-CONFIRMED 2026-09-16** (build `DVD_anglefollow_20260916_0353.rbf`, SEED 7 first roll,
+  clk_dec 94.41/90.40 vs the 86.0 gate) — maintainer on `Grave of the Fireflies`: *"no angle
+  switching after a seek ... and the timestamps are correct"*. **ALL THREE PRE-EXISTING** — found by the maintainer while confirming the three fixes below, which are
+  what let `Grave of the Fireflies` play far enough to reach them. Report: *"seeking at any
+  point shows an incorrect preview time (+8 minutes when seeking during the beginning
+  chapter) and starts alternating the 2 available angles at 1hz."*
+  ★★ **ONE ROOT: A SIBLING ANGLE CELL IS INDISTINGUISHABLE FROM SEQUENTIAL CONTENT** to
+  anything that maps an RBN to a cell or accumulates time.
+  **(a) The timeline.** The cell walk's prefix sum added EVERY cell's `playback_time`,
+  siblings included — but a 2-angle block is one span of film offered two ways. MEASURED on
+  Grave (13 back-to-back 2-angle pairs = the whole film): the 13 angle-1 cells plus the
+  closing cell sum to **5396 s = 1:29:56**, matching the PGC's declared `01:30:03` to frame
+  rounding, while all 26 give **10725 s = 2:58:45**. ★★ And that is what produced the
+  reported **+8:00**: a block's two cells OVERLAP (chapter 1 is cell 0 at RBN 0..339620 and
+  cell 1 at 457..340206) and `seek_time` keeps the **nearest at-or-below**, so any target
+  past sector 457 resolved to the SIBLING and published its start — 8:00, chapter 1's own
+  length, to the second. **Fix = the prefix sum only:** a sibling (`bt==1 && bm>=2`)
+  inherits the block-first cell's start and adds nothing. ★ That makes `seek_time`'s pick
+  **harmless rather than wrong** (both cells now report the same start), so the preview, the
+  live clock and the title total are corrected together and **`seek_time` needs no change**.
+  This removes the *"multi-angle blocks over-count — documented limitation"* that
+  `dvd_iso_reader.sv` has carried since Phase 11.
+  **(b) The 1 Hz alternation.** The angle-block entry was gated
+  `cc_blk_first && !angle_resolved && `**`!rbn_override`**, and a raw-RBN scrub sets
+  `rbn_override` — so a SEEK INTO a block never ran the angle scan: `angle_count` stayed 0,
+  `angle_active` with it, and `seamless_active` needs `!cc_is_angle` so that was 0 too.
+  Neither arm set ⇒ no ILVU follow ⇒ the interleaved range streamed LINEARLY. Grave's first
+  ILVU is ~457 sectors ≈ 1 s. ★ **The seek path's own comment already said the opposite** —
+  *"a transport seek re-scans any angle/interleaved block it lands in"*, right where the seek
+  clears `angle_resolved`. ⚠ **The mid-block ILVU hop is excluded by `!angle_resolved`, not
+  by that term** (the hop fires only while `angle_active`, which requires `angle_resolved`,
+  and does not clear it), which is why the term was removable — checked against the benches,
+  not reasoned away, since it dates to the original Phase 9 import with no recorded
+  rationale.
+  **(c) THE SNAP LANDED ON WHICHEVER ANGLE THE TARGET FELL IN — A COIN FLIP.** Arming the
+  follow is not enough: the scrub is snapped FORWARD to the next NAV pack and the angles'
+  ILVUs round-robin, so the landing belongs to whichever angle's ILVU the target fell in.
+  MEASURED on Grave, per angle across all 13 blocks: **48–52 %**. Field report *"seeking
+  always lands on angle 2, so there's a quick glance of the storyboard angle before it
+  settles on the film"* — the coin flip seen a few times, and "settles" is the `sml_agli`
+  follow converging after one ILVU (~1 s). ⚠⚠ **On a disc with NO `sml_agli` it never
+  converges** — Castle / Die Another Day would play the REST OF THE BLOCK in the wrong
+  angle; unobserved only because their blocks are a title card, an opening and credits.
+  **Fix = an angle-aware snap keyed on `dsi_gi.vobu_vob_idn`** (DSI 0x18 → sector `0x41F`),
+  in three passes: PLAIN (land as before) → LEARN (probe the chosen cell's own
+  `first_sector`, which IS the first VOBU of that angle's chain, to read its VOB_ID) → FILT
+  (re-snap from the landing, accepting only that VOB_ID).
+  ★ **MEASURED premise on all three discs:** every angle cell of a block has a DISTINCT
+  VOB_ID and every VOBU inside that angle's ILVUs carries it (Grave: vob 1 at RBN 0..456,
+  vob 2 at 457..1074, vob 1 at 1075..). ⚠ VOB_IDs are NOT consecutive from 1 — Castle uses
+  1/2, 4/5, 8/9 — so `first + angle - 1` would be wrong; the cell's own value is read.
+  ★ **Testing the VOB_ID costs no extra reads:** the probe leaves the sector resident in
+  `parse_buf` (`pb_sec`) and `rbuf` is only a 45-byte window copy, so the `0x41F` window is a
+  second `S_FETCH`. Only LEARN costs a real read — one per scrub into an angle block.
+  ⚠ **The angle passes must NOT fall back into `S_RBN_SCAN`** when the budget runs out: that
+  re-resolves the cell and undoes the angle choice. They fall back to the unfiltered landing.
+  ⚠⚠ **THE DIVERT IS GATED ON `snap_pend` (named `ang_snap_pend` until issue #49
+  widened it), NOT `rbn_override`.** `rbn_override` is set by
+  a scrub landing AND by the mid-block ILVU hop, and the hop keeps `angle_resolved` set — so
+  the first version fired on the first hop of a block reached by ORDINARY PLAYBACK, putting a
+  probe read into the one path whose contract is time-continuity (no flush, no `seek_ack`, no
+  A/V re-anchor; HW-proven since fj#98). ★ **No bench caught it and none could have:** the
+  outcome stayed CORRECT, just with an extra read and mid-stream latency, so TEST A/B stayed
+  green — it would have reached HW as a stutter at an ILVU boundary and been blamed on
+  something else. The flag means "the most recent SCRUB has not had its landing angle
+  verified": set when a scrub is armed, cleared as soon as ANY landing resolves, never set by
+  the hop. The tell is TEST D's `A1` returning to 2048 (it read 2489 while the probe fired on
+  the hop).
+  ⛔ **C_POSI parsing was the first plan and was DROPPED on inspection** — all eight `wphase`
+  codes are in use, so it needs the shared PGC walk phase widened to `[3:0]` across 15 sites
+  in a parser every disc and domain goes through, **and it would not have removed the second
+  pass anyway** (the snap runs before the cell is resolved). The probe keeps the risk inside
+  the seek path for one read.
+  **Gate: `iso_reader_angle_tb` TEST G** (seek onto angle 2's NAV pack with angle 1 selected;
+  RED `A2=2048`, GREEN `A2=0`). Fixture VOB_IDs are 1/2 for block 1 and **3/4** for block 2 —
+  deliberately not 1/2 again and not consecutive, so an angle-index rule fails.
+  ⚠⚠ **THE FIXTURE'S "NAV PACKS" WERE NEVER NAV PACKS, AND TEST G FAILING ON THE *FIXED*
+  READER IS WHAT EXPOSED IT.** `put_nav` wrote the DSI but none of the three signatures
+  `nav_sig_hit` tests (pack start @0, system header @14, PCI PES @38), so the VOBU-align
+  probe exhausted `NAV_CAP` on every scrub and fell back to the raw target — **the snap had
+  never been exercised by this bench**, and TEST D was green only because its raw target
+  happened to be a NAV sector. Third fixture gap on this branch (see also the missing
+  `next_vobu` and the harmless last hop): **a failing arm is a claim about the FIXTURE first
+  and the RTL second**, and an arm that fails on the fixed reader is the tell.
+  ⚠ **Residual, measured and deliberate:** a target landing in the sibling's TAIL (past the
+  block-first cell's `last_sector`) matches only the sibling, which is not `cc_blk_first`, so
+  the scan still does not run — **586 of ~340,000 sectors (0.17 %)** on Grave chapter 1.
+  Walking back to `block_first` would fix it; not done.
+  **Gates: `iso_reader_angle_tb` TEST D** (scrub to a NAV-aligned RBN inside a block, only
+  the selected angle's bytes afterwards — RED `A2=4096`, the entire sibling cell) **and TEST
+  E** (durations 10/20/5 ⇒ `title_secs_o == 35`; summing siblings gives **65**, the
+  1:30→2:58 error in miniature). ⚠ TEST D deliberately does NOT assert `angle_count`: it is
+  a PEAK and the block was already scanned during the settling play, so it reads 2 pre-fix
+  too — an assertion that cannot fail for this defect. ⚠ TEST D's landing is NAV-aligned on
+  purpose: the reader's `S_NAV_SEEK` snap (fj#106) moves a raw target to the next NAV pack,
+  so that is what a real disc produces; a landing PAST a nav pack has no DSI to snoop and
+  cannot arm the follow for the ILVU it lands in — a property of ILVU navigation, not of
+  this fix.
+  Detail: **`docs/dvd_nav.md`** "Seeking inside an angle block".
+
+- ✅ **ADJACENT ANGLE BLOCKS — THE ANGLE COUNT WALKED OUT OF THE BLOCK IT WAS MEASURING,
+  REPORTING 9 ANGLES ON A 2-ANGLE DISC AND SKIPPING ~22 MINUTES OF THE FILM (2026-09-15,
+  branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, and
+  ✅ HW-CONFIRMED 2026-09-15** — maintainer: *"Grave of the Fireflies does report 2 angles
+  now, and playing past 8 minutes does roll into chapter 2"*, i.e. both halves of the defect
+  (the count AND the block skip) measured on the board.** Field report on `Grave of the Fireflies.iso`: *"playing that back on the core
+  showed 9 angles to choose from but no auto-switching that I saw. Is that normal
+  behavior?"* No — `TT_SRPT` declares **2**, and the disc's NAV packs carry exactly two
+  `sml_agli` entries. **The 9 was the core's own cap.**
+  ★★ **`S_ANGLE_SCAN` COUNTED `block_type` AND NEVER RE-CHECKED `block_mode`.** A block is
+  `block_mode` 1 (FIRST), 2 (IN)…, 3 (LAST), and the NEXT block starts at 1 — but the scan
+  counted the run of consecutive `block_type==1` cells and stopped only at a non-angle cell
+  or its `< 9` limit. Fine on every disc Phase 9 was proven on, where a normal cell follows
+  each block. **Grave of the Fireflies VTS_01 PGC1 is 13 BACK-TO-BACK 2-angle pairs** (one
+  per chapter, `bm=1,3, 1,3, …`) with only the final cell of the PGC normal, so the scan ran
+  the whole way to its cap.
+  ★★★ **AND THE WRONG COUNT IS NOT THE WORST OF IT — `block_last` FOLLOWS IT.**
+  `block_last = block_first + angle_count - 1` = cell 8, so the end-of-block skip lands on
+  0-based cell 9 = **1-based cell 10 = chapter 5's ANGLE-2 cell**: after chapter 1 (8:00)
+  playback jumps over chapters 2/3/4 — **≈22 minutes** — and resumes in the other angle.
+  ⚠ Then it compounds: that landing cell is `bm=3`, so `cc_blk_first` is false and
+  `angle_resolved` was just cleared ⇒ **neither `angle_active` nor `seamless_active`**
+  (`seamless_active` needs `!cc_is_angle`), so the ILVU follow stops and it streams an
+  interleaved range LINEARLY — the alternating-angles symptom again, by a third route.
+  **Fix = libdvdnav's own rule** (`play_Cell_post`: `while (block_mode >= 2) cellN++`):
+  continue only while the next cell is IN or LAST of the SAME block. ⚠ The 9 cap STAYS (it
+  is the `sml_agli` table size and the spec's angle limit, so it bounds a malformed block);
+  it is simply no longer what ends a well-formed one.
+  ⛔ **A "have I consumed the LAST cell" latch was written and then DELETED** — on any
+  well-formed layout `block_mode >= 2` already stops at the boundary, so no fixture could
+  distinguish it, and libdvdnav has no such latch. A claim no mutation can catch is not a
+  gated claim; do not re-add it.
+  ★★ **SWEPT OVER 808 ANGLE BLOCKS: the old rule disagrees on 12 of the 23 multi-angle
+  discs** — `TimeTraveler` (**463** adjacent blocks), `Beauty_and_the_Beast` (**54**),
+  `HOW_GREAT_IS_OUR_GOD` (14), `Grave of the Fireflies` (12), `BOOK_OF_LIFE` (6), and 7
+  more with 1–3 each. ★ **Cross-checked against the DISC, not just itself:** the block count
+  equals `TT_SRPT nr_of_angles` on **21 of 23**; the 2 exceptions are one disc whose blocks
+  genuinely hold 3 and 4 angles under a title declaring 5 — `nr_of_angles` is a TITLE-level
+  maximum, so per-block counting is the MORE precise of the two. That is also why the reader
+  counts cells rather than reading `nr_of_angles`: `block_last` needs the per-block value.
+  **Gate: `iso_reader_angle_tb` TEST C** (a second 2-angle block immediately after the
+  first, the Grave shape) — RED on the pre-fix reader with `angle_count=4` and **`B1=0`, the
+  second block skipped entirely**. Mutation **M5** restores the old rule and must fail TEST C
+  while leaving `angle_noagli_tb` green. ★ Control, in its strongest form: with BOTH reader
+  fixes applied, **`main`'s own unmodified single-block bench is byte-identical to `main`'s
+  own reader**. ⚠ This disc DOES author `sml_agli`, so the no-`sml_agli` fix below does not
+  touch it — a genuinely separate defect found by a user question.
+  Detail: **`docs/dvd_nav.md`** "Adjacent angle blocks".
+
+- ✅ **A MULTI-ANGLE DISC NEED NOT AUTHOR `sml_agli`, AND PHASE 9 REQUIRED IT — Studio
+  Ghibli discs alternated between the localized and Japanese versions every 1–4 s
+  (2026-09-15, branch `fix/angle-noagli-follow`); sim-proven RED/GREEN, mutation-checked, and
+  ✅ HW-CONFIRMED 2026-09-15.** Field report on `CASTLE_IN_THE_SKY.iso`: *"there are multiplexed
+  versions of the title to show the localized or Japanese version. Currently the core
+  switches rapidly between the two angles rather than sticking to one."* A second user, on
+  unnamed Ghibli discs: *"starts playing the English version then makes a pop noise and then
+  switches to Japanese for a second then back to English."*
+  ★★ **THE ARM REQUIRED `snoop_valid` (= `sml_agli[cur_angle-1] != 0`), AND THESE DISCS
+  AUTHOR NO `sml_agli` AT ALL.** MEASURED (`nav_extract.py --angles --title-vob 1`): on
+  CASTLE VTS_02 PGC1 and DIEANOTHERDAY_D1_PS VTS_05 PGC1, **every VOBU of every angle block
+  reports `sml_agli: (none)`** while `vobu_sri.next_vobu` is populated and correct (Castle
+  RBN 491 `BLOCK|LAST` → `+755` → RBN 1246 = angle 1's next ILVU, stepping over angle 2's at
+  692..1245). So no jump ever armed and the reader streamed the cell's `[first..last]`
+  LINEARLY — a range that physically contains both angles.
+  ★★ **libdvdnav never hits this because the preference order is the other way round:**
+  `dvdnav.c:434` makes `vobu_sri.next_vobu` the BASE for every VOBU and the `sml_agli` block
+  at `:452-468` only OVERRIDES it. We made the override mandatory. Fix = restore the
+  reference order (`sml_agli` when present, `next_vobu` otherwise), reusing the `next_vobu`
+  decode the HW-proven seamless-branch path already snoops (PR fj#112) — no new snoop bytes.
+  ★★ **IT IS AN AUDIO DEFECT TOO, AND THAT IS THE SECOND REPORT'S "POP".** Each angle's ILVU
+  carries the SAME timespan of audio: Castle angle 1 ILVU 1 = PTS 0.243–2.387 s, angle 2
+  ILVU 1 = **0.243–2.259 s**, with all three substreams (0x80 en / 0x81 ja / 0x82 fr) in
+  both. Linear streaming delivers every timespan twice, so the PTS jumps **backward ~2 s at
+  every junction** — past `disp_sched`'s 0.5 s re-anchor threshold, with the straddling AC-3
+  frame dropped by `ac3_reframer` as a silent gap. ⚠ On Castle both angles carry the same
+  substream set, so the reported language flip is most likely the Japanese title card plus
+  the repeat; another disc could carry different sets and flip outright. Same fix either way.
+  ★★★ **AND A SECOND, INDEPENDENT DEFECT: `sprm3` (AGLN) WAS WRITTEN BY THE VM AND READ BY
+  NOBODY.** `dvd_vm` has latched SPRM3 from `SetSTN` since Phase 4 and exported only SPRM1/2.
+  Castle's boot chain sets `g[14]=2` and its feature PGC's PRE runs
+  `SetSTN ASTN=g[12] SPSTN=g[13] AGLN=g[14]` — **the disc asks for angle 2** (English title
+  cards; angle 1 is Japanese) and its Audio menu re-issues SetSTN with the angle matching
+  each language. The core played angle 1 regardless. Fixed: `dvd_vm.sprm_agln` → emu's
+  `vm_owns_angle` latch (same last-writer-wins shape as `vm_owns_aud`/`vm_owns_sp`) → the
+  reader's `agl_vm`/`agl_vm_en`; a B6 press releases the claim AND writes SPRM3 back
+  (`agl_set`), because Castle's VTSM PGCs 19/20/21/24 all run `g[14] = AGLN`.
+  ⛔ **NOT driven by `Player Language`, measured:** a full decode of every PGC command on the
+  disc finds ZERO references to SPRM0/16/17/18/19/20. The angle follows the disc's own audio
+  menu, not the player's language register — do not couple the OSD option to it.
+  ✅ **HW-CONFIRMED 2026-09-15, and the maintainer's reading of it is right:** *"Castle in the
+  Sky now correctly selects the angle depending on which language is selected
+  (english/japanese), at least I think that's how it works"*. It is — the disc's Audio menu
+  sets BOTH in one instruction: `SetSTN ASTN=0 AGLN=2` (English 5.1), `ASTN=1 AGLN=1`
+  (Japanese 2.0), `ASTN=2 AGLN=2` (French 2.0), so picking a language there picks the title-card
+  angle with it. ⚠ **It is the DISC's Audio menu that does this, not the core's B7 Audio
+  button** — B7 retargets the substream directly and never runs `SetSTN`, so the angle does
+  not follow it. That is also how a real player behaves, and it is why `vm_owns_angle`
+  releases on a B6 press rather than fighting the user.
+  ★★★ **AND A THIRD: THE READER PICKED THE CELL BEFORE THE DISC COULD SPEAK, ALWAYS.**
+  `pgc_loaded` pulses at `S_PGC_DONE` and the reader reaches the `S_ANGLE_SCAN` resolve ~8
+  cycles later, while the VM only STARTS `BLK_PRE` on that same pulse (serial ALU + an 8-byte
+  BRAM fetch per command). Not a race sometimes lost — always lost. libdvdnav's order is
+  `play_PGC` → PRE → `play_Cell`'s `cellN += AGL_REG - 1`. Fix: new `dvd_vm.pre_done` →
+  reader `pre_seen` → a bounded hold in the new `S_ANGLE_PRE`.
+  ⚠ **`ANG_PRE_WD` (~0.25 s) is LOAD-BEARING:** a PRE command that itself jumps leaves the VM
+  in `V_WAIT` awaiting a `pgc_loaded` a stalled reader would never produce.
+  ⚠ **`pre_done`'s `!ev_loaded` term is equally load-bearing:** `pgc_loaded` only LATCHES the
+  event, so without it the pulse fires BEFORE the PRE block runs — the same defect one level
+  down.
+  ⛔ **NOT keyed on the cell's `seamless_angle` bit** (byte 0 bit 0) even though it predicts
+  `sml_agli` presence perfectly on all 23 swept discs — that is a DECLARATION in the IFO, the
+  `progressive_frame` class. Key on the snooped VALUE; `seamless_angle` is only the sweep's
+  discriminator. ⛔ **NOT `sml_pbi.next_ilvu_sa`** (same target on both discs, but a new snoop
+  field where `next_vobu` is already captured and validated).
+  ★★ **BLAST RADIUS SWEPT, NOT GUESSED: 23 discs have `block_type==1` angle blocks; 4 author
+  no `sml_agli`** — `CASTLE_IN_THE_SKY` (3 blocks), `DIEANOTHERDAY_D1_PS` VTS05 (**19**
+  blocks across a 2:12 feature), `MISSMARS` VTS05, `WITHOUTAPADDLE43` VTS03. The other 19
+  (MiB, Beauty and the Beast, BOOK_OF_LIFE, GOLDMEMBER, DIE_ANOTHER_DAY_DISC2) author it and
+  were always correct — which is why the fj#98 HW vehicle never showed this.
+  ⚠ **Accepted limitation (maintainer decision):** on a no-`sml_agli` disc a mid-block B6
+  press takes effect at the NEXT angle block. `next_vobu` follows the chain of the angle
+  whose VOBU was read and knows nothing about the siblings, so `ilvu_from_agli` gates the
+  cell re-point. ⛔ Do NOT "fix" it with a flushing seek to the sibling cell's `first_sector`
+  — that restarts the segment, and Castle's third block is the 3-minute end credits.
+  **Gates: `bench/dvd/run_angle.sh --red`** (`angle_noagli_tb` scores the DELIVERED BYTE
+  STREAM and the PTS in it — pre-fix `A2=4068` and PTS `100 100 200 200 300`, post-fix `A2=0`
+  and `100 200 300 400 500`; `iso_reader_angle_tb` and `iso_reader_ilvu_tb` are
+  **byte-identical** to the pre-change reader, which confines the delta to those 4 discs),
+  **`tools/check_angle_wiring.py`** (the emu seam, RED on the pre-fix file and 3
+  re-regressions — emu has no bench, the issue #81 lesson), and `dvd_vm_tb` **T7** (the
+  disc's real instruction bytes).
+  ⚠ **HW instrument: `reanchors` is ALREADY in the telemetry** — it should climb ~once per
+  1–4 s through an angle block on a broken core and stop on a fixed one. Screenshot sampling
+  is the WRONG instrument here (the alternation period is 1–4 s against ~5 s ssh-paced
+  captures = below Nyquist), sound for REPRODUCING but biased toward a false pass when
+  CONFIRMING. Castle block A is RBN 0…8852 = the first 12 s of the title.
+  Detail: **`docs/dvd_nav.md`** "No `sml_agli`" + "The disc picks the angle",
+  `docs/track_selection.md`.
+
+- ✅ **THE HUD WAS AUTHORED FOR A FRAME THAT DOES NOT EXIST ON THE PROGRESSIVE OUTPUT —
+  no HUD at all on a VCD, a HUD running off the right edge on an SVCD (2026-09-14, branch
+  `fix/hud-narrow-window`); sim-proven RED/GREEN, 12 mutations each caught by its own arm,
+  and ✅ HW-CONFIRMED 2026-09-14 with the defect REPRODUCED FIRST on the pre-fix core.** Field report: with `Video Output = Progressive`, *"VCD is missing
+  the HUD entirely; SVCD has the HUD but it extends past the right edge"*. Interlaced is
+  correct on both.
+  ★★ **ONE CAUSE, TWO AXES, AND THE HALF THAT WAS "CLOSED" A YEAR AGO WAS ONLY CLOSED ON
+  ONE OUTPUT PATH.** The DE window is `min(decoded size, raster resolution)` —
+  `rtl/mpeg2/syncgen.v` blanks on `h_cntr >= horizontal_resolution || h_cntr >= h_size`,
+  and `h_size`/`v_size` are the SEQUENCE HEADER's sizes — while every fill that widens a
+  sub-720 picture back out (`sif_hfill_eff`, `sif_v2x_eff`, the 240p raster) is gated on
+  `interlaced_eff`, deliberately, because an HDMI-only rig keeps ascal's polyphase scale.
+  So the progressive path really does present **352×240 for a VCD and 480×480 for an
+  SVCD**, and `transport_hud`/`seek_bar`/`idle_logo` were authored against a fixed 720×480
+  with `act_h_eff` carrying the raster RESOLUTION, not the window: the status row sat at
+  lines 416..447 of a 240-line picture (nothing renders) and columns 104..615 of a 480-wide
+  one (clipped, then ascal stretches what survived).
+  ⛔ **`docs/mpeg1.md` §B.3 listed "HUD/overlay geometry is 720-authored (clipped at 352)"
+  and marked it "now closed" — the closure was the SIF ANALOG fill.** A gap closed on one
+  output path is not closed, and that sentence is what stopped anyone looking. Corrected in
+  place.
+  **Fix:** `dvd/emu.sv` publishes the window on both axes (`act_w_eff`/`act_h_eff`),
+  replicating syncgen's rule including the forward fill transforms; every pre-existing case
+  reduces to the old constants, so **only sub-720 progressive content moves**. The overlays
+  take `act_w_i` and centre in it.
+  ★ **Only the HORIZONTAL pitch follows the window** (maintainer decision: follow what the
+  240p change did): the row stack stays 32 px tall and bottom-anchored, and below a **544
+  knee** the text renders at the 1x glyph pitch = the same ROM walked at half the pitch.
+  The seek bar's internal column space stays 0..511 and a narrow render samples two columns
+  per drawn pixel. ⚠ Its notch read must take the **odd sibling** (`hcol | 1`): a notch is
+  written as a column PAIR, so an even-only sample drops every notch whose pair starts odd
+  (3 of 4 in the bench).
+  ⚠ `idle_logo` is NOT an idle-only consumer — the screensaver and Stop show it over a
+  mounted, playing title, so on a VCD it was bouncing in a 720-wide box on a 352-wide
+  picture. A 2x logo too large for the window now renders native.
+  ★★ **THE DEFECT WAS A WRONG VALUE ON A CORRECT PORT, WHICH NO MODULE BENCH CAN SEE** —
+  each is handed the window as a plusarg and was correct for the frame it was told about.
+  `tools/check_ov_geom_wiring.py` reads the connection out of `dvd/emu.sv`
+  (the `check_p240_wiring.py` pattern). And the load-bearing sim arm is `hud_frame_tb`'s
+  **`[double]`**: counting lit pixels inside a box cannot tell a correct narrow render from
+  a plausible wrong one (a box keeping the 2x pitch draws the first 16 cells; one drawn at
+  half scale without re-mapping draws the left half of the line — both sit entirely inside
+  the window and pass every count check), so it renders the SAME text at both pitches and
+  requires the narrow one to be the wide one with each column pair collapsed.
+  ★★★ **TWO PRE-EXISTING GATE DEFECTS CAME OUT WITH IT, THE SECOND HIDING BEHIND THE
+  FIRST.** The five overlay benches called `$finish` on failure, so `vvp` exited 0 and a
+  runner scoring the exit code read a FAILING bench as a passing one — the `bench/ac3` M17
+  trap in a second place. With `$fatal` in place, **`run_p240.sh`'s `seek_bar_tb (240)` arm
+  had been reporting `ok` on a bench reporting 13 errors since the 240p branch merged**:
+  its render arms hardcoded NTSC-480 row coordinates, so at `+act_h=240` every
+  `render_line` landed on a blank line and every positive assertion asserted against
+  nothing. The 240p RTL was never at fault; rows derive from `act_h_i` now and the arm
+  passes at 240/288/480/576 for real.
+  Gate: **`bench/dvd/run_ov_geom.sh --red`**.
+  ✅ **HW-CONFIRMED 2026-09-14 AGAINST ITS OWN CONTROL** (build
+  `DVD_hudnarrow_20260914_1552.rbf`, SEED 7 first roll, clk_dec 96.30/91.48, 90 % ALM).
+  ★ **The seek bar is the instrument, not the text:** it is a filled rectangle spanning
+  the whole box, so comparing its border row against the picture row above it cancels the
+  content and MEASURES the box. Each arm run on the same media, in `Progressive`, on both
+  cores:
+  | arm | picture | seek-bar span | HUD text |
+  |---|---|---|---|
+  | VCD, pre-fix | 352x240 | **nothing drawn** | absent |
+  | VCD, fixed | 352x240 | 31..287 = **257 px, inside** | `0:00:32/0:56:49`, maxerr 0 |
+  | SVCD, pre-fix | 480x480 | 88..479 = **CLIPPED at the edge** (512 px box) | right ~120 px lost |
+  | SVCD, fixed | 480x480 | 96..351 = **256 px, inside** | `0:00:10/0:05:04`, maxerr 0 |
+  | DVD, pre-fix | 720x480 | 88..599 = 512 px | `[PAUSE] 0:00:08/2:02:09 CH 1/35` |
+  | DVD, fixed | 720x480 | **88..599 = 512 px, identical** | **identical, maxerr 0** |
+  ★★ **And the logo arm is the one a bench cannot settle, measured 14 samples per core over
+  a VCD (Stop drives the same `logo_vis` as the screensaver): pre-fix 7 whole / 1 cut by
+  the picture edge / 6 ENTIRELY OFF-SCREEN; fixed 14 whole, 0 cut, 0 lost** — and the logo
+  reached x 351 of 352 and y 236 of 240, so it uses the whole window rather than a safe
+  inset.
+  Detail: **`docs/transport_hud.md`** "The window is not the raster", `docs/vcd_svcd.md` §5.
+
+- ✅ **THE FIRST SLIDE OF A MENU SLIDESHOW IS PIXELATED — the reader stopped delivering
+  the transition cell before it had handed over its tail (2026-09-14, branch
+  `fix/menu-natural-drain`); sim-proven RED/GREEN, 5 mutations each caught by exactly its
+  own arms, mechanism proven OFFLINE in a reference decoder, and ✅ HW-CONFIRMED
+  2026-09-14 against its own control** (build `DVD_menudrain_20260914_2316.rbf`, clk_dec
+  93.93/93.01 vs the 86.0 gate, 90 % ALM). Field report on v0.5.0: on ULTIMATE_T2's **Mission Profiles**, the FIRST
+  still of each actor's slideshow comes up pixelated and STAYS so; on v0.4.0 it was
+  pixelated for a split second and then settled.
+  ★ **v0.4.0's "settle" was the §5 menu-still COLD RE-DECODE, removed in v0.5.0**
+  (`b900478`, issue #65 — it replayed the still cell's audio, and two later decoder fixes
+  were believed to have made it unnecessary). That belief is what the field falsified.
+  ★★ **THE ASYMMETRY IS THE DIAGNOSIS, and it is a property of the DISC.** Measured with
+  `nav_extract.py`: the hub (VTSM PGCN 14) reaches a slideshow through **cell 1, a
+  904-sector ~2 s MOTION transition clip** whose `cell_cmd 1 = LinkTailPGC` runs the POST
+  `if (g[6]==N) LinkPGCN 15..23`. Slide N→N+1 is `LinkNextPG` INSIDE one PGC, leaving a
+  cell that is a STILL — already parked, cache empty, elementary stream ended on a
+  `sequence_end_code`. The transition ends on neither.
+  ★★★ **AND THE LOSS WAS STRUCTURAL, NOT A RACE:** `dvd_iso_reader.sv` dispatches the cell
+  command at the cell's LAST BLOCK READ and leaves `S_STREAM` for `S_VM_WAIT`, while its
+  output pipeline only ran while `S_STREAM` — so up to 16 KB sat undelivered in the stream
+  cache until `jump_ack` reset `wr_ptr` and discarded it. No gate could have waited for
+  that; the module had stopped delivering. `docs/dvd_menu_refinements.md` §2 had recorded
+  the same cut as a residual ("dropping the transition tail's last ~16 KB … Not yet
+  fixed") from the other end.
+  **Fix:** `streaming` covers `S_VM_WAIT` too (no `sd` read is ever issued there), and the
+  Phase-B natural-transition drain gate the TITLE domain has used since PR fj#150 now
+  applies in EVERY domain — `jnat_l`/`snat_l` lose their `&& ~menu_dom`. The menu
+  exemption's stated reason was "their tail rides `keep_vbuf`"; **`keep_vbuf` preserves
+  the DECODER's buffer, not bytes the reader never handed over.**
+  ⚠ **The gate is `nat_drained`, NOT `vbuf_empty`, and this is the part most likely to be
+  "simplified" later.** `vbuf_empty` is a decoder LOW-WATER MARK (fill ≤ 1 unit), so a
+  merely STARVING decoder reads "drained" while the cache is still full — exactly a
+  throttled menu transition. `nat_drained` also wants the cache empty, no block in flight,
+  the output pipeline quiet, and 255 settled cycles so `ps_stream_fifo` and `ps_demux`
+  (which `load_flush` resets too) have drained. `DRAIN_WD` still bounds it and any USER
+  jump/seek preempts it.
+  ⛔⛔ **THE QUANTISER-MATRIX ROUTE WAS MEASURED AND REFUTED — DO NOT RE-DERIVE IT.** The
+  natural theory was `docs/quant_matrix.md`'s mechanism reached by truncation instead of by
+  a flush (the vld left mid-macroblock eats the landing's `00 00 01 B3`; with no
+  `sequence_end_code` `sequence_header_seen` is still set so the picture start code is
+  accepted anyway, and the slide decodes with the transition's near-flat matrix while the
+  slides download none). New `tools/quant_fixture.py --junction` +
+  **`bench/dvd/run_menu_junction.sh`** build that splice from the REAL cells:
+  **[J0] contiguous restores the defaults (`downloads=1`, 0/64 wrong) and [J1] ALL SEVEN
+  truncation offsets (8…3400 B) also come back 0/64.** With the bytes contiguous the parser
+  errors out on the partial slice and resyncs BEFORE the header; losing the matrix needs the
+  FLUSH. ★ The arms are committed BEFORE the fix, as standing evidence.
+  ⚠ **State the scope exactly, so nobody either re-derives it OR over-trusts it:** what is
+  measured is that a truncated-but-CONTIGUOUS junction does not lose the matrix, over the
+  real cells at seven truncation points, with cut A trimmed to its last sequence header plus
+  two pictures. It is not a proof about every parser state the 192 KB menu VBUF can be in on
+  hardware. It IS enough to stop treating the matrix as the presumed cause.
+  ✅ **REPRODUCED AND QUANTIFIED ON THE RIG (pre-fix core, the control), so the fix has a
+  number to beat.** Blockiness = image energy on the 8-pixel DCT block grid ÷ energy off it
+  (a correct picture has no reason to prefer the grid):
+  | capture | blockiness H | detail σ |
+  |---|---|---|
+  | slide 1, first view | **1.857** | 44.1 |
+  | slide 1, after a press (it HOLDS) | **1.992** | 44.0 |
+  | slide 2 — the in-disc control | **0.985** | 55.1 |
+  ★★★ **AND THE MECHANISM WAS SETTLED OFFLINE BY A DECODER THAT SHARES NO CODE WITH OURS.**
+  Concatenate the two cells' real elementary streams and hand them to **ffmpeg**: the slide
+  alone and the WHOLE transition + slide both decode at **blockiness 1.035**, while
+  **transition − 300 B + slide decodes at 1.898** — against the board's measured 1.857, the
+  same picture, the same defect. So the damage is in the BITSTREAM the reader hands over,
+  not in anything peculiar to this decoder. ⚠ It is **offset-dependent** (300 B damages the
+  landing; 8, 4000 and 16384 B do not), which is exactly why the matrix sweep came back
+  clean at its own offsets: a picture can be damaged without the matrix being what was lost.
+  ✅ **HW-CONFIRMED, control arm first, and the PRE-FIX defect is DETERMINISTIC** — two
+  independent entries measured **1.857** to three decimals, slide 2 (the in-disc control)
+  0.985. After the fix, three different slideshows: **1.006 / 0.986 / 1.056**.
+  ✅ **AND CONFIRMED INDEPENDENTLY BY THE MAINTAINER ON THEIR OWN DISPLAY** (2026-09-14,
+  before merge). ★ That arm is worth naming separately: every number above is a harness
+  measurement of a captured raster, and the defect was REPORTED by eye — so a person
+  looking at a real screen is the instrument the report was made with, not a lesser one.
+  Unregressed in the same session: main menu and submenu transitions, the hub highlight,
+  the Jump-Into-Timeline cubes and scene-index thumbnails (both `keep_vbuf` hops),
+  menu→title Play, and a chapter skip during playback.
+  ★ **The blockiness metric is the reusable part:** image energy ON the 8-pixel DCT block
+  grid ÷ energy off it, cropped to the picture body. A correct picture has no reason to
+  prefer the grid, so ~1.0 is clean and ~1.9 is not — it needs no reference frame, which is
+  what let the same number compare a board capture, an ffmpeg decode and a second disc.
+  **Gate: `bench/dvd/run_menudrain.sh --red`** — the real reader + `dvd_vm` + `flush_ctl` +
+  `ps_stream_fifo` + `ps_demux`, scoring the VIDEO ELEMENTARY BYTES `ps_demux` emits (what
+  the decoder would receive), never a signal the fix names; `iso_reader_vm_tb` T1–T9 pass
+  UNCHANGED, which is the title-domain contract.
+  ★ **Arm [A]'s shape is load-bearing twice and BOTH were found by a mutation surviving:**
+  it runs with `vbuf_empty=1` throughout (so the low-water mark cannot be what gates) and
+  its sink stalls 448 cycles in every 512 (the menu VBUF cap's shape). With a SHORT stall,
+  "the pipe is quiet" and "there is nothing left to send" are indistinguishable and
+  dropping the cache term is caught by **nothing**.
+  Detail: **`docs/dvd_menu_refinements.md` §9**, `docs/dvd_nav.md` "Phase B".
+- 🔧 **"DEEP FRIED" MENU STILLS — the disc's own quantiser matrix was being thrown away
+  at every VBUF flush (2026-09-13/14, branch `fix/quant-matrix-flush`); sim-proven
+  RED/GREEN and ✅ HW-CONFIRMED 2026-09-14 AGAINST ITS OWN CONTROL** (build
+  `DVD_quantmatrix_20260914_1221.rbf`, SEED 7 first roll, 91 % ALM, clk_dec 93.02/91.69):
+  the same 8-re-entry script gave the PRE-fix core **1 fried onset, held** — the report,
+  reproduced — and the fix core **0 fried / 0 garbage**, correct menu at the first capture
+  ~0.7 s after the Menu key, chapter skips still holding, and the FP->menu landing's one
+  black frame present on BOTH cores (so the cut costs nothing that was not already there).
+  Field report on `WAKE_UP_WITH_ELMO.iso`: parking on
+  the main menu gives a still with exploded texture, clipped highlights, oversaturated
+  colour and complementary-colour halos on the text; one Select press repaints it
+  correctly *without* activating, a second activates. ★ *"On 0.4.0 the fried image
+  flashes for a split second then resolves; on 0.5.0 it holds."*
+  ★★ **THE ARTEFACT WAS IDENTIFIED OFFLINE, FROM THE DISC, BEFORE THE DECODER WAS OPENED.**
+  The menu stills `load_intra_quantiser_matrix` a near-flat matrix (DC 8, all AC 4) where
+  the MPEG default ramps to 83, so decoding with the default scales every AC coefficient
+  **4x to 20.75x**. Bit-patching the matrices to the defaults in the real elementary
+  stream reproduces the reporter's screenshot detail for detail. ★ **Why only stills:** a
+  moving title re-sends a sequence header every GOP; a menu still is
+  `SEQ GOP PIC:I SEQ_END`, **one sequence header ever**. ★ **Why a press repairs it:**
+  menu entry from a title is a full VBUF flush, a menu->menu hop is `keep_vbuf`.
+  ⛔ v0.4.0's repair was the menu-still cold re-decode removed by `b900478` (issue #65) —
+  the UNMASKER, not the cause; do not revert it.
+  ★★★ **THE FIX IS THE DECODER SOFT RESET THE DESIGN ALREADY HAD, NOT A SURGICAL
+  RE-SYNC — and the wrong answer cost three hardware rounds.** A VBUF flush discards the
+  buffered bytes and leaves the whole pipeline (vld state, getbits window, rld fifo,
+  iquant, motcomp) frozen mid-picture; the landing arrives INTO that and its one
+  sequence header gets eaten. The first fix forced the vld state machine to
+  `STATE_NEXT_START_CODE` at the flush: it recovered the matrix in sim (12/12) and
+  produced **magenta/green crosshatched garbage** on the board (measured: both chroma
+  planes carrying LUMA — a block-count desync from the partial block it left in the rld
+  fifo). Two forms of flushing the getbits window failed the same way (one also cost
+  7 MHz: a bare AND on a large module's reset tree). **The pipeline's state is coupled;
+  reset all of it or none of it.** `dvd/flush_ctl.sv` now raises `soft_flush` on a VM
+  JUMP THAT CROSSES THE MENU/TITLE BOUNDARY (menu entry/exit, the FP boot chain) as well
+  as on a mount —
+  `reset.soft_rst_n`, the watchdog-equivalent reset a file mount has used HW-proven
+  since August. Transport seeks and mode switches are NOT included: a chapter skip keeps
+  its held frame; a menu entry/exit is a brief black cut, which is what a set-top player
+  does (maintainer decision). `mount_flush` stays mount-only for `pal_detect`.
+  ⚠⚠ **THE PREDICATE SHIPPED WIDER THAN THAT SENTENCE AND THE SENTENCE IS WHY NOBODY
+  NOTICED — ✅ FIXED and HW-CONFIRMED 2026-09-15 (branch `fix/soft-reset-scope`, build
+  `DVD_softscope_20260915_1924.rbf`, SEED 7 first roll, clk_dec 94.39/90.27, 91 % ALM).** It gated on
+  `jump_ack && ~keep_vbuf`, and `keep_vbuf` is `menu_dom && (target is a menu)` — a fact
+  about the DOMAIN — so `~keep_vbuf` is true for EVERY title-domain jump too. On a movie
+  the two sets nearly coincide; on a DVD-GAME disc, whose menus are authored as
+  TITLE-domain PGCs, every screen transition is a title→title `LinkPGCN`, so ordinary
+  gameplay navigation took a full decoder reset. Field report on Scooby-Doo 2: a black
+  frame and a MiSTer **resolution popup** on the overworld map at every van move. The
+  gate is now the reader's new `jump_cross` (pre-jump `menu_dom` XOR target-is-menu),
+  its sibling — ⛔ the two are NOT complements, and a title→title jump is neither:
+  it flushes and must not soft-reset. Same class as issue #81 (*a menu CONTEXT is not a
+  menu DOMAIN*) and the same lesson: **derive a predicate from what it SELECTS, not from
+  the cases it was written for.** Gate: `flush_ctl_tb` row **[4b]**, RED on the first cut
+  (`soft=64`, want 0) and the ONLY row that fails.
+  ✅ **MEASURED ON THE RIG, THREE ARMS, SAME DISC AND SAME LANDING PGCN** (spurious
+  resolution reports counted from Main's own `show_video_info()` log, `debug=2`): idle
+  0/0/0; Play Movie **0 / 1 / 0**; Menu key **0 / 1 / 0**; overworld van move
+  **0 / 1 / 0** (pre-#92 / shipped / fixed). ★ The two CROSSINGS are the sharp result —
+  they still soft-reset and now report nothing, which is the sync fix working on its own;
+  the van move is the scope fix. The soft reset demonstrably still fires (the capture
+  right after the Play crossing is **σ=0.0, uniformly black** — the accepted black cut).
+  ✅ **The accepted risk came back CLEAN:** the disc's title-domain stills measure
+  blockiness **1.093 / 1.105** (fried is ~1.9), fix/control pairs identical to three
+  decimals, and **T2's main menu after a title→menu re-entry is un-fried at 1.044** —
+  that crossing is what #92 exists to protect, so it is the load-bearing unregression.
+  ✅ **MAINTAINER-CONFIRMED 2026-09-15 on their own rig, including the arms the harness
+  could not reach:** Scooby-Doo 2 good, **T2 Mission Profiles** good (the #96 path), and
+  the **Elmo disc launched 20 times with no fried image** — against an original onset rate
+  of ~1 in 8, which is the arm that matters, since one clean pass proves nothing.
+  ⚠ **A PAL disc IS still fried and it is PRE-EXISTING — `INCREDIBLE_HULK.iso`'s special
+  features menu, A/B'd by the maintainer against the `quantmatrix` build that fixed Elmo
+  and fried THERE too.** ★ It is out of #92's reach STRUCTURALLY, not by accident: the
+  menu is VTS_06 VTSM **PGCN 15**, a single `still=255` cell reached only by **PGCN 14's
+  POST `LinkPGCN 15`** (a 70 s motion clip in the same menu domain), so the landing is a
+  **menu→menu hop with `keep_vbuf = 1` — and a `keep_vbuf` hop soft-resets on NO build.**
+  Its matrix is the worst in the library measured so far (`qmatrix_scan`: 7/7 downloads,
+  worst `default/custom` **29.00** vs Elmo's 20.75). ⛔ A THIRD case, not a regression of
+  #92 or #96 — chase separately; `docs/quant_matrix.md` §12e names the two live
+  hypotheses and the measurement that separates them.
+  ✅ **THAT THIRD CASE IS FIXED BY MPEG-2 ZERO_BYTE STUFFING AT THE JUNCTION (2026-09-16,
+  branch `fix/menu-hop-zero-stuff`, `dvd/es_stuff.sv`) — sim-proven RED/GREEN on the REAL
+  cells and mutation-checked 7/7; built `DVD_hopstuff_20260916_1859.rbf`, SEED 7 first
+  roll, clk_dec 92.46/91.71, 91 % ALM, `es_stuff` = 19 ALMs; ✅ HW-CONFIRMED 2026-09-16 by
+  the maintainer: Nacho ×20, Hulk ×10, Elmo ×10 with no fried image, Hulk correct on the
+  FIRST view, T2 Mission Profiles clean.** The `keep_vbuf` hop hands the
+  decoder the outgoing cell cut at an arbitrary byte, then the landing's `00 00 01 B3`;
+  the vld, left mid-VLC, sometimes swallows that header as coefficient data and the
+  landing still (ONE sequence header ever) dequantises with the previous menu's matrix.
+  ISO 13818-2 §6.2.1 makes any number of zero bytes before a start code legal and the vld
+  already walks them — so a shim between `ps_demux` and `vidfeed_cdc` puts **128 zeros**
+  in front of the first byte after the hop's pipe reset. From ANY parser state an all-zero
+  string hits `STATE_ERROR`/`STATE_DCT_ERROR` within a few bits (every VLC table returns
+  length 0 on it) — the SAME natural path that already resyncs 4 landings in 5 — and the
+  hunt then finds the header intact from any byte alignment. **No fried picture, no drop,
+  no re-stream, no duplicate audio, no black frame.** ★ `N ≥ 68` is a MEASURED bound, not
+  taste: a cut INSIDE a 64-entry quantiser-matrix download (`STATE_LD_*_QUANT0`, a
+  counter-driven loop) eats up to 64 zeros as entries first — `run_menu_junction.sh` [J4]:
+  16 zeros fry (62/64), 128 pass. ⛔ Zeros, never `0xFF`: a run of 1s decodes as valid
+  B.14 coefficients forever. ⚠ The spend waits for `pipe_rst_n` to have been LOW since
+  the ack: a byte of the OUTGOING cell can still be presented in the cycle between them,
+  and zeros in front of THAT could fabricate `00 00 01 00` = a picture start code.
+  ★★ **THIS REPLACES "OPTION A" (branch `fix/menu-hop-still-matrix`, HW-confirmed over
+  four rounds, NOT merged, kept unpushed as the fallback).** Reviewed cold, option A had
+  two holes and a footprint: (1) if the parser swallows the landing's PICTURE header too,
+  it resyncs on a slice code (accepted, `sequence_header_seen` is still set from the old
+  cell), `hdr_eaten` never fires, no repair, `await_hdr` sticks; (2) `hop_mark` is a
+  one-cycle pulse on the LAST arm of an if/else chain and is DROPPED on a coincidence
+  with the `PICTURE_HEADER` branch; (3) six modules, ten ports, forty bench tie-offs, a
+  retry budget, a reader watchdog, an audio hold — to repair a picture that need never
+  decode wrong. ★ **The durable lesson: when a defect is "the parser was left in a bad
+  state at a seam", ask whether the STREAM can be made legal at the seam before
+  building detection-and-repair around the decoder.** The 24-byte `S_VID_FLUSH` filler in
+  `ps_demux` had been the precedent all along.
+  MEASURED (`quant_matrix_tb +NOFLUSH`, real vld over NACHO_LIBRE_WS VTSM07 PGC10 cell0 →
+  PGC13 cell0): cut at 5000 B **63/64 wrong** (the eat, reproduced); +128 zeros **0/64**.
+  Gates: **`bench/dvd/run_es_stuff.sh --red`**, `tools/check_es_stuff_wiring.py` (the seam,
+  read out of `emu.sv`; RED on `main`), `run_menu_junction.sh` [J1n]/[J3]/[J4]. ⚠ The
+  T2-only [J1] sweep (8/8 PASS, "FAIL by design") no longer gates. Detail:
+  **`docs/quant_matrix.md` §13q**.
+  ★★ **AND THE SAME ROUND FOUND THE FLUSH JUNCTION FRYING TOO (§13r, build `dev-hopstuff2`
+  = `DVD_hopstuff2_20260916_2120.rbf`, SEED 7 first roll, clk_dec 93.71/89.77;
+  ✅ HW-CONFIRMED 2026-09-16 by the maintainer: Player Mode sharp on the first view, chapter
+  skips and menu entry/exit unregressed):** Harry Potter Interactive's Player Mode screen, a TITLE-domain
+  still reached by a title→title jump = a VBUF flush with NO soft reset (#98 covers
+  crossings only), came up BLOCKY, pre-existing on v0.5.0. Same eat, opposite direction:
+  the still downloads NO matrix and relies on the defaults; every title VOB downloads one
+  peaking at 41 vs the default 83, so an eaten header halves the still's high frequencies.
+  MEASURED on `main`'s RTL with the real `hp_still_i.hex`: **7 of 12 swept flush positions
+  keep the title's matrix; 0 of 12 with 128 zeros** — and ffmpeg decoding the VTS_08 stills
+  behind the title's header reproduces the screenshot (blockiness 1.14 → 3.68). Fix = arm
+  `es_stuff` on EVERY jump/seek ack (`es_stuff_arm = jump_ack | seek_ack`), not only the
+  `keep_vbuf` one; `check_es_stuff_wiring.py` is RED on an arm scoped back to `keep_vbuf`;
+  `run_menu_junction.sh` [J5] is the flush-sweep gate. ★ Lesson: the first cut scoped the
+  stuffer to the case it was written for (the hop) when what it SELECTS is "a junction
+  where the parser is left mid-stream" — the #92/#81 predicate class, caught by a
+  hardware round rather than by asking *what else does this fire on* first.
+  ★ **The diagnostic round that settled it read `chroma_format` beside every garbage
+  frame on the rig: 1 (correct) on all three** — the parameter that sets blocks-per-
+  macroblock was exonerated in one run, which is what turned "re-sync harder" into
+  "reset everything". ⚠ Two harness lessons: a reference-free garbage classifier must
+  test **r(Cb,Cr) and chroma high-frequency energy** (0.98 correct vs 5.0/6.4 garbage —
+  4:2:0 chroma cannot carry that), not r(Cb,Y), which is meaningless when the frame's
+  own luma is wrong; and `seqext_n` climbing was read first as "the story played" and
+  then as "the presses never landed" — a per-GOP counter proves neither, the garbage
+  menu frame itself proved the re-entry happened.
+  ★ **A SECOND, INDEPENDENT BUG fixed with it:** `iquant.v` un-zigzagged the download with
+  the **live** `alternate_scan` (the PREVIOUS picture's), against 13818-2 **7.3.1** (the
+  download is always scan 0) and the module's own header comment. Invisible on a flat
+  matrix; `tools/quant_fixture.py --matrix-probe` reads **58/64 wrong, permutation=1**.
+  **Blast radius MEASURED** (`tools/qmatrix_scan.py`, which reads the default matrices OUT
+  OF `iquant.v`): of 957 images, **820 (86 %)** download a matrix in a menu VOB, **533**
+  differ by >2x, worst 83x; **480** pair a varied download with an `alternate_scan=1`
+  title.
+  **Gates: `bench/dvd/run_quant_matrix.sh --red`** (`+SOFTRST=1` models the soft reset;
+  RED sweep loses 10/12 on the shipped decoder, GREEN recovers 12/12; scores the matrix
+  the hardware ends up holding against the bytes on the disc, never a signal the fix
+  names) and `flush_ctl_tb` row [4] (RED on the pre-fix module). ⚠ The matrix bench
+  passed 12/12 on the build that garbaged the board, so **the title->menu re-entry test
+  on the rig is part of the gate** — run with the PRE-fix core as the control arm, because
+  the fried rate is low (1 onset in 8–9 re-entries) and a clean fix arm alone proves
+  nothing. ⚠ The MiSTer `screenshot` path takes ~1 s, so a target-side burst resolves
+  ~1.2 s, not 0.4. ⏳ Not automated: an issue-#65 narration still must not replay audio —
+  structurally it cannot (the soft reset re-streams nothing; `aud_flush` fires on the same
+  `jump_flush`), a maintainer ear-check closes it.
+  ★★★ **AND A SECOND, INDEPENDENT DEFECT CAME OUT WITH IT — THE ONE THAT ACTUALLY DREW
+  THE POPUP, AND IT IS OLDER THAN #92.** A decoder soft reset asserts `dot_rst`
+  (`reset.v` `comm_rst`), and `mixer` → `mpeg2_osd` → `yuv2rgb` all sat on it while each
+  zeroes its `h_sync`/`v_sync`/`pixel_en` registers — and those three ARE the core's
+  `VGA_HS`/`VGA_VS`/`VGA_DE`. So a soft reset **dropped sync at the pins** for the ~2.4 µs
+  flush level. ⚠ That is exactly what `sw_blank`'s comment forbids (*"RGB ONLY … dropping
+  sync across a raster change is the `re_interlace` S_HUNT defect"*), and the 2026-09-03
+  single-raster fix had moved **`syncgen_intf`** to `dot_hard_rst` for this very class of
+  reason — **it moved the raster GENERATOR but not the pipeline that carries its sync to
+  the pins.** Fix: the sync/DE delay line in those three modules takes a new `hard_rst`
+  port (`dot_hard_rst`); the DATA path and `mixer`'s `pixel_rd_en` handshake stay on
+  `dot_rst` (`pixel_queue` is reset with them), so the picture goes black for a few dots
+  while sync keeps running — a black line is invisible, a dropped sync is not.
+  ★ **Why a popup rather than a flicker:** `hps_io`'s `video_calc` counts active dots off
+  DE and **re-arms its report on ANY change, reporting 15 frames later whether or not the
+  value came back** — so a transient is enough, and Main then names the resolution already
+  on screen. MEASURED in sim: one pulse costs **48 active dots** and disturbs the emitted
+  sync for 136 cycles. Gate: **`bench/dvd/run_sync_integrity.sh --red`** — two identical
+  display chains off ONE syncgen, one taking the reset pulse, requiring bit-identical
+  `{pixel_en,h_sync,v_sync}`; it measures the PINS, never a signal the fix names.
+  ⚠ Its first run passed **vacuously** (every counter 0): `syncgen`'s counters are reset
+  only by `syncgen_rst`, which the core pulses from a modeline write, so leaving it high
+  left them at X. It now refuses to pass without a live raster.
+  ⚠ This defect also affects the MOUNT soft reset and a WATCHDOG expiry — both have had
+  it since August and neither was noticed (a mount changes resolution legitimately; a
+  watchdog expiry is abnormal). ✅ HW-CONFIRMED 2026-09-15 in the same round: a menu
+  entry/exit, which STILL soft-resets, now reports nothing where the shipped core
+  reported once.
+  Detail: **`docs/quant_matrix.md`** (§11 the fix + HW round, §9–§10 the failed attempt).
+  ⚠ **Its `keep_vbuf` claim was too strong and is corrected in place (2026-09-14):** such a
+  hop leaves the VBUF alone but still pulsed `load_flush` AND dropped up to 16 KB the
+  reader had never delivered. That does NOT lose the matrix (measured, 7/7 offsets clean —
+  see the menu-slideshow bullet above), but it was a real defect with its own consequence.
+
+- ✅ **PROGRAM ORDER IS NOT PHYSICAL ORDER — the title span collapsed on 51 of 958
+  library discs, making them completely unseekable (2026-09-13, branch
+  `fix/title-span-max`); sim-proven RED/GREEN, 5/5 mutations each caught by its own
+  arm, and ✅ HW-CONFIRMED 2026-09-13 ON THE REPORTED DISC** (build
+  `DVD_titlespan_20260913_2203.rbf`, SEED 7 first roll, clk_dec 94.32/92.1, 88 % ALM).
+  ★★ **THE NOTCHES WERE SCORED AGAINST THE DISC, NOT AGAINST THE CORE:**
+  `seek_bar`'s own formula applied to the chapter table read straight out of the ISO,
+  compared with the columns measured in a screenshot — **19 notches, total residual
+  1 px over 19**, where the old rule drew none. Bar fill at 0:02:03 of 1:55:54 read
+  **column 5 of 512** (it was a solid 512 block). Forward burst **0:07:16 → 0:08:52**
+  (+87 s) and backward **0:09:24 → 0:08:18** (−75 s), both bounded, playback
+  continuing; **A-B repeat**, which shares the clamp, held **0:09:08–0:09:28 for
+  90 s**. `Debug Overlay=On` reported `CH 1/7` = reader PGCN 1, VTS 7, confirming the
+  board was playing the exact title analysed. Control from the healthy 903
+  (`1NIGHT_MCCOOLS`) unregressed.
+  ⚠ **The +10 px offset between the nominal `X0` and the captured raster is HARNESS
+  GEOMETRY** — fitted, not assumed, and matching the `xoff -9` the harness's HUD
+  decoder reports independently. An unfitted first pass read a constant −10 on 18 of
+  19 notches and looked exactly like a systematic placement error.
+  ✅ **The gamepad HOLD-to-scrub gesture is CONFIRMED (maintainer, 2026-09-14).**
+  ★ It is the one arm the harness STRUCTURALLY cannot reach — `kbd_map.sv`
+  deliberately masks `kbd_joy[14:13]` out of `joy_eff` and routes keyboard FF/REW to
+  `dpad_seek`, so every harness measurement went through `scrub_ctrl`'s JUMP port
+  instead: same `target` clamp, different gesture. ⚠ It also retires the open
+  burst-size question (≈1 harness burst in 3 moved ~+9 s not ~+87 s, attributed to
+  taps falling outside the ~400 ms coalescing window over ssh): a HELD gesture does
+  not coalesce at all, so a clean hold is exactly the control that attribution
+  wanted. Field report on
+  `A_MILLION_WAYS_TO_DIE_IN_THE_WEST` (physical disc AND the decrypted ISO): *"any
+  forward seeking will jump all the way to the end of the movie. The chapter markers
+  are missing and the hud bar is solid gray."*
+  ★★ **THREE SYMPTOMS, ONE WRONG NUMBER, AND THE ASSUMPTION WAS WRITTEN IN THE
+  COMMENT THAT SHIPPED WITH IT.** `dvd_iso_reader.sv`'s cell walk took
+  `title_last_rbn` from the LAST-WRITTEN cell and said why: *"cells are captured in
+  order, so after the walk this is the title's end RBN"*. MEASURED on that disc
+  (VTS_07 PGCN 1, 22 cells, 1:55:54): cells 0..20 run RBN 4..3,359,267 perfectly
+  ascending, and **cell 21 — the LAST PROGRAM — is 4 sectors at RBN 0..3, physically
+  at the FRONT of the VOBS**. So the reader published `first=4, last=3`.
+  Downstream, every module behaving correctly: `scrub_ctrl` `span = (last>first) ? …
+  : 1` → **1**, its clamp pins EVERY target at 3, and `S_RBN_SCAN` resolves RBN 3 to
+  **cell 21 = the last program** ⇒ "jumps to the end"; `seek_bar`'s `dv_delta`
+  saturates ⇒ `fill_px = 512` = a solid bar, with every `tick_col` pushed off the
+  0..511 raster ⇒ no notches. ⚠ The playhead is always above 3, so **backward seeks
+  clamp there too** — "will not tolerate a seek" is exact. ⚠ And `scrub_ctrl`'s jump
+  port shares that clamp, so **D-pad seek (`O[45]`) and A-B repeat are broken by the
+  identical mechanism** — two free HW confirmations.
+  ★★ **SWEPT, NOT GUESSED: 45 discs publish `last <= first` and 6 more a short span
+  = 51/958 (5.3 %)**, classified by coverage as **44 CONTIGUOUS** (one physical run
+  plus a displaced cell — fully repaired), 4 PARTLY SCATTERED and 3 SCATTERED.
+  Dominant shape `first = k, last = k-1`, k measured at 4, 5, 30, 78, 142, 145, 200,
+  248, 373, 430, 690, 32693. Replaying the new rule over all 955 parseable images:
+  **degenerate spans 45 → 0, discs with <99 % of played sectors inside the span
+  51 → 5, and discs made WORSE: 0.**
+  **Fix = `title_last_rbn` is the MAXIMUM `last_sector` over the PGC's cells.**
+  ★ **STRUCTURAL, not merely better:** `max(last) >= cell[0].last >= cell[0].first =
+  title_first_rbn`, so a degenerate span is now **impossible by construction**.
+  ⛔ **`title_first_rbn` stays cell 0's `first_sector` — deliberately NOT
+  `min(first_sector)`, and this is the part most likely to be "tidied" later.**
+  `scrub_ctrl` substitutes it on a backward UNDERFLOW, and on exactly these discs the
+  physical minimum lies INSIDE the displaced trailing cell — the symmetric-looking
+  change jumps to the end from the other direction. Bench arm E is that refusal made
+  executable; mutation M4 turns the minimum back on and must fail arm E and nothing
+  else.
+  ★ **The `cell_wi == 8'd0` seed is load-bearing TWICE and the second was found by
+  the harness, not by design:** without it a title's span leaks into the next PGC
+  (arm F) **and** on the FIRST walk the reader's linear branch has already published
+  `total_blocks-1`, so a bare `max()` keeps the whole IMAGE's last block and the
+  forward clamp stops clamping at all (arm D). The M2 mutation was written expecting
+  F alone and came back "expected [F], got [DF]".
+  **Change 2 (same branch): a `S_RBN_SCAN` miss must not play the LAST cell.** It did
+  (`cell_i <= cell_count - 1`, "clamp to the last cell") — which on an out-of-order
+  PGC **is** "jump to the end", the same symptom by a second route. Now the cell that
+  STARTS nearest below the target, or program cell 0 below every cell (a target under
+  the first cell is a rewind past the start). Reachable only on the 7 scattered discs;
+  `iso_reader_scrub_tb` TEST 4 picks the same cell under both rules and is
+  byte-identical, which is what confines the delta.
+  ★★ **A READER-ONLY BENCH CANNOT CATCH THIS, and that is the reusable lesson.**
+  `title_last_rbn` reaches the reader's OWN behaviour in exactly one place — the
+  `nav_cand > title_last_rbn` bail, which only shortens the VOBU-align probe and then
+  falls back to the raw target — so a bench driving `seek_rbn_pulse` directly
+  (`iso_reader_scrub_tb`) lands identically with and without the fix. The defect lives
+  at the **seam**: reader publishes the span → `scrub_ctrl` clamps → reader lands on
+  the clamped value. Same shape as the A-B `jump_dir` miss: **assert against the
+  CONSUMER's contract, across the seam.** New `bench/dvd/title_span_tb.sv`
+  instantiates BOTH modules over a synthetic disc mirroring the measured shape and
+  measures the LANDING (bytes delivered + the cell they came from), never a signal the
+  fix names. ★ The `SHn` ladder is left at shipping values on purpose — `29 >> 13` and
+  `1 >> 13` both floor to a 1-sector step, so **the clamp is the only variable**.
+  ⚠ Arm D asserts the BYTE only: its target IS the title's final sector, so prefetch
+  has already advanced `cell_i` by the time the byte reaches the output.
+  Gate: **`bench/dvd/run_title_span.sh --red`** — 5 mutations, and the runner requires
+  **EXACTLY** the designed arms to fail (M1→BCDE, M2→DF, M3→BCDEF, M4→E only,
+  M5→G only); a mutation caught by everything says nothing about which arm is
+  load-bearing. `scrub_ctrl_tb` TEST 20 is a **contract arm, not a gate**: it drives
+  the real measured `first=4/last=3` pair and asserts `scrub_ctrl` is CORRECT given a
+  bad span, so a later session fixes the producer instead of loosening the clamp.
+  ⚠ Pre-existing and NOT from this branch: `iso_reader_atmos_tb` and
+  `iso_reader_tpsw_boot_tb` fail **byte-identically** against the pre-change reader
+  (diffed); the other 31 reader tbs, `run_dpad_seek.sh`, `run_scrub_tiers.sh --red`
+  and `run_mode_realign.sh` are all green.
+  ⛔ **NON-GOALS, measured, do not re-derive:** (1) a **sector-based** position-space
+  model is the only thing that fully fixes the 7 scattered discs, but it is **useless
+  for the seamless-branch class** — `ULTIMATE_T2` VTS_01 PGCN 1 is 122 cells
+  **physically MONOTONIC** (so T2 never had this bug) with 35 interleaved, 32 of them
+  over-stating their playtime by 1.3×–4.6×, up to **2,786 sectors/s** against a ~600
+  DVD ceiling; `ALIEN_VS_PREDATOR_SE` the same. A **TIME**-based bar (`C_PBTM` prefix
+  sum, already in `cell_start_mem`/`cellf_secs`, plus DSI `c_eltm`) is the model that
+  would cover both. (2) `cellf_idx = cell_wi[6:0]` is a latent 7-bit alias into
+  `seek_bar`'s `cellf_ram[0:127]` — **measured unreachable**: ZERO discs in the
+  958-image library have a played PGC over 128 cells (histogram tops out in the
+  96..127 bucket, 8 discs). (3) `scrub_ctrl`/`seek_bar` are NOT changed; a defensive
+  span floor there would mask the producer.
+  ★★★ **AND A THIRD DEFECT UNDER THE SAME ROOT CAUSE, IN THE RENDERER, WHICH THE
+  SPAN FIX DID NOT TOUCH:** `seek_bar`'s `tick_col[]` is filled in **program**
+  order but holds **physical** columns, and the renderer walked it with ONE
+  MONOTONIC POINTER (`advance while s0_x > tk_q + 1`) — the declaration even says
+  `// converted notch columns (ascending)`. On BIG_TROUBLE chapter 1 converts to
+  column ~511 and the other 44 to low columns, so the pointer can never get past
+  entry 0 and only chapter 1 ever draws. That is the board's *"only one chapter
+  marker shows up"*, and it is a DIFFERENT mechanism from the span — seeking was
+  already fixed when it was still happening. FIX = a **512-bit column bitmap**:
+  no order to get wrong, ONE cycle to clear (it is a register, not a memory —
+  most of why it is a register), and it deletes the pointer, its read-lag guard
+  and the per-line walk. `tick_col[]` stays for the chapter-skip preview cursor.
+  ★ Gate `seek_bar_tb` **T11** measures what is DRAWN, not what `tick_col` holds:
+  four chapters whose columns are deliberately NOT ascending, asserting all four
+  notches and **exactly 8 lit columns** (which pins the 2 px width too). Proven
+  RED on the pre-fix module — **"drew 2 notch columns"** — and mutation **M9**
+  reproduces the walker's degenerate behaviour in one sed.
+  ✅ **ALL FOUR HW-CONFIRMED 2026-09-14** (build `DVD_titlespan_20260914_0100.rbf`,
+  SEED 7 first roll, clk_dec 94.25/90.11, 90 % ALM; maintainer confirmed seeking and
+  chapter markers on the test discs). On BIG_TROUBLE: notches **2 marks / 44 of 45
+  misplaced / 5116 px residual → 42 marks / 0 misplaced / 6 px**; forward
+  `0:00:42→0:02:19`, backward `0:02:47→0:02:25`; preview clock RED `0:00:00` at
+  t+0.85 s and t+1.45 s, GREEN at the same sample points.
+  ★★ **THE PREVIEW WAS UNMEASURABLE UNTIL THE PRESS AND THE CAPTURES WERE SEQUENCED
+  ON THE TARGET** — it lives ~2 s (400 ms window + 1.5 s linger) while ssh-paced
+  shots land ~5 s apart, so the first attempt sampled AROUND it three times and saw
+  nothing. One ssh session injecting the key then firing four `screenshot` commands
+  with target-side `sleep`s caught it. ⚠ ~1 capture in 4 is not written at 0.6 s
+  spacing; read a missing sample as missing, not as clean.
+  ★★★ **AND A FOURTH, IN THE SEEK PREVIEW CLOCK — same assumption, third module.**
+  Board report after the renderer fix: the preview *"stays at 0:00:00 during
+  seeking, then updates to the correct timestamp when the seek completes"*.
+  ★ **The second half of that sentence IS the diagnosis:** the live clock is
+  `cur_cell_start + dsi_c_eltm` = cell-INDEX based, so it was always right; only
+  the PREVIEW was wrong, which localises it to `seek_time` alone. Its bracketing
+  scan walked cells in INDEX order and stopped at the first `cf_q > tgt` — needing
+  `cellf_ram` to ascend with the index. With cell 0 at the top of the disc the
+  FIRST compare closes the bracket with `lo_ok = 0` and the "before the first cell"
+  path publishes 0. Now it walks every cell, keeps the NEAREST at-or-below, then
+  reads the next PROGRAM's start for the cell's end (`S_HI`/`S_HI2`); ~180 cycles
+  for a 60-cell PGC on an event-rate path. Gate `seek_time_tb` **T11** (RED
+  reproduces `got 000000`), mutations **MB** (restore the early exit) and **MC**
+  (take any cell at/below rather than the nearest — caught by the arm that targets
+  the physically-LAST cell, the only shape where the two differ). Dead `hi_rbn`
+  removed en route.
+  ⚠ Cosmetic residual, predicted before the build and CONFIRMED on the board: the
+  displaced trailing cell sits outside `[first,last]`, so its chapter notch pins to
+  column 0 (chapters 1 and 21 both did on the reported disc).
+  ★★★ **AND THE FIRST CUT WAS INCOMPLETE IN A WAY ONLY THE BOARD COULD SHOW: THE DISC
+  POPULATION IS SYMMETRIC, SO ONE NUMBER CANNOT SERVE IT.** Shipped to the rig, the
+  maintainer reported BIG_TROUBLE_LITTLE_CHINA: *"doesn't have a solid bar, rather it
+  has incorrect chapter markers (only one shows up) and seeking always brings you back
+  to the beginning of the title."* Its `cell[0]` sits at RBN **2,032,273 of
+  2,032,309** with the other 59 cells BELOW it, so `title_first_rbn` landed near the
+  END and the playhead spent the film BELOW the span: `dv_delta` FLOORS to 0 instead
+  of saturating (bar EMPTY, not solid — ⚠ I predicted solid and was wrong), 44 of 45
+  notches pile at column 0, and the LOW clamp fires on every seek. Same degenerate
+  span, opposite direction.
+  | shape | one value as `cell[0].first` | one value as `min(first)` |
+  |---|---|---|
+  | LAST program at RBN 0 (~34 discs) | correct | rewind past the start → **jump to the END** |
+  | FIRST program at the TOP (5 discs) | every seek → **back to the BEGINNING** | correct |
+  **FIX = FOUR numbers, not two:** `title_first/last` = the physical ENVELOPE
+  (min/max — how wide the title is, and what a target may address), plus NEW
+  `title_start_rbn` = `cell[0].first_sector` and `title_end_rbn` =
+  `cell[N-1].last_sector` (where "past the beginning"/"past the end" should LAND).
+  `scrub_ctrl` then stops a gesture that **CROSSES** a program end *from inside*
+  (`cross_lo`/`cross_hi`).
+  ★ **Written as a CROSSING and not a clamp, and that is the whole trick:** the "from
+  inside" test keeps it inert on a disc whose playhead legitimately sits outside
+  `[start,end]` in RBN terms. A plain low clamp cannot tell "you rewound off the front
+  of the film" from "you are simply below cell 0's address", and firing on the second
+  IS the reported bug.
+  ★★ **Safety property, MEASURED not argued: on a well-ordered PGC `start==first` and
+  `end==last`, so both rules reduce EXACTLY to the clamps they replace.** `start`/`end`
+  differ from `first`/`last` on **51 of 955** discs — precisely the affected set — so
+  **904 discs cannot be moved by this change at all**, and the envelope now covers
+  **100 % of played sectors on every disc** (worst 1.0000). `scrub_ctrl_tb` passes
+  UNCHANGED with start/end defaulted equal, which is that claim made executable.
+  ⛔ **The old ⛔ here said "`title_first_rbn` stays cell 0's — do NOT make it the
+  minimum". That argument was sound and the conclusion was still wrong**, because it
+  only ever considered one half of the population. It is now the minimum, and what
+  protects the backward underflow is `cross_lo`, not the choice of that value. The
+  mutation that guarded the old rule (M4) was RETIRED rather than kept: it no longer
+  describes a wrong version of the code, and a mutation like that is noise, not a gate.
+  Detail: **`docs/dvd_nav.md` §2f**, `docs/transport_hud.md`.
+- ✅ **HDMI PASSTHRU LEFT THE ADV7513 IN NON-PCM MODE FOR THE NEXT CORE (2026-09-11,
+  branch `fix/hdmi-audio-teardown`) — sim + host-proven RED/GREEN, mutation-checked
+  both sides, and ✅ HW-CONFIRMED 2026-09-12 with the defect REPRODUCED FIRST** (build
+  `DVD_hdmiteardown_20260912_0320.rbf`, SEED 7 first roll, clk_dec 92.77/88.90).
+  ★★ **MEASURED AT THE CHIP, NOT BY EAR: `i2cget -y 1 0x39 0x12` on the rig** (the
+  ADV7513 is on **i2c bus 1**; `0x20` = PCM, `0xA0` = non-PCM). That turns "no audio on
+  the next core" — which sounds like a listening test needing a receiver — into a
+  one-byte read, and it is what let the RED arm run at all: **the rig's sink does not
+  advertise AC-3/DTS** (`sink_ok=0`), so nothing engages until `dvd_hdmi_bitstream=2`
+  is set in `MiSTer.ini` (restore it afterwards; `mister.py restore` does not).
+  **RED (pre-fix core + pre-fix Main): `0x12=0xA0` with the DVD core, and STILL `0xA0`
+  after loading the menu core** — the report, reproduced. **GREEN, in order:** the
+  stuck `0xA0` **self-healed to `0x20` at core load** (layer 3 — the RED arm left it
+  set, so the arm tested itself); `0x20` at t+3 s and t+6 s with nothing routed, then
+  `0xA0` from t+9 s when AC-3 started (layer 1); **3 chapter skips and 3 audio-track
+  switches produced EXACTLY ONE register write in total** (the reset-domain design,
+  confirmed — count `adv7513:` lines in `/tmp/dvd_hdmi_audio.log`, which records every
+  write and so catches blips a sampler would miss); an LPCM VOB in Passthru read
+  `0x20`; Decode PCM with AC-3 playing never engaged; and **loading another core while
+  engaged read `0x20`, with `teardown: restoring PCM mode` in the log** (layer 2 = the
+  fix). Pacing unregressed: Decode 59.955 Hz / 24.01 fps / audio −12 ppm / 0 lates /
+  0 drops; Passthru 59.953 Hz, 2.505 refreshes per frame.
+  ✅ **THE TWO ARMS THE HARNESS COULD NOT REACH WERE CLOSED BY THE MAINTAINER
+  2026-09-12:** rebooting while a DD track plays restores PCM for the next core (the
+  `reboot()` arm, step 37 — the OSD Reboot row cannot be driven from the harness, and
+  a reboot wipes `/tmp` and the log with it), **and a POWER CUT does not retain the
+  register** — a game core has audio after it. ★ That second one had been written here
+  three times as *"a power cut should clear it, which is the chip's reset value, not
+  anything code here can assert"*; it is now MEASURED, and it is the only layer no
+  code can provide. ✅ **And the accepted trade came back clean: the PCM→DD switch at a
+  title start does NOT clip audibly** (maintainer, 2026-09-12, on a real receiver —
+  this rig's sink has no AC-3/DTS decoder, so nothing here could hear it). That was the
+  one cost the design knowingly took on; it is now paid and measured, so the per-track
+  engage policy stands on its own rather than on the fj#110 precedent.
+  ⚠ **Harness trap seen twice here: telemetry sampled across the launch transient is
+  GARBAGE** (1003 refreshes/s, 65,524 drain-gate closures — counters read across the
+  core's reset). Re-measure on settled playback; a second window read perfectly clean.
+  A short clip is the same trap in reverse — a 41 s window on a 66 s clip starting at
+  t+20 s spans the end of the file and reports the audio rate 15 % low.
+  Field report: *"enable passthru with the
+  modified Main installed, load another core, and you get no audio."* Reproduced in
+  code, and it needed **no disc** — selecting `Audio Out = Passthru` was enough.
+  ★★ **`docs/hdmi_bitstream.md` §2 PREDICTED THIS AND THE PREDICTION WAS FILED UNDER
+  THE ROUTE WE DIDN'T SHIP.** Its case for IEC958-direct was that route (i) *"can
+  only pin the flag high for a whole session, putting us straight back in the regime
+  the fj#110 fix exists to avoid"*. Route (ii) was then deleted after four failed HW
+  rounds and we shipped (i) — inheriting the exact property §2 had rejected it for,
+  with the warning still in the file describing the losing option. ⚠ **When a route
+  is abandoned, re-read what was written AGAINST the one that replaces it**; those
+  paragraphs become a defect list, not history.
+  **Three mechanisms, and only the third is ours alone:** (1) `0x12[7]` is the
+  non-PCM flag and **stock `init_data` has no `0x12` entry at all** — it rewrites
+  `0x0C`, so the *route* reverts while the flag stands, through a core load and
+  through a warm reboot (the HPS resets, the transmitter does not); a power cut
+  should clear it, which is the chip's reset value, not anything code here can
+  assert. (2) Nothing ran on the way out: other cores run **stock Main** via `main=`,
+  and our own re-exec cannot help either — `user_io_init()` hands off to the core's
+  `main=` binary at stock `user_io.cpp:~1484`, **before `video_init()` at 1514**.
+  (3) `want` was `passthru && sink_ok && !pcm_session`, and `pcm_session` reads 0
+  **both** when AC-3 is playing and when nothing is.
+  **Fix in three layers, because no single one survives a crash:** PCM is now the
+  RESTING state (new `aud_route.bs_session` = "a bitstream is what is playing right
+  now", so idle/menus/LPCM/ejected never claim the link); `dvd_hdmi_audio_teardown()`
+  at both orderly exits (integration steps 36/37 — `app_restart()`, which every core
+  load ends in, and `reboot()`); and `0x12` cleared in our own `hdmi_config_init()`
+  (step 38) so an unclean exit is recovered by loading this core again.
+  ★ **`bs_session`'s RESET DOMAIN is the whole design and is NOT `aud_rst_n`** — that
+  pulses on every seek, audio-track switch and `aud_flush`, so a verdict reset there
+  would release the transmitter and re-engage at every chapter skip, and the receiver
+  re-locks each time. It clears on `reset_n` and on an empty slot (`~media_seen`).
+  Without that distinction `bs_session` IS `pcm_session` inverted, which is why the
+  bench's seek arm is the load-bearing one.
+  ★ **Teardown keys on `chip_nonpcm`, NOT on `acked`:** they disagree for 50 ms at
+  every release (ack down, registers not yet restored), and a core load landing in
+  that window is exactly the case `acked` answers wrongly — the one host mutation
+  caught by a single arm.
+  ★ **CMD_AF needed a VERSION BIT (15), not just a data bit:** an old core and a new
+  IDLE one both answer `pcm_session = 0`, so without it Main cannot tell "AC-3 is
+  playing" from "this core cannot say", and either choice silently breaks one of
+  them. Old core ⇒ old rule, unchanged.
+  ⚠ **Found by my own test, not by review:** teardown first left `acked` set with the
+  chip in PCM — harmless at a terminal call site, a trap anywhere else. It now drops
+  the ack first, the same order a release uses.
+  Gates: `bench/dvd/run_passthru_pcm.sh --red` (`aud_route_tb` TEST 6 + 4 mutations)
+  and **`main/tests/run_tests.sh --red`**, which gains a RED arm (4 mutations, host
+  `g++`, no MiSTer/Docker). ⚠ **Residual by construction:** a crash, a panic, or the
+  board's reset button *while a DD/DTS track plays* still leaves the flag set for the
+  next stock-Main boot — recovery is a power cycle or reloading this core. ⚠ Accepted
+  trade: each title start is now one PCM→DD switch (the fj#110 shape) and may clip the
+  first moment of audio. Detail: **`docs/hdmi_bitstream.md` §5a**.
+- ✅ **LOGIC RECLAIM — three branches, ALL MERGED 2026-09-11 (PR #82 AC-3, PR #83 nav/VM/
+  telemetry + `MISTER_DISABLE_ALSA`, PR #84 reader) and ✅ HW-CONFIRMED on the rig.** Together,
+  against the v0.5.0 baseline fit on the same seed: ALUTs 60,642 → **57,465 (−3,177)**,
+  registers 52,238 → 50,497, "ALMs needed" 93 % → 87 %, clk_dec hot corner 89.94 → 96.06.
+  Full record and the unstarted follow-ups (subpicture bitmap 5-px packing for −20 M10K,
+  seek-table sharing, the reader's `sec_lba` mux): **`docs/logic_reclaim.md`**.
+  ⚠ Trap recorded there and in the ledger: consolidating a memory's write sites made Quartus
+  17 stop inferring `ext_mem` as RAM with NO warning (+5,373 registers, no fit) — after any
+  edit near a memory's writes, grep `DVD.map.rpt` for its "Inferred altsyncram" line before
+  spending a fit. Branch A detail (the AC-3 half, originally written as its own bullet):
+  (maintainer's rig: all four MiB AC-3 tracks audible on the capture card, −26 to −42 dBFS;
+  LPCM VOB −52 dBFS; MP2 VCD −44 dBFS at 44.1 kHz; Passthru telemetry steady; video pacing
+  2.4996 refreshes/frame, 48 kHz −51 ppm, 0 lates/drops over 46 s)
+  (build `DVD_almreclaim_20260911_0138.rbf`, SEED 7 first roll, clk_dec 93.66/90.86).
+  Zero value changes: **−2,544 ALUTs** (60,642 → 58,098), "ALMs needed" 93 % → 89 %.
+  ★★ **THE HEADLINE PERCENTAGE WAS LYING IN BOTH DIRECTIONS.** A same-seed fit of
+  v0.5.0 `main` PLACED 40,821 ALMs (97 %) in 4,188/4,191 LABs — its "93 %" was the
+  fitter's dense-packing estimate subtracted from a full device — and the two
+  speculative branches that "hit 98 %" placed only ~400 more; the estimate collapsed and
+  the percentage jumped. **Measure reclaim in synthesis ALUTs (`DVD.map.rpt` per entity)
+  and placed ALMs, never the headline.** Cutting the CD player would have recovered
+  ~300 ALMs; declined.
+  ★ **Where the AC-3 area actually was: not memory (M19 finished that) but Quartus
+  muxing RESULTS across mutually exclusive FSM states, so every inlined function call
+  was its own datapath.** `bit_allocation` had `compute_mask` at five states and
+  `UPDATE_LEAK` at four (2,491 → 1,348 ALUTs with ONE shared path, then a 20-bit width
+  with the range proof in the file); `mantissa_dequant` had `scale_coeff` at 19 sites
+  (1,594 → 1,110); both `bit_reader`s carried 64-bit barrel shifters for a stated
+  40/24-bit bound (−366). The IMDCT operand-mux/butterfly rewrite was worth only −81:
+  Quartus already shared it — but that module swung **+786 ALUTs between two netlists
+  with identical RTL**, a mapping cliff the regular form should remove.
+  ⚠ **`bench/ac3/run_balloc.sh` had been failing silently since M19d** (it modelled
+  delta-BA combinationally after the read became registered; 17 bap mismatches inside
+  the delta-BA bands, vvp exit 0). RTL was right, bench was stale; fixed and `$fatal`ed
+  BEFORE the refactor so it could gate it. Gate at every commit: `run_front_cosim.sh`
+  bap bit-exact on 13 streams **and PCM dumps of blocks 0–5 byte-identical** to a
+  pre-change baseline, plus each unit suite. Detail: `docs/ac3_decoder_architecture.md`
+  §4.12, `DVD.qsf` ledger. Plan for the remaining branches (nav/VM/glue, reader,
+  block-RAM packing) is in the audit record there.
+- ✅ **WAV / CD-DA RAW-PCM PLAYBACK (2026-09-10, branch `feature/wav-audio`) —
+  ✅ HW-CONFIRMED 2026-09-10** (build `DVD_wavaudio_20260910_1900.rbf`, SEED 7,
+  clk_dec 87.61/88.42 at 98% ALM; all seven gates green over the HIL harness).
+  ★ **The two gates worth knowing about:** the 48 kHz rate constant was measured
+  by READING THE TOTAL DURATION of a file of known length — 180.0 s reads
+  `0:02:59`, where the parked branch's reused 44.1 kHz constant would read
+  `0:03:16`; and the Passthru gate measured **−15.3 dBFS flat**, indistinguishable
+  from Decode PCM, **with `Audio=Off` proven to read −999.0 dBFS on the same path**
+  so the control arm could actually fail. ⚠ The whole-capture RMS was MISLEADING
+  there (−36.9 dBFS with the peak unchanged, because the setting landed partway
+  through the capture) — a 0.25 s envelope answers cleanly where an average over a
+  transition does not. `.wav` files (16-bit stereo PCM,
+  44.1/48 kHz) play through a new raw-PCM mode that bypasses `ps_demux` and every
+  codec: `dvd_iso_reader` chunk-walks the RIFF header (`S_WAV_HDR`) and streams the
+  data payload straight into `lpcm_unpack` via a new `cdda_*` port on
+  `dvd_audio_decode`. Screen = the bouncing idle logo, a forced-on HUD status line
+  and the seek bar as a progress bar. ★ **This is deliberately the CORE HALF OF
+  MUSIC-CD SUPPORT shipped first as its own feature**: branch 2
+  (`feature/cdda-physical`, the bullet below) has the Main serve a physical audio CD as
+  ONE GIANT WAV — a synthetic 44-byte header in front of the repacked 2352→2048
+  audio sectors — so the disc reuses this exact probe and needs no new core mode,
+  no `cfg[15]` (the last free config bit stays free), and no `hps_io` mount-word
+  fork. ⚠ **Rode LPCM rather than adding a fifth `aud_type`** — the field is 2-bit
+  with all four codes taken, and raw PCM wants none of the dispatch/PES/PTS
+  machinery; `lpcm_unpack` gained `le` (CD/WAV are little-endian, DVD LPCM is
+  big-endian) + `afull`, and `cdda_mode=0` is bit-identical.
+  ⚠ **Three traps, all now covered by TBs:** the flat-PS **pack hunt** must not arm
+  (`00 00 01 BA` never arrives in PCM, so a seek would eat the rest of the file);
+  `S_INIT` had to stop skipping the byte-0 probe under 17 blocks (a tiny `.wav` is
+  legal where a tiny ISO is not); and a seek must resume on an **L/R-PAIR-ALIGNED**
+  byte (`bpos ≡ wav_doff mod 4`) or the channels swap for the rest of playback —
+  the `listchunk` fixture has `data_off=90` (≡2 mod 4) precisely so the naive
+  block-boundary answer fails there. ⚠ **The payload END needed two guards, both
+  RED-proven:** a STREAMING writer's `cksize = 0xFFFFFFFF` wrapped a 32-bit end
+  computation to ~40 (**file played nothing**), and a TRUNCATED file's over-claiming
+  chunk ran past EOF into the block padding (**852 bytes of 0xEE emitted as audio**);
+  `wav_dend` is 35-bit, EOF-clamped, then pair-truncated. Unsupported shapes
+  (mono/24-bit/float/96 k) raise `UNSUPPORTED IMAGE` **immediately** — the header
+  states the format, and the 20 s patience window can never advance for a source
+  that delivers no picture anyway.
+  ★★ **THE REBASE ONTO POST-v0.5.0 `main` DELETED CODE RATHER THAN MERGING IT, and
+  that is the durable part.** The branch had been parked since 2026-09-02 and `main`
+  had meanwhile grown **`dvd/lin_rate.sv`** — one time model shared by every linear
+  source, with an EXACT combinational bypass for raw CD and a measured-PTS path for
+  flat files. CD-DA is the same shape as the raw-CD arm (a fixed geometry), so the
+  branch's own `dvd/cdda_time.sv` was **retired** and CD-DA became a second
+  fixed-rate arm of that bypass. Three things fell out for free: the HUD clock, the
+  **seek-preview** clock, and a **48 kHz D-pad step that is now exact** (the branch
+  had reused the 44.1 kHz constant 861 for both, ~8.6% short at 48 kHz, and had
+  shipped that as a documented limitation). ⚠ **The bypass is not an optimisation —
+  it is required:** a PCM source carries NO PTS, so `lin_rate`'s measurement path can
+  never arm on it, and a measured-rate gate would leave the D-pad inert and the clock
+  at 0:00:00 on every `.wav` and every audio CD.
+  ⚠⚠ **AND THE PASSTHRU INTERACTION IS THE OPPOSITE OF THE OLD ONE (PR #79).**
+  Passthru is no longer bitstream-only: `aud_route` classifies each RING frame and
+  sends LPCM/MP2 to the decoder as PCM. CD-DA/WAV never enters the ring at all, so
+  `rt_pcm_session` would sit at its reset value 0 all session and
+  `pcm_mute = (pass_mode & ~rt_pcm_session)` would **mute a `.wav` outright in
+  Passthru**. `pass_mode` is therefore forced off in `cdda_mode` — which also makes
+  `af_passthru` tell Main to put the ADV7513 in PCM mode, and drops `SPDIF_PASS_EN`
+  and `HDMI_BS_EN` so both legs carry ordinary PCM. Same user-visible outcome PR #79
+  gives an LPCM track; **HW gate: play a `.wav` with `Audio Out = Passthru`.**
+  ✅ ~~bin/cue images REJECTED~~ — **reversed 2026-09-25**: `.cue` sheets are parsed by
+  the Main (see the `.cue` bullet at the top of this list). ⛔ CHD is still unsupported.
+  Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`; design **`docs/cdda.md`**.
+
+- 🔧 **PHYSICAL AUDIO CDs (2026-09-10, branch `feature/cdda-physical`) — a music CD
+  inserted while the core is running PLAYS on the board, and ✅ TRACK SKIP IS
+  HW-PROVEN** (build `DVD_cddaphys_20260910_2242.rbf`, SEED 9, clk_dec 90.72/88.04):
+  auto-mount at exactly `44 + 190430x2352` bytes, `CH 1/ 4`, next-track, and BOTH
+  arms of the prev resolver — restart-current above ~3 s, previous-track below it.
+  ⏳ **One gate still open: next on the LAST track** — the drive dropped its disc
+  again and escalated to `usb 1-1.1: reset high-speed USB device number 9`, which is
+  the host re-enumerating the device, not a refused command; the same fault
+  reproduced earlier with the MENU core loaded, so NOT our code. Suspect power.
+  ⛔ Reading past the lead-out was CHECKED and is not the cause: `dvd_cdda_read()`
+  refuses `b0 >= size`, clamps `b1 > size`, and clamps every burst to the track edge.
+  ⚠⚠ **THAT GATE CANNOT BE DRIVEN OVER SSH AND THE REASON GENERALISES: the harness's
+  own latency is part of the instrument.** Each `mister.py key` is a fresh ssh round
+  trip (~1-2 s), so two presses land 2-4 s apart — OUTSIDE the 3 s `RESTART_BLK`
+  window being tested, so both restart and the previous-track arm can never fire.
+  Measured: ssh-paced presses stayed on track 2 twice; the identical pair driven ON
+  the target (`echo "keys 104" > /tmp/mister_hil; sleep 1.2; ...`) reached track 1
+  first try. An ssh-paced test of a 3 s rule is a bench that cannot fail, and it
+  reads as "the feature is broken".
+  ★ **And the drive fault presented as MISSING SCREENSHOTS, which reads like a core
+  hang:** `shot` failed while `state` still answered — Main alive but blocked in the
+  `sr` retry loop, so `user_io_poll()` never serviced `/dev/MiSTer_cmd`. The
+  documented blocking-I/O coupling, arriving through a new symptom. ⚠ "Is the picture
+  frozen or is the machine frozen" does NOT separate these; ask whether Main's own
+  command FIFO is being serviced.
+  ★★ **THE WHOLE FEATURE NEEDED NO NEW CORE MODE AND NO NEW INTEGRATION STEP.** The
+  Main serves the disc as **ONE GIANT WAV** — a synthetic 44-byte canonical RIFF
+  header in front of the audio sectors repacked 2352→2048 — so the core reuses the
+  `riff_wave` probe branch 1 already shipped. `cfg[15]` stays free, `hps_io` is
+  unforked, and `apply_integration.py` is **untouched**: `dvd_css.cpp` grew a
+  two-source front (`SRC_NONE / SRC_CSS / SRC_CDDA`) behind the six functions
+  `user_io.cpp` already calls.
+  ⛔ **REUSE `DVD_PHYS_SENTINEL` — do NOT invent a second sentinel string.**
+  `dvd_phys_note_mount()` special-cases exactly one string; any *other* mount path is
+  read as a **foreign** mount and clears `mounted`, which would silently disable
+  physical playback altogether. `dvd_css_open()` decides DVD-vs-CD internally.
+  ⚠ **Keep `find_dvd_device()` off the CD-DA path** — it sets `css_size` from
+  `BLKGETSIZE64` as a SIDE EFFECT of scanning, which is the raw device size, not our
+  synthetic `44 + n×2352`, and the core's WAV EOF clamp is load-bearing on the
+  reported size being exact. `find_audio_cd()` returns an open fd and touches nothing.
+  ★ **A failed read is already silence, for free:** `user_io` zero-fills the window
+  when the hook returns ≤0, so a scratched sector plays as a dropout rather than
+  stalling — correct CD behaviour, no code. ★ And the drive speed is **capped**
+  (`CDROM_SELECT_SPEED`, 4×): CD-DA needs 172 KB/s and an uncapped drive spins to 48×
+  and screams through a music disc.
+  ⚠ **`dvd_report` regression, guarded:** `find_source()` couples `dvd_css_active()`
+  with `dvd_phys_device()` and then reads 2048-byte ISO sectors off `/dev/srN` — on a
+  CD-DA mount both answer truthfully and the support-bundle chord would produce a
+  BROKEN bundle instead of its "nothing to bundle" diagnostic. New `dvd_css_is_cdda()`
+  gates it.
+  **Detection** is `cd_audio_probe(int fd)` in `dvd_detect.cpp` — TOC-only, no disc
+  read, and deliberately BROADER than stock's "the TOC contains no data track": ours
+  is "**has ≥1 audio track**", so an enhanced/mixed-mode disc plays its audio tracks,
+  which is what real players did. The cheap probe sits in the once-per-insertion latch;
+  the full TOC read happens in the MOUNT path, which already expects to block.
+  **Tracks** ride the generic ioctl-download channel into new `dvd/cdda_toc.sv`
+  (tracks-as-chapters via the existing `seek_rbn`; the HUD reads **`TR n/N`**, not
+  `CH`, via `transport_hud.trk_mode`). Track-relative time was FREE, because
+  `lin_rate`'s measurement path is bypassed in cdda mode, so muxing its
+  `lin_blk`/`total_blk` inputs to `(lin_blk − track_start)` cannot corrupt a rate
+  estimate: two subtracts and two muxes, no new arithmetic.
+  🔧 **FOLLOW-UP BUILD `dev-cddaphys2` (2026-09-10) — sim-green + mutation-checked,
+  ⏳ HW-untested.** Five user requests; detail `docs/cdda.md` "Follow-up".
+  ★ **The progress bar is PER-TRACK and FF/REW stop at the track edges** (REVERSING
+  the first build's whole-disc bar). ONE substitution gives both edge rules:
+  `scrub_ctrl`'s clamp takes `[cur_start, cur_end]`, so REW stops at the track start
+  and FF saturates at `cur_end` — which IS the next track's first block, so "FF to the
+  end skips to the next track" needed no logic. REW at a track start deliberately does
+  NOT step back (user decision). ⚠ A TRACK SKIP must not see that span
+  (previous-track targets a block before `cur_start`): `cdda_skip_win` holds the disc
+  span for the cycles `scrub_ctrl` resolves a jump in.
+  ⚠ **The disc-bar notches NEVER rendered on hardware:** `seek_bar` rebuilds its tick
+  list only on a `pgc_loaded` RISE, which a CD never produces — and the stale list a
+  DVD leaves behind would have drawn the DVD's notches on the CD bar. Notches are gone
+  (`cdda_toc`'s replay deleted) and new `seek_bar.ticks_off` gates notches AND the
+  chapter cursor.
+  ★ **AUDIO VISUALIZER — `dvd/cdda_viz.sv`, reached with Angle** (dead on a CD, since
+  the angle switch needs `cell_ready`): the bouncing **logo is the DEFAULT** and Angle
+  opts INTO **copper bars**; also on `.wav`. **The budget IS the design:** no
+  framebuffer; copper is solved per LINE serially (one comparator, four clocks, held
+  for the line) and its three bar positions per FRAME, shift-adds only, no DSP. Shares
+  `idle_logo`'s overlay slot (same 3-stage latency and lead). ⛔ Lissajous not built:
+  it needs a bitplane.
+  ★ **The oscillator is a TRIANGLE, not a sine (2026-09-12, user decision — the bars
+  bounce linearly instead of easing at the ends), and that DELETED the 64-entry
+  quarter-wave LUT outright:** the mirror already existed for the sine, so the
+  magnitude collapsed to `{sq_i, 1'b0}`, which is a wire rather than logic. Three
+  bars, not five. Both changes were asked for as area savings and both are; the LUT
+  was the larger of the two.
+  ⛔ **THE SCOPE WAS BUILT AND THEN DROPPED (2026-09-11, user decision — be
+  conservative with logic).** It was a two-trace oscilloscope, L above R, triggered on
+  L's rising zero crossing, storing precomputed screen ROWS (360 × 20 bits) rather than
+  samples so the display path only compared. It worked. **What it cost was MEASURED,
+  not estimated:** synthesising `cdda_viz` alone with `mode` tied to each constant (so
+  Quartus prunes the other arms) gives copper ~120, scope ~105, xor ~60 ALMs — and the
+  scope additionally owned **one whole M10K**. With RAM at 90 % and the design in the
+  congestion regime, that memory block was the expensive half.
+  ⛔ **AND THE XOR PATTERN WENT TOO (2026-09-12, same reason): ~60 ALMs on its own,
+  but it was the ONLY per-PIXEL consumer**, so dropping it also retired the
+  `a_xv`/`a_yv`/`b_m` coordinate pipeline and the `sx`/`sy`/`tc` scroll registers —
+  copper's colour is a per-LINE register, so nothing rides the pipeline now and its
+  two stages exist purely to match `idle_logo`'s 3-cycle latency.
+  ⚠ **The cycle is now TWO stops, and the LOGO is mode 0 = the default** (`viz_mode`
+  wraps at 1). `viz_mode` is still 2 bits because emu passes it straight through, so
+  it MUST be wrapped explicitly: letting the counter roll on its width leaves dead
+  modes in the cycle and Angle lands on a blank screen, which reads as the player
+  having hung. `cdda_screen_tb` `[3b]` is RED-proven against exactly that mutation.
+  ★★ **AND THE FIRST HONEST COST FOR THE WHOLE CD FEATURE, measured on the reclaimed
+  netlist (`dev-cddaphys5`, SEED 9 first roll, clk_dec 96.51/91.70 at 89 % ALM):
+  +1,046 synthesis ALUTs / +659 ALMs / +1 M10K** over main's reclaim fit — `cdda_viz`
+  414, `cdda_toc` 281, `cdda_screen` 5, ~346 for the reader's WAV walk and glue
+  (`lin_rate` and `lpcm_unpack` are NOT CD-only and are excluded). ⚠ **The reclaim
+  audit's "cutting the CD player would have recovered ~300 ALMs" was HALF the true
+  figure and should not be quoted** — it predates the visualizers, and `cdda_viz` alone is
+  414. Every earlier CD fit sat at 98–99 % ALM, where packing variance swamped the
+  signal; this is the first uncongested one.
+  ★ **Gate `bench/dvd/cdda_viz_tb.sv` checks RENDERED PIXELS** — full coverage, one
+  colour per line, bar cores that MOVE between frames, and **exactly three bars**.
+  ⚠ **That bar count is runs of the 3-line WHITE CORE, MAXIMISED over six frames, and
+  both halves were learned by getting it wrong:** 31-line bar BODIES overlap, so two
+  adjacent bars merge and a body-run count reads 2; and with a TRIANGLE two bars can
+  land on the same row outright at particular phases. A single-frame exact count is
+  therefore flaky by construction — the max over several phases is stable and still
+  fails if the bar count changes.
+  ⛔ **EJECTING A DISC DID NOT RETURN THE CORE TO IDLE (2026-09-12, user report), and
+  MAIN WAS NOT AT FAULT** — its own log shows the eject detected, the slot unmounted
+  and `status[0]` pulsed, which is exactly what that instrumentation exists to settle.
+  `dvd_iso_reader` cleared `cdda_mode` ONLY in its `start` branch, and issue #48 gates
+  `start_streaming` on a non-zero `img_size`; **an eject arrives as a ZERO-SIZE
+  mount**, so `start` never fired — and the bit was not in the reset branch either
+  (`iso_mode` was; `cdda_mode`/`raw_mode` were the odd ones out). `emu.sv`'s
+  `logo_vis` then kept taking its CD arm, which ignores `media_seen`, so the screen
+  stayed on the visualizer and the reset looked inert. Fixed at BOTH ends: the reader
+  resets `cdda_mode`/`raw_mode`/`wav_bad`, and the screen arm is gated on `media_seen`
+  (`cd_screen`) so a stale mode can never strand the display on its own. Gate:
+  `wav_probe_tb` **TEST 8**, RED-proven (pre-fix reader reports `cdda=1` surviving the
+  reset) and carrying a precondition so it cannot pass vacuously.
+  ⚠ **Making the logo the default would have MASKED this** — `viz_logo` is 1 after a
+  reset, so the screen looks right while `cdda_mode` stays high and every other
+  consumer of it (HUD `force_show`, `ticks_off`, the transport's CD arms, `pass_mode`
+  suppression) remains wrongly in CD mode. Fix the bit, not the symptom. ⚠ **The retired scope arm left a lesson worth more
+  than the feature:** its "continuity" check first counted lit COLUMNS, which a dotted
+  plot also lights, so it passed a plot that drew dots instead of a line; counting
+  PIXELS (~4,700 continuous vs ~720 dotted) is what made it able to fail. Suite:
+  `run_wav.sh` (also runs `cdda_toc_tb`).
+  🔧 **`dev-cddaphys3`:** the FF/REW seek preview showed DISC time — `lin_rate`'s
+  `lin_blk`/`total_blk` were re-based to the track but its `prev_rbn` sibling was not
+  (D-pad previews were fine: `seek_time` reads the already track-relative clock). And
+  the HUD (status line + bar) is hidden over a visualizer, shown over the logo, Display
+  toggles — new `dvd/cdda_screen.sv` + bench; the HUD's own Display toggle is gated off
+  on a CD so there is ONE copy of that state. ⏳ HW-untested.
+  🔧 **`dev-cddaphys4`: track skips STACK** (user report — N quick presses moved ONE
+  track). emu's debounce already counted presses into `chap_mag`; `cdda_toc` simply
+  never took it. It now resolves "N tracks" to an INDEX and captures that entry as the
+  single-port table walk passes it (≤ two sweeps), with the restart-counts-as-one rule;
+  the HUD projection counts tracks and reads `cdda_toc.past_start`, so preview and
+  resolver share ONE rule. DVD bit-identical. `cdda_toc_tb` [7]. ⏳ HW-untested.
+  ★★ **`cdda_toc` DID NOT FIT ON ITS FIRST WRITE, AND IT IS THE `parse_buf` LESSON
+  VERBATIM.** Async-read of the track-start array at **5 sites** → 3733 ALUTs / 3463
+  regs / **0 block memory bits**, and the fitter wanted 4558 LABs against 4191 — the
+  LUT-RAM explosion this file has documented since 2026-07-05, walked into anyway.
+  Rewritten around **ONE synchronous read port** with a 3-deep pipeline
+  (`rd`/`rd_p`/`rd_pp`, address history `ra_q`): **214 ALUTs**. ⚠ The off-by-one that
+  fell out of it: `first_pass` must clear on **`ra_q`**, not `ra`, or the last track's
+  notch is dropped — caught by the bench.
+  ★ **The bench found a real never-garbage defect:** entry RAM was written as bytes
+  ARRIVED, so a malformed upload corrupted track starts while `toc_valid` stayed set
+  from the previous good table. The table is invalidated at DOWNLOAD START (the
+  `idle_logo` rule).
+  ⚠⚠ **FOUR separate `bench-that-cannot-fail` instances in ONE bench**, all found and
+  fixed by mutation: (a) malformed uploads carrying identical payload, so "unchanged"
+  was indistinguishable from "changed to the same value"; (b) a "truncated" blob whose
+  length was exactly valid for its own declared track count; (c) scenarios that ran
+  AFTER an earlier one had invalidated the table; (d) a one-cycle `skip_fire` pulse
+  sampled 4 cycles late. Gate: `bench/dvd/cdda_toc_tb.sv`, golden
+  `tools/cdda_toc_ref.py`, host-side `main/tests/dvd_cdda_test.cpp` (the 2048/2352
+  phase cycle repeats every **128 sectors / 147 blocks** — gcd 16 — and the mapping is
+  pure arithmetic, so it needed no `#define` seam).
+  ★ **Step 0 was an SG_IO smoke test on the board** (`main/tools/cdda_smoke.c`) and it
+  earned its place: whether the drive honours **`READ CD` (0xBE)** audio reads was the
+  only real unknown. `cdb[1]=0x04` (expected sector type CD-DA), `cdb[9]=0x10` (user
+  data only ⇒ exactly 2352 B/sector of raw PCM, little-endian, **no byte swap** — that
+  is a CHD thing); `CDROMREADRAW` (MSF, `lba+150`) is the fallback.
+  ⚠ **`CH 0/ 0` on the HUD looked like a bug and was not** — `Debug Overlay=On`
+  repurposes that field as `{PGCN, VTS}`. Check the saved config before "fixing" a
+  readout.
+  ★ **The fork CAN hand a CD to us**: `menu_audio_mgl()` in
+  Main_MiSTer_Physical_Disc maps `[physical_disc] AUDIOCD=` onto a core MGL and needs
+  only a one-line `DVD → "DVD.mgl"` arm; the DVD handoff already releases the drive
+  before `xml_load`, so our `dvd_phys_tick()` claims it. Not a blocker for a disc
+  inserted while we are already running.
+  Design **`docs/cdda.md`**; manual `site/content/formats/physical-discs.md`.
+
+- 🔧 **SINGLE-RASTER ANALOG OUTPUT — the second raster (`re_interlace`/VGA2) is
+  RETIRED; the interlaced MAIN raster carries the N64 half-line and drives the CRT
+  directly (2026-09-03, branch `feature/single-raster-analog`). ✅ HW-CONFIRMED on the
+  maintainer's rig: HDMI and the composite CRT both clean, no jumpy image, steady
+  `720x480i @ 59.9` (build `DVD_n64model_20260903_0148.rbf`, SEED 5, clk_dec 93.01/88.94).
+  Design + post-mortem: `docs/single_raster_analog.md`.**
+  ★★ **THE DEFECT USERS REPORTED WAS THE FIELD-PARITY CORRECTOR (PR #37), NOT SYNC.**
+  MEASURED from screenshots by splitting each woven frame into its two fields and
+  correlating: with the corrector on, consecutive fields carry the SAME source lines
+  (offset **+0.00** frame lines; a correct interlaced still measures **+0.50**) — weave
+  combs on a STILL and bob jumps a field line, on HDMI and the CRT alike. v0.3.0
+  `Analog Out = Native Fields` (same authored-fields content path, no corrector) measures
+  +0.50 and is clean. This branch tied `par_ins` 0; the corrector is now ✅ **REPAIRED,
+  re-enabled and HW-CONFIRMED** — see the field-parity bullet below and
+  `docs/field_parity.md`.
+  ★ **FIVE HW ROUNDS WERE SPENT ON THE WRONG LAYER; the rules that earns are in
+  `docs/single_raster_analog.md` §3.9 and worth reading before the next hunt:** (1) when
+  a build changes X and the symptom persists, X is EXONERATED — round 4 had no half-line
+  on the main raster and still combed, and that disproof sat unused for two more rounds;
+  (2) the user's "does the old build do this?" A/B outranks any amount of RTL reading;
+  (3) measure the artefact (the screenshot correlation took minutes and no hypothesis
+  survived it). ⚠ **`bench/dvd/field_parity_tb.sv` COULD NOT SEE the defect**: its
+  behavioural framestore returns a CONSTANT word (no displayed pixel carries evidence of
+  which source line it came from) and its pass condition is the SAME EXPRESSION as the
+  RTL's `frame_top_par_err` — a golden model that agrees with its RTL by construction
+  (the POST-only PGC trap again). Replacement: `field_phase_tb` (LINE-STAMPED
+  framestore, per-field measurement of what the mixer EMITTED, consecutive fields must
+  differ and repeat with period 2). ★ **And the perturbation that finally exposed the
+  corrector was the MUNDANE one:** every scenario written from the field reports (seeks,
+  cold start, cadence breaks) passed with it on — the defect only appeared once the bench
+  STARVED the pixel queue, which is what this compute-bound core does several times a
+  second on real content. When a bench exonerates the code the hardware indicts, ask what
+  the hardware does all the time that the bench never does.
+  ★ **The raster is the N64 model, on ONE raster** — halfline 429/432 in the interlaced
+  modeline, doubled 2x (not 2x+1) by `syncgen_intf` to 858/864 = exactly half the line,
+  with the 262/263 alternation ⇒ vsync exactly 262.5 lines apart EVERY field, so Main
+  reports a steady 59.94 and a CRT interleaves. This is what N64_MiSTer and PSX_MiSTer
+  put on their single raster (and `syncgen.v`'s model was copied from N64's
+  `VI_videoout_sync.vhd`). ⚠ Rounds 3–5 briefly wrote halfline 0 and synthesised the
+  half-line in `sys_top`'s `csync` instead — both detours REVERTED; `csync` is stock.
+  ⚠ 2H serrations were also tried (they equalise the two fields' broad pulses, 27/27 µs
+  vs 50/18 µs — the measured shape behind the RetroTINK "vsync length toggling" report)
+  and REVERTED: the composite CRT was worse with them. ⛔ **THAT VERDICT IS NOW KNOWN TO
+  BE CONFOUNDED** (2026-09-05): the A/B ran while the field-parity corrector was
+  defective, and the 2H code was deleted in the same commit that disabled it. Superseded
+  by `P1O[47:46] Analog CSync` — see the SMPTE composite-sync bullet below and
+  `docs/single_raster_analog.md` §3.10.
+  Deleted with the second raster: `dvd/re_interlace.sv` (~10 M10K line buffer + a second
+  `sync_gen` + a lock FSM that emitted NO sync at all while hunting), the `sys_top.v`
+  VGA2 block, `re_interlace_tb`. Line-21 CC moved into **`dvd/cc_vbi.sv`** on the main
+  raster's VBI (the `sys_top` VGA scanlines DE gate dropped — it killed the waveform once
+  on VGA2; emu's output stage now blanks outside DE itself). ⏳ CC is sim-proven only on
+  this path — HW gate.
+  ★ **Also fixed en route (all mechanically real, from the field reports):** (1)
+  `syncgen_intf`'s modeline copies were on `dot_rst`, which the WATCHDOG and mount soft
+  reset pulse — `sync_reg` zeroes them async, so the running `sync_gen` saw
+  `horizontal_length=0/interlaced=0` for a few dots and RE-PHASED (~1.2 s cadence at
+  81 MHz); now on `dot_hard_rst` like the regfile (`modeline_boot_tb` [4]: RED 3/6 field
+  pairs broken with the old wiring, GREEN 0/6). (2) `pal_eff` was live off the decoded
+  `vertical_size` (0 after any reset ⇒ a PAL disc read NTSC ⇒ double walk) — held now.
+  (3) `analog_want` was COMBINATIONAL off Main's live cfg word while its comment claimed
+  a latch (Main re-sends cfg on every `video_mode_adjust`/OSD leave/`[video=]` re-parse ⇒
+  a changed bit = a full `il_switch` mid-play, the likeliest "toggle = crash") — latched
+  via new `hps_io.cfg_seen`, follows while nothing is mounted, frozen while a disc plays.
+  (4) Progressive + analog-direct wrote the 875×1287 @ 23.976 Hz film modeline to the
+  pins — `filmp_eff` also gated on `~analog_want` (HDMI-only rigs keep Film 24p); that is
+  the reported "Progressive loses signal when playback starts". (5) Idle window
+  off-by-ones (VER_RES 479→480, H 1441→1440 via the 2x doubling) — idle now reports
+  `720x480i`, no load-time resolution popup (which itself made Main re-send cfg).
+  (6) `CE_PIXEL` = one clock per pixrep pair in Interlaced (Main reports **720x480i**,
+  ascal samples 720 real pixels; the analog waveform is bit-identical since the DAC never
+  used the enable) — native 13.5 MHz dot pacing was NOT done (every overlay query-lead
+  constant assumes one dot per clock). (7) idle_logo moves every FIELD in Interlaced
+  (was half speed). `O[2]` gained a third-row trigger readout (watchdog / il_switch /
+  pal edge / vsize 0 / cfg re-write) visible whenever Interlaced.
+  ★ **HW round 6 sweep (all ✅):** line-21 CC on the new `cc_vbi` path, overlays /
+  subtitles / menus / HUD on the analog output, sub-720 fill (VCD/SVCD/MPEG-1), Analog
+  Aspect Letterbox+Crop, PAL content, steady `720x480i @ 59.9`. Two findings: (a) the
+  `~analog_want` film gate was over-blunt — it removed the only way to watch 24p over
+  HDMI with the CRT off, and it never bit anything else (Auto already resolves such a rig
+  to Interlaced), so it now applies to the AUTO verdict only and `Film 24p Out = On`
+  overrides it; (b) ⚠ **a mid-title `Video Output` change can FREEZE the decoder**
+  (malformed frame, never self-recovers, a chapter seek clears it, either direction,
+  intermittent) — **PRE-EXISTING: v0.3.0 does the same on an `Analog Out` change**, so it
+  is NOT from this branch. ⚠ **First seen on PAL and recorded here as PAL-only; that was
+  WRONG — it reproduces on NTSC (2026-09-03), which is what disproved the `pal_eff`-only
+  hypothesis and pointed at the standard-neutral cause.** Now **🔧 FIXED (issue #42,
+  branch `fix/mode-switch-realign`), ✅ HW-CONFIRMED 2026-09-03** — see the
+  mode-switch re-align bullet below and `docs/single_raster_analog.md` §6.
+  (Marker corrected 2026-09-04: this still read "⏳ HW-confirm pending" after the
+  bullet below had already recorded the hardware confirmation.)
+  ⏳ Not gated: `direct_video=1` through an HDMI DAC, and the parity coin flip (the
+  maintainer's late-model CRT has never shown it — the two Discord reporters' older sets
+  do, so the corrector fix leans on `field_phase_tb`). The analog SYNC MODES (RGB SCART,
+  YPbPr, sync-on-green, 15 kHz RGBHV) have since been exercised by the maintainer on a
+  RetroTINK.
+  ✅ **PAL ON AN ANALOG CRT IS HW-CONFIRMED (2026-09-12, multiple user reports).** That
+  closes TWO open items at once, and the second is the less obvious one: the 576i raster
+  numbers (sim-derived since PR fj#146) AND the **field order**, which had only ever been
+  measured on NTSC and applied to 625 lines by analogy — see
+  `docs/single_raster_analog.md` §3.12, whose "untested rather than known-good" warning is
+  now answered. The per-standard `pal ? … : …` contingency recorded there was NOT needed.
+- ✅ **SMPTE 170M / BT.470 ANALOG COMPOSITE SYNC — we were emitting no equalizing pulses
+  at all (2026-09-05, PR #64); sim-proven RED/GREEN and ✅
+  HW-CONFIRMED 2026-09-07** (maintainer's rig: composite CRT and HDMI both correct with
+  nothing to set, build `DVD_smptesync4_20260907_2305.rbf`, SEED 5 first roll, clk_dec
+  93.45/91.35). ⏳ **The two reporters whose sets FOUND the defect have not retested** —
+  that is what the next release is for, and their sets are the ones that matter here,
+  since the maintainer's CRT never showed the original sawtooth.
+  Field reports that started it: a PAL Sony Trinitron on RGB SCART with *"jitter + sawtooth
+  edges"* that flicking aspect ratios no longer clears, and a RetroTINK 4K user reporting
+  *"the fields are out of order by default"*. The maintainer's CRT was clean on the same
+  builds.
+  ★★ **THE STANDARD SPECIFIES A NINE-LINE BLOCK AND WE SHIPPED A THIRD OF IT.** SMPTE
+  170M §13.3 / Table 3 / Fig 7 (525-line) and ITU-R BT.470-6 Table 2 (625-line): 3 lines
+  of pre-equalizing pulses, 3 lines of vertical sync serrated at **2H**, 3 lines of
+  post-equalizing (PAL: 2.5 lines each). Stock MiSTer `csync` emits **no equalizing
+  pulses and serrates at 1H**. MEASURED consequence (`csync_field_tb`, NTSC): the two
+  fields' first wide pulses are **1347 vs 489 clk27 = 49.9 µs vs 18.1 µs**, so a 20 µs
+  width detector MISSES field B's and locks a line late — trigger spacings
+  **449837 / 451063** instead of 450450/450450 (11 per-field errors), RC integrator
+  450172 / 450728 (10 out of tolerance). With the block: **450450 / 450450, zero errors on
+  both models**, both fields' broad pulse 731 clk27 (27.07 µs).
+  ★★ **AND THE TABLE THAT SETTLES THE 2H QUESTION — the RC integrator's field-to-field
+  trigger error, which is the mechanism an analog CRT actually uses: Stock ±278 clk
+  (0.16 line, 10 out of tolerance) → 2H ±34 clk (0.020 line) → SMPTE 0 (NTSC) / ±2 clk
+  (PAL). The equalizing pulses buy a further ~17× over 2H alone and take NTSC to exact.**
+  Nobody had that number when 2H was built and reverted: the argument then was "2H fixes
+  the width asymmetry", which it does, and whether the REST of the block was worth having
+  was never asked because it was believed impossible to build.
+  ★★ **THE RECORDED BLOCKER WAS TRUE OF ONE MODULE AND FALSE OF THE CORE.**
+  `sys/sys_top.v` said equalizing pulses *"would need advance knowledge of vsync"* — true
+  of a module that derives sync from a FINISHED hsync/vsync pair, which structurally
+  cannot place a pulse before vsync starts. `v_pos` carries the raster's line index and
+  field parity a field ahead. **The sync was being assembled in the wrong place, not
+  withheld for a good reason.** New `dvd/csync_smpte.sv` builds it from the core's own
+  raster; `dvd/emu.sv` exports `VGA_CS`/`VGA_CS_EN`; `sys/sys_top.v` delays by `CS_PIPE`
+  and muxes. **`module csync` is NOT edited** and is CHECKSUMMED by the bench — "Stock is
+  bit-identical" is only a claim about the module the bench was handed.
+  ★★ **AND THE EVIDENCE THAT HAD CONDEMNED 2H WAS CONFOUNDED.** The 2H variant was built
+  (`a2b72fb`) and reverted (`48c00cb`) because *"the reference composite CRT was worse
+  with it"* — but that A/B ran in HW rounds 1–3 **while the field-parity corrector was
+  defective and repeating fields several times a second**, and the 2H code was deleted in
+  the SAME COMMIT that disabled the corrector. It bounced with 2H and without it, so 2H
+  was never the variable. It ships as a selectable arm to be re-measured, not re-argued.
+  ★ **Counting the block in HALF-LINES is what makes one generator serve both standards**
+  (BT.470's `l`/`m`/`n` = 3H / 2.5H → 6/6/6 and 5/5/5), and **every width derives from
+  modeline registers the raster already carries — no new constants** — each inside
+  tolerance for both: serration = hsync width (4.704 µs vs 4.7 ±0.1), equalizing =
+  hsync/2 (2.296 / 2.333 µs vs 2.3 ±0.1 / 2.35 ±0.1), broad = half-line − serration
+  (27.074 / 27.296 µs vs 27.1 / 27.3).
+  ★ **ANCHORED ON THE OUTPUT HSYNC, so "did we break anything" is an equality gate.**
+  Outside the block the module is `h_sync` delayed one clock — bit-identical to what stock
+  emits outside vsync — so [G1]/[G3] check it clock by clock (0 mismatches over 5.8 M
+  clocks) instead of trusting a hand-tuned constant. ⚠ Places the analog vertical interval
+  245 dots (0.14 line) earlier; that is the standards-correct placement and it touches
+  **only the analog composite-sync bit** — `VGA_HS/VS/DE/F1` and `CE_PIXEL` are untouched,
+  so **HDMI is bit-identical on every arm**. That decoupling is what HW round 2's
+  raster-level re-anchoring lacked.
+  ⚠⚠ **`CS_PIPE` was the one number worth not trusting, and the design note got it
+  wrong.** The note hand-counted 7 (`sync_fix` 0 + `scanlines` 3 + `osd` 4) and forgot
+  `csync`'s own register. New `bench/dvd/csync_pipe_tb.sv` drives the **real**
+  scanlines/osd/csync and greps the constant out of `sys_top.v`: **measured 8, sys_top
+  uses 8**, RED arm proven. A wrong value moves every analog sync edge 37 ns per clock and
+  is invisible in every other bench.
+  ★ **The bench caught a real defect on its first run, and it was a boundary error a
+  width census would have passed:** a registered counter reset by the hsync edge does not
+  read zero until the cycle AFTER it, so block pulses starting at a **line** boundary rose
+  one clock early and measured one clock wide while the **half-line** ones did not — the
+  two fields disagreed by exactly one clock, first spacing 859 instead of 858. Position is
+  now computed combinationally for the cycle in progress. ★ **Also worth keeping: the
+  Stock arm's first "the defect is still here" assertion was wrong** — it asserted a >2×
+  width ratio on the *detected* first broad pulse, but the detector quite correctly SKIPS
+  field B's 18 µs pulse and locks onto the next one. That miss IS the defect; the ratio
+  was a worse proxy. The gate now measures what a **separator does** (both models must
+  disagree field to field on Stock, and agree on SMPTE).
+  **Gate: `bench/dvd/run_csync_field.sh`** (3 modes × NTSC/PAL) + `--red` (4 mutations:
+  block not half-line-offset, equalizing pulses at broad width, pre-eq dropped, one clock
+  late — three are sed-mutated copies of the generator, since a bench cannot mutate a
+  module it instantiates) + `bench/dvd/run_csync_pipe.sh`. ⚠ [G5] field congruence stops
+  at the block ON PURPOSE: the entry hsync is a full line before it in one field and half
+  a line in the other (measured 1716 vs 858), which is interlace itself, not an asymmetry
+  any standard removes.
+  ⚠ **`vga_scaler=1` or a framebuffer BYPASSES this entirely** (the pins take
+  `hdmi_cs_osd` from the other `csync` instance) — expect "the setting does nothing"
+  reports. `vga_cs_osd` also feeds `yc_out`, so composite/S-video get the new sync too:
+  an unmeasured second consumer, on the HW checklist.
+  ⛔ **`P1O[48] Field Order` and `Analog CSync`'s `Stock` arm were REMOVED before release
+  (2026-09-07, user decision), once each had done its diagnostic job.** Field order is a
+  correctness constant with ONE right value, and the knob moved HDMI and analog TOGETHER —
+  so it could never reconcile a disagreement between them, only relocate it, and a user
+  reaching for it to fix a CRT would silently break their HDMI. `Stock` is a measurably
+  broken signal (0.857 line between the fields, mis-identified first field), not a
+  fallback; it held comparison value ONLY while the field order was also wrong, because
+  the two errors cancelled. `Analog CSync` ships as `SMPTE`/`2H` on `P1O[46]`, and the
+  framework module remains the live path on a PROGRESSIVE raster (`cs_en` follows `en`) —
+  which is the configuration `csync_field_tb`'s stock arm now exercises.
+  ★ **The removed knob is described below because the REASONING is the durable part.**
+  ★ **`P1O[48] Field Order` flipped the CONTENT mapping, NOT the raster** — it XORs `mpeg2video.v`'s
+  `sync_raster_par_err` input, equivalent to inverting `mixer.v`'s comparison while
+  leaving `mixer.v` untouched. ⛔ `syncgen.v`'s own advice ("flip both terms",
+  `vs_ref_dot` + `eff_vertical_length`) is now marked DO NOT: that moves the raster, which
+  is the one part **inherited from the known-good N64 core**, and drags `cc_vbi`'s field-1
+  derivation with it (the CC round-1/2 failure). What this fork INVENTED is the next
+  sentence — *"odd_field=1 scans v_pos even lines (TOP content)"* — and **its one HW
+  validation (2026-07-05) predates the field-parity corrector, so the phase was a coin
+  flip and a wrong convention was right half the time. That is the `VGA_F1` story on the
+  analog side.**
+  ⚠ **Testing field order needs VIDEO-sourced content** (`tools/video_cadence_census.py`),
+  Weave or CRT Simulation, never Bob: film is progressive frames split into fields, so
+  both halves are the same instant and swapping them shows almost nothing — a rig can be
+  genuinely insensitive, and "looks the same" must not be read as "the knob does nothing".
+  ★ **The RT4K reading is the deciding vote on the default, not the maintainer's CRT** —
+  an instrument that reports field order outranks impressions; the CRT is the regression
+  check (this is the inverse of the usual arrangement, and deliberate).
+  ⚠ **Count the evidence honestly:** ONE unambiguous field-order report (RT4K), one
+  ambiguous (the Trinitron sawtooth, equally consistent with the sync asymmetry), and
+  older reports that predate the deterministic corrector and describe the coin flip — they
+  cannot speak to today's default. ⚠ **The RT4K needs field offset −2 and a pure swap is a
+  ONE-unit correction**; if −2 survives both arms there is a third thing (a line-position
+  offset) — chase it separately, do not absorb it into "field order".
+  **Field-order gate: `run_field_phase.sh` gains a `+swap=1` arm** — it XORs the same CDC
+  the bench already replicates and inverts CHECK C with it, while leaving checks A and B
+  (fields carry different source lines; period 2) alone: the knob must move content to the
+  other raster slot AND alternation must survive. ★ Not vacuous — measured **1 repeat /
+  28 misaligned worst settle window, identical to `+phase=1` and unlike `+phase=0`'s 0/0**,
+  because a swap at phase 0 gives the corrector the same work as no swap at phase 1; a
+  corrector that ignored the inverted verdict would leave content in the old slot and fail
+  check C outright.
+  ★★★ **AND FIXING THE SYNC EXPOSED A FIELD-ORDER ERROR THE BROKEN SYNC HAD BEEN HIDING
+  SINCE THE BEGINNING (2026-09-06, HW-found, `rtl/mpeg2/field_polarity.vh` `FIELD1_VPOS`
+  0 → 1).** Field report on the §3.10 build: `Stock`+`Normal` correct on both outputs
+  (= v0.4.0); `SMPTE`/`2H`+`Normal` **wrong on the CRT**, right on HDMI;
+  `SMPTE`/`2H`+`Swap` right on the CRT, **combed on HDMI**.
+  ★ **Two outputs wanting opposite settings IS the diagnosis:** `Field Order` moves the
+  CONTENT mapping, which feeds both, so it can never reconcile a disagreement BETWEEN
+  them — something had moved the ANALOG assignment alone. MEASURED (`csync_field_tb`
+  `[G8]`): stock leaves the fields **0.857 line** apart and its width detector misses one
+  field's 18 µs pulse, locking onto the next one a line later — so a TV concludes the
+  **opposite** field is field 1. **With that misreading in place, a content mapping off by
+  one field looked correct.** SMPTE gives 0.500 and the true assignment, exposing it.
+  HDMI never reads composite sync, so it was never mis-corrected.
+  ⛔ **The fix is the RASTER, not `mixer.v` and not `VGA_F1`** — those move HDMI and analog
+  together. ONE constant, three consumers (`syncgen.v` line-aligned vsync + short field
+  total; `csync_smpte.sv` block phase; `cc_vbi.sv` field-1 captions).
+  ★★ **`syncgen.v`'s original "flip both terms" advice was RIGHT and my §3.11 "DO NOT" was
+  wrong**: what is inherited from N64 is the 262/263 + mid-line-vsync MECHANISM, not the
+  assignment of OUR fields to it — and that had never been tested because no display could
+  read it.
+  ★★★ **THE DURABLE LESSON: `cc_field_map_tb`'s header said "TOP content displays inside
+  SYNC field 2 (NTSC is bottom-field-first)". On 2026-09-05 I deleted it as an inverted
+  stale comment because THREE other sites agreed against it. It was right — all three had
+  been calibrated against a sync no display could read, so their agreement was not
+  evidence, it was three readings of one untested reference.** Restored, with the history.
+  ⚠⚠ **LINE-21 CC IS NOT A TEST OF FIELD ORDER, and I proposed it as a decisive one.**
+  The census finds **field 2 empty on every disc**, so nothing competes for the slot and a
+  decoder shows C1 whichever field the data lands in — captions decoded in all six
+  sync × field-order combinations on HW, which says the chain works and NOTHING about the
+  mapping. A prediction whose failure mode is unobservable is not a prediction.
+  **New gate [G8]:** the raster's line-aligned field and the emitted block's must be the
+  same `v_pos` parity, **both measured, neither reading the constant**, so a consumer
+  flipped in isolation fails. `cc_field_map_tb` (mutation-checked) and `cc_e2e_tb` now read
+  the constant instead of pinning a polarity; `crt_syncgen_tb` passes UNCHANGED, which is
+  the evidence the flip preserves every timing invariant and swaps only which field is
+  which. ⏳ HW test is one A/B: `Field Order = Normal` correct on BOTH outputs.
+  ⚠ `Analog CSync = Stock` will now look WRONG on a CRT where it used to look right —
+  expected, the two errors no longer cancel.
+  **Build:** `DVD_smptesync_20260906_0222.rbf` (pre-field-fix), SEED 5 FIRST roll despite
+  two new CONF_STR rows, clk_dec 95.35 @100C / 92.55 @-40C (gate 86.0), 91 % ALM.
+  Detail: `docs/single_raster_analog.md` §3.10 (sync shape), §3.11 (the knob, and the
+  reasoning error), §3.12 (the field-order fix).
+- ✅ **MODE-SWITCH READER RE-ALIGN + PAL/NTSC VERDICT HARDENING (2026-09-03, issue #42,
+  branch `fix/mode-switch-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03
+  (user report: the freeze is gone; build `DVD_modeswitch_20260903_1538.rbf`, SEED 5 first
+  roll, clk_dec 91.90/88.88).** ★ **SWITCH BLANK added on top (2026-09-03, user
+  request; ✅ HW-CONFIRMED same day, build `DVD_swblank_20260903_1638.rbf` — the roll and
+  the top-half squish are GONE):** the fix left the ~1 s transient visible and ugly (to
+  Interlaced = a full-screen rolling image flashing between black frames = the display
+  losing vertical lock; to Progressive = the picture squished into the top half =
+  field-height content in a frame-height DE window). Both are inherent to changing the
+  raster under in-flight content, so the fix is cosmetic: `mode_realign` now holds the
+  picture BLACK from the edge until the first frame of the new mode is on screen.
+  ★ **The window needed no new signal — `video_live` already is it** (our own `load_flush`
+  re-arms it via `pickup_hold`). ⚠ **The rule is "clear on the first HIGH *after* a LOW"**:
+  at the edge `video_live` is still high from the OLD content, so a naive "clear when
+  video_live" blanks nothing. ⚠ `BLANK_MAX` (~1.5 s) is load-bearing twice — in a MENU
+  `video_live` never drops (emu forces the STD hold off while `menu_active`), so the
+  ceiling is the only exit; and it stops a cosmetic fix masking a persistent fault.
+  ⚠ Placement in the output mux is the design: **after** `cc_on` (line-21 captions live in
+  the VBI), **after** `dbg_px_q` (the `O[2]` blk10 "il_switch fired" readout must stay
+  visible during exactly this event), **before** `sub_r` (picture+subs+HUD+logo go dark
+  together). **RGB only — never sync** (the `re_interlace` `S_HUNT` defect). `blank_en` =
+  `media_seen` so the boot idle screen is never blanked. A second edge RESTARTS the window
+  (the seek arm coalesces; the blank must not). ⛔ "Repeat the last good frame" lost: the
+  symptom is a ROLL, so a held frame rolls too — rolling black is invisible, a rolling
+  still is not. Gate: `mode_realign_tb` [12]–[17], **mutation-checked** (5 targeted RTL
+  mutations, each caught by its own scenario — these are cheap level assertions, exactly
+  the shape that passes without proving anything).
+  ⚠ **STILL OPEN on this path, and it is NEITHER of the two fixed bugs: A/V SYNC after a
+  `Video Output` change.** User report 2026-09-03 (on the seek-realign build): *"Many video
+  output changes can cause sync issues, but that is existing behavior and is cleared by a
+  chapter skip."* Not the freeze (fixed, §6) and not the stale-reference macroblocking
+  (fixed, `docs/seek_realign.md`) — it is lip-sync drift cured by a RE-ANCHOR. ★ That cure
+  is the diagnosis: a chapter skip re-anchors the STC, so suspect `av_sync`'s refresh
+  accounting across a refresh-rate change (`TICKS_PER_REFRESH`/`refresh_50hz` are picked
+  from the mode), NOT the raster or the flush — the switch already fires the full trio plus
+  a re-align seek. Detail: `docs/single_raster_analog.md` §7.
+  ★★ **THE RESIDUAL IS NOW A TRANSPORT ITEM (tracked as issue #45), NOT A MODE-SWITCH
+  ONE, and the user's own
+  report is what establishes that:** *"still some visible glitches but I think these are
+  more decoder issues than mode switch since it looks similar to when a chapter skip is
+  performed."* The design goal was to make a mode switch **byte-identical to a chapter
+  jump**; once it is, it cannot carry a class of artifact a chapter seek does not. So a
+  symptom that matches a chapter skip is the goal being MET, and it relocates the remaining
+  work. ⚠ Do NOT re-chase it under issue #42.
+  ✅ **ISSUE #45 IS NOW FIXED — see the POST-SEEK REFERENCE RE-ALIGN bullet below**
+  (`docs/seek_realign.md`); the mechanism guessed here was confirmed exactly. Fixes: a mid-title `Video Output` change
+  could freeze the decoder on a malformed frame with no self-recovery; a chapter seek
+  cleared it. Pre-existing (v0.3.0 does it on `Analog Out`).
+  ★★ **THE FIX WAS WRITTEN IN THE EXISTING COMMENT AND HAD BEEN READ AS HARMLESS FOR
+  MONTHS.** `emu.sv`'s `il_switch` block said: "the full flush is exactly what a chapter
+  seek does (HW-confirmed synced); the only difference is the reader doesn't jump, so
+  ps_demux re-hunts to the next pack boundary within the vbuf re-lock glitch." That
+  difference IS the bug — the decoder resumed **mid-VOBU with no GOP boundary to re-lock
+  on** — and the reason a chapter seek cured it is that a seek is the same trio **plus a
+  reader jump**. The clue was in the workaround the whole time. New `dvd/mode_realign.sv`
+  turns the edge into a **seek to the playhead's own VOBU** and lets `seek_ack` drive the
+  trio, so a mode switch is byte-identical to a chapter jump. `flush_ctl.mode_switch`
+  survives as the **fallback** (menus, raw `.m2v`, no trustworthy playhead, or an
+  unacknowledged seek) — `flush_ctl.sv` itself is unchanged.
+  ★ **"PAL-only" was a WRONG CONSTRAINT that shaped the first diagnosis.** The report,
+  this file, `docs/single_raster_analog.md` and the manual all said NTSC was unaffected,
+  which pointed straight at the PAL-only `pal_eff` feedback path. The maintainer then saw
+  it on NTSC. The cause is the standard-neutral mid-VOBU resume; `pal_eff` is one of TWO
+  garbage-header amplifiers and the other (`filmp_eff` via `film_det`) flips on either
+  standard. ⚠ Worth the habit: when a symptom is reported as specific to one
+  configuration, that specificity is a *hypothesis*, not a measurement.
+  ★ **Three design points, each learned the hard way elsewhere:** (1) the target is the
+  playhead's OWN VOBU because `dsi_nv_pck_lbn` already IS a NAV pack — the reader's snap
+  probe hits candidate #1 and moves nowhere; the next VOBU would walk forward a sector at
+  a time up to `NAV_CAP=1024` reads (`iso_reader_seek_tb` TEST9 **measures** the walk at
+  1 read/sector over three points: 3 / 4 / 8 reads, so the cost model is proven not
+  claimed). (2) **Edges are COALESCED** — `il_eff` is a level, so N toggles converge on
+  one raster and need ONE re-align; that makes the repeated-mid-parse-flush loop class
+  (the thing that killed the film edge) structurally unreachable, and is why a future
+  `filmp_eff` edge belongs here and never straight in `flush_ctl`. (3) `tgt_rbn` is
+  latched ONCE and gated on `dsi_fresh` — `nav_dsi` is on `pipe_rst_n`, so the re-align's
+  OWN `load_flush` zeroes the playhead and the reader's clamp would turn that into a jump
+  to the start of the title (the `dpad_seek` stale-table trap).
+  ★ **Leg 2 — `dvd/pal_detect.sv`:** `pal_detect_dec` latched on ANY non-zero
+  `vertical_size`, so one garbage header flipped `pal_eff` → a raster restart **with no
+  flush at all** (the walk keys on `il_eff | pal_eff | filmp_eff`; only `il_eff` carries
+  the trio) → `film_det` → `filmp_eff` → the walk again. Now a plausibility bound
+  (64…1152 lines — a BOUND, not a whitelist: flat `.mpg` files exist and 1080 is not a
+  multiple of 16) plus a **sustained**-disagreement requirement to CHANGE an established
+  verdict; the first header after a mount still latches immediately. The 2026-09-03
+  `!= 0` hold is subsumed. ⚠ **Confirmation is a TIMER, not a count of headers:**
+  `vertical_size` is a REGISTER, not an event — a real disc re-parses a sequence header
+  every GOP but writes the SAME value, so a transition-counting rule can never reach N
+  for a genuine change and would freeze the verdict forever. That design was written and
+  discarded before it shipped.
+  ★ **Both benches are built against the `bench-that-cannot-fail` failure mode.**
+  `pal_detect_tb` counts **verdict EDGES, not end states** — the pre-fix rule self-heals
+  on the next real header, so an end-state check PASSED the stray-header and churn
+  scenarios (measured RED: 12 walk kicks during a garbage burst, 2 for one stray header).
+  `mode_realign_chain_tb` runs the REAL reader over a synthetic disc and reads **the first
+  bytes delivered after the flush**: pre-fix `b0 b0 b0 b0` (mid-sector cell payload),
+  fixed `00 00 01 BA / BB / BF` (a NAV pack) — a property of the byte stream, not a
+  restatement of an RTL expression. Suite: `bench/dvd/run_mode_realign.sh` (`--red` runs
+  the pre-fix arms first). ⚠ `mode_realign_tb`'s first version failed all 11 scenarios
+  against correct RTL: blocking stimulus assignments landed **on** the clock edge and
+  raced the DUT, so every count read 0. Stimulus is driven from the negedge now.
+  ⚠ **The field-parity suites pass unchanged BY CONSTRUCTION, which is not evidence:**
+  they compile `resample_addrgen`/`mixer`/`syncgen` and never see `emu.sv`. The corrector
+  names an `il_switch` raster restart as one of its expected triggers, and what this
+  branch changes is the flush's TIMING relative to that restart — so the interaction is
+  HW-only and belongs in the same round.
+  ⚠ **No `modeline_boot_tb` phase was added, deliberately:** the walk is NOT gated on
+  `realign_pend` — `il_eff` still changes the instant the OSD bit does, so only the FLUSH
+  is deferred. The existing bench passing unchanged IS that evidence. **If HW still
+  freezes, the remaining suspect is the raster restart** and the next step is to gate
+  `il_out` on `~realign_pend` — one behavioural delta per round
+  (`docs/single_raster_analog.md` §3.9). Detail: `docs/single_raster_analog.md` §6.
+- ✅ **POST-SEEK REFERENCE RE-ALIGN (2026-09-03, issue #45, branch
+  `fix/seek-reference-realign`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-03**
+  (build `DVD_seekrealign_20260903_1901.rbf`, SEED 5 first roll, clk_dec 91.10/88.28).
+  ★★ **THE HW REPORT MATCHED THE WRITTEN PREDICTION TO THE FRAME:** *"the old scene is not
+  in motion, it's frozen and we jump to the target seek position with ~1 frame of a
+  misaligned image."* Three claims, each mapping onto a piece of the design — the leading
+  B's are no longer displayed (the reported defect, GONE); the display now genuinely HOLDS
+  the last frame (what `flush_ctl.sv` always claimed a seek did and did not); and the one
+  remaining bad frame is the truncated in-flight picture, predicted below and unchanged.
+  ★ **Writing the residual down BEFORE the build is what made the round cheap** — the
+  report read as a confirmation, not a surprise, and no time went into re-opening the
+  anchor accounting to explain a frame already accounted for. Same discipline as
+  `docs/single_raster_analog.md` §3.9, which cost five rounds to learn.
+  Every seek (chapter skip, scrub release, D-Pad Seek, menu → Play) showed **~6 frames
+  (~100 ms)** of macroblocking. ★ **The detail that identified it was in the report:**
+  *"the target chapter is decoding and in motion during this macroblocking, but it has the
+  residual image overlayed"* — new content building correctly AND MOVING exonerates the
+  reader, the demux and the landing point; only the PREDICTION is wrong. A corrupt picture
+  would be one still-wrong frame, not a burst with coherent new motion.
+  **Root cause:** `flush_vbuf_eff` reaches exactly three sinks (`vbuf_rst`,
+  `frame_drop_ctl.flush`, `framestore.vb_flush`) and the decode pipeline is on `sync_rst`,
+  so `motcomp_picbuf`'s reference slots survive a seek holding the PRE-SEEK scene — and
+  those slots carry **no valid bit at all** (`forward/backward_reference_frame` are pure
+  pointers `motcomp_addrgen` reads unconditionally), so stale CONTENT is invisible to the
+  decoder by construction.
+  ★ **TWO anchors, not one, and the rotation is why:** picbuf assigns
+  `current_frame <= forward_reference_frame` while fwd/bwd swap, so the first post-flush I
+  only establishes the BACKWARD reference — forward still points at the old scene, which is
+  exactly what an open GOP's leading B's read; only the SECOND anchor overwrites that slot.
+  Two coded pictures × 3:2 ≈ the reported 6 display frames.
+  **Fix = `rtl/mpeg2/vld.v`** (one new input, `vbuf_flush` from `flush_vbuf_eff` — already
+  clk_dec, no new CDC): drop every non-I picture until the first I, then B's until the
+  second anchor, through the EXISTING governor suppression legs, so picbuf never sees them
+  and the display **actually holds** the last frame — which is what `flush_ctl.sv` always
+  claimed a seek did.
+  ★ **THE ARM MUST SIT BEFORE THE `clk_en` TERM.** `vld.clk_en` is `vld_en`, and
+  `motcomp.v:257-272` freezes the VLD at EVERY picture header until picbuf's display
+  handshake — **up to a whole display frame (~1.5 M clk_dec cycles)** — while the flush
+  level is ~192 clk_dec cycles. A `clk_en`-gated capture would miss it ROUTINELY, not
+  occasionally. Level-dominant for the window also coalesces repeated flushes for free.
+  ★ **Anchors are counted off the SAME node picbuf rotates on** (`hdr_upd_slot`, factored
+  out of `update_picture_buffers`): "count an anchor exactly when picbuf rotates" is then
+  true by construction, a field-coded I frame (two I field pictures) counts ONCE, and it
+  adds no new fan-out on `picture_structure` — the register physical synthesis mangled in
+  the Thayer `drops=0` round. No sibling pair-arm is needed: the predicate is identical at
+  both field headers, so pair atomicity is structural.
+  ★ **The ledger split is not hygiene:** `drop_this_picture` latches either reason but a new
+  `drop_gov_picture` feeds `drop_pic_ack`, else 2–3 unrequested credits per seek drive
+  `frame_drop_ctl` to `DEBT_FLOOR = -4` and the governor needs 6 lates before it may drop
+  again — during the post-seek re-lock, when it is most likely to be late.
+  ⛔ **`closed_gop` is REJECTED, not overlooked** (parsed at `vld.v:1477`, consumed by
+  nothing): it is a bit the ENCODER wrote, not a measurement — the `progressive_frame`
+  failure class again; a disc that lies would leave the defect present AND unfalsifiable.
+  ⛔ **The picbuf `prev_i_p_frame_valid` clear (issue #45's own "fix direction 1") is
+  INSUFFICIENT and was not done:** it suppresses the display of one stale anchor and does
+  nothing to `forward_reference_frame`. ★★ **And the durable rule it earned: anything that
+  must correct an `update_picture_buffers` decision either RIDES the mvec FIFO or is decided
+  in the vld — it cannot bypass the FIFO and arrive on time.** A direct wire can be re-set
+  by a queued PRE-flush anchor's update, and no bounded level defeats that (the queue can
+  take a whole field to drain because picbuf blocks on the display handshake).
+  ⚠ **Residual, PREDICTED BEFORE THE BUILD AND CONFIRMED BY IT:** the picture in flight at
+  the flush is truncated, owns a slot, and is displayed once — held ~4 picture times
+  instead of ~1. Net trade: ~6 frames of macroblocked MOTION → **~1 misaligned frame**.
+  That is now the ONLY thing left of issue #45 and it is a different defect class (one
+  corrupt picture, not stale prediction). ★ The HW shape — freeze, then cut to the new
+  scene with one bad frame between — **weakens the v1 argument against blanking a seek**:
+  that argument was written when the alternative was six frames of visible garbage, and
+  blanking one frame of an already-hard cut costs almost no display continuity. See
+  `docs/seek_realign.md` §5.1.
+  **Gate: `bench/dvd/run_seek_realign.sh`** — real `vld` + `getbits` + `motcomp_picbuf` over
+  TWO cuts of a real title with a real reader jump at the flush, measuring **slot
+  provenance** (a shadow tag per picbuf slot; a post-flush picture predicting from a
+  pre-flush-tagged slot is a violation). Names no signal in the fix, so it cannot become a
+  golden model that agrees with its RTL. RED (`-Pseek_realign_tb.SEEK_REALIGN=0`) measures
+  `viol == meta[3]` = the fixture's leading-B count and reproduces a pristine-RTL run byte
+  for byte; GREEN is `viol == 0` AND `realign_drops == meta[3]` — asserted EXACTLY, because
+  dropping too much costs display frames at every seek. `tools/seek_fixture.py` REFUSES a
+  cut whose landing GOP is closed or has no leading B's (that fixture would make RED
+  measure zero and the gate vacuous). Arms include a **menu still** landing
+  (`hp_still_i.hex` as cut B): a still is `SEQ GOP PIC:I SEQ_END`, ONE I and no B's, so a
+  rule that dropped an I would mean the menu never appears — measured `realign_drops=0`.
+  ★ **Scope note: menu→menu hops are structurally untouched** — `flush_ctl` gates
+  `seek_flush` on `~keep_vbuf`, so the Phase-5 rule is inherited for free and only menu
+  ENTRY/EXIT (which were always two of issue #45's four paths) re-align.
+  Detail: **`docs/seek_realign.md`**.
+- ✅ **FIELD-PARITY CORRECTOR REPAIRED AND RE-ENABLED (2026-09-03, issue #41, branch
+  `fix/field-parity-corrector`) — sim-proven RED/GREEN and ✅ HW-CONFIRMED: round 1 gave
+  the CRT ("always gets the fields right on the TV" where PR #40 was a coin flip) and
+  exposed an inverted `VGA_F1`; round 2 confirmed that fix
+  (`DVD_parityf1_20260903_1253.rbf`).**
+  ★★ **ROUND 1 ALSO EXPOSED AN INVERTED `VGA_F1`, and only determinism could:** with the
+  phase now fixed, HDMI Weave went from a coin flip to CONSISTENTLY COMBED while the CRT
+  became consistently right. Two outputs disagreeing by exactly one field pins it to the
+  FLAG, not the corrector — the analog pins never read `VGA_F1` (the raster half-line
+  carries the CRT's interleave). `sys/ascal.vhd` latches the flag at every DE rise and the
+  write-placement decision reads it in the SAME clocked process on the field's first
+  active pixel, so it uses the value from the PREVIOUS field's last line ⇒ the effective
+  convention is **F1 = 0 on the TOP field**. `emu.sv` emitted `~core_v_pos[0]` (1 on top)
+  ⇒ ascal stored the top field in the odd rows = a pairwise line swap = Weave combing on
+  a STILL. Now `core_v_pos[0]`, ✅ HW-confirmed. ⚠ Unfalsifiable while the parity was random — HDMI was
+  right half the time — and the line's own comment had said "polarity may need flipping on
+  HW" since it was written. ⚠ **Not sim-gateable here**: ascal is VHDL, the benches are
+  Icarus.
+  ★ **Root cause of the withdrawal: the FEEDBACK arm was chasing STARVATION.** Its cure
+  is a REPEATED field (re-showing `last_image` is the only insertion that lands the
+  resumed stream aligned — see the XOR note below), and it was firing at field rate,
+  because when the pixel queue runs dry the mixer displays nothing at that frame-top
+  opportunity and every following content field lands one raster slot later. That IS a
+  genuine parity error — but this core is compute-bound and does it repeatedly, so the
+  error churns, and one repeated field per starve is a far worse picture than the
+  half-line offset it removes. The old `par_armed` + **4-refresh** liveness re-arm
+  permitted an insertion every five refreshes = exactly the measured +0.00.
+  FIX = the feedback arm only acts on a **STABLE** error: `PAR_CONFIRM` (30 refreshes,
+  ~0.5 s) of a continuously-asserted verdict, plus `PAR_HOLD` (120 refreshes, ~2 s) as a
+  hard budget so a repeated field can never appear more often than that whatever the
+  starvation rate is. `par_age` starts saturated so the cold-start landing is not
+  delayed. The FEED-FORWARD arm (`alt_break`) is unchanged and ungated — it inserts the
+  OPPOSITE field, can never repeat one, and it is the arm that handles the reported
+  chapter-skip symptom. Gate: **`bench/dvd/field_phase_tb.sv`** (finished here; it was
+  committed unfinished by PR #40) + `run_field_phase.sh`, 7 windows × 2 raster phases.
+  Measured, not asserted: 4 starvation events cost **4** repeated fields with the shipped
+  corrector, **0** with the gate and **0** with the corrector off. Detail:
+  `docs/field_parity.md`.
+  ✅ **HOLD ARM — THE CORRECTOR COULD NOT ACT WHILE THE PICTURE WAS HELD (2026-09-04,
+  branch `fix/field-parity-hold`); sim-proven RED/GREEN and ✅ HW-CONFIRMED 2026-09-04
+  (build `DVD_holdparity_20260904_1902.rbf`, SEED 5 first roll, clk_dec 91.72/87.62 —
+  the reported card on HDMI Weave AND the CRT, the cards behind it, pause, menu stills,
+  compute-heavy playback for the churn budget, and chapter skips: all good).**
+  Field report: a disc (`RINGER_WS`) combed under Weave and jittered on a CRT **only on
+  the FOX warning card it boots to**, clean once the movie started.
+  ★★ **THE BLIND SPOT WAS WRITTEN DOWN AS A REASSURANCE.** `docs/field_parity.md`'s root
+  cause says the `STATE_REPEAT` persistence re-scan "preserves strict TOP/BOTTOM
+  alternation, so content parity and raster parity stay locked". True — and that is the
+  bug: preserving alternation **freezes a bad phase**, and the corrector's only cure
+  (defer a pickup) needs a pickup a hold does not have. `par_slip` requires
+  `STATE_INIT && ofv_pickup`; `STATE_REPEAT` returns straight to `STATE_NEXT_IMG` while a
+  frame is held, and for a menu still `output_frame_valid` is 0 **by construction**
+  (`mpeg2video.v`'s `freeze_wd`: a still is an end-of-stream hold) — so the mount's
+  coin-flip landing displays uncorrected for as long as the still lasts. MEASURED
+  360/360 held fields misaligned over a 6 s hold vs 0/360 for a hold entered aligned.
+  ★ **A still is the worst case TWICE: frozen dense text is the content most sensitive to
+  a one-line error, and it is the state in which the corrector is most disabled** — which
+  is why a general defect read as disc-specific. The disc is ordinary: its boot cells are
+  single clean I-frames (`progressive_frame=1`, ffprobe `interlaced_frame=0`).
+  FIX = `par_hold_ins` reuses `par_fb` UNCHANGED (so the hold arm adds opportunities to
+  act, not permissions — `PAR_CONFIRM`/`PAR_HOLD` still bound it) and the `STATE_REPEAT`
+  image build emits the held pair in the OTHER ORDER for one visit. The junction repeats
+  a field = an ODD slot shift = the re-alignment, and on a frozen picture a repeated
+  field is invisible.
+  ⛔ **NOT the obvious one-field form** (`image_0 <= last_image; image_1 <= NO_OUTPUT`):
+  identical emitted stream, but `late_pair`/`late_ext` stretch `frame_late` to two cycles
+  BECAUSE a repeat visit is a PAIR, so a one-field visit banks a refresh of phantom drop
+  debt per correction (an unearned B-drop); it also leaves the tail parity unchanged, so
+  a `tff=1` resume re-fires `alt_break` for a phase already fixed. ⚠ **Both counters must
+  clear on the insertion** — the verdict is 1–2 refreshes + CDC stale, so clearing only
+  `par_cnt` lets the first `STATE_INIT` after the hold re-break the phase it just fixed.
+  ⚠ **No `frame_late` from this arm**: the addrgen free-runs against the raster, so
+  re-ordering a held pair adds no raster field, no scan and no STC tick.
+  Gate: `field_phase_tb` **[8-hold-heal]** — ★ `force_misaligned()` MEASURES the phase
+  break and retries, because a stall eats one field or two and a scenario keyed on the
+  cold-start landing would be VACUOUS on whichever `+phase` arm started aligned (exactly
+  why `[7-post-stutter]` passes on both arms today). ⚠ **`[6-stutter]` did not guard the
+  new arm at all** — its `mem_stall` parks the FSM in `STATE_WAIT`, which never reaches
+  the persistence branch; it now drops `output_frame_valid` through each stall.
+- ✅ **VIDEO OUTPUT CONSOLIDATION + FIELD-PARITY RE-ENGAGE FIX (2026-09-02,
+  PR #37) — ✅ HW-CONFIRMED (rounds 1-2 recorded further down this bullet; the
+  field-parity half was then repaired and re-confirmed by PR #44).** Two CRT field reports
+  (SuperStationOne→YPbPr→Sony CRT; a second user on The Shining) exposed (a) the weave
+  analog path "extremely wobbly" = the known caveat-2 pairing defect, and (b) Native
+  Fields going "super aliased" after chapter skip/FF/aspect changes, healed only by
+  toggling the mode 3–4 times = a 50/50 parity roll. **(1) THE PARITY BUG — root-caused
+  and FIXED (`docs/field_parity.md`):** the mixer's relaxed frame-top matcher (the
+  3:2/drop black-fields fix) accepts either raster parity slot, and nothing carried
+  raster parity back to `resample_addrgen`'s pickup — one odd perturbation (seek tff,
+  raster restart, cold start) flipped content-field↔raster-field phase PERMANENTLY
+  (invisible under HDMI Bob, glaring on fieldpass/Weave). Fix = feed-forward
+  `alt_break` (schedule head would repeat the last field's parity) + feedback `par_fb`
+  (new `mixer.frame_top_par_err` → sync_reg → addrgen), inserting ONE held-frame field
+  and deferring the pickup one refresh (`pickup_go`), with a `frame_late` pulse so the
+  drop ledger reclaims it. ★ **The triggers compose by XOR and the inserted field's
+  TYPE depends on the trigger** (alt_break: OPPOSITE field; par_fb: SAME field; both at
+  once: insert NOTHING — the break itself lands aligned): "insert opposite on either"
+  livelocks — alt_break un-fixes every par_fb insertion. Suite
+  `bench/dvd/run_field_parity.sh` — the checker reads the mixer's frame-top acceptance
+  hierarchically (what the SCREEN gets); proven RED on pre-fix RTL (a break's
+  misalignment persists 16/16 tops and survives a CLEAN seek = the toggle-ritual
+  mechanism) and GREEN post-fix (feed-forward arms: zero wrong fields ever displayed;
+  feedback arm: ≤2). ⚠ `gov_field_late_tb` needed a stimulus fix, not an expectation
+  fix: real discs TOGGLE tff after an rff picture; holding it constant is an authored
+  cadence break the corrector now rightly heals. **(2) SETTINGS CONSOLIDATED (user
+  decision, reversing the 2026-08-23 "all four modes stay" review — see
+  `docs/roadmap.md`):** `O[10:9] Interlaced Out` (+ its `det_video` Auto detector) and
+  the 4-value `O[27:26] Analog Out` are REPLACED by ONE option **`O[10:9] Video Output
+  = Auto/Interlaced/Progressive`** (`Interlaced` = the old Native Fields renamed —
+  authored fields session-wide, fieldpass analog raster, HDMI 480i via ascal Bob/Weave;
+  `Auto` = ini-driven `analog_want`, boot-static; `Progressive` keeps Film 24p and
+  serves 480p-analog displays). `re_interlace.sv` is FIELDPASS-ONLY (weave/derive
+  deleted — CRT-480i-plus-progressive-HDMI simultaneity deliberately dropped:
+  pick-your-output); `analog_eff`/`il_eff` collapse into one `interlaced_eff`; config
+  layout `"v,1"`→`"v,2"` (all saved settings reset once). O[27:26] left dead/reserved.
+  Detail: `docs/field_parity.md`, superseded headers in `docs/interlaced_auto.md` +
+  `docs/analog_dual_raster.md`.
+  ★ **HW ROUND 1 (2026-09-02) found a LATENT BOOT RACE the consolidation was first to
+  arm: Interlaced-at-boot showed "719x...i @ 31.48 kHz" + dead CRT — the modeline walk
+  keys on RAW reset_n while the decoder synchronizes its resets INTERNALLY
+  (reset.v cascaded 5-FF stages), so hard_rst (gating every regfile modeline register)
+  deasserts ~5-10 clk_dec cycles later and the boot walk's writes were SILENTLY
+  SWALLOWED — progressive raster + VGA_F1 toggling, and il_prev latched so nothing
+  retried.** Invisible since the walk was built: il_eff was always 0 at boot (a
+  swallowed walk wrote the reset defaults anyway) and every change came via OSD with
+  the decoder alive — `Auto` from the ini bits is the first boot-time walk that
+  matters. FIX = `dec_ready` gate (kicks wait for `core_sync_rst` = the decoder's own
+  `sync_rst_out`, the LAST reset to deassert, observed high 8 cycles). Proven
+  RED/GREEN by `bench/dvd/modeline_boot_tb.sv` over the REAL `reset.v` + `regfile.v`
+  (RED reproduced BOTH failure shapes: total swallow = the exact HW symptom, and
+  partial application; the OSD-toggle control passes un-fixed — why no prior HW round
+  ever saw it). ⚠ Lesson: any emu-side logic writing decoder REGISTERS around reset
+  must gate on `sync_rst_out`, not `reset_n` — the walk was the only such writer.
+  ★ HW round 2 (`DVD_videoout2`, user report): a MID-TITLE switch to Interlaced now
+  works cleanly — indirect HW evidence for the parity corrector (pre-fix that exact
+  raster restart was a coin-flip perturbation, the source of the old "set it before
+  loading" advice; the manual now says the switch works with a chapter-seek-style
+  interruption).
+- ✅ **MID-PLAY LOAD A/V DESYNC — FIXED IN FABRIC; ✅ HW-CONFIRMED 2026-08-28 (user
+  report: mid-play loads across VOB/mpg/ISO/VCD cut to black, start clean, hold sync;
+  T2 logo chain clean; seeks/menus/cold mount unregressed; build
+  `DVD_mountflush2_20260828_1537.rbf`). The companion FILM-ENGAGE flush was
+  attempted and ⛔ REVERTED after a T2 HW regression — that skew stays OPEN, owned by
+  the planned early-film-detect feature.** The rule both bugs share: a playback
+  discontinuity needs the FULL FLUSH TRIO (seek/vbuf + load + aud) or audio phases
+  against the wrong video timeline. **Mount fix (kept):** loading a new file mid-play
+  fired load_flush + aud_flush but NOT the VBUF flush — the old "Seek-only; clip-load
+  path untouched" exclusion predated the lip-sync v5 video_live re-arm, which turned
+  the surviving 0.5–2 MB old-file VBUF into a PERMANENT audio lead (STC anchors on the
+  new file, governor displays old frames; forward skew < 15 s never re-anchors; only a
+  core reload avoided it). `start_streaming` now fires the trio, keep_vbuf-ungated.
+  **Film-switch attempt (reverted):** a bare `filmp_eff` XOR edge into `mode_switch`
+  broke T2's menu→Play Dolby/THX logo chain — the logos flap the detector, each flap
+  flushed at an arbitrary mid-stream position (no reader jump = no VOBU re-alignment),
+  garbage seq headers (186-wide popups) flipped pal_eff (25 Hz) which feeds back into
+  film_want = a self-feeding corruption/strobe loop. ⚠ il_switch's fire-on-edge
+  pattern is only safe for ~once/title signals; a filmp edge oscillates and the flush
+  perturbs the parse the detector feeds on. Full post-mortem + the reintroduction
+  requirements (hold-suppression + holdoff, T2 logo chain as HW gate):
+  `docs/film_24p_plan.md` §13. Also shipped: flush glue EXTRACTED to
+  `dvd/flush_ctl.sv` + `bench/dvd/flush_ctl_tb.sv` locks the 11-row trigger matrix
+  (proven RED against the pre-fix logic); `frame_drop_ctl` debt now clears on
+  `flush_vbuf_eff` (carried-in stale debt could fire spurious B-drops post-seek/mount).
+  **Mount decoder SOFT RESET (same branch, follow-up HW round):** the trio flushes
+  BUFFERS only — the decode pipeline (vld in-flight picture, reference frames, picbuf)
+  survives on sync_rst by upstream design, so a flat-file load showed MACROBLOCK
+  GARBAGE (truncated picture + new file's open-GOP B-frames motion-compensated against
+  the OLD file's references; DVD first cells are closed-GOP which is why ISOs looked
+  better). Fix: `flush_ctl.mount_flush` (mount ONLY, never seeks — those need display
+  continuity) → `mpeg2video.soft_flush` → new `reset.soft_rst_n` leg = the exact
+  watchdog-expiry soft reset (regfile/modeline on hard_rst SURVIVE — the HW-proven
+  recovery path); a warm load now cuts to black and starts as cold as a core reload.
+  Post-mortem + deferred items (detector re-arm, vidfeed_cdc): `docs/av_sync.md`
+  "Mid-play mount desync post-mortem".
+- ✅ **FILM MODE FLAPPING — FIXED BY AN EVIDENCE GATE; ✅ HW-CONFIRMED 2026-08-30
+  (build `DVD_filmevidence_20260830_1720`: APOLLO_13's credits no longer flap, T2 holds
+  sync in Auto, and FERRIS_BUELLER follows its own mid-title film→video change IN SYNC).**
+  ★ **The defect was never engage LATENCY — it was mode FLAPPING.** MEASURED on APOLLO_13
+  in DISPLAY order (coded order hides it behind B-reordering): **9 engage/disengage flips
+  in 46 s**, each re-walking the modeline and re-locking ascal. Near-black pictures are
+  **100 % `progressive_frame==0`** (384 B against that title's own 17,704 B median).
+  ★★ **THE FRAMING THAT SOLVED IT: `progressive_frame` is not a measurement — it is a bit
+  the ENCODER wrote**, and on a near-black picture there is no field structure to describe,
+  so the encoder takes the MPEG-2 default and marks it interlaced. The detector counted
+  that meaningless claim at `DN_HARD=8`. VLC's IVTC survives the same content because it
+  reads PIXELS and discards uninformative frames as evidence ("If no motion, the result
+  from this algorithm cannot be reliable ... we do nothing"). **FIX = an informativeness
+  gate on CODED PICTURE SIZE** measured in `vld.v`, carried to the display as a fourth
+  per-picture attribute through `motcomp_picbuf`, where an uninformative pickup updates
+  NOTHING in the detector — not the confidences, not `rff_q`.
+  ⚠ **The threshold must be RELATIVE, per picture coding type, with a warm-up** — all three
+  forced by measurement, not taste: HIGH_SCHOOL_MUSICAL codes a **318 B median** (its small
+  pictures ARE its content; a fixed threshold discards 55 % of the disc and delays its video
+  verdict 17 s), a black I-frame codes 7,580 B where a real one codes ~82,000 B (tiny for an
+  I, above any threshold that does not also eat legitimate B-frames), and seeding the mean
+  from whichever picture arrived first made two rips of near-identical content gate 0.0 %
+  and 85.8 %. ⚠ **Ordering gotcha:** size is known only at picture END, so this CANNOT ride
+  `flags_commit` (which fires at the coding extension near the START) — `informative_commit`
+  pulses at the terminating start code, still strictly before picbuf rotates slots.
+  ⚠ **Count `next_advance`/`next_align`, NOT the registered `advance`/`align`** — vld.v
+  forces those to 0 whenever `clk_en` is low, so a clk_en-gated block reads 0 almost always;
+  that made every picture measure 0 B, which is SILENTLY INERT (a zero mean compares equal,
+  so everything reads "informative") and would have shipped as a no-op.
+  ⛔ **A PER-TITLE LATCH WAS TRIED AND IS NOT THE ANSWER** (abandoned, unpushed): it works on
+  APOLLO_13 but costs **12 s to leave film mode**, which FERRIS_BUELLER's film→video special
+  feature makes unacceptable. ⛔ **`frame_pred_frame_dct` is NOT a usable substitute** — it
+  looks perfect on APOLLO_13 and reads 0 for ~99 % of pictures INCLUDING progressive ones on
+  FERRIS/AUSTIN_POWERS_2, so a detector keyed on it calls film VIDEO within two seconds. It
+  is an encoder rate setting, not a content property. Library sweep: **15 better, 0 worse
+  over 123 discs**. Golden model `tools/film_evidence_probe.py`; suite
+  `bench/dvd/run_film_evidence.sh` (`film_evidence_tb` runs the REAL vld over REAL disc
+  bytes and checks size AND verdict against the golden — a hand-driven vld model would only
+  check one's reading of the FSM). Detail: `docs/film_24p_plan.md` §14.
+  ⚠ **Separate, still OPEN:** APOLLO_13 plays **~800 ms audio-ahead**, established at the
+  FIRST anchor of a playback and cleared by any re-anchor (chapter skip). NOT detection, NOT
+  the raster switch (`Film 24p = On` shows it too), and NOT the VBUF cap (Shallow changed
+  nothing). An imported "anchor the STC on the screen" fix made it WORSE (1800 ms + stream
+  freezes) and is not merged — see `docs/av_sync.md` "HW round 3" before touching it.
+- 🔧 **THE STC IS A CLOCK — free-running STC + PTS-scheduled display (2026-09-06/07,
+  PR #63, `dev-stcfree`). BUILT `DVD_stcfree_20260907_0335.rbf`
+  (SEED 5 first roll, clk_dec 91.41/90.51, 92 % ALM), sim-proven by
+  `bench/dvd/run_stc_freerun.sh`, and ✅ **HW-CONFIRMED 2026-09-07** across titles
+  (APOLLO_13/MiB/Ferris in sync, no judder after a chapter skip), menus (Thayer's Quest
+  and Tomb Raider no longer freeze, D&D holds sync through menu choices, T2 clean,
+  FAMILY FEUD II's questions read to the end), captions (MiB + Matrix) and the new
+  0 ms A/V Offset default. Design + status record:
+  `docs/stc_freerun.md` — read §3.5 for what was DELETED before touching any A/V code, and
+  §3.7 (1)–(8) for six defects found across three HW rounds, all of them mine.**
+  ★★ **THE ONE THAT MATTERS MOST: `dvd/emu.sv` DECLARED `dec_pts_in`/`dec_pts_in_valid`,
+  WIRED THEM INTO `mpeg2video`, AND NEVER INSTANTIATED THE CDC THAT DRIVES THEM.**
+  `mpeg2video`'s own port comment said the PTS was *"already crossed into clk (emu
+  pts_cdc)"* — naming an instance that did not exist. Quartus tied both low, so the
+  decoder NEVER RECEIVED A VIDEO PTS: the scheduler anchored its clock to **0** at the
+  first (untagged) pickup and ran open-loop on extrapolation, for every disc, in every
+  mode, through TWO hardware rounds. The reported "audio 1.6 s ahead" was simply the audio
+  PTS at the start of playback — it measured **1599.9 ms and 1601.5 ms** in two different
+  raster configurations, identical to a millisecond, which a dynamic mechanism does not do
+  and a stream constant does. One `pts_cdc #(.W(33))` fixes it; `av_drift` went to
+  **−0.3 / +0.2 ms**.
+  ★★ **WHY FOUR INSTRUMENTS AND TWO HW ROUNDS MISSED IT — the durable lesson.** Not an
+  implicit net (the wire was declared, so `default_nettype none` and the 10236 gate are
+  silent: those catch a missing DECLARATION, this was a missing DRIVER). No bench sees it
+  (`pts_assoc_tb`/`pts_chain_tb` drive `pts_in` directly and are byte-exact — the
+  association was correct, it was never given anything to associate; there is no emu-level
+  bench). And the telemetry read HEALTHY, because **with no tags `want_pts` falls back to
+  the scheduler's own extrapolation, so `disp_lag` compares the clock against a number
+  derived from the clock** — it read ≈0 and that was taken as proof the scheduler worked.
+  > **An instrument derived from the thing it measures reports health at exactly the
+  > moment that thing is absent.** Telemetry word 15 found this on its FIRST run because
+  > it reports the clock's own HISTORY (`prov_seen`, `first_tagged`, `reanchors`) rather
+  > than a difference against it. Prefer instruments that can say "nothing real happened".
+  ★ **Two gates now catch this class mechanically, both proven against the real defects,
+  both advisory on a dev build and fatal on `--release`:** `tools/lint_undriven.sh`
+  (verilator `-Wwarn-UNDRIVEN` over **the file list in `DVD.qsf`** — a glob would lint the
+  upstream `resample_addrgen` instead of the fork's; validated by naming `dec_pts_in` on
+  the commit before the fix; runs BEFORE the compile so it costs seconds) and
+  `tools/netlist_canary.sh` (a wide data register Quartus constant-folded —
+  `pts_assoc|tag_pts[1..32]` "Merged with `tag_pts[0]`" was in the map report the whole
+  time; catches a path driven BY A CONSTANT, which the lint cannot see).
+  ★ **The audit those gates came from found a SECOND dead path in the same surgery:**
+  `frame_late` was left `output reg` with its `always` block deleted, so the entire
+  lateness → `frame_drop_ctl` ledger was dead — `late_raw` computed correctly and consumed
+  by nothing, O[12] Frame Drop unable to act on a real decode miss, and the `lates`/`drops`
+  telemetry reporting only the scheduler's own catch-up request while looking like a
+  working governor. Restored as `late_raw | late_ext | par_late_r`; `late_ext` KEPT against
+  the plan (a field-path REPEAT re-scans a PAIR, so one miss costs two refreshes).
+  ★ **A/V Offset should now default to 0 ms, MEASURED:** `play_err` reads **−0.0 ms** at
+  0 ms and +99.9 at +100, so the +100 ms default was the null of the OLD parse-front
+  residual, exactly as the plan predicted. ⏳ Not changed yet — it is user-visible, the
+  verdict is ears, and `CONF_STR` is in the netlist so it re-rolls the pinned seed.
+  ★ **EVERYTHING THAT PRESENTS TO THE VIEWER IS NOW ON THIS ONE CLOCK** — video, audio
+  decode, IEC 61937 passthrough, subpictures, highlight promotion and line-21 captions.
+  The last two were an explicit uniformity pass (`docs/stc_freerun.md` §11):
+  `nav_pci` trusts the scheduled path only while the pending HLI was committed AFTER the
+  clock's most recent re-anchor (`hli_coherent`) — a measurement, where `~keep_vbuf` was
+  a guess; and `cc_line21` spends a credit per display PICKUP instead of draining on
+  raster fields, which fixed a **GOP-sized (~0.5 s) standing phase error** the old
+  "same clock" reasoning could not see because it only ever argued about RATE.
+  ⚠ **The nav_pci settle/timer FALLBACKS STAY.** They are not redundant: they cover the
+  incoherent case, and deleting them (which tying `hl_stc_fresh` to 1 effectively did) is
+  what cost Harry Potter and Scene It their highlights.
+  ⚠ **Deliberately NOT on the STC, so the next audit does not re-litigate them:** still
+  durations and the reader's cell clock (raster vsyncs ÷ `disp_fps` — a WALL clock, which
+  is what a `still_time` needs), the HUD/seek-bar clock (DSI `c_eltm`), `spu_decode`'s
+  `menu_mode` bypass (a menu subpicture shows for as long as the menu is up), and every
+  timeout (`av_vid_hold`, `DRAIN_WD`, `arm_timer`, `vmw_tmr` — plain clk_sys counters that
+  schedule nothing).
+  ⚠ **Two PRE-EXISTING highlight bugs were found while testing this and are NOT from it**
+  (A/B'd against `dev-main`, identical there): Harry Potter Interactive's Player Mode
+  screen and Scene It's Play-game menu render no highlight. Diagnostic state for both is
+  in `docs/stc_freerun.md` §10; they want their own issue.
+  ⛔ **RETRACTED en route, and worth knowing before re-deriving either:** (a) re-basing
+  `play_anchor` on a clock re-anchor — `play_err` IS the lip-sync error, and dragging its
+  anchor along forces it toward zero, so it read −98 ms while the real error was 1.6 s;
+  (b) re-anchoring the clock at a raster change — it made every instrument read correct and
+  changed nothing audible, because **retarding the clock does not move audio that has
+  already left the DAC**. A clock ahead of the display must be answered by ADVANCING THE
+  VIDEO (drops), never by moving the clock back.
+  ★ **Stage 1 in one paragraph:** `dvd/disp_sched.sv` (in `mpeg2video`) counts a
+  90 kHz tick (`clk_sys/300`, toggle-crossed) and anchors it at pickups of tagged
+  pictures; `resample_addrgen`'s `frame_due` IS its `sched_due` (`stc − pts ≥ −half_scan`,
+  half the raster's IMAGE-SCAN period: 750/900/1877/1800); `next_pts` extrapolates from
+  the flags × `frame_rate_code` plus every `skip_ack` (deferred if a picture is waiting
+  at the output — the depth-1 queue's ordering rule); a tagged picture > 1 frame behind,
+  > 0.5 s ahead, or > 2.7 s late re-anchors (`LATE_MAX_TICKS`; the 350 ms of the original
+  plan was raised in HW round B -- "lateness is not a discontinuity",
+  `docs/stc_freerun.md` §3.7(2)). `av_sync.sv` is a clk_sys MIRROR now;
+  every consumer reads the one `stc`; `sched_en`/`sync_armed` lost `~menu_active`,
+  the STD hold gained a ~155 ms no-audio release,
+  ⚠ **(corrected 2026-09-08: two items here described the mid-branch commit `2b548b0`, not
+  what merged -- commit `5f49c29` walked both back. `hl_stc_fresh` is NOT tied to 1; it is
+  `~keep_vbuf` as before (`dvd/emu.sv:1541`). The STD hold's `menu_active` exemption was
+  RESTORED; only the `!aud_seen` release is new. `sched_en`/`sync_armed` did lose
+  `~menu_active`.)**
+  and `dvd_audio_decode` re-bases `play_anchor` by each anchor delta. The scheduler's
+  reset is the VBUF flush, NOT the keep_vbuf pipe reset — that is what makes menus
+  safe. ⚠ `disp_sched_tb` scores every pickup against the scenario's TRUE PTS, not the
+  DUT's own wanted time: two of five mutations were invisible until it did.
+  DELETED: the refresh-counted STC, `TPR_Q16`, the PI, `vbig`; `refresh_cnt`,
+  `cur_show`/`show_next`/`SHOW_N`, the film24 override, `cad_acc`, `menu_ff`, the
+  `vid_err` instrument (word 5 reads 0); benches `cadence_slip/phase`, `film_drift`,
+  `gov_field_late`, `menu_ff`, `resample_cadence*`.
+  ★★ **Every A/V-sync defect since the governor shipped is ONE defect: the STC counted
+  refreshes from a PARSE-front anchor and the display never consulted a PTS after
+  it**, so whatever sat between the demux and the screen (the VBUF, 0.5–1.8 s,
+  bitrate-dependent) became the A/V offset — Film 24p −945 ms, every "skew cured by a
+  chapter skip" report, the menu lip-sync exemptions. The archived branch
+  `feature/audio-delay-ddr` (never merged) got film24 to ~−175 ms with a decoder-front
+  proxy clock and designed a 2 MB DDR audio-delay ring; both treat the buffer as the
+  problem. This does what a set-top box does: **a 90 kHz clock off the same 27 MHz
+  crystal as the raster and the audio NCO (rate locked by construction), and both media
+  presented at their PTS against it.** Buffer depth becomes latency, not offset.
+  ⛔ The "video is the master timebase / two crystals" premise in `docs/av_sync.md` was
+  false and is superseded; the EXONERATED / FAILED lists there still hold.
+  **Stage 0 (no behaviour change):** exact PTS→picture association through the decoder.
+  The demux marks the first payload byte of a PTS-bearing PES (`vid_mark`, riding the
+  byte through a 9-bit `vidfeed_cdc`); `dvd/vbuf_pos.sv` gives that byte's VBUF position
+  exactly (words written + write-fifo pending + this cycle's push + packer phase);
+  `getbits_fifo.bitpos` gives the vld's parse position from the same flush;
+  `dvd/pts_assoc.sv` pops a stamp at the first picture header at/after it (the MPEG
+  rule, ISO 13818-1 2.4.3.7) and the tag rides `motcomp_picbuf` as a fifth slot
+  attribute (`output_pts`) to `resample_addrgen`. Telemetry word 11 `disp_lag` =
+  displayed PTS − STC is the acceptance signal: ≈ −1 s film24 / −0.2 s interlaced
+  before Stage 1, ~0 after.
+  ★ **Two things measured, not assumed:** the start code sits 32 bits before the
+  header position (57/57 + 220/220 exact, `pts_assoc_tb [A]`), and `vbuf_write`
+  raises its push strobe the cycle AFTER a word's eighth byte, so a mark on the next
+  byte counted one word short (−8 B, `pts_chain_tb`) until the strobe was added.
+  ★ **A real pre-existing defect fixed en route: up to 32 VBUF reads are in flight at a
+  flush and their responses landed in the read FIFO AFTER its reset** — the decoder
+  swallowed up to 256 stale bytes of the old stream after every seek. Reads now carry
+  the flush parity in their memory tag (`TAG_VBUF1`, spare code 7, toggled on the
+  flush's RISING edge — it is a 192-cycle level) and `framestore_response` drops the
+  other epoch. Gate: `bench/dvd/run_pts_assoc.sh` (RED arm rebuilds the response with
+  the epoch compare removed and must fail).
+  ⚠ DVDs carry a video PTS about once per VOBU (~11 pictures; 260–372 KB/PTS measured
+  on four discs), so Stage 1 extrapolates between tags from the picture flags and
+  `frame_rate_code` and needs the vld's new any-reason `skip_ack` (governor AND realign
+  drops) to keep that timeline honest.
+  - ✅ **THE PARSE-FRONT AUDIT (2026-09-08, PR #75) — two consumers #63 changed WITHOUT
+    TOUCHING; sim-proven RED/GREEN against measured disc data and ✅ HW-CONFIRMED
+    2026-09-08** (build `DVD_spuwindow_20260908_1955.rbf`, SEED 5 first roll, 92 % ALM,
+    clk_dec 87.40/88.85 — passing but the thinnest margin in recent history, worth a
+    seed sweep if a later branch lands near the 86.0 gate). Field report on The Matrix:
+    the "Follow the White Rabbit" icon FLASHES instead of staying solid, and there is an
+    AUDIO DROPOUT at each white-rabbit point *whether or not* white-rabbit mode is
+    entered.
+    ★★ **§11 asked which presentation paths were still off the STC. It did not ask the
+    other question: which consumers compare a PARSE-FRONT value AGAINST `stc`, and so
+    changed meaning when `stc` moved onto the display.** Both defects are that question's
+    answer and neither module was edited by #63.
+    **(1) `spu_decode` commits at the parse front into a SINGLE bitmap.** With `stc`
+    leading, an arriving unit was already due at commit; with `disp_lag ≈ 0` it installs a
+    window ~a VBUF depth in the FUTURE and blanks what is on screen. MEASURED: the icon is
+    one `FSTA_DSP` at PTS 101885 + one `STP_DSP` at 866659 = **8.4975 s solid**, re-sent
+    **byte-identically 8 times, 90090 ticks (1.001 s) apart** — so solid IS the authored
+    behaviour and the blink period is the re-send period. ⚠ The same bug **truncates every
+    ordinary subtitle** by up to a VBUF depth. Fixed at the mechanism (a display-order
+    HOLD at `DCSQ_END` + a CONTIGUITY CLAMP at `COMMIT` + `S_IDLE` resuming at a real unit
+    boundary), NOT by widening `menu_mode`. ⛔ Double-buffering the bitmap is ~102 M10Ks
+    against 55 free. ★ The hold's bound is MEASURED: real subtitle units are never closer
+    than 1034 ms (n=36, median 2369 ms). Gate `bench/dvd/run_spu_window.sh --red`
+    (3 mutations, each caught by its own arm; the harness FAILS a mutation that does not
+    compile — two arms first "passed" on a build error).
+    **(2) A seamless-branch junction is not a content change.** #63's `disc_rephase`
+    resets `audio_ring` + `dvd_audio_decode`, accepted on *"titles re-anchor about once per
+    playback (APOLLO_13)"*. APOLLO_13 is one continuous title; **Matrix VTS_02 PGCN 1 —
+    the PLAIN movie — has the same 9 interleaved cell-pairs as the rabbit PGCN 6**, which
+    is why the dropout ignores white-rabbit mode. MEASURED: the ILVU splices INSIDE a block
+    are continuous (0 irregular steps in 238 AC-3 PTS samples) and the disc authors NO
+    audio gap (`sml_pbi.vob_a[]` all zero), but **entering the cell the PTS restarts near
+    zero (−2 s to −64 s)**; every such cell is byte0 `0x0e` = `seamless_play=1` AND
+    `stc_discontinuity=1`. Fix = ask the disc: `dvd_iso_reader` decodes
+    `cell_playback_t` byte 0 **bit 3** (the byte was already in `cell_cat_mem`; three bits
+    were used) and `flush_ctl` withholds the audio flush there. The CLOCK still
+    re-anchors. ⛔ NOT a "was there a seek/jump recently" window — a looping menu cell
+    re-anchors with genuinely restarting audio and pulses no `seek_ack`. Menus are
+    structurally untouched (`menu_dom` never latches the level). ⚠ 104/106 cells are
+    seamless, so inside a feature the re-phase now fires only at the 2 authored breaks —
+    consistent with the FAMILY FEUD II measurement. Gate
+    `bench/dvd/run_seamless_audio.sh --red`. ⚠ Two bench lessons: the fixture needed a
+    third cell that is seamless but NOT interleaved (byte0 `0x08`) or bits 3 and 2
+    coincide and the wrong bit passes (it did); and a per-cell sample must be phased
+    against the reader's own `cell_i`, not the delivered byte pattern (the reader runs ~2
+    sectors ahead). ⏳ `nav_pci`'s `hli_coherent` is untouched and may be a second
+    contributor to the icon — `O[2]` `blk1`/`blk7` vs `blk3`/`blk8` separates them on HW.
+    **(3) A STREAM THE PGC DOES NOT DECLARE WAS BEING DISPLAYED (pre-existing, same PR).**
+    Rabbit-mode subtitles read "white on white". PGCN 6 declares logical stream 1 only;
+    pressing Subtitle releases the VM's claim, the user path resolves logical 0 by RAW
+    INDEX to 0x20 (the real subtitle stream) and draws it with PGCN 6's palette, whose
+    three opaque subtitle classes are all `Y=128` (PGCN 1: `[0] Y=16 [8] Y=128 [9] Y=176`).
+    ⚠ **The rule is NARROWED ON A SWEEP, not on the spec alone:** 221 discs / 22,733 title
+    PGCs — class A (declares logical 0) 18,801, class B (declares NOTHING) 3,929 of which
+    **586 rely on the identity fallback**, class C (declares something, not 0) **3**.
+    libdvdnav's unconditional available-bit guard would strip subtitles from those 586
+    across up to 168 discs, so `subp_stream_map.any_present` narrows it to class C —
+    blast radius 3 PGCs. Only the USER path is gated (menu/VM resolutions pick a stream
+    the disc itself chose). Gate: `subp_stream_map_tb`'s 6 directed `stream_absent` arms,
+    RED against BOTH the unconditional version and the pre-fix one; the 2071-vector
+    `phys_streamN` golden contract is untouched.
+    Detail: **`docs/stc_freerun.md` §12**, `docs/subpicture.md`, `docs/dvd_nav.md`.
+
+- 🔧 **A MENU CONTEXT IS NOT A MENU DOMAIN — the subpicture map's domain gate asked the
+  wrong question (2026-09-12, issue #81); sim-proven + mutation-checked, ⏳ HW-confirm
+  pending.** Field report on v0.5.0: *Aniki, mon Frère* (**BROTHER**) PAL FR Z2, physical
+  disc, `Disc Menus` On — *"No visible selection on the main menus."*
+  ★★ **THAT IS WORD-FOR-WORD THE #60/#61 SYMPTOM ON A DISC THE #60/#61 FIX COULD NOT
+  REACH, AND THE SENTENCE CLAIMING IT COULD WAS IN `emu.sv` THE WHOLE TIME.** Measured
+  from the repro bundle: the disc's FP is `g[3]=1; JumpTT 3`, so its menus are
+  **TITLE-domain PGCs** (VTS_02, 22 titles of 30–41 s, `PGCN 4` post
+  `if (g[0]==0) JumpVTS_PTT 4:1` = a looping motion menu, and `HL_BTNN = 0x400/0x800` in
+  five PGCs' POSTs = it expects highlights), VTS_02 `V_ATTR = 0x5E00` (PAL 16:9), and
+  `subp_control[0] = 0x80010200` on **every** PGC — **the exact word both #60/#61 discs
+  author**, so the highlight SPU rides `0x21` while the core filtered `0x20`. A highlight
+  is a RECOLOUR of subpicture pixels, so nothing was drawn.
+  ★ **The mechanism: `subp_stream_map`'s gate was `ctx_menu ? ~dom_tt : dom_tt`, driven
+  from `emu.sv`'s `menu_sp_ctx` — and `menu_sp_ctx` is DELIBERATELY WIDER than the menu
+  domain** (it includes `sp_menu_early`, the in-title multi-button HLI menu: Scene It's
+  game menus, and this disc's motion menus). So a menu context in the TITLE domain
+  demanded a menu-domain table, found the title's, and fell back to the logical index.
+  Fix: the input is now `menu_dom` (`menus_on && menu_active` — a fact about the PLAYER)
+  and the test is `dom_ok = (dom_tt != menu_dom)` = "the table belongs to the domain we
+  are in".
+  ⚠⚠ **THE MODULE'S TRUTH TABLE DID NOT CHANGE** (`ctx_menu ? ~dom_tt : dom_tt` is the
+  same function of that bit; verified over 200,000 input points), so
+  `subp_stream_map_tb` **cannot go RED for this defect** — only emu's choice of what to
+  put on the wire changed, and there is no emu-level bench.
+  ★★ **THAT IS THE DURABLE LESSON, AND THE DOC HAD ALREADY TALKED ITSELF OUT OF THE
+  GATE:** `docs/track_selection.md` said a chain bench "would have to *replicate* emu's
+  glue, which is a bench agreeing with a copy of the thing it is meant to check" — true,
+  and it was then read as covering the glue. It did not: a single port connection
+  carrying the wrong FACT is invisible to every module-level test. New
+  **`tools/check_subp_map_wiring.py`** gates that one connection by **reading it out of
+  `dvd/emu.sv`** (the `tools/acmod_scan.py` / `csync_pipe_tb` pattern — a table that
+  cannot go stale beats a correct one), runs from `run_subpic.sh` in milliseconds, and is
+  RED on the pre-#81 file and on 2 targeted re-regressions.
+  ⚠ **No local repro, quantified: 958 ISOs → 7 discs have a title-domain PGC resolving
+  logical 0 non-zero, and NONE of the 7 carries an in-title HLI** (`nav_extract.py
+  --title-vob`), so they are untouched either way — the same standing as #60/#61, which
+  also could not be reproduced locally.
+  ★ **The one class this touches is MEASURED bit-identical, not argued so: Scene It's game
+  VTS declares `nr_of_vts_subp_streams = 0` with the AVAILABLE BIT CLEAR on every
+  `subp_control[0]`**, and `use_map` requires `ctl_sel[31]` — so it stays on the identity
+  fallback → physical 0 and the domain gate never gets to matter. (Its highlight works
+  because the disc sends an SPU on `0x20` whatever its IFO table says.) The discs this can
+  move are exactly: available bit SET **and** a non-zero id for the presented aspect
+  **and** an in-title HLI menu. ⚠ The reporter did not pass `--nav-packs`, so the
+  HLI itself is not in evidence and the diagnosis is structural.
+  ★★ **AND libdvdnav — THE INDEPENDENT ORACLE — EXPOSED A SECOND WRONG FACT ON THE SAME
+  LOOKUP, WHICH IS WHY IT GOT FIXED RATHER THAN DEFERRED.** `vm_get_subp_stream`
+  (`vmget.c:138`) has **NO domain condition on the map at all** (the domain only forces
+  `subpN=0` and turns a `-1` into 0), so it applies `subp_control` in
+  `DVD_DOMAIN_VTSTitle` too and resolves this disc to `0x21` — our fix agrees with it.
+  But the aspect it feeds the lookup is `vm_get_video_attr()` =
+  **`vtsi_mat->vts_video_attr` in the title domain (`vmget.c:313`) — the IFO, not the
+  sequence header**, while we used `ar_wide_auto` there. A menu-domain menu already reads
+  the IFO *precisely because* "DVD menus are routinely authored 16:9 anamorphic with a 4:3
+  sequence-header code", and a title-domain menu is the same authoring — so a 4:3 code
+  would take the `[28:24]` field (0) and **the symptom would have survived the domain fix
+  entirely.** New reader output `title_ar_wide` from `VTS_V_ATTR@0x200`, costing ONE extra
+  `attr_addr` step (the Phase-10 `S_ATTR` sweep already has that sector resident), consumed
+  by ONE mux arm: `sp_map_wide = sp_menu_early && !menu_dom_live ? title_ar_wide_w :
+  ar_wide_auto_eff`.
+  ⚠ **Scoped to the in-title MENU only** — the white-rabbit `SetSTN` path, the user
+  subtitle path and `ar_wide_eff`/`VIDEO_ARX` keep the HW-proven sequence-header value.
+  The asymmetry is deliberate: one of those has a working precedent to preserve, the other
+  does not. And it is NOT a second delta in the "one per HW round" sense — its blast radius
+  is the SAME single case as the domain fix.
+  Gates: `subp_stream_map_tb` arms [7]–[10] + 6 vectors; `iso_reader_attr_tb`'s
+  `title_ar_wide` arm, which reads `VTS_V_ATTR` **out of the fixture** rather than
+  restating 1 (MiB VTS_21 = `0x4E80`) and refuses to be vacuous, **3/3 reader mutations
+  caught**; `check_subp_map_wiring.py` on both ports, RED on 3 re-regressions.
+  Detail: **`docs/track_selection.md`** "The domain gate asked the wrong question",
+  `docs/dvd_nav.md` (Scene It section).
+
+- ✅ **MEM_SHIM_BURST TAG/LRU STORE → M10K — the ALM congestion reclaim (2026-08-27,
+  PR #18) — ✅ HW-CONFIRMED 2026-08-28 (user soak: full-length MiB + menu/seek stress,
+  no shear/artifacting; build `DVD_shimreclaim_20260828_0259.rbf`).**
+  The designated congestion-relief project: post-PR#17 the design sat at 98% ALM and
+  the last two branches each needed fit-rescue work. `dvd/mem_shim_burst.sv` (4,899
+  ALMs — the tag/valid/LRU flop store + per-set 128:1 async muxes, the recurring
+  LUT-RAM pattern) now keeps tags + LRU ranks in two sync-read M10Ks (by-set words);
+  valid bits stay flops. The hit loop grew to 3 overlapped stages (still 1 word/cycle);
+  misses/writes issue from the verdict cycle (fast entry — miss timing matches the flop
+  version; TB pure-miss meter improved 26→25 cyc/resp). **Replacement policy is
+  BIT-EXACT true LRU**, gated by the new A/B TB `bench/dvd/mem_shim_ab_tb.sv` (live
+  module vs a FROZEN flop-tag copy on one trace, independently-stalled rigs, accepted-
+  burst sequences must be identical — 4/4 combos, 1,351 identical misses). Suite:
+  `bench/dvd/run_mem_shim.sh` (all green). Fit: module 4,899→~1,406 ALMs (regs
+  6,546→1,028, +3 M10K), **design 41,202 ALMs (98%) → 36,341 (87%)**; pinned SEED 5
+  held FIRST roll, clk_dec 93.73/90.33 (gate 86.0). The HW soak mattered because this
+  is the shear-fix module (sim cannot prove hit-rate-under-real-traffic) — it PASSED:
+  entire MiB movie + menu/seek actions, no video issues, no shearing, no artifacting.
+  Detail: `docs/history.md` §11.
+
+- 🔧 **PIXELATED MENU STILLS — root-caused + fixed in fabric (2026-08-26, branch
+  `fix/picbuf-display-slot-alias`); ✅ HW-CONFIRMED 2026-08-27 (user report: Harry Potter
+  artifacting GONE, no regressions on other discs; build `DVD_picbufalias`).** A menu/game still could come up
+  **blocky, "like it hasn't finished loading"** because the decoder was writing the new picture
+  **into the frame slot the display was scanning out**. `rtl/mpeg2/motcomp_picbuf.v` guards its
+  `current_frame` (:268/:278) and `prev_i_p_frame` (:355) updates with `~vld_last_frame`, but the
+  **fwd/bwd reference swap (:322/:327) was not guarded** — so at every `sequence_end_code` the
+  slot pointers rotated one extra step, `STATE_LAST_FRAME` put that slot on screen while clearing
+  `prev_i_p_frame_valid`, and the next sequence's first I both targeted the displayed slot AND
+  took `STATE_IP_FRAME_0`'s `~output_frame_valid` shortcut (:164) past the anti-overwrite
+  handshake. **Fix = add `~vld_last_frame` to the swap** (the alias becomes structurally
+  impossible: `fwd`/`bwd` are always a distinct {0,1} pair and `output_frame == prev_i_p_frame
+  == bwd` at a sequence end). This is an **upstream mpeg2fpga bug** — the file was untouched
+  since import. Sim: new `bench/dvd/motcomp_picbuf_tb.sv` ([A] still→still fails pre-fix, passes
+  post-fix; [B] video→still control; [C] boot-deadlock guard) + a `` `ifdef CHECK `` assertion now
+  live in the module. ⛔ **Do NOT instead gate the `STATE_IP_FRAME_0` shortcut on slot
+  inequality — it DEADLOCKS the core** (`dvd/resample_addrgen.v:543` gates pickup on
+  `output_frame_valid`, which is 0 in exactly that scenario, so `output_frame_rd` never arrives).
+  ⚠ **Scope is honest and narrower than the symptom:** measured over 70 real cells of the Harry
+  Potter Interactive disc, every `still_time=255` still is `SEQ GOP PIC:I SEQ_END` (so a still
+  arms the collision for whatever decodes next ⇒ still→still navigation collided every time)
+  while every video/transition cell ends on a coded B (⇒ never armed). So this does **not**
+  explain the reported jump-vs-natural asymmetry, nor a multi-second artifact — yet on HW the fix
+  cleared ALL observed artifacting on the disc, so those observation-level discrepancies closed with it. Also learned: that disc's stills are **title-domain**, and the menu-still cold
+  re-decode (`dvd_iso_reader.sv:4017`) is `menu_dom`-gated, so it never ran there at all — a
+  separate, deliberately deferred item. Detail: `docs/dvd_menu_refinements.md` §5.
+  A follow-up **audit of the rest of the upstream decoder found no further fix-now
+  defects** — findings + the audited-clean list: `docs/decoder_audit.md`.
+
+- ✅ **LAUNCH FEEDBACK TRIO — HW-CONFIRMED 2026-08-26 (5 HW rounds; PR #9 +
+  the follow-up rounds PR); design + full history: `docs/idle_screen.md`.**
+  Shipped as release v0.1c. HW rounds delivered on top of the original trio:
+  bounce-box art trim, logo-behind-OSD, the QX query-lead SIGN fix (subtract
+  like SP_QX_ADJ, not add like the HUD -- the centred boxes hide the shift),
+  the PNG converter rewrite (background-aware, box-averaged --fit, refuses
+  tiny results), the 256x64 logo ROM (4 M10K, per-logo 1x/2x scale, fmt-0
+  back-compat), and OSD R0 Reset actually wired (status[0] consumed by
+  nothing since the fork began -> now ORs into reset_n: unload + VM reset +
+  back to the logo; boot.rom logo and the OSD one-shot survive by design). (1) **Config
+  versioning**: CONF_STR `"v,1;"` → settings persist to `config/DVD_v1.CFG`;
+  bump N on any incompatible O[..] relayout (resets ALL options — re-audit
+  index-0 labels when bumping). (2) **Startup OSD popup**: `BUTTONS` was
+  wrongly an INPUT since the fork began (canonical = output; b[0] = the
+  virtual OSD button) — now a wait-then-pulse `osd_btn` pops the file picker
+  ~1 s after a bare load (mount-suppressed, one-shot, NOT the console-core
+  hold idiom: menu.cpp fires on the RELEASE edge so a mid-window MGL mount
+  would pop it anyway — the pulse form cancels instead). (3) **Idle screen**:
+  `dvd/idle_logo.sv` bouncing-logo screensaver while nothing is mounted
+  (1 M10K two-bank ROM, user bitmap via `/media/fat/games/DVD/boot.rom` —
+  `tools/idle_logo.py` converts PNGs; never-garbage is structural: writes
+  are bank-1-gated + exact-length commit). Rode in with an area-reclaim
+  pass: dead mpeg2fpga OSD tied off (~300 ALM + 7 DSP + 5 M10K) and
+  `dvd_vm`'s 11 parallel `eval_reg` register-file muxes shared down to 3
+  (~1k ALM; ⚠ the gprm[] reads must stay DIRECT array expressions — a
+  function-mediated word read loses array sensitivity and broke type 4's
+  compare-after-set; see the ⚠ note in dvd/dvd_vm.sv). Decoder >576-line
+  support was investigated for removal and found NOT worth it (HD costs
+  DDR3 + counter widths, not fabric — the big decoder M10Ks are
+  latency-tuning FIFOs).
+
+- ✅ **POST-ONLY PGC DISPATCH + FORCED-SELECT ON A NEW HLI — two nav bugs from
+  user-submitted discs (2026-08-30, branch `feature/postonly-pgc-and-fosl`);
+  ✅ HW-CONFIRMED 2026-08-31 (build `DVD_navfix_20260831_0029`) — fix (1) fully,
+  fix (2) PARTIALLY (see below).** Reports: The Residents Commercial DVD *"doesn't allow you
+  to enter the maze / picks Play All whatever you choose / LINK FAIL"*, Dinosaur
+  *"LINK FAIL, navigation issues preventing progress"*, Scooby-Doo 2 *"floor maze
+  starts the player in the wrong position"*.
+  **(1) A 0-CELL PGC IS NOT A DEAD END — it runs its POST.** libdvdnav `play_PGC()`
+  falls to `play_PGC_post()` when `nr_of_programs == 0`, and menu discs use exactly
+  that as the **button dispatcher**: every button carries the SAME `LinkPGCN`, and the
+  target PGC (0 cells, 0 pre) reads `HL_BTNN` in its POST to decide where the press
+  goes — so **SPRM8 is the only carrier of the user's choice**. Killing that PGC
+  collapsed every option onto one destination AND raised LINK FAIL. Fixed at the three
+  `dvd_vm.sv` "0 cells ⇒ dead end" sites (enter `BLK_POST` when `nr_post != 0`;
+  `nr_post == 0` keeps the TP_SW dead-end recovery) + the `dvd_iso_reader.sv`
+  `S_PGC_CELLCHK` gate (`cmd_nr_pre || cmd_nr_post` — its LinkPGCN-follow scan walks
+  PRE commands ONLY, so a POST-only stub fell to `pgc_error`).
+  ⚠ **`tools/dvd_vm_ref.py` HELD THE SAME WRONG ASSUMPTION**, so the golden model could
+  not have caught this — it was written from the RTL and agreed with it. **libdvdnav
+  (`tools/bin/trace_*`) is the independent oracle; use it when a model and its RTL
+  agree suspiciously well.** Scope (**505-disc sweep**; an earlier "15/122" in commit
+  dbe5d57 used a NON-RECURSIVE glob that missed `interactive/` = the DVD games):
+  **70 discs (14.3%)** have the strict 0-cell/0-pre/POST dispatcher, **178 (36.3%)** have
+  a 0-cell PGC with any POST = the full affected population. Sweep: **499/505 landings
+  unchanged, 6 changed — ALL SIX went from a HARD BOOT FAILURE to a healthy menu**
+  (3 verified vs libdvdnav, one landing byte-exact; 3 ✅ HW-confirmed 2026-08-31; four had
+  never been reported). **Zero regressions.** Corroborated by a TV box set outside the
+  swept set (*"link failure on every menu option"*): 6 dispatchers per disc, boot landing
+  unchanged, every button `pgc_error` pre-fix and resolving post-fix.
+  ⚠ Library disc titles are deliberately NOT recorded here (maintainer preference); the
+  per-disc rows are reproducible by re-running the sweep.
+  Test `dvd_vm_tb` [S23] (real Residents PGCN 81 POST bytes; RED pre-fix).
+  **(2) FORCED SELECT (`fosl`) applied only on a not-armed→armed edge** — `armed` reads
+  its pre-assignment value, so `fosl` was dropped whenever one HLI replaced another
+  while armed, which is what a title-domain game does VOBU to VOBU. Scooby's maze
+  authors 4 auto-action compass buttons + an inert centre with `fosl=5`; losing it left
+  the highlight on button 1 (= left), which **self-activated**. Now gated on
+  `nxt_ss == 1` (NEW HLI), matching the `foac` commit; `ss=2/3` continuations stay
+  excluded so it can't fight the player's D-pad. Tests `nav_pci_tb` T16 (RED pre-fix) /
+  T17 (control). Detail: `docs/dvd_vm.md` "POST-only PGC dispatch", `docs/dvd_nav.md`
+  "Forced select".
+  ⚠ **fix (2) was PARTIAL — HW showed fresh maze entry correct, but RE-ENTRY after a
+  trap and the NEXT room still landed on button 1 (auto-action = the player moves before
+  any input).** ⛔ The "leading theory" recorded here (the re-entries arrive as
+  `hli_ss==2`; gate `fosl` on a cell/PGC change) was WRONG: the re-entry HLIs carry
+  **`fosl = 0`**, so no `fosl` rule could have parked them. (⚠ Still true and still worth
+  knowing: NAV packs carry a system header, PCI data starts at sector offset **0x2D**,
+  not 0x15 — an early scan silently found zero HLIs from that mistake.)
+  ✅ **ROOT-CAUSED AND FIXED 2026-09-14 (branch `fix/link-button-flush`) — sim-proven
+  RED/GREEN, 6 mutations each caught by exactly its own arm, and ✅ HW-CONFIRMED
+  2026-09-14 by the maintainer** (build `DVD_linkbtn_20260914_1834.rbf`, SEED 7 first
+  roll, clk_dec 91.04/87.54, 90 % ALM): the Scooby-Doo grid section plays correctly, and
+  the T2 and Matrix menus are unregressed by the persistence change.
+  The maintainer's HIL session on the Wickles Manor ENTRANCE grid (21 tiles, reader
+  `PGCN 28`) nailed the shape: every trap resets the highlight to the **same absolute
+  tile, the upper-left one**, from wherever the player fell — *"a hardcoded default, not
+  a wrong-direction offset"*. It was: `nav_pci`'s constant `btn_sel <= 6'd1` at reset.
+  ★★ **THE DISC PARKS THE CURSOR WITH THE LINK'S OWN BUTTON FIELD, NOT `fosl`:** the trap
+  exits are `LinkCN 26 (button 16)` / `(button 3)`, the next room `LinkCN 10 (button
+  17)`, the grid entry `LinkPGN 2 (button 18)`, the 5-button maze's re-entries `LinkPGN
+  15 (button 1..6)` chosen by `g[15]` — and where it wants a RESET it writes `(button 1)`
+  explicitly, ~40 times, which is a disc authored against a player whose HL_BTNN
+  PERSISTS. `dvd_vm.sv` handled the field correctly (`sprm8 <= sub_btn`, `btn_force` →
+  `nav_pci.sel_force`, stored for the next arm); but **the link carrying the button is
+  the link that fires the seek, whose `load_flush` resets `nav_pci` (`pipe_rst_n`)** ~a
+  hundred cycles later, and the stored 16 went back to 1. libdvdnav's `HL_BTNN_REG` is
+  cleared by `vm_reset` = the disc open and by nothing else.
+  **Fix = one wire in the direction the register already lived:** `dvd_vm.hl_btnn`
+  (= `sprm8[15:10]`, on the hard reset) → `nav_pci.hl_btnn`, from which `nav_pci`
+  re-seeds `btn_sel` in the first cycle after its reset releases (first in the clocked
+  block, so `sel_force` / the arm's persistence rule / `fosl` still win = libdvdnav's
+  priority). The VM's `sprm8` also now TRACKS the live selection while armed and not
+  frozen (it already read that way via `sprm8_eff`; the register just forgot it at
+  tear-down), so an un-activated D-pad move survives a jump like `dvdnav_button_select`.
+  ⚠ **Semantic change for EVERY jump:** a menu entered by activating button k arms on k
+  (if it has ≥ k buttons and the link carries no button) where it used to arm on 1 — the
+  oracle's behaviour and what authoring tools assume; T2 and Matrix menus were checked in
+  the same HW round as the grid and look right.
+  ★ **The seam is gated by `tools/check_hl_btnn_wiring.py`** (reads the two `.hl_btnn`
+  connections out of `dvd/emu.sv`, the `check_subp_map_wiring.py` pattern) because each
+  module bench is handed the other side's value and cannot see a wrong or missing wire.
+  Gate: **`bench/dvd/run_link_button.sh --red`** — `nav_pci_tb` T19 over the REAL grid
+  NAV pack (`scooby_grid_pci.hex`: `sel_force(16)` → reset → arms on 16; RED pre-fix
+  = 1), `dvd_vm_tb` T6 (`LinkCN 26 (button 16)` exports 16; select write-back; frozen
+  guard), the wiring check; mutations M1–M4 + W1–W2. ★ Reusable: a one-cycle request
+  into a module that the SAME action later resets will not be there when needed — a
+  shadow of a VM register must be re-derived from its source after a reset, never from
+  a constant. Detail: `docs/dvd_nav.md` "Link button fields across a flush".
+  ✅ **SCOOBY'S WHAC-A-MOLE — ROOT-CAUSED AND FIXED 2026-09-14 (branch
+  `fix/hli-window-lag`); sim-proven RED/GREEN over the REAL NAV packs, 5 mutations each
+  failing EXACTLY its own arms, and ✅ HW-CONFIRMED over two rounds 2026-09-14/15 (builds
+  `DVD_molewindow_20260914_2217.rbf` then `DVD_molewindow2_20260915_0202.rbf`, SEED 7 first
+  roll, clk_dec 94.20/89.84, 91 % ALM): **the maintainer can beat the minigame**, hits
+  register with the disc's own yellow highlight and misses with its red one, and the T2 /
+  Matrix menus are unregressed by the promotion-timer change.
+  ⏳ **Two symptoms REMAIN on the same disc and are NOT this defect** — they are A/V sync at
+  a cell transition, tracked separately: Shaggy's win commentary is cut off (🔧 **fixed in
+  sim 2026-09-18 — see the natural-transition audio-drain bullet at the top of this
+  list**), and one round's speech does not lip-sync (still open). MEASURED structure that points the next session at it: every
+  cell in this game RESTARTS its PTS near zero (rounds at 0.094 s, commentary at 0.122 s),
+  so every transition is a clock discontinuity plus an audio re-phase; and the commentary
+  clips are **single-picture still cells carrying 8.3-22.2 s of audio past their only video
+  picture**, so `disp_sched` gets exactly ONE anchor and free-runs the rest. Start on HW
+  with the drift counters (`av_drift_ms`/`play_err_ms`/`disp_lag_ms`) — a drifting
+  single-anchor clock and audio dropped at the seek are different faults with one symptom,
+  and telemetry separates them in a single reading.** Report: a monster appears, the
+  player presses that direction, the core says MISS, plays the "all the monsters mock
+  you" clip and restarts the round.
+  ★★ **THE DISC AUTHORS A SEQUENCE OF HLI TIME WINDOWS, AND `nav_pci`'s PARK POLICY WAS
+  WRITTEN FOR A LOOPING MENU.** Each round cell is cut into consecutive windows (`hli_ss=1`
+  one VOBU before each starts, `hli_ss=2` every VOBU in between); all five buttons are the
+  same (4 directions with `auto_action=1`, a neutral centre with `fosl=5`), and only the
+  monster's direction carries the hit — **the same button is a hit or a miss depending on
+  which window is armed**. The single pending slot's earliest-`s_ptm`-wins rule says a
+  repeated commit is harmless because "identical content re-parks after each promote
+  anyway" (true of a menu that re-sends ONE HLI for ever, false of a sequence): a
+  continuation re-parked the armed window with `nxt_pre=0` — promotable only by the ~1 s
+  fallback — and a commit that could still be SCHEDULED was held behind a pending one that
+  could only TIME OUT. The armed set trailed the picture by up to ~1.5 s, so a quick
+  correct press fired the PREVIOUS window's miss. A slow press hit, which is why it reads
+  as "it says I missed when I didn't".
+  **Fix = FOUR rules in `dvd/nav_pci.sv`.** The first HW round shipped two and the
+  maintainer reported the game progressing but still *"I will definitely hit a monster
+  but it will count as a miss sometimes"*; a lead sweep reproduced that exactly, and the
+  other two rules came out of it. (1) `arm_is_cont` — a continuation of the window
+  ALREADY ON SCREEN does not re-park (needs `h_sptm`, which the 2026-09-10 area pass had
+  removed as write-only; ⚠ `ss=3` is NOT suppressed, it is "changed commands", and a
+  continuation with nothing armed still parks because a seek landing mid-window has only
+  continuations). (2) `sched_outranks` — a schedulable commit outranks one that can only
+  time out. (3) **A SECOND PENDING STAGE** — with a ~1.4 s parse lead several authored
+  windows are in flight at once and one slot discarded the later ones for ever (⚠ 4 banks
+  = display + head + stage 2 + fill, exactly; ⚠ and taking a window into the head must
+  DROP its duplicate from the queue, or the duplicate shifts back in when the real one
+  promotes and blocks every later commit for that window). (4) `nxt_future` — below.
+  ★★★ **THE BIGGEST REMAINING DEFECT WAS PRE-EXISTING AND POINTED THE OTHER WAY: THE
+  ~1 s `PROMOTE_FALLBACK` WAS PROMOTING WINDOWS ~1 s EARLY.** That timer exists for a
+  pending whose STC compare will NEVER come due (keep_vbuf skew); it also fired on
+  pendings that were simply EARLY, so whenever the parse front leads by more than the
+  timer — and a title at this disc's ~10 Mbps mux buffers about that — every window armed
+  ahead of the picture and the NEXT window's buttons answered a press aimed at the
+  monster on screen. `nxt_future` = with a TRUSTED clock and a commit made before its
+  window, "not yet" is informative and must be waited out; an untrusted clock still falls
+  back, so the menu rescue is untouched. ⚠ **BOUNDED by `FUTURE_HORIZON` (4 s) and
+  `nav_pci_tb` T7 is why** — T7 parks a pending 28.7 s ahead and needs the timer; the
+  unbounded first cut passed every arm of the NEW bench and was caught only by the menu
+  suite, which is why that suite is now part of this gate.
+  **MEASURED over the real cell-17 packs (16 windows, shortest 0.50/0.73 s), monster
+  windows answering a +300 ms press with their hit:**
+  | VBUF lead | shipped v0.5.x | + rules 1-2 | + rules 3-4 |
+  |---|---|---|---|
+  | 300 ms | 9/9 | 9/9 | 9/9 |
+  | 600-1100 ms | 8/9 | 8/9 | **9/9** |
+  | 1300-1600 ms | 7/9 | 8/9 | **9/9** |
+  | 1800 ms | 5/9 | 6/9 | **9/9** |
+  ★★ **MEASUREMENT REVERSED THE STORY TWICE.** The continuation re-park reads like the
+  whole bug; ablation says `sched_outranks` fixes the *reported* case, `arm_is_cont` owns
+  a late re-commit reaching the display (arm [F]), and the LARGEST effect at realistic
+  buffer depths belongs to a timer defect that predates this disc entirely. Every rule was
+  kept only because disabling it costs measured hits — and one that did not (a "refresh the
+  queued entry" wire added while chasing [F]) was **DELETED** once the duplicate fix made
+  it dead: no mutation could catch its removal and the sweep was unchanged at every lead.
+  ⚠ `sched_outranks` KEEPS its `!nxt_pre` guard — that guard IS the Matrix rule, and
+  without it the policy becomes newest-schedulable-wins, the exact regime the 2026-08-05
+  fix removed. Measured to be a no-op for repeated identical content (same `s_ptm`, and
+  `stc` only advances).
+  ⏳ **Known residual, MEASURED (arm [G]): a round's FIRST window is fallback-timed** (~1 s)
+  because the round is entered by a `LinkCN` seek and that window commits while the clock
+  still measures the previous cell; every later window is display-scheduled at **+0 ms**.
+  Harmless here (each round opens on a *nothing* window). ⛔ Tightening it means touching
+  `hli_coherent`, which is what cost Harry Potter and Scene It their highlights — bounded
+  by the bench, not chased.
+  **Gate: `bench/dvd/run_hli_window.sh --red`** — `hli_window_tb` runs the real `nav_pci`
+  over the real NAV packs (`scooby_mole_pci.hex`, 4 windows) and **measures what the
+  player experiences: press a direction at a display time, record WHICH COMMAND FIRED**,
+  with the expected command read out of the fixture's own button records. It models the
+  two clocks (a display clock, and a parse front running a sweepable VBUF lead ahead of
+  it, entering the round on the previous cell's timeline). `nav_pci_tb` runs in the same
+  gate. Pre-fix: 8 arms red, the monster's own direction firing the miss at every lead.
+  9 mutations, each failing EXACTLY its own arms (M1→F, M2→E2, M3→F, M4→A B F, M5→J,
+  M6→A, M7→D, M8→F, M9→the menu suite).
+  ⚠⚠ **A bench bug found by making the bench FASTER, worth the habit:** the scene clock
+  had two drivers — a task's blocking reset and the tick process's nonblocking increment.
+  At 3 clk/tick the reset survived (the increment ran on 1 edge in 3); at 1 clk/tick it
+  was overwritten every edge, scenes never restarted, and it presented as "the fix
+  regressed". Detail: `docs/dvd_nav.md` "A sequence of HLI windows is not a looping menu".
+  ★ **RESIDENTS' MISSING AUDIO — ROOT-CAUSED, and it is NOT a nav bug: `dvd/ac3/`
+  SUPPORTS ONLY acmod 2 (2/0) AND acmod 7 (3/2).** `bsi_parse.sv:167` sets sticky
+  `err_unsupported` for anything else → `ac3_err` → ac3_front self-heal reset every
+  frame → SILENCE. The Residents is **acmod 6 (2/2 quad)** on 310/314 frames; its maze
+  rooms play because they are LPCM, which is exactly the split the user reported.
+  ★★ **The same guard rejects acmod 1 (MONO)** — a much bigger catch, confirmed by HW
+  (BBB-NTSC's special feature is silent) and an independent field report (*"Dolby Digital
+  1.0 Mono … running without audio"*). 505-disc census: **26 discs** have an unsupported
+  acmod on some track, **11 on a DEFAULT track** (9 mono + 2 quad), **2 AC-3-silent
+  disc-wide**. Verified in-bitstream on four library discs (mono ×273, mono ×101,
+  acmod 5 ×167, mono ×200). ⚠ Use the PES `first_access_unit_pointer` to locate
+  the syncframe — a naive `0x0B77` search hits false syncs in payloads.
+  ✅ **MONO SHIPPED (2026-08-31, branch `feature/ac3-mono`)** — `acmod 1` accepted;
+  ⚠ its `B_MIXLFE` field is **lfeon ALONE = 1 bit** (no cmixlev/surmixlev/dsurmod
+  for 1/0 — reading acmod 2's 3 bits would desync the rest of bsi); `nfchans = 1`
+  in BOTH derivation sites (`ac3_parse` + `audblk_parse`); and new `pcm_out.mono`
+  reads ch0 for L AND R because mono never writes pcm_mem ch1 (`ac3_front.acmod`
+  had been left unconnected in `dvd_audio_decode` — it drives this now). Mono needs
+  NO downmix (`dmx_en = nfchans > 2` is false), so its PCM path IS the stereo ch0
+  path. Gate: `bench/ac3/vectors/bbb_mono.ac3` (Creative-Commons BBB extract)
+  through the Verilator/liba52 cosim — exps/bap BIT-EXACT, PCM ≤0.5 LSB @ s16
+  (tol 2.0); proven RED pre-fix (`acmod=-1 inscope=0 err=1`, zero frames produced).
+  All 9 cosim vectors + 11 bench/ac3 suites + `dvd_audio_decode_tb` green.
+  ✅ **HW-CONFIRMED 2026-08-31** (build `DVD_ac3fnfix_20260831_0452`): mono, 3/1 and
+  2/2 discs all play; stereo and 5.1 unregressed.
+  ★★ **THE BUG THAT COST THE MOST TIME HERE WAS NOT THE CODEC — IT WAS FIVE
+  `function automatic` HELPERS THAT QUARTUS 17 MISCOMPILED SILENTLY.** acmod 1 and 5
+  were SILENT on hardware while every sim gate stayed green (the cosim decoded real
+  mono/acmod-5 disc streams BIT-EXACTLY for 400 frames). The helpers took only scalar
+  args and read no arrays, and **Quartus emitted NO warning for any changed module**.
+  ⚠ **The technique that cracked it, reuse it: A/B TWO OF OUR OWN BUILDS.** A real
+  disc's mono track played on the earlier build (inline ternary) and was silent on the
+  later one differing on that path ONLY by using functions — same RTL, different
+  silicon. That is far cheaper than the post-map netlist cosim and was decisive.
+  Fix = all five rewritten as plain wires/inline ternaries (`acmod_cmix`,
+  `acmod_smix`, `acmod_mixbits`, and the two `nfchans` ternaries). Pre-existing
+  functions elsewhere (`to_s16`, `bin2gray`, `bndtab`, `compute_mask`) ship fine —
+  functions are not banned, but **when sim says correct and silicon says broken,
+  suspect a recently-added function FIRST.** Memory: `verilog-function-hazards`.
+  ⛔ **THE "still unsupported: acmod 0/3/4/5/6" LINE THAT STOOD HERE WAS STALE and
+  sent a later session hunting a defect that no longer exists.** `bsi_parse.sv`
+  has decoded **acmod 1..7** since 2026-08-31 (the same commit as mono); the only
+  value still rejected is **acmod 0 (1+1 dual mono)**, and deliberately — it
+  carries a SECOND dialnorm/compr/langcod/audprodi block that the bsi FSM does
+  not walk, so accepting it would desync bsi and produce GARBAGE instead of
+  silence, a strictly worse failure. Read `dvd/ac3/bsi_parse.sv:186-204`, which
+  says exactly this; the CLAUDE.md summary simply had not been flipped with it.
+  ✅ **AND THE "absent from the measured library" CLAIM THAT REJECTION RESTS ON IS
+  NOW MEASURED, NOT ASSERTED (2026-09-08), BY A COMMITTED TOOL: `tools/acmod_scan.py`
+  over 223 images / 1521 AC-3 streams found acmod 2 ×1150, 7 ×354, 1 ×11, 5 ×3,
+  6 ×3, and ZERO acmod 0, 3 or 4** — so every AC-3 stream in the library is inside
+  what the core decodes today, and it exits 0.
+  ★ **THE TOOL READS THE ACCEPTED SET OUT OF `bsi_parse.sv` INSTEAD OF RESTATING
+  IT, and that is the actual lesson of this round.** The previous census's verdict
+  lived only as prose here; when the RTL grew acmod 3..6 the prose did not follow,
+  and a later session spent hardware time hunting a defect fixed months earlier.
+  A table that cannot go stale beats a correct one. (RED-proven: mutate the guard
+  back to the old `{2,7}` rule and the tool reports acmod 5 as silent and exits 1.)
+  ⚠ Scope stated honestly in the tool: it samples the head of each VTS's VOBS, so
+  a substream first appearing later is not sampled; acmod is a per-stream constant,
+  which is what makes that sound.
+  ⚠⚠ **AND THE IFO's CHANNEL COUNT IS NOT THE ACMOD — it is a number the AUTHORING
+  TOOL wrote, the `progressive_frame` failure class again.** Screening the library
+  on the IFO flagged 3 discs; the bitstream cleared one of them outright
+  (life_of_brian declares 4ch on VTS_03 and carries plain acmod 2) and moved
+  another's (DVD_VIDEO_20260806 VTS_08 declares 6ch, carries acmod 5). Locate the
+  syncframe through the PES `first_access_unit_pointer`, never by searching for
+  `0x0B77` — that pattern occurs inside payload and yields a plausible wrong acmod.
+  ✅ **HW-MEASURED on the rig 2026-09-08** with `tools/audio_check.py`, which reads
+  the capture card rather than an ear: The Residents (the disc that reported the
+  bug; HUD `CH 1/30` under `Debug Overlay=On` confirms the playing VTS is 30,
+  which the sweep confirms is acmod 6 quad) → **−29.5 dBFS**; THSCOUT VTS_05, the
+  one genuine acmod 5 (3/1) default track → both tracks audible; and a 6-track
+  disc whose track 6 is **mono** → all 6 audible. Nothing in this library is
+  silent any more.
+- 🔧 **FAILED MENU LINK RE-ENTERS THE MENU, NEVER THE MOVIE (2026-08-27, PR #17)
+  — MERGED; HW no-regression pass 2026-08-27 (menus/boot unaffected); ⏳ the
+  positive case (a disc whose menu link actually fails — the reporter's Blade
+  Runner) is still the outstanding gate; sim fault-injection covers it
+  meanwhile ([S22]).** Field report
+  (Blade Runner): a language-menu "next page" arrow STARTED THE FEATURE — a failed
+  menu-domain jump (`pgc_error`, e.g. a page-2 LinkPGCN out of the selected
+  PGCI_UT language unit's range) fell through the VM's `fb == FB_NONE` chain to the
+  auto-title. New arm in `dvd/dvd_vm.sv`: a failed MENU-destination link with a
+  last-good menu **re-enters that menu** (`last_menu_*`, latched per menu-domain
+  `pgc_loaded` — NOT the reader's live `cur_vts`, which has already moved to the
+  failed target) + pulses `link_fail` → transport-HUD **`LINK FAIL nn`** popup
+  (`pop_type 9`, menu-exempt). Second failure walks the existing FB_VTSM chain;
+  boot/FP and title-destination failures keep the auto-title exactly as before.
+  Also: `nav_pci` foac forced-ACTIVATE deleted (libdvdnav never implements it; it
+  could start playback with no keypress), forced-SELECT hop kept one-shot; overlay
+  **row 26 = reader `pgc_error` reason latch** (reason/nr_srp/want_pgcn — replaces
+  the answered `dbg_promo` probe). Tests: `dvd_vm_tb` [S22], `transport_hud_tb`
+  T21; golden `_jump()` in `dvd_vm_ref.py`. No local repro disc exists (431-ISO
+  scan: zero out-of-range menu links; Goonies' unequal LUs check out) — validated
+  by sim fault-injection; the reporter's disc is the HW gate. Detail:
+  `docs/dvd_vm.md` "Failed-menu-link re-enter".
+- ✅ **AUDIO LOGICAL→PHYSICAL STREAM MAPPING (2026-08-27, PR #17) —
+  HW-CONFIRMED 2026-08-27 (user report: GET_SMART VTS 2 now has sound where it
+  was silent — the decisive A/B; build `DVD_menulink_20260828_0153.rbf`,
+  SEED 5, clk_dec 94.5/91.5, reached via the framestore mem-request-write
+  RETIME, see the DVD.qsf ledger).** The track pick
+  (SPRM1/SetSTN or the Audio button) is a LOGICAL stream number; the PGC's
+  `audio_control[8]` table maps it to the PHYSICAL substream `ps_demux` filters on
+  (libdvdnav `vm_get_audio_stream` + the first-available fallback). The old raw-index
+  assumption silenced any disc with a non-identity map — the "language menu → movie
+  plays with NO audio" field report (Blade Runner), and 31/431 library discs; local
+  boot-silent repro = **GET_SMART VTS 2** (every logical → 0x83; HW A/B via the Debug
+  Title VTS picker). Reader streams the table on the shared `pgc_ctl_*` bus (new
+  `P_ACTL` phase, every domain — menus resolve logical 0 through it); new
+  `dvd/aud_stream_map.sv` (32-FF store, identity when no PGC/table = legacy
+  bit-identical); `aud_switch` gains a jump-window guard so PGC re-parses can't pulse
+  `aud_resync` (menu audio continuity, §5d). Golden: `dvd_vm_ref.py aud_stream_map()`
+  + `nav_extract.py --audio-map`; 2,026-vector bit-exact TB + reader/demux suites
+  green. Detail: `docs/track_selection.md` "Logical→physical audio mapping".
+- ✅ **IEC 61937 BITSTREAM NOW ALSO LEAVES OVER HDMI (2026-08-30, PR #25) —
+  ✅ HW-CONFIRMED 2026-08-31 (DD + DTS decode on a real receiver over HDMI, route (i)).**
+  ★ **The startup/track-change LOCK FLAP that shadowed it (pre-existing, both outputs)
+  is ✅ FIXED + HW-CONFIRMED 2026-08-31 (branch `feature/bs-flap-probe`, build
+  `DVD_bsflapfix2`): the ring drain watchdog read the wrapper's A/V-sync hold as a
+  wedged consumer (it arms only on `frame_pop`), left the STD backpressure disengaged,
+  and the ring dropped ~1130 frames in a title's first 46 s — each dropped span a
+  forward PTS hole = a multi-second wire gap = the receiver flap.** MEASURED via
+  DEBUG_OVERLAY captures + `tools/osd_read.py` (probe rows 23/24, muxed on Passthru).
+  Fixes: `iec61937_wrap.hold_active_o` re-arms the watchdog (a deliberate hold is a
+  live consumer), and the wrapper FREE-RUNS in the menu domain (`sync_armed &=
+  ~menu_active` — a keep_vbuf menu hop's pre-anchor hold against the preserved
+  old-timeline ring is a circular stall, measured wedged ~20 s; menus aren't
+  lip-synced, same rule as the av_vid_hold menu exemption). HW: title start locks in
+  seconds, track changes near-instant, T2/Matrix menu transitions smooth WITH audio
+  (v0.2.0 dropped audio there), A/V sync good, optical + HDMI. Tried-negative worth
+  keeping: NO hold fill (NonPCM/pause burst) holds this receiver's lock across
+  authored menu silence even with clean streams — only real data bursts do ("digital
+  black" canned silent AC-3 = possible future polish). `docs/iec61937.md` "FLAP ROOT
+  CAUSE". `Audio Out = Passthru` used to be
+  optical-only, so 5.1 needed the Digital I/O board. It doesn't: 61937 rides inside an
+  ordinary 2-ch/48 kHz/16-bit IEC 60958 stream (1.536 Mbit/s — exactly AC-3's max), which
+  is precisely what the DE10-Nano's single wired I2S line to the ADV7513 carries. (That one
+  line is also why **multichannel LPCM is impossible** here — the board routes no other
+  audio data pin; confirmed in its pin table.) `dvd/i2s_iec958.sv` serializes the SAME
+  subframes `spdif_pass` biphase-encodes — one source, two link layers, so they cannot
+  drift. ⛔ **STALE AS WRITTEN — CORRECTED 2026-09-09. The route below was BUILT AND THEN
+  REMOVED, and the claim that follows it is now false.** `dvd/hdmi_bs_i2s.sv:14-19`:
+  IEC958-direct "was built, documented from the Programming Guide, sim-correct, and never
+  produced a decodable stream across four hardware rounds. It has been removed rather than
+  carried as dead weight." What SHIPS is route (i) — plain 16-bit standard I2S with the
+  channel status taken from the ADV7513 **register map**, `0x0C` = `0x44`/`0x04` and the
+  non-PCM bit in `0x12[7]` = `0xA0`/`0x20`, both written by Main over I2C in
+  `hdmi_config_set_audio()` (integration step 20). **So over HDMI the non-PCM flag is a
+  STATIC per-session I2C setting, not a per-block wire bit** — `emu.sv` ties `bs_nonpcm_o`
+  off entirely. Only optical S/PDIF carries it dynamically (`spdif_pass`, per 192-frame
+  block). Anything that needs HDMI to switch between PCM and a bitstream must therefore go
+  through Main, at its poll rate. ⚠ `dvd_hdmi_audio.cpp`'s own success message still says
+  "IEC958-direct mode", and `docs/hdmi_bitstream.md`'s §2 and register table still describe
+  the removed route.
+  ★ *(Superseded original text, kept for the reasoning:* chosen route is IEC958-direct
+  `0x0C[1:0]=3`, because it is what mainline Linux uses for IEC958 subframes and keeps the
+  non-PCM flag DYNAMIC, preserving the fj#110 ROUND 2 fix.*)* ★ **Stock Main is
+  safe BY CONSTRUCTION**: the ADV7513's I2C is HPS-only, so a bitstream sent to a sink still
+  expecting PCM is full-scale noise — the core therefore refuses to emit one without the
+  `cfg[14]` ack that only MiSTer_DVDcss sets (after checking EDID Short Audio Descriptors,
+  which stock Main never parses at all). ⚠ **The ack, not `pass_mode`, owns the HDMI audio
+  format** — leaving Passthru is instant in fabric but the chip stays non-PCM until Main's
+  next poll, so that window must be digital silence; Main sequences engage/release
+  asymmetrically. ⚠ **MEASURED phase step:** the first pair interval after `rst_audio_n` is
+  509 clk_audio, not 512 (`bit_ce` and `spdif_pass`'s counter re-align three cycles in), and
+  that reset pulses on every audio-track switch and `aud_flush` — hence the ~100 ms hold-off.
+  Tests: `bench/dvd/run_hdmi_bitstream.sh` — `iec61937_wrap_tb` TEST 9 (pacing exact over 513
+  strobes) and `i2s_iec958_tb`, a **demodulator** that reads subframes back off the wire
+  (it failed all four checks first run and the serializer was correct — the demod was
+  free-running instead of framing on `ws`; a register-peek test would have proven nothing).
+  ⚠ Open: the preamble nibble for IEC958-direct is an assumption (Z=1,Y=2,X=4) — first thing
+  to change if HW round 1 mis-locks. Design: **`docs/hdmi_bitstream.md`**.
+- 🔧 **AUDIO IS NOW DECODED IN FABRIC (2026-06-27, branch `feature/fabric-ac3-audio`).**
+  AC-3 and LPCM are decoded entirely in the FPGA: `ps_demux` → `audio_ring` →
+  `dvd/dvd_audio_decode.sv` (AC-3 via the ported `dvd/ac3/*` `ac3_front`+`pcm_out`,
+  5.1→stereo downmix; LPCM via `dvd/lpcm_unpack.sv`) → `AUDIO_L/R` → framework I2S → HDMI.
+  **No HPS daemon** — `hps/dvd_audio.c` and the DDR3 audio write chain
+  (`audio_ddr_pack`/`cdc_req_ack`/`audio_ddr_issue`) are RETIRED (the `hps/` tree was
+  deleted in the pre-release cleanup; `ddr_arb` audio master tied off). DTS is dropped for now (future:
+  in-fabric IEC 61937 to the Digital I/O board). Toggle `O5 Audio` (default On). A/V sync
+  still rides the **frame-rate governor** (`dvd/resample_addrgen.v`). Design in
+  `docs/fabric_audio.md`; sim-verified (`bench/dvd/lpcm_unpack_tb.sv`,
+  `bench/dvd/dvd_audio_decode_tb.sv`); **hardware confirmation pending.** Open follow-ups:
+  HW confirm, LPCM 24-bit/96 kHz. DTS: no in-fabric decoder, but **IEC 61937 passthrough
+  ✅ HW-CONFIRMED 2026-07-11 (PR fj#109)** — AC-3 + DTS both lock and play on a real
+  receiver, A/V sync correct; see `docs/iec61937.md`. The earlier startup-lock / track-switch
+  re-lock issue is **✅ FIXED + HW-CONFIRMED 2026-07-11 (PR fj#110)**: the receiver couldn't
+  acquire across the Pc=0 non-PCM null bursts the producer emitted during A/V-sync holds, so
+  the hold path now emits real **linear-PCM silence** (per-pair `nonpcm` flag → `spdif_pass`
+  clears the non-PCM channel-status bit) — the receiver sees PCM then one clean PCM→DD/DTS
+  switch, like a real player. Locks at startup + through track switching on all tracks.
+  - **M19 AREA PASS (2026-07-11, branch `feature/ac3-area-reduction`).** The AC-3
+    subtree had bloated to **9,378 ALMs — larger than the MPEG-2 video decoder
+    (8,484)** — and the spdif branch FAILED to route at 91% ALMs. Cause: unconverted
+    memory (the recurring LUT-RAM pattern): bit_allocation's `expc`/`dbc` register
+    file + `baptab`/`latab`/`hthtab0` LUT ROMs (~3.0k ALMs), imdct_512's ~37 kbit of
+    schedule/twiddle/window tables in LUTs (~3.3k ALMs), audblk_parse staging arrays.
+    All converted to sync-read M10K (M19/M19b/M19c/M19d) + the downmix multipliers
+    folded into the shared DSP bank (M19e, −6 DSPs). **Zero value changes** — gate at
+    every stage = PCMDUMP byte-identical vs baseline + bit-exact bap cosim. Also
+    fixed en route: `run_imdct/imdct256/drc` TBs had been silently FAILING since the
+    M17 DRC fix (pre-M17 dynrng convention + vvp exit-0 masking; now `$fatal` on
+    fail). Full detail: `docs/ac3_decoder_architecture.md` §4.11.
+  - **AC-3 File Test (`O[12]`) — REMOVED 2026-07-01 (`feature/remove-diagnostic-cruft`).**
+    This diagnostic loaded a raw `.ac3` elementary stream straight into `ac3_front`
+    (bypassing ps_demux/audio_ring/av_sync, free-run NCO) to test the decoder decoupled
+    from the pipeline. **Its finding stands: it HW-CONFIRMED (2026-06-28) that raw `.ac3`
+    plays back clean, EXONERATING the in-fabric AC-3 decoder** — remaining VOB audio
+    glitches are PIPELINE-side (ps_demux/audio_ring/av_sync/governor), not `dvd/ac3/*`.
+    The toggle + `raw_mode` path + `.ac3` file handling were then removed as cruft
+    (the decoder is proven; chase the pipeline).
+  - **AC-3 reframer (static-pops fix, 2026-06-28, branch `feature/ac3-graceful-drop`):**
+    new `dvd/ac3_reframer.sv` between `ps_demux` and `audio_ring` regenerates
+    `aud_frame_start` on AC-3 `0x0B77` boundaries so the ring's drop unit is a WHOLE
+    AC-3 frame — an overflow drop becomes a clean silent gap (`ac3_front` resyncs)
+    instead of a non-aligned hole → self-heal reset → POP. Transparent passthrough
+    (bytes reach `ac3_front` identical), no decoder change. Genlock-Off HW test
+    (PR fj#40) proved the pop is INPUT-side overflow, not the output NCO — this targets
+    that. Sim-verified (`bench/dvd/ac3_reframer_tb.sv` + `ac3_reframer_ring_tb.sv`:
+    forced overflow, every committed frame starts `0B77`). **HW: v1 GREATLY REDUCED
+    BBB pops but some remained (Matrix had none — just compute-bound stutter).** v2
+    adds a `frmsizcod` FRAME-LENGTH LOCK so a coincidental in-payload `0x0B77` (~4% at
+    640kb/s = the residual-pop cause) can't make a spurious boundary — only accepts a
+    sync once a full frame is emitted. **✅ v2 HW-CONFIRMED 2026-06-28 (PR fj#41 merged):
+    BBB pops GONE.** Static-pops saga closed; remaining BBB/Matrix artifact is
+    compute-bound VIDEO stutter only ([[clock-lever-exhausted-matrix]]), not audio.
+    See `docs/fabric_audio.md` §"AC-3 reframer".
+- 🔧 **PTS-DRIVEN A/V SYNC (2026-06-28, branch `feature/av-sync-pts`).** Audio is now
+  genlocked to the video presentation timeline instead of free-running. `dvd/av_sync.sv`
+  builds a video-referenced System Time Clock (STC, anchored on `ps_demux.vid_pts`,
+  advanced one `TICKS_PER_REFRESH` per displayed image — `refresh_tick` = `core_v_sync`
+  edge in clk_sys) and soft-slews the 48 kHz audio NCO (`nco_trim`, ±0.5 %) so the
+  dispatched audio PTS tracks the STC — like a DVD player slaving its audio DAC to the
+  recovered STC. Per-frame PTS rides `ps_demux.aud_frame_pts → audio_ring descriptor →
+  dvd_audio_decode.dispatch_pts → av_sync`. Seek (>0.7 s `vid_pts` jump) re-anchors
+  cleanly. **Sim-verified** (`bench/dvd/av_sync_tb.sv` + extended `audio_ring_tb`,
+  regressions incl. real-VOB `ps_chain` green); MERGED PR fj#36. **HW: runs; ships with a
+  registered VGA output stage that HW-CONFIRMED fixed the placement-marginal output artifacts
+  — column dots GONE and no green fringing (see memory `chroma-fringe-is-intermittent`, a
+  recurring multi-session issue now likely cured).** Scope = pacing only: the PES-granular
+  `audio_ring` drop (static-*pop*) and overlay surfacing of drift/trim are tracked
+  follow-ups. Design: `docs/av_sync.md`.
+  - **★ LIP-SYNC SAGA (2026-07-02/03, PR fj#60 MERGED — read `docs/av_sync.md`
+    "WHERE THIS STANDS" + `docs/lipsync_pickup.md` before touching A/V sync).**
+    Eleven HW rounds. SHIPPED + HW-PROVEN: STC references the SCREEN not the demux
+    parse (`video_live` gate, one-sided re-anchor, per-load re-arm); playback phase
+    set at the PCM-FIFO EXIT (drain gate + stale-skip + pre-anchor dispatch hold —
+    drift telemetry went −455 ms → healthy +91 ms); **`P1O[23:21]` A/V Offset**
+    (signed 18-bit, 0/−100..−500/+100/+200 ms, WORKS but binds at (re)start events
+    only); STD mux-lead hold (DVD muxes audio 470–667 ms BEHIND video — measured
+    on real VOBs by `bench/dvd/aud_pts_chain_tb.sv`); film-aware drop reclaim
+    (`cur_show` debit, signed debt); VBUF 256 KB→2 MB; absolute `vbuf_healthy`
+    (64/32 KB); NCO trim RETIRED (same-crystal rate lock — keep it retired).
+    **PR fj#61 (`feature/lipsync-drift`, MERGED 2026-07-04) = six measurement
+    rounds; `docs/lipsync_pickup.md` "START HERE" is the live work order.**
+    AUDIO IS FULLY EXONERATED (re-confirmed 2026-07-04 on a CLEAN decode:
+    play_err constant to the LSB all run). Three audio-side fixes shipped en
+    route (stale-skip confined to the load window; arrival-gated mid-play
+    catch-up; drop debit = dropped frame's own rff duration).
+    **⛔ ROUND-7 RETRACTION (2026-07-04): the "frame_late ×3 post-crash" bug
+    NEVER EXISTED — it was a `tools/osd_read.py` mis-calibration (affine
+    sx=2.0 against a true 2.667 full-width capture = a 3:4 column-pitch alias:
+    displayed bit k sampled true bit k−⌊k/4⌋, inflating every counter row
+    4×–13× value-dependently; row 3 read 414/s instead of 59.94). Reader fixed
+    (strict row-3 validation + measured-pitch autocorrelation gate + selftest
+    alias trap); the same recording re-decoded cleanly (`rec5.mkv` →
+    `drift5d.csv`, not retained). TRUE numbers: lates ~4.2/s pre and ~4.1/s post
+    crash (honest governor — also verified by RTL analysis: one REPEAT visit
+    per scan), drops 2.0→1.4/s, lates/drops 2.0→3.0 (the rff debit working).
+    Rounds 4–6 numeric claims are ALL VOID; the qualitative mechanisms stand.
+    **ROUND 8 (same day): lips MEASURED from rec5.mkv vs the source VOB
+    (audio envelope xcorr + per-frame template matching — all local, no HW).
+    Audio content offset CONSTANT all run (audio perfect, direct proof).
+    Video content RAMPS ~+3.3% fast from the start of play — funded by the
+    draining VBUF cushion (rates match) — until the cushion exhausts at the
+    first heavy scene (t≈62, the "crash"), then video clamps to delivery
+    rate and the accumulated ~+1.2 s lead freezes (measured constant to the
+    ms, t=80→168) = the user's permanent "audio ~900 ms behind". ENGINE =
+    FRAME-DROP DEBIT LEAK: drops (2.04/s) inject each dropped frame's TRUE
+    duration (~2.5–3 refr; rff-mixed B population) while the debt controller
+    reclaims only ~2.04/drop (the measured lates/drops ratio) ⇒
+    `drop_pic_rff` READS 0 ON HW, the round-4 film-aware debit (61b230c) is
+    inert; each dropped rff B leaks +1 refresh ≈ +3%. Governor pacing itself
+    is HONEST (recording cadence run-lengths = true 3:2 + the honest lates;
+    scan-vs-raster locked: resample_chain_tb SCANRATE instrument + mixer
+    frame-top-parking analysis). Also ruled out: VOB PTS discontinuities
+    (full-file scan clean), STC re-anchor, watchdog resets, scan free-run.
+    ROUNDS 9–12 (same day): rounds 9–10 shipped the row-16 drop-debit
+    instrument ({debited-3, debited-2}, replacing stc_excess) + sim-exonerated
+    the vld drop path (vld_drop_rff_tb over a real MiB ES); round 11 found the
+    TRUE ROOT CAUSE when drift7 read identical to drift6: **STALE DISPLAY
+    FLAGS — picbuf captured rff/tff/progressive_frame at the picture-HEADER
+    update pulse, but they parse in the coding EXTENSION (the vld freezes at
+    the header), so every picture displayed with its coded PREDECESSOR's
+    flags.** Invisible on clean 3:2 (alternation preserved); frame drops broke
+    the pairing and leaked ~+1 refresh per drop = the ramp. FIX =
+    `flags_commit` (vld pulses at ext-parsed, never for dropped pics; direct
+    wire to picbuf which re-latches the three flags; ordering by the header
+    freeze). **✅ ROUND 12 HW-CONFIRMED (drift9b capture, DVD_drift8, 7.5 min MiB
+    through the Shea crash): vid_err FLAT ±3 all run, VBUF PARKED (~0.5–1.2 MB,
+    rises through the crash), lates/drops 2.03–2.05 constant, play_err
+    constant to the LSB, lips constant throughout (user-confirmed). THE DRIFT
+    SAGA IS CLOSED.** Bonus: the old "−500 ms start constant" was mostly the
+    ramp — the true residual start error is ~−100 ms (audio slightly early;
+    user now runs A/V Offset +100). See docs/lipsync_pickup.md rounds 7–12.**
+    Follow-ups 1 & 2 SHIPPED (`feature/lipsync-followups`): the **A/V Offset
+    default is now +100 ms** (NTSC-film null), menu rebalanced around ±200 ms
+    (-300/-400/-500 dropped); the overlay is cleaned up — rows 14/15 restored to
+    the AC-3 self-heal reset view (14 ERR, 15 TOTAL, no O[12] mux), drift
+    instrument rows retired (overlay NROW 21→17, `stc_excess` emu logic dropped),
+    row 16 {drop3,drop2} kept until a Matrix/PAL pass; `tools/osd_read.py`
+    ROW_LABELS updated. **+100 ms default ✅ HW-verified on Matrix/PAL too
+    (2026-07-10) — treat it as universal.** Remaining: the secondary
+    why-4-lates/s-churn curiosity.
+    EXONERATED by measurement (do NOT re-chase): PTS chain, anchor value, NCO
+    rate, mux geometry as drift, AC-3 self-heal resets, STC-vs-wall rate,
+    live-flag cadence sampling, self-sustaining drop churn (both sim-cleared in
+    `bench/dvd/cadence_phase_tb.sv`).
+    FAILED (do NOT retry): entry-side dispatch scheduling, pre-anchor gate bypass,
+    mid-play gate re-arm (full-FIFO deadlock), fractional vbuf thresholds, 16-bit
+    offset constants.
+  - **`P1O[13],A/V Sync,On,Off`** — ⚠ **RENAMED from `Audio Genlock` 2026-09-07 (PR #66)**
+  (bit span unchanged; `wire av_freerun = status[13]` keeps its name, which is still
+  accurate). Its original job — free-run the 48 kHz NCO via `nco_trim=0` (2026-06-28,
+  branch `feature/vob-audio-freerun`) — **has been dead since the 2026-07-02 trim
+  retirement**: `emu.sv` declares `dec_nco_trim = 22'sd0` unconditionally, so that
+  reading was stale for two months while the CONF_STR comment, `docs/`, and the manual
+  all still taught it. What the bit does NOW (since PR #63) is disable the PTS scheduler
+  **wholesale, video included**: `disp_sched.sched_en` (every picture due on arrival ⇒
+  the display free-runs at raster rate), `dvd_audio_decode.sched_en` (drain gate,
+  stale-skip, catch-up, pre-anchor hold) and `iec61937_wrap.sync_armed` (passthrough
+  hold). Off is "no lip sync at all" — a diagnostic arm, never a fallback.
+  ★ **Kept rather than hardwired on (reviewed 2026-09-07, user decision) because it is
+  the only on-hardware way to take the whole scheduler out of a bug report** — the
+  alternative is a custom build per investigation. The rename is what makes keeping it
+  safe: `Field Order` and `Analog CSync = Stock` were DELETED before release precisely
+  because a user could reach for them as a *fix*, and "Audio Genlock" invited exactly
+  that while naming half the behaviour. ⚠ **Any CONF_STR edit re-rolls the pinned fitter
+  SEED**, so this rename was batched into a release build rather than spent on its own.
+  See `docs/fabric_audio.md` §"A/V Sync toggle".
+  - *(Prior HPS-decode path, retired: FPGA wrote compressed frames to a DDR3 ring at byte
+    `0x30800000` for the standalone `hps/dvd_audio.c` daemon (liba52) to mmap/decode/ALSA.
+    HW-confirmed 2026-06-25; see `docs/audio_ddr_path.md` for history.)*
+- ✅ **Decoded, correct-color SD MPEG-2 video on real hardware** (DE10-Nano + 128 MB SDRAM
+  add-on board). This is the first confirmed video; the inherited "✅ decode works" claims below
+  were aspirational until now. The path: the HPS f2sdram read path can't sustain the core's
+  108 MHz on this board, so the core's memory was ported to the SDRAM module (`dvd/sdram.sv` +
+  `dvd/mem_sdram_shim.sv`, branch `feature/sdram-module`, PR fj#6).
+- ✅ **Shear (sawtooth) is RESOLVED — NOT a current problem; do not chase it.** The earlier
+  sawtooth bandwidth limit was fixed by the DDR3 burst-bridge work plus raising the decoder
+  compute clock to 54 MHz (PR fj#10 / `DVD_dec54d` and the f2sdram burst path). 720×480 has not
+  sheared for many build iterations. (Historical diagnosis condensed in `docs/history.md`
+  §1–2; full logs in git history.)
+- ✅ **The "256-line black-frame strobe" is RESOLVED for ≤480 content** (2026-06-24,
+  branch `feature/strobe-offset-diagnosis`). It was a PICTURE SPLIT, not memory/black: the
+  resample emitted the macroblock-padded height (`mb_height*16`) while the raster active
+  region was the true `vertical_size`, so the surplus lines spilled into the next output
+  frame. Fixed by (1) ending the emission at `disp_y == vertical_size-1`
+  (`dvd/resample_addrgen.v`) and (2) `VERT_RES 479→480` (`modeline.v`, an active-region
+  off-by-one). Progressive + 480 clips play clean. Full story in
+  `docs/history.md`. **Still open (separate):** vert-res >480 content still spills
+  (needs downscale). *(Interlaced ~half-speed field-cadence is addressed by native 480i/576i
+  fields output — see the `Interlaced Out: Auto` note below.)*
+- ✅ **Interlaced Out (Off/Auto/On) — native 480i/576i fields to ascal — HW-CONFIRMED +
+  MERGED (PR fj#132, 2026-07-27). ⛔ OPTION RETIRED 2026-09-02 — the fields raster it
+  built still ships as `Video Output = Interlaced`; the separate option and the
+  `det_video` Auto detector are deleted (see the consolidation bullet at the top).**
+  `O[10:9] Interlaced Out` is 3-way **Off/Auto/On**,
+  **default Off** (reverted from Auto 2026-07-27 — see below). `On` gives native interlaced
+  fields (NTSC 480i **and** the newly-added **PAL 576i**: `il_eff` no longer forced low under
+  PAL; new `pal_prev & il_prev` modeline branch, 312 lines/field ≈ 50 Hz) and plays
+  **A/V-synced on HW (confirmed)**. A standard-neutral `det_video` verdict in
+  `dvd/resample_addrgen.v` (sustained `progressive_frame==0`, mutually exclusive with the
+  film verdicts) drives **Auto**, which auto-engages interlaced for true video-sourced
+  content via a mid-title **full seek-style flush** (`il_switch` → load_flush + aud_flush +
+  vbuf flush). **⚠️ Auto is NOT the default: its mid-title switch still leaves audio
+  SLIGHTLY OUT OF SYNC on HW** (round 1–2, 2026-07-26/27) even after the seek-style
+  re-sync — kept as an opt-in to revisit. The **overlay/OSD horizontal squish** in
+  interlaced mode is now **✅ FIXED (2026-08-22)** — `ov_h_gen`/`sp_qx` invert the pixrep
+  ×2 in `dvd/emu.sv` and `spu_decode`/`crt_ov_map` `.interlaced` follow `il_eff` (their
+  +2 field-line walk had never engaged); progressive is bit-identical. Bob/Weave still
+  `O11`. PAL 576i on the analog pins is now covered by the dual-raster re-interlacer
+  (see the Dual-Raster bullet below). **Dual-raster v1 note:** while the analog raster is
+  engaged (`analog_eff`), Interlaced Out is FORCED OFF (the re-interlacer needs the
+  standard progressive main raster; the CRT still gets true 480i via the weave frames).
+  Sim: `bench/dvd/film_detect_tb.sv`. Design + follow-ups: **`docs/interlaced_auto.md`**.
+- ✅ **LINE-21 CLOSED CAPTIONS (2026-08-25/26, branch `feature/closed-captions`) —
+  ✅ HW-CONFIRMED 2026-08-26 (round 5, user report: C1 captions complete on MiB +
+  Matrix, real TV, YC encoder board → composite).** NTSC discs carry EIA-608 captions in MPEG-2 **user_data**,
+  not subpicture. The core now extracts them and re-modulates them onto **line 21 of
+  the analog raster** so the TELEVISION's own decoder renders them — what a real
+  player does. **No on-screen character generator** — originally dropped because a 32x15 char
+  plane + a font ROM grown past 64 glyphs for lowercase (~2-3 M10K, several hundred
+  ALMs) did not fit a 98% ALM / 91% RAM design. ★ That rationale EXPIRED with the
+  PR #9-#11 area reclaim (now 93% ALM / 91% RAM); asked directly (2026-08-26) the user
+  chose to KEEP the scope line-21-only, so it is a CHOICE not a constraint — do NOT
+  re-derive "it doesn't fit". See `docs/closed_captions.md` §5.
+  Three legs: (1) **extraction** = a PASSIVE SNOOP in `rtl/mpeg2/vld.v` — no new FSM
+  state, because `STATE_NEXT_START_CODE` already walks user_data one byte at a time
+  so the payload streams past in `getbits[23:16]` for free (**110 insertions, 0
+  deletions**; the new block writes only its own regs, so the decode path is
+  untouchable by construction). ★ In the VLD and NOT `ps_demux` — ps_demux is in
+  FRONT of the ~1 s VBUF, so a demux-side sniff is the stale-display-flags bug
+  (drift rounds 11-12) in a new hat; the VLD is where `flags_commit` had to move for
+  the same reason. (2) **pacing** = one pair per displayed FIELD — MEASURED on real
+  discs: the block sits on the GOP header and `cc_count` counts DISPLAY frames not
+  coded pictures (15 vs 12 following pictures = 3:2 already expanded by the encoder).
+  ⚠ **AMENDED 2026-09-07:** the RATE argument holds, but "no PTS/STC at all, the
+  caption clock and the raster are the same clock" was only ever true of the rate —
+  it says nothing about PHASE, and the phase was out by about a GOP, because the
+  pairs arrive as ONE BURST at the GOP header and nothing re-aligned the queue.
+  `disp_sched` now emits a credit per display PICKUP carrying that picture's field
+  count and `cc_line21` spends one per pair: same rate, the display's phase.
+  ✅ HW-confirmed 2026-09-07 on MiB and Matrix. See `docs/stc_freerun.md` §11. (3) **waveform**
+  (`dvd/cc_line21.sv`) — exact by construction: 13.5 MHz = 858·fH and the bit rate is
+  32·fH, so one bit is **858/32 = 26.8125 dots EXACTLY**; a 16-bit NCO at 2444/dot
+  hits that to +0.0002% and its top 4 bits index the run-in sine LUT. Line number
+  derived TWICE and agreeing (15th line after vsync end = last VBI line before active
+  = `v_cntr` 261 = `p_vlen`), from `sg_vpos` alone — `syncgen.v` unchanged. Output mux
+  gated on `~sg_pixel_en` so a wrong line can only cost a blanking line, never punch a
+  hole in the picture. `P1O[14] Line-21 CC` (default On, debug page; reuses the bit freed by the
+  O[14] CRT-mode retirement). Sim: `cc_extract_tb` (**180/180 pairs byte-exact**
+  through the REAL vld+getbits over REAL MiB bytes vs a Python golden),
+  `cc_line21_tb` (a **DEMODULATOR** — slices at 25 IRE, locks to the run-in, rebuilds
+  the bytes; 5/5), `re_interlace_tb` unchanged 9/9. Census: **6/34 local discs**
+  carry live captions, zero PAL, zero CEA-708, field 2 empty everywhere
+  (`tools/cc_scan.py`, `dvd_census.py --captions`). **★ HW ROUND 1 (2026-08-25): no
+  captions on MiB/Matrix, TV on C1 — ONE real bug + ONE misdiagnosis.** The bug:
+  `sys/sys_top.v` fed the VGA2 scanlines stage `.din(vga2_de ? rgb : 24'd0)`, zeroing
+  everything outside active video — line 21 is BY DEFINITION in the VBI, so the
+  waveform died one module before the DAC (`scanlines`/`osd`/`yc_out`/`vga_out` all
+  checked: none gate data on DE). ⚠ Lesson: a VBI side-channel travels a path every
+  other feature uses only inside DE — trace it to the PIN. The misdiagnosis: cc_fld1
+  was flipped to `sg_vpos[0]` on a content-based premise (TOP = field 1), inverting a
+  CORRECT mapping — masked by the DE bug (everything looked identically dead).
+  **★ HW ROUND 2 (2026-08-26, YC encoder board → composite): CC Test Line ✅ (dash
+  band changes with dialogue = extraction/pacing/waveform/DE-fix/analog chain ALL
+  HW-CONFIRMED), C1 empty → the symptom IS the diagnosis: C1/C2/T1/T2 are all
+  FIELD-1 services, so the field mapping was wrong — the round-1 flip. FIXED back to
+  `cc_fld1 = ~sg_vpos[0]` with the SYNC-SIGNATURE derivation (SMPTE 170M: field 1 =
+  vsync line-aligned, field 2 = mid-line; in this raster that VBI has v_pos[0]==0 and
+  its active is BOTTOM content — NTSC is bottom-field-first; picture-content parity
+  NEVER identifies the broadcast field). `bench/dvd/cc_field_map_tb.sv` REWRITTEN to
+  classify by vsync-edge alignment (what a TV measures) + mutation-checked, so the
+  wrong premise can't be encoded again. `P1O[44] CC Test Line` = the diagnostic that
+  cracked it (paints the waveform on a visible line — one glance separates "chain
+  works, placement wrong" from everything upstream). Rebased onto post-0.1c main
+  (clean); SEED 3 closed the pre-round-2 netlist (90.9/90.2). **HW gate (round 3 =
+  C1 decode): `docs/closed_captions.md` §0 + §6.**
+- ✅ **DUAL-RASTER ANALOG OUTPUT (2026-07-29, HW-CONFIRMED + MERGED PR fj#146,
+  2026-07-30) — SUPERSEDES the O[14] whole-core CRT mode below. ⛔ FULLY RETIRED
+  2026-09-03 (`feature/single-raster-analog`, top bullet): `re_interlace`, the VGA2
+  plumbing and the fieldpass re-timer are DELETED — the interlaced main raster carries
+  the half-line and drives the pins directly; the ini engagement rule (`analog_want`,
+  now latched) and line-21 CC (now `dvd/cc_vbi.sv`) survive. History only below.**
+  User-confirmed
+  working on real hardware (analog engages from ini alone, HDMI stays progressive
+  simultaneously). ⚠️ The exact PAL 576i timing numbers and the field-dominance
+  caveat (see `docs/analog_dual_raster.md`) were not specifically re-verified by
+  this confirmation and remained open sub-items — ✅ **both CLOSED 2026-09-12 on the
+  SINGLE raster that replaced this one; see the single-raster bullet above.**
+  The analog CRT now works **from MiSTer.ini alone, like any other core**
+  (`vga_scaler=0` + `composite_sync=1`/ypbpr/sog — nothing in the OSD): the core emits
+  TWO simultaneous rasters — the unchanged progressive main raster for ascal/HDMI, and
+  a native 15 kHz 480i/**576i (PAL now included)** second raster from
+  `dvd/re_interlace.sv` (4-line sync-read BRAM + a second N64-model `sync_gen`
+  instance, phase-locked by construction: 2 fields = exactly 2 main frames; arming
+  skew window (1716,1994) clk27, proven by `bench/dvd/re_interlace_tb.sv`'s
+  pixel-exact frame-tag checks). New additive `sys_top.v` `VGA2_*` input muxes the
+  direct analog chain (incl. the direct_video tap → HDMI-DAC CRTs work too);
+  `hps_io.sv` exports the ini bits (cfg[2]/[3]/[5]/[9]); **`VGA_SCALER=0` always**
+  (the forced-1 that made ini `vga_scaler=0` unobservable is gone). `O[27:26] Analog
+  Out` = Auto/Interlaced/Progressive override (default Auto). Retired: O[14], the
+  13.5 MHz `dot_ce` main-raster pacing (CE_PIXEL≡1 now), the modeline-walk CRT
+  branch, `crt_eff` (Analog Aspect + overlay gating now ride `analog_eff`; overlay
+  taps are always progressive). Also fixed: the bogus `"O[10],Direct Video"` CONF_STR
+  line that collided with `O[10:9] Interlaced Out`. Precedence: analog active ⇒ Film
+  24p/25p raster suppressed (can't feed the re-interlacer) and Interlaced Out forced
+  off (v1). VIDEO_ARX/ARY force 4:3 while Analog Letterbox/Crop is active (the
+  rescale is upstream in the now-shared raster). ⚠ PAL 576i numbers are sim-derived —
+  HW gate. Design + HW checklist: **`docs/analog_dual_raster.md`**.
+  - **✅ `Analog Out = Native Fields` (field passthrough) — 2026-08-22, HW-CONFIRMED
+    (core claim; PR fj#178).** A/B'd vs `Auto` on `ROGER_WATERS_IN_THE_FLESH` — MEASURED
+    video-sourced by `tools/video_cadence_census.py`, not assumed — fields output
+    **noticeably smoother**; 50-min MiB run held A/V sync (that run also covers the
+    FIELD-path governor ledger under rff 3:2, and Letterbox — MiB's title is 16:9
+    anamorphic so Auto had it active). Overlays full width in this mode ✅, other
+    Analog Out modes unregressed ✅, and `Interlaced Out = On` on HDMI now renders
+    overlays correctly ✅ (that half is the standalone fix). **Only PAL-analog is
+    unverified** — no PAL CRT available; The Office plays right on HDMI, and PAL
+    fieldpass is sim-proven, but PR fj#146's sim-derived PAL 576i raster numbers STAY OPEN.
+    *(⛔ Historical: that raster is retired. PAL on an analog CRT is ✅ HW-CONFIRMED
+    2026-09-12 on the single raster — see the top bullet.)* Fourth `O[27:26]` mode: forces `il_eff` for the session so
+    the decoder emits **authored** TOP/BOTTOM fields and `re_interlace` re-times them
+    1:1 (`fieldpass`: period 900900/1080000, write-port pixrep decimation, `SKEW_FP=858`).
+    **This is the structural fix for the field-pairing defect**, and WHY the obvious cheap
+    fix was rejected is worth remembering: a governor **late** re-scans one FRAME on the
+    progressive path (**+1 refresh = ODD ⇒ the pairing parity FLIPS**) but a FIELD PAIR on
+    the field path (+2 = even), and lates run **~4/s on healthy content** — so
+    phase-aligning the re-interlacer would hold ~250 ms, and re-arming blanks the CRT's
+    sync (`S_HUNT` drops `sg_rst_n`). Film barely cares (each field still lies wholly in
+    one picture; only dominance alternates); **true 29.97i video is where combing shows**.
+    ★ The main raster does NOT need a half-line — the local `sync_gen` supplies it and the
+    source's field durations already alternate 262/263, so the rasters stay line-for-line
+    locked (proven pixel-exactly, `re_interlace_tb` [6]/[7]); a half-line on the main
+    raster would expose HDMI to the `ff01ac8` hunting issue for nothing. Opt-in: HDMI
+    drops to 480i via ascal for the session (ascal isn't cadence-aware ⇒ film regresses
+    there). Set it BEFORE loading a disc (a mid-title change fires the `il_switch` flush).
+    Ships with the overlay pixrep fix as a hard prerequisite.
+- ✅ **CRT 480i — native 15 kHz 2:1 interlace: HW-CONFIRMED 2026-07-05 (PR fj#65,
+  `feature/crt-480i-native`) — ⛔ SUPERSEDED by the dual-raster bullet above (O[14]
+  removed); the syncgen N64 model, pixel_queue CE-stretch, and field-path ledger
+  fixes it delivered still ship.** Round 2 verdict on the real CRT: image CORRECT (true 2:1
+  interlace, native width, field order right as shipped) and AUDIO STAYS IN SYNC (the
+  field-path ledger fixes hold). Round 1 had confirmed the raster but showed BLACK video →
+  root cause = a latent CE bug in `rtl/mpeg2/pixel_queue.v` (the dc-fifo's raw-clock
+  `valid` pulse falls entirely inside the disabled 13.5 MHz-CE cycle, so the mixer never
+  latches a pixel; audio/overlay kept flowing). Fixed with a CE-stretch shim (bit-identical
+  at CE≡1); reproduced + proven end-to-end by `resample_chain_tb +crt=1`.
+  **⚠️ Open follow-up: the HDMI chroma fringe REGRESSED on this build** — the known
+  clk_dec-Fmax/fit-margin artifact, not the CRT logic (see docs/crt_480i.md status note +
+  memories `chroma-edge-fringe-is-upsample-mode`, `quartus-build-flaky-routing`; builds ran
+  with an uncommitted SEED 9). See docs/crt_480i.md §0/§8.** `O[14] CRT 480i Out`: native-width 480i for a real
+  CRT on the analog board, built to the N64 model after the pulse-delay approach was
+  HW-proven never to lock (memory `crt-interlace-odd-total-lines` — the old
+  `feature/crt-composite` branch is dead; this is the fresh start). Three legs:
+  (1) `rtl/mpeg2/syncgen.v` N64-model interlace, armed by `interlaced && halfline!=0`:
+  alternating 262/263 field totals + vsync sampled at a half-line COUNTER reference ⇒
+  vsync spacing exactly 262.5 lines every field (`bench/dvd/crt_syncgen_tb.sv`; legacy
+  480p/HDMI-480i bit-identical). (2) `dvd/emu.sv`: 13.5 MHz `dot_ce`/`CE_PIXEL` (native
+  720-wide, NOT pixel-repetition), a 4th modeline-walk branch (halfline=429, pixrep off),
+  and `VGA_SCALER=0` in CRT mode (it was hardwired 1 = forcing the scaler onto the analog
+  pins). (3) 480i field-path A/V-ledger fixes (the audio-drifts-ahead blocker from the old
+  branch): 2-cycle `frame_late` on pair repeats (the ×2 late undercount — dominant),
+  mode-aware `show_next` (rff film = 3 field scans in 480i), `~interlaced` drop-debit
+  gates removed (`rtl/mpeg2/mpeg2video.v`), and `refresh_cnt` SATURATION (the 4-bit wrap
+  silently ate ~12% of stall lateness in BOTH display modes;
+  `bench/dvd/gov_field_late_tb.sv` proves 1:1 late:refresh accounting). Overlay row 17 =
+  `vid_err` re-added (NROW 17→18, `tools/osd_read.py` updated + selftest green) — the HW
+  verdict is that row staying FLAT through a compute crush in 480i. CRT needs `MiSTer.ini`
+  `vga_scaler=0`, `composite_sync=1`. Full design + HW test plan + field-swap contingency:
+  `docs/crt_480i.md`. (PAL 576i CRT: ✅ delivered by the dual-raster rework above;
+  letterbox/240p vertical scaler still open.)
+- 🧰 On-hardware diagnostics: `debug_overlay.sv` (multi-row block-bit counters — rows 0-17 +
+  Phase-7 rows 18/19 nav current/total time). ⚠️ **STATUS (2026-07-09): this overlay is
+  `` `ifdef DEBUG_OVERLAY `` and COMPILED OUT of the release build** (it shares the display
+  hotspot with the subpicture blend; `ov_on` is hardwired 0 — see `emu.sv` ~L2088). In a
+  **release `.rbf`, `O[2]` shows NOTHING from this overlay**; instead `O[2]` drives only the
+  lightweight **menu-highlight diagnostic blocks** (`status[2] && menus_on`, `dbg_blk1..8`).
+  To read the multi-row overlay / `tools/osd_read.py` rows on HW you must **define
+  `DEBUG_OVERLAY` in `DVD.qsf` and rebuild** (that re-tightens the congested fit — verify it
+  still closes + passes the clk_dec fringe gate). ⚠️ overlay
+  watchdog cell polarity gotcha documented above. (The DRAM/SDRAM self-tests, DDR3 burst BIST,
+  AC-3 File Test, and the SDRAM controller were removed 2026-07-01 in
+  `feature/remove-diagnostic-cruft` to simplify the on-board logic; see `docs/history.md`.)
+
+## What Already Works (Upstream MiSTer_MPEG2)
+
+- ✅ Full hardware MPEG-2 video decode in FPGA fabric (IDCT, motion comp, VLC)
+- ✅ High-bandwidth SD card sector streaming (`mpg_streamer.sv`) via `sd_*` block interface
+- ✅ DDR3 frame buffer management (`mem_shim.sv`) — pipelined FSM with skid buffer
+- ✅ TrustZone-compliant 15.5MB HD frame buffer within MiSTer's 24MB CMA window
+- ✅ NTSC 480p/60Hz video output via MiSTer framework
+- ✅ Simulation testbench (`bench/`) and debug tooling
+
+## Known Gaps in Upstream (what this project adds)
+
+- ✅ Framerate sync: PAL now supported via a runtime modeline switch — **HW-CONFIRMED**
+  (2026-06-30, branch `feature/hres-offbyone-pal`, PR fj#50). The 27 MHz dot clock gives 50.0 Hz
+  with PAL totals (864×625), so NO PLL reconfig is needed: `O[17:16] Video Standard`
+  (Auto/NTSC/PAL) drives the runtime modeline-write walk (`dvd/emu.sv`) to 720×576p@50 +
+  `av_sync`'s 50 Hz STC (`refresh_50hz`); governor `SHOW_N=2` already yields 25 fps at 50 Hz.
+  **Auto** detects from the decoder's new `vertical_size_out` port (480=NTSC, 576=PAL). PAL
+  progressive (25p) film via Film 25p; **PAL 576i interlaced now supported** (HDMI fields via
+  `Interlaced Out`, PR fj#132; analog pins via the dual-raster re-interlacer — see the
+  Dual-Raster bullet above, ⏳ HW-pending). Also
+  fixed the horizontal off-by-one (`HORZ_RES 719→720`, recovers the 1-col right crop), the
+  analogue of the earlier `VERT_RES 479→480`. **⚠️ PAL playback STUTTERS on high-motion (BBB
+  PAL DVD):** same compute-bound decoder ceiling as the NTSC high-motion stutter, just exposed
+  harder by the ~20% taller 576-line frame (1620 vs 1350 MB/frame) — NOT a PAL timing/pacing
+  bug. Rides on the deferred motion-comp/IDCT rewrite. See docs/roadmap.md "PAL/NTSC Framerate
+  Sync" and the `*compute-bound*` memories.
+- ❌ HD modeline switching: fixed 27MHz SD clock, no dynamic PLL for 720p/1080p
+- ❌ Audio: core is video-only, no audio output of any kind
+- ✅ **DVD ISO playback (v1) — IN FABRIC, no HPS daemon — HW-CONFIRMED 2026-07-05**
+  (PR fj#70, branch `feature/dvd-iso-navigator`, `DVD_isonav`). `dvd/dvd_iso_reader.sv`
+  replaces `mpg_streamer`: select a **decrypted DVD-Video `.iso`** and it detects
+  ISO9660, walks root → `VIDEO_TS`, and plays the **largest VTS = main feature**. The
+  `sd_*` block interface is random-access (framework serves any `sd_lba`), so nav is all
+  in fabric — nothing on the HPS. Non-ISO images fall back to linear whole-file streaming
+  (`.VOB`/`.mpg`/`.m2v` unchanged, HW-confirmed). **CSS stays a PC-side rip step**
+  (MakeMKV/dvdbackup); ISO9660 only (UDF-only images deferred); no IFO/PGC yet
+  (chapters/seek/angles = Phases 7–9). **⚠️ The largest-VTS heuristic does NOT pick the
+  right main title on every disc** (fix = IFO/PGC or a manual OSD title picker, deferred).
+  **Fit gotcha (fixed):** `parse_buf` must be a SYNC-read BRAM — the first build hit 226%
+  ALMs because it was read async at ~30 offsets (LUT-RAM explosion); now 81% ALMs, one
+  M10K + a 45-byte `rbuf` record shadow. Tests: `bench/dvd/iso_reader_tb.sv` (synthetic) +
+  `bench/dvd/iso_reader_real_tb.sv` (real MEN_IN_BLACK metadata → VTS_21). Predictor:
+  `tools/iso_nav_check.py`. Design: **`docs/dvd_nav.md`**.
+  - **🔧 SD DELIVERY 2048-BYTE BLOCKS (2026-08-03/04, branch `feature/sd-2048-blocks`,
+    PR fj#159).** `hps_io BLKSZ=4` → one 2048-byte request per DVD sector (4× fewer HPS
+    round-trips; sd_lba = sector LBA = RBN 1:1, the ×4 mapping deleted; NAV/DSI snoop
+    offsets now sector-relative). Motivated by the **Thayer's Quest ~3 Hz audio
+    skipping** + the disc being authored at the DVD mux ceiling (pack-SCR scan: VTS_02
+    sustains 9.47–10.08 Mbps for minutes; clean discs average 5.2–5.5). **⚠ HW verdict
+    (2026-08-04): the skip rate was UNCHANGED — delivery is EXONERATED for that symptom**
+    (and "VBUF bar low" is NOT a starvation proof: STD backpressure parks it low in
+    normal play). The rework stands on its own (headroom for mux-ceiling discs, simpler
+    reader, larger CIFS reads); all 27 reader TBs green (chapter_tb cells grown to 16
+    sectors — 1-sector cells let the 8-sector cache prefetch outrun the drain, a TB
+    artifact). Further lever if needed: `sd_blk_cnt` up to 16 KB/request.
+    **★ THAYER SAGA ULTIMATE ROOT CAUSE — ✅ FIXED + HW-CONFIRMED 2026-08-05 (audio
+    solid AND in sync): THE DISC IS MOSTLY FIELD-CODED MPEG-2, and the frame-drop
+    governor's documented punt on field-picture B's meant its ~10 % video-decode
+    deficit (6–7 lates/s, drops=0 by design) could never be reclaimed** — video ran
+    slow, audio didn't wait (vid_err +8 refr/s = the audio-early A/V drift), and the
+    backed-up buffers entered the VBUF-hard-full jam (demux stalls mid-PES on video,
+    the ring backpressure never engages, the audio ring bleeds to 0 with no restoring
+    force = the menu/gameplay skipping). Deep `picture_structure` census: VMGM-past-
+    head + VTS_02/05/07/11 = top/bottom FIELD pictures; only VTS_09 + VOB lead-ins
+    frame-coded (every early ES sample had hit those by luck — census DEEP, not
+    heads). **Fix = B FIELD-PAIR DROP (`rtl/mpeg2/vld.v`):** decide at the FIRST
+    field (second_field reads 1 there = the update-pulse convention, so the pair's
+    update suppresses like a frame-B), `drop_pair_arm` atomically drops the sibling,
+    new `drop_pic_field` acks cost/credit **1 per field** (a pair debits exactly the
+    2 refreshes it frees). Sim: field ES drops in clean atomic pairs; frame streams
+    identical; `vld_drop_rff_tb +DRAIN` display-blocked mode added. Diagnosis
+    instruments kept (DEBUG_OVERLAY builds): row 27 flow-control flags, row 16
+    in-vld drop probe. ⛔ Two preserve/keep "netlist mangling" rounds en route were a
+    GHOST (the probes disproved it; hardening kept as insurance). Flow-control work
+    kept on merit: v2 stall grain 0x2C, v3 ring-floor escape, **v4 GLOBAL VBUF SOFT
+    CEILING 0xE0/0xD8** (VBUF-hard-full is a death regime — never reach it), and the
+    **menu cap halved 0x30→0x18**. Also measured: Thayer's audio mux lead ~33 ms
+    (normal 470–667 ms); an inaudible ≤15-LSB AC-3 cpl-exponent divergence (open
+    follow-up). See `docs/dvd_menu_refinements.md` §5d amendment + `docs/dvd_nav.md`
+    "Block size".
+  - **★ HIGHLIGHT PROMOTION MODEL v2 — ✅ HW-CONFIRMED 2026-08-06 (T2 + MiB + Thayer,
+    4 probe rounds via overlay row 26).** The branch's sd-2048 speedup exposed that
+    nav_pci's promotion paths trusted a parse-anchored clock: highlights painted over
+    menu transitions (early) or starved (late). Final model, every path
+    display-justified: **STC-scheduled** promotion requires a REAL crossing
+    (`nxt_pre`: commit before the window start) AND a TRUSTED clock (`stc_fresh` =
+    last load flushed, or `settled_seen` = a still park since load); **scheduled
+    DISARMS require the trusted clock too** (stale per-VOBU ss=0 disarms on a
+    keep_vbuf timeline starved promotions — off_due outranks nxt_due);
+    **settle promotion** (`menu_settled` = reader `still_active` && VBUF ≤ ~24 KB —
+    reader-park alone fired with ~0.5–1.5 s of transition still buffered) lands the
+    highlight WITH the settled image on parking menus (T2 confirmed great); **timer
+    fallback 1.0 s** serves only LOOPING motion menus (MiB pages/root — probes proved
+    they never park, so no settle signal exists; sub-second transitions). Probe kept:
+    overlay row 26 = {promo_cnt, src 1=sched/2=settle/3=timer, age ~4.85 ms units}.
+    See `dvd/nav_pci.sv` header comments.
+- ✅ **GAMEPAD TRANSPORT: cell-granular seek + pause (2026-07-06) — HW-PROVEN via the
+  later transport stack (chapters/scrub/HUD/pause exercised on the board, PRs fj#96/#101/#103/#106).** The
+  reusable **seek primitive** (later unlocks chapters/FF/skip/menu-jump — all reduce to "jump +
+  re-sync"): `dvd_iso_reader` gains `seek_pulse`/`seek_cell` (+`seek_ack`/`cur_cell`/`cell_ready`)
+  to jump to a PGC cell, **latched and executed at a block boundary** (`seek_jump = seek_pending
+  && ~blk_inflight` — let the outstanding `sd` read finish or its beats leak as stale cache bytes)
+  by reusing the existing `S_CELL_LOAD→…→S_STREAM` cell-load path. Gamepad (`joystick_0`, prev
+  unused; `J1,Pause,Prev Chapter,Next Chapter`): B1=pause, B3/Right=next cell, B2/Left=prev cell.
+  **★ HW ROUND-1 exposed two architectural gaps, both from the decoder's ~1 s VBUF cushion +
+  audio continuity; fixed via NATIVE decoder trick-play hooks (not a decoder reset):**
+  (1) **Seek video lagged ~1 s** (audio jumped immediately, old buffered video played on): `seek_ack`
+  now also pulses `mpeg2video.vbuf_flush` (seek-only `seek_flush` level → clk_dec), ORed into the
+  regfile's native `flush_vbuf`, discarding the buffered bitstream so video jumps with the audio.
+  (2) **Pause → still frame went BLACK + res popup after ~1 s, and audio kept playing** (desync grew
+  with pause length): the governor freeze stalled the decoder → the **watchdog** reset it (black
+  screen) — now the watchdog is fed `repeat_frame=31` (native freeze-suppress) while paused; and
+  **audio is held** by gating `dvd_audio_decode`'s play tick (`aud_ce_play &= ~pause`, reuses the
+  drain-hold → silence, seamless resume) + freezing the ring drain watchdog (`aud_bp_wd`). Pause
+  now = 4 coordinated holds: governor freeze + watchdog-suppress + STC freeze (`av_sync.pause`) +
+  audio hold. Tests: `bench/dvd/iso_reader_seek_tb.sv`, `av_sync_tb.sv` [5]. Design:
+  `docs/dvd_nav.md` "Transport". Cell-granular only (cells start on clean GOP boundaries → decoder
+  re-locks); sub-cell/time-based seek deferred. **Watch on HW re-test:** rapid multi-seek
+  robustness (round-1 "skipping record" + audio-stop) and any brief glitch frame at the VBUF flush.
+  **A/V-sync-after-scrub ✅ HW-CONFIRMED (2026-07-10, PR fj#106, `DVD_scrubalign_20260710_2312.rbf`,
+  SEED 13 clk_dec 94.36/90.19 MHz):** the hold-to-seek scrub's raw-RBN target landed mid-VOBU → decoder re-locked
+  mid-GOP (pixelated) and av_sync anchored the STC on the *next* VOBU's video PTS → permanent
+  sub-second audio lead (a chapter jump re-aligned it). The reader now snaps the scrub target
+  forward to the first NAV pack (VOBU boundary) via a 1-block parse-probe (`S_NAV_SEEK*`,
+  `NAV_CAP=1024`, raw fallback) so a scrub landing matches the chapter-seek contract. Scope:
+  the `seek_is_rbn` title path only. See `docs/dvd_nav.md` §2a.
+- ✅ **DISC MENUS Phase 2 — menu domain + VM jump interface (2026-07-07, PR fj#80) —
+  HW-CONFIRMED via the menu-refinements rounds (PRs fj#84–fj#90; see
+  `docs/dvd_menu_refinements.md` status roll-up).** `O[1] Disc Menus` (**default On** as of
+  2026-08-23 — the end-user defaults pass; was Off through the phase work) +
+  `J1,...,Select,Menu`: Menu jumps from the playing title to the disc's authored
+  **VTS root menu** (VTSM PGCI_UT@208 → LU[0] → entry 0x83; fallback chain VTSM→VMGM→
+  resume), Menu/Select again resumes the title at the saved cell. Reader gained the
+  reusable **VM jump primitive** (`jump_pulse/{domain FP/VMGM/VTSM/TT, vts, pgcn, entry,
+  cell}` → `jump_ack` on the seek flush contract + `pgc_loaded/pgc_error`), a
+  **generalized PGCIT path** (one parser for title + menu PGCs, mount included), and a
+  **sector-crossing byte walker** that parses PGC hdr@156-233 (still@163, palette@164 —
+  the Phase-1 straddle-skip is GONE), streams the **full command table** out on `cmd_we`
+  (Phase-4 VM BRAM format, frozen), and loads cells WITH `{still_time,cell_cmd_nr}` meta.
+  Real-disc findings baked in: MiB's root entry PGC = 0-cell command stub → reader
+  follows the last pre-command LinkPGCN (uncond preferred, depth ≤2); menu stills are
+  CELL-level (0xFF) → **drain-then-`S_STILL`** with a watchdog-only hold
+  (`mpeg2video.freeze_wd`), NOT the 4-hold pause set (the decoder must play out its
+  buffered tail to reach the authored still frame — the seek-VBUF lesson in reverse).
+  `tools/iso_nav_check.py decode_vmcmd` rewritten as a faithful libdvdnav vmcmd.c port
+  (the old ad-hoc decoder had the jump op codes WRONG: op2=JumpTT read as JumpVTS_TT,
+  op6=JumpSS as JumpTT) + menu PGCI_UT dumps, validated on MiB/Matrix/T2 (zero
+  unknown-bit warnings). Tests: `bench/dvd/iso_reader_menu_tb.sv` (6 scenarios incl.
+  straddling-PGC follow) + all existing reader tbs + real-VOB ps_chain green. Design:
+  `docs/dvd_nav.md` "Menu domain". **HW ROUND 1 (2026-07-07): Matrix menu WORKS +
+  resume works on both discs; MiB = silent black** — root cause from the IFO dump: MiB
+  VTS_21's root entry is a 0-cell **JumpSS trampoline** (g14=0x3500 → VMGM dispatcher
+  → JumpSS VTSM vts 2 = needs real VM execution); the old VTSM→VMGM fallback landed on
+  VMGM PGC1's cells = authored BLACK FILLER. **Round-2 fix (re-test pending): fallback
+  chain gained a hop — own VTSM → VTSM of the LARGEST-menu-VOB VTS (`best_menu_vts`;
+  MiB: VTS_02_0.VOB 261 MB → its root LinkPGCNs to the real menu) → VMGM → resume.**
+  Also HW-learned: menu 4:3 aspect = authored (Auto follows seq hdr, correct); menu
+  subpictures invisible with O[15] On = authored contrast 0, visibility comes from HLI
+  highlight colours (Phase 3), NOT a decode gap.
+- ✅ **DISC MENUS Phase 3 — PCI/HLI button highlights + gamepad nav (2026-07-07) —
+  HW-CONFIRMED (highlight render closed by PR fj#83/#84, `docs/dvd_menu_refinements.md` §1).** ps_demux routes
+  private_stream_2 substream 0x00 (PCI; SYSTEM syntax, no PES opt header, off
+  S_SYS_LEN_LO) → new `dvd/nav_pci.sv` (double-buffered HLI BRAM 0x60-0x315, hli_ss
+  commit semantics, fosl/foac, STC arm window, button-record fetch → REGISTERS, D-pad
+  link walk, activate = btn_cmd + ~0.6s ACT flash). Highlight render: inside the rect
+  the sp pixel class takes the HLI coli nibbles ([Ci3..Ci0 A3..A0], on-disc verified)
+  through the SAME pgc_palette→subpic_blend path; spu_decode force-enabled while a menu
+  is up (O[15]-independent). Reader gained the CELL-LOOP heuristic (replay a
+  button-armed cell with cell_cmd≠0 — MiB's interactive screen is mid-PGC cell 1; the
+  authored loop is a cell command). emu micro-bridge: LinkPGCN → same-PGCIT menu jump
+  (MiB submenus/Matrix menus WORK), LinkTailPGC → title resume; rest flash-only until
+  the Phase-4 VM. Golden tools: `tools/nav_extract.py` (PCI/HLI decoder + NAV fixture
+  writer, offsets vs libdvdread nav_types.h). Tests: nav_pci_tb + ps_demux_ps2_tb (real
+  MiB NAV sectors, byte-exact), all reader/demux/subpic suites green. Design:
+  docs/dvd_nav.md "Menu buttons". **HW gate:** MiB/Matrix menu → highlight visible,
+  D-pad follows the authored link graph, Select opens MiB submenus (LinkPGCN) / flashes
+  play buttons, menu loops instead of parking. Next: Phase 4 dvd_vm.sv interpreter.
+- ✅ **DISC MENUS Phase 4 — DVD-VM interpreter (2026-07-07) — HW-CONFIRMED via the
+  menu-refinements rounds (menus work on real discs; see `docs/dvd_menu_refinements.md`).** New `dvd/dvd_vm.sv` EXECUTES the disc's nav
+  commands (faithful libdvdnav decoder.c eval; types 5/6 per vmcmd.c — decoder.c's
+  own 5/6 is FIXME-wrong; type 4 compares AFTER its set, others before). GPRM×16 +
+  SPRM subset, cmd BRAM 2048×8 + program-map BRAM (reader-streamed), serial ALU,
+  LFSR16 rnd — all bit-exact vs `tools/dvd_vm_ref.py` (the new golden model,
+  validated on MiB/BBB/Matrix: MiB's Menu key executes the FULL JumpSS trampoline
+  to the real VTS_02 menu; BBB FP = JumpTT 4 — the old "JumpVTS_TT" reading was the
+  pre-rewrite decoder bug). With `O[1]` On: mount boots the **First Play PGC** (no
+  auto-play), buttons/menu keys run real commands (CallSS/RSM resume with skip_pre,
+  LinkTailPGC→POST dispatch = MiB Play, SetSTN→SPRM1/2→demux track mux), POST runs
+  at title end (drain-first), menu loops via vm_replay (gapless). Reader gained
+  `vm_mode` S_VM_WAIT verdicts (+0.62s watchdog), JumpTT TT_SRPT resolve +
+  title-entry scan, P_PMAP program-map walk; emu's Phase-2/3 proto-nav/micro-bridge
+  glue is DELETED (VM owns jumps; nav_pci gained `sel_force` for SetHL_BTNN).
+  Menus Off = Phase-3 behaviour exactly. Punted: angles, PTT exactness (Phase 6),
+  GPRM counter tick, UOPs, parental.
+  - **⚠ BOOT-CHAIN MENU SHORTCUT — the one deliberate deviation from libdvdnav
+    (2026-08-25, user decision) — ✅ HW-CONFIRMED 2026-08-25 (user report).**
+    Menu pressed over the First Play copyright screen used to hand the key to
+    the PLAYING title's VTSM Root, which on a DVD-game disc is a DISPATCHER,
+    not a menu: Atmosfear's sets
+    `g[2]=7` → VMGM 6 → VTSM(1) Root → (g2≠0) PGCN 5 → 48 → `rnd 6; JumpTT 1` =
+    a random ~35 s Gatekeeper clip. **libdvdnav does the same** (verified with its
+    own `trace_menuearly` on the real ISO) and the disc sets **no UOP bits**, so a
+    faithful VM cannot help — hence the deviation. While `menu_seen == 0` (no
+    menu-domain PGC loaded since the mount) the Menu key targets `best_menu_vts`
+    Root instead; `g[2]` stays 0 and Atmosfear lands on its real main menu.
+    Self-limiting (that press latches `menu_seen`), inert when
+    `best_menu_vts ∈ {0, cur_vts}`, and new `fb=FB_BOOTM` falls back to the SPEC
+    path (own-VTS Root) before VMGM. **141-disc sweep: 135 unchanged, 6 changed —
+    all from a TITLE landing to a MENU landing.** Tests `dvd_vm_tb` [S2]/[S21];
+    golden model in lockstep. Full trace + table: `docs/dvd_vm.md` "Boot-chain
+    menu shortcut". Tests: dvd_vm_tb (27 vectors + 9 scenarios),
+  iso_reader_vm_tb (command-driven boot→menu→loop→resume→post), all reader/demux/
+  nav suites green. Design: **`docs/dvd_vm.md`**. **HW gate: BBB boots FP→menu→
+  correct feature; MiB trampoline/Play/resume; SetSTN switches streams.**
+- ✅ **DISC MENUS Phase 5 — menu-transition VBUF hold (2026-07-08, PR fj#84) —
+  HW round-2 ACCEPTED (see the ★ notes below + `docs/dvd_menu_refinements.md` §2).** Fixes the T2
+  "offset highlight / freeze mid-transition" (and §3 "wrong timeline"): the
+  highlight was correct but sat over a **stale/frozen menu image**. Root cause
+  (decoded from the disc): a menu→menu transition fired `vbuf_flush`, cold-
+  restarting the decoder so the persistence frame (old menu still) stayed while
+  nav_pci armed the NEW menu's highlight. Reader now exports **`keep_vbuf`** (1 on
+  a menu-internal seek / menu→menu jump / menu next_pgcn advance); emu gates
+  `seek_flush_cnt` with `~keep_vbuf` so those transitions pulse **`load_flush`
+  only, not `vbuf_flush`** → the decoder plays out the authored transition tail
+  then decodes the new menu (no stale frame). Title seeks / menu→title (Play) /
+  title→menu (Menu key) keep the flush (A/V-sync). Tests: `iso_reader_menu_tb`
+  (T2/T4/T8 keep_vbuf table), `iso_reader_seek_tb` (title seek keeps it 0). Design:
+  `docs/dvd_menu_refinements.md` §2, `docs/dvd_nav.md` "Menu-transition VBUF hold".
+  **HW gate: T2/Matrix submenu enter + timeline select land on the correct menu
+  with the highlight over the matching image; MiB/BBB unchanged; O[1] Off unaffected.**
+  **★ HW ROUND 2 (2026-07-08): keep_vbuf ACCEPTED** — transitions + timeline switch
+  work. Added **Phase 5b — nav_pci `video_live` fallback promotion**: deep menus
+  (Mission Profiles, "Jump Into Timeline" scene-range menu + scene submenu) had
+  **highlights that never armed** — nav_pci promotes at `STC >= hli_s_ptm` but av_sync's
+  STC is anchored on the demux parse-front (not the screen) and a keep_vbuf hop doesn't
+  re-anchor it, so the compare is permanently not-due. nav_pci now takes `video_live` +
+  promotes a waiting armed HLI (visible coli `sel=444405ad`) after ~1 s of video-live so
+  it ALWAYS appears; STC path kept for Matrix finite windows (`nav_pci_tb` T7). Residual
+  keep_vbuf side effects deferred (documented in `docs/dvd_menu_refinements.md` §1/§2):
+  1–2 black frames at the LinkPGCN junction (ps_demux reset + cache clear),
+  content-appears-late (VBUF-lag: decoder plays the accumulated tail before the settled
+  still), highlight-sometimes-early (STC-past-s_ptm).
+  **Tail-drain amendment ✅ HW-CONFIRMED 2026-07-30 (user report, PR fj#149):** a NATURAL title-domain PGC end (FP logo chains, end-of-title → menu) used
+  to lose its last ~1 s to the `keep_vbuf=0` jump flush; the reader now waits for
+  `vbuf_empty` (~5 s `DRAIN_WD` watchdog) before dispatching `vm_pgc_end`, so the clip
+  plays out fully. User jumps/seeks stay immediate; menu paths unchanged. See
+  `docs/dvd_nav.md` "Natural-transition tail drain".
+  **Tail-drain Phase B ✅ HW-CONFIRMED + MERGED 2026-07-31 (PR fj#150):** title-domain
+  CELL-COMMAND jump/seek verdicts (Thayer's Quest FMV branch
+  points) now tail-drain too. The VM exports `vm_from_wait` provenance
+  (= `wait_verdict && nat_src` — `nat_src` tracks WHO STARTED the chain, set only by
+  `ev_cellcmd`/`ev_pgcend`; ★ HW round 1 proved blk-only provenance wrong: Tomb
+  Raider's Select skip = button `LinkTailPGC`→POST, whose jump read BLK_POST and got
+  tail-drain-gated for seconds — `nat_src` keeps every user-started chain immediate;
+  every V_IDLE event arm also forces `blk<=BLK_BTN`), the reader gates `jump_go`/`seek_jump` on
+  `vbuf_empty`/`DRAIN_WD` for natural title requests (dispatch stays ungated —
+  `vm_adv` cell commands never hitch), freezes `vmw_tmr` while gated, and feeds
+  `nat_wait_o` back to `dvd_vm.wait_hold` to freeze the V_WAIT give-up timer
+  (else `skip_pre`/`tt_resolve` corrupt mid-drain). HW: TR Select scene-skip
+  immediate (the round-2 fix), Thayer unchanged — EXPECTED (its choice cells are
+  timed stills = already drained; the gate covers no-still branch cells).
+  Detail + a known pre-existing `JumpSS_VTSM vts=0` quirk: `docs/dvd_nav.md` "Phase B".
+  **★★ HW ROUND 5 — ✅ HIGHLIGHTS FIXED + CONFIRMED (2026-07-08, PR fj#84 merged).** The real
+  blocker (found by MEASURING SPU sizes, not guessing): `spu_decode`'s SPU buffer was **8 KB**
+  (`SPU_CAP=8192`, 13-bit addrs), but menu subpictures are large (T2 root 2.8 KB=fit→worked;
+  mission-profiles 8.6 KB, scene-range 23.9 KB=overflow). The DCSQ sits at the SPU's END, so a
+  small cap dropped it and `rd_ptr<=dcsqt_sa[12:0]` truncated its offset → never committed →
+  no subpicture → no highlight (which is why every downstream fix did nothing). Fix: SPU_CAP
+  8 KB→32 KB + 15-bit addresses (RAM 69%→74%, fits). **Mission Profiles + scene-range
+  highlights now render on HW.** Diagnostic that cracked it: O[2] on-screen blocks
+  (armed/video_live/subpic-shown/SPU-arrival) + `tools/spu_ref.py` SPU→PNG dump. The round-4/5/6
+  fixes (menu_mode visible-window bypass, `sp_track=0` for menus, `video_live` fallback) were
+  correct-but-insufficient alone and remain in place. **★ OPEN follow-up = VBUF LAG (new
+  session):** the decoder trails the parse by the buffered depth (keep_vbuf), so menus don't
+  reach the settled still — scene-range NUMBERS (baked video, cell-0 I-frame) missing on the
+  deep first-entry path, mission-profile slide-load flashes, Matrix/MiB scene-page images lag
+  ~2–3 s behind the highlight. Fix direction: flush-and-re-decode the still cell on the
+  menu-still park (or bound the menu VBUF lead). See `docs/dvd_menu_refinements.md` §5.
+- ✅ **TRANSPORT HUD Phase 11 — HW-CONFIRMED 2026-07-10 (PR fj#103)** (release build
+  gated green: clk_dec 91.07/88.12 MHz, ALM 90%, DSP unchanged 97/112;
+  `releases/DVD_hud_20260710_1955.rbf`). The release-visible playback feedback layer (the multi-row debug
+  overlay stays compiled out): `dvd/transport_hud.sv` renders a bottom **status line**
+  (`► 0:12:34/1:37:05 CH 12/23`; ❚❚ pause; the scrub tier as 2-5 arrows — it printed
+  `►►×n` until 2026-09-12, a tier ordinal posing as a rate, where `×1` meant ~29× real
+  time; see `docs/transport_hud.md`) + an **event popup line** (`AUDIO 2/4 FR` / `SUB OFF` / `ANGLE 2/3` / `CH n/N`,
+  last-event-wins, Phase-10 `attr_*` languages) from a generated glyph ROM
+  (`tools/hud_font.py` → `dvd/hud_font.mem`) + 2×32 text plane; **`dvd/seek_bar.sv`**
+  gives the seek-on-release scrub its missing feedback (fill = hold start, amber cursor =
+  release target vs the title RBN span) and pops on pause/seek/chapter with the live
+  playhead + chapter-tick notches (stretch, severable). New **B9 "Display"** button
+  toggles a persistent status line; auto-show 2.5 s on events; hidden in menus.
+  Whole-title elapsed = the reader's per-cell BCD prefix sum (+ new `cur_pgm` query walk)
+  (+) DSI `c_eltm` via `dvd/bcd_time_add.sv` (rate-aware frame carry, 508 vectors green).
+  **Hotspot discipline:** all formatting/division at event rate; display path = (x,y)-pure
+  registered pipelines priority-muxed into the ONE existing `subpic_blend` register stage
+  (0 new DSP; field-order per-pixel identity proven in sim = CRT-480i safe; HDMI-480i O9
+  half-width caveat = subtitle parity). Tests: transport_hud_tb (12 scenarios, text-plane
+  ASCII decode), hud_frame_tb (PPM frame + interlace proof), seek_bar_tb (divider/ticks/
+  popup), bcd_time_add_tb, extended iso_reader_chapter_tb; all reader/nav/demux/av_sync
+  suites + real-VOB ps_chain green. Design + HW-gate checklist: **`docs/transport_hud.md`**.
+- ✅ Multi-angle (Phase 9): HW-CONFIRMED 2026-07-10 (PR fj#98, MiB title 13 five-angle B6
+  cycle). Timed/heuristic stills: HW-CONFIRMED 2026-07-10 (PR fj#90).
+- ❌ DVD-specific remaining: chapters/PTT exactness (Phase 6: VTS_PTT_SRPT), menu audio,
+  no UDF-only-image support. (Phase-8b TMAP time seek: retired 2026-07-10, **REOPENED and
+  built 2026-09-25**, issue #127 — see the status bullet near the top and `docs/dvd_nav.md` §2h.)
+- ✅ **DVD-REMOTE BUTTONS — Stop, Aspect, Chapter Menu, A-B Repeat, Frame Step, a
+  screensaver, and the Display toggle FIX (2026-09-13, branch
+  `feature/remote-buttons`) — sim-proven, mutation-checked 31/31 across five modules,
+  and ✅ HW-CONFIRMED 2026-09-13 over five rounds** (final build
+  `DVD_remotebtns_20260913_2037.rbf`, SEED 7 first roll, 88 % ALM, clk_dec
+  92.49/88.38). **Eject, Volume and the CEC transport mapping shipped with it**
+  (B19-B21 + `main/support/dvd/dvd_remote.cpp`, integration steps 39-41) —
+  eject ✅ HW-CONFIRMED from the maintainer's own log: `DVD_PHYS: eject: tray
+  opened on /dev/sr0`, plus the unmount-an-image case. **Every feature MEASURED, not eyeballed:** Display hidden at 300/800/
+  1500 ms across 3 on/off cycles (all inside the 2.5 s window a pre-fix core stays
+  visible); Stop → `STOP` popup, elapsed frozen over 5 s, resume IN PLACE
+  (0:00:19→0:00:23), `STOP  FROM START`, then restart from First Play (total
+  1:43:41→0:00:14) with the picture **max=0, perfectly black**; Chapter Menu followed
+  `0x87`→PGCN 4→`LinkPGCN 8` onto the real 4-cell scene menu with buttons armed;
+  Frame Step 0 px over 3 s paused, then 1962/2431/1618 px per press, still PAUSE,
+  26,422 px on resume (⚠ the FIRST press on a PLAYING title now PAUSES instead of being
+  swallowed -- see the frame-step bullet below; that measurement was of a press made while
+  already paused, so it still stands); Aspect cycles all four popups and, PAUSED so content is static,
+  alternates active height 298↔357 px per press exactly as the RTL predicts for 16:9
+  anamorphic; screensaver not armed at 100 s, armed by 145 s, logo MOVING 9,280 px/3 s
+  over a blanked picture; **A-B repeat kept the playhead inside 0:01:46–0:02:04 for
+  96 s** (free-running would reach ~0:03:20) and ran away again after `A-B OFF`.
+  ★★ **STOP SHIPPED AS THE WRONG FEATURE, TWICE, AND BOTH WERE SPEC MISREADS
+  RATHER THAN BUGS.** Round 1 blanked the picture to black; the report was
+  *"one stop was supposed to drop you to the idle logo"* — a set-top player
+  spins down and puts its OWN screen up, and the machinery already existed
+  (the screensaver was doing exactly that five minutes later), so `logo_vis`
+  simply gained `stopped_w`. Round 3 then found the stage READOUT wrong too:
+  *"the second stop should clear all messages... just show the logo as if you
+  had done a soft reset."* The two stages are told apart by the PRESENCE of an
+  overlay, not by two captions — stage 1 keeps `STOP` because a resume is
+  waiting, stage 2 suppresses the HUD and seek bar entirely. The
+  `STOP  FROM START` string, `transport_hud`'s `stop_kept` port and the
+  `f2_keep` snapshot were deleted rather than left as dead weight.
+  ⚠ Measured, so it needs no re-deriving: playing mean 45.90/max 255 → stage 1
+  mean 1.99/max 110 with `STOP` → stage 2 mean ~2.1/max 116 with the HUD gone,
+  held 11 s, logo moving 9,464 px in 2 s.
+  ★★ **EJECT NEEDED TWO FIXES AND THE REPORT NAMED THE SECOND ONE:** *"eject
+  does not eject the disc, instead it reloads it... we see the key cracking
+  message again and the disc starts over."* (1) The tray was asked to open
+  BEFORE the teardown, while the mounted file and the libdvdcss session still
+  hold `/dev/srN` open — the kernel refuses to eject a busy device, so it never
+  moved. (2) With the disc still in the drive the 1 Hz auto-mount re-acquired
+  it and re-cracked the keys. `foreign = 1` blocks that, reusing the existing
+  "do not auto-mount" latch whose clear condition is already right: a disc
+  INSERTION EDGE. No new state, no timer.
+  ⚠⚠ **AND ONE ROUND WAS WASTED BY ME, NOT BY THE CODE:** I described the
+  round-2 logo fix while the core was still compiling and only the Main had
+  been staged, so the maintainer tested the OLD `.rbf` and correctly reported
+  no change. **A fix is not testable until its artefact is ON THE BOARD** —
+  say "building" and wait, and remember which half of a change lives in the
+  `.rbf` and which in the Main (they are flashed separately).
+  ★★ **A-B REPEAT SHIPPED BROKEN AND ONLY HARDWARE COULD FIND IT: `scrub_ctrl`'s
+  `jump_dir` is `1 = forward` (`scrub_ctrl.sv:174`, applied at `:260` as
+  `base ± off`), and `ab_repeat` drove `1'b1` under a comment claiming "1 = backward".**
+  Every loop-back was a forward jump that cleared `title_last_rbn`, got clamped there
+  by `:263`, and ran off into the PGC's post — measured as a jump to **1:43:42 of a
+  1:43:41 title**. One bit.
+  ★★★ **AND THE BENCH COULD NOT CATCH IT, WHICH IS THE DURABLE PART.** Arm `[B2d]`
+  asserted `jump_dir == 1` *because the RTL drove 1* — the expectation was copied from
+  the implementation's own belief rather than from the CONSUMER'S CONTRACT, so bench
+  and RTL shared one wrong convention and agreed perfectly through 7/7 mutations.
+  Same shape as `field_parity_tb` and `dvd_vm_ref.py`
+  ([[bench-that-cannot-fail]]). **When a module hands a value to another module,
+  assert against the consumer's declaration and cite its line** — the arm now reads 0
+  and names `scrub_ctrl.sv:174`.
+  ⚠⚠ **A HARNESS BUG COST THE WHOLE FIRST ROUND, and it looked exactly like a core
+  defect.** `tools/mister_keyd.py` declared a hand-maintained list of Linux keycodes to
+  uinput, and **a uinput device can only emit keys it DECLARED — the kernel drops the
+  rest silently.** All five new keys were injected, accepted by `mister.py key` (whose
+  names derive from `CONF_STR`), and discarded by the kernel; on the board that is
+  indistinguishable from "the core ignores those buttons". It was the one transcribed
+  table in a harness built on derived ones. Now `range(1, 249)` — declaring a key is
+  not emitting it, so a generous range cannot go stale.
+  ⚠ **Three more harness traps, all of which produced a confident wrong reading first:**
+  (1) `Debug Overlay=On` forces `vis = 1` (`transport_hud.sv:202`), so the instrument
+  MASKED the Display test — the baseline read "visible" before any press. (2) A
+  press→screenshot pair over ssh is a RACE: `screenshot` goes straight to
+  `/dev/MiSTer_cmd` while the key goes agent→uinput→Main→core, so a zero-delay capture
+  shows the PRE-press state and reads as the pre-fix bug. Sample several delays inside
+  the window instead. (3) Display persistence CARRIES OVER between runs, so a script
+  that assumes it starts off silently ran an entire Stop test with the HUD hidden.
+  ★ **The screensaver's no-state-change claim is proven two ways:** `cfg_rewritten`,
+  `il_switch_fired` and `watchdog_fired` all stayed RED through it (no scaler re-init,
+  no raster switch, the watchdog never fired across the long hold), and dismissing it
+  restored the **bit-identical** paused frame (0 px different from the original) — the
+  held frame survived untouched, which a `media_seen` clear could not have done.
+  ⚠ **Chapter Menu on a disc with NO chapter menu falls back to the disc's ROOT menu**
+  (`fb=FB_VTSM`), measured on an image whose VTSM declares only an `0x83` entry — the
+  board parked there with buttons armed, not stalled. The manual had claimed "does
+  nothing and says `NO MENU`"; there is no such popup and never was. Corrected.
+  ⚠ The elapsed readout is unreliable for a second or two AFTER a seek (the DSI time
+  interpolation re-syncs on the next NAV pack), so A-B's landing point cannot be
+  timed to the second from the HUD — measure the loop as a BOUNDED BAND over a long
+  window instead, which is also the property a user actually experiences. Field report: *"display button would be nice if it toggled
+  on/off instead of just on"*, plus no Stop, no aspect on a button, no volume, no eject.
+  ★ **The Display defect was ONE LINE, and the bench had encoded it as correct
+  behaviour.** `transport_hud.sv` did toggle `persist_q`; the line below it re-armed the
+  ~2.5 s auto-show timer on EVERY press, and `vis` ORs that timer in — so the press that
+  turned persistence *off* left the line up anyway. T7/T8 both carried a
+  `repeat (2100) // drain the toggle's own timer arm` before checking it was hidden:
+  the bench worked AROUND the defect rather than catching it, which is why no arm was
+  ever red. New T7a0 asserts the off-press hides AT ONCE.
+  ★★ **SCOPE WAS CUT BY MEASUREMENT, TWICE, AND THE TWO CUTS ARE DIFFERENT FAILURES.**
+  Four disc-menu buttons were planned; one shipped. Angle menu: 216 of 956 discs declare
+  one, but only 22 have a multi-angle title and **11 have both — 205 of 216 are empty
+  template stubs** (a declared IFO table is not a capability: the `progressive_frame`
+  family again). Audio/Subtitle menus are *genuine* (317/340 and 301/343 back real
+  multi-stream content) but **DOMINATED**: B7 already serves 603 discs and B8 553, strict
+  supersets of the menus' reach, and the Root menu reaches those pages anyway. Only
+  Chapter Menu (401 discs, 42 %) is a capability we lack — nothing else jumps to a scene.
+  ⛔ **DVD-Text is measured DEAD, not deferred:** 219/956 set `txtdt_mgi` and 149 hold a
+  printable name, but the names are mastering junk (`SONY`, `TEXT_DATA`, `Xess_DATA`,
+  `ACT_O_V`). That supersedes `docs/conformance.md`'s "TXTDT 2/23 — defer until a disc
+  needs it" on a 40× larger sample: no disc needs it.
+  ★ **Stop is built out of the EXISTING pause holds** (`dvd/stop_ctl.sv`): `stopped` ORs
+  into `pause_gov`/`pause_aud`, so the governor freeze, `repeat_frame=31` watchdog
+  suppression, STC stall and audio hold come free and an indefinite stop is the
+  already-proven indefinite pause. Two-stage: press 1 keeps the position (PLAY resumes in
+  place, nothing was torn down, so there is no bookmark to save), press 2 forgets it and
+  the next PLAY re-pulses the reader/VM `start` — ⛔ **NOT a remount**, which the core
+  cannot ask for. ⚠ `dvd_vm.sv` zeroes `rsm_vts` inside `if (start)`, which is correct for
+  stage 2 and must not happen at stage 1.
+  ⛔⛔ **THE SCREENSAVER'S WHOLE DESIGN IS "DO NOT CLEAR `media_seen`".** That is the
+  obvious trigger and it is wrong: `emu.sv:146` derives `idle_wide` from it into
+  `VIDEO_ARX/ARY`, so clearing it mid-title flips the aspect and makes Main re-init the
+  scaler — a resolution popup in the middle of a film. It is a pure display-layer term on
+  `logo_vis`, placed OUTSIDE the `!media_seen` group (a paused title still has live video,
+  so a term ANDed inside could never assert). HUD and seek bar are suppressed while it is
+  up, since a burnt-in status line is what it exists to prevent.
+  ★★ **...AND IT BLANKED THE PICTURE BUT NOT THE LAYER DRAWN ON TOP OF IT — ✅ FIXED
+  2026-09-15 (branch `fix/screensaver-overlay-gate`), sim-proven RED/GREEN, 13 mutations
+  each caught by EXACTLY its own assertion, and ✅ HW-CONFIRMED 2026-09-15 WITH THE DEFECT
+  REPRODUCED FIRST ON THE PRE-FIX CORE** (build `DVD_saveroverlay_20260916_0158.rbf`,
+  SEED 7 first roll, clk_dec 95.01/91.44, 91 % ALM). Field report: *pause
+  on a disc menu where an option is highlighted and the highlight persists into the
+  screensaver.* `pic_blank` took `core_r/g/b` to black and `hud_on_e`/`bar_on_e`
+  suppressed the chrome, but `sp_q_inside`/`hl_use` carried no gate — so the SUBPICTURE
+  layer (a subtitle, or a menu button highlight, which is a RECOLOUR of subpicture pixels)
+  composited over the blanked black frame and stayed.
+  ★★★ **THE DURABLE LINE: a gate on the picture is not a gate on what is drawn OVER the
+  picture.** Layers derived from the picture move with it; player chrome does not. That
+  split is now a TABLE in `docs/screensaver.md`, so the next overlay added to that mux
+  inherits it instead of re-deriving it.
+  ⚠ **A menu highlight NEVER EXPIRES ON ITS OWN** — `spu_decode.sv`'s `visible` is
+  `enable && c_valid && (menu_mode || window)` and `menu_mode` BYPASSES the STC show/hide
+  window, so `q_inside` holds for as long as the menu is up. This is the one context where
+  "it will time out" is false, which is why it read as a highlight parked on black rather
+  than a flicker.
+  ⚠ **The gate is `pic_blank`, NOT `saver_on_w`** — Stop leaks identically and a stop is
+  INDEFINITE, so with `Screensaver=Off` it never ends. `hud_on_e`/`bar_on_e` use
+  `~stop_full` (stage 2 only) because stage 1 deliberately KEEPS the `STOP` caption: the
+  presence of a caption IS the stage readout, and the subpicture has no such job. ⚠ And
+  `pause_q` is not in `pic_blank`, so an ordinary pause still keeps picture and subtitle.
+  ⛔ **Gated at the REGISTER STAGE only — the base `sp_q_inside`/`hl_use` wires stay raw**,
+  because the release-visible `O[2]` diagnostics read them (`sp_seen`→blk3,
+  `hl_use_q`→`hlvis_seen`→blk8) and must keep answering *did it FIRE?*, not *was it
+  SHOWN?*. **blk8 was already fixed once for this exact class of mistake** (2026-08-17: it
+  watched the composited `sp_force_q`, so a HUD popup alone turned it green). `sp_sel_col`
+  (the `pgc_palette` ADDRESS) and `sp_r/g/b_q` stay ungated too — unobservable with `ov_on`
+  low, and gating them adds a hotspot term plus a second definition of "the highlight is
+  active". ⛔ `logo_on_w` is never gated: it IS the screensaver.
+  ★★ **TWO PRE-EXISTING BENCH DEFECTS CAME OUT WITH IT, AND THE FIRST UNGATED THE FIX'S
+  OWN PREMISE.** `subpic_blend_tb` never tested `ov_on=0` with `ov_force=1` — line 71 was
+  the only `ov_on=0` vector and the 4096-point sweep hardcoded `1'b1` — so "clearing
+  `ov_on` alone removes the pixel" was assumed, not measured, and `ov_force`'s NAME invites
+  the wrong reading. MEASURED: mutate to `blend = (ov_on || ov_force) && …` and the
+  PRE-change bench reports **`RESULT: PASS` and exits 0**; with the on/off sweep, 962 errors
+  and exit 1. Second: `stop_ctl_tb` and `subpic_blend_tb` both `$finish`ed on failure (vvp
+  exits 0 — the `bench/ac3` / `run_p240.sh` trap), and **`stop_ctl_tb` had NO RUNNER AT ALL**
+  so its copy had never been sprung; `run_subpic.sh` had the same hole from the other end
+  (`| grep RESULT` matches `RESULT: FAIL` while `set -e` never trips). All fixed.
+  ✅ **MEASURED ON THE RIG, BOTH CORES THROUGH THE IDENTICAL SCRIPT** (MiB's main menu
+  with PLAY MOVIE highlighted; `lit` = non-black pixels in a frame, `static` = lit in BOTH
+  of two frames at the same position = what is PARKED on the blanked screen, the logo
+  having moved):
+  | arm | control lit | control static | fix lit | fix static |
+  |---|---|---|---|---|
+  | **Screensaver** (the report) | 5875 | **1189** | 4686 | **0** |
+  | Stop stage 1 | 5710 | **1024** | 4686 | **0** |
+  | Stop stage 2 | 5710 | **1024** | 4686 | **0** |
+  ★★★ **THE FIX CORE'S `lit` IS THE CONTROL'S `lit` MINUS EXACTLY ITS `static`, TO THE
+  PIXEL, ON ALL THREE** (5875−1189 = 5710−1024 = 4686) — so it removed the highlight and
+  NOTHING ELSE. "The count went to zero" would also be satisfied by a fix that blanked too
+  much; this is the statement that excludes it. Control bbox x 273..453 y 280..303 = the
+  PLAY MOVIE rect. ✅ Round trip: highlight present → gone → **back on the next button up**
+  after one `up` press, so the menu is LIVE, not repainted. ✅ And the four `O[2]`
+  diagnostics read GREEN under the saver on BOTH cores — the diagnostics-stay-honest claim,
+  which only hardware could settle.
+  ⚠⚠ **THE FIRST CONTROL ARM DID NOT REPRODUCE AND THAT WAS MY HARNESS, NOT THE CORE.** It
+  returned to the menu on a fixed 20 s settle and PAUSED ON THE TRANSITION CLIP, where
+  nothing is armed — so the screensaver arm measured **0 static px on a core that has the
+  bug**, while its own Stop arm seconds earlier measured 1189. **A step that never reached
+  the state was not measured, and it reads exactly like a pass.** Wait for the board's own
+  `hl_btns_armed`, then PAUSE IMMEDIATELY to freeze the state: MiB's root is a LOOPING
+  motion menu that cycles back through its transition and disarms on its own. ⚠ Dismiss
+  with `up`, never `select` — select ACTIVATES the button (here: Play Movie).
+  ⚠ **`logo_vis` and `pic_blank` are SIBLINGS over the same facts with nothing tying them
+  together** — add a condition to one and the logo can be up with the picture live. Recorded
+  in `docs/screensaver.md`; a future change to either must move both.
+  **Gates: `bench/dvd/run_screensaver.sh --red`** (3 arms — the seam, the producer, the
+  consumer — and 13 mutations; MEASURED per arm: every emu mutation fails in exactly ONE
+  named assertion group, and R3/R4/R5 all mutate `sp_on_e` so each is matched on the message
+  that distinguishes it) and **`tools/check_saver_overlay_wiring.py`**, which pins the WHOLE
+  burn-in policy (the pre-existing gates too) and pins BY REJECTION the wires that must stay
+  ungated. ⚠ Three parsing traps in its docstring, and the first is the sharpest in the
+  tree: **`emu.sv`'s `dbg_blk8` comment contains the literal pre-fix expression
+  `hud_on_w | bar_on_w | hl_use`, so a grep-based checker PASSES ON A FULLY REVERTED FILE**
+  — `strip_comments()` is mandatory. Also: `hl_use_e` contains `hl_use` as a SUBSTRING, so
+  every test is over a token set, never `in`. Detail: **`docs/screensaver.md`**.
+  ★ **`O[48:47] Screensaver,5min,Off,2min,10min` — the value ORDER is the feature.**
+  `status[]` powers up at zero, so index 0 IS the default; `Off,2min,5min,10min` would
+  ship it disabled. Bits 47/48 were never allocated ⇒ **no `"v,N"` bump, no settings
+  reset**. ⚠ Re-ordering later WOULD force one (that is why v3 exists).
+  ⚠⚠ **The Aspect button exists mostly to CONTAIN a hazard.** The core cannot write
+  `status[]` (`dvd_telem.sv:11-16`), so `dvd/aspect_ctl.sv` publishes an override the OSD
+  reclaims on any change. It cycles whichever control is LIVE because `Analog Aspect` is
+  gated on `interlaced_eff` and would be a dead button on an HDMI-only rig. Every
+  `VIDEO_ARX/ARY` change re-inits the scaler, so the verdict SETTLES 250 ms: ten rapid
+  presses = ONE change. ⚠ `sp_disp_mode` had to follow the override too, or subtitles lay
+  out for an aspect the picture is no longer in.
+  ★ **A-B repeat taught the sharpest lesson.** It seeks by construction, so it lives in
+  the stale-DSI window — but a stale **0 is BELOW B**, so "compare without the freshness
+  guard" was MISSED by the obvious arm. The damage is one level down: our own loop-back
+  seek flushes `nav_dsi`, `cur_rbn` drops to 0, an unguarded LOCKOUT clears (0 < B), and
+  the parse front coming back still past B fires again = the seek storm. Bench arm [B7]
+  replays exactly that.
+  ★ **Frame step needed TWO gates opened, not one.** `ofv_pickup` alone advances nothing:
+  while paused `STATE_REPEAT` loops back to `STATE_NEXT_IMG` forever, so `STATE_INIT` —
+  the only state that consumes a pickup — is unreachable. `ofv_paced` also had to bypass
+  `frame_due`, because `disp_sched` freezes the STC under pause and the next picture is
+  never "due". ⚠ And the arm must clear on the REAL consumption
+  (`(state == STATE_INIT) && pickup_go`, the term behind `output_frame_rd`), not on
+  `pickup_go` — which is a combinational "a frame could be taken", true for many cycles
+  mid-scan. A probe showed the arm living exactly ONE cycle, in state 9.
+  ✅ **AND THE BUTTON WAS DEAD DURING PLAYBACK UNTIL 2026-09-16 (branch
+  `fix/frame-step-pause`); sim-proven RED/GREEN, 16 mutations each caught by the assertion
+  that owns it, ⏳ HW-confirm pending.** The guard shipped as
+  `(pause_q || stopped_w) && cell_ready && !menu_active`, so a press on a playing title was
+  SILENTLY SWALLOWED — you had to know to press B1 first. It is pause-and-nudge now, like a
+  set-top player and VLC: a new LAST arm of emu's `pause_q` chain sets pause on a step press
+  while live, and the next press steps as before.
+  ★★ **THE FIRST PRESS PAUSES *ONLY*, AND THAT IS MEASURED, NOT TASTE.** While the title is
+  live an ordinary pickup happens every frame, and `pause_dec` is 2 CDC flops deep where
+  `step_dec` needs 3 — so an arm raised on the pausing press is consumed by a pickup that was
+  going to happen anyway, and one press would advance one frame **or two** depending only on
+  raster phase. Hence two presses, two jobs.
+  ★ **ONE shared predicate** (`step_ok = cell_ready && !menu_active && !hold_freeze`) for
+  both halves: if the pausing press and the stepping press could disagree about where frame
+  step is legal, the button would pause a title it can never step — a dead-end pause only B1
+  undoes. ⛔ `!in_title_menu` deliberately absent (B1 already pauses there).
+  ⚠ **`!hold_freeze` is what makes emu agree with the datapath:** `resample_addrgen.v:451,458`
+  gate `ofv_paced` AND `ofv_pickup` on `~hold_freeze` **unconditionally** — `step_arm` does
+  NOT bypass it — so a step press during a held scrub advances nothing; without the term it
+  would set `pause_q`, and a scrub release is a `seek_ack`, **not** a `jump_ack`, so nothing
+  clears it and the disc lands on the scrub target PAUSED.
+  ⚠⚠ **THE ARM IS THE LAST `else if` AND POSITION IS SEMANTICS.** The chain is a priority mux
+  over one register and this arm only ever SETS pause, so at the bottom it cannot mask a
+  RESUME; hoisted above any clear-only arm a coincident resume press becomes a stuck pause.
+  **`step_ok`'s `~hold_freeze` does NOT cover the FF/REW arm** — on the `ff_edge` cycle
+  `hold_freeze` has not risen yet — so the PRIORITY is the only thing that covers it.
+  `!stopped_w` is the same class: a `pause_q` set under a stop survives the PLAY that clears
+  the stop (`pause_edge && !stopped_w` cannot fire on that cycle) and the disc resumes paused.
+  ⛔ **B9 OWNS THE HUD IN A PAUSE; THE PAUSE ONLY SEEDS IT (2026-09-17, user decision —
+  the SECOND revision of this behaviour).** First cut: no change, because both overlays
+  take `pause_q` as a visibility LEVEL (correct about the mechanism, wrong about what is
+  wanted). Second: mask that level for a frame-step pause — still a HOLD, so B9 could not
+  hide the line in a **B1** pause. The spec is a true toggle in both: B1 starts shown,
+  frame step starts clean, **B9 toggles from there, repeatedly, in either**.
+  **Shape:** `transport_hud` owns a pause-scoped latch `pause_show` — seeded at the pause
+  EDGE from the new `pause_seed` input (emu drives `!step_paused`), toggled by
+  `display_edge` while paused, cleared at pause end. While `pause_q` is high, `vis` is
+  **that latch ALONE**.
+  ⚠⚠ **"Alone" IS the reported defect:** a B1 pause also arms `show_tmr` (`pause_edge` is
+  in `hud_user_evt`), so as a mere OR term the first B9 press would hide nothing.
+  ★ `seek_bar` takes the SAME latch (`pause_show_o`), never its own expression — it has no
+  `display_edge`, so a local value would stop following B9.
+  ⚠ `persist_q` and `show_tmr` are PLAYBACK-scoped now (`display_edge && !pause_q`), or
+  pausing→hiding→resuming would flip the playback line (bench arm T6p-i).
+  ⚠⚠ **AND THE FIRST `step_paused` LATCH SHIPPED BROKEN — HARDWARE CAUGHT IT, SIM COULD
+  NOT.** It read `if (~pause_q) 0; else if (step_pause_go) 1;` and `pause_q` is NON-BLOCKING,
+  so on the cycle `step_pause_go` fires `pause_q` still reads 0: the clear won every time
+  and the set was UNREACHABLE. ★ The comment beside it stated that very fact and drew the
+  wrong conclusion. No sim arm could see it (`transport_hud_tb` drives the port directly;
+  emu has no bench) and **the checker pinned the WRONG SHAPE as correct**, because the
+  pattern came from the same mistaken reasoning as the RTL.
+  ★★ **Durable: a wiring checker pins a shape, it cannot tell you the shape is wrong.**
+  Where a latch's ORDER carries the meaning, extract it into a module with a bench — the
+  `flush_ctl.sv` / `stop_ctl.sv` precedent.
+  Gates: `transport_hud_tb` **T6p** (13 arms) + emu mutations **P1–P4 / Q1–Q3**; **Q3**
+  restores the OR form and must fail T6p-g/T6p-l, **P4** restores the shipped latch order.
+  ★★ **A reordering changes no term, no port and no expression, so NO bench and no Quartus
+  fit can see it** — hence `tools/check_frame_step_wiring.py` reads the arm, its terms AND
+  its ordering against all four resume arms out of `dvd/emu.sv` (RED on the pre-fix file,
+  where the headline message names the shipped behaviour).
+  ⚠⚠ **TWO PRE-EXISTING BENCH GAPS CAME OUT WITH IT.** `pickup_hold_tb` tied
+  `.sched_due(1'b1)`, so `frame_due` was always true, `(frame_due | step_arm)` was redundant,
+  and **deleting `| step_arm` was caught by NOTHING** — the bench now models `disp_sched`
+  freezing the STC under pause (`sched_due = ~pause`), which is exactly why that term exists.
+  And `stop_ctl_tb` **had no runner at all**; it is an arm of `run_frame_step.sh` now.
+  New arm **5e**: a step press while LIVE must cost exactly one pickup (not two) and leave
+  `step_arm` clear — the executable form of the CDC argument above.
+  ★★★ **AND A SECOND, PRE-EXISTING DEFECT ON v0.6.0 FOUND BY THE SAME REPORT: STEPPING
+  COULD ONLY REACH AS FAR AS THE VBUF — ~17 FRAMES, ✅ FIXED AND HW-CONFIRMED 2026-09-16**
+  (build `DVD_framestep2_20260917_0210.rbf`, SEED 7, clk_dec 92.19/88.52). Field report:
+  *"only about 20 frames can be advanced before it stops updating"*, guessed to be "maybe it
+  stops when it hits a new i-frame". ⛔ **It is NOT the I-frame — it stops when the VBUF
+  reaches ZERO**, and the measurement refutes the GOP theory twice over.
+  ★ **MEASURED on the rig, telemetry per press** (`pickups` is the instrument: one
+  successful step is exactly one pickup):
+  | arm | steps | `vbuf_fill` |
+  |---|---|---|
+  | `Audio=On` (as reported) | **17**, then FROZEN for 18 more presses | 84 → **0** |
+  | `Audio=Off` (control) | **35 presses → 35 steps** | flat **221–224** |
+  With the audio path out of the way the SAME GOP structure steps indefinitely, so GOP
+  length is not what bounds it; the count moves with BUFFER DEPTH.
+  **The chain, all pre-existing:** pause holds the audio decoder (no `aud_frame_pop`) → the
+  32 KB ring fills in ~0.6 s → **`aud_bp_wd` is deliberately FROZEN while paused** so it
+  stays armed → `ps_aud_ready` is 0 for the whole pause → `ps_demux` carries **ONE byte
+  stream**, so it stalls on the first audio PES and no more VIDEO reaches the VBUF → and
+  **`pause` never reaches the vld** (0 references in `vld.v`), so each press eats one more
+  picture OUT OF the VBUF. A fixed larder.
+  ⚠⚠ **THE FREEZE'S OWN COMMENT IS THE STALE PREMISE:** *"Holding it armed keeps the demux
+  backpressured (everything is frozen anyway), so no audio is lost."* True when written —
+  **frame step is the first thing that advances the DISPLAY while paused.** Same class as
+  `docs/mpeg1.md` §B.3's "now closed".
+  **Fix:** `step_session` releases the audio backpressure for the rest of the pause; the
+  ring reverts to drop-on-full (`ac3_reframer` keeps drops whole-frame-aligned = clean
+  silence, not a pop) and video keeps flowing. ⚠ Keyed on a **`step_tgl` TRANSITION, not
+  `step_edge`** — only an ACCEPTED press toggles it, so a press in a menu or during a held
+  scrub cannot start a session; cleared by `~pause_aud`, which covers every resume in one
+  term and keeps the session alive across a STOP.
+  ★★★ **AND UNBOUNDED STEPPING EXPOSED A THIRD DEFECT — THE CLOCK DID NOT FOLLOW THE STEP
+  (2026-09-16, `dvd/disp_sched.sv`); ✅ HW-CONFIRMED against its own control.** Field report:
+  *"doing a big run of frame steps and then resuming causes a/v to go out of sync with audio
+  playing early."* ★ The buffer fix above is what made it REACHABLE, not its cause: at ~17
+  steps the clock could fall only ~0.6 s behind.
+  `disp_sched`'s clock is `if (tick && anchored && video_live && !pause) stc <= stc + 1`, so
+  it is frozen while paused — but a step advances the DISPLAY, so the clock falls **one
+  picture behind per press**. `av_drift` is *dispatched audio PTS − STC*, so a clock left
+  behind reads as **audio EARLY**: the reported symptom.
+  ⚠⚠ **NOTHING UPSTAIRS CATCHES IT:** `disc_w` compares the tagged picture against the
+  **EXTRAPOLATED `next_pts`**, and a step session is perfectly continuous content, so no
+  re-anchor leg trips — the discontinuity is in the CLOCK, which `disc_w` was not built to
+  see. MEASURED: `reanchors` stayed at **1** through ~300 steps with `disp_lag` at **5 s**.
+  **Fix = `if (pause) stc <= want_pts;`** — the STC is the PRESENTATION clock and a step
+  PRESENTS a picture. ★ A pickup while paused IS a frame step by construction (the tick is
+  frozen by `pause`; `ofv_pickup` is gated on `~pause || step_arm`), so no new port.
+  **Gate: `disp_sched_tb` [11b] + `run_disp_sched.sh` M13**, scoring the scenario's TRUE PTS
+  against the clock at each stepped pickup. ★ The bound is **one picture, not zero** — the
+  sample uses the pre-update clock, so following reads the previous picture's duration and
+  STAYS, while not following grows: **20 steps 75,075 ticks / 30 steps 112,613 vs 4,507
+  fixed**, and the scaling with press count IS the signature.
+  ⚠⚠ **TWO BENCH LESSONS, BOTH MINE:** [11b]'s first cut reused `report()`'s PACED tolerance
+  (752) and FAILED with the fix in — a stepped clock advances in picture-sized jumps by
+  design, so I nearly read a correct fix as broken; and it issued 30 presses of which only 20
+  landed (a press during the raster's field-busy window is not consumed), so it now drives
+  until 30 steps have BEEN TAKEN.
+  ✅ **HW-CONFIRMED, control vs fix, same disc and script (205 steps then resume):**
+  `disp_lag` **−23 ms immediately and constant** where the control held **5057 ms for ~15 s**;
+  `av_drift` **57 ms at t+3 s** where the control swung **−5478…+3174 ms**. No transient.
+  ⚠ Timing cost: clk_dec 92.19/88.52 → **89.71/87.54** (gate 86.0) — passing on SEED 7 first
+  roll but the thinnest build of the branch; sweep the seed if a later change lands near it.
+  ⛔ **MY EARLIER "accepted residual, converges in seconds" WAS WRONG AND IS RETRACTED.** It
+  was measured at 70 steps (934 ms → 94 ms by t+8 s) and stated as general; at ~300 steps it
+  is 5 s of lag for ~15 s. A transient measured at one scale is not a bound.
+  ✅ **Fix arm against its own control, same disc and script: 35 presses → 35 steps with
+  `Audio=On`**, `vbuf_fill` 89 → 218 on the FIRST step and 216–224 throughout, then 70 more
+  steps with vbuf still 221.
+  Gates: **`bench/dvd/run_frame_step.sh --red`** (19 mutations), `tools/check_frame_step_wiring.py`
+  (also run from `run_stc_freerun.sh` §6). Detail: `docs/dvd_nav.md` "Frame step as a pause route".
+  ⚠ **Eject and Volume DID land as B19..B21 in this same change** — the ⛔ that stood here
+  saying they were "deliberately NOT here, they need a core→Main request channel that does
+  not exist" was written before the channel was built and contradicted this very bullet's
+  own opening line six paragraphs up. Corrected 2026-09-17. The channel is emu's
+  `rq_volup_seq`/`rq_voldn_seq`/`rq_eject_tgl` counters on the `CMD_AF` telemetry word →
+  `main/support/dvd/dvd_remote.cpp:91-109`, which takes the mod-16 difference per poll and
+  calls `set_volume()`. ★★ **The reason that was the right shape is still live and is the
+  durable half: volume must NOT be a fabric attenuator, because MiSTer already HAS one** —
+  `sys_top.v:293` `vol_att` → `audio_out`, covering I2S, the analog DAC **and S/PDIF**
+  together, driven by Main's `set_volume()` from the OSD, `/dev/MiSTer_cmd` and **HDMI-CEC
+  volume keys, which `user_io.cpp:4283-4296` consumes before they ever reach the core**. A
+  second attenuator would desync from the OSD bar and could not touch passthrough at all.
+  ✅ **AND VOLUME IS ON THE MAIN-ROW `-`/`=` TOO (2026-09-17, PR #106);
+  sim-proven, 4/4 mutations each caught by exactly its own arms, and
+  ✅ HW-CONFIRMED 2026-09-17** (build `DVD_volkeys_20260918_0055.rbf`, SEED 7 first roll,
+  clk_dec 95.80/91.33, 91 % ALM). It was keypad-only (`79`/`7B`), and a keypad is precisely
+  what a tenkeyless keyboard, a laptop and most HID remotes do not have — so volume was
+  unreachable for those users. ★ **Not an invention: Main's own OSD already aliases the
+  same pair** (`menu.cpp:1478-1483` folds `KEY_EQUAL` into `KEY_KPPLUS` and `KEY_MINUS`
+  into `KEY_KPMINUS`), so the two pairs behave identically everywhere, OSD included.
+  `4E`/`55` checked against all three claimants rather than assumed: **non-extended**
+  (`input.cpp:381-382`), absent from every file under `dvd/`, and ⚠ **not** among emu's
+  twenty digit scancodes despite sitting immediately right of `0` on the keycap row —
+  physical adjacency is not a code collision. ⚠ No shift tracking in `kbd_map`, so `55` is
+  BARE `=`; deliberate, and why the manual says `-` / `=` not `+`.
+  ★ **Gate: `kbd_map_tb` T5b, NOT the two `tap_bit` arms** — the `tap_bit`s catch a MISSING
+  alias, while only T5b (decode **unextended only**) catches one put in the `E0` branch,
+  i.e. the direction where the wrong thing happens rather than nothing.
+  ★★ **A PRE-EXISTING MANUAL RENDERING BUG CAME OUT WITH IT:** `Keypad ++"+"++` shipped as
+  **two EMPTY `<kbd>` boxes** — `pymdownx.keys` treats `+` as its key SEPARATOR and splits
+  on it even inside the quoted form, and quoting protects every other punctuation key
+  (`"."` and `"-"` are fine), so the one character that breaks was the one that row needed.
+  Now the extension's own keymap names (`equal`/`minus`/`num-plus`/`num-minus`). ⚠ **Found
+  only by reading the BUILT HTML** — the markdown source looks correct in both the broken
+  and the fixed version, so no source-level check could have caught it. Swept: it was the
+  only occurrence, and the built site now has no empty `<kbd>` anywhere.
+  ⚠⚠ **A CEC remote's Stop key currently does GoUp** (`hdmi_cec.cpp:301` maps
+  `CEC_USER_CONTROL_STOP` → `KEY_ESC`, which `kbd_map` binds to Return), and since CEC's
+  `EXIT` resolves to `KEY_MENU` (eaten by Main) that is a TV remote's only back button
+  today. Remapping it belongs with the Main branch, and must SPLIT the shared
+  `ROOT_MENU`/`EXIT` case so `ROOT_MENU` keeps `KEY_MENU` — otherwise a CEC-only user
+  loses every route to the MiSTer OSD.
+  ⚠ **Two build-gate lessons:** Quartus builds from `DVD.qsf`'s FILE LIST, so three new
+  modules were undefined entities — and `tools/lint_undriven.sh` PASSED throughout,
+  because it reads the same list and never saw them. `build_release.sh` also exited **0**
+  on that failed compile; read the log, not the status.
+  Buttons B14-B21 + keys `Q Z F5 L .` and `E` (eject), `KP+`/`=` and `KP-`/`-` (volume) —
+  all free-checked against `kbd_map`, emu's numpad digit block and the never-bind list;
+  `kbd_joy` 17→22 bits for B14..B18 and →**25** for B19..B21 (`dvd/emu.sv:1566`,
+  `kbd_map.sv:102`), and ⚠ the FF/REW mask widened with it. Detail: `docs/dvd_nav.md` "Keyboard / CEC input", `site/content/playback/controls.md`.
+- ✅ **KEYBOARD / TV-REMOTE TRANSPORT (2026-09-03, issue #35, branch
+  `feature/keyboard-controls`) — sim-proven + mutation-checked and ✅ HW-CONFIRMED
+  2026-09-04** (build `DVD_kbdmap_20260904_0226.rbf`, SEED 5 first roll, clk_dec
+  92.70/90.14): **the issue #35 case itself** (with no Define-buttons mapping, `Enter`
+  activates the highlighted button in a disc menu), menu navigation + the transport keys,
+  the keyboard 10 s seek, and **the gamepad unregressed** (hold-to-scrub still ramps and
+  lands — the one thing only HW could gate, since the `joy_eff` substitution has no bench).
+  ⏳ **STILL UNGATED, and neither is chaseable on the maintainer's rig:** HDMI-CEC (that
+  board's CEC engine does not run at all — see below) and the tap-repeating IR remote burst
+  (no receiver to hand; covered in sim by `dpad_seek_tb` T19a).
+  Every transport action gained a built-in key: `dvd/kbd_map.sv` decodes `ps2_key` into a
+  17-bit vector in `joystick_0`'s bit order and `emu.sv` ORs it into a new `joy_eff` that
+  every button wire, edge detector, the chapter debounce, the menu walk, the HUD and
+  `vm_entropy_stir` now read — a key and a gamepad button are the same signal by the time
+  anything acts on them, so **no consumer changed**.
+  ★★ **THE BUG WAS IN MAIN, NOT IN US, AND NOT IN THE DISC: MiSTer's "Define buttons"
+  CANNOT BIND `Enter` OR `Esc` TO ANY BUTTON.** `input.cpp:3276` guards the capture block
+  with `!((mapping_type < 2 || !mapping_button) && (cancel || enter))` and a keyboard
+  session is `mapping_type == 0`, so both keys are excluded for *every* button — and
+  `Enter`, being the OSD's own confirm key, additionally reaches `menu.cpp:4419` and **ends
+  and saves the mapping session**, which is exactly why a user reports it "registered" and
+  then does nothing. ✅ Reproduced on a stock MiSTer with a plain USB keyboard (a mapped
+  `Enter` will not activate a highlighted DVD-menu button while the gamepad's Select does,
+  same menu). ⚠ The first two diagnoses were wrong and both were disc-shaped — a nav bundle
+  was nearly requested. **On a console dock remote `OK` and `Exit` ARE those two keys**, so
+  its two most important buttons were the two MiSTer refuses to map.
+  ★ **HDMI-CEC remotes could drive NOTHING here before this** — Main injects CEC presses as
+  keyboard events (`hdmi_cec.cpp:290-319`) and never runs them through the joystick mapper,
+  so scancodes were their only route. ⚠ CEC's own Root Menu/Exit is unreachable
+  (`menu_present() ? KEY_BACK : KEY_MENU`; during playback that is `KEY_MENU` = the OSD
+  toggle, and `KEY_BACK` has `NONE` in the PS/2 table), hence Menu/Title/Audio/Subtitle ride
+  the CEC **colour keys** `F1`-`F4`.
+  ⚠⚠ **BUT CEC DOES NOT WORK ON THE MAINTAINER'S BOARD, so it is NOT a supported path and
+  must NOT gate this feature.** MEASURED 2026-09-04: I2C to the ADV7513 is fine, but the
+  clock probe reports `TX elapsed=150 finished=0` -> `CEC: no clock detected.` ->
+  `CEC: init failed.` — the chip's CEC engine never completes a frame. ⛔ `hdmi_cec_clock=`
+  CANNOT fix it (that suggestion was made once and was wrong): the ini value is only
+  consulted AFTER a successful probe TX (`hdmi_cec.cpp:559`), so it picks between clock
+  rates rather than starting an engine. It fails cleanly (`cfg.hdmi_cec = 0`, no retry
+  loop). ★★ The recommended remote is a **USB IR receiver presenting as a HID keyboard**
+  (Flirc / MCE dongle / a dock's own receiver) — same `ps2_key` path, no CEC, no ini.
+  ⚠ **Main discards its own log by default** (`cfg.cpp:452`) — a CEC diagnosis needs
+  `debug=2` under `[MiSTer]` then `/tmp/debug.txt`, and raw button codes are printed
+  **only in the menu core** (`hdmi_cec.cpp:276`).
+  ★★ **KEYBOARD FAST FWD / REWIND GO TO `dvd/dpad_seek.sv`, NOT `scrub_ctrl`'s
+  hold-to-scrub — and that is the whole reason `kbd_map` has NO LEVELS.** MEASURED: Retro
+  Remake's SuperDock receiver firmware (`Retro-Remake/DockIR`, `src/main.c`) sends
+  `key-down -> 80 ms -> key-up` PER NEC REPEAT FRAME, ~110 ms apart, so an IR "hold" is ~9
+  discrete taps a second. `scrub_ctrl`'s accumulate tick is 60 ms, so each 80 ms tap leaves
+  `pending_off != 0` and every release issues a REAL seek = ~9 flush/re-locks per second,
+  the regime HW rounds 1-2 recorded as fatal. Second hazard: a stuck level leaves
+  `hold_freeze` high forever (frozen picture, no seek) and the reflex recovery — tap again —
+  releases with `pending_off` at the title span = **one seek to the END OF THE TITLE**.
+  Both vanish with pulses. `scrub_ctrl.sv` and `dpad_seek.sv` are **unmodified**; `emu.sv`
+  masks `kbd_joy[14:13]` out of `joy_eff`, ties `dpad_seek.en` to 1 (it is read in exactly
+  one place) and moves the `O[45]` gate onto the four D-PAD edges, so keyboard seek is
+  ungated — `O[45]` exists to stop the *D-pad* fighting a game disc, which a dedicated seek
+  key cannot do.
+  ⚠ **The extended bit is load-bearing:** six codes are bit-identical to numpad digits and
+  differ only by `E0` (`75`/np-8, `72`/np-2, `6B`/np-4, `74`/np-6, `7D`/np-9, `7A`/np-3).
+  The pre-existing digit block requires `!ps2_key[8]`; `kbd_map` requires `ps2_key[8]` for
+  exactly those six, and decodes **no digits at all**.
+  ⛔ **No OSD option (user decision 2026-09-03):** CEC is opt-in and OFF by default in
+  `MiSTer.ini` (`memset` + no default; `hdmi_cec.cpp:1268`), a user's own mapping already
+  shadows the built-in keys (Main returns early, `input.cpp:3807-3821`, so a key is a
+  joystick bit OR a scancode, never both — which is also why OR-ing cannot double-fire), and
+  a core-side switch could only be all-or-nothing because **a CEC press is indistinguishable
+  from a keyboard press on the wire**. `O[46]` stays free; appending it later is
+  forward-compatible so `"v,2"` would not need bumping.
+  Gate: `bench/dvd/run_kbd.sh` — `kbd_map_tb` is **mutation-checked** (5 targeted RTL
+  mutations each caught; level assertions on a decoder are exactly the shape that passes
+  without proving anything), `dpad_seek_tb` **T19a/T19b** replay the IR burst and prove ONE
+  `jump_fire`, and `scrub_ctrl_tb` passing **unchanged** is the gate that the gamepad scrub
+  was untouched. ⚠ `emu.sv`'s `joy_eff` substitution has NO sim gate (no emu-level bench) —
+  review-only plus Quartus elaboration; `joy_prev <= joy_eff` is the line that silently
+  breaks everything if missed. Detail: **`docs/dvd_nav.md` "Keyboard / CEC input"**.
+- ✅ **D-PAD FIXED-TIME SEEK (`O[45]`, default Off) — HW-CONFIRMED 2026-08-27
+  (PR #15; user report; SEED 7, clk_dec 90.97 @100C / 89.5 @-40C).** VLC-style jumps on the D-pad
+  while a title plays: **Left/Right ∓10 s, Down/Up ∓60 s**. Presses inside ~400 ms coalesce
+  into ONE seek and each tap RE-ARMS the window, so a burst builds an arbitrarily long jump
+  (20 taps of Up = one 20-min jump), shown as **`SEEK FWD 12:30`**. HOLD-to-compound was
+  built then REVERTED 2026-08-27 by user decision — taps only. `UNIT_CAP` (599 units =
+  99:50) bounds only the MM:SS READOUT, not the seek; `scrub_ctrl`'s title-span clamp is the
+  real limit. Never a jump PER VOBU — that is the rapid flush/re-lock regime HW rounds 1–2
+  of the scrub proved fatal, hence one seek per gesture however long the burst. Targets come from the disc's OWN
+  authored **DSI VOBU_SRI `fwda`/`bwda`** tables, which `nav_dsi` has parsed since Phase 7
+  but **nothing ever consumed** — `emu.sv` tied `dsi_tbl_raddr` to 0, so Quartus
+  dead-stripped the whole `dsi_tbl` RAM (the fit report showed `nav_dsi` at **16 ALMs / 0
+  memory bits**); wiring the port back RESURRECTS ~1 M10K + ~100 ALMs, so check the map
+  report after a fit. New `dvd/dpad_seek.sv` resolves the request by **greedy decomposition
+  over the coarse ladder {120,60,30,10} s**, which makes the common gestures exact single
+  lookups (1×R=`fwda[3]`, 3×R=`fwda[2]`, 1×U=`fwda[1]`, 2×U=`fwda[0]`) instead of
+  compounding the 10 s entry; it hands the target to a new **jump mode in
+  `dvd/scrub_ctrl.sv`**, reusing the title-span clamp, the seek bar and the one proven
+  `seek_rbn` issue. Non-DVD sources have no DSI and take the step from the
+  **`lin_blk10` port** (`dvd/lin_rate.sv`, 2026-09-03): a raw VCD/SVCD image uses the
+  exact CD geometry (75 sectors/s × 2352 B ÷ 2048 = **861 blocks per 10 s**, a
+  combinational bypass so that path is structurally unchanged), and a flat
+  `.mpg`/`.VOB` uses a rate **measured from the stream's own PTS against blocks
+  consumed** — that was **issue #39** (the D-pad did nothing on a `.mpg`; the one
+  blocking term was `emu.sv`'s `.lin_mode` ANDed with `raw_mode_w`). Bare `.m2v` stays
+  inert **structurally, not by policy** (no packs ⇒ `saw_pack` never asserts ⇒
+  `lin_seek_ok` is 0, which blocks FF/REW too). Same measurement also gives linear
+  modes their first **HUD clock** (they read `0:00:00` before). ★ The rate is DIVIDED,
+  not scaled by a shift: a window closes on the first PTS sample past its length and
+  samples are a picture apart, so a fixed scale would bake the overshoot in as a
+  systematic over-estimate. ⚠ Reset domain is `reset_n`, never `pipe_rst_n` — the
+  estimate must survive the seeks it enables. Detail: `docs/vcd_svcd.md` §3a.
+  **⚠ Default Off ON PURPOSE** — the 2026-07-28 decision to move
+  seeking OFF the D-pad (game DVDs play seekable video while expecting directional input)
+  becomes CONDITIONAL, not wrong; it is also suppressed by `menu_nav`/`in_title_menu`.
+  ★ **THE STALE-TABLE TRAP** it had to guard is worth knowing beyond this feature:
+  `nav_dsi.rst_n` is `pipe_rst_n`, so every seek clears `dsi_nv_pck_lbn` to 0, but
+  `dsi_tbl`/`tbl_rdata` live in a **separate UNRESET always block** and keep the previous
+  VOBU's offsets — resolving in that window computes `0 ± stale_offset` and the clamp turns
+  it into **a jump to the start of the title**, which "tap, tap again 200 ms later"
+  reproduces every time. Guarded by a `dsi_fresh` latch (set by `dsi_commit`, cleared by
+  `load_flush`), a mid-resolve restart, a base latched ONCE and exported as `jump_base`, and
+  a ~2 s give-up. The contract is now recorded in `nav_dsi.sv`'s header for the next
+  consumer. HUD: popup type 8 `SEEK FWD 30S` (the `pop_type` field widened 3→4 bits; the
+  sign is SPELLED so the glyph ROM and `dvd/hud_font.mem` stay untouched) + the tap count in
+  the shared icon field — ⛔ NO LONGER: since 2026-09-12 a D-pad gesture renders
+  direction arrows only and `emu.sv` feeds `.scrub_tier` `2'd0`, because that field now
+  draws a SPEED as an arrow count and a tap count is not a speed (the popup carried the
+  magnitude all along). Golden `tools/nav_extract.py --dpad`; tests
+  `bench/dvd/dpad_seek_tb.sv` (24 scenarios incl. the trap), `scrub_ctrl_tb` T9–T12,
+  `transport_hud_tb` T18–T20, all under `bench/dvd/run_dpad_seek.sh`. Design:
+  **`docs/dvd_nav.md` §2b**.
+- 🔧 **MGL LAUNCH (issue #48, 2026-09-04, branch `fix/mgl-launch`) — sim-proven
+  RED/GREEN, ⏳ HW-confirm pending.** Report: launching the core from an MGL shortcut
+  gave "a grey or green screen" and a MiSTer that was "completely unresponsive" and had
+  to be restarted, while the same `.mpg` played when picked by hand from Load Video.
+  ★★ **THE UNRESPONSIVENESS WAS OUR OWN `InfoMessage` PUMPS, and the coupling is worth
+  knowing before writing ANY Main-side tick:** while `mgl->done == 0`, `HandleUI()` takes
+  the MGL branch and **never calls `menu_key_get()`** — the SOLE source of every input
+  event (keyboard menu key, gamepad menu key, the physical OSD button, and the core's own
+  virtual one; the `KEY_F12|UPSTROKE` synthesis lives inside it). The MGL's only forward
+  edge out of state 1 requires `menustate == MENU_NONE2` **exactly**, states 1/2 have no
+  handler in the MGL switch, and there is **no timeout**. `InfoMessage()` pins
+  `menustate = MENU_INFO`. Two overlay pumps call it once a second from `user_io_poll()`,
+  BEFORE `HandleUI` runs — `dvd_css_tick` (8 s) and `dvd_hdmi_audio`'s `report_pump`
+  (6 s per arm, **re-armed on every stage transition**, and the stage moves with the
+  scaler re-init a mount itself provokes). A `delay="5"` MGL fires squarely inside them:
+  nothing mounted, nothing responded. **That is why MGL misbehaved on THIS core and not on
+  stock ones.** ⚠ **The rule, now in `INTEGRATION.md` and `docs/mgl_launch.md`: never
+  raise `Info`/`InfoMessage`/`ProgressMessage` from a poll tick while
+  `mgl_get()->done == 0` — check `dvd_launch_ui_busy()` and DEFER (push the window
+  forward, don't spend it).** New `main/support/dvd/dvd_launch.{h,cpp}` (steps 27-29) also
+  adds a 20 s MGL watchdog — a floor under the fix, not the fix: a stall we haven't
+  thought of now costs a failed load, not a reboot.
+  ⚠ **Two comments in those files said `InfoMessage` "no-ops"/"is dropped" when the menu
+  FSM is busy. For the IDLE case that is exactly backwards, and believing it is what let
+  this ship.** Both corrected in place. Same class: `docs/idle_screen.md` claimed Main
+  skips `boot.rom` for an MGL launch — it does not (an MGL leaves `path` empty, so
+  boot.rom downloads normally and the `<file>` mount arrives seconds later by another
+  route).
+  ★ **The MGL dispatch itself was SOUND for this core** — `type="s" index="0"` matches the
+  `S0` row at `selentry 0`, `user_io_ext_idx` resolves `.mpg` to extension 0, the index
+  byte is `0x01` in BOTH flows, `make_fullpath` passes an absolute path through. Nothing
+  about the MGL format needed changing; ruling that out first is what left the real
+  asymmetry visible (the MGL flow is the one that opens a COLD path — the manual flow
+  always walks the directory with `ScanDirectory` first, warming the CIFS cache).
+  ★★ **COLOUR IS A DIAGNOSTIC and it is measurable, not folklore** (traced through
+  `yuv2rgb.v`, SMPTE-170M, `cy=38155`): **black** (0,0,0) = nothing scanning at all
+  (`mixer` emits Y=16,U=V=128 when not displaying) = reader wedged; **green** (0,136,0) =
+  a framestore slot being scanned that was NEVER WRITTEN (Y=Cb=Cr=0); **grey**
+  (130,130,130) = an intra picture DECODED OUT OF MIS-FRAMED BYTES (MPEG-2 resets the
+  intra DC predictor to 128 per slice) ⇒ suspect `ps_demux` framing. Splits three bugs
+  apart before any instrumentation. ⚠ `mode_realign`'s switch blank is NOT a candidate for
+  any of them — hard ~1.5 s `BLANK_MAX`, cleared on `start_streaming`, gated off before
+  the first mount, and it produces black.
+  **Core-side, three defects the launch exposed** (none MGL-specific in mechanism):
+  (1) **A MOUNT WITH NO MEDIA WAS TREATED AS A MOUNT.** Main sends `UIO_SET_SDSTAT` even
+  when the open FAILED (size zeroed) and `hps_io` raises `img_mounted` for an all-zero
+  word — which is also how an EJECT arrives — so the pulse means "the slot changed", not
+  "there is media". `disc_ever` always guarded on `img_size != 0`; `start_streaming` and
+  `media_seen` did not, so a failed mount killed the idle logo AND its file picker,
+  flipped `VIDEO_ARX`, and started the reader on a zero-length image, where
+  `total_blocks == 0` took the "< 17 sectors" branch and `S_STREAM`'s
+  `strm_blk + 1 == ext_blocks_q` terminator can NEVER be satisfied ⇒ an unbounded walk of
+  LBA 0,1,2,… of an empty slot. ⚠ **And it could not be reported: `img_unplayable`'s
+  window only advances while `img_streaming`, so a reader that requests and receives
+  nothing SILENCES the one notice that would have named it.** Fixed in three places on
+  purpose (`start_streaming` gated on size; a new `img_ejected` clears `media_seen`,
+  itself guarded on the delivery/picture signals `logo_vis` uses so a failed mount can't
+  flip `VIDEO_ARX` under live content; `S_INIT` → `S_DONE` on zero blocks; terminator
+  relaxed to `>=`).
+  (2) **`ps_demux`'s `S_ES_PASS` WAS A ONE-WAY DOOR.** The raw-ES verdict is taken on the
+  first start code after a pipe reset and `ever_seen_pack` is cleared by EVERY
+  `load_flush`, so it is retaken after each one — and a flush does not always land on a
+  pack boundary (the in-place `mode_switch` fallback flushes without moving the reader,
+  and is chosen exactly when `ps_saw_pack` is 0, i.e. right after a mount). Landing
+  mid-PES on `00 00 01 B3` latched it for the rest of the title and handed PES headers,
+  audio, subpicture and NAV packs to the video decoder = the grey picture, no
+  self-recovery from any seek or watchdog. Now leaves on `00 00 01 BA`; a genuine bare ES
+  cannot contain one (`0xB9`-`0xFF` are system codes, illegal in a video ES, and MPEG-2
+  forbids emulation in the payload). ★ The 4 already-forwarded pack-code bytes LEAK ON
+  PURPOSE — the first three went out on earlier cycles, so suppressing only the `BA` emits
+  a headless `00 00 01` and the decoder eats the next real byte as its code. This also
+  subsumes arming the reader's `hunt_active` on the in-place `mode_switch`.
+  (3) **Two latches that did not do what their comments said.** `osd_btn` was a pure
+  decode of `osd_wait`, which advances only while `~status[0]` — so a reset inside the
+  `[FIRE, END)` window froze the count with the button HELD, and Main reads a ≥3 s hold as
+  "enter Bluetooth pairing"; now gated on `~status[0]`. And **`analog_want_l`'s "freeze
+  while a disc is mounted" NEVER FROZE**: `img_mounted` is a one-transaction PULSE, not a
+  level, so the latch tracked cfg forever, mid-title included — Main re-sends cfg on every
+  `video_mode_adjust`, INCLUDING the one the mount's own `VIDEO_ARX` flip provokes, so a
+  changed ini bit could fire a live `il_switch` under playing content (the issue #42
+  class). `media_seen` is the level that was meant.
+  **Gate: `bench/dvd/run_mgl.sh`.** `iso_reader_mount_tb` — RED 10 reads against an empty
+  slot and still `S_STREAM` (10 is only what fitted in the window; the walk has no end),
+  GREEN 0 reads and `S_DONE`. `ps_demux_esrecover_tb` — RED **48 video bytes and 0 AUDIO
+  bytes** after the next pack (the whole pack handed to the video decoder; 0 audio is the
+  sharp end, since raw-ES mode routes nothing to audio at all), GREEN 12 and 4. Both
+  measure what the hardware DOES (requests issued, bytes demuxed onto WHICH PORT), not a
+  signal the fix names, and each carries a control arm against over-reach (a real bare ES
+  must stay in ES mode; an empty mount must leave the reader able to start again).
+  ⚠ **`iso_reader_mount_tb` ships its OWN mock HPS because it POLLS.** The mock in
+  `iso_reader_tb.sv` and its clones latches the request on the first cycle `sd_rd` is high
+  and always serves it; the real `hps_io` picks requests up by polling cmd `'h16` at
+  Main's poll rate, so a request withdrawn in between is LOST. Without a polling mock the
+  "mount over an in-flight read" arm is a bench that cannot fail.
+  ★ **The CSS progress bar survives an MGL launch on a PHYSICAL disc, and the reason is
+  worth knowing because the obvious one is wrong:** `ProgressMessage` → `InfoMessage`, and
+  `InfoMessage` calls `OsdEnable(OSD_MSG)` ITSELF, so the `OsdDisable()` an MGL performs
+  does not hide it. The gate is `if (menustate <= MENU_INFO)`. A physical disc mounts on
+  the VERY FIRST `user_io_poll()` (before HandleUI has run at all, and long before a
+  `delay=N` MGL fires) with `menustate` still at its `MENU_NONE1` initialiser ⇒ bar
+  visible. ⚠ **Residual (not fixed):** only an encrypted `.iso` that the MGL ITSELF mounts
+  loses the bar, because that mount runs inside `MENU_GENERIC_IMAGE_SELECTED` and the
+  guard fails. Keys cache, so it is once per disc.
+  ⚠ **And that same crack is why the watchdog measures TICKS, NOT WALL CLOCK:**
+  `crack_title_keys()` is synchronous inside `user_io_file_mount()` and blocks
+  `user_io_poll()` for MINUTES on an uncached disc, so wall-clock timing would read a
+  physical disc's first-play crack as an MGL stall and destroy a healthy auto-load — the
+  watchdog killing the thing it was added to protect. `dvd_launch_tick()` discounts gaps
+  between its own invocations: a gap means the loop was not running, so it cannot be time
+  the MGL spent stuck.
+  ★★ **FOLLOW-UP (same branch, from the HW round): THE OPTICAL DRIVE FIGHTS FOR THE
+  SAME SLOT.** Report: an MGL for a `.mpg` worked, but with a disc in the drive it
+  waited for key extraction first, and removing that disc froze the `.mpg` and left
+  the core unable to reach the idle screen. Both are `dvd_phys.cpp` treating slot 0
+  as its own when it shares it with every image the user can load. (1)
+  `dvd_phys_tick()` auto-mounted on the VERY FIRST poll, and an MGL's `<file>` lands
+  `delay` seconds later — so the drive won that race every time, and on an encrypted
+  disc that is minutes of `crack_title_keys()` (SYNCHRONOUS, blocking
+  `user_io_poll()`) for a disc the MGL then replaces anyway. (2) `mounted` meant "we
+  mounted a disc at some point", NOT "we still own the slot", so after any later
+  mount an eject still ran the teardown: `user_io_file_mount("", 0)` closed the file
+  that WAS playing (the reader starves = the freeze) and pulsed `status[0]`.
+  ⚠ **Note (2) is INDEPENDENT of MGL** — auto-mount a disc, then pick a file from
+  the OSD, then eject: same bug, and it predates all of this.
+  Fix = new `dvd_phys_note_mount(path, index)` from `user_io_file_mount()`
+  (integration step 30). ★ **Every reason not to mount is now checked BEFORE
+  `dvd_video_probe()`**, the first thing that actually reads the disc — "no disc
+  operations when launched to play a file" has to mean no READS, not just no mount,
+  or a spinning drive is probed once a second all session. ★ **An insertion EDGE
+  (not the level) clears the `foreign` latch:** putting a disc in is deliberate and
+  the auto-mount is the only way to play one, so an insertion still wins, while a
+  disc merely SITTING there never takes the slot back from an image the user chose.
+  Readiness is the edge, so it costs one ioctl and reads nothing. ⚠ **Pass the
+  INDEX** — Main mounts `boot*.vhd` across slots 0-3 at init and the drive only ever
+  binds slot 0; without it a `boot.vhd` in `games/DVD/` would silently disable
+  physical-disc playback. ⚠ Still open, and a candidate if "Reset does nothing" is
+  ever reported: the eject path's `reset_release_at` releases `status[0]`
+  unconditionally ~1 s later, so an OSD Reset pressed inside that window is
+  cancelled by it.
+  **Gate: `main/tests/run_tests.sh`** — HOST-side (plain `g++`, no MiSTer, no ARM
+  toolchain, no Docker), the overlay's first such test. `dvd_phys_test.cpp` includes
+  the module and stubs the rest of Main at link time, so it exercises the real
+  logic; RED against the pre-fix module reproduces BOTH field symptoms. [4]-[6] are
+  controls, because every one of these bugs is trivially "fixed" by never mounting a
+  disc. ⚠ The module carries exactly ONE `#ifdef DVD_PHYS_TEST`, around
+  `open_ready_drive` — a real `/dev/srN` cannot be faked (a regular file opens fine
+  and then fails `CDROM_DRIVE_STATUS`).
+  ★★ **AND A THIRD ROUND: THE DRIVE PROBE RUNS ON THE THREAD THAT FEEDS THE
+  DECODER.** Report after the slot-ownership fix: the MGL launch was clean, but
+  ejecting an UNRELATED disc still froze the `.mpg` — **while the OSD kept
+  working**. ★ That last clause IS the diagnosis: Main alive + HandleUI running
+  ⇒ nothing unmounted the file and the core is not in reset, so it is being
+  STARVED. And with the slot fix in place `dvd_phys_tick()` does nothing on that
+  eject, which leaves exactly one thing still touching the drive — the 1 Hz scan
+  itself. `open("/dev/srN", O_NONBLOCK)` + `ioctl(CDROM_DRIVE_STATUS)` is
+  **BLOCKING I/O on the same thread as `user_io_poll()`'s SD block service**, so
+  however long it takes is time the core gets no data. Microseconds on a settled
+  drive; with the **TRAY OPEN** the `sr` driver answers TEST UNIT READY with a
+  media-change unit attention and RETRIES — hundreds of ms, every second, forever,
+  because the state never settles. Fix: a probe over 50 ms doubles the scan period
+  (cap 10 s) and a fast one restores 1 s; while a foreign image owns the slot the
+  floor is 5 s (the scan then exists only to notice an INSERTION). Measured
+  (`dvd_phys_test.cpp` [8], 400 ms probe): **60 blocking calls a minute → 7.**
+  ✅ **HW-CONFIRMED 2026-09-04** (*"ejecting during .mpg playback works now"*). It
+  shipped as a hypothesis with instrumentation and the instrument STAYS: any probe
+  over 50 ms is logged to `/tmp/dvd_report.log` with its duration, which is the
+  fastest way to tell a slow drive from a core-side stall next time.
+  ★★ **THE DIAGNOSIS CAME FROM ONE CLAUSE IN THE REPORT — "the OSD still works".**
+  Main alive + HandleUI running rules out every unmount/reset hypothesis at a stroke
+  and leaves starvation as the only shape that fits. **Ask it explicitly next time:
+  "is the PICTURE frozen or is the MACHINE frozen" separates the HPS side from the
+  core side before a line of code is read.**
+  ★ **The durable rule, worth applying to any future overlay tick: `user_io_poll()`
+  is the core's data pump. Blocking I/O there is a video artefact, not a latency
+  nit.** `dvd_report` already forks for this reason; `crack_title_keys` gets away
+  with it only because nothing is playing yet.
+  ★★ **FOURTH ROUND: RETURNING TO THE IDLE SCREEN MUST NOT DEPEND ON THE HPS RESET.**
+  Report: after an MGL launch the OSD **Reset row does nothing**, so neither the
+  button nor an eject reaches the idle screen. ⚠ **The core side CANNOT be
+  launch-dependent** — `status[0]` goes through ONE flip-flop into `reset_n`, and
+  `user_io_status_set()` sends unconditionally with `hps_io` latching `status[15:0]`
+  on the FIRST word of the transaction (so even the OSD row's back-to-back
+  `set(1); set(0)` leaves the bit high for the rest of a transaction = hundreds of
+  clk_sys cycles). Neither end has an MGL dependency, so this half is
+  **INSTRUMENTED, not guessed**: integration step 31 logs every `status[0]` write to
+  `/tmp/dvd_report.log` with the MGL state, which splits "Main never dispatched"
+  from "the core ignored it" — they are fixed in completely different places.
+  ★★ **But the eject path had a defect of its own, and it was MINE from round two:**
+  `img_ejected` is a ONE-CYCLE PULSE and an eject arrives while the last frames are
+  still on screen, so `(img_ejected && !img_streaming && !video_live_s2)` evaluated
+  `video_live_s2` as still HIGH at exactly that instant and threw the clear away
+  every time. **The test was right; sampling it at the pulse was wrong.** New
+  `slot_empty` latches the emptied slot and the clear fires once the picture
+  actually runs out — so the return to idle now depends on nothing but the core.
+  ★ The latch also keeps the original guard honest: a FAILED MOUNT over live content
+  still leaves the old image playing and `media_seen` undisturbed, so `VIDEO_ARX/ARY`
+  does not flip mid-title and Main does not re-init the scaler.
+  ⚠ **Durable shape, and this is the second time this session:** a one-cycle event
+  ANDed with a level that is only settled LATER is a condition that never fires.
+  Latch the event, test the level when it can answer.
+  ★★ **FIFTH ROUND: THE `delay` WAS BEING CONSUMED BEFORE IT WAS SET.** Report: the
+  clip plays immediately with `delay="5"`. The log settled it in three lines —
+  `MGL pending -- delay=5s, 5000 ms remaining` … `mount result: slot 0 OK` …
+  `MGL finished after ~0s`. The timer was armed CORRECTLY and the mount still
+  happened inside the same second, so `CheckTimer` was never the gate: the FSM had
+  been advanced past `case 0` before the main loop even started.
+  ★★ **`CheckTimer(t)` is `(!t) || (GetTimer(0) >= t)` — AN UNARMED TIMER READS AS
+  AN EXPIRED ONE.** `mgl_parse()` memsets the struct, so `mgl->timer` is 0 from the
+  parse (`user_io_init` ~1516) until the arming at that function's very END (~1760);
+  anything re-entering `HandleUI()` in that window runs `case 0` with
+  `CheckTimer(0) == true`. **`user_io_file_tx()` ends with
+  `ProgressMessage(0,0,0,0)` → `MenuHide()` → `HandleUI()`, so a `boot.rom` transfer
+  does exactly that — and this fork ships a `boot.rom` for the idle logo.** Fixed at
+  the invariant: `if (mgl->timer && CheckTimer(mgl->timer))` (integration step 32,
+  the FIRST edit outside `user_io.cpp`; new `replace_once()` helper fails loudly if
+  the anchor moves). ⚠ `delay="0"` still works — that yields `GetTimer(0)`, a live
+  millisecond count, never literally zero.
+  ★★★ **THE PATTERN ACROSS ALL FIVE ROUNDS, AND IT IS THE MOST REUSABLE THING HERE:
+  the stock mechanism was fine every time, and THIS CORE'S OWN ADDITIONS are what
+  tipped it over** — our `InfoMessage` pumps froze the MGL FSM, our drive scan
+  starved the decoder, our `boot.rom` ate the delay. **Ask what THIS core does that
+  a stock core does not, before reading stock code for a defect.**
+  Detail: **`docs/mgl_launch.md`**.
+- ✅ **SEEK-PREVIEW CLOCK + A GENTLER SCRUB RAMP (2026-09-03, branch
+  `feature/flat-file-time-seek`) — ✅ HW-CONFIRMED 2026-09-04** (build
+  `DVD_timeline_20260904_0059.rbf`, SEED 5 first roll, clk_dec 94.06/93.11).
+  ★ **HW round 1 found a REAL bug the sim could not: the timeline read 1.6× SHORT on
+  some discs** — `seek_time` bracketed each position between CONSECUTIVE cells'
+  first_sectors, but a PGC's cells can sit anywhere in the VOBS with large UNPLAYED
+  gaps between them. AFTER_EARTH VTS_13 PGC1: cell 0 is RBN 142..172,843 holding all
+  532 s, cell 1 a 142-sector 0 s stub at 278,540 — **172,702 played sectors in a
+  278,540 span, 1.612**. Reported readings reproduced to the second (a scrub showing
+  0:00:22 landed at 0:00:34; 0:02:42 at 0:04:33). Fixed: a cell's span is its OWN
+  `first..last` (the reader streams `cellf_last` on its own strobe — last_sector is
+  known only at cell byte 23), a target inside a gap clamps to that cell's end time,
+  and the fraction went 8 → **14 bits** with rounding (8 bits cost 28 s inside a
+  single-cell two-hour title). ⚠ **I had documented that exact case as "an
+  approximation; for a preview it is immaterial" — written from reading the format
+  rather than measuring a disc.** ⚠ **And the first re-check measured the WRONG VTS**
+  (the largest-VTS heuristic names VTS_05, which has no gaps; the title that actually
+  loads is VTS_13, which the core's own `O[2]` debug readout names in one glance —
+  `CH 1/13` = PGCN 1, VTS 13). Ask the core what it is playing before analysing a disc.
+  ✅ **Seamless-branch discs were a SEEK bug, not a readout one — issue #49, FIXED
+  2026-09-17**, see the note further down.
+  (1) **`dvd/seek_time.sv`**: the HUD clock showed the live playhead only, so it sat
+  FROZEN through every seek while the seek bar's cursor travelled. Two causes, one
+  symptom — a held FF/REW asserts `hold_freeze` → the governor stops → DSI packets stop
+  → `dsi_c_eltm` coasts and `cell_i` cannot move; a chapter burst does not pause at all
+  and simply does not seek until its ~500 ms debounce closes. `seek_bar` had already
+  fixed this for the CURSOR; this fixes the number, from the same maps. Three sources:
+  the D-pad's own signed MM:S0 delta (⚠ `pend_sec` is **tens** of seconds), a chapter's
+  authored start via `pmap→cell_start` (exact), and per-cell interpolation of an RBN.
+  ⛔ Scaling the title total by the bar's 0..512 fraction was REJECTED — constant-bitrate
+  across a whole title means the number visibly jumps by minutes when a VBR seek lands.
+  ★ Everything is BINARY SECONDS until the last step because `bcd_time_add` has no
+  subtract; the reader now carries a binary prefix sum beside its BCD one (`cellf_secs`,
+  `title_secs_o`). Design: `docs/transport_hud.md` "Preview clock".
+  (2) **Scrub ramp relaxed** (user report: "it ramps up too fast"): the old
+  `{10,8,6,5}` / 0-1.5-3-5 s ladder moved ~2 MINUTES of a 2 h title per second even in
+  tier 0 — no fine-positioning tier existed and 5 s of holding crossed 77 minutes. Now
+  `{12,10,8,6}` / 0-2-4.5-8 s (⚠ superseded again 2026-09-12 — see the content-rate note
+  below), and the ladder is `SH0..SH3` PARAMETERS rather than a
+  hardcoded ternary, pinned by `scrub_ctrl_tb` T13–T15 so a retune is deliberate.
+  ⚠ A retune must also move `dvd/dpad_seek.sv`'s header, `docs/dvd_nav.md` §2a and
+  `docs/transport_hud.md` — the numbers are quoted in all four.
+  ★★ **AND THE STEP IS NO LONGER A FRACTION OF THE SPAN AT ALL (2026-09-12, branch
+  `feature/scrub-time-tiers`, `dev-scrubtiers`) — sim-proven with a mutant per claim, and
+  ✅ HW-CONFIRMED for the DVD path (see the round below).** A fraction of a SHORT title is a crawl: MEASURED at tier 0, a 2 h
+  feature moved **29 content-seconds per second**, a 3-minute clip **0.58**, a 30-second
+  clip **0.19**, and the shift truncated what little was left (`2584 >> 12 = 0` — the
+  `| 1` floor was the only thing still moving the cursor). Now a linear file steps
+  `(lin_blk10 * 6) >> {6,4,2,0}` (blocks per 10 s, so the shift IS the rate ≈
+  16/63/250/1000 s/s, gated on the rate being VALID — the `dpad_seek` precedent), and a DVD
+  steps
+  `span >> (SHn + log2(title_secs) − SECS_REF)`: **span cancels out of the content rate
+  algebraically**, so a duration BUCKET (a leading-one position, no divide) fixes the rate.
+  ★ `SECS_REF = 12` anchors it so every title in **4096–8191 s (68–136 min)** keeps a
+  **bit-identical** step — the 2 h feel that passed hardware is untouched, and only titles
+  far from 2 h move. ⛔ **Do NOT turn the bucket into `span / title_secs`**: on a
+  seamless-branch disc the span holds the other branch's ILVUs (issue #49) and that
+  inflation hits the shift and the divide IDENTICALLY, so the divide fixes nothing — and
+  the AREA objection to it expired with the reclaim, so do not re-derive "we have area
+  now, so divide".
+  ★★ **BOTH SOURCES NOW RAMP AT ONE LADDER — ~15 / 60 / 240 / 960 content-s/s — and that
+  COST THE 2 h BIT-IDENTITY, deliberately** (maintainer: *"these both should have the same
+  seek steps — maybe we meet in the middle"*). The first cut kept `SHn = {12,10,8,6}` to
+  preserve the signed-off 2 h feel exactly, which left a DVD at 29/117/469/1875 s/s against
+  a `.mpg` at 5/21/83/167 — a tier meaning a 5–10× different speed by source. The DVD ladder
+  is HALVED (`{13,11,9,7}`); the anchor mechanism is untouched, only its value moved.
+  ★ **The `* 6` on the linear base is arithmetic, not taste:** unscaled, the linear lattice
+  is `166.7/2^n` and the DVD one `120000/2^m`, half a power of two apart, so nothing brings
+  them closer than **41 %**; ×6 lands them on one lattice at **7 %**. ⚠ Retune `SHn` and
+  `LSn` TOGETHER. ⚠ Residual, now the larger error: the power-of-two bucket still lets the
+  DVD rate vary **2× within a bucket** (68 min → 8.3 s/s, 2h16 → 16.7); removing it needs
+  the forbidden `span / title_secs`. Gate: `bench/dvd/run_scrub_tiers.sh --red` (T19 pins the
+  parity; 7 mutants, including an unscaled lattice and a drifted ladder).
+  ✅ **HW-CONFIRMED 2026-09-12 — THE FEEL, WHICH IS THE ONLY THING THAT COULD SETTLE IT**
+  (build `DVD_scrubtiers_20260912_2135.rbf`, flashed to the rig and held on a physical
+  disc; maintainer: *"that scrub speed feels good"*).
+  ★ **The harness could not have answered this and never will:** `dvd/kbd_map.sv`
+  deliberately routes keyboard Fast Fwd/Rewind to `dvd/dpad_seek.sv`, never to
+  `scrub_ctrl`'s hold-to-scrub — an IR "hold" is ~9 discrete taps a second, which on the
+  hold path is ~9 flush/re-locks a second, the regime HW rounds 1–2 proved fatal. So
+  `joy_eff` masks those keys out and the gesture is reachable **only from a gamepad**. A
+  tier ladder is a feel setting whose instrument is a person, and this is the second
+  retune (2026-09-03 was the first) decided the same way.
+  ✅ **AND THE REST OF THE ROUND CAME BACK GOOD THE SAME DAY** (maintainer: *"all those
+  open scrub questions look and feel good on the board"*), so the branch is confirmed
+  whole rather than on its easiest path: the **LINEAR half** held at the same tiers —
+  which is the parity claim itself, felt rather than only pinned in sim to 7 % — a
+  **SHORT title**, which is the 0.58 s/s crawl the change exists for and the case the
+  first disc could not exercise (an ordinary feature sits in the anchor bucket, the one
+  length whose behaviour moved least), and the **arrow readout** that replaced `×1..×4`.
+  ★ Worth keeping straight for anyone retuning this: those two are different mechanisms,
+  not one test twice. A linear file's rate comes from `lin_blk10` and is independent of
+  its length; a DVD's comes from the duration bucket and is nothing but its length. The
+  short-title arm is the only one that exercises `secs_lz` at all.
+  ✅ **SEAMLESS-BRANCH DISCS WERE WRONG AND IT WAS THE SEEK, NOT THE READOUT —
+  FIXED 2026-09-17 (issue #49); see the top-of-file bullet.** The 2026-09-03
+  cell-gap fix (a cell's span is its own `first..last` — AFTER_EARTH VTS_13 PGC1,
+  1.612× short, ✅ HW-confirmed good afterwards) does NOT cover
+  ALIEN_VS_PREDATOR_SE: **23 of its 66 cells are interleaved**. ⚠ ILVU *playback*
+  was HW-confirmed in PR fj#112; ILVU *seeking* never was.
+  ⛔ **Two claims that stood here were REFUTED by measurement and must not be
+  re-derived:** the live clock reading "a couple of seconds in" does **not** mean
+  `cell_i` is wrong (the branch cell's extent contains the sibling's sectors, so
+  the cell index is right — it is the SIBLING's `dsi c_eltm` being snooped off the
+  stream, measured at `00:00:02.15` on T2's sibling VOBU); and the 885–1679
+  sectors/s figure does **not** imply a preview error, because it is a RATE while
+  the preview uses a scale-free FRACTION of the span (measured worst within-cell
+  error 0.9 s Matrix / 3.3 s T2 / 8.8 s AVP). Detail: `docs/dvd_nav.md` §2e.
+  ⚠ **Trick play (continuous 2×/4×) is a SEPARATE feature and is NOT this**: it must be
+  flush-FREE (a jump per VOBU is the regime HW rounds 1–2 of the scrub proved fatal), so
+  it needs an I-frame-only VOBU splice in the reader. `dsi_1stref_ea` is already parsed
+  and currently unconnected/dead-stripped. See `docs/dvd_nav.md` §2d.
+
+---
+
+## Key Architectural Decisions
+
+### Why FPGA for video, HPS for audio?
+The HPS is an 800MHz dual-core ARM Cortex-A9. When a core runs, one CPU core is
+at ~100% handling MiSTer framework I/O. The remaining core cannot do real-time
+MPEG-2 video decode (too slow — even ARM chips in the DVD era needed hardware assist).
+AC-3/DTS audio decode (liba52/libdca) uses ~3–5% of one core at 48kHz — totally fine.
+
+### Audio output strategy (Option 3: dual-path)
+- **HDMI:** Stereo PCM downmix decoded on HPS (liba52/libdca) → ALSA dummy device →
+  auto-mixed into MiSTer's HDMI audio output. Works on any TV, no extra hardware.
+- **S/PDIF (future):** IEC 61937 bitstream passthrough over optical S/PDIF.
+  **Not exclusive to the Digital I/O board** — the framework drives its `spdif` net to
+  both `AUDIO_SPDIF` (Digital board TOSLINK) *and* `SDCD_SPDIF` (`PIN_AH7`), the latter
+  being the **Analog I/O board's combo 3.5mm mini-TOSLINK** optical out. The real blocker
+  is format, not the connector: the framework's `audio_out` only emits **PCM** S/PDIF, so
+  passthrough needs our own `iec61937_wrap.sv` framing the *undecoded* AC-3/DTS frames
+  (already available pre-decode at `ps_demux → audio_ring`) + driving the S/PDIF pin
+  directly with the IEC 60958 non-PCM bit set. Design `iec61937_wrap.sv` now; targets
+  whichever board has a populated optical transmitter. See `docs/audio.md` "Path B".
+
+### CSS encryption
+Handled entirely on HPS using **libdvdcss**. Replace raw `open()`/`read()` sector calls
+with `dvdcss_open()` / `dvdcss_read(DVDCSS_READ_DECRYPT)`. The FPGA never sees
+encrypted data. Works on ISO files, not just physical drives.
+
+**CSS-encrypted ISO detect + warn + audio mute — ✅ MERGED + HW-CONFIRMED
+2026-08-06 (PR fj#160).** A raw (undecrypted) rip
+green-screens with loud audio static (FAIRYTOPIA.iso was the motivating case —
+~19% of packs still scrambled; VLC plays it only because libdvdcss decrypts on
+the fly). The core detects `PES_scrambling_control != 0` in `ps_demux`
+(`pes_scrambled` pulse), shows a **persistent `CSS ENCRYPTED` HUD popup** (visible in
+menus too, yields to user popups then re-arms), and **mutes both audio paths**
+(decode: `AUDIO_L/R`=0; passthrough: `iec61937_wrap.mute_i` = PCM-silence bursts
+that still drain the ring — no STD wedge). Video keeps playing so the disc is
+identifiable.
+✅ **THE VERDICT IS NOW A DENSITY, NOT A COUNT — issue #59, PR #76, 2026-09-08;
+sim-proven RED/GREEN + mutation-checked, and ✅ HW-CONFIRMED 2026-09-08** (build
+`DVD_cssdensity_20260908_2056.rbf`, SEED 5 first roll, clk_dec 92.07/91.16):
+**both** directions on the maintainer's rig — the encrypted discs tried were still
+detected and muted, and several unencrypted discs were no longer flagged.
+⏳ **NOT specifically reported, so still open: whether a static BURST is audible at
+mount** on an encrypted disc now that the latch takes ~92 checked headers instead
+of ~21. If one ever is, the answer is NOT a smaller `LATCH_HITS` — it is a
+provisional mute on the first marker that the bucket confirms or releases.
+Multiple users lost **all audio** on discs that play perfectly, the reported case a
+physical disc `MiSTer_DVDcss` was decrypting correctly. The old rule counted **4
+markers per session, however far apart, and latched permanently** — while a real
+CSS source gives one every ~5 packs. It could not tell 4 from 400,000.
+★★ **THE COMMENT THAT SAID IT WAS SAFE IS WHAT LET IT SHIP:** `docs/fabric_audio.md`
+claimed the `'10'` marker gate made "false positives impossible". True of the marker
+BITS, false of the VERDICT — a random byte passes `'10'` 1 time in 4 and 3 of those
+carry a non-zero scrambling field, so **any byte mistaken for a PES-flags byte is a
+marker with probability ~3/16**. Two routes: a lost frame (after a resync `S_HUNT`
+locks onto any byte-aligned start code — the unhandled `PES_packet_length == 0` and
+a flush that misses a pack boundary), and a marker that survived decryption
+(libdvdcss clears the bits at the **fixed sector offset 0x14** and only in its
+non-zero-title-key branch).
+★★ **AND THE OFFLINE ORACLE HAD BEEN RIGHT ALL ALONG WHILE CLAIMING TO BE THE
+MODEL.** `tools/css_scan.py` said it "mirrors `ps_demux.sv S_PES_HDR_FLAGS1`
+exactly"; it never did — it checks only the **first PES after the pack header**,
+the RTL checked every checkable PES it dispatched. That divergence is why the tool
+called the same media clean while the core flagged it. **The RTL was changed to
+match the tool.** ⚠ Same class as `dvd_vm_ref.py` agreeing with its RTL: a model
+written from, or asserted to mirror, its subject proves nothing.
+**Fix (1)** `pack_fresh` in `ps_demux`: a marker scores only on a pack's own PES
+(a DVD pack is 2048 B = one checkable PES; `0xBB`/`0xBE`/`0xBF` never reach
+`S_PES_HDR_FLAGS1`, so nothing genuine is lost). ⚠ **Spend the arm IN
+`S_PES_HDR_FLAGS1`, not at the `S_HUNT` dispatch** — the dispatch is two states
+earlier, so clearing there clears it before the flags byte is examined and NOTHING
+can ever score (measured: every arm read 0).
+**Fix (2)** new **`dvd/css_detect.sv`** (extracted from `emu.sv`, which has no
+bench — same reason as `flush_ctl.sv`/`dpad_seek.sv`): a **leaky bucket** — a marker
+adds one, every `LEAK_CLEAN=64` clean headers repay one, latch at `LATCH_HITS=16`.
+The bucket rises only above a **density knee of 1/(K+1) = 1.54 %**. Measured: real
+CSS (p=0.19) latches in **92 headers (~0.15 s)**, p=0.05 in 289, ≤0.004 never.
+⛔ **NOT "reset after N consecutive clean headers"** (the obvious form, written
+first): it has no density meaning, only a longest-gap — and **a VOBU is 200–500
+packs**, so a stray once per VOBU never sees an N=512 clean run and latches anyway.
+⚠ **Below the knee the bucket is a negative-drift RANDOM WALK, not a pinned zero:**
+measured at p=0.008 it still latched after ~67,000 headers. "Exponentially longer
+the further below p\*", and a session is finite. ⚠ The knee rests on **one** measured
+real-CSS density (19 %); if an encrypted rip is ever seen below ~5 %, raise
+`LEAK_CLEAN` and move the bench's knee band (the bench fails if they disagree).
+⚠ **Mechanism-justified, NOT reproduced** — a library sweep was dropped by decision;
+it could not have seen the mis-framing route anyway. If it is the wrong route the
+warning persists and nothing regresses, since the change only makes the detector
+harder to trip. **Accepted trade:** genuine CSS below 1.5 % now ticks instead of
+muting — which is the regime where a miss costs least.
+Sim: **`bench/dvd/run_css.sh`** (`css_detect_tb` 10 arms, A1 asserting the DELETED
+rule latches where the new one does not, **8 mutations each caught**;
+`ps_demux_scram_tb` 8 arms, T2/T4 RED against the pre-fix demux which `--red`
+rebuilds out of git), plus `iec61937_wrap_tb` T8, `transport_hud_tb` T13.
+Detail: `docs/fabric_audio.md` "CSS mute", `docs/transport_hud.md`.
+
+**DVD drive region tool (`main/Scripts/set_dvd_region.sh`, 2026-08-30) — ✅ READ +
+gamepad menu HW-CONFIRMED (2026-08-31, re-confirmed 2026-09-04 on the rewritten script);
+✅ **the SET path is HW-CONFIRMED 2026-09-04 too** (region 1 → 2, read back first try,
+counter 3 → 2) — after issue #52 found TWO reasons it never had been: ★★ **the command was
+MALFORMED. `pdrc` is a region MASK with one bit CLEAR (region 1 = `0xfe`), NOT the region
+number**, which as a mask claims seven playable regions. MEASURED with `sg_raw` sending the
+byte-identical command: sense **05/26/00, "invalid field in PARAMETER LIST"** — ★ *parameter
+list*, not *CDB*, which localised it to one byte of the payload in a single shot. `regionset`
+has always sent the mask (`regionset.c` `~(1 << (n-1))` → `dvd_udf.c:UDFRPCSet`). ★ **Drives DIFFER on this
+byte, which is why it survived so long:** issue #52's LG GS40N *took* the plain number (that
+user's region change succeeded — only the read-back afterwards failed), while the TSSTcorp
+rejects it. The number worked by luck on tolerant firmware; the mask is what a strict drive
+demands.** ★ **The write now goes out over SG_IO with `DVD_AUTH`
+as the fallback** — byte-identical commands, but `sr_do_ioctl` collapses every refusal into a
+bare `EIO` (Illegal Request and most Not Ready alike), so the ioctl route CANNOT say why a
+one-way operation failed. ★★ **And it earned its keep on the first run: the second reason was THE DISC IN THE TRAY.**
+Sense `05/6f/04` — a drive takes its new region from the loaded disc, which must **ALLOW**
+the region being set (measured: a disc with `RMI 40`, everything but region 7, satisfied a
+switch to region 2; an empty tray gives `02/3a/01`). ⚠⚠ **The diagnostic lesson cost two HW
+rounds and is the durable part:** the evidence read "accepted on a PC over SG_IO, refused on
+the MiSTer over the ioctl", and BOTH variables that framing offers — route and machine — were
+wrong; the cause was a third nobody had written down. Then the first correction ("take the
+disc out") was wrong TOO, because one refuting measurement was read as establishing its
+opposite. A drive that can *explain itself* outranks any amount of A/B reasoning, and `EIO`
+is all the ioctl route can ever say.
+A drive with no region set refuses the CSS title-key ioctl, so every physical disc pays a
+multi-second crack (`No drive region: cracking`); the Scripts-menu tool reads the region
+(and the remaining-change count) and can set it, via `DVD_AUTH` — no compiled helper, since
+python3 is stock on MiSTer. **Three** durable facts it is built around, worth knowing before
+writing ANY MiSTer Scripts tool: a Scripts-menu script is run by handing its bare path to
+`agetty`, so it can **never take arguments** (SSH only); MiSTer injects uinput KEYBOARD
+events from the gamepad while a script runs (D-pad→arrows, B1→Enter, B2→Esc) but **no digits
+or letters** — so interactive means a cursor menu, never a typed prompt; and ★ **a script
+that returns quickly LOSES ITS LAST SCREEN** — `menu.cpp`'s `MENU_SCRIPTS_FB2` ignores keys
+while the script's process lives, then closes the framebuffer terminal on the first key
+**RELEASE** after it is reaped, so the press that confirms a menu erases the result of that
+press. Every exit must wait for a FRESH keypress. A region set is
+**irreversible** (no un-set, ~5 changes ever), hence cursor-starts-on-Cancel/No throughout.
+★★ **And the reporting rule issue #52 earned, which generalises past this tool: a failure to
+READ BACK a change is not a failure to MAKE it.** The script's unguarded re-read would hit
+the drive's post-SEND-KEY unit attention and throw an uncaught traceback over a change that
+had worked. Verification now
+re-opens the device and retries 6 × 0.5 s, an unconfirmed read reports "accepted, not yet
+reported" (exit 3) instead of failure, and only the change command itself refusing is an
+error. ★ The same round found `dvd_css.cpp:drive_region_set()` reading `region_mask` alone,
+which labels an **RPC-1 (region-free) drive** — empty mask, `rpc_scheme == 0`, no region
+enforced at all — as having no region, i.e. the best case reported as the worst; it now
+also passes on `rpc_scheme == 0`. ⏳ **That arm is UNGATED — every local drive is RPC-2, so
+it cannot run here**; what was re-checked on HW (2026-09-04) is that an RPC-2 no-region drive
+still cracks and still says so. It moves a MESSAGE only (`region_set` never picks a code
+path), and a zeroed REPORT KEY reply already read as "set" before, so it adds no new way to
+be wrong.
+Tested by `tools/test_set_dvd_region.py` (fakes the drive incl. post-change faults, drives
+the menus through a pty, **mutation-checked** 5/5, `SET_DVD_REGION_SH=` points it at another
+copy to prove RED). Design + ioctl details: `docs/physical_disc.md`.
+
+### ★ There is a real MiSTer you can drive — use it instead of asking
+
+The maintainer's rig is reachable over ssh and the harness in `tools/` flashes a build,
+launches a disc, presses transport keys, pulls back a decoded screenshot, reads the
+decoder's live pacing counters, soaks a disc unattended, and diffs the core's navigation
+against libdvdnav. **Skill: `.claude/skills/hil-testing/`** (operating manual + the traps).
+Design record and evidence: `docs/hil_harness.md`.
+
+Prefer measuring to asking. Two rules worth carrying even if you read nothing else:
+**telemetry field names come from `main/support/dvd/dvd_ctl.cpp`'s `fprintf`, not the RTL
+port names** (a renamed field reads as a constant zero and silently kills the oracle
+reading it — this has happened twice), and **a sampled capture card measures OFFSETS, not
+RATES** (its drift figure changes with the capture frame rate). Put the rig back with
+`tools/mister.py restore` — the maintainer uses it.
+
+### User bug reports arrive as sparse-sector nav bundles, not ISOs
+
+**`tools/dvd_report.py` (2026-08-31) — the answer to "the disc that breaks it is
+one I don't own".** A nav bug needs the IFO tables and nothing else, and those are
+~0.005% of an image (104 KB of a 4.47 GB rip), so a reporter builds a **36–100 KB
+zip** from their own rip on their PC. The bundle stores `{LBA → sector}` pairs at
+their **original disc addresses**; `unpack` writes them into a **sparse** image of
+the original size (6.77 GB apparent, 480 KB on disk). ★ **That is why no tool
+needed changing** — `IsoNav` asserts `CD001` at sector 16 and follows absolute
+LBAs, so the reconstruction simply *is* an ISO; it is also the `*_meta.hex`
+testbench idiom, so a submission is already shaped like a regression fixture.
+Validated 23/23 discs across the library: `iso_nav_check.py` output byte-identical
+between original and reconstruction (up to 9,143 lines), plus `dvd_vm_ref.py`
+boot/menu, `dvd_census.py`, `nav_extract.py`. Every bundle **self-checks by
+rebuilding itself** before it is handed over (a bundle that cannot be walked is
+worse than none — the reporter is gone by the time anyone opens it).
+★ **The bundle contains ONLY unencrypted navigation structures — no picture, no
+sound, no keys — and that is ENFORCED, not promised.** `audit()` refuses to write
+a bundle if any gathered sector parses as an MPEG-PS pack containing anything but
+a system header, padding or `private_stream_2`; proven RED against a real title
+sector (`0xE0`) and green on a real NAV pack. It cannot carry key material even in
+principle (title keys live in scrambled sector headers, the disc key block in the
+lead-in, which is not in an ISO image at all) — and the IFO/NAV data it DOES carry
+is capturable precisely because CSS never scrambles it (our own
+`main/support/dvd/dvd_css.cpp:341,393` says so). ⚠ **Never relax this to accept
+VOB payload "just for one bug"** — the guarantee is why a stranger can hand a
+bundle over without thinking, and it is the same line as
+`css-key-cache-never-ship`. ⛔ A `--from-drive` mode was considered and REJECTED
+(2026-08-31, user decision): it points users at their optical drive, and a
+reporter who has already ripped their own ISO is a better reporter.
+★★ **`--nav-packs` SCANS MENU VOBs, SO IT CANNOT CAPTURE AN IN-TITLE MENU'S
+BUTTONS AT ALL — on any route (2026-09-12, issue #81).** A DVD-game or
+motion-menu disc authors its menus as TITLE-domain PGCs with the HLI in a title
+VOB's NAV packs (Scene It's game menus; #81's disc, whose boot menus live in
+`VTS_02_1.VOB`), so a highlight bug on such a disc could not be evidenced by
+either route. That is structural, not a tuning matter.
+✅ **FIXED by a PLAYHEAD WINDOW — ✅ HW-CONFIRMED 2026-09-12 ON A PHYSICAL DISC, BOTH
+ARMS.** Arm 1, the DEGRADE path (new Main + the OLD release-installed collector): bundle
+written, `nav packs: no`, audit clean — that combination wrote NO BUNDLE AT ALL before the
+flag probe, measured on the same rig. Arm 2, the CAPTURE path, chord pressed ON THE DISC'S
+MENU: `hli_ss=2 btn_ns=5`, `btn_coli sel=00005af0`, the full 1↔2↔3↔4↔5↔1 link graph and a
+decoded VM command per button (`LinkPGCN 13/4/14/2/30`, two of them with `HL_BTNN`), in a
+73 KB bundle — **exactly the evidence missing from #60, #61 and #81, all three of which
+were physical-disc reports whose bundles carried ZERO NAV packs.** The second NAV pack 8
+sectors later carries the SAME button set: the per-VOBU HLI re-send that `--nav-stop` rests
+on, now observed on real media.
+★★ **AND THE REAL COST IS FAR BELOW THE COLD MEASUREMENT — both presses finished in ≤1 s**,
+against 2.7-4.9 s cold, because the window reads FORWARD FROM THE PLAYHEAD, which is where
+the core has just been streaming, so most of it is already page-cached. The cold numbers are
+the pessimistic bound, not the typical case.
+⚠ **`/tmp/dvd_report_run.log` was 0 bytes after every press** — the child's stdout is not
+captured, so `reap()`'s "Support bundle FAILED — see /tmp/dvd_report_run.log" points at an
+empty file. PRE-EXISTING and only on the failure path, but it is that path's ONLY
+diagnostic; suspect is `start()`'s `freopen(..., stdout)` before `execvp` (python writes
+fine to a redirect on that box). Own item.
+The mechanism:
+`dvd_report.py --nav-window SECTORS` (with `--lba`) captures every NAV pack in one
+SEQUENTIAL run forward from the sector being served, and `dvd_report.cpp` passes
+`--nav-window 2048` whenever it has a playhead.
+★ **Measured ON THE MISTER, which is what chose it over "just pass `--nav-packs`
+too": the window costs 1.38 s against 0.86 s for no capture at all (SCENEIT_HP,
+16 NAV packs, a 37 KB bundle), while `--nav-packs` on MEN_IN_BLACK costs 37.7 s —
+19× the window's 1.98 s on the same disc**, from local storage with the core not
+even running. It yields 13–20 of ~20 packs carrying multi-button HLI on Scene It's
+game VTSes, which `--nav-packs` cannot reach at all.
+★★ **AN OPTICAL DRIVE IS ~50× SLOWER AND THE ARITHMETIC SAID OTHERWISE — MEASURED
+ON A REAL DVD WHILE THE CORE STREAMED IT: ~90–285 KB/s, a SEVENTH of DVD 1x**,
+steady over 84 s (so not spin-up), and chunking does NOT help (1-sector reads
+13.9 s, 256-sector 17.8 s — it is the drive, not syscalls). A 2048-sector window
+costs **15.7–29.1 s** there against ~0.5 s on an image. ⚠ **Authentication and a
+spinning drive do NOT rescue it** — that was the obvious hypothesis and the
+measurement killed it. ⚠⚠ **Re-reading a region takes 0.02 s, so any timing on an
+LBA something already touched is measuring the PAGE CACHE** — a first attempt here
+read 0.26 s for a window that really costs 16 s.
+✅ **Bounded: `--nav-stop` (default 2) ends the scan at the 2nd NAV pack, and the
+cap follows the MEDIUM** (`nav_window_for()`, on `S_ISBLK` — the medium, not the
+path spelling): 512 sectors optical, 2048 image. Measured on that disc: 1st NAV
+pack +51..+230 sectors (2.1–5.5 s), 2nd +304..+465 (3.9–7.0 s), 8th +1701..+1903
+(19.1–29.1 s) — and an HLI repeats byte-identically every VOBU, so the FIRST
+record already carries the whole button set. **Chord on a physical DVD: 0.91–0.96 s
+before this branch, 2.73/4.92 s with the bounded window, vs +15.7–29.1 s
+unbounded.** ⚠ The cap is what you pay where there are NO NAV packs (a still, a
+gap) — the early stop cannot help there, which is why it is media-dependent rather
+than merely large; one run hit 14.35 s on a bad patch, so 3–5 s is typical, not a
+bound. Proven end to end: a window bundle reconstructs to
+an ISO whose `nav_extract.py` walk decodes a complete 7-button in-title menu.
+⚠ A VOBU is ≤1 s, so 2048 sectors spans several, and an HLI is re-sent every VOBU
+while a menu is up — forward-only is enough. ⚠ The content guarantee is unchanged
+and still structural (`is_nav_pack` gates the append; `audit()` re-checks the final
+set). ⛔ `--nav-packs` still NOT on the chord — it answers a different question, and
+the expensive one.
+⚠⚠ **AND THE FLAG IS NOT PASSED UNCONDITIONALLY, because MEASURED ON THE RIG an
+older release-installed `dvd_report.py` given it prints `unrecognized arguments:
+--nav-window 2048` and writes NO BUNDLE AT ALL** — strictly worse than the missing
+button data it adds. The release zip ships `Scripts/dvd_report.py` beside the Main so
+they normally move together, but a Main updated alone must degrade, not break. So the
+child ASKS THE SCRIPT (`dvd_report_script_supports`): argparse cannot accept a flag it
+does not name, so a substring search is sound both ways. In the CHILD, after the fork
+(file I/O on the poll thread is the `dvd_phys` lesson), chunked with a `tlen-1` overlap.
+★ **The argv moved OUT of the `fork()` (`dvd_report_build_argv`) purely so it could
+be tested, because every failure here is SILENT** — a missing flag still produces a
+bundle that is written, self-checks and looks complete, which is exactly how #81
+arrived. `main/tests/dvd_report_test.cpp`: 6 arms, **6 RED mutations each caught by
+its own assertion** (drop the flag; pass it with no playhead — which captures the
+NAV packs at the START of the disc, *confidently wrong data instead of none*; reach
+for `--nav-packs`; forget the NUL; ignore what the installed script accepts; drop the
+probe's chunk overlap, which reports a good tool as too old).
+⚠ Two harness traps: `red_case`'s `grep -q "$expect"` read an expect string
+beginning `--` as an OPTION (now `-e`), and **a test that walks argv to its NUL
+cannot detect a missing NUL** — the terminator arm pre-fills a sentinel, runs FIRST,
+and bounds every scan, so the mutation is caught by its own assertion instead of as
+noise elsewhere. Detail: `docs/support_bundle_hps.md`.
+⚠ Two traps recorded in `docs/bug_reports.md`: NAV-pack detection is **not**
+`0x000001BF` at offset 14 (a **system header** pushes PCI to `0x26`; the fixed
+offset found ZERO packs and reported success), and the tool is **deliberately
+self-contained** — a reporter downloads one file, not a checkout, so it duplicates
+a small ISO9660 walk instead of importing `IsoNav`. Scope is nav only; video-side
+bugs (subpicture, CC, cadence, lip-sync) report in prose. User-facing entry:
+the MANUAL page `site/content/reference/reporting-a-bug.md` (Reference → Reporting a
+bug) — NOT the README, which is a landing page. Design: **`docs/bug_reports.md`**.
+
+**★ AND FROM THE PLAYER ITSELF — a gamepad chord (2026-09-01, `MiSTer_DVDcss`;
+✅ HW-CONFIRMED 2026-09-02, and on the hardest case first — a PHYSICAL DISC:
+77 KB off a 7.22 GB disc, audit clean, full nav walk + VM boot chain on the
+reconstruction, and ★ the playhead landed 2,064 sectors into the feature, which is
+the fact a reporter can never supply. ★★ Reading `/dev/srN` while `dvd_css` holds
+the drive WORKS — the thing flagged as likeliest to misbehave.)** Hold
+**Audio + Subtitle 2 s** and the Main writes a bundle
+for whatever is mounted — image OR optical drive — to `/media/fat/DVD_reports/`.
+★ **The Main SHELLS OUT to `tools/dvd_report.py`, it does not reimplement the
+collector** (python3 is on stock MiSTer; a C++ copy would drift, audit and
+self-check included) — and that is also what DISSOLVED the old Scripts-menu
+blocker: "no arguments, gamepad gives only arrows/Enter" stops mattering when the
+Main already knows what is mounted and passes it as an argument. ★★ **A chord, not
+an OSD row, because a `CONF_STR` entry changes the netlist and RE-ROLLS THE PINNED
+FITTER SEED** — a one-line menu addition is not a one-line change in this project.
+⚠ `dvd_report_joy()` **observes `map` and never modifies it**: masking the chord
+bits would mean a detection bug could stop buttons working, and would swallow a
+fast double-press — the accepted cost is that the chord also steps audio/subtitle
+once each (why B7/B8, not the transport buttons, where a stray seek would linger).
+⚠ **The work FORKS** — `dvd_report_tick()` shares the poll loop with SD block
+service, so inline work would starve the core mid-playback; feedback rides Main's
+own `InfoMessage()`, so no RTL change was needed for it either. Uniquely captures
+`buffer_lba` = **where playback actually was**, which a reporter can never state
+from memory. ⚠ **The DE10-Nano has NO battery-backed RTC** — an on-player bundle
+from a never-networked MiSTer carries an epoch date in its filename AND
+`created_utc`; unique per session, not trustworthy as a sequence
+(`player.generated_on == "mister"` marks them). Integration steps 22–25. The **core version needs no new plumbing**: `CONF_STR`'s
+`V,` line is appended to the OSD core name at init, so `OsdCoreNameGet()` reads back
+`"DVD v0.4.0 260901"` — everything after the first space (no space ⇒ record nothing,
+never pass the bare core name off as a version).
+⚠ **`main/build_main.sh` used to copy the overlay as a HAND-MAINTAINED FILE LIST**
+and silently omitted the new module — it now globs `support/dvd/*`; the failure
+surfaced far away as a missing-header error in `user_io.cpp`.
+Design: **`docs/support_bundle_hps.md`**.
+
+### No USB DVD-ROM drive support
+MiSTer's custom Linux kernel almost certainly lacks `sr_mod` (`CONFIG_BLK_DEV_SR`).
+Recompiling the kernel is out of scope. Workflow: rip disc to ISO on PC, copy to SD card,
+play from ISO. libdvdcss handles CSS decryption transparently on ISO files.
+
+### ISO-based workflow
+User places `.iso` files on the SD card. HPS opens ISO with libdvdcss, parses UDF,
+navigates IFO, reads VOB sectors, feeds decrypted data to FPGA ring buffer.
+
+**Test ISOs live in `$DVD_ISO_DIR/`** (decrypted DVD-Video rips, on the dev
+machine — used for `tools/nav_extract.py`, `tools/spu_dump_iso.py`, etc.). Current set:
+`MEN_IN_BLACK.iso`, `THE_MATRIX_16X9LB_N_AMERICA.ISO`, `ULTIMATE_T2.iso`,
+`PAW_PATROL_MEET_EVEREST.iso`, `SCENEIT_HP.iso`/`SCENEIT_JR.iso`/`Scene_It.iso`.
+
+---
+
+## Audio Codec Support Plan
+
+| Codec | Substream ID (PES) | HPS decode library | HDMI out | S/PDIF (future) |
+|-------|-------------------|--------------------|----------|-----------------|
+| AC-3 (Dolby Digital) | 0x80–0x87 | liba52 | ✅ stereo PCM | IEC 61937-3, Pc=0x0001 |
+| DTS | 0x88–0x8F | libdca | ✅ stereo PCM | IEC 61937-5, Pc=0x000B |
+| LPCM | 0xA0–0xA7 | none (raw PCM) | ✅ direct | N/A |
+| MP2 (MPEG-1 Layer II) | stream_id 0xC0–0xC7 (no substream byte) | none — in-fabric `dvd/mp2/mp2_decode.sv` | ✅ stereo PCM ✅ HW-CONFIRMED 2026-08-24 | IEC 61937 Pc=0x0004 bitstreaming not implemented — but since PR #79 Passthru DECODES MP2 and sends PCM, it no longer silences it |
+
+DTS support is essentially free once AC-3 works — same IEC 61937 wrapper, different
+preamble constant and library. Always detect substream ID before routing audio PES.
+
+**MP2 + MPEG-1 video — ✅ HW-CONFIRMED 2026-08-24 (branch `feature/mpeg1-codecs`,
+build `DVD_mpeg1c`): the missing DVD-spec codecs, both in fabric — see
+`docs/mpeg1.md`.** NTSC+PAL MPEG-1 clips + a converted VCD play with A/V sync on
+the board. ⚠ HW-bringup lesson recorded in docs/mpeg1.md: Quartus 17 mangles
+`N'(expr)` size casts (sim-perfect, silent silicon); caught by the new
+post-map-netlist cosim technique — use part-selects/$signed instead. MP2 rides PES stream_id
+0xC0+n directly (track select = stream_id low 3 bits; type `T_MP2 = 2'd3` reuses
+the old "unknown" sentinel), reframed by `dvd/mp2_reframer.sv`, decoded by
+`dvd/mp2/mp2_decode.sv` — **BIT-EXACT in sim vs the golden model
+`tools/mp2_ref.py`** (which is itself ≤1 LSB vs ffmpeg float decode) on synthetic
+48 kHz fixtures AND real VCD content, plus a full-chain TB (real `-f dvd` VOB →
+ps_demux → reframers → audio_ring → dvd_audio_decode). Suite:
+`bench/dvd/run_mp2.sh`. ~~44.1 kHz (VCD) plays ~8.8 % fast~~ — ✅ FIXED by the
+VCD/SVCD feature below (NCO muxes on the MP2 header rate).
+**SIF ANALOG FILL — ✅ HW-CONFIRMED 2026-08-24 (PR #2):** SIF content used to
+show in the upper-left quarter of the ANALOG output
+(the syncgen DE window tracks the decoded size; `re_interlace` is hardcoded 720-wide).
+Now an in-core 2× fill — `disp_hstretch` 352→720 + the addrgen vscale walk re-armed as
+mode 2 (2× line repeat) + a syncgen-only effective-size mux in `mpeg2video.v` — gated
+on `analog_eff` (HDMI keeps ascal's scale; also fixes direct-video + un-clips the HUD).
+★★ **THE VERTICAL HALF OF THAT FILL IS NOW RETIRED FOR SIF: NATIVE 240p SHIPPED
+2026-09-14 (branch `feature/native-240p`) — sim-proven, mutation-checked, and ✅
+HW-CONFIRMED 2026-09-14** (build `DVD_p240_20260914_1405.rbf`, SEED 7 first roll, clk_dec
+91.42/88.47, 90 % ALM): **the composite CRT plays it correctly, and a RetroTINK 4K on RGBS
+REPORTS IT AS 240p.**
+★ **The RT4K reading is the load-bearing half of that and the CRT is the regression check**
+— an instrument that names the mode outranks an impression, which is the same ordering
+`docs/single_raster_analog.md` §3.11 settled for field order. A CRT will happily lock to a
+raster that is subtly wrong; a scaler that prints "240p" has actually decoded the line rate
+and the absence of the half-line, which is precisely what this branch changes.
+⏳ **NOT yet exercised, so do not read the confirmation wider than it is:** PAL 288p, a
+LONG VCD (the ~8.7 s held frame is the one cost nobody has sat through), the HUD/seek-bar/
+idle-logo geometry on a 240-line screen, and the screensaver/Stop logo over a 240p title. The horizontal 352→720 stretch stays (it is a true 2-tap linear resample and a
+CRT needs the full line width); the **2× line repeat is what made SIF look chunky**, and on
+a 240-line raster there is nothing to repeat. Field report that started it: *"that scaling
+is nearest neighbor and looks very chunky."*
+★★ **THE OLD REJECTION ("no exact-59.94 Hz 240p modeline exists at 1716 dots/line, so it
+would drift against the fixed 48 kHz NCO") WAS WRONG IN BOTH HALVES — do not re-derive it.**
+(1) **240p is not 59.94 Hz** — that is the interlaced FIELD rate; console 240p omits the
+half-line and runs **262 lines = 60.055 Hz**, which is what every CRT takes (`CDi_MiSTer`'s
+`rtl/video_timing.sv`: `v_total = 262; v_active = 240;`). Asking for an exact 59.94
+progressive modeline was asking for 262.5 lines. (2) **The drift argument depended on the
+STC being RASTER-derived**, which PR #63 ended: `disp_sched` free-runs off the crystal that
+also feeds the NCO, so the raster supplies pickup OPPORTUNITIES, not the clock.
+✅ **The held-frame claim §B.3a flagged as unverified is now VERIFIED at RTL level:**
+`frame_due = sched_due`, a not-yet-due picture parks in `STATE_REPEAT` (the held frame), and
+`late_raw` requires `sched_next_due` — false there — so the hold banks **no lateness, no
+drop debt and nothing reaches the audio clock**. One held frame per ~8.7 s, not a drift.
+⚠ Consequently `dvd/emu.sv`'s "the ONLY thing holding A/V together over a long title is that
+the core raster period equals the true content rate" is STALE — pre-#63 architecture.
+★ **The raster IS the 480i branch with `interlaced=0`** — same line, same hsync, same vsync
+window, same `vertical_length`; only `VERT_RES` (240/288), the half-line (0), the interlaced
+bit and deinterlace differ. ⚠⚠ **PIXEL REPETITION STAYS ON** (`VID_MODE` `3'b010`): it holds
+the line at 15.734 kHz, and dropping it gives 31.5 kHz, which no 15 kHz display takes.
+⚠⚠ **AND `p240_eff` IMPLIES `il_eff`, so in the walk's ternary chains a p240 arm placed
+AFTER an il arm is DEAD CODE** — the raster silently stays line-doubled and nothing fails.
+That happened during development (PAL 576i swallowed PAL 288p); `tools/check_p240_wiring.py`
+gates the order by reading `emu.sv`, because emu has no bench.
+★ **`il_eff` split three ways and only one moved:** new `fields_eff = interlaced_eff &
+~p240_eff` carries "the decoder emits FIELDS" (`VGA_F1`, `HDMI_BOB_DEINT`, `sif_v2x_eff`,
+`crt_ov_map`/`spu_decode` `.interlaced`, `cc_vbi`); "the 15 kHz raster is up" and "pixrep is
+on" stay on `il_eff` and are unchanged.
+★ **Automatic, no CONF_STR row** (a menu entry re-rolls the pinned SEED and there is no
+choice to offer). The engage rides `pal_detect`'s existing debounce as a SECOND verdict on
+the same timer — ⛔ never the raw `sif_v_dec` tap, which has no bound and no hold and is the
+reverted film-switch loop. `mount_arm` latches the first header of a file at once, so a VCD
+switches inside the mount flush window and there is no mid-title change in practice.
+⛔ **The "×2 vertical downscale" §B.3a listed as still needed was for putting 480-LINE
+content into 240p. SIF needed NOTHING** — it is already 240 lines; you stop doubling it.
+★ **WHY THE CORE REPORTS 720x240 AND NOT 352x240** (asked on the HW round; the answer is
+not "clock compatibility", so do not re-derive it that way). The line is fixed at 1716 dots
+@ 27 MHz because that is what makes 15.734 kHz; the reported WIDTH is only how `CE_PIXEL`
+slices it. A native 352 wants one enable per 4 dots = 6.75 MHz = **1716/4 = 429**
+pixel-times exactly, 352 active + 77 blanking — the arithmetic is clean and 720 is NOT
+required. What stops it is (a) `syncgen_intf`'s pixel repetition is a single bit-shift
+doubling, so 13.5 MHz is the only sub-27 MHz rate reachable without new logic, and (b)
+⚠ **EVERY OVERLAY IS AUTHORED IN 720-PIXEL SPACE** — the status line is a 512-px-wide glyph
+box at `X0=104`, `seek_bar` the same, `idle_logo` bounces against `720 - w2` — so a 512-px
+line does not fit on a 352-px screen at all. That is a re-authoring job, not a constant
+change. Gain would be ONE resample (352→720 linear, then ascal, becomes 352→ascal): worth
+nothing to a CRT, but it would let a RetroTINK lock a 1:1 sample grid. ⛔ And the target
+would be **352, not 320** — the content is 352 wide, so 320 means cropping real pixels.
+⚠ Related, PRE-EXISTING and minor: MPEG-1 SIF is half of **704**, not 720, so the
+352→720 stretch is ~2.3 % wider than strict BT.601 geometry. Consistent with how the fill
+already treats 704-wide sub-D1 DVD content, and invisible — a choice, not a defect.
+Gate `bench/dvd/run_p240.sh --red` (11 GREEN arms; 14 mutations, all caught). Detail: **`docs/mpeg1.md`
+§B.3b**. ~~Sub-D1 MPEG-2 (704/544) intentionally NOT filled~~ —
+scope REVERSED 2026-08-24 by user decision: the predicate is now `< 720` (any sub-720
+width fills; SVCD 480 = exact 2:3), shipped with the VCD/SVCD feature below. Design:
+`docs/mpeg1.md` §B.3; overlay inverse contract: `docs/crt_anamorphic.md` §9b. Sim:
+`resample_chain_tb +sif=1`/`+hfill=1` variants (`+sif` runs co-sim the addrgen walk
+vs the 2× closed form; `+hgrad` blend, `+crt` fields, `+siftog` runtime toggle),
+`crt_ov_map_tb` T1d/T6.
+- ⛔ **"THE BOTTOM LINE ONLY GOES HALFWAY ACROSS" IS THE DISC, NOT THE CORE (2026-09-12,
+  docs-only change).** Field report in `Analog Aspect = Letterbox`; reproduced in **VLC** and
+  measured in the decoded pixels — a half-line where one field's first active line begins
+  part-way across and/or the other's last one ends part-way across, on a minority of discs,
+  NTSC and PAL alike (THE_OFFICE carries BOTH ends). Overscan normally hides it; HDMI at 1:1
+  and Letterbox (which lifts the picture's bottom edge out of a CRT's overscan) expose it —
+  as a set-top player letterboxing the same disc also would. ★ **Three theories died on
+  measurement; they are recorded so nobody re-derives them:** NOT a pipeline defect (a partial
+  line can ONLY be `pixel_rd_underflow`, which `mixer.v:80-88` measured as zero on HW — this
+  finding corroborates it), NOT stream parameters (a CLEAN disc matches three affected ones on
+  resolution, picture structure, `progressive_frame`, `rff` and `progressive_sequence`), NOT
+  bitrate/decode load (the HIGHEST-bitrate disc of the six is clean at 8.4 Mbps while an
+  affected one runs 4.4). ⚠ Prevalence deliberately NOT quantified — the detector took four
+  revisions and still disagreed with itself on low-contrast material. Detail, the measurement
+  recipe and its four traps: **`docs/crt_anamorphic.md` §11**, which also records an
+  UNREACHABLE latent `disp_vscale` frame-top re-arm bug found en route.
+**VCD + SVCD playback (bin/cue direct) — ✅ HW-CONFIRMED 2026-08-24 (user report:
+VCD/SVCD good on analog + HDMI, seeking works; branch
+`feature/vcd-svcd-playback`) — see `docs/vcd_svcd.md` (design + remaining
+sub-item checklist).** Select the rip's data-track `.bin`
+(CONF_STR gained BIN/IMG/DAT): `dvd_iso_reader` detects raw MODE2/2352 by the
+sector sync at byte 0 (new S_CHK_RAW; RIFF/CDXA .DAT handled) and deblocks
+in-line — Form-2 payloads [24,2348) only, Form-1/ISO track skipped, counted
+wr_ptr advance — golden-model byte-exact (`tools/cd_deblock_ref.py`). `ps_demux`
+auto-detects MPEG-1 system streams per pack (12-byte packs; S_M1_HDR/S_M1_STD PES
+path reusing the S_PTS assembler; golden `tools/mpeg1_ps_ref.py`). MP2 output NCO
+muxes 44.1/48/32 kHz off the new `mp2_decode.fs_o`, latched only while the drain
+gate is closed. Whole-file seek + seek bar + pause on linear playback: raw seeks
+snap to a sector (= pack) boundary; flat `.mpg`/`.VOB` seeks re-sync via a
+post-seek 00 00 01 BA pack hunt (gated on `ps_demux.saw_pack`; `.m2v` stays
+linear-only). SVCD display: HDMI already correct (ascal + DAR latch, 16:9
+anamorphic included). Suite: `bench/dvd/run_vcd.sh` (real-VCD fixtures committed,
+`tools/vcd_fixtures.py`; full chain PCM bit-exact + NCO cadence proven). v1
+limitations (no VCD menus/PBC, no CD-DA tracks, no 2336-byte images, 23.976 film
+VCDs play fast, HUD time zero in linear modes): `docs/vcd_svcd.md` §5.
+
+---
+
+## First Task: ps_demux.sv
+
+The Program Stream demuxer is the first new RTL module to write. It sits between
+`mpg_streamer.sv` (which feeds raw VOB sectors) and the existing MPEG-2 decoder.
+
+It must:
+1. Parse MPEG-2 Program Stream pack headers (start code `0x000001BA`)
+2. Parse PES packet headers, extract `stream_id` and `substream_id`
+3. Route video PES (`stream_id = 0xE0`) to the existing MPEG-2 decoder input
+4. Route audio PES (`stream_id = 0xBD`) to the audio ring buffer for HPS pickup
+5. Extract and pass through PTS timestamps for A/V sync
+
+Write a testbench (`bench/dvd/ps_demux_tb.sv`) using a real VOB hex extract before
+testing on hardware. A VOB file can be hex-dumped with `xxd VIDEO_TS/VTS_01_1.VOB | head -200`.
+
+### Status & design decisions (implemented)
+
+The FSM in `dvd/ps_demux.sv` is implemented and passes `bench/dvd/ps_demux_tb.sv` in
+Icarus Verilog. It is now wired into the pipeline via `dvd/emu.sv`
+(`mpg_streamer → ps_stream_fifo → ps_demux → mpeg2video`); the `dvd/ps_stream_fifo.sv`
+adapter bridges `mpg_streamer`'s pulse (valid+busy) interface to `ps_demux`'s held
+(valid+ready) handshake without dropping the in-flight byte. Integration is covered by
+`bench/dvd/ps_chain_tb.sv`. Decisions baked in (full detail in `docs/architecture.md`):
+
+- **Pack header is variable length:** 9 fixed bytes after `0xBA`, then a stuffing-length
+  byte (low 3 bits) and that many stuffing bytes — not a flat 14.
+- **private_stream_1 sub-header is stripped:** drop `substream_id` + 3 bytes (AC-3/DTS) or
+  + 6 bytes (LPCM) so the HPS gets raw frames; `aud_frame_start` strobes each frame's first
+  byte.
+- **`aud_type` is 2-bit:** 0=AC-3, 1=DTS, 2=LPCM, 3=unknown (the 4-bit width in early docs
+  is superseded).
+- **Backpressure-safe 1:1 passthrough:** `in_ready` follows the active output's ready;
+  counters/shift-register advance only on `in_valid && in_ready`.
+- **`PES_packet_length` is the master byte counter** for each packet. Known limitation:
+  `length == 0` (unbounded video PES) is not yet handled — OK for DVD VOBs, fix later via
+  start-code-hunt fallback.
+- **Raw elementary streams are auto-detected and passed through.** If the first start code
+  is a video-layer code (`<= 0xB8`, e.g. `0xB3` sequence header) rather than a `0xBA` pack,
+  `ps_demux` reconstructs the `00 00 01 <code>` preamble and forwards every byte to video
+  (`S_ES_EMIT`→`S_ES_PASS`). This was the black-screen bring-up fix — on hardware all test
+  files (`tools/streams/*.mpg`, ffmpeg `.m2v` extracts) were bare elementary streams the
+  original PS-only demuxer discarded, starving the decoder. Tested by
+  `bench/dvd/ps_demux_es_tb.sv`.
+- **DVD nav/system packs are skipped by length (real-VOB robustness).** Any `stream_id
+  >= 0xBB` that isn't pack/video/audio — esp. `private_stream_2`/NV_PCK nav packs (`0xBF`)
+  and padding (`0xBE`) — is consumed in full via its 2-byte `PES_packet_length`
+  (`S_SYS_LEN_HI/LO`→`S_DISCARD`) instead of being hunted past, so a `00 00 01` byte pattern
+  inside a nav payload can't false-trigger a start code and desync the stream. Also added
+  `VOB` to the `CONF_STR` extension list so `.VOB` files are directly selectable. Tested by
+  `bench/dvd/ps_demux_nav_tb.sv`; the real-Matrix-VOB `ps_chain_tb` still passes (50,395 B).
+  ⚠️ Sim-verified only — not yet confirmed on a real multiplexed VOB on hardware.
+- **On-screen debug overlay** (`dvd/debug_overlay.sv`, `O2,Debug Overlay` toggle, default
+  off) renders pipeline counters as on-screen block-bit rows — used to diagnose the above
+  with no UART cable. **⚠️ COMPILED OUT of the release build** (`` `ifdef DEBUG_OVERLAY ``,
+  congestion — see the "On-hardware diagnostics" note above): `O[2]` only shows these rows in
+  a `DEBUG_OVERLAY` rebuild. In a release `.rbf`, `O[2]` drives the menu-highlight blocks.
+
+## audio_ring.sv — Status & design decisions (implemented, sim-verified)
+
+`dvd/audio_ring.sv` is the consumer for `ps_demux`'s audio output — a buffer that
+holds complete audio frames for the HPS to pull out later (decode AC-3/DTS via
+liba52/libdca, or pass LPCM, → ALSA → HDMI). Passes `bench/dvd/audio_ring_tb.sv`
+in Icarus. **Built but NOT yet wired into `emu.sv`** (the audio outputs there stay
+parked with `aud_ready=1'b1`); wiring it in + the HPS read path are the next steps.
+
+- **Single-clock (clk_sys), no CDC.** The chosen HPS read transport is the
+  MiSTer `ioctl_upload` channel, which runs in the clk_sys (27 MHz) domain — the
+  same domain as `ps_demux`. So this is a plain single-clock FIFO, *not* the
+  dual-clock FIFO the early docs assumed for an f2sdram path.
+- **FLOW CONTROL — watchdog-guarded demux backpressure (revised 2026-07-02; the
+  old "never backpressure into video" HARD INVARIANT is relaxed).** `ps_demux`
+  carries video AND audio on one byte stream. The ring's own `aud_ready` output
+  stays tied HIGH (accept-always; on overflow it **drops a whole frame** —
+  rewinds bytes, bumps `overflow_count` — keeping boundaries intact), but it now
+  also exports **`almost_full`**, and `emu.sv` gates `ps_demux.aud_ready` with
+  it: when the ring is nearly full the shared demux STREAM stalls until the
+  audio decoder drains (the DVD System-Target-Decoder model). The video PICTURE
+  is unaffected — the video decoder rides its multi-MB VBUF bitstream backlog
+  through the stall. Why: an overflow drop is a whole AC-3 frame = an audible
+  32 ms gap (the low-fps audio "stutter"); backpressure loses nothing. Guard: a
+  ~1.2 s drain watchdog in `emu.sv` (armed by `frame_pop`) — audio muted (O5) /
+  wedged decoder → backpressure released, reverting to drop-on-full, so the
+  stream can never wedge video. ⚠ **The watchdog must also count a PASSTHROUGH
+  A/V-sync hold as "consumer alive"** (`iec61937_wrap.hold_active_o` re-arms it,
+  2026-08-31): a hold produces no `frame_pop`, and reading it as a wedge left
+  backpressure disengaged at every title start — the ring dropped ~25 frames/s
+  for ~46 s and the dropped spans' PTS holes were the measured IEC 61937
+  receiver lock flap (`docs/iec61937.md` "FLAP ROOT CAUSE"). The 48 kHz audio
+  NCO stays untouched (same
+  crystal as the raster + exact governor cadence ⇒ no drift to correct).
+- **Two coupled FIFOs:** a byte ring (`BYTE_DEPTH`, default 8192) + a
+  frame-descriptor ring (`FRAME_DEPTH`, default 64) of `{length[15:0], type[1:0]}`,
+  one per *completed* frame. HPS pops a descriptor, then reads `frame_len` bytes.
+  Both depths must be powers of two (pointers wrap naturally).
+- **Committed vs in-progress:** `avail` = readable committed bytes, `fill` = all
+  physical bytes. In-progress (or dropped) frame bytes sit ahead of the readable
+  region and can never leak to the HPS.
+- **LENGTH-DEFERRED FINALIZE (known limitation):** a frame's length is only known
+  at the *next* `aud_frame_start`, so frame N commits when frame N+1 starts. The
+  trailing frame isn't finalized until another starts — fine for continuous
+  playback; a future flush/timeout input can finalize a lone last frame.
+- **`aud_pts` not stored yet** (A/V sync is a later phase) — `ps_demux` PTS
+  outputs stay parked.
+
+### ⚠️ Debug-overlay gotcha: `watchdog_rst` is ACTIVE-LOW
+
+When reading the **flag row (row 4)**, the watchdog cell (`[5]`) is special: the decoder's
+`watchdog_rst` (`rtl/mpeg2/watchdog.v`) is **active-LOW** — it sits HIGH in normal operation
+and only pulses LOW for one cycle if the watchdog actually expires. So a raw "green = signal
+high" reading is BACKWARDS: green-on-the-raw-signal = NORMAL, not "firing." (This has bitten
+multiple sessions.) The overlay now feeds cell `[5]` the **inverted/expiry** sense (`~watchdog_rst`
+captured sticky-per-frame), so **green on the watchdog cell = the watchdog FIRED this frame
+(BAD), red = healthy.** If you ever see watchdog code/overlay, double-check the polarity before
+concluding "the decoder is hanging." The same caution applies to any active-low signal shown as
+a flag.
+
+---
+

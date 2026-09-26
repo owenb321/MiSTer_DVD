@@ -28,6 +28,15 @@ does:
 grep -on "](#[a-z0-9-]*)" README.md   # every anchor must match a heading that still exists
 ```
 
+Then check the context budget. `CLAUDE.md` is loaded into every session:
+
+```bash
+wc -c CLAUDE.md                 # over ~60 KB = a feature write-up landed in the wrong file
+```
+
+If it is over budget, move the offending write-up to the top of `docs/status_log.md` and
+leave one row in `CLAUDE.md`'s "Feature status index".
+
 ## 2. Signal pass
 
 ```bash
@@ -46,6 +55,7 @@ Map what changed to what must be reviewed:
 | `main/`, `build_release.sh`, `tools/package_release.sh` | `about/building.md`, `getting-started/install.md` |
 | Video output paths (`re_interlace`, `syncgen`, modeline) | `video/analog-crt.md`, `video/interlaced.md`, `video/film-24p.md` |
 | `README.md` changed but `site/content/` did not, or the reverse | **drift flag** — check the two still agree |
+| A feature landed or changed status | its row in `CLAUDE.md`'s status index + its `docs/status_log.md` entry |
 | `docs/*.md` changed | harvest check: did user-facing material land in an engineering note instead of the manual? |
 
 ## 3. Semantic pass
