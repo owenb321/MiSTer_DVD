@@ -2,8 +2,8 @@
 
 **Status:** Branches A (AC-3), B (nav/VM/glue) and C (reader) ✅ merged and
 HW-confirmed 2026-09-11. Branch D (`feature/reader-slim`, the reader again, plus the
-retirement of the numeric debug overlay) is bit-identical in simulation and passed a
-harness HW smoke round on 2026-09-26, §8. The block-RAM packing pass (§6) is still planned.
+retirement of the numeric debug overlay) is bit-identical in simulation and
+✅ HW-confirmed by the maintainer on 2026-09-26, §8. The block-RAM packing pass (§6) is still planned.
 
 ## 0. Why
 
@@ -186,7 +186,7 @@ on the HW gate.
 and `MISTER_DOWNSCALE_NN` — declined (scaler filters vanish from the OSD; NN downscale
 would alias a 720×576 source on 640×480 / 480-line-PAL outputs, the CRT users).
 
-## 8. Branch D — `feature/reader-slim` (bit-identical in sim; ✅ HW smoke pass 2026-09-26)
+## 8. Branch D — `feature/reader-slim` (bit-identical in sim; ✅ HW-CONFIRMED 2026-09-26)
 
 **Why again.** Between Branch C and 2026-09-25 the reader grew from 6,421 to **7,869
 ALUTs** (seamless-branch seek, four angle fixes, the duration scan, WAV/CD-DA, the title
@@ -242,8 +242,15 @@ real identity. A mid-branch fit of step 6
 (`DVD_readerslim_20260926_0329.rbf`, SEED 9 first roll) read 93.07 / 90.69 MHz and 41,039
 ALMs.
 
-**HW smoke pass (2026-09-26, the harness, final build + the current Main; the maintainer's own
-look on a real display is still the last gate):**
+**✅ HW-CONFIRMED by the maintainer (2026-09-26)** on the final build, running the targeted list:
+a physical disc with menus on, the menu-heavy discs (T2 Mission Profiles, Scooby-Doo 2's maze
+and whac-a-mole, Harry Potter / Scene It in-title menus), a language-page menu and back,
+Chapter Menu and a scene jump, gamepad hold-to-scrub, seeks inside T2's branches, a seek
+pre-empting a seek, Auto mode on stub and TV discs, timed stills, and the `O[2]` blocks, all
+good. One pre-existing defect surfaced on X-Men Apocalypse (the chapter total, see the Auto
+Auto-mode note in `docs/dvd_nav.md`); it is identical on v0.7.0 and is not from this branch.
+
+**Harness smoke pass (2026-09-26, final build + the current Main), run before it:**
 - `nav_diff` on Men in Black, `--script "1 2"`: no differences from libdvdnav (boot parks at
   PGC 5, both buttons land in PGC 9).
 - Men in Black with Disc Menus Off: Auto picks the feature (1:37:52, PGCN 1 of VTS 21);
