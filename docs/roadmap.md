@@ -443,7 +443,9 @@ If you want more control or can't build libdvdread for MiSTer's ARM:
       live, the SAVED config still said Off). Fixed in the reader: an unusable PGC
       tries the next one, and Auto plays the LONGEST PGC rather than PGCN 1 — which is
       a 0-44 s stub on 60 of 1231 library discs. Detail: `docs/dvd_nav.md`,
-      `docs/physical_disc.md`.
+      `docs/physical_disc.md`. Follow-up, issue #132 (2026-09-26, ✅ HW via the HIL harness): the
+      chapter table now follows that PGC's own title instead of title 1's (X-Men
+      Apocalypse read `CH n/1`). Gate `bench/dvd/run_auto_ptt.sh`.
 
 **Checkpoint:** Drop an ISO of any commercial DVD onto the SD card. Core automatically
 finds the main feature, navigates to it, and plays from start.

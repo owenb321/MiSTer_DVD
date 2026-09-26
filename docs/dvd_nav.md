@@ -97,25 +97,66 @@ adds the file.
   longest PGC. That was a deliberate choice (maintainer, 2026-09-19), not an oversight.
   ⛔ The VTS pick stays **largest-by-bytes**: MEASURED, it disagrees with longest-title on
   **2 of 1231** discs, and a duration-based pick costs an IFO read per title set at mount.
-  Gate: `iso_reader_pgc_tb` TEST 5. Sweep: `auto_pgc_sweep.py` shape in the issue thread.
-  ⏳ **OPEN, issue #132 (found 2026-09-26, pre-existing since this rule landed): Auto loads TITLE 1's
-  chapter table, not the table of the PGC it plays.** Field report on X-Men Apocalypse, Disc
-  Menus Off, v0.7.0 and `dev-readerslim` alike: chapter skips work, but the HUD total reads
-  1 and the seek bar has no chapter notches. The cause is ordering: at mount the PTT load
-  (`S_PTTLD_*`) runs BEFORE the PGC parse, with `cur_ttn = want_ttn ? want_ttn : 1`, and
-  Auto has no `want_ttn`, so it loads VTS title 1's table. The duration scan then picks
-  PGCN 2, which is title 2 (29 chapters; its SRP `entry_id` is `0x82`). `hud_nr_ch` and
-  `seek_bar`'s `.nr_pgm` both come from `nr_ptt` = 1. Skips still work because PGCN 2 is not
-  in title 1's table, so the chapter FSM falls back to PGCN 2's own program map.
-  With Disc Menus ON the disc says `JumpTT 35` (= VTS 7 title 2), so that path is right.
-  MEASURED over 1,462 library ISOs (a model of the Auto pick run over each IFO): **194 discs play
-  a PGC that is not title 1's**. On 166 of them the PGC is another title's entry PGC; the
-  chapter total shown is wrong on **97** (26 show exactly 1), and happens to match on 69.
-  On 28 the chosen PGC is no title's entry PGC.
-  Fix direction (not built): after `dur_scan` picks PGCN k, take the title from k's own
-  SRP `entry_id` (bit 7 set ⇒ `vts_ttn = entry_id & 0x7F`) and reload the PTT table for it
-  when it differs from 1; when k starts no title, search the PTT table for k (libdvdnav's
-  title/part lookup) or publish `nr_ptt = 0` so the HUD and notches use k's program count.
+  Gate: `iso_reader_pgc_tb` TEST 5. Sweep: `auto_pgc_sweep.py` shape in the issue thread;
+  `tools/auto_pick_model.py` is the committed model of the pick.
+  ✅ **FIXED, issue #132 (2026-09-26, ✅ MERGED (PR #134); HW-confirmed on the
+  rig by the HIL harness: `CH 1/29` with notches, was `CH 1/1`): Auto now reloads the
+  chapter table of the PGC it plays.** Field report on X-Men
+  Apocalypse, Disc Menus Off, v0.7.0 and `dev-readerslim` alike: chapter skips worked, but the
+  HUD total read 1 and the seek bar had no chapter notches. The cause was ordering: at mount
+  the PTT load (`S_PTTLD_*`) runs BEFORE the PGC parse, with `cur_ttn = want_ttn ? want_ttn :
+  1`, and Auto has no `want_ttn`, so it loaded VTS title 1's table. The duration scan then
+  picks PGCN 2, which is title 2 (29 chapters; its SRP `entry_id` is `0x82`). `hud_nr_ch` and
+  `seek_bar`'s `.nr_pgm` both come from `nr_ptt`, which was 1. Skips still worked because
+  PGCN 2 is not in title 1's table, so the chapter FSM fell back to PGCN 2's own program map.
+  With Disc Menus ON the disc says `JumpTT 35` (= VTS 7 title 2), so that path was right.
+  **The fix** (all on the Auto path; every VM path names its title):
+  1. The scan's "done" branch sets `dur_pick`. At the re-take of the winner (`S_SRP_EVAL`,
+     where rbuf holds its SRP), if the winner is not PGCN 1 or its title differs from
+     `cur_ttn`, the reader sets `ptt_reld`, reads VTSI@200 and re-runs `S_PTTLD_*` for
+     `reld_ttn`. `S_PTTLD_DONE` then goes straight back to `S_SRP_FETCH`, where `srp_i` still
+     holds the winner. Returning through `@204 → S_PGCIT_HDR` would re-arm the scan when
+     the winner is PGCN 1. `want_ttn` is deliberately not reused, because a nonzero value
+     routes through `S_PTT_MAT`/`S_PTT_PGC`, which rewrite `want_pgcn`.
+  2. ★ **The title is `entry_id[6:0]` whether or not bit 7 is set.** The SRP's PGC category
+     is bit 7 = entry PGC and bits 6..0 = the VTS_TTN the PGC belongs to, and the title
+     number is carried by every title PGC, not only by entry PGCs. MEASURED (`tools/auto_pick_model.py`
+     over 1,482 images): on all 7 winners with no entry flag that another title's table
+     names, the low bits named exactly that title, and on the 20 inside title 1's
+     multi-PGC table they were 1. 0 → keep title 1. ⚠ Do not "fix" this to require bit 7:
+     `scan_title` needs bit 7 because it looks for a title's *entry*, which is a
+     different question.
+  3. **Membership check instead of libdvdnav's title/part lookup.** `P_PTT` compares each
+     entry's pgcn with `want_pgcn` (`ptt_hit`). If the reloaded table does not name the
+     winner, `nr_ptt = 0`, so the HUD total and the notches use the PGC's own
+     `nr_of_programs` and `CH_G` (gated on `nr_ptt != 0`) never reads the stale `ptt_mem`.
+     This costs one comparator, where the lookup would walk every title's table.
+     The check also covers the case where the disc's `entry_id` is simply wrong
+     (a disc field is a claim).
+     Any winner other than PGCN 1 reloads even when the title is unchanged, so the check
+     also covers the 20 title-1 multi-PGC discs and the 5 games whose winner no table names.
+  4. ⚠ **The duration-scan arm is now gated on `!ptt_res_tt`.** This was latent before the
+     fix and became reachable on more discs with it. An Auto cross-PGC chapter jump
+     (`CH_J`: `jttn_l <= cur_ttn`, `jptt_l`) resolves through `S_PTT_PGC`. When the target
+     chapter lives in PGCN 1, `want_pgcn == 1` met the arm's condition, the scan ran again,
+     and the skip landed back on the longest PGC. `ptt_res_tt` is 0 on an Auto mount and
+     1 on any title jump.
+  5. **The unusable-winner fallthrough reloads too.** When the scan's winner has no cell
+     table (the OZ decoy: cells declared, `cell_playback_offset == 0`), Auto takes the next
+     PGC, and that re-take sets `dur_pick` again on an Auto mount (`!ptt_res_tt`). OZ
+     itself shows no visible change: its winner falls through to PGCN 2 = title 2, and
+     every title of VTS_08 has 53 chapters. The malformed-SRP branch clears `dur_pick`, so
+     the one-shot cannot go stale.
+  MEASURED over the library (1,482 images; 11 unreadable or without a title PGCIT). The
+  winner is title 1's entry PGC on 1,271 (unchanged). It is another title's entry PGC on
+  168: the old total was wrong on **99** of those, including X-Men Apocalypse, and happened
+  to match on 69. On 32 the winner has no entry flag: 20 are inside title 1's table
+  (unchanged), 7 are in another title's table (now that title's count), and 5 are games
+  whose winner no table names (now its program count). The planning model counted 1,462
+  images, which is why the issue's numbers are a few lower.
+  Gate: `bench/dvd/run_auto_ptt.sh [--red]`, which runs `iso_reader_autoptt_tb` arms A–F and
+  `iso_reader_pgc_tb` TEST 5 (the issue's disc shape), with six mutations that each fail
+  exactly their arms.
 - **An unusable PGC tries the NEXT one before the linear fallback (same change).** A title
   PGC with no cells, or with `cell_playback_offset == 0`, used to send Auto to `S_FINAL2`,
   which streams the WHOLE VTS from RBN 0 — including sectors no cell references, which is
@@ -1881,7 +1922,10 @@ approximation toward the exact DVD `VTS_PTT_SRPT` model. Golden model: `tools/pt
 2. **Resident `ptt_mem` + `nr_ptt`** — the current title's full chapter table is loaded at
    mount (P_PTT walker), and the **HUD `CH n/N` total is now the exact `nr_of_ptts`** (equal
    to `nr_of_programs` on every single-PGC movie title, so no visible movie change; correct
-   on multi-PGC titles, clamped through the 99/100 HUD/notch limits).
+   on multi-PGC titles, clamped through the 99/100 HUD/notch limits). ⚠ With Disc Menus
+   Off, "the current title" was title 1 until issue #132. The mount-time load still is,
+   and the table is then reloaded for the title of the PGC the duration scan picks
+   (see "Auto plays the LONGEST PGC" above).
 
 **Deferred (ptt_mem foundation is in place; documented decision, 2026-07-25):** the
 **user B2/B3 chapter-skip crossing PGC boundaries** and the **PTT-based current-chapter `n`**

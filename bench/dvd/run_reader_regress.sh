@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run_reader_regress.sh -- bit-identity gate for refactors of dvd/dvd_iso_reader.sv.
 #
-# Runs every bench that instantiates the reader (41 benches, 50 arms), with
+# Runs every bench that instantiates the reader (42 benches, 51 arms), with
 # bench/dvd/reader_trace.sv compiled beside each one, and keeps three things per
 # arm: the run log, the vvp exit code, and a trace of every change on the
 # reader's kept output ports. Run it once on `main` to make a baseline, then on
@@ -70,6 +70,7 @@ iso_reader_atmos|iso_reader_atmos_tb|dut|||
 iso_reader_attr|iso_reader_attr_tb|dut|||
 iso_reader_auddrain|iso_reader_auddrain_tb|dut|||
 iso_reader_auddrain_noaudio|iso_reader_auddrain_tb|dut|-Piso_reader_auddrain_tb.NO_AUDIO_TERM=1||
+iso_reader_autoptt|iso_reader_autoptt_tb|dut|||
 iso_reader_branch_1|iso_reader_branch_tb|dut|-Piso_reader_branch_tb.ARM=1||
 iso_reader_branch_2|iso_reader_branch_tb|dut|-Piso_reader_branch_tb.ARM=2||
 iso_reader_branch_3|iso_reader_branch_tb|dut|-Piso_reader_branch_tb.ARM=3||

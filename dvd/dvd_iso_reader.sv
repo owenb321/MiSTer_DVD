@@ -16,8 +16,9 @@
 //      MAIN-FEATURE SELECTION (Auto, Disc Menus Off): the VTS whose title VOBs
 //      _1.._N are the largest in total (S_WALK_VTS / S_FINALIZE), then, inside
 //      it, the PGC with the longest playback_time (the dur_scan pass through
-//      S_PGC_HDR, bounded by DUR_SCAN_MAX). The OSD Debug "Title VTS" picker
-//      overrides the VTS (title_sel -> S_SELECT). With Disc Menus On nothing is
+//      S_PGC_HDR, bounded by DUR_SCAN_MAX), whose title's chapter table
+//      (VTS_PTT_SRPT) is then reloaded (issue #132). The OSD Debug "Title VTS"
+//      picker overrides the VTS (title_sel -> S_SELECT). With Disc Menus On nothing is
 //      picked here: the DVD-VM boots the First Play PGC and every later title is
 //      a VM jump, whose JumpTT is resolved through the VMGI TT_SRPT (S_TT_RES).
 //      (A TT_SRPT "title 1" pick at mount was retired because title 1 is a logo
@@ -1118,6 +1119,15 @@ localparam DUR_SCAN_MAX = 16'd128;    // PGCs scanned; a feature is never past t
 reg        dur_scan;                  // 1 = S_PGC_HDR is duration-scanning
 reg [15:0] dur_best_secs;             // best playback_time seen, in seconds
 reg [15:0] dur_best_pgcn;             // ...and which PGCN had it
+// Auto chapter-table reload (issue #132). The mount loads title 1's VTS_PTT_SRPT
+// BEFORE the duration scan picks a PGC, so once the scan has picked one the
+// reader reloads the table of the title that PGC belongs to (S_SRP_EVAL), and
+// checks the PGC is in it (P_PTT); not in it -> nr_ptt = 0, and the HUD falls
+// back to the PGC's own program count.
+reg        dur_pick;                  // 1 = the next S_SRP_EVAL re-takes dur_scan's winner
+reg        ptt_reld;                  // 1 = this PTT load is that reload
+reg        ptt_hit;                   // the reload's table names want_pgcn
+reg [6:0]  reld_ttn;                  // title the reload loads (the winner's entry_id[6:0])
 reg [15:0] srp_i;                     // SRP cursor (PGCITs can exceed 255 entries)
 reg        sel_ret;                   // S_SELECT return: 0=title (S_PGC_BEGIN), 1=VTSM menu
 reg [31:0] jmp_ifo_lba;               // VTSI LBA of a VTSM jump target
@@ -2451,6 +2461,10 @@ always @(posedge clk or negedge rst_n) begin
         want_ttn     <= 7'd0;
         scan_mode    <= 1'b0;
         dur_scan     <= 1'b0;
+        dur_pick     <= 1'b0;
+        ptt_reld     <= 1'b0;
+        ptt_hit      <= 1'b0;
+        reld_ttn     <= 7'd0;
         scan_title   <= 1'b0;
         sel_ret      <= 1'b0;
         nav_ready    <= 1'b0;
@@ -2905,6 +2919,8 @@ always @(posedge clk or negedge rst_n) begin
             want_ttn        <= 7'd0;
             scan_mode       <= 1'b0;
             dur_scan        <= 1'b0;
+            dur_pick        <= 1'b0;
+            ptt_reld        <= 1'b0;
             scan_title      <= 1'b0;
             sel_ret         <= 1'b0;
             nav_ready       <= 1'b0;
@@ -2945,6 +2961,8 @@ always @(posedge clk or negedge rst_n) begin
             follow_cnt   <= 2'd0;
             scan_mode    <= 1'b0;
             dur_scan     <= 1'b0;
+            dur_pick     <= 1'b0;
+            ptt_reld     <= 1'b0;
             scan_title   <= 1'b0;
             want_ttn     <= (jdom_l == DOM_TT) ? jttn_l : 7'd0;
             dom          <= jdom_l;
@@ -3796,9 +3814,12 @@ always @(posedge clk or negedge rst_n) begin
             // title's TTU span, then streams {pgcn,pgn} per chapter into ptt_mem
             // (P_PTT walker). Always exits via S_PTTLD_DONE, which restores the
             // resume field the PGC parse needs. cur_ttn = the loaded title's
-            // vts_ttn (want_ttn on a jump, else 1 = the Auto main title).
+            // vts_ttn: want_ttn on a jump; on an Auto mount 1 first, then, on
+            // the reload after the duration scan (ptt_reld), the title of the
+            // PGC the scan picked (reld_ttn, see S_SRP_EVAL).
             S_PTTLD_MAT: begin
-                cur_ttn    <= (want_ttn != 7'd0) ? want_ttn : 7'd1;
+                cur_ttn    <= ptt_reld ? reld_ttn :
+                              (want_ttn != 7'd0) ? want_ttn : 7'd1;
                 nr_ptt     <= 11'd0;
                 ptt_res_tt <= (want_ttn != 7'd0);
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
@@ -3861,7 +3882,19 @@ always @(posedge clk or negedge rst_n) begin
             // path re-reads VTSI@200 (S_PTT_MAT needs vts_ptt_srpt), Auto re-reads
             // VTSI@204 (S_PGC_MAT needs vts_pgcit). vts_pgcit_ptr is a live tap of
             // the shadow, so the resume state reads the right value next.
-            S_PTTLD_DONE: begin
+            // The Auto reload (ptt_reld) instead returns straight to the re-take
+            // of the duration scan's winner: srp_i still holds winner-1, and the
+            // PTT load touches none of pit_sec / pit_off / nr_srp_l / want_pgcn.
+            // Going back through @204 -> S_PGCIT_HDR would re-arm the scan when
+            // the winner is PGCN 1. A table that does not name the winner is not
+            // its chapter table: nr_ptt = 0 publishes "no table", so the HUD
+            // total and the seek-bar notches use the PGC's own nr_of_programs
+            // and CH_G (gated on nr_ptt != 0) never reads the stale ptt_mem.
+            S_PTTLD_DONE: if (ptt_reld) begin
+                ptt_reld <= 1'b0;
+                if (!ptt_hit) nr_ptt <= 11'd0;
+                state    <= S_SRP_FETCH;
+            end else begin
                 sec_base <= eff_ifo_lba;
                 sec_off  <= 32'd0;
                 fetch_base <= ptt_res_tt ? 11'd200 : 11'd204;
@@ -3916,12 +3949,20 @@ always @(posedge clk or negedge rst_n) begin
                         // this core's own heuristic, not a spec path.
                         // Costs one extra header read per PGC at mount, bounded by
                         // DUR_SCAN_MAX. Menu domains and every vm_mode path are
-                        // untouched (they name the PGC they want).
+                        // untouched (they name the PGC they want). The chapter
+                        // table loaded before this scan is title 1's; S_SRP_EVAL
+                        // reloads the winner's own (dur_pick, issue #132).
                         // ⚠ The VTS pick is NOT duration-based and deliberately so:
                         // MEASURED, largest-by-bytes disagrees with longest-title on
                         // 2 of 1231 discs, and scanning every VTS would cost an IFO
                         // read per title set on a drive where reads are ~30 ms.
-                        if (!vm_mode && dom == DOM_TT && !menu_dom &&
+                        // ⚠ !ptt_res_tt: ONLY an Auto mount scans. A title jump sets
+                        // ptt_res_tt (S_PTTLD_MAT) -- including the reader's own
+                        // cross-PGC chapter jump, which runs with Disc Menus off too.
+                        // Without it, a chapter that lives in PGCN 1 resolved to
+                        // want_pgcn == 1, re-ran the scan, and the skip landed back on
+                        // the longest PGC (iso_reader_autoptt_tb arm E, issue #132).
+                        if (!vm_mode && dom == DOM_TT && !menu_dom && !ptt_res_tt &&
                             want_pgcn == 16'd1 && nr_pgci_srp > 16'd1) begin
                             dur_scan      <= 1'b1;
                             dur_best_secs <= 16'd0;
@@ -3975,12 +4016,41 @@ always @(posedge clk or negedge rst_n) begin
                     end
                 end else if (srp_pgc_start[31:21] != 11'd0) begin
                     // pgc_start_byte beyond 2 MB = malformed PGCIT
+                    dur_pick <= 1'b0;                  // no stale one-shot past this parse
                     if (dom != DOM_TT) begin
                         pgc_error <= 1'b1;
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;
+                end else if (dur_pick && (want_pgcn != 16'd1 ||
+                             (srp_entry_id[6:0] != 7'd0 && srp_entry_id[6:0] != cur_ttn))) begin
+                    // ★ AUTO CHAPTER TABLE (issue #132). The mount loaded title 1's
+                    // VTS_PTT_SRPT before the duration scan ran; the scan's winner is
+                    // often another title's PGC (X-Men: Apocalypse: title 1 = PGCN 1,
+                    // a 1 s stub with one chapter; the feature is PGCN 2 = title 2,
+                    // 29 chapters), so the HUD read "CH n/1" and the seek bar had no
+                    // notches. Reload the table of the title this PGC belongs to,
+                    // then come back here (S_PTTLD_DONE -> S_SRP_FETCH) to take it.
+                    // The title is entry_id[6:0] WHETHER OR NOT bit 7 (entry PGC) is
+                    // set: the SRP's PGC category carries the owning VTS_TTN on every
+                    // title PGC. MEASURED over 1,468 library discs: on all 7 winners
+                    // with no entry flag that some title's table names, the low bits
+                    // named exactly that title (and 1 on the 20 inside title 1's
+                    // multi-PGC table). 0 -> keep title 1. Title-ENTRY scans still
+                    // need bit 7 (scan_title above); that is a different question.
+                    // Any winner other than PGCN 1 reloads even when the title is
+                    // unchanged, so P_PTT's membership check (ptt_hit) covers it too.
+                    dur_pick   <= 1'b0;
+                    ptt_reld   <= 1'b1;
+                    ptt_hit    <= 1'b0;
+                    reld_ttn   <= (srp_entry_id[6:0] != 7'd0) ? srp_entry_id[6:0] : 7'd1;
+                    sec_base   <= eff_ifo_lba;
+                    sec_off    <= 32'd0;
+                    fetch_base <= 11'd200;             // VTSI_MAT.vts_ptt_srpt @200
+                    fetch_ret  <= S_PTTLD_MAT;
+                    state      <= S_SECREAD;
                 end else begin
+                    dur_pick    <= 1'b0;
                     scan_mode   <= 1'b0;
                     scan_title  <= 1'b0;
                     cur_pgcn    <= srp_i + 16'd1;
@@ -4022,6 +4092,7 @@ always @(posedge clk or negedge rst_n) begin
                     // Done: re-take the winner. dur_best_pgcn defaults to 1, so a
                     // PGCIT of cell-less PGCs still lands where it used to.
                     dur_scan  <= 1'b0;
+                    dur_pick  <= 1'b1;             // S_SRP_EVAL: reload its chapter table
                     want_pgcn <= win ? (srp_i + 16'd1) : dur_best_pgcn;
                     srp_i     <= (win ? (srp_i + 16'd1) : dur_best_pgcn) - 16'd1;
                     state     <= S_SRP_FETCH;
@@ -4318,6 +4389,9 @@ always @(posedge clk or negedge rst_n) begin
                         ptt_we    <= 1'b1;
                         ptt_waddr <= walk_idx[11:2];                   // entry index
                         ptt_wdata <= {ptt_pgcn_c, pb_rdata};
+                        // Auto reload: does this title's table name the PGC being
+                        // played? (read in S_PTTLD_DONE; meaningless otherwise)
+                        if (ptt_pgcn_c == want_pgcn) ptt_hit <= 1'b1;
                     end
                     if (walk_left == 13'd1) state <= S_PTTLD_DONE;
                 end
@@ -4388,6 +4462,11 @@ always @(posedge clk or negedge rst_n) begin
                         srp_i      <= srp_i + 16'd1;
                         want_pgcn  <= srp_i + 16'd2;
                         scan_mode  <= 1'b0;
+                        // On an Auto mount this PGC stands in for the duration scan's
+                        // winner, so its chapter table must be reloaded too (issue
+                        // #132; iso_reader_autoptt_tb arm F). A chapter jump that
+                        // lands here (ptt_res_tt) already loaded the right title.
+                        dur_pick   <= !ptt_res_tt;
                         state      <= S_SRP_FETCH;
                     end else
                         state <= S_FINAL2;             // title linear fallback (palette kept)

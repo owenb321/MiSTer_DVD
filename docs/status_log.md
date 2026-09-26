@@ -22,6 +22,68 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **AUTO CHAPTER TABLE FOLLOWS THE PGC IT PLAYS (issue #132, 2026-09-26, ✅ MERGED
+  (PR #134), `dev-autoptt`); sim-proven and ✅ HW-CONFIRMED on the rig by
+  the HIL harness** (see HW below for which build).
+  Field report: *X-Men: Apocalypse* with Disc Menus Off showed `CH n/1` and no seek-bar
+  notches, on v0.7.0 and on `dev-readerslim`. Chapter skips worked. **Cause:** the Auto mount
+  loads `VTS_PTT_SRPT` before the PGC parse and always for title 1, and the duration scan
+  (2026-09-19) then plays the longest PGC. Here that is PGCN 2 = title 2 (29 chapters, SRP
+  `entry_id 0x82`), while title 1 is a 1 s, one-chapter stub. **Fix** (`dvd/dvd_iso_reader.sv`,
+  Auto path only):
+  - After the scan, `S_SRP_EVAL` reloads the table of the title named by the winner's
+    `entry_id[6:0]`.
+  - `P_PTT` checks that the winner is in that table; a miss sets `nr_ptt = 0`, so the HUD
+    uses the PGC's program count.
+  - `S_PTTLD_DONE` returns straight to the re-take.
+  - The unusable-winner fallthrough (the OZ decoy shape) re-arms the reload for the next
+    PGC. Found in review after the first HW run; arm F reproduces it on `main`. OZ itself
+    shows no visible change, because all its titles have 53 chapters.
+  - The scan's arm is now gated on `!ptt_res_tt`. Without that, an Auto cross-PGC chapter
+    jump into PGCN 1 re-ran the scan and landed back on the feature. This was latent before
+    the fix and is now reachable on more discs; `iso_reader_autoptt_tb` arm E reproduced it
+    on `main`.
+  **Library (`tools/auto_pick_model.py`, 1,482 images):**
+  - 1,271 unchanged.
+  - 168 play another title's entry PGC; the old total was wrong on **99**.
+  - 7 non-entry winners now take their own title's count.
+  - 5 games whose winner no table names now show the PGC's program count.
+  - 20 title-1 multi-PGC discs are unchanged.
+  **Deviation from the issue's suggestion**, and why:
+  - The title is taken from `entry_id[6:0]` even when bit 7 is clear. PGC_CAT carries the
+    owning VTS_TTN on every title PGC, and the sweep agrees on every such disc.
+  - A membership comparator replaces libdvdnav's title/part lookup, which would walk every
+    title's table.
+  Details: `docs/dvd_nav.md` ("Auto plays the LONGEST PGC").
+  **Gate:** `bench/dvd/run_auto_ptt.sh --red`. That is `iso_reader_autoptt_tb` A–F plus
+  `iso_reader_pgc_tb` TEST 5 (now also asserts `nr_ptt`/`cur_ttn`) and `iso_reader_ptt_tb`,
+  with 6 mutations that each fail exactly their arms. The new bench joins
+  `run_reader_regress.sh` (42 benches, 51 arms). Against a `main` baseline with the branch's
+  benches copied in, only `iso_reader_autoptt` and `iso_reader_pgc` (TEST 5) move; every
+  other arm is bit-identical. ⚠ A fresh `main` worktree lacks the git-ignored
+  `bench/dvd/test_vobs/mib_vts21_vtsi_mat.hex`, so copy it in first, or
+  `iso_reader_attr` shows a false diff.
+  **Fit:** `ptt_mem` is still an inferred altsyncram. Registers are +107 over Branch D's
+  build. ⚠ The ".fit.summary" ALM line dropped from 97 % to 94 %, but that line is
+  Quartus' "ALMs needed" estimate: this build *places* 41,051 ALMs (98 %). It is packing,
+  not a smaller design.
+  **HW (harness, X-Men Apocalypse, Disc Menus Off), on `DVD_autoptt_20260926_1526`, the
+  build before the fallthrough fix:**
+  - Control arm, `DVD_readerslim_20260926_0404`: `CH 1/1`, a seek bar with no notches, and
+    `CH 2/1` after next-chapter (at 0:08:21).
+  - Fix: `CH 1/29`, the seek bar shows notches, and next/next/prev give `CH 2/29` (0:08:21),
+    `3/29` (0:14:15), then `2/29`.
+  - Disc Menus On → PLAY: `CH 1/29` → `2/29` at 0:08:21, unchanged.
+  **HW on the final build, `DVD_autoptt_20260926_1603` (commit 73db472, SEED 9, clk_dec
+  89.88/88.92, 40,981 ALMs placed):**
+  - X-Men Apocalypse, Disc Menus Off: `CH 1/29`, and next-chapter gives `2/29` at 0:08:21.
+  - The `!ptt_res_tt` scan gate, on *Girl Next Door* disc 2 with Disc Menus Off. This is
+    the "no entry flag, in title 1" shape: Auto plays PGCN 2 = chapter 2 of 9, and
+    chapter 1 lives in PGCN 1.
+    - Control (`readerslim_0404`): prev-chapter never leaves chapter 2, even when pressed
+      at its start. The HUD sits at `CH 2/9` with a total of 0:09:59, because every
+      chapter-1 jump re-ran the scan back to PGCN 2.
+    - Fix: `CH 1/9`, and the total becomes 0:07:56, PGCN 1's own length.
 - ✅ **READER SLIMMING (BRANCH D) + THE NUMERIC DEBUG OVERLAY RETIRED (2026-09-26, branch
   `feature/reader-slim`); bit-identical in simulation, a harness HW smoke pass, and
   ✅ HW-CONFIRMED 2026-09-26 by the maintainer on the final build** (`DVD_readerslim_20260926_0404.rbf`, SEED 9 first roll, clk_dec 90.03/89.45,
