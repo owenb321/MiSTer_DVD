@@ -1357,8 +1357,16 @@ reg        pb_skip;                   // next S_SECREAD completion skips the rbu
 // 106% fit).
 reg [31:0] play_blk;                  // current concatenated 2048-sector position
 reg [31:0] play_end;                  // end (exclusive) sector of the current cell
-reg [31:0] ext_cum;                   // concatenated sector base of strm_idx's extent
-reg [31:0] seek_cum;                  // S_CELL_SEEK cumulative sector base
+// Concatenated sector base of the extent at strm_idx. The extent walks
+// (S_CELL_SEEK, S_NAV_SEEK) zero it and accumulate it; S_STREAM then advances it
+// across extent boundaries. It was two registers (seek_cum for the walks, ext_cum
+// for streaming, copied at the S_CELL_SEEK hit) until feature/reader-slim: their
+// lives never overlap, because every walk starts by zeroing it (or continues one
+// with no S_STREAM in between) and every cell-mode read that uses it follows an
+// S_CELL_SEEK hit.
+reg [31:0] seek_cum;
+// The end (exclusive) of that extent, and "the walk ran past the title's extents".
+wire [31:0] ext_end_w  = seek_cum + ext_blocks_q;
 reg [31:0] seek_target;               // S_CELL_SEEK target concatenated sector
 
 // =========================================================================
@@ -1505,6 +1513,7 @@ reg [31:0] dir_remain;  // bytes remaining in the whole directory
 reg [11:0] p;           // byte offset of the current record within the sector
 
 reg [6:0]  strm_idx;    // current extent (absolute)
+wire       walk_oob_w = (strm_idx >= eff_base + eff_cnt);   // walked past the title's extents
 reg [6:0]  strm_left;   // extents remaining
 reg [31:0] strm_blk;    // 2048-sector offset within the current extent
 reg        strm_done;
@@ -1573,7 +1582,7 @@ wire [31:0] wav_next    = {20'd0, wav_off} + 32'd8 + wav_cksz +
                           {31'd0, wav_cksz[0]};
 
 // ---- S_STREAM request address (area pass 2026-09-10) ---------------------------
-wire [31:0] sd_base_w = cell_mode ? (menu_dom ? menu_base_blk : (ext_start_q - ext_cum))
+wire [31:0] sd_base_w = cell_mode ? (menu_dom ? menu_base_blk : (ext_start_q - seek_cum))
                                   : ext_start_q;
 wire [31:0] sd_off_w  = cell_mode ? play_blk : strm_blk;
 
@@ -4760,7 +4769,7 @@ always @(posedge clk or negedge rst_n) begin
 
             S_NAV_SEEK2: state <= S_NAV_SEEK;   // ext_*_q refresh for strm_idx
             S_NAV_SEEK: begin
-                if (strm_idx >= eff_base + eff_cnt ||
+                if (walk_oob_w ||
                     nav_cand > title_last_rbn   ||
                     (nav_mode != NAVM_PLAIN && nav_cand > cl_rd) ||
                     nav_left == 11'd0) begin
@@ -4785,14 +4794,14 @@ always @(posedge clk or negedge rst_n) begin
                         state         <= S_CELL_LOAD;
                     end else
                         state <= S_RBN_SCAN2;             // fallback: raw seek_rbn_l
-                end else if (seek_cum + ext_blocks_q > nav_cand) begin
+                end else if (ext_end_w > nav_cand) begin
                     // candidate lies in extent strm_idx -> probe its sector
                     sec_lba    <= ext_start_q + nav_cand - seek_cum;
                     fetch_base <= 11'd0;
                     fetch_ret  <= S_NAV_CHK;
                     state      <= S_SECREAD;
                 end else begin
-                    seek_cum <= seek_cum + ext_blocks_q;  // advance to the next extent
+                    seek_cum <= ext_end_w;              // advance to the next extent
                     strm_idx <= strm_idx + 7'd1;
                     state    <= S_NAV_SEEK2;
                 end
@@ -4889,7 +4898,7 @@ always @(posedge clk or negedge rst_n) begin
             // latency after each strm_idx step.
             S_CELL_SEEK2: state <= S_CELL_SEEK;
             S_CELL_SEEK: begin
-                if (cf_rd > cl_rd || strm_idx >= eff_base + eff_cnt) begin
+                if (cf_rd > cl_rd || walk_oob_w) begin
                     // malformed / out-of-range cell -> skip to the next cell
                     if (cell_i + 8'd1 >= cell_count) begin
                         strm_done <= 1'b1;
@@ -4899,12 +4908,11 @@ always @(posedge clk or negedge rst_n) begin
                         cell_raddr <= cell_i + 8'd1;
                         state      <= S_CELL_LOAD;
                     end
-                end else if (seek_cum + ext_blocks_q > seek_target) begin
-                    ext_cum  <= seek_cum;
+                end else if (ext_end_w > seek_target) begin
                     play_blk <= seek_target;
                     state    <= S_STREAM;       // strm_idx settled -> ext_*_q valid
                 end else begin
-                    seek_cum <= seek_cum + ext_blocks_q;
+                    seek_cum <= ext_end_w;
                     strm_idx <= strm_idx + 7'd1;
                     state    <= S_CELL_SEEK2;   // reload ext_blocks_q for the next index
                 end
@@ -4922,8 +4930,8 @@ always @(posedge clk or negedge rst_n) begin
                     // here. Menu domain bypasses the extent table (single VOB).
                     // One adder: base + offset, where the menu-domain base is
                     // menu_base_blk, the title-domain base is the extent's
-                    // start rebased by ext_cum (modulo 2^32 the same as the
-                    // old ext_start_q + (play_blk - ext_cum)), and the linear
+                    // start rebased by seek_cum (modulo 2^32 the same as the
+                    // old ext_start_q + (play_blk - seek_cum)), and the linear
                     // base is the extent start -- area pass 2026-09-10 (this
                     // was three adders, a subtract and a 3-way 32-bit mux).
                     sd_lba       <= sd_base_w + sd_off_w;
@@ -5152,8 +5160,8 @@ always @(posedge clk or negedge rst_n) begin
                                 // cross an extent boundary within the group
                                 // (title only - the menu VOB is one extent)
                                 if (!menu_dom &&
-                                    play_blk + 32'd1 == ext_cum + ext_blocks_q) begin
-                                    ext_cum  <= ext_cum + ext_blocks_q;
+                                    play_blk + 32'd1 == ext_end_w) begin
+                                    seek_cum <= ext_end_w;
                                     strm_idx <= strm_idx + 7'd1;
                                     state    <= S_EXT_LOAD;   // refresh ext_*_q for new extent
                                 end
