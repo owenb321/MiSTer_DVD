@@ -119,9 +119,9 @@ stream (`e0_count` stayed 0 — not corruption, just no PES headers).
 `bench/dvd/ps_demux_es_tb.sv`. The debug overlay stays in the tree behind the
 `O2,Debug Overlay` toggle (default off).
 
-**Diagnostic instrument worth keeping:** `dvd/debug_overlay.sv` renders pipeline counters as
-on-screen block-bit rows — no UART cable needed. Toggle it on to inspect the feed/decode
-path on hardware.
+**Diagnostic instrument (since retired):** `dvd/debug_overlay.sv` rendered pipeline counters
+as on-screen block-bit rows. It was deleted on `feature/reader-slim` (2026-09); the telemetry
+bridge (`dvd_telem`, `tools/mister.py telem`) is the on-hardware instrument now.
 
 **Note:** the ES fix got video *bytes* to the decoder, but **playback still does not work** —
 it exposed a deeper blocker (next section). Toggle the overlay on and you can see the demux
@@ -1051,9 +1051,9 @@ Levers, cheapest/lowest-risk first:
 - [x] **Release-vs-debug split — DONE (PR fj#71).** `dvd/debug_overlay.sv` sits in the hotspot;
   it is now gated behind `` `ifdef DEBUG_OVERLAY `` in `dvd/emu.sv` (default OFF). The shipped
   subpicture release build compiles it out, which was **required** to route/close the fit once
-  the subpicture renderer landed in the same corner (playback wedged with it in). Define
-  `DEBUG_OVERLAY` (VERILOG_MACRO in DVD.qsf) to bring the O2 overlay back for diagnostics — that
-  re-tightens the fit and may need a seed re-sweep. Note the overlay was only ~300 ALMs, but the
+  the subpicture renderer landed in the same corner (playback wedged with it in). (The
+  overlay was later retired outright on `feature/reader-slim`, 2026-09, in favour of
+  `dvd_telem`; see docs/logic_reclaim.md §8.) Note the overlay was only ~300 ALMs, but the
   fit relief + the combinational-blend footprint cut together took it off the edge.
 - [x] **Fitter seed / effort as a stop-gap (not a fix).** ~~The design is a routing
   "lottery"~~ — **largely RESOLVED 2026-08-01 by the SDC clock-groups fix** (docs/history.md
