@@ -236,11 +236,14 @@ It is there for the six state codes, not for area.
 roll**): clk_dec **90.03 MHz @100C / 89.45 MHz @-40C** (gate 86.0; `main` was 90.95 / 89.09),
 **40,654 / 41,910 ALMs needed (97 %)** against `main`'s 41,221 (98 %), reader **4,449 ALMs**
 against 4,895, 94 / 112 DSP (was 95), M10K unchanged (507), registers 52,932 (+23).
-`lint_undriven`, `netlist_canary` and `fmax_check` pass. A mid-branch fit of step 6
+`lint_undriven`, `netlist_canary` and `fmax_check` pass. Both builds were made in a detached
+worktree pinned at their commit, so their `.rbf.json` records `branch: HEAD`; the SHA is the
+real identity. A mid-branch fit of step 6
 (`DVD_readerslim_20260926_0329.rbf`, SEED 9 first roll) read 93.07 / 90.69 MHz and 41,039
 ALMs.
 
-**HW smoke pass (2026-09-26, the harness, final build + the current Main):**
+**HW smoke pass (2026-09-26, the harness, final build + the current Main; the maintainer's own
+look on a real display is still the last gate):**
 - `nav_diff` on Men in Black, `--script "1 2"`: no differences from libdvdnav (boot parks at
   PGC 5, both buttons land in PGC 9).
 - Men in Black with Disc Menus Off: Auto picks the feature (1:37:52, PGCN 1 of VTS 21);

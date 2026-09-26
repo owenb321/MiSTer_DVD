@@ -414,7 +414,7 @@ otherwise; `--red` runs its mutation arms).
 | Native 240p/288p for SIF, 352→720 horizontal fill | ✅ ⏳ PAL 288p, long VCD | `mpeg1.md` §B.3b | `run_p240.sh`, `check_p240_wiring.py` |
 | Line-21 closed captions (`cc_vbi`, pickup-paced) | ✅ | `closed_captions.md` | `cc_extract_tb`, `cc_line21_tb` |
 | mem_shim tag/LRU store in M10K | ✅ | `history.md` §11 | `run_mem_shim.sh` |
-| Logic reclaim (AC-3, nav/VM, reader ×2; debug overlay retired) | ✅ (D: bit-identical in sim + harness HW smoke) | `logic_reclaim.md` §8 | `bench/ac3` suites, `run_reader_regress.sh` |
+| Logic reclaim (AC-3, nav/VM, reader ×2; debug overlay retired) | ✅ A–C · D ✅ harness smoke, ⏳ maintainer's own look | `logic_reclaim.md` §8 | `bench/ac3` suites, `run_reader_regress.sh` |
 
 ### Audio and A/V sync
 
