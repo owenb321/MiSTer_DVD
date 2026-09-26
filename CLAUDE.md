@@ -341,7 +341,12 @@ worse maintenance burden than targeted in-place edits. So:
   - Eject opens the tray and returns to idle, with no `/dev/sr1` handle left open.
     The close path is where the refactor touched it.
 
-  ⏳ Physical VCD not re-run (no disc to hand). ⚠ Pre-existing, not from this branch:
+  ✅ **Physical VCD unregressed too:**
+  - the burned QG0012 disc mounts at 603,803,088 B (256,719 sectors, the same span its
+    `.cue` produces), plays, seeks, total 0:57:04;
+  - Eject opens the tray, returns to idle, and leaves no `/dev/sr1` handle.
+
+  ⚠ Pre-existing, not from this branch:
   one Eject press logs a SECOND eject request after the core reset the first one
   causes (harmless: it unmounts an already-empty slot). Likely the core's eject
   toggle clearing on reset, read by `dvd_remote.cpp` as a new press. ⚠ Two quick Previous presses at the very END of the last track landed on
