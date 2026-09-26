@@ -98,7 +98,7 @@ adds the file.
   ⛔ The VTS pick stays **largest-by-bytes**: MEASURED, it disagrees with longest-title on
   **2 of 1231** discs, and a duration-based pick costs an IFO read per title set at mount.
   Gate: `iso_reader_pgc_tb` TEST 5. Sweep: `auto_pgc_sweep.py` shape in the issue thread.
-  ⏳ **OPEN (found 2026-09-26, pre-existing since this rule landed): Auto loads TITLE 1's
+  ⏳ **OPEN, issue #132 (found 2026-09-26, pre-existing since this rule landed): Auto loads TITLE 1's
   chapter table, not the table of the PGC it plays.** Field report on X-Men Apocalypse, Disc
   Menus Off, v0.7.0 and `dev-readerslim` alike: chapter skips work, but the HUD total reads
   1 and the seek bar has no chapter notches. The cause is ordering: at mount the PTT load
