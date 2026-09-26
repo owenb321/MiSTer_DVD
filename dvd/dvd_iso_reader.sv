@@ -635,8 +635,8 @@ reg [2:0]  attr_j;
 reg        attr_phase;           // 0 = audio table, 1 = subpicture table
 reg        attr_vatr;            // 1 = the pending read is VTS_V_ATTR@0x200 (one-shot)
 reg        attr_cnt_pending;     // 1 = the pending read is a stream-count byte
-reg [5:0]  attr_resume;          // FSM state to resume after the sweep
-reg [5:0]  ptt_resume;           // Phase 6: state to resume after the PTT-table load
+reg        ptt_res_tt;           // Phase 6: after the PTT-table load, 1 = S_PTT_MAT (a
+                                 // jump's part resolve), 0 = S_PGC_MAT (the Auto mount)
 
 // =========================================================================
 // Extent table (2048-sector ranges). Winner slice [best_base..best_base+best_cnt).
@@ -1011,7 +1011,6 @@ reg [6:0]  chap_best;                 // current chapter (largest start <= cell_
 reg [7:0]  chap_best_cell;            // start cell (0-based) of chap_best
 reg        chap_dir_l;
 reg [4:0]  chap_mag_l;                // magnitude latched at the chap_pulse (>=1)
-reg [6:0]  chap_tp;                   // resolved target program
 reg        chap_do;                   // 1 = the resolved skip is a real move
 reg        chap_at_start_l;           // chap_at_start latched at the chap_pulse
 // Phase 11: query-only reuse of the same walk -> cur_pgm (chapter for the HUD).
@@ -1079,7 +1078,6 @@ reg [15:0] ptt_pgcn_c;                // P_PTT: captured pgcn (u16) of the entry
 // PTT-load bookkeeping (VTS_PTT_SRPT header + TTU span)
 reg [15:0] ptt_nr_srpt;              // nr_of_srpts of the VTS_PTT_SRPT
 reg [31:0] ptt_last_byte;            // last_byte @4
-reg [20:0] ptt_base_off;            // byte offset of cur_ttn's TTU (rel VTS_PTT_SRPT)
 
 always @(posedge clk) begin
     if (ptt_we) ptt_mem[ptt_waddr] <= ptt_wdata;
@@ -1233,6 +1231,9 @@ reg        adv_pend;                  // authored next_pgcn reached: drain, then
 // remember the last unconditional (preferred) / conditional LinkPGCN target
 // seen in the PRE commands and follow it, depth-limited.
 reg [15:0] link_pgcn_u, link_pgcn_c;
+// The 0-cell follow's target: the last unconditional LinkPGCN, else the last
+// conditional one (0 = the stub names none).
+wire [15:0] link_tgt_w = (link_pgcn_u != 16'd0) ? link_pgcn_u : link_pgcn_c;
 reg [1:0]  follow_cnt;
 
 // Sector-crossing byte WALKER. One engine walks parse_buf a byte per 2 cycles
@@ -1259,6 +1260,9 @@ reg [31:0] pb_sec;                    // sector currently resident in parse_buf
 reg [23:0] wacc;                      // rolling byte accumulator (u16/u32 assembly)
 reg [15:0] nr_pre16, nr_post16, nr_cellc16;  // raw command counts
 reg [15:0] prog_map_off16;            // PGC program_map_offset @230 (0 = none)
+// The header walk continues into the program map (P_PMAP) when the PGC has one
+// and it can matter; FP PGCs carry commands only.
+wire       pmap_go_w = (prog_map_off16 != 16'd0) && (cmd_nr_pgm != 8'd0) && (dom != DOM_FP);
 // Phase-4 VM-wait context (S_VM_WAIT)
 reg        vmw_pgc;                   // 1 = waiting on POST (else a cell cmd)
 reg        vmw_last;                  // the waited cell was the PGC's last
@@ -1469,11 +1473,11 @@ localparam S_NAV_SEEK2    = 6'd51;   // 1-cycle ext_*_q refresh (mirrors S_CELL_
 localparam S_NAV_CHK      = 6'd52;   // evaluate the NAV signature in rbuf
 // Phase-6 PTT-table load (resident ptt_mem for the current title). Runs off the
 // title-mount attr-sweep resume, BEFORE the PGC parse, for BOTH Auto and jump
-// mounts, then chains to ptt_resume (= the original S_PTT_MAT / S_PGC_MAT).
+// mounts, then chains to S_PTT_MAT / S_PGC_MAT (ptt_res_tt).
 localparam S_PTTLD_MAT    = 6'd53;   // entered after VTSI@200 shadow: vts_ptt_srpt ptr
 localparam S_PTTLD_HDR    = 6'd54;   // nr_of_srpts@0 + last_byte@4 -> read ttu offsets
 localparam S_PTTLD_OFF    = 6'd55;   // ttu_offset[ttn-1]/[ttn] -> nr_ptt, launch P_PTT
-localparam S_PTTLD_DONE   = 6'd56;   // re-fetch the resume field (@200 / @204) -> ptt_resume
+localparam S_PTTLD_DONE   = 6'd56;   // re-fetch the resume field (@200 / @204) -> S_PTT_MAT / S_PGC_MAT
 localparam S_CHK_RAW      = 6'd58;   // raw MODE2/2352 (VCD/SVCD .bin) signature probe
 localparam S_ANGLE_PRE    = 6'd59;   // hold the angle pick until the VM's PRE has run
 localparam S_ANGLE_PICK   = 6'd60;   // load the effective angle's cell
@@ -1804,7 +1808,6 @@ wire [31:0] nav_step   = (nav_in_blk && nav_ilvuea != 32'd0)
 // IFO big-endian field taps (rbuf shadow fetched at the relevant offset)
 wire [31:0] tt_srpt_ptr = {rbuf[0], rbuf[1], rbuf[2], rbuf[3]};   // VMGI@196
 wire [15:0] nr_of_srpts = {rbuf[0], rbuf[1]};                     // TT_SRPT@0
-wire [7:0]  ttsrp0_vtsn  = rbuf[14];                              // TT_SRP[0]@6
 
 // PGC big-endian field taps. Reads set fetch_base to the field's byte offset so
 // the field lands in the low shadow bytes. A field that straddles the sector end
@@ -1915,7 +1918,7 @@ always @(posedge clk)
 // sector's RBN (= play_blk). snoop_done pulses at the DSI region's last byte;
 // the FSM evaluates + arms the ILVU jump then.
 // =========================================================================
-wire [3:0]  ang_idx = (cur_angle == 4'd0) ? 4'd0 : (cur_angle - 4'd1);   // 0-based
+wire [3:0]  ang_idx = cur_angle - 4'd1;   // 0-based; every cur_angle writer gives >= 1
 wire [10:0] agli_o  = 11'h4BB + 11'd6 * {7'd0, ang_idx};                 // sector offset
 always @(posedge clk) begin
     snoop_done <= 1'b0;
@@ -2194,8 +2197,8 @@ always @(posedge clk)
             //   would stop clamping at all (arm D). Both measured.
             // ⚠ Accepted, bounded: the max now lets ANY malformed cell record
             //   inflate the span, where before only a malformed LAST cell could.
-            //   nr_cells > MAXCELL already routes garbage PGCs to the linear
-            //   fallback and S_CELL_SEEK already skips cf_rd > cl_rd cells.
+            //   The cell tables hold all 255 cells nr_of_cells can name, and
+            //   S_CELL_SEEK already skips cf_rd > cl_rd cells.
             if (cell_wi == 8'd0 || cell_last_w > title_last_rbn)
                 title_last_rbn <= cell_last_w;
             // title_end = the LAST PROGRAM's last_sector -- i.e. exactly what
@@ -2402,7 +2405,6 @@ always @(posedge clk or negedge rst_n) begin
         lu_i         <= 7'd0;
         lu_n         <= 7'd0;
         lu0_st       <= 32'd0;
-        chap_tp      <= 7'd0;
         chap_do      <= 1'b0;
         chap_query   <= 1'b0;
         pgm_q_cell   <= 8'hFF;
@@ -2476,11 +2478,10 @@ always @(posedge clk or negedge rst_n) begin
         ptt_wdata    <= 24'd0;
         nr_ptt       <= 11'd0;
         cur_ttn      <= 7'd0;
-        ptt_resume   <= S_PGC_MAT;
+        ptt_res_tt   <= 1'b0;
         ptt_pgcn_c   <= 16'd0;
         ptt_nr_srpt  <= 16'd0;
         ptt_last_byte<= 32'd0;
-        ptt_base_off <= 21'd0;
         prog_map_off16 <= 16'd0;
         follow_cnt   <= 2'd0;
         link_pgcn_u  <= 16'd0;
@@ -2707,9 +2708,6 @@ always @(posedge clk or negedge rst_n) begin
                 //   its start (a later cell, or >~5 s cell-elapsed = !chap_at_start_l).
                 //   So one prev from mid-chapter restarts it; mag>=2 (or from the
                 //   start) steps to earlier chapters. dec = # chapters below chap_best.
-                chap_tp <= chap_dir_l
-                    ? chap_next_tp
-                    : chap_prev_tp;
                 pm_raddr <= chap_dir_l
                     ? chap_next_tp
                     : chap_prev_tp;
@@ -2769,7 +2767,6 @@ always @(posedge clk or negedge rst_n) begin
                     // clamps at a title end that lives in this PGC. Single-PGC
                     // movie titles always land here (g_pgc_first==0 &&
                     // g_pgc_last==nr_ptt-1).
-                    chap_tp  <= chap_dir_l ? chap_next_tp : chap_prev_tp;
                     pm_raddr <= chap_dir_l ? chap_next_tp : chap_prev_tp;
                     chap_do  <= chap_dir_l ? (chap_best + 7'd1 < cmd_nr_pgm[6:0])
                                            : 1'b1;
@@ -2791,8 +2788,7 @@ always @(posedge clk or negedge rst_n) begin
                     if (ptt_rd_q[7:0] != 8'd0 &&
                         ptt_rd_q[7:0] <= cmd_nr_pgm &&
                         ptt_rd_q[7:0] <= 8'd128) begin
-                        chap_tp  <= ptt_rd_q[6:0] - 7'd1;   // pgn-1 (pgn <= 128)
-                        pm_raddr <= ptt_rd_q[6:0] - 7'd1;
+                        pm_raddr <= ptt_rd_q[6:0] - 7'd1;   // pgn-1 (pgn <= 128)
                         chap_do  <= 1'b1;
                         chap_st  <= CH_C;
                     end else
@@ -2960,8 +2956,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= vmgi_lba;
                     fetch_base <= 11'd132;
                     fetch_ret  <= S_JMP_VMGI;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end else begin
                     pgc_error  <= 1'b1;
@@ -2987,8 +2981,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= vmgi_lba;
                     fetch_base <= 11'd200;
                     fetch_ret  <= S_JMP_VMGI;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end else begin
                     pgc_error  <= 1'b1;
@@ -3019,8 +3011,6 @@ always @(posedge clk or negedge rst_n) begin
                         sec_lba    <= vmgi_lba;
                         fetch_base <= 11'd196;      // VMGI.tt_srpt ptr
                         fetch_ret  <= S_TT_RES;
-                        fi         <= 6'd0;
-                        fi_cap_v   <= 1'b0;
                         state      <= S_SECREAD;
                     end else begin
                         pgc_error  <= 1'b1;         // no VMGI: cannot resolve
@@ -3295,7 +3285,6 @@ always @(posedge clk or negedge rst_n) begin
                     fi_save     <= fi;
                     fetch_cross <= 1'b1;
                     sec_lba     <= sec_lba + 32'd1;
-                    fi_cap_v    <= 1'b0;
                     state       <= S_SECREAD;
                 end else begin
                     fi_cap   <= fi;
@@ -3585,8 +3574,6 @@ always @(posedge clk or negedge rst_n) begin
                             sec_lba    <= gq_ifo_lba;
                             fetch_base <= 11'd208;     // VTSI_MAT.vtsm_pgci_ut @208
                             fetch_ret  <= S_JMP_VTSM;
-                            fi         <= 6'd0;
-                            fi_cap_v   <= 1'b0;
                             state      <= S_SECREAD;
                         end else begin
                             pgc_error <= 1'b1;         // no VTSI / no menu VOB
@@ -3622,25 +3609,22 @@ always @(posedge clk or negedge rst_n) begin
                 // them out (S_ATTR) once the sector is resident, THEN resume
                 // the normal PGC parse. The rbuf shadow fetched below (@200 /
                 // @204) is untouched by the sweep (it reads parse_buf directly),
-                // so attr_resume proceeds exactly as before.
+                // so the sweep's exit to S_PTTLD_MAT proceeds exactly as before.
                 if (iso_mode && eff_ifo_lba != 32'd0) begin
                     // Both Auto and jump mounts fetch VTSI@200 (vts_ptt_srpt) so
                     // the Phase-6 PTT-table load (S_PTTLD_*) can run for the
                     // current title BEFORE the PGC parse; S_PTTLD_DONE re-fetches
                     // the resume field (@200 for the jump's S_PTT_MAT part-resolve,
-                    // @204 for Auto's S_PGC_MAT) so ptt_resume proceeds unchanged.
+                    // @204 for Auto's S_PGC_MAT) so the resume proceeds unchanged.
                     sec_lba    <= eff_ifo_lba;
                     fetch_base <= 11'd200;             // VTSI_MAT.vts_ptt_srpt @200
                     fetch_ret  <= S_ATTR_RD;
-                    attr_resume<= S_PTTLD_MAT;
                     attr_phase <= 1'b0; attr_cnt_pending <= 1'b1;
                     // ONE extra byte before the audio count: VTS_V_ATTR@0x200's
                     // high byte, in the same resident sector (issue #81).
                     attr_vatr  <= 1'b1;
                     attr_addr  <= 11'd512;             // VTS_V_ATTR @0x200 (high byte)
                     attr_idx   <= 3'd0; attr_j <= 3'd0;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end else begin
                     state <= S_FINAL2;                 // no VTSI -> linear
@@ -3653,7 +3637,7 @@ always @(posedge clk or negedge rst_n) begin
             // then subp count @597 + vts_subp_attr[32] @598 (stride 6, first 8
             // routable). Two cycles per byte (S_ATTR_RD sets the parse_buf
             // address, S_ATTR_CAP consumes the 1-cycle-late pb_rdata). ~120
-            // cycles, one-off at the title mount. Resumes attr_resume.
+            // cycles, one-off at the title mount. Resumes at S_PTTLD_MAT.
             S_ATTR_RD: state <= S_ATTR_CAP;   // pb_raddr = attr_addr; latch next cycle
             S_ATTR_CAP: begin
                 if (attr_vatr) begin
@@ -3706,7 +3690,7 @@ always @(posedge clk or negedge rst_n) begin
                                 attr_idx <= 3'd0;
                                 state <= S_ATTR_RD;
                             end else begin
-                                state <= attr_resume;          // sweep done
+                                state <= S_PTTLD_MAT;          // sweep done
                             end
                         end else begin
                             attr_idx <= attr_idx + 3'd1;
@@ -3728,8 +3712,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= eff_ifo_lba;
                     fetch_base <= 11'd204;
                     fetch_ret  <= S_PGC_MAT;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end else begin
                     ptt_srpt_lba <= eff_ifo_lba + vts_pgcit_ptr;
@@ -3737,8 +3719,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
                     fetch_base <= {2'b00, want_ttn, 2'b00} + 11'd4;
                     fetch_ret  <= S_PTT_OFF;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end
             end
@@ -3755,15 +3735,11 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= eff_ifo_lba;
                     fetch_base <= 11'd204;
                     fetch_ret  <= S_PGC_MAT;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end else begin
                     sec_lba    <= ptt_srpt_lba + (eff_ptt_off[20:0] >> 11);
                     fetch_base <= eff_ptt_off[10:0];
                     fetch_ret  <= S_PTT_PGC;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end
             end
@@ -3787,8 +3763,6 @@ always @(posedge clk or negedge rst_n) begin
                 sec_lba    <= eff_ifo_lba;
                 fetch_base <= 11'd204;                 // VTSI_MAT.vts_pgcit @204
                 fetch_ret  <= S_PGC_MAT;
-                fi         <= 6'd0;
-                fi_cap_v   <= 1'b0;
                 state      <= S_SECREAD;
             end
 
@@ -3803,7 +3777,7 @@ always @(posedge clk or negedge rst_n) begin
             S_PTTLD_MAT: begin
                 cur_ttn    <= (want_ttn != 7'd0) ? want_ttn : 7'd1;
                 nr_ptt     <= 11'd0;
-                ptt_resume <= (want_ttn != 7'd0) ? S_PTT_MAT : S_PGC_MAT;
+                ptt_res_tt <= (want_ttn != 7'd0);
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     state <= S_PTTLD_DONE;             // no PTT table
                 end else begin
@@ -3811,8 +3785,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
                     fetch_base <= 11'd0;               // VTS_PTT_SRPT header @0
                     fetch_ret  <= S_PTTLD_HDR;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end
             end
@@ -3826,12 +3798,11 @@ always @(posedge clk or negedge rst_n) begin
                     {9'd0, cur_ttn} > nr_of_srpts) begin
                     state <= S_PTTLD_DONE;             // ttn out of range -> no table
                 end else begin
-                    sec_lba    <= ptt_srpt_lba +
-                                  (({2'b00, cur_ttn, 2'b00} + 11'd4) >> 11);
+                    // ttu_offset[ttn-1] sits at byte 8+4*(ttn-1) <= 512 (ttn is
+                    // 7-bit), so it is always in the header's own first sector.
+                    sec_lba    <= ptt_srpt_lba;
                     fetch_base <= ({2'b00, cur_ttn, 2'b00} + 11'd4);  // 8+4*(ttn-1)
                     fetch_ret  <= S_PTTLD_OFF;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end
             end
@@ -3847,7 +3818,6 @@ always @(posedge clk or negedge rst_n) begin
                 span = (ttu1 > ttu0) ? (ttu1 - ttu0) : 32'd0;
                 cnt  = span >> 2;
                 cnt_c = (cnt > {21'd0, PTT_CAP}) ? PTT_CAP : cnt[10:0];
-                ptt_base_off <= ttu0[20:0];
                 if (cnt == 32'd0 || ttu0 > 32'd2097151) begin
                     nr_ptt <= 11'd0;
                     state  <= S_PTTLD_DONE;
@@ -3868,10 +3838,8 @@ always @(posedge clk or negedge rst_n) begin
             // the shadow, so the resume state reads the right value next.
             S_PTTLD_DONE: begin
                 sec_lba    <= eff_ifo_lba;
-                fetch_base <= (ptt_resume == S_PTT_MAT) ? 11'd200 : 11'd204;
-                fetch_ret  <= ptt_resume;
-                fi         <= 6'd0;
-                fi_cap_v   <= 1'b0;
+                fetch_base <= ptt_res_tt ? 11'd200 : 11'd204;
+                fetch_ret  <= ptt_res_tt ? S_PTT_MAT : S_PGC_MAT;
                 state      <= S_SECREAD;
             end
 
@@ -3886,8 +3854,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
                     fetch_base <= 11'd0;               // nr_pgci_srp@0
                     fetch_ret  <= S_PGCIT_HDR;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end
             end
@@ -3961,8 +3927,6 @@ always @(posedge clk or negedge rst_n) begin
                 sec_lba    <= pit_sec + (({10'b0,pit_off} + 21'd8 + {2'b0,srp_i,3'b000}) >> 11);
                 fetch_base <= (({10'b0,pit_off} + 21'd8 + {2'b0,srp_i,3'b000})) & 21'h007FF;
                 fetch_ret  <= S_SRP_EVAL;
-                fi         <= 6'd0;
-                fi_cap_v   <= 1'b0;
                 state      <= S_SECREAD;
             end
 
@@ -4002,8 +3966,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= pit_sec + (({10'b0,pit_off} + srp_pgc_start[20:0]) >> 11);
                     fetch_base <= (({10'b0,pit_off} + srp_pgc_start[20:0])) & 21'h007FF;
                     fetch_ret  <= S_PGC_HDR;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end
             end
@@ -4021,11 +3983,13 @@ always @(posedge clk or negedge rst_n) begin
                 // not playable, so it cannot win.
                 reg [19:0] secs;
                 reg [15:0] cand;
+                reg        win;           // this PGC beats the best so far
                 secs = ({12'd0, rbuf[4][7:4]} * 20'd36000) + ({12'd0, rbuf[4][3:0]} * 20'd3600) +
                        ({12'd0, rbuf[5][7:4]} * 20'd600)   + ({12'd0, rbuf[5][3:0]} * 20'd60)   +
                        ({12'd0, rbuf[6][7:4]} * 20'd10)    +  {12'd0, rbuf[6][3:0]};
                 cand = (secs > 20'd35999) ? 16'd35999 : secs[15:0];   // C_PBTM spec max
-                if (nr_of_cells_b != 8'd0 && cand > dur_best_secs) begin
+                win  = (nr_of_cells_b != 8'd0) && (cand > dur_best_secs);
+                if (win) begin
                     dur_best_secs <= cand;
                     dur_best_pgcn <= srp_i + 16'd1;
                 end
@@ -4036,10 +4000,8 @@ always @(posedge clk or negedge rst_n) begin
                     // Done: re-take the winner. dur_best_pgcn defaults to 1, so a
                     // PGCIT of cell-less PGCs still lands where it used to.
                     dur_scan  <= 1'b0;
-                    want_pgcn <= (nr_of_cells_b != 8'd0 && cand > dur_best_secs)
-                                 ? (srp_i + 16'd1) : dur_best_pgcn;
-                    srp_i     <= ((nr_of_cells_b != 8'd0 && cand > dur_best_secs)
-                                 ? (srp_i + 16'd1) : dur_best_pgcn) - 16'd1;
+                    want_pgcn <= win ? (srp_i + 16'd1) : dur_best_pgcn;
+                    srp_i     <= (win ? (srp_i + 16'd1) : dur_best_pgcn) - 16'd1;
                     state     <= S_SRP_FETCH;
                 end
             end else begin
@@ -4206,8 +4168,7 @@ always @(posedge clk or negedge rst_n) begin
                             cmd_nr_pre  <= 8'd0;
                             cmd_nr_post <= 8'd0;
                             cmd_nr_cell <= 8'd0;
-                            if (prog_map_off16 != 16'd0 && cmd_nr_pgm != 8'd0 &&
-                                dom != DOM_FP) begin
+                            if (pmap_go_w) begin
                                 walk_sec  <= walk_sec_w;  // pgc + prog_map_off (shared adder)
                                 walk_off  <= walk_off_w;
                                 walk_left <= {5'd0, cmd_nr_pgm};
@@ -4235,8 +4196,7 @@ always @(posedge clk or negedge rst_n) begin
                         if (nr_pre16 + nr_post16 + nr_cellc16 == 16'd0 ||
                             nr_pre16 + nr_post16 + nr_cellc16 > 16'd511) begin
                             // empty or absurd -> skip to the program map / cells
-                            if (prog_map_off16 != 16'd0 && cmd_nr_pgm != 8'd0 &&
-                                dom != DOM_FP) begin
+                            if (pmap_go_w) begin
                                 walk_sec  <= walk_sec_w;  // pgc + prog_map_off (shared adder)
                                 walk_off  <= walk_off_w;
                                 walk_left <= {5'd0, cmd_nr_pgm};
@@ -4275,8 +4235,7 @@ always @(posedge clk or negedge rst_n) begin
                         else                     link_pgcn_c <= {1'b0, cmd_b6[6:0], pb_rdata};
                     end
                     if (walk_left == 13'd1) begin
-                        if (prog_map_off16 != 16'd0 && cmd_nr_pgm != 8'd0 &&
-                            dom != DOM_FP) begin
+                        if (pmap_go_w) begin
                             walk_sec  <= walk_sec_w;      // pgc + prog_map_off (shared adder)
                             walk_off  <= walk_off_w;
                             walk_left <= {5'd0, cmd_nr_pgm};
@@ -4359,8 +4318,9 @@ always @(posedge clk or negedge rst_n) begin
             end
 
             // Cell-count gate (runs AFTER the header/command walk; palette +
-            // commands already captured). Title: 0 or >MAXCELL -> linear
-            // whole-VTS fallback. Menu: a 0-cell entry PGC is a command STUB
+            // commands already captured). Title: 0 cells -> linear whole-VTS
+            // fallback (the tables hold MAXCELL = 255 = every count the 8-bit
+            // nr_of_cells can name, so there is no upper bound to check). Menu: a 0-cell entry PGC is a command STUB
             // (MiB root) -> follow its last pre-command LinkPGCN (unconditional
             // preferred), depth-limited; FP parses commands only and idles.
             S_PGC_CELLCHK: begin
@@ -4368,8 +4328,7 @@ always @(posedge clk or negedge rst_n) begin
                     cell_count <= 8'd0;
                     pgc_loaded <= 1'b1;
                     state      <= S_DONE;              // FP: commands only, no video
-                end else if (nr_cells == 8'd0 || nr_cells > MAXCELL ||
-                             cell_pb_off16 == 16'd0) begin
+                end else if (nr_cells == 8'd0 || cell_pb_off16 == 16'd0) begin
                     if (vm_mode && (cmd_nr_pre != 8'd0 || cmd_nr_post != 8'd0)) begin
                         // Phase-4: a 0-cell PGC is a COMMAND STUB - report it
                         // loaded and let the VM execute its pre commands (the
@@ -4388,18 +4347,16 @@ always @(posedge clk or negedge rst_n) begin
                         pgc_loaded <= 1'b1;
                         state      <= S_DONE;
                     end else if (menu_dom) begin
-                        if ((link_pgcn_u != 16'd0 || link_pgcn_c != 16'd0) &&
-                            follow_cnt < 2'd2) begin
-                            want_pgcn  <= (link_pgcn_u != 16'd0) ? link_pgcn_u : link_pgcn_c;
-                            srp_i      <= ((link_pgcn_u != 16'd0) ? link_pgcn_u : link_pgcn_c) - 16'd1;
+                        if (link_tgt_w != 16'd0 && follow_cnt < 2'd2) begin
+                            want_pgcn  <= link_tgt_w;
+                            srp_i      <= link_tgt_w - 16'd1;
                             follow_cnt <= follow_cnt + 2'd1;
                             scan_mode  <= 1'b0;
-                            state      <= (((link_pgcn_u != 16'd0) ? link_pgcn_u : link_pgcn_c)
-                                           <= nr_srp_l) ? S_SRP_FETCH : S_DONE;
-                            if (((link_pgcn_u != 16'd0) ? link_pgcn_u : link_pgcn_c) > nr_srp_l) begin
+                            state      <= (link_tgt_w <= nr_srp_l) ? S_SRP_FETCH : S_DONE;
+                            if (link_tgt_w > nr_srp_l) begin
                                 pgc_error <= 1'b1;
                                 dbg_pgcerr <= {3'd2, ((nr_srp_l > 16'd31) ? 5'd31 : nr_srp_l[4:0]),
-                                               ((link_pgcn_u != 16'd0) ? link_pgcn_u[7:0] : link_pgcn_c[7:0])};
+                                               link_tgt_w[7:0]};
                             end
                         end else begin
                             pgc_error <= 1'b1;
@@ -4661,7 +4618,7 @@ always @(posedge clk or negedge rst_n) begin
                 // what keeps every non-VM path byte-identical -- and it stops
                 // this state swallowing a B6 press that lands in the same
                 // cycle (a later assignment in this always block would win).
-                if (agl_vm_en || cur_angle == 4'd0 || cur_angle > angle_count)
+                if (agl_vm_en || cur_angle > angle_count)
                     cur_angle <= ang_eff;
                 cell_i     <= block_first + {4'd0, ang_eff} - 8'd1;
                 cell_raddr <= block_first + {4'd0, ang_eff} - 8'd1;
@@ -4733,8 +4690,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= eff_ifo_lba;
                     fetch_base <= 11'd212;
                     fetch_ret  <= S_TMAP;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     tm_ph      <= TM_MAT2;
                     state      <= S_SECREAD;
                 end
@@ -4746,8 +4701,6 @@ always @(posedge clk or negedge rst_n) begin
                         sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
                         fetch_base <= 11'd0;
                         fetch_ret  <= S_TMAP;
-                        fi         <= 6'd0;
-                        fi_cap_v   <= 1'b0;
                         tm_ph      <= TM_TAB;
                         state      <= S_SECREAD;
                     end
@@ -4759,8 +4712,6 @@ always @(posedge clk or negedge rst_n) begin
                         sec_lba    <= tm_sec + {23'd0, tm_tab_off[17:11]};
                         fetch_base <= tm_tab_off[10:0];
                         fetch_ret  <= S_TMAP;
-                        fi         <= 6'd0;
-                        fi_cap_v   <= 1'b0;
                         tm_ph      <= TM_TAB2;
                         state      <= S_SECREAD;
                     end
@@ -4771,8 +4722,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= tm_sec + {11'd0, vts_pgcit_ptr[31:11]};
                     fetch_base <= vts_pgcit_ptr[10:0];
                     fetch_ret  <= S_TMAP;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     tm_ph      <= TM_HDR;
                     state      <= S_SECREAD;
                 end
@@ -4801,8 +4750,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= tm_sec + {24'd0, tm_ent_byte[18:11]};
                     fetch_base <= tm_ent_byte[10:0];
                     fetch_ret  <= S_TMAP;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     tm_ph      <= TM_ENT2;
                     state      <= S_SECREAD;
                 end
@@ -4922,8 +4869,7 @@ always @(posedge clk or negedge rst_n) begin
                         // latched by the probe read), so this is a second 45-byte
                         // window copy, NOT a second disk read.
                         fetch_base <= 11'h40F;            // DSI 0x08 -> sector 0x40F
-                        fi         <= 6'd0;
-                        fetch_xw   <= 1'b0;
+                        fi         <= 6'd0;     // fetch_xw is 0 after every S_FETCH exit
                         fetch_ret  <= S_NAV_VOB;
                         state      <= S_FETCH;
                     end
@@ -5484,8 +5430,6 @@ always @(posedge clk or negedge rst_n) begin
                     fetch_base <= {2'd0, jttn_l, 2'b00} + {1'd0, jttn_l, 3'b000}
                                   - 11'd4;
                     fetch_ret  <= S_TT_RES2;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end
             end
@@ -5528,8 +5472,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= vmgi_lba + (vts_pgcit_ptr[20:0] >> 11);
                     fetch_base <= vts_pgcit_ptr[10:0];
                     fetch_ret  <= S_PGC_HDR;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end else begin
                     // VMGM menu: latch the UT target, then capture VMGM_V_ATR
@@ -5569,8 +5511,6 @@ always @(posedge clk or negedge rst_n) begin
                 sec_lba    <= jmp_ut_lba;
                 fetch_base <= 11'd0;
                 fetch_ret  <= S_UT_HDR;
-                fi         <= 6'd0;
-                fi_cap_v   <= 1'b0;
                 state      <= S_SECREAD;
             end
 
@@ -5596,8 +5536,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= jmp_ut_lba + (ut_lu0_start[20:0] >> 11);
                     fetch_base <= ut_lu0_start[10:0];
                     fetch_ret  <= S_PGCIT_HDR;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end else begin
                     lu_n       <= ut_nr_lus[6:0];
@@ -5621,8 +5559,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= jmp_ut_lba + (rbuf_be32_4[20:0] >> 11);
                     fetch_base <= rbuf_be32_4[10:0];
                     fetch_ret  <= S_PGCIT_HDR;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end else if ({1'b0, lu_i} + 8'd1 < {1'b0, lu_n}) begin
                     lu_i       <= lu_i + 7'd1;
@@ -5638,8 +5574,6 @@ always @(posedge clk or negedge rst_n) begin
                     sec_lba    <= jmp_ut_lba + (lu0_st[20:0] >> 11);
                     fetch_base <= lu0_st[10:0];
                     fetch_ret  <= S_PGCIT_HDR;
-                    fi         <= 6'd0;
-                    fi_cap_v   <= 1'b0;
                     state      <= S_SECREAD;
                 end
             end
