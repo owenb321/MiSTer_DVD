@@ -72,14 +72,32 @@ def blend(yuvo):
     return out
 
 
-def bob(Y):
-    """Top field kept, bottom lines rebuilt from the neighbours (study only)."""
-    x = Y.astype(np.int32)
-    out = x.copy()
-    for y in range(1, x.shape[0], 2):
-        dn = x[y + 1] if y + 1 < x.shape[0] else x[y - 1]
-        out[y] = (x[y - 1] + dn + 1) >> 1
+def bob_keep(yuvo, keep_bot):
+    """THE BOB KERNEL (dvd/field_blend.sv's second kernel, docs/field_blend.md "Bob"):
+    keep one field of the woven frame -- the TOP field is the EVEN lines -- and rebuild
+    each line of the other field from the kept lines above and below it:
+        y % 2 == keep_bot:  out[y] = in[y]
+        otherwise:          out[y] = (a + d + 1) >> 1     (Y/U/V)
+    with the same MIRRORED edges as the blend (y == 0: a := d; y == H-1: d := a), so
+    keeping BOTTOM, line 0 is in[1], and keeping TOP (H even), line H-1 is in[H-2].
+    out.osd = in.osd (never filtered)."""
+    H = yuvo.shape[0]
+    x = yuvo.astype(np.int32)
+    a = np.concatenate((x[1:2], x[:-1]), axis=0)
+    d = np.concatenate((x[1:], x[H - 2:H - 1]), axis=0)
+    out = yuvo.copy()
+    rebuilt = ((a[:, :, :3] + d[:, :, :3] + 1) >> 1).astype(np.uint8)
+    for y in range(H):
+        if (y & 1) != int(keep_bot):
+            out[y, :, :3] = rebuilt[y]
     return out
+
+
+def bob(Y):
+    """Top field kept, luma only (the study in `score`)."""
+    yuvo = np.zeros(Y.shape + (4,), dtype=np.uint8)
+    yuvo[:, :, 0] = Y
+    return bob_keep(yuvo, 0)[:, :, 0].astype(np.int32)
 
 
 def comb_ratio(Y):
@@ -93,11 +111,14 @@ def comb_ratio(Y):
 # fixtures
 # ----------------------------------------------------------------------------
 def write_fixture(stem, yuvo, ft_code=0):
-    """<stem>.in.hex: H+1 lines x W {y,u,v,osd}; .exp.hex: H x W; .meta.hex: W, H, ft_code."""
+    """<stem>.in.hex: H+1 lines x W {y,u,v,osd}; .exp.hex: H x W (blend);
+    .bobt.exp.hex / .bobb.exp.hex: H x W (bob keeping TOP / BOTTOM); .meta.hex: W, H, ft_code."""
     H, W, _ = yuvo.shape
     src = rtl_input(yuvo)
     exp = blend(yuvo)
-    for suf, arr, n in (('.in.hex', src, H + 1), ('.exp.hex', exp, H)):
+    for suf, arr, n in (('.in.hex', src, H + 1), ('.exp.hex', exp, H),
+                        ('.bobt.exp.hex', bob_keep(yuvo, 0), H),
+                        ('.bobb.exp.hex', bob_keep(yuvo, 1), H)):
         with open(stem + suf, 'w') as fh:
             for y in range(n):
                 for c in range(W):

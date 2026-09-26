@@ -221,6 +221,7 @@ wire cfg_seen, cfg_wr;                               // hps_io cfg-word bookkeep
 wire hdmi_bs_ack;                                    // cfg[14] HPS ack (DVD-FORK, HDMI bitstream)
 wire bs_stb_w;                                       // 48 kHz pair strobe from iec61937_wrap
 wire [1:0] video_out_mode = status[10:9]; // 0=Auto 1=Interlaced 2=Progressive (O[27:26] left dead — old Analog Out)
+wire [1:0] deint_mode     = status[51:50]; // Deinterlace: 0=Weave 1=Bob 2=Blend (3 unused = Weave). OB/bit 11 + O[49] retired
 // Debug "Title VTS" override (P1, two BCD digits -> VTS 1..99; 0 = Auto).
 // See the CONF_STR note at the retired O[31:28] slot.
 wire [3:0] dbg_tv_tens  = status[35:32];
@@ -369,7 +370,12 @@ assign HDMI_BLACKOUT    = 0;
 //        shimmer on static/film content, but combing on fast inter-field motion.
 //        Best for film (3:2-pulldown) DVDs; Bob is better for true-video DVDs.
 // Progressive mode (O9 off) emits no field flag, so this is forced 0 (don't-care).
-assign HDMI_BOB_DEINT   = fields_eff & ~status[11];   // 240p is progressive: nothing to deinterlace
+// DVD-FORK (deinterlace merge, docs/field_blend.md "One option"): the choice is now the
+// shared O[51:50] Deinterlace (0 Weave, 1 Bob, 2 Blend). Only Bob asks ascal to bob;
+// Blend (which the Interlaced row does not list, so the OSD shows it as index 0 =
+// Weave) and the unused 3 weave, which is what the OSD then shows. The old OB bit 11
+// is retired and read by nothing.
+assign HDMI_BOB_DEINT   = fields_eff & (deint_mode == 2'd1);   // 240p is progressive: nothing to deinterlace
 
 // DVD-FORK (interlaced overlay alignment, 2026-08-22): the interlaced raster uses
 // PIXEL REPETITION (rtl/mpeg2/syncgen_intf.v doubles every horizontal timing value,
@@ -780,7 +786,28 @@ parameter CONF_STR = {
     //                    path (component/VGA displays; also the dev A/B switch).
     // status[10:9]. See docs/analog_dual_raster.md, docs/field_parity.md.
     "O[10:9],Video Output,Auto,Interlaced,Progressive;",
-    "OB,480i Deint,Bob,Weave;",
+    // Deinterlace (DVD-FORK deinterlace merge, 2026-09-25, docs/field_blend.md "One
+    // option"): ONE choice for both rasters, O[51:50] = 0 Weave (default), 1 Bob,
+    // 2 Blend. Replaces "480i Deint" (OB, bit 11) and "Progressive Deint" (O[49]);
+    // both bits are left DEAD/reserved so a stale saved value can't re-arm them, and
+    // [51:50] were never allocated, so no "v,N" bump (their old choices reset).
+    //   Weave  = the two fields interleaved: full vertical resolution, combs on motion.
+    //   Bob    = one field at a time, the other's lines rebuilt: smooth motion, half
+    //            the vertical resolution. Progressive: dvd/field_blend.sv's bob kernel,
+    //            true-interlaced pictures only (film is untouched), not on the Film 24p
+    //            raster. Interlaced: ascal's bob, HDMI only (the CRT gets real fields).
+    //   Blend  = PROGRESSIVE ONLY: every line (a + 2b + d) / 4, see below.
+    // ★ TWO ROWS, ONE BIT FIELD, chosen by the menu mask (status_menumask bit 0 =
+    // interlaced_eff): H0 hides a row while the Interlaced raster is up, h0 while it is
+    // not. The Interlaced row lists no Blend: a saved 2 shows there as index 0 (Main's
+    // menu.cpp renders an out-of-range value as index 0) and weaves, matching the label.
+    // ⚠ Weave is index 0 BY DESIGN (user decision): the Progressive default stays the
+    // measured one (Blend over-selects, see below), at the cost of HDMI-on-Interlaced
+    // moving from Bob to Weave by default.
+    "H0O[51:50],Deinterlace,Weave,Bob,Blend;",
+    "h0O[51:50],Deinterlace,Weave,Bob;",
+    // (retired) "OB,480i Deint,Bob,Weave;" -- bit 11 reserved.
+    // (retired, now Deinterlace = Blend above; bit 49 reserved)
     // Progressive Deint (docs/field_blend.md): on the PROGRESSIVE raster a
     // true-interlaced picture (progressive_frame = 0: video-sourced 29.97i/25i,
     // field-coded laserdisc FMV) is woven, and combs on motion. Blend =
@@ -794,9 +821,8 @@ parameter CONF_STR = {
     //   ⚠ Index 0 = the default = OFF (user decision 2026-09-24): progressive_frame = 0
     // also selects progressive content carrying interlaced flags (measured: 3 of 5 PAL
     // pf=0 discs and ~half a sample of NTSC ones never comb), which a blend only
-    // softens. Named for its raster, like "480i Deint" above. Bit 49 was never
-    // allocated, so no "v,N" bump.
-    "O[49],Progressive Deint,Off,Blend;",
+    // softens. (That is also why Deinterlace defaults to Weave.)
+    // (retired) "O[49],Progressive Deint,Off,Blend;" -- bit 49 reserved.
     // Analog Aspect: how anamorphic content is fitted to the 4:3 analog TV (ONLY
     // active while the analog 480i raster is engaged). Auto = Fit for 4:3 streams,
     // Letterbox for 16:9 (from the sequence header aspect code). Fit = raster
@@ -1053,6 +1079,7 @@ wire [15:0] telem_aud_disc;
 // Field blend instrument (clk_dec level from mpeg2video, word 7 flags[5]) --
 // declared ahead of the telem instance for the same reason.
 wire        core_blend_act;
+wire        core_bob_act;        // progressive bob instrument (clk_dec level, word 14 [8])
 
 // BLKSZ=4: 2048-byte sd blocks (= one DVD/ISO sector per request). One HPS
 // round-trip per sector instead of four 512-byte ones — the per-request
@@ -1060,6 +1087,9 @@ wire        core_blend_act;
 // the 10.08 Mbps DVD maximum (Thayer's Quest). sd_lba is in 2048-byte units.
 hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     .clk_sys        (clk_sys),
+    // DVD-FORK (deinterlace merge): menu-mask bit 0 = the Interlaced raster is up;
+    // the two Deinterlace rows (H0/h0) swap on it. Main reads it per menu draw.
+    .status_menumask({15'd0, interlaced_eff}),
     .HPS_BUS        (HPS_BUS),
     .EXT_BUS        (ext_bus),      // DVD-FORK (telemetry bridge): see dvd_telem below
 
@@ -1155,7 +1185,7 @@ dvd_telem dvd_telem_inst (
     .disp_lag   (av_disp_lag[19:4]),     // clk_sys: displayed PTS - STC (word 11)
     .play_err   (dbg_aud_play_err),      // clk_sys: audio position vs anchor (word 12)
     .av_drift   (av_drift[19:4]),        // clk_sys: dispatched audio PTS - STC (word 13)
-    .sched_flags({8'd0, core_sched_flags}),   // clk_dec: what the scheduler saw (word 14)
+    .sched_flags({7'd0, core_bob_act, core_sched_flags}),   // [8] = progressive bob active   // clk_dec: what the scheduler saw (word 14)
     .sched_dur  (core_sched_dur),             // clk_dec: the duration it applied (word 15)
     // CMD_AF: what the audio wire is really carrying, so Main can put the ADV7513
     // into PCM mode for an LPCM/MP2 track in Passthru.
@@ -4438,17 +4468,28 @@ always @(posedge clk_dec) begin
     filmp_dec    <= filmp_s1_dec;
 end
 
-// DVD-FORK (field blend, docs/field_blend.md): O[49] Progressive Deint, index 1 =
-// Blend. Gated on ~interlaced_eff -- NOT fields_eff: 240p (p240_eff) is a sub-mode of
-// the interlaced 15 kHz raster whose decoder emits FRAMES, and this feature is for the
-// progressive 480p/576p raster only. A human toggle plus a boot-static verdict, so a
-// plain 2-FF into clk_dec suffices (the filmp_dec shape above); the addrgen only acts
-// on it at a scan start.
-wire blend_en = status[49] & ~interlaced_eff;
+// DVD-FORK (field blend, docs/field_blend.md): Deinterlace = Blend (O[51:50] == 2;
+// was O[49] Progressive Deint). Gated on ~interlaced_eff -- NOT fields_eff: 240p
+// (p240_eff) is a sub-mode of the interlaced 15 kHz raster whose decoder emits FRAMES,
+// and this feature is for the progressive 480p/576p raster only. A human toggle plus a
+// boot-static verdict, so a plain 2-FF into clk_dec suffices (the filmp_dec shape
+// above); the addrgen only acts on it at a scan start.
+wire blend_en = (deint_mode == 2'd2) & ~interlaced_eff;
 reg  blend_s1_dec, blend_en_dec;
 always @(posedge clk_dec) begin
     blend_s1_dec <= blend_en;
     blend_en_dec <= blend_s1_dec;
+end
+// DVD-FORK (progressive bob, docs/field_blend.md "Bob"): Deinterlace = Bob on the
+// progressive raster -- field_blend's other kernel. Same ~interlaced_eff gate (on the
+// Interlaced raster Bob is ascal's, HDMI_BOB_DEINT). ~filmp_eff: the Film 24p/25p
+// raster scans a picture about once, so a bob there would show one field and drop the
+// other; a true-interlaced picture on that raster stays woven (Blend still engages).
+wire bob_en = (deint_mode == 2'd1) & ~interlaced_eff & ~filmp_eff;
+reg  bob_s1_dec, bob_en_dec;
+always @(posedge clk_dec) begin
+    bob_s1_dec <= bob_en;
+    bob_en_dec <= bob_s1_dec;
 end
 
 // Drain-gate live-state debug taps from dvd_audio_decode. dbg_aud_play_pts /
@@ -5160,8 +5201,10 @@ mpeg2video mpeg2video_inst (
     .film24            (filmp_dec),                    // DVD-FORK (Film 24p/25p Out): 1 frame/refresh in the governor; ascal does the pulldown
     .film_det_ntsc     (core_film_det_ntsc),           // DVD-FORK (Film 24p auto-detect): 3:2 telecine verdict (clk_dec)
     .film_det_pal      (core_film_det_pal),            // DVD-FORK (Film 24p auto-detect): sustained-progressive verdict (clk_dec)
-    .blend_en          (blend_en_dec),                 // DVD-FORK (field blend): O[49] Progressive Deint = Blend
-    .blend_act         (core_blend_act)                // DVD-FORK (field blend): instrument -> telemetry word 7 flags[5]
+    .blend_en          (blend_en_dec),                 // DVD-FORK (field blend): Deinterlace = Blend (progressive)
+    .blend_act         (core_blend_act),               // DVD-FORK (field blend): instrument -> telemetry word 7 flags[5]
+    .bob_en            (bob_en_dec),                   // DVD-FORK (progressive bob): Deinterlace = Bob (progressive)
+    .bob_act           (core_bob_act)                  // DVD-FORK (progressive bob): instrument -> telemetry word 14 [8]
 );
 // DVD-FORK (Film 24p auto-detect): 2-FF sync the governor's clk_dec cadence verdicts
 // into clk_sys, where film_want / filmp_eff resolve the Off/On/Auto mode (the reverse

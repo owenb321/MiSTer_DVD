@@ -25,7 +25,7 @@ An explicit choice always overrides `MiSTer.ini` and persists across reloads.
 | A 15 kHz RGBHV rig the ini bits cannot identify | **Interlaced**, explicitly |
 | A display that wants 480p/576p on the analog pins | **Progressive**, explicitly |
 | HDMI, but a disc of true-interlaced video (TV, concerts) and you want native fields | **Interlaced**, explicitly |
-| HDMI, a true-interlaced disc, and you'd rather see a soft picture than combing | **Progressive** with [`Progressive Deint`](#progressive-deint-blending-away-the-comb) = Blend |
+| HDMI, a true-interlaced disc, and you'd rather not see combing | **Progressive** with [`Deinterlace`](#deinterlace) = Bob (smooth motion) or Blend (steady, softer) |
 
 For a CRT there is nothing to set in the OSD — it engages from `MiSTer.ini` exactly like
 any other core:
@@ -48,8 +48,8 @@ While it is active:
 - The **CRT** gets each authored field directly on a native 15 kHz raster — the smoothest
   presentation for video-sourced discs, and the same thing a set-top player outputs.
 - **HDMI** drops to 480i for the session, deinterlaced by the framework scaler.
-  `480i Deint` picks Bob (smooth motion, half vertical resolution) or Weave (full
-  resolution, combing on motion). The scaler is not cadence-aware, so **film content
+  [`Deinterlace`](#deinterlace) picks Bob (smooth motion, half vertical resolution) or
+  Weave (full resolution, combing on motion). The scaler is not cadence-aware, so **film content
   looks better in Progressive mode on HDMI** — which is why Interlaced is not forced
   whenever a CRT is merely present, only chosen.
 - [Film 24p](film-24p.md) output is unavailable (a 23.976 Hz raster cannot carry fields).
@@ -87,30 +87,43 @@ The two fields of a video-sourced picture are two different moments, 1/60 s apar
 both alternately while paused would flicker between them, so when you pause (or frame-step)
 such a picture the player holds **one** field, filling the other field's lines by
 interpolation — the "field still" a set-top player shows. The still is steady on a CRT and
-with either `480i Deint` setting, at the cost of half the vertical detail while paused.
+over HDMI with either `Deinterlace` setting, at the cost of half the vertical detail while
+paused.
 
 Film and progressive pictures are unaffected: their two fields are the same moment, so the
 pause keeps the full-resolution frame. It works the same with every `Analog Aspect` setting.
 
-## Progressive Deint: blending away the comb
+## Deinterlace
 
-In **Progressive** mode, a picture from a video-sourced disc (television, concerts,
-laserdisc-style FMV) shows both of its fields at once. They are two different moments, so
-anything that moves shows **combing**: fine horizontal teeth along moving edges.
+A picture from a video-sourced disc (television, concerts, laserdisc-style FMV) carries
+two fields, and they are two different moments. `Deinterlace` chooses how they are shown.
 
-`Progressive Deint = Blend` mixes every line of such a picture with the lines above and
-below it. The comb becomes a soft ghost of the two moments. There is no detector and
-nothing that changes from one refresh to the next, so edges and text stay perfectly steady.
+| Setting | Progressive output | Interlaced output (HDMI only) |
+|---|---|---|
+| **Weave** *(default)* | Both fields at once: full detail, but anything that moves shows **combing**, fine horizontal teeth along moving edges. | The framework scaler interleaves the fields: full detail, combing on motion. |
+| **Bob** | One field at a time, 60 (or 50) times a second, with the other field's lines filled in from the lines above and below. Motion is smooth and there is no comb; the cost is half the vertical detail, and fine horizontal edges shimmer slightly as the two fields alternate. | The framework scaler's bob, with the same trade. |
+| **Blend** | Every line mixed with the lines above and below it. The comb becomes a soft ghost of the two moments, and nothing changes from one refresh to the next, so edges and text stay perfectly steady. The cost is sharpness everywhere, including parts of the picture that were not moving. | Not offered. |
 
-The trade is **sharpness**. Those pictures lose some vertical detail everywhere, including
-parts of the picture that were not moving. Many discs marked as interlaced never actually
-comb, and on those Blend only softens, which is why it is **Off by default**. Turn it on for
-a disc whose combing bothers you, and off again for the next one.
+The OSD only lists the choices that apply to the current `Video Output`. If `Blend` is
+selected and you switch to Interlaced, the setting shows and behaves as `Weave` there, and
+comes back as `Blend` when you switch back.
 
-Film and progressive content are never touched: the player only blends pictures the disc
-marks as interlaced. It has no effect in **Interlaced** mode, where the fields are shown as
-fields and `480i Deint` applies instead. Subtitles, menu highlights and the HUD are drawn
-after the blend, so they stay sharp.
+On the **Interlaced** output, a CRT always receives the real fields, whatever this is set
+to. `Deinterlace` only changes what HDMI shows at the same time.
+
+Some things are never touched:
+
+- **Film and progressive content.** The player only deinterlaces pictures the disc marks
+  as interlaced, so a film disc looks the same with every setting.
+- **The [Film 24p](film-24p.md) output.** Bob needs a refresh per field, which a 24 Hz
+  output does not have, so under Film 24p a `Bob` picture is woven. Blend still applies.
+- **Subtitles, menu highlights and the HUD.** They are drawn afterwards, so they stay sharp.
+
+Many discs marked as interlaced never actually comb. On those, Bob and Blend only cost
+detail, which is why **Weave is the default**. Try Bob or Blend on a disc whose combing
+bothers you, and switch back for the next one. A paused picture is steady with every
+setting (see [Pausing interlaced video](#pausing-interlaced-video)); with Bob it holds one
+field.
 
 ## Field alignment
 

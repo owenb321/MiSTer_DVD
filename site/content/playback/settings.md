@@ -18,11 +18,16 @@ Settings are saved to `/media/fat/config/DVD_v3.CFG` and persist across core rel
 | **SPDIF Byte Order** | **Normal** / Swap | Applies to *both* bitstream outputs despite the name. If a receiver names the format but plays static, toggle this. |
 | **Player Language** | **English** / 15 others | The player's language preference for menus, audio and subtitles, like a set-top player's setup screen. Discs use it to pick a default track. |
 | **Video Output** | **Auto** / Interlaced / Progressive | The core's one output-mode choice: authored interlaced fields (CRTs, true-video content) or progressive (HDMI, film) — see [Video Output](../video/interlaced.md). Auto follows `MiSTer.ini`. |
-| **480i Deint** | **Bob** / Weave | How the framework scaler deinterlaces when receiving 480i (HDMI, while Video Output is Interlaced). |
-| **Progressive Deint** | **Off** / Blend | The companion to `480i Deint`, for the other output. With **Progressive**, true-interlaced video (video-sourced 29.97i/25i, laserdisc-style FMV) shows combing on motion. **Blend** mixes each line with its neighbours, which turns the comb into a soft ghost and never shimmers, at the cost of some vertical sharpness on those discs. Film, progressive content and the Interlaced output are untouched either way. See [Progressive Deint](../video/interlaced.md#progressive-deint-blending-away-the-comb). |
+| **Deinterlace** | **Weave** / Bob / Blend | How the two fields of a true-interlaced picture (video-sourced 29.97i/25i, laserdisc-style FMV) are shown. **Weave** shows both at once: full detail, but combing on motion. **Bob** shows one field at a time with the missing lines filled in: smooth motion, half the vertical detail. **Blend** mixes each line with its neighbours, turning the comb into a soft ghost at the cost of some sharpness. The choices follow `Video Output`: **Progressive** offers all three; **Interlaced** offers Weave and Bob, and there they only change how HDMI shows the 480i/576i signal (a CRT always gets the real fields). Film and progressive content are never touched. See [Deinterlace](../video/interlaced.md#deinterlace). |
 | **Analog Aspect** | **Auto** / Fit / Letterbox / Crop | How anamorphic content fits a 4:3 analog TV — see [Analog Aspect](../video/analog-crt.md#analog-aspect). |
 | **Video Standard** | **Auto** / NTSC / PAL | Auto detects from the stream's vertical size (480 = NTSC, 576 = PAL). |
 | **Screensaver** | **5min** / Off / 2min / 10min | How long a paused or stopped disc sits still before the bouncing idle logo takes over. The picture goes with it, and so do the status line, the seek bar and any subtitle or disc menu highlight — nothing is left standing still, which is the whole point. Any button or key brings it all straight back, exactly as it was. It protects CRTs from burn-in and changes nothing about playback — your place is kept. |
+
+!!! note "Deinterlace replaces two settings"
+    **Deinterlace** replaces the separate `480i Deint` and `Progressive Deint` settings.
+    Your other settings are kept, but whatever you had chosen for those two returns to the
+    default, **Weave**, once. If you watch the **Interlaced** output over HDMI and liked the
+    old default (Bob), set `Deinterlace = Bob`.
 
 !!! warning "New in v0.4.0 — your settings reset once"
     **Video Output** replaces the previous `Interlaced Out` and `Analog Out` settings

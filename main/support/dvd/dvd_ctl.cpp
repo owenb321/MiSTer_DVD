@@ -107,7 +107,9 @@ static void telem_read()
 		// flags.tmap / flags.tmap_fb = the last TIME seek landed through the disc's
 		// time map / fell back to its sector estimate (issue #127, word 7
 		// flags[6]/[7]; both 0 on a core without the feature, or before one).
-		"\"still\":%u,\"menu\":%u,\"blend\":%u,\"tmap\":%u,\"tmap_fb\":%u}}\n",
+		// flags.bob = the display scan under way uses the progressive bob kernel
+		// (docs/field_blend.md "Bob"; word 14 bit 8, 0 on a core without it).
+		"\"still\":%u,\"menu\":%u,\"blend\":%u,\"tmap\":%u,\"tmap_fb\":%u,\"bob\":%u}}\n",
 		t, w[1], w[2], w[3], w[4],
 		(int)(int16_t)w[5],                       // vid_err is SIGNED
 		(int)((w[6] >> 11) & 0x1F) - (((w[6] >> 15) & 1) ? 32 : 0),
@@ -123,7 +125,8 @@ static void telem_read()
 		(unsigned)(w[7] & 1), (unsigned)((w[7] >> 1) & 1),
 		(unsigned)((w[7] >> 2) & 1), (unsigned)((w[7] >> 3) & 1),
 		(unsigned)((w[7] >> 4) & 1), (unsigned)((w[7] >> 5) & 1),
-		(unsigned)((w[7] >> 6) & 1), (unsigned)((w[7] >> 7) & 1));
+		(unsigned)((w[7] >> 6) & 1), (unsigned)((w[7] >> 7) & 1),
+		(unsigned)((w[14] >> 8) & 1));
 	fclose(f);
 	rename(tmp, DVD_TELEM_FILE);
 }

@@ -108,9 +108,11 @@ def parse(literals: list[str]):
             continue
 
         # "O[27:26],Analog Out,Auto,Interlaced,..." / "P1O2,Debug Overlay,Off,On"
-        # / "OX6,Audio Out,..." / "OB,480i Deint,Bob,Weave"
+        # / "OX6,Audio Out,..." / "H0O[51:50],Deinterlace,Weave,Bob,Blend"
+        # ⚠ H/h/D/d + one mask char are Main's hide/disable-by-menu-mask prefixes
+        # (menu.cpp); without them in the pattern such a row is silently NOT CHECKED.
         head = s.split(",")[0]
-        if re.fullmatch(r"(P\d)?O[X]?(\[[\d:]+\]|[0-9A-Za-z])", head):
+        if re.fullmatch(MASK_PREFIX + r"(P\d)?O[X]?(\[[\d:]+\]|[0-9A-Za-z])", head):
             parts = [p.strip() for p in s.split(",")]
             if len(parts) >= 2 and parts[1]:
                 options.append((parts[1], parts[2:]))
@@ -120,6 +122,11 @@ def parse(literals: list[str]):
         # structural and carries nothing to document.
 
     return options, buttons, exts
+
+
+# Main's menu-mask prefixes (menu.cpp: H/D hide/disable while mask bit n is SET, h/d
+# while it is CLEAR; n is one base-32 char; they stack, and precede the page prefix).
+MASK_PREFIX = r"(?:[HhDd][0-9A-Va-v])*"
 
 
 def parse_bits(literals: list[str]):
@@ -139,6 +146,11 @@ def parse_bits(literals: list[str]):
       "12"        -> two chars: start=first, end=second
       lowercase o -> +32 on both ends ("ex")
       X           -> "also handled by the HPS"; carries no bits, skipped
+      H0/h0/D1..  -> menu-mask prefixes, carry no bits. Rows the mask swaps share ONE
+                     bit field (e.g. the two Deinterlace rows, one per raster); they
+                     are merged into one entry keeping the LONGEST value list, which
+                     is only sound because the shorter list is a prefix of it -- a
+                     row pair that disagrees on a value's index raises.
 
     This is parsed rather than hand-listed on purpose: emu.sv carries
     commented-out CONF_STR history, so a hand-maintained table drifts and a
@@ -157,7 +169,7 @@ def parse_bits(literals: list[str]):
         if not s:
             continue
         head = s.split(",")[0]
-        m = re.fullmatch(r"(?:P\d)?([Oo])(X?)(\[[\d:]+\]|[0-9A-Za-z]{1,2})", head)
+        m = re.fullmatch(MASK_PREFIX + r"(?:P\d)?([Oo])(X?)(\[[\d:]+\]|[0-9A-Za-z]{1,2})", head)
         if not m:
             continue
         parts = [p.strip() for p in s.split(",")]
@@ -184,7 +196,17 @@ def parse_bits(literals: list[str]):
 
         if end < start or end > 127 or end - start > 8:
             continue                        # Main rejects these too
-        out.append((parts[1], start, end, parts[2:]))
+        vals = parts[2:]
+        dup = next((k for k, o in enumerate(out) if o[:3] == (parts[1], start, end)), None)
+        if dup is not None:
+            old = out[dup][3]
+            short, long_ = (old, vals) if len(old) <= len(vals) else (vals, old)
+            if long_[:len(short)] != short:
+                raise ValueError(f"CONF_STR rows {parts[1]!r} share bits {start}..{end} "
+                                 f"but disagree on the values: {old} vs {vals}")
+            out[dup] = (parts[1], start, end, long_)
+            continue
+        out.append((parts[1], start, end, vals))
     return out
 
 

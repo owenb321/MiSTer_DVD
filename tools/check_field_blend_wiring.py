@@ -1,29 +1,39 @@
 #!/usr/bin/env python3
-"""check_field_blend_wiring.py -- the field-blend seams in dvd/emu.sv and
-rtl/mpeg2/mpeg2video.v (docs/field_blend.md).
+"""check_field_blend_wiring.py -- the field-blend / progressive-bob seams in
+dvd/emu.sv and rtl/mpeg2/mpeg2video.v (docs/field_blend.md).
 
-WHY A SCRIPT: every module bench is handed blend_en / the pixel stream by its
-parent and is correct for what it is given. What decides whether the feature
-reaches the screen -- and ONLY on the progressive raster, and OFF by default --
-is a handful of connections no bench instantiates (emu has no bench, and the
-chain bench wires field_blend itself). The check_field_order_wiring.py pattern.
+WHY A SCRIPT: every module bench is handed blend_en / bob_en / the pixel stream by
+its parent and is correct for what it is given. What decides whether the features
+reach the screen -- on the right raster, from the one Deinterlace option, with Weave
+as the default -- is a handful of connections no bench instantiates (emu has no
+bench, and the chain bench wires field_blend itself). The
+check_field_order_wiring.py pattern.
 
 WHAT IS PINNED
   emu.sv
-    1. exactly one CONF_STR row "O[49],Progressive Deint,Off,Blend;" and no other
-       row whose bit range covers 49. Index 0 = Off = the DEFAULT (user decision
-       2026-09-24) -- a swapped value order would ship the feature ON.
-    2. blend_en = status[49] & ~interlaced_eff. Rejected: a NEGATED status[49]
-       (that is the default-ON polarity), and fields_eff / il_eff / p240_eff: 240p
-       is a sub-mode of the interlaced raster whose decoder emits FRAMES, so a
-       fields_eff gate (what shelved Stage A used) would blend on 240p.
-    3. a 2-FF sync of blend_en into clk_dec, and mpeg2video fed the SYNCED net.
-    4. the instrument: mpeg2video.blend_act -> core_blend_act -> telemetry flags.
+    1. the Deinterlace option (2026-09-25 merge): exactly the two rows
+         "H0O[51:50],Deinterlace,Weave,Bob,Blend;"   (Progressive raster)
+         "h0O[51:50],Deinterlace,Weave,Bob;"         (Interlaced raster: no Blend)
+       and no other row on bits 50/51. Index 0 = Weave = the DEFAULT. The retired
+       rows' bits 11 ("480i Deint") and 49 ("Progressive Deint") are claimed by no
+       row and READ BY NOTHING (a stale saved value must not re-arm them).
+    2. hps_io.status_menumask = {15'd0, interlaced_eff} -- mask bit 0 is what swaps
+       the two rows (H0 hides on a set bit, h0 on a clear one).
+    3. deint_mode = status[51:50];
+       blend_en = (deint_mode == 2'd2) & ~interlaced_eff;
+       bob_en   = (deint_mode == 2'd1) & ~interlaced_eff & ~filmp_eff;
+       HDMI_BOB_DEINT = fields_eff & (deint_mode == 2'd1).
+       Rejected in the blend/bob gates: fields_eff / il_eff / p240_eff -- 240p is a
+       sub-mode of the interlaced raster whose decoder emits FRAMES, so a fields_eff
+       gate (what shelved Stage A used) would filter on 240p.
+    4. a 2-FF sync of each into clk_dec, and mpeg2video fed the SYNCED nets.
+    5. the instruments: blend_act -> core_blend_act -> telemetry flags; bob_act ->
+       core_bob_act -> telemetry sched_flags (word 14 bit 8).
   mpeg2video.v
-    5. resample.blend_en(blend_en); resample.scan_blend and field_blend.scan_blend
-       are the same net, and so are the two scan_start connections (the sideband
-       is useless if its pulse and its bit come from different places).
-    6. ORDER: resample -> field_blend -> disp_vscale. field_blend.in_y is
+    6. resample.blend_en(blend_en) / .bob_en(bob_en); scan_start, scan_blend,
+       scan_bob and scan_bob_bot are each ONE net from resample to field_blend (the
+       sideband is useless if its pulse and its bits come from different places).
+    7. ORDER: resample -> field_blend -> disp_vscale. field_blend.in_y is
        y_resample, and disp_vscale.in_y is field_blend's out_y -- never y_resample
        (a bypass leaves the module instantiated and inert, which every bench of the
        module would still pass).
@@ -119,64 +129,121 @@ def tokens(expr):
 def conf_rows(src):
     """(hi, lo, text) for every O-row string literal: "O[h:l],..", "O[n],..", "Ox,.."."""
     rows = []
-    for m in re.finditer(r'"((?:P\d+)?O\[(\d+)(?::(\d+))?\][^"]*)"', src):
+    pre = r'(?:[HhDd][0-9A-Va-v])*(?:P\d+)?'      # menu-mask hide/disable prefixes, page
+    for m in re.finditer(r'"(%sO\[(\d+)(?::(\d+))?\][^"]*)"' % pre, src):
         hi = int(m.group(2)); lo = int(m.group(3)) if m.group(3) else hi
         rows.append((hi, lo, m.group(1)))
-    for m in re.finditer(r'"((?:P\d+)?O([0-9A-Va-v]{1,2}),[^"]*)"', src):
+    for m in re.finditer(r'"(%sO([0-9A-Va-v]{1,2}),[^"]*)"' % pre, src):
         ch = m.group(2)
         bits = [int(c, 36) for c in ch]
         rows.append((max(bits), min(bits), m.group(1)))
     return rows
 
 
+PROG_ROW = 'H0O[51:50],Deinterlace,Weave,Bob,Blend;'
+ILACE_ROW = 'h0O[51:50],Deinterlace,Weave,Bob;'
+
+
+def gate_expr(src, name, bad, rel):
+    m = re.search(r'\bwire\s+%s\s*=\s*([^;]+);' % name, src)
+    if not m:
+        bad(name, 'no `wire %s = ...;` in %s' % (name, rel))
+        return None
+    return m.group(1)
+
+
+def mode_eq(expr, val):
+    """expr compares deint_mode to 2'd<val> (either operand order)."""
+    return bool(re.search(r"\(\s*deint_mode\s*==\s*2'd%d\s*\)" % val, expr) or
+                re.search(r"\(\s*2'd%d\s*==\s*deint_mode\s*\)" % val, expr))
+
+
 def check_emu(src, rel, bad):
     rows = conf_rows(src)
-    ours = [r for r in rows if r[2] == 'O[49],Progressive Deint,Off,Blend;']
-    if len(ours) != 1:
-        bad('CONF_STR', 'expected exactly one "O[49],Progressive Deint,Off,Blend;" row, '
-                        'found %d. Index 0 must be Off (the default). Rows mentioning 49: %s'
-                        % (len(ours), [r[2] for r in rows if r[1] <= 49 <= r[0]]))
-    others = [r[2] for r in rows if r[1] <= 49 <= r[0] and r[2] != 'O[49],Progressive Deint,Off,Blend;']
+    for want, what in ((PROG_ROW, 'Progressive'), (ILACE_ROW, 'Interlaced')):
+        n = sum(1 for r in rows if r[2] == want)
+        if n != 1:
+            bad('CONF_STR', 'expected exactly one %s Deinterlace row "%s", found %d. Rows on '
+                            'bits 50/51: %s' % (what, want, n,
+                                                [r[2] for r in rows if r[1] <= 51 and r[0] >= 50]))
+    others = [r[2] for r in rows if r[1] <= 51 and r[0] >= 50 and r[2] not in (PROG_ROW, ILACE_ROW)]
     if others:
-        bad('CONF_STR', 'another row claims status[49]: %s' % others)
+        bad('CONF_STR', 'another row claims status[51:50]: %s' % others)
+    for bit, old in ((11, '480i Deint'), (49, 'Progressive Deint')):
+        claim = [r[2] for r in rows if r[1] <= bit <= r[0]]
+        if claim:
+            bad('CONF_STR', 'bit %d (the retired "%s") is claimed again: %s' % (bit, old, claim))
+        if re.search(r'\bstatus\s*\[\s*%d\s*\]' % bit, src):
+            bad('status[%d]' % bit, ('is still READ; the retired "%s" bit must be read by '
+                                     'nothing, or a stale saved value re-arms it.') % old)
 
-    m = re.search(r'\bwire\s+blend_en\s*=\s*([^;]+);', src)
-    if not m:
-        bad('blend_en', 'no `wire blend_en = ...;` in %s' % rel)
-    else:
-        expr = m.group(1)
+    hp = connections(src, 'hps_io')
+    if hp is None:
+        bad('hps_io instance', 'not found in %s' % rel)
+    elif not re.fullmatch(r"\{\s*15'd0\s*,\s*interlaced_eff\s*\}", hp.get('status_menumask') or ''):
+        bad('hps_io.status_menumask', 'connected to `%s`, want {15\'d0, interlaced_eff}: mask '
+                                      'bit 0 set = the Interlaced raster, which H0 hides the '
+                                      'Blend row on.' % hp.get('status_menumask'))
+
+    m = re.search(r'\bwire\s*\[\s*1\s*:\s*0\s*\]\s*deint_mode\s*=\s*([^;]+);', src)
+    if not m or not re.fullmatch(r'status\s*\[\s*51\s*:\s*50\s*\]', m.group(1).strip()):
+        bad('deint_mode', 'want `wire [1:0] deint_mode = status[51:50];`, found `%s`'
+            % (m.group(1) if m else None))
+
+    for name, val, extra in (('blend_en', 2, ()), ('bob_en', 1, ('filmp_eff',))):
+        expr = gate_expr(src, name, bad, rel)
+        if expr is None:
+            continue
         tk = tokens(expr)
-        if not re.search(r'(?<![~!])\bstatus\s*\[\s*49\s*\]', expr):
-            bad('blend_en', '`%s` does not read status[49] UN-negated. Index 1 = Blend, so '
-                            'the feature is on when the bit is SET; ~status[49] ships it '
-                            'ON by default.' % expr)
+        if not mode_eq(expr, val):
+            bad(name, "`%s` does not test (deint_mode == 2'd%d)." % (expr, val))
+        if 'status' in tk:
+            bad(name, '`%s` reads status directly; it must decode deint_mode.' % expr)
         if not re.search(r'~\s*interlaced_eff\b', expr):
-            bad('blend_en', '`%s` is not gated on ~interlaced_eff (the progressive raster).' % expr)
+            bad(name, '`%s` is not gated on ~interlaced_eff (the progressive raster).' % expr)
+        for t in extra:
+            if not re.search(r'~\s*%s\b' % t, expr):
+                bad(name, '`%s` is not gated on ~%s: the Film 24p/25p raster scans a picture '
+                          'about once, so a bob there drops a field.' % (expr, t))
         for t in ('fields_eff', 'il_eff', 'p240_eff', 'il_prev', 'fields_prev'):
             if t in tk:
-                bad('blend_en', '`%s` uses %s. 240p is a sub-mode of the interlaced raster '
-                                'whose decoder emits FRAMES; only ~interlaced_eff excludes it.'
+                bad(name, '`%s` uses %s. 240p is a sub-mode of the interlaced raster '
+                          'whose decoder emits FRAMES; only ~interlaced_eff excludes it.'
                     % (expr, t))
 
-    if not re.search(r'\bblend_s1_dec\s*<=\s*blend_en\s*;', src) or \
-       not re.search(r'\bblend_en_dec\s*<=\s*blend_s1_dec\s*;', src):
-        bad('blend_en CDC', 'no 2-FF blend_en -> blend_s1_dec -> blend_en_dec in %s' % rel)
+    m = re.search(r'\bassign\s+HDMI_BOB_DEINT\s*=\s*([^;]+);', src)
+    if not m:
+        bad('HDMI_BOB_DEINT', 'no assign in %s' % rel)
+    else:
+        expr = m.group(1)
+        if not re.match(r'\s*fields_eff\s*&', expr) or not mode_eq(expr, 1) or 'status' in tokens(expr):
+            bad('HDMI_BOB_DEINT', "`%s`, want fields_eff & (deint_mode == 2'd1): ascal bobs "
+                                  "only on Bob, and a saved Blend weaves (what the Interlaced "
+                                  "row then shows)." % expr)
+
+    for n in ('blend', 'bob'):
+        if not re.search(r'\b%s_s1_dec\s*<=\s*%s_en\s*;' % (n, n), src) or \
+           not re.search(r'\b%s_en_dec\s*<=\s*%s_s1_dec\s*;' % (n, n), src):
+            bad('%s_en CDC' % n, 'no 2-FF %s_en -> %s_s1_dec -> %s_en_dec in %s' % (n, n, n, rel))
 
     mv = connections(src, 'mpeg2video')
     if mv is None:
         bad('mpeg2video instance', 'not found in %s' % rel)
     else:
-        if tokens(mv.get('blend_en')) != {'blend_en_dec'}:
-            bad('mpeg2video.blend_en', 'fed `%s`, want the synced blend_en_dec (clk_dec).'
-                % mv.get('blend_en'))
-        if tokens(mv.get('blend_act')) != {'core_blend_act'}:
-            bad('mpeg2video.blend_act', 'connected to `%s`, want core_blend_act.' % mv.get('blend_act'))
+        for port, want in (('blend_en', 'blend_en_dec'), ('bob_en', 'bob_en_dec'),
+                           ('blend_act', 'core_blend_act'), ('bob_act', 'core_bob_act')):
+            if tokens(mv.get(port)) != {want}:
+                bad('mpeg2video.%s' % port, 'connected to `%s`, want %s.' % (mv.get(port), want))
     tl = connections(src, 'dvd_telem')
     if tl is None:
         bad('dvd_telem instance', 'not found in %s' % rel)
-    elif 'core_blend_act' not in tokens(tl.get('flags')):
-        bad('dvd_telem.flags', '`%s` does not carry core_blend_act -- the HW round cannot '
-                               'see engagement.' % tl.get('flags'))
+    else:
+        if 'core_blend_act' not in tokens(tl.get('flags')):
+            bad('dvd_telem.flags', '`%s` does not carry core_blend_act -- the HW round cannot '
+                                   'see engagement.' % tl.get('flags'))
+        if 'core_bob_act' not in tokens(tl.get('sched_flags')):
+            bad('dvd_telem.sched_flags', '`%s` does not carry core_bob_act (word 14 bit 8).'
+                % tl.get('sched_flags'))
 
 
 def check_mpeg(src, rel, bad):
@@ -188,16 +255,17 @@ def check_mpeg(src, rel, bad):
             bad('%s instance' % name, 'not found in %s' % rel)
     if rs is None or fb is None or vs is None:
         return
-    if tokens(rs.get('blend_en')) != {'blend_en'}:
-        bad('resample.blend_en', 'fed `%s`, want the mpeg2video input blend_en.' % rs.get('blend_en'))
-    sb_r, sb_f = tokens(rs.get('scan_blend')), tokens(fb.get('scan_blend'))
-    if not sb_r or sb_r != sb_f:
-        bad('scan_blend', 'resample drives `%s`, field_blend reads `%s` -- not one net.'
-            % (rs.get('scan_blend'), fb.get('scan_blend')))
-    ss_r, ss_f = tokens(rs.get('scan_start')), tokens(fb.get('scan_start'))
-    if not ss_r or ss_r != ss_f:
-        bad('scan_start', 'resample drives `%s`, field_blend reads `%s` -- not one net.'
-            % (rs.get('scan_start'), fb.get('scan_start')))
+    for p in ('blend_en', 'bob_en'):
+        if tokens(rs.get(p)) != {p}:
+            bad('resample.%s' % p, 'fed `%s`, want the mpeg2video input %s.' % (rs.get(p), p))
+    for p in ('scan_start', 'scan_blend', 'scan_bob', 'scan_bob_bot'):
+        a_, b_ = tokens(rs.get(p)), tokens(fb.get(p))
+        if not a_ or a_ != b_:
+            bad(p, 'resample drives `%s`, field_blend reads `%s` -- not one net.'
+                % (rs.get(p), fb.get(p)))
+    if tokens(fb.get('bob_act')) != {'bob_act'}:
+        bad('field_blend.bob_act', 'connected to `%s`, want the mpeg2video output bob_act.'
+            % fb.get('bob_act'))
     if tokens(fb.get('in_y')) != {'y_resample'}:
         bad('field_blend.in_y', 'fed `%s`, want y_resample (it sits right after resample).'
             % fb.get('in_y'))
@@ -236,9 +304,10 @@ def main():
         for f in fails:
             sys.stderr.write('  - %s\n' % f)
         return 1
-    print('check_field_blend_wiring: PASS -- O[49] Off/Blend (default Off), gated on '
-          '~interlaced_eff, synced into clk_dec, instrumented; resample -> field_blend -> '
-          'disp_vscale with one sideband')
+    print('check_field_blend_wiring: PASS -- one Deinterlace option O[51:50] Weave/Bob/Blend '
+          '(default Weave; two rows swapped by the menu mask, no Blend on Interlaced), bits 11/49 '
+          'retired; blend/bob gated on ~interlaced_eff (bob also ~filmp_eff), synced into '
+          'clk_dec, instrumented; resample -> field_blend -> disp_vscale with one sideband')
     return 0
 
 

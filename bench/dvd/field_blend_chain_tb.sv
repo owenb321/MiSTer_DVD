@@ -29,6 +29,16 @@
 //   [C8]  +ilace=1: on the interlaced (fields) arm no scan is ever marked
 //   +tff=0  must pass unchanged (nothing here depends on field order)
 //   +blend_en=0  RED: the option off = the weave; C1 must fail
+//
+// PROGRESSIVE BOB (docs/field_blend.md "Bob"), +bob=1 (blend_en off, bob_en on):
+//   the SAME arms score the bob kernel instead of the blend -- keep one field, rebuild
+//   the other's lines as (a + d + 1) >> 1 -- where the kept field is derived HERE from
+//   the pickup handshake, never from the sideband: the first scan after a pickup keeps
+//   the picture's FIRST field (tff), every later scan the SECOND.
+//   [C9]  scans that follow a pickup (the first field) equal the kernel
+//   [C10] vacuity: both kinds of scan (pickup and re-scan) were actually scored
+//   [C5] then says the held second field is byte-identical on every re-scan, [C4] with
+//   +pfr=1 that film is untouched, [C8] with +ilace=1 that nothing is marked.
 `timescale 1ns/1ps
 module field_blend_chain_tb;
   localparam [7:0]  MB_WIDTH   = 8'd8;
@@ -45,7 +55,7 @@ module field_blend_chain_tb;
   reg dot_clk = 0; always #10 dot_clk = ~dot_clk;
   reg rst = 0;
 
-  integer pfr = 0, tff = 1, blend_en_i = 1, mix = 0, pause_i = 0, ilace = 0;
+  integer pfr = 0, tff = 1, blend_en_i = 1, mix = 0, pause_i = 0, ilace = 0, bob_i = 0;
   reg        pause = 1'b0;
   reg        step_req = 1'b0;
   reg        progressive_frame = 1'b0;
@@ -54,6 +64,7 @@ module field_blend_chain_tb;
   reg        output_frame_valid = 1'b0;
   wire       output_frame_rd;
   reg        blend_en = 1'b1;
+  reg        bob_en   = 1'b0;
   reg        ilace_r = 1'b0;
 
   wire        disp_wr_addr_full, disp_wr_addr_almost_full, disp_wr_addr_en, disp_wr_addr_ack;
@@ -63,7 +74,7 @@ module field_blend_chain_tb;
   wire [7:0]  px_y, px_u, px_v, px_osd;
   wire [2:0]  px_position;
   wire        px_wr_en, px_wr_almost_full;
-  wire        scan_start, scan_half, scan_blend;
+  wire        scan_start, scan_half, scan_blend, scan_bob, scan_bob_bot;
 
   resample resample (
     .clk(clk), .rst(rst),
@@ -86,21 +97,23 @@ module field_blend_chain_tb;
     .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0),
     .sched_due(1'b1), .sched_next_due(1'b1),
     .still_en(1'b0), .scan_start(scan_start), .scan_half(scan_half),
-    .blend_en(blend_en), .scan_blend(scan_blend)
+    .blend_en(blend_en), .scan_blend(scan_blend),
+    .bob_en(bob_en), .scan_bob(scan_bob), .scan_bob_bot(scan_bob_bot)
   );
 
   wire [7:0] fb_y, fb_u, fb_v, fb_osd;
   wire [2:0] fb_pos;
   wire       fb_wr, vs_in_almost_full;
-  wire       blend_act;
+  wire       blend_act, bob_act;
   field_blend field_blend (
     .clk(clk), .clk_en(1'b1), .rst(rst),
     .scan_start(scan_start), .scan_blend(scan_blend),
+    .scan_bob(scan_bob), .scan_bob_bot(scan_bob_bot),
     .in_y(px_y), .in_u(px_u), .in_v(px_v), .in_osd(px_osd),
     .in_pos(px_position), .in_wr(px_wr_en), .in_almost_full(px_wr_almost_full),
     .out_y(fb_y), .out_u(fb_u), .out_v(fb_v), .out_osd(fb_osd),
     .out_pos(fb_pos), .out_wr(fb_wr), .out_almost_full(vs_in_almost_full),
-    .blend_act(blend_act)
+    .blend_act(blend_act), .bob_act(bob_act)
   );
 
   wire [7:0] vs_y, vs_u, vs_v, vs_osd;
@@ -225,7 +238,7 @@ module field_blend_chain_tb;
   // Scan scoring at the disp_hstretch output (= what the pixel queue receives)
   // ====================================================================
   localparam [2:0] ROW_0_COL_0 = 3'b000, ROW_1_COL_0 = 3'b001, ROW_X_COL_0 = 3'b010;
-  localparam integer P_IGNORE = 0, P_WEAVE = 1, P_BLEND = 2;
+  localparam integer P_IGNORE = 0, P_WEAVE = 1, P_BLEND = 2, P_BOB = 3;
 
   integer phase = P_IGNORE;
   integer skip  = 0;
@@ -241,9 +254,18 @@ module field_blend_chain_tb;
   // mismatch totals per line class, over every scored scan
   integer bad_int = 0, bad_top = 0, bad_bot = 0, bad_struct = 0, bad_row1 = 0, bad_held = 0;
   integer held_check = 0;                // C5 armed: consecutive scans are one held picture
+  // bob: per scan, in scan order, "this scan follows a pickup" -- from the handshake
+  reg  sq [0:255];
+  integer sq_w = 0, sq_r = 0;
+  integer cur_first = 0;                 // the scan being scored follows a pickup
+  integer bad_first = 0, n_first = 0, n_second = 0;
 
   function integer disp_of(input integer code); disp_of = (code + 128) & 255; endfunction
   // the kernel over the displayed values, mirrored at both edges
+  // bob: which field the scan keeps -- the first field (tff) on a pickup scan, else the second
+  function integer keep_bot_of(input integer first);
+    keep_bot_of = first ? (tff ? 0 : 1) : (tff ? 1 : 0);
+  endfunction
   function integer exp_px(input integer ph, input integer y, input integer c);
     integer a, b, d;
     begin
@@ -252,7 +274,10 @@ module field_blend_chain_tb;
       else begin
         d = (y + 1 < H) ? disp_of(stamp(y + 1, c / 16)) : disp_of(stamp(y - 1, c / 16));
         a = (y > 0)     ? disp_of(stamp(y - 1, c / 16)) : d;
-        exp_px = (a + 2 * b + d + 2) / 4;
+        if (ph == P_BOB)
+          exp_px = ((y % 2) == keep_bot_of(cur_first)) ? b : (a + d + 1) / 2;
+        else
+          exp_px = (a + 2 * b + d + 2) / 4;
       end
     end
   endfunction
@@ -262,6 +287,8 @@ module field_blend_chain_tb;
     begin
       if (cur_slot >= 0) begin
         scans_total = scans_total + 1;
+        if (sq_r < sq_w) begin cur_first = sq[sq_r % 256]; sq_r = sq_r + 1; end
+        else cur_first = 0;
         if (cur_px != LINE_PX) cur_bad_px = cur_bad_px + 1;    // last line
         if (scans_total > 4 && !ilace && (cur_n != H || cur_bad_px != 0 || cur_slot != 0)) begin
           bad_struct = bad_struct + 1;
@@ -277,13 +304,15 @@ module field_blend_chain_tb;
             y = k / LINE_PX;
             if (vals[k] !== exp_px(phase, y, k % LINE_PX)) begin
               nb = nb + 1;
-              if (y == 0) bad_top = bad_top + 1;
+              if (phase == P_BOB && cur_first) bad_first = bad_first + 1;
+              else if (y == 0) bad_top = bad_top + 1;
               else if (y == H - 1) bad_bot = bad_bot + 1;
               else bad_int = bad_int + 1;
             end
           end
+          if (phase == P_BOB) begin if (cur_first) n_first = n_first + 1; else n_second = n_second + 1; end
           // C5: against the previous scored scan of the same held picture
-          if (held_check && prev_ok)
+          if (held_check && prev_ok && !(phase == P_BOB && cur_first))
             for (k = 0; k < H * LINE_PX; k = k + 1)
               if (vals[k] !== prev[k]) bad_held = bad_held + 1;
           for (k = 0; k < H * LINE_PX; k = k + 1) prev[k] = vals[k];
@@ -331,12 +360,14 @@ module field_blend_chain_tb;
 
   integer pickups = 0;
   integer scan_begins = 0, marked = 0;
+  reg     pick_pend = 1'b0;
   always @(posedge clk) if (rst) begin
+    if (output_frame_rd) begin pickups = pickups + 1; pick_pend = 1'b1; end
     if (resample.resample_addrgen.scan_start) begin
       scan_begins = scan_begins + 1;
-      if (scan_blend) marked = marked + 1;
+      if (scan_blend || scan_bob) marked = marked + 1;
+      sq[sq_w % 256] = pick_pend; sq_w = sq_w + 1; pick_pend = 1'b0;
     end
-    if (output_frame_rd) pickups = pickups + 1;
   end
 
   task present_one;
@@ -359,12 +390,14 @@ module field_blend_chain_tb;
     void'($value$plusargs("pause=%d", pause_i));
     void'($value$plusargs("ilace=%d", ilace));
     void'($value$plusargs("verbose=%d", verbose));
+    void'($value$plusargs("bob=%d", bob_i));
     progressive_frame = pfr[0];
     top_field_first = tff[0];
-    blend_en = blend_en_i[0];
+    blend_en = blend_en_i[0] && !bob_i;
+    bob_en   = bob_i[0];
     ilace_r = ilace[0];
-    $display("==== field_blend_chain_tb  pfr=%0d tff=%0d blend_en=%0d mix=%0d pause=%0d ilace=%0d ====",
-             pfr, tff, blend_en_i, mix, pause_i, ilace);
+    $display("==== field_blend_chain_tb  pfr=%0d tff=%0d blend_en=%0d bob=%0d mix=%0d pause=%0d ilace=%0d ====",
+             pfr, tff, blend_en_i, bob_i, mix, pause_i, ilace);
 
     repeat (8) @(posedge clk); rst = 1; repeat (8) @(posedge clk);
 
@@ -378,11 +411,26 @@ module field_blend_chain_tb;
     end else begin
       // a few pictures, then hold (persistence re-scans the held frame)
       repeat (3) present_one;
-      held_check = 1;
-      run_phase(pfr ? P_WEAVE : P_BLEND, 3, NSCORE, n_a);
-      held_check = 0;
+      if (bob_i && !pfr) begin
+        // bob: pictures keep arriving while scoring, so pickup scans (first field) and
+        // re-scans (second field) are both scored; then a hold for C5
+        phase = P_BOB; skip = 2; ph_scans = 0; ph_pass = 0; prev_ok = 0;
+        repeat (6) begin present_one; repeat (2) @(posedge clk); end
+        phase = P_IGNORE;
+        $display("  [BOB] streaming: %0d pickup scans, %0d re-scans scored", n_first, n_second);
+        held_check = 1;
+        run_phase(P_BOB, 3, NSCORE, n_a);
+        held_check = 0;
+        if (n_first < 2 || n_second < 2) begin
+          $display("FAIL: [C10] vacuous: %0d pickup scans and %0d re-scans scored", n_first, n_second); errors = errors + 1;
+        end
+      end else begin
+        held_check = 1;
+        run_phase(pfr ? P_WEAVE : P_BLEND, 3, NSCORE, n_a);
+        held_check = 0;
+      end
       $display("  [A] %s : %0d/%0d scans  (blend_act=%0d)",
-               pfr ? "film control, weave" : "blended (kernel)   ", n_a, NSCORE, blend_act);
+               pfr ? "film control, weave" : bob_i ? "bob (held 2nd fld) " : "blended (kernel)   ", n_a, NSCORE, blend_act);
 
       if (pause_i) begin
         // a frame step while paused: the stepped picture is blended from its first scan
@@ -392,7 +440,7 @@ module field_blend_chain_tb;
           present_one;
           begin @(negedge clk) step_req = 1'b1; @(negedge clk) step_req = 1'b0; end
         join
-        run_phase(P_BLEND, 1, NSCORE, n_b);
+        run_phase(bob_i ? P_BOB : P_BLEND, 1, NSCORE, n_b);
         $display("  [P] after a paused step: %0d/%0d scans", n_b, NSCORE);
         if (n_b != NSCORE) begin $display("FAIL: [C7] a stepped picture was not blended"); errors = errors + 1; end
         @(negedge clk) pause = 1'b0;
@@ -417,6 +465,7 @@ module field_blend_chain_tb;
         if (bad_int != 0) begin $display("FAIL: [C1] %0d interior pixels differ from the kernel", bad_int); errors = errors + 1; end
         if (bad_top != 0) begin $display("FAIL: [C1T] %0d top-line pixels differ (mirror a := d)", bad_top); errors = errors + 1; end
         if (bad_bot != 0) begin $display("FAIL: [C1B] %0d bottom-line pixels differ (mirror d := a)", bad_bot); errors = errors + 1; end
+        if (bad_first != 0) begin $display("FAIL: [C9] %0d pixels of pickup (first-field) scans differ from the bob kernel", bad_first); errors = errors + 1; end
       end
       if (bad_held != 0) begin $display("FAIL: [C5] a held picture's consecutive scans differ on %0d pixels", bad_held); errors = errors + 1; end
       if (bad_struct != 0) begin $display("FAIL: [C2] %0d scans structurally damaged (lines / pixels / slot)", bad_struct); errors = errors + 1; end

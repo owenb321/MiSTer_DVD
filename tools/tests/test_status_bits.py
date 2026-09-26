@@ -23,7 +23,8 @@ EXPECTED = {
     'Audio Out': (6, 6),              # OX6 -- the X carries no bits
     'SPDIF Byte Order': (7, 7),
     'Video Output': (9, 10),
-    '480i Deint': (11, 11),           # OB -- 'B' is base-32 11
+    # 'OB,480i Deint' (bit 11) and 'O[49],Progressive Deint' retired 2026-09-25 into:
+    'Deinterlace': (50, 51),          # H0O/h0O[51:50] -- two rows, one field, merged
     'Frame Drop': (12, 12),
     'A/V Sync': (13, 13),
     'Line-21 CC': (14, 14),
@@ -77,6 +78,16 @@ cases = [
 for lit, label, want in cases:
     got = {a: (b, c) for a, b, c, _ in docs_check.parse_bits([lit.strip('"')])}
     check(label, got.get(label), want)
+
+print('[menu-mask prefixes: rows swapped by the mask share one field]')
+got = docs_check.parse_bits(['H0O[51:50],Mask,A,B,C;', 'h0O[51:50],Mask,A,B;', 'D1P1O[9],Masked page,X,Y;'])
+check('Mask merged', [(a, b, c, v) for a, b, c, v in got if a == 'Mask'], [('Mask', 50, 51, ['A', 'B', 'C'])])
+check('Masked page', [(a, b, c) for a, b, c, _ in got if a == 'Masked page'], [('Masked page', 9, 9)])
+try:
+    docs_check.parse_bits(['H0O[51:50],Clash,A,B;', 'h0O[51:50],Clash,B,A;'])
+    print('  FAIL rows that disagree on a value index were merged'); fails += 1
+except ValueError:
+    print('  PASS rows that disagree on a value index are refused')
 
 print('[rejections -- Main refuses these too]')
 for lit in ('"O[3:9],Backwards,A,B;"', '"O[1:0],TooWide,A;"'):
