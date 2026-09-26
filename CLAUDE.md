@@ -409,13 +409,39 @@ worse maintenance burden than targeted in-place edits. So:
   **`docs/dvd_nav.md` §2h**. The preview-anchor attempt that preceded this is on the local
   branch `fix/display-clock`, the display-clock queue on `wip/disp-clock-queue` (both unpushed).
 
+- ✅ **ONE `Deinterlace` OPTION (Weave / Bob / Blend) + BOB ON THE PROGRESSIVE RASTER
+  (2026-09-25, branch `feature/deint-merge`); sim-proven + mutation-checked, built
+  `DVD_deintmerge_20260926_0049.rbf` (SEED 9 first roll, clk_dec 88.92/89.88, 98 % ALM,
+  Bob = +7 ALM; rebased onto PR #129 and rebuilt as `DVD_deintmerge_20260926_0154.rbf`,
+  SEED 9 first roll, 90.95/89.09), ✅ HW-MEASURED 2026-09-26: on Thayer's most-combed blocks, comb 1.05 Weave → 0.31 Bob
+  → 0.18 Blend; held re-scans 0 px; Bob's kept field bit-exact against Weave; film 0 px;
+  pacing unchanged; gated off on Interlaced and Film 24p; ✅ HW-CONFIRMED by the
+  maintainer's eye the same day (OSD row swap, HDMI Bob on Interlaced, Bob motion).** `OB 480i Deint` and `O[49] Progressive Deint` are RETIRED (bits 11/49
+  reserved and read by nothing) into `O[51:50] Deinterlace`: 0 = Weave (default), 1 = Bob,
+  2 = Blend. ⛔ "Off" was dropped because it equals Weave on both rasters (user decision).
+  ★ **Two CONF_STR rows share the field, swapped by the MENU MASK**: `H0O[51:50]…Weave,Bob,Blend`
+  and `h0O[51:50]…Weave,Bob`, with `hps_io.status_menumask = {15'd0, interlaced_eff}` (the
+  first use of the mask in this core). Main renders an out-of-range value as index 0, so a
+  saved Blend reads and behaves as Weave on the Interlaced raster (`HDMI_BOB_DEINT =
+  fields_eff & (deint_mode == 1)`). ⚠ Accepted cost: HDMI on Interlaced now defaults to
+  Weave (was Bob). ★ **Progressive Bob is `field_blend`'s second kernel**: keep one field,
+  rebuild the other's lines as `(a + d + 1) >> 1`, on the same `cur_ilace` gate as Blend,
+  plus `~filmp_eff`. The pickup scan keeps the FIRST field and every re-scan the SECOND,
+  so a hold is steady; alternating per re-scan would be Stage A's 30 Hz flip (MB4 → C5).
+  ⚠ **`tools/docs_check.py` silently skipped mask-prefixed rows** (it matched `P`/`O` only);
+  `MASK_PREFIX` now handles them, and `parse_bits()` merges rows that share a field.
+  Telemetry `flags.bob` = word 14 bit 8 (word 7 is full). Gates:
+  `bench/dvd/run_field_blend.sh --red`, `tools/check_field_blend_wiring.py`. Detail:
+  **`docs/field_blend.md` §6–§7**.
+
 - ✅ **PROGRESSIVE DEINT = BLEND — a NON-ADAPTIVE field blend on the Progressive
   raster (2026-09-24, branch `feature/field-blend`); sim-proven + mutation-checked, built
   `DVD_fieldblend_20260924_1713.rbf` (SEED 9 first roll, clk_dec 91.64/89.16, 254 ALM,
   6 M10K, 0 DSP), ✅ HW-MEASURED on the rig 2026-09-24 (Thayer comb 1.751 → 0.588 on
   one paused picture, 0 px change between Blend re-scans, film 0 px Off vs Blend, PAL and
   NTSC video engage, Interlaced disengages, pacing unchanged), ✅ HW-CONFIRMED by the maintainer the same day: Thayer's Quest looks good with
-  Blend, and a film→video change inside one title switches the blend correctly.** `O[49] Progressive Deint = Off / Blend`, **default Off**. On the
+  Blend, and a film→video change inside one title switches the blend correctly.** `O[49] Progressive Deint = Off / Blend`, **default Off** (⚠ since 2026-09-25 it is
+  `Deinterlace = Blend` on the merged `O[51:50]` option, see the bullet above). On the
   Progressive raster, `dvd/field_blend.sv` filters every line of a true-interlaced picture
   (`cur_ilace`) as `(a + 2b + d + 2) >> 2`, mirroring the edges.
   ★ **This reopens `hw_budget_and_lessons.md` §0 narrowly and on purpose.** Shelved Stage A

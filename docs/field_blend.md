@@ -4,7 +4,10 @@
 and built: `DVD_fieldblend_20260924_1713.rbf`, SEED 9 first roll, clk_dec 91.64 / 89.16
 MHz against the 86.0 gate, `field_blend` = 254 ALM, 6 M10K, 0 DSP. ✅ HW-measured on the
 rig 2026-09-24 (§5) and ✅ confirmed by the maintainer's eye the same day.
-**Option:** `O[49] Progressive Deint = Off / Blend`, **default Off**.
+**Option:** was `O[49] Progressive Deint = Off / Blend`, default Off. **Since 2026-09-25 it
+is `Deinterlace = Blend`** on the merged `O[51:50] Deinterlace = Weave / Bob / Blend`
+(default Weave = the old Off), which also carries a progressive **Bob** built on this
+module — see §6 and §7.
 **Files:** `dvd/field_blend.sv`, `dvd/resample_addrgen.v` (sideband and H+1 walk),
 `rtl/mpeg2/resample.v` and `rtl/mpeg2/mpeg2video.v` (threading and instance), `dvd/emu.sv`
 (option, gate, CDC, telemetry), `main/support/dvd/dvd_ctl.cpp` (`flags.blend`).
@@ -204,7 +207,8 @@ Luma only; the module bench covers chroma bit-exactly.
 
 Both are defence in depth, and no bench can fail on their removal.
 
-**Wiring (`tools/check_field_blend_wiring.py`).** It checks:
+**Wiring (`tools/check_field_blend_wiring.py`).** (As first shipped; §6 lists what it
+pins since the Deinterlace merge.) It checks:
 - the CONF_STR row, including that **Off is index 0**;
 - the gate polarity;
 - the `~interlaced_eff` term, with `fields_eff`/`il_eff`/`p240_eff` rejected;
@@ -255,3 +259,179 @@ that instantiate the addrgen or `resample` gained a `.blend_en(1'b0)` tie-off.
   - hard-telecine film (`pf=0`) is blended, which the census could not size;
   - a menu still flagged interlaced is softened;
   - the blend applies to the whole picture, not only where it combs (by design, §1).
+
+## 6. One option: `Deinterlace = Weave / Bob / Blend` (2026-09-25, branch `feature/deint-merge`)
+
+✅ **Sim-proven, mutation-checked, built and HW-CONFIRMED 2026-09-26 (§7).** Build
+`releases/DVD_deintmerge_20260926_0049.rbf`: SEED 9 first roll, clk_dec 88.92 @100C / 89.88
+@−40C (gate 86.0), not marginal, 98 % ALM. `field_blend` = 261 ALM (254 before Bob, so the
+second kernel cost 7 ALM), 6 M10K, 0 DSP. The matching Main cross-compiles
+(`USE_DOCKER=1 main/build_main.sh`).
+**Rebased onto PR #129 (`.cue` sheets) and rebuilt:** `releases/DVD_deintmerge_20260926_0154.rbf`,
+SEED 9 first roll, clk_dec 90.95 @100C / 89.09 @−40C, 98 % ALM, from a clean tree at
+`2a79dd7`. The rebase changed only the file-picker list and `` `CORE_VERSION ``, so the
+HW round above (run on the pre-rebase build) stands. `run_field_blend.sh --red` is green
+again, 53 arms; the Main rebuilds too.
+
+Two options used to cover one question, one per raster:
+- `OB 480i Deint = Bob / Weave` (bit 11) chose ascal's deinterlace for HDMI while the
+  Interlaced raster was up (`HDMI_BOB_DEINT`);
+- `O[49] Progressive Deint = Off / Blend` was this module.
+
+They are now **one** field, `O[51:50] Deinterlace`: **0 = Weave (default), 1 = Bob,
+2 = Blend**. "Off" was dropped (user decision) because it is identical to Weave on both
+rasters: Progressive Off already showed the woven frame, and ascal's non-bob mode is a
+weave.
+
+**Two rows on one bit field, swapped by the menu mask.**
+- `H0O[51:50],Deinterlace,Weave,Bob,Blend` is hidden while mask bit 0 is set;
+  `h0O[51:50],Deinterlace,Weave,Bob` is hidden while it is clear.
+- Mask bit 0 = `interlaced_eff`, on `hps_io.status_menumask` (connected for the first
+  time; the port and command 0x2E were always there).
+- Main reads the mask on every menu draw (`menu.cpp`, `UIO_GET_OSDMASK`), so the rows
+  swap live when Video Output changes.
+- Syntax, from `menu.cpp`: `H`/`D` hide/disable on a SET bit and `h`/`d` on a CLEAR one.
+  The mask index is one base-32 character. The prefixes stack and come BEFORE the page
+  prefix (`H1P1O...`).
+- The Interlaced row lists no Blend. Main renders an out-of-range value as index 0
+  without writing it back (`menu.cpp`, "option's index is outside of available values"),
+  so a saved Blend **shows as Weave there, and the core weaves**: `HDMI_BOB_DEINT` is
+  `(deint_mode == 1)`, not `!= 0`. Back on Progressive the saved 2 is Blend again.
+
+**Why Weave is index 0** (user decision). The Progressive default stays the measured one
+(§2: `pf=0` over-selects, so any filter by default softens ~half of the discs it
+engages). The cost is that HDMI on the Interlaced raster moves from Bob to Weave by
+default. The manual says so in a note.
+
+**Why new bits, not a relayout.** Bits 50/51 had never been allocated, so no `"v,N"` bump
+and no mass settings reset; only these two options' choices reset, once. Bits 11 and 49
+are left reserved and are read by NOTHING (the wiring checker pins that), so a stale
+saved value cannot re-arm anything.
+
+**What the tools had to learn.**
+- `tools/docs_check.py` (`parse()` and `parse_bits()`) matched only rows beginning `P`/`O`.
+  A mask-prefixed row was SILENTLY skipped: not checked against the manual, and not
+  settable by `tools/mister.py`. `MASK_PREFIX` fixes that.
+- `parse_bits()` MERGES rows with one label and one bit field, keeping the longer value
+  list. That is only sound when the shorter list is a prefix of the longer one, and a
+  pair that disagrees raises (`tools/tests/test_status_bits.py`).
+
+## 7. Bob on the Progressive raster
+
+`Deinterlace = Bob` on Progressive is field_blend's **second kernel**. It keeps ONE field of
+the woven frame (the top field is the even lines) and rebuilds each line of the other as
+the average of the kept lines above and below:
+
+    kept line  (y % 2 == keep_bot):  out = b
+    other line                   :  out = (a + d + 1) >> 1
+
+This is an interpolating bob, the user's choice over line repeat. It needs no new memory:
+the `dbuf`/`nbuf` line delays already hold `a` and `b`. The edges fall out of the existing
+mirroring:
+- top: `a := d`, so keeping the bottom field, line 0 = line 1;
+- bottom: the addrgen's (H+1)th line is H-2, so keeping the top field with H even, line
+  H-1 = line H-2.
+
+**Gate: the same as Blend's** (`filt_ok` in `resample_addrgen.v`). That is `cur_ilace`, the
+weave arm, a FRAME image, and no SIF walk or Letterbox. So film and `pf=1` pictures are
+never touched. emu adds `~filmp_eff`, because the Film 24p/25p raster scans a picture
+about once and a bob there would drop a field; a true-interlaced picture on that raster
+stays woven (Blend still engages there).
+
+**Which field, and why it is not Stage A.** The kept field is picked per scan by the
+addrgen:
+- the pickup scan (`STATE_INIT`) keeps the picture's **first** field (`cur_tff`, latched
+  at the pickup like `cur_ilace`);
+- **every** later re-scan (`STATE_REPEAT`) keeps the **second**.
+
+MPEG-2 forbids `rff` on a `pf=0` picture, so on cadence a bob picture gets exactly two
+refreshes: first field, then second, a true 59.94/50 Hz bob.
+
+A pause, a late re-scan, or a held still keeps showing the second field,
+**byte-identical on every re-scan**. That is the point, and the lesson from Stage A:
+- Stage A alternated its anchor on every refresh of a held picture, which is a 30 Hz
+  flip on anything held.
+- Here the only alternation is the one the content itself has (two fields, two refreshes).
+- Mutation MB4 (alternate on every re-scan) is caught by C5.
+
+Bob still has its native character: during playback, fine static horizontal edges
+twitter by half a line, exactly as ascal's bob does on 480i. It is opt-in.
+
+**Scans stay FRAME images**, so the governor's pair ledger (`late_pair`/`late_ext`) is
+untouched: a bob scan is a woven-frame scan whose lines are rebuilt downstream.
+
+**Sideband.** `scan_blend` now means "a filtered scan, H+1 lines in, either kernel".
+Beside it, `scan_bob` selects the kernel and `scan_bob_bot` the kept field. The 4-deep
+queue entries grew from 1 bit to 3, and the input FIFO word from 36 bits to 38.
+
+**Telemetry.** `bob_act` goes to word 14 bit 8 as `flags.bob` in `/tmp/dvd_telem.json`.
+Word 7's eight flag bits are all taken.
+
+**Gates.**
+- `bench/dvd/run_field_blend.sh --red`:
+  - module arms `+bob=1|2` are bit-exact against `tools/field_blend_model.py`'s
+    `bob_keep()` for both kept fields, with backpressure and on the real Thayer frame;
+  - chain `+bob=1` covers pickup scans keeping the first field [C9], held re-scans
+    keeping the second and identical [C1 C5], film [C4], the fields arm [C8], `+tff=0`,
+    a paused step, a film switch, and vacuity [C10].
+
+  | mutation | caught by |
+  |---|---|
+  | MB1 no +1 rounding | K1 |
+  | MB2 wrong line parity | K1 |
+  | MB3 kept field inverted | C1 C1B C1T C9 |
+  | MB4 alternates per re-scan | C1 C1B C1T C5 |
+  | MB5 `tff` ignored (+tff=0) | C1 C1B C1T C9 |
+  | MB6 `cur_ilace` gate removed (+pfr=1) | C4 |
+
+  The wiring REDs grew to W0–W11: menumask inverted or unwired, a Blend label on the
+  Interlaced row, HDMI still reading bit 11, bob without `~interlaced_eff`, bob without
+  `~filmp_eff`.
+- `tools/check_field_blend_wiring.py` pins everything in §6/§7 (rows, mask, `deint_mode`,
+  both gates, `HDMI_BOB_DEINT`, retired bits unread, CDCs, instruments, one sideband).
+
+⚠ **Three harness traps found writing this, worth keeping:**
+- **The wiring checker CRASHED on two RED arms** (a `%` format error), and `wred` read the
+  non-zero exit as RED. It now demands the named `check_field_blend_wiring: FAIL` line.
+- **`$value$plusargs` takes the FIRST match.** `mod_args` used to bake in the blend
+  `+exp`, so a bob arm appending its own `+exp` was silently scored against the blend
+  expectation. There is now exactly one `+exp` per arm.
+- **This shell is zsh, which does not word-split `$a`.** A loop over "`+bob=1 +exp=...`"
+  handed vvp ONE argument and every arm read X. Drive such loops through `bash -c`.
+
+**✅ HW-MEASURED on the rig (2026-09-26, harness).** Build `DVD_deintmerge_20260926_0049.rbf`
+plus a Main built from this branch merged with `main` (PR #129), so the cue work rides along.
+
+| check | result |
+|---|---|
+| Thayer VTS_01 at 0:00:00, one paused picture: the 40 most-combed 16x16 blocks in Weave | comb **1.05 (Weave) → 0.31 (Bob) → 0.18 (Blend)** |
+| Same held picture, two shots per mode | **0 px differ** in Weave, Bob and Blend; Weave identical before and after the tour |
+| Bob kernel, on the silicon | kept rows = the odd (bottom) field, **max \|Bob − Weave\| = 0**, the second field of a held `tff=1` picture as designed; rebuilt rows vs the average of their neighbours: mean 0.9, p99 7.5 (YUV-domain average vs RGB) |
+| Engagement, live `osd` changes on Progressive | `flags.bob` = 1 only on Bob, `flags.blend` = 1 only on Blend |
+| MEN_IN_BLACK (film, `pf=1`), paused: Weave vs Bob | `flags.bob = 0`, **0 px differ** on a non-black picture |
+| Pacing, Thayer, interleaved 15 s windows | lates 7.38 / 7.71 / 7.32 / 7.44 per s (W/B/W/B), `vid_err` 0, 59.95 Hz |
+| `Video Output = Interlaced`, each setting | `blend = 0`, `bob = 0` (the fabric filters stay off) |
+| `Film 24p Out = On` (23.96 Hz raster) | Bob: `bob = 0`; Blend: `blend = 1` |
+
+⚠ Harness lessons from this round:
+- **A pause pressed straight after a launch is dropped.** It lands before playback is
+  live, and every later shot is then of a PLAYING picture: all modes "differed" by ~287,000
+  px. Check `flags.pause` and a frozen `pickups` before reading any held-picture result.
+- `pickups` is cumulative across an MGL relaunch of the same core until the core reset
+  lands, so wait for `refreshes` to drop before counting a new launch's pictures.
+- The HDMI side of Interlaced (ascal's bob) cannot be captured: screenshots are ascal's
+  input, and the capture card was held by another process.
+
+**✅ HW-CONFIRMED by the maintainer's eye (2026-09-26)** on the three checks the harness
+cannot make:
+- the OSD row shows 3 values on Progressive and 2 on Interlaced, and swaps live;
+- HDMI on Interlaced follows Bob/Weave;
+- Bob motion on true-interlaced video looks right.
+- Thayer's Quest on Progressive + Bob: comb ≈ 0 while playing, and a paused picture 0 px
+  different between shots;
+- a film disc: 0 px Bob vs Weave, `flags.bob = 0`;
+- Blend unregressed;
+- Interlaced: HDMI follows Bob/Weave, and the CRT is unaffected;
+- the OSD row shows 3 values on Progressive and 2 on Interlaced, and swaps live (the
+  maintainer's eye; screenshots do not carry the OSD);
+- Bob motion judged by eye.

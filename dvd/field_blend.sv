@@ -51,6 +51,18 @@
  *
  * OSD is never blended (a palette INDEX). With blend_en low the addrgen marks no
  * scan, the buffered path never fills, and the module is the wire it replaces.
+ *
+ * DVD-FORK (PROGRESSIVE BOB, docs/field_blend.md "Bob"). A second kernel on the same
+ * line buffers, selected per scan by the sideband (scan_bob, with scan_blend also set,
+ * because a bob scan is the same H+1-line filtered scan). It keeps ONE field of the
+ * woven frame -- the top field is the even lines -- and rebuilds each line of the other
+ * field as the average of the kept lines above and below it:
+ *     kept line  (y[0] == keep_bot):  out = b
+ *     other line                   :  out = (a + d + 1) >> 1
+ * The addrgen chooses the kept field per scan (the first field on the pickup scan, the
+ * second on every re-scan). The edges fall out of the mirroring above: keeping BOTTOM,
+ * output line 0 is (d + d + 1) >> 1 = line 1; keeping TOP with H even, the bottom line
+ * is (H-2 + H-2 + 1) >> 1 = line H-2, a repeat of the nearest kept line.
  */
 
 `include "timescale.v"
@@ -61,7 +73,9 @@ module field_blend (
   input             rst,               // synchronous, active low
 
   input             scan_start,        // addrgen: a frame-top scan begins
-  input             scan_blend,        //   ... and is a blend scan (H+1 lines in)
+  input             scan_blend,        //   ... and is a filtered scan (H+1 lines in)
+  input             scan_bob,          //   ... with the BOB kernel (else the blend)
+  input             scan_bob_bot,      //   ... bob keeps the BOTTOM field (else the TOP)
 
   /* from resample_bilinear */
   input       [7:0] in_y,
@@ -82,14 +96,15 @@ module field_blend (
   input             out_almost_full,
 
   /* instrument (level, for dvd_telem): the scan under way is a blend scan */
-  output reg        blend_act
+  output reg        blend_act,
+  output reg        bob_act            // ... and it is a bob scan
   );
 
 `include "resample_codes.v"
 
   /* ---- per-scan sideband, in scan order. Depth 4: a scan needs every one of its
    * lines through the resample pipeline before the next can start. ---- */
-  reg   [3:0] sb_q;
+  reg   [2:0] sb_q [0:3];                                     // {bob_bot, bob, filtered}
   reg   [2:0] sb_n;
   reg         in_prev_row0;
   wire        in_col0 = (in_pos == ROW_0_COL_0) || (in_pos == ROW_1_COL_0) || (in_pos == ROW_X_COL_0);
@@ -98,19 +113,21 @@ module field_blend (
   always @(posedge clk)
     if (~rst) in_prev_row0 <= 1'b0;
     else if (in_wr && clk_en && in_col0) in_prev_row0 <= (in_pos == ROW_0_COL_0);
-  wire        sb_blend = (sb_n != 3'd0) & sb_q[0];          // the arriving scan is BLEND
+  wire        sb_blend = (sb_n != 3'd0) & sb_q[0][0];       // the arriving scan is FILTERED
+  wire  [1:0] sb_kern  = (sb_n != 3'd0) ? sb_q[0][2:1] : 2'd0;  // {bob_bot, bob}
   wire        sb_pop   = ft_arr && (sb_n != 3'd0);
   wire  [2:0] sb_npop  = sb_pop ? sb_n - 3'd1 : sb_n;
-  wire  [3:0] sb_shift = sb_pop ? {1'b0, sb_q[3:1]} : sb_q;
   always @(posedge clk)
     if (~rst) begin
       sb_n <= 3'd0;
-      sb_q <= 4'd0;
+      sb_q[0] <= 3'd0; sb_q[1] <= 3'd0; sb_q[2] <= 3'd0; sb_q[3] <= 3'd0;
     end else begin
-      sb_q <= sb_shift;
+      if (sb_pop) begin
+        sb_q[0] <= sb_q[1]; sb_q[1] <= sb_q[2]; sb_q[2] <= sb_q[3]; sb_q[3] <= 3'd0;
+      end
       sb_n <= sb_npop;
       if (clk_en && scan_start && (sb_npop != 3'd4)) begin
-        sb_q[sb_npop[1:0]] <= scan_blend;
+        sb_q[sb_npop[1:0]] <= {scan_bob_bot & scan_bob, scan_bob & scan_blend, scan_blend};
         sb_n <= sb_npop + 3'd1;
       end
     end
@@ -124,39 +141,43 @@ module field_blend (
   wire        ft_route  = sb_blend | path_busy;
   reg         scan_route;
   reg         scan_mode_in;
+  reg   [1:0] scan_kern_in;
   always @(posedge clk)
-    if (~rst) begin scan_route <= 1'b0; scan_mode_in <= 1'b0; end
-    else if (ft_arr) begin scan_route <= ft_route; scan_mode_in <= sb_blend; end
+    if (~rst) begin scan_route <= 1'b0; scan_mode_in <= 1'b0; scan_kern_in <= 2'd0; end
+    else if (ft_arr) begin scan_route <= ft_route; scan_mode_in <= sb_blend; scan_kern_in <= sb_kern; end
   wire        route_px = in_ft ? ft_route : scan_route;
   wire        mode_px  = in_ft ? sb_blend : scan_mode_in;
+  wire  [1:0] kern_px  = in_ft ? sb_kern  : scan_kern_in;
 
   /* ---- input FIFO (absorbs the resample macroblock bursts) + FWFT reader ---- */
   wire        fifo_prog_full;
   wire        fifo_rvalid;
-  wire [35:0] fifo_dout;               // {blend, y, u, v, osd, pos}
+  wire [37:0] fifo_dout;               // {bob_bot, bob, filtered, y, u, v, osd, pos}
   wire        fifo_rd_en;
   wire        ibuf_wr = route_px & in_wr & clk_en;
 
-  fifo_sc #(.addr_width(9'd7), .dta_width(9'd36), .prog_thresh(9'd64))   // 128 deep, 64 margin
+  fifo_sc #(.addr_width(9'd7), .dta_width(9'd38), .prog_thresh(9'd64))   // 128 deep, 64 margin
   ibuf (
     .clk(clk), .rst(rst),
-    .din({mode_px, in_y, in_u, in_v, in_osd, in_pos}),
+    .din({kern_px, mode_px, in_y, in_u, in_v, in_osd, in_pos}),
     .wr_en(ibuf_wr),
     .full(), .wr_ack(), .overflow(), .prog_full(fifo_prog_full),
     .dout(fifo_dout), .rd_en(fifo_rd_en),
     .empty(fifo_empty), .valid(fifo_rvalid), .underflow(), .prog_empty()
     );
 
-  wire [35:0] head;
+  wire [37:0] head;
   wire        head_valid;
   reg         head_pop;
-  fwft_reader #(.dta_width(9'd36)) fr (
+  fwft_reader #(.dta_width(9'd38)) fr (
     .rst(rst), .clk(clk), .clk_en(clk_en),
     .fifo_rd_en(fifo_rd_en), .fifo_valid(fifo_rvalid), .fifo_dout(fifo_dout),
     .valid(head_valid), .dout(head), .rd_en(head_pop)
     );
 
-  wire        h_blend = head[35];      // per-pixel copy of its scan's mode (set at routing)
+  wire        h_blend = head[35];      // per-pixel copy of its scan's mode (set at routing): filtered
+  wire        h_bob   = head[36];      //   ... with the bob kernel
+  wire        h_bbot  = head[37];      //   ... keeping the BOTTOM field
   wire  [7:0] h_y   = head[34:27];
   wire  [7:0] h_u   = head[26:19];
   wire  [7:0] h_v   = head[18:11];
@@ -201,6 +222,7 @@ module field_blend (
 
   /* stage 1: the pixel consumed last cycle (its reads are landing now) */
   reg         p1_valid, p1_emit, p1_blend, p1_first;
+  reg         p1_bob, p1_keep;           // bob scan; this OUTPUT line belongs to the kept field
   reg   [9:0] p1_col;
   reg  [31:0] p1_d;                    // {y,u,v,osd} of the live input line (d)
   reg   [2:0] p1_pos;
@@ -212,6 +234,7 @@ module field_blend (
 
   /* stage 2: fabric re-register of the M10K outputs, the pixel alongside */
   reg         p2_valid, p2_emit, p2_blend, p2_first;
+  reg         p2_bob, p2_keep;
   reg  [31:0] p2_d;
   reg   [2:0] p2_pos;
   reg  [31:0] b2;                      // line y   {y,u,v,osd}
@@ -224,6 +247,13 @@ module field_blend (
   wire  [9:0] k_y = {2'd0, a_y} + {1'd0, b2[31:24], 1'b0} + {2'd0, p2_d[31:24]} + 10'd2;
   wire  [9:0] k_u = {2'd0, a_u} + {1'd0, b2[23:16], 1'b0} + {2'd0, p2_d[23:16]} + 10'd2;
   wire  [9:0] k_v = {2'd0, a_v} + {1'd0, b2[15:8],  1'b0} + {2'd0, p2_d[15:8]}  + 10'd2;
+  /* the bob kernel's rebuilt line: the kept field's lines above (a) and below (d) */
+  wire  [8:0] m_y = {1'd0, a_y} + {1'd0, p2_d[31:24]} + 9'd1;
+  wire  [8:0] m_u = {1'd0, a_u} + {1'd0, p2_d[23:16]} + 9'd1;
+  wire  [8:0] m_v = {1'd0, a_v} + {1'd0, p2_d[15:8]}  + 9'd1;
+  wire  [7:0] f_y = ~p2_bob ? k_y[9:2] : p2_keep ? b2[31:24] : m_y[8:1];
+  wire  [7:0] f_u = ~p2_bob ? k_u[9:2] : p2_keep ? b2[23:16] : m_u[8:1];
+  wire  [7:0] f_v = ~p2_bob ? k_v[9:2] : p2_keep ? b2[15:8]  : m_v[8:1];
 
   /* registered outputs */
   reg   [7:0] r_y, r_u, r_v, r_osd;
@@ -234,6 +264,7 @@ module field_blend (
     if (~rst) begin
       scan_ft_code <= ROW_0_COL_0; sline <= 12'd0; col <= 10'd0; h_prev_row0 <= 1'b0;
       p1_valid <= 1'b0; p1_emit <= 1'b0; p1_blend <= 1'b0; p1_first <= 1'b0;
+      p1_bob <= 1'b0; p1_keep <= 1'b0; p2_bob <= 1'b0; p2_keep <= 1'b0; bob_act <= 1'b0;
       p1_col <= 10'd0; p1_d <= 32'd0; p1_pos <= ROW_X_COL_X;
       p2_valid <= 1'b0; p2_emit <= 1'b0; p2_blend <= 1'b0; p2_first <= 1'b0;
       p2_d <= 32'd0; p2_pos <= ROW_X_COL_X; b2 <= 32'd0; a2 <= 24'd0;
@@ -245,6 +276,8 @@ module field_blend (
       if (consume) begin
         p1_d <= {h_y, h_u, h_v, h_osd}; p1_pos <= e_pos; p1_col <= e_col;
         p1_emit <= e_emit; p1_blend <= h_blend; p1_first <= e_first;
+        /* output line y = e_sline - 1, so y[0] = ~e_sline[0]; the top field is even */
+        p1_bob  <= h_bob;  p1_keep <= (~e_sline[0] == h_bbot);
         if (h_col0) begin
           col <= 10'd1;
           h_prev_row0 <= (h_pos == ROW_0_COL_0);
@@ -255,6 +288,7 @@ module field_blend (
 
       /* -------- stage 2: M10K outputs land in fabric registers -------- */
       p2_valid <= p1_valid; p2_emit <= p1_emit; p2_blend <= p1_blend; p2_first <= p1_first;
+      p2_bob <= p1_bob; p2_keep <= p1_keep;
       p2_d <= p1_d; p2_pos <= p1_pos;
       b2 <= dbuf_rd; a2 <= nbuf_rd;
 
@@ -262,14 +296,14 @@ module field_blend (
        * add's cone (docs/hw_budget_and_lessons.md §5) -------- */
       r_wr <= p2_valid & p2_emit;
       if (p2_valid) begin
-        r_y   <= p2_blend ? k_y[9:2]  : p2_d[31:24];
-        r_u   <= p2_blend ? k_u[9:2]  : p2_d[23:16];
-        r_v   <= p2_blend ? k_v[9:2]  : p2_d[15:8];
+        r_y   <= p2_blend ? f_y       : p2_d[31:24];
+        r_u   <= p2_blend ? f_u       : p2_d[23:16];
+        r_v   <= p2_blend ? f_v       : p2_d[15:8];
         r_osd <= p2_blend ? b2[7:0]   : p2_d[7:0];              // never blended
         r_pos <= p2_pos;
       end
 
-      if (ft_arr) blend_act <= sb_blend;
+      if (ft_arr) begin blend_act <= sb_blend & ~sb_kern[0]; bob_act <= sb_kern[0]; end
     end
 
   /* idle detector for the routing decision (see path_busy) */

@@ -945,8 +945,21 @@ The cost is vertical softness.
 It is sim-proven and mutation-checked (`bench/dvd/run_field_blend.sh --red`,
 `tools/check_field_blend_wiring.py`).
 
-**✅ HW-CONFIRMED 2026-09-24** (harness round + the maintainer's eye, incl. a film→video change inside one title). Next step: merge. Design, the library census
+**✅ HW-CONFIRMED 2026-09-24** (harness round + the maintainer's eye, incl. a film→video change inside one title). Design, the library census
 that chose default Off, and the known limits are in **`docs/field_blend.md`**.
+
+### ✅ One Deinterlace option (Weave / Bob / Blend) + Bob on Progressive (2026-09-25, branch `feature/deint-merge`)
+
+`480i Deint` (OB) and `Progressive Deint` (O[49]) merge into `O[51:50] Deinterlace =
+Weave / Bob / Blend`, default Weave. Two CONF_STR rows share the field, and the menu mask
+(bit 0 = `interlaced_eff`) shows only Weave/Bob on the Interlaced raster. Bob on the
+Progressive raster is `field_blend`'s second kernel: keep one field, interpolate the other.
+The first field shows on the pickup scan and the second on every re-scan, so a hold is
+steady.
+
+Sim-proven + mutation-checked (`run_field_blend.sh --red`), built
+(`DVD_deintmerge_20260926_0049.rbf`, timing clean), ✅ HW-measured 2026-09-26 (§7 table).
+✅ HW-CONFIRMED by the maintainer's eye 2026-09-26. **Next step: merge.**
 
 ### HD Modeline Switching
 The display block drives a fixed 27MHz SD clock. DVD is 480i/480p so this is fine,

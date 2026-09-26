@@ -119,6 +119,9 @@ progressive-film raster and interlaced).
 
 `VGA_F1`, `HDMI_BOB_DEINT`, and the modeline walk all key off `il_eff`, so they follow
 automatically.
+(⚠ Stale since the 240p split: `VGA_F1` and `HDMI_BOB_DEINT` key off `fields_eff` =
+`interlaced_eff & ~p240_eff`, and since 2026-09-25 `HDMI_BOB_DEINT` reads the merged
+`Deinterlace` option instead of `O11` — see `docs/field_blend.md` §6.)
 
 ### 3. PAL 576i modeline branch
 

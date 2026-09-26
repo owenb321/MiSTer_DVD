@@ -49,7 +49,8 @@ module resample_addrgen (
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
   hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
   still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
-  blend_en, scan_blend                             // DVD-FORK (field blend): enable + per-scan sideband to field_blend
+  blend_en, scan_blend,                            // DVD-FORK (field blend): enable + per-scan sideband to field_blend
+  bob_en, scan_bob, scan_bob_bot                   // DVD-FORK (progressive bob): enable + per-scan kernel select
   );
 
   input              clk;                      // clock
@@ -275,9 +276,26 @@ module resample_addrgen (
    * cur_ilace says is true-interlaced (film keeps its weave, bit-identical), never under
    * the SIF walk or Letterbox. No anchor, no per-scan state: every scan of a picture is
    * marked the same, so a held picture renders identically on each re-scan.
-   * The frame-top TAG (disp_y_sat) is untouched: only the line count changes, by one. */
+   * The frame-top TAG (disp_y_sat) is untouched: only the line count changes, by one.
+   *
+   * DVD-FORK (PROGRESSIVE BOB -- docs/field_blend.md "Bob"). The same machinery, a
+   * different kernel: field_blend keeps ONE field of the woven frame and rebuilds the
+   * other's lines as the average of the kept field's lines above and below.
+   *   bob_en        the feature is on (emu: Deinterlace = Bob, progressive raster, not
+   *                 the film raster)
+   *   scan_bob      the scan being started is a BOB scan (scan_blend is then also 1:
+   *                 scan_blend means "a filtered scan, H+1 lines in", whichever kernel)
+   *   scan_bob_bot  ... and keeps the BOTTOM field (else the TOP)
+   * Which field: the pickup scan keeps the picture's FIRST field (top_field_first,
+   * latched at the pickup like cur_ilace) and EVERY later re-scan keeps the SECOND. A
+   * pf=0 picture may not carry rff, so on cadence that is exactly first, second = a
+   * field-rate bob; a pause, a late re-scan or a held still keeps showing the second
+   * field, byte-identical on every re-scan (no 30 Hz flip on a hold). */
   input              blend_en;
   output             scan_blend;
+  input              bob_en;
+  output             scan_bob;
+  output             scan_bob_bot;
 
 `include "vld_codes.v"
 `include "mem_codes.v"
@@ -772,13 +790,30 @@ module resample_addrgen (
    * blend_want: the weave arm (progressive raster), a true-interlaced DISPLAYED picture
    * (cur_ilace, latched at the real pickup), and neither Letterbox nor the SIF walk owning
    * the vertical path. Evaluated per scan at STATE_NEXT_IMG. */
-  wire       blend_want = blend_en && deinterlace && ~interlaced && cur_ilace &&
-                          ~vscale_en && ~sif2x;
-  wire       blend_now  = blend_want && (image_0 == FRAME);
+  wire       filt_ok    = deinterlace && ~interlaced && cur_ilace && ~vscale_en && ~sif2x &&
+                          (image_0 == FRAME);
+  wire       blend_now  = blend_en && filt_ok;
+  /* DVD-FORK (progressive bob): same gate, the bob kernel. Blend wins if both are ever
+   * set (emu decodes one 2-bit option, so they cannot be). */
+  wire       bob_now    = bob_en && ~blend_en && filt_ok;
+  /* cur_tff: the DISPLAYED picture's first field, latched at the real pickup for the
+   * same reason as cur_ilace. pic_scanned: a scan of the displayed picture has already
+   * begun, so this one is a re-scan (STATE_REPEAT) and keeps the SECOND field. */
+  reg        cur_tff, pic_scanned;
+  always @(posedge clk)
+    if (~rst) begin cur_tff <= 1'b1; pic_scanned <= 1'b0; end
+    else if (clk_en && (state == STATE_INIT) && pickup_go) begin
+      cur_tff     <= top_field_first;
+      pic_scanned <= 1'b0;
+    end
+    else if (clk_en && scan_begin) pic_scanned <= 1'b1;
+  wire       bob_bot_now = pic_scanned ? cur_tff : ~cur_tff;   // keep BOTTOM
   always @(posedge clk)
     if (~rst) blend_scan <= 1'b0;
-    else if (clk_en && (state == STATE_NEXT_IMG)) blend_scan <= blend_now;
-  assign scan_blend = blend_now;
+    else if (clk_en && (state == STATE_NEXT_IMG)) blend_scan <= blend_now | bob_now;
+  assign scan_blend   = blend_now | bob_now;
+  assign scan_bob     = bob_now;
+  assign scan_bob_bot = bob_bot_now;
 
   /* next state logic */
   always @*
