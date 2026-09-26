@@ -1480,7 +1480,17 @@ reg        fetch_xw;    // fetch is continuing in the NEXT sector (wrapped)
 reg        fetch_cross; // a cross-refill is in progress (S_SECREAD resumes S_FETCH, keeps fi)
 reg [5:0]  fi_save;     // fi latched at the straddle point (restored after the refill)
 
-reg [31:0] sec_lba;     // 2048-LBA to read in S_SECREAD
+// SECTOR-ADDRESS UNIT (feature/reader-slim). Every parse read names its sector
+// as base + offset; S_SECREAD issues sd_lba <= sec_base + sec_off, so the ~37
+// read sites share ONE adder instead of each carrying their own. (It was a
+// sec_lba register written with the finished sum at each site.) A site that also
+// loaded pit_sec / pgc_sec / ptt_srpt_lba / tm_sec with the same sum sets a flag
+// instead; the flagged register takes the sum on the next cycle at the top of
+// the clocked block, whichever branch then runs, so a seek that pre-empts the
+// read still sees it loaded. Nothing reads those four registers on that cycle.
+reg [31:0] sec_base, sec_off;
+wire [31:0] sec_sum_w = sec_base + sec_off;
+reg        ld_pit, ld_pgc, ld_ptt, ld_tm;
 // Transport/VM seek executes at a block boundary. Phase-B additions: a
 // NATURAL seek (snat_l) also waits for the stream to be delivered (nat_drained,
 // bounded by DRAIN_WD); and ~jump_pending makes the "jump outranks seek" rule
@@ -2284,6 +2294,9 @@ always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
         state        <= S_IDLE;
         sd_lba       <= 32'd0;
+        sec_base     <= 32'd0;
+        sec_off      <= 32'd0;
+        {ld_pit, ld_pgc, ld_ptt, ld_tm} <= 4'b0000;
         sd_rd        <= 1'b0;
         blk_inflight <= 1'b0;
         sd_ack_d     <= 1'b0;
@@ -2835,6 +2848,14 @@ always @(posedge clk or negedge rst_n) begin
             jptt_l   <= {1'b0, jump_ptt};
         end
 
+        // Sector-address unit: registers flagged by last cycle's read site take
+        // the read's sector now (see the sec_base declaration).
+        if (ld_pit) pit_sec      <= sec_sum_w;
+        if (ld_pgc) pgc_sec      <= sec_sum_w;
+        if (ld_ptt) ptt_srpt_lba <= sec_sum_w;
+        if (ld_tm)  tm_sec       <= sec_sum_w;
+        {ld_pit, ld_pgc, ld_ptt, ld_tm} <= 4'b0000;
+
         if (start) begin
             state      <= S_INIT;
             tm_v       <= 1'b0;            // a new disc: no cached time map
@@ -2933,7 +2954,8 @@ always @(posedge clk or negedge rst_n) begin
             DOM_FP: begin
                 // First Play PGC: VMGI@132 is a BYTE offset rel. to the VMGI.
                 if (vmgi_found) begin
-                    sec_lba    <= vmgi_lba;
+                    sec_base <= vmgi_lba;
+                    sec_off  <= 32'd0;
                     fetch_base <= 11'd132;
                     fetch_ret  <= S_JMP_VMGI;
                     state      <= S_SECREAD;
@@ -2958,7 +2980,8 @@ always @(posedge clk or negedge rst_n) begin
                     want_pgcn     <= jpgcn_l;
                     want_entry    <= jentry_l;
                     use_jcell     <= (jcell_l != 8'd0);   // breadcrumb return cell
-                    sec_lba    <= vmgi_lba;
+                    sec_base <= vmgi_lba;
+                    sec_off  <= 32'd0;
                     fetch_base <= 11'd200;
                     fetch_ret  <= S_JMP_VMGI;
                     state      <= S_SECREAD;
@@ -2988,7 +3011,8 @@ always @(posedge clk or negedge rst_n) begin
                 use_jcell   <= 1'b1;
                 if (jttn_l != 7'd0 && jvts_l == 8'd0) begin
                     if (vmgi_found) begin
-                        sec_lba    <= vmgi_lba;
+                        sec_base <= vmgi_lba;
+                        sec_off  <= 32'd0;
                         fetch_base <= 11'd196;      // VMGI.tt_srpt ptr
                         fetch_ret  <= S_TT_RES;
                         state      <= S_SECREAD;
@@ -3136,7 +3160,8 @@ always @(posedge clk or negedge rst_n) begin
                     // block 0 too and S_CHK_RAW takes the flat fallback for them
                     // instead of reading a nonexistent LBA 16.
                     vd_lba    <= 32'd16;
-                    sec_lba   <= 32'd0;
+                    sec_base <= 32'd0;
+                    sec_off  <= 32'd0;
                     fetch_base<= 11'd0;
                     fetch_ret <= S_CHK_RAW;
                     state     <= S_SECREAD;
@@ -3169,7 +3194,8 @@ always @(posedge clk or negedge rst_n) begin
                     // Too small for ISO9660 -> flat-file fallback
                     state     <= S_FLAT_INIT;             // shared whole-file extent setup
                 end else begin
-                    sec_lba   <= 32'd16;
+                    sec_base <= 32'd16;
+                    sec_off  <= 32'd0;
                     fetch_base<= 11'd0;      // CD001 / type at sector start
                     fetch_ret <= S_CHK_VD0;
                     state     <= S_SECREAD;
@@ -3222,7 +3248,7 @@ always @(posedge clk or negedge rst_n) begin
             // then hand off to the fetch sequencer.
             S_SECREAD: begin
                 if (!blk_inflight) begin
-                    sd_lba       <= sec_lba;
+                    sd_lba       <= sec_sum_w;
                     sd_rd        <= 1'b1;
                     blk_inflight <= 1'b1;
                 end else begin
@@ -3232,7 +3258,7 @@ always @(posedge clk or negedge rst_n) begin
                         // Every read is a whole sector now, so even a NAV-align
                         // probe (fetch_ret==S_NAV_CHK) leaves a fully-resident
                         // parse_buf and pb_sec can always claim residency.
-                        pb_sec   <= sec_lba;
+                        pb_sec   <= sd_lba;   // the sector this read issued
                         // A straddle cross-refill (fetch_cross) resumes the SAME
                         // fetch at the saved fi with fetch_xw=1 (wrapped reads);
                         // else a fresh fetch (fi=0), or a walker refill (fi=45 =
@@ -3260,11 +3286,12 @@ always @(posedge clk or negedge rst_n) begin
                 // fetch_base is large; a real cross only happens while fi < FETCH_N.
                 if (!fetch_xw && fi != FETCH_N && fb_fi > 12'd2047) begin
                     // The byte at this fi lives in the NEXT sector. Refill parse_buf
-                    // with sec_lba+1 (sec_lba still holds the fetch's base sector)
-                    // and resume this same fetch with fetch_xw=1, preserving fi.
+                    // with pb_sec+1 (pb_sec is the resident sector this fetch reads
+                    // from) and resume this same fetch with fetch_xw=1, preserving fi.
                     fi_save     <= fi;
                     fetch_cross <= 1'b1;
-                    sec_lba     <= sec_lba + 32'd1;
+                    sec_base <= pb_sec;
+                    sec_off  <= 32'd1;
                     state       <= S_SECREAD;
                 end else begin
                     fi_cap   <= fi;
@@ -3298,7 +3325,8 @@ always @(posedge clk or negedge rst_n) begin
                     state     <= S_ERROR;
                 end else begin
                     vd_lba    <= vd_lba + 32'd1;
-                    sec_lba   <= vd_lba + 32'd1;
+                    sec_base <= vd_lba;
+                    sec_off  <= 32'd1;
                     fetch_base<= 11'd0;
                     fetch_ret <= S_CHK_VD0;
                     state     <= S_SECREAD;
@@ -3310,7 +3338,8 @@ always @(posedge clk or negedge rst_n) begin
             S_CHK_VD1: begin
                 dir_lba    <= root_lba;
                 dir_remain <= root_len;
-                sec_lba    <= root_lba;
+                sec_base <= root_lba;
+                sec_off  <= 32'd0;
                 p          <= 12'd0;
                 fetch_base <= 11'd0;
                 fetch_ret  <= S_WALK_ROOT;
@@ -3324,7 +3353,8 @@ always @(posedge clk or negedge rst_n) begin
                     if (name_is_videots) begin
                         dir_lba    <= rec_extlba;
                         dir_remain <= rec_datalen;
-                        sec_lba    <= rec_extlba;
+                        sec_base <= rec_extlba;
+                        sec_off  <= 32'd0;
                         p          <= 12'd0;
                         fetch_base <= 11'd0;
                         fetch_ret  <= S_WALK_VTS;
@@ -3341,7 +3371,8 @@ always @(posedge clk or negedge rst_n) begin
                     if (dir_remain > 32'd2048) begin
                         dir_remain <= dir_remain - 32'd2048;
                         dir_lba    <= dir_lba + 32'd1;
-                        sec_lba    <= dir_lba + 32'd1;
+                        sec_base <= dir_lba;
+                        sec_off  <= 32'd1;
                         p          <= 12'd0;
                         fetch_base <= 11'd0;
                         fetch_ret  <= S_WALK_ROOT;
@@ -3426,7 +3457,8 @@ always @(posedge clk or negedge rst_n) begin
                     if (dir_remain > 32'd2048) begin
                         dir_remain <= dir_remain - 32'd2048;
                         dir_lba    <= dir_lba + 32'd1;
-                        sec_lba    <= dir_lba + 32'd1;
+                        sec_base <= dir_lba;
+                        sec_off  <= 32'd1;
                         p          <= 12'd0;
                         fetch_base <= 11'd0;
                         fetch_ret  <= S_WALK_VTS;
@@ -3550,7 +3582,8 @@ always @(posedge clk or negedge rst_n) begin
                             jmp_ifo_lba   <= gq_ifo_lba;
                             menu_base_blk <= gq_mnu_lba;
                             menu_blocks   <= gq_mnu_blk;   // 0 if no VTSM VOB
-                            sec_lba    <= gq_ifo_lba;
+                            sec_base <= gq_ifo_lba;
+                            sec_off  <= 32'd0;
                             fetch_base <= 11'd208;     // VTSI_MAT.vtsm_pgci_ut @208
                             fetch_ret  <= S_JMP_VTSM;
                             state      <= S_SECREAD;
@@ -3593,7 +3626,8 @@ always @(posedge clk or negedge rst_n) begin
                     // current title BEFORE the PGC parse; S_PTTLD_DONE re-fetches
                     // the resume field (@200 for the jump's S_PTT_MAT part-resolve,
                     // @204 for Auto's S_PGC_MAT) so the resume proceeds unchanged.
-                    sec_lba    <= eff_ifo_lba;
+                    sec_base <= eff_ifo_lba;
+                    sec_off  <= 32'd0;
                     fetch_base <= 11'd200;             // VTSI_MAT.vts_ptt_srpt @200
                     fetch_ret  <= S_ATTR_RD;
                     attr_phase <= 1'b0; attr_cnt_pending <= 1'b1;
@@ -3687,14 +3721,16 @@ always @(posedge clk or negedge rst_n) begin
                     want_ttn == 7'd0) begin
                     // no PTT table -> fall back to the title-entry scan (@204;
                     // want_ttn kept so S_PGCIT_HDR scans by title, else SRP[0]).
-                    sec_lba    <= eff_ifo_lba;
+                    sec_base <= eff_ifo_lba;
+                    sec_off  <= 32'd0;
                     fetch_base <= 11'd204;
                     fetch_ret  <= S_PGC_MAT;
                     state      <= S_SECREAD;
                 end else begin
-                    ptt_srpt_lba <= eff_ifo_lba + vts_pgcit_ptr;
+                    ld_ptt     <= 1'b1;   // ptt_srpt_lba <= this read's sector (loaded next cycle)
                     // read ttu_offset[ttn-1] = u32 @ 8 + 4*(ttn-1) = 4*ttn + 4
-                    sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
+                    sec_base <= eff_ifo_lba;
+                    sec_off  <= vts_pgcit_ptr;
                     fetch_base <= {2'b00, want_ttn, 2'b00} + 11'd4;
                     fetch_ret  <= S_PTT_OFF;
                     state      <= S_SECREAD;
@@ -3710,12 +3746,14 @@ always @(posedge clk or negedge rst_n) begin
             S_PTT_OFF: begin
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd2097151) begin
                     // bad ttu offset -> title-entry scan (want_ttn preserved)
-                    sec_lba    <= eff_ifo_lba;
+                    sec_base <= eff_ifo_lba;
+                    sec_off  <= 32'd0;
                     fetch_base <= 11'd204;
                     fetch_ret  <= S_PGC_MAT;
                     state      <= S_SECREAD;
                 end else begin
-                    sec_lba    <= ptt_srpt_lba + (eff_ptt_off[20:0] >> 11);
+                    sec_base <= ptt_srpt_lba;
+                    sec_off  <= (eff_ptt_off[20:0] >> 11);
                     fetch_base <= eff_ptt_off[10:0];
                     fetch_ret  <= S_PTT_PGC;
                     state      <= S_SECREAD;
@@ -3738,7 +3776,8 @@ always @(posedge clk or negedge rst_n) begin
                     if (ptt_pgn >= 16'd1 && ptt_pgn <= 16'd255)
                         jpgn_l <= ptt_pgn[7:0];        // start at program pgn
                 end
-                sec_lba    <= eff_ifo_lba;
+                sec_base <= eff_ifo_lba;
+                sec_off  <= 32'd0;
                 fetch_base <= 11'd204;                 // VTSI_MAT.vts_pgcit @204
                 fetch_ret  <= S_PGC_MAT;
                 state      <= S_SECREAD;
@@ -3759,8 +3798,9 @@ always @(posedge clk or negedge rst_n) begin
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     state <= S_PTTLD_DONE;             // no PTT table
                 end else begin
-                    ptt_srpt_lba <= eff_ifo_lba + vts_pgcit_ptr;
-                    sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
+                    ld_ptt     <= 1'b1;   // ptt_srpt_lba <= this read's sector (loaded next cycle)
+                    sec_base <= eff_ifo_lba;
+                    sec_off  <= vts_pgcit_ptr;
                     fetch_base <= 11'd0;               // VTS_PTT_SRPT header @0
                     fetch_ret  <= S_PTTLD_HDR;
                     state      <= S_SECREAD;
@@ -3778,7 +3818,8 @@ always @(posedge clk or negedge rst_n) begin
                 end else begin
                     // ttu_offset[ttn-1] sits at byte 8+4*(ttn-1) <= 512 (ttn is
                     // 7-bit), so it is always in the header's own first sector.
-                    sec_lba    <= ptt_srpt_lba;
+                    sec_base <= ptt_srpt_lba;
+                    sec_off  <= 32'd0;
                     fetch_base <= ({2'b00, cur_ttn, 2'b00} + 11'd4);  // 8+4*(ttn-1)
                     fetch_ret  <= S_PTTLD_OFF;
                     state      <= S_SECREAD;
@@ -3815,7 +3856,8 @@ always @(posedge clk or negedge rst_n) begin
             // VTSI@204 (S_PGC_MAT needs vts_pgcit). vts_pgcit_ptr is a live tap of
             // the shadow, so the resume state reads the right value next.
             S_PTTLD_DONE: begin
-                sec_lba    <= eff_ifo_lba;
+                sec_base <= eff_ifo_lba;
+                sec_off  <= 32'd0;
                 fetch_base <= ptt_res_tt ? 11'd200 : 11'd204;
                 fetch_ret  <= ptt_res_tt ? S_PTT_MAT : S_PGC_MAT;
                 state      <= S_SECREAD;
@@ -3827,9 +3869,10 @@ always @(posedge clk or negedge rst_n) begin
                 if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     state <= S_FINAL2;
                 end else begin
-                    pit_sec    <= eff_ifo_lba + vts_pgcit_ptr;
+                    ld_pit     <= 1'b1;   // pit_sec <= this read's sector (loaded next cycle)
                     pit_off    <= 11'd0;
-                    sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
+                    sec_base <= eff_ifo_lba;
+                    sec_off  <= vts_pgcit_ptr;
                     fetch_base <= 11'd0;               // nr_pgci_srp@0
                     fetch_ret  <= S_PGCIT_HDR;
                     state      <= S_SECREAD;
@@ -3900,7 +3943,8 @@ always @(posedge clk or negedge rst_n) begin
             S_SRP_FETCH: begin
                 // DVD-FORK FIX: srp_i is 16 bits now (PGCITs > 255 entries), so
                 // srp_i*8 needs 19 bits - the old 17-bit expression overflowed.
-                sec_lba    <= pit_sec + (({10'b0,pit_off} + 21'd8 + {2'b0,srp_i,3'b000}) >> 11);
+                sec_base <= pit_sec;
+                sec_off  <= (({10'b0,pit_off} + 21'd8 + {2'b0,srp_i,3'b000}) >> 11);
                 fetch_base <= (({10'b0,pit_off} + 21'd8 + {2'b0,srp_i,3'b000})) & 21'h007FF;
                 fetch_ret  <= S_SRP_EVAL;
                 state      <= S_SECREAD;
@@ -3936,9 +3980,10 @@ always @(posedge clk or negedge rst_n) begin
                     cur_pgcn    <= srp_i + 16'd1;
                     link_pgcn_u <= 16'd0;
                     link_pgcn_c <= 16'd0;
-                    pgc_sec    <= pit_sec + (({10'b0,pit_off} + srp_pgc_start[20:0]) >> 11);
+                    ld_pgc     <= 1'b1;   // pgc_sec <= this read's sector (loaded next cycle)
                     pgc_off    <= (({10'b0,pit_off} + srp_pgc_start[20:0])) & 21'h007FF;
-                    sec_lba    <= pit_sec + (({10'b0,pit_off} + srp_pgc_start[20:0]) >> 11);
+                    sec_base <= pit_sec;
+                    sec_off  <= (({10'b0,pit_off} + srp_pgc_start[20:0]) >> 11);
                     fetch_base <= (({10'b0,pit_off} + srp_pgc_start[20:0])) & 21'h007FF;
                     fetch_ret  <= S_PGC_HDR;
                     state      <= S_SECREAD;
@@ -4036,7 +4081,8 @@ always @(posedge clk or negedge rst_n) begin
             // refill; all parse-time, nowhere near the streaming path.
             S_WALK_RD: begin
                 if (walk_sec != pb_sec) begin
-                    sec_lba    <= walk_sec;
+                    sec_base <= walk_sec;
+                    sec_off  <= 32'd0;
                     pb_skip    <= 1'b1;                // skip the rbuf fetch
                     fi_cap_v   <= 1'b0;
                     fetch_ret  <= S_WALK_RD;
@@ -4640,7 +4686,8 @@ always @(posedge clk or negedge rst_n) begin
             S_TMAP: begin
                 case (tm_ph)
                 TM_MAT: begin                          // VTSI_MAT@0xD4 = vts_tmapt
-                    sec_lba    <= eff_ifo_lba;
+                    sec_base <= eff_ifo_lba;
+                    sec_off  <= 32'd0;
                     fetch_base <= 11'd212;
                     fetch_ret  <= S_TMAP;
                     tm_ph      <= TM_MAT2;
@@ -4650,8 +4697,9 @@ always @(posedge clk or negedge rst_n) begin
                     if (vts_pgcit_ptr == 32'd0 || cur_pgcn == 16'd0)
                         tm_ph <= TM_FAIL;              // the disc authors no map
                     else begin
-                        tm_sec     <= eff_ifo_lba + vts_pgcit_ptr;
-                        sec_lba    <= eff_ifo_lba + vts_pgcit_ptr;
+                        ld_tm      <= 1'b1;   // tm_sec <= this read's sector (loaded next cycle)
+                        sec_base <= eff_ifo_lba;
+                        sec_off  <= vts_pgcit_ptr;
                         fetch_base <= 11'd0;
                         fetch_ret  <= S_TMAP;
                         tm_ph      <= TM_TAB;
@@ -4662,7 +4710,8 @@ always @(posedge clk or negedge rst_n) begin
                     if (cur_pgcn > nr_pgci_srp)
                         tm_ph <= TM_FAIL;              // no map for this PGC
                     else begin
-                        sec_lba    <= tm_sec + {23'd0, tm_tab_off[17:11]};
+                        sec_base <= tm_sec;
+                        sec_off  <= {23'd0, tm_tab_off[17:11]};
                         fetch_base <= tm_tab_off[10:0];
                         fetch_ret  <= S_TMAP;
                         tm_ph      <= TM_TAB2;
@@ -4670,9 +4719,10 @@ always @(posedge clk or negedge rst_n) begin
                     end
                 end
                 TM_TAB2: begin                         // the map's header
-                    tm_sec     <= tm_sec + {11'd0, vts_pgcit_ptr[31:11]};
+                    ld_tm      <= 1'b1;   // tm_sec <= this read's sector (loaded next cycle)
                     tm_off     <= vts_pgcit_ptr[10:0];
-                    sec_lba    <= tm_sec + {11'd0, vts_pgcit_ptr[31:11]};
+                    sec_base <= tm_sec;
+                    sec_off  <= {11'd0, vts_pgcit_ptr[31:11]};
                     fetch_base <= vts_pgcit_ptr[10:0];
                     fetch_ret  <= S_TMAP;
                     tm_ph      <= TM_HDR;
@@ -4700,7 +4750,8 @@ always @(posedge clk or negedge rst_n) begin
                     // program, libdvdnav's "fake entry -1"); hi = entry k.
                     // Past the map, both are the last entry.
                     tm_last    <= (tm_k >= tm_nent);
-                    sec_lba    <= tm_sec + {24'd0, tm_ent_byte[18:11]};
+                    sec_base <= tm_sec;
+                    sec_off  <= {24'd0, tm_ent_byte[18:11]};
                     fetch_base <= tm_ent_byte[10:0];
                     fetch_ret  <= S_TMAP;
                     tm_ph      <= TM_ENT2;
@@ -4794,7 +4845,8 @@ always @(posedge clk or negedge rst_n) begin
                         state <= S_RBN_SCAN2;             // fallback: raw seek_rbn_l
                 end else if (ext_end_w > nav_cand) begin
                     // candidate lies in extent strm_idx -> probe its sector
-                    sec_lba    <= ext_start_q + nav_cand - seek_cum;
+                    sec_base <= ext_start_q - seek_cum;
+                    sec_off  <= nav_cand;
                     fetch_base <= 11'd0;
                     fetch_ret  <= S_NAV_CHK;
                     state      <= S_SECREAD;
@@ -5372,7 +5424,8 @@ always @(posedge clk or negedge rst_n) begin
                     pgc_error <= 1'b1;
                     state     <= S_DONE;
                 end else begin
-                    sec_lba    <= vmgi_lba + tt_srpt_ptr;
+                    sec_base <= vmgi_lba;
+                    sec_off  <= tt_srpt_ptr;
                     // entry offset = 8 + 12*(ttn-1) = 12*ttn - 4 = 4t + 8t - 4
                     fetch_base <= {2'd0, jttn_l, 2'b00} + {1'd0, jttn_l, 3'b000}
                                   - 11'd4;
@@ -5412,9 +5465,10 @@ always @(posedge clk or negedge rst_n) begin
                     cur_pgcn   <= 8'd0;
                     link_pgcn_u <= 16'd0;
                     link_pgcn_c <= 16'd0;
-                    pgc_sec    <= vmgi_lba + (vts_pgcit_ptr[20:0] >> 11);
+                    ld_pgc     <= 1'b1;   // pgc_sec <= this read's sector (loaded next cycle)
                     pgc_off    <= vts_pgcit_ptr[10:0];
-                    sec_lba    <= vmgi_lba + (vts_pgcit_ptr[20:0] >> 11);
+                    sec_base <= vmgi_lba;
+                    sec_off  <= (vts_pgcit_ptr[20:0] >> 11);
                     fetch_base <= vts_pgcit_ptr[10:0];
                     fetch_ret  <= S_PGC_HDR;
                     state      <= S_SECREAD;
@@ -5452,7 +5506,8 @@ always @(posedge clk or negedge rst_n) begin
             // i.e. 0x0C in the high byte. Then issue the (deferred) PGCI_UT read.
             S_MENU_VATR: begin
                 menu_ar_wide <= (rbuf[0] & 8'h0C) == 8'h0C;
-                sec_lba    <= jmp_ut_lba;
+                sec_base <= jmp_ut_lba;
+                sec_off  <= 32'd0;
                 fetch_base <= 11'd0;
                 fetch_ret  <= S_UT_HDR;
                 state      <= S_SECREAD;
@@ -5474,9 +5529,10 @@ always @(posedge clk or negedge rst_n) begin
                     pgc_error <= 1'b1;
                     state     <= S_DONE;
                 end else if (ut_nr_lus == 16'd1) begin
-                    pit_sec    <= jmp_ut_lba + (ut_lu0_start[20:0] >> 11);
+                    ld_pit     <= 1'b1;   // pit_sec <= this read's sector (loaded next cycle)
                     pit_off    <= ut_lu0_start[10:0];
-                    sec_lba    <= jmp_ut_lba + (ut_lu0_start[20:0] >> 11);
+                    sec_base <= jmp_ut_lba;
+                    sec_off  <= (ut_lu0_start[20:0] >> 11);
                     fetch_base <= ut_lu0_start[10:0];
                     fetch_ret  <= S_PGCIT_HDR;
                     state      <= S_SECREAD;
@@ -5497,9 +5553,10 @@ always @(posedge clk or negedge rst_n) begin
             S_LU_EVAL: begin
                 if (lu_lang == lu_lang_pref &&
                     rbuf_be32_4 >= 32'd8 && rbuf_be32_4 <= 32'd2097151) begin
-                    pit_sec    <= jmp_ut_lba + (rbuf_be32_4[20:0] >> 11);
+                    ld_pit     <= 1'b1;   // pit_sec <= this read's sector (loaded next cycle)
                     pit_off    <= rbuf_be32_4[10:0];
-                    sec_lba    <= jmp_ut_lba + (rbuf_be32_4[20:0] >> 11);
+                    sec_base <= jmp_ut_lba;
+                    sec_off  <= (rbuf_be32_4[20:0] >> 11);
                     fetch_base <= rbuf_be32_4[10:0];
                     fetch_ret  <= S_PGCIT_HDR;
                     state      <= S_SECREAD;
@@ -5512,9 +5569,10 @@ always @(posedge clk or negedge rst_n) begin
                     state      <= S_FETCH;
                 end else begin
                     // no language match -> LU[0] (libdvdnav fallback)
-                    pit_sec    <= jmp_ut_lba + (lu0_st[20:0] >> 11);
+                    ld_pit     <= 1'b1;   // pit_sec <= this read's sector (loaded next cycle)
                     pit_off    <= lu0_st[10:0];
-                    sec_lba    <= jmp_ut_lba + (lu0_st[20:0] >> 11);
+                    sec_base <= jmp_ut_lba;
+                    sec_off  <= (lu0_st[20:0] >> 11);
                     fetch_base <= lu0_st[10:0];
                     fetch_ret  <= S_PGCIT_HDR;
                     state      <= S_SECREAD;
