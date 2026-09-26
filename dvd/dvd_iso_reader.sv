@@ -629,7 +629,7 @@ reg [31:0] ext_start_q, ext_blocks_q;  // registered read of ext_mem[strm_idx]
 // (+5,373 registers, the design no longer fit). An explicit port with one
 // address expression is the form it always infers. Writes land one cycle
 // after the site sets ext_w_*: the scan's writes are consumed many cycles
-// later, and the flat-init path waits one extra state (S_FLAT_INIT2) before
+// later, and the flat-init path waits one extra state (S_LAT) before
 // S_EXT_LOAD refreshes the read.
 reg        ext_w_en;
 reg [6:0]  ext_w_addr;
@@ -655,7 +655,7 @@ localparam MAXGRP = 100;  // was 32 (see MAXEXT note): hold up to 99 VTS
 // Phase-0 ALM reclaim (2026-07-06): group table is a SYNC-READ M10K packed as
 // {vts[8], base[7], cnt[7], ifo_lba[32], menu_lba[32], menu_blk[32]} = 118b,
 // read at `sel_i` during S_SELECT (a scan) via a registered port + a 1-cycle
-// wait state (S_SELECT2). Replaces four 32-entry async register files. Runs
+// wait state (S_LAT). Replaces four 32-entry async register files. Runs
 // once per mount, so 2 cycles/step is free. Phase-2 widened the row with the
 // per-VTS menu VOB extent (VTS_xx_0.VOB = VTSM_VOBS: ISO LBA + 2048-sectors).
 localparam GMEM_W = 8 + 7 + 7 + 32 + 32 + 32;   // 118
@@ -1386,8 +1386,9 @@ localparam S_DONE      = 6'd11;
 localparam S_ERROR     = 6'd12;
 // IFO title-selection states (appended at the end so S_STREAM/DONE/ERROR keep
 // their numbers and existing testbenches' magic numbers stay valid)
+localparam S_LAT          = 6'd15;   // one-cycle wait, then lat_ret (feature/reader-slim)
+// Free codes: 14, 29, 30, 45, 47, 51 (the six wait states S_LAT replaced).
 localparam S_FLAT_INIT    = 6'd13;   // whole-file single-extent setup -> S_EXT_LOAD (area pass 2026-09-10)
-localparam S_FLAT_INIT2   = 6'd14;   // one-cycle wait for the ext_mem write port
 // (6'd15 was S_IFO_TSRPT, unreachable, deleted 2026-09-10)
 localparam S_SELECT       = 6'd16;   // scan group table for target VTS
 // PGC / cell-timeline states (Phase 7; appended)
@@ -1407,8 +1408,6 @@ localparam S_CELL_LOAD2   = 6'd26;   // BRAM read latency #2 -> compute seek tar
 localparam S_CELL_SEEK    = 6'd27;   // map a cell's first_sector to an extent + offset
 // Phase-0 ALM reclaim: sync-read wait states for the ext_mem / gmem M10K ports.
 localparam S_EXT_LOAD     = 6'd28;   // 1-cycle wait: ext_start_q/ext_blocks_q refresh, -> S_STREAM
-localparam S_CELL_SEEK2   = 6'd29;   // 1-cycle wait during the S_CELL_SEEK extent scan
-localparam S_SELECT2      = 6'd30;   // 1-cycle wait during the S_SELECT group scan
 localparam S_WALK_CAP     = 6'd31;   // walker: consume one byte (phase dispatch)
 localparam S_PGC_CELLCHK  = 6'd32;   // after hdr/cmd walk: cells valid? / 0-cell follow
 // Phase-2 menu domain (appended)
@@ -1430,9 +1429,7 @@ localparam S_PTT_MAT      = 6'd40;   // read VTSI@200 -> vts_ptt_srpt ptr
 localparam S_PTT_OFF      = 6'd41;   // read ttu_offset[ttn-1]
 localparam S_PTT_PGC      = 6'd42;   // read ptt[0].pgcn/pgn -> want_pgcn/jpgn
 localparam S_RBN_SCAN     = 6'd44;   // sub-cell scrub: find the cell containing seek_rbn_l
-localparam S_RBN_SCAN2    = 6'd45;   // BRAM read latency during the containing-cell scan
 localparam S_ANGLE_SCAN   = 6'd46;   // Phase 9: count the angle-block cells (block_type==1)
-localparam S_ANGLE_SCAN2  = 6'd47;   // BRAM read latency during the angle-count scan
 localparam S_MENU_VATR    = 6'd43;   // capture menu aspect (V_ATR@0x100) then read the PGCI_UT
 localparam S_ATTR_RD      = 6'd48;   // Phase 10: address parse_buf @attr_addr (read latency #1)
 localparam S_ATTR_CAP     = 6'd49;   // Phase 10: capture pb_rdata -> track-attr store
@@ -1440,7 +1437,6 @@ localparam S_ATTR_CAP     = 6'd49;   // Phase 10: capture pb_rdata -> track-attr
 // the raw scrub target to the first NAV pack (VOBU boundary) so the decoder re-locks
 // on a clean GOP and av_sync anchors on the VOBU-first video PTS. See docs/dvd_nav.md.
 localparam S_NAV_SEEK     = 6'd50;   // extent-walk / issue a 1-block probe read
-localparam S_NAV_SEEK2    = 6'd51;   // 1-cycle ext_*_q refresh (mirrors S_CELL_SEEK2)
 localparam S_NAV_CHK      = 6'd52;   // evaluate the NAV signature in rbuf
 // Phase-6 PTT-table load (resident ptt_mem for the current title). Runs off the
 // title-mount attr-sweep resume, BEFORE the PGC parse, for BOTH Auto and jump
@@ -1462,6 +1458,7 @@ localparam S_WAV_HDR      = 6'd63;   // RIFF/WAVE chunk walk (fmt/data) over sec
 
 reg [5:0]  state;
 reg [5:0]  fetch_ret;   // state to enter after S_FETCH
+reg [5:0]  lat_ret;     // state to enter after the S_LAT one-cycle wait
 reg [10:0] fetch_base;  // parse_buf offset the shadow starts at
 reg [5:0]  fi;          // fetch byte counter
 reg        fi_cap_v;
@@ -1691,7 +1688,7 @@ end
 
 // Extent + group tables: synchronous read ports (M10K). ext_mem tracks the
 // streaming cursor strm_idx (1-cycle latency; S_EXT_LOAD covers it); gmem tracks
-// the S_SELECT scan cursor sel_i (S_SELECT2 covers it).
+// the S_SELECT scan cursor sel_i (an S_LAT wait covers it).
 always @(posedge clk) begin
     ext_start_q  <= ext_mem[strm_idx][63:32];
     ext_blocks_q <= ext_mem[strm_idx][31:0];
@@ -2296,6 +2293,7 @@ always @(posedge clk or negedge rst_n) begin
         sd_lba       <= 32'd0;
         sec_base     <= 32'd0;
         sec_off      <= 32'd0;
+        lat_ret      <= S_IDLE;
         {ld_pit, ld_pgc, ld_ptt, ld_tm} <= 4'b0000;
         sd_rd        <= 1'b0;
         blk_inflight <= 1'b0;
@@ -2999,7 +2997,8 @@ always @(posedge clk or negedge rst_n) begin
                 want_pgcn   <= jpgcn_l;
                 want_entry  <= jentry_l;
                 use_jcell   <= (jcell_l != 8'd0);   // breadcrumb return cell
-                state       <= S_SELECT2;
+                state       <= S_LAT;
+                lat_ret     <= S_SELECT;
             end
             default: begin  // DOM_TT
                 // Title jump: the group scan re-selects the playing title
@@ -3027,7 +3026,8 @@ always @(posedge clk or negedge rst_n) begin
                     play_vtsn   <= jvts_l;
                     want_pgcn   <= (jttn_l != 7'd0) ? 16'd0
                                    : ((jpgcn_l == 16'd0) ? 16'd1 : jpgcn_l);
-                    state       <= S_SELECT2;
+                    state       <= S_LAT;
+                    lat_ret     <= S_SELECT;
                 end
             end
             endcase
@@ -3112,7 +3112,8 @@ always @(posedge clk or negedge rst_n) begin
                 // set only at S_PGC_DONE, after cell_count <= nr_cells != 0, and
                 // every cell_count <= 0 happens inside a parse, with cell_mode 0.)
                 if (menu_dom) begin
-                    state <= S_RBN_SCAN2;      // menu scrub: no VOBU align, direct scan
+                    state <= S_LAT;      // menu scrub: no VOBU align, direct scan
+                    lat_ret <= S_RBN_SCAN;
                 end else if (seek_tm) begin
                     // TIME seek: resolve the sector through the disc's time map
                     // first (S_TMAP), then take the same snap below. A header
@@ -3128,7 +3129,8 @@ always @(posedge clk or negedge rst_n) begin
                     snap_pend <= 1'b1;         // this landing needs its branch verified
                     strm_idx <= eff_base;       // extent-walk cursor (S_CELL_LOAD2 re-inits)
                     seek_cum <= 32'd0;
-                    state    <= S_NAV_SEEK2;    // 1-cycle ext_*_q refresh, then probe
+                    state    <= S_LAT;    // 1-cycle ext_*_q refresh, then probe
+                    lat_ret  <= S_NAV_SEEK;
                 end
             end else begin
                 cell_i       <= seek_cell_l;
@@ -3515,7 +3517,8 @@ always @(posedge clk or negedge rst_n) begin
                 end else if (title_sel != 7'd0) begin
                     target_vtsn <= {1'd0, title_sel};
                     sel_i       <= 7'd0;
-                    state       <= S_SELECT2;  // wait for gmem_q to refresh, then scan
+                    state       <= S_LAT;  // wait for gmem_q to refresh, then scan
+                    lat_ret     <= S_SELECT;
                 end else
                     state <= S_PGC_BEGIN;      // Auto = largest VTS
             end
@@ -3553,18 +3556,20 @@ always @(posedge clk or negedge rst_n) begin
                 strm_idx  <= 7'd0; strm_left <= 7'd1;
                 strm_blk  <= 32'd0; strm_done <= 1'b0;
                 wr_ptr    <= 0;
-                state     <= S_FLAT_INIT2;
+                state     <= S_LAT;
+                lat_ret   <= S_EXT_LOAD;
             end
-            S_FLAT_INIT2: state <= S_EXT_LOAD;   // the write lands; S_EXT_LOAD then refreshes ext_*_q
+            // S_LAT: the one-cycle wait for a sync-read memory's registered output
+            // (ext_mem, gmem, the cell tables) or a registered write to land.
+            S_LAT: state <= lat_ret;
 
             // ------------------------------------------------------------
             // Scan the group table for a target VTS (sync-read M10K: gmem_q
-            // tracks sel_i, so each step is S_SELECT2 (wait) -> S_SELECT
+            // tracks sel_i, so each step is S_LAT (wait) -> S_SELECT
             // (eval)). Two callers: sel_ret=0 selects the TITLE (match ->
             // sel_* overwritten, exhausted -> largest-VTS fallback); sel_ret=1
             // is a VTSM menu jump (match -> read VTSI@208, no sel_* clobber,
             // exhausted -> pgc_error).
-            S_SELECT2: state <= S_SELECT;          // gmem_q now holds gmem[sel_i]
             S_SELECT: begin
                 if (sel_i >= grp_count) begin
                     if (sel_ret) begin
@@ -3600,7 +3605,8 @@ always @(posedge clk or negedge rst_n) begin
                     end
                 end else begin
                     sel_i <= sel_i + 7'd1;
-                    state <= S_SELECT2;               // reload gmem_q for the next index
+                    state <= S_LAT;               // reload gmem_q for the next index
+                    lat_ret <= S_SELECT;
                 end
             end
 
@@ -4486,7 +4492,8 @@ always @(posedge clk or negedge rst_n) begin
                     angle_count <= 4'd1;                 // this cell is angle 1
                     ang_scan_i  <= cell_i + 8'd1;
                     cell_raddr  <= cell_i + 8'd1;        // prefetch cat[cell_i+1]
-                    state       <= S_ANGLE_SCAN2;
+                    state       <= S_LAT;
+                    lat_ret     <= S_ANGLE_SCAN;
                 end else if (rbn_override && snap_pend && snap_want) begin
                     // BRANCH-AWARE SNAP, pass 1: we have just resolved the cell a
                     // raw-RBN scrub landed in, and it is an interleaved cell -- so
@@ -4508,7 +4515,8 @@ always @(posedge clk or negedge rst_n) begin
                     nav_mode  <= NAVM_LEARN;
                     strm_idx  <= eff_base;
                     seek_cum  <= 32'd0;
-                    state     <= S_NAV_SEEK2;
+                    state     <= S_LAT;
+                    lat_ret   <= S_NAV_SEEK;
                 end else begin
                     // Title: map through the extent table. Start the seek scan
                     // from the group base, reusing strm_idx as the cursor.
@@ -4530,7 +4538,8 @@ always @(posedge clk or negedge rst_n) begin
                                                 : cf_rd;         // RBN = sector unit
                     play_end    <= cl_rd + 32'd1;                // last+1 (exclusive)
                     rbn_override <= 1'b0;
-                    state       <= S_CELL_SEEK2;   // wait for ext_blocks_q at eff_base
+                    state       <= S_LAT;   // wait for ext_blocks_q at eff_base
+                    lat_ret     <= S_CELL_SEEK;
                 end
             end
 
@@ -4565,14 +4574,14 @@ always @(posedge clk or negedge rst_n) begin
             // ⚠ The 9 cap stays: it is the sml_agli table size (9 entries) and
             // the DVD spec's angle limit, so it bounds a malformed block. It is
             // no longer what ENDS a well-formed one.
-            S_ANGLE_SCAN2: state <= S_ANGLE_SCAN;
             S_ANGLE_SCAN: begin
                 if (cc_blk_cont && ({8'd0, ang_scan_i} < {8'd0, cell_count})
                         && angle_count < 4'd9) begin
                     angle_count  <= angle_count + 4'd1;
                     ang_scan_i   <= ang_scan_i + 8'd1;
                     cell_raddr   <= ang_scan_i + 8'd1;
-                    state        <= S_ANGLE_SCAN2;
+                    state        <= S_LAT;
+                    lat_ret      <= S_ANGLE_SCAN;
                 end else begin
                     // angle_count known. block_last = block_first + count - 1.
                     block_last     <= block_first + {4'd0, angle_count} - 8'd1;
@@ -4626,11 +4635,10 @@ always @(posedge clk or negedge rst_n) begin
 
             // Sub-cell scrub: scan the cell table for the cell whose RBN range
             // [cf_rd, cl_rd] contains seek_rbn_l. cell_raddr walks 0..cell_count-1
-            // (S_RBN_SCAN2 covers the 1-cycle BRAM latency). On a hit, land on that
+            // (an S_LAT wait covers the 1-cycle BRAM latency). On a hit, land on that
             // cell and fall into the normal cell-load path with rbn_override set.
             // If the scan exhausts (target in an inter-cell gap, or outside every
             // cell), land on the cell that STARTS nearest below the target.
-            S_RBN_SCAN2: state <= S_RBN_SCAN;
             S_RBN_SCAN: begin
                 if (cf_rd <= seek_rbn_l && seek_rbn_l <= cl_rd) begin
                     cell_i     <= rbn_scan_i;
@@ -4661,7 +4669,8 @@ always @(posedge clk or negedge rst_n) begin
                     rbn_best_v <= rbn_bt_v;
                     rbn_scan_i <= rbn_scan_i + 8'd1;
                     cell_raddr <= rbn_scan_i + 8'd1;
-                    state      <= S_RBN_SCAN2;
+                    state      <= S_LAT;
+                    lat_ret    <= S_RBN_SCAN;
                 end
             end
 
@@ -4675,7 +4684,7 @@ always @(posedge clk or negedge rst_n) begin
             // ------------------------------------------------------------
             // Phase 8b (reopened 2026-09-25, issue #127): TIME -> SECTOR through
             // the disc's VTS time map, then the ordinary scrub landing (VOBU
-            // snap, branch/angle filters) from S_NAV_SEEK2. Entered from the
+            // snap, branch/angle filters) via S_LAT. Entered from the
             // seek_jump branch AFTER the flush + seek_ack, exactly like the NAV
             // probe, so the stream cache is already empty and a newer seek or a
             // jump can pre-empt it between reads (blk_inflight is 0 there).
@@ -4810,13 +4819,13 @@ always @(posedge clk or negedge rst_n) begin
                     strm_idx  <= eff_base;
                     seek_cum  <= 32'd0;
                     tm_ph     <= TM_MAT;
-                    state     <= S_NAV_SEEK2;
+                    state     <= S_LAT;
+                    lat_ret   <= S_NAV_SEEK;
                 end
                 default: tm_ph <= TM_FAIL;
                 endcase
             end
 
-            S_NAV_SEEK2: state <= S_NAV_SEEK;   // ext_*_q refresh for strm_idx
             S_NAV_SEEK: begin
                 if (walk_oob_w ||
                     nav_cand > title_last_rbn   ||
@@ -4841,8 +4850,10 @@ always @(posedge clk or negedge rst_n) begin
                         nav_mode      <= NAVM_PLAIN;
                         snap_pend <= 1'b0;            // do not re-enter the probe
                         state         <= S_CELL_LOAD;
-                    end else
-                        state <= S_RBN_SCAN2;             // fallback: raw seek_rbn_l
+                    end else begin
+                        state   <= S_LAT;                 // fallback: raw seek_rbn_l
+                        lat_ret <= S_RBN_SCAN;
+                    end
                 end else if (ext_end_w > nav_cand) begin
                     // candidate lies in extent strm_idx -> probe its sector
                     sec_base <= ext_start_q - seek_cum;
@@ -4853,14 +4864,16 @@ always @(posedge clk or negedge rst_n) begin
                 end else begin
                     seek_cum <= ext_end_w;              // advance to the next extent
                     strm_idx <= strm_idx + 7'd1;
-                    state    <= S_NAV_SEEK2;
+                    state    <= S_LAT;
+                    lat_ret  <= S_NAV_SEEK;
                 end
             end
             S_NAV_CHK: begin
                 if (nav_sig_hit) begin
                     if (nav_mode == NAVM_PLAIN) begin
                         seek_rbn_l <= nav_cand;           // SNAP to the aligned VOBU RBN
-                        state      <= S_RBN_SCAN2;        // -> containing-cell scan
+                        state      <= S_LAT;        // -> containing-cell scan
+                        lat_ret    <= S_RBN_SCAN;
                     end else begin
                         // LEARN / FILT both want this VOBU's dsi_gi.vobu_vob_idn,
                         // and FILT also wants sml_pbi.{category,ilvu_ea} to step by
@@ -4898,7 +4911,8 @@ always @(posedge clk or negedge rst_n) begin
                     nav_mode      <= NAVM_FILT;
                     strm_idx      <= eff_base;
                     seek_cum      <= 32'd0;
-                    state         <= S_NAV_SEEK2;
+                    state         <= S_LAT;
+                    lat_ret       <= S_NAV_SEEK;
                 end else if (nav_vob == snap_want_vob) begin
                     // on the selected branch's chain -- stream from here. cell_i is
                     // already the right cell (S_ANGLE_PICK for an angle block, the
@@ -4944,9 +4958,8 @@ always @(posedge clk or negedge rst_n) begin
             // to an extent index + offset within the selected group. cf_rd/cl_rd
             // track cell_raddr (the current cell) throughout; strm_idx scans then
             // stays put as the streaming extent pointer. ext_blocks_q is the
-            // sync-read of ext_mem[strm_idx]; S_CELL_SEEK2 covers its 1-cycle
+            // sync-read of ext_mem[strm_idx]; an S_LAT wait covers its 1-cycle
             // latency after each strm_idx step.
-            S_CELL_SEEK2: state <= S_CELL_SEEK;
             S_CELL_SEEK: begin
                 if (cf_rd > cl_rd || walk_oob_w) begin
                     // malformed / out-of-range cell -> skip to the next cell
@@ -4964,7 +4977,8 @@ always @(posedge clk or negedge rst_n) begin
                 end else begin
                     seek_cum <= ext_end_w;
                     strm_idx <= strm_idx + 7'd1;
-                    state    <= S_CELL_SEEK2;   // reload ext_blocks_q for the next index
+                    state    <= S_LAT;   // reload ext_blocks_q for the next index
+                    lat_ret  <= S_CELL_SEEK;
                 end
             end
 
@@ -5446,7 +5460,8 @@ always @(posedge clk or negedge rst_n) begin
                     want_pgcn   <= 16'd0;      // title-entry scan
                     sel_i       <= 7'd0;
                     sel_ret     <= 1'b0;
-                    state       <= S_SELECT2;
+                    state       <= S_LAT;
+                    lat_ret     <= S_SELECT;
                 end
             end
 
