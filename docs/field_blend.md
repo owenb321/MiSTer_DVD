@@ -262,7 +262,11 @@ that instantiate the addrgen or `resample` gained a `.blend_en(1'b0)` tie-off.
 
 ## 6. One option: `Deinterlace = Weave / Bob / Blend` (2026-09-25, branch `feature/deint-merge`)
 
-⏳ **Sim-proven and mutation-checked; not yet built or HW-tested.**
+⏳ **Sim-proven, mutation-checked and BUILT; not yet HW-tested.** Build
+`releases/DVD_deintmerge_20260926_0049.rbf`: SEED 9 first roll, clk_dec 88.92 @100C / 89.88
+@−40C (gate 86.0), not marginal, 98 % ALM. `field_blend` = 261 ALM (254 before Bob, so the
+second kernel cost 7 ALM), 6 M10K, 0 DSP. The matching Main cross-compiles
+(`USE_DOCKER=1 main/build_main.sh`).
 
 Two options used to cover one question, one per raster:
 - `OB 480i Deint = Bob / Weave` (bit 11) chose ascal's deinterlace for HDMI while the

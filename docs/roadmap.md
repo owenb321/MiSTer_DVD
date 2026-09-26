@@ -957,8 +957,9 @@ Progressive raster is `field_blend`'s second kernel: keep one field, interpolate
 The first field shows on the pickup scan and the second on every re-scan, so a hold is
 steady.
 
-Sim-proven + mutation-checked (`run_field_blend.sh --red`). **Next step: build, then the HW
-gate in `docs/field_blend.md` §7.**
+Sim-proven + mutation-checked (`run_field_blend.sh --red`), built
+(`DVD_deintmerge_20260926_0049.rbf`, timing clean). **Next step: the HW gate in
+`docs/field_blend.md` §7.**
 
 ### HD Modeline Switching
 The display block drives a fixed 27MHz SD clock. DVD is 480i/480p so this is fine,
