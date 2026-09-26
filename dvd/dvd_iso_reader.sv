@@ -1892,6 +1892,9 @@ always @(posedge clk)
 // =========================================================================
 wire [3:0]  ang_idx = cur_angle - 4'd1;   // 0-based; every cur_angle writer gives >= 1
 wire [10:0] agli_o  = 11'h4BB + 11'd6 * {7'd0, ang_idx};                 // sector offset
+// Byte index relative to that entry: one subtractor instead of four offset
+// compares (identical mod 2^11, the width both sides of each compare had).
+wire [10:0] agli_d  = sd_buff_addr[10:0] - agli_o;
 always @(posedge clk) begin
     snoop_done <= 1'b0;
     if (state==S_STREAM && sd_buff_wr && ilvu_active) begin
@@ -1915,10 +1918,10 @@ always @(posedge clk) begin
             default: ;
         endcase
         if (sd_buff_addr[10:0] == 11'd0)          snoop_rbn <= play_blk;
-        if (sd_buff_addr[10:0] == agli_o)         snoop_agli[31:24] <= sd_buff_dout;
-        if (sd_buff_addr[10:0] == agli_o+11'd1)   snoop_agli[23:16] <= sd_buff_dout;
-        if (sd_buff_addr[10:0] == agli_o+11'd2)   snoop_agli[15:8]  <= sd_buff_dout;
-        if (sd_buff_addr[10:0] == agli_o+11'd3)   snoop_agli[7:0]   <= sd_buff_dout;
+        if (agli_d == 11'd0) snoop_agli[31:24] <= sd_buff_dout;
+        if (agli_d == 11'd1) snoop_agli[23:16] <= sd_buff_dout;
+        if (agli_d == 11'd2) snoop_agli[15:8]  <= sd_buff_dout;
+        if (agli_d == 11'd3) snoop_agli[7:0]   <= sd_buff_dout;
         if (sd_buff_addr[10:0] == 11'h5FF)        snoop_done <= 1'b1;   // DSI region done
     end
 end
