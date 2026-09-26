@@ -118,8 +118,8 @@ module iec61937_wrap #(
 
     // ---- burst-classification taps (flap probe, clk_sys) ----
     // One pulse per burst START (the S_IDLE decision), with its classification.
-    // These feed the emu-side gap/underrun counters (DEBUG_OVERLAY rows 23/24 in
-    // Passthru) so the wire's real/silent burst pattern is readable on hardware.
+    // They fed the emu-side gap/underrun counters of the (since retired) debug
+    // overlay; emu leaves them unconnected, and a bench or telemetry can re-tap them.
     output reg         dbg_burst_stb,  // pulses when a burst begins
     output reg         dbg_burst_real, // 1 = real 61937 data-burst (Pa/Pb emitted)
     output reg         dbg_burst_held, // silent AND a codec frame was queued but

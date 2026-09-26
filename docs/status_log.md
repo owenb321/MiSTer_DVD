@@ -4032,7 +4032,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   `vga_scaler=0`, `composite_sync=1`. Full design + HW test plan + field-swap contingency:
   `docs/crt_480i.md`. (PAL 576i CRT: ✅ delivered by the dual-raster rework above;
   letterbox/240p vertical scaler still open.)
-- 🧰 On-hardware diagnostics: `debug_overlay.sv` (multi-row block-bit counters — rows 0-17 +
+- 🧰 ⛔ **RETIRED 2026-09 (`feature/reader-slim`): `debug_overlay.sv`, the `DEBUG_OVERLAY`
+  macro and `tools/osd_read.py` are deleted; `dvd_telem` replaced them. History only below.**
+  On-hardware diagnostics: `debug_overlay.sv` (multi-row block-bit counters — rows 0-17 +
   Phase-7 rows 18/19 nav current/total time). ⚠️ **STATUS (2026-07-09): this overlay is
   `` `ifdef DEBUG_OVERLAY `` and COMPILED OUT of the release build** (it shares the display
   hotspot with the subpicture blend; `ov_on` is hardwired 0 — see `emu.sv` ~L2088). In a
@@ -5769,7 +5771,8 @@ adapter bridges `mpg_streamer`'s pulse (valid+busy) interface to `ps_demux`'s he
   `VOB` to the `CONF_STR` extension list so `.VOB` files are directly selectable. Tested by
   `bench/dvd/ps_demux_nav_tb.sv`; the real-Matrix-VOB `ps_chain_tb` still passes (50,395 B).
   ⚠️ Sim-verified only — not yet confirmed on a real multiplexed VOB on hardware.
-- **On-screen debug overlay** (`dvd/debug_overlay.sv`, `O2,Debug Overlay` toggle, default
+- ⛔ **RETIRED 2026-09 (`feature/reader-slim`; `O[2]` itself stays, see above).**
+  **On-screen debug overlay** (`dvd/debug_overlay.sv`, `O2,Debug Overlay` toggle, default
   off) renders pipeline counters as on-screen block-bit rows — used to diagnose the above
   with no UART cable. **⚠️ COMPILED OUT of the release build** (`` `ifdef DEBUG_OVERLAY ``,
   congestion — see the "On-hardware diagnostics" note above): `O[2]` only shows these rows in

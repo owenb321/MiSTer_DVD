@@ -128,7 +128,7 @@ def gen_audio(path, standard, nframes, period, offset_ms=0.0):
     measurement chain: a known injected error must come back as itself. An
     instrument that has never been shown to report a wrong answer correctly is
     not an instrument -- and this project has already lost a round to one
-    (docs/lipsync_pickup.md's mis-calibrated osd_read.py voided rounds 4-6).
+    (docs/lipsync_pickup.md's mis-calibrated osd_read.py, since retired, voided rounds 4-6).
     """
     import numpy as np
     fps = FPS[standard]

@@ -2,8 +2,8 @@
 // dvd/transport_hud.sv -- Phase 11: transport HUD (graphic on-screen status)
 // ============================================================================
 // Release-visible playback feedback, rendered in fabric and composited through
-// the existing subpic_blend register stage in emu.sv (NOT the `ifdef
-// DEBUG_OVERLAY block overlay, which is compiled out of release builds).
+// the existing subpic_blend register stage in emu.sv (NOT the numeric debug
+// overlay, which was compiled out of release builds and has since been retired).
 //
 // Status line (bottom-anchored, 32 cells of 16x32 px = 512 px wide):
 //   [icon] H:MM:SS/H:MM:SS CH n/N      ("TR n/N" on an audio CD: trk_mode)

@@ -1280,14 +1280,12 @@ wire        ps_sp_valid;
 wire        ps_sp_frame_start;
 wire [32:0] ps_sp_pts;
 wire        ps_sp_pts_valid;
-// audio_ring status (surfaced on the debug overlay, rows 12/13)
+// audio_ring status (aud_frames_avail feeds telemetry)
 wire [15:0] aud_frames_avail;
-wire [15:0] aud_bytes_avail;
 // dvd/aud_drain.sv -> dvd_iso_reader.aud_drained. Declared here, ahead of the
 // reader instance: emu.sv has no `default_nettype none`, so a forward
 // reference would silently become a 1-bit implicit net.
 wire        aud_drained_w;
-wire [15:0] aud_overflow_cnt;
 
 // A/V sync (dvd/av_sync.sv), all clk_sys
 wire [32:0] ps_vid_pts;
@@ -1300,7 +1298,6 @@ wire        av_stc_anchored;        // av_sync STC locked -> dispatch schedule g
 wire        av_disp_anchored;       // ... and on the DISPLAY timeline -> audio PLAYBACK release
 wire [32:0] av_stc;
 wire signed [31:0] av_drift;
-wire [15:0] av_reanchor_cnt;
 
 // Detect image mount event (start streaming).
 //
@@ -1643,13 +1640,6 @@ wire [5:0]  vm_hl_btnn;                 // the VM's SPRM8 button: nav_pci re-see
 wire [7:0]  vm_astn, vm_spstn;
 wire [7:0]  vm_agln;                 // SPRM3 (camera angle) from the DVD-VM
 wire        vm_pre_done;             // VM finished this PGC's PRE block
-// DVD-FORK DEBUG (Atmosfear wrong-title diagnosis): taps used by the
-// DEBUG_OVERLAY rows 21..26. Declared unconditionally (the module ports are
-// always connected); the latch logic + overlay feed are under `DEBUG_OVERLAY.
-wire [7:0]  vm_dbg_state;
-wire [15:0] vm_dbg_g3, vm_dbg_g14_9;
-wire [15:0] vm_dbg_rsm;      // {rsm_vts, rsm_pgcn} for the DEBUG_OVERLAY (symptom-1)
-wire [15:0] vm_dbg_deadend;  // {deadend_vts, deadend_pgcn} = the PGC that dead-ended
 wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HUD popup)
 wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
 wire [7:0]  rdr_play_vtsn, rdr_target_vtsn;
@@ -2697,11 +2687,11 @@ dvd_vm dvd_vm_inst (
     .pre_done      (vm_pre_done),         // PRE resolved -> the angle is settled
     .agl_set       (angle_wb),            // B6 press: write the user's angle back
     .agl_set_val   (angle_wb_val),
-    .dbg_state     (vm_dbg_state),
-    .dbg_g3        (vm_dbg_g3),
-    .dbg_g14_9     (vm_dbg_g14_9),
-    .dbg_rsm       (vm_dbg_rsm),
-    .dbg_deadend   (vm_dbg_deadend),
+    .dbg_state     (),
+    .dbg_g3        (),
+    .dbg_g14_9     (),
+    .dbg_rsm       (),
+    .dbg_deadend   (),
     .link_fail     (vm_link_fail),       // failed menu link -> HUD "LINK FAIL nn"
     .link_fail_pgcn(vm_link_fail_pgcn)
 );
@@ -3645,7 +3635,7 @@ wire ps_saw_pack;
 wire css_scrambled;
 // Saturating census of what the verdict was decided on. ⚠ CURRENTLY UNCONSUMED,
 // so Quartus dead-strips both counters -- they exist so that surfacing them (a
-// DEBUG_OVERLAY row, or the delivered-vs-medium census sketched in
+// dvd_telem word, or the delivered-vs-medium census sketched in
 // docs/bug_reports.md) is a one-line change rather than an RTL round trip.
 wire [15:0] css_hdr_census, css_scram_census;
 css_detect #(.LATCH_HITS(16), .LEAK_CLEAN(64)) css_det (
@@ -4010,8 +4000,8 @@ audio_ring #(.BYTE_DEPTH(32768), .FRAME_DEPTH(128)) audio_ring_inst (
     .frame_pop        (aud_frame_pop),
 
     .frames_available (aud_frames_avail),
-    .bytes_available  (aud_bytes_avail),
-    .overflow_count   (aud_overflow_cnt)
+    .bytes_available  (),
+    .overflow_count   ()
 );
 
 // Demux backpressure (see FLOW CONTROL note above): stall ps_demux's audio path —
@@ -4171,7 +4161,6 @@ assign ps_aud_ready = ~(aud_ring_almost_full && aud_bp_armed && ~step_session);
 // always instantiated and never reset by the mode; `enable` only parked its FSM.
 wire        aud_dec_en = ~status[5];
 wire        ac3_synced_dbg, ac3_err_dbg;
-wire [15:0] dbg_ac3_resets, dbg_ac3_err_resets;
 
 dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .clk         (clk_sys),
@@ -4245,8 +4234,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000)) dvd_audio_decode_inst (
     .audio_r     (dec_audio_r),
     .ac3_synced  (ac3_synced_dbg),
     .ac3_err     (ac3_err_dbg),
-    .dbg_ac3_resets    (dbg_ac3_resets),
-    .dbg_ac3_err_resets (dbg_ac3_err_resets),
+    .dbg_ac3_resets    (),
+    .dbg_ac3_err_resets (),
     .dbg_draining       (dbg_aud_draining),
     .dbg_play_pts_valid (dbg_aud_play_pts_valid),
     .dbg_armed_data     (dbg_aud_armed_data),
@@ -4284,11 +4273,6 @@ always @(posedge CLK_AUDIO or negedge aud_rst_n)
     if (!aud_rst_n) aud_rsync <= 2'b00;
     else            aud_rsync <= {aud_rsync[0], 1'b1};
 wire rst_audio_n = aud_rsync[1];
-
-// Flap-probe burst classification taps (fed to the DEBUG_OVERLAY gap/underrun
-// counters, rows 23/24 in Passthru; declared unconditionally like the other
-// dbg wires so the ports are always connected).
-wire bs_burst_stb, bs_burst_real, bs_burst_held;
 
 iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .clk_sys      (clk_sys),
@@ -4347,9 +4331,9 @@ iec61937_wrap #(.FIFO_AW(8)) iec61937_wrap_inst (
     .bs_stb_o     (bs_stb_w),
     .dbg_word     (),
     .dbg_word_stb (),
-    .dbg_burst_stb (bs_burst_stb),
-    .dbg_burst_real(bs_burst_real),
-    .dbg_burst_held(bs_burst_held),
+    .dbg_burst_stb (),
+    .dbg_burst_real(),
+    .dbg_burst_held(),
     .hold_active_o (pass_hold_active)
 );
 
@@ -4552,7 +4536,7 @@ av_sync av_sync_inst (
     .anchor_delta       (av_anchor_delta),
     .drift              (av_drift),
     .buf_lag            (),
-    .reanchor_count     (av_reanchor_cnt)
+    .reanchor_count     ()
 );
 
 // Priority arbiter on the DDRAM port: decoder (mem_shim_burst) is the only master
@@ -4796,17 +4780,7 @@ wire       core_h_sync, core_v_sync;
 wire [11:0] core_h_pos, core_v_pos;
 wire [8:0]  core_init_cnt;
 wire        core_sync_rst;
-wire        core_vbw_almost_full;
 wire       core_pixel_en;
-wire [3:0]  shim_debug_state;
-wire [1:0]  shim_debug_saved_cmd;
-wire        shim_debug_sdram_busy;
-wire        shim_debug_sdram_ack;
-wire [15:0] shim_debug_rd_count;
-wire [15:0] shim_debug_wr_count;
-wire [15:0] shim_debug_rsp_count;
-wire [15:0] shim_debug_read_pend_cycles;
-wire [15:0] shim_debug_cache_missrate;   // {miss%, read-intensity} per window (row 6)
 
 // =========================================================================
 // DVD-FORK FIX (interlaced cadence): the native 480i/576i fields modeline
@@ -5085,8 +5059,6 @@ always @(posedge clk_dec) begin
     end
 end
 
-wire        vld_err;         // decoder parse-error flag (was an implicit net — see the
-                             // build_release.sh implicit-net gate, instituted 2026-08-26)
 // DVD-FORK (line-21 CC): caption byte pairs out of the VLD's user_data snoop.
 // clk_dec domain — do NOT sample these in clk_sys directly.
 wire        core_cc_valid;
@@ -5132,7 +5104,7 @@ mpeg2video mpeg2video_inst (
     .reg_rd_en  (1'b0),
 
     .busy       (core_busy),
-    .error      (vld_err),
+    .error      (),
     .interrupt  (),
     .watchdog_rst (watchdog_rst),
 
@@ -5163,12 +5135,12 @@ mpeg2video mpeg2video_inst (
     .testpoint_dip_en (1'b0),
     .init_cnt_out     (core_init_cnt),
     .sync_rst_out     (core_sync_rst),
-    .vbw_almost_full_out (core_vbw_almost_full),
+    .vbw_almost_full_out (),
     .dbg_lines_displayed (core_dbg_lines_displayed),   // DVD-FORK DEBUG (256-line strobe)
     .dbg_first_vpos  (core_dbg_first_vpos),
     .dbg_last_vpos  (core_dbg_last_vpos),
-    .dbg_prof0       (core_dbg_prof0),                 // DVD-FORK DEBUG (stage profiler) rows 10/11
-    .dbg_prof1       (core_dbg_prof1),
+    .dbg_prof0       (),                 // stage profiler (decoder_profile.sv); unread since the overlay retired
+    .dbg_prof1       (),
     // DVD-FORK (line-21 CC): EIA-608 pairs sniffed from user_data, in clk_dec.
     // They cross to clk_sys inside dvd/cc_line21.sv's own fifo_dc.
     .cc_pair_valid     (core_cc_valid),
@@ -5223,11 +5195,8 @@ assign film_det_pal_sync  = film_det_pal_s2;
 // film and PAL stutter withOUT frame drop (real lates hold the display), and the
 // starvation guard makes dropping safe (never fires while bitstream-starved).
 // index 0 (On, default) => status[12]=0 => drop enabled; status[12]=1 => Off.
-// core_frames_late/dropped are running counters from frame_drop_ctl; all 16
-// debug_overlay rows are currently occupied, so surfacing them on the overlay is a
-// deferred follow-up (same reason the av_sync drift overlay was deferred — the
-// 4-bit-addressed overlay is fragile to expand). Initial HW validation is the visual
-// A/B on BBB-PAL / high-motion (O[12] Off vs On). See docs/motcomp_throughput.md.
+// core_frames_late/dropped are running counters from frame_drop_ctl, read out by
+// dvd_telem (tools/mister.py telem). See docs/motcomp_throughput.md.
 wire [15:0] core_frames_late, core_frames_dropped;
 wire [15:0] core_pickups;   // DVD-FORK (telemetry): content frames picked up for display (clk_dec, free-running)
 wire [15:0] aud_play_cnt;   // DVD-FORK (telemetry): audio play ticks/16 (clk_sys, free-running)
@@ -5555,37 +5524,6 @@ wire       disp_hfill_en    = sif_hfill_eff;                                // S
 wire [11:0] core_dbg_lines_displayed;
 wire [11:0] core_dbg_first_vpos;
 wire [11:0] core_dbg_last_vpos;
-// DVD-FORK DEBUG (stage profiler): windowed pipeline-stage bottleneck duty
-// (clk_dec domain). Surfaced on overlay rows 10/11 (see decoder_profile.sv):
-//   row 10 prof0 = {idct_fifo_af%, mvec_af%}  motcomp backpressure
-//   row 11 prof1 = {idct_empty%,   rld_af%}   motcomp starvation | mid-pipe
-wire [15:0] core_dbg_prof0;
-wire [15:0] core_dbg_prof1;
-
-// DVD-FORK DEBUG (slideshow-decay diagnosis): per-second governor rates for overlay
-// row 11. Samples the free-running clk_dec counters raw (eyeball-grade CDC, same as
-// rows 14/15) and latches the 1-second delta, saturated to 8 bits.
-reg [24:0] rate_tick_cnt;
-reg [15:0] lates_prev, drops_prev;
-reg  [7:0] lates_per_sec, drops_per_sec;
-wire [15:0] lates_delta = core_frames_late    - lates_prev;
-wire [15:0] drops_delta = core_frames_dropped - drops_prev;
-always @(posedge clk_sys) begin
-    if (~reset_n) begin
-        rate_tick_cnt <= 25'd0;
-        lates_prev    <= 16'd0;
-        drops_prev    <= 16'd0;
-        lates_per_sec <= 8'd0;
-        drops_per_sec <= 8'd0;
-    end else if (rate_tick_cnt == 25'd26_999_999) begin
-        rate_tick_cnt <= 25'd0;
-        lates_per_sec <= (lates_delta > 16'd255) ? 8'hFF : lates_delta[7:0];
-        drops_per_sec <= (drops_delta > 16'd255) ? 8'hFF : drops_delta[7:0];
-        lates_prev    <= core_frames_late;
-        drops_prev    <= core_frames_dropped;
-    end else
-        rate_tick_cnt <= rate_tick_cnt + 25'd1;
-end
 
 // =========================================================================
 // Core 64-bit FIFO  <->  HPS f2sdram (DDRAM) burst bridge
@@ -5597,9 +5535,6 @@ end
 // recon writes) from thrashing a direct-mapped cache; a high hit rate is what
 // gives DDR3 its bandwidth (the lever, per ao486 — not clock or burst size).
 // Drives DDRAM via the burst_ddr_* wires (through ddr_arb up top).
-// shim_debug_* feeds the overlay/UART: debug_state is 0..10 (0 S_INIT, 1 REQ,
-// 2 RX, 3 PROC, 4 HIT, 5 FILL_CMD, 6 FILL_DAT, 7 FILL_DRN, 8 SERVE_ADR, 9 SERVE,
-// 10 WR_CMD); rd_count counts read-miss BURST commands, rsp_count counts beats.
 // 4-way / 128 sets / 8-word = 32 KB (ao486-exact). This is the proven baseline:
 // susi (352x240) is pixel-perfect with it. HARDWARE-MEASURED that neither more sets
 // (256x4=64KB) NOR more ways (128x8) helps matrix -> matrix is NOT cache-hit-rate-
@@ -5646,15 +5581,15 @@ mem_shim_burst #(.NSETS(64)) mem_shim_burst_inst (
     .ddr3_readdatavalid (arb_dec_readdatavalid),
     .ddr3_waitrequest (arb_dec_waitrequest),
 
-    .debug_state      (shim_debug_state),
-    .debug_saved_cmd  (shim_debug_saved_cmd),
-    .debug_sdram_busy (shim_debug_sdram_busy),
-    .debug_sdram_ack  (shim_debug_sdram_ack),
-    .debug_rd_count   (shim_debug_rd_count),
-    .debug_wr_count   (shim_debug_wr_count),
-    .debug_rsp_count  (shim_debug_rsp_count),
-    .debug_read_pend_cycles (shim_debug_read_pend_cycles),
-    .debug_cache_missrate   (shim_debug_cache_missrate)
+    .debug_state      (),
+    .debug_saved_cmd  (),
+    .debug_sdram_busy (),
+    .debug_sdram_ack  (),
+    .debug_rd_count   (),
+    .debug_wr_count   (),
+    .debug_rsp_count  (),
+    .debug_read_pend_cycles (),
+    .debug_cache_missrate   ()
 );
 
 // =========================================================================
@@ -5694,42 +5629,6 @@ always @(posedge clk_mem or negedge reset_n) begin
 end
 
 // =========================================================================
-// Read-path instrumentation (for debug overlay)
-// =========================================================================
-// Overlay row 6 was the CMD_READ-request counter (dbg_rdreq_count) used during
-// black-screen bring-up to confirm the core issued reads at all. That question is
-// long answered (video plays), so row 6 was REPURPOSED to the burst-cache
-// MISS RATE (shim_debug_cache_missrate, wired from mem_shim_burst) — the
-// compute-vs-memory disambiguator. The old counter is removed.
-
-// =========================================================================
-// Feed-chain instrumentation (for debug overlay)
-// =========================================================================
-// matrix.mpg (a valid program stream) still starves the decoder, so trace the
-// byte flow: mpg_streamer output -> ps_demux input (consumed) -> ps_demux video
-// output. Whichever counter is the last to move is where bytes stop. All three
-// nodes are in the clk_sys domain.
-reg [15:0] dbg_strm_count    = 0;   // bytes mpg_streamer emits
-reg [15:0] dbg_demuxin_count = 0;   // bytes ps_demux actually consumes
-reg [15:0] dbg_vidout_count  = 0;   // video bytes ps_demux forwards to decoder
-always @(posedge clk_sys or negedge reset_n) begin
-    if (!reset_n) begin
-        dbg_strm_count    <= 0;
-        dbg_demuxin_count <= 0;
-        dbg_vidout_count  <= 0;
-    end else begin
-        if (stream_valid)                      dbg_strm_count    <= dbg_strm_count    + 1'd1;
-        if (demux_in_valid && demux_in_ready)  dbg_demuxin_count <= dbg_demuxin_count + 1'd1;
-        if (ps_vid_valid)                      dbg_vidout_count  <= dbg_vidout_count  + 1'd1;
-    end
-end
-
-// NOTE: overlay rows 10/11 were the ps_demux start-code counters (dbg_sc_count /
-// dbg_e0_count) from the black-screen bring-up — long resolved (video plays). They
-// are REPURPOSED to the decoder STAGE PROFILER (core_dbg_prof0/1, wired above), so
-// those counters are removed.
-
-// =========================================================================
 // Video Output — direct from MPEG2 core (no fallback mux)
 // =========================================================================
 // The fallback VGA generator ran on clk_vid (25.175 MHz) but CLK_VIDEO =
@@ -5739,252 +5638,9 @@ end
 // wiring them directly is clean. Before a stream is decoded, the core
 // outputs black (Y=16, Cb=Cr=128), which is fine — "no signal" until play.
 
-// On-screen pipeline diagnostic overlay (dvd/debug_overlay.sv).
-// status[2]==0 -> overlay Off (default, video shows), ==1 -> On. Only RGB is
-// muxed; the sync/DE come straight from the core so timing/lock is never disturbed.
-wire       dbg_en = status[2];
-wire       ov_on;
-wire [7:0] ov_r, ov_g, ov_b;
-
-// DVD-FORK (subpicture congestion relief): the debug_overlay renderer sits in the SAME
-// congested display hotspot the subpicture blend now uses, and adding the subpicture
-// renderer pushed the marginal fit over the edge (playback wedged / constant resync).
-// Compile the overlay OUT for the release build (frees the corner + prunes its deep
-// debug taps). Define DEBUG_OVERLAY in DVD.qsf to bring it back for diagnostics.
-// See docs/roadmap.md "FPGA congestion" (release-vs-debug split).
-// FLOW-CONTROL flags (overlay row 27, Thayer menu-audio saga): WHO is stalling
-// the shared stream, sampled per frame. The three stall sources are sticky-OR'd
-// across each frame (a sub-frame stall still shows); the guard/state levels are
-// snapshots. Assembled here (outside the ifdef: 6 flops, free) so the overlay
-// port wiring stays trivial.
-// {vbuf_fill[7:0], thr_sticky, fifo_sticky, aud_bp_sticky, aud_bp_armed,
-//  aud_ring_low, menu_aud_live, menu_vbuf_over, menu_active}
-reg fc_thr_s, fc_fifo_s, fc_bp_s;       // sticky accumulators (current frame)
-reg fc_thr_l, fc_fifo_l, fc_bp_l;       // latched (previous frame, displayed)
-always @(posedge clk_sys) begin
-    if (~core_vs_prev_sys & core_v_sync) begin
-        {fc_thr_l, fc_fifo_l, fc_bp_l} <= {fc_thr_s, fc_fifo_s, fc_bp_s};
-        fc_thr_s  <= menu_vbuf_throttle;
-        fc_fifo_s <= fifo_almost_full;
-        fc_bp_s   <= ~ps_aud_ready;
-    end else begin
-        fc_thr_s  <= fc_thr_s  | menu_vbuf_throttle;
-        fc_fifo_s <= fc_fifo_s | fifo_almost_full;
-        fc_bp_s   <= fc_bp_s   | ~ps_aud_ready;
-    end
-end
-wire [15:0] dbg_flowctl = {vbuf_fill_s1,
-                           fc_thr_l, fc_fifo_l, fc_bp_l, aud_bp_armed,
-                           aud_ring_low, menu_aud_live, menu_vbuf_over, menu_active};
-
-`ifdef DEBUG_OVERLAY
-// ---- Tomb Raider FREEZE-REACH diagnosis (rows 21..26) -----------------------
-// TR freezes at the 2nd interactive choice: video freezes, no options. The old
-// (2026-07-27) diagnosis said the reader dead-ends at VMGM PGC4, menu_active=0
-// -- but the "1-cell PRE-dispatcher never runs its PRE" theory was DISPROVEN in
-// sim (bench/dvd/iso_reader_predispatch_tb.sv: the reader+VM handle that
-// correctly). libdvdnav stays entirely in title 3 through the choices; our core
-// wrongly ends up in the VMGM menu domain. So the REAL question is: which jump
-// leaves title 3, and what is the exact PGC-load sequence into the freeze?
-//
-// These rows capture a rolling 4-deep PGC-LOAD HISTORY (captured on each
-// pgc_loaded pulse) + the reader/VM state, so the whole reach is visible when
-// the picture freezes. Each history entry packs {menu_dom[15], vts[14:8],
-// pgcn[7:0]}: menu_dom=0 => TITLE (TT); menu_dom=1 & vts=0 => VMGM; menu_dom=1
-// & vts>0 => VTSM. Read the history newest(23) -> oldest(26) to see the turn,
-// e.g. [23]=VMGM/4 [24]=VMGM/3 [25]=TT/3 [26]=TT/25 shows TT/3 -> (jump) ->
-// VMGM/3 -> VMGM/4 = the wrong turn out of the title.
-reg [7:0]  ovl_pgc_err_cnt;
-reg [15:0] tr_ld0, tr_ld1, tr_ld2, tr_ld3;   // PGC-load history (newest..oldest)
-// Last VM jump the reader accepted (captured at jump_ack): the JUMP that caused
-// the current load. Row 22 = {jump_domain[15:14], jump_vts[13:7], jump_pgcn[6:0]}
-// (domain 3=TT 1=VMGM 2=VTSM 0=FP). Post-fix this tells whether the in-title
-// LinkPGCN now ships jump_vts=cur_vts (nonzero) or still 0, and reveals the
-// mechanism (CallSS VMGM => domain=1, LinkPGCN => domain=3).
-reg [15:0] tr_lastjmp;
-always @(posedge clk_sys or negedge reset_n) begin
-    if (!reset_n) begin
-        ovl_pgc_err_cnt <= 8'd0;
-        tr_ld0 <= 16'd0; tr_ld1 <= 16'd0; tr_ld2 <= 16'd0; tr_ld3 <= 16'd0;
-        tr_lastjmp <= 16'd0;
-    end else begin
-        if (pgc_error && ovl_pgc_err_cnt != 8'hFF)
-            ovl_pgc_err_cnt <= ovl_pgc_err_cnt + 8'd1;
-        if (vm_jump_pulse)
-            tr_lastjmp <= {vm_jump_domain, vm_jump_vts[6:0], vm_jump_pgcn[6:0]};
-        // Shift a new entry in on each PGC load. cur_vts/cur_pgcn_rd are set by
-        // the reader at load time (settled by the pgc_loaded pulse).
-        if (pgc_loaded) begin
-            tr_ld3 <= tr_ld2;
-            tr_ld2 <= tr_ld1;
-            tr_ld1 <= tr_ld0;
-            tr_ld0 <= {menu_active, cur_vts[6:0], cur_pgcn_rd[7:0]};
-        end
-    end
-end
-
-// ---- IEC 61937 FLAP PROBE (rows 23/24, Passthru mode only) ------------------
-// Counts what the RECEIVER actually sees on the wire at title start / across a
-// track change, to discriminate the flap hypotheses (docs/iec61937.md "flap
-// probe"): repeated re-anchors vs aud_rst_n resets vs marginal-due hold chatter
-// vs ring underrun. All saturating, cleared only on core reset — read them as
-// deltas (or watch them tick live during a flap).
-//   row 23 = {gap_runs[7:0], aud_rst_cnt[3:0], reanchor_cnt[3:0]}
-//     gap_runs     = real→silent burst transitions AFTER acquisition (each one
-//                    is an interruption of the data-burst stream = one receiver
-//                    re-negotiation candidate). Ticking during the flap = the
-//                    pacing gaps ARE the flap; static = look at resets instead.
-//     aud_rst_cnt  = aud_rst_n pulses (track switch aud_resync, seeks, mounts —
-//                    each also hard-resets the spdif encoder = a discontinuity).
-//     reanchor_cnt = av_sync STC re-anchors (each can re-open a hold run).
-//   row 24 = {max_silent_run[7:0], underrun_bursts[7:0]}
-//     max_silent_run  = longest consecutive silent-burst run post-acquisition
-//                       (large = long gaps → re-anchor/hold-run shaped; 1-2 =
-//                       single-burst chatter → marginal-due shaped, test the
-//                       drain-watchdog fix).
-//     underrun_bursts = silent bursts with NO frame queued post-acquisition
-//                       (ring starvation, distinct from a pacing hold).
-reg        bsp_seen;                    // a real burst since the last aud_rst_n
-reg        bsp_prev_real;               // last burst's classification
-reg [7:0]  bsp_gap_runs, bsp_run_len, bsp_run_max, bsp_under;
-reg [3:0]  bsp_audrst, bsp_reanchor;
-reg        bsp_audrst_q;
-reg [15:0] bsp_reanchor_prev;
-always @(posedge clk_sys or negedge reset_n) begin
-    if (!reset_n) begin
-        bsp_seen <= 1'b0; bsp_prev_real <= 1'b0;
-        bsp_gap_runs <= 8'd0; bsp_run_len <= 8'd0; bsp_run_max <= 8'd0;
-        bsp_under <= 8'd0; bsp_audrst <= 4'd0; bsp_reanchor <= 4'd0;
-        bsp_audrst_q <= 1'b1; bsp_reanchor_prev <= 16'd0;
-    end else begin
-        bsp_audrst_q <= aud_rst_n;
-        if (bsp_audrst_q && !aud_rst_n && bsp_audrst != 4'hF)
-            bsp_audrst <= bsp_audrst + 4'd1;
-        if (!aud_rst_n) bsp_seen <= 1'b0;   // mirrors the wrapper's burst_seen clear
-        bsp_reanchor_prev <= av_reanchor_cnt;
-        // av_sync resets per load flush (its counter drops to 0) — count only
-        // nonzero changes so a reset itself isn't miscounted as a re-anchor.
-        if (av_reanchor_cnt != bsp_reanchor_prev && av_reanchor_cnt != 16'd0
-            && bsp_reanchor != 4'hF)
-            bsp_reanchor <= bsp_reanchor + 4'd1;
-        if (bs_burst_stb) begin
-            bsp_prev_real <= bs_burst_real;
-            if (bs_burst_real) begin
-                bsp_seen    <= 1'b1;
-                bsp_run_len <= 8'd0;
-            end else if (bsp_seen) begin
-                if (bsp_prev_real && bsp_gap_runs != 8'hFF)
-                    bsp_gap_runs <= bsp_gap_runs + 8'd1;
-                if (bsp_run_len != 8'hFF) begin
-                    bsp_run_len <= bsp_run_len + 8'd1;
-                    if (bsp_run_len + 8'd1 > bsp_run_max)
-                        bsp_run_max <= bsp_run_len + 8'd1;
-                end
-                if (!bs_burst_held && bsp_under != 8'hFF)
-                    bsp_under <= bsp_under + 8'd1;
-            end
-        end
-    end
-end
-debug_overlay debug_overlay_inst (
-    .clk          (clk_sys),
-    .rst_n        (reset_n),
-    .en           (dbg_en),
-    .h_pos        (ov_h_gen),
-    .v_pos        (core_v_pos),
-    .de           (core_pixel_en),
-    .wr_count     (shim_debug_wr_count),
-    .rd_count     (shim_debug_rd_count),
-    .rsp_count    (shim_debug_rsp_count),
-    .frame_cnt    (core_frame_cnt),
-    .streamer_active   (streamer_active),
-    .streamer_has_data (streamer_has_data),
-    .streamer_sd_ack   (streamer_sd_ack),
-    .sdram_busy        (shim_debug_sdram_busy),
-    .vld_err           (vld_err),
-    .watchdog_rst      (watchdog_rst),
-    .shim_state        (shim_debug_state),
-    .cache_missrate    (shim_debug_cache_missrate),  // row 6: {miss%, read-intensity}
-    .strm_count        (dbg_strm_count),
-    .demuxin_count     (dbg_demuxin_count),
-    .vidout_count      (dbg_vidout_count),
-    // Rows 10/11 REPURPOSED (2026-07-02, slideshow-decay diagnosis; the stage profiler
-    // that used them was removed 2026-07-01):
-    //   row 10 = {VBUF fill (0xFF = 2MB bitstream cushion full), audio_ring fill
-    //             (0xFF = 32KB full)} — the two reservoirs, side by side.
-    //   row 11 = {frames_late/sec, frames_dropped/sec} (saturating 8-bit) — the
-    //             governor's live behavior. Healthy: row10 high-byte rides high with
-    //             row11 near 00 00; the smooth->slideshow decay shows WHICH reservoir
-    //             drains and whether lateness precedes or follows it.
-    .prof0             ({core_vbuf_fill, aud_bytes_avail[14:7]}),
-    .prof1             ({lates_per_sec, drops_per_sec}),
-    // Rows 14/15 = AC-3 decoder self-heal reset counters (restored 2026-07-04 after
-    // the lip-sync drift saga closed — PR #62; the drift-instrument O[12] mux that
-    // displaced them is retired). row 14 = ERR-caused resets, row 15 = TOTAL resets.
-    // Both flat/low = the AC-3 front is healthy; climbing = input starvation / error
-    // resets (the old static-pop class). No longer muxed by Frame Drop; the live
-    // governor behaviour is on row 11 ({lates/s, drops/s}).
-    .stall_cycles      (dbg_ac3_err_resets),
-    .stall_info        (dbg_ac3_resets),
-    .core_busy         (core_busy),
-    .vbw_full          (core_vbw_almost_full),
-    .aud_frames        (aud_frames_avail),   // overlay row 12
-    // Row 13 = audio_ring frames DROPPED on overflow (should be ~0 in the STD
-    // backpressure era). The drift-era armed-time high byte is retired.
-    .aud_overflow      (aud_overflow_cnt),
-    // Row 16 = drop-debit split {drop acks debited 3 [15:8], debited 2 [7:0]},
-    // saturating (core_drop_costs). KEPT past the drift saga as the frame-drop
-    // accounting check: on 3:2 film the drops phase-lock to rff=0 B's, so cost2 is
-    // the honest heavy byte — cost3 climbing too would flag film-aware debits.
-    // Retire after a Matrix/PAL confirmation pass.
-    .drop_costs        (core_drop_costs),
-    // Row 17 = vid_err (re-added 2026-07-05 for CRT 480i): signed wall-vs-content
-    // refreshes from mpeg2video (clk_dec, eyeball-grade CDC like rows 10/11). The
-    // 480i field-path A/V drift is diagnosed by THIS row — flat = timeline locked.
-    .vid_err           (core_vid_err),
-    // Rows 18/19 = DVD current/total time {mm,ss} BCD (Phase-7 nav foundation):
-    // 18 = DSI cell-elapsed (current), 19 = PGC playback_time (total)
-    .nav_time          (dbg_nav_time),
-    .nav_total         (dbg_nav_total),
-    .angle_info        (dbg_angle),
-    // Rows 21..26 = Tomb Raider FREEZE-REACH diagnosis. Read at the freeze
-    // (picture frozen = stable to read). Row 21 FIRST: S_DONE = reader dead-ended.
-    //   row 21 = LIVE reader debug_state: rd_state[5:0], S_STILL[6], menu_dom[7],
-    //            best_cnt[12:8], sel_valid[13], iso_error[14], iso_mode[15].
-    //   row 22 = LAST VM jump the reader accepted: {jump_domain[15:14],
-    //            jump_vts[13:7], jump_pgcn[6:0]}. domain 3=TT 1=VMGM 2=VTSM 0=FP.
-    //            Post-fix: an in-title LinkPGCN should now show domain=3, vts=the
-    //            title's VTS (nonzero); vts=0 here = the bug persists / other op.
-    //   rows 23..26 = rolling PGC-LOAD HISTORY, newest(23) -> oldest(26). Each =
-    //            {menu_dom[15], vts[14:8], pgcn[7:0]}. menu_dom=0 => TT (title);
-    //            menu_dom=1 & vts=00 => VMGM; menu_dom=1 & vts>0 => VTSM. The
-    //            sequence NAMES the wrong turn out of title 3 into the menu domain.
-    .dbg21  (streamer_dbg_state),                   // LIVE reader state (rd_state[5:0]+menu_dom[7]+flags)
-    .dbg22  (tr_lastjmp),                           // last VM jump {jump_domain[15:14], jump_vts[13:7], jump_pgcn[6:0]}
-    // Rows 23/24 are MUXED on pass_mode: Passthru shows the IEC 61937 flap
-    // probe (packing documented at the bsp_* block above); Decode keeps the
-    // Tomb Raider PGC-load history.
-    .dbg23  (pass_mode ? {bsp_gap_runs, bsp_audrst, bsp_reanchor} : tr_ld0),
-    .dbg24  (pass_mode ? {bsp_run_max, bsp_under}                : tr_ld1),
-    .dbg25  (tr_ld2),                               // PGC-load history [2]
-    .dbg26  (rd_dbg_pgcerr),                        // last pgc_error {reason[15:13], nr_srp_sat[12:8],
-                                                    //  want_pgcn[7:0]} — reason 1=empty PGCIT,
-                                                    //  2=PGCN out of range (the failed-menu-link case),
-                                                    //  3=bad pgc_start, 4=JumpTT resolve, 5=no PGCI_UT,
-                                                    //  6=bad UT header, 7=VTS/menu-VOB not found
-    .flowctl (dbg_flowctl),                         // row 27: {vbuf_fill, flow-control flags}
-    .ov_on        (ov_on),
-    .ov_r         (ov_r),
-    .ov_g         (ov_g),
-    .ov_b         (ov_b)
-);
-`else
-// Overlay compiled out (release build): no overlay pixels, video passes through.
-assign ov_on = 1'b0;
-assign ov_r  = 8'd0;
-assign ov_g  = 8'd0;
-assign ov_b  = 8'd0;
-`endif
+// The numeric DEBUG_OVERLAY lattice (dvd/debug_overlay.sv) was retired on
+// feature/reader-slim: compiled out of every release since 2026-07-09 and
+// superseded by dvd_telem (core->Main telemetry). See docs/logic_reclaim.md §8.
 
 // =========================================================================
 // DVD subpicture (subtitle) overlay — decode (spu_decode) + reusable alpha
@@ -6335,16 +5991,7 @@ always @(posedge clk_sys) begin
 end
 assign sp_new_cell = sp_new_cell_r;
 
-// Overlay time rows (both BCD, osd_read-decodable as 4 nibbles = MM:SS):
-//   row 18 = current  = DSI cell-elapsed time  c_eltm[mm,ss]
-//   row 19 = total    = PGC playback_time      pgc_playback_time[mm,ss]
-// c_eltm / playback_time bytes are hh[31:24] mm[23:16] ss[15:8] ff[7:0].
-wire [31:0] pgc_playback_time_w;    // PGC total time from dvd_iso_reader (BCD)
-wire [15:0] dbg_nav_time  = {dsi_c_eltm[23:16], dsi_c_eltm[15:8]};
-wire [15:0] dbg_nav_total = {pgc_playback_time_w[23:16], pgc_playback_time_w[15:8]};
-// Phase 9: {angle_count, cur_angle} for the debug overlay (row 20, DEBUG_OVERLAY
-// build only). Release-visible angle indicator is a follow-up (like the time rows).
-wire [15:0] dbg_angle     = {4'd0, angle_count, 4'd0, cur_angle};
+wire [31:0] pgc_playback_time_w;    // PGC total time from dvd_iso_reader (BCD, HUD total)
 
 // rect hit vs the live raster position, registered to align with sp_q_idx
 // (both then lag core_h/v_pos by one clk_sys = the same 1-px shift the
@@ -7211,10 +6858,9 @@ assign VGA_CS_EN = csync_smpte_en;
 // design:
 //   - AFTER cc_on, so the line-21 caption waveform still goes out. It lives in the VBI,
 //     i.e. outside DE, and blanking it would kill captions for a second every switch.
-//   - AFTER ov_on / dbg_px_q, so the DEBUG_OVERLAY rows and the release-visible O[2]
-//     diagnostic blocks stay readable. blk10 of the O[2] third row IS the "il_switch
-//     fired" readout — hiding it exactly when a switch happens would blind the one
-//     instrument pointed at this event.
+//   - AFTER dbg_px_q, so the release-visible O[2] diagnostic blocks stay readable.
+//     blk10 of the O[2] third row IS the "il_switch fired" readout — hiding it
+//     exactly when a switch happens would blind the one instrument pointed at it.
 //   - BEFORE sub_r, so it takes out the picture, subtitles, HUD and idle logo together.
 //     That is the intent: everything content-derived goes dark as one.
 // ⚠ RGB ONLY — vga_hs_q/vga_vs_q/vga_de_q below are UNTOUCHED. Dropping sync across a
@@ -7226,9 +6872,9 @@ assign VGA_CS_EN = csync_smpte_en;
 reg [7:0] vga_r_q, vga_g_q, vga_b_q;
 reg       vga_hs_q, vga_vs_q, vga_de_q, ce_pix_q;
 always @(posedge clk_sys) begin
-    vga_r_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_r : dbg_px_q ? dbg_r_q : sw_blank ? 8'd0 : sub_r;
-    vga_g_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_g : dbg_px_q ? dbg_g_q : sw_blank ? 8'd0 : sub_g;
-    vga_b_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : ov_on ? ov_b : dbg_px_q ? dbg_b_q : sw_blank ? 8'd0 : sub_b;
+    vga_r_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : dbg_px_q ? dbg_r_q : sw_blank ? 8'd0 : sub_r;
+    vga_g_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : dbg_px_q ? dbg_g_q : sw_blank ? 8'd0 : sub_g;
+    vga_b_q  <= cc_on ? cc_level : ~core_pixel_en ? 8'd0 : dbg_px_q ? dbg_b_q : sw_blank ? 8'd0 : sub_b;
     vga_hs_q <= core_h_sync;
     vga_vs_q <= core_v_sync;
     vga_de_q <= core_pixel_en;
@@ -7244,7 +6890,8 @@ assign VGA_DE = vga_de_q;
 
 // DVD-FORK: the UART debug transmitter (uart_debug + uart_tx) is REMOVED to free
 // routing for the frame-drop reland (the design is congestion-marginal). Diagnostics
-// moved to the on-screen debug_overlay long ago, so the UART was dead weight; removing
+// moved to the on-screen debug_overlay long ago (itself retired since, in favour of
+// dvd_telem), so the UART was dead weight; removing
 // it also prunes its exclusive deep debug taps (streamer_*, shim_debug_*, core_*_cnt).
 // See docs/roadmap.md "FPGA congestion / resource cleanup".
 

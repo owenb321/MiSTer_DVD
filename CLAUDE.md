@@ -491,8 +491,8 @@ Each of these cost at least one hardware round. The story is in `docs/status_log
 - **HIL:** run the control arm (old build) first; ssh latency is part of the instrument;
   one behavioural change per flash; a build is not testable until its artefact is on the
   board. See `.claude/skills/hil-testing/`.
-- **`watchdog_rst` is active-LOW.** The debug overlay (`DEBUG_OVERLAY`, compiled out of
-  release builds) shows expiry, so green = fired.
+- **`watchdog_rst` is active-LOW** (high = healthy, a one-cycle low = expired). Check
+  the polarity before concluding a decoder is hanging.
 - **Stale premises in comments ship bugs.** When a feature changes what a mechanism
   guards, re-read the comments that justified the old behaviour.
 
