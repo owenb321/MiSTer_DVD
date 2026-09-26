@@ -412,7 +412,8 @@ worse maintenance burden than targeted in-place edits. So:
 - ✅ **ONE `Deinterlace` OPTION (Weave / Bob / Blend) + BOB ON THE PROGRESSIVE RASTER
   (2026-09-25, branch `feature/deint-merge`); sim-proven + mutation-checked, built
   `DVD_deintmerge_20260926_0049.rbf` (SEED 9 first roll, clk_dec 88.92/89.88, 98 % ALM,
-  Bob = +7 ALM), ✅ HW-MEASURED 2026-09-26: on Thayer's most-combed blocks, comb 1.05 Weave → 0.31 Bob
+  Bob = +7 ALM; rebased onto PR #129 and rebuilt as `DVD_deintmerge_20260926_0154.rbf`,
+  SEED 9 first roll, 90.95/89.09), ✅ HW-MEASURED 2026-09-26: on Thayer's most-combed blocks, comb 1.05 Weave → 0.31 Bob
   → 0.18 Blend; held re-scans 0 px; Bob's kept field bit-exact against Weave; film 0 px;
   pacing unchanged; gated off on Interlaced and Film 24p; ✅ HW-CONFIRMED by the
   maintainer's eye the same day (OSD row swap, HDMI Bob on Interlaced, Bob motion).** `OB 480i Deint` and `O[49] Progressive Deint` are RETIRED (bits 11/49

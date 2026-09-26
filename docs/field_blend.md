@@ -267,6 +267,11 @@ that instantiate the addrgen or `resample` gained a `.blend_en(1'b0)` tie-off.
 @−40C (gate 86.0), not marginal, 98 % ALM. `field_blend` = 261 ALM (254 before Bob, so the
 second kernel cost 7 ALM), 6 M10K, 0 DSP. The matching Main cross-compiles
 (`USE_DOCKER=1 main/build_main.sh`).
+**Rebased onto PR #129 (`.cue` sheets) and rebuilt:** `releases/DVD_deintmerge_20260926_0154.rbf`,
+SEED 9 first roll, clk_dec 90.95 @100C / 89.09 @−40C, 98 % ALM, from a clean tree at
+`2a79dd7`. The rebase changed only the file-picker list and `` `CORE_VERSION ``, so the
+HW round above (run on the pre-rebase build) stands. `run_field_blend.sh --red` is green
+again, 53 arms; the Main rebuilds too.
 
 Two options used to cover one question, one per raster:
 - `OB 480i Deint = Bob / Weave` (bit 11) chose ascal's deinterlace for HDMI while the
