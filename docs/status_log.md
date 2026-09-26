@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ✅ **AUTO CHAPTER TABLE FOLLOWS THE PGC IT PLAYS (issue #132, 2026-09-26, branch
-  `feature/auto-ptt-title`, `dev-autoptt`); sim-proven and ✅ HW-CONFIRMED on the rig by
+- ✅ **AUTO CHAPTER TABLE FOLLOWS THE PGC IT PLAYS (issue #132, 2026-09-26, ✅ MERGED
+  (PR #134), `dev-autoptt`); sim-proven and ✅ HW-CONFIRMED on the rig by
   the HIL harness** (see HW below for which build).
   Field report: *X-Men: Apocalypse* with Disc Menus Off showed `CH n/1` and no seek-bar
   notches, on v0.7.0 and on `dev-readerslim`. Chapter skips worked. **Cause:** the Auto mount

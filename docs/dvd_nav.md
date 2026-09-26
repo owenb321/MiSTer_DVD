@@ -99,7 +99,7 @@ adds the file.
   **2 of 1231** discs, and a duration-based pick costs an IFO read per title set at mount.
   Gate: `iso_reader_pgc_tb` TEST 5. Sweep: `auto_pgc_sweep.py` shape in the issue thread;
   `tools/auto_pick_model.py` is the committed model of the pick.
-  ✅ **FIXED, issue #132 (2026-09-26, branch `feature/auto-ptt-title`; HW-confirmed on the
+  ✅ **FIXED, issue #132 (2026-09-26, ✅ MERGED (PR #134); HW-confirmed on the
   rig by the HIL harness: `CH 1/29` with notches, was `CH 1/1`): Auto now reloads the
   chapter table of the PGC it plays.** Field report on X-Men
   Apocalypse, Disc Menus Off, v0.7.0 and `dev-readerslim` alike: chapter skips worked, but the

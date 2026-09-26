@@ -366,7 +366,7 @@ otherwise; `--red` runs its mutation arms).
 | Natural transition waits for audio (`aud_drain`) | ✅ | `dvd_nav.md` | `run_auddrain.sh` |
 | Seek anchor: pre-flush picture untagged | ✅ | `dvd_nav.md` | `picbuf_tag_flush_tb`, `disp_sched_tb` [14e] |
 | Auto mode: skip unusable PGCs, longest-duration PGC | ✅ | `dvd_nav.md`, `physical_disc.md` | `iso_reader_pgc_tb` |
-| Auto mode: chapter table of the PGC it plays (issue #132) | ✅ (HIL) | `dvd_nav.md` | `run_auto_ptt.sh` |
+| Auto mode: chapter table of the PGC it plays (issue #132, PR #134) | ✅ (HIL) | `dvd_nav.md` | `run_auto_ptt.sh` |
 | Angles: `next_vobu` without `sml_agli`, SPRM3 from the VM, PRE before resolve | ✅ | `dvd_nav.md`, `track_selection.md` | `run_angle.sh`, `check_angle_wiring.py` |
 | Adjacent angle blocks (count stops at the block edge) | ✅ | `dvd_nav.md` | `iso_reader_angle_tb` C |
 | Seeking inside an angle block (timeline, arm, VOB_ID snap) | ✅ | `dvd_nav.md` | `iso_reader_angle_tb` D/E/G |
