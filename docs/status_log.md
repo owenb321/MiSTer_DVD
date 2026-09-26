@@ -74,8 +74,16 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - Fix: `CH 1/29`, the seek bar shows notches, and next/next/prev give `CH 2/29` (0:08:21),
     `3/29` (0:14:15), then `2/29`.
   - Disc Menus On → PLAY: `CH 1/29` → `2/29` at 0:08:21, unchanged.
-  - ⚠ Proven in simulation only: the `!ptt_res_tt` scan gate. X-Men is single-PGC, so the
-    board never took a cross-PGC chapter jump into PGCN 1. Arm E covers it.
+  **HW on the final build, `DVD_autoptt_20260926_1603` (commit 73db472, SEED 9, clk_dec
+  89.88/88.92, 40,981 ALMs placed):**
+  - X-Men Apocalypse, Disc Menus Off: `CH 1/29`, and next-chapter gives `2/29` at 0:08:21.
+  - The `!ptt_res_tt` scan gate, on *Girl Next Door* disc 2 with Disc Menus Off. This is
+    the "no entry flag, in title 1" shape: Auto plays PGCN 2 = chapter 2 of 9, and
+    chapter 1 lives in PGCN 1.
+    - Control (`readerslim_0404`): prev-chapter never leaves chapter 2, even when pressed
+      at its start. The HUD sits at `CH 2/9` with a total of 0:09:59, because every
+      chapter-1 jump re-ran the scan back to PGCN 2.
+    - Fix: `CH 1/9`, and the total becomes 0:07:56, PGCN 1's own length.
 - ✅ **READER SLIMMING (BRANCH D) + THE NUMERIC DEBUG OVERLAY RETIRED (2026-09-26, branch
   `feature/reader-slim`); bit-identical in simulation, a harness HW smoke pass, and
   ✅ HW-CONFIRMED 2026-09-26 by the maintainer on the final build** (`DVD_readerslim_20260926_0404.rbf`, SEED 9 first roll, clk_dec 90.03/89.45,
