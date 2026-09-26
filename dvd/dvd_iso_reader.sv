@@ -4,7 +4,7 @@
 // same output contract (stream_data / stream_valid / busy) into ps_stream_fifo,
 // same hps_io sd_* block interface, same clk_sys single-clock domain.
 //
-// Two automatically-selected paths, chosen at mount:
+// Automatically-selected paths, chosen at mount:
 //
 //   1. ISO path  - when the mounted image is a DVD-Video ISO (ISO9660 "CD001"
 //      present at logical sector 16). Parses ISO9660 to find VIDEO_TS/, picks
@@ -13,25 +13,30 @@
 //      framework main binary serves any sd_lba from the mounted image, like a
 //      .vhd core), so all navigation lives here in fabric.
 //
-//      MAIN-FEATURE SELECTION (IFO-primary, size-fallback): after enumerating
-//      the VIDEO_TS title VOBs, we parse the DVD-Video VMGI (VIDEO_TS.IFO) Title
-//      Search Pointer Table (TT_SRPT) and pick the VTS that holds TITLE 1 (the
-//      conventional main feature). If VIDEO_TS.IFO is absent or the TT_SRPT is
-//      malformed we fall back to the old heuristic: the VTS whose title VOBs
-//      _1.._N are the largest in total. IFO fields are BIG-ENDIAN. Offsets used:
-//        VMGI_MAT.tt_srpt          @196 (0xC4)  BE u32  sector ptr rel. to IFO
-//                                                       start => abs LBA =
-//                                                       vmgi_lba + tt_srpt_ptr
-//        TT_SRPT.nr_of_srpts       @0           BE u16  title count
-//        TT_SRP[0].title_set_nr    @14 (=8+6)   u8      title 1's VTS number
-//      (Cross-checked vs libdvdread ifo_types.h vmgi_mat_t / tt_srpt_t.)
+//      MAIN-FEATURE SELECTION (Auto, Disc Menus Off): the VTS whose title VOBs
+//      _1.._N are the largest in total (S_WALK_VTS / S_FINALIZE), then, inside
+//      it, the PGC with the longest playback_time (the dur_scan pass through
+//      S_PGC_HDR, bounded by DUR_SCAN_MAX). The OSD Debug "Title VTS" picker
+//      overrides the VTS (title_sel -> S_SELECT). With Disc Menus On nothing is
+//      picked here: the DVD-VM boots the First Play PGC and every later title is
+//      a VM jump, whose JumpTT is resolved through the VMGI TT_SRPT (S_TT_RES).
+//      (A TT_SRPT "title 1" pick at mount was retired because title 1 is a logo
+//      or warning stub on many discs; its unreachable states went on 2026-09-10.)
+//      IFO fields are BIG-ENDIAN; offsets are cross-checked against libdvdread
+//      ifo_types.h. See docs/dvd_nav.md.
 //
 //   2. Flat-file fallback - when the image is NOT ISO9660 (a bare .VOB / .mpg /
 //      .m2v elementary or program stream). Streams the whole file linearly from
 //      block 0, exactly like the original mpg_streamer.
 //
-// CSS is out of scope (v1 supports DECRYPTED ISOs only). UDF-only images and
-// IFO/PGC navigation (chapters/seek/angles) are later phases. See docs/dvd_nav.md.
+//   3. Raw CD / PCM - a raw MODE2/2352 image (VCD/SVCD .bin, sniffed by its sync
+//      pattern in S_CHK_RAW) is deblocked in-line to its Form-2 payload, and a
+//      RIFF/WAVE file (S_WAV_HDR) streams only its data chunk. docs/vcd_svcd.md,
+//      docs/cdda.md.
+//
+// CSS never reaches the fabric: an encrypted disc or image is decrypted by the
+// custom Main (main/support/dvd/dvd_css.cpp) before its sectors are served.
+// UDF-only images are not supported (ISO9660 bridge required). See docs/dvd_nav.md.
 //
 // BLOCK SIZE: the sd_* interface serves 2048-byte blocks (hps_io BLKSZ=4,
 // sd_blk_cnt=0 => 1 block/req) = exactly one ISO9660/DVD logical sector, so
@@ -379,8 +384,9 @@ module dvd_iso_reader #(
     // Phase 11: BCD dvd_time START of the playing cell within the title (the
     // per-cell playback-time prefix sum, built during the P_CELL walk). emu
     // adds nav_dsi's cell-relative c_eltm to it (bcd_time_add) for the HUD's
-    // whole-title elapsed readout. Valid in cell_mode; multi-angle blocks
-    // over-count (all angles' cells are summed) — documented limitation.
+    // whole-title elapsed readout. Valid in cell_mode. An angle block counts
+    // once: a sibling angle cell inherits the block-first cell's start (see the
+    // run_eltm prefix sum), so the old over-count is gone.
     output reg [31:0] cur_cell_start,
     // Phase 11 stretch: cell first_sector write TAP (streamed during the
     // P_CELL walk, like the pm_* stream) — dvd/seek_bar.sv shadows the cell
@@ -1801,8 +1807,9 @@ wire [15:0] nr_of_srpts = {rbuf[0], rbuf[1]};                     // TT_SRPT@0
 wire [7:0]  ttsrp0_vtsn  = rbuf[14];                              // TT_SRP[0]@6
 
 // PGC big-endian field taps. Reads set fetch_base to the field's byte offset so
-// the field lands in the low shadow bytes (only rbuf[0..15] are relied on ->
-// safe for fetch_base up to ~2044; the shadow read wraps >2047 to parse_buf[0]).
+// the field lands in the low shadow bytes. A field that straddles the sector end
+// is fetched correctly: S_FETCH refills parse_buf with the next sector and
+// resumes (fetch_cross / fetch_xw), so any fetch_base is safe.
 wire [31:0] vts_pgcit_ptr  = {rbuf[0], rbuf[1], rbuf[2], rbuf[3]};   // VTSI_MAT@204 / @208 / VMGI@200/@132
 wire [15:0] nr_pgci_srp    = {rbuf[0], rbuf[1]};                     // PGCIT@0 (shadow@pit_off)
 wire [7:0]  nr_of_cells_b   = rbuf[3];                               // PGC@3 (shadow@pgc_off)
@@ -2814,7 +2821,7 @@ always @(posedge clk or negedge rst_n) begin
                 end else
                     chap_st <= CH_IDLE;          // jump busy / no VTS -> drop
             end
-            CH_C: chap_st <= CH_D;               // pm_rd_q <- pmap[chap_tp]
+            CH_C: chap_st <= CH_D;               // pm_rd_q <- pmap[pm_raddr]
             CH_D: begin
                 // pm_rd_q = target chapter's entry cell (1-based). Arm a cell seek.
                 if (chap_do && pm_rd_q != 8'd0 && (pm_rd_q - 8'd1) < cell_count &&
@@ -3492,10 +3499,11 @@ always @(posedge clk or negedge rst_n) begin
                 //   - Auto (title_sel == 0) -> the LARGEST VTS (best_base, by total
                 //     title-VOB bytes) = the longest-title proxy. This replaced the
                 //     old VMGI TT_SRPT "title 1" pick, which chose a short
-                //     license/logo clip on discs where title 1 isn't the feature.
-                //     (The S_IFO_MAT/TSRPT title-1 states are now unreachable but
-                //     retained; S_SELECT is still used for the manual pick.) The
-                //     real fix for ambiguous discs is the graphical DVD menu.
+                //     license/logo clip on discs where title 1 isn't the feature
+                //     (its states were deleted 2026-09-10; S_SELECT serves the
+                //     manual pick). Inside the chosen VTS, S_PGC_HDR's dur_scan
+                //     then takes the longest PGC. The real fix for ambiguous discs
+                //     is the graphical DVD menu.
                 // Both converge on S_PGC_BEGIN for the PGC cell-timeline parse.
                 // Phase-4: with Disc Menus on, the reader IDLES here and the
                 // DVD-VM boots the disc (First Play PGC) - nothing auto-plays.
