@@ -325,7 +325,9 @@ worse maintenance burden than targeted in-place edits. So:
 
 - 🔧 **`.cue` SHEETS — AUDIO CD AND VCD/SVCD RIPS, PARSED BY THE MAIN, ZERO FABRIC LOGIC
   (2026-09-25, branch `feature/cue-sheets`); host-proven (12 mutations each caught by
-  its own `FAIL` line), and ✅ HW-MEASURED on the rig 2026-09-25, control arm first**
+  its own `FAIL` line), ✅ HW-MEASURED on the rig 2026-09-25, control arm first, and
+  ✅ HW-CONFIRMED by the maintainer the same day loading a `.cue` from the OSD file
+  picker** (the one path the harness cannot drive: it launches by MGL)
   (build `DVD_cue_20260926_0019.rbf`, SEED 9 first roll, clk_dec 87.81/87.45, 98 % ALM).
   | arm | result |
   |---|---|

@@ -580,7 +580,7 @@ the split is deliberate:
 earlier rejection; host-proven (`main/tests/dvd_cue_test.cpp`, 12 mutations) and
 ✅ HW-MEASURED on the rig 2026-09-25 (audio bin/cue + per-track wav, VCD split-bin and
 MODE2/2336, refused sheet; physical audio CD and physical VCD both unregressed, eject
-included).** Audio CD and VCD/SVCD bin/cue (and per-track `.wav`) rips, parsed by the
+included), and ✅ HW-CONFIRMED by the maintainer from the OSD file picker.** Audio CD and VCD/SVCD bin/cue (and per-track `.wav`) rips, parsed by the
 Main and served as the same streams a physical disc produces — zero RTL beyond `CUE`
 in `CONF_STR`. Design: `docs/cdda.md` "`.cue` sheets". ⛔ CHD still not supported
 (would need libchdr in the overlay).

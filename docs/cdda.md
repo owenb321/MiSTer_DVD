@@ -93,7 +93,8 @@ the Archie/ST/Amiga cores, and Main restarts at every core load — which is why
 was harmless). `CUE` makes it 27. Step 50 widens the buffer to 256, matching the
 buffer it is copied from.
 
-✅ **HW-measured 2026-09-25** (build `DVD_cue_20260926_0019.rbf`). The control arm, the
+✅ **HW-measured 2026-09-25** (build `DVD_cue_20260926_0019.rbf`), and ✅ confirmed by the
+maintainer loading a `.cue` from the OSD file picker. The control arm, the
 pre-cue Main, mounts the sheet as a 225-byte text file and plays nothing. The new Main:
 - a one-`.bin` tone disc and the same disc as EAC per-track `.wav` both read
   `TR 1/3` 0:00:32;
