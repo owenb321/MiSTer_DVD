@@ -325,6 +325,19 @@ module iso_reader_pgc_tb;
                 img[22*2048+600+232] = 8'h01;                   // cell table @+256
                 img[22*2048+600+233] = 8'h00;
                 put_cell(22, 32'd600, 16'd256, 0, 32'd2, 32'd2); // PGC2 -> RBN 2 (0xB2)
+                // Issue #132: the X-Men: Apocalypse chapter tables. PGCN 1 is
+                // title 1's entry (1 chapter), PGCN 2 is title 2's (2 chapters),
+                // so Auto must publish title 2's table, not title 1's.
+                img[22*2048+8]  = 8'h81;                        // SRP[0] entry: title 1
+                img[22*2048+16] = 8'h82;                        // SRP[1] entry: title 2
+                img[21*2048+203] = 8'h02;                       // vts_ptt_srpt @200 -> sector 23
+                img[23*2048+1]  = 8'h02;                        // nr_of_srpts = 2
+                img[23*2048+7]  = 8'd27;                        // last_byte
+                img[23*2048+11] = 8'd16;                        // ttu_offset[0] (title 1)
+                img[23*2048+15] = 8'd20;                        // ttu_offset[1] (title 2)
+                img[23*2048+17] = 8'h01; img[23*2048+19] = 8'h01; // t1 ch1 -> pgc1 pg1
+                img[23*2048+21] = 8'h02; img[23*2048+23] = 8'h01; // t2 ch1 -> pgc2 pg1
+                img[23*2048+25] = 8'h02; img[23*2048+27] = 8'h01; // t2 ch2 -> pgc2 pg1
             end else if (vts_pgcit_ptr != 0) begin
                 // pgc_start_byte=16, nr_cells=tb_ncells, cell_playback_offset=256
                 put_pgcit(22, 32'd16, tb_ncells, tb_cpo);
@@ -523,6 +536,10 @@ module iso_reader_pgc_tb;
         if (cap_n !== 2048)         begin errors=errors+1; $display("  ERR wrong byte count (want the 1 h PGC's cell)"); end
         for (i = 0; i < 2048 && i < cap_n; i = i + 1)
             expect_byte(i, cap[i], 8'hB2);          // the feature, not the 5 s logo
+        // ...and its chapter table is title 2's, not title 1's (issue #132)
+        $display("TEST5: cur_ttn=%0d nr_ptt=%0d (expect 2 2)", dut.cur_ttn, dut.nr_ptt);
+        if (dut.cur_ttn !== 7'd2)  begin errors=errors+1; $display("  ERR chapter table is not the played PGC's title"); end
+        if (dut.nr_ptt !== 11'd2)  begin errors=errors+1; $display("  ERR nr_ptt is not title 2's chapter count"); end
 
         // =============================================================
         if (errors == 0) $display("ISO_READER_PGC_TB: ALL TESTS PASSED");
