@@ -195,7 +195,8 @@ module dvd_vm (
 
     output     [7:0]  dbg_state,
     // DVD-FORK DEBUG (Atmosfear wrong-title diagnosis): expose the scenario-
-    // dispatch GPRMs so emu's DEBUG_OVERLAY can latch them at the game jump.
+    // dispatch GPRMs (read by dvd_vm_tb; emu leaves them unconnected since the
+    // debug overlay that latched them at the game jump was retired).
     output     [15:0] dbg_g3,          // g[3] = the scenario-dispatch selector
     output     [15:0] dbg_g14_9,       // {g[14][7:0] (root button), g[9][7:0] (yes count)}
     // DVD-FORK DEBUG (TP Star Wars symptom-1 diagnosis): the RSM target, so the

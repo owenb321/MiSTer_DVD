@@ -118,7 +118,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/vbuf_pos.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/pts_cdc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/pts_assoc.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/disp_sched.sv
-set_global_assignment -name SYSTEMVERILOG_FILE dvd/debug_overlay.sv
 # DVD-FORK (subpicture/subtitle O15 + O[26:24]): SPU decoder + reusable alpha blend.
 # See docs/subpicture.md.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/spu_decode.sv
@@ -407,20 +406,10 @@ set_global_assignment -name VERILOG_MACRO "QUARTUS=1"
 # Linux-side audio player (a BGM script, say) is silent while the DVD core is loaded --
 # documented in site/content/reference/compatibility.md.
 set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
-# DVD-FORK DEBUG: to bring back the Atmosfear wrong-title diagnosis overlay
-# (dvd/debug_overlay.sv rows 21..26; O[2] + Disc Menus On to view), uncomment the
-# next line and rebuild (--compile). It re-tightens the congested fit and may
-# need a fitter seed re-sweep. Left OFF for the release build.
-# DVD-FORK DEBUG (feature/bs-flap-probe): the overlay was temporarily enabled here
-# for the IEC 61937 flap probe rows 23/24 (docs/iec61937.md "FLAP ROOT CAUSE" —
-# the captures that cracked it). Re-enable by uncommenting for future passthrough
-# diagnosis; left OFF for release builds.
-# set_global_assignment -name VERILOG_MACRO "DEBUG_OVERLAY=1"
-# NOTE (Film 24p, issue #124): DEBUG_OVERLAY was briefly re-enabled here for the
-# bring-up lates readout, but the overlay+Phase1 netlist fit flaky on SEED 9 (routed +
-# STA-clean but HW-green — the framebuffer write path came out functionally broken).
-# Ship the release (no-overlay) netlist, which has headroom and fits SEED 9 cleanly.
-# Re-add `VERILOG_MACRO "DEBUG_OVERLAY=1"` + seed-sweep if the numeric overlay is needed.
+# The numeric DEBUG_OVERLAY lattice (dvd/debug_overlay.sv, the DEBUG_OVERLAY macro) was
+# RETIRED on feature/reader-slim (2026-09): compiled out of every release since
+# 2026-07-09 and superseded by dvd_telem. Its history (the Atmosfear, IEC 61937 flap
+# and Film 24p diagnoses) is in git and docs/logic_reclaim.md §8.
 
 set_instance_assignment -name PARTITION_HIERARCHY root_partition -to | -section_id Top
 set_global_assignment -name FITTER_AGGRESSIVE_ROUTABILITY_OPTIMIZATION ALWAYS
@@ -463,7 +452,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # SUBPICTURE netlist (PR #71, 2026-07-06): SEED 7 FROZE playback / caused constant resync on
 # HW (the renderer landed in the display hotspot). SEED 9 is the HW-CONFIRMED value for this
 # netlist (build DVD_subpic_rel: combinational blend + debug_overlay compiled OUT via
-# `ifdef DEBUG_OVERLAY). Defining DEBUG_OVERLAY re-tightens the fit and likely needs a new sweep.
+# `ifdef DEBUG_OVERLAY; the overlay has since been retired entirely).
 #
 # TIMED-STILLS netlist (2026-07-09): SEED 7 re-pinned after SEED 9 striped on HW. The
 # "clk_dec Fmax 110.24 MHz" claimed in that pin commit is JUNK — the sweep's extraction read a
@@ -1515,5 +1504,14 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   ⚠ The headline moved 93 % -> 98 % against v0.7.0 for 254 ALM of new logic: that is
 #   the fitter's dense-packing ESTIMATE swinging (the 2026-09-11 reclaim lesson), not
 #   1,862 ALMs of growth. Read timing, not the headline, for whether this netlist is healthy.
+
+# feature/reader-slim (2026-09-26, dev-readerslim, docs/logic_reclaim.md §8): SEED 9 held
+# FIRST roll -- clk_dec 90.03 MHz @100C / 89.45 MHz @-40C (gate 86.0, PASS both,
+# non-marginal). Build releases/DVD_readerslim_20260926_0404.rbf, commit 6a443ab.
+# 40,654 / 41,910 ALMs "needed" (97 %; main 41,221 = 98 %), 52,932 regs, 507 / 553 M10K,
+# 94 / 112 DSP (main 95). dvd_iso_reader 7,869 -> 7,065 ALUTs, 4,895 -> 4,449 ALMs, 3 -> 2
+# DSP, all 12 of its altsyncrams still inferred; bit-identical in sim (run_reader_regress.sh).
+#   Removing the reader's dead debug_state port let Quartus extract its main `state` FSM
+#   (one-hot) for the first time -- a real netlist change from a "dead port" removal.
 
 set_global_assignment -name SEED 9

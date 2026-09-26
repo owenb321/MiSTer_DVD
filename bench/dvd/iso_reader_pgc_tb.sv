@@ -50,8 +50,7 @@ module iso_reader_pgc_tb;
     wire        stream_valid;
     reg         busy = 0;
 
-    wire        debug_iso_mode, debug_iso_error;
-    wire [15:0] debug_state;
+    wire        debug_iso_mode;
 
     reg  [7:0]  img [0:IMG_BYTES-1];
 
@@ -80,7 +79,7 @@ module iso_reader_pgc_tb;
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
-        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), 
         // Phase-4 DVD-VM ports: legacy mode (vm_mode=0 keeps prior behaviour)
         .jump_ttn(7'd0), .jump_pgn(8'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
@@ -90,10 +89,8 @@ module iso_reader_pgc_tb;
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
-        .debug_active(), .debug_sd_rd(), .debug_sd_ack(), .debug_cache_has_data(),
-        .debug_file_size(), .debug_total_sectors(), .debug_next_lba(),
-        .debug_state(debug_state), .debug_iso_mode(debug_iso_mode),
-        .debug_iso_error(debug_iso_error)
+        .debug_active(),   
+         .debug_iso_mode(debug_iso_mode)
     );
 
     always #5 clk = ~clk;
@@ -376,7 +373,7 @@ module iso_reader_pgc_tb;
         repeat (400) @(posedge clk);
 
         $display("TEST1: iso_mode=%b iso_error=%b cell_mode=%b cell_count=%0d cap_n=%0d (expect 1 0 1 2 4096)",
-                 debug_iso_mode, debug_iso_error, dut.cell_mode, dut.cell_count, cap_n);
+                 debug_iso_mode, dut.iso_error, dut.cell_mode, dut.cell_count, cap_n);
         if (debug_iso_mode !== 1'b1) begin errors=errors+1; $display("  ERR iso_mode not set"); end
         if (dut.cell_mode !== 1'b1)  begin errors=errors+1; $display("  ERR cell_mode not taken"); end
         if (dut.cell_count !== 8'd2) begin errors=errors+1; $display("  ERR cell_count != 2"); end

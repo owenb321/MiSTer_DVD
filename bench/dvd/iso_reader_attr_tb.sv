@@ -41,13 +41,12 @@ module iso_reader_attr_tb;
     wire        stream_valid;
     reg         busy = 1'b1;
 
-    wire        debug_iso_mode, debug_iso_error;
+    wire        debug_iso_mode;
 
     // Phase-10 enumeration outputs under test
     wire [3:0]  audio_ntracks, subp_ntracks;
     reg  [2:0]  attr_a_sel = 0, attr_s_sel = 0;
     wire [2:0]  attr_a_fmt;
-    wire [3:0]  attr_a_ch;
     wire [15:0] attr_a_lang, attr_s_lang;
     wire        title_ar_wide;      // issue #81: TITLE-domain aspect from the IFO
 
@@ -56,22 +55,21 @@ module iso_reader_attr_tb;
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
-        .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), .menu_snap(1'b0),
+        .title_sel(4'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), 
         .jump_ttn(7'd0), .jump_pgn(8'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
         .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(), .auto_vts(), .cell_count_o(),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
         // Phase-10 ports
         .audio_ntracks(audio_ntracks), .subp_ntracks(subp_ntracks),
-        .attr_a_sel(attr_a_sel), .attr_a_fmt(attr_a_fmt), .attr_a_ch(attr_a_ch),
+        .attr_a_sel(attr_a_sel), .attr_a_fmt(attr_a_fmt), 
         .attr_a_lang(attr_a_lang), .attr_s_sel(attr_s_sel), .attr_s_lang(attr_s_lang),
         .title_ar_wide(title_ar_wide),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
-        .debug_active(), .debug_sd_rd(), .debug_sd_ack(), .debug_cache_has_data(),
-        .debug_file_size(), .debug_total_sectors(), .debug_next_lba(),
-        .debug_state(), .debug_iso_mode(debug_iso_mode), .debug_iso_error(debug_iso_error)
+        .debug_active(),   
+         .debug_iso_mode(debug_iso_mode) 
     );
 
     always #5 clk = ~clk;
@@ -124,13 +122,15 @@ module iso_reader_attr_tb;
     integer errors = 0;
     integer t, i;
 
-    task chk_a(input [2:0] trk, input [2:0] fmt, input [3:0] ch, input [15:0] lang);
+    // The channel count is not stored any more (nothing read it), so only the
+    // codec and the language are checked.
+    task chk_a(input [2:0] trk, input [2:0] fmt, input [15:0] lang);
         begin
             attr_a_sel = trk; #1;
-            if (attr_a_fmt !== fmt || attr_a_ch !== ch || attr_a_lang !== lang) begin
+            if (attr_a_fmt !== fmt || attr_a_lang !== lang) begin
                 errors = errors + 1;
-                $display("  ERR audio[%0d]: fmt=%0d ch=%0d lang=%04x (want fmt=%0d ch=%0d lang=%04x)",
-                         trk, attr_a_fmt, attr_a_ch, attr_a_lang, fmt, ch, lang);
+                $display("  ERR audio[%0d]: fmt=%0d lang=%04x (want fmt=%0d lang=%04x)",
+                         trk, attr_a_fmt, attr_a_lang, fmt, lang);
             end
         end
     endtask
@@ -159,16 +159,16 @@ module iso_reader_attr_tb;
         repeat (200) @(posedge clk);   // let the subp attribute sweep finish
 
         $display("ATTR: iso_mode=%b iso_error=%b audio_ntracks=%0d subp_ntracks=%0d",
-                 debug_iso_mode, debug_iso_error, audio_ntracks, subp_ntracks);
+                 debug_iso_mode, dut.iso_error, audio_ntracks, subp_ntracks);
 
         if (audio_ntracks !== 4'd4) begin errors=errors+1; $display("  ERR audio_ntracks (want 4)"); end
         if (subp_ntracks  !== 4'd4) begin errors=errors+1; $display("  ERR subp_ntracks (want 4)"); end
 
         // Per-track: en=0x656e, fr=0x6672, es=0x6573, AC3=fmt 0
-        chk_a(3'd0, 3'd0, 4'd2, 16'h656e);   // English 2.0
-        chk_a(3'd1, 3'd0, 4'd6, 16'h656e);   // English 5.1
-        chk_a(3'd2, 3'd0, 4'd2, 16'h6672);   // French 2.0
-        chk_a(3'd3, 3'd0, 4'd2, 16'h656e);   // English commentary 2.0
+        chk_a(3'd0, 3'd0, 16'h656e);   // English 2.0
+        chk_a(3'd1, 3'd0, 16'h656e);   // English 5.1
+        chk_a(3'd2, 3'd0, 16'h6672);   // French 2.0
+        chk_a(3'd3, 3'd0, 16'h656e);   // English commentary 2.0
         chk_s(3'd0, 16'h656e);               // English subs
         chk_s(3'd1, 16'h6672);               // French subs
         chk_s(3'd2, 16'h6573);               // Spanish subs

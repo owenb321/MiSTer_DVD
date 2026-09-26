@@ -98,6 +98,24 @@ adds the file.
   ⛔ The VTS pick stays **largest-by-bytes**: MEASURED, it disagrees with longest-title on
   **2 of 1231** discs, and a duration-based pick costs an IFO read per title set at mount.
   Gate: `iso_reader_pgc_tb` TEST 5. Sweep: `auto_pgc_sweep.py` shape in the issue thread.
+  ⏳ **OPEN, issue #132 (found 2026-09-26, pre-existing since this rule landed): Auto loads TITLE 1's
+  chapter table, not the table of the PGC it plays.** Field report on X-Men Apocalypse, Disc
+  Menus Off, v0.7.0 and `dev-readerslim` alike: chapter skips work, but the HUD total reads
+  1 and the seek bar has no chapter notches. The cause is ordering: at mount the PTT load
+  (`S_PTTLD_*`) runs BEFORE the PGC parse, with `cur_ttn = want_ttn ? want_ttn : 1`, and
+  Auto has no `want_ttn`, so it loads VTS title 1's table. The duration scan then picks
+  PGCN 2, which is title 2 (29 chapters; its SRP `entry_id` is `0x82`). `hud_nr_ch` and
+  `seek_bar`'s `.nr_pgm` both come from `nr_ptt` = 1. Skips still work because PGCN 2 is not
+  in title 1's table, so the chapter FSM falls back to PGCN 2's own program map.
+  With Disc Menus ON the disc says `JumpTT 35` (= VTS 7 title 2), so that path is right.
+  MEASURED over 1,462 library ISOs (a model of the Auto pick run over each IFO): **194 discs play
+  a PGC that is not title 1's**. On 166 of them the PGC is another title's entry PGC; the
+  chapter total shown is wrong on **97** (26 show exactly 1), and happens to match on 69.
+  On 28 the chosen PGC is no title's entry PGC.
+  Fix direction (not built): after `dur_scan` picks PGCN k, take the title from k's own
+  SRP `entry_id` (bit 7 set ⇒ `vts_ttn = entry_id & 0x7F`) and reload the PTT table for it
+  when it differs from 1; when k starts no title, search the PTT table for k (libdvdnav's
+  title/part lookup) or publish `nr_ptt = 0` so the HUD and notches use k's program count.
 - **An unusable PGC tries the NEXT one before the linear fallback (same change).** A title
   PGC with no cells, or with `cell_playback_offset == 0`, used to send Auto to `S_FINAL2`,
   which streams the WHOLE VTS from RBN 0 — including sectors no cell references, which is

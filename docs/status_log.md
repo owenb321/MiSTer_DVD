@@ -22,6 +22,26 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **READER SLIMMING (BRANCH D) + THE NUMERIC DEBUG OVERLAY RETIRED (2026-09-26, branch
+  `feature/reader-slim`); bit-identical in simulation, a harness HW smoke pass, and
+  ✅ HW-CONFIRMED 2026-09-26 by the maintainer on the final build** (`DVD_readerslim_20260926_0404.rbf`, SEED 9 first roll, clk_dec 90.03/89.45,
+  **97 % ALMs, was 98 %**). No behaviour change was allowed. `dvd/dvd_iso_reader.sv` had grown
+  back to 7,869 ALUTs with the 6-bit state space at 63 of 64 codes. It is now **7,065 ALUTs
+  (−804, −10.2 %), 4,449 ALMs (was 4,895) and 2 DSPs (was 3)**, with all 12 of its RAMs still
+  inferred. The biggest single win is one shared
+  sector-address adder for all 37 parse reads, the "`sec_lba` mux" that Branch C deferred.
+  Six pure wait states became one `S_LAT`, which frees six state codes.
+  ★ **The gate is new and reusable: `bench/dvd/run_reader_regress.sh`** traces every kept
+  output port of all 41 reader benches (50 arms) against a baseline from a `main` worktree.
+  A one-cycle mutation changed the traces while every bench still passed, so verdicts alone
+  would not have caught it.
+  ★ Removing the dead `debug_state` port let Quartus extract the reader's main FSM for the
+  first time (one-hot, +~55 flip-flops, less decode logic).
+  The compiled-out `DEBUG_OVERLAY`, `dvd/debug_overlay.sv` and `tools/osd_read.py` are
+  deleted (`dvd_telem` replaced them), along with the reader's 16 dead ports.
+  ⚠ Found and NOT fixed (bit-identical rule): `seek_jump` never clears `fetch_cross`, so a
+  seek landing on a straddle refill's first cycle resumes a stale fetch. Detail, ledger and
+  the skipped items: **`docs/logic_reclaim.md` §8**.
 - ✅ **`.cue` SHEETS — AUDIO CD AND VCD/SVCD RIPS, PARSED BY THE MAIN, ZERO FABRIC LOGIC
   (2026-09-25, ✅ MERGED PR #129); host-proven (12 mutations each caught by
   its own `FAIL` line), ✅ HW-MEASURED on the rig 2026-09-25, control arm first, and
@@ -4032,7 +4052,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   `vga_scaler=0`, `composite_sync=1`. Full design + HW test plan + field-swap contingency:
   `docs/crt_480i.md`. (PAL 576i CRT: ✅ delivered by the dual-raster rework above;
   letterbox/240p vertical scaler still open.)
-- 🧰 On-hardware diagnostics: `debug_overlay.sv` (multi-row block-bit counters — rows 0-17 +
+- 🧰 ⛔ **RETIRED 2026-09 (`feature/reader-slim`): `debug_overlay.sv`, the `DEBUG_OVERLAY`
+  macro and `tools/osd_read.py` are deleted; `dvd_telem` replaced them. History only below.**
+  On-hardware diagnostics: `debug_overlay.sv` (multi-row block-bit counters — rows 0-17 +
   Phase-7 rows 18/19 nav current/total time). ⚠️ **STATUS (2026-07-09): this overlay is
   `` `ifdef DEBUG_OVERLAY `` and COMPILED OUT of the release build** (it shares the display
   hotspot with the subpicture blend; `ov_on` is hardwired 0 — see `emu.sv` ~L2088). In a
@@ -5769,7 +5791,8 @@ adapter bridges `mpg_streamer`'s pulse (valid+busy) interface to `ps_demux`'s he
   `VOB` to the `CONF_STR` extension list so `.VOB` files are directly selectable. Tested by
   `bench/dvd/ps_demux_nav_tb.sv`; the real-Matrix-VOB `ps_chain_tb` still passes (50,395 B).
   ⚠️ Sim-verified only — not yet confirmed on a real multiplexed VOB on hardware.
-- **On-screen debug overlay** (`dvd/debug_overlay.sv`, `O2,Debug Overlay` toggle, default
+- ⛔ **RETIRED 2026-09 (`feature/reader-slim`; `O[2]` itself stays, see above).**
+  **On-screen debug overlay** (`dvd/debug_overlay.sv`, `O2,Debug Overlay` toggle, default
   off) renders pipeline counters as on-screen block-bit rows — used to diagnose the above
   with no UART cable. **⚠️ COMPILED OUT of the release build** (`` `ifdef DEBUG_OVERLAY ``,
   congestion — see the "On-hardware diagnostics" note above): `O[2]` only shows these rows in

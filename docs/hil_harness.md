@@ -11,7 +11,8 @@ designed but not built — see "What is not here yet".
 
 Every hardware round in this project used to be human-scale: build a named
 `.rbf`, send it over Discord, wait for someone to flash it, play a disc, record
-video and send the file back, then decode it offline with `tools/osd_read.py`.
+video and send the file back, then decode it offline with `tools/osd_read.py`
+(since retired with the numeric overlay it read).
 Five rounds went into single-raster analog, twelve into lip-sync drift. The
 harness collapses that loop for anything visible on HDMI:
 
@@ -140,9 +141,10 @@ warm one.
 line always-visible **and** repurposes the `CH n/N` field as
 `{reader PGCN, VTS}` (`emu.sv:6169-6170`). So every screenshot carries decodable
 playback state from frame one, with no keypress, **in a release build**. It also
-enables the O[2] diagnostic blocks. This is why `tools/osd_read.py` is not the
-primary reader: the numeric `DEBUG_OVERLAY` lattice it decodes is compiled out
-(`DVD.qsf:382`) and re-enabling it re-rolls the pinned fitter seed.
+enables the O[2] diagnostic blocks. The numeric `DEBUG_OVERLAY` lattice and its
+decoder `tools/osd_read.py` were retired on `feature/reader-slim` (2026-09): the
+overlay had been compiled out of every release since 2026-07-09, and re-enabling it
+re-rolled the pinned fitter seed. Telemetry (`dvd_telem`) replaced it.
 
 ## Rig facts (this maintainer's setup, 2026-09-05)
 

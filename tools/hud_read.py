@@ -12,8 +12,8 @@ no scaler filtering, at native 720x480 (or 720x576 PAL).
 That makes the transport HUD exactly machine-readable.  dvd/transport_hud.sv
 draws from a 64-glyph ROM (dvd/hud_font.mem) at fixed coordinates, and the
 glyph classes are OPAQUE (alpha 15, transport_hud.sv:612-627), so there is no
-calibration, no affine fit and no blending ambiguity -- unlike tools/osd_read.py,
-which decodes a capture-card recording and needs both.
+calibration, no affine fit and no blending ambiguity -- unlike the retired
+tools/osd_read.py (git history), which decoded a capture-card recording and needed both.
 
 Two readouts:
 
@@ -155,7 +155,7 @@ def load_image(path):
             return im.width, im.height, im.tobytes()
     except ImportError:
         pass
-    # ffmpeg fallback -- already a dependency of tools/osd_read.py
+    # ffmpeg fallback
     probe = subprocess.run(
         ['ffprobe', '-v', 'error', '-select_streams', 'v:0',
          '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', path],

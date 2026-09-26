@@ -193,9 +193,10 @@ module ps_demux (
     // substreams the stream actually carries, and whether the selected track is
     // getting any PES at all. "Silent because the selected substream does not
     // exist" was invisible before this — the filter discards everything with no
-    // diagnostic. Consumers: the DEBUG_OVERLAY seen-masks below; a future
+    // diagnostic. Consumers: bench/dvd/ps_demux_substream_tb.sv, and a future
     // never-silently-silent watchdog (designed, deliberately deferred — see
-    // docs/track_selection.md).
+    // docs/track_selection.md). emu leaves them unconnected; the retired debug
+    // overlay's per-codec seen masks used to read them.
     output logic        aud_ss_seen,   // pulse: an audio-class substream/stream id parsed
     output logic [2:0]  aud_ss_id,     // its low 3 bits (the track number)
     output logic        aud_pes_hit,   // pulse: that PES matched aud_track
@@ -364,22 +365,6 @@ always_ff @(posedge clk or negedge rst_n) begin
                        (in_byte[2:0] == aud_track);
     end
 end
-`ifdef DEBUG_OVERLAY
-// Sticky per-codec seen masks (debug builds only — dead-stripped from release).
-// Cleared with the demux reset (per jump/mount via pipe_rst_n in emu).
-logic [7:0] dbg_seen_ac3, dbg_seen_dts, dbg_seen_lpcm, dbg_seen_mp2;
-always_ff @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-        dbg_seen_ac3 <= 8'd0; dbg_seen_dts  <= 8'd0;
-        dbg_seen_lpcm <= 8'd0; dbg_seen_mp2 <= 8'd0;
-    end else if (consume) begin
-        if (obs_bd_aud && in_byte[7:3] == 5'b10000) dbg_seen_ac3[in_byte[2:0]]  <= 1'b1;
-        if (obs_bd_aud && in_byte[7:3] == 5'b10001) dbg_seen_dts[in_byte[2:0]]  <= 1'b1;
-        if (obs_bd_aud && in_byte[7:3] == 5'b10100) dbg_seen_lpcm[in_byte[2:0]] <= 1'b1;
-        if (obs_mp2)                                dbg_seen_mp2[in_byte[2:0]]  <= 1'b1;
-    end
-end
-`endif
 
 // MPEG audio stream_id 0xC0-0xC7 (DVD MP2): payload starts straight after the
 // PES optional header (no substream byte / sub-header), so the three header-exit

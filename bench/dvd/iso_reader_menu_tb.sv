@@ -77,7 +77,6 @@ module iso_reader_menu_tb;
     reg  [3:0]  jump_entry = 0;
     reg  [7:0]  jump_cell = 0;
     reg         vbuf_empty = 0;   // §5 menu still cold re-decode trigger (VBUF drained)
-    reg         menu_snap = 0;    // §5c Snappy: cold re-decode the still immediately
     wire        jump_ack, pgc_loaded, pgc_error, menu_active, still_active;
     wire        keep_vbuf;
     wire [7:0]  cur_vts, best_menu_vts;
@@ -88,8 +87,7 @@ module iso_reader_menu_tb;
     wire [7:0]  cmd_nr_pre, cmd_nr_post, cmd_nr_cell;
 
     wire        seek_ack;
-    wire        debug_iso_mode, debug_iso_error;
-    wire [15:0] debug_state;
+    wire        debug_iso_mode;
 
     reg  [7:0]  img [0:IMG_BYTES-1];
 
@@ -169,7 +167,7 @@ module iso_reader_menu_tb;
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0),
-        .aud_drained(1'b1), .vbuf_empty(vbuf_empty), .menu_snap(menu_snap),
+        .aud_drained(1'b1), .vbuf_empty(vbuf_empty), 
         // Phase-4 DVD-VM ports: legacy mode (vm_mode=0 keeps prior behaviour)
         .jump_ttn(7'd0), .jump_pgn(8'd0), .jump_ptt(10'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
@@ -184,9 +182,8 @@ module iso_reader_menu_tb;
         .best_menu_vts(best_menu_vts),
         .cmd_we(cmd_we), .cmd_waddr(cmd_waddr), .cmd_wdata(cmd_wdata),
         .cmd_nr_pre(cmd_nr_pre), .cmd_nr_post(cmd_nr_post), .cmd_nr_cell(cmd_nr_cell),
-        .cell_end_pulse(), .pgc_end_pulse(),
-        .pgc_still_time(), .next_pgcn(), .prev_pgcn(), .goup_pgcn(),
-        .cur_cell_still(), .cur_cell_cmdnr(),
+         .next_pgcn(), .prev_pgcn(), .goup_pgcn(),
+         .cur_cell_cmdnr(),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
@@ -194,10 +191,8 @@ module iso_reader_menu_tb;
         .pgc_ctl_wdata(pgc_ctl_wdata), .pgc_ctl_valid(pgc_ctl_valid),
         .pgc_dom_tt(pgc_dom_tt),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
-        .debug_active(), .debug_sd_rd(), .debug_sd_ack(), .debug_cache_has_data(),
-        .debug_file_size(), .debug_total_sectors(), .debug_next_lba(),
-        .debug_state(debug_state), .debug_iso_mode(debug_iso_mode),
-        .debug_iso_error(debug_iso_error)
+        .debug_active(),   
+         .debug_iso_mode(debug_iso_mode)
     );
 
     always #5 clk = ~clk;
@@ -585,7 +580,7 @@ module iso_reader_menu_tb;
         while (cap_n < cap_mark + 2048 && t < 4000000) begin @(posedge clk); t = t + 1; end
         repeat (400) @(posedge clk);
         $display("TEST3 TT resume: bytes=%0d menu=%b state=%0d",
-                 cap_n - cap_mark, menu_active, debug_state[5:0]);
+                 cap_n - cap_mark, menu_active, dut.state);
         chk(cap_n - cap_mark == 2048, "T3 resume byte count (cell 1 only)");
         chk(menu_active === 1'b0, "T3 menu_active dropped");
         expect_range(cap_mark, 2048, 8'hB0);
@@ -618,11 +613,11 @@ module iso_reader_menu_tb;
         cap_mark = cap_n; cmd_n = 0;
         do_jump(2'd0, 8'd0, 8'd0, 4'd0, 8'd0);
         t = 0;
-        while (debug_state[5:0] != 6'd11 && t < 4000000) begin @(posedge clk); t = t + 1; end
+        while (dut.state != 6'd11 && t < 4000000) begin @(posedge clk); t = t + 1; end
         repeat (100) @(posedge clk);
         $display("TEST5 FP: state=%0d bytes=%0d cmds=%0d nr_pre=%0d",
-                 debug_state[5:0], cap_n - cap_mark, cmd_n, cmd_nr_pre);
-        chk(debug_state[5:0] == 6'd11, "T5 landed in S_DONE");
+                 dut.state, cap_n - cap_mark, cmd_n, cmd_nr_pre);
+        chk(dut.state == 6'd11, "T5 landed in S_DONE");
         chk(cap_n - cap_mark == 0, "T5 no video bytes");
         chk(cmd_n == 16 && cmd_nr_pre == 8'd2, "T5 FP command stream (2 cmds)");
         chk(cmd_cap[8] === 8'h30 && cmd_cap[9] === 8'h02, "T5 FP JumpTT bytes");
@@ -691,12 +686,13 @@ module iso_reader_menu_tb;
         // one seek_ack and a 2048-byte re-stream there.
         //   (a) idle              -> parked, no flush, no re-stream
         //   (b) vbuf_empty=1      -> STILL parked, no flush, no re-stream
-        //   (c) menu_snap=1       -> likewise (the Snappy path is gone; emu has
-        //                            hardwired menu_snap 0 since the toggle went)
+        //   (c) a further idle hold -> likewise. (This arm drove menu_snap, the old
+        //                            Snappy trigger; that input is now deleted, so it
+        //                            holds idle for the same 200k cycles instead.)
         //   (d) a jump still EXITS the still -- the control that stops (a)-(c)
         //       being satisfied by a wedged reader that can never leave.
         // =============================================================
-        menu_snap = 1'b0; vbuf_empty = 1'b0;
+        vbuf_empty = 1'b0;
         do_jump(2'd2, 8'd1, 8'd0, 4'd3, 8'd0);
         t = 0; while (still_active && t < 200000) begin @(posedge clk); t = t + 1; end
         t = 0; while (!still_active && t < 4000000) begin @(posedge clk); t = t + 1; end
@@ -720,15 +716,13 @@ module iso_reader_menu_tb;
         chk(still_active === 1'b1, "T9b stays parked on the still");
         vbuf_empty = 1'b0;
 
-        // (c) menu_snap -- the old Snappy trigger. Also gone.
+        // (c) a further idle hold (formerly menu_snap=1; that input is deleted).
         cap_mark = cap_n; n_seek_ack = 0;
-        menu_snap = 1'b1;
         repeat (200000) @(posedge clk);
-        $display("TEST9c menu_snap=1: bytes=%0d seek_acks=%0d still=%b",
+        $display("TEST9c further idle: bytes=%0d seek_acks=%0d still=%b",
                  cap_n - cap_mark, n_seek_ack, still_active);
-        chk(n_seek_ack == 0, "T9c menu_snap does NOT trigger a cold re-decode");
+        chk(n_seek_ack == 0, "T9c no cold re-decode on a longer hold");
         chk(cap_n - cap_mark == 0, "T9c the still cell is NOT re-streamed");
-        menu_snap = 1'b0;
 
         // (d) CONTROL: a real jump must still leave the still. Without this,
         // (a)-(c) would all pass on a reader that had simply wedged in S_STILL.

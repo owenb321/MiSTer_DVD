@@ -414,7 +414,7 @@ otherwise; `--red` runs its mutation arms).
 | Native 240p/288p for SIF, 352→720 horizontal fill | ✅ ⏳ PAL 288p, long VCD | `mpeg1.md` §B.3b | `run_p240.sh`, `check_p240_wiring.py` |
 | Line-21 closed captions (`cc_vbi`, pickup-paced) | ✅ | `closed_captions.md` | `cc_extract_tb`, `cc_line21_tb` |
 | mem_shim tag/LRU store in M10K | ✅ | `history.md` §11 | `run_mem_shim.sh` |
-| Logic reclaim (AC-3, nav/VM, reader) | ✅ | `logic_reclaim.md` | `bench/ac3` suites |
+| Logic reclaim (AC-3, nav/VM, reader ×2; debug overlay retired) | ✅ (D HW-confirmed 2026-09-26) | `logic_reclaim.md` §8 | `bench/ac3` suites, `run_reader_regress.sh` |
 
 ### Audio and A/V sync
 
@@ -491,8 +491,8 @@ Each of these cost at least one hardware round. The story is in `docs/status_log
 - **HIL:** run the control arm (old build) first; ssh latency is part of the instrument;
   one behavioural change per flash; a build is not testable until its artefact is on the
   board. See `.claude/skills/hil-testing/`.
-- **`watchdog_rst` is active-LOW.** The debug overlay (`DEBUG_OVERLAY`, compiled out of
-  release builds) shows expiry, so green = fired.
+- **`watchdog_rst` is active-LOW** (high = healthy, a one-cycle low = expired). Check
+  the polarity before concluding a decoder is hanging.
 - **Stale premises in comments ship bugs.** When a feature changes what a mechanism
   guards, re-read the comments that justified the old behaviour.
 
@@ -549,6 +549,10 @@ vvp bench/dvd/ps_demux_sim
 iverilog -g2012 -o bench/dvd/audio_ring_sim \
     dvd/audio_ring.sv bench/dvd/audio_ring_tb.sv
 vvp bench/dvd/audio_ring_sim
+
+# Refactoring dvd/dvd_iso_reader.sv? Prove it bit-identical: baseline from a worktree of
+# main, then compare (traces every kept port of all 41 reader benches; docs/logic_reclaim.md §8)
+bench/dvd/run_reader_regress.sh --baseline <dir-from-a-main-worktree-run>
 
 # Full Quartus compile (from project root). The Quartus revision is `DVD`,
 # so the output is output_files/DVD.sof

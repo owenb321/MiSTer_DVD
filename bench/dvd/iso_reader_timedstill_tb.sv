@@ -77,7 +77,6 @@ module iso_reader_timedstill_tb;
     reg  [3:0]  jump_entry = 0;
     reg  [7:0]  jump_cell = 0;
     reg         vbuf_empty = 0;   // §5 menu still cold re-decode trigger (VBUF drained)
-    reg         menu_snap = 0;    // §5c Snappy: cold re-decode the still immediately
     wire        jump_ack, pgc_loaded, pgc_error, menu_active, still_active;
     wire        keep_vbuf;
     wire [7:0]  cur_vts, best_menu_vts;
@@ -88,8 +87,7 @@ module iso_reader_timedstill_tb;
     wire [7:0]  cmd_nr_pre, cmd_nr_post, cmd_nr_cell;
 
     wire        seek_ack;
-    wire        debug_iso_mode, debug_iso_error;
-    wire [15:0] debug_state;
+    wire        debug_iso_mode;
 
     reg  [7:0]  img [0:IMG_BYTES-1];
 
@@ -139,7 +137,7 @@ module iso_reader_timedstill_tb;
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0),
-        .aud_drained(1'b1), .vbuf_empty(vbuf_empty), .menu_snap(menu_snap),
+        .aud_drained(1'b1), .vbuf_empty(vbuf_empty), 
         // Phase-4 DVD-VM ports: legacy mode (vm_mode=0 keeps prior behaviour)
         .jump_ttn(7'd0), .jump_pgn(8'd0), .jump_ptt(10'd0),
         .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),
@@ -154,17 +152,14 @@ module iso_reader_timedstill_tb;
         .best_menu_vts(best_menu_vts),
         .cmd_we(cmd_we), .cmd_waddr(cmd_waddr), .cmd_wdata(cmd_wdata),
         .cmd_nr_pre(cmd_nr_pre), .cmd_nr_post(cmd_nr_post), .cmd_nr_cell(cmd_nr_cell),
-        .cell_end_pulse(), .pgc_end_pulse(),
-        .pgc_still_time(), .next_pgcn(), .prev_pgcn(), .goup_pgcn(),
-        .cur_cell_still(), .cur_cell_cmdnr(),
+         .next_pgcn(), .prev_pgcn(), .goup_pgcn(),
+         .cur_cell_cmdnr(),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
         .sd_buff_addr(sd_buff_addr), .sd_buff_dout(sd_buff_dout), .sd_buff_wr(sd_buff_wr),
         .stream_data(stream_data), .stream_valid(stream_valid), .busy(busy),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
-        .debug_active(), .debug_sd_rd(), .debug_sd_ack(), .debug_cache_has_data(),
-        .debug_file_size(), .debug_total_sectors(), .debug_next_lba(),
-        .debug_state(debug_state), .debug_iso_mode(debug_iso_mode),
-        .debug_iso_error(debug_iso_error)
+        .debug_active(),   
+         .debug_iso_mode(debug_iso_mode)
     );
 
     always #5 clk = ~clk;
@@ -528,7 +523,7 @@ module iso_reader_timedstill_tb;
         // The still is HELD, not re-decoded (issue #65 removed the cold re-decode);
         // the timer counts down and the PGC advances.
         // =============================================================
-        vbuf_empty = 1'b0; menu_snap = 1'b0;
+        vbuf_empty = 1'b0;
         cap_mark = cap_n;
         do_jump(2'd2, 8'd1, 8'd0, 4'd3, 8'd0);            // VTSM Root
         // 1) park on the cell0 timed still (0xD0 streamed)
