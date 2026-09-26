@@ -51,6 +51,29 @@ For a **`.wav`** it means something more specific, and appears immediately: the 
 refused rather than played as noise, and compressed audio (MP3, FLAC, AAC) is not supported
 at all. Convert with, for example, `ffmpeg -i in.flac -ac 2 -ar 44100 -c:a pcm_s16le out.wav`.
 
+### `Cannot play this CUE sheet`
+
+The player read a [`.cue` sheet](../getting-started/loading.md#playing-a-cue) and could not
+turn it into something to play. The second line says why:
+
+- **`missing FILE "…"`** — a file the sheet names is not next to it. Keep the `.cue` in the
+  same folder as its `.bin`/`.wav` files, and check the sheet names the files you actually
+  have (a sheet written for `Disc.bin` does not find `Disc (Track 2).bin`). Letter case and
+  Windows drive-letter paths are already allowed for.
+- **`FILE type MP3 is not supported`** (or FLAC, AIFF) — only raw `.bin` and CD-format
+  `.wav` files can be played. Convert the tracks to 16-bit stereo 44.1 kHz `.wav`, for
+  example `ffmpeg -i 01.flac -ac 2 -ar 44100 -c:a pcm_s16le 01.wav`, and point the sheet at
+  them.
+- **`WAVE must be 16-bit stereo 44.1 kHz PCM`** — the same, for a `.wav` in the wrong format.
+- **`no AUDIO track and no Video CD track to play`** — a data-only CD, such as a PC or game
+  disc. There is nothing on it this player can show.
+- **`INDEX is past the end of "…"`** — the sheet describes more than the file holds: the
+  `.bin` is truncated, or the sheet belongs to a different rip.
+- **`line N: …`** — the sheet itself is malformed at that line.
+
+When the core was started from an MGL shortcut the reason is not shown on screen (a pop-up
+at that moment would stall the launch), but it is always written to `/tmp/dvd_cue.log`.
+
 ### `CSS ENCRYPTED`
 
 The core is seeing scrambled sectors, so nothing available is decrypting this disc or

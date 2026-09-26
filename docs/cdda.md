@@ -37,12 +37,66 @@ signalling — no `cfg[15]` (the last free config bit stays free), no fork of th
 `hps_io` mount word. 44 is divisible by 4, so 2048-byte blocks stay L/R-pair
 aligned.
 
-⛔ **Image files (bin/cue, CHD) were considered and rejected** (user decision).
-ISO9660 cannot hold CD-DA, so it would mean parsing `.cue` sheets — and nobody
-archives music that way. The barrier is low if this is ever revisited: stock
-Main's `cd.h` `toc_t`, `support/chd/mister_chd.*` and any core's ~150-line
-`load_cue()` would drop into our Main and serve the SAME byte stream this core
-already plays, with zero RTL change.
+✅ **`.cue` sheets were ADDED 2026-09-25 (branch `feature/cue-sheets`), reversing an
+earlier rejection** — see "`.cue` sheets" below. The rejection (user decision) read:
+*"ISO9660 cannot hold CD-DA, so it would mean parsing `.cue` sheets — and nobody
+archives music that way."* The prediction beside it held exactly: the Main serves
+the SAME byte stream this core already plays, with zero RTL change. ⛔ **CHD is still
+not supported** — it would need libchdr in the overlay, which has stayed
+dependency-free.
+
+## `.cue` sheets (Main-only, `main/support/dvd/dvd_cue.{h,cpp}`)
+
+The core never sees a file's extension, so a `.cue` is handled entirely in the
+Main by building one of the two streams the core already plays. The only fabric
+touch is `CUE` in `CONF_STR`'s `S0` list (0 ALMs; it re-rolls the seed like any
+`CONF_STR` edit, which every branch's `dev-<slug>` already does).
+
+* **Audio CD** → exactly the physical disc's virtual WAV. `dvd_cdda.cpp` gained a
+  second source (`dvd_cdda_open_source()`, a frame-reader callback where the drive's
+  `read_frames()` was), so the header, the 2352→2048 repack, the track-edge burst
+  split and the `CDTC` blob are all the SAME code the physical path uses. It rides
+  `dvd_css`'s CD-DA front door (`dvd_css_open_cdda_source()`), so the slot is
+  `SD_TYPE_DVDCSS` and the read path, read-ahead and close needed no new step.
+* **Video CD / SVCD** → the physical VCD's raw span, through
+  `dvd_vcd_open_source()` (`SD_TYPE_VCD`). A Mode 2 first track is a VCD; the span
+  is the consecutive Mode 2 tracks, which is `dvd_vcd_open()`'s rule. This also
+  fixes two things the bare `.bin` cannot: a hybrid single-bin's CD-DA tail is left
+  out (the core would otherwise stream it, and ~1 random PCM sector in 512 passes
+  the Form-2 test), and a `MODE2/2336` rip gets its 16-byte sync+header put back.
+* **Track geometry is the physical TOC's**: a track starts at INDEX 01, and the next
+  track's INDEX 00 pregap plays at the END of the track before. The first audio
+  track's pregap is not served. INDEX 02+ move nothing; PREGAP/POSTGAP are silence
+  not in the file. EAC's "gaps appended" layout (INDEX 00 at the tail of the
+  previous FILE) and one-file-per-track both work, because every INDEX records the
+  FILE it was written under and byte positions are carried forward per file (sector
+  SIZES can differ between tracks of one file: MODE1/2048 then AUDIO).
+* **FILE types**: BINARY, MOTOROLA (byte-swapped on the way out), WAVE (16-bit
+  stereo 44.1 kHz PCM; the `data` chunk is located, odd-size chunks padded). MP3,
+  FLAC, AIFF are refused.
+* **Spec maxima**: 99 tracks, 99 FILEs; past either the sheet is refused with a
+  reason, never truncated.
+* **The track table** goes out on the first poll AFTER the mount
+  (`dvd_cdda_toc_service()` from `dvd_css_tick()`): the core wipes it on every
+  mount, and an OSD mount has no caller like `dvd_phys_tick` to send it afterwards.
+  Any open leaves it pending; the upload clears it, so a physical disc still
+  uploads once.
+* **Refusals** are logged to `/tmp/dvd_cue.log` and shown as `Cannot play this
+  CUE sheet` — except while an MGL launch is busy (`dvd_launch_ui_busy()`), where a
+  notice would freeze the launch (issue #48).
+
+⚠ **A stock-Main overflow came with it and is fixed by integration step 50.** The
+file picker `strcpy`s a core's extension list into `static char fs_pFileExt[13]`.
+Our list was already 24 characters; in the built object the bytes past the buffer
+are `menu_visible`, `osd_unlocked` and `config_scale[0]` (a pointer, read only by
+the Archie/ST/Amiga cores, and Main restarts at every core load — which is why it
+was harmless). `CUE` makes it 27. Step 50 widens the buffer to 256, matching the
+buffer it is copied from.
+
+Gates: `main/tests/dvd_cue_test.cpp` (parser + layout from text; real temporary
+files mounted and read back through the REAL `dvd_cdda.cpp`, byte for byte; two file
+layouts of one disc must produce one stream) and 12 mutations in
+`main/tests/run_tests.sh --red`, each matched on its own `FAIL` line.
 
 ## Probe (`dvd_iso_reader.sv`, `S_WAV_HDR`)
 

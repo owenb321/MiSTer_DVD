@@ -13,6 +13,7 @@
 #define MISTER_PHYSICAL_DISC_CSS_H
 
 #include <stdint.h>
+#include "dvd_cdda.h"
 
 // Locate the DVD in the optical drive, open it through libdvdcss (running the
 // CSS authentication handshake), and keep the handle for reads. Returns 1 on
@@ -24,6 +25,12 @@ int dvd_css_open(void);
 // dvd_css_read); 0 otherwise, so the caller keeps the normal direct-file mount for
 // decrypted ISOs. Keys are cracked from the data and cached under DVDCSS_CACHE.
 int dvd_css_open_image(const char *path);
+
+// An audio CD image (a .cue sheet, dvd_cue.cpp): serve `toc`'s virtual WAV with
+// the frames supplied by `rd`, through this same front door -- so the slot is
+// SD_TYPE_DVDCSS and the read path, read-ahead and close need no new integration
+// step. Returns 1 on success, 0 on failure (dvd_css_open()'s convention).
+int dvd_css_open_cdda_source(const dvd_cdda_toc *toc, dvd_cdda_frames_fn rd, void (*on_close)(void));
 
 // True while a libdvdcss handle is open.
 int dvd_css_active(void);

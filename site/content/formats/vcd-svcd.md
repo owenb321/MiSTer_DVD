@@ -6,22 +6,26 @@ involved, so nothing beyond the bare `.rbf` is needed.
 A **physical VCD or SVCD disc** plays the same way straight from a USB optical drive — see
 [Physical discs](physical-discs.md#video-cd-super-video-cd-from-the-drive). Everything on
 this page (what to select does not apply there; everything else — playback, seeking, the
-limitations below) is identical either way, since the disc and a `.bin` rip present the
-core with the same bytes.
+limitations below) is identical either way, since the disc, a `.cue` and a `.bin` rip all
+present the core with the same bytes.
 
 ## Which file to select
 
-Select the rip's **data-track `.bin`** from `Load Video` — usually the one labelled
-**"Track 2"**. The small Track 1 is the ISO filesystem and does not contain the movie.
+**With [`MiSTer_DVDcss`](../getting-started/what-you-need.md), select the rip's `.cue`.** The
+player reads the sheet and plays the disc's data tracks as one, so it does not matter which
+`.bin` holds the movie, and any audio tracks on a mixed disc are left out cleanly. Rips
+with the sync bytes stripped (**`MODE2/2336`** in the sheet) play this way too. See
+[Playing a `.cue`](../getting-started/loading.md#playing-a-cue).
 
-Also accepted:
+**On the bare core,** select the rip's **data-track `.bin`** from `Load Video` — usually
+the one labelled **"Track 2"**. The small Track 1 is the ISO filesystem and does not
+contain the movie.
+
+Also accepted, on either:
 
 - **Single-file whole-disc `.bin`** images
 - Raw **`.img`** files
 - Extracted **`.DAT`** files (the `MPEGAV/AVSEQ01.DAT` from a mounted VCD)
-
-`.cue` sheets themselves are **not selectable** — they are text descriptions of the layout,
-not the data. Pick the `.bin` the cue refers to.
 
 ## What happens
 
@@ -50,11 +54,12 @@ was added. Nothing beyond that was built:
 - **No VCD menus or PBC** (playback control). The movie track plays; interactive VCD
   navigation is not implemented.
 - **No segment stills.**
-- **One `.bin` per movie track** — a multi-track rip needs the movie track selected
-  directly. A physical disc plays its first data track only, the same limitation made
-  once by the disc instead of by you.
+- **No title selection.** A disc or a `.cue` plays from its first data track straight
+  through the data tracks that follow it; the movie tracks of a multi-movie VCD are not
+  offered as separate titles. To start at a particular one, select its `.bin` directly.
 - **No CD-DA audio tracks** — audio-only tracks on a mixed disc do not play.
-- **No 2336-byte-sector images.** The common 2352-byte raw format is what is supported.
+- **2336-byte-sector images need their `.cue`.** Selected directly, only the common
+  2352-byte raw format is recognised.
 - **A 23.976-coded film VCD would play fast.** This is rare; almost all VCDs are 29.97 or
   25 fps.
 - **The elapsed and total times are an estimate** in linear playback modes, worked out

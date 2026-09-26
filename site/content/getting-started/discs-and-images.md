@@ -60,9 +60,16 @@ and mutes rather than emitting static.
 
 ## Video CD / Super Video CD
 
-No CSS is ever involved. Rip to bin/cue and select the **data-track `.bin`** — see
+No CSS is ever involved. Rip to bin/cue and select the **`.cue`** (with
+[`MiSTer_DVDcss`](what-you-need.md)) or the **data-track `.bin`** — see
 [Video CD / SVCD](../formats/vcd-svcd.md) for which track that is and what the format
 supports.
+
+## Audio CD images
+
+A music CD ripped to bin/cue — or to one `.wav` per track with a `.cue` — plays like the
+disc itself, with track numbers and track skip. Select the `.cue`; see
+[Playing a `.cue`](loading.md#playing-a-cue).
 
 ## Bare video files
 

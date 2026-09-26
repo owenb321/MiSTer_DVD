@@ -119,6 +119,9 @@ on both outputs even in `Passthru`.
 **Enhanced and mixed-mode CDs** — discs with a data track alongside the music —
 play their audio tracks. The data track is skipped.
 
+A **ripped** audio CD plays the same way from its `.cue` sheet, with no drive at all — see
+[Playing a `.cue`](../getting-started/loading.md#playing-a-cue).
+
 !!! note "Launching from the menu on the Physical Disc fork"
     The core plays a CD you insert **while it is already running** on any setup.
     If you use the Physical Disc fork of the Main and want inserting a CD *at the

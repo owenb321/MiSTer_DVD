@@ -8,7 +8,8 @@ that when something does not play, you can tell which piece is missing.
 |---|:--:|:--:|:--:|
 | Decrypted DVD-Video ISO | ✓ | ✓ | ✓ |
 | Flat `.VOB` / `.mpg` / `.m2v` stream | ✓ | ✓ | ✓ |
-| Video CD / SVCD (bin/cue) | ✓ | ✓ | ✓ |
+| Video CD / SVCD — the `.bin` selected directly | ✓ | ✓ | ✓ |
+| **`.cue` sheets** — *audio CD and VCD/SVCD rips* | — | ✓ | ✓ |
 | Disc menus, navigation, subtitles, chapters, angles | ✓ | ✓ | ✓ |
 | Audio decode to stereo (AC-3, MP2, LPCM) | ✓ | ✓ | ✓ |
 | **Bitstream passthrough over optical S/PDIF** | ✓ | ✓ | ✓ |

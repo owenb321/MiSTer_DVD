@@ -25,6 +25,10 @@ came from — a `.bin` file and a live drive present the same byte stream.
   Single-bin whole-disc images also exist. `.img` raw dumps are byte-identical to
   `.bin`; `.cue`/`.ccd`/`.mds` sidecars are text/metadata the fabric cannot parse (the
   framework mounts exactly one file and the extension never reaches fabric).
+  ✅ **Since 2026-09-25 the MAIN parses `.cue`** (`main/support/dvd/dvd_cue.h`, design in
+  `docs/cdda.md` "`.cue` sheets"): it serves the consecutive Mode 2 tracks as one raw
+  span through `dvd_vcd_open_source()` — the physical-VCD path — so the fabric still
+  never sees the sheet. `.ccd`/`.mds` remain unsupported.
 - Raw sector = 12-byte sync (`00 FF×10 00`) + 3-byte MSF + mode byte (@15) + 8-byte XA
   subheader (submode @18; **bit5 = Form 2**) + payload @24 (Form 2 = 2324 B, Form 1 =
   2048 B). MPEG sectors are Form 2, **one MPEG pack per sector, `00 00 01 BA` at payload
@@ -246,11 +250,15 @@ goldens against `ffmpeg -c copy` at generation time. Plus: `crt_ov_map_tb`,
 - **No menus / PBC / segment stills** (VCD 2.0 SEGMENT items are skipped only insofar
   as they live in the ISO track region of single-bin images; a stray Form-2 segment
   before the movie would play briefly).
-- **Multi-track discs**: pick each track's `.bin` separately (multi-movie VCDs).
-  CD-DA audio tracks are not playable. On a physical disc (`docs/physical_disc.md`)
-  the equivalent limitation is the same choice made once, by the disc's own first
-  DATA track, instead of by the user picking a file.
-- **2336-byte sector images** (Mode-2-without-sync rips) are not detected.
+- **Multi-track discs**: a physical disc or a `.cue` serves the first run of
+  consecutive data tracks as one stream; to start a later movie of a multi-movie VCD,
+  pick its `.bin` directly. CD-DA audio tracks are not playable. ⚠ A **hybrid
+  single-bin picked directly** still streams its CD-DA tail (the deblocker drops
+  all-zero sectors, but ~1 random PCM sector in 512 passes the Form-2 test and
+  reaches `ps_demux`); its `.cue` excludes the tail.
+- **2336-byte sector images** (Mode-2-without-sync rips) are not detected when picked
+  directly. Through a `.cue` (`MODE2/2336`) the Main re-inserts the 16-byte
+  sync + MSF + mode prefix, so they play.
 - **23.976-coded NTSC film VCDs play ~25 % fast**: MPEG-1 has no repeat_first_field,
   so the film detector cannot see them and the governor shows every frame for 2
   refreshes. Rare; revisit if a real disc surfaces (would key on frame_rate_code).

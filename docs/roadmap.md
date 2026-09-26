@@ -576,10 +576,12 @@ the split is deliberate:
   held `iso_mode`. Fixed at both ends (reader reset + a `media_seen` gate on the
   screen arm); gate `wav_probe_tb` TEST 8, RED-proven. Sim-green, ⏳ HW-untested.
 
-⛔ **bin/cue and CHD images: rejected** (user decision). ISO9660 cannot hold
-CD-DA, so it means parsing `.cue` sheets, and nobody archives music that way.
-Cheap to revisit if ever wanted — stock Main's `cd.h`/`mister_chd.*`/`load_cue()`
-would feed the SAME byte stream this core already plays, with no RTL change.
+🔧 **`.cue` sheets — ADDED 2026-09-25 (branch `feature/cue-sheets`), reversing the
+earlier rejection; host-proven (`main/tests/dvd_cue_test.cpp`, 12 mutations), ⏳ HW
+pending.** Audio CD and VCD/SVCD bin/cue (and per-track `.wav`) rips, parsed by the
+Main and served as the same streams a physical disc produces — zero RTL beyond `CUE`
+in `CONF_STR`. Design: `docs/cdda.md` "`.cue` sheets". ⛔ CHD still not supported
+(would need libchdr in the overlay).
 
 ## Phase 6 — Polish and Known Issues (Weeks 15+)
 

@@ -65,9 +65,9 @@ fly with a user-supplied libdvdcss. No PC decrypt step. The bare `.rbf` plays de
 ISOs on its own; the add-on is opt-in and additive.
 
 **Video CD / Super Video CD** — [bin/cue rips play directly](formats/vcd-svcd.md): select
-the data-track `.bin` and the core strips the raw CD sectors in fabric, demuxes the MPEG-1
-(VCD) or MPEG-2 (SVCD) stream, and plays it with correct 44.1 kHz audio pitch, seek and
-pause.
+the `.cue` (or the data-track `.bin`) and the core strips the raw CD sectors in fabric,
+demuxes the MPEG-1 (VCD) or MPEG-2 (SVCD) stream, and plays it with correct 44.1 kHz audio
+pitch, seek and pause.
 
 **Analog / CRT** — a native 15 kHz 480i/576i raster on the analog pins, built from the
 disc's [authored fields](video/analog-crt.md), with broadcast-standard composite sync — the

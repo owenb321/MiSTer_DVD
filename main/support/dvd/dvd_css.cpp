@@ -941,6 +941,15 @@ int dvd_css_open_image(const char *path)
 	return 1;
 }
 
+int dvd_css_open_cdda_source(const dvd_cdda_toc *toc, dvd_cdda_frames_fn rd, void (*on_close)(void))
+{
+	if (css || raw_fd >= 0 || src_cdda) return 0;
+	if (dvd_cdda_open_source(toc, rd, on_close)) return 0;
+	src_cdda = 1;
+	css_ra_start();
+	return 1;
+}
+
 int dvd_css_active(void)
 {
 	return css != NULL || raw_fd >= 0 || src_cdda;
@@ -966,6 +975,11 @@ int dvd_css_is_cdda(void)
 // holds the window open rather than consuming it. See docs/mgl_launch.md.
 void dvd_css_tick(void)
 {
+	// An image-backed audio CD's track table goes out on the first poll after its
+	// mount -- see dvd_cdda_toc_service(). Not a notice, so it needs no
+	// dvd_launch_ui_busy() gate: it touches no menu state.
+	dvd_cdda_toc_service();
+
 	if (!warn_until) return;
 	time_t now = time(NULL);
 	if (now >= warn_until) { warn_until = 0; return; }

@@ -67,6 +67,17 @@ void dvd_cdda_wav_header(uint8_t *hdr, uint32_t payload);
 // still spinning up, so call this from the MOUNT path, never from a poll tick.
 int  dvd_cdda_open(int fd, const char *dev);
 
+// A second source: the same virtual WAV, but with the 2352-byte audio frames
+// supplied by `rd` instead of the drive -- a .cue sheet's .bin files
+// (dvd_cue.cpp). `toc` is copied. The track `lba` values are whatever sector
+// numbering `rd` understands; the virtual-image arithmetic above never looks at
+// them except to hand them back. `rd` reads `count` CONSECUTIVE sectors and must
+// fill every byte (zero what it cannot read). `on_close`, if given, is called
+// from dvd_cdda_close() so the source can release its files. Returns 0 on
+// success, like dvd_cdda_open().
+typedef int (*dvd_cdda_frames_fn)(int lba, int count, uint8_t *dst);
+int  dvd_cdda_open_source(const dvd_cdda_toc *toc, dvd_cdda_frames_fn rd, void (*on_close)(void));
+
 int  dvd_cdda_active(void);
 uint64_t dvd_cdda_size(void);
 const dvd_cdda_toc *dvd_cdda_get_toc(void);
@@ -87,6 +98,14 @@ void dvd_cdda_close(void);
 // Call AFTER the mount succeeds: the core clears any previous table on
 // img_mounted, so an upload sent before it would be thrown away.
 void dvd_cdda_toc_upload(void);
+
+// Every successful open leaves the table PENDING until it is uploaded. The
+// physical path uploads straight after its own mount (dvd_phys.cpp), which
+// clears the flag. An image mount from the OSD (a .cue) has no such caller:
+// user_io_file_mount() only returns after UIO_SET_SDSTAT, so the first poll tick
+// after it -- dvd_css_tick() calls this -- is the earliest moment the core will
+// keep the table. Cheap no-op when nothing is pending.
+void dvd_cdda_toc_service(void);
 
 #define DVD_CDDA_TOC_INDEX 250   // clear of PSX's 251
 

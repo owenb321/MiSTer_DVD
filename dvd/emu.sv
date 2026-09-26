@@ -678,13 +678,18 @@ parameter CONF_STR = {
     // space-separated list is wrong: the OSD chunks every 3 chars, so
     // "MPG M2V VOB" -> MPG/_M2/... ISO selects a decrypted DVD-Video image;
     // dvd_iso_reader navigates VIDEO_TS in fabric (largest VTS = main feature).
-    // BIN/IMG/DAT select a raw MODE2/2352 CD image (VCD/SVCD bin/cue data
-    // track — pick the LARGE track bin; .cue sheets are text the fabric cannot
-    // parse). WAV plays PCM audio files (16-bit stereo 44.1/48 kHz) through
-    // the CD-DA path. Detection is content-based (sector-sync/RIFF probe at
-    // byte 0), the extension list is only the OSD picker filter. Other files
-    // stream as before.
-    "S0,MPGM2VVOBISOBINIMGDATWAV,Load Video;",
+    // BIN/IMG/DAT select a raw MODE2/2352 CD image (a VCD/SVCD data track
+    // picked directly). WAV plays PCM audio files (16-bit stereo 44.1/48 kHz)
+    // through the CD-DA path. CUE is a cue sheet: the MAIN parses it and
+    // serves either an audio CD (as the same virtual WAV a physical CD is,
+    // plus its track table) or a VCD's raw Mode 2 data span -- the fabric
+    // never sees the text (main/support/dvd/dvd_cue.h). Detection is
+    // content-based (sector-sync/RIFF probe at byte 0), the extension list is
+    // only the OSD picker filter. Other files stream as before.
+    // ⚠ Main's picker copies this list into a buffer that was 13 bytes in
+    // stock Main; our Main widens it (integration step 50). A longer list is
+    // fine with our Main, but keep that step in mind before adding more.
+    "S0,MPGM2VVOBISOBINIMGDATWAVCUE,Load Video;",
     // Aspect Ratio: Auto (default) reads the display AR from the MPEG-2 sequence header
     // (aspect_ratio_information, par. 6.3.3: 2=4:3, 3=16:9); 4:3/16:9 force it. Drives the
     // MiSTer scaler output aspect (VIDEO_ARX/ARY) — the 720x480/576 raster is unchanged,

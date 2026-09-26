@@ -42,6 +42,9 @@ static int           g_open = 0;
 static char          g_dev[16] = {0};
 static uint8_t      *g_scratch = 0;      // VCD_BURST_MAX frames
 static int           g_readfail = 0;     // rate-limited logging
+// A non-drive source (dvd_vcd_open_source). NULL = the drive.
+static dvd_vcd_frames_fn g_src_rd = 0;
+static void        (*g_src_close)(void) = 0;
 
 // ---------------------------------------------------------------- pure helper
 
@@ -298,6 +301,30 @@ int dvd_vcd_open(void)
 	return 0;
 }
 
+int dvd_vcd_open_source(int len, dvd_vcd_frames_fn rd, void (*on_close)(void))
+{
+	if (g_open || len <= 0 || !rd) return -1;
+
+	g_scratch = (uint8_t *)malloc((size_t)VCD_BURST_MAX * DVD_VCD_RAW);
+	if (!g_scratch) { printf("DVD_VCD: out of memory\n"); return -1; }
+
+	memset(&g_trk, 0, sizeof(g_trk));
+	g_trk.num   = 1;
+	g_trk.lba   = 0;             // the source numbers its own span from 0
+	g_trk.len   = len;
+	g_src_rd    = rd;
+	g_src_close = on_close;
+	g_fd        = -1;            // no drive: dvd_vcd_close() must not close anything
+	g_open      = 1;
+	g_readfail  = 0;
+	snprintf(g_dev, sizeof(g_dev), "image");
+
+	printf("DVD_VCD: image source, %d sectors, %llu-byte virtual image\n",
+	       g_trk.len, (unsigned long long)dvd_vcd_image_size(&g_trk));
+	dvd_ra_start(vcd_src_read, (uint32_t)((dvd_vcd_image_size(&g_trk) + 2047) / 2048));
+	return 0;
+}
+
 int dvd_vcd_active(void) { return g_open; }
 uint64_t dvd_vcd_size(void) { return g_open ? dvd_vcd_image_size(&g_trk) : 0; }
 
@@ -306,6 +333,10 @@ void dvd_vcd_close(void)
 	dvd_ra_stop();   // FIRST: the worker owns g_fd and g_scratch, freed below
 	if (g_scratch) { free(g_scratch); g_scratch = 0; }
 	if (g_fd >= 0) close(g_fd);
+	// An image source owns files, not a drive fd: hand them back to it.
+	if (g_src_close) g_src_close();
+	g_src_rd = 0;
+	g_src_close = 0;
 	memset(&g_trk, 0, sizeof(g_trk));
 	g_fd = -1;
 	g_open = 0;
@@ -345,7 +376,8 @@ static int vcd_src_read(void *buf, uint32_t lba, uint32_t cnt)
 		if (frames > VCD_BURST_MAX) frames = VCD_BURST_MAX;
 		if (frames < 1)             frames = 1;
 
-		read_frames(g_trk.lba + frame, frames, g_scratch);
+		if (g_src_rd) g_src_rd(g_trk.lba + frame, frames, g_scratch);
+		else          read_frames(g_trk.lba + frame, frames, g_scratch);
 
 		size_t avail = (size_t)frames * DVD_VCD_RAW - off;
 		size_t want  = (size_t)(b1 - b);

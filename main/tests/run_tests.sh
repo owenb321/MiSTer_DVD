@@ -499,6 +499,63 @@ if [ "$RED" -eq 1 ]; then
         "want the VCD sentinel" \
         "s/is_vcd ? DVD_PHYS_VCD_SENTINEL : DVD_PHYS_SENTINEL/DVD_PHYS_SENTINEL/" \
         phys-vcd-wrong-sentinel
+
+    # ---- dvd_cue: .cue sheets (audio CD + Video CD images) ----------------
+    # Each expect is anchored on "FAIL" so it matches the arm that FAILED, not
+    # the same label printed on an "ok" line.
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*track 2 starts at ITS INDEX 01" \
+        "s/\&\& !p->pregap \&\& p->owner != last_owner/\&\& p->owner != last_owner/" \
+        cue-index00-is-the-start
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*INDEX 00 = 00:26:50" \
+        "s/(m \* 60 + sec) \* 75 + f/(m * 60 + sec) * 60 + f/" \
+        cue-msf-60-frames
+    # Sector sizes differ between the tracks of one file (MODE1/2048 then AUDIO);
+    # byte positions must be carried forward, not computed as sector*size.
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*audio byte offset carries" \
+        "s/uint64_t byte = w->cur_byte\[f\] + (uint64_t)(a - w->cur_sec\[f\]) \* t->ssize;/uint64_t byte = (uint64_t)a * t->ssize;/" \
+        cue-byte-carry-lost
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*span = both data tracks" \
+        "s/serve = p->owner < span_end \&\& /serve = /" \
+        cue-vcd-span-takes-audio
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*served sectors = 5000 - track 1 pregap" \
+        "s/ \&\& !(p->owner == first_audio \&\& p->pregap)//" \
+        cue-first-pregap-served
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*MOTOROLA audio is byte-swapped" \
+        "s/if (cue_swap\[e->file\] \&\& cue_lay.kind == DVD_CUE_AUDIO)/if (0)/" \
+        cue-motorola-not-swapped
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*starts with the CD sync pattern" \
+        "s/dvd_cue_raw_prefix(dst + (size_t)i \* 2352, vlba + i);/;/" \
+        cue-2336-no-prefix
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*chunk.*padded LIST" \
+        "s/pos += 8 + (uint64_t)sz + (sz \& 1);/pos += 8 + (uint64_t)sz;/" \
+        cue-wave-chunk-unpadded
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .6a. mounts" \
+        "s/if (!strcasecmp(de->d_name, base))/if (!strcmp(de->d_name, base))/" \
+        cue-case-sensitive-names
+    # issue #48: a notice raised during an MGL launch freezes the launch.
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*raises NO notice" \
+        "s/if (!dvd_launch_ui_busy())/if (1)/" \
+        cue-notice-during-mgl
+    # The core wipes the track table on every mount, so an image mount's table
+    # must go out on the poll AFTER it -- once.
+    red_case dvd_cdda.cpp dvd_cue_test.cpp \
+        "FAIL .*table uploaded after the mount" \
+        "s/if (g_toc_pending \&\& g_open) dvd_cdda_toc_upload();/;/" \
+        cdda-image-table-never-sent
+    red_case dvd_cdda.cpp dvd_cue_test.cpp \
+        "FAIL .*not again on the next poll" \
+        "/user_io_set_download(0);/{n;s/g_toc_pending = 0;//}" \
+        cdda-image-table-every-poll
     echo
 fi
 

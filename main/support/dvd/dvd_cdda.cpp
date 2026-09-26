@@ -45,6 +45,10 @@ static int           g_open = 0;
 static char          g_dev[16] = {0};
 static uint8_t      *g_scratch = 0;      // CDDA_BURST_MAX frames
 static int           g_readfail = 0;     // rate-limited logging
+static int           g_toc_pending = 0;  // table not yet sent to the core
+// A non-drive source (dvd_cdda_open_source). NULL = the drive.
+static dvd_cdda_frames_fn g_src_rd = 0;
+static void        (*g_src_close)(void) = 0;
 
 // ---------------------------------------------------------------- pure helpers
 
@@ -260,7 +264,36 @@ int dvd_cdda_open(int fd, const char *dev)
 	snprintf(g_dev, sizeof(g_dev), "%s", dev ? dev : "");
 	apply_speed_cap(fd);
 
+	g_toc_pending = 1;
+
 	printf("DVD_CDDA: %d audio track(s), %d sectors, %llu-byte virtual WAV\n",
+	       g_toc.ntracks, g_toc.nsectors,
+	       (unsigned long long)dvd_cdda_image_size(&g_toc));
+	return 0;
+}
+
+int dvd_cdda_open_source(const dvd_cdda_toc *toc, dvd_cdda_frames_fn rd, void (*on_close)(void))
+{
+	if (g_open || !toc || !rd) return -1;
+	if (toc->ntracks <= 0 || toc->ntracks > DVD_CDDA_MAX_TRACKS - 1 || toc->nsectors <= 0)
+	{
+		printf("DVD_CDDA: source has no usable audio tracks\n");
+		return -1;
+	}
+
+	g_scratch = (uint8_t *)malloc((size_t)CDDA_BURST_MAX * DVD_CDDA_RAW);
+	if (!g_scratch) { printf("DVD_CDDA: out of memory\n"); return -1; }
+
+	g_toc       = *toc;
+	g_src_rd    = rd;
+	g_src_close = on_close;
+	g_fd        = -1;            // no drive: dvd_cdda_close() must not close anything
+	g_open      = 1;
+	g_readfail  = 0;
+	g_toc_pending = 1;
+	snprintf(g_dev, sizeof(g_dev), "image");
+
+	printf("DVD_CDDA: image source, %d audio track(s), %d sectors, %llu-byte virtual WAV\n",
 	       g_toc.ntracks, g_toc.nsectors,
 	       (unsigned long long)dvd_cdda_image_size(&g_toc));
 	return 0;
@@ -286,10 +319,15 @@ void dvd_cdda_close(void)
 	// table. A manual eject from a separate process failed for the same reason,
 	// which is what localised it to a held descriptor rather than to the drive.
 	if (g_fd >= 0) close(g_fd);
+	// An image source owns files, not a drive fd: hand them back to it.
+	if (g_src_close) g_src_close();
+	g_src_rd = 0;
+	g_src_close = 0;
 	g_fd = -1;
 	g_open = 0;
 	g_dev[0] = 0;
 	g_readfail = 0;
+	g_toc_pending = 0;
 }
 
 // ---------------------------------------------------------------- the read hook
@@ -345,7 +383,8 @@ int dvd_cdda_read(void *buf, uint32_t lba, uint32_t cnt)
 		if (frames > CDDA_BURST_MAX)  frames = CDDA_BURST_MAX;
 		if (frames < 1)               frames = 1;
 
-		read_frames(disc, frames, g_scratch);
+		if (g_src_rd) g_src_rd(disc, frames, g_scratch);
+		else          read_frames(disc, frames, g_scratch);
 
 		size_t avail = (size_t)frames * DVD_CDDA_RAW - off;
 		size_t want  = (size_t)(b1 - b);
@@ -393,7 +432,13 @@ void dvd_cdda_toc_upload(void)
 	user_io_set_download(1);
 	user_io_file_tx_data(blob, (uint32_t)n);
 	user_io_set_download(0);
+	g_toc_pending = 0;
 
 	printf("DVD_CDDA: sent %d-track table (%d bytes, %u blocks)\n",
 	       g_toc.ntracks, n, total_blocks);
+}
+
+void dvd_cdda_toc_service(void)
+{
+	if (g_toc_pending && g_open) dvd_cdda_toc_upload();
 }

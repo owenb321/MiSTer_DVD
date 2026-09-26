@@ -323,6 +323,32 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **`.cue` SHEETS — AUDIO CD AND VCD/SVCD RIPS, PARSED BY THE MAIN, ZERO FABRIC LOGIC
+  (2026-09-25, branch `feature/cue-sheets`); host-proven, 12 mutations each caught by
+  its own `FAIL` line, ⏳ HW pending.** Reverses the earlier bin/cue rejection. The core
+  never sees an extension, so `main/support/dvd/dvd_cue.{h,cpp}` builds a stream it
+  already plays:
+  - an **audio CD** is the physical disc's virtual WAV plus the `CDTC` track table,
+    through `dvd_cdda_open_source()` and `dvd_css`'s CD-DA front door;
+  - a **VCD/SVCD** is the physical VCD's raw Mode 2 span, through `dvd_vcd_open_source()`.
+    It also excludes a hybrid disc's CD-DA tail and re-inserts the prefix a
+    `MODE2/2336` rip dropped.
+
+  Both are the SAME code the physical paths run, so the only new logic is the parser
+  and layout. The only RTL touch is `CUE` in `CONF_STR` (0 ALMs). Tracks start at
+  INDEX 01 and a pregap plays at the end of the track before, as the physical TOC
+  does. EAC's gaps-appended layout, per-track `.wav`, MOTOROLA, and Windows
+  paths/case are handled. Limits are 99 tracks and 99 files, refused past either,
+  never truncated.
+  ★ **The track table must go out on the poll AFTER the mount** (the core wipes it on
+  mount): `dvd_cdda_toc_service()` from `dvd_css_tick()`.
+  ★★ **A stock-Main overflow came with it:** the picker `strcpy`s the S0 list into
+  `fs_pFileExt[13]`, and ours was already 24 characters (27 with CUE), overrunning
+  into `menu_visible`, `osd_unlocked` and `config_scale[0]`. Integration step 50
+  widens it to 256.
+  Gates: `main/tests/run_tests.sh --red` (`dvd_cue_test.cpp`). Detail:
+  **`docs/cdda.md` "`.cue` sheets"**, `main/integration/INTEGRATION.md` "Steps 50-51".
+
 - ✅ **TIME-MAP SEEK — Phase 8b REOPENED: the seek preview and the landing now agree
   (2026-09-25, issue #127, ✅ MERGED PR #128); sim-proven, 13 mutations + 9 wiring
   re-regressions each caught by its own check; the D-PAD arm is ✅ HW-MEASURED 2026-09-25
@@ -2284,8 +2310,8 @@ worse maintenance burden than targeted in-place edits. So:
   `af_passthru` tell Main to put the ADV7513 in PCM mode, and drops `SPDIF_PASS_EN`
   and `HDMI_BS_EN` so both legs carry ordinary PCM. Same user-visible outcome PR #79
   gives an LPCM track; **HW gate: play a `.wav` with `Audio Out = Passthru`.**
-  ⛔ **bin/cue + CHD images REJECTED** (user decision): ISO9660 cannot hold CD-DA so
-  it means parsing `.cue` sheets, and nobody archives music that way.
+  ✅ ~~bin/cue images REJECTED~~ — **reversed 2026-09-25**: `.cue` sheets are parsed by
+  the Main (see the `.cue` bullet at the top of this list). ⛔ CHD is still unsupported.
   Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`; design **`docs/cdda.md`**.
 
 - 🔧 **PHYSICAL AUDIO CDs (2026-09-10, branch `feature/cdda-physical`) — a music CD
