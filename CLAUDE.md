@@ -412,7 +412,10 @@ worse maintenance burden than targeted in-place edits. So:
 - 🔧 **ONE `Deinterlace` OPTION (Weave / Bob / Blend) + BOB ON THE PROGRESSIVE RASTER
   (2026-09-25, branch `feature/deint-merge`); sim-proven + mutation-checked, built
   `DVD_deintmerge_20260926_0049.rbf` (SEED 9 first roll, clk_dec 88.92/89.88, 98 % ALM,
-  Bob = +7 ALM), ⏳ HW-untested.** `OB 480i Deint` and `O[49] Progressive Deint` are RETIRED (bits 11/49
+  Bob = +7 ALM), ✅ HW-MEASURED 2026-09-26: on Thayer's most-combed blocks, comb 1.05 Weave → 0.31 Bob
+  → 0.18 Blend; held re-scans 0 px; Bob's kept field bit-exact against Weave; film 0 px;
+  pacing unchanged; gated off on Interlaced and Film 24p. ⏳ The OSD row swap and HDMI Bob
+  on Interlaced still need the maintainer's eye.** `OB 480i Deint` and `O[49] Progressive Deint` are RETIRED (bits 11/49
   reserved and read by nothing) into `O[51:50] Deinterlace`: 0 = Weave (default), 1 = Bob,
   2 = Blend. ⛔ "Off" was dropped because it equals Weave on both rasters (user decision).
   ★ **Two CONF_STR rows share the field, swapped by the MENU MASK**: `H0O[51:50]…Weave,Bob,Blend`

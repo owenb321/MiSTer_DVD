@@ -394,7 +394,33 @@ Word 7's eight flag bits are all taken.
 - **This shell is zsh, which does not word-split `$a`.** A loop over "`+bob=1 +exp=...`"
   handed vvp ONE argument and every arm read X. Drive such loops through `bash -c`.
 
-**⏳ HW gate (not yet run):**
+**✅ HW-MEASURED on the rig (2026-09-26, harness).** Build `DVD_deintmerge_20260926_0049.rbf`
+plus a Main built from this branch merged with `main` (PR #129), so the cue work rides along.
+
+| check | result |
+|---|---|
+| Thayer VTS_01 at 0:00:00, one paused picture: the 40 most-combed 16x16 blocks in Weave | comb **1.05 (Weave) → 0.31 (Bob) → 0.18 (Blend)** |
+| Same held picture, two shots per mode | **0 px differ** in Weave, Bob and Blend; Weave identical before and after the tour |
+| Bob kernel, on the silicon | kept rows = the odd (bottom) field, **max \|Bob − Weave\| = 0**, the second field of a held `tff=1` picture as designed; rebuilt rows vs the average of their neighbours: mean 0.9, p99 7.5 (YUV-domain average vs RGB) |
+| Engagement, live `osd` changes on Progressive | `flags.bob` = 1 only on Bob, `flags.blend` = 1 only on Blend |
+| MEN_IN_BLACK (film, `pf=1`), paused: Weave vs Bob | `flags.bob = 0`, **0 px differ** on a non-black picture |
+| Pacing, Thayer, interleaved 15 s windows | lates 7.38 / 7.71 / 7.32 / 7.44 per s (W/B/W/B), `vid_err` 0, 59.95 Hz |
+| `Video Output = Interlaced`, each setting | `blend = 0`, `bob = 0` (the fabric filters stay off) |
+| `Film 24p Out = On` (23.96 Hz raster) | Bob: `bob = 0`; Blend: `blend = 1` |
+
+⚠ Harness lessons from this round:
+- **A pause pressed straight after a launch is dropped.** It lands before playback is
+  live, and every later shot is then of a PLAYING picture: all modes "differed" by ~287,000
+  px. Check `flags.pause` and a frozen `pickups` before reading any held-picture result.
+- `pickups` is cumulative across an MGL relaunch of the same core until the core reset
+  lands, so wait for `refreshes` to drop before counting a new launch's pictures.
+- The HDMI side of Interlaced (ascal's bob) cannot be captured: screenshots are ascal's
+  input, and the capture card was held by another process.
+
+**⏳ Still for the maintainer's eye:**
+- the OSD row shows 3 values on Progressive and 2 on Interlaced, and swaps live;
+- HDMI on Interlaced follows Bob/Weave;
+- Bob motion on true-interlaced video.
 - Thayer's Quest on Progressive + Bob: comb ≈ 0 while playing, and a paused picture 0 px
   different between shots;
 - a film disc: 0 px Bob vs Weave, `flags.bob = 0`;

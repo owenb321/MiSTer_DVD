@@ -958,8 +958,9 @@ The first field shows on the pickup scan and the second on every re-scan, so a h
 steady.
 
 Sim-proven + mutation-checked (`run_field_blend.sh --red`), built
-(`DVD_deintmerge_20260926_0049.rbf`, timing clean). **Next step: the HW gate in
-`docs/field_blend.md` §7.**
+(`DVD_deintmerge_20260926_0049.rbf`, timing clean), ✅ HW-measured 2026-09-26 (§7 table).
+**Next step: the maintainer's eye on the OSD row swap and HDMI Bob on Interlaced, then
+merge (rebase onto PR #129, rebuild).**
 
 ### HD Modeline Switching
 The display block drives a fixed 27MHz SD clock. DVD is 480i/480p so this is fine,
