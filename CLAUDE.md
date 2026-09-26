@@ -336,9 +336,15 @@ worse maintenance burden than targeted in-place edits. So:
   | VCD, `MODE2/2336` | the same, so the rebuilt sync prefix passes the core's detector |
   | refused sheet (missing FILE), MGL launch | reason logged, no notice, MGL finishes, idle logo |
 
-  ⏳ Physical audio CD / VCD unregression not re-run (the drive held a DVD); the refactor
-  only adds a NULL-defaulted source pointer, and `dvd_cdda_test`/`dvd_vcd_test` pass
-  unchanged. ⚠ Two quick Previous presses at the very END of the last track landed on
+  ✅ **Physical audio CD unregressed on the same build:**
+  - an 18-track disc auto-mounts, plays (−14…−17 dBFS), skips and stacks skips;
+  - Eject opens the tray and returns to idle, with no `/dev/sr1` handle left open.
+    The close path is where the refactor touched it.
+
+  ⏳ Physical VCD not re-run (no disc to hand). ⚠ Pre-existing, not from this branch:
+  one Eject press logs a SECOND eject request after the core reset the first one
+  causes (harmless: it unmounts an already-empty slot). Likely the core's eject
+  toggle clearing on reset, read by `dvd_remote.cpp` as a new press. ⚠ Two quick Previous presses at the very END of the last track landed on
   track 1, not the track before; from mid-track they land correctly. That is the core's
   stacking path, shared with a physical CD. Not cue-specific; unexplained. Reverses the earlier bin/cue rejection. The core
   never sees an extension, so `main/support/dvd/dvd_cue.{h,cpp}` builds a stream it
