@@ -1085,7 +1085,9 @@ reg [15:0] cur_pgcn;                  // PGCN (1-based) of the loaded PGC (0 = F
 // Jump/domain state. dom follows the DVD-VM domain encoding of jump_domain.
 localparam DOM_FP = 2'd0, DOM_VMGM = 2'd1, DOM_VTSM = 2'd2, DOM_TT = 2'd3;
 reg [1:0]  dom;                       // domain of the loaded PGC
-reg        menu_dom;                  // dom is VMGM/VTSM (menu VOB streaming)
+// dom is VMGM/VTSM (menu VOB streaming). A wire, not a register: every write of
+// the old menu_dom register was paired with a dom write that gave the same answer.
+wire       menu_dom = (dom == DOM_VMGM) || (dom == DOM_VTSM);
 
 // Real chapter-skip walk arm (may pre-empt an in-flight cur_pgm query walk).
 // Cross-PGC: nr_ptt > 1 also arms it — a 1-program PGC inside a multi-chapter
@@ -1094,7 +1096,6 @@ wire chap_go = chap_pulse && cell_mode && !menu_dom &&
                (cmd_nr_pgm > 8'd1 || nr_ptt > 11'd1) &&
                (chap_st == CH_IDLE || chap_query) && !seek_pending;
 reg        jump_pending;              // a jump is latched awaiting a block boundary
-reg        jump_ctx;                  // parsing under a JUMP (errors -> pgc_error, not linear)
 reg [1:0]  jdom_l;                    // latched jump request
 reg [7:0]  jvts_l, jcell_l;
 reg [15:0] jpgcn_l;                   // 15-bit DVD PGCN field
@@ -1342,7 +1343,6 @@ reg [7:0]  cm_cat_c;                  // captured cell category byte@0 (Phase 9)
 // copyright STILL is often authored with cell still_time@2 == 0 and signalled
 // only by a cell whose playback_time exceeds its content duration. Capture the
 // extra fields to reconstruct the effective hold at parse time.
-reg [31:0] cf_c;                      // cell first_sector @8 (RBN)
 reg [31:0] lv_c;                      // cell last_vobu_start_sector @16 (RBN)
 reg [7:0]  pbh_c, pbm_c;              // playback_time @4/@5 hour/minute (BCD-decoded)
 reg [15:0] pb_c;                      // playback_time in seconds, clamped to the
@@ -1961,7 +1961,7 @@ wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
 // map to M10K, not async register files.
 // =========================================================================
 // libdvdnav still heuristic, evaluated as cell byte 23 (last_sector) lands.
-// cf_c/lv_c/pb_c were captured earlier in the same 24 B record.
+// cellf_rbn/lv_c/pb_c were captured earlier in the same 24 B record.
 // ★ A MULTI-ANGLE BLOCK OCCUPIES ONE SLOT ON THE TIMELINE, NOT N.
 // cm_cat_c is this cell's category byte, captured at record byte 0 and so
 // already valid at byte 11 where the prefix sum is written. A SIBLING angle cell
@@ -1983,7 +1983,8 @@ wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
 wire       cw_sibling  = (cm_cat_c[5:4] == 2'd1) && (cm_cat_c[7:6] >= 2'd2);
 wire       cw_blk_first= (cm_cat_c[5:4] == 2'd1) && (cm_cat_c[7:6] == 2'd1);
 wire [31:0] cell_last_w = {wacc, pb_rdata};                 // last_sector @20
-wire [31:0] cell_sz_w   = cell_last_w - cf_c;               // content size (sectors)
+wire [31:0] cell_sz_w   = cell_last_w - cellf_rbn;          // content size (sectors);
+                                                            // cellf_rbn = first_sector @8
 wire        heur_hit_w  = (cell_last_w == lv_c) && (cell_sz_w < 32'd1024) &&
                           (pb_c != 16'd0) && (cell_sz_w <= (32'd30 * {16'd0, pb_c}));
 // The heuristic still byte clamps at 254 (255 would alias the INDEFINITE
@@ -2392,7 +2393,6 @@ always @(posedge clk or negedge rst_n) begin
         pgc_dom_tt    <= 1'b0;
         wacc         <= 24'd0;
         jump_pending <= 1'b0;
-        jump_ctx     <= 1'b0;
         jump_ack     <= 1'b0;
         keep_vbuf    <= 1'b0;
         jump_cross   <= 1'b0;
@@ -2405,7 +2405,6 @@ always @(posedge clk or negedge rst_n) begin
         still_next   <= STILL_NEXT;
         still_last   <= 1'b0;
         dom          <= DOM_TT;
-        menu_dom     <= 1'b0;
         menu_ar_wide <= 1'b0;             // default 4:3 until a menu V_ATR is read
         title_ar_wide<= 1'b0;             // default 4:3 until a title V_ATR is read
         attr_vatr    <= 1'b0;
@@ -2854,9 +2853,7 @@ always @(posedge clk or negedge rst_n) begin
             jump_pending    <= 1'b0;
             jnat_l          <= 1'b0;
             snat_l          <= 1'b0;
-            jump_ctx        <= 1'b0;
             dom             <= DOM_TT;
-            menu_dom        <= 1'b0;
             use_jcell       <= 1'b0;
             want_pgcn       <= 16'd1;   // mount plays PGCN 1 of the title PGCIT
             want_entry      <= 4'd0;
@@ -2896,7 +2893,6 @@ always @(posedge clk or negedge rst_n) begin
             // transitions) flushes but keeps the pipeline.
             jump_cross   <= menu_dom ^
                             ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM));
-            jump_ctx     <= 1'b1;
             wr_ptr       <= 0;
             strm_done    <= 1'b0;
             cell_mode    <= 1'b0;
@@ -2907,7 +2903,6 @@ always @(posedge clk or negedge rst_n) begin
             scan_title   <= 1'b0;
             want_ttn     <= (jdom_l == DOM_TT) ? jttn_l : 7'd0;
             dom          <= jdom_l;
-            menu_dom     <= (jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM);
             case (jdom_l)
             DOM_FP: begin
                 // First Play PGC: VMGI@132 is a BYTE offset rel. to the VMGI.
@@ -3062,11 +3057,11 @@ always @(posedge clk or negedge rst_n) begin
                 // STC on the NEXT VOBU's video PTS (DVD video PES carry a PTS only
                 // on the VOBU-first pack) -> a permanent sub-second audio lead.
                 // Probe forward from the raw target to the first NAV pack so the
-                // scrub landing matches the clean chapter-seek contract. Menu /
-                // empty-cell keep the direct scan.
-                if (cell_count == 8'd0) begin
-                    state <= S_STREAM;         // empty cell list (shouldn't happen)
-                end else if (menu_dom) begin
+                // scrub landing matches the clean chapter-seek contract. A menu
+                // keeps the direct scan. (cell_count is never 0 here: cell_mode is
+                // set only at S_PGC_DONE, after cell_count <= nr_cells != 0, and
+                // every cell_count <= 0 happens inside a parse, with cell_mode 0.)
+                if (menu_dom) begin
                     state <= S_RBN_SCAN2;      // menu scrub: no VOBU align, direct scan
                 end else if (seek_tm) begin
                     // TIME seek: resolve the sector through the disc's time map
@@ -3559,7 +3554,6 @@ always @(posedge clk or negedge rst_n) begin
             // in rbuf[0..15]. Any malformed/absent PGC -> S_FINAL2 (linear).
             S_PGC_BEGIN: begin
                 dom      <= DOM_TT;                    // title path (mount + TT jump)
-                menu_dom <= 1'b0;
                 play_vtsn <= sel_valid ? target_vtsn : best_vtsn;
                 // Phase-10: the VTSI_MAT sector these branches read in also
                 // carries the audio/subpicture stream-attribute tables. Sweep
@@ -3823,7 +3817,7 @@ always @(posedge clk or negedge rst_n) begin
             S_PGCIT_HDR: begin
                 nr_srp_l <= nr_pgci_srp;
                 if (nr_pgci_srp == 16'd0) begin
-                    if (jump_ctx && dom != DOM_TT) begin
+                    if (dom != DOM_TT) begin
                         pgc_error <= 1'b1;
                         state     <= S_DONE;
                     end else
@@ -3860,7 +3854,7 @@ always @(posedge clk or negedge rst_n) begin
                             srp_i         <= 16'd0;
                         end
                         state     <= S_SRP_FETCH;
-                    end else if (jump_ctx && dom != DOM_TT) begin
+                    end else if (dom != DOM_TT) begin
                         pgc_error <= 1'b1;     // requested PGCN out of range
                         state     <= S_DONE;
                     end else
@@ -3905,7 +3899,7 @@ always @(posedge clk or negedge rst_n) begin
                     end
                 end else if (srp_pgc_start[31:21] != 11'd0) begin
                     // pgc_start_byte beyond 2 MB = malformed PGCIT
-                    if (jump_ctx && dom != DOM_TT) begin
+                    if (dom != DOM_TT) begin
                         pgc_error <= 1'b1;
                         state     <= S_DONE;
                     end else
@@ -4240,7 +4234,6 @@ always @(posedge clk or negedge rst_n) begin
                               {16'd0, pb_rdata[3:0]};
                         pb_c <= (pbs > 20'd35999) ? 16'd35999 : pbs[15:0];
                     end
-                    if (cell_bi == 5'd11) cf_c <= {wacc, pb_rdata};   // first_sector @8
                     if (cell_bi == 5'd19) lv_c <= {wacc, pb_rdata};   // last_vobu_start @16
                     // (first/last BRAM writes live in the dedicated block above)
                     if (cell_bi == 5'd23) begin
