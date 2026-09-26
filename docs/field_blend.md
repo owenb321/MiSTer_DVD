@@ -262,7 +262,7 @@ that instantiate the addrgen or `resample` gained a `.blend_en(1'b0)` tie-off.
 
 ## 6. One option: `Deinterlace = Weave / Bob / Blend` (2026-09-25, branch `feature/deint-merge`)
 
-⏳ **Sim-proven, mutation-checked and BUILT; not yet HW-tested.** Build
+✅ **Sim-proven, mutation-checked, built and HW-CONFIRMED 2026-09-26 (§7).** Build
 `releases/DVD_deintmerge_20260926_0049.rbf`: SEED 9 first roll, clk_dec 88.92 @100C / 89.88
 @−40C (gate 86.0), not marginal, 98 % ALM. `field_blend` = 261 ALM (254 before Bob, so the
 second kernel cost 7 ALM), 6 M10K, 0 DSP. The matching Main cross-compiles
@@ -417,10 +417,11 @@ plus a Main built from this branch merged with `main` (PR #129), so the cue work
 - The HDMI side of Interlaced (ascal's bob) cannot be captured: screenshots are ascal's
   input, and the capture card was held by another process.
 
-**⏳ Still for the maintainer's eye:**
+**✅ HW-CONFIRMED by the maintainer's eye (2026-09-26)** on the three checks the harness
+cannot make:
 - the OSD row shows 3 values on Progressive and 2 on Interlaced, and swaps live;
 - HDMI on Interlaced follows Bob/Weave;
-- Bob motion on true-interlaced video.
+- Bob motion on true-interlaced video looks right.
 - Thayer's Quest on Progressive + Bob: comb ≈ 0 while playing, and a paused picture 0 px
   different between shots;
 - a film disc: 0 px Bob vs Weave, `flags.bob = 0`;

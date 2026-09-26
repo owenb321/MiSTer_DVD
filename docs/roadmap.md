@@ -948,7 +948,7 @@ It is sim-proven and mutation-checked (`bench/dvd/run_field_blend.sh --red`,
 **✅ HW-CONFIRMED 2026-09-24** (harness round + the maintainer's eye, incl. a film→video change inside one title). Design, the library census
 that chose default Off, and the known limits are in **`docs/field_blend.md`**.
 
-### 🔧 One Deinterlace option (Weave / Bob / Blend) + Bob on Progressive (2026-09-25, branch `feature/deint-merge`)
+### ✅ One Deinterlace option (Weave / Bob / Blend) + Bob on Progressive (2026-09-25, branch `feature/deint-merge`)
 
 `480i Deint` (OB) and `Progressive Deint` (O[49]) merge into `O[51:50] Deinterlace =
 Weave / Bob / Blend`, default Weave. Two CONF_STR rows share the field, and the menu mask
@@ -959,8 +959,7 @@ steady.
 
 Sim-proven + mutation-checked (`run_field_blend.sh --red`), built
 (`DVD_deintmerge_20260926_0049.rbf`, timing clean), ✅ HW-measured 2026-09-26 (§7 table).
-**Next step: the maintainer's eye on the OSD row swap and HDMI Bob on Interlaced, then
-merge (rebase onto PR #129, rebuild).**
+✅ HW-CONFIRMED by the maintainer's eye 2026-09-26. **Next step: merge.**
 
 ### HD Modeline Switching
 The display block drives a fixed 27MHz SD clock. DVD is 480i/480p so this is fine,
