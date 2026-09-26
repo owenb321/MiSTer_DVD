@@ -4016,6 +4016,7 @@ always @(posedge clk or negedge rst_n) begin
                     end
                 end else if (srp_pgc_start[31:21] != 11'd0) begin
                     // pgc_start_byte beyond 2 MB = malformed PGCIT
+                    dur_pick <= 1'b0;                  // no stale one-shot past this parse
                     if (dom != DOM_TT) begin
                         pgc_error <= 1'b1;
                         state     <= S_DONE;
@@ -4461,6 +4462,11 @@ always @(posedge clk or negedge rst_n) begin
                         srp_i      <= srp_i + 16'd1;
                         want_pgcn  <= srp_i + 16'd2;
                         scan_mode  <= 1'b0;
+                        // On an Auto mount this PGC stands in for the duration scan's
+                        // winner, so its chapter table must be reloaded too (issue
+                        // #132; iso_reader_autoptt_tb arm F). A chapter jump that
+                        // lands here (ptt_res_tt) already loaded the right title.
+                        dur_pick   <= !ptt_res_tt;
                         state      <= S_SRP_FETCH;
                     end else
                         state <= S_FINAL2;             // title linear fallback (palette kept)

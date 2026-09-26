@@ -17,6 +17,9 @@
 //   C  eid 0x01 (no entry flag), PGCN 2 inside title 1's
 //      multi-PGC table (3 PTTs)                            -> ttn 1, nr_ptt 3
 //   D  eid 0x02 (no entry flag), PGCN 2 in title 2 (2 PTTs) -> ttn 2, nr_ptt 2
+//   F  OZ shape: PGCN1 is the 2 h scan winner but UNUSABLE (cells declared,
+//      cell_playback_offset 0), so the reader falls through to PGCN2, eid 0x82,
+//      title 2 = 3 PTTs                                      -> ttn 2, nr_ptt 3
 //   E  C's shape, then prev-chapter from ch3 (PGCN 2) to ch2 = {pgc1, pg2}:
 //      the cross-PGC chapter jump resolves to PGCN 1, which must NOT re-arm
 //      the duration scan (it would land back on PGCN 2).
@@ -174,6 +177,7 @@ module iso_reader_autoptt_tb;
     // is {pgcn, pgn}, supplied through the ptt1/ptt2 arrays.
     reg [15:0] ptt1_pgcn [0:7], ptt1_pgn [0:7];
     reg [15:0] ptt2_pgcn [0:7], ptt2_pgn [0:7];
+    reg        tb_decoy = 1'b0;   // arm F: PGCN1 is a 2 h decoy with no cell table
 
     task build(input [7:0] eid1, input [7:0] eid2, input integer n1, input integer n2);
         integer j;
@@ -219,8 +223,9 @@ module iso_reader_autoptt_tb;
             img[24*2048+8]  = eid1; be32(24*2048+8+4, 32'd64);
             img[24*2048+16] = eid2; be32(24*2048+16+4, 32'd600);
             // PGC1: 00:00:05, 2 programs / 2 cells
-            put_pgc(24*2048+64, 8'd2, 8'd2, 16'd256);
+            put_pgc(24*2048+64, 8'd2, 8'd2, tb_decoy ? 16'd0 : 16'd256);
             img[24*2048+64+6] = 8'h05;
+            if (tb_decoy) img[24*2048+64+4] = 8'h02;   // 02:00:05 -> wins the scan
             be16(24*2048+64+230, 16'd240);
             img[24*2048+64+240] = 8'd1;
             img[24*2048+64+241] = 8'd2;
@@ -316,6 +321,17 @@ module iso_reader_autoptt_tb;
         build(8'h81, 8'h02, 1, 2);
         mount;
         check_mount(8'hB2, 7'd2, 11'd2, "D: non-entry PGC names title 2");
+
+        // ---- F: the scan's winner is unusable; the next PGC takes over ------
+        ptt1_pgcn[0] = 1; ptt1_pgn[0] = 1;
+        ptt2_pgcn[0] = 2; ptt2_pgn[0] = 1;
+        ptt2_pgcn[1] = 2; ptt2_pgn[1] = 1;
+        ptt2_pgcn[2] = 2; ptt2_pgn[2] = 1;
+        tb_decoy = 1'b1;
+        build(8'h81, 8'h82, 1, 3);
+        tb_decoy = 1'b0;
+        mount;
+        check_mount(8'hB2, 7'd2, 11'd3, "F: unusable winner falls through to title 2");
 
         // ---- E: C's shape, prev-chapter across into PGCN 1 -----------------
         ptt1_pgcn[0] = 1; ptt1_pgn[0] = 1;

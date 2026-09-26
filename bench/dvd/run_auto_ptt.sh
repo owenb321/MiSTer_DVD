@@ -12,11 +12,13 @@
 #        issue's disc shape) + iso_reader_ptt_tb (Disc Menus On must not move).
 # RED  : sed-mutated copies of dvd_iso_reader.sv. Each must fail exactly the
 #        arms listed, and no others:
-#          M1 no-reload   : never reload after the scan            -> A B D
+#          M1 no-reload   : never reload after the scan            -> A B D F
 #          M2 no-member   : a miss keeps the table's count         -> B
 #          M3 bit7-ttn    : title only from ENTRY PGCs (bit 7)     -> D
 #          M4 ptt0-member : membership tested on chapter 1 only    -> C E
 #          M5 no-gate     : the scan re-arms on a chapter jump     -> E
+#          M6 no-fallthru : the unusable-winner fallthrough takes the
+#                           next PGC without reloading its table   -> F
 #        M4 also fails E because E mounts C's disc shape: with nr_ptt = 0 at
 #        mount there is no chapter 3 to step back from.
 #
@@ -64,14 +66,14 @@ if [ $RED -eq 1 ]; then
         fi
         timeout 900 vvp "$OUT/$name" > "$OUT/$name.log" 2>&1
         local got
-        got=$(grep -oE '^FAIL [A-E]' "$OUT/$name.log" | awk '{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//')
+        got=$(grep -oE '^FAIL [A-F]' "$OUT/$name.log" | awk '{print $2}' | sort -u | tr '\n' ' ' | sed 's/ $//')
         if [ "$got" = "$want" ]; then
             echo "  ok   $name -> fails [$got]"
         else
             echo "  FAIL $name: failed [$got], expected [$want]"; fail=1
         fi
     }
-    mutate M1_no_reload   "A B D" \
+    mutate M1_no_reload   "A B D F" \
         "s/end else if (dur_pick \&\& (want_pgcn != 16'd1 ||/end else if (1'b0 \&\& dur_pick \&\& (want_pgcn != 16'd1 ||/"
     mutate M2_no_member   "B" \
         "s/if (!ptt_hit) nr_ptt <= 11'd0;/if (1'b0) nr_ptt <= 11'd0;/"
@@ -81,6 +83,8 @@ if [ $RED -eq 1 ]; then
         "s/if (ptt_pgcn_c == want_pgcn) ptt_hit <= 1'b1;/if (ptt_pgcn_c == want_pgcn \&\& walk_idx[11:2] == 10'd0) ptt_hit <= 1'b1;/"
     mutate M5_no_gate     "E" \
         "s/!menu_dom \&\& !ptt_res_tt \&\&/!menu_dom \&\&/"
+    mutate M6_no_fallthru "F" \
+        "s/dur_pick   <= !ptt_res_tt;/dur_pick   <= 1'b0;/"
 fi
 
 if [ $fail -eq 0 ]; then echo "RUN_AUTO_PTT: PASS"; else echo "RUN_AUTO_PTT: FAIL"; exit 1; fi
