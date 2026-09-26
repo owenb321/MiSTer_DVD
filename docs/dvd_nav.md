@@ -141,6 +141,12 @@ adds the file.
      chapter lives in PGCN 1, `want_pgcn == 1` met the arm's condition, the scan ran again,
      and the skip landed back on the longest PGC. `ptt_res_tt` is 0 on an Auto mount and
      1 on any title jump.
+  5. **The unusable-winner fallthrough reloads too.** When the scan's winner has no cell
+     table (the OZ decoy: cells declared, `cell_playback_offset == 0`), Auto takes the next
+     PGC, and that re-take sets `dur_pick` again on an Auto mount (`!ptt_res_tt`). OZ
+     itself shows no visible change: its winner falls through to PGCN 2 = title 2, and
+     every title of VTS_08 has 53 chapters. The malformed-SRP branch clears `dur_pick`, so
+     the one-shot cannot go stale.
   MEASURED over the library (1,482 images; 11 unreadable or without a title PGCIT). The
   winner is title 1's entry PGC on 1,271 (unchanged). It is another title's entry PGC on
   168: the old total was wrong on **99** of those, including X-Men Apocalypse, and happened
@@ -148,8 +154,8 @@ adds the file.
   (unchanged), 7 are in another title's table (now that title's count), and 5 are games
   whose winner no table names (now its program count). The planning model counted 1,462
   images, which is why the issue's numbers are a few lower.
-  Gate: `bench/dvd/run_auto_ptt.sh [--red]`, which runs `iso_reader_autoptt_tb` arms A–E and
-  `iso_reader_pgc_tb` TEST 5 (the issue's disc shape), with five mutations that each fail
+  Gate: `bench/dvd/run_auto_ptt.sh [--red]`, which runs `iso_reader_autoptt_tb` arms A–F and
+  `iso_reader_pgc_tb` TEST 5 (the issue's disc shape), with six mutations that each fail
   exactly their arms.
 - **An unusable PGC tries the NEXT one before the linear fallback (same change).** A title
   PGC with no cells, or with `cell_playback_offset == 0`, used to send Auto to `S_FINAL2`,

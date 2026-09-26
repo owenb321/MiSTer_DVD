@@ -24,7 +24,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 - ✅ **AUTO CHAPTER TABLE FOLLOWS THE PGC IT PLAYS (issue #132, 2026-09-26, branch
   `feature/auto-ptt-title`, `dev-autoptt`); sim-proven and ✅ HW-CONFIRMED on the rig by
-  the HIL harness** (`DVD_autoptt_20260926_1526.rbf`, 94 % ALMs, clk_dec 93.27/91.37).
+  the HIL harness** (see HW below for which build).
   Field report: *X-Men: Apocalypse* with Disc Menus Off showed `CH n/1` and no seek-bar
   notches, on v0.7.0 and on `dev-readerslim`. Chapter skips worked. **Cause:** the Auto mount
   loads `VTS_PTT_SRPT` before the PGC parse and always for title 1, and the duration scan
@@ -36,6 +36,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - `P_PTT` checks that the winner is in that table; a miss sets `nr_ptt = 0`, so the HUD
     uses the PGC's program count.
   - `S_PTTLD_DONE` returns straight to the re-take.
+  - The unusable-winner fallthrough (the OZ decoy shape) re-arms the reload for the next
+    PGC. Found in review after the first HW run; arm F reproduces it on `main`. OZ itself
+    shows no visible change, because all its titles have 53 chapters.
   - The scan's arm is now gated on `!ptt_res_tt`. Without that, an Auto cross-PGC chapter
     jump into PGCN 1 re-ran the scan and landed back on the feature. This was latent before
     the fix and is now reachable on more discs; `iso_reader_autoptt_tb` arm E reproduced it
@@ -52,20 +55,27 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - A membership comparator replaces libdvdnav's title/part lookup, which would walk every
     title's table.
   Details: `docs/dvd_nav.md` ("Auto plays the LONGEST PGC").
-  **Gate:** `bench/dvd/run_auto_ptt.sh --red`. That is `iso_reader_autoptt_tb` A–E plus
+  **Gate:** `bench/dvd/run_auto_ptt.sh --red`. That is `iso_reader_autoptt_tb` A–F plus
   `iso_reader_pgc_tb` TEST 5 (now also asserts `nr_ptt`/`cur_ttn`) and `iso_reader_ptt_tb`,
-  with 5 mutations that each fail exactly their arms. The new bench joins
+  with 6 mutations that each fail exactly their arms. The new bench joins
   `run_reader_regress.sh` (42 benches, 51 arms). Against a `main` baseline with the branch's
   benches copied in, only `iso_reader_autoptt` and `iso_reader_pgc` (TEST 5) move; every
   other arm is bit-identical. ⚠ A fresh `main` worktree lacks the git-ignored
   `bench/dvd/test_vobs/mib_vts21_vtsi_mat.hex`, so copy it in first, or
   `iso_reader_attr` shows a false diff.
-  **HW (harness, X-Men Apocalypse, Disc Menus Off):**
+  **Fit:** `ptt_mem` is still an inferred altsyncram. Registers are +107 over Branch D's
+  build. ⚠ The ".fit.summary" ALM line dropped from 97 % to 94 %, but that line is
+  Quartus' "ALMs needed" estimate: this build *places* 41,051 ALMs (98 %). It is packing,
+  not a smaller design.
+  **HW (harness, X-Men Apocalypse, Disc Menus Off), on `DVD_autoptt_20260926_1526`, the
+  build before the fallthrough fix:**
   - Control arm, `DVD_readerslim_20260926_0404`: `CH 1/1`, a seek bar with no notches, and
     `CH 2/1` after next-chapter (at 0:08:21).
   - Fix: `CH 1/29`, the seek bar shows notches, and next/next/prev give `CH 2/29` (0:08:21),
     `3/29` (0:14:15), then `2/29`.
   - Disc Menus On → PLAY: `CH 1/29` → `2/29` at 0:08:21, unchanged.
+  - ⚠ Proven in simulation only: the `!ptt_res_tt` scan gate. X-Men is single-PGC, so the
+    board never took a cross-PGC chapter jump into PGCN 1. Arm E covers it.
 - ✅ **READER SLIMMING (BRANCH D) + THE NUMERIC DEBUG OVERLAY RETIRED (2026-09-26, branch
   `feature/reader-slim`); bit-identical in simulation, a harness HW smoke pass, and
   ✅ HW-CONFIRMED 2026-09-26 by the maintainer on the final build** (`DVD_readerslim_20260926_0404.rbf`, SEED 9 first roll, clk_dec 90.03/89.45,
