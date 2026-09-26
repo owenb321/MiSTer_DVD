@@ -538,3 +538,53 @@ every byte is a pure function of disc LBA/offset) plus new arms in
 `dvd_phys_test.cpp` covering the dispatch itself. 6 RED mutations, each
 caught by its own arm (`run_tests.sh --red`). Detail:
 `MiSTer_DVD/docs/physical_disc.md`, `MiSTer_DVD/docs/vcd_svcd.md`.
+
+## Steps 50-51 — `.cue` sheets (`support/dvd/dvd_cue.{h,cpp}`)
+
+An audio CD or Video CD rip selected by its `.cue`. The Main parses the sheet and
+serves the stream a physical disc of that kind already produces: an audio CD
+through `dvd_css`'s CD-DA source (`SD_TYPE_DVDCSS`), a VCD/SVCD through `dvd_vcd`'s
+source (`SD_TYPE_VCD`). So the read hooks (8/9, 46/47), the read-ahead defer (49)
+and the close on remount (5, 44b) all apply unchanged, and only the dispatch is new.
+Design: `MiSTer_DVD/docs/cdda.md` "`.cue` sheets".
+
+| # | File | Edit |
+|---|---|---|
+| 50 | `menu.cpp` | `static char fs_pFileExt[13]` → `[256]` (`// dvd:ext-len`) |
+| 51a | `user_io.cpp` | include `support/dvd/dvd_cue.h` |
+| 51b | `user_io.cpp` | `// dvd:cue` — a mount arm before `else if (x2trd_ext_supp(name))` |
+
+```cpp
+else if (is_dvd() && len > 4 && !strcasecmp(name + len - 4, ".cue"))   // dvd:cue
+{
+	int kind = dvd_cue_mount(name);
+	if (kind == DVD_CUE_AUDIO) { sd_type[index] = SD_TYPE_DVDCSS; sd_image[index].size = dvd_css_size(); writable = 0; ret = 1; }
+	else if (kind == DVD_CUE_VCD) { sd_type[index] = SD_TYPE_VCD; sd_image[index].size = dvd_vcd_size(); writable = 0; ret = 1; }
+}
+```
+
+★ **Step 50 fixes a stock overflow this core is the one to trip.** The OSD file
+picker `strcpy`s a core's `S` extension list (from a 256-byte buffer) into the
+13-byte `fs_pFileExt`. Our list was 24 characters before this feature and is 27
+with `CUE`; in the built object the bytes past the buffer are `menu_visible`,
+`osd_unlocked` and `config_scale[0]`, a pointer. It stayed harmless because those
+are rewritten every pass or read only by other cores, and Main restarts at every
+core load, but that is layout luck. ⚠ A stock-Main bump that renames or resizes
+this buffer breaks the anchor loudly, as intended.
+
+★ **A refused sheet must NOT fall through to the plain-file branch.** The arm
+matches every `.cue`; when `dvd_cue_mount()` fails, `ret` stays 0, the size goes to
+0, and the core sees an empty mount (the idle screen). Falling through would hand
+the core the sheet's TEXT as an image.
+
+★ **The track table is NOT sent here.** `user_io_file_mount()` sends
+`UIO_SET_SDSTAT` last, and the core clears its table on that mount, so an upload
+from inside the dispatch would be thrown away. `dvd_cdda_toc_service()`, called
+from `dvd_css_tick()` on the next poll, sends it.
+
+⚠ This is another `insert_before` arm on the `x2trd_ext_supp` anchor, the chain the
+step 43-47 notes above warn about. The block does not repeat the anchor line.
+
+Host tests: `main/tests/dvd_cue_test.cpp` (parser and layout from sheet text; real
+temporary files mounted and read back through the real `dvd_cdda.cpp`) and 12 RED
+mutations in `run_tests.sh --red`.

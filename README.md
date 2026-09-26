@@ -67,8 +67,9 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   does the disc itself in a drive (needs `MiSTer_DVDcss`).
 - **[Audio CDs](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/#audio-cds)** — put a music CD in
   the drive and it plays, with track skip and a per-track clock, the way a DVD player always
-  did (needs `MiSTer_DVDcss`). A
-  [`.wav` file](https://owenb321.github.io/MiSTer_DVD/getting-started/loading/#playing-a-wav) plays the same way
+  did (needs `MiSTer_DVDcss`). A ripped CD plays the same way from its
+  [`.cue` sheet](https://owenb321.github.io/MiSTer_DVD/getting-started/loading/#playing-a-cue), and a
+  [`.wav` file](https://owenb321.github.io/MiSTer_DVD/getting-started/loading/#playing-a-wav) plays
   from the bare core.
 - **Gamepad, keyboard or infrared remote** — every transport action has a
   [built-in key](https://owenb321.github.io/MiSTer_DVD/playback/controls/), so a USB IR receiver

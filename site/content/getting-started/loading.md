@@ -16,15 +16,44 @@ Accepted file types:
 | Extension | What it is |
 |---|---|
 | `.iso` | DVD-Video image, decrypted or (with the add-ons) encrypted |
+| `.cue` | Cue sheet for a CD rip — an **audio CD** or a **Video CD / SVCD**. Needs [`MiSTer_DVDcss`](what-you-need.md); see [Playing a `.cue`](#playing-a-cue) |
 | `.bin` `.img` `.dat` | Video CD / SVCD raw-sector rips — see [Video CD / SVCD](../formats/vcd-svcd.md) |
 | `.vob` | A single DVD program stream, played linearly |
 | `.mpg` | MPEG program stream (MPEG-1 or MPEG-2) |
 | `.m2v` | Bare MPEG-2 elementary video stream, no audio |
 | `.wav` | PCM audio file — 16-bit stereo, 44.1 or 48 kHz. Audio only, no picture |
 
-Only the first two give you navigation. A `.vob`, `.mpg` or `.m2v` is played straight
-through with no menus, no chapters, and — for `.m2v` — no sound, because the format
-carries none.
+An `.iso` gives you disc menus and chapters, and a `.cue` gives you tracks. A `.vob`,
+`.mpg` or `.m2v` is played straight through with no menus, no chapters, and — for `.m2v` —
+no sound, because the format carries none.
+
+## Playing a `.cue`
+
+A `.cue` sheet is the small text file a CD ripper writes next to the `.bin` (or `.wav`)
+files, describing where each track starts. Select the **`.cue`** and the player reads it
+and works out what the disc is:
+
+- **An audio CD** plays exactly as a [music CD in the drive](../formats/physical-discs.md#audio-cds)
+  does: the bouncing logo, `TR 3/12` with the time *within* the track, a per-track
+  progress bar, and **Next / Previous Chapter** skipping tracks. Data tracks on an enhanced
+  or mixed-mode disc are skipped.
+- **A Video CD or SVCD** plays as described on [Video CD / SVCD](../formats/vcd-svcd.md) —
+  but you no longer need to know which `.bin` holds the movie, and any audio tracks on the
+  disc are left out cleanly.
+
+The sheet's files can be one `.bin` for the whole disc or one per track, and audio rips
+with one `.wav` per track (the way EAC writes them) work too. The `.wav` files must be
+CD audio: 16-bit stereo at 44.1 kHz. A sheet written on Windows is fine — the drive-letter
+paths and the letter case are sorted out for you. Keep the sheet in the same folder as its
+files.
+
+A `.cue` needs the [`MiSTer_DVDcss`](what-you-need.md) add-on, because it is the MiSTer's
+own software, not the FPGA, that reads the sheet. On the bare core a `.cue` still shows up
+in the file picker, but nothing plays; select the `.bin` instead.
+
+If the sheet cannot be played, the reason pops up — `Cannot play this CUE sheet`, followed
+by the problem, such as a missing file. See
+[Troubleshooting](../reference/troubleshooting.md#cannot-play-this-cue-sheet).
 
 ## Playing a `.wav`
 

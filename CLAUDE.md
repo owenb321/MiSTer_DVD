@@ -323,6 +323,60 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **`.cue` SHEETS — AUDIO CD AND VCD/SVCD RIPS, PARSED BY THE MAIN, ZERO FABRIC LOGIC
+  (2026-09-25, ✅ MERGED PR #129); host-proven (12 mutations each caught by
+  its own `FAIL` line), ✅ HW-MEASURED on the rig 2026-09-25, control arm first, and
+  ✅ HW-CONFIRMED by the maintainer the same day loading a `.cue` from the OSD file
+  picker** (the one path the harness cannot drive: it launches by MGL)
+  (build `DVD_cue_20260926_0019.rbf`, SEED 9 first roll, clk_dec 87.81/87.45, 98 % ALM).
+  | arm | result |
+  |---|---|
+  | control: the pre-cue Main | the sheet mounts as a 225-byte text file → black, nothing plays |
+  | audio, one `.bin` + INDEX 00 pregaps | `TR 1/3`, 0:00:32 (30 s + the next pregap); skips land on 440/660/880 Hz by capture |
+  | audio, EAC per-track `.wav`, gaps appended | identical: `TR 1/3`, 0:00:32, 440 → 660 Hz across the file edge |
+  | VCD, split `.bin` | picture, −14.8 dBFS, seek, total 0:34:34 = 155,529 sectors ÷ 75 |
+  | VCD, `MODE2/2336` | the same, so the rebuilt sync prefix passes the core's detector |
+  | refused sheet (missing FILE), MGL launch | reason logged, no notice, MGL finishes, idle logo |
+
+  ✅ **Physical audio CD unregressed on the same build:**
+  - an 18-track disc auto-mounts, plays (−14…−17 dBFS), skips and stacks skips;
+  - Eject opens the tray and returns to idle, with no `/dev/sr1` handle left open.
+    The close path is where the refactor touched it.
+
+  ✅ **Physical VCD unregressed too:**
+  - the burned QG0012 disc mounts at 603,803,088 B (256,719 sectors, the same span its
+    `.cue` produces), plays, seeks, total 0:57:04;
+  - Eject opens the tray, returns to idle, and leaves no `/dev/sr1` handle.
+
+  ⚠ Pre-existing, not from this branch:
+  one Eject press logs a SECOND eject request after the core reset the first one
+  causes (harmless: it unmounts an already-empty slot). Likely the core's eject
+  toggle clearing on reset, read by `dvd_remote.cpp` as a new press. ⚠ Two quick Previous presses at the very END of the last track landed on
+  track 1, not the track before; from mid-track they land correctly. That is the core's
+  stacking path, shared with a physical CD. Not cue-specific; unexplained. Reverses the earlier bin/cue rejection. The core
+  never sees an extension, so `main/support/dvd/dvd_cue.{h,cpp}` builds a stream it
+  already plays:
+  - an **audio CD** is the physical disc's virtual WAV plus the `CDTC` track table,
+    through `dvd_cdda_open_source()` and `dvd_css`'s CD-DA front door;
+  - a **VCD/SVCD** is the physical VCD's raw Mode 2 span, through `dvd_vcd_open_source()`.
+    It also excludes a hybrid disc's CD-DA tail and re-inserts the prefix a
+    `MODE2/2336` rip dropped.
+
+  Both are the SAME code the physical paths run, so the only new logic is the parser
+  and layout. The only RTL touch is `CUE` in `CONF_STR` (0 ALMs). Tracks start at
+  INDEX 01 and a pregap plays at the end of the track before, as the physical TOC
+  does. EAC's gaps-appended layout, per-track `.wav`, MOTOROLA, and Windows
+  paths/case are handled. Limits are 99 tracks and 99 files, refused past either,
+  never truncated.
+  ★ **The track table must go out on the poll AFTER the mount** (the core wipes it on
+  mount): `dvd_cdda_toc_service()` from `dvd_css_tick()`.
+  ★★ **A stock-Main overflow came with it:** the picker `strcpy`s the S0 list into
+  `fs_pFileExt[13]`, and ours was already 24 characters (27 with CUE), overrunning
+  into `menu_visible`, `osd_unlocked` and `config_scale[0]`. Integration step 50
+  widens it to 256.
+  Gates: `main/tests/run_tests.sh --red` (`dvd_cue_test.cpp`). Detail:
+  **`docs/cdda.md` "`.cue` sheets"**, `main/integration/INTEGRATION.md` "Steps 50-51".
+
 - ✅ **TIME-MAP SEEK — Phase 8b REOPENED: the seek preview and the landing now agree
   (2026-09-25, issue #127, ✅ MERGED PR #128); sim-proven, 13 mutations + 9 wiring
   re-regressions each caught by its own check; the D-PAD arm is ✅ HW-MEASURED 2026-09-25
@@ -2284,8 +2338,8 @@ worse maintenance burden than targeted in-place edits. So:
   `af_passthru` tell Main to put the ADV7513 in PCM mode, and drops `SPDIF_PASS_EN`
   and `HDMI_BS_EN` so both legs carry ordinary PCM. Same user-visible outcome PR #79
   gives an LPCM track; **HW gate: play a `.wav` with `Audio Out = Passthru`.**
-  ⛔ **bin/cue + CHD images REJECTED** (user decision): ISO9660 cannot hold CD-DA so
-  it means parsing `.cue` sheets, and nobody archives music that way.
+  ✅ ~~bin/cue images REJECTED~~ — **reversed 2026-09-25**: `.cue` sheets are parsed by
+  the Main (see the `.cue` bullet at the top of this list). ⛔ CHD is still unsupported.
   Suite `bench/dvd/run_wav.sh`, golden `tools/wav_ref.py`; design **`docs/cdda.md`**.
 
 - 🔧 **PHYSICAL AUDIO CDs (2026-09-10, branch `feature/cdda-physical`) — a music CD

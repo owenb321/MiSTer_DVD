@@ -41,6 +41,14 @@ Video CD audio has always had.
 In `Passthru` a `.wav` plays as ordinary PCM on both outputs, because that is what it is.
 There is no bitstream to pass through, so the setting makes no difference to it.
 
+## CD audio images (`.cue`)
+
+A ripped audio CD selected by its `.cue` sheet plays on the same PCM path, with track
+numbers and track skip like a disc in the drive — see
+[Playing a `.cue`](../getting-started/loading.md#playing-a-cue). CD audio is always 16-bit
+stereo at 44.1 kHz, so a sheet whose tracks are `.wav` files needs them in exactly that
+format; MP3 and FLAC sheets are refused. It needs the `MiSTer_DVDcss` add-on.
+
 ## MP2
 
 MPEG-1 Layer II, at 32, 44.1 and 48 kHz.

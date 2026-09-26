@@ -57,6 +57,15 @@ uint64_t dvd_vcd_image_size(const dvd_vcd_track *trk);
 // path, never a poll tick.
 int  dvd_vcd_open(void);
 
+// A second source: the same raw image, with its 2352-byte sectors supplied by
+// `rd` instead of the drive -- a .cue sheet's data-track span (dvd_cue.cpp).
+// The span is `len` sectors numbered 0..len-1 as `rd` sees them. `rd` must fill
+// every byte (zero what it cannot read); `on_close`, if given, is called from
+// dvd_vcd_close() so the source can release its files. Starts the read-ahead,
+// exactly as dvd_vcd_open() does. Returns 0 on success.
+typedef int (*dvd_vcd_frames_fn)(int lba, int count, uint8_t *dst);
+int  dvd_vcd_open_source(int len, dvd_vcd_frames_fn rd, void (*on_close)(void));
+
 int  dvd_vcd_active(void);
 uint64_t dvd_vcd_size(void);
 

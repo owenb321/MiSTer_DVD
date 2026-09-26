@@ -765,4 +765,57 @@ u = insert_before(u, 'else if (op & 1)\n\t\t\t{\n\t\t\t\tuint32_t buf_n',
 write(uio_path, u)
 print("[integration] user_io.cpp patched (read-ahead)")
 
+# ---------------------------------------------------------------- .cue sheets
+# Steps 50-51. See INTEGRATION.md "Steps 50-51" and support/dvd/dvd_cue.h.
+
+# 50. The OSD file picker copies a core's extension list into a 13-byte static
+# (`fs_pFileExt[13]`) with strcpy, from a 256-byte one. A stock bug that this core
+# is the one to trip: "MPGM2VVOBISOBINIMGDATWAVCUE" is 27 characters, and in the
+# built object the 15 bytes past the buffer are menu_visible, osd_unlocked and
+# config_scale[0] -- a pointer. Match the source buffer instead.
+m = read(m_path)
+m = replace_once(m,
+    'static char fs_pFileExt[13] = "xxx";',
+    'static char fs_pFileExt[256] = "xxx";   // dvd:ext-len -- was [13], which a long S0 list overflows',
+    50, 'dvd:ext-len')
+write(m_path, m)
+print("[integration] menu.cpp patched (file-picker extension buffer)")
+
+u = read(uio_path)
+
+# 51a. include
+u = insert_after(u, '#include "support/dvd/dvd_css.h"',
+    '#include "support/dvd/dvd_cue.h"\n',
+    '51a', 'support/dvd/dvd_cue.h')
+
+# 51b. mount dispatch: a .cue is parsed HERE and never handed to the core as a
+# file. An audio CD rides the DVD-CSS slot type (dvd_css's CD-DA source), a Video
+# CD the physical-VCD one, so the read path, the read-ahead defer (49) and the
+# close on remount (5, 44b) all apply unchanged. A sheet that fails is NOT allowed
+# to fall through to the plain-file branch below: the core would be handed text.
+u = insert_before(u, 'else if (x2trd_ext_supp(name))',
+    'else if (is_dvd() && len > 4 && !strcasecmp(name + len - 4, ".cue"))   // dvd:cue\n'
+    '{\n'
+    '\t// .cue sheet: an audio CD or a Video CD image, served by the Main -- see dvd_cue.h.\n'
+    '\tint kind = dvd_cue_mount(name);\n'
+    '\tif (kind == DVD_CUE_AUDIO)\n'
+    '\t{\n'
+    '\t\tsd_type[index] = SD_TYPE_DVDCSS;\n'
+    '\t\tsd_image[index].size = dvd_css_size();\n'
+    '\t\twritable = 0;\n'
+    '\t\tret = 1;\n'
+    '\t}\n'
+    '\telse if (kind == DVD_CUE_VCD)\n'
+    '\t{\n'
+    '\t\tsd_type[index] = SD_TYPE_VCD;\n'
+    '\t\tsd_image[index].size = dvd_vcd_size();\n'
+    '\t\twritable = 0;\n'
+    '\t\tret = 1;\n'
+    '\t}\n'
+    '}\n',
+    '51b', '// dvd:cue')
+
+write(uio_path, u)
+print("[integration] user_io.cpp patched (.cue sheets)")
+
 print("[integration] done")
