@@ -21,6 +21,7 @@ which assumptions turned out to be false. Entry points:
 |---|---|
 | `architecture.md` | System data flow, the FPGA/ARM split |
 | `roadmap.md` | Phased plan and current status — the canonical "what's next" |
+| `status_log.md` | Per-feature record (field report → root cause → HW evidence), newest first; indexed from `CLAUDE.md` |
 | `dvd_nav.md`, `dvd_vm.md` | In-fabric ISO/IFO navigation and the DVD virtual machine |
 | `fabric_audio.md`, `ac3_decoder_architecture.md` | Audio decode in fabric |
 | `av_sync.md`, `lipsync_pickup.md` | A/V sync design and the drift investigation |
