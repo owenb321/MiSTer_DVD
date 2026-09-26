@@ -22,6 +22,45 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **AUTO CHAPTER TABLE FOLLOWS THE PGC IT PLAYS (issue #132, 2026-09-26, branch
+  `feature/auto-ptt-title`, `dev-autoptt`); sim-proven, ⏳ HW-confirm pending.**
+  Field report: *X-Men: Apocalypse* with Disc Menus Off showed `CH n/1` and no seek-bar
+  notches, on v0.7.0 and on `dev-readerslim`. Chapter skips worked. **Cause:** the Auto mount
+  loads `VTS_PTT_SRPT` before the PGC parse and always for title 1, and the duration scan
+  (2026-09-19) then plays the longest PGC. Here that is PGCN 2 = title 2 (29 chapters, SRP
+  `entry_id 0x82`), while title 1 is a 1 s, one-chapter stub. **Fix** (`dvd/dvd_iso_reader.sv`,
+  Auto path only):
+  - After the scan, `S_SRP_EVAL` reloads the table of the title named by the winner's
+    `entry_id[6:0]`.
+  - `P_PTT` checks that the winner is in that table; a miss sets `nr_ptt = 0`, so the HUD
+    uses the PGC's program count.
+  - `S_PTTLD_DONE` returns straight to the re-take.
+  - The scan's arm is now gated on `!ptt_res_tt`. Without that, an Auto cross-PGC chapter
+    jump into PGCN 1 re-ran the scan and landed back on the feature. This was latent before
+    the fix and is now reachable on more discs; `iso_reader_autoptt_tb` arm E reproduced it
+    on `main`.
+  **Library (`tools/auto_pick_model.py`, 1,482 images):**
+  - 1,271 unchanged.
+  - 168 play another title's entry PGC; the old total was wrong on **99**.
+  - 7 non-entry winners now take their own title's count.
+  - 5 games whose winner no table names now show the PGC's program count.
+  - 20 title-1 multi-PGC discs are unchanged.
+  **Deviation from the issue's suggestion**, and why:
+  - The title is taken from `entry_id[6:0]` even when bit 7 is clear. PGC_CAT carries the
+    owning VTS_TTN on every title PGC, and the sweep agrees on every such disc.
+  - A membership comparator replaces libdvdnav's title/part lookup, which would walk every
+    title's table.
+  Details: `docs/dvd_nav.md` ("Auto plays the LONGEST PGC").
+  **Gate:** `bench/dvd/run_auto_ptt.sh --red`. That is `iso_reader_autoptt_tb` A–E plus
+  `iso_reader_pgc_tb` TEST 5 (now also asserts `nr_ptt`/`cur_ttn`) and `iso_reader_ptt_tb`,
+  with 5 mutations that each fail exactly their arms. The new bench joins
+  `run_reader_regress.sh` (42 benches, 51 arms). Against a `main` baseline with the branch's
+  benches copied in, only `iso_reader_autoptt` and `iso_reader_pgc` (TEST 5) move; every
+  other arm is bit-identical. ⚠ A fresh `main` worktree lacks the git-ignored
+  `bench/dvd/test_vobs/mib_vts21_vtsi_mat.hex`, so copy it in first, or
+  `iso_reader_attr` shows a false diff.
+  **Next step:** the build and a HIL run on X-Men Apocalypse with Disc Menus Off
+  (expect `CH n/29` with notches), then the same disc with Disc Menus On as a regression check.
 - ✅ **READER SLIMMING (BRANCH D) + THE NUMERIC DEBUG OVERLAY RETIRED (2026-09-26, branch
   `feature/reader-slim`); bit-identical in simulation, a harness HW smoke pass, and
   ✅ HW-CONFIRMED 2026-09-26 by the maintainer on the final build** (`DVD_readerslim_20260926_0404.rbf`, SEED 9 first roll, clk_dec 90.03/89.45,
