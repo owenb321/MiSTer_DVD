@@ -9,7 +9,8 @@ and only the PGCN (all the board's HUD shows). This runs the SAME microcode the 
 runs (tools/nav_isa.py's emulator inside tools/nav_shell.py's wrapper model) under a
 Python model of the reader's playback, so it needs no hardware, runs the library in
 minutes, and can compare everything libdvdnav reports: domain, VTS, PGCN, program,
-cell, and the 16 GPRMs.
+cell, and the 16 GPRMs (except
+counter-mode ones, which count wall-clock seconds the model does not have).
 
 THE READER MODEL (Player below) is what the RTL reader does, at cell granularity:
   - a VM jump (JUMP pulse) loads a PGC the way dvd_iso_reader's jump service does:
@@ -267,7 +268,8 @@ class Player:
                 pg = i + 1
         g = [self.sh.m.ram[i] for i in range(16)]
         return dict(dom=DVDNAV_DOM[self.dom], vts=self.vts, pgcn=self.pgcn, pg=pg,
-                    cell=self.cell + 1, buttons=buttons, gprm=g)
+                    cell=self.cell + 1, buttons=buttons, gprm=g,
+                    gmode=self.sh.m.ram[S.N.RAM_MAP['GMODE']])
 
     def run(self, script):
         """-> [(action, landing state)] in trace_nav's pairing (the LAST park after
@@ -468,7 +470,11 @@ def diff_disc(iso, script, mutate=None):
             break
         keys = ['dom', 'pgcn'] + (['vts'] if o.get('dom') in (2, 8) else [])
         same = all(o.get(k) == u.get(k) for k in keys)
-        gsame = o.get('gprm') == u.get('gprm')
+        # a counter-mode GPRM counts wall-clock seconds, and the model has no clock
+        cm = u.get('gmode', 0)
+        og, ug = o.get('gprm') or [], u.get('gprm') or []
+        gsame = len(og) == len(ug) and all(a == b for i, (a, b) in enumerate(zip(og, ug))
+                                           if not (cm >> i) & 1)
         first_menu = t.startswith('m') and menu_calls == 1 and i == 0
         v = 'ok' if same and gsame else ('ok-gprm' if same else
                                           ('boot-shortcut' if first_menu else 'DIFF'))
