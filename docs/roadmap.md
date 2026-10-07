@@ -1426,11 +1426,11 @@ Levers, cheapest/lowest-risk first:
   decides whether a navigation sequencer for the reader, VM and `nav_pci` (6,234 ALMs) and
   a shared transport arithmetic unit (~3,300 ALMs) are worth a branch.
   **🔧 The VM pilot is built (2026-10-07, branch `feature/nav-ucode`, `docs/nav_engine.md`):**
-  - `dvd_vm` is microcode: 1,635 → 919 ALM standalone, +4 M10K;
+  - `dvd_vm` is microcode: 1,350 → 853 ALM in the core, +4 M10K, timing passes;
   - it is transaction-equal to the old FSM;
   - `tools/nav_offline.py` diffs it against libdvdnav over the library without the rig.
 
-  ⏳ Full-core fit, HIL `nav_diff`, hand check. Next after it: the reader state split.
+  ⏳ HIL `nav_diff`, hand check. Next after it: the reader state split.
 
 Validate empirically (does it route? does the fringe stay gone on HW?), not by chasing the
 fit/STA reports to zero — consistent with the project's "validate on hardware" discipline.

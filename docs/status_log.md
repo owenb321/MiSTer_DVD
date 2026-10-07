@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **THE DVD VM AS MICROCODE (2026-10-07, branch `feature/nav-ucode`; sim-proven,
-  standalone fit; ⏳ full-core fit, HIL `nav_diff`, hand check).** Full note:
+  full-core fit passes timing; ⏳ HIL `nav_diff`, hand check).** Full note:
   `docs/nav_engine.md`.
   - **Why:** `docs/logic_reclaim.md` §10b's pilot. The VM is microcoded alone, so the
     cost and the workflow are measured before the reader is touched.
@@ -36,8 +36,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       pulses and fields, SPRM8/SPRM3 shadows, `pre_done`, the LFSR.
     - The tools are `tools/nav_isa.py` (ISA, assembler, emulator, `--mutant`) and
       `tools/nav_shell.py` (the wrapper in Python).
-  - **Cost (standalone, SEED 1, `bench/dvd/vm_fit_top.sv`, the dbg ports open as in
-    `emu`):** 1,635 → **919 ALM (−716)**, 6 → 10 M10K, ≈ 50 MHz both.
+  - **Cost:**
+    - **In the core** (SEED 5, vs `main`'s v0.9.0 fit): `dvd_vm` 1,350 → **853 ALM
+      (−498)**, 2,351 → 1,187 ALUTs, 6 → 10 M10K.
+    - **Timing:** `clk_dec` 90.63 / 87.87 MHz; `clock_check` PASS.
+    - **Standalone** (SEED 1, `bench/dvd/vm_fit_top.sv`): 1,635 → 919 ALM.
   - **Equivalence:**
     - The old FSM is kept unchanged as `bench/dvd/ref/dvd_vm_hw.sv`.
     - `tools/vm_ab.py` / `bench/dvd/run_vm_ab.sh` runs it, the Python VM and the new RTL
