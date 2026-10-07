@@ -45,7 +45,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **Equivalence:**
     - The old FSM is kept unchanged as `bench/dvd/ref/dvd_vm_hw.sv`.
     - `tools/vm_ab.py` / `bench/dvd/run_vm_ab.sh` runs it, the Python VM and the new RTL
-      on generated scripts, applied at rest. They agree on 1,000 × 120 steps: 271k
+      on generated scripts, applied at rest. They agree on 1,000 × 120 steps: 217k (271k with the first generator)
       pulses with their fields, SPRM changes, and the whole state at every rest. The RTL
       also matches the emulator's trace and cycle count.
     - All 16 `;MUT` arms diverge, and four wrapper mutations are caught. One of them,

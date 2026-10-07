@@ -45,6 +45,7 @@ tools/mister.py restore         # stock Main, harness files gone, saved settings
 | `audio_check.py <iso>` | is every audio track the disc offers actually audible? |
 | `acmod_scan.py [iso...]` | what acmod does each AC-3 track really carry, vs what the RTL accepts? (no hardware) |
 | `nav_diff.py <disc> --script "1 2"` | diff the core's navigation against libdvdnav |
+| `nav_offline.py <disc> --auto 3` / `--library` | the same diff with **no rig**: the core's VM microcode under a model of the reader (`docs/nav_engine.md` §5) -- try it before queueing for the board; a difference is a lead to reproduce with `nav_diff` |
 | `lipsync_measure.py` + `sync_disc.py` | A/V **offset** measurement (see the warning below) |
 
 Gates, all hardware-free: `bench/dvd/run_telem.sh`.

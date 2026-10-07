@@ -415,7 +415,8 @@ Those need a hand check.
 **Status:** analysis only. No branch, no fit, and every saving below is an estimate
 unless it says "measured". Source: the 2026-10-05 fit of `main` at PR #159
 (`output_files/DVD.fit.rpt` §20): 38,699 / 41,910 ALMs needed (92 %), 519 / 553 M10K
-(**34 free**), 87 / 112 DSP.
+(**34 free**), 87 / 112 DSP. ⚠ The VM pilot (10b, `feature/nav-ucode`) spends 4 of them:
+v0.9.0's 521 → 525, **28 free**.
 
 **The question.** Moving DTS, the AC-3 parse and MP2 onto one microcoded engine
 (`ac3_engine.md`, `mp2_engine.md`, `dts_decoder.md` D2) reclaimed more logic than DTS cost.

@@ -11,7 +11,9 @@
 # Python VM (microcode emulator + wrapper model) and the microcoded RTL emit the same
 # pulses with the same fields in the same order, the same SPRM changes, and the same
 # state at every rest; the RTL also matches the emulator's instruction trace and its
-# cycle count, step for step. 1,000 x 120 passed when this was written.
+# cycle count, step for step. 1,000 x 120 passed when this was written (217k pulses).
+# The generator biases a few commands (SetGPRMMD counters, JumpSS/CallSS VTSM) so
+# every ;MUT arm bites even at 60 x 80; the corpus is deterministic per seed.
 #
 # RED: (a) every `;MUT` arm in dvd/nav/vm.uasm, run in the Python VM, diverges from
 # the old FSM somewhere in the corpus (BLIND = FAIL); (b) mutations of the wrapper's
@@ -44,17 +46,16 @@ if python3 tools/vm_ab.py --red --seeds "$SEEDS" --steps "$STEPS" > .sim/vm_ab/r
 else failed "vm_ab --red"; grep "RED \|^FAIL" .sim/vm_ab/red.txt | head -20; fi
 
 echo "== RED (b): the wrapper's RTL"
-SRC=dvd/dvd_vm.sv
-BAK=.sim/vm_ab/dvd_vm.sv.green
-cp "$SRC" "$BAK"
-trap 'cp "$BAK" "$SRC"' EXIT
+# Each mutant is a COPY in $TMP, compiled through vm_ab.py --vm-src: the tree's
+# dvd/dvd_vm.sv is never edited, so a killed run cannot leave a mutant behind.
+TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 wrap() {   # $1 label, $2 sed expression on dvd/dvd_vm.sv
-    sed "$2" "$BAK" > "$SRC"
-    if cmp -s "$BAK" "$SRC"; then failed "$1: the mutation did not apply (anchor moved)"; return; fi
-    if python3 tools/vm_ab.py --new --seeds 40 --steps 80 > ".sim/vm_ab/$1.txt" 2>&1; then
+    local src="$TMP/dvd_vm_$1.sv"
+    sed "$2" dvd/dvd_vm.sv > "$src"
+    if cmp -s dvd/dvd_vm.sv "$src"; then failed "$1: the mutation did not apply (anchor moved)"; return; fi
+    if python3 tools/vm_ab.py --new --vm-src "$src" --seeds 40 --steps 80 > ".sim/vm_ab/$1.txt" 2>&1; then
         failed "$1: the A/B PASSED the mutant"
     else pass "$1 -> $(grep -m1 -o '\[new vs old\]: step [0-9]* [A-Z][^:]*' ".sim/vm_ab/$1.txt" || echo diverged)"; fi
-    cp "$BAK" "$SRC"
 }
 # the event priority: Return ahead of Menu
 wrap W1-priority "s/for (ei = UEV_N - 1; ei >= 0; ei = ei - 1)/for (ei = 0; ei < UEV_N; ei = ei + 1)/"

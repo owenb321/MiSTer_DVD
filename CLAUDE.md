@@ -176,7 +176,8 @@ feature should be designed:
   apply to every bench in this tree.
 
 Also: current fabric headroom (~8 % ALM ≈ 3,200 / 6 % M10K / 22 % DSP as of 2026-10-05,
-after the engine merges — the ALM figure is the binding one), what a DDR3 line pump
+after the engine merges — the ALM figure is the binding one; the microcoded VM,
+`feature/nav-ucode`, spends 4 more M10K: 525 / 553, 28 free, and gives ~500 ALM back), what a DDR3 line pump
 costs (~190 ALM + 6 M10K), and the retime trick that took a build from two failed seed
 sweeps to a first-fit pass.
 

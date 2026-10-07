@@ -78,6 +78,17 @@ def script_to_ops(lines):
 def rand_cmd(rng):
     """A random command, biased so the fields that select registers name real ones
     and the link fields land on real operations often enough to matter."""
+    if rng.random() < 0.04:
+        # SetGPRMMD: g[r] = imm, COUNTER mode -- random bits almost never set the mode
+        # bit and the value together, and without a counter the tick walk (and its
+        # RED arm `tickwrite`) is never exercised
+        return bytes([0x53, 0, rng.randrange(256), rng.randrange(256), 0,
+                      0x80 | rng.randrange(16), 0, 0]).hex()
+    if rng.random() < 0.04:
+        # JumpSS / CallSS to a VTSM menu with a non-zero byte in ins[31:24] -- the two
+        # decode that byte differently (the Matrix white-rabbit bug, ;MUT callss)
+        return bytes([0x30, rng.choice([0x06, 0x08]), 0, rng.randrange(1, 8),
+                      rng.randrange(1, 8), 0x80 | rng.choice([3, 4, 5, 6, 7]), 0, 0]).hex()
     t = rng.choices(range(8), weights=[10, 22, 12, 16, 12, 12, 12, 4])[0]
     b = [rng.getrandbits(8) for _ in range(8)]
     b[0] = (t << 5) | (b[0] & 0x1F)
@@ -176,10 +187,11 @@ def gen_script(seed, steps):
 
 
 # ------------------------------------------------------------------ running
-def build(new):
+def build(new, vm_src=None):
     os.makedirs(SIM, exist_ok=True)
-    exe = os.path.join(SIM, 'new_sim' if new else 'old_sim')
-    src = NEW_SRC if new else OLD_SRC
+    tag = os.path.basename(vm_src).replace('.', '_') if vm_src else 'new'
+    exe = os.path.join(SIM, (tag + '_sim') if new else 'old_sim')
+    src = ([vm_src] + NEW_SRC[1:] if vm_src else NEW_SRC) if new else OLD_SRC
     cmd = ['iverilog', '-g2012', '-I', 'dvd', '-o', exe] + (['-DVM_NEW'] if new else []) + src
     p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
     if p.returncode:
@@ -294,6 +306,8 @@ def main():
     ap.add_argument('--script', help='run one script file instead of the generator')
     ap.add_argument('--new', action='store_true', help='also run the microcoded RTL')
     ap.add_argument('--red', action='store_true', help='every ;MUT arm must diverge')
+    ap.add_argument('--vm-src', help='with --new: this dvd_vm.sv instead of dvd/dvd_vm.sv '
+                    '(a mutant; run_vm_ab.sh never edits the tree)')
     a = ap.parse_args()
 
     if a.script:
@@ -301,7 +315,7 @@ def main():
     else:
         corpus = [(f'seed{s}', gen_script(s, a.steps)) for s in range(a.first, a.first + a.seeds)]
     old = build(False)
-    new = build(True) if a.new else None
+    new = build(True, a.vm_src) if a.new else None
 
     jobs = [(name, lines, old, new, bool(a.script), a.red) for name, lines in corpus]
     with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as ex:

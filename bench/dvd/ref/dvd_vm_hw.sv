@@ -1,3 +1,11 @@
+// bench/dvd/ref/dvd_vm_hw.sv -- THE A/B ORACLE. This is dvd/dvd_vm.sv as it was at
+// edcfb01 (the hardwired FSM, before the microcode), with ONLY the module renamed to
+// dvd_vm_hw. tools/vm_ab.py / bench/dvd/run_vm_ab.sh score the microcoded VM against it
+// transaction for transaction (docs/nav_engine.md). Do NOT fix or change it: an edit
+// here changes what "equal to the old FSM" means. Its two simulation-only artefacts
+// (three event latches missing from reset, RAMs never initialised) are deposited by
+// bench/dvd/vm_ab_tb.sv, not repaired here.
+//
 // dvd_vm.sv - DVD Virtual Machine interpreter (Phase 4 disc menus).
 //
 // Executes the disc's navigation commands (8-byte VM instructions from the
