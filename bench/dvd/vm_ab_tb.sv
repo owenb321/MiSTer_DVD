@@ -171,6 +171,10 @@ module vm_ab_tb;
         if (`S_SPRM2 !== l2) begin l2 = `S_SPRM2; $fwrite(fo, "L %0d sprm2 %04h\n", step, l2); end
         if (`S_SPRM3 !== l3) begin l3 = `S_SPRM3; $fwrite(fo, "L %0d sprm3 %04h\n", step, l3); end
         if (`S_SPRM8 !== l8) begin l8 = `S_SPRM8; $fwrite(fo, "L %0d sprm8 %04h\n", step, l8); end
+        // PREDONE first: when it shares a cycle with a dispatch's first pulse (the old
+        // FSM raises both in its V_IDLE cycle), the PRE it reports resolved before that
+        // dispatch -- and the sequencer raises it while parked, before the handler runs
+        if (pre_done)   $fwrite(fo, "P %0d PREDONE\n", step);
         if (btn_force)  $fwrite(fo, "P %0d BTNF %0d\n", step, btn_force_val);
         if (link_fail)  $fwrite(fo, "P %0d LINKFAIL %0d\n", step, link_fail_pgcn);
         if (jump_pulse) $fwrite(fo, "P %0d JUMP %0d %0d %0d %0d %0d %0d %0d %0d %0d\n", step,
@@ -179,7 +183,6 @@ module vm_ab_tb;
         if (seek_pulse) $fwrite(fo, "P %0d SEEK %0d %0d\n", step, seek_cell, vm_from_wait);
         if (vm_replay)  $fwrite(fo, "P %0d REPLAY\n", step);
         if (vm_adv)     $fwrite(fo, "P %0d ADV\n", step);
-        if (pre_done)   $fwrite(fo, "P %0d PREDONE\n", step);
     end
 
 `ifdef VM_NEW

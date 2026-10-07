@@ -123,9 +123,13 @@ if [ $RED -eq 1 ]; then
     mutate_vm() {
         local name=$1 want=$2 expr=$3
         local src="$OUT/$name.sv"
-        sed "$expr" "$VM" > "$src"
-        if cmp -s "$VM" "$src"; then
-            echo "  FAIL $name: the sed matched nothing (mutation is stale)"; fail=1; return
+        if [ -n "$expr" ]; then
+            sed "$expr" "$VM" > "$src"
+            if cmp -s "$VM" "$src"; then
+                echo "  FAIL $name: the sed matched nothing (mutation is stale)"; fail=1; return
+            fi
+        else
+            cp "$VM" "$src"            # a microcode arm: the mutation is in $VM's ROM
         fi
         if ! iverilog -g2012 -o "$OUT/$name" "$src" bench/dvd/dvd_vm_tb.sv 2>"$OUT/$name.build"; then
             echo "  FAIL $name (build)"; sed 's/^/      /' "$OUT/$name.build" | head; fail=1; return
@@ -141,12 +145,23 @@ if [ $RED -eq 1 ]; then
             echo "  FAIL $name: failed [$got], expected [$want]"; fail=1
         fi
     }
-    mutate_vm N1_natural    "V1 V2 V7" "s/usr_edge <= 1'b1;/usr_edge <= 1'b1; nat_src <= 1'b1;/"
-    mutate_vm N2_no_mask    "V3 V4"    "s/assign vm_adv = vm_adv_q \&\& !usr_edge;/assign vm_adv = vm_adv_q;/"
-    mutate_vm N3_no_next    "V2 V7"    "s/if (usr_edge \&\& next_pgcn != 16'd0) begin/if (1'b0) begin/"
-    mutate_vm N4_first_pg   "V5"       "s/jump_pgn <= 8'hFF;/jump_pgn <= 8'd0;/"
-    mutate_vm N5_in_menu    "V6"       "s/if (!menu_active) begin/if (1'b1) begin/"
-    mutate_vm N6_mask_stuck "V8"       "s|usr_edge <= 1'b0;   // a chain has ended|// usr_edge never cleared|"
+    # The VM is microcode now (docs/nav_engine.md): the chain itself is `;MUT` arms in
+    # dvd/nav/vm.uasm (tools/nav_isa.py --mutant); the vm_adv mask stays wrapper RTL.
+    mutate_uc() {   # $1 name, $2 expected arms, $3 the ;MUT arm
+        local sv
+        if ! sv=$(python3 tools/nav_isa.py --mutant "$3" "$OUT" 2>"$OUT/$1.asm"); then
+            echo "  FAIL $1: no ;MUT $3 in dvd/nav/vm.uasm (mutation is stale)"; fail=1; return
+        fi
+        VM_SAVED=$VM; VM=$sv
+        mutate_vm "$1" "$2" ""
+        VM=$VM_SAVED
+    }
+    mutate_uc N1_natural    "V1 V2 V7" chnat
+    mutate_vm N2_no_mask    "V3 V4"    "s/vm_adv_q <= !flags\[UFL_USR\];/vm_adv_q <= 1'b1;/"
+    mutate_uc N3_no_next    "V2 V7"    chnext
+    mutate_uc N4_first_pg   "V5"       chfirst
+    mutate_uc N5_in_menu    "V6"       chmenu
+    mutate_uc N6_mask_stuck "V8"       usrstuck
 fi
 
 if [ $fail -eq 0 ]; then echo "RUN_CHAP_EDGE: PASS"; else echo "RUN_CHAP_EDGE: FAIL"; exit 1; fi

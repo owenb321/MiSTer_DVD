@@ -39,7 +39,7 @@
 ; the `if (start)` block; the GPRM clear walk).
 ; =============================================================================
 RESET:      li   t1, 0
-RCLR:       st   r0, M_GPRM[t1]
+RCLR:       st   r0, M_GPRM[t1]  ;MUT mountclear: nop
             addi t1, t1, 1
             bltui t1, 16, RCLR
             st   r0, M_GMODE
@@ -70,7 +70,7 @@ RCLR:       st   r0, M_GPRM[t1]
 ; wrapper's priority encoder. The tick is index 0 so the walk runs before any
 ; event, as the old `tick_pending || clr_busy` hold did.
 ; =============================================================================
-IDLE:       andi blkf, blkf, NOT_USR
+IDLE:       andi blkf, blkf, NOT_USR  ;MUT usrstuck: nop
             out  O_FLAGS, blkf
             wev  ITAB, 0
 ITAB:       jmp  E_TICK
@@ -148,7 +148,7 @@ ZC0:        li   t1, 0
 ; A SPRM reads the RAM image OR the wrapper's live window; each is 0 where the
 ; other holds the register (RAM: 4..7, 9, 10, 13; window: everything live).
 EVREG:      bbs  t1, 7, EVR_S
-            andi t1, t1, 15
+            andi t1, t1, 15  ;MUT gidx: andi t1, t1, 7
             ld   t1, M_GPRM[t1]
             ret
 EVR_S:      andi t1, t1, 31
@@ -260,7 +260,7 @@ ET1:        shr  t1, t3, t4
             bbc  t1, 0, ET2
             ld   t1, M_GPRM[t4]
             addi t1, t1, 1
-            st   t1, M_GPRM[t4]
+            st   t1, M_GPRM[t4]  ;MUT tickwrite: nop
 ET2:        addi t4, t4, 1
             bltui t4, 16, ET1
             outi O_PULSE, PB_TICKDONE
@@ -428,10 +428,10 @@ E_PGCEND:   outi O_EVCLR, EV_CHEDGE
 ; CHEDGE: a chapter skip hit the title's edge (a USER chain, vm_adv masked)
 E_CHEDGE:   li   fuse, 0
             st   r0, M_CHAIN
-            andi blkf, blkf, NOT_NAT
+            andi blkf, blkf, NOT_NAT  ;MUT chnat: ori blkf, blkf, F_NAT
             out  O_FLAGS, blkf
             in   t1, P_MENU_ACTIVE
-            bnei t1, 0, IDLE
+            bnei t1, 0, IDLE                    ;MUT chmenu: nop
             ori  blkf, blkf, F_USR
             out  O_FLAGS, blkf
             in   t1, P_CHEDGE_DIR
@@ -450,7 +450,7 @@ ECE_PREV:   in   t3, P_PREV_PGCN                ; Prev: prev_pgcn at its LAST pr
             li   t1, DOM_TT
             in   t2, P_CUR_VTS
             call JSET
-            outi O_J_PGN, 0xFF
+            outi O_J_PGN, 0xFF  ;MUT chfirst: outi O_J_PGN, 0
             jmp  JGO0
 
 ; MENU key
@@ -551,9 +551,9 @@ WL5:        call ZCELL
             bnei t2, 0, ENTER_POST
             jmp  DEADEND
 ; ★ Both of these drop a button press latched during the wait (dvd_vm_tb S25).
-W_ERROR:    outi O_EVCLR, EV_BTN                ; the idle dispatch runs the chain
+W_ERROR:    outi O_EVCLR, EV_BTN                ; the idle dispatch runs the chain  ;MUT werrbtn: nop
             jmp  IDLE
-W_TIMEOUT:  outi O_EVCLR, EV_BTN                ; the reader never answered: give up
+W_TIMEOUT:  outi O_EVCLR, EV_BTN                ; the reader never answered: give up  ;MUT wtobtn: nop
             st   r0, M_SKIP_PRE
             jmp  IDLE
 
@@ -589,7 +589,7 @@ BE_PRE:     call ZCELL                          ; PRE fell through: play
             in   t2, P_NR_POST
             bnei t2, 0, ENTER_POST
             jmp  DEADEND
-BE_POST:    bbc  blkf, FBIT_USR, ADV_IDLE        ; title-edge Next: follow next_pgcn
+BE_POST:    bbc  blkf, FBIT_USR, ADV_IDLE        ; title-edge Next: follow next_pgcn  ;MUT chnext: jmp ADV_IDLE
             in   t3, P_NEXT_PGCN
             beqi t3, 0, ADV_IDLE
             li   t1, DOM_TT
@@ -802,8 +802,8 @@ S_OR:       or   t1, t2, t1
 S_XOR:      xor  t1, t2, t1
 S_MOV:      st   t1, M_GPRM[t4]
             jmp  TLINK
-S_SWAP:     st   t2, M_GPRM[t5]                 ; reg2 <= old reg, THEN reg <= data
-            st   t1, M_GPRM[t4]                 ;MUT swaporder: st t2, M_GPRM[t4]
+S_SWAP:     st   t2, M_GPRM[t5]                 ; reg2 <= old reg, THEN reg <= data ;MUT swaporder: st t1, M_GPRM[t5]
+            st   t1, M_GPRM[t4]                 ;MUT swap1: nop
             jmp  TLINK
 S_MUL:      li   t3, 0                          ; saturating shift-add, MSB first:
             li   t6, 16                         ; min(product, 0xFFFF)

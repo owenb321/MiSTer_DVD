@@ -214,11 +214,6 @@ def streams(log):
         f = ln.split()
         kind, step = f[0], int(f[1])
         key = f[2] if kind == 'L' else ''
-        if kind == 'P' and f[2] == 'PREDONE':
-            # pre_done is a level the reader latches (pre_seen): the old FSM raises it
-            # in the same cycle as a dispatch's first pulse, so only its count per
-            # step is a property, not its place among the other pulses
-            kind = 'Q'
         out.setdefault((step, kind, key), []).append(ln)
     # SPRM8 alone has a hardware shadow that rewrites it every cycle while a menu is
     # armed and unfrozen, so between two VM writes it shows the shadow value for a
@@ -235,7 +230,7 @@ def streams(log):
     return out
 
 
-def compare(a, b, kinds='PLSQ'):
+def compare(a, b, kinds='PLS'):
     """-> None if equal, else a description of the first difference. `kinds`: the
     streams compared (T, the sequencer trace, and C, its cycles, exist only in the
     Python model's log and the microcoded RTL's)."""

@@ -49,6 +49,8 @@ value) per event, in program order --
 Usage:
     tools/nav_isa.py --asm [--check]      # assemble dvd/nav/vm.uasm -> dvd/nav/*.mem, .svh
     tools/nav_isa.py --list               # the program with addresses
+    tools/nav_isa.py --mutate ARM --mem-out x.mem   # a RED arm's ROM image
+    tools/nav_isa.py --mutant ARM DIR     # ... as a runnable dvd_vm.sv (prints its path)
 """
 import argparse
 import os
@@ -563,7 +565,31 @@ def main():
     ap.add_argument('--asm', action='store_true', help='assemble and write the ROM files')
     ap.add_argument('--check', action='store_true', help='with --asm: compare, do not write')
     ap.add_argument('--list', action='store_true', help='print the assembled program')
+    ap.add_argument('--mutate', help='assemble with this ;MUT arm (with --mem-out)')
+    ap.add_argument('--mutant', nargs=2, metavar=('ARM', 'DIR'),
+                    help='write DIR/dvd_vm_ARM.sv: the RTL running the ;MUT arm ARM')
+    ap.add_argument('--mem-out', help='write only the ROM image here (a RED arm\'s ROM: a '
+                    'runner points a copy of dvd/dvd_vm.sv at it)')
     a = ap.parse_args()
+    if a.mutant:
+        # a RED arm as a runnable RTL: DIR/<arm>.mem and DIR/dvd_vm_<arm>.sv, a copy of
+        # dvd/dvd_vm.sv whose ROM loads that image. Prints the .sv path.
+        os.makedirs(a.mutant[1], exist_ok=True)
+        mem = os.path.abspath(os.path.join(a.mutant[1], a.mutant[0] + '.mem'))
+        words, _, _ = load_program(a.mutant[0])
+        open(mem, 'w').write('\n'.join([f'{w:010x}' for w in words] +
+                                       ['0000000000'] * (UC_DEPTH - len(words))) + '\n')
+        sv = os.path.join(a.mutant[1], f'dvd_vm_{a.mutant[0]}.sv')
+        text = open(VMSV).read()
+        assert text.count('"dvd/nav/nav_ucode.mem"') == 1
+        open(sv, 'w').write(text.replace('"dvd/nav/nav_ucode.mem"', f'"{mem}"'))
+        print(sv)
+        return 0
+    if a.mem_out:
+        words, _, _ = load_program(a.mutate)
+        open(a.mem_out, 'w').write('\n'.join([f'{w:010x}' for w in words] +
+                                              ['0000000000'] * (UC_DEPTH - len(words))) + '\n')
+        return 0
     if a.list:
         listing()
         return 0

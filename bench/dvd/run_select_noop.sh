@@ -212,6 +212,76 @@ mut R8 "$E" "$TMP/R8.sv" \
     && red_emu "R8 Still off allowed with a button armed" "$TMP/R8.sv" "lacks \`!hl_btns_armed\`"
 
 echo "== RED (the VM: both V_WAIT doors) =="
+# Each wait exit must drop a button press latched during the wait. The VM is microcode
+# now (docs/nav_engine.md): each arm is a `;MUT` line in dvd/nav/vm.uasm, built into a
+# runnable dvd_vm.sv by tools/nav_isa.py --mutant.
+#
+# R5 -- un-clear the ev_error exit (W_ERROR). Reachable whenever the fallback chain
+# lands on its one NO-JUMP arm (FB_GAVEUP); every other arm jumps, and that jump's
+# ev_loaded would clear ev_btn anyway. S25b exists to reach exactly that.
+if V5=$(python3 tools/nav_isa.py --mutant werrbtn "$TMP" 2>"$TMP/R5.asm"); then
+    red_vm "R5 ev_error exit leaks a stale press" "$V5" "S25b"
+else failed "R5: no ;MUT werrbtn in dvd/nav/vm.uasm -- this arm would prove NOTHING"; fi
+# R6 -- un-clear the give-up exit (W_TIMEOUT).
+if V6=$(python3 tools/nav_isa.py --mutant wtobtn "$TMP" 2>"$TMP/R6.asm"); then
+    red_vm "R6 give-up exit leaks a stale press" "$V6" "S25a"
+else failed "R6: no ;MUT wtobtn in dvd/nav/vm.uasm -- this arm would prove NOTHING"; fi
+
+[ $rc -eq 0 ] && echo "run_select_noop: ALL GREEN" || echo "run_select_noop: FAIL"
+    exit $rc
+fi
+
+echo "== RED (the seam) =="
+E=dvd/emu.sv
+
+# R0 -- the REAL pre-fix file, straight out of git. Not a hand-made mutation: the
+# thing the field reported, as it actually shipped.
+if git show 99790bd:dvd/emu.sv > "$TMP/R0.sv" 2>/dev/null; then
+    red_emu "R0 pre-fix emu.sv (main @ 99790bd)" "$TMP/R0.sv" "second consumer"
+else
+    echo "  skip R0 (commit 99790bd not in this clone)"
+fi
+
+# R1 -- a NEW second consumer of sel_edge. This is the shape the next
+# "Select should also..." patch will take, and the reason the check is written as
+# an invariant over every reader rather than as "key_resume is absent".
+mut R1 "$E" "$TMP/R1.sv" \
+    "s|^        if (menus_on \&\& menu_edge)\$|        if (menus_on \&\& menu_active \&\& sel_edge \&\& !hl_btns_armed)\n            key_title_p <= 1'b1;\n        if (menus_on \&\& menu_edge)|" \
+    && red_emu "R1 a new second consumer of sel_edge" "$TMP/R1.sv" "second consumer"
+
+# R2 -- ANTI-VACUITY: Select deleted outright. "Nothing drives it" must not pass.
+mut R2 "$E" "$TMP/R2.sv" \
+    "s|            nav_act_p <= sel_edge;|            nav_act_p <= 1'b0;|" \
+    "s|        else if (in_title_hli \&\& sel_edge)|        else if (in_title_hli)|" \
+    && red_emu "R2 activation removed (anti-vacuity)" "$TMP/R2.sv" "nothing reads it"
+
+# R3 -- ANTI-VACUITY: the Menu key unwired. B5 now solely owns the resume toggle,
+# so "no key_resume" would otherwise pass for entirely the wrong reason.
+mut R3 "$E" "$TMP/R3.sv" \
+    "s|\.key_menu      (key_menu_p),|.key_menu      (1'b0),|" \
+    && red_emu "R3 Menu key unwired (anti-vacuity)" "$TMP/R3.sv" "key_menu"
+
+# R4 -- strip_comments() is load-bearing, and this proves it rather than asserting
+# it: emu.sv's replacement comment quotes the DELETED code verbatim, on purpose, so
+# a grep-based checker reports the defect present on a CORRECT file.
+if grep -q "key_resume_p <= 1'b1;" "$E"; then
+    pass "R4 a grep checker would FAIL the fixed file (the comment quotes the deleted code)"
+else
+    failed "R4: the comment no longer quotes the deleted code -- the trap is undocumented"
+fi
+
+# R7/R8 -- the ONE named exception, user Still off (2026-10-05). Select may end a
+# PARKED still with no button armed or pending; without that gate it is an
+# ordinary second consumer again, and without the no-buttons terms it would mean
+# something other than Activate where a highlight can exist.
+mut R7 "$E" "$TMP/R7.sv" \
+    "s|^wire still_off_go = still_off_ok \&\& (pause_edge \|\| sel_edge);|wire still_off_go = (pause_edge \|\| sel_edge);|" \
+    && red_emu "R7 Still off decode loses its gate" "$TMP/R7.sv" "second consumer"
+mut R8 "$E" "$TMP/R8.sv" \
+    "s|^wire still_off_ok = menus_on \&\& still_active \&\& !hl_btns_armed \&\& |wire still_off_ok = menus_on \&\& still_active \&\& |" \
+    && red_emu "R8 Still off allowed with a button armed" "$TMP/R8.sv" "lacks \`!hl_btns_armed\`"
+
+echo "== RED (the VM: both V_WAIT doors) =="
 V=dvd/dvd_vm.sv
 
 # R5 -- un-clear the ev_error exit. Reachable whenever the fallback chain lands on
