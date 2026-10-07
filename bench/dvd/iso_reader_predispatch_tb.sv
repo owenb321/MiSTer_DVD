@@ -22,6 +22,7 @@
 // Run: iverilog -g2012 -o /tmp/rpd dvd/dvd_iso_reader.sv dvd/dvd_vm.sv \
 //        bench/dvd/iso_reader_predispatch_tb.sv && vvp /tmp/rpd
 
+`include "bench/dvd/dvd_vm_peek.svh"   // the VM state in its data RAM
 `timescale 1ns/1ps
 
 module iso_reader_predispatch_tb;
@@ -448,7 +449,7 @@ module iso_reader_predispatch_tb;
         // ---------------- BOOT: title streams --------------------------
         wait_bytes(2048);
         if (cap[0] !== 8'hB0) fail("BOOT: first title byte != B0");
-        if (vm.gprm[14] !== 16'h0035) fail("BOOT: FP pre g14 != 0x35");
+        if (`VM_GPRM(vm, 14) !== 16'h0035) fail("BOOT: FP pre g14 != 0x35");
         t1_end = cap_n;
         $display("BOOT: FP -> JumpTT 1 -> title 0xB0  (cap=%0d)", t1_end);
 
@@ -467,10 +468,10 @@ module iso_reader_predispatch_tb;
             $display("  after title end: 0xC1(degenerate)=%0d  0xC2(PGC3)=%0d bytes",
                      seen_c1, seen_c2);
             $display("  reader state=%0d vm_state=%0d menu_active=%b cur_vts=%0d cur_pgcn=%0d gprm5=%04x",
-                     dut.state, vm.state, menu_active, cur_vts, cur_pgcn_rd, vm.gprm[5]);
+                     dut.state, vm.state, menu_active, cur_vts, cur_pgcn_rd, `VM_GPRM(vm, 5));
             if (seen_c2 == 0)
                 fail("FREEZE REPRO: PGC2 PRE LinkPGCN 3 never followed (PGC3/0xC2 not reached)");
-            if (vm.gprm[5] !== 16'h00AB)
+            if (`VM_GPRM(vm, 5) !== 16'h00AB)
                 fail("PGC2 PRE did not run (g5 != 0xAB)");
         end
 

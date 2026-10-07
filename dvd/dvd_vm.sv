@@ -794,6 +794,19 @@ assign dbg_g14_9   = 16'd0;
 assign dbg_rsm     = {dbg_rsm_vts, dbg_rsm_pgcn};
 assign dbg_deadend = {dbg_de_vts, dbg_de_pgcn};
 
+// The old FSM's names for what benches poll (read only; nothing in the core reads
+// them, so synthesis prunes them). clr_busy: the mount's RAM clear now runs in the
+// microcode's RESET -- high until the program first parks at the idle wev.
+wire ev_boot   = ev[UEV_BOOT],    ev_loaded = ev[UEV_LOADED], ev_error  = ev[UEV_ERROR];
+wire ev_btn    = ev[UEV_BTN],     ev_cellcmd = ev[UEV_CELLCMD], ev_pgcend = ev[UEV_PGCEND];
+wire ev_chedge = ev[UEV_CHEDGE],  ev_menu   = ev[UEV_MENU],   ev_title  = ev[UEV_TITLE];
+wire ev_cmenu  = ev[UEV_CMENU],   ev_return = ev[UEV_RETURN];
+reg  clr_busy;
+always @(posedge clk or negedge rst_n)
+    if (!rst_n)                    clr_busy <= 1'b1;
+    else if (start)                clr_busy <= 1'b1;
+    else if (wev_req && !wev_mode) clr_busy <= 1'b0;
+
 endmodule
 
 

@@ -44,6 +44,7 @@
 // Run: iverilog -g2012 -o /tmp/zc dvd/dvd_iso_reader.sv dvd/dvd_vm.sv \
 //        bench/dvd/iso_reader_zerocell_tb.sv && vvp /tmp/zc
 
+`include "bench/dvd/dvd_vm_peek.svh"   // the VM state in its data RAM
 `timescale 1ns/1ps
 
 module iso_reader_zerocell_tb;
@@ -202,7 +203,7 @@ module iso_reader_zerocell_tb;
             $display("[%0t] VM JUMP dom=%0d vts=%0d pgcn=%0d entry=%0d ttn=%0d ptt=%0d cell=%0d (g6=%0d g10=%0d)",
                      $time, vm_jump_domain, vm_jump_vts, vm_jump_pgcn,
                      vm_jump_entry, vm_jump_ttn, vm_jump_ptt, vm_jump_cell,
-                     vm.gprm[6], vm.gprm[10]);
+                     `VM_GPRM(vm, 6), `VM_GPRM(vm, 10));
         if (vm_seek_pulse)
             $display("[%0t] VM SEEK cell=%0d", $time, vm_seek_cell);
         if (vm_replay_w)
@@ -563,7 +564,7 @@ module iso_reader_zerocell_tb;
         while (n_d0 == 0 && t < 4000000) begin @(posedge clk); t = t+1; end
         if (n_d0 == 0) fail("stage 4: menu (0xD0) never streamed after the trampoline");
         else $display("stage 4: menu streams after round-2 pre  PASS");
-        if (vm.gprm[6] !== 16'd1) fail("stage 4: g6 != 1 after the trampoline POST");
+        if (`VM_GPRM(vm, 6) !== 16'd1) fail("stage 4: g6 != 1 after the trampoline POST");
         if (!menu_active) fail("stage 4: menu_active low while the menu streams");
 
         // Stage 5: menu parks looping (POST LinkCN 3 replays cell 2 = 0xD2)

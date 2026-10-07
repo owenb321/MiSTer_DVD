@@ -45,6 +45,7 @@
 // Run: iverilog -g2012 -o /tmp/rvm dvd/dvd_iso_reader.sv dvd/dvd_vm.sv \
 //        bench/dvd/iso_reader_vm_tb.sv && vvp /tmp/rvm
 
+`include "bench/dvd/dvd_vm_peek.svh"   // the VM state in its data RAM
 `timescale 1ns/1ps
 
 module iso_reader_montage_tb;
@@ -486,9 +487,9 @@ module iso_reader_montage_tb;
         wait_bytes(4096);                 // both title sectors
         if (cap[0]    !== 8'hB0) fail("T1: first title byte != B0");
         if (cap[2048] !== 8'hB1) fail("T1: second title cell != B1");
-        if (vm.gprm[14] !== 16'h0035) fail("T1: FP pre g14 != 0x35");
-        if (vm.sprm4 !== 16'd1) fail("T1: SPRM4 (TTN) != 1");
-        if (vm.sprm5 !== 16'd1) fail("T1: SPRM5 (VTS_TTN) != 1");
+        if (`VM_GPRM(vm, 14) !== 16'h0035) fail("T1: FP pre g14 != 0x35");
+        if (`VM_SPRM(vm, 4) !== 16'd1) fail("T1: SPRM4 (TTN) != 1");
+        if (`VM_SPRM(vm, 5) !== 16'd1) fail("T1: SPRM5 (VTS_TTN) != 1");
         if (menu_active) fail("T1: menu_active during the title");
         t1_end = cap_n;
         $display("T1 boot: FP -> JumpTT 1 -> TT_SRPT -> title streaming  PASS (cap=%0d)", t1_end);
@@ -505,8 +506,8 @@ module iso_reader_montage_tb;
             for (k = t1_end; k < cap_n; k = k + 1)
                 if (cap[k] == 8'hD0) disable find_d0;
         end
-        if (vm.gprm[13] !== 16'h00AB) fail("T2: stub pre g13 != 0xAB");
-        if (vm.rsm_vts !== 8'd1) fail("T2: RSM not saved");
+        if (`VM_GPRM(vm, 13) !== 16'h00AB) fail("T2: stub pre g13 != 0xAB");
+        if (`VM_RSM_VTS(vm) !== 8'd1) fail("T2: RSM not saved");
         t2_end = cap_n;
         $display("T2 menu key: CallSS -> stub pre LinkPGCN 2 -> menu  PASS (cap=%0d)", t2_end);
 
