@@ -24,6 +24,7 @@ Usage:
     tools/vm_ab.py --red                 # every ;MUT arm in dvd/nav/vm.uasm must diverge
 """
 import argparse
+import concurrent.futures
 import os
 import random
 import re
@@ -38,7 +39,7 @@ import nav_shell as S      # noqa: E402
 
 SIM = os.path.join(REPO, '.sim', 'vm_ab')
 OLD_SRC = ['bench/dvd/ref/dvd_vm_hw.sv', 'bench/dvd/vm_ab_tb.sv']
-NEW_SRC = ['dvd/nav/nav_seq.sv', 'dvd/dvd_vm.sv', 'bench/dvd/vm_ab_tb.sv']
+NEW_SRC = ['dvd/dvd_vm.sv', 'bench/dvd/vm_ab_tb.sv']
 ARG_ID = {'cellcmd': 0, 'btn': 1, 'chedge': 2, 'stir': 3, 'agl': 4}
 INPUT_IDX = {n: i for i, n in enumerate(S.INPUTS)}
 
@@ -186,20 +187,20 @@ def build(new):
     return exe
 
 
-def run_rtl(exe, lines, tag):
+def run_rtl(exe, lines, tag, trace=False):
     ops = os.path.join(SIM, tag + '.ops')
     log = os.path.join(SIM, tag + '.log')
     open(ops, 'w').write(script_to_ops(lines))
-    p = subprocess.run(['vvp', '-n', exe, f'+in={ops}', f'+out={log}'], cwd=REPO,
+    p = subprocess.run(['vvp', '-n', exe, f'+in={ops}', f'+out={log}'] + (['+trace'] if trace else []), cwd=REPO,
                        capture_output=True, text=True, timeout=1800)
     if 'PASS: vm_ab_tb' not in p.stdout:
         return None, p.stdout[-2000:]
     return open(log).read().splitlines(), None
 
 
-def run_py(lines, mutate=None):
+def run_py(lines, mutate=None, trace=False):
     try:
-        return S.run_script(lines, mutate).log, None
+        return S.run_script(lines, mutate, trace).log, None
     except N.SeqError as e:
         return None, f'emulator: {e}'
 
@@ -234,9 +235,12 @@ def streams(log):
     return out
 
 
-def compare(a, b):
-    """-> None if equal, else a description of the first difference."""
-    sa, sb = streams(a), streams(b)
+def compare(a, b, kinds='PLSQ'):
+    """-> None if equal, else a description of the first difference. `kinds`: the
+    streams compared (T, the sequencer trace, and C, its cycles, exist only in the
+    Python model's log and the microcoded RTL's)."""
+    sa = {k: v for k, v in streams(a).items() if k[1] in kinds}
+    sb = {k: v for k, v in streams(b).items() if k[1] in kinds}
     for k in sorted(set(sa) | set(sb)):
         if sa.get(k) != sb.get(k):
             x, y = sa.get(k, []), sb.get(k, [])
@@ -247,6 +251,43 @@ def compare(a, b):
                 return f'step {k[0]} state: ' + ', '.join(d)
             return f'step {k[0]} {k[1]} {k[2]}:\n    {x}\n    {y}'
     return None
+
+
+def one(job):
+    """One script on every VM. -> (name, the old FSM's log, [failure messages])."""
+    name, lines, old, new, keep, red = job
+    msgs = []
+    lo, err = run_rtl(old, lines, name + '.old')
+    if lo is None:
+        return name, None, [f'FAIL {name}: the old FSM did not run:\n{err}']
+    if keep:
+        open(os.path.join(SIM, name + '.old.txt'), 'w').write('\n'.join(lo) + '\n')
+    if red:
+        return name, lo, msgs
+    lp, err = run_py(lines, trace=bool(new))
+    if lp is None:
+        msgs.append(f'FAIL {name} [py]: {err}')
+    else:
+        if keep:
+            open(os.path.join(SIM, name + '.py.txt'), 'w').write('\n'.join(lp) + '\n')
+        d = compare(lo, lp)
+        if d:
+            msgs.append(f'FAIL {name} [py vs old]: {d}')
+    if new:
+        ln, err = run_rtl(new, lines, name + '.new', trace=True)
+        if ln is None:
+            msgs.append(f'FAIL {name} [new]: did not run:\n{err}')
+        else:
+            if lp is not None:
+                d = compare(lp, ln, 'TC')
+                if d:
+                    msgs.append(f'FAIL {name} [new vs py: trace/cycles]: {d}')
+            if keep:
+                open(os.path.join(SIM, name + '.new.txt'), 'w').write('\n'.join(ln) + '\n')
+            d = compare(lo, ln)
+            if d:
+                msgs.append(f'FAIL {name} [new vs old]: {d}')
+    return name, lo, msgs
 
 
 def main():
@@ -267,40 +308,15 @@ def main():
     old = build(False)
     new = build(True) if a.new else None
 
-    olds = {}
+    jobs = [(name, lines, old, new, bool(a.script), a.red) for name, lines in corpus]
+    with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as ex:
+        results = list(ex.map(one, jobs))
+    olds = {name: lo for name, lo, _ in results if lo is not None}
     fails = 0
-    for name, lines in corpus:
-        lo, err = run_rtl(old, lines, name + '.old')
-        if lo is None:
-            print(f'FAIL {name}: the old FSM did not run:\n{err}')
+    for _, _, msgs in results:
+        for m in msgs:
+            print(m)
             fails += 1
-            continue
-        olds[name] = lo
-        if a.script:
-            open(os.path.join(SIM, name + '.old.txt'), 'w').write('\n'.join(lo) + '\n')
-        if a.red:
-            continue
-        lp, err = run_py(lines)
-        if lp is None:
-            print(f'FAIL {name} [py]: {err}')
-            fails += 1
-            continue
-        if a.script:
-            open(os.path.join(SIM, name + '.py.txt'), 'w').write('\n'.join(lp) + '\n')
-        d = compare(lo, lp)
-        if d:
-            print(f'FAIL {name} [py vs old]: {d}')
-            fails += 1
-        if new:
-            ln, err = run_rtl(new, lines, name + '.new')
-            if ln is None:
-                print(f'FAIL {name} [new]: did not run:\n{err}')
-                fails += 1
-                continue
-            d = compare(lo, ln)
-            if d:
-                print(f'FAIL {name} [new vs old]: {d}')
-                fails += 1
     npulse = sum(1 for lo in olds.values() for ln in lo if ln.startswith('P '))
     print(f'vm_ab: {len(corpus)} scripts, {npulse} pulses from the old FSM')
 

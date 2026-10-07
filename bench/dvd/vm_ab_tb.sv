@@ -182,9 +182,28 @@ module vm_ab_tb;
         if (pre_done)   $fwrite(fo, "P %0d PREDONE\n", step);
     end
 
+`ifdef VM_NEW
+    // the sequencer's own trace (tools/nav_isa.py Machine.trace) and its busy
+    // cycles per step (the emulator's CYC model): +trace adds them to the log
+    reg trace_on = 0;
+    integer busy = 0;
+    initial trace_on = $test$plusargs("trace");
+    always @(negedge clk) if (rst_n && trace_on && step > 0) begin
+        if (dut.u_seq.tr_valid)
+            $fwrite(fo, "T %0d %0d %0d %0d %0d\n", step, dut.u_seq.tr_kind, dut.u_seq.tr_pc,
+                    dut.u_seq.tr_addr, dut.u_seq.tr_val);
+    end
+    always @(posedge clk) if (rst_n)
+        if ((dut.u_seq.run && !(dut.u_seq.wev_req && !dut.u_seq.ev_valid)) || dut.u_seq.q == 2'd2)
+            busy = busy + 1;
+`endif
+
     task dump;
         integer i;
     begin
+`ifdef VM_NEW
+        if (trace_on) begin $fwrite(fo, "C %0d %0d\n", step, busy); busy = 0; end
+`endif
         $fwrite(fo, "S %0d", step);
         for (i = 0; i < 16; i = i + 1) $fwrite(fo, " g%0d=%0h", i, `S_GPRM(i));
         $fwrite(fo, " gmode=%0h sprm1=%0h sprm2=%0h sprm3=%0h", `S_GMODE, `S_SPRM1, `S_SPRM2, `S_SPRM3);
@@ -221,7 +240,7 @@ module vm_ab_tb;
             @(posedge clk); #1;
             q = `QUIET ? q + 1 : 0;
             n = n + 1;
-            if (n > 400000) begin
+            if (n > 8000000) begin                 // > 4096 commands x the slowest
                 $display("FAIL [hang] step %0d never settled", step);
                 $fatal(1);
             end
@@ -255,6 +274,9 @@ module vm_ab_tb;
         for (k = 0; k < 128; k = k + 1) dut.pmem[k] = 8'd0;
 `endif
         settle;
+`ifdef VM_NEW
+        busy = 0;                          // the power-on reset is not a step
+`endif
         while (!$feof(fi)) begin
             rc = $fscanf(fi, "%h %h %h\n", op, a, b);
             if (rc == 3) begin

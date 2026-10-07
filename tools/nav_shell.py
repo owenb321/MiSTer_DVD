@@ -63,7 +63,9 @@ def lfsr_next(v):
 
 
 class Shell:
-    def __init__(self, words=None, mutate=None):
+    def __init__(self, words=None, mutate=None, trace=False):
+        self.trace = trace
+        self.c0 = 0
         if words is None:
             words, _, _ = N.load_program(mutate)
         self.inp_lv = {k: v for k, (w, v) in INPUTS.items()}
@@ -108,6 +110,8 @@ class Shell:
         self.nav_ready_d = 0
         self.m.reset()
         self.m.run()
+        self.m.trace = []
+        self.c0 = self.m.cycles
 
     # ------------------------------------------------------------ helpers
     def _emit(self, *f):
@@ -384,14 +388,20 @@ class Shell:
             self.run()
         else:
             raise ValueError(f'stimulus: {line!r}')
+        if self.trace:
+            for k, pc, a, v in self.m.trace:
+                self.log.append('T %d %d %d %d %d' % (self.step_no, k, pc, a, v))
+            self.log.append('C %d %d' % (self.step_no, self.m.cycles - self.c0))
+        self.m.trace = []
+        self.c0 = self.m.cycles
         d = self.dump()
         self.log.append('S %d ' % self.step_no + ' '.join(
             '%s=%x' % (k, d[k]) if d[k] is not None else '%s=-' % k for k in STATE))
         return True
 
 
-def run_script(lines, mutate=None):
-    sh = Shell(mutate=mutate)
+def run_script(lines, mutate=None, trace=False):
+    sh = Shell(mutate=mutate, trace=trace)
     for ln in lines:
         sh.apply(ln)
     return sh
