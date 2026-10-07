@@ -1,7 +1,8 @@
 # The DVD VM as microcode (`dvd/dvd_vm.sv` + `dvd/nav/vm.uasm`)
 
 **Status (2026-10-07, branch `feature/nav-ucode`):** built, sim-proven, fitted in the core
-(timing passes). ⏳ HIL `nav_diff` and the maintainer's hand check pending.
+(timing passes), and HIL round 1 reproduces the control's `nav_diff` table exactly (§3a).
+⏳ The maintainer's hand check of the paths `nav_diff` cannot reach.
 This is the pilot `docs/logic_reclaim.md` §10b proposed: the VM alone, so the
 measurement and the workflow question are answered before the reader is touched.
 
@@ -164,6 +165,39 @@ bench:
   is kept by construction (`ev <= ((ev | ev_set) & ~ev_clr) | ev_force`), not by a
   gate.
 - **Anything timing-dependent:** how long a chain takes. See §4.
+
+### 3a. HW round 1 (2026-10-07, rig)
+
+**Setup:**
+- **Builds:** control `releases/DVD_20261007.rbf` (v0.9.0; RTL identical to this branch's
+  base); test `DVD_navucode_20261007_0640.rbf`.
+- **Disc set:** the PR #135 set (MiB, Matrix, T2, Scooby-Doo 2, Harry Potter
+  Interactive, Scene It HP).
+- **Scripts:** one fixed 4-button script per disc, derived from the oracle
+  (`nav_offline.auto_script`, seed 7, `.sim`-local), the same on both arms.
+
+**Result: identical tables on every compared step.**
+
+| Disc | Result, both arms |
+|---|---|
+| MiB | 3 of 3 equal to libdvdnav |
+| Matrix | 2 of 2 equal to libdvdnav |
+| Scooby-Doo 2 | 1 of 1 equal to libdvdnav |
+| T2 | the first button lands on PGCN 6 where libdvdnav says 1. The pre-existing `main` difference PR #135 recorded (it saw 5 with a different button). |
+
+The same steps never reached an armed park on both arms (HP Interactive and Scene It
+throughout, the Scooby maze, MiB's and Matrix's last step), so those are not measured.
+
+**The offline diff predicted all of it beforehand:**
+- every landing the board compared;
+- T2's divergence, to the PGCN: the microcode lands on PGC 6 offline too.
+
+So the model reproduces the board where the board can be read, and it can read the steps
+the board cannot (HP Interactive and Scene It agree offline on all four of their steps).
+
+⏳ **Still needs the maintainer's hand check** (as for PR #135): Scooby-Doo 2's minigame
+and maze, T2 (Mission Profiles, a slideshow), HP Interactive (Player Mode), Scene It HP (a
+game and a question), and a counter-mode GPRM disc.
 
 ## 4. Timing
 

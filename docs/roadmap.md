@@ -1430,7 +1430,8 @@ Levers, cheapest/lowest-risk first:
   - it is transaction-equal to the old FSM;
   - `tools/nav_offline.py` diffs it against libdvdnav over the library without the rig.
 
-  ⏳ HIL `nav_diff`, hand check. Next after it: the reader state split.
+  HIL `nav_diff` = the control on every compared step. ⏳ The maintainer's hand check.
+  Next after it: the reader state split.
 
 Validate empirically (does it route? does the fringe stay gone on HW?), not by chasing the
 fit/STA reports to zero — consistent with the project's "validate on hardware" discipline.

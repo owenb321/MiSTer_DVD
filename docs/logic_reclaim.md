@@ -538,7 +538,8 @@ decoded together, so the IMDCT's `bufmem`, `delay_mem` and `pcm_mem` could share
 >   as the oracle), and every VM gate is green with its `--red` arms re-expressed.
 > - **Offline diff:** the same microcode runs offline against libdvdnav over the ISO
 >   library (`tools/nav_offline.py`), which is the "largest practical win" below.
-> - **Pending:** the full-core fit and HIL.
+> - **Rig:** HIL `nav_diff` = the control on every compared step.
+> - **Pending:** the maintainer's hand check.
 
 | entity | ALMs | M10K |
 |---|---|---|

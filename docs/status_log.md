@@ -23,7 +23,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **THE DVD VM AS MICROCODE (2026-10-07, branch `feature/nav-ucode`; sim-proven,
-  full-core fit passes timing; ⏳ HIL `nav_diff`, hand check).** Full note:
+  full-core fit passes timing; HIL `nav_diff` = control on every compared step; ⏳ the
+  maintainer's hand check).** Full note:
   `docs/nav_engine.md`.
   - **Why:** `docs/logic_reclaim.md` §10b's pilot. The VM is microcoded alone, so the
     cost and the workflow are measured before the reader is touched.
@@ -62,6 +63,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **Offline libdvdnav diff:** `tools/nav_offline.py` runs the same microcode under a
     model of the reader's playback against `trace_nav`. 48 library discs: 71 actions
     compared, all equal on domain, VTS, PGCN and all 16 GPRMs.
+  - **HW round 1** (2026-10-07; control v0.9.0, same scripts, the PR #135 discs):
+    - the table is identical to the control on every compared step: MiB 3/3, Matrix 2/2,
+      Scooby-Doo 2 1/1, and T2's pre-existing first-button difference (board PGCN 6,
+      libdvdnav 1);
+    - `tools/nav_offline.py` predicted every one of those landings beforehand, T2's
+      divergence included.
   - **Timing:** worst observed chain (a 4,096-command runaway) 1.11 M cycles, 41 ms;
     ≥ 6× inside the reader's watchdogs.
   - **Limits:**
