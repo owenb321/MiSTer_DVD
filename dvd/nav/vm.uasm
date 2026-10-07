@@ -1,0 +1,1161 @@
+; dvd/nav/vm.uasm -- the DVD virtual machine as microcode for the navigation
+; sequencer (dvd/nav/nav_seq.sv; ISA in tools/nav_isa.py; design in
+; docs/nav_engine.md). Assemble with `tools/nav_isa.py --asm`.
+;
+; This is a port of the hardwired FSM that dvd/dvd_vm.sv used to be, state by
+; state, and it must stay TRANSACTION-EQUAL to it (bench/dvd/ref/dvd_vm_hw.sv is
+; that FSM, kept as the A/B oracle; tools/vm_ab.py runs the comparison). Every
+; 9-bit and 8-bit wrap of the old FSM is reproduced with an explicit mask, because
+; this machine's registers are 16 bits. The labels name the old FSM's states
+; (V_IDLE -> IDLE, V_WAIT -> WAIT, V_FETCH -> FETCH, ...) so the two read side by
+; side; the semantics notes live in dvd/dvd_vm.sv's history and docs/dvd_vm.md.
+;
+; The wrapper (dvd/dvd_vm.sv) owns everything real-time: the event latches and
+; their priority (wev), the wait timer, the output pulses, the SPRM8/SPRM3
+; shadows, pre_done, the LFSR. tools/nav_shell.py models it.
+
+.reg t1   r1                ; scratch (EVREG takes and returns t1, clobbers t2)
+.reg t2   r2
+.reg t3   r3
+.reg t4   r4
+.reg t5   r5
+.reg t6   r6
+.reg pc   r7                ; command index (old: pc, 9 bits)
+.reg base r8                ; block bounds (old: blk_base / blk_end)
+.reg end  r9
+.reg blkf r10               ; {walk, usr_edge, nat_src, blk[1:0]}, mirrored to O_FLAGS
+.reg fuse r11               ; commands executed this activation
+.reg i0   r12               ; the 8-byte command: i0 = ins[63:48] ... i3 = ins[15:0]
+.reg i1   r13
+.reg i2   r14
+.reg i3   r15
+
+.equ NOT_NAT   0xFFFF ^ F_NAT
+.equ NOT_USR   0xFFFF ^ F_USR
+.equ NOT_WALK  0xFFFF ^ F_WALK
+
+; =============================================================================
+; RESET: power-on and every mount (`start`) enter here (old: the reset values and
+; the `if (start)` block; the GPRM clear walk).
+; =============================================================================
+RESET:      li   t1, 0
+RCLR:       st   r0, M_GPRM[t1]
+            addi t1, t1, 1
+            bltui t1, 16, RCLR
+            st   r0, M_GMODE
+            st   r0, M_FB                       ; FB_NONE
+            st   r0, M_CVM
+            st   r0, M_SKIP_PRE
+            st   r0, M_TT_RESOLVE
+            st   r0, M_CHAIN
+            st   r0, M_RSM_VTS
+            st   r0, M_DE_SEEN
+            st   r0, M_DE_VTS
+            st   r0, M_DE_PGCN
+            li   t1, 1
+            st   t1, M_SPRMI+4
+            st   t1, M_SPRMI+5
+            st   r0, M_SPRMI+6
+            st   t1, M_SPRMI+7
+            st   r0, M_SPRMI+9
+            st   r0, M_SPRMI+10
+            li   t1, 15
+            st   t1, M_SPRMI+13
+            li   fuse, 0
+            andi blkf, blkf, 3                  ; a mount clears nat/usr, keeps blk (as the
+            ; fall into IDLE                    ; old FSM did; power-on resets the registers)
+
+; =============================================================================
+; IDLE (old V_IDLE): a chain has ended. usr_edge clears; then dispatch by the
+; wrapper's priority encoder. The tick is index 0 so the walk runs before any
+; event, as the old `tick_pending || clr_busy` hold did.
+; =============================================================================
+IDLE:       andi blkf, blkf, NOT_USR
+            out  O_FLAGS, blkf
+            wev  ITAB, 0
+ITAB:       jmp  E_TICK
+            jmp  E_DISABLED
+            jmp  E_BOOT
+            jmp  E_ERROR
+            jmp  E_LOADED
+            jmp  E_BTN
+            jmp  E_CELLCMD
+            jmp  E_PGCEND
+            jmp  E_CHEDGE
+            jmp  E_MENU
+            jmp  E_TITLE
+            jmp  E_CMENU
+            jmp  E_RETURN
+
+; WAIT (old V_WAIT): a jump was issued; the reader answers with pgc_loaded or
+; pgc_error, or the wrapper's timer gives up (~0.62 s, frozen by wait_hold).
+WAIT:       wev  WTAB, 1
+WTAB:       jmp  W_LOADED
+            jmp  W_ERROR
+            jmp  W_TIMEOUT
+
+; =============================================================================
+; Shared helpers
+; =============================================================================
+; BLKSET: blk = t1 (keeps nat/usr/walk), mirrored to the wrapper
+BLKSET:     andi blkf, blkf, 0xFFFC
+            or   blkf, blkf, t1
+            out  O_FLAGS, blkf
+            ret
+; UPRO: the user/boot event prologue: fuse = chain = 0, blk = BTN, nat_src = 0
+UPRO:       li   fuse, 0
+            st   r0, M_CHAIN
+BLKBTN:     andi blkf, blkf, 0xFFFF ^ (3 | F_NAT)
+            ori  blkf, blkf, BLK_BTN
+            out  O_FLAGS, blkf
+            ret
+; WV_IDLE: vm_adv <= wait_verdict (blk is CELL or POST), then idle. ADV_IDLE: vm_adv.
+WV_IDLE:    andi t6, blkf, 3
+            beqi t6, BLK_PRE, IDLE
+            beqi t6, BLK_BTN, IDLE
+ADV_IDLE:   outi O_PULSE, PB_ADV
+            jmp  IDLE
+; JSET: the jump fields: t1 = dom | entry << 4, vts t2, pgcn t3; ttn/pgn/cell/ptt 0
+JSET:       out  O_J_DE, t1
+            out  O_J_VTS, t2
+            out  O_J_PGCN, t3
+            outi O_J_TTN, 0
+            outi O_J_PGN, 0
+            outi O_J_CELL, 0
+            outi O_J_PTT, 0
+            ret
+; JGO: fb = t5; pulse the jump (and re-arm the wait timer); wait for the verdict
+JGO0:       li   t5, FB_NONE
+JGO:        st   t5, M_FB
+            outi O_PULSE, PB_JUMP | PB_WARM
+            jmp  WAIT
+; LJVTS: t2 = link_jump_vts (cur_vts in a title, vm_vts in a menu)
+LJVTS:      in   t2, P_VM_DOM
+            bnei t2, DOM_TT, LJV1
+            in   t2, P_CUR_VTS
+            ret
+LJV1:       in   t2, P_VM_VTS
+            ret
+; ZCELL: t1 = (cell_count == 0 && vm_dom != TT): a 0-cell menu PGC
+ZCELL:      in   t1, P_CELL_COUNT
+            bnei t1, 0, ZC0
+            in   t1, P_VM_DOM
+            snei t1, t1, DOM_TT
+            ret
+ZC0:        li   t1, 0
+            ret
+; EVREG: t1 = eval_reg(t1): bit 7 = SPRM (t1[4:0]), else GPRM (t1[3:0]).
+; A SPRM reads the RAM image OR the wrapper's live window; each is 0 where the
+; other holds the register (RAM: 4..7, 9, 10, 13; window: everything live).
+EVREG:      bbs  t1, 7, EVR_S
+            andi t1, t1, 15
+            ld   t1, M_GPRM[t1]
+            ret
+EVR_S:      andi t1, t1, 31
+            ld   t2, M_SPRMI[t1]
+            in   t1, P_SPRMW[t1]
+            or   t1, t1, t2
+            ret
+; RSM_SAVE: resume point = here, cell t1 (old: rsm_* <= cur_*, sprm4..7, sprm8_eff)
+RSM_SAVE:   st   t1, M_RSM_CELL
+            in   t2, P_CUR_VTS
+            st   t2, M_RSM_VTS
+            in   t2, P_CUR_PGCN
+            st   t2, M_RSM_PGCN
+            ld   t2, M_SPRMI+4
+            st   t2, M_RSM_R4
+            ld   t2, M_SPRMI+5
+            st   t2, M_RSM_R5
+            ld   t2, M_SPRMI+6
+            st   t2, M_RSM_R6
+            ld   t2, M_SPRMI+7
+            st   t2, M_RSM_R7
+            in   t2, P_SPRMW+8
+            st   t2, M_RSM_R8
+            ret
+; RSM_REST: sprm4..7 <= the saved values (sprm8 is the caller's: LinkRSM keeps a
+; button field)
+RSM_REST:   ld   t1, M_RSM_R4
+            st   t1, M_SPRMI+4
+            ld   t1, M_RSM_R5
+            st   t1, M_SPRMI+5
+            ld   t1, M_RSM_R6
+            st   t1, M_SPRMI+6
+            ld   t1, M_RSM_R7
+            st   t1, M_SPRMI+7
+            ret
+; RSM_JUMP: the jump fields for a resume (TT rsm_vts rsm_pgcn, cell rsm_cell), no PRE
+RSM_JUMP:   outi O_VM_DOM, DOM_TT
+            ld   t2, M_RSM_VTS
+            out  O_VM_VTS, t2
+            li   t1, DOM_TT
+            ld   t3, M_RSM_PGCN
+            call JSET
+            ld   t1, M_RSM_CELL
+            out  O_J_CELL, t1
+            li   t1, 1
+            st   t1, M_SKIP_PRE
+            ret
+; MENUKEY: t2 = menukey_vts, t5 = its fb. The BOOT-CHAIN MENU SHORTCUT (a
+; deliberate libdvdnav deviation, docs/dvd_vm.md): before any menu has shown,
+; aim at best_menu_vts instead of this title's own VTSM Root.
+MENUKEY:    in   t2, P_CUR_VTS
+            li   t5, FB_VTSM
+            in   t1, P_MENU_SEEN
+            bnei t1, 0, MK_X
+            in   t1, P_BEST_MENU_VTS
+            beqi t1, 0, MK_X
+            beq  t1, t2, MK_X
+            mov  t2, t1
+            li   t5, FB_BOOTM
+MK_X:       ret
+; TITLE_RSM: from a playing title, Title / Chapter Menu save RSM and arm the toggle
+TITLE_RSM:  in   t1, P_MENU_ACTIVE
+            bnei t1, 0, TR_X
+            in   t1, P_VM_DOM
+            bnei t1, DOM_TT, TR_X
+            in   t1, P_CUR_CELL
+            call RSM_SAVE
+            li   t1, 1
+            st   t1, M_CVM
+TR_X:       ret
+; DEADEND: a 0-cell menu PGC with no way on -> the menu fallback chain
+DEADEND:    li   t1, FB_VTSM
+            st   t1, M_FB
+            outi O_EVSET, EV_ERROR
+            ld   t1, M_DE_SEEN
+            bnei t1, 0, IDLE
+            li   t1, 1
+            st   t1, M_DE_SEEN
+            in   t1, P_CUR_VTS
+            st   t1, M_DE_VTS
+            in   t1, P_CUR_PGCN
+            st   t1, M_DE_PGCN
+            jmp  IDLE
+; START_PRE / ENTER_POST: run a PGC's PRE / POST block
+START_PRE:  li   t1, BLK_PRE
+            call BLKSET
+            li   base, 0
+            in   end, P_NR_PRE
+            li   pc, 0
+            jmp  FETCH
+ENTER_POST: li   t1, BLK_POST
+            call BLKSET
+            in   base, P_NR_PRE
+            in   t2, P_NR_POST
+            add  end, base, t2
+            mov  pc, base
+            jmp  FETCH
+
+; =============================================================================
+; Idle-mode events
+; =============================================================================
+; The counter-mode tick: +1 per elapsed second on every counter-mode GPRM. The
+; walk counts as V_IDLE for pre_done and the entropy stir (F_WALK).
+E_TICK:     ori  blkf, blkf, F_WALK
+            out  O_FLAGS, blkf
+            ld   t3, M_GMODE
+            li   t4, 0
+ET1:        shr  t1, t3, t4
+            bbc  t1, 0, ET2
+            ld   t1, M_GPRM[t4]
+            addi t1, t1, 1
+            st   t1, M_GPRM[t4]
+ET2:        addi t4, t4, 1
+            bltui t4, 16, ET1
+            outi O_PULSE, PB_TICKDONE
+            andi blkf, blkf, NOT_WALK
+            out  O_FLAGS, blkf
+            jmp  IDLE
+
+; Disc Menus off: drop everything; a reader wait still gets its vm_adv
+E_DISABLED: in   t1, P_EVENTS
+            outi O_EVCLR, EV_ALL
+            andi t1, t1, EV_CELLCMD | EV_PGCEND
+            beqi t1, 0, IDLE
+            jmp  ADV_IDLE
+
+; BOOT: run the First Play PGC
+E_BOOT:     call UPRO
+            outi O_VM_DOM, DOM_FP
+            outi O_VM_VTS, 0
+            li   t1, DOM_FP
+            li   t2, 0
+            li   t3, 0
+            call JSET
+            li   t5, FB_FP
+            jmp  JGO
+
+; ERROR: a jump failed -- the fallback chain
+E_ERROR:    outi O_EVCLR, EV_LOADED
+            call BLKBTN
+            ld   t6, M_FB
+            beqi t6, FB_GAVEUP, EE_GU
+            in   t1, P_CUR_VTS
+            in   t2, P_VM_VTS
+            bnei t6, FB_BOOTM, EE2
+            beqi t1, 0, EE2
+            beq  t1, t2, EE2
+            jmp  EE_VTSM2                       ; the shortcut missed: this title's own Root
+EE2:        bnei t6, FB_VTSM, EE3
+            in   t1, P_BEST_MENU_VTS
+            beqi t1, 0, EE3
+            beq  t1, t2, EE3
+EE_VTSM2:   outi O_VM_DOM, DOM_VTSM             ; t1 = the VTS to try
+            out  O_VM_VTS, t1
+            mov  t2, t1
+            li   t1, DOM_VTSM | 3 << 4                          ; Root
+            li   t3, 0
+            call JSET
+            li   t5, FB_VTSM2
+            jmp  JGO
+EE3:        beqi t6, FB_VTSM, EE_VMGM
+            beqi t6, FB_VTSM2, EE_VMGM
+            beqi t6, FB_BOOTM, EE_VMGM
+            bnei t6, FB_VMGM, EE4
+            ld   t1, M_RSM_VTS
+            beqi t1, 0, EE4
+            call RSM_REST                       ; no menus at all: resume the title
+            ld   t1, M_RSM_R8
+            out  O_SPRM8, t1
+            call RSM_JUMP
+            li   t5, FB_GAVEUP
+            jmp  JGO
+EE4:        bnei t6, FB_NONE, EE_AUTO
+            in   t1, P_LM_V
+            beqi t1, 0, EE_AUTO
+            in   t1, P_VM_DOM
+            beqi t1, DOM_VMGM, EE_LF
+            bnei t1, DOM_VTSM, EE_AUTO
+EE_LF:      in   t1, P_JPGCN                    ; a user menu link failed: LINK FAIL,
+            andi t1, t1, 0xFF                   ; re-enter the last good menu
+            out  O_LF_PGCN, t1
+            in   t1, P_LM_DOM
+            in   t2, P_LM_VTS
+            in   t3, P_LM_PGCN
+            out  O_VM_DOM, t1
+            out  O_VM_VTS, t2
+            call JSET
+            li   t5, FB_VTSM
+            st   t5, M_FB
+            outi O_PULSE, PB_JUMP | PB_WARM | PB_LINKFAIL
+            jmp  WAIT
+EE_AUTO:    outi O_VM_DOM, DOM_TT               ; FP / title / VMGM-without-resume: auto title
+            in   t2, P_AUTO_VTS
+            out  O_VM_VTS, t2
+            li   t1, DOM_TT
+            li   t3, 1
+            call JSET
+            li   t5, FB_GAVEUP
+            jmp  JGO
+EE_GU:      st   r0, M_FB                       ; never loop on errors
+            jmp  IDLE
+EE_VMGM:    outi O_VM_DOM, DOM_VMGM
+            outi O_VM_VTS, 0
+            li   t1, DOM_VMGM | 2 << 4                          ; Title menu
+            li   t2, 0
+            li   t3, 0
+            call JSET
+            li   t5, FB_VMGM
+            jmp  JGO
+
+; LOADED while idle: run the new PGC's PRE
+E_LOADED:   outi O_EVCLR, EV_CELLCMD | EV_PGCEND | EV_BTN | EV_CHEDGE
+            andi blkf, blkf, NOT_NAT
+            out  O_FLAGS, blkf
+            in   t1, P_VM_DOM
+            bnei t1, DOM_TT, EL1
+            st   r0, M_CVM
+EL1:        ld   t1, M_SKIP_PRE
+            beqi t1, 0, EL2
+            st   r0, M_SKIP_PRE
+            st   r0, M_FB
+            jmp  IDLE
+EL2:        in   t1, P_NR_PRE
+            beqi t1, 0, EL3
+            st   r0, M_FB
+            jmp  START_PRE
+EL3:        call ZCELL                          ; no PRE: POST-only dispatcher / dead end
+            beqi t1, 0, EL_FBN
+            in   t2, P_NR_POST
+            bnei t2, 0, ENTER_POST
+            jmp  DEADEND
+EL_FBN:     st   r0, M_FB
+            jmp  IDLE
+
+; BTN: run the activated button's command (one-instruction block)
+E_BTN:      call UPRO
+            in   i0, P_BTN0
+            in   i1, P_BTN1
+            in   i2, P_BTN2
+            in   i3, P_BTN3
+            li   base, 0
+            li   end, 1
+            li   pc, 0
+            jmp  EXEC
+
+; CELLCMD: the reader waits on a cell command
+E_CELLCMD:  li   fuse, 0
+            st   r0, M_CHAIN
+            ori  blkf, blkf, F_NAT
+            out  O_FLAGS, blkf
+            in   t1, P_CC_NR
+            beqi t1, 0, ADV_IDLE
+            in   t2, P_NR_CELL
+            bltu t2, t1, ADV_IDLE
+            in   t3, P_NR_PRE
+            in   t4, P_NR_POST
+            add  t3, t3, t4
+            add  t3, t3, t1
+            andi end, t3, 0x1FF
+            subi base, t3, 1
+            andi base, base, 0x1FF
+            mov  pc, base
+            li   t1, BLK_CELL
+            call BLKSET
+            jmp  FETCH
+
+; PGCEND: the reader waits at the PGC's end: run its POST
+E_PGCEND:   outi O_EVCLR, EV_CHEDGE
+            li   fuse, 0
+            st   r0, M_CHAIN
+            ori  blkf, blkf, F_NAT
+            out  O_FLAGS, blkf
+            in   t2, P_NR_POST
+            bnei t2, 0, ENTER_POST
+            jmp  ADV_IDLE
+
+; CHEDGE: a chapter skip hit the title's edge (a USER chain, vm_adv masked)
+E_CHEDGE:   li   fuse, 0
+            st   r0, M_CHAIN
+            andi blkf, blkf, NOT_NAT
+            out  O_FLAGS, blkf
+            in   t1, P_MENU_ACTIVE
+            bnei t1, 0, IDLE
+            ori  blkf, blkf, F_USR
+            out  O_FLAGS, blkf
+            in   t1, P_CHEDGE_DIR
+            beqi t1, 0, ECE_PREV
+            li   t1, BLK_POST                   ; Next: this PGC's POST
+            call BLKSET
+            in   base, P_NR_PRE
+            in   t2, P_NR_POST
+            add  end, base, t2
+            mov  pc, base
+            jmp  NEXT
+ECE_PREV:   in   t3, P_PREV_PGCN                ; Prev: prev_pgcn at its LAST program
+            beqi t3, 0, IDLE
+            li   t1, BLK_BTN
+            call BLKSET
+            li   t1, DOM_TT
+            in   t2, P_CUR_VTS
+            call JSET
+            outi O_J_PGN, 0xFF
+            jmp  JGO0
+
+; MENU key
+E_MENU:     call UPRO
+            in   t1, P_MENU_ACTIVE
+            bnei t1, 0, EM_MENU
+            in   t1, P_VM_DOM
+            bnei t1, DOM_TT, EM_MENU
+            in   t1, P_CUR_CELL                 ; in a title: CallSS VTSM Root
+            call RSM_SAVE
+            li   t1, 1
+            st   t1, M_CVM
+            jmp  EM_ROOT
+EM_MENU:    ld   t1, M_CVM                      ; a menu we came to by the key: toggle back
+            beqi t1, 0, EM_ROOT
+            ld   t1, M_RSM_VTS
+            beqi t1, 0, EM_ROOT
+            call RSM_REST
+            ld   t1, M_RSM_R8
+            out  O_SPRM8, t1
+            call RSM_JUMP
+            jmp  JGO0
+EM_ROOT:    call MENUKEY
+            outi O_VM_DOM, DOM_VTSM
+            out  O_VM_VTS, t2
+            li   t1, DOM_VTSM | 3 << 4                          ; Root
+            li   t3, 0
+            call JSET
+            jmp  JGO
+
+; TITLE key: VMGM Title menu
+E_TITLE:    call UPRO
+            call TITLE_RSM
+            outi O_VM_DOM, DOM_VMGM
+            outi O_VM_VTS, 0
+            li   t1, DOM_VMGM | 2 << 4
+            li   t2, 0
+            li   t3, 0
+            call JSET
+            li   t5, FB_VMGM
+            jmp  JGO
+
+; CHAPTER MENU key: VTSM entry 7
+E_CMENU:    call UPRO
+            call TITLE_RSM
+            call MENUKEY
+            outi O_VM_DOM, DOM_VTSM
+            out  O_VM_VTS, t2
+            li   t1, DOM_VTSM | 7 << 4
+            li   t3, 0
+            call JSET
+            li   t5, FB_VTSM
+            jmp  JGO
+
+; RETURN key = GoUp
+E_RETURN:   call UPRO
+            in   t3, P_GOUP_PGCN
+            beqi t3, 0, IDLE
+            in   t1, P_VM_DOM
+            call LJVTS
+            call JSET
+            jmp  JGO0
+
+; =============================================================================
+; Wait-mode events
+; =============================================================================
+W_LOADED:   outi O_EVCLR, EV_LOADED | EV_CELLCMD | EV_PGCEND | EV_BTN | EV_CHEDGE
+            andi blkf, blkf, NOT_USR
+            out  O_FLAGS, blkf
+            in   t1, P_VM_DOM
+            bnei t1, DOM_TT, WL1
+            st   r0, M_CVM
+WL1:        ld   t1, M_TT_RESOLVE
+            beqi t1, 0, WL2
+            in   t1, P_RES_TTN                  ; JumpTT's resolved vts_ttn
+            st   t1, M_SPRMI+5
+            st   r0, M_TT_RESOLVE
+WL2:        ld   t1, M_CHAIN
+            addi t2, t1, 1
+            andi t2, t2, 0x7F
+            st   t2, M_CHAIN
+            bltui t1, 63, WL3
+            st   r0, M_SKIP_PRE                 ; jump-chain runaway: stop chaining
+            st   r0, M_FB
+            jmp  IDLE
+WL3:        ld   t1, M_SKIP_PRE
+            beqi t1, 0, WL4
+            st   r0, M_SKIP_PRE                 ; RSM resume: no pre-commands
+            st   r0, M_FB
+            jmp  IDLE
+WL4:        in   t1, P_NR_PRE
+            beqi t1, 0, WL5
+            andi blkf, blkf, NOT_NAT
+            jmp  START_PRE
+WL5:        call ZCELL
+            beqi t1, 0, EL_FBN
+            in   t2, P_NR_POST
+            bnei t2, 0, ENTER_POST
+            jmp  DEADEND
+; ★ Both of these drop a button press latched during the wait (dvd_vm_tb S25).
+W_ERROR:    outi O_EVCLR, EV_BTN                ; the idle dispatch runs the chain
+            jmp  IDLE
+W_TIMEOUT:  outi O_EVCLR, EV_BTN                ; the reader never answered: give up
+            st   r0, M_SKIP_PRE
+            jmp  IDLE
+
+; =============================================================================
+; Command execution: FETCH -> EXEC -> (set) -> link -> NEXT
+; =============================================================================
+FETCH:      shli t1, pc, 2
+            ldc  i0, 0[t1]
+            ldc  i1, 1[t1]
+            ldc  i2, 2[t1]
+            ldc  i3, 3[t1]
+EXEC:       addi fuse, fuse, 1
+            shri t1, fuse, 12
+            bnei t1, 0, WV_IDLE                 ; 4096 commands this activation: stop,
+            shri t1, i0, 13                     ; releasing the reader if it waits
+            beqi t1, 0, T0                      ; type
+            beqi t1, 1, T1
+            beqi t1, 2, T2
+            bnei t1, 7, T3456                   ; type 7: nop
+NEXTPC:     addi pc, pc, 1
+            andi pc, pc, 0x1FF
+NEXT:       bgeu pc, end, BLKEND
+            bltu pc, base, BLKEND
+            jmp  FETCH
+BLKEND:     andi t1, blkf, 3
+            jr   t1, BETAB
+BETAB:      jmp  BE_PRE
+            jmp  BE_POST
+            jmp  ADV_IDLE
+            jmp  IDLE                           ; BTN: state updated, done
+BE_PRE:     call ZCELL                          ; PRE fell through: play
+            beqi t1, 0, IDLE
+            in   t2, P_NR_POST
+            bnei t2, 0, ENTER_POST
+            jmp  DEADEND
+BE_POST:    bbc  blkf, FBIT_USR, ADV_IDLE        ; title-edge Next: follow next_pgcn
+            in   t3, P_NEXT_PGCN
+            beqi t3, 0, ADV_IDLE
+            li   t1, DOM_TT
+            in   t2, P_CUR_VTS
+            call JSET
+            jmp  JGO0
+
+; ---- compare: t3 = cond_now, per operand layout (clobbers t1, t2, t4) --------
+CND_V1:     andi t1, i1, 0xFF                   ; A = reg ins[39:32]
+            call EVREG
+            mov  t4, t1
+CND_B1:     bbs  i0, 7, CB1I                    ; B = cmp_imm ? ins[31:16] : reg ins[23:16]
+            andi t1, i2, 0xFF
+            call EVREG
+            jmp  CND_GO
+CB1I:       mov  t1, i2
+CND_GO:     shri t3, i0, 4
+            andi t3, t3, 7
+            dcmp t3, t4, t1, t3                 ;MUT cmpswap: dcmp t3, t1, t4, t3
+            ret
+CND_V2:     shri t1, i3, 8                      ; A = reg ins[15:8], B = reg ins[7:0]
+            call EVREG
+            mov  t4, t1
+            andi t1, i3, 0xFF
+            call EVREG
+            jmp  CND_GO
+CND_T3:     shri t1, i1, 8                      ; A = reg ins[47:40]
+            call EVREG
+            mov  t4, t1
+            bbs  i0, 7, CT3I                    ; B = cmp_imm ? ins[15:0] : reg ins[7:0]
+            andi t1, i3, 0xFF
+            call EVREG
+            jmp  CND_GO
+CT3I:       mov  t1, i3
+            jmp  CND_GO
+CND_T4:     andi t1, i0, 15                     ; A = g[ins[51:48]] (the set's destination)
+            ld   t4, M_GPRM[t1]
+            jmp  CND_B1
+CND_T56:    bbs  i0, 12, C56I
+            andi t1, i1, 15                     ; A = g[ins[35:32]]
+            ld   t4, M_GPRM[t1]
+            jmp  CND_B1
+C56I:       shri t1, i2, 8                      ; imm form: A = g[ins[27:24]], B = reg ins[23:16]
+            andi t1, t1, 15
+            ld   t4, M_GPRM[t1]
+            andi t1, i2, 0xFF
+            call EVREG
+            jmp  CND_GO
+
+; ---- type 0: Nop / Goto / Break / SetTmpPML ----------------------------------
+T0:         call CND_V1
+            andi t5, i0, 15                     ; lnk_op
+            beqi t3, 0, NEXTPC
+            bnei t5, 3, T0G
+            shri t1, i3, 8                      ; SetTmpPML: sprm13 = ins[11:8]
+            andi t1, t1, 15
+            st   t1, M_SPRMI+13
+T0G:        beqi t5, 1, T0GOTO
+            beqi t5, 3, T0GOTO
+            bnei t5, 2, NEXTPC
+            mov  pc, end                        ; Break
+            jmp  NEXT
+T0GOTO:     andi t1, i3, 0xFF                   ; Goto (1-based)
+            add  t1, base, t1
+            subi t1, t1, 1
+            andi pc, t1, 0x1FF
+            jmp  NEXT
+
+; ---- type 1: link / jump -----------------------------------------------------
+T1:         bbs  i0, 12, T1J
+            call CND_V1
+            jmp  LNK_LINK
+T1J:        call CND_V2
+            beqi t3, 0, NEXTPC
+            andi t5, i0, 15
+            beqi t5, 1, WV_IDLE                 ; Exit: stop, hold the frame
+            beqi t5, 2, J_TT
+            beqi t5, 3, J_VTSTT
+            beqi t5, 5, J_VTSPTT
+            beqi t5, 6, J_SS
+            beqi t5, 8, J_SS
+            jmp  NEXTPC
+
+; ---- type 2: system set (+ optional link) ------------------------------------
+T2:         call CND_V2
+            shri t5, i0, 8
+            andi t5, t5, 15                     ; set_op
+            beqi t5, 1, T2STN
+            beqi t5, 2, T2NVT
+            beqi t5, 3, T2MD
+            beqi t5, 6, T2HL
+            jmp  LNK_LINK
+T2STN:      beqi t3, 0, LNK_LINK                ; SetSTN
+            bbc  i1, 7, T2S2                    ; ins[39]: ASTN
+            andi t1, i1, 0x7F
+            bbs  i0, 12, T2S1W
+            andi t1, i1, 15                     ; g[ins[35:32]]
+            ld   t1, M_GPRM[t1]
+T2S1W:      out  O_SPRM1, t1
+T2S2:       bbc  i2, 15, T2S3                   ; ins[31]: SPSTN
+            shri t1, i2, 8
+            andi t1, t1, 0x7F
+            bbs  i0, 12, T2S2W
+            andi t1, t1, 15                     ; g[ins[27:24]]
+            ld   t1, M_GPRM[t1]
+T2S2W:      out  O_SPRM2, t1
+T2S3:       bbc  i2, 7, LNK_LINK                ; ins[23]: AGLN
+            andi t1, i2, 0x7F
+            bbs  i0, 12, T2S3W
+            andi t1, i2, 15                     ; g[ins[19:16]]
+            ld   t1, M_GPRM[t1]
+T2S3W:      out  O_SPRM3, t1
+            jmp  LNK_LINK
+T2NVT:      beqi t3, 0, LNK_LINK                ; SetNVTMR (stored, never fires)
+            call SDATA_2
+            st   t1, M_SPRMI+9
+            andi t1, i2, 0xFF
+            st   t1, M_SPRMI+10
+            jmp  LNK_LINK
+T2MD:       andi t5, i2, 15                     ; SetGPRMMD: the mode bit is written
+            ld   t6, M_GMODE                    ; even when the condition fails
+            li   t1, 1
+            shl  t1, t1, t5
+            xori t2, t1, 0xFFFF
+            and  t6, t6, t2
+            bbc  i2, 7, T2MD1
+            or   t6, t6, t1
+T2MD1:      st   t6, M_GMODE
+            beqi t3, 0, LNK_LINK
+            call SDATA_2
+            st   t1, M_GPRM[t5]
+            jmp  LNK_LINK
+T2HL:       beqi t3, 0, LNK_LINK                ; SetHL_BTNN
+            mov  t1, i2
+            bbs  i0, 12, T2HLW
+            andi t1, i2, 15                     ; g[ins[19:16]]
+            ld   t1, M_GPRM[t1]
+T2HLW:      out  O_SPRM8, t1
+            shri t1, t1, 10
+            out  O_BTNF_VAL, t1
+            outi O_PULSE, PB_BTNF
+            jmp  LNK_LINK
+; SDATA_2: t1 = type 2/4's set data: imm ? ins[47:32] : reg ins[39:32]
+SDATA_2:    bbs  i0, 12, SD2I
+            andi t1, i1, 0xFF
+            jmp  EVREG
+SD2I:       mov  t1, i1
+            ret
+
+; ---- types 3..6: set (+ link) ------------------------------------------------
+T3456:      shri t5, i0, 13
+            beqi t5, 3, T3C
+            beqi t5, 4, T4C
+            call CND_T56
+            jmp  TSET
+T3C:        call CND_T3
+            jmp  TSET
+T4C:        call CND_T4
+TSET:       st   t3, M_T0                       ; the pre-set compare (old link_cond_l)
+            shri t6, i0, 8
+            andi t6, t6, 15                     ; set_op
+            beqi t6, 0, TLINK
+            shri t5, i0, 13
+            beqi t5, 4, TSDO                    ; type 4 sets ALWAYS (decoder.c)
+            beqi t3, 0, TLINK                   ;MUT setalways: nop
+TSDO:       beqi t5, 3, TS3
+            beqi t5, 4, TS4
+            andi t4, i0, 15                     ; 5/6: dst ins[51:48], reg2 ins[19:16]
+            andi t5, i2, 15
+            bbs  i0, 12, TSI1
+            shri t1, i1, 8                      ; reg ins[47:40]
+            jmp  TSEV
+TS4:        andi t4, i0, 15                     ; 4: dst ins[51:48], reg2 ins[35:32]
+            andi t5, i1, 15
+            bbs  i0, 12, TSI1
+            andi t1, i1, 0xFF                   ; reg ins[39:32]
+            jmp  TSEV
+TS3:        andi t4, i1, 15                     ; 3: dst ins[35:32], reg2 ins[19:16]
+            andi t5, i2, 15
+            bbs  i0, 12, TSI3
+            andi t1, i2, 0xFF                   ; reg ins[23:16]
+TSEV:       call EVREG
+            jmp  TSOP
+TSI1:       mov  t1, i1                         ; imm ins[47:32]
+            jmp  TSOP
+TSI3:       mov  t1, i2                         ; imm ins[31:16]
+TSOP:       ld   t2, M_GPRM[t4]                 ; opD: the destination's value now
+            bgeui t6, 12, TLINK
+            jr   t6, SETTAB
+SETTAB:     jmp  TLINK
+            jmp  S_MOV
+            jmp  S_SWAP
+            jmp  S_ADD
+            jmp  S_SUB
+            jmp  S_MUL
+            jmp  S_DIV
+            jmp  S_MOD
+            jmp  S_RND
+            jmp  S_AND
+            jmp  S_OR
+            jmp  S_XOR
+S_ADD:      sadd t1, t2, t1                     ; clamps to 0xFFFF
+            jmp  S_MOV
+S_SUB:      ssub t1, t2, t1                     ; clamps to 0
+            jmp  S_MOV
+S_AND:      and  t1, t2, t1
+            jmp  S_MOV
+S_OR:       or   t1, t2, t1
+            jmp  S_MOV
+S_XOR:      xor  t1, t2, t1
+S_MOV:      st   t1, M_GPRM[t4]
+            jmp  TLINK
+S_SWAP:     st   t2, M_GPRM[t5]                 ; reg2 <= old reg, THEN reg <= data
+            st   t1, M_GPRM[t4]                 ;MUT swaporder: st t2, M_GPRM[t4]
+            jmp  TLINK
+S_MUL:      li   t3, 0                          ; saturating shift-add, MSB first:
+            li   t6, 16                         ; min(product, 0xFFFF)
+SM1:        sadd t3, t3, t3
+            bbc  t1, 15, SM2
+            sadd t3, t3, t2
+SM2:        shli t1, t1, 1
+            subi t6, t6, 1
+            bnei t6, 0, SM1
+            mov  t1, t3
+            jmp  S_MOV
+S_DIV:      beqi t1, 0, S_FFFF
+            st   t4, M_T0+1
+            call DIVU
+            ld   t4, M_T0+1
+            mov  t1, t3
+            jmp  S_MOV
+S_MOD:      beqi t1, 0, S_FFFF
+            st   t4, M_T0+1
+            call DIVU
+            ld   t4, M_T0+1
+            mov  t1, t2
+            jmp  S_MOV
+S_FFFF:     li   t1, 0xFFFF                     ; divide by zero
+            jmp  S_MOV
+S_RND:      outi O_PULSE, PB_LFSTEP             ; the LFSR steps once per rnd
+            in   t2, P_LFSR
+            beqi t1, 0, S_MOV                   ; rnd 0 = 0
+            st   t4, M_T0+1
+            call DIVU
+            ld   t4, M_T0+1
+            addi t1, t2, 1                      ; (lfsr % data) + 1
+            jmp  S_MOV
+; DIVU: t2 / t1 (t1 != 0) -> t3 quotient, t2 remainder (clobbers t4, t5, t6).
+; Restoring, 16 steps. A remainder with its top bit set overflows the shift: it
+; is then certainly >= the divisor, and the 16-bit difference is exact.
+DIVU:       li   t3, 0
+            li   t5, 0
+            li   t6, 16
+DV1:        shri t4, t5, 15
+            shli t5, t5, 1
+            bbc  t2, 15, DV2
+            ori  t5, t5, 1
+DV2:        shli t2, t2, 1
+            shli t3, t3, 1
+            bnei t4, 0, DV3
+            bltu t5, t1, DV4
+DV3:        sub  t5, t5, t1
+            ori  t3, t3, 1
+DV4:        subi t6, t6, 1
+            bnei t6, 0, DV1
+            mov  t2, t5
+            ret
+
+; the link part of types 3..6 (t3 is reloaded: the set may have used it)
+TLINK:      ld   t3, M_T0
+            shri t5, i0, 13
+            beqi t5, 3, LNK_LINK
+            beqi t5, 5, LNK_SUB
+            bnei t5, 4, TL6
+            call CND_T4                         ; type 4 compares AFTER its set ;MUT t4latched: nop
+            jmp  LNK_SUB
+TL6:        li   t3, 1                          ; type 6: the link is unconditional
+            jmp  LNK_SUB
+
+; =============================================================================
+; Link evaluation (old V_LINKEV). t3 = the condition.
+; =============================================================================
+LNK_LINK:   andi t5, i0, 15                     ; types 1(link)/2/3: op ins[51:48]
+            beqi t5, 0, NEXTPC
+            beqi t3, 0, NEXTPC
+            beqi t5, 1, SUBINS
+            beqi t5, 4, L_PGCN
+            beqi t5, 5, L_PTT
+            beqi t5, 6, L_PGN
+            beqi t5, 7, L_CN
+            jmp  NEXTPC
+LNK_SUB:    beqi t3, 0, NEXTPC                  ; types 4..6: always a sub-instruction
+; ---- the link sub-instruction (decoder.c: low 5 bits of byte 7) --------------
+SUBINS:     andi t6, i3, 31
+            bgeui t6, 17, NEXTPC
+            call BTNFLD
+            jr   t6, SUBTAB
+SUBTAB:     jmp  S_NOLINK
+            jmp  S_TOPC
+            jmp  S_NEXTC
+            jmp  S_PREVC
+            jmp  NEXTPC
+            jmp  S_PG
+            jmp  S_PG
+            jmp  S_PG
+            jmp  NEXTPC
+            jmp  S_TOPPGC
+            jmp  S_NAVPGC
+            jmp  S_NAVPGC
+            jmp  S_NAVPGC
+            jmp  S_TAILPGC
+            jmp  NEXTPC
+            jmp  NEXTPC
+            jmp  S_RSM
+; BTNFLD: a link's button field (ins[15:10]) -> SPRM8 and nav_pci's selection
+BTNFLD:     shri t1, i3, 10
+            beqi t1, 0, BF_X
+            shli t2, t1, 10
+            out  O_SPRM8, t2
+            out  O_BTNF_VAL, t1
+            outi O_PULSE, PB_BTNF
+BF_X:       ret
+
+S_NOLINK:   jmp  WV_IDLE
+S_TOPC:     outi O_PULSE, PB_REPLAY
+            jmp  IDLE
+S_NEXTC:    in   t1, P_CUR_CELL
+            addi t1, t1, 1
+            andi t1, t1, 0xFF
+            in   t2, P_CELL_COUNT
+            bltu t1, t2, SNC_SEEK
+            in   t2, P_NR_POST                  ; past the last cell: POST
+            bnei t2, 0, ENTER_POST
+            jmp  ADV_IDLE
+SNC_SEEK:   out  O_SEEK_CELL, t1
+            outi O_PULSE, PB_SEEK
+            jmp  IDLE
+S_PREVC:    in   t1, P_CUR_CELL
+            beqi t1, 0, SNC_SEEK
+            subi t1, t1, 1
+            jmp  SNC_SEEK
+S_PG:       in   t1, P_NR_PGMS                  ; LinkTopPG / NextPG / PrevPG
+            bnei t1, 0, PGSCAN
+            beqi t6, 5, S_TOPC                  ; no program map: cell approximations
+            beqi t6, 6, S_NEXTC
+            jmp  S_PREVC
+PGSCAN:     in   t2, P_CUR_CELL                 ; cur_pg = the last program whose
+            addi t2, t2, 1                      ; entry cell is <= cur_cell + 1
+            li   t3, 1
+            li   t4, 0
+PGS1:       ldp  t5, 0[t4]
+            beqi t5, 0, PGS2
+            bltu t2, t5, PGS2
+            addi t3, t4, 1
+PGS2:       addi t4, t4, 1
+            bltu t4, t1, PGS1
+            beqi t6, 6, PG_NEXT
+            beqi t6, 7, PG_PREV
+            mov  t1, t3                         ; TopPG
+            jmp  PMRD0
+PG_NEXT:    addi t2, t3, 1
+            bltu t1, t2, PGN_POST
+            mov  t1, t2
+            jmp  PMRD0
+PGN_POST:   in   t2, P_NR_POST                  ; past the last program: POST
+            bnei t2, 0, ENTER_POST
+            jmp  ADV_IDLE
+PG_PREV:    li   t1, 1
+            bltui t3, 2, PMRD0
+            subi t1, t3, 1
+; PMRD (old V_PMRD): program t1 of this PGC -> seek/replay; t6 = a LinkPTTN part
+; that may cross PGCs (0 = none)
+PMRD0:      li   t6, 0
+PMRD:       in   t3, P_NR_PGMS
+            beqi t1, 0, PMR_OUT
+            beqi t3, 0, PMR_OUT
+            bltu t3, t1, PMR_OUT
+            subi t2, t1, 1
+            andi t2, t2, 0x7F
+            ldp  t2, 0[t2]
+            in   t3, P_CUR_CELL
+            li   t5, 0
+            beqi t2, 0, PMR_SEEK
+            subi t5, t2, 1
+            andi t5, t5, 0xFF
+            bne  t5, t3, PMR_SEEK
+            jmp  S_TOPC             ; same cell: gapless replay
+PMR_SEEK:   out  O_SEEK_CELL, t5
+            outi O_PULSE, PB_SEEK
+            jmp  IDLE
+PMR_OUT:    beqi t6, 0, PMR_ADV
+            outi O_VM_DOM, DOM_TT               ; a part past this PGC: the exact
+            li   t1, DOM_TT                     ; VTS_PTT_SRPT resolve, PRE skipped
+            in   t2, P_CUR_VTS
+            li   t3, 0
+            call JSET
+            ld   t1, M_SPRMI+5
+            andi t1, t1, 0x7F
+            out  O_J_TTN, t1
+            out  O_J_PTT, t6
+            li   t1, 1
+            st   t1, M_SKIP_PRE
+            jmp  JGO0
+PMR_ADV:    jmp  WV_IDLE
+
+S_TOPPGC:   in   t1, P_VM_DOM                   ; re-enter this PGC
+            call LJVTS
+            in   t3, P_CUR_PGCN
+            call JSET
+            jmp  JGO0
+S_NAVPGC:   beqi t6, 10, SNP_N
+            beqi t6, 11, SNP_P
+            in   t3, P_GOUP_PGCN
+            jmp  SNP1
+SNP_N:      in   t3, P_NEXT_PGCN
+            jmp  SNP1
+SNP_P:      in   t3, P_PREV_PGCN
+SNP1:       bnei t3, 0, SNP2
+            jmp  WV_IDLE
+SNP2:       in   t1, P_VM_DOM
+            call LJVTS
+            call JSET
+            jmp  JGO0
+S_TAILPGC:  andi t1, blkf, 3
+            beqi t1, BLK_POST, ADV_IDLE          ; already there
+            in   t2, P_NR_POST
+            bnei t2, 0, ENTER_POST
+            jmp  ADV_IDLE
+S_RSM:      ld   t1, M_RSM_VTS
+            bnei t1, 0, SRSM1
+            jmp  WV_IDLE
+SRSM1:      call RSM_REST
+            shri t1, i3, 10
+            bnei t1, 0, SRSM2                   ; a button field already wrote SPRM8
+            ld   t1, M_RSM_R8
+            out  O_SPRM8, t1
+SRSM2:      call RSM_JUMP
+            jmp  JGO0
+
+L_PTT:      call BTNFLD                         ; LinkPTTN: a part, maybe in another PGC
+            andi t6, i3, 0x3FF
+            bnei t6, 0, LPT1
+            li   t6, 1
+            li   t1, 1
+            jmp  PMRD
+LPT1:       andi t1, i3, 0xFF
+            jmp  PMRD
+L_PGN:      call BTNFLD                         ; LinkPGN
+            li   t6, 0
+            andi t1, i3, 0x7F
+            bnei t1, 0, PMRD
+            li   t1, 1
+            jmp  PMRD
+L_CN:       call BTNFLD                         ; LinkCN
+            andi t1, i3, 0xFF
+            beqi t1, 0, SNC_SEEK
+            subi t1, t1, 1
+            in   t2, P_CUR_CELL
+            bne  t1, t2, SNC_SEEK
+            jmp  S_TOPC
+L_PGCN:     in   t1, P_VM_DOM                   ; LinkPGCN: a 15-bit PGCN
+            call LJVTS
+            andi t3, i3, 0x7FFF
+            call JSET
+            jmp  JGO0
+
+; =============================================================================
+; Jumps (type 1, imm). t3 = cond (true here).
+; =============================================================================
+J_TT:       andi t6, i2, 0x7F                   ; JumpTT n (TT_SRPT resolve)
+            st   t6, M_SPRMI+4
+            li   t1, 1
+            st   t1, M_SPRMI+7
+            st   t1, M_TT_RESOLVE               ; SPRM5 <= res_ttn on the load
+            outi O_VM_DOM, DOM_TT
+            outi O_VM_VTS, 0
+            li   t1, DOM_TT
+            li   t2, 0
+            li   t3, 0
+            call JSET
+            out  O_J_TTN, t6
+            li   t5, FB_TITLE
+            jmp  JGO
+J_VTSTT:    andi t6, i2, 0x7F                   ; JumpVTS_TT n
+            st   t6, M_SPRMI+5
+            li   t1, 1
+            st   t1, M_SPRMI+7
+            call LJVTS                          ; the domain's VTS, before vm_dom changes
+            outi O_VM_DOM, DOM_TT
+            li   t1, DOM_TT
+            li   t3, 0
+            call JSET
+            out  O_J_TTN, t6
+            li   t5, FB_TITLE
+            jmp  JGO
+J_VTSPTT:   andi t6, i2, 0x7F                   ; JumpVTS_PTT t:p (exact part)
+            st   t6, M_SPRMI+5
+            andi t1, i1, 0x3FF
+            st   t1, M_SPRMI+7
+            call LJVTS
+            outi O_VM_DOM, DOM_TT
+            li   t1, DOM_TT
+            li   t3, 0
+            call JSET
+            out  O_J_TTN, t6
+            andi t1, i1, 0x3FF
+            out  O_J_PTT, t1
+            li   t5, FB_TITLE
+            jmp  JGO
+J_SS:       andi t5, i0, 15                     ; 6 JumpSS / 8 CallSS
+            bnei t5, 8, JSS1
+            in   t1, P_VM_DOM
+            bnei t1, DOM_TT, JSS1
+            shri t1, i2, 8                      ; CallSS from a title: save RSM;
+            andi t1, t1, 0xFF                   ; rsm_cell = ins[31:24] - 1, or here
+            beqi t1, 0, JSSC
+            subi t1, t1, 1
+            jmp  JSSS
+JSSC:       in   t1, P_CUR_CELL
+JSSS:       call RSM_SAVE
+JSS1:       shri t6, i2, 6
+            andi t6, t6, 3                      ; ins[23:22]
+            jr   t6, JSSTAB
+JSSTAB:     jmp  JSS_FP
+            jmp  JSS_VMGM
+            jmp  JSS_VTSM
+            jmp  JSS_PGC
+JSS_FP:     outi O_VM_DOM, DOM_FP
+            outi O_VM_VTS, 0
+            li   t1, DOM_FP
+            li   t2, 0
+            li   t3, 0
+            jmp  JSS_GO
+JSS_VMGM:   outi O_VM_DOM, DOM_VMGM
+            outi O_VM_VTS, 0
+            andi t1, i2, 15                     ; menu ins[19:16]
+            shli t1, t1, 4
+            ori  t1, t1, DOM_VMGM
+            li   t2, 0
+            li   t3, 0
+            jmp  JSS_GO
+; VTSM: JumpSS_VTSM and CallSS_VTSM DECODE DIFFERENTLY (the Matrix white-rabbit
+; bug, docs/dvd_vm.md): CallSS stays in this title's VTS; JumpSS opens ins[31:24]
+; (0 = the current one) and sets SPRM5 = ins[39:32].
+JSS_VTSM:   andi t4, i2, 15
+            bnei t5, 8, JSSV_J                  ;MUT callss: jmp JSSV_J
+            in   t2, P_CUR_VTS
+            jmp  JSSV_W
+JSSV_J:     andi t1, i1, 0xFF
+            st   t1, M_SPRMI+5
+            shri t2, i2, 8
+            andi t2, t2, 0xFF
+            bnei t2, 0, JSSV_W
+            call LJVTS
+JSSV_W:     outi O_VM_DOM, DOM_VTSM
+            out  O_VM_VTS, t2
+            shli t1, t4, 4                      ; menu ins[19:16]
+            ori  t1, t1, DOM_VTSM
+            li   t3, 0
+            jmp  JSS_GO
+JSS_PGC:    outi O_VM_DOM, DOM_VMGM             ; VMGM PGC: a 15-bit PGCN, 0 -> 1
+            outi O_VM_VTS, 0
+            andi t3, i1, 0x7FFF
+            bnei t3, 0, JSSP1
+            li   t3, 1
+JSSP1:      li   t1, DOM_VMGM
+            li   t2, 0
+JSS_GO:     call JSET
+            jmp  JGO0
