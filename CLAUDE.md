@@ -262,7 +262,8 @@ MiSTer_DVD/
 ├── rtl/                       ← UPSTREAM mpeg2fpga decoder (fork edits allowed, see below)
 ├── sys/                       ← UPSTREAM: MiSTer framework (edit only when unavoidable)
 ├── dvd/                       ← this fork's RTL: emu.sv (top), reader, demux, audio,
-│                                 nav/VM, HUD, overlays, ac3/, mp2/
+│                                 nav/VM, HUD, overlays, ac3/, mp2/, nav/ (the VM's
+│                                 microcode: vm.uasm + its ROM; docs/nav_engine.md)
 ├── hps/                       ← RETIRED. The HPS audio daemon's C sources were deleted in
 │                                 the pre-release cleanup; only two stale compiled ARM
 │                                 binaries remain tracked (~1.7 MB). Nothing builds or
@@ -434,6 +435,7 @@ otherwise; `--red` runs its mutation arms).
 | clk_mem closes 90 MHz: victim invalidate deferred a cycle (82.2 → 93.2 worst corner, SEED 9); `fmax_check` WARNs on clk_mem | ✅ sim cycle-exact; HW smoke = `main` (THE_OFFICE Prog: same 1 late, 0 drops); MERGED PR #157 | `status_log.md` "clk_mem timing" | `run_mem_shim.sh --red` (LOCKSTEP arm) |
 | Logic reclaim (AC-3, nav/VM, reader ×2; debug overlay retired) | ✅ (D HW-confirmed 2026-09-26) | `logic_reclaim.md` §8 | `bench/ac3` suites, `run_reader_regress.sh` |
 | Logic reclaim E: VM GPRMs in an M10K (−1,129 ALUTs) | ✅ | `logic_reclaim.md` §9 | `run_gprm_ram.sh`, `check_gprm_ram.py` |
+| DVD VM as microcode (`nav_seq` running `dvd/nav/vm.uasm`, §10b pilot): standalone fit −716 ALM, +4 M10K; transaction-equal to the old FSM (kept as `bench/dvd/ref/dvd_vm_hw.sv`); offline libdvdnav diff | 🔧 sim + standalone fit; ⏳ full fit, HIL | `nav_engine.md` | `run_vm_ab.sh --red`, `run_gprm_ram.sh --red`, `tools/nav_offline.py` |
 | Decode pacing × output mode: Progressive lates = display re-read contention; `dec_duty` telemetry (PR #137) | ✅ fixed by F1 + F2 (whole census 0; §6c resolved) | `decode_pacing.md` | `run_telem.sh`, `check_decode_duty_wiring.py` |
 | F1: no OSD display reads (8 → 6 words per MB-line, bit-exact; Prog lates ROGER 9.2→3.8, Office 8.2→1.0, Thayer 7.3→0.1; PR #138) | ✅ HW-measured | `decode_pacing.md` §7 | `run_osd_read.sh`, `check_osd_read_wiring.py` |
 | Per-picture decode-time instrument: telemetry words 21–24 (`pic_max`, `pic_n`, `pic_over`); settled §6c, F4 not justified; PR #140 | ✅ HW data | `decode_pacing.md` §7 "Instrument" | `run_telem.sh` (M5–M8), `check_decode_duty_wiring.py` |

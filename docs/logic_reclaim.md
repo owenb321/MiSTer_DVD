@@ -532,6 +532,14 @@ decoded together, so the IMDCT's `bufmem`, `delay_mem` and `pcm_mem` could share
 
 ### 10b. A navigation sequencer for the reader, the VM and `nav_pci` (biggest, riskiest)
 
+> **🔧 The VM pilot is built (2026-10-07, branch `feature/nav-ucode`): `docs/nav_engine.md`.**
+> - **Cost:** 1,635 → 919 ALM standalone (−716), +4 M10K.
+> - **Equivalence:** transaction-equal to the old FSM (a three-way A/B with the FSM kept
+>   as the oracle), and every VM gate is green with its `--red` arms re-expressed.
+> - **Offline diff:** the same microcode runs offline against libdvdnav over the ISO
+>   library (`tools/nav_offline.py`), which is the "largest practical win" below.
+> - **Pending:** the full-core fit and HIL.
+
 | entity | ALMs | M10K |
 |---|---|---|
 | `dvd_iso_reader` | 4,352 | 32 |
@@ -671,4 +679,5 @@ the census since F1 + F2, `decode_pacing.md`) is the hardest-won property in the
    budget gate's `IMDCT_BLOCK` and the executor design.
 3. **The VM as a microcode pilot** (10b), or the reader state split first if the area
    question matters more than the workflow one. Either decides whether the rest of 10b
-   and 10c are worth a branch.
+   and 10c are worth a branch. **Built (2026-10-07, `docs/nav_engine.md`): the pilot
+   says yes on area (−716 ALM for +4 M10K).** Next is the reader state split.

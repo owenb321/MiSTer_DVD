@@ -1,5 +1,12 @@
 # DVD-VM interpreter (`dvd/dvd_vm.sv`) — Phase 4 disc menus
 
+> **★ Since 2026-10-07 the VM is MICROCODE: `docs/nav_engine.md`.**
+> - `dvd/dvd_vm.sv` is a hardwired wrapper around a sequencer running `dvd/nav/vm.uasm`.
+> - Every semantic below still holds, transaction for transaction: the hardwired FSM
+>   this note describes is kept as the A/B oracle, `bench/dvd/ref/dvd_vm_hw.sv`.
+> - Read "Execution model" as the meaning of the microcode. Its labels name the old
+>   states (`IDLE`, `WAIT`, `FETCH`, `PMRD`, ...).
+
 **Status: HW ROUND 1 PASSED core acceptance (2026-07-07, branch `feature/dvd-vm`);
 round-2 fixes shipped, re-test pending.** Sim: unit tb (`bench/dvd/dvd_vm_tb.sv`: 27
 golden-model vectors bit-exact + 9 dispatch scenarios) + reader+VM end-to-end
@@ -8,8 +15,9 @@ golden-model vectors bit-exact + 9 dispatch scenarios) + reader+VM end-to-end
 **HW status (3 rounds): CORE ACCEPTED — merged as PR fj#82.** BBB/MiB/Matrix all
 navigate menus and play the correct titles/features. Remaining items are per-disc
 nav_pci highlight rendering + transition polish, tracked in
-**`docs/dvd_menu_refinements.md`** (a follow-up track, not a phase gate; `O[1]`
-defaults Off so normal playback is unaffected). T2 Ultimate — an extreme case
+**`docs/dvd_menu_refinements.md`** (a follow-up track, not a phase gate). `O[1]` Disc
+Menus defaults **On** (index 0, `menus_on = ~status[1]` in `emu.sv`); Off gives Phase-3
+playback. This note said "defaults Off" until 2026-10-07. T2 Ultimate — an extreme case
 (GPRM timeline state machine) — surfaced highlight fill/offset/visibility +
 transition-freeze issues recorded there.
 
@@ -593,9 +601,15 @@ PGC12 GPRM dispatcher → `LinkPGCN 6` = the game menu **directly**, no copyrigh
 > link needs the on-HW reader diagnostic (freeze-diagnostic overlay: `rd_state` + `{cur_vts,cur_pgcn}`).
 | `pgc_error` | fallback chain (below) |
 
-Fetch = 8 sync-BRAM reads (cmd BRAM 2048×8, reader-written; button slot bypasses the
-BRAM). ALU: 1-cycle simple ops; serial 16-cycle mul (MSB-first shift-add) and
-restoring div/mod/rnd. Program-map links scan/read the pm BRAM (2 cycles/entry).
+Fetch: the command table is 512 commands (4096 bytes, reader-written). The button slot
+bypasses the table.
+- **The old FSM:** 8 sync-BRAM reads, 1-cycle simple ops, a serial 16-cycle mul
+  (MSB-first shift-add) and a restoring div/mod/rnd.
+- **The microcode** (`docs/nav_engine.md`): 4 word reads from two byte banks, the same
+  arithmetic as loops (multiply saturating per step, restoring divide), ~270 cycles for
+  the slowest command.
+
+Program-map links scan and read the pm BRAM.
 
 **Reader-wait contract**: every `vm_cell_cmd` / `vm_pgc_end` is answered with exactly
 one of `vm_adv` (continue authored behaviour), `vm_replay` (replay the current cell,
@@ -618,7 +632,9 @@ one of `vm_adv` (continue authored behaviour), `vm_replay` (replay the current c
   LinkCN n → replay if n-1 == cur_cell else seek.
 - LinkTopPG/NextPG/PrevPG → program-map scan for cur_pg, then pm[pg−1]−1 seek
   (NextPG past the last program → POST); no program map → cell approximations.
-- LinkPGN/LinkPTTN → pm lookup (PTT ≈ program until Phase 6).
+- LinkPGN → pm lookup. LinkPTTN → pm lookup when the part is a program of this PGC;
+  otherwise the exact `VTS_PTT_SRPT` resolve (a cross-PGC part: `jump_ttn` = SPRM5,
+  `jump_ptt` = the part, PRE skipped — the Tomb Raider "return to a previous choice" fix).
 - LinkTopPGC → re-enter the current PGC (pre re-runs); LinkNext/Prev/GoUpPGC → jump
   to the authored next/prev/goup PGCN (0 → hold).
 - LinkTailPGC → chain into the POST block **now** (MiB Play buttons).
@@ -797,6 +813,10 @@ python3 tools/dvd_vm_ref.py menu  <disc.iso> N  # trace a Menu-key press
 # library sweep (old vs new Menu-key landing): force vm.menu_seen = True for the
 # pre-shortcut path and compare -- how the 141-disc table above was produced.
 iverilog -g2012 -o /tmp/v dvd/dvd_vm.sv bench/dvd/dvd_vm_tb.sv && vvp /tmp/v
+# the microcoded VM (docs/nav_engine.md)
+python3 tools/nav_isa.py --asm --check          # ROM + generated files current
+bench/dvd/run_vm_ab.sh --red                    # old FSM = Python VM = new RTL; arms bite
+tools/nav_offline.py <disc.iso> --auto 3        # the microcode vs libdvdnav, no rig
 iverilog -g2012 -o /tmp/r dvd/dvd_iso_reader.sv dvd/dvd_vm.sv \
     bench/dvd/iso_reader_vm_tb.sv && vvp /tmp/r
 ```
@@ -819,4 +839,4 @@ differently on the two visits because g14 changes — GPRM state observably work
 - Matrix: menus/pagination/chapter buttons as in Phase 3, now via real execution.
 - Titles: POST commands at feature end return to a menu instead of parking.
 - Audio/subtitle menus switch streams (SetSTN → track mux).
-- Menus Off (O[1] default): behaviour identical to Phase 3 (regression).
+- Menus Off (O[1] = Off): behaviour identical to Phase 3 (regression).

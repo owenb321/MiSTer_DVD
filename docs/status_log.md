@@ -22,6 +22,50 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **THE DVD VM AS MICROCODE (2026-10-07, branch `feature/nav-ucode`; sim-proven,
+  standalone fit; ⏳ full-core fit, HIL `nav_diff`, hand check).** Full note:
+  `docs/nav_engine.md`.
+  - **Why:** `docs/logic_reclaim.md` §10b's pilot. The VM is microcoded alone, so the
+    cost and the workflow are measured before the reader is touched.
+  - **What:**
+    - `dvd/dvd_vm.sv` keeps its module and every port. Inside it, a 40-bit,
+      16-register sequencer (`nav_seq`, same file) runs `dvd/nav/vm.uasm` (1,014 of
+      1,024 words) from an M10K ROM. GPRMs, RAM-resident SPRMs, RSM and the fallback
+      state live in a 256 × 16 data RAM.
+    - The wrapper keeps the real-time half: event latches and priority, the wait timer,
+      pulses and fields, SPRM8/SPRM3 shadows, `pre_done`, the LFSR.
+    - The tools are `tools/nav_isa.py` (ISA, assembler, emulator, `--mutant`) and
+      `tools/nav_shell.py` (the wrapper in Python).
+  - **Cost (standalone, SEED 1, `bench/dvd/vm_fit_top.sv`, the dbg ports open as in
+    `emu`):** 1,635 → **919 ALM (−716)**, 6 → 10 M10K, ≈ 50 MHz both.
+  - **Equivalence:**
+    - The old FSM is kept unchanged as `bench/dvd/ref/dvd_vm_hw.sv`.
+    - `tools/vm_ab.py` / `bench/dvd/run_vm_ab.sh` runs it, the Python VM and the new RTL
+      on generated scripts, applied at rest. They agree on 1,000 × 120 steps: 271k
+      pulses with their fields, SPRM changes, and the whole state at every rest. The RTL
+      also matches the emulator's trace and cycle count.
+    - All 16 `;MUT` arms diverge, and four wrapper mutations are caught. One of them,
+      `pre_done`'s load-bearing `!ev_loaded`, was gated by nothing before.
+    - `dvd_vm_tb` prints the same 49 lines on both.
+    - Every VM runner's `--red` arm was re-expressed against the microcode and is caught
+      by the same named arm as before.
+  - **Found on the way (the old RTL, simulation only):**
+    - `ev_title` / `ev_return` / `ev_cmenu` are missing from its reset block;
+    - its command and program-map RAMs are never initialised.
+
+    Silicon powers both up 0; the A/B bench deposits it.
+  - **Fixed on the way:** the LFSR seeds synchronously, which removes the `lfsr[8]~15`
+    latch every STA run logged.
+  - **Offline libdvdnav diff:** `tools/nav_offline.py` runs the same microcode under a
+    model of the reader's playback against `trace_nav`. 48 library discs: 71 actions
+    compared, all equal on domain, VTS, PGCN and all 16 GPRMs.
+  - **Timing:** worst observed chain (a 4,096-command runaway) 1.11 M cycles, 41 ms;
+    ≥ 6× inside the reader's watchdogs.
+  - **Limits:**
+    - The A/B applies stimulus only at rest, so events arriving mid-chain are not
+      compared (`docs/nav_engine.md` §3).
+    - The ROM is full; the next microcode addition needs compaction or a fifth M10K.
+
 - ✅ **CLOCK_CHECK: EVERY CLOCK, INTRA-DOMAIN, EVERY CORNER (2026-10-07, ✅ MERGED
   PR #167; run on the v0.9.0 fit: PASS).** Full note: `docs/timing.md`.
   - **Why:** the release sweep of 2026-10-07 tracked two clocks, and the question was
