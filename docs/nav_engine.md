@@ -131,6 +131,7 @@ whose ROM is that arm, which is how the runners' VM arms work now.
 | `run_chap_edge --red` N1–N6 | microcode arms `chnat`, `chnext`, `chfirst`, `chmenu`, `usrstuck`; N2 (the `vm_adv` mask) is a wrapper edit; the same V-arms as before |
 | `run_player_regs --red` R4 | the wrapper's SPRM20 window |
 | `dvd_vm_tb`, `dvd_vm_atmos_tb`, the 12 reader+VM benches | unchanged in substance; the state that moved into the RAM is reached through `` `VM_GPRM(dut, i) `` etc. `dvd_vm_tb` prints the same 49 lines on both VMs. |
+| `run_reader_regress.sh --baseline <main>` | The PR #135 acceptance, met (2026-10-07). Verdicts are identical on all 51 arms. The 38 arms without the VM are bit-identical (log and trace). The 13 with it differ in their traces (a sequencer takes more cycles), and their logs differ only in numbers: `$finish` times, `cap=` cycle counts, printed `vm.state`. |
 
 **How the A/B works** (`tools/vm_ab.py`, `bench/dvd/vm_ab_tb.sv`, `tools/nav_shell.py`):
 - A generated script of inputs, command tables, program maps and pulses is applied
