@@ -185,6 +185,7 @@ class Player:
         self.cells = 0
         self.blocks = 0
         self.log = []
+        self.path = []                  # the PGCs that played a cell (path_key), in order
         self.set('auto_vts', self.d.best_vts)
         self.set('best_menu_vts', self.d.best_menu_vts)
 
@@ -345,6 +346,9 @@ class Player:
                     loops += 1
                 acted = False
             prev = key
+            k = path_key(DVDNAV_DOM[self.dom], self.vts, self.pgcn)
+            if not self.path or self.path[-1] != k:
+                self.path.append(k)
             c = p['cells'][self.cell]
             self.sh.inp_lv['cur_cell'] = self.cell
             h = self.d.hli(self.dom, self.vts, c)
@@ -447,6 +451,7 @@ def oracle(iso, script, seed=None):
     act_re = re.compile(r'^>> action: (.+)$')
     rows, last, pending, idx = [], None, None, None
     blockerr = False
+    path = []                                    # the PGCs that played a cell, in order
     for ln in out.splitlines():
         if ln.startswith('BLOCK ERR') or re.search(r'ifoRead_\w+ failed|No such pgcN', ln):
             # libdvdnav could not use the disc: a read error ('Expected NAV packet but
@@ -461,6 +466,10 @@ def oracle(iso, script, seed=None):
             last = dict(dom=int(m.group(2)), vts=int(m.group(3)), pgcn=int(m.group(4)),
                         pg=int(m.group(5)), cell=int(m.group(6)),
                         gprm=[int(x) for x in m.group(7).split(',')])
+            if m.group(1) == 'cell':
+                k = path_key(last['dom'], last['vts'], last['pgcn'])
+                if not path or path[-1] != k:
+                    path.append(k)
             continue
         m = park_re.match(ln)
         if m:
@@ -486,10 +495,16 @@ def oracle(iso, script, seed=None):
         # libdvdnav never parked, so no action ran: the disc boots straight into
         # playback. Where it stands at the cap is still the boot chain's verdict
         # (First Play -> the feature); compare that. A third of the library is this.
-        rows.append(('boot', dict(last, buttons=0, cap=True, blockerr=err_fail)))
+        rows.append(('boot', dict(last, buttons=0, cap=True,
+                                  blockerr=blockerr or err_fail, path=path)))
     # the commands libdvdnav lists and runs are on stderr (ran_rnd reads them); stdout
     # first, so auto_script's park parse sees the same text it always did
     return rows, out + '\n' + pr.stderr
+
+
+def path_key(dom, vts, pgcn):
+    """A boot-path step in libdvdnav's codes; the VTS only where it names one."""
+    return (dom, vts if dom in (2, 8) else 0, pgcn)
 
 
 def tok_of(action):
@@ -577,8 +592,27 @@ def compare_disc(iso, name, script, a, mutate, words=None):
         t = tok_of(act)
         menu_calls += t.startswith('m')
         u = ours[i][1] if i < len(ours) else None
-        if t == 'boot':
-            u = at_end                           # the model's position at the cap
+        if t == 'boot' and not o.get('blockerr'):
+            # both played until the cap and count blocks differently (whole cells
+            # here), so they stop at different points of the SAME boot chain
+            # (Horrible Bosses: four trailers, the model one behind). Compare the
+            # chain: one side's PGC path must be a prefix of the other's.
+            op, up = [tuple(x) for x in o.get('path', [])], pl.path
+            n = min(len(op), len(up))
+            agree = n > 0 and op[:n] == up[:n]
+            if not agree:
+                v = 'DIFF'
+            elif len(op) != len(up):
+                v = 'ok-prefix'                  # the same chain, one side further on
+            else:
+                v = 'ok'
+            if v == 'ok':                        # the same endpoint: registers compare
+                cm = at_end.get('gmode', 0)
+                og, ug = o.get('gprm') or [], at_end.get('gprm') or []
+                if any(a != b for i, (a, b) in enumerate(zip(og, ug)) if not (cm >> i) & 1):
+                    v = 'ok-gprm'
+            rows.append(dict(tok=t, o=o, u=dict(at_end, path=up), verdict=v))
+            continue
         if o.get('blockerr'):
             rows.append(dict(tok=t, o=o, u=u, verdict='oracle-err'))
             break                                # libdvdnav failed to read: not a landing
