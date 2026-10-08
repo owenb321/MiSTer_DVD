@@ -25,6 +25,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 - ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
   The microcoded VM against libdvdnav over every library disc, with
   `tools/nav_offline.py`. Full note: `docs/nav_engine.md` §5a.
+  - **Pass 2** (1,531 discs, cap 100k, fixed tools):
+    - 1,492 `ok`, 26 `rnd`, 6 `oracle-err`, 3 `nolanding` (two no-First-Play discs,
+      plus Anchorman, a cap artefact), 1 `cap-edge`, 1 `ok-gprm` (T3), and 2
+      unreadable;
+    - the 515 discs that never park were then compared on their boot chain: 501
+      agree, 10 `oracle-err`, 4 `rnd`.
   - **Result:** every lead traced to the model, to a libdvdnav failure, or to `rnd`,
     except **two pre-existing core differences**. The old FSM has both, so neither is the
     microcode's:
