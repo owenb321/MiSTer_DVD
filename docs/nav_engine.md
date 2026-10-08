@@ -198,7 +198,7 @@ throughout, the Scooby maze, MiB's and Matrix's last step), so those are not mea
 So the model reproduces the board where the board can be read, and it can read the steps
 the board cannot (HP Interactive and Scene It agree offline on all four of their steps).
 
-✅ **The maintainer's hand check passed (2026-10-08, the same build on .236).** It covered
+✅ **The maintainer's hand check passed (2026-10-08, the same build, on the rig).** It covered
 the paths `nav_diff` cannot reach, as for PR #135:
 - Scooby-Doo 2's minigame and maze;
 - T2 (Mission Profiles, a slideshow);
