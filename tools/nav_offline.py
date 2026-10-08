@@ -33,6 +33,19 @@ verdict: it names a disc, a script and a step to reproduce on the rig with
 nav_diff.py. Discs that use `rnd` are skipped (the core's LFSR and libdvdnav's RNG
 differ by design), as nav_diff does.
 
+A disc's status (docs/nav_engine.md sec 5):
+    ok          every compared landing agrees (dom, PGCN, VTS in a VTS domain, GPRMs
+                outside counter mode)
+    ok-gprm     the same screens, different registers, no rnd: a LEAD
+    DIFF        a different screen: a LEAD
+    rnd         libdvdnav executed a rnd set, and a difference (or a second seed)
+                followed it
+    oracle-err  libdvdnav could not use the disc after the action (read error, IFO
+                rejected, a PTT naming PGC 0)
+    cap-edge    both stopped at the block cap on the same screen, one park apart
+    nolanding   the model never reached the landing libdvdnav did: a LEAD
+    udf-only    no VIDEO_TS in the ISO9660 tree (the reader cannot open it)
+
 Usage:
     tools/nav_offline.py <disc.iso> --script "1 2 mR 1"
     tools/nav_offline.py <disc.iso> --auto 4            # a valid script from the oracle
@@ -519,6 +532,13 @@ def diff_disc(iso, script, mutate=None, words=None):
             res['status'] = 'rnd'
         elif res['status'] == 'ok':
             res['status'] = 'ok-gprm'        # same screens, different registers: a lead
+    elif res['status'] == 'ok' and ran_rnd(raw):
+        # agreement after an rnd may be luck (SpacePirates: seed 1's rand() and the
+        # LFSR gave the same g9). If another seed moves libdvdnav, the ok proves nothing.
+        b, _ = oracle(iso, script, seed=99)
+        if [(r[1].get('pgcn'), r[1].get('gprm')) for r in a] != \
+           [(r[1].get('pgcn'), r[1].get('gprm')) for r in b]:
+            res['status'] = 'rnd'
     return res
 
 
