@@ -358,8 +358,10 @@ class Player:
                 elif t == 'mT':
                     v = self.verdict(self.vm('pulse title'))
                 elif t.startswith('w'):
+                    # trace_nav prints a wait as an action too, and pairs it with the
+                    # next park after N cell changes: keep it pending (it was dropped,
+                    # which left every 'w1' script with nothing to compare)
                     wait = int(t[1:] or 1)
-                    pending = None
                 if v is not None and v[0] in ('jump', 'seek'):
                     cand = None
                     st = self.follow(v)
@@ -405,13 +407,27 @@ class Player:
 def oracle(iso, script, seed=None):
     """trace_nav's landings -> [(action, state)] with GPRMs (nav_diff's pairing)."""
     cmd = [TRACE_NAV, iso, script] + ([str(seed)] if seed is not None else [])
-    out = subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=900).stdout
+    pr = subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=900)
+    out = pr.stdout
+    # libdvdnav logs to BOTH streams (the link values on stdout, an IFO rejection and
+    # the Exit it substitutes on stderr), so their order cannot be recovered: a failure
+    # on stderr voids only a FINAL landing that ended without a park (see below)
+    err_fail = bool(re.search(r'ifoRead_\w+ failed|No such pgcN|BLOCK ERR', pr.stderr))
     vm_re = re.compile(r'VM\[([\w-]+)\]\s+dom=(-?\d+)\s+vtsN=(-?\d+)\s+pgcN=(-?\d+)'
                        r'\s+pgN=(-?\d+)\s+cellN=(-?\d+).*?GPRM\[([\d,]+)\]')
     park_re = re.compile(r'^===== PARK #(\d+)\s+title=(-?\d+)\s+part=(-?\d+)\s+buttons=(\d+)')
     act_re = re.compile(r'^>> action: (.+)$')
     rows, last, pending, idx = [], None, None, None
+    blockerr = False
     for ln in out.splitlines():
+        if ln.startswith('BLOCK ERR') or re.search(r'ifoRead_\w+ failed|No such pgcN', ln):
+            # libdvdnav could not use the disc: a read error ('Expected NAV packet but
+            # none found': a VOB not where the IFO says), an IFO libdvdread rejects
+            # (ifoRead_PGCIT failed), or a malformed link target (VTS_PTT_SRPT naming
+            # PGC 0 -> 'No such pgcN', then Exit). Its landing after that is its own
+            # failure, not navigation -- reported as oracle-err, not compared.
+            blockerr = True
+            continue
         m = vm_re.search(ln)
         if m:
             last = dict(dom=int(m.group(2)), vts=int(m.group(3)), pgcn=int(m.group(4)),
@@ -430,12 +446,14 @@ def oracle(iso, script, seed=None):
             continue
         if act_re.match(ln):
             if pending is not None and idx is None:
-                rows.append((pending, dict(last or {}, buttons=0, cap=True)))
+                rows.append((pending, dict(last or {}, buttons=0, cap=True, blockerr=blockerr)))
             pending, idx = act_re.match(ln).group(1), None
+            blockerr = False                     # only errors AFTER the action void it
     if pending is not None and idx is None:
         # no park after the last action (a title plays into the block cap): its
         # landing is where the trace ended
-        rows.append((pending, dict(last or {}, buttons=0, cap=True)))
+        rows.append((pending, dict(last or {}, buttons=0, cap=True,
+                                   blockerr=blockerr or err_fail)))
     return rows, out
 
 
@@ -471,15 +489,22 @@ def diff_disc(iso, script, mutate=None, words=None):
     a, _ = oracle(iso, script, seed=1)
     res = compare_disc(iso, name, script, a, mutate, words)
     if res['status'] == 'DIFF':
+        # compare the GPRMs too: Dragon's Lair II's `g9 = rnd 32` gave both seeds the
+        # same PGCs at the compared steps but different registers, and a later
+        # branch on g9 then diverged -- a PGC-only check called that a DIFF
         b, _ = oracle(iso, script, seed=99)
-        if [r[1].get('pgcn') for r in a] != [r[1].get('pgcn') for r in b]:
+        if [(r[1].get('pgcn'), r[1].get('gprm')) for r in a] != \
+           [(r[1].get('pgcn'), r[1].get('gprm')) for r in b]:
             res['status'] = 'rnd'
     return res
 
 
 def compare_disc(iso, name, script, a, mutate, words=None):
     try:
-        ours = Player(iso, mutate, words).run(script)
+        pl = Player(iso, mutate, words)
+        ours = pl.run(script)
+        capped = pl.blocks >= BLOCK_CAP
+        at_end = pl.state(0)
     except Exception as e:                       # a model or emulator failure is a finding too
         return dict(disc=name, script=script, rows=[], status=f'error: {e!r}')
     rows = []
@@ -488,8 +513,22 @@ def compare_disc(iso, name, script, a, mutate, words=None):
         t = tok_of(act)
         menu_calls += t.startswith('m')
         u = ours[i][1] if i < len(ours) else None
+        if o.get('blockerr'):
+            rows.append(dict(tok=t, o=o, u=u, verdict='oracle-err'))
+            break                                # libdvdnav failed to read: not a landing
         if u is None:
-            rows.append(dict(tok=t, o=o, u=None, verdict='nolanding'))
+            # both sides stopped at the block cap: they count blocks differently near
+            # it (whole cells here, block by block in trace_nav), so one can reach one
+            # more park than the other -- a boundary artefact, not a landing
+            # ...but only when we stopped on the screen libdvdnav applied this action
+            # at (the previous landing): a run that never parked at all is a real
+            # difference (ISLAM_TRAILER: libdvdnav parks on a First Play menu)
+            prev = a[i - 1][1] if i > 0 else None
+            same = prev is not None and all(
+                prev.get(k) == at_end.get(k)
+                for k in ['dom', 'pgcn'] + (['vts'] if prev.get('dom') in (2, 8) else []))
+            v = 'cap-edge' if (o.get('cap') and capped and same) else 'nolanding'
+            rows.append(dict(tok=t, o=o, u=None, verdict=v))
             break
         keys = ['dom', 'pgcn'] + (['vts'] if o.get('dom') in (2, 8) else [])
         same = all(o.get(k) == u.get(k) for k in keys)
@@ -505,7 +544,9 @@ def compare_disc(iso, name, script, a, mutate, words=None):
         if v == 'DIFF':
             break                                # everything after is downstream
     st = 'DIFF' if any(r['verdict'] == 'DIFF' for r in rows) else \
-         ('nolanding' if any(r['verdict'] == 'nolanding' for r in rows) else 'ok')
+         ('nolanding' if any(r['verdict'] == 'nolanding' for r in rows) else
+          ('oracle-err' if any(r['verdict'] == 'oracle-err' for r in rows) else
+           ('cap-edge' if any(r['verdict'] == 'cap-edge' for r in rows) else 'ok')))
     return dict(disc=name, script=script, rows=rows, status=st)
 
 
