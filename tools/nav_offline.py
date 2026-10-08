@@ -482,6 +482,11 @@ def oracle(iso, script, seed=None):
         # landing is where the trace ended
         rows.append((pending, dict(last or {}, buttons=0, cap=True,
                                    blockerr=blockerr or err_fail)))
+    if not rows and pending is None and last is not None:
+        # libdvdnav never parked, so no action ran: the disc boots straight into
+        # playback. Where it stands at the cap is still the boot chain's verdict
+        # (First Play -> the feature); compare that. A third of the library is this.
+        rows.append(('boot', dict(last, buttons=0, cap=True, blockerr=err_fail)))
     # the commands libdvdnav lists and runs are on stderr (ran_rnd reads them); stdout
     # first, so auto_script's park parse sees the same text it always did
     return rows, out + '\n' + pr.stderr
@@ -572,6 +577,8 @@ def compare_disc(iso, name, script, a, mutate, words=None):
         t = tok_of(act)
         menu_calls += t.startswith('m')
         u = ours[i][1] if i < len(ours) else None
+        if t == 'boot':
+            u = at_end                           # the model's position at the cap
         if o.get('blockerr'):
             rows.append(dict(tok=t, o=o, u=u, verdict='oracle-err'))
             break                                # libdvdnav failed to read: not a landing
