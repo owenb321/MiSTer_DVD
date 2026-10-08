@@ -1016,9 +1016,33 @@ can never continue differently from an expired one:
 | Indefinite (0xFF) or timed, the last cell | `STILL_PGEND`: PGC end → POST | same |
 
 The 0xFF entry now records `still_next`/`still_last` (it set neither before, since only the
-timer read them). With `vm_mode` the cell command outranks a 0xFF still (the HW-proven
-Phase-3 ordering, commented at the reader's cell-end branch), so `STILL_CMD` never applies
-there.
+timer read them).
+
+**An indefinite still and its cell command (2026-10-08, `feature/nav-fixes`).**
+- **Until then** the cell command outranked a 0xFF still whenever `vm_mode` was on. That is
+  the HW-proven Phase-3 ordering, which keeps MiB/Matrix motion menus looping instead of
+  freezing on a last frame. libdvdnav holds the still and runs the command only when the
+  still ends.
+- **The rule now:** command-first applies only to a command that **loops the cell**:
+  - `LinkCN` to itself;
+  - `LinkTopCell` / `LinkTopPG` / `LinkTopPGC`;
+  - `LinkPGN`, unconditionally, because menus run no program query, so "this program" isn't
+    known;
+  - `LinkPGCN` to this PGC.
+
+  Any other command waits out the still, with `still_next = STILL_CMD`; Still off or a
+  button's jump ends it.
+- **How the reader knows:** the `P_CMD` walker records each cell command's link class in
+  `ccls_mem` (256 × 21, one M10K) as it streams it to the VM, and `cc_loops` decodes it at
+  the cell's end.
+- **Found by:** the First Play fix on hardware. ISLAM_TRAILER's First Play menu cell is
+  0xFF + `g1 = 1; LinkTailPGC`. It ran at once, the POST linked on, and the disc stopped
+  at `Exit`, where libdvdnav waits for the press.
+- **Library:** 47 discs have a 0xFF still with a cell command, and about 12 have a non-loop
+  one. Among them, INDIVISIBLE's gallery (VTSM 2, PGC 19: five 0xFF + `LinkTailPGC` pages)
+  flashed page 1 and returned to the menu.
+- **Gates:** `iso_reader_fpnone_tb` G/H, `run_sprm67.sh --red` R8–R10. Every existing
+  reader-regress trace is unchanged.
 
 **Holds the key ignores (`still_act = 0`).** These are the holds with no continuation of
 their own, and the key is a no-op there, as it is at a dead end on a real player:

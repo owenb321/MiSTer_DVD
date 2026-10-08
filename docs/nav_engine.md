@@ -419,6 +419,14 @@ the fix is described after the list.
   - `bench/dvd/run_sprm67.sh --red`, 7 reader mutations, each caught by its own arm.
 - **Reader regress:** verdict-identical; six VM arms shift by 2 cycles, the shorter
   `RSM_SAVE`.
+- **HW (rig, A/B vs `dev-navsweep`):**
+  - SPRM7 is confirmed. Austin Powers 2's chapter menu, on its second visit from
+    chapter 10, opens "Chapters 7-12" with chapter 10 lit; the control opens "Chapters
+    1-6" with chapter 1.
+  - The First Play fix boots ISLAM_TRAILER's menu but ran into the reader's
+    command-before-0xFF-still order. That order is now narrowed to looping commands, by
+    user decision (`docs/dvd_nav.md` "An indefinite still and its cell command"); the
+    model mirrors it.
 - **Offline:** T3, D050818_01 and ISLAM_TRAILER now agree with libdvdnav.
 
 **Pass 2 (1,531 discs, the fixed model and oracle, a fresh run):**
