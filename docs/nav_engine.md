@@ -85,7 +85,10 @@ instructions with no table.
 
 ### The program
 
-- **Size:** 972 of 1,024 words (1,014 at the merge; compacted 2026-10-08, §7).
+- **Size:** 972 of 1,024 words (1,014 at the merge). It was compacted 2026-10-08 (§7):
+  sim-proven by the full gate set on the final tree (`run_vm_ab --red`, every VM runner
+  `--red`, and `run_reader_regress` IDENTICAL to `main` on all 51 arms: the compaction
+  kept every jump path's instruction count). ⏳ Not yet on a board.
 - **Layout:** the labels name the old FSM's states (`IDLE`, `WAIT`, `FETCH`, `EXEC`,
   `NEXT`, `PMRD`, ...), so the two read side by side.
 - **Wraparound:** every 8- and 9-bit wrap of the old FSM is reproduced with an
@@ -348,14 +351,18 @@ cap 100,000.
 oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcode's):
 
 1. **SPRM7 (PTTN) and SPRM6 (TT_PGCN) do not follow playback.**
-   - libdvdnav sets `PTTN_REG` whenever a program starts a new part ("this chapter
-     FOUND"), and sets `TT_PGCN_REG` to the title PGCN on every title PGC.
+   - libdvdnav updates both as a title plays (`src/vm/getset.c`):
+     - `set_PGN`, on every cell start in the title domain, sets `PTTN_REG` from
+       `vm_get_current_title_part`. That is the global part, reverse-mapped from
+       {pgcN, pgN} through VTS_PTT_SRPT: the same quantity as the reader's `cur_pgm`.
+     - `set_PGCN` sets `TT_PGCN_REG = pgcN` on every title-domain PGC.
    - The core writes SPRM7 only at a jump (1, or the part a `JumpVTS_PTT` names), and
      SPRM6 only to 0 (both at mount, and restored by RSM).
    - T3's VTSM PRE copies SPRM7 into g6 after the feature's last chapter: libdvdnav
      2, the core 1.
-   - **Library census** (a scan of every PGC's PRE/POST/cell commands; button
-     commands not scanned), 1,531 discs:
+   - **Library census** (`tools/sprm_census.py`: every PGC's PRE/POST/cell commands;
+     button commands are not scanned; type 0/1 compares and type 3 register-source
+     sets only), 1,531 discs:
      - **SPRM7 is read by 528 discs.** 475 copy it into a GPRM, mostly a VTSM menu
        preamble that saves the SPRMs, as T3's does. 58 branch on it directly, 53 of
        those in VMGM.
@@ -437,7 +444,8 @@ cannot be compared, because libdvdnav itself fails on them.
 
 ## 7. Next
 
-- **The ROM has 52 words free (972 / 1,024),** after the 2026-10-08 compaction
+- **The ROM has 52 words free (972 / 1,024; sim-proven, ⏳ HW pending),** after the
+  2026-10-08 compaction
   (`feature/nav-sweep`): the domain and VTS setup shared by most jumps (`JSETV`,
   `JSETV0`), and the mount clear as one loop over a contiguous RAM range. Past
   that, a fifth M10K gives 1,280 words. The RSM save could still become a table

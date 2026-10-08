@@ -602,8 +602,14 @@ def compare_disc(iso, name, script, a, mutate, words=None):
             agree = n > 0 and op[:n] == up[:n]
             if not agree:
                 v = 'DIFF'
+            elif len(up) > len(op):
+                # the model further on is NOT the accounting artefact: whole cells
+                # charged per cell can only put it behind. libdvdnav spending its
+                # blocks somewhere the model left (a loop, a held cell) is a lead.
+                # (Ten of these were libdvdnav read errors, which BLOCK ERR now voids.)
+                v = 'DIFF'
             elif len(op) != len(up):
-                v = 'ok-prefix'                  # the same chain, one side further on
+                v = 'ok-prefix'                  # the same chain, the model behind
             else:
                 v = 'ok'
             if v == 'ok':                        # the same endpoint: registers compare
