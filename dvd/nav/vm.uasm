@@ -38,20 +38,13 @@
 ; RESET: power-on and every mount (`start`) enter here (old: the reset values and
 ; the `if (start)` block; the GPRM clear walk).
 ; =============================================================================
+; the GPRMs, counter mode, fb (FB_NONE), cvm, skip_pre, tt_resolve, chain, rsm_vts and
+; the dead-end latch: contiguous from 0 (tools/nav_isa.py RAM_MAP), cleared in one walk.
+; The rest of RSM is NOT cleared, as the old FSM's mount did not (rsm_vts == 0 says none).
 RESET:      li   t1, 0
 RCLR:       st   r0, M_GPRM[t1]  ;MUT mountclear: nop
             addi t1, t1, 1
-            bltui t1, 16, RCLR
-            st   r0, M_GMODE
-            st   r0, M_FB                       ; FB_NONE
-            st   r0, M_CVM
-            st   r0, M_SKIP_PRE
-            st   r0, M_TT_RESOLVE
-            st   r0, M_CHAIN
-            st   r0, M_RSM_VTS
-            st   r0, M_DE_SEEN
-            st   r0, M_DE_VTS
-            st   r0, M_DE_PGCN
+            bltui t1, M_MOUNT_CLR, RCLR
             li   t1, 1
             st   t1, M_SPRMI+4
             st   t1, M_SPRMI+5
@@ -115,6 +108,11 @@ WV_IDLE:    andi t6, blkf, 3
             beqi t6, BLK_BTN, IDLE
 ADV_IDLE:   outi O_PULSE, PB_ADV
             jmp  IDLE
+; JSETV0 / JSETV: as JSET, and the VM's own domain and VTS become the jump's (O_VM_DOM
+; takes t1[1:0]); JSETV0 also sets pgcn 0. Most jumps change the VM's domain this way.
+JSETV0:     li   t3, 0
+JSETV:      out  O_VM_DOM, t1
+            out  O_VM_VTS, t2
 ; JSET: the jump fields: t1 = dom | entry << 4, vts t2, pgcn t3; ttn/pgn/cell/ptt 0
 JSET:       out  O_J_DE, t1
             out  O_J_VTS, t2
@@ -185,12 +183,10 @@ RSM_REST:   ld   t1, M_RSM_R4
             st   t1, M_SPRMI+7
             ret
 ; RSM_JUMP: the jump fields for a resume (TT rsm_vts rsm_pgcn, cell rsm_cell), no PRE
-RSM_JUMP:   outi O_VM_DOM, DOM_TT
-            ld   t2, M_RSM_VTS
-            out  O_VM_VTS, t2
+RSM_JUMP:   ld   t2, M_RSM_VTS
             li   t1, DOM_TT
             ld   t3, M_RSM_PGCN
-            call JSET
+            call JSETV
             ld   t1, M_RSM_CELL
             out  O_J_CELL, t1
             li   t1, 1
@@ -277,12 +273,9 @@ E_DISABLED: in   t1, P_EVENTS
 
 ; BOOT: run the First Play PGC
 E_BOOT:     call UPRO
-            outi O_VM_DOM, DOM_FP
-            outi O_VM_VTS, 0
             li   t1, DOM_FP
             li   t2, 0
-            li   t3, 0
-            call JSET
+            call JSETV0
             li   t5, FB_FP
             jmp  JGO
 
@@ -301,12 +294,9 @@ EE2:        bnei t6, FB_VTSM, EE3
             in   t1, P_BEST_MENU_VTS
             beqi t1, 0, EE3
             beq  t1, t2, EE3
-EE_VTSM2:   outi O_VM_DOM, DOM_VTSM             ; t1 = the VTS to try
-            out  O_VM_VTS, t1
-            mov  t2, t1
-            li   t1, DOM_VTSM | 3 << 4                          ; Root
-            li   t3, 0
-            call JSET
+EE_VTSM2:   mov  t2, t1                         ; t1 = the VTS to try
+            li   t1, DOM_VTSM | 3 << 4           ; Root
+            call JSETV0
             li   t5, FB_VTSM2
             jmp  JGO
 EE3:        beqi t6, FB_VTSM, EE_VMGM
@@ -333,29 +323,22 @@ EE_LF:      in   t1, P_JPGCN                    ; a user menu link failed: LINK 
             in   t1, P_LM_DOM
             in   t2, P_LM_VTS
             in   t3, P_LM_PGCN
-            out  O_VM_DOM, t1
-            out  O_VM_VTS, t2
-            call JSET
+            call JSETV
             li   t5, FB_VTSM
             st   t5, M_FB
             outi O_PULSE, PB_JUMP | PB_WARM | PB_LINKFAIL
             jmp  WAIT
-EE_AUTO:    outi O_VM_DOM, DOM_TT               ; FP / title / VMGM-without-resume: auto title
-            in   t2, P_AUTO_VTS
-            out  O_VM_VTS, t2
+EE_AUTO:    in   t2, P_AUTO_VTS                 ; FP / title / VMGM-without-resume: auto title
             li   t1, DOM_TT
             li   t3, 1
-            call JSET
+            call JSETV
             li   t5, FB_GAVEUP
             jmp  JGO
 EE_GU:      st   r0, M_FB                       ; never loop on errors
             jmp  IDLE
-EE_VMGM:    outi O_VM_DOM, DOM_VMGM
-            outi O_VM_VTS, 0
-            li   t1, DOM_VMGM | 2 << 4                          ; Title menu
+EE_VMGM:    li   t1, DOM_VMGM | 2 << 4           ; Title menu
             li   t2, 0
-            li   t3, 0
-            call JSET
+            call JSETV0
             li   t5, FB_VMGM
             jmp  JGO
 
@@ -474,22 +457,16 @@ EM_MENU:    ld   t1, M_CVM                      ; a menu we came to by the key: 
             call RSM_JUMP
             jmp  JGO0
 EM_ROOT:    call MENUKEY
-            outi O_VM_DOM, DOM_VTSM
-            out  O_VM_VTS, t2
-            li   t1, DOM_VTSM | 3 << 4                          ; Root
-            li   t3, 0
-            call JSET
+            li   t1, DOM_VTSM | 3 << 4           ; Root
+            call JSETV0
             jmp  JGO
 
 ; TITLE key: VMGM Title menu
 E_TITLE:    call UPRO
             call TITLE_RSM
-            outi O_VM_DOM, DOM_VMGM
-            outi O_VM_VTS, 0
             li   t1, DOM_VMGM | 2 << 4
             li   t2, 0
-            li   t3, 0
-            call JSET
+            call JSETV0
             li   t5, FB_VMGM
             jmp  JGO
 
@@ -497,11 +474,8 @@ E_TITLE:    call UPRO
 E_CMENU:    call UPRO
             call TITLE_RSM
             call MENUKEY
-            outi O_VM_DOM, DOM_VTSM
-            out  O_VM_VTS, t2
             li   t1, DOM_VTSM | 7 << 4
-            li   t3, 0
-            call JSET
+            call JSETV0
             li   t5, FB_VTSM
             jmp  JGO
 
@@ -1064,12 +1038,9 @@ J_TT:       andi t6, i2, 0x7F                   ; JumpTT n (TT_SRPT resolve)
             li   t1, 1
             st   t1, M_SPRMI+7
             st   t1, M_TT_RESOLVE               ; SPRM5 <= res_ttn on the load
-            outi O_VM_DOM, DOM_TT
-            outi O_VM_VTS, 0
             li   t1, DOM_TT
             li   t2, 0
-            li   t3, 0
-            call JSET
+            call JSETV0
             out  O_J_TTN, t6
             li   t5, FB_TITLE
             jmp  JGO
@@ -1117,15 +1088,11 @@ JSSTAB:     jmp  JSS_FP
             jmp  JSS_VMGM
             jmp  JSS_VTSM
             jmp  JSS_PGC
-JSS_FP:     outi O_VM_DOM, DOM_FP
-            outi O_VM_VTS, 0
-            li   t1, DOM_FP
+JSS_FP:     li   t1, DOM_FP
             li   t2, 0
             li   t3, 0
             jmp  JSS_GO
-JSS_VMGM:   outi O_VM_DOM, DOM_VMGM
-            outi O_VM_VTS, 0
-            andi t1, i2, 15                     ; menu ins[19:16]
+JSS_VMGM:   andi t1, i2, 15                     ; menu ins[19:16]
             shli t1, t1, 4
             ori  t1, t1, DOM_VMGM
             li   t2, 0
@@ -1144,18 +1111,14 @@ JSSV_J:     andi t1, i1, 0xFF
             andi t2, t2, 0xFF
             bnei t2, 0, JSSV_W
             call LJVTS
-JSSV_W:     outi O_VM_DOM, DOM_VTSM
-            out  O_VM_VTS, t2
-            shli t1, t4, 4                      ; menu ins[19:16]
+JSSV_W:     shli t1, t4, 4                      ; menu ins[19:16]
             ori  t1, t1, DOM_VTSM
             li   t3, 0
             jmp  JSS_GO
-JSS_PGC:    outi O_VM_DOM, DOM_VMGM             ; VMGM PGC: a 15-bit PGCN, 0 -> 1
-            outi O_VM_VTS, 0
-            andi t3, i1, 0x7FFF
+JSS_PGC:    andi t3, i1, 0x7FFF                 ; VMGM PGC: a 15-bit PGCN, 0 -> 1
             bnei t3, 0, JSSP1
             li   t3, 1
 JSSP1:      li   t1, DOM_VMGM
             li   t2, 0
-JSS_GO:     call JSET
+JSS_GO:     call JSETV
             jmp  JGO0

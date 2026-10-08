@@ -8,17 +8,17 @@
 `define VM_RAM(P, a)    P.u_seq.dram[a]
 `define VM_GPRM(P, i)   P.u_seq.dram[0 + (i)]
 `define VM_SPRM(P, n)   P.u_seq.dram[64 + (n)]    // 4..7, 9, 10, 13 only
-`define VM_RSM_R(P, n)  P.u_seq.dram[27 + (n) - 4]  // n = 4..8
+`define VM_RSM_R(P, n)  P.u_seq.dram[28 + (n) - 4]  // n = 4..8
 `define VM_GMODE(P)      P.u_seq.dram[16]
 `define VM_FB(P)         P.u_seq.dram[17]
 `define VM_CVM(P)        P.u_seq.dram[18]
 `define VM_SKIP_PRE(P)   P.u_seq.dram[19]
 `define VM_TT_RESOLVE(P) P.u_seq.dram[20]
 `define VM_CHAIN(P)      P.u_seq.dram[21]
-`define VM_RSM_VTS(P)    P.u_seq.dram[24]
-`define VM_RSM_PGCN(P)   P.u_seq.dram[25]
-`define VM_RSM_CELL(P)   P.u_seq.dram[26]
-`define VM_DE_SEEN(P)    P.u_seq.dram[32]
-`define VM_DE_VTS(P)     P.u_seq.dram[33]
-`define VM_DE_PGCN(P)    P.u_seq.dram[34]
+`define VM_RSM_VTS(P)    P.u_seq.dram[22]
+`define VM_RSM_PGCN(P)   P.u_seq.dram[26]
+`define VM_RSM_CELL(P)   P.u_seq.dram[27]
+`define VM_DE_SEEN(P)    P.u_seq.dram[23]
+`define VM_DE_VTS(P)     P.u_seq.dram[24]
+`define VM_DE_PGCN(P)    P.u_seq.dram[25]
 `endif

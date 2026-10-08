@@ -114,6 +114,7 @@ WEV_WAIT = ['LOADED', 'ERROR', 'TIMEOUT']
 # One single-port M10K, touched only by ld/st. Everything the old FSM kept in flops
 # that only the VM reads lives here.
 RAM_MAP = {
+    # 0x00 .. MOUNT_CLR-1: cleared by every mount (vm.uasm RESET walks them in one loop)
     'GPRM': 0x00,        # 0x00..0x0F the 16 GPRMs
     'GMODE': 0x10,       # counter-mode bits, one per GPRM
     'FB': 0x11,          # the fallback-chain state (FB_*)
@@ -121,9 +122,12 @@ RAM_MAP = {
     'SKIP_PRE': 0x13,
     'TT_RESOLVE': 0x14,
     'CHAIN': 0x15,       # VM-issued jumps this activation
-    'RSM_VTS': 0x18, 'RSM_PGCN': 0x19, 'RSM_CELL': 0x1A,
-    'RSM_R4': 0x1B, 'RSM_R5': 0x1C, 'RSM_R6': 0x1D, 'RSM_R7': 0x1E, 'RSM_R8': 0x1F,
-    'DE_SEEN': 0x20, 'DE_VTS': 0x21, 'DE_PGCN': 0x22,
+    'RSM_VTS': 0x16,     # 0 = no resume point
+    'DE_SEEN': 0x17, 'DE_VTS': 0x18, 'DE_PGCN': 0x19,
+    'MOUNT_CLR': 0x1A,
+    # kept across a mount, as the old FSM kept them
+    'RSM_PGCN': 0x1A, 'RSM_CELL': 0x1B,
+    'RSM_R4': 0x1C, 'RSM_R5': 0x1D, 'RSM_R6': 0x1E, 'RSM_R7': 0x1F, 'RSM_R8': 0x20,
     'T0': 0x28,          # 0x28..0x2F handler scratch
     'SPRMI': 0x40,       # 0x40..0x5F the SPRM image: 4..7, 9, 10, 13 live here
 }
