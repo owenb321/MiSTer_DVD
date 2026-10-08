@@ -13,7 +13,8 @@
 #                             held through the PRE, title-only
 #   iso_reader_ptt_tb         the reader publishes the GLOBAL part on every chapter move
 #   iso_reader_fpnone_tb      A/B/F First Play with no FP PGC; C/D/E which title's table
-#                             a PGCN-only title jump reads
+#                             a PGCN-only title jump reads; G/H an indefinite still and
+#                             its cell command (hold first unless the command loops)
 #   check_sprm67_wiring.py    emu.sv, which has no bench
 set -u
 cd "$(dirname "$0")/../.."
@@ -79,6 +80,15 @@ if [ "${1:-}" = "--red" ]; then
     # the part off by one (the 0-based index)
     mut R7-part-0based iso_reader_ptt_tb "T-I" \
         "s/                    ptt_cur <= {1'b0, g_best} + 11'd1;/                    ptt_cur <= {1'b0, g_best};/"
+    # every cell command counts as a loop: the old command-first order everywhere
+    mut R8-all-loop iso_reader_fpnone_tb "G:" \
+        "s/^wire        cc_loops   = (ccls_q\[20\] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/wire        cc_loops   = 1'b1 || (ccls_q[20] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/"
+    # no command counts as a loop: a motion menu would freeze
+    mut R9-none-loop iso_reader_fpnone_tb "H:" \
+        "s/^wire        cc_loops   = (ccls_q\[20\] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/wire        cc_loops   = 1'b0 \&\& (ccls_q[20] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/"
+    # the class table written one entry off (cmd_nr is 1-based)
+    mut R10-class-off-by-one iso_reader_fpnone_tb "[GH]:" \
+        "s/                        ccls_wa <= walk_idx\[10:3\] - nr_pre16\[7:0\] - nr_post16\[7:0\] + 8'd1;/                        ccls_wa <= walk_idx[10:3] - nr_pre16[7:0] - nr_post16[7:0];/"
 fi
 
 [ $rc -eq 0 ] && echo "run_sprm67: ALL GREEN" || echo "run_sprm67: FAILURES"

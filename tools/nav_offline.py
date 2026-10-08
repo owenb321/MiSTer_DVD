@@ -189,6 +189,20 @@ def still_of(p, ci):
     return 0
 
 
+def cell_cmd_loops(c, cell_no, pgcn):
+    """dvd_iso_reader's cc_loops: does this cell command LOOP the cell? Then an
+    indefinite (0xFF) still runs it first (the Phase-3 motion-menu order); any other
+    command waits out the still, as libdvdnav does (docs/dvd_nav.md "An indefinite
+    still and its cell command")."""
+    c = bytes(c)
+    t, lt, b7 = c[0] >> 5, c[1] & 0x0F, c[7]
+    sub_loop = (b7 & 0x1F) in (1, 5, 9)          # LinkTopCell / TopPG / TopPGC
+    if t == 1 and not c[0] & 0x10:               # a type-1 LINK
+        return ((lt == 1 and sub_loop) or lt == 6 or (lt == 7 and b7 == cell_no) or
+                (lt == 4 and (((c[6] & 0x7F) << 8) | b7) == pgcn))
+    return 2 <= t <= 6 and sub_loop              # a LinkSubIns riding a set/compare
+
+
 class Player:
     """The reader's playback around the microcoded VM (see the module docstring)."""
 
@@ -422,6 +436,9 @@ class Player:
                     elif loops > 0:
                         park = True
             still = still_of(p, self.cell)
+            if (still == 0xFF and c['cmd_nr'] and c['cmd_nr'] <= len(p['cellc']) and
+                    cell_cmd_loops(p['cellc'][c['cmd_nr'] - 1], self.cell + 1, self.pgcn)):
+                still = 0          # the core loops the cell instead of holding it
             if still == 0xFF:
                 park, cand = True, None
             elif still and cand is not None and cand[:3] == key[:3] and not acted:

@@ -10,6 +10,13 @@
 //                                  no jump_cross (fp_none counts First Play as a menu)
 //   F  ... and VMGI@200 = 0 too -> pgc_error, as before
 //
+// AN INDEFINITE STILL AND ITS CELL COMMAND (ISLAM_TRAILER's menu cell: still 0xFF and
+// 'g1 = 1; LinkTailPGC'). The reader ran every cell command before the still (the
+// Phase-3 order, for MiB/Matrix motion menus), so the disc linked on and stopped at
+// Exit. Now only a command that LOOPS the cell runs first:
+//   G  PGC 1's cell: 0xFF + LinkTailPGC -> the still holds, no vm_cell_cmd
+//   H  PGC 2's cell: 0xFF + LinkCN 1 (itself) -> vm_cell_cmd at once, no still
+//
 // SPRM7 FOLLOWS PLAYBACK: the reader publishes the playing cell's GLOBAL part (ptt_upd
 // / ptt_cur) from its title's PTT table. A VM title jump that names a PGCN but no
 // title (LinkPGCN, an RSM resume) used to load title 1's table regardless (1,139 of
@@ -70,6 +77,7 @@ module iso_reader_fpnone_tb;
     wire [10:0] nr_ptt_w;
     wire        ptt_upd_w;
     wire [10:0] ptt_cur_w;
+    wire        vm_cell_cmd_w;
 
     dvd_iso_reader dut (
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
@@ -77,7 +85,7 @@ module iso_reader_fpnone_tb;
         .aud_drained(1'b1), .vbuf_empty(1'b1),
         .jump_ttn(jump_ttn), .jump_pgn(jump_pgn[7:0]), .jump_ptt(jump_ptt),
         .still_off(1'b0), .vm_mode(1'b1), .vm_adv(1'b0), .vm_replay(1'b0),
-        .vm_cell_cmd(), .vm_pgc_end(), .nav_ready_o(nav_ready_w),
+        .vm_cell_cmd(vm_cell_cmd_w), .vm_pgc_end(), .nav_ready_o(nav_ready_w),
         .auto_vts(auto_vts_w), .cell_count_o(cell_count_w), .res_ttn(res_ttn_w),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
         .seek_pulse(1'b0), .seek_natural(1'b0), .seek_cell(8'd0), .seek_ack(seek_ack),
@@ -115,6 +123,7 @@ module iso_reader_fpnone_tb;
     reg       kv_at_ack = 0, jc_at_ack = 0;
     reg [7:0] seen [0:255];                      // seen[byte] = streamed since cleared
     integer   n_ptt = 0;                         // parts published since cleared
+    integer   n_ccmd = 0;                        // vm_cell_cmd pulses since cleared
     reg [10:0] ptt_hist [0:7];
     integer   k;
     always @(posedge clk) begin
@@ -130,6 +139,7 @@ module iso_reader_fpnone_tb;
                 post_jump_byte <= stream_data; post_jump_v <= 1'b1; await_first <= 1'b0;
             end
         end
+        if (vm_cell_cmd_w === 1'b1) n_ccmd <= n_ccmd + 1;
         if (ptt_upd_w === 1'b1) begin
             if (n_ptt < 8) ptt_hist[n_ptt] <= ptt_cur_w;
             n_ptt <= n_ptt + 1;
@@ -197,6 +207,19 @@ module iso_reader_fpnone_tb;
     task put_cell(input integer pa, input integer idx, input [31:0] first, input [31:0] last);
         integer c; begin c = pa + 256 + idx*24; be32(c+8, first); be32(c+20, last); end
     endtask
+    // a cell's still byte and cell command number (cell table @256)
+    task put_cellsc(input integer pa, input integer idx, input [7:0] still, input [7:0] cmdnr);
+        begin img[pa+256+idx*24+2] = still; img[pa+256+idx*24+3] = cmdnr; end
+    endtask
+    // a command table @off holding ONE cell command (0 pre, 0 post)
+    task put_cellcmd(input integer pa, input [15:0] off, input [63:0] c);
+        integer k; begin
+            be16(pa+228, off);
+            be16(pa+off+0, 16'd0); be16(pa+off+2, 16'd0); be16(pa+off+4, 16'd1);
+            be16(pa+off+6, 16'd15);
+            for (k = 0; k < 8; k = k + 1) img[pa+off+8+k] = c[8*(7-k) +: 8];
+        end
+    endtask
     task put_ut(input integer sec, input [15:0] nsrp);          // one LU, 'en'
         integer base; begin
             base = sec*2048;
@@ -241,6 +264,12 @@ module iso_reader_fpnone_tb;
             put_msrp(21, 2, 8'h00, 32'd1100);
             put_pgc(21*2048+16+64, 8'd1, 8'd1);   put_cell(21*2048+16+64, 0, 0, 15);
             put_pgc(21*2048+16+600, 8'd1, 8'd1);  put_cell(21*2048+16+600, 0, 16, 31);
+            // G: PGC 1's cell = ISLAM's (0xFF + g1 = 1; LinkTailPGC)
+            put_cellsc(21*2048+16+64, 0, 8'hFF, 8'd1);
+            put_cellcmd(21*2048+16+64, 16'd300, 64'h710100010001000d);
+            // H: PGC 2's cell = a motion-menu loop (0xFF + LinkCN 1, itself)
+            put_cellsc(21*2048+16+600, 0, 8'hFF, 8'd1);
+            put_cellcmd(21*2048+16+600, 16'd300, 64'h2007000000000001);
             put_pgc(21*2048+16+1100, 8'd1, 8'd1); put_cell(21*2048+16+1100, 0, 32, 47);
 
             // VTSI_MAT @22: vts_ptt_srpt = +1 (23), vts_pgcit = +2 (24)
@@ -298,7 +327,7 @@ module iso_reader_fpnone_tb;
         integer b;
     begin
         for (b = 0; b < 256; b = b + 1) seen[b] = 8'd0;
-        saw_err = 0; saw_loaded = 0; post_jump_v = 0; n_ptt = 0;
+        saw_err = 0; saw_loaded = 0; post_jump_v = 0; n_ptt = 0; n_ccmd = 0;
         @(negedge clk);
         jump_domain = dom; jump_vts = vts; jump_pgcn = pgcn; jump_entry = 0;
         jump_ttn = ttn; jump_pgn = 0; jump_ptt = 0; jump_pulse = 1;
@@ -327,6 +356,14 @@ module iso_reader_fpnone_tb;
         // A: First Play with no First Play PGC -> VMGM PGC 1
         jump(2'd0, 8'd0, 16'd0, 7'd0);
         wait_byte(8'hC1, "A");
+        begin : wg integer t; t = 0;
+            while (!still_active && t < 2000000) begin @(posedge clk); t = t + 1; end
+        end
+        repeat (2000) @(posedge clk);
+        if (!still_active || n_ccmd != 0) begin
+            fail("G: 0xFF still + LinkTailPGC did not hold before its command");
+            $display("  still_active=%0d vm_cell_cmd x%0d", still_active, n_ccmd);
+        end else $display("G: 0xFF still + LinkTailPGC holds, command deferred  PASS");
         if (saw_err) fail("A: First Play errored (no FP PGC must play VMGM PGC 1)");
         if (post_jump_byte !== 8'hC1) begin fail("A: first byte is not VMGM PGC 1's"); $display("  byte=%02x", post_jump_byte); end
         if (!menu_active) fail("A: VMGM PGC 1 is not a menu to the reader");
@@ -344,6 +381,17 @@ module iso_reader_fpnone_tb;
             $display("  keep_vbuf=%0d jump_cross=%0d", kv_at_ack, jc_at_ack);
         end
         if (errors == 0) $display("B: First Play LinkPGCN 3 -> VMGM PGC 3, VBUF held  PASS");
+
+        // H: a motion-menu loop (0xFF + LinkCN to itself) keeps the command-first order
+        jump(2'd0, 8'd0, 16'd2, 7'd0);
+        wait_byte(8'hC2, "H");
+        begin : wh integer t; t = 0;
+            while (n_ccmd == 0 && !still_active && t < 2000000) begin @(posedge clk); t = t + 1; end
+        end
+        if (n_ccmd == 0 || still_active) begin
+            fail("H: 0xFF still + LinkCN-self did not run its command first");
+            $display("  still_active=%0d vm_cell_cmd x%0d", still_active, n_ccmd);
+        end else $display("H: 0xFF still + LinkCN to itself -> command first (loop)  PASS");
 
         // C: title jump to PGC 2 (title 2 only): title 2's table, parts 1 then 2
         jump(2'd3, 8'd1, 16'd2, 7'd0);

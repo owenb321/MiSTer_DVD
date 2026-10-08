@@ -1856,6 +1856,37 @@ always @(posedge clk) begin
     cc_rd <= cell_cat_mem  [cell_raddr];   // Phase-9 cell category byte@0
 end
 
+// CELL-COMMAND LINK CLASS (2026-10-08, docs/dvd_nav.md "An indefinite still and its
+// cell command"). One entry per cell command, written as the P_CMD walker streams it
+// to the VM, read for the playing cell's cmd_nr. A cell with an indefinite (0xFF)
+// still AND a cell command runs the command FIRST only when the command LOOPS -- a
+// motion menu's LinkCN to itself, LinkTopCell/TopPG/TopPGC, LinkPGN, LinkPGCN to this
+// PGC -- the HW-proven Phase-3 ordering that keeps MiB/Matrix menus moving. Any other
+// command waits out the still, as libdvdnav does (ISLAM_TRAILER's First Play menu:
+// 'g1 = 1; LinkTailPGC' ran at once, the POST linked on and the disc stopped at Exit).
+//   {t1lnk, t26, b1[3:0] (link type), b6[6:0], b7}: a type-1 LINK carries any link
+//   type; types 2-6 carry only a LinkSubIns, whose sub-instruction is b7[4:0].
+// LinkPGN counts as a loop unconditionally: a menu does not run the program query, so
+// "this program" is not known there, and command-first is what it did before.
+(* ramstyle = "M10K, no_rw_check" *) reg [20:0] ccls_mem [0:255];
+reg  [20:0] ccls_q;
+reg         ccls_we;
+reg  [7:0]  ccls_wa;
+reg  [20:0] ccls_wd;
+always @(posedge clk) begin
+    if (ccls_we) ccls_mem[ccls_wa] <= ccls_wd;
+    ccls_q <= ccls_mem[cm_rd[7:0]];
+end
+wire [4:0]  cc_sub     = ccls_q[4:0];
+wire [3:0]  cc_lt      = ccls_q[18:15];
+wire        cc_subloop = (cc_sub == 5'd1) || (cc_sub == 5'd5) || (cc_sub == 5'd9);
+wire        cc_loops   = (ccls_q[20] && ((cc_lt == 4'd1 && cc_subloop) ||
+                                         (cc_lt == 4'd6) ||
+                                         (cc_lt == 4'd7 && ccls_q[7:0] == cell_i + 8'd1) ||
+                                         (cc_lt == 4'd4 &&
+                                          {1'b0, ccls_q[14:8], ccls_q[7:0]} == cur_pgcn))) ||
+                         (ccls_q[19] && cc_subloop);
+
 // Phase 11: cur_cell_start continuously tracks the STREAMING cell via its own
 // sync read port on cell_i (cell_raddr is transiently repointed by the angle
 // prefetch / seek scans, so piggybacking there would skew the readout).
@@ -2642,6 +2673,9 @@ always @(posedge clk or negedge rst_n) begin
         pgc_loaded   <= 1'b0;
         pgc_error    <= 1'b0;
         cmd_we       <= 1'b0;
+        ccls_we      <= 1'b0;
+        ccls_wa      <= 8'd0;
+        ccls_wd      <= 21'd0;
         ext_w_en     <= 1'b0;
         still_timed  <= 1'b0;
         still_secs   <= 16'd0;
@@ -2733,6 +2767,7 @@ always @(posedge clk or negedge rst_n) begin
             pgc_dom_tt    <= (dom == DOM_TT);
         end
         cmd_we   <= 1'b0;
+        ccls_we  <= 1'b0;
         pm_we    <= 1'b0;
         ptt_we   <= 1'b0;
         ext_w_en <= 1'b0;                   // one-cycle write strobe (see ext_mem)
@@ -4650,6 +4685,16 @@ always @(posedge clk or negedge rst_n) begin
                     if (walk_idx[2:0] == 3'd0) cmd_b0 <= pb_rdata;
                     if (walk_idx[2:0] == 3'd1) cmd_b1 <= pb_rdata;
                     if (walk_idx[2:0] == 3'd6) cmd_b6 <= pb_rdata;
+                    // a CELL command's last byte: record its link class (ccls_mem)
+                    if (walk_idx[2:0] == 3'd7 &&
+                        {6'd0, walk_idx[12:3]} >= nr_pre16 + nr_post16 &&
+                        {6'd0, walk_idx[12:3]} - nr_pre16 - nr_post16 < 16'd255) begin
+                        ccls_we <= 1'b1;
+                        ccls_wa <= walk_idx[10:3] - nr_pre16[7:0] - nr_post16[7:0] + 8'd1;
+                        ccls_wd <= {cmd_b0[7:5] == 3'd1 && !cmd_b0[4],
+                                    cmd_b0[7:5] >= 3'd2 && cmd_b0[7:5] <= 3'd6,
+                                    cmd_b1[3:0], cmd_b6[6:0], pb_rdata};
+                    end
                     // LinkPGCN in a PRE command (type 1 link, op 4): byte0=0x20,
                     // byte1 low nibble=4; unconditional when the compare op
                     // (byte1[6:4]) is 0. DVD-FORK FIX: the target is the 15-BIT
@@ -5523,6 +5568,20 @@ always @(posedge clk or negedge rst_n) begin
                                                                            STILL_NEXT;
                                     strm_done  <= 1'b1;
                                     still_pend <= 1'b1;   // drain, then S_STILL
+                                end else if (vm_mode && cm_rd[7:0] != 8'd0 &&
+                                             cm_rd[15:8] == 8'd255 && !cc_loops) begin
+                                    // INDEFINITE STILL, THEN ITS CELL COMMAND (2026-10-08):
+                                    // a command that does not loop the cell waits out the
+                                    // still, as libdvdnav does; the user's Still off (or a
+                                    // button's jump) ends it, and the command runs then
+                                    // (STILL_CMD). Loop commands keep the command-first
+                                    // order below (ccls_mem, above).
+                                    still_timed <= 1'b0;
+                                    still_act   <= 1'b1;
+                                    still_last  <= (cell_i + 8'd1 >= cell_count);
+                                    still_next  <= STILL_CMD;
+                                    strm_done   <= 1'b1;
+                                    still_pend  <= 1'b1;   // drain, then S_STILL
                                 end else if (vm_mode && cm_rd[7:0] != 8'd0) begin
                                     if (dur_hold_w) begin
                                         // AUTHORED CELL DURATION: the cell's
@@ -5551,9 +5610,10 @@ always @(posedge clk or negedge rst_n) begin
                                     // hand it to the VM and wait for the
                                     // verdict (adv / replay / seek / jump).
                                     // Ordering matches the HW-proven Phase-3
-                                    // heuristic: the command outranks the
-                                    // cell still (MiB/Matrix interactive
-                                    // cells carry both).
+                                    // heuristic: a LOOPING command outranks
+                                    // an indefinite cell still (MiB/Matrix
+                                    // interactive cells carry both); any
+                                    // other waits it out (the branch above).
                                     vm_cell_cmd <= 1'b1;
                                     vmw_pgc     <= 1'b0;
                                     vmw_last    <= (cell_i + 8'd1 >= cell_count);
