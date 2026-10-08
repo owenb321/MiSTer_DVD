@@ -542,6 +542,9 @@ def main():
     ap.add_argument('--out', help='write the per-disc results here (JSON lines, as each '
                     'disc finishes)')
     ap.add_argument('--resume', action='store_true', help='with --out: skip discs already in it')
+    ap.add_argument('--only', metavar='FILE', help='run only the discs listed in FILE (paths '
+                    'relative to $DVD_ISO_DIR, one per line): a second pass over a sweep\'s '
+                    'differences and its discs that compared nothing')
     ap.add_argument('--block-cap', type=int, help='trace_nav\'s and the model\'s block cap '
                     '(default 400000; a sweep uses less, see BLOCK_CAP)')
     a = ap.parse_args()
@@ -562,6 +565,9 @@ def main():
     isos = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(LIB) for f in fs
                   if f.lower().endswith('.iso')
                   and not (set(os.path.relpath(dp, LIB).split(os.sep)) & SKIP_DIRS))
+    if a.only:
+        want = {ln.strip() for ln in open(a.only) if ln.strip()}
+        isos = [i for i in isos if os.path.relpath(i, LIB) in want]
     if a.limit:
         isos = isos[:a.limit]
     results = []
