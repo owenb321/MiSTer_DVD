@@ -85,7 +85,7 @@ instructions with no table.
 
 ### The program
 
-- **Size:** 1,014 of 1,024 words.
+- **Size:** 972 of 1,024 words (1,014 at the merge; compacted 2026-10-08, §7).
 - **Layout:** the labels name the old FSM's states (`IDLE`, `WAIT`, `FETCH`, `EXEC`,
   `NEXT`, `PMRD`, ...), so the two read side by side.
 - **Wraparound:** every 8- and 9-bit wrap of the old FSM is reproduced with an
@@ -253,29 +253,129 @@ The same microcode runs under a Python model of the reader's playback (`Player`)
 - loads resolve as the reader's jump service does: PTT_SRPT for a title, the entry
   id for a menu, `pgn` 0xFF = the last program;
 - cells play, with their still, then their cell command (the VM's verdict), then
-  PGCEND and POST, and authored `next_pgcn` on an advance;
+  PGCEND and POST, and authored `next_pgcn` on an advance (a command-only PGC too);
 - buttons come from the cell's first NV_PCK carrying an HLI;
-- playback is charged in sectors against `trace_nav`'s 400,000-block cap.
+- playback is charged in sectors against `trace_nav`'s block cap, shared through
+  `TRACE_BLOCK_CAP` (`--block-cap`; `trace_nav` defaults to 400,000).
 
 It parks by `trace_nav`'s rule (`tools/dvd_trace/trace_nav.c`): an indefinite still,
-or a button cell confirmed by a still or by a loop. It compares each action's landing
-with libdvdnav's: domain, VTS (title and VTSM), PGCN, and the 16 GPRMs. Program and
-cell are shown but not compared, because they are timing-dependent at the block cap.
+or a button cell confirmed by a still or by a loop. **The still is libdvdnav's, not
+the IFO's:** `still_of()` mirrors `vm_position_get`'s "rough fix", which holds a
+short single-VOBU cell as a still for its playback time. Without it, T2 read as a
+navigation difference (§3a).
 
-It skips discs that use `rnd`, and treats the first menu call as expected to differ
-(the boot-chain shortcut), as `nav_diff.py` does.
+It compares each action's landing with libdvdnav's: domain, PGCN, VTS in a VTS
+domain (libdvdnav keeps the last VTS in VMGM; the core says 0), and the 16 GPRMs,
+except those in counter mode (the model has no clock). Program and cell are shown
+but not compared, because they are timing-dependent at the block cap. The first
+menu call is expected to differ (the boot-chain shortcut), as in `nav_diff.py`.
 
-**Limits:** no clock, no angle blocks, and a model of the reader rather than the
-reader. **A difference is a lead to reproduce on the rig with `nav_diff.py`, not a
-verdict.**
+**A disc's status:**
+
+| Status | Meaning | Lead? |
+|---|---|---|
+| `ok` | every compared landing agrees | — |
+| `ok-gprm` | the same screens, different GPRMs, and libdvdnav ran no `rnd` | **yes** |
+| `DIFF` | a different screen | **yes** |
+| `nolanding` | the model never reached a landing libdvdnav did | **yes** |
+| `rnd` | libdvdnav **executed** a `rnd` set, and a difference (or a second seed) followed it | no: the core's LFSR and libdvdnav's `rand()` differ by design |
+| `oracle-err` | libdvdnav could not use the disc after the action: a read error (`Expected NAV packet`), an IFO libdvdread rejects (`ifoRead_PGCIT failed`), a PTT naming PGC 0 (`No such pgcN`) | no |
+| `cap-edge` | both stopped at the block cap on the same screen, one park apart (they count blocks differently near it) | no |
+| `udf-only` | no `VIDEO_TS` in the ISO9660 tree; the reader cannot open it (a known gap) | no |
+
+`rnd` is decided from libdvdnav's own command trace on stderr (the commands it runs,
+not the block listings it prints first). A conditional `rnd` whose condition was
+false still counts, which is conservative. An `ok` on a disc that ran `rnd` is re-run
+under seed 99, and becomes `rnd` if that moves libdvdnav, since its agreement may have
+been luck.
+
+⚠ **`trace_nav`'s seed did not hold before 2026-10-08.** `dvdnav_open()` calls
+`srand(time.tv_usec)`, which replaced the seed `trace_nav` had set before opening.
+Every run's `rnd` differed, so the two-seed `rnd` test (here and in `nav_diff.py`)
+compared two random runs. The seed is now set after the open (`trace_nav.c`,
+`trace_wait.c`).
+
+**Limits:**
+- There is no clock, no angle blocks, and a model of the reader rather than the reader.
+  **A lead is something to reproduce on the rig with `nav_diff.py`, not a verdict.**
+- `auto_script` presses buttons only. The Menu and Title keys (`mR`, `mT`) and
+  chapter skips are never generated, so the scene-selection-from-a-title path that
+  exposes SPRM7 (§5a) is reached only when a disc's own buttons go there.
+- SPRM8 (the highlighted button) is not compared. A menu that pre-selects a button
+  from SPRM7 would read `ok` while highlighting the wrong one.
 
 Usage:
 ```
 tools/nav_offline.py <disc.iso> --script "1 2 mR 1"
-tools/nav_offline.py --library --auto 3 --out results.jsonl    # $DVD_ISO_DIR
+tools/nav_offline.py --library --auto 3 --block-cap 100000 --jobs 4 --out r.jsonl
+tools/nav_offline.py --library --only leads.txt --out r2.jsonl     # a second pass
 tools/nav_offline.py --library --red callss                    # a ;MUT arm must differ
 ```
-It needs `tools/bin/trace_nav` (`tools/build_dvd_trace.sh`; untracked).
+It needs `tools/bin/trace_nav` (`tools/build_dvd_trace.sh`; untracked). Use
+`--jobs 4` on a network library; each worker is light now. A model log once took a
+worker to 11 GB, and the logs are now dropped after each stimulus.
+
+### 5a. The library sweep (2026-10-08, `feature/nav-sweep`)
+
+The whole ISO library, `--auto 3` (three random buttons from libdvdnav's parks), block
+cap 100,000.
+
+**Pass 1 (1,530 discs)** ran with the model as it was at the merge:
+- 1,503 `ok`, 10 `DIFF`, 11 `nolanding`, 5 `rnd`, 1 error (`_hwtest/BADIMAGE`, not
+  ISO9660); one disc never finished (`dvdi/MILLIONAIRERUS`, below).
+- **Not what it looked like.** 516 of the `ok` discs compared nothing: libdvdnav never
+  parked within the cap, so their script was `w1`, and the model dropped `w` actions.
+  The register comparison was folded into `ok`, so 31 `ok-gprm` rows went unread.
+
+**Triage** turned every lead into a model fix or a class:
+
+| Disc | Pass 1 | Cause | Now |
+|---|---|---|---|
+| T2, Mad Dog, JSPAWN, RSD100, … | DIFF / nolanding | libdvdnav's short-cell still (`still_of`) | `ok` |
+| Just One of the Guys, `DVD_VIDEO` | nolanding | the dropped `w` action | `ok` |
+| Harvard Man, Tangled | DIFF | libdvdnav read error after the action | `oracle-err` |
+| DragBal2 | DIFF | libdvdread rejects a PGCIT; libdvdnav substitutes Exit | `oracle-err` |
+| DragBal1 | DIFF | a PTT entry names PGC 0; libdvdnav Exits | `oracle-err` |
+| FAIRYTOPIA, Dragon's Lair II, Die Another Day 2, 11 game discs | rnd / DIFF / ok-gprm | `rnd` on the path | `rnd` |
+| MANONFIRE, Scene It | nolanding | both at the cap, one park apart | `cap-edge` |
+| MILLIONAIRERUS | never finished | no `VIDEO_TS` in ISO9660; the model spun | `udf-only` |
+| **D050818_01, ISLAM_TRAILER** | nolanding | **the core: no First Play PGC** (below) | lead |
+| **TERMINATOR_3** | ok-gprm | **the core: SPRM7 does not follow playback** (below) | lead |
+
+**Two real differences, both in the core, and the old FSM had both** (the A/B
+oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcode's):
+
+1. **SPRM7 (PTTN) and SPRM6 (TT_PGCN) do not follow playback.**
+   - libdvdnav sets `PTTN_REG` whenever a program starts a new part ("this chapter
+     FOUND"), and sets `TT_PGCN_REG` to the title PGCN on every title PGC.
+   - The core writes SPRM7 only at a jump (1, or the part a `JumpVTS_PTT` names), and
+     SPRM6 only to 0 (both at mount, and restored by RSM).
+   - T3's VTSM PRE copies SPRM7 into g6 after the feature's last chapter: libdvdnav
+     2, the core 1.
+   - **Library census** (a scan of every PGC's PRE/POST/cell commands; button commands not scanned):
+     ⏳ split pending.
+   - The reader already resolves the global PTT index for the HUD (`cur_pgm`,
+     `dvd_iso_reader.sv`, 8 bits, clamped at 255 for the display), and `dvd_vm` has
+     `cur_pgcn`.
+   - **Proposed fix (not built):**
+     - a title-domain SPRM7 latch fed from a 10-bit `cur_pgm` (the spec allows 999
+       parts);
+     - SPRM6 = `cur_pgcn` in the title domain;
+     - both kept across a menu call, as libdvdnav keeps them;
+     - RSM save/restore reconciled.
+   - **What a user would see:** a scene-selection menu opened mid-film that pages
+     or highlights from SPRM7 opens at chapter 1.
+   - **Rig check:** play into chapter 3, press Chapter Menu, see which page and
+     button come up.
+2. **No First Play PGC (VMGI@0x84 = 0).**
+   - libdvdnav's `set_FP_PGC` then plays VMGM PGC 1 in the First Play domain.
+   - The reader's `S_JMP_VMGI` raises `pgc_error` instead, so the VM's FB_FP fallback
+     goes to the auto title.
+   - The census found 2 such discs (D050818_01, ISLAM_TRAILER) and no First Play PGC
+     with cells.
+   - **Proposed fix (not built):** the reader mirrors `set_FP_PGC`.
+
+**Pass 2** (the fixed model, a fresh run): ⏳ running.
 
 ## 6. Decisions and rejected alternatives
 
@@ -296,11 +396,11 @@ It needs `tools/bin/trace_nav` (`tools/build_dvd_trace.sh`; untracked).
 
 ## 7. Next
 
-- **The ROM is full (1,014 / 1,024).** The next microcode addition needs either
-  compaction or a fifth M10K (1,280 words is 5 × 256 × 40). Candidates for
-  compaction:
-  - jump-field setup at each call site;
-  - the RSM save, which a table walk could replace.
+- **The ROM has 52 words free (972 / 1,024),** after the 2026-10-08 compaction
+  (`feature/nav-sweep`): the domain and VTS setup shared by most jumps (`JSETV`,
+  `JSETV0`), and the mount clear as one loop over a contiguous RAM range. Past
+  that, a fifth M10K gives 1,280 words. The RSM save could still become a table
+  walk.
 - **The sequencer's register file has four read ports** (`rs`, `rt`, `rd` for `st`,
   `rk` for `dcmp`). Folding `st` onto `rt` and `dcmp`'s op onto a fixed register is
   the obvious ALM trim inside the 663.

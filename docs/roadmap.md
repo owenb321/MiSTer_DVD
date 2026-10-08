@@ -1432,6 +1432,19 @@ Levers, cheapest/lowest-risk first:
 
   HIL `nav_diff` = the control on every compared step; the maintainer's hand check passed.
   Next after it: the reader state split.
+  **The library sweep (2026-10-08, `docs/nav_engine.md` §5a):** the microcode against
+  libdvdnav over every library disc, offline. Every lead was traced to the model, a
+  libdvdnav failure, or `rnd`, except two pre-existing core differences, both shared with
+  the old FSM. Each is a named follow-up; neither is built:
+  - ⏳ **SPRM7 (PTTN) / SPRM6 (TT_PGCN) follow playback**, as libdvdnav's do. The core sets
+    them only at a jump, so a scene-selection menu opened mid-film can page or highlight
+    from chapter 1. Fix: a title-domain latch fed from the reader's `cur_pgm` (widened to
+    10 bits) and `cur_pgcn`, kept across a menu call, RSM reconciled. Rig check first: play
+    into chapter 3, press Chapter Menu.
+  - ⏳ **No First Play PGC** (VMGI@0x84 = 0): libdvdnav plays VMGM PGC 1 in the FP domain;
+    the reader raises `pgc_error` and the VM falls back to the auto title (2 library discs).
+  - ⏳ The next sweep: generate Menu/Title keys and chapter skips in `auto_script`, and
+    compare SPRM8.
 
 Validate empirically (does it route? does the fringe stay gone on HW?), not by chasing the
 fit/STA reports to zero — consistent with the project's "validate on hardware" discipline.

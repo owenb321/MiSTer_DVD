@@ -22,6 +22,26 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
+  The microcoded VM against libdvdnav over every library disc, with
+  `tools/nav_offline.py`. Full note: `docs/nav_engine.md` §5a.
+  - **Result:** every lead traced to the model, to a libdvdnav failure, or to `rnd`,
+    except **two pre-existing core differences**. The old FSM has both, so neither is the
+    microcode's:
+    - **SPRM7 / SPRM6 do not follow playback.** They are set only at a jump. T3's
+      VTSM reads SPRM7 = 1 where libdvdnav reads 2.
+    - **No First Play PGC.** The reader errors where libdvdnav plays VMGM PGC 1 (2
+      discs).
+  - **The tools were fixed more than the VM:**
+    - libdvdnav's short-cell still (`still_of`);
+    - the dropped `w` action, which hid 516 discs that compared nothing;
+    - a 0-cell spin, and a model log that reached 11 GB;
+    - `rnd` decided from what libdvdnav executed.
+  - **`trace_nav`'s seed never held:** `dvdnav_open()` reseeds from the clock. It is now
+    set after the open, so `nav_diff.py`'s two-seed check was random too until then.
+  - **Next:** the two follow-ups in `docs/roadmap.md` (user decision), and a sweep that
+    generates menu keys and compares SPRM8.
+
 - ✅ **THE DVD VM AS MICROCODE (2026-10-07, ✅ MERGED PR #168; HW-CONFIRMED
   2026-10-08).** Sim-proven; the full-core fit passes timing; HIL `nav_diff` equals the
   control on every compared step; the maintainer's hand check of the game paths passed on
