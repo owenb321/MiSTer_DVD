@@ -42,8 +42,25 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     - every VM runner `--red` is green;
     - reader regress is verdict-identical (6 arms shift by 2 cycles: `RSM_SAVE` reads 6/7
       with `in`).
-  - **Next:** the full sweep with the fixes, the build, and a rig check (T3: play into
-    chapter 3, Chapter Menu; a no-FP disc boots its menu).
+  - **Sweep pass 3 (2026-10-08, the fixes):** the only changes from pass 2 are the three
+    intended ones. T3 went `ok-gprm` → `ok`; D050818_01 and ISLAM_TRAILER went
+    `nolanding` → `ok`. There are no DIFFs and no `ok-gprm`.
+  - **HW, rig, A/B vs `dev-navsweep` (`DVD_navfixes_20261008_1648.rbf`):**
+    - ✅ **SPRM7: HW-confirmed.** Austin Powers 2's chapter menu pages by SPRM7 on a
+      second visit (the first visit always opens page 1, on any player).
+      - Setup: play into chapter 10, open Chapter Menu, Menu to resume, then Chapter
+        Menu again.
+      - Fix: "Chapters 7-12", with button 10 lit.
+      - Control: "Chapters 1-6", with button 1 lit.
+    - ⚠ **No FP PGC on ISLAM_TRAILER:** the fix boots VMGM PGC 1 (the disc's "MENU" with
+      its button), but the board does not park there. The cell has an indefinite (0xFF)
+      still AND a cell command (`g1 = 1; LinkTailPGC`), and the reader runs the command
+      first. That is the deliberate, HW-proven Phase-3 ordering for MiB/Matrix motion
+      menus (`docs/dvd_nav.md` "Still off"). The POST then loops the cell, `LinkPGCN 3`,
+      and PGC 3 ends in `Exit`: the picture stops on the menu with no button armed.
+      libdvdnav holds the still and waits for the press. The control boots the auto
+      title. `nav_offline` did not predict this, because its model parks on any 0xFF
+      still (a model gap to close).
 
 - ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
   The microcoded VM against libdvdnav over every library disc, with
