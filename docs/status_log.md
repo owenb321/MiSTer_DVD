@@ -22,8 +22,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ⏳ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC (2026-10-08,
-  `feature/nav-fixes`; sim-proven, ⏳ HW).** These are the two pre-existing core differences
+- ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
+  NON-LOOP CELL COMMAND (2026-10-08, `feature/nav-fixes`; HW-CONFIRMED on the rig, A/B
+  vs `dev-navsweep`).** These are the two pre-existing core differences
   the library sweep found (entry below). The user decided to fix both. Full note:
   `docs/nav_engine.md` §5a "The fix".
   - **SPRM6/7:**
@@ -61,6 +62,14 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       libdvdnav holds the still and waits for the press. The control boots the auto
       title. `nav_offline` did not predict this, because its model parks on any 0xFF
       still (a model gap to close).
+  - **The still rule (user decision; `docs/dvd_nav.md` "An indefinite still and its cell
+    command"):** command-first is kept for commands that loop the cell; any other command
+    waits out the still. Build `DVD_navfixes_20261008_1851.rbf` passes timing, and
+    `ccls_mem` is inferred as M10K. HW on the second rig:
+    - ✅ ISLAM_TRAILER boots VMGM PGC 1 as a still with its button armed; button 1 plays
+      the trailer from its start, as libdvdnav does. The control boots the trailer.
+    - ✅ The Muppets' first menu (0xFF + `LinkCN` to itself) is identical on both builds:
+      the same park, buttons armed, byte-identical frames.
 
 - ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
   The microcoded VM against libdvdnav over every library disc, with

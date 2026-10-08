@@ -349,7 +349,7 @@ cap 100,000.
 
 **Two real differences, both in the core, and the old FSM had both** (the A/B
 oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcode's).
-**Both are fixed (2026-10-08, `feature/nav-fixes`, user decision): sim-proven, ⏳ HW**;
+**Both are fixed (2026-10-08, `feature/nav-fixes`, user decision): ✅ HW-confirmed**;
 the fix is described after the list.
 
 1. **SPRM7 (PTTN) and SPRM6 (TT_PGCN) do not follow playback.**
