@@ -22,10 +22,10 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ✅ **THE DVD VM AS MICROCODE (2026-10-07, branch `feature/nav-ucode`; HW-CONFIRMED
+- ✅ **THE DVD VM AS MICROCODE (2026-10-07, ✅ MERGED PR #168; HW-CONFIRMED
   2026-10-08).** Sim-proven; the full-core fit passes timing; HIL `nav_diff` equals the
   control on every compared step; the maintainer's hand check of the game paths passed on
-  `DVD_navucode_20261007_0640.rbf`. Not yet merged. Full note:
+  `DVD_navucode_20261007_0640.rbf`. Full note:
   `docs/nav_engine.md`.
   - **Why:** `docs/logic_reclaim.md` §10b's pilot. The VM is microcoded alone, so the
     cost and the workflow are measured before the reader is touched.

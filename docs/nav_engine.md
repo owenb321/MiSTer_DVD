@@ -1,11 +1,10 @@
 # The DVD VM as microcode (`dvd/dvd_vm.sv` + `dvd/nav/vm.uasm`)
 
-**Status (2026-10-07, branch `feature/nav-ucode`): ✅ HW-CONFIRMED.**
+**Status (2026-10-07): ✅ HW-CONFIRMED, ✅ MERGED (PR #168).**
 - Built, sim-proven and fitted in the core; timing passes.
 - HIL round 1 reproduces the control's `nav_diff` table exactly (§3a).
 - The maintainer's hand check passed on build `DVD_navucode_20261007_0640.rbf`
   (2026-10-08).
-- Not yet pushed or merged.
 This is the pilot `docs/logic_reclaim.md` §10b proposed: the VM alone, so the
 measurement and the workflow question are answered before the reader is touched.
 
