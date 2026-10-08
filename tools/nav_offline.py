@@ -58,7 +58,11 @@ LIB = os.environ.get('DVD_ISO_DIR', os.path.expanduser('~/dvd-isos'))
 DOM_FP, DOM_VMGM, DOM_VTSM, DOM_TT = 0, 1, 2, 3
 DVDNAV_DOM = {DOM_FP: 1, DOM_TT: 2, DOM_VMGM: 4, DOM_VTSM: 8}   # libdvdnav's codes
 CELL_CAP = 4000
-BLOCK_CAP = 400000       # trace_nav's [block cap]: playback is charged in sectors
+# trace_nav's [block cap]: playback is charged in sectors against the SAME cap trace_nav
+# uses (it reads TRACE_BLOCK_CAP; --block-cap sets both). A sweep lowers it because the
+# library is a network share and a title that plays into the cap is most of a run's I/O.
+BLOCK_CAP = int(os.environ.get('TRACE_BLOCK_CAP', 400000))
+SKIP_DIRS = {'umd'}      # PSP UMD Video images: not DVD-Video
 VOBU_SCAN = 256          # VOBUs of a cell searched for an HLI
 
 
@@ -449,12 +453,20 @@ def auto_script(iso, steps, seed=1):
 
 
 def diff_disc(iso, script, mutate=None):
-    """-> dict(disc, script, rows=[...], status). A row compares one action."""
-    name = os.path.basename(iso)
+    """-> dict(disc, script, rows=[...], status). A row compares one action.
+    A disc that differs is re-run under a second libdvdnav seed: if that moves the
+    oracle's landings, the disc uses `rnd` and is reported as such, not as a DIFF."""
+    name = os.path.relpath(iso, LIB) if iso.startswith(LIB) else os.path.basename(iso)
     a, _ = oracle(iso, script, seed=1)
-    b, _ = oracle(iso, script, seed=99)
-    if [r[1].get('pgcn') for r in a] != [r[1].get('pgcn') for r in b]:
-        return dict(disc=name, script=script, rows=[], status='rnd')
+    res = compare_disc(iso, name, script, a, mutate)
+    if res['status'] == 'DIFF':
+        b, _ = oracle(iso, script, seed=99)
+        if [r[1].get('pgcn') for r in a] != [r[1].get('pgcn') for r in b]:
+            res['status'] = 'rnd'
+    return res
+
+
+def compare_disc(iso, name, script, a, mutate):
     try:
         ours = Player(iso, mutate).run(script)
     except Exception as e:                       # a model or emulator failure is a finding too
@@ -503,7 +515,7 @@ def lib_job(args):
         script = ' '.join(auto_script(iso, steps)) or 'w1'
         return diff_disc(iso, script, mutate)
     except Exception as e:
-        return dict(disc=os.path.basename(iso), script='', rows=[], status=f'error: {e!r}')
+        return dict(disc=os.path.relpath(iso, LIB), script='', rows=[], status=f'error: {e!r}')
 
 
 def main():
@@ -516,8 +528,16 @@ def main():
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--jobs', type=int, default=os.cpu_count())
     ap.add_argument('--red', help='run with this ;MUT arm: it must produce differences')
-    ap.add_argument('--out', help='write the per-disc results here (JSON lines)')
+    ap.add_argument('--out', help='write the per-disc results here (JSON lines, as each '
+                    'disc finishes)')
+    ap.add_argument('--resume', action='store_true', help='with --out: skip discs already in it')
+    ap.add_argument('--block-cap', type=int, help='trace_nav\'s and the model\'s block cap '
+                    '(default 400000; a sweep uses less, see BLOCK_CAP)')
     a = ap.parse_args()
+    if a.block_cap:
+        os.environ['TRACE_BLOCK_CAP'] = str(a.block_cap)       # trace_nav and the workers
+        global BLOCK_CAP
+        BLOCK_CAP = a.block_cap
     if not os.path.exists(TRACE_NAV):
         sys.exit(f'nav_offline: {TRACE_NAV} not built (tools/build_dvd_trace.sh)')
     if not a.library:
@@ -527,21 +547,34 @@ def main():
         res = diff_disc(a.iso, script, a.red)
         show(res)
         return 0 if res['status'] in ('ok', 'rnd') else 1
+    import json
     isos = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(LIB) for f in fs
-                  if f.lower().endswith('.iso'))
+                  if f.lower().endswith('.iso')
+                  and not (set(os.path.relpath(dp, LIB).split(os.sep)) & SKIP_DIRS))
     if a.limit:
         isos = isos[:a.limit]
     results = []
+    done = set()
+    if a.out and a.resume and os.path.exists(a.out):
+        for ln in open(a.out):
+            r = json.loads(ln)
+            results.append(r)
+            done.add(r['disc'])
+    todo = [i for i in isos if os.path.relpath(i, LIB) not in done]
+    print(f'nav_offline: {len(isos)} discs, {len(todo)} to run, block cap {BLOCK_CAP}', flush=True)
+    out = open(a.out, 'a') if a.out else None
     with concurrent.futures.ProcessPoolExecutor(max_workers=a.jobs) as ex:
-        for res in ex.map(lib_job, [(i, a.auto, a.red) for i in isos]):
+        futs = [ex.submit(lib_job, (i, a.auto, a.red)) for i in todo]
+        for n, fu in enumerate(concurrent.futures.as_completed(futs), 1):
+            res = fu.result()
             results.append(res)
+            if out:
+                out.write(json.dumps(res) + '\n')
+                out.flush()
             if res['status'] not in ('ok', 'rnd'):
                 show(res)
-    if a.out:
-        import json
-        with open(a.out, 'w') as f:
-            for r in results:
-                f.write(json.dumps(r) + '\n')
+            if n % 25 == 0:
+                print(f'  ... {n}/{len(todo)}', flush=True)
     from collections import Counter
     c = Counter(r['status'].split(':')[0] for r in results)
     print(f"nav_offline: {len(results)} discs: " + ', '.join(f'{k} {v}' for k, v in sorted(c.items())))
