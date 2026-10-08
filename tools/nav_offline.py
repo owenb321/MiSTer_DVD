@@ -183,7 +183,12 @@ class Player:
         """Apply a stimulus line; -> the pulses it produced (P lines, split)."""
         n = len(self.sh.log)
         self.sh.apply(line)
-        return [ln.split()[2:] for ln in self.sh.log[n:] if ln.startswith('P ')]
+        out = [ln.split()[2:] for ln in self.sh.log[n:] if ln.startswith('P ')]
+        # neither log is read back here, and both grow without bound: a library disc
+        # that kept the VM busy took a sweep worker to 11 GB
+        del self.sh.log[:]
+        del self.sh.m.trace[:]
+        return out
 
     def verdict(self, pulses):
         """The VM's answer: ('jump', fields) / ('seek', cell) / ('replay',) /
@@ -303,8 +308,18 @@ class Player:
         prev = None
         while st == 'play' and self.cells < CELL_CAP and self.blocks < BLOCK_CAP:
             p = self.pgc
-            if p is None or not p['cells']:
-                st = self.follow(self.verdict(self.vm('pulse pgcend')))
+            if p is None:                    # nothing ever loaded: the VM has given up
+                st = 'stop'
+                break
+            if not p['cells']:
+                # a command-only PGC: POST, then as at any PGC end -- a plain advance
+                # takes the authored next_pgcn or stops (it spun here, re-raising the end)
+                v = self.verdict(self.vm('pulse pgcend')) or ('adv',)
+                if v[0] in ('adv', 'replay'):
+                    st = (self.follow(self.load([self.dom, self.vts, p['next'], 0, 0, 0,
+                                                 0, 0, 0])) if p['next'] else 'stop')
+                else:
+                    st = self.follow(v)
                 continue
             if self.cell >= p['nr_cells']:
                 self.cell = 0
@@ -454,7 +469,9 @@ def oracle(iso, script, seed=None):
         # landing is where the trace ended
         rows.append((pending, dict(last or {}, buttons=0, cap=True,
                                    blockerr=blockerr or err_fail)))
-    return rows, out
+    # the commands libdvdnav lists and runs are on stderr (ran_rnd reads them); stdout
+    # first, so auto_script's park parse sees the same text it always did
+    return rows, out + '\n' + pr.stderr
 
 
 def tok_of(action):
@@ -486,17 +503,39 @@ def diff_disc(iso, script, mutate=None, words=None):
     A disc that differs is re-run under a second libdvdnav seed: if that moves the
     oracle's landings, the disc uses `rnd` and is reported as such, not as a DIFF."""
     name = os.path.relpath(iso, LIB) if iso.startswith(LIB) else os.path.basename(iso)
-    a, _ = oracle(iso, script, seed=1)
+    if Disc(iso).vmgi_lba is None:
+        # no VIDEO_TS in the ISO9660 tree: libdvdnav finds it through UDF, the core's
+        # reader cannot (UDF-only images are a known gap). MILLIONAIRERUS.
+        return dict(disc=name, script='', rows=[], status='udf-only')
+    a, raw = oracle(iso, script, seed=1)
     res = compare_disc(iso, name, script, a, mutate, words)
-    if res['status'] == 'DIFF':
-        # compare the GPRMs too: Dragon's Lair II's `g9 = rnd 32` gave both seeds the
-        # same PGCs at the compared steps but different registers, and a later
-        # branch on g9 then diverged -- a PGC-only check called that a DIFF
-        b, _ = oracle(iso, script, seed=99)
-        if [(r[1].get('pgcn'), r[1].get('gprm')) for r in a] != \
-           [(r[1].get('pgcn'), r[1].get('gprm')) for r in b]:
+    gdiff = any(r['verdict'] == 'ok-gprm' for r in res['rows'])
+    if res['status'] == 'DIFF' or gdiff:
+        # libdvdnav EXECUTED an rnd: the core's LFSR and libdvdnav's RNG differ by
+        # design, so nothing after it compares. This replaced a two-seed test (does
+        # seed 99 move the landings?), which missed Die Another Day 2: its `g0 = rnd
+        # 12` sent both seeds down the same branch.
+        if ran_rnd(raw):
             res['status'] = 'rnd'
+        elif res['status'] == 'ok':
+            res['status'] = 'ok-gprm'        # same screens, different registers: a lead
     return res
+
+
+def ran_rnd(out):
+    """Did libdvdnav execute a `rnd` set? (`out` is oracle()'s, stderr included.)
+    Its trace LISTS a block's commands under
+    'Full list of commands to execute' (up to the '----' rule), then prints the ones it
+    runs; only the latter count."""
+    listing = False
+    for ln in out.splitlines():
+        if 'Full list of commands to execute' in ln:
+            listing = True
+        elif ln.startswith('libdvdnav: ---'):
+            listing = False
+        elif not listing and re.match(r'^\(\d+\) .*\| g\[\d+\] rnd ', ln):
+            return True
+    return False
 
 
 def compare_disc(iso, name, script, a, mutate, words=None):

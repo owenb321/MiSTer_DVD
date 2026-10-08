@@ -209,11 +209,11 @@ int main(int argc, char **argv) {
 
   if (argc < 2) { printf("usage: %s <iso> [\"script\"] [rnd_seed]\n", argv[0]); return 1; }
   parse_script(argc > 2 ? argv[2] : "");
-  { const char *s = getenv("ATMOS_SEED");
-    if (argc > 3) srand((unsigned)atoi(argv[3]));
-    else if (s) srand((unsigned)atoi(s));
-    printf(">> rnd seed = %s\n", argc > 3 ? argv[3] : (s ? s : "default(1)")); }
   if (dvdnav_open(&nav, argv[1]) != DVDNAV_STATUS_OK) { printf("open failed\n"); return 2; }
+  /* after the open, which reseeds from the clock (see trace_nav.c) */
+  { const char *s = getenv("ATMOS_SEED");
+    srand(argc > 3 ? (unsigned)atoi(argv[3]) : (s ? (unsigned)atoi(s) : 1u));
+    printf(">> rnd seed = %s\n", argc > 3 ? argv[3] : (s ? s : "default(1)")); }
   dvdnav_set_readahead_flag(nav, 0);
   dvdnav_set_PGC_positioning_flag(nav, 1);
 
