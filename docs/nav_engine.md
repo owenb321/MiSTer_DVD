@@ -352,8 +352,15 @@ oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcod
      SPRM6 only to 0 (both at mount, and restored by RSM).
    - T3's VTSM PRE copies SPRM7 into g6 after the feature's last chapter: libdvdnav
      2, the core 1.
-   - **Library census** (a scan of every PGC's PRE/POST/cell commands; button commands not scanned):
-     ⏳ split pending.
+   - **Library census** (a scan of every PGC's PRE/POST/cell commands; button
+     commands not scanned), 1,531 discs:
+     - **SPRM7 is read by 528 discs.** 475 copy it into a GPRM, mostly a VTSM menu
+       preamble that saves the SPRMs, as T3's does. 58 branch on it directly, 53 of
+       those in VMGM.
+     - **SPRM6 is compared by 74 discs,** 66 in VMGM. That is title-menu logic, which
+       picks by the title PGC that was playing.
+     - A copy matters only if a later command branches on the GPRM. So 528 is the
+       ceiling, and 58 + 74 is the floor of discs whose navigation can differ.
    - The reader already resolves the global PTT index for the HUD (`cur_pgm`,
      `dvd_iso_reader.sv`, 8 bits, clamped at 255 for the display), and `dvd_vm` has
      `cur_pgcn`.
