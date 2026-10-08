@@ -388,7 +388,7 @@ oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcod
 
 | Status | Discs | Notes |
 |---|---|---|
-| `ok` | 1,492 | 2,025 landings compared and agreed; 515 discs never parked (below) |
+| `ok` | 1,492 | 2,025 landings compared and agreed; 515 discs never parked, re-run below |
 | `rnd` | 26 | all 9 `DIFF` rows are on these: game discs, plus films with a random trailer or menu (Butterfly Effect, Die Another Day 2, Hot Chick, The Office UK) |
 | `oracle-err` | 6 | Harvard Man, Tangled, Lady Highwayman, Matrix Reloaded disc 2, DragBal1, DragBal2 |
 | `nolanding` | 3 | the two no-First-Play discs; **Anchorman**, a cap artefact: the model reaches the same menu ~16k blocks later, and at a 200k cap the two agree (and it runs `rnd`) |
@@ -399,7 +399,24 @@ oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcod
 **The 515 discs that never park** boot straight into playback: libdvdnav does not stop
 on a menu inside the cap, so no action runs. Their position at the cap is still the
 boot chain's result (First Play → the feature), and it is now compared as a `boot`
-row: ⏳ running.
+row.
+- **What it compares:** the sequence of PGCs that played a cell, on both sides. Both
+  play into the cap counting blocks differently, so they stop at different points of
+  the same chain. One being a prefix of the other is `ok-prefix`; the GPRMs are
+  compared only when both end on the same PGC.
+- **Result:**
+  - 501 agree, 3 of them as a prefix (Horrible Bosses, Mighty Macs, Poseidon
+    Adventure: the model one trailer behind);
+  - 10 are `oracle-err`: libdvdnav hits `Expected NAV packet` in its first menu or
+    trailer (The King's Speech, The Hobbit, HP Prisoner of Azkaban, …);
+  - 4 run `rnd`.
+- **Can it fail?** `--red gidx` makes the boot row differ on the first six of these
+  discs; `setalways` does not, since their boot chains have no false conditional set.
+
+**The whole library, then:** no difference between the microcode and libdvdnav that
+the model, a libdvdnav failure, `rnd` or the block cap does not explain, except the
+two pre-existing core gaps above (SPRM6/7, no First Play PGC). 16 discs (6 + 10)
+cannot be compared, because libdvdnav itself fails on them.
 
 ## 6. Decisions and rejected alternatives
 
