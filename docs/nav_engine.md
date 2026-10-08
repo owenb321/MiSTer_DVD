@@ -301,6 +301,8 @@ compared two random runs. The seed is now set after the open (`trace_nav.c`,
 - `auto_script` presses buttons only. The Menu and Title keys (`mR`, `mT`) and
   chapter skips are never generated, so the scene-selection-from-a-title path that
   exposes SPRM7 (§5a) is reached only when a disc's own buttons go there.
+- `rnd` is decided per disc, so a difference BEFORE the first `rnd` on a game disc is
+  hidden too (26 discs in pass 2).
 - SPRM8 (the highlighted button) is not compared. A menu that pre-selects a button
   from SPRM7 would read `ok` while highlighting the wrong one.
 
@@ -382,7 +384,22 @@ oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcod
      with cells.
    - **Proposed fix (not built):** the reader mirrors `set_FP_PGC`.
 
-**Pass 2** (the fixed model, a fresh run): ⏳ running.
+**Pass 2 (1,531 discs, the fixed model and oracle, a fresh run):**
+
+| Status | Discs | Notes |
+|---|---|---|
+| `ok` | 1,492 | 2,025 landings compared and agreed; 515 discs never parked (below) |
+| `rnd` | 26 | all 9 `DIFF` rows are on these: game discs, plus films with a random trailer or menu (Butterfly Effect, Die Another Day 2, Hot Chick, The Office UK) |
+| `oracle-err` | 6 | Harvard Man, Tangled, Lady Highwayman, Matrix Reloaded disc 2, DragBal1, DragBal2 |
+| `nolanding` | 3 | the two no-First-Play discs; **Anchorman**, a cap artefact: the model reaches the same menu ~16k blocks later, and at a 200k cap the two agree (and it runs `rnd`) |
+| `cap-edge` | 1 | MANONFIRE |
+| `ok-gprm` | 1 | **T3** (SPRM7) |
+| `udf-only` / error | 1 / 1 | MILLIONAIRERUS / `_hwtest/BADIMAGE` (not ISO9660) |
+
+**The 515 discs that never park** boot straight into playback: libdvdnav does not stop
+on a menu inside the cap, so no action runs. Their position at the cap is still the
+boot chain's result (First Play → the feature), and it is now compared as a `boot`
+row: ⏳ running.
 
 ## 6. Decisions and rejected alternatives
 
