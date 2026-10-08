@@ -148,9 +148,9 @@ class Disc(R.IsoNav):
 class Player:
     """The reader's playback around the microcoded VM (see the module docstring)."""
 
-    def __init__(self, iso, mutate=None):
+    def __init__(self, iso, mutate=None, words=None):
         self.d = Disc(iso)
-        self.sh = S.Shell(mutate=mutate)
+        self.sh = S.Shell(words=words, mutate=mutate)
         self.dom, self.vts, self.pgcn, self.pgc, self.cell = DOM_FP, 0, 0, None, 0
         self.cells = 0
         self.blocks = 0
@@ -452,13 +452,13 @@ def auto_script(iso, steps, seed=1):
     return script
 
 
-def diff_disc(iso, script, mutate=None):
+def diff_disc(iso, script, mutate=None, words=None):
     """-> dict(disc, script, rows=[...], status). A row compares one action.
     A disc that differs is re-run under a second libdvdnav seed: if that moves the
     oracle's landings, the disc uses `rnd` and is reported as such, not as a DIFF."""
     name = os.path.relpath(iso, LIB) if iso.startswith(LIB) else os.path.basename(iso)
     a, _ = oracle(iso, script, seed=1)
-    res = compare_disc(iso, name, script, a, mutate)
+    res = compare_disc(iso, name, script, a, mutate, words)
     if res['status'] == 'DIFF':
         b, _ = oracle(iso, script, seed=99)
         if [r[1].get('pgcn') for r in a] != [r[1].get('pgcn') for r in b]:
@@ -466,9 +466,9 @@ def diff_disc(iso, script, mutate=None):
     return res
 
 
-def compare_disc(iso, name, script, a, mutate):
+def compare_disc(iso, name, script, a, mutate, words=None):
     try:
-        ours = Player(iso, mutate).run(script)
+        ours = Player(iso, mutate, words).run(script)
     except Exception as e:                       # a model or emulator failure is a finding too
         return dict(disc=name, script=script, rows=[], status=f'error: {e!r}')
     rows = []
@@ -510,10 +510,10 @@ def show(res):
 
 
 def lib_job(args):
-    iso, steps, mutate = args
+    iso, steps, mutate, words = args
     try:
         script = ' '.join(auto_script(iso, steps)) or 'w1'
-        return diff_disc(iso, script, mutate)
+        return diff_disc(iso, script, mutate, words)
     except Exception as e:
         return dict(disc=os.path.relpath(iso, LIB), script='', rows=[], status=f'error: {e!r}')
 
@@ -564,7 +564,10 @@ def main():
     print(f'nav_offline: {len(isos)} discs, {len(todo)} to run, block cap {BLOCK_CAP}', flush=True)
     out = open(a.out, 'a') if a.out else None
     with concurrent.futures.ProcessPoolExecutor(max_workers=a.jobs) as ex:
-        futs = [ex.submit(lib_job, (i, a.auto, a.red)) for i in todo]
+        # the program is assembled ONCE, here: a sweep runs for hours, and a worker that
+        # re-read dvd/nav/vm.uasm would pick up an edit made meanwhile (it did, 2026-10-08)
+        words, _, _ = S.N.load_program(a.red)
+        futs = [ex.submit(lib_job, (i, a.auto, None, words)) for i in todo]
         for n, fu in enumerate(concurrent.futures.as_completed(futs), 1):
             res = fu.result()
             results.append(res)
