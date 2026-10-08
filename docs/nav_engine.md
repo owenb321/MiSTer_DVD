@@ -29,7 +29,7 @@ checkers and the runners did not change. Inside it are two modules:
 | event latches (gated by Disc Menus) and their priority, auto-cleared on dispatch | every event handler (the old FSM's V_IDLE arms) |
 | the wait timer (~0.62 s, frozen by `wait_hold`) | command fetch and decode: types 0–7, compare, set, link and jump |
 | output fields and pulses; the `usr_edge` mask on `vm_adv` | serial mul, div, mod, rnd, as loops; the swap |
-| SPRM1/2/3/8 (they are ports), the SPRM8 shadow / activation latch / freeze, the SPRM3 write-back | the RAM-resident SPRMs 4–7, 9, 10, 13 |
+| SPRM1/2/3/8 (they are ports), the SPRM8 shadow / activation latch / freeze, the SPRM3 write-back; SPRM6/7, which follow a title as it plays (§5a) | the RAM-resident SPRMs 4, 5, 9, 10, 13 |
 | `vm_dom` / `vm_vts`, and on the load event `last_menu_*` and `menu_seen` | the fallback chain, RSM, the boot-chain shortcut, `came_via_menukey` |
 | `pre_done` (with its load-bearing `!ev[LOADED]` term) | the POST-only 0-cell dispatch, the title-edge Next/Prev, the dead-end latch |
 | the LFSR (step on request, stir while idle) | the counter-mode tick walk, the fuse (4096), the chain guard (63) |
@@ -348,7 +348,9 @@ cap 100,000.
 | **TERMINATOR_3** | ok-gprm | **the core: SPRM7 does not follow playback** (below) | lead |
 
 **Two real differences, both in the core, and the old FSM had both** (the A/B
-oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcode's):
+oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcode's).
+**Both are fixed (2026-10-08, `feature/nav-fixes`, user decision): sim-proven, ⏳ HW**;
+the fix is described after the list.
 
 1. **SPRM7 (PTTN) and SPRM6 (TT_PGCN) do not follow playback.**
    - libdvdnav updates both as a title plays (`src/vm/getset.c`):
@@ -373,12 +375,8 @@ oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcod
    - The reader already resolves the global PTT index for the HUD (`cur_pgm`,
      `dvd_iso_reader.sv`, 8 bits, clamped at 255 for the display), and `dvd_vm` has
      `cur_pgcn`.
-   - **Proposed fix (not built):**
-     - a title-domain SPRM7 latch fed from a 10-bit `cur_pgm` (the spec allows 999
-       parts);
-     - SPRM6 = `cur_pgcn` in the title domain;
-     - both kept across a menu call, as libdvdnav keeps them;
-     - RSM save/restore reconciled.
+   - **Built** (see "The fix" below): wrapper registers fed by the reader's part and
+     the PGC load.
    - **What a user would see:** a scene-selection menu opened mid-film that pages
      or highlights from SPRM7 opens at chapter 1.
    - **Rig check:** play into chapter 3, press Chapter Menu, see which page and
@@ -389,7 +387,39 @@ oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcod
      goes to the auto title.
    - The census found 2 such discs (D050818_01, ISLAM_TRAILER) and no First Play PGC
      with cells.
-   - **Proposed fix (not built):** the reader mirrors `set_FP_PGC`.
+   - **Built:** the reader mirrors `set_FP_PGC` (`docs/dvd_nav.md`, the domain table).
+
+**The fix (2026-10-08, `feature/nav-fixes`).**
+
+- **SPRM6/7 are wrapper registers now**, like SPRM1/2/3/8. The microcode writes them at a
+  jump, a resume and a mount through `UOUT_SPRM6/7`, and reads them through the window, so
+  `RSM_SAVE` costs 2 cycles less (an `in` where it had an `ld`). The hardware updates them:
+  - **SPRM6** takes `cur_pgcn` on a title-domain `pgc_loaded`, before the PRE runs, as
+    `set_PGCN` does;
+  - **SPRM7** takes the reader's part (`ptt_upd` / `ptt_val`), held until the VM is at
+    rest: parked at the idle `wev` with no event, tick or walk pending.
+- **Why "at rest" and not "after the PRE".** The reader resolves the part as the first
+  cell streams, which can be mid-PRE, and libdvdnav's `set_PGN` runs after the PRE.
+  "After the PRE" alone left a one-cycle race with a queued event's RSM save, and the old
+  FSM and the sequencer resolved it differently (the A/B found it on seed 15).
+- **The reader** publishes the global part from its `cur_pgm` reverse map, on a hit only.
+  A PGCN-only title jump (a `LinkPGCN`, a resume) now reads the owning title's PTT table:
+  `ttn_pick`, in `docs/dvd_nav.md` "Which title's table". It used to read title 1's, and
+  1,139 library discs have a VTS with more than one title.
+- **Deliberate differences from libdvdnav's loop:**
+  - a reverse-map miss holds SPRM7 (libdvdnav writes 0, but it searches every title);
+  - a program past the PGC's last part maps to that part (libdvdnav finds nothing).
+- **Gates:**
+  - `dvd_vm_tb` S28 a–f;
+  - `run_vm_ab.sh --red` W5–W7. The oracle carries the same change as a named DELTA, so the
+    A/B still has an independent second implementation;
+  - `iso_reader_ptt_tb` asserts SPRM7 on every chapter move;
+  - `iso_reader_fpnone_tb` A–F;
+  - `check_sprm67_wiring.py`;
+  - `bench/dvd/run_sprm67.sh --red`, 7 reader mutations, each caught by its own arm.
+- **Reader regress:** verdict-identical; six VM arms shift by 2 cycles, the shorter
+  `RSM_SAVE`.
+- **Offline:** T3, D050818_01 and ISLAM_TRAILER now agree with libdvdnav.
 
 **Pass 2 (1,531 discs, the fixed model and oracle, a fresh run):**
 

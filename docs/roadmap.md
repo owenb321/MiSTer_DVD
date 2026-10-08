@@ -1436,13 +1436,12 @@ Levers, cheapest/lowest-risk first:
   libdvdnav over every library disc, offline. Every lead was traced to the model, a
   libdvdnav failure, or `rnd`, except two pre-existing core differences, both shared with
   the old FSM. Each is a named follow-up; neither is built:
-  - ⏳ **SPRM7 (PTTN) / SPRM6 (TT_PGCN) follow playback**, as libdvdnav's do. The core sets
-    them only at a jump, so a scene-selection menu opened mid-film can page or highlight
-    from chapter 1. Fix: a title-domain latch fed from the reader's `cur_pgm` (widened to
-    10 bits) and `cur_pgcn`, kept across a menu call, RSM reconciled. Rig check first: play
-    into chapter 3, press Chapter Menu.
-  - ⏳ **No First Play PGC** (VMGI@0x84 = 0): libdvdnav plays VMGM PGC 1 in the FP domain;
-    the reader raises `pgc_error` and the VM falls back to the auto title (2 library discs).
+  - 🔧 **SPRM7 (PTTN) / SPRM6 (TT_PGCN) follow playback**, as libdvdnav's do. BUILT
+    2026-10-08 (`feature/nav-fixes`), sim-proven; ⏳ HW: play into chapter 3, press
+    Chapter Menu. The fix includes the owning title's PTT table on a PGCN-only title
+    jump (`ttn_pick`).
+  - 🔧 **No First Play PGC** (VMGI@0x84 = 0): the reader plays VMGM PGC 1 in the FP domain,
+    as libdvdnav does. BUILT 2026-10-08, sim-proven; ⏳ HW.
   - ⏳ The next sweep: generate Menu/Title keys and chapter skips in `auto_script`, and
     compare SPRM8.
 

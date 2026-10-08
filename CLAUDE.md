@@ -389,6 +389,8 @@ otherwise; `--red` runs its mutation arms).
 | Player parameters: SPRM20 = disc's first allowed region, SPRM14 from output/Analog Aspect, SPRM15 with DTS (`player_regs`) | ✅ HW (HARTSWAR_169 VTS 4→3 on HDMI vs `main`), MERGED PR #154 | `dvd_vm.md` "Player parameters" | `run_player_regs.sh --red`, `check_player_regs_wiring.py` |
 | Chapter skip at the title's edges: Next → POST, Prev → `prev_pgcn` (audit 7) | ✅ HW (vs libdvdnav), MERGED PR #158 | `dvd_nav.md` | `run_chap_edge.sh --red`, `check_chap_edge_wiring.py` |
 | `.BUP` fallback (audit 8): fabric IFO header gate; Main mirrors unreadable IFO sectors | ✅ HW (fabric A/B vs `main`; Main mirror on a physical disc), MERGED PR #163 | `dvd_nav.md` "IFO header gate" | `run_bup.sh --red`, `main/tests` [21]–[29] |
+| Library sweep vs libdvdnav (`nav_offline`, 1,531 discs): no microcode difference; 2 pre-existing core gaps found | 🔧 offline, `feature/nav-sweep` | `nav_engine.md` §5a | `tools/nav_offline.py --library` |
+| SPRM6/7 follow playback (+ the owning title's PTT table on a PGCN-only jump); First Play with no FP PGC plays VMGM PGC 1 | 🔧 sim-proven, ⏳ HW, `feature/nav-fixes` | `nav_engine.md` §5a, `dvd_nav.md` | `run_sprm67.sh --red`, `run_vm_ab.sh --red`, `check_sprm67_wiring.py` |
 
 ### Transport, HUD and input
 
@@ -485,8 +487,6 @@ otherwise; `--red` runs its mutation arms).
 - ❌ HD output (720p/1080p): fixed 27 MHz SD dot clock.
 - ❌ UDF-only images, parental control.
 - ⏳ 3rd-ed. audit tail (1–8 shipped): `docs/roadmap.md` "2026-10-01 spec-audit".
-- ⏳ SPRM6/7 don't follow playback; no-First-Play-PGC discs boot the auto title (library
-  sweep vs libdvdnav, `docs/nav_engine.md` §5a; `tools/nav_offline.py`).
 - ❌ Trick play (continuous 2×/4×): needs a flush-free I-frame splice (`docs/dvd_nav.md` §2d).
 - ⚠ `lates` counts one per refresh while a PGC still is held, so boot/menu windows
   over-report (`docs/decode_pacing.md` §2c). Real lates are 0 on the census set since F1 +

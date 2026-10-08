@@ -22,6 +22,29 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ⏳ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC (2026-10-08,
+  `feature/nav-fixes`; sim-proven, ⏳ HW).** These are the two pre-existing core differences
+  the library sweep found (entry below). The user decided to fix both. Full note:
+  `docs/nav_engine.md` §5a "The fix".
+  - **SPRM6/7:**
+    - Both are wrapper registers now. SPRM6 is set on a title PGC load; SPRM7 takes the
+      reader's global part (`ptt_upd` / `ptt_cur`), held until the VM is at rest.
+    - T3's VTSM now reads chapter 2, as libdvdnav does. 58 library discs branch on
+      SPRM7 and 74 on SPRM6.
+  - **The PTT table:** a PGCN-only title jump (`LinkPGCN`, a resume) now reads the owning
+    title's table, not title 1's (`ttn_pick`). That also fixes the HUD's CH n/N after
+    resuming into title 2+ of a VTS.
+  - **First Play:** with @0x84 = 0, VMGM PGC 1 plays in the First Play domain, as with
+    libdvdnav. D050818_01 and ISLAM_TRAILER now agree offline.
+  - **Gates:**
+    - `run_sprm67.sh --red` (7 reader arms, wiring, S28) and `run_vm_ab.sh --red`
+      (W5–W7) are green;
+    - every VM runner `--red` is green;
+    - reader regress is verdict-identical (6 arms shift by 2 cycles: `RSM_SAVE` reads 6/7
+      with `in`).
+  - **Next:** the full sweep with the fixes, the build, and a rig check (T3: play into
+    chapter 3, Chapter Menu; a no-FP disc boots its menu).
+
 - ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
   The microcoded VM against libdvdnav over every library disc, with
   `tools/nav_offline.py`. Full note: `docs/nav_engine.md` §5a.
