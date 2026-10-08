@@ -70,6 +70,10 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       libdvdnav 1);
     - `tools/nav_offline.py` predicted every one of those landings beforehand, T2's
       divergence included.
+    - **T2's "difference" is press timing, not navigation** (2026-10-08). Its cell 2 is
+      a 5 s single-VOBU still with buttons. libdvdnav and the core both hold it; the
+      harness pressed after it ended. Offline, with libdvdnav's still rule, T2 agrees on
+      all four steps (`docs/nav_engine.md` §3a).
   - **Timing:** worst observed chain (a 4,096-command runaway) 1.11 M cycles, 41 ms;
     ≥ 6× inside the reader's watchdogs.
   - **Limits:**

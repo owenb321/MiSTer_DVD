@@ -194,6 +194,23 @@ throughout, the Scooby maze, MiB's and Matrix's last step), so those are not mea
 - every landing the board compared;
 - T2's divergence, to the PGCN: the microcode lands on PGC 6 offline too.
 
+**T2's divergence is press timing, not navigation (diagnosed offline, 2026-10-08,
+`feature/nav-sweep`).**
+- VTSM 1 PGC 1's cell 2 is one VOBU, 58 sectors, with a 5 s playback time and no still
+  time.
+- **libdvdnav** holds it as a 5 s still with buttons up: `vm_position_get`'s "rough fix"
+  for short single-VOBU cells. `trace_nav` parks there and presses button 2, which is
+  LinkPGN 4.
+- **The core** holds it too, by serving the cell's authored playback time
+  (`docs/dvd_nav.md` "Authored cell duration").
+- **The board harness** needs settled, armed screenshots about 1 s apart, so it pressed
+  after the 5 s were up. That landed on cell 4, an indefinite still whose button 2 is
+  `g3 = 2; LinkPGCN 6`.
+
+Once `tools/nav_offline.py` parks by libdvdnav's rule (`still_of`), T2 agrees on all four
+steps. The VM executes the same command libdvdnav does; the two sides pressed at
+different screens.
+
 So the model reproduces the board where the board can be read, and it can read the steps
 the board cannot (HP Interactive and Scene It agree offline on all four of their steps).
 

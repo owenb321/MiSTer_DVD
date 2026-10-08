@@ -145,6 +145,23 @@ class Disc(R.IsoNav):
         return out
 
 
+def still_of(p, ci):
+    """The still libdvdnav shows at cell ci's end (vm.c vm_position_get), which is what
+    trace_nav parks on: the cell's still time, plus the PGC's on its last cell, else
+    its "rough fix" -- a single-VOBU cell under 1,024 sectors at a low data rate is
+    held for its whole playback time (e.g. ULTIMATE_T2's VTSM menu: a 5 s still with
+    buttons up, 2026-10-08). 0xFF = indefinite."""
+    c = p['cells'][ci]
+    st = c['still'] + (p['still'] if ci == p['nr_cells'] - 1 else 0)
+    if st:
+        return st
+    if 'last' in c and c['last'] == c['last_vobu'] and c['last'] - c['first'] < 1024:
+        t = c['pbtime']
+        if t and (c['last'] - c['first']) // t <= 30:
+            return min(t, 0xFF)
+    return 0
+
+
 class Player:
     """The reader's playback around the microcoded VM (see the module docstring)."""
 
@@ -315,9 +332,10 @@ class Player:
                         cand, loops = key, 0
                     elif loops > 0:
                         park = True
-            if c['still'] == 0xFF:
+            still = still_of(p, self.cell)
+            if still == 0xFF:
                 park, cand = True, None
-            elif c['still'] and cand is not None and cand[:3] == key[:3] and not acted:
+            elif still and cand is not None and cand[:3] == key[:3] and not acted:
                 park, cand = True, None
             if park and not acted:
                 if pending is not None:
@@ -366,14 +384,7 @@ class Player:
             self.cell += 1
             if self.cell < p['nr_cells']:
                 continue
-            # the PGC ends
-            if p['still'] == 0xFF and not acted:
-                self.cell = p['nr_cells'] - 1
-                if pending is not None:
-                    rows.append((pending, self.state(0)))
-                    pending = None
-                if ti >= len(toks):
-                    break
+            # the PGC ends (its still was the last cell's: still_of)
             v = self.verdict(self.vm('pulse pgcend')) or ('adv',)
             if v[0] == 'adv':
                 if p['next']:
