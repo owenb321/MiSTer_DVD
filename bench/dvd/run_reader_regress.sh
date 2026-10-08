@@ -86,6 +86,7 @@ iso_reader_celldur|iso_reader_celldur_tb|dut|||
 iso_reader_chapter|iso_reader_chapter_tb|dut|||
 iso_reader_cluedo_menu|iso_reader_cluedo_menu_tb|dut|||
 iso_reader_ifo|iso_reader_ifo_tb|dut|||
+iso_reader_fpnone|iso_reader_fpnone_tb|dut|||
 iso_reader_ilvu|iso_reader_ilvu_tb|dut|||
 iso_reader_intitle_link|iso_reader_intitle_link_tb|dut|||
 iso_reader_linkptt|iso_reader_linkptt_tb|dut|||

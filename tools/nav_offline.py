@@ -86,6 +86,7 @@ class Disc(R.IsoNav):
     def __init__(self, path):
         super().__init__(path)
         self._hli = {}
+        self._ptt = {}
         self.vobs = {}                  # (dom, vts) -> absolute LBA of the VOB set
         if self.vmgi_lba is not None:
             m = self.sec(self.vmgi_lba)
@@ -127,6 +128,19 @@ class Disc(R.IsoNav):
         if not 1 <= part <= nparts:
             return None
         return struct.unpack('>HH', self.rd(base + start + 4 * (part - 1), 4))
+
+    def ptt_table(self, vts, ttn):
+        """VTS_PTT_SRPT[ttn] -> [(pgcn, pgn), ...] (the reader's ptt_mem, PTT_CAP 1024)."""
+        key = (vts, ttn)
+        if key not in self._ptt:
+            t = []
+            for part in range(1, 1025):
+                r = self.ptt(vts, ttn, part)
+                if r is None:
+                    break
+                t.append(r)
+            self._ptt[key] = t
+        return self._ptt[key]
 
     def hli(self, dom, vts, cell):
         """The first HLI in the cell: (btn_ns, fosl, [8-byte commands]) or None."""
@@ -186,6 +200,10 @@ class Player:
         self.blocks = 0
         self.log = []
         self.path = []                  # the PGCs that played a cell (path_key), in order
+        # the reader's PTT state (dvd_iso_reader cur_ttn / ptt_mem): which title's
+        # VTS_PTT_SRPT is resident, and whether it names the playing PGC
+        self.cur_ttn, self.ptt_tab = 1, []
+        self.fp_vm = False              # First Play is playing a VMGM PGC (no FP PGC)
         self.set('auto_vts', self.d.best_vts)
         self.set('best_menu_vts', self.d.best_menu_vts)
 
@@ -220,14 +238,24 @@ class Player:
         return out
 
     # ---- loads (the reader's jump service) ----------------------------------
-    def load(self, f):
-        """Resolve a VM jump and report pgc_loaded / pgc_error. -> the verdict of
-        whatever the VM did next (a PRE may jump again)."""
+    def load(self, f, natural=False):
+        """Resolve a VM jump (or the reader's own next_pgcn advance, `natural`) and
+        report pgc_loaded / pgc_error. -> the verdict of whatever the VM did next (a
+        PRE may jump again)."""
         dom, vts, pgcn, entry, ttn, pgn, ptt, cell, _nat = f
         d = self.d
         pgc = None
         res_ttn = 0
-        if dom == DOM_FP:
+        fp_vm = False
+        if dom == DOM_FP and getattr(d, 'fp_off', 1) == 0:
+            # no First Play PGC: the reader re-runs the jump as a VMGM one at its PGCN
+            # (0 -> 1), as libdvdnav's set_FP_PGC / get_PGCIT do; the VM stays in FP
+            pit = d.pgcit(DOM_VMGM, 0)
+            pgcn = pgcn or 1
+            if pit and 1 <= pgcn <= len(pit):
+                pgc = d.pgc(pit[pgcn - 1][1])
+            dom, vts, fp_vm = DOM_VMGM, 0, True
+        elif dom == DOM_FP:
             pgc, vts, pgcn = d.fp_pgc(), 0, 0
         elif dom in (DOM_VMGM, DOM_VTSM):
             if dom == DOM_VMGM:
@@ -244,7 +272,6 @@ class Player:
                 t = d.tt.get(ttn)
                 if t:
                     vts, ttn = t
-            res_ttn = ttn
             pit = d.pgcit(DOM_TT, vts)
             if pit:
                 if pgcn == 0 and ttn:
@@ -255,9 +282,27 @@ class Player:
                             pgn = ppg
                 if 1 <= pgcn <= len(pit):
                     pgc = d.pgc(pit[pgcn - 1][1])
+            if pgc is not None and not natural:
+                # the reader's PTT table (S_PTTLD_MAT, ttn_pick): the named title's;
+                # with no title, title 1's if it names the PGC, else the SRP owner's
+                # (entry_id[6:0]), whose table must name it or none is held
+                if ttn:
+                    self.cur_ttn = ttn
+                    self.ptt_tab = d.ptt_table(vts, ttn)
+                else:
+                    t1 = d.ptt_table(vts, 1)
+                    eid = pit[pgcn - 1][0] & 0x7F
+                    if any(e[0] == pgcn for e in t1) or eid in (0, 1):
+                        self.cur_ttn, self.ptt_tab = 1, t1
+                    else:
+                        t = d.ptt_table(vts, eid)
+                        self.cur_ttn = eid
+                        self.ptt_tab = t if any(e[0] == pgcn for e in t) else []
+            res_ttn = self.cur_ttn
         if pgc is None:
             return self.verdict(self.vm('pulse error'))
         self.dom, self.vts, self.pgcn, self.pgc = dom, vts, pgcn, pgc
+        self.fp_vm = fp_vm
         nc = pgc['nr_cells']
         if pgn == 0xFF and pgc['pm']:
             cell = pgc['pm'][-1] - 1
@@ -307,7 +352,8 @@ class Player:
             if self.cell >= c1 - 1:
                 pg = i + 1
         g = [self.sh.m.ram[i] for i in range(16)]
-        return dict(dom=DVDNAV_DOM[self.dom], vts=self.vts, pgcn=self.pgcn, pg=pg,
+        return dict(dom=1 if self.fp_vm else DVDNAV_DOM[self.dom], vts=self.vts,
+                    pgcn=self.pgcn, pg=pg,
                     cell=self.cell + 1, buttons=buttons, gprm=g,
                     gmode=self.sh.m.ram[S.N.RAM_MAP['GMODE']])
 
@@ -331,7 +377,7 @@ class Player:
                 v = self.verdict(self.vm('pulse pgcend')) or ('adv',)
                 if v[0] in ('adv', 'replay'):
                     st = (self.follow(self.load([self.dom, self.vts, p['next'], 0, 0, 0,
-                                                 0, 0, 0])) if p['next'] else 'stop')
+                                                 0, 0, 0], natural=True)) if p['next'] else 'stop')
                 else:
                     st = self.follow(v)
                 continue
@@ -346,6 +392,17 @@ class Player:
                     loops += 1
                 acted = False
             prev = key
+            if self.dom == DOM_TT and self.ptt_tab:
+                # the reader's cur_pgm query (CH_G): the last part of this PGC at or
+                # below the cell's program; published on a hit only (SPRM7)
+                pg = 1
+                for i, c1 in enumerate(p['pm']):
+                    if c1 and self.cell >= c1 - 1:
+                        pg = i + 1
+                hit = [i + 1 for i, (pc, pn) in enumerate(self.ptt_tab)
+                       if pc == self.pgcn and pn and pn <= pg]
+                if hit:
+                    self.vm(f'pulse ptt={hit[-1]}')
             k = path_key(DVDNAV_DOM[self.dom], self.vts, self.pgcn)
             if not self.path or self.path[-1] != k:
                 self.path.append(k)
@@ -422,7 +479,7 @@ class Player:
             v = self.verdict(self.vm('pulse pgcend')) or ('adv',)
             if v[0] == 'adv':
                 if p['next']:
-                    st = self.follow(self.load([self.dom, self.vts, p['next'], 0, 0, 0, 0, 0, 0]))
+                    st = self.follow(self.load([self.dom, self.vts, p['next'], 0, 0, 0, 0, 0, 0], natural=True))
                 else:
                     st = 'stop'
                 continue

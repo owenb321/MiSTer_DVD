@@ -383,9 +383,10 @@ module dvd_iso_reader #(
     // pre-Phase-6 value. 8-bit display clamp at 255 (matches emu hud_nr_ch).
     output reg [7:0]  cur_pgm,
     // SPRM7 (PTTN) for the VM: the playing cell's GLOBAL part, one ptt_upd pulse per
-    // cur_pgm query that resolves through the PTT table (libdvdnav set_PGN ->
-    // vm_get_current_title_part). 0 when no part names the cell: libdvdnav writes 0
-    // too. Not published without a PTT table (nr_ptt == 0): the VM keeps its value.
+    // cur_pgm query that finds the cell in the title's PTT table (libdvdnav set_PGN
+    // -> vm_get_current_title_part). Not published on a miss or without a table
+    // (nr_ptt == 0): the VM keeps its value (libdvdnav writes 0 on a miss, but it
+    // searches every title in the VTS; see the CH_GR comment).
     // 11 bits, unclamped: PTT_CAP is 1024 parts, so g_best + 1 reaches 1024 (the
     // spec allows 999); the HUD's cur_pgm keeps its own 8-bit display clamp.
     output reg        ptt_upd,
@@ -1236,6 +1237,13 @@ reg [15:0] dur_best_pgcn;             // ...and which PGCN had it
 // checks the PGC is in it (P_PTT); not in it -> nr_ptt = 0, and the HUD falls
 // back to the PGC's own program count.
 reg        dur_pick;                  // 1 = the next S_SRP_EVAL re-takes dur_scan's winner
+// 1 = a VM title jump named a PGCN but no title (LinkPGCN, an RSM resume): S_PTTLD_MAT
+// loaded title 1's table, so S_SRP_EVAL reloads the OWNING title's (the SRP's
+// entry_id[6:0]) when title 1's does not name the PGC (ptt_hit) -- libdvdnav's
+// vm_get_current_title_part takes the lowest title that names it. Without it a resume into title 2 of a VTS read title
+// 1's chapters: SPRM7 found no part, and the HUD showed title 1's chapter total. 1,139
+// of 1,531 library discs have a VTS with more than one title (2026-10-08).
+reg        ttn_pick;
 reg        ptt_reld;                  // 1 = this PTT load is that reload
 reg        ptt_hit;                   // the reload's table names want_pgcn
 reg [6:0]  reld_ttn;                  // title the reload loads (the winner's entry_id[6:0])
@@ -2653,6 +2661,7 @@ always @(posedge clk or negedge rst_n) begin
         scan_mode    <= 1'b0;
         dur_scan     <= 1'b0;
         dur_pick     <= 1'b0;
+        ttn_pick     <= 1'b0;
         ptt_reld     <= 1'b0;
         ptt_hit      <= 1'b0;
         reld_ttn     <= 7'd0;
@@ -2965,9 +2974,12 @@ always @(posedge clk or negedge rst_n) begin
                     cur_pgm <= !g_found ? ({1'b0, chap_best} + 8'd1)
                              : (g_best >= 10'd255) ? 8'd255
                              : (g_best[7:0] + 8'd1);
-                    // the VM's SPRM7: the global part, or 0 on a miss (libdvdnav)
-                    ptt_upd <= 1'b1;
-                    ptt_cur <= g_found ? ({1'b0, g_best} + 11'd1) : 11'd0;
+                    // the VM's SPRM7: the global part, on a hit only. libdvdnav
+                    // writes 0 on a miss, but it searches every title of the VTS,
+                    // and a miss here can be a table that is not the PGC's -- 0
+                    // would then overwrite a resumed SPRM7 that was right.
+                    ptt_upd <= g_found;
+                    ptt_cur <= {1'b0, g_best} + 11'd1;
                     chap_query <= 1'b0;
                     chap_st    <= CH_IDLE;
                 end else if (!g_found ||
@@ -3148,6 +3160,7 @@ always @(posedge clk or negedge rst_n) begin
             scan_mode       <= 1'b0;
             dur_scan        <= 1'b0;
             dur_pick        <= 1'b0;
+            ttn_pick        <= 1'b0;
             ptt_reld        <= 1'b0;
             scan_title      <= 1'b0;
             sel_ret         <= 1'b0;
@@ -3198,6 +3211,7 @@ always @(posedge clk or negedge rst_n) begin
             scan_mode    <= 1'b0;
             dur_scan     <= 1'b0;
             dur_pick     <= 1'b0;
+            ttn_pick     <= 1'b0;
             ptt_reld     <= 1'b0;
             scan_title   <= 1'b0;
             want_ttn     <= (jdom_l == DOM_TT) ? jttn_l : 7'd0;
@@ -3290,6 +3304,8 @@ always @(posedge clk or negedge rst_n) begin
                     play_vtsn   <= jvts_l;
                     want_pgcn   <= (jttn_l != 7'd0) ? 16'd0
                                    : ((jpgcn_l == 16'd0) ? 16'd1 : jpgcn_l);
+                    ttn_pick    <= (jttn_l == 7'd0);    // no title named: find its owner
+                    ptt_hit     <= 1'b0;   // ...unless title 1's table names it (P_PTT)
                     state       <= S_LAT;
                     lat_ret     <= S_SELECT;
                 end
@@ -4325,13 +4341,21 @@ always @(posedge clk or negedge rst_n) begin
                 end else if (srp_pgc_start[31:21] != 11'd0) begin
                     // pgc_start_byte beyond 2 MB = malformed PGCIT
                     dur_pick <= 1'b0;                  // no stale one-shot past this parse
+                    ttn_pick <= 1'b0;
                     if (dom != DOM_TT) begin
                         pgc_error <= 1'b1;
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;
-                end else if (dur_pick && (want_pgcn != 16'd1 ||
-                             (srp_entry_id[6:0] != 7'd0 && srp_entry_id[6:0] != cur_ttn))) begin
+                end else if ((dur_pick && (want_pgcn != 16'd1 ||
+                              (srp_entry_id[6:0] != 7'd0 && srp_entry_id[6:0] != cur_ttn))) ||
+                             // a VM title jump with no title: libdvdnav takes the
+                             // LOWEST title whose table names the PGC, so keep title
+                             // 1's when it does (ptt_hit); else reload the SRP's owner.
+                             // Never a reload per LinkPGCN inside title 1 (DVD games
+                             // link many times a second).
+                             (ttn_pick && !ptt_hit && srp_entry_id[6:0] != 7'd0 &&
+                              srp_entry_id[6:0] != cur_ttn)) begin
                     // ★ AUTO CHAPTER TABLE (issue #132). The mount loaded title 1's
                     // VTS_PTT_SRPT before the duration scan ran; the scan's winner is
                     // often another title's PGC (X-Men: Apocalypse: title 1 = PGCN 1,
@@ -4349,6 +4373,7 @@ always @(posedge clk or negedge rst_n) begin
                     // Any winner other than PGCN 1 reloads even when the title is
                     // unchanged, so P_PTT's membership check (ptt_hit) covers it too.
                     dur_pick   <= 1'b0;
+                    ttn_pick   <= 1'b0;
                     ptt_reld   <= 1'b1;
                     ptt_hit    <= 1'b0;
                     reld_ttn   <= (srp_entry_id[6:0] != 7'd0) ? srp_entry_id[6:0] : 7'd1;
@@ -4359,6 +4384,7 @@ always @(posedge clk or negedge rst_n) begin
                     state      <= S_SECREAD;
                 end else begin
                     dur_pick    <= 1'b0;
+                    ttn_pick    <= 1'b0;
                     scan_mode   <= 1'b0;
                     scan_title  <= 1'b0;
                     cur_pgcn    <= srp_i + 16'd1;
