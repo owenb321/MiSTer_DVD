@@ -1,8 +1,11 @@
 # The DVD VM as microcode (`dvd/dvd_vm.sv` + `dvd/nav/vm.uasm`)
 
-**Status (2026-10-07, branch `feature/nav-ucode`):** built, sim-proven, fitted in the core
-(timing passes), and HIL round 1 reproduces the control's `nav_diff` table exactly (§3a).
-⏳ The maintainer's hand check of the paths `nav_diff` cannot reach.
+**Status (2026-10-07, branch `feature/nav-ucode`): ✅ HW-CONFIRMED.**
+- Built, sim-proven and fitted in the core; timing passes.
+- HIL round 1 reproduces the control's `nav_diff` table exactly (§3a).
+- The maintainer's hand check passed on build `DVD_navucode_20261007_0640.rbf`
+  (2026-10-08).
+- Not yet pushed or merged.
 This is the pilot `docs/logic_reclaim.md` §10b proposed: the VM alone, so the
 measurement and the workflow question are answered before the reader is touched.
 
@@ -195,9 +198,15 @@ throughout, the Scooby maze, MiB's and Matrix's last step), so those are not mea
 So the model reproduces the board where the board can be read, and it can read the steps
 the board cannot (HP Interactive and Scene It agree offline on all four of their steps).
 
-⏳ **Still needs the maintainer's hand check** (as for PR #135): Scooby-Doo 2's minigame
-and maze, T2 (Mission Profiles, a slideshow), HP Interactive (Player Mode), Scene It HP (a
-game and a question), and a counter-mode GPRM disc.
+✅ **The maintainer's hand check passed (2026-10-08, the same build on .236).** It covered
+the paths `nav_diff` cannot reach, as for PR #135:
+- Scooby-Doo 2's minigame and maze;
+- T2 (Mission Profiles, a slideshow);
+- HP Interactive (Player Mode);
+- Scene It HP (a game and a question);
+- a counter-mode GPRM disc.
+
+Verdict: "all looks good on hardware".
 
 ## 4. Timing
 

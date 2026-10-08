@@ -533,14 +533,14 @@ decoded together, so the IMDCT's `bufmem`, `delay_mem` and `pcm_mem` could share
 
 ### 10b. A navigation sequencer for the reader, the VM and `nav_pci` (biggest, riskiest)
 
-> **🔧 The VM pilot is built (2026-10-07, branch `feature/nav-ucode`): `docs/nav_engine.md`.**
+> **✅ The VM pilot is built and HW-confirmed (2026-10-07/08, branch `feature/nav-ucode`): `docs/nav_engine.md`.**
 > - **Cost:** `dvd_vm` 1,350 → 853 ALM in the core (−498), +4 M10K; timing passes.
 > - **Equivalence:** transaction-equal to the old FSM (a three-way A/B with the FSM kept
 >   as the oracle), and every VM gate is green with its `--red` arms re-expressed.
 > - **Offline diff:** the same microcode runs offline against libdvdnav over the ISO
 >   library (`tools/nav_offline.py`), which is the "largest practical win" below.
 > - **Rig:** HIL `nav_diff` = the control on every compared step.
-> - **Pending:** the maintainer's hand check.
+> - **Hand check:** the maintainer's passed (2026-10-08).
 
 | entity | ALMs | M10K |
 |---|---|---|

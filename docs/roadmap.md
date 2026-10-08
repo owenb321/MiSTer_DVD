@@ -1425,12 +1425,12 @@ Levers, cheapest/lowest-risk first:
   `imdct_512`; costed: worst AC-3 frame 52.8 % raw / 59.0 % under the gate's ×1.25); then a measurement-only split of `dvd_iso_reader`'s states, which
   decides whether a navigation sequencer for the reader, VM and `nav_pci` (6,234 ALMs) and
   a shared transport arithmetic unit (~3,300 ALMs) are worth a branch.
-  **🔧 The VM pilot is built (2026-10-07, branch `feature/nav-ucode`, `docs/nav_engine.md`):**
+  **✅ The VM pilot is built and HW-confirmed (2026-10-07/08, branch `feature/nav-ucode`, `docs/nav_engine.md`):**
   - `dvd_vm` is microcode: 1,350 → 853 ALM in the core, +4 M10K, timing passes;
   - it is transaction-equal to the old FSM;
   - `tools/nav_offline.py` diffs it against libdvdnav over the library without the rig.
 
-  HIL `nav_diff` = the control on every compared step. ⏳ The maintainer's hand check.
+  HIL `nav_diff` = the control on every compared step; the maintainer's hand check passed.
   Next after it: the reader state split.
 
 Validate empirically (does it route? does the fringe stay gone on HW?), not by chasing the
