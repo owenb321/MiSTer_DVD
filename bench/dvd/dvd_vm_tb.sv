@@ -52,6 +52,7 @@
 //
 // Run: iverilog -g2012 -o /tmp/vmtb dvd/dvd_vm.sv bench/dvd/dvd_vm_tb.sv && vvp /tmp/vmtb
 
+`include "bench/dvd/dvd_vm_peek.svh"   // the VM state in its data RAM
 `timescale 1ns/1ps
 
 module dvd_vm_tb;
@@ -329,7 +330,7 @@ module dvd_vm_tb;
         n_cases = n_cases + 1;
         vm_restart;
         // preload g9 (the only setup the selftest uses)
-        dut.gprm[9] = g9init;
+        `VM_GPRM(dut, 9) = g9init;
         // load as a PRE block
         for (i = 0; i < cn; i = i + 1) wr_cmd(i[7:0], cmds[i]);
         nr_pre = cn[7:0]; nr_post = 0; nr_cell = 0;
@@ -339,10 +340,10 @@ module dvd_vm_tb;
         wait_settled;
 
         // register state must match the golden model bit-exactly
-        if (dut.gprm[3] !== e_g3) begin fail(cname); $display("  g3=%04x exp %04x", dut.gprm[3], e_g3); end
-        if (dut.gprm[4] !== e_g4) begin fail(cname); $display("  g4=%04x exp %04x", dut.gprm[4], e_g4); end
-        if (dut.gprm[5] !== e_g5) begin fail(cname); $display("  g5=%04x exp %04x", dut.gprm[5], e_g5); end
-        if (dut.gprm[9] !== e_g9) begin fail(cname); $display("  g9=%04x exp %04x", dut.gprm[9], e_g9); end
+        if (`VM_GPRM(dut, 3) !== e_g3) begin fail(cname); $display("  g3=%04x exp %04x", `VM_GPRM(dut, 3), e_g3); end
+        if (`VM_GPRM(dut, 4) !== e_g4) begin fail(cname); $display("  g4=%04x exp %04x", `VM_GPRM(dut, 4), e_g4); end
+        if (`VM_GPRM(dut, 5) !== e_g5) begin fail(cname); $display("  g5=%04x exp %04x", `VM_GPRM(dut, 5), e_g5); end
+        if (`VM_GPRM(dut, 9) !== e_g9) begin fail(cname); $display("  g9=%04x exp %04x", `VM_GPRM(dut, 9), e_g9); end
         if ({8'd0, sprm_astn}  !== e_s1) begin fail(cname); $display("  sprm1=%02x exp %04x", sprm_astn, e_s1); end
         if ({8'd0, sprm_spstn} !== e_s2) begin fail(cname); $display("  sprm2=%02x exp %04x", sprm_spstn, e_s2); end
         // sprm8: the golden fixture is eval-level (no dispatch), but the RTL
@@ -368,18 +369,18 @@ module dvd_vm_tb;
         end else if (e_link == "JumpTT") begin
             if (!saw_jump || cap_jdom != 2'd3 || {25'd0, cap_jttn} != e_d1)
                 begin fail(cname); $display("  expected TT jump ttn=%0d", e_d1); end
-            if (dut.sprm4 != e_d1[15:0]) begin fail(cname); $display("  SPRM4 != ttn"); end
+            if (`VM_SPRM(dut, 4) != e_d1[15:0]) begin fail(cname); $display("  SPRM4 != ttn"); end
         end else if (e_link == "JumpSS_VTSM") begin
             if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != e_d1[7:0] ||
                 cap_jentry != e_d3[3:0])
                 begin fail(cname); $display("  expected VTSM jump vts=%0d menu=%0d", e_d1, e_d3); end
-            if (dut.sprm5 != e_d2[15:0]) begin fail(cname); $display("  SPRM5 != title"); end
+            if (`VM_SPRM(dut, 5) != e_d2[15:0]) begin fail(cname); $display("  SPRM5 != title"); end
         end else if (e_link == "CallSS_VTSM") begin
             if (!saw_jump || cap_jdom != 2'd2 || cap_jentry != e_d1[3:0])
                 begin fail(cname); $display("  expected CallSS VTSM menu=%0d", e_d1); end
             // rsm_cell field d2 (1-based) -> saved cell d2-1
-            if (e_d2 != 0 && dut.rsm_cell != (e_d2[7:0] - 8'd1))
-                begin fail(cname); $display("  rsm_cell=%0d exp %0d", dut.rsm_cell, e_d2-1); end
+            if (e_d2 != 0 && `VM_RSM_CELL(dut) != (e_d2[7:0] - 8'd1))
+                begin fail(cname); $display("  rsm_cell=%0d exp %0d", `VM_RSM_CELL(dut), e_d2-1); end
         end else begin
             $display("NOTE: no action mapping for link %0s (case %0s) - state-only check", e_link, cname);
         end
@@ -466,8 +467,8 @@ module dvd_vm_tb;
         wait_settled;
         if (!saw_jump || cap_jdom != 2'd3 || cap_jttn != 7'd4)
             fail("S2: expected TT jump ttn=4 from FP pre");
-        if (dut.gprm[14] !== 16'h3500) fail("S1: g14 != 0x3500");
-        if (dut.sprm4 !== 16'd4) fail("S1: SPRM4 != 4");
+        if (`VM_GPRM(dut, 14) !== 16'h3500) fail("S1: g14 != 0x3500");
+        if (`VM_SPRM(dut, 4) !== 16'd4) fail("S1: SPRM4 != 4");
         // reader answers: the title loaded (no pre), 3 cells
         nr_pre = 0; cell_count = 8'd3;
         cur_vts = 8'd4; cur_pgcn = 8'd1; cur_cell = 8'd0;
@@ -489,8 +490,8 @@ module dvd_vm_tb;
         if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != best_menu_vts ||
             cap_jentry != 4'd3)
             fail("S2: expected boot-shortcut VTSM Root jump to best_menu_vts");
-        if (dut.fb !== 3'd7) fail("S2: expected fb = FB_BOOTM");
-        if (dut.rsm_vts !== 8'd4 || dut.rsm_cell !== 8'd2)
+        if (`VM_FB(dut) !== 3'd7) fail("S2: expected fb = FB_BOOTM");
+        if (`VM_RSM_VTS(dut) !== 8'd4 || `VM_RSM_CELL(dut) !== 8'd2)
             fail("S2: RSM not saved");
         // reader answers: 0-cell root stub, pre = LinkPGCN 2
         wr_cmd(0, 64'h2004000000000002);         // LinkPGCN 2
@@ -589,7 +590,7 @@ module dvd_vm_tb;
         wait_settled;
         if (!saw_jump || cap_jdom != 2'd1 || cap_jentry != 4'd2)
             fail("S5: expected VMGM menu-2 jump from POST");
-        if (dut.gprm[4] === 16'h1111) fail("S5: PRE ran instead of POST");
+        if (`VM_GPRM(dut, 4) === 16'h1111) fail("S5: PRE ran instead of POST");
         nr_pre = 0; cell_count = 8'd2;
         pulse_loaded;
         wait_idle;
@@ -604,7 +605,7 @@ module dvd_vm_tb;
         wait_idle;
         if (!saw_adv) fail("S6: expected vm_adv on post fall-through");
         if (saw_jump) fail("S6: unexpected jump");
-        if (dut.gprm[4] !== 16'd1) fail("S6: post did not execute");
+        if (`VM_GPRM(dut, 4) !== 16'd1) fail("S6: post did not execute");
         $display("S6 post fall-through PASS");
 
         // ---------------- [S7] fallback chain -------------------------------
@@ -615,7 +616,7 @@ module dvd_vm_tb;
         // resume goes through. (This step used the retired key_resume until
         // 2026-09-17; it is a bench CONVENIENCE, not a claim, and ev_menu case (a)
         // performs the identical LinkRSM.)
-        dut.came_via_menukey = 1'b1;
+        `VM_CVM(dut) = 1'b1;
         menu_active = 0;
         clear_actions;
         @(negedge clk); key_menu = 1;
@@ -684,8 +685,8 @@ module dvd_vm_tb;
         btn_cmd_valid = 1;
         @(negedge clk); btn_cmd_valid = 0;
         wait_settled;
-        if (dut.gprm[14] !== 16'hABCD) fail("S9: button set g14 failed");
-        if (dut.gprm[4]  !== 16'd2)    fail("S9: TailPGC did not run POST");
+        if (`VM_GPRM(dut, 14) !== 16'hABCD) fail("S9: button set g14 failed");
+        if (`VM_GPRM(dut, 4)  !== 16'd2)    fail("S9: TailPGC did not run POST");
         if (!saw_jump || cap_jdom != 2'd1 || cap_jpgcn != 8'd1)
             fail("S9: expected VMGM pgc-1 jump from POST after TailPGC");
         nr_pre = 0; nr_post = 0; cell_count = 8'd2;
@@ -727,7 +728,7 @@ module dvd_vm_tb;
             fail("S10: CallSS_VTSM must STAY in VTS 2 (rsm_cell mis-read as VTS)");
             $display("      cap_jvts=%0d expected 2", cap_jvts);
         end
-        if (dut.rsm_vts !== 8'd2)
+        if (`VM_RSM_VTS(dut) !== 8'd2)
             fail("S10: CallSS_VTSM resume (vts=2) not saved");
         $display("S10 CallSS_VTSM stay-in-VTS (white-rabbit boot) PASS");
 
@@ -762,7 +763,7 @@ module dvd_vm_tb;
         clear_actions;
         pulse_loaded;
         wait_settled;
-        if (dut.gprm[15] !== 16'h0800)
+        if (`VM_GPRM(dut, 15) !== 16'h0800)
             fail("S11: g15 = HL_BTNN read the wrong button after teardown");
         if (!saw_jump || cap_jpgcn != 8'd21)
             fail("S11: dispatch collapsed to button-1 default (LinkPGCN 20) not 2 (21)");
@@ -796,7 +797,7 @@ module dvd_vm_tb;
         btn_cmd_valid = 1;
         @(negedge clk); btn_cmd_valid = 0;
         wait_settled;
-        if (dut.gprm[0] !== 16'd2 || !saw_jump || cap_jpgcn != 8'd84)
+        if (`VM_GPRM(dut, 0) !== 16'd2 || !saw_jump || cap_jpgcn != 8'd84)
             fail("S12a: LinkTailPGC dispatch != button 2 (LinkPGCN 84)");
         // S12b BUG CASE: after activating button 2, btn_sel drifts to 1 (a menu
         // re-arm reset) while btns_armed stays 1. The dispatch must STILL be
@@ -820,7 +821,7 @@ module dvd_vm_tb;
         @(negedge clk); btn_cmd_valid = 0;
         btn_sel = 6'd1;                     // btn_sel drifts to 1 (menu re-arm)
         wait_settled;
-        if (dut.gprm[0] !== 16'd2 || !saw_jump || cap_jpgcn != 8'd84)
+        if (`VM_GPRM(dut, 0) !== 16'd2 || !saw_jump || cap_jpgcn != 8'd84)
             fail("S12b: dispatch collapsed to button 1 (LinkPGCN 58) on btn_sel drift");
         $display("S12 Atmosfear LinkTailPGC dispatch survives btn_sel drift PASS");
 
@@ -870,11 +871,11 @@ module dvd_vm_tb;
         nav_ready = 0;            // drop the leftover boot request before restarting
         vm_restart;
         wait_idle;
-        dut.came_via_menukey = 1'b0;
-        dut.rsm_vts = 8'd1; dut.rsm_pgcn = 8'd1; dut.rsm_cell = 8'd0;
+        `VM_CVM(dut) = 1'b0;
+        `VM_RSM_VTS(dut) = 8'd1; `VM_RSM_PGCN(dut) = 8'd1; `VM_RSM_CELL(dut) = 8'd0;
         dut.vm_dom = 2'd1;                 // DOM_VMGM
         dut.vm_vts = 8'd0;
-        dut.fb = 3'd0;                     // FB_NONE
+        `VM_FB(dut) = 3'd0;                     // FB_NONE
         menu_active = 1;
         clear_actions;
         @(negedge clk); key_menu = 1;
@@ -897,7 +898,7 @@ module dvd_vm_tb;
         nav_ready = 0; vm_restart; wait_idle;
         dut.vm_dom = 2'd2;                 // DOM_VTSM
         dut.vm_vts = 8'd1;
-        dut.came_via_menukey = 1'b0;
+        `VM_CVM(dut) = 1'b0;
         cur_vts = 8'd1; cur_pgcn = 8'd27; cur_cell = 8'd0;   // the dead-end stub
         nr_pre = 0; nr_post = 0; nr_cell = 0; cell_count = 8'd0;
         menu_active = 1;
@@ -909,7 +910,7 @@ module dvd_vm_tb;
         if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != best_menu_vts ||
             cap_jentry != 4'd3)
             fail("S14: dead-end must recover via best_menu_vts VTSM Root");
-        if (dut.deadend_pgcn !== 8'd27 || dut.deadend_vts !== 8'd1)
+        if (`VM_DE_PGCN(dut) !== 8'd27 || `VM_DE_VTS(dut) !== 8'd1)
             fail("S14: dbg_deadend did not latch the failing PGC {01,27}");
         nr_pre = 0; cell_count = 8'd2; pulse_loaded; wait_idle;
         $display("S14 0-cell menu dead-end recovers to a menu + latches PGC PASS");
@@ -1049,8 +1050,8 @@ module dvd_vm_tb;
         // (a) disc-driven menu (came_via_menukey=0, RSM filled by the disc's own
         //     CallSS): the Menu key must NOT resume the stub. It re-invokes Root.
         nav_ready = 0; vm_restart; wait_idle;
-        dut.came_via_menukey = 1'b0;
-        dut.rsm_vts = 8'd1; dut.rsm_pgcn = 8'd1; dut.rsm_cell = 8'd1;
+        `VM_CVM(dut) = 1'b0;
+        `VM_RSM_VTS(dut) = 8'd1; `VM_RSM_PGCN(dut) = 8'd1; `VM_RSM_CELL(dut) = 8'd1;
         dut.vm_dom = 2'd1;                 // DOM_VMGM (the intro chain)
         dut.vm_vts = 8'd0;
         menu_active = 1;
@@ -1068,8 +1069,8 @@ module dvd_vm_tb;
         pulse_loaded; wait_idle;
         // (b) the USER toggle still resumes: same RSM but came_via_menukey=1.
         nav_ready = 0; vm_restart; wait_idle;
-        dut.came_via_menukey = 1'b1;
-        dut.rsm_vts = 8'd1; dut.rsm_pgcn = 8'd1; dut.rsm_cell = 8'd1;
+        `VM_CVM(dut) = 1'b1;
+        `VM_RSM_VTS(dut) = 8'd1; `VM_RSM_PGCN(dut) = 8'd1; `VM_RSM_CELL(dut) = 8'd1;
         dut.vm_dom = 2'd1;                 // DOM_VMGM
         dut.vm_vts = 8'd0;
         menu_active = 1;
@@ -1097,9 +1098,9 @@ module dvd_vm_tb;
         wait_settled;
         if (!saw_jump || cap_jdom != 2'd1 || cap_jentry != 4'd2)
             fail("S17a: title key must jump VMGM Title (entry 2)");
-        if (dut.rsm_vts !== 8'd3 || dut.rsm_pgcn !== 8'd2 || dut.rsm_cell !== 8'd4)
+        if (`VM_RSM_VTS(dut) !== 8'd3 || `VM_RSM_PGCN(dut) !== 8'd2 || `VM_RSM_CELL(dut) !== 8'd4)
             fail("S17a: title key from a title must save RSM");
-        if (dut.came_via_menukey !== 1'b1)
+        if (`VM_CVM(dut) !== 1'b1)
             fail("S17a: title key from a title must set came_via_menukey");
         nr_pre = 0; cell_count = 8'd2; menu_active = 1;
         cur_vts = 8'd0; cur_pgcn = 8'd1; cur_cell = 8'd0;
@@ -1120,8 +1121,8 @@ module dvd_vm_tb;
         //     trampoline stub): jump VMGM Title but do NOT touch RSM or the
         //     toggle flag - the stub RSM must not be re-blessed (see S16).
         nav_ready = 0; vm_restart; wait_idle;
-        dut.came_via_menukey = 1'b0;
-        dut.rsm_vts = 8'd1; dut.rsm_pgcn = 8'd1; dut.rsm_cell = 8'd1;
+        `VM_CVM(dut) = 1'b0;
+        `VM_RSM_VTS(dut) = 8'd1; `VM_RSM_PGCN(dut) = 8'd1; `VM_RSM_CELL(dut) = 8'd1;
         dut.vm_dom = 2'd1;                 // DOM_VMGM
         dut.vm_vts = 8'd0;
         menu_active = 1;
@@ -1132,9 +1133,9 @@ module dvd_vm_tb;
         wait_settled;
         if (!saw_jump || cap_jdom != 2'd1 || cap_jentry != 4'd2)
             fail("S17c: title key in a menu must jump VMGM Title (entry 2)");
-        if (dut.rsm_vts !== 8'd1 || dut.rsm_pgcn !== 8'd1 || dut.rsm_cell !== 8'd1)
+        if (`VM_RSM_VTS(dut) !== 8'd1 || `VM_RSM_PGCN(dut) !== 8'd1 || `VM_RSM_CELL(dut) !== 8'd1)
             fail("S17c: title key in a menu must not clobber RSM");
-        if (dut.came_via_menukey !== 1'b0)
+        if (`VM_CVM(dut) !== 1'b0)
             fail("S17c: title key in a disc-driven menu must not set came_via_menukey");
         nr_pre = 0; cell_count = 8'd2; menu_active = 1;
         cur_vts = 8'd0; cur_pgcn = 8'd1; cur_cell = 8'd0;
@@ -1193,9 +1194,9 @@ module dvd_vm_tb;
             fail("S24a: Chapter Menu must jump to VTSM entry 7 (PTT menu)");
         // and it must save RSM from a playing title, like the other menu keys,
         // so Menu/Select can toggle back to the movie afterwards.
-        if (dut.rsm_vts !== 8'd5 || dut.rsm_pgcn !== 16'd9 || dut.rsm_cell !== 8'd3)
+        if (`VM_RSM_VTS(dut) !== 8'd5 || `VM_RSM_PGCN(dut) !== 16'd9 || `VM_RSM_CELL(dut) !== 8'd3)
             fail("S24b: Chapter Menu from a title must save RSM");
-        if (dut.came_via_menukey !== 1'b1)
+        if (`VM_CVM(dut) !== 1'b1)
             fail("S24b: Chapter Menu must set came_via_menukey");
         $display("S24 Chapter Menu key (VTSM entry 7 + RSM discipline) PASS");
 
@@ -1216,11 +1217,11 @@ module dvd_vm_tb;
         menu_active = 0;
         cur_vts = 8'd1; cur_pgcn = 8'd3; cur_cell = 8'd0; cell_count = 8'd1;
         begin : s19_init integer i;
-            for (i = 0; i < 16; i = i + 1) dut.gprm[i] = 16'd0;
+            for (i = 0; i < 16; i = i + 1) `VM_GPRM(dut, i) = 16'd0;
         end
         dut.sprm1 = 16'd15; dut.sprm2 = 16'd0;  dut.sprm3 = 16'd1;
-        dut.sprm4 = 16'd4;  dut.sprm5 = 16'd3;  dut.sprm6 = 16'd3;
-        dut.sprm7 = 16'd1;  dut.sprm8 = 16'h0400;
+        `VM_SPRM(dut, 4) = 16'd4;  `VM_SPRM(dut, 5) = 16'd3;  `VM_SPRM(dut, 6) = 16'd3;
+        `VM_SPRM(dut, 7) = 16'd1;  dut.sprm8 = 16'h0400;
         wr_cmd(0,  64'h00a1000600010009);   // if (g6 == 1) Goto 9
         wr_cmd(1,  64'h00a100050001000d);   // if (g5 == 1) Goto 13
         wr_cmd(2,  64'h6100000300920000);   // g3 = SPRM18 (subp pref = 'en')
@@ -1262,11 +1263,11 @@ module dvd_vm_tb;
         wait_settled;
         if (!saw_jump || cap_jdom != 2'd1 || cap_jpgcn != 16'd1)
             fail("S19: expected CallSS_VMGM_PGC 1 jump");
-        if (dut.gprm[6] !== 16'd1)
+        if (`VM_GPRM(dut, 6) !== 16'd1)
             fail("S19: g6 != 1 - the boot-loop guard flag was NOT set");
-        if (dut.gprm[3] !== 16'd0 || dut.gprm[4] !== 16'd0 ||
-            dut.gprm[5] !== 16'd0 || dut.gprm[11] !== 16'd0 ||
-            dut.gprm[14] !== 16'd0)
+        if (`VM_GPRM(dut, 3) !== 16'd0 || `VM_GPRM(dut, 4) !== 16'd0 ||
+            `VM_GPRM(dut, 5) !== 16'd0 || `VM_GPRM(dut, 11) !== 16'd0 ||
+            `VM_GPRM(dut, 14) !== 16'd0)
             fail("S19: g3/g4/g5/g11/g14 not zeroed per the golden model");
         if (dut.sprm1 !== 16'd0)
             fail("S19: sprm1 != 0 (SetSTN ASTN path diverged)");
@@ -1284,7 +1285,7 @@ module dvd_vm_tb;
         menu_active = 1;
         cur_vts = 8'd1; cur_pgcn = 8'd1; cur_cell = 8'd0; cell_count = 8'd3;
         begin : s20_init integer i;
-            for (i = 0; i < 16; i = i + 1) dut.gprm[i] = 16'd0;
+            for (i = 0; i < 16; i = i + 1) `VM_GPRM(dut, i) = 16'd0;
         end
         wr_cmd(0,  64'h00a100060000000b);   // if (g6 == 0) Goto 11
         wr_cmd(1,  64'h00a1000b00000006);   // if (g11 == 0) Goto 6
@@ -1307,8 +1308,8 @@ module dvd_vm_tb;
         // round 2: g6=1 (the S19 flag) -> LinkCN 1 = play the menu
         dut.vm_dom = 2'd2;
         dut.vm_vts = 8'd1;
-        dut.gprm[6] = 16'd1;
-        dut.gprm[10] = 16'd0;
+        `VM_GPRM(dut, 6) = 16'd1;
+        `VM_GPRM(dut, 10) = 16'd0;
         clear_actions;
         pulse_loaded;
         wait_settled;
@@ -1363,7 +1364,7 @@ module dvd_vm_tb;
         // (c) back to a title, press Menu again -> spec path, targets cur_vts (7)
         menu_active = 0;
         dut.vm_dom = 2'd3;
-        dut.came_via_menukey = 1'b0;             // a title played: toggle dropped
+        `VM_CVM(dut) = 1'b0;             // a title played: toggle dropped
         cur_vts = 8'd7; cur_pgcn = 8'd3; cur_cell = 8'd1; cell_count = 8'd4;
         clear_actions;
         @(negedge clk); key_menu = 1;
@@ -1372,7 +1373,7 @@ module dvd_vm_tb;
         if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != 8'd7 ||
             cap_jentry != 4'd3)
             fail("S21c: after a menu was seen, Menu must use the spec path (cur_vts)");
-        if (dut.fb !== 3'd2) fail("S21c: expected fb = FB_VTSM (spec path)");
+        if (`VM_FB(dut) !== 3'd2) fail("S21c: expected fb = FB_VTSM (spec path)");
         $display("S21 boot-chain menu shortcut (target/fallback/self-limit) PASS");
 
         // -------- [S22] FAILED MENU LINK -> re-enter the menu (2026-08-27) ---
@@ -1411,7 +1412,7 @@ module dvd_vm_tb;
         if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != 8'd7 ||
             cap_jpgcn != 16'd5)
             fail("S22a: must RE-ENTER the last menu (VTSM 7 PGCN 5), not auto-title");
-        if (dut.fb !== 3'd2) fail("S22a: fb must advance to FB_VTSM");
+        if (`VM_FB(dut) !== 3'd2) fail("S22a: fb must advance to FB_VTSM");
         // (b) the re-enter itself fails -> the EXISTING FB_VTSM chain
         clear_actions; pulse_error; wait_settled;
         if (!saw_jump || cap_jdom != 2'd2 || cap_jvts != best_menu_vts ||
@@ -1455,7 +1456,7 @@ module dvd_vm_tb;
         cell_count = 8'd0;                 // <-- 0 cells
         btns_armed = 0;                    // the LinkPGCN tore the menu down
         begin : s23_init integer i;
-            for (i = 0; i < 16; i = i + 1) dut.gprm[i] = 16'd0;
+            for (i = 0; i < 16; i = i + 1) `VM_GPRM(dut, i) = 16'd0;
         end
         wr_cmd(0,  64'h7100000300000000);  // g[3] = 0
         wr_cmd(1,  64'h6100000000880000);  // g[0] = HL_BTNN
@@ -1492,11 +1493,11 @@ module dvd_vm_tb;
         // A 0-cell PGC with NO post is still a genuine dead end -> FB_VTSM
         // (the TP_SW selector-with-no-matching-case path must not regress).
         nr_pre = 0; nr_post = 0; nr_cell = 0; cell_count = 8'd0;
-        dut.deadend_seen = 1'b0;           // fb moves on once the chain runs,
+        `VM_DE_SEEN(dut) = 1'b0;           // fb moves on once the chain runs,
         clear_actions;                     // so latch the dead-end itself
         pulse_loaded;
         wait_settled;
-        if (dut.deadend_seen !== 1'b1)
+        if (`VM_DE_SEEN(dut) !== 1'b1)
             fail("S23: 0-cell PGC with no POST must still take the dead-end chain");
         if (saw_jump && cap_jpgcn >= 16'd82 && cap_jpgcn <= 16'd85)
             fail("S23: a no-POST stub must not dispatch like a POST dispatcher");
@@ -1567,7 +1568,7 @@ module dvd_vm_tb;
         // alike. FB_GAVEUP is the chain's one NO-JUMP arm, so the stale press is
         // left as the only thing that can still act. Without this the arm passes
         // against the un-cleared door (measured).
-        @(negedge clk); dut.fb = 3'd6;         // FB_GAVEUP
+        @(negedge clk); `VM_FB(dut) = 3'd6;         // FB_GAVEUP
         pulse_error;
         wait_settled;
         if (saw_replay)
@@ -1606,15 +1607,15 @@ module dvd_vm_tb;
         wr_cmd(1, 64'h5300006400050000);     // SetMode Register g[5]  = 100
         nr_pre = 2; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
         clear_actions; pulse_loaded; wait_idle;
-        if (dut.gprm[13]      !== 16'd5) fail("T1: counter g13 initial != 5");
-        if (dut.gprm_mode[13] !== 1'b1)  fail("T1: g13 not in counter mode");
+        if (`VM_GPRM(dut, 13)      !== 16'd5) fail("T1: counter g13 initial != 5");
+        if (`VM_GMODE(dut)[13] !== 1'b1)  fail("T1: g13 not in counter mode");
         do_ticks(3);
-        if (dut.gprm[13] !== 16'd8)   fail("T1: g13 != 8 after 3 ticks");
-        if (dut.gprm[5]  !== 16'd100) fail("T1: register g5 ticked (must not)");
+        if (`VM_GPRM(dut, 13) !== 16'd8)   fail("T1: g13 != 8 after 3 ticks");
+        if (`VM_GPRM(dut, 5)  !== 16'd100) fail("T1: register g5 ticked (must not)");
         // harvest the ticked counter into g4 (like PGCN8 pre#0 'g[14] += g[13]')
         wr_cmd(0, 64'h63000004000d0000);     // g[4] += g[13]
         nr_pre = 1; clear_actions; pulse_loaded; wait_idle;
-        if (dut.gprm[4] !== 16'd8) fail("T1: harvest g4 != ticked counter (8)");
+        if (`VM_GPRM(dut, 4) !== 16'd8) fail("T1: harvest g4 != ticked counter (8)");
         $display("T1 counter tick + harvest PASS");
 
         // ---- T2: rnd seeded from rnd_seed -> different seed, different rnd ---
@@ -1625,12 +1626,12 @@ module dvd_vm_tb;
         wr_cmd(0, 64'h78000002001f0000);     // g[2] rnd 0x1f
         nr_pre = 1; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
         clear_actions; pulse_loaded; wait_idle;
-        if (dut.gprm[2] !== 16'd26) fail("T2: rnd(seed=ACE1,K=31) != 26");
+        if (`VM_GPRM(dut, 2) !== 16'd26) fail("T2: rnd(seed=ACE1,K=31) != 26");
         rnd_seed = 16'h1234; vm_restart;
         if (dut.lfsr !== 16'h1234) fail("T2: lfsr != seed 0x1234 at mount");
         wr_cmd(0, 64'h78000002001f0000);
         nr_pre = 1; clear_actions; pulse_loaded; wait_idle;
-        if (dut.gprm[2] !== 16'd6)  fail("T2: rnd(seed=1234,K=31) != 6");
+        if (`VM_GPRM(dut, 2) !== 16'd6)  fail("T2: rnd(seed=1234,K=31) != 6");
         $display("T2 rnd seed variation PASS");
         rnd_seed = 16'hACE1;                 // restore default
 
@@ -1656,23 +1657,23 @@ module dvd_vm_tb;
         // dropping that second write passed the whole bench. Expected values
         // are tools/dvd_vm_ref.py's, not restated from the RTL.
         vm_restart;
-        dut.gprm[1] = 16'h1111; dut.gprm[2] = 16'h2222; dut.gprm[5] = 16'h5555;
+        `VM_GPRM(dut, 1) = 16'h1111; `VM_GPRM(dut, 2) = 16'h2222; `VM_GPRM(dut, 5) = 16'h5555;
         wr_cmd(0, 64'h6200000100020000);     // g[1] <-> g[2]
         wr_cmd(1, 64'h6200000500050000);     // g[5] <-> g[5] (self-swap: unchanged)
         nr_pre = 2; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
         clear_actions; pulse_loaded; wait_idle;
-        if (dut.gprm[1] !== 16'h2222) fail("T6s: swap g1 != 0x2222 (the second write)");
-        if (dut.gprm[2] !== 16'h1111) fail("T6s: swap g2 != 0x1111 (the first write)");
-        if (dut.gprm[5] !== 16'h5555) fail("T6s: self-swap g5 changed");
+        if (`VM_GPRM(dut, 1) !== 16'h2222) fail("T6s: swap g1 != 0x2222 (the second write)");
+        if (`VM_GPRM(dut, 2) !== 16'h1111) fail("T6s: swap g2 != 0x1111 (the first write)");
+        if (`VM_GPRM(dut, 5) !== 16'h5555) fail("T6s: self-swap g5 changed");
         $display("T6s swap PASS");
 
         // ---- T7c: a mount CLEARS the GPRMs (vm_reset) ----------------------
         // The RAM cannot be reset in one cycle, so the clear is a 16-cycle walk
         // started by `start`. Without an arm of its own, skipping it was caught
         // only by later vectors tripping over leftover values.
-        dut.gprm[0] = 16'h7777; dut.gprm[7] = 16'h7777; dut.gprm[15] = 16'h7777;
+        `VM_GPRM(dut, 0) = 16'h7777; `VM_GPRM(dut, 7) = 16'h7777; `VM_GPRM(dut, 15) = 16'h7777;
         vm_restart;
-        if (dut.gprm[0] !== 16'd0 || dut.gprm[7] !== 16'd0 || dut.gprm[15] !== 16'd0)
+        if (`VM_GPRM(dut, 0) !== 16'd0 || `VM_GPRM(dut, 7) !== 16'd0 || `VM_GPRM(dut, 15) !== 16'd0)
             fail("T7c: a mount did not clear the GPRMs");
         $display("T7c mount clear PASS");
 
@@ -1773,8 +1774,8 @@ module dvd_vm_tb;
         wr_cmd(0, 64'h6100000500830000);     // g[5] = AGLN (SPRM3)
         nr_pre = 1; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
         clear_actions; pulse_loaded; wait_idle;
-        if (dut.gprm[5] !== 16'd2) begin
-            $display("   g[5] = %0d", dut.gprm[5]);
+        if (`VM_GPRM(dut, 5) !== 16'd2) begin
+            $display("   g[5] = %0d", `VM_GPRM(dut, 5));
             fail("T7e: the disc read AGLN back as something other than the user's 2");
         end
         if (errors == t7_err0)
@@ -1800,22 +1801,22 @@ module dvd_vm_tb;
         wr_cmd(5, 64'h7100000500010000);   // g5 = 1
         // round 1: a region-3 player on HDMI with DTS
         cfg14 = 16'h0C00; cfg15 = 16'h5800; cfg20 = 16'h0004;
-        for (i = 0; i < 16; i = i + 1) dut.gprm[i] = 16'd0;
+        for (i = 0; i < 16; i = i + 1) `VM_GPRM(dut, i) = 16'd0;
         nr_pre = 6; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
         clear_actions; pulse_loaded; wait_idle;
-        if (dut.gprm[1] !== 16'h0C00) begin fail("S26: SPRM14 read != cfg (0C00)"); $display("  g1=%04x", dut.gprm[1]); end
-        if (dut.gprm[2] !== 16'h5800) begin fail("S26: SPRM15 read != cfg (5800)"); $display("  g2=%04x", dut.gprm[2]); end
-        if (dut.gprm[3] !== 16'h0004) begin fail("S26: SPRM20 read != cfg (0004)"); $display("  g3=%04x", dut.gprm[3]); end
-        if (dut.gprm[4] !== 16'h0000) fail("S26: region-3 player took the wrong-region arm");
-        if (dut.gprm[5] !== 16'h0001) fail("S26: block did not run to its end (round 1)");
+        if (`VM_GPRM(dut, 1) !== 16'h0C00) begin fail("S26: SPRM14 read != cfg (0C00)"); $display("  g1=%04x", `VM_GPRM(dut, 1)); end
+        if (`VM_GPRM(dut, 2) !== 16'h5800) begin fail("S26: SPRM15 read != cfg (5800)"); $display("  g2=%04x", `VM_GPRM(dut, 2)); end
+        if (`VM_GPRM(dut, 3) !== 16'h0004) begin fail("S26: SPRM20 read != cfg (0004)"); $display("  g3=%04x", `VM_GPRM(dut, 3)); end
+        if (`VM_GPRM(dut, 4) !== 16'h0000) fail("S26: region-3 player took the wrong-region arm");
+        if (`VM_GPRM(dut, 5) !== 16'h0001) fail("S26: block did not run to its end (round 1)");
         // round 2: region 1, analog letterbox, no DTS -> the reads follow
         cfg14 = 16'h0200; cfg15 = 16'h5000; cfg20 = 16'h0001;
-        for (i = 0; i < 16; i = i + 1) dut.gprm[i] = 16'd0;
+        for (i = 0; i < 16; i = i + 1) `VM_GPRM(dut, i) = 16'd0;
         clear_actions; pulse_loaded; wait_idle;
-        if (dut.gprm[1] !== 16'h0200 || dut.gprm[2] !== 16'h5000 || dut.gprm[3] !== 16'h0001)
-            begin fail("S26: round 2 reads did not follow the cfg"); $display("  g1=%04x g2=%04x g3=%04x", dut.gprm[1], dut.gprm[2], dut.gprm[3]); end
-        if (dut.gprm[4] !== 16'hDEAD) fail("S26: region-1 player missed the wrong-region arm");
-        if (dut.gprm[5] !== 16'h0001) fail("S26: block did not run to its end (round 2)");
+        if (`VM_GPRM(dut, 1) !== 16'h0200 || `VM_GPRM(dut, 2) !== 16'h5000 || `VM_GPRM(dut, 3) !== 16'h0001)
+            begin fail("S26: round 2 reads did not follow the cfg"); $display("  g1=%04x g2=%04x g3=%04x", `VM_GPRM(dut, 1), `VM_GPRM(dut, 2), `VM_GPRM(dut, 3)); end
+        if (`VM_GPRM(dut, 4) !== 16'hDEAD) fail("S26: region-1 player missed the wrong-region arm");
+        if (`VM_GPRM(dut, 5) !== 16'h0001) fail("S26: block did not run to its end (round 2)");
         cfg14 = 16'h0100; cfg15 = 16'h7CFC; cfg20 = 16'h0001;   // back to the defaults
         $display("S26 player parameters SPRM14/15/20 read live from cfg PASS");
     end

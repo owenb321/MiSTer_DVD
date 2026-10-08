@@ -76,7 +76,7 @@ mutate R2-crop-letterbox pr "s/2'd3:                  sprm14 = 16'h0100;/2'd2:  
 # SPRM15: DTS claimed only when the codebooks loaded, forgetting Passthru
 mutate R3-dts-no-pass pr 's/(pass_mode | dts_ok)/(dts_ok)/' "FAIL [P3]"
 # the VM still answers the old constant
-mutate R4-vm-constant vm "s/5'd20: sprm_read = cfg_sprm20;/5'd20: sprm_read = 16'h0001;/" "FAIL: S26"
+mutate R4-vm-constant vm "s/5'd20: in_data = cfg_sprm20;/5'd20: in_data = 16'h0001;/" "FAIL: S26"
 # the reader captures the wrong byte of vmg_category
 mutate R5-wrong-byte rd 's/vmg_rmask  <= rbuf\[3\];/vmg_rmask  <= rbuf[2];/' "FAIL: T1: vmg_rmask"
 # a remount keeps the previous disc's mask

@@ -9,6 +9,7 @@
 // the RTL VM issues the correct JumpTT for each g3 -- verifying the 109-/52-
 // command jump table (SetGPRM + register compare + Goto flow + JumpTT) that no
 // prior dvd_vm_tb vector exercises. Ground truth: tools/dvd_vm_ref.py.
+`include "bench/dvd/dvd_vm_peek.svh"   // the VM state in its data RAM
 `timescale 1ns/1ps
 
 module dvd_vm_atmos_tb;
@@ -129,7 +130,7 @@ module dvd_vm_atmos_tb;
     // set g3, run the loaded PGC's PRE, assert JumpTT == exp (dom TT=3)
     task chk_jtt(input [15:0] g3, input [6:0] exp);
     begin
-        dut.gprm[3] = g3;
+        `VM_GPRM(dut, 3) = g3;
         clear_actions;
         pulse_loaded;
         wait_settled;
@@ -165,7 +166,7 @@ module dvd_vm_atmos_tb;
         load_block(9'd109);
         chk_jtt(16'h0005, 7'd5);    // low range: g3=5 -> JumpTT 5
         // g3=0x42 in PGC2 -> LinkPGCN 3 (not a JumpTT): verify it links, not jumps TT
-        dut.gprm[3] = 16'h0042; clear_actions; pulse_loaded; wait_settled;
+        `VM_GPRM(dut, 3) = 16'h0042; clear_actions; pulse_loaded; wait_settled;
         if (!saw_jump || cap_jpgcn != 8'd3)
             begin errors=errors+1; $display("  ERR PGC2 g3=0x42: expected LinkPGCN 3, got jump dom=%0d pgcn=%0d ttn=%0d",
                                             cap_jdom, cap_jpgcn, cap_jttn); end

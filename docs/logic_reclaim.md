@@ -415,7 +415,8 @@ Those need a hand check.
 **Status:** analysis only. No branch, no fit, and every saving below is an estimate
 unless it says "measured". Source: the 2026-10-05 fit of `main` at PR #159
 (`output_files/DVD.fit.rpt` §20): 38,699 / 41,910 ALMs needed (92 %), 519 / 553 M10K
-(**34 free**), 87 / 112 DSP.
+(**34 free**), 87 / 112 DSP. ⚠ The VM pilot (10b, PR #168) spends 4 of them:
+v0.9.0's 521 → 525, **28 free**.
 
 **The question.** Moving DTS, the AC-3 parse and MP2 onto one microcoded engine
 (`ac3_engine.md`, `mp2_engine.md`, `dts_decoder.md` D2) reclaimed more logic than DTS cost.
@@ -531,6 +532,15 @@ decoded together, so the IMDCT's `bufmem`, `delay_mem` and `pcm_mem` could share
   short-block material (`bbb_short_5p1`).
 
 ### 10b. A navigation sequencer for the reader, the VM and `nav_pci` (biggest, riskiest)
+
+> **✅ The VM pilot is built and HW-confirmed (2026-10-07/08, ✅ MERGED PR #168): `docs/nav_engine.md`.**
+> - **Cost:** `dvd_vm` 1,350 → 853 ALM in the core (−498), +4 M10K; timing passes.
+> - **Equivalence:** transaction-equal to the old FSM (a three-way A/B with the FSM kept
+>   as the oracle), and every VM gate is green with its `--red` arms re-expressed.
+> - **Offline diff:** the same microcode runs offline against libdvdnav over the ISO
+>   library (`tools/nav_offline.py`), which is the "largest practical win" below.
+> - **Rig:** HIL `nav_diff` = the control on every compared step.
+> - **Hand check:** the maintainer's passed (2026-10-08).
 
 | entity | ALMs | M10K |
 |---|---|---|
@@ -671,4 +681,5 @@ the census since F1 + F2, `decode_pacing.md`) is the hardest-won property in the
    budget gate's `IMDCT_BLOCK` and the executor design.
 3. **The VM as a microcode pilot** (10b), or the reader state split first if the area
    question matters more than the workflow one. Either decides whether the rest of 10b
-   and 10c are worth a branch.
+   and 10c are worth a branch. **Built (2026-10-07, `docs/nav_engine.md`): the pilot
+   says yes on area (−498 ALM in the core for +4 M10K).** Next is the reader state split.

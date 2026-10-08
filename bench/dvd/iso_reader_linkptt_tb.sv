@@ -18,6 +18,7 @@
 // Run: iverilog -g2012 -o /tmp/rlp dvd/dvd_iso_reader.sv dvd/dvd_vm.sv \
 //        dvd/bcd_time_add.sv bench/dvd/iso_reader_linkptt_tb.sv && vvp /tmp/rlp
 
+`include "bench/dvd/dvd_vm_peek.svh"   // the VM state in its data RAM
 `timescale 1ns/1ps
 
 module iso_reader_linkptt_tb;
@@ -151,7 +152,7 @@ module iso_reader_linkptt_tb;
         if (pgc_loaded)
             $display("  [%0t] pgc_loaded cur_vts=%0d cur_pgcn=%0d nr_pgm=%0d nr_post=%0d", $time,
                      cur_vts, cur_pgcn_rd, nr_pgm_w, nr_post_w);
-        if (vm_pgc_end_w) $display("  [%0t] vm_pgc_end (vm.state=%0d link_ptt=%0d)", $time, vm.state, vm.link_ptt);
+        if (vm_pgc_end_w) $display("  [%0t] vm_pgc_end (vm.state=%0d jump_ptt=%0d)", $time, vm.state, vm.jump_ptt);
         if (vm_adv_w)     $display("  [%0t] vm_adv", $time);
     end
 
@@ -285,7 +286,7 @@ module iso_reader_linkptt_tb;
         if (cap[0]!==8'hB0) fail("BOOT: first byte != B0");
         if (cur_vts!==8'd1) fail("BOOT: cur_vts != 1");
         t1_end=cap_n;
-        $display("BOOT: VTS1 PGC1 0xB0 cur_vts=%0d SPRM5=%0d (cap=%0d)", cur_vts, vm.sprm5, t1_end);
+        $display("BOOT: VTS1 PGC1 0xB0 cur_vts=%0d SPRM5=%0d (cap=%0d)", cur_vts, `VM_SPRM(vm, 5), t1_end);
         trace_on=1;
 
         // PGC1 POST = LinkPTT 3 -> part 3 is CROSS-PGC -> must reach PGC2 (0xB2).

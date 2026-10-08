@@ -73,6 +73,7 @@
 // Run: iverilog -g2012 -o /tmp/rvm dvd/dvd_iso_reader.sv dvd/dvd_vm.sv \
 //        bench/dvd/iso_reader_vm_tb.sv && vvp /tmp/rvm
 
+`include "bench/dvd/dvd_vm_peek.svh"   // the VM state in its data RAM
 `timescale 1ns/1ps
 
 module iso_reader_vm_tb;
@@ -583,11 +584,11 @@ module iso_reader_vm_tb;
         wait_bytes(6144);                 // cell 1 + first sector of cell 2
         if (cap[0]    !== 8'hB0) fail("T1: first title byte != B0");
         if (cap[4096] !== 8'hB1) fail("T1: second title cell != B1");
-        if (vm.gprm[14] !== 16'h0035) fail("T1: FP pre g14 != 0x35");
+        if (`VM_GPRM(vm, 14) !== 16'h0035) fail("T1: FP pre g14 != 0x35");
         if (rm_at_fp !== 8'hFB) begin fail("T1: vmg_rmask at the FP pgc_loaded != the disc's 0xFB"); $display("  rm_at_fp=%02x", rm_at_fp); end
-        if (vm.gprm[13] !== 16'h0004) begin fail("T1: FP pre read SPRM20 != 0x0004 (region 3)"); $display("  g13=%04x", vm.gprm[13]); end
-        if (vm.sprm4 !== 16'd1) fail("T1: SPRM4 (TTN) != 1");
-        if (vm.sprm5 !== 16'd1) fail("T1: SPRM5 (VTS_TTN) != 1");
+        if (`VM_GPRM(vm, 13) !== 16'h0004) begin fail("T1: FP pre read SPRM20 != 0x0004 (region 3)"); $display("  g13=%04x", `VM_GPRM(vm, 13)); end
+        if (`VM_SPRM(vm, 4) !== 16'd1) fail("T1: SPRM4 (TTN) != 1");
+        if (`VM_SPRM(vm, 5) !== 16'd1) fail("T1: SPRM5 (VTS_TTN) != 1");
         if (menu_active) fail("T1: menu_active during the title");
         t1_end = cap_n;
         $display("T1 boot: FP -> JumpTT 1 -> TT_SRPT -> title streaming  PASS (cap=%0d)", t1_end);
@@ -604,8 +605,8 @@ module iso_reader_vm_tb;
             for (k = t1_end; k < cap_n; k = k + 1)
                 if (cap[k] == 8'hD0) disable find_d0;
         end
-        if (vm.gprm[13] !== 16'h00AB) fail("T2: stub pre g13 != 0xAB");
-        if (vm.rsm_vts !== 8'd1) fail("T2: RSM not saved");
+        if (`VM_GPRM(vm, 13) !== 16'h00AB) fail("T2: stub pre g13 != 0xAB");
+        if (`VM_RSM_VTS(vm) !== 8'd1) fail("T2: RSM not saved");
         t2_end = cap_n;
         $display("T2 menu key: CallSS -> stub pre LinkPGCN 2 -> menu  PASS (cap=%0d)", t2_end);
 
@@ -659,7 +660,7 @@ module iso_reader_vm_tb;
                 if (cap[k] == 8'hD0 || cap[k] == 8'hD1) ds = ds + 1;
             if (ds < 1024) fail("T5: menu bytes missing after POST jump");
         end
-        if (vm.sprm5 !== 16'd1) fail("T5: SPRM5 != 1 after JumpSS VTSM");
+        if (`VM_SPRM(vm, 5) !== 16'd1) fail("T5: SPRM5 != 1 after JumpSS VTSM");
         $display("T5 title end: drained -> POST JumpSS VTSM -> menu  PASS (cap=%0d)", cap_n);
 
         // The menu loop streams 0xD1 continuously, so byte counts are the
@@ -822,10 +823,10 @@ module iso_reader_vm_tb;
             while (!rm_seen && t < 4000000) begin @(posedge clk); t = t + 1; end
             if (!rm_seen) fail("T10: no pgc_loaded after the remount");
             t = 0;
-            while (vm.gprm[14] !== 16'h0035 && t < 400000) begin @(posedge clk); t = t + 1; end
+            while (`VM_GPRM(vm, 14) !== 16'h0035 && t < 400000) begin @(posedge clk); t = t + 1; end
         end
         if (rm_at_fp !== 8'h00) begin fail("T10: vmg_rmask at the remount's FP != 0x00"); $display("  rm_at_fp=%02x", rm_at_fp); end
-        if (vm.gprm[13] !== 16'h0001) begin fail("T10: remount FP pre read SPRM20 != 0x0001"); $display("  g13=%04x", vm.gprm[13]); end
+        if (`VM_GPRM(vm, 13) !== 16'h0001) begin fail("T10: remount FP pre read SPRM20 != 0x0001"); $display("  g13=%04x", `VM_GPRM(vm, 13)); end
         $display("T10 remount: region mask cleared, new disc's read before First Play  PASS");
 
         if (errors == 0) $display("ISO_READER_VM_TB: ALL TESTS PASSED");
