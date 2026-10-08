@@ -95,7 +95,7 @@ IN['SPRMW'] = 32                 # 32..63: the live-SPRM window (0 for RAM-resid
 OUT_PORTS = [
     'J_DE', 'J_VTS', 'J_PGCN', 'RSV3', 'J_TTN', 'J_PGN', 'J_PTT', 'J_CELL',
     'SEEK_CELL', 'PULSE', 'BTNF_VAL', 'LF_PGCN', 'SPRM1', 'SPRM2', 'SPRM3', 'SPRM8',
-    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET']
+    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET', 'SPRM6', 'SPRM7']
 OUT = {n: i for i, n in enumerate(OUT_PORTS)}
 # PULSE bits
 PULSE_BITS = ['JUMP', 'SEEK', 'REPLAY', 'ADV', 'BTNF', 'LINKFAIL', 'LFSTEP', 'WARM', 'TICKDONE']
@@ -507,7 +507,7 @@ def peek_svh():
          '`ifndef DVD_VM_PEEK_SVH', '`define DVD_VM_PEEK_SVH',
          '`define VM_RAM(P, a)    P.u_seq.dram[a]',
          f'`define VM_GPRM(P, i)   P.u_seq.dram[{M["GPRM"]} + (i)]',
-         f'`define VM_SPRM(P, n)   P.u_seq.dram[{M["SPRMI"]} + (n)]    // 4..7, 9, 10, 13 only',
+         f'`define VM_SPRM(P, n)   P.u_seq.dram[{M["SPRMI"]} + (n)]    // 4, 5, 9, 10, 13 only (6, 7: P.sprm6/7)',
          f'`define VM_RSM_R(P, n)  P.u_seq.dram[{M["RSM_R4"]} + (n) - 4]  // n = 4..8']
     for k in ('GMODE', 'FB', 'CVM', 'SKIP_PRE', 'TT_RESOLVE', 'CHAIN', 'RSM_VTS', 'RSM_PGCN',
               'RSM_CELL', 'DE_SEEN', 'DE_VTS', 'DE_PGCN'):

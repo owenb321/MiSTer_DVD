@@ -68,6 +68,12 @@ wrap W2-no-freeze "s/                sprm8_frozen <= 1'b1;/                sprm8
 wrap W3-pre-early "s/else if (pre_armed \&\& !ev\[UEV_LOADED\] \&\& (v_idle || jump_pulse)) begin/else if (pre_armed \&\& (v_idle || jump_pulse)) begin/"
 # the menu-load latch takes the live cur_vts instead of the VM's domain VTS
 wrap W4-lm-vts "s/            last_menu_vts  <= vm_vts;/            last_menu_vts  <= cur_vts;/"
+# SPRM6 never follows a title PGC load (the pre-2026-10-08 behaviour)
+wrap W5-sprm6-load "s/        if (pgc_loaded \&\& vm_dom == DOM_TT) sprm6 <= cur_pgcn;/        if (1'b0) sprm6 <= cur_pgcn;/"
+# SPRM7 takes a part outside the title domain
+wrap W6-ptt-dom "s/        if (ptt_upd \&\& vm_dom == DOM_TT) begin/        if (ptt_upd) begin/"
+# SPRM7 lands mid-PRE (libdvdnav's set_PGN runs after the PRE)
+wrap W7-ptt-pre "s/        end else if (ptt_pend \&\& !pre_armed \&\& !pgc_loaded \&\& vm_rest) begin/        end else if (ptt_pend) begin/"
 
 [ $rc -eq 0 ] && echo "run_vm_ab: ALL GREEN" || echo "run_vm_ab: FAILURES"
 exit $rc

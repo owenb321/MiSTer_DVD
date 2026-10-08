@@ -105,7 +105,11 @@ module iso_reader_celldur_tb;
     wire [7:0]  sprm_astn_w, sprm_spstn_w;
     wire [7:0]  vm_dbg;
 
+    // SPRM7: the reader's part of the playing cell -> the VM (as emu.sv wires it)
+    wire        ptt_upd_w;
+    wire [10:0] ptt_cur_w;
     dvd_iso_reader #(.SEC_DIV(1000)) dut (
+        .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
@@ -147,6 +151,7 @@ module iso_reader_celldur_tb;
         .cfg_lang(16'h656E), .cfg_sprm14(16'h0100), .cfg_sprm15(16'h7CFC), .cfg_sprm20(16'h0001),
         // new VM ports tied off (a floating input is X).
         .agl_set(1'b0), .agl_set_val(4'd1),
+        .ptt_upd(ptt_upd_w), .ptt_val(ptt_cur_w),
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .start(start),
         .rnd_seed(16'hACE1), .sec_tick(1'b0),
         .entropy_stir(1'b0), .entropy_val(16'd0),

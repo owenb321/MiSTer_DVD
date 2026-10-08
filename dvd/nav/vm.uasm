@@ -48,8 +48,8 @@ RCLR:       st   r0, M_GPRM[t1]  ;MUT mountclear: nop
             li   t1, 1
             st   t1, M_SPRMI+4
             st   t1, M_SPRMI+5
-            st   r0, M_SPRMI+6
-            st   t1, M_SPRMI+7
+            out  O_SPRM6, r0
+            out  O_SPRM7, t1
             st   r0, M_SPRMI+9
             st   r0, M_SPRMI+10
             li   t1, 15
@@ -144,7 +144,8 @@ ZC0:        li   t1, 0
             ret
 ; EVREG: t1 = eval_reg(t1): bit 7 = SPRM (t1[4:0]), else GPRM (t1[3:0]).
 ; A SPRM reads the RAM image OR the wrapper's live window; each is 0 where the
-; other holds the register (RAM: 4..7, 9, 10, 13; window: everything live).
+; other holds the register (RAM: 4, 5, 9, 10, 13; window: everything live, 6 and 7
+; included -- the wrapper updates those two as a title plays, docs/nav_engine.md).
 EVREG:      bbs  t1, 7, EVR_S
             andi t1, t1, 15  ;MUT gidx: andi t1, t1, 7
             ld   t1, M_GPRM[t1]
@@ -164,9 +165,9 @@ RSM_SAVE:   st   t1, M_RSM_CELL
             st   t2, M_RSM_R4
             ld   t2, M_SPRMI+5
             st   t2, M_RSM_R5
-            ld   t2, M_SPRMI+6
+            in   t2, P_SPRMW+6
             st   t2, M_RSM_R6
-            ld   t2, M_SPRMI+7
+            in   t2, P_SPRMW+7
             st   t2, M_RSM_R7
             in   t2, P_SPRMW+8
             st   t2, M_RSM_R8
@@ -178,9 +179,9 @@ RSM_REST:   ld   t1, M_RSM_R4
             ld   t1, M_RSM_R5
             st   t1, M_SPRMI+5
             ld   t1, M_RSM_R6
-            st   t1, M_SPRMI+6
+            out  O_SPRM6, t1
             ld   t1, M_RSM_R7
-            st   t1, M_SPRMI+7
+            out  O_SPRM7, t1
             ret
 ; RSM_JUMP: the jump fields for a resume (TT rsm_vts rsm_pgcn, cell rsm_cell), no PRE
 RSM_JUMP:   ld   t2, M_RSM_VTS
@@ -1036,7 +1037,7 @@ L_PGCN:     in   t1, P_VM_DOM                   ; LinkPGCN: a 15-bit PGCN
 J_TT:       andi t6, i2, 0x7F                   ; JumpTT n (TT_SRPT resolve)
             st   t6, M_SPRMI+4
             li   t1, 1
-            st   t1, M_SPRMI+7
+            out  O_SPRM7, t1
             st   t1, M_TT_RESOLVE               ; SPRM5 <= res_ttn on the load
             li   t1, DOM_TT
             li   t2, 0
@@ -1047,7 +1048,7 @@ J_TT:       andi t6, i2, 0x7F                   ; JumpTT n (TT_SRPT resolve)
 J_VTSTT:    andi t6, i2, 0x7F                   ; JumpVTS_TT n
             st   t6, M_SPRMI+5
             li   t1, 1
-            st   t1, M_SPRMI+7
+            out  O_SPRM7, t1
             call LJVTS                          ; the domain's VTS, before vm_dom changes
             outi O_VM_DOM, DOM_TT
             li   t1, DOM_TT
@@ -1059,7 +1060,7 @@ J_VTSTT:    andi t6, i2, 0x7F                   ; JumpVTS_TT n
 J_VTSPTT:   andi t6, i2, 0x7F                   ; JumpVTS_PTT t:p (exact part)
             st   t6, M_SPRMI+5
             andi t1, i1, 0x3FF
-            st   t1, M_SPRMI+7
+            out  O_SPRM7, t1
             call LJVTS
             outi O_VM_DOM, DOM_TT
             li   t1, DOM_TT

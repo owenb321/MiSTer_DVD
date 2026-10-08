@@ -14,7 +14,8 @@
 //   4 pulse   a = mask (nav_shell.PULSES order), with the args from op 7
 //   5 timeout
 //   6 settle
-//   7 arg     a = 0 cellcmd nr, 1 btn command, 2 chedge dir, 3 stir value, 4 agl value
+//   7 arg     a = 0 cellcmd nr, 1 btn command, 2 chedge dir, 3 stir value, 4 agl value,
+//             5 ptt value (the reader's part of the playing cell)
 // Every op but 7 is a step; after each the bench waits for quiescence and, for all
 // but cmd/pm, prints the state. Pulses and SPRM changes are printed as they happen.
 // A step that never settles is a [hang] and fatal.
@@ -58,6 +59,8 @@ module vm_ab_tb;
     reg        btn_cmd_valid = 0;
     reg        agl_set = 0;
     reg [3:0]  agl_set_val = 0;
+    reg        ptt_upd = 0;
+    reg [10:0] ptt_val = 0;
 
     wire        btn_force; wire [5:0] btn_force_val; wire [5:0] hl_btnn;
     wire        jump_pulse; wire [1:0] jump_domain; wire [7:0] jump_vts; wire [15:0] jump_pgcn;
@@ -96,6 +99,7 @@ module vm_ab_tb;
         .vm_adv(vm_adv), .vm_from_wait(vm_from_wait), .wait_hold(wait_hold),
         .sprm_astn(sprm_astn), .sprm_spstn(sprm_spstn), .sprm_agln(sprm_agln),
         .pre_done(pre_done), .agl_set(agl_set), .agl_set_val(agl_set_val),
+        .ptt_upd(ptt_upd), .ptt_val(ptt_val),
         .dbg_state(dbg_state), .dbg_g3(dbg_g3), .dbg_g14_9(dbg_g14_9), .dbg_rsm(dbg_rsm),
         .dbg_deadend(dbg_deadend), .link_fail(link_fail), .link_fail_pgcn(link_fail_pgcn));
 
@@ -212,7 +216,7 @@ module vm_ab_tb;
         $fwrite(fo, " gmode=%0h sprm1=%0h sprm2=%0h sprm3=%0h", `S_GMODE, `S_SPRM1, `S_SPRM2, `S_SPRM3);
 `ifdef VM_NEW
         $fwrite(fo, " sprm4=%0h sprm5=%0h sprm6=%0h sprm7=%0h sprm8=%0h sprm9=%0h sprm10=%0h sprm13=%0h",
-                `S_SPRMI(4), `S_SPRMI(5), `S_SPRMI(6), `S_SPRMI(7), `S_SPRM8, `S_SPRMI(9),
+                `S_SPRMI(4), `S_SPRMI(5), dut.sprm6, dut.sprm7, `S_SPRM8, `S_SPRMI(9),
                 `S_SPRMI(10), `S_SPRMI(13));
         $fwrite(fo, " rsm_vts=%0h rsm_pgcn=%0h rsm_cell=%0h rsm_r4=%0h rsm_r5=%0h rsm_r6=%0h rsm_r7=%0h rsm_r8=%0h",
                 `S_RSM_VTS, `S_RSM_PGCN, `S_RSM_CELL, `S_RSM_R(4), `S_RSM_R(5), `S_RSM_R(6),
@@ -251,7 +255,7 @@ module vm_ab_tb;
     end
     endtask
 
-    reg [63:0] arg [0:4];
+    reg [63:0] arg [0:5];
     integer fi, rc, op;
     reg [63:0] a, b;
     reg [8*256-1:0] infile, outfile;
@@ -262,7 +266,7 @@ module vm_ab_tb;
         if (!$value$plusargs("out=%s", outfile)) begin $display("FAIL: +out=<log>"); $fatal(1); end
         fi = $fopen(infile, "r");
         fo = $fopen(outfile, "w");
-        for (k = 0; k < 5; k = k + 1) arg[k] = 0;
+        for (k = 0; k < 6; k = k + 1) arg[k] = 0;
         repeat (4) @(posedge clk);
         @(negedge clk) rst_n = 1;
 `ifndef VM_NEW
@@ -322,10 +326,11 @@ module vm_ab_tb;
                     start = a[10]; sec_tick = a[11];
                     entropy_stir = a[12]; entropy_val = arg[3];
                     agl_set = a[13]; agl_set_val = arg[4];
+                    ptt_upd = a[14]; ptt_val = arg[5];
                     @(negedge clk);
                     {pgc_loaded, pgc_error, vm_cell_cmd, vm_pgc_end, btn_cmd_valid, key_menu,
                      key_title, key_return, key_cmenu, key_chedge, start, sec_tick,
-                     entropy_stir, agl_set} = 0;
+                     entropy_stir, agl_set, ptt_upd} = 0;
                     settle; dump;
                 end
                 5: begin

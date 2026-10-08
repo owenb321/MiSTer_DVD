@@ -7,7 +7,7 @@
 `define DVD_VM_PEEK_SVH
 `define VM_RAM(P, a)    P.u_seq.dram[a]
 `define VM_GPRM(P, i)   P.u_seq.dram[0 + (i)]
-`define VM_SPRM(P, n)   P.u_seq.dram[64 + (n)]    // 4..7, 9, 10, 13 only
+`define VM_SPRM(P, n)   P.u_seq.dram[64 + (n)]    // 4, 5, 9, 10, 13 only (6, 7: P.sprm6/7)
 `define VM_RSM_R(P, n)  P.u_seq.dram[28 + (n) - 4]  // n = 4..8
 `define VM_GMODE(P)      P.u_seq.dram[16]
 `define VM_FB(P)         P.u_seq.dram[17]

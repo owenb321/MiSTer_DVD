@@ -382,6 +382,14 @@ module dvd_iso_reader #(
     // on a single-PGC (movie) title chapter == program so this matches the
     // pre-Phase-6 value. 8-bit display clamp at 255 (matches emu hud_nr_ch).
     output reg [7:0]  cur_pgm,
+    // SPRM7 (PTTN) for the VM: the playing cell's GLOBAL part, one ptt_upd pulse per
+    // cur_pgm query that resolves through the PTT table (libdvdnav set_PGN ->
+    // vm_get_current_title_part). 0 when no part names the cell: libdvdnav writes 0
+    // too. Not published without a PTT table (nr_ptt == 0): the VM keeps its value.
+    // 11 bits, unclamped: PTT_CAP is 1024 parts, so g_best + 1 reaches 1024 (the
+    // spec allows 999); the HUD's cur_pgm keeps its own 8-bit display clamp.
+    output reg        ptt_upd,
+    output reg [10:0] ptt_cur,
     // Phase 6: chapter total (nr_of_ptts of the current title) for the HUD's
     // "CH n/N" N. 0 = no PTT table -> HUD falls back to cmd_nr_pgm. On movies
     // nr_ptt == cmd_nr_pgm (== nr_of_programs).
@@ -759,6 +767,11 @@ reg [31:0] vmgm_vob_blk;     // length in 2048-sectors
 // IFO (VMGI / TT_SRPT) navigation + selection
 reg [31:0] vmgi_lba;      // ISO LBA of VIDEO_TS.IFO (the VMGI)
 reg        vmgi_found;    // VIDEO_TS.IFO record seen during the VIDEO_TS walk
+// The disc has no First Play PGC (VMGI@0x84 == 0): First Play runs VMGM PGCs, as
+// libdvdnav's set_FP_PGC does (S_JMP_VMGI). Set by the first such jump, cleared at
+// mount; while set, a First Play target counts as a menu domain (keep_vbuf /
+// jump_cross), since what plays is a VMGM PGC from VIDEO_TS.VOB.
+reg        fp_none;
 reg [31:0] vmgi_bup_lba;  // ISO LBA of VIDEO_TS.BUP (0 = none, or already in use)
 reg [7:0]  target_vtsn;   // VTS number holding title 1 (from TT_SRPT)
 reg [6:0]  sel_base;      // IFO-selected group's extent base
@@ -2491,6 +2504,7 @@ always @(posedge clk or negedge rst_n) begin
         fi_cap_v     <= 1'b0;
         grp_count    <= 7'd0;
         vmgi_found   <= 1'b0;
+        fp_none      <= 1'b0;
         sel_valid    <= 1'b0;
         best_ifo_lba <= 32'd0;
         sel_ifo_lba  <= 32'd0;
@@ -2589,6 +2603,8 @@ always @(posedge clk or negedge rst_n) begin
         chap_query   <= 1'b0;
         pgm_q_cell   <= 8'hFF;
         cur_pgm      <= 8'd0;
+        ptt_upd      <= 1'b0;
+        ptt_cur      <= 11'd0;
         pm_raddr     <= 7'd0;
         ptt_raddr    <= 10'd0;
         g_i          <= 10'd0;
@@ -2717,6 +2733,7 @@ always @(posedge clk or negedge rst_n) begin
         vm_cell_cmd    <= 1'b0;
         vm_pgc_end     <= 1'b0;
         chap_edge      <= 1'b0;
+        ptt_upd        <= 1'b0;
 
         // ---- Multi-angle (Phase 9) ------------------------------------------
         // Angle cycle: emu delivers a 1-cycle pulse. Cycle 1..angle_count; the
@@ -2948,6 +2965,9 @@ always @(posedge clk or negedge rst_n) begin
                     cur_pgm <= !g_found ? ({1'b0, chap_best} + 8'd1)
                              : (g_best >= 10'd255) ? 8'd255
                              : (g_best[7:0] + 8'd1);
+                    // the VM's SPRM7: the global part, or 0 on a miss (libdvdnav)
+                    ptt_upd <= 1'b1;
+                    ptt_cur <= g_found ? ({1'b0, g_best} + 11'd1) : 11'd0;
                     chap_query <= 1'b0;
                     chap_st    <= CH_IDLE;
                 end else if (!g_found ||
@@ -3091,6 +3111,7 @@ always @(posedge clk or negedge rst_n) begin
             grp_vts    <= 8'hFF;
             grp_count  <= 7'd0;
             vmgi_found <= 1'b0;
+            fp_none    <= 1'b0;
             sel_valid  <= 1'b0;
             best_ifo_lba    <= 32'd0;
             sel_ifo_lba     <= 32'd0;
@@ -3160,13 +3181,15 @@ always @(posedge clk or negedge rst_n) begin
             // PRE-jump value (RHS reads the old reg); the new domain is jdom_l.
             // menu->title (Play) and title->menu (Menu key) keep the flush.
             keep_vbuf    <= menu_dom &&
-                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM));
+                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM) ||
+                             (jdom_l == DOM_FP && fp_none));
             // ...and whether this jump CROSSES the menu/title boundary at all. Same two
             // values, XOR instead of AND (see the port declaration). Only a crossing
             // soft-resets the decoder; a title->title LinkPGCN (a DVD game's screen
             // transitions) flushes but keeps the pipeline.
             jump_cross   <= menu_dom ^
-                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM));
+                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM) ||
+                             (jdom_l == DOM_FP && fp_none));
             wr_ptr       <= 0;
             strm_done    <= 1'b0;
             cell_mode    <= 1'b0;
@@ -5869,7 +5892,30 @@ always @(posedge clk or negedge rst_n) begin
             // (VTSM_PGCI_UT sector ptr). S_UT_HDR reads the PGCI_UT header +
             // LU[0] and positions the menu PGCIT.
             S_JMP_VMGI: begin
-                if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
+                if (dom == DOM_FP && vts_pgcit_ptr == 32'd0) begin
+                    // DVD-FORK FIX (2026-10-08): no First Play PGC. libdvdnav's
+                    // set_FP_PGC then plays VMGM PGC 1 in the First Play domain, and
+                    // a link from it (FP-domain LinkPGCN n) resolves through the same
+                    // VMGM PGCIT: get_PGCIT treats First Play as the VMGM. So re-run
+                    // this jump as a VMGM one, at the jump's PGCN (0 -> 1), re-fetching
+                    // @200 from the resident VMGI_MAT sector. The VM keeps its own
+                    // domain (vm_dom = FP); the reader plays a VMGM PGC. If @200 is
+                    // 0 as well, the second pass errors as before. Was: pgc_error,
+                    // and the VM's FB_FP fallback booted the auto title (2 library
+                    // discs, docs/nav_engine.md 5a).
+                    fp_none       <= 1'b1;
+                    dom           <= DOM_VMGM;
+                    menu_base_blk <= vmgm_vob_lba;
+                    menu_blocks   <= vmgm_vob_blk;
+                    want_pgcn     <= (jpgcn_l != 16'd0) ? jpgcn_l : 16'd1;
+                    want_entry    <= 4'd0;
+                    use_jcell     <= (jcell_l != 8'd0);
+                    fetch_base    <= 11'd200;
+                    fetch_ret     <= S_JMP_VMGI;
+                    fi            <= 6'd0;
+                    fi_cap_v      <= 1'b0;
+                    state         <= S_FETCH;          // parse_buf still holds VMGI_MAT
+                end else if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     pgc_error <= 1'b1;
                     state     <= S_DONE;
                 end else if (dom == DOM_FP) begin

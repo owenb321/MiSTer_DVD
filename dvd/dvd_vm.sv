@@ -223,6 +223,14 @@ module dvd_vm (
     // source of truth for exactly this reason.
     input             agl_set,        // pulse: user changed the angle
     input      [3:0]  agl_set_val,    // 1-based angle to store in SPRM3
+    // SPRM7 (PTTN) follows playback, as libdvdnav's set_PGN does: the reader's
+    // global part (VTS_PTT_SRPT reverse map) of the cell now playing in a title,
+    // 0 when no part names it (libdvdnav writes 0 too). Before 2026-10-08 the VM
+    // set SPRM7 only at a jump, so a menu reading it saw chapter 1 (T3's VTSM;
+    // 58 library discs branch on it, docs/nav_engine.md 5a). Held until this
+    // PGC's PRE has resolved: libdvdnav updates it in play_Cell, after the PRE.
+    input             ptt_upd,        // pulse: ptt_val is the playing cell's part
+    input      [10:0] ptt_val,
 
     output     [7:0]  dbg_state,
     // DVD-FORK DEBUG (Atmosfear wrong-title diagnosis): expose the scenario-
@@ -346,6 +354,8 @@ localparam [5:0] UOUT_VM_VTS = 6'd17;
 localparam [5:0] UOUT_FLAGS = 6'd18;
 localparam [5:0] UOUT_EVCLR = 6'd19;
 localparam [5:0] UOUT_EVSET = 6'd20;
+localparam [5:0] UOUT_SPRM6 = 6'd21;
+localparam [5:0] UOUT_SPRM7 = 6'd22;
 localparam integer UPB_JUMP = 0;
 localparam integer UPB_SEEK = 1;
 localparam integer UPB_REPLAY = 2;
@@ -487,6 +497,12 @@ reg  [7:0]  last_menu_vts;
 reg  [15:0] last_menu_pgcn;
 reg         last_menu_v;
 reg  [15:0] sprm1, sprm2, sprm3, sprm8;
+// SPRM6 (TT_PGCN) and SPRM7 (PTTN) live here, not in the sequencer's RAM: the
+// hardware updates them as a title plays (below), and the microcode writes them
+// at a jump, a resume and a mount through UOUT_SPRM6/7.
+reg  [15:0] sprm6, sprm7;
+reg         ptt_pend;                // a part arrived during this PGC's PRE
+reg  [10:0] ptt_q;
 reg         sprm8_frozen;
 reg  [15:0] lfsr;
 reg         seed_ld;
@@ -520,6 +536,10 @@ wire [15:0] lfsr_stir = lfsr ^ entropy_val;
 // V_IDLE of the old FSM: parked at the idle wev, or in the counter-tick walk.
 // pre_done and the entropy stir are defined against it.
 wire v_idle      = (wev_req && !wev_mode) || flags[UFL_WALK];
+// at rest: parked at the idle wev with nothing to dispatch -- no event, no tick, no
+// walk. A held SPRM7 part lands only here, so which handler sees it never depends
+// on how many cycles a dispatch takes (the old FSM's and the sequencer's differ).
+wire vm_rest     = wev_req && !wev_mode && !(|ev) && !tick_pending && !flags[UFL_WALK];
 wire parked_wait = wev_req && wev_mode;
 wire wait_verdict = (flags[1:0] == 2'd1) || (flags[1:0] == 2'd2);   // POST / CELL
 assign vm_from_wait = wait_verdict && flags[UFL_NAT];
@@ -558,6 +578,8 @@ always @* begin
         5'd1:  in_data = sprm1;
         5'd2:  in_data = sprm2;
         5'd3:  in_data = sprm3;
+        5'd6:  in_data = sprm6;
+        5'd7:  in_data = sprm7;
         5'd8:  in_data = sprm8_eff;
         5'd12: in_data = 16'h5553;                // 'US' parental country
         5'd14: in_data = cfg_sprm14;              // video preference (player_regs)
@@ -638,6 +660,7 @@ always @(posedge clk or negedge rst_n) begin
         last_menu_dom <= DOM_VTSM; last_menu_vts <= 8'd0;
         last_menu_pgcn <= 16'd0; last_menu_v <= 1'b0;
         sprm1 <= 16'd15; sprm2 <= 16'd62; sprm3 <= 16'd1; sprm8 <= 16'h0400;
+        sprm6 <= 16'd0; sprm7 <= 16'd1; ptt_pend <= 1'b0; ptt_q <= 11'd0;
         sprm8_frozen <= 1'b0;
         lfsr <= 16'hACE1; seed_ld <= 1'b1;
         j_ptt <= 10'd0;
@@ -670,6 +693,20 @@ always @(posedge clk or negedge rst_n) begin
             last_menu_pgcn <= cur_pgcn;
             last_menu_v    <= 1'b1;
             menu_seen      <= 1'b1;
+        end
+        // SPRM6/7 follow a title as it plays (libdvdnav set_PGCN / set_PGN). Both are
+        // written before the microcode's own writes below, which win in a shared cycle.
+        //  SPRM6 = the title PGC, on its load: before the PRE runs, as set_PGCN does.
+        //  SPRM7 = the playing cell's part, held until the VM is at rest: the reader
+        //  resolves it as the first cell streams, which can be mid-PRE, and
+        //  libdvdnav's set_PGN runs after the PRE (and after anything it chains to).
+        if (pgc_loaded && vm_dom == DOM_TT) sprm6 <= cur_pgcn;
+        if (ptt_upd && vm_dom == DOM_TT) begin
+            ptt_pend <= 1'b1;
+            ptt_q    <= ptt_val;
+        end else if (ptt_pend && !pre_armed && !pgc_loaded && vm_rest) begin
+            ptt_pend <= 1'b0;
+            sprm7    <= {5'd0, ptt_q};
         end
         if (sec_tick) tick_pending <= 1'b1;
 
@@ -726,6 +763,8 @@ always @(posedge clk or negedge rst_n) begin
             UOUT_SPRM2:     sprm2 <= od;
             UOUT_SPRM3:     sprm3 <= od;
             UOUT_SPRM8:     sprm8 <= od;
+            UOUT_SPRM6:     sprm6 <= od;
+            UOUT_SPRM7:     sprm7 <= od;
             UOUT_VM_DOM:    vm_dom <= od[1:0];
             UOUT_VM_VTS:    vm_vts <= od[7:0];
             UOUT_FLAGS:     flags <= od[4:0];
@@ -756,6 +795,7 @@ always @(posedge clk or negedge rst_n) begin
             last_menu_dom <= DOM_VTSM; last_menu_vts <= 8'd0;
             last_menu_pgcn <= 16'd0; last_menu_v <= 1'b0;
             sprm1 <= 16'd15; sprm2 <= 16'd62; sprm3 <= 16'd1; sprm8 <= 16'h0400;
+            sprm6 <= 16'd0; sprm7 <= 16'd1; ptt_pend <= 1'b0;
             sprm8_frozen <= 1'b0;
             lfsr <= lfsr_seed; seed_ld <= 1'b0;
         end
@@ -958,6 +998,8 @@ localparam [5:0] UOUT_VM_VTS = 6'd17;
 localparam [5:0] UOUT_FLAGS = 6'd18;
 localparam [5:0] UOUT_EVCLR = 6'd19;
 localparam [5:0] UOUT_EVSET = 6'd20;
+localparam [5:0] UOUT_SPRM6 = 6'd21;
+localparam [5:0] UOUT_SPRM7 = 6'd22;
 localparam integer UPB_JUMP = 0;
 localparam integer UPB_SEEK = 1;
 localparam integer UPB_REPLAY = 2;
