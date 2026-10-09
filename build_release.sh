@@ -12,6 +12,7 @@
 #   ./build_release.sh --name DVD_foo  # override the release base name
 #   ./build_release.sh --release      # PUBLIC RELEASE build. Two things:
 #                                     #  (1) HARD timing gate — refuse to pack if clk_dec
+#                                     #      (or, since 2026-10-09, clk_mem)
 #                                     #      Fmax is below tools/fmax_check.sh's threshold
 #                                     #      at either slow corner (the chroma-fringe
 #                                     #      lottery; currently 86 MHz). Default
@@ -171,19 +172,24 @@ fi
 # is clk_dec failing setup at a slow corner. The threshold lives in fmax_check.sh and is
 # 86.0 MHz (raised from 81.0 on 2026-08-01 by feature/fringe-sdc-clock-groups — do not
 # quote a number here, it goes stale; this comment said 81 long after the gate was 86).
+# Since 2026-10-09 the same script also gates clk_mem (the DDR3 bridge) at its 90 MHz run
+# rate (docs/status_log.md "clk_mem retime"); either clock missing makes the fit marginal.
 # Verify every pack; --release refuses a marginal fit, default warns + tags the name so a
 # fringing rbf is instantly explainable.
 FMAX_TAG=""
 FMAX_LINE=""
+MEM_LINE=""
 if FMAX_OUT=$("$(dirname "$0")/tools/fmax_check.sh" "output_files/${PROJECT}.sta.rpt" 2>&1); then
     echo "$FMAX_OUT"
     FMAX_LINE=$(echo "$FMAX_OUT" | grep -m1 'clk_dec Restricted Fmax' || true)
+    MEM_LINE=$(echo "$FMAX_OUT" | grep -m1 'clk_mem Restricted Fmax' || true)
 else
     rc=$?
     echo "$FMAX_OUT"
     FMAX_LINE=$(echo "$FMAX_OUT" | grep -m1 'clk_dec Restricted Fmax' || true)
+    MEM_LINE=$(echo "$FMAX_OUT" | grep -m1 'clk_mem Restricted Fmax' || true)
     if [[ "$RELEASE_GATE" -eq 1 ]]; then
-        echo "ERROR: --release build refused: clk_dec timing gate failed (rc=$rc). Re-sweep seeds (tools/seed_sweep.sh) or retime." >&2
+        echo "ERROR: --release build refused: timing gate failed (rc=$rc; clk_dec and clk_mem are both gates, see the FAIL line above). Re-sweep seeds (tools/seed_sweep.sh) or retime." >&2
         notify "❌ MiSTer_DVD RELEASE build REFUSED — ${FMAX_LINE:-no STA data} (fringe-lottery fit)"
         trap - EXIT
         exit 1
@@ -264,6 +270,9 @@ SEED_V=$(sed -n 's/^set_global_assignment -name SEED  *//p' "$HERE/${PROJECT}.qs
 F100=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*Fmax: *\([0-9.]*\) MHz @100C.*/\1/p')
 FM40=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*, *\([0-9.]*\) MHz @-40C.*/\1/p')
 FTGT=$(printf '%s' "$FMAX_LINE" | sed -n 's/.*(target *\([0-9.]*\)).*/\1/p')
+M100=$(printf '%s' "$MEM_LINE" | sed -n 's/.*Fmax: *\([0-9.]*\) MHz @100C.*/\1/p')
+MM40=$(printf '%s' "$MEM_LINE" | sed -n 's/.*, *\([0-9.]*\) MHz @-40C.*/\1/p')
+MTGT=$(printf '%s' "$MEM_LINE" | sed -n 's/.*(target *\([0-9.]*\)).*/\1/p')
 BDATE=$(sed -n 's/.*`define BUILD_DATE "\([^"]*\)".*/\1/p' "$HERE/build_id.v" 2>/dev/null || true)
 RBF_SHA=$(sha256sum "$OUT" 2>/dev/null | cut -d' ' -f1 || true)
 # GIT_* normally arrive from tools/docker_reexec.sh, which resolves them on the
@@ -301,6 +310,9 @@ cat > "$MANIFEST" <<EOF
     "clk_dec_100c_mhz": ${F100:-null},
     "clk_dec_m40c_mhz": ${FM40:-null},
     "threshold_mhz": ${FTGT:-null},
+    "clk_mem_100c_mhz": ${M100:-null},
+    "clk_mem_m40c_mhz": ${MM40:-null},
+    "clk_mem_threshold_mhz": ${MTGT:-null},
     "pass": $([ -z "$FMAX_TAG" ] && echo true || echo false)
   },
   "toolchain": {

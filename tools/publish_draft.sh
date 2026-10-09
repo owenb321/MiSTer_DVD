@@ -86,9 +86,10 @@ def die(m): sys.exit("!! " + m)
 if man.get("core_version") != tag:
     die("manifest says the core was built as %r, not %r" % (man.get("core_version"), tag))
 if man["rbf"].get("marginal") or not man["timing"].get("pass"):
-    die("that build is TIMING-MARGINAL (%s/%s MHz, gate %s) — never ship one; re-roll with tools/seed_sweep.sh"
-        % (man["timing"].get("clk_dec_100c_mhz"), man["timing"].get("clk_dec_m40c_mhz"),
-           man["timing"].get("threshold_mhz")))
+    t = man["timing"]
+    die("that build is TIMING-MARGINAL (clk_dec %s/%s MHz, gate %s; clk_mem %s/%s MHz, gate %s) — never ship one; re-roll with tools/seed_sweep.sh"
+        % (t.get("clk_dec_100c_mhz"), t.get("clk_dec_m40c_mhz"), t.get("threshold_mhz"),
+           t.get("clk_mem_100c_mhz"), t.get("clk_mem_m40c_mhz"), t.get("clk_mem_threshold_mhz")))
 h = hashlib.sha256(open(rbf, "rb").read()).hexdigest()
 if man["rbf"].get("sha256") != h:
     die("manifest sha256 does not match the .rbf — they are from different builds")
@@ -97,9 +98,10 @@ if not (3_500_000 <= sz <= 5_000_000):
     die(".rbf is %d bytes, outside the 3.5-5.0 MB band (an uncompressed pack does not configure the FPGA)" % sz)
 if man["git"].get("dirty"):
     print(">> note: that core was built from a DIRTY tree", file=sys.stderr)
-print(">> core %s  seed %s  %s/%s MHz  %s"
+print(">> core %s  seed %s  clk_dec %s/%s MHz  clk_mem %s/%s MHz  %s"
       % (man["rbf"]["name"], man["fit"]["seed"], man["timing"]["clk_dec_100c_mhz"],
-         man["timing"]["clk_dec_m40c_mhz"], man["git"]["sha"][:12]))
+         man["timing"]["clk_dec_m40c_mhz"], man["timing"].get("clk_mem_100c_mhz"),
+         man["timing"].get("clk_mem_m40c_mhz"), man["git"]["sha"][:12]))
 PY
 
 # gh is not authenticated on this machine by default; the token lives in the git

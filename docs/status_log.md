@@ -114,11 +114,24 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     - A stale write lands before framestore's post-reset clear sweeps memory.
     - Believed benign, not proven. The queue is on the FIFO's side of that line, so it
       adds nothing to it.
-  - **Next:**
-    - Optional: let a pop take the word arriving that cycle (`do_read = dn_rd_en && (count
-      != 0 || up_valid)`). That halves the dry-run latency, and the FIFO pop stays
-      credit-based.
-    - Decide whether `clk_mem` becomes a FAIL in `fmax_check` (7 of 7 seeds now clear it).
+  - **Decided (user, 2026-10-09):**
+    - **`clk_mem` is a gate.** `fmax_check` FAILs below 90 MHz at either slow corner, as
+      `clk_dec` does below 86.
+      - `clock_check` agrees (`fail_fmax`; selftest 14 arms, the flipped arm caught by
+        reverting it).
+      - `seed_sweep` counts a seed only if both close and ranks on the worst corner over
+        both clocks.
+      - `build_release`'s manifest gains `clk_mem_*` fields, which `package.yml` and
+        `publish_draft.sh` print.
+    - **The dry-run latency stays (deferred, not done).** It costs 0.1–0.5 % decode with
+      lates unchanged, against a fit + sweep + HW round.
+      - The one-line form (`do_read = dn_rd_en && (count != 0 || up_valid)`) would lean on
+        Quartus's read-during-write pass-through in the slot RAM, which sim cannot check.
+      - If pacing ever needs the cycle (F3), the cleaner form is a register copy of the
+        last arriving word (enable = `up_valid`, never the bridge), presented when a pop
+        takes an arriving word. It avoids the RAM read-during-write case, for about 50 ALM.
+  - **Found, not fixed:** `seed_sweep.sh` defaults `FMAX_MIN` to 81 while `fmax_check`'s
+    `clk_dec` gate is 86, so a sweep "PASS" can still fail the build gate. Pre-existing.
 
 - ✅ **STRICT FIRST FIELD (2026-10-08, ✅ MERGED PR #170; ✅ HW-CONFIRMED 2026-10-09 by
   HIL counters and the maintainer's check).** Full note: `docs/field_parity.md` "Strict first field".

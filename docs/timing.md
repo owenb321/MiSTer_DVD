@@ -36,7 +36,7 @@ The only reliable reading is `report_timing -from_clock X -to_clock X`, which is
 
 | Tool | Reads | Covers | Role |
 |---|---|---|---|
-| `tools/fmax_check.sh` | `DVD.sta.rpt` (free) | `clk_dec` FAIL < 86 MHz; `clk_mem` WARN < 90 | the gate `build_release.sh` and `seed_sweep.sh` run on every fit |
+| `tools/fmax_check.sh` | `DVD.sta.rpt` (free) | `clk_dec` FAIL < 86 MHz; `clk_mem` FAIL < 90 (a WARN until 2026-10-09) | the gate `build_release.sh` and `seed_sweep.sh` run on every fit |
 | `tools/clock_check.sh` | a `quartus_sta` run on the fit on disk (about 30 s) | every clock: intra-domain setup, hold, recovery, removal, all four corners | run on the fit a release ships; record the result |
 | `tools/timing_paths.sh` | a `quartus_sta` run | top N intra-clock setup paths: `TIMING_CLOCK=dec` (default) / `mem` / a clock name, `TIMING_TEMP=100` (default) / `-40`, `TIMING_OUT=<file in the repo>` | finding the cluster to retime; dump the corner that is failing |
 
@@ -47,15 +47,16 @@ The only reliable reading is `report_timing -from_clock X -to_clock X`, which is
 
 - **Intra-domain hold or removal below 0 at any corner: FAIL.** A hold violation does not
   improve at a lower clock rate or a cooler die, so no margin argument rescues it.
-- **Setup:** `clk_dec` FAILs below 86 MHz at a slow corner (mirrors `fmax_check`); `clk_mem`
-  WARNs below its 90 MHz run rate; every other clock WARNs on negative slack.
+- **Setup:** `clk_dec` FAILs below 86 MHz and `clk_mem` below its 90 MHz run rate at a slow
+  corner (both mirror `fmax_check`; `clk_mem` was a WARN until the 2026-10-09 retime cleared
+  it on 7 of 7 seeds, user decision); every other clock WARNs on negative slack.
 - **Recovery below 0: WARN.**
 - **A clock not in `POLICY` is judged by the generic rules and flagged as INFO**, so a new
   PLL output is never skipped. Clocks with no paths (the PLL VCO phases) are silent.
 - **Known waivers (`KNOWN`)** downgrade a setup miss to INFO only while the worst path
   starts and ends inside a named block and stays above a floor. A regression past the floor,
   or the worst path moving into our logic, WARNs again.
-- `--selftest`: 13 arms, each of which must produce exactly its own finding.
+- `--selftest`: 14 arms, each of which must produce exactly its own finding.
 
 ## `clk_hdmi`: the one standing miss
 

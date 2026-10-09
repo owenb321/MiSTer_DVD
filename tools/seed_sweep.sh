@@ -4,7 +4,8 @@
 # tools/fmax_check.sh (row-anchored parse — see that script for the 2026-07-09
 # neighbor-row extraction bug this replaces), and keeps the BEST passing fit.
 #
-# A seed only COUNTS if it (a) routes and (b) closes clk_dec >= FMAX_MIN (81 MHz)
+# A seed only COUNTS if it (a) routes and (b) closes clk_dec >= FMAX_MIN (81 MHz) and
+# clk_mem >= CLK_MEM_MIN (90 MHz, fmax_check's default; a gate since 2026-10-09)
 # at BOTH slow corners — "routes" alone is NOT success; a routed-but-marginal fit
 # is the chroma-fringe lottery (and has produced garbled-green HW builds).
 #
@@ -64,16 +65,19 @@ for s in $SEEDS; do
   fmax_rc=$?
   summary=$(echo "$fmax_out" | grep -m1 'clk_dec Restricted Fmax' || echo "no clk_dec row")
   echo "    SEED $s -> routed; $summary" | tee -a "$LOG"
-  # clk_mem is WARN-only in fmax_check (not a sweep criterion yet), but record it per seed
-  # so the best seed can be chosen with both domains in view (docs/status_log.md "clk_mem timing").
-  echo "$fmax_out" | grep -m1 'clk_mem Restricted Fmax' | sed "s/^/    SEED $s -> /" | tee -a "$LOG"
+  # clk_mem is a gate too since 2026-10-09 (fmax_check FAILs below 90; docs/status_log.md
+  # "clk_mem retime"), so a seed counts only if BOTH clocks close.
+  mem_summary=$(echo "$fmax_out" | grep -m1 'clk_mem Restricted Fmax' || echo "no clk_mem row")
+  echo "    SEED $s -> $mem_summary" | tee -a "$LOG"
   if [ $fmax_rc -ne 0 ]; then
-    echo "    SEED $s -> timing FAIL (< ${FMAX_MIN} MHz) — marginal fit, next seed" | tee -a "$LOG"
+    why=$(echo "$fmax_out" | grep -E '^fmax_check: (FAIL|ERROR)' | sed 's/^fmax_check: //' | tr '\n' ' ')
+    echo "    SEED $s -> timing FAIL: ${why:-rc $fmax_rc} — next seed" | tee -a "$LOG"
     continue
   fi
-  # Passing fit: score by the worst slow corner so "best" means most real margin.
-  # (strip the "(target ...)" suffix so the threshold value can't pollute the min)
-  min_corner=$(echo "$summary" | sed 's/(target.*//' | grep -oE '[0-9]+\.[0-9]+' | sort -n | head -1)
+  # Passing fit: score by the worst slow corner over BOTH clocks, so "best" means the most
+  # real margin anywhere (strip the "(target ...)" suffixes so a threshold can't pollute it).
+  min_corner=$(printf '%s\n%s\n' "$summary" "$mem_summary" | sed 's/(target.*//' \
+               | grep -oE '[0-9]+\.[0-9]+' | sort -n | head -1)
   if awk -v a="$min_corner" -v b="$best_fmax" 'BEGIN{exit !(a > b)}'; then
     echo "    SEED $s -> PASS, new best (worst-corner ${min_corner} MHz) — assembling" | tee -a "$LOG"
     quartus_asm DVD >/tmp/asm_$s.log 2>&1
@@ -94,22 +98,22 @@ for s in $SEEDS; do
 done
 
 if [ -z "$best_seed" ]; then
-  echo "=== seed sweep EXHAUSTED — no seed routed AND closed clk_dec ${FMAX_MIN} MHz $(date) ===" | tee -a "$LOG"
-  "$(dirname "$0")/notify.sh" "❌ MiSTer_DVD seed sweep EXHAUSTED — no seed closes clk_dec ${FMAX_MIN} MHz. Retime or trim logic."
+  echo "=== seed sweep EXHAUSTED — no seed routed AND closed clk_dec ${FMAX_MIN} + clk_mem MHz $(date) ===" | tee -a "$LOG"
+  "$(dirname "$0")/notify.sh" "❌ MiSTer_DVD seed sweep EXHAUSTED — no seed closes clk_dec ${FMAX_MIN} + clk_mem MHz. Retime or trim logic."
   exit 1
 fi
 
 # Restore the winning pair so output_files matches what gets packed.
 cp "$BEST_DIR/DVD.sof" output_files/DVD.sof
 cp "$BEST_DIR/DVD.sta.rpt" output_files/DVD.sta.rpt
-echo "=== BEST: SEED $best_seed (clk_dec worst-corner ${best_fmax} MHz) — packing ===" | tee -a "$LOG"
+echo "=== BEST: SEED $best_seed (worst corner over clk_dec + clk_mem: ${best_fmax} MHz) — packing ===" | tee -a "$LOG"
 NOTIFY_SILENT=1 ./build_release.sh --release --name "$NAME" >>"$LOG" 2>&1
 rc=$?
 RBF=$(ls -t releases/${NAME}_*.rbf 2>/dev/null | head -1)
 if [ $rc -eq 0 ] && [ -n "$RBF" ]; then
   ls -la "$RBF" | tee -a "$LOG"
   echo "=== DONE $(date): remember to pin SEED $best_seed in DVD.qsf for this netlist ===" | tee -a "$LOG"
-  "$(dirname "$0")/notify.sh" "✅ MiSTer_DVD sweep: SEED $best_seed closes clk_dec (worst-corner ${best_fmax} MHz) — packed $(basename "$RBF"). Pin SEED $best_seed in DVD.qsf."
+  "$(dirname "$0")/notify.sh" "✅ MiSTer_DVD sweep: SEED $best_seed closes clk_dec + clk_mem (worst corner ${best_fmax} MHz) — packed $(basename "$RBF"). Pin SEED $best_seed in DVD.qsf."
 else
   echo "=== pack FAILED after sweep (rc=$rc) — check $LOG ===" | tee -a "$LOG"
   "$(dirname "$0")/notify.sh" "⚠️ MiSTer_DVD sweep found SEED $best_seed but the pack failed — check $LOG"

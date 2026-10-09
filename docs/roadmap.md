@@ -708,8 +708,9 @@ which would give auto 16:9 switching on PAL widescreen CRTs.
       bench + 6 mutations, bridge suites through it.
 - [x] Sweep: 7/7 seeds clear `clk_mem` (≥ 94.2 MHz); SEED 17 pinned, `clock_check` PASS.
 - [x] HW A/B vs `main`: pacing equal (ROGER's PR #142 late in both arms), menu ↔ title clean.
-- [ ] Optional: same-cycle pop of an arriving word (halves the +2-cycle dry-run latency).
-- [ ] Decide: `clk_mem` WARN → FAIL in `fmax_check`.
+- [x] `clk_mem` is a gate: `fmax_check`/`clock_check` FAIL < 90, `seed_sweep` ranks both clocks (user, 2026-10-09).
+- [ ] Deferred: hand an arriving word straight to the bridge (halves the +2-cycle dry-run latency;
+      design in `docs/status_log.md` "clk_mem retime"), only if pacing (F3) needs it.
 
 ### ✅ Strict first field: a start lands on its own raster slot (2026-10-08; ✅ HW-CONFIRMED 2026-10-09, ✅ MERGED PR #170 — `docs/field_parity.md` "Strict first field")
 
