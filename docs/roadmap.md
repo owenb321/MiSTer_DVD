@@ -1437,7 +1437,7 @@ Levers, cheapest/lowest-risk first:
   libdvdnav failure, or `rnd`, except two pre-existing core differences, both shared with
   the old FSM. Each is a named follow-up; neither is built:
   - ✅ **SPRM7 (PTTN) / SPRM6 (TT_PGCN) follow playback**, as libdvdnav's do
-    (`feature/nav-fixes`, HW-confirmed 2026-10-08 on Austin Powers 2's chapter menu).
+    (PR #169, HW-confirmed 2026-10-08 on Austin Powers 2's chapter menu).
     The fix includes the owning title's PTT table on a PGCN-only title jump
     (`ttn_pick`).
   - ✅ **No First Play PGC** (VMGI@0x84 = 0): the reader plays VMGM PGC 1 in the FP domain,

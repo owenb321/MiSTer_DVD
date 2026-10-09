@@ -389,7 +389,7 @@ otherwise; `--red` runs its mutation arms).
 | Player parameters: SPRM20 = disc's first allowed region, SPRM14 from output/Analog Aspect, SPRM15 with DTS (`player_regs`) | ✅ HW (HARTSWAR_169 VTS 4→3 on HDMI vs `main`), MERGED PR #154 | `dvd_vm.md` "Player parameters" | `run_player_regs.sh --red`, `check_player_regs_wiring.py` |
 | Chapter skip at the title's edges: Next → POST, Prev → `prev_pgcn` (audit 7) | ✅ HW (vs libdvdnav), MERGED PR #158 | `dvd_nav.md` | `run_chap_edge.sh --red`, `check_chap_edge_wiring.py` |
 | `.BUP` fallback (audit 8): fabric IFO header gate; Main mirrors unreadable IFO sectors | ✅ HW (fabric A/B vs `main`; Main mirror on a physical disc), MERGED PR #163 | `dvd_nav.md` "IFO header gate" | `run_bup.sh --red`, `main/tests` [21]–[29] |
-| Library sweep vs libdvdnav found SPRM6/7 frozen + no-FP-PGC boot: both fixed (+ 0xFF still holds before a non-loop cell command) | ✅ HW, `feature/nav-fixes` | `nav_engine.md` §5a | `run_sprm67.sh --red` |
+| Library sweep vs libdvdnav found SPRM6/7 frozen + no-FP-PGC boot: both fixed (+ 0xFF still holds before a non-loop cell command) | ✅ HW, MERGED PR #169 | `nav_engine.md` §5a | `run_sprm67.sh --red` |
 
 ### Transport, HUD and input
 

@@ -198,7 +198,7 @@ throughout, the Scooby maze, MiB's and Matrix's last step), so those are not mea
 - T2's divergence, to the PGCN: the microcode lands on PGC 6 offline too.
 
 **T2's divergence is press timing, not navigation (diagnosed offline, 2026-10-08,
-`feature/nav-sweep`).**
+PR #169).**
 - VTSM 1 PGC 1's cell 2 is one VOBU, 58 sectors, with a 5 s playback time and no still
   time.
 - **libdvdnav** holds it as a 5 s still with buttons up: `vm_position_get`'s "rough fix"
@@ -321,7 +321,7 @@ non-DVD-Video images in subdirectories can skip them with `NAV_SKIP_DIRS=dir1,di
 `--jobs 4` on a network library; each worker is light now. A model log once took a
 worker to 11 GB, and the logs are now dropped after each stimulus.
 
-### 5a. The library sweep (2026-10-08, `feature/nav-sweep`)
+### 5a. The library sweep (2026-10-08, PR #169)
 
 The whole ISO library, `--auto 3` (three random buttons from libdvdnav's parks), block
 cap 100,000.
@@ -350,7 +350,7 @@ cap 100,000.
 
 **Two real differences, both in the core, and the old FSM had both** (the A/B
 oracle `bench/dvd/ref/dvd_vm_hw.sv` behaves the same, so neither is the microcode's).
-**Both are fixed (2026-10-08, `feature/nav-fixes`, user decision): ✅ HW-confirmed**;
+**Both are fixed (2026-10-08, PR #169, user decision): ✅ HW-confirmed**;
 the fix is described after the list.
 
 1. **SPRM7 (PTTN) and SPRM6 (TT_PGCN) do not follow playback.**
@@ -390,7 +390,7 @@ the fix is described after the list.
      with cells.
    - **Built:** the reader mirrors `set_FP_PGC` (`docs/dvd_nav.md`, the domain table).
 
-**The fix (2026-10-08, `feature/nav-fixes`).**
+**The fix (2026-10-08, PR #169).**
 
 - **SPRM6/7 are wrapper registers now**, like SPRM1/2/3/8. The microcode writes them at a
   jump, a resume and a mount through `UOUT_SPRM6/7`, and reads them through the window, so
@@ -485,7 +485,7 @@ cannot be compared, because libdvdnav itself fails on them.
 
 - **The ROM has 52 words free (972 / 1,024; sim-proven, ⏳ HW pending),** after the
   2026-10-08 compaction
-  (`feature/nav-sweep`): the domain and VTS setup shared by most jumps (`JSETV`,
+  (PR #169): the domain and VTS setup shared by most jumps (`JSETV`,
   `JSETV0`), and the mount clear as one loop over a contiguous RAM range. Past
   that, a fifth M10K gives 1,280 words. The RSM save could still become a table
   walk.

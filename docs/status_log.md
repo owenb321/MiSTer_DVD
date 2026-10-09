@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
-  NON-LOOP CELL COMMAND (2026-10-08, `feature/nav-fixes`; HW-CONFIRMED on the rig, A/B
+  NON-LOOP CELL COMMAND (2026-10-08, ✅ MERGED PR #169; HW-CONFIRMED on the rig, A/B
   vs `dev-navsweep`).** These are the two pre-existing core differences
   the library sweep found (entry below). The user decided to fix both. Full note:
   `docs/nav_engine.md` §5a "The fix".
@@ -90,7 +90,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       maintainer checked it by hand on this build: the menu works, unchanged from 0.9.0
       (the 1851 build would have frozen a page).
 
-- ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
+- ✅ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, MERGED PR #169, offline).**
   The microcoded VM against libdvdnav over every library disc, with
   `tools/nav_offline.py`. Full note: `docs/nav_engine.md` §5a.
   - **Pass 2** (1,531 discs, cap 100k, fixed tools):

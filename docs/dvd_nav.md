@@ -644,7 +644,7 @@ bit7 set + low nibble match: VMGM 2=Title; VTSM 3=Root 4=SubPic 5=Audio 6=Angle
 any time after the VIDEO_TS walk (`nav_ready`) and execute only from a settled state
 (`S_STREAM`/`S_DONE`/`S_STILL`) at a block boundary — never mid-parse.
 
-**No First Play PGC (VMGI@0x84 = 0; 2026-10-08, `feature/nav-fixes`).** libdvdnav's
+**No First Play PGC (VMGI@0x84 = 0; 2026-10-08, PR #169).** libdvdnav's
 `set_FP_PGC` then plays VMGM PGC 1 *in the First Play domain*, and a First Play
 `LinkPGCN n` resolves through the same VMGM PGCIT (`get_PGCIT` treats First Play as the
 VMGM). `S_JMP_VMGI` now does the same: a First Play jump that finds @132 = 0 re-runs as a
@@ -1018,7 +1018,7 @@ can never continue differently from an expired one:
 The 0xFF entry now records `still_next`/`still_last` (it set neither before, since only the
 timer read them).
 
-**An indefinite still and its cell command (2026-10-08, `feature/nav-fixes`).**
+**An indefinite still and its cell command (2026-10-08, PR #169).**
 - **Until then** the cell command outranked a 0xFF still whenever `vm_mode` was on. That is
   the HW-proven Phase-3 ordering, which keeps MiB/Matrix motion menus looping instead of
   freezing on a last frame. libdvdnav holds the still and runs the command only when the
