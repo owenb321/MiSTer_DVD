@@ -55,6 +55,11 @@ done
 # CYCLE-exact -- every functional port plus the FSM state, every cycle, identical inputs -- against the module as
 # it was before the deferred-victim-invalidate retime. The reference is built from git
 # at RETIME_BASE (a commit on main), renamed, so no 1,100-line frozen copy is checked in.
+# The DDR3 address/burstcount are compared while read|write is high and writedata while
+# write is high (the Avalon contract; the 2026-10-09 speculative-pop retime loads them
+# while idle). It also fails on a coverage hole: any retimed path the stimulus never hit.
+# The request-FIFO queue (dvd/mem_req_prefetch.sv) is outside this module and has its own
+# gate: bench/dvd/run_mem_prefetch.sh.
 # ⚠ This arm pins one intended-no-op change. A later change to mem_shim_burst that is
 # MEANT to alter timing will fail it: move RETIME_BASE to that change's parent, or drop
 # the arm, and say which in the commit.

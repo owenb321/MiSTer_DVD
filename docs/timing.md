@@ -38,7 +38,7 @@ The only reliable reading is `report_timing -from_clock X -to_clock X`, which is
 |---|---|---|---|
 | `tools/fmax_check.sh` | `DVD.sta.rpt` (free) | `clk_dec` FAIL < 86 MHz; `clk_mem` WARN < 90 | the gate `build_release.sh` and `seed_sweep.sh` run on every fit |
 | `tools/clock_check.sh` | a `quartus_sta` run on the fit on disk (about 30 s) | every clock: intra-domain setup, hold, recovery, removal, all four corners | run on the fit a release ships; record the result |
-| `tools/timing_paths.sh` | a `quartus_sta` run | top N intra-`clk_dec` setup paths | finding the cluster to retime |
+| `tools/timing_paths.sh` | a `quartus_sta` run | top N intra-clock setup paths: `TIMING_CLOCK=dec` (default) / `mem` / a clock name, `TIMING_TEMP=100` (default) / `-40`, `TIMING_OUT=<file in the repo>` | finding the cluster to retime; dump the corner that is failing |
 
 `fmax_check`'s "Restricted Fmax" for `clk_dec` and `clk_mem` is exactly `clock_check`'s
 `1000 / (period − worst intra setup slack)`: on the first run both read 91.60 and 88.90 MHz.

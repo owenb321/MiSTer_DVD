@@ -46,7 +46,7 @@ fi
 CHAIN_SRC="rtl/mpeg2/vld.v rtl/mpeg2/getbits.v rtl/mpeg2/vbuf.v rtl/mpeg2/framestore.v \
   rtl/mpeg2/framestore_request.v rtl/mpeg2/framestore_response.v rtl/mpeg2/synchronizer.v \
   rtl/mpeg2/wrappers.v rtl/mpeg2/fwft.v rtl/mpeg2/xfifo_sc.v rtl/mpeg2/xilinx_fifo_dc.v \
-  rtl/mpeg2/read_write.v dvd/vbuf_pos.sv dvd/pts_assoc.sv"
+  rtl/mpeg2/read_write.v dvd/vbuf_pos.sv dvd/pts_assoc.sv dvd/mem_req_prefetch.sv"
 
 # ---- [A] position, real vld over the ES ------------------------------------
 iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/pts_assoc_sim \

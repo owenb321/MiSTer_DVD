@@ -166,6 +166,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/frame_drop_ctl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dec_duty.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/mem_shim.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/mem_shim_burst.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/mem_req_prefetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/sys_pll.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mpg_streamer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dvd_iso_reader.sv

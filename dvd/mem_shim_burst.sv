@@ -59,6 +59,14 @@
 // Strict in-order processing => responses in request order, and a write is never
 // issued while a read burst is in flight (the rule that kept f2sdram alive).
 //
+// REQUEST PORT: in the core, mem_req_rd_* comes from framestore's request FIFO
+// THROUGH dvd/mem_req_prefetch.sv (clk_mem retime, 2026-10-09), a 4-slot register
+// queue with the FIFO's exact standard-mode contract. So the speculative pop
+// (mem_req_rd_en, combinational from the stage-A verdict) ends at a few local flops,
+// not at the FIFO's M10K across the die. Nothing here depends on it: the module
+// sees the same contract, with commands arriving at most 2 cycles later after the
+// queue runs dry.
+//
 // Address formula (DENSE, fixes the 24 MB TrustZone boundary): DDR word address
 // {7'b0011000, word_addr[21:0]} puts window 3 (HPS byte 0x30000000) in bits[28:25]
 // with no left-shift. Burst base = the line-aligned word address.

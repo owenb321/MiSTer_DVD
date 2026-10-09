@@ -256,12 +256,31 @@ module mem_shim_ab_tb;
         .debug_rsp_count(rig[0].dbg_rsp), .debug_read_pend_cycles(rig[0].dbg_pend),
         .debug_cache_missrate(rig[0].dbg_mr)
     );
+    // -DMSAB_PREFETCH (2026-10-09): the NEW rig drains its FIFO model through
+    // dvd/mem_req_prefetch.sv, as framestore does in the core. The queue changes WHEN
+    // each command reaches the bridge, never which; the decision-exact compare below
+    // must still see identical burst sequences and responses.
+`ifdef MSAB_PREFETCH
+    wire [87:0] pf_dout;
+    wire        pf_en, pf_valid;
+    mem_req_prefetch #(.W(88), .D(4)) pf_new (
+        .clk(clk), .rst(rst_n),
+        .up_rd_en(rig[1].req_en), .up_valid(rig[1].req_valid),
+        .up_dout({rig[1].req_cmd, rig[1].req_addr, rig[1].req_dta}),
+        .dn_rd_en(pf_en), .dn_valid(pf_valid), .dn_dout(pf_dout));
+`endif
     mem_shim_burst #(.NSETS(NSETS), .ASSOC(4), .LINEW(LINEW)) dut_new (
         .clk(clk), .rst_n(rst_n), .hard_rst_n(rst_n),
         .cwf_en(1'b`MSAB_CWF), .dual_en(1'b`MSAB_DUAL),
+`ifdef MSAB_PREFETCH
+        .mem_req_rd_cmd(pf_dout[87:86]), .mem_req_rd_addr(pf_dout[85:64]),
+        .mem_req_rd_dta(pf_dout[63:0]),
+        .mem_req_rd_en(pf_en), .mem_req_rd_valid(pf_valid),
+`else
         .mem_req_rd_cmd(rig[1].req_cmd), .mem_req_rd_addr(rig[1].req_addr),
         .mem_req_rd_dta(rig[1].req_dta),
         .mem_req_rd_en(rig[1].req_en), .mem_req_rd_valid(rig[1].req_valid),
+`endif
         .mem_res_wr_dta(rig[1].res_dta), .mem_res_wr_en(rig[1].res_en),
         .mem_res_wr_almost_full(rig[1].res_almost_full),
         .ddr3_addr(rig[1].ddr_addr), .ddr3_burstcnt(rig[1].ddr_burstcnt),
