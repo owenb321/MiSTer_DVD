@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **STRICT FIRST FIELD (2026-10-08, branch `feature/field-start`; sim-proven RED/GREEN,
-  ⏳ HW-confirm pending).** Full note: `docs/field_parity.md` "Strict first field".
+- ✅ **STRICT FIRST FIELD (2026-10-08, ✅ MERGED PR #170; ✅ HW-CONFIRMED 2026-10-09 by
+  HIL counters and the maintainer's check).** Full note: `docs/field_parity.md` "Strict first field".
   - **Symptom:** on an interlaced raster a picture sometimes came up combed for ~0.5 s and
     then snapped clean, at a mount, a menu↔title jump or a Video Output switch.
   - **Cause:** a decoder soft reset restarts `resample_addrgen` with `last_image =
@@ -54,8 +54,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     `h2f_user0` −0.631 ns at 100 °C inside stock `ascal` (`avl_write_i` → its dpram); new on
     this seed, an HPS-bridge path in the framework. The HIL rounds ran on the pre-rebase
     builds; the field-start logic is identical.
-  - **Next step:** the maintainer's eye on the CRT and on HDMI Weave (starts, menu↔title,
-    Video Output switches) on the `1511` build. Then merge.
+  - **HW-confirmed:** the maintainer checked the `1511` build on hardware (2026-10-09):
+    looks good. ⏳ Not run: a PAL disc (same raster-restart path).
 
 - ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
   NON-LOOP CELL COMMAND (2026-10-08, ✅ MERGED PR #169; HW-CONFIRMED on the rig, A/B

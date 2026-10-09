@@ -5,9 +5,9 @@
 > now refuses the wrong slot for the first field after a reset or a raster restart, so a
 > mount, a menu↔title jump or a Video Output switch starts aligned from its first field. The
 > corrector stays as the safety net for mid-play slips. See
-> ["Strict first field"](#strict-first-field-2026-10-08) below. Status: HIL-measured clean on
-> the rig (feedback heals 0 over 15 starts and 30 Video Output round trips, control 5 and 3);
-> `⏳` the maintainer's eye on the CRT and HDMI Weave (branch `feature/field-start`).
+> ["Strict first field"](#strict-first-field-2026-10-08) below. Status: ✅ MERGED (PR #170),
+> ✅ HW-CONFIRMED: HIL-measured (feedback heals 0 over 15 starts and 30 Video Output round
+> trips, control 5 and 3) and the maintainer's check on hardware (2026-10-09).
 
 **Status: ✅ RE-ENABLED and ✅ HW-CONFIRMED (2026-09-03, issue #41). Round 1 confirmed the
 analog CRT — "this one seems to always get the fields right on the TV", where PR #40 was a
@@ -387,9 +387,10 @@ refreshes have elapsed. Moved earlier it would wait the budget out instead of me
 
 ## Strict first field (2026-10-08)
 
-**Status: sim-proven RED/GREEN (`run_field_phase.sh --red`, S1–S4); HIL-measured clean in
-round 2 (below); `⏳` the maintainer's eye on the CRT and HDMI Weave. Branch
-`feature/field-start`.**
+**Status: ✅ MERGED (PR #170). Sim-proven RED/GREEN (`run_field_phase.sh --red`, S1–S4);
+HIL-measured clean in round 2 (below); ✅ HW-CONFIRMED by the maintainer on the rebased
+build `DVD_fieldstart_20261009_1511.rbf` (2026-10-09). Not yet run: a PAL disc (its
+detection walk is the same raster-restart path).**
 
 ### The symptom, and the hole it came through
 

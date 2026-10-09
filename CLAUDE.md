@@ -418,7 +418,7 @@ otherwise; `--red` runs its mutation arms).
 | SMPTE 170M / BT.470 composite sync, `FIELD1_VPOS` | ✅ ⏳ original reporters' sets | `single_raster_analog.md` §3.10–3.12 | `run_csync_field.sh`, `run_csync_pipe.sh` |
 | Video Output = Auto/Interlaced/Progressive | ✅ | `field_parity.md` | `run_field_parity.sh` |
 | Field-parity corrector (stable-error gate, hold arm), `VGA_F1` polarity | ✅ | `field_parity.md` | `run_field_phase.sh` |
-| Strict first field (starts land on their slot; word 31) | 🔧 HIL heals 0, ⏳ eye on CRT (`feature/field-start`) | `field_parity.md` | `run_field_phase.sh --red`, `check_field_start_wiring.py` |
+| Strict first field (starts land on their slot; word 31) | ✅ HW, MERGED PR #170 (HIL heals 5→0) | `field_parity.md` | `run_field_phase.sh --red`, `check_field_start_wiring.py` |
 | Field-coded MPEG-2 display order (`first_field_top`) | ✅ | `field_parity.md` | `run_field_order.sh`, `check_field_order_wiring.py` |
 | Pause holds one field (field still) | ✅ | `field_parity.md` | `run_pause_still.sh` |
 | Deinterlace = Weave/Bob/Blend (`O[51:50]`) | ✅ | `field_blend.md` | `run_field_blend.sh`, `check_field_blend_wiring.py` |
