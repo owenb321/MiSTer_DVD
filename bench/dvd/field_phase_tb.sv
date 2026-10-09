@@ -47,9 +47,17 @@
  * A field that is a deliberate REPEAT of its predecessor (the corrector inserting one
  * field to re-align a cadence break, or the governor holding a frame) legitimately
  * violates A once, and a field or two may land misaligned before the feedback arm
- * reacts. So each scenario is windowed: a SETTLE window absorbs the correction (its
- * violations are counted and reported, bounded), and the CHECK window that follows must
- * be clean on all three invariants.
+ * reacts. So each MID-PLAY scenario ([2]-[9]) is windowed: a SETTLE window absorbs the
+ * correction (its violations are counted and reported, bounded), and the CHECK window that
+ * follows must be clean on all three invariants.
+ *
+ * ★ A START HAS NO SETTLE WINDOW (2026-10-08, docs/field_parity.md "Strict first field").
+ * [1] cold start, [10] decoder soft reset (srst: mount, menu<->title), [11] raster restart
+ * (raster_rst: a modeline write) and [12] the Video Output switch itself (ilace) are judged
+ * by start_clean from the first field displayed. The mixer's strict first-field placement
+ * makes that possible; a settle window there would hide the ~0.5 s blip it removed. [12]
+ * alone allows TRANS_FIELDS for the FRAME->field transition, which the core blanks.
+ * +start_only runs [1], [10], [11], [12]; +only12 runs [1] and [12].
  *
  * ★ SCENARIO [6] IS THE ONE THAT FOUND THE HW DEFECT, and it is the mundane one: it
  * STARVES the pixel queue. Every scenario written from the field reports (seeks, cold

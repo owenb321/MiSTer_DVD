@@ -571,6 +571,10 @@ strict first-field waits M".
   further word needs a wider counter, not a new index.
 - The expected HW reading over N starts: `strict_waits` ≈ N/2 and `fb_heals` = 0. A control
   build without the strict term reads `fb_heals` ≈ N/2.
+- The HW gate is two scripts: `tools/hil_field_starts.py` (N launches, counts per launch)
+  and `tools/hil_field_toggles.py` (Video Output round trips, every counter event timed
+  against the switch through the MiSTer's `/proc/uptime`; the `video_live` flag cannot
+  mark a switch in a disc menu, because it never drops there).
 
 ## Consequences for the HW symptom
 
