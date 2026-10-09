@@ -1039,10 +1039,23 @@ timer read them).
   0xFF + `g1 = 1; LinkTailPGC`. It ran at once, the POST linked on, and the disc stopped
   at `Exit`, where libdvdnav waits for the press.
 - **Library:** 47 discs have a 0xFF still with a cell command, and about 12 have a non-loop
-  one. Among them, INDIVISIBLE's gallery (VTSM 2, PGC 19: five 0xFF + `LinkTailPGC` pages)
-  flashed page 1 and returned to the menu.
-- **Gates:** `iso_reader_fpnone_tb` G/H, `run_sprm67.sh --red` R8–R10. Every existing
-  reader-regress trace is unchanged.
+  one.
+  - **INDIVISIBLE's chapter-select menu** (VTSM 2, PGC 19; reached by Title, then the
+    second entry) has five pages, each a 0xFF still with buttons and `LinkTailPGC`. It
+    bounced straight back to its parent menu, so it was unusable. ✅ The maintainer
+    confirmed by hand on 2026-10-08 that it now works, and that it does not on 0.9.0.
+- **Which commands loop:**
+  - Types 1 (a link), 2 and 3 carry the full link set: libdvdnav's
+    `eval_link_instruction`, e.g. INDIVISIBLE's type-3 buttons `g8 = 5; LinkPGCN 19`.
+  - Only types 4–6 are `LinkSubIns`-only.
+  - A `cmd_nr` past the PGC's cell commands (malformed) reads no entry of this PGC, so it
+    keeps the old command-first order.
+- **Gates:**
+  - `iso_reader_fpnone_tb` G/H/B2;
+  - `run_sprm67.sh --red` R8–R11;
+  - every existing reader-regress trace is unchanged.
+- **HW:** ISLAM_TRAILER parks on its menu (rig A/B). Motion menus still loop: The Muppets
+  on the rig, Men in Black by hand.
 
 **Holds the key ignores (`still_act = 0`).** These are the holds with no continuation of
 their own, and the key is a no-op there, as it is at a dead end on a real player:

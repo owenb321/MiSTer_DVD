@@ -70,6 +70,19 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       the trailer from its start, as libdvdnav does. The control boots the trailer.
     - ✅ The Muppets' first menu (0xFF + `LinkCN` to itself) is identical on both builds:
       the same park, buttons armed, byte-identical frames.
+    - ✅ The maintainer's hand check (2026-10-08):
+      - Men in Black's menu still animates and loops.
+      - **INDIVISIBLE's chapter-select menu works here and did not on 0.9.0.** It
+        bounced back to its parent: five 0xFF + `LinkTailPGC` pages.
+    - ✅ The PTT table on a resume (`ttn_pick`), rig A/B on Babylon A.D. side B: after
+      Menu → Menu the HUD reads `CH 5/21`; the control reads `CH 5/1` (title 1's
+      one-chapter table). That was a pre-existing HUD bug.
+    - Aladdin D2 cannot resume on any player: its main menu is a title-domain PGC, so
+      Menu from it is a fresh menu call (the same on 0.9.0).
+    - About Schmidt pages its chapter menu by SPRM7 only when g7 = 12, i.e. after a
+      chapter was chosen from that menu, which is the disc's authoring.
+    - The still rule's decode was corrected: types 2/3 carry the full link set. It needs
+      a rebuild; the HW above ran on `DVD_navfixes_20261008_1851.rbf`.
 
 - ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
   The microcoded VM against libdvdnav over every library disc, with
