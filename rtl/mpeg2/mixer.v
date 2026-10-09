@@ -44,6 +44,7 @@ module mixer(
   disp_v_offset,                                                  // DVD-FORK (CRT anamorphic letterbox bar offset)
   frame_top_par_err,                                              // DVD-FORK (field-parity corrector): frame-top landed on the wrong raster field parity
   interlaced,                                                     // DVD-FORK FIX (field start): the raster is interlaced (strict first-field placement)
+  raster_restart,                                                 // DVD-FORK FIX (field start): the raster generator is being restarted (a modeline write)
   strict_waits                                                    // DVD-FORK FIX (field start): telemetry, frame-top slots refused by the strict placement
   );
 
@@ -144,6 +145,12 @@ module mixer(
    * field". */
   input              interlaced;
   output reg    [7:0]strict_waits;
+  /* DVD-FORK FIX (field start, phase 2): HIGH while the sync generator is held in reset by a
+   * modeline write (regfile syncgen_rst, synced to dot_clk in mpeg2video.v exactly as
+   * syncgen_intf does). A restart re-phases the raster under content that keeps flowing:
+   * a mode switch, a PAL/NTSC walk, a film/240p walk. It re-arms start_strict, so the next
+   * frame-top after the restart is placed on its own slot like the first after a reset. */
+  input              raster_restart;
 
   /* store pixel_queue fifo output */
   reg           [7:0]y_0;
@@ -216,7 +223,7 @@ module mixer(
    * one: at most one extra field of black, on a screen that is already black after a soft
    * reset. The wait is ordinary backpressure (the addrgen parks in STATE_WAIT on a full
    * queue), so no pickup is deferred, nothing repeats, and every field after it alternates
-   * aligned. ⛔ Never armed by a starve (pixel_rd_underflow): strict after a starve costs
+   * aligned. Armed by a reset (below) and, phase 2, by a raster restart (raster_restart). ⛔ Never armed by a starve (pixel_rd_underflow): strict after a starve costs
    * two slots and churns on compute-bound content, which the feedback arm's PAR_CONFIRM
    * gate exists to leave alone. */
   reg               start_strict;
@@ -277,8 +284,15 @@ module mixer(
    * reset, a watchdog expiry or a decoder soft reset), cleared by the first frame-top this
    * mixer accepts (on whichever slot, which under the strict term is the matching one). */
   wire              top_accept          = (state == STATE_WAIT) && (next == STATE_FIRST_PIXEL) && is_frame_top;
+  /* Phase 2: a raster restart re-arms it. Taken outside clk_en — the level is a few dot
+   * clocks long, and arming on every cycle of it is harmless (the sync generator is in
+   * reset, so no frame-top slot can be accepted meanwhile). ⚠ Mid-stream this can hold one
+   * field: the content then runs one field (16.7 ms) later than its PTS, once, with no
+   * frame_late pulse to the drop ledger. A restart is a user/mount-rate event, so that is
+   * left as a known limit rather than given a new seam into resample_addrgen. */
   always @(posedge clk)
     if (~rst) start_strict <= 1'b1;
+    else if (raster_restart) start_strict <= 1'b1;
     else if (clk_en && top_accept) start_strict <= 1'b0;
     else start_strict <= start_strict;
 

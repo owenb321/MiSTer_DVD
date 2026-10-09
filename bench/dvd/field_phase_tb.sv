@@ -106,6 +106,9 @@ module field_phase_tb;
   reg soft_rst = 1'b0;
   wire srst = rst & ~soft_rst;               // active-low, like rst
   wire [7:0] strict_waits;                   // the mixer's count of refused frame-top slots
+  /* Phase 2: a RASTER restart — on the core a modeline register write resets sync_gen
+   * (regfile syncgen_rst) while the decode and display path keep running. Scenario [11]. */
+  reg raster_rst = 1'b0;
 
   // ---- stimulus ----
   reg  [2:0] output_frame = 3'd2;
@@ -243,7 +246,7 @@ module field_phase_tb;
   );
 
   sync_gen sync_gen (
-    .clk(dot_clk), .clk_en(1'b1), .rst(rst),
+    .clk(dot_clk), .clk_en(1'b1), .rst(rst & ~raster_rst),
     .horizontal_size(HORIZONTAL_SIZE), .vertical_size(VERTICAL_SIZE),
     .display_horizontal_size(14'd0), .display_vertical_size(14'd0),
     .horizontal_resolution(H_RES), .horizontal_sync_start(H_SS),
@@ -268,7 +271,7 @@ module field_phase_tb;
 `ifndef NO_PARITY_FIX
     .frame_top_par_err(mixer_par_err),
 `endif
-    .interlaced(1'b1), .strict_waits(strict_waits),   // DVD-FORK FIX (field start): the mixer's raster flag = the sync_gen's
+    .interlaced(1'b1), .raster_restart(raster_rst), .strict_waits(strict_waits),   // DVD-FORK FIX (field start): the mixer's raster flag = the sync_gen's
     .disp_v_offset(12'd0)
   );
 
@@ -531,9 +534,12 @@ module field_phase_tb;
    * this window checks. (The first two fields are judged too: tally() skips them because it
    * compares against fields i-1 and i-2, which a start does not have.) */
   task start_clean(input [8*40-1:0] name, input integer n);
-    integer s0, i, mis, rpt, part;
+    begin start_clean_at(name, fld_n, n); end
+  endtask
+  task start_clean_at(input [8*40-1:0] name, input integer s0, input integer n);
+    integer i, mis, rpt, part;
     begin
-      s0 = fld_n;  wait_flds(n);
+      wait (fld_n >= s0 + n);  @(posedge dot_clk);
       mis = 0;  rpt = 0;  part = 0;
       for (i = s0; i < s0 + n; i = i + 1) begin
         if (!clean_head(i)) part = part + 1;
@@ -558,12 +564,12 @@ module field_phase_tb;
 
   integer phase = 0;
   integer start_only = 0;
-  integer k, w0, sw_total;
+  integer k, w0, sw_total, i0, skipped;
 
   initial begin
     void'($value$plusargs("phase=%d", phase));
     if ($test$plusargs("dbg")) dbg = 1;
-    /* +start_only: [1] and [10] alone, the two windows that judge a START. ~1/10 of the
+    /* +start_only: [1], [10] and [11] alone, the windows that judge a START. ~1/10 of the
      * full run, which is what lets the runner afford a mutation sweep over them. */
     if ($test$plusargs("start_only")) start_only = 1;
     $display("\n==== field_phase_tb  +phase=%0d ====", phase);
@@ -677,9 +683,38 @@ module field_phase_tb;
       $fatal(1, "[10] SCENARIO VACUOUS: neither soft-reset start was released toward the wrong slot (strict_waits did not move)");
     $display("[10-soft-reset] the strict placement refused %0d slot(s) over the two starts", sw_total);
 
+    // [11] RASTER RESTART under flowing content — a modeline write (Video Output switch,
+    // PAL/NTSC walk) resets sync_gen while the decoder and the display path run on. One
+    // restart mid-TOP field and one mid-BOTTOM field. The mid-bottom one is the case a
+    // slot-parity detector cannot see: the cut field's image spills into the restarted top
+    // field, so the slot sequence looks alternating while the next frame-top heads for the
+    // wrong one. The fields spilled over from the cut image are the restart's own artefact
+    // (on the core the mode switch blanks them), so the window starts at the first field
+    // with a clean head, and from THAT field on there is no settle.
+    sw_total = 0;
+    for (k = 0; k < 2; k = k + 1) begin
+      wait_flds(4);
+      wait (pixel_en && (h_pos == 12'd8) && (v_pos == (k ? 12'd61 : 12'd60)));
+      w0 = strict_waits;  i0 = fld_n;
+      raster_rst = 1'b1;  repeat (4) @(posedge dot_clk);  raster_rst = 1'b0;
+      skipped = 0;
+      wait (fld_n > i0);
+      while (!clean_head(i0)) begin
+        i0 = i0 + 1;  skipped = skipped + 1;
+        if (skipped > 3) $fatal(1, "[11] no clean field head within 3 fields of the restart");
+        wait (fld_n > i0);
+      end
+      start_clean_at(k ? "11-raster-restart-bot" : "11-raster-restart-top", i0, NCHK);
+      $display("    (%0d spilled-over field(s) skipped before the window)", skipped);
+      sw_total = sw_total + ((strict_waits - w0) & 8'hFF);
+    end
+    if (sw_total == 0)
+      $fatal(1, "[11] SCENARIO VACUOUS: neither raster restart sent a frame-top toward the wrong slot (strict_waits did not move)");
+    $display("[11-raster-restart] the strict placement refused %0d slot(s) over the two restarts", sw_total);
+
     $display("(source line 0 stamps %0d, line 1 stamps %0d; %0d fields measured)",
              base_code, peak_code, fld_n);
-    if (fld_n < (start_only ? 3*NCHK : 4*(SETTLE+NCHK)) || peak_code != base_code + 8'd1)
+    if (fld_n < (start_only ? 5*NCHK : 4*(SETTLE+NCHK)) || peak_code != base_code + 8'd1)
       $fatal(1, "==== BENCH BROKEN (+phase=%0d): %0d fields, stamps %0d/%0d (expected two adjacent) ====",
              phase, fld_n, base_code, peak_code);
     if (errors == 0) begin

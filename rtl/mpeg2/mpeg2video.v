@@ -1872,6 +1872,18 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * (Crop+SIF, qstep 91), both inside disp_hstretch's upscale RATIO CONTRACT. */
   wire [11:0] disp_hdst_w = disp_hfill_en ? 12'd720 : (mb_width << 4); // full raster line width = what a Fit line emits
 
+  /* DVD-FORK FIX (field start, phase 2): the regfile's syncgen_rst (active LOW, one clk
+   * cycle per modeline register write) synchronized to dot_clk — the same sync_reset that
+   * syncgen_intf runs to reset sync_gen, duplicated here rather than exported so the two
+   * benches instantiating syncgen_intf keep their port list. The mixer re-arms its strict
+   * first-field placement on it (docs/field_parity.md "Strict first field"). */
+  wire dot_syncgen_rst_n;
+  sync_reset dot_syncgen_sreset (
+    .clk(dot_clk),
+    .asyncrst(syncgen_rst),
+    .syncrst(dot_syncgen_rst_n)
+    );
+
   /* Mixer */
   mixer mixer (
     .clk(dot_clk), 
@@ -1905,6 +1917,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .disp_v_offset(disp_v_offset),                           // DVD-FORK (CRT anamorphic letterbox bar offset)
     .frame_top_par_err(dot_frame_top_par_err),               // DVD-FORK (field-parity corrector): to the addrgen via sync_raster_par_err
     .interlaced(dot_interlaced),                             // DVD-FORK FIX (field start): strict first-field placement (dot domain already)
+    .raster_restart(~dot_syncgen_rst_n),                     // DVD-FORK FIX (field start): a modeline write is restarting sync_gen
     .strict_waits(dot_strict_waits)                          // DVD-FORK FIX (field start): telemetry, refused frame-top slots (wraps)
     );
 
