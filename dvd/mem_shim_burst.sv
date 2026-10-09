@@ -59,6 +59,14 @@
 // Strict in-order processing => responses in request order, and a write is never
 // issued while a read burst is in flight (the rule that kept f2sdram alive).
 //
+// REQUEST PORT: in the core, mem_req_rd_* comes from framestore's request FIFO
+// THROUGH dvd/mem_req_prefetch.sv (clk_mem retime, 2026-10-09), a 4-slot register
+// queue with the FIFO's exact standard-mode contract. So the speculative pop
+// (mem_req_rd_en, combinational from the stage-A verdict) ends at a few local flops,
+// not at the FIFO's M10K across the die. Nothing here depends on it: the module
+// sees the same contract, with commands arriving at most 2 cycles later after the
+// queue runs dry.
+//
 // Address formula (DENSE, fixes the 24 MB TrustZone boundary): DDR word address
 // {7'b0011000, word_addr[21:0]} puts window 3 (HPS byte 0x30000000) in bits[28:25]
 // with no left-shift. Burst base = the line-aligned word address.
@@ -162,7 +170,7 @@ module mem_shim_burst #(
     // ---- FSM state ----
     // PIPELINED 1-word/cycle hit loop, now THREE overlapped stages (the tag RAM
     // is sync-read):
-    //   Stage T: select the live source (pk > sk > FIFO) and present its SET to
+    //   Stage T: select the live source (skid > FIFO) and present its SET to
     //            the tag/LRU RAM;
     //   Stage A: the RAM word for the pA_* command is out — compare tags, pick
     //            hit way / victim, present the hit word's data-RAM address;
@@ -219,7 +227,7 @@ module mem_shim_burst #(
     reg [63:0]      sk_dta;
 
     // ---- PAIRED DUAL-OUTSTANDING miss fills (dual_en) — declared early because the
-    // stage-T mux and rd_en assign below reference pk_valid/dual_en_q ----
+    // stage-T mux and rd_en assign below reference dual_en_q ----
     // On a read miss (slot A) we peek the next command; if it is ALSO a read miss to
     // a DIFFERENT set (so no victim-way collision with A), we issue burst B as well,
     // overlapping the two DDR command latencies. Beats return in order (all of A then
@@ -227,15 +235,20 @@ module mem_shim_burst #(
     // slot, early-serves its requested word (cwf), and on the last beat validates the
     // line + queues a fallback serve. The case statement only ISSUES bursts and
     // sequences A->peek->B. Responses stay strictly in order. A non-pairable peek is
-    // stashed in pk_* and processed by S_STREAM after the fill, so no command is lost.
+    // held in the skid and processed by S_STREAM after the fill, so no command is lost.
     // NOTE (BRAM-tag rework): the stream's pops are SPECULATIVE, so at fill entry
     // the next command usually sits in the SKID already (parked on the miss-exit
     // cycle) — that skid command IS the peek candidate then (its set has been on
     // the tag-RAM address since the exit cycle, so S_FILL_CMD goes straight to
     // S_PEEK2); only an empty skid pops the FIFO for a candidate (S_PEEK latches
-    // it into pk_*). sk and pk are therefore mutually exclusive. A non-pairable
-    // candidate simply STAYS in its hold register for S_STREAM to process in
-    // order — no command is ever lost or reordered.
+    // it into the skid too). A non-pairable candidate simply STAYS in the skid for
+    // S_STREAM to process in order — no command is ever lost or reordered.
+    // (clk_mem retime, 2026-10-09: S_PEEK used to latch into a separate pk_* hold
+    // register. pk and sk were never valid together — S_PEEK is entered only with an
+    // empty skid, and the skid only loads while streaming with pk empty; the LOCKSTEP
+    // bench checked the premise on every cycle of the old module — so pk was the skid
+    // under another name. Merging them removed 90 flops and the sk_valid-selected
+    // pk/sk candidate mux that headed the worst clk_mem path.)
     reg        dual_en_q;
     reg [SET_W-1:0]  ifb_set;    // slot B (2nd burst) line set
     reg [ASW-1:0]    ifb_way;    // slot B victim way (chosen from B's set; set != A's)
@@ -246,18 +259,10 @@ module mem_shim_burst #(
     reg        a_done;           // slot A fully collected before B was accepted (wait)
     reg        c2;               // COLLECT is currently filling slot B (else slot A)
     reg        served_b;         // slot-B requested word emitted during the fill
-    reg        pk_valid;         // a peeked non-pairable command is held in pk_*
-    reg  [1:0] pk_cmd;
-    reg [21:0] pk_addr;
-    reg [63:0] pk_dta;
-    // Pair-candidate mux for S_PEEK2: the skid command when it holds one (the
-    // common case — the speculative pop parked the next command there on the
-    // miss-exit cycle), else the S_PEEK-latched pk. Mutually exclusive by
-    // construction (S_PEEK is only entered with an empty skid; the skid only
-    // loads while streaming).
-    wire        cand_is_sk = sk_valid;
-    wire [1:0]  cand_cmd  = sk_valid ? sk_cmd  : pk_cmd;
-    wire [21:0] cand_addr = sk_valid ? sk_addr : pk_addr;
+    // Pair candidate for S_PEEK2: always the skid (parked there by the speculative
+    // pop on the miss-exit cycle, or latched by S_PEEK from the FIFO).
+    wire [1:0]  cand_cmd  = sk_cmd;
+    wire [21:0] cand_addr = sk_addr;
     wire [LOFF_W-1:0] cand_off  = cand_addr[LOFF_W-1:0];
     wire [SET_W-1:0]  cand_set  = cand_addr[LOFF_W +: SET_W];
     wire [TAG_W-1:0]  cand_tag  = cand_addr[LOFF_W+SET_W +: TAG_W];
@@ -272,21 +277,18 @@ module mem_shim_burst #(
     reg [1:0]        sv_n;           // queued count (0..2)
 
     // ---- Stage T source mux ----
-    // Priority: the peeked-non-pairable hold (pk_*, drained first so order is
-    // preserved), then the backpressure/exit skid, then the live FIFO output.
-    // (pk and sk can never BOTH be valid: pairing peeks are suppressed while the
-    // skid holds, and the skid only loads while streaming — the rd_en guard is
-    // defensive.)
-    wire        lu_src_v  = pk_valid ? 1'b1    : sk_valid ? 1'b1    : mem_req_rd_valid;
-    wire [1:0]  lu_src_c  = pk_valid ? pk_cmd  : sk_valid ? sk_cmd  : mem_req_rd_cmd;
-    wire [21:0] lu_src_a  = pk_valid ? pk_addr : sk_valid ? sk_addr : mem_req_rd_addr;
-    wire [63:0] lu_src_d  = pk_valid ? pk_dta  : sk_valid ? sk_dta  : mem_req_rd_dta;
+    // Priority: the skid (an older command: backpressure / slow-path exit / a
+    // non-pairable peek), then the live FIFO output.
+    wire        lu_src_v  = sk_valid ? 1'b1    : mem_req_rd_valid;
+    wire [1:0]  lu_src_c  = sk_valid ? sk_cmd  : mem_req_rd_cmd;
+    wire [21:0] lu_src_a  = sk_valid ? sk_addr : mem_req_rd_addr;
+    wire [63:0] lu_src_d  = sk_valid ? sk_dta  : mem_req_rd_dta;
 
     // ---- tag/LRU RAM read port (shared address; registered outputs) ----
     // Streaming presents the LIVE stage-T source's set (so the word is out when
     // that command sits in stage A); a stall re-presents stage A's set so the
     // word HOLDS across the stall; S_PEEK/S_PEEK2 present the peeked command's
-    // set through the same stage-T mux (pk latches at the S_PEEK edge and takes
+    // set through the same stage-T mux (the skid latches at the S_PEEK edge and takes
     // mux priority in S_PEEK2). In the remaining (slow-path) states the read is
     // don't-care: every consumer there uses the snap_* / fillB_* snapshots.
     reg  [TAGV_W-1:0] tag_rd;
@@ -349,16 +351,20 @@ module mem_shim_burst #(
         (lw_valid     && (lw_set == pA_set)) ? lw_ranks   : lru_rd;
 
     // ---- combinational hit / victim select over the looked-up set word ----
-    // Inputs: stage A's command while streaming, the peeked command in S_PEEK2.
-    // (S_PROC never uses this block — it runs on the snap_* snapshot registers.)
-    wire              peek_cmp  = (state == S_PEEK2);
-    wire [TAG_W-1:0]  cmp_tag   = peek_cmp ? cand_tag : pA_tag;
-    wire [SET_W-1:0]  cmp_set   = peek_cmp ? cand_set : pA_set;
-    wire [LRUV_W-1:0] cmp_lru   = peek_cmp ? lru_rd : lru_eff;
-    wire [ASSOC-1:0]  cmp_valid = cache_valid[cmp_set];
+    // TWO copies, one per consumer (clk_mem retime, 2026-10-09). One shared block
+    // used to serve both, its inputs muxed by (state == S_PEEK2) between stage A
+    // and the skid candidate. S_STREAM never selected the candidate leg, but STA
+    // timed it anyway: sk_valid -> candidate set -> cache_valid[] -> hit_c ->
+    // sA_slow -> mem_req_rd_en -> the request FIFO was the worst clk_mem path on
+    // both corners of the v0.9.0 fit. Now stage A's verdict is a function of pA_*,
+    // tag_rd and lru_eff only, and the pair decision has its own copy (pk_hit_c, pk_victim_c).
+    // Same logic, bit for bit; the LOCKSTEP arm proves it unobservable.
+    // (S_PROC uses neither — it runs on the snap_* snapshot registers.)
+    wire [ASSOC-1:0]  a_valid = cache_valid[pA_set];     // stage A (S_STREAM)
+    wire [ASSOC-1:0]  k_valid = cache_valid[cand_set];   // pair candidate (S_PEEK2)
 
     integer wi;
-    reg                hit_c;
+    reg                hit_c;       // stage A: hit, hit way, victim
     reg  [ASW-1:0]     hit_way_c;
     reg  [ASW-1:0]     victim_c;
     reg                vic_done;
@@ -366,7 +372,7 @@ module mem_shim_burst #(
         hit_c     = 1'b0;
         hit_way_c = {ASW{1'b0}};
         for (wi = 0; wi < ASSOC; wi = wi + 1)
-            if (cmp_valid[wi] && (tag_rd[wi*TAG_W +: TAG_W] == cmp_tag)) begin
+            if (a_valid[wi] && (tag_rd[wi*TAG_W +: TAG_W] == pA_tag)) begin
                 hit_c     = 1'b1;
                 hit_way_c = wi[ASW-1:0];
             end
@@ -374,10 +380,28 @@ module mem_shim_burst #(
         victim_c = {ASW{1'b0}};
         vic_done = 1'b0;
         for (wi = ASSOC-1; wi >= 0; wi = wi - 1)
-            if (!cmp_valid[wi]) begin victim_c = wi[ASW-1:0]; vic_done = 1'b1; end
+            if (!a_valid[wi]) begin victim_c = wi[ASW-1:0]; vic_done = 1'b1; end
         if (!vic_done)
             for (wi = 0; wi < ASSOC; wi = wi + 1)
-                if (cmp_lru[wi*ASW +: ASW] == (ASSOC-1)) victim_c = wi[ASW-1:0];
+                if (lru_eff[wi*ASW +: ASW] == (ASSOC-1)) victim_c = wi[ASW-1:0];
+    end
+
+    integer wk;
+    reg                pk_hit_c;    // pair candidate: hit, victim (no hit way needed)
+    reg  [ASW-1:0]     pk_victim_c;
+    reg                pk_vic_done;
+    always @* begin
+        pk_hit_c = 1'b0;
+        for (wk = 0; wk < ASSOC; wk = wk + 1)
+            if (k_valid[wk] && (tag_rd[wk*TAG_W +: TAG_W] == cand_tag))
+                pk_hit_c = 1'b1;
+        pk_victim_c = {ASW{1'b0}};
+        pk_vic_done = 1'b0;
+        for (wk = ASSOC-1; wk >= 0; wk = wk - 1)
+            if (!k_valid[wk]) begin pk_victim_c = wk[ASW-1:0]; pk_vic_done = 1'b1; end
+        if (!pk_vic_done)
+            for (wk = 0; wk < ASSOC; wk = wk + 1)
+                if (lru_rd[wk*ASW +: ASW] == (ASSOC-1)) pk_victim_c = wk[ASW-1:0];
     end
 
     // ---- streaming stage-A verdict ----
@@ -406,11 +430,12 @@ module mem_shim_burst #(
     // advances — the pop is SPECULATIVE (the popped command's verdict is only
     // known one cycle later at stage A), so a slow-path exit parks the in-flight
     // command in the skid. It stays low on a stall (almost_full), on the exit
-    // cycle itself, when both hold registers are full (defensive), and on the
-    // empty-drain cycle (a pop there would land in S_REQ unconsumed and be lost).
+    // cycle itself, and on the empty-drain cycle (a pop there would land in S_REQ
+    // unconsumed and be lost). (A "both hold registers full" defensive term went
+    // with the pk->sk merge: there is one hold register now.)
     assign mem_req_rd_en = (state == S_REQ)
                         || ((state == S_STREAM) && !mem_res_wr_almost_full && !sA_slow
-                            && !(pk_valid && sk_valid) && (lu_src_v || pA_valid))
+                            && (lu_src_v || pA_valid))
                         // DUAL: on burst-A acceptance, pop the next command so it is
                         // live in S_PEEK for the pair decision (unless the skid holds
                         // an older command — peeking would reorder).
@@ -602,10 +627,6 @@ module mem_shim_burst #(
             a_done         <= 1'b0;
             c2             <= 1'b0;
             served_b       <= 1'b0;
-            pk_valid       <= 1'b0;
-            pk_cmd         <= 2'd0;
-            pk_addr        <= 22'd0;
-            pk_dta         <= 64'd0;
             sv_set[0] <= 0; sv_set[1] <= 0;
             sv_way[0] <= 0; sv_way[1] <= 0;
             sv_off[0] <= 0; sv_off[1] <= 0;
@@ -629,9 +650,10 @@ module mem_shim_burst #(
             // LATER, from registers.
             //
             // Why one cycle later is observably identical (re-verify if the FSM changes):
-            // the lookup outputs hit_c / hit_way_c / victim_c (cmp_valid) are consumed
-            // ONLY in S_STREAM (the stage-A verdict, the snapshots, the fast write, the
-            // pB_* advance, cm_miss) and in S_PEEK2 (the pair decision). The cycle after
+            // the lookup outputs (hit_c / hit_way_c / victim_c from a_valid, pk_hit_c /
+            // pk_victim_c from k_valid) are consumed ONLY in S_STREAM (the stage-A verdict,
+            // the snapshots, the fast write, the pB_* advance, cm_miss) and in S_PEEK2 (the
+            // pair decision). The cycle after
             // site A is S_FILL_CMD; the cycle after site B is S_ISSUE2 or S_FILL_DAT.
             // Neither consumes them. The one other reader, raddr_comb, feeds cache_rdata,
             // which is consumed only in S_STREAM behind a stage-A hit (pB_valid) and in
@@ -677,11 +699,11 @@ module mem_shim_burst #(
                     end else begin
                         // single A, or B just finished: drain/serve. Preserve the
                         // cwf fast-path (nothing queued AND this word served). If a
-                        // held command exists (pk/sk), go to S_STREAM DIRECTLY
+                        // held command exists (the skid), go to S_STREAM DIRECTLY
                         // (not S_REQ — S_REQ pops the FIFO and would skip a command
                         // while S_STREAM consumes the hold first).
                         if ((sv_n == 2'd0) && (c_served || cwf_fire))
-                            state <= (pk_valid || sk_valid) ? S_STREAM : S_REQ;
+                            state <= sk_valid ? S_STREAM : S_REQ;
                         else
                             state <= S_FILL_DRN;
                     end
@@ -743,13 +765,90 @@ module mem_shim_burst #(
                     // into the skid (its `valid` is 1 cycle only) so it survives;
                     // tl_raddr re-reads Stage A's set and raddr_comb Stage B's word
                     // so tag_rd/lru_rd/cache_rdata hold. No emit/consume/fetch.
-                    if (!sk_valid && !pk_valid && mem_req_rd_valid) begin
+                    if (!sk_valid && mem_req_rd_valid) begin
                         sk_cmd   <= mem_req_rd_cmd;
                         sk_addr  <= mem_req_rd_addr;
                         sk_dta   <= mem_req_rd_dta;
                         sk_valid <= 1'b1;
                     end
                 end else begin
+                    // ---------------------------------------------------------
+                    // VERDICT-INDEPENDENT DATA LOADS (clk_mem retime, 2026-10-09).
+                    // Every DATA register below loads on every non-stall streaming
+                    // cycle, whatever stage A's verdict. Only the CONTROL flops
+                    // further down (state, ddr3_read/write, inv_a_pend, the
+                    // pA/pB/lw/sk valid bits, cur_cmd) take sA_slow / pA_rd_miss /
+                    // pA_wr_fast. The verdict comes out of the tag M10K (~2.5 ns
+                    // clock-to-out) through a 4-way compare; it used to gate ~300
+                    // flops, and that fanout was most of the clk_mem limiter.
+                    //
+                    // Why each load is unobservable when it is not the exit cycle
+                    // (re-verify if the FSM changes):
+                    //  - pA_cmd/addr/dta: a stage-A slot whose pA_valid is 0 is
+                    //    never read (the verdict, raddr_comb and cm_miss are all
+                    //    qualified by pA_valid or by the S_STREAM pipeline). On an
+                    //    exit pA_valid <= 0 and the stage-T source is NOT consumed,
+                    //    so it is re-presented when the stream resumes.
+                    //  - pB_set/way/off/lru: read only behind pB_valid, which is
+                    //    sA_hit (and sA_hit is 0 on every exit cycle).
+                    //  - cur_addr/cur_dta, snap_*, sel_way, wr_is_hit, wr_way: read
+                    //    only in the slow states (S_PROC, S_FILL_*, S_PEEK*,
+                    //    S_ISSUE2, S_SERVE*, S_WR_CMD) and by the deferred
+                    //    invalidate, which is never pending in S_STREAM (sim guard
+                    //    at the bottom). The exit edge is the LAST streaming edge,
+                    //    so they hold exactly the exiting command's values, as
+                    //    before.
+                    //  - beat, fill_to, fill_failed, served, pairing, ifb_active,
+                    //    c2, a_done, served_b, sv_*: the fill/serve bookkeeping.
+                    //    Read only in the fill-region and serve states (COLLECT is
+                    //    gated by in_fill; its un-gated "!c2 && a_done &&
+                    //    ifb_active" arm cannot fire with a_done = 0). A fill and a
+                    //    serve queue are always complete before S_STREAM resumes.
+                    //  - ddr3_addr/burstcnt/writedata: ddr3_read and ddr3_write
+                    //    are 0 in every streaming cycle, and the Avalon slave
+                    //    samples these only with read/write (ddr_arb is a
+                    //    combinational pass-through). They change only where
+                    //    read/write is low, and are stable while it is high
+                    //    (S_FILL_CMD, S_ISSUE2 and S_WR_CMD load nothing).
+                    // bench/dvd/run_mem_shim.sh's LOCKSTEP arm compares every
+                    // functional output each cycle against the pre-retime module
+                    // (the DDR3 address/burstcount/writedata where read/write says
+                    // they are sampled).
+                    // ---------------------------------------------------------
+                    pA_cmd         <= lu_src_c;             // stage T -> A
+                    pA_addr        <= lu_src_a;
+                    pA_dta         <= lu_src_d;
+                    pB_set         <= pA_set;               // stage A -> B
+                    pB_way         <= hit_way_c;
+                    pB_off         <= pA_off;
+                    pB_lru         <= lru_eff;
+                    cur_addr       <= pA_addr;              // slow-path handoff
+                    cur_dta        <= pA_dta;
+                    snap_tags      <= tag_rd;
+                    snap_lru       <= lru_eff;
+                    snap_hit       <= hit_c;
+                    snap_hit_way   <= hit_way_c;
+                    snap_victim    <= victim_c;
+                    sel_way        <= victim_c;             // fast miss: the victim
+                    wr_is_hit      <= hit_c;                // fast write: update on accept
+                    wr_way         <= hit_way_c;
+                    ddr3_addr      <= {7'b0011000, (pA_cmd == CMD_READ) ? pA_line_base : pA_addr};
+                    ddr3_burstcnt  <= (pA_cmd == CMD_READ) ? LINEW[7:0] : 8'd1;
+                    ddr3_writedata <= pA_dta;
+                    beat           <= 0;                    // fresh fill / serve bookkeeping
+                    fill_to        <= 0;
+                    fill_failed    <= 1'b0;
+                    served         <= 1'b0;                 // CWF: not yet emitted
+                    pairing    <= 1'b0;  ifb_active <= 1'b0;
+                    c2         <= 1'b0;  a_done     <= 1'b0;  served_b <= 1'b0;
+                    sv_wr      <= 1'b0;  sv_rd      <= 1'b0;  sv_n     <= 2'd0;
+                    if (!sk_valid && mem_req_rd_valid) begin  // skid data (valid below)
+                        sk_cmd   <= mem_req_rd_cmd;
+                        sk_addr  <= mem_req_rd_addr;
+                        sk_dta   <= mem_req_rd_dta;
+                    end
+
+                    // ---- CONTROL ----
                     // Stage B: emit the hit looked up two cycles ago. Its LRU
                     // touch commits through the write port this cycle; lw_* keeps
                     // the written word for next cycle's read bypass.
@@ -760,79 +859,40 @@ module mem_shim_burst #(
                         lw_set   <= pB_set;
                         lw_ranks <= pB_touched;
                     end
+                    pB_valid <= sA_hit;                     // (0 on every exit)
                     if (sA_slow) begin
-                        // Stage A holds a non-streamable command: capture its
-                        // lookup and hand off. The stage-T source is left in
+                        // Stage A holds a non-streamable command: hand off (its
+                        // lookup was captured above). The stage-T source is left in
                         // place (younger commands, served after); a live FIFO
                         // word — the speculative pop — parks in the skid.
                         cur_cmd      <= pA_cmd;
-                        cur_addr     <= pA_addr;
-                        cur_dta      <= pA_dta;
-                        snap_tags    <= tag_rd;
-                        snap_lru     <= lru_eff;
-                        snap_hit     <= hit_c;
-                        snap_hit_way <= hit_way_c;
-                        snap_victim  <= victim_c;
                         pA_valid     <= 1'b0;
-                        pB_valid     <= 1'b0;
                         lw_valid     <= 1'b0;
-                        if (!sk_valid && !pk_valid && mem_req_rd_valid) begin
-                            sk_cmd   <= mem_req_rd_cmd;
-                            sk_addr  <= mem_req_rd_addr;
-                            sk_dta   <= mem_req_rd_dta;
+                        if (!sk_valid && mem_req_rd_valid)
                             sk_valid <= 1'b1;
-                        end
                         if (pA_rd_miss) begin
                             // FAST miss entry (timing parity with the flop-tag
                             // version: verdict -> S_FILL_CMD in one cycle).
                             // Invalidate the victim (so a fill timeout can't leave a
                             // stale valid line) -- next cycle, from cur_set/sel_way,
                             // see DEFERRED VICTIM INVALIDATE -- and issue one burst
-                            // line-fill.
-                            sel_way                        <= victim_c;
-                            inv_a_pend                     <= 1'b1;
-                            ddr3_addr                      <= {7'b0011000, pA_line_base};
-                            ddr3_burstcnt                  <= LINEW[7:0];
-                            ddr3_read                      <= 1'b1;
-                            beat                           <= 0;
-                            fill_to                        <= 0;
-                            fill_failed                    <= 1'b0;
-                            served                         <= 1'b0;   // CWF: not yet emitted
-                            // DUAL bookkeeping: fresh fill, empty serve queue, slot A.
-                            pairing    <= 1'b0;  ifb_active <= 1'b0;
-                            c2         <= 1'b0;  a_done     <= 1'b0;  served_b <= 1'b0;
-                            sv_wr      <= 1'b0;  sv_rd      <= 1'b0;  sv_n     <= 2'd0;
-                            state                          <= S_FILL_CMD;
+                            // line-fill (address/burstcount loaded above).
+                            inv_a_pend <= 1'b1;
+                            ddr3_read  <= 1'b1;
+                            state      <= S_FILL_CMD;
                         end else if (pA_wr_fast) begin
                             // FAST write entry (single-beat write-through)
-                            wr_is_hit      <= hit_c;       // update cached word on accept
-                            wr_way         <= hit_way_c;
-                            ddr3_addr      <= {7'b0011000, pA_addr};
-                            ddr3_burstcnt  <= 8'd1;
-                            ddr3_writedata <= pA_dta;
-                            ddr3_write     <= 1'b1;
-                            state          <= S_WR_CMD;
+                            ddr3_write <= 1'b1;
+                            state      <= S_WR_CMD;
                         end else begin
                             state <= S_PROC;               // ADDR_ERR / NOOP / REFRESH
                         end
                     end else begin
-                        // Stage A -> B advance (or bubble): stage A's hit word
-                        // address is on raddr_comb; its bypassed rank word rides
-                        // along for the stage-B touch.
-                        pB_valid <= sA_hit;
-                        pB_set   <= pA_set;
-                        pB_way   <= hit_way_c;
-                        pB_off   <= pA_off;
-                        pB_lru   <= lru_eff;
-                        // Stage T -> A: consume the live source (pk first, then
-                        // skid, then FIFO — order is preserved by the priority).
-                        pA_cmd   <= lu_src_c;
-                        pA_addr  <= lu_src_a;
-                        pA_dta   <= lu_src_d;
+                        // Stage T -> A: consume the live source (skid first, then
+                        // the FIFO — order is preserved by the priority).
                         pA_valid <= lu_src_v;
                         if (lu_src_v) begin
-                            if (pk_valid)      pk_valid <= 1'b0;
-                            else if (sk_valid) sk_valid <= 1'b0;
+                            if (sk_valid) sk_valid <= 1'b0;
                         end else if (!pA_valid) begin
                             state <= S_REQ;   // T and A empty: drain (pB emitted above), refetch
                         end
@@ -853,7 +913,7 @@ module mem_shim_burst #(
                         if (!mem_res_wr_almost_full) begin
                             mem_res_wr_dta <= 64'd0;   // sentinel: synthetic zero
                             mem_res_wr_en  <= 1'b1;
-                            state          <= (pk_valid || sk_valid) ? S_STREAM : S_REQ;
+                            state          <= sk_valid ? S_STREAM : S_REQ;
                         end
                     end
                     else begin
@@ -876,7 +936,7 @@ module mem_shim_burst #(
                 end
                 CMD_WRITE: begin
                     if (cur_aerr) begin
-                        state <= (pk_valid || sk_valid) ? S_STREAM : S_REQ;  // drop sentinel write
+                        state <= sk_valid ? S_STREAM : S_REQ;  // drop sentinel write
                     end else begin
                         wr_is_hit      <= snap_hit;    // update cached word on accept
                         wr_way         <= snap_hit_way;
@@ -887,7 +947,7 @@ module mem_shim_burst #(
                         state          <= S_WR_CMD;
                     end
                 end
-                default: state <= (pk_valid || sk_valid) ? S_STREAM : S_REQ;  // NOOP / REFRESH
+                default: state <= sk_valid ? S_STREAM : S_REQ;  // NOOP / REFRESH
                 endcase
             end
 
@@ -910,15 +970,15 @@ module mem_shim_burst #(
 
             // =================================================================
             // DUAL: the next command is live this cycle (popped on A's acceptance).
-            // Latch it into pk_* (its FIFO valid is 1 cycle only) and present its
-            // set to the tag/LRU RAM (via the stage-T mux — pk takes priority next
-            // cycle so the address holds); decide in S_PEEK2.
+            // Latch it into the skid (its FIFO valid is 1 cycle only) and present
+            // its set to the tag/LRU RAM (via the stage-T mux — the skid takes
+            // priority next cycle so the address holds); decide in S_PEEK2.
             S_PEEK: begin
                 if (mem_req_rd_valid) begin
-                    pk_cmd   <= mem_req_rd_cmd;
-                    pk_addr  <= mem_req_rd_addr;
-                    pk_dta   <= mem_req_rd_dta;
-                    pk_valid <= 1'b1;
+                    sk_cmd   <= mem_req_rd_cmd;
+                    sk_addr  <= mem_req_rd_addr;
+                    sk_dta   <= mem_req_rd_dta;
+                    sk_valid <= 1'b1;
                     state    <= S_PEEK2;
                 end else begin
                     state <= S_FILL_DAT;                           // FIFO empty: single A
@@ -926,30 +986,32 @@ module mem_shim_burst #(
             end
 
             // =================================================================
-            // DUAL: the candidate's (skid- or pk-held) set word is on
-            // tag_rd/lru_rd. Pair it as burst B iff it is a READ MISS to a
-            // DIFFERENT set (so its victim can't collide with A's in-flight way;
-            // also guarantees A's validate never writes B's set word between B's
-            // snapshot and B's validate). Otherwise it stays in its hold register
-            // for S_STREAM to process in order; single A fill.
+            // DUAL: the skid candidate's set word is on tag_rd/lru_rd. Pair it as
+            // burst B iff it is a READ MISS to a DIFFERENT set (so its victim can't
+            // collide with A's in-flight way; also guarantees A's validate never
+            // writes B's set word between B's snapshot and B's validate). Otherwise
+            // it stays in the skid for S_STREAM to process in order; single A fill.
+            // Slot B's DATA registers load whatever the decision (clk_mem retime,
+            // 2026-10-09; same argument as S_STREAM's): ifb_*/fillB_* are read only
+            // behind c2 / inv_b_pend, which only a pair sets, and ddr3_read is 0 in
+            // S_PEEK2 (burst A was accepted on the way in), so ddr3_addr/burstcnt
+            // are not sampled unless the pair raises ddr3_read on this same edge.
             S_PEEK2: begin
-                if ((cand_cmd == CMD_READ) && !hit_c && !cand_aerr && (cand_set != cur_set)) begin
-                    ifb_set    <= cand_set;
-                    ifb_way    <= victim_c;
-                    ifb_off    <= cand_off;
-                    ifb_tag    <= cand_tag;
+                ifb_set       <= cand_set;
+                ifb_way       <= pk_victim_c;
+                ifb_off       <= cand_off;
+                ifb_tag       <= cand_tag;
+                fillB_tags    <= tag_rd;                       // B's validate RMW base
+                fillB_lru     <= lru_rd;
+                served_b      <= 1'b0;
+                ddr3_addr     <= {7'b0011000, cand_line_base};
+                ddr3_burstcnt <= LINEW[7:0];
+                if ((cand_cmd == CMD_READ) && !pk_hit_c && !cand_aerr && (cand_set != cur_set)) begin
                     inv_b_pend <= 1'b1;   // invalidate B's victim next cycle (DEFERRED VICTIM INVALIDATE)
-                    fillB_tags <= tag_rd;                      // B's validate RMW base
-                    fillB_lru  <= lru_rd;
-                    served_b   <= 1'b0;
                     pairing    <= 1'b1;
-                    if (cand_is_sk) sk_valid <= 1'b0;          // candidate consumed
-                    else            pk_valid <= 1'b0;
-                    // issue burst B now (A is already accepted / in flight)
-                    ddr3_addr     <= {7'b0011000, cand_line_base};
-                    ddr3_burstcnt <= LINEW[7:0];
-                    ddr3_read     <= 1'b1;
-                    state         <= S_ISSUE2;
+                    sk_valid   <= 1'b0;                        // candidate consumed
+                    ddr3_read  <= 1'b1;   // issue burst B now (A is already accepted / in flight)
+                    state      <= S_ISSUE2;
                 end else begin
                     state <= S_FILL_DAT;                       // candidate stays held
                 end
@@ -978,7 +1040,7 @@ module mem_shim_burst #(
             // served). raddr_comb presents the queue head; cache_rdata is valid in
             // S_SERVE one cycle later.
             S_FILL_DRN:  state <= (sv_n != 2'd0) ? S_SERVE_ADR
-                                                 : ((pk_valid || sk_valid) ? S_STREAM : S_REQ);
+                                                 : (sk_valid ? S_STREAM : S_REQ);
             S_SERVE_ADR: state <= S_SERVE;
 
             S_SERVE: begin
@@ -990,7 +1052,7 @@ module mem_shim_burst #(
                     // more queued -> next serve; else hand off (S_STREAM if a held
                     // command exists, else S_REQ).
                     state          <= (sv_n > 2'd1) ? S_SERVE_ADR
-                                                    : ((pk_valid || sk_valid) ? S_STREAM : S_REQ);
+                                                    : (sk_valid ? S_STREAM : S_REQ);
                 end
             end
 
@@ -1001,7 +1063,7 @@ module mem_shim_burst #(
             S_WR_CMD: begin
                 if (!ddr3_waitrequest) begin
                     ddr3_write <= 1'b0;
-                    state <= (pk_valid || sk_valid) ? S_STREAM : S_REQ;
+                    state <= sk_valid ? S_STREAM : S_REQ;
                 end
             end
             endcase

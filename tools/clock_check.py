@@ -11,9 +11,10 @@ Exit codes: 0 = no FAIL (WARNs allowed), 1 = FAIL, 2 = missing/unparseable input
 The rules (docs/timing.md "The checks"):
   * hold / removal < 0 inside a domain, at ANY corner -> FAIL. A hold violation does not
     get better at a lower clock rate or a cooler die, so no margin argument rescues it.
-  * setup: clk_dec FAILs below 86 MHz at either slow corner (the same gate as
-    fmax_check.sh, which stays the gate build_release.sh runs); clk_mem WARNs below its
-    90 MHz run rate; every other clock WARNs on negative slack at any corner.
+  * setup: clk_dec FAILs below 86 MHz and clk_mem below its 90 MHz run rate at either
+    slow corner (the same gates as fmax_check.sh, which stays the gate build_release.sh
+    runs; clk_mem was a WARN until the 2026-10-09 retime cleared it on 7 of 7 seeds);
+    every other clock WARNs on negative slack at any corner.
   * recovery < 0 inside a domain -> WARN.
   * A clock missing from POLICY is judged by the generic rules and flagged, so a new PLL
     output is never silently skipped.
@@ -29,7 +30,7 @@ POLICY = {
     "emu|sys_pll|altera_pll_i|general[3].gpll~PLL_OUTPUT_COUNTER|divclk":
         ("clk_dec", "fail_fmax", 86.0),
     "emu|sys_pll|altera_pll_i|general[1].gpll~PLL_OUTPUT_COUNTER|divclk":
-        ("clk_mem", "warn_fmax", 90.0),
+        ("clk_mem", "fail_fmax", 90.0),
     "emu|sys_pll|altera_pll_i|general[0].gpll~PLL_OUTPUT_COUNTER|divclk":
         ("clk_sys", "warn_slack", None),
     "pll_hdmi|pll_hdmi_inst|altera_pll_i|cyclonev_pll|counter[0].output_counter|divclk":
@@ -172,7 +173,8 @@ def selftest():
         ("clean", rows(), []),
         ("clk_dec below 86 MHz", rows({(DEC, "setup"): 12.345 - 1000 / 85.0}), [("FAIL", "clk_dec")]),
         ("clk_dec 87 MHz passes", rows({(DEC, "setup"): 12.345 - 1000 / 87.0}), []),
-        ("clk_mem below 90 MHz warns only", rows({(MEM, "setup"): 11.111 - 1000 / 89.0}), [("WARN", "clk_mem")]),
+        ("clk_mem below 90 MHz fails", rows({(MEM, "setup"): 11.111 - 1000 / 89.0}), [("FAIL", "clk_mem")]),
+        ("clk_mem 91 MHz passes", rows({(MEM, "setup"): 11.111 - 1000 / 91.0}), []),
         ("negative intra hold fails", rows({(SYS, "hold"): -0.05}), [("FAIL", "clk_sys")]),
         ("negative intra removal fails", rows({(SYS, "removal"): -0.01}), [("FAIL", "clk_sys")]),
         ("negative intra recovery warns", rows({(SYS, "recovery"): -0.5}), [("WARN", "clk_sys")]),

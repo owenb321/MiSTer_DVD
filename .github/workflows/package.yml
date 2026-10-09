@@ -117,7 +117,7 @@ jobs:
             exit 1
           fi
           if [ "$(jq -r '.rbf.marginal' "$MAN")" = "true" ] || [ "$(jq -r '.timing.pass' "$MAN")" != "true" ]; then
-            echo "::error::This is a TIMING-MARGINAL build ($(jq -r '.timing.clk_dec_100c_mhz' "$MAN") MHz @100C / $(jq -r '.timing.clk_dec_m40c_mhz' "$MAN") MHz @-40C, gate $(jq -r '.timing.threshold_mhz' "$MAN")). Never ship one — re-roll with tools/seed_sweep.sh."
+            echo "::error::This is a TIMING-MARGINAL build ($(jq -r '.timing.clk_dec_100c_mhz' "$MAN") MHz @100C / $(jq -r '.timing.clk_dec_m40c_mhz' "$MAN") MHz @-40C, gate $(jq -r '.timing.threshold_mhz' "$MAN"); clk_mem $(jq -r '.timing.clk_mem_100c_mhz // "n/a"' "$MAN") / $(jq -r '.timing.clk_mem_m40c_mhz // "n/a"' "$MAN") MHz, gate $(jq -r '.timing.clk_mem_threshold_mhz // "n/a"' "$MAN")). Never ship one — re-roll with tools/seed_sweep.sh."
             exit 1
           fi
 
@@ -170,6 +170,7 @@ jobs:
             + "| commit | `\(.git.sha[0:12])` on `\(.git.branch)`\(if .git.dirty then " **(dirty)**" else "" end) |\n"
             + "| fitter seed | \(.fit.seed) |\n"
             + "| clk_dec Fmax | \(.timing.clk_dec_100c_mhz) MHz @100C / \(.timing.clk_dec_m40c_mhz) MHz @-40C (gate \(.timing.threshold_mhz)) |\n"
+            + "| clk_mem Fmax | \(.timing.clk_mem_100c_mhz // "n/a") MHz @100C / \(.timing.clk_mem_m40c_mhz // "n/a") MHz @-40C (gate \(.timing.clk_mem_threshold_mhz // "n/a")) |\n"
             + "| utilization | ALM \(.fit.alm) · RAM \(.fit.ram_blocks) · DSP \(.fit.dsp_blocks) |\n"
             + "| toolchain | \(.toolchain.quartus) |\n"
             + "| image | `\(.toolchain.image)` |"' incoming/*.rbf.json >> "$GITHUB_STEP_SUMMARY"

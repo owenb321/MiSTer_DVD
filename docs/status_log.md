@@ -22,6 +22,117 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **CLK_MEM RETIME: THE SPECULATIVE POP OFF THE CRITICAL PATH (2026-10-09, ✅ MERGED
+  PR #171; sim-proven, every seed of a 7-seed sweep clears 90 MHz, HW A/B equal to `main`
+  on the rig).** The follow-up PR #157 left open ("retime the
+  speculative-pop cluster").
+  - **Why:** `clk_mem` (90 MHz) closed by placement luck. v0.9.0's SEED 5 cleared by
+    +0.016 ns, the rebase onto PR #169 re-rolled it to 82.67 MHz, and PR #170's 7-seed sweep
+    found 3 seeds at 90 or above, none by more than 0.6 MHz.
+  - **Measured first** (`tools/timing_paths.sh`, now with `TIMING_CLOCK=mem` and the
+    `TIMING_TEMP` the docs already promised): on the v0.9.0 fit all 200 worst intra-`clk_mem`
+    paths at both slow corners started at `sk_valid` or `state.S_PEEK2`.
+    - One comparator served stage A and S_PEEK2 through a `(state == S_PEEK2)` mux whose
+      candidate leg was itself `sk_valid ? sk : pk`. STA therefore timed `sk_valid →
+      cache_valid[] → hit_c → sA_slow → mem_req_rd_en →` the request FIFO, a path S_STREAM
+      never selects.
+    - Behind it, real paths: the stage-A verdict (tag M10K, ~2.5 ns clock-to-out, then a
+      4-way compare) gated ~300 data flops, and `mem_req_rd_en` drove the FIFO's `do_read`
+      across the die.
+    - ★ The worst path was **two LUTs and a 7.9 ns route between adjacent LABs**: routing
+      congestion in the HPS-bridge corner, not logic depth. Fanout and routing demand were
+      the levers. A later fit showed the same thing (below).
+  - **A, in `mem_shim_burst`, output-identical:**
+    - `pk` merged into `sk` (they were never valid together; the bench now asserts that on
+      the old module every cycle), −90 flops.
+    - Two comparators, one per consumer.
+    - Every data register loads on every non-stall streaming cycle (and in S_PEEK2)
+      whatever the verdict; only control flops take it.
+    - `ddr3_addr`/`burstcount`/`writedata` now change while `read`/`write` are low. The
+      Avalon slave ignores that (`ddr_arb` is a combinational pass-through).
+  - **A-only fit (SEED 13): 77.3 MHz.** The verdict cone was gone (≥ +0.7 ns), and the
+    limiter moved INSIDE the request FIFO. Its own M10K reached its own `dout` register one
+    LAB away through a **9.9 ns** route: congestion again.
+  - **B, `dvd/mem_req_prefetch.sv` in `framestore.v`** (the read-side mirror of the existing
+    write-side DVD-FORK RETIME):
+    - A 4-slot queue that pops the FIFO on registered credit and serves the bridge with the
+      FIFO's exact standard-mode contract (valid the cycle after `rd_en`, never eager).
+    - It resets with the FIFO (`rst`), so a soft or watchdog reset flushes both.
+    - Quartus infers the slots as an M10K, with the latched pointer folded into its read
+      address: 3 M10K + ~79 ALM.
+  - **Gates:**
+    - `run_mem_shim.sh --red`:
+      - LOCKSTEP vs `RETIME_BASE`: 0 mismatches in all 4 cwf/dual combos.
+      - The DDR3 port is compared by the Avalon contract.
+      - It fails on a coverage hole in any retimed path: 122 FIFO peeks, 998 skid peeks,
+        22/188 pairs by source, ~1,200 stall and ~1,900 exit captures, 545 write hits.
+      - 4 new RED arms.
+    - `run_mem_prefetch.sh --red`: the contract bench (real `xilinx_fifo_dc`, 54 → 90 MHz)
+      with arms ORDER/EAGER/TPUT/STALE/COUNT. 6 mutations, including the queue on a
+      power-on-only reset. The bridge's suites run through the queue with identical burst
+      sequences.
+    - `run_pts_assoc.sh` and `lint_undriven` are green.
+  - **A+B sweep**, `clk_dec` / `clk_mem` @100 °C / @−40 °C:
+
+    | Seed | `clk_dec` | `clk_mem` |
+    |---|---|---|
+    | 13 | 92.21 / 88.98 | 97.76 / 98.67 |
+    | 1 | 93.02 / 90.46 | 99.57 / 99.38 |
+    | 5 | 91.01 / 88.77 | 94.20 / 95.78 |
+    | 7 | 91.04 / 88.79 | 100.99 / 101.31 |
+    | 9 | 90.40 / 90.15 | 99.36 / 100.95 |
+    | 11 | 93.55 / 90.92 | 99.88 / 102.57 |
+    | **17** | **93.73 / 92.46** | **98.10 / 97.84** |
+
+    - **Every seed clears `clk_mem` by ≥ 4.2 MHz.**
+    - SEED 17 is pinned (the best worst-corner over both clocks). `clock_check` PASS,
+      0 warnings; `clk_mem` intra slack +0.890 ns.
+    - Its worst path is now the verdict into the queue's address stall.
+    - ALM 38,685 (92 %), RAM 529/553.
+    - Build: `releases/DVD_memretime_20261009_2159.rbf`.
+  - **HW A/B** (2026-10-09, on the rig). Control arm first (`main` = PR #170's
+    `DVD_fieldstart_20261009_1511`), then the A+B SEED 13 build, through the same script:
+    - **Pacing:** `pacing_matrix` on ROGER / THE_OFFICE / Thayer, 3 Video Output cells × 2
+      rounds each. 0 drops everywhere; lates equal.
+    - **ROGER's single Progressive late at pickup ~1055** (the accepted PR #142 spot) is in
+      both arms: control 3 of 5 launches, A+B 5 of 5 (interleaved, same pickups 1049–1065).
+      The difference is not significant at this count.
+    - ⚠ **Systematic, small:** per picture, decode time is +0.02–0.07 ms and reference
+      wait +0.02–0.11 ms in all 9 cells (0.1–0.5 %). This is the queue's 2-cycle latency
+      when the FIFO runs dry.
+    - **Soft reset:** 4 menu ↔ title round trips on RINGER_WS (a decoder soft reset each
+      way). They reach the same states as the control, and the picture is clean.
+    - **The pinned SEED 17 build** (the HW rounds above ran SEED 13: same netlist, other
+      placement) was smoked the same day. ROGER, one round of the three cells: the same
+      single Progressive late, otherwise 0, `picmax` equal. 3 menu ↔ title round trips were
+      clean.
+  - **Found, not fixed (pre-existing):** the bridge is on `reset_n` while the FIFO it drains
+    is on framestore's soft `rst`, so `sk`/`pA` can carry a popped command across a soft
+    reset.
+    - Stale read responses are discarded by the epoch compare (`pts_chain_tb`: "stale
+      responses crossed the flush, none delivered").
+    - A stale write lands before framestore's post-reset clear sweeps memory.
+    - Believed benign, not proven. The queue is on the FIFO's side of that line, so it
+      adds nothing to it.
+  - **Decided (user, 2026-10-09):**
+    - **`clk_mem` is a gate.** `fmax_check` FAILs below 90 MHz at either slow corner, as
+      `clk_dec` does below 86.
+      - `clock_check` agrees (`fail_fmax`; selftest 14 arms, the flipped arm caught by
+        reverting it).
+      - `seed_sweep` counts a seed only if both close and ranks on the worst corner over
+        both clocks.
+      - `build_release`'s manifest gains `clk_mem_*` fields, which `package.yml` and
+        `publish_draft.sh` print.
+    - **The dry-run latency stays (deferred, not done).** It costs 0.1–0.5 % decode with
+      lates unchanged, against a fit + sweep + HW round.
+      - The one-line form (`do_read = dn_rd_en && (count != 0 || up_valid)`) would lean on
+        Quartus's read-during-write pass-through in the slot RAM, which sim cannot check.
+      - If pacing ever needs the cycle (F3), the cleaner form is a register copy of the
+        last arriving word (enable = `up_valid`, never the bridge), presented when a pop
+        takes an arriving word. It avoids the RAM read-during-write case, for about 50 ALM.
+  - **Found, not fixed:** `seed_sweep.sh` defaults `FMAX_MIN` to 81 while `fmax_check`'s
+    `clk_dec` gate is 86, so a sweep "PASS" can still fail the build gate. Pre-existing.
+
 - ✅ **STRICT FIRST FIELD (2026-10-08, ✅ MERGED PR #170; ✅ HW-CONFIRMED 2026-10-09 by
   HIL counters and the maintainer's check).** Full note: `docs/field_parity.md` "Strict first field".
   - **Symptom:** on an interlaced raster a picture sometimes came up combed for ~0.5 s and

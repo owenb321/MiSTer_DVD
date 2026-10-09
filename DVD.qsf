@@ -166,6 +166,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/frame_drop_ctl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dec_duty.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/mem_shim.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/mem_shim_burst.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/mem_req_prefetch.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/sys_pll.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/mpg_streamer.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dvd_iso_reader.sv
@@ -1615,4 +1616,12 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   SEED  3: 90.63/87.98 | 89.76/90.29
 # SEED 13 pinned: clears both at both corners, and the best clk_dec of the seven (SEED 11
 # also clears both, with less margin). The sweep wrote SEED 3 here, the last one it fitted.
-set_global_assignment -name SEED 13
+# CLK_MEM RETIME (2026-10-09, PR #171: mem_shim_burst off the stage-A verdict +
+# dvd/mem_req_prefetch.sv on the request FIFO's read side). clk_dec / clk_mem @100C / @-40C:
+#   SEED 13: 92.21/88.98 | 97.76/98.67   SEED  1: 93.02/90.46 | 99.57/99.38
+#   SEED  5: 91.01/88.77 | 94.20/95.78   SEED  7: 91.04/88.79 | 100.99/101.31
+#   SEED  9: 90.40/90.15 | 99.36/100.95  SEED 11: 93.55/90.92 | 99.88/102.57
+#   SEED 17: 93.73/92.46 | 98.10/97.84
+# Every seed clears clk_mem by >= 4.2 MHz (the pre-retime sweep above: 3 of 7 reached 90).
+# SEED 17 pinned: the best worst-corner over both clocks; clock_check PASS (0 fail, 0 warn).
+set_global_assignment -name SEED 17

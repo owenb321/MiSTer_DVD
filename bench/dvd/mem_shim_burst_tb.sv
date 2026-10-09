@@ -116,12 +116,27 @@ module mem_shim_burst_tb;
 `ifndef MSB_DUAL
  `define MSB_DUAL 0
 `endif
+    // -DMSB_PREFETCH (2026-10-09): drain the FIFO model through dvd/mem_req_prefetch.sv,
+    // as framestore does in the core; every check below must still hold.
+`ifdef MSB_PREFETCH
+    wire [87:0] pf_dout;
+    wire        pf_en, pf_valid;
+    mem_req_prefetch #(.W(88), .D(4)) pf (
+        .clk(clk), .rst(rst_n),
+        .up_rd_en(req_en), .up_valid(req_valid), .up_dout({req_cmd, req_addr, req_dta}),
+        .dn_rd_en(pf_en), .dn_valid(pf_valid), .dn_dout(pf_dout));
+`endif
     mem_shim_burst #(.ASSOC(`MSB_ASSOC), .NSETS(`MSB_NSETS)) dut (
         .clk(clk), .rst_n(rst_n), .hard_rst_n(rst_n),
         .cwf_en(1'b`MSB_CWF),
         .dual_en(1'b`MSB_DUAL),
+`ifdef MSB_PREFETCH
+        .mem_req_rd_cmd(pf_dout[87:86]), .mem_req_rd_addr(pf_dout[85:64]), .mem_req_rd_dta(pf_dout[63:0]),
+        .mem_req_rd_en(pf_en), .mem_req_rd_valid(pf_valid),
+`else
         .mem_req_rd_cmd(req_cmd), .mem_req_rd_addr(req_addr), .mem_req_rd_dta(req_dta),
         .mem_req_rd_en(req_en), .mem_req_rd_valid(req_valid),
+`endif
         .mem_res_wr_dta(res_dta), .mem_res_wr_en(res_en), .mem_res_wr_almost_full(res_almost_full),
         .ddr3_addr(ddr_addr), .ddr3_burstcnt(ddr_burstcnt),
         .ddr3_read(ddr_read), .ddr3_write(ddr_write),

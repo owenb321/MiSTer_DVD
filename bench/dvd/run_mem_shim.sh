@@ -55,6 +55,15 @@ done
 # CYCLE-exact -- every functional port plus the FSM state, every cycle, identical inputs -- against the module as
 # it was before the deferred-victim-invalidate retime. The reference is built from git
 # at RETIME_BASE (a commit on main), renamed, so no 1,100-line frozen copy is checked in.
+# The DDR3 address/burstcount are compared while read|write is high and writedata while
+# write is high (the Avalon contract; the 2026-10-09 speculative-pop retime loads them
+# while idle). It also fails on a coverage hole: any retimed path the stimulus never hit.
+# The request-FIFO queue (dvd/mem_req_prefetch.sv) is outside this module and has its own
+# gate: bench/dvd/run_mem_prefetch.sh.
+# ⚠ The coverage block in mem_shim_ab_tb.sv reads the REFERENCE's internals by name
+# (pk_valid, sA_slow, pA_rd_miss, pA_wr_fast). pk_valid is gone since the pk->sk merge
+# (691288a): moving RETIME_BASE past it means dropping cv_both / cv_peek_pk /
+# cv_pk_consume, or re-pointing those counters at the new names.
 # ⚠ This arm pins one intended-no-op change. A later change to mem_shim_burst that is
 # MEANT to alter timing will fail it: move RETIME_BASE to that change's parent, or drop
 # the arm, and say which in the commit.
@@ -95,6 +104,16 @@ if git cat-file -e "$RETIME_BASE:dvd/mem_shim_burst.sv" 2>/dev/null; then
         red "site-B wrong way" 's/if (inv_b_pend) cache_valid\[ifb_set\]\[ifb_way\]/if (inv_b_pend) cache_valid[ifb_set][ifb_way+1'"'"'b1]/' 'ifb_way+1'
         red "guard alive"      's/^            inv_a_pend <= 1.b0;$/            inv_a_pend <= inv_a_pend; \/\/ MUT/' 'MUT' \
             "deferred invalidate pending"
+        # The speculative-pop retime (2026-10-09): data loads moved off the verdicts and
+        # the DDR3 compare honours the Avalon contract. Each arm must still be caught.
+        red "addr under read"  '/^            S_FILL_CMD: begin$/a\                ddr3_addr <= ddr3_addr ^ 29'"'"'d8; // MUT' 'MUT' \
+            "LOCKSTEP MISMATCH"
+        red "exit keeps pA"    's/^                        pA_valid     <= 1.b0;$/                        pA_valid     <= pA_valid; \/\/ MUT/' 'MUT' \
+            "LOCKSTEP MISMATCH"
+        red "A reads cand set" 's/^    wire \[ASSOC-1:0\]  a_valid = cache_valid\[pA_set\];/    wire [ASSOC-1:0]  a_valid = cache_valid[cand_set]; \/\/ MUT/' 'MUT' \
+            "LOCKSTEP MISMATCH"
+        red "no beat reset"    's/^                    beat           <= 0;                    \/\/ fresh fill/                    \/\/ MUT beat reset dropped/' 'MUT' \
+            "LOCKSTEP MISMATCH"
     fi
 else
     echo "== LOCKSTEP: SKIPPED -- RETIME_BASE $RETIME_BASE not in this clone's history"

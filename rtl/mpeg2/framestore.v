@@ -384,6 +384,20 @@ module framestore(rst, clk, mem_clk,
     );
 
   
+  /* DVD-FORK RETIME (clk_mem, 2026-10-09): READ-side mirror of the write-side
+   * retime above. The DDR3 bridge's pop (mem_req_rd_en) is combinational from its
+   * stage-A cache verdict; straight into this FIFO it drove do_read (read pointer,
+   * empty, the 88-bit dout enable, the M10K address stall) across the die, a third
+   * of the worst clk_mem paths on the v0.9.0 fit. dvd/mem_req_prefetch.sv is a
+   * 4-slot queue (inferred as a small M10K) that pops the FIFO on registered credit and serves the
+   * bridge with the SAME standard-mode contract (valid the cycle after rd_en, never
+   * eager), so the bridge is unchanged. It is reset with this FIFO (rst), so a
+   * watchdog or soft reset flushes both together. Cost: 2 clk_mem cycles of latency
+   * only when the queue runs dry; throughput unchanged (1 word/cycle). */
+  wire          [87:0]mem_req_fifo_dout;
+  wire                mem_req_fifo_rd_en;
+  wire                mem_req_fifo_valid;
+
   /* memory request fifo */
   fifo_dc 
     #(.addr_width(MEMREQ_DEPTH),
@@ -400,12 +414,24 @@ module framestore(rst, clk, mem_clk,
     .overflow(mem_req_wr_overflow), 
     .prog_full(mem_req_wr_almost_full), 
     .rd_clk(mem_clk), 
-    .dout({mem_req_rd_cmd, mem_req_rd_addr, mem_req_rd_dta}), 
-    .rd_en(mem_req_rd_en), 
+    .dout(mem_req_fifo_dout),                                 /* DVD-FORK RETIME (read side) */
+    .rd_en(mem_req_fifo_rd_en), 
     .empty(), 
-    .valid(mem_req_rd_valid), 
+    .valid(mem_req_fifo_valid),  
     .underflow(), 
     .prog_empty()
+    );
+
+  /* DVD-FORK RETIME (read side): see above. */
+  mem_req_prefetch #(.W(88), .D(4)) mem_req_prefetch (
+    .clk(mem_clk),
+    .rst(rst),
+    .up_rd_en(mem_req_fifo_rd_en),
+    .up_valid(mem_req_fifo_valid),
+    .up_dout(mem_req_fifo_dout),
+    .dn_rd_en(mem_req_rd_en),
+    .dn_valid(mem_req_rd_valid),
+    .dn_dout({mem_req_rd_cmd, mem_req_rd_addr, mem_req_rd_dta})
     );
 
   /*
