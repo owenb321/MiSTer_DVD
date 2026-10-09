@@ -340,10 +340,12 @@ Interlaced — green means an internal raster event fired. Please
 
 ### The picture goes aliased / screen-door after a chapter skip on a CRT
 
-The two interlaced fields can land the wrong way round after an interruption. The core
-corrects this itself, including while a picture is **held** — a disc menu, an authored
-copyright or warning card, a paused frame — which settles within about half a second, so
-you may catch it doing so. Many televisions never show it at all; it depends on the set.
+The two interlaced fields can land the wrong way round after an interruption. A picture
+that is **starting** (a disc load, a jump between a menu and the film, a Video Output switch)
+is placed on the correct fields before it is shown. An interruption mid-play is corrected by
+the core within about half a second, including while a picture is **held** (a disc menu, an
+authored copyright or warning card, a paused frame), so you may occasionally catch it settling.
+Many televisions never show it at all; it depends on the set.
 
 !!! question "CRT owners: please report anything that looks wrong"
     Televisions and scalers differ, and a set's sync separator is what decides whether

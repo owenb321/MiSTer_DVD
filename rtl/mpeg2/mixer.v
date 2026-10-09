@@ -227,8 +227,7 @@ module mixer(
    * two slots and churns on compute-bound content, which the feedback arm's PAR_CONFIRM
    * gate exists to leave alone. */
   reg               start_strict;
-  wire              strict_now          = start_strict;
-  wire              strict_refuse_slot  = interlaced && strict_now && is_frame_top && top_par_mismatch;
+  wire              strict_refuse_slot  = interlaced && start_strict && is_frame_top && top_par_mismatch;
   wire              display_first_pixel = (h_pos == 12'd0) && ((is_frame_top && ~strict_refuse_slot && (v_pos >= disp_v_offset) && (v_pos <= disp_v_offset + 12'd1)) ||
                                                                ((position_in_0 == ROW_X_COL_0) && (v_pos != disp_v_offset) && (v_pos != disp_v_offset + 12'd1)));
   wire              last_pixel_read     = pixel_rd_valid && (position_in == ROW_X_COL_LAST);

@@ -22,6 +22,29 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **STRICT FIRST FIELD (2026-10-08, branch `feature/field-start`; sim-proven RED/GREEN,
+  ⏳ HW-confirm pending).** Full note: `docs/field_parity.md` "Strict first field".
+  - **Symptom:** on an interlaced raster a picture sometimes came up combed for ~0.5 s and
+    then snapped clean, at a mount, a menu↔title jump or a Video Output switch.
+  - **Cause:** a decoder soft reset restarts `resample_addrgen` with `last_image =
+    NO_OUTPUT`, so the corrector's feed-forward arm (`alt_break`) cannot act on the first
+    pickup. The relaxed mixer matcher places the first field on whichever slot comes next
+    (a 50/50 roll per start), and only the feedback arm heals it, `PAR_CONFIRM` (~0.5 s)
+    later. A modeline write re-phases `sync_gen` under flowing content the same way.
+  - **Fix:** the mixer refuses the wrong slot for the first frame-top after a reset or a
+    raster restart (`start_strict`), as a set-top player does. Cost ≤ 1 black field on a
+    screen already black or blanked. Mid-stream frame-tops stay relaxed; the corrector stays
+    as the net for starvation slips.
+  - **Rejected:** a slot-parity detector for raster restarts. A restart that cuts a bottom
+    field short spills its image into the restarted top field, so the slots still alternate
+    while the next frame-top heads for the wrong one (`[11-raster-restart-bot]`).
+  - **Gate:** `run_field_phase.sh --red`: `[1]` with no settle window, `[10]` soft-reset
+    starts, `[11]` raster restarts; mutations S1–S3. `check_field_start_wiring.py`.
+  - **Instrument:** telemetry word 31 = `{1, fb_heals[6:0], strict_waits[7:0]}`.
+  - **Next step:** HIL. Control arm first (a build with the strict term removed), N mounts
+    and menu→title jumps; expect `fb_heals` ≈ N/2 on the control and 0 on the fix, with
+    `strict_waits` ≈ N/2. Then the maintainer's eye on the CRT and on HDMI Weave.
+
 - ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
   NON-LOOP CELL COMMAND (2026-10-08, ✅ MERGED PR #169; HW-CONFIRMED on the rig, A/B
   vs `dev-navsweep`).** These are the two pre-existing core differences

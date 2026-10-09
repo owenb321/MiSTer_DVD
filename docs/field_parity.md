@@ -1,5 +1,13 @@
 # Field-parity re-engage corrector (2026-09-02, repaired 2026-09-03, hold arm 2026-09-04)
 
+> ★ **2026-10-08: a START is now placed correctly, not healed.** The corrector below repairs a
+> misaligned field phase ~0.5 s after it appears. The mixer's **strict first-field placement**
+> now refuses the wrong slot for the first field after a reset or a raster restart, so a
+> mount, a menu↔title jump or a Video Output switch starts aligned from its first field. The
+> corrector stays as the safety net for mid-play slips. See
+> ["Strict first field"](#strict-first-field-2026-10-08) below; status `⏳ HW-confirm pending`
+> (branch `feature/field-start`).
+
 **Status: ✅ RE-ENABLED and ✅ HW-CONFIRMED (2026-09-03, issue #41). Round 1 confirmed the
 analog CRT — "this one seems to always get the fields right on the TV", where PR #40 was a
 coin flip — and exposed an inverted `VGA_F1`; round 2 confirmed that fix
@@ -199,7 +207,9 @@ next pickup — an oscillation that never converges.
 ### Rejected alternatives
 
 - **Strict mixer matching** (revert the relaxed matcher): re-introduces the black-field
-  regression on every legitimate 3:2/drop alternation break.
+  regression on every legitimate 3:2/drop alternation break. (Strictness for the FIRST
+  frame-top after a start only is a different design, and it shipped 2026-10-08: see
+  ["Strict first field"](#strict-first-field-2026-10-08).)
 - **A flush-driven discontinuity flag** (arm the corrector from `vbuf_flush` /
   `mode_switch`): misses the Analog Aspect walk (no flush is issued) and mixer
   underflow slips, and cannot see cold-start luck. The alternation break and the
@@ -374,6 +384,137 @@ queue and misses the frame together — so the churn budget covers both arms.
 `[1]` is the only earlier window that spends it, so `[8]` sits after `[5]` where ~120
 refreshes have elapsed. Moved earlier it would wait the budget out instead of measuring.
 
+## Strict first field (2026-10-08)
+
+**Status: sim-proven RED/GREEN (`run_field_phase.sh --red`); `⏳ HW-confirm pending`, branch
+`feature/field-start`.**
+
+### The symptom, and the hole it came through
+
+On an interlaced raster (CRT, HDMI 480i under Weave) the picture sometimes came up combed or
+"screen-door" for about half a second, then snapped clean. That is the ~0.5 s `PAR_CONFIRM`
+heal above, firing at **starts**:
+
+- A decoder **soft reset** (`dvd/flush_ctl.sv` `soft_flush`: every mount, and every
+  `~keep_vbuf` VM jump, i.e. every menu↔title crossing; the watchdog too) restarts the
+  addrgen with `last_image = NO_OUTPUT`. `alt_break` compares the pending field with
+  `last_image`, so **the feed-forward arm cannot act on the first pickup at all**. The first
+  field lands on whichever slot comes next (the relaxed matcher), a 50/50 roll per start, and
+  only the feedback arm can repair it, `PAR_CONFIRM` refreshes later.
+- A **raster restart** (any modeline register write: a Video Output switch, a PAL/NTSC walk, a
+  film or 240p walk) re-phases `sync_gen` under content that keeps flowing. The mode switch's
+  `sw_blank` (`dvd/mode_realign.sv`) clears at the first new pickup, which is *before* the
+  0.5 s heal, so that blip was visible too.
+
+### What a set-top box does, and why this is not the rejected "strict mixer matching"
+
+A set-top player's display is pulled by vsync from a frame buffer. At each vsync it knows the
+parity of the coming field and shows that field of the current frame. When a sequence starts on
+the wrong polarity it waits (or repeats) up to one field, so it never places a field on the
+wrong slot. Upstream's strict matcher was not wrong to be strict at a start. It was wrong to be
+strict **everywhere**: mid-stream, a 3:2/drop alternation break then emits a black field. This
+fork's display is pushed through a FIFO rather than pulled, so the parity of a stream is
+decided by when its first field reaches the queue. The fix makes that one decision correctly
+and leaves every later frame-top relaxed.
+
+### The fix (`rtl/mpeg2/mixer.v`, `rtl/mpeg2/mpeg2video.v`)
+
+- `start_strict`: set by `~rst` (dot_rst, so every reset of the data path) and by
+  `raster_restart`; cleared by the first frame-top the mixer accepts.
+- While it is set and the raster is `interlaced`, `display_first_pixel` refuses a frame-top
+  slot of the wrong parity (`strict_refuse_slot`). The parity test is `top_par_mismatch`, the
+  SAME wire that feeds `frame_top_par_err`, so the placement and the corrector's verdict cannot
+  disagree.
+- The cost is at most **one extra field of black**, on a screen that is black anyway after a
+  soft reset and blanked anyway during a mode switch. The wait is ordinary backpressure: the
+  addrgen parks in `STATE_WAIT` on a full queue, so no pickup is deferred and nothing repeats.
+  The addrgen is untouched, and `alt_break` takes over from the second pickup.
+- `raster_restart` = the regfile's `syncgen_rst` (active-low, one cycle per modeline write)
+  through its own `sync_reset` into `dot_clk`, the same synchroniser `syncgen_intf` uses to
+  reset `sync_gen`. It is duplicated in `mpeg2video.v` rather than exported, so the two benches
+  that instantiate `syncgen_intf` keep their port list.
+- The hold case (a mount whose first content is a several-second warning card or menu still)
+  is fixed for free: the still never lands wrong, so the hold arm has nothing to do.
+
+⛔ **Rejected: a mixer-local "two frame-top slots of the same parity" detector** in place of
+`raster_restart`. A restart that cuts a **bottom** field short spills that field's image into
+the restarted top field, so the slot sequence still alternates while the next frame-top heads
+for the wrong slot. The detector would never fire. `field_phase_tb` `[11-raster-restart-bot]`
+is that case, and it is the arm the S3 mutation fails (15/16 fields misaligned).
+
+⛔ **Never armed by a starve** (`pixel_rd_underflow`). Strict after a starve costs two slots
+and churns on compute-bound content, which is the case `PAR_CONFIRM` exists to leave alone.
+
+### Known limits
+
+- **Mid-stream strictness has no ledger entry.** After a raster restart, a refused slot means
+  the content runs one field (16.7 ms) later than its PTS, once, with no `frame_late` pulse to
+  the drop ledger. A restart happens at user or mount rate, so this was left rather than given a
+  new seam into `resample_addrgen`.
+- **A microsecond race at a Progressive→Interlaced switch.** The walk writes the `interlaced`
+  bit and restarts `sync_gen` a few `clk_dec` cycles apart. A frame-top accepted in that gap
+  would clear `start_strict` on the old raster. The window is microseconds in a 16.7 ms field,
+  and `par_fb` nets it.
+- **Starvation slips mid-play** are still healed by the feedback arm (~0.5 s), as before. A
+  set-top box avoids them by pulling fields at each vsync, which would be a display-path
+  rework.
+
+### The corrector still matters
+
+- `alt_break` (feed-forward) remains the primary tool mid-stream. A seek or a cell boundary
+  that starts a GOP on the "wrong" `tff` breaks content alternation with no reset, so the mixer
+  is relaxed. Strictness there would show black; `alt_break` inserts the opposite field of the
+  held frame, which is the set-top "repeat at its own parity" behaviour.
+- `par_fb` and the hold arm become a safety net. The only known source left is a starvation
+  slip, which without them persists until the next reset: the "stays broken indefinitely"
+  failure in issue #41.
+
+### Gate — `bench/dvd/run_field_phase.sh --red`
+
+`field_phase_tb` now models the decoder soft reset apart from the raster's hard reset (`srst`
+drives resample, the framestore reader, pixel_queue, the mixer's data path and the parity CDC;
+`sync_gen` and the mixer's sync line stay on `rst`), and models a modeline write as
+`raster_rst` on `sync_gen` alone.
+
+- `[1-cold-start]` has **no settle window** (`start_clean`). Every field from the first one
+  displayed must land on its own parity, none may repeat, and none may be a partial head. It
+  used to allow `SETTLE_FB` fields for the feedback arm.
+- `[10-soft-reset-a/b]`: two soft-reset starts released one field period apart, so one of them
+  heads for the wrong slot whatever `+phase` is. Non-vacuity reads the mixer's `strict_waits`,
+  which counts a mismatched slot even when a mutation removes the refusal.
+- `[11-raster-restart-top/bot]`: a restart mid-top field and mid-bottom field under flowing
+  content. The window starts at the first clean field head after the restart.
+- `+start_only` runs `[1]`, `[10]` and `[11]` alone (~3 minutes for both phases), which is what
+  the mutation sweep uses:
+
+| mutation | what it breaks | caught by |
+|---|---|---|
+| S1 | the strict term removed from `display_first_pixel` | `[1]`/`[10]` MISALIGNED (16/16) |
+| S2 | `start_strict` never armed by a reset | `[1]`/`[10]` MISALIGNED |
+| S3 | the `raster_restart` arm removed | `[11-raster-restart-bot]` 15/16 misaligned |
+
+S1 reproduces the coin flip exactly: on each `+phase` arm one of the two soft-reset starts
+lands misaligned, and `[1]` lands misaligned on `+phase=1`, matching the RED table in "Proof"
+above.
+
+### Telemetry — word 31, so the HW gate is a count
+
+`dvd/dvd_telem.sv` word 31 = `{1, fb_heals[6:0], strict_waits[7:0]}`; `dvd_ctl.cpp` emits
+`fb_heals` / `strict_waits` and `tools/mister.py telem` prints "field parity: feedback heals N
+strict first-field waits M".
+
+- `fb_heals` counts the corrector's feedback insertions (`par_slip && par_fb`, or
+  `par_hold_ins`). Each one is a ~0.5 s misaligned stretch that was then healed. The addrgen
+  exports a one-cycle `par_heal` pulse and `mpeg2video.v` counts it on `hard_rst`, because the
+  addrgen itself resets on every soft reset, the very event being measured.
+- `strict_waits` counts frame-top slots the strict placement refused. It is on the mixer's
+  `hard_rst`.
+- Bit 15 is a FORMAT bit: a core built before the word answers 0 there, which must read as
+  "absent", not "zero heals". Word 31 is the last index the 5-bit word counter reaches, so a
+  further word needs a wider counter, not a new index.
+- The expected HW reading over N starts: `strict_waits` ≈ N/2 and `fb_heals` = 0. A control
+  build without the strict term reads `fb_heals` ≈ N/2.
+
 ## Consequences for the HW symptom
 
 - Chapter skip / FF / seek: the feed-forward guard aligns the first field of the new
@@ -386,6 +527,8 @@ refreshes have elapsed. Moved earlier it would wait the budget out instead of me
   now heals ~0.5 s in (`PAR_CONFIRM`) instead of staying wrong for the whole hold. A
   mount whose first content is a several-second still — the case that made this look
   disc-specific — is the one that needed it.
+- Mount, menu↔title jumps and Video Output switches (2026-10-08): start aligned from their
+  first field (strict first-field placement), so the ~0.5 s heal no longer shows there.
 
 ## ★ A SECOND, INDEPENDENT AXIS: WHICH SOURCE FIELD IS THE *FIRST INSTANT*
 
@@ -660,8 +803,13 @@ resume.
 
 ## Files
 
-- `rtl/mpeg2/mixer.v` — `frame_top_par_err` output (verdict register only; matcher
-  untouched)
+- `rtl/mpeg2/mixer.v` — `frame_top_par_err` output (verdict register only); since
+  2026-10-08 also `start_strict` / `strict_refuse_slot` / `top_par_mismatch` (the strict
+  first-field placement), the `interlaced` and `raster_restart` inputs, and `strict_waits`
+- `rtl/mpeg2/mpeg2video.v` — `dot_syncgen_sreset` (the restart's own synchroniser), the
+  `fb_heals` counter, and the `dbg_fb_heals` / `dbg_strict_waits` outputs to telemetry word 31
+- `tools/check_field_start_wiring.py` — the seams no module bench can see (mixer inputs,
+  the restart synchroniser, word 31's packing in `dvd/emu.sv`, Main's reader)
 - `rtl/mpeg2/mpeg2video.v` — gate + `sync_reg` CDC + routing
 - `rtl/mpeg2/resample.v` — pass-through
 - `dvd/resample_addrgen.v` — the corrector (`alt_break` / `par_fb` / `par_armed` /

@@ -17,6 +17,8 @@
 //       driven with a distinct value, so a swapped or unwired word cannot pass.
 //   [7] words 21..24: the PIC_MAGIC marker and dec_duty's per-picture words, in
 //       order, with word 16 still DD01 (an older Main keys on it).
+//   [8] words 25..31: AUD_MAGIC, the audio engine's words, and word 31 field_par
+//       (docs/field_parity.md "Strict first field") -- the LAST word wcnt can reach.
 //============================================================================
 module dvd_telem_tb;
     reg clk = 0;
@@ -37,9 +39,12 @@ module dvd_telem_tb;
     reg [15:0] sched_flags = 16'hB4B4, sched_dur = 16'hB5B5;
     reg [15:0] dec_disp = 16'hC1C1, dec_starve = 16'hC2C2, dec_back = 16'hC3C3, dec_ref = 16'hC4C4;
     reg [15:0] pic_max = 16'hD1D1, pic_n = 16'hD2D2, pic_over = 16'hD3D3;
+    reg [15:0] dts_flags = 16'hE1E1, eng_frames = 16'hE4E4, eng_refused = 16'hE5E5;
+    reg [31:0] cb_sum = 32'hE2E2_E3E3;
+    reg [15:0] field_par = 16'hF1F1;
 
     integer errors = 0;
-    reg [15:0] got [0:24];
+    reg [15:0] got [0:31];
 
     // CMD_AF inputs. Tied off explicitly: a new INPUT left unconnected floats Z
     // and quietly poisons whatever reads it (see CLAUDE.md's note on new ports).
@@ -59,6 +64,8 @@ module dvd_telem_tb;
         .sched_flags(sched_flags), .sched_dur(sched_dur),
         .dec_disp(dec_disp), .dec_starve(dec_starve), .dec_back(dec_back), .dec_ref(dec_ref),
         .dec_pic_max(pic_max), .dec_pic_n(pic_n), .dec_pic_over(pic_over),
+        .dts_flags(dts_flags), .cb_sum(cb_sum), .eng_frames(eng_frames), .eng_refused(eng_refused),
+        .field_par(field_par),
         .af_passthru(af_pt), .af_pcm_session(af_pcm), .af_bs_session(af_bs),
         .rq_eject_tgl(rq_ej), .rq_volup_seq(rq_up), .rq_voldn_seq(rq_dn));
 
@@ -85,7 +92,7 @@ module dvd_telem_tb;
                 drops = 16'hDDDD; vid_err = 16'hEEEE;
                 repeat (100) @(negedge clk);    // let the sampler walk every source (3*NSRC = 72 cycles)
             end
-            for (i = 1; i <= 24; i = i + 1) begin
+            for (i = 1; i <= 31; i = i + 1) begin
                 strobe(16'd0);
                 got[i] = dout;
                 if (drive) drove = 1;
@@ -229,6 +236,18 @@ module dvd_telem_tb;
         pic_over = 16'h0202; repeat (100) @(negedge clk);
         run_xact(16'h007A, 1'b0, drove);
         check("pic_over follows its input", got[24], 16'h0202);
+
+        $display("[8] words 25..31: AUD_MAGIC, the audio engine, field_par");
+        check("AUD_MAGIC",   got[25], 16'hDD03);
+        check("dts_flags",   got[26], 16'hE1E1);
+        check("cb_sum hi",   got[27], 16'hE2E2);
+        check("cb_sum lo",   got[28], 16'hE3E3);
+        check("eng_frames",  got[29], 16'hE4E4);
+        check("eng_refused", got[30], 16'hE5E5);
+        check("field_par",   got[31], 16'hF1F1);
+        field_par = 16'h8102; repeat (100) @(negedge clk);
+        run_xact(16'h007A, 1'b0, drove);
+        check("field_par follows its input", got[31], 16'h8102);
 
         if (errors == 0) $display("dvd_telem_tb: ALL GREEN");
         else             $display("dvd_telem_tb: FAILURES");

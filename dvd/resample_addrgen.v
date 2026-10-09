@@ -46,6 +46,7 @@ module resample_addrgen (
   sched_due, sched_next_due,                        // DVD-FORK (PTS scheduling): from disp_sched
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect): cadence verdicts
   raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
+  par_heal,                                         // DVD-FORK (field start telemetry): one pulse per FEEDBACK insertion
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
   hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
   still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
@@ -208,6 +209,13 @@ module resample_addrgen (
    * by the corrector at the pickup decision below; qualified there by `interlaced`, so
    * a progressive display never acts on it. Field-rate level, CDC-safe. */
   input              raster_par_err;
+  /* DVD-FORK (field start telemetry, 2026-10-08): one clk pulse per FEEDBACK insertion --
+   * the pickup arm's (par_slip && par_fb) or the hold arm's (par_hold_ins), the two events
+   * that reset par_age. Each is a ~0.5 s misaligned stretch that was then healed. Counted
+   * in mpeg2video.v on hard_rst, because this module resets on every soft reset and the
+   * soft reset is exactly the start the count exists to measure (telemetry word 31,
+   * docs/field_parity.md "Strict first field"). */
+  output reg         par_heal;
 
   /* DVD-FORK (CRT anamorphic VERTICAL scaler, 2026-07-05): display-mode select for
    * the 4:3-CRT 16:9 handling. 0 = FIT (bypass — bit-identical to the pre-scaler
@@ -753,6 +761,10 @@ module resample_addrgen (
       if ((par_slip && par_fb) || par_hold_ins)    par_age <= 8'd0;
       else if (refresh_done && (par_age != PAR_HOLD)) par_age <= par_age + 8'd1;
     end
+
+  always @(posedge clk)
+    if (~rst) par_heal <= 1'b0;
+    else      par_heal <= clk_en && ((par_slip && par_fb) || par_hold_ins);
 
   reg par_late_r;                      // hand the inserted refresh to the frame-drop ledger (cad_late_r pattern)
   /* ⚠ par_slip ONLY — a hold insertion must NOT pulse frame_late. The addrgen free-runs

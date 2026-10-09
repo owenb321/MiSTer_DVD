@@ -700,6 +700,13 @@ game discs plus a seeded random 100; numbers and method in
 which would give auto 16:9 switching on PAL widescreen CRTs.
 **⛔ by decision 2026-10-01:** UOP enforcement, APS (Macrovision) and CGMS-A.
 
+### 🔧 Strict first field: a start lands on its own raster slot (2026-10-08, sim-proven, ⏳ HW-confirm pending — `docs/field_parity.md` "Strict first field")
+
+- [x] Mixer refuses the wrong slot for the first frame-top after a reset or a raster restart
+      (`start_strict`); `field_phase_tb` `[1]`/`[10]`/`[11]` with no settle window, mutations S1–S3.
+- [x] Telemetry word 31 (`fb_heals`, `strict_waits`), Main reader, `mister.py telem`.
+- ⏳ HIL: control arm, then N mounts / menu→title jumps / Video Output switches; `fb_heals` = 0.
+
 ### ✅ .BUP fallback when an IFO is unreadable (2026-10-06, ✅ MERGED PR #163; fabric ✅ HW-CONFIRMED A/B vs `main`, Main mirror ✅ HW on a physical disc — see `docs/dvd_nav.md` "IFO header gate and .BUP fallback")
 
 The 3rd-edition audit's item 8. Two layers (user decision, 2026-10-06):

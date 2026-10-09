@@ -63,6 +63,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              dbg_lines_displayed, dbg_first_vpos, dbg_last_vpos,   // DVD-FORK DEBUG (256-line strobe)
              dbg_prof0, dbg_prof1, dbg_prof2, dbg_prof3,           // DVD-FORK DEBUG (dec_duty, docs/decode_pacing.md)
              dbg_pic_max, dbg_pic_n, dbg_pic_over,             // DVD-FORK DEBUG (dec_duty per picture)
+             dbg_fb_heals, dbg_strict_waits,                   // DVD-FORK (field start telemetry, word 31)
              cc_pair_valid, cc_pair, cc_pair_field,               // DVD-FORK (line-21 CC): EIA-608 pairs from user_data (clk domain)
              vertical_size_out,                                   // DVD-FORK FIX (PAL auto-detect): sequence-header frame height
              horizontal_size_out,                                 // DVD-FORK (CRT anamorphic overlay align): sequence-header frame width
@@ -162,6 +163,13 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   output     [15:0]dbg_pic_max;          // longest picture decode in the last 0.83 s window, cycles/4096
   output     [15:0]dbg_pic_n;            // pictures decoded (wraps)
   output     [15:0]dbg_pic_over;         // ... that took longer than one frame period (wraps)
+  /* DVD-FORK (field start telemetry, 2026-10-08; docs/field_parity.md "Strict first field"):
+   * telemetry word 31. Both wrap and both are HARD-reset only, so they count across the
+   * soft resets they exist to measure. dbg_fb_heals (clk): the field-parity corrector's
+   * feedback insertions. dbg_strict_waits (dot_clk): frame-top slots the mixer's strict
+   * first-field placement refused. dvd_telem's two-agree sampler takes both raw. */
+  output reg  [7:0]dbg_fb_heals;
+  output      [7:0]dbg_strict_waits;
   /* DVD-FORK FIX (PAL auto-detect): the decoded frame's vertical_size from the MPEG-2
    * sequence header (clk domain). 480 => NTSC, 576 => PAL. emu derives a 1-bit PAL flag
    * and CDC's it to clk_sys to drive the modeline + av_sync + interlace selection. */
@@ -885,6 +893,11 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * A field-rate level (holds until the next displayed frame-top), so a plain 2-FF
    * synchronizer is safe. */
   wire       raster_par_err;
+  wire       par_heal;                      // DVD-FORK (field start telemetry): resample_addrgen, one pulse per feedback insertion
+  always @(posedge clk)
+    if (~hard_rst)     dbg_fb_heals <= 8'd0;
+    else if (par_heal) dbg_fb_heals <= dbg_fb_heals + 8'd1;
+  assign dbg_strict_waits = dot_strict_waits;
   sync_reg #(.width(1))  sync_raster_par_err          (clk, sync_rst, dot_frame_top_par_err && dot_interlaced, raster_par_err);
 
   /* flush video buffer */
@@ -1699,6 +1712,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .film_det_ntsc(film_det_ntsc),                           // DVD-FORK (Film 24p auto-detect)
     .film_det_pal(film_det_pal),
     .raster_par_err(raster_par_err),                         // DVD-FORK (field-parity corrector): mixer verdict, synced
+    .par_heal(par_heal),                                     // DVD-FORK (field start telemetry): one pulse per feedback insertion
     .vscale_mode(disp_vscale_mode),                          // DVD-FORK (CRT anamorphic vscale)
     .hcrop_en(disp_hcrop_en),                               // DVD-FORK (CRT anamorphic horizontal crop)
     /* DVD-FORK (pause field still): always enabled in the core (benches tie it 0 to get

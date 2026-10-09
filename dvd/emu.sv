@@ -1213,6 +1213,10 @@ wire [31:0] cb_sum_seen;
 wire [15:0] eng_frames_w, eng_refused_w;
 wire  [4:0] eng_last_err_w;
 wire        dts_active_w;
+// telemetry word 31 (docs/field_parity.md "Strict first field"): the field-parity
+// corrector's feedback heals (clk_dec) and the mixer's strict first-field waits (dot clk),
+// both hard-reset-only wrapping counts out of mpeg2video. Declared ahead of the telem.
+wire  [7:0] core_fb_heals, core_strict_waits;
 
 // player_regs' "the disc prohibits EVERY region" flag (SPRM20 then falls back to region
 // 1): telemetry word 14 bit 9, so the fallback is never silent. Declared ahead of the
@@ -1258,6 +1262,9 @@ dvd_telem dvd_telem_inst (
     .cb_sum       (cb_sum_seen),
     .eng_frames   (eng_frames_w),
     .eng_refused  (eng_refused_w),
+    // word 31: bit 15 is a FORMAT bit (a core without the word answers 0), then the two
+    // counts. fb_heals keeps its low 7 bits: a delta is all the host takes.
+    .field_par    ({1'b1, core_fb_heals[6:0], core_strict_waits}),
     // CMD_AF: what the audio wire is really carrying, so Main can put the ADV7513
     // into PCM mode for an LPCM/MP2 track in Passthru.
     .af_passthru    (pass_mode),
@@ -5556,6 +5563,8 @@ mpeg2video mpeg2video_inst (
     .dbg_pic_max     (core_pic_max),     // longest picture decode, last window (telemetry word 22)
     .dbg_pic_n       (core_pic_n),       // pictures decoded (word 23)
     .dbg_pic_over    (core_pic_over),    // ... over one frame period (word 24)
+    .dbg_fb_heals    (core_fb_heals),    // field-parity feedback heals (word 31)
+    .dbg_strict_waits(core_strict_waits),// strict first-field waits (word 31)
     // DVD-FORK (line-21 CC): EIA-608 pairs sniffed from user_data, in clk_dec.
     // They cross to clk_sys inside dvd/cc_line21.sv's own fifo_dc.
     .cc_pair_valid     (core_cc_valid),

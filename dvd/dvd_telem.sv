@@ -65,6 +65,15 @@
 //     word 27 cb_sum[31:16]  word 28 cb_sum[15:0] -- the copy's checksum (D4 rule 2)
 //     word 29 eng_frames     -- frames the engine decoded (AC-3 + DTS, wraps)
 //     word 30 eng_refused    -- frames it refused (wraps)
+//     word 31 field_par      -- {1, fb_heals[6:0], strict_waits[7:0]} (docs/field_parity.md
+//                               "Strict first field"). Bit 15 is a FORMAT bit, not data: a
+//                               core built before this word answers 0 here, which a Main
+//                               must not read as "zero heals". fb_heals = the field-parity
+//                               corrector's FEEDBACK insertions (the ~0.5 s heal), strict_waits
+//                               = frame-top slots the mixer's strict first-field placement
+//                               refused. Both wrap and survive soft resets (hard_rst only).
+//                               ⚠ The LAST word: wcnt is 5 bits and saturates at 31, so a
+//                               further word needs a wider counter, not a new index.
 //   Word 11 is the measurement docs/av_sync.md "THE STC IS A CLOCK" is built
 //   on: the picture on SCREEN against the clock the audio is scheduled by. It
 //   is ~0 when the display is scheduled by PTS (Stage 1) and reads the whole
@@ -147,6 +156,7 @@ module dvd_telem #(
     input  [31:0] cb_sum,                // words 27, 28
     input  [15:0] eng_frames,            // word 29
     input  [15:0] eng_refused,           // word 30
+    input  [15:0] field_par,             // word 31: {1, fb_heals[6:0], strict_waits[7:0]}
 
     // --- audio link format (CMD_AF) -------------------------------------
     // What the wire is actually carrying, which is NOT what the OSD bit says: in
@@ -190,7 +200,7 @@ module dvd_telem #(
     // registered-sample commit (never the raw asynchronous input), 1/3 the
     // flops. The atomic snapshot below is untouched: q[] is latched together
     // on the command strobe exactly as the 19 outputs were.
-    localparam int NSRC = 29;
+    localparam int NSRC = 30;
     wire [15:0] src [0:NSRC-1];
     assign src[0]  = refreshes;
     assign src[1]  = pickups;
@@ -233,6 +243,7 @@ module dvd_telem #(
     assign src[26] = cb_sum[15:0];
     assign src[27] = eng_frames;
     assign src[28] = eng_refused;
+    assign src[29] = field_par;
 
     reg  [4:0]  cur;                        // source being sampled
     reg  [1:0]  sph;                        // 0: sample A, 1: sample B, 2: compare+commit
@@ -268,6 +279,7 @@ module dvd_telem #(
     wire [15:0] s_pmax    = q[21], s_pn      = q[22], s_pover = q[23];
     wire [15:0] s_dflags  = q[24], s_sumhi   = q[25], s_sumlo = q[26];
     wire [15:0] s_efr     = q[27], s_eref    = q[28];
+    wire [15:0] s_fpar    = q[29];
 
     reg  [4:0] wcnt;
     reg        active;
@@ -275,7 +287,7 @@ module dvd_telem #(
 
     // the atomic snapshot
     reg [15:0] q1, q2, q3, q4, q5, q6, q7, q8, q9, q10, q11, q12, q13, q14, q15;
-    reg [15:0] q17, q18, q19, q20, q22, q23, q24, q26, q27, q28, q29, q30;
+    reg [15:0] q17, q18, q19, q20, q22, q23, q24, q26, q27, q28, q29, q30, q31;
     reg [15:0] q_afmt;
     reg        af_sel;
 
@@ -316,6 +328,7 @@ module dvd_telem #(
                 q28 <= s_sumlo;
                 q29 <= s_efr;
                 q30 <= s_eref;
+                q31 <= s_fpar;
                 q_afmt <= s_afmt;
                 dout_r <= MAGIC;
             end else begin
@@ -352,6 +365,7 @@ module dvd_telem #(
                     5'd28:   dout_r <= q28;
                     5'd29:   dout_r <= q29;
                     5'd30:   dout_r <= q30;
+                    5'd31:   dout_r <= q31;
                     default: dout_r <= 16'd0;
                 endcase
             end
