@@ -63,6 +63,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              dbg_lines_displayed, dbg_first_vpos, dbg_last_vpos,   // DVD-FORK DEBUG (256-line strobe)
              dbg_prof0, dbg_prof1, dbg_prof2, dbg_prof3,           // DVD-FORK DEBUG (dec_duty, docs/decode_pacing.md)
              dbg_pic_max, dbg_pic_n, dbg_pic_over,             // DVD-FORK DEBUG (dec_duty per picture)
+             dbg_fb_heals, dbg_strict_waits,                   // DVD-FORK (field start telemetry, word 31)
              cc_pair_valid, cc_pair, cc_pair_field,               // DVD-FORK (line-21 CC): EIA-608 pairs from user_data (clk domain)
              vertical_size_out,                                   // DVD-FORK FIX (PAL auto-detect): sequence-header frame height
              horizontal_size_out,                                 // DVD-FORK (CRT anamorphic overlay align): sequence-header frame width
@@ -162,6 +163,13 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   output     [15:0]dbg_pic_max;          // longest picture decode in the last 0.83 s window, cycles/4096
   output     [15:0]dbg_pic_n;            // pictures decoded (wraps)
   output     [15:0]dbg_pic_over;         // ... that took longer than one frame period (wraps)
+  /* DVD-FORK (field start telemetry, 2026-10-08; docs/field_parity.md "Strict first field"):
+   * telemetry word 31. Both wrap and both are HARD-reset only, so they count across the
+   * soft resets they exist to measure. dbg_fb_heals (clk): the field-parity corrector's
+   * feedback insertions. dbg_strict_waits (dot_clk): frame-top slots the mixer's strict
+   * first-field placement refused. dvd_telem's two-agree sampler takes both raw. */
+  output reg  [7:0]dbg_fb_heals;
+  output      [7:0]dbg_strict_waits;
   /* DVD-FORK FIX (PAL auto-detect): the decoded frame's vertical_size from the MPEG-2
    * sequence header (clk domain). 480 => NTSC, 576 => PAL. emu derives a 1-bit PAL flag
    * and CDC's it to clk_sys to drive the modeline + av_sync + interlace selection. */
@@ -587,6 +595,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire             v_sync_mixer;
   wire             pixel_en_mixer;
   wire             dot_frame_top_par_err;   // DVD-FORK (field-parity corrector): mixer frame-top parity verdict (dot_clk level)
+  wire        [7:0]dot_strict_waits;        // DVD-FORK FIX (field start): mixer telemetry, dot_clk domain (wrapping count)
 
   /* osd - yuv2rgb interface */
   wire             pixel_en_osd;            // pixel enable 
@@ -884,6 +893,11 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * A field-rate level (holds until the next displayed frame-top), so a plain 2-FF
    * synchronizer is safe. */
   wire       raster_par_err;
+  wire       par_heal;                      // DVD-FORK (field start telemetry): resample_addrgen, one pulse per feedback insertion
+  always @(posedge clk)
+    if (~hard_rst)     dbg_fb_heals <= 8'd0;
+    else if (par_heal) dbg_fb_heals <= dbg_fb_heals + 8'd1;
+  assign dbg_strict_waits = dot_strict_waits;
   sync_reg #(.width(1))  sync_raster_par_err          (clk, sync_rst, dot_frame_top_par_err && dot_interlaced, raster_par_err);
 
   /* flush video buffer */
@@ -1698,6 +1712,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .film_det_ntsc(film_det_ntsc),                           // DVD-FORK (Film 24p auto-detect)
     .film_det_pal(film_det_pal),
     .raster_par_err(raster_par_err),                         // DVD-FORK (field-parity corrector): mixer verdict, synced
+    .par_heal(par_heal),                                     // DVD-FORK (field start telemetry): one pulse per feedback insertion
     .vscale_mode(disp_vscale_mode),                          // DVD-FORK (CRT anamorphic vscale)
     .hcrop_en(disp_hcrop_en),                               // DVD-FORK (CRT anamorphic horizontal crop)
     /* DVD-FORK (pause field still): always enabled in the core (benches tie it 0 to get
@@ -1871,6 +1886,18 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * (Crop+SIF, qstep 91), both inside disp_hstretch's upscale RATIO CONTRACT. */
   wire [11:0] disp_hdst_w = disp_hfill_en ? 12'd720 : (mb_width << 4); // full raster line width = what a Fit line emits
 
+  /* DVD-FORK FIX (field start, phase 2): the regfile's syncgen_rst (active LOW, one clk
+   * cycle per modeline register write) synchronized to dot_clk — the same sync_reset that
+   * syncgen_intf runs to reset sync_gen, duplicated here rather than exported so the two
+   * benches instantiating syncgen_intf keep their port list. The mixer re-arms its strict
+   * first-field placement on it (docs/field_parity.md "Strict first field"). */
+  wire dot_syncgen_rst_n;
+  sync_reset dot_syncgen_sreset (
+    .clk(dot_clk),
+    .asyncrst(syncgen_rst),
+    .syncrst(dot_syncgen_rst_n)
+    );
+
   /* Mixer */
   mixer mixer (
     .clk(dot_clk), 
@@ -1902,7 +1929,10 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .dbg_first_vpos(dbg_first_vpos),                 // DVD-FORK DEBUG
     .dbg_last_vpos(dbg_last_vpos),               // DVD-FORK DEBUG
     .disp_v_offset(disp_v_offset),                           // DVD-FORK (CRT anamorphic letterbox bar offset)
-    .frame_top_par_err(dot_frame_top_par_err)                // DVD-FORK (field-parity corrector): to the addrgen via sync_raster_par_err
+    .frame_top_par_err(dot_frame_top_par_err),               // DVD-FORK (field-parity corrector): to the addrgen via sync_raster_par_err
+    .interlaced(dot_interlaced),                             // DVD-FORK FIX (field start): strict first-field placement (dot domain already)
+    .raster_restart(~dot_syncgen_rst_n),                     // DVD-FORK FIX (field start): a modeline write is restarting sync_gen
+    .strict_waits(dot_strict_waits)                          // DVD-FORK FIX (field start): telemetry, refused frame-top slots (wraps)
     );
 
   /* On-Screen Display */

@@ -1606,4 +1606,13 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # The sweep wrote SEED 17 here, the last seed it fitted -- the trap recorded above.
 # clk_mem's worst paths on the misses are mem_shim_burst again (cur_addr -> cache_valid on
 # SEED 17), so the next clk_mem retime is the real fix (status_log "clk_mem timing").
-set_global_assignment -name SEED 5
+# FIELD START (2026-10-09, feature/field-start rebased onto PR #169): the strict first-field
+# netlist (rtl/mpeg2/mixer.v start window, telemetry word 31) re-rolled SEED 5: clk_dec
+# 89.21/88.58 held, clk_mem 82.67/83.82 missed 90. Sweep, clk_dec / clk_mem @100C / @-40C:
+#   SEED  9: 90.60/89.47 | 88.67/89.55   SEED  7: 89.02/85.79 | 90.55/91.27 (clk_dec FAIL)
+#   SEED 11: 87.65/86.31 | 90.48/91.71   SEED 13: 90.78/90.56 | 90.51/91.22
+#   SEED 17: 91.50/89.13 | 84.88/86.37   SEED  1: 89.45/86.85 | 79.48/83.27
+#   SEED  3: 90.63/87.98 | 89.76/90.29
+# SEED 13 pinned: clears both at both corners, and the best clk_dec of the seven (SEED 11
+# also clears both, with less margin). The sweep wrote SEED 3 here, the last one it fitted.
+set_global_assignment -name SEED 13

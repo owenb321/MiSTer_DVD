@@ -133,12 +133,15 @@ the display pipeline: the two interlaced fields land the wrong way round after a
 interruption. The core corrects this itself. Not every set shows it in the first place —
 a television with a tolerant sync separator may never see it at all.
 
-The correction also applies **while a picture is being held** — a disc menu, an authored
-copyright or warning card, or a paused frame. A disc that boots straight to a
-several-second warning screen would otherwise show that screen misaligned for its whole
-duration and then play perfectly, because a held picture never delivers a new frame for
-the correction to act on. A held picture straightens itself within about half a second,
-so you may still catch it settling.
+When a picture **starts** — loading a disc, moving between a disc menu and the film, or
+switching Video Output — the core places the first field on the matching line set before
+anything is shown, the way a set-top player does. It may wait one field (1/60 s) of black to do
+so, but the picture starts aligned rather than settling.
+
+During playback, the core still corrects an interruption it could not foresee, such as the
+decoder briefly falling behind. That correction also works **while a picture is being held**:
+a disc menu, an authored copyright or warning card, or a paused frame. It takes about half a
+second, so on rare occasions you may catch a picture settling mid-play.
 
 ### Motion on FMV and laserdisc-style discs
 

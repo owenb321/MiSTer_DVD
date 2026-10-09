@@ -909,6 +909,14 @@ def telem_summary(rows):
     # reading (docs/dvd_nav.md "IFO header gate"; absent on an older core = 0).
     s['ifo'] = {f: max(_flag(x, f) for x in rows)
                 for f in ('bup_vmg', 'bup_vts', 'ifo_nogood')}
+    # Field parity (word 31, docs/field_parity.md "Strict first field"): two wrapping
+    # counters, 7 and 8 bits, pin-reset only, so a window sums its per-row deltas.
+    # fb_heals = the corrector's feedback insertions (each one is ~0.5 s of a misaligned
+    # field phase that was then healed); strict_waits = frame-top slots the mixer refused
+    # to start a field on. Absent on a core without the word.
+    if 'fb_heals' in rows[0]:
+        s['field'] = {k: sum((b[k] - a[k]) & m for a, b in zip(rows, rows[1:]))
+                      for k, m in (('fb_heals', 0x7F), ('strict_waits', 0xFF))}
     # disp_lag / av_drift are [19:4] slices of a wider difference: +-5825 ms is
     # the whole range, so a value near it has probably aliased.
     for k in ('disp_lag_ms', 'av_drift_ms', 'play_err_ms'):
@@ -977,6 +985,10 @@ def telem_print(s):
         p = s['pic']
         print(f"  per picture: longest {p['max_ms']:.1f} ms   over one frame period "
               f"{p['over']}/{p['n']} ({p['over_per_s']:.2f}/s)")
+    if 'field' in s:
+        fp = s['field']
+        print(f"  field parity: feedback heals {fp['fb_heals']}   strict first-field waits "
+              f"{fp['strict_waits']}")
     sc = s['sched']
     print(f"  sched (modal): frc={sc['sched_frc']} ps={sc['sched_ps']} pf={sc['sched_pf']} "
           f"tff={sc['sched_tff']} rff={sc['sched_rff']}   tagged={s['tagged']}")

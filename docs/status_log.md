@@ -22,6 +22,41 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **STRICT FIRST FIELD (2026-10-08, ✅ MERGED PR #170; ✅ HW-CONFIRMED 2026-10-09 by
+  HIL counters and the maintainer's check).** Full note: `docs/field_parity.md` "Strict first field".
+  - **Symptom:** on an interlaced raster a picture sometimes came up combed for ~0.5 s and
+    then snapped clean, at a mount, a menu↔title jump or a Video Output switch.
+  - **Cause:** a decoder soft reset restarts `resample_addrgen` with `last_image =
+    NO_OUTPUT`, so the corrector's feed-forward arm (`alt_break`) cannot act on the first
+    pickup. The relaxed mixer matcher places the first field on whichever slot comes next
+    (a 50/50 roll per start), and only the feedback arm heals it, `PAR_CONFIRM` (~0.5 s)
+    later. A modeline write re-phases `sync_gen` under flowing content the same way.
+  - **Fix:** the mixer refuses the wrong slot for the first frame-top after a reset or a
+    raster restart (`start_strict`), as a set-top player does. Cost ≤ 1 black field on a
+    screen already black or blanked. Mid-stream frame-tops stay relaxed; the corrector stays
+    as the net for starvation slips.
+  - **Rejected:** a slot-parity detector for raster restarts. A restart that cuts a bottom
+    field short spills its image into the restarted top field, so the slots still alternate
+    while the next frame-top heads for the wrong one (`[11-raster-restart-bot]`).
+  - **Gate:** `run_field_phase.sh --red`: `[1]` with no settle window, `[10]` soft-reset
+    starts, `[11]` raster restarts; mutations S1–S3. `check_field_start_wiring.py`.
+  - **Instrument:** telemetry word 31 = `{1, fb_heals[6:0], strict_waits[7:0]}`.
+  - **HW round 1 (2026-10-09):** 15 `RINGER_WS` launches, `fb_heals` control 5 → fix **0**.
+    Video Output switches were improved, not fixed: heals landed 0.54/0.62 s after the
+    switch. A leftover progressive FRAME image spent a one-shot arm, so the arm now covers
+    8 accepted frame-tops (`[12]`, mutation S4). Table in `docs/field_parity.md`.
+  - **HW round 2 (2026-10-09, `DVD_fieldstart_20261009_0454.rbf`):** 15 launches
+    `fb_heals` **0**; 30 Video Output round trips `fb_heals` **0** (control 3 in 10). Two
+    switches took a second strict wait ~0.1 s in, which is the FRAME re-break being refused.
+  - **Rebased onto PR #169 (2026-10-09):** SEED 5 re-rolled (`clk_mem` 82.67/83.82). Seven
+    seeds swept; **SEED 13** clears both: `clk_dec` 90.78/90.56, `clk_mem` 90.51/91.22 →
+    `DVD_fieldstart_20261009_1511.rbf` (`30dab25`, clean). `clock_check` PASS, 1 WARN:
+    `h2f_user0` −0.631 ns at 100 °C inside stock `ascal` (`avl_write_i` → its dpram); new on
+    this seed, an HPS-bridge path in the framework. The HIL rounds ran on the pre-rebase
+    builds; the field-start logic is identical.
+  - **HW-confirmed:** the maintainer checked the `1511` build on hardware (2026-10-09):
+    looks good. ⏳ Not run: a PAL disc (same raster-restart path).
+
 - ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
   NON-LOOP CELL COMMAND (2026-10-08, ✅ MERGED PR #169; HW-CONFIRMED on the rig, A/B
   vs `dev-navsweep`).** These are the two pre-existing core differences

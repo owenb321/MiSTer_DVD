@@ -42,7 +42,10 @@ module mixer(
   y_out, u_out, v_out, osd_out, h_sync_out, v_sync_out, pixel_en_out,
   dbg_lines_displayed, dbg_first_vpos, dbg_last_vpos,             // DVD-FORK DEBUG (256-line strobe probe)
   disp_v_offset,                                                  // DVD-FORK (CRT anamorphic letterbox bar offset)
-  frame_top_par_err                                               // DVD-FORK (field-parity corrector): frame-top landed on the wrong raster field parity
+  frame_top_par_err,                                              // DVD-FORK (field-parity corrector): frame-top landed on the wrong raster field parity
+  interlaced,                                                     // DVD-FORK FIX (field start): the raster is interlaced (strict first-field placement)
+  raster_restart,                                                 // DVD-FORK FIX (field start): the raster generator is being restarted (a modeline write)
+  strict_waits                                                    // DVD-FORK FIX (field start): telemetry, frame-top slots refused by the strict placement
   );
 
   input              clk;                      // clock
@@ -134,6 +137,21 @@ module mixer(
    * 0 there anyway); the consumer additionally gates on its own `interlaced`. */
   output reg         frame_top_par_err;
 
+  /* DVD-FORK FIX (field start, 2026-10-08): the regfile's `interlaced` bit (dot_interlaced,
+   * already synced in mpeg2video.v). Gates the strict first-field placement below, so a
+   * progressive raster is bit-identical. strict_waits: a wrapping count of frame-top slots
+   * that placement refused (telemetry word 31). It is on hard_rst, so it keeps counting
+   * across the soft resets it exists to measure. See docs/field_parity.md "Strict first
+   * field". */
+  input              interlaced;
+  output reg    [7:0]strict_waits;
+  /* DVD-FORK FIX (field start, phase 2): HIGH while the sync generator is held in reset by a
+   * modeline write (regfile syncgen_rst, synced to dot_clk in mpeg2video.v exactly as
+   * syncgen_intf does). A restart re-phases the raster under content that keeps flowing:
+   * a mode switch, a PAL/NTSC walk, a film/240p walk. It re-arms start_strict, so the next
+   * frame-top after the restart is placed on its own slot like the first after a reset. */
+  input              raster_restart;
+
   /* store pixel_queue fifo output */
   reg           [7:0]y_0;
   reg           [7:0]u_0;
@@ -185,7 +203,46 @@ module mixer(
    * line gate are shifted by disp_v_offset (0 in FIT/ZOOM => bit-identical to upstream's
    * v_pos 0/1). The picture starts at v_pos==offset (top field, even) / offset+1 (bottom
    * field, odd), giving a centred top bar. */
-  wire              display_first_pixel = (h_pos == 12'd0) && ((is_frame_top && (v_pos >= disp_v_offset) && (v_pos <= disp_v_offset + 12'd1)) ||
+  /* DVD-FORK (field-parity corrector): the frame-top at the head would start on the WRONG
+   * raster field parity here — a TOP field (ROW_0_COL_0) anywhere but v_pos == offset, a
+   * BOTTOM field anywhere but offset+1. ONE expression for both consumers (the strict
+   * placement just below and the frame_top_par_err verdict), so they cannot disagree. */
+  wire              top_par_mismatch    = (position_in_0 == ROW_0_COL_0) ? (v_pos != disp_v_offset)
+                                                                         : (v_pos != disp_v_offset + 12'd1);
+  /* DVD-FORK FIX (field start, 2026-10-08): STRICT PLACEMENT OF THE FIRST FIELD AFTER A START.
+   * The relaxed matcher below takes a frame-top on EITHER slot, so the parity of a stream is
+   * decided by when its first field happens to reach the queue. Mid-stream that is right (a
+   * 3:2/drop break must display, not go black, and resample_addrgen's alt_break keeps the
+   * content alternating). At a START it is a coin flip: after a soft reset (every mount and
+   * every ~keep_vbuf VM jump, i.e. each menu<->title crossing) the addrgen restarts with
+   * last_image = NO_OUTPUT, so its feed-forward arm cannot act, and half of all starts
+   * displayed misaligned until the feedback arm confirmed the error ~0.5 s later.
+   * A set-top player never places a field on the wrong slot: at a start it waits for the
+   * matching one. So does this — for the first frame-top after an arm event only. While
+   * start_strict is set the mismatching slot is refused and the picture lands on the next
+   * one: at most one extra field of black, on a screen that is already black after a soft
+   * reset. The wait is ordinary backpressure (the addrgen parks in STATE_WAIT on a full
+   * queue), so no pickup is deferred, nothing repeats, and every field after it alternates
+   * aligned. Armed by a reset (below) and, phase 2, by a raster restart (raster_restart),
+   * for the next STRICT_TOPS accepted frame-tops (strict_left). ⛔ Never armed by a starve (pixel_rd_underflow): strict after a starve costs
+   * two slots and churns on compute-bound content, which the feedback arm's PAR_CONFIRM
+   * gate exists to leave alone. */
+  /* ★ A WINDOW OF STRICT FRAME-TOPS, NOT ONE (2026-10-09, HW). Clearing the arm at the
+   * first accepted frame-top was not enough at a Video Output switch: the addrgen still
+   * holds woven FRAME images built for the progressive raster (STATE_REPEAT re-emits a FRAME
+   * last_image until the next pickup), and a FRAME image heads with ROW_0_COL_0 exactly like
+   * a TOP field, so it was the frame-top that spent the arm. It then spills across two
+   * interlaced fields and the first real field image landed a slot late. Measured on the rig
+   * as heals PAR_CONFIRM after the switch (0.54 / 0.62 s), reproduced as field_phase_tb
+   * [12-video-output-d] (16/16 misaligned). So the arm covers the next STRICT_TOPS accepted
+   * frame-tops. Content keeps strict TOP/BOTTOM alternation from the second pickup on
+   * (resample_addrgen's alt_break), so after the first one the extra strictness costs
+   * nothing unless something re-breaks the phase inside the window -- which is the point. */
+  localparam [3:0]  STRICT_TOPS         = 4'd8;
+  reg          [3:0]strict_left;          // accepted frame-tops still to be placed strictly
+  wire              start_strict        = (strict_left != 4'd0);
+  wire              strict_refuse_slot  = interlaced && start_strict && is_frame_top && top_par_mismatch;
+  wire              display_first_pixel = (h_pos == 12'd0) && ((is_frame_top && ~strict_refuse_slot && (v_pos >= disp_v_offset) && (v_pos <= disp_v_offset + 12'd1)) ||
                                                                ((position_in_0 == ROW_X_COL_0) && (v_pos != disp_v_offset) && (v_pos != disp_v_offset + 12'd1)));
   wire              last_pixel_read     = pixel_rd_valid && (position_in == ROW_X_COL_LAST);
 
@@ -233,9 +290,38 @@ module mixer(
   always @(posedge clk)
     if (~rst) frame_top_par_err <= 1'b0;
     else if (clk_en && (state == STATE_WAIT) && (next == STATE_FIRST_PIXEL) && is_frame_top)
-      frame_top_par_err <= (position_in_0 == ROW_0_COL_0) ? (v_pos != disp_v_offset)
-                                                          : (v_pos != disp_v_offset + 12'd1);
+      frame_top_par_err <= top_par_mismatch;
     else frame_top_par_err <= frame_top_par_err;
+
+  /* DVD-FORK FIX (field start): armed by every reset of the data path (dot_rst = a hard
+   * reset, a watchdog expiry or a decoder soft reset); each frame-top this mixer accepts
+   * spends one of STRICT_TOPS (see strict_left above). */
+  wire              top_accept          = (state == STATE_WAIT) && (next == STATE_FIRST_PIXEL) && is_frame_top;
+  /* Phase 2: a raster restart re-arms it. Taken outside clk_en — the level is a few dot
+   * clocks long, and arming on every cycle of it is harmless (the sync generator is in
+   * reset, so no frame-top slot can be accepted meanwhile). ⚠ Mid-stream this can hold one
+   * field: the content then runs one field (16.7 ms) later than its PTS, once, with no
+   * frame_late pulse to the drop ledger. A restart is a user/mount-rate event, so that is
+   * left as a known limit rather than given a new seam into resample_addrgen. */
+  always @(posedge clk)
+    if (~rst) strict_left <= STRICT_TOPS;
+    else if (raster_restart) strict_left <= STRICT_TOPS;
+    else if (clk_en && top_accept && start_strict) strict_left <= strict_left - 4'd1;
+    else strict_left <= strict_left;
+
+  /* Telemetry: one count per frame-top SLOT refused. A slot is the first pixel of the
+   * frame-top line, and h_pos is 0 there for one clk_en (pixel repetition holds a pixel
+   * for two, so take the edge). */
+  reg               refuse_q;
+  wire              refuse_cond         = (state == STATE_WAIT) && pixel_en_in && (h_pos == 12'd0) &&
+                                          (v_pos >= disp_v_offset) && (v_pos <= disp_v_offset + 12'd1) &&
+                                          strict_refuse_slot;
+  always @(posedge clk)
+    if (~hard_rst) begin refuse_q <= 1'b0; strict_waits <= 8'd0; end
+    else if (clk_en) begin
+      refuse_q <= refuse_cond;
+      if (refuse_cond && ~refuse_q) strict_waits <= strict_waits + 8'd1;
+    end
 
   /* registers */
   /* store pixel_fifo output */

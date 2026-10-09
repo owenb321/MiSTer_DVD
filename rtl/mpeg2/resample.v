@@ -49,6 +49,7 @@ module resample(
   step_req,                                         // DVD-FORK (frame step B18): advance exactly one picture while paused
   film_det_ntsc, film_det_pal,                      // DVD-FORK (Film 24p auto-detect)
   raster_par_err,                                   // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (synced level)
+  par_heal,                                         // DVD-FORK (field start telemetry): one pulse per feedback insertion
   vscale_mode,                                      // DVD-FORK (CRT anamorphic vertical scaler)
   hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop)
   still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): see dvd/resample_addrgen.v
@@ -115,6 +116,7 @@ module resample(
   output             film_det_ntsc;               // DVD-FORK (Film 24p auto-detect): sustained 3:2 telecine verdict (NTSC 24p)
   output             film_det_pal;                // DVD-FORK (Film 24p auto-detect): sustained progressive verdict (PAL 25p)
   input              raster_par_err;              // DVD-FORK (field-parity corrector): mixer frame-top parity mismatch (2-FF synced level)
+  output             par_heal;                    // DVD-FORK (field start telemetry): one pulse per feedback insertion (resample_addrgen)
   input        [1:0] vscale_mode;                 // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox
   input              hcrop_en;                    // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
   input              still_en;                    // DVD-FORK (pause field still): 1 = may engage
@@ -201,6 +203,7 @@ module resample(
     .film_det_ntsc(film_det_ntsc),                 // DVD-FORK (Film 24p auto-detect)
     .film_det_pal(film_det_pal),
     .raster_par_err(raster_par_err),               // DVD-FORK (field-parity corrector)
+    .par_heal(par_heal),                           // DVD-FORK (field start telemetry)
     .vscale_mode(vscale_mode),                     // DVD-FORK (CRT anamorphic vscale)
     .hcrop_en(hcrop_en),                          // DVD-FORK (CRT anamorphic horizontal crop)
     .still_en(still_en),                          // DVD-FORK (pause field still)

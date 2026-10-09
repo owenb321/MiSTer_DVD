@@ -76,6 +76,12 @@ the RTL port names.** Word 11 is `disp_lag` in `dvd_telem.sv` and `disp_lag_ms` 
 a **dead oracle that no selftest can see**, because selftests feed synthetic dicts. This
 has happened twice.
 
+**★ `flags.video_live` does not mark events in a disc MENU.** `emu.sv` forces the STD
+mux-lead hold off while `menu_active`, so a mode switch or a flush never drops it there.
+To time a counter against something you did, map host time onto the rows' clock: they are
+CLOCK_MONOTONIC = the MiSTer's `/proc/uptime`, so read it around each command
+(`tools/hil_field_toggles.py` does exactly this).
+
 **★ Signals get RETIRED. Check a telemetry field is alive before believing it.** PR #63
 tied word 5 (`vid_err`) to a literal `16'd0`; an oracle reading it was silently dead for
 months. `dvd_explore` now prints a liveness report naming any field that never changed.

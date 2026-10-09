@@ -47,6 +47,11 @@
 // words 26..30 follow -- the DTS codebook copy's verdict and checksum, the engine's
 // frames and refusals. Cores without it answer 0 past word 24.
 #define DVD_TELEM_AUD_MAGIC 0xDD03
+// Word 31 (docs/field_parity.md "Strict first field"): {1, fb_heals[6:0], strict_waits[7:0]}.
+// Not behind a marker word -- 31 is the last index the core's word counter reaches -- so
+// bit 15 is its FORMAT bit instead: a core built before it answers 0, which must read as
+// "absent", not "zero heals".
+#define DVD_TELEM_FPAR_PRESENT 0x8000
 
 #define TELEM_PERIOD_MS 250
 
@@ -96,9 +101,9 @@ static void telem_read()
 	// Words 11-13 (A/V phase) were added with the PTS-scheduled display work.
 	// Reading them from an OLDER core is safe: dvd_telem's readout mux answers
 	// 16'd0 for any index it does not implement, so they read 0, not garbage.
-	uint16_t w[31];
+	uint16_t w[32];
 	w[0] = spi_uio_cmd_cont(UIO_DVD_TELEM);
-	for (int i = 1; i < 31; i++) w[i] = spi_w(0);
+	for (int i = 1; i < 32; i++) w[i] = spi_w(0);
 	DisableIO();
 
 	if (w[0] != DVD_TELEM_MAGIC) return;      // no bridge in this core build
@@ -135,6 +140,17 @@ static void telem_read()
 				"\"dts_sum\":\"%04x%04x\",\"eng_frames\":%u,\"eng_refused\":%u,",
 				w[26] & 1, (w[26] >> 1) & 1, (w[26] >> 2) & 1, (w[26] >> 8) & 31,
 				w[27], w[28], w[29], w[30]);
+	}
+	// field parity (word 31): fb_heals = the field-parity corrector's feedback insertions
+	// (the ~0.5 s heal), strict_waits = frame-top slots the mixer's strict first-field
+	// placement refused. Wrapping 7-/8-bit counters, hard-reset only; the host
+	// differences them. Absent (not zero) on a core without the word.
+	if (w[31] & DVD_TELEM_FPAR_PRESENT)
+	{
+		size_t n = strlen(duty);
+		if (n < sizeof(duty))
+			snprintf(duty + n, sizeof(duty) - n, "\"fb_heals\":%u,\"strict_waits\":%u,",
+				(w[31] >> 8) & 0x7F, w[31] & 0xFF);
 	}
 	int len = snprintf(line, sizeof(line),
 		"{\"t\":%.6f,%s\"refreshes\":%u,\"pickups\":%u,\"lates\":%u,"
