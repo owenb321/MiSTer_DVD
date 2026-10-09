@@ -223,10 +223,24 @@ module mixer(
    * one: at most one extra field of black, on a screen that is already black after a soft
    * reset. The wait is ordinary backpressure (the addrgen parks in STATE_WAIT on a full
    * queue), so no pickup is deferred, nothing repeats, and every field after it alternates
-   * aligned. Armed by a reset (below) and, phase 2, by a raster restart (raster_restart). ⛔ Never armed by a starve (pixel_rd_underflow): strict after a starve costs
+   * aligned. Armed by a reset (below) and, phase 2, by a raster restart (raster_restart),
+   * for the next STRICT_TOPS accepted frame-tops (strict_left). ⛔ Never armed by a starve (pixel_rd_underflow): strict after a starve costs
    * two slots and churns on compute-bound content, which the feedback arm's PAR_CONFIRM
    * gate exists to leave alone. */
-  reg               start_strict;
+  /* ★ A WINDOW OF STRICT FRAME-TOPS, NOT ONE (2026-10-09, HW). Clearing the arm at the
+   * first accepted frame-top was not enough at a Video Output switch: the addrgen still
+   * holds woven FRAME images built for the progressive raster (STATE_REPEAT re-emits a FRAME
+   * last_image until the next pickup), and a FRAME image heads with ROW_0_COL_0 exactly like
+   * a TOP field, so it was the frame-top that spent the arm. It then spills across two
+   * interlaced fields and the first real field image landed a slot late. Measured on the rig
+   * as heals PAR_CONFIRM after the switch (0.54 / 0.62 s), reproduced as field_phase_tb
+   * [12-video-output-d] (16/16 misaligned). So the arm covers the next STRICT_TOPS accepted
+   * frame-tops. Content keeps strict TOP/BOTTOM alternation from the second pickup on
+   * (resample_addrgen's alt_break), so after the first one the extra strictness costs
+   * nothing unless something re-breaks the phase inside the window -- which is the point. */
+  localparam [3:0]  STRICT_TOPS         = 4'd8;
+  reg          [3:0]strict_left;          // accepted frame-tops still to be placed strictly
+  wire              start_strict        = (strict_left != 4'd0);
   wire              strict_refuse_slot  = interlaced && start_strict && is_frame_top && top_par_mismatch;
   wire              display_first_pixel = (h_pos == 12'd0) && ((is_frame_top && ~strict_refuse_slot && (v_pos >= disp_v_offset) && (v_pos <= disp_v_offset + 12'd1)) ||
                                                                ((position_in_0 == ROW_X_COL_0) && (v_pos != disp_v_offset) && (v_pos != disp_v_offset + 12'd1)));
@@ -280,8 +294,8 @@ module mixer(
     else frame_top_par_err <= frame_top_par_err;
 
   /* DVD-FORK FIX (field start): armed by every reset of the data path (dot_rst = a hard
-   * reset, a watchdog expiry or a decoder soft reset), cleared by the first frame-top this
-   * mixer accepts (on whichever slot, which under the strict term is the matching one). */
+   * reset, a watchdog expiry or a decoder soft reset); each frame-top this mixer accepts
+   * spends one of STRICT_TOPS (see strict_left above). */
   wire              top_accept          = (state == STATE_WAIT) && (next == STATE_FIRST_PIXEL) && is_frame_top;
   /* Phase 2: a raster restart re-arms it. Taken outside clk_en — the level is a few dot
    * clocks long, and arming on every cycle of it is harmless (the sync generator is in
@@ -290,10 +304,10 @@ module mixer(
    * frame_late pulse to the drop ledger. A restart is a user/mount-rate event, so that is
    * left as a known limit rather than given a new seam into resample_addrgen. */
   always @(posedge clk)
-    if (~rst) start_strict <= 1'b1;
-    else if (raster_restart) start_strict <= 1'b1;
-    else if (clk_en && top_accept) start_strict <= 1'b0;
-    else start_strict <= start_strict;
+    if (~rst) strict_left <= STRICT_TOPS;
+    else if (raster_restart) strict_left <= STRICT_TOPS;
+    else if (clk_en && top_accept && start_strict) strict_left <= strict_left - 4'd1;
+    else strict_left <= strict_left;
 
   /* Telemetry: one count per frame-top SLOT refused. A slot is the first pixel of the
    * frame-top line, and h_pos is 0 there for one clk_en (pixel repetition holds a pixel

@@ -109,6 +109,10 @@ module field_phase_tb;
   /* Phase 2: a RASTER restart — on the core a modeline register write resets sync_gen
    * (regfile syncgen_rst) while the decode and display path keep running. Scenario [11]. */
   reg raster_rst = 1'b0;
+  /* Scenario [12]: the Video Output switch itself. On the core one regfile bit feeds
+   * sync_gen, resample (interlaced, and deinterlace = its complement, emu.sv) and the
+   * mixer, and the modeline walk that flips it also restarts sync_gen. */
+  reg ilace = 1'b1;
 
   // ---- stimulus ----
   reg  [2:0] output_frame = 3'd2;
@@ -177,7 +181,7 @@ module field_phase_tb;
     .disp_rd_dta_empty(disp_rd_dta_empty), .disp_rd_dta_en(disp_rd_dta_en),
     .disp_rd_dta_valid(disp_rd_dta_valid), .disp_rd_dta(disp_rd_dta),
     .pixel_wr_almost_full(pq_wr_almost_full),
-    .interlaced(1'b1), .deinterlace(1'b0),       // native fields display path
+    .interlaced(ilace), .deinterlace(~ilace),    // native fields display path ([12] toggles it)
     .persistence(1'b1), .repeat_frame(5'd0),
     .y(px_y), .u(px_u), .v(px_v), .osd_out(px_osd),
     .position_out(px_position), .pixel_wr_en(px_wr_en),
@@ -253,7 +257,7 @@ module field_phase_tb;
     .horizontal_sync_end(H_SE), .horizontal_length(H_LEN),
     .vertical_resolution(V_RES), .vertical_sync_start(V_SS),
     .vertical_sync_end(V_SE), .horizontal_halfline(12'd0), .vertical_length(V_LEN),
-    .interlaced(1'b1), .clip_display_size(1'b0),
+    .interlaced(ilace), .clip_display_size(1'b0),
     .h_pos(h_pos), .v_pos(v_pos), .pixel_en(pixel_en),
     .h_sync(h_sync), .v_sync(v_sync), .c_sync(), .h_blank(), .v_blank()
   );
@@ -271,7 +275,7 @@ module field_phase_tb;
 `ifndef NO_PARITY_FIX
     .frame_top_par_err(mixer_par_err),
 `endif
-    .interlaced(1'b1), .raster_restart(raster_rst), .strict_waits(strict_waits),   // DVD-FORK FIX (field start): the mixer's raster flag = the sync_gen's
+    .interlaced(ilace), .raster_restart(raster_rst), .strict_waits(strict_waits),   // DVD-FORK FIX (field start): the mixer's raster flag = the sync_gen's
     .disp_v_offset(12'd0)
   );
 
@@ -288,6 +292,7 @@ module field_phase_tb;
 
   reg  [7:0]  rec_code [0:MAXFLD-1];   // source-line stamp of the field's first line
   reg         rec_vpar [0:MAXFLD-1];   // raster field it landed in (v_pos parity)
+  reg         rec_ilace[0:MAXFLD-1];   // ... and the raster was interlaced ([12])
   reg  [31:0] rec_hash [0:MAXFLD-1];   // FNV-1a over every emitted luma sample
 
   integer     fld_n = 0;               // displayed fields WITH picture content so far
@@ -317,6 +322,7 @@ module field_phase_tb;
       if (got_first && fld_n < MAXFLD) begin
         rec_code[fld_n] = f_code;
         rec_vpar[fld_n] = f_vpar;
+        rec_ilace[fld_n] = ilace;
         rec_hash[fld_n] = acc_hash;
         if (stamp_track && f_code < base_code) base_code <= f_code;
         if (stamp_track && f_code > peak_code) peak_code <= f_code;
@@ -565,6 +571,7 @@ module field_phase_tb;
   integer phase = 0;
   integer start_only = 0;
   integer k, w0, sw_total, i0, skipped;
+  localparam TRANS_FIELDS = 4;           // [12]: the FRAME->field transition, blanked on the core
 
   initial begin
     void'($value$plusargs("phase=%d", phase));
@@ -664,6 +671,7 @@ module field_phase_tb;
     // field period apart land toward OPPOSITE slots, so whichever +phase this is, one of
     // them needs the strict placement — measured below rather than assumed.
     progressive_frame = 0; repeat_first_field = 0; film_mode = 0; top_field_first = 1;
+    if (!$test$plusargs("only12")) begin   // +only12: [1] (it measures the stamps) and [12]
     sw_total = 0;
     for (k = 0; k < 2; k = k + 1) begin
       output_frame_valid = 0;
@@ -711,10 +719,38 @@ module field_phase_tb;
     if (sw_total == 0)
       $fatal(1, "[11] SCENARIO VACUOUS: neither raster restart sent a frame-top toward the wrong slot (strict_waits did not move)");
     $display("[11-raster-restart] the strict placement refused %0d slot(s) over the two restarts", sw_total);
+    end   // !only12
+
+    // [12] VIDEO OUTPUT SWITCH, Progressive -> Interlaced, under flowing content. Unlike
+    // [11] the content changes kind as well: the addrgen was emitting woven FRAME images,
+    // and the ones already built or queued are still FRAME images when the interlaced
+    // raster starts (STATE_REPEAT re-emits a FRAME last_image until the next pickup).
+    // HW (2026-10-09): heals landed PAR_CONFIRM after the switch on the strict build.
+    // Four attempts at different points of the progressive frame.
+    // The first TRANS_FIELDS fields after the switch carry the FRAME->field transition
+    // itself (a FRAME image spilling across two fields, a repeated field); on the core the
+    // mode switch's sw_blank (dvd/mode_realign.sv) holds the picture black over them. The
+    // defect is what PERSISTS after them -- on the pre-fix RTL, every field misaligned from
+    // start+4 on, which the feedback arm only heals PAR_CONFIRM later -- so the window
+    // opens TRANS_FIELDS fields after the switch and then allows no settle at all.
+    stamp_track = 1'b0;                  // progressive heads are not field heads
+    for (k = 0; k < 4; k = k + 1) begin
+      ilace = 1'b0;
+      raster_rst = 1'b1;  repeat (4) @(posedge dot_clk);  raster_rst = 1'b0;
+      repeat (6) @(negedge v_sync);                    // progressive playback
+      wait (pixel_en && (h_pos == 12'd8) && (v_pos == 12'd20 + 12'd25 * k));
+      i0 = fld_n;
+      ilace = 1'b1;
+      raster_rst = 1'b1;  repeat (4) @(posedge dot_clk);  raster_rst = 1'b0;
+      i0 = i0 + TRANS_FIELDS;
+      start_clean_at(k == 0 ? "12-video-output-a" : k == 1 ? "12-video-output-b" :
+                     k == 2 ? "12-video-output-c" : "12-video-output-d", i0, NCHK);
+    end
+    stamp_track = 1'b1;
 
     $display("(source line 0 stamps %0d, line 1 stamps %0d; %0d fields measured)",
              base_code, peak_code, fld_n);
-    if (fld_n < (start_only ? 5*NCHK : 4*(SETTLE+NCHK)) || peak_code != base_code + 8'd1)
+    if (fld_n < ($test$plusargs("only12") ? 3*NCHK : start_only ? 5*NCHK : 4*(SETTLE+NCHK)) || peak_code != base_code + 8'd1)
       $fatal(1, "==== BENCH BROKEN (+phase=%0d): %0d fields, stamps %0d/%0d (expected two adjacent) ====",
              phase, fld_n, base_code, peak_code);
     if (errors == 0) begin

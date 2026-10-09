@@ -41,9 +41,13 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **Gate:** `run_field_phase.sh --red`: `[1]` with no settle window, `[10]` soft-reset
     starts, `[11]` raster restarts; mutations S1–S3. `check_field_start_wiring.py`.
   - **Instrument:** telemetry word 31 = `{1, fb_heals[6:0], strict_waits[7:0]}`.
-  - **Next step:** HIL. Control arm first (a build with the strict term removed), N mounts
-    and menu→title jumps; expect `fb_heals` ≈ N/2 on the control and 0 on the fix, with
-    `strict_waits` ≈ N/2. Then the maintainer's eye on the CRT and on HDMI Weave.
+  - **HW round 1 (2026-10-09):** 15 `RINGER_WS` launches, `fb_heals` control 5 → fix **0**.
+    Video Output switches were improved, not fixed: heals landed 0.54/0.62 s after the
+    switch. A leftover progressive FRAME image spent a one-shot arm, so the arm now covers
+    8 accepted frame-tops (`[12]`, mutation S4). Table in `docs/field_parity.md`.
+  - **Next step:** HW round 2 on the windowed build: the same 15 launches plus ≥ 30 timed
+    Video Output toggles (`fb_heals` = 0 expected), then the maintainer's eye on the CRT and
+    on HDMI Weave.
 
 - ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
   NON-LOOP CELL COMMAND (2026-10-08, ✅ MERGED PR #169; HW-CONFIRMED on the rig, A/B

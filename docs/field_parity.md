@@ -419,8 +419,10 @@ and leaves every later frame-top relaxed.
 
 ### The fix (`rtl/mpeg2/mixer.v`, `rtl/mpeg2/mpeg2video.v`)
 
-- `start_strict`: set by `~rst` (dot_rst, so every reset of the data path) and by
-  `raster_restart`; cleared by the first frame-top the mixer accepts.
+- `strict_left`: loaded with `STRICT_TOPS` (8) by `~rst` (dot_rst, so every reset of the
+  data path) and by `raster_restart`; each frame-top the mixer accepts spends one, and
+  `start_strict = strict_left != 0`. (The first cut cleared the arm at the FIRST accepted
+  frame-top. HW showed why that is not enough; see "HW round 1" below.)
 - While it is set and the raster is `interlaced`, `display_first_pixel` refuses a frame-top
   slot of the wrong parity (`strict_refuse_slot`). The parity test is `top_par_mismatch`, the
   SAME wire that feeds `frame_top_par_err`, so the placement and the corrector's verdict cannot
@@ -445,16 +447,44 @@ is that case, and it is the arm the S3 mutation fails (15/16 fields misaligned).
 ⛔ **Never armed by a starve** (`pixel_rd_underflow`). Strict after a starve costs two slots
 and churns on compute-bound content, which is the case `PAR_CONFIRM` exists to leave alone.
 
+### HW round 1 (2026-10-09) — starts fixed, and a Video Output switch that was not
+
+Builds `DVD_fieldstart_20261009_0234.rbf` (fix, SEED 5, `clk_dec` 95.57 / 90.56 MHz,
+`clock_check` PASS) and `DVD_fieldctl_20261009_0256.rbf` (the control: the same commit with
+the strict term removed, so it carries the same counters). Read off telemetry word 31.
+
+| test | control | fix (first cut) |
+|---|---|---|
+| 15 launches of `RINGER_WS` (mount + its boot chain) on Interlaced | `fb_heals` **5**, `strict_waits` 5 | `fb_heals` **0**, `strict_waits` 7 |
+| Video Output Progressive→Interlaced, `THE_OFFICE` menu | 10 toggles: `fb_heals` **3** | 10 + 20 + 10 + 15 toggles: `fb_heals` 1, 0, 3, 2 |
+
+In the control the two counters agree launch for launch: every start that headed for the
+wrong slot was then healed ~0.5 s later, which is the reported blip, and the control could
+fail. The fix removed it from every start. The Video Output switch was improved, not fixed.
+
+**Timed against the switch** (the custom Main's CLOCK_MONOTONIC rows mapped to the host's
+osd commands through `/proc/uptime`): both heals of the 15-toggle run landed **0.54 s and
+0.62 s after the switch to Interlaced**, each following a strict wait in the same switch.
+So the first field was placed right, and something a few fields later broke the phase again.
+That something was a leftover progressive **FRAME** image. `STATE_REPEAT` re-emits a FRAME
+`last_image` until the next pickup, and a FRAME heads with `ROW_0_COL_0`, exactly like a TOP
+field. It spent the arm, spilled across two interlaced fields, and the first real field
+image landed a slot late. `field_phase_tb` `[12]` reproduces it (16/16 misaligned at one of
+four switch points). The arm now covers `STRICT_TOPS` accepted frame-tops, and mutation S4
+(`STRICT_TOPS = 1`) puts the defect back.
+
 ### Known limits
 
 - **Mid-stream strictness has no ledger entry.** After a raster restart, a refused slot means
   the content runs one field (16.7 ms) later than its PTS, once, with no `frame_late` pulse to
   the drop ledger. A restart happens at user or mount rate, so this was left rather than given a
   new seam into `resample_addrgen`.
-- **A microsecond race at a Progressive→Interlaced switch.** The walk writes the `interlaced`
-  bit and restarts `sync_gen` a few `clk_dec` cycles apart. A frame-top accepted in that gap
-  would clear `start_strict` on the old raster. The window is microseconds in a 16.7 ms field,
-  and `par_fb` nets it.
+- **The window is a count, not a proof.** `STRICT_TOPS` = 8 covers the FRAME images a switch
+  can leave queued (a pickup's schedule plus the persistence re-scans before the next one).
+  A perturbation later than 8 frame-tops after an arm is healed by `par_fb`, as before.
+- **Inside the window a 3:2/drop alternation break shows one black field** instead of a
+  misplaced one. Content reaching the mixer alternates strictly from the second pickup on
+  (`alt_break`), so in practice this needs an encoder-made break within ~130 ms of a start.
 - **Starvation slips mid-play** are still healed by the feedback arm (~0.5 s), as before. A
   set-top box avoids them by pulling fields at each vsync, which would be a display-path
   rework.
@@ -484,14 +514,20 @@ drives resample, the framestore reader, pixel_queue, the mixer's data path and t
   which counts a mismatched slot even when a mutation removes the refusal.
 - `[11-raster-restart-top/bot]`: a restart mid-top field and mid-bottom field under flowing
   content. The window starts at the first clean field head after the restart.
-- `+start_only` runs `[1]`, `[10]` and `[11]` alone (~3 minutes for both phases), which is what
-  the mutation sweep uses:
+- `[12-video-output-a..d]`: the Video Output switch itself, Progressive→Interlaced at four
+  points of the progressive frame. One `ilace` bit drives sync_gen, resample (and
+  `deinterlace` as its complement) and the mixer, with a raster restart, as the walk does. The
+  first 4 fields after the switch are the FRAME→field transition, which the core blanks
+  (`sw_blank`); the window opens after them, with no settle.
+- `+start_only` runs `[1]`, `[10]`, `[11]` and `[12]` alone, which is what the mutation sweep
+  uses (`+only12` drops `[10]`/`[11]` for iteration):
 
 | mutation | what it breaks | caught by |
 |---|---|---|
 | S1 | the strict term removed from `display_first_pixel` | `[1]`/`[10]` MISALIGNED (16/16) |
 | S2 | `start_strict` never armed by a reset | `[1]`/`[10]` MISALIGNED |
 | S3 | the `raster_restart` arm removed | `[11-raster-restart-bot]` 15/16 misaligned |
+| S4 | the arm spent by one frame-top (`STRICT_TOPS = 1`, the first cut) | `[12-video-output-d]` 16/16 misaligned |
 
 S1 reproduces the coin flip exactly: on each `+phase` arm one of the two soft-reset starts
 lands misaligned, and `[1]` lands misaligned on `+phase=1`, matching the RED table in "Proof"

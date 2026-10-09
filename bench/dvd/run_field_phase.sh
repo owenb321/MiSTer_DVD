@@ -25,10 +25,12 @@
 #
 # --red also runs the START mutations (docs/field_parity.md "Strict first field"): each
 # breaks the mixer's strict first-field placement one way, and each must fail its own
-# window in +start_only mode ([1], [10], [11] only; ~3 minutes, run concurrently):
+# window in +start_only mode ([1], [10], [11], [12] only; run concurrently):
 #   S1  the strict term removed from display_first_pixel  -> [1]/[10] MISALIGNED
-#   S2  start_strict never armed by a reset                -> [1]/[10] MISALIGNED
+#   S2  the arm never loaded by a reset                    -> [1]/[10] MISALIGNED
 #   S3  the raster-restart arm removed                     -> [11-raster-restart-bot]
+#   S4  the arm spent by ONE frame-top (STRICT_TOPS = 1)   -> [12-video-output-d]: a
+#       leftover progressive FRAME image spends it at a Video Output switch
 set -e
 cd "$(dirname "$0")/../.."
 
@@ -77,12 +79,14 @@ PYEOF
   }
   _mut S1 "is_frame_top && ~strict_refuse_slot && (v_pos" "is_frame_top && (v_pos" \
        '^\[(1-cold-start|10-soft-reset-[ab])\] FAIL: [0-9]+ misaligned' &
-  _mut S2 "if (~rst) start_strict <= 1'b1;" "if (~rst) start_strict <= 1'b0;" \
+  _mut S2 "if (~rst) strict_left <= STRICT_TOPS;" "if (~rst) strict_left <= 4'd0;" \
        '^\[(1-cold-start|10-soft-reset-[ab])\] FAIL: [0-9]+ misaligned' &
-  _mut S3 "    else if (raster_restart) start_strict <= 1'b1;"$'\n' "" \
+  _mut S3 "    else if (raster_restart) strict_left <= STRICT_TOPS;"$'\n' "" \
        '^\[11-raster-restart-bot\] FAIL: [0-9]+ misaligned' &
+  _mut S4 "STRICT_TOPS         = 4'd8;" "STRICT_TOPS         = 4'd1;" \
+       '^\[12-video-output-d\] FAIL: [0-9]+ misaligned' &
   wait
-  for m in S1 S2 S3; do
+  for m in S1 S2 S3 S4; do
     if [ -f "$TMP/$m.res" ]; then cat "$TMP/$m.res"; grep -q MUTFAIL "$TMP/$m.res" && fail=1
     else echo "  $m: NO RESULT"; fail=1; fi
   done
