@@ -389,7 +389,7 @@ module framestore(rst, clk, mem_clk,
    * stage-A cache verdict; straight into this FIFO it drove do_read (read pointer,
    * empty, the 88-bit dout enable, the M10K address stall) across the die, a third
    * of the worst clk_mem paths on the v0.9.0 fit. dvd/mem_req_prefetch.sv is a
-   * 4-slot register queue that pops the FIFO on registered credit and serves the
+   * 4-slot queue (inferred as a small M10K) that pops the FIFO on registered credit and serves the
    * bridge with the SAME standard-mode contract (valid the cycle after rd_en, never
    * eager), so the bridge is unchanged. It is reset with this FIFO (rst), so a
    * watchdog or soft reset flushes both together. Cost: 2 clk_mem cycles of latency

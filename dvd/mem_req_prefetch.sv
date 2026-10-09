@@ -10,8 +10,9 @@
 // drove do_read: the read pointer, `empty`, an 88-bit dout enable and the FIFO
 // M10K's address stall, a die crossing from one M10K to another. Those endpoints
 // were a third of the worst clk_mem paths on the v0.9.0 fit. Through this queue
-// the pop ends at 4 local flops (count, rptr, pptr, dn_valid), and nothing the
-// bridge drives reaches the FIFO.
+// the pop ends at this module's own small state (count, rptr, dn_valid, and the
+// slot store's read-address stall, below), and nothing the bridge drives reaches
+// the FIFO.
 //
 // CONTRACT, both sides: the xilinx_fifo_dc standard read mode, unchanged for the
 // bridge, which relies on it (its speculative pop + skid):
@@ -29,8 +30,15 @@
 // D >= 3 sustains one word per cycle on a hit stream (steady state: count 1,
 // one word in flight, one popped per cycle); D = 4 for power-of-two pointers.
 //
-// OUTPUT: a mux, slot[pptr], with pptr latched at the pop. Not a re-registered
-// dout: that would put an 88-bit enable back on the bridge's critical pop.
+// OUTPUT: slot[pptr], with pptr latched at the pop. Not a re-registered dout:
+// that would put an 88-bit enable back on the bridge's critical pop.
+// ⚠ AS BUILT (first fit, 2026-10-09): Quartus infers `slot` as a 4x88 M10K RAM and
+// folds pptr into its read-address register (the pop drives the address stall),
+// with pass-through logic for the RTL's read-during-write order. Cost 3 M10K +
+// ~79 ALM, cheaper in ALMs (the binding resource) than ~350 flops and an 88-bit
+// 4:1 mux. Worst clk_mem path on that fit: the verdict into this address stall,
+// +0.88 ns. If M10K ever becomes the scarce resource, (* ramstyle = "logic" *) on
+// `slot` gives the flop version; it is the same RTL.
 //
 // RESET: the FIFO's own reset (framestore `rst`, active low, applied
 // asynchronously exactly as xilinx_fifo_dc's read side applies it), so a watchdog
