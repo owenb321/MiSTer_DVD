@@ -95,6 +95,16 @@ if git cat-file -e "$RETIME_BASE:dvd/mem_shim_burst.sv" 2>/dev/null; then
         red "site-B wrong way" 's/if (inv_b_pend) cache_valid\[ifb_set\]\[ifb_way\]/if (inv_b_pend) cache_valid[ifb_set][ifb_way+1'"'"'b1]/' 'ifb_way+1'
         red "guard alive"      's/^            inv_a_pend <= 1.b0;$/            inv_a_pend <= inv_a_pend; \/\/ MUT/' 'MUT' \
             "deferred invalidate pending"
+        # The speculative-pop retime (2026-10-09): data loads moved off the verdicts and
+        # the DDR3 compare honours the Avalon contract. Each arm must still be caught.
+        red "addr under read"  '/^            S_FILL_CMD: begin$/a\                ddr3_addr <= ddr3_addr ^ 29'"'"'d8; // MUT' 'MUT' \
+            "LOCKSTEP MISMATCH"
+        red "exit keeps pA"    's/^                        pA_valid     <= 1.b0;$/                        pA_valid     <= pA_valid; \/\/ MUT/' 'MUT' \
+            "LOCKSTEP MISMATCH"
+        red "A reads cand set" 's/^    wire \[ASSOC-1:0\]  a_valid = cache_valid\[pA_set\];/    wire [ASSOC-1:0]  a_valid = cache_valid[cand_set]; \/\/ MUT/' 'MUT' \
+            "LOCKSTEP MISMATCH"
+        red "no beat reset"    's/^                    beat           <= 0;                    \/\/ fresh fill/                    \/\/ MUT beat reset dropped/' 'MUT' \
+            "LOCKSTEP MISMATCH"
     fi
 else
     echo "== LOCKSTEP: SKIPPED -- RETIME_BASE $RETIME_BASE not in this clone's history"

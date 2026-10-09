@@ -277,13 +277,26 @@ module mem_shim_ab_tb;
     );
 
     // ---- LOCKSTEP: every functional output + debug_state, every cycle ----
+    // The DDR3 port is compared by the consumer's contract (Avalon-MM, through the
+    // combinational ddr_arb): address and burstcount are sampled only while read or
+    // write is high, writedata only while write is high. Outside those cycles they are
+    // don't-care, and the 2026-10-09 retime loads them every streaming cycle to keep
+    // them off the stage-A verdict. Everything else is compared on every cycle. (A
+    // change WHILE read/write is high is still a mismatch: RED arm "addr under read".)
     integer ls_cycles = 0, ls_errs = 0;
-    wire [255:0] ls_out0 = {rig[0].req_en, rig[0].res_en, rig[0].res_dta, rig[0].ddr_addr,
-                            rig[0].ddr_burstcnt, rig[0].ddr_read, rig[0].ddr_write,
-                            rig[0].ddr_writedata, rig[0].ddr_byteenable, rig[0].dbg_state};
-    wire [255:0] ls_out1 = {rig[1].req_en, rig[1].res_en, rig[1].res_dta, rig[1].ddr_addr,
-                            rig[1].ddr_burstcnt, rig[1].ddr_read, rig[1].ddr_write,
-                            rig[1].ddr_writedata, rig[1].ddr_byteenable, rig[1].dbg_state};
+    function automatic [110:0] ls_ddr(input [28:0] a, input [7:0] bc, input rd, input wr,  // 29+8+1+1+64+8
+                                      input [63:0] wd, input [7:0] be);
+        ls_ddr = {(rd | wr) ? a : 29'd0, (rd | wr) ? bc : 8'd0, rd, wr,
+                  wr ? wd : 64'd0, be};
+    endfunction
+    wire [255:0] ls_out0 = {rig[0].req_en, rig[0].res_en, rig[0].res_dta,
+                            ls_ddr(rig[0].ddr_addr, rig[0].ddr_burstcnt, rig[0].ddr_read,
+                                   rig[0].ddr_write, rig[0].ddr_writedata, rig[0].ddr_byteenable),
+                            rig[0].dbg_state};
+    wire [255:0] ls_out1 = {rig[1].req_en, rig[1].res_en, rig[1].res_dta,
+                            ls_ddr(rig[1].ddr_addr, rig[1].ddr_burstcnt, rig[1].ddr_read,
+                                   rig[1].ddr_write, rig[1].ddr_writedata, rig[1].ddr_byteenable),
+                            rig[1].dbg_state};
     always @(posedge clk) if (LOCKSTEP && rst_n) begin
         ls_cycles = ls_cycles + 1;
         if (ls_out0 !== ls_out1) begin
@@ -309,6 +322,44 @@ module mem_shim_ab_tb;
         if ((dut_ref.state == ST_ISSUE2) && (pst_r != ST_ISSUE2)) pairs_r = pairs_r + 1;
         if ((dut_new.state == ST_ISSUE2) && (pst_n != ST_ISSUE2)) pairs_n = pairs_n + 1;
     end
+
+    // ---- LOCKSTEP coverage (2026-10-09, the speculative-pop retime) ----
+    // A cycle-exact compare only proves the paths the stimulus reaches. Each counter
+    // below is a path that retime rewrote; the run FAILS if any of them is zero, so a
+    // stimulus change cannot quietly make the lockstep vacuous for that path. Read from
+    // the REFERENCE rig (the pre-change module; identical inputs, so identical paths).
+    // It also checks, every cycle, the premise the retime's pk->sk merge rests on: the
+    // reference never holds a peeked command (pk) and a skid command (sk) at once.
+`ifdef MSAB_LOCKSTEP
+    localparam [3:0] CV_STREAM = 4'd11, CV_PEEK = 4'd12, CV_PEEK2 = 4'd14,
+                     CV_WR_CMD = 4'd10, CV_FILLCMD = 4'd5;
+    integer cv_peek_pk = 0, cv_peek2_sk = 0, cv_pair_pk = 0, cv_pair_sk = 0;
+    integer cv_stall_cap = 0, cv_exit_cap = 0, cv_pk_consume = 0, cv_wrhit = 0;
+    integer cv_miss = 0, cv_wr_exit = 0, cv_both = 0;
+    always @(posedge clk) if (rst_n) begin
+        if (dut_ref.pk_valid && dut_ref.sk_valid) cv_both = cv_both + 1;
+        if ((dut_ref.state == CV_PEEK) && rig[0].req_valid) cv_peek_pk = cv_peek_pk + 1;
+        if ((dut_ref.state == CV_PEEK2) && dut_ref.sk_valid) cv_peek2_sk = cv_peek2_sk + 1;
+        if ((dut_ref.state == CV_STREAM) && rig[0].res_almost_full
+            && !dut_ref.sk_valid && !dut_ref.pk_valid && rig[0].req_valid) cv_stall_cap = cv_stall_cap + 1;
+        if ((dut_ref.state == CV_STREAM) && !rig[0].res_almost_full && dut_ref.sA_slow) begin
+            if (!dut_ref.sk_valid && !dut_ref.pk_valid && rig[0].req_valid) cv_exit_cap = cv_exit_cap + 1;
+            if (dut_ref.pA_rd_miss) cv_miss = cv_miss + 1;
+            if (dut_ref.pA_wr_fast) cv_wr_exit = cv_wr_exit + 1;
+        end
+        if ((dut_ref.state == CV_STREAM) && !rig[0].res_almost_full && !dut_ref.sA_slow
+            && dut_ref.pk_valid) cv_pk_consume = cv_pk_consume + 1;
+        if ((dut_ref.state == CV_WR_CMD) && !rig[0].ddr_waitrequest && dut_ref.wr_is_hit) cv_wrhit = cv_wrhit + 1;
+    end
+    // pair source: on the S_PEEK2 -> S_ISSUE2 edge, which hold register fed burst B
+    reg cv_p2_sk = 1'b0;
+    always @(posedge clk) if (rst_n) begin
+        if (dut_ref.state == CV_PEEK2) cv_p2_sk <= dut_ref.sk_valid;
+        if ((dut_ref.state == ST_ISSUE2) && (pst_r == CV_PEEK2)) begin
+            if (cv_p2_sk) cv_pair_sk = cv_pair_sk + 1; else cv_pair_pk = cv_pair_pk + 1;
+        end
+    end
+`endif
 
     // ---- stimulus ----
     integer j, k, base, ra;
@@ -442,6 +493,20 @@ module mem_shim_ab_tb;
                 errors = errors + 1;
             end
             errors = errors + ls_errs;
+`ifdef MSAB_LOCKSTEP
+            $display("  LOCKSTEP coverage (REF): peek-from-FIFO %0d, peek2-from-skid %0d, pairs from pk %0d / skid %0d, stall-capture %0d, exit-capture %0d, pk-consume %0d, misses %0d, write exits %0d, write hits %0d",
+                     cv_peek_pk, cv_peek2_sk, cv_pair_pk, cv_pair_sk, cv_stall_cap, cv_exit_cap, cv_pk_consume, cv_miss, cv_wr_exit, cv_wrhit);
+            if (cv_both != 0) begin
+                $display("  ERROR: REF held pk and sk at once on %0d cycles (the pk->sk merge premise is false)", cv_both);
+                errors = errors + 1;
+            end
+            if (cv_stall_cap == 0 || cv_exit_cap == 0 || cv_miss == 0 || cv_wr_exit == 0 || cv_wrhit == 0
+                || (`MSAB_DUAL && (cv_peek_pk == 0 || cv_peek2_sk == 0 || cv_pair_pk == 0
+                                   || cv_pair_sk == 0 || cv_pk_consume == 0))) begin
+                $display("  ERROR: LOCKSTEP coverage hole -- a retimed path was never exercised");
+                errors = errors + 1;
+            end
+`endif
         end
         if (errors == 0)
             $display("  RESULT: PASS — burst sequences identical (%0d misses), all responses correct", cap_bn[0]);
