@@ -81,8 +81,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       Menu from it is a fresh menu call (the same on 0.9.0).
     - About Schmidt pages its chapter menu by SPRM7 only when g7 = 12, i.e. after a
       chapter was chosen from that menu, which is the disc's authoring.
-    - The still rule's decode was corrected: types 2/3 carry the full link set. It needs
-      a rebuild; the HW above ran on `DVD_navfixes_20261008_1851.rbf`.
+    - The still rule's decode was corrected: types 2/3 carry the full link set. The HW
+      above ran on `DVD_navfixes_20261008_1851.rbf`. The corrected build,
+      `DVD_navfixes_20261009_0149.rbf`, passes timing: `clk_dec` 88.94 / 88.07 MHz,
+      `clk_mem` 94.4 / 94.1 MHz. It differs only for a looping type-2/3 cell command on
+      an indefinite still; none of the discs tested above has one.
 
 - ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
   The microcoded VM against libdvdnav over every library disc, with
