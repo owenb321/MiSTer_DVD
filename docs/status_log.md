@@ -90,7 +90,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     - Its worst path is now the verdict into the queue's address stall.
     - ALM 38,685 (92 %), RAM 529/553.
     - Build: `releases/DVD_memretime_20261009_2159.rbf`.
-  - **HW A/B** (2026-10-09, .236). Control arm first (`main` = PR #170's
+  - **HW A/B** (2026-10-09, on the rig). Control arm first (`main` = PR #170's
     `DVD_fieldstart_20261009_1511`), then the A+B SEED 13 build, through the same script:
     - **Pacing:** `pacing_matrix` on ROGER / THE_OFFICE / Thayer, 3 Video Output cells × 2
       rounds each. 0 drops everywhere; lates equal.
