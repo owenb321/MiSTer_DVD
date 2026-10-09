@@ -1864,8 +1864,12 @@ end
 // PGC -- the HW-proven Phase-3 ordering that keeps MiB/Matrix menus moving. Any other
 // command waits out the still, as libdvdnav does (ISLAM_TRAILER's First Play menu:
 // 'g1 = 1; LinkTailPGC' ran at once, the POST linked on and the disc stopped at Exit).
-//   {t1lnk, t26, b1[3:0] (link type), b6[6:0], b7}: a type-1 LINK carries any link
-//   type; types 2-6 carry only a LinkSubIns, whose sub-instruction is b7[4:0].
+//   {tlink, tsub, b1[3:0] (link type), b6[6:0], b7}: types 1 (a LINK, not a jump), 2
+//   and 3 carry the full link set (libdvdnav eval_link_instruction: 'g8 = 5; LinkPGCN
+//   19' is a type-3 command, INDIVISIBLE's menu buttons); types 4-6 carry only a
+//   LinkSubIns (eval_link_subins), whose sub-instruction is b7[4:0].
+// A cmd_nr past this PGC's cell commands (malformed) would read a stale entry: it keeps
+// the old command-first order.
 // LinkPGN counts as a loop unconditionally: a menu does not run the program query, so
 // "this program" is not known there, and command-first is what it did before.
 (* ramstyle = "M10K, no_rw_check" *) reg [20:0] ccls_mem [0:255];
@@ -4691,8 +4695,9 @@ always @(posedge clk or negedge rst_n) begin
                         {6'd0, walk_idx[12:3]} - nr_pre16 - nr_post16 < 16'd255) begin
                         ccls_we <= 1'b1;
                         ccls_wa <= walk_idx[10:3] - nr_pre16[7:0] - nr_post16[7:0] + 8'd1;
-                        ccls_wd <= {cmd_b0[7:5] == 3'd1 && !cmd_b0[4],
-                                    cmd_b0[7:5] >= 3'd2 && cmd_b0[7:5] <= 3'd6,
+                        ccls_wd <= {(cmd_b0[7:5] == 3'd1 && !cmd_b0[4]) ||
+                                    cmd_b0[7:5] == 3'd2 || cmd_b0[7:5] == 3'd3,
+                                    cmd_b0[7:5] >= 3'd4 && cmd_b0[7:5] <= 3'd6,
                                     cmd_b1[3:0], cmd_b6[6:0], pb_rdata};
                     end
                     // LinkPGCN in a PRE command (type 1 link, op 4): byte0=0x20,
@@ -5569,6 +5574,7 @@ always @(posedge clk or negedge rst_n) begin
                                     strm_done  <= 1'b1;
                                     still_pend <= 1'b1;   // drain, then S_STILL
                                 end else if (vm_mode && cm_rd[7:0] != 8'd0 &&
+                                             cm_rd[7:0] <= cmd_nr_cell &&   // an entry of THIS PGC
                                              cm_rd[15:8] == 8'd255 && !cc_loops) begin
                                     // INDEFINITE STILL, THEN ITS CELL COMMAND (2026-10-08):
                                     // a command that does not loop the cell waits out the

@@ -86,6 +86,9 @@ if [ "${1:-}" = "--red" ]; then
     # no command counts as a loop: a motion menu would freeze
     mut R9-none-loop iso_reader_fpnone_tb "H:" \
         "s/^wire        cc_loops   = (ccls_q\[20\] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/wire        cc_loops   = 1'b0 \&\& (ccls_q[20] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/"
+    # types 2/3 decoded as LinkSubIns-only (the first version's mistake)
+    mut R11-type3-subins iso_reader_fpnone_tb "B2:" \
+        "s/                                    cmd_b0\[7:5\] == 3'd2 || cmd_b0\[7:5\] == 3'd3,/                                    1'b0,/"
     # the class table written one entry off (cmd_nr is 1-based)
     mut R10-class-off-by-one iso_reader_fpnone_tb "[GH]:" \
         "s/                        ccls_wa <= walk_idx\[10:3\] - nr_pre16\[7:0\] - nr_post16\[7:0\] + 8'd1;/                        ccls_wa <= walk_idx[10:3] - nr_pre16[7:0] - nr_post16[7:0];/"

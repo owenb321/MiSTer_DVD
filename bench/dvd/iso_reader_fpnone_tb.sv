@@ -16,6 +16,8 @@
 // Exit. Now only a command that LOOPS the cell runs first:
 //   G  PGC 1's cell: 0xFF + LinkTailPGC -> the still holds, no vm_cell_cmd
 //   H  PGC 2's cell: 0xFF + LinkCN 1 (itself) -> vm_cell_cmd at once, no still
+//   B2 PGC 3's cell: 0xFF + type-3 'g1 = 1; LinkPGCN 3' (itself) -> the same (types 2/3
+//      carry the full link set; only 4-6 are LinkSubIns-only)
 //
 // SPRM7 FOLLOWS PLAYBACK: the reader publishes the playing cell's GLOBAL part (ptt_upd
 // / ptt_cur) from its title's PTT table. A VM title jump that names a PGCN but no
@@ -271,6 +273,10 @@ module iso_reader_fpnone_tb;
             put_cellsc(21*2048+16+600, 0, 8'hFF, 8'd1);
             put_cellcmd(21*2048+16+600, 16'd300, 64'h2007000000000001);
             put_pgc(21*2048+16+1100, 8'd1, 8'd1); put_cell(21*2048+16+1100, 0, 32, 47);
+            // B2: PGC 3's cell = 0xFF + a TYPE-3 'g1 = 1; LinkPGCN 3' (itself): a loop.
+            // Types 2/3 carry the full link set (only 4-6 are LinkSubIns-only).
+            put_cellsc(21*2048+16+1100, 0, 8'hFF, 8'd1);
+            put_cellcmd(21*2048+16+1100, 16'd300, 64'h7104000100010003);
 
             // VTSI_MAT @22: vts_ptt_srpt = +1 (23), vts_pgcit = +2 (24)
             be32(22*2048+200, 32'd1);
@@ -381,6 +387,14 @@ module iso_reader_fpnone_tb;
             $display("  keep_vbuf=%0d jump_cross=%0d", kv_at_ack, jc_at_ack);
         end
         if (errors == 0) $display("B: First Play LinkPGCN 3 -> VMGM PGC 3, VBUF held  PASS");
+        begin : wb2 integer t; t = 0;
+            while (n_ccmd == 0 && !still_active && t < 2000000) begin @(posedge clk); t = t + 1; end
+        end
+        if (n_ccmd == 0 || still_active) begin
+            fail("B2: 0xFF still + type-3 LinkPGCN to itself did not run its command first");
+            $display("  still_active=%0d vm_cell_cmd x%0d cur_pgcn=%0d ccls_q=%06x cm_rd=%0x",
+                     still_active, n_ccmd, dut.cur_pgcn, dut.ccls_q, dut.cm_rd);
+        end else $display("B2: 0xFF still + type-3 'g1 = 1; LinkPGCN 3' (itself) -> command first  PASS");
 
         // H: a motion-menu loop (0xFF + LinkCN to itself) keeps the command-first order
         jump(2'd0, 8'd0, 16'd2, 7'd0);

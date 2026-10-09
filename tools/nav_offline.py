@@ -197,10 +197,10 @@ def cell_cmd_loops(c, cell_no, pgcn):
     c = bytes(c)
     t, lt, b7 = c[0] >> 5, c[1] & 0x0F, c[7]
     sub_loop = (b7 & 0x1F) in (1, 5, 9)          # LinkTopCell / TopPG / TopPGC
-    if t == 1 and not c[0] & 0x10:               # a type-1 LINK
+    if (t == 1 and not c[0] & 0x10) or t in (2, 3):   # the full link set
         return ((lt == 1 and sub_loop) or lt == 6 or (lt == 7 and b7 == cell_no) or
                 (lt == 4 and (((c[6] & 0x7F) << 8) | b7) == pgcn))
-    return 2 <= t <= 6 and sub_loop              # a LinkSubIns riding a set/compare
+    return 4 <= t <= 6 and sub_loop              # a LinkSubIns riding a set/compare
 
 
 class Player:
