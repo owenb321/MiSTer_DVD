@@ -26,6 +26,7 @@
 #   * Memory is left UNBOUNDED — the fitter peaks ~6 GB; a low --memory OOM-kills it.
 #   * SEEDS/FMAX_MIN/SWEEP_ALL/NOTIFY_* are forwarded so seed_sweep's env knobs and
 #     notifications still work; positional args (--compile, NAME, ...) pass via "$@".
+#     TIMING_CLOCK/TEMP/OUT are tools/timing_paths.sh's knobs (clock, corner, output).
 #   * GIT_* are resolved on the HOST and forwarded: the image may have no git, and
 #     build_release.sh's provenance manifest needs branch/sha/dirty. QUARTUS_DOCKER_IMAGE
 #     rides along so the manifest can record which image actually built the .rbf.
@@ -66,6 +67,7 @@ maybe_reexec_in_docker() {
         -e IN_QUARTUS_DOCKER=1 -e HOME=/tmp \
         -e SEEDS -e FMAX_MIN -e SWEEP_ALL -e FIT_TIMEOUT -e NOTIFY_URL -e NOTIFY_SILENT \
         -e GIT_BRANCH -e GIT_SHA -e GIT_DIRTY -e QUARTUS_DOCKER_IMAGE \
+        -e TIMING_CLOCK -e TIMING_TEMP -e TIMING_OUT \
         -v "$repo":"$repo" -w "$repo" \
         "$image" "$self" "$@"
 }
