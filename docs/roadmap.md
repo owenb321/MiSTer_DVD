@@ -1432,6 +1432,19 @@ Levers, cheapest/lowest-risk first:
 
   HIL `nav_diff` = the control on every compared step; the maintainer's hand check passed.
   Next after it: the reader state split.
+  **The library sweep (2026-10-08, `docs/nav_engine.md` §5a):** the microcode against
+  libdvdnav over every library disc, offline. Every lead was traced to the model, a
+  libdvdnav failure, or `rnd`, except two pre-existing core differences, both shared with
+  the old FSM. Each is a named follow-up; neither is built:
+  - ✅ **SPRM7 (PTTN) / SPRM6 (TT_PGCN) follow playback**, as libdvdnav's do
+    (PR #169, HW-confirmed 2026-10-08 on Austin Powers 2's chapter menu).
+    The fix includes the owning title's PTT table on a PGCN-only title jump
+    (`ttn_pick`).
+  - ✅ **No First Play PGC** (VMGI@0x84 = 0): the reader plays VMGM PGC 1 in the FP domain,
+    as libdvdnav does (HW-confirmed on ISLAM_TRAILER). It needed the still rule: an
+    indefinite still now holds before a non-loop cell command.
+  - ⏳ The next sweep: generate Menu/Title keys and chapter skips in `auto_script`, and
+    compare SPRM8.
 
 Validate empirically (does it route? does the fringe stay gone on HW?), not by chasing the
 fit/STA reports to zero — consistent with the project's "validate on hardware" discipline.

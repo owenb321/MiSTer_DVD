@@ -40,7 +40,7 @@ import nav_shell as S      # noqa: E402
 SIM = os.path.join(REPO, '.sim', 'vm_ab')
 OLD_SRC = ['bench/dvd/ref/dvd_vm_hw.sv', 'bench/dvd/vm_ab_tb.sv']
 NEW_SRC = ['dvd/dvd_vm.sv', 'bench/dvd/vm_ab_tb.sv']
-ARG_ID = {'cellcmd': 0, 'btn': 1, 'chedge': 2, 'stir': 3, 'agl': 4}
+ARG_ID = {'cellcmd': 0, 'btn': 1, 'chedge': 2, 'stir': 3, 'agl': 4, 'ptt': 5}
 INPUT_IDX = {n: i for i, n in enumerate(S.INPUTS)}
 
 
@@ -171,6 +171,11 @@ def gen_script(seed, steps):
             s.append(f'pulse agl={rng.randrange(1, 10)}')
         elif r < 0.74:
             s.append('timeout')
+        elif r < 0.79:
+            # the reader's part of the playing cell (SPRM7); with a load in the same
+            # cycle it must wait out that PGC's PRE
+            p = rng.choice([0, 1, 2, rng.randrange(1, 100), rng.randrange(1 << 11)])
+            s.append(f'pulse ptt={p}' if rng.random() < 0.6 else f'pulse loaded ptt={p}')
         elif r < 0.88:
             s.append(rand_input(rng))
         elif r < 0.95:

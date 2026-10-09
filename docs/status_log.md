@@ -22,6 +22,100 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
+  NON-LOOP CELL COMMAND (2026-10-08, ✅ MERGED PR #169; HW-CONFIRMED on the rig, A/B
+  vs `dev-navsweep`).** These are the two pre-existing core differences
+  the library sweep found (entry below). The user decided to fix both. Full note:
+  `docs/nav_engine.md` §5a "The fix".
+  - **SPRM6/7:**
+    - Both are wrapper registers now. SPRM6 is set on a title PGC load; SPRM7 takes the
+      reader's global part (`ptt_upd` / `ptt_cur`), held until the VM is at rest.
+    - T3's VTSM now reads chapter 2, as libdvdnav does. 58 library discs branch on
+      SPRM7 and 74 on SPRM6.
+  - **The PTT table:** a PGCN-only title jump (`LinkPGCN`, a resume) now reads the owning
+    title's table, not title 1's (`ttn_pick`). That also fixes the HUD's CH n/N after
+    resuming into title 2+ of a VTS.
+  - **First Play:** with @0x84 = 0, VMGM PGC 1 plays in the First Play domain, as with
+    libdvdnav. D050818_01 and ISLAM_TRAILER now agree offline.
+  - **Gates:**
+    - `run_sprm67.sh --red` (7 reader arms, wiring, S28) and `run_vm_ab.sh --red`
+      (W5–W7) are green;
+    - every VM runner `--red` is green;
+    - reader regress is verdict-identical (6 arms shift by 2 cycles: `RSM_SAVE` reads 6/7
+      with `in`).
+  - **Sweep pass 3 (2026-10-08, the fixes):** the only changes from pass 2 are the three
+    intended ones. T3 went `ok-gprm` → `ok`; D050818_01 and ISLAM_TRAILER went
+    `nolanding` → `ok`. There are no DIFFs and no `ok-gprm`.
+  - **HW, rig, A/B vs `dev-navsweep` (`DVD_navfixes_20261008_1648.rbf`):**
+    - ✅ **SPRM7: HW-confirmed.** Austin Powers 2's chapter menu pages by SPRM7 on a
+      second visit (the first visit always opens page 1, on any player).
+      - Setup: play into chapter 10, open Chapter Menu, Menu to resume, then Chapter
+        Menu again.
+      - Fix: "Chapters 7-12", with button 10 lit.
+      - Control: "Chapters 1-6", with button 1 lit.
+    - ⚠ **No FP PGC on ISLAM_TRAILER:** the fix boots VMGM PGC 1 (the disc's "MENU" with
+      its button), but the board does not park there. The cell has an indefinite (0xFF)
+      still AND a cell command (`g1 = 1; LinkTailPGC`), and the reader runs the command
+      first. That is the deliberate, HW-proven Phase-3 ordering for MiB/Matrix motion
+      menus (`docs/dvd_nav.md` "Still off"). The POST then loops the cell, `LinkPGCN 3`,
+      and PGC 3 ends in `Exit`: the picture stops on the menu with no button armed.
+      libdvdnav holds the still and waits for the press. The control boots the auto
+      title. `nav_offline` did not predict this, because its model parks on any 0xFF
+      still (a model gap to close).
+  - **The still rule (user decision; `docs/dvd_nav.md` "An indefinite still and its cell
+    command"):** command-first is kept for commands that loop the cell; any other command
+    waits out the still. Build `DVD_navfixes_20261008_1851.rbf` passes timing, and
+    `ccls_mem` is inferred as M10K. HW on the second rig:
+    - ✅ ISLAM_TRAILER boots VMGM PGC 1 as a still with its button armed; button 1 plays
+      the trailer from its start, as libdvdnav does. The control boots the trailer.
+    - ✅ The Muppets' first menu (0xFF + `LinkCN` to itself) is identical on both builds:
+      the same park, buttons armed, byte-identical frames.
+    - ✅ The maintainer's hand check (2026-10-08):
+      - Men in Black's menu still animates and loops.
+      - **INDIVISIBLE's chapter-select menu works here and did not on 0.9.0.** It
+        bounced back to its parent: five 0xFF + `LinkTailPGC` pages.
+    - ✅ The PTT table on a resume (`ttn_pick`), rig A/B on Babylon A.D. side B: after
+      Menu → Menu the HUD reads `CH 5/21`; the control reads `CH 5/1` (title 1's
+      one-chapter table). That was a pre-existing HUD bug.
+    - Aladdin D2 cannot resume on any player: its main menu is a title-domain PGC, so
+      Menu from it is a fresh menu call (the same on 0.9.0).
+    - About Schmidt pages its chapter menu by SPRM7 only when g7 = 12, i.e. after a
+      chapter was chosen from that menu, which is the disc's authoring.
+    - The still rule's decode was corrected: types 2/3 carry the full link set. The HW
+      above ran on `DVD_navfixes_20261008_1851.rbf`. The corrected build,
+      `DVD_navfixes_20261009_0149.rbf`, passes timing: `clk_dec` 88.94 / 88.07 MHz,
+      `clk_mem` 94.4 / 94.1 MHz. It differs only for a looping type-2/3 cell command on
+      an indefinite still; none of the discs tested above has one. In the library only
+      ROLLERBALLB has one (VTSM 1, PGC 24, its paged menu: `g2 = 13; LinkPGCN 24`). ✅ The
+      maintainer checked it by hand on this build: the menu works, unchanged from 0.9.0
+      (the 1851 build would have frozen a page).
+
+- ✅ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, MERGED PR #169, offline).**
+  The microcoded VM against libdvdnav over every library disc, with
+  `tools/nav_offline.py`. Full note: `docs/nav_engine.md` §5a.
+  - **Pass 2** (1,531 discs, cap 100k, fixed tools):
+    - 1,492 `ok`, 26 `rnd`, 6 `oracle-err`, 3 `nolanding` (two no-First-Play discs,
+      plus Anchorman, a cap artefact), 1 `cap-edge`, 1 `ok-gprm` (T3), and 2
+      unreadable;
+    - the 515 discs that never park were then compared on their boot chain: 501
+      agree, 10 `oracle-err`, 4 `rnd`.
+  - **Result:** every lead traced to the model, to a libdvdnav failure, or to `rnd`,
+    except **two pre-existing core differences**. The old FSM has both, so neither is the
+    microcode's:
+    - **SPRM7 / SPRM6 do not follow playback.** They are set only at a jump. T3's
+      VTSM reads SPRM7 = 1 where libdvdnav reads 2.
+    - **No First Play PGC.** The reader errors where libdvdnav plays VMGM PGC 1 (2
+      discs).
+  - **The tools were fixed more than the VM:**
+    - libdvdnav's short-cell still (`still_of`);
+    - the dropped `w` action, which hid 516 discs that compared nothing;
+    - a 0-cell spin, and a model log that reached 11 GB;
+    - `rnd` decided from what libdvdnav executed.
+  - **`trace_nav`'s seed never held:** `dvdnav_open()` reseeds from the clock. It is now
+    set after the open, so `nav_diff.py`'s two-seed check was random too until then.
+  - **Next:** the two follow-ups in `docs/roadmap.md` (user decision), and a sweep that
+    generates menu keys and compares SPRM8.
+
 - ✅ **THE DVD VM AS MICROCODE (2026-10-07, ✅ MERGED PR #168; HW-CONFIRMED
   2026-10-08).** Sim-proven; the full-core fit passes timing; HIL `nav_diff` equals the
   control on every compared step; the maintainer's hand check of the game paths passed on
@@ -70,6 +164,10 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       libdvdnav 1);
     - `tools/nav_offline.py` predicted every one of those landings beforehand, T2's
       divergence included.
+    - **T2's "difference" is press timing, not navigation** (2026-10-08). Its cell 2 is
+      a 5 s single-VOBU still with buttons. libdvdnav and the core both hold it; the
+      harness pressed after it ended. Offline, with libdvdnav's still rule, T2 agrees on
+      all four steps (`docs/nav_engine.md` §3a).
   - **Timing:** worst observed chain (a 4,096-command runaway) 1.11 M cycles, 41 ms;
     ≥ 6× inside the reader's watchdogs.
   - **Limits:**

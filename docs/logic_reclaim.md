@@ -401,7 +401,9 @@ oracle. **The branch reproduced the control's table exactly on every compared st
 4/4, Matrix 3/3, Harry Potter Interactive 3/3 (its 4th step was voided by another session
 loading a core mid-run), Scooby-Doo 2 1/1, Scene It HP never parked on either build, and
 T2's first button lands on PGCN 5 where libdvdnav says PGCN 1 **on both builds** — a
-pre-existing difference on `main`, not this branch.
+pre-existing difference on `main`, not this branch. **Later diagnosed as press timing, not
+navigation** (2026-10-08, `docs/nav_engine.md` §3a): the first screen is a 5 s timed still
+the core holds, and the harness pressed after it ended.
 ⚠ What that does NOT cover: steps that never reached an armed park on either build (T2
 after its first button, the Scooby maze itself, Scene It's game), and counter-mode GPRMs.
 Those need a hand check.

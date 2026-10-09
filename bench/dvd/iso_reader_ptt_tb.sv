@@ -70,6 +70,12 @@ module iso_reader_ptt_tb;
     reg         chap_at_start = 1;
     wire [7:0]  cur_pgm_w;
     wire [10:0] nr_ptt_w;
+    // SPRM7 for the VM (docs/nav_engine.md 5a): the global part, pulsed per resolve.
+    // The last one published is what the VM would hold.
+    wire        ptt_upd_w;
+    wire [10:0] ptt_cur_w;
+    reg  [10:0] ptt_last = 11'h7FF;
+    always @(posedge clk) if (ptt_upd_w === 1'b1) ptt_last <= ptt_cur_w;
 
     dvd_iso_reader dut (
         // new reader inputs tied off: a floating input is X, and X on
@@ -85,6 +91,7 @@ module iso_reader_ptt_tb;
         .cur_cell(), .cell_ready(),
         .chap_pulse(chap_pulse), .chap_dir(chap_dir), .chap_mag(chap_mag),
         .chap_at_start(chap_at_start), .cur_pgm(cur_pgm_w), .nr_ptt_o(nr_ptt_w),
+        .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_domain(jump_domain), .jump_vts(jump_vts),
         .jump_pgcn(jump_pgcn), .jump_entry(jump_entry), .jump_cell(8'd0),
         .jump_ack(jump_ack), .pgc_loaded(pgc_loaded), .pgc_error(pgc_error),
@@ -358,6 +365,11 @@ module iso_reader_ptt_tb;
         if (cur_pgm_w !== want_ch) begin
             $display("FAIL %0s: cur_pgm=%0d, expected %0d (global chapter)",
                      label, cur_pgm_w, want_ch);
+            errors = errors + 1;
+        end else if (ptt_last !== {3'd0, want_ch}) begin
+            // the VM's SPRM7 is published by the same resolve as cur_pgm
+            $display("FAIL %0s: ptt_cur (SPRM7) = %0d, expected part %0d",
+                     label, ptt_last, want_ch);
             errors = errors + 1;
         end else
             $display("%0s -> %02x ch%0d via %0s  PASS", label, want, want_ch,

@@ -44,7 +44,7 @@ INPUTS = {   # name: (width, reset value). The cfg defaults are libdvdnav's cons
     'btn_sel': (6, 0), 'btns_armed': (1, 0), 'wait_hold': (1, 0),
 }
 PULSES = ['loaded', 'error', 'cellcmd', 'pgcend', 'btn', 'menu', 'title', 'return',
-          'cmenu', 'chedge', 'start', 'tick', 'stir', 'agl']
+          'cmenu', 'chedge', 'start', 'tick', 'stir', 'agl', 'ptt']
 DOM_VMGM, DOM_VTSM, DOM_TT = 1, 2, 3
 EVB = N.EV
 
@@ -86,6 +86,9 @@ class Shell:
                 self._level(r, v)
         else:
             self.sprm = {1: 15, 2: 62, 3: 1, 8: 0x400}
+        # SPRM6/7 are wrapper registers too, but not ports: no L lines
+        self.sprm[6], self.sprm[7] = 0, 1
+        self.ptt_pend, self.ptt_q = False, 0
         self.frozen = False
         seed = self.inp_lv['rnd_seed']
         self.lfsr = seed if seed else 0xACE1
@@ -143,6 +146,15 @@ class Shell:
             self.pre_armed = False
             self._emit('PREDONE')
 
+    def _ptt_apply(self):
+        # a held part lands only at rest: parked at the idle wev with nothing to
+        # dispatch (the wrapper's vm_rest; libdvdnav's set_PGN runs after the PRE)
+        if (self.ptt_pend and not self.pre_armed and self.m.waiting == 0 and
+                not self.events and not self.tick_pending and
+                not (self.flags & N.base_equ()['F_WALK'])):
+            self.ptt_pend = False
+            self.sprm[7] = self.ptt_q
+
     # ------------------------------------------------------------ the machine's I/O
     def inp(self, p):
         L = self.inp_lv
@@ -150,7 +162,7 @@ class Shell:
             n = p - 32
             if n in (0, 16, 18):
                 return L['cfg_lang']
-            if n in (1, 2, 3):
+            if n in (1, 2, 3, 6, 7):
                 return self.sprm[n]
             if n == 8:
                 return self.sprm8_eff()
@@ -207,6 +219,8 @@ class Shell:
             self._level(int(name[4:]), v)
             if name == 'SPRM8':
                 self._shadow()            # the shadow takes it back next cycle
+        elif name in ('SPRM6', 'SPRM7'):
+            self.sprm[int(name[4:])] = v & 0xFFFF
         elif name == 'VM_DOM':
             self.vm_dom = v & 3
         elif name == 'VM_VTS':
@@ -291,6 +305,11 @@ class Shell:
             self.lm = (self.vm_dom, self.vm_vts, L['cur_pgcn'])
             self.lm_v = True
             self.menu_seen = True
+        # SPRM6/7 (the wrapper's order: after the menu latch, before the microcode)
+        if 'loaded' in ps and self.vm_dom == DOM_TT:
+            self.sprm[6] = L['cur_pgcn']
+        if 'ptt' in ps and self.vm_dom == DOM_TT:
+            self.ptt_pend, self.ptt_q = True, ps['ptt'] & 0x7FF
         if 'tick' in ps:
             self.tick_pending = True
         if 'loaded' in ps:
@@ -327,6 +346,7 @@ class Shell:
 
     def run(self):
         self.m.run()
+        self._ptt_apply()     # the RTL lands a held part once the VM is at rest
         self._shadow()
 
     def dump(self):
@@ -334,7 +354,8 @@ class Shell:
         M = N.RAM_MAP
         v = {('g%d' % i): r[i] for i in range(16)}
         v.update(gmode=r[M['GMODE']], sprm1=self.sprm[1], sprm2=self.sprm[2],
-                 sprm3=self.sprm[3], sprm8=self.sprm[8], fb=r[M['FB']], cvm=r[M['CVM']],
+                 sprm3=self.sprm[3], sprm6=self.sprm[6], sprm7=self.sprm[7],
+                 sprm8=self.sprm[8], fb=r[M['FB']], cvm=r[M['CVM']],
                  skip_pre=r[M['SKIP_PRE']], tt_resolve=r[M['TT_RESOLVE']],
                  menu_seen=int(self.menu_seen), vm_dom=self.vm_dom, vm_vts=self.vm_vts,
                  de_seen=r[M['DE_SEEN']], de_vts=r[M['DE_VTS']], de_pgcn=r[M['DE_PGCN']],
@@ -343,7 +364,7 @@ class Shell:
                  usr=(self.flags >> 3) & 1, lm_v=int(self.lm_v), lm_dom=self.lm[0],
                  lm_vts=self.lm[1], lm_pgcn=self.lm[2], events=self.events,
                  tick=int(self.tick_pending), mode=self.m.waiting)
-        for n in (4, 5, 6, 7, 9, 10, 13):
+        for n in (4, 5, 9, 10, 13):
             v['sprm%d' % n] = r[M['SPRMI'] + n]
         for n in ('VTS', 'PGCN', 'CELL', 'R4', 'R5', 'R6', 'R7', 'R8'):
             v['rsm_' + n.lower()] = r[M['RSM_' + n]]

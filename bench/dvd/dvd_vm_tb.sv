@@ -49,6 +49,12 @@
 //         follows next_pgcn, a chain with no jump is a strict no-op with
 //         vm_adv masked; Prev jumps to prev_pgcn's LAST program (pgn 0xFF).
 //         Arms V1-V8, mutated by bench/dvd/run_chap_edge.sh --red.
+//   [S28] SPRM6 (TT_PGCN) / SPRM7 (PTTN) follow a title as it plays (libdvdnav
+//         set_PGCN / set_PGN; docs/nav_engine.md 5a). a: a title load sets SPRM6,
+//         its own PRE sees it; b: a menu load does not; c: the reader's part lands
+//         in SPRM7; d: a part with the load waits out that PRE; e: a part outside a
+//         title is ignored; f: a part of 0 (no PTT entry) is stored. The wrapper
+//         arms are bench/dvd/run_vm_ab.sh --red W5-W7.
 //
 // Run: iverilog -g2012 -o /tmp/vmtb dvd/dvd_vm.sv bench/dvd/dvd_vm_tb.sv && vvp /tmp/vmtb
 
@@ -102,6 +108,8 @@ module dvd_vm_tb;
     wire        pre_done;
     reg         agl_set = 0;
     reg  [3:0]  agl_set_val = 4'd1;
+    reg         ptt_upd = 0;              // SPRM7 from the reader (S28)
+    reg  [10:0] ptt_val = 11'd0;
     integer     pre_done_n = 0;
     integer     t7_err0 = 0;
     always @(posedge clk) if (pre_done) pre_done_n = pre_done_n + 1;
@@ -137,6 +145,7 @@ module dvd_vm_tb;
         .cfg_sprm14(cfg14), .cfg_sprm15(cfg15), .cfg_sprm20(cfg20),
         // new VM ports tied off (a floating input is X).
         .agl_set(agl_set), .agl_set_val(agl_set_val),
+        .ptt_upd(ptt_upd), .ptt_val(ptt_val),
         .sprm_agln(sprm_agln), .pre_done(pre_done),
         .clk(clk), .rst_n(rst_n), .enable(enable), .start(start), .cfg_lang(16'h656E),
         .rnd_seed(rnd_seed), .sec_tick(sec_tick),
@@ -1220,8 +1229,8 @@ module dvd_vm_tb;
             for (i = 0; i < 16; i = i + 1) `VM_GPRM(dut, i) = 16'd0;
         end
         dut.sprm1 = 16'd15; dut.sprm2 = 16'd0;  dut.sprm3 = 16'd1;
-        `VM_SPRM(dut, 4) = 16'd4;  `VM_SPRM(dut, 5) = 16'd3;  `VM_SPRM(dut, 6) = 16'd3;
-        `VM_SPRM(dut, 7) = 16'd1;  dut.sprm8 = 16'h0400;
+        `VM_SPRM(dut, 4) = 16'd4;  `VM_SPRM(dut, 5) = 16'd3;  dut.sprm6 = 16'd3;
+        dut.sprm7 = 16'd1;  dut.sprm8 = 16'h0400;    // 6/7 are wrapper registers
         wr_cmd(0,  64'h00a1000600010009);   // if (g6 == 1) Goto 9
         wr_cmd(1,  64'h00a100050001000d);   // if (g5 == 1) Goto 13
         wr_cmd(2,  64'h6100000300920000);   // g3 = SPRM18 (subp pref = 'en')
@@ -1822,6 +1831,55 @@ module dvd_vm_tb;
     end
     endtask
 
+    // ---------------- [S28] SPRM6/7 follow a title as it plays ---------------
+    task ptt_pulse(input [10:0] v);
+    begin
+        @(negedge clk); ptt_upd = 1; ptt_val = v;
+        @(negedge clk); ptt_upd = 0;
+    end
+    endtask
+
+    task run_s28;
+        integer i;
+    begin
+        nav_ready = 1; vm_restart; wait_idle;
+        for (i = 0; i < 16; i = i + 1) `VM_GPRM(dut, i) = 16'd0;
+        wr_cmd(0, 64'h6100000100860000);   // g1 = SPRM6
+        wr_cmd(1, 64'h6100000200870000);   // g2 = SPRM7
+        nr_pre = 2; nr_post = 0; nr_cell = 0; cell_count = 8'd3;
+        menu_active = 0;
+        if (dut.sprm6 !== 16'd0 || dut.sprm7 !== 16'd1) fail("S28: mount values != 0 / 1");
+        // (a) a title PGC load: SPRM6 = its PGCN, already set for its own PRE
+        dut.vm_dom = 2'd3; cur_pgcn = 16'd7;
+        clear_actions; pulse_loaded; wait_idle;
+        if (dut.sprm6 !== 16'd7) begin fail("S28a: SPRM6 != the title PGCN"); $display("  sprm6=%0d", dut.sprm6); end
+        if (`VM_GPRM(dut, 1) !== 16'd7) begin fail("S28a: the PRE read SPRM6 != its own PGCN"); $display("  g1=%0d", `VM_GPRM(dut, 1)); end
+        // (c) the reader's part, at rest
+        ptt_pulse(11'd3); wait_idle;
+        if (dut.sprm7 !== 16'd3) begin fail("S28c: SPRM7 != the reader's part"); $display("  sprm7=%0d", dut.sprm7); end
+        // (d) a part arriving with the next load: that PGC's PRE reads the OLD part
+        cur_pgcn = 16'd8;
+        @(negedge clk); pgc_loaded = 1; ptt_upd = 1; ptt_val = 11'd5;
+        @(negedge clk); pgc_loaded = 0; ptt_upd = 0;
+        wait_idle;
+        if (`VM_GPRM(dut, 2) !== 16'd3) begin fail("S28d: the PRE read the part that arrived with its load"); $display("  g2=%0d", `VM_GPRM(dut, 2)); end
+        if (dut.sprm7 !== 16'd5) begin fail("S28d: the held part never landed"); $display("  sprm7=%0d", dut.sprm7); end
+        if (`VM_GPRM(dut, 1) !== 16'd8) fail("S28d: SPRM6 != the second title PGCN");
+        // (b) a menu PGC load leaves SPRM6; (e) a part in a menu is ignored
+        dut.vm_dom = 2'd2; menu_active = 1; cur_pgcn = 16'd9;
+        clear_actions; pulse_loaded; wait_idle;
+        if (dut.sprm6 !== 16'd8) begin fail("S28b: a menu load changed SPRM6"); $display("  sprm6=%0d", dut.sprm6); end
+        if (`VM_GPRM(dut, 2) !== 16'd5) fail("S28b: the menu's PRE did not see the title's part");
+        ptt_pulse(11'd9); wait_idle;
+        if (dut.sprm7 !== 16'd5) begin fail("S28e: a part outside a title changed SPRM7"); $display("  sprm7=%0d", dut.sprm7); end
+        // (f) back in a title, a cell no PTT entry names: 0, as libdvdnav writes
+        dut.vm_dom = 2'd3; menu_active = 0;
+        ptt_pulse(11'd0); wait_idle;
+        if (dut.sprm7 !== 16'd0) begin fail("S28f: a part of 0 was not stored"); $display("  sprm7=%0d", dut.sprm7); end
+        $display("S28 SPRM6/7 follow a title as it plays PASS");
+    end
+    endtask
+
     // ---------------- [S27] chapter skip at the TITLE's edge -----------------
     // The reader decides the edge and pulses key_chedge (its own bench is
     // iso_reader_chapedge_tb); here the VM's half. A title is playing
@@ -1945,6 +2003,7 @@ module dvd_vm_tb;
         run_s25;
         run_s26;
         run_s27;
+        run_s28;
         part3;
 
         if (errors == 0) $display("ALL TESTS PASS (dvd_vm_tb)");

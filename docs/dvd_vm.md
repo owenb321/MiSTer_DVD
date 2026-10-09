@@ -188,7 +188,13 @@ A faithful port of **libdvdnav `src/vm/decoder.c` `eval_command`**:
   a 16-cycle walk. Touch `gprm[]` only in its port block (`tools/check_gprm_ram.py`).
 - **SPRMs implemented**: 1 ASTN (init 15 = none), 2 SPSTN (init 62), 3 AGLN, 4 TTN,
   5 VTS_TTN, 6 TT_PGCN, 7 PTTN, 8 HL_BTNN (init 0x400), 9/10 NVTMR (stored, never
-  fires), 13 PML. Constants per libdvdnav `vm_reset`: SPRM0/16/18 = 'en' (the OSD
+  fires), 13 PML. **6 and 7 follow a title as it plays** (2026-10-08,
+  `docs/nav_engine.md` §5a), as libdvdnav's `set_PGCN` / `set_PGN` do:
+  - SPRM6 = the PGCN of every title-domain PGC load, before its PRE;
+  - SPRM7 = the reader's global part of the playing cell (`ptt_upd`), held until the VM
+    is at rest.
+
+  Before that, both were set only at a jump. Constants per libdvdnav `vm_reset`: SPRM0/16/18 = 'en' (the OSD
   Player Language), 12 = 'US'. **SPRM14 / 15 / 20 are NOT constants** since
   PR #154: they come from `dvd/player_regs.sv` (see "Player parameters
   SPRM14/15/20" below). The old values were 0x100 / 0x7CFC / 1, and 1 is region 1,
@@ -640,7 +646,8 @@ one of `vm_adv` (continue authored behaviour), `vm_replay` (replay the current c
 - LinkTailPGC → chain into the POST block **now** (MiB Play buttons).
 - LinkRSM → restore SPRM4-8 + jump {TT, rsm} with `skip_pre`.
 - JumpTT n → reader resolves via TT_SRPT (`jump_ttn`, `jump_vts=0`); SPRM4=n,
-  SPRM5=resolved vts_ttn (`res_ttn` latched at load), SPRM7=1.
+  SPRM5=resolved vts_ttn (`res_ttn` latched at load), SPRM7=1 (then the reader's part as
+  the title plays).
 - JumpVTS_TT / JumpVTS_PTT → title-entry scan in the current VTS (+ start program).
 - JumpSS FP / VMGM menu / VTSM (vts,title,menu) / VMGM pgc → the four reader domains.
 - CallSS_* → save RSM {cur_vts, cur_pgcn, cell (command's rsm_cell field − 1, else

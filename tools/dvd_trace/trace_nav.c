@@ -190,14 +190,22 @@ int main(int argc, char **argv) {
   int cand_loops = 0;
   long cand_blocks = 0;
   long blocks = 0, blocks_in_cell = 0;
+  /* TRACE_BLOCK_CAP: how many blocks before the trace gives up (default 400000).
+   * tools/nav_offline.py lowers it for library sweeps: the share is network-bound
+   * and a title that plays into the cap is most of a run's I/O. Its own playback
+   * model charges sectors against the SAME cap, so both sides stop together. */
+  long block_cap = 400000;
+  { const char *c = getenv("TRACE_BLOCK_CAP"); if (c && atol(c) > 0) block_cap = atol(c); }
 
   if (argc < 2) { printf("usage: %s <iso> [\"script\"] [rnd_seed]\n", argv[0]); return 1; }
   parse_script(argc > 2 ? argv[2] : "");
-  { const char *s = getenv("ATMOS_SEED");
-    if (argc > 3) srand((unsigned)atoi(argv[3]));
-    else if (s) srand((unsigned)atoi(s));
-    printf(">> rnd seed = %s\n", argc > 3 ? argv[3] : (s ? s : "default(1)")); }
   if (dvdnav_open(&nav, argv[1]) != DVDNAV_STATUS_OK) { printf("open failed\n"); return 2; }
+  /* AFTER the open: dvdnav_open() itself calls srand(time.tv_usec) (dvdnav.c), so a
+   * seed set before it was silently replaced and every run's rnd differed -- the
+   * offline sweep's two-seed rnd test compared two random runs. */
+  { const char *s = getenv("ATMOS_SEED");
+    srand(argc > 3 ? (unsigned)atoi(argv[3]) : (s ? (unsigned)atoi(s) : 1u));
+    printf(">> rnd seed = %s\n", argc > 3 ? argv[3] : (s ? s : "default(1)")); }
   dvdnav_set_readahead_flag(nav, 0);
   dvdnav_set_PGC_positioning_flag(nav, 1);
 
@@ -236,7 +244,7 @@ int main(int argc, char **argv) {
           }
         }
       }
-      if (blocks > 400000) { printf("[block cap]\n"); finished = 1; }
+      if (blocks > block_cap) { printf("[block cap]\n"); finished = 1; }
       break;
     case DVDNAV_STILL_FRAME: {
       dvdnav_still_event_t *s = (dvdnav_still_event_t *)buf;

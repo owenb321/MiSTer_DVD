@@ -33,6 +33,19 @@ verdict: it names a disc, a script and a step to reproduce on the rig with
 nav_diff.py. Discs that use `rnd` are skipped (the core's LFSR and libdvdnav's RNG
 differ by design), as nav_diff does.
 
+A disc's status (docs/nav_engine.md sec 5):
+    ok          every compared landing agrees (dom, PGCN, VTS in a VTS domain, GPRMs
+                outside counter mode)
+    ok-gprm     the same screens, different registers, no rnd: a LEAD
+    DIFF        a different screen: a LEAD
+    rnd         libdvdnav executed a rnd set, and a difference (or a second seed)
+                followed it
+    oracle-err  libdvdnav could not use the disc after the action (read error, IFO
+                rejected, a PTT naming PGC 0)
+    cap-edge    both stopped at the block cap on the same screen, one park apart
+    nolanding   the model never reached the landing libdvdnav did: a LEAD
+    udf-only    no VIDEO_TS in the ISO9660 tree (the reader cannot open it)
+
 Usage:
     tools/nav_offline.py <disc.iso> --script "1 2 mR 1"
     tools/nav_offline.py <disc.iso> --auto 4            # a valid script from the oracle
@@ -58,7 +71,12 @@ LIB = os.environ.get('DVD_ISO_DIR', os.path.expanduser('~/dvd-isos'))
 DOM_FP, DOM_VMGM, DOM_VTSM, DOM_TT = 0, 1, 2, 3
 DVDNAV_DOM = {DOM_FP: 1, DOM_TT: 2, DOM_VMGM: 4, DOM_VTSM: 8}   # libdvdnav's codes
 CELL_CAP = 4000
-BLOCK_CAP = 400000       # trace_nav's [block cap]: playback is charged in sectors
+# trace_nav's [block cap]: playback is charged in sectors against the SAME cap trace_nav
+# uses (it reads TRACE_BLOCK_CAP; --block-cap sets both). A sweep lowers it because the
+# library is a network share and a title that plays into the cap is most of a run's I/O.
+BLOCK_CAP = int(os.environ.get('TRACE_BLOCK_CAP', 400000))
+# library subdirectories to skip (images that are not DVD-Video), comma-separated
+SKIP_DIRS = {d for d in os.environ.get('NAV_SKIP_DIRS', '').split(',') if d}
 VOBU_SCAN = 256          # VOBUs of a cell searched for an HLI
 
 
@@ -69,6 +87,7 @@ class Disc(R.IsoNav):
     def __init__(self, path):
         super().__init__(path)
         self._hli = {}
+        self._ptt = {}
         self.vobs = {}                  # (dom, vts) -> absolute LBA of the VOB set
         if self.vmgi_lba is not None:
             m = self.sec(self.vmgi_lba)
@@ -111,6 +130,19 @@ class Disc(R.IsoNav):
             return None
         return struct.unpack('>HH', self.rd(base + start + 4 * (part - 1), 4))
 
+    def ptt_table(self, vts, ttn):
+        """VTS_PTT_SRPT[ttn] -> [(pgcn, pgn), ...] (the reader's ptt_mem, PTT_CAP 1024)."""
+        key = (vts, ttn)
+        if key not in self._ptt:
+            t = []
+            for part in range(1, 1025):
+                r = self.ptt(vts, ttn, part)
+                if r is None:
+                    break
+                t.append(r)
+            self._ptt[key] = t
+        return self._ptt[key]
+
     def hli(self, dom, vts, cell):
         """The first HLI in the cell: (btn_ns, fosl, [8-byte commands]) or None."""
         base = self.vobs.get((dom, vts if dom in (DOM_VTSM, DOM_TT) else 0))
@@ -141,16 +173,52 @@ class Disc(R.IsoNav):
         return out
 
 
+def still_of(p, ci):
+    """The still libdvdnav shows at cell ci's end (vm.c vm_position_get), which is what
+    trace_nav parks on: the cell's still time, plus the PGC's on its last cell, else
+    its "rough fix" -- a single-VOBU cell under 1,024 sectors at a low data rate is
+    held for its whole playback time (e.g. ULTIMATE_T2's VTSM menu: a 5 s still with
+    buttons up, 2026-10-08). 0xFF = indefinite."""
+    c = p['cells'][ci]
+    st = c['still'] + (p['still'] if ci == p['nr_cells'] - 1 else 0)
+    if st:
+        return st
+    if 'last' in c and c['last'] == c['last_vobu'] and c['last'] - c['first'] < 1024:
+        t = c['pbtime']
+        if t and (c['last'] - c['first']) // t <= 30:
+            return min(t, 0xFF)
+    return 0
+
+
+def cell_cmd_loops(c, cell_no, pgcn):
+    """dvd_iso_reader's cc_loops: does this cell command LOOP the cell? Then an
+    indefinite (0xFF) still runs it first (the Phase-3 motion-menu order); any other
+    command waits out the still, as libdvdnav does (docs/dvd_nav.md "An indefinite
+    still and its cell command")."""
+    c = bytes(c)
+    t, lt, b7 = c[0] >> 5, c[1] & 0x0F, c[7]
+    sub_loop = (b7 & 0x1F) in (1, 5, 9)          # LinkTopCell / TopPG / TopPGC
+    if (t == 1 and not c[0] & 0x10) or t in (2, 3):   # the full link set
+        return ((lt == 1 and sub_loop) or lt == 6 or (lt == 7 and b7 == cell_no) or
+                (lt == 4 and (((c[6] & 0x7F) << 8) | b7) == pgcn))
+    return 4 <= t <= 6 and sub_loop              # a LinkSubIns riding a set/compare
+
+
 class Player:
     """The reader's playback around the microcoded VM (see the module docstring)."""
 
-    def __init__(self, iso, mutate=None):
+    def __init__(self, iso, mutate=None, words=None):
         self.d = Disc(iso)
-        self.sh = S.Shell(mutate=mutate)
+        self.sh = S.Shell(words=words, mutate=mutate)
         self.dom, self.vts, self.pgcn, self.pgc, self.cell = DOM_FP, 0, 0, None, 0
         self.cells = 0
         self.blocks = 0
         self.log = []
+        self.path = []                  # the PGCs that played a cell (path_key), in order
+        # the reader's PTT state (dvd_iso_reader cur_ttn / ptt_mem): which title's
+        # VTS_PTT_SRPT is resident, and whether it names the playing PGC
+        self.cur_ttn, self.ptt_tab = 1, []
+        self.fp_vm = False              # First Play is playing a VMGM PGC (no FP PGC)
         self.set('auto_vts', self.d.best_vts)
         self.set('best_menu_vts', self.d.best_menu_vts)
 
@@ -162,7 +230,12 @@ class Player:
         """Apply a stimulus line; -> the pulses it produced (P lines, split)."""
         n = len(self.sh.log)
         self.sh.apply(line)
-        return [ln.split()[2:] for ln in self.sh.log[n:] if ln.startswith('P ')]
+        out = [ln.split()[2:] for ln in self.sh.log[n:] if ln.startswith('P ')]
+        # neither log is read back here, and both grow without bound: a library disc
+        # that kept the VM busy took a sweep worker to 11 GB
+        del self.sh.log[:]
+        del self.sh.m.trace[:]
+        return out
 
     def verdict(self, pulses):
         """The VM's answer: ('jump', fields) / ('seek', cell) / ('replay',) /
@@ -180,14 +253,24 @@ class Player:
         return out
 
     # ---- loads (the reader's jump service) ----------------------------------
-    def load(self, f):
-        """Resolve a VM jump and report pgc_loaded / pgc_error. -> the verdict of
-        whatever the VM did next (a PRE may jump again)."""
+    def load(self, f, natural=False):
+        """Resolve a VM jump (or the reader's own next_pgcn advance, `natural`) and
+        report pgc_loaded / pgc_error. -> the verdict of whatever the VM did next (a
+        PRE may jump again)."""
         dom, vts, pgcn, entry, ttn, pgn, ptt, cell, _nat = f
         d = self.d
         pgc = None
         res_ttn = 0
-        if dom == DOM_FP:
+        fp_vm = False
+        if dom == DOM_FP and getattr(d, 'fp_off', 1) == 0:
+            # no First Play PGC: the reader re-runs the jump as a VMGM one at its PGCN
+            # (0 -> 1), as libdvdnav's set_FP_PGC / get_PGCIT do; the VM stays in FP
+            pit = d.pgcit(DOM_VMGM, 0)
+            pgcn = pgcn or 1
+            if pit and 1 <= pgcn <= len(pit):
+                pgc = d.pgc(pit[pgcn - 1][1])
+            dom, vts, fp_vm = DOM_VMGM, 0, True
+        elif dom == DOM_FP:
             pgc, vts, pgcn = d.fp_pgc(), 0, 0
         elif dom in (DOM_VMGM, DOM_VTSM):
             if dom == DOM_VMGM:
@@ -204,7 +287,6 @@ class Player:
                 t = d.tt.get(ttn)
                 if t:
                     vts, ttn = t
-            res_ttn = ttn
             pit = d.pgcit(DOM_TT, vts)
             if pit:
                 if pgcn == 0 and ttn:
@@ -215,9 +297,27 @@ class Player:
                             pgn = ppg
                 if 1 <= pgcn <= len(pit):
                     pgc = d.pgc(pit[pgcn - 1][1])
+            if pgc is not None and not natural:
+                # the reader's PTT table (S_PTTLD_MAT, ttn_pick): the named title's;
+                # with no title, title 1's if it names the PGC, else the SRP owner's
+                # (entry_id[6:0]), whose table must name it or none is held
+                if ttn:
+                    self.cur_ttn = ttn
+                    self.ptt_tab = d.ptt_table(vts, ttn)
+                else:
+                    t1 = d.ptt_table(vts, 1)
+                    eid = pit[pgcn - 1][0] & 0x7F
+                    if any(e[0] == pgcn for e in t1) or eid in (0, 1):
+                        self.cur_ttn, self.ptt_tab = 1, t1
+                    else:
+                        t = d.ptt_table(vts, eid)
+                        self.cur_ttn = eid
+                        self.ptt_tab = t if any(e[0] == pgcn for e in t) else []
+            res_ttn = self.cur_ttn
         if pgc is None:
             return self.verdict(self.vm('pulse error'))
         self.dom, self.vts, self.pgcn, self.pgc = dom, vts, pgcn, pgc
+        self.fp_vm = fp_vm
         nc = pgc['nr_cells']
         if pgn == 0xFF and pgc['pm']:
             cell = pgc['pm'][-1] - 1
@@ -267,7 +367,8 @@ class Player:
             if self.cell >= c1 - 1:
                 pg = i + 1
         g = [self.sh.m.ram[i] for i in range(16)]
-        return dict(dom=DVDNAV_DOM[self.dom], vts=self.vts, pgcn=self.pgcn, pg=pg,
+        return dict(dom=1 if self.fp_vm else DVDNAV_DOM[self.dom], vts=self.vts,
+                    pgcn=self.pgcn, pg=pg,
                     cell=self.cell + 1, buttons=buttons, gprm=g,
                     gmode=self.sh.m.ram[S.N.RAM_MAP['GMODE']])
 
@@ -282,8 +383,18 @@ class Player:
         prev = None
         while st == 'play' and self.cells < CELL_CAP and self.blocks < BLOCK_CAP:
             p = self.pgc
-            if p is None or not p['cells']:
-                st = self.follow(self.verdict(self.vm('pulse pgcend')))
+            if p is None:                    # nothing ever loaded: the VM has given up
+                st = 'stop'
+                break
+            if not p['cells']:
+                # a command-only PGC: POST, then as at any PGC end -- a plain advance
+                # takes the authored next_pgcn or stops (it spun here, re-raising the end)
+                v = self.verdict(self.vm('pulse pgcend')) or ('adv',)
+                if v[0] in ('adv', 'replay'):
+                    st = (self.follow(self.load([self.dom, self.vts, p['next'], 0, 0, 0,
+                                                 0, 0, 0], natural=True)) if p['next'] else 'stop')
+                else:
+                    st = self.follow(v)
                 continue
             if self.cell >= p['nr_cells']:
                 self.cell = 0
@@ -296,6 +407,20 @@ class Player:
                     loops += 1
                 acted = False
             prev = key
+            if self.dom == DOM_TT and self.ptt_tab:
+                # the reader's cur_pgm query (CH_G): the last part of this PGC at or
+                # below the cell's program; published on a hit only (SPRM7)
+                pg = 1
+                for i, c1 in enumerate(p['pm']):
+                    if c1 and self.cell >= c1 - 1:
+                        pg = i + 1
+                hit = [i + 1 for i, (pc, pn) in enumerate(self.ptt_tab)
+                       if pc == self.pgcn and pn and pn <= pg]
+                if hit:
+                    self.vm(f'pulse ptt={hit[-1]}')
+            k = path_key(DVDNAV_DOM[self.dom], self.vts, self.pgcn)
+            if not self.path or self.path[-1] != k:
+                self.path.append(k)
             c = p['cells'][self.cell]
             self.sh.inp_lv['cur_cell'] = self.cell
             h = self.d.hli(self.dom, self.vts, c)
@@ -311,9 +436,13 @@ class Player:
                         cand, loops = key, 0
                     elif loops > 0:
                         park = True
-            if c['still'] == 0xFF:
+            still = still_of(p, self.cell)
+            if (still == 0xFF and c['cmd_nr'] and c['cmd_nr'] <= len(p['cellc']) and
+                    cell_cmd_loops(p['cellc'][c['cmd_nr'] - 1], self.cell + 1, self.pgcn)):
+                still = 0          # the core loops the cell instead of holding it
+            if still == 0xFF:
                 park, cand = True, None
-            elif c['still'] and cand is not None and cand[:3] == key[:3] and not acted:
+            elif still and cand is not None and cand[:3] == key[:3] and not acted:
                 park, cand = True, None
             if park and not acted:
                 if pending is not None:
@@ -336,8 +465,10 @@ class Player:
                 elif t == 'mT':
                     v = self.verdict(self.vm('pulse title'))
                 elif t.startswith('w'):
+                    # trace_nav prints a wait as an action too, and pairs it with the
+                    # next park after N cell changes: keep it pending (it was dropped,
+                    # which left every 'w1' script with nothing to compare)
                     wait = int(t[1:] or 1)
-                    pending = None
                 if v is not None and v[0] in ('jump', 'seek'):
                     cand = None
                     st = self.follow(v)
@@ -362,18 +493,11 @@ class Player:
             self.cell += 1
             if self.cell < p['nr_cells']:
                 continue
-            # the PGC ends
-            if p['still'] == 0xFF and not acted:
-                self.cell = p['nr_cells'] - 1
-                if pending is not None:
-                    rows.append((pending, self.state(0)))
-                    pending = None
-                if ti >= len(toks):
-                    break
+            # the PGC ends (its still was the last cell's: still_of)
             v = self.verdict(self.vm('pulse pgcend')) or ('adv',)
             if v[0] == 'adv':
                 if p['next']:
-                    st = self.follow(self.load([self.dom, self.vts, p['next'], 0, 0, 0, 0, 0, 0]))
+                    st = self.follow(self.load([self.dom, self.vts, p['next'], 0, 0, 0, 0, 0, 0], natural=True))
                 else:
                     st = 'stop'
                 continue
@@ -390,18 +514,37 @@ class Player:
 def oracle(iso, script, seed=None):
     """trace_nav's landings -> [(action, state)] with GPRMs (nav_diff's pairing)."""
     cmd = [TRACE_NAV, iso, script] + ([str(seed)] if seed is not None else [])
-    out = subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=900).stdout
+    pr = subprocess.run(cmd, capture_output=True, text=True, errors='replace', timeout=900)
+    out = pr.stdout
+    # libdvdnav logs to BOTH streams (the link values on stdout, an IFO rejection and
+    # the Exit it substitutes on stderr), so their order cannot be recovered: a failure
+    # on stderr voids only a FINAL landing that ended without a park (see below)
+    err_fail = bool(re.search(r'ifoRead_\w+ failed|No such pgcN|BLOCK ERR', pr.stderr))
     vm_re = re.compile(r'VM\[([\w-]+)\]\s+dom=(-?\d+)\s+vtsN=(-?\d+)\s+pgcN=(-?\d+)'
                        r'\s+pgN=(-?\d+)\s+cellN=(-?\d+).*?GPRM\[([\d,]+)\]')
     park_re = re.compile(r'^===== PARK #(\d+)\s+title=(-?\d+)\s+part=(-?\d+)\s+buttons=(\d+)')
     act_re = re.compile(r'^>> action: (.+)$')
     rows, last, pending, idx = [], None, None, None
+    blockerr = False
+    path = []                                    # the PGCs that played a cell, in order
     for ln in out.splitlines():
+        if ln.startswith('BLOCK ERR') or re.search(r'ifoRead_\w+ failed|No such pgcN', ln):
+            # libdvdnav could not use the disc: a read error ('Expected NAV packet but
+            # none found': a VOB not where the IFO says), an IFO libdvdread rejects
+            # (ifoRead_PGCIT failed), or a malformed link target (VTS_PTT_SRPT naming
+            # PGC 0 -> 'No such pgcN', then Exit). Its landing after that is its own
+            # failure, not navigation -- reported as oracle-err, not compared.
+            blockerr = True
+            continue
         m = vm_re.search(ln)
         if m:
             last = dict(dom=int(m.group(2)), vts=int(m.group(3)), pgcn=int(m.group(4)),
                         pg=int(m.group(5)), cell=int(m.group(6)),
                         gprm=[int(x) for x in m.group(7).split(',')])
+            if m.group(1) == 'cell':
+                k = path_key(last['dom'], last['vts'], last['pgcn'])
+                if not path or path[-1] != k:
+                    path.append(k)
             continue
         m = park_re.match(ln)
         if m:
@@ -415,13 +558,28 @@ def oracle(iso, script, seed=None):
             continue
         if act_re.match(ln):
             if pending is not None and idx is None:
-                rows.append((pending, dict(last or {}, buttons=0, cap=True)))
+                rows.append((pending, dict(last or {}, buttons=0, cap=True, blockerr=blockerr)))
             pending, idx = act_re.match(ln).group(1), None
+            blockerr = False                     # only errors AFTER the action void it
     if pending is not None and idx is None:
         # no park after the last action (a title plays into the block cap): its
         # landing is where the trace ended
-        rows.append((pending, dict(last or {}, buttons=0, cap=True)))
-    return rows, out
+        rows.append((pending, dict(last or {}, buttons=0, cap=True,
+                                   blockerr=blockerr or err_fail)))
+    if not rows and pending is None and last is not None:
+        # libdvdnav never parked, so no action ran: the disc boots straight into
+        # playback. Where it stands at the cap is still the boot chain's verdict
+        # (First Play -> the feature); compare that. A third of the library is this.
+        rows.append(('boot', dict(last, buttons=0, cap=True,
+                                  blockerr=blockerr or err_fail, path=path)))
+    # the commands libdvdnav lists and runs are on stderr (ran_rnd reads them); stdout
+    # first, so auto_script's park parse sees the same text it always did
+    return rows, out + '\n' + pr.stderr
+
+
+def path_key(dom, vts, pgcn):
+    """A boot-path step in libdvdnav's codes; the VTS only where it names one."""
+    return (dom, vts if dom in (2, 8) else 0, pgcn)
 
 
 def tok_of(action):
@@ -448,15 +606,59 @@ def auto_script(iso, steps, seed=1):
     return script
 
 
-def diff_disc(iso, script, mutate=None):
-    """-> dict(disc, script, rows=[...], status). A row compares one action."""
-    name = os.path.basename(iso)
-    a, _ = oracle(iso, script, seed=1)
-    b, _ = oracle(iso, script, seed=99)
-    if [r[1].get('pgcn') for r in a] != [r[1].get('pgcn') for r in b]:
-        return dict(disc=name, script=script, rows=[], status='rnd')
+def diff_disc(iso, script, mutate=None, words=None):
+    """-> dict(disc, script, rows=[...], status). A row compares one action.
+    A disc that differs is re-run under a second libdvdnav seed: if that moves the
+    oracle's landings, the disc uses `rnd` and is reported as such, not as a DIFF."""
+    name = os.path.relpath(iso, LIB) if iso.startswith(LIB) else os.path.basename(iso)
+    if Disc(iso).vmgi_lba is None:
+        # no VIDEO_TS in the ISO9660 tree: libdvdnav finds it through UDF, the core's
+        # reader cannot (UDF-only images are a known gap). MILLIONAIRERUS.
+        return dict(disc=name, script='', rows=[], status='udf-only')
+    a, raw = oracle(iso, script, seed=1)
+    res = compare_disc(iso, name, script, a, mutate, words)
+    gdiff = any(r['verdict'] == 'ok-gprm' for r in res['rows'])
+    if res['status'] == 'DIFF' or gdiff:
+        # libdvdnav EXECUTED an rnd: the core's LFSR and libdvdnav's RNG differ by
+        # design, so nothing after it compares. This replaced a two-seed test (does
+        # seed 99 move the landings?), which missed Die Another Day 2: its `g0 = rnd
+        # 12` sent both seeds down the same branch.
+        if ran_rnd(raw):
+            res['status'] = 'rnd'
+        elif res['status'] == 'ok':
+            res['status'] = 'ok-gprm'        # same screens, different registers: a lead
+    elif res['status'] == 'ok' and ran_rnd(raw):
+        # agreement after an rnd may be luck (SpacePirates: seed 1's rand() and the
+        # LFSR gave the same g9). If another seed moves libdvdnav, the ok proves nothing.
+        b, _ = oracle(iso, script, seed=99)
+        if [(r[1].get('pgcn'), r[1].get('gprm')) for r in a] != \
+           [(r[1].get('pgcn'), r[1].get('gprm')) for r in b]:
+            res['status'] = 'rnd'
+    return res
+
+
+def ran_rnd(out):
+    """Did libdvdnav execute a `rnd` set? (`out` is oracle()'s, stderr included.)
+    Its trace LISTS a block's commands under
+    'Full list of commands to execute' (up to the '----' rule), then prints the ones it
+    runs; only the latter count."""
+    listing = False
+    for ln in out.splitlines():
+        if 'Full list of commands to execute' in ln:
+            listing = True
+        elif ln.startswith('libdvdnav: ---'):
+            listing = False
+        elif not listing and re.match(r'^\(\d+\) .*\| g\[\d+\] rnd ', ln):
+            return True
+    return False
+
+
+def compare_disc(iso, name, script, a, mutate, words=None):
     try:
-        ours = Player(iso, mutate).run(script)
+        pl = Player(iso, mutate, words)
+        ours = pl.run(script)
+        capped = pl.blocks >= BLOCK_CAP
+        at_end = pl.state(0)
     except Exception as e:                       # a model or emulator failure is a finding too
         return dict(disc=name, script=script, rows=[], status=f'error: {e!r}')
     rows = []
@@ -465,8 +667,49 @@ def diff_disc(iso, script, mutate=None):
         t = tok_of(act)
         menu_calls += t.startswith('m')
         u = ours[i][1] if i < len(ours) else None
+        if t == 'boot' and not o.get('blockerr'):
+            # both played until the cap and count blocks differently (whole cells
+            # here), so they stop at different points of the SAME boot chain
+            # (Horrible Bosses: four trailers, the model one behind). Compare the
+            # chain: one side's PGC path must be a prefix of the other's.
+            op, up = [tuple(x) for x in o.get('path', [])], pl.path
+            n = min(len(op), len(up))
+            agree = n > 0 and op[:n] == up[:n]
+            if not agree:
+                v = 'DIFF'
+            elif len(up) > len(op):
+                # the model further on is NOT the accounting artefact: whole cells
+                # charged per cell can only put it behind. libdvdnav spending its
+                # blocks somewhere the model left (a loop, a held cell) is a lead.
+                # (Ten of these were libdvdnav read errors, which BLOCK ERR now voids.)
+                v = 'DIFF'
+            elif len(op) != len(up):
+                v = 'ok-prefix'                  # the same chain, the model behind
+            else:
+                v = 'ok'
+            if v == 'ok':                        # the same endpoint: registers compare
+                cm = at_end.get('gmode', 0)
+                og, ug = o.get('gprm') or [], at_end.get('gprm') or []
+                if any(a != b for i, (a, b) in enumerate(zip(og, ug)) if not (cm >> i) & 1):
+                    v = 'ok-gprm'
+            rows.append(dict(tok=t, o=o, u=dict(at_end, path=up), verdict=v))
+            continue
+        if o.get('blockerr'):
+            rows.append(dict(tok=t, o=o, u=u, verdict='oracle-err'))
+            break                                # libdvdnav failed to read: not a landing
         if u is None:
-            rows.append(dict(tok=t, o=o, u=None, verdict='nolanding'))
+            # both sides stopped at the block cap: they count blocks differently near
+            # it (whole cells here, block by block in trace_nav), so one can reach one
+            # more park than the other -- a boundary artefact, not a landing
+            # ...but only when we stopped on the screen libdvdnav applied this action
+            # at (the previous landing): a run that never parked at all is a real
+            # difference (ISLAM_TRAILER: libdvdnav parks on a First Play menu)
+            prev = a[i - 1][1] if i > 0 else None
+            same = prev is not None and all(
+                prev.get(k) == at_end.get(k)
+                for k in ['dom', 'pgcn'] + (['vts'] if prev.get('dom') in (2, 8) else []))
+            v = 'cap-edge' if (o.get('cap') and capped and same) else 'nolanding'
+            rows.append(dict(tok=t, o=o, u=None, verdict=v))
             break
         keys = ['dom', 'pgcn'] + (['vts'] if o.get('dom') in (2, 8) else [])
         same = all(o.get(k) == u.get(k) for k in keys)
@@ -482,7 +725,9 @@ def diff_disc(iso, script, mutate=None):
         if v == 'DIFF':
             break                                # everything after is downstream
     st = 'DIFF' if any(r['verdict'] == 'DIFF' for r in rows) else \
-         ('nolanding' if any(r['verdict'] == 'nolanding' for r in rows) else 'ok')
+         ('nolanding' if any(r['verdict'] == 'nolanding' for r in rows) else
+          ('oracle-err' if any(r['verdict'] == 'oracle-err' for r in rows) else
+           ('cap-edge' if any(r['verdict'] == 'cap-edge' for r in rows) else 'ok')))
     return dict(disc=name, script=script, rows=rows, status=st)
 
 
@@ -498,12 +743,12 @@ def show(res):
 
 
 def lib_job(args):
-    iso, steps, mutate = args
+    iso, steps, mutate, words = args
     try:
         script = ' '.join(auto_script(iso, steps)) or 'w1'
-        return diff_disc(iso, script, mutate)
+        return diff_disc(iso, script, mutate, words)
     except Exception as e:
-        return dict(disc=os.path.basename(iso), script='', rows=[], status=f'error: {e!r}')
+        return dict(disc=os.path.relpath(iso, LIB), script='', rows=[], status=f'error: {e!r}')
 
 
 def main():
@@ -516,8 +761,19 @@ def main():
     ap.add_argument('--limit', type=int, default=0)
     ap.add_argument('--jobs', type=int, default=os.cpu_count())
     ap.add_argument('--red', help='run with this ;MUT arm: it must produce differences')
-    ap.add_argument('--out', help='write the per-disc results here (JSON lines)')
+    ap.add_argument('--out', help='write the per-disc results here (JSON lines, as each '
+                    'disc finishes)')
+    ap.add_argument('--resume', action='store_true', help='with --out: skip discs already in it')
+    ap.add_argument('--only', metavar='FILE', help='run only the discs listed in FILE (paths '
+                    'relative to $DVD_ISO_DIR, one per line): a second pass over a sweep\'s '
+                    'differences and its discs that compared nothing')
+    ap.add_argument('--block-cap', type=int, help='trace_nav\'s and the model\'s block cap '
+                    '(default 400000; a sweep uses less, see BLOCK_CAP)')
     a = ap.parse_args()
+    if a.block_cap:
+        os.environ['TRACE_BLOCK_CAP'] = str(a.block_cap)       # trace_nav and the workers
+        global BLOCK_CAP
+        BLOCK_CAP = a.block_cap
     if not os.path.exists(TRACE_NAV):
         sys.exit(f'nav_offline: {TRACE_NAV} not built (tools/build_dvd_trace.sh)')
     if not a.library:
@@ -527,21 +783,40 @@ def main():
         res = diff_disc(a.iso, script, a.red)
         show(res)
         return 0 if res['status'] in ('ok', 'rnd') else 1
+    import json
     isos = sorted(os.path.join(dp, f) for dp, _, fs in os.walk(LIB) for f in fs
-                  if f.lower().endswith('.iso'))
+                  if f.lower().endswith('.iso')
+                  and not (set(os.path.relpath(dp, LIB).split(os.sep)) & SKIP_DIRS))
+    if a.only:
+        want = {ln.strip() for ln in open(a.only) if ln.strip()}
+        isos = [i for i in isos if os.path.relpath(i, LIB) in want]
     if a.limit:
         isos = isos[:a.limit]
     results = []
+    done = set()
+    if a.out and a.resume and os.path.exists(a.out):
+        for ln in open(a.out):
+            r = json.loads(ln)
+            results.append(r)
+            done.add(r['disc'])
+    todo = [i for i in isos if os.path.relpath(i, LIB) not in done]
+    print(f'nav_offline: {len(isos)} discs, {len(todo)} to run, block cap {BLOCK_CAP}', flush=True)
+    out = open(a.out, 'a') if a.out else None
     with concurrent.futures.ProcessPoolExecutor(max_workers=a.jobs) as ex:
-        for res in ex.map(lib_job, [(i, a.auto, a.red) for i in isos]):
+        # the program is assembled ONCE, here: a sweep runs for hours, and a worker that
+        # re-read dvd/nav/vm.uasm would pick up an edit made meanwhile (it did, 2026-10-08)
+        words, _, _ = S.N.load_program(a.red)
+        futs = [ex.submit(lib_job, (i, a.auto, None, words)) for i in todo]
+        for n, fu in enumerate(concurrent.futures.as_completed(futs), 1):
+            res = fu.result()
             results.append(res)
+            if out:
+                out.write(json.dumps(res) + '\n')
+                out.flush()
             if res['status'] not in ('ok', 'rnd'):
                 show(res)
-    if a.out:
-        import json
-        with open(a.out, 'w') as f:
-            for r in results:
-                f.write(json.dumps(r) + '\n')
+            if n % 25 == 0:
+                print(f'  ... {n}/{len(todo)}', flush=True)
     from collections import Counter
     c = Counter(r['status'].split(':')[0] for r in results)
     print(f"nav_offline: {len(results)} discs: " + ', '.join(f'{k} {v}' for k, v in sorted(c.items())))

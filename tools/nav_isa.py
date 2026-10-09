@@ -95,7 +95,7 @@ IN['SPRMW'] = 32                 # 32..63: the live-SPRM window (0 for RAM-resid
 OUT_PORTS = [
     'J_DE', 'J_VTS', 'J_PGCN', 'RSV3', 'J_TTN', 'J_PGN', 'J_PTT', 'J_CELL',
     'SEEK_CELL', 'PULSE', 'BTNF_VAL', 'LF_PGCN', 'SPRM1', 'SPRM2', 'SPRM3', 'SPRM8',
-    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET']
+    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET', 'SPRM6', 'SPRM7']
 OUT = {n: i for i, n in enumerate(OUT_PORTS)}
 # PULSE bits
 PULSE_BITS = ['JUMP', 'SEEK', 'REPLAY', 'ADV', 'BTNF', 'LINKFAIL', 'LFSTEP', 'WARM', 'TICKDONE']
@@ -114,6 +114,7 @@ WEV_WAIT = ['LOADED', 'ERROR', 'TIMEOUT']
 # One single-port M10K, touched only by ld/st. Everything the old FSM kept in flops
 # that only the VM reads lives here.
 RAM_MAP = {
+    # 0x00 .. MOUNT_CLR-1: cleared by every mount (vm.uasm RESET walks them in one loop)
     'GPRM': 0x00,        # 0x00..0x0F the 16 GPRMs
     'GMODE': 0x10,       # counter-mode bits, one per GPRM
     'FB': 0x11,          # the fallback-chain state (FB_*)
@@ -121,9 +122,12 @@ RAM_MAP = {
     'SKIP_PRE': 0x13,
     'TT_RESOLVE': 0x14,
     'CHAIN': 0x15,       # VM-issued jumps this activation
-    'RSM_VTS': 0x18, 'RSM_PGCN': 0x19, 'RSM_CELL': 0x1A,
-    'RSM_R4': 0x1B, 'RSM_R5': 0x1C, 'RSM_R6': 0x1D, 'RSM_R7': 0x1E, 'RSM_R8': 0x1F,
-    'DE_SEEN': 0x20, 'DE_VTS': 0x21, 'DE_PGCN': 0x22,
+    'RSM_VTS': 0x16,     # 0 = no resume point
+    'DE_SEEN': 0x17, 'DE_VTS': 0x18, 'DE_PGCN': 0x19,
+    'MOUNT_CLR': 0x1A,
+    # kept across a mount, as the old FSM kept them
+    'RSM_PGCN': 0x1A, 'RSM_CELL': 0x1B,
+    'RSM_R4': 0x1C, 'RSM_R5': 0x1D, 'RSM_R6': 0x1E, 'RSM_R7': 0x1F, 'RSM_R8': 0x20,
     'T0': 0x28,          # 0x28..0x2F handler scratch
     'SPRMI': 0x40,       # 0x40..0x5F the SPRM image: 4..7, 9, 10, 13 live here
 }
@@ -503,7 +507,7 @@ def peek_svh():
          '`ifndef DVD_VM_PEEK_SVH', '`define DVD_VM_PEEK_SVH',
          '`define VM_RAM(P, a)    P.u_seq.dram[a]',
          f'`define VM_GPRM(P, i)   P.u_seq.dram[{M["GPRM"]} + (i)]',
-         f'`define VM_SPRM(P, n)   P.u_seq.dram[{M["SPRMI"]} + (n)]    // 4..7, 9, 10, 13 only',
+         f'`define VM_SPRM(P, n)   P.u_seq.dram[{M["SPRMI"]} + (n)]    // 4, 5, 9, 10, 13 only (6, 7: P.sprm6/7)',
          f'`define VM_RSM_R(P, n)  P.u_seq.dram[{M["RSM_R4"]} + (n) - 4]  // n = 4..8']
     for k in ('GMODE', 'FB', 'CVM', 'SKIP_PRE', 'TT_RESOLVE', 'CHAIN', 'RSM_VTS', 'RSM_PGCN',
               'RSM_CELL', 'DE_SEEN', 'DE_VTS', 'DE_PGCN'):

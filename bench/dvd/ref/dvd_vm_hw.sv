@@ -2,7 +2,11 @@
 // edcfb01 (the hardwired FSM, before the microcode), with ONLY the module renamed to
 // dvd_vm_hw. tools/vm_ab.py / bench/dvd/run_vm_ab.sh score the microcoded VM against it
 // transaction for transaction (docs/nav_engine.md). Do NOT fix or change it: an edit
-// here changes what "equal to the old FSM" means. Its two simulation-only artefacts
+// here changes what "equal to the old FSM" means. The ONE exception is a deliberate
+// behaviour change, made here AND in the VM as a named DELTA, so the A/B keeps an
+// independent second implementation of it:
+//   DELTA 2026-10-08 SPRM6/7: SPRM6/SPRM7 follow a title as it plays (ptt_upd /
+//   ptt_val; libdvdnav set_PGCN / set_PGN). docs/nav_engine.md 5a. Its two simulation-only artefacts
 // (three event latches missing from reset, RAMs never initialised) are deposited by
 // bench/dvd/vm_ab_tb.sv, not repaired here.
 //
@@ -217,6 +221,8 @@ module dvd_vm_hw (
     // source of truth for exactly this reason.
     input             agl_set,        // pulse: user changed the angle
     input      [3:0]  agl_set_val,    // 1-based angle to store in SPRM3
+    input             ptt_upd,        // DELTA 2026-10-08 SPRM6/7
+    input      [10:0] ptt_val,
 
     output     [7:0]  dbg_state,
     // DVD-FORK DEBUG (Atmosfear wrong-title diagnosis): expose the scenario-
@@ -320,6 +326,8 @@ reg        clr_busy;           // RAM clear walk (reset / mount): no async clear
 reg  [3:0] clr_i;
 reg  [1:0] tick_ph;            // counter-mode tick: 0 address, 1 issue, 2 land
 reg [15:0] sprm1, sprm2, sprm3, sprm4, sprm5, sprm6, sprm7, sprm8;
+reg        ptt_pend;                 // DELTA 2026-10-08 SPRM6/7
+reg [10:0] ptt_q;
 reg [15:0] sprm9, sprm10, sprm13;
 
 assign sprm_astn  = sprm1[7:0];
@@ -863,6 +871,7 @@ always @(posedge clk or negedge rst_n) begin
         sprm1 <= 16'd15; sprm2 <= 16'd62; sprm3 <= 16'd1;
         sprm4 <= 16'd1;  sprm5 <= 16'd1;  sprm6 <= 16'd0;
         sprm7 <= 16'd1;  sprm8 <= 16'h0400;
+        ptt_pend <= 1'b0; ptt_q <= 11'd0;    // DELTA 2026-10-08 SPRM6/7
         sprm8_frozen <= 1'b0;
         sprm9 <= 16'd0;  sprm10 <= 16'd0; sprm13 <= 16'd15;
         lfsr  <= lfsr_seed;
@@ -959,6 +968,20 @@ always @(posedge clk or negedge rst_n) begin
             last_menu_pgcn <= cur_pgcn;
             last_menu_v    <= 1'b1;
         end
+        // DELTA 2026-10-08 SPRM6/7: the title PGC on its load; the playing cell's
+        // part once the FSM is at rest (V_IDLE, nothing to dispatch). Its own writes
+        // below win.
+        if (pgc_loaded && vm_dom == DOM_TT) sprm6 <= cur_pgcn;
+        if (ptt_upd && vm_dom == DOM_TT) begin
+            ptt_pend <= 1'b1;
+            ptt_q    <= ptt_val;
+        end else if (ptt_pend && !pre_armed && !pgc_loaded && state == V_IDLE &&
+                     !tick_pending && !clr_busy &&
+                     !(ev_boot | ev_loaded | ev_error | ev_btn | ev_cellcmd | ev_pgcend |
+                       ev_chedge | ev_menu | ev_title | ev_cmenu | ev_return)) begin
+            ptt_pend <= 1'b0;
+            sprm7    <= {5'd0, ptt_q};
+        end
 
         // 1 Hz seconds tick -> pending (applied in V_IDLE, race-free vs GPRM
         // writes). Free-running whether or not the VM is busy; one flag is
@@ -1041,6 +1064,7 @@ always @(posedge clk or negedge rst_n) begin
             sprm1 <= 16'd15; sprm2 <= 16'd62; sprm3 <= 16'd1;
             sprm4 <= 16'd1;  sprm5 <= 16'd1;  sprm6 <= 16'd0;
             sprm7 <= 16'd1;  sprm8 <= 16'h0400;
+            ptt_pend <= 1'b0; ptt_q <= 11'd0;    // DELTA 2026-10-08 SPRM6/7
             sprm8_frozen <= 1'b0;
             sprm9 <= 16'd0;  sprm10 <= 16'd0; sprm13 <= 16'd15;
             lfsr  <= lfsr_seed;         // re-seed rnd from the mount-time entropy

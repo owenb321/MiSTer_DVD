@@ -633,7 +633,7 @@ command execution (Phase 4) yet — this phase ships the reusable machinery they
 
 | domain | meaning | PGC source | cells map into |
 |---|---|---|---|
-| 0 FP   | First Play PGC | VMGI@132 (BYTE offset) | none (commands only → `S_DONE`) |
+| 0 FP   | First Play PGC | VMGI@132 (BYTE offset); **0 → VMGM PGCIT** (below) | none (commands only → `S_DONE`) |
 | 1 VMGM | VMG menu | VMGI@200 PGCI_UT (sector) | `VIDEO_TS.VOB` |
 | 2 VTSM | VTS menu | VTSI@208 PGCI_UT (sector) | `VTS_xx_0.VOB` |
 | 3 TT   | title | VTSI@204 VTS_PGCIT | title VOBs via the extent table |
@@ -643,6 +643,19 @@ bit7 set + low nibble match: VMGM 2=Title; VTSM 3=Root 4=SubPic 5=Audio 6=Angle
 7=Chapter; no match → SRP[0]). `jump_cell` = start cell (TT resume). Jumps are latched
 any time after the VIDEO_TS walk (`nav_ready`) and execute only from a settled state
 (`S_STREAM`/`S_DONE`/`S_STILL`) at a block boundary — never mid-parse.
+
+**No First Play PGC (VMGI@0x84 = 0; 2026-10-08, PR #169).** libdvdnav's
+`set_FP_PGC` then plays VMGM PGC 1 *in the First Play domain*, and a First Play
+`LinkPGCN n` resolves through the same VMGM PGCIT (`get_PGCIT` treats First Play as the
+VMGM). `S_JMP_VMGI` now does the same: a First Play jump that finds @132 = 0 re-runs as a
+VMGM jump at the jump's PGCN (0 → 1), re-fetching @200 from the resident VMGI_MAT. The VM
+keeps its own domain (`vm_dom` = FP); the reader plays a VMGM PGC, so `menu_active` is set,
+and `fp_none` (cleared at mount) makes a First Play target count as a menu for `keep_vbuf`
+/ `jump_cross`, so a First Play → First Play link holds the VBUF like any menu → menu one.
+@200 = 0 as well still errors. It was `pgc_error`, after which the VM's FB_FP fallback booted
+the auto title. 2 library discs, from one authoring template (D050818_01, ISLAM_TRAILER),
+found by the library sweep (`docs/nav_engine.md` §5a). Gate: `iso_reader_fpnone_tb` A/B/F,
+`bench/dvd/run_sprm67.sh --red` R1–R3.
 
 ### Generalized PGCIT walk + the sector-crossing walker
 
@@ -1003,9 +1016,46 @@ can never continue differently from an expired one:
 | Indefinite (0xFF) or timed, the last cell | `STILL_PGEND`: PGC end → POST | same |
 
 The 0xFF entry now records `still_next`/`still_last` (it set neither before, since only the
-timer read them). With `vm_mode` the cell command outranks a 0xFF still (the HW-proven
-Phase-3 ordering, commented at the reader's cell-end branch), so `STILL_CMD` never applies
-there.
+timer read them).
+
+**An indefinite still and its cell command (2026-10-08, PR #169).**
+- **Until then** the cell command outranked a 0xFF still whenever `vm_mode` was on. That is
+  the HW-proven Phase-3 ordering, which keeps MiB/Matrix motion menus looping instead of
+  freezing on a last frame. libdvdnav holds the still and runs the command only when the
+  still ends.
+- **The rule now:** command-first applies only to a command that **loops the cell**:
+  - `LinkCN` to itself;
+  - `LinkTopCell` / `LinkTopPG` / `LinkTopPGC`;
+  - `LinkPGN`, unconditionally, because menus run no program query, so "this program" isn't
+    known;
+  - `LinkPGCN` to this PGC.
+
+  Any other command waits out the still, with `still_next = STILL_CMD`; Still off or a
+  button's jump ends it.
+- **How the reader knows:** the `P_CMD` walker records each cell command's link class in
+  `ccls_mem` (256 × 21, one M10K) as it streams it to the VM, and `cc_loops` decodes it at
+  the cell's end.
+- **Found by:** the First Play fix on hardware. ISLAM_TRAILER's First Play menu cell is
+  0xFF + `g1 = 1; LinkTailPGC`. It ran at once, the POST linked on, and the disc stopped
+  at `Exit`, where libdvdnav waits for the press.
+- **Library:** 47 discs have a 0xFF still with a cell command, and about 12 have a non-loop
+  one.
+  - **INDIVISIBLE's chapter-select menu** (VTSM 2, PGC 19; reached by Title, then the
+    second entry) has five pages, each a 0xFF still with buttons and `LinkTailPGC`. It
+    bounced straight back to its parent menu, so it was unusable. ✅ The maintainer
+    confirmed by hand on 2026-10-08 that it now works, and that it does not on 0.9.0.
+- **Which commands loop:**
+  - Types 1 (a link), 2 and 3 carry the full link set: libdvdnav's
+    `eval_link_instruction`, e.g. INDIVISIBLE's type-3 buttons `g8 = 5; LinkPGCN 19`.
+  - Only types 4–6 are `LinkSubIns`-only.
+  - A `cmd_nr` past the PGC's cell commands (malformed) reads no entry of this PGC, so it
+    keeps the old command-first order.
+- **Gates:**
+  - `iso_reader_fpnone_tb` G/H/B2;
+  - `run_sprm67.sh --red` R8–R11;
+  - every existing reader-regress trace is unchanged.
+- **HW:** ISLAM_TRAILER parks on its menu (rig A/B). Motion menus still loop: The Muppets
+  on the rig, Men in Black by hand.
 
 **Holds the key ignores (`still_act = 0`).** These are the holds with no continuation of
 their own, and the key is a no-op there, as it is at a dead end on a real player:
@@ -2094,6 +2144,17 @@ restored by the 15-bit-PGCN fix, PR fj#164 — **PTT_CAP=1024** since PR fj#170;
 clamps the user-skip/HUD gracefully, VM jumps are unaffected since they resolve on-demand).
 Loaded at title mount for `cur_ttn = (want_ttn ? want_ttn : 1)` by a **`P_PTT` walker phase**
 (reuses the sector-crossing byte walker; 4 bytes/entry).
+
+**Which title's table (`ttn_pick`, 2026-10-08).** A VM title jump that names a PGCN but no
+title — a `LinkPGCN`, an RSM resume — took title 1's table regardless. After Menu →
+Resume into title 2 of a VTS, the reverse map then missed, the HUD showed title 1's total,
+and SPRM7 had no part. 1,139 of 1,531 library discs have a VTS with more than one title.
+`S_SRP_EVAL` now reloads the SRP owner's table (`entry_id[6:0]`, issue #132's reload
+machinery) **unless title 1's table names the PGC** (`ptt_hit` from the first load):
+libdvdnav's `vm_get_current_title_part` takes the *lowest* title that names it, so a PGC
+shared by a "play all" title 1 and an episode title keeps title 1's part, as libdvdnav does.
+There is no reload for a `LinkPGCN` inside title 1, so DVD games that link many times a
+second pay nothing. Gate: `iso_reader_fpnone_tb` C/D/E, `run_sprm67.sh --red` R4/R5.
 `nr_ptt = min((ttu_off[ttn]-ttu_off[ttn-1])/4, PTT_CAP)`.
 
 The table sat write-only ("swept dead logic", the PR fj#170 fit finding) until the Phase-5
@@ -2108,6 +2169,14 @@ between the program-map walk and the legacy resolve). One shared scan serves bot
   multi-PGC titles; 8-bit display clamp at 255 matching emu's `hud_nr_ch`). On a trivial
   (movie) title this equals the program — identical to before. No reverse-map hit → the
   per-PGC program as before.
+- **SPRM7 for the VM (2026-10-08):** the same resolve pulses `ptt_upd` with
+  `ptt_cur = g_best+1`, 11 bits and unclamped, **on a hit only**. It is libdvdnav's
+  `set_PGN` → `PTTN_REG`. Two deliberate differences from libdvdnav's loop, both
+  documented in `docs/nav_engine.md` §5a:
+  - a miss holds SPRM7 where libdvdnav writes 0, because libdvdnav searches every title
+    of the VTS and a miss here can be a table that isn't the PGC's;
+  - a program past the PGC's last part maps to that last part where libdvdnav finds
+    nothing, because the spec makes parts contiguous.
 - **User skip (B2/B3):** the same scan also records `g_pgc_first/g_pgc_last` (the current
   PGC's entry-run bounds). `CH_GR` first re-checks the **legacy within-PGC resolve** — taken
   whenever the move resolves inside the loaded PGC *or* clamps at a title end living in this

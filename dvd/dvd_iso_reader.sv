@@ -382,6 +382,15 @@ module dvd_iso_reader #(
     // on a single-PGC (movie) title chapter == program so this matches the
     // pre-Phase-6 value. 8-bit display clamp at 255 (matches emu hud_nr_ch).
     output reg [7:0]  cur_pgm,
+    // SPRM7 (PTTN) for the VM: the playing cell's GLOBAL part, one ptt_upd pulse per
+    // cur_pgm query that finds the cell in the title's PTT table (libdvdnav set_PGN
+    // -> vm_get_current_title_part). Not published on a miss or without a table
+    // (nr_ptt == 0): the VM keeps its value (libdvdnav writes 0 on a miss, but it
+    // searches every title in the VTS; see the CH_GR comment).
+    // 11 bits, unclamped: PTT_CAP is 1024 parts, so g_best + 1 reaches 1024 (the
+    // spec allows 999); the HUD's cur_pgm keeps its own 8-bit display clamp.
+    output reg        ptt_upd,
+    output reg [10:0] ptt_cur,
     // Phase 6: chapter total (nr_of_ptts of the current title) for the HUD's
     // "CH n/N" N. 0 = no PTT table -> HUD falls back to cmd_nr_pgm. On movies
     // nr_ptt == cmd_nr_pgm (== nr_of_programs).
@@ -759,6 +768,11 @@ reg [31:0] vmgm_vob_blk;     // length in 2048-sectors
 // IFO (VMGI / TT_SRPT) navigation + selection
 reg [31:0] vmgi_lba;      // ISO LBA of VIDEO_TS.IFO (the VMGI)
 reg        vmgi_found;    // VIDEO_TS.IFO record seen during the VIDEO_TS walk
+// The disc has no First Play PGC (VMGI@0x84 == 0): First Play runs VMGM PGCs, as
+// libdvdnav's set_FP_PGC does (S_JMP_VMGI). Set by the first such jump, cleared at
+// mount; while set, a First Play target counts as a menu domain (keep_vbuf /
+// jump_cross), since what plays is a VMGM PGC from VIDEO_TS.VOB.
+reg        fp_none;
 reg [31:0] vmgi_bup_lba;  // ISO LBA of VIDEO_TS.BUP (0 = none, or already in use)
 reg [7:0]  target_vtsn;   // VTS number holding title 1 (from TT_SRPT)
 reg [6:0]  sel_base;      // IFO-selected group's extent base
@@ -1223,6 +1237,13 @@ reg [15:0] dur_best_pgcn;             // ...and which PGCN had it
 // checks the PGC is in it (P_PTT); not in it -> nr_ptt = 0, and the HUD falls
 // back to the PGC's own program count.
 reg        dur_pick;                  // 1 = the next S_SRP_EVAL re-takes dur_scan's winner
+// 1 = a VM title jump named a PGCN but no title (LinkPGCN, an RSM resume): S_PTTLD_MAT
+// loaded title 1's table, so S_SRP_EVAL reloads the OWNING title's (the SRP's
+// entry_id[6:0]) when title 1's does not name the PGC (ptt_hit) -- libdvdnav's
+// vm_get_current_title_part takes the lowest title that names it. Without it a resume into title 2 of a VTS read title
+// 1's chapters: SPRM7 found no part, and the HUD showed title 1's chapter total. 1,139
+// of 1,531 library discs have a VTS with more than one title (2026-10-08).
+reg        ttn_pick;
 reg        ptt_reld;                  // 1 = this PTT load is that reload
 reg        ptt_hit;                   // the reload's table names want_pgcn
 reg [6:0]  reld_ttn;                  // title the reload loads (the winner's entry_id[6:0])
@@ -1834,6 +1855,41 @@ always @(posedge clk) begin
     cm_rd <= cell_meta_mem [cell_raddr];
     cc_rd <= cell_cat_mem  [cell_raddr];   // Phase-9 cell category byte@0
 end
+
+// CELL-COMMAND LINK CLASS (2026-10-08, docs/dvd_nav.md "An indefinite still and its
+// cell command"). One entry per cell command, written as the P_CMD walker streams it
+// to the VM, read for the playing cell's cmd_nr. A cell with an indefinite (0xFF)
+// still AND a cell command runs the command FIRST only when the command LOOPS -- a
+// motion menu's LinkCN to itself, LinkTopCell/TopPG/TopPGC, LinkPGN, LinkPGCN to this
+// PGC -- the HW-proven Phase-3 ordering that keeps MiB/Matrix menus moving. Any other
+// command waits out the still, as libdvdnav does (ISLAM_TRAILER's First Play menu:
+// 'g1 = 1; LinkTailPGC' ran at once, the POST linked on and the disc stopped at Exit).
+//   {tlink, tsub, b1[3:0] (link type), b6[6:0], b7}: types 1 (a LINK, not a jump), 2
+//   and 3 carry the full link set (libdvdnav eval_link_instruction: 'g8 = 5; LinkPGCN
+//   19' is a type-3 command, INDIVISIBLE's menu buttons); types 4-6 carry only a
+//   LinkSubIns (eval_link_subins), whose sub-instruction is b7[4:0].
+// A cmd_nr past this PGC's cell commands (malformed) would read a stale entry: it keeps
+// the old command-first order.
+// LinkPGN counts as a loop unconditionally: a menu does not run the program query, so
+// "this program" is not known there, and command-first is what it did before.
+(* ramstyle = "M10K, no_rw_check" *) reg [20:0] ccls_mem [0:255];
+reg  [20:0] ccls_q;
+reg         ccls_we;
+reg  [7:0]  ccls_wa;
+reg  [20:0] ccls_wd;
+always @(posedge clk) begin
+    if (ccls_we) ccls_mem[ccls_wa] <= ccls_wd;
+    ccls_q <= ccls_mem[cm_rd[7:0]];
+end
+wire [4:0]  cc_sub     = ccls_q[4:0];
+wire [3:0]  cc_lt      = ccls_q[18:15];
+wire        cc_subloop = (cc_sub == 5'd1) || (cc_sub == 5'd5) || (cc_sub == 5'd9);
+wire        cc_loops   = (ccls_q[20] && ((cc_lt == 4'd1 && cc_subloop) ||
+                                         (cc_lt == 4'd6) ||
+                                         (cc_lt == 4'd7 && ccls_q[7:0] == cell_i + 8'd1) ||
+                                         (cc_lt == 4'd4 &&
+                                          {1'b0, ccls_q[14:8], ccls_q[7:0]} == cur_pgcn))) ||
+                         (ccls_q[19] && cc_subloop);
 
 // Phase 11: cur_cell_start continuously tracks the STREAMING cell via its own
 // sync read port on cell_i (cell_raddr is transiently repointed by the angle
@@ -2491,6 +2547,7 @@ always @(posedge clk or negedge rst_n) begin
         fi_cap_v     <= 1'b0;
         grp_count    <= 7'd0;
         vmgi_found   <= 1'b0;
+        fp_none      <= 1'b0;
         sel_valid    <= 1'b0;
         best_ifo_lba <= 32'd0;
         sel_ifo_lba  <= 32'd0;
@@ -2589,6 +2646,8 @@ always @(posedge clk or negedge rst_n) begin
         chap_query   <= 1'b0;
         pgm_q_cell   <= 8'hFF;
         cur_pgm      <= 8'd0;
+        ptt_upd      <= 1'b0;
+        ptt_cur      <= 11'd0;
         pm_raddr     <= 7'd0;
         ptt_raddr    <= 10'd0;
         g_i          <= 10'd0;
@@ -2618,6 +2677,9 @@ always @(posedge clk or negedge rst_n) begin
         pgc_loaded   <= 1'b0;
         pgc_error    <= 1'b0;
         cmd_we       <= 1'b0;
+        ccls_we      <= 1'b0;
+        ccls_wa      <= 8'd0;
+        ccls_wd      <= 21'd0;
         ext_w_en     <= 1'b0;
         still_timed  <= 1'b0;
         still_secs   <= 16'd0;
@@ -2637,6 +2699,7 @@ always @(posedge clk or negedge rst_n) begin
         scan_mode    <= 1'b0;
         dur_scan     <= 1'b0;
         dur_pick     <= 1'b0;
+        ttn_pick     <= 1'b0;
         ptt_reld     <= 1'b0;
         ptt_hit      <= 1'b0;
         reld_ttn     <= 7'd0;
@@ -2708,6 +2771,7 @@ always @(posedge clk or negedge rst_n) begin
             pgc_dom_tt    <= (dom == DOM_TT);
         end
         cmd_we   <= 1'b0;
+        ccls_we  <= 1'b0;
         pm_we    <= 1'b0;
         ptt_we   <= 1'b0;
         ext_w_en <= 1'b0;                   // one-cycle write strobe (see ext_mem)
@@ -2717,6 +2781,7 @@ always @(posedge clk or negedge rst_n) begin
         vm_cell_cmd    <= 1'b0;
         vm_pgc_end     <= 1'b0;
         chap_edge      <= 1'b0;
+        ptt_upd        <= 1'b0;
 
         // ---- Multi-angle (Phase 9) ------------------------------------------
         // Angle cycle: emu delivers a 1-cycle pulse. Cycle 1..angle_count; the
@@ -2948,6 +3013,12 @@ always @(posedge clk or negedge rst_n) begin
                     cur_pgm <= !g_found ? ({1'b0, chap_best} + 8'd1)
                              : (g_best >= 10'd255) ? 8'd255
                              : (g_best[7:0] + 8'd1);
+                    // the VM's SPRM7: the global part, on a hit only. libdvdnav
+                    // writes 0 on a miss, but it searches every title of the VTS,
+                    // and a miss here can be a table that is not the PGC's -- 0
+                    // would then overwrite a resumed SPRM7 that was right.
+                    ptt_upd <= g_found;
+                    ptt_cur <= {1'b0, g_best} + 11'd1;
                     chap_query <= 1'b0;
                     chap_st    <= CH_IDLE;
                 end else if (!g_found ||
@@ -3091,6 +3162,7 @@ always @(posedge clk or negedge rst_n) begin
             grp_vts    <= 8'hFF;
             grp_count  <= 7'd0;
             vmgi_found <= 1'b0;
+            fp_none    <= 1'b0;
             sel_valid  <= 1'b0;
             best_ifo_lba    <= 32'd0;
             sel_ifo_lba     <= 32'd0;
@@ -3127,6 +3199,7 @@ always @(posedge clk or negedge rst_n) begin
             scan_mode       <= 1'b0;
             dur_scan        <= 1'b0;
             dur_pick        <= 1'b0;
+            ttn_pick        <= 1'b0;
             ptt_reld        <= 1'b0;
             scan_title      <= 1'b0;
             sel_ret         <= 1'b0;
@@ -3160,13 +3233,15 @@ always @(posedge clk or negedge rst_n) begin
             // PRE-jump value (RHS reads the old reg); the new domain is jdom_l.
             // menu->title (Play) and title->menu (Menu key) keep the flush.
             keep_vbuf    <= menu_dom &&
-                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM));
+                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM) ||
+                             (jdom_l == DOM_FP && fp_none));
             // ...and whether this jump CROSSES the menu/title boundary at all. Same two
             // values, XOR instead of AND (see the port declaration). Only a crossing
             // soft-resets the decoder; a title->title LinkPGCN (a DVD game's screen
             // transitions) flushes but keeps the pipeline.
             jump_cross   <= menu_dom ^
-                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM));
+                            ((jdom_l == DOM_VMGM) || (jdom_l == DOM_VTSM) ||
+                             (jdom_l == DOM_FP && fp_none));
             wr_ptr       <= 0;
             strm_done    <= 1'b0;
             cell_mode    <= 1'b0;
@@ -3175,6 +3250,7 @@ always @(posedge clk or negedge rst_n) begin
             scan_mode    <= 1'b0;
             dur_scan     <= 1'b0;
             dur_pick     <= 1'b0;
+            ttn_pick     <= 1'b0;
             ptt_reld     <= 1'b0;
             scan_title   <= 1'b0;
             want_ttn     <= (jdom_l == DOM_TT) ? jttn_l : 7'd0;
@@ -3267,6 +3343,8 @@ always @(posedge clk or negedge rst_n) begin
                     play_vtsn   <= jvts_l;
                     want_pgcn   <= (jttn_l != 7'd0) ? 16'd0
                                    : ((jpgcn_l == 16'd0) ? 16'd1 : jpgcn_l);
+                    ttn_pick    <= (jttn_l == 7'd0);    // no title named: find its owner
+                    ptt_hit     <= 1'b0;   // ...unless title 1's table names it (P_PTT)
                     state       <= S_LAT;
                     lat_ret     <= S_SELECT;
                 end
@@ -4302,13 +4380,21 @@ always @(posedge clk or negedge rst_n) begin
                 end else if (srp_pgc_start[31:21] != 11'd0) begin
                     // pgc_start_byte beyond 2 MB = malformed PGCIT
                     dur_pick <= 1'b0;                  // no stale one-shot past this parse
+                    ttn_pick <= 1'b0;
                     if (dom != DOM_TT) begin
                         pgc_error <= 1'b1;
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;
-                end else if (dur_pick && (want_pgcn != 16'd1 ||
-                             (srp_entry_id[6:0] != 7'd0 && srp_entry_id[6:0] != cur_ttn))) begin
+                end else if ((dur_pick && (want_pgcn != 16'd1 ||
+                              (srp_entry_id[6:0] != 7'd0 && srp_entry_id[6:0] != cur_ttn))) ||
+                             // a VM title jump with no title: libdvdnav takes the
+                             // LOWEST title whose table names the PGC, so keep title
+                             // 1's when it does (ptt_hit); else reload the SRP's owner.
+                             // Never a reload per LinkPGCN inside title 1 (DVD games
+                             // link many times a second).
+                             (ttn_pick && !ptt_hit && srp_entry_id[6:0] != 7'd0 &&
+                              srp_entry_id[6:0] != cur_ttn)) begin
                     // ★ AUTO CHAPTER TABLE (issue #132). The mount loaded title 1's
                     // VTS_PTT_SRPT before the duration scan ran; the scan's winner is
                     // often another title's PGC (X-Men: Apocalypse: title 1 = PGCN 1,
@@ -4326,6 +4412,7 @@ always @(posedge clk or negedge rst_n) begin
                     // Any winner other than PGCN 1 reloads even when the title is
                     // unchanged, so P_PTT's membership check (ptt_hit) covers it too.
                     dur_pick   <= 1'b0;
+                    ttn_pick   <= 1'b0;
                     ptt_reld   <= 1'b1;
                     ptt_hit    <= 1'b0;
                     reld_ttn   <= (srp_entry_id[6:0] != 7'd0) ? srp_entry_id[6:0] : 7'd1;
@@ -4336,6 +4423,7 @@ always @(posedge clk or negedge rst_n) begin
                     state      <= S_SECREAD;
                 end else begin
                     dur_pick    <= 1'b0;
+                    ttn_pick    <= 1'b0;
                     scan_mode   <= 1'b0;
                     scan_title  <= 1'b0;
                     cur_pgcn    <= srp_i + 16'd1;
@@ -4601,6 +4689,17 @@ always @(posedge clk or negedge rst_n) begin
                     if (walk_idx[2:0] == 3'd0) cmd_b0 <= pb_rdata;
                     if (walk_idx[2:0] == 3'd1) cmd_b1 <= pb_rdata;
                     if (walk_idx[2:0] == 3'd6) cmd_b6 <= pb_rdata;
+                    // a CELL command's last byte: record its link class (ccls_mem)
+                    if (walk_idx[2:0] == 3'd7 &&
+                        {6'd0, walk_idx[12:3]} >= nr_pre16 + nr_post16 &&
+                        {6'd0, walk_idx[12:3]} - nr_pre16 - nr_post16 < 16'd255) begin
+                        ccls_we <= 1'b1;
+                        ccls_wa <= walk_idx[10:3] - nr_pre16[7:0] - nr_post16[7:0] + 8'd1;
+                        ccls_wd <= {(cmd_b0[7:5] == 3'd1 && !cmd_b0[4]) ||
+                                    cmd_b0[7:5] == 3'd2 || cmd_b0[7:5] == 3'd3,
+                                    cmd_b0[7:5] >= 3'd4 && cmd_b0[7:5] <= 3'd6,
+                                    cmd_b1[3:0], cmd_b6[6:0], pb_rdata};
+                    end
                     // LinkPGCN in a PRE command (type 1 link, op 4): byte0=0x20,
                     // byte1 low nibble=4; unconditional when the compare op
                     // (byte1[6:4]) is 0. DVD-FORK FIX: the target is the 15-BIT
@@ -5474,6 +5573,21 @@ always @(posedge clk or negedge rst_n) begin
                                                                            STILL_NEXT;
                                     strm_done  <= 1'b1;
                                     still_pend <= 1'b1;   // drain, then S_STILL
+                                end else if (vm_mode && cm_rd[7:0] != 8'd0 &&
+                                             cm_rd[7:0] <= cmd_nr_cell &&   // an entry of THIS PGC
+                                             cm_rd[15:8] == 8'd255 && !cc_loops) begin
+                                    // INDEFINITE STILL, THEN ITS CELL COMMAND (2026-10-08):
+                                    // a command that does not loop the cell waits out the
+                                    // still, as libdvdnav does; the user's Still off (or a
+                                    // button's jump) ends it, and the command runs then
+                                    // (STILL_CMD). Loop commands keep the command-first
+                                    // order below (ccls_mem, above).
+                                    still_timed <= 1'b0;
+                                    still_act   <= 1'b1;
+                                    still_last  <= (cell_i + 8'd1 >= cell_count);
+                                    still_next  <= STILL_CMD;
+                                    strm_done   <= 1'b1;
+                                    still_pend  <= 1'b1;   // drain, then S_STILL
                                 end else if (vm_mode && cm_rd[7:0] != 8'd0) begin
                                     if (dur_hold_w) begin
                                         // AUTHORED CELL DURATION: the cell's
@@ -5502,9 +5616,10 @@ always @(posedge clk or negedge rst_n) begin
                                     // hand it to the VM and wait for the
                                     // verdict (adv / replay / seek / jump).
                                     // Ordering matches the HW-proven Phase-3
-                                    // heuristic: the command outranks the
-                                    // cell still (MiB/Matrix interactive
-                                    // cells carry both).
+                                    // heuristic: a LOOPING command outranks
+                                    // an indefinite cell still (MiB/Matrix
+                                    // interactive cells carry both); any
+                                    // other waits it out (the branch above).
                                     vm_cell_cmd <= 1'b1;
                                     vmw_pgc     <= 1'b0;
                                     vmw_last    <= (cell_i + 8'd1 >= cell_count);
@@ -5869,7 +5984,30 @@ always @(posedge clk or negedge rst_n) begin
             // (VTSM_PGCI_UT sector ptr). S_UT_HDR reads the PGCI_UT header +
             // LU[0] and positions the menu PGCIT.
             S_JMP_VMGI: begin
-                if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
+                if (dom == DOM_FP && vts_pgcit_ptr == 32'd0) begin
+                    // DVD-FORK FIX (2026-10-08): no First Play PGC. libdvdnav's
+                    // set_FP_PGC then plays VMGM PGC 1 in the First Play domain, and
+                    // a link from it (FP-domain LinkPGCN n) resolves through the same
+                    // VMGM PGCIT: get_PGCIT treats First Play as the VMGM. So re-run
+                    // this jump as a VMGM one, at the jump's PGCN (0 -> 1), re-fetching
+                    // @200 from the resident VMGI_MAT sector. The VM keeps its own
+                    // domain (vm_dom = FP); the reader plays a VMGM PGC. If @200 is
+                    // 0 as well, the second pass errors as before. Was: pgc_error,
+                    // and the VM's FB_FP fallback booted the auto title (2 library
+                    // discs, docs/nav_engine.md 5a).
+                    fp_none       <= 1'b1;
+                    dom           <= DOM_VMGM;
+                    menu_base_blk <= vmgm_vob_lba;
+                    menu_blocks   <= vmgm_vob_blk;
+                    want_pgcn     <= (jpgcn_l != 16'd0) ? jpgcn_l : 16'd1;
+                    want_entry    <= 4'd0;
+                    use_jcell     <= (jcell_l != 8'd0);
+                    fetch_base    <= 11'd200;
+                    fetch_ret     <= S_JMP_VMGI;
+                    fi            <= 6'd0;
+                    fi_cap_v      <= 1'b0;
+                    state         <= S_FETCH;          // parse_buf still holds VMGI_MAT
+                end else if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
                     pgc_error <= 1'b1;
                     state     <= S_DONE;
                 end else if (dom == DOM_FP) begin

@@ -25,6 +25,7 @@
     output seek_pulse, output [7:0] seek_cell, output vm_replay, output vm_adv, \
     output vm_from_wait, input wait_hold, output [7:0] sprm_astn, output [7:0] sprm_spstn, \
     output [7:0] sprm_agln, output pre_done, input agl_set, input [3:0] agl_set_val, \
+    input ptt_upd, input [10:0] ptt_val, \
     output link_fail, output [7:0] link_fail_pgcn
 
 `define VM_FIT_CONN \
@@ -50,7 +51,8 @@
     .vm_replay(vm_replay), .vm_adv(vm_adv), .vm_from_wait(vm_from_wait), \
     .wait_hold(wait_hold), .sprm_astn(sprm_astn), .sprm_spstn(sprm_spstn), \
     .sprm_agln(sprm_agln), .pre_done(pre_done), .agl_set(agl_set), \
-    .agl_set_val(agl_set_val), .link_fail(link_fail), .link_fail_pgcn(link_fail_pgcn), \
+    .agl_set_val(agl_set_val), .ptt_upd(ptt_upd), .ptt_val(ptt_val), \
+    .link_fail(link_fail), .link_fail_pgcn(link_fail_pgcn), \
     .dbg_state(), .dbg_g3(), .dbg_g14_9(), .dbg_rsm(), .dbg_deadend()
 
 module vm_fit_new (`VM_FIT_PORTS);

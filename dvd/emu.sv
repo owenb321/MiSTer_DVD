@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-navucode"
+`define CORE_VERSION "dev-navfixes"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1658,6 +1658,11 @@ wire [11:0] vm_cmd_waddr;
 wire [7:0]  vm_cmd_wdata;
 wire [7:0]  vm_nr_pre, vm_nr_post, vm_nr_cell, vm_nr_pgm;
 wire [7:0]  cur_pgm_w;                // Phase 11 HUD: current chapter (1-based, 0=unresolved)
+// SPRM7 (PTTN) for the VM: the reader's GLOBAL part of the playing cell, pulsed per
+// resolve (0 = no PTT entry names it). Unclamped, unlike cur_pgm_w. Gated by
+// tools/check_sprm67_wiring.py.
+wire        ptt_upd_w;
+wire [10:0] ptt_cur_w;
 wire [10:0] nr_ptt_w;                 // Phase 6: exact chapter total (nr_of_ptts, 0 = none)
 // HUD "CH n/N" total: prefer the exact PTT count; fall back to nr_of_programs
 // when there is no PTT table (on single-PGC movie titles the two are equal).
@@ -2844,6 +2849,8 @@ dvd_vm dvd_vm_inst (
     .pre_done      (vm_pre_done),         // PRE resolved -> the angle is settled
     .agl_set       (angle_wb),            // B6 press: write the user's angle back
     .agl_set_val   (angle_wb_val),
+    .ptt_upd       (ptt_upd_w),           // SPRM7 follows playback (the reader's part)
+    .ptt_val       (ptt_cur_w),
     .dbg_state     (),
     .dbg_g3        (),
     .dbg_g14_9     (),
@@ -3742,6 +3749,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     .pm_wdata       (vm_pm_wdata),
     .cmd_nr_pgm     (vm_nr_pgm),
     .cur_pgm        (cur_pgm_w),          // Phase 11 HUD: current chapter (1-based)
+    .ptt_upd        (ptt_upd_w),          // -> dvd_vm SPRM7 (global part, unclamped)
+    .ptt_cur        (ptt_cur_w),
     .nr_ptt_o       (nr_ptt_w),           // Phase 6: exact chapter total (nr_of_ptts)
     .pgc_playback_time (pgc_playback_time_w),
     .next_pgcn      (rd_next_pgcn),

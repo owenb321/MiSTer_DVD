@@ -96,6 +96,12 @@ A disc's own checks get honest answers about the player:
   widescreen setup.
 - **Audio.** Discs are told which audio formats the core can actually play (Dolby Digital,
   MPEG audio, and DTS).
+- **Where you are.** Discs are told the chapter and the part of the title that is playing,
+  so a scene-selection or main menu opened mid-film can open on the chapter you were
+  watching.
+
+Discs authored without a First Play program start where other players start them: at the
+first program of the disc's top-level menu.
 
 **Damaged navigation files.** Every DVD carries a backup copy of each navigation file
 (`.BUP`). When a disc's main copy can't be read, the core uses the backup, as set-top
