@@ -700,6 +700,17 @@ game discs plus a seeded random 100; numbers and method in
 which would give auto 16:9 switching on PAL widescreen CRTs.
 **⛔ by decision 2026-10-01:** UOP enforcement, APS (Macrovision) and CGMS-A.
 
+### 🔧 clk_mem retime: the speculative pop off the critical path (2026-10-09, `feature/clkmem-retime`, unmerged — `docs/status_log.md` "clk_mem retime")
+
+- [x] `mem_shim_burst`: pk merged into sk, one comparator per consumer, data loads off the
+      stage-A verdict; LOCKSTEP 0 mismatches, coverage-gated, 4 new RED arms.
+- [x] `dvd/mem_req_prefetch.sv` on the request FIFO's read side (`framestore.v`), contract
+      bench + 6 mutations, bridge suites through it.
+- [x] Sweep: 7/7 seeds clear `clk_mem` (≥ 94.2 MHz); SEED 17 pinned, `clock_check` PASS.
+- [x] HW A/B vs `main`: pacing equal (ROGER's PR #142 late in both arms), menu ↔ title clean.
+- [ ] Optional: same-cycle pop of an arriving word (halves the +2-cycle dry-run latency).
+- [ ] Decide: `clk_mem` WARN → FAIL in `fmax_check`.
+
 ### ✅ Strict first field: a start lands on its own raster slot (2026-10-08; ✅ HW-CONFIRMED 2026-10-09, ✅ MERGED PR #170 — `docs/field_parity.md` "Strict first field")
 
 - [x] Mixer refuses the wrong slot for the first 8 frame-tops after a reset or a raster restart

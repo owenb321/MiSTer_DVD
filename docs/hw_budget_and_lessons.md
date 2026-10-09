@@ -369,6 +369,17 @@ expected; negative slack between two registers on the same clock is not
 (`docs/status_log.md` "clk_mem timing"). A sweep that ranks on one clock can still pick a
 seed that fails the other.
 
+### A short path with a long route is congestion: cut fanout and false structure
+
+The 2026-10-09 `clk_mem` limiter was **two LUTs and a 7.9 ns route between adjacent LABs**,
+and after the first fix a FIFO's M10K reached its own output register one LAB away in
+9.9 ns. Neither is logic depth, so neither is fixed by pipelining. What fixed it was
+routing demand: a control signal (`sk_valid`, fanout 185) selecting a shared comparator's
+inputs made STA time a path the FSM never takes, and one verdict enabled ~300 flops.
+Split shared logic per consumer, load data registers unconditionally and keep the decision
+on the few control flops, and decouple a cross-die handshake with a small credit queue.
+7 of 7 seeds then cleared by ≥ 4.2 MHz (`docs/status_log.md` "clk_mem retime").
+
 ---
 
 ## 6. Hardware-in-the-loop measurement discipline
