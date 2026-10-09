@@ -316,7 +316,8 @@ tools/nav_offline.py --library --auto 3 --block-cap 100000 --jobs 4 --out r.json
 tools/nav_offline.py --library --only leads.txt --out r2.jsonl     # a second pass
 tools/nav_offline.py --library --red callss                    # a ;MUT arm must differ
 ```
-It needs `tools/bin/trace_nav` (`tools/build_dvd_trace.sh`; untracked). Use
+It needs `tools/bin/trace_nav` (`tools/build_dvd_trace.sh`; untracked). A library that keeps
+non-DVD-Video images in subdirectories can skip them with `NAV_SKIP_DIRS=dir1,dir2`. Use
 `--jobs 4` on a network library; each worker is light now. A model log once took a
 worker to 11 GB, and the logs are now dropped after each stimulus.
 

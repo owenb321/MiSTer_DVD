@@ -75,7 +75,8 @@ CELL_CAP = 4000
 # uses (it reads TRACE_BLOCK_CAP; --block-cap sets both). A sweep lowers it because the
 # library is a network share and a title that plays into the cap is most of a run's I/O.
 BLOCK_CAP = int(os.environ.get('TRACE_BLOCK_CAP', 400000))
-SKIP_DIRS = {'umd'}      # PSP UMD Video images: not DVD-Video
+# library subdirectories to skip (images that are not DVD-Video), comma-separated
+SKIP_DIRS = {d for d in os.environ.get('NAV_SKIP_DIRS', '').split(',') if d}
 VOBU_SCAN = 256          # VOBUs of a cell searched for an HLI
 
 

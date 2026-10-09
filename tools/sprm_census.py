@@ -30,7 +30,7 @@ import dvd_vm_ref as R                                   # noqa: E402
 
 LIB = os.path.expanduser(os.environ.get('DVD_ISO_DIR', '~/dvd-isos'))
 WATCH = {0x85: 5, 0x86: 6, 0x87: 7}                      # SPRM 5/6/7 as register operands
-SKIP_DIRS = {'umd'}
+SKIP_DIRS = {d for d in os.environ.get('NAV_SKIP_DIRS', '').split(',') if d}   # as nav_offline
 
 
 def reads(c):
